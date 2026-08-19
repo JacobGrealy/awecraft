@@ -1,0 +1,26 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0044 — leaf/flower transparency (black background in web build)</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:900px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}</style></head><body>
+<h1>AC-0044 — leaves/flowers render BLACK instead of transparent in the web build</h1>
+<h2>Report (user, 2026-08-19)</h2>
+<p>"the transparency for the leaves / flowers is not working in web build, instead it has a black background."
+Tested in the browser at the LAN URL against web build 2026-08-19 09:48 (first build containing trees/flowers from AC-0027).</p>
+<h2>Working hypothesis (verify, don't assume)</h2>
+<p>AC-0027 added leaves as grayscale Faithful tile (alpha in the tile) with tint [60,140,48] and "cutout" faces,
+flowers as cross quads. Likely causes: material transparency mode wrong for web export (AlphaBlend vs AlphaScissor/Cutout),
+atlas PNG imported without alpha, or transparent texels multiplied into black (tint × 0-alpha) instead of discarding fragments.</p>
+<h2>Requirements</h2>
+<ul>
+<li>Web spec first: how index.html renders leaves (block 7) + flowers (18/19) — opaque? alpha-tested? cross? (targeted grep only).</li>
+<li>Fix in godot/ (chunk.gd materials, atlas import flags, Data tiles): transparent leaf gaps + flower-cross gaps show the background (sky/terrain) in BOTH desktop render and web export. No black, no see-through solid leaves (cutout, not blend, if web uses cutout).</li>
+<li>Keep leaf tint [60,140,48] working (BIOME-TINT); no UV changes.</li>
+</ul>
+<h2>Verify (gates)</h2>
+<ol>
+<li>Headless: plain `--quit` + `AWECRAFT_LOGIC=trees` ok:true, 0 script errors.</li>
+<li>Desktop render (r=2, iso, AWECRAFT_NO_FOG=1) → no black under leaf canopies; cp to tasks/AC-0044/.</li>
+<li>Web rebuild (build_web.sh) — allowed for this task — then BROWSER proof: screenshot the served page (chrome/playwright headless, https://localhost:8443, ~60 s load) around a tree; pixel-check that transparent leaf regions are NOT black (background/sky colors present); save to tasks/AC-0044/.</li>
+<li>One godot process at a time; scratch → .scratch/.</li>
+</ol>
+<h2>Deliverables</h2>
+<ul><li>Fix in godot/; rebuilt web; <code>tasks/AC-0044/AC-0044-results.html</code> (summary + embedded before/after screenshots); report ≤20 lines.</li></ul>
+</body></html>

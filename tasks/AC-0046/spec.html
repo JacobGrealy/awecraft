@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0046 — task management tooling + webui (mirror of work todo system)</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:940px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}</style></head><body>
+<h1>AC-0046 — TASK tooling + webui (modeled on the user's work todo system)</h1>
+<h2>Reference (clone at <code>.scratch/awe-jarvis/data/todo-backup/</code> — private repo, read-only)</h2>
+<ul>
+<li><code>scripts/todo_lib.py</code> — load/save/next_id/find/new_item (184 ln)</li>
+<li><code>scripts/todo_ops.py</code> — SHARED MUTATION layer (invariants in one place so CLI and webapp can't drift)</li>
+<li><code>scripts/add_todo.py</code> / <code>update_todo.py</code> — CLI entry points</li>
+<li><code>scripts/generate_view.py</code> — SHARED RENDER layer (static board; same functions serve the webapp via an <code>_INTERACTIVE</code> flag)</li>
+<li><code>webapp/app.py</code> + <code>render_edit.py</code> + <code>run.py</code> — editable board, loopback-only (no auth; POSTs write the YAML), every mutation re-renders the static view too; sandbox test pattern in <code>test_app.py</code></li>
+</ul>
+<h2>Deliverables (all under <code>tasks/</code>, stdlib + pyyaml only, no game-code changes)</h2>
+<ol>
+<li><code>tasks/scripts/tasks_lib.py</code> — load/save <code>tasks/TASKS.yaml</code>; <code>next_id()</code> (AC-NNNN); <code>add / set_status / add_comment / queue_add / queue_remove</code>; invariants: <code>status: done ⇒ completed_at set</code>; comment ids increment per task; every mutation bumps task <code>updated_at</code> + top-level <code>meta.updated_at</code>.</li>
+<li><code>tasks/scripts/tasks.py</code> — CLI: <code>add --title --source user|agent --priority 1-3 --notes "…"</code>, <code>status &lt;id&gt; open|in-progress|done|blocked</code>, <code>comment &lt;id&gt; "text" [--author user|agent]</code>, <code>queue add|remove|list [id]</code>, <code>next</code> (print top of queue), <code>render</code> (regenerate <code>tasks/TASKS.md</code>). Every command re-renders TASKS.md after mutation.</li>
+<li><code>tasks/scripts/render.py</code> — TASKS.yaml → TASKS.md (current table + queue line), shared by CLI + webui.</li>
+<li><code>tasks/webui.py</code> — board server, stdlib http.server, <b>loopback-only 127.0.0.1:5180</b> (no auth): sections = Queue (ordered) → Open (by priority) → Blocked → Done; each card: id/title/status/priority/created/updated/notes + comment thread + links to <code>tasks/&lt;id&gt;/spec.html</code>, <code>AC-NNNN-results.html</code>, and any PNGs in the folder (serve the static <code>tasks/</code> dir). Edits (status/comment/queue) go through <code>tasks_lib</code> + re-render — same shared-layer pattern as jarvis so CLI and webui can't disagree. <code>--port N</code> + <code>--sandbox &lt;dir&gt;</code> flags (copy YAML to a sandbox dir first, per jarvis test pattern).</li>
+<li>Smoke test: <code>tasks/scripts/test_tasks.py</code> — sandbox copy of TASKS.yaml; run CLI add/status/comment/queue against it; webui route checks via HTTP against a sandboxed instance; assert reload-from-disk shows mutations (jarvis double-check pattern).</li>
+</ol>
+<h2>Verify (gates)</h2>
+<ol>
+<li>Smoke test passes on a sandbox copy (live TASKS.yaml untouched).</li>
+<li>CLI demo against live data: <code>comment AC-0046 "tooling shipped" --author agent</code> + <code>status AC-0046 done</code> (the only live mutations).</li>
+<li>Webui: <code>curl 127.0.0.1:5180</code> → 200, page contains AC-0046 card + queue section; task-folder links resolve (curl spec.html 200).</li>
+<li><code>python3 tasks/scripts/render.py</code> leaves TASKS.md consistent.</li>
+</ol>
+<p>Report ≤20 lines → <code>tasks/AC-0046/AC-0046-results.html</code>.</p>
+</body></html>

@@ -1,0 +1,26 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0045 — inventory click/drag not working in web build</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:900px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}</style></head><body>
+<h1>AC-0045 — can't click and drag inventory items / crafted items (web build)</h1>
+<h2>Report (user, 2026-08-19)</h2>
+<p>"I can't click and drag inventory items / crafted items" — in the browser build (same 09:48 web build).
+M7b UI (ui/inventory.gd) wires LMB grab/place/swap + RMB + shift via <code>SlotCtl._gui_input</code>; M7a headless chain passes, so the LOGIC is fine — this is input/UI-layer in the web export.</p>
+<h2>Investigate (don't assume)</h2>
+<ul>
+<li>Repro first: in the browser — open E, does a plain LMB click on a slot do anything (grab)? Does hotbar 1-9 still select? Does dragging move the item? Capture what registers vs not (browser console + playwright mouse events).</li>
+<li>Prime suspects: GUI input on CanvasLayer in web export (pointer events vs input events), pointer-lock/unlock interaction when the UI opens, control anchors/sizing under the web canvas (touch emulation?), Godot web known ~300 ms input path, `_gui_input` accept/propagation, or the per-frame refresh rebuilding Controls under the cursor and swallowing the release.</li>
+<li>Check whether desktop (xvfb + xdotool mouse) shows the same bug — isolates web-export-only vs UI-layer bug.</li>
+</ul>
+<h2>Requirements</h2>
+<ul>
+<li>Fix in godot/ only (never web/ or the frozen spec). LMB grab/place/swap, RMB, shift-quickmove, drag with live held-cursor all work in the BROWSER and on desktop. Keep M7a semantics (grid-lost-on-close etc.).</li>
+<li>If a residual ~300 ms web input latency remains after the fix, note it as a known platform limitation in results (don't chase it here).</li>
+</ul>
+<h2>Verify (gates)</h2>
+<ol>
+<li>Headless: `AWECRAFT_LOGIC=craft` ok:true + battery quick, 0 script errors.</li>
+<li>BROWSER PROOF (playwright/chrome headless vs https://localhost:8443): open E, screenshot before; scripted LMB drag from a storage slot (give items via a debug/env hook if needed) to a hotbar slot; screenshot after; assert the item MOVED (pixel diff of the two slots + held-cursor evidence). Save PNGs to tasks/AC-0045/.</li>
+<li>Web rebuild (allowed for this task).</li>
+</ol>
+<h2>Deliverables</h2>
+<ul><li>Fix; rebuilt web; <code>tasks/AC-0045/AC-0045-results.html</code> (summary + embedded before/after screenshots); report ≤20 lines.</li></ul>
+</body></html>

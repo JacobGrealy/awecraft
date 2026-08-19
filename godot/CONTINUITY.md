@@ -1,6 +1,16 @@
 # AweCraft → Godot migration — CONTINUITY checkpoint
 If context is compacted, read THIS + `godot/ARCHITECTURE.md` + `REMAINING_FEATURES.html`, then continue from the task list in §6.
 
+## 0. CHECKPOINT 2026-08-19 (session handoff — context was full; user restarting opencode)
+**RESUME:** read this block + `tasks/TASKS.yaml` (single source of truth) + AGENTS.md (TASK PROTOCOL) → work the top of the queue. No user approval needed between tasks ("work list to completion" directive stands).
+- **QUEUE (top first):** AC-0030 server-daemon (spec done, **NOT yet launched**) → AC-0044 leaf/flower web transparency (spec done) → AC-0045 inventory drag web (spec done) → AC-0046 tasks-tooling+webui (spec done, user defers) → AC-0031 water-anim → AC-0032 hand-anim → AC-0033 menu+options → AC-0034 hitch → AC-0035 m5a2 → AC-0036 underwater → AC-0037 mobs (web's 8 + bunny) → AC-0038 particles → AC-0039 sound → AC-0040 bouncy-banana → AC-0041 windows-reexport → AC-0042 planet-plan (research .html, END). AC-0043 endgame = BLOCKED on user spec.
+- **TASK PROTOCOL:** `tasks/TASKS.yaml` = source of truth (work-todo schema: id/title/source/priority/status/labels/created_at/updated_at/completed_at/waiting_on/notes/comments[] + top `queue:`); `tasks/TASKS.md` = rendered view (re-render after edits); per-task `tasks/AC-NNNN/`: `spec.html` BEFORE launch (coordinator writes), `AC-NNNN-results.html` + screenshots AFTER (subagent writes). Commit+push after EVERY verified task (incl. task folder).
+- **GIT:** `origin` = https://github.com/JacobGrealy/awecraft (public, ssh, master). First full-port commit pushed (80a9916 + this checkpoint commit).
+- **SERVER:** https 8443 running via `python3 serve_web.py --ssl` (nohup; pid from ps). Deaths on opencode restart = process-group kills (NOT subagents). AC-0030 makes it `--daemon` (setsid + pidfile .scratch/serve_web.pid + port guard). Canonical: `python3 serve_web.py --ssl --daemon`.
+- **WEB BUILD:** 2026-08-19 09:48 (has trees/flowers/tint/fog/tex). Rebuild after each fix task. User is actively testing the browser — the two AC-0044/0045 bugs were found there. Windows exe (109MB) STALE re trees → AC-0041.
+- **CONFIG (live since 08-19 restart):** general=xhigh, explore=medium, summary/compaction=low, prune OFF, /tmp allowed.
+- **STATE NOTES:** trees/flowers DONE (AC-0027, verify-pass fixed 5 bugs: increment-outside-while ×5, atlas flora re-import, cross-quad buffer ×2, probe fixes; GENHASH terrain intact; perf 63ms 0% regression). jarvis (user's private todo system) cloned to `.scratch/awe-jarvis/` — schema adopted into TASKS.yaml; scripts/webapp are the REFERENCE for AC-0046. Scratch → `.scratch/` (pruned 694M→40M; .gitignored).
+
 ## 1. What & where
 - **Web game = SPEC (frozen)** at `/home/angrygiant/github_projects/AweCraft/index.html`, build `20260816-r12`. Source of truth for ALL behavior/data. Web work is DONE; it is the reference, not to be modified.
 - **Godot port = the live work** at `/home/angrygiant/github_projects/AweCraft/godot/` (GDScript, Godot 4.7.1). Multi-file.
