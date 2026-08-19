@@ -1,0 +1,97 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0047 — results: tasks webui LAN access + persistent daemon</title>
+<style>body{font-family:system-ui,'Segoe UI',sans-serif;margin:24px 40px;max-width:980px;line-height:1.5;color:#1b232f}
+h1{font-size:20px}h2{font-size:15px;margin-top:22px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}
+code,pre{background:#eef1f6;border-radius:3px;font-size:12.5px;font-family:ui-monospace,monospace}
+pre{padding:10px;overflow:auto;line-height:1.45}
+.pass{color:#1a7a3c;font-weight:700}.fail{color:#c0392b;font-weight:700}
+table{border-collapse:collapse;font-size:13px}td,th{border:1px solid #d7dee8;padding:4px 10px;text-align:left}
+.note{background:#fdf3dc;border:1px solid #e6c86e;border-radius:5px;padding:8px 12px;font-size:13px}</style></head><body>
+<h1>AC-0047 — tasks webui on the LAN, surviving restarts <span class="pass">DONE</span></h1>
+<p><code>tasks/webui.py</code> now binds <code>0.0.0.0</code> (default port 5180 kept) and gains the
+same daemon/pidfile/port-guard pattern that <code>serve_web.py</code> proved in AC-0030:
+<code>--daemon</code> (double fork + <code>os.setsid()</code>, own session, survives opencode restarts),
+<code>--replace</code> (kills only the identified webui pid), and a guard that prints
+<code>already running (pid X, port Y)</code> and exits 0. Pidfile <code>.scratch/tasks_webui.pid</code>,
+log <code>.scratch/tasks-webui.log</code> (append + start marker). No auth (explicit user request, single-user LAN).
+Edit/static/sandbox behavior untouched — the whole <code>Handler</code>, <code>tasks_lib</code> mutation path,
+re-render, and <code>--sandbox</code> logic are byte-identical to AC-0046.</p>
+
+<h2>Files changed</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>tasks/webui.py</code></td><td>Only file changed. <code>HOST</code> 127.0.0.1 → <code>0.0.0.0</code>; added
+<code>--daemon</code>/<code>--replace</code> flags; ported process-info helpers
+(<code>_port_inodes</code>/<code>_pids_with_inode</code>/<code>_holds_port</code>/<code>find_running</code>/<code>port_holder</code>/<code>kill_webui</code>)
+from <code>serve_web.py</code> (now keyed on <code>webui.py</code> in cmdline); added
+<code>start_daemon()</code> (double fork + setsid, stdio → <code>/dev/null</code> + append log, start marker, pidfile);
+<code>serve()</code> installs SIGTERM/SIGINT cleanup and prints localhost + detected-LAN URLs;
+<code>lan_ip()</code> parses <code>ip -4 -o addr show</code> (first non-loopback iface). Nothing outside the
+server-startup path was modified.</td></tr>
+</table>
+
+<h2>Gates</h2>
+<table>
+<tr><th>#</th><th>gate</th><th>result</th></tr>
+<tr><td>1</td><td><code>python3 tasks/scripts/test_tasks.py</code> (sandbox; live YAML untouched)</td><td class="pass">PASS</td></tr>
+<tr><td>2</td><td><code>--daemon --replace</code> prints pid; localhost 200 with Queue section + task card</td><td class="pass">PASS</td></tr>
+<tr><td>3</td><td>LAN 200 (192.168.0.224 is the live LAN IP — verified via <code>ip -4 addr</code>, not stale)</td><td class="pass">PASS</td></tr>
+<tr><td>4</td><td>ps: SID = own PID (session leader); pidfile matches; 2nd non-daemon start → "already running" exit 0</td><td class="pass">PASS</td></tr>
+<tr><td>5</td><td>Final state: daemon left running on 0.0.0.0:5180</td><td class="pass">PASS</td></tr>
+</table>
+
+<h2>Gate 1 — smoke test</h2>
+<pre>$ python3 tasks/scripts/test_tasks.py
+... (45 checks: CLI sandbox round-trips, webui HTTP routes on free port, on-disk persistence re-verification)
+45 passed, 0 failed
+RESULT {"ok": true, "passed": 45, "sandboxes": ["ac0046-sandbox", "ac0046-webui"]}
+exit 0, stderr empty (zero warnings), live TASKS.yaml checksum unchanged</pre>
+
+<h2>Gate 2 — daemon start + localhost evidence</h2>
+<pre>$ python3 tasks/webui.py --daemon --replace
+daemon pid: 86536
+log: /home/angrygiant/github_projects/AweCraft/.scratch/tasks-webui.log
+exit 0</pre>
+<pre>$ curl -s -o /tmp/ac0047-localhost.html -w "HTTP %{http_code}\n" http://127.0.0.1:5180/
+HTTP 200
+$ grep -c "Queue (work order)" /tmp/ac0047-localhost.html
+1
+$ grep -c 'data-id="AC-0046"' /tmp/ac0047-localhost.html      # a task card is present
+1</pre>
+
+<h2>Gate 3 — LAN evidence</h2>
+<pre>$ ip -4 -o addr show | grep -v lo
+3: wlx8c86dda7aba9    inet 192.168.0.224/24 ...     # the real non-loopback IP (192.168.0.224 is current)
+$ curl -s -o /tmp/ac0047-lan.html -w "HTTP %{http_code}\n" http://192.168.0.224:5180/
+HTTP 200
+$ grep -c "Queue (work order)" /tmp/ac0047-lan.html
+1
+$ tail .scratch/tasks-webui.log
+==== 2026-08-19T20:36:40Z tasks/webui.py start pid=86536 port=5180 ====
+task board: http://localhost:5180/  (all interfaces, no auth)
+          http://192.168.0.224:5180/  (LAN)
+registry:   .../tasks/TASKS.yaml
+task files: .../tasks
+127.0.0.1 "GET / HTTP/1.1" 200 -
+192.168.0.224 "GET / HTTP/1.1" 200 -</pre>
+
+<h2>Gate 4 — session / pidfile / guard</h2>
+<pre>$ cat .scratch/tasks_webui.pid
+86536
+$ ps -o pid,sid,pgid,stat,cmd -p 86536
+    PID     SID    PGID STAT CMD
+  86536   86536   86536 Ss   python3 tasks/webui.py --daemon --replace
+        # SID == PID (own session), PGID == PID, Ss = session leader
+
+$ python3 tasks/webui.py          # second start, non-daemon, while daemon is up
+already running (pid 86536, port 5180)
+echo $?
+0</pre>
+
+<h2>Canonical command + note</h2>
+<pre>python3 tasks/webui.py --daemon        # detached, survives opencode restarts
+python3 tasks/webui.py --daemon --replace   # restart in place (kills only the webui pid)
+python3 tasks/webui.py --port N [--sandbox DIR]   # non-daemon forms unchanged</pre>
+<div class="note"><b>URLs:</b> <code>http://localhost:5180/</code> · <code>http://192.168.0.224:5180/</code> (LAN).
+Daemon (pid 86536) left running as the final state. The 8443 game-server daemon (pid 45083) was untouched,
+as were <code>godot/</code> and <code>web/</code>. No git commit (coordinator commits).</div>
+</body></html>

@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0047 — tasks webui: LAN access + persistent daemon</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:900px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}</style></head><body>
+<h1>AC-0047 — tasks webui accessible on the LAN, surviving restarts</h1>
+<h2>Request (user, 2026-08-19)</h2>
+<p>"I need the todo webapp to be accessible on LAN not just localhost."</p>
+<h2>Requirements</h2>
+<ul>
+<li><code>tasks/webui.py</code> binds <code>0.0.0.0</code> by default (keep <code>--port N</code>; default port 5180). No auth (user's own LAN, explicit request).</li>
+<li>Daemon mode (same proven pattern as <code>serve_web.py --daemon</code> from AC-0030 — study and reuse it): <code>--daemon</code> double-fork + <code>os.setsid()</code>, own session; <code>--replace</code> kills only the identified webui pid/port holder; port guard prints <code>already running (pid X, port Y)</code> and exits 0.</li>
+<li>Pidfile <code>.scratch/tasks_webui.pid</code>; log <code>.scratch/tasks-webui.log</code> (append + start marker).</li>
+<li>Existing behavior unchanged: loopback sandbox tests must still pass; edits still go through tasks_lib + re-render; static tasks/ dir serving intact.</li>
+</ul>
+<h2>Canonical command (after this task)</h2>
+<pre>python3 tasks/webui.py --daemon</pre>
+<h2>Verify (hard gates)</h2>
+<ol>
+<li>Smoke test still green: <code>python3 tasks/scripts/test_tasks.py</code> (sandbox; live YAML untouched) — zero warnings.</li>
+<li><code>python3 tasks/webui.py --daemon --replace</code> → prints pid; <code>curl -s http://127.0.0.1:5180/</code> → 200 and contains the Queue section + a task card.</li>
+<li>LAN proof: <code>curl -s http://192.168.0.224:5180/</code> → 200 (the machine's LAN IP; if that IP is stale, detect the actual non-loopback IP from <code>ip -4 addr</code>, use it, and say so).</li>
+<li><code>ps -o pid,sid,pgid -p &lt;pid&gt;</code> → SID = own PID; pidfile matches; second non-daemon start → "already running" exit 0.</li>
+<li>FINAL STATE: leave the daemon running; report both <code>http://localhost:5180/</code> and <code>http://192.168.0.224:5180/</code> (or detected LAN IP).</li>
+</ol>
+<h2>Deliverables</h2>
+<ul>
+<li>Updated <code>tasks/webui.py</code>; running daemon on 5180 (LAN-reachable).</li>
+<li><code>tasks/AC-0047/AC-0047-results.html</code> — summary + curl/ps evidence blocks for both addresses.</li>
+</ul>
+</body></html>
