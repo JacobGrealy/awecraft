@@ -1,6 +1,6 @@
 # AweCraft — Tasks (rendered view; source of truth: `TASKS.yaml`)
 
-Updated 2026-08-19T10:05. Committed queue (order): `AC-0030` → `AC-0044` → `AC-0045` → `AC-0046` → `AC-0032` → `AC-0033` → `AC-0034` → `AC-0035` → `AC-0036` → `AC-0037` → `AC-0038` → `AC-0039` → `AC-0040` → `AC-0041` → `AC-0042` (AC-0043 blocked on user spec).
+Updated 2026-08-19T10:10. Committed queue (order): `AC-0030` → `AC-0044` → `AC-0045` → `AC-0046` → `AC-0031` → `AC-0032` → `AC-0033` → `AC-0034` → `AC-0035` → `AC-0036` → `AC-0037` → `AC-0038` → `AC-0039` → `AC-0040` → `AC-0041` → `AC-0042` (AC-0043 blocked on user spec).
 
 | ID | Title | Status | Pri | Created | Updated | Completed |
 |----|-------|--------|-----|---------|---------|-----------|
@@ -52,4 +52,4 @@ Updated 2026-08-19T10:05. Committed queue (order): `AC-0030` → `AC-0044` → `
 | AC-0046 | tasks-tooling-webui | open | 2 | 2026-08-19 | 2026-08-19 | — |
 
 Per task: `tasks/<id>/` — `spec.html` (pre-launch) + `<id>-results.html` (agent summary + embedded screenshots) + screenshots.
-Comments live in `TASKS.yaml` under `intake[].comments[]` (id/created_at/text with author prefix). Once AC-0046 lands: use `tasks/scripts/tasks.py` CLI + webui instead of hand edits.
+Comments live in `TASKS.yaml` under `intake[].comments[]`. Once AC-0046 lands: use `tasks/scripts/tasks.py` CLI + webui instead of hand edits.

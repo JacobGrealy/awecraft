@@ -1,7 +1,7 @@
 # AweCraft task registry (single source of truth)
 # Schema mirrors the work todo-backup format (title/source/priority/status/labels/created_at/updated_at/horizon/waiting_on/notes/comments).
 meta:
-  updated_at: 2026-08-19T10:05
+  updated_at: 2026-08-19T10:10
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -9,6 +9,7 @@ queue:
 - AC-0044
 - AC-0045
 - AC-0046
+- AC-0031
 - AC-0032
 - AC-0033
 - AC-0034
