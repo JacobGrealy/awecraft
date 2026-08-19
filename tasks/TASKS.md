@@ -1,6 +1,6 @@
 # AweCraft — Tasks (rendered view; source of truth: `TASKS.yaml`)
 
-Updated 2026-08-19T12:37. Committed queue (order): `AC-0030` → `AC-0044` → `AC-0045` → `AC-0046` → `AC-0031` → `AC-0032` → `AC-0033` → `AC-0034` → `AC-0035` → `AC-0036` → `AC-0037` → `AC-0038` → `AC-0039` → `AC-0040` → `AC-0041` → `AC-0042` (AC-0043 blocked on user spec).
+Updated 2026-08-19T13:28. Committed queue (order): `AC-0030` → `AC-0044` → `AC-0045` → `AC-0046` → `AC-0031` → `AC-0032` → `AC-0033` → `AC-0034` → `AC-0035` → `AC-0036` → `AC-0037` → `AC-0038` → `AC-0039` → `AC-0040` → `AC-0041` → `AC-0042` (AC-0043 blocked on user spec).
 
 | ID | Title | Status | Pri | Created | Updated | Completed |
 |----|-------|--------|-----|---------|---------|-----------|
@@ -47,7 +47,7 @@ Updated 2026-08-19T12:37. Committed queue (order): `AC-0030` → `AC-0044` → `
 | AC-0041 | windows-reexport | open | 1 | 2026-08-19 | 2026-08-19 | — |
 | AC-0042 | planet-plan | open | 1 | 2026-08-19 | 2026-08-19 | — |
 | AC-0043 | endgame | blocked | 2 | 2026-08-18 | 2026-08-19 | — |
-| AC-0044 | leaf-flower-transparency | open | 3 | 2026-08-19 | 2026-08-19 | — |
+| AC-0044 | leaf-flower-transparency | done | 3 | 2026-08-19 | 2026-08-19 | 2026-08-19 |
 | AC-0045 | inventory-drag | open | 3 | 2026-08-19 | 2026-08-19 | — |
 | AC-0046 | tasks-tooling-webui | open | 2 | 2026-08-19 | 2026-08-19 | — |
 

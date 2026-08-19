@@ -981,22 +981,26 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels:
   - bug
   - web
   - rendering
   created_at: 2026-08-19T10:00
-  updated_at: 2026-08-19T09:58
-  completed_at: null
+  updated_at: 2026-08-19T13:28
+  completed_at: 2026-08-19T13:28
   waiting_on: null
   parent_id: null
   notes: Leaves/flowers render a BLACK background in the web build instead of transparent (cutout) regions. Desktop looked fine (unverified). Fix the alpha pipeline in godot/ (material transparency mode / atlas alpha / tint-vs-alpha) and prove in the browser.
   comments:
-  - id: 1
-    created_at: 2026-08-19T10:00
-    updated_at: null
-    text: '[user] the transparency for the leaves / flowers is not working in web build, instead it has a black background.'
+   - id: 1
+     created_at: 2026-08-19T10:00
+     updated_at: null
+     text: '[user] the transparency for the leaves / flowers is not working in web build, instead it has a black background.'
+   - id: 2
+     created_at: 2026-08-19 13:28T12:00
+     updated_at: null
+     text: '[agent] DONE: root cause = stale blocks_atlas.png had lost alpha (leaf/flower gaps baked opaque); import_pack() skipped existing rects so it never refreshed. Re-imported atlas fresh from Faithful pack; materials (AlphaScissor) were already correct. Desktop + browser gates pass (sky through canopy, 0 black).'
 - id: AC-0045
   title: inventory-drag
   source: user
