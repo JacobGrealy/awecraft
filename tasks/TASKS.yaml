@@ -1,7 +1,7 @@
 # AweCraft task registry (single source of truth)
 # Schema mirrors the work todo-backup format (title/source/priority/status/labels/created_at/updated_at/horizon/waiting_on/notes/comments).
 meta:
-  updated_at: 2026-08-19T12:37
+  updated_at: 2026-08-19T15:30
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -1008,14 +1008,14 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels:
   - bug
   - web
   - ui
   created_at: 2026-08-19T10:00
-  updated_at: 2026-08-19T09:58
-  completed_at: null
+  updated_at: 2026-08-19T15:30
+  completed_at: 2026-08-19T15:30
   waiting_on: null
   parent_id: null
   notes: Can't click and drag inventory items / crafted items in the web build. M7a headless craft chain passes, so logic is fine — input/UI layer in the web export (pointer events, pointer-lock, canvas sizing, per-frame Control rebuilds).
@@ -1023,7 +1023,11 @@ intake:
   - id: 1
     created_at: 2026-08-19T10:00
     updated_at: null
-    text: '[user] I can''t click and drag inventory items / crafted items'
+     text: '[user] I can''t click and drag inventory items / crafted items'
+   - id: 2
+     created_at: 2026-08-19 15:30T12:00
+     updated_at: null
+     text: '[agent] DONE: two UI-input bugs — _route_click arg order (bind() appends slotIndex, read as slot=0 → all clicks no-op; broke every platform, web just exposed it) + Godot routes mouse-release to gui.mouse_focus (drag-drop needed UI-side release resolution). Fix: ui/inventory.gd release-drop + player.gd click API `release`/drag_held; new AWECRAFT_LOGIC=guiclick + V-key Debug.seed_inv() hook; browser-verified drag storage→hotbar.'
 - id: AC-0046
   title: tasks-tooling-webui
   source: user

@@ -72,6 +72,21 @@ func sel(index) -> void:
 		return
 	Game.player.sel = clampi(int(index), 0, 35)
 
+func seed_inv() -> void:
+	if Game.player == null:
+		return
+	var p = Game.player
+	for i in p.inv.size():
+		p.inv[i] = {"id": 0, "n": 0}
+	for i in p.craft_grid.size():
+		p.craft_grid[i] = {"id": 0, "n": 0}
+	for i in p.armor.size():
+		p.armor[i] = 0
+	p.held = {}
+	p.inv[27] = {"id": 6, "n": 5}
+	p.recompute_craft()
+	Game.message("Seeded: 5 oak logs in storage[0]")
+
 func teleport(x, y, z) -> void:
 	if Game.player == null:
 		return

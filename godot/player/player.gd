@@ -43,6 +43,7 @@ var _regen_t := 0.0
 var _starve_t := 0.0
 signal damaged(src: String)
 var held: Dictionary = {}
+var drag_held := false
 var craft_grid: Array = []
 var craft_out: Dictionary = {}
 var ui_mode := ""
@@ -123,6 +124,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 			else:
 				close_inventory()
+		elif kc == int(KEY_V):
+			Debug.seed_inv()
 		elif kc == int(KEY_ESCAPE) and ui_mode != "":
 			close_inventory()
 		elif ui_mode == "" and kc >= int(KEY_1) and kc <= int(KEY_9):
@@ -725,7 +728,9 @@ func damage_player(n: float, src: String) -> void:
 	if hp <= 0.0:
 		hp = 0.0
 		dead = true
+		drag_held = false
 		release_mine()
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 func respawn() -> void:
@@ -772,6 +777,7 @@ func open_inventory(mode: String) -> void:
 
 func close_inventory() -> void:
 	ui_mode = ""
+	drag_held = false
 	release_mine()
 	if held != {} and int(held.get("id", 0)) != 0:
 		inv_add(int(held["id"]), int(held["n"]))
@@ -788,8 +794,26 @@ func recompute_craft() -> void:
 	craft_out = {} if m == null else {"id": int(m["id"]), "n": int(m["n"])}
 
 
-func _slot_click(s: Dictionary, set_slot: Callable, area: String, button: int, shift: bool) -> void:
+func _slot_click(s: Dictionary, set_slot: Callable, area: String, button: int, shift: bool, release: bool = false) -> void:
 	var has_s := int(s["id"]) != 0
+	var had_held := held != {} and int(held.get("id", 0)) != 0
+	if release:
+		if had_held and drag_held:
+			if not has_s:
+				set_slot.call({"id": int(held["id"]), "n": int(held["n"])})
+				held = {}
+			elif int(s["id"]) == int(held["id"]):
+				var rmax := _stack_max(int(s["id"]))
+				var rt := mini(int(held["n"]), rmax - int(s["n"]))
+				s["n"] = int(s["n"]) + rt
+				held["n"] = int(held["n"]) - rt
+				if int(held["n"]) <= 0:
+					held = {}
+			else:
+				set_slot.call({"id": int(held["id"]), "n": int(held["n"])})
+				held = {"id": int(s["id"]), "n": int(s["n"])}
+		drag_held = false
+		return
 	if shift:
 		if has_s and (area == "storage" or area == "hotbar"):
 			var target: String = "hotbar" if area == "storage" else "storage"
@@ -810,6 +834,7 @@ func _slot_click(s: Dictionary, set_slot: Callable, area: String, button: int, s
 					_inv_set(i + off, {"id": int(s["id"]), "n": m2})
 					s["n"] = int(s["n"]) - m2
 			set_slot.call(s if int(s["n"]) > 0 else {"id": 0, "n": 0})
+		drag_held = false
 		return
 	if button == 2:
 		if held != {} and int(held.get("id", 0)) != 0:
@@ -827,6 +852,7 @@ func _slot_click(s: Dictionary, set_slot: Callable, area: String, button: int, s
 				set_slot.call({"id": 0, "n": 0})
 			else:
 				s["n"] = int(s["n"]) - 1
+		drag_held = not had_held and int(held.get("id", 0)) != 0
 		return
 	if held != {} and int(held.get("id", 0)) != 0:
 		if not has_s:
@@ -842,26 +868,30 @@ func _slot_click(s: Dictionary, set_slot: Callable, area: String, button: int, s
 		else:
 			set_slot.call({"id": int(held["id"]), "n": int(held["n"])})
 			held = {"id": int(s["id"]), "n": int(s["n"])}
+		drag_held = false
 	elif has_s:
 		held = {"id": int(s["id"]), "n": int(s["n"])}
 		set_slot.call({"id": 0, "n": 0})
+		drag_held = true
+	else:
+		drag_held = false
 
 
 func _cg_set(_i: int, v: Dictionary) -> void:
 	craft_grid[_i] = v
 
 
-func inv_slot_click(index: int, area: String, button: int, shift: bool) -> void:
+func inv_slot_click(index: int, area: String, button: int, shift: bool, release: bool = false) -> void:
 	var i: int = index + STORAGE_OFF if area == "storage" else index
-	_slot_click(_inv_get(i), func(v: Dictionary) -> void: _inv_set(i, v), area, button, shift)
+	_slot_click(_inv_get(i), func(v: Dictionary) -> void: _inv_set(i, v), area, button, shift, release)
 
 
-func craft_grid_click(index: int, button: int, shift: bool) -> void:
+func craft_grid_click(index: int, button: int, shift: bool, release: bool = false) -> void:
 	if index < 0 or index >= craft_grid.size():
 		return
-	if shift:
+	if shift and not release:
 		return
-	_slot_click(craft_grid[index], func(v: Dictionary) -> void: craft_grid[index] = v, "craft", button, false)
+	_slot_click(craft_grid[index], func(v: Dictionary) -> void: craft_grid[index] = v, "craft", button, false, release)
 	recompute_craft()
 
 
@@ -881,12 +911,21 @@ func craft_output_click() -> void:
 		Audio.play("pickup")
 
 
-func armor_slot_click(index: int, button: int, shift: bool) -> void:
+func armor_slot_click(index: int, button: int, shift: bool, release: bool = false) -> void:
 	if index < 0 or index >= armor.size():
 		return
 	var kind: String = ARMOR_SLOTS[index]
+	var had_held := held != {} and int(held.get("id", 0)) != 0
+	if release:
+		if had_held and drag_held:
+			var it3 = Data.items.get(int(held["id"]))
+			if it3 != null and str(it3.get("armor", "")) == kind and int(armor[index]) == 0:
+				armor[index] = int(held["id"])
+				held = {}
+		drag_held = false
+		return
 	if button == 2:
-		if held != {} and int(held.get("id", 0)) != 0:
+		if had_held:
 			var it = Data.items.get(int(held["id"]))
 			if it != null and str(it.get("armor", "")) == kind:
 				if int(held["n"]) > 1:
@@ -895,10 +934,12 @@ func armor_slot_click(index: int, button: int, shift: bool) -> void:
 				elif int(armor[index]) == 0:
 					armor[index] = int(held["id"])
 					held = {}
+		drag_held = false
 		return
 	if shift:
+		drag_held = false
 		return
-	if held != {} and int(held.get("id", 0)) != 0:
+	if had_held:
 		var it2 = Data.items.get(int(held["id"]))
 		if it2 != null and str(it2.get("armor", "")) == kind:
 			if int(armor[index]) == 0:
@@ -911,6 +952,7 @@ func armor_slot_click(index: int, button: int, shift: bool) -> void:
 	elif int(armor[index]) != 0:
 		held = {"id": int(armor[index]), "n": 1}
 		armor[index] = 0
+	drag_held = not had_held and int(held.get("id", 0)) != 0
 
 
 func inv_selected() -> Dictionary:

@@ -57,6 +57,7 @@ class SlotCtl extends Control:
 	var border := SLOT_BORDER
 	var tex: Texture2D = null
 	var cb: Callable
+	var rel_pos := Vector2.ZERO
 
 	func _draw() -> void:
 		var s := size
@@ -74,14 +75,19 @@ class SlotCtl extends Control:
 			draw_rect(r, fill)
 
 	func _gui_input(event: InputEvent) -> void:
-		if event is InputEventMouseButton and event.pressed and cb.is_valid():
+		if event is InputEventMouseButton and cb.is_valid():
 			var mb: InputEventMouseButton = event
 			if mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 				return
-			if Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
-				var button := 0 if mb.button_index == MOUSE_BUTTON_LEFT else 2
-				cb.call(button, mb.shift_pressed)
-				get_viewport().set_input_as_handled()
+			if Input.mouse_mode != Input.MOUSE_MODE_VISIBLE:
+				var p = Game.player
+				if p == null or String(p.ui_mode) == "":
+					return
+			if not mb.pressed:
+				rel_pos = position + mb.position
+			var button := 0 if mb.button_index == MOUSE_BUTTON_LEFT else 2
+			cb.call(button, mb.shift_pressed, mb.pressed)
+			get_viewport().set_input_as_handled()
 
 
 class HeldCtl extends Control:
@@ -241,7 +247,6 @@ func _ready() -> void:
 	_held.size = Vector2(SLOT, SLOT)
 	_held.visible = false
 	_held.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_held)
 	_panel = FrameRect.new()
 	_panel.bg = PANEL_BG
 	_panel.edge = 3.0
@@ -354,6 +359,7 @@ func _ready() -> void:
 	dl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	dl.position = Vector2.ZERO
 	_dead_btn.add_child(dl)
+	add_child(_held)
 	_build_all_recipes()
 
 
@@ -383,24 +389,49 @@ func _add_slot(area: String, idx: int) -> void:
 	_labels.append(l)
 
 
-func _route_click(si: int, button: int, shift: bool) -> void:
+func _route_click(button: int, shift: bool, is_press: bool, si: int) -> void:
 	var p = Game.player
 	if p == null:
+		return
+	if not is_press:
+		_release_drop(p, (_slots[si] as SlotCtl).rel_pos)
 		return
 	var area: String = _areas[si]
 	var idx: int = _indices[si]
 	if area == "storage":
-		p.inv_slot_click(idx, "storage", button, shift)
+		p.inv_slot_click(idx, "storage", button, shift, false)
 	elif area == "armor":
-		p.armor_slot_click(idx, button, shift)
+		p.armor_slot_click(idx, button, shift, false)
 	elif area == "hotbar":
-		p.inv_slot_click(idx, "hotbar", button, shift)
+		p.inv_slot_click(idx, "hotbar", button, shift, false)
 	elif area == "craft":
-		p.craft_grid_click(idx, button, shift)
+		p.craft_grid_click(idx, button, shift, false)
 	elif area == "output":
 		p.craft_output_click()
 	elif button == 0 and Game.mode == "play":
 		p.sel = idx
+
+
+func _release_drop(p, gpos: Vector2) -> void:
+	for i in _slots.size():
+		var c: Control = _slots[i]
+		if not c.visible:
+			continue
+		if not Rect2(c.position, c.size).has_point(gpos):
+			continue
+		var area: String = _areas[i]
+		var idx: int = _indices[i]
+		if area == "storage":
+			p.inv_slot_click(idx, "storage", 0, false, true)
+		elif area == "armor":
+			p.armor_slot_click(idx, 0, false, true)
+		elif area == "hotbar":
+			p.inv_slot_click(idx, "hotbar", 0, false, true)
+		elif area == "craft":
+			p.craft_grid_click(idx, 0, false, true)
+		elif area == "hotbar_bottom":
+			p.sel = idx
+		return
 
 
 func _tile_texture(region: Vector2i) -> Texture2D:

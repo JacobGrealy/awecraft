@@ -276,6 +276,11 @@ func _ready() -> void:
 			player = _spawn_player()
 			await _craft_test()
 			return
+		if logic == "guiclick":
+			world.recenter(spawn.x, spawn.z, true)
+			player = _spawn_player()
+			await _guiclick_test()
+			return
 		if logic == "combat":
 			world.recenter(spawn.x, spawn.z, true)
 			await _await_spawn_floor(spawn, 300)
@@ -783,6 +788,71 @@ func _interact_test() -> void:
 		"after_place_cell": after_place,
 		"place_ok": after_place == tid,
 	})
+	get_tree().quit()
+
+
+func _heldpair(p):
+	if p == null or p.held == {} or int(p.held.get("id", 0)) == 0:
+		return [0, 0]
+	return [int(p.held["id"]), int(p.held["n"])]
+
+
+func _guiclick_test() -> void:
+	var p = Game.player
+	for i in 4:
+		await get_tree().physics_frame
+	Debug.seed_inv()
+	p.open_inventory("inv")
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	for i in 6:
+		await get_tree().physics_frame
+	var r := {}
+	var ok := true
+	r["held0"] = _heldpair(p)
+	ok = ok and r["held0"] == [0, 0]
+	p.inv_slot_click(0, "storage", 0, false, false)
+	r["held_down"] = _heldpair(p)
+	r["storage_down"] = [int(p._inv_get(27)["id"]), int(p._inv_get(27)["n"])]
+	ok = ok and r["held_down"] == [6, 5] and r["storage_down"] == [0, 0]
+	p.inv_slot_click(0, "hotbar", 0, false, true)
+	r["held_up"] = _heldpair(p)
+	r["hot0_up"] = [int(p._inv_get(0)["id"]), int(p._inv_get(0)["n"])]
+	ok = ok and r["held_up"] == [0, 0] and r["hot0_up"] == [6, 5]
+	p.inv_slot_click(0, "hotbar", 0, false, false)
+	r["held_grab2"] = _heldpair(p)
+	ok = ok and r["held_grab2"] == [6, 5]
+	p.inv_slot_click(2, "hotbar", 0, false, true)
+	r["hot2_move"] = [int(p._inv_get(2)["id"]), int(p._inv_get(2)["n"])]
+	r["hot0_move"] = [int(p._inv_get(0)["id"]), int(p._inv_get(0)["n"])]
+	ok = ok and _heldpair(p) == [0, 0] and r["hot2_move"] == [6, 5] and r["hot0_move"] == [0, 0]
+	Debug.give_item(8, 3)
+	p.inv_slot_click(p.find_slot(8), "hotbar", 0, false, false)
+	p.inv_slot_click(0, "hotbar", 0, false, false)
+	r["two_click"] = [int(p._inv_get(0)["id"]), int(p._inv_get(0)["n"]), _heldpair(p)]
+	p.inv_slot_click(0, "hotbar", 0, false, true)
+	r["two_click_up"] = [int(p._inv_get(0)["id"]), int(p._inv_get(0)["n"]), _heldpair(p)]
+	ok = ok and r["two_click"] == [8, 3, [0, 0]] and r["two_click_up"] == [8, 3, [0, 0]]
+	p.inv_slot_click(0, "storage", 0, false, false)
+	p.inv_slot_click(0, "storage", 0, false, true)
+	r["storage_same"] = [int(p._inv_get(27)["id"]), int(p._inv_get(27)["n"]), _heldpair(p)]
+	ok = ok and r["storage_same"] == [0, 0, [0, 0]]
+	Debug.seed_inv()
+	for i in 8:
+		await get_tree().physics_frame
+	var hv = Game.hotbar
+	var s23: Control = hv._slots[23]
+	var s50: Control = hv._slots[50]
+	print("AC45_IDX held=", hv._held.get_index(), " panel=", hv._panel.get_index(), " total=", hv.get_child_count())
+	p.inv_slot_click(0, "storage", 0, false, false)
+	ok = ok and _heldpair(p) == [6, 5]
+	Game.hotbar._release_drop(p, s50.position + s50.size * 0.5)
+	r["drop_hot0"] = [int(p._inv_get(0)["id"]), int(p._inv_get(0)["n"]), _heldpair(p)]
+	ok = ok and r["drop_hot0"] == [6, 5, [0, 0]]
+	p.inv_slot_click(0, "hotbar", 0, false, false)
+	Game.hotbar._release_drop(p, s23.position + s23.size * 0.5)
+	r["drop_storage"] = [int(p._inv_get(27)["id"]), int(p._inv_get(27)["n"]), _heldpair(p)]
+	ok = ok and r["drop_storage"] == [6, 5, [0, 0]]
+	Debug.result({"ok": ok, "data": r})
 	get_tree().quit()
 
 

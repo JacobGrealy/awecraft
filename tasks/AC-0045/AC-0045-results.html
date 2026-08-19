@@ -1,0 +1,90 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0045 results — inventory click/drag fixed</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:980px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}img{max-width:640px;border:1px solid #b9c2cf;border-radius:4px;display:block;margin:8px 0}table{border-collapse:collapse;font-size:13px}td,th{border:1px solid #cdd6e3;padding:4px 10px}.pass{color:#17641f;font-weight:600}</style></head><body>
+<h1>AC-0045 — inventory click/drag fixed (web build) — 2026-08-19</h1>
+
+<h2>Root cause (two independent bugs, both in the UI input layer — logic was never at fault)</h2>
+<p><b>1. Wrong Callable argument order (the big one, broke ALL platforms, not just web).</b>
+Slots were wired with
+<code>c.cb = Callable(self, "_route_click").bind(_slots.size())</code> — bound arguments are
+<b>appended</b> — but the handler was called as
+<code>cb.call(button, shift)</code> against a signature
+<code>_route_click(si, button, shift)</code>.
+So every click executed as <code>_route_click(button, shift, slotIndex)</code> →
+<code>si</code> received the button value, the area lookup landed on "hotbar_bottom", and the only effect was
+<code>p.sel = 0</code>. Every storage/craft/output/armor/hotbar-in-panel click was a silent no-op.
+This is why M7a headless passed (it calls <code>Debug.inv_click</code> → the player click API directly, bypassing the UI)
+while the user saw nothing happen in the browser.</p>
+<p><b>2. Godot GUI mouse-focus semantics.</b> The engine keeps <code>gui.mouse_focus</code> on the control where a button
+was pressed and routes the <b>release</b> back to that same control (verified in
+<code>Viewport::_gui_input_event</code>, 4.7 <code>scene/main/viewport.cpp</code>). A release never reaches the control
+under the cursor — so an MC-style LMB drag (down on slot A, release over slot B) can't work by just handling
+<code>pressed=false</code>; the UI must resolve the drop target itself from the release position.</p>
+
+<h2>Fix (godot/ only)</h2>
+<ul>
+<li><code>ui/inventory.gd</code> — <code>_route_click</code> signature corrected to
+<code>(button, shift, is_press, si)</code> matching the bound call; mouse <b>release</b> events now routed; new
+<code>_release_drop(p, gpos)</code> resolves the slot under the release position (slot rect scan) and dispatches the
+release action (place/merge/swap, equip, craft-grid drop, hotbar-bottom select). <code>SlotCtl</code> captures the release
+position in its own space (<code>rel_pos = position + mb.position</code>; the engine rewrites the event position into the
+focused control's local space). The mouse-mode guard now also passes while a UI is open (web export reports
+<code>mouse_mode</code> from the live browser pointer-lock state — <code>DisplayServerWeb::mouse_get_mode()</code> — so a
+stale CAPTURED can't swallow UI clicks). Held-cursor control moved to top z-order so a dragged item is never hidden
+behind the panel.</li>
+<li><code>player/player.gd</code> — click API gained an explicit <code>release</code> parameter. New <code>drag_held</code>
+state: set only when a press <b>grabbed</b> a stack, cleared on any place/shift/RMB/close/death. Release actions
+place/merge/swap the held stack into the target; a release never grabs (keeps the web spec's 2-click flow intact:
+down places, up no-ops). <code>close_inventory</code>/death clear the flag (grid-lost-on-close quirk untouched).
+Death now sets <code>MOUSE_MODE_VISIBLE</code> (mirrors frozen spec's <code>document.exitPointerLock()</code> on death,
+so the Respawn button is clickable in the browser). Debug key <b>V</b> → <code>Debug.seed_inv()</code> (deterministic
+browser pre-populate: 5 oak logs in storage slot 0).</li>
+<li><code>autoload/debug.gd</code> — <code>Debug.seed_inv()</code>.</li>
+<li><code>scenes/main.gd</code> — new regression harness <code>AWECRAFT_LOGIC=guiclick</code>: replays the exact UI
+driver calls (grab → drop via <code>_release_drop</code> position resolution, 2-click flow, no double-place on release,
+grab+release same-slot no-op).</li>
+</ul>
+
+<h2>Verification gates</h2>
+<table>
+<tr><th>Gate</th><th>Result</th></tr>
+<tr><td>1a. Headless <code>AWECRAFT_LOGIC=craft</code> (M7a semantics incl. grid-lost-on-close, held-return)</td><td class="pass">PASS ok:true, bit-identical to pre-fix output</td></tr>
+<tr><td>1b. Headless <code>AWECRAFT_LOGIC=guiclick</code> (new: grab/drop/2-click/release edge cases)</td><td class="pass">PASS ok:true</td></tr>
+<tr><td>1c. Battery player/interact/light/fluids/buckets + plain quit</td><td class="pass">PASS, zero script errors (interact <code>drop_spawned:false</code> seen once = pre-documented 1/8 RNG flake, retry green)</td></tr>
+<tr><td>2. BROWSER PROOF (playwright/chromium vs https://localhost:8443, 1280×720, 1:1 canvas)</td><td class="pass">PASS — see below</td></tr>
+<tr><td>3. Web rebuilt via <code>./build_web.sh</code> (served, new pck mtime/size confirmed)</td><td class="pass">PASS</td></tr>
+</table>
+<p>Browser script: load → wait for world → <b>V</b> (seed 5 logs in storage[0]) → <b>E</b> (open) → before.png →
+mouse <b>down</b> at storage slot 0 → move to in-panel hotbar slot 0 (24 steps) → mid_drag.png → <b>up</b> → after.png.
+Pixel asserts (region-averaged): before = log texture at storage[0], hotbar[0] empty; mid = storage[0] empty +
+log-texture held cursor following mouse at mouse+(14,14) rendered <b>above</b> the panel; after = log ×5 at hotbar[0]
+(tooltip "Oak Log"), storage[0] empty, held cursor gone. <b>The item moved via the scripted LMB drag.</b></p>
+
+<h2>Screenshots (tasks/AC-0045/)</h2>
+<p><b>Before</b> — seeded: 5 oak logs in storage slot 0 (top-left of storage grid):</p>
+<img src="ac45_before.png">
+<p><b>Mid-drag</b> — log picked up (storage empty), held cursor trailing the mouse, drawn above the panel edge:</p>
+<img src="ac45_mid_drag.png">
+<p><b>After</b> — log ×5 placed in hotbar slot 0 (tooltip visible); storage empty; held cursor cleared:</p>
+<img src="ac45_after.png">
+
+<h2>Known limitations / notes</h2>
+<ul>
+<li>Residual web input latency: browser input events are flushed per frame; under software (swiftshader) rasterization
+frames take 250–400 ms, so a grab can visually lag the scripted mouse-down by a frame or two (observed in the mid shot
+sequence). On real GPU hardware this is the normal single-frame input path — noted per spec, not chased.</li>
+<li>The browser console logs one benign pageerror, "A user gesture is required to request Pointer Lock." at startup —
+the frozen web spec does the same gesture-less <code>requestPointerLock()</code> on new world (index.html:3163–3200), and
+the established fallback (click to capture, drag-look otherwise) is BUGWEB-1's design. Not a script error; no action.</li>
+<li>Drag-drop (release-to-place) is an <b>extension beyond the frozen web spec</b> (web slots handle mousedown only) and
+is required by this task; the spec's 2-click flow (down picks, down places, shift, RMB) is preserved exactly, verified
+headless in <code>guiclick</code>.</li>
+<li>Debug hook <b>V</b> seeds the deterministic inventory (also works on desktop) — used by the browser gate.</li>
+</ul>
+
+<h2>Files changed</h2>
+<pre>godot/ui/inventory.gd      slot click routing: arg order, press+release, _release_drop, guard, held z-order
+godot/player/player.gd     click API release param + drag_held state, close/death flag clears, V debug key
+godot/autoload/debug.gd    Debug.seed_inv()
+godot/scenes/main.gd       AWECRAFT_LOGIC=guiclick regression test (+ _heldpair helper)
+web/                       rebuilt (AC-0045 build)</pre>
+</body></html>
