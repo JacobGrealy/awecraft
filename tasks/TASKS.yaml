@@ -1,0 +1,523 @@
+# AweCraft task registry (single source of truth; see tasks/AC-NNNN/ for spec.html + results + screenshots)
+updated: 2026-08-19 09:45
+queue:
+- AC-0030
+- AC-0031
+- AC-0032
+- AC-0033
+- AC-0034
+- AC-0035
+- AC-0036
+- AC-0037
+- AC-0038
+- AC-0039
+- AC-0040
+- AC-0041
+- AC-0042
+tasks:
+- id: AC-0001
+  name: m1-scaffold
+  description: 'Godot scaffold: autoloads (Game/Data/Audio/Debug), scene, Debug.snap/result harness'
+  created: '2026-08-15'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-16'
+  comments:
+  - ts: 2026-08-15 12:00
+    author: agent
+    text: Migration plan M1 (ARCHITECTURE.md §8); web spec frozen at r12 as reference
+- id: AC-0002
+  name: m2-chunk-world
+  description: 'Chunk world: seeded generator (4 biomes, caves, ores, bedrock, sea y30, H80), SurfaceTool meshing, per-chunk collision'
+  created: '2026-08-15'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-16'
+  comments:
+  - ts: 2026-08-15 12:00
+    author: agent
+    text: Migration plan M2
+- id: AC-0003
+  name: m3-player
+  description: 'Player: CharacterBody3D movement, walk/sprint/gravity/jump, fly (F), first-person look, time (G), F3 debug, world spawn'
+  created: '2026-08-15'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-16'
+  comments:
+  - ts: 2026-08-15 12:00
+    author: agent
+    text: Migration plan M3
+- id: AC-0004
+  name: m4-interaction
+  description: 'Interaction: DDA select highlight, long-press mine, place, drops, hotbar select (1-9/wheel)'
+  created: '2026-08-15'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-16'
+  comments:
+  - ts: 2026-08-15 12:00
+    author: agent
+    text: Migration plan M4
+- id: AC-0005
+  name: m5a1-lighting-compute
+  description: 'Lighting computation: sky column + block-light BFS (torch 14, glowstone 12, lava 15); bake-to-mesh deferred'
+  created: '2026-08-15'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-16'
+  comments:
+  - ts: 2026-08-15 12:00
+    author: agent
+    text: Migration plan M5 (compute part; bake = AC-0035)
+- id: AC-0006
+  name: m6a-fluid-sim
+  description: 'Fluid simulation: flow levels (source 8), water/lava, reactions (obsidian/stone), tick near player'
+  created: '2026-08-15'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-16'
+  comments:
+  - ts: 2026-08-15 12:00
+    author: agent
+    text: Migration plan M6 (sim part)
+- id: AC-0007
+  name: m6b-fluid-mesh-buckets
+  description: Fluid mesh (level-aware) + buckets (139/140/141 scoop/place) + fluid raycast
+  created: '2026-08-15'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-16'
+  comments:
+  - ts: 2026-08-15 12:00
+    author: agent
+    text: Migration plan M6 (mesh+buckets part)
+- id: AC-0008
+  name: bugweb1-camera
+  description: 'Web camera bug: LMB drag-look + click recapture (web-freeze era)'
+  created: '2026-08-17'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-17'
+  comments:
+  - ts: 2026-08-17 10:00
+    author: user
+    text: camera controls felt wrong in the web build
+- id: AC-0009
+  name: bugweb2-web-perf
+  description: 'Web perf: 1 concave shape/chunk, 1-chunk/frame build queue (spawn first), serve_web.py gzip 39.5→10.1MB'
+  created: '2026-08-17'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-17'
+  comments:
+  - ts: 2026-08-17 11:00
+    author: user
+    text: browser build was very slow to load/play
+- id: AC-0010
+  name: perf3a-break-freeze
+  description: 'Block-break freeze fix: local snapshot build 133→45-75ms, typed Lighting, staggered edit flush (worst frame 54ms)'
+  created: '2026-08-17'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-17'
+  comments:
+  - ts: 2026-08-17 14:00
+    author: user
+    text: breaking a block froze the game
+- id: AC-0011
+  name: perf3c1-worldgen
+  description: Worldgen 23.9x faster (744→31ms/chunk), GENHASH-gated bit-identical, API unchanged
+  created: '2026-08-17'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-17'
+  comments:
+  - ts: 2026-08-17 15:00
+    author: agent
+    text: 'PERF2 finding: WorldGen.generate was the startup cost'
+- id: AC-0012
+  name: tex-textures
+  description: Block texture atlas from Faithful-32x .mcpack import pipeline (AWECRAFT_IMPORT_PACK); id 9 cobblestone added; portal purple fill
+  created: '2026-08-16'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-17'
+  comments:
+  - ts: 2026-08-16 18:00
+    author: user
+    text: 'block textures: UV-mapped atlas; import Minecraft resource packs (.mcpack)'
+- id: AC-0013
+  name: webx-web-export
+  description: 'Godot HTML5 export pipeline: 4.7.1 web templates, export preset, build_web.sh → web/, served over http(s)'
+  created: '2026-08-16'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-17'
+  comments:
+  - ts: 2026-08-16 18:00
+    author: user
+    text: Godot HTML5/Web export after EVERY feature so the user can test in a browser
+- id: AC-0014
+  name: perf3d-fluid-sleep
+  description: 'Fluid sleep: full-scan only while awake, ~0ms ticks after 3 write-free ticks, A/B bit-identical (sea settle 12 ticks)'
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-18'
+  comments:
+  - ts: 2026-08-18 08:00
+    author: user
+    text: still noticeable drops (web retest)
+- id: AC-0015
+  name: web-format-bug
+  description: Web string-format error every fluid tick in browser (~10 console errors/s + main-thread cost) — fixed
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-18'
+  comments:
+  - ts: 2026-08-18 09:00
+    author: agent
+    text: found via browser console during PERF3d A/B
+- id: AC-0016
+  name: bugwater1-climb-out-water
+  description: 'Climb out of water: swim-up assist (extend web spec — frozen web has the same stuck-swimmer bug)'
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-18'
+  comments:
+  - ts: 2026-08-18 10:00
+    author: user
+    text: Unable to climb out of water, need to be able to hold space to get on top of a block at same height as water
+- id: AC-0017
+  name: render-dist
+  description: Visual radius split from sim; default r=2→4 (25→81 chunks); AWECRAFT_LOGIC=perf gate; A/B r=2
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-18'
+  comments:
+  - ts: 2026-08-18 09:00
+    author: user
+    text: 'MC-style: default 4 chunks visually, sim separate (up to 96 visual)'
+- id: AC-0018
+  name: m7a-inventory-craft-logic
+  description: 'Headless inventory+craft logic: web-exact slot model (inv[36], storage inv[27+i], armor 4), click semantics, shapeless+shaped output, AWECRAFT_LOGIC=craft'
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-18'
+  comments:
+  - ts: 2026-08-18 11:00
+    author: agent
+    text: 'M7 split: logic first (stall lesson: small headless-first steps)'
+- id: AC-0019
+  name: m7b-inventory-ui
+  description: 'Inventory UI: web-exact panel (48px slots), craft grid+output, hover NAME tooltip, craftable-recipe autofill list, icon/atlas fixes'
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-18'
+  comments:
+  - ts: 2026-08-18 11:00
+    author: user
+    text: backpack 9x3 + craft grid + output + armor 4; hover name tooltip; transparent empty slots; craftable-recipe autofill list
+- id: AC-0020
+  name: m8-survival
+  description: 'Survival: hunger (20, drain/regen/starve), armor DR (web formula), tool speed (2/4/6/7), pick-gated drops, eat, food bar + black hearts, fall/lava/drown/void'
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-18'
+  comments:
+  - ts: 2026-08-18 12:00
+    author: agent
+    text: Migration plan M8
+- id: AC-0021
+  name: m9-combat
+  description: 'Combat: attack (block DDA wins, mob only when ray empty, no cooldown per web), bare-hand 1 dmg, weapon .dmg, knockback, death drops; MOBS table ported; stub mob API'
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-18'
+  comments:
+  - ts: 2026-08-18 13:00
+    author: agent
+    text: Migration plan M9 (bare-hand punch was a web-backlog ask)
+- id: AC-0022
+  name: m5b-day-night
+  description: 'Day/night: web-exact sky/sun/ambient/dusk/fog formulas, 600s cycle auto-advance, G noon/midnight, DayNight core module'
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-18'
+  comments:
+  - ts: 2026-08-16 20:00
+    author: agent
+    text: shelved M5b (resume after core+TEX)
+- id: AC-0023
+  name: bugtext-browser-textures
+  description: Browser export untextured — atlas load fix for web build; browser screenshot proof (cobble/sand/sky/fog/UI)
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-18'
+  comments:
+  - ts: 2026-08-18 19:00
+    author: user
+    text: why is nothing textured? In the web version everything had a basic texture by default and an option to load a texture pack in the main menu. This version doesn't have basic textures or a main menu
+- id: AC-0024
+  name: fog-pop
+  description: 'Fog must end before farthest chunk edge: DayNight.fog_near/fog_far(render_radius) = (r+1)*4 / (r+1)*16*0.95 (r=4: 20/76 < 80 edge)'
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-18'
+  comments:
+  - ts: 2026-08-18 19:00
+    author: user
+    text: there needs to be a fog before the end of the furthest chunk to hid the pop in
+- id: AC-0025
+  name: biome-tint
+  description: 'Biome tint: web NEUTRAL_TINTS (grass top 93/178/55, water 47/107/235, leaves 60/140/48) via Data.block_tint × face brightness; fixed missing render-await bug'
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-18'
+  comments:
+  - ts: 2026-08-18 19:30
+    author: user
+    text: grass and water are grey. this is because they need to be tinted as they can be different colors depending on there biome
+- id: AC-0026
+  name: windows-export
+  description: 'Windows x86_64 release export: preset + export/windows/AweCraft.exe single-file 109MB (pck embedded, no console)'
+  created: '2026-08-19'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-19'
+  comments:
+  - ts: 2026-08-19 06:00
+    author: user
+    text: please export a windows x86_64 version of the game (before you do anything else)
+- id: AC-0027
+  name: trees-flora
+  description: 'Trees + flowers ported from web: per-chunk deterministic gen (20x20 ring, trunk 4..6, canopy 2/2/1/1), flora atlas tiles (leaf tinted, poppy/dandelion), cross meshing, drops 15%/50% seeds'
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-19'
+  comments:
+  - ts: 2026-08-18 19:30
+    author: user
+    text: will we be adding trees and flowers in? (these were in the the 3js version).
+  - ts: 2026-08-19 08:10
+    author: agent
+    text: verify-pass fixed 5 bugs in the stalled run (loop corruption, atlas re-import, quad buffer); GENHASH terrain intact; perf 63ms 0% regression; test_spin* junk deleted
+- id: AC-0028
+  name: ops-config
+  description: 'Ops: scratch dir + .gitignore, /tmp/** pre-allowed, agent variants (general xhigh / explore medium / summary+compaction low), compaction prune off'
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-19'
+  comments:
+  - ts: 2026-08-18 19:00
+    author: user
+    text: stop writing things to tmp since I have to allow that... or add tmp as a directory that you and your sub agents can access
+  - ts: 2026-08-19 05:30
+    author: user
+    text: can you launch the sub agents at medium reasoning level? or even low for summarization agents
+  - ts: 2026-08-19 06:30
+    author: user
+    text: we should turn off prune in the compaction setting, this will interfere with caching
+  - ts: 2026-08-19 06:30
+    author: user
+    text: let's put general sub agent back on Xhigh reasoning
+- id: AC-0029
+  name: docs-features-backlog
+  description: 'REMAINING_FEATURES.html: + online multiplayer, + controller support; WS6 marked REMOVED (endgame redirect)'
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: done
+  completed: '2026-08-18'
+  comments:
+  - ts: 2026-08-18 19:30
+    author: user
+    text: 'add to future features list: Online multiplayer, controller support'
+- id: AC-0030
+  name: server-daemon
+  description: serve_web.py --daemon (double-fork setsid, pidfile .scratch/serve_web.pid, port guard, --replace) so the https server survives opencode restarts
+  created: '2026-08-19'
+  updated: 2026-08-19 08:15
+  status: in_progress
+  completed: null
+  comments:
+  - ts: 2026-08-19 07:00
+    author: user
+    text: I think the https server is down, are the sub processes killing it?
+  - ts: 2026-08-19 07:00
+    author: agent
+    text: 'root cause: opencode restarts kill the nohup''d process group (not subagents). Canonical launcher becomes `python3 serve_web.py --ssl --daemon`'
+  - ts: 2026-08-19 07:00
+    author: user
+    text: is serve_web.py how we are starting the https server? If not, would it make sense to update it and use it as such? → yes, updated per this task
+- id: AC-0031
+  name: water-anim
+  description: Animate water texture like the web (UV scroll/shimmer on the fluid mesh)
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: pending
+  completed: null
+  comments:
+  - ts: 2026-08-18 19:30
+    author: user
+    text: water texture should be animated
+- id: AC-0032
+  name: hand-anim
+  description: Swing/punch animation for the held item while mining; fix blurry held-item texture (nearest-neighbor filter)
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: pending
+  completed: null
+  comments:
+  - ts: 2026-08-18 19:30
+    author: user
+    text: we should have an animation for the item in hand when you mine a block using it (ie it should swing/punch). Also texture on held objects is blurry for some reason
+- id: AC-0033
+  name: menu
+  description: 'Main menu (title + build version + play/new world) before game start; options menu from main + pause: render-distance slider (chunks), sim-distance slider (chunks), texture-pack apply, sound-volume slider, fullscreen toggle, resolution dropdown; persist settings'
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: pending
+  completed: null
+  comments:
+  - ts: 2026-08-18 19:30
+    author: user
+    text: We need a main menu before you start the game. We need an options menu accessable from the main menu or pause menu
+  - ts: 2026-08-18 19:30
+    author: user
+    text: we should be able to modify render distance (number of chunks) and simulation distance (number of chunks). These should be sliders. In this menu you should also be able to apply texture packs.
+  - ts: 2026-08-18 19:30
+    author: user
+    text: also slider for sound volume
+  - ts: 2026-08-18 19:30
+    author: user
+    text: fullscreen option, resolution dropdown
+  - ts: 2026-08-18 19:30
+    author: user
+    text: build version should display in menu
+- id: AC-0034
+  name: hitch
+  description: 'Block-break hitches remain: PERF3c-2 diagnostics (recenter sync gen, worst boundary-chunk build, tick_fluids locality, snapshot drain) + fixes'
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: pending
+  completed: null
+  comments:
+  - ts: 2026-08-18 19:30
+    author: user
+    text: game still hitches when a block is broken.
+- id: AC-0035
+  name: m5a2-light-bake
+  description: Bake per-voxel light into mesh vertex colors (Lighting from AC-0005 ready) + web uDay terrain uniform + stars
+  created: '2026-08-16'
+  updated: 2026-08-19 08:15
+  status: pending
+  completed: null
+  comments:
+  - ts: 2026-08-16 20:00
+    author: agent
+    text: shelved M5a2 (resume after core+TEX)
+- id: AC-0036
+  name: underwater
+  description: 'Underwater view: hide water cells around the eye + underwater visual effect (overlay tint; research web''s approach first)'
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: pending
+  completed: null
+  comments:
+  - ts: 2026-08-18 19:30
+    author: user
+    text: underwater looks weird, we probably want to hide the water blocks while we are in them and apply some kind of visual effect to simulate being underwater, though I'm open to other ideas on how best to handle that.
+- id: AC-0037
+  name: mobs
+  description: 'Mobs: 9 UNIQUE models (web''s 8 + cute bunny, chicken-sized) with hip/shoulder-pivoted limbs, AI (hostile chase, chicken passive, wolf tame by bone, spider night-only), bow/arrows, day/night spawn tables; orchestrator iterates each model PNG'
+  created: '2026-08-16'
+  updated: 2026-08-19 08:15
+  status: pending
+  completed: null
+  comments:
+  - ts: 2026-08-16 20:00
+    author: agent
+    text: Migration plan M10 (mob model quality was a web-backlog ask)
+  - ts: 2026-08-19 07:00
+    author: user
+    text: for mobs, we also want cute little bunnies, they should be about the same size as the chickens
+- id: AC-0038
+  name: m12-particles
+  description: 'WS7 pooled particles (~200): break debris, hit sparks, arrow burst, pickup puff'
+  created: '2026-08-16'
+  updated: 2026-08-19 08:15
+  status: pending
+  completed: null
+  comments:
+  - ts: 2026-08-16 20:00
+    author: agent
+    text: from REMAINING_FEATURES.html WS7
+- id: AC-0039
+  name: m13-sound
+  description: 'WS8 procedural sound (no assets): block/step/hit/eat/splash/arrow/bow/mob/ambient — headless-asserted (dummy audio driver)'
+  created: '2026-08-16'
+  updated: 2026-08-19 08:15
+  status: pending
+  completed: null
+  comments:
+  - ts: 2026-08-16 20:00
+    author: agent
+    text: from REMAINING_FEATURES.html WS8; banana gorilla sfx (AC-0040) waits on this
+- id: AC-0040
+  name: bouncy-banana
+  description: 'Bouncy banana: banana trees (special tree type) grow bananas; within 10 blocks of a character, chance to fall off and bounce around until at rest; pickable; eating restores health + stamina; short gorilla sfx on eat (after AC-0039)'
+  created: '2026-08-19'
+  updated: 2026-08-19 08:15
+  status: pending
+  completed: null
+  comments:
+  - ts: 2026-08-19 07:00
+    author: user
+    text: add bouncy banana. These grow on banana trees (a special tree type). when a character is within 10 blocks of a bouncing banana, the banana has a chance to fall of the tree and start bouncing around before eventually coming to a rest. The banana can be picked up by the character and eaten to restore health and stamina. When the banana is eaten a short gorilla sound effect plays. This can be implemented after we add the sound system.
+- id: AC-0041
+  name: windows-reexport
+  description: 'Periodic: re-export export/windows/AweCraft.exe after major batches (current exe predates trees/flora/etc.)'
+  created: '2026-08-19'
+  updated: 2026-08-19 08:15
+  status: pending
+  completed: null
+  comments:
+  - ts: 2026-08-19 08:00
+    author: agent
+    text: derived from AC-0026 + the commit-after-each-task cadence
+- id: AC-0042
+  name: planet-plan
+  description: 'Research/plan ONLY (do not implement): world contained to a planet — flat Minecraft feel on surface, seamless ground→space takeoff, ring (Halo-like) geometry so the rectangle map wraps; NMS GDC talk + similar games research; plan doc as .html'
+  created: '2026-08-19'
+  updated: 2026-08-19 08:15
+  status: pending
+  completed: null
+  comments:
+  - ts: 2026-08-19 06:30
+    author: user
+    text: write plan for how we could support the world being contained to a planet, and have the ability to fly off the planet and then land back on the planet or fly to another planet and land on it. Use "no man's sky" as inspiration... if a fully spherical planet prevents too many challenges... what if we use rings? (like halo)... when on the planet surface it should not really feel different from normal minecraft.
+- id: AC-0043
+  name: endgame
+  description: Endgame direction (replaces removed M11/Nether) — BLOCKED on user spec
+  created: '2026-08-18'
+  updated: 2026-08-19 08:15
+  status: blocked
+  completed: null
+  comments:
+  - ts: 2026-08-18 08:00
+    author: user
+    text: endgame redirected in a new direction; spec TBD — do NOT build Nether/portal; focus on the basics

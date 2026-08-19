@@ -1,0 +1,46 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0030 — serve_web.py daemon mode</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:900px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}</style></head><body>
+
+<h1>AC-0030 — HTTPS server as self-healing daemon (serve_web.py)</h1>
+
+<h2>Problem</h2>
+<p>The https server (<code>python3 serve_web.py --ssl</code>, port 8443, serving <code>web/</code>) dies on every
+<em>opencode restart</em>: background processes started with plain <code>nohup &amp;</code> live in opencode's process
+group, which is killed on session end. Not subagents — subagents must never kill it. The server must survive
+arbitrary opencode restarts and be the single canonical launcher.</p>
+
+<h2>Requirements</h2>
+<ul>
+<li><code>serve_web.py</code> stays a single stdlib-only file at repo root (AweCraft/serve_web.py).</li>
+<li>New flag <code>--daemon</code>: fully detach — double <code>os.fork()</code> + <code>os.setsid()</code>, stdio from <code>/dev/null</code> to the log file. Parent prints the daemon pid and exits.</li>
+<li>Pidfile <code>.scratch/serve_web.pid</code> (create <code>.scratch/</code> if missing). Write it in the daemon after re-parent.</li>
+<li>Port guard (all modes): if the target port is already bound by a live <code>serve_web.py</code> process → print <code>already running (pid X, port Y)</code> and exit 0. New flag <code>--replace</code>: kill that pid first (only that pid), then start.</li>
+<li>Log: <code>.scratch/awecraft-web-https.log</code> (https) / <code>.scratch/awecraft-web-http.log</code> (plain) — append, with a start marker line.</li>
+<li>Keep existing behavior unchanged: serves <code>web/</code>, gzip for known types, <code>--ssl</code> → 0.0.0.0:8443 with <code>web/ssl/</code> cert; no <code>--ssl</code> → 0.0.0.0:8140.</li>
+</ul>
+
+<h2>Canonical command (after this task)</h2>
+<pre>python3 serve_web.py --ssl --daemon</pre>
+
+<h2>Verify (hard gates, zero errors)</h2>
+<ol>
+<li>Daemon starts: <code>python3 serve_web.py --ssl --daemon --replace</code> → prints pid; <code>curl -sk https://127.0.0.1:8443/</code> → 200; <code>curl -sk https://127.0.0.1:8443/index.js</code> → 200.</li>
+<li>Detached: <code>ps -o pid,sid,pgid,cmd -p &lt;pid&gt;</code> → SID equals PID's own (own session, NOT the calling shell's session); <code>cat .scratch/serve_web.pid</code> matches.</li>
+<li>Guard: run <code>python3 serve_web.py --ssl</code> again → "already running" + exit 0, only ONE listener on 8443.</li>
+<li>Clean stop: <code>kill $(cat .scratch/serve_web.pid)</code> → port freed, pidfile stale-detection works (next <code>--daemon</code> starts cleanly or <code>--replace</code> handles it).</li>
+<li>Restart daemon as the final state (server MUST be running when the task ends, via <code>--ssl --daemon</code>).</li>
+</ol>
+
+<h2>Constraints</h2>
+<ul>
+<li>NO systemd/cron. Subagents may kill ONLY the identified serve_web pid.</li>
+<li>Do not touch godot/ or web/.</li>
+<li>Scratch files → <code>.scratch/</code>.</li>
+</ul>
+
+<h2>Deliverables</h2>
+<ul>
+<li>Updated <code>serve_web.py</code>.</li>
+<li>Running daemon on 8443 (https).</li>
+<li><code>tasks/AC-0030/AC-0030-results.html</code> — summary with the ps/curl evidence as <code>&lt;pre&gt;</code> blocks (no visual screenshots needed; state that).</li>
+</ul>

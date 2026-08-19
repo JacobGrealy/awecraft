@@ -1,0 +1,2579 @@
+extends Node3D
+
+const WorldRes = preload("res://world/world.tscn")
+const PlayerRes = preload("res://player/player.tscn")
+const InventoryScript = preload("res://ui/inventory.gd")
+const AtlasScript = preload("res://core/atlas.gd")
+const DayNight = preload("res://core/daynight.gd")
+
+var world: Node3D
+var camera: Camera3D
+var player: Node3D
+var drops: Node
+var entities: Node
+var sun: DirectionalLight3D
+var world_env: WorldEnvironment
+var env: Environment
+
+
+func _ready() -> void:
+	var import_pack := OS.get_environment("AWECRAFT_IMPORT_PACK")
+	if import_pack != "":
+		var imp := AtlasScript.import_pack(import_pack)
+		print("ATLAS_IMPORT ", JSON.stringify(imp))
+		Debug.result(imp)
+		get_tree().quit()
+		return
+
+	sun = DirectionalLight3D.new()
+	sun.shadow_enabled = false
+	add_child(sun)
+
+	world_env = WorldEnvironment.new()
+	env = Environment.new()
+	env.background_mode = Environment.BG_COLOR
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	env.fog_enabled = true
+	env.fog_mode = Environment.FOG_MODE_DEPTH
+	if OS.get_environment("AWECRAFT_NO_FOG") == "1":
+		env.fog_enabled = false
+	world_env.environment = env
+	add_child(world_env)
+
+	var snapshot_path := OS.get_environment("AWECRAFT_SNAPSHOT")
+	var logic := OS.get_environment("AWECRAFT_LOGIC")
+	var cam := OS.get_environment("AWECRAFT_CAM")
+	var size_env := OS.get_environment("AWECRAFT_SIZE")
+	if size_env != "":
+		var parts := size_env.split(",")
+		get_window().size = Vector2i(parts[0].to_int(), parts[1].to_int())
+	var seed_env := OS.get_environment("AWECRAFT_SEED")
+	Game.new_world(44 if seed_env == "" else seed_env.to_int())
+	var time_env := OS.get_environment("AWECRAFT_TIME")
+	if time_env != "":
+		Game.time_of_day = fmod(time_env.to_float(), 1.0)
+	_update_sky()
+
+	world = WorldRes.instantiate()
+	world.name = "World"
+	add_child(world)
+	if OS.get_environment("AWECRAFT_NO_COLLISION") == "1":
+		world.collision_enabled = false
+	var rad := OS.get_environment("AWECRAFT_RADIUS")
+	if rad != "":
+		world.render_radius = rad.to_int()
+
+	drops = Node.new()
+	drops.name = "Drops"
+	add_child(drops)
+	Game.drops = drops
+	entities = Node.new()
+	entities.name = "Entities"
+	add_child(entities)
+	Game.entities = entities
+	var inventory: CanvasLayer = InventoryScript.new()
+	inventory.name = "Inventory"
+	add_child(inventory)
+	Game.hotbar = inventory
+
+	if OS.get_environment("AWECRAFT_PROBE") != "":
+		var oc := 0
+		var omx := 0.0
+		var omz := 0.0
+		var mh := -1
+		var mhx := 0
+		var mhz := 0
+		for px in range(-192, 193, 8):
+			for pz in range(-192, 193, 8):
+				var th := WorldGen.terrain_height(px, pz, Game.world_seed)
+				if th < Data.SEA:
+					oc += 1
+					omx += float(px)
+					omz += float(pz)
+				if th > mh:
+					mh = th
+					mhx = px
+					mhz = pz
+		var cenx := omx / float(oc) if oc > 0 else -1.0
+		var cenz := omz / float(oc) if oc > 0 else -1.0
+		var lmh := -1
+		var lmx := 0
+		var lmz := 0
+		for px in range(-40, 41, 2):
+			for pz in range(-40, 41, 2):
+				var th := WorldGen.terrain_height(px, pz, Game.world_seed)
+				if th > lmh:
+					lmh = th
+					lmx = px
+					lmz = pz
+		print("PROBE ocean_cells=", oc, " centroid=", [int(cenx), int(cenz)], " max_h=", mh, " max_at=", [mhx, mhz], " local_max=", [lmh, lmx, lmz])
+		if OS.get_environment("AWECRAFT_PROBE") == "biome":
+			var mism := 0
+			var shown := 0
+			var cxm := int(floorf(-160.0 / 16.0))
+			var czm := int(floorf(160.0 / 16.0))
+			var gen_cache := {}
+			for z in range(-160, 161, 4):
+				for x in range(-160, 161, 4):
+					var bt := WorldGen.biome_at(x, z, Game.world_seed)
+					var gxx := int(floorf(float(x) / 16.0))
+					var gzz := int(floorf(float(z) / 16.0))
+					var gkey := "%d,%d" % [gxx, gzz]
+					if not gen_cache.has(gkey):
+						gen_cache[gkey] = WorldGen.generate(gxx, gzz, Game.world_seed)
+					var g: PackedByteArray = gen_cache[gkey]
+					var hgt := 0
+					for yy in range(75, -1, -1):
+						if g[(yy << 8) | ((z & 15) << 4) | (x & 15)] != 0:
+							hgt = yy
+							break
+					var topb: int = g[(hgt << 8) | ((z & 15) << 4) | (x & 15)]
+					if topb == 5 or hgt <= Data.SEA:
+						continue
+					var gb := "none"
+					if topb == 12:
+						gb = "snow"
+					elif topb == 4:
+						gb = "desert"
+					else:
+						continue
+					if bt != gb:
+						mism += 1
+						if shown < 8:
+							print("BIMISMATCH x=%d z=%d api=%s gen=%s topb=%d h=%d" % [x, z, bt, gb, topb, hgt])
+							shown += 1
+			print("BIMISMATCH total=", mism)
+			var dbg_pts: Array = []
+			for z in range(-160, 161, 4):
+				for x in range(-160, 161, 4):
+					var bt2 := WorldGen.biome_at(x, z, Game.world_seed)
+					var hgt2 := WorldGen.terrain_height(x, z, Game.world_seed)
+					if hgt2 <= Data.SEA or hgt2 > 40:
+						continue
+					var gxx2 := int(floorf(float(x) / 16.0))
+					var gzz2 := int(floorf(float(z) / 16.0))
+					var g2 = gen_cache.get("%d,%d" % [gxx2, gzz2])
+					if g2 == null:
+						continue
+					var top2 := 0
+					for yy in range(75, -1, -1):
+						if g2[(yy << 8) | ((z & 15) << 4) | (x & 15)] != 0:
+							top2 = g2[(yy << 8) | ((z & 15) << 4) | (x & 15)]
+							break
+					if top2 == 12 and bt2 != "snow":
+						dbg_pts.append([x, z])
+					elif top2 == 4 and bt2 != "desert":
+						dbg_pts.append([x, z])
+					if dbg_pts.size() >= 3:
+						break
+				if dbg_pts.size() >= 3:
+					break
+			for p in dbg_pts:
+				var dx: int = p[0]
+				var dz: int = p[1]
+				var gxx3 := int(floorf(float(dx) / 16.0))
+				var gzz3 := int(floorf(float(dz) / 16.0))
+				var at := AweNoise.fbm2(float(dx) / 260.0 + 900.0, float(dz) / 260.0 + 900.0, Game.world_seed + 21, 3)
+				var am := AweNoise.fbm2(float(dx) / 260.0 + 1700.0, float(dz) / 260.0 + 1700.0, Game.world_seed + 33, 3)
+				var cta := PackedFloat64Array()
+				cta.resize(256)
+				var cma := PackedFloat64Array()
+				cma.resize(256)
+				WorldGen._fbm2chunk(gxx3 * 16, 260.0, 900.0, gzz3 * 16, 260.0, 900.0, Game.world_seed + 21, 3, cta)
+				WorldGen._fbm2chunk(gxx3 * 16, 260.0, 1700.0, gzz3 * 16, 260.0, 1700.0, Game.world_seed + 33, 3, cma)
+				var di := (dz & 15) * 16 + (dx & 15)
+				print("FBS x=%d z=%d api=(%f,%f) chunk=(%f,%f)" % [dx, dz, at, am, cta[di], cma[di]])
+		if OS.get_environment("AWECRAFT_PROBE") == "map":
+			for pz in range(-32, 48, 2):
+				var row := ""
+				var brow := ""
+				for px in range(-32, 48, 2):
+					var mh2 := WorldGen.terrain_height(px, pz, Game.world_seed)
+					var ch := " "
+					if mh2 < Data.SEA:
+						ch = "~"
+						row += ch
+						brow += "."
+						continue
+					var bm2 := WorldGen.biome_at(px, pz, Game.world_seed)
+					var bch := " "
+					if bm2 == "plains":
+						bch = "p"
+					elif bm2 == "forest":
+						bch = "f"
+					elif bm2 == "snow":
+						bch = "s"
+					elif bm2 == "desert":
+						bch = "d"
+					if mh2 <= Data.SEA + 2:
+						ch = "."
+					elif mh2 < 38:
+						ch = "-"
+					elif mh2 < 44:
+						ch = "+"
+					else:
+						ch = "#"
+					row += ch
+					brow += bch
+				print("MAP y=%d %s" % [pz, row])
+				print("BIO y=%d %s" % [pz, brow])
+		if OS.get_environment("AWECRAFT_PROBE") == "scan":
+			for s in range(1, 121):
+				var slmh := -1
+				for spx in range(-48, 49, 4):
+					for spz in range(-48, 49, 4):
+						var sth := WorldGen.terrain_height(spx, spz, s)
+						if sth > slmh:
+							slmh = sth
+				var sod := 9999
+				for spx in range(-96, 97, 8):
+					for spz in range(-96, 97, 8):
+						if WorldGen.terrain_height(spx, spz, s) < Data.SEA:
+							var sd := absi(spx - 8) + absi(spz - 8)
+							if sd < sod:
+								sod = sd
+				print("SEED ", s, " local_max=", slmh, " ocean_dist=", sod)
+		if OS.get_environment("AWECRAFT_BCELL") != "":
+			for spec in OS.get_environment("AWECRAFT_BCELL").split(";"):
+				var p := spec.split(",")
+				var bxc := int(p[0])
+				var bzc := int(p[1])
+				var th3 := WorldGen.terrain_height(bxc, bzc, Game.world_seed)
+				var bt3 := WorldGen.biome_at(bxc, bzc, Game.world_seed)
+				var top3 := 0
+				var ty3 := -1
+				for yy in range(74, -1, -1):
+					top3 = world.get_block(bxc, yy, bzc)
+					if top3 != 0:
+						ty3 = yy
+						break
+				print("BCELL x=%d z=%d h=%d biome=%s topb=%d at_y=%d" % [bxc, bzc, th3, bt3, top3, ty3])
+		get_tree().quit()
+		return
+
+	var spawn: Vector3 = world.spawn_point()
+
+	if logic != "":
+		world.fluid_sim_enabled = false
+		if logic == "player":
+			world.recenter(spawn.x, spawn.z, true)
+			await _await_spawn_floor(spawn, 300)
+			player = _spawn_player()
+			await _player_logic_test()
+			return
+		if logic == "look":
+			world.recenter(spawn.x, spawn.z, true)
+			player = _spawn_player()
+			await _look_test()
+			return
+		if logic == "interact":
+			world.recenter(spawn.x, spawn.z, true)
+			player = _spawn_player()
+			await _interact_test()
+			return
+		if logic == "craft":
+			world.recenter(spawn.x, spawn.z, true)
+			player = _spawn_player()
+			await _craft_test()
+			return
+		if logic == "combat":
+			world.recenter(spawn.x, spawn.z, true)
+			await _await_spawn_floor(spawn, 300)
+			player = _spawn_player()
+			await _combat_test(spawn)
+			return
+		if logic == "survival":
+			world.recenter(spawn.x, spawn.z, true)
+			await _await_spawn_floor(spawn, 300)
+			player = _spawn_player()
+			await _survival_test(spawn)
+			return
+		if logic == "light":
+			world.collision_enabled = false
+			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
+			_light_test(spawn)
+			get_tree().quit()
+			return
+		if logic == "daynight":
+			world.collision_enabled = false
+			world.render_radius = 0
+			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
+			await _daynight_test()
+			return
+		if logic == "tint":
+			await _tint_test()
+			return
+		if logic == "fluids":
+			world.collision_enabled = false
+			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
+			_fluids_test(spawn)
+			get_tree().quit()
+			return
+		if logic == "fluidsettle":
+			world.collision_enabled = false
+			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
+			_fluidsettle_test()
+			return
+		if logic == "buckets":
+			world.collision_enabled = false
+			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
+			player = _spawn_player()
+			await _buckets_test()
+			return
+		if logic == "water":
+			world.recenter(spawn.x, spawn.z, true)
+			player = _spawn_player()
+			await _water_test(spawn)
+			return
+		if logic == "fpv":
+			world.recenter(spawn.x, spawn.z, true)
+			player = _spawn_player()
+			await _fpv_test()
+			return
+		if logic == "editperf":
+			await _editperf_test(spawn)
+			return
+		if logic == "perf":
+			var t0 := Time.get_ticks_msec()
+			world.recenter(spawn.x, spawn.z, true)
+			var recenter_ms := Time.get_ticks_msec() - t0
+			await _perf_test(spawn, t0, recenter_ms)
+			return
+		if logic == "atlas":
+			world.collision_enabled = false
+			world.render_radius = 0
+			world.recenter(spawn.x, spawn.z, true)
+			await _atlas_test(spawn)
+			return
+		if logic == "genhash":
+			var t0 := Time.get_ticks_msec()
+			for cx in range(-2, 3):
+				for cz in range(-2, 3):
+					var d := WorldGen.generate(cx, cz, Game.world_seed)
+					var h := HashingContext.new()
+					h.start(HashingContext.HASH_MD5)
+					h.update(d)
+					var md5: PackedByteArray = h.finish()
+					var hx := ""
+					for i in range(8):
+						hx += "%02x" % md5[i]
+					print("GENHASH ", cx, " ", cz, " ", hx)
+			print("GENMS ", Time.get_ticks_msec() - t0)
+			get_tree().quit()
+			return
+		if logic == "trees":
+			await _trees_test()
+			return
+		world.collision_enabled = false
+		world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
+		if OS.get_environment("AWECRAFT_MESH_INFO") != "":
+			for e in world.mesh_info():
+				print("MINFO ", JSON.stringify(e))
+		Debug.result(_logic_check())
+		get_tree().quit()
+		return
+
+	world.recenter(spawn.x, spawn.z, true)
+	var only_env := OS.get_environment("AWECRAFT_ONLY")
+	if only_env != "":
+		var only_set := {}
+		for k in only_env.split(";"):
+			only_set[k] = true
+		for key in world.chunks:
+			var cc = world.chunks[key]
+			if not only_set.has(key):
+				if cc.mesh_instance != null:
+					cc.mesh_instance.visible = false
+				if cc.fluid_instance != null:
+					cc.fluid_instance.visible = false
+	if OS.get_environment("AWECRAFT_DBG") != "":
+		for dx in range(-2, 3):
+			for dz in range(-2, 3):
+				var k = "%d,%d" % [dx, dz]
+				var c = world.chunks.get(k)
+				if c == null:
+					print("DBGCHUNK ", k, " MISSING")
+					continue
+				var has_mi = c.mesh_instance != null
+				var sc := -1
+				if c.mesh_instance and c.mesh_instance.mesh:
+					sc = c.mesh_instance.mesh.get_surface_count()
+				var ab = ""
+				if c.mesh_instance and c.mesh_instance.mesh:
+					var aabb = c.mesh_instance.mesh.get_aabb()
+					ab = "%s/%s" % [aabb.position, aabb.size]
+				print("DBGCHUNK ", k, " built=", c.mesh_built, " mi=", has_mi, " surf=", sc, " pos=", [int(c.position.x), int(c.position.z)], " aabb=", ab)
+
+	if cam == "top":
+		camera = _make_camera()
+		camera.position = Vector3(spawn.x, spawn.y + 105.0, spawn.z + 0.5)
+		camera.look_at(Vector3(spawn.x, 0.0, spawn.z), Vector3(0, 0, 1))
+		camera.current = true
+	elif cam == "iso":
+		camera = _make_camera()
+		camera.position = Vector3(spawn.x + 55.0, spawn.y + 75.0, spawn.z - 55.0)
+		camera.look_at(Vector3(7.5, 28.0, 7.5), Vector3(0, 1, 0))
+		camera.current = true
+	elif cam == "iso2":
+		camera = _make_camera()
+		camera.position = Vector3(spawn.x + 18.0, spawn.y + 26.0, spawn.z - 18.0)
+		camera.look_at(Vector3(spawn.x - 4.0, spawn.y - 6.0, spawn.z + 4.0), Vector3(0, 1, 0))
+		camera.current = true
+	else:
+		await _await_spawn_floor(spawn, 300)
+		player = _spawn_player()
+		Game.start()
+
+	if snapshot_path != "":
+		var fluid_shot := OS.get_environment("AWECRAFT_FLUID_SHOT") == "1"
+		var aimed := false
+		if player != null:
+			if fluid_shot:
+				Debug.fly(true)
+				Debug.give_item(140, 1)
+				Debug.give_item(139, 1)
+				player.sel = _slot_of(player, 140)
+				var aim := _find_shore_aim()
+				if not aim.is_empty():
+					Debug.teleport(aim["cam"].x, aim["cam"].y - player.EYE, aim["cam"].z)
+					player.look(aim["yaw"], aim["pitch"])
+					aimed = true
+			else:
+				var aim := _find_aim_spot()
+				if not aim.is_empty():
+					Debug.fly(true)
+					var fpv_env := OS.get_environment("AWECRAFT_FPV_ITEM")
+					Debug.give_item(3, 12)
+					Debug.give_item(111, 1)
+					if int(aim["id"]) != 2 and int(aim["id"]) != 3:
+						Debug.give_item(int(aim["id"]), 3)
+					if fpv_env != "":
+						player.sel = _slot_of(player, fpv_env.to_int())
+					Debug.teleport(aim["cam"].x, aim["cam"].y - player.EYE, aim["cam"].z)
+					player.look(aim["yaw"], aim["pitch"])
+					aimed = true
+		var inv_env := OS.get_environment("AWECRAFT_INV")
+		if inv_env != "" and player != null:
+			for i in player.inv.size():
+				player.inv[i] = {"id": 0, "n": 0}
+			if inv_env == "1":
+				Debug.give_item(6, 5)
+				Debug.give_item(8, 12)
+				Debug.give_item(100, 6)
+				Debug.give_item(111, 1)
+				Debug.give_item(127, 1)
+				player.inv_slot_click(player.find_slot(127), "hotbar", 0, false)
+				player.armor_slot_click(0, 0, false)
+				Debug.give_item(132, 1)
+				player.inv_slot_click(player.find_slot(132), "hotbar", 0, false)
+				player.armor_slot_click(1, 0, false)
+			player.open_inventory("inv")
+			if inv_env == "1":
+				inventory.autofill_first()
+				inventory.hover_item(111)
+		var drain_at := spawn
+		if player != null:
+			drain_at = player.position
+		await _await_world_build(drain_at, 3000)
+		for i in 8:
+			await get_tree().physics_frame
+		if not (fluid_shot and aimed):
+			await Debug.snap(snapshot_path)
+		if aimed:
+			if fluid_shot:
+				player.use_selected()
+				for i in 60:
+					await get_tree().physics_frame
+				await Debug.snap(snapshot_path)
+			else:
+				player.place()
+				for i in 4:
+					await get_tree().physics_frame
+				await Debug.snap(snapshot_path.replace(".png", "_placed.png"))
+		Debug.result({"m4": "ok", "w": int(get_viewport().size.x), "h": int(get_viewport().size.y), "cam": cam})
+		get_tree().quit()
+
+
+func _spawn_player() -> Node3D:
+	var p := PlayerRes.instantiate()
+	p.name = "Player"
+	add_child(p)
+	return p
+
+
+func _make_camera() -> Camera3D:
+	var c := Camera3D.new()
+	c.fov = 75.0
+	add_child(c)
+	return c
+
+
+func _process(delta: float) -> void:
+	if world != null and Game.mode != "menu":
+		Game.time_of_day = fmod(Game.time_of_day + minf(delta, 0.05) / DayNight.DAY_LEN, 1.0)
+		_update_sky()
+		_update_fog()
+
+
+func _update_sky() -> void:
+	var t := Game.time_of_day
+	sun.light_color = Color.WHITE
+	sun.light_energy = DayNight.sun_energy(t)
+	sun.look_at(DayNight.sun_direction(t), Vector3.UP)
+	var sky := DayNight.sky_display(t)
+	env.background_color = sky
+	env.ambient_light_color = Color.WHITE
+	env.ambient_light_energy = DayNight.ambient_energy(t)
+	env.fog_light_color = sky
+
+
+func _update_fog() -> void:
+	var rr: int = world.render_radius
+	env.fog_depth_begin = DayNight.fog_near(rr)
+	env.fog_depth_end = DayNight.fog_far(rr)
+
+
+func _daynight_test() -> void:
+	Game.time_of_day = 0.25
+	_update_sky()
+	var r25 := _sky_readout(0.25, false)
+	var t0 := Time.get_ticks_msec()
+	var td0 := Game.time_of_day
+	while Time.get_ticks_msec() - t0 < 5000:
+		await get_tree().process_frame
+	var elapsed_ms := Time.get_ticks_msec() - t0
+	var actual := Game.time_of_day - td0
+	if actual < -0.5:
+		actual += 1.0
+	var expected := elapsed_ms / 1000.0 / DayNight.DAY_LEN
+	var delta_ok := expected > 0.0 and absf(actual - expected) <= expected * 0.02
+	var r75 := _sky_readout(0.75, true)
+	var col := DayNight.sky_display(0.5)
+	Debug.result({
+		"time_025": r25,
+		"time_075": r75,
+		"cycle_elapsed_ms": elapsed_ms,
+		"cycle_expected": roundf(expected * 1000000.0) / 1000000.0,
+		"cycle_actual": roundf(actual * 1000000.0) / 1000000.0,
+		"cycle_delta_ok": delta_ok,
+		"colcheck": [roundf(col.r * 10000.0) / 10000.0, roundf(col.g * 10000.0) / 10000.0, roundf(col.b * 10000.0) / 10000.0],
+		"ok": delta_ok,
+	})
+	get_tree().quit()
+
+
+func _sky_readout(t: float, apply: bool) -> Dictionary:
+	if apply:
+		Game.time_of_day = t
+		_update_sky()
+	var d := DayNight.sun_direction(t)
+	var r := sun.rotation_degrees
+	return {
+		"t": t,
+		"night": DayNight.is_night(t),
+		"sun_dir": [roundf(d.x * 10000.0) / 10000.0, roundf(d.y * 10000.0) / 10000.0, roundf(d.z * 10000.0) / 10000.0],
+		"sun_rot": [roundf(r.x * 100.0) / 100.0, roundf(r.y * 100.0) / 100.0, roundf(r.z * 100.0) / 100.0],
+		"energy": roundf(sun.light_energy * 10000.0) / 10000.0,
+		"ambient": roundf(env.ambient_light_energy * 10000.0) / 10000.0,
+		"sky": [roundf(env.background_color.r * 10000.0) / 10000.0, roundf(env.background_color.g * 10000.0) / 10000.0, roundf(env.background_color.b * 10000.0) / 10000.0],
+		"fog": [roundf(env.fog_light_color.r * 10000.0) / 10000.0, roundf(env.fog_light_color.g * 10000.0) / 10000.0, roundf(env.fog_light_color.b * 10000.0) / 10000.0],
+	}
+
+
+func _player_logic_test() -> void:
+	var p = Game.player
+	for i in 10:
+		await get_tree().physics_frame
+	var start: Vector3 = p.position
+	Input.action_press("move_forward")
+	for i in 40:
+		await get_tree().physics_frame
+	Input.action_release("move_forward")
+	for i in 8:
+		await get_tree().physics_frame
+	var after_fwd := Vector2(p.position.x, p.position.z)
+	var horizontal_moved := after_fwd.distance_to(Vector2(start.x, start.z))
+	for i in 60:
+		if p.is_on_floor():
+			break
+		await get_tree().physics_frame
+	var on_floor: bool = p.is_on_floor()
+	var peak: float = p.position.y
+	Input.action_press("jump")
+	for i in 240:
+		await get_tree().physics_frame
+		if p.position.y > peak:
+			peak = p.position.y
+		if i > 10 and p.is_on_floor() and p.velocity.y <= 0.0:
+			break
+	Input.action_release("jump")
+	for i in 8:
+		await get_tree().physics_frame
+	Debug.fly(true)
+	Input.action_press("jump")
+	for i in 40:
+		await get_tree().physics_frame
+	Input.action_release("jump")
+	var after_fly_y: float = p.position.y
+	Debug.fly(false)
+	var time_before := Game.time_of_day
+	Input.action_press("time")
+	await get_tree().physics_frame
+	Input.action_release("time")
+	for i in 3:
+		await get_tree().physics_frame
+	var time_after := Game.time_of_day
+	Debug.result({
+		"start": [roundf(start.x * 100.0) / 100.0, roundf(start.y * 100.0) / 100.0, roundf(start.z * 100.0) / 100.0],
+		"after_fwd": [roundf(after_fwd.x * 100.0) / 100.0, roundf(after_fwd.y * 100.0) / 100.0],
+		"horizontal_moved": roundf(horizontal_moved * 100.0) / 100.0,
+		"is_on_floor": on_floor,
+		"jump_peak_y": roundf(peak * 100.0) / 100.0,
+		"after_fly_y": roundf(after_fly_y * 100.0) / 100.0,
+		"time_before": time_before,
+		"time_after": time_after,
+	})
+	get_tree().quit()
+
+
+func _look_test() -> void:
+	var p = Game.player
+	for i in 5:
+		await get_tree().physics_frame
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	var yaw0: float = p.get_yaw()
+	var pitch0: float = p.get_pitch()
+	var mb := InputEventMouseButton.new()
+	mb.button_index = MOUSE_BUTTON_LEFT
+	mb.pressed = true
+	Input.parse_input_event(mb)
+	var dragging := false
+	var mined_during := false
+	for i in 12:
+		await get_tree().physics_frame
+		if p.is_mining():
+			mined_during = true
+		if p.is_dragging():
+			dragging = true
+			break
+	var mm := InputEventMouseMotion.new()
+	mm.relative = Vector2(300.0, 120.0)
+	Input.parse_input_event(mm)
+	for i in 12:
+		await get_tree().physics_frame
+		if p.is_mining():
+			mined_during = true
+		if p.get_yaw() != yaw0 or p.get_pitch() != pitch0:
+			break
+	var mb2 := InputEventMouseButton.new()
+	mb2.button_index = MOUSE_BUTTON_LEFT
+	mb2.pressed = false
+	Input.parse_input_event(mb2)
+	for i in 12:
+		await get_tree().physics_frame
+		if p.is_mining():
+			mined_during = true
+		if not p.is_dragging():
+			break
+	var yaw_a: float = p.get_yaw()
+	var pitch_a: float = p.get_pitch()
+	var drag_mined: bool = mined_during or p.is_mining()
+	var after_drag_not_dragging: bool = not p.is_dragging()
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	var mm2 := InputEventMouseMotion.new()
+	mm2.relative = Vector2(100.0, 0.0)
+	p.apply_look(mm2)
+	var yaw_b: float = p.get_yaw()
+	var pitch_b: float = p.get_pitch()
+	var drag_yaw_delta: float = yaw_a - yaw0
+	var drag_pitch_delta: float = pitch_a - pitch0
+	var locked_yaw_delta: float = yaw_b - yaw_a
+	var locked_pitch_delta: float = pitch_b - pitch_a
+	var drag_yaw_ok: bool = absf(drag_yaw_delta + 300.0 * 0.0022) < 0.001
+	var drag_pitch_ok: bool = absf(drag_pitch_delta + 120.0 * 0.0022) < 0.001
+	var locked_yaw_ok: bool = absf(locked_yaw_delta + 0.22) < 0.000001
+	var locked_pitch_ok: bool = absf(locked_pitch_delta) < 0.000001
+	Debug.result({
+		"yaw0": yaw0,
+		"pitch0": pitch0,
+		"yaw_after_drag": yaw_a,
+		"pitch_after_drag": pitch_a,
+		"yaw_after_locked": yaw_b,
+		"pitch_after_locked": pitch_b,
+		"drag_yaw_delta": roundf(drag_yaw_delta * 10000.0) / 10000.0,
+		"drag_pitch_delta": roundf(drag_pitch_delta * 10000.0) / 10000.0,
+		"locked_yaw_delta": roundf(locked_yaw_delta * 10000.0) / 10000.0,
+		"locked_pitch_delta": roundf(locked_pitch_delta * 10000.0) / 10000.0,
+		"dragging": dragging and after_drag_not_dragging,
+		"drag_mined": drag_mined,
+		"drag_yaw_ok": drag_yaw_ok,
+		"drag_pitch_ok": drag_pitch_ok,
+		"locked_yaw_ok": locked_yaw_ok,
+		"locked_pitch_ok": locked_pitch_ok,
+		"ok": drag_yaw_ok and drag_pitch_ok and locked_yaw_ok and locked_pitch_ok and dragging and after_drag_not_dragging and not drag_mined,
+	})
+	get_tree().quit()
+
+
+func _interact_test() -> void:
+	var p = Game.player
+	for i in 5:
+		await get_tree().physics_frame
+	var aim := _find_aim_spot()
+	if aim.is_empty():
+		Debug.result({"error": "no breakable aim spot near spawn"})
+		get_tree().quit()
+		return
+	var target: Vector3i = aim["cell"]
+	var tid: int = int(aim["id"])
+	world.set_block(target.x, target.y, target.z, 2)
+	tid = 2
+	var cam: Vector3 = aim["cam"]
+	Debug.fly(true)
+	Debug.teleport(cam.x, cam.y - p.EYE, cam.z)
+	p.look(aim["yaw"], aim["pitch"])
+	for i in 4:
+		await get_tree().physics_frame
+	var highlight_visible: bool = p.highlight.visible
+	p.start_mine()
+	var frames := int(ceilf(float(Data.block(tid).hard) * 60.0)) + 20
+	for i in range(frames):
+		await get_tree().physics_frame
+	p.release_mine()
+	for i in 3:
+		await get_tree().physics_frame
+	var after_mine: int = world.get_block(target.x, target.y, target.z)
+	var drop_spawned: bool = Game.drops.get_child_count() >= 1
+	var inv_grew := {"id": tid, "n": 0}
+	var teleported := false
+	for i in 300:
+		var dn: Node3D = null
+		if Game.drops.get_child_count() > 0:
+			dn = Game.drops.get_child(0)
+		if dn != null and not teleported and dn.settled:
+			Debug.teleport(dn.position.x, dn.position.y + 1.4, dn.position.z)
+			teleported = true
+		inv_grew["n"] = _count_item(p, tid)
+		if inv_grew["n"] > 0:
+			break
+		await get_tree().physics_frame
+	p.sel = _slot_of(p, tid)
+	Debug.teleport(float(target.x) + 0.5, float(target.y) + 1.05, float(target.z) + 0.5)
+	p.look(0.0, -p.PITCH_LIMIT)
+	for i in 3:
+		await get_tree().physics_frame
+	var hit2: Dictionary = p.aim_hit()
+	var place_cell := Vector3i.ZERO
+	if hit2.hit:
+		place_cell = hit2.cell + hit2.normal
+	p.place()
+	for i in 2:
+		await get_tree().physics_frame
+	var after_place := -1
+	if place_cell != Vector3i.ZERO:
+		after_place = world.get_block(place_cell.x, place_cell.y, place_cell.z)
+	Debug.result({
+		"target_cell": [target.x, target.y, target.z],
+		"breakable_id": tid,
+		"highlight_visible": highlight_visible,
+		"after_mine_cell": after_mine,
+		"drop_spawned": drop_spawned,
+		"inv_grew": inv_grew,
+		"place_cell": [place_cell.x, place_cell.y, place_cell.z],
+		"after_place_cell": after_place,
+		"place_ok": after_place == tid,
+	})
+	get_tree().quit()
+
+
+func _craft_test() -> void:
+	var p = Game.player
+	for i in 4:
+		await get_tree().physics_frame
+	var r := {}
+	var ok := true
+	Debug.give_item(6, 2)
+	r["logs_start"] = _count_item(p, 6)
+	ok = ok and r["logs_start"] == 2
+	p.open_inventory("inv")
+	Debug.inv_click(41, 2)
+	r["held_r1"] = [int(p.held.get("id", 0)), int(p.held.get("n", 0)) if p.held != {} else 0]
+	Debug.inv_click(0, 0)
+	r["out_a"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	ok = ok and int(p.craft_out.get("id", 0)) == 8 and int(p.craft_out.get("n", 0)) == 4
+	Debug.craft()
+	r["planks_a"] = _count_item(p, 8)
+	r["logs_a"] = _count_item(p, 6)
+	ok = ok and r["planks_a"] == 4 and r["logs_a"] == 1
+	Debug.inv_click(41, 2)
+	Debug.inv_click(0, 0)
+	r["out_b"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	ok = ok and int(p.craft_out.get("id", 0)) == 8 and int(p.craft_out.get("n", 0)) == 4
+	Debug.craft()
+	r["planks_b"] = _count_item(p, 8)
+	r["logs_b"] = _count_item(p, 6)
+	ok = ok and r["planks_b"] == 8 and r["logs_b"] == 0
+	Debug.inv_click(42, 2)
+	Debug.inv_click(0, 0)
+	Debug.inv_click(42, 2)
+	Debug.inv_click(1, 0)
+	r["out_c"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	ok = ok and int(p.craft_out.get("id", 0)) == 100 and int(p.craft_out.get("n", 0)) == 4
+	Debug.craft()
+	r["sticks_c"] = _count_item(p, 100)
+	r["planks_c"] = _count_item(p, 8)
+	ok = ok and r["sticks_c"] == 4 and r["planks_c"] == 6
+	Debug.inv_click(42, 2)
+	Debug.inv_click(0, 0)
+	Debug.inv_click(42, 2)
+	Debug.inv_click(1, 0)
+	Debug.inv_click(42, 2)
+	Debug.inv_click(2, 0)
+	Debug.inv_click(41, 2)
+	Debug.inv_click(4, 0)
+	Debug.inv_click(41, 2)
+	Debug.inv_click(7, 0)
+	r["out_d"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	ok = ok and int(p.craft_out.get("id", 0)) == 111 and int(p.craft_out.get("n", 0)) == 1
+	Debug.craft()
+	r["pick_d"] = _count_item(p, 111)
+	r["planks_d"] = _count_item(p, 8)
+	r["sticks_d"] = _count_item(p, 100)
+	r["logs_d"] = _count_item(p, 6)
+	ok = ok and r["pick_d"] == 1 and r["planks_d"] == 3 and r["sticks_d"] == 2 and r["logs_d"] == 0
+	Debug.give_item(127, 1)
+	Debug.inv_click(44, 0)
+	Debug.inv_click(10, 0)
+	r["armor_head"] = int(p.armor[0])
+	r["points_head"] = p.armor_points()
+	ok = ok and r["armor_head"] == 127 and r["points_head"] == 1
+	Debug.give_item(131, 1)
+	Debug.inv_click(44, 0)
+	Debug.inv_click(10, 0)
+	r["armor_swap"] = [int(p.armor[0]), int(p.held.get("id", 0)) if p.held != {} else 0, p.armor_points()]
+	ok = ok and int(p.armor[0]) == 131 and int(p.held.get("id", 0)) == 127 and p.armor_points() == 2
+	Debug.inv_click(44, 0)
+	Debug.inv_click(10, 0)
+	r["armor_uneq"] = [int(p.armor[0]), int(p.held.get("id", 0)) if p.held != {} else 0]
+	ok = ok and int(p.armor[0]) == 0 and int(p.held.get("id", 0)) == 131
+	Debug.inv_click(45, 0)
+	Debug.inv_click(42, 2)
+	Debug.inv_click(0, 0)
+	r["out_nomatch"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	ok = ok and p.craft_out == {}
+	p.close_inventory()
+	r["close_ui"] = p.ui_mode
+	r["close_grid0"] = int(p.craft_grid[0]["id"])
+	r["planks_close"] = _count_item(p, 8)
+	ok = ok and p.ui_mode == "" and r["close_grid0"] == 0 and _count_item(p, 8) == 2
+	Debug.give_item(8, 1)
+	Debug.inv_click(42, 2)
+	p.close_inventory()
+	r["held_return"] = [int(p.held.get("id", 0)) if p.held != {} else 0, _count_item(p, 8)]
+	ok = ok and p.held == {} and _count_item(p, 8) == 3
+	Debug.result({
+		"ok": ok,
+		"data": r,
+		"inv": Debug.inv_dump(),
+		"armor": Debug.armor_dump(),
+	})
+	get_tree().quit()
+
+
+func _survival_test(spawn: Vector3) -> void:
+	var p = Game.player
+	for i in 60:
+		await get_tree().physics_frame
+	var r := {}
+	var ok := true
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	var ctop: int = world.surface_top(sx, sz)
+	var px := -1
+	var pz := -1
+	for dx in range(-8, 9, 2):
+		for dz in range(-8, 9, 2):
+			var tx := sx + dx
+			var tz := sz + dz
+			var flat := true
+			for fx in range(-1, 2):
+				for fz in range(-1, 2):
+					if world.surface_top(tx + fx, tz + fz) != ctop:
+						flat = false
+			if not flat:
+				continue
+			var clear := true
+			for k in range(1, 5):
+				if world.surface_top(tx, tz - k) > ctop:
+					clear = false
+			if not clear:
+				continue
+			px = tx
+			pz = tz
+			break
+		if px >= 0:
+			break
+	if px < 0:
+		Debug.result({"error": "no flat survival spot near spawn"})
+		get_tree().quit()
+		return
+	var sc := Vector3i(px, ctop + 1, pz - 4)
+	Debug.set_block(sc.x, sc.y, sc.z, 3)
+	Debug.fly(true)
+	var eye := Vector3(float(px) + 0.5, float(ctop + 1) + 0.5, float(pz) + 0.5)
+	Debug.aim_at(eye.x, eye.y, eye.z)
+	for i in 3:
+		await get_tree().physics_frame
+	var mine_hits: bool = false
+	for i in 4:
+		await get_tree().physics_frame
+		if p.aim_hit().hit:
+			mine_hits = true
+			break
+	var h0: float = p.hunger
+	var drops_before: int = Game.drops.get_child_count()
+	var t0 := Time.get_ticks_msec()
+	p.start_mine()
+	var bare_frames := -1
+	for i in range(300):
+		await get_tree().physics_frame
+		if world.get_block(sc.x, sc.y, sc.z) == 0:
+			bare_frames = i + 1
+			break
+	var bare_ms := Time.get_ticks_msec() - t0
+	for i in 4:
+		await get_tree().physics_frame
+	var drop_bare: int = Game.drops.get_child_count() - drops_before
+	Debug.set_block(sc.x, sc.y, sc.z, 3)
+	Debug.give_item(111, 1)
+	p.sel = _slot_of(p, 111)
+	Debug.aim_at(eye.x, eye.y, eye.z)
+	for i in 3:
+		await get_tree().physics_frame
+	t0 = Time.get_ticks_msec()
+	p.start_mine()
+	var pick_frames := -1
+	for i in range(300):
+		await get_tree().physics_frame
+		if world.get_block(sc.x, sc.y, sc.z) == 0:
+			pick_frames = i + 1
+			break
+	var pick_ms := Time.get_ticks_msec() - t0
+	var h_end: float = p.hunger
+	var drop_pick := -1
+	for i in 12:
+		for ch in Game.drops.get_children():
+			if int(ch.id) == 9:
+				drop_pick = 9
+		if drop_pick >= 0:
+			break
+		await get_tree().physics_frame
+	var tool_ratio := float(bare_ms) / float(pick_ms) if pick_ms > 0 else 0.0
+	ok = ok and bare_frames > 0 and pick_frames > 0
+	ok = ok and absf(tool_ratio - 2.0) < 0.25
+	ok = ok and drop_bare == 0
+	ok = ok and drop_pick == 9
+	p.armor = [0, 0, 0, 0]
+	p.hp = 20.0
+	p.damage_player(5.0, "t")
+	var dmg_none: float = 20.0 - p.hp
+	p.armor = [131, 132, 133, 134]
+	p.hp = 20.0
+	p.damage_player(5.0, "t")
+	var dmg_armor: float = 20.0 - p.hp
+	ok = ok and dmg_none == 5.0 and dmg_armor == 2.0
+	Debug.fly(false)
+	Debug.teleport(float(px) + 0.5, float(ctop + 1) + 0.05, float(pz) + 0.5)
+	for i in 60:
+		if p.is_on_floor():
+			break
+		await get_tree().physics_frame
+	if not p.is_on_floor():
+		Debug.result({"error": "no floor for sprint phase"})
+		get_tree().quit()
+		return
+	var h_s0: float = p.hunger
+	var ke := InputEventKey.new()
+	ke.physical_keycode = KEY_SHIFT
+	ke.keycode = KEY_SHIFT
+	ke.pressed = true
+	Input.parse_input_event(ke)
+	for i in 60:
+		await get_tree().physics_frame
+	ke.pressed = false
+	Input.parse_input_event(ke)
+	var hunger_drain: float = h_s0 - p.hunger
+	ok = ok and hunger_drain > 0.05 and hunger_drain < 0.08
+	p.hunger = 20.0
+	p.hp = 20.0
+	for i in 3:
+		await get_tree().physics_frame
+	p.hp = 15.0
+	var rp0 := Time.get_ticks_msec()
+	var regen_gain := 0.0
+	for i in range(300):
+		await get_tree().physics_frame
+		if p.hp > 15.0:
+			regen_gain = p.hp - 15.0
+			break
+	var regen_ms := Time.get_ticks_msec() - rp0
+	ok = ok and regen_gain >= 1.0 and regen_ms >= 1900 and regen_ms <= 2600
+	p.hp = 20.0
+	p.hunger = 0.0
+	var sp0 := Time.get_ticks_msec()
+	for i in range(700):
+		await get_tree().physics_frame
+		if p.hp <= 18.0:
+			break
+	var starve_ms := Time.get_ticks_msec() - sp0
+	var starve_dmg: float = 20.0 - p.hp
+	ok = ok and starve_dmg == 2.0 and starve_ms >= 7500 and starve_ms <= 9500
+	Debug.set_block(sc.x, sc.y, sc.z, 3)
+	var tgtc := Vector3(float(sc.x) + 0.5, float(sc.y) + 0.5, float(sc.z) + 0.5)
+	var d: Vector3 = (tgtc - (p.position + Vector3(0.0, p.EYE, 0.0))).normalized()
+	p.look(atan2(-d.x, -d.z), asin(clampf(d.y, -1.0, 1.0)))
+	for i in 3:
+		await get_tree().physics_frame
+	var aim_food: bool = p.aim_hit().hit
+	Debug.give_item(147, 1)
+	p.sel = _slot_of(p, 147)
+	var wb := 0
+	while wb < 20 and int(p.inv[p.sel]["n"]) <= 0:
+		await get_tree().physics_frame
+		wb += 1
+	p.hp = 10.0
+	p.hunger = 10.0
+	p.use_selected()
+	for i in 3:
+		await get_tree().physics_frame
+	var eat_cooked := {"hp_gain": p.hp - 10.0, "hunger_gain": p.hunger - 10.0, "left": int(p.inv[p.sel]["n"])}
+	Debug.give_item(146, 1)
+	p.sel = _slot_of(p, 146)
+	wb = 0
+	while wb < 20 and int(p.inv[p.sel]["n"]) <= 0:
+		await get_tree().physics_frame
+		wb += 1
+	p.use_selected()
+	for i in 3:
+		await get_tree().physics_frame
+	var eat_raw := {"hp_gain": p.hp - 15.0, "hunger_gain": p.hunger - 15.0, "left": int(p.inv[p.sel]["n"])}
+	p.hp = 20.0
+	p.hunger = 20.0
+	Debug.give_item(147, 1)
+	p.sel = _slot_of(p, 147)
+	wb = 0
+	while wb < 20 and int(p.inv[p.sel]["n"]) <= 0:
+		await get_tree().physics_frame
+		wb += 1
+	var full_left_before: int = int(p.inv[p.sel]["n"])
+	p.use_selected()
+	for i in 3:
+		await get_tree().physics_frame
+	var eat_full := {"hp": p.hp, "hunger": p.hunger, "consumed": full_left_before - int(p.inv[p.sel]["n"])}
+	ok = ok and aim_food and eat_cooked.hp_gain == 5.0 and eat_cooked.hunger_gain == 5.0 and eat_cooked.left == 0
+	ok = ok and eat_raw.hp_gain == 2.0 and eat_raw.hunger_gain == 2.0 and eat_raw.left == 0
+	ok = ok and eat_full.hp == 20.0 and eat_full.hunger == 20.0 and eat_full.consumed == 0
+	p.armor = [0, 0, 0, 0]
+	p.dead = false
+	p.hp = 2.0
+	p.damage_player(5.0, "t")
+	var died: bool = p.dead and p.hp == 0.0
+	p.respawn()
+	for i in 90:
+		if p.is_on_floor():
+			break
+		await get_tree().physics_frame
+	var respawn_ok: bool = not p.dead and p.hp == 20.0 and p.hunger == 20.0 and p.armor == [0, 0, 0, 0] and p.is_on_floor()
+	ok = ok and died and respawn_ok
+	r = {
+		"tool_ratio": roundf(tool_ratio * 100.0) / 100.0,
+		"bare_ms": bare_ms,
+		"pick_ms": pick_ms,
+		"bare_frames": bare_frames,
+		"pick_frames": pick_frames,
+		"drop_bare": drop_bare,
+		"drop_pick": drop_pick,
+		"dmg_none": dmg_none,
+		"dmg_armor": dmg_armor,
+		"hunger_drain": roundf(hunger_drain * 1000.0) / 1000.0,
+		"hunger_mine": roundf((h0 - h_end) / 2.0 * 1000.0) / 1000.0,
+		"hunger_regen": {"gain": regen_gain, "ms": regen_ms},
+		"starve": {"dmg": starve_dmg, "ms": starve_ms},
+		"eat": {"cooked": eat_cooked, "raw": eat_raw, "full": eat_full},
+		"respawn": respawn_ok,
+		"dump": Debug.dump_survival(),
+		"ok": ok,
+	}
+	Debug.result(r)
+	get_tree().quit()
+
+
+func _editperf_test(spawn: Vector3) -> void:
+	world.recenter(spawn.x, spawn.z, true)
+	var pcx := int(floorf(spawn.x / 16.0))
+	var pcz := int(floorf(spawn.z / 16.0))
+	var awaited := 0
+	while awaited < 1200:
+		var allm := true
+		for key in world.chunks:
+			var cc: Node3D = world.chunks[key]
+			if absi(cc.cx - pcx) <= world.render_radius and absi(cc.cz - pcz) <= world.render_radius and not cc.mesh_built:
+				allm = false
+				break
+		if allm:
+			break
+		await get_tree().physics_frame
+		awaited += 1
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	var cell := Vector3i(sx, world.surface_top(sx, sz), sz)
+	var okc := _breakable(world.get_block(cell.x, cell.y, cell.z))
+	if not okc:
+		for dx in range(-8, 9, 2):
+			if okc:
+				break
+			for dz in range(-8, 9, 2):
+				var t2: int = world.surface_top(sx + dx, sz + dz)
+				if _breakable(world.get_block(sx + dx, t2, sz + dz)):
+					cell = Vector3i(sx + dx, t2, sz + dz)
+					okc = true
+					break
+	if not okc:
+		Debug.result({"error": "no breakable surface cell near spawn"})
+		get_tree().quit()
+		return
+	var edited_id: int = world.get_block(cell.x, cell.y, cell.z)
+	var t_edit := Time.get_ticks_msec()
+	world.set_block(cell.x, cell.y, cell.z, 0)
+	var w2 := 0
+	while w2 < 300 and not (world.light_dirty.is_empty() and world.light_pending.is_empty()):
+		await get_tree().physics_frame
+		w2 += 1
+	await get_tree().physics_frame
+	Debug.result({
+		"cell": [cell.x, cell.y, cell.z],
+		"edited_id": edited_id,
+		"cell_after": world.get_block(cell.x, cell.y, cell.z),
+		"flush_done": world.light_dirty.is_empty() and world.light_pending.is_empty(),
+		"flush_frames": world.perf_flush_frames,
+		"max_frame_build_ms": world.perf_max_frame_ms,
+		"single_build_ms": world.perf_single_build_ms,
+		"total_ms": Time.get_ticks_msec() - t_edit,
+	})
+	get_tree().quit()
+
+
+func _find_aim_spot() -> Dictionary:
+	var sp: Vector3 = world.spawn_point()
+	var sx := int(sp.x)
+	var sz := int(sp.z)
+	var top: int = world.surface_top(sx, sz)
+	var candidates: Array[Vector3i] = []
+	if _breakable(world.get_block(sx, top, sz)):
+		candidates.append(Vector3i(sx, top, sz))
+	for dx in range(-8, 9, 2):
+		for dz in range(-8, 9, 2):
+			var t2: int = world.surface_top(sx + dx, sz + dz)
+			if _breakable(world.get_block(sx + dx, t2, sz + dz)):
+				candidates.append(Vector3i(sx + dx, t2, sz + dz))
+	var dz_list := [2, 3, -2, -3, 4, -4, 5, -5]
+	for tc in candidates:
+		var tcenter := Vector3(float(tc.x) + 0.5, float(tc.y) + 0.5, float(tc.z) + 0.5)
+		for dz in dz_list:
+			for dh in range(0, 12):
+				var cam := Vector3(float(tc.x) + 0.5, float(tc.y) + 0.5 + float(dh), float(tc.z) + 0.5 + float(dz))
+				var dir := (tcenter - cam).normalized()
+				var hit = VoxelMath.raycast_blocks(cam, dir, 6.0, world.get_block)
+				if not hit.hit or hit.cell != tc:
+					continue
+				var feet := cam - Vector3(0.0, 1.62, 0.0)
+				if not _clear_feet(feet):
+					continue
+				var yaw := atan2(-dir.x, -dir.z)
+				var pitch := asin(clampf(dir.y, -1.0, 1.0))
+				if absf(pitch) > 1.55:
+					continue
+				return {"cell": tc, "id": world.get_block(tc.x, tc.y, tc.z), "cam": cam, "yaw": yaw, "pitch": pitch}
+	return {}
+
+
+func _find_shore_aim() -> Dictionary:
+	var sp: Vector3 = world.spawn_point()
+	var sx := int(sp.x)
+	var sz := int(sp.z)
+	var cands: Array = []
+	for dx in range(-48, 49, 2):
+		for dz in range(-48, 49, 2):
+			var x := sx + dx
+			var z := sz + dz
+			var th: int = WorldGen.terrain_height(x, z, Game.world_seed)
+			if th < Data.SEA or th > Data.SEA + 5:
+				continue
+			var ocean := Vector2i.ZERO
+			for od in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				if WorldGen.terrain_height(x + od.x * 8, z + od.y * 8, Game.world_seed) < Data.SEA:
+					ocean = od
+					break
+			if ocean == Vector2i.ZERO:
+				continue
+			cands.append({"x": x, "z": z, "ocean": ocean, "d": absi(dx) + absi(dz)})
+	cands.sort_custom(func(a, b): return int(a["d"]) < int(b["d"]))
+	if cands.is_empty():
+		return {}
+	for cand in cands:
+		var x: int = int(cand["x"])
+		var z: int = int(cand["z"])
+		var oc: Vector2i = cand["ocean"]
+		var t: int = world.surface_top(x, z)
+		if world.get_block(x, t + 1, z) != 0:
+			continue
+		var cell := Vector3i(x, t + 1, z)
+		var ground := cell - Vector3i(0, 1, 0)
+		var gcenter := Vector3(float(ground.x) + 0.5, float(ground.y) + 0.5, float(ground.z) + 0.5)
+		for bd2 in [4.0, 5.0, 6.0]:
+			for up in [4.0, 5.0, 6.0]:
+				var eye := gcenter + Vector3(-float(oc.x) * bd2, up, -float(oc.y) * bd2)
+				if not _clear_feet(eye - Vector3(0.0, 1.62, 0.0)):
+					continue
+				var ax := -0.3 * float(oc.x)
+				var az := -0.3 * float(oc.y)
+				var ap := Vector3(gcenter.x + ax, float(ground.y) + 1.0, gcenter.z + az)
+				var dir := (ap - eye).normalized()
+				var t_hit := (eye.y - (float(ground.y) + 1.0)) / absf(dir.y)
+				if t_hit > 5.5:
+					continue
+				var hit = VoxelMath.raycast_cell(eye, dir, 14.0, world.get_block, true)
+				if not hit.hit or hit.cell != ground or hit.normal != Vector3i(0, 1, 0):
+					continue
+				var yaw := atan2(-dir.x, -dir.z)
+				var pitch := asin(clampf(dir.y, -1.0, 1.0))
+				if absf(pitch) > 1.55:
+					continue
+				if int(hit.id) == 5 or int(hit.id) == 24:
+					continue
+				return {"cell": cell, "cam": eye, "yaw": yaw, "pitch": pitch}
+	return {}
+
+
+func _breakable(id: int) -> bool:
+	var info = Data.block(id)
+	return info != null and info.solid and float(info.get("hard", 1e9)) < 1e8
+
+
+func _clear_feet(feet: Vector3) -> bool:
+	for oy in [0.0, 0.95, 1.79]:
+		var x := int(floorf(feet.x))
+		var y := int(floorf(feet.y + oy))
+		var z := int(floorf(feet.z))
+		if y < 0 or y >= Data.HEIGHT:
+			continue
+		var info = Data.block(world.get_block(x, y, z))
+		if info != null and info.solid:
+			return false
+	return true
+
+
+func _count_item(p, id: int) -> int:
+	var c := 0
+	for it in p.inv:
+		if int(it["id"]) == id:
+			c += int(it["n"])
+	return c
+
+
+func _slot_of(p, id: int) -> int:
+	for i in p.inv.size():
+		if int(p.inv[i]["id"]) == id:
+			return i
+	return 0
+
+
+func _logic_check() -> Dictionary:
+	var spawn: Vector3 = world.spawn_point()
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	var sy := int(spawn.y)
+	var top_at_spawn := 0
+	for y in range(sy + 2, -1, -1):
+		var b = world.get_block(sx, y, sz)
+		if b != 0:
+			top_at_spawn = b
+			break
+	var bedrock = world.get_block(sx, 0, sz)
+	var ocean := false
+	for i in range(256):
+		var ox := -64 + (i % 16) * 8
+		var oz := -64 + (i / 16) * 8
+		if WorldGen.terrain_height(ox, oz, Game.world_seed) < Data.SEA:
+			ocean = world.get_block(ox, Data.SEA, oz) == WorldGen.B_WATER
+			break
+	var stone_at_depth := -1
+	for i in range(64):
+		var ox := 8 + (i % 8) * 4
+		var oz := 8 + (i / 8) * 4
+		var oy := 12 + (i % 5) * 2
+		if world.get_block(ox, oy, oz) == WorldGen.B_STONE:
+			stone_at_depth = oy
+			break
+	var biomes := {}
+	for bx in range(-400, 401, 40):
+		for bz in range(-400, 401, 40):
+			biomes[WorldGen.biome_at(bx, bz, Game.world_seed)] = true
+	return {
+		"spawn_h": spawn.y,
+		"top_at_spawn": top_at_spawn,
+		"y0_bedrock": bedrock,
+		"ocean_water_at_sea": ocean,
+		"stone_at_depth": stone_at_depth,
+		"biome_count": biomes.size(),
+		"biomes": biomes.keys(),
+	}
+
+
+func _light_test(spawn: Vector3) -> void:
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	var top: int = world.surface_top(sx, sz)
+
+	var surface_eff := -1
+	for dx in range(-6, 7, 3):
+		for dz in range(-6, 7, 3):
+			var t: int = world.surface_top(sx + dx, sz + dz)
+			var cell := Vector3i(sx + dx, t + 1, sz + dz)
+			if world.get_block(cell.x, cell.y, cell.z) != 0:
+				continue
+			var l: Dictionary = world.light_at(cell.x, cell.y, cell.z)
+			if int(l.eff) >= 15:
+				surface_eff = int(l.eff)
+				break
+		if surface_eff >= 0:
+			break
+
+	var lavas: Array[Vector3i] = []
+	for lx in range(sx - 36, sx + 37):
+		for lz in range(sz - 36, sz + 37):
+			for ly in range(0, 8):
+				if world.get_block(lx, ly, lz) == WorldGen.B_LAVA:
+					lavas.append(Vector3i(lx, ly, lz))
+
+	var cave_eff := -1
+	var torch_eff := -1
+	var far_before := -1
+	var far_after := -1
+	var depth := 6
+	while depth < 30 and cave_eff < 0:
+		var cy: int = top - depth
+		if cy >= 5:
+			for dx in range(-16, 17):
+				if cave_eff >= 0:
+					break
+				for dz in range(-16, 17):
+					var cx := sx + dx
+					var cz := sz + dz
+					if world.get_block(cx, cy, cz) != 0:
+						continue
+					if not _is_solid(cx, cy + 1, cz):
+						continue
+					if cy < 23:
+						var farx := cx + 5
+						var clear := true
+						for lav in lavas:
+							if absi(lav.x - cx) + absi(lav.y - cy) + absi(lav.z - cz) < 15 \
+									or absi(lav.x - farx) + absi(lav.y - cy) + absi(lav.z - cz) < 15:
+								clear = false
+								break
+						if not clear:
+							continue
+					var pocket := Vector3i(cx, cy, cz)
+					var far := pocket + Vector3i(5, 0, 0)
+					for i in range(1, 6):
+						var c := pocket + Vector3i(i, 0, 0)
+						if world.get_block(c.x, c.y, c.z) != 0:
+							world.set_block(c.x, c.y, c.z, 0)
+					var lb: Dictionary = world.light_at(far.x, far.y, far.z)
+					if int(lb.eff) > 5:
+						continue
+					var l0: Dictionary = world.light_at(pocket.x, pocket.y, pocket.z)
+					cave_eff = int(l0.eff)
+					far_before = int(lb.eff)
+					world.set_block(pocket.x, pocket.y, pocket.z, 22)
+					var lt: Dictionary = world.light_at(pocket.x, pocket.y, pocket.z)
+					var la: Dictionary = world.light_at(far.x, far.y, far.z)
+					torch_eff = int(lt.eff)
+					far_after = int(la.eff)
+					break
+		depth += 1
+
+	Debug.result({
+		"surface_eff": surface_eff,
+		"cave_eff": cave_eff,
+		"torch_level": torch_eff,
+		"torch_far_before": far_before,
+		"torch_far_after": far_after,
+	})
+
+
+func _fluids_test(spawn: Vector3) -> void:
+	var cx0 := int(floorf(spawn.x / 16.0))
+	var cz0 := int(floorf(spawn.z / 16.0))
+	var x0 := cx0 * 16
+	var wz := cz0 * 16 + 8
+	var tmax := 0
+	for lz in range(7, 10):
+		for lx in range(16):
+			var t: int = world.surface_top(x0 + lx, cz0 * 16 + lz)
+			if t > tmax:
+				tmax = t
+	var by := tmax + 5
+	for lx in range(16):
+		for dz in range(-1, 2):
+			for dy in range(-2, 4):
+				Debug.set_block(x0 + lx, by + dy, wz + dz, 0)
+	by = mini(by, Data.HEIGHT - 8)
+	var wxc := x0 + 2
+	var wxa := x0 + 8
+	var wxb := x0 + 12
+	# Stability: 2-cell source water column in stone; single cleared air cell beside the top source
+	Debug.set_block(wxc, by - 1, wz, 3)
+	Debug.set_fluid(wxc, by, wz, 5, 8)
+	Debug.set_fluid(wxc, by + 1, wz, 5, 8)
+	Debug.set_block(wxc + 1, by, wz, 3)
+	Debug.set_block(wxc - 1, by, wz, 3)
+	Debug.set_block(wxc, by, wz + 1, 3)
+	Debug.set_block(wxc, by, wz - 1, 3)
+	Debug.set_block(wxc - 1, by + 1, wz, 3)
+	Debug.set_block(wxc, by + 1, wz + 1, 3)
+	Debug.set_block(wxc, by + 1, wz - 1, 3)
+	Debug.set_block(wxc + 2, by + 1, wz, 3)
+	Debug.set_block(wxc + 1, by + 1, wz + 1, 3)
+	Debug.set_block(wxc + 1, by + 1, wz - 1, 3)
+	# Reaction A: source water (L=8) directly above a lava cell -> obsidian
+	Debug.set_block(wxa, by - 2, wz, 3)
+	Debug.set_block(wxa + 1, by - 1, wz, 3)
+	Debug.set_block(wxa - 1, by - 1, wz, 3)
+	Debug.set_block(wxa, by - 1, wz + 1, 3)
+	Debug.set_block(wxa, by - 1, wz - 1, 3)
+	Debug.set_block(wxa, by - 1, wz, 24)
+	Debug.set_block(wxa + 1, by, wz, 3)
+	Debug.set_block(wxa - 1, by, wz, 3)
+	Debug.set_block(wxa, by, wz + 1, 3)
+	Debug.set_block(wxa, by, wz - 1, 3)
+	Debug.set_fluid(wxa, by, wz, 5, 8)
+	# Reaction B: flowing water (L=7) sideways next to lava -> the lava becomes stone
+	Debug.set_block(wxb, by - 1, wz, 3)
+	Debug.set_block(wxb + 1, by - 1, wz, 3)
+	Debug.set_block(wxb - 1, by, wz, 3)
+	Debug.set_block(wxb, by, wz + 1, 3)
+	Debug.set_block(wxb, by, wz - 1, 3)
+	Debug.set_block(wxb + 2, by, wz, 3)
+	Debug.set_block(wxb + 1, by, wz, 24)
+	Debug.set_fluid(wxb, by, wz, 5, 7)
+	var region_keys: Array = world.chunks.keys()
+	var sea_before := _water_at_level(region_keys, Data.SEA)
+	var total_before := _count_fluid_cells(region_keys, 5)
+	var w_before := _water_in_box(region_keys, wxc - 1, wxc + 2, by - 1, by + 1, wz - 1, wz + 1)
+	var no_drain := true
+	var prev := total_before
+	Debug.tick_fluids()
+	var cur := _count_fluid_cells(region_keys, 5)
+	no_drain = no_drain and cur >= prev
+	prev = cur
+	var w_after := _water_in_box(region_keys, wxc - 1, wxc + 2, by - 1, by + 1, wz - 1, wz + 1)
+	var water_delta := w_after - w_before
+	var shore: Array = Debug.fluid_at(wxc + 1, by + 1, wz)
+	var src_top: Array = Debug.fluid_at(wxc, by + 1, wz)
+	var src_bot: Array = Debug.fluid_at(wxc, by, wz)
+	var r_a: int = Debug.block_at(wxa, by - 1, wz)
+	var r_b: int = Debug.block_at(wxb + 1, by, wz)
+	for i in 4:
+		Debug.tick_fluids()
+		cur = _count_fluid_cells(region_keys, 5)
+		no_drain = no_drain and cur >= prev
+		prev = cur
+	var w_settle := _water_in_box(region_keys, wxc - 1, wxc + 2, by - 1, by + 1, wz - 1, wz + 1)
+	var src_top2: Array = Debug.fluid_at(wxc, by + 1, wz)
+	# stable: fixture adds exactly 1 cell, sources never churn (stay 8 after 5 ticks),
+	# fixture box reaches steady state, and the natural world loses no fluid cells (no drain)
+	var sea_stable: bool = (
+		water_delta == 1
+		and shore == [5, 7]
+		and src_top == [5, 8]
+		and src_bot == [5, 8]
+		and src_top2 == [5, 8]
+		and w_settle == w_after
+		and no_drain
+	)
+	print("FLUIDSTAT region_water_before=%d region_water_final=%d sea_surface_before=%d sea_surface_final=%d" % [total_before, prev, sea_before, _water_at_level(region_keys, Data.SEA)])
+	Debug.result({
+		"shore_after": shore,
+		"source_after": src_top,
+		"water_delta": water_delta,
+		"water_on_lava_result": r_a,
+		"sideways_lava_result": r_b,
+		"sea_stable": sea_stable,
+	})
+
+
+func _buckets_test() -> void:
+	var p = Game.player
+	for i in 10:
+		await get_tree().physics_frame
+	Debug.fly(true)
+	var sp: Vector3 = world.spawn_point()
+	var sx := int(sp.x)
+	var sz := int(sp.z)
+	var wx := sx + 4
+	var wz := sz + 2
+	var gy: int = world.surface_top(wx, wz)
+	if gy < 3:
+		gy = 3
+	if gy >= Data.HEIGHT - 6:
+		gy = Data.HEIGHT - 8
+	var wy := gy + 1
+	for z in range(wz, wz + 7):
+		for yy in range(wy, wy + 2):
+			Debug.set_block(wx, yy, z, 0)
+	Debug.set_fluid(wx, wy, wz, 5, 8)
+	for i in 3:
+		await get_tree().physics_frame
+	var scoop_before: Array = Debug.fluid_at(wx, wy, wz)
+	Debug.give_item(139, 1)
+	p.sel = _slot_of(p, 139)
+	Debug.aim_at(float(wx) + 0.5, float(wy) + 0.5, float(wz) + 5.0)
+	for i in 3:
+		await get_tree().physics_frame
+	p.use_selected()
+	for i in 3:
+		await get_tree().physics_frame
+	var after_scoop: Array = Debug.fluid_at(wx, wy, wz)
+	var inv_scoop := {"id": 140, "n": _count_item(p, 140)}
+	Debug.give_item(140, 1)
+	p.sel = _slot_of(p, 140)
+	Debug.set_block(wx, wy, wz + 2, 3)
+	Debug.aim_at(float(wx) + 0.5, float(wy) + 0.5, float(wz) + 5.0)
+	for i in 3:
+		await get_tree().physics_frame
+	p.use_selected()
+	for i in 3:
+		await get_tree().physics_frame
+	var place_after: Array = Debug.fluid_at(wx, wy, wz + 3)
+	var inv_place := {"id": 139, "n": _count_item(p, 139)}
+	Debug.result({
+		"scoop_before": scoop_before,
+		"after_scoop": after_scoop,
+		"inv_scoop": inv_scoop,
+		"place_after": place_after,
+		"inv_place": inv_place,
+	})
+	get_tree().quit()
+
+
+func _water_test(spawn: Vector3) -> void:
+	var p = Game.player
+	for i in 10:
+		await get_tree().physics_frame
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	var wx := sx + 4
+	var wz := sz
+	var B := 42
+	for x in range(wx - 1, wx + 5):
+		for z in range(wz - 1, wz + 2):
+			for y in range(B - 4, B + 3):
+				var id := 0
+				if y < B or (y == B and x != wx and x != wx + 1):
+					id = 3
+				Debug.set_block(x, y, z, id)
+	for z in range(wz - 1, wz + 2):
+		Debug.set_fluid(wx, B, z, 5, 8)
+		Debug.set_fluid(wx + 1, B, z, 5, 8)
+	var fix_chunks := {}
+	for fx in [wx - 1, wx + 4]:
+		for fz in [wz - 1, wz + 1]:
+			fix_chunks["%d,%d" % [int(floorf(float(fx) / 16.0)), int(floorf(float(fz) / 16.0))]] = true
+	var waited := 0
+	while waited < 900:
+		var allc := true
+		for k in fix_chunks:
+			var c: Node3D = world.chunks.get(k)
+			if c == null or c.col_dirty:
+				allc = false
+				break
+		if allc:
+			break
+		await get_tree().physics_frame
+		waited += 1
+	for i in 4:
+		await get_tree().physics_frame
+	p.look(-PI / 2, 0.0)
+	Debug.teleport(float(wx) + 0.5, float(B), float(wz) + 0.5)
+	for i in 4:
+		await get_tree().physics_frame
+	Input.action_press("jump")
+	Input.action_press("move_forward")
+	var timeline: Array = []
+	var max_y := -1e9
+	var above_top := false
+	var first_above_frame := 0
+	var landed_frame := 0
+	var frames := 1300
+	for f in range(1, frames + 1):
+		await get_tree().physics_frame
+		var py: float = p.position.y
+		if py > max_y:
+			max_y = py
+		if not above_top and py >= float(B + 1):
+			above_top = true
+			first_above_frame = f
+		if landed_frame == 0 and p.is_on_floor() and py >= float(B + 1) and int(floorf(p.position.x)) >= wx + 2:
+			landed_frame = f
+			Input.action_release("jump")
+			Input.action_release("move_forward")
+		if f % 50 == 0:
+			var bx := int(floorf(p.position.x))
+			var by := int(floorf(p.position.y + 0.5))
+			var bz := int(floorf(p.position.z))
+			timeline.append([f, roundf(p.position.x * 100.0) / 100.0, roundf(py * 1000.0) / 1000.0, Debug.block_at(bx, by, bz) == 5, roundf(p.velocity.x * 100.0) / 100.0])
+	for i in 60:
+		await get_tree().physics_frame
+	var standing: bool = p.is_on_floor() and absf(p.position.y - float(B + 1)) < 0.05 and int(floorf(p.position.x)) >= wx + 2
+	Debug.result({
+		"B": B,
+		"shore_top": B + 1,
+		"timeline": timeline,
+		"max_y": roundf(max_y * 1000.0) / 1000.0,
+		"first_above_frame": first_above_frame,
+		"above_top": above_top,
+		"landed_frame": landed_frame,
+		"standing_on_shore": standing,
+		"final": [roundf(p.position.x * 1000.0) / 1000.0, roundf(p.position.y * 1000.0) / 1000.0, roundf(p.position.z * 1000.0) / 1000.0],
+		"final_on_floor": p.is_on_floor(),
+		"water_cell_intact": Debug.block_at(wx, B, wz) == 5,
+		"ok": above_top and standing,
+	})
+	get_tree().quit()
+
+
+func _combat_spawn_aimed(p: Node3D, key: String, t: float) -> Node3D:
+	var info = Data.mobs.get(key)
+	var h := float(info["h"])
+	var c: Vector3 = p.camera.global_position + p.aim_dir() * t
+	return Debug.spawn_mob(key, c.x, c.y - h * 0.55, c.z)
+
+
+func _combat_test(spawn: Vector3) -> void:
+	var p = Game.player
+	Debug.fly(true)
+	for i in 10:
+		await get_tree().physics_frame
+	p.position = Vector3(spawn.x, spawn.y + 12.0, spawn.z)
+	p.look(0.0, -0.35)
+	p.hp = 20.0
+	p.hunger = 20.0
+	for i in 4:
+		await get_tree().physics_frame
+	var m: Node3D = _combat_spawn_aimed(p, "chicken", 4.5)
+	var h0: float = p.hunger
+	p.start_mine()
+	await get_tree().physics_frame
+	var bare_ok: bool = absf(float(m.hp) - 3.0) < 0.001 and absf(p.hunger - (h0 - 0.5)) < 0.001
+	var hp_after_first: float = m.hp
+	p.start_mine()
+	var double_hp: float = m.hp
+	var double_ok: bool = absf(double_hp - 2.0) < 0.001 and absf(p.hunger - (h0 - 1.0)) < 0.001
+	var drops_before: int = Game.drops.get_child_count()
+	Debug.give_item(109, 1)
+	p.sel = 0
+	for i in 2:
+		await get_tree().physics_frame
+	p.start_mine()
+	for i in 4:
+		await get_tree().physics_frame
+	var death_drops: Array = []
+	var wpn_ok := false
+	if Game.drops.get_child_count() > drops_before:
+		for i in range(drops_before, Game.drops.get_child_count()):
+			var d = Game.drops.get_child(i)
+			death_drops.append({"id": int(d.id), "n": 1})
+	wpn_ok = death_drops.size() == 1 and int(death_drops[0]["id"]) == 146 and not is_instance_valid(m)
+	p.look(3.14, -0.35)
+	for i in 2:
+		await get_tree().physics_frame
+	var hunger_before_nt: float = p.hunger
+	var drops_before_nt: int = Game.drops.get_child_count()
+	p.start_mine()
+	for i in 2:
+		await get_tree().physics_frame
+	var nt_ok: bool = absf(p.hunger - hunger_before_nt) < 0.001 and Game.drops.get_child_count() == drops_before_nt
+	Debug.result({
+		"bare": bare_ok,
+		"bare_hp": roundf(hp_after_first * 100.0) / 100.0,
+		"post_double_hp": roundf(double_hp * 100.0) / 100.0,
+		"cooldown_ms": 0,
+		"cooldown_ok": double_ok,
+		"weapon_dmg": 4 if wpn_ok else null,
+		"death_drops": death_drops,
+		"death_ok": wpn_ok,
+		"no_target": nt_ok,
+		"ok": bool(bare_ok and double_ok and wpn_ok and nt_ok),
+	})
+	get_tree().quit()
+
+
+func _await_spawn_floor(spawn: Vector3, max_frames: int) -> void:
+	var pcx := int(floorf(spawn.x / 16.0))
+	var pcz := int(floorf(spawn.z / 16.0))
+	var waited := 0
+	while waited < max_frames:
+		var c = world.chunks.get("%d,%d" % [pcx, pcz])
+		if c != null and c.mesh_built:
+			return
+		await get_tree().physics_frame
+		waited += 1
+
+
+func _await_world_build(where: Vector3, max_frames: int) -> void:
+	var pcx := int(floorf(where.x / 16.0))
+	var pcz := int(floorf(where.z / 16.0))
+	var waited := 0
+	while waited < max_frames:
+		var all := true
+		for key in world.chunks:
+			var cc: Node3D = world.chunks[key]
+			if absi(cc.cx - pcx) <= world.render_radius and absi(cc.cz - pcz) <= world.render_radius and not cc.mesh_built:
+				all = false
+				break
+		if all:
+			return
+		await get_tree().physics_frame
+		waited += 1
+	print("SNAPDRAIN not fully drained after %d frames" % max_frames)
+
+
+func _fpv_test() -> void:
+	var p = Game.player
+	for i in 10:
+		await get_tree().physics_frame
+	Debug.give_item(3, 5)
+	p.sel = 0
+	for i in 6:
+		await get_tree().physics_frame
+	var block_visible := false
+	var block_type_ok := p.held_box is MeshInstance3D
+	var sprite_hidden: bool = p.held_sprite != null and p.held_sprite.visible == false
+	var region_ok := false
+	var region_actual := [-1, -1]
+	var region_want := Data.block_rect(3, "side")
+	if p.held_box != null:
+		block_visible = p.held_box.visible
+		if block_visible and p.held_box.material_override != null:
+			var tex = p.held_box.material_override.albedo_texture
+			if tex is ImageTexture and Data.atlas_tex != null:
+				var ti: Image = tex.get_image()
+				var src: Image = Data.atlas_tex.get_image()
+				region_actual = [int(region_want.x), int(region_want.y)]
+				region_ok = ti.get_size() == Vector2i(Data.TILE_PX, Data.TILE_PX) \
+					and ti.get_pixel(0, 0) == src.get_pixel(region_want.x, region_want.y) \
+					and ti.get_pixel(15, 15) == src.get_pixel(region_want.x + 15, region_want.y + 15)
+	Debug.give_item(111, 1)
+	p.sel = _slot_of(p, 111)
+	for i in 6:
+		await get_tree().physics_frame
+	var tool_visible := false
+	var tool_type_ok := p.held_sprite is Sprite3D
+	if p.held_sprite != null:
+		tool_visible = p.held_sprite.visible
+		tool_type_ok = tool_type_ok and p.held_box.visible == false
+	p.sel = 30
+	for i in 6:
+		await get_tree().physics_frame
+	var empty_hidden: bool = p.held_box.visible == false and p.held_sprite.visible == false
+	p.look(0.7, 0.0)
+	for i in 2:
+		await get_tree().physics_frame
+	var b: Basis = p.highlight.global_transform.basis
+	var hx := b * Vector3(1, 0, 0)
+	var hz := b * Vector3(0, 0, 1)
+	var highlight_axis_ok := absf(hx.x - 1.0) < 0.001 and absf(hx.y) < 0.001 and absf(hx.z) < 0.001 \
+		and absf(hz.x) < 0.001 and absf(hz.y) < 0.001 and absf(hz.z - 1.0) < 0.001
+	Debug.result({
+		"highlight_axis_ok": highlight_axis_ok,
+		"block_held_ok": block_visible and block_type_ok and sprite_hidden and region_ok,
+		"block_visible": block_visible,
+		"block_type_ok": block_type_ok,
+		"sprite_hidden_during_block": sprite_hidden,
+		"region_actual": region_actual,
+		"region_want": [int(region_want.x), int(region_want.y)],
+		"tool_held_ok": tool_visible and tool_type_ok,
+		"tool_visible": tool_visible,
+		"tool_type_ok": tool_type_ok,
+		"empty_hidden_ok": empty_hidden,
+	})
+	get_tree().quit()
+
+
+func _count_shapes(n: Node) -> int:
+	var c := 1 if n is CollisionShape3D else 0
+	for ch: Node in n.get_children():
+		c += _count_shapes(ch)
+	return c
+
+
+func _perf_test(spawn: Vector3, t0: int, recenter_ms: int) -> void:
+	var pcx := int(floorf(spawn.x / 16.0))
+	var pcz := int(floorf(spawn.z / 16.0))
+	var frames := 0
+	var max_frame_ms := 0
+	var all := false
+	while frames < 1200:
+		var fb := Time.get_ticks_msec()
+		await get_tree().physics_frame
+		var fe := Time.get_ticks_msec()
+		if fe - fb > max_frame_ms:
+			max_frame_ms = fe - fb
+		frames += 1
+		all = true
+		for key in world.chunks:
+			var c: Node3D = world.chunks[key]
+			if absi(c.cx - pcx) <= world.render_radius and absi(c.cz - pcz) <= world.render_radius:
+				if not c.mesh_built:
+					all = false
+					break
+		if all:
+			break
+	if OS.get_environment("AWECRAFT_MESH_INFO") != "":
+		for e in world.mesh_info():
+			print("MINFO ", JSON.stringify(e))
+	var built := 0
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if c.mesh_built:
+			built += 1
+	var total_ms := Time.get_ticks_msec() - t0
+	var shapes := _count_shapes(get_tree().root)
+	var rr: int = world.render_radius
+	var edge := (float(rr) + 1.0) * 16.0
+	Debug.result({
+		"chunks": built,
+		"render_radius": rr,
+		"fog_near": DayNight.fog_near(rr),
+		"fog_far": DayNight.fog_far(rr),
+		"fog_edge": edge,
+		"fog_ok": DayNight.fog_far(rr) < edge,
+		"total_chunks": world.chunks.size(),
+		"all_meshed": all,
+		"collision_shapes": shapes,
+		"total_ms": total_ms,
+		"frames": frames,
+		"recenter_ms": recenter_ms,
+		"max_frame_ms": max_frame_ms,
+		"build_units": world.perf_build_units,
+		"drain_frames": world.perf_drain_frames,
+		"max_drain_ms": roundf(world.perf_max_drain_ms * 10.0) / 10.0,
+		"gen_ms": world.perf_gen_ms,
+		"build_ms": world.perf_build_ms,
+	})
+	get_tree().quit()
+
+
+func _atlas_test(spawn: Vector3) -> void:
+	var pcx := int(floorf(spawn.x / 16.0))
+	var pcz := int(floorf(spawn.z / 16.0))
+	var c = world.chunks.get("%d,%d" % [pcx, pcz])
+	for i in 900:
+		if c != null and c.mesh_built and c.mesh_instance != null and c.mesh_instance.mesh != null:
+			break
+		await get_tree().physics_frame
+	if c == null or c.mesh_built != true or c.mesh_instance == null or c.mesh_instance.mesh == null:
+		Debug.result({"error": "spawn chunk not meshed"})
+		get_tree().quit()
+		return
+	var mesh: ArrayMesh = c.mesh_instance.mesh
+	var has_uv := false
+	var uv_min := 1.0
+	var uv_max := 0.0
+	if mesh.get_surface_count() > 0:
+		var arrs = mesh.surface_get_arrays(0)
+		var uvs: PackedVector2Array = arrs[Mesh.ARRAY_TEX_UV]
+		if uvs.size() > 0:
+			has_uv = true
+			for uv in uvs:
+				uv_min = minf(uv_min, minf(uv.x, uv.y))
+				uv_max = maxf(uv_max, maxf(uv.x, uv.y))
+	var gt := Data.block_rect(1, "top")
+	var gs := Data.block_rect(1, "side")
+	Debug.result({
+		"has_uv": has_uv,
+		"uv_min": roundf(uv_min * 10000.0) / 10000.0,
+		"uv_max": roundf(uv_max * 10000.0) / 10000.0,
+		"uv_in_range": has_uv and uv_min >= 0.0 and uv_max <= 1.0,
+		"grass_top": [int(gt.x), int(gt.y)],
+		"grass_side": [int(gs.x), int(gs.y)],
+		"grass_distinct": gt != gs,
+	})
+	get_tree().quit()
+
+
+func _tint_test() -> void:
+	world.collision_enabled = false
+	world.render_radius = 1
+	var seed := Game.world_seed
+	var exp_grass := [93.0, 178.0, 55.0]
+	var exp_water := [0.95 * 47.0, 0.95 * 107.0, 0.95 * 235.0]
+	var out := {}
+	var ok := true
+	for bm in ["plains", "forest", "snow", "desert"]:
+		var cell = _tint_find_cell(bm, seed)
+		var tag = bm
+		if bm == "plains" or bm == "forest":
+			tag = bm + "_grass"
+		elif bm == "snow":
+			tag = "snow_grass"
+		elif bm == "desert":
+			tag = "sand"
+		if cell == null:
+			out[tag] = {"error": "no_cell"}
+			ok = false
+			continue
+		var tcx := int(floorf(float(cell["x"]) / 16.0))
+		var tcz := int(floorf(float(cell["z"]) / 16.0))
+		world.recenter(float(cell["x"]), float(cell["z"]), true)
+		if not await _tint_wait_built(tcx, tcz, 1500):
+			out[tag] = {"error": "not_built", "at": [cell["x"], cell["z"]]}
+			ok = false
+			continue
+		var c = world.chunks.get("%d,%d" % [tcx, tcz])
+		var got = _tint_vertex(c, cell, false)
+		if got == null:
+			out[tag] = {"error": "no_vertex", "at": [cell["x"], cell["z"], cell["y"]]}
+			ok = false
+			continue
+		var m := true
+		if bm == "plains" or bm == "forest":
+			m = _tint_close(got, exp_grass)
+		else:
+			m = _tint_neutral(got)
+		out[tag] = {"at": [cell["x"], cell["z"], cell["y"]], "rgb": got, "match": m}
+		if not m:
+			ok = false
+	var wf = _tint_find_water(seed)
+	if wf == null:
+		out["water"] = {"error": "no_water"}
+		ok = false
+	else:
+		var wcx := int(floorf(float(wf["x"]) / 16.0))
+		var wcz := int(floorf(float(wf["z"]) / 16.0))
+		world.recenter(float(wf["x"]), float(wf["z"]), true)
+		if not await _tint_wait_built(wcx, wcz, 1500):
+			out["water"] = {"error": "not_built", "at": [wf["x"], wf["z"]]}
+			ok = false
+		else:
+			var c = world.chunks.get("%d,%d" % [wcx, wcz])
+			var got = _tint_vertex(c, wf, true)
+			if got == null:
+				out["water"] = {"error": "no_vertex", "at": [wf["x"], wf["z"]]}
+				ok = false
+			else:
+				var m := _tint_close(got, exp_water)
+				out["water"] = {"at": [wf["x"], wf["z"]], "biome": WorldGen.biome_at(wf["x"], wf["z"], seed), "rgb": got, "match": m}
+				if not m:
+					ok = false
+	Debug.result({"ok": ok, "samples": out})
+	get_tree().quit()
+
+
+func _tint_find_cell(bm: String, seed: int):
+	var want_top := 1
+	if bm == "snow":
+		want_top = 12
+	elif bm == "desert":
+		want_top = 4
+	var gen_cache := {}
+	for z in range(-160, 161, 2):
+		for x in range(-160, 161, 2):
+			if WorldGen.biome_at(x, z, seed) != bm:
+				continue
+			var h := WorldGen.terrain_height(x, z, seed)
+			if h <= Data.SEA + 1 or h > 74:
+				continue
+			var cx2 := int(floorf(float(x) / 16.0))
+			var cz2 := int(floorf(float(z) / 16.0))
+			var gkey := "%d,%d" % [cx2, cz2]
+			if not gen_cache.has(gkey):
+				gen_cache[gkey] = WorldGen.generate(cx2, cz2, seed)
+			var topb: int = gen_cache[gkey][(h << 8) | ((z & 15) << 4) | (x & 15)]
+			if topb != want_top:
+				continue
+			var flat := true
+			for dz in range(-1, 2):
+				for dx in range(-1, 2):
+					if WorldGen.terrain_height(x + dx, z + dz, seed) != h:
+						flat = false
+			if flat:
+				return {"x": x, "z": z, "y": h}
+	return null
+
+
+func _tint_find_water(seed: int):
+	for z in range(-160, 161, 2):
+		for x in range(-160, 161, 2):
+			if WorldGen.terrain_height(x, z, seed) >= Data.SEA:
+				continue
+			var flat := true
+			for dz in range(-1, 2):
+				for dx in range(-1, 2):
+					if WorldGen.terrain_height(x + dx, z + dz, seed) >= Data.SEA:
+						flat = false
+			if flat:
+				return {"x": x, "z": z, "y": Data.SEA}
+	return null
+
+
+func _tint_wait_built(tcx: int, tcz: int, max_frames: int) -> bool:
+	var frames := 0
+	while frames < max_frames:
+		var all := true
+		for key in world.chunks:
+			var c: Node3D = world.chunks[key]
+			if absi(int(c.cx) - tcx) <= world.render_radius and absi(int(c.cz) - tcz) <= world.render_radius:
+				if not c.mesh_built:
+					all = false
+					break
+		if all:
+			return true
+		await get_tree().physics_frame
+		frames += 1
+	return false
+
+
+func _tint_vertex(c: Node3D, cell: Dictionary, fluid: bool):
+	if c == null:
+		return null
+	var mesh: ArrayMesh
+	if fluid:
+		if c.fluid_instance == null or c.fluid_instance.mesh == null:
+			return null
+		mesh = c.fluid_instance.mesh
+	else:
+		if c.mesh_instance == null or c.mesh_instance.mesh == null:
+			return null
+		mesh = c.mesh_instance.mesh
+	var lx := int(cell["x"]) - int(c.cx) * 16
+	var lz := int(cell["z"]) - int(c.cz) * 16
+	var yv := float(int(cell["y"])) + (0.875 if fluid else 1.0)
+	var want: Array = [[lx, lz], [lx + 1, lz], [lx + 1, lz + 1], [lx, lz + 1]]
+	for s in range(mesh.get_surface_count()):
+		var arrs = mesh.surface_get_arrays(s)
+		var vs: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+		var cs: PackedColorArray = arrs[Mesh.ARRAY_COLOR]
+		for i in range(vs.size() - 3):
+			if absf(vs[i].y - yv) > 0.01:
+				continue
+			var okq := true
+			var seen := {}
+			for j in range(4):
+				var vi: Vector3 = vs[i + j]
+				var key := -1
+				for w in want:
+					if absf(vi.x - float(w[0])) < 0.01 and absf(vi.z - float(w[1])) < 0.01 and absf(vi.y - yv) < 0.01:
+						key = w[0] * 1000 + w[1]
+						break
+				if key < 0 or seen.has(key) or not cs[i + j].is_equal_approx(cs[i]):
+					okq = false
+					break
+				seen[key] = true
+			if okq and seen.size() == 4:
+				return [roundf(cs[i].r * 255.0), roundf(cs[i].g * 255.0), roundf(cs[i].b * 255.0)]
+	return null
+
+
+func _tint_close(got: Array, exp: Array) -> bool:
+	for i in range(3):
+		if absf(float(got[i]) - float(exp[i])) > 1.5:
+			return false
+	return true
+
+
+func _tint_neutral(got: Array) -> bool:
+	return absf(float(got[0]) - float(got[1])) <= 1.5 and absf(float(got[1]) - float(got[2])) <= 1.5 and float(got[0]) >= 200.0
+
+
+func _water_in_box(keys: Array, x0: int, x1: int, y0: int, y1: int, z0: int, z1: int) -> int:
+	var n := 0
+	for key in keys:
+		var c: Node3D = world.chunks.get(key)
+		if c == null:
+			continue
+		var data: PackedByteArray = c.data
+		for i in range(data.size()):
+			if data[i] != 5:
+				continue
+			var yy: int = i >> 8
+			if yy < y0 or yy > y1:
+				continue
+			var xx: int = int(c.cx) * 16 + (i & 15)
+			if xx < x0 or xx > x1:
+				continue
+			var zz: int = int(c.cz) * 16 + ((i >> 4) & 15)
+			if zz < z0 or zz > z1:
+				continue
+			n += 1
+	return n
+
+
+func _water_at_level(keys: Array, y: int) -> int:
+	var n := 0
+	for key in keys:
+		var c: Node3D = world.chunks.get(key)
+		if c == null:
+			continue
+		var data: PackedByteArray = c.data
+		for i in range(data.size()):
+			if (i >> 8) == y and data[i] == 5:
+				n += 1
+	return n
+
+
+func _count_fluid_cells(keys: Array, id: int) -> int:
+	var n := 0
+	for key in keys:
+		var c: Node3D = world.chunks.get(key)
+		if c == null:
+			continue
+		var data: PackedByteArray = c.data
+		for i in range(data.size()):
+			if data[i] == id:
+				n += 1
+	return n
+
+
+func _fluidsettle_test() -> void:
+	var keys: Array = world.chunks.keys()
+	var prev_w := _count_fluid_cells(keys, 5)
+	var quiet := 0
+	var i := 0
+	var nmax := 400
+	var hard := OS.get_environment("AWECRAFT_SETTLE_TICKS") != ""
+	if hard:
+		nmax = OS.get_environment("AWECRAFT_SETTLE_TICKS").to_int()
+	while i < nmax:
+		i += 1
+		Debug.tick_fluids()
+		var w := _count_fluid_cells(keys, 5)
+		if w == prev_w:
+			quiet += 1
+		else:
+			quiet = 0
+		prev_w = w
+		if not hard and quiet >= 3:
+			break
+	Debug.result({"ticks_to_settle": i, "quiet": quiet, "water_final": prev_w, "chunk_count": world.chunks.size()})
+	get_tree().quit()
+
+
+func _is_solid(x: int, y: int, z: int) -> bool:
+	if y < 0 or y >= Data.HEIGHT:
+		return false
+	var info = Data.block(world.get_block(x, y, z))
+	return info != null and bool(info.solid) and not bool(info.cross)
+
+
+func _tref_tree_at(x: int, z: int, seed: int) -> int:
+	var h := WorldGen.terrain_height(x, z, seed)
+	if h <= Data.SEA + 1:
+		return -1
+	var d := 0.0
+	var b := WorldGen.biome_at(x, z, seed)
+	if b == "forest":
+		d = 0.14
+	elif b == "plains":
+		d = 0.02
+	elif b == "snow":
+		d = 0.02
+	if d <= 0.0:
+		return -1
+	if AweNoise.hash2i(x, z, seed + 55) >= d:
+		return -1
+	return h
+
+
+func _trees_ref_flora(d: PackedByteArray, cx: int, cz: int, seed: int, trees: Dictionary, flowers: Dictionary) -> void:
+	var hmax := Data.HEIGHT
+	var bx := cx * 16
+	var bz := cz * 16
+	var tz := bz - 2
+	while tz < bz + 18:
+		var tx := bx - 2
+		while tx < bx + 18:
+			var h := _tref_tree_at(tx, tz, seed)
+			if h >= 0:
+				var glx := tx - bx
+				var glz := tz - bz
+				var skip := false
+				if glx >= 0 and glx < 16 and glz >= 0 and glz < 16:
+					var gb: int = d[(h << 8) | (glz << 4) | glx]
+					if gb == 0 or gb == 5 or gb == 24:
+						skip = true
+					else:
+						var gi = Data.block(gb)
+						if gi == null or not bool(gi.solid):
+							skip = true
+				if not skip:
+					var th := 4 + int(AweNoise.hash2i(tx, tz, seed + 66) * 3.0)
+					trees["%d,%d" % [tx, tz]] = th
+					var dy := 1
+					while dy <= th:
+						WorldGen._putc(d, tx, h + dy, tz, 6, bx, bz, hmax)
+						dy += 1
+					var ly := th - 1
+					while ly <= th + 2:
+						var rad := 1 if ly >= th + 1 else 2
+						var dx := -rad
+						while dx <= rad:
+							var dz := -rad
+							while dz <= rad:
+								var sk := false
+								if rad == 2 and absi(dx) == 2 and absi(dz) == 2:
+									sk = true
+								if ly == th + 2 and absi(dx) == 1 and absi(dz) == 1:
+									sk = true
+								if not sk:
+											WorldGen._putc(d, tx + dx, h + ly, tz + dz, 7, bx, bz, hmax)
+								dz += 1
+							dx += 1
+						ly += 1
+			tx += 1
+		tz += 1
+	var lz := 0
+	while lz < 16:
+		var lx := 0
+		while lx < 16:
+			var x := bx + lx
+			var z := bz + lz
+			var h := WorldGen.terrain_height(x, z, seed)
+			if h > Data.SEA and h < hmax - 2:
+				var top: int = d[(h << 8) | (lz << 4) | lx]
+				if top == 1 and AweNoise.hash2i(x, z, seed + 777) < 0.02:
+					var fid := 18 if AweNoise.hash2i(x, z, seed + 778) < 0.5 else 19
+					d[((h + 1) << 8) | (lz << 4) | lx] = fid
+					flowers["%d,%d" % [x, z]] = fid
+			lx += 1
+		lz += 1
+
+
+func _rget(dicts: Dictionary, x: int, y: int, z: int) -> int:
+	if y < 0 or y >= Data.HEIGHT:
+		return 0
+	var key := "%d,%d" % [int(floorf(float(x) / 16.0)), int(floorf(float(z) / 16.0))]
+	var dd = dicts.get(key)
+	if dd == null:
+		return -999
+	return int(dd[(y << 8) | ((z & 15) << 4) | (x & 15)])
+
+
+func _trees_md5(d: PackedByteArray) -> String:
+	var h := HashingContext.new()
+	h.start(HashingContext.HASH_MD5)
+	h.update(d)
+	var md5: PackedByteArray = h.finish()
+	var hx := ""
+	for i in range(8):
+		hx += "%02x" % md5[i]
+	return hx
+
+
+func _trees_test() -> void:
+	var seed := Game.world_seed
+	var radc := 1
+	var out := {}
+	var ok := true
+	var per_chunk := {}
+	var ref_data := {}
+	var ref_trees := {}
+	var ref_flowers := {}
+	var cx := -radc
+	while cx <= radc:
+		var cz := -radc
+		while cz <= radc:
+			var key := "%d,%d" % [cx, cz]
+			var d := WorldGen.generate(cx, cz, seed)
+			var dref := d.duplicate()
+			for i in range(dref.size()):
+				var bv: int = dref[i]
+				if bv == 6 or bv == 7 or bv == 18 or bv == 19:
+					dref[i] = 0
+			var cnt := {"log": 0, "leaf": 0, "rose": 0, "dan": 0}
+			for i in range(d.size()):
+				var v: int = d[i]
+				if v == 6:
+					cnt["log"] += 1
+				elif v == 7:
+					cnt["leaf"] += 1
+				elif v == 18:
+					cnt["rose"] += 1
+				elif v == 19:
+					cnt["dan"] += 1
+			_trees_ref_flora(dref, cx, cz, seed, ref_trees, ref_flowers)
+			var rcnt := {"log": 0, "leaf": 0, "rose": 0, "dan": 0}
+			for i in range(dref.size()):
+				var v: int = dref[i]
+				if v == 6:
+					rcnt["log"] += 1
+				elif v == 7:
+					rcnt["leaf"] += 1
+				elif v == 18:
+					rcnt["rose"] += 1
+				elif v == 19:
+					rcnt["dan"] += 1
+			ref_data[key] = dref
+			per_chunk[key] = {"act": cnt, "ref": rcnt, "match": cnt == rcnt}
+			if cnt != rcnt:
+				ok = false
+			cz += 1
+		cx += 1
+	var npath := "/home/angrygiant/github_projects/AweCraft/.scratch/trees_expect_%d.json" % seed
+	if FileAccess.file_exists(npath):
+		var nf := FileAccess.open(npath, FileAccess.READ)
+		var nj = JSON.parse_string(nf.get_as_text())
+		nf.close()
+		if nj is Dictionary:
+			var ncnts: Dictionary = nj.get("counts", {})
+			var nc_ok := true
+			for key in per_chunk:
+				var nc = ncnts.get(key)
+				var actv: Dictionary = per_chunk[key]["act"]
+				var same: bool = nc != null and nc.size() == actv.size()
+				if same:
+					for fk in actv:
+						if not nc.has(fk) or float(int(nc[fk])) != float(int(actv[fk])):
+							same = false
+							break
+				if not same:
+					nc_ok = false
+					print("NCDBG key=", key, " act=", JSON.stringify(actv), " json=", JSON.stringify(nc))
+			var ntrees: Dictionary = nj.get("trees", {})
+			var nt_ok := ntrees.size() == ref_trees.size()
+			if nt_ok:
+				for tk in ref_trees:
+					if not ntrees.has(tk) or int(ntrees[tk]) != int(ref_trees[tk]):
+						nt_ok = false
+						break
+			var nflowers: Dictionary = nj.get("flowers", {})
+			var nf_ok := nflowers.size() == ref_flowers.size()
+			if nf_ok:
+				for fk in ref_flowers:
+					if not nflowers.has(fk) or int(nflowers[fk]) != int(ref_flowers[fk]):
+						nf_ok = false
+						break
+			out["node_count_ok"] = nc_ok
+			out["node_trees_ok"] = nt_ok
+			out["node_flowers_ok"] = nf_ok
+			ok = ok and nc_ok and nt_ok and nf_ok
+		else:
+			out["node_error"] = "bad_json"
+			ok = false
+	else:
+		out["node_error"] = "no_file"
+	var desert_checked := -1
+	var desert_ok := true
+	for z in range(-64, 65, 4):
+		if desert_checked > 0:
+			break
+		for x in range(-64, 65, 4):
+			if WorldGen.biome_at(x, z, seed) != "desert":
+				continue
+			var hd := WorldGen.terrain_height(x, z, seed)
+			if hd <= Data.SEA + 1 or hd > 40:
+				continue
+			desert_checked = hd
+			if _rget(ref_data, x, hd + 1, z) == 6:
+				desert_ok = false
+			for yy in range(1, 9):
+				var cv: int = _rget(ref_data, x, hd + yy, z)
+				if cv == 18 or cv == 19:
+					desert_ok = false
+			break
+	out["desert_checked"] = desert_checked
+	out["desert_no_flora"] = desert_ok
+	ok = ok and desert_ok
+	var samples := []
+	var th_seen := {}
+	for tk in ref_trees:
+		if th_seen.size() >= 3:
+			break
+		var thv: int = int(ref_trees[tk])
+		if th_seen.has(thv):
+			continue
+		var parts: PackedStringArray = String(tk).split(",")
+		var txi := int(parts[0])
+		var tzi := int(parts[1])
+		if txi < -16 or txi > 15 or tzi < -16 or tzi > 15:
+			continue
+		var hh := _tref_tree_at(txi, tzi, seed)
+		var tcell = _tref_tree_cells(txi, tzi, hh, thv, ref_data)
+		samples.append({"at": [txi, tzi], "h": hh, "th": thv, "ok": tcell["ok"], "fails": tcell["fails"]})
+		if not tcell["ok"]:
+			ok = false
+		th_seen[thv] = true
+	out["tree_samples"] = samples
+	var fsamples := []
+	var fid_seen := {}
+	for fk in ref_flowers:
+		if fid_seen.size() >= 2:
+			break
+		var fidv: int = int(ref_flowers[fk])
+		if fid_seen.has(fidv):
+			continue
+		fid_seen[fidv] = true
+		var fparts: PackedStringArray = String(fk).split(",")
+		var fx := int(fparts[0])
+		var fz := int(fparts[1])
+		var fh := WorldGen.terrain_height(fx, fz, seed)
+		var fcell = {
+			"cell": _rget(ref_data, fx, fh + 1, fz),
+			"ground": _rget(ref_data, fx, fh, fz),
+			"above": _rget(ref_data, fx, fh + 2, fz),
+		}
+		var fok: bool = int(fcell["cell"]) == fidv and int(fcell["ground"]) == 1 and int(fcell["above"]) == 0
+		fsamples.append({"at": [fx, fz], "want": fidv, "cell": fcell, "ok": fok})
+		if not fok:
+			ok = false
+	out["flower_samples"] = fsamples
+	var a1 := WorldGen.generate(0, 0, seed)
+	var a2 := WorldGen.generate(0, 0, seed)
+	var a3 := WorldGen.generate(-1, 2, seed)
+	var a4 := WorldGen.generate(-1, 2, seed)
+	out["determinism"] = (a1 == a2) and (a3 == a4)
+	ok = ok and out["determinism"]
+	var blpath := "/home/angrygiant/github_projects/AweCraft/.scratch/genhash_before_trees.log"
+	var bl := {}
+	if FileAccess.file_exists(blpath):
+		var bf := FileAccess.open(blpath, FileAccess.READ)
+		while not bf.eof_reached():
+			var line := bf.get_line()
+			if not line.begins_with("GENHASH "):
+				continue
+			var pp := line.split(" ")
+			bl["%s,%s" % [pp[1], pp[2]]] = pp[3]
+		bf.close()
+	if bl.size() == 25:
+		var gh_ok := true
+		var gh_fail := ""
+		var gx := -2
+		while gx <= 2:
+			var gz := -2
+			while gz <= 2:
+				var dd2 := WorldGen.generate(gx, gz, seed).duplicate()
+				for i in range(dd2.size()):
+					var vv: int = dd2[i]
+					if vv == 6 or vv == 7 or vv == 18 or vv == 19:
+						dd2[i] = 0
+				var key2 := "%d,%d" % [gx, gz]
+				if bl[key2] != _trees_md5(dd2):
+					gh_ok = false
+					gh_fail = key2
+				gz += 1
+			gx += 1
+		out["genhash_gate"] = gh_ok
+		if gh_fail != "":
+			out["genhash_fail"] = gh_fail
+		ok = ok and gh_ok
+	else:
+		out["genhash_gate"] = null
+	print("TREES stat trees=%d flowers=%d rose=%d dan=%d" % [ref_trees.size(), ref_flowers.size(), _tref_count_fid(ref_flowers, 18), _tref_count_fid(ref_flowers, 19)])
+	world.collision_enabled = false
+	world.render_radius = 1
+	world.recenter(8.0, 8.0, true)
+	var waited := 0
+	while waited < 900:
+		var cc = world.chunks.get("0,0")
+		if cc != null and cc.mesh_built:
+			break
+		await get_tree().physics_frame
+		waited += 1
+	var mesh_info := {}
+	var cc0 = world.chunks.get("0,0")
+	if cc0 != null and cc0.mesh_built:
+		var d0: PackedByteArray = cc0.data
+		var nleaf := 0
+		var nflower := 0
+		for i in range(d0.size()):
+			var v: int = d0[i]
+			if v == 7:
+				nleaf += 1
+			elif v == 18 or v == 19:
+				nflower += 1
+		var ops := 0
+		if cc0.mesh_instance and cc0.mesh_instance.mesh:
+			ops = cc0.mesh_instance.mesh.get_surface_count()
+		var leaf_v := -1
+		var flower_v := -1
+		var cutout_v := -1
+		if nleaf > 0 or nflower > 0:
+			if cc0.flora_instance == null or cc0.flora_instance.mesh == null:
+				mesh_info = {"error": "no_flora_instance", "nleaf": nleaf, "nflower": nflower}
+			else:
+				var fm: ArrayMesh = cc0.flora_instance.mesh
+				var sc := fm.get_surface_count()
+				for s in range(sc):
+					var arrs = fm.surface_get_arrays(s)
+					var vs: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+					if s == 0:
+						cutout_v = vs.size()
+					if s == 1:
+						flower_v = vs.size()
+				if nleaf == 0 and nflower > 0:
+					flower_v = cutout_v
+					cutout_v = -1
+				mesh_info = {"opaque_surfaces": ops, "cutout_verts": cutout_v, "flower_verts": flower_v, "nleaf": nleaf, "nflower": nflower}
+				if nflower > 0:
+					ok = ok and flower_v == nflower * 8
+				if nleaf > 0:
+					ok = ok and cutout_v > 0 and cutout_v % 4 == 0
+	else:
+		mesh_info = {"error": "chunk_not_built"}
+	out["mesh"] = mesh_info
+	Debug.result({"ok": ok, "data": out, "per_chunk": per_chunk})
+	get_tree().quit()
+
+
+func _tref_count_fid(fl: Dictionary, fid: int) -> int:
+	var n := 0
+	for k in fl:
+		if int(fl[k]) == fid:
+			n += 1
+	return n
+
+
+func _tref_tree_cells(x: int, z: int, h: int, th: int, dicts: Dictionary) -> Dictionary:
+	var out := {"ok": true, "fails": []}
+	var checks: Array = [
+		[h + 1, 6, "trunk_base"],
+		[h + th, -6, "trunk_top"],
+		[h + th + 3, 0, "above_canopy"],
+		[h + th + 2, 7, "canopy_top_center"],
+	]
+	for ck in checks:
+		var got := _rget(dicts, x, int(ck[0]), z)
+		var exp := int(ck[1])
+		var cok := true
+		if exp < 0:
+			cok = int(got) == -exp or int(got) == 7
+		else:
+			cok = int(got) == exp
+		if not cok:
+			out["ok"] = false
+			out["fails"].append(ck[2] + "=" + str(got))
+	var corners: Array = [
+		[1, h + th + 2, 1, 0],
+		[2, h + th - 1, 0, 7],
+		[2, h + th - 1, 2, 0],
+		[2, h + th, 1, 7],
+		[2, h + th + 1, 0, 0],
+	]
+	for ck in corners:
+		var got := _rget(dicts, x + int(ck[0]), int(ck[1]), z + int(ck[2]))
+		if got != int(ck[3]):
+			out["ok"] = false
+			out["fails"].append("%d,%d,%d=%d" % [ck[0], ck[1], ck[2], got])
+	return out

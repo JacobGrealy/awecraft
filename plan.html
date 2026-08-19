@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AweCraft — Action Plan</title>
+<style>
+body{background:#14161a;color:#d8dce2;font:15px/1.55 'Courier New',monospace;max-width:980px;margin:0 auto;padding:32px 22px}
+h1{font-size:26px;letter-spacing:2px;color:#fff;border-bottom:2px solid #3a3f47;padding-bottom:10px}
+h2{font-size:18px;color:#7ec8ff;margin-top:34px;border-left:4px solid #7ec8ff;padding-left:10px}
+h3{font-size:15px;color:#ffd27e;margin-top:18px}
+.goal{background:#1b2027;border:1px solid #2c333d;padding:14px 16px;border-radius:6px;margin:18px 0}
+.goal b{color:#8fe388}
+li{margin:6px 0}
+code{background:#0e1116;padding:1px 5px;border-radius:3px;color:#9fd0ff;font-size:13px}
+table{border-collapse:collapse;width:100%;margin:14px 0;font-size:13px}
+th,td{border:1px solid #2c333d;padding:7px 10px;text-align:left;vertical-align:top}
+th{background:#1b2027;color:#fff}
+td.st{white-space:nowrap}
+.st.todo{color:#ffd27e}.st.doing{color:#7ec8ff}.st.done{color:#8fe388}
+.note{background:#241f16;border:1px solid #3d331e;padding:10px 14px;border-radius:6px;font-size:13px;color:#e8d9b0;margin:10px 0}
+.small{font-size:12px;color:#8a919c}
+</style>
+</head>
+<body>
+<h1>AweCraft → Minecraft Parity Plan</h1>
+
+<div class="goal">
+<b>Goal:</b> make AweCraft as close to Minecraft as possible, closing the 8 identified gaps.
+All work stays in the single <code>index.html</code> (no new dependencies). Each workstream ships with a
+build bump (<code>BUILD</code> marker), <code>node --check</code>, and a live browser verification.
+</div>
+
+<p class="small">Ordering is by dependency + impact: lighting and terrain depth first (they enable the rest),
+then the survival loop, combat, the Nether, and finally the "feel" systems (particles, sound).</p>
+
+<h2>Workstreams</h2>
+<table>
+<tr><th>#</th><th>Workstream</th><th>Status</th><th>Scope</th><th>Done when</th></tr>
+
+<tr>
+<td>+</td><td><b>Fly + time keys</b> (user request)</td><td class="st done">done</td>
+<td>
+F toggles creative-style fly (Space up, Shift down, no fall damage, no drowning). G skips to
+midnight/noon. Help text + F3 indicator updated.
+</td>
+<td>Fly works with collision; G jumps time; verified in browser.</td>
+</tr>
+<tr>
+<td>1</td><td><b>Lighting + torches</b></td><td class="st done">done</td>
+<td>
+Per-voxel light = <code>max(skyLight×day, blockLight)</code>, baked into vertex colors (world switches to unlit
+<code>MeshBasicMaterial</code>; mobs keep sun/ambient). Sky light = column open-to-sky (15/0). Block light = BFS
+flood from sources (torch 14, glowstone 12, lava 15, magma 3) with −1 attenuation, recomputed on edits.
+New blocks: <b>torch</b> (thin box, light 14), <b>glowstone</b> (light 12).
+</td>
+<td>Caves/underground are dark; a torch lights a ~14-block radius and works at night; night sky dims the world.</td>
+</tr>
+
+<tr>
+<td>2</td><td><b>Caves, lava & depth</b></td><td class="st done">done</td>
+<td>
+3D noise cave carving in <code>genChunk</code> (worm tunnels, y≈5–60); <b>lava</b> pools (light 15, damages) in deep
+caves (y&lt;8); <b>obsidian</b> block (very hard, diamond-pick gated); ore placement into cave walls; tree-placement
+guard so trees don't float over carved air.
+</td>
+<td>Digging down reveals dark, torchable cave networks with glowing lava; obsidian exists and is hard to mine.</td>
+</tr>
+
+<tr>
+<td>3</td><td><b>Liquid simulation</b></td><td class="st done">done</td>
+<td>
+Water + lava become fluids with levels 1–8 (8 = source). Tick every ~0.2s: horizontal flow (−1 level), vertical
+fall, source re-flood. Water-on-lava contact → obsidian (source) / stone (flow). Level-aware water surface mesh.
+<b>Buckets</b>: empty/water/lava bucket items + recipe; right-click to scoop/place fluid. Lava slows + burns the player.
+</td>
+<td>Dig a trench in the ocean → it re-floods; water poured on lava makes obsidian; buckets scoop and place fluids.
+Also fixed a latent click-path regression (undefined <code>hhit</code> → every left/right click threw) and a falsy
+<code>it.bucket===0</code> guard that made empty-bucket scoops unreachable; verified: flow into dug shore cell (level-7 spread,
+source stable, +1 water only), scoop→140, place→level-8 source +139, source-water on lava → obsidian, flowing water
+sideways vs lava → stone, tick ≈1.1 ms near the sea.</td>
+</tr>
+
+<tr>
+<td>4</td><td><b>Survival loop</b></td><td class="st done">done</td>
+<td>
+Tool tiers (wood/stone/iron/diamond) for <b>pickaxe, axe, shovel, sword</b> with mining-speed multipliers and
+tool-gated drops (stone/ores drop only with the right pick). <b>Armor</b> (leather/iron/diamond × helmet/chest/legs/boots)
+with damage reduction + 4 equip slots in the inventory. <b>Hunger</b> bar (0–20, exhaustion on sprint/attack/mine,
+regen when fed, starvation damage). Full recipe set + fix missing log→planks.
+<b>Verified (20260816-r11):</b> shapeless log→planks + shaped wooden-pickaxe craft; stone/ore drops gate on pickaxe; diamond pick breaks stone far faster than bare hands; armor equips into the 4 inventory slots and reduces damage (full diamond → 1 dmg drown vs 2 bare); hunger drain/regen/starve + food-bar HUD + eat. Items 111–125 (tools), 127–138 (armor), icon tiles 53–79.
+</td>
+<td>The punch-tree→pickaxe→stone→iron→diamond progression is playable end-to-end; armor reduces mob damage;
+hunger regenerates hearts and starves you.</td>
+</tr>
+
+<tr>
+<td>5</td><td><b>Mob ecosystem + combat</b></td><td class="st todo">todo</td>
+<td>
+New mobs: <b>skeleton</b> (ranged, shoots arrows), <b>chicken</b> (passive, drops raw chicken), <b>wolf</b>
+(neutral, tameable with bone), <b>spider</b> (night-hostile, drops string). Projectile system (arrows with gravity,
+hit player/mobs). <b>Bow</b> + arrow items + recipes; bone/string/arrow drops; updated spawn tables.
+</td>
+<td>Fight skeletons with a bow (arrows fly and hit); tame a wolf; spiders drop string at night.</td>
+</tr>
+
+<tr>
+<td>6</td><td><b>Nether + portals</b></td><td class="st todo">todo</td>
+<td>
+Second world: netherrack terrain, basalt pillars, lava sea, glowstone, bedrock ceiling; constant dim light (no
+day cycle). <b>Portal</b>: build an obsidian frame (4×5), ignite with flint &amp; steel → purple portal block;
+stepping in teleports to the mapped position in the other dimension (1:1 scale), with cooldown + nearest-portal
+fallback. Per-dimension save. Flint &amp; steel item + recipe.
+</td>
+<td>Build and light an obsidian portal, walk through to the Nether, and return.</td>
+</tr>
+
+<tr>
+<td>7</td><td><b>Particles</b></td><td class="st todo">todo</td>
+<td>
+Pooled particle system (~200, <code>THREE.Points</code> with per-particle color/velocity/gravity/life).
+Block-break debris (block's average color), hit sparks, arrow-hit burst, small pickup puff.
+</td>
+<td>Breaking blocks emits flying debris; hits and arrows produce sparks.</td>
+</tr>
+
+<tr>
+<td>8</td><td><b>Sound</b></td><td class="st todo">todo</td>
+<td>
+Extend the existing WebAudio synth: block-specific break/place thumps, footstep ticks (surface-dependent),
+hit/punch, eat, splash, arrow shoot + thock, bow "bwip", mob hurt, ambient day/night tone. All procedural (no assets).
+</td>
+<td>Every core action (walk, mine, place, hit, eat, shoot) has audible feedback.</td>
+</tr>
+</table>
+
+<h2>Known deviations (documented, not bugs)</h2>
+<div class="note">
+<ul style="margin:4px 0 0 18px;padding:0">
+<li>No ambient occlusion, no redstone, no rain, no baby-mob visuals beyond current, no ghast, no enchanting.</li>
+<li>Portal scale is 1:1 (vanilla uses 8:1 overworld→Nether).</li>
+<li>Single-file, single-threaded generation; light is recomputed per-chunk on edits (may hitch briefly on large builds).</li>
+<li>Audio is synthesized, not vanilla samples.</li>
+</ul>
+</div>
+
+<h2>Verification protocol (per workstream)</h2>
+<ol style="margin-left:20px">
+<li>Bump <code>BUILD</code> marker (e.g. <code>20260815-r8</code> …).</li>
+<li><code>node --check</code> on the extracted module — must pass.</li>
+<li>Live browser check (Playwright): 0 console errors, <code>__loopErr</code> null, feature exercised via <code>__debug</code>, screenshot captured.</li>
+<li>Update this plan's status column.</li>
+</ol>
+
+<p class="small">Server: http://localhost:8137 · http://192.168.0.224:8137 — hard-refresh to pick up a new build (F3 shows the marker).</p>
+</body>
+</html>

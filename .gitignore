@@ -1,0 +1,6 @@
+.scratch/
+web/
+export/
+.godot/
+.playwright-cli/
+nohup.out

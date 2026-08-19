@@ -1,0 +1,49 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AweCraft — remaining features</title>
+<style>body{font-family:system-ui,Segoe UI,Roboto,sans-serif;margin:24px 40px;color:#1b232f;max-width:1040px;line-height:1.45}h1{font-size:20px}h2{font-size:15px;margin-top:22px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}ul{margin:6px 0}li{margin:3px 0}code{background:#eef1f6;padding:1px 5px;border-radius:3px;font-size:13px}.note{color:#546}</style>
+</head><body>
+<h1>AweCraft — Remaining Features (backlog)</h1>
+<p class="note">Saved 2026-08-16. The open items below (plus WS6–8) are carried into the <b>Godot port</b>. The web game freezes at build <code>20260816-r12</code> and serves as the reference/spec. Visual reference for the crafting UI: <code>minecraft-crafting-ui-reference-image.webp</code> (repo root).</p>
+
+<h2>Baseline already done in web (must be PORTED to Godot, working)</h2>
+<ul>
+<li>Voxel world: chunking, terrain, 4 biomes, caves (noise), ores (fbm3), bedrock, sea level y30, world height 80.</li>
+<li>Raycast select/mine/place, player controls, fly (F), time (G), F3 debug.</li>
+<li>Lighting: column sky light + block-light BFS, torches (WS1).</li>
+<li>Fluids (WS3): water/lava flow levels (source=8, flowing decays), reactions (obsidian/stone), buckets scoop/place, level-aware mesh.</li>
+<li>Survival (WS4): tools (pick/axe/shovel/sword ×4) with speed + gated drops, armor (4 sets × 4 slots) with damage reduction, hunger (drain/regen/starve) + food bar, crafting (shapeless + shaped), full recipe set.</li>
+<li>Mobs (WS5, r12): 4 originals + skeleton/chicken/wolf/spider, bow + arrow + projectile system, AI, day/night spawn tables.</li>
+</ul>
+
+<h2>Open: Mob model quality + leg pivots</h2>
+<ul>
+<li>Mobs currently render as colored boxy “creeper-like” shapes. Rebuild each with a UNIQUE model that reads as its creature: skeleton (slender white/gray, bow held in front, skull w/ eyes), chicken (small white body, orange beak, red comb, wings, small legs, flapping), wolf (gray quadruped, pointed ears, snout, 4 legs, tail; tamed → collar), spider (dark body + 8 legs, small head). Also review the 4 originals for realism.</li>
+<li>Leg/limb animation must pivot around the TOP attachment (hip/shoulder), not the mesh center. Fix for ALL animated limbs (and arms).</li>
+</ul>
+
+<h2>Open: Crafting / Inventory UI (ref: minecraft-crafting-ui-reference-image.webp)</h2>
+<ul>
+<li>Empty inventory + craft slots → transparent (subtle inset), NOT grass-textured.</li>
+<li>Item tooltip: show item NAME on hover.</li>
+<li>“Craftable recipes” options: a clickable list of recipes; clicking one auto-fills the required materials IF the player has them (consumed on output).</li>
+</ul>
+
+<h2>Open: Combat</h2>
+<ul><li>Bare-handed punch: with no tool/weapon equipped, attacking a mob deals LOW damage (≈1), not nothing.</li></ul>
+
+<h2>WS6 — Nether + portals <span class="note">(REMOVED 2026-08-18 — endgame being redirected to a new direction, spec TBD)</span></h2>
+<ul>
+<li>Second dimension: netherrack, basalt pillars, lava sea (y28–30), glowstone, bedrock ceiling; constant dim light, no day cycle.</li>
+<li>Portal: obsidian frame (4×5) ignited with flint&amp;steel → portal block; step in → teleport 1:1 to the mapped position; cooldown + nearest-portal fallback; per-dimension save. Flint&amp;steel item + recipe.</li>
+</ul>
+
+<h2>WS7 — Particles</h2>
+<ul><li>Pooled (~200) particle system (per-particle color/velocity/gravity/life): block-break debris (block avg color), hit sparks, arrow-hit burst, pickup puff.</li></ul>
+
+<h2>WS8 — Sound</h2>
+<ul><li>Procedural synth (no assets): block break/place thumps per category, footstep ticks (surface-dependent), hit/punch, eat, splash, arrow shoot + thock, bow “bwip”, mob hurt, ambient day/night tone.</li></ul>
+<h2>Future (beyond web spec — user 2026-08-18)</h2>
+<ul>
+<li>Online multiplayer.</li>
+<li>Controller support.</li>
+</ul>
+</body></html>
