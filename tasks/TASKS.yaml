@@ -1,7 +1,5 @@
-# AweCraft task registry (single source of truth)
-# Schema mirrors the work todo-backup format (title/source/priority/status/labels/created_at/updated_at/horizon/waiting_on/notes/comments).
 meta:
-  updated_at: 2026-08-19T15:30
+  updated_at: 2026-08-19T16:10
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -79,7 +77,8 @@ intake:
   completed_at: 2026-08-16T12:00
   waiting_on: null
   parent_id: null
-  notes: 'Player: CharacterBody3D movement, walk/sprint/gravity/jump, fly (F), first-person look, time (G), F3 debug, world spawn'
+  notes: 'Player: CharacterBody3D movement, walk/sprint/gravity/jump, fly (F), first-person look, time (G), F3 debug, world
+    spawn'
   comments:
   - id: 1
     created_at: 2026-08-15 12:00T12:00
@@ -268,7 +267,8 @@ intake:
   completed_at: 2026-08-17T12:00
   waiting_on: null
   parent_id: null
-  notes: Block texture atlas from Faithful-32x .mcpack import pipeline (AWECRAFT_IMPORT_PACK); id 9 cobblestone added; portal purple fill
+  notes: Block texture atlas from Faithful-32x .mcpack import pipeline (AWECRAFT_IMPORT_PACK); id 9 cobblestone added; portal
+    purple fill
   comments:
   - id: 1
     created_at: 2026-08-16 18:00T12:00
@@ -394,7 +394,8 @@ intake:
   completed_at: 2026-08-18T12:00
   waiting_on: null
   parent_id: null
-  notes: 'Headless inventory+craft logic: web-exact slot model (inv[36], storage inv[27+i], armor 4), click semantics, shapeless+shaped output, AWECRAFT_LOGIC=craft'
+  notes: 'Headless inventory+craft logic: web-exact slot model (inv[36], storage inv[27+i], armor 4), click semantics, shapeless+shaped
+    output, AWECRAFT_LOGIC=craft'
   comments:
   - id: 1
     created_at: 2026-08-18 11:00T12:00
@@ -415,12 +416,14 @@ intake:
   completed_at: 2026-08-18T12:00
   waiting_on: null
   parent_id: null
-  notes: 'Inventory UI: web-exact panel (48px slots), craft grid+output, hover NAME tooltip, craftable-recipe autofill list, icon/atlas fixes'
+  notes: 'Inventory UI: web-exact panel (48px slots), craft grid+output, hover NAME tooltip, craftable-recipe autofill list,
+    icon/atlas fixes'
   comments:
   - id: 1
     created_at: 2026-08-18 11:00T12:00
     updated_at: null
-    text: '[user] backpack 9x3 + craft grid + output + armor 4; hover name tooltip; transparent empty slots; craftable-recipe autofill list'
+    text: '[user] backpack 9x3 + craft grid + output + armor 4; hover name tooltip; transparent empty slots; craftable-recipe
+      autofill list'
 - id: AC-0020
   title: m8-survival
   source: agent
@@ -436,7 +439,8 @@ intake:
   completed_at: 2026-08-18T12:00
   waiting_on: null
   parent_id: null
-  notes: 'Survival: hunger (20, drain/regen/starve), armor DR (web formula), tool speed (2/4/6/7), pick-gated drops, eat, food bar + black hearts, fall/lava/drown/void'
+  notes: 'Survival: hunger (20, drain/regen/starve), armor DR (web formula), tool speed (2/4/6/7), pick-gated drops, eat,
+    food bar + black hearts, fall/lava/drown/void'
   comments:
   - id: 1
     created_at: 2026-08-18 12:00T12:00
@@ -457,7 +461,8 @@ intake:
   completed_at: 2026-08-18T12:00
   waiting_on: null
   parent_id: null
-  notes: 'Combat: attack (block DDA wins, mob only when ray empty, no cooldown per web), bare-hand 1 dmg, weapon .dmg, knockback, death drops; MOBS table ported; stub mob API'
+  notes: 'Combat: attack (block DDA wins, mob only when ray empty, no cooldown per web), bare-hand 1 dmg, weapon .dmg, knockback,
+    death drops; MOBS table ported; stub mob API'
   comments:
   - id: 1
     created_at: 2026-08-18 13:00T12:00
@@ -478,7 +483,8 @@ intake:
   completed_at: 2026-08-18T12:00
   waiting_on: null
   parent_id: null
-  notes: 'Day/night: web-exact sky/sun/ambient/dusk/fog formulas, 600s cycle auto-advance, G noon/midnight, DayNight core module'
+  notes: 'Day/night: web-exact sky/sun/ambient/dusk/fog formulas, 600s cycle auto-advance, G noon/midnight, DayNight core
+    module'
   comments:
   - id: 1
     created_at: 2026-08-16 20:00T12:00
@@ -505,7 +511,8 @@ intake:
   - id: 1
     created_at: 2026-08-18 19:00T12:00
     updated_at: null
-    text: '[user] why is nothing textured? In the web version everything had a basic texture by default and an option to load a texture pack in the main menu. This version doesn''t have basic textures or a main menu'
+    text: '[user] why is nothing textured? In the web version everything had a basic texture by default and an option to load
+      a texture pack in the main menu. This version doesn''t have basic textures or a main menu'
 - id: AC-0024
   title: fog-pop
   source: user
@@ -521,7 +528,8 @@ intake:
   completed_at: 2026-08-18T12:00
   waiting_on: null
   parent_id: null
-  notes: 'Fog must end before farthest chunk edge: DayNight.fog_near/fog_far(render_radius) = (r+1)*4 / (r+1)*16*0.95 (r=4: 20/76 < 80 edge)'
+  notes: 'Fog must end before farthest chunk edge: DayNight.fog_near/fog_far(render_radius) = (r+1)*4 / (r+1)*16*0.95 (r=4:
+    20/76 < 80 edge)'
   comments:
   - id: 1
     created_at: 2026-08-18 19:00T12:00
@@ -542,12 +550,14 @@ intake:
   completed_at: 2026-08-18T12:00
   waiting_on: null
   parent_id: null
-  notes: 'Biome tint: web NEUTRAL_TINTS (grass top 93/178/55, water 47/107/235, leaves 60/140/48) via Data.block_tint × face brightness; fixed missing render-await bug'
+  notes: 'Biome tint: web NEUTRAL_TINTS (grass top 93/178/55, water 47/107/235, leaves 60/140/48) via Data.block_tint × face
+    brightness; fixed missing render-await bug'
   comments:
   - id: 1
     created_at: 2026-08-18 19:30T12:00
     updated_at: null
-    text: '[user] grass and water are grey. this is because they need to be tinted as they can be different colors depending on there biome'
+    text: '[user] grass and water are grey. this is because they need to be tinted as they can be different colors depending
+      on there biome'
 - id: AC-0026
   title: windows-export
   source: user
@@ -584,7 +594,8 @@ intake:
   completed_at: 2026-08-19T12:00
   waiting_on: null
   parent_id: null
-  notes: 'Trees + flowers ported from web: per-chunk deterministic gen (20x20 ring, trunk 4..6, canopy 2/2/1/1), flora atlas tiles (leaf tinted, poppy/dandelion), cross meshing, drops 15%/50% seeds'
+  notes: 'Trees + flowers ported from web: per-chunk deterministic gen (20x20 ring, trunk 4..6, canopy 2/2/1/1), flora atlas
+    tiles (leaf tinted, poppy/dandelion), cross meshing, drops 15%/50% seeds'
   comments:
   - id: 1
     created_at: 2026-08-18 19:30T12:00
@@ -593,7 +604,8 @@ intake:
   - id: 2
     created_at: 2026-08-19 08:10T12:00
     updated_at: null
-    text: '[agent] verify-pass fixed 5 bugs in the stalled run (loop corruption, atlas re-import, quad buffer); GENHASH terrain intact; perf 63ms 0% regression; test_spin* junk deleted'
+    text: '[agent] verify-pass fixed 5 bugs in the stalled run (loop corruption, atlas re-import, quad buffer); GENHASH terrain
+      intact; perf 63ms 0% regression; test_spin* junk deleted'
 - id: AC-0028
   title: ops-config
   source: user
@@ -609,12 +621,14 @@ intake:
   completed_at: 2026-08-19T12:00
   waiting_on: null
   parent_id: null
-  notes: 'Ops: scratch dir + .gitignore, /tmp/** pre-allowed, agent variants (general xhigh / explore medium / summary+compaction low), compaction prune off'
+  notes: 'Ops: scratch dir + .gitignore, /tmp/** pre-allowed, agent variants (general xhigh / explore medium / summary+compaction
+    low), compaction prune off'
   comments:
   - id: 1
     created_at: 2026-08-18 19:00T12:00
     updated_at: null
-    text: '[user] stop writing things to tmp since I have to allow that... or add tmp as a directory that you and your sub agents can access'
+    text: '[user] stop writing things to tmp since I have to allow that... or add tmp as a directory that you and your sub
+      agents can access'
   - id: 2
     created_at: 2026-08-19 05:30T12:00
     updated_at: null
@@ -663,7 +677,8 @@ intake:
   completed_at: 2026-08-19T12:37
   waiting_on: null
   parent_id: null
-  notes: serve_web.py --daemon (double-fork setsid, pidfile .scratch/serve_web.pid, port guard, --replace) so the https server survives opencode restarts
+  notes: serve_web.py --daemon (double-fork setsid, pidfile .scratch/serve_web.pid, port guard, --replace) so the https server
+    survives opencode restarts
   comments:
   - id: 1
     created_at: 2026-08-19 07:00T12:00
@@ -672,15 +687,18 @@ intake:
   - id: 2
     created_at: 2026-08-19 07:00T12:00
     updated_at: null
-    text: '[agent] root cause: opencode restarts kill the nohup''d process group (not subagents). Canonical launcher becomes `python3 serve_web.py --ssl --daemon`'
-   - id: 3
-     created_at: 2026-08-19 07:00T12:00
-     updated_at: null
-     text: '[user] is serve_web.py how we are starting the https server? If not, would it make sense to update it and use it as such? → yes, updated per this task'
-   - id: 4
-     created_at: 2026-08-19 12:37T12:00
-     updated_at: null
-     text: '[agent] DONE: all 5 gates pass; socket-level port guard (/proc inode→fd→cmdline); daemon pid 45083 left running; canonical = `python3 serve_web.py --ssl --daemon`'
+    text: '[agent] root cause: opencode restarts kill the nohup''d process group (not subagents). Canonical launcher becomes
+      `python3 serve_web.py --ssl --daemon`'
+  - id: 3
+    created_at: 2026-08-19 07:00T12:00
+    updated_at: null
+    text: '[user] is serve_web.py how we are starting the https server? If not, would it make sense to update it and use it
+      as such? → yes, updated per this task'
+  - id: 4
+    created_at: 2026-08-19 12:37T12:00
+    updated_at: null
+    text: '[agent] DONE: all 5 gates pass; socket-level port guard (/proc inode→fd→cmdline); daemon pid 45083 left running;
+      canonical = `python3 serve_web.py --ssl --daemon`'
 - id: AC-0031
   title: water-anim
   source: user
@@ -722,7 +740,8 @@ intake:
   - id: 1
     created_at: 2026-08-18 19:30T12:00
     updated_at: null
-    text: '[user] we should have an animation for the item in hand when you mine a block using it (ie it should swing/punch). Also texture on held objects is blurry for some reason'
+    text: '[user] we should have an animation for the item in hand when you mine a block using it (ie it should swing/punch).
+      Also texture on held objects is blurry for some reason'
 - id: AC-0033
   title: menu
   source: user
@@ -738,16 +757,20 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'Main menu (title + build version + play/new world) before game start; options menu from main + pause: render-distance slider (chunks), sim-distance slider (chunks), texture-pack apply, sound-volume slider, fullscreen toggle, resolution dropdown; persist settings'
+  notes: 'Main menu (title + build version + play/new world) before game start; options menu from main + pause: render-distance
+    slider (chunks), sim-distance slider (chunks), texture-pack apply, sound-volume slider, fullscreen toggle, resolution
+    dropdown; persist settings'
   comments:
   - id: 1
     created_at: 2026-08-18 19:30T12:00
     updated_at: null
-    text: '[user] We need a main menu before you start the game. We need an options menu accessable from the main menu or pause menu'
+    text: '[user] We need a main menu before you start the game. We need an options menu accessable from the main menu or
+      pause menu'
   - id: 2
     created_at: 2026-08-18 19:30T12:00
     updated_at: null
-    text: '[user] we should be able to modify render distance (number of chunks) and simulation distance (number of chunks). These should be sliders. In this menu you should also be able to apply texture packs.'
+    text: '[user] we should be able to modify render distance (number of chunks) and simulation distance (number of chunks).
+      These should be sliders. In this menu you should also be able to apply texture packs.'
   - id: 3
     created_at: 2026-08-18 19:30T12:00
     updated_at: null
@@ -775,7 +798,8 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'Block-break hitches remain: PERF3c-2 diagnostics (recenter sync gen, worst boundary-chunk build, tick_fluids locality, snapshot drain) + fixes'
+  notes: 'Block-break hitches remain: PERF3c-2 diagnostics (recenter sync gen, worst boundary-chunk build, tick_fluids locality,
+    snapshot drain) + fixes'
   comments:
   - id: 1
     created_at: 2026-08-18 19:30T12:00
@@ -817,12 +841,14 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'Underwater view: hide water cells around the eye + underwater visual effect (overlay tint; research web''s approach first)'
+  notes: 'Underwater view: hide water cells around the eye + underwater visual effect (overlay tint; research web''s approach
+    first)'
   comments:
   - id: 1
     created_at: 2026-08-18 19:30T12:00
     updated_at: null
-    text: '[user] underwater looks weird, we probably want to hide the water blocks while we are in them and apply some kind of visual effect to simulate being underwater, though I''m open to other ideas on how best to handle that.'
+    text: '[user] underwater looks weird, we probably want to hide the water blocks while we are in them and apply some kind
+      of visual effect to simulate being underwater, though I''m open to other ideas on how best to handle that.'
 - id: AC-0037
   title: mobs
   source: user
@@ -838,7 +864,9 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'Mobs: 9 UNIQUE models (web''s 8 + cute bunny, chicken-sized) with hip/shoulder-pivoted limbs, AI (hostile chase, chicken passive, wolf tame by bone, spider night-only), bow/arrows, day/night spawn tables; orchestrator iterates each model PNG'
+  notes: 'Mobs: 9 UNIQUE models (web''s 8 + cute bunny, chicken-sized) with hip/shoulder-pivoted limbs, AI (hostile chase,
+    chicken passive, wolf tame by bone, spider night-only), bow/arrows, day/night spawn tables; orchestrator iterates each
+    model PNG'
   comments:
   - id: 1
     created_at: 2026-08-16 20:00T12:00
@@ -884,7 +912,8 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'WS8 procedural sound (no assets): block/step/hit/eat/splash/arrow/bow/mob/ambient — headless-asserted (dummy audio driver)'
+  notes: 'WS8 procedural sound (no assets): block/step/hit/eat/splash/arrow/bow/mob/ambient — headless-asserted (dummy audio
+    driver)'
   comments:
   - id: 1
     created_at: 2026-08-16 20:00T12:00
@@ -905,12 +934,16 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'Bouncy banana: banana trees (special tree type) grow bananas; within 10 blocks of a character, chance to fall off and bounce around until at rest; pickable; eating restores health + stamina; short gorilla sfx on eat (after AC-0039)'
+  notes: 'Bouncy banana: banana trees (special tree type) grow bananas; within 10 blocks of a character, chance to fall off
+    and bounce around until at rest; pickable; eating restores health + stamina; short gorilla sfx on eat (after AC-0039)'
   comments:
   - id: 1
     created_at: 2026-08-19 07:00T12:00
     updated_at: null
-    text: '[user] add bouncy banana. These grow on banana trees (a special tree type). when a character is within 10 blocks of a bouncing banana, the banana has a chance to fall of the tree and start bouncing around before eventually coming to a rest. The banana can be picked up by the character and eaten to restore health and stamina. When the banana is eaten a short gorilla sound effect plays. This can be implemented after we add the sound system.'
+    text: '[user] add bouncy banana. These grow on banana trees (a special tree type). when a character is within 10 blocks
+      of a bouncing banana, the banana has a chance to fall of the tree and start bouncing around before eventually coming
+      to a rest. The banana can be picked up by the character and eaten to restore health and stamina. When the banana is
+      eaten a short gorilla sound effect plays. This can be implemented after we add the sound system.'
 - id: AC-0041
   title: windows-reexport
   source: agent
@@ -947,12 +980,16 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'Research/plan ONLY (do not implement): world contained to a planet — flat Minecraft feel on surface, seamless ground→space takeoff, ring (Halo-like) geometry so the rectangle map wraps; NMS GDC talk + similar games research; plan doc as .html'
+  notes: 'Research/plan ONLY (do not implement): world contained to a planet — flat Minecraft feel on surface, seamless ground→space
+    takeoff, ring (Halo-like) geometry so the rectangle map wraps; NMS GDC talk + similar games research; plan doc as .html'
   comments:
   - id: 1
     created_at: 2026-08-19 06:30T12:00
     updated_at: null
-    text: '[user] write plan for how we could support the world being contained to a planet, and have the ability to fly off the planet and then land back on the planet or fly to another planet and land on it. Use "no man''s sky" as inspiration... if a fully spherical planet prevents too many challenges... what if we use rings? (like halo)... when on the planet surface it should not really feel different from normal minecraft.'
+    text: '[user] write plan for how we could support the world being contained to a planet, and have the ability to fly off
+      the planet and then land back on the planet or fly to another planet and land on it. Use "no man''s sky" as inspiration...
+      if a fully spherical planet prevents too many challenges... what if we use rings? (like halo)... when on the planet
+      surface it should not really feel different from normal minecraft.'
 - id: AC-0043
   title: endgame
   source: user
@@ -991,16 +1028,20 @@ intake:
   completed_at: 2026-08-19T13:28
   waiting_on: null
   parent_id: null
-  notes: Leaves/flowers render a BLACK background in the web build instead of transparent (cutout) regions. Desktop looked fine (unverified). Fix the alpha pipeline in godot/ (material transparency mode / atlas alpha / tint-vs-alpha) and prove in the browser.
+  notes: Leaves/flowers render a BLACK background in the web build instead of transparent (cutout) regions. Desktop looked
+    fine (unverified). Fix the alpha pipeline in godot/ (material transparency mode / atlas alpha / tint-vs-alpha) and prove
+    in the browser.
   comments:
-   - id: 1
-     created_at: 2026-08-19T10:00
-     updated_at: null
-     text: '[user] the transparency for the leaves / flowers is not working in web build, instead it has a black background.'
-   - id: 2
-     created_at: 2026-08-19 13:28T12:00
-     updated_at: null
-     text: '[agent] DONE: root cause = stale blocks_atlas.png had lost alpha (leaf/flower gaps baked opaque); import_pack() skipped existing rects so it never refreshed. Re-imported atlas fresh from Faithful pack; materials (AlphaScissor) were already correct. Desktop + browser gates pass (sky through canopy, 0 black).'
+  - id: 1
+    created_at: 2026-08-19T10:00
+    updated_at: null
+    text: '[user] the transparency for the leaves / flowers is not working in web build, instead it has a black background.'
+  - id: 2
+    created_at: 2026-08-19 13:28T12:00
+    updated_at: null
+    text: '[agent] DONE: root cause = stale blocks_atlas.png had lost alpha (leaf/flower gaps baked opaque); import_pack()
+      skipped existing rects so it never refreshed. Re-imported atlas fresh from Faithful pack; materials (AlphaScissor) were
+      already correct. Desktop + browser gates pass (sky through canopy, 0 black).'
 - id: AC-0045
   title: inventory-drag
   source: user
@@ -1018,16 +1059,20 @@ intake:
   completed_at: 2026-08-19T15:30
   waiting_on: null
   parent_id: null
-  notes: Can't click and drag inventory items / crafted items in the web build. M7a headless craft chain passes, so logic is fine — input/UI layer in the web export (pointer events, pointer-lock, canvas sizing, per-frame Control rebuilds).
+  notes: Can't click and drag inventory items / crafted items in the web build. M7a headless craft chain passes, so logic
+    is fine — input/UI layer in the web export (pointer events, pointer-lock, canvas sizing, per-frame Control rebuilds).
   comments:
   - id: 1
     created_at: 2026-08-19T10:00
     updated_at: null
-     text: '[user] I can''t click and drag inventory items / crafted items'
-   - id: 2
-     created_at: 2026-08-19 15:30T12:00
-     updated_at: null
-     text: '[agent] DONE: two UI-input bugs — _route_click arg order (bind() appends slotIndex, read as slot=0 → all clicks no-op; broke every platform, web just exposed it) + Godot routes mouse-release to gui.mouse_focus (drag-drop needed UI-side release resolution). Fix: ui/inventory.gd release-drop + player.gd click API `release`/drag_held; new AWECRAFT_LOGIC=guiclick + V-key Debug.seed_inv() hook; browser-verified drag storage→hotbar.'
+    text: '[user] I can''t click and drag inventory items / crafted items'
+  - id: 2
+    created_at: 2026-08-19 15:30T12:00
+    updated_at: null
+    text: '[agent] DONE: two UI-input bugs — _route_click arg order (bind() appends slotIndex, read as slot=0 → all clicks
+      no-op; broke every platform, web just exposed it) + Godot routes mouse-release to gui.mouse_focus (drag-drop needed
+      UI-side release resolution). Fix: ui/inventory.gd release-drop + player.gd click API `release`/drag_held; new AWECRAFT_LOGIC=guiclick
+      + V-key Debug.seed_inv() hook; browser-verified drag storage→hotbar.'
 - id: AC-0046
   title: tasks-tooling-webui
   source: user
@@ -1035,26 +1080,37 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels:
   - ops
   - tooling
   created_at: 2026-08-19T10:00
-  updated_at: 2026-08-19T10:05
-  completed_at: null
+  updated_at: 2026-08-19T16:10
+  completed_at: 2026-08-19T16:10
   waiting_on: null
   parent_id: null
-  notes: 'Task-management tooling + board webui modeled on the user''s work system (awe-jarvis todo-backup): shared mutation layer + shared render layer, CLI (add/status/comment/queue/render/next), loopback-only webui with spec/results/screenshot links, sandboxed tests. Reference clone: .scratch/awe-jarvis/data/todo-backup/. DO NOT implement until it reaches the top of the queue (user 2026-08-19).'
+  notes: 'Task-management tooling + board webui modeled on the user''s work system (awe-jarvis todo-backup): shared mutation
+    layer + shared render layer, CLI (add/status/comment/queue/render/next), loopback-only webui with spec/results/screenshot
+    links, sandboxed tests. Reference clone: .scratch/awe-jarvis/data/todo-backup/. DO NOT implement until it reaches the
+    top of the queue (user 2026-08-19).'
   comments:
   - id: 1
     created_at: 2026-08-19T10:00
     updated_at: null
-    text: '[user] In the private repo, note the management scripts that are used to maintain it and decide if we should have something similar. Also note the webui for viewing the tasks, would be nice to have something like that for this as well.'
+    text: '[user] In the private repo, note the management scripts that are used to maintain it and decide if we should have
+      something similar. Also note the webui for viewing the tasks, would be nice to have something like that for this as
+      well.'
   - id: 2
     created_at: 2026-08-19T10:00
     updated_at: null
-    text: '[agent] Decision: YES, adopt the pattern at AweCraft scale — tasks_lib (mutate) + render (shared) + CLI + loopback webui. Spec written; deferred per user (context close).'
+    text: '[agent] Decision: YES, adopt the pattern at AweCraft scale — tasks_lib (mutate) + render (shared) + CLI + loopback
+      webui. Spec written; deferred per user (context close).'
   - id: 3
     created_at: 2026-08-19T10:00
     updated_at: null
-    text: '[user] don''t implement the management scripts or webui yet though, create tasks for those as context is getting close'
+    text: '[user] don''t implement the management scripts or webui yet though, create tasks for those as context is getting
+      close'
+  - id: 4
+    created_at: 2026-08-19T16:10
+    updated_at: null
+    text: '[agent] tooling shipped'

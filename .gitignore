@@ -3,4 +3,5 @@ web/
 export/
 .godot/
 .playwright-cli/
+__pycache__/
 nohup.out

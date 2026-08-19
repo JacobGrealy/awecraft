@@ -1,0 +1,125 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0046 — results: task-management tooling + board webui</title>
+<style>body{font-family:system-ui,'Segoe UI',sans-serif;margin:24px 40px;max-width:980px;line-height:1.5;color:#1b232f}
+h1{font-size:20px}h2{font-size:15px;margin-top:22px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}
+code,pre{background:#eef1f6;border-radius:3px;font-size:12.5px;font-family:ui-monospace,monospace}
+pre{padding:10px;overflow:auto;line-height:1.45}
+.pass{color:#1a7a3c;font-weight:700}.fail{color:#c0392b;font-weight:700}
+table{border-collapse:collapse;font-size:13px}td,th{border:1px solid #d7dee8;padding:4px 10px;text-align:left}
+img{max-width:100%;border:1px solid #cdd6e3;border-radius:6px;margin:8px 0}
+.note{background:#fdf3dc;border:1px solid #e6c86e;border-radius:5px;padding:8px 12px;font-size:13px}</style></head><body>
+<h1>AC-0046 — task-management tooling + board webui <span class="pass">DONE</span></h1>
+<p>Modeled on the user's work todo system (<code>.scratch/awe-jarvis/data/todo-backup/</code>): shared
+mutation layer (<code>tasks_lib</code>) + shared render layer (<code>render</code>), so the CLI and the webui
+cannot drift. stdlib + pyyaml only; nothing outside <code>tasks/</code> touched (one exception, noted below).</p>
+
+<h2>Files created</h2>
+<table>
+<tr><th>file</th><th>role</th></tr>
+<tr><td><code>tasks/scripts/tasks_lib.py</code></td><td>load/save TASKS.yaml; <code>next_id()</code> (AC-NNNN); <code>add / set_status / add_comment / queue_add / queue_remove / queue_top</code>. Invariants in one place: done ⇒ completed_at set (leaving done clears it), comment ids increment per task, every mutation bumps task <code>updated_at</code> + <code>meta.updated_at</code>. Mutations return the dict; caller persists (one atomic write per edit).</td></tr>
+<tr><td><code>tasks/scripts/tasks.py</code></td><td>CLI: <code>add / status / comment / queue add|remove|list / next</code>. <code>--file</code> or env <code>AWECRAFT_TASKS_FILE</code> points at a copy. No markdown re-render (TASKS.md is gone; YAML is the only registry file).</td></tr>
+<tr><td><code>tasks/scripts/render.py</code></td><td>Shared render layer: TASKS.yaml → board HTML. Queue line (chips, done struck through, live top highlighted) + work-order table + Open/Blocked/Done sections. Open &amp; Blocked are full cards (id/title/status/priority/created/updated/source/labels/notes + comment thread + links into the task folder); Done are the same full cards in collapsible <code>&lt;details&gt;</code> (3 most recent open). <code>python3 tasks/scripts/render.py</code> prints a static page (relative links, save next to <code>tasks/</code>); <code>--out</code>, <code>--file</code>, <code>--base</code>.</td></tr>
+<tr><td><code>tasks/webui.py</code></td><td>Board server, stdlib <code>http.server</code>, <b>loopback-only 127.0.0.1:5180</b>, no auth. <code>GET /</code> board, <code>GET /tasks/&lt;path&gt;</code> static task folders (spec/results/PNGs, path-traversal guarded, traversal → 403), <code>POST /api/add|status|comment|queue_add|queue_remove</code> — each loads the YAML fresh, mutates via <b>tasks_lib</b>, saves, re-renders via <b>render</b>, and returns the fresh board (JS swaps it in). Flags: <code>--port N</code>, <code>--sandbox DIR</code> (copies the YAML into DIR first; task folders stay served from the real <code>tasks/</code> dir). Also <code>GET /healthz</code> for tests.</td></tr>
+<tr><td><code>tasks/scripts/test_tasks.py</code></td><td>Smoke test (jarvis pattern): fresh sandbox copies under <code>.scratch/</code>; CLI run as subprocesses against the copy; webui started sandboxed on a free port and driven over real HTTP; every mutation asserted twice — response OK <i>and</i> reload-from-disk shows it. In-process <code>warnings.simplefilter("error")</code> + <code>-W error</code> CLI check. Live YAML checksummed before/after.</td></tr>
+</table>
+
+<h2>Gates</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>evidence</th></tr>
+<tr><td>1. smoke test on sandbox copy</td><td class="pass">PASS</td><td>45/45 checks, exit 0, stderr empty (zero Python warnings), live YAML checksum unchanged.</td></tr>
+<tr><td>2. CLI demo vs live data (only allowed live mutations)</td><td class="pass">PASS</td><td>see outputs below.</td></tr>
+<tr><td>3. webui curl checks on 127.0.0.1:5180</td><td class="pass">PASS</td><td>200s + content checks below; test instance stopped afterwards (no servers left running).</td></tr>
+<tr><td>4. render.py dry-run</td><td class="pass">PASS</td><td>53 kB board HTML; contains live queue top <code>5·AC-0031</code> (live chip + table row), open card AC-0041, done card AC-0046, blocked card AC-0043, task-folder links (<code>spec.html</code>, PNGs).</td></tr>
+</table>
+
+<h2>Gate 2 — live CLI demo</h2>
+<pre>$ python3 tasks/scripts/tasks.py comment AC-0046 "tooling shipped" --author agent
+Comment 4 added to AC-0046
+
+$ python3 tasks/scripts/tasks.py status AC-0046 done
+AC-0046 -&gt; done
+
+$ python3 tasks/scripts/tasks.py next
+next: AC-0031  water-anim  [open]
+
+$ python3 tasks/scripts/tasks.py queue list | head -6
+ 1  AC-0030  [done]  server-daemon
+ 2  AC-0044  [done]  leaf-flower-transparency
+ 3  AC-0045  [done]  inventory-drag
+ 4  AC-0046  [done]  tasks-tooling-webui
+ 5  AC-0031  [open]  water-anim
+ 6  AC-0032  [open]  hand-anim</pre>
+<p>Invariants verified on disk afterwards: AC-0046 <code>status: done</code>, <code>completed_at: 2026-08-19T16:10</code>,
+comment 4 <code>[agent] tooling shipped</code>, <code>meta.updated_at</code> bumped, and zero
+done-without-<code>completed_at</code> violations across all 46 tasks.</p>
+
+<h2>Gate 3 — webui curl evidence (sandboxed instance on the canonical port)</h2>
+<pre>$ python3 tasks/webui.py --port 5180 --sandbox .scratch/ac0046-webui-live
+task board: http://127.0.0.1:5180/  (loopback-only, no auth)
+registry:   .../.scratch/ac0046-webui-live/TASKS.yaml
+SANDBOX:    writes go to the copy above, never the live TASKS.yaml
+
+$ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5180/
+200
+$ curl -s http://127.0.0.1:5180/ | grep -c 'data-id="AC-0046"'        # AC-0046 card present
+3
+$ curl -s http://127.0.0.1:5180/ | grep -c "Queue (work order)"        # queue section present
+1
+$ curl -s http://127.0.0.1:5180/ | grep -o 'qchip live"&gt;[0-9]*&amp;middot;AC-0031'
+qchip live"&gt;5&amp;middot;AC-0031
+$ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5180/tasks/AC-0046/spec.html
+200
+$ curl -s -o /dev/null -w "%{http_code} %{content_type}\n" http://127.0.0.1:5180/tasks/AC-0044/render_iso.png
+200 image/png</pre>
+<p>The smoke test additionally exercised every mutation over HTTP (add/status/comment/queue round-trip)
+against a second sandboxed instance and re-read the YAML from disk to confirm persistence — all PASS,
+instance stopped cleanly, no warnings.</p>
+
+<h2>Board (screenshots from the running webui)</h2>
+<p><img src="board.png" alt="board top: queue line, work-order table, open cards by priority"></p>
+<p><img src="board-bottom.png" alt="done section: collapsible cards, most recent open"></p>
+
+<h2>Usage</h2>
+<pre># CLI (live registry)
+python3 tasks/scripts/tasks.py add --title "Fix X" --source user --priority 1 --notes "why"
+python3 tasks/scripts/tasks.py status AC-0031 in-progress
+python3 tasks/scripts/tasks.py comment AC-0031 "root cause: ..." --author agent
+python3 tasks/scripts/tasks.py queue add AC-0031      # or: queue remove / queue list
+python3 tasks/scripts/tasks.py next                   # first non-done queue entry
+
+# Board webui (canonical start; loopback-only)
+python3 tasks/webui.py                # http://127.0.0.1:5180/
+python3 tasks/webui.py --port 5181    # alt port
+python3 tasks/webui.py --sandbox /tmp/ac-board   # try it without touching the live YAML
+# in the browser: status select on any card, comment form, queue/dequeue buttons, new-task form
+# links on each card open the task folder's spec.html / &lt;id&gt;-results.html / PNGs
+
+# static board (no server): prints HTML; save next to tasks/ for relative links
+python3 tasks/scripts/render.py --out tasks/board.html
+
+# tests (sandbox copies under .scratch/, live file untouched)
+python3 tasks/scripts/test_tasks.py</pre>
+
+<h2>Deviations / notes</h2>
+<div class="note"><b>Pre-existing YAML syntax error in tasks/TASKS.yaml fixed (required to build any tooling).</b>
+The hand-maintained registry did not parse: two comment blocks (AC-0030 comments 3–4, and
+AC-0045 comment 1's <code>text:</code> + comment 2) were indented one space too deep
+(YAML "expected &lt;block end&gt;" at line 676 / "mapping values are not allowed here" at line 1026).
+Minimal repair: re-indented 13 lines by −1 space, <b>no content changed</b> — verified by
+<code>git diff</code> (pure indentation) and by loading 46 tasks + all comment threads intact.
+From now on, writes always go through <code>tasks_lib</code>, which re-serializes valid YAML.</div>
+<p>Other notes:</p>
+<ul>
+<li>Done tasks render as full cards (per the webui spec's card list for all four sections), collapsed in
+<code>&lt;details&gt;</code> with the 3 most recent open, so the 30+ finished tasks stay out of the way.</li>
+<li><code>next</code> = first queue entry that is not done (the committed queue keeps finished entries
+as the historical work order).</li>
+<li>Comment <code>--author</code> prepends the registry's <code>[user]</code>/<code>[agent]</code> prefix
+(only if not already present), matching every existing thread; webui comment form has an author select.</li>
+<li>Webui serves the real <code>tasks/</code> folder store even in <code>--sandbox</code> mode (folders are
+read-only artifacts; only the YAML is redirected) — so spec/results/PNG links resolve in both modes.</li>
+<li>Sandbox dirs for this run were cleaned up from <code>.scratch/</code>; curl/render evidence left there
+(<code>ac0046-*.html</code>, <code>ac0046-*.log</code>, gitignored).</li>
+</ul>
+<p>Not done (per task rules): no git commit/push (coordinator), no changes outside <code>tasks/</code>,
+canonical start stays <code>python3 tasks/webui.py</code>.</p>
+</body></html>
