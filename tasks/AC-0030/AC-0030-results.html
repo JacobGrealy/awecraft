@@ -1,0 +1,131 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0030 — serve_web.py daemon mode (results)</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:900px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:22px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}table{border-collapse:collapse;font-size:14px}td,th{border:1px solid #cdd6e3;padding:4px 10px;text-align:left}.pass{color:#0a7a2f;font-weight:600}.note{color:#5a6572}</style></head><body>
+
+<h1>AC-0030 — HTTPS server as self-healing daemon (results)</h1>
+
+<p><strong>Status: COMPLETE</strong>. <code>serve_web.py</code> is now a self-healing daemon: double
+<code>os.fork()</code> + <code>os.setsid()</code>, stdio → <code>/dev/null</code> + append log, pidfile
+<code>.scratch/serve_web.pid</code>, port guard in all modes, <code>--replace</code> flag. Stdlib only, single
+file at repo root. <code>godot/</code> and <code>web/</code> untouched. No systemd/cron. <em>No screenshots apply
+— this task is process/server plumbing, verified via ps/curl/kill evidence below.</em></p>
+
+<h2>Files changed</h2>
+<ul>
+<li><code>serve_web.py</code> (repo root) — added: flag parsing (<code>--daemon</code>, <code>--replace</code>),
+<code>start_daemon()</code> (double fork + setsid, stdio redirect, start marker, pidfile write after re-parent),
+port guard (<code>find_running()</code>/port-holder detection via <code>/proc/net/tcp{,6}</code> socket inodes →
+matching pids via <code>/proc/&lt;pid&gt;/fd</code> + cmdline match for <code>serve_web.py</code>),
+<code>kill_serve_web()</code> (SIGTERM → SIGKILL escalation, waits for port release; kills ONLY the identified
+serve_web pid), stale/corrupt pidfile tolerance, SIGTERM/SIGINT handlers that remove the pidfile.
+Serving behavior (web/ root, gzip for .wasm/.js/.html/.pck, ports 8443/8140, cert from web/ssl) unchanged.</li>
+<li><code>.scratch/serve_web.pid</code>, <code>.scratch/awecraft-web-https.log</code>,
+<code>.scratch/awecraft-web-http.log</code> — runtime artifacts (created as needed).</li>
+</ul>
+
+<h2>Verify gates (all PASS)</h2>
+<table>
+<tr><th>#</th><th>Gate</th><th>Result</th></tr>
+<tr><td>1</td><td><code>--ssl --daemon --replace</code> prints pid; curl <code>/</code> and <code>/index.js</code> → 200</td><td class="pass">PASS</td></tr>
+<tr><td>2</td><td><code>ps -o pid,sid,pgid,cmd</code> → SID == own PID (own session, not shell's); pidfile matches</td><td class="pass">PASS</td></tr>
+<tr><td>3</td><td>Plain <code>--ssl</code> run → "already running (pid X, port Y)", exit 0, exactly one listener on 8443</td><td class="pass">PASS</td></tr>
+<tr><td>4</td><td><code>kill $(cat .scratch/serve_web.pid)</code> → port freed; stale pidfile handled (next daemon start clean)</td><td class="pass">PASS</td></tr>
+<tr><td>5</td><td>Final state: daemon running via <code>--ssl --daemon</code></td><td class="pass">PASS (pid 45083, left running)</td></tr>
+</table>
+
+<h2>Evidence — gate 1: daemon start + curls</h2>
+<pre>$ python3 serve_web.py --ssl --daemon --replace
+daemon pid: 42970
+log: /home/angrygiant/github_projects/AweCraft/.scratch/awecraft-web-https.log
+(exit=0)
+
+$ curl -sk -o /dev/null -w "GET / -> %{http_code}\n" https://127.0.0.1:8443/
+GET / -&gt; 200
+$ curl -sk -o /dev/null -w "GET /index.js -> %{http_code}\n" https://127.0.0.1:8443/index.js
+GET /index.js -&gt; 200</pre>
+
+<h2>Evidence — gate 2: own session + pidfile</h2>
+<pre>$ ps -o pid,sid,pgid,ppid,cmd -p 42970
+    PID    SID   PGID  PPID CMD
+  42970  42970  42970     1 python3 serve_web.py --ssl --daemon --replace
+
+$ cat .scratch/serve_web.pid
+42970</pre>
+<p class="note">SID = PGID = own PID → daemon is its own session/group leader, outside the calling shell's
+session; PPID 1 → re-parented to init after the intermediate child exited, so it survives opencode restarts.
+The daemon itself writes the pidfile after re-parenting (per spec).</p>
+
+<h2>Evidence — gate 3: port guard</h2>
+<pre>$ python3 serve_web.py --ssl
+already running (pid 42970, port 8443)
+(exit=0)
+
+$ ss -ltnp | grep ':8443 '
+LISTEN 0  5  0.0.0.0:8443  0.0.0.0:*  users:(("python3",pid=42970,fd=3))   # exactly one listener</pre>
+<p class="note">Guard is socket-level (<code>/proc/net/tcp{,6}</code> → socket inode → fd owner → cmdline match),
+so it works even if the pidfile is missing or corrupt; the pidfile is used as a fast-path hint only.</p>
+
+<h2>Evidence — gate 4: clean stop + stale pidfile</h2>
+<pre>$ kill $(cat .scratch/serve_web.pid)
+port 8443 free after kill
+pidfile removed by SIGTERM handler        # graceful stop removes the pidfile
+
+# planted a stale pidfile (dead pid of a killed sleep):
+$ echo 43245 &gt; .scratch/serve_web.pid
+$ python3 serve_web.py --ssl --daemon
+daemon pid: 43319                          # stale pid ignored, started cleanly
+(exit=0)</pre>
+
+<h2>Extra checks (beyond gates)</h2>
+<ul>
+<li><strong>--replace against a live daemon:</strong> <code>replacing serve_web.py (pid 43319, port 8443)</code> →
+old pid SIGTERM'd (only that pid), port waited-for release, new daemon 43428 up, curl → 200.</li>
+<li><strong>Foreign port holder:</strong> with <code>python3 -m http.server</code> holding 8140:
+<code>port 8140 is already in use by pid 43618 (not serve_web.py); refusing to start</code>, exit 1, foreign
+process left untouched.</li>
+<li><strong>Plain HTTP mode:</strong> <code>--daemon</code> (no <code>--ssl</code>) → pid 44746, own session,
+<code>http://127.0.0.1:8140/</code> and <code>/index.js</code> → 200, log
+<code>.scratch/awecraft-web-http.log</code>, clean stop. Gzip still active (response header
+<code>content-encoding: gzip</code> on <code>/index.js</code>).</li>
+</ul>
+
+<h2>Evidence — gate 5: final state (left running)</h2>
+<pre>$ python3 serve_web.py --ssl --daemon
+daemon pid: 45083
+log: /home/angrygiant/github_projects/AweCraft/.scratch/awecraft-web-https.log
+(exit=0)
+
+$ ps -o pid,sid,pgid,ppid,cmd -p $(cat .scratch/serve_web.pid)
+    PID    SID   PGID  PPID CMD
+  45083  45083  45083     1 python3 serve_web.py --ssl --daemon
+
+$ curl -sk -o /dev/null -w "GET / -> %{http_code}\n"   https://127.0.0.1:8443/
+GET / -&gt; 200
+$ curl -sk -o /dev/null -w "GET /index.js -> %{http_code}\n" https://127.0.0.1:8443/index.js
+GET /index.js -&gt; 200
+
+$ python3 serve_web.py --ssl        # guard confirmed on final daemon
+already running (pid 45083, port 8443)
+(exit=0)</pre>
+
+<h2>Log (append, start marker)</h2>
+<pre>https://192.168.0.224:8443/
+==== 2026-08-19T16:34:33Z serve_web.py start pid=45083 https port=8443 ====
+https://localhost:8443/
+https://192.168.0.224:8443/</pre>
+
+<h2>Canonical command (going forward)</h2>
+<pre>python3 serve_web.py --ssl --daemon</pre>
+
+<h2>Deviations / notes</h2>
+<ul>
+<li>None against the spec. One in-task fix: initial implementation called <code>setsid()</code> in the
+<em>first</em> child, leaving the final daemon in the intermediate's session (SID ≠ PID); moved to the
+final daemon so <code>SID == PID</code> per gate 2.</li>
+<li>SIGTERM handler also removes the pidfile on graceful stop (spec's stale-pidfile handling makes this
+optional, but it keeps the pidfile accurate; a SIGKILL'd daemon just leaves a stale one, which the guard
+tolerates — verified).</li>
+<li>Server URLs for testing: <code>https://localhost:8443/</code> and <code>https://192.168.0.224:8443/</code>
+(self-signed cert — browser warns once until accepted).</li>
+</ul>
+
+</body></html>

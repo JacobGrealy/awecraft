@@ -1,7 +1,7 @@
 # AweCraft task registry (single source of truth)
 # Schema mirrors the work todo-backup format (title/source/priority/status/labels/created_at/updated_at/horizon/waiting_on/notes/comments).
 meta:
-  updated_at: 2026-08-19T10:10
+  updated_at: 2026-08-19T12:37
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -655,12 +655,12 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: in-progress
+  status: done
   labels:
   - ops
   created_at: 2026-08-19T12:00
-  updated_at: 2026-08-19 08:15T12:00
-  completed_at: null
+  updated_at: 2026-08-19T12:37
+  completed_at: 2026-08-19T12:37
   waiting_on: null
   parent_id: null
   notes: serve_web.py --daemon (double-fork setsid, pidfile .scratch/serve_web.pid, port guard, --replace) so the https server survives opencode restarts
@@ -673,10 +673,14 @@ intake:
     created_at: 2026-08-19 07:00T12:00
     updated_at: null
     text: '[agent] root cause: opencode restarts kill the nohup''d process group (not subagents). Canonical launcher becomes `python3 serve_web.py --ssl --daemon`'
-  - id: 3
-    created_at: 2026-08-19 07:00T12:00
-    updated_at: null
-    text: '[user] is serve_web.py how we are starting the https server? If not, would it make sense to update it and use it as such? → yes, updated per this task'
+   - id: 3
+     created_at: 2026-08-19 07:00T12:00
+     updated_at: null
+     text: '[user] is serve_web.py how we are starting the https server? If not, would it make sense to update it and use it as such? → yes, updated per this task'
+   - id: 4
+     created_at: 2026-08-19 12:37T12:00
+     updated_at: null
+     text: '[agent] DONE: all 5 gates pass; socket-level port guard (/proc inode→fd→cmdline); daemon pid 45083 left running; canonical = `python3 serve_web.py --ssl --daemon`'
 - id: AC-0031
   title: water-anim
   source: user
