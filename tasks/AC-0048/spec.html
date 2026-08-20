@@ -1,0 +1,23 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0048 — swing/punch faster + loops while held</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:900px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}</style></head><body>
+<h1>AC-0048 — swing/punch animation: 2-4× quicker, loops while button held</h1>
+<h2>Request (user, 2026-08-19, follow-up to AC-0032)</h2>
+<p>"the punching animation should be 2-4 times quicker and should loop while the mouse button is held down."</p>
+<h2>Current state</h2>
+<p>AC-0032 added a single-shot 0.4 s swing on <code>start_mine</code> (mine + attack paths; empty-hand fist punch) in <code>godot/player/player.gd</code> (hand_root pivot, debug keys H/J/K, <code>Debug.swing</code>, <code>AWECRAFT_LOGIC=swing</code>, <code>AWECRAFT_SWING</code>/<code>AWECRAFT_EMPTYHAND</code> hooks).</p>
+<h2>Requirements</h2>
+<ul>
+<li>Cycle 2-4× quicker: 0.4 s → ~0.1–0.2 s per shot (pick one; punch and swing may share the value for simplicity — keep it snappy).</li>
+<li>Loop while LMB is held: while the mine state is active (start_mine until release_mine) the animation re-triggers every cycle; on release it settles to idle cleanly (no frozen mid-pose). Click attacks keep M9 click semantics (visual punch per click, no auto-fire — web-faithful).</li>
+<li>Render-only; do NOT change mining progress/hard logic or M9 combat logic.</li>
+<li>Update the swing harness so the loop is testable headless (e.g. cycles-while-held count).</li>
+</ul>
+<h2>Verify (hard gates)</h2>
+<ol>
+<li>Headless: full battery + <code>AWECRAFT_LOGIC=swing</code> extended: assert ≥2 cycles during a 1 s held-mine and idle settle on release. Zero script errors.</li>
+<li>Desktop: idle vs mid-loop frames differ (screenshot pair, tasks/AC-0048/).</li>
+<li>Web rebuild + browser (playwright, never kill the 8443 daemon): scripted LMB-press on a block, capture mid-loop frame ≠ idle. Save to tasks/AC-0048/.</li>
+</ol>
+<h2>Deliverables</h2>
+<ul><li>Fix in godot/, rebuilt web/, <code>tasks/AC-0048/AC-0048-results.html</code> (summary + frames). Report ≤20 lines.</li></ul>
+</body></html>

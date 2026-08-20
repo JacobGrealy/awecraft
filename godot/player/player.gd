@@ -56,7 +56,7 @@ var _held_mats := {}
 var _held_texs := {}
 var _held_key := ""
 const HAND_BASE_POS := Vector3(0.45, -0.42, -0.8)
-const SWING_DURATION := 0.4
+const SWING_DURATION := 0.1
 const SWING_ITEM := 0
 const SWING_PUNCH := 1
 var _swing_active := false
@@ -64,6 +64,8 @@ var _swing_held := false
 var _swing_t := 0.0
 var _swing_frac := 0.0
 var _swing_kind := SWING_ITEM
+var _swing_loop := false
+var _lmb_down := false
 var _mining := false
 var _dragging := false
 var _mine_cell := Vector3i(0, 0, 0)
@@ -94,6 +96,7 @@ func _process(dt: float) -> void:
 	if key != _held_key:
 		_held_key = key
 		_update_held(int(it["id"]), int(it["n"]))
+	_update_swing_loop()
 	_update_swing(dt)
 
 
@@ -101,6 +104,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and (Input.mouse_mode == Input.MOUSE_MODE_CAPTURED or _dragging):
 		var mm: InputEventMouseMotion = event
 		apply_look(mm)
+	if event is InputEventMouseButton:
+		var lmb: InputEventMouseButton = event
+		if lmb.button_index == MOUSE_BUTTON_LEFT:
+			_lmb_down = lmb.pressed
 	if Game.mode != "play":
 		return
 	if event is InputEventMouseButton:
@@ -143,8 +150,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			hold_swing(0.5)
 		elif kc == int(KEY_K):
 			clear_swing()
-		elif kc == int(KEY_ESCAPE) and ui_mode != "":
-			close_inventory()
+		elif kc == int(KEY_ESCAPE):
+			if ui_mode != "":
+				close_inventory()
+			elif not dead and OS.has_feature("desktop") and OS.get_environment("AWECRAFT_MENU") == "1":
+				Game.pause()
 		elif ui_mode == "" and kc >= int(KEY_1) and kc <= int(KEY_9):
 			sel = int(kc - int(KEY_1))
 
@@ -425,6 +435,7 @@ func hold_swing(frac: float, kind: int = -1) -> void:
 func clear_swing() -> void:
 	_swing_active = false
 	_swing_held = false
+	_swing_loop = false
 	_swing_t = 0.0
 	_swing_frac = 0.0
 	if hand_root != null:
@@ -441,6 +452,19 @@ func swing_active() -> bool:
 	return _swing_active
 
 
+func _update_swing_loop() -> void:
+	var want_loop := Game.mode == "play" and ui_mode == "" and not dead \
+		and _lmb_down and not _swing_held
+	if want_loop:
+		if not _swing_active:
+			_swing_active = true
+			_swing_t = 0.0
+			_swing_kind = swing_kind_for_selected()
+		_swing_loop = true
+	elif _swing_loop:
+		clear_swing()
+
+
 func _update_swing(dt: float) -> void:
 	if not _swing_active:
 		return
@@ -451,10 +475,13 @@ func _update_swing(dt: float) -> void:
 		_swing_t += dt
 		frac = _swing_t / SWING_DURATION
 	if frac >= 1.0:
-		_swing_active = false
-		_swing_t = 0.0
-		_reset_hand_pose()
-		return
+		if _swing_loop:
+			_swing_t = fmod(_swing_t, SWING_DURATION)
+		else:
+			_swing_active = false
+			_swing_t = 0.0
+			_reset_hand_pose()
+			return
 	_apply_swing(clampf(frac, 0.0, 1.0))
 
 
@@ -852,6 +879,7 @@ func damage_player(n: float, src: String) -> void:
 
 func respawn() -> void:
 	dead = false
+	_lmb_down = false
 	hp = 20.0
 	hunger = 20.0
 	air = 10.0
@@ -885,6 +913,10 @@ func _inv_set(i: int, v: Dictionary) -> void:
 	while inv.size() <= i:
 		inv.append({"id": 0, "n": 0})
 	inv[i] = v
+
+
+func refresh_held() -> void:
+	_held_key = ""
 
 
 func open_inventory(mode: String) -> void:

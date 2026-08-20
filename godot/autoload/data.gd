@@ -186,6 +186,14 @@ func _ready() -> void:
 
 # Web-faithful: updateAtlasAnims flips stacked frames at 300 ms/frame (web
 # default frametime; no .animation.json for water/lava in the Faithful pack).
+func apply_atlas(image: Image, rects: Dictionary) -> void:
+	atlas_tex = ImageTexture.create_from_image(image)
+	atlas_rects = rects
+	for bid in fluid_anim_mats:
+		fluid_anim_mats[bid].set_shader_parameter("atlas", atlas_tex)
+		fluid_anim_mats[bid].set_shader_parameter("anim_frames", float(block_anim_frames(bid)))
+
+
 func _make_fluid_anim_mats() -> void:
 	for bid in [5, 24]:
 		var sm := ShaderMaterial.new()

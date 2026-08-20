@@ -45,3 +45,6 @@ After each Godot feature or fix: `./build_web.sh` → ensure server running (`se
 
 ## Task status (canonical)
 `godot/CONTINUITY.md` §6 — M1-M6b + TEX done; next: RENDER-DIST (visual radius r=2→4, split from sim), then M7+ per `godot/ARCHITECTURE.md` §8.
+
+## Game semantics reference (user 2026-08-20)
+- Minecraft wiki is the canonical reference for how tools/crafting/blocks should behave — AweCraft must match it **exactly unless the user specifies otherwise**: https://minecraft.wiki/w/Tool , https://minecraft.wiki/w/Block (plus related: Tool_durability, Mining, Crafting_table, Item_repair, Item).

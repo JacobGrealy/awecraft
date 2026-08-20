@@ -33,6 +33,8 @@ func _ready() -> void:
 
 
 func _process(dt: float) -> void:
+	if Game.mode != "play":
+		return
 	var p = Game.player
 	if p == null:
 		return

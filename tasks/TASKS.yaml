@@ -1,8 +1,13 @@
 meta:
-  updated_at: 2026-08-19T23:40
+  updated_at: 2026-08-20T10:04
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
+- AC-0048
+- AC-0049
+- AC-0050
+- AC-0052
+- AC-0051
 - AC-0047
 - AC-0030
 - AC-0044
@@ -1149,3 +1154,91 @@ intake:
     updated_at: null
     text: '[agent] DONE: webui binds 0.0.0.0, daemon mode (pidfile/port guard) like serve_web.py; daemon pid 86536 left running;
       both localhost + LAN curl 200'
+- id: AC-0048
+  title: swing-punch-fast-loop
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: done
+  labels: []
+  created_at: 2026-08-20T01:09
+  updated_at: 2026-08-20T10:04
+  completed_at: 2026-08-20T10:04
+  waiting_on: null
+  parent_id: null
+  notes: Swing/punch animation 2-4x quicker and loops while the mouse button is held down (user 2026-08-19, AC-0032 follow-up)
+  comments:
+  - id: 1
+    created_at: 2026-08-20T10:04
+    updated_at: null
+    text: 'Done 2026-08-20: SWING_DURATION 0.4->0.10s; LMB-hold loop via _lmb_down + _update_swing_loop (settles on release);
+      swing harness loop_cycles_0.9s=5 ok:true; full battery green; web rebuilt 20260820 + browser-verified. Results: tasks/AC-0048/AC-0048-results.html'
+- id: AC-0049
+  title: wiki-tool-research
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-20T09:07
+  updated_at: 2026-08-20T09:07
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Summarize minecraft.wiki Tool semantics + gap analysis vs AweCraft (user: make everything function exactly like
+    MC unless specified otherwise; user 2026-08-20: ''feel free to make new todo tasks based on gaps'')'
+  comments: []
+- id: AC-0050
+  title: craft-overflow-inventory
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-20T09:07
+  updated_at: 2026-08-20T09:07
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'BUG user 2026-08-20: when all quick-use (hotbar) slots are full, crafted items do not show in the inventory grid'
+  comments: []
+- id: AC-0051
+  title: tool-models-icons
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-20T09:07
+  updated_at: 2026-08-20T09:07
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'BUG user 2026-08-20: axe/pickaxe etc. have no held 3D model (should look like swinging the tool) and no icons; icons
+    should be pixel-art representations of the 3D voxel models'
+  comments: []
+- id: AC-0052
+  title: crafting-table-gate
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-20T09:07
+  updated_at: 2026-08-20T09:07
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'BUG user 2026-08-20: can craft everything without a crafting table, and cannot actually use the crafting table (2x2
+    vs 3x3 gate)'
+  comments: []

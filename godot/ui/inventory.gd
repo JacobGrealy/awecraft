@@ -624,6 +624,16 @@ func _update_recipes(p, show: bool, px: float, py: float) -> void:
 	_recipe_box.visible = true
 
 
+func refresh_atlas() -> void:
+	_tile_tex.clear()
+	for si in _slots.size():
+		_last[si] = ""
+		(_slots[si] as Control).queue_redraw()
+	for r in _recipe_rows:
+		r.queue_redraw()
+	_held.queue_redraw()
+
+
 func hover_item(id_in: int) -> void:
 	_force_hover_id = int(id_in)
 

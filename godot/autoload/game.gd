@@ -16,6 +16,17 @@ func new_world(seed) -> void:
 	mode = "play"
 
 
+func pause() -> void:
+	if mode == "play":
+		mode = "pause"
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func resume() -> void:
+	if mode == "pause":
+		mode = "play"
+
+
 func start() -> void:
 	mode = "play"
 	if player != null:

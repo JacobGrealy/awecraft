@@ -34,10 +34,43 @@ const MAP := {
 
 
 static func import_pack(pack_path: String) -> Dictionary:
+	var r := import_pack_mem(pack_path)
+	if not bool(r.get("ok", false)):
+		return r
+	return _save_pack(r)
+
+
+static func import_pack_mem(source) -> Dictionary:
 	var z := ZIPReader.new()
-	var err := z.open(pack_path)
+	var err: int = -1
+	if source is PackedByteArray:
+		err = z.open_buffer(source)
+	else:
+		err = z.open(String(source))
 	if err != OK:
 		return {"ok": false, "error": "zip_open_%d" % err}
+	return _import_core(z)
+
+
+static func _save_pack(r: Dictionary) -> Dictionary:
+	if not bool(r.get("ok", false)):
+		return r
+	var atlas: Image = r["image"]
+	var rects: Dictionary = r["rects"]
+	var out := {}
+	for k in r:
+		if k != "image":
+			out[k] = r[k]
+	DirAccess.make_dir_recursive_absolute("res://assets")
+	atlas.save_png("res://assets/blocks_atlas.png")
+	var f := FileAccess.open("res://assets/blocks_atlas.json", FileAccess.WRITE)
+	if f:
+		f.store_string(JSON.stringify(rects))
+		f.close()
+	return out
+
+
+static func _import_core(z: ZIPReader) -> Dictionary:
 	var atlas: Image = null
 	var rects := {}
 	if FileAccess.file_exists("res://assets/blocks_atlas.json"):
@@ -119,13 +152,7 @@ static func import_pack(pack_path: String) -> Dictionary:
 			faces[face_name] = [tl.x, tl.y, TILE_PX, TILE_PX]
 			rects[bkey] = faces
 	z.close()
-	DirAccess.make_dir_recursive_absolute("res://assets")
-	atlas.save_png("res://assets/blocks_atlas.png")
-	var f := FileAccess.open("res://assets/blocks_atlas.json", FileAccess.WRITE)
-	if f:
-		f.store_string(JSON.stringify(rects))
-		f.close()
-	return {"ok": true, "merged": existing, "tiles": tiles_ok, "missing": missing, "blocks": rects.size()}
+	return {"ok": true, "merged": existing, "tiles": tiles_ok, "missing": missing, "blocks": rects.size(), "image": atlas, "rects": rects}
 
 
 static func _free_tile(used: Dictionary) -> Vector2i:

@@ -5,6 +5,7 @@ const PlayerRes = preload("res://player/player.tscn")
 const InventoryScript = preload("res://ui/inventory.gd")
 const AtlasScript = preload("res://core/atlas.gd")
 const DayNight = preload("res://core/daynight.gd")
+const MenuScript = preload("res://ui/menu.gd")
 
 var world: Node3D
 var camera: Camera3D
@@ -14,6 +15,8 @@ var entities: Node
 var sun: DirectionalLight3D
 var world_env: WorldEnvironment
 var env: Environment
+var inventory_ui: CanvasLayer
+var menu_ui: CanvasLayer
 
 
 func _ready() -> void:
@@ -47,8 +50,10 @@ func _ready() -> void:
 	if size_env != "":
 		var parts := size_env.split(",")
 		get_window().size = Vector2i(parts[0].to_int(), parts[1].to_int())
+	if size_env == "":
+		Settings.apply_window(get_window())
+	Settings.apply_audio()
 	var seed_env := OS.get_environment("AWECRAFT_SEED")
-	Game.new_world(44 if seed_env == "" else seed_env.to_int())
 	var time_env := OS.get_environment("AWECRAFT_TIME")
 	if time_env != "":
 		Game.time_of_day = fmod(time_env.to_float(), 1.0)
@@ -58,6 +63,39 @@ func _ready() -> void:
 			Data.fluid_anim_mats[bid].set_shader_parameter("phase", anim_phase_env.to_float())
 	_update_sky()
 
+	var menu_shot := OS.get_environment("AWECRAFT_MENU_SHOT")
+	if menu_shot != "":
+		var menu := _make_menu()
+		if OS.get_environment("AWECRAFT_MENU_VIEW") == "options":
+			menu.open_options("main")
+		for i in 6:
+			await get_tree().process_frame
+		await Debug.snap(menu_shot)
+		Debug.result({"menu": true, "mode": Game.mode, "build": Build.ID, "values": Settings.values})
+		get_tree().quit()
+		return
+
+	var menu_boot := OS.get_environment("AWECRAFT_MENU_BOOT") == "1"
+	if logic != "" or (snapshot_path != "" and not menu_boot):
+		await _run_game(seed_env, logic, cam, snapshot_path)
+		return
+
+	var headless_sanity := DisplayServer.get_name() == "headless" \
+		and logic == "" and snapshot_path == "" and not menu_boot
+	# menu render bug (invisible CanvasLayer UI) — menu boot is env-gated until fixed
+	var want_menu := OS.has_feature("desktop") and not headless_sanity \
+		and OS.get_environment("AWECRAFT_MENU") == "1"
+	if want_menu:
+		await _boot_menu()
+		if menu_boot:
+			await menu_ui.play_clicked()
+			if snapshot_path != "":
+				await _snapshot_finish(cam)
+	elif not headless_sanity:
+		await _run_game(seed_env, logic, cam, snapshot_path)
+
+
+func _create_game_nodes() -> void:
 	world = WorldRes.instantiate()
 	world.name = "World"
 	add_child(world)
@@ -66,6 +104,8 @@ func _ready() -> void:
 	var rad := OS.get_environment("AWECRAFT_RADIUS")
 	if rad != "":
 		world.render_radius = rad.to_int()
+	else:
+		Settings.apply_world()
 
 	drops = Node.new()
 	drops.name = "Drops"
@@ -75,10 +115,113 @@ func _ready() -> void:
 	entities.name = "Entities"
 	add_child(entities)
 	Game.entities = entities
-	var inventory: CanvasLayer = InventoryScript.new()
-	inventory.name = "Inventory"
-	add_child(inventory)
-	Game.hotbar = inventory
+	inventory_ui = InventoryScript.new()
+	inventory_ui.name = "Inventory"
+	add_child(inventory_ui)
+	Game.hotbar = inventory_ui
+
+
+func _boot_menu() -> void:
+	await get_tree().process_frame
+	_make_menu()
+
+
+func _make_menu() -> CanvasLayer:
+	menu_ui = MenuScript.new()
+	menu_ui.name = "Menu"
+	menu_ui.on_play = Callable(self, "_menu_play")
+	menu_ui.on_new_world = Callable(self, "_menu_new_world")
+	menu_ui.on_resume = Callable(self, "_menu_resume")
+	menu_ui.on_quit_to_menu = Callable(self, "_quit_to_menu")
+	add_child(menu_ui)
+	return menu_ui
+
+
+func _menu_play() -> void:
+	await start_game(int(Settings.values.get("seed", 44)))
+
+
+func _menu_new_world(seed: int) -> void:
+	Settings.set_value("seed", int(seed))
+	await start_game(int(Settings.values.get("seed", 44)))
+
+
+func _menu_resume() -> void:
+	Game.resume()
+
+
+func quit_to_menu() -> void:
+	_free_game_nodes()
+	Game.mode = "menu"
+	if menu_ui != null:
+		menu_ui.show_main()
+
+
+func start_game(seed: int) -> void:
+	Game.new_world(seed)
+	_create_game_nodes()
+	var spawn: Vector3 = world.spawn_point()
+	world.recenter(spawn.x, spawn.z, true)
+	await _await_spawn_floor(spawn, 300)
+	player = _spawn_player()
+	Game.start()
+
+
+func _free_game_nodes() -> void:
+	if player != null:
+		player.queue_free()
+	if inventory_ui != null:
+		inventory_ui.queue_free()
+	if world != null:
+		world.queue_free()
+	if drops != null:
+		drops.queue_free()
+	if entities != null:
+		entities.queue_free()
+	player = null
+	inventory_ui = null
+	world = null
+	drops = null
+	entities = null
+	Game.world = null
+	Game.player = null
+	Game.drops = null
+	Game.entities = null
+	Game.hotbar = null
+
+
+func _settings_test() -> void:
+	Settings.load_settings()
+	var before := int(Settings.values["render_dist"])
+	Settings.set_value("render_dist", 5)
+	var saved := -1
+	var cf := ConfigFile.new()
+	if cf.load(Settings.PATH) == OK:
+		saved = int(cf.get_value("settings", "render_dist", -1))
+	Settings.load_settings()
+	var reloaded := int(Settings.values["render_dist"])
+	Settings.set_value("volume", 37)
+	Settings.load_settings()
+	var volume_ok := int(Settings.values["volume"]) == 37
+	Settings.set_value("render_dist", before)
+	Settings.set_value("volume", 100)
+	Debug.result({
+		"before": before,
+		"saved": saved,
+		"reloaded": reloaded,
+		"volume_ok": volume_ok,
+		"restore": int(Settings.values["render_dist"]) == before,
+		"ok": saved == 5 and reloaded == 5 and volume_ok,
+	})
+
+
+func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: String) -> void:
+	Game.new_world(44 if seed_env == "" else seed_env.to_int())
+	if logic == "settings":
+		_settings_test()
+		get_tree().quit()
+		return
+	_create_game_nodes()
 
 	if OS.get_environment("AWECRAFT_PROBE") != "":
 		var oc := 0
@@ -450,86 +593,92 @@ func _ready() -> void:
 		Game.start()
 
 	if snapshot_path != "":
-		var fluid_shot := OS.get_environment("AWECRAFT_FLUID_SHOT") == "1"
-		var aimed := false
-		if player != null:
-			if fluid_shot:
+		await _snapshot_finish(cam)
+
+
+func _snapshot_finish(cam: String) -> void:
+	var snapshot_path := OS.get_environment("AWECRAFT_SNAPSHOT")
+	var spawn: Vector3 = world.spawn_point()
+	var fluid_shot := OS.get_environment("AWECRAFT_FLUID_SHOT") == "1"
+	var aimed := false
+	if player != null:
+		if fluid_shot:
+			Debug.fly(true)
+			Debug.give_item(140, 1)
+			Debug.give_item(139, 1)
+			player.sel = _slot_of(player, 140)
+			var aim := _find_shore_aim()
+			if not aim.is_empty():
+				Debug.teleport(aim["cam"].x, aim["cam"].y - player.EYE, aim["cam"].z)
+				player.look(aim["yaw"], aim["pitch"])
+				aimed = true
+		else:
+			var aim := _find_aim_spot()
+			if not aim.is_empty():
 				Debug.fly(true)
-				Debug.give_item(140, 1)
-				Debug.give_item(139, 1)
-				player.sel = _slot_of(player, 140)
-				var aim := _find_shore_aim()
-				if not aim.is_empty():
-					Debug.teleport(aim["cam"].x, aim["cam"].y - player.EYE, aim["cam"].z)
-					player.look(aim["yaw"], aim["pitch"])
-					aimed = true
-			else:
-				var aim := _find_aim_spot()
-				if not aim.is_empty():
-					Debug.fly(true)
-					Debug.give_item(3, 12)
-					Debug.give_item(111, 1)
-					if int(aim["id"]) != 2 and int(aim["id"]) != 3:
-						Debug.give_item(int(aim["id"]), 3)
-					var fpv_env := OS.get_environment("AWECRAFT_FPV_ITEM")
-					if fpv_env != "":
-						var fpid: int = fpv_env.to_int()
-						if _count_item(player, fpid) <= 0:
-							Debug.give_item(fpid, 1)
-						player.sel = _slot_of(player, fpid)
-					Debug.teleport(aim["cam"].x, aim["cam"].y - player.EYE, aim["cam"].z)
-					player.look(aim["yaw"], aim["pitch"])
-					aimed = true
-		var inv_env := OS.get_environment("AWECRAFT_INV")
-		if inv_env != "" and player != null:
-			for i in player.inv.size():
-				player.inv[i] = {"id": 0, "n": 0}
-			if inv_env == "1":
-				Debug.give_item(6, 5)
-				Debug.give_item(8, 12)
-				Debug.give_item(100, 6)
+				Debug.give_item(3, 12)
 				Debug.give_item(111, 1)
-				Debug.give_item(127, 1)
-				player.inv_slot_click(player.find_slot(127), "hotbar", 0, false)
-				player.armor_slot_click(0, 0, false)
-				Debug.give_item(132, 1)
-				player.inv_slot_click(player.find_slot(132), "hotbar", 0, false)
-				player.armor_slot_click(1, 0, false)
-			player.open_inventory("inv")
-			if inv_env == "1":
-				inventory.autofill_first()
-				inventory.hover_item(111)
-		var drain_at := spawn
-		if player != null:
-			drain_at = player.position
-		await _await_world_build(drain_at, 3000)
-		for i in 8:
+				if int(aim["id"]) != 2 and int(aim["id"]) != 3:
+					Debug.give_item(int(aim["id"]), 3)
+				var fpv_env := OS.get_environment("AWECRAFT_FPV_ITEM")
+				if fpv_env != "":
+					var fpid: int = fpv_env.to_int()
+					if _count_item(player, fpid) <= 0:
+						Debug.give_item(fpid, 1)
+					player.sel = _slot_of(player, fpid)
+				Debug.teleport(aim["cam"].x, aim["cam"].y - player.EYE, aim["cam"].z)
+				player.look(aim["yaw"], aim["pitch"])
+				aimed = true
+	var inv_env := OS.get_environment("AWECRAFT_INV")
+	if inv_env != "" and player != null:
+		for i in player.inv.size():
+			player.inv[i] = {"id": 0, "n": 0}
+		if inv_env == "1":
+			Debug.give_item(6, 5)
+			Debug.give_item(8, 12)
+			Debug.give_item(100, 6)
+			Debug.give_item(111, 1)
+			Debug.give_item(127, 1)
+			player.inv_slot_click(player.find_slot(127), "hotbar", 0, false)
+			player.armor_slot_click(0, 0, false)
+			Debug.give_item(132, 1)
+			player.inv_slot_click(player.find_slot(132), "hotbar", 0, false)
+			player.armor_slot_click(1, 0, false)
+		player.open_inventory("inv")
+		if inv_env == "1":
+			inventory_ui.autofill_first()
+			inventory_ui.hover_item(111)
+	var drain_at := spawn
+	if player != null:
+		drain_at = player.position
+	await _await_world_build(drain_at, 3000)
+	for i in 8:
+		await get_tree().physics_frame
+	var emptyhand_env := OS.get_environment("AWECRAFT_EMPTYHAND")
+	if emptyhand_env == "1" and player != null:
+		for i in player.inv.size():
+			player.inv[i] = {"id": 0, "n": 0}
+		player.sel = 0
+	var swing_env := OS.get_environment("AWECRAFT_SWING")
+	if swing_env != "" and player != null:
+		player.hold_swing(swing_env.to_float())
+		for i in 3:
 			await get_tree().physics_frame
-		var emptyhand_env := OS.get_environment("AWECRAFT_EMPTYHAND")
-		if emptyhand_env == "1" and player != null:
-			for i in player.inv.size():
-				player.inv[i] = {"id": 0, "n": 0}
-			player.sel = 0
-		var swing_env := OS.get_environment("AWECRAFT_SWING")
-		if swing_env != "" and player != null:
-			player.hold_swing(swing_env.to_float())
-			for i in 3:
+	if not (fluid_shot and aimed):
+		await Debug.snap(snapshot_path)
+	if aimed:
+		if fluid_shot:
+			player.use_selected()
+			for i in 60:
 				await get_tree().physics_frame
-		if not (fluid_shot and aimed):
 			await Debug.snap(snapshot_path)
-		if aimed:
-			if fluid_shot:
-				player.use_selected()
-				for i in 60:
-					await get_tree().physics_frame
-				await Debug.snap(snapshot_path)
-			else:
-				player.place()
-				for i in 4:
-					await get_tree().physics_frame
-				await Debug.snap(snapshot_path.replace(".png", "_placed.png"))
-		Debug.result({"m4": "ok", "w": int(get_viewport().size.x), "h": int(get_viewport().size.y), "cam": cam})
-		get_tree().quit()
+		else:
+			player.place()
+			for i in 4:
+				await get_tree().physics_frame
+			await Debug.snap(snapshot_path.replace(".png", "_placed.png"))
+	Debug.result({"m4": "ok", "w": int(get_viewport().size.x), "h": int(get_viewport().size.y), "cam": cam})
+	get_tree().quit()
 
 
 func _spawn_player() -> Node3D:
@@ -546,11 +695,22 @@ func _make_camera() -> Camera3D:
 	return c
 
 
+var _last_mode := ""
+
+
 func _process(delta: float) -> void:
-	if world != null and Game.mode != "menu":
-		Game.time_of_day = fmod(Game.time_of_day + minf(delta, 0.05) / DayNight.DAY_LEN, 1.0)
-		_update_sky()
+	Game.time_of_day = fmod(Game.time_of_day + minf(delta, 0.05) / DayNight.DAY_LEN, 1.0)
+	_update_sky()
+	if world != null and Game.mode == "play":
 		_update_fog()
+	if _last_mode != Game.mode:
+		var from := _last_mode
+		_last_mode = Game.mode
+		if menu_ui != null:
+			if Game.mode == "pause" and from == "play":
+				menu_ui.show_pause()
+			elif Game.mode == "play" and from == "pause":
+				menu_ui.hide_pause()
 
 
 func _update_sky() -> void:
@@ -1444,6 +1604,42 @@ func _swing_test() -> void:
 	r["punch_max_offset"] = roundf(punch_moved * 1000.0) / 1000.0
 	r["punch_done"] = not p.swing_active()
 	ok = ok and punch_moved > 0.1 and r["punch_done"]
+	Debug.give_item(6, 1)
+	p.sel = _slot_of(p, 6)
+	for i in 4:
+		await get_tree().physics_frame
+	p.start_mine()
+	p._lmb_down = true
+	var t0 := Time.get_ticks_msec()
+	var cycles := 0
+	var in_high := false
+	var loop_max_off := 0.0
+	var held_stayed_active := true
+	while Time.get_ticks_msec() - t0 < 900:
+		await get_tree().physics_frame
+		if not p.swing_active():
+			held_stayed_active = false
+		var f2: float = p.swing_frac()
+		var off2: float = p.hand_root.position.distance_to(p.HAND_BASE_POS)
+		if off2 > loop_max_off:
+			loop_max_off = off2
+		if f2 > 0.5:
+			in_high = true
+		elif in_high and f2 < 0.25:
+			cycles += 1
+			in_high = false
+	p._lmb_down = false
+	var settle_ok := false
+	for i in 16:
+		await get_tree().physics_frame
+		if not p.swing_active() and p.hand_root.position.distance_to(p.HAND_BASE_POS) < 0.001:
+			settle_ok = true
+			break
+	r["loop_cycles_0.9s"] = cycles
+	r["loop_max_offset"] = roundf(loop_max_off * 1000.0) / 1000.0
+	r["loop_held_stayed_active"] = held_stayed_active
+	r["loop_settles_on_release"] = settle_ok
+	ok = ok and cycles >= 4 and held_stayed_active and settle_ok
 	Debug.result({"ok": ok, "data": r})
 	get_tree().quit()
 

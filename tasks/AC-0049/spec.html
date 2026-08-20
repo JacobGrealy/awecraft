@@ -1,0 +1,27 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0049 — wiki tool research + gap analysis</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:940px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}</style></head><body>
+<h1>AC-0049 — Minecraft Tool wiki: summarize + AweCraft gap analysis (RESEARCH, no game code)</h1>
+<h2>Directive (user 2026-08-20)</h2>
+<p>"read this page to learn about how tools should work: https://minecraft.wiki/w/Tool" + "feel free to make new todo tasks based on gaps you identify by reading the wiki" + reference rule saved in AGENTS.md §"Game semantics reference": <b>AweCraft must match Minecraft exactly unless the user specifies otherwise</b> (Tool, Block, Tool_durability, Mining, Crafting_table, Item_repair, Item).</p>
+<h2>Scope</h2>
+<ul>
+<li>SUMMARIZE (condensed, decision-ready) the semantics of: tool tiers (wood/stone/iron/diamond/gold) × tools (pickaxe/shovel/axe/hoe + swords, shears) — mining speed multipliers, attack damage, attack speed; which blocks require which tool to drop their proper loot; hardness; durability values; repair; what hoes do (farmland).</li>
+<li>MAP to AweCraft's actual item/block set in <code>godot/autoload/data.gd</code> (ids ~100-143 items incl. tools 111+; blocks with hardness in <code>Data.blocks</code>) — not all MC items exist here; only gaps for what AweCraft has (or trivially should have).</li>
+</ul>
+<h2>Current AweCraft code to inspect (read-only; targeted greps, don't dump big files into report)</h2>
+<ul>
+<li><code>godot/autoload/data.gd</code> — items dict (damage/speed/durability fields?), block hardness, recipes (22 shapeless + 14 shaped), mining-speed logic.</li>
+<li><code>godot/player/player.gd</code> — <code>_mine_update</code> (speed multiplier source, tool gating?), <code>attack_mob</code> (damage), swing constants.</li>
+<li><code>godot/ui/inventory.gd</code> — craft grid (3×3 always?), output click (overflow target?), crafting-table use (is block 20 usable? 2×2 vs 3×3?).</li>
+<li><code>godot/core/atlas.gd</code> / <code>godot/assets/blocks_atlas.*</code> — how icons/texture tiles exist for items (do 111+ have atlas tiles? web pack item textures are separate: <code>assets/minecraft/textures/item/</code> in the mcpack).</li>
+<li><code>godot/player/player.gd</code> held-item: <code>held_box/held_sprite/held_fist</code> — what a tool renders as today (cube? sprite? nothing?).</li>
+</ul>
+<h2>Deliverable (single self-contained file: tasks/AC-0049/AC-0049-research.html)</h2>
+<ol>
+<li>Condensed semantics tables (tools × tiers: speed/mine, damage, attack speed, durability; per-block correct-tool + drop rules — restricted to AweCraft's block set; crafting 2×2 vs 3×3 rules from Crafting_table page).</li>
+<li>GAP LIST vs AweCraft: exact current behavior → target behavior, with code locations (file:line). Include the 3 known user bugs (AC-0050 overflow, AC-0051 tool models/icons, AC-0052 table gate) — confirm/refine their root causes and what MC-exact behavior requires (e.g. which of the 14 shaped recipes are table-only in MC).</li>
+<li>PROPOSED NEW TASKS (id free / "NEW-1.."): one line each, priority, what it changes, verify idea (headless harness name). E.g. likely candidates: tool-specific drop gating, tool speed multipliers, attack damage/speed per tool, durability, farmland hoe, item repair (anvil vs same-item — check scope), tool icons from pack item textures.</li>
+</ol>
+<h2>Rules</h2>
+<ul><li>Research only — NO changes to game code. Scratch → .scratch/. No git. Report ≤ 20 lines: path to research.html, one-liner per proposed task, top 3 findings.</li></ul>
+</body></html>

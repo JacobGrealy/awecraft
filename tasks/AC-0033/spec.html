@@ -1,0 +1,24 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0033 — main menu + options</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:900px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}</style></head><body>
+<h1>AC-0033 — main menu + options menu (sliders persist)</h1>
+<h2>Request (user, 2026-08-18)</h2>
+<p>"We need a main menu before you start the game. We need an options menu accessable from the main menu or pause menu" — with: render-distance slider (chunks), sim-distance slider (chunks), texture-pack apply, sound-volume slider, fullscreen toggle, resolution dropdown, and the build version displayed. Settings persist.</p>
+<h2>Requirements</h2>
+<ul>
+<li>Web spec first: targeted grep of index.html for the frozen web's main menu (title/play/new world + texture-pack option) and any pause behavior — match wording/structure where it matters; extend where the user asked for more.</li>
+<li>FLOW: menu scene first (title + build version + Play/New World + Options). Play starts the game (existing start path); pause (Esc when playing & amp; inventory closed) → options; Esc/E closes inventory as today.</li>
+<li>OPTIONS: render-distance slider (1–8 chunks → world render radius; chunk recenter on change), sim-distance slider (fluid tick region, currently ±14), sound-volume slider (Audio volume; M13 not landed so wire the bus volume), texture-pack apply (desktop: file dialog → existing import pipeline to assets; web: JSBridge file pick → in-memory atlas swap — if in-memory web swap proves infeasible this session, deliver desktop-fully-working + document honest deviation), fullscreen toggle, resolution dropdown (common modes + current).</li>
+<li>PERSISTENCE: user:// settings store (ConfigFile), loaded at boot, saved on change; must survive web session reloads (user:// → IndexedDB on web).</li>
+<li>BUILD VERSION: a build-stamp mechanism (e.g. build_id written by build_web.sh + windows export step; fallback "dev") shown in the menu.</li>
+<li>Keep the AWECRAFT_* env hooks working (menu must not break snapshot/logic harnesses — add a harness skip so AWECRAFT_LOGIC/AWECRAFT_SNAPSHOT start straight into the game).</li>
+</ul>
+<h2>Verify (hard gates, staged — checkpoint to disk after each)</h2>
+<ol>
+<li>Headless: full battery + --quit zero script errors (harness skip works: AWECRAFT_LOGIC=player still works from menu-boot).</li>
+<li>Settings logic: headless round-trip (set render dist 5, save, reload, read 5) via a debug hook or AWECRAFT_LOGIC=settings.</li>
+<li>Desktop render (r=1): the MENU itself is screenshotted (title/version/play/options visible) + after "Play" the game renders. Save to tasks/AC-0033/.</li>
+<li>Web rebuild + browser (playwright, never kill 8443 daemon): menu screenshots; click Play → world loads; open Options, move render-distance slider, save, reload page → setting persisted (screenshot/console evidence). Save to tasks/AC-0033/.</li>
+</ol>
+<h2>Deliverables</h2>
+<ul><li>Menu+options in godot/ (scene or code-built UI, your choice, existing style), rebuilt web/, <code>tasks/AC-0033/AC-0033-results.html</code> (summary + screenshots incl. options panel). Report ≤20 lines.</li></ul>
+</body></html>

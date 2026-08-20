@@ -9,7 +9,6 @@ const FLUSH_FRAME_BUDGET_MS := 40
 const FLUSH_MAX_PER_FRAME := 2
 const BULK_LIGHT_CELLS_MAX := 3000
 const FLUID_TICK_INTERVAL := 0.2
-const FLUID_TICK_RADIUS := 14
 const FLUID_DIRS := [
 	[1, 0],
 	[-1, 0],
@@ -21,6 +20,7 @@ const BUILD_FAST_US := 15000
 const DRAIN_FRAME_BUDGET_US := 30000
 
 var render_radius := 4
+var fluid_tick_radius := 14
 var collision_enabled := true
 var chunks := {}
 var chunk_keys := {}
@@ -51,6 +51,7 @@ var tick_time := false
 var _fluid_write := false
 var _fluid_stable := 0
 var _fluid_sig := ""
+var tex_refresh: Array = []
 
 
 func _ready() -> void:
@@ -66,12 +67,12 @@ func _ready() -> void:
 
 
 func _on_fluid_tick() -> void:
-	if fluid_sim_enabled:
+	if fluid_sim_enabled and Game.mode == "play":
 		tick_fluids()
 
 
 func _process(_delta: float) -> void:
-	if light_dirty.is_empty() and fluid_dirty.is_empty() and build_queue.is_empty() and light_pending.is_empty():
+	if light_dirty.is_empty() and fluid_dirty.is_empty() and build_queue.is_empty() and light_pending.is_empty() and tex_refresh.is_empty():
 		return
 	var was_active := flush_active
 	var added := false
@@ -144,6 +145,30 @@ func _process(_delta: float) -> void:
 		else:
 			fluid_dirty[_key(int(cc.cx), int(cc.cz))] = true
 	_drain_build_queue()
+	_drain_tex_refresh()
+
+
+func refresh_textures() -> void:
+	tex_refresh = chunks.keys().duplicate()
+
+
+func _drain_tex_refresh() -> void:
+	if tex_refresh.is_empty():
+		return
+	var t0 := Time.get_ticks_msec()
+	var done := 0
+	while done < FLUSH_MAX_PER_FRAME and not tex_refresh.is_empty():
+		if done > 0 and Time.get_ticks_msec() - t0 > FLUSH_FRAME_BUDGET_MS:
+			break
+		var key = tex_refresh.pop_back()
+		var c: Node3D = chunks.get(key)
+		if c == null or not c.mesh_built:
+			continue
+		if not _build_ready(int(c.cx), int(c.cz)):
+			tex_refresh.push_back(key)
+			continue
+		c.build_mesh(get_block, c.last_eff)
+		done += 1
 
 
 func _dequeue(key: String) -> void:
@@ -646,10 +671,10 @@ func tick_fluids() -> void:
 	if Game.player != null:
 		var px := floori(Game.player.position.x)
 		var pz := floori(Game.player.position.z)
-		var cx0 := int(floorf(float(px - FLUID_TICK_RADIUS) / 16.0))
-		var cx1 := int(floorf(float(px + FLUID_TICK_RADIUS) / 16.0))
-		var cz0 := int(floorf(float(pz - FLUID_TICK_RADIUS) / 16.0))
-		var cz1 := int(floorf(float(pz + FLUID_TICK_RADIUS) / 16.0))
+		var cx0 := int(floorf(float(px - fluid_tick_radius) / 16.0))
+		var cx1 := int(floorf(float(px + fluid_tick_radius) / 16.0))
+		var cz0 := int(floorf(float(pz - fluid_tick_radius) / 16.0))
+		var cz1 := int(floorf(float(pz + fluid_tick_radius) / 16.0))
 		for cx in range(cx0, cx1 + 1):
 			for cz in range(cz0, cz1 + 1):
 				cl.append(Vector2i(cx, cz))
