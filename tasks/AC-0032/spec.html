@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0032 — held-item swing/punch animation + sharp texture</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:900px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}</style></head><body>
+<h1>AC-0032 — held-item swing/punch animation + fix blurry held-item texture</h1>
+<h2>Request (user, 2026-08-18)</h2>
+<p>"we should have an animation for the item in hand when you mine a block using it (ie it should swing/punch). Also texture on held objects is blurry for some reason."</p>
+<h2>Requirements</h2>
+<ul>
+<li>Web spec first: targeted grep of <code>index.html</code> — does the frozen web render a held item at all, and with what animation/timing? Port what's there. If the web has no in-hand item view (verify first), add an MC-style Godot-native held-item (lower-right, atlas icon from <code>Data.tiles</code>, current selection) with a swing on mine/attack — consistent with the rest of the port, no inventing data.</li>
+<li>Find where the held item currently renders in godot/ (likely a MeshInstance3D/sprite near the camera or a UI overlay) — that explains the blur: it almost certainly uses default bilinear filtering. Fix: NEAREST texture filter (and no mip bleed) so held pixels are crisp 1:1.</li>
+<li>Animation: on <code>start_mine</code> (and on bare-hand punch / attack per M9) the item does a quick swing (rotate/dip ~0.3–0.5 s, single shot, no loop); empty hand does a punch motion (hand/box). Keep M7a/M9 logic untouched — this is render-only.</li>
+<li>Must work in the WEB export (user's surface) and desktop; no perf regression.</li>
+</ul>
+<h2>Verify (hard gates)</h2>
+<ol>
+<li>Headless: full battery (player/interact/light/fluids/buckets + --quit) → zero script errors.</li>
+<li>Sharpness proof (desktop): screenshot with an item selected (e.g. pickaxe or log) — held icon pixels crisp (zoom crop in results: no blurry edges). Save to tasks/AC-0032/.</li>
+<li>Swing proof (desktop): add a small debug hook (e.g. <code>Debug.swing()</code>) and capture two frames (idle vs mid-swing) → visibly different item pose. Save to tasks/AC-0032/.</li>
+<li>Web rebuild (<code>./build_web.sh</code>) + browser proof (playwright vs https://localhost:8443, never kill the daemon): held item visible + crisp (crop), and a mid-swing frame differs from idle. Save to tasks/AC-0032/.</li>
+</ol>
+<h2>Deliverables</h2>
+<ul><li>Fix in godot/, rebuilt web/, <code>tasks/AC-0032/AC-0032-results.html</code> (summary + crops/evidence). Report ≤20 lines.</li></ul>
+</body></html>

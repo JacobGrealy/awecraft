@@ -291,6 +291,12 @@ func _ready() -> void:
 			player = _spawn_player()
 			await _combat_test(spawn)
 			return
+		if logic == "swing":
+			world.recenter(spawn.x, spawn.z, true)
+			await _await_spawn_floor(spawn, 300)
+			player = _spawn_player()
+			await _swing_test()
+			return
 		if logic == "survival":
 			world.recenter(spawn.x, spawn.z, true)
 			await _await_spawn_floor(spawn, 300)
@@ -461,13 +467,16 @@ func _ready() -> void:
 				var aim := _find_aim_spot()
 				if not aim.is_empty():
 					Debug.fly(true)
-					var fpv_env := OS.get_environment("AWECRAFT_FPV_ITEM")
 					Debug.give_item(3, 12)
 					Debug.give_item(111, 1)
 					if int(aim["id"]) != 2 and int(aim["id"]) != 3:
 						Debug.give_item(int(aim["id"]), 3)
+					var fpv_env := OS.get_environment("AWECRAFT_FPV_ITEM")
 					if fpv_env != "":
-						player.sel = _slot_of(player, fpv_env.to_int())
+						var fpid: int = fpv_env.to_int()
+						if _count_item(player, fpid) <= 0:
+							Debug.give_item(fpid, 1)
+						player.sel = _slot_of(player, fpid)
 					Debug.teleport(aim["cam"].x, aim["cam"].y - player.EYE, aim["cam"].z)
 					player.look(aim["yaw"], aim["pitch"])
 					aimed = true
@@ -496,6 +505,16 @@ func _ready() -> void:
 		await _await_world_build(drain_at, 3000)
 		for i in 8:
 			await get_tree().physics_frame
+		var emptyhand_env := OS.get_environment("AWECRAFT_EMPTYHAND")
+		if emptyhand_env == "1" and player != null:
+			for i in player.inv.size():
+				player.inv[i] = {"id": 0, "n": 0}
+			player.sel = 0
+		var swing_env := OS.get_environment("AWECRAFT_SWING")
+		if swing_env != "" and player != null:
+			player.hold_swing(swing_env.to_float())
+			for i in 3:
+				await get_tree().physics_frame
 		if not (fluid_shot and aimed):
 			await Debug.snap(snapshot_path)
 		if aimed:
@@ -1372,6 +1391,61 @@ func _clear_feet(feet: Vector3) -> bool:
 		if info != null and info.solid:
 			return false
 	return true
+
+
+func _swing_test() -> void:
+	var p = Game.player
+	for i in 6:
+		await get_tree().physics_frame
+	var r := {}
+	var ok := true
+	Debug.give_item(6, 1)
+	p.sel = _slot_of(p, 6)
+	for i in 4:
+		await get_tree().physics_frame
+	r["box_visible"] = p.held_box.visible
+	r["fist_when_item"] = p.held_fist.visible
+	ok = ok and r["box_visible"] and not r["fist_when_item"]
+	p.start_mine()
+	var saw_mid := false
+	var mid_frac := 0.0
+	var settled := false
+	for i in range(60):
+		await get_tree().physics_frame
+		var f: float = p.swing_frac()
+		if f > 0.3 and f < 0.95:
+			saw_mid = true
+			mid_frac = f
+		if not p.swing_active():
+			settled = p.hand_root.position.distance_to(p.HAND_BASE_POS) < 0.001
+			break
+	r["saw_mid_swing"] = saw_mid
+	r["mid_frac"] = roundf(mid_frac * 100.0) / 100.0
+	r["settled"] = settled
+	ok = ok and saw_mid and settled
+	for i in 4:
+		await get_tree().physics_frame
+	for i in p.inv.size():
+		p.inv[i] = {"id": 0, "n": 0}
+	p.sel = 0
+	for i in 4:
+		await get_tree().physics_frame
+	r["fist_empty_hand"] = p.held_fist.visible
+	ok = ok and r["fist_empty_hand"]
+	p.start_swing()
+	var punch_moved := 0.0
+	for i in range(40):
+		await get_tree().physics_frame
+		var off: float = p.hand_root.position.distance_to(p.HAND_BASE_POS)
+		if off > punch_moved:
+			punch_moved = off
+		if not p.swing_active():
+			break
+	r["punch_max_offset"] = roundf(punch_moved * 1000.0) / 1000.0
+	r["punch_done"] = not p.swing_active()
+	ok = ok and punch_moved > 0.1 and r["punch_done"]
+	Debug.result({"ok": ok, "data": r})
+	get_tree().quit()
 
 
 func _count_item(p, id: int) -> int:

@@ -48,11 +48,22 @@ var craft_grid: Array = []
 var craft_out: Dictionary = {}
 var ui_mode := ""
 var highlight: MeshInstance3D = null
+var hand_root: Node3D = null
 var held_box: MeshInstance3D = null
 var held_sprite: Sprite3D = null
+var held_fist: MeshInstance3D = null
 var _held_mats := {}
 var _held_texs := {}
 var _held_key := ""
+const HAND_BASE_POS := Vector3(0.45, -0.42, -0.8)
+const SWING_DURATION := 0.4
+const SWING_ITEM := 0
+const SWING_PUNCH := 1
+var _swing_active := false
+var _swing_held := false
+var _swing_t := 0.0
+var _swing_frac := 0.0
+var _swing_kind := SWING_ITEM
 var _mining := false
 var _dragging := false
 var _mine_cell := Vector3i(0, 0, 0)
@@ -75,15 +86,15 @@ func _ready() -> void:
 	_update_debug_label()
 
 
-func _process(_dt: float) -> void:
-	if camera == null or held_box == null or held_sprite == null:
+func _process(dt: float) -> void:
+	if camera == null or hand_root == null or held_box == null or held_sprite == null:
 		return
 	var it: Dictionary = inv_selected()
 	var key := "%d:%d:%d:%s" % [sel, int(it["id"]), int(it["n"]), ui_mode]
-	if key == _held_key:
-		return
-	_held_key = key
-	_update_held(int(it["id"]), int(it["n"]))
+	if key != _held_key:
+		_held_key = key
+		_update_held(int(it["id"]), int(it["n"]))
+	_update_swing(dt)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -126,6 +137,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				close_inventory()
 		elif kc == int(KEY_V):
 			Debug.seed_inv()
+		elif kc == int(KEY_H):
+			start_swing()
+		elif kc == int(KEY_J):
+			hold_swing(0.5)
+		elif kc == int(KEY_K):
+			clear_swing()
 		elif kc == int(KEY_ESCAPE) and ui_mode != "":
 			close_inventory()
 		elif ui_mode == "" and kc >= int(KEY_1) and kc <= int(KEY_9):
@@ -298,24 +315,40 @@ func _build_highlight() -> void:
 func _build_held() -> void:
 	if camera == null:
 		return
+	hand_root = Node3D.new()
+	hand_root.position = HAND_BASE_POS
+	camera.add_child(hand_root)
 	var mesh := BoxMesh.new()
 	held_box = MeshInstance3D.new()
 	held_box.mesh = mesh
 	held_box.material_override = StandardMaterial3D.new()
-	held_box.position = Vector3(0.45, -0.42, -0.8)
 	held_box.scale = Vector3(0.35, 0.35, 0.35)
 	held_box.visible = false
-	camera.add_child(held_box)
+	hand_root.add_child(held_box)
 	held_sprite = Sprite3D.new()
-	held_sprite.position = Vector3(0.45, -0.42, -0.8)
 	held_sprite.scale = Vector3(0.35, 0.35, 0.35)
 	held_sprite.billboard = 1
+	held_sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	held_sprite.visible = false
-	camera.add_child(held_sprite)
+	hand_root.add_child(held_sprite)
+	var fm := BoxMesh.new()
+	fm.size = Vector3(0.18, 0.3, 0.24)
+	held_fist = MeshInstance3D.new()
+	held_fist.mesh = fm
+	var fmat := StandardMaterial3D.new()
+	fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	fmat.albedo_color = Color(0.87, 0.73, 0.57)
+	held_fist.material_override = fmat
+	held_fist.position = Vector3(0.0, -0.05, 0.0)
+	held_fist.visible = false
+	hand_root.add_child(held_fist)
 
 
 func _update_held(id: int, n: int) -> void:
-	if ui_mode != "" or id == 0 or n <= 0:
+	var show_fist := ui_mode == "" and (id == 0 or n <= 0)
+	if held_fist != null:
+		held_fist.visible = show_fist
+	if id == 0 or n <= 0:
 		held_box.visible = false
 		held_sprite.visible = false
 		return
@@ -341,6 +374,7 @@ func _held_mat(id: int, binfo: Dictionary) -> StandardMaterial3D:
 	m = StandardMaterial3D.new()
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.vertex_color_use_as_albedo = false
+	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	var r := Data.block_rect(id, "side")
 	if Data.atlas_tex != null and r != Vector2i(-1, -1) and Data.atlas_tex.get_image() != null:
 		var tile := Data.atlas_tex.get_image().get_region(Rect2i(r, Vector2i(Data.TILE_PX, Data.TILE_PX)))
@@ -363,6 +397,87 @@ func _tint_tex(col: Color) -> ImageTexture:
 	return t
 
 
+func swing(kind: int) -> void:
+	_swing_active = true
+	_swing_held = false
+	_swing_t = 0.0
+	_swing_kind = int(kind)
+
+
+func swing_kind_for_selected() -> int:
+	var it: Dictionary = inv_selected()
+	if int(it["id"]) == 0 or int(it["n"]) <= 0:
+		return SWING_PUNCH
+	return SWING_ITEM
+
+
+func start_swing() -> void:
+	swing(swing_kind_for_selected())
+
+
+func hold_swing(frac: float, kind: int = -1) -> void:
+	_swing_active = true
+	_swing_held = true
+	_swing_frac = clampf(float(frac), 0.0, 1.0)
+	_swing_kind = int(kind) if kind >= 0 else swing_kind_for_selected()
+
+
+func clear_swing() -> void:
+	_swing_active = false
+	_swing_held = false
+	_swing_t = 0.0
+	_swing_frac = 0.0
+	if hand_root != null:
+		_reset_hand_pose()
+
+
+func swing_frac() -> float:
+	if not _swing_active:
+		return 0.0
+	return _swing_frac if _swing_held else minf(_swing_t / SWING_DURATION, 1.0)
+
+
+func swing_active() -> bool:
+	return _swing_active
+
+
+func _update_swing(dt: float) -> void:
+	if not _swing_active:
+		return
+	var frac: float
+	if _swing_held:
+		frac = _swing_frac
+	else:
+		_swing_t += dt
+		frac = _swing_t / SWING_DURATION
+	if frac >= 1.0:
+		_swing_active = false
+		_swing_t = 0.0
+		_reset_hand_pose()
+		return
+	_apply_swing(clampf(frac, 0.0, 1.0))
+
+
+func _apply_swing(frac: float) -> void:
+	var a := sin(frac * PI)
+	if frac <= 0.0:
+		_reset_hand_pose()
+		return
+	if _swing_kind == SWING_PUNCH:
+		hand_root.position = Vector3(HAND_BASE_POS.x - 0.12 * a, HAND_BASE_POS.y + 0.03 * a, HAND_BASE_POS.z - 0.34 * a)
+		hand_root.rotation = Vector3(-0.12 * a, 0.0, 0.12 * a)
+	else:
+		hand_root.position = Vector3(HAND_BASE_POS.x, HAND_BASE_POS.y - 0.16 * a, HAND_BASE_POS.z - 0.08 * a)
+		hand_root.rotation = Vector3(-1.25 * a, 0.0, 0.4 * a)
+
+
+func _reset_hand_pose() -> void:
+	if hand_root == null:
+		return
+	hand_root.position = HAND_BASE_POS
+	hand_root.rotation = Vector3.ZERO
+
+
 func aim_dir() -> Vector3:
 	return (Basis.from_euler(Vector3(_pitch, _yaw, 0.0)) * Vector3(0.0, 0.0, -1.0)).normalized()
 
@@ -377,7 +492,9 @@ func start_mine() -> void:
 	var mob := aim_mob()
 	if mob != null:
 		attack_mob(mob)
+		start_swing()
 		return
+	start_swing()
 	_mining = true
 	_mine_id = -1
 	_mine_prog = 0.0

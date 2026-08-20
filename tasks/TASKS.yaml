@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-19T22:07
+  updated_at: 2026-08-19T23:40
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -734,12 +734,12 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels:
   - godot
   created_at: 2026-08-18T12:00
-  updated_at: 2026-08-19 08:15T12:00
-  completed_at: null
+  updated_at: 2026-08-19T23:40
+  completed_at: 2026-08-19T23:40
   waiting_on: null
   parent_id: null
   notes: Swing/punch animation for the held item while mining; fix blurry held-item texture (nearest-neighbor filter)
@@ -749,6 +749,12 @@ intake:
     updated_at: null
     text: '[user] we should have an animation for the item in hand when you mine a block using it (ie it should swing/punch).
       Also texture on held objects is blurry for some reason'
+  - id: 2
+    created_at: 2026-08-19T23:40
+    updated_at: null
+    text: '[agent] DONE: web has NO held-item (verified by grep) → Godot-native MC viewmodel: NEAREST filter fixed blur, 0.4s
+      single-shot swing on mine/attack, empty-hand fist punch, Debug.swing + AWECRAFT_LOGIC=swing harness, H/J/K debug keys.
+      All 4 gates pass (browser swing delta 39%).'
 - id: AC-0033
   title: menu
   source: user
@@ -756,11 +762,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: in-progress
   labels:
   - godot
   created_at: 2026-08-18T12:00
-  updated_at: 2026-08-19 08:15T12:00
+  updated_at: 2026-08-19T23:40
   completed_at: null
   waiting_on: null
   parent_id: null

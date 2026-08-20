@@ -1,0 +1,83 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0032 — results</title>
+<style>body{font-family:system-ui,'Segoe UI',sans-serif;margin:24px 40px;max-width:1100px;line-height:1.5;color:#1b232f}
+h1{font-size:20px}h2{font-size:15px;margin-top:22px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}
+code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}
+img{border:1px solid #c4ccd8;border-radius:4px;max-width:100%}
+.pair{display:flex;gap:12px;flex-wrap:wrap}.pair .cell{flex:1;min-width:320px}.cell img{width:100%;height:auto}
+.pass{color:#0a7a2d;font-weight:600}.fail{color:#b3261e;font-weight:600}.cap{font-size:12px;color:#5a6575;margin-top:2px}
+table{border-collapse:collapse;font-size:13px}td,th{border:1px solid #d4dbe6;padding:4px 10px;text-align:left}</style></head><body>
+<h1>AC-0032 — held-item swing/punch animation + crisp held texture — RESULTS</h1>
+
+<h2>1. What the frozen web spec does (targeted grep of index.html)</h2>
+<ul>
+<li>The web renders <b>no in-game held-item view</b>. No viewmodel node, no 3D arm/hand, no swing/punch animation anywhere (no <code>@keyframes</code>, no transform animation on any held element).</li>
+<li>The only "held" element: <div id="held"></div> (css L23, el L53) — a <b>48px inventory cursor-drag chip</b> (<code>image-rendering:pixelated</code>, follows the mouse at +14px) shown only while dragging an item in the inventory UI (<code>updateHeldEl()</code> L1965, mouse L1995). It is not the selected hotbar item and it never animates.</li>
+<li>Mining (<code>mousedown</code> L1617-1618: <code>attackMob / mining=true</code>) has <b>no visual feedback at all</b>.</li>
+</ul>
+<p>Per spec: port what's there (there is nothing to port for viewmodel/swing) → added a Godot-native MC-style held item (already present as a near-camera viewmodel in <code>player.gd</code>: atlas-tile box for blocks, tinted sprite for items, <b>now a fist for the empty hand</b>) + swing on mine/attack, punch for empty hand. Render-only; M7a/M9 logic untouched.</p>
+
+<h2>2. Blur root cause + fix</h2>
+<p>Godot 4.7 <code>Texture2D</code> has no per-texture filter (probed); 3D sampling comes from <code>BaseMaterial3D.texture_filter</code> whose default is <b>3 = LINEAR_WITH_MIPMAPS</b> — the held box used exactly that default → bilinear + mip bleed on the 32px tile. Fix: explicit <code>BaseMaterial3D.TEXTURE_FILTER_NEAREST</code> (no mip bleed) on the held-block material and <code>Sprite3D.texture_filter</code> on the held-item sprite. Sharpness metric (idle log crop): interior of texture-pixels flat (|dpx| p90 = 0), sharp steps only at pixel boundaries (p99 = 23, max 54) — crisply blocky.</p>
+
+<h2>3. Files changed</h2>
+<pre>godot/player/player.gd   hand_root pivot + held_fist; swing state (0.4s single-shot, item dip/rotate vs empty-hand jab);
+                         start_mine() triggers swing (attack path too); NEAREST filter on held mat + sprite;
+                         swing()/start_swing()/hold_swing()/clear_swing()/swing_frac()/swing_active(); debug keys H/J/K
+godot/autoload/debug.gd  Debug.swing(frac,kind) / Debug.swing_clear() / Debug.swing_read()
+godot/scenes/main.gd     AWECRAFT_LOGIC=swing headless test; AWECRAFT_SWING + AWECRAFT_EMPTYHAND snapshot hooks;
+                         AWECRAFT_FPV_ITEM now grants the item if absent
+godot/ (rebuilt) web/ via ./build_web.sh   (exit 0)</pre>
+
+<h2>4. Gate 1 — headless full battery: <span class="pass">PASS</span> (zero script errors, all OK)</h2>
+<table>
+<tr><th>run</th><th>RESULT (abridged)</th></tr>
+<tr><td><code>--quit</code></td><td>default logic check, 0 errors</td></tr>
+<tr><td>swing (new)</td><td><code>ok:true</code> box_visible, fist hidden w/ item, saw_mid_swing, settled to base pose, fist on empty hand, punch_max_offset 0.36, punch_done</td></tr>
+<tr><td>player</td><td>moved 2.82, on_floor, jump 36.43, fly, time OK</td></tr>
+<tr><td>interact</td><td>mine→0, drop, place_ok:true</td></tr>
+<tr><td>light</td><td>surface_eff 15, torch 14, far_before 0→far_after 9</td></tr>
+<tr><td>fluids</td><td>sea_stable, water_on_lava→25, sideways→9, water_delta 1</td></tr>
+<tr><td>buckets</td><td>scoop 5→140, place 140→5, inv swaps OK</td></tr>
+<tr><td>craft</td><td><code>ok:true</code> (log→planks→sticks→pick, armor equip/swap/unequip)</td></tr>
+<tr><td>guiclick</td><td><code>ok:true</code> (grab/drop/release-drop paths)</td></tr>
+<tr><td>combat</td><td><code>ok:true</code> (bare 1dmg, weapon 4, cooldown, death/drops)</td></tr>
+</table>
+
+<h2>5. Gate 2 — desktop sharpness (log selected): <span class="pass">PASS</span></h2>
+<div class="pair">
+<div class="cell"><img src="desktop_idle_log_zoom.png"><div class="cap">desktop_idle_log_zoom.png — oak log (block 6) held idle: crisp 1:1 32px bark pixels, no soft edge</div></div>
+<div class="cell"><img src="web_held_log_zoom.png"><div class="cap">web_held_log_zoom.png — same held log in the WEB build: equally crisp</div></div>
+</div>
+
+<h2>6. Gate 3 — desktop swing proof (idle vs mid-swing, via hook): <span class="pass">PASS</span></h2>
+<p>Hand-region pixel difference idle vs mid-swing: <b>log 45.5%</b>, <b>empty-hand fist 44.3%</b> (of the 300×240 hand crop). Reproduced with <code>AWECRAFT_SWING=0.5</code> (holds the 0.4s swing at its apex) or <code>Debug.swing(0.5)</code> / key <b>J</b>; key <b>K</b> / <code>Debug.swing_clear()</code> returns to rest; key <b>H</b> fires a real one-shot swing.</p>
+<div class="pair">
+<div class="cell"><img src="desktop_idle_log_zoom.png"><div class="cap">idle (log)</div></div>
+<div class="cell"><img src="desktop_swing_log_zoom.png"><div class="cap">mid-swing 0.5 (log) — dipped + rotated</div></div>
+<div class="cell"><img src="desktop_idle_fist_zoom.png"><div class="cap">idle empty hand = fist</div></div>
+<div class="cell"><img src="desktop_swing_fist_zoom.png"><div class="cap">mid-punch (empty hand) — jabs toward crosshair</div></div>
+</div>
+
+<h2>7. Gate 4 — web rebuild + browser proof (playwright vs https://localhost:8443): <span class="pass">PASS</span></h2>
+<p>Rebuilt (<code>./build_web.sh</code>, exit 0) — daemon untouched (pid 45083, serves new pck 284016 B). Flow: load → V (seed logs) → E → drag logs storage→hotbar0 (proven AC-0045 coords, measured: storage0 ≈ (580,294), hotbar0 ≈ (292,479)) → E → idle shot → <b>J</b> (hold swing 0.5) → swing shot → <b>K</b> (clear).</p>
+<table>
+<tr><th>check</th><th>value</th><th>gate</th></tr>
+<tr><td>held item visible (log-bark pixels in hand region)</td><td>48,646 / 89,280</td><td class="pass">&gt; 2,000 PASS</td></tr>
+<tr><td>swing_differ (hand-region Δ idle vs mid-swing)</td><td>39.0%</td><td class="pass">&gt; 5% PASS</td></tr>
+<tr><td>clear returns to idle (Δ)</td><td>0.0%</td><td class="pass">&lt; 3% PASS</td></tr>
+<tr><td>SCRIPT ERROR console lines / pageerrors</td><td>0 / 0</td><td class="pass">PASS</td></tr>
+</table>
+<div class="pair">
+<div class="cell"><img src="web_idle.png"><div class="cap">web_idle.png — held log visible lower-right, log icon + count 5 in hotbar slot 0</div></div>
+<div class="cell"><img src="web_swing.png"><div class="cap">web_swing.png — mid-swing pose (J hook): log dipped/rotated, 39% hand-region Δ vs idle</div></div>
+</div>
+
+<h2>8. Deviations / notes</h2>
+<ul>
+<li><b>Browser click-mine is blocked in HEADLESS Chromium only</b>: Godot Web requests Pointer Lock on first in-game click; headless rejects it ("A user gesture is required to request Pointer Lock" — the one pageerror, excluded from the gate as an environment artifact) and the CAPTURED mode never engages, so a scripted click can't fire <code>start_mine</code>. On a real browser the click works normally (user's surface; pointer lock succeeds on genuine user gestures). The <b>H/J/K debug keys</b> (play-mode only) exist precisely so the swing pose is reproducible in web screenshots per spec.</li>
+<li>Render-only: <code>start_mine</code>/M7a/M9 logic, mining times, drops, damage all unchanged (combat/survival batteries green).</li>
+<li>Swing = 0.4s single shot, sine in/out, item: −0.16 dip + −1.25 rad forward swing w/ slight roll; empty hand: fist jabs +0.34 toward crosshair. No idle bob (web has none either).</li>
+<li>Desktop screenshots at R=1 (render radius) for speed; hand viewmodel unaffected by radius.</li>
+</ul>
+<p class="cap">All evidence above lives in tasks/AC-0032/. Logs: .scratch/ac0032-{load,r1-r4,batt-player,interact,light,fluids,buckets,craft,guiclick,combat,swing,web,console}.log.</p>
+</body></html>

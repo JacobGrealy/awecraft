@@ -229,3 +229,20 @@ func set_time(t) -> void:
 func fly(enabled) -> void:
 	if Game.player != null:
 		Game.player.set_fly(bool(enabled))
+
+func swing(frac: float = 0.5, kind: int = -1) -> void:
+	if Game.player != null:
+		Game.player.hold_swing(float(frac), int(kind))
+
+func swing_clear() -> void:
+	if Game.player != null:
+		Game.player.clear_swing()
+
+func swing_read() -> Dictionary:
+	if Game.player == null:
+		return {"active": false, "frac": 0.0, "fist": false}
+	var p = Game.player
+	var fist := false
+	if p.held_fist != null:
+		fist = p.held_fist.visible
+	return {"active": true, "frac": p.swing_frac(), "fist": fist}
