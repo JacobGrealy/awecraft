@@ -746,8 +746,8 @@ func _process(dt: float) -> void:
 			var area: String = _areas[si]
 			var idx: int = _indices[si]
 			if area == "storage":
-				id = int(p._inv_get(27 + idx)["id"])
-				n = int(p._inv_get(27 + idx)["n"])
+				id = int(p._inv_get(p.STORAGE_OFF + idx)["id"])
+				n = int(p._inv_get(p.STORAGE_OFF + idx)["n"])
 			elif area == "armor":
 				id = int(p.armor[idx])
 				n = 1 if id != 0 else 0

@@ -644,6 +644,8 @@ func _snapshot_finish(cam: String) -> void:
 			Debug.give_item(132, 1)
 			player.inv_slot_click(player.find_slot(132), "hotbar", 0, false)
 			player.armor_slot_click(1, 0, false)
+			for i in range(13, 36):
+				player.inv[i] = {"id": 140 + (i % 8), "n": (i % 7) + 1}
 		player.open_inventory("inv")
 		if inv_env == "1":
 			inventory_ui.autofill_first()
@@ -1005,7 +1007,7 @@ func _guiclick_test() -> void:
 	ok = ok and r["held0"] == [0, 0]
 	p.inv_slot_click(0, "storage", 0, false, false)
 	r["held_down"] = _heldpair(p)
-	r["storage_down"] = [int(p._inv_get(27)["id"]), int(p._inv_get(27)["n"])]
+	r["storage_down"] = [int(p._inv_get(9)["id"]), int(p._inv_get(9)["n"])]
 	ok = ok and r["held_down"] == [6, 5] and r["storage_down"] == [0, 0]
 	p.inv_slot_click(0, "hotbar", 0, false, true)
 	r["held_up"] = _heldpair(p)
@@ -1027,7 +1029,7 @@ func _guiclick_test() -> void:
 	ok = ok and r["two_click"] == [8, 3, [0, 0]] and r["two_click_up"] == [8, 3, [0, 0]]
 	p.inv_slot_click(0, "storage", 0, false, false)
 	p.inv_slot_click(0, "storage", 0, false, true)
-	r["storage_same"] = [int(p._inv_get(27)["id"]), int(p._inv_get(27)["n"]), _heldpair(p)]
+	r["storage_same"] = [int(p._inv_get(9)["id"]), int(p._inv_get(9)["n"]), _heldpair(p)]
 	ok = ok and r["storage_same"] == [0, 0, [0, 0]]
 	Debug.seed_inv()
 	for i in 8:
@@ -1043,7 +1045,7 @@ func _guiclick_test() -> void:
 	ok = ok and r["drop_hot0"] == [6, 5, [0, 0]]
 	p.inv_slot_click(0, "hotbar", 0, false, false)
 	Game.hotbar._release_drop(p, s23.position + s23.size * 0.5)
-	r["drop_storage"] = [int(p._inv_get(27)["id"]), int(p._inv_get(27)["n"]), _heldpair(p)]
+	r["drop_storage"] = [int(p._inv_get(9)["id"]), int(p._inv_get(9)["n"]), _heldpair(p)]
 	ok = ok and r["drop_storage"] == [6, 5, [0, 0]]
 	Debug.result({"ok": ok, "data": r})
 	get_tree().quit()
@@ -1058,6 +1060,8 @@ func _craft_test() -> void:
 	Debug.give_item(6, 2)
 	r["logs_start"] = _count_item(p, 6)
 	ok = ok and r["logs_start"] == 2
+	p.inv[0] = {"id": 6, "n": 2}
+	p.inv[9] = {"id": 0, "n": 0}
 	p.open_inventory("inv")
 	Debug.inv_click(41, 2)
 	r["held_r1"] = [int(p.held.get("id", 0)), int(p.held.get("n", 0)) if p.held != {} else 0]
@@ -1068,6 +1072,8 @@ func _craft_test() -> void:
 	r["planks_a"] = _count_item(p, 8)
 	r["logs_a"] = _count_item(p, 6)
 	ok = ok and r["planks_a"] == 4 and r["logs_a"] == 1
+	p.inv[1] = p.inv[9]
+	p.inv[9] = {"id": 0, "n": 0}
 	Debug.inv_click(41, 2)
 	Debug.inv_click(0, 0)
 	r["out_b"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
@@ -1086,6 +1092,8 @@ func _craft_test() -> void:
 	r["sticks_c"] = _count_item(p, 100)
 	r["planks_c"] = _count_item(p, 8)
 	ok = ok and r["sticks_c"] == 4 and r["planks_c"] == 6
+	p.inv[0] = p.inv[9]
+	p.inv[9] = {"id": 0, "n": 0}
 	Debug.inv_click(42, 2)
 	Debug.inv_click(0, 0)
 	Debug.inv_click(42, 2)
@@ -1105,12 +1113,16 @@ func _craft_test() -> void:
 	r["logs_d"] = _count_item(p, 6)
 	ok = ok and r["pick_d"] == 1 and r["planks_d"] == 3 and r["sticks_d"] == 2 and r["logs_d"] == 0
 	Debug.give_item(127, 1)
+	p.inv[3] = p.inv[10]
+	p.inv[10] = {"id": 0, "n": 0}
 	Debug.inv_click(44, 0)
 	Debug.inv_click(10, 0)
 	r["armor_head"] = int(p.armor[0])
 	r["points_head"] = p.armor_points()
 	ok = ok and r["armor_head"] == 127 and r["points_head"] == 1
 	Debug.give_item(131, 1)
+	p.inv[3] = p.inv[10]
+	p.inv[10] = {"id": 0, "n": 0}
 	Debug.inv_click(44, 0)
 	Debug.inv_click(10, 0)
 	r["armor_swap"] = [int(p.armor[0]), int(p.held.get("id", 0)) if p.held != {} else 0, p.armor_points()]
@@ -1134,6 +1146,75 @@ func _craft_test() -> void:
 	p.close_inventory()
 	r["held_return"] = [int(p.held.get("id", 0)) if p.held != {} else 0, _count_item(p, 8)]
 	ok = ok and p.held == {} and _count_item(p, 8) == 3
+	for i in 36:
+		p.inv[i] = {"id": 0, "n": 0}
+	p.held = {}
+	p.open_inventory("inv")
+	p.inv[0] = {"id": 6, "n": 5}
+	for i in range(1, 9):
+		p.inv[i] = {"id": 150 + i, "n": 3}
+	Debug.inv_click(41, 2)
+	Debug.inv_click(0, 0)
+	Debug.craft()
+	r["A_inv9"] = [int(p._inv_get(9)["id"]), int(p._inv_get(9)["n"])]
+	var a_hot_planks := 0
+	for i in 9:
+		if int(p._inv_get(i)["id"]) == 8:
+			a_hot_planks += int(p._inv_get(i)["n"])
+	var a_vis_planks := 0
+	for i in range(9, 36):
+		if int(p._inv_get(i)["id"]) == 8:
+			a_vis_planks += int(p._inv_get(i)["n"])
+	r["A_hot_planks"] = a_hot_planks
+	r["A_vis_planks"] = a_vis_planks
+	ok = ok and r["A_inv9"] == [8, 4] and a_hot_planks == 0 and a_vis_planks == 4
+	for i in 36:
+		p.inv[i] = {"id": 2, "n": 1}
+	p.inv[0] = {"id": 6, "n": 6}
+	p.held = {}
+	Debug.inv_click(41, 2)
+	Debug.inv_click(0, 0)
+	r["B_out_pre"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	Debug.craft()
+	r["B_out"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	r["B_logs"] = _count_item(p, 6)
+	r["B_grid0"] = [int(p.craft_grid[0]["id"]), int(p.craft_grid[0]["n"])]
+	ok = ok and r["B_out_pre"] == [8, 4] and r["B_out"] == [8, 4] and r["B_logs"] == 5 and r["B_grid0"] == [6, 1]
+	for i in 36:
+		p.inv[i] = {"id": 0, "n": 0}
+	p.held = {}
+	for i in 8:
+		p.inv[i] = {"id": 150 + i, "n": 2}
+	p.inv[9] = {"id": 12, "n": 3}
+	p.inv_slot_click(0, "storage", 0, true, false)
+	r["C1_inv8"] = [int(p._inv_get(8)["id"]), int(p._inv_get(8)["n"])]
+	r["C1_inv9"] = [int(p._inv_get(9)["id"]), int(p._inv_get(9)["n"])]
+	ok = ok and r["C1_inv8"] == [12, 3] and r["C1_inv9"] == [0, 0]
+	for i in 36:
+		p.inv[i] = {"id": 0, "n": 0}
+	p.held = {}
+	p.inv[0] = {"id": 5, "n": 7}
+	p.inv_slot_click(0, "hotbar", 0, true, false)
+	r["C2_inv9"] = [int(p._inv_get(9)["id"]), int(p._inv_get(9)["n"])]
+	r["C2_inv0"] = [int(p._inv_get(0)["id"]), int(p._inv_get(0)["n"])]
+	ok = ok and r["C2_inv9"] == [5, 7] and r["C2_inv0"] == [0, 0]
+	for i in 36:
+		p.inv[i] = {"id": 0, "n": 0}
+	p.held = {}
+	p.inv[35] = {"id": 2, "n": 5}
+	p.inv_slot_click(26, "storage", 0, false, false)
+	r["D0_held"] = _heldpair(p)
+	r["D0_inv35"] = [int(p._inv_get(35)["id"]), int(p._inv_get(35)["n"])]
+	p.inv_slot_click(4, "hotbar", 0, false, true)
+	r["D1_hot4"] = [int(p._inv_get(4)["id"]), int(p._inv_get(4)["n"])]
+	p.inv_slot_click(4, "hotbar", 0, false, false)
+	p.inv_slot_click(26, "storage", 0, false, true)
+	r["D2_inv35"] = [int(p._inv_get(35)["id"]), int(p._inv_get(35)["n"])]
+	r["D2_hot4"] = [int(p._inv_get(4)["id"]), int(p._inv_get(4)["n"])]
+	r["D2_held"] = _heldpair(p)
+	r["D_dirt"] = _count_item(p, 2)
+	ok = ok and r["D0_held"] == [2, 5] and r["D0_inv35"] == [0, 0] and r["D1_hot4"] == [2, 5] and r["D2_inv35"] == [2, 5] and r["D2_hot4"] == [0, 0] and r["D2_held"] == [0, 0] and r["D_dirt"] == 5
+	p.close_inventory()
 	Debug.result({
 		"ok": ok,
 		"data": r,
@@ -2054,7 +2135,7 @@ func _combat_test(spawn: Vector3) -> void:
 	var double_ok: bool = absf(double_hp - 2.0) < 0.001 and absf(p.hunger - (h0 - 1.0)) < 0.001
 	var drops_before: int = Game.drops.get_child_count()
 	Debug.give_item(109, 1)
-	p.sel = 0
+	p.sel = _slot_of(p, 109)
 	for i in 2:
 		await get_tree().physics_frame
 	p.start_mine()
@@ -2126,7 +2207,7 @@ func _fpv_test() -> void:
 	for i in 10:
 		await get_tree().physics_frame
 	Debug.give_item(3, 5)
-	p.sel = 0
+	p.sel = _slot_of(p, 3)
 	for i in 6:
 		await get_tree().physics_frame
 	var block_visible := false

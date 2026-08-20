@@ -1,0 +1,46 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0050 - craft overflow into inventory</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:940px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}</style></head><body>
+<h1>AC-0050 - user bug: crafted items must land in the VISIBLE inventory when hotbar is full (never vanish)</h1>
+<h2>Report (user 2026-08-20)</h2>
+<p>"when all quick use slots are full, items from crafting should go into your inventory, but they do not show in your inventory"</p>
+<h2>Root cause (AC-0049 research G1 - tasks/AC-0049/AC-0049-research.html - READ IT FIRST)</h2>
+<ul>
+<li>UI draws hotbar <code>inv[0..8]</code> + 27 storage slots mapped to <code>inv[27+idx] = inv[27..53]</code> (godot/ui/inventory.gd:272-273, 748-750), but <code>inv</code> is only 36 long (godot/player/player.gd:16) - storage rows 2-3 back never-initialized indices that grow on click via <code>_inv_set</code> (player.gd:912-915).</li>
+<li><code>inv_add</code> (player.gd:797-817) caps at 36 and scans from index 0: full hotbar + partial storage &gt;27... crafted output silently lands in <b>hidden inv[9..26]</b>, which the UI never draws. That is the "item vanishes" bug.</li>
+<li>MC-exact target: the 36 inventory = 9 hotbar + 27 storage, ALL VISIBLE. One backing, no hidden reserve, no &gt;36.</li>
+</ul>
+<h2>Required changes (Godot only, web/ untouched)</h2>
+<ol>
+<li><b>Storage slot mapping (godot/ui/inventory.gd)</b>: storage grid slot i (0..26) must back <code>inv[9+i]</code> (rows fill left-to-right, top-to-bottom: storage idx 0..26 = inv[9..35]). Fix the slot creation (272-273) AND the refresh/draw (741-774, 748-750) AND every click/drag/shift path that converts storage-idx &lt;-&gt; inv-idx (search for <code>27 +</code> / <code>- 27</code> / storage index math; drag-drop in inventory.gd + move/shift in player.gd:966-987).</li>
+<li><b>inv_add (godot/player/player.gd:797-817)</b>: scan the 36 slots in MC order (storage 9..35 first, then hotbar 0..8 - matches MC filling the main inventory before the hotbar; if simpler/consistent order is needed, document it, but the bug = output must ALWAYS end up in a visible slot). Cap stays 64 per stack, 36 slots total.</li>
+<li><b>Shift-click (player.gd:966-987)</b>: span all 36 per MC (hotbar item -&gt; storage, storage item -&gt; hotbar, whichever has room).</li>
+<li>Full-inventory case (MC parity, already correct): output stays in the output slot, materials are NOT consumed - keep this (craft_output_click player.gd:1047-1060).</li>
+<li><b>No other UI surface may draw hidden slots</b>: hotbar HUD (player.gd or ui/) draws only inv[0..8]; E-inventory draws 9 storage rows x 3 = 27 + hotbar row = 36 total visible. Anything drawing inv[27..53] today is the bug.</li>
+</ol>
+<h2>Verify gates (ALL must pass, zero script errors)</h2>
+<ol>
+<li><code>~/tools/godot/godot --headless --path godot --quit</code> - zero script errors.</li>
+<li><b>Extend AWECRAFT_LOGIC=craft harness (godot/scenes/main.gd craft test)</b> with exact cases, printed in RESULT:
+  <ul>
+  <li>Fill hotbar 0..8 full (distinct stacks), leave storage empty -&gt; craft a 1-item recipe (e.g. planks: log x4 -&gt; planks x4, or stick x2) -&gt; output click -&gt; assert planks landed in <code>inv[9]</code> (first visible storage slot), assert NOT in inv[0..8], visible count of planks across inv[9..35] == crafted amount.</li>
+  <li>Fill ALL 36 slots -&gt; craft -&gt; output-click -&gt; assert output REMAINS in the output slot AND recipes' inputs were NOT consumed (materials intact in storage).</li>
+  <li>Shift-click a storage slot (e.g. inv[9] item) -&gt; item moves to first free hotbar slot (inv[8] after filling others); inverse shift from hotbar fills storage.</li>
+  <li>Drag a stack from storage row 3 (inv[35]) to hotbar and back -&gt; counts preserved.</li>
+  <li>Existing craft assertions must still pass unchanged.</li>
+  </ul></li>
+<li><code>AWECRAFT_LOGIC=guiclick</code> unchanged-green (drag/drop harness) - storage indices changed, so re-verify; adjust its expected VALUES only if it encoded the old 27+ mapping (note any change in report).</li>
+<li>Full battery: player, interact, light, fluids, buckets, combat, swing, settings - all green, zero script errors.</li>
+<li>Render proof: xvfb gl_compatibility, AWECRAFT_SNAPSHOT absolute path, open inventory with partially-filled storage (AWECRAFT hooks or a small env) - show storage row 2/3 populated visually is NOT required if an env hook doesn't exist (the headless craft harness is the authoritative proof) - but DO capture the E-inventory with storage rows 1-3 filled if a hook exists. Save screenshots into tasks/AC-0050/.</li>
+<li>Web rebuild: <code>./build_web.sh</code> (godot/web/ untouched). Confirm served index.js bytes changed.</li>
+</ol>
+<h2>Deliverables</h2>
+<ul>
+<li>tasks/AC-0050/AC-0050-results.html - self-contained: root cause, changes (file:line), RESULT JSON values, screenshot(s).</li>
+<li>Report to coordinator: MAX 20 lines - files changed, key RESULT values, any guiclick expectation changes, deviations.</li>
+</ul>
+<h2>Rules</h2>
+<ul>
+<li>Godot one at a time; headless first; zero script errors is a hard gate; scratch to .scratch/; no git; never kill the python servers; small honest partial &gt; empty.</li>
+<li>web/index.html (r12) is the FROZEN spec - it has its own inventory mapping; do NOT touch web/ at all.</li>
+</ul>
+</body></html>

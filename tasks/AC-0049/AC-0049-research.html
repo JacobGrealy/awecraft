@@ -1,0 +1,151 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AC-0049 — MC tool research + AweCraft gap analysis</title>
+<style>
+body{font-family:system-ui,'Segoe UI',sans-serif;margin:24px 40px;max-width:1100px;line-height:1.45;color:#1b232f}
+h1{font-size:20px}
+h2{font-size:15px;margin-top:22px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}
+h3{font-size:13px;margin-top:14px}
+table{border-collapse:collapse;font-size:12.5px;margin:8px 0}
+th,td{border:1px solid #cdd6e3;padding:3px 8px;text-align:left}
+th{background:#eef1f6}
+code{background:#eef1f6;border-radius:3px;font-size:12px;padding:0 3px}
+.gap{background:#fff8f0;border-left:3px solid #e08b2d;padding:6px 10px;margin:8px 0;font-size:13px}
+.ok{color:#1a7a2e}.bad{color:#b3261e}
+.note{font-size:12px;color:#556}
+</style>
+</head>
+<body>
+<h1>AC-0049 — Minecraft tool semantics (condensed) + AweCraft gap analysis</h1>
+<p class="note">Research only. Sources: minecraft.wiki/w/Tool, /Durability, /Crafting_table (fetched 2026-08-20), /Mining, /Item_repair (scope check), plus read-only greps of <code>godot/</code>. Frozen web spec <code>index.html</code> NOT modified; note AweCraft must match <b>MC</b> per user directive 2026-08-20 even where it diverges from the web (web has the same 3×3-anywhere / hidden-slot quirks).</p>
+
+<h2>1. Tool tiers &amp; per-tool stats (Java Edition, current wiki)</h2>
+<p>Mining speed multiplier per tier (Tiers; confirmed against Crafting_Table breaking table: 3.75s / 1.9 / 0.95 / 0.65 / 0.5 / 0.35s ⇒ ÷2/4/6/8/(netherite 9)/12):</p>
+<table>
+<tr><th>Tier</th><th>Wood</th><th>Stone</th><th>Iron</th><th>Diamond</th><th>(Nether / Gold for ref)</th></tr>
+<tr><td>Mine speed ×</td><td>2</td><td>4</td><td>6</td><td>8</td><td>9 / 12 (fastest, weakest)</td></tr>
+<tr><td>Max durability (uses)</td><td>59</td><td>131</td><td>250</td><td>1561</td><td>2031 / 32</td></tr>
+<tr><td>Sword durability</td><td>60</td><td>132</td><td>251</td><td>1562</td><td>(swords = tools + 1)</td></tr>
+</table>
+<p>Attack damage / attack speed (from Tool page item tooltips; attack speed = swings/s, cooldown = 1/speed):</p>
+<table>
+<tr><th>Tool</th><th>Wood</th><th>Stone</th><th>Iron</th><th>Diamond</th></tr>
+<tr><td>Pickaxe</td><td>2 / 1.2</td><td>3 / 1.2</td><td>4 / 1.2</td><td>5 / 1.2</td></tr>
+<tr><td>Axe</td><td>6 / 1.0</td><td>7 / 1.0</td><td>9 / 0.9*</td><td>9 / 1.0</td></tr>
+<tr><td>Shovel</td><td>2.5 / 1.0</td><td>3.5 / 1.0</td><td>4.5 / 1.0</td><td>5.5 / 1.0</td></tr>
+<tr><td>Sword</td><td>4 / 1.6</td><td>5 / 1.6</td><td>6 / 1.6</td><td>7 / 1.6</td></tr>
+<tr><td>Hoe</td><td>1 / 1</td><td>1 / 2</td><td>1 / 3</td><td>1 / 4</td></tr>
+</table>
+<p class="note">*Fetched Tool page shows iron axe 9/0.9, copper 9/0.8, gold 7/1.0 — current wiki values (classic JE was 6/7/8/9 @ 0.6); use the fetched values. Bows (AweCraft item 142, M10 pending): draw time 1.1s, damage 2.5 → 7+ full power. Shears: 238 dur. Flint&amp;steel: 64 dur (id 126 reserved for M11-replacement later).</p>
+
+<h2>2. Breaking rules (Mining / Breaking)</h2>
+<ul>
+<li>Time to break (s) = <code>1.5 × hardness / speed</code>, where speed = held tool's tier multiplier <b>if it's the correct tool type</b>, else 1 (bare-hand rate). Block with computed time &lt; 0.15 s breaks <b>instantly</b> (no progress bar).</li>
+<li><b>Wrong-tool penalty:</b> if the block requires a specific tool (stone family, ores) and you don't have the right type, it still breaks but at <b>5× bare-hand time</b> (speed treated as 1).</li>
+<li><b>Drop gating:</b> without the required tool, the block breaks but drops <b>nothing</b>. Obsidian adds a <b>tier gate</b>: iron pick (tier ≥ 3) or better required, else no drop.</li>
+<li>Stone (3) drops <b>cobblestone</b> (9) only with a pick. Ores drop with any pick. Wood/soil blocks drop with anything (only speed differs).</li>
+</ul>
+
+<h3>AweCraft block set: correct tool + drops (restricted to what <code>Data.blocks</code> actually has)</h3>
+<table>
+<tr><th>Block (id)</th><th>Hard AweCraft / MC</th><th>Best tool</th><th>Drop requirement (MC)</th><th>AweCraft today</th></tr>
+<tr><td>Grass (1)</td><td>0.6 / 0.6</td><td>shovel</td><td>any → dirt</td><td>✓ (dirt + 35% seeds, <code>data.gd:259</code>)</td></tr>
+<tr><td>Dirt (2), Sand (4), Snowy Grass (12)</td><td>0.6 / 0.5</td><td>shovel</td><td>any → self (grass→dirt)</td><td>✓ (hardness 0.6 vs MC 0.5 — 20% slow)</td></tr>
+<tr><td>Stone (3)</td><td>1.5 / 1.5</td><td>pick</td><td><b>pick required</b> → cobble (9)</td><td>✓ gated (<code>data.gd:263-264</code>); ✗ no 5× wrong-tool penalty</td></tr>
+<tr><td>Cobblestone (9)</td><td>2.0 / 2.0</td><td>pick</td><td>any → self</td><td>✓</td></tr>
+<tr><td>Coal Ore (14)</td><td>2.0 / 3.0</td><td>pick</td><td><b>pick required</b> → coal (106)</td><td>✓ gated; hardness 2.0 vs 3.0</td></tr>
+<tr><td>Iron Ore (15)</td><td>2.5 / 3.0</td><td>pick</td><td><b>pick required</b> → raw iron (110)</td><td>✓ gated; hardness off</td></tr>
+<tr><td>Diamond Ore (16)</td><td>3.0 / 3.0</td><td>pick</td><td><b>pick required</b> → diamond (107)</td><td>✓ gated</td></tr>
+<tr><td>Obsidian (25)</td><td>50 / 50</td><td>pick ≥ iron</td><td><b>iron pick or better</b> (tier ≥ 3), else nothing</td><td class="bad">✗ any pick works (<code>data.gd:280-282</code> fallback, no tier check)</td></tr>
+<tr><td>Oak Log (6)</td><td>1.0 / <b>2.0</b></td><td>axe</td><td>any → self</td><td>✓ drop; ✗ breaks 2× too fast</td></tr>
+<tr><td>Planks (8), Leaves (7)</td><td>1.0 / 2.0 · 0.2 / 0.2</td><td>axe · any</td><td>any (leaves: 15% seeds)</td><td>✓ leaves; ✗ planks 2× too fast</td></tr>
+<tr><td>Bricks (17), Furnace (21)</td><td>2.0/1.5 · 2.0/<b>3.5</b></td><td>pick · pick</td><td>any → self (furnace keeps no state — fine)</td><td>✓; hardness off</td></tr>
+<tr><td>Crafting Table (20)</td><td>1.0 / <b>2.5</b></td><td>axe (fastest; any tool/hand works)</td><td>any → self</td><td>✓ drop; ✗ 2.5× too fast; ✗ not usable (see AC-0052)</td></tr>
+<tr><td>Torch (22), Glowstone (23)</td><td>0.1/0.15 · 0.3/0.3</td><td>any (instant-ish)</td><td>any → self</td><td>✓</td></tr>
+<tr><td>Flowers (18,19)</td><td>0.1 / 0.0</td><td>any (instant)</td><td>self + 50% seeds</td><td>✓</td></tr>
+<tr><td>Water (5), Lava (24), Bedrock (11)</td><td>1e9</td><td>—</td><td>unbreakable</td><td>✓</td></tr>
+</table>
+
+<h2>3. Crafting: 2×2 (inventory) vs 3×3 (crafting table)</h2>
+<ul>
+<li>Inventory (E) = <b>2×2</b> grid only. Using the crafting table block opens a <b>3×3</b> grid ("gives access to many recipes not available from the inventory's 2×2"). Shape matching is by bounding box (recipes can sit in any corner); shapeless anywhere.</li>
+<li>Repair via grid: two items of the <b>same material/type</b> side-by-side → 1 item with <b>sum of durabilities + 5%</b> of max (capped at max); no XP; works in 2×2 and 3×3 alike (anvil = +12%, keeps enchantments — out of scope, AweCraft has no enchantments).</li>
+<li>Shift-click output = max craft (beta 1.6 re-added); closing the table returns grid items to inventory "if space allows".</li>
+</ul>
+<h3>AweCraft's 36 recipes classified MC-exact</h3>
+<table>
+<tr><th>Where it must craft (MC)</th><th>AweCraft recipes</th></tr>
+<tr><td><b>Inventory 2×2 OK</b> (6)</td><td>planks (6→8×4), crafting table (8×4→20), sticks (8×2→100×4), bricks (9×4→17×4), bucket (105×3→139; MC shape is a 2×2 V), arrows (9+100→143×4)</td></tr>
+<tr><td><b>Table-only</b> — all 14 shaped (each is a 3-tall or 3×3 shape)</td><td>furnace (3×3 cobble ring), pickaxes 111–114, axes 115–118, shovels 119–122 (2-w×3-tall), bow (142, 3×3)</td></tr>
+<tr><td><b>Table-only</b> — shapeless today but 3-tall shapes in MC (16 of the 22)</td><td>swords: iron 109, wooden 123, stone 124, diamond 125 (2 material + 1 stick vertical); armor 127–138 (all three sets; helmet 2×3, chestplate 3×3, leggings/boots ≤3-tall ring shapes)</td></tr>
+</table>
+<p class="note">Note: iron sword id 109 has the odd "dmg 4, tier 3, speed 1.5" outside the 111–125 block — consolidate when reworking tools.</p>
+
+<h2>4. Durability / repair (scope for AweCraft)</h2>
+<ul>
+<li>Use cost: axe/pick/shovel — break a non-instant block = 1, hit mob = <b>2</b>; sword — hit mob = 1, break other block = 2; hoe — till soil = 1, mob hit = 1 (JE). Instant-break blocks cost 0. Item breaks at 0 (last block still breaks).</li>
+<li>Durability bar renders under the icon (green→red, hidden when full). Repair = 2-of-same-in-grid combine (+5%, cap at max) — that's the <b>entire</b> repair surface AweCraft needs (no grindstone/anvil/elytra).</li>
+</ul>
+
+<h2>5. GAP LIST (AweCraft today → MC-exact target; code locations)</h2>
+
+<div class="gap"><b>G1 · AC-0050 known bug — craft overflow / invisible slots. CONFIRMED, refined.</b><br>
+<b>Current:</b> UI shows hotbar <code>inv[0..8]</code> + 27 storage slots mapped to <code>inv[27+idx]</code> = <code>inv[27..53]</code> (<code>ui/inventory.gd:272-273, 748-750</code>). <code>inv</code> is only 36 long (<code>player.gd:16, 293-302</code>) so visible storage rows 1–2 map to never-backed indices (created on click via <code>_inv_set</code> grow, <code>player.gd:912-915</code>), while <code>inv_add</code> (<code>player.gd:797-817</code>) is capped at <code>mini(INV_SIZE,size)=36</code> and scans from index 0 — so when the hotbar is full, crafted output silently lands in <b>hidden</b> <code>inv[9..26]</code> (never drawn by <code>inventory.gd:741-774</code>). That is the "item vanishes; not in storage grid". When all 36 are genuinely full, <code>craft_output_click</code> (<code>player.gd:1047-1060</code>) correctly does nothing (materials kept).<br>
+<b>MC target:</b> exactly 27 visible storage + 9 visible hotbar = the 36 slots; no hidden reserve; auto-fill order storage-then-hotbar; output stays in slot when full (already true). Also fix shift-click targets (<code>player.gd:966-987</code>) which only span 9 storage slots.</div>
+
+<div class="gap"><b>G2 · AC-0052 known bug — no 2×2/3×3 gate, table unusable. CONFIRMED.</b><br>
+<b>Current:</b> one 3×3 <code>craft_grid</code> always (<code>player.gd:19, 300-302</code>); <code>recompute_craft</code> (<code>player.gd:939-943</code>) matches all 14 shaped + 22 shapeless regardless of context; the inventory panel always draws 9 craft slots (<code>ui/inventory.gd:267-268</code>). The crafting table block (20) has <b>no GUI</b>: RMB → <code>use_selected</code> → <code>place_item</code> (<code>player.gd:570-584</code>) — it can only be placed/broken. So: everything craftable with no table, and the table itself does nothing.<br>
+<b>MC target:</b> E-inventory = 2×2 grid (4 cells); use-on-table = dedicated 3×3 GUI with per-table grid state (items return on close, per wiki). <code>match_shaped</code> already tolerates short grids (<code>data.gd:310-326</code>, <code>i &lt; grid.size()</code> guard) so a 4-cell grid works unchanged. All 14 shaped + swords + armor become table-only (section 3); 6 shapeless stay inventory-available.</div>
+
+<div class="gap"><b>G3 · AC-0051 known bug — no tool held model, no pixel icons. CONFIRMED.</b><br>
+<b>Current:</b> held items (non-blocks) render as a <b>flat solid-color billboard</b>: <code>_update_held</code> (<code>player.gd:357-377</code>) → <code>held_sprite</code> with <code>_tint_tex(item["icon"])</code>; <code>held_box</code> is only used for blocks (<code>player.gd:365-370</code>). UI icons: <code>_setup_icon</code> (<code>ui/inventory.gd:447-465</code>) fills with the item's flat color; <code>Data.tiles</code> is empty (<code>data.gd:143</code>) and <code>blocks_atlas.{png,json}</code> contains <b>block</b> tiles only. The mcpack has all needed item art: <code>assets/minecraft/textures/item/{wooden,stone,iron,diamond}_{pickaxe,axe,shovel,sword}.png</code> (806 item textures total, verified in <code>Faithful-32x-1.21.11.mcpack</code>).<br>
+<b>MC target:</b> per-tool pixel icons imported from pack <code>item/</code> textures into an item tile atlas (also covers 100–108, 110, 142–147); held tool = voxel-built 3D model per tool type (pick/axe/shovel/sword) attached to <code>hand_root</code>, animated by the existing swing system (<code>SWING_DURATION 0.1</code>, <code>player.gd:59</code>, <code>_update_swing</code> 455-485).</div>
+
+<div class="gap"><b>G4 · Mining speed multipliers + time formula.</b><br>
+<b>Current:</b> <code>_update_interaction</code> (<code>player.gd:687-691</code>): <code>mult</code> = item <code>speed</code> only if tool type == <code>block_tool(id)</code>; progress = <code>dt*mult/max(0.15,hard)</code> — i.e. time = <code>hard/mult</code> (missing MC's 1.5× factor), <b>no 5× wrong-tool penalty</b>, and instant-break uses a 0.15 floor instead of the &lt;0.15s rule. Tier speeds in data: wood 2 / stone 4 / iron 6 / <b>diamond 7</b> (<code>data.gd:56-70</code>).<br>
+<b>Target:</b> speeds 2/4/6/<b>8</b>; time = <code>1.5×hard/speed</code>; wrong-tool-type on stone/ores/obsidian → 5× bare-hand; &lt;0.15s ⇒ instant. Fix hardness values flagged in §2 (log/planks/table/furnace/bricks/ores/dirt-sand).</div>
+
+<div class="gap"><b>G5 · Obsidian tier gate (and general tier-aware gating).</b><br>
+<b>Current:</b> <code>block_drops(id, is_pick)</code> (<code>data.gd:256-282</code>) takes only a bool; obsidian (25) drops cobble… drops it for <b>any</b> pick via the <code>b["drop"]</code> fallback. <code>is_pick</code> computed in <code>player.gd:695</code> ignores tier.<br>
+<b>Target:</b> <code>block_drops(id, tool_type, tier)</code>; obsidian requires tier ≥ 3 (else no drop, and 5× time per G4).</div>
+
+<div class="gap"><b>G6 · Per-tool attack damage.</b><br>
+<b>Current:</b> <code>attack_mob</code> (<code>player.gd:552-561</code>) uses <code>item["dmg"]</code>: pick 1–3, axe 3–6, shovel 2–3, swords 3/4/6, iron sword (109) 4, bare hand 1 (<code>data.gd:54-70</code>).<br>
+<b>Target (MC):</b> pick 2/3/4/5 · axe 6/7/9/9 · shovel 2.5/3.5/4.5/5.5 · swords 4/5/6/7 · hand stays 1. Consolidate 109 into the 111–125 scheme.</div>
+
+<div class="gap"><b>G7 · No attack cooldown / speed.</b><br>
+<b>Current:</b> every LMB press = one full-damage hit (<code>player.gd:120-123 → 518-524</code>); hold loop re-animates the arm only (<code>player.gd:455-466</code>) so rapid clicking = uncapped full-dmg DPS. The <code>speed</code> field (1.5 for swords) is never used for anything (no block has tool "sword", <code>data.gd:39-43</code>).<br>
+<b>Target:</b> per-item attack speed (sword 1.6, pick 1.2, axe 0.9–1.0, shovel 1.0 → rename/repurpose <code>speed</code>; keep mining speed separate per G4); damage scales 50%→100% with cooldown progress (full dmg needs ≥75% of the 1/speed cooldown); hits during cooldown still deal ≥50% (standard MC ramp).</div>
+
+<div class="gap"><b>G8 · Durability + repair (absent entirely).</b><br>
+<b>Current:</b> no durability field anywhere (<code>data.gd:44-92</code>), no consumption in mine/attack paths, no bar in <code>_setup_icon</code>/<code>_held</code>.<br>
+<b>Target:</b> <code>dur</code> per tier (59/131/250/1561; swords +1); consume on use (G4/G7 events: block=1, mob hit=2 for pick/axe/shovel, sword block=2/hit=1); break at 0; durability bar under icon in UI + hotbar; repair = 2-of-same in either craft grid → sum + 5% of max capped (works in 2×2 too, per wiki). Armor durability (armor items 127–138 have no <code>dur</code> today; MC: leather 55/80/75/65 … iron 165/240/225/195, diamond 363/528/495/429, losing 1 per 4HP absorbed) is a second-stage scope — AweCraft's armor is currently static-DR only (<code>player.gd:852-859, 862-868</code>).</div>
+
+<div class="gap"><b>G9 · Hoes / farmland (optional).</b><br>
+AweCraft has <b>no hoes and no farmland/crops</b> (blocks, items) — so hoe→farmland isn't a defect, it's a missing feature pair. Include only if farming is wanted: new hoe items (watch: id 126 is reserved for flint&amp;steel), farmland block (till dirt/grass with RMB = 1 dur, MC hardness 0.65), seeds (108 exists!) plant on farmland. Low priority, needs its own spec.</div>
+
+<h2>6. PROPOSED NEW TASKS (IDs continue after AC-0052; known bugs keep their IDs)</h2>
+<table>
+<tr><th>ID</th><th>Priority</th><th>Task</th><th>Headless verify idea</th></tr>
+<tr><td>AC-0050 (existing)</td><td>1 (user bug)</td><td>Inventory model: 27 visible storage + 9 hotbar covering all 36 slots, no hidden reserve; <code>inv_add</code> order storage→hotbar; fix shift-click spans; output stays when full</td><td><code>AWECRAFT_LOGIC=craft</code> ext: fill all 36, craft → output persists, grid not consumed; partial-fill → lands in row 1 of visible storage</td></tr>
+<tr><td>AC-0052 (existing)</td><td>1 (user bug)</td><td>2×2 inventory grid + real 3×3 crafting-table GUI (use-on-block opens per-table grid state, items return on close); classify 14 shaped + 16 shapeless as table-only</td><td><code>AWECRAFT_LOGIC=craft</code> ext: pickaxe pattern in 2×2 → null; same pattern in table grid → 111; table closes → grid items back in inv</td></tr>
+<tr><td>AC-0051a (new, from AC-0051)</td><td>1 (user bug)</td><td>Import pack <code>textures/item/*.png</code> for 100–125 (+142–147) into an item tile atlas; <code>_setup_icon</code>/hotbar/recipe-list use pixel icons; durability bar later</td><td>headless: importer script runs, <code>Data.item_rect(111) != (-1,-1)</code>, zero script errors; visual check via inventory snapshot</td></tr>
+<tr><td>AC-0051b (new, from AC-0051)</td><td>1 (user bug)</td><td>Voxel 3D models per tool type (pickaxe/axe/shovel/sword) held in <code>hand_root</code>, swinging with existing 0.1s swing anim; replace flat tint sprite for tools</td><td>headless: tool selected → <code>held_box</code>-style node visible (probe), zero errors; iso snapshot with pick held for visual</td></tr>
+<tr><td>AC-0053 (new)</td><td>1 (core M8)</td><td>Tool mechanics: speeds 2/4/6/8; time = 1.5×hard/speed + 5× wrong-tool penalty + instant &lt;0.15s; MC damage table; attack cooldown w/ 50–100% damage ramp; MC hardness values; obsidian pick≥iron gate (G4–G7)</td><td><code>AWECRAFT_LOGIC=mining</code> (new harness): break-time A/B per tool (1.5×/speed), wrong-tool 5×, obsidian w/ wood-pick → 0 drops, i-pick → drop; <code>combat</code> harness: dmg values + spam-click total ≤ cooldown-capped</td></tr>
+<tr><td>AC-0054 (new)</td><td>2 (M8)</td><td>Durability + repair: <code>dur</code> field, consumption rules, break-at-0, icon bar, 2-of-same grid combine (+5%, cap) in both grids (G8 first stage)</td><td><code>AWECRAFT_LOGIC=durability</code> (new): break 59+ blocks with wood-pick → broken exactly at 0; combine two half-dur swords → max−? (sum+5% capped); battery green</td></tr>
+<tr><td>AC-0055 (new, optional)</td><td>3</td><td>Hoes + farmland (till with hoe = 1 dur, seeds 108 plant, crops block) — only if user wants farming; needs farmland block id + new item ids (126 is reserved)</td><td><code>AWECRAFT_LOGIC=farm</code>: RMB hoe on grass/dirt → farmland, dur −1, seed plants, grows on ticks</td></tr>
+<tr><td>(fold into AC-0054, optional stage 2)</td><td>3</td><td>Armor durability (per-piece MC values, −1 per 4 HP absorbed, bar on equipped armor)</td><td><code>combat</code> ext: damage_player with full armor → per-piece dur decrements, break at 0</td></tr>
+</table>
+
+<h2>7. Sources</h2>
+<ul class="note">
+<li>https://minecraft.wiki/w/Tool (recipes w/ damage &amp; attack-speed tooltips; best-tools; durability pointer)</li>
+<li>https://minecraft.wiki/w/Durability (material use counts; per-tool-use costs; combining +5%)</li>
+<li>https://minecraft.wiki/w/Crafting_table (2×2 vs 3×3; table hardness 2.5 + per-axe breaking times; repair; closing returns grid items)</li>
+<li>https://minecraft.wiki/w/Mining + Breaking (time formula 1.5×hard/speed, 5× wrong-tool, instant-break &lt;0.15s, drop requirements)</li>
+<li>Local: <code>godot/autoload/data.gd</code> (items 100–147, blocks, TOOL_BLOCKS, block_drops, 22+14 recipes), <code>godot/player/player.gd</code> (mine 665-702, attack 552-561, held 325-377, inv 790-849, craft 922-1060), <code>godot/ui/inventory.gd</code> (layout 265-275, icons 437-465, refresh 741-774), <code>Faithful-32x-1.21.11.mcpack</code> (item textures verified present)</li>
+</ul>
+</body>
+</html>

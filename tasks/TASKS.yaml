@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-20T10:04
+  updated_at: 2026-08-20T11:43
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -8,6 +8,9 @@ queue:
 - AC-0050
 - AC-0052
 - AC-0051
+- AC-0053
+- AC-0054
+- AC-0055
 - AC-0047
 - AC-0030
 - AC-0044
@@ -1182,16 +1185,22 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-20T09:07
-  updated_at: 2026-08-20T09:07
-  completed_at: null
+  updated_at: 2026-08-20T10:44
+  completed_at: 2026-08-20T10:44
   waiting_on: null
   parent_id: null
   notes: 'Summarize minecraft.wiki Tool semantics + gap analysis vs AweCraft (user: make everything function exactly like
     MC unless specified otherwise; user 2026-08-20: ''feel free to make new todo tasks based on gaps'')'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-20T10:44
+    updated_at: null
+    text: 'Research done 2026-08-20: tasks/AC-0049/AC-0049-research.html (5 tables + gap list + 7 proposed tasks). Key: drop
+      gating partially exists; inventory craft model 36-visible fix; table GUI missing; pack item textures (806) ready for
+      icons.'
 - id: AC-0050
   title: craft-overflow-inventory
   source: user
@@ -1199,15 +1208,22 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-20T09:07
-  updated_at: 2026-08-20T09:07
-  completed_at: null
+  updated_at: 2026-08-20T11:43
+  completed_at: 2026-08-20T11:43
   waiting_on: null
   parent_id: null
   notes: 'BUG user 2026-08-20: when all quick-use (hotbar) slots are full, crafted items do not show in the inventory grid'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-20T11:43
+    updated_at: null
+    text: 'Done 2026-08-20 (subagent + coordinator verify): STORAGE_OFF 27->9 (inventory remap); inv_add scans storage 9..35
+      then hotbar 0..8 (_inv_order); shift-click spans full opposite region; craft harness A/B/C/D cases green (A_inv9=[8,4]
+      hotbar-full overflow to visible storage; B full-36 output stays + inputs unconsumed); guiclick RESULT byte-identical;
+      battery 0 script errors; web rebuilt (pck A/B-proven fresh). tasks/AC-0050/AC-0050-results.html + 2 screenshots.'
 - id: AC-0051
   title: tool-models-icons
   source: user
@@ -1218,13 +1234,19 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-20T09:07
-  updated_at: 2026-08-20T09:07
+  updated_at: 2026-08-20T10:45
   completed_at: null
   waiting_on: null
   parent_id: null
   notes: 'BUG user 2026-08-20: axe/pickaxe etc. have no held 3D model (should look like swinging the tool) and no icons; icons
     should be pixel-art representations of the 3D voxel models'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-20T10:45
+    updated_at: null
+    text: 'Scope expanded (AC-0049 research): BOTH (a) pixel-art icons for tools from the mcpack item textures (806 available)
+      AND (b) voxel 3D held models per tool type (pickaxe/shovel/axe/sword) reusing the existing swing anim. See tasks/AC-0049/AC-0049-research.html
+      gap AC-0051.'
 - id: AC-0052
   title: crafting-table-gate
   source: user
@@ -1241,4 +1263,53 @@ intake:
   parent_id: null
   notes: 'BUG user 2026-08-20: can craft everything without a crafting table, and cannot actually use the crafting table (2x2
     vs 3x3 gate)'
+  comments: []
+- id: AC-0053
+  title: tool-mechanics-mc-exact
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-20T10:44
+  updated_at: 2026-08-20T10:44
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'From AC-0049 research: mine-speed formula 1.5*hard/speed, speed tiers 2/4/6/8, 5x wrong-tool penalty, MC attack
+    damage + cooldown ramp, obsidian iron-pick gate, hardness fixes. Verify AWECRAFT_LOGIC=mining + combat'
+  comments: []
+- id: AC-0054
+  title: durability-repair
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-20T10:44
+  updated_at: 2026-08-20T10:44
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'From AC-0049 research: tool durability values + damage on use, 2-of-same grid repair (+5%). Verify AWECRAFT_LOGIC=durability'
+  comments: []
+- id: AC-0055
+  title: hoes-farmland
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-08-20T10:44
+  updated_at: 2026-08-20T10:44
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'From AC-0049 research (OPTIONAL, only if farming wanted): hoe tilling -> farmland. Verify AWECRAFT_LOGIC=farm'
   comments: []

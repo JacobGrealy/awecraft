@@ -17,7 +17,7 @@ const INV_SIZE := 36
 const STACK_MAX := 64
 const ARMOR_SIZE := 4
 const CRAFT_GRID_SIZE := 9
-const STORAGE_OFF := 27
+const STORAGE_OFF := 9
 const ARMOR_SLOTS := ["head", "chest", "legs", "boots"]
 
 @onready var camera: Camera3D = $Camera3D
@@ -794,10 +794,19 @@ func _stack_max(id: int) -> int:
 	return STACK_MAX
 
 
+func _inv_order() -> Array:
+	var order: Array = []
+	for i in range(STORAGE_OFF, mini(INV_SIZE, inv.size())):
+		order.append(i)
+	for i in range(0, mini(STORAGE_OFF, inv.size())):
+		order.append(i)
+	return order
+
+
 func inv_add(id: int, n: int) -> bool:
 	var max_n := _stack_max(id)
-	var lim := mini(INV_SIZE, inv.size())
-	for i in lim:
+	var order := _inv_order()
+	for i in order:
 		var it: Dictionary = inv[i]
 		if int(it["id"]) == id and int(it["n"]) < max_n:
 			var take := mini(n, max_n - int(it["n"]))
@@ -805,7 +814,7 @@ func inv_add(id: int, n: int) -> bool:
 			n -= take
 			if n <= 0:
 				return true
-	for i in lim:
+	for i in order:
 		var it: Dictionary = inv[i]
 		if int(it["id"]) == 0 and n > 0:
 			var take := mini(n, max_n)
@@ -965,9 +974,9 @@ func _slot_click(s: Dictionary, set_slot: Callable, area: String, button: int, s
 		return
 	if shift:
 		if has_s and (area == "storage" or area == "hotbar"):
-			var target: String = "hotbar" if area == "storage" else "storage"
-			var off := 0 if target == "hotbar" else STORAGE_OFF
-			for i in 9:
+			var off := 0 if area == "storage" else STORAGE_OFF
+			var cnt := 9 if area == "storage" else 27
+			for i in cnt:
 				var t: Dictionary = _inv_get(i + off)
 				if int(t["id"]) != 0 and int(t["id"]) == int(s["id"]) and int(t["n"]) < _stack_max(int(t["id"])):
 					var m := mini(int(s["n"]), _stack_max(int(t["id"])) - int(t["n"]))
@@ -975,7 +984,7 @@ func _slot_click(s: Dictionary, set_slot: Callable, area: String, button: int, s
 					s["n"] = int(s["n"]) - m
 					if int(s["n"]) <= 0:
 						break
-			for i in 9:
+			for i in cnt:
 				if int(s["n"]) <= 0:
 					break
 				if int(_inv_get(i + off)["id"]) == 0:

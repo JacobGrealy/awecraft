@@ -83,7 +83,7 @@ func seed_inv() -> void:
 	for i in p.armor.size():
 		p.armor[i] = 0
 	p.held = {}
-	p.inv[27] = {"id": 6, "n": 5}
+	p.inv[9] = {"id": 6, "n": 5}
 	p.recompute_craft()
 	Game.message("Seeded: 5 oak logs in storage[0]")
 
