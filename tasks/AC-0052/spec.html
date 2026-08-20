@@ -1,0 +1,66 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0052 - crafting table gate (2x2 vs 3x3)</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:940px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}</style></head><body>
+<h1>AC-0052 - user bug: crafting table does nothing, and everything crafts without one</h1>
+<h2>Report (user 2026-08-20)</h2>
+<p>"i can craft everything i want without the crafting table" + "i also cant actually use the crafting table"</p>
+<h2>Reference (MC-exact per AGENTS.md rule; wiki https://minecraft.wiki/w/Crafting_table)</h2>
+<ul>
+<li>E-inventory = 2x2 craft grid (4 cells) only.</li>
+<li>Right-clicking a placed crafting table block opens a 3x3 craft grid GUI (separate grid state; closing returns grid items to inventory "if space allows").</li>
+<li>Shape matching by bounding box (recipe can sit in any corner of the grid); shapeless anywhere in the grid.</li>
+</ul>
+<h2>Root cause (AC-0049 research G2 - tasks/AC-0049/AC-0049-research.html - READ IT FIRST)</h2>
+<ul>
+<li>One 3x3 <code>craft_grid</code> everywhere (godot/player/player.gd:19, ~300); <code>recompute_craft</code> (player.gd ~939-943) matches ALL recipes in every context.</li>
+<li>UI always draws 9 craft slots (godot/ui/inventory.gd ~267-268).</li>
+<li>Crafting table block (id 20) has NO GUI: RMB -&gt; use_selected -&gt; place_item (player.gd ~546-584) - it can only be placed/broken.</li>
+<li><code>Data.match_shaped</code> already tolerates short grids (i &lt; grid.size() guard, data.gd ~310-326) so a 4-cell grid works without matching changes.</li>
+</ul>
+<h2>Classification (MC-exact; from research section 3 - all 36 AweCraft recipes)</h2>
+<table>
+<tr><th>Allowed where</th><th>Recipes (AweCraft ids)</th></tr>
+<tr><td>Inventory 2x2 OK (6, all shapeless, fit 2x2)</td><td>planks (6 -&gt; 8x4), crafting table (8x4 -&gt; 20), sticks (8x2 -&gt; 100x4), bricks (9x4 -&gt; 17x4), bucket (105x3 -&gt; 139), arrows (9+100 -&gt; 143x4)</td></tr>
+<tr><td>Table-only, 14 shaped (3-tall or 3x3 shapes)</td><td>furnace (3x3 cobble ring), pickaxes 111-114, axes 115-118, shovels 119-122, bow 142</td></tr>
+<tr><td>Table-only, 16 shapeless-today (3-tall shapes in MC)</td><td>swords: iron 109, wooden 123, stone 124, diamond 125; armor 127-138 (helmet/chest/leggings/boots x leather/iron/diamond)</td></tr>
+</table>
+<p>Implementation: add a <code>grid: 2</code> / <code>grid: 3</code> field to every recipe in godot/autoload/data.gd; the craft matcher checks <code>recipe.grid &lt;= current_grid_size</code> BEFORE matching. Swords/armor stay shapeless but are grid:3 (shapeless-anywhere in a 3x3 is exactly MC behavior).</p>
+<h2>Required changes (godot/ only)</h2>
+<ol>
+<li><b>Recipe classification</b> (godot/autoload/data.gd): tag all 36 recipes per the table above; expose the grid requirement to the matcher. 6 = grid 2, 30 = grid 3.</li>
+<li><b>E-inventory 2x2</b>: the E-view craft grid becomes 4 slots (godot/ui/inventory.gd grid creation ~267-268 + every index math on it). Backing: player.craft_grid stays the same container but the UI only shows/uses 4 cells (or add a size-aware view; your choice - keep it simple and honest). Only grid-2 recipes produce output there.</li>
+<li><b>Crafting table GUI</b>: new ui_mode "table" (player.gd open_inventory/close_inventory already take a mode string).
+  <ul>
+  <li>RMB on a placed table block (id 20) via use_selected (player.gd ~546-560) - BEFORE the place-item path: open the 3x3 table GUI (mouse visible, input routed like the inventory).</li>
+  <li>Table state: a dedicated <code>table_grid: Array[9]</code> on the player (simplification vs MC's per-block state - note it); grid:3 recipes match against it; grid-2 also craftable there (MC allows 2x2 recipes in the table - they fit).</li>
+  <li>Close (Esc / re-open elsewhere / death / respawn): return all table_grid items to the inventory via <code>inv_add</code> (MC "if space allows"); anything that does NOT fit spawns as a normal item drop at the player position (Game.drops exists - reuse the drop path used by death drops).</li>
+  <li>UI view: 3x3 grid + output slot + 27 storage + 9 hotbar (reuse the inventory screen layout, just swap the grid size).</li>
+  </ul></li>
+<li><b>recompute_craft</b> must recompute against the CORRECT grid for the open mode (2x2 data when ui_mode "" or "inv"; 9-cell when "table"), and the output slot click must consume from the same grid.</li>
+<li>Holding a placeable item while RMB-ing the table still opens the table (MC priority: table use beats placement).</li>
+</ol>
+<h2>Verify gates (ALL, zero script errors)</h2>
+<ol>
+<li><code>~/tools/godot/godot --headless --path godot --quit</code> - zero script errors.</li>
+<li><b>Extend AWECRAFT_LOGIC=craft</b> (godot/scenes/main.gd) with exact printed assertions:
+  <ul>
+  <li>A: pickaxe-shaped pattern (3 logs row + 2 sticks row) in the 2x2 E-grid -&gt; NULL output (does not fit 2x2). Assert output null + inputs unmodified.</li>
+  <li>B: open table (ui_mode "table"), same pattern in table_grid -&gt; output = pickaxe id 111; output-click consumes the 5 inputs from table_grid.</li>
+  <li>C: planks (log -&gt; 4 planks) in E-grid 2x2 -&gt; output 8x4 (grid-2 recipe still works in inventory).</li>
+  <li>D: sword shapeless (e.g. iron x2 + stick) in E-grid -&gt; NULL (grid 3 recipe); same in table -&gt; sword 109.</li>
+  <li>E: close table with items left in table_grid -&gt; everything back in inv (counts preserved); if inv full -&gt; remainder spawns drops (assert drop count if easy, else assert inv counts only + note it).</li>
+  <li>F: table use priority - holding a placeable block, use_selected targeting a table block cell -&gt; opens table instead of placing (assert ui_mode == "table").</li>
+  </ul></li>
+<li>Full battery: player, interact, light, fluids, buckets, guiclick, combat, swing, settings - all green, zero script errors (guiclick encodes E-inventory interactions; if it encoded the old 9-slot grid, adjust its expectations and call it out).</li>
+<li>Render proof (xvfb gl_compatibility, AWECRAFT_SNAPSHOT absolute path, AWECRAFT_NO_FOG=1): E-inventory showing the 2x2 grid, and the table GUI showing the 3x3 grid - save both into tasks/AC-0052/. If no env hook can open the GUIs, add a TINY headless-render hook (env AWECRAFT_UI=inv|table that opens the respective ui_mode) rather than hand-screenshotting; keep it small and documented.</li>
+<li>Web rebuild <code>./build_web.sh</code>; confirm fresh export (pck hash or A/B export). No web/ edits.</li>
+</ol>
+<h2>Deliverables</h2>
+<ul>
+<li>tasks/AC-0052/AC-0052-results.html - self-contained: what changed (file:line), RESULT values, the two GUI screenshots, the documented simplification (shared table_grid vs per-block).</li>
+<li>Report to coordinator: MAX 20 lines.</li>
+</ul>
+<h2>Rules</h2>
+<ul>
+<li>Godot ONE at a time; headless FIRST; zero script errors hard gate; scratch to .scratch/; no git; never touch web/ or the frozen index.html; never kill the python servers; small honest partial &gt; empty.</li>
+</ul>
+</body></html>

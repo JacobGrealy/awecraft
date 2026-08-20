@@ -90,45 +90,46 @@ var items := {
 	146: {"name": "Raw Chicken", "icon": Color(0.98, 0.78, 0.65), "stack": 64, "food": 2},
 	147: {"name": "Cooked Chicken", "icon": Color(0.72, 0.45, 0.25), "stack": 64, "food": 5},
 }
+# grid: 2 = craftable in the E-inventory 2x2 grid; grid: 3 = crafting-table 3x3 only
 var shapeless := [
-	{"in": {6: 1}, "out": {"id": 8, "n": 4}},
-	{"in": {8: 4}, "out": {"id": 20, "n": 1}},
-	{"in": {8: 2}, "out": {"id": 100, "n": 4}},
-	{"in": {9: 4}, "out": {"id": 17, "n": 4}},
-	{"in": {105: 3, 100: 2}, "out": {"id": 109, "n": 1}},
-	{"in": {105: 3}, "out": {"id": 139, "n": 1}},
-	{"in": {8: 2, 100: 1}, "out": {"id": 123, "n": 1}},
-	{"in": {9: 2, 100: 1}, "out": {"id": 124, "n": 1}},
-	{"in": {107: 2, 100: 1}, "out": {"id": 125, "n": 1}},
-	{"in": {104: 5}, "out": {"id": 127, "n": 1}},
-	{"in": {104: 8}, "out": {"id": 128, "n": 1}},
-	{"in": {104: 7}, "out": {"id": 129, "n": 1}},
-	{"in": {104: 4}, "out": {"id": 130, "n": 1}},
-	{"in": {105: 5}, "out": {"id": 131, "n": 1}},
-	{"in": {105: 8}, "out": {"id": 132, "n": 1}},
-	{"in": {105: 7}, "out": {"id": 133, "n": 1}},
-	{"in": {105: 4}, "out": {"id": 134, "n": 1}},
-	{"in": {107: 5}, "out": {"id": 135, "n": 1}},
-	{"in": {107: 8}, "out": {"id": 136, "n": 1}},
-	{"in": {107: 7}, "out": {"id": 137, "n": 1}},
-	{"in": {107: 4}, "out": {"id": 138, "n": 1}},
-	{"in": {9: 1, 100: 1}, "out": {"id": 143, "n": 4}},
+	{"in": {6: 1}, "grid": 2, "out": {"id": 8, "n": 4}},
+	{"in": {8: 4}, "grid": 2, "out": {"id": 20, "n": 1}},
+	{"in": {8: 2}, "grid": 2, "out": {"id": 100, "n": 4}},
+	{"in": {9: 4}, "grid": 2, "out": {"id": 17, "n": 4}},
+	{"in": {105: 3, 100: 2}, "grid": 3, "out": {"id": 109, "n": 1}},
+	{"in": {105: 3}, "grid": 2, "out": {"id": 139, "n": 1}},
+	{"in": {8: 2, 100: 1}, "grid": 3, "out": {"id": 123, "n": 1}},
+	{"in": {9: 2, 100: 1}, "grid": 3, "out": {"id": 124, "n": 1}},
+	{"in": {107: 2, 100: 1}, "grid": 3, "out": {"id": 125, "n": 1}},
+	{"in": {104: 5}, "grid": 3, "out": {"id": 127, "n": 1}},
+	{"in": {104: 8}, "grid": 3, "out": {"id": 128, "n": 1}},
+	{"in": {104: 7}, "grid": 3, "out": {"id": 129, "n": 1}},
+	{"in": {104: 4}, "grid": 3, "out": {"id": 130, "n": 1}},
+	{"in": {105: 5}, "grid": 3, "out": {"id": 131, "n": 1}},
+	{"in": {105: 8}, "grid": 3, "out": {"id": 132, "n": 1}},
+	{"in": {105: 7}, "grid": 3, "out": {"id": 133, "n": 1}},
+	{"in": {105: 4}, "grid": 3, "out": {"id": 134, "n": 1}},
+	{"in": {107: 5}, "grid": 3, "out": {"id": 135, "n": 1}},
+	{"in": {107: 8}, "grid": 3, "out": {"id": 136, "n": 1}},
+	{"in": {107: 7}, "grid": 3, "out": {"id": 137, "n": 1}},
+	{"in": {107: 4}, "grid": 3, "out": {"id": 138, "n": 1}},
+	{"in": {9: 1, 100: 1}, "grid": 2, "out": {"id": 143, "n": 4}},
 ]
 var shaped := [
-	{"grid": ["CCC", "C C", "CCC"], "map": {"C": 9}, "out": {"id": 21, "n": 1}},
-	{"grid": ["MMM", " S ", " S "], "map": {"M": 8, "S": 100}, "out": {"id": 111, "n": 1}},
-	{"grid": ["MMM", " S ", " S "], "map": {"M": 9, "S": 100}, "out": {"id": 112, "n": 1}},
-	{"grid": ["MMM", " S ", " S "], "map": {"M": 105, "S": 100}, "out": {"id": 113, "n": 1}},
-	{"grid": ["MMM", " S ", " S "], "map": {"M": 107, "S": 100}, "out": {"id": 114, "n": 1}},
-	{"grid": ["MM ", "MS ", " S "], "map": {"M": 8, "S": 100}, "out": {"id": 115, "n": 1}},
-	{"grid": ["MM ", "MS ", " S "], "map": {"M": 9, "S": 100}, "out": {"id": 116, "n": 1}},
-	{"grid": ["MM ", "MS ", " S "], "map": {"M": 105, "S": 100}, "out": {"id": 117, "n": 1}},
-	{"grid": ["MM ", "MS ", " S "], "map": {"M": 107, "S": 100}, "out": {"id": 118, "n": 1}},
-	{"grid": ["M  ", "S  ", "S  "], "map": {"M": 8, "S": 100}, "out": {"id": 119, "n": 1}},
-	{"grid": ["M  ", "S  ", "S  "], "map": {"M": 9, "S": 100}, "out": {"id": 120, "n": 1}},
-	{"grid": ["M  ", "S  ", "S  "], "map": {"M": 105, "S": 100}, "out": {"id": 121, "n": 1}},
-	{"grid": ["M  ", "S  ", "S  "], "map": {"M": 107, "S": 100}, "out": {"id": 122, "n": 1}},
-	{"grid": ["S# ", "#S ", "S# "], "map": {"S": 100, "#": 145}, "out": {"id": 142, "n": 1}},
+	{"grid3": ["CCC", "C C", "CCC"], "grid": 3, "map": {"C": 9}, "out": {"id": 21, "n": 1}},
+	{"grid3": ["MMM", " S ", " S "], "grid": 3, "map": {"M": 8, "S": 100}, "out": {"id": 111, "n": 1}},
+	{"grid3": ["MMM", " S ", " S "], "grid": 3, "map": {"M": 9, "S": 100}, "out": {"id": 112, "n": 1}},
+	{"grid3": ["MMM", " S ", " S "], "grid": 3, "map": {"M": 105, "S": 100}, "out": {"id": 113, "n": 1}},
+	{"grid3": ["MMM", " S ", " S "], "grid": 3, "map": {"M": 107, "S": 100}, "out": {"id": 114, "n": 1}},
+	{"grid3": ["MM ", "MS ", " S "], "grid": 3, "map": {"M": 8, "S": 100}, "out": {"id": 115, "n": 1}},
+	{"grid3": ["MM ", "MS ", " S "], "grid": 3, "map": {"M": 9, "S": 100}, "out": {"id": 116, "n": 1}},
+	{"grid3": ["MM ", "MS ", " S "], "grid": 3, "map": {"M": 105, "S": 100}, "out": {"id": 117, "n": 1}},
+	{"grid3": ["MM ", "MS ", " S "], "grid": 3, "map": {"M": 107, "S": 100}, "out": {"id": 118, "n": 1}},
+	{"grid3": ["M  ", "S  ", "S  "], "grid": 3, "map": {"M": 8, "S": 100}, "out": {"id": 119, "n": 1}},
+	{"grid3": ["M  ", "S  ", "S  "], "grid": 3, "map": {"M": 9, "S": 100}, "out": {"id": 120, "n": 1}},
+	{"grid3": ["M  ", "S  ", "S  "], "grid": 3, "map": {"M": 105, "S": 100}, "out": {"id": 121, "n": 1}},
+	{"grid3": ["M  ", "S  ", "S  "], "grid": 3, "map": {"M": 107, "S": 100}, "out": {"id": 122, "n": 1}},
+	{"grid3": ["S# ", "#S ", "S# "], "grid": 3, "map": {"S": 100, "#": 145}, "out": {"id": 142, "n": 1}},
 ]
 var mobs := {
 	"pig": {"passive": true, "hp": 10, "w": 0.8, "h": 0.9, "speed": 1.5, "drops": [{"id": 101, "n": 2, "ch": 1.0}, {"id": 104, "n": 1, "ch": 0.6}], "body": Color.html("f2a29c"), "head": Color.html("f2a29c")},
@@ -282,7 +283,7 @@ func block_drops(_id: int, _is_pick: bool) -> Array:
 	return []
 
 
-func match_shapeless(cells: Array):
+func match_shapeless(cells: Array, grid_size: int = 3):
 	var have := {}
 	for c in cells:
 		if c == null:
@@ -292,6 +293,8 @@ func match_shapeless(cells: Array):
 			continue
 		have[cid] = int(have.get(cid, 0)) + int(c["n"])
 	for r in shapeless:
+		if int(r.get("grid", 2)) > int(grid_size):
+			continue
 		var ok := true
 		for id in r["in"]:
 			if int(have.get(id, 0)) != int(r["in"][id]):
@@ -307,11 +310,13 @@ func match_shapeless(cells: Array):
 	return null
 
 
-func match_shaped(grid: Array):
+func match_shaped(grid: Array, grid_size: int = 3):
 	for r in shaped:
+		if int(r.get("grid", 3)) > int(grid_size):
+			continue
 		var ok := true
 		for i in 9:
-			var ch := String(r["grid"][i / 3])[i % 3]
+			var ch := String(r["grid3"][i / 3])[i % 3]
 			var want := 0
 			if ch != " ":
 				want = int(r["map"].get(ch, 0))

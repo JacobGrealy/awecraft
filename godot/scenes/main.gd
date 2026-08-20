@@ -646,7 +646,18 @@ func _snapshot_finish(cam: String) -> void:
 			player.armor_slot_click(1, 0, false)
 			for i in range(13, 36):
 				player.inv[i] = {"id": 140 + (i % 8), "n": (i % 7) + 1}
-		player.open_inventory("inv")
+		elif inv_env == "table":
+			Debug.give_item(8, 12)
+			Debug.give_item(100, 8)
+			Debug.give_item(105, 8)
+			for i in range(13, 36):
+				player.inv[i] = {"id": 105, "n": (i % 8) + 1}
+			player.table_grid[0] = {"id": 8, "n": 1}
+			player.table_grid[1] = {"id": 8, "n": 1}
+			player.table_grid[2] = {"id": 8, "n": 1}
+			player.table_grid[4] = {"id": 100, "n": 1}
+			player.table_grid[7] = {"id": 100, "n": 1}
+		player.open_inventory("table" if inv_env == "table" else "inv")
 		if inv_env == "1":
 			inventory_ui.autofill_first()
 			inventory_ui.hover_item(111)
@@ -1092,26 +1103,6 @@ func _craft_test() -> void:
 	r["sticks_c"] = _count_item(p, 100)
 	r["planks_c"] = _count_item(p, 8)
 	ok = ok and r["sticks_c"] == 4 and r["planks_c"] == 6
-	p.inv[0] = p.inv[9]
-	p.inv[9] = {"id": 0, "n": 0}
-	Debug.inv_click(42, 2)
-	Debug.inv_click(0, 0)
-	Debug.inv_click(42, 2)
-	Debug.inv_click(1, 0)
-	Debug.inv_click(42, 2)
-	Debug.inv_click(2, 0)
-	Debug.inv_click(41, 2)
-	Debug.inv_click(4, 0)
-	Debug.inv_click(41, 2)
-	Debug.inv_click(7, 0)
-	r["out_d"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
-	ok = ok and int(p.craft_out.get("id", 0)) == 111 and int(p.craft_out.get("n", 0)) == 1
-	Debug.craft()
-	r["pick_d"] = _count_item(p, 111)
-	r["planks_d"] = _count_item(p, 8)
-	r["sticks_d"] = _count_item(p, 100)
-	r["logs_d"] = _count_item(p, 6)
-	ok = ok and r["pick_d"] == 1 and r["planks_d"] == 3 and r["sticks_d"] == 2 and r["logs_d"] == 0
 	Debug.give_item(127, 1)
 	p.inv[3] = p.inv[10]
 	p.inv[10] = {"id": 0, "n": 0}
@@ -1140,12 +1131,12 @@ func _craft_test() -> void:
 	r["close_ui"] = p.ui_mode
 	r["close_grid0"] = int(p.craft_grid[0]["id"])
 	r["planks_close"] = _count_item(p, 8)
-	ok = ok and p.ui_mode == "" and r["close_grid0"] == 0 and _count_item(p, 8) == 2
+	ok = ok and p.ui_mode == "" and r["close_grid0"] == 0 and _count_item(p, 8) == 5
 	Debug.give_item(8, 1)
 	Debug.inv_click(42, 2)
 	p.close_inventory()
 	r["held_return"] = [int(p.held.get("id", 0)) if p.held != {} else 0, _count_item(p, 8)]
-	ok = ok and p.held == {} and _count_item(p, 8) == 3
+	ok = ok and p.held == {} and _count_item(p, 8) == 6
 	for i in 36:
 		p.inv[i] = {"id": 0, "n": 0}
 	p.held = {}
@@ -1214,6 +1205,127 @@ func _craft_test() -> void:
 	r["D2_held"] = _heldpair(p)
 	r["D_dirt"] = _count_item(p, 2)
 	ok = ok and r["D0_held"] == [2, 5] and r["D0_inv35"] == [0, 0] and r["D1_hot4"] == [2, 5] and r["D2_inv35"] == [2, 5] and r["D2_hot4"] == [0, 0] and r["D2_held"] == [0, 0] and r["D_dirt"] == 5
+	# --- AC-0052: 2x2 vs 3x3 crafting gate (pickaxe pattern = 3 planks row + 2 sticks) ---
+	p.close_inventory()
+	# A: pickaxe pattern in the 2x2 E-grid -> NULL output, inputs unmodified
+	p.open_inventory("inv")
+	p.craft_grid[0] = {"id": 8, "n": 1}
+	p.craft_grid[1] = {"id": 8, "n": 1}
+	p.craft_grid[2] = {"id": 8, "n": 1}
+	p.craft_grid[3] = {"id": 100, "n": 1}
+	p.recompute_craft()
+	r["A_out"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	var a_grid: Array = []
+	for gi in 4:
+		a_grid.append([int(p.craft_grid[gi]["id"]), int(p.craft_grid[gi]["n"])])
+	r["A_grid"] = a_grid
+	ok = ok and r["A_out"] == [0, 0] and a_grid == [[8, 1], [8, 1], [8, 1], [100, 1]]
+	# B: same pattern in the table 3x3 grid -> pickaxe 111, output click consumes all 5 inputs
+	p.open_inventory("table")
+	p.table_grid[0] = {"id": 8, "n": 1}
+	p.table_grid[1] = {"id": 8, "n": 1}
+	p.table_grid[2] = {"id": 8, "n": 1}
+	p.table_grid[4] = {"id": 100, "n": 1}
+	p.table_grid[7] = {"id": 100, "n": 1}
+	p.recompute_craft()
+	r["B_out"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	ok = ok and r["B_out"] == [111, 1]
+	Debug.craft()
+	var b_filled := 0
+	for i in p.table_grid.size():
+		if int(p.table_grid[i]["id"]) != 0:
+			b_filled += 1
+	r["B_pick"] = _count_item(p, 111)
+	r["B_filled"] = b_filled
+	ok = ok and r["B_pick"] == 1 and b_filled == 0
+	# C: grid-2 recipe (planks) still works in the 2x2 E-grid
+	p.close_inventory()
+	p.open_inventory("inv")
+	p.craft_grid[0] = {"id": 6, "n": 1}
+	p.recompute_craft()
+	r["C_out"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	ok = ok and r["C_out"] == [8, 4]
+	# D: grid-3 recipe (iron sword, shapeless) NULL in 2x2, = 109 in table
+	p.craft_grid[0] = {"id": 105, "n": 3}
+	p.craft_grid[1] = {"id": 100, "n": 2}
+	p.recompute_craft()
+	r["D_out_inv"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	ok = ok and r["D_out_inv"] == [0, 0]
+	p.open_inventory("table")
+	p.table_grid[0] = {"id": 105, "n": 3}
+	p.table_grid[1] = {"id": 100, "n": 2}
+	p.recompute_craft()
+	r["D_out_table"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	ok = ok and r["D_out_table"] == [109, 1]
+	Debug.craft()
+	r["D_sword"] = _count_item(p, 109)
+	ok = ok and r["D_sword"] == 1
+	# E: closing the table returns grid items to inv (space allows); full inv -> item drops
+	p.table_grid[0] = {"id": 8, "n": 4}
+	p.close_inventory()
+	r["E_planks"] = _count_item(p, 8)
+	ok = ok and r["E_planks"] == 4
+	var drops_base: int = int(Game.drops.get_child_count())
+	for i in 36:
+		p.inv[i] = {"id": 2, "n": 64}
+	p.open_inventory("table")
+	p.table_grid[0] = {"id": 6, "n": 3}
+	p.close_inventory()
+	r["E_drops"] = int(Game.drops.get_child_count()) - drops_base
+	r["E_logs"] = _count_item(p, 6)
+	ok = ok and r["E_drops"] == 3 and r["E_logs"] == 0
+	# F: table use beats placement — holding a placeable, use_selected on a table opens the table
+	for i in 36:
+		p.inv[i] = {"id": 0, "n": 0}
+	p.held = {}
+	p.close_inventory()
+	var fsp: Vector3 = world.spawn_point()
+	var fsx := int(fsp.x)
+	var fsz := int(fsp.z)
+	var ftop: int = world.surface_top(fsx, fsz)
+	var fx := -1
+	var fz := -1
+	for dx in range(-8, 9, 2):
+		for dz in range(-8, 9, 2):
+			var tx2 := fsx + dx
+			var tz2 := fsz + dz
+			var flat := true
+			for fxx in range(-1, 2):
+				for fzz in range(-1, 2):
+					if world.surface_top(tx2 + fxx, tz2 + fzz) != ftop:
+						flat = false
+			if not flat:
+				continue
+			var clear := true
+			for k2 in range(1, 5):
+				if world.surface_top(tx2, tz2 - k2) > ftop:
+					clear = false
+			if not clear:
+				continue
+			fx = tx2
+			fz = tz2
+			break
+		if fx >= 0:
+			break
+	if fx < 0:
+		fx = fsx
+		fz = fsz
+	var fsc := Vector3i(fx, ftop + 1, fz - 4)
+	Debug.set_block(fsc.x, fsc.y, fsc.z, 20)
+	Debug.fly(true)
+	var feye := Vector3(float(fx) + 0.5, float(ftop + 1) + 0.5, float(fz) + 0.5)
+	Debug.aim_at(feye.x, feye.y, feye.z)
+	for i in 6:
+		await get_tree().physics_frame
+	var fhit: Dictionary = p.aim_hit()
+	r["F_aim"] = [bool(fhit.hit), int(fhit.get("id", 0))]
+	p.inv[0] = {"id": 1, "n": 5}
+	p.sel = 0
+	p.use_selected()
+	r["F_mode"] = String(p.ui_mode)
+	r["F_held"] = [int(p.inv[0]["id"]), int(p.inv[0]["n"])]
+	r["F_cell"] = world.get_block(fsc.x, fsc.y, fsc.z)
+	ok = ok and int(fhit.get("id", 0)) == 20 and r["F_mode"] == "table" and r["F_held"] == [1, 5] and r["F_cell"] == 20
 	p.close_inventory()
 	Debug.result({
 		"ok": ok,

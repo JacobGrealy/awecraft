@@ -389,6 +389,11 @@ func _add_slot(area: String, idx: int) -> void:
 	_labels.append(l)
 
 
+func _is_table_mode() -> bool:
+	var p = Game.player
+	return p != null and String(p.ui_mode) == "table"
+
+
 func _route_click(button: int, shift: bool, is_press: bool, si: int) -> void:
 	var p = Game.player
 	if p == null:
@@ -405,7 +410,10 @@ func _route_click(button: int, shift: bool, is_press: bool, si: int) -> void:
 	elif area == "hotbar":
 		p.inv_slot_click(idx, "hotbar", button, shift, false)
 	elif area == "craft":
-		p.craft_grid_click(idx, button, shift, false)
+		if _is_table_mode():
+			p.table_grid_click(idx, button, shift, false)
+		else:
+			p.craft_grid_click(idx, button, shift, false)
 	elif area == "output":
 		p.craft_output_click()
 	elif button == 0 and Game.mode == "play":
@@ -428,7 +436,10 @@ func _release_drop(p, gpos: Vector2) -> void:
 		elif area == "hotbar":
 			p.inv_slot_click(idx, "hotbar", 0, false, true)
 		elif area == "craft":
-			p.craft_grid_click(idx, 0, false, true)
+			if _is_table_mode():
+				p.table_grid_click(idx, 0, false, true)
+			else:
+				p.craft_grid_click(idx, 0, false, true)
 		elif area == "hotbar_bottom":
 			p.sel = idx
 		return
@@ -467,16 +478,16 @@ func _setup_icon(c: Control, id: int) -> void:
 
 func _build_all_recipes() -> void:
 	for r in Data.shapeless:
-		_all_recipes.append({"shaped": false, "req": r["in"], "out": r["out"], "ok": false})
+		_all_recipes.append({"shaped": false, "grid": int(r.get("grid", 2)), "req": r["in"], "out": r["out"], "ok": false})
 	for r in Data.shaped:
 		var req := {}
-		var g: Array = r["grid"]
+		var g: Array = r["grid3"]
 		for i in 9:
 			var ch := String(g[i / 3])[i % 3]
 			if ch != " ":
 				var id: int = int(r["map"][ch])
 				req[id] = int(req.get(id, 0)) + 1
-		_all_recipes.append({"shaped": true, "grid": r["grid"], "map": r["map"], "req": req, "out": r["out"], "ok": false})
+		_all_recipes.append({"shaped": true, "grid": 3, "grid3": r["grid3"], "map": r["map"], "req": req, "out": r["out"], "ok": false})
 
 
 func _have(id: int) -> int:
@@ -494,7 +505,11 @@ func _have(id: int) -> int:
 func _refresh_recipe_ok() -> void:
 	if Game.player == null:
 		return
+	var gs := 3 if _is_table_mode() else 2
 	for r in _all_recipes:
+		if int(r["grid"]) > gs:
+			r["ok"] = false
+			continue
 		var req: Dictionary = r["req"]
 		var ok := true
 		for id in req:
@@ -531,14 +546,15 @@ func _recipe_click(r: Dictionary) -> void:
 	var p = Game.player
 	if p == null:
 		return
+	var grid: Array = p.table_grid if _is_table_mode() else p.craft_grid
 	if bool(r["shaped"]):
-		var g: Array = r["grid"]
+		var g3: Array = r["grid3"]
 		for i in 9:
-			var ch := String(g[i / 3])[i % 3]
+			var ch := String(g3[i / 3])[i % 3]
 			if ch != " ":
-				p.craft_grid[i] = {"id": int(r["map"][ch]), "n": 1}
+				grid[i] = {"id": int(r["map"][ch]), "n": 1}
 			else:
-				p.craft_grid[i] = {"id": 0, "n": 0}
+				grid[i] = {"id": 0, "n": 0}
 	else:
 		var cell := 0
 		var req: Dictionary = r["req"]
@@ -546,7 +562,7 @@ func _recipe_click(r: Dictionary) -> void:
 			var left := int(req[id])
 			while left > 0:
 				var take := mini(left, 64)
-				p.craft_grid[cell] = {"id": int(id), "n": take}
+				grid[cell] = {"id": int(id), "n": take}
 				cell += 1
 				left -= take
 	p.recompute_craft()
@@ -599,6 +615,9 @@ func _update_recipes(p, show: bool, px: float, py: float) -> void:
 	for i in 36:
 		var it: Dictionary = p._inv_get(i)
 		inv_key += "%d:%d " % [int(it["id"]), int(it["n"])]
+	for i in p.table_grid.size():
+		inv_key += "t%d" % int(p.table_grid[i]["id"])
+	inv_key += " m" + String(p.ui_mode)
 	if inv_key != _last_inv_key:
 		_last_inv_key = inv_key
 		_refresh_recipe_ok()
@@ -715,10 +734,17 @@ func _process(dt: float) -> void:
 	_strip.position = Vector2(sx, sy)
 	_strip.size = Vector2(sw, sh)
 	var p = Game.player
-	var show: bool = p != null and String(p.ui_mode) == "inv"
+	var show: bool = p != null and (String(p.ui_mode) == "inv" or String(p.ui_mode) == "table")
+	var is_table: bool = p != null and String(p.ui_mode) == "table"
 	_panel.visible = show
+	var ttxt := "Crafting Table" if is_table else "Inventory"
+	if _title.text != ttxt:
+		_title.text = ttxt
 	for i in range(9, _slots.size()):
-		(_slots[i] as Control).visible = show
+		var sv := false
+		if show:
+			sv = not (String(_areas[i]) == "craft" and not is_table and (i - 9) >= p.EGRID_CELLS)
+		(_slots[i] as Control).visible = sv
 	if show:
 		_panel.size = Vector2(float(PANEL_W), float(PANEL_H))
 	var px := (vs.x - float(PANEL_W)) * 0.5
@@ -727,9 +753,11 @@ func _process(dt: float) -> void:
 	for i in 9:
 		(_slots[i] as Control).position = Vector2(sx + 5.0 + i * (SLOT + HOT_IN), sy + 5.0)
 	if show:
-		for i in 9:
+		var cols := 3 if is_table else 2
+		var ccount := 9 if is_table else int(p.EGRID_CELLS)
+		for i in ccount:
 			var cc: Control = _slots[9 + i]
-			cc.position = Vector2(px + float(CRAFT_X) + (i % 3) * (SLOT + GAP), py + CRAFT_Y + (i / 3) * (SLOT + GAP))
+			cc.position = Vector2(px + float(CRAFT_X) + (i % cols) * (SLOT + GAP), py + CRAFT_Y + int(i / cols) * (SLOT + GAP))
 		(_slots[18] as Control).position = Vector2(px + float(OUT_X), py + float(OUT_Y))
 		for i in 4:
 			(_slots[19 + i] as Control).position = Vector2(px + float(ARMOR_X), py + float(ROW_Y) + i * (SLOT + GAP))
@@ -752,8 +780,9 @@ func _process(dt: float) -> void:
 				id = int(p.armor[idx])
 				n = 1 if id != 0 else 0
 			elif area == "craft":
-				id = int(p.craft_grid[idx]["id"])
-				n = int(p.craft_grid[idx]["n"])
+				var cg: Array = p.table_grid if _is_table_mode() else p.craft_grid
+				id = int(cg[idx]["id"])
+				n = int(cg[idx]["n"])
 			elif area == "output":
 				id = int(p.craft_out.get("id", 0))
 				n = int(p.craft_out.get("n", 0))

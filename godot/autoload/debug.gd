@@ -80,6 +80,8 @@ func seed_inv() -> void:
 		p.inv[i] = {"id": 0, "n": 0}
 	for i in p.craft_grid.size():
 		p.craft_grid[i] = {"id": 0, "n": 0}
+	for i in p.table_grid.size():
+		p.table_grid[i] = {"id": 0, "n": 0}
 	for i in p.armor.size():
 		p.armor[i] = 0
 	p.held = {}
@@ -167,7 +169,7 @@ func dump_survival():
 
 func inv_dump():
 	if Game.player == null:
-		return {"sel": 0, "slots": [], "armor": [], "points": 0, "held": {}, "craft_grid": [], "craft_out": {}}
+		return {"sel": 0, "slots": [], "armor": [], "points": 0, "held": {}, "craft_grid": [], "table_grid": [], "craft_out": {}}
 	var p = Game.player
 	var slots: Array = []
 	for i in p.inv.size():
@@ -177,6 +179,10 @@ func inv_dump():
 	for i in p.craft_grid.size():
 		if int(p.craft_grid[i]["id"]) != 0:
 			grid.append({"i": i, "id": int(p.craft_grid[i]["id"]), "n": int(p.craft_grid[i]["n"])})
+	var tgrid: Array = []
+	for i in p.table_grid.size():
+		if int(p.table_grid[i]["id"]) != 0:
+			tgrid.append({"i": i, "id": int(p.table_grid[i]["id"]), "n": int(p.table_grid[i]["n"])})
 	var armor_ids: Array = []
 	for a in p.armor:
 		armor_ids.append(int(a))
@@ -187,6 +193,7 @@ func inv_dump():
 		"points": p.armor_points(),
 		"held": {} if p.held == {} else {"id": int(p.held["id"]), "n": int(p.held["n"])},
 		"craft_grid": grid,
+		"table_grid": tgrid,
 		"craft_out": {} if p.craft_out == {} else {"id": int(p.craft_out["id"]), "n": int(p.craft_out["n"])},
 	}
 

@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-20T11:43
+  updated_at: 2026-08-20T12:56
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -1254,16 +1254,25 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-20T09:07
-  updated_at: 2026-08-20T09:07
-  completed_at: null
+  updated_at: 2026-08-20T12:56
+  completed_at: 2026-08-20T12:56
   waiting_on: null
   parent_id: null
   notes: 'BUG user 2026-08-20: can craft everything without a crafting table, and cannot actually use the crafting table (2x2
     vs 3x3 gate)'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-20T12:56
+    updated_at: null
+    text: 'Done 2026-08-20 (subagent + coordinator verify): grid-2/grid-3 tags on all 36 recipes (6/30); E-inventory 2x2,
+      table 3x3 GUI (ui_mode ''table'', shared table_grid, returns on close w/ drop fallback); table use beats placement;
+      harness gates A-F green (pickaxe 2x2=NULL/table=111, planks 2x2 ok, sword 2x2=NULL/table=109); battery 0 script errors,
+      guiclick byte-identical; web rebuilt A/B-proven. Coordinator note: subagent''s two GUI pngs were filename-swapped -
+      fixed + re-embedded in results.html, re-captured verified 2x2 shot; gating confirmed visually (2x2 list shows only grid-2
+      recipes).'
 - id: AC-0053
   title: tool-mechanics-mc-exact
   source: user

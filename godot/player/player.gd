@@ -17,6 +17,8 @@ const INV_SIZE := 36
 const STACK_MAX := 64
 const ARMOR_SIZE := 4
 const CRAFT_GRID_SIZE := 9
+const EGRID_CELLS := 4
+const TABLE_ID := 20
 const STORAGE_OFF := 9
 const ARMOR_SLOTS := ["head", "chest", "legs", "boots"]
 
@@ -45,6 +47,9 @@ signal damaged(src: String)
 var held: Dictionary = {}
 var drag_held := false
 var craft_grid: Array = []
+# Shared table grid (documented simplification vs MC's per-block table state:
+# one 3x3 grid for the ui_mode "table" view, returned to inventory on close).
+var table_grid: Array = []
 var craft_out: Dictionary = {}
 var ui_mode := ""
 var highlight: MeshInstance3D = null
@@ -300,6 +305,9 @@ func _init_inv() -> void:
 	craft_grid.clear()
 	for i in CRAFT_GRID_SIZE:
 		craft_grid.append({"id": 0, "n": 0})
+	table_grid.clear()
+	for i in CRAFT_GRID_SIZE:
+		table_grid.append({"id": 0, "n": 0})
 	held = {}
 	craft_out = {}
 	ui_mode = ""
@@ -569,6 +577,11 @@ func release_mine() -> void:
 
 func use_selected() -> void:
 	if Game.mode != "play" or Game.world == null:
+		return
+	var hit := aim_hit()
+	if hit.hit and int(hit.id) == TABLE_ID:
+		open_inventory("table")
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		return
 	var item: Dictionary = inv_selected()
 	var sid := int(item["id"])
@@ -883,7 +896,16 @@ func damage_player(n: float, src: String) -> void:
 		dead = true
 		drag_held = false
 		release_mine()
+		_return_table_grid()
+		if held != {}:
+			_return_held_to_inv()
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _return_held_to_inv() -> void:
+	if int(held.get("id", 0)) != 0:
+		inv_add(int(held["id"]), int(held["n"]))
+	held = {}
 
 
 func respawn() -> void:
@@ -931,6 +953,7 @@ func refresh_held() -> void:
 func open_inventory(mode: String) -> void:
 	ui_mode = mode
 	release_mine()
+	recompute_craft()
 
 
 func close_inventory() -> void:
@@ -942,13 +965,42 @@ func close_inventory() -> void:
 		held = {}
 	for i in CRAFT_GRID_SIZE:
 		craft_grid[i] = {"id": 0, "n": 0}
+	_return_table_grid()
 	craft_out = {}
 
 
+func _return_table_grid() -> void:
+	for c in table_grid:
+		var cid := int(c["id"])
+		var n := int(c["n"])
+		if cid == 0 or n <= 0:
+			continue
+		var before := count_item(cid)
+		inv_add(cid, n)
+		var left := n - (count_item(cid) - before)
+		if left > 0:
+			for k in left:
+				if Game.world != null:
+					Game.world.spawn_drop(cid, Vector3(position.x + 0.5, position.y + 1.0, position.z + 0.5))
+	for i in range(table_grid.size()):
+		table_grid[i] = {"id": 0, "n": 0}
+
+
+func _current_craft_cells() -> Array:
+	if ui_mode == "table":
+		return table_grid
+	var cells: Array = []
+	for i in mini(EGRID_CELLS, craft_grid.size()):
+		cells.append(craft_grid[i])
+	return cells
+
+
 func recompute_craft() -> void:
-	var m = Data.match_shaped(craft_grid)
+	var cells: Array = _current_craft_cells()
+	var gs := 3 if ui_mode == "table" else 2
+	var m = Data.match_shaped(cells, gs)
 	if m == null:
-		m = Data.match_shapeless(craft_grid)
+		m = Data.match_shapeless(cells, gs)
 	craft_out = {} if m == null else {"id": int(m["id"]), "n": int(m["n"])}
 
 
@@ -1045,11 +1097,22 @@ func inv_slot_click(index: int, area: String, button: int, shift: bool, release:
 
 
 func craft_grid_click(index: int, button: int, shift: bool, release: bool = false) -> void:
-	if index < 0 or index >= craft_grid.size():
+	if index < 0 or index >= EGRID_CELLS:
+		return
+	if index >= craft_grid.size():
 		return
 	if shift and not release:
 		return
 	_slot_click(craft_grid[index], func(v: Dictionary) -> void: craft_grid[index] = v, "craft", button, false, release)
+	recompute_craft()
+
+
+func table_grid_click(index: int, button: int, shift: bool, release: bool = false) -> void:
+	if index < 0 or index >= table_grid.size():
+		return
+	if shift and not release:
+		return
+	_slot_click(table_grid[index], func(v: Dictionary) -> void: table_grid[index] = v, "craft", button, false, release)
 	recompute_craft()
 
 
@@ -1058,8 +1121,7 @@ func craft_output_click() -> void:
 		return
 	var ok := inv_add(int(craft_out["id"]), int(craft_out["n"]))
 	if ok:
-		for i in CRAFT_GRID_SIZE:
-			var c: Dictionary = craft_grid[i]
+		for c in _current_craft_cells():
 			if int(c["id"]) != 0:
 				c["n"] = int(c["n"]) - int(craft_out["n"])
 				if int(c["n"]) <= 0:
