@@ -216,6 +216,7 @@ var _tooltip: Label
 var _force_hover_id := 0
 var _mouse := Vector2.ZERO
 var _tile_tex := {}
+var _item_tex := {}
 var _hearts: Array = []
 var _food: FoodBar
 var _flash: FlashCtl
@@ -455,6 +456,18 @@ func _tile_texture(region: Vector2i) -> Texture2D:
 	return t
 
 
+func _item_texture(item_id: int) -> Texture2D:
+	var t: Texture2D = _item_tex.get(item_id)
+	if t != null:
+		return t
+	var irect := Data.item_rect(item_id)
+	if irect == Vector2i(-1, -1) or Data.item_atlas_tex == null:
+		return null
+	t = ImageTexture.create_from_image(Data.item_atlas_tex.get_image().get_region(Rect2i(irect, Vector2i(Data.TILE_PX, Data.TILE_PX))))
+	_item_tex[item_id] = t
+	return t
+
+
 func _setup_icon(c: Control, id: int) -> void:
 	if id == 0:
 		c.region = Vector2i(-1, -1)
@@ -466,14 +479,19 @@ func _setup_icon(c: Control, id: int) -> void:
 		c.region = Data.block_rect(id, "side")
 		c.fill = info["color"]["side"]
 		c.tex = _tile_texture(c.region) if (c.region.x >= 0 and Data.atlas_tex != null) else null
+		return
+	c.region = Vector2i(-1, -1)
+	var itex := _item_texture(id)
+	if itex != null:
+		c.tex = itex
+		c.fill = Color(0.7, 0.7, 0.7, 1.0)
+		return
+	c.tex = null
+	var it = Data.items.get(id)
+	if it != null and it.has("icon"):
+		c.fill = it["icon"]
 	else:
-		c.region = Vector2i(-1, -1)
-		c.tex = null
-		var it = Data.items.get(id)
-		if it != null and it.has("icon"):
-			c.fill = it["icon"]
-		else:
-			c.fill = Color(0.7, 0.7, 0.7, 1.0)
+		c.fill = Color(0.7, 0.7, 0.7, 1.0)
 
 
 func _build_all_recipes() -> void:
@@ -645,6 +663,7 @@ func _update_recipes(p, show: bool, px: float, py: float) -> void:
 
 func refresh_atlas() -> void:
 	_tile_tex.clear()
+	_item_tex.clear()
 	for si in _slots.size():
 		_last[si] = ""
 		(_slots[si] as Control).queue_redraw()

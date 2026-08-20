@@ -600,6 +600,24 @@ func _snapshot_finish(cam: String) -> void:
 	var snapshot_path := OS.get_environment("AWECRAFT_SNAPSHOT")
 	var spawn: Vector3 = world.spawn_point()
 	var fluid_shot := OS.get_environment("AWECRAFT_FLUID_SHOT") == "1"
+	var held_env := OS.get_environment("AWECRAFT_HELD")
+	if held_env != "" and player != null:
+		var hid: int = held_env.to_int()
+		if _count_item(player, hid) <= 0:
+			Debug.give_item(hid, 1)
+		player.sel = _slot_of(player, hid)
+		var aim := _find_aim_spot()
+		if not aim.is_empty():
+			Debug.fly(true)
+			Debug.teleport(aim["cam"].x, aim["cam"].y - player.EYE, aim["cam"].z)
+			player.look(aim["yaw"], aim["pitch"])
+		await _await_world_build(player.position, 3000)
+		for i in 10:
+			await get_tree().physics_frame
+		await Debug.snap(snapshot_path)
+		Debug.result({"held": hid, "w": int(get_viewport().size.x), "h": int(get_viewport().size.y), "cam": cam})
+		get_tree().quit()
+		return
 	var aimed := false
 	if player != null:
 		if fluid_shot:
@@ -727,6 +745,8 @@ func _process(delta: float) -> void:
 
 
 func _update_sky() -> void:
+	if sun == null:
+		return
 	var t := Game.time_of_day
 	sun.light_color = Color.WHITE
 	sun.light_energy = DayNight.sun_energy(t)
@@ -1833,6 +1853,42 @@ func _swing_test() -> void:
 	r["loop_held_stayed_active"] = held_stayed_active
 	r["loop_settles_on_release"] = settle_ok
 	ok = ok and cycles >= 4 and held_stayed_active and settle_ok
+	var toolork := {}
+	var expected_type := {111: "pick", 115: "axe", 119: "shovel", 123: "sword", 113: "pick"}
+	for tid in expected_type:
+		Debug.give_item(tid, 1)
+		p.sel = _slot_of(p, tid)
+		for i in 6:
+			await get_tree().physics_frame
+		var present: bool = p.held_tool != null and p.held_tool.visible
+		var vtype: String = String(p.held_tool_type)
+		var fist: bool = p.held_fist.visible
+		var sprite: bool = p.held_sprite.visible
+		var box: bool = p.held_box.visible
+		toolork[tid] = present and vtype == expected_type[tid] and not fist and not sprite and not box
+		r["tool_%d" % tid] = {"present": present, "type": vtype, "fist": fist, "sprite": sprite, "box": box, "ok": bool(toolork[tid])}
+		if tid == 111 or tid == 113:
+			r["headcolor_%d" % tid] = p.held_head_color().to_html()
+	ok = ok and (toolork as Dictionary).size() == 5
+	for tid in toolork:
+		ok = ok and bool(toolork[tid])
+	r["tier_differs_111_vs_113"] = r.get("headcolor_111") != r.get("headcolor_113")
+	ok = ok and bool(r["tier_differs_111_vs_113"])
+	Debug.give_item(6, 1)
+	p.sel = _slot_of(p, 6)
+	for i in 6:
+		await get_tree().physics_frame
+	r["box_after_tool"] = p.held_box.visible
+	r["tool_hidden_after_block"] = p.held_tool.visible
+	ok = ok and r["box_after_tool"] and not r["tool_hidden_after_block"]
+	for i in p.inv.size():
+		p.inv[i] = {"id": 0, "n": 0}
+	p.sel = 0
+	for i in 6:
+		await get_tree().physics_frame
+	r["fist_after_empty"] = p.held_fist.visible
+	r["tool_hidden_empty"] = p.held_tool.visible
+	ok = ok and r["fist_after_empty"] and not r["tool_hidden_empty"]
 	Debug.result({"ok": ok, "data": r})
 	get_tree().quit()
 

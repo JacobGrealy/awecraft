@@ -27,6 +27,8 @@ const C_DANDELION := Color(0.941, 0.824, 0.157)
 
 var atlas_tex: Texture2D = null
 var atlas_rects := {}
+var item_atlas_tex: Texture2D = null
+var item_atlas_rects := {}
 var fluid_anim_mats := {}
 const ATLAS_PX := 1024.0
 const TILE_PX := 32
@@ -182,7 +184,25 @@ func _ready() -> void:
 		f.close()
 		if j is Dictionary:
 			atlas_rects = j
+	_load_item_atlas()
 	_make_fluid_anim_mats()
+
+
+func _load_item_atlas() -> void:
+	var itex := load("res://assets/items_atlas.png")
+	if itex is Texture2D:
+		item_atlas_tex = itex
+	if FileAccess.file_exists("res://assets/items_atlas.json"):
+		var f := FileAccess.open("res://assets/items_atlas.json", FileAccess.READ)
+		var j = JSON.parse_string(f.get_as_text())
+		f.close()
+		if j is Dictionary:
+			item_atlas_rects = j
+
+
+func apply_items_atlas(image: Image, rects: Dictionary) -> void:
+	item_atlas_tex = ImageTexture.create_from_image(image)
+	item_atlas_rects = rects
 
 
 # Web-faithful: updateAtlasAnims flips stacked frames at 300 ms/frame (web
@@ -226,6 +246,20 @@ func block_rect(id: int, face: String) -> Vector2i:
 	if r == null:
 		return Vector2i(-1, -1)
 	return Vector2i(int(r[0]), int(r[1]))
+
+
+func item_rect(_id: int) -> Vector2i:
+	var e = item_atlas_rects.get(str(_id))
+	if e == null:
+		return Vector2i(-1, -1)
+	return Vector2i(int(e[0]), int(e[1]))
+
+
+func item_tint(_id: int) -> Color:
+	var it = items.get(_id)
+	if it != null and it.has("icon"):
+		return Color(it["icon"])
+	return Color(0.7, 0.7, 0.7, 1.0)
 
 
 func block_tint(id: int, face: String) -> Color:

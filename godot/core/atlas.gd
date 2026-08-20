@@ -3,6 +3,7 @@ class_name Atlas
 const ATLAS_PX := 1024
 const TILE_PX := 32
 const DIR := "assets/minecraft/textures/block/"
+const IDIR := "assets/minecraft/textures/"
 const SUF := ".png"
 
 const MAP := {
@@ -30,6 +31,56 @@ const MAP := {
 	"24": ["lava_still", "lava_still", "lava_still"],
 	"25": ["obsidian", "obsidian", "obsidian"],
 	"28": ["portal", "portal", "portal"],
+}
+
+const IMAP := {
+	100: "item/stick.png",
+	101: "item/beef.png",
+	102: "item/cooked_beef.png",
+	103: "block/white_wool.png",
+	104: "item/leather.png",
+	105: "item/iron_ingot.png",
+	106: "item/coal.png",
+	107: "item/diamond.png",
+	108: "item/wheat_seeds.png",
+	109: "item/iron_sword.png",
+	110: "item/raw_iron.png",
+	111: "item/wooden_pickaxe.png",
+	112: "item/stone_pickaxe.png",
+	113: "item/iron_pickaxe.png",
+	114: "item/diamond_pickaxe.png",
+	115: "item/wooden_axe.png",
+	116: "item/stone_axe.png",
+	117: "item/iron_axe.png",
+	118: "item/diamond_axe.png",
+	119: "item/wooden_shovel.png",
+	120: "item/stone_shovel.png",
+	121: "item/iron_shovel.png",
+	122: "item/diamond_shovel.png",
+	123: "item/wooden_sword.png",
+	124: "item/stone_sword.png",
+	125: "item/diamond_sword.png",
+	127: "item/leather_helmet.png",
+	128: "item/leather_chestplate.png",
+	129: "item/leather_leggings.png",
+	130: "item/leather_boots.png",
+	131: "item/iron_helmet.png",
+	132: "item/iron_chestplate.png",
+	133: "item/iron_leggings.png",
+	134: "item/iron_boots.png",
+	135: "item/diamond_helmet.png",
+	136: "item/diamond_chestplate.png",
+	137: "item/diamond_leggings.png",
+	138: "item/diamond_boots.png",
+	139: "item/bucket.png",
+	140: "item/water_bucket.png",
+	141: "item/lava_bucket.png",
+	142: "item/bow.png",
+	143: "item/arrow.png",
+	144: "item/bone.png",
+	145: "item/string.png",
+	146: "item/chicken.png",
+	147: "item/cooked_chicken.png",
 }
 
 
@@ -67,6 +118,14 @@ static func _save_pack(r: Dictionary) -> Dictionary:
 	if f:
 		f.store_string(JSON.stringify(rects))
 		f.close()
+	if r.has("item_image") and r["item_image"] is Image:
+		(r["item_image"] as Image).save_png("res://assets/items_atlas.png")
+		var ir = r.get("item_rects")
+		if ir is Dictionary:
+			var fi := FileAccess.open("res://assets/items_atlas.json", FileAccess.WRITE)
+			if fi:
+				fi.store_string(JSON.stringify(ir))
+				fi.close()
 	return out
 
 
@@ -151,8 +210,51 @@ static func _import_core(z: ZIPReader) -> Dictionary:
 			ftile[fname] = [tl.x, tl.y, TILE_PX, TILE_PX]
 			faces[face_name] = [tl.x, tl.y, TILE_PX, TILE_PX]
 			rects[bkey] = faces
+	var ir := _import_items(z)
 	z.close()
-	return {"ok": true, "merged": existing, "tiles": tiles_ok, "missing": missing, "blocks": rects.size(), "image": atlas, "rects": rects}
+	return {
+		"ok": true, "merged": existing, "tiles": tiles_ok, "missing": missing, "blocks": rects.size(), "image": atlas, "rects": rects,
+		"item_tiles": ir["tiles"], "item_missing": ir["missing"], "item_count": ir["items"],
+		"item_image": ir["image"], "item_rects": ir["rects"],
+	}
+
+
+static func _import_items(z: ZIPReader) -> Dictionary:
+	var img := Image.create_empty(ATLAS_PX, ATLAS_PX, false, Image.FORMAT_RGBA8)
+	var used := {}
+	var rects := {}
+	var tiles := 0
+	var missing: Array = []
+	for id in IMAP:
+		var bkey: String = str(id)
+		var path: String = IDIR + String(IMAP[id])
+		var tl := _free_tile(used)
+		if tl.x < 0:
+			missing.append(bkey + "(full)")
+			continue
+		used[tl] = true
+		var region := Rect2(tl, Vector2(TILE_PX, TILE_PX))
+		var iimg: Image = null
+		if z.file_exists(path):
+			iimg = Image.new()
+			if iimg.load_png_from_buffer(z.read_file(path)) != OK:
+				iimg = null
+		if iimg == null:
+			var info = Data.items.get(int(id))
+			var fallback := Color(0.7, 0.7, 0.7, 1.0)
+			if info != null and info.has("icon"):
+				fallback = Color(info["icon"])
+			img.fill_rect(region, fallback)
+			missing.append(bkey)
+		else:
+			if iimg.get_format() != Image.FORMAT_RGBA8:
+				iimg.convert(Image.FORMAT_RGBA8)
+			if iimg.get_width() != TILE_PX or iimg.get_height() != TILE_PX:
+				iimg.resize(TILE_PX, TILE_PX)
+			img.blit_rect(iimg, Rect2i(0, 0, TILE_PX, TILE_PX), tl)
+			tiles += 1
+		rects[bkey] = [tl.x, tl.y, TILE_PX, TILE_PX]
+	return {"ok": true, "tiles": tiles, "missing": missing, "items": rects.size(), "image": img, "rects": rects}
 
 
 static func _free_tile(used: Dictionary) -> Vector2i:

@@ -57,10 +57,19 @@ var hand_root: Node3D = null
 var held_box: MeshInstance3D = null
 var held_sprite: Sprite3D = null
 var held_fist: MeshInstance3D = null
+var held_tool: Node3D = null
+var held_tool_type := ""
 var _held_mats := {}
 var _held_texs := {}
+var _held_item_texs := {}
+var _tool_mats := {}
+var _tool_unit_mesh: Mesh = null
+var _tool_wide_mesh: Mesh = null
 var _held_key := ""
 const HAND_BASE_POS := Vector3(0.45, -0.42, -0.8)
+const TOOL_VOX := 0.12
+const HANDLE_C := Color(0.47, 0.33, 0.18)
+const SWORD_HANDLE_C := Color(0.52, 0.36, 0.22)
 const SWING_DURATION := 0.1
 const SWING_ITEM := 0
 const SWING_PUNCH := 1
@@ -360,29 +369,56 @@ func _build_held() -> void:
 	held_fist.position = Vector3(0.0, -0.05, 0.0)
 	held_fist.visible = false
 	hand_root.add_child(held_fist)
+	_tool_unit_mesh = BoxMesh.new()
+	_tool_unit_mesh.size = Vector3(1.0, 1.0, 1.0)
+	_tool_wide_mesh = BoxMesh.new()
+	_tool_wide_mesh.size = Vector3(1.0, 1.0, 2.0)
+	held_tool = Node3D.new()
+	held_tool.visible = false
+	hand_root.add_child(held_tool)
 
 
 func _update_held(id: int, n: int) -> void:
 	var show_fist := ui_mode == "" and (id == 0 or n <= 0)
 	if held_fist != null:
 		held_fist.visible = show_fist
-	if id == 0 or n <= 0:
+	if held_box != null:
 		held_box.visible = false
+	if held_sprite != null:
 		held_sprite.visible = false
+	if held_tool != null:
+		held_tool.visible = false
+	if id == 0 or n <= 0:
 		return
 	var binfo = Data.block(id)
 	if binfo != null:
 		held_box.material_override = _held_mat(id, binfo)
 		held_box.visible = true
-		held_sprite.visible = false
 		return
-	held_box.visible = false
 	var it = Data.items.get(id)
-	var col := Color(0.7, 0.7, 0.7, 1.0)
-	if it != null and it.has("icon"):
-		col = Color(it["icon"])
-	held_sprite.texture = _tint_tex(col)
-	held_sprite.visible = true
+	var tool_type := ""
+	if it != null and it.has("tool"):
+		tool_type = String(it["tool"])
+	if tool_type in ["pick", "axe", "shovel", "sword"]:
+		_setup_held_tool(id, tool_type)
+	elif it != null:
+		var irect := Data.item_rect(id)
+		if irect != Vector2i(-1, -1) and Data.item_atlas_tex != null and Data.item_atlas_tex.get_image() != null:
+			held_sprite.texture = _item_atlas_tex(id)
+		else:
+			held_sprite.texture = _tint_tex(Data.item_tint(id))
+		held_sprite.visible = true
+
+
+func _item_atlas_tex(id: int) -> ImageTexture:
+	var t = _held_item_texs.get(id)
+	if t != null:
+		return t
+	var r := Data.item_rect(id)
+	var img := Data.item_atlas_tex.get_image().get_region(Rect2i(r, Vector2i(Data.TILE_PX, Data.TILE_PX)))
+	t = ImageTexture.create_from_image(img)
+	_held_item_texs[id] = t
+	return t
 
 
 func _held_mat(id: int, binfo: Dictionary) -> StandardMaterial3D:
@@ -413,6 +449,84 @@ func _tint_tex(col: Color) -> ImageTexture:
 	t = ImageTexture.create_from_image(img)
 	_held_texs[k] = t
 	return t
+
+
+const TOOL_POSE_ROT := Vector3(-0.42, 0.55, -0.9)
+const TOOL_POSE_POS := Vector3(0.03, -0.03, -0.02)
+
+
+func _tool_voxels(type: String, tcolor: Color) -> Array:
+	var v: Array = []
+	if type == "sword":
+		v.append({"p": Vector3(0, -1, 0), "c": SWORD_HANDLE_C, "wide": false, "head": false})
+		v.append({"p": Vector3(0, 0, 0), "c": SWORD_HANDLE_C, "wide": false, "head": false})
+		v.append({"p": Vector3(0, 1, 0), "c": tcolor, "wide": false, "head": true})
+		return v
+	for hy in range(-1, 2):
+		v.append({"p": Vector3(0, hy, 0), "c": HANDLE_C, "wide": false, "head": false})
+	if type == "pick":
+		for hx in range(-1, 2):
+			v.append({"p": Vector3(hx, 2, 0), "c": tcolor, "wide": false, "head": true})
+	elif type == "axe":
+		v.append({"p": Vector3(0, 2, 0), "c": tcolor, "wide": false, "head": true})
+		v.append({"p": Vector3(1, 2, 0), "c": tcolor, "wide": false, "head": true})
+	elif type == "shovel":
+		v.append({"p": Vector3(0, -2, 0), "c": tcolor, "wide": true, "head": true})
+	return v
+
+
+func _voxel_mat(color: Color) -> StandardMaterial3D:
+	var k := color.to_html()
+	var m = _tool_mats.get(k)
+	if m != null:
+		return m
+	m = StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.albedo_color = color
+	_tool_mats[k] = m
+	return m
+
+
+func _make_voxel(color: Color, wide: bool) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = _tool_wide_mesh if wide else _tool_unit_mesh
+	mi.material_override = _voxel_mat(color)
+	mi.scale = Vector3.ONE * TOOL_VOX
+	return mi
+
+
+func _setup_held_tool(id: int, type: String) -> void:
+	var tcolor := Data.item_tint(id)
+	for c in held_tool.get_children():
+		held_tool.remove_child(c)
+		c.queue_free()
+	var vox := _tool_voxels(type, tcolor)
+	var mn := Vector3(INF, INF, INF)
+	var mx := Vector3(-INF, -INF, -INF)
+	for vd in vox:
+		mn = mn.min(Vector3(vd["p"]))
+		mx = mx.max(Vector3(vd["p"]))
+	var cen := (mn + mx) * 0.5
+	for vd in vox:
+		var mi := _make_voxel(Color(vd["c"]), bool(vd["wide"]))
+		mi.name = "head" if bool(vd["head"]) else "voxel"
+		mi.position = (Vector3(vd["p"]) - cen) * TOOL_VOX
+		held_tool.add_child(mi)
+	held_tool_type = type
+	held_tool.position = TOOL_POSE_POS
+	held_tool.rotation = TOOL_POSE_ROT
+	held_tool.visible = true
+
+
+func held_head_color() -> Color:
+	if held_tool == null:
+		return Color()
+	for c in held_tool.get_children():
+		if c is MeshInstance3D and c.name == "head":
+			var m = (c as MeshInstance3D).material_override
+			if m is StandardMaterial3D:
+				return (m as StandardMaterial3D).albedo_color
+	return Color()
 
 
 func swing(kind: int) -> void:
@@ -948,6 +1062,7 @@ func _inv_set(i: int, v: Dictionary) -> void:
 
 func refresh_held() -> void:
 	_held_key = ""
+	_held_item_texs.clear()
 
 
 func open_inventory(mode: String) -> void:

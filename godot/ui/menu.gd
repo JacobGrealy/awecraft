@@ -161,13 +161,17 @@ func _on_pack_file_selected(path: String) -> void:
 		st.text = "Import failed: atlas reload"
 		return
 	Data.apply_atlas(img, r["rects"])
+	if FileAccess.file_exists("res://assets/items_atlas.png"):
+		var iimg: Image = Image.load_from_file("res://assets/items_atlas.png")
+		if iimg != null and r.has("item_rects"):
+			Data.apply_items_atlas(iimg, r["item_rects"])
 	if Game.world != null:
 		Game.world.refresh_textures()
 	if Game.hotbar != null:
 		Game.hotbar.refresh_atlas()
 	if Game.player != null:
 		Game.player.refresh_held()
-	st.text = "Texture pack applied: %d blocks, %d tiles, %d merged" % [int(r.get("blocks", 0)), int(r.get("tiles", 0)), int(r.get("merged", 0))]
+	st.text = "Texture pack applied: %d blocks, %d tiles, %d items" % [int(r.get("blocks", 0)), int(r.get("tiles", 0)), int(r.get("item_count", 0))]
 
 
 func _sync_controls() -> void:

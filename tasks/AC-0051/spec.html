@@ -1,0 +1,60 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0051 - tool model + pixel icons</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:940px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}</style></head><body>
+<h1>AC-0051 - user bugs: tools have no held 3D model AND no pixel-art icon</h1>
+<h2>Report (user 2026-08-20)</h2>
+<p>"when i use my axe or pick it does not even look like im swinging my axe or pickaxe" + "the axe does not even have an icon, nor do any of the other tools i think. it should look like a pixel art representation of the 3d pixel model in the item list"</p>
+<h2>Reference</h2>
+<p>MC-exact rule (AGENTS.md §Game semantics reference; minecraft.wiki/w/Tool, /w/Item). Icons should be the pack's actual pixel art: the Faithful mcpack ships real item textures at <code>textures/item/*.png</code> (806 of them, verified present), already extractable via the existing atlas pipeline.</p>
+<h2>Root cause (AC-0049 research G3 - tasks/AC-0049/AC-0049-research.html - READ IT FIRST)</h2>
+<ul>
+<li>Held non-block items render as a flat solid-color billboard: <code>_update_held</code> (godot/player/player.gd ~357-377) -&gt; <code>held_sprite</code> with <code>_tint_tex(item["icon"])</code>; <code>held_box</code> is only used for blocks.</li>
+<li>UI icons: <code>_setup_icon</code> (godot/ui/inventory.gd ~447-465) fills with the item's flat color; <code>Data.tiles</code> is empty (data.gd:143); <code>blocks_atlas.{png,json}</code> has block tiles only.</li>
+<li>No per-tool 3D model exists at all.</li>
+</ul>
+<h2>Existing infra (reuse - do not reinvent)</h2>
+<ul>
+<li><b>Atlas pipeline</b>: godot/core/atlas.gd - <code>Atlas.import_pack(pack_path)</code> extracts mcpack (repo root <code>Faithful-32x-1.21.11.mcpack</code>) into <code>res://assets/minecraft/textures/...</code>, then builds <code>assets/blocks_atlas.png</code> + <code>.json</code> of 32x32 tiles (json: id -&gt; {top/side/bottom: [x,y,w,h]}). Item textures live at <code>textures/item/</code> in the pack.</li>
+<li>Held viewmodel: player.gd <code>hand_root</code> / <code>held_box</code> (block) / <code>held_sprite</code> (flat item billboard) / <code>held_fist</code>; swing system animates hand_root (SWING_DURATION 0.1, AC-0048 loop) - anything parented to hand_root swings for free.</li>
+<li>Item ids live in godot/autoload/data.gd (100 stick, 104 leather, 105 iron ingot, 107 diamond, 109 iron sword, 111-114 pickaxes wood/stone/iron/diamond, 115-118 axes, 119-122 shovels, 123-125 wood/stone/diamond swords, 127-138 armor 3 materials x 4 pieces, 139 bucket, 140 water bucket, 141 lava bucket, 142 bow, 143 arrow, 145 string, food ids, etc - READ data.gd for the authoritative list; item display color is <code>items[id]["icon"]</code> or similar). Tool types are already known to the matcher (data.gd TOOL_BLOCKS / block_tool).</li>
+</ul>
+<h2>Part A - pixel icons (all items, from pack textures)</h2>
+<ol>
+<li>New import step (extend atlas.gd or a sibling script, same style): extract <code>textures/item/*.png</code>, build <code>assets/items_atlas.png</code> + <code>items_atlas.json</code>: <code>{item_id: [x, y, w, h]}</code> single-sprite-per-item. Map every item id in data.gd to its mcpack texture name (wooden_pickaxe, stone_axe, ..., iron_sword, leather_chestplate, bucket, water_bucket, bow, arrow, ...). Items whose texture is missing fall back to flat color (never crash). 32x32 native tiles, same as blocks.</li>
+<li>Expose lookup (e.g. <code>Atlas.item_rect(item_id)</code> or Atlas autoload var) - single source of truth.</li>
+<li>UI icon path: <code>_setup_icon</code> (inventory.gd) - if item has an atlas tile, draw it (texture-region on the slot Control, scaled to fit the slot like block tiles already work); else keep flat color fallback. This covers the E-inventory, storage, hotbar, armor slots AND the left "Craftable" recipe list for free (they all route through _setup_icon).</li>
+<li>Held non-tool items (food, buckets, arrows, bow, armor in hand): replace the flat <code>_tint_tex</code> sprite with a textured sprite (ItemTexture from items_atlas tile; keep the same quad size/position). Blocks keep <code>held_box</code>; tools go to Part B.</li>
+</ol>
+<h2>Part B - voxel 3D held tools (pickaxes/axes/shovels/swords, all 4 tiers)</h2>
+<ol>
+<li>New: a per-tool-type voxel viewmodel built from plain BoxMeshes (1 voxel = 1x1x1 box, ~0.12 scale) parented to <code>hand_root</code> (sibling of held_box/held_sprite) so the EXISTING swing animation drives it - no new anim code.
+  <ul>
+  <li>Handle: 3 voxels vertical (1x3), wood-brown for wood, gray/white/diamond-colored shaft tint is fine (keep one handle color + tool head tinted per tier via <code>items[id]["icon"]</code> color - simplest honest approach).</li>
+  <li>Pickaxe head: 3 voxels across the TOP of the handle (x -1..1 at handle top), tier tint.</li>
+  <li>Axe head: 2 voxels at handle top (one directly above the top, one to the +x side), tier tint.</li>
+  <li>Shovel head: 1 voxel (slightly taller/wider, 1x2 acceptable) at the BOTTOM of the handle, tier tint.</li>
+  <li>Sword: 3-voxel vertical blade, bottom 2 = handle tint (leather brown), top = tier tint (slightly brighter acceptable).</li>
+  <li>Bow (142): no 3D model needed - textured icon sprite is fine (MC bow held model is complex); document it.</li>
+  </ul></li>
+<li><code>_update_held</code> routing: selected item is a tool (pick/axe/shovel/sword family by id range/type in data.gd) -&gt; show voxel tool (correct type + tier), hide held_box/held_sprite/fist; block -&gt; held_box as today; non-tool item -&gt; textured sprite (Part A); empty -&gt; fist. Selection/tier must update correctly when switching hotbar slots (the existing <code>_held_key</code> change mechanism already fires - reuse it).</li>
+<li>Orientation: static pose matching "held at 45deg" look (rotate the tool group so the handle points up-back-right like MC's first-person items); per-tool minor position offsets to keep it centered in the bottom-right viewmodel area. First-person only is correct (external cameras show whatever the model is - fine).</li>
+</ol>
+<h2>Verify gates (ALL, zero script errors)</h2>
+<ol>
+<li><code>~/tools/godot/godot --headless --path godot --quit</code> - zero script errors (NEW .import files + atlas assets land; stale <code>.ctex</code>/<code>.md5</code> purge after atlas regen is a known gotcha - CONTINUITY.md).</li>
+<li><b>Atlas import</b>: run the import headless; assert items_atlas.json covers EVERY data.gd item id that has a pack texture (expected: all of 100-125, 139-143, 145, foods, armor 127-138); print the coverage count in RESULT. Missing = fallback, not failure.</li>
+<li><b>Viewmodel harness</b> (extend AWECRAFT_LOGIC=swing in godot/scenes/main.gd): for ids 111 (wood pick), 115 (wood axe), 119 (wood shovel), 123 (wood sword), 113 (iron pick): give item, select, assert the voxel tool node exists + visible + correct type tag, fist and sprite hidden; then select a block (id 6 log) -&gt; held_box visible again; empty hand -&gt; fist. Assert per-tier tint differs (e.g. icon tint color of 111 vs 113). All printed in RESULT.</li>
+<li><b>Icon UI check</b>: extend the AWECRAFT_INV=1 render hook data to include a tool/food/bucket in the hotbar+storage (it already gives 111/127/132) - the snapshot must show TEXTURED icons (not flat color squares) for tools/armor/bucket. Visual gate (view the PNG yourself before reporting).</li>
+<li>Full battery green: player interact light fluids buckets craft guiclick combat swing settings (+ mining/water/look if present) - zero script errors.</li>
+<li>Render set into tasks/AC-0051/: first-person snapshots holding WOOD PICKAXE, IRON AXE, DIAMOND SHOVEL, WOOD SWORD (add a tiny <code>AWECRAFT_HELD=&lt;id&gt;</code> env hook if needed - give item, select, snap; keep hook minimal + documented), + the inventory-with-textured-icons shot. AWECRAFT_SNAPSHOT=absolute path, AWECRAFT_NO_FOG=1 where scene visible needed.</li>
+<li>Web rebuild <code>./build_web.sh</code> (exit 0, fresh export). Note: pck grows slightly (items_atlas.png) - expected.</li>
+</ol>
+<h2>Deliverables</h2>
+<ul>
+<li>tasks/AC-0051/AC-0051-results.html - self-contained: what changed (file:line), atlas coverage count, harness RESULT values, the render set embedded, bow=icon-only note.</li>
+<li>Report to coordinator: MAX 20 lines - files changed, coverage count, harness values, deviations.</li>
+</ul>
+<h2>Rules</h2>
+<ul>
+<li>godot/ only; Godot ONE at a time; headless FIRST; renders only xvfb gl_compatibility (AWECRAFT_NO_FOG=1, absolute snapshot paths); no audio device; no git; never touch web/ or frozen index.html; never kill the python servers; scratch to .scratch/; small honest partial &gt; empty; zero script errors is a hard gate.</li>
+</ul>
+</body></html>
