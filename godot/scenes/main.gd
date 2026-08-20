@@ -52,6 +52,10 @@ func _ready() -> void:
 	var time_env := OS.get_environment("AWECRAFT_TIME")
 	if time_env != "":
 		Game.time_of_day = fmod(time_env.to_float(), 1.0)
+	var anim_phase_env := OS.get_environment("AWECRAFT_ANIM_PHASE")
+	if anim_phase_env != "":
+		for bid in Data.fluid_anim_mats:
+			Data.fluid_anim_mats[bid].set_shader_parameter("phase", anim_phase_env.to_float())
 	_update_sky()
 
 	world = WorldRes.instantiate()
@@ -424,6 +428,16 @@ func _ready() -> void:
 		camera.position = Vector3(spawn.x + 18.0, spawn.y + 26.0, spawn.z - 18.0)
 		camera.look_at(Vector3(spawn.x - 4.0, spawn.y - 6.0, spawn.z + 4.0), Vector3(0, 1, 0))
 		camera.current = true
+	elif OS.get_environment("AWECRAFT_ANIM_SHOT") == "1":
+		var wc = _find_water_cell(spawn)
+		if wc.has("cell"):
+			var wci: Vector3i = wc["cell"]
+			camera = _make_camera()
+			camera.position = Vector3(float(wci.x) + 0.5, float(wci.y) + 13.0, float(wci.z) + 0.5)
+			camera.look_at(Vector3(float(wci.x) + 0.5, float(wci.y), float(wci.z) + 0.5), Vector3(0, 0, 1))
+			camera.current = true
+		else:
+			print("ANIM_SHOT no water cell near spawn")
 	else:
 		await _await_spawn_floor(spawn, 300)
 		player = _spawn_player()
@@ -1264,6 +1278,23 @@ func _find_aim_spot() -> Dictionary:
 				if absf(pitch) > 1.55:
 					continue
 				return {"cell": tc, "id": world.get_block(tc.x, tc.y, tc.z), "cam": cam, "yaw": yaw, "pitch": pitch}
+	return {}
+
+
+func _find_water_cell(spawn: Vector3) -> Dictionary:
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	for r in range(0, 64, 4):
+		for dx in range(-r, r + 1, 4):
+			for dz in range(-r, r + 1, 4):
+				var x := sx + dx
+				var z := sz + dz
+				var th: int = WorldGen.terrain_height(x, z, Game.world_seed)
+				if th < 0 or th >= Data.SEA - 1:
+					continue
+				for y in range(Data.SEA - 1, maxi(th, 0) - 1, -1):
+					if world.fluid_level(x, y, z) > 0 or world.get_block(x, y, z) == 5:
+						return {"cell": Vector3i(x, y, z)}
 	return {}
 
 

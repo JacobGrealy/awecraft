@@ -1,0 +1,23 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0031 — water animation (web-faithful)</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:900px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}</style></head><body>
+<h1>AC-0031 — animated water, web-faithful</h1>
+<h2>Request (user backlog, 2026-08-18)</h2>
+<p>"water texture should be animated" — the web build animates the water surface (UV scroll/shimmer over time); the Godot port currently renders a static fluid texture.</p>
+<h2>Requirements</h2>
+<ul>
+<li>Web spec first: targeted grep of <code>index.html</code> for how the fluid/water render animates (UV offset by time? sine shimmer? 2-frame flip? speed + direction). Port the SAME approach and parameters to Godot.</li>
+<li>Fix in godot/ only (fluid mesh material / UV pipeline — <code>world/chunk.gd</code> fluid side, or a small shader; your choice, but it must match the web look).</li>
+<li>Animation must be texture/UV-side ONLY — no per-frame fluid mesh rebuild, no extra fluid sim work. Zero regression on the perf gate.</li>
+<li>Keep: level-aware fluid mesh, buckets, fluid raycast, water tint [47,107,235], fluid sleep behavior. Lava stays static (web reference decides — verify, don't assume).</li>
+<li>Must work in the WEB export (user's primary surface) and desktop.</li>
+</ul>
+<h2>Verify (hard gates)</h2>
+<ol>
+<li>Headless: full battery (player/interact/light/fluids/buckets + plain --quit) → zero script errors.</li>
+<li>Perf regression: <code>AWECRAFT_LOGIC=perf AWECRAFT_TIMING=1</code> → chunks=81, max_frame_ms ≤ ~80, no regression vs 63 ms baseline.</li>
+<li>Desktop motion proof: two renders via the standard harness (xvfb gl_compatibility, r=1 or 2) at two different <code>AWECRAFT_TIME</code> values near water; pixel-diff the water region → non-zero diff (motion), no black/tearing. Save both PNGs + the diff to tasks/AC-0031/.</li>
+<li>Web rebuild (<code>./build_web.sh</code>), then browser proof (playwright vs https://localhost:8443, do NOT kill the 8443 daemon): two screenshots ~2 s apart, water region pixel-diff non-zero. Save to tasks/AC-0031/.</li>
+</ol>
+<h2>Deliverables</h2>
+<ul><li>Fix in godot/, rebuilt web/, <code>tasks/AC-0031/AC-0031-results.html</code> (summary + before/after + diff evidence). Report ≤20 lines.</li></ul>
+</body></html>

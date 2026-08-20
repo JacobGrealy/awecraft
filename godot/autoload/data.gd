@@ -27,6 +27,7 @@ const C_DANDELION := Color(0.941, 0.824, 0.157)
 
 var atlas_tex: Texture2D = null
 var atlas_rects := {}
+var fluid_anim_mats := {}
 const ATLAS_PX := 1024.0
 const TILE_PX := 32
 
@@ -180,6 +181,32 @@ func _ready() -> void:
 		f.close()
 		if j is Dictionary:
 			atlas_rects = j
+	_make_fluid_anim_mats()
+
+
+# Web-faithful: updateAtlasAnims flips stacked frames at 300 ms/frame (web
+# default frametime; no .animation.json for water/lava in the Faithful pack).
+func _make_fluid_anim_mats() -> void:
+	for bid in [5, 24]:
+		var sm := ShaderMaterial.new()
+		var sh = load("res://core/fluid_anim.gdshader")
+		if sh == null:
+			sm.queue_free()
+			continue
+		sm.shader = sh
+		sm.set_shader_parameter("atlas", atlas_tex)
+		sm.set_shader_parameter("anim_frames", float(block_anim_frames(bid)))
+		sm.set_shader_parameter("frame_time", 0.3)
+		sm.set_shader_parameter("phase", 0.0)
+		sm.set_shader_parameter("alpha_scale", 0.62)
+		fluid_anim_mats[bid] = sm
+
+
+func block_anim_frames(id: int) -> int:
+	var e = atlas_rects.get(str(id))
+	if e == null:
+		return 1
+	return maxi(1, int(e.get("anim", 1)))
 
 
 func block_rect(id: int, face: String) -> Vector2i:

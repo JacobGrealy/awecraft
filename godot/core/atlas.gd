@@ -58,7 +58,9 @@ static func import_pack(pack_path: String) -> Dictionary:
 	for id in rects:
 		var faces: Dictionary = rects[id]
 		for fn in faces:
-			used[Vector2i(int(faces[fn][0]), int(faces[fn][1]))] = true
+			var fr = faces[fn]
+			if fr is Array:
+				used[Vector2i(int(fr[0]), int(fr[1]))] = true
 	var tiles_ok := 0
 	var missing: Array = []
 	for id in MAP:
@@ -94,13 +96,28 @@ static func import_pack(pack_path: String) -> Dictionary:
 			else:
 				if img.get_format() != Image.FORMAT_RGBA8:
 					img.convert(Image.FORMAT_RGBA8)
-				if img.get_width() != TILE_PX or img.get_height() != TILE_PX:
-					img.resize(TILE_PX, TILE_PX)
-				atlas.blit_rect(img, Rect2i(0, 0, TILE_PX, TILE_PX), tl)
-				tiles_ok += 1
+				if img.get_width() == TILE_PX and img.get_height() > TILE_PX and img.get_height() % TILE_PX == 0:
+					# stacked animation frames (web: ANIM flip); frame 0 in the tile,
+					# frames 1..N-1 in the tiles directly below it
+					var nfr := int(img.get_height()) / TILE_PX
+					var st := _strip_tile(used, nfr)
+					if st.x >= 0:
+						for fr in range(nfr):
+							used[Vector2i(st.x, st.y + fr * TILE_PX)] = true
+							atlas.blit_rect(img, Rect2i(0, fr * TILE_PX, TILE_PX, TILE_PX), Vector2i(st.x, st.y + fr * TILE_PX))
+						tl = st
+						faces["anim"] = nfr
+					else:
+						tl = Vector2i(-1, -1)
+						missing.append(fname + "(strip)")
+				else:
+					if img.get_width() != TILE_PX or img.get_height() != TILE_PX:
+						img.resize(TILE_PX, TILE_PX)
+					atlas.blit_rect(img, Rect2i(0, 0, TILE_PX, TILE_PX), tl)
+					tiles_ok += 1
 			ftile[fname] = [tl.x, tl.y, TILE_PX, TILE_PX]
 			faces[face_name] = [tl.x, tl.y, TILE_PX, TILE_PX]
-		rects[bkey] = faces
+			rects[bkey] = faces
 	z.close()
 	DirAccess.make_dir_recursive_absolute("res://assets")
 	atlas.save_png("res://assets/blocks_atlas.png")
@@ -121,4 +138,18 @@ static func _free_tile(used: Dictionary) -> Vector2i:
 				return p
 			tx += 1
 		ty += 1
+	return Vector2i(-1, -1)
+
+
+static func _strip_tile(used: Dictionary, nfr: int) -> Vector2i:
+	var cols := ATLAS_PX / TILE_PX
+	for tx in range(cols):
+		for tyi in range(cols - nfr + 1):
+			var ok := true
+			for i in range(nfr):
+				if used.has(Vector2i(tx * TILE_PX, (tyi + i) * TILE_PX)):
+					ok = false
+					break
+			if ok:
+				return Vector2i(tx * TILE_PX, tyi * TILE_PX)
 	return Vector2i(-1, -1)

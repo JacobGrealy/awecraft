@@ -433,6 +433,13 @@ func _fluid_material() -> StandardMaterial3D:
 	return m
 
 
+func _fluid_anim_material(id: int) -> Material:
+	var m = Data.fluid_anim_mats.get(id)
+	if m != null:
+		return m
+	return _fluid_material()
+
+
 func _surface(arr: Acc) -> Array:
 	var a: Array = []
 	a.resize(Mesh.ARRAY_MAX)
@@ -518,8 +525,10 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	var rc_o: Array = []
 	var rk: Array = []
 	var rq: Array = []
-	var rf: Array = []
-	var nff := 0
+	var rf_w: Array = []
+	var rf_l: Array = []
+	var nfw := 0
+	var nfl := 0
 	var d: PackedByteArray = data
 	for y in range(Data.HEIGHT):
 		var dy := y << 8
@@ -532,8 +541,13 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 				if id == 5 or id == 24:
 					var hgt: float = _fluid_hgt(lx, y, lz, snap, snap_fl)
 					if hgt > 0.0:
-						nff += _fluid_quad_count(lx, y, lz, id, hgt, snap, snap_fl)
-						rf.append([lx, y, lz, id, hgt])
+						var fcnt := _fluid_quad_count(lx, y, lz, id, hgt, snap, snap_fl)
+						if id == 5:
+							nfw += fcnt
+							rf_w.append([lx, y, lz, id, hgt])
+						else:
+							nfl += fcnt
+							rf_l.append([lx, y, lz, id, hgt])
 					continue
 				if oktab[id] == 0:
 					continue
@@ -552,9 +566,12 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	var ac := Acc.new()
 	_qgrow(ac, rc_o.size())
 	_emit_faces(rc_o, ac, lmn, larr, lw, ld, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
-	var af := Acc.new()
-	_qgrow(af, nff)
-	_emit_fluid(rf, af, snap, snap_fl, has_tex, fn, fcv, ct, cs, cb)
+	var af_w := Acc.new()
+	_qgrow(af_w, nfw)
+	_emit_fluid(rf_w, af_w, snap, snap_fl, has_tex, fn, fcv, ct, cs, cb)
+	var af_l := Acc.new()
+	_qgrow(af_l, nfl)
+	_emit_fluid(rf_l, af_l, snap, snap_fl, has_tex, fn, fcv, ct, cs, cb)
 	var ak := Acc.new()
 	_qgrow(ak, rk.size())
 	_emit_faces(rk, ak, lmn, larr, lw, ld, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
@@ -570,13 +587,16 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 		mi.mesh = mesh
 		add_child(mi)
 		mesh_instance = mi
-	if ac.q > 0 or af.q > 0:
+	if ac.q > 0 or af_w.q > 0 or af_l.q > 0:
 		if ac.q > 0:
 			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ac))
 			mesh.surface_set_material(mesh.get_surface_count() - 1, _fluid_material())
-		if af.q > 0:
-			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(af))
-			mesh.surface_set_material(mesh.get_surface_count() - 1, _fluid_material())
+		if af_w.q > 0:
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(af_w))
+			mesh.surface_set_material(mesh.get_surface_count() - 1, _fluid_anim_material(5))
+		if af_l.q > 0:
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(af_l))
+			mesh.surface_set_material(mesh.get_surface_count() - 1, _fluid_anim_material(24))
 		var fi := MeshInstance3D.new()
 		fi.mesh = mesh
 		add_child(fi)

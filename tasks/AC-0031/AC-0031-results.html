@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0031 — Animated water (web-faithful)</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 24px auto; padding: 0 16px; color: #222; }
+h1 { font-size: 22px; } h2 { font-size: 17px; margin-top: 28px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; vertical-align: top; }
+th { background: #f4f4f4; }
+.pass { color: #0a0; font-weight: bold; }
+code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; }
+img { max-width: 560px; border: 1px solid #bbb; }
+.pair { display: flex; gap: 16px; flex-wrap: wrap; }
+.note { background: #fff8e1; border-left: 4px solid #fa0; padding: 8px 12px; font-size: 14px; }
+</style>
+</head>
+<body>
+
+<h1>AC-0031 — Animated water (web-faithful)</h1>
+<p>Port the frozen web build's water animation into <code>godot/</code> with web-exact parameters. Web build was the spec; all fixes in <code>godot/</code> only.</p>
+
+<h2>Web findings (index.html, read-only)</h2>
+<ul>
+<li><code>updateAtlasAnims(dt)</code> re-blits frame <code>idx = floor(elapsed_ms / frametime)</code> into the <em>same</em> atlas tile each flip; sequential cycle <code>idx % N</code>.</li>
+<li><code>findAnimJson</code> only parses <code>.animation.json</code> — it ignores Faithful's <code>.mcmeta</code> — so water/lava run at the web <strong>default 300 ms/frame</strong>.</li>
+<li>Faithful-32x-1.21.11 pack: <code>water_still.png</code> = 32×1024 (<strong>32 stacked frames</strong>), <code>lava_still.png</code> = 32×640 (<strong>20 stacked frames</strong>). Water frame alpha = 180, lava alpha = 255. <strong>Lava animates too</strong> (spec had assumed possibly-static).</li>
+</ul>
+
+<h2>Approach (texture/UV-side only, zero sim changes)</h2>
+<ul>
+<li><code>godot/core/atlas.gd</code>: fresh import detects stacked images (width 32, height a multiple of 32), allocates a vertical frame strip (frame 0 = normal tile rect, frames stacked below), records <code>faces["anim"] = N</code> in the atlas JSON.</li>
+<li><code>godot/core/fluid_anim.gdshader</code> (new, spatial): <code>frame = mod(floor((TIME + phase) / frame_time), anim_frames)</code>; <code>uv.y += frame / 32</code>; <code>ALBEDO = tex.rgb * COLOR.rgb</code>; <code>ALPHA = alpha_scale * tex.a</code> (0.62 for water, over tint-vertex-color).</li>
+<li><code>godot/autoload/data.gd</code>: builds one <code>ShaderMaterial</code> per fluid (block 5 → 32 frames @0.3s; block 24 → 20 frames @0.3s).</li>
+<li><code>godot/world/chunk.gd</code>: fluid surface records split into standard (torch) / water / lava so each fluid gets its animated material; fallback to standard material if a mat is missing.</li>
+<li>Atlas regenerated: water strip px (224,0) ×32 rows, lava strip px (0,32) ×20 rows, 29 tiles, portal purple fallback. Consecutive water frames verified to differ (266 px).</li>
+</ul>
+
+<h2>Key bug found &amp; fixed</h2>
+<div class="note">First proof pair was pixel-identical. Forensics: Godot <em>game mode</em> served a <strong>stale imported texture</strong> — <code>blocks_atlas.png-3d6da29d…ctex</code> dated 13:14 (old atlas) while the PNG had been regenerated at 20:00; cached <code>source_md5</code> (0262b2c7…) ≠ current (7419b4fe…). The old atlas happened to have the water tile at the same column, so only frame 0 looked right and frames 1+ sampled empty tiles → water invisible. Fix: purged the stale <code>.ctex</code>/<code>.md5</code> and force-reimported (<code>godot --headless --path godot --import</code>); md5 now matches, fresh ctex written.</div>
+
+<h2>Verification gates</h2>
+<table>
+<tr><th>Gate</th><th>Result</th><th>Evidence</th></tr>
+<tr><td>a. Headless battery</td><td class="pass">PASS</td><td>player/interact/light/fluids/buckets + <code>--quit</code>: 0 script errors. Fluids: sea_stable=true, water_on_lava_result=25, sideways_lava_result=9, bucket scoop/place OK. Re-run after final cleanup: 0 errors.</td></tr>
+<tr><td>b. Perf (R=…)</td><td class="pass">PASS</td><td><code>AWECRAFT_LOGIC=perf AWECRAFT_TIMING=1</code>: chunks=81, <strong>max_frame_ms=61 ≤ 80</strong> (textured-anim build; baseline was 63 ms). Animation is UV math only, no mesh rebuilds.</td></tr>
+<tr><td>c. Desktop motion proof</td><td class="pass">PASS</td><td>Top-down render over water cell (0,29,16), phase 0 vs 1.5 (engine T≈20.7 s/21.1 s → frames <strong>5 vs 11</strong>): pixel diff full-frame bbox, <strong>98,383 px changed</strong>; water renders tinted (96,118,160)→(98,123,172). Below.</td></tr>
+<tr><td>d. Web build + Playwright</td><td class="pass">PASS</td><td><code>./build_web.sh</code> fresh export of final tree (21:59); server <code>https://localhost:8443/</code> → 200 (pid 45083). Chromium 1280×720, 2 shots 2 s apart: <strong>19,962 px changed</strong>, bbox (0,157,1280,720) = ocean band. Only console noise: "Pointer Lock requires user gesture" (expected, headless). Below.</td></tr>
+</table>
+
+<h2>Desktop proof (ANIM_SHOT, top-down over water, phase 0 → 1.5)</h2>
+<div class="pair">
+<div><img src="water_anim_a.png" alt="frame 5"><br>shot A (frame 5)</div>
+<div><img src="water_anim_b.png" alt="frame 11"><br>shot B (frame 11)</div>
+<div><img src="water_anim_diff.png" alt="diff"><br>diff ×8 (bright = changed)</div>
+</div>
+
+<h2>Web proof (https://localhost:8443, 2 s apart)</h2>
+<div class="pair">
+<div><img src="web_anim_a.png" alt="web shot a"><br>web A</div>
+<div><img src="web_anim_b.png" alt="web shot b"><br>web B</div>
+<div><img src="web_anim_diff.png" alt="web diff"><br>diff ×8</div>
+</div>
+
+<h2>Notes / deviations</h2>
+<ul>
+<li>Lava now animates (20 frames, 300 ms) — matches web exactly, though the spec text hinted at possibly-static; web is the source of truth.</li>
+<li>Kept harness env knobs for future visual proofs: <code>AWECRAFT_ANIM_SHOT=1</code> (top-down camera on a water cell near spawn) and <code>AWECRAFT_ANIM_PHASE</code> (shader time-offset to force a known frame window). All debug prints and the shparam probe were removed.</li>
+<li>Water alpha = 0.62 × frame alpha (180/255) over the standard water tint — static look identical to pre-task water at frame 0, only frame content moves.</li>
+</ul>
+
+</body>
+</html>
