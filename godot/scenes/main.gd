@@ -1023,6 +1023,25 @@ func _heldpair(p):
 	return [int(p.held["id"]), int(p.held["n"])]
 
 
+func _mb(pos: Vector2, button: int, pressed: bool, shift := false) -> void:
+	var e := InputEventMouseButton.new()
+	e.button_index = button
+	e.pressed = pressed
+	e.position = pos
+	e.global_position = pos
+	e.shift_pressed = shift
+	Input.parse_input_event(e)
+
+
+func _mm(pos: Vector2, rel: Vector2) -> void:
+	var e := InputEventMouseMotion.new()
+	e.position = pos
+	e.global_position = pos
+	e.relative = rel
+	e.button_mask = 1
+	Input.parse_input_event(e)
+
+
 func _guiclick_test() -> void:
 	var p = Game.player
 	for i in 4:
@@ -1078,8 +1097,167 @@ func _guiclick_test() -> void:
 	Game.hotbar._release_drop(p, s23.position + s23.size * 0.5)
 	r["drop_storage"] = [int(p._inv_get(9)["id"]), int(p._inv_get(9)["n"]), _heldpair(p)]
 	ok = ok and r["drop_storage"] == [6, 5, [0, 0]]
+	ok = ok and await _guiclick_real(p, r, ok)
 	Debug.result({"ok": ok, "data": r})
 	get_tree().quit()
+
+
+func _slotc(si: int) -> Vector2:
+	var s: Control = Game.hotbar._slots[si]
+	return Vector2(s.position.x + 24.0, s.position.y + 24.0)
+
+
+func _guiclick_real(p, r, ok: bool) -> bool:
+	p.held = {}
+	p.drag_held = false
+	for i in 36:
+		p.inv[i] = {"id": 0, "n": 0}
+	p.inv[0] = {"id": 8, "n": 3}
+	p.inv[1] = {"id": 9, "n": 2}
+	p.inv[5] = {"id": 6, "n": 5}
+	p.inv[9] = {"id": 2, "n": 4}
+	p.inv[10] = {"id": 5, "n": 3}
+	p.inv[11] = {"id": 7, "n": 2}
+	p.inv[12] = {"id": 4, "n": 4}
+	for i in 10:
+		await get_tree().physics_frame
+	# R1: real press on storage slot 23 (inv[9]) picks the stack up
+	var c23 := _slotc(23)
+	_mb(c23, 1, true)
+	for i in 3:
+		await get_tree().physics_frame
+	r["R1_held"] = _heldpair(p)
+	r["R1_src"] = [int(p._inv_get(9)["id"]), int(p._inv_get(9)["n"])]
+	ok = ok and r["R1_held"] == [2, 4] and r["R1_src"] == [0, 0]
+	# R2: real release over hotbar slot 52 (inv[2], empty) drops it
+	var c52 := _slotc(52)
+	_mm(c52, c52 - c23)
+	for i in 3:
+		await get_tree().physics_frame
+	_mb(c52, 1, false)
+	for i in 3:
+		await get_tree().physics_frame
+	r["R2_dst"] = [int(p._inv_get(2)["id"]), int(p._inv_get(2)["n"])]
+	r["R2_held"] = _heldpair(p)
+	ok = ok and r["R2_dst"] == [2, 4] and r["R2_held"] == [0, 0]
+	# R3: click pick (hotbar 51) + click place into other (hotbar 50) = swap, release into empty 53
+	_mb(_slotc(51), 1, true)
+	for i in 2:
+		await get_tree().physics_frame
+	_mb(_slotc(50), 1, true)
+	for i in 2:
+		await get_tree().physics_frame
+	var c53 := _slotc(53)
+	_mb(c53, 1, false)
+	for i in 3:
+		await get_tree().physics_frame
+	r["R3_hot0"] = [int(p._inv_get(0)["id"]), int(p._inv_get(0)["n"])]
+	r["R3_hot1"] = [int(p._inv_get(1)["id"]), int(p._inv_get(1)["n"])]
+	r["R3_hot3"] = [int(p._inv_get(3)["id"]), int(p._inv_get(3)["n"])]
+	r["R3_held"] = _heldpair(p)
+	ok = ok and r["R3_hot0"] == [9, 2] and r["R3_hot1"] == [0, 0] and r["R3_hot3"] == [8, 3] and r["R3_held"] == [0, 0]
+	# R4: press-drag-release hotbar 50 (inv[0]) -> storage slot 30 (inv[16])
+	var c30 := _slotc(30)
+	_mb(_slotc(50), 1, true)
+	for i in 2:
+		await get_tree().physics_frame
+	_mm(c30, c30 - _slotc(50))
+	for i in 2:
+		await get_tree().physics_frame
+	_mb(c30, 1, false)
+	for i in 3:
+		await get_tree().physics_frame
+	r["R4_dst"] = [int(p._inv_get(16)["id"]), int(p._inv_get(16)["n"])]
+	r["R4_src"] = [int(p._inv_get(0)["id"]), int(p._inv_get(0)["n"])]
+	ok = ok and r["R4_dst"] == [9, 2] and r["R4_src"] == [0, 0]
+	# R5: press-drag-release storage slot 26 (inv[12]) -> storage slot 49 (row 3, inv[35])
+	var c26 := _slotc(26)
+	var c49 := _slotc(49)
+	_mb(c26, 1, true)
+	for i in 2:
+		await get_tree().physics_frame
+	_mm(c49, c49 - c26)
+	for i in 2:
+		await get_tree().physics_frame
+	_mb(c49, 1, false)
+	for i in 3:
+		await get_tree().physics_frame
+	r["R5_dst"] = [int(p._inv_get(35)["id"]), int(p._inv_get(35)["n"])]
+	r["R5_src"] = [int(p._inv_get(12)["id"]), int(p._inv_get(12)["n"])]
+	ok = ok and r["R5_dst"] == [4, 4] and r["R5_src"] == [0, 0]
+	# R6: shift-click storage slot 24 (inv[10]) -> first empty hotbar slot (inv[1])
+	var c24 := _slotc(24)
+	_mb(c24, 1, true, true)
+	for i in 2:
+		await get_tree().physics_frame
+	_mb(c24, 1, false, true)
+	for i in 3:
+		await get_tree().physics_frame
+	r["R6_dst"] = [int(p._inv_get(0)["id"]), int(p._inv_get(0)["n"])]
+	r["R6_src"] = [int(p._inv_get(10)["id"]), int(p._inv_get(10)["n"])]
+	ok = ok and r["R6_dst"] == [5, 3] and r["R6_src"] == [0, 0]
+	# R7: shift-click hotbar slot 55 (inv[5]) -> first empty storage slot (inv[9])
+	var c55 := _slotc(55)
+	_mb(c55, 1, true, true)
+	for i in 2:
+		await get_tree().physics_frame
+	_mb(c55, 1, false, true)
+	for i in 3:
+		await get_tree().physics_frame
+	r["R7_dst"] = [int(p._inv_get(9)["id"]), int(p._inv_get(9)["n"])]
+	r["R7_src"] = [int(p._inv_get(5)["id"]), int(p._inv_get(5)["n"])]
+	ok = ok and r["R7_dst"] == [6, 5] and r["R7_src"] == [0, 0]
+	# R8: craft-output click with hotbar full -> lands in first storage slot (inv[9])
+	for i in 36:
+		p.inv[i] = {"id": 0, "n": 0}
+	p.held = {}
+	p.drag_held = false
+	for i in 9:
+		p.inv[i] = {"id": 150 + i, "n": 1}
+	p.close_inventory()
+	p.open_inventory("inv")
+	p.craft_grid[0] = {"id": 6, "n": 1}
+	p.recompute_craft()
+	for i in 6:
+		await get_tree().physics_frame
+	r["R8_out_pre"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0))]
+	var c18 := _slotc(18)
+	_mb(c18, 1, true)
+	for i in 2:
+		await get_tree().physics_frame
+	_mb(c18, 1, false)
+	for i in 3:
+		await get_tree().physics_frame
+	r["R8_planks"] = _count_item(p, 8)
+	r["R8_inv9"] = [int(p._inv_get(9)["id"]), int(p._inv_get(9)["n"])]
+	ok = ok and r["R8_out_pre"] == [8, 4] and r["R8_planks"] == 4 and r["R8_inv9"] == [8, 4]
+	# P1: pickup order — empty inventory, item lands in the first HOTBAR slot
+	for i in 36:
+		p.inv[i] = {"id": 0, "n": 0}
+	p.held = {}
+	p.drag_held = false
+	Debug.give_item(8, 5)
+	r["P1_landing"] = _slot_of(p, 8)
+	r["P1_inv0"] = [int(p._inv_get(0)["id"]), int(p._inv_get(0)["n"])]
+	ok = ok and r["P1_landing"] == 0 and r["P1_inv0"] == [8, 5]
+	# P2: merge-where-present still wins (hotbar stack grows)
+	for i in 36:
+		p.inv[i] = {"id": 0, "n": 0}
+	p.inv[2] = {"id": 8, "n": 10}
+	Debug.give_item(8, 5)
+	r["P2_merge"] = [int(p._inv_get(2)["id"]), int(p._inv_get(2)["n"])]
+	r["P2_landing"] = _slot_of(p, 8)
+	ok = ok and r["P2_merge"] == [8, 15] and r["P2_landing"] == 2
+	# P3: hotbar full -> overflow to first storage slot (inv[9])
+	for i in 36:
+		p.inv[i] = {"id": 0, "n": 0}
+	for i in 9:
+		p.inv[i] = {"id": 150 + i, "n": 1}
+	Debug.give_item(8, 3)
+	r["P3_landing"] = _slot_of(p, 8)
+	r["P3_inv9"] = [int(p._inv_get(9)["id"]), int(p._inv_get(9)["n"])]
+	ok = ok and r["P3_landing"] == 9 and r["P3_inv9"] == [8, 3]
+	return ok
 
 
 func _craft_test() -> void:
@@ -1103,8 +1281,9 @@ func _craft_test() -> void:
 	r["planks_a"] = _count_item(p, 8)
 	r["logs_a"] = _count_item(p, 6)
 	ok = ok and r["planks_a"] == 4 and r["logs_a"] == 1
-	p.inv[1] = p.inv[9]
-	p.inv[9] = {"id": 0, "n": 0}
+	for i in 36:
+		if i != 1 and int(p.inv[i]["id"]) == 8:
+			p.inv[i] = {"id": 0, "n": 0}
 	Debug.inv_click(41, 2)
 	Debug.inv_click(0, 0)
 	r["out_b"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
@@ -1123,17 +1302,13 @@ func _craft_test() -> void:
 	r["sticks_c"] = _count_item(p, 100)
 	r["planks_c"] = _count_item(p, 8)
 	ok = ok and r["sticks_c"] == 4 and r["planks_c"] == 6
-	Debug.give_item(127, 1)
-	p.inv[3] = p.inv[10]
-	p.inv[10] = {"id": 0, "n": 0}
+	p.inv[3] = {"id": 127, "n": 1}
 	Debug.inv_click(44, 0)
 	Debug.inv_click(10, 0)
 	r["armor_head"] = int(p.armor[0])
 	r["points_head"] = p.armor_points()
 	ok = ok and r["armor_head"] == 127 and r["points_head"] == 1
-	Debug.give_item(131, 1)
-	p.inv[3] = p.inv[10]
-	p.inv[10] = {"id": 0, "n": 0}
+	p.inv[3] = {"id": 131, "n": 1}
 	Debug.inv_click(44, 0)
 	Debug.inv_click(10, 0)
 	r["armor_swap"] = [int(p.armor[0]), int(p.held.get("id", 0)) if p.held != {} else 0, p.armor_points()]

@@ -923,9 +923,9 @@ func _stack_max(id: int) -> int:
 
 func _inv_order() -> Array:
 	var order: Array = []
-	for i in range(STORAGE_OFF, mini(INV_SIZE, inv.size())):
-		order.append(i)
 	for i in range(0, mini(STORAGE_OFF, inv.size())):
+		order.append(i)
+	for i in range(STORAGE_OFF, mini(INV_SIZE, inv.size())):
 		order.append(i)
 	return order
 
@@ -1193,7 +1193,7 @@ func _slot_click(s: Dictionary, set_slot: Callable, area: String, button: int, s
 		else:
 			set_slot.call({"id": int(held["id"]), "n": int(held["n"])})
 			held = {"id": int(s["id"]), "n": int(s["n"])}
-		drag_held = false
+		drag_held = int(held.get("id", 0)) != 0
 	elif has_s:
 		held = {"id": int(s["id"]), "n": int(s["n"])}
 		set_slot.call({"id": 0, "n": 0})

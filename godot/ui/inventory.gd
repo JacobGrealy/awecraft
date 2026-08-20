@@ -395,12 +395,25 @@ func _is_table_mode() -> bool:
 	return p != null and String(p.ui_mode) == "table"
 
 
+func _hit_slot(gpos: Vector2) -> int:
+	for i in _slots.size():
+		var c: Control = _slots[i]
+		if not c.visible:
+			continue
+		if not Rect2(c.position, c.size).has_point(gpos):
+			continue
+		return i
+	return -1
+
+
 func _route_click(button: int, shift: bool, is_press: bool, si: int) -> void:
 	var p = Game.player
 	if p == null:
 		return
 	if not is_press:
-		_release_drop(p, (_slots[si] as SlotCtl).rel_pos)
+		var gpos: Vector2 = (_slots[si] as SlotCtl).rel_pos
+		if _hit_slot(gpos) != si:
+			_release_drop(p, gpos)
 		return
 	var area: String = _areas[si]
 	var idx: int = _indices[si]
@@ -422,28 +435,24 @@ func _route_click(button: int, shift: bool, is_press: bool, si: int) -> void:
 
 
 func _release_drop(p, gpos: Vector2) -> void:
-	for i in _slots.size():
-		var c: Control = _slots[i]
-		if not c.visible:
-			continue
-		if not Rect2(c.position, c.size).has_point(gpos):
-			continue
-		var area: String = _areas[i]
-		var idx: int = _indices[i]
-		if area == "storage":
-			p.inv_slot_click(idx, "storage", 0, false, true)
-		elif area == "armor":
-			p.armor_slot_click(idx, 0, false, true)
-		elif area == "hotbar":
-			p.inv_slot_click(idx, "hotbar", 0, false, true)
-		elif area == "craft":
-			if _is_table_mode():
-				p.table_grid_click(idx, 0, false, true)
-			else:
-				p.craft_grid_click(idx, 0, false, true)
-		elif area == "hotbar_bottom":
-			p.sel = idx
+	var ti := _hit_slot(gpos)
+	if ti < 0:
 		return
+	var area: String = _areas[ti]
+	var idx: int = _indices[ti]
+	if area == "storage":
+		p.inv_slot_click(idx, "storage", 0, false, true)
+	elif area == "armor":
+		p.armor_slot_click(idx, 0, false, true)
+	elif area == "hotbar":
+		p.inv_slot_click(idx, "hotbar", 0, false, true)
+	elif area == "craft":
+		if _is_table_mode():
+			p.table_grid_click(idx, 0, false, true)
+		else:
+			p.craft_grid_click(idx, 0, false, true)
+	elif area == "hotbar_bottom":
+		p.sel = idx
 
 
 func _tile_texture(region: Vector2i) -> Texture2D:

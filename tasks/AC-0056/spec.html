@@ -1,0 +1,62 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0056 - Frutiger Aero look (color grade + skybox)</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:960px;line-height:1.5;color:#122}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd2e0;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}li{margin:3px 0}</style></head><body>
+<h1>AC-0056 — give the game a Frutiger Aero look: (A) fullscreen color-grade + (B) aero skybox</h1>
+<h2>User request (2026-08-20, verbatim)</h2>
+<p>"can we apply some kind of color grading to make our game have frutiger aero aesthetic?" + "also add a skybox that has the frutiger aero aesthetic". These are the user's two headline asks. They flow into BOTH the desktop godot render AND the web build (web/ is rebuilt from godot/ — the primary surface is the browser on 8443).</p>
+<h2>What "Frutiger Aero" means here (the target, be specific)</h2>
+<p>Mid-2000s glossy optimistic "aqua/aviation" look: highly saturated cyan/blue/green, glassy bright highlights, a big soft glowing sun, a clean vertical gradient sky (deep azure → bright cyan → pale near-white horizon), puffy glossy clouds, and a "clean, cool, milky-lit" world with lifted (never pure-black) darks and subtle bloom. Tasteful, not neon. Reference mood: Windows Vista sky, early iOS water, glossy "aqua" UI.</p>
+<h3>Concrete palette (start here; tune from renders)</h3>
+<table>
+<tr><th>Element</th><th>Day target (hex)</th><th>Notes</th></tr>
+<tr><td>Sky zenith</td><td>#2E86D8 → #35A0E0</td><td>azure/cobalt top of screen</td></tr>
+<tr><td>Sky mid</td><td>#5FC6EA</td><td>bright cyan</td></tr>
+<tr><td>Sky horizon</td><td>#DFF6FB</td><td>near-white pale cyan at the horizon line</td></tr>
+<tr><td>Sun</td><td>#FFFFFF core, #FFF6DE warm halo</td><td>soft-edged disc + LARGE soft radial glow (halo), not a hard square</td></tr>
+<tr><td>Clouds</td><td>#FFFFFF, alpha ~0.5-0.8</td><td>puffy rounded noise blobs, subtle cyan rim, drift slowly</td></tr>
+<tr><td>Shadows (grade)</td><td>tint toward #1E5A66</td><td>cool teal shadows (split-tone)</td></tr>
+<tr><td>Highlights (grade)</td><td>cool white #F4FCFF</td><td>bright, slight cyan</td></tr>
+<tr><td>Brights/bloom</td><td>—</td><td>soft glow on sky, sun, water, torches (threshold ~0.8, medium)</td></tr>
+<tr><td>Aqua wash</td><td>cyan #7FE7FF</td><td>very subtle screen/soft-light overlay, ~4-8% amount (the "aqua" feel)</td></tr>
+<tr><td>Blacks</td><td>#0A1418 floor</td><td>lifted "milky" darks, never pure black, faint cyan</td></tr>
+</table>
+<p>Night (aero): deep indigo→teal gradient (#0B1E3A→#0E3F4A), dim cool moon glow, cooler/tighter grade, (optional) faint stars. Sunset (nice-to-have only if cheap): warm coral/pink top → cyan horizon.</p>
+<h2>Part A — fullscreen color grade</h2>
+<p>Apply a post-process grade to the whole 3D frame. Grade ops (all tunable uniforms): saturation/vibrance (up ~15-25%), split-tone (teal shadows → cool cyan-white highlights), an S-curve contrast punch in the midtones, lifted milky blacks, a soft bloom/bloom on brights, and a low-amount aqua screen-wash. Must read as "clean, bright, saturated, cool" without blowing out.
+<ul>
+<li><b>Preferred implementation:</b> a full-viewport post-process via a <b>SubViewport</b> — render the game (world + camera + aero sky) into a SubViewport, and show it through a fullscreen unlit quad whose <code>ShaderMaterial</code> samples the subviewport texture and applies the grade. This is the standard Godot 4 pattern for arbitrary color grading and works under gl_compatibility.</li>
+<li><b>Fallback</b> (only if the SubViewport route proves flaky under llvmpipe): a <code>WorldEnvironment</code> <code>Environment</code> with glow (bloom) + tonemap for the brights, and accept a lighter grade — but the aero SKYBOX (Part B) must still land fully. Do NOT silently drop the split-tone/saturation grade without telling me.</li>
+<li>Key grade uniforms (saturation, blue_wash, bloom, lift, contrast) must be editable Constants at the top of the shader so we can dial it from a re-render without re-engineering.</li>
+</ul></p>
+<h2>Part B — aero skybox</h2>
+<p>Replace the current flat <code>Environment.background_color</code> sky with a Frutiger Aero sky.
+<ul>
+<li><b>Preferred:</b> a large back-face sky surface (inverted sphere or a big quad set) with a shader: vertical gradient (zenith azure → mid cyan → pale horizon using the values above) + a soft-edged sun disc with a large radial glow (position the sun using the existing sun/day-night direction) + a few soft puffy cloud blobs (2D noise, low alpha, slow drift, subtle cyan rim) + a thin light-cyan horizon haze band. It must enclose the world and not be clipped by the far plane (either very large or parented to the camera, and raise far plane if needed).</li>
+<li><b>Alternative (simpler):</b> a <code>Sky</code> resource / <code>ProceduralSkyMaterial</code> with animated top/horizon/sun colors + glow — acceptable if it reads aero; preferred is the custom gradient surface.</li>
+<li><b>DayNight integration (required):</b> find how the sky currently updates (search <code>_update_sky</code> in <code>godot/scenes/main.gd</code> and the <code>DayNight</code> autoload) and modulate the aero palette by the same time-of-day: day = full azure/cyan, night = deep indigo/teal, sunset = warm→cyan. The grade should also shift cooler at night.</li>
+</ul></p>
+<h2>Toggle + tuning (required)</h2>
+<ul>
+<li><code>AWECRAFT_AERO=0</code> = stock look (for before/after), <code>1</code> = aero (default once verified). One env var flips the whole grade+sky so "before" shots are trivial and the user can keep it off later.</li>
+<li>Expose the key grade/sky amounts as constants so a follow-up pass only needs a numeric tweak.</li>
+</ul>
+<h2>Verify gates (ALL — zero script errors is a hard gate)</h2>
+<ol>
+<li><code>~/tools/godot/godot --headless --path godot --quit</code> → 0 script errors (aero code must not break logic).</li>
+<li>Full battery green: player interact light fluids buckets craft guiclick combat swing settings (0 script errors).</li>
+<li>Render set (xvfb gl_compatibility, <code>AWECRAFT_NO_FOG=1</code>, r=1; first-person AND a top/iso shot for the sky):
+  <ul>
+  <li><b>day aero</b> (<code>AWECRAFT_AERO=1</code>) — MUST show the aero gradient sky + glowing sun + graded saturated world.</li>
+  <li><b>day stock</b> (<code>AWECRAFT_AERO=0</code>) — before.</li>
+  <li>(nice) night aero.</li>
+  </ul>
+  Frame diff (aero vs stock) must be non-trivial. <b>View every PNG yourself before reporting.</b></li>
+<li>Web rebuild <code>./build_web.sh</code> exit 0 (fresh export). Then a browser check on https://localhost:8443 (playwright, ignore cert) — confirm the aero sky + grade are visible and there are NO console script errors (web runs Chromium ANGLE/swiftshader; make sure the ShaderMaterial + sky render there, not just under llvmpipe).</li>
+<li><code>tasks/AC-0056/AC-0056-results.html</code> self-contained: before/after (day, + night if done), a "how to tune" table (which uniforms, default values, and which are most impactful), files changed (file:line), and a one-line note if any fallback was used.</li>
+</ol>
+<h2>Deliverables</h2>
+<ul><li>Code (godot/ only): aero grade (post-shader via SubViewport or Environment glow), aero skybox day+night, AWECRAFT_AERO toggle, tunable constants.</li>
+<li>Renders into tasks/AC-0056/ (day aero, day stock, night aero, browser shot) + AC-0056-results.html.</li>
+<li>Report to coordinator: MAX 20 lines — files changed, which approach (SubViewport grade or Environment-glow fallback), uniform defaults, render paths, web-console clean?, anything you want the user to look at first.</li></ul>
+<h2>Rules</h2>
+<ul><li>godot/ only; Godot ONE at a time; headless FIRST; renders only via xvfb gl_compatibility (AWECRAFT_NO_FOG=1 when you want the world visible, AWECRAFT_SNAPSHOT=ABSOLUTE path); no audio device; no git; never touch web/ or frozen index.html; never kill the python servers; scratch → .scratch/; small honest partial &gt; empty; zero script errors is a hard gate. If the aero look needs tuning after the user sees it, that's a fast follow-up — get a strong v1 with good defaults + easy knobs.</li></ul>
+</body></html>
