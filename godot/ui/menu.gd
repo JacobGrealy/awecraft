@@ -40,6 +40,9 @@ func _ready() -> void:
 	_build_main()
 	_build_pause()
 	_build_options()
+	add_child(main_box)
+	add_child(pause_box)
+	add_child(options_box)
 	file_dialog = FileDialog.new()
 	file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	if not _is_web:

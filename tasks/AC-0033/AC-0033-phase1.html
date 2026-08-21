@@ -1,0 +1,60 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0033 Phase 1 — menu render bug: root cause + fix</title>
+<style>body{font-family:system-ui,'Segoe UI',sans-serif;margin:24px 40px;max-width:1000px;line-height:1.5;color:#1b232f}
+h1{font-size:20px}h2{font-size:15px;margin-top:22px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}
+code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}
+img{max-width:640px;border:1px solid #cdd6e3;border-radius:4px;display:block;margin:10px 0}
+table{border-collapse:collapse;font-size:13px}td,th{border:1px solid #cdd6e3;padding:4px 10px;text-align:left}
+.ok{color:#0a7a2f;font-weight:600}.bad{color:#b3211b;font-weight:600}</style></head><body>
+<h1>AC-0033 Phase 1 — main-menu invisible under Xvfb/llvmpipe: root cause + fix</h1>
+<p>2026-08-21 · debug+fix on existing menu code · env-gated boot remains <code>AWECRAFT_MENU=1</code> (flip to menu-first is Phase 2)</p>
+
+<h2>Root cause (two independent wiring bugs, both renderer-independent)</h2>
+<p>(1) <b>The menu never added its UI to the scene tree.</b> In <code>godot/ui/menu.gd</code>, <code>_build_main()</code>/<code>_build_pause()</code>/<code>_build_options()</code> construct each box (a full-rect <code>Control</code> + bg <code>ColorRect</code> + centered <code>VBoxContainer</code>) and store it in <code>main_box</code>/<code>pause_box</code>/<code>options_box</code> — but <code>add_child(box)</code> was never called on the menu <code>CanvasLayer</code>. The boxes existed only as dangling GDScript references: <code>get_child_count() == 1</code> (just the FileDialog), sizes stuck at (0,0), <code>is_inside_tree() == false</code>. Nothing 2D was ever drawable. The old "children present + visible=true" probes read <i>object properties</i>, not tree membership — which is why the minimization went in circles, and why a "byte-identical replica" in a separate scene rendered fine (someone's replica must have added the child).</p>
+<p>(2) <b>The menu path had no active camera.</b> <code>main.gd</code> only creates <code>camera</code> in the game path. With no <code>Camera3D</code>, the root viewport runs no 3D pass at all — no Environment background, no aero sky — so the frame collapses to the viewport's <b>default clear color (0.3,0.3,0.3) = (77,77,77)</b>. There is no (77,77,77) constant in the menu source (its bg is MENU_BG (14,14,20)); 77,77,77 is the engine default. Both bugs together = the exact uniform gray observed. Aero grade/sky/wash was <b>ruled out</b> by A/B (<code>AWECRAFT_AERO=0</code> → still uniform 77,77,77), confirming the re-verify-first note in the spec.</p>
+
+<h2>What was changed (13 lines, 2 files)</h2>
+<pre>godot/ui/menu.gd    (+3)  _ready: add_child(main_box); add_child(pause_box); add_child(options_box)
+godot/scenes/main.gd (+10) new _setup_menu_camera(): makes+activates a Camera3D at origin
+                          (idempotent: no-op once the game camera exists — player.start() takes over at Game.start, player.gd:108)
+                          called from the AWECRAFT_MENU_SHOT branch and from _boot_menu()</pre>
+<p>Both fixes are robust across renderers (real GPU and web included): putting UI in the tree is a correctness bug fix, and giving the menu viewport a camera is what every drawing path in this project already requires. No llvmpipe-specific hacks, no rendering-method conditionals, no probe scaffolding left in the tree (probe code was added during diagnosis and fully removed).</p>
+
+<h2>Diagnosis probes (env-gated, all removed)</h2>
+<p>Binary search behind temp <code>AWECRAFT_PROBE2D=1|2</code> flags in the MENU_SHOT branch:</p>
+<table>
+<tr><th>Run</th><th>Setup</th><th>Frame result</th><th>Conclusion</th></tr>
+<tr><td>repro (pre-fix)</td><td><code>AWECRAFT_MENU_SHOT</code> = current menu path</td><td>1 distinct color (77,77,77); <b>md5-identical to the old menu-main.png</b></td><td>Current failure mode reproduced exactly; 3D bg and 2D layer both absent</td></tr>
+<tr><td>A/B aero</td><td><code>AWECRAFT_AERO=0</code></td><td>still 1 distinct (77,77,77)</td><td class="bad">aero grade/sky/wash NOT the cause</td></tr>
+<tr><td>probe 2D</td><td>plain red full-rect ColorRect on own CanvasLayer + tree walk</td><td>frame = 100% (230,51,51); walk: Menu layer's only child = FileDialog; box/bg/vb <code>is_inside_tree()==false</code>, sizes (0,0)</td><td class="bad">2D canvas works; menu boxes were never in the tree</td></tr>
+<tr><td>probe cam</td><td>bare <code>Camera3D</code> current=true, no UI</td><td>1399 distinct colors (aero sky + sun)</td><td class="bad">3D pass works iff a camera exists — menu path had none</td></tr>
+</table>
+
+<h2>Verify gates</h2>
+<table>
+<tr><th>Gate</th><th>Command</th><th>Result</th></tr>
+<tr><td>G1</td><td><code>godot --headless --path godot --quit</code> (×2, incl. final state)</td><td class="ok">zero script errors</td></tr>
+<tr><td>G2</td><td>full logic battery, headless, all 22 modes in main.gd: player, interact, light, fluids, buckets, craft, guiclick, swing, look, combat, water, fpv, tint, daynight, atlas, fluidsettle, settings, survival, editperf, perf, genhash, trees</td><td class="ok">22/22 green, 0 script errors, unchanged behavior (harness skip intact: AWECRAFT_SNAPSHOT/LOGIC still boot straight into game). Note: fpv <code>tool_held_ok:false</code> is PRE-EXISTING — A/B via git stash: byte-identical RESULT on the pristine tree.</td></tr>
+<tr><td>G3</td><td>render <code>AWECRAFT_MENU_SHOT=…</code> (current canonical menu path) + <code>AWECRAFT_MENU_VIEW=options</code>; interactive <code>AWECRAFT_MENU=1</code> 25 s boot also verified</td><td class="ok">menu-main-after.png: <b>863 distinct</b> (was 1); top color (14,14,20)×707 749 = MENU_BG, white title text (255,255,255)×2 485. menu-options-after.png: 540 distinct; panel drawn ((17,17,18) content on (4,4,5) = MENU_BG under the 0.72 overlay), 0 green pixels (no world behind). Zero script errors; RESULT <code>{"menu":true,"mode":"menu","build":"dev",…}</code></td></tr>
+<tr><td>G4</td><td>menu→game via <b>kept hook</b>: <code>AWECRAFT_MENU_BOOT=1 AWECRAFT_SNAPSHOT=… AWECRAFT_NO_FOG=1 AWECRAFT_RADIUS=2</code> (boots menu, simulates Play press via existing <code>menu_ui.play_clicked()</code>, snapshots game world)</td><td class="ok">menu-to-game.png: 6 606 distinct colors — terrain, water, held tool + hotbar HUD, <b>menu gone</b>; RESULT <code>{"m4":"ok","cam":"","w":1280,"h":720}</code></td></tr>
+</table>
+
+<h2>Before (old evidence, kept)</h2>
+<img src="menu-main.png" alt="before: uniform 77,77,77 — 1 distinct color">
+<p>uniform 77,77,77 · 1 distinct pixel · menu-main.png / menu-options.png (md5-identical to pre-fix repro)</p>
+
+<h2>After</h2>
+<img src="menu-main-after.png" alt="after: main menu rendered">
+<p>menu-main-after.png · 863 distinct · title + version + Play/New World/Options + help line</p>
+<img src="menu-options-after.png" alt="after: options panel">
+<p>menu-options-after.png · 540 distinct · render distance 4 / sim distance 1 / volume 100 / 1280x720 / fullscreen / pack import / Back</p>
+<img src="menu-to-game.png" alt="after Play: game world, menu gone">
+<p>menu-to-game.png · 6 606 distinct · world rendered after Play (a harness byproduct menu-to-game_placed.png from the aim-place path also kept as extra evidence)</p>
+
+<h2>Deviations / notes</h2>
+<ul>
+<li>Spec's old repro env (<code>AWECRAFT_MENU=1</code> + <code>AWECRAFT_SNAPSHOT</code>) is now (by design, spec requirement: "AWECRAFT_SNAPSHOT starts straight into the game") routed to the game path. Current canonical hooks: <code>AWECRAFT_MENU_SHOT=&lt;abs path&gt;</code> (+<code>AWECRAFT_MENU_VIEW=options</code>) for menu shots; <code>AWECRAFT_MENU=1</code> interactive; <code>AWECRAFT_MENU_BOOT=1</code>+<code>AWECRAFT_SNAPSHOT</code> for menu→game shots (documented for Phase 2). Absolute snapshot paths required — <code>Debug.snap()</code> fails on relative paths (pre-existing quirk, not changed).</li>
+<li>Pre-existing render-run notices unchanged and out of scope: ALSA init ERR_CANT_OPEN (dummy audio), one atlas ERR_CANT_OPEN (data.gd:64), RID/CanvasItem leak warnings at exit after forced quit.</li>
+<li>Committed hook <code>AWECRAFT_DEBUG_TREE=1</code> (menu.gd) now prints truthful layout (bg 1280×720, VBox 1280×720) — left in place per project env-hook pattern.</li>
+<li>Default boot NOT flipped (Phase 2). No web/ changes, no git by this agent.</li>
+</ul>
+</body></html>

@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-21T07:34
+  updated_at: 2026-08-21T08:49
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -33,6 +33,7 @@ queue:
 - AC-0054
 - AC-0055
 - AC-0053
+- AC-0061
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -779,7 +780,7 @@ intake:
   labels:
   - godot
   created_at: 2026-08-18T12:00
-  updated_at: 2026-08-21T07:34
+  updated_at: 2026-08-21T08:49
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -815,6 +816,10 @@ intake:
     text: '[agent] User 2026-08-21: start with AC-0033. Resume state: code done + battery green; BLOCKED on the menu-CanvasLayer-invisible-under-llvmpipe
       render bug (screenshots in tasks/AC-0033/ are uniform 77,77,77). Re-reproduce, root-cause, fix, then flip to menu-first
       boot (web parity) + browser gates.'
+  - id: 7
+    created_at: 2026-08-21T08:49
+    updated_at: null
+    text: '[user] for the in game pause menu, let''s default the key bind to p since escape is already used by the browser'
 - id: AC-0034
   title: hitch
   source: user
@@ -1526,3 +1531,22 @@ intake:
       (fist/block/tools/sprite) sways; composes with swing. New sway harness gates ok:true (7.8/7.99 bobs 2s, y/x amplitudes,
       idle 0.0). Battery 8/8 0 script errors; build exit 0 (100vw intact); browser W-hold 0.3s hand-delta 123,585px + settle
       shot, 0 console errors. Renders ac0060_r_idle_tool + r_walk1/2 (tool centroid +5.1px). tasks/AC-0060/.'
+- id: AC-0061
+  title: verify-pipeline-speedup
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-21T08:49
+  updated_at: 2026-08-21T08:49
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'From user 2026-08-21 (why does verify so long): (a) single-process logic battery (one Godot launch + one world,
+    all AWECRAFT_LOGIC modes sequentially, per-mode RESULT), (b) cheap UI-shot path (skip world gen / R=1 for UI-only snapshots),
+    (c) cap renders+shots per task to the minimum in specs, (d) browser gates only for web/UI-affecting changes, lower viewport,
+    one session for all gates. No rigor reduction: zero-script-errors + RESULT gates + before/after pixels stay.'
+  comments: []

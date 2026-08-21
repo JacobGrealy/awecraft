@@ -74,6 +74,7 @@ func _ready() -> void:
 
 	var menu_shot := OS.get_environment("AWECRAFT_MENU_SHOT")
 	if menu_shot != "":
+		_setup_menu_camera()
 		var menu := _make_menu()
 		if OS.get_environment("AWECRAFT_MENU_VIEW") == "options":
 			menu.open_options("main")
@@ -132,7 +133,16 @@ func _create_game_nodes() -> void:
 
 func _boot_menu() -> void:
 	await get_tree().process_frame
+	_setup_menu_camera()
 	_make_menu()
+
+
+func _setup_menu_camera() -> void:
+	if camera != null:
+		return
+	camera = _make_camera()
+	camera.position = Vector3.ZERO
+	camera.current = true
 
 
 func _make_menu() -> CanvasLayer:
