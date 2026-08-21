@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-20T20:28
+  updated_at: 2026-08-20T21:35
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -1405,18 +1405,27 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-20T20:23
-  updated_at: 2026-08-20T20:26
-  completed_at: null
+  updated_at: 2026-08-20T21:35
+  completed_at: 2026-08-20T21:35
   waiting_on: null
   parent_id: null
   notes: 'User 2026-08-20: "in web view the game is only rendering to like 2/3 of the screen". Likely web-export canvas stuck
     at 1280x720 (canvasResizePolicy=2, project viewport 1280x720 = exactly 2/3 of 1920x1080). Diagnose in browser (playwright)
     and fix so the canvas fills the browser window on load + after resize. Fix must be reproducible via build_web.sh (web/
     is a build artifact - never hand-edit web/).'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-20T21:35
+    updated_at: null
+    text: '[agent] Done 2026-08-20 (subagent + coordinator verify): root cause = canvasResizePolicy 2 never CSS-sizes #canvas
+      at boot, so the C++ window stuck at the 1280x720 project size (exactly 2/3 of 1920x1080); post-boot resizes were always
+      fine. Fix: export_presets.cfg html/head_include (injects CSS 100vw/100vh + one-time 2px canvas kick after boot into
+      every fresh web/index.html; build_web.sh untouched). Gates: headless 0 errors, battery 10/10, build exit 0, browser
+      1920x1080 black-frac 0.0008 (was ~48%) + 1366x768 byte-clean + 10s mouse-tracking OK, no console errors. results + 6
+      shots in tasks/AC-0058/. Note: both daemons had died (restart) - relaunched 8443 (pid 411476) + 5180 (pid 411491).'
 - id: AC-0059
   title: inventory-recipe-click
   source: user
