@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-20T21:35
+  updated_at: 2026-08-20T22:18
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -1342,11 +1342,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-20T14:16
-  updated_at: 2026-08-20T20:25
-  completed_at: null
+  updated_at: 2026-08-20T22:18
+  completed_at: 2026-08-20T22:18
   waiting_on: null
   parent_id: null
   notes: 'User 2026-08-20: ''apply some color grading for frutiger aero aesthetic'' + ''add a skybox with the frutiger aero
@@ -1365,6 +1365,17 @@ intake:
       (vibrant azure sky, bright yellow sand, lush green) - retune grade: warmer/more saturated mids, less milky lift, reduce
       cool aqua wash; (3) re-verify A/B renders + browser. Note: web canvas 2/3 bug is tracked separately as AC-0058 (fix
       canvas first so browser gates are valid).'
+  - id: 2
+    created_at: 2026-08-20T22:18
+    updated_at: null
+    text: '[agent] Round 2 done 2026-08-20 (subagent + coordinator verify): (1) fog fix = render_mode fog_disabled on aero_sky
+      + aero_wash (:2) - sky crisp at 1000m through default fog, terrain still fogs (MC behavior); sky_fog shots day/dusk/night.
+      (2) Sega palette tune (aero.gd constants): WASH_AMOUNT 0.07->0.03, WASH_COLOR ->(168,238,255), GLOW_STRENGTH 0.4->0.35,
+      EXPOSURE 1.0->0.85, SUN_BOOST 1.1->1.0, new SUN_TINT warm wired at main.gd:861, AMBIENT_BOOST 1.15->1.0, AMBIENT_TINT
+      ->(232,233,226), env.adjustment_saturation 1.25 + adjustment_contrast 1.1 (verified real in 4.7.1). Sand A/B via AWECRAFT_CM=sandpad
+      harness: aero mid (220,210,156) vs stock (186,177,141) - reads yellow-warm now. Gates: headless 0, battery 9/9 (guiclick
+      ok:true), web build ok (100vw injection intact), browser sky sat 0.92 through fog, 0 console errors. results.html covers
+      both rounds + tuning table.'
 - id: AC-0057
   title: inventory-clickmove-broken
   source: user

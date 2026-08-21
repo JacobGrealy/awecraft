@@ -6,6 +6,7 @@ const InventoryScript = preload("res://ui/inventory.gd")
 const AtlasScript = preload("res://core/atlas.gd")
 const DayNight = preload("res://core/daynight.gd")
 const MenuScript = preload("res://ui/menu.gd")
+const AeroLib = preload("res://core/aero.gd")
 
 var world: Node3D
 var camera: Camera3D
@@ -17,6 +18,11 @@ var world_env: WorldEnvironment
 var env: Environment
 var inventory_ui: CanvasLayer
 var menu_ui: CanvasLayer
+var aero := false
+var aero_sky: MeshInstance3D
+var aero_sky_mat: ShaderMaterial
+var aero_wash: MeshInstance3D
+var aero_wash_mesh: QuadMesh
 
 
 func _ready() -> void:
@@ -42,6 +48,9 @@ func _ready() -> void:
 		env.fog_enabled = false
 	world_env.environment = env
 	add_child(world_env)
+	aero = AeroLib.enabled()
+	if aero:
+		_setup_aero()
 
 	var snapshot_path := OS.get_environment("AWECRAFT_SNAPSHOT")
 	var logic := OS.get_environment("AWECRAFT_LOGIC")
@@ -577,6 +586,28 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		camera.position = Vector3(spawn.x + 18.0, spawn.y + 26.0, spawn.z - 18.0)
 		camera.look_at(Vector3(spawn.x - 4.0, spawn.y - 6.0, spawn.z + 4.0), Vector3(0, 1, 0))
 		camera.current = true
+	elif cam == "sky":
+		camera = _make_camera()
+		camera.position = Vector3(spawn.x, spawn.y + 6.0, spawn.z)
+		var ssun := AeroLib.sky_uniforms(Game.time_of_day)["sun_dir"] as Vector3
+		ssun = Vector3(ssun.x, clampf(ssun.y, 0.06, 1.0), ssun.z).normalized()
+		camera.look_at(camera.position + ssun, Vector3.UP)
+		camera.current = true
+	elif cam == "eyeup":
+		camera = _make_camera()
+		camera.position = Vector3(spawn.x, spawn.y + 1.62, spawn.z)
+		var body := AeroLib.sky_uniforms(Game.time_of_day)["sun_dir"] as Vector3
+		var eyaw := atan2(-body.x, -body.z)
+		var epitch := clampf(asin(clampf(body.y, -1.0, 1.0)) * 0.5, -0.9, 0.7)
+		var edir := Vector3(-cos(epitch) * sin(eyaw), sin(epitch), -cos(epitch) * cos(eyaw)).normalized()
+		camera.look_at(camera.position + edir, Vector3.UP)
+		camera.current = true
+	elif cam == "sandpad":
+		var pad_top := _build_sand_pad(spawn)
+		camera = _make_camera()
+		camera.position = Vector3(spawn.x + 7.5, pad_top + 2.1, spawn.z + 7.5)
+		camera.look_at(Vector3(spawn.x, pad_top + 0.3, spawn.z), Vector3(0, 1, 0))
+		camera.current = true
 	elif OS.get_environment("AWECRAFT_ANIM_SHOT") == "1":
 		var wc = _find_water_cell(spawn)
 		if wc.has("cell"):
@@ -726,12 +757,91 @@ func _make_camera() -> Camera3D:
 	return c
 
 
+func _build_sand_pad(spawn: Vector3) -> float:
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	var top := -1
+	for dx in range(-6, 6):
+		for dz in range(-6, 6):
+			var h := WorldGen.terrain_height(sx + dx, sz + dz, Game.world_seed)
+			top = maxi(top, h)
+	for dx in range(-6, 6):
+		for dz in range(-6, 6):
+			var x := sx + dx
+			var z := sz + dz
+			var h := WorldGen.terrain_height(x, z, Game.world_seed)
+			for y in range(h + 1, h + 14):
+				world.set_block(x, y, z, 0)
+			for y in range(h + 1, top + 3):
+				world.set_block(x, y, z, 4)
+	return float(top) + 3.0
+
+
+func _setup_aero() -> void:
+	if AeroLib.grade_on():
+		AeroLib.apply_grade(env)
+	if AeroLib.sky_on():
+		var sm := ShaderMaterial.new()
+		sm.shader = load("res://core/aero_sky.gdshader")
+		sm.set_shader_parameter("cam_pos", Vector3.ZERO)
+		aero_sky_mat = sm
+		var sph := SphereMesh.new()
+		sph.radius = AeroLib.SKY_RADIUS
+		sph.height = AeroLib.SKY_RADIUS * 2.0
+		sph.rings = 24
+		sph.flip_faces = true
+		aero_sky = MeshInstance3D.new()
+		aero_sky.name = "AeroSky"
+		aero_sky.mesh = sph
+		aero_sky.material_override = sm
+		add_child(aero_sky)
+	if AeroLib.wash_on():
+		aero_wash_mesh = QuadMesh.new()
+		var wm := ShaderMaterial.new()
+		wm.shader = load("res://core/aero_wash.gdshader")
+		wm.set_shader_parameter("wash_color", AeroLib.WASH_COLOR)
+		wm.set_shader_parameter("wash_amount", AeroLib.WASH_AMOUNT)
+		wm.set_shader_parameter("top_glow", AeroLib.WASH_TOP_GLOW)
+		aero_wash = MeshInstance3D.new()
+		aero_wash.name = "AeroWash"
+		aero_wash.mesh = aero_wash_mesh
+		aero_wash.material_override = wm
+		aero_wash.visible = false
+		add_child(aero_wash)
+
+
+func _aero_camera() -> Camera3D:
+	if camera != null and camera.is_inside_tree():
+		return camera
+	if player != null:
+		var pc := player.get_node_or_null("Camera3D")
+		if pc != null:
+			return pc
+	return null
+
+
 var _last_mode := ""
 
 
 func _process(delta: float) -> void:
 	Game.time_of_day = fmod(Game.time_of_day + minf(delta, 0.05) / DayNight.DAY_LEN, 1.0)
 	_update_sky()
+	if aero and aero_sky != null:
+		var ac := _aero_camera()
+		if ac != null:
+			aero_sky.global_position = ac.global_position
+			aero_sky_mat.set_shader_parameter("cam_pos", ac.global_position)
+			if aero_wash != null:
+				aero_wash.visible = true
+				var gt := ac.global_transform
+				aero_wash.global_position = gt.origin + gt.basis * Vector3(0.0, 0.0, -0.12)
+				aero_wash.global_basis = gt.basis
+				var vw := get_viewport().get_visible_rect().size
+				var aspect := maxf(vw.x / maxf(vw.y, 1.0), 0.1)
+				var half_h := tan(float((ac as Camera3D).fov) * PI / 360.0) * 0.12
+				var sz := Vector2(2.0 * half_h * aspect, 2.0 * half_h)
+				if aero_wash_mesh.size != sz:
+					aero_wash_mesh.size = sz
 	if world != null and Game.mode == "play":
 		_update_fog()
 	if _last_mode != Game.mode:
@@ -748,14 +858,18 @@ func _update_sky() -> void:
 	if sun == null:
 		return
 	var t := Game.time_of_day
-	sun.light_color = Color.WHITE
-	sun.light_energy = DayNight.sun_energy(t)
+	sun.light_color = AeroLib.SUN_TINT if aero else Color.WHITE
+	sun.light_energy = DayNight.sun_energy(t) * (AeroLib.SUN_BOOST if aero else 1.0)
 	sun.look_at(DayNight.sun_direction(t), Vector3.UP)
 	var sky := DayNight.sky_display(t)
 	env.background_color = sky
-	env.ambient_light_color = Color.WHITE
-	env.ambient_light_energy = DayNight.ambient_energy(t)
+	env.ambient_light_color = AeroLib.AMBIENT_TINT if aero else Color.WHITE
+	env.ambient_light_energy = DayNight.ambient_energy(t) * (AeroLib.AMBIENT_BOOST if aero else 1.0)
 	env.fog_light_color = sky
+	if aero and aero_sky_mat != null:
+		var u := AeroLib.sky_uniforms(t)
+		for k in u.keys():
+			aero_sky_mat.set_shader_parameter(k, u[k])
 
 
 func _update_fog() -> void:
