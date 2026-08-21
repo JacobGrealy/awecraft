@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-21T18:03
+  updated_at: 2026-08-21T18:41
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -1678,11 +1678,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-21T10:20
-  updated_at: 2026-08-21T10:20
-  completed_at: null
+  updated_at: 2026-08-21T18:41
+  completed_at: 2026-08-21T18:41
   waiting_on: null
   parent_id: null
   notes: 'HUD: the hunger bar should use food icons like Minecraft (drumstick style), not a red bar. Pull a Minecraft HUD
@@ -1694,6 +1694,15 @@ intake:
     updated_at: null
     text: '[user] the hunger bar should be food icons like in minecraft, pull down a screenshot of minecraft and make it look
       like that'
+  - id: 2
+    created_at: 2026-08-21T18:41
+    updated_at: null
+    text: '[agent] DONE 2026-08-21 (subagent + coordinator verify): MC HUD ref fetched (minecraft.wiki/w/HUD strip -> tasks/AC-0065/mc_hud_ref.png);
+      FoodBar red bar replaced by FoodRow of 10 code-drawn 9x9 drumstick pixel icons (meat+bone bitmasks, 3 NEAREST tex full/two-tone
+      half/empty dark, HeartRow pitch, v=hunger-i*2, HUD-mirrored per ref); AWECRAFT_HUNGER hook added. Coordinator re-verified:
+      G1 0 script errors, hunger harness (AC-0063 semantics) intact, food_0 (10 empty silhouettes) + food_13 (6F+1H+3E) viewed
+      — reads as MC drumsticks, drumsticks-above-hearts-above-hotbar layout; web shot clean 0 console errors. Deviations:
+      none.'
 - id: AC-0066
   title: viewmodel-held-fidelity
   source: user

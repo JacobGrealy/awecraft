@@ -140,7 +140,7 @@ const HARNESS_ENVS := [
 	"AWECRAFT_HELD", "AWECRAFT_WALK_SHOT", "AWECRAFT_EMPTYHAND", "AWECRAFT_SWING", "AWECRAFT_FPV_ITEM",
 	"AWECRAFT_ANIM_SHOT", "AWECRAFT_PROBE", "AWECRAFT_BCELL", "AWECRAFT_MESH_INFO", "AWECRAFT_ONLY",
 	"AWECRAFT_DBG", "AWECRAFT_SETTLE_TICKS", "AWECRAFT_SEED", "AWECRAFT_TIME", "AWECRAFT_ANIM_PHASE",
-	"AWECRAFT_SIZE", "AWECRAFT_HP",
+	"AWECRAFT_SIZE", "AWECRAFT_HP", "AWECRAFT_HUNGER",
 ]
 
 
@@ -889,6 +889,9 @@ func _snapshot_finish(cam: String) -> void:
 	var hp_env := OS.get_environment("AWECRAFT_HP")
 	if hp_env != "" and player != null:
 		player.hp = clampf(hp_env.to_float(), 0.0, 20.0)
+	var hunger_env := OS.get_environment("AWECRAFT_HUNGER")
+	if hunger_env != "" and player != null:
+		player.hunger = clampf(hunger_env.to_float(), 0.0, 20.0)
 	if not (fluid_shot and aimed):
 		await Debug.snap(snapshot_path)
 	if aimed:

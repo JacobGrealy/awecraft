@@ -243,24 +243,86 @@ class RecipeRow extends Control:
 			get_viewport().set_input_as_handled()
 
 
-class FoodBar extends Control:
-	var frac := 1.0
+class FoodRow extends Control:
+	const MASK := [
+		"001110000",
+		"011111000",
+		"111111000",
+		"011111000",
+		"001111000",
+		"000111100",
+		"000001110",
+		"000000110",
+		"000000010",
+	]
+	const BONE := [
+		"000000000",
+		"000000000",
+		"000000000",
+		"000000000",
+		"000001000",
+		"000001100",
+		"000000110",
+		"000000110",
+		"000000010",
+	]
+	const CELL := 18.0
+	const GAP := 3.0
+	var hunger := 20.0
+	var tex_full: ImageTexture
+	var tex_half: ImageTexture
+	var tex_empty: ImageTexture
+
+	func ready_row() -> void:
+		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		tex_full = _tex(false, false)
+		tex_half = _tex(false, true)
+		tex_empty = _tex(true, false)
+
+	func _tex(dark_all: bool, split: bool) -> ImageTexture:
+		var img := Image.create_empty(9, 9, false, Image.FORMAT_RGBA8)
+		var has := func(xx: int, yy: int) -> bool:
+			if xx < 0 or yy < 0 or xx >= 9 or yy >= 9:
+				return false
+			return MASK[yy].substr(xx, 1) == "1"
+		var meat_t := Color8(218, 98, 82)
+		var meat_b := Color8(160, 48, 44)
+		var bone := Color8(232, 222, 198)
+		var meat_out := Color8(86, 28, 30)
+		var bone_out := Color8(118, 106, 80)
+		var dmeat := Color8(96, 80, 80)
+		var dbone := Color8(72, 62, 58)
+		var dout := Color8(44, 33, 33)
+		for y in 9:
+			for x in 9:
+				if not has.call(x, y):
+					img.set_pixel(x, y, Color(0.0, 0.0, 0.0, 0.0))
+					continue
+				var on_bone: bool = BONE[y].substr(x, 1) == "1"
+				var is_dark: bool = dark_all or (split and x >= 4)
+				var edge: bool = not has.call(x - 1, y) or not has.call(x + 1, y) \
+					or not has.call(x, y - 1) or not has.call(x, y + 1)
+				var c: Color
+				if is_dark:
+					c = dout if edge else (dbone if on_bone else dmeat)
+				elif edge:
+					c = bone_out if on_bone else meat_out
+				else:
+					c = bone if on_bone else meat_t.lerp(meat_b, float(y) / 8.0)
+				img.set_pixel(x, y, c)
+		return ImageTexture.create_from_image(img)
 
 	func _draw() -> void:
-		var s := size
-		draw_rect(Rect2(Vector2.ZERO, s), Color(0.0, 0.0, 0.0, 0.55))
-		draw_rect(Rect2(Vector2.ZERO, Vector2(s.x, 1.0)), Color(0.067, 0.067, 0.067, 1.0), true)
-		draw_rect(Rect2(Vector2(0.0, s.y - 1.0), Vector2(s.x, 1.0)), Color(0.067, 0.067, 0.067, 1.0), true)
-		draw_rect(Rect2(Vector2.ZERO, Vector2(1.0, s.y)), Color(0.067, 0.067, 0.067, 1.0), true)
-		draw_rect(Rect2(Vector2(s.x - 1.0, 0.0), Vector2(1.0, s.y)), Color(0.067, 0.067, 0.067, 1.0), true)
-		var fw := clampf(frac, 0.0, 1.0) * (s.x - 2.0)
-		var fh := s.y - 2.0
-		var top_c := Color8(232, 163, 61)
-		var bot_c := Color8(176, 106, 28)
-		var yy := 1
-		while float(yy) < fh:
-			draw_rect(Rect2(1.0, 1.0 + float(yy), fw, 1.0), top_c.lerp(bot_c, float(yy) / fh))
-			yy += 1
+		for i in 10:
+			var v: float = hunger - float(i) * 2.0
+			var t: ImageTexture
+			if v >= 2.0:
+				t = tex_full
+			elif v > 0.0:
+				t = tex_half
+			else:
+				t = tex_empty
+			draw_texture_rect(t, Rect2(Vector2(float(i) * (CELL + GAP), 0.0), Vector2(CELL, CELL)), false)
 
 
 class FlashCtl extends Control:
@@ -310,7 +372,7 @@ var _mouse := Vector2.ZERO
 var _tile_tex := {}
 var _item_tex := {}
 var _heart_row: HeartRow
-var _food: FoodBar
+var _food: FoodRow
 var _flash: FlashCtl
 var _flash_tex: ImageTexture
 var _flash_t := 0.0
@@ -393,8 +455,8 @@ func _ready() -> void:
 	_tooltip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_tooltip.visible = false
 	add_child(_tooltip)
-	_food = FoodBar.new()
-	_food.size = Vector2(170, 9)
+	_food = FoodRow.new()
+	_food.ready_row()
 	_food.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_food)
 	_heart_row = HeartRow.new()
@@ -857,11 +919,12 @@ func _update_survival(p, dt: float) -> void:
 		_heart_row.hp = float(p.hp)
 		_heart_row.queue_redraw()
 	_food.visible = true
-	_food.position = Vector2((vs.x - 170.0) * 0.5, vs.y - 84.0 - 9.0)
+	_food.position = Vector2((vs.x - row_w) * 0.5, vs.y - 64.0 - float(HeartRow.CELL) - float(FoodRow.CELL) - 2.0)
+	_food.size = Vector2(row_w, float(FoodRow.CELL))
 	var hk := str(roundf(float(p.hunger) * 1000.0))
 	if hk != _hunger_key:
 		_hunger_key = hk
-		_food.frac = clampf(float(p.hunger) / 20.0, 0.0, 1.0)
+		_food.hunger = float(p.hunger)
 		_food.queue_redraw()
 	_dead_bg.visible = p.dead
 	if p.dead:
