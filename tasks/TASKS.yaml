@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-21T16:10
+  updated_at: 2026-08-21T18:03
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -1647,11 +1647,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-21T10:20
-  updated_at: 2026-08-21T10:20
-  completed_at: null
+  updated_at: 2026-08-21T18:03
+  completed_at: 2026-08-21T18:03
   waiting_on: null
   parent_id: null
   notes: 'BUG (user 2026-08-21, visible in tasks/AC-0033/p2_paused.png): the health hearts do not display as heart graphics
@@ -1662,6 +1662,15 @@ intake:
     created_at: 2026-08-21T10:20
     updated_at: null
     text: '[user] the hearts for health have an issue, they do not show as heart graphics'
+  - id: 2
+    created_at: 2026-08-21T18:03
+    updated_at: null
+    text: '[agent] DONE 2026-08-21 (subagent + coordinator verify): 10 heart Labels (Godot-default-font unicode tofu squares)
+      -> HeartRow Control drawing a 9x9 bitmask MC-heart glyph, 3 NEAREST ImageTextures (full red / two-tone half / empty
+      dark silhouette), same v=hp-i*2 states + centered-row math + damage-flash. Forge/neoforge pack icons.png has no heart
+      tile -> code-drawn. Coordinator re-verified: G1 0 script errors, guiclick green, hearts_mid (6F+1H+3E w/ visible two-tone)
+      + hearts_half (1H+9E) viewed and pixel-proven (row width tapers, red 229/37/33, half left-red/right-gray); web rebuild
+      + browser web_hearts crisp, 0 console errors.'
 - id: AC-0065
   title: hunger-food-icons-mc
   source: user

@@ -130,6 +130,69 @@ class HeldCtl extends Control:
 			draw_rect(Rect2(Vector2.ZERO, size), fill)
 
 
+class HeartRow extends Control:
+	const MASK := [
+		"011000110",
+		"111101111",
+		"111111111",
+		"111111111",
+		"111111111",
+		"011111110",
+		"011111110",
+		"001111100",
+		"000111000",
+	]
+	const CELL := 18.0
+	const GAP := 3.0
+	var hp := 20.0
+	var tex_full: ImageTexture
+	var tex_half: ImageTexture
+	var tex_empty: ImageTexture
+
+	func ready_row() -> void:
+		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		var red := Color8(229, 37, 33)
+		var red_out := Color8(64, 14, 16)
+		var gray := Color8(96, 80, 80)
+		var gray_out := Color8(44, 33, 33)
+		tex_full = _tex(red, red, red_out, red_out)
+		tex_half = _tex(red, gray, red_out, gray_out)
+		tex_empty = _tex(gray, gray, gray_out, gray_out)
+
+	func _tex(fl: Color, fr: Color, ol: Color, or_: Color) -> ImageTexture:
+		var img := Image.create_empty(9, 9, false, Image.FORMAT_RGBA8)
+		var has := func(xx: int, yy: int) -> bool:
+			if xx < 0 or yy < 0 or xx >= 9 or yy >= 9:
+				return false
+			return MASK[yy].substr(xx, 1) == "1"
+		for y in 9:
+			for x in 9:
+				if not has.call(x, y):
+					img.set_pixel(x, y, Color(0.0, 0.0, 0.0, 0.0))
+					continue
+				var edge: bool = not has.call(x - 1, y) or not has.call(x + 1, y) \
+					or not has.call(x, y - 1) or not has.call(x, y + 1)
+				var c: Color
+				if edge:
+					c = ol if x < 4 else or_
+				else:
+					c = fl if x < 4 else fr
+				img.set_pixel(x, y, c)
+		return ImageTexture.create_from_image(img)
+
+	func _draw() -> void:
+		for i in 10:
+			var v: float = hp - float(i) * 2.0
+			var t: ImageTexture
+			if v >= 2.0:
+				t = tex_full
+			elif v > 0.0:
+				t = tex_half
+			else:
+				t = tex_empty
+			draw_texture_rect(t, Rect2(Vector2(float(i) * (CELL + GAP), 0.0), Vector2(CELL, CELL)), false)
+
+
 class RecipeRow extends Control:
 	var region := Vector2i(-1, -1)
 	var fill := Color(0.05, 0.05, 0.08, 1.0)
@@ -246,7 +309,7 @@ var _force_hover_id := 0
 var _mouse := Vector2.ZERO
 var _tile_tex := {}
 var _item_tex := {}
-var _hearts: Array = []
+var _heart_row: HeartRow
 var _food: FoodBar
 var _flash: FlashCtl
 var _flash_tex: ImageTexture
@@ -334,16 +397,11 @@ func _ready() -> void:
 	_food.size = Vector2(170, 9)
 	_food.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_food)
-	for i in 10:
-		var h := Label.new()
-		h.text = "\u2665"
-		h.add_theme_font_size_override("font_size", 16)
-		h.add_theme_color_override("font_color", Color(0.0, 0.0, 0.0, 1.0))
-		h.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0))
-		h.add_theme_constant_override("outline_size", 2)
-		h.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		add_child(h)
-		_hearts.append(h)
+	_heart_row = HeartRow.new()
+	_heart_row.ready_row()
+	_heart_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_heart_row.visible = false
+	add_child(_heart_row)
 	var fimg := Image.create_empty(128, 128, false, Image.FORMAT_RGBA8)
 	var fc := Vector2(64.0, 64.0)
 	var fmaxd := fc.length()
@@ -781,8 +839,7 @@ func _update_survival(p, dt: float) -> void:
 	_flash.queue_redraw()
 	if p == null:
 		_food.visible = false
-		for h in _hearts:
-			(h as Label).visible = false
+		_heart_row.visible = false
 		_dead_bg.visible = false
 		return
 	if _damaged_node != p:
@@ -790,16 +847,15 @@ func _update_survival(p, dt: float) -> void:
 			_damaged_node.damaged.disconnect(_on_damaged)
 		_damaged_node = p
 		p.damaged.connect(_on_damaged)
-	var hw: Vector2 = _hearts[0].get_combined_minimum_size()
-	var total_w := 10.0 * hw.x + 9.0
-	var hx := (vs.x - total_w) * 0.5
-	var hy := vs.y - 64.0 - hw.y
-	for i in 10:
-		var h: Label = _hearts[i]
-		var v: float = p.hp - float(i) * 2.0
-		h.visible = true
-		h.modulate.a = 1.0 if v >= 2.0 else (0.45 if v >= 1.0 else 0.25)
-		(h as Control).position = Vector2(hx + i * (hw.x + 1.0), hy)
+	var row_w := float(HeartRow.CELL) * 10.0 + float(HeartRow.GAP) * 9.0
+	_heart_row.visible = true
+	_heart_row.position = Vector2((vs.x - row_w) * 0.5, vs.y - 64.0 - float(HeartRow.CELL))
+	_heart_row.size = Vector2(row_w, float(HeartRow.CELL))
+	var hpk := str(roundf(float(p.hp) * 10.0))
+	if hpk != _hp_key:
+		_hp_key = hpk
+		_heart_row.hp = float(p.hp)
+		_heart_row.queue_redraw()
 	_food.visible = true
 	_food.position = Vector2((vs.x - 170.0) * 0.5, vs.y - 84.0 - 9.0)
 	var hk := str(roundf(float(p.hunger) * 1000.0))
