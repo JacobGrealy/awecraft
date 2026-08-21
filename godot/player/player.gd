@@ -294,8 +294,13 @@ func _physics_process(dt: float) -> void:
 	else:
 		air = minf(10.0, air + dt * 2.0)
 		drown_t = 0.0
-	if not flying and is_on_floor() and Input.is_key_pressed(KEY_SHIFT):
-		hunger = maxf(0.0, hunger - dt * 0.06)
+	var hungry := bool(Settings.values["hunger_enabled"])
+	if hungry:
+		if not flying and is_on_floor() and Input.is_key_pressed(KEY_SHIFT):
+			hunger = maxf(0.0, hunger - dt * 0.06)
+	else:
+		hunger = 20.0
+		_starve_t = 0.0
 	if hunger > 18.0 and hp < 20.0:
 		_regen_t += dt
 		if _regen_t >= 2.0:
@@ -303,7 +308,7 @@ func _physics_process(dt: float) -> void:
 			hp = minf(20.0, hp + 1.0)
 	else:
 		_regen_t = 0.0
-	if hunger <= 0.0:
+	if hungry and hunger <= 0.0:
 		_starve_t += dt
 		if _starve_t >= 4.0:
 			_starve_t = 0.0
@@ -713,7 +718,8 @@ func attack_mob(mob: Node3D) -> void:
 	if item != null and float(item.get("dmg", 0)) > 0.0:
 		dmg = float(item["dmg"])
 	mob.hurt(dmg, position)
-	hunger = maxf(0.0, hunger - 0.5)
+	if bool(Settings.values["hunger_enabled"]):
+		hunger = maxf(0.0, hunger - 0.5)
 	Audio.play("hit")
 	if mob.hp <= 0.0:
 		mob.try_kill()
@@ -854,7 +860,8 @@ func _update_interaction(dt: float) -> void:
 	_mine_prog += dt * mult / maxf(0.15, float(info["hard"]))
 	if _mine_prog >= 1.0:
 		Game.world.set_block(_mine_cell.x, _mine_cell.y, _mine_cell.z, 0)
-		hunger = maxf(0.0, hunger - 0.1)
+		if bool(Settings.values["hunger_enabled"]):
+			hunger = maxf(0.0, hunger - 0.1)
 		var is_pick := held_item != null and str(held_item.get("tool", "")) == "pick"
 		var center := Vector3(float(_mine_cell.x) + 0.5, float(_mine_cell.y) + 0.5, float(_mine_cell.z) + 0.5)
 		for d in Data.block_drops(_mine_id, is_pick):

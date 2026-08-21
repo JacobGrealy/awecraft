@@ -9,6 +9,7 @@ const DEFAULTS := {
 	"fullscreen": false,
 	"resolution": "1280x720",
 	"seed": 44,
+	"hunger_enabled": true,
 }
 
 var values: Dictionary = {}
@@ -42,6 +43,8 @@ func _clamp(k: String, v) -> void:
 		"volume":
 			values[k] = roundi(clampf(float(v), 0.0, 100.0))
 		"fullscreen":
+			values[k] = bool(v)
+		"hunger_enabled":
 			values[k] = bool(v)
 		"seed":
 			values[k] = int(v)

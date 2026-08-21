@@ -32,6 +32,7 @@ var sim_val: Label
 var volume_val: Label
 var res_option: OptionButton
 var full_check: CheckBox
+var hunger_check: CheckBox
 var file_dialog: FileDialog
 var _options_from := "main"
 var _is_web := false
@@ -105,13 +106,14 @@ func open_options(source: String) -> void:
 	_sync_controls()
 	_apply_state()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	print("OPTSYNC from=%s render=%d sim=%d vol=%d res=%s full=%s" % [
+	print("OPTSYNC from=%s render=%d sim=%d vol=%d res=%s full=%s hunger=%s" % [
 		source,
 		int(Settings.values["render_dist"]),
 		int(Settings.values["sim_dist"]),
 		int(Settings.values["volume"]),
 		String(Settings.values["resolution"]),
 		bool(Settings.values["fullscreen"]),
+		bool(Settings.values["hunger_enabled"]),
 	])
 
 
@@ -272,6 +274,7 @@ func _sync_controls() -> void:
 	if wi >= 0:
 		res_option.select(wi)
 	full_check.button_pressed = bool(Settings.values["fullscreen"])
+	hunger_check.button_pressed = bool(Settings.values["hunger_enabled"])
 	_syncing = false
 
 
@@ -314,6 +317,12 @@ func _on_full_toggled(on: bool) -> void:
 		return
 	Settings.set_value("fullscreen", on)
 	Settings.apply_window(get_window())
+
+
+func _on_hunger_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("hunger_enabled", on)
 
 
 func _mk_btn(text: String, cb: Callable, w: float = -1.0) -> Button:
@@ -537,6 +546,16 @@ func _build_options() -> void:
 	full_check.add_theme_font_size_override("font_size", 15)
 	full_check.toggled.connect(_on_full_toggled)
 	vb.add_child(full_check)
+	var gp := Label.new()
+	gp.text = "Gameplay"
+	gp.add_theme_font_size_override("font_size", 15)
+	gp.add_theme_color_override("font_color", SUB_C)
+	vb.add_child(gp)
+	hunger_check = CheckBox.new()
+	hunger_check.text = "Hunger"
+	hunger_check.add_theme_font_size_override("font_size", 15)
+	hunger_check.toggled.connect(_on_hunger_toggled)
+	vb.add_child(hunger_check)
 	var packb := _mk_btn("Load Texture Pack (.mcpack / .zip)", _open_pack_dialog, 560.0)
 	if _is_web:
 		packb.disabled = true

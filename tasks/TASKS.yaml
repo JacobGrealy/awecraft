@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-21T13:13
+  updated_at: 2026-08-21T15:13
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -20,8 +20,6 @@ queue:
 - AC-0046
 - AC-0031
 - AC-0032
-- AC-0033
-- AC-0062
 - AC-0063
 - AC-0064
 - AC-0065
@@ -29,6 +27,7 @@ queue:
 - AC-0067
 - AC-0070
 - AC-0068
+- AC-0071
 - AC-0034
 - AC-0035
 - AC-0036
@@ -1618,11 +1617,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-21T10:20
-  updated_at: 2026-08-21T10:20
-  completed_at: null
+  updated_at: 2026-08-21T15:12
+  completed_at: 2026-08-21T15:12
   waiting_on: null
   parent_id: null
   notes: 'Options menu: add a Gameplay section with a toggle to turn hunger off (no drain, no starve), persisted with the
@@ -1632,6 +1631,15 @@ intake:
     created_at: 2026-08-21T10:20
     updated_at: null
     text: '[user] add an option to the menu under gameplay to turn off hunger'
+  - id: 2
+    created_at: 2026-08-21T15:12
+    updated_at: null
+    text: '[agent] DONE 2026-08-21 (subagent + coordinator verify): Settings.hunger_enabled (default true, persisted user://
+      -> IndexedDB), player.gd gates sprint/mine/attack drain + starve (off -> hunger pinned 20, regen rule unchanged), menu
+      Gameplay section + Hunger checkbox (FULLSCREEN-style, OPTSYNC). Coordinator re-verified: G1 0 errors, hunger harness
+      off{attack_cost_zero, hunger20, min_hp15 no-starve, regen} on{starve 1dmg@~4s} ok:true, settings round-trip off-saved/reloaded-off/back-on/default-true
+      ok:true, options_gameplay.png row visible + centered column intact, web rebuild + browser toggle-off persists across
+      reload 0 console errors.'
 - id: AC-0064
   title: hearts-heart-graphics
   source: user
@@ -1800,3 +1808,36 @@ intake:
     text: '[user] redoing the tool voxel models, they should have the same resolution in voxels that the icon has in pixels.
       So the voxels will need to be smaller. Pull down a minecraft screenshot to see what an axe / sword / pickaxe looks like
       for example.'
+- id: AC-0071
+  title: chunk-streaming-plan
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-21T15:13
+  updated_at: 2026-08-21T15:13
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'PLAN ONLY (research, no implementation) — user reviews the plan before any code (user 2026-08-21). Relates to AC-0034
+    (block-break hitches). Goal: chunks stream IN/OUT as the player crosses boundaries — first-load pop and boundary hitches
+    handled across many frames (and/or worker threads) doing small incremental gen/build/mesh/collision work with priority
+    by distance, and far chunks unloaded, WITHOUT interrupting gameplay. Plan must cover: current pipeline audit (world.gd
+    recenter/build queue, chunk.gd mesh+collision, WorldGen cost, light/fluid flushes, editperf), Godot 4 options (Task/worker
+    threads vs budgeted per-frame vs hybrid; NOTE web export = single-threaded only, must degrade to budgeted), memory/ownership
+    rules (one godot process; mesh build must be thread-safe or main-thread budgeted), phased rollout (phase1 budgeted streaming,
+    phase2 threads if desktop-only gain), perf targets + verify approach (AWECRAFT_LOGIC=perf timing, walking-through-boundary
+    timing harness), risks. Deliverable: tasks/<id>/<id>-plan.html for user review (browser). No godot code changes, no renders
+    beyond what already exists.'
+  comments:
+  - id: 1
+    created_at: 2026-08-21T15:13
+    updated_at: null
+    text: '[user] I think we need to make it so after the first load the chunks are streamed in / out rather than it all happening
+      at once. As the player crosses chunk boundaries it should kick off a separate parallel process and/or some kind of process
+      that happens across many updates doing small amounts of the loading / unloading without interrupting gameplay. This
+      relates to AC-0034. For this one, let''s make the first take just coming up with a plan of attack that I can review
+      before we try to implement.'

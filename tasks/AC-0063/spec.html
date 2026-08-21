@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AC-0063 — options: gameplay hunger toggle</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:960px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:18px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code{background:#eef1f6;border-radius:3px;font-size:12.5px}</style></head><body>
+<h1>AC-0063 — Options &gt; Gameplay: toggle hunger off</h1>
+<p>User 2026-08-21: "add an option to the menu under gameplay to turn off hunger". The options panel (AC-0033) already has render/sim/sound/resolution/fullscreen. Add a <b>Gameplay</b> section with a <b>Hunger</b> toggle.</p>
+<h2>Behavior</h2>
+<ul>
+<li>New persisted setting <code>hunger_enabled</code> (default <b>true</b>) in the same settings store as the other options (<code>autoload/settings.gd</code> pattern; web → IndexedDB). Saved on change like the others (OPTSYNC-style sync so pause/menu views show the live value).</li>
+<li>When <b>OFF</b>: the player does NOT drain hunger (sprint/mine/attack cost 0) and does NOT starve — regardless of HP. The hunger bar renders FULL (20/20). HP regen by the existing &gt;18 rule keeps working (bar is always full, matching MC peaceful-ish feel). Eating still works and is harmless.</li>
+<li>When <b>ON</b>: today's exact behavior (drain/regen/starve per M8). No changes to existing tuning numbers.</li>
+<li>UI: a "Gameplay" sub-heading in the options panel (below the existing controls; keep the centered-column layout — AC-0033 D2 fix) with one toggle row "Hunger". Checkbox/toggle consistent with the fullscreen toggle style.</li>
+</ul>
+<h2>Gates (zero script errors hard on every run; steps fast)</h2>
+<ol>
+<li>G1: <code>--headless --quit</code> → 0 script errors.</li>
+<li>G2: full AWECRAFT_LOGIC battery → green except known pre-existing <code>fpv tool_held_ok:false</code>; 0 script errors; settings harness round-trip: set hunger off, save, reload, read off (extend the existing <code>AWECRAFT_LOGIC=settings</code> or the settings debug hook; do not break existing assertions).</li>
+<li>G3 (new, headless): extend <code>AWECRAFT_LOGIC=survival</code> (or a small <code>AWECRAFT_LOGIC=hunger</code>): with hunger OFF and hp low, feed a lot of dt/attacks → hp does NOT drop from starving AND hunger stays 20 AND regen eventually occurs; with ON, starving still happens. RESULT JSON ok:true both branches.</li>
+<li>G4: options panel desktop shot showing the Gameplay/Hunger row → <code>tasks/AC-0063/options_gameplay.png</code> (visual + pixel verify row present, layout still centered).</li>
+<li>G5: <code>./build_web.sh</code> → 0; browser (https://localhost:8443, 1920×1080, daemon 411476 do-not-kill): Play → P → Options → toggle Hunger off → reload → still off (persistence) → 0 console errors. Shot to <code>tasks/AC-0063/</code>.</li>
+</ol>
+<h2>Scope fence</h2>
+<p>Only the toggle + the two hunger code paths (drain+starve gate) + options UI row + settings key. Do NOT touch the food/eating UI (that's AC-0065), hearts (AC-0064), mining/combat, or menu layout beyond adding one section. No git. No other tasks.</p>
+<h2>Deliverables</h2>
+<p>Code changes, <code>tasks/AC-0063/AC-0063-results.html</code> (RESULT jsons + shots), report ≤20 lines.</p>
+</body></html>

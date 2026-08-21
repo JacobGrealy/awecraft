@@ -1,0 +1,33 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AC-0071 — chunk streaming plan (research only)</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:1000px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:18px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code{background:#eef1f6;border-radius:3px;font-size:12.5px}li{margin:3px 0}</style></head><body>
+<h1>AC-0071 — Chunk streaming plan (RESEARCH ONLY — no code)</h1>
+<p>User 2026-08-21: after the first load, chunks should be <b>streamed in/out</b> as the player crosses chunk boundaries — a separate parallel process and/or work spread across many updates doing small amounts of loading/unloading <b>without interrupting gameplay</b>. This relates to AC-0034 (block-break hitches). <b>This task produces a plan of attack for the user to review BEFORE any implementation.</b> Do not write game code, do not run renders, do not git. Deliver a readable .html plan.</p>
+<h2>Must audit first (ground the plan in the ACTUAL current pipeline — read the code, cite line numbers)</h2>
+<ul>
+<li><code>world/world.gd</code> — <code>recenter()</code>, the build queue (how many chunks/frame, spawn-first ordering), render radius vs sim split, light/fluid dirty flush staggering, fluid sleep.</li>
+<li><code>world/chunk.gd</code> — <code>build_mesh</code> (SurfaceTool snapshot cost), collision rebuild (1 ConcavePolygonShape3D/chunk), per-block data layout, mesh/collision rebuild triggers (<code>col_dirty</code>, <code>edit flush</code>).</li>
+<li><code>world/generator.gd</code> / <code>world/genhash</code> — <code>WorldGen.generate</code> cost per chunk (the ~31 ms/chunk PERF3c-1 number; verify current).</li>
+<li>First-load: what happens at boot (how many chunks generated + meshed before first frame, the "pop-in" cost) and what a boundary crossing costs today (sync recenter? worst boundary-chunk build? the AC-0034 diagnostics that were noted but never implemented).</li>
+</ul>
+<h2>The plan must propose (with trade-offs, not a single dogma)</h2>
+<ul>
+<li><b>Streaming policy</b>: target-state chunk set around the player; priority by (distance, angle toward look dir, "needed for collision") with radial + ringed load order; unload policy + hysteresis (avoid load/unload flapping at the boundary); first-load fast-path (spawn chunk + ring 1 sync so the first frame isn't empty, rest streams).</li>
+<li><b>Execution model</b>, explicitly comparing for THIS engine: (a) budgeted main-thread work (N ms/frame of gen and/or N chunks of mesh per frame, interleaved), (b) Godot 4 <code>Task</code>/worker threads for generation (data-only, thread-safe: write into chunk data arrays off-main, main-thread mesh+collision only), (c) hybrid (gen threaded main+web; mesh budgeted). <b>Hard constraint:</b> the Web export (wasm) is single-threaded — the design MUST degrade cleanly to budgeted-only on web (feature-detect and fall back); call out exactly what works/doesn't in the browser. Also respect: one godot <i>process</i> at a time is about our test harness, not in-game threads — but note mesh/physics API calls must stay on the main thread in Godot (verify against docs).</li>
+<li><b>Collision</b>: how collision builds fit the budget (they're the heavy part — 1 concave/chunk); staged vs delayed; the interaction with player/mob physics.</li>
+<li><b>Lighting + fluids</b>: how the staggered flush/sleep integrate with streaming (no double work for chunks being unloaded).</li>
+<li><b>Save integration</b>: AC-0062 edit-deltas + continue must stay correct while streaming (edits keyed by chunk coordinates survive load/unload; re-apply on re-center).</li>
+<li><b>Memory</b>: peak resident chunks at render radius 4/6/8; unload frees mesh+collision.</li>
+</ul>
+<h2>Plan deliverable structure (tasks/AC-0071/AC-0071-plan.html, self-contained, readable in browser)</h2>
+<ol>
+<li>Current-pipeline audit (what runs today + measured costs, table: step / cost / where it blocks the frame).</li>
+<li>Problem statement: first-load pop + boundary hitches + the specific AC-0034 suspects.</li>
+<li>Proposed design: streaming policy + execution model (recommended choice + rejected alternatives with why), including the web single-thread fallback; a small diagram or ordered bullet flow is fine.</li>
+<li>Phased rollout: Phase 1 (budgeted main-thread streaming — works on web+desktop, removes pop/hitches, low risk), Phase 2 (optional threaded gen, desktop-gated), each phase: scope, effort signals (no calendar estimates — the user doesn't want estimated days), and verification. Note that Phase numbering is OURS: the user said no estimated days ever.</li>
+<li>Performance targets + acceptance criteria: what we measure (walking-through-boundary frame times, first-load time-to-first-frame, memory) and the harnesses that will prove it (extend AWECRAFT_LOGIC=perf; a new boundary-walk timing harness); concrete numbers to hit (e.g. max frame ≤ X ms during boundary crossing at r=4 — propose values, flag them as proposals for the user to approve).</li>
+<li>Risks + open questions for the user (threaded-gen web parity? collision staging risk? unload flash artifacts? render radius defaults?) — explicit "DECISIONS NEEDED" list.</li>
+</ol>
+<h2>Out of scope for this task</h2>
+<p>No implementation, no perf changes, no new harnesses, no renders, no git. Use headless godot only if you need to read runtime structure (a --quit load is fine); prefer static reading. Keep the plan grounded in real line numbers — if a number you recall is stale, say so in the plan.</p>
+</body></html>

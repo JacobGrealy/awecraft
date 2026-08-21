@@ -334,6 +334,21 @@ func _settings_test() -> void:
 	Settings.set_value("volume", 37)
 	Settings.load_settings()
 	var volume_ok := int(Settings.values["volume"]) == 37
+	Settings.set_value("hunger_enabled", false)
+	var hsaved := -1
+	var cf2 := ConfigFile.new()
+	if cf2.load(Settings.PATH) == OK:
+		hsaved = 1 if bool(cf2.get_value("settings", "hunger_enabled", true)) else 0
+	Settings.load_settings()
+	var hunger_off_ok := bool(Settings.values["hunger_enabled"]) == false
+	Settings.set_value("hunger_enabled", true)
+	Settings.load_settings()
+	var hunger_on_ok := bool(Settings.values["hunger_enabled"]) == true
+	OS.set_environment("AWECRAFT_IGNORE_SETTINGS", "1")
+	Settings.load_settings()
+	var hunger_default_ok := bool(Settings.values["hunger_enabled"]) == true
+	OS.set_environment("AWECRAFT_IGNORE_SETTINGS", "")
+	Settings.load_settings()
 	Settings.set_value("render_dist", before)
 	Settings.set_value("volume", 100)
 	Debug.result({
@@ -341,8 +356,9 @@ func _settings_test() -> void:
 		"saved": saved,
 		"reloaded": reloaded,
 		"volume_ok": volume_ok,
+		"hunger": {"saved_off": hsaved, "reloaded_off": hunger_off_ok, "back_on": hunger_on_ok, "default_true": hunger_default_ok},
 		"restore": int(Settings.values["render_dist"]) == before,
-		"ok": saved == 5 and reloaded == 5 and volume_ok,
+		"ok": saved == 5 and reloaded == 5 and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok,
 	})
 
 
@@ -580,6 +596,12 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			await _await_spawn_floor(spawn, 300)
 			player = _spawn_player()
 			await _survival_test(spawn)
+			return
+		if logic == "hunger":
+			world.recenter(spawn.x, spawn.z, true)
+			await _await_spawn_floor(spawn, 300)
+			player = _spawn_player()
+			await _hunger_toggle_test(spawn)
 			return
 		if logic == "light":
 			world.collision_enabled = false
@@ -2155,6 +2177,113 @@ func _survival_test(spawn: Vector3) -> void:
 		"eat": {"cooked": eat_cooked, "raw": eat_raw, "full": eat_full},
 		"respawn": respawn_ok,
 		"dump": Debug.dump_survival(),
+		"ok": ok,
+	}
+	Debug.result(r)
+	get_tree().quit()
+
+
+func _hunger_toggle_test(spawn: Vector3) -> void:
+	var p = Game.player
+	for i in 60:
+		await get_tree().physics_frame
+	var ok := true
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	var ctop: int = world.surface_top(sx, sz)
+	var px := -1
+	var pz := -1
+	for dx in range(-8, 9, 2):
+		for dz in range(-8, 9, 2):
+			var tx := sx + dx
+			var tz := sz + dz
+			var flat := true
+			for fx in range(-1, 2):
+				for fz in range(-1, 2):
+					if world.surface_top(tx + fx, tz + fz) != ctop:
+						flat = false
+			if not flat:
+				continue
+			var clear := true
+			for k in range(1, 5):
+				if world.surface_top(tx, tz - k) > ctop:
+					clear = false
+			if not clear:
+				continue
+			px = tx
+			pz = tz
+			break
+		if px >= 0:
+			break
+	if px < 0:
+		Debug.result({"error": "no flat hunger spot near spawn"})
+		get_tree().quit()
+		return
+	Debug.teleport(float(px) + 0.5, float(ctop + 1) + 0.05, float(pz) + 0.5)
+	for i in 60:
+		if p.is_on_floor():
+			break
+		await get_tree().physics_frame
+	if not p.is_on_floor():
+		Debug.result({"error": "no floor for hunger test"})
+		get_tree().quit()
+		return
+	var prior := bool(Settings.values["hunger_enabled"])
+	var m = Debug.spawn_mob("chicken", float(px) + 2.0, float(ctop) + 1.0, float(pz) + 2.0)
+	for i in 10:
+		await get_tree().physics_frame
+	Settings.set_value("hunger_enabled", false)
+	for i in 3:
+		await get_tree().physics_frame
+	var pin_ok := false
+	p.hunger = 5.0
+	p.hp = 15.0
+	for i in 5:
+		await get_tree().physics_frame
+		pin_ok = pin_ok or absf(p.hunger - 20.0) < 0.001
+	ok = ok and pin_ok
+	p._regen_t = 0.0
+	var min_hp := 999.0
+	var regen_ms := -1
+	var t0 := Time.get_ticks_msec()
+	var atk_ok := true
+	for i in 3:
+		p.attack_mob(m)
+		atk_ok = atk_ok and absf(p.hunger - 20.0) < 0.001
+	ok = ok and atk_ok
+	for i in range(300):
+		await get_tree().physics_frame
+		min_hp = minf(min_hp, p.hp)
+		if p.hp > 15.0:
+			regen_ms = Time.get_ticks_msec() - t0
+			break
+	var off_hunger: float = p.hunger
+	var off_regen_gain: float = p.hp - 15.0
+	ok = ok and absf(off_hunger - 20.0) < 0.001
+	ok = ok and min_hp >= 15.0
+	ok = ok and off_regen_gain >= 1.0
+	ok = ok and regen_ms >= 1900 and regen_ms <= 2700
+	Settings.set_value("hunger_enabled", true)
+	for i in 3:
+		await get_tree().physics_frame
+	p.hp = 20.0
+	p.hunger = 0.0
+	p._starve_t = 0.0
+	var s0 := Time.get_ticks_msec()
+	for i in range(800):
+		await get_tree().physics_frame
+		if p.hp < 20.0:
+			break
+	var st_ms := Time.get_ticks_msec() - s0
+	var st_dmg: float = 20.0 - p.hp
+	ok = ok and st_dmg == 1.0 and st_ms >= 3900 and st_ms <= 5000
+	Settings.set_value("hunger_enabled", prior)
+	if m != null and is_instance_valid(m):
+		m.queue_free()
+	var r := {
+		"pin_to_full": pin_ok,
+		"off": {"hunger": off_hunger, "min_hp": min_hp, "regen_gain": roundf(off_regen_gain * 100.0) / 100.0, "regen_ms": regen_ms, "attack_cost_zero": atk_ok},
+		"on": {"starve_dmg": st_dmg, "starve_ms": st_ms},
 		"ok": ok,
 	}
 	Debug.result(r)
