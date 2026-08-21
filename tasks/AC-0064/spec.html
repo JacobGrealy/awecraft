@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AC-0064 — hearts: real heart graphics</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:960px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:18px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:12.5px}li{margin:3px 0}</style></head><body>
+<h1>AC-0064 — Health hearts render as real heart graphics</h1>
+<p>User 2026-08-21: "the hearts for health have an issue, they do not show as heart graphics." Evidence: <code>tasks/AC-0033/p2_paused.png</code> (row of filled squares above the hotbar).</p>
+<h2>Root cause (verified by coordinator)</h2>
+<p>The 10 hearts in <code>godot/ui/inventory.gd</code> (~:249 declared, :340-347 built, :784-798 positioned) are <b>Labels</b> using a Unicode heart character. Godot's default font has no glyph for it → every heart renders as a tofu/filled <b>square</b>. The Faithful-32x pack does NOT ship the vanilla <code>assets/minecraft/textures/gui/icons.png</code> HUD atlas (only <code>forge/neoforge</code> variants — check whether those contain a usable 16px heart; if yes you may cut it from the pack, but don't depend on it). So the hearts are a <b>code-drawn pixel glyph</b>.</p>
+<h2>Requirement</h2>
+<ul>
+<li>Replace the 10 heart Labels with MC-style heart icons drawn in the HUD's <code>_draw</code> pass (or 10 small <code>ImageTexture</code> slots rebuilt on hp change) — a crisp <b>9×9 pixel-art heart</b> (MC's shape: two rounded lobes on top, pointed bottom), rendered with <b>nearest filtering</b>, size matching the current row (~14-18px), with the classic dark outline so it reads on any background.</li>
+<li>Three states, driven by <code>p.hp</code> (float, 0..20, 2 hp per heart) exactly like the current label logic (<code>inventory.gd:793-798</code>: <code>v = hp − i*2</code>): <b>full</b> (v≥1), <b>half</b> (0&lt;v&lt;1 — MC style: left half bright red, right half dark/empty), <b>empty</b> (v≤0 — dark gray heart silhouette, still visible as a heart).</li>
+<li>Full heart = MC red (≈ <code>Color("e52521")</code>-ish / your pick, close to vanilla), outline dark. Keep position/centering of the row (already computed at <code>798</code>) and the damage-flash hook (<code>_on_damaged</code>) behavior.</li>
+<li>Do NOT touch the FOOD bar / hunger display (that is AC-0065's scope — even though it's visually adjacent). Don't move the hotbar. Don't change <code>hp</code> semantics anywhere.</li>
+</ul>
+<h2>Gates (zero script errors hard on every run; steps fast)</h2>
+<ol>
+<li>G1: <code>--headless --quit</code> → 0 script errors.</li>
+<li>G2: full AWECRAFT_LOGIC battery → green except known pre-existing <code>fpv tool_held_ok:false</code>; 0 script errors; <code>guiclick</code>/<code>craft</code> harnesses byte-stable (they exercise the inventory UI).</li>
+<li>G3: desktop HUD shots at multiple HP via the existing snapshot harness (pick one: <code>AWECRAFT_SNAPSHOT</code> + a Debug hook, or a small env) — save to <code>tasks/AC-0064/hearts_{full,13,1,half}.png</code>: hp=20 (all full), hp=13 (6 full + 1 half + 3 empty — the half must show two-tone), hp=1 (1 half), hp=0.5 or 1 (1 heart half + 9 empty). Pixel-verify the heart row is NOT square: e.g. the top row of pixels of a heart is narrower than its middle (shape asymmetry) + red hue present + two-tone for half. View the PNGs (you have image access) — they must read as hearts.</li>
+<li>G4: <code>./build_web.sh</code> → 0; browser (playwright, https://localhost:8443, daemon 411476 do-not-kill) in-game HUD shot → <code>tasks/AC-0064/web_hearts.png</code>, hearts read as hearts, 0 console errors.</li>
+</ol>
+<h2>Scope fence</h2>
+<p>HUD heart rendering in <code>ui/inventory.gd</code> (+ a tiny pixel-glyph helper if you want one in <code>core/</code>). No food-bar work (AC-0065), no heart damage logic changes, no menu, no git, no renders beyond the gates (a step is 1-6s; don't pad).</p>
+<h2>Deliverables</h2>
+<p>Code + <code>tasks/AC-0064/AC-0064-results.html</code> (before/after: reference p2_paused.png vs new shots; RESULT/px evidence) + report ≤20 lines.</p>
+</body></html>

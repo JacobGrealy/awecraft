@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-21T15:13
+  updated_at: 2026-08-21T16:10
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -853,7 +853,7 @@ intake:
   created_at: 2026-08-18T12:00
   updated_at: 2026-08-19 08:15T12:00
   completed_at: null
-  waiting_on: null
+  waiting_on: user review of tasks/AC-0071/AC-0071-plan.html (implementation re-scopes AC-0034 per approved plan)
   parent_id: null
   notes: 'Block-break hitches remain: PERF3c-2 diagnostics (recenter sync gen, worst boundary-chunk build, tick_fluids locality,
     snapshot drain) + fixes'
@@ -1815,11 +1815,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-21T15:13
-  updated_at: 2026-08-21T15:13
-  completed_at: null
+  updated_at: 2026-08-21T16:10
+  completed_at: 2026-08-21T16:10
   waiting_on: null
   parent_id: null
   notes: 'PLAN ONLY (research, no implementation) — user reviews the plan before any code (user 2026-08-21). Relates to AC-0034
@@ -1841,3 +1841,14 @@ intake:
       that happens across many updates doing small amounts of the loading / unloading without interrupting gameplay. This
       relates to AC-0034. For this one, let''s make the first take just coming up with a plan of attack that I can review
       before we try to implement.'
+  - id: 2
+    created_at: 2026-08-21T16:10
+    updated_at: null
+    text: '[agent] Plan delivered 2026-08-21: tasks/AC-0071/AC-0071-plan.html. Recommended: HYBRID — Phase 1 budgeted main-thread
+      streaming (web+desktop, no pop/hitches, low risk) -> Phase 2 desktop-gated Task-pool threaded WorldGen (data-only; mesh/light/collision
+      main-thread), enabled only if Phase 1 boundary frames are still gen-dominated. Web stays single-threaded (thread_support=false,
+      export_presets.cfg:25; threaded web needs COOP/COEP on serve_web.py). Stale numbers flagged: ''recenter sync gen ~0.8s''
+      is a logic-test path, not the play path; live boundary suspects = boundary-chunk build (incl hidden diagonal re-gens
+      chunk.gd:372-374) + fluid window-slide re-wake (world.gd:719-723). 5 DECISIONS NEEDED for user (phasing, web thread
+      parity, collision staging, unload flash, default radius) — each with a recommendation. Implementation = separate task
+      (re-scopes AC-0034) pending user review.'

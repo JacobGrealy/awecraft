@@ -1,0 +1,275 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AC-0071 — Chunk streaming plan (for user review)</title>
+<style>
+body{font-family:system-ui,'Segoe UI',sans-serif;margin:24px 40px;max-width:1100px;line-height:1.45;color:#1b232f}
+h1{font-size:20px}
+h2{font-size:15px;margin-top:22px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}
+h3{font-size:13px;margin-top:14px}
+table{border-collapse:collapse;font-size:12.5px;margin:8px 0}
+th,td{border:1px solid #cdd6e3;padding:3px 8px;text-align:left;vertical-align:top}
+th{background:#eef1f6}
+code{background:#eef1f6;border-radius:3px;font-size:12px;padding:0 3px}
+.note{font-size:12px;color:#556}
+.ok{color:#1a7a2e}.bad{color:#b3261e}.warn{color:#b06d00}
+.decisions{background:#fff8f0;border-left:4px solid #e08b2d;padding:8px 14px;margin:12px 0;font-size:13px}
+.decisions h2{border:none;margin-top:0}
+.flow{font-size:12.5px;background:#f4f7fb;border:1px solid #cdd6e3;border-radius:4px;padding:8px 12px}
+.flow li{margin:2px 0}
+td.small{font-size:11.5px}
+</style>
+</head>
+<body>
+<h1>AC-0071 — Chunk streaming plan (RESEARCH ONLY — for user review)</h1>
+<p class="note">Author: planning subagent, 2026-08-21. No game code was written, no renders run, no battery executed.
+Every current-code claim below is cited to a real file:line in <code>godot/</code> (state at commit before this task).
+Measured cost numbers come from previously committed gates (PERF3c-1, RENDER-DIST, PERF3a/d — cited in §1.6);
+any number proposed forward is explicitly marked <b>[PROPOSAL]</b> for user approval.</p>
+
+<h2>1. Current-pipeline audit (what runs today)</h2>
+
+<h3>1.1 The pipeline, as it exists</h3>
+<ul>
+<li><b>Chunk model</b> — each chunk is a <code>Node3D</code> with raw <code>data</code> (block ids, 256×80 bytes, index <code>(y&lt;&lt;8)|(lz&lt;&lt;4)|lx</code>, <code>chunk.gd:35-40</code>) + <code>fl</code> (fluid level, same layout, <code>chunk.gd:43-48</code>) + up to three <code>MeshInstance3D</code> (opaque+cutout, fluid, flora, <code>chunk.gd:20-22, 581-615</code>) + one <code>StaticBody3D</code> with a single <code>ConcavePolygonShape3D</code> (<code>chunk.gd:23, 625-645</code>). <code>World.HEIGHT=80</code> (<code>data.gd:4</code>).</li>
+<li><b>World manager</b> (<code>world/world.gd</code>) — <code>chunks{}</code> keyed "<em>cx,cz</em>" (<code>world.gd:25, 335-341</code>), per-chunk <code>edits{}</code> deltas (<code>world.gd:27, 486-490</code>), a sorted <code>build_queue</code> (<code>world.gd:44, 183-212</code>) with two entry kinds: <code>data</code> (ring, radius+1) and <code>build</code> (radius), and three per-frame drains run from <code>_process</code>: light flush (<code>world.gd:75-149</code>), then <code>_drain_build_queue</code> (<code>world.gd:148, 261-332</code>), then texture refresh (<code>world.gd:149, 156-172</code>).</li>
+<li><b>Recenter</b> (<code>world.gd:385-436</code>) — called when the player's chunk changes (<code>player.gd:890-897, 273</code>), at first load (<code>main.gd:257, 295, 694</code>), on settings change (<code>settings.gd:96-100</code>) or <code>Debug.teleport</code> (<code>debug.gd:97, 105</code>). With the play-path default <code>mesh_now=true</code> it <b>never generates or meshes</b>: it stub-creates nodes for the new radius squares (<code>world.gd:415-420</code>) and the outer data ring (<code>world.gd:421-428</code>), queue-frees anything beyond <code>r+1</code> (<code>world.gd:390-402</code>), and re-enqueues all unbuilt chunks by Manhattan distance (<code>world.gd:429-436, 201</code>). The synchronous generate-all path (<code>create_chunk(…,false)</code> in a loop, <code>world.gd:403-414</code>) is only used by logic tests via <code>mesh_now=false</code>.</li>
+<li><b>The drain</b> (<code>world.gd:261-332</code>) — per-frame budget: <b>3 units</b> while the spawn 3×3 has any unbuilt chunk (<code>_startup_pending</code>, <code>world.gd:232-238</code>), else <b>2</b> if the last build took &lt;15 ms (<code>BUILD_FAST_US</code>, <code>world.gd:19, 265</code>), else <b>1</b>; hard-capped at <b>30 ms</b> of work per frame (<code>DRAIN_FRAME_BUDGET_US</code>, <code>world.gd:20, 267-269</code>). One "unit" = one data generation <i>or</i> one mesh build. A build is only eligible when its 4 axial neighbor chunks have data (<code>_build_ready</code>, <code>world.gd:215-220</code>), so the drain naturally does a BFS: spawn data → neighbor data → spawn mesh → … "spawn chunk first" falls out of the distance sort (<code>world.gd:201</code>).</li>
+<li><b>One data unit</b> — <code>WorldGen.generate(cx,cz,seed)</code> (<code>world.gd:306</code>; <code>generator.gd:85-334</code>: 5 fbm2 grids, column fill, 2-column cave noise, 4-column ore/hash noise, trees in a ±2 block margin, flora) + <code>init_fl</code> (<code>world.gd:307</code>) + edit re-apply (<code>world.gd:308</code> → <code>493-510</code>).</li>
+<li><b>One build unit</b> — <code>build_mesh(get_block)</code> (<code>world.gd:319</code> → <code>chunk.gd:454-622</code>): standalone light compute over the 16×16×80 box because no light cache is passed (<code>chunk.gd:466-472</code>; <code>Lighting.compute_light_flat</code>, <code>lighting.gd:146</code>) → 18×18×80 snapshot incl. 8-neighbor bands, with a hidden on-demand <i>generate of missing diagonal neighbors</i> inside the snapshot (<code>chunk.gd:364-397, 372-374</code> → <code>world._chunk_data:369-382</code>) → face scan over 16×16×80 (<code>chunk.gd:533-562</code>) → quad emission into 6 surfaces (<code>chunk.gd:563-580</code>) → new <code>ArrayMesh</code> + a <b>new material object per surface</b> (<code>chunk.gd:581-615, 400-433</code>) → <code>mesh_built=true</code> (<code>chunk.gd:616</code>) → if <code>col_dirty</code>, full collision rebuild: copy every opaque-surface vertex, <code>ConcavePolygonShape3D.set_faces(all triangles)</code>, new <code>StaticBody3D</code>+<code>CollisionShape3D</code> (<code>chunk.gd:617-622, 625-645</code>). <code>col_dirty</code> is set only by block/fluid writes and edit re-apply (<code>world.gd:467, 508</code>; <code>chunk.gd:17</code>), so light/fluid/texture flush rebuilds do not rebuild collision.</li>
+<li><b>Edit flush (AC-0034's original target)</b> — a <code>set_block</code> marks a 3×3 <code>light_dirty</code> (<code>world.gd:7, 474-478</code>); <code>_process</code> rebuilds ≤<b>2 chunks/frame</b> under a <b>40 ms</b> frame budget (<code>FLUSH_MAX_PER_FRAME</code>/<code>FLUSH_FRAME_BUDGET_MS</code>, <code>world.gd:8-9, 112-138</code>), with a bulk shared light pass when the pending box is ≤3000 columns (<code>BULK_LIGHT_CELLS_MAX</code>, <code>world.gd:10, 101-107, 524-536</code>). This staggering (PERF3a) already cut the 9–17 s one-frame block to ~54 ms worst build frame (CONTINUITY §6, PERF3a line).</li>
+<li><b>Fluids</b> — every 0.2 s (<code>FLUID_TICK_INTERVAL</code>, <code>world.gd:11, 70-72</code>) <code>tick_fluids</code> scans a column window of ±<code>fluid_tick_radius</code> blocks around the player (<code>world.gd:700-718</code>; default <code>sim_dist=1</code> → 16 blocks, <code>settings.gd:7, 90-93</code>). Sleep (PERF3d): after 3 write-free ticks it returns in ≈0 ms (<code>world.gd:725-733</code>) — but the "stability" signature is the window's size + first column (<code>world.gd:719-723</code>), so <b>every time the ±16-block window slides across a chunk boundary it resets stability and re-wakes a full scan</b> of ~20 k cells per chunk in the window (<code>world.gd:735-799</code>). Pre-sleep that tick cost 175–520 ms (CONTINUITY §6, PERF3d line).</li>
+<li><b>Unload today</b> — only inside <code>recenter</code>: chunks beyond <code>r+1</code> are collected and <code>queue_free</code>'d (deferred to frame end), with queue + light-pending entries removed (<code>world.gd:390-402</code>). <code>fluid_dirty</code> and <code>tex_refresh</code> for freed chunks are <b>not</b> cleared there (they are harmlessly skipped later, <code>world.gd:97-99, 165-167</code>).</li>
+</ul>
+
+<h3>1.2 First-load paths (menu → playable)</h3>
+<table>
+<tr><th>Path</th><th>Sequence (cited)</th><th>What the player sees</th></tr>
+<tr><td><b>New world</b></td><td class="small"><code>start_game</code> <code>main.gd:291-298</code>: <code>spawn_point()</code> synchronously generates the spawn chunk (<code>world.gd:574-576</code> → <code>world.gd:564-571</code> → <code>world.gd:439-443</code> → <code>world.gd:369-375</code>, ≈31 ms) → <code>recenter(spawn,true)</code> (stubs only, <code>world.gd:385-436</code>) → <b>await spawn chunk meshed</b> (<code>_await_spawn_floor</code>, <code>main.gd:296, 3241-3250</code>, max 300 frames) → spawn player, <code>Game.start()</code>.</td><td class="small">Playable in ~1–2 drain units. First frame covers a <b>16×16-block island</b>; the other ~80 chunks at r=4 pop in over seconds while the player already stands in the world.</td></tr>
+<tr><td><b>Continue (AC-0062)</b></td><td class="small"><code>_continue_slot</code> <code>main.gd:240-264</code>: restore <code>world.edits</code> <b>before</b> recenter (<code>main.gd:249, 257</code>) → <code>recenter(target,true)</code> → <b>await FULL radius drained</b> (<code>_await_world_build</code>, <code>main.gd:258, 3253-3268</code>, max 3000 frames) → spawn player → recenter again (<code>main.gd:262</code>).</td><td class="small">The opposite failure: a <b>long blank world</b> (≈ the full first-load drain, see §1.6) before the player appears.</td></tr>
+<tr><td><b>Logic tests</b></td><td class="small"><code>main.gd:606-650</code> etc. use <code>recenter(…,false)</code> → synchronous generate of the whole radius (<code>world.gd:403-414</code>).</td><td class="small">Harness-only. The "~0.8 s recenter sync data-gen" number in the AC-0034 suspect list refers to <i>this</i> path, not the play path.</td></tr>
+</table>
+
+<h3>1.3 The audit table: step / cost / where it blocks a frame</h3>
+<table>
+<tr><th>Step</th><th>Code</th><th>Cost (documented, §1.6)</th><th>Where it blocks a frame</th></tr>
+<tr><td>Sync spawn-chunk generate at start</td><td class="small"><code>main.gd:294</code> → <code>generator.gd:85</code></td><td class="small">≈31 ms (1 chunk)</td><td class="small"><b>First-load</b> — one frame after Play click (invisible to player, tiny).</td></tr>
+<tr><td>Stub + enqueue at recenter</td><td class="small"><code>world.gd:385-436</code></td><td class="small">&lt;1 ms (node creation + queue resort of ≤361 entries at r=8)</td><td class="small"><b>Boundary crossing</b> — negligible. The crossing itself is cheap; the <i>bursts it triggers</i> are not (next rows).</td></tr>
+<tr><td>Data generation unit</td><td class="small"><code>world.gd:304-315</code></td><td class="small">≈31 ms/chunk headless; est. 100–300 ms/chunk in wasm (CONTINUITY RENDER-DIST estimate)</td><td class="small"><b>First-load pop</b> (83 units queued at r=4) and <b>boundary crossing</b> (9 new data units per crossing). 30 ms frame guard (<code>world.gd:20, 268</code>) ⇒ effectively 1 unit/frame; the frame that generates a chunk burns ~2 physics frames of work.</td></tr>
+<tr><td>Mesh + light build unit</td><td class="small"><code>world.gd:316-326</code> → <code>chunk.gd:454-622</code></td><td class="small">≈10–40 ms headless (implied by RENDER-DIST: 81 chunks in 196 frames, max frame 63 ms); est. 100–300 ms in wasm</td><td class="small"><b>First-load pop</b> + <b>boundary crossing</b> (9 builds per crossing). Standalone light compute runs per chunk (<code>chunk.gd:466-472</code>) instead of a shared bulk pass.</td></tr>
+<tr><td>Collision rebuild (inside a build)</td><td class="small"><code>chunk.gd:617-645</code></td><td class="small">not measured in isolation [to measure in Phase 1]; historically the top web suspect (BUGWEB-2, CONTINUITY §6: concave-shape + wasm cost)</td><td class="small"><b>Boundary crossing</b> (9× per crossing) — same frames as the mesh builds; also on every block edit (<code>col_dirty</code>, <code>world.gd:467</code>).</td></tr>
+<tr><td>Hidden diagonal neighbor generates inside snapshot</td><td class="small"><code>chunk.gd:372-374</code> → <code>world.gd:369-382</code></td><td class="small">up to 4 × ~31 ms <i>inside one build unit</i> when diagonal ring data isn't ready</td><td class="small"><b>Boundary crossing</b> worst-chunk builds — a build unit can quietly become 2–4 generate units. Rare once the +1 ring is prefilled, but this is the <b>worst boundary-chunk build</b> suspect.</td></tr>
+<tr><td>Fluid window wake</td><td class="small"><code>world.gd:719-733</code> + scan <code>world.gd:735-799</code>, every 0.2 s <code>world.gd:11, 70-72</code></td><td class="small">wake scan ≈ 4–9 chunks × 20 224 cell-iterations; pre-sleep 175–520 ms/tick (CONTINUITY PERF3d); now ~0 ms when asleep</td><td class="small"><b>Boundary crossing</b> and any walk: the sliding ±16-block window signature (<code>world.gd:719-723</code>) resets sleep each time the window crosses a chunk → 3 full-scan ticks per crossing ("tick_fluids locality" suspect).</td></tr>
+<tr><td>Edit flush (block break/place)</td><td class="small"><code>world.gd:76-149</code></td><td class="small">≤2 chunks×~45–75 ms over frames, 40 ms/frame guard; worst build frame 54 ms (PERF3a)</td><td class="small"><b>Block-edit flush</b> — AC-0034's original hitch; already staggered, must not regress under streaming load (drain and flush share the same frames).</td></tr>
+<tr><td>Unload (free) side of recenter</td><td class="small"><code>world.gd:390-402</code></td><td class="small">≤9 nodes at a crossing; <code>queue_free</code> defers to frame end</td><td class="small"><b>Boundary crossing</b> — one slightly heavier frame (mesh+collision memory released); no gameplay block.</td></tr>
+<tr><td>Continue full-drain wait</td><td class="small"><code>main.gd:258</code> → <code>3253-3268</code></td><td class="small">≈ full first-load drain (≈8 s headless at r=4, §1.6)</td><td class="small"><b>First-load</b> variant: whole radius must drain before the player exists.</td></tr>
+</table>
+
+<h3>1.4 What a boundary crossing does today (walking 1 chunk east, r=4)</h3>
+<div class="flow"><ol>
+<li>Frame in which the player crosses x = k·16: <code>player.gd:273</code> → <code>_recenter</code> (<code>player.gd:890-897</code>) → <code>world.recenter</code> (<code>world.gd:385-436</code>): 9 new stubs (+ring stubs), 9 chunks freed on the far side (<code>world.gd:390-402</code>), queue re-sorted. ~&lt;1 ms.</li>
+<li>Next ~15–30 frames: the drain processes up to 1–3 units/frame (<code>world.gd:265-269</code>) = the 9 new chunks' data→build→collision, interleaved with whatever else is pending (edit flush, tex refresh). Each unit ≈31 ms (gen) or ≈10–40 ms (build, headless).</li>
+<li>Every 0.2 s, the fluid tick possibly does a full window scan (re-woken by the window shift, <code>world.gd:719-723, 730-733</code>).</li>
+</ol></div>
+<p>Net: the crossing is <b>spread over many frames already</b> — the problem is that each unit still costs 1.5–30+ frames' worth of work (headless vs wasm), and nothing about ordering (look direction), unloading (hysteresis), light reuse, or collision staging reduces the per-unit cost. That is what this plan changes.</p>
+
+<h3>1.5 AC-0034 suspect list — status (from CONTINUITY.md §6 PERF3c-2, verified against current code)</h3>
+<table>
+<tr><th>Suspect</th><th>Status today (verified)</th></tr>
+<tr><td>1. "recenter sync data-gen (~0.8 s)"</td><td class="small"><b>Largely stale for play.</b> The play path uses <code>mesh_now=true</code> = stub-only (<code>world.gd:415-436</code>); the sync generate loop is test-only (<code>world.gd:403-414</code>, used by <code>AWECRAFT_LOGIC=light/fluids/…</code>, <code>main.gd:606-650</code>). Residual: first-load drain + per-crossing bursts (rows above).</td></tr>
+<tr><td>2. "worst boundary-chunk build"</td><td class="small"><b>Live.</b> 9 build units per crossing, worst case inflated by hidden diagonal generates (<code>chunk.gd:372-374</code>) + standalone light (<code>chunk.gd:466-472</code>) + collision rebuild (<code>chunk.gd:617-645</code>). Never fixed — AC-0034 was split/directed to viewmodel work (TASKS.yaml:881).</td></tr>
+<tr><td>3. "tick_fluids locality (periodic spike)"</td><td class="small"><b>Live.</b> Window-slide signature resets sleep on every chunk crossing (<code>world.gd:719-723</code>). Never fixed.</td></tr>
+<tr><td>4. "snapshot-drain"</td><td class="small"><b>Harness artifact.</b> <code>_await_world_build</code> waits for a full drain by design (<code>main.gd:3253-3268</code>); not a gameplay block. Keep, but measure the walk separately (new harness, §5).</td></tr>
+</table>
+
+<h3>1.6 Numbers relied on (and which are stale-risk)</h3>
+<table>
+<tr><th>Number</th><th>Source (committed gate)</th><th>Trust</th></tr>
+<tr><td><code>WorldGen.generate</code> ≈ <b>31 ms/chunk</b> (744 ms before, 23.9× optimization)</td><td class="small">CONTINUITY.md §6, PERF3c-1 line (2026-08-17, headless GDScript, this machine); re-measurable anytime via <code>AWECRAFT_LOGIC=genhash</code> GENMS (<code>main.gd:663-677</code>)</td><td class="small"><span class="warn">Documented, not re-measured here</span> (battery not run per task rules). Cross-check: RENDER-DIST total 8 s / 196 frames / 162 units ≈ 40 ms avg per unit incl. builds — consistent.</td></tr>
+<tr><td>r=4 full drain: <b>81 chunks meshed, total 121 resident (incl. 40 data ring), max_frame_ms 63, total_ms 7998, drain 196 frames</b>; A/B r=2 = 25 chunks</td><td class="small">CONTINUITY.md §6, RENDER-DIST line (2026-08-18, headless)</td><td class="small">Documented headless gate — re-baselined by Phase 1 harness on the first run (expect same ±10%).</td></tr>
+<tr><td>Budgeted drain: 1-chunk/frame effective; spawn-first ordering</td><td class="small">CONTINUITY.md §6, BUGWEB-2 line; code <code>world.gd:19-20, 265-269</code></td><td class="small">Verified in code.</td></tr>
+<tr><td>Wasm per-chunk build ≈ <b>100–300 ms</b>; browser 200–300 ms late-phase longtasks (swiftshader artifact suspected)</td><td class="small">CONTINUITY.md §6, RENDER-DIST + findings lines (2026-08-18)</td><td class="small"><span class="warn">Estimates, never precisely measured in a real browser</span> — Phase 1 gates use user devtools/F3 on real HW.</td></tr>
+<tr><td>Edit flush ≤2 chunks/40 ms frame; worst build frame 54 ms (was 9–17 s single frame); <code>build_mesh</code> 133→45–75 ms via local snapshot</td><td class="small">CONTINUITY.md §6, PERF3a line; code <code>world.gd:8-9, 112-138</code></td><td class="small">Documented + verified in code.</td></tr>
+<tr><td>Fluid tick 175–520 ms pre-sleep; ≈0 ms asleep; settles in 12 ticks</td><td class="small">CONTINUITY.md §6, PERF3d line; code <code>world.gd:725-733</code></td><td class="small">Documented + verified in code.</td></tr>
+<tr><td>Per-chunk concave collision = 1 shape vs ~250 k box shapes at r=2 (25 shapes)</td><td class="small">CONTINUITY.md §6, BUGWEB-2 line; code <code>chunk.gd:625-645</code></td><td class="small">Verified in code.</td></tr>
+</table>
+
+<h2>2. Problem statement</h2>
+<ul>
+<li><b>First-load pop (New world).</b> Player appears on a 16×16-block island (<code>main.gd:296, 3241-3250</code> waits only for the spawn chunk) while 80 more chunks stream in at ≤3 units/frame, each unit 1.5–30+ frames of work. r=4 fully drains in ≈8 s headless / long-er in wasm; the last chunks of the radius pop in visibly mid-gameplay.</li>
+<li><b>First-load blank (Continue).</b> The opposite: <code>_await_world_build</code> (<code>main.gd:258</code>) blocks on the <i>entire</i> radius before the player exists — the whole drain as a loading stall.</li>
+<li><b>Boundary hitches.</b> Every 16-block crossing enqueues 9 gen+build units and re-wakes the fluid window; at 1–3 budgeted units/frame with 30 ms unit costs (headless) / 100–300 ms (wasm), the player gets several visibly heavy frames per crossing, worst when diagonal ring data is missing (hidden generates, <code>chunk.gd:372-374</code>) or the fluid window is awake (CONTINUITY §6 suspects 2+3, both still live, §1.5).</li>
+<li><b>AC-0034 block-break flushes</b> share the same main-thread budget as streaming — the two must coexist (flush 40 ms guard, <code>world.gd:8-9</code>; drain 30 ms guard, <code>world.gd:20</code>; one frame has both, plus physics + render). No double-work when a chunk is being unloaded (partially true today: flush skips freed chunks, <code>world.gd:81-84, 97-99, 165-167</code> — made explicit in §3.4).</li>
+</ul>
+
+<h2>3. Proposed design</h2>
+
+<h3>3.1 Streaming policy</h3>
+<ul>
+<li><b>Target chunk set</b> — keep the current square (Chebyshev) radius, <code>render_radius</code> 1–8 (<code>settings.gd:41-42</code>); it is what the fog edge math already relies on (<code>fog_far(r) &lt; (r+1)·16</code> asserted in the perf RESULT, <code>main.gd:3373-3380</code>). Add an outer <b>data ring at r+1</b> (already exists, <code>world.gd:421-428</code>) and — new — an optional <b>r+2 data ring in low-memory mode</b>: generating data (≈41 KB/chunk, no mesh) is cheap insurance that mesh build-ready (<code>_build_ready</code>, <code>world.gd:215-220</code>) is never data-starved at the leading edge.</li>
+<li><b>Load priority</b> — replace the pure Manhattan-score (<code>d</code>, <code>world.gd:183-212, 201</code>) with a composite entry score, recomputed at recenter and (throttled to ~2×/s) on look change:
+  <code>score = distManhattan + lookPenalty + collPenalty</code>, where
+  <ul>
+  <li><code>lookPenalty</code> = (1 − angleAlignment)·K: chunks within ~±70° of the camera look direction sort first (K ≈ 0.75·distScale), so the view fills before the periphery;</li>
+  <li><code>collPenalty</code>: chunks at Chebyshev ≤ player-radius get full-priority (they can be stood on); r+1 ring entries are data-only and sort behind everything in-radius;</li>
+  <li>the drain keeps its "first <i>eligible</i> entry" scan (<code>world.gd:270-298</code>), so build-readiness can't be starved — priority only orders the queue (n ≤ 361 entries at r=8; re-sort &lt;1 ms).</li>
+  </ul></li>
+<li><b>Unload with hysteresis</b> — today: hard free at <code>r+1</code>, decided once per crossing (<code>world.gd:390-395</code>). New:
+  <ul>
+  <li>a chunk becomes <b>candidate</b> at Chebyshev <code>r+1</code> (keep data, kill mesh+collision now — frees the expensive GPU/physics memory immediately) and <b>freed</b> only after <code>r+2</code> for <b>2 consecutive recenter events</b> (~1.1 s at sprint, 3.7 s at walk);</li>
+  <li>no flap: a chunk inside r again clears candidate state at once; max churn for boundary jitter = 0 frees;</li>
+  <li>on free, clear <b>all</b> per-chunk maps: <code>build_queue</code>/<code>queued_keys</code> (already, <code>world.gd:399</code>), <code>light_pending/set</code> (already, <code>world.gd:400-401</code>), and — new — <code>fluid_dirty</code> + <code>tex_refresh</code> entries;</li>
+  <li><b>memory-pressure mode</b> (optional, Phase 1 item): if resident built chunks exceed a cap, evict oldest <i>data-only ring</i> chunks first (LRU), never built in-radius ones.</li>
+  </ul></li>
+<li><b>First-load fast path</b> — keep the two-stage design but make it explicit:
+  <ul>
+  <li><b>sync core</b>: spawn chunk + 3×3 (≤9 chunks) data-then-mesh before the player spawns. New-world: <code>_await_spawn_floor</code> (<code>main.gd:3241-3250</code>) waits only for the spawn chunk today; <b>[PROPOSAL — decision item 6]</b> widen to the 3×3 (bounded extra cost ≈ 8 × (gen+build) ≈ 0.3–2 s) so the first view is a 48×48-block solid area, then the rest streams. Continue: <b>stop waiting for the full radius</b> (<code>main.gd:258</code>) — wait for the 3×3 around the saved position instead; the rest streams in around an already-existing player.</li>
+  <li>the rest of the radius streams with the startup budget (3 units/frame while `_startup_pending`, <code>world.gd:265</code>) — unchanged; look-bias makes the forward view fill first.</li>
+  </ul></li>
+</ul>
+
+<h3>3.2 Execution model — comparison for THIS engine</h3>
+<p class="note">Hard constraints, verified: (i) the Web export preset has <code>variant/thread_support=false</code> (<code>godot/export_presets.cfg:25</code>) and Godot 4.3+ web exports are <b>single-threaded by default and recommended</b>; a threaded web export would require cross-origin isolation headers (COOP/COEP) and "the project will not run" without them (Godot docs, "Exporting for the Web", Thread support + Serving the files sections). Our canonical server <code>serve_web.py</code> does not send those headers. ⇒ <b>Web = budgeted main-thread, full stop.</b> (ii) Godot scene-tree APIs (node add/remove, <code>MeshInstance3D</code>, <code>StaticBody3D</code>/<code>CollisionShape3D</code>, <code>ArrayMesh</code>, <code>RenderingServer</code> mesh registration) must run on the main thread; worker threads may only touch pure data (Godot docs, "Thread and task manipulation" / using multiple threads — node &amp; RenderingServer calls are main-thread; <code>Task</code>/<code>WorkerThreadPool</code> are the supported 4.x work-stealing primitives). Godot-4 <code>Task</code> (allocate/run/await) and the engine's <code>WorkerThreadPool</code> (≤ <code>OS.get_core_count()</code> workers, here 6) are available in 4.7.</p>
+<table>
+<tr><th></th><th>(a) Budgeted main-thread</th><th>(b) Task/worker threads for data-only gen</th><th>(c) Hybrid (budgeted + desktop-gated threaded gen) <b>[RECOMMENDED]</b></th></tr>
+<tr><td><b>What runs where</b></td><td class="small">gen, light, mesh, collision, unload — all main thread, ≤30 ms/frame (<code>world.gd:20</code>)</td><td class="small">gen off-main into worker-local arrays; light/mesh/collision/main-tree all main</td><td class="small">= (a) always + (b) when <code>not OS.has_feature("web")</code> and <code>AWECRAFT_THREADGEN != "0"</code></td></tr>
+<tr><td><b>Works on web</b></td><td class="small ok">Yes (the only option)</td><td class="small bad">No — export has no threads (<code>export_presets.cfg:25</code>); code must feature-detect, not assume</td><td class="small ok">Yes — web takes the (a) path with zero code divergence at runtime</td></tr>
+<tr><td><b>Frame cost after change</b></td><td class="small">unit = gen (≈31 ms) or build (≈10–40 ms); boundary burst = 18 units over ~15–30 frames; per-crossing worst frame still ≈ 1 unit cost</td><td class="small">gen hidden in parallel (2–3 in flight): data stays ≥1 layer ahead; main-thread unit = build only (≈10–40 ms headless); worst frame drops to a build frame</td><td class="small">desktop: as (b); web/desktop-w/o-threads: as (a)</td></tr>
+<tr><td><b>Risk</b></td><td class="small">Low. Reuses the existing staged-drain mechanism; deterministic; trivially testable headless</td><td class="small">Medium. GDScript threading: no shared mutable state — each worker must generate into its <b>own</b> local <code>PackedByteArray</code> and hand the reference over (PackedByteArray is a ref type; concurrent read+write is unsafe); light/mesh must never read neighbor data from a worker (a builder thread could read a chunk whose <code>data</code> the fluid tick or <code>set_block</code> is mutating on main). Mitigated by scoping workers to <code>WorldGen.generate</code> only (pure static function, no nodes, no globals — <code>generator.gd:85-334</code> reads only its arguments), then apply <code>init_fl</code>+<code>_apply_edits_to_chunk</code> on main (<code>world.gd:307-308, 493-510</code>).</td><td class="small">= (a) risk + gateable (b) risk; env toggle off = exact (a)</td></tr>
+<tr><td><b>Expected gain</b></td><td class="small">kills most of the *pop* variance via priority/hysteresis/bulk-light/collision-staging; unit cost unchanged</td><td class="small">removes the gen cost from frames entirely (~31 of the ~70 worst-case unit ms headless; ~100+ ms of the 100–300 ms wasm unit if it were available — it isn't, on web)</td><td class="small">best desktop; web still improves via (a)'s per-chunk cost cuts (bulk light, staged collision — §3.3)</td></tr>
+<tr><td><b>Web parity outcome</b></td><td class="small" colspan="3">Web gets: priority ordering, hysteresis, bulk batch light, collision staging, fluid locality fixes, cheaper first-load. Web does NOT get: parallel generation. Explicit acceptance that web streaming speed is bounded by single-thread wasm cost — mitigations there are pure per-chunk cost reduction, not parallelism. (If the user later wants threaded web: requires re-export with thread support <i>and</i> adding COOP/COEP headers to <code>serve_web.py</code> — called out as decision item 2.)</td></tr>
+</table>
+
+<h3>3.3 Collision staging (the heavy part of a build)</h3>
+<ul>
+<li>Current trigger surface: initial build, any <code>set_block</code>/<code>set_fluid</code>/<code>_apply_edits_to_chunk</code> via <code>col_dirty</code> (<code>world.gd:467, 508</code>, <code>chunk.gd:17, 617-622</code>); light/fluid/tex flushes already skip collision (<code>col_dirty</code> gate, <code>chunk.gd:617</code>).</li>
+<li><b>[PROPOSAL] Staged rule for stream-in builds:</b>
+  <ul>
+  <li>chunks at Chebyshev ≤ 1 from the player: collision <b>immediate</b> in the same build unit (player can be there this second);</li>
+  <li>chunks at 2…r: mesh first (visible immediately), collision in the <b>next budget slot</b> (a dedicated low-priority "collision" unit type) — the mesh pop and the physics pop are decoupled, and the worst build frame loses its <code>set_faces</code> cost (<code>chunk.gd:638-639</code>);</li>
+  <li>bounded exposure: the 1-slot delay = ≤1 frame where a far chunk is walkable — the player is never within 1 frame of such a chunk unless flying at the leading edge; covered by a sprint-into-terrain gate in the boundary harness (§5). If that ever matters: per-y-band <code>CollisionShape3D</code> sub-shapes added incrementally (a <code>StaticBody3D</code> may carry many shapes) — listed as fallback option 4, only if measurements demand it.</li>
+  </ul></li>
+<li><b>[PROPOSAL] Measure first:</b> the Phase 1 harness reports <code>collision_ms</code> per build unit (instrument around <code>chunk.gd:625-645</code>) before/after — if <code>set_faces</code> cost turns out small on modern desktop, option 4 never gets built.
+</li></ul>
+
+<h3>3.4 Lighting + fluid integration with streaming (no double work)</h3>
+<ul>
+<li><b>Bulk batch light for stream-in.</b> Today every queued build does its own standalone 16×16×80 light compute (<code>world.gd:319</code> passes no cache → <code>chunk.gd:466-472</code>). The flush already has the shared-box pattern (<code>_bulk_light</code>/<code>_build_batch</code>, <code>world.gd:524-561</code>, margin 2, <code>world.gd:6</code>). New: a re-center batch (≤ the 9 new chunks) computes <b>one</b> <code>compute_light_flat</code> over their union box + margin and hands the per-chunk slice into <code>build_mesh(…, eff)</code> (the <code>eff</code> parameter already exists, <code>chunk.gd:454, 466-472</code>). 9 light computes → 1 per crossing.</li>
+<li><b>No work for chunks being unloaded.</b> recenter-freed keys are removed from <code>build_queue</code> + <code>light_pending</code> today (<code>world.gd:399-401</code>); extend to <code>fluid_dirty</code>/<code>tex_refresh</code>, and the flush loops additionally skip chunks beyond <code>r+1</code> (one-line checks beside the existing null checks, <code>world.gd:81-84, 97-99</code>). A chunk that is candidate-for-unload (§3.1) gets its mesh+collision killed immediately and its pending light work dropped — its data stays for the hysteresis window, so a re-entry costs a rebuild (with edits re-applied, §3.5) not a re-generate.</li>
+<li><b>Fluids (suspect 3 fix).</b> Inside <code>tick_fluids</code> (<code>world.gd:700-802</code>):
+  <ul>
+  <li><b>prescreen per chunk</b>: scan the chunk's <code>fl</code> (20 KB, trivial) — skip chunks with no fluid at all (dry biomes cost ~0; the 20 224-iteration column loop, <code>world.gd:749-799</code>, only runs on fluid-bearing chunks);</li>
+  <li><b>coarser sleep signature</b>: round the window to 32-block cells (<code>world.gd:719-723</code> currently changes on every chunk-column shift) so small walks don't reset stability;</li>
+  <li>keep the existing wake sources (fluid writes, <code>_fluid_write</code>, <code>world.gd:725-727</code>) — the sim results must stay bit-identical to the current <code>AWECRAFT_LOGIC=fluids</code>/<code>fluidsettle</code> RESULTs (gate: FLUIDSTAT unchanged, CONTINUITY PERF3d).</li>
+  </ul></li>
+</ul>
+
+<h3>3.5 Save integration (AC-0062) — why streaming is transparent, + 1 hardening</h3>
+<ul>
+<li>Edits live at <b>world level</b>, keyed by chunk-coord string ("cx,cz" → cell → <code>{b,f}</code>) — <code>world.gd:27, 486-490</code>. They never move with a chunk node, so stream-out keeps them; every generation path re-applies them <b>before first mesh</b>: queue drain (<code>world.gd:308</code>), <code>create_chunk</code> (<code>world.gd:359</code>), on-demand gen (<code>world.gd:379</code>) → <code>_apply_edits_to_chunk</code> (<code>world.gd:493-510</code>, also sets <code>col_dirty</code> + light/fluid dirty, <code>world.gd:508-510</code>).</li>
+<li>Save persists exactly <code>{"edits": w.edits, player, seed, time"}</code> (<code>save.gd:73-89</code>), and restore injects <code>world.edits</code> <b>before</b> recenter (<code>main.gd:249, 257</code>) — regen-not-dump by design. Streaming adds no new failure mode here. Phase 1 keeps exactly these invariants and adds a boundary-harness round-trip assertion (edit → walk 20 chunks away and back → cell matches), so a regression is caught by the gate, not by the user.</li>
+<li><b>One existing sharp edge to harden (1 line):</b> <code>set_fluid(…, create=false)</code> is the default (<code>world.gd:648</code>), so player-initiated placement onto a not-resident chunk silently no-ops (<code>world.gd:658-660</code>). Player bucket placement (<code>player.gd:820</code>) should pass <code>create=true</code> (matches <code>set_block</code>'s create=true, <code>player.gd:788</code> / <code>world.gd:446, 452-453</code>). Unreachable in practice today (reach &lt; one chunk at r≥1) but it must stay true once streaming means chunks are deliberately absent.
+</li></ul>
+
+<h3>3.6 Memory at render radii 4 / 6 / 8</h3>
+<table>
+<tr><th></th><th>r=4</th><th>r=6</th><th>r=8</th></tr>
+<tr><td>Built (mesh+collision) resident max</td><td>81</td><td>169</td><td>289</td></tr>
+<tr><td>Data ring (r+1) resident</td><td>40</td><td>56</td><td>72</td></tr>
+<tr><td>Candidates pending free (hysteresis, r+1→r+2 band)</td><td>~48</td><td>~64</td><td>~80</td></tr>
+<tr><td>Raw data+fl per chunk (exact)</td><td colspan="3">2 × 20 480 B = 40.96 KB (<code>data.gd:4</code>, index layout <code>chunk.gd:35-40</code>) ⇒ 121 chunks ≈ 5 MB at r=4 — negligible</td></tr>
+<tr><td>Mesh+arrays+materials per built chunk</td><td colspan="3">not measured in committed gates [measure in Phase 1 via <code>AWECRAFT_MESH_INFO</code> per-surface vert counts, <code>main.gd:687-689</code>, + <code>OS.get_used_memory()</code> / <code>OS.get_total_memory()</code> before/after drain]. Expect ~0.2–1 MB per built chunk CPU+GPU (6 surfaces, new material per surface, <code>chunk.gd:581-615</code>)</td></tr>
+<tr><td>Concave shape per built chunk (exact formula)</td><td colspan="3">opaque triangles × 3 verts × 24 B, set via <code>ConcavePolygonShape3D.set_faces</code> (<code>chunk.gd:634-639</code>) — same order as mesh arrays</td></tr>
+<tr><td><b>[PROPOSAL] steady-state budget (approve/adjust)</b></td><td>≤ 150 MB Δ</td><td>≤ 260 MB Δ</td><td>≤ 380 MB Δ</td></tr>
+</table>
+<p class="note">The binding constraint is the <b>browser tab's</b> budget (wasm heap + GPU), not this machine (63 GB). If r=8 on web measures hot, the levers are: data-ring depth 1 instead of 2, hysteresis band widened (frees earlier), or lower web default radius (decision items 5/7). Unload frees mesh+collision immediately at candidate (§3.1), so the steady state is dominated by the 81/169/289 built chunks.</p>
+
+<h3>3.7 Resulting per-frame work (proposed steady state, playing at r=4, crossing a boundary)</h3>
+<div class="flow"><ol>
+<li><code>player.gd:273</code> → recenter: stubs, candidate-mark freed side, score+resort queue, clear dead map entries (<code>≈1 ms</code>).</li>
+<li>Drain (budgeted, 30 ms guard kept): up to 3 scored units — a build unit now = shared-batch light slice + mesh (+collision only if player-adjacent); a gen unit ≈31 ms main-thread (web) or off-main completion handoff (desktop Phase 2).</li>
+<li>Collision-staging slot: 1 deferred collision unit (low priority, never competes with a pending edit flush of the same chunk).</li>
+<li>Edit flush: unchanged ≤2 chunks/40 ms (<code>world.gd:8-9</code>) — a chunk that is <i>being unloaded</i> is skipped (§3.4).</li>
+<li>Fluid tick (0.2 s): per-chunk prescreen; asleep unless the window actually holds fluid and something wrote (<code>world.gd:730-733</code> as improved).</li>
+</ol></div>
+
+<h2>4. Phased rollout (numbers are ours; no calendar estimates, per standing rule)</h2>
+
+<h3>Phase 1 — Budgeted main-thread streaming (web + desktop, low risk)</h3>
+<table>
+<tr><th>#</th><th>Item</th><th>Where it lands</th></tr>
+<tr><td>P1.1</td><td>Scored queue (distance + look + collision-need), re-sort at recenter + throttled look update</td><td class="small"><code>world.gd</code> <code>_insert_sorted</code>/<code>_enqueue_*</code> (<code>183-212</code>); look source = player yaw (<code>player.gd</code> <code>get_yaw</code>)</td></tr>
+<tr><td>P1.2</td><td>Two-stage unload: candidate at r+1 (kill mesh+collision now), free at r+2 after 2 recenter events; clear all per-chunk maps on free</td><td class="small"><code>world.gd:385-436</code>; new per-chunk state fields in <code>chunk.gd</code></td></tr>
+<tr><td>P1.3</td><td>Bulk batch light for stream-in builds (union box + margin 2, slices into <code>build_mesh(…,eff)</code>)</td><td class="small"><code>world.gd:524-561</code> pattern; <code>chunk.gd:466-472</code> already accepts <code>eff</code></td></tr>
+<tr><td>P1.4</td><td>Collision staging: player ±1 immediate, else next-slot unit; per-build <code>collision_ms</code> instrumentation</td><td class="small"><code>chunk.gd:617-645</code>; new queue unit type in <code>world.gd:261-332</code></td></tr>
+<tr><td>P1.5</td><td>Fluid locality: per-chunk fluid prescreen + 32-block sleep-signature + unchanged wake sources</td><td class="small"><code>world.gd:700-802</code></td></tr>
+<tr><td>P1.6</td><td>First-load fast path: 3×3 sync core for New world <b>and</b> Continue (replaces full-radius wait at <code>main.gd:258</code>)</td><td class="small"><code>main.gd:240-264, 291-298, 3241-3268</code></td></tr>
+<tr><td>P1.7</td><td>Budget envs: <code>AWECRAFT_DRAIN_MS</code>, <code>AWECRAFT_GEN_BUDGET</code> (tuneable for web-weak-HW mode)</td><td class="small"><code>world.gd:19-20</code> region</td></tr>
+<tr><td>P1.8</td><td>Hardening: <code>set_fluid</code> player-placement <code>create=true</code> (<code>player.gd:820</code>)</td><td class="small">1 line</td></tr>
+</table>
+<p><b>Phase 1 verification</b> (all headless-first; web build + browser gate last): full battery green with <code>ok:true</code> byte-identical where gates exist (player/interact/craft/guiclick/light/fluids/fluidsettle/buckets/water/save/settings — RESULTs must match pre-change values), <code>genhash</code> bit-identical, <code>AWECRAFT_LOGIC=perf</code> re-baseline at r=2/4/6/8, new <code>AWECRAFT_LOGIC=boundary</code> harness (§5), 0 script errors on every run, <code>./build_web.sh</code> + browser boundary walk (user devtools). Small render only for the unload-ring/fog masking check (existing <code>AWECRAFT_SNAPSHOT</code> mechanism, R=2 per ops rules).</p>
+
+<h3>Phase 2 — Threaded data generation (desktop-gated, OPTIONAL, only after Phase 1 numbers)</h3>
+<p><b>Boundary conditions to enable it (ALL must hold):</b></p>
+<ol>
+<li>Phase 1's boundary harness still shows generation as a significant share of walk-frame cost at r≥4 on this machine (e.g. gen units &gt;25% of unit-ms) — otherwise Phase 2 is not worth its risk; <b>or</b> the user explicitly wants it for desktop r=6/8 smoothness.</li>
+<li><code>not OS.has_feature("web")</code> (hard) — plus <code>AWECRAFT_THREADGEN != "0"</code> env (on-by-default desktop, off = exact Phase 1 behavior), plus optional <code>AWECRAFT_THREADGEN_N</code> pool size (default <code>mini(OS.get_core_count()-2, 3)</code> on this 6-core box).</li>
+<li>Code-review gate: workers touch <b>only</b> <code>WorldGen.generate</code> (pure static, no nodes, no globals, no shared PackedByteArray — <code>generator.gd:85-334</code>); results hand back as freshly-allocated arrays; <code>init_fl</code>/<code>_apply_edits_to_chunk</code> run on main (<code>world.gd:307-308</code> region); in-flight cap ≤6.</li>
+<li>Determinism gate: <code>genhash</code> MD5s identical with <code>AWECRAFT_THREADGEN=0</code> vs `1`, 25/25 + seeds 999/424242 (same cross-check style as PERF3c-1).</li>
+</ol>
+<p><b>Phase 2 scope:</b> <code>WorldGen.generate</code> into a small task pool (Godot 4 <code>Task</code> allocate/run or <code>WorkerThreadPool.add_task</code>), completion handoff on main into <code>c.data</code> (<code>world.gd:306-315</code> region), drain logic otherwise unchanged. <b>Verification:</b> same harnesses with a threadgen A/B pair (<code>AWECRAFT_THREADGEN=0/1</code>) on the boundary walk + full battery under threadgen-on + genhash parity. Rejected for Phase 2 (deliberately): threading the mesh/face-scan (main-thread handoff of <code>ArrayMesh</code> eats most of the win, high risk), threading light (reads mutable neighbor data — unsafeness not worth it), threaded web export (decision item 2).</p>
+
+<h2>5. Performance targets + acceptance criteria</h2>
+<p class="warn">All numbers below are [PROPOSALS] for user approval. Baselines = §1.6 committed gates (headless, this machine, r=4 unless stated). "Walk" = the new boundary harness, §5.1.</p>
+<table>
+<tr><th>Metric</th><th>Baseline (committed)</th><th>Phase 1 target [PROPOSAL]</th><th>Phase 2 target (desktop) [PROPOSAL]</th><th>Proven by</th></tr>
+<tr><td>First-draw (Play click → spawn chunk meshed, player controllable)</td><td class="small">≈1–2 drain units (≈0.1–0.3 s headless)</td><td class="small">≤0.5 s headless; Continue: ≤0.75 s to player (vs. full-drain ≈8 s+ today, <code>main.gd:258</code>)</td><td class="small">same (unchanged)</td><td class="small">extended <code>AWECRAFT_LOGIC=perf</code> (<code>main.gd:3340-3394</code>) — add first-draw-ms + memory fields</td></tr>
+<tr><td>First-load full drain (r=4, 81 chunks)</td><td class="small">total_ms 7998, max_frame_ms 63, 196 frames (<code>main.gd:3384-3393</code> fields exist)</td><td class="small">total ≤8 s (bulk light should improve it; re-baseline) AND visible pop-ins confined to r&gt;2 by then [PROPOSAL]</td><td class="small">total ≤5 s</td><td class="small"><code>AWECRAFT_LOGIC=perf</code> + <code>AWECRAFT_RADIUS</code> sweep 2/4/6/8 (<code>main.gd:118-120</code> already supported)</td></tr>
+<tr><td>Boundary walk, per-frame (20-chunk straight line, r=4)</td><td class="small">no harness exists today → measure in Phase 1 step 0</td><td class="small">p95 frame ≤33 ms; max frame ≤50 ms; <b>no single frame &gt;50 ms</b> headless</td><td class="small">p95 ≤17 ms, max ≤33 ms</td><td class="small">new <code>AWECRAFT_LOGIC=boundary</code> harness (§5.1)</td></tr>
+<tr><td>Boundary-crossing burst: time from crossing until all 9 in-radius new chunks meshed</td><td class="small">n/a</td><td class="small">≤0.5 s headless (≈9 build units at ≥2/frame after first few)</td><td class="small">≤0.3 s</td><td class="small">boundary harness (per-crossing timestamps)</td></tr>
+<tr><td>Load/unload flapping at boundary jitter (±0.5 chunk in/out ×3)</td><td class="small">n/a (hard r+1 free today)</td><td class="small">0 chunk frees during jitter; ≤1 free per true departure</td><td class="small">same</td><td class="small">boundary harness (loaded/unloaded counters)</td></tr>
+<tr><td>Fluid tick during steady walk (p95 of ticking frames)</td><td class="small">0 ms asleep; wake scan up to 4–9×20 k-cell iterations (175–520 ms pre-sleep history)</td><td class="small">≤5 ms (prescreen: dry chunks ≈0; wet windows bounded)</td><td class="small">same</td><td class="small">boundary harness + existing <code>AWECRAFT_TICKTIME=1</code> TICKMS (<code>world.gd:731-732, 800-801</code>); FLUIDSTAT bit-identical gate</td></tr>
+<tr><td>Steady-state memory Δ (post-drain, r = 4/6/8)</td><td class="small">not measured in committed gates</td><td class="small">≤150 / 260 / 380 MB (§3.6 table)</td><td class="small">same</td><td class="small">perf harness: <code>OS.get_used_memory()</code>/<code>OS.get_total_memory()</code> pre/post; <code>AWECRAFT_MESH_INFO</code> vert counts (<code>main.gd:687-689</code>)</td></tr>
+<tr><td>Web (real browser, user HW, r=4): boundary walk</td><td class="small">longtask 200–300 ms late phase on swiftshader (documented artifact, CONTINUITY §6)</td><td class="small">user devtools: no longtask &gt;300 ms while crossing at r=4; F3 FPS no visible cliff</td><td class="small">n/a (web = Phase 1 path)</td><td class="small">user browser test after <code>./build_web.sh</code> (web loop per AGENTS.md)</td></tr>
+<tr><td>Regression gates</td><td colspan="2">full battery <code>ok:true</code> byte-identical (RESULT dicts), genhash bit-identical, 0 script errors, save round-trip incl. new stream-out round-trip assertion</td><td>+ genhash threadgen 0/1 parity, full battery under threadgen-on</td><td class="small">existing harnesses (<code>main.gd:554-692</code> branches) + boundary harness edit round-trip</td></tr></table>
+
+<h3>5.1 The boundary-walk timing harness (new, Phase 1)</h3>
+<ul>
+<li><code>AWECRAFT_LOGIC=boundary</code>: recenter at spawn (mesh_now=true) → wait for 3×3 core → spawn fly player at spawn → fly +X at fixed speed crossing N=20 chunk lines (env-tunable) → per physics frame record: frame ms, player chunk, in-radius built/resident counts, queue depth → RESULT JSON: p50/p95/max frame ms (walk segment only), crossings, loads, unloads, flap count, per-crossing burst-ms, final resident set == target radius, <b>edit round-trip</b> (set_block near start before walk; assert cell value after return proves AC-0062 deltas survive stream-out/in), fluid-tick ms samples, memory before/after.</li>
+<li>Same-file extension for <code>AWECRAFT_LOGIC=perf</code> (first-draw ms, memory, per-frame ms array/p95) — no new scene; both print <code>RESULT {...}</code> + self-quit, matching the existing harness contract (ARCHITECTURE.md §6/§7).</li>
+<li>Existing envs already in the loop: <code>AWECRAFT_RADIUS</code> (r sweep, <code>main.gd:118-120</code>), <code>AWECRAFT_SEED</code>, <code>AWECRAFT_TIMING</code> (GENCHUNK/BUILDCHUNK lines, <code>world.gd:59, 310-311, 322-323</code>).</li>
+</ul>
+
+<h2>6. Risks</h2>
+<table>
+<tr><th>Risk</th><th>Severity</th><th>Mitigation</th></tr>
+<tr><td class="small">Headless-green ≠ web-smooth: wasm units cost 3–10× headless GDScript; the committed 100–300 ms/chunk wasm numbers are estimates, not measurements (§1.6)</td><td class="small">High</td><td class="small">Each phase ends with the web build + <b>user</b> browser gate (F3/devtools), not just headless; budgets env-tunable (P1.7) so weak-web-HW mode lowers throughput rather than raising frame spikes; default radius decision (item 5) sets the ceiling.</td></tr>
+<tr><td class="small">Look-bias priority starves sideways/back builds → player turns and sees unbuilt periphery</td><td class="small">Med</td><td class="small">Bias is a soft sort weight (K<1), never a hard gate; ring data (r+1) keeps building so the turn is covered within a crossing or two; boundary harness walks + a turn-in-place variant.</td></tr>
+<tr><td class="small">Collision staging (P1.4) = ≤1 frame of missing collision on non-adjacent stream-in chunks → sprint/fly clip-through at leading edge</td><td class="small">Med (bounded)</td><td class="small">Player ±1 always immediate (sprint covers 5.6 m/s ≈ 0.09 blocks/frame — a 1-chunk-adjacent buffer is 16 blocks); boundary harness includes a sprint-into-terrain case; if it fails, fall back to immediate-everywhere (today's behavior) — staging is a single flag.</td></tr>
+<tr><td class="small">Unload pop visible despite fog (chunk dies at r+1/r+2 while fog ends at (r+1)·16)</td><td class="small">Med</td><td class="small">Fog edge math already asserted in perf RESULT (<code>main.gd:3373-3380</code>: <code>fog_far(r) &lt; (r+1)·16</code>) — candidate stage kills the <i>mesh</i> at r+1, i.e. exactly at the fog edge; verify per r in the R=2 snapshot check; hysteresis can be widened (item 4).</td></tr>
+<tr><td class="small">Phase 2 threading: GDScript thread pitfalls (shared ref-type mutation, no main-thread rule violations), subtle non-determinism</td><td class="small">Med (contained)</td><td class="small">Workers scoped to the pure static generator (§4 Phase 2 gates 3-4); env toggle = instant rollback to Phase 1 behavior; genhash parity gate; small pool; all handoffs of fresh arrays on main.</td></tr>
+<tr><td class="small">Fluid prescreen/coarser-sig changes sim results (bit drift vs. FLUIDSTAT gate)</td><td class="small">Low-Med</td><td class="small">Prescreen is skip-if-no-fluid (mathematically no-op); coarser sig only changes <i>sleep timing</i>, never written cells; gate: fluids/fluidsettle RESULTs bit-identical (CONTINUITY PERF3d harness).</td></tr>
+<tr><td class="small">Edit-flush (AC-0034) and streaming compete for the same main-thread ms — flush hitches return under streaming load</td><td class="small">Low</td><td class="small">Budgets are explicit and additive (drain 30 ms, flush 40 ms, flush has priority for the player's own edits — it runs first in <code>_process</code>, <code>world.gd:101-149</code> before <code>world.gd:148</code>); boundary harness mines a block while crossing to prove coexistence.</td></tr>
+<tr><td class="small">Memory at r=8 on web exceeds comfortable tab budget</td><td class="small">Low</td><td class="small">§3.6 levers (ring depth, hysteresis width, web default radius) are all one-knob changes; measured, not guessed, by the perf harness memory fields.</td></tr>
+</table>
+
+<div class="decisions">
+<h2>7. DECISIONS NEEDED FROM USER</h2>
+<ol>
+<li><b>Execution model &amp; phasing</b> — approve the recommended hybrid: Phase 1 budgeted main-thread streaming (web+desktop) first; Phase 2 (desktop-only threaded <i>data generation</i>) only if Phase 1's boundary numbers still show gen-dominated frames or you want desktop r=6/8 smoother? [Recommended: yes to that order.]</li>
+<li><b>Threading on web parity</b> — accept that the browser build stays single-threaded always (current preset <code>thread_support=false</code>, <code>export_presets.cfg:25</code>; threaded web would need COOP/COEP headers on <code>serve_web.py</code> + a re-export and browser cross-origin isolation)? [Recommended: accept; web gains come from per-chunk cost cuts, not parallelism.]</li>
+<li><b>Collision staging approach</b> — OK with immediate collision for player ±1 chunks and a 1-slot-deferred collision for far stream-in chunks (bounded 1-frame pass-through at the leading edge), OR keep collision immediate everywhere (today) and accept the larger crossing frames? [Recommended: staged, with the flag to revert.]</li>
+<li><b>Unload flash artifacts</b> — acceptable that chunks die visually at the fog edge (r+1) with hysteresis (r+2/2-events) before full free — OR do you want zero visible pop-out even at cost of more resident memory (wider hysteresis band)? [Recommended: fog-edge death + current hysteresis; the R=2 snapshot gate checks it.]</li>
+<li><b>Default render radius</b> — keep 4 across platforms (<code>settings.gd:6</code>)? Or platform profiles (e.g. web default 2, desktop default 4/6)? [Recommended: keep 4 for now; revisit after the web boundary-walk numbers land.]</li>
+<li><b>First-load fast path</b> — widen the sync core from 1 chunk (spawn chunk only, <code>main.gd:3241-3250</code>) to the 3×3 for <i>both</i> New world and Continue (Continue drops its full-radius wait, <code>main.gd:258</code>)? Cost: +0.3–2 s after Play/Continue click; gain: no 16×16 island, no 8 s blank. [Recommended: yes.]</li>
+<li><b>Streaming aggression on weak web HW</b> — is "smooth frame ceiling wins over world-fill speed" the right default (i.e. keep the 30 ms guard and let r=4 take its time on a weak laptop), or should weak devices get a lower automatic radius? [Recommended: ceiling wins; radius is user-settable 1–8 already, <code>settings.gd:41-42</code>.]</li>
+<li><b>Memory ceiling</b> — do the §3.6 proposed steady-state budgets (≤150/260/380 MB at r=4/6/8) match your expectations for the browser, or should it be tighter (forcing earlier evictions)? [Needs the Phase 1 measurement to be meaningful; numbers are proposals.]</li>
+</ol>
+</div>
+
+<h2>8. Out of scope (confirmed)</h2>
+<p>No code changes in <code>godot/</code>, no renders beyond what exists, no new harnesses executed, no git — this file only. Follow-up candidates deliberately NOT included: cheaper light-only mesh refresh instead of full rebuild (M5a2-adjacent, <code>chunk.gd:454-580</code>), per-block box collision near the player (fine-collision redesign), threaded mesh face-scan, texture-streaming, and the AC-0034 viewmodel bundle (separate task, TASKS.yaml:881).</p>
+<p class="note">Sources: <code>godot/world/{world,chunk,generator,lighting}.gd</code>, <code>godot/scenes/main.gd</code>, <code>godot/player/player.gd</code>, <code>godot/autoload/{settings,save}.gd</code>, <code>godot/autoload/data.gd</code>, <code>godot/export_presets.cfg</code>, <code>build_web.sh</code>, <code>godot/CONTINUITY.md</code> §6 (PERF3a/c-1/d, BUGWEB-2, RENDER-DIST lines), <code>godot/ARCHITECTURE.md</code> §6/§9, <code>tasks/AC-0071/spec.html</code>, Godot 4.7 docs (Exporting for the Web — single-threaded default + COOP/COEP requirement; Thread &amp; task manipulation — Task/WorkerThreadPool, main-thread scene/RSS rule).</p>
+</body>
+</html>
