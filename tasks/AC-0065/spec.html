@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AC-0065 — hunger: MC food icons</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:960px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:18px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:12.5px}li{margin:3px 0}</style></head><body>
+<h1>AC-0065 — Hunger bar → Minecraft food icons</h1>
+<p>User 2026-08-21: "the hunger bar should be food icons like in minecraft, pull down a screenshot of minecraft and make it look like that." The hunger HUD is currently a plain red 170px bar.</p>
+<h2>Reference (fetch FIRST, save to the task folder)</h2>
+<ul>
+<li>The pack has NO vanilla <code>gui/icons.png</code>, so no icon to cut. <b>Pull a Minecraft HUD reference image</b> so the layout/icon is faithful: e.g. <code>https://minecraft.wiki/w/HUD</code> (the in-game HUD section shows hearts + hunger drumsticks; pick a direct image URL from the page, webfetch the page first to find it) → save as <code>tasks/AC-0065/mc_hud_ref.png</code> (a small crop of the hearts+hunger rows is ideal; embed it in results.html as the "target"). If the wiki image route fails after ~2 attempts, a second candidate (e.g. minecraft.wiki's "Hunger" or "Meat" article image of the drumstick hunger icon) is fine. Cite where it came from.</li>
+</ul>
+<h2>Requirement</h2>
+<ul>
+<li>Replace the <code>FoodBar</code> red bar (<code>ui/inventory.gd:246</code>, used at :396-399, positioned at :860, driven by <code>frac = hunger/20</code> at :864) with a <b>row of 10 drumstick ("meat on bone") icons</b> matching the MC reference: 2 hunger points per icon, states <b>full / half (left portion colored) / empty (dark silhouette)</b>, computed from <code>p.hunger</code> exactly like hearts (<code>v = hunger − i*2</code>). Mirror the icons the way MC does (hunger drumsticks point the opposite way vs the held meat) — match whatever the fetched reference shows.</li>
+<li>The drumstick is a <b>code-drawn pixel glyph</b> (9×9, same approach as <code>HeartRow</code> at :133 — bitmask → NEAREST ImageTexture, 3 states, dark outline so it reads on any background). Reuse/extend the heart-glyph pattern; keep both rows visually consistent (same cell size/gap/positioning). Hunger row stays ABOVE the hotbar, in its current slot (above the heart row — do NOT re-flow the column; keep the AC-0033 D2 centered layout). Keep the hunger-flash/damage behaviors intact. Respect the AC-0063 setting: when <code>hunger_enabled = false</code> the row renders full (it's pinned to 20), exactly as today.</li>
+<li>Do NOT touch hearts (AC-0064 done), the food/eating logic, hotbar, or menu. Only the hunger HUD.</li>
+</ul>
+<h2>Gates (zero script errors hard every run; steps fast)</h2>
+<ol>
+<li>G1: <code>--headless --quit</code> → 0 script errors.</li>
+<li>G2: full AWECRAFT_LOGIC battery → green except known pre-existing <code>fpv tool_held_ok:false</code>; 0 script errors; guiclick/craft unchanged.</li>
+<li>G3: desktop HUD shots at multiple hunger → <code>tasks/AC-0065/food_{full,13,5,0}.png</code> (hunger=20 all full; 13 → 6 full + 1 half + 3 empty; 5 → 2 full + 1 half + 7 empty; 0/0.5 → empties). Drive it like AC-0064's <code>AWECRAFT_HP</code> hook (there's now a pattern in main.gd — add an <code>AWECRAFT_HUNGER</code> env, set <code>player.hunger</code> pre-snapshot, keep for future shots). Pixel-verify (PIL): row is icon-shaped (not a bar — width/height aspect of a single cell ≈1, with transparent gaps between icons), amber/meat hue present, half icon two-tone, hunger=0 row shows dark silhouettes. View the PNGs — must read as drumsticks/hunger icons like the reference.</li>
+<li>G4: <code>./build_web.sh</code> → 0; browser (playwright, https://localhost:8443, daemon 411476 do NOT kill) in-game shot <code>tasks/AC-0065/web_food.png</code>; icons read correctly; 0 console errors.</li>
+</ol>
+<h2>Scope fence</h2>
+<p>Hunger HUD only (ui/inventory.gd FoodBar → icon row + main.gd env hook). No heart/menu/food-logic changes, no git, no renders beyond gates.</p>
+<h2>Deliverables</h2>
+<p>Code + <code>tasks/AC-0065/AC-0065-results.html</code> (mc_hud_ref.png embedded as target; before = the old bar vs new row at the 4 hunger levels; evidence numbers; deviations) + report ≤20 lines.</p>
+</body></html>
