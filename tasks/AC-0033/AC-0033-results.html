@@ -5,8 +5,8 @@ code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;ove
 img{max-width:640px;border:1px solid #cdd6e3;border-radius:4px;display:block;margin:10px 0}
 table{border-collapse:collapse;font-size:13px}td,th{border:1px solid #cdd6e3;padding:4px 10px;text-align:left}
 .ok{color:#0a7a2f;font-weight:600}.bad{color:#b3211b;font-weight:600}</style></head><body>
-<h1>AC-0033 — main menu + options menu: FINAL results (Phase 1 + Phase 2)</h1>
-<p>2026-08-21 · Phase 1 = menu-invisible render bug root-caused + fixed · Phase 2 = menu-first boot flip, P pause, options end-to-end, build version, web browser gates. Web rebuilt (stamp <code>20260821-743ac30</code>).</p>
+<h1>AC-0033 — main menu + options menu: FINAL results (Phase 1 + 2 + 3)</h1>
+<p>2026-08-21 · Phase 1 = menu-invisible render bug root-caused + fixed · Phase 2 = menu-first boot flip, P pause, options end-to-end, build version, web browser gates · <b>Phase 3 = layout/visibility defect fixes found by coordinator screenshot review</b> (menu-box state machine + full-width layout). Web rebuilt (stamp <code>20260821-830cc89</code>).</p>
 
 <h2>Phase 1 — root cause (recap)</h2>
 <p>Two independent wiring bugs made the menu invisible under Xvfb/llvmpipe (uniform 77,77,77 frame): (1) <code>menu.gd</code> built <code>main_box</code>/<code>pause_box</code>/<code>options_box</code> as dangling references — <code>add_child()</code> was never called, so nothing 2D was in the tree; (2) the menu path never created a <code>Camera3D</code>, so the root viewport ran no 3D pass and collapsed to the default clear color (0.3,0.3,0.3) = (77,77,77). Fix: 13 lines in 2 files (boxes added in <code>_ready</code>; idempotent <code>_setup_menu_camera()</code> in <code>main.gd</code>). Aero grade/sky ruled out by A/B (<code>AWECRAFT_AERO=0</code> still gray). Detail in <code>AC-0033-phase1.html</code>.</p>
@@ -78,6 +78,60 @@ table{border-collapse:collapse;font-size:13px}td,th{border:1px solid #cdd6e3;pad
 <p>p2_web_options_set6.png — render-distance moved to 6 in-game</p>
 <img src="p2_web_options_persist.png" alt="options after page reload, value persisted">
 <p>p2_web_options_persist.png — after page reload, menu → Options: render distance still 6 (console <code>OPTSYNC from=main render=6</code> = persistence proof)</p>
+
+<h2>Phase 3 — layout/visibility defects (defect fix, 2026-08-21)</h2>
+<p>Coordinator screenshot review of the phase-2 shots found 2 real defects the pixel-count gates missed. Both fixed surgically in <code>godot/ui/menu.gd</code> (1 file, ~+60/−40) plus a 2-line pre-existing Godot-4 API bug in <code>player.gd</code>/<code>menu.gd</code>. No styling/world/player changes.</p>
+
+<h3>D1 — menu boxes not mutually exclusive (ghosting)</h3>
+<p><b>Root cause:</b> box visibility was managed as scattered ad-hoc <code>visible</code> flags in 5 call-sites (<code>show_main</code>, <code>show_pause</code>, <code>open_options</code>, <code>play_clicked</code>, resume/quit). <code>open_options()</code> (menu.gd:95) set <code>options_box.visible = true</code> <b>without hiding the box behind it</b> — so the main box (title, Play, help line, its own Load Texture Pack button) stayed lit under the options panel. Re-verified pre-fix this session on the exact committed tree: <code>AWECRAFT_MENU_SHOT + AWECRAFT_MENU_VIEW=options</code> reproduced the ghost (below, left).</p>
+<p><b>Fix:</b> explicit visibility state machine — <code>_state</code> ∈ <code>main / pause / opt_main / opt_pause / ingame</code>, single <code>_apply_state()</code> sets each box visible <b>exactly iff</b> it matches the state, and hides the whole menu <code>CanvasLayer</code> (<code>visible=false</code>) while <code>ingame</code> (play mode), except <code>show_pause()</code> which re-shows the layer with only <code>pause_box</code>. Every entry point (<code>show_main</code>/<code>show_pause</code>/<code>open_options</code>/<code>close_options</code>/<code>play_clicked</code>/<code>new_world_clicked</code>/<code>hide_pause</code>/resume/quit) now only sets <code>_state</code>; <code>close_options</code> returns to the remembered source (<code>_options_from</code>: main→main box, pause→pause box). <code>_unhandled_input</code> (Esc/E/P closing options/pause) is inert while <code>ingame</code>. Load Texture Pack button kept in ONE place (main menu, per web parity; the options panel's own copy also stays — but exactly one is ever visible, per state).</p>
+<table>
+<tr><th></th><th>BEFORE (phase 2, options view)</th><th>AFTER (phase 3)</th></tr>
+<tr>
+<td><b>p3_menu_options.png</b> — options over dimmed window bg. Exactly ONE "Load Texture Pack" band (pixel-verified: neutral-text row y434–445 only; no "Options" label ghost, no main title, no help line).</td>
+<td><img src="repro_options.png" alt="pre-fix options ghost: title + Options label + duplicate LTP button + help line all visible"></td>
+<td><img src="p3_menu_options.png" alt="fixed: single options panel over dimmed bg"></td>
+</tr>
+<tr>
+<td>Ghost-zone crops (panel rows y380–560, 1.5×): before = ghost "Options" label + dimmed duplicate LTP + main help line; after = clean.</td>
+<td><img src="crop_p2_options_ghostrange.png" alt="before crop: ghost Options label and duplicate Load Texture Pack"></td>
+<td><img src="crop_p3_options_ghostrange.png" alt="after crop: single panel, no ghosts"></td>
+</tr>
+<tr>
+<td><b>p3_paused.png</b> — mode watcher play→pause → <code>show_pause()</code>: only the pause box, world+hotbar behind, no main-box ghost (state machine guarantees <code>main_box.visible=false</code>; layer not hidden). Pixel check: left-edge seed "44" (was at x0–22 y447 pre-layout-fix) and right-edge "New World" (x1120–1203) rows now 0 bright-neutral px; title zone (y150–240) contains only "Game Paused" text.</td>
+<td><img src="p2_paused.png" alt="phase-2 paused shot"></td>
+<td><img src="p3_paused.png" alt="phase-3 paused shot: single pause box over world"></td>
+</tr>
+</table>
+<p class="ok">Note: the committed p2_paused.png (1280) title zone proved byte-clean on re-scan (clouds, not ghost); the provable committed ghost was the options view. The state machine hardens ALL flows (incl. any transient double-<code>visible</code> race across the 5 old call-sites) and the layer-hidden-while-playing guarantee — re-verified on all three desktop shots + web.</p>
+
+<h3>D2 — full-window-width layout → centered fixed-width column</h3>
+<p><b>Root cause:</b> <code>_build_main</code> used a full-rect VBox: <code>_mk_btn</code> defaults made every button full-width via <code>SIZE_EXPAND_FILL</code> with a <code>340px</code> minimum, and the seed <code>LineEdit</code>/<code>New World</code> row expanded edge-to-edge.</p>
+<p><b>Fix:</b> main box = full-rect bg + <code>CenterContainer</code> → 720px-minimum column: title/subtitle/version, Play, seed+New World row (LineEdit expand + 130px button, side by side WITHIN the column), Options, Load Texture Pack, status — all buttons now <code>size_flags_horizontal = FILL</code> (column width) or explicit 130/200px. Pause box: same pattern, 480px column. Options box: already a 560px centered column (unchanged). Help line: centered bottom strip (y−36), allowed to run wider than the column. <code>_mk_btn</code> default width flipped to "fill parent" (−1) so no future button re-expands to window width.</p>
+<table>
+<tr><th></th><th>BEFORE (web, 1920×1080)</th><th>AFTER (web, 1920×1080)</th></tr>
+<tr>
+<td>Before: Play bar spanned 1920px, "44" pinned to the window's left edge, "New World" pinned to the right edge. After: centered ~720px column, nothing at either window edge (pixel-verified: left strip x0–80 and right strip x1840–1920, y480–640 → 0 bright px; Play button bg extent x600–1319, center 959).</td>
+<td><img src="p2_web_menu.png" alt="before: full-width menu"></td>
+<td><img src="p3_web_menu.png" alt="after: centered column at 1920x1080"></td>
+</tr>
+</table>
+<p>Desktop dual-resolution verified too: <code>p3_menu_main.png</code> (1280×720, column x280–980) and <code>p3_menu_main_1920.png</code> (1920×1080, column x600–1320) — same 720px column, correctly centered at both.</p>
+<p><img src="p3_menu_main.png" alt="main menu 1280x720"></p>
+<p><img src="p3_menu_main_1920.png" alt="main menu 1920x1080"></p>
+
+<h3>Bonus fix found along the way (pre-existing, phase-2-introduced)</h3>
+<p><code>event.action</code> is not a property in Godot 4 (removed pre-4) — <code>kc == int(KEY_P) or event.action == "ui_pause"</code> threw <b>SCRIPT ERROR: Invalid access to property 'action' on InputEventKey</b> on every non-P keypress during the <code>AWECRAFT_LOGIC=survival</code> harness run. Fixed in <code>player.gd</code>:176 and <code>menu.gd</code>:64 → <code>event.is_action_pressed("ui_pause")</code>. Battery went from 1 script error → 0.</p>
+
+<h2>Phase 3 — gates</h2>
+<table>
+<tr><th>gate</th><th>result</th></tr>
+<tr><td><b>G1</b> <code>godot --headless --path godot --quit</code></td><td><span class="ok">0 script errors</span> (re-run after final code state)</td></tr>
+<tr><td><b>G2</b> full 22-mode logic battery (player interact light fluids buckets craft guiclick swing look combat water fpv tint daynight atlas fluidsettle settings survival editperf perf genhash trees)</td><td><span class="ok">all exit 0, 0 script errors, all <code>ok:</code> flags true</span>; only known exception = <code>fpv tool_held_ok:false</code> (pre-existing, unchanged). Menu does not interfere with harness modes (env-skip intact).</td></tr>
+<tr><td><b>G3</b> desktop shots (xvfb/llvmpipe, 0 script errors each)</td><td><code>p3_menu_main.png</code> (1280) + <code>p3_menu_main_1920.png</code> (1920, <code>AWECRAFT_SIZE</code>) + <code>p3_menu_options.png</code> (<code>AWECRAFT_MENU_VIEW=options</code>) + <code>p3_paused.png</code> (<code>AWECRAFT_MENU_BOOT=1 AWECRAFT_PAUSE_SHOT=1 AWECRAFT_RADIUS=1</code>, RESULT <code>{"pause_shot":true,"mode":"pause"}</code>). Pixel gates: options = exactly 1 LTP text band (y434–445) + no "Options"-label ghost (r&gt;55 neutral count in ghost row y470–500 = 0, was the duplicate button) + main title/help line rows absent; main menu edge strips x0–60 / x1220–1280 (and 1920: x0–80 / x1840–1920) = 0 bright px (before: 97 / 190); paused: "44"-left and "New World"-right rows gone (0 px, vs pre-layout-fix x0–22 / x1120–1203), world visible (sky std 7.8, grass band std 5.5 under 0.72 overlay dimming), hotbar present, title zone = "Game Paused" only. All shots also visually verified.</td></tr>
+<tr><td><b>G4</b> <code>./build_web.sh</code> + browser (Playwright, https://localhost:8443, 1920×1080, daemon pid 411476 untouched, exit 200)</td><td><span class="ok">build exit 0</span> (pck 367 592 B; stamp <code>20260821-830cc89</code> shown in menu). Boot → centered-column menu <code>p3_web_menu.png</code> (no edge-pinned elements) → click Play → world <code>p3_web_playing.png</code> (185 terrain px in bottom band) → P → <code>p3_web_paused.png</code> (single pause box, centered 480px column over dimmed world, no main-menu ghost) → <b>0 console errors, 0 pageerrors</b>.</td></tr>
+</table>
+<p>All <code>p2_*.png</code> before-evidence kept untouched. Debug scaffolding: none left (repro shots kept in <code>.scratch</code>/tmp only; the <code>repro_options.png</code> pre-fix capture kept in the task folder as D1 before-proof). No world/fluid/player-logic changes.</p>
 
 <h2>Deviations / notes</h2>
 <ul>

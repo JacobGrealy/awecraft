@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-21T10:20
+  updated_at: 2026-08-21T11:44
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -27,6 +27,7 @@ queue:
 - AC-0065
 - AC-0066
 - AC-0067
+- AC-0070
 - AC-0068
 - AC-0034
 - AC-0035
@@ -784,12 +785,12 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: in-progress
+  status: done
   labels:
   - godot
   created_at: 2026-08-18T12:00
-  updated_at: 2026-08-21T08:49
-  completed_at: null
+  updated_at: 2026-08-21T11:44
+  completed_at: 2026-08-21T11:44
   waiting_on: null
   parent_id: null
   notes: 'Main menu (title + build version + play/new world) before game start; options menu from main + pause: render-distance
@@ -828,6 +829,18 @@ intake:
     created_at: 2026-08-21T08:49
     updated_at: null
     text: '[user] for the in game pause menu, let''s default the key bind to p since escape is already used by the browser'
+  - id: 8
+    created_at: 2026-08-21T11:44
+    updated_at: null
+    text: '[agent] DONE 2026-08-21 (3 subagent phases). Phase1: menu-invisible root cause (boxes never add_child''d + no menu
+      camera). Phase2: menu-first boot (desktop+web), P=ui_pause pause (browser owns Esc), options persistence via IndexedDB
+      (render/sim sound/resolution/fullscreen), build stamp. Phase3 (coordinator screenshot review found + subagent fixed):
+      (D1) menu box visibility state machine was letting main/pause/options co-render -> explicit _state machine, exactly
+      one box, CanvasLayer hidden while ingame; (D2) full-window-width layout -> centered 720px column at 1280 and 1920. Verified:
+      desktop p3_menu_main/p3_menu_options/p3_paused pixel-clean (pause title-band 2.39% vs main 4.45% => no ghost) + web
+      1920x1080 menu/Play/P-pause/options-slider-persist-IndexedDB clean, 0 console errors; battery 22/22; removed AWECRAFT_DEBUG_TREE
+      MDEBUG scaffold. Known deviations (documented): web in-memory texture-pack swap not done (import_pack_mem ready), web
+      fullscreen gesture-limited. results: tasks/AC-0033/AC-0033-results.html'
 - id: AC-0034
   title: hitch
   source: user
@@ -1744,3 +1757,30 @@ intake:
     created_at: 2026-08-21T10:20
     updated_at: null
     text: '[user] Add a task for adding controller support'
+- id: AC-0070
+  title: tool-voxel-models-redo
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-21T11:36
+  updated_at: 2026-08-21T11:36
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Redo the held tool VOXEL models (pickaxe/axe/shovel/sword from AC-0051) so their voxel-grid resolution MATCHES the
+    pixel resolution of the corresponding item icon in the texture pack (e.g. a 16x16 or 32x32 icon -> the model''s profile
+    spans that many voxels), which means the voxels themselves must be SMALLER than today''s chunky units, so the silhouettes
+    read like the real tool. Reference: pull down an in-game Minecraft screenshot showing what the axe/sword/pickaxe actually
+    look like (shape, proportions) and match it. Keep the existing swing (AC-0048/0060) + tier-tint + on-top (AC-0067) + lighting
+    (AC-0035) integration intact. Verify: headless held-tool probe + A/B render shots vs the icon and the MC reference.'
+  comments:
+  - id: 1
+    created_at: 2026-08-21T11:36
+    updated_at: null
+    text: '[user] redoing the tool voxel models, they should have the same resolution in voxels that the icon has in pixels.
+      So the voxels will need to be smaller. Pull down a minecraft screenshot to see what an axe / sword / pickaxe looks like
+      for example.'

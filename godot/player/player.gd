@@ -173,7 +173,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			hold_swing(0.5)
 		elif kc == int(KEY_K):
 			clear_swing()
-		elif kc == int(KEY_P) or event.action == "ui_pause":
+		elif kc == int(KEY_P) or event.is_action_pressed("ui_pause"):
 			if ui_mode == "" and not dead:
 				Game.pause()
 		elif kc == int(KEY_ESCAPE):

@@ -32,6 +32,19 @@ var file_dialog: FileDialog
 var _options_from := "main"
 var _is_web := false
 var _syncing := false
+# visibility state machine: exactly one of the boxes may be visible;
+# "ingame" = menu layer hidden entirely (except pause, via show_pause)
+var _state := "main"
+
+
+func _apply_state() -> void:
+	if main_box != null:
+		main_box.visible = _state == "main"
+	if pause_box != null:
+		pause_box.visible = _state == "pause"
+	if options_box != null:
+		options_box.visible = _state == "opt_main" or _state == "opt_pause"
+	visible = _state != "ingame"
 
 
 func _ready() -> void:
@@ -51,17 +64,14 @@ func _ready() -> void:
 	file_dialog.file_selected.connect(_on_pack_file_selected)
 	add_child(file_dialog)
 	show_main()
-	if OS.get_environment("AWECRAFT_DEBUG_TREE") == "1":
-		print("MDEBUG main_box", main_box.size, main_box.visible, "vp", get_viewport().get_visible_rect().size)
-		for i in range(main_box.get_child_count()):
-			var ch = main_box.get_child(i)
-			print("MDEBUG child ", ch.get_class(), ch.size, ch.visible)
 
 
 func _unhandled_input(event) -> void:
+	if _state == "ingame":
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		var kc: int = int(event.physical_keycode)
-		if kc != int(KEY_ESCAPE) and kc != int(KEY_P) and event.action != "ui_pause":
+		if kc != int(KEY_ESCAPE) and kc != int(KEY_P) and not event.is_action_pressed("ui_pause"):
 			return
 		if options_box.visible:
 			close_options()
@@ -72,31 +82,23 @@ func _unhandled_input(event) -> void:
 
 
 func show_main() -> void:
-	if main_box != null:
-		main_box.visible = true
-	if pause_box != null:
-		pause_box.visible = false
-	if options_box != null:
-		options_box.visible = false
+	_state = "main"
+	_apply_state()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 func show_pause() -> void:
-	if main_box != null:
-		main_box.visible = false
-	if pause_box != null:
-		pause_box.visible = true
-	if options_box != null:
-		options_box.visible = false
+	_state = "pause"
 	_sync_controls()
+	_apply_state()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 func open_options(source: String) -> void:
 	_options_from = source
+	_state = "opt_main" if source == "main" else "opt_pause"
 	_sync_controls()
-	if options_box != null:
-		options_box.visible = true
+	_apply_state()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	print("OPTSYNC from=%s render=%d sim=%d vol=%d res=%s full=%s" % [
 		source,
@@ -109,13 +111,14 @@ func open_options(source: String) -> void:
 
 
 func close_options() -> void:
-	if options_box != null:
-		options_box.visible = false
+	if _state == "opt_main" or _state == "opt_pause":
+		_state = _options_from
+	_apply_state()
 
 
 func play_clicked() -> void:
-	if main_box != null:
-		main_box.visible = false
+	_state = "ingame"
+	_apply_state()
 	if on_play.is_valid():
 		await on_play.call()
 
@@ -128,20 +131,20 @@ func new_world_clicked() -> void:
 	else:
 		seed = randi_range(-2147483647, 2147483646)
 		seed_edit.text = str(seed)
-	if main_box != null:
-		main_box.visible = false
+	_state = "ingame"
+	_apply_state()
 	if on_new_world.is_valid():
 		await on_new_world.call(seed)
 
 
 func hide_pause() -> void:
-	if pause_box != null:
-		pause_box.visible = false
+	_state = "ingame"
+	_apply_state()
 
 
 func _on_resume_btn_pressed() -> void:
-	if pause_box != null:
-		pause_box.visible = false
+	_state = "ingame"
+	_apply_state()
 	if on_resume.is_valid():
 		on_resume.call()
 
@@ -252,10 +255,15 @@ func _on_full_toggled(on: bool) -> void:
 	Settings.apply_window(get_window())
 
 
-func _mk_btn(text: String, cb: Callable, w: float = 340.0) -> Button:
+func _mk_btn(text: String, cb: Callable, w: float = -1.0) -> Button:
 	var b := Button.new()
 	b.text = text
-	b.custom_minimum_size = Vector2(w, 40.0)
+	if w >= 0.0:
+		b.custom_minimum_size = Vector2(w, 40.0)
+		b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	else:
+		b.custom_minimum_size = Vector2(0, 40.0)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	b.add_theme_font_size_override("font_size", 17)
 	if cb.is_valid():
 		b.pressed.connect(cb)
@@ -284,11 +292,16 @@ func _build_main() -> void:
 	main_status.add_theme_font_size_override("font_size", 13)
 	main_status.add_theme_color_override("font_color", SUB_C)
 	main_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	# centered fixed-width column (MC-menu-like); holds at any resolution
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var vb := VBoxContainer.new()
-	vb.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vb.custom_minimum_size = Vector2(720.0, 0)
 	vb.alignment = BoxContainer.ALIGNMENT_CENTER
 	vb.add_theme_constant_override("separation", 10)
-	main_box.add_child(vb)
+	center.add_child(vb)
+	main_box.add_child(center)
 	var title := Label.new()
 	title.text = "AweCraft"
 	title.add_theme_font_size_override("font_size", 52)
@@ -326,23 +339,34 @@ func _build_main() -> void:
 		packb.tooltip_text = "Unavailable in the web build"
 	vb.add_child(packb)
 	vb.add_child(main_status)
+	# help line: centered bottom strip, allowed to run wider than the column
 	var help := Label.new()
 	help.text = "WASD move · Space jump/swim · F fly · G day/night · P pause · Left click mine/attack · Right click place/use · E inventory · 1-9/scroll select"
 	help.add_theme_font_size_override("font_size", 12)
 	help.add_theme_color_override("font_color", HELP_C)
 	help.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(help)
+	help.anchor_left = 0.0
+	help.anchor_top = 1.0
+	help.anchor_right = 1.0
+	help.anchor_bottom = 1.0
+	help.offset_top = -36.0
+	help.offset_bottom = 0.0
+	main_box.add_child(help)
 
 
 func _build_pause() -> void:
 	pause_box = _full_box()
 	pause_box.visible = false
 	pause_box.add_child(_mk_full_bg(OVERLAY_BG))
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var vb := VBoxContainer.new()
-	vb.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vb.custom_minimum_size = Vector2(480.0, 0)
 	vb.alignment = BoxContainer.ALIGNMENT_CENTER
 	vb.add_theme_constant_override("separation", 12)
-	pause_box.add_child(vb)
+	center.add_child(vb)
+	pause_box.add_child(center)
 	var t := Label.new()
 	t.text = "Game Paused"
 	t.add_theme_font_size_override("font_size", 34)
