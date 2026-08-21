@@ -189,28 +189,103 @@ func _make_menu() -> CanvasLayer:
 	menu_ui.on_new_world = Callable(self, "_menu_new_world")
 	menu_ui.on_resume = Callable(self, "_menu_resume")
 	menu_ui.on_quit_to_menu = Callable(self, "_quit_to_menu")
+	menu_ui.on_continue = Callable(self, "_menu_continue")
 	add_child(menu_ui)
 	return menu_ui
 
 
 func _menu_play() -> void:
-	await start_game(int(Settings.values.get("seed", 44)))
+	var slot := Save.first_occupied_slot()
+	if slot >= 0:
+		await _menu_continue(slot)
+		return
+	var seed := int(Settings.values.get("seed", 44))
+	Settings.set_value("seed", seed)
+	var s2 := Save.first_empty_slot()
+	Save.active_slot = s2
+	await start_game(seed)
+	Save.save_now(s2)
 
 
 func _menu_new_world(seed: int) -> void:
 	Settings.set_value("seed", int(seed))
-	await start_game(int(Settings.values.get("seed", 44)))
+	var slot := Save.first_empty_slot()
+	Save.active_slot = slot
+	await start_game(int(seed))
+	Save.save_now(slot)
+
+
+func _menu_continue(slot: int) -> void:
+	await _continue_slot(slot)
 
 
 func _menu_resume() -> void:
 	Game.resume()
 
 
+func _autosave() -> void:
+	if Save.active_slot >= 0 and Game.world != null and Game.player != null:
+		Save.save_now(Save.active_slot)
+
+
 func quit_to_menu() -> void:
+	_autosave()
 	_free_game_nodes()
 	Game.mode = "menu"
 	if menu_ui != null:
 		menu_ui.show_main()
+		menu_ui.refresh_slots()
+
+
+func _continue_slot(slot: int) -> void:
+	var data := Save.load_full(int(slot))
+	if data.is_empty():
+		return
+	Save.active_slot = int(slot)
+	if world != null:
+		_free_game_nodes()
+	Game.new_world(int(data.get("seed", 1)))
+	_create_game_nodes()
+	world.edits = data.get("edits", {})
+	var ps: Dictionary = data.get("player", {})
+	var pos: Array = ps.get("pos", [])
+	var target: Vector3
+	if pos.size() == 3:
+		target = Vector3(float(pos[0]), float(pos[1]), float(pos[2]))
+	else:
+		target = world.spawn_point()
+	world.recenter(target.x, target.z, true)
+	await _await_world_build(target, 3000)
+	player = _spawn_player()
+	_restore_player(ps)
+	if Game.world != null:
+		world.recenter(player.position.x, player.position.z)
+	Game.time_of_day = float(data.get("time", 0.0))
+	Game.start()
+
+
+func _restore_player(ps: Dictionary) -> void:
+	if player == null or ps.is_empty():
+		return
+	var p = player
+	var pos: Array = ps.get("pos", [])
+	if pos.size() == 3:
+		p.position = Vector3(float(pos[0]), float(pos[1]), float(pos[2]))
+	p.look(float(ps.get("yaw", 0.0)), float(ps.get("pitch", 0.0)))
+	p.sel = int(ps.get("sel", 0))
+	p.hp = float(ps.get("hp", 20.0))
+	p.hunger = float(ps.get("hunger", 20.0))
+	var inv: Array = ps.get("inv", [])
+	if inv.size() == p.inv.size():
+		for i in inv.size():
+			var it = inv[i]
+			p.inv[i] = {"id": int(it.get("id", 0)), "n": int(it.get("n", 0))}
+	var armor: Array = ps.get("armor", [])
+	if armor.size() == p.armor.size():
+		for i in armor.size():
+			p.armor[i] = int(armor[i])
+	if p.has_method("refresh_held"):
+		p.refresh_held()
 
 
 func start_game(seed: int) -> void:
@@ -581,6 +656,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			return
 		if logic == "trees":
 			await _trees_test()
+			return
+		if logic == "save":
+			await _save_test()
 			return
 		world.collision_enabled = false
 		world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
@@ -2886,6 +2964,147 @@ func _combat_test(spawn: Vector3) -> void:
 		"death_ok": wpn_ok,
 		"no_target": nt_ok,
 		"ok": bool(bare_ok and double_ok and wpn_ok and nt_ok),
+	})
+	get_tree().quit()
+
+
+func _vec_close(a: Array, b: Array, eps: float) -> bool:
+	if a.size() != 3 or b.size() != 3:
+		return false
+	for i in 3:
+		if absf(float(a[i]) - float(b[i])) > eps:
+			return false
+	return true
+
+
+func _start_world_to_slot(seed: int, slot: int) -> void:
+	Save.active_slot = int(slot)
+	if world != null:
+		_free_game_nodes()
+	Game.new_world(int(seed))
+	_create_game_nodes()
+	world.edits = {}
+	var spawn: Vector3 = world.spawn_point()
+	world.recenter(spawn.x, spawn.z, true)
+	await _await_spawn_floor(spawn, 300)
+	player = _spawn_player()
+	Game.start()
+
+
+func _save_test() -> void:
+	var S := 44
+	Save.clear(0)
+	Save.clear(1)
+	Save.clear(2)
+	var clear_pre_ok := true
+	for s in 3:
+		if FileAccess.file_exists("user://awecraft_save_%d.json" % s) or not Save.meta(s).is_empty():
+			clear_pre_ok = false
+	await _start_world_to_slot(S, 0)
+	var sp: Vector3 = world.spawn_point()
+	var sx := int(sp.x)
+	var sz := int(sp.z)
+	var top: int = world.surface_top(sx, sz)
+	var tx := sx + 5
+	var tz := sz + 5
+	var ttop: int = world.surface_top(tx, tz)
+	var ppos := Vector3(float(tx) + 0.5, float(ttop) + 1.0, float(tz) + 0.5)
+	Debug.set_block(sx, top, sz, 3)
+	Debug.set_block(sx + 1, top, sz, 4)
+	Debug.set_block(sx, top + 1, sz, 6)
+	Debug.set_block(sx, top - 2, sz, 16)
+	Debug.set_block(sx + 2, top, sz + 1, 23)
+	Debug.set_block(sx - 1, top, sz - 1, 22)
+	var pl = Game.player
+	Debug.give_item(111, 3)
+	Debug.give_item(2, 5)
+	pl.hp = 13.0
+	pl.hunger = 7.0
+	Debug.teleport(ppos.x, ppos.y, ppos.z)
+	Game.time_of_day = 0.7
+	pl.sel = 2
+	for i in 20:
+		await get_tree().physics_frame
+	var inv_before: Array = []
+	for it in pl.inv:
+		inv_before.append([int(it["id"]), int(it["n"])])
+	var pos_before: Array = [pl.position.x, pl.position.y, pl.position.z]
+	var saved_ok := Save.save_now(0)
+	var edited := {
+		[sx, top, sz]: 3,
+		[sx + 1, top, sz]: 4,
+		[sx, top + 1, sz]: 6,
+		[sx, top - 2, sz]: 16,
+		[sx + 2, top, sz + 1]: 23,
+		[sx - 1, top, sz - 1]: 22,
+	}
+	var unedited := [
+		[sx + 8, top, sz + 8],
+		[sx - 8, top, sz - 8],
+		[sx + 5, top, sz - 9],
+		[sx - 6, top, sz + 7],
+	]
+	var base_u: Array = []
+	for u in unedited:
+		base_u.append(world.get_block(u[0], u[1], u[2]))
+	_free_game_nodes()
+	await _continue_slot(0)
+	var pl2 = Game.player
+	var blocks_match := 0
+	var blocks_total := edited.size()
+	for k in edited:
+		if world.get_block(k[0], k[1], k[2]) == edited[k]:
+			blocks_match += 1
+	var unedited_match := 0
+	for i in unedited.size():
+		if world.get_block(unedited[i][0], unedited[i][1], unedited[i][2]) == base_u[i]:
+			unedited_match += 1
+	var pos_after: Array = [pl2.position.x, pl2.position.y, pl2.position.z]
+	var pos_ok: bool = _vec_close(pos_after, pos_before, 0.35)
+	var sel_ok: bool = (pl2.sel == 2)
+	var hp_ok: bool = absf(float(pl2.hp) - 13.0) < 0.01
+	var hunger_ok: bool = absf(float(pl2.hunger) - 7.0) < 0.01
+	var time_ok: bool = absf(Game.time_of_day - 0.7) < 0.001
+	var inv_after: Array = []
+	for it in pl2.inv:
+		inv_after.append([int(it["id"]), int(it["n"])])
+	var inv_match: bool = (inv_after == inv_before)
+	var player_match: bool = pos_ok and sel_ok and hp_ok and hunger_ok and time_ok and inv_match
+	var slot0_ok: bool = (blocks_match == blocks_total) and (unedited_match == unedited.size()) and player_match
+	await _start_world_to_slot(S, 1)
+	var iso_cell := [sx + 3, top, sz + 3]
+	var iso_base: int = world.get_block(iso_cell[0], iso_cell[1], iso_cell[2])
+	Debug.set_block(iso_cell[0], iso_cell[1], iso_cell[2], 25)
+	Save.save_now(1)
+	await _continue_slot(0)
+	var iso_ok := true
+	for k in edited:
+		if world.get_block(k[0], k[1], k[2]) != edited[k]:
+			iso_ok = false
+	if world.get_block(iso_cell[0], iso_cell[1], iso_cell[2]) != iso_base:
+		iso_ok = false
+	Save.clear(1)
+	var clear_ok := not FileAccess.file_exists("user://awecraft_save_1.json") and Save.meta(1).is_empty()
+	Save.clear(0)
+	Save.clear(2)
+	var ok: bool = saved_ok and slot0_ok and iso_ok and clear_pre_ok and clear_ok
+	Debug.result({
+		"ok": ok,
+		"saved_ok": saved_ok,
+		"clear_ok": clear_ok,
+		"clear_pre_ok": clear_pre_ok,
+		"blocks_match": blocks_match,
+		"blocks_total": blocks_total,
+		"unedited_match": unedited_match,
+		"unedited_total": unedited.size(),
+		"player_match": player_match,
+		"pos_ok": pos_ok, "sel_ok": sel_ok, "hp_ok": hp_ok, "hunger_ok": hunger_ok, "time_ok": time_ok,
+		"inv_match": inv_match,
+		"slot0_ok": slot0_ok,
+		"iso_ok": iso_ok,
+		"iso_base": iso_base,
+		"pos_before": pos_before,
+		"pos_after": pos_after,
 	})
 	get_tree().quit()
 

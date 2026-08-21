@@ -24,6 +24,7 @@ var fluid_tick_radius := 14
 var collision_enabled := true
 var chunks := {}
 var chunk_keys := {}
+var edits := {}
 var light_dirty := {}
 var light_pending: Array = []
 var light_pending_set := {}
@@ -304,6 +305,7 @@ func _drain_build_queue() -> void:
 			var tg := Time.get_ticks_msec()
 			c2.data = WorldGen.generate(cx2, cz2, Game.world_seed)
 			c2.init_fl()
+			_apply_edits_to_chunk(c2)
 			var dg := Time.get_ticks_msec() - tg
 			if timing:
 				print("GENCHUNK %d,%d gen_ms=%d" % [cx2, cz2, dg])
@@ -354,6 +356,7 @@ func create_chunk(cx: int, cz: int, mesh_now: bool) -> Node3D:
 	var c: Node3D = _make_chunk_node(cx, cz)
 	c.data = WorldGen.generate(cx, cz, Game.world_seed)
 	c.init_fl()
+	_apply_edits_to_chunk(c)
 	if mesh_now:
 		c.build_mesh(get_block)
 	return c
@@ -373,6 +376,7 @@ func _chunk_data(cx: int, cz: int) -> Node3D:
 		var tg := Time.get_ticks_msec()
 		c.data = WorldGen.generate(cx, cz, Game.world_seed)
 		c.init_fl()
+		_apply_edits_to_chunk(c)
 		if timing:
 			print("ONDEMANDGEN %d,%d gen_ms=%d" % [cx, cz, Time.get_ticks_msec() - tg])
 	return c
@@ -464,6 +468,7 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 	_mark_light_around(cx, cz)
 	if _fluid_near(x, y, z):
 		_fluid_write = true
+	_record_edit(cx, cz, fi, id, int(c.fl[fi]))
 
 
 func _mark_light_around(cx: int, cz: int) -> void:
@@ -476,6 +481,33 @@ func _mark_fluid_around(cx: int, cz: int) -> void:
 	for dx in range(-LIGHT_NEIGHBOR, LIGHT_NEIGHBOR + 1):
 		for dz in range(-LIGHT_NEIGHBOR, LIGHT_NEIGHBOR + 1):
 			fluid_dirty[_key(cx + dx, cz + dz)] = true
+
+
+func _record_edit(cx: int, cz: int, fi: int, b: int, f: int) -> void:
+	var key := _key(cx, cz)
+	if not edits.has(key):
+		edits[key] = {}
+	edits[key][fi] = {"b": b, "f": f}
+
+
+func _apply_edits_to_chunk(c: Node3D) -> void:
+	var key := _key(c.cx, c.cz)
+	if not edits.has(key):
+		return
+	var data: PackedByteArray = c.data
+	if data.is_empty():
+		return
+	var fl: PackedByteArray = c.fl
+	if fl.size() != data.size():
+		fl.resize(data.size())
+	var cells: Dictionary = edits[key]
+	for fkey in cells:
+		var e: Dictionary = cells[fkey]
+		data[int(fkey)] = int(e.get("b", 0))
+		fl[int(fkey)] = int(e.get("f", 0))
+	c.col_dirty = true
+	_mark_light_around(c.cx, c.cz)
+	_mark_fluid_around(c.cx, c.cz)
 
 
 func _bulk_box_cells() -> int:
@@ -635,6 +667,7 @@ func set_fluid(x: int, y: int, z: int, id: int, lvl: int, create := false) -> vo
 	c.fl[i] = lvl
 	_fluid_write = true
 	_mark_fluid_around(cx, cz)
+	_record_edit(cx, cz, i, id, lvl)
 
 
 func fluid_level(x: int, y: int, z: int) -> int:

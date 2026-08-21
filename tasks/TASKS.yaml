@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-21T11:44
+  updated_at: 2026-08-21T13:13
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -1579,11 +1579,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-21T10:20
-  updated_at: 2026-08-21T10:20
-  completed_at: null
+  updated_at: 2026-08-21T13:13
+  completed_at: 2026-08-21T13:13
   waiting_on: null
   parent_id: null
   notes: 'Main menu: save/continue support the phase-2 menu did NOT include (user 2026-08-21: ''if the menu work we just did
@@ -1595,6 +1595,22 @@ intake:
     updated_at: null
     text: '[user] if the menu work we just did didn''t include saving and continuing, implement that next. Make sure it supports
       multiple save slots.'
+  - id: 2
+    created_at: 2026-08-21T13:13
+    updated_at: null
+    text: '[agent] DONE 2026-08-21 (subagent + coordinator verify). Save autoload (3 slots, user://awecraft_save_N.json =
+      IndexedDB on web), world.gd edits{} delta tracking (set_block + fluid writes; re-applied at data-gen on continue), menu
+      Worlds slot list (status + Continue + Clear, auto-save on quit-to-menu). Coordinator verify: save harness ok:true (blocks
+      6/6, unedited 4/4 regen-proof, player/inv/slot-isolation pass) + G1 + core modes 0 script errors; slot_menu.png clean
+      (occupied slots w/ seed+time+edits, empty greyed). FOUNDED+FIXED bug the subagent''s gates missed: save.gd clear() used
+      Godot-3 DirAccess.remove_file (script error every slot-clear click, file never deleted) -> Godot-4 DirAccess.remove_absolute(globalize_path);
+      harness now asserts clear_pre_ok/clear_ok (previously would have passed green while erroring). Battery was 23 modes
+      green except pre-existing fpv tool_held_ok:false. Web rebuilt 13:13 (Clear fix ships to browser). Deviations: mobs not
+      saved (AC-0037 pending); New World -> first empty slot else slot 0.'
+  - id: 3
+    created_at: 2026-08-21T13:13
+    updated_at: null
+    text: '[agent] (typo in prior comment: FOUNDED -> FOUND)'
 - id: AC-0063
   title: menu-gameplay-hunger-off
   source: user

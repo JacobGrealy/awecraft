@@ -13,6 +13,7 @@ Data="*res://autoload/data.gd"
 Audio="*res://autoload/audio.gd"
 Debug="*res://autoload/debug.gd"
 Settings="*res://autoload/settings.gd"
+Save="*res://autoload/save.gd"
 
 [display]
 

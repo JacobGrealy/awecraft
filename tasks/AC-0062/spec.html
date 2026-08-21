@@ -1,0 +1,58 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AC-0062 — save/continue, multiple slots</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:980px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:12.5px}pre{padding:8px;overflow:auto}li{margin:3px 0}</style></head><body>
+<h1>AC-0062 — Save / Continue with multiple save slots</h1>
+<p>User 2026-08-21: "if the menu work we just did didn't include saving and continuing, implement that next. Make sure it supports multiple save slots." The AC-0033 menu did NOT persist worlds. This task adds real save/continue across sessions, on desktop AND web (IndexedDB via <code>user://</code>).</p>
+
+<h2>What a save captures</h2>
+<ul>
+<li>World seed (<code>Game.world_seed</code>) and time-of-day (<code>Game.time_of_day</code>).</li>
+<li><b>World edits only (delta)</b> — NOT the whole voxel world. Recommended: track edits in <code>world.gd</code> as <code>edits := {}</code> keyed by chunk <code>(cx,cz)</code> → {cell index → {block id, fluid level}}. Update it inside the existing <code>set_block</code> (world.gd:442) and the fluid-write path so every player-caused change is recorded. On save, serialize the edit map. Keep it bounded (only touched cells).</li>
+<li><b>Player state</b>: position, <code>inv</code> (Array of <code>{id,n}</code>), <code>sel</code>, <code>armor</code> (Array), <code>hp</code>, <code>hunger</code>.</li>
+</ul>
+
+<h2>Slots</h2>
+<ul>
+<li><b>3 named slots</b> (0,1,2; trivially expandable later). Mirror the <code>autoload/settings.gd</code> persistence pattern: one <code>ConfigFile</code> at <code>user://awecraft_saves.cfg</code>, one <section> per slot, OR one JSON file per slot — your choice, but it MUST go through <code>user://</code> so the web export persists to IndexedDB (settings.gd already proved this works on the browser).</li>
+<li>Active slot = the one the current session is playing on (set when you New World into a slot or Continue one).</li>
+</ul>
+
+<h2>Flow / menu wiring (extend the AC-0033 menu; keep its styling/state-machine — do NOT regress D1/D2)</h2>
+<ul>
+<li>Menu gets a <b>slot list</b> (3 rows): each shows slot state — "Empty" or "World <seed> · <HH:MM> · <n> edits" (whatever fields you store). Per occupied slot: <b>Continue</b> (load it) and a delete/clear. The existing <b>New World</b> (seed + New World button) assigns/creates a slot (pick first empty, else overwrite-prompt-free overwrite of slot 0 — document the rule) — keep it working.</li>
+<li><b>Auto-save on quit:</b> quitting to menu (Quit to Menu / browser quit) writes the active slot. (A manual "Save" in pause-options is a nice-to-have; auto-save-on-quit is the requirement.)</li>
+<li><b>Continue</b> = load seed + regenerate base world deterministically (<code>WorldGen.generate</code> is seed-deterministic, GENHASH-gated) + re-apply the saved edit delta + restore player state/time, then go straight into the game (menu first, then auto-start, mirroring the <code>AWECRAFT_MENU_BOOT</code> harness path).</li>
+<li>New World = fresh seed (or user-entered) into a slot, no edits, player at spawn.</li>
+</ul>
+
+<h2>Hard gates (cheap-to-expensive; zero script errors on EVERY run; steps are fast — logic ≈3.5s, R=1 render ≈5.4s, menu shot ≈1.5s)</h2>
+<ol>
+<li><b>G1:</b> <code>~/tools/godot/godot --headless --path godot --quit</code> → 0 script errors.</li>
+<li><b>G2:</b> full AWECRAFT_LOGIC battery (all modes in main.gd: player/interact/light/fluids/buckets/craft/guiclick/swing/look/combat/water/fpv/tint/daynight/atlas/fluidsettle/settings/survival/editperf/perf/genhash/trees) → green except KNOWN PRE-EXISTING <code>fpv tool_held_ok:false</code>; 0 script errors. Save/continue must not disturb any harness mode (all harness envs bypass the menu as they already do).</li>
+<li><b>G3 — new <code>AWECRAFT_LOGIC=save</code> harness (the core proof, headless):</b>
+  <pre># 1. New world seed=S into slot 0 (fresh)
+# 2. Apply a KNOWN set of edits: e.g. Debug.set_block for ~6 cells at fixed coords
+#    (a few on-surface, one deep) + break a few
+# 3. Debug.give_item(111,3) ; Debug.give_item(2,5) ; player.hp=13 ; player.hunger=7 ;
+#    Debug.teleport fixed xyz ; Game.time_of_day=0.7 ; sel=2
+# 4. Save slot 0
+# 5. RESET to a fresh world (same seed S, no edits) — as if the process restarted
+# 6. Load slot 0  -> assert:
+#    - every edited cell == its saved id
+#    - a set of NON-edited cells == base-generated (proves regen, not whole-dump)
+#    - player position / sel / hp / hunger / inv (exact ids+counts) / time all == saved
+#    -> Debug.result({... ok:true, blocks_match:N, unedited_match:N, player_match:true, inv_match:true})
+# 7. Slot isolation: New world into slot 1, change ONE different cell. Load slot 0 again
+#    -> slot-0 cell restored and slot-1's changed cell is NOT present. ok:true.</pre></li>
+<li><b>G4 — desktop shot:</b> menu showing an OCCUPIED slot (run the save harness to create data, or a tiny <code>AWECRAFT_MENU_SHOT</code> variant that first seeds slot 0) → <code>tasks/AC-0062/slot_menu.png</code>. Verify visually + pixel (slot row shows seed/edit text, not "Empty").</li>
+<li><b>G5 — web (the user's surface):</b> <code>./build_web.sh</code> → 0. Browser (playwright, https://localhost:8443, 1920×1080; daemon pid 411476 — do NOT kill): New World (Play) → the game → <b>reload the page</b> → menu shows slot 0 as occupied (persistence across reload = IndexedDB working) → click Continue → world loads. Save <code>slot_menu.png</code>/web variants under <code>tasks/AC-0062/</code>. 0 console errors. (If IndexedDB cross-reload proves flaky under headless-swiftshader after ~2 focused attempts, ship desktop-fully-working + document the deviation honestly.)</li>
+</ol>
+
+<h2>Scope fence</h2>
+<ul>
+<li>NO mob save (mobs are AC-0037, not landed — saving/omitting mobs is fine, document). NO chunk-full-world dump unless the deltas approach is impractical (prefer deltas). Do NOT touch mining/combat/viewmodel/lighting (other tasks). Do NOT run git. Keep menu D1/D2 (state machine + centered column) intact — add rows, don't reflow.</li>
+</ul>
+
+<h2>Deliverables</h2>
+<ul><li>Save/continue module (autoload or core/<code>save.gd</code>), world.gd edit-tracking, menu slot UI, main.gd load/continue wiring (+ <code>AWECRAFT_LOGIC=save</code> harness), <code>tasks/AC-0062/AC-0062-results.html</code> (RESULT jsons + slot shot), report ≤20 lines.</li></ul>
+</body></html>

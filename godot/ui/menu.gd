@@ -13,6 +13,10 @@ var on_play: Callable
 var on_new_world: Callable
 var on_resume: Callable
 var on_quit_to_menu: Callable
+var on_continue: Callable
+var slot_labels: Array = []
+var slot_conts: Array = []
+var slot_clears: Array = []
 
 var main_box: Control
 var pause_box: Control
@@ -85,6 +89,7 @@ func show_main() -> void:
 	_state = "main"
 	_apply_state()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	refresh_slots()
 
 
 func show_pause() -> void:
@@ -135,6 +140,62 @@ func new_world_clicked() -> void:
 	_apply_state()
 	if on_new_world.is_valid():
 		await on_new_world.call(seed)
+
+
+func continue_clicked(slot: int) -> void:
+	_state = "ingame"
+	_apply_state()
+	if on_continue.is_valid():
+		await on_continue.call(slot)
+
+
+func _clear_slot(slot: int) -> void:
+	Save.clear(slot)
+	if Save.active_slot == slot:
+		Save.active_slot = -1
+	refresh_slots()
+	if main_status != null:
+		main_status.text = "Slot %d cleared" % (slot + 1)
+
+
+func _mk_slot_row(s: int) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var l := Label.new()
+	l.text = ""
+	l.add_theme_font_size_override("font_size", 14)
+	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.custom_minimum_size = Vector2(0, 34.0)
+	row.add_child(l)
+	var cont := _mk_btn("Continue", func(): continue_clicked(s), 120.0)
+	var clr := _mk_btn("Clear", func(): _clear_slot(s), 70.0)
+	row.add_child(cont)
+	row.add_child(clr)
+	slot_labels.append(l)
+	slot_conts.append(cont)
+	slot_clears.append(clr)
+	return row
+
+
+func refresh_slots() -> void:
+	for s in range(slot_labels.size()):
+		var l: Label = slot_labels[s]
+		var cont: Button = slot_conts[s]
+		var clr: Button = slot_clears[s]
+		if not Save.file_exists(s):
+			l.text = "Slot %d — Empty" % (s + 1)
+			l.add_theme_color_override("font_color", HELP_C)
+			cont.disabled = true
+			clr.disabled = true
+			continue
+		var m := Save.meta(s)
+		l.text = "Slot %d · World %d · %s · %d edits" % [
+			s + 1, int(m.get("seed", 0)), Save.format_time(float(m.get("time", 0.0))), int(m.get("edits", 0))
+		]
+		l.add_theme_color_override("font_color", SUB_C)
+		cont.disabled = false
+		clr.disabled = false
 
 
 func hide_pause() -> void:
@@ -332,6 +393,16 @@ func _build_main() -> void:
 	row.add_child(seed_edit)
 	row.add_child(_mk_btn("New World", new_world_clicked, 130.0))
 	vb.add_child(row)
+	var wlab := Label.new()
+	wlab.text = "Worlds"
+	wlab.add_theme_font_size_override("font_size", 14)
+	wlab.add_theme_color_override("font_color", HELP_C)
+	vb.add_child(wlab)
+	slot_labels = []
+	slot_conts = []
+	slot_clears = []
+	for s in range(3):
+		vb.add_child(_mk_slot_row(s))
 	vb.add_child(_mk_btn("Options", func(): open_options("main")))
 	var packb := _mk_btn("Load Texture Pack (.mcpack / .zip)", _open_pack_dialog)
 	if _is_web:
