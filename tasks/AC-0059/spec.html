@@ -1,36 +1,61 @@
-<!doctype html><html><head><meta charset="utf-8"><title>AC-0059 - Inventory: re-verify click/drag in browser + fix craft-recipe click</title>
-<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:960px;line-height:1.5;color:#122}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd2e0;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}li{margin:3px 0}</style></head><body>
-<h1>AC-0059 — inventory input in the web build: re-verify click/drag + make craft-recipe click work</h1>
-<h2>User report (2026-08-20, verbatim)</h2>
-<p>"still can't click and drag items, can't click on craft recipe"</p>
-<h2>Context (read before touching anything)</h2>
-<ul>
-<li>Inventory UI = <code>godot/ui/inventory.gd</code> (CanvasLayer), all clicks go through the player click API (<code>player.gd</code>) and the <code>_route_click</code> path. History: AC-0045 (first drag fix: arg order + gui.mouse_focus release), AC-0057 (release-over-same-slot fix + hotbar-first pickup, browser pixel gates 3/3, web rebuilt 19:01 which the user is now testing).</li>
-<li>So click/drag was JUST fixed and verified — but the user STILL says it doesn't work. Their real drag (mouse down → move → up) may differ from the harness/gates (which simulate discrete events). RE-VERIFY with a real playwright mouse on the CURRENT build before concluding it is fixed. If it genuinely works, prove it with before/after screenshots + exact event sequence; if not, root-cause it.</li>
-<li>The craft-recipe part may be a separate real bug: the craftable-recipe autofill list (M7b2, Godot-native — not in the frozen web spec) — clicking a row should populate the craft grid and show the output slot. Find where rows are built (search inventory.gd / hud for the recipe list, e.g. <code>craftable</code>/<code>recipe</code>) and check the rows actually receive mouse input (mouse_filter, gui_input, Button vs painted-in-<code>_draw</code> decoration). A painted list with no _hit test = clicks no-op = exactly this symptom.</li>
-<li>Current slot model (after AC-0050/0052/0057): ONE visible 36-slot inventory — hotbar 0..8, storage 9..35 (STORAGE_OFF=9); E = 2×2 craft GUI; right-click crafting table block (20) = 3×3 table GUI; recipe rows are tagged grid:2 / grid:3 (AC-0052). Only grid-2 recipes are craftable from E; grid-3 only at the table. The recipe list should respect that (show recipes craftable in the CURRENT ui_mode, or the union — check what it does and keep it consistent).</li>
-</ul>
-<h2>Tasks</h2>
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0059 - Inventory/recipe click + Minecraft inventory UI emulation</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:960px;line-height:1.5;color:#122}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd2e0;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}li{margin:3px 0}table{border-collapse:collapse}td,th{border:1px solid #c8cdd8;padding:4px 8px}</style></head><body>
+<h1>AC-0059 — Minecraft-style inventory UI (research + emulate) + craft-recipe click</h1>
+<h2>User reports (2026-08-20, verbatim)</h2>
+<p>1) "still can't click and drag items, can't click on craft recipe" → then <b>"clicking works, at some point the crafting area changed from 3x3 to 2x2. Look up some screenshots of minecraft's inventory systems and try to emulate the interface as close as possible"</b>.</p>
+<p>So: click/drag is CONFIRMED WORKING by the user (do not re-fix it; verify it as a gate only). The crafting grid is 2×2 in the E-inventory — that is the AC-0052 split (E = 2×2, crafting table = 3×3), which is EXACTLY how Minecraft works (player inventory has a 2×2 craft grid; the crafting table has 3×3). <b>Keep that split</b> — the user's real ask is the LOOK &amp; LAYOUT: make the inventory interface emulate the Minecraft interface as closely as possible.</p>
+<h2>Research phase (do this FIRST, in the task)</h2>
 <ol>
-<li><b>Browser re-verify (real mouse, playwright, https://localhost:8443, ignore cert):</b> seed items (<code>Debug.seed_inv()</code> exists, or <code>Debug.give_item</code> via the web's debug path if exposed), open E-inventory, then with REAL playwright mouse events (mousedown at slot center → mousemove mid-way → mouseup at target slot center):
+<li>Fetch reference images/geometry of the vanilla Minecraft GUIs. Sources (webfetch; images can be saved into tasks/AC-0059/refs/): <code>https://minecraft.wiki/w/User_interface</code>, <code>https://minecraft.wiki/w/Crafting_table</code>, <code>https://minecraft.wiki/w/Crafting</code>, <code>https://minecraft.wiki/w/Inventory</code> (if it exists), plus a DuckDuckGo image/text search for "minecraft inventory gui layout" / "minecraft crafting table gui". Note: exact slot-grid facts you can rely on (verify against the images you fetch):
   <ul>
-  <li>drag storage → hotbar (icon + count move; P1 landing slot 0-8),</li>
-  <li>click slot A (pick) then click slot B (drop, with A's old content swapped back),</li>
-  <li>shift-click a storage stack → distributes into hotbar,</li>
-  <li>right-click split? (only if implemented — report what is and isn't there; do NOT add new features beyond the web spec unless trivial).</li>
-  </ul>
-  Record a pass/fail table with before/after screenshots for each flow.</li>
-<li><b>Fix recipe click:</b> clicking a craftable recipe row must populate the craft grid cells (correct items in correct positions for shaped recipes, any cells for shapeless) and the output slot must show the result; clicking the output then takes the result into the inventory and clears inputs (existing player API <code>craft_output</code> click semantics — reuse, don't reinvent). If rows are painted decoration, add a _hit-test in the same <code>_route_click</code> flow (no new input listeners needed — keep the single click path). Keyboard-free: mouse only.</li>
-<li><b>If re-verify found a real drag bug:</b> root-cause + fix in the same pass (keep AC-0057 harness semantics intact).</li>
+  <li><b>Player inventory GUI (E):</b> gray raised panel; top-left = 9×3 player inventory grid; right column top = 4 armor slots (helmet, chestplate, leggings, boots, vertical); bottom-right = 2×2 craft grid + separate result slot to its RIGHT with a small arrow between; very bottom row = hotbar 9 slots (separated from the main grid by a divider); panel is 176×166 px in 1× scale (18px slot pitch, 16px item icons, ~8px padding).</li>
+  <li><b>Crafting table GUI:</b> same panel + bottom inventory/hotbar, but top area = 3×3 craft grid (top-left) + result slot with arrow to its right; the 4 armor slots are also present in the same right column position.</li>
+  <li><b>Styling:</b> panel base light gray (≈ #C6C6C6) with a raised bevel (light top/left, dark bottom/right); slots are RECESSED (dark top/left, light bottom/right); item icons 16px centered in 18px slots; hotbar selected slot = white 2px border; stack counts = white text with black outline, bottom-right corner; tooltips = yellow item name text; a small arrow sprite points from the craft grid into the result slot; title text top-left of the panel ("Inventory" / "Crafting").</li>
+  </ul></li>
+<li>Save the 2–4 key reference screenshots into <code>tasks/AC-0059/refs/</code> and note in results.html which layout facts came from where.</li>
 </ol>
+<h2>Implementation (godot/ui/inventory.gd — the UI is currently scene-built Controls; keep that approach)</h2>
+<h3>Scale rule:</h3>
+<p>Our slots are 48px (3× the vanilla 16px icon). Scale the vanilla 1× layout by ×3: slot pitch 18→<b>54px</b> (48px slot + 6px gap), padding 8→24px, panel 176×166→<b>528×498</b> (E inventory) and table height = 528 × (vanilla table panel ≈166+… — measure from your reference; table GUI is a bit taller because of the 3×3 grid). Keep all coordinates in small constants at the top of the script (a LAYOUT const block) so future tweaks are trivial.</p>
+<h3>Layout targets (E inventory):</h3>
+<table>
+<tr><th>Region</th><th>Where (vanilla logic)</th></tr>
+<tr><td>Title "Inventory"</td><td>top-left, above the main grid</td></tr>
+<tr><td>Main inventory 9×3</td><td>top-left area (storage + the 27 above hotbar; our model: ONE 36-slot inv — hotbar 0..8, storage 9..35; storage 9..35 = the 9×3 grid, hotbar = bottom row, EXACTLY like MC where the 9×3 sits above the hotbar)</td></tr>
+<tr><td>Armor column (4)</td><td>right side, top, vertical (helmet→boots)</td></tr>
+<tr><td>Craft grid 2×2 + result</td><td>bottom-RIGHT of the panel, result slot to the right of the grid, small drawn arrow between them (draw the arrow in _draw — a simple MC-style gray/dark arrow shape)</td></tr>
+<tr><td>Hotbar 9</td><td>bottom row, separated by the divider gap</td></tr>
+</table>
+<p>Table GUI (right-click crafting table block id 20): same panel; top-left = <b>3×3</b> craft grid (shared <code>table_grid</code> Array[9] from AC-0052), result slot + arrow to its right, armor column on the right (shared armor — it's in both GUIs in MC), inventory 9×3 + hotbar below. Close returns contents via inv_add (existing AC-0052 behavior — keep).</p>
+<h3>Styling targets:</h3>
+<ul>
+<li>Panel: base #C6C6C6, raised bevel — 2px light (#FFFFFF-ish) on top+left, 2px dark (#555-ish) on bottom+right (drawn in _draw or a 9-slice-styled ColorRect; our current panel is close but re-check the bevel DIRECTION against the references — MC is raised: light top-left).</li>
+<li>Slots: recessed — 2px dark top/left + 2px light bottom/right around a slightly darker fill (#8B8B8B-ish / our current rgba(0,0,0,.35) is acceptable if it reads recessed against the new bevel; pick per reference); selected hotbar = white 2px border; hovered slot = subtle white border.</li>
+<li>Item icons: 48px atlas tile (existing _setup_icon/_draw), stack count white + black outline bottom-right; empty slots see the panel through (no flat dark block).</li>
+<li>Result slot: slightly different look is fine (in MC it's the same slot style) + ARROW between grid and result.</li>
+<li>Tooltip: hover a slot → yellow item name text (existing) — MC-style (yellow #FFFFA0-ish on dark background) if easy.</li>
+<li>Recipe autofill list (Godot-native, not in MC): KEEP it but move it OUTSIDE the MC-style panel (right of the panel, vertically aligned with the craft grid) so the panel itself reads pure-MC. Row click must work (below).</li>
+</ul>
+<h3>Recipe click (fix the "can't click on craft recipe" report):</h3>
+<ul>
+<li>Clicking a craftable recipe row fills the craft grid for the CURRENT ui_mode (2×2 in E: only grid:2 recipes; 3×3 at table: grid:2 and grid:3) + recomputes output (reuse player.gd craft API; no new input listeners — extend the existing _route_click / _hit flow with a row hit-test).</li>
+<li>Planks check (M7a chain): 4 logs in grid → output 4 planks → click output → hotbar gains 4 planks, inputs consumed (AC-0050 overflow rules still apply).</li>
+</ul>
+<h3>Input model (MUST survive the re-layout):</h3>
+<ul>
+<li>Single click-path design from AC-0045/AC-0057 (_route_click + release-drop + drag_held) — rebuild the slot→screen mapping for the new coordinates; do not change the semantics (LMB pick/place/swap, RMB place-one/split-if-n, shift-click distribute across the opposite region, held-cursor).</li>
+<li>The headless guiclick harness (AWECRAFT_LOGIC=guiclick in godot/scenes/main.gd) must stay ok:true (it drives Debug.inv_click uiSlot indices — verify it is layout-independent; if any pixel asserts exist there, update them).</li>
+</ul>
 <h2>Verify gates (ALL; zero script errors is a hard gate)</h2>
 <ol>
-<li>Headless battery green: <code>AWECRAFT_LOGIC=guiclick</code> ok:true (AC-0057 result unchanged: P1_landing=0, R1-R8 pass) + full battery (player interact light fluids buckets craft guiclick combat swing settings) 0 script errors.</li>
-<li>New/extended headless gate for recipe click if feasible (e.g. <code>AWECRAFT_LOGIC=guiclick</code> case or <code>Debug.inv_click</code> on the recipe row index): click row for planks → grid cells filled with logs → recompute → output = 4 planks (M7a chain: log→4 planks→4 sticks→wooden pick 111) → click output → hotbar gains 4 planks, inputs consumed, grid cleared. Report exact RESULT json.</li>
-<li>Browser (playwright, 8443): the four flows from tasks.1 pass with real mouse + a working recipe-row click (screenshot: row click → grid filled + output visible → inventory gains the crafted item). No console errors. Screenshots → <code>tasks/AC-0059/</code>. View them yourself first.</li>
-<li>Web rebuild <code>./build_web.sh</code> exit 0 (AC-0058's canvas fix will already be in the tree — do NOT revert it; your browser frames should be full-window; if the canvas still looks 2/3, that's AC-0058's problem in progress — note it and continue).</li>
-<li><code>tasks/AC-0059/AC-0059-results.html</code>: pass/fail table (before/after), root causes, fix (file:line), screenshots embedded. Report to coordinator MAX 20 lines: verdict on the "still can't drag" claim (works? if not, root cause), recipe-click root cause + fix, gate results, screenshot paths.</li>
+<li>Headless: <code>~/tools/godot/godot --headless --path godot --quit</code> → 0 script errors.</li>
+<li>Battery: AWECRAFT_LOGIC=player|interact|light|fluids|buckets|craft|guiclick|combat|swing → 0 script errors; <b>guiclick ok:true</b> (P1_landing=0, R1-R8 incl R8 planks→inv[9]).</li>
+<li>Headless recipe-click gate: extend the guiclick harness or Debug hook — click a planks recipe row (headless, ui_mode inv) → grid=4 logs → output=4 planks → click output → hotbar +4 planks, grid cleared. Report the RESULT json. Plus a table-mode check: 3×3 pickaxe recipe (3 sticks + 2 planks rows… per Data: check the actual pickaxe shaped pattern) → output 111.</li>
+<li>Inventory renders (xvfb gl_compatibility, small radius, the <code>AWECRAFT_INV</code> env pre-opens the inventory; snapshots): (a) E-inventory with items+armor+held item, (b) table GUI (how to force table ui_mode headless? use Debug — check debug.gd for a ui hook; if none, add a tiny env/Debug hook — keep it minimal), (c) recipe row filled + output visible. Save to tasks/AC-0059/. VIEW them — the panel must READ as the Minecraft inventory at a glance.</li>
+<li>Browser (playwright, https://localhost:8443, ignore cert; canvas now full-window after AC-0058): real-mouse flows — drag storage→hotbar (lands 0-8), pick+place between slots, shift-click distribute, E-inventory open + a recipe-row click that visibly fills the grid and shows output, close (E). No console errors. Save screenshots (these go in results.html; the user will judge the look).</li>
+<li><code>./build_web.sh</code> exit 0 after code fixes (keep the export_presets head_include 100vw injection untouched).</li>
+<li><code>tasks/AC-0059/AC-0059-results.html</code>: reference screenshots (embedded), before/after inventory renders, layout constants table, recipe-click RESULT json, browser pass/fail table, files changed (file:line), any deviations (e.g. things MC has we intentionally skipped — furnace UI etc).</li>
 </ol>
 <h2>Rules</h2>
-<ul><li>godot/ only (ui/player/debug); never hand-edit web/; Godot ONE at a time; headless FIRST; no git; never kill the python servers; scratch → .scratch/ or task folder; no comments in GDScript; small honest partial &gt; empty; zero script errors is a hard gate. Do not re-implement inventory logic — surgical edits to the input path + recipe rows.</li></ul>
+<ul><li>godot/ only (ui/ + main.gd debug hooks + debug.gd if needed); NEVER change inventory LOGIC semantics (slot model, AC-0050/0052/0057 behaviors) — layout+style+recipe-row only; Godot ONE at a time; headless FIRST, renders small (r=1-2, xvfb gl_compatibility, AWECRAFT_SNAPSHOT=absolute path); no git; never kill python servers (8443 pidfile .scratch/serve_web.pid, 5180 tasks webui); scratch → .scratch/ or the task folder; no comments in GDScript; zero script errors is a hard gate; honest partial &gt; empty. Do NOT touch swing timing (AC-0060) or aero (AC-0056 is done/committed).</li></ul>
 </body></html>
