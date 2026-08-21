@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-20T22:37
+  updated_at: 2026-08-21T00:53
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -1444,11 +1444,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-20T20:24
-  updated_at: 2026-08-20T22:37
-  completed_at: null
+  updated_at: 2026-08-21T00:53
+  completed_at: 2026-08-21T00:53
   waiting_on: null
   parent_id: null
   notes: 'User 2026-08-20: still can''t click and drag items, can''t click on craft recipe (apostrophes in original). AC-0057
@@ -1465,6 +1465,18 @@ intake:
       try to emulate the interface as close as possible'' — re-scope: research vanilla MC inventory GUIs (player inventory
       2x2 + crafting table 3x3 + armor column) and rebuild ui/inventory.gd layout + styling to match (scaled to our 48px slots),
       keeping the working click paths + grid split (E=2x2, table=3x3 is exactly MC). Recipe-row click fix still in scope.'
+  - id: 2
+    created_at: 2026-08-21T00:53
+    updated_at: null
+    text: '[agent] Done 2026-08-20 (subagent + coordinator verify): MC-geometry re-layout from vanilla Faithful-pack GUI pngs
+      (2x2->528x498 panel, 54px pitch, raised bevel, recessed slots, yellow tooltips; E = armor-left + 2x2+arrow+result top-right
+      + 9x3 over hotbar; table = 3x3+arrow+result no armor - both vanilla-correct). Recipe-click root cause: row input required
+      visible mouse while GUI opens captured + old autofill fabricated grid items without consuming; fix = visible-or-open
+      guard + real _take_from_inv/_grid_to_inv pulls + open_inventory sets mouse VISIBLE (container behavior). Gates: headless
+      0, battery 9/9, guiclick ok:true (legacy P1/R1-R8 intact + NEW C1 E-planks row-click and C2 table 3x3 pickaxe), browser
+      4/4 real-mouse, build ok. Renders tasks/AC-0059/inv_e_after|inv_table_after vs refs/Inventory.png. Deviations: no player-character
+      preview yet (needs subviewport render of the player model - optional follow-up), recipe list stays dark Godot-native
+      outside panel.'
 - id: AC-0060
   title: viewmodel-sway-swing-speed
   source: user

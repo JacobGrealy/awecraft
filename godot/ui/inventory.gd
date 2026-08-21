@@ -1,39 +1,59 @@
 extends CanvasLayer
 
 const SLOT := 48
-const PAD := 14
-const GAP := 3
-const ROW_GAP := 14
+const PITCH := 54
+const PAD := 22
 const HOT_IN := 2
-const SLOT_BG := Color(0.0, 0.0, 0.0, 0.35)
-const SLOT_BORDER := Color(0.333, 0.333, 0.333, 1.0)
-const SEL_BORDER := Color(1.0, 1.0, 1.0, 1.0)
 const STRIP_BG := Color(0.0, 0.0, 0.0, 0.4)
 const STRIP_BORDER := Color(1.0, 1.0, 1.0, 0.3)
-const PANEL_BG := Color(0.776, 0.776, 0.776, 1.0)
+const PANEL_W := 528
+const PANEL_H := 498
+const PANEL_BG := Color8(198, 198, 198)
+const PANEL_OUT := Color(0.0, 0.0, 0.0, 1.0)
 const PANEL_HI := Color(1.0, 1.0, 1.0, 1.0)
-const PANEL_LO := Color(0.333, 0.333, 0.333, 1.0)
+const PANEL_LO := Color8(85, 85, 85)
+const PANEL_BEVEL := 4
+const SLOT_FILL := Color8(139, 139, 139)
+const SLOT_DARK := Color8(55, 55, 55)
+const SLOT_LIGHT := Color(1.0, 1.0, 1.0, 1.0)
+const SEL_BORDER := Color(1.0, 1.0, 1.0, 1.0)
+const ARROW_C := Color8(139, 139, 139)
 const TITLE_C := Color(0.247, 0.247, 0.247, 1.0)
-const ARMOR_H := 4 * SLOT + 3 * GAP
-const STORE_W := 9 * SLOT + 8 * GAP
-const STORE_H := 3 * SLOT + 2 * GAP
-const CRAFT_H := 3 * SLOT + 2 * GAP
-const TITLE_ZONE := 28
-const ROW_Y := PAD + TITLE_ZONE
-const CRAFT_X := PAD
-const CRAFT_Y := ROW_Y + (ARMOR_H - CRAFT_H) / 2.0
-const OUT_X := PAD + CRAFT_H + ROW_GAP
-const OUT_Y := ROW_Y + (ARMOR_H - SLOT) / 2.0
-const ARMOR_X := OUT_X + SLOT + ROW_GAP
-const STORE_X := ARMOR_X + SLOT + ROW_GAP
-const STORE_Y := ROW_Y + (ARMOR_H - STORE_H) / 2.0
-const PHOT_X := PAD
-const PHOT_Y := ROW_Y + ARMOR_H + 10
-const PANEL_W := STORE_X + STORE_W + PAD
-const PANEL_H := PAD + TITLE_ZONE + ARMOR_H + 10 + SLOT + PAD
+const ARMOR_X := 22
+const ARMOR_Y := 22
+const CRAFT2_X := 292
+const CRAFT2_Y := 52
+const OUT2_X := 460
+const OUT2_Y := 82
+const CRAFT3_X := 88
+const CRAFT3_Y := 49
+const OUT3_X := 358
+const OUT3_Y := 91
+const MAIN_X := 22
+const MAIN_Y := 250
+const HOTY := 424
 const LIST_W := 190
 const REC_H := 42
 const REC_TOP := 24
+
+
+class PanelCtl extends Control:
+	var shaft: Rect2 = Rect2()
+	var tri: PackedVector2Array = PackedVector2Array()
+
+	func _draw() -> void:
+		var s := size
+		draw_rect(Rect2(Vector2.ZERO, s), PANEL_BG)
+		var e := float(PANEL_BEVEL)
+		draw_rect(Rect2(Vector2(1.0, 1.0), Vector2(s.x - 2.0, e)), PANEL_HI, true)
+		draw_rect(Rect2(Vector2(1.0, 1.0), Vector2(e, s.y - 2.0)), PANEL_HI, true)
+		draw_rect(Rect2(Vector2(1.0, s.y - 1.0 - e), Vector2(s.x - 2.0, e)), PANEL_LO, true)
+		draw_rect(Rect2(Vector2(s.x - 1.0 - e, 1.0), Vector2(e, s.y - 2.0)), PANEL_LO, true)
+		draw_rect(Rect2(Vector2.ZERO, s), PANEL_OUT, false, 1.0)
+		if shaft.size.x > 0.0:
+			draw_rect(shaft, ARROW_C)
+		if tri.size() == 3:
+			draw_colored_polygon(tri, ARROW_C)
 
 
 class FrameRect extends Control:
@@ -54,25 +74,31 @@ class FrameRect extends Control:
 class SlotCtl extends Control:
 	var region := Vector2i(-1, -1)
 	var fill := Color(0.05, 0.05, 0.08, 1.0)
-	var border := SLOT_BORDER
+	var selected := false
+	var hover := false
 	var tex: Texture2D = null
 	var cb: Callable
 	var rel_pos := Vector2.ZERO
 
 	func _draw() -> void:
 		var s := size
-		draw_rect(Rect2(Vector2.ZERO, s), SLOT_BG)
-		draw_rect(Rect2(Vector2.ZERO, Vector2(s.x, 2.0)), border, true)
-		draw_rect(Rect2(Vector2(0.0, s.y - 2.0), Vector2(s.x, 2.0)), border, true)
-		draw_rect(Rect2(Vector2.ZERO, Vector2(2.0, s.y)), border, true)
-		draw_rect(Rect2(Vector2(s.x - 2.0, 0.0), Vector2(2.0, s.y)), border, true)
-		var r := Rect2(Vector2(4, 4), Vector2(s.x - 8.0, s.y - 8.0))
+		var be := 3.0
+		draw_rect(Rect2(Vector2.ZERO, s), SLOT_FILL)
+		if hover:
+			draw_rect(Rect2(Vector2(2.0, 2.0), Vector2(s.x - 4.0, s.y - 4.0)), Color(1.0, 1.0, 1.0, 0.16))
+		draw_rect(Rect2(Vector2.ZERO, Vector2(s.x, be)), SLOT_DARK, true)
+		draw_rect(Rect2(Vector2.ZERO, Vector2(be, s.y)), SLOT_DARK, true)
+		draw_rect(Rect2(Vector2(0.0, s.y - be), Vector2(s.x, be)), SLOT_LIGHT, true)
+		draw_rect(Rect2(Vector2(s.x - be, 0.0), Vector2(be, s.y)), SLOT_LIGHT, true)
+		var r := Rect2(Vector2(2, 2), Vector2(s.x - 4.0, s.y - 4.0))
 		if tex != null:
 			draw_texture_rect(tex, r, false)
 		elif region.x >= 0 and Data.atlas_tex != null:
 			draw_texture_rect_region(Data.atlas_tex, Rect2i(region.x, region.y, Data.TILE_PX, Data.TILE_PX), r)
 		else:
 			draw_rect(r, fill)
+		if selected:
+			draw_rect(Rect2(Vector2.ZERO, s), SEL_BORDER, false, 3.0)
 
 	func _gui_input(event: InputEvent) -> void:
 		if event is InputEventMouseButton and cb.is_valid():
@@ -146,9 +172,12 @@ class RecipeRow extends Control:
 			var mb: InputEventMouseButton = event
 			if mb.button_index != MOUSE_BUTTON_LEFT:
 				return
-			if Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
-				cb.call()
-				get_viewport().set_input_as_handled()
+			var p = Game.player
+			if Input.mouse_mode != Input.MOUSE_MODE_VISIBLE:
+				if p == null or String(p.ui_mode) == "":
+					return
+			cb.call()
+			get_viewport().set_input_as_handled()
 
 
 class FoodBar extends Control:
@@ -199,7 +228,7 @@ class DeadBtn extends Control:
 
 var _strip: FrameRect
 var _held: HeldCtl
-var _panel: FrameRect
+var _panel: PanelCtl
 var _title: Label
 var _slots: Array = []
 var _labels: Array = []
@@ -248,11 +277,7 @@ func _ready() -> void:
 	_held.size = Vector2(SLOT, SLOT)
 	_held.visible = false
 	_held.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_panel = FrameRect.new()
-	_panel.bg = PANEL_BG
-	_panel.edge = 3.0
-	_panel.edge_hi = PANEL_HI
-	_panel.edge_lo = PANEL_LO
+	_panel = PanelCtl.new()
 	_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_panel.visible = false
 	add_child(_panel)
@@ -260,7 +285,7 @@ func _ready() -> void:
 	_title.text = "Inventory"
 	_title.add_theme_font_size_override("font_size", 15)
 	_title.add_theme_color_override("font_color", TITLE_C)
-	_title.position = Vector2(PAD, PAD - 5)
+	_title.position = Vector2(22, 4)
 	_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_panel.add_child(_title)
 	for i in 9:
@@ -299,7 +324,7 @@ func _ready() -> void:
 	tbox.border_color = Color(0.0, 0.0, 0.0, 1.0)
 	_tooltip.add_theme_stylebox_override("normal", tbox)
 	_tooltip.add_theme_font_size_override("font_size", 14)
-	_tooltip.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 1.0))
+	_tooltip.add_theme_color_override("font_color", Color(1.0, 1.0, 0.63))
 	_tooltip.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
 	_tooltip.add_theme_constant_override("outline_size", 3)
 	_tooltip.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -569,11 +594,49 @@ func _rebuild_recipes() -> void:
 		_recipe_rows.append(row)
 
 
+func _grid_to_inv(p, grid: Array) -> void:
+	for c in grid:
+		var cid := int(c["id"])
+		var n := int(c["n"])
+		if cid == 0 or n <= 0:
+			continue
+		p.inv_add(cid, n)
+		c["id"] = 0
+		c["n"] = 0
+
+
+func _take_from_inv(p, item_id: int, n: int) -> int:
+	var got := 0
+	for i in 36:
+		if n <= 0:
+			break
+		var it: Dictionary = p._inv_get(i)
+		if int(it["id"]) != item_id:
+			continue
+		var t := mini(n, int(it["n"]))
+		it["n"] = int(it["n"]) - t
+		if int(it["n"]) <= 0:
+			p._inv_set(i, {"id": 0, "n": 0})
+		got += t
+		n -= t
+	return got
+
+
 func _recipe_click(r: Dictionary) -> void:
 	var p = Game.player
 	if p == null:
 		return
+	if not bool(r["ok"]):
+		return
 	var grid: Array = p.table_grid if _is_table_mode() else p.craft_grid
+	_grid_to_inv(p, grid)
+	var req: Dictionary = r["req"]
+	for id in req:
+		if _have(int(id)) < int(req[id]):
+			p.recompute_craft()
+			return
+	for id in req.keys():
+		_take_from_inv(p, int(id), int(req[id]))
 	if bool(r["shaped"]):
 		var g3: Array = r["grid3"]
 		for i in 9:
@@ -584,10 +647,10 @@ func _recipe_click(r: Dictionary) -> void:
 				grid[i] = {"id": 0, "n": 0}
 	else:
 		var cell := 0
-		var req: Dictionary = r["req"]
-		for id in req:
+		var mx := 9 if _is_table_mode() else int(p.EGRID_CELLS)
+		for id in req.keys():
 			var left := int(req[id])
-			while left > 0:
+			while left > 0 and cell < mx:
 				var take := mini(left, 64)
 				grid[cell] = {"id": int(id), "n": take}
 				cell += 1
@@ -663,10 +726,12 @@ func _update_recipes(p, show: bool, px: float, py: float) -> void:
 	var bh := float(REC_TOP) + 6.0 + float(_recipe_rows.size()) * float(REC_H + 2)
 	var bw := float(LIST_W)
 	_recipe_box.size = Vector2(bw, bh)
-	var bx := px - bw - 10.0
-	if bx < 6.0:
-		bx = px + float(PANEL_W) + 10.0
-	_recipe_box.position = Vector2(bx, py + (float(PANEL_H) - bh) * 0.5)
+	var vs2: Vector2 = get_viewport().get_visible_rect().size
+	var bx := px + float(PANEL_W) + 12.0
+	if bx + bw > vs2.x - 6.0:
+		bx = px - bw - 12.0
+	var by := py + (float(CRAFT3_Y) if String(p.ui_mode) == "table" else float(CRAFT2_Y))
+	_recipe_box.position = Vector2(bx, by)
 	_recipe_box.visible = true
 
 
@@ -759,41 +824,61 @@ func _process(dt: float) -> void:
 	var sh := SLOT + 10.0
 	var sx := (vs.x - sw) * 0.5
 	var sy := vs.y - 8.0 - sh
-	_strip.position = Vector2(sx, sy)
-	_strip.size = Vector2(sw, sh)
 	var p = Game.player
 	var show: bool = p != null and (String(p.ui_mode) == "inv" or String(p.ui_mode) == "table")
 	var is_table: bool = p != null and String(p.ui_mode) == "table"
+	_strip.visible = not show
+	_strip.position = Vector2(sx, sy)
+	_strip.size = Vector2(sw, sh)
 	_panel.visible = show
-	var ttxt := "Crafting Table" if is_table else "Inventory"
+	var ttxt := "Crafting" if is_table else "Inventory"
 	if _title.text != ttxt:
 		_title.text = ttxt
 	for i in range(9, _slots.size()):
 		var sv := false
 		if show:
-			sv = not (String(_areas[i]) == "craft" and not is_table and (i - 9) >= p.EGRID_CELLS)
+			var ar := String(_areas[i])
+			if ar == "armor":
+				sv = not is_table
+			elif ar == "craft":
+				sv = is_table or (i - 9) < p.EGRID_CELLS
+			else:
+				sv = true
 		(_slots[i] as Control).visible = sv
-	if show:
-		_panel.size = Vector2(float(PANEL_W), float(PANEL_H))
+	for i in 9:
+		(_slots[i] as Control).visible = not show
+		(_slots[i] as Control).position = Vector2(sx + 5.0 + i * (SLOT + HOT_IN), sy + 5.0)
 	var px := (vs.x - float(PANEL_W)) * 0.5
 	var py := (vs.y - float(PANEL_H)) * 0.5
 	_panel.position = Vector2(px, py)
-	for i in 9:
-		(_slots[i] as Control).position = Vector2(sx + 5.0 + i * (SLOT + HOT_IN), sy + 5.0)
 	if show:
-		var cols := 3 if is_table else 2
-		var ccount := 9 if is_table else int(p.EGRID_CELLS)
-		for i in ccount:
-			var cc: Control = _slots[9 + i]
-			cc.position = Vector2(px + float(CRAFT_X) + (i % cols) * (SLOT + GAP), py + CRAFT_Y + int(i / cols) * (SLOT + GAP))
-		(_slots[18] as Control).position = Vector2(px + float(OUT_X), py + float(OUT_Y))
-		for i in 4:
-			(_slots[19 + i] as Control).position = Vector2(px + float(ARMOR_X), py + float(ROW_Y) + i * (SLOT + GAP))
+		_panel.size = Vector2(float(PANEL_W), float(PANEL_H))
+		var shaft := Rect2()
+		var tri := PackedVector2Array()
+		if is_table:
+			shaft = Rect2(270, 124, 64, 10)
+			tri = PackedVector2Array([Vector2(313, 106), Vector2(334, 129), Vector2(313, 152)])
+			for i in 9:
+				var cc: Control = _slots[9 + i]
+				cc.position = Vector2(px + float(CRAFT3_X) + (i % 3) * float(PITCH), py + float(CRAFT3_Y) + int(i / 3) * float(PITCH))
+			(_slots[18] as Control).position = Vector2(px + float(OUT3_X), py + float(OUT3_Y))
+		else:
+			shaft = Rect2(406, 100, 44, 10)
+			tri = PackedVector2Array([Vector2(430, 85), Vector2(451, 105), Vector2(430, 125)])
+			for i in int(p.EGRID_CELLS):
+				var cc: Control = _slots[9 + i]
+				cc.position = Vector2(px + float(CRAFT2_X) + (i % 2) * float(PITCH), py + float(CRAFT2_Y) + int(i / 2) * float(PITCH))
+			(_slots[18] as Control).position = Vector2(px + float(OUT2_X), py + float(OUT2_Y))
+			for i in 4:
+				(_slots[19 + i] as Control).position = Vector2(px + float(ARMOR_X), py + float(ARMOR_Y) + i * float(PITCH))
+		_panel.shaft = shaft
+		_panel.tri = tri
+		_panel.queue_redraw()
 		for i in 27:
 			var c2: Control = _slots[23 + i]
-			c2.position = Vector2(px + float(STORE_X) + (i % 9) * (SLOT + GAP), py + STORE_Y + (i / 9) * (SLOT + GAP))
+			c2.position = Vector2(px + float(MAIN_X) + (i % 9) * float(PITCH), py + float(MAIN_Y) + (i / 9) * float(PITCH))
 		for i in 9:
-			(_slots[50 + i] as Control).position = Vector2(px + float(PHOT_X) + i * (SLOT + GAP), py + float(PHOT_Y))
+			(_slots[50 + i] as Control).position = Vector2(px + float(MAIN_X) + i * float(PITCH), py + float(HOTY))
 	for si in _slots.size():
 		var id := 0
 		var n := 0
@@ -817,16 +902,20 @@ func _process(dt: float) -> void:
 			else:
 				id = int(p._inv_get(idx)["id"])
 				n = int(p._inv_get(idx)["n"])
-				if area == "hotbar_bottom":
+				if area == "hotbar" or area == "hotbar_bottom":
 					is_sel = int(p.sel) == idx
-		var key := "%d|%d|%d" % [id, n, 1 if is_sel else 0]
+		var hv := false
+		if show and si >= 9:
+			hv = Rect2(_slots[si].position, _slots[si].size).has_point(_mouse)
+		var key := "%d|%d|%d|%d" % [id, n, 1 if is_sel else 0, 1 if hv else 0]
 		if key != _last[si]:
 			_last[si] = key
 			_slot_ids[si] = id
 			var c: Control = _slots[si]
 			_setup_icon(c, id)
 			if c is SlotCtl:
-				(c as SlotCtl).border = SEL_BORDER if is_sel else SLOT_BORDER
+				(c as SlotCtl).selected = is_sel
+				(c as SlotCtl).hover = hv
 			_labels[si].text = str(n) if n > 1 else ""
 			c.queue_redraw()
 	if _force_hover_id != 0:

@@ -1,0 +1,34 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0059 research notes</title></head><body>
+<h2>Reference sources</h2>
+<ul>
+<li>https://minecraft.wiki/w/Crafting (page + images)</li>
+<li>https://minecraft.wiki/w/Crafting_table</li>
+<li>Images saved to refs/: Inventory.png (352x332 = 2x vanilla), Crafting_Table_GUI.png (352x332), Crafting2x2.png, Crafting3x3.png</li>
+<li>AUTHORITATIVE: vanilla GUI textures from repo Faithful-32x-1.21.11.mcpack: assets/minecraft/textures/gui/container/inventory.png + crafting_table.png (32x pack => 2x scale; .scratch/awecraft-ac0059/gui/). Pixel-measured below.</li>
+</ul>
+<h2>Measured geometry (1x vanilla px; ours = x3 with 48px slots, 54px pitch)</h2>
+<table border=1>
+<tr><th>region</th><th>1x (vanilla)</th><th>3x (ours, panel-local)</th></tr>
+<tr><td>panel</td><td>176x166, 1px black outline + 1.5px white top/left bevel + 1.5px #555555 bottom/right bevel, base #C6C6C6</td><td>528x498, 1px black + 4px bevels</td></tr>
+<tr><td>armor (E-inv only, LEFT column)</td><td>x7.5, y 7.5/25.5/43.5/61.5 (16px, pitch 18)</td><td>x22, y 22/76/130/184</td></tr>
+<tr><td>player-model display area</td><td>x25.5 w49, y7.5 h70</td><td>x77 w147, y22 h210 (left empty = faithful)</td></tr>
+<tr><td>2x2 craft (E)</td><td>x97.5/115.5, y17.5/35.5</td><td>x292/346, y52/106</td></tr>
+<tr><td>arrow (E)</td><td>bbox x133.5-149.5, y28.5-41; shaft x135.5-149.5 y33.5-36.5; head base x143.5 y28.5-41 tip x149.75 y34.75; fill #8B8B8B</td><td>shaft Rect2(406,100,44,10); tri (430,85)-(449,105)-(430,124)</td></tr>
+<tr><td>output (E)</td><td>x153.5, y27.5</td><td>x460, y82</td></tr>
+<tr><td>3x3 craft (table)</td><td>x29.5/47.5/65.5... slots x29.5 w16 pitch 18; y16.5 pitch 18</td><td>x88/142/196, y49/103/157</td></tr>
+<tr><td>arrow (table)</td><td>bbox x90-111, y35.5-50; shaft x90-111 y41.5-44.5; head base x104.5 y35.5-50 tip x111 y42.75</td><td>shaft Rect2(270,124,63,10); tri (313,106)-(333,128)-(313,150)</td></tr>
+<tr><td>output (table)</td><td>x119.5, y30.5</td><td>x358, y91</td></tr>
+<tr><td>main 9x3 (both)</td><td>x7.5-167.5 pitch 18, y83.5/101.5/119.5</td><td>x22+54i, y250/304/358</td></tr>
+<tr><td>hotbar 9 (both)</td><td>x7.5-167.5, y141.5</td><td>x22+54i, y424</td></tr>
+<tr><td>slots</td><td>16px: 1px dark #373737 top+left, 1px white bottom+right, fill #8B8B8B</td><td>48px: 3px dark top+left, 3px white bottom+right</td></tr>
+<tr><td>selected hotbar</td><td>white ~1.5px frame</td><td>3px white</td></tr>
+<tr><td>title</td><td>"Inventory"/"Crafting" dark gray text top-left (~x8,y6)</td><td>(22,4) font 15 #3F3F3F</td></tr>
+</table>
+<h2>Facts settled</h2>
+<ul>
+<li>Armor column: LEFT in vanilla (measured x15-47 col, 4 slots). Spec's right-side assumption corrected per reference.</li>
+<li>Table GUI has NO armor column and NO model area (verified from crafting_table.png: only 3x3 + output + 4x9 rows).</li>
+<li>Tooltip: MC classic style yellow text.</li>
+<li>Recipe-click root cause: (1) RecipeRow._gui_input required Input.mouse_mode==VISIBLE but table GUI opened via RMB-use keeps CAPTURED; (2) _recipe_click FABRICATED grid items without consuming inventory ingredients.</li>
+</ul>
+</body></html>

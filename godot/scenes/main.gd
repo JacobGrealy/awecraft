@@ -710,6 +710,12 @@ func _snapshot_finish(cam: String) -> void:
 		if inv_env == "1":
 			inventory_ui.autofill_first()
 			inventory_ui.hover_item(111)
+			player.held = {"id": 111, "n": 1}
+			var mid: Vector2 = get_viewport().get_visible_rect().size * 0.5
+			var mmv := InputEventMouseMotion.new()
+			mmv.position = mid - Vector2(120, 60)
+			mmv.global_position = mid - Vector2(120, 60)
+			Input.parse_input_event(mmv)
 	var drain_at := spawn
 	if player != null:
 		drain_at = player.position
@@ -1371,7 +1377,97 @@ func _guiclick_real(p, r, ok: bool) -> bool:
 	r["P3_landing"] = _slot_of(p, 8)
 	r["P3_inv9"] = [int(p._inv_get(9)["id"]), int(p._inv_get(9)["n"])]
 	ok = ok and r["P3_landing"] == 9 and r["P3_inv9"] == [8, 3]
+	# C1: recipe-row click in the E-inventory (planks): pull the log from storage,
+	# fill the 2x2 grid, show output, click output -> planks to hotbar, grid cleared
+	for i in 36:
+		p.inv[i] = {"id": 0, "n": 0}
+	p.held = {}
+	p.drag_held = false
+	p.close_inventory()
+	p.open_inventory("inv")
+	p.inv[9] = {"id": 6, "n": 4}
+	for i in 8:
+		await get_tree().physics_frame
+	var hv = Game.hotbar
+	var c1row = _find_recipe_row(hv, 8)
+	r["C1_row"] = c1row != null
+	if c1row != null:
+		var cp1: Vector2 = hv._recipe_box.position + c1row.position + c1row.size * 0.5
+		_mb(cp1, 1, true)
+		for i in 2:
+			await get_tree().physics_frame
+		_mb(cp1, 1, false)
+		for i in 4:
+			await get_tree().physics_frame
+	var c1g: Array = []
+	for i in 4:
+		c1g.append(int(p.craft_grid[i]["id"]))
+	r["C1_grid"] = c1g
+	r["C1_out"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	ok = ok and r["C1_row"] and r["C1_grid"] == [6, 0, 0, 0] and r["C1_out"] == [8, 4]
+	_mb(_slotc(18), 1, true)
+	for i in 2:
+		await get_tree().physics_frame
+	_mb(_slotc(18), 1, false)
+	for i in 4:
+		await get_tree().physics_frame
+	r["C1_planks"] = _count_item(p, 8)
+	r["C1_logs_left"] = _count_item(p, 6)
+	var c1ga: Array = []
+	for i in 4:
+		c1ga.append(int(p.craft_grid[i]["id"]))
+	r["C1_grid_after"] = c1ga
+	ok = ok and r["C1_planks"] == 4 and r["C1_logs_left"] == 3 and r["C1_grid_after"] == [0, 0, 0, 0]
+	# C2: recipe-row click in the table GUI (wooden pickaxe 3x3 pattern)
+	p.close_inventory()
+	for i in 36:
+		p.inv[i] = {"id": 0, "n": 0}
+	p.held = {}
+	p.drag_held = false
+	p.open_inventory("table")
+	p.inv[10] = {"id": 8, "n": 3}
+	p.inv[11] = {"id": 100, "n": 2}
+	p.inv[12] = {"id": 8, "n": 5}
+	for i in 8:
+		await get_tree().physics_frame
+	var c2row = _find_recipe_row(hv, 111)
+	r["C2_row"] = c2row != null
+	if c2row != null:
+		var cp2: Vector2 = hv._recipe_box.position + c2row.position + c2row.size * 0.5
+		_mb(cp2, 1, true)
+		for i in 2:
+			await get_tree().physics_frame
+		_mb(cp2, 1, false)
+		for i in 4:
+			await get_tree().physics_frame
+	var c2tg: Array = []
+	for i in 9:
+		c2tg.append(int(p.table_grid[i]["id"]))
+	r["C2_tgrid"] = c2tg
+	r["C2_out"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	ok = ok and r["C2_row"] and r["C2_tgrid"] == [8, 8, 8, 0, 100, 0, 0, 100, 0] and r["C2_out"] == [111, 1]
+	_mb(_slotc(18), 1, true)
+	for i in 2:
+		await get_tree().physics_frame
+	_mb(_slotc(18), 1, false)
+	for i in 4:
+		await get_tree().physics_frame
+	r["C2_pick"] = _count_item(p, 111)
+	var c2tga: Array = []
+	for i in 9:
+		c2tga.append(int(p.table_grid[i]["id"]))
+	r["C2_tgrid_after"] = c2tga
+	r["C2_planks_left"] = _count_item(p, 8)
+	r["C2_sticks_left"] = _count_item(p, 100)
+	ok = ok and r["C2_pick"] == 1 and r["C2_tgrid_after"] == [0, 0, 0, 0, 0, 0, 0, 0, 0] and r["C2_planks_left"] == 5 and r["C2_sticks_left"] == 0
 	return ok
+
+
+func _find_recipe_row(hv, out_id: int):
+	for row in hv._recipe_rows:
+		if int(row.out_id) == out_id:
+			return row
+	return null
 
 
 func _craft_test() -> void:

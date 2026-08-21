@@ -1069,6 +1069,7 @@ func open_inventory(mode: String) -> void:
 	ui_mode = mode
 	release_mine()
 	recompute_craft()
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 func close_inventory() -> void:
