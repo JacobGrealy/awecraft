@@ -12,6 +12,13 @@
 <li>BUILD VERSION: a build-stamp mechanism (e.g. build_id written by build_web.sh + windows export step; fallback "dev") shown in the menu.</li>
 <li>Keep the AWECRAFT_* env hooks working (menu must not break snapshot/logic harnesses — add a harness skip so AWECRAFT_LOGIC/AWECRAFT_SNAPSHOT start straight into the game).</li>
 </ul>
+<h2>RESUME STATE (2026-08-21 — code is DONE; remaining work = render bug + flip to menu-first + browser gates)</h2>
+<ul>
+<li>Feature files (menu + options + persistence + build version) already landed (shipped in commit 9727c3f, tree currently clean). Battery green, zero script errors. Menu boot + Esc pause currently env-gated <code>AWECRAFT_MENU=1</code>; default boot = straight into game (desktop AND web) UNTIL the render bug below is fixed.</li>
+<li><b>BLOCKER — menu invisible under Xvfb/llvmpipe:</b> <code>AWECRAFT_MENU=1</code> + <code>AWECRAFT_SNAPSHOT=...</code> (render: <code>xvfb-run -a ~/tools/godot/godot --path godot --rendering-method gl_compatibility</code>) produces a <b>uniform 77,77,77 frame</b> (see tasks/AC-0033/menu-main.png, menu-options.png — both blank gray). Prior minimization (scaffolding DELETED in AC-0048 cleanup 9727c3f; re-minimize from scratch) established: children present + visible per probe; plain Control/ColorRect/full-rect CanvasItems render fine at ANY layer (incl. 20); a byte-identical replica of the menu tree in a separate MINCLASS scene <b>renders fine</b>, but the menu's own tree in its own scene does not. Not fully root-caused. NOTE: a lot shipped since the bug was filed (AC-0056 aero grade/sky, AC-0058, AC-0059, AC-0060) — re-verify the CURRENT failure mode first (uniform 77,77,77 may be 3D clear/sky behind an invisible 2D layer, or a shader/material regression). Check aero's Environment/WorldEnvironment interaction with the menu scene first.</li>
+<li>Then: flip default to <b>menu-first boot</b> (web parity — the frozen web boots into its main menu), harness envs (<code>AWECRAFT_LOGIC</code>/<code>AWECRAFT_SNAPSHOT</code>/<code>AWECRAFT_INV</code> etc.) must start straight into the game; keep <code>AWECRAFT_MENU=0</code> as the explicit skip.</li>
+<li>Fog note for game shots: r=1 ⇒ fog_far ≈ 12 &lt; camera distance ⇒ sky-only frame is NOT a bug; use <code>AWECRAFT_NO_FOG=1</code> for known-good game shots or r=2.</li>
+</ul>
 <h2>Verify (hard gates, staged — checkpoint to disk after each)</h2>
 <ol>
 <li>Headless: full battery + --quit zero script errors (harness skip works: AWECRAFT_LOGIC=player still works from menu-boot).</li>

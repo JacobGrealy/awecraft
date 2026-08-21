@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-21T02:10
+  updated_at: 2026-08-21T07:34
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -13,9 +13,6 @@ queue:
 - AC-0050
 - AC-0052
 - AC-0051
-- AC-0053
-- AC-0054
-- AC-0055
 - AC-0047
 - AC-0030
 - AC-0044
@@ -33,6 +30,9 @@ queue:
 - AC-0040
 - AC-0041
 - AC-0042
+- AC-0054
+- AC-0055
+- AC-0053
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -779,7 +779,7 @@ intake:
   labels:
   - godot
   created_at: 2026-08-18T12:00
-  updated_at: 2026-08-19T23:40
+  updated_at: 2026-08-21T07:34
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -809,6 +809,12 @@ intake:
     created_at: 2026-08-18 19:30T12:00
     updated_at: null
     text: '[user] build version should display in menu'
+  - id: 6
+    created_at: 2026-08-21T07:34
+    updated_at: null
+    text: '[agent] User 2026-08-21: start with AC-0033. Resume state: code done + battery green; BLOCKED on the menu-CanvasLayer-invisible-under-llvmpipe
+      render bug (screenshots in tasks/AC-0033/ are uniform 77,77,77). Re-reproduce, root-cause, fix, then flip to menu-first
+      boot (web parity) + browser gates.'
 - id: AC-0034
   title: hitch
   source: user
@@ -842,16 +848,24 @@ intake:
   labels:
   - godot
   created_at: 2026-08-16T12:00
-  updated_at: 2026-08-19 08:15T12:00
+  updated_at: 2026-08-21T07:34
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: Bake per-voxel light into mesh vertex colors (Lighting from AC-0005 ready) + web uDay terrain uniform + stars
+  notes: 'Bake per-voxel light into mesh vertex colors (Lighting from AC-0005 ready) + web uDay terrain uniform + stars. BUNDLED
+    (user 2026-08-21, do after AC-0033+AC-0034): viewmodel lighting — held block/item/hand must darken with the light level
+    at the player (caves/night).'
   comments:
   - id: 1
     created_at: 2026-08-16 20:00T12:00
     updated_at: null
     text: '[agent] shelved M5a2 (resume after core+TEX)'
+  - id: 2
+    created_at: 2026-08-21T07:34
+    updated_at: null
+    text: '[user] User 2026-08-21: the held block/item in hand AND the hand itself must be affected by the current lighting
+      — darker in darker areas (caves/night). Bundle this viewmodel-lighting requirement INTO AC-0035 (do it after AC-0033
+      and AC-0034).'
 - id: AC-0036
   title: underwater
   source: user
@@ -1296,13 +1310,18 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-20T10:44
-  updated_at: 2026-08-20T10:44
+  updated_at: 2026-08-21T07:34
   completed_at: null
   waiting_on: null
   parent_id: null
   notes: 'From AC-0049 research: mine-speed formula 1.5*hard/speed, speed tiers 2/4/6/8, 5x wrong-tool penalty, MC attack
     damage + cooldown ramp, obsidian iron-pick gate, hardness fixes. Verify AWECRAFT_LOGIC=mining + combat'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-21T07:34
+    updated_at: null
+    text: '[user] User 2026-08-21: moved to the END of the queue — focus first on catching the Godot port up to the web version
+      (AC-0033..AC-0042 batch, incl. AC-0054/0055 before it).'
 - id: AC-0054
   title: durability-repair
   source: user

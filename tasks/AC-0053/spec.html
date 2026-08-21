@@ -1,0 +1,87 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AC-0053 — Tool mechanics MC-exact (spec)</title>
+<style>
+body{font-family:system-ui,'Segoe UI',sans-serif;margin:24px 40px;max-width:1050px;line-height:1.45;color:#1b232f}
+h1{font-size:20px}
+h2{font-size:15px;margin-top:22px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}
+table{border-collapse:collapse;font-size:12.5px;margin:8px 0}
+th,td{border:1px solid #cdd6e3;padding:3px 8px;text-align:left}
+th{background:#eef1f6}
+code{background:#eef1f6;border-radius:3px;font-size:12px;padding:0 3px}
+.gate{background:#f0f8f0;border-left:3px solid #2e7a1a;padding:6px 10px;margin:8px 0;font-size:13px}
+</style>
+</head>
+<body>
+<h1>AC-0053 — Tool mechanics MC-exact</h1>
+<p>Source: <code>tasks/AC-0049/AC-0049-research.html</code> gaps G4–G7 (+ tier gate G5). User directive 2026-08-20: match <b>minecraft.wiki exactly</b> (Tool / Mining / Breaking pages) unless user says otherwise — even where the frozen web spec (<code>index.html</code>) differs. Do NOT modify <code>index.html</code>.</p>
+
+<h2>1. Mining time formula (replaces player.gd <code>progress = dt*mult/max(0.15,hard)</code>)</h2>
+<p>Compute break time <code>T</code> for the targeted block id + held item:</p>
+<ul>
+<li><code>speed</code> = held item's mining multiplier (<code>.speed</code>, tiers 2/4/6/8 — fix diamond 7→8) <b>iff</b> held tool type == block's best tool (<code>Data.block_tool(id)</code>), else 1.</li>
+<li><code>T = 1.5 × hard / speed</code>.</li>
+<li><b>Wrong-tool penalty:</b> for pick-required blocks (stone 3, coal ore 14, iron ore 15, diamond ore 16, obsidian 25): if held tool type ≠ pick (including empty hand) → <code>T = 1.5 × hard × 5</code> (5× bare-hand).</li>
+<li><b>Instant break:</b> if computed <code>T &lt; 0.15 s</code> → breaks on the next progress tick with no accumulated timer (no progress bar in UI).</li>
+<li>Progress accumulates <code>dt / T</code> while mining; release/reset cancels (existing start_mine/release_mine semantics).</li>
+</ul>
+
+<h2>2. Hardness fixes (Data.blocks, AweCraft → MC)</h2>
+<table>
+<tr><th>Block</th><th>Now</th><th>MC</th></tr>
+<tr><td>Dirt (2), Sand (4), Snowy grass (12)</td><td>0.6</td><td><b>0.5</b></td></tr>
+<tr><td>Coal ore (14)</td><td>2.0</td><td><b>3.0</b></td></tr>
+<tr><td>Iron ore (15)</td><td>2.5</td><td><b>3.0</b></td></tr>
+<tr><td>Oak log (6)</td><td>1.0</td><td><b>2.0</b></td></tr>
+<tr><td>Planks (8)</td><td>1.0</td><td><b>2.0</b></td></tr>
+<tr><td>Bricks (17)</td><td>2.0</td><td><b>1.5</b></td></tr>
+<tr><td>Crafting table (20)</td><td>1.0</td><td><b>2.5</b></td></tr>
+<tr><td>Furnace (21)</td><td>2.0</td><td><b>3.5</b></td></tr>
+<tr><td>Flowers (18,19)</td><td>0.1</td><td><b>0.0</b> (instant)</td></tr>
+</table>
+<p>Leave: grass 0.6, stone 1.5, cobble 2.0, diamond ore 3.0, obsidian 50, leaves 0.2, torch 0.1, glowstone 0.3, water/lava/bedrock 1e9. (Torch/glowstone marked OK in research; do not fiddle.)</p>
+
+<h2>3. Tool stats (Data.items 111–125 + 109)</h2>
+<p>Two separate fields: <code>speed</code> = <b>mining</b> multiplier (2/4/6/8 for pick/axe/shovel; swords keep 1.0 mining) and new <code>aspeed</code> = <b>attack</b> attacks/sec. <code>dmg</code> = attack damage at full charge. Consolidate item 109 into the 111–125 scheme (same fields; it is the iron sword — id stays 109, recipes reference it).</p>
+<table>
+<tr><th></th><th>Wood</th><th>Stone</th><th>Iron</th><th>Diamond</th></tr>
+<tr><td>Pickaxe dmg / aspeed</td><td>2 / 1.2</td><td>3 / 1.2</td><td>4 / 1.2</td><td>5 / 1.2</td></tr>
+<tr><td>Axe dmg / aspeed</td><td>6 / 1.0</td><td>7 / 1.0</td><td>9 / <b>0.9</b></td><td>9 / 1.0</td></tr>
+<tr><td>Shovel dmg / aspeed</td><td>2.5 / 1.0</td><td>3.5 / 1.0</td><td>4.5 / 1.0</td><td>5.5 / 1.0</td></tr>
+<tr><td>Sword dmg / aspeed (109=iron)</td><td>4 / 1.6</td><td>5 / 1.6</td><td>6 / 1.6</td><td>7 / 1.6</td></tr>
+</table>
+<p>Bare-hand: dmg 1, aspeed 1.6468 (per wiki). Values are from the AC-0049 fetched wiki tables — if you spot-fetch minecraft.wiki, keep the fetched values.</p>
+<p><b>Do NOT touch:</b> item 126 (reserved flint&amp;steel), armor 127–138, buckets, bow/arrow (M10+), any recipe ids.</p>
+
+<h2>4. Attack cooldown + damage ramp (G7)</h2>
+<ul>
+<li>Player tracks <code>last_attack_time</code>. One attack per LMB press (current behavior; hold-loop stays animation-only = MC desktop behavior). Cooldown period = 1/aspeed.</li>
+<li>Charge <code>p = clamp(elapsed / period, 0, 1)</code>. Multiplier = <code>1.0</code> if p ≥ 0.75 else <code>0.5 + 0.5 × p / 0.75</code> (50% at p=0 → 100% at p=0.75). Damage = dmg × multiplier (float).</li>
+<li>Expose the pure function (e.g. <code>attack_damage(item, elapsed)</code>) so the headless harness can assert it without real mobs.</li>
+</ul>
+
+<h2>5. Obsidian tier gate (G5)</h2>
+<p><code>Data.block_drops</code> → <code>(id, tool_type, tier)</code>: obsidian (25) drops only with a pick <b>tier ≥ 3</b>; stone (3) drops cobblestone (9) only with any pick (keep); ores (14/15/16) drop with any pick (keep); everything else unchanged. Update the call site in player.gd.</p>
+
+<h2>6. VERIFY gates (all required, headless)</h2>
+<div class="gate"><b>Battery (must stay green, zero script errors):</b> <code>AWECRAFT_LOGIC=player|interact|light|fluids|buckets|craft|guiclick|swing</code> + bare <code>--headless --quit</code> load. Only assertions that encode the OLD non-MC timing may be adjusted — list every adjustment in the report.</div>
+<div class="gate"><b>New <code>AWECRAFT_LOGIC=mining</code></b> (harness in scenes/main.gd, Debug hooks + RESULT JSON). Use dt-stepped <code>start_mine</code>/progress sampling (do NOT wait real 375 s). Expected (±2%):
+<ul>
+<li>Stone (hard 1.5): wood pick <b>t=1.125s</b>, stone pick 0.5625, iron 0.375, diamond 0.28125.</li>
+<li>Dirt (0.5): wood shovel 0.375 / bare hand 0.75.</li>
+<li>Log (2.0): diamond axe 0.375.</li>
+<li>Axe on stone: t=11.25 (assert progress ≈0.5 when 5.625s of dt fed).</li>
+<li>Obsidian (50): wood pick → progress after 12.5s dt ≈ <b>1/30</b> (i.e. T=375) AND drop = none; iron pick T=12.5 AND drops obsidian; diamond pick drops too; bare hand T=375, no drop.</li>
+<li>Flower (hard 0): instant break on first tick.</li>
+</ul></div>
+<div class="gate"><b>New <code>AWECRAFT_LOGIC=combat</code></b> (RESULT JSON): full-charge dmg — hand 1, wood sword 4, stone sword 5, <b>109 iron sword 6</b>, diamond sword 7, wood pick 2, iron axe 9. Ramp: hit, then hit again at p≈0.5 of cooldown → damage ≈0.83× (within band 0.7–0.95); hit after full cooldown → 100%. Assert via the pure function (Debug hook) — headless mobs not required; use <code>Debug.spawn_mob</code> only if it trivially works headless.</div>
+<div class="gate"><b>Scope fence:</b> NO durability (AC-0054), NO hoes (AC-0055), NO armor changes, NO web/browser work (coordinator runs <code>build_web.sh</code> after), NO git. Small, surgical, headless-first.</div>
+
+<h2>Deliverables</h2>
+<ul>
+<li>Files: <code>godot/autoload/data.gd</code> (stats/hardness/block_drops sig), <code>godot/player/player.gd</code> (mine formula + penalty + instant, cooldown ramp, call sites), <code>godot/scenes/main.gd</code> (mining + combat harnesses) — and any harness file the pattern dictates.</li>
+<li><code>tasks/AC-0053/AC-0053-results.html</code>: self-contained summary — RESULT JSONs (mining, combat, full battery), the exact expected-vs-actual table, list of any harness-assertion adjustments, deviations.</li>
+<li>Report to coordinator: MAX ~20 lines (files changed, RESULT values, deviations).</li>
+</ul>
