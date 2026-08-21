@@ -1,0 +1,37 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0060 - Viewmodel: walk sway + swing half-speed</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:960px;line-height:1.5;color:#122}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd2e0;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}li{margin:3px 0}</style></head><body>
+<h1>AC-0060 — first-person hand: sway while walking + swing at half speed</h1>
+<h2>User request (2026-08-20, verbatim)</h2>
+<p>"the hand / block should sway as you walk (different from the swing when you click). also the animation should be about half as fast for the swing as it is right now"</p>
+<h2>Current state (read first)</h2>
+<ul>
+<li>Swing = AC-0048: <code>SWING_DURATION</code> in <code>godot/player/player.gd</code> = <b>0.10 s</b> (was 0.4 in AC-0032, cut 4× in AC-0048). LMB hold loops the swing (<code>_lmb_down</code> + <code>_update_swing_loop`, settles on release). The swing animates <code>hand_root</code> rotation; held content = fist / block box / voxel tool / textured sprite (AC-0051), all children of hand_root.</li>
+<li>Headless harness: <code>AWECRAFT_LOGIC=swing</code> in <code>godot/scenes/main.gd</code> (Debug.swing + scripted LMB hold) — currently asserts ~5 cycles in 0.9 s for the 0.10 s period (<code>loop_cycles_0.9s</code> gate). Halving the speed changes that expectation — <b>update the harness threshold in the same pass</b> and keep it deterministic (run it to confirm the new number, e.g. ~4 cycles in 0.9 s).</li>
+</ul>
+<h2>Task 1 — swing at half speed</h2>
+<ul>
+<li><code>SWING_DURATION</code> 0.10 → <b>0.20 s</b>. Hold-loop continues to fire every cycle while LMB is down; mining is press-timer based (dt vs hard) — confirm the swing loop is purely visual for mining progress (if damage/mine progress is coupled to swing cycles, preserve the effective mining rhythm: at half speed with the same per-cycle progress, mining takes 2× the old hold time — that would be a behavior regression; if coupled, scale per-cycle progress ×2 so total mine time is unchanged. Report which case you found).</li>
+<li>Update the swing harness cycle expectation to the new duration; report the new RESULT json.</li>
+</ul>
+<h2>Task 2 — walk sway (separate from the swing)</h2>
+<ul>
+<li>Goal: while moving, the held hand bobs gently — Minecraft-style viewmodel bob: small vertical + horizontal sinusoid on a walk-cycle phase that advances with horizontal speed; idle = perfectly still.</li>
+<li>Implementation guidance: add a <b>sway pivot Node3D</b> so the sway composes cleanly with the swing (the swing rotates hand_root; the sway should NOT fight it — e.g. parent hand_root under a new sway node that lives where hand_root was, or apply sway to an additive child transform — inspect the actual hierarchy first and pick the cleanest composition; both effects must play simultaneously: swinging while walking). Drive from <code>_physics_process</code> (or _process if the hand code lives there — match existing):
+  <ul>
+  <li>phase += horizontal_speed × dt × k (tune k so one bob ≈ one MC step, ~4 bobs/s at walk 4.3 m/s, a bit faster at sprint 5.6),</li>
+  <li>offset_y = A·sin(phase·2π) (A ≈ 0.010–0.02), offset_x = B·sin(phase·π) (B ≈ 0.004–0.008),</li>
+  <li>amplitude scales with speed (0 at rest, full at ≥ walk speed); smooth the speed in (short lerp ~8–12/s) so start/stop don't pop,</li>
+  <li>no sway while flying? (MC bobs less when flying — acceptable either way; if you keep a small fly-bob, say so), no sway when the inventory GUI is open? (hand may be hidden — check what the UI does to hand_root visibility; keep behavior consistent with what's visible).</li>
+  </ul></li>
+</ul>
+<h2>Verify gates (ALL; zero script errors is a hard gate)</h2>
+<ol>
+<li>Headless: extend <code>AWECRAFT_LOGIC=swing</code> (or a sibling <code>AWECRAFT_LOGIC=viewmodel</code>) to assert BOTH: (a) new swing cycle count at 0.20 s (deterministic expected value — run and lock it), (b) walk sway: scripted walk for N seconds → report hand offset min/max + zero-crossing count (≈ bobs expected from phase), and idle 2 s → offset stays 0 (within 1e-4). Deterministic seed/time (the harness already controls time — keep it). Report the full RESULT json.</li>
+<li>Full battery green: player interact light fluids buckets craft guiclick combat swing settings — 0 script errors (any swing-timing change must not break the mine-loop harness).</li>
+<li>Renders (xvfb gl_compatibility, small, AWECRAFT_NO_FOG=1): (a) idle first-person shot with a held tool (transform sanity — tool still where it always was), (b) two first-person shots 0.25 s apart while moving (if the snapshot harness can script motion — otherwise capture during the harness walk and note the method) → hand region visibly shifted between frames. View your PNGs first.</li>
+<li>Web rebuild <code>./build_web.sh</code> exit 0 + browser check on https://localhost:8443 (playwright, ignore cert): two screenshots ~0.3 s apart while walking (W key held) → hand region visibly different; one shot after releasing → settles. No console errors. Screenshots → <code>tasks/AC-0060/</code>.</li>
+<li><code>tasks/AC-0060/AC-0060-results.html</code>: swing timing (old/new + gate before/after), sway params (k, A, B, speed scaling) + why, RESULT jsons, renders embedded. Report to coordinator MAX 20 lines: files changed (file:line for the key spots), swing coupling finding, sway params, gate results, screenshot paths.</li>
+</ol>
+<h2>Rules</h2>
+<ul><li>godot/ only (player/main, no ui changes beyond what's needed); Godot ONE at a time; headless FIRST, at most a couple of small renders; no git; never kill the python servers; scratch → .scratch/ or task folder; no comments in GDScript; keep the held-model hierarchy (AC-0051) working — fist/block/tool/sprite all must sway; zero script errors is a hard gate.</li></ul>
+</body></html>

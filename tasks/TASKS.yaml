@@ -1,10 +1,13 @@
 meta:
-  updated_at: 2026-08-20T15:57
+  updated_at: 2026-08-20T20:28
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0057
+- AC-0058
 - AC-0056
+- AC-0059
+- AC-0060
+- AC-0057
 - AC-0048
 - AC-0049
 - AC-0050
@@ -1339,10 +1342,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-20T14:16
-  updated_at: 2026-08-20T14:23
+  updated_at: 2026-08-20T20:25
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -1352,7 +1355,16 @@ intake:
     glow, glossy puffy clouds, horizon haze) that still respects DayNight. Must render under gl_compatibility/llvmpipe; expose
     AWECRAFT_AERO=0/1 toggle + tunable uniforms. Verify: 0 script errors, battery green, A/B render shots (day+night), web
     rebuild + browser check 8443.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-20T20:25
+    updated_at: null
+    text: '[agent] User feedback round 2 (2026-08-20, after testing the 19:01 web build): (1) skybox invisible - fog eats
+      it (confirmed: Godot 4 spatial needs render_mode fog_disabled; empty fog_fragment() is NOT enough) - add fog_disabled
+      to aero_sky (+wash) render_mode; (2) palette: sand should be more yellow, user wants the Sega / Green Hill Zone palette
+      (vibrant azure sky, bright yellow sand, lush green) - retune grade: warmer/more saturated mids, less milky lift, reduce
+      cool aqua wash; (3) re-verify A/B renders + browser. Note: web canvas 2/3 bug is tracked separately as AC-0058 (fix
+      canvas first so browser gates are valid).'
 - id: AC-0057
   title: inventory-clickmove-broken
   source: user
@@ -1386,3 +1398,62 @@ intake:
       (P1_landing=9, R3_hot3/R4_dst/R5_dst empty) -> after ok:true (P1_landing=0, all R1-R8 pass, R8 AC-0050 fallback planks->inv[9]
       intact). Battery 10/10 0 script errors, web rebuilt + browser 3/3 pixel gates no console errors. tasks/AC-0057/ has
       results.html + 3 browser shots.'
+- id: AC-0058
+  title: web-canvas-2of3
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: in-progress
+  labels: []
+  created_at: 2026-08-20T20:23
+  updated_at: 2026-08-20T20:26
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User 2026-08-20: "in web view the game is only rendering to like 2/3 of the screen". Likely web-export canvas stuck
+    at 1280x720 (canvasResizePolicy=2, project viewport 1280x720 = exactly 2/3 of 1920x1080). Diagnose in browser (playwright)
+    and fix so the canvas fills the browser window on load + after resize. Fix must be reproducible via build_web.sh (web/
+    is a build artifact - never hand-edit web/).'
+  comments: []
+- id: AC-0059
+  title: inventory-recipe-click
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-20T20:24
+  updated_at: 2026-08-20T20:24
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User 2026-08-20: still can''t click and drag items, can''t click on craft recipe (apostrophes in original). AC-0057
+    fixed click/drag (harness+browser gates) and the 19:01 web rebuild contains it, so RE-VERIFY the real-mouse flow in the
+    browser on the current build; a plain drag may still differ from the harness. Separately fix: clicking a craft-recipe
+    row (autofill list) should fill the craft grid + show output. Verify in browser with playwright real mouse: drag storage->hotbar
+    lands; click a craftable recipe auto-fills grid and output appears.'
+  comments: []
+- id: AC-0060
+  title: viewmodel-sway-swing-speed
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-20T20:25
+  updated_at: 2026-08-20T20:25
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User 2026-08-20: the hand / block should sway as you walk (different from the swing when you click); the swing animation
+    should be about half as fast as it is right now. = (a) walk bob on hand_root driven by horizontal velocity (sine phase,
+    amplitude/speed scale with speed), separate from and independent of the AC-0048 swing loop; (b) swing 0.10s -> 0.20s;
+    adjust the swing harness threshold in main.gd (AWECRAFT_LOGIC=swing, loop cycle expectation) to match; verify headless
+    + A/B render + web rebuild + browser shot.'
+  comments: []

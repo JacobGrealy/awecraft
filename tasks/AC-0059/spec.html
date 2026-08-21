@@ -1,0 +1,36 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0059 - Inventory: re-verify click/drag in browser + fix craft-recipe click</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:960px;line-height:1.5;color:#122}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd2e0;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}li{margin:3px 0}</style></head><body>
+<h1>AC-0059 — inventory input in the web build: re-verify click/drag + make craft-recipe click work</h1>
+<h2>User report (2026-08-20, verbatim)</h2>
+<p>"still can't click and drag items, can't click on craft recipe"</p>
+<h2>Context (read before touching anything)</h2>
+<ul>
+<li>Inventory UI = <code>godot/ui/inventory.gd</code> (CanvasLayer), all clicks go through the player click API (<code>player.gd</code>) and the <code>_route_click</code> path. History: AC-0045 (first drag fix: arg order + gui.mouse_focus release), AC-0057 (release-over-same-slot fix + hotbar-first pickup, browser pixel gates 3/3, web rebuilt 19:01 which the user is now testing).</li>
+<li>So click/drag was JUST fixed and verified — but the user STILL says it doesn't work. Their real drag (mouse down → move → up) may differ from the harness/gates (which simulate discrete events). RE-VERIFY with a real playwright mouse on the CURRENT build before concluding it is fixed. If it genuinely works, prove it with before/after screenshots + exact event sequence; if not, root-cause it.</li>
+<li>The craft-recipe part may be a separate real bug: the craftable-recipe autofill list (M7b2, Godot-native — not in the frozen web spec) — clicking a row should populate the craft grid and show the output slot. Find where rows are built (search inventory.gd / hud for the recipe list, e.g. <code>craftable</code>/<code>recipe</code>) and check the rows actually receive mouse input (mouse_filter, gui_input, Button vs painted-in-<code>_draw</code> decoration). A painted list with no _hit test = clicks no-op = exactly this symptom.</li>
+<li>Current slot model (after AC-0050/0052/0057): ONE visible 36-slot inventory — hotbar 0..8, storage 9..35 (STORAGE_OFF=9); E = 2×2 craft GUI; right-click crafting table block (20) = 3×3 table GUI; recipe rows are tagged grid:2 / grid:3 (AC-0052). Only grid-2 recipes are craftable from E; grid-3 only at the table. The recipe list should respect that (show recipes craftable in the CURRENT ui_mode, or the union — check what it does and keep it consistent).</li>
+</ul>
+<h2>Tasks</h2>
+<ol>
+<li><b>Browser re-verify (real mouse, playwright, https://localhost:8443, ignore cert):</b> seed items (<code>Debug.seed_inv()</code> exists, or <code>Debug.give_item</code> via the web's debug path if exposed), open E-inventory, then with REAL playwright mouse events (mousedown at slot center → mousemove mid-way → mouseup at target slot center):
+  <ul>
+  <li>drag storage → hotbar (icon + count move; P1 landing slot 0-8),</li>
+  <li>click slot A (pick) then click slot B (drop, with A's old content swapped back),</li>
+  <li>shift-click a storage stack → distributes into hotbar,</li>
+  <li>right-click split? (only if implemented — report what is and isn't there; do NOT add new features beyond the web spec unless trivial).</li>
+  </ul>
+  Record a pass/fail table with before/after screenshots for each flow.</li>
+<li><b>Fix recipe click:</b> clicking a craftable recipe row must populate the craft grid cells (correct items in correct positions for shaped recipes, any cells for shapeless) and the output slot must show the result; clicking the output then takes the result into the inventory and clears inputs (existing player API <code>craft_output</code> click semantics — reuse, don't reinvent). If rows are painted decoration, add a _hit-test in the same <code>_route_click</code> flow (no new input listeners needed — keep the single click path). Keyboard-free: mouse only.</li>
+<li><b>If re-verify found a real drag bug:</b> root-cause + fix in the same pass (keep AC-0057 harness semantics intact).</li>
+</ol>
+<h2>Verify gates (ALL; zero script errors is a hard gate)</h2>
+<ol>
+<li>Headless battery green: <code>AWECRAFT_LOGIC=guiclick</code> ok:true (AC-0057 result unchanged: P1_landing=0, R1-R8 pass) + full battery (player interact light fluids buckets craft guiclick combat swing settings) 0 script errors.</li>
+<li>New/extended headless gate for recipe click if feasible (e.g. <code>AWECRAFT_LOGIC=guiclick</code> case or <code>Debug.inv_click</code> on the recipe row index): click row for planks → grid cells filled with logs → recompute → output = 4 planks (M7a chain: log→4 planks→4 sticks→wooden pick 111) → click output → hotbar gains 4 planks, inputs consumed, grid cleared. Report exact RESULT json.</li>
+<li>Browser (playwright, 8443): the four flows from tasks.1 pass with real mouse + a working recipe-row click (screenshot: row click → grid filled + output visible → inventory gains the crafted item). No console errors. Screenshots → <code>tasks/AC-0059/</code>. View them yourself first.</li>
+<li>Web rebuild <code>./build_web.sh</code> exit 0 (AC-0058's canvas fix will already be in the tree — do NOT revert it; your browser frames should be full-window; if the canvas still looks 2/3, that's AC-0058's problem in progress — note it and continue).</li>
+<li><code>tasks/AC-0059/AC-0059-results.html</code>: pass/fail table (before/after), root causes, fix (file:line), screenshots embedded. Report to coordinator MAX 20 lines: verdict on the "still can't drag" claim (works? if not, root cause), recipe-click root cause + fix, gate results, screenshot paths.</li>
+</ol>
+<h2>Rules</h2>
+<ul><li>godot/ only (ui/player/debug); never hand-edit web/; Godot ONE at a time; headless FIRST; no git; never kill the python servers; scratch → .scratch/ or task folder; no comments in GDScript; small honest partial &gt; empty; zero script errors is a hard gate. Do not re-implement inventory logic — surgical edits to the input path + recipe rows.</li></ul>
+</body></html>
