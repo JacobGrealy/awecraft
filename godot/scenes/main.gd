@@ -722,6 +722,9 @@ func _snapshot_finish(cam: String) -> void:
 	await _await_world_build(drain_at, 3000)
 	for i in 8:
 		await get_tree().physics_frame
+	if OS.get_environment("AWECRAFT_WALK_SHOT") == "1" and player != null:
+		await _walk_shot_finish(snapshot_path, spawn)
+		return
 	var emptyhand_env := OS.get_environment("AWECRAFT_EMPTYHAND")
 	if emptyhand_env == "1" and player != null:
 		for i in player.inv.size():
@@ -746,6 +749,36 @@ func _snapshot_finish(cam: String) -> void:
 				await get_tree().physics_frame
 			await Debug.snap(snapshot_path.replace(".png", "_placed.png"))
 	Debug.result({"m4": "ok", "w": int(get_viewport().size.x), "h": int(get_viewport().size.y), "cam": cam})
+	get_tree().quit()
+
+
+func _walk_shot_finish(path: String, spawn: Vector3) -> void:
+	var p = Game.player
+	var pad_top := _build_walk_pad(spawn, 10)
+	Debug.teleport(8.5, pad_top, 8.5)
+	for i in 40:
+		await get_tree().physics_frame
+	var wid_env := OS.get_environment("AWECRAFT_FPV_ITEM")
+	if wid_env != "":
+		var wid: int = wid_env.to_int()
+		if _count_item(p, wid) <= 0:
+			Debug.give_item(wid, 1)
+		p.sel = _slot_of(p, wid)
+	for i in 6:
+		await get_tree().physics_frame
+	Input.action_press("move_forward")
+	await get_tree().physics_frame
+	for i in 300:
+		if p.hand_pose_offset().y > 0.008:
+			break
+		await get_tree().physics_frame
+	await get_tree().physics_frame
+	await Debug.snap(path)
+	for i in 8:
+		await get_tree().physics_frame
+	await Debug.snap(path.replace(".png", "_w2.png"))
+	Input.action_release("move_forward")
+	Debug.result({"m4": "ok", "walk_shot": true, "w": int(get_viewport().size.x), "h": int(get_viewport().size.y)})
 	get_tree().quit()
 
 
@@ -780,6 +813,36 @@ func _build_sand_pad(spawn: Vector3) -> float:
 				world.set_block(x, y, z, 0)
 			for y in range(h + 1, top + 3):
 				world.set_block(x, y, z, 4)
+	return float(top) + 3.0
+
+
+func _build_walk_pad(sp: Vector3, radius: int) -> float:
+	var stx := int(sp.x)
+	var stz := int(sp.z)
+	var top := -1
+	for dx in range(-radius, radius + 1):
+		for dz in range(-radius, radius + 1):
+			var h := WorldGen.terrain_height(stx + dx, stz + dz, Game.world_seed)
+			top = maxi(top, h)
+	var touched := {}
+	for dx in range(-radius, radius + 1):
+		for dz in range(-radius, radius + 1):
+			var x := stx + dx
+			var z := stz + dz
+			var h := WorldGen.terrain_height(x, z, Game.world_seed)
+			for y in range(h + 1, h + 14):
+				world.set_block(x, y, z, 0)
+			for y in range(h + 1, top + 3):
+				world.set_block(x, y, z, 4)
+			touched[world._key(int(floorf(float(x) / 16.0)), int(floorf(float(z) / 16.0)))] = true
+	world.light_dirty.clear()
+	world.light_pending.clear()
+	world.light_pending_set.clear()
+	world.fluid_dirty.clear()
+	for key in touched:
+		var c = world.chunks.get(key)
+		if c != null and c.mesh_built:
+			c.build_mesh(world.get_block, {})
 	return float(top) + 3.0
 
 
@@ -2175,7 +2238,7 @@ func _swing_test() -> void:
 			saw_mid = true
 			mid_frac = f
 		if not p.swing_active():
-			settled = p.hand_root.position.distance_to(p.HAND_BASE_POS) < 0.001
+			settled = p.hand_pose_offset().length() < 0.001
 			break
 	r["saw_mid_swing"] = saw_mid
 	r["mid_frac"] = roundf(mid_frac * 100.0) / 100.0
@@ -2194,7 +2257,7 @@ func _swing_test() -> void:
 	var punch_moved := 0.0
 	for i in range(40):
 		await get_tree().physics_frame
-		var off: float = p.hand_root.position.distance_to(p.HAND_BASE_POS)
+		var off: float = p.hand_pose_offset().length()
 		if off > punch_moved:
 			punch_moved = off
 		if not p.swing_active():
@@ -2218,7 +2281,7 @@ func _swing_test() -> void:
 		if not p.swing_active():
 			held_stayed_active = false
 		var f2: float = p.swing_frac()
-		var off2: float = p.hand_root.position.distance_to(p.HAND_BASE_POS)
+		var off2: float = p.hand_pose_offset().length()
 		if off2 > loop_max_off:
 			loop_max_off = off2
 		if f2 > 0.5:
@@ -2230,14 +2293,14 @@ func _swing_test() -> void:
 	var settle_ok := false
 	for i in 16:
 		await get_tree().physics_frame
-		if not p.swing_active() and p.hand_root.position.distance_to(p.HAND_BASE_POS) < 0.001:
+		if not p.swing_active() and p.hand_pose_offset().length() < 0.001:
 			settle_ok = true
 			break
 	r["loop_cycles_0.9s"] = cycles
 	r["loop_max_offset"] = roundf(loop_max_off * 1000.0) / 1000.0
 	r["loop_held_stayed_active"] = held_stayed_active
 	r["loop_settles_on_release"] = settle_ok
-	ok = ok and cycles >= 4 and held_stayed_active and settle_ok
+	ok = ok and cycles >= 3 and cycles <= 5 and held_stayed_active and settle_ok
 	var toolork := {}
 	var expected_type := {111: "pick", 115: "axe", 119: "shovel", 123: "sword", 113: "pick"}
 	for tid in expected_type:
@@ -2274,6 +2337,57 @@ func _swing_test() -> void:
 	r["fist_after_empty"] = p.held_fist.visible
 	r["tool_hidden_empty"] = p.held_tool.visible
 	ok = ok and r["fist_after_empty"] and not r["tool_hidden_empty"]
+	var pad_top := _build_walk_pad(world.spawn_point(), 10)
+	Debug.teleport(8.5, pad_top, 8.5)
+	for i in 24:
+		await get_tree().physics_frame
+	var w_p0: Vector3 = p.position
+	Input.action_press("move_forward")
+	var w_ymin := INF
+	var w_ymax := -INF
+	var w_xmin := INF
+	var w_xmax := -INF
+	var w_cross := 0
+	var w_prev := 0.0
+	var w_bobs0: float = p.sway_bobs()
+	var w_hvmax := 0.0
+	for i in 120:
+		await get_tree().physics_frame
+		var wo: Vector3 = p.hand_pose_offset()
+		w_hvmax = maxf(w_hvmax, Vector2(p.velocity.x, p.velocity.z).length())
+		w_ymin = minf(w_ymin, wo.y)
+		w_ymax = maxf(w_ymax, wo.y)
+		w_xmin = minf(w_xmin, wo.x)
+		w_xmax = maxf(w_xmax, wo.x)
+		if (w_prev > 0.0 and wo.y <= 0.0) or (w_prev < 0.0 and wo.y >= 0.0):
+			w_cross += 1
+		w_prev = wo.y
+	var w_p1: Vector3 = p.position
+	Input.action_release("move_forward")
+	var w_bobs: float = p.sway_bobs() - w_bobs0
+	var w_idle := 0.0
+	var w_idle_early := 0.0
+	for i in 180:
+		await get_tree().physics_frame
+		var wi: Vector3 = p.hand_pose_offset()
+		if i < 60:
+			w_idle_early = maxf(w_idle_early, wi.length())
+		else:
+			w_idle = maxf(w_idle, wi.length())
+	r["walk_idle_early_max"] = roundf(w_idle_early * 10000.0) / 10000.0
+	r["walk_bobs"] = roundf(w_bobs * 100.0) / 100.0
+	r["walk_dist"] = roundf(w_p1.distance_to(w_p0) * 100.0) / 100.0
+	r["walk_hv_max"] = roundf(w_hvmax * 100.0) / 100.0
+	r["walk_y_min"] = roundf(w_ymin * 10000.0) / 10000.0
+	r["walk_y_max"] = roundf(w_ymax * 10000.0) / 10000.0
+	r["walk_x_min"] = roundf(w_xmin * 10000.0) / 10000.0
+	r["walk_x_max"] = roundf(w_xmax * 10000.0) / 10000.0
+	r["walk_y_crossings"] = w_cross
+	r["walk_idle_max_off"] = roundf(w_idle * 100000.0) / 100000.0
+	ok = ok and w_bobs > 4.0 and w_bobs < 10.0
+	ok = ok and absf(w_bobs * 2.0 - float(w_cross)) <= 2.5
+	ok = ok and w_ymax > 0.004 and w_ymin < -0.004
+	ok = ok and w_idle < 1e-4
 	Debug.result({"ok": ok, "data": r})
 	get_tree().quit()
 

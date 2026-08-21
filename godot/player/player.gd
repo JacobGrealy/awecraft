@@ -54,6 +54,10 @@ var craft_out: Dictionary = {}
 var ui_mode := ""
 var highlight: MeshInstance3D = null
 var hand_root: Node3D = null
+var sway_root: Node3D = null
+var _sway_phase := 0.0
+var _sway_bobs := 0.0
+var _sway_speed := 0.0
 var held_box: MeshInstance3D = null
 var held_sprite: Sprite3D = null
 var held_fist: MeshInstance3D = null
@@ -70,9 +74,13 @@ const HAND_BASE_POS := Vector3(0.45, -0.42, -0.8)
 const TOOL_VOX := 0.12
 const HANDLE_C := Color(0.47, 0.33, 0.18)
 const SWORD_HANDLE_C := Color(0.52, 0.36, 0.22)
-const SWING_DURATION := 0.1
+const SWING_DURATION := 0.2
 const SWING_ITEM := 0
 const SWING_PUNCH := 1
+const SWAY_PHASE_K := 0.93
+const SWAY_AMP_Y := 0.015
+const SWAY_AMP_X := 0.006
+const SWAY_SMOOTH := 10.0
 var _swing_active := false
 var _swing_held := false
 var _swing_t := 0.0
@@ -112,6 +120,7 @@ func _process(dt: float) -> void:
 		_update_held(int(it["id"]), int(it["n"]))
 	_update_swing_loop()
 	_update_swing(dt)
+	_update_sway(dt)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -342,9 +351,11 @@ func _build_highlight() -> void:
 func _build_held() -> void:
 	if camera == null:
 		return
+	sway_root = Node3D.new()
+	sway_root.position = HAND_BASE_POS
+	camera.add_child(sway_root)
 	hand_root = Node3D.new()
-	hand_root.position = HAND_BASE_POS
-	camera.add_child(hand_root)
+	sway_root.add_child(hand_root)
 	var mesh := BoxMesh.new()
 	held_box = MeshInstance3D.new()
 	held_box.mesh = mesh
@@ -613,18 +624,42 @@ func _apply_swing(frac: float) -> void:
 		_reset_hand_pose()
 		return
 	if _swing_kind == SWING_PUNCH:
-		hand_root.position = Vector3(HAND_BASE_POS.x - 0.12 * a, HAND_BASE_POS.y + 0.03 * a, HAND_BASE_POS.z - 0.34 * a)
+		hand_root.position = Vector3(-0.12 * a, 0.03 * a, -0.34 * a)
 		hand_root.rotation = Vector3(-0.12 * a, 0.0, 0.12 * a)
 	else:
-		hand_root.position = Vector3(HAND_BASE_POS.x, HAND_BASE_POS.y - 0.16 * a, HAND_BASE_POS.z - 0.08 * a)
+		hand_root.position = Vector3(0.0, -0.16 * a, -0.08 * a)
 		hand_root.rotation = Vector3(-1.25 * a, 0.0, 0.4 * a)
 
 
 func _reset_hand_pose() -> void:
 	if hand_root == null:
 		return
-	hand_root.position = HAND_BASE_POS
+	hand_root.position = Vector3.ZERO
 	hand_root.rotation = Vector3.ZERO
+
+
+func hand_pose_offset() -> Vector3:
+	if sway_root == null or hand_root == null:
+		return Vector3.ZERO
+	return sway_root.position + hand_root.position - HAND_BASE_POS
+
+
+func sway_bobs() -> float:
+	return _sway_bobs
+
+
+func _update_sway(dt: float) -> void:
+	if sway_root == null or hand_root == null:
+		return
+	var hspeed := Vector2(velocity.x, velocity.z).length()
+	_sway_speed = lerpf(_sway_speed, hspeed, minf(1.0, SWAY_SMOOTH * dt))
+	if hspeed > 0.05:
+		var step := hspeed * dt * SWAY_PHASE_K
+		_sway_phase = fmod(_sway_phase + step, 1.0)
+		_sway_bobs += step
+	var amp := clampf(_sway_speed / WALK, 0.0, 1.0)
+	var off := Vector3(SWAY_AMP_X * amp * sin(_sway_bobs * PI), SWAY_AMP_Y * amp * sin(_sway_phase * TAU), 0.0)
+	sway_root.position = HAND_BASE_POS + off
 
 
 func aim_dir() -> Vector3:
