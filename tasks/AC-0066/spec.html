@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AC-0066 — held-item fidelity (cross sprites + full-UV blocks)</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:980px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:18px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:12.5px}li{margin:3px 0}</style></head><body>
+<h1>AC-0066 — Viewmodel: held items must match their world form</h1>
+<p>User 2026-08-21: "the object like flowers that are rendered in 2d should also be rendered in the same way when you hold them instead of as a block. Also, for blocks that you hold, they should look the same as the big blocks just with the entire block scaled down, currently only part of the texture shows on the block and they look different than the blocks in the world."</p>
+<h2>Root cause (coordinator-verified)</h2>
+<p><code>player.gd:357-427</code>: <code>held_box</code> is a single <b>BoxMesh</b> scaled 0.35 with ONE <code>StandardMaterial3D</code> material_override (built in <code>_held_mat</code>, :441) — one icon-ish texture stretched over all 6 faces, so (a) flowers/cross blocks show as a SOLID cube and (b) normal blocks show only part/a single crop of the texture on every face, not the per-face world tiles. <code>held_sprite</code> (Sprite3D billboard) is only used for non-block items (items 100+), NOT for block/cross ids.</p>
+<h2>Requirement</h2>
+<ul>
+<li><b>(a) Cross/billboard blocks (flowers 18/19, any <code>cross:true</code> block, leaves-if-cross):</b> when held, render the <b>same cross shape the world chunks use</b> (two crossed quads), scaled down (≈ same scale as held_box, 0.35), with the real atlas tile + <code>Data.block_tint</code>, same alpha behavior as the world cross/leaf material. Never a solid box.</li>
+<li><b>(b) Normal solid blocks held:</b> the held block must look like the world block scaled down — each of the 6 faces must show the <b>ENTIRE per-face tile</b> (top face → block's "top" tile, side faces → "side" tile, bottom → "bottom" tile), exactly like chunk meshing, not a partial crop or one texture on all faces. Implement by building a small 1×1×1 box <b>ArrayMesh</b> whose per-face-group UVs come from <code>Data.block_rect(id, face_name)</code> (the same API chunk.gd uses in <code>_face_rect</code>/:108-131) + <code>Data.atlas_tex</code>, per-face vertex-color tint via <code>Data.block_tint(id, face_name)</code> the same way chunk.gd applies it (:249). Cache the mesh per block id.</li>
+<li><b>Scope guard:</b> DO NOT redo the held <b>tool</b> voxel models (pick/axe/shovel/sword) — that's AC-0070's job. Keep the existing tool voxel path (<code>_setup_held_tool</code>) working as-is; only touch the block + cross-item held rendering. Keep the AC-0060 sway + AC-0048 swing driving <code>hand_root</code> (everything must keep swaying/swinging). <code>held_sprite</code> behavior for pure-items (100+) and <code>held_fist</code> (empty hand) stay.</li>
+<li><b>Positioning/scale:</b> keep the current held offset/scale so the hand still reads naturally (0.35 scale is fine; tweak slightly only if a full-UV face looks too small — but do NOT move the hand position).</li>
+</ul>
+<h2>Verification (headless-first; keep renders minimal — the held shot is the key one)</h2>
+<ul>
+<li><b>G1:</b> <code>--headless --quit</code> → 0 script errors.</li>
+<li><b>G2:</b> full AWECRAFT_LOGIC battery → green except known pre-existing <code>fpv tool_held_ok:false</code>; 0 script errors; guiclick/craft unchanged.</li>
+<li><b>G3 (headless asserts, new hook):</b> extend/add an <code>AWECRAFT_HELD</code>-driven probe (there's already <code>AWECRAFT_HELD</code> in main.gd:~785 and <code>_fpv_test</code>:3277): for a few block ids, when selected, assert (a) the held node's mesh face-group UVs span the FULL per-face tile rect from <code>Data.block_rect</code> (assert UV width/height ≈ the full tile rect dimensions, i.e. not a partial crop), (b) a cross block (18/19) held mesh is a CROSS (4 triangles / 2 quads, non-box) and uses the atlas tile + tint, (c) a solid block held mesh is 12 triangles (box) with correct top/side uv source ids. Print a <code>RESULT {...}</code> with those booleans.</li>
+<li><b>G4 (render):</b> one iso/FPV shot per a couple of held ids — a normal block (e.g. grass/stone) and a flower — via the existing held-shot harness (AWECRAFT_HELD or an FPV snapshot). Save to <code>tasks/AC-0066/held_block.png</code> + <code>tasks/AC-0066/held_flower.png</code>. View them (you have image access): the held block must show distinct top/side tiles like the world (grassy top vs dirt side for grass), and the flower must be a cross/plant, not a cube.</li>
+<li><b>G5:</b> <code>./build_web.sh</code> → 0; browser (playwright, https://localhost:8443, daemon 411476 do NOT kill) held-flower + held-block shot (<code>tasks/AC-0066/web_held_*.png</code>); 0 console errors.</li>
+</ul>
+<h2>Scope fence</h2>
+<p>Only held block + cross-item rendering (player.gd held path + a small per-face UV mesh builder, possibly a helper in <code>core/</code>). No tool-voxel (AC-0070), no on-top/depth (AC-0067), no lighting (AC-0035), no chunk/world changes, no git, no renders beyond G4/G5. Keep hand sway/swing intact.</p>
+<h2>Deliverables</h2>
+<p>Code + <code>tasks/AC-0066/AC-0066-results.html</code> (G3 RESULT json + before/after held shots + deviations) + report ≤20 lines.</p>
+</body></html>
