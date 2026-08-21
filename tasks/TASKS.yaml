@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-21T08:49
+  updated_at: 2026-08-21T10:20
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -21,6 +21,13 @@ queue:
 - AC-0031
 - AC-0032
 - AC-0033
+- AC-0062
+- AC-0063
+- AC-0064
+- AC-0065
+- AC-0066
+- AC-0067
+- AC-0068
 - AC-0034
 - AC-0035
 - AC-0036
@@ -33,6 +40,7 @@ queue:
 - AC-0054
 - AC-0055
 - AC-0053
+- AC-0069
 - AC-0061
 intake:
 - id: AC-0001
@@ -859,7 +867,8 @@ intake:
   parent_id: null
   notes: 'Bake per-voxel light into mesh vertex colors (Lighting from AC-0005 ready) + web uDay terrain uniform + stars. BUNDLED
     (user 2026-08-21, do after AC-0033+AC-0034): viewmodel lighting — held block/item/hand must darken with the light level
-    at the player (caves/night).'
+    at the player (caves/night). BUNDLED 2 (user 2026-08-21): the player should emit a small amount of light so it is never
+    completely pitch black near them.'
   comments:
   - id: 1
     created_at: 2026-08-16 20:00T12:00
@@ -1550,3 +1559,188 @@ intake:
     (c) cap renders+shots per task to the minimum in specs, (d) browser gates only for web/UI-affecting changes, lower viewport,
     one session for all gates. No rigor reduction: zero-script-errors + RESULT gates + before/after pixels stay.'
   comments: []
+- id: AC-0062
+  title: save-continue-multi-slot
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-21T10:20
+  updated_at: 2026-08-21T10:20
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Main menu: save/continue support the phase-2 menu did NOT include (user 2026-08-21: ''if the menu work we just did
+    didn''t include saving and continuing, implement that next''). Multiple save slots: save on quit/pause, choose slot on
+    menu (new/continue per slot), seed/progress persistence of world edits + player state. user:// storage (web IndexedDB).'
+  comments:
+  - id: 1
+    created_at: 2026-08-21T10:20
+    updated_at: null
+    text: '[user] if the menu work we just did didn''t include saving and continuing, implement that next. Make sure it supports
+      multiple save slots.'
+- id: AC-0063
+  title: menu-gameplay-hunger-off
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-21T10:20
+  updated_at: 2026-08-21T10:20
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Options menu: add a Gameplay section with a toggle to turn hunger off (no drain, no starve), persisted with the
+    rest of the settings.'
+  comments:
+  - id: 1
+    created_at: 2026-08-21T10:20
+    updated_at: null
+    text: '[user] add an option to the menu under gameplay to turn off hunger'
+- id: AC-0064
+  title: hearts-heart-graphics
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-21T10:20
+  updated_at: 2026-08-21T10:20
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'BUG (user 2026-08-21, visible in tasks/AC-0033/p2_paused.png): the health hearts do not display as heart graphics
+    - they render as plain filled squares. Draw real heart shapes (MC heart icon texture from the mcpack if present, else
+    vector heart) for full/half/empty states, MC-style row above the hotbar.'
+  comments:
+  - id: 1
+    created_at: 2026-08-21T10:20
+    updated_at: null
+    text: '[user] the hearts for health have an issue, they do not show as heart graphics'
+- id: AC-0065
+  title: hunger-food-icons-mc
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-21T10:20
+  updated_at: 2026-08-21T10:20
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'HUD: the hunger bar should use food icons like Minecraft (drumstick style), not a red bar. Pull a Minecraft HUD
+    reference screenshot (webfetch minecraft.wiki/HUD or similar, save into the task folder) and match the layout: hearts
+    row + hunger row above the hotbar.'
+  comments:
+  - id: 1
+    created_at: 2026-08-21T10:20
+    updated_at: null
+    text: '[user] the hunger bar should be food icons like in minecraft, pull down a screenshot of minecraft and make it look
+      like that'
+- id: AC-0066
+  title: viewmodel-held-fidelity
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-21T10:20
+  updated_at: 2026-08-21T10:20
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Viewmodel fidelity (user 2026-08-21): (a) cross-type items (flowers etc. - 2D billboard blocks) must render as the
+    SAME billboard/cross sprite when held, not as a solid block; (b) held blocks must look like the world block scaled down
+    with the ENTIRE texture per face visible (today only part of the texture shows so held blocks look different from world
+    blocks) - build the held block from the same per-face UV/atlas logic as chunk meshing, scaled.'
+  comments:
+  - id: 1
+    created_at: 2026-08-21T10:20
+    updated_at: null
+    text: '[user] the object like flowers that are rendered in 2d should also be rendered in the same way when you hold them
+      instead of as a block. Also, for blocks that you hold, they should look the same as the big blocks just with the entire
+      block scaled down, currently only part of the texture shows on the block and they look different then the blocks in
+      the world'
+- id: AC-0067
+  title: viewmodel-always-on-top
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-21T10:20
+  updated_at: 2026-08-21T10:20
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Viewmodel depth (user 2026-08-21): the hand / anything held must ALWAYS render on top of the environment (never
+    obscured/occluded by blocks) - MC-style. (Note: this interacts with AC-0035 viewmodel lighting - lighting must darken
+    the held item, but depth must still stay on top.)'
+  comments:
+  - id: 1
+    created_at: 2026-08-21T10:20
+    updated_at: null
+    text: '[user] the hand / anything held in hand should always render on top of the enviroment (ie the block you are holding
+      should not be obscured by the enviroment)'
+- id: AC-0068
+  title: water-column-fill-spread
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-21T10:20
+  updated_at: 2026-08-21T10:20
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Water sim rework to MC behavior (user 2026-08-21, spec = https://minecraft.wiki/w/Water - READ IT): water must never
+    have empty space below it - water fills all the way down until it meets terrain blocks; when falling water reaches the
+    next block it should SPREAD/flow out at the bottom (source+flow levels, level decay). Reconcile tick_fluids with the wiki
+    rules (source blocks, flow distance 7, level decay, spread on landing) and keep the fluids/buckets logics green.'
+  comments:
+  - id: 1
+    created_at: 2026-08-21T10:20
+    updated_at: null
+    text: '[user] for water, it should never have empty space below it, there should be water all the way down until there
+      are terrain blocks. If it falls in this way it should spread out at the bottom where it meets the next block. Read this
+      to learn how water should work: https://minecraft.wiki/w/Water'
+- id: AC-0069
+  title: controller-support
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-08-21T10:20
+  updated_at: 2026-08-21T10:20
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Controller (gamepad) support: map standard gamepad buttons (stick look, left stick move, face buttons mine/place/interact,
+    D-pad/RT hotbar, start pause menu) with InputMap; menus navigable with a controller. Scope-check Godot 4 InputMap + Joypad
+    API; headless verify via Input.action_press simulation; document in results.'
+  comments:
+  - id: 1
+    created_at: 2026-08-21T10:20
+    updated_at: null
+    text: '[user] Add a task for adding controller support'

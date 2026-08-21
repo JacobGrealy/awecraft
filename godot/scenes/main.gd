@@ -86,22 +86,26 @@ func _ready() -> void:
 		return
 
 	var menu_boot := OS.get_environment("AWECRAFT_MENU_BOOT") == "1"
-	if logic != "" or (snapshot_path != "" and not menu_boot):
+	if logic != "":
+		await _run_game(seed_env, logic, cam, snapshot_path)
+		return
+	if (snapshot_path != "" or _harness_env_set()) and not (menu_boot and snapshot_path != ""):
 		await _run_game(seed_env, logic, cam, snapshot_path)
 		return
 
-	var headless_sanity := DisplayServer.get_name() == "headless" \
-		and logic == "" and snapshot_path == "" and not menu_boot
-	# menu render bug (invisible CanvasLayer UI) — menu boot is env-gated until fixed
-	var want_menu := OS.has_feature("desktop") and not headless_sanity \
-		and OS.get_environment("AWECRAFT_MENU") == "1"
+	var headless_idle := DisplayServer.get_name() == "headless" \
+		and logic == "" and snapshot_path == "" and not menu_boot and not _harness_env_set()
+	# menu-first boot on every display platform (desktop + web); AWECRAFT_MENU=0 = explicit game-first skip
+	var want_menu := not headless_idle and OS.get_environment("AWECRAFT_MENU") != "0"
 	if want_menu:
 		await _boot_menu()
 		if menu_boot:
 			await menu_ui.play_clicked()
-			if snapshot_path != "":
+			if OS.get_environment("AWECRAFT_PAUSE_SHOT") == "1":
+				await _pause_shot_finish()
+			elif snapshot_path != "":
 				await _snapshot_finish(cam)
-	elif not headless_sanity:
+	elif not headless_idle:
 		await _run_game(seed_env, logic, cam, snapshot_path)
 
 
@@ -131,10 +135,43 @@ func _create_game_nodes() -> void:
 	Game.hotbar = inventory_ui
 
 
+const HARNESS_ENVS := [
+	"AWECRAFT_LOGIC", "AWECRAFT_SNAPSHOT", "AWECRAFT_INV", "AWECRAFT_FLUID_SHOT", "AWECRAFT_CAM",
+	"AWECRAFT_HELD", "AWECRAFT_WALK_SHOT", "AWECRAFT_EMPTYHAND", "AWECRAFT_SWING", "AWECRAFT_FPV_ITEM",
+	"AWECRAFT_ANIM_SHOT", "AWECRAFT_PROBE", "AWECRAFT_BCELL", "AWECRAFT_MESH_INFO", "AWECRAFT_ONLY",
+	"AWECRAFT_DBG", "AWECRAFT_SETTLE_TICKS", "AWECRAFT_SEED", "AWECRAFT_TIME", "AWECRAFT_ANIM_PHASE",
+	"AWECRAFT_SIZE",
+]
+
+
+func _harness_env_set() -> bool:
+	for e in HARNESS_ENVS:
+		if OS.get_environment(e) != "":
+			return true
+	return false
+
+
 func _boot_menu() -> void:
 	await get_tree().process_frame
 	_setup_menu_camera()
 	_make_menu()
+
+
+func _pause_shot_finish() -> void:
+	var snapshot_path := OS.get_environment("AWECRAFT_SNAPSHOT")
+	var spawn: Vector3 = world.spawn_point()
+	await _await_world_build(spawn, 3000)
+	for i in 6:
+		await get_tree().physics_frame
+	var ke := InputEventKey.new()
+	ke.physical_keycode = KEY_P
+	ke.pressed = true
+	Input.parse_input_event(ke)
+	for i in 8:
+		await get_tree().physics_frame
+	await Debug.snap(snapshot_path)
+	Debug.result({"pause_shot": true, "mode": Game.mode, "w": int(get_viewport().size.x), "h": int(get_viewport().size.y)})
+	get_tree().quit()
 
 
 func _setup_menu_camera() -> void:
@@ -240,6 +277,10 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		_settings_test()
 		get_tree().quit()
 		return
+	if _harness_env_set():
+		OS.set_environment("AWECRAFT_IGNORE_SETTINGS", "1")
+		Settings.load_settings()
+		OS.set_environment("AWECRAFT_IGNORE_SETTINGS", "")
 	_create_game_nodes()
 
 	if OS.get_environment("AWECRAFT_PROBE") != "":

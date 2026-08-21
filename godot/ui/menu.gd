@@ -61,7 +61,7 @@ func _ready() -> void:
 func _unhandled_input(event) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		var kc: int = int(event.physical_keycode)
-		if kc != int(KEY_ESCAPE):
+		if kc != int(KEY_ESCAPE) and kc != int(KEY_P) and event.action != "ui_pause":
 			return
 		if options_box.visible:
 			close_options()
@@ -98,6 +98,14 @@ func open_options(source: String) -> void:
 	if options_box != null:
 		options_box.visible = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	print("OPTSYNC from=%s render=%d sim=%d vol=%d res=%s full=%s" % [
+		source,
+		int(Settings.values["render_dist"]),
+		int(Settings.values["sim_dist"]),
+		int(Settings.values["volume"]),
+		String(Settings.values["resolution"]),
+		bool(Settings.values["fullscreen"]),
+	])
 
 
 func close_options() -> void:
@@ -319,7 +327,7 @@ func _build_main() -> void:
 	vb.add_child(packb)
 	vb.add_child(main_status)
 	var help := Label.new()
-	help.text = "WASD move · Space jump/swim · F fly · G day/night · Left click mine/attack · Right click place/use · E inventory · 1-9/scroll select · Esc pause"
+	help.text = "WASD move · Space jump/swim · F fly · G day/night · P pause · Left click mine/attack · Right click place/use · E inventory · 1-9/scroll select"
 	help.add_theme_font_size_override("font_size", 12)
 	help.add_theme_color_override("font_color", HELP_C)
 	help.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -344,6 +352,12 @@ func _build_pause() -> void:
 	vb.add_child(_mk_btn("Back to Game", _on_resume_btn_pressed))
 	vb.add_child(_mk_btn("Options", func(): open_options("pause")))
 	vb.add_child(_mk_btn("Quit to Menu", _on_quit_btn_pressed))
+	var hint := Label.new()
+	hint.text = "P or Esc resumes"
+	hint.add_theme_font_size_override("font_size", 12)
+	hint.add_theme_color_override("font_color", HELP_C)
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(hint)
 
 
 func _options_row(vb: VBoxContainer, label_text: String, slider: HSlider, val: Label) -> void:

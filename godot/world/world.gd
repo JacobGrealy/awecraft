@@ -67,7 +67,7 @@ func _ready() -> void:
 
 
 func _on_fluid_tick() -> void:
-	if fluid_sim_enabled and Game.mode == "play":
+	if fluid_sim_enabled and (Game.mode == "play" or Game.mode == "pause"):
 		tick_fluids()
 
 

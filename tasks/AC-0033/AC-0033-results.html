@@ -1,0 +1,92 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AC-0033 — main menu + options: FINAL results</title>
+<style>body{font-family:system-ui,'Segoe UI',sans-serif;margin:24px 40px;max-width:1000px;line-height:1.5;color:#1b232f}
+h1{font-size:20px}h2{font-size:15px;margin-top:22px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}
+code,pre{background:#eef1f6;border-radius:3px;font-size:13px}pre{padding:8px;overflow:auto}
+img{max-width:640px;border:1px solid #cdd6e3;border-radius:4px;display:block;margin:10px 0}
+table{border-collapse:collapse;font-size:13px}td,th{border:1px solid #cdd6e3;padding:4px 10px;text-align:left}
+.ok{color:#0a7a2f;font-weight:600}.bad{color:#b3211b;font-weight:600}</style></head><body>
+<h1>AC-0033 — main menu + options menu: FINAL results (Phase 1 + Phase 2)</h1>
+<p>2026-08-21 · Phase 1 = menu-invisible render bug root-caused + fixed · Phase 2 = menu-first boot flip, P pause, options end-to-end, build version, web browser gates. Web rebuilt (stamp <code>20260821-743ac30</code>).</p>
+
+<h2>Phase 1 — root cause (recap)</h2>
+<p>Two independent wiring bugs made the menu invisible under Xvfb/llvmpipe (uniform 77,77,77 frame): (1) <code>menu.gd</code> built <code>main_box</code>/<code>pause_box</code>/<code>options_box</code> as dangling references — <code>add_child()</code> was never called, so nothing 2D was in the tree; (2) the menu path never created a <code>Camera3D</code>, so the root viewport ran no 3D pass and collapsed to the default clear color (0.3,0.3,0.3) = (77,77,77). Fix: 13 lines in 2 files (boxes added in <code>_ready</code>; idempotent <code>_setup_menu_camera()</code> in <code>main.gd</code>). Aero grade/sky ruled out by A/B (<code>AWECRAFT_AERO=0</code> still gray). Detail in <code>AC-0033-phase1.html</code>.</p>
+
+<h2>Phase 2 — what changed</h2>
+<ul>
+<li><b>Menu-first default boot (desktop AND web)</b> — <code>main.gd</code> <code>_ready</code>: any real display platform (headless excluded) boots the main menu unless <code>AWECRAFT_MENU=0</code> (explicit game-first skip, verified by run). <code>play_clicked</code> → existing <code>start_game(Settings seed)</code> path; seed LineEdit + New World intact.</li>
+<li><b>Harness bypass</b> — new <code>HARNESS_ENVS</code> list + <code>_harness_env_set()</code>: <code>AWECRAFT_LOGIC</code>, <code>AWECRAFT_SNAPSHOT</code>, <code>AWECRAFT_INV</code>, <code>AWECRAFT_FLUID_SHOT</code>, <code>AWECRAFT_CAM</code>, <code>AWECRAFT_HELD</code>, <code>AWECRAFT_WALK_SHOT</code>, <code>AWECRAFT_EMPTYHAND</code>, <code>AWECRAFT_SWING</code>, <code>AWECRAFT_FPV_ITEM</code>, <code>AWECRAFT_ANIM_SHOT</code>, <code>AWECRAFT_PROBE</code>, <code>AWECRAFT_BCELL</code>, <code>AWECRAFT_MESH_INFO</code>, <code>AWECRAFT_ONLY</code>, <code>AWECRAFT_DBG</code>, <code>AWECRAFT_SETTLE_TICKS</code>, <code>AWECRAFT_SEED</code>, <code>AWECRAFT_TIME</code>, <code>AWECRAFT_ANIM_PHASE</code>, <code>AWECRAFT_SIZE</code> all start straight into the game. Verified by running the full 22-mode battery after the flip. <code>_run_game</code> now loads default (deterministic) settings when any harness env is set, so user settings can't drift harness numbers.</li>
+<li><b>In-game pause = P</b> (user 2026-08-21: browser owns Esc; P is the default bind on all platforms). <code>ui_pause</code> input action added to <code>project.godot</code> (physical P). <code>player.gd</code>: P (or <code>ui_pause</code> action) while playing, inventory closed, not dead → <code>Game.pause()</code> → existing <code>pause_box</code> shown via the mode watcher in <code>main.gd</code>. While open: player physics/look/mine locked (<code>Game.mode != "play"</code> gates, already in place). <b>What keeps running — matched to the frozen web</b> (index.html:3217 loop gate <code>state==='play'||state==='pause'||state==='dead'</code>): sky, <code>updateWorldStreaming</code> (chunk recenter/mesh drain), fluids (<code>tickFluids</code>; <code>world.gd</code> fluid timer now ticks in <code>pause</code> mode too), atlas anims — while player/mob/drop/attack update is stopped (index.html:3224 gates those on <code>state==='play'</code> only). Esc/E keep inventory-close; Esc and P both close pause menu (menu.gd). "P pause" in the main-menu help line; "P or Esc resumes" hint under the pause buttons. No key-rebinding UI.</li>
+<li><b>Options end-to-end</b> (code existed; now exercised in the flipped flow): render-distance slider 1–8 → <code>Settings.apply_render_distance()</code> = world render radius + <code>recenter()</code>; sim-distance slider (chunks, internal ±n×16 blocks) → <code>fluid_tick_radius</code>; volume slider → Master bus linear db; texture-pack apply = existing <code>Atlas.import_pack</code> file-dialog pipeline (desktop); fullscreen toggle + resolution dropdown (1280x720 / 1600x900 / 1920x1080 / 2560x1440 + current) → <code>Window</code> mode/size. PERSISTENCE: <code>user://awecraft.cfg</code> ConfigFile, loaded at boot, saved on every change — verified headless (round-trip) and in the browser (value survives page reload → IndexedDB on web).</li>
+<li><b>Build version</b> — mechanism was already wired (build_web.sh rewrites <code>godot/core/build_id.gd</code> around the export, restores <code>"dev"</code> after; fallback "dev" in-tree). Menu shows <code>AweCraft[&lt;Build.ID&gt;]</code>; web build stamped <code>20260821-743ac30</code> and displays it (web menu screenshot below).</li>
+<li><b>Finding</b>: <code>OS.has_feature("desktop")</code> is <code>false</code> under xvfb-llvmpipe (only <code>linuxbsd</code>; verified with a standalone probe) — the old menu gate would have silently run game-first in CI-style renders. New gate = "not headless AND not <code>AWECRAFT_MENU=0</code>", which covers desktop + web correctly.</li>
+</ul>
+
+<h2>G1 — headless zero script errors</h2>
+<pre>~/tools/godot/godot --headless --path godot --quit
+→ 0 SCRIPT ERROR (re-run after every code change, incl. final state)</pre>
+
+<h2>G2 — full logic battery (headless, post-flip; 22/22 green, 0 script errors)</h2>
+<table>
+<tr><th>mode</th><th>key assertions (RESULT)</th></tr>
+<tr><td>player</td><td>horizontal_moved 2.82, jump_peak_y 36.43, is_on_floor true</td></tr>
+<tr><td>interact</td><td>breakable_id 2, drop_spawned true, place_ok true</td></tr>
+<tr><td>light</td><td>torch_level 14, surface_eff 15, cave_eff 0</td></tr>
+<tr><td>fluids</td><td>sea_stable true, water_on_lava_result 25, sideways_lava_result 9</td></tr>
+<tr><td>buckets</td><td>scoop_before [5,8] → [0,0], inv 140↔139</td></tr>
+<tr><td>craft</td><td>ok:true — A/B/C/D flow + armor equip/swap/unequip + table sword</td></tr>
+<tr><td>guiclick</td><td>ok:true — all P/R/C1/C2 row + drag gates</td></tr>
+<tr><td>swing</td><td>ok:true — 4 tool types, tier tints, loop_cycles_0.9s 3, walk_bobs 7.82</td></tr>
+<tr><td>look</td><td>ok:true — LMB-drag + locked pointer deltas</td></tr>
+<tr><td>combat</td><td>ok:true — bare-hand 1 dmg (hp 3.0), weapon_dmg 4, cooldown, death drops</td></tr>
+<tr><td>water</td><td>ok:true — above_top true, standing_on_shore true</td></tr>
+<tr><td>fpv</td><td>ok gates true; <code>tool_held_ok:false</code> = KNOWN PRE-EXISTING (unchanged)</td></tr>
+<tr><td>tint</td><td>ok:true — per-biome grass/snow/sand/leaf/water colors</td></tr>
+<tr><td>daynight</td><td>ok:true — 5006 ms cycle, 0.00842 vs expected 0.00834</td></tr>
+<tr><td>atlas</td><td>grass_distinct true, has_uv true, uv in range</td></tr>
+<tr><td>fluidsettle</td><td>ticks_to_settle 12, quiet 3, water_final 9925</td></tr>
+<tr><td>settings</td><td>ok:true — before 4 → saved 5 → reloaded 5, volume 37 round-trip, restored</td></tr>
+<tr><td>survival</td><td>ok:true — hunger drain/regen/starve, armor DR 2.0, eating, respawn</td></tr>
+<tr><td>editperf</td><td>flush_frames 9, max_frame_build_ms 60</td></tr>
+<tr><td>perf</td><td>all_meshed true, chunks 81, max_frame_ms 63, fog_ok true</td></tr>
+<tr><td>genhash</td><td>25/25 MD5 hashes, re-run bit-identical (deterministic gate by design prints hashes, no RESULT)</td></tr>
+<tr><td>trees</td><td>ok:true — genhash_gate true, flora samples, per-chunk determinism 25/25</td></tr>
+</table>
+<p class="ok">The harness envs start straight into the game in every mode above (proven: each ran its scenario and printed its RESULT). <code>AWECRAFT_MENU=0</code> explicit skip also verified: render returned <code>{"m4":"ok","w":1280,"h":720}</code> game-first with 0 script errors.</p>
+
+<h2>G3 — desktop shots (xvfb/llvmpipe, all 0 script errors)</h2>
+<p><code>AWECRAFT_MENU_SHOT</code> → p2_menu_main.png (863 distinct; MENU_BG (14,14,20)×707 848; white title (255,255,255)×2 485) ·
+<code>AWECRAFT_MENU_SHOT</code>+<code>AWECRAFT_MENU_VIEW=options</code> → p2_menu_options.png (540 distinct; panel over dimmed menu) ·
+<code>AWECRAFT_MENU_BOOT=1 AWECRAFT_PAUSE_SHOT=1 AWECRAFT_SNAPSHOT</code> + <code>AWECRAFT_NO_FOG=1 AWECRAFT_RADIUS=2</code> → p2_paused.png (3 045 distinct; world+HUD behind overlay; RESULT <code>{"pause_shot":true,"mode":"pause","w":1280,"h":720}</code>).</p>
+<img src="p2_menu_main.png" alt="main menu: title, build, seed+New World, Play, Options, pack, help line">
+<p>p2_menu_main.png — menu (note help line now says "P pause")</p>
+<img src="p2_menu_options.png" alt="options panel over dimmed menu">
+<p>p2_menu_options.png — options: render 4 / sim 1 / volume 100 / 1280x720 / fullscreen / pack / Back</p>
+<img src="p2_paused.png" alt="pause menu over world">
+<p>p2_paused.png — P pressed after menu→Play: pause box over R=2 world (terrain, trees, water, hearts, hotbar), "P or Esc resumes" hint</p>
+
+<h2>G4 — web build + browser (Playwright, https://localhost:8443, 1920x1080, fresh profile per run)</h2>
+<p><code>./build_web.sh</code> → exit 0; pck 366 858 B; <code>build_id.gd</code> stamped <code>20260821-743ac30</code> at export, restored to <code>"dev"</code> after (tree stays clean). Timeline: canvas 1 s → <b>menu at 12 s</b> (Play reached → world at 31 s) → P → pause overlay (dimmed sky (4,48,71) = 255×0.28 overlay, title bright_frac 0.067) → in-game Options (<code>OPTSYNC from=pause render=4 sim=1 vol=100</code>) → render slider 4→<b>6</b> (value label redraws) → Esc → reload → menu at 87 s → Options again: <b><code>OPTSYNC from=main render=6 sim=1 vol=100</code></b> = <span class="ok">persisted across reload (user:// → IndexedDB)</span>. Console: 0 errors, 0 pageerrors (only 8 log lines, incl. the 2 OPTSYNC diagnostics). Web menu shows <code>AweCraft[20260821-743ac30]</code>.</p>
+<img src="p2_web_menu.png" alt="web main menu with build stamp">
+<p>p2_web_menu.png — web boots into the menu; build stamp <code>AweCraft[20260821-743ac30]</code> visible; "P pause" in help line</p>
+<img src="p2_web_playing.png" alt="web world after clicking Play">
+<p>p2_web_playing.png — after clicking Play, world streaming (aero sky + terrain)</p>
+<img src="p2_web_paused.png" alt="web pause menu after P">
+<p>p2_web_paused.png — P in the browser: dimmed world + pause box (works on web too, where Esc is owned by the browser)</p>
+<img src="p2_web_options.png" alt="in-game options from pause">
+<p>p2_web_options.png — pause → Options in-game (over dimmed world)</p>
+<img src="p2_web_options_set6.png" alt="render distance set to 6">
+<p>p2_web_options_set6.png — render-distance moved to 6 in-game</p>
+<img src="p2_web_options_persist.png" alt="options after page reload, value persisted">
+<p>p2_web_options_persist.png — after page reload, menu → Options: render distance still 6 (console <code>OPTSYNC from=main render=6</code> = persistence proof)</p>
+
+<h2>Deviations / notes</h2>
+<ul>
+<li><b>P vs Esc pause:</b> frozen web pauses on pointer-lock loss (Esc in desktop browsers). Per the user directive (2026-08-21) the in-game pause key is <b>P</b> on all platforms (the browser owns Esc); Esc still closes the pause menu in the port, and the web's Esc-while-locked exit is not reproduced on web (documented). Pause-state running/suspended set matches the web loop exactly (fluids/sky/streaming/atlas-anim run; player/mobs/drops stop).</li>
+<li><b>Sim-distance:</b> slider is chunk-granular (1–8), applies ±(n×16) blocks to the fluid tick region; default 1 chunk (16 blocks) vs the old hardcoded 14 — ±2 blocks, documented approximation of "default ±14".</li>
+<li><b>Web texture pack:</b> button present but disabled with tooltip — in-memory pack swap (re-import + live atlas swap from a browser file pick) is not implemented in this build; desktop path (file dialog → <code>Atlas.import_pack</code> → apply) is fully working. <code>Atlas.import_pack_mem(PackedByteArray)</code> already exists as the in-memory entry point for a follow-up.</li>
+<li><b>Web fullscreen:</b> checkbox persisted and applied to the embedded window; browsers typically ignore programmatic fullscreen/resize on the Godot canvas without user gesture — cosmetic limitation of the web embedding, state still persists.</li>
+<li>New env hook <code>AWECRAFT_PAUSE_SHOT=1</code> (with <code>AWECRAFT_MENU_BOOT=1 AWECRAFT_SNAPSHOT=path</code>) = menu→Play→P→snapshot harness. <code>OPTSYNC</code> print on options open is a permanent diagnostic (env-hook pattern).</li>
+<li>Pre-existing render-run notices unchanged: ALSA ERR_CANT_OPEN (dummy audio), one atlas ERR_CANT_OPEN (data.gd:64), RID leak warnings at forced quit.</li>
+<li>Phase-1 before/evidence files (menu-main.png, menu-options.png, playing.png, menu-to-game*) kept untouched.</li>
+</ul>
+</body></html>

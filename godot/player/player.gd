@@ -173,11 +173,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			hold_swing(0.5)
 		elif kc == int(KEY_K):
 			clear_swing()
+		elif kc == int(KEY_P) or event.action == "ui_pause":
+			if ui_mode == "" and not dead:
+				Game.pause()
 		elif kc == int(KEY_ESCAPE):
 			if ui_mode != "":
 				close_inventory()
-			elif not dead and OS.has_feature("desktop") and OS.get_environment("AWECRAFT_MENU") == "1":
-				Game.pause()
 		elif ui_mode == "" and kc >= int(KEY_1) and kc <= int(KEY_9):
 			sel = int(kc - int(KEY_1))
 
