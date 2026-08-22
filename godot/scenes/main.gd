@@ -674,6 +674,12 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			_fluids_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "fluidprobe":
+			world.collision_enabled = false
+			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
+			_fluidprobe_test()
+			get_tree().quit()
+			return
 		if logic == "fluidsettle":
 			world.collision_enabled = false
 			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
@@ -2860,6 +2866,67 @@ func _light_test(spawn: Vector3) -> void:
 		"torch_far_before": far_before,
 		"torch_far_after": far_after,
 	})
+
+
+func _probe_water_positions() -> Dictionary:
+	var out := {}
+	for key in world.chunks.keys():
+		var c: Node3D = world.chunks.get(key)
+		if c == null:
+			continue
+		var d: PackedByteArray = c.data
+		for i in range(d.size()):
+			if d[i] == 5:
+				var yy: int = i >> 8
+				var gx: int = int(c.cx) * 16 + (i & 15)
+				var gz: int = int(c.cz) * 16 + ((i >> 4) & 15)
+				out[yy * 262144 + gx * 256 + gz] = yy
+	return out
+
+
+func _fluidprobe_test() -> void:
+	var keys: Array = world.chunks.keys()
+	var fl_hist := {}
+	var sea_hist := {}
+	for key in world.chunks.keys():
+		var c: Node3D = world.chunks.get(key)
+		if c == null:
+			continue
+		var d: PackedByteArray = c.data
+		for i in range(d.size()):
+			if d[i] == 5:
+				var v: int = c.fl[i]
+				fl_hist[v] = int(fl_hist.get(v, 0)) + 1
+				if (i >> 8) == Data.SEA:
+					sea_hist[v] = int(sea_hist.get(v, 0)) + 1
+	print("PROBE fl_hist=%s sea_surface_hist=%s" % [fl_hist, sea_hist])
+	var prev: Dictionary = _probe_water_positions()
+	var prev_total := _count_fluid_cells(keys, 5)
+	var prev_sea := _water_at_level(keys, Data.SEA)
+	print("PROBE t0 total=%d sea=%d" % [prev_total, prev_sea])
+	for i in 8:
+		Debug.tick_fluids()
+		var cur: Dictionary = _probe_water_positions()
+		var adds := 0
+		var ys := {}
+		var samples: Array = []
+		for k in cur:
+			if not prev.has(k):
+				adds += 1
+				var yy: int = int(k) / 262144
+				ys[yy] = int(ys.get(yy, 0)) + 1
+				if samples.size() < 24:
+					var rem: int = int(k) % 262144
+					samples.append("%d,%d,%d" % [rem / 256, yy, rem % 256])
+		for k in prev:
+			if not cur.has(k):
+				var rem2: int = int(k) % 262144
+				print("PROBE t%d REMOVED %d,%d,%d" % [i + 1, rem2 / 256, int(k) / 262144, rem2 % 256])
+		print("PROBE t%d adds=%d sea_delta=%d ys=%s samples=%s" % [i + 1, adds, _water_at_level(keys, Data.SEA) - prev_sea, ys, samples])
+		prev = cur
+		prev_total = _count_fluid_cells(keys, 5)
+		prev_sea = _water_at_level(keys, Data.SEA)
+	Debug.result({"done": true})
 
 
 func _fluids_test(spawn: Vector3) -> void:

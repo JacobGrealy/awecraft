@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-22T06:17
+  updated_at: 2026-08-22T10:52
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -28,7 +28,9 @@ queue:
 - AC-0072
 - AC-0067
 - AC-0070
+- AC-0073
 - AC-0068
+- AC-0074
 - AC-0034
 - AC-0035
 - AC-0036
@@ -852,9 +854,9 @@ intake:
   labels:
   - godot
   created_at: 2026-08-18T12:00
-  updated_at: 2026-08-19 08:15T12:00
+  updated_at: 2026-08-22T10:52
   completed_at: null
-  waiting_on: user review of tasks/AC-0071/AC-0071-plan.html (implementation re-scopes AC-0034 per approved plan)
+  waiting_on: null
   parent_id: null
   notes: 'Block-break hitches remain: PERF3c-2 diagnostics (recenter sync gen, worst boundary-chunk build, tick_fluids locality,
     snapshot drain) + fixes'
@@ -863,6 +865,12 @@ intake:
     created_at: 2026-08-18 19:30T12:00
     updated_at: null
     text: '[user] game still hitches when a block is broken.'
+  - id: 2
+    created_at: 2026-08-22T10:52
+    updated_at: null
+    text: '[agent] UNBLOCKED 2026-08-22: user approved per AC-0071 plan (hybrid: Phase 1 budgeted main-thread streaming web+desktop
+      -> Phase 2 desktop-gated threaded worldgen). Moved up in queue after AC-0073 tool-fix + AC-0074 windows-export so each
+      feature ships a native build. Default render radius stays user slider default 50.'
 - id: AC-0035
   title: m5a2-light-bake
   source: agent
@@ -1877,8 +1885,8 @@ intake:
   status: done
   labels: []
   created_at: 2026-08-21T15:13
-  updated_at: 2026-08-21T16:10
-  completed_at: 2026-08-21T16:10
+  updated_at: 2026-08-22T10:52
+  completed_at: 2026-08-22T10:40
   waiting_on: null
   parent_id: null
   notes: 'PLAN ONLY (research, no implementation) — user reviews the plan before any code (user 2026-08-21). Relates to AC-0034
@@ -1911,6 +1919,11 @@ intake:
       chunk.gd:372-374) + fluid window-slide re-wake (world.gd:719-723). 5 DECISIONS NEEDED for user (phasing, web thread
       parity, collision staging, unload flash, default radius) — each with a recommendation. Implementation = separate task
       (re-scopes AC-0034) pending user review.'
+  - id: 3
+    created_at: 2026-08-22T10:52
+    updated_at: null
+    text: '[agent] Plan delivered (tasks/AC-0071/AC-0071-plan.html); user approved implementation 2026-08-22 (''move 34 up
+      and work on it now''). Implementation = AC-0034.'
 - id: AC-0072
   title: option-sliders-render-sim
   source: user
@@ -1943,3 +1956,58 @@ intake:
       sim to 8, persist 8/8 after reload, 0 errors). settings.gd (4-96/50 defaults + clamp_sim_to_render + load clamp) + menu.gd
       (slider ranges, live sim max, snap-clamp handlers) + main.gd _settings_test. Results: tasks/AC-0072/AC-0072-results.html.
       PERF FLAG: 50-chunk default is heavy until AC-0071/AC-0034 streaming lands.'
+- id: AC-0073
+  title: tool-orientation-and-scale
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-22T10:52
+  updated_at: 2026-08-22T10:52
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Held tool voxel models have the WRONG ORIENTATION: in first person they should be oriented like MC - head pointing
+    toward the screen center (crosshair), handle toward the bottom-right of the frame - and the swing should SWEEP the head
+    toward/through the center (MC punch). Also the SCALED of held tools AND held flowers/blocks/items should be about TWICE
+    as big as currently (held 0.35 -> 0.70, tool diags x2). Pull a real Minecraft first-person held-tool screenshot as reference.
+    Keep swing (AC-0048), sway (AC-0060), on-top depth (AC-0067), head-color/tier (swing harness) green.'
+  comments:
+  - id: 1
+    created_at: 2026-08-22T10:52
+    updated_at: null
+    text: '[user] for the tool voxel models, they all have the wrong orientation. They should be oriented such that they swing
+      towards the center. pull down a screenshot of minecraft to see how it''s tools are oriented'
+  - id: 2
+    created_at: 2026-08-22T10:52
+    updated_at: null
+    text: '[user] the flower looks close to right, why are the tools so different? Also though the scale of the tools/flowers
+      when held should be about twice as big as they currently are'
+- id: AC-0074
+  title: windows-export-pipeline
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-22T10:52
+  updated_at: 2026-08-22T10:52
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Windows DESKTOP export pipeline: export_presets.cfg preset.1 ''Windows'' exists + win64 templates 4.7.1.stable installed.
+    Task: add build_windows.sh (headless --export-release), verify exe (PE magic), serve exports/ over LAN http on a spare
+    port (daemon, pidfile, port guard like serve_web.py), document download URLs (localhost + 192.168.0.224). AFTER THIS TASK,
+    every feature task includes a gate: run build_windows.sh so the user gets a fresh exe after each feature. Rationale: user
+    may fully switch from web to native if it is much smoother.'
+  comments:
+  - id: 1
+    created_at: 2026-08-22T10:52
+    updated_at: null
+    text: '[user] Depending on the overhead I want a windows export after each feature is delivered. If it''s much smoother
+      than the web build we might completely switch over to windows / linux native builds.'
