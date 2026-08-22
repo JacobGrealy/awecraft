@@ -69,6 +69,7 @@ static func cross_material() -> Material:
 
 static func _base_mat() -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
+	m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	m.vertex_color_use_as_albedo = true
 	if Data.atlas_tex != null:
 		m.albedo_texture = Data.atlas_tex

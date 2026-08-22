@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-21T20:19
+  updated_at: 2026-08-22T03:47
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -1757,11 +1757,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-21T10:20
-  updated_at: 2026-08-21T10:20
-  completed_at: null
+  updated_at: 2026-08-22T03:47
+  completed_at: 2026-08-22T03:47
   waiting_on: null
   parent_id: null
   notes: 'Viewmodel depth (user 2026-08-21): the hand / anything held must ALWAYS render on top of the environment (never
@@ -1773,6 +1773,16 @@ intake:
     updated_at: null
     text: '[user] the hand / anything held in hand should always render on top of the enviroment (ie the block you are holding
       should not be obscured by the enviroment)'
+  - id: 2
+    created_at: 2026-08-22T03:47
+    updated_at: null
+    text: '[agent] DONE 2026-08-21 (subagent; report came back empty -> coordinator verified manually). All viewmodel parts
+      depth-disabled so the hand/held item never occludes against the environment (MC-style): held_box override, held_sprite.no_depth_test,
+      held_fist fmat, _voxel_mat (all tool voxels), HeldMeshes._base_mat. Sprite3D resolved via its native .no_depth_test
+      (no quad mesh needed). G1 0; G2 full 24-mode battery 0 script errors (craft/guiclick/swing/look/combat/water/tint/daynight/settings/survival/trees/held/hunger
+      all ok:true); G3 depth{block,cross,fist,sprite,tool} all true depth_ok:true; G4 before/after occlusion: before=held
+      block occluded face-against-wall, after=held grass block fully on top; G5 web shots. No git by subagent (fence held).
+      Coordinator rebuilt web. Deviations: none.'
 - id: AC-0068
   title: water-column-fill-spread
   source: user
@@ -1919,7 +1929,7 @@ intake:
   - id: 2
     created_at: 2026-08-21T23:15
     updated_at: null
-    text: '[coordinator] DONE - G1-G4 PASS (G3 ok:true; G4 browser gate_all True: defaults 50/1, sim=40 set, render->8
-      clamps sim to 8, persist 8/8 after reload, 0 errors). settings.gd (4-96/50 defaults + clamp_sim_to_render + load
-      clamp) + menu.gd (slider ranges, live sim max, snap-clamp handlers) + main.gd _settings_test. Results:
-      tasks/AC-0072/AC-0072-results.html. PERF FLAG: 50-chunk default is heavy until AC-0071/AC-0034 streaming lands.'
+    text: '[coordinator] DONE - G1-G4 PASS (G3 ok:true; G4 browser gate_all True: defaults 50/1, sim=40 set, render->8 clamps
+      sim to 8, persist 8/8 after reload, 0 errors). settings.gd (4-96/50 defaults + clamp_sim_to_render + load clamp) + menu.gd
+      (slider ranges, live sim max, snap-clamp handlers) + main.gd _settings_test. Results: tasks/AC-0072/AC-0072-results.html.
+      PERF FLAG: 50-chunk default is heavy until AC-0071/AC-0034 streaming lands.'

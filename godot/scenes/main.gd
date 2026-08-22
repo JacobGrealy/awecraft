@@ -700,6 +700,12 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			player = _spawn_player()
 			await _held_test()
 			return
+		if logic == "wallshot":
+			world.recenter(spawn.x, spawn.z, true)
+			await _await_spawn_floor(spawn, 300)
+			player = _spawn_player()
+			await _wallshot_test()
+			return
 		if logic == "editperf":
 			await _editperf_test(spawn)
 			return
@@ -3431,6 +3437,147 @@ func _held_test() -> void:
 	res["box_ok"] = box_ok
 	res["box_1"] = boxd
 	res["scale_ok"] = p.held_box != null and p.held_box.scale == Vector3(0.35, 0.35, 0.35)
+	var depth: Dictionary = {}
+	var depth_ok := true
+	p.sel = _slot_of(p, 18)
+	for i in 6:
+		await get_tree().physics_frame
+	var dm1 = p.held_box.material_override
+	depth["cross"] = p.held_box.visible and dm1 is StandardMaterial3D \
+		and (dm1 as StandardMaterial3D).depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+	p.sel = _slot_of(p, 1)
+	for i in 6:
+		await get_tree().physics_frame
+	var dm2 = p.held_box.material_override
+	depth["block"] = p.held_box.visible and dm2 is StandardMaterial3D \
+		and (dm2 as StandardMaterial3D).depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+	Debug.give_item(111, 1)
+	p.sel = _slot_of(p, 111)
+	for i in 6:
+		await get_tree().physics_frame
+	var tcnt := 0
+	var tool_d := false
+	if p.held_tool != null and p.held_tool.visible:
+		for c in p.held_tool.get_children():
+			if c is MeshInstance3D:
+				tcnt += 1
+				var tm = (c as MeshInstance3D).material_override
+				if tm is StandardMaterial3D and (tm as StandardMaterial3D).depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED:
+					tool_d = true
+	depth["tool"] = tool_d and tcnt > 0
+	Debug.give_item(107, 1)
+	p.sel = _slot_of(p, 107)
+	for i in 6:
+		await get_tree().physics_frame
+	var spr_d := false
+	if p.held_sprite != null and p.held_sprite.visible:
+		spr_d = p.held_sprite.no_depth_test == true
+	depth["sprite"] = spr_d
+	var eslot := -1
+	for i in p.inv.size():
+		if int(p.inv[i]["id"]) == 0:
+			eslot = i
+			break
+	p.sel = eslot
+	for i in 6:
+		await get_tree().physics_frame
+	var fist_d := false
+	if p.held_fist != null and p.held_fist.visible and p.held_fist.material_override is StandardMaterial3D:
+		fist_d = (p.held_fist.material_override as StandardMaterial3D).depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+	depth["fist"] = fist_d
+	depth_ok = depth_ok and bool(depth["cross"]) and bool(depth["block"]) and bool(depth["tool"]) and bool(depth["sprite"]) and bool(depth["fist"])
+	res["depth"] = depth
+	res["depth_ok"] = depth_ok
+	Debug.result(res)
+	get_tree().quit()
+
+
+func _force_viewmodel_depth_on(p) -> void:
+	if p.held_box != null and p.held_box.material_override is StandardMaterial3D:
+		(p.held_box.material_override as StandardMaterial3D).depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	if p.held_fist != null and p.held_fist.material_override is StandardMaterial3D:
+		(p.held_fist.material_override as StandardMaterial3D).depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	if p.held_tool != null:
+		for c in p.held_tool.get_children():
+			if c is MeshInstance3D and (c as MeshInstance3D).material_override is StandardMaterial3D:
+				((c as MeshInstance3D).material_override as StandardMaterial3D).depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	if p.held_sprite != null:
+		p.held_sprite.no_depth_test = false
+
+
+var _is_stone := func(c: Color) -> bool: return absf(c.r - c.g) < 14 and absf(c.g - c.b) < 14 and c.r > 24 and c.r < 120
+
+
+var _is_cyan := func(c: Color) -> bool: return c.b > 150 and c.g > 150 and c.r < 110 and c.b > c.r + 80
+
+
+func _wallshot_region_count(path: String, pred: Callable, x0: int, x1: int, y0: int, y1: int) -> int:
+	var img := Image.load_from_file(path)
+	var n := 0
+	for y in range(y0, y1, 2):
+		for x in range(x0, x1, 2):
+			if pred.call(img.get_pixel(x, y)):
+				n += 1
+	return n
+
+
+func _wallshot_test() -> void:
+	var p = Game.player
+	var spawn: Vector3 = world.spawn_point()
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	var feet_y := float(p.position.y)
+	var ey := int(floorf(feet_y + p.EYE))
+	world.collision_enabled = false
+	Debug.fly(true)
+	for wx in range(sx - 1, sx + 2):
+		for wy in range(ey - 1, ey + 2):
+			world.set_block(wx, wy, sz - 1, 3)
+	for i in 40:
+		await get_tree().physics_frame
+	var before := OS.get_environment("AWECRAFT_WALL_BEFORE") == "1"
+	var shots := OS.get_environment("AWECRAFT_WALL_SHOTS")
+	var outdir := ProjectSettings.globalize_path("res://..") + "/tasks/AC-0067/"
+	var res: Dictionary = {"before": before, "shots": shots, "wall_face_z": float(sz) - 1.0, "eye_to_wall_face": 0.5, "hand_to_wall_face": 0.3, "block": false, "item": false}
+	var vmx0 := 820
+	var vmx1 := 1240
+	var vmy0 := 430
+	var vmy1 := 700
+	if shots == "" or shots.find("block") >= 0:
+		Debug.give_item(1, 1)
+		p.sel = _slot_of(p, 1)
+		for i in 8:
+			await get_tree().physics_frame
+		if before:
+			_force_viewmodel_depth_on(p)
+		p.position = Vector3(sx + 0.5, feet_y, float(sz) + 0.5)
+		p.look(0.0, 0.0)
+		for i in 8:
+			await get_tree().physics_frame
+		var bpath := outdir + "held_on_wall%s.png" % ("_before" if before else "")
+		await Debug.snap(bpath)
+		res["block"] = true
+		res["block_frame_stone"] = _wallshot_region_count(bpath, _is_stone, 0, 1280, 0, 720)
+		res["block_vm_nonstone"] = _wallshot_region_count(bpath, func(c: Color) -> bool: return not _is_stone.call(c), vmx0, vmx1, vmy0, vmy1)
+		var bm = p.held_box.material_override if p.held_box != null else null
+		res["block_box_vis"] = p.held_box != null and p.held_box.visible
+		res["block_depth_on"] = bm is StandardMaterial3D and (bm as StandardMaterial3D).depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	if shots == "" or shots.find("item") >= 0:
+		Debug.give_item(107, 1)
+		p.sel = _slot_of(p, 107)
+		for i in 8:
+			await get_tree().physics_frame
+		if before:
+			_force_viewmodel_depth_on(p)
+		p.position = Vector3(sx + 0.5, feet_y, float(sz) + 0.5)
+		p.look(0.0, 0.0)
+		for i in 8:
+			await get_tree().physics_frame
+		var ipath := outdir + "held_item_on_wall%s.png" % ("_before" if before else "")
+		await Debug.snap(ipath)
+		res["item"] = true
+		res["item_vm_cyan"] = _wallshot_region_count(ipath, _is_cyan, vmx0, vmx1, vmy0, vmy1)
+		res["item_sprite_vis"] = p.held_sprite != null and p.held_sprite.visible
 	Debug.result(res)
 	get_tree().quit()
 

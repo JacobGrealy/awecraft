@@ -364,7 +364,9 @@ func _build_held() -> void:
 	var mesh := BoxMesh.new()
 	held_box = MeshInstance3D.new()
 	held_box.mesh = mesh
-	held_box.material_override = StandardMaterial3D.new()
+	var hbmat := StandardMaterial3D.new()
+	hbmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	held_box.material_override = hbmat
 	held_box.scale = Vector3(0.35, 0.35, 0.35)
 	held_box.visible = false
 	hand_root.add_child(held_box)
@@ -372,6 +374,7 @@ func _build_held() -> void:
 	held_sprite.scale = Vector3(0.35, 0.35, 0.35)
 	held_sprite.billboard = 1
 	held_sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	held_sprite.no_depth_test = true
 	held_sprite.visible = false
 	hand_root.add_child(held_sprite)
 	var fm := BoxMesh.new()
@@ -381,6 +384,7 @@ func _build_held() -> void:
 	var fmat := StandardMaterial3D.new()
 	fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	fmat.albedo_color = Color(0.87, 0.73, 0.57)
+	fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	held_fist.material_override = fmat
 	held_fist.position = Vector3(0.0, -0.05, 0.0)
 	held_fist.visible = false
@@ -486,6 +490,7 @@ func _voxel_mat(color: Color) -> StandardMaterial3D:
 	m = StandardMaterial3D.new()
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.albedo_color = color
+	m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	_tool_mats[k] = m
 	return m
 
