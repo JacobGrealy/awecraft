@@ -1,0 +1,34 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AC-0067 — viewmodel always on top of environment</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:980px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:18px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:12.5px}li{margin:3px 0}</style></head><body>
+<h1>AC-0067 — Hand / held item must ALWAYS render on top of the environment</h1>
+<p>User 2026-08-21: "the hand / anything held in hand should always render on top of the enviroment (ie the block you are holding should not be obscured by the enviroment)." This is the classic MC-style viewmodel: the held item is never occluded/clipped by nearby blocks, even when your face is against a wall.</p>
+<h2>Current state (coordinator-read, <code>player.gd</code>)</h2>
+<p>The viewmodel is a set of children under <code>hand_root</code> (→ <code>sway_root</code> → <code>camera</code>), all standard depth-tested, so a nearby block can hide/clip them:</p>
+<ul>
+<li><code>held_box</code> (:365-370) — MeshInstance3D, holds solid-block box AND cross-item meshes; material via <code>HeldMeshes.box_material()</code> / <code>HeldMeshes.cross_material()</code> (set in <code>_update_held</code> :412-416). Initial <code>material_override</code> is a plain <code>StandardMaterial3D</code>.</li>
+<li><code>held_sprite</code> (:371-376) — a <b>Sprite3D</b> (billboard) used for non-tool ITEMS (100+); texture from item atlas or tint (:426-431).</li>
+<li><code>held_fist</code> (:377-387) — MeshInstance3D, <code>fmat</code> = unshaded StandardMaterial3D.</li>
+<li><code>held_tool</code> (:392-394) — Node3D; each voxel child is a MeshInstance3D with <code>material_override = _voxel_mat(color)</code> (a StandardMaterial3D, :490) — set up in <code>_setup_held_tool</code> (:504-523).</li>
+</ul>
+<p>No <code>depth_draw_mode</code> usage exists anywhere yet.</p>
+<h2>Requirement</h2>
+<ul>
+<li>Make the <b>entire viewmodel</b> (held block, held cross, held fist, held tool voxels, AND held-item Sprite3D) render with <b>depth testing disabled</b> (<code>StandardMaterial3D.depth_draw_mode = DEPTH_DRAW_DISABLED</code>) so it is never obscured by world geometry. This is the fix; do not reposition/resize/light the viewmodel (position/scale are already correct from AC-0060/0066; lighting of the held item = AC-0035, out of scope here).</li>
+<li>Apply to EVERY viewmodel material path: <code>HeldMeshes.box_material()</code>, <code>HeldMeshes.cross_material()</code>, the initial <code>held_box.material_override</code>, <code>held_fist</code> fmat, and <code>_voxel_mat()</code> (so all tool voxels get it). Best place for the shared ones: set depth-disabled once where those materials are created (HeldMeshes and _voxel_mat), so it's not repeated per-frame.</li>
+<li><b>Sprite3D (the tricky one):</b> first VERIFY whether Godot 4.7 <code>Sprite3D</code> exposes a <code>material_override</code> (check docs or a 2-line headless probe). <b>If yes</b>: set its <code>depth_draw_mode = DEPTH_DRAW_DISABLED</code>. <b>If no</b>: convert the held-item sprite to a billboarded quad — a <code>MeshInstance3D</code> with a small quad/plane mesh (or a <code>QuadMesh</code>) whose <code>material_override</code> is a StandardMaterial3D with the item texture (reuse the exact atlas/tint selection logic at :426-431), set to billboard (use the same orientation the Sprite3D had — a camera-facing quad; simplest is a <code>PlaneMesh</code> rotated to face the camera, or keep a Sprite3D but drive depth via whatever API exists). The item MUST still show the correct icon and stay on top. Document whichever path you took.</li>
+<li>Keep: hand sway (AC-0060) and swing (AC-0048) — everything under <code>hand_root</code> keeps animating. Keep the fist/tool/block item routing in <code>_update_held</code>. No change to the world/chunk rendering.</li>
+</ul>
+<h2>Gates (cheap-to-expensive; zero script errors EVERY run)</h2>
+<ol>
+<li>G1: <code>~/tools/godot/godot --headless --path godot --quit</code> → 0 script errors.</li>
+<li>G2: FULL AWECRAFT_LOGIC battery → green except KNOWN PRE-EXISTING <code>fpv tool_held_ok:false</code>; 0 script errors; guiclick/craft unchanged; the existing <code>AWECRAFT_LOGIC=held</code> + <code>AWECRAFT_LOGIC=swing</code> still pass (sway/swing intact).</li>
+<li>G3 (headless assert): a <code>RESULT {...}</code> JSON — for each held type (solid block, cross item, tool, item-sprite, empty fist), select it and assert the <b>active viewmodel material's <code>depth_draw_mode == DEPTH_DRAW_DISABLED</code></b> (probe <code>held_box.material_override</code>, the tool-voxel <code>material_override</code>, the fist fmat, and the sprite path). Report ok per type + overall ok:true. (Extend the existing <code>AWECRAFT_LOGIC=held</code> harness.)</li>
+<li>G4 (the real proof — occlusion render): a small harness (env-gated) that teleports the player so a SOLID block is right in front of the viewmodel (face against a wall / block &lt;0.5m away), holds a block (or an item), and snapshots → <code>tasks/AC-0067/held_on_wall.png</code>. The held item must be FULLY visible (its pixels = the held item's texture, NOT the wall's). If cheap, also capture the BEFORE state (depth still on) as evidence of the fix. View the PNG (you have image access) — the held block/item must not be clipped or hidden by the block.</li>
+<li>G5: <code>./build_web.sh</code> → 0; browser (playwright, https://localhost:8443, 1920×1080, daemon 411476 do NOT kill): hold a block or item near/against a block → shot <code>tasks/AC-0067/web_on_top.png</code>; held item fully visible; 0 console errors.</li>
+</ol>
+<h2>Scope fence</h2>
+<p>Viewmodel DEPTH only (player.gd + HeldMeshes + possibly converting the held sprite to a quad mesh). No viewmodel repositioning/resizing, no viewmodel lighting (AC-0035), no world/chunk changes, no menu, no other tasks. No git (coordinate ONLY via your report — the coordinator commits). No renders beyond G4/G5.</p>
+<h2>Deliverables</h2>
+<p>Code + <code>tasks/AC-0067/AC-0067-results.html</code> (G3 RESULT json, before/after occlusion shots, the Sprite3D path taken + why, deviations) + report ≤20 lines.</p>
+</body></html>
