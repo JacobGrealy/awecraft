@@ -120,6 +120,8 @@ func _create_game_nodes() -> void:
 		world.render_radius = rad.to_int()
 	else:
 		Settings.apply_world()
+		if _harness_env_set():
+			world.render_radius = 4
 
 	drops = Node.new()
 	drops.name = "Drops"
@@ -339,16 +341,45 @@ func _free_game_nodes() -> void:
 	Game.hotbar = null
 
 
+class _StubWorld:
+	var render_radius := 0
+	var fluid_tick_radius := 0
+	func recenter(_x: float, _z: float) -> void:
+		pass
+
+
 func _settings_test() -> void:
+	if FileAccess.file_exists(Settings.PATH):
+		DirAccess.remove_absolute(Settings.PATH)
 	Settings.load_settings()
-	var before := int(Settings.values["render_dist"])
+	var defaults_ok := int(Settings.values["render_dist"]) == 50 and int(Settings.values["sim_dist"]) == 1
+	Settings.set_value("render_dist", 2)
+	var min_ok := int(Settings.values["render_dist"]) == 4
+	Settings.set_value("render_dist", 999)
+	var max_ok := int(Settings.values["render_dist"]) == 96
+	Settings.set_value("sim_dist", 8)
+	var sim_set_ok := int(Settings.values["sim_dist"]) == 8
+	Settings.set_value("render_dist", 4)
+	var sim_lower_ok := int(Settings.values["sim_dist"]) == 4
 	Settings.set_value("render_dist", 5)
-	var saved := -1
-	var cf := ConfigFile.new()
-	if cf.load(Settings.PATH) == OK:
-		saved = int(cf.get_value("settings", "render_dist", -1))
+	Settings.set_value("sim_dist", 9)
+	var sim_raise_ok := int(Settings.values["sim_dist"]) == 5
+	var cfi := ConfigFile.new()
+	cfi.set_value("settings", "render_dist", 10)
+	cfi.set_value("settings", "sim_dist", 20)
+	cfi.save(Settings.PATH)
 	Settings.load_settings()
-	var reloaded := int(Settings.values["render_dist"])
+	var load_clamp_ok := int(Settings.values["render_dist"]) == 10 and int(Settings.values["sim_dist"]) == 10
+	var w := _StubWorld.new()
+	Game.world = w
+	Settings.apply_world()
+	var apply_world_ok := w.render_radius == 10 and w.fluid_tick_radius == 160
+	Settings.set_value("render_dist", 7)
+	Settings.set_value("sim_dist", 3)
+	Settings.apply_render_distance()
+	Settings.apply_sim_distance()
+	var apply_dist_ok := w.render_radius == 7 and w.fluid_tick_radius == 48
+	Game.world = null
 	Settings.set_value("volume", 37)
 	Settings.load_settings()
 	var volume_ok := int(Settings.values["volume"]) == 37
@@ -367,16 +398,17 @@ func _settings_test() -> void:
 	var hunger_default_ok := bool(Settings.values["hunger_enabled"]) == true
 	OS.set_environment("AWECRAFT_IGNORE_SETTINGS", "")
 	Settings.load_settings()
-	Settings.set_value("render_dist", before)
 	Settings.set_value("volume", 100)
+	Settings.reset_defaults()
 	Debug.result({
-		"before": before,
-		"saved": saved,
-		"reloaded": reloaded,
+		"defaults": {"render": 50, "sim": 1, "ok": defaults_ok},
+		"range": {"min": 4, "max": 96, "min_ok": min_ok, "max_ok": max_ok},
+		"sim_clamp": {"set_ok": sim_set_ok, "render_lower_8to4": sim_lower_ok, "sim_raise_9at5": sim_raise_ok},
+		"load_clamp": {"saved": [10, 20], "after_load": [10, 10], "ok": load_clamp_ok},
+		"apply": {"world": [10, 160], "dist": [7, 48], "ok": apply_world_ok and apply_dist_ok},
 		"volume_ok": volume_ok,
 		"hunger": {"saved_off": hsaved, "reloaded_off": hunger_off_ok, "back_on": hunger_on_ok, "default_true": hunger_default_ok},
-		"restore": int(Settings.values["render_dist"]) == before,
-		"ok": saved == 5 and reloaded == 5 and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok,
+		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok,
 	})
 
 

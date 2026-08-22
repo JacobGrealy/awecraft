@@ -254,6 +254,7 @@ func _on_pack_file_selected(path: String) -> void:
 func _sync_controls() -> void:
 	_syncing = true
 	render_slider.value = float(int(Settings.values["render_dist"]))
+	sim_slider.max_value = float(int(Settings.values["render_dist"]))
 	sim_slider.value = float(int(Settings.values["sim_dist"]))
 	volume_slider.value = float(int(Settings.values["volume"]))
 	render_val.text = str(int(render_slider.value))
@@ -283,14 +284,26 @@ func _on_render_changed(v: float) -> void:
 		return
 	render_val.text = str(int(v))
 	Settings.set_value("render_dist", int(v))
+	_syncing = true
+	sim_slider.max_value = float(int(Settings.values["render_dist"]))
+	sim_slider.value = float(int(Settings.values["sim_dist"]))
+	_syncing = false
+	sim_val.text = str(int(sim_slider.value))
 	Settings.apply_render_distance()
+	Settings.apply_sim_distance()
 
 
 func _on_sim_changed(v: float) -> void:
 	if _syncing:
 		return
-	sim_val.text = str(int(v))
-	Settings.set_value("sim_dist", int(v))
+	var r := int(Settings.values["render_dist"])
+	var s := clampi(int(v), 1, r)
+	_syncing = true
+	sim_slider.max_value = float(r)
+	sim_slider.value = float(s)
+	_syncing = false
+	sim_val.text = str(s)
+	Settings.set_value("sim_dist", s)
 	Settings.apply_sim_distance()
 
 
@@ -512,14 +525,14 @@ func _build_options() -> void:
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(t)
 	render_slider = HSlider.new()
-	render_slider.min_value = 1.0
-	render_slider.max_value = 8.0
+	render_slider.min_value = 4.0
+	render_slider.max_value = 96.0
 	render_slider.value_changed.connect(_on_render_changed)
 	render_val = Label.new()
 	_options_row(vb, "Render distance (chunks)", render_slider, render_val)
 	sim_slider = HSlider.new()
 	sim_slider.min_value = 1.0
-	sim_slider.max_value = 8.0
+	sim_slider.max_value = float(int(Settings.values["render_dist"]))
 	sim_slider.value_changed.connect(_on_sim_changed)
 	sim_val = Label.new()
 	_options_row(vb, "Simulation distance (chunks)", sim_slider, sim_val)

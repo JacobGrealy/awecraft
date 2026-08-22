@@ -1898,11 +1898,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-21T20:19
-  updated_at: 2026-08-21T20:19
-  completed_at: null
+  updated_at: 2026-08-21T23:15
+  completed_at: 2026-08-21T23:15
   waiting_on: null
   parent_id: null
   notes: 'Menu options: (1) Render distance slider range 4-96 (was 1-8), DEFAULT 50 (was 4). (2) Simulation distance slider
@@ -1916,3 +1916,10 @@ intake:
     updated_at: null
     text: '[user] render chunk slider should go from 4-96 and default should be 50. simulation slider can never be more than
       render slider'
+  - id: 2
+    created_at: 2026-08-21T23:15
+    updated_at: null
+    text: '[coordinator] DONE - G1-G4 PASS (G3 ok:true; G4 browser gate_all True: defaults 50/1, sim=40 set, render->8
+      clamps sim to 8, persist 8/8 after reload, 0 errors). settings.gd (4-96/50 defaults + clamp_sim_to_render + load
+      clamp) + menu.gd (slider ranges, live sim max, snap-clamp handlers) + main.gd _settings_test. Results:
+      tasks/AC-0072/AC-0072-results.html. PERF FLAG: 50-chunk default is heavy until AC-0071/AC-0034 streaming lands.'

@@ -2,8 +2,12 @@ extends Node
 
 const PATH := "user://awecraft.cfg"
 
+const RENDER_MIN := 4
+const RENDER_MAX := 96
+const SIM_MIN := 1
+
 const DEFAULTS := {
-	"render_dist": 4,
+	"render_dist": 50,
 	"sim_dist": 1,
 	"volume": 100,
 	"fullscreen": false,
@@ -33,13 +37,21 @@ func load_settings() -> Dictionary:
 	for k in values:
 		if cf.has_section_key("settings", k):
 			_clamp(k, cf.get_value("settings", k))
+	clamp_sim_to_render()
 	return values
+
+
+func clamp_sim_to_render() -> void:
+	if int(values["sim_dist"]) > int(values["render_dist"]):
+		values["sim_dist"] = int(values["render_dist"])
 
 
 func _clamp(k: String, v) -> void:
 	match k:
-		"render_dist", "sim_dist":
-			values[k] = clampi(int(v), 1, 8)
+		"render_dist":
+			values[k] = clampi(int(v), RENDER_MIN, RENDER_MAX)
+		"sim_dist":
+			values[k] = clampi(int(v), SIM_MIN, RENDER_MAX)
 		"volume":
 			values[k] = roundi(clampf(float(v), 0.0, 100.0))
 		"fullscreen":
@@ -57,6 +69,7 @@ func _clamp(k: String, v) -> void:
 
 func set_value(k: String, v) -> void:
 	_clamp(k, v)
+	clamp_sim_to_render()
 	save()
 
 
