@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-22T03:47
+  updated_at: 2026-08-22T06:17
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -1837,11 +1837,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-21T11:36
-  updated_at: 2026-08-21T11:36
-  completed_at: null
+  updated_at: 2026-08-22T06:17
+  completed_at: 2026-08-22T06:17
   waiting_on: null
   parent_id: null
   notes: 'Redo the held tool VOXEL models (pickaxe/axe/shovel/sword from AC-0051) so their voxel-grid resolution MATCHES the
@@ -1857,6 +1857,16 @@ intake:
     text: '[user] redoing the tool voxel models, they should have the same resolution in voxels that the icon has in pixels.
       So the voxels will need to be smaller. Pull down a minecraft screenshot to see what an axe / sword / pickaxe looks like
       for example.'
+  - id: 2
+    created_at: 2026-08-22T06:17
+    updated_at: null
+    text: '[agent] DONE 2026-08-21 (subagent + coordinator verify). Rework: held pick/axe/shovel/sword now = fine 32x32 icon-extracted
+      voxel silhouettes (TOOL_GRIDS in player.gd; per-tool voxel size = target_diag/grid_len so overall size/pose preserved
+      ~exactly). Voxel(cube) counts before->after: pick 6->203, axe 5->185, shovel 4->184, sword 3->253. Head voxels = Data.item_tint
+      (wood 8c6133 != iron bfbfc7), handle wood. Coord re-verified: G1 0; swing STAYS green (tier_differs_111_vs_113 true,
+      loop/settle/sway intact); toolres G3 ok:true (types, head==tint, bbox diag within +/-25%, counts>=20); G4 views = held_pick/axe/sword
+      read as the named tools and match hotbar icons. web 0 console (script) errors. No git by subagent (fence held). Deviations
+      noted: 2 merged MeshInstance per tool (head+handle); extrusion depth 1 voxel (flat silhouette).'
 - id: AC-0071
   title: chunk-streaming-plan
   source: user

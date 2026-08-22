@@ -63,14 +63,14 @@ var held_sprite: Sprite3D = null
 var held_fist: MeshInstance3D = null
 var held_tool: Node3D = null
 var held_tool_type := ""
+var _tool_voxel_count := 0
+var _tool_diag := 0.0
 var _held_texs := {}
 var _held_item_texs := {}
 var _tool_mats := {}
-var _tool_unit_mesh: Mesh = null
-var _tool_wide_mesh: Mesh = null
 var _held_key := ""
 const HAND_BASE_POS := Vector3(0.45, -0.42, -0.8)
-const TOOL_VOX := 0.12
+const TOOL_TARGET_DIAG := {"pick": 0.612, "axe": 0.55, "shovel": 0.55, "sword": 0.398}
 const HANDLE_C := Color(0.47, 0.33, 0.18)
 const SWORD_HANDLE_C := Color(0.52, 0.36, 0.22)
 const SWING_DURATION := 0.2
@@ -389,10 +389,6 @@ func _build_held() -> void:
 	held_fist.position = Vector3(0.0, -0.05, 0.0)
 	held_fist.visible = false
 	hand_root.add_child(held_fist)
-	_tool_unit_mesh = BoxMesh.new()
-	_tool_unit_mesh.size = Vector3(1.0, 1.0, 1.0)
-	_tool_wide_mesh = BoxMesh.new()
-	_tool_wide_mesh.size = Vector3(1.0, 1.0, 2.0)
 	held_tool = Node3D.new()
 	held_tool.visible = false
 	hand_root.add_child(held_tool)
@@ -462,24 +458,182 @@ const TOOL_POSE_ROT := Vector3(-0.42, 0.55, -0.9)
 const TOOL_POSE_POS := Vector3(0.03, -0.03, -0.02)
 
 
-func _tool_voxels(type: String, tcolor: Color) -> Array:
-	var v: Array = []
-	if type == "sword":
-		v.append({"p": Vector3(0, -1, 0), "c": SWORD_HANDLE_C, "wide": false, "head": false})
-		v.append({"p": Vector3(0, 0, 0), "c": SWORD_HANDLE_C, "wide": false, "head": false})
-		v.append({"p": Vector3(0, 1, 0), "c": tcolor, "wide": false, "head": true})
-		return v
-	for hy in range(-1, 2):
-		v.append({"p": Vector3(0, hy, 0), "c": HANDLE_C, "wide": false, "head": false})
-	if type == "pick":
-		for hx in range(-1, 2):
-			v.append({"p": Vector3(hx, 2, 0), "c": tcolor, "wide": false, "head": true})
-	elif type == "axe":
-		v.append({"p": Vector3(0, 2, 0), "c": tcolor, "wide": false, "head": true})
-		v.append({"p": Vector3(1, 2, 0), "c": tcolor, "wide": false, "head": true})
-	elif type == "shovel":
-		v.append({"p": Vector3(0, -2, 0), "c": tcolor, "wide": true, "head": true})
-	return v
+const TOOL_GRIDS := {
+	"pick": [
+		"................................",
+		"................................",
+		"................................",
+		"................................",
+		"................................",
+		"...........#########............",
+		"..........#############.........",
+		"...........#############hh......",
+		".............###########hhh.....",
+		"...................######hh.....",
+		".....................hh####.....",
+		"....................hhhh####....",
+		"...................hhhhh####....",
+		"..................hhhhh.####....",
+		".................hhhhh..#####...",
+		"................hhhhh....####...",
+		"...............hhhhh.....####...",
+		"..............hhhhh......####...",
+		".............hhhhh.......####...",
+		"............hhhhh........####...",
+		"...........hhhhh.........####...",
+		"..........hhhhh...........###...",
+		".........hhhhh............###...",
+		"........hhhhh..............#....",
+		".......hhhhh....................",
+		"......hhhhh.....................",
+		".....hhhhh......................",
+		"....hhhhh.......................",
+		"....hhhh........................",
+		".....hh.........................",
+		"................................",
+		"................................"
+	],
+	"axe": [
+		"................................",
+		"................................",
+		"................................",
+		"...................###..........",
+		"..................#####.........",
+		".................######.........",
+		"................#######.........",
+		"...............########.........",
+		"..............#########.........",
+		".............#########hh........",
+		".............###########h.......",
+		".............###########h#......",
+		"..............#####h#######.....",
+		"..................hh#######.....",
+		".................hhhhh#####.....",
+		"................hhhhh#####......",
+		"...............hhhhh..###.......",
+		"..............hhhhh.............",
+		".............hhhhh..............",
+		"............hhhhh...............",
+		"...........hhhhh................",
+		"..........hhhhh.................",
+		".........hhhhh..................",
+		"........hhhhh...................",
+		".......hhhhh....................",
+		"......hhhhh.....................",
+		".....hhhhh......................",
+		"....hhhhh.......................",
+		"....hhhh........................",
+		".....hh.........................",
+		"................................",
+		"................................"
+	],
+	"shovel": [
+		"................................",
+		"................................",
+		"................................",
+		"................................",
+		".......................#####....",
+		"......................#######...",
+		".....................#########..",
+		"....................##########..",
+		"...................###########..",
+		"..................############..",
+		".................#############..",
+		"..................###########...",
+		"...................h########....",
+		"..................hhh######.....",
+		".................hhhhh####......",
+		"................hhhhh.###.......",
+		"...............hhhhh...#........",
+		"..............hhhhh.............",
+		".............hhhhh..............",
+		"............hhhhh...............",
+		"...........hhhhh................",
+		"..........hhhhh.................",
+		".........hhhhh..................",
+		"........hhhhh...................",
+		".......hhhhh....................",
+		"....hhhhhhh.....................",
+		"....hhhhhh......................",
+		"....hhhhh.......................",
+		".....hhhh.......................",
+		"......hhh.......................",
+		"................................",
+		"................................"
+	],
+	"sword": [
+		"............................####",
+		"...........................#####",
+		"..........................######",
+		".........................#######",
+		"........................#######.",
+		".......................#######..",
+		"......................#######...",
+		".....................#######....",
+		"....................#######.....",
+		"...................#######......",
+		"..................#######.......",
+		".................#######........",
+		"................#######.........",
+		"...............#######..........",
+		"....###.......#######...........",
+		"....####.....#######............",
+		"....#####...#######.............",
+		".....#####.#######..............",
+		"......###########...............",
+		"......##########................",
+		"......#########.................",
+		".......#######..................",
+		".......h#######.................",
+		"......hhh#######................",
+		".....hhhhh#######...............",
+		"....hhhhh..#######..............",
+		"...hhhhh......####..............",
+		".##hhhh........###..............",
+		"####hh..........................",
+		"#####...........................",
+		"#####...........................",
+		".###............................"
+	],
+}
+
+
+func _tool_part_mesh(centers: Array, s: Vector3) -> Mesh:
+	var v := PackedVector3Array()
+	var idx := PackedInt32Array()
+	var faces := [
+		[0, 3, 2, 0, 2, 1],
+		[4, 5, 6, 4, 6, 7],
+		[1, 2, 6, 1, 6, 5],
+		[0, 4, 7, 0, 7, 3],
+		[3, 7, 6, 3, 6, 2],
+		[0, 1, 5, 0, 5, 4],
+	]
+	for ctr in centers:
+		var c: Vector3 = ctr
+		var cs := [
+			c + Vector3(-s.x, -s.y, -s.z),
+			c + Vector3(s.x, -s.y, -s.z),
+			c + Vector3(s.x, s.y, -s.z),
+			c + Vector3(-s.x, s.y, -s.z),
+			c + Vector3(-s.x, -s.y, s.z),
+			c + Vector3(s.x, -s.y, s.z),
+			c + Vector3(s.x, s.y, s.z),
+			c + Vector3(-s.x, s.y, s.z),
+		]
+		var base := v.size()
+		for fv in cs:
+			v.append(fv)
+		for f in faces:
+			for k in 6:
+				idx.append(base + int(f[k]))
+	var arrs: Array = []
+	arrs.resize(Mesh.ARRAY_MAX)
+	arrs[Mesh.ARRAY_VERTEX] = v
+	arrs[Mesh.ARRAY_INDEX] = idx
+	var m := ArrayMesh.new()
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrs)
+	return m
 
 
 func _voxel_mat(color: Color) -> StandardMaterial3D:
@@ -491,16 +645,9 @@ func _voxel_mat(color: Color) -> StandardMaterial3D:
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.albedo_color = color
 	m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_tool_mats[k] = m
 	return m
-
-
-func _make_voxel(color: Color, wide: bool) -> MeshInstance3D:
-	var mi := MeshInstance3D.new()
-	mi.mesh = _tool_wide_mesh if wide else _tool_unit_mesh
-	mi.material_override = _voxel_mat(color)
-	mi.scale = Vector3.ONE * TOOL_VOX
-	return mi
 
 
 func _setup_held_tool(id: int, type: String) -> void:
@@ -508,22 +655,64 @@ func _setup_held_tool(id: int, type: String) -> void:
 	for c in held_tool.get_children():
 		held_tool.remove_child(c)
 		c.queue_free()
-	var vox := _tool_voxels(type, tcolor)
-	var mn := Vector3(INF, INF, INF)
-	var mx := Vector3(-INF, -INF, -INF)
-	for vd in vox:
-		mn = mn.min(Vector3(vd["p"]))
-		mx = mx.max(Vector3(vd["p"]))
-	var cen := (mn + mx) * 0.5
-	for vd in vox:
-		var mi := _make_voxel(Color(vd["c"]), bool(vd["wide"]))
-		mi.name = "head" if bool(vd["head"]) else "voxel"
-		mi.position = (Vector3(vd["p"]) - cen) * TOOL_VOX
-		held_tool.add_child(mi)
+	var grid: Array = TOOL_GRIDS[type]
+	var min_i := 32
+	var max_i := -1
+	var min_j := 32
+	var max_j := -1
+	for j in 32:
+		var row: String = grid[j]
+		for i in 32:
+			if row[i] != ".":
+				min_i = mini(min_i, i)
+				max_i = maxi(max_i, i)
+				min_j = mini(min_j, j)
+				max_j = maxi(max_j, j)
+	var bw := max_i - min_i + 1
+	var bh := max_j - min_j + 1
+	var center_i := (float(min_i) + float(max_i) + 1.0) * 0.5
+	var center_j := (float(min_j) + float(max_j) + 1.0) * 0.5
+	var target: float = TOOL_TARGET_DIAG[type]
+	var diag_cells: float = (float(bw) * float(bw) + float(bh) * float(bh) + 1.0) ** 0.5
+	var vox := target / diag_cells
+	var half := Vector3(vox * 0.5, vox * 0.5, vox * 0.5)
+	var head_cells: Array = []
+	var handle_cells: Array = []
+	for j in 32:
+		var row: String = grid[j]
+		for i in 32:
+			var ch: String = row[i]
+			if ch == ".":
+				continue
+			var ctr := Vector3((float(i) - center_i) * vox, (center_j - float(j)) * vox, 0.0)
+			if ch == "#":
+				head_cells.append(ctr)
+			else:
+				handle_cells.append(ctr)
+	var head_mi := MeshInstance3D.new()
+	head_mi.name = "head"
+	head_mi.mesh = _tool_part_mesh(head_cells, half)
+	head_mi.material_override = _voxel_mat(tcolor)
+	held_tool.add_child(head_mi)
+	var handle_mi := MeshInstance3D.new()
+	handle_mi.name = "handle"
+	handle_mi.mesh = _tool_part_mesh(handle_cells, half)
+	handle_mi.material_override = _voxel_mat(HANDLE_C)
+	held_tool.add_child(handle_mi)
+	_tool_voxel_count = head_cells.size() + handle_cells.size()
+	_tool_diag = target
 	held_tool_type = type
 	held_tool.position = TOOL_POSE_POS
 	held_tool.rotation = TOOL_POSE_ROT
 	held_tool.visible = true
+
+
+func held_tool_voxel_count() -> int:
+	return _tool_voxel_count
+
+
+func held_tool_diag() -> float:
+	return _tool_diag
 
 
 func held_head_color() -> Color:

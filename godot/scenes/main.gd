@@ -700,6 +700,11 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			player = _spawn_player()
 			await _held_test()
 			return
+		if logic == "toolres":
+			world.recenter(spawn.x, spawn.z, true)
+			player = _spawn_player()
+			await _toolres_test()
+			return
 		if logic == "wallshot":
 			world.recenter(spawn.x, spawn.z, true)
 			await _await_spawn_floor(spawn, 300)
@@ -3489,6 +3494,65 @@ func _held_test() -> void:
 	res["depth"] = depth
 	res["depth_ok"] = depth_ok
 	Debug.result(res)
+	get_tree().quit()
+
+
+func _toolres_test() -> void:
+	var p = Game.player
+	for i in 10:
+		await get_tree().physics_frame
+	var r := {}
+	var ok := true
+	var old_diag := {111: 0.612, 113: 0.612, 115: 0.55, 119: 0.55, 123: 0.398}
+	var exp_type := {111: "pick", 113: "pick", 115: "axe", 119: "shovel", 123: "sword"}
+	for tid in [111, 113, 115, 119, 123]:
+		Debug.give_item(tid, 1)
+		p.sel = _slot_of(p, tid)
+		for i in 6:
+			await get_tree().physics_frame
+		var present: bool = p.held_tool != null and p.held_tool.visible
+		var fist: bool = p.held_fist.visible
+		var sprite: bool = p.held_sprite.visible
+		var box: bool = p.held_box.visible
+		var ctype: String = String(p.held_tool_type)
+		var tcnt := 0
+		var aabb := AABB()
+		var has_aabb := false
+		if p.held_tool != null:
+			for c in p.held_tool.get_children():
+				if c is MeshInstance3D:
+					tcnt += 1
+					var me = (c as MeshInstance3D).mesh
+					if me != null:
+						var la: AABB = me.get_aabb()
+						if not has_aabb:
+							aabb = la
+							has_aabb = true
+						else:
+							aabb = aabb.merge(la)
+		var diag := 0.0
+		if has_aabb:
+			diag = Vector3(aabb.size).length()
+		var headc: Color = p.held_head_color()
+		var tint: Color = Data.item_tint(tid)
+		var head_ok := headc.is_equal_approx(tint)
+		var count := int(p.held_tool_voxel_count())
+		var size_ok := has_aabb and absf(diag - float(old_diag[tid])) <= 0.25 * float(old_diag[tid])
+		var row_ok: bool = present and ctype == String(exp_type[tid]) and not fist and not sprite and not box \
+			and tcnt > 0 and count >= 20 and head_ok and size_ok
+		r["tool_%d" % tid] = {
+			"present": present, "type": ctype, "fist": fist, "sprite": sprite, "box": box,
+			"voxel_children": tcnt, "voxel_count": count,
+			"old_diag": float(old_diag[tid]), "new_diag": roundf(diag * 1000.0) / 1000.0,
+			"head_html": headc.to_html(), "tint_html": tint.to_html(),
+			"head_ok": head_ok, "size_ok": size_ok, "ok": row_ok,
+		}
+		ok = ok and row_ok
+	var tier_nei := Data.item_tint(111) != Data.item_tint(113)
+	r["tier_tint_111_ne_113"] = tier_nei
+	ok = ok and tier_nei
+	r["ok"] = ok
+	Debug.result(r)
 	get_tree().quit()
 
 
