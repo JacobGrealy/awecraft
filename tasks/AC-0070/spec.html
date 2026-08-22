@@ -1,0 +1,45 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AC-0070 — redo tool voxel models (icon-resolution silhouettes)</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:980px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:18px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:12.5px}li{margin:3px 0}</style></head><body>
+<h1>AC-0070 — Redo held tool voxel models to icon resolution</h1>
+<p>User 2026-08-21: "redoing the tool voxel models, they should have the same resolution in voxels that the icon has in pixels. So the voxels will need to be smaller. Pull down a minecraft screenshot to see what an axe / sword / pickaxe looks like for example." I.e. the held pickaxe/axe/shovel/sword must be built from a <b>fine voxel silhouette (≈ the 32×32 icon resolution)</b> with much SMALLER voxels, so each reads as its real tool shape — not today's 3–5 fat voxels.</p>
+<h2>Current state (coordinator-read, <code>player.gd</code>)</h2>
+<ul>
+<li><code>TOOL_VOX := 0.12</code> (:73) — every "voxel" is a fat 0.12 box. <code>TOOL_POSE_ROT := (-0.42, 0.55, -0.9)</code>, <code>TOOL_POSE_POS := (0.03, -0.03, -0.02)</code> (:461-462).</li>
+<li><code>_tool_voxels(type, tcolor)</code> (:465) returns only 3–5 voxels: sword = grip(2)+head(1); pick = grip(3)+3 head across top; axe = grip(3)+2 head; shovel = grip(2)+1 wide head. Chunky blobs, not recognizable tools.</li>
+<li><code>_voxel_mat(color)</code> (:490) — StandardMaterial3D, unshaded, color = albedo, <b>already depth-disabled</b> (AC-0067). <code>_make_voxel</code> (:494) builds a MeshInstance3D. <code>_setup_held_tool(id, type)</code> (:504-523) clears + rebuilds the voxel children under <code>held_tool</code>, centers them, applies TOOL_POSE. <code>held_head_color()</code> (:526) returns the material color of a child named "head" (metal/tier tint).</li>
+<li>Item icons are <b>32×32 px tiles</b> in <code>godot/assets/items_atlas.png</code> (rect at <code>items_atlas.json[str(id)]</code>, e.g. 109→[288,0,32,32]). The tool silhouette should visually match its icon profile + a real MC tool.</li>
+</ul>
+<h2>Requirement</h2>
+<ul>
+<li>Refetch/confirm a real Minecraft reference for each tool: <b>pull a Minecraft screenshot/image</b> showing the axe, sword, and pickaxe (and shovel) shapes — save to <code>tasks/AC-0070/</code> (e.g. the item icon PNGs themselves from the pack are a great reference too: you can extract the 32×32 icon tiles for 111/115/119/123/113 from <code>items_atlas.png</code> + <code>items_atlas.json</code> and save as refs — do that). Match the tool's proportions/silhouette to BOTH its icon and a real MC tool.</li>
+<li>Rebuild <code>_tool_voxels</code> (or a new builder) so each tool is a <b>fine silhouette on a grid ≈ the icon resolution (target ~32×32, at least ~16×16)</b>, extruded into voxels:
+  <ul>
+  <li><b>sword:</b> a straight blade that tapers slightly toward the tip + a small guard + a short grip (blade metal = tier tint, grip = wood).</li>
+  <li><b>pickaxe:</b> a curved, two-pronged/double-headed blade arcing across the top of a diagonal handle (head metal = tier tint, handle wood).</li>
+  <li><b>axe:</b> a single broad blade on one side of a diagonal handle (head metal = tier tint, handle wood).</li>
+  <li><b>shovel:</b> a flat spade blade at the end of a straight handle (blade = tier tint, handle wood).</li>
+  </ul>
+  Color the "head" (metal) voxels with <code>tcolor</code> = <code>Data.item_tint(id)</code> (wood/stone/iron/diamond differ) and the handle with the existing wood color (HANDLE_C). Keep the <code>head</code> flag on the metal voxels so <code>held_head_color()</code> still returns the tier tint.</li>
+<li><b>Scale:</b> shrink the voxel size so the tool's OVERALL size + position stay essentially the same as today (the hand must still read naturally and stay where it is). E.g. compute per-tool voxel size ≈ (current overall size) / (grid length) rather than the constant 0.12. Keep TOOL_POSE_ROT/POS (or adjust only minimally) so AC-0060 sway + AC-0048 swing + AC-0067 depth-disable all still work unchanged.</li>
+<li>Do NOT change tier data, item ids, recipes, or the tier-tint logic. Do NOT touch held blocks/cross (AC-0066), held on-top (AC-0067), or sway/swing (AC-0060/0048) — only the tool voxel model + its scale.</li>
+</ul>
+<h2>Keep green (hard regressions)</h2>
+<ul>
+<li>The <code>held_tool</code> node structure: a Node3D of voxel MeshInstance children, `tool` distinct from box/sprite/fist (the <code>AWECRAFT_LOGIC=swing</code> harness asserts <code>tool_%d present + type + not fist/sprite/box</code>).</li>
+<li><code>held_tool_type</code> correct for 111/113→pick, 115→axe, 119→shovel, 123→sword.</li>
+<li><code>held_head_color()</code>: wood (111) ≠ iron (113) tier tints (the swing harness asserts <code>tier_differs_111_vs_113</code>).</li>
+</ul>
+<h2>Gates (cheap-to-expensive; zero script errors EVERY run; logic ~3.5s, renders ~1.5-6s)</h2>
+<ol>
+<li>G1: <code>--headless --quit</code> → 0 script errors.</li>
+<li>G2: FULL AWECRAFT_LOGIC battery → green except KNOWN PRE-EXISTING <code>fpv tool_held_ok:false</code>; 0 script errors; <code>swing</code> harness must STAY green (tool types, tier_differs, head colors, swing loop, sway). guiclick/craft unchanged.</li>
+<li>G3 (headless assert, extend a harness): select each tool id (111/113/115/119/123) → RESULT JSON asserting the held tool is a voxel node, has a FINER voxel count than before (report the voxel count; assert it exceeds the old 3–5, e.g. ≥ ~20), head color == <code>Data.item_tint</code> (tier-differing), and the tool's bbox overall size is within ~±25% of the old overall size (scale preserved). ok:true.</li>
+<li>G4 (render — the real proof): capture each held tool as an FPV/held shot — at least the 4 types (a pickaxe, axe, shovel, sword), ideally a wood + diamond tier of each if cheap → <code>tasks/AC-0070/held_pick.png, held_axe.png, held_shovel.png, held_sword.png</code> (tier variants suffixed). VIEW them (you have image access) against the ref icons + the MC reference: each must clearly read as its named tool (curved pick head, axe blade, sword blade, shovel spade), not a chunky blob, and look consistent with its icon.</li>
+<li>G5: <code>./build_web.sh</code> → 0; browser (playwright, https://localhost:8443, 1920×1080, daemon 411476 do NOT kill): hold a pickaxe/axe/sword → shots <code>tasks/AC-0070/web_tool_*.png</code>; readable as tools; 0 console errors.</li>
+</ol>
+<h2>Scope fence</h2>
+<p>Only the held TOOL voxel models + their scale (player.gd <code>_tool_voxels</code>/<code>_setup_held_tool</code>/<code>_make_voxel</code>/<code>TOOL_VOX</code>, a possible new fine-silhouette builder in <code>player.gd</code> or <code>core/</code>). No held block/cross/on-top/sway/swing logic changes; no tier/item/recipe changes; no menu. **Do NOT run git (no commit/push) and do NOT edit coordination files — coordinate ONLY via your report; the coordinator commits.** No renders beyond G4/G5.</p>
+<h2>Deliverables</h2>
+<p>Code + refs (icon tiles + any MC ref) + <code>tasks/AC-0070/AC-0070-results.html</code> (refs, G3 RESULT json, before/after held-tool shots, deviations) + report ≤20 lines (files changed, voxel counts before→after per tool, G1-G5 results, whether git ran = MUST be "no", deviations).</p>
+</body></html>
