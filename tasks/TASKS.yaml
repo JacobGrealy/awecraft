@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-22T10:52
+  updated_at: 2026-08-22T17:21
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -1963,11 +1963,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-22T10:52
-  updated_at: 2026-08-22T10:52
-  completed_at: null
+  updated_at: 2026-08-22T17:21
+  completed_at: 2026-08-22T17:21
   waiting_on: null
   parent_id: null
   notes: 'Held tool voxel models have the WRONG ORIENTATION: in first person they should be oriented like MC - head pointing
@@ -1986,6 +1986,16 @@ intake:
     updated_at: null
     text: '[user] the flower looks close to right, why are the tools so different? Also though the scale of the tools/flowers
       when held should be about twice as big as they currently are'
+  - id: 3
+    created_at: 2026-08-22T17:21
+    updated_at: null
+    text: '[agent] DONE 2026-08-22 (subagent + coordinator verify): TOOL_POSE_ROT (0.467,2.956,-0.394) head->center, TOOL_TARGET_DIAG
+      x2, _apply_swing tool branch retuned (apex head 48-83% closer to center), held_box/sprite 0.35->0.70 + z -0.18 recenter
+      (fixes near-clip cull of big held items; also fixed pre-existing poppy-invisible-since-AC-0067 in headless+browser renders).
+      Coord re-verified: G1 0, toolpose G3 ok:true (scales 0.7, head_above/centered/in_front x4 tools, diag exactly 2x, depth_disabled
+      true), swing all ok:true (tier_differs true), G4 6 renders viewed (head->crosshair, handle bottom-right, mid-swing arcs
+      center, 2x old, no clip), web 3 shots clean. Subagent: no git, no coord files. MC ref = minecraft.wiki File:ShieldFirstPerson
+      + item renders.'
 - id: AC-0074
   title: windows-export-pipeline
   source: user

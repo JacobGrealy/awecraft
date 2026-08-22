@@ -1,0 +1,99 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AC-0073 results — held tool orientation + held scale ×2</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:1080px;line-height:1.5;color:#1b232f}
+h1{font-size:20px}h2{font-size:15px;margin-top:22px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}
+pre{background:#eef1f6;border-radius:4px;padding:8px;font-size:12px;overflow-x:auto}
+img{max-width:100%;border:1px solid #cdd6e3;border-radius:4px;margin:6px 0}
+.grid{display:flex;flex-wrap:wrap;gap:10px}.card{flex:1 1 320px;max-width:480px}
+.good{color:#177b3a;font-weight:600}.bad{color:#b3261e;font-weight:600}
+table{border-collapse:collapse}td,th{border:1px solid #cdd6e3;padding:3px 8px;font-size:13px}</style></head><body>
+<h1>AC-0073 — Held tools: orientation (head toward center, swing sweeps to center) + held item scale ×2</h1>
+
+<h2>MC first-person references (pulled, saved in <code>tasks/AC-0073/refs/</code>)</h2>
+<ul>
+<li><code>refs/mc_shield_firstperson.png</code> — real MC first-person: item sits low-RIGHT, long axis runs bottom-right → center, top/head of item sweeps toward the crosshair on attack (minecraft.wiki File:ShieldFirstPerson).</li>
+<li><code>refs/mc_icon_*.png</code> (wooden pickaxe/axe/shovel/sword item renders), <code>refs/mc_icon_iron_pick.png</code>, <code>refs/mc_icon_iron_sword.png</code>, <code>refs/mc_hud_example.png</code> — crosshair centered, items hugging bottom corners, center never covered.</li>
+</ul>
+
+<h2>What changed (<code>godot/player/player.gd</code> only)</h2>
+<table>
+<tr><th>Symbol</th><th>Before</th><th>After</th></tr>
+<tr><td><code>TOOL_TARGET_DIAG</code> (:73)</td><td>{pick 0.612, axe 0.55, shovel 0.55, sword 0.398}</td><td>×2 → {pick 1.224, axe 1.10, shovel 1.10, sword 0.796}</td></tr>
+<tr><td><code>TOOL_POSE_ROT</code> (:458)</td><td>(−0.42, 0.55, −0.9) — mapped icon head-axis to camera (+0.54, +0.57, −0.63) = up/<b>right, away from center</b></td><td>(0.467168, 2.956413, −0.394178) — head-axis → up/<b>left, toward crosshair</b>; handle to bottom-right. Chosen from a Ry(π)·Rx(−0.5)·Rz(0.35) composition so all 4 TOOL_GRIDS share one convention.</td></tr>
+<tr><td><code>TOOL_POSE_POS</code> (:459)</td><td>(0.03, −0.03, −0.02)</td><td>(0, 0, 0) (hand_root carries the corner position)</td></tr>
+<tr><td><code>_apply_swing</code> tool branch (:818-821)</td><td>pos (0, −0.16a, −0.08a), rot (−1.25a, 0, 0.4a) — head swung away/down</td><td>pos (−0.18a, +0.25a, −0.12a), rot (−0.3a, +0.7a, −0.15a) — at apex the head centroid lands <b>beside the crosshair</b> (visible arc through center). Punch branch untouched (harness green, read fine).</td></tr>
+<tr><td><code>held_box.scale</code> / <code>held_sprite.scale</code> (:371/:376)</td><td>0.35</td><td><b>0.70</b> (<code>HELD_ITEM_SCALE</code>)</td></tr>
+<tr><td><code>held_box.position</code> in <code>_update_held</code> (:413-421)</td><td>(never set; geometry 0..1 anchored at hand origin)</td><td>(0, 0, <b>−0.18</b>) for both box and cross meshes — see "near-clip fix" below</td></tr>
+</table>
+<p>No per-tool pose offsets needed. TOOL_GRIDS voxel shapes unchanged; <code>held_fist</code> unchanged. No new assets.</p>
+
+<h2>Near-clip fix (required to make ×2 flowers/blocks actually render)</h2>
+<p>Held geometry is billboards anchored at the hand origin 0.8 units in front of the camera at 70° FOV (default near = 0.1). At the previous 0.35 scale the cross quad's near face sat at z = −0.425 (0.325 behind the near plane); at a naive 0.70 it sits at z = <b>−0.1 = exactly on the near plane</b> and the software renderer (llvmpipe / swiftshader) drops the whole item from the transparent pass — the held poppy simply vanished (isolated via probe: plain scissor+no-tex renders, scissor+atlas renders in-world but not held, opaque+atlas renders held → near-plane cull). Pulling the held item 0.18 back from the camera puts the near face at z = −0.45 (0.35 behind the near plane, same clearance as the old 0.35 render) while the item stays 2× physical size and reads as 2× on screen. This fixed the poppy on both desktop llvmpipe and web swiftshader (web region red px 30 → 8458).</p>
+
+<h2>G3 headless pose/scale asserts (<code>AWECRAFT_LOGIC=toolpose</code>, camera-space centroids)</h2>
+<pre>RESULT {"depth":{"box":true,"fist":true,"sprite":true,"tool":true},"depth_ok":true,"held_box_scale_x":0.7,
+"held_sprite_scale_x":0.7,"ok":true,"scale_ok":true,
+"tool_111":{"apex_handle":[0.317,-0.172,-0.948],"apex_head":[0.137,-0.104,-0.914],"bbox_diag":1.224,
+ "closer_pct":64.0,"d_apex":0.172,"d_idle":0.482,"depth_disabled":true,"diag_2x_ok":true,"head_above":true,
+ "head_centered":true,"head_in_front":true,"idle_handle":[0.504,-0.416,-0.792],"idle_head":[0.332,-0.35,-0.858],
+ "ok":true,"type":"pick"},
+"tool_115":{"apex_handle":[0.349,-0.214,-0.918],"apex_head":[0.053,-0.046,-0.93],"bbox_diag":1.1,"closer_pct":82.0,
+ "d_apex":0.07,"d_idle":0.39,"depth_disabled":true,"diag_2x_ok":true,"head_above":true,"head_centered":true,
+ "head_in_front":true,"idle_handle":[0.517,-0.468,-0.763],"idle_head":[0.268,-0.284,-0.904],"ok":true,"type":"axe"},
+"tool_119":{"apex_handle":[0.428,-0.216,-0.966],"apex_head":[0.018,-0.062,-0.889],"bbox_diag":1.1,"closer_pct":83.0,
+ "d_apex":0.064,"d_idle":0.378,"depth_disabled":true,"diag_2x_ok":true,"head_above":true,"head_centered":true,
+ "head_in_front":true,"idle_handle":[0.608,-0.46,-0.75],"idle_head":[0.218,-0.309,-0.9],"ok":true,"type":"shovel"},
+"tool_123":{"apex_handle":[0.489,-0.244,-0.97],"apex_head":[0.271,-0.162,-0.93],"bbox_diag":0.796,"closer_pct":48.0,
+ "d_apex":0.316,"d_idle":0.613,"depth_disabled":true,"diag_2x_ok":true,"head_above":true,"head_centered":true,
+ "head_in_front":true,"idle_handle":[0.663,-0.49,-0.724],"idle_head":[0.456,-0.41,-0.804],"ok":true,"type":"sword"}}
+</pre>
+<table>
+<tr><th>tool</th><th>head in front (z)</th><th>head above (y)</th><th>head more centered (|x|)</th><th>apex closer to center</th><th>bbox diag vs 2× old</th><th>depth disabled</th></tr>
+<tr><td>pick 111</td><td class="good">✓</td><td class="good">✓</td><td class="good">✓</td><td class="good">64%</td><td class="good">1.224 = 2×0.612 exact</td><td class="good">✓</td></tr>
+<tr><td>axe 115</td><td class="good">✓</td><td class="good">✓</td><td class="good">✓</td><td class="good">82%</td><td class="good">1.10 = 2×0.55 exact</td><td class="good">✓</td></tr>
+<tr><td>shovel 119</td><td class="good">✓</td><td class="good">✓</td><td class="good">✓</td><td class="good">83%</td><td class="good">1.10 = 2×0.55 exact</td><td class="good">✓</td></tr>
+<tr><td>sword 123</td><td class="good">✓</td><td class="good">✓</td><td class="good">✓</td><td class="good">48%</td><td class="good">0.796 = 2×0.398 exact</td><td class="good">✓</td></tr>
+</table>
+<p>All gates per tool: idle head closer to crosshair direction than handle (z smaller, y higher, |x| smaller), apex head ≥20% closer to (0,0,·) center (min achieved 48%), scale 0.70±5%, bbox diag exactly 2× old ±15%, tool/box/fist/sprite depth still DISABLED (AC-0067 hold). Overall <code>ok:true</code>.</p>
+
+<h2>Gates</h2>
+<table>
+<tr><th>Gate</th><th>Result</th></tr>
+<tr><td>G1 <code>godot --headless --quit</code></td><td class="good">0 script errors</td></tr>
+<tr><td>G2 full AWECRAFT_LOGIC battery (23 modes: player/interact/light/fluids/buckets/water/craft/survival/combat/daynight/tint/swing/held/toolres/toolpose/fpv/save/settings/hunger/guiclick/look/trees/fluidsettle etc.)</td><td class="good">0 script errors in every mode; all <code>ok</code> keys true. fpv keeps the KNOWN PRE-EXISTING <code>tool_held_ok:false</code> sub-key (present before this task); swing: tool types per id, tier_differs_111_vs_113 true, punch_moved &gt;0.1, loop 3-5 cycles, settles, sway green; held: depth_ok true; toolres voxel counts intact</td></tr>
+<tr><td>G3 <code>AWECRAFT_LOGIC=toolpose</code></td><td class="good">ok:true (table above; 64/82/83/48% apex close-in)</td></tr>
+<tr><td>G4 renders (R=1, llvmpipe)</td><td class="good">all 6 saved + VIEWED: idle heads point toward crosshair, handles bottom-right, ~2× the AC-0070 shots, mid-swing head arcs to just beside the crosshair, crosshair uncovered, nothing clipped</td></tr>
+<tr><td>G5 web (playwright https://localhost:8443 1920×1080, server 411476 untouched)</td><td class="good"><code>./build_web.sh</code> exit 0; pickaxe idle + mid-swing (J key, head sweeps to center band — 4757 brown px in the 930-990×500-580 center band) + poppy 2× all read correctly in browser; 0 console errors (only known headless "user gesture required for pointer lock" pageerror)</td></tr>
+</table>
+
+<h2>Before (AC-0070, head up-RIGHT away from center, 0.35 scale)</h2>
+<div class="grid">
+<div class="card"><img src="../AC-0070/held_pick.png"><img src="../AC-0070/held_axe.png"></div>
+<div class="card"><img src="../AC-0070/held_shovel.png"><img src="../AC-0070/held_sword.png"></div>
+</div>
+
+<h2>After — idle (2026-08-22, head toward center, 0.70 scale)</h2>
+<div class="grid">
+<div class="card"><img src="held_pick.png"><img src="held_axe.png"></div>
+<div class="card"><img src="held_shovel.png"><img src="held_sword.png"></div>
+</div>
+
+<h2>After — mid-swing apex (head swept to just beside crosshair) + poppy ×2</h2>
+<div class="grid">
+<div class="card"><img src="held_pick_swing.png"><img src="held_poppy_2x.png"></div>
+</div>
+
+<h2>Web (1920×1080)</h2>
+<div class="grid">
+<div class="card"><img src="web_pick_idle.png"><img src="web_pick_swing.png"><img src="web_poppy_idle.png"></div>
+</div>
+
+<h2>Deviations / notes</h2>
+<ul>
+<li><b>held_box z recenter (−0.18)</b> — required to make ×2 flowers/blocks render at all (near-plane cull of the 1×-anchored geometry at scale 0.70; see above). Purely a viewmodel position term; items remain at the same screen anchor, 2× size.</li>
+<li><code>held_fist</code> left UNCHANGED (0.18/0.3/0.24 box at (0, −0.05, 0)) — user did not ask, reads fine next to ×2 items in the shots.</li>
+<li>Swing punch branch untouched (was not reported as reading wrong; harness green).</li>
+<li>No git run by this subagent; no coordination files touched; index.html untouched.</li>
+<li>Known pre-existing (not mine, left as-is): <code>AWECRAFT_LOGIC=fpv</code> <code>tool_held_ok:false</code>; <code>AWECRAFT_LOGIC=wallshot</code> does not exit under headless on this box (pre-dates this task, never ran in the battery loop).</li>
+</ul>
+</body></html>

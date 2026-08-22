@@ -711,6 +711,11 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			player = _spawn_player()
 			await _toolres_test()
 			return
+		if logic == "toolpose":
+			world.recenter(spawn.x, spawn.z, true)
+			player = _spawn_player()
+			await _toolpose_test()
+			return
 		if logic == "wallshot":
 			world.recenter(spawn.x, spawn.z, true)
 			await _await_spawn_floor(spawn, 300)
@@ -3508,7 +3513,7 @@ func _held_test() -> void:
 				boxd = {"tris": idx2.size() / 3, "faces": spans, "tint_top_ok": tint_top_ok, "tint_side_ok": tint_side_ok, "atlas_same": mat2_ok}
 	res["box_ok"] = box_ok
 	res["box_1"] = boxd
-	res["scale_ok"] = p.held_box != null and p.held_box.scale == Vector3(0.35, 0.35, 0.35)
+	res["scale_ok"] = p.held_box != null and p.held_box.scale == Vector3(0.7, 0.7, 0.7) and p.held_sprite != null and p.held_sprite.scale == Vector3(0.7, 0.7, 0.7)
 	var depth: Dictionary = {}
 	var depth_ok := true
 	p.sel = _slot_of(p, 18)
@@ -3570,7 +3575,7 @@ func _toolres_test() -> void:
 		await get_tree().physics_frame
 	var r := {}
 	var ok := true
-	var old_diag := {111: 0.612, 113: 0.612, 115: 0.55, 119: 0.55, 123: 0.398}
+	var old_diag := {111: 1.224, 113: 1.224, 115: 1.10, 119: 1.10, 123: 0.796}
 	var exp_type := {111: "pick", 113: "pick", 115: "axe", 119: "shovel", 123: "sword"}
 	for tid in [111, 113, 115, 119, 123]:
 		Debug.give_item(tid, 1)
@@ -3620,6 +3625,107 @@ func _toolres_test() -> void:
 	ok = ok and tier_nei
 	r["ok"] = ok
 	Debug.result(r)
+	get_tree().quit()
+
+
+func _toolpose_centroid(cam: Camera3D, mi: MeshInstance3D) -> Vector3:
+	if mi == null or mi.mesh == null:
+		return Vector3(INF, INF, INF)
+	var gt: Transform3D = mi.get_global_transform()
+	var center: Vector3 = gt.basis * mi.mesh.get_aabb().get_center() + gt.origin
+	return cam.to_local(center)
+
+
+func _toolpose_test() -> void:
+	var p = Game.player
+	for i in 10:
+		await get_tree().physics_frame
+	var cam: Camera3D = p.camera
+	var res: Dictionary = {}
+	var ok := true
+	if p.held_box != null:
+		res["held_box_scale_x"] = roundf(p.held_box.scale.x * 1000.0) / 1000.0
+	else:
+		res["held_box_scale_x"] = -1.0
+	if p.held_sprite != null:
+		res["held_sprite_scale_x"] = roundf(p.held_sprite.scale.x * 1000.0) / 1000.0
+	else:
+		res["held_sprite_scale_x"] = -1.0
+	var scale_ok := absf(float(res["held_box_scale_x"]) - 0.70) <= 0.05 and absf(float(res["held_sprite_scale_x"]) - 0.70) <= 0.05
+	res["scale_ok"] = scale_ok
+	ok = ok and scale_ok
+	var old_diag := {111: 0.612, 115: 0.55, 119: 0.55, 123: 0.398}
+	var exp_type := {111: "pick", 115: "axe", 119: "shovel", 123: "sword"}
+	var tool_d_ok := true
+	for tid in [111, 115, 119, 123]:
+		Debug.give_item(tid, 1)
+		p.sel = _slot_of(p, tid)
+		for i in 10:
+			await get_tree().physics_frame
+		var tool = p.held_tool
+		if tool == null or not tool.visible:
+			res["tool_%d" % tid] = {"ok": false, "reason": "missing"}
+			ok = false
+			continue
+		var head_mi := tool.get_node_or_null("head") as MeshInstance3D
+		var handle_mi := tool.get_node_or_null("handle") as MeshInstance3D
+		var ih: Vector3 = _toolpose_centroid(cam, head_mi)
+		var ip: Vector3 = _toolpose_centroid(cam, handle_mi)
+		p.hold_swing(0.5, p.SWING_ITEM)
+		for i in 10:
+			await get_tree().physics_frame
+		var ah: Vector3 = _toolpose_centroid(cam, head_mi)
+		var ap: Vector3 = _toolpose_centroid(cam, handle_mi)
+		p.clear_swing()
+		for i in 10:
+			await get_tree().physics_frame
+		var aabb := AABB()
+		var has := false
+		for c in tool.get_children():
+			if c is MeshInstance3D and (c as MeshInstance3D).visible:
+				var la: AABB = (c as MeshInstance3D).mesh.get_aabb()
+				aabb = la if not has else aabb.merge(la)
+				has = true
+		var diag := 0.0
+		if has:
+			diag = Vector3(aabb.size).length()
+		var old: float = float(old_diag[tid])
+		var diag_ok := has and absf(diag - 2.0 * old) <= 0.15 * 2.0 * old
+		var pos_ok := ih.z < ip.z and ih.y > ip.y and absf(ih.x) < absf(ip.x)
+		var d_idle := Vector2(ih.x, ih.y).length()
+		var d_apex := Vector2(ah.x, ah.y).length()
+		var arc_ok := d_idle > 0.05 and d_apex <= 0.8 * d_idle
+		var dtool := true
+		for c in tool.get_children():
+			if c is MeshInstance3D:
+				var tm = (c as MeshInstance3D).material_override
+				dtool = dtool and tm is StandardMaterial3D and (tm as StandardMaterial3D).depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+		tool_d_ok = tool_d_ok and dtool
+		var row_ok: bool = String(p.held_tool_type) == String(exp_type[tid]) and pos_ok and arc_ok and diag_ok and dtool
+		ok = ok and row_ok
+		res["tool_%d" % tid] = {
+			"type": String(p.held_tool_type),
+			"idle_head": [roundf(ih.x * 1000.0) / 1000.0, roundf(ih.y * 1000.0) / 1000.0, roundf(ih.z * 1000.0) / 1000.0],
+			"idle_handle": [roundf(ip.x * 1000.0) / 1000.0, roundf(ip.y * 1000.0) / 1000.0, roundf(ip.z * 1000.0) / 1000.0],
+			"apex_head": [roundf(ah.x * 1000.0) / 1000.0, roundf(ah.y * 1000.0) / 1000.0, roundf(ah.z * 1000.0) / 1000.0],
+			"apex_handle": [roundf(ap.x * 1000.0) / 1000.0, roundf(ap.y * 1000.0) / 1000.0, roundf(ap.z * 1000.0) / 1000.0],
+			"head_in_front": ih.z < ip.z, "head_above": ih.y > ip.y, "head_centered": absf(ih.x) < absf(ip.x),
+			"d_idle": roundf(d_idle * 1000.0) / 1000.0, "d_apex": roundf(d_apex * 1000.0) / 1000.0,
+			"closer_pct": roundf((1.0 - d_apex / d_idle) * 100.0),
+			"bbox_diag": roundf(diag * 1000.0) / 1000.0, "diag_2x_ok": diag_ok,
+			"depth_disabled": dtool, "ok": row_ok,
+		}
+	var box_d := p.held_box != null and p.held_box.material_override is StandardMaterial3D \
+		and (p.held_box.material_override as StandardMaterial3D).depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+	var fist_d := p.held_fist != null and p.held_fist.material_override is StandardMaterial3D \
+		and (p.held_fist.material_override as StandardMaterial3D).depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+	var spr_d: bool = p.held_sprite != null and (p.held_sprite.no_depth_test == true)
+	var depth_ok_all: bool = tool_d_ok and box_d and fist_d and spr_d
+	res["depth"] = {"tool": tool_d_ok, "box": box_d, "fist": fist_d, "sprite": spr_d}
+	res["depth_ok"] = depth_ok_all
+	ok = ok and depth_ok_all
+	res["ok"] = ok
+	Debug.result(res)
 	get_tree().quit()
 
 

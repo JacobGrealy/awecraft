@@ -70,7 +70,8 @@ var _held_item_texs := {}
 var _tool_mats := {}
 var _held_key := ""
 const HAND_BASE_POS := Vector3(0.45, -0.42, -0.8)
-const TOOL_TARGET_DIAG := {"pick": 0.612, "axe": 0.55, "shovel": 0.55, "sword": 0.398}
+const TOOL_TARGET_DIAG := {"pick": 1.224, "axe": 1.10, "shovel": 1.10, "sword": 0.796}
+const HELD_ITEM_SCALE := 0.70
 const HANDLE_C := Color(0.47, 0.33, 0.18)
 const SWORD_HANDLE_C := Color(0.52, 0.36, 0.22)
 const SWING_DURATION := 0.2
@@ -367,11 +368,12 @@ func _build_held() -> void:
 	var hbmat := StandardMaterial3D.new()
 	hbmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	held_box.material_override = hbmat
-	held_box.scale = Vector3(0.35, 0.35, 0.35)
+	held_box.scale = Vector3.ONE * HELD_ITEM_SCALE
+	held_box.position = Vector3.ZERO
 	held_box.visible = false
 	hand_root.add_child(held_box)
 	held_sprite = Sprite3D.new()
-	held_sprite.scale = Vector3(0.35, 0.35, 0.35)
+	held_sprite.scale = Vector3(0.70, 0.70, 0.70)
 	held_sprite.billboard = 1
 	held_sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	held_sprite.no_depth_test = true
@@ -414,6 +416,7 @@ func _update_held(id: int, n: int) -> void:
 		else:
 			held_box.mesh = HeldMeshes.box_mesh(id)
 			held_box.material_override = HeldMeshes.box_material()
+		held_box.position = Vector3(0.0, 0.0, -0.18)
 		held_box.visible = true
 		return
 	var it = Data.items.get(id)
@@ -454,8 +457,8 @@ func _tint_tex(col: Color) -> ImageTexture:
 	return t
 
 
-const TOOL_POSE_ROT := Vector3(-0.42, 0.55, -0.9)
-const TOOL_POSE_POS := Vector3(0.03, -0.03, -0.02)
+const TOOL_POSE_ROT := Vector3(0.467168, 2.956413, -0.394178)
+const TOOL_POSE_POS := Vector3(0.0, 0.0, 0.0)
 
 
 const TOOL_GRIDS := {
@@ -813,8 +816,8 @@ func _apply_swing(frac: float) -> void:
 		hand_root.position = Vector3(-0.12 * a, 0.03 * a, -0.34 * a)
 		hand_root.rotation = Vector3(-0.12 * a, 0.0, 0.12 * a)
 	else:
-		hand_root.position = Vector3(0.0, -0.16 * a, -0.08 * a)
-		hand_root.rotation = Vector3(-1.25 * a, 0.0, 0.4 * a)
+		hand_root.position = Vector3(-0.18 * a, 0.25 * a, -0.12 * a)
+		hand_root.rotation = Vector3(-0.3 * a, 0.7 * a, -0.15 * a)
 
 
 func _reset_hand_pose() -> void:
