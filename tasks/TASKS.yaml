@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-21T18:41
+  updated_at: 2026-08-21T20:19
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -24,10 +24,11 @@ queue:
 - AC-0064
 - AC-0065
 - AC-0066
+- AC-0071
+- AC-0072
 - AC-0067
 - AC-0070
 - AC-0068
-- AC-0071
 - AC-0034
 - AC-0035
 - AC-0036
@@ -1710,11 +1711,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-21T10:20
-  updated_at: 2026-08-21T10:20
-  completed_at: null
+  updated_at: 2026-08-21T20:18
+  completed_at: 2026-08-21T20:10
   waiting_on: null
   parent_id: null
   notes: 'Viewmodel fidelity (user 2026-08-21): (a) cross-type items (flowers etc. - 2D billboard blocks) must render as the
@@ -1729,6 +1730,26 @@ intake:
       instead of as a block. Also, for blocks that you hold, they should look the same as the big blocks just with the entire
       block scaled down, currently only part of the texture shows on the block and they look different then the blocks in
       the world'
+  - id: 2
+    created_at: 2026-08-21T20:10
+    updated_at: null
+    text: '[agent] DONE 2026-08-21: new core/held_mesh.gd (HeldMeshes) builds per-face-UV 1x1x1 box ArrayMesh (Data.block_rect
+      per face + Data.atlas_tex + block_tint vertex colors, exact chunk.gd UV corner math) and the same crossed-quad cross
+      mesh world chunks emit (top tile, ALPHA_SCISSOR+CULL_DISABLED, double-sided); player.gd _update_held routes cross:true
+      (non-thin) blocks -> cross, else box (scale 0.35/node/sway/swing untouched). Gates: G1 0 err; full battery green, craft+guiclick
+      byte-identical, fpv block_held_ok:true (tool_held_ok:false pre-existing); G3 AWECRAFT_LOGIC=held -> cross_ok:true (4
+      tris, top tile [672,0] uv [673,1,704,32], scissor mat, 0.9*tint col) + box_ok:true (12 tris, top[0,0]/ side[32,0]/bottom[64,0]
+      tiles all ok, tint top 1.0*TINT_GRASS_TOP + side 0.8 ok, atlas mat); G4 held_flower.png reads as crossed-quad poppy,
+      held_block.png grassy top + dirt sides (viewed); G5 build 0 + web ?aw=18:2|1:2 (new _apply_aw_query + head_include --separator
+      user-arg hook) web_held_flower/block.png verified, 0 console errors. Deviations: held meshes lit (chunk materials are
+      lit; viewmodel lighting = AC-0035); thin cross (torch) not converted (world uses box pass for thin). See tasks/AC-0066/AC-0066-results.html.'
+  - id: 3
+    created_at: 2026-08-21T20:18
+    updated_at: null
+    text: '[agent] Coordinator verify 2026-08-21: G1 0 script errors re-run clean; AWECRAFT_LOGIC=held box_1 grass top[0,0]/side[32,0]/bottom[64,0]
+      all ok + tint ok, poppy18 cross 4tris atlas-scissor ok; held_block.png + held_flower.png viewed = grassy-top/dirt-side
+      scaled block + crossed-quad poppy (not cube); web A/B 0 console errors. Deviations ok (torch/thin cross kept as box
+      per world path; web aw= arg-separator fix in export_presets).'
 - id: AC-0067
   title: viewmodel-always-on-top
   source: user
@@ -1870,3 +1891,28 @@ intake:
       chunk.gd:372-374) + fluid window-slide re-wake (world.gd:719-723). 5 DECISIONS NEEDED for user (phasing, web thread
       parity, collision staging, unload flash, default radius) — each with a recommendation. Implementation = separate task
       (re-scopes AC-0034) pending user review.'
+- id: AC-0072
+  title: option-sliders-render-sim
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-21T20:19
+  updated_at: 2026-08-21T20:19
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Menu options: (1) Render distance slider range 4-96 (was 1-8), DEFAULT 50 (was 4). (2) Simulation distance slider
+    must NEVER exceed the render slider - clamp sim so sim<=render at all times (on render change AND on sim change). Settings
+    persist as before (user:// -> IndexedDB). NOTE: a 50-chunk default is a big ask for the current progressive (not-yet-true-streaming)
+    engine - flag perf expectation, pair with AC-0071/AC-0034 streaming. Verify: slider applies render radius + fluid sim
+    radius correctly, sim clamps to render, persists across reload, no script errors, web rebuild + browser.'
+  comments:
+  - id: 1
+    created_at: 2026-08-21T20:19
+    updated_at: null
+    text: '[user] render chunk slider should go from 4-96 and default should be 50. simulation slider can never be more than
+      render slider'

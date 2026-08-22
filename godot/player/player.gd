@@ -63,7 +63,6 @@ var held_sprite: Sprite3D = null
 var held_fist: MeshInstance3D = null
 var held_tool: Node3D = null
 var held_tool_type := ""
-var _held_mats := {}
 var _held_texs := {}
 var _held_item_texs := {}
 var _tool_mats := {}
@@ -409,7 +408,12 @@ func _update_held(id: int, n: int) -> void:
 		return
 	var binfo = Data.block(id)
 	if binfo != null:
-		held_box.material_override = _held_mat(id, binfo)
+		if bool(binfo.get("cross", false)) and not bool(binfo.get("thin", false)):
+			held_box.mesh = HeldMeshes.cross_mesh(id)
+			held_box.material_override = HeldMeshes.cross_material()
+		else:
+			held_box.mesh = HeldMeshes.box_mesh(id)
+			held_box.material_override = HeldMeshes.box_material()
 		held_box.visible = true
 		return
 	var it = Data.items.get(id)
@@ -436,24 +440,6 @@ func _item_atlas_tex(id: int) -> ImageTexture:
 	t = ImageTexture.create_from_image(img)
 	_held_item_texs[id] = t
 	return t
-
-
-func _held_mat(id: int, binfo: Dictionary) -> StandardMaterial3D:
-	var m = _held_mats.get(id)
-	if m != null:
-		return m
-	m = StandardMaterial3D.new()
-	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	m.vertex_color_use_as_albedo = false
-	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-	var r := Data.block_rect(id, "side")
-	if Data.atlas_tex != null and r != Vector2i(-1, -1) and Data.atlas_tex.get_image() != null:
-		var tile := Data.atlas_tex.get_image().get_region(Rect2i(r, Vector2i(Data.TILE_PX, Data.TILE_PX)))
-		m.albedo_texture = ImageTexture.create_from_image(tile)
-	else:
-		m.albedo_color = binfo["color"]["side"]
-	_held_mats[id] = m
-	return m
 
 
 func _tint_tex(col: Color) -> ImageTexture:

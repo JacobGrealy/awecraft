@@ -262,6 +262,7 @@ func _continue_slot(slot: int) -> void:
 		world.recenter(player.position.x, player.position.z)
 	Game.time_of_day = float(data.get("time", 0.0))
 	Game.start()
+	_apply_aw_query()
 
 
 func _restore_player(ps: Dictionary) -> void:
@@ -296,6 +297,23 @@ func start_game(seed: int) -> void:
 	await _await_spawn_floor(spawn, 300)
 	player = _spawn_player()
 	Game.start()
+	_apply_aw_query()
+
+
+func _apply_aw_query() -> void:
+	var spec := ""
+	for a in OS.get_cmdline_user_args():
+		var s := String(a)
+		if s.begins_with("aw="):
+			spec = s.substr(3)
+	if spec == "" or player == null:
+		return
+	var pairs := spec.split("|")
+	for pair in pairs:
+		var pp := pair.split(":")
+		Debug.give_item(int(pp[0]), int(pp[1]) if pp.size() > 1 else 1)
+	player.sel = _slot_of(player, int(pairs[0].split(":")[0]))
+	Game.message("Debug items given (%s)" % spec)
 
 
 func _free_game_nodes() -> void:
@@ -644,6 +662,11 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			world.recenter(spawn.x, spawn.z, true)
 			player = _spawn_player()
 			await _fpv_test()
+			return
+		if logic == "held":
+			world.recenter(spawn.x, spawn.z, true)
+			player = _spawn_player()
+			await _held_test()
 			return
 		if logic == "editperf":
 			await _editperf_test(spawn)
@@ -3274,6 +3297,112 @@ func _await_world_build(where: Vector3, max_frames: int) -> void:
 	print("SNAPDRAIN not fully drained after %d frames" % max_frames)
 
 
+func _held_test() -> void:
+	var p = Game.player
+	for i in 10:
+		await get_tree().physics_frame
+	var res: Dictionary = {}
+	Debug.give_item(18, 3)
+	p.sel = _slot_of(p, 18)
+	for i in 6:
+		await get_tree().physics_frame
+	var cross_ok := false
+	var cross: Dictionary = {}
+	if p.held_box != null and p.held_box.visible:
+		var me = p.held_box.mesh
+		if me is ArrayMesh:
+			var am: ArrayMesh = me
+			if am.get_surface_count() > 0:
+				var ss = am.surface_get_arrays(0)
+				var verts: PackedVector3Array = ss[Mesh.ARRAY_VERTEX]
+				var uvs: PackedVector2Array = ss[Mesh.ARRAY_TEX_UV]
+				var cols: PackedColorArray = ss[Mesh.ARRAY_COLOR]
+				var idx: PackedInt32Array = ss[Mesh.ARRAY_INDEX]
+				var tl := Data.block_rect(18, "top")
+				var minx := INF
+				var miny := INF
+				var maxx := -INF
+				var maxy := -INF
+				for uvv in uvs:
+					minx = minf(minx, uvv.x)
+					miny = minf(miny, uvv.y)
+					maxx = maxf(maxx, uvv.x)
+					maxy = maxf(maxy, uvv.y)
+				var px := [int(round(minx * Data.ATLAS_PX)), int(round(miny * Data.ATLAS_PX)), int(round(maxx * Data.ATLAS_PX)), int(round(maxy * Data.ATLAS_PX))]
+				var inx0 := (float(tl.x) + 0.5) / Data.ATLAS_PX
+				var inx1 := (float(tl.x) + 31.5) / Data.ATLAS_PX
+				var iny0 := (float(tl.y) + 0.5) / Data.ATLAS_PX
+				var iny1 := (float(tl.y) + 31.5) / Data.ATLAS_PX
+				var uv_ok := absf(minx - inx0) < 0.002 and absf(maxx - inx1) < 0.002 \
+					and absf(miny - iny0) < 0.002 and absf(maxy - iny1) < 0.002
+				var mat = p.held_box.material_override
+				var mat_ok := mat is StandardMaterial3D \
+					and (mat as StandardMaterial3D).transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR \
+					and (mat as StandardMaterial3D).cull_mode == BaseMaterial3D.CULL_DISABLED
+				var want: Color = Color(0.9, 0.9, 0.9) * Data.block_tint(18, "top")
+				var c0: Color = cols[0]
+				var col_ok := absf(c0.r - want.r) < 0.002 and absf(c0.g - want.g) < 0.002 and absf(c0.b - want.b) < 0.002
+				cross_ok = idx.size() / 3 == 4 and verts.size() == 8 and uv_ok and mat_ok and col_ok
+				cross = {"tris": idx.size() / 3, "verts": verts.size(), "tile_top": [int(tl.x), int(tl.y)], "uv_px": px, "mat_ok": mat_ok, "col_ok": col_ok, "atlas_same": (mat as StandardMaterial3D).albedo_texture == Data.atlas_tex}
+	res["cross_ok"] = cross_ok
+	res["cross_18"] = cross
+	res["sprite_hidden"] = p.held_sprite != null and p.held_sprite.visible == false
+	Debug.give_item(1, 3)
+	p.sel = _slot_of(p, 1)
+	for i in 6:
+		await get_tree().physics_frame
+	var box_ok := false
+	var boxd: Dictionary = {}
+	if p.held_box != null and p.held_box.visible:
+		var me2 = p.held_box.mesh
+		if me2 is ArrayMesh:
+			var am2: ArrayMesh = me2
+			if am2.get_surface_count() > 0:
+				var ss2 = am2.surface_get_arrays(0)
+				var uvs2: PackedVector2Array = ss2[Mesh.ARRAY_TEX_UV]
+				var cols2: PackedColorArray = ss2[Mesh.ARRAY_COLOR]
+				var idx2: PackedInt32Array = ss2[Mesh.ARRAY_INDEX]
+				var names: Array = ["side", "side", "top", "bottom", "side", "side"]
+				var spans := {}
+				var all_ok := true
+				for fi in 6:
+					var b0 := fi * 4
+					var mnx := INF
+					var mny := INF
+					var mxx := -INF
+					var myy := -INF
+					for j in 4:
+							mnx = minf(mnx, uvs2[b0 + j].x)
+							mny = minf(mny, uvs2[b0 + j].y)
+							mxx = maxf(mxx, uvs2[b0 + j].x)
+							myy = maxf(myy, uvs2[b0 + j].y)
+					var fn := String(names[fi])
+					var tl2 := Data.block_rect(1, fn)
+					var fx0 := (float(tl2.x) + 0.5) / Data.ATLAS_PX
+					var fx1 := (float(tl2.x) + 31.5) / Data.ATLAS_PX
+					var fy0 := (float(tl2.y) + 0.5) / Data.ATLAS_PX
+					var fy1 := (float(tl2.y) + 31.5) / Data.ATLAS_PX
+					var fok := absf(mnx - fx0) < 0.002 and absf(mxx - fx1) < 0.002 \
+						and absf(mny - fy0) < 0.002 and absf(myy - fy1) < 0.002
+					all_ok = all_ok and fok
+					spans[fn] = {"tile": [int(tl2.x), int(tl2.y)], "uv_px": [int(round(mnx * Data.ATLAS_PX)), int(round(mny * Data.ATLAS_PX)), int(round(mxx * Data.ATLAS_PX)), int(round(myy * Data.ATLAS_PX))], "ok": fok}
+				var tcol: Color = cols2[10]
+				var top_want := Color(1.0, 1.0, 1.0) * Data.block_tint(1, "top")
+				var tint_top_ok := absf(tcol.r - top_want.r) < 0.002 and absf(tcol.g - top_want.g) < 0.002 and absf(tcol.b - top_want.b) < 0.002
+				var scol: Color = cols2[0]
+				var side_want := Color(0.8, 0.8, 0.8) * Data.block_tint(1, "side")
+				var tint_side_ok := absf(scol.r - side_want.r) < 0.002 and absf(scol.g - side_want.g) < 0.002 and absf(scol.b - side_want.b) < 0.002
+				var mat2 = p.held_box.material_override
+				var mat2_ok := mat2 is StandardMaterial3D and (mat2 as StandardMaterial3D).albedo_texture == Data.atlas_tex
+				box_ok = idx2.size() / 3 == 12 and uvs2.size() == 24 and all_ok and tint_top_ok and tint_side_ok and mat2_ok
+				boxd = {"tris": idx2.size() / 3, "faces": spans, "tint_top_ok": tint_top_ok, "tint_side_ok": tint_side_ok, "atlas_same": mat2_ok}
+	res["box_ok"] = box_ok
+	res["box_1"] = boxd
+	res["scale_ok"] = p.held_box != null and p.held_box.scale == Vector3(0.35, 0.35, 0.35)
+	Debug.result(res)
+	get_tree().quit()
+
+
 func _fpv_test() -> void:
 	var p = Game.player
 	for i in 10:
@@ -3283,22 +3412,38 @@ func _fpv_test() -> void:
 	for i in 6:
 		await get_tree().physics_frame
 	var block_visible := false
-	var block_type_ok := p.held_box is MeshInstance3D
+	var block_type_ok := false
 	var sprite_hidden: bool = p.held_sprite != null and p.held_sprite.visible == false
 	var region_ok := false
 	var region_actual := [-1, -1]
 	var region_want := Data.block_rect(3, "side")
 	if p.held_box != null:
 		block_visible = p.held_box.visible
-		if block_visible and p.held_box.material_override != null:
-			var tex = p.held_box.material_override.albedo_texture
-			if tex is ImageTexture and Data.atlas_tex != null:
-				var ti: Image = tex.get_image()
-				var src: Image = Data.atlas_tex.get_image()
-				region_actual = [int(region_want.x), int(region_want.y)]
-				region_ok = ti.get_size() == Vector2i(Data.TILE_PX, Data.TILE_PX) \
-					and ti.get_pixel(0, 0) == src.get_pixel(region_want.x, region_want.y) \
-					and ti.get_pixel(15, 15) == src.get_pixel(region_want.x + 15, region_want.y + 15)
+		var me = p.held_box.mesh
+		if me is ArrayMesh:
+			block_type_ok = true
+			var am: ArrayMesh = me
+			if am.get_surface_count() > 0:
+				var ss = am.surface_get_arrays(0)
+				var uvs: PackedVector2Array = ss[Mesh.ARRAY_TEX_UV]
+				var idx: PackedInt32Array = ss[Mesh.ARRAY_INDEX]
+				if idx.size() / 3 == 12 and uvs.size() == 24:
+					var mnx := INF
+					var mny := INF
+					var mxx := -INF
+					var myy := -INF
+					for j in 4:
+						mnx = minf(mnx, uvs[j].x)
+						mny = minf(mny, uvs[j].y)
+						mxx = maxf(mxx, uvs[j].x)
+						myy = maxf(myy, uvs[j].y)
+					region_actual = [int(round(mnx * Data.ATLAS_PX)), int(round(mny * Data.ATLAS_PX))]
+					var ex0 := (float(region_want.x) + 0.5) / Data.ATLAS_PX
+					var ex1 := (float(region_want.x) + 31.5) / Data.ATLAS_PX
+					var ey0 := (float(region_want.y) + 0.5) / Data.ATLAS_PX
+					var ey1 := (float(region_want.y) + 31.5) / Data.ATLAS_PX
+					region_ok = absf(mnx - ex0) < 0.002 and absf(mxx - ex1) < 0.002 \
+						and absf(mny - ey0) < 0.002 and absf(myy - ey1) < 0.002
 	Debug.give_item(111, 1)
 	p.sel = _slot_of(p, 111)
 	for i in 6:
