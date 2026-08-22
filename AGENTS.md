@@ -44,7 +44,7 @@ Then continue the task list in CONTINUITY.md §6. Do not re-derive state; the ch
 After each Godot feature or fix: `./build_web.sh` → ensure server running (`serve_web.py`) → report localhost + LAN URLs → user tests in browser → next task. Browser bugs are first-class: reproduce reasoning from the spec (`index.html` is the reference) but fix in `godot/`.
 
 ## Task status (canonical)
-`godot/CONTINUITY.md` §6 — M1-M6b + TEX done; next: RENDER-DIST (visual radius r=2→4, split from sim), then M7+ per `godot/ARCHITECTURE.md` §8.
+`godot/CONTINUITY.md` §6 — AC-0062–AC-0066 + AC-0072 done (2026-08-21); AC-0071 streaming plan delivered, awaiting user review (gates AC-0034); next in queue: AC-0067 viewmodel-on-top.
 
 ## Game semantics reference (user 2026-08-20)
 - Minecraft wiki is the canonical reference for how tools/crafting/blocks should behave — AweCraft must match it **exactly unless the user specifies otherwise**: https://minecraft.wiki/w/Tool , https://minecraft.wiki/w/Block (plus related: Tool_durability, Mining, Crafting_table, Item_repair, Item).
