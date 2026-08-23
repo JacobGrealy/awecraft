@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-22T17:21
+  updated_at: 2026-08-22T21:38
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -1051,7 +1051,7 @@ intake:
   labels:
   - research
   created_at: 2026-08-19T12:00
-  updated_at: 2026-08-19 08:15T12:00
+  updated_at: 2026-08-22T17:22
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -1065,6 +1065,12 @@ intake:
       the planet and then land back on the planet or fly to another planet and land on it. Use "no man''s sky" as inspiration...
       if a fully spherical planet prevents too many challenges... what if we use rings? (like halo)... when on the planet
       surface it should not really feel different from normal minecraft.'
+  - id: 2
+    created_at: 2026-08-22T17:22
+    updated_at: null
+    text: '[agent] SCOPE (user 2026-08-22): also write up the spherical-planet version - several approaches to mapping onto
+      a sphere (lat-lon/equirect, cubemap/cube-sphere, icosahedral/geodesic, visual-sphere+flat-playable NMS style) with pros/cons
+      vs each other AND vs ring worlds. Deliverable tasks/AC-0042/AC-0042-plan.html.'
 - id: AC-0043
   title: endgame
   source: user
@@ -1798,11 +1804,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-21T10:20
-  updated_at: 2026-08-21T10:20
-  completed_at: null
+  updated_at: 2026-08-22T21:38
+  completed_at: 2026-08-22T21:38
   waiting_on: null
   parent_id: null
   notes: 'Water sim rework to MC behavior (user 2026-08-21, spec = https://minecraft.wiki/w/Water - READ IT): water must never
@@ -1816,6 +1822,18 @@ intake:
     text: '[user] for water, it should never have empty space below it, there should be water all the way down until there
       are terrain blocks. If it falls in this way it should spread out at the bottom where it meets the next block. Read this
       to learn how water should work: https://minecraft.wiki/w/Water'
+  - id: 2
+    created_at: 2026-08-22T21:38
+    updated_at: null
+    text: '[agent] DONE 2026-08-22 (2 subagent runs; coordinator verified). water.gd rework per wiki: falling = MOVE not copy
+      (fl>0 cells move down as level-8 when air below; whole column descends 1/tick), land full -> spreads 7-wide (n_l=7..1,
+      level-1 terminal), HOLD rule (no sideways spread while below is still falling). Natural sources (fl==0) = FULL skip/stationary
+      (MC: natural water stationary + sea ZERO writes invariant) - also restored chunk.gd init_fl fl=0 (earlier rework had
+      sea at fl=8 flowing; that was the churn source, sea 2730->2500). fluids test now asserts sea_surface before==final (2730=2730
+      FLAT, backed 1406=1406) + source-over-hole stationary case (0 writes). Coord re-verified: G1 0, fluids sea_stable true
+      + reactions 25/9 + shore [5,7] + water_delta 1, fluidfall G3 ok:true (caseA stationary, caseB descended/landed/spread
+      113cells/18ticks no_drain, caseC flat pool shore[5,7] far[5,1]), buckets/fluidsettle 0 errors, fluid_settled.png viewed
+      = pooled + stepped spread on floor, web shot valid. No git by subagents.'
 - id: AC-0069
   title: controller-support
   source: user

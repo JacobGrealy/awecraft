@@ -749,54 +749,68 @@ func tick_fluids() -> void:
 		for y in range(1, hmax):
 			var ib: int = (y - 1) << 8
 			var ia: int = y << 8
+			var ib2: int = (y - 2) << 8
 			for lz in range(16):
 				var lb: int = lz << 4
 				for lx in range(16):
 					var i := ia | lb | lx
-					if fl[i] == 0:
-						continue
 					var b: int = data[i]
-					if not is_fluid_id(b):
-						fl[i] = 0
+					var l: int
+					if fl[i] == 0:
+						# Natural (worldgen) water is a stationary source (fl=0, MC-style):
+						# oceans/rivers generate stationary and do not flow until
+						# block-updated. fl=0 cells are skipped entirely (no lava reaction,
+						# no fall, no sideways spread) so the natural ocean produces ZERO
+						# writes and stays 100% stable. Player/bucket water arrives with an
+						# explicit fl (8) and runs the full fall/spread pass below.
 						continue
+					else:
+						if not is_fluid_id(b):
+							fl[i] = 0
+							continue
+						l = fl[i]
 					var x := wx0 + lx
 					var z := wz0 + lz
 					var below: int = data[ib | lb | lx]
 					if b == 5 and below == 24:
-						set_block(x, y - 1, z, 25 if fl[i] == 8 else 9, false)
+						set_block(x, y - 1, z, 25 if l == 8 else 9, false)
 						continue
 					if b == 24 and below == 5:
 						set_block(x, y - 1, z, 9, false)
 						continue
-					var l: int = fl[i]
 					var n_l: int = 7 if l == 8 else l - 1
-					if n_l <= 0:
-						continue
 					if fluid_replaceable(below):
-						set_fluid(x, y - 1, z, b, n_l, false)
+						set_fluid(x, y - 1, z, b, 8, false)
+						set_fluid(x, y, z, 0, 0, false)
+					elif n_l <= 0:
+						continue
 					else:
-						for d in FLUID_DIRS:
-							var ddx: int = int(d[0])
-							var ddz: int = int(d[1])
-							var nx := x + ddx
-							var nz := z + ddz
-							var nb: int
-							if ddx == 1 and lx == 15:
-								nb = _nb_block(ne, ia | lb, nx, y, nz)
-							elif ddx == -1 and lx == 0:
-								nb = _nb_block(nw, ia | lb | 15, nx, y, nz)
-							elif ddz == 1 and lz == 15:
-								nb = _nb_block(ns, ia | lx, nx, y, nz)
-							elif ddz == -1 and lz == 0:
-								nb = _nb_block(nn, ia | 240 | lx, nx, y, nz)
-							else:
-								nb = data[ia | ((nz & 15) << 4) | (nx & 15)]
-							if fluid_replaceable(nb):
-								set_fluid(nx, y, nz, b, n_l, false)
-							elif nb == 5 and b == 24:
-								set_block(nx, y, nz, 9, false)
-							elif nb == 24 and b == 5:
-								set_block(nx, y, nz, 9, false)
+						var hold := false
+						if is_fluid_id(below) and y >= 2 and fluid_replaceable(data[ib2 | lb | lx]):
+							hold = true
+						if not hold:
+							for d in FLUID_DIRS:
+								var ddx: int = int(d[0])
+								var ddz: int = int(d[1])
+								var nx := x + ddx
+								var nz := z + ddz
+								var nb: int
+								if ddx == 1 and lx == 15:
+									nb = _nb_block(ne, ia | lb, nx, y, nz)
+								elif ddx == -1 and lx == 0:
+									nb = _nb_block(nw, ia | lb | 15, nx, y, nz)
+								elif ddz == 1 and lz == 15:
+									nb = _nb_block(ns, ia | lx, nx, y, nz)
+								elif ddz == -1 and lz == 0:
+									nb = _nb_block(nn, ia | 240 | lx, nx, y, nz)
+								else:
+									nb = data[ia | ((nz & 15) << 4) | (nx & 15)]
+								if fluid_replaceable(nb):
+									set_fluid(nx, y, nz, b, n_l, false)
+								elif nb == 5 and b == 24:
+									set_block(nx, y, nz, 9, false)
+								elif nb == 24 and b == 5:
+									set_block(nx, y, nz, 9, false)
 	if tick_time:
 		print("TICKMS ", (Time.get_ticks_usec() - t0) / 1000.0)
 

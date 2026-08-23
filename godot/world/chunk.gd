@@ -41,11 +41,10 @@ func set_local(lx: int, y: int, lz: int, id: int) -> void:
 
 
 func init_fl() -> void:
+	# Natural water generates as a stationary source: fl stays 0 (fluid_level() maps
+	# 0 -> 8 for display and sim), so the natural ocean never falls or churns.
+	# Player/bucket water arrives later with an explicit fl (8) and flows.
 	fl.resize(data.size())
-	for i in range(data.size()):
-		var b: int = data[i]
-		if b == 5 or b == 24:
-			fl[i] = 8
 
 
 func _effl(lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, x: int, y: int, z: int) -> int:

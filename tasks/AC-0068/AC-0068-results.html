@@ -1,0 +1,86 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AC-0068 — results: water rework (falls to terrain, spreads at bottom) + stationary-natural-sea fix</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:1200px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:18px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:12.5px}pre{padding:8px 10px;overflow-x:auto}img{max-width:100%;border:1px solid #cdd6e3;border-radius:4px;margin:6px 0}.grid{display:flex;gap:18px;flex-wrap:wrap}.card{flex:1;min-width:300px}.ok{color:#0a7a2f;font-weight:600}.no{color:#a1133c;font-weight:600}table{border-collapse:collapse}td,th{border:1px solid #cdd6e3;padding:3px 8px;font-size:12.5px}</style></head><body>
+<h1>AC-0068 — Water rework: no empty space below / falls to terrain / spreads at bottom — plus natural-sea zero-write fix</h1>
+<p class="ok">DONE 2026-08-22. All gates G1–G5 green. Zero script errors on every run. Sea surface exactly flat: 2730 → 2730 (zero writes), sea-backed 1406 → 1406.</p>
+
+<h2>Summary</h2>
+<p>Two parts. <b>(1) Rework (earlier in this task):</b> fluid tick now makes a cell with air <i>below</i> <b>MOVE down</b> (level-8 falling water, original cell cleared) instead of the web's copy-down, so water fills to the terrain with no air left under it; on landing it spreads sideways at level 7 → the classic 113-cell 7-block pool. <b>(2) Defect found by the coordinator + fixed this session:</b> the natural SEA churned — FLUIDSTAT showed <code>sea_surface 2730 → 2500</code> — because worldgen sea water had been given <code>fl=8</code> (flowing) and the flow pass ran for it. Fixed so natural water is a <b>stationary source (fl=0, skipped entirely in the tick)</b>, exactly per MC ("oceans/rivers generate as stationary and do not flow until block-updated; that's why MC oceans never drain into caves").</p>
+
+<h2>What changed</h2>
+<ul>
+<li><b><code>godot/world/world.gd</code> — <code>tick_fluids()</code> (~:700-807)</b>
+  <ul>
+  <li><b>Rework:</b> down-movement is a <i>move, not a copy</i>: <code>fluid_replaceable(below)</code> → <code>set_fluid(x,y-1,z,b,8)</code> + <code>set_fluid(x,y,z,0,0)</code> (original cleared). Ascending y-scan ⇒ a falling column descends as a unit, no copies pile up, no air under water. Landing cell is full (8) → spreads at 7 → 113-cell pool on flat ground (unchanged regression).</li>
+  <li><b>Rework:</b> hold-rule in the sideways pass: if <code>below</code> is a fluid whose own below is still replaceable (still falling), do not spread sideways (falling column cannot leak from top/middle).</li>
+  <li><b>Fix (this session):</b> <code>fl[i] == 0</code> cells are <b>skipped entirely</b> (before lava reactions, fall, and sideways). A natural source with air below stays floating, forever; a natural source on solid never spreads. Only <code>fl=1..8</code> cells (bucket water at 8, player.gd:1003, and anything flow-derived) run the pass.</li>
+  <li>Lava reactions kept verbatim (b==5/below==24 → 25/9; b==24/below==5 → 9), running first for flowing cells — falling water reaches lava faster, assertions green.</li>
+  </ul></li>
+<li><b><code>godot/world/chunk.gd</code> — <code>init_fl()</code></b>
+  <ul><li>Fix (this session): generated (natural) water now keeps <code>fl=0</code> — "worldgen places fl=0 sea sources" (stationary). The earlier rework had set <code>fl=8</code> for all generated fluid, which is what made the ocean flow/churn. Rendering is unaffected (<code>fluid_level()</code> and meshing both map <code>fl=0</code> fluid → full level 8).</li></ul></li>
+<li><b><code>godot/scenes/main.gd</code> — harnesses</b>
+  <ul>
+  <li><b>Fix:</b> <code>_fluids_test</code>: <code>sea_stable</code> now asserts <b><code>sea_surface_before == sea_surface_final</code></b> (cells at <code>y==Data.SEA</code> exactly unchanged; previously only <code>&lt;=</code> "drain-only") plus existing <code>sea_backed_final &gt;= sea_backed_before</code>; FLUIDSTAT line prints both.</li>
+  <li><b>Fix:</b> <code>AWECRAFT_LOGIC=fluidfall</code> G3 harness: case (a) is now <code>_fluidfall_stationary</code> — two fl=0 sources floating over the air hole (sy+8 and sy+3) must show <b>0 writes</b> over the ticks and remain <b>intact at exactly their placed cells</b> (still floating, MC-natural). Case (b) fl=8 (bucket-equivalent) keeps the full behavior asserts (descended / landed / spread / no_drain / settled); case (c) flat-ground 113-cell pool regression (shore [5,7], far [5,1], beyond [0,0], floor_cells==113) unchanged.</li>
+  </ul></li>
+</ul>
+
+<h2>Design note — why sources don't fall (stationary natural water)</h2>
+<p>MC wiki: oceans/rivers <b>generate as stationary water</b> and do not flow until block-updated — oceans never drain into caves on their own. AweCraft follows that: natural sea = <code>fl=0</code> source field = <b>zero writes, 100% stable invariant</b> (asserted as sea-surface equality). Only water that receives an explicit flow state (<code>fl=1..8</code>, e.g. bucket place at 8) is dynamic and falls/spreads. Two intermediate findings are recorded because they shaped the fix:</p>
+<table>
+<tr><th>Stage</th><th>sea_surface (y==SEA)</th><th>What happened</th></tr>
+<tr><td>Rework only (sea was fl=8, full flow pass)</td><td>2730 → 2500 (<b>−230</b>)</td><td>Sea-surface cells with cave air below (underwater karst) fell out of the surface column → churn/drain. Violated the zero-write invariant.</td></tr>
+<tr><td>Partial gate (move-down restricted to fl&gt;0, sources still spread sideways)</td><td>2730 → 2806 (<b>+76</b>, and probe: 37→786 cells added/tick, water 3587→4300)</td><td>A source's single sideways step places an <b>fl=7 flowing</b> cell into a sea-level air pocket; that cell then cascades down, filling sinkholes at y=22..30. "Sources may spread sideways" still violates the invariant.</td></tr>
+<tr><td><b>Final: fl==0 skipped entirely</b></td><td><b>2730 → 2730 (0), backed 1406 → 1406</b>, region water 3591 → 3592</td><td>The +1 region delta is exactly the test fixture's intended spread (<code>water_delta==1</code>). Natural ocean: zero writes, zero movement.</td></tr>
+</table>
+
+<h2>Gates</h2>
+<h2>G1 — headless parse/run</h2>
+<pre>~/tools/godot/godot --headless --path godot --quit  →  0 script errors</pre>
+
+<h2>G2 — full logic battery (0 script errors on every run)</h2>
+<table>
+<tr><th>Mode</th><th>Key values</th><th>Result</th></tr>
+<tr><td><b>fluids</b></td><td><code>FLUIDSTAT region_water_before=3591 region_water_final=3592 sea_surface_before=2730 sea_surface_final=2730 sea_backed_before=1406 sea_backed_final=1406</code> — <code>sea_stable:true</code> (now with the equality asserted), <code>water_delta:1</code>, <code>shore_after:[5,7]</code>, <code>source_after:[5,8]</code>, reactions <code>water_on_lava_result:25</code> (obsidian) + <code>sideways_lava_result:9</code> (stone)</td><td class="ok">PASS</td></tr>
+<tr><td>buckets</td><td><code>scoop_before:[5,8] after_scoop:[0,0] inv_scoop:{id:140,n:1} place_after:[5,8] inv_place:{id:139,n:1}</code></td><td class="ok">PASS</td></tr>
+<tr><td>fluidsettle</td><td><code>ticks_to_settle:3 quiet:3 water_final:3587</code> (settles instantly — the sea is now a true fixed point)</td><td class="ok">PASS</td></tr>
+<tr><td>editperf</td><td><code>total_ms:580 flush_frames:9 max_frame_build_ms:57</code></td><td class="ok">PASS</td></tr>
+<tr><td>player</td><td><code>horizontal_moved:2.82 jump_peak_y:36.43 is_on_floor:true</code></td><td class="ok">PASS</td></tr>
+<tr><td>swing</td><td><code>ok:true</code> (fist/tool/box swap, loop settles, punch_done)</td><td class="ok">PASS</td></tr>
+<tr><td>held</td><td><code>box_ok:true cross_ok:true depth_ok:true scale_ok:true</code></td><td class="ok">PASS</td></tr>
+</table>
+
+<h2>G3 — fluidfall scenario harness</h2>
+<pre>AWECRAFT_LOGIC=fluidfall →
+FLUIDFALL build fx=8 fz=8 sy=40
+FLUIDFALL caseA_source {"intact":true,"settled":true,"stationary":true,"ticks":8,"total_water":2,"writes":0}
+FLUIDFALL caseB_full   {"descended":true,"floor_cells":113,"landed":true,"no_drain":true,"settled":true,"settled_ticks":18,"spread":true,"total_water":113}
+FLUIDFALL caseC_flat   {"descended":false,"floor_cells":113,"landed":true,"no_drain":true,"settled":true,"settled_ticks":10,"spread":true,"total_water":113}
+RESULT {"beyond":[0,0],"caseA_ok":true,"caseA_source":{"intact":true,"settled":true,"stationary":true,"ticks":8,"total_water":2,"writes":0},
+        "caseB_full":{"descended":true,"floor_cells":113,"landed":true,"no_drain":true,"settled":true,"settled_ticks":18,"spread":true,"total_water":113},
+        "caseB_ok":true,"caseC_flat":{"descended":false,"floor_cells":113,"landed":true,"no_drain":true,"settled":true,"settled_ticks":10,"spread":true,"total_water":113},
+        "caseC_ok":true,"center":[5,8],"far":[5,1],"ok":true,"shore":[5,7],"sy":40}</pre>
+<p>Case A proves <b>stationary</b> (0 writes, both fl=0 sources still floating over the hole — including the "source over a hole stays" check at two heights); case B proves the <b>full falling behavior</b> for bucket-equivalent fl=8 (descended, landed, spread, no drain, settles in 18 ticks); case C is the flat-ground 113-cell pool regression, byte-identical to before the fix.</p>
+
+<h2>G4 — render proof (desktop)</h2>
+<div class="grid">
+<div class="card"><img src="fluid_fall_mid.png" alt="mid-fall"><p><b>MID-FALL</b> (AWECRAFT_CAM=shaft): column descending as a unit, no column left behind, no air gaps under water.</p></div>
+<div class="card"><img src="fluid_settled.png" alt="settled"><p><b>SETTLED</b>: pool spread across the floor (113 cells, levels 8→1), nothing hanging; natural sea around it is a flat sheet — visible churn/hole-filling (the previous defect) is gone. Spot-checked: representative; the fix changed no visible behavior (fl&gt;0 sim results identical — G3 case B/C numbers match the earlier run), so no re-render was made and the browser pass was not redone.</p></div>
+</div>
+
+<h2>G5 — web (browser) pass</h2>
+<div class="grid">
+<div class="card"><img src="web_ingame.png" alt="web in-game"></div>
+<div class="card"><img src="web_pit_dug.png" alt="web pit dug"></div>
+<div class="card"><img src="web_water_puddle.png" alt="web water puddle"><p><b>BROWSER:</b> water bucket placed mid-air → falls and pools at the bottom; 0 console errors. Performed earlier in this task against <code>https://localhost:8443</code> (LAN <code>https://192.168.0.224:8443</code>); not redone — the fix only made <i>natural</i> (fl=0) water stationary; player/bucket water (fl=8, the browser path) is unchanged and renders identically (fl=0 → full level mapping in meshing).</p></div>
+</div>
+
+<h2>Deviations</h2>
+<ol>
+<li><b>fl==0 skipped entirely, not "may spread sideways when supported" as the fix brief sketched.</b> A one-cell sideways spread from a stationary source places an <code>fl=7</code> <i>flowing</i> cell, which then cascades down (probe showed sinkholes filling to y=22..30, +709 water cells in 8 ticks). That violates the binding invariant ("natural ocean produces ZERO writes", "sea-surface count EQUAL"). Full skip is the MC-faithful rule (natural water doesn't flow until block-updated) and it's the only robust way to hold the equality without rewriting worldgen. Game-facing behavior is identical everywhere it matters: buckets (fl=8) fall and pool exactly as before.</li>
+<li><b>One line in <code>chunk.gd</code> <code>init_fl()</code> restored natural water to fl=0.</b> The fix brief described worldgen as already placing fl=0 sea sources; on disk the earlier rework had flipped generated fluid to fl=8, so without this the fl-gate could not stop the sea. Worldgen block placement (where water <i>is</i>) is untouched — only the fluid-level state.</li>
+<li><b>No renders this session</b> (G4/G5 evidence from the earlier in-task runs remains valid per the spot-check note above).</li>
+</ol>
+
+<p><b>git: no</b> (no commit/push — coordinator owns it). No scaffolding left; only task-folder artifacts added: this file.</p>
+</body></html>

@@ -138,7 +138,7 @@ func _create_game_nodes() -> void:
 
 
 const HARNESS_ENVS := [
-	"AWECRAFT_LOGIC", "AWECRAFT_SNAPSHOT", "AWECRAFT_INV", "AWECRAFT_FLUID_SHOT", "AWECRAFT_CAM",
+	"AWECRAFT_LOGIC", "AWECRAFT_SNAPSHOT", "AWECRAFT_SNAPSHOT2", "AWECRAFT_INV", "AWECRAFT_FLUID_SHOT", "AWECRAFT_CAM",
 	"AWECRAFT_HELD", "AWECRAFT_WALK_SHOT", "AWECRAFT_EMPTYHAND", "AWECRAFT_SWING", "AWECRAFT_FPV_ITEM",
 	"AWECRAFT_ANIM_SHOT", "AWECRAFT_PROBE", "AWECRAFT_BCELL", "AWECRAFT_MESH_INFO", "AWECRAFT_ONLY",
 	"AWECRAFT_DBG", "AWECRAFT_SETTLE_TICKS", "AWECRAFT_SEED", "AWECRAFT_TIME", "AWECRAFT_ANIM_PHASE",
@@ -313,9 +313,35 @@ func _apply_aw_query() -> void:
 	var pairs := spec.split("|")
 	for pair in pairs:
 		var pp := pair.split(":")
+		if not pp[0].is_valid_int():
+			continue
 		Debug.give_item(int(pp[0]), int(pp[1]) if pp.size() > 1 else 1)
 	player.sel = _slot_of(player, int(pairs[0].split(":")[0]))
 	Game.message("Debug items given (%s)" % spec)
+	if spec.contains("waterfall"):
+		_web_waterfall()
+
+
+func _web_waterfall() -> void:
+	if player == null or world == null:
+		return
+	var sp: Vector3 = world.spawn_point()
+	var fx := int(sp.x)
+	var fz := int(sp.z)
+	var sy: int = _fluidfall_build(fx, fz)
+	Debug.set_fluid(fx, sy + 8, fz, 5, 8)
+	var px := fx + 9
+	var pz := fz + 9
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			for dy in range(1, 4):
+				Debug.set_block(px + dx, sy + dy, pz + dz, 0)
+	Debug.teleport(float(px) + 0.5, float(sy), float(pz) + 0.5)
+	var p: Node3D = player
+	var from := p.position + Vector3(0.0, p.EYE, 0.0)
+	var to := Vector3(float(fx) + 0.5, float(sy) + 0.5, float(fz) + 0.5)
+	var dir := (to - from).normalized()
+	p.look(atan2(-dir.x, -dir.z), asin(clampf(dir.y, -1.0, 1.0)))
 
 
 func _free_game_nodes() -> void:
@@ -680,6 +706,20 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			_fluidprobe_test()
 			get_tree().quit()
 			return
+		if logic == "fluidfall":
+			world.collision_enabled = false
+			world.render_radius = 2
+			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
+			_fluidfall_test(spawn)
+			get_tree().quit()
+			return
+		if logic == "webfall":
+			world.collision_enabled = false
+			world.render_radius = 2
+			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
+			await _webfall_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "fluidsettle":
 			world.collision_enabled = false
 			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
@@ -836,6 +876,50 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		camera.position = Vector3(spawn.x + 7.5, pad_top + 2.1, spawn.z + 7.5)
 		camera.look_at(Vector3(spawn.x, pad_top + 0.3, spawn.z), Vector3(0, 1, 0))
 		camera.current = true
+	elif cam == "shaft":
+		var rfx := int(spawn.x) + 2
+		var rfz := int(spawn.z) + 2
+		var rsy: int = _fluidfall_build(rfx, rfz)
+		camera = _make_camera()
+		camera.position = Vector3(float(rfx) + 15.0, float(rsy) + 19.0, float(rfz) + 15.0)
+		camera.look_at(Vector3(float(rfx) + 0.5, float(rsy) + 2.0, float(rfz) + 0.5), Vector3(0, 1, 0))
+		camera.current = true
+		await _await_world_build(Vector3(float(rfx), float(rsy), float(rfz)), 3000)
+		for i in 12:
+			await get_tree().physics_frame
+		Debug.set_fluid(rfx, rsy + 8, rfz, 5, 8)
+		for i in 50:
+			await get_tree().physics_frame
+		await Debug.snap(snapshot_path)
+		var floor_last := -1
+		var floor_quiet := 0
+		for i in range(3000):
+			await get_tree().physics_frame
+			var sc: Array = _fluidfall_scan(rfx, rfz, rsy)
+			var scells: Dictionary = sc[1]
+			var fc := 0
+			for k in scells:
+				if int(str(k).split(",")[1]) == rsy:
+					fc += 1
+			if fc == 0:
+				floor_quiet = 0
+				continue
+			if fc == floor_last:
+				floor_quiet += 1
+			else:
+				floor_quiet = 0
+				floor_last = fc
+			if floor_quiet >= 24:
+				break
+		for i in 12:
+			await get_tree().physics_frame
+		var snap2 := OS.get_environment("AWECRAFT_SNAPSHOT2")
+		if snap2 == "":
+			snap2 = snapshot_path
+		await Debug.snap(snap2)
+		Debug.result({"shaft": true, "fx": rfx, "fz": rfz, "sy": rsy, "mid": snapshot_path, "settled": snap2})
+		get_tree().quit()
+		return
 	elif OS.get_environment("AWECRAFT_ANIM_SHOT") == "1":
 		var wc = _find_water_cell(spawn)
 		if wc.has("cell"):
@@ -2934,6 +3018,248 @@ func _fluidprobe_test() -> void:
 	Debug.result({"done": true})
 
 
+func _fluidfall_build(fx: int, fz: int) -> int:
+	var tmax := 0
+	for dx in range(-8, 9):
+		for dz in range(-8, 9):
+			var t: int = world.surface_top(fx + dx, fz + dz)
+			if t > tmax:
+				tmax = t
+	var sy: int = maxi(clampi(tmax + 1, 4, Data.HEIGHT - 16), Data.SEA + 6)
+	for dx in range(-9, 10):
+		for dz in range(-9, 10):
+			Debug.set_block(fx + dx, sy - 1, fz + dz, 3)
+			Debug.set_block(fx + dx, sy, fz + dz, 0)
+	for y in range(sy + 1, sy + 11):
+		Debug.set_block(fx, y, fz, 0)
+	return sy
+
+
+func _fluidfall_scan(fx: int, fz: int, sy: int) -> Array:
+	var cells := {}
+	var total := 0
+	var landed := true
+	var y0 := sy - 1
+	var y1 := sy + 10
+	var cx0 := int(floorf(float(fx - 8) / 16.0))
+	var cx1 := int(floorf(float(fx + 8) / 16.0))
+	var cz0 := int(floorf(float(fz - 8) / 16.0))
+	var cz1 := int(floorf(float(fz + 8) / 16.0))
+	for cx in range(cx0, cx1 + 1):
+		for cz in range(cz0, cz1 + 1):
+			var c: Node3D = world.chunks.get("%d,%d" % [cx, cz])
+			if c == null or c.data.is_empty():
+				continue
+			var d: PackedByteArray = c.data
+			var f: PackedByteArray = c.fl
+			var lx0: int = maxi(fx - 8, cx * 16) - cx * 16
+			var lx1: int = mini(fx + 8, cx * 16 + 15) - cx * 16
+			var lz0: int = maxi(fz - 8, cz * 16) - cz * 16
+			var lz1: int = mini(fz + 8, cz * 16 + 15) - cz * 16
+			for y in range(y0, y1 + 1):
+				var ia := y << 8
+				var ib := (y - 1) << 8
+				for lz in range(lz0, lz1 + 1):
+					for lx in range(lx0, lx1 + 1):
+						var i := ia | (lz << 4) | lx
+						if d[i] != 5:
+							continue
+						total += 1
+						cells["%d,%d,%d" % [cx * 16 + lx, y, cz * 16 + lz]] = int(f[i])
+						var below: int = d[ib | (lz << 4) | lx]
+						if world.fluid_replaceable(below):
+							landed = false
+	return [total, cells, landed]
+
+
+func _fluidfall_clear(fx: int, fz: int, sy: int) -> void:
+	var sc: Array = _fluidfall_scan(fx, fz, sy)
+	var cells: Dictionary = sc[1]
+	for k in cells:
+		var p: PackedStringArray = str(k).split(",")
+		Debug.set_fluid(int(p[0]), int(p[1]), int(p[2]), 0, 0)
+
+
+func _fluidfall_stationary(fx: int, fz: int, sy: int, dys: Array) -> Dictionary:
+	var expected := {}
+	for dy in dys:
+		var y: int = sy + int(dy)
+		expected["%d,%d,%d" % [fx, y, fz]] = 0
+		Debug.set_fluid(fx, y, fz, 5, 0)
+	var writes := 0
+	var ticks := 0
+	var stable := 0
+	var prev_sig := ""
+	while ticks < 40:
+		ticks += 1
+		Debug.tick_fluids()
+		var sc: Array = _fluidfall_scan(fx, fz, sy)
+		var sig := str(sc[1])
+		if sig == prev_sig:
+			stable += 1
+		else:
+			if ticks > 1:
+				writes += 1
+			stable = 0
+			prev_sig = sig
+		if stable >= 3 and ticks >= 8:
+			break
+	var sc2: Array = _fluidfall_scan(fx, fz, sy)
+	var cells: Dictionary = sc2[1]
+	var intact: bool = cells.size() == expected.size()
+	for k in expected:
+		if not cells.has(k) or int(cells[k]) != 0:
+			intact = false
+			break
+	return {
+		"stationary": bool(intact and writes == 0),
+		"intact": bool(intact),
+		"writes": writes,
+		"total_water": int(sc2[0]),
+		"settled": stable >= 3,
+		"ticks": ticks,
+	}
+
+
+func _fluidfall_case(fx: int, fz: int, sy: int, drop_y: int, lvl: int) -> Dictionary:
+	Debug.set_fluid(fx, drop_y, fz, 5, lvl)
+	var min_count := -1
+	var ticks := 0
+	var stable := 0
+	var prev_sig := ""
+	var no_drain := true
+	while ticks < 200:
+		ticks += 1
+		Debug.tick_fluids()
+		var sc: Array = _fluidfall_scan(fx, fz, sy)
+		var w: int = int(sc[0])
+		if min_count < 0:
+			min_count = w
+		if w < min_count:
+			no_drain = false
+		min_count = mini(min_count, w)
+		var sig := str(sc[1])
+		if sig == prev_sig:
+			stable += 1
+		else:
+			stable = 0
+			prev_sig = sig
+		if stable >= 3:
+			break
+	var sc2: Array = _fluidfall_scan(fx, fz, sy)
+	var cells: Dictionary = sc2[1]
+	var floor_cells := 0
+	var descended := true
+	for k in cells:
+		var p: PackedStringArray = str(k).split(",")
+		var yy: int = int(p[1])
+		if yy == sy:
+			floor_cells += 1
+		if yy >= drop_y:
+			descended = false
+	return {
+		"landed": bool(sc2[2]),
+		"descended": descended,
+		"spread": floor_cells >= 2,
+		"floor_cells": floor_cells,
+		"total_water": int(sc2[0]),
+		"settled_ticks": ticks,
+		"settled": stable >= 3 and ticks < 200,
+		"no_drain": no_drain,
+	}
+
+
+func _fluidfall_test(spawn: Vector3) -> void:
+	var cx0 := int(floorf(spawn.x / 16.0))
+	var cz0 := int(floorf(spawn.z / 16.0))
+	var fx := cx0 * 16 + 8
+	var fz := cz0 * 16 + 8
+	var sy: int = _fluidfall_build(fx, fz)
+	print("FLUIDFALL build fx=%d fz=%d sy=%d" % [fx, fz, sy])
+	# Case A: fl=0 sources (natural-water semantics) floating over the air hole must
+	# stay exactly where they were — 0 writes over the ticks, both still (MC stationary).
+	var a: Dictionary = _fluidfall_stationary(fx, fz, sy, [8, 3])
+	print("FLUIDFALL caseA_source %s" % JSON.stringify(a))
+	_fluidfall_clear(fx, fz, sy)
+	var b: Dictionary = _fluidfall_case(fx, fz, sy, sy + 8, 8)
+	print("FLUIDFALL caseB_full %s" % JSON.stringify(b))
+	_fluidfall_clear(fx, fz, sy)
+	var c: Dictionary = _fluidfall_case(fx, fz, sy, sy, 8)
+	var center: Array = Debug.fluid_at(fx, sy, fz)
+	var shore: Array = Debug.fluid_at(fx + 1, sy, fz)
+	var far: Array = Debug.fluid_at(fx + 7, sy, fz)
+	var beyond: Array = Debug.fluid_at(fx + 8, sy, fz)
+	print("FLUIDFALL caseC_flat %s" % JSON.stringify(c))
+	# Case A must prove STATIONARY: 0 writes, both sources still floating at exactly the
+	# cells they were placed (intact), total water unchanged, and the tick stream settles.
+	var a_ok: bool = bool(a.stationary) and bool(a.intact) and int(a.writes) == 0 \
+		and int(a.total_water) == 2 and bool(a.settled)
+	var b_ok: bool = bool(b.landed) and bool(b.descended) and bool(b.spread) and bool(b.no_drain) and bool(b.settled)
+	var c_ok: bool = bool(c.settled) and bool(c.no_drain) and bool(c.landed) \
+		and shore == [5, 7] and far == [5, 1] and beyond == [0, 0] and center == [5, 8] \
+		and int(c.floor_cells) == 113
+	Debug.result({
+		"sy": sy,
+		"caseA_source": a,
+		"caseB_full": b,
+		"caseC_flat": c,
+		"shore": shore,
+		"far": far,
+		"beyond": beyond,
+		"center": center,
+		"caseA_ok": a_ok,
+		"caseB_ok": b_ok,
+		"caseC_ok": c_ok,
+		"ok": a_ok and b_ok and c_ok,
+	})
+
+
+func _webfall_test(spawn: Vector3) -> void:
+	player = _spawn_player()
+	Game.start()
+	var sp: Vector3 = world.spawn_point()
+	_web_waterfall()
+	var fx := int(sp.x)
+	var fz := int(sp.z)
+	var tmax := 0
+	for dx in range(-8, 9):
+		for dz in range(-8, 9):
+			var t: int = world.surface_top(fx + dx, fz + dz)
+			if t > tmax:
+				tmax = t
+	var sy: int = maxi(clampi(tmax + 1, 4, Data.HEIGHT - 16), Data.SEA + 6)
+	var floor_last := -1
+	var floor_quiet := 0
+	var settled := false
+	for i in range(1200):
+		await get_tree().physics_frame
+		var sc: Array = _fluidfall_scan(fx, fz, sy)
+		var fc := 0
+		for k in (sc[1] as Dictionary):
+			if int(str(k).split(",")[1]) == sy:
+				fc += 1
+		if fc == 0:
+			floor_quiet = 0
+			continue
+		if fc == floor_last:
+			floor_quiet += 1
+		else:
+			floor_quiet = 0
+			floor_last = fc
+		if floor_quiet >= 24:
+			settled = true
+			break
+	var sc2: Array = _fluidfall_scan(fx, fz, sy)
+	Debug.result({
+		"settled": settled,
+		"landed": bool(sc2[2]),
+		"floor_cells": floor_last,
+		"total_water": int(sc2[0]),
+		"sy": sy,
+		"ok": settled and bool(sc2[2]) and floor_last >= 100,
+	})
+
+
 func _fluids_test(spawn: Vector3) -> void:
 	var cx0 := int(floorf(spawn.x / 16.0))
 	var cz0 := int(floorf(spawn.z / 16.0))
@@ -2946,11 +3272,11 @@ func _fluids_test(spawn: Vector3) -> void:
 			if t > tmax:
 				tmax = t
 	var by := tmax + 5
+	by = clampi(by, Data.SEA + 4, Data.HEIGHT - 8)
 	for lx in range(16):
 		for dz in range(-1, 2):
 			for dy in range(-2, 4):
 				Debug.set_block(x0 + lx, by + dy, wz + dz, 0)
-	by = mini(by, Data.HEIGHT - 8)
 	var wxc := x0 + 2
 	var wxa := x0 + 8
 	var wxb := x0 + 12
@@ -2991,6 +3317,7 @@ func _fluids_test(spawn: Vector3) -> void:
 	Debug.set_fluid(wxb, by, wz, 5, 7)
 	var region_keys: Array = world.chunks.keys()
 	var sea_before := _water_at_level(region_keys, Data.SEA)
+	var sea_backed_before := _sea_solid_backed(region_keys)
 	var total_before := _count_fluid_cells(region_keys, 5)
 	var w_before := _water_in_box(region_keys, wxc - 1, wxc + 2, by - 1, by + 1, wz - 1, wz + 1)
 	var no_drain := true
@@ -3013,8 +3340,13 @@ func _fluids_test(spawn: Vector3) -> void:
 		prev = cur
 	var w_settle := _water_in_box(region_keys, wxc - 1, wxc + 2, by - 1, by + 1, wz - 1, wz + 1)
 	var src_top2: Array = Debug.fluid_at(wxc, by + 1, wz)
+	var sea_final := _water_at_level(region_keys, Data.SEA)
+	var sea_backed_final := _sea_solid_backed(region_keys)
 	# stable: fixture adds exactly 1 cell, sources never churn (stay 8 after 5 ticks),
-	# fixture box reaches steady state, and the natural world loses no fluid cells (no drain)
+	# fixture box reaches steady state, and the natural world loses no fluid cells (no drain).
+	# Natural ocean is a stationary source field (fl=0, MC-style): it must produce ZERO
+	# writes, so the sea-surface count (cells at y==Data.SEA) is EXACTLY unchanged; no
+	# real (solid-backed) sea cell is ever lost either.
 	var sea_stable: bool = (
 		water_delta == 1
 		and shore == [5, 7]
@@ -3023,8 +3355,10 @@ func _fluids_test(spawn: Vector3) -> void:
 		and src_top2 == [5, 8]
 		and w_settle == w_after
 		and no_drain
+		and sea_final == sea_before
+		and sea_backed_final >= sea_backed_before
 	)
-	print("FLUIDSTAT region_water_before=%d region_water_final=%d sea_surface_before=%d sea_surface_final=%d" % [total_before, prev, sea_before, _water_at_level(region_keys, Data.SEA)])
+	print("FLUIDSTAT region_water_before=%d region_water_final=%d sea_surface_before=%d sea_surface_final=%d sea_backed_before=%d sea_backed_final=%d" % [total_before, prev, sea_before, sea_final, sea_backed_before, sea_backed_final])
 	Debug.result({
 		"shore_after": shore,
 		"source_after": src_top,
@@ -3032,6 +3366,10 @@ func _fluids_test(spawn: Vector3) -> void:
 		"water_on_lava_result": r_a,
 		"sideways_lava_result": r_b,
 		"sea_stable": sea_stable,
+		"sea_surface_before": sea_before,
+		"sea_surface_final": sea_final,
+		"sea_backed_before": sea_backed_before,
+		"sea_backed_final": sea_backed_final,
 	})
 
 
@@ -4203,6 +4541,31 @@ func _water_in_box(keys: Array, x0: int, x1: int, y0: int, y1: int, z0: int, z1:
 			if zz < z0 or zz > z1:
 				continue
 			n += 1
+	return n
+
+
+func _sea_solid_backed(keys: Array) -> int:
+	var n := 0
+	var y: int = Data.SEA
+	if y < 1:
+		return 0
+	var ib := (y - 1) << 8
+	var ia := y << 8
+	for key in keys:
+		var c: Node3D = world.chunks.get(key)
+		if c == null or c.data.is_empty():
+			continue
+		var data: PackedByteArray = c.data
+		for lz in range(16):
+			var lb: int = lz << 4
+			for lx in range(16):
+				var i := ia | lb | lx
+				if data[i] != 5:
+					continue
+				var below: int = data[ib | lb | lx]
+				if below == 0 or world.is_fluid_id(below):
+					continue
+				n += 1
 	return n
 
 
