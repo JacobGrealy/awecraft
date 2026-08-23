@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-23T04:38
+  updated_at: 2026-08-23T09:39
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -33,6 +33,7 @@ queue:
 - AC-0074
 - AC-0075
 - AC-0076
+- AC-0079
 - AC-0077
 - AC-0078
 - AC-0034
@@ -858,7 +859,7 @@ intake:
   labels:
   - godot
   created_at: 2026-08-18T12:00
-  updated_at: 2026-08-22T22:59
+  updated_at: 2026-08-23T09:39
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -881,6 +882,12 @@ intake:
     text: '[agent] UNBLOCKED 2026-08-22 (user: ''move 34 up and work on it now''; AC-0071 plan approved). SPLIT into children
       AC-0075..AC-0078 (harness-baseline -> policy -> buildcost -> fluids+firstload) per plan phases; Phase 2 threaded-gen
       is a separate follow-up task, only if Phase-1 numbers or user demand. This umbrella closes after AC-0078.'
+  - id: 4
+    created_at: 2026-08-23T09:39
+    updated_at: null
+    text: '[agent] SPLIT UPDATE 2026-08-23: AC-0076 first attempt stalled (no code on disk, no hung procs) -> AC-0076 REVISED
+      to recenter-O(n^2)-fix + budgets + P1.8 only; look-priority + hysteresis moved to new child AC-0079 (queued right behind
+      0076). Queue now 0075(done) 0076 0079 0077 0078.'
 - id: AC-0035
   title: m5a2-light-bake
   source: agent
@@ -2148,4 +2155,25 @@ intake:
   notes: 'AC-0034 child 4/4 (plan AC-0071 P1.5+P1.6): fluid locality (per-chunk fluid prescreen + 32-block sleep signature,
     wake sources unchanged, sim results bit-identical) + first-load fast path (3x3 sync core for New world AND Continue -
     Continue stops waiting for full radius, streams around existing player).'
+  comments: []
+- id: AC-0079
+  title: chunk-stream-policy2-lookpriority-hysteresis
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-23T09:39
+  updated_at: 2026-08-23T09:39
+  completed_at: null
+  waiting_on: null
+  parent_id: AC-0034
+  notes: 'AC-0034 child 2b/4 (split from AC-0076 after its first attempt stalled, 2026-08-23): look-priority + collision-need
+    scored queue (plan P1.1: score = manhattan + lookPenalty (K~0.75, re-score at recenter + ~2x/s throttle) + collPenalty)
+    + two-stage hysteresis unload (P1.2: candidate at r+1 kills mesh+collision immediately, free at r+2 after 2 recenter events,
+    clear ALL per-chunk maps incl fluid_dirty+tex_refresh, no-flap, flush skips candidates) + unload invisible check. Improves
+    the r=4 walk (baseline: 11/20 bursts never finished, in_radius_built_max 64/81) and memory churn. Runs AFTER AC-0076 (recenter
+    O(n^2) fix).'
   comments: []
