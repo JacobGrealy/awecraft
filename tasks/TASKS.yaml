@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-22T22:43
+  updated_at: 2026-08-22T23:02
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -31,6 +31,10 @@ queue:
 - AC-0073
 - AC-0068
 - AC-0074
+- AC-0075
+- AC-0076
+- AC-0077
+- AC-0078
 - AC-0034
 - AC-0035
 - AC-0036
@@ -850,11 +854,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: in-progress
   labels:
   - godot
   created_at: 2026-08-18T12:00
-  updated_at: 2026-08-22T10:52
+  updated_at: 2026-08-22T22:59
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -871,6 +875,12 @@ intake:
     text: '[agent] UNBLOCKED 2026-08-22: user approved per AC-0071 plan (hybrid: Phase 1 budgeted main-thread streaming web+desktop
       -> Phase 2 desktop-gated threaded worldgen). Moved up in queue after AC-0073 tool-fix + AC-0074 windows-export so each
       feature ships a native build. Default render radius stays user slider default 50.'
+  - id: 3
+    created_at: 2026-08-22T22:59
+    updated_at: null
+    text: '[agent] UNBLOCKED 2026-08-22 (user: ''move 34 up and work on it now''; AC-0071 plan approved). SPLIT into children
+      AC-0075..AC-0078 (harness-baseline -> policy -> buildcost -> fluids+firstload) per plan phases; Phase 2 threaded-gen
+      is a separate follow-up task, only if Phase-1 numbers or user demand. This umbrella closes after AC-0078.'
 - id: AC-0035
   title: m5a2-light-bake
   source: agent
@@ -2049,3 +2059,78 @@ intake:
       re-ran G1-lite/G2/G4: 200s + 8443/5180 alive, g1 0 errors, build_web.sh 0. DEVIATION NOTED: spec''s custom_template/console
       route is impossible in 4.7 (export fails, no pck) - wrapper route is right. NOW A GATE: every subsequent feature task
       ends with ./build_windows.sh.'
+- id: AC-0075
+  title: chunk-stream-harness-baseline
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: in-progress
+  labels: []
+  created_at: 2026-08-22T22:59
+  updated_at: 2026-08-22T23:02
+  completed_at: null
+  waiting_on: null
+  parent_id: AC-0034
+  notes: 'AC-0034 child 1/4 (plan AC-0071 step 0 = MEASURE FIRST): new AWECRAFT_LOGIC=boundary 20-chunk walk harness (plan
+    5.1: p50/p95/max frame ms, crossings, loads/unloads/flap, per-crossing burst, edit round-trip, fluid tick samples, memory)
+    + AWECRAFT_LOGIC=perf extensions (first-draw ms, per-frame p95, memory fields) + AWECRAFT_RADIUS sweep baseline r=2/4/50.
+    NOTE: default render radius is now 50 (AC-0072 slider) - plan tables cover r<=8, the r=50 numbers decide the web-vs-native
+    question (user 2026-08-22). NO streaming behavior changes in this task. All existing harness RESULTs must stay byte-identical
+    (proof).'
+  comments: []
+- id: AC-0076
+  title: chunk-stream-policy
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-22T22:59
+  updated_at: 2026-08-22T22:59
+  completed_at: null
+  waiting_on: null
+  parent_id: AC-0034
+  notes: 'AC-0034 child 2/4 (plan AC-0071 P1.1+P1.2+P1.7+P1.8): scored load queue (manhattan+look+collision-need, re-sort
+    at recenter + throttled look), two-stage unload hysteresis (candidate at r+1 kills mesh+collision now, free at r+2 after
+    2 recenter events, clear all per-chunk maps, no-flap), drain budget envs, set_fluid player-placement create=true hardening.'
+  comments: []
+- id: AC-0077
+  title: chunk-stream-buildcost
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-22T22:59
+  updated_at: 2026-08-22T22:59
+  completed_at: null
+  waiting_on: null
+  parent_id: AC-0034
+  notes: 'AC-0034 child 3/4 (plan AC-0071 P1.3+P1.4): bulk batch light for stream-in builds (union box + margin, slices into
+    build_mesh eff param - 9 light computes become 1 per crossing) + collision staging (player +/-1 immediate, far chunks
+    next-slot low-priority unit, single revert flag) + collision_ms per-build instrumentation.'
+  comments: []
+- id: AC-0078
+  title: chunk-stream-fluids-firstload
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-22T22:59
+  updated_at: 2026-08-22T22:59
+  completed_at: null
+  waiting_on: null
+  parent_id: AC-0034
+  notes: 'AC-0034 child 4/4 (plan AC-0071 P1.5+P1.6): fluid locality (per-chunk fluid prescreen + 32-block sleep signature,
+    wake sources unchanged, sim results bit-identical) + first-load fast path (3x3 sync core for New world AND Continue -
+    Continue stops waiting for full radius, streams around existing player).'
+  comments: []
