@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0086 results — World-generation documentation page</title>
+<style>
+body{font-family:Georgia,serif;max-width:76ch;margin:3rem auto;padding:0 1rem;line-height:1.55;color:#222}
+code{background:#f3f3ee;padding:.1em .35em;border-radius:3px;font-size:.92em;font-family:ui-monospace,Menlo,Consolas,monospace}
+h1{border-bottom:2px solid #222;padding-bottom:.3rem}
+h2{margin-top:2rem}
+table{border-collapse:collapse;margin:1rem 0}
+td,th{border:1px solid #bbb;padding:.35rem .6rem;text-align:left;vertical-align:top}
+th{background:#f3f3ee}
+.pass{background:#eef6ee;border-left:4px solid #2e7d32;padding:.5rem .9rem;margin:.4rem 0}
+.note{background:#fff8e1;border-left:4px solid #f9a825;padding:.5rem .9rem;margin:.4rem 0}
+ul{margin:.4rem 0 .8rem 1.3rem}
+</style>
+</head>
+<body>
+<h1>AC-0086 results — world-generation-doc-page</h1>
+<p><strong>Status:</strong> DONE · 2026-08-23 · <strong>Deliverable:</strong>
+<code>world-generation.html</code> (repo root, 244 KB, self-contained, no external assets, opens via file://)</p>
+
+<h2>What the page documents</h2>
+<p>A dark "strata atlas" technical document (10 sections, TOC, inline-SVG figures) covering the full
+generation pipeline of the frozen web spec (<code>index.html</code>, build 20260816-r12):</p>
+<ul>
+  <li><strong>01 Pipeline</strong> — the six passes of <code>genChunk</code> (lines 784–871) with a flow diagram.</li>
+  <li><strong>02 Noise primitives &amp; seeding</strong> — hash2i/hash3i (32-bit imul mixer), quintic fade,
+      value noise, fbm (amp ×0.5 / freq ×2 / +101 per octave, normalized); seed string hashing
+      ("awecraft" → −1520868207); a <strong>complete noise-layer registry table</strong> (15 fields with
+      scale, octaves, seed key, range, usage).</li>
+  <li><strong>03 Elevation</strong> — the three stacked fields (c /220×3oct, h /70×4oct, r /300×3oct with
+      the r&gt;0.62 → +(r−0.62)·150 ridge bonus), formula, clamp [3,74]; cross-section + layer-curve figures.</li>
+  <li><strong>04 Biomes</strong> — t/m fields (·2−1), the ordered threshold ladder (snow → desert → forest →
+      plains fallback), surface-block mapping table; a real 48×48 biome map figure.</li>
+  <li><strong>05 Sea level &amp; water</strong> — flat plane at SEA=30, flood fill, 2-block beach rule, no trees ≤ h=31.</li>
+  <li><strong>06 Ores &amp; obsidian</strong> — the cascading depth-gated checks with measured frequencies
+      (diamond 2.81% / iron 1.82% / coal 1.08% / obsidian 1.93% in-band) and three real core-sample columns.</li>
+  <li><strong>07 Caves</strong> — two intersecting single-octave vnoise3 worms (0.58/0.56 thresholds,
+      y/10 vertical stretch), lava below y=8, measured 14.16% carve rate.</li>
+  <li><strong>08 Trees &amp; flowers</strong> — per-column Bernoulli placement (hash seed+55 vs density
+      0.14/0.02/0.02/0), trunk 4+⌊hash·3⌋, the exact 4-level canopy construction with corner/cross cuts,
+      air-only put() guards + ±2 halo, flowers (2% of grass tops, Rose/Dandelion 50/50).</li>
+  <li><strong>09 Worked examples</strong> — 7 real columns with every intermediate value, plus a hand-verified
+      calculation for (−832, 0).</li>
+  <li><strong>10 Godot port</strong> — bit-identical noise math; two deliberate differences (spawn plateau at
+      (8,8) h=34; mathematically-equivalent tree_at early-out).</li>
+</ul>
+
+<h2>Method</h2>
+<p>Because subagents were unavailable this session, the coordinator researched directly. All figures,
+tables and examples were computed by <strong>extracting the spec's own generator functions verbatim from
+index.html (lines 122–136 + 760–783) and executing them in headless Chromium</strong> (Playwright) —
+not by re-implementing in Python. Ore/cave frequencies: 120,000 samples each with the same real code.
+Scratch: <code>.scratch/AC-0086/</code> (calc.py, build_svgs.py, splice.py, crosscheck.py, JSON/SVG/PNG).</p>
+
+<h2>Verification gates</h2>
+<div class="pass">G1 — File exists at repo root; HTML parses cleanly (python3 html.parser, zero unclosed tags);
+zero network references (the only "http://" strings are 5 w3.org XML namespace identifiers in SVG xmlns
+attributes — identifiers, not fetches; the page loads fully offline via file://, confirmed by headless
+render: 4 SVGs, 10 sections, 5 tables, 3 cores, 7 example rows, no console errors).</div>
+<div class="pass">G2 — Factual cross-check: <code>crosscheck.py</code> verified <strong>155/155 claims</strong>
+against index.html: 60+ verbatim tokens (function names, biome names, block names, hash constants,
+scales, thresholds, seed keys), every quoted snippet line (760–783 strict-equal, others substring) matched
+to its cited spec line, and all prose line-range citations (103, 125–128, 720, 760, 768, 776, 784, 817,
+869, 2997–3001, 3002) confirmed. Two citation errors found by the first pass (split single-line functions;
+wrong line for hash3i) were fixed and re-verified.</div>
+<div class="pass">G3 — All spec sections present (caves/ores exist in the spec and are documented; no silent omissions).</div>
+<div class="pass">G4 — No code changes: git status shows only <code>world-generation.html</code>,
+<code>tasks/AC-0086/</code> and the TASKS.yaml registration. No godot run needed (no code changes).</div>
+<div class="pass">G5 — This results file.</div>
+
+<div class="note"><strong>Surprising facts found</strong>: (1) the "desert" ore column at (−72,0) contains 12 iron
+blocks — the ore cascade makes deep deserts iron-rich; (2) snow biome uses the same oak model (no pines) —
+the web spec has exactly one tree species; (3) the Godot port's spawn plateau (h=34 within radius 6 of (8,8))
+has no web-spec counterpart — the web game can spawn on slopes.</div>
+
+</body>
+</html>

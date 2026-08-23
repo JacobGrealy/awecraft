@@ -1,8 +1,9 @@
 meta:
-  updated_at: 2026-08-23T18:45
+  updated_at: 2026-08-23T19:40
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
+- AC-0086
 - AC-0083
 - AC-0084
 - AC-0085
@@ -2413,3 +2414,39 @@ intake:
     created_at: 2026-08-23T18:45
     updated_at: null
     text: '[coord] Registered 2026-08-23 from user report. Top priority, ahead of planned AC-0082.'
+- id: AC-0086
+  title: world-generation-doc-page
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: done
+  labels:
+  - docs
+  created_at: 2026-08-23T18:55
+  updated_at: 2026-08-23T19:40
+  completed_at: 2026-08-23T19:40
+  waiting_on: null
+  parent_id: null
+  notes: 'USER REQUEST 2026-08-23: "create an html file detailing how the world generation works. Focus on the
+    layers of noise that determine biomes / trees, etc." Deliverable: repo-root world-generation.html
+    (self-contained, offline, no external assets) documenting the full gen pipeline from the FROZEN WEB SPEC
+    (index.html): noise primitives/seeding, each noise layer with exact constants (freq/octaves/amplitude/thresholds),
+    biome decision logic + table, sea level/water, tree/vegetation placement per biome, caves/ores, worked example.
+    Also check godot/ port for divergences and note them. HARD GATE: every name/constant in the doc cross-checked
+    verbatim against index.html via .scratch script. See tasks/AC-0086/spec.html.'
+  comments:
+  - id: 1
+    created_at: 2026-08-23T18:55
+    updated_at: null
+    text: '[coord] Registered 2026-08-23 from user request.'
+  - id: 2
+    created_at: 2026-08-23T19:40
+    updated_at: null
+    text: '[coord] DONE 2026-08-23. Subagents were unavailable this session (probe + 2 launches failed), so the
+      coordinator researched directly and authored the doc. Deliverable world-generation.html: 10-section strata-atlas
+      doc; every figure/table/example computed by running the spec''s own generator code (extracted verbatim from
+      index.html) in headless Chromium via Playwright; seed "awecraft" = -1520868207. G2 cross-check: 155/155 claims
+      verified against index.html (2 citation errors caught + fixed on first pass). G1/G4: parses clean, zero network
+      refs, no code changes (git status: only world-generation.html + tasks/AC-0086/ + this yaml). No godot run needed.'

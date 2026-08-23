@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0086 — World-generation documentation page</title>
+<style>
+  body{font-family:Georgia,serif;max-width:74ch;margin:3rem auto;padding:0 1rem;line-height:1.55;color:#222}
+  code{background:#f3f3ee;padding:.1em .35em;border-radius:3px;font-size:.92em}
+  h1{border-bottom:2px solid #222;padding-bottom:.3rem}
+  h2{margin-top:2rem}
+  table{border-collapse:collapse;margin:1rem 0}
+  td,th{border:1px solid #bbb;padding:.35rem .6rem;text-align:left;vertical-align:top}
+  th{background:#f3f3ee}
+  .gate{background:#eef6ee;border-left:4px solid #2e7d32;padding:.5rem .9rem;margin:.4rem 0}
+  .note{background:#fff8e1;border-left:4px solid #f9a825;padding:.5rem .9rem;margin:.4rem 0}
+</style>
+</head>
+<body>
+<h1>AC-0086 — "How world generation works" documentation page</h1>
+<p><strong>Source:</strong> user request (2026-08-23): "create an html file detailing how the world
+generation works. Focus on the layers of noise that determine biomes / trees, etc."</p>
+<p><strong>Deliverable:</strong> one self-contained HTML file at repo root:
+<code>/home/angrygiant/github_projects/AweCraft/world-generation.html</code>.
+Openable directly in a browser (file://), no external assets, no network requests, no build step.</p>
+
+<h2>Context (read first)</h2>
+<ul>
+  <li><code>index.html</code> at repo root is the frozen web game — a single-file Three.js build
+      (build 20260816-r12). <strong>It is the source of truth for ALL behavior/data.</strong> Every
+      world-generation fact in the doc (function names, noise parameters, biome names, thresholds,
+      tree species, block ids) must be extracted from <em>its actual code</em>, not invented or
+      approximated from "how Minecraft does it".</li>
+  <li><code>godot/</code> is the Godot 4.7.1 port. Check its world-generation code (likely
+      <code>godot/world/</code> and/or <code>godot/autoload/</code>) to see whether it mirrors the web
+      spec or diverges. If it diverges meaningfully (different parameters, different noise,
+      restructured pipeline), the page must say so explicitly in a "Godot port" section. Do NOT
+      modify anything under <code>godot/</code> or <code>index.html</code>.</li>
+  <li><code>godot/CONTINUITY.md</code> and <code>godot/ARCHITECTURE.md</code> describe the port's
+      structure and may point at the relevant world files.</li>
+</ul>
+
+<h2>What the page must document</h2>
+<p>Goal: a technically literate reader understands, end-to-end, how one world coordinate (x,z)
+becomes a column of blocks. Focus (per the user) on the <strong>layers of noise</strong> — but the
+full pipeline is needed to make sense of them.</p>
+<ol>
+  <li><strong>Overview / pipeline diagram</strong> — the stages from seed → noise fields → biome
+      choice → surface blocks → vegetation → (caves/ores if present). A visual (inline SVG or styled
+      HTML) is strongly encouraged.</li>
+  <li><strong>Noise primitives &amp; seeding</strong> — which noise family (value/perlin/simplex/
+      fBm/hash), the RNG or hash functions used, how the world seed enters, any lattice/grid
+      resolution, and any coordinate scaling (e.g. noise sampled at x/SCALE).</li>
+  <li><strong>Each noise layer, one by one</strong> — for every field that influences generation
+      (e.g. continental/height, hill/mountain, moisture/humidity, temperature, cave, ore, tree
+      scatter…): its purpose, exact parameters from the code (frequency/wavelength, octaves,
+      amplitude, persistence, gain, offset/shift, any remapping/curves), and its range. Use the
+      real constant values and the real function names with line references.</li>
+  <li><strong>Biome determination</strong> — the exact decision logic (thresholds/branches) that maps
+      noise values → biome. A table: biome name → conditions (ranges) → surface block(s) →
+      underground → vegetation.</li>
+  <li><strong>Sea level &amp; water</strong> — how ocean/water columns are decided, water height,
+      sand/shore handling.</li>
+  <li><strong>Trees &amp; vegetation (the star of the show)</strong> — per-biome species, how
+      placement is decided (per-column hash? probability? minimum spacing?), trunk height, canopy
+      shape code, leaves, plus flowers/grass/other scatter. Quote the actual selection logic.</li>
+  <li><strong>Caves &amp; ores</strong> — if present in the web spec: how they're generated and
+      which layers/thresholds control them.</li>
+  <li><strong>Worked example</strong> — walk through a couple of concrete (x,z) points (or a small
+      seeded table) showing the noise values → biome → column. Helps readers verify understanding.</li>
+</ol>
+<p>Include short <strong>verbatim code snippets</strong> (with file + line numbers) for the key
+functions: the noise primitive(s), the biome selector, the tree placer. Snippets should be short
+and trimmed — the page is an explanation, not a code dump.</p>
+
+<h2>Design requirements (frontend-design aesthetic)</h2>
+<p>Make it genuinely good-looking — this is a kept artifact, not a scratch note. Commit to a
+single, deliberate aesthetic (e.g. a "field-notes / cartographer's atlas" vibe suits world
+generation; a dark "cave/depth" theme with a strata/layer motif also fits). Requirements:
+characterful typography (no generic defaults), a cohesive palette via CSS variables, clear
+section hierarchy, a TOC, responsive-ish layout, subtle background texture or layered depth,
+and tasteful motion (e.g. a one-shot staggered reveal on load, hover states on table rows /
+diagram parts). Keep it self-contained: all CSS inline in <code>&lt;style&gt;</code>, all
+graphics inline SVG or CSS — <strong>no external fonts, images, or scripts</strong> (it must work
+offline via file://). No JavaScript is required; if you add any, keep it tiny and dependency-free.</p>
+
+<h2>Verification gates (ALL must pass)</h2>
+<div class="gate">1. <code>world-generation.html</code> exists at repo root and opens standalone.
+  Well-formed HTML: parse it with <code>python3 -c "import html.parser,sys;
+  p=html.parser.HTMLParser(); p.feed(open('world-generation.html').read()); print('ok')"</code>
+  (or equivalent) and confirm no exceptions. Confirm zero external references:
+  <code>grep -nE "https?://|&lt;script[^&gt;]+src|&lt;link[^&gt;]+href" world-generation.html</code>
+  must return nothing (inline SVG/CSS is fine).</div>
+<div class="gate">2. <strong>Factual cross-check (the hard gate).</strong> Every biome name, block
+  name, tree species, and numeric constant (frequencies, amplitudes, octaves, thresholds, sea
+  level, probabilities, offsets) stated in the doc must appear verbatim in <code>index.html</code>
+  (or, for port-specific claims, in the <code>godot/</code> files you cite). Write a small
+  cross-check script into <code>.scratch/</code> that extracts your key terms/numbers and greps
+  them against the source; include its pass/fail summary in the results. Anything you cannot
+  trace to the source must be fixed or removed.</div>
+<div class="gate">3. Every section listed in "What the page must document" is present (adapt names
+  if a layer, e.g. caves/ores, genuinely doesn't exist in the web spec — then state that it
+  doesn't exist, don't omit silently).</div>
+<div class="gate">4. No code changes: <code>git status</code> must show only
+  <code>world-generation.html</code> and <code>tasks/AC-0086/</code> as new (plus nothing else
+  modified). No godot run is required for this task (no code changes) — but do a final read-through
+  of the generated HTML for typos/broken markup.</div>
+<div class="gate">5. Results file <code>tasks/AC-0086/AC-0086-results.html</code> written: a
+  self-contained summary of what the page documents, the aesthetic chosen, and the verification
+  results (gate 2 cross-check output, gate list).</div>
+
+<h2>Report (chat) — MAX ~20 lines</h2>
+<p>Files written, aesthetic/section summary, cross-check result (e.g. "N/N terms verified
+verbatim"), any source facts that surprised you, deviations from spec. Keep it short.</p>
+
+<div class="note"><strong>Constraints:</strong> read-only on <code>index.html</code> and
+<code>godot/</code>; write only <code>world-generation.html</code>, <code>tasks/AC-0086/</code>,
+and scratch files under <code>.scratch/</code>. No git operations (the coordinator commits).
+Honest partial is better than a fabricated complete: if a piece of the generation logic is
+genuinely hard to trace, document what you did trace and flag the rest.</div>
+</body>
+</html>
