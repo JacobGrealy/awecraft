@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-23T09:39
+  updated_at: 2026-08-23T14:50
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -2109,17 +2109,31 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-22T22:59
-  updated_at: 2026-08-23T04:38
-  completed_at: null
+  updated_at: 2026-08-23T14:45
+  completed_at: 2026-08-23T14:45
   waiting_on: null
   parent_id: AC-0034
   notes: 'AC-0034 child 2/4 (plan AC-0071 P1.1+P1.2+P1.7+P1.8): scored load queue (manhattan+look+collision-need, re-sort
     at recenter + throttled look), two-stage unload hysteresis (candidate at r+1 kills mesh+collision now, free at r+2 after
     2 recenter events, clear all per-chunk maps, no-flap), drain budget envs, set_fluid player-placement create=true hardening.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-23T14:45
+    updated_at: null
+    text: '[agent] DONE 2026-08-23 (2 subagent runs: v1 stalled mid-report with full code on disk; v2-resume finished gates+report).
+      Queue rework: sorted-list _insert_sorted (O(n^2) at r=50) -> band_buckets (per-manhattan-distance arrays) + sticky dq/mq
+      cursors; recenter rebuild = single O(n) pass (no resort); drain = mesh-head-if-ready else data-wave (BFS preserved);
+      AWECRAFT_DRAIN_MS (30) / AWECRAFT_GEN_BUDGET envs; RECPROBE kept (env-gated); TINTDBG/DPROBE/PCOUNT scaffolding removed
+      (coord verified 0 matches). RECPROBE split: baseline 7397ms = (a) queue walk/insert ~8400 + (b) eager stubs ~56. AFTER:
+      recenter r50 7397->97ms (per-crossing <=43ms), first_draw r50 7578->280ms, boundary r50 walk 841/991 -> 59/95ms, r4
+      walk 60/97->60/98, r4 never-finished bursts 11->0, r2 56/112->58/99. Coord re-verified: G1 0, fluids byte-identical
+      (sea_stable, 2730 flat), boundary r4 fresh run 0 errs/0-never-finished/flap0/81-81-final, perf r4 fresh: all_meshed
+      drain 8.19s (+2.6%) first_draw 183ms, build exe+wasm fresh. DEVIATIONS (documented): D1 eager in-radius stubs RETAINED
+      (lazy stubs broke tint/guiclick harness wait-loop contract; stub cost 56ms fits <100ms gate - margin 2-4ms), D2 mem
+      67.2 vs 66 = allocator variance, D3 r50 build_units +~300 = headless cadence (drain_s identical).'
 - id: AC-0077
   title: chunk-stream-buildcost
   source: agent
@@ -2163,10 +2177,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-23T09:39
-  updated_at: 2026-08-23T09:39
+  updated_at: 2026-08-23T14:50
   completed_at: null
   waiting_on: null
   parent_id: AC-0034

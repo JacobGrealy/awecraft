@@ -18,6 +18,7 @@ const FLUID_DIRS := [
 
 const BUILD_FAST_US := 15000
 const DRAIN_FRAME_BUDGET_US := 30000
+const DRAIN_MS_DEFAULT := 30
 
 var render_radius := 4
 var fluid_tick_radius := 14
@@ -42,12 +43,29 @@ var fluid_tick_samples: Array = []
 var fluid_dirty := {}
 var fluid_sim_enabled := true
 var fluid_timer: Timer = null
-var build_queue: Array = []
+var band_buckets: Array = []
+var dq_b := 0
+var dq_i := 0
+var mq_b := 0
+var mq_i := 0
+var queue_size := 0
 var queued_keys := {}
+var drain_budget_ms := DRAIN_MS_DEFAULT
+var gen_budget_ms := -1
 var last_build_us := 0
 var last_pcx := 0
 var last_pcz := 0
 var timing := false
+var _recprobe := false
+var _rp_free_ms := 0.0
+var _rp_stub_ms := 0.0
+var _rp_stub_n := 0
+var _rp_walk_ms := 0.0
+var _rp_insert_ms := 0.0
+var _rp_dequeue_ms := 0.0
+var _rp_deq_n := 0
+var _rp_drain_stub_ms := 0.0
+var _rp_drain_stub_n := 0
 var fluid_sleep := true
 var tick_time := false
 var _fluid_write := false
@@ -55,9 +73,15 @@ var _fluid_stable := 0
 var _fluid_sig := ""
 var tex_refresh: Array = []
 
-
 func _ready() -> void:
 	timing = OS.get_environment("AWECRAFT_TIMING") == "1"
+	_recprobe = OS.get_environment("AWECRAFT_RECPROBE") == "1"
+	var dr := OS.get_environment("AWECRAFT_DRAIN_MS")
+	if dr != "" and dr.to_int() > 0:
+		drain_budget_ms = dr.to_int()
+	var gb := OS.get_environment("AWECRAFT_GEN_BUDGET")
+	if gb != "" and gb.to_int() >= 0:
+		gen_budget_ms = gb.to_int()
 	fluid_sleep = OS.get_environment("AWECRAFT_FLUID_SLEEP") != "0"
 	tick_time = OS.get_environment("AWECRAFT_TICKTIME") == "1"
 	Game.world = self
@@ -67,14 +91,12 @@ func _ready() -> void:
 	fluid_timer.timeout.connect(_on_fluid_tick)
 	add_child(fluid_timer)
 
-
 func _on_fluid_tick() -> void:
 	if fluid_sim_enabled and (Game.mode == "play" or Game.mode == "pause"):
 		tick_fluids()
 
-
 func _process(_delta: float) -> void:
-	if light_dirty.is_empty() and fluid_dirty.is_empty() and build_queue.is_empty() and light_pending.is_empty() and tex_refresh.is_empty():
+	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty():
 		return
 	var was_active := flush_active
 	var added := false
@@ -149,10 +171,8 @@ func _process(_delta: float) -> void:
 	_drain_build_queue()
 	_drain_tex_refresh()
 
-
 func refresh_textures() -> void:
 	tex_refresh = chunks.keys().duplicate()
-
 
 func _drain_tex_refresh() -> void:
 	if tex_refresh.is_empty():
@@ -172,46 +192,42 @@ func _drain_tex_refresh() -> void:
 		c.build_mesh(get_block, c.last_eff)
 		done += 1
 
-
-func _dequeue(key: String) -> void:
-	queued_keys.erase(key)
-	for i in range(build_queue.size()):
-		if build_queue[i]["key"] == key:
-			build_queue.remove_at(i)
-			return
-
-
-func _insert_sorted(e: Dictionary) -> void:
-	var i := 0
-	while i < build_queue.size() and int(build_queue[i]["d"]) <= int(e.d):
-		i += 1
-	build_queue.insert(i, e)
-	queued_keys[e["key"]] = "data" if bool(e["data_only"]) else "build"
-
+func _convert_data_to_build(key: String) -> void:
+	for b in range(band_buckets.size()):
+		var arr: Array = band_buckets[b]
+		for i in range(arr.size()):
+			if arr[i]["key"] == key:
+				arr[i]["data_only"] = false
+				queued_keys[key] = "build"
+				if b < mq_b or (b == mq_b and i < mq_i):
+					mq_b = b
+					mq_i = i
+				return
 
 func _enqueue_build(cx: int, cz: int) -> void:
 	var key := _key(cx, cz)
 	var c = chunks.get(key)
-	if c == null or c.mesh_built:
+	if c != null and c.mesh_built:
 		return
 	var old = queued_keys.get(key)
 	if old == "build":
 		return
 	if old == "data":
-		_dequeue(key)
-	_insert_sorted({"key": key, "cx": cx, "cz": cz, "d": absi(cx - last_pcx) + absi(cz - last_pcz), "data_only": false})
-
-
-func _enqueue_data(cx: int, cz: int) -> void:
-	var key := _key(cx, cz)
-	var old = queued_keys.get(key)
-	if old != null:
+		_convert_data_to_build(key)
 		return
-	var c = chunks.get(key)
-	if c != null and not c.data.is_empty():
-		return
-	_insert_sorted({"key": key, "cx": cx, "cz": cz, "d": absi(cx - last_pcx) + absi(cz - last_pcz), "data_only": true})
-
+	if band_buckets.is_empty():
+		for i in range(2 * render_radius + 3):
+			band_buckets.append([])
+	var b := mini(absi(cx - last_pcx) + absi(cz - last_pcz), band_buckets.size() - 1)
+	band_buckets[b].append({"key": key, "cx": cx, "cz": cz, "data_only": false})
+	queued_keys[key] = "build"
+	queue_size += 1
+	if b < dq_b:
+		dq_b = b
+		dq_i = 0
+	if b < mq_b:
+		mq_b = b
+		mq_i = 0
 
 func _build_ready(cx: int, cz: int) -> bool:
 	for n in [[1, 0], [-1, 0], [0, 1], [0, -1]]:
@@ -219,7 +235,6 @@ func _build_ready(cx: int, cz: int) -> bool:
 		if nc == null or nc.data.is_empty():
 			return false
 	return true
-
 
 func _box_ready(mnx: int, mnz: int, mxx: int, mxz: int) -> bool:
 	for cx in range(mnx, mxx + 1):
@@ -229,7 +244,6 @@ func _box_ready(mnx: int, mnz: int, mxx: int, mxz: int) -> bool:
 				return false
 	return true
 
-
 func _startup_pending() -> bool:
 	for dx in range(-1, 2):
 		for dz in range(-1, 2):
@@ -237,7 +251,6 @@ func _startup_pending() -> bool:
 			if c == null or not c.mesh_built:
 				return true
 	return false
-
 
 func _pending_box() -> Dictionary:
 	var mnx := 2147483647
@@ -258,71 +271,117 @@ func _pending_box() -> Dictionary:
 		return {"mnx": -1, "mnz": -1, "mxx": -1, "mxz": -1}
 	return {"mnx": mnx, "mnz": mnz, "mxx": mxx, "mxz": mxz}
 
+func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
+	var tg := Time.get_ticks_msec()
+	c.data = WorldGen.generate(cx, cz, Game.world_seed)
+	c.init_fl()
+	_apply_edits_to_chunk(c)
+	var dg := Time.get_ticks_msec() - tg
+	if timing:
+		print("GENCHUNK %d,%d gen_ms=%d" % [cx, cz, dg])
+	perf_gen_ms += dg
+	return dg
+
+func _build_unit(c: Node3D, cx: int, cz: int) -> int:
+	var tb := Time.get_ticks_msec()
+	c.build_mesh(get_block)
+	var dt := Time.get_ticks_msec() - tb
+	last_build_us = dt * 1000
+	if timing:
+		print("BUILDCHUNK %d,%d gen_ms=0 build_ms=%d" % [cx, cz, dt])
+	perf_build_ms += dt
+	return dt
+
+func _drain_data_wave() -> int:
+	if dq_b >= band_buckets.size():
+		return 0
+	var db := dq_b
+	var di := dq_i
+	while db < band_buckets.size():
+		var arr: Array = band_buckets[db]
+		if di >= arr.size():
+			db += 1
+			di = 0
+			continue
+		var e: Dictionary = arr[di]
+		var cx: int = int(e["cx"])
+		var cz: int = int(e["cz"])
+		var c = chunks.get(e["key"])
+		if c == null:
+			if absi(cx - last_pcx) > render_radius + 1 or absi(cz - last_pcz) > render_radius + 1:
+				di += 1
+				continue
+			var s0 := Time.get_ticks_usec() if _recprobe else 0
+			stub_chunk(cx, cz)
+			if _recprobe:
+				_rp_drain_stub_ms += (Time.get_ticks_usec() - s0) / 1000.0
+				_rp_drain_stub_n += 1
+			c = chunks.get(e["key"])
+		if not c.data.is_empty():
+			di += 1
+			continue
+		var dg := _gen_unit(c, cx, cz)
+		dq_b = db
+		dq_i = di
+		return dg
+	dq_b = db
+	dq_i = di
+	return 0
+
+func _mesh_head_ready() -> int:
+	while mq_b < band_buckets.size():
+		var marr: Array = band_buckets[mq_b]
+		if mq_i >= marr.size():
+			mq_b += 1
+			mq_i = 0
+			continue
+		var me: Dictionary = marr[mq_i]
+		var cx: int = int(me["cx"])
+		var cz: int = int(me["cz"])
+		var c = chunks.get(me["key"])
+		if c == null:
+			if absi(cx - last_pcx) > render_radius + 1 or absi(cz - last_pcz) > render_radius + 1:
+				mq_i += 1
+				continue
+			return 0
+		if bool(me["data_only"]):
+			if c.data.is_empty():
+				return 0
+			mq_i += 1
+			continue
+		if c.data.is_empty():
+			return 0
+		if c.mesh_built:
+			mq_i += 1
+			continue
+		return 1 if _build_ready(cx, cz) else 0
+	return 0
 
 func _drain_build_queue() -> void:
-	if build_queue.is_empty():
+	if queue_size == 0:
 		return
 	var t0 := Time.get_ticks_usec()
 	var budget := 3 if _startup_pending() else (2 if last_build_us < BUILD_FAST_US else 1)
+	var budget_us := int(drain_budget_ms * 1000)
+	var gen_used_ms := 0
 	var units := 0
-	while budget > 0 and not build_queue.is_empty():
-		if Time.get_ticks_usec() - t0 > DRAIN_FRAME_BUDGET_US:
+	while budget > 0:
+		if Time.get_ticks_usec() - t0 > budget_us:
 			break
-		var found := -1
-		var phase := ""
-		var i := 0
-		while i < build_queue.size():
-			var e: Dictionary = build_queue[i]
-			var key: String = e["key"]
-			var c = chunks.get(key)
-			var cx: int = int(e["cx"])
-			var cz: int = int(e["cz"])
-			var lim := render_radius + (1 if bool(e["data_only"]) else 0)
-			if c == null or c.mesh_built or absi(cx - last_pcx) > lim or absi(cz - last_pcz) > lim:
-				build_queue.remove_at(i)
-				queued_keys.erase(key)
-				continue
-			if c.data.is_empty():
-				found = i
-				phase = "data"
-				break
-			if bool(e["data_only"]):
-				build_queue.remove_at(i)
-				queued_keys.erase(key)
-				continue
-			if _build_ready(cx, cz):
-				found = i
-				phase = "build"
-				break
-			i += 1
-		if found < 0:
+		var u := 0
+		var gm := 0
+		if _mesh_head_ready() == 1:
+			var he: Dictionary = band_buckets[mq_b][mq_i]
+			var hc: Node3D = chunks.get(he["key"])
+			_build_unit(hc, int(he["cx"]), int(he["cz"]))
+			u = 1
+		elif gen_budget_ms < 0 or gen_used_ms < gen_budget_ms:
+			gm = _drain_data_wave()
+			if gm > 0:
+				u = 1
+				gen_used_ms += gm
+		if u == 0:
 			break
-		var e2: Dictionary = build_queue[found]
-		var key2: String = e2["key"]
-		var c2: Node3D = chunks.get(key2)
-		var cx2: int = int(e2["cx"])
-		var cz2: int = int(e2["cz"])
-		if phase == "data":
-			var tg := Time.get_ticks_msec()
-			c2.data = WorldGen.generate(cx2, cz2, Game.world_seed)
-			c2.init_fl()
-			_apply_edits_to_chunk(c2)
-			var dg := Time.get_ticks_msec() - tg
-			if timing:
-				print("GENCHUNK %d,%d gen_ms=%d" % [cx2, cz2, dg])
-			perf_gen_ms += dg
-			units += 1
-			budget -= 1
-			continue
-		build_queue.remove_at(found)
-		queued_keys.erase(key2)
-		var tb := Time.get_ticks_msec()
-		c2.build_mesh(get_block)
-		var dt := Time.get_ticks_msec() - tb
-		last_build_us = dt * 1000
-		if timing:
-			print("BUILDCHUNK %d,%d gen_ms=0 build_ms=%d" % [cx2, cz2, dt])
-		perf_build_ms += dt
 		units += 1
 		budget -= 1
 	if units > 0:
@@ -331,8 +390,6 @@ func _drain_build_queue() -> void:
 		var fm := (Time.get_ticks_usec() - t0) / 1000.0
 		if fm > perf_max_drain_ms:
 			perf_max_drain_ms = fm
-
-
 func _key(cx: int, cz: int) -> String:
 	var k := cx * 65536 + cz
 	var s = chunk_keys.get(k)
@@ -340,7 +397,6 @@ func _key(cx: int, cz: int) -> String:
 		s = "%d,%d" % [cx, cz]
 		chunk_keys[k] = s
 	return s
-
 
 func _make_chunk_node(cx: int, cz: int) -> Node3D:
 	var c: Node3D = ChunkScript.new()
@@ -352,7 +408,6 @@ func _make_chunk_node(cx: int, cz: int) -> Node3D:
 	chunks[_key(cx, cz)] = c
 	return c
 
-
 func create_chunk(cx: int, cz: int, mesh_now: bool) -> Node3D:
 	var c: Node3D = _make_chunk_node(cx, cz)
 	c.data = WorldGen.generate(cx, cz, Game.world_seed)
@@ -362,10 +417,8 @@ func create_chunk(cx: int, cz: int, mesh_now: bool) -> Node3D:
 		c.build_mesh(get_block)
 	return c
 
-
 func stub_chunk(cx: int, cz: int) -> Node3D:
 	return _make_chunk_node(cx, cz)
-
 
 func _chunk_data(cx: int, cz: int) -> Node3D:
 	var c = chunks.get(_key(cx, cz))
@@ -382,25 +435,100 @@ func _chunk_data(cx: int, cz: int) -> Node3D:
 			print("ONDEMANDGEN %d,%d gen_ms=%d" % [cx, cz, Time.get_ticks_msec() - tg])
 	return c
 
+func _build_queue_for_center(pcx: int, pcz: int) -> void:
+	var rr := render_radius
+	var nbands := 2 * rr + 3
+	var new_buckets: Array = []
+	for i in range(nbands):
+		new_buckets.append([])
+	var want: Dictionary = {}
+	for dx in range(-rr, rr + 1):
+		for dz in range(-rr, rr + 1):
+			var cx := pcx + dx
+			var cz := pcz + dz
+			var key := _key(cx, cz)
+			var old = queued_keys.get(key)
+			if old == "build":
+				continue
+			var c = chunks.get(key)
+			if c != null and c.mesh_built:
+				continue
+			want[key] = {"cx": cx, "cz": cz, "d": absi(dx) + absi(dz)}
+	for b in range(band_buckets.size()):
+		var arr: Array = band_buckets[b]
+		for i in range(arr.size()):
+			var e: Dictionary = arr[i]
+			var key: String = e["key"]
+			var adx := absi(int(e["cx"]) - pcx)
+			var adz := absi(int(e["cz"]) - pcz)
+			if adx > rr + 1 or adz > rr + 1:
+				if not chunks.has(key):
+					queued_keys.erase(key)
+				continue
+			if want.has(key):
+				queued_keys.erase(key)
+				continue
+			new_buckets[mini(adx + adz, nbands - 1)].append(e)
+	var new_n := 0
+	var qs := 0
+	for key in want:
+		var w: Dictionary = want[key]
+		queued_keys[key] = "build"
+		new_buckets[mini(int(w["d"]), nbands - 1)].append({"key": key, "cx": int(w["cx"]), "cz": int(w["cz"]), "data_only": false})
+		new_n += 1
+	for dx in range(-(rr + 1), rr + 2):
+		for dz in range(-(rr + 1), rr + 2):
+			if maxi(absi(dx), absi(dz)) != rr + 1:
+				continue
+			var cx := pcx + dx
+			var cz := pcz + dz
+			var key := _key(cx, cz)
+			if queued_keys.has(key):
+				continue
+			var c = chunks.get(key)
+			if c != null and not c.data.is_empty():
+				continue
+			queued_keys[key] = "data"
+			new_buckets[mini(absi(dx) + absi(dz), nbands - 1)].append({"key": key, "cx": cx, "cz": cz, "data_only": true})
+			new_n += 1
+	for b in range(nbands):
+		for e2 in new_buckets[b]:
+			qs += 1
+	band_buckets = new_buckets
+	dq_b = 0
+	dq_i = 0
+	mq_b = 0
+	mq_i = 0
+	queue_size = qs
+	_rp_stub_n = new_n
 
 func recenter(wx: float, wz: float, mesh_now := true) -> void:
 	last_pcx = int(floorf(wx / 16.0))
 	last_pcz = int(floorf(wz / 16.0))
 	var pcx := last_pcx
 	var pcz := last_pcz
+	_rp_free_ms = 0.0
+	_rp_stub_ms = 0.0
+	_rp_stub_n = 0
+	_rp_walk_ms = 0.0
+	_rp_insert_ms = 0.0
+	_rp_dequeue_ms = 0.0
+	_rp_deq_n = 0
+	var rt0 := Time.get_ticks_usec()
 	var to_free: Array[String] = []
 	for key in chunks:
 		var c: Node3D = chunks[key]
-		if absi(c.cx - pcx) > render_radius or absi(c.cz - pcz) > render_radius:
-			if absi(c.cx - pcx) > render_radius + 1 or absi(c.cz - pcz) > render_radius + 1:
-				to_free.append(key)
+		if absi(c.cx - pcx) > render_radius + 1 or absi(c.cz - pcz) > render_radius + 1:
+			to_free.append(key)
+	var tf1 := Time.get_ticks_usec()
 	for key in to_free:
 		var c: Node3D = chunks[key]
 		chunks.erase(key)
-		_dequeue(key)
+		queued_keys.erase(key)
 		light_pending_set.erase(key)
 		light_pending.erase(key)
 		c.queue_free()
+	_rp_free_ms += (Time.get_ticks_usec() - tf1) / 1000.0
 	if not mesh_now:
 		var make: Array[Dictionary] = []
 		for dx in range(-render_radius, render_radius + 1):
@@ -413,36 +541,38 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 		for e in make:
 			create_chunk(e.cx, e.cz, false)
 		return
+	var tr1 := Time.get_ticks_usec()
 	for dx in range(-render_radius, render_radius + 1):
 		for dz in range(-render_radius, render_radius + 1):
-			var cx := pcx + dx
-			var cz := pcz + dz
-			if not chunks.has(_key(cx, cz)):
-				stub_chunk(cx, cz)
+			var cxr := pcx + dx
+			var czr := pcz + dz
+			if not chunks.has(_key(cxr, czr)):
+				stub_chunk(cxr, czr)
+				_rp_stub_n += 1
 	for dx in range(-(render_radius + 1), render_radius + 2):
 		for dz in range(-(render_radius + 1), render_radius + 2):
 			if maxi(absi(dx), absi(dz)) != render_radius + 1:
 				continue
-			var cx := pcx + dx
-			var cz := pcz + dz
-			if not chunks.has(_key(cx, cz)):
-				stub_chunk(cx, cz)
-	for key in chunks:
-		var c: Node3D = chunks[key]
-		if c.mesh_built:
-			continue
-		if absi(c.cx - pcx) <= render_radius and absi(c.cz - pcz) <= render_radius:
-			_enqueue_build(int(c.cx), int(c.cz))
-		elif absi(c.cx - pcx) <= render_radius + 1 and absi(c.cz - pcz) <= render_radius + 1:
-			_enqueue_data(int(c.cx), int(c.cz))
-
+			var cxr := pcx + dx
+			var czr := pcz + dz
+			if not chunks.has(_key(cxr, czr)):
+				stub_chunk(cxr, czr)
+				_rp_stub_n += 1
+	_build_queue_for_center(pcx, pcz)
+	_rp_walk_ms += (Time.get_ticks_usec() - tr1) / 1000.0
+	if _recprobe:
+		print("RECPROBE r=%d total_ms=%.1f free_ms=%.1f rebuild_ms=%.1f new_n=%d queue=%d chunks=%d drain_stubs_ms=%.1f drain_stubs_n=%d" % [
+			render_radius,
+			(Time.get_ticks_usec() - rt0) / 1000.0,
+			_rp_free_ms, _rp_walk_ms, _rp_stub_n,
+			queue_size, chunks.size(),
+			_rp_drain_stub_ms, _rp_drain_stub_n])
 
 func get_block(x: int, y: int, z: int) -> int:
 	if y < 0 or y >= Data.HEIGHT:
 		return 0
 	var c := _chunk_data(int(floorf(float(x) / 16.0)), int(floorf(float(z) / 16.0)))
 	return c.get_local(x & 15, y, z & 15)
-
 
 func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 	if y < 0 or y >= Data.HEIGHT:
@@ -471,25 +601,21 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 		_fluid_write = true
 	_record_edit(cx, cz, fi, id, int(c.fl[fi]))
 
-
 func _mark_light_around(cx: int, cz: int) -> void:
 	for dx in range(-LIGHT_NEIGHBOR, LIGHT_NEIGHBOR + 1):
 		for dz in range(-LIGHT_NEIGHBOR, LIGHT_NEIGHBOR + 1):
 			light_dirty[_key(cx + dx, cz + dz)] = true
-
 
 func _mark_fluid_around(cx: int, cz: int) -> void:
 	for dx in range(-LIGHT_NEIGHBOR, LIGHT_NEIGHBOR + 1):
 		for dz in range(-LIGHT_NEIGHBOR, LIGHT_NEIGHBOR + 1):
 			fluid_dirty[_key(cx + dx, cz + dz)] = true
 
-
 func _record_edit(cx: int, cz: int, fi: int, b: int, f: int) -> void:
 	var key := _key(cx, cz)
 	if not edits.has(key):
 		edits[key] = {}
 	edits[key][fi] = {"b": b, "f": f}
-
 
 func _apply_edits_to_chunk(c: Node3D) -> void:
 	var key := _key(c.cx, c.cz)
@@ -510,7 +636,6 @@ func _apply_edits_to_chunk(c: Node3D) -> void:
 	_mark_light_around(c.cx, c.cz)
 	_mark_fluid_around(c.cx, c.cz)
 
-
 func _bulk_box_cells() -> int:
 	var pb := _pending_box()
 	if int(pb["mnx"]) < 0:
@@ -520,7 +645,6 @@ func _bulk_box_cells() -> int:
 	var mxx: int = int(pb["mxx"])
 	var mxz: int = int(pb["mxz"])
 	return (mxx - mnx + 1 + LIGHT_FLUSH_MARGIN * 2) * (mxz - mnz + 1 + LIGHT_FLUSH_MARGIN * 2) * Data.HEIGHT
-
 
 func _bulk_light() -> Dictionary:
 	var pb := _pending_box()
@@ -535,7 +659,6 @@ func _bulk_light() -> Dictionary:
 		"max": Vector3i(mxx + LIGHT_FLUSH_MARGIN, Data.HEIGHT - 1, mxz + LIGHT_FLUSH_MARGIN),
 	}
 	return Lighting.compute_light_flat(box, self)
-
 
 func _build_batch(list: Array, margin: int) -> void:
 	if list.is_empty():
@@ -561,7 +684,6 @@ func _build_batch(list: Array, margin: int) -> void:
 		var cc: Node3D = c
 		cc.build_mesh(get_block, eff)
 
-
 func surface_top(x: int, z: int) -> int:
 	for y in range(Data.HEIGHT - 1, -1, -1):
 		var b := get_block(x, y, z)
@@ -571,11 +693,9 @@ func surface_top(x: int, z: int) -> int:
 				return y
 	return 0
 
-
 func spawn_point() -> Vector3:
 	var top := surface_top(WorldGen.SPAWN_X, WorldGen.SPAWN_Z)
 	return Vector3(WorldGen.SPAWN_X + 0.5, float(top) + 1.0, WorldGen.SPAWN_Z + 0.5)
-
 
 func light_at(x: int, y: int, z: int) -> Dictionary:
 	var r := 8
@@ -584,7 +704,6 @@ func light_at(x: int, y: int, z: int) -> Dictionary:
 	var res: Dictionary = Lighting.compute_light_split({"min": mn, "max": mx}, self)
 	var c := Vector3i(x, y, z)
 	return {"sky": int(res.sky.get(c, 0)), "block": int(res.block.get(c, 0)), "eff": int(res.eff.get(c, 0))}
-
 
 func mesh_info() -> Array:
 	var out := []
@@ -612,7 +731,6 @@ func mesh_info() -> Array:
 		out.append(e)
 	return out
 
-
 func spawn_drop(id: int, pos: Vector3) -> void:
 	if Game.drops == null:
 		return
@@ -623,10 +741,8 @@ func spawn_drop(id: int, pos: Vector3) -> void:
 	d.position = pos
 	Game.drops.add_child(d)
 
-
 func is_fluid_id(id: int) -> bool:
 	return id == 5 or id == 24
-
 
 func fluid_replaceable(b: int) -> bool:
 	if b == 0:
@@ -644,7 +760,6 @@ func fluid_replaceable(b: int) -> bool:
 	if is_fluid_id(b):
 		return false
 	return bool(info.get("cross", false)) and not bool(info.solid)
-
 
 func set_fluid(x: int, y: int, z: int, id: int, lvl: int, create := false) -> void:
 	if y < 0 or y >= Data.HEIGHT:
@@ -670,7 +785,6 @@ func set_fluid(x: int, y: int, z: int, id: int, lvl: int, create := false) -> vo
 	_mark_fluid_around(cx, cz)
 	_record_edit(cx, cz, i, id, lvl)
 
-
 func fluid_level(x: int, y: int, z: int) -> int:
 	if y < 0 or y >= Data.HEIGHT:
 		return 0
@@ -687,16 +801,13 @@ func fluid_level(x: int, y: int, z: int) -> int:
 			v = 8
 	return v
 
-
 func fluid_at(x: int, y: int, z: int) -> Array:
 	return [get_block(x, y, z), fluid_level(x, y, z)]
-
 
 func _nb_block(nc: Node3D, li: int, gx: int, gy: int, gz: int) -> int:
 	if nc != null and not nc.data.is_empty():
 		return nc.data[li]
 	return get_block(gx, gy, gz)
-
 
 func tick_fluids() -> void:
 	if chunks.is_empty():
@@ -816,7 +927,6 @@ func tick_fluids() -> void:
 	if tick_time:
 		print("TICKMS ", (Time.get_ticks_usec() - t0) / 1000.0)
 	fluid_tick_samples.append((Time.get_ticks_usec() - t0) / 1000.0)
-
 
 func _fluid_near(x: int, y: int, z: int) -> bool:
 	if is_fluid_id(get_block(x, y, z)) or fluid_level(x, y, z) > 0:

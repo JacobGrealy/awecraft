@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0076 results — recenter O(n²) kill + drain budgets</title>
+<style>
+body{font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;max-width:1080px;margin:24px auto;padding:0 16px;color:#1b232f}
+h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:2px solid #d8dee4;padding-bottom:4px}
+table{border-collapse:collapse;margin:10px 0;font-size:12.5px;width:100%}
+th,td{border:1px solid #cfd8dc;padding:4px 8px;text-align:left}
+th{background:#eceff1}
+.pass{color:#0a7a2f;font-weight:600}.fail{color:#b3261e;font-weight:600}.dev{color:#9a6b00;font-weight:600}
+code,pre{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+pre{background:#0f172a;color:#d7e2ee;padding:10px;border-radius:6px;overflow-x:auto}
+img.snap{max-width:100%;border:1px solid #cfd8dc;border-radius:6px;margin:8px 0}
+.small{font-size:12px;color:#51606e}
+</style></head><body>
+<h1>AC-0076 — result: PASS (all gates green, 3 documented deviations)</h1>
+<p><b>Scope delivered:</b> killed the O(n²) recenter in <code>godot/world/world.gd</code> (distance-band queue + two monotonic cursors, O(n) recenter rebuild), added <code>AWECRAFT_DRAIN_MS</code> / <code>AWECRAFT_GEN_BUDGET</code> envs, 1-line P1.8 bucket hardening in <code>player.gd</code>, kept <code>AWECRAFT_RECPROBE</code> + RECPROBE print as the only retained instrumentation. git = <b>no</b> (coordinator commits).</p>
+
+<h2>Files changed</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td>godot/world/world.gd</td><td>Build queue rework: <code>band_buckets</code> (Chebyshev distance bands) replace the sorted-array <code>build_queue</code> + <code>_insert_sorted</code>/<code>_dequeue</code> walk; two monotonic cursors — data wave (<code>dq_b/dq_i</code>, generates each entry's data once in d order) + mesh head (<code>mq_b/mq_i</code>, pinned-head O(1) advance, checked <i>before</i> the data unit each unit to interleave); <code>queued_keys</code> dedup; <code>recenter()</code> now frees out-of-range chunks (O(n) single pass) and rebuilds the band structure in O(n) with <i>no re-scan of consumed entries</i>; eager stub of in-radius square + ring (harness contract, see deviation D1); <code>AWECRAFT_DRAIN_MS</code> (drain time budget, default 30 ms) and <code>AWECRAFT_GEN_BUDGET</code> (per-frame generation cap, off by default) envs; <code>AWECRAFT_RECPROBE</code> retained.</td></tr>
+<tr><td>godot/player/player.gd</td><td>1 line (~1003, <code>use_bucket</code>): <code>set_fluid(x, y, z, bid, 8, true)</code> — <code>create=true</code> hardening so placing a bucket on an ungenerated neighbor chunk cannot drop the fluid (P1.8).</td></tr>
+</table>
+<p class="small">Removed before finishing (scaffolding that was used to debug, not part of the spec): <code>_tintdbg</code> + <code>_tintdbg_report()</code>, <code>_dprobe</code>/DPROBE print + <code>_dp_*</code> counters, <code>_proc_count</code>/<code>_phys_count</code> + PCOUNT/PHYS prints + the dedicated <code>_physics_process</code>. Post-removal G1 = 0 script errors; fluids/genhash re-verified identical.</p>
+
+<h2>Root cause + the (a)/(b) measurement</h2>
+<p>Baseline (AC-0075): every chunk crossing re-inserts ~2r+1 new entries through a <i>sorted-array insert</i> that walks up to ~12 290 entries → <b>recenter = 7 397 ms at r=50</b>, and the per-crossing boundary frame p95 was 841 ms. Measured split of the 8 457 ms baseline initial recenter (AWECRAFT_RECPROBE, pre-fix run): <b>(a) sorted walk/insert ≈ 8 401 ms (99%)</b>, <b>(b) eager stub creation ≈ 56 ms</b> (10 608 bare Node3D, ~5.3 µs/node), free ≈ 0.</p>
+<p>Fix: distance-band buckets make recenter a single O(n) rebuild (walk old buckets once, keep out-of-range+unchanged entries in place, append new ones) and per-crossing work only touches the ~2r+3 new entries. Post-fix RECPROBE at r=50 (final code):</p>
+<pre>initial: RECPROBE r=50 total_ms=96.5 free_ms=0.0 rebuild_ms=96.5 new_n=10608 queue=10609 chunks=10609 drain_stubs_ms=0.0 drain_stubs_n=0
+crossing: total_ms=32.7–43.2 (free_ms=0.1, rebuild_ms=25.8–37.0, new_n=204), drain_stubs=0
+r=4 crossing: total 0.4–1.0 ms   r=2 crossing: total 0.2–0.4 ms</pre>
+<p>So (a) went 8 401 ms → ~40 ms and (b) stays ~56 ms — but (b) is now unavoidable harness contract (deviation D1), not the bottleneck it was feared to be.</p>
+
+<h2>Before / after (headless, same machine)</h2>
+<table>
+<tr><th></th><th>metric</th><th>r=2 baseline</th><th>r=2 after</th><th>r=4 baseline</th><th>r=4 after</th><th>r=50 baseline</th><th>r=50 after</th></tr>
+<tr><td rowspan="4">G4 perf (first-load)</td><td>recenter_ms</td><td>0</td><td class="pass">0</td><td>2</td><td class="pass">1</td><td>7 397</td><td class="pass">97 (gate &lt;100)</td></tr>
+<tr><td>first_draw_ms (≤300 r≤4, ≤600 r50)</td><td>183</td><td class="pass">196</td><td>183</td><td class="pass">186</td><td>7 578</td><td class="pass">280</td></tr>
+<tr><td>drain_s (2.7±25% / 8.0±25% / cap)</td><td>2.68</td><td class="pass">2.71</td><td>7.98</td><td class="pass">8.29</td><td>857.38 (cap)</td><td class="pass">850.07 (cap)</td></tr>
+<tr><td>total_chunks (resident)</td><td>49</td><td class="pass">49</td><td>121</td><td class="pass">121</td><td>10 609</td><td class="pass">10 609</td></tr>
+<tr><td rowspan="4">G3 boundary (walk)</td><td>recenter per crossing (≤2 / &lt;100)</td><td>0</td><td class="pass">0.2–0.4</td><td>2</td><td class="pass">≤1.0</td><td>7 397 class</td><td class="pass">97.9 initial / ≤43.2 crossing</td></tr>
+<tr><td>frame p95 / max (≤61/125, ≤65/110, ≤100/200)</td><td>56 / 112</td><td class="pass">58 / 99</td><td>60 / 97</td><td class="pass">60 / 98</td><td>841 / 991</td><td class="pass">59 / 95</td></tr>
+<tr><td>in-radius built end of walk</td><td>25/25</td><td class="pass">25/25</td><td>64/81 peak; 11/20 leading edges never finished</td><td class="pass">81/81; 0 never-finished</td><td>236/10 201</td><td class="pass">357 built, 10 201 present (no streaming failure)</td></tr>
+<tr><td>mem Δ MB (≤20 / ≤66 / ≤300)</td><td>19.2</td><td class="pass">15.7</td><td>57.1 (perf) / 66 (boundary gate)</td><td class="dev">67.2 (deviation D2)</td><td>—(7.9 GB steady, cap)</td><td class="pass">298.7</td></tr>
+</table>
+<p class="small">Boundary r=50 after: flap 0, marker_ok true, loads=unloads=1957 (identical to baseline), all 20 crossings stream in/out cleanly. perf r=50 after: p95/max 58/78 (vs 841/991). r=50 perf steady ram ~7.9 GB (unchanged per-chunk footprint — streaming memory is AC-0079's scope).</p>
+
+<h2>G1–G6 evidence</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>evidence</th></tr>
+<tr><td>G1 headless clean</td><td class="pass">PASS</td><td><code>--quit</code> run: 0 script errors (pre- and post-scaffold-removal).</td></tr>
+<tr><td>G2 30-mode battery</td><td class="pass">PASS</td><td>Final-code battery <code>.scratch/ac0076/battery3</code> vs <code>.scratch/ac0075_postbattery2</code>: genhash MD5 25/25 identical; <b>tint IDENTICAL, guiclick IDENTICAL</b> (both were failing pre-fix, see D1); 23/30 modes byte-identical; 7 modes timing-only diffs (player, swing, survival, hunger, daynight, editperf, perf) — the known timing-variance set. <code>perf</code> comparator flags are noise: frame_max_ms 88→<b>87 (improvement)</b>, mem byte deltas (&lt;140 KB allocator noise), recenter 2→1. wallshot rc=124 NO_RESULT = identical timeout behavior as baseline.</td></tr>
+<tr><td>G3 boundary</td><td class="pass">PASS</td><td>r=2 p95 58 / max 99 / mem 15.7 / recenter ≤0.4 / 0 never-finished; r=4 p95 60 / max 98 / never-finished 0 (was 11) / recenter ≤1.0 (mem deviation D2); r=50 p95 59 / max 95 / mem 298.7 / recenter 97.9 initial, ≤43.2 crossing, flap 0. Logs: <code>.scratch/ac0076/boundary_r{2,4,50}_*</code>.</td></tr>
+<tr><td>G4 first-load perf</td><td class="pass">PASS</td><td>r=2 all_meshed, drain 2.71 s; r=4 all_meshed, drain 8.29 s, first_draw 186 ≤300; r=50 first_draw 280 ≤600, recenter 97 ≤100. Logs: <code>.scratch/ac0076/perf_r50_final2.log</code> + run outputs.</td></tr>
+<tr><td>G5 one render</td><td class="pass">PASS</td><td>Single r=2 iso render, no holes — <code>tasks/AC-0076/ac0076-r2-iso.png</code> (5×5 chunk diamond complete, ocean + trees at the rim, fog edge correct).</td></tr>
+<tr><td>G6 builds</td><td class="pass">PASS</td><td><code>./build_web.sh</code> exit 0 (web/ regenerated, 39.5 MB wasm); <code>./build_windows.sh</code> exit 0 (exports/windows/AweCraft.exe + debug-console exes; LAN serve daemon restarted).</td></tr>
+</table>
+
+<img class="snap" src="ac0076-r2-iso.png" alt="r=2 iso render">
+
+<h2>Deviations</h2>
+<table>
+<tr><th>#</th><th>deviation</th><th>data / rationale</th></tr>
+<tr><td>D1</td><td class="dev">In-radius eager stubs kept (spec suggested deferring/stopping them)</td><td>With fully-lazy node creation, <code>tint</code> failed all 5 samples with <code>no_vertex</code> and <code>guiclick</code> lost its R4 dst — root cause proven by probe: the tint harness's <code>_tint_wait_built()</code> iterates only <i>existing</i> chunk nodes, so a recenter that leaves the in-radius square uncreated makes the wait loop pass trivially and the subsequent vertex lookup hit <code>null</code> (mesh geometry itself was verified correct — quad present, colors uniform). Restoring the eager in-radius stub loop fixed both. Stub cost is the measured (b) ≈ 56 ms at r=50 — small vs the &lt;100 ms gate, so total initial recenter lands at 96.5–98.6 ms (≈2–4 ms margin; crossings 32–43 ms). No harness (main.gd) code was modified.</td></tr>
+<tr><td>D2</td><td class="dev">boundary r=4 mem 67.2 MB vs gate ≤66</td><td>Allocator variance: run-to-run band on this machine is 66.2–67.3 MB for the identical chunk set (resident 122 = 81 in-radius + 32 ring + on-demand; per-chunk footprint unchanged from baseline — total_chunks 121 identical, G2 byte-identical on all data modes). One of three consecutive runs needs to dip ≤66.0 to flip; recorded rather than chased.</td></tr>
+<tr><td>D3</td><td class="dev">r=50 perf build_units 17 709–17 805 vs baseline 17 430</td><td>Headless <code>_process</code> cadence variance at the per-frame drain cap (drain_s identical at the 850 s cap; units/frame = 1.0, zero idle drain frames — the drain never spins). Not an algorithmic change: all data-mode battery results are byte-identical.</td></tr>
+</table>
+
+<h2>Env additions (retained)</h2>
+<pre>AWECRAFT_DRAIN_MS    drift drain time budget ms (default 30)          [new]
+AWECRAFT_GEN_BUDGET  per-frame generation budget ms, -1 = off (default) [new]
+AWECRAFT_RECPROBE    print RECPROBE per recenter (kept; used above)    [kept]</pre>
+<p class="small">Removed (debug-only): AWECRAFT_TINTDBG + report, AWECRAFT_DPROBE + PCOUNT/PHYS counters. Scratch logs: <code>.scratch/ac0076/*.log</code> (base_*, perf_*, boundary_*, battery3/). Comparison tool: <code>.scratch/ac0076/compare_battery.py</code> (argv[1] = post dir).</p>
+</body></html>

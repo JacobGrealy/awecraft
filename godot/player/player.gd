@@ -1000,7 +1000,7 @@ func use_bucket(info: Dictionary) -> void:
 		return
 	if _box_intersects_player(target):
 		return
-	Game.world.set_fluid(target.x, target.y, target.z, bid, 8)
+	Game.world.set_fluid(target.x, target.y, target.z, bid, 8, true)
 	inv_consume_selected()
 	inv_add(139, 1)
 	Audio.play("splash")
