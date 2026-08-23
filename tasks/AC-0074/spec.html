@@ -1,0 +1,35 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AC-0074 — Windows export pipeline (build script + LAN serve)</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:980px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:18px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:12.5px}li{margin:3px 0}</style></head><body>
+<h1>AC-0074 — Windows export pipeline: build_windows.sh + LAN download serve</h1>
+<p>User 2026-08-21: "Depending on the overhead I want a windows export after each feature is delivered. If it's much smoother than the web build we might completely switch over to windows / linux native builds." So: a one-command Windows build + a way for the user to download the exe, run it on a Windows machine, and compare smoothness vs the web build.</p>
+<h2>Current state (coordinator-verified)</h2>
+<ul>
+<li><code>godot/export_presets.cfg</code>: <b>preset.0 = Web</b> (used by build_web.sh), <b>preset.1 = Windows</b> (platform "Windows Desktop", runnable=true, export_filter all_resources). Engine: <code>~/tools/godot/godot</code> = 4.7.1.stable.</li>
+<li>Export templates INSTALLED: <code>~/.local/share/godot/export_templates/4.7.1.stable/</code> contains <code>windows_release_x86_64.exe</code>, <code>windows_debug_x86_64_console.exe</code>, etc. (full set present).</li>
+<li>Existing servers (do NOT touch/kill pids 411476 https:8443 web / 411491 http:5180 webui): <code>serve_web.py --ssl --daemon</code> pattern = setsid-detached daemon, pidfile in <code>.scratch/</code>, log, port-in-use guard. <code>.gitignore</code> excludes <code>exports/</code> and <code>.scratch/</code> (verify; add if missing — binary exes must NOT be committed).</li>
+</ul>
+<h2>Deliverable</h2>
+<ol>
+<li><b><code>build_windows.sh</code></b> at repo root (next to build_web.sh), executable, mirroring build_web.sh's style:
+  <ul>
+  <li>Export <b>release</b> → <code>exports/windows/AweCraft.exe</code>: <code>~/tools/godot/godot --headless --path godot --export-release "Windows" "exports/windows/AweCraft.exe"</code> (create dir first).</li>
+  <li>Export <b>debug+console</b> → <code>exports/windows/AweCraft_debug_console.exe</code>: same with <code>--export-debug</code> (the _console template is selected when the project/preset uses console output; if the plain preset produces a non-console exe, add a SECOND preset "Windows (debug console)" in export_presets.cfg with <code>binary_format/embed_pck</code> normal + console enabled — check preset options <code>binary_format/architecture=x86_64</code> and the "Debug" template toggle; the reliable route is a dedicated preset with <code>custom_template/debug</code> pointing at <code>~/.local/share/godot/export_templates/4.7.1.stable/windows_debug_x86_64_console.exe</code> — do what actually produces a console exe and prove it).</li>
+  <li>After each export: verify the exe exists, print size, check <b>PE magic</b> (first 2 bytes <code>MZ</code> — <code>head -c2</code>) — a corrupt/HTML export fails loud.</li>
+  <li>Print the final artifact summary (paths + sizes + build id: stamp <code>exports/windows/BUILD.txt</code> with git short sha + timestamp so the user knows which feature build they have).</li>
+  <li>No network, no godot game run — export only (ONE godot at a time anyway).</li>
+  </ul></li>
+<li><b>Serve <code>exports/windows/</code> over plain HTTP on the LAN</b>: start a daemon like serve_web.py does — <code>python3 -m http.server PORT --bind 0.0.0.0 --directory exports/windows</code> via setsid, pidfile <code>.scratch/serve_win_export.pid</code>, log <code>.scratch/awecraft-winexport-http.log</code>. <b>PORT = 8080</b> (fallback 8081/8082 if busy; port-in-use guard prints the picked port). build_windows.sh should ensure the daemon is running (restart it if the pidfile pid is stale) and print the download URLs. Add a <code>--no-serve</code> flag that skips the daemon.</li>
+</ol>
+<h2>Verification (this box is Linux — the exe CANNOT run here; verify at build + serve level)</h2>
+<ol>
+<li>G1: <code>build_windows.sh</code> exits 0; both exes exist with PE <code>MZ</code> magic; sizes sane (release typically 40–120MB for this project size; warn only if < 10MB); <code>BUILD.txt</code> written with the right git sha.</li>
+<li>G2: serve daemon up: <code>curl -sI http://127.0.0.1:PORT/AweCraft.exe</code> → HTTP 200 + content-length ≈ exe size; same for the debug-console exe; <code>ss -tlnp</code> shows 0.0.0.0:PORT (NOT port 8443/5180 touched; pids 411476/411491 alive and untouched).</li>
+<li>G3: idempotency + guard: run <code>build_windows.sh --no-serve</code> a 2nd time (no daemon spawn), then full again (daemon already running → no dup, no port clash). Stale-pidfile case: kill the daemon pid, re-run → daemon respawns. 5180/8443 still serving throughout (curl both).</li>
+<li>G4: quick regression that the game still headless-loads (export shouldn't touch code, but the new export preset in export_presets.cfg is project data): <code>~/tools/godot/godot --headless --path godot --quit</code> 0 script errors; and <code>./build_web.sh</code> still exits 0 (web pipeline unscathed).</li>
+</ol>
+<h2>Scope fence</h2>
+<p>Add: <code>build_windows.sh</code>, maybe a 2nd export preset in <code>godot/export_presets.cfg</code>, <code>.gitignore</code> lines if <code>exports/</code> isn't already ignored, serve daemon + pidfile/log. NO game code changes, no godot RUNS beyond G1/G4 headless loads, no touch of serve_web.py / webui.py / their pids, <b>NO git</b> (coordinator commits), NO coordination-file edits (AGENTS.md/CONTINUITY.md/TASKS.yaml/tasks/scripts/* — the coordinator records the new gate), no web rebuild beyond the G4 check.</p>
+<h2>Deliverables</h2>
+<p><code>build_windows.sh</code> (+ preset/gitignore as needed) + <code>tasks/AC-0074/AC-0074-results.html</code> (commands run, G1–G4 evidence incl curl headers + ss output + exe sizes + the two download URLs <b>http://localhost:PORT/AweCraft.exe</b> and <b>http://192.168.0.224:PORT/AweCraft.exe</b>, how the user runs/tests on Windows incl. the debug-console build for log capture, deviations) + report ≤20 lines (files added, G1-G4 results, picked PORT, URLs, git = "no", deviations).</p>
+</body></html>
