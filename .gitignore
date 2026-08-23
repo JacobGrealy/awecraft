@@ -1,6 +1,7 @@
 .scratch/
 web/
 export/
+exports/
 .godot/
 .playwright-cli/
 __pycache__/

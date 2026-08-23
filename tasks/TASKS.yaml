@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-22T21:45
+  updated_at: 2026-08-22T22:43
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -2021,11 +2021,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-22T10:52
-  updated_at: 2026-08-22T21:45
-  completed_at: null
+  updated_at: 2026-08-22T22:43
+  completed_at: 2026-08-22T22:43
   waiting_on: null
   parent_id: null
   notes: 'Windows DESKTOP export pipeline: export_presets.cfg preset.1 ''Windows'' exists + win64 templates 4.7.1.stable installed.
@@ -2039,3 +2039,13 @@ intake:
     updated_at: null
     text: '[user] Depending on the overhead I want a windows export after each feature is delivered. If it''s much smoother
       than the web build we might completely switch over to windows / linux native builds.'
+  - id: 2
+    created_at: 2026-08-22T22:43
+    updated_at: null
+    text: '[agent] DONE 2026-08-22 (subagent + coord re-verified). build_windows.sh: release AweCraft.exe 109.5MB + debug
+      AweCraft_debug_console.exe 103.4MB + .console.exe wrapper (Godot 4.7 console = GUI exe + CUI wrapper; preset.2 ''Windows
+      (console debug)'' debug/export_console_wrapper=1), PE MZ both, BUILD.txt stamped (git sha). Serve daemon port 8080 (pidfile
+      .scratch/serve_win_export.pid) -> http://localhost:8080/AweCraft.exe + http://192.168.0.224:8080/AweCraft.exe. Coord
+      re-ran G1-lite/G2/G4: 200s + 8443/5180 alive, g1 0 errors, build_web.sh 0. DEVIATION NOTED: spec''s custom_template/console
+      route is impossible in 4.7 (export fails, no pck) - wrapper route is right. NOW A GATE: every subsequent feature task
+      ends with ./build_windows.sh.'

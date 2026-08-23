@@ -15,12 +15,13 @@ Then continue the task list in CONTINUITY.md §6. Do not re-derive state; the ch
 - Logic tests (print `RESULT {...}` JSON then quit): `AWECRAFT_LOGIC=player|interact|light|fluids|buckets ~/tools/godot/godot --headless --path godot`
 - Render (software GL under virtual X, llvmpipe): `xvfb-run -a ~/tools/godot/godot --path godot --rendering-method gl_compatibility` (+ env hooks: `AWECRAFT_SNAPSHOT=path.png`, `AWECRAFT_CAM=top|iso`, `AWECRAFT_SEED`, `AWECRAFT_TIME`, `AWECRAFT_RADIUS`, `AWECRAFT_FLUID_SHOT=1`)
 - Web build (run AFTER EVERY feature/fix): `./build_web.sh` → `web/`
+- Windows build (run AFTER EVERY feature/fix, since AC-0074 2026-08-22): `./build_windows.sh` → `exports/windows/AweCraft.exe` (+ `AweCraft_debug_console.exe` + `.console.exe` wrapper) and (re)starts the LAN serve daemon (http 0.0.0.0:8080, pidfile `.scratch/serve_win_export.pid`, `--no-serve` to skip)
 - Web serve (SINGLE server, no plain-HTTP twin): `python3 serve_web.py --ssl` (https 0.0.0.0:8443, self-signed `web/ssl/`, gzips) — log to `.scratch/awecraft-web-https.log`
-- When reporting any running server, ALWAYS give both: `https://localhost:8443/` and `https://192.168.0.224:8443/` (browser warns once about the self-signed cert until accepted)
+- When reporting any running server, ALWAYS give both localhost and LAN: web `https://localhost:8443/` + `https://192.168.0.224:8443/` (self-signed, browser warns once); windows exes `http://localhost:8080/AweCraft.exe` + `http://192.168.0.224:8080/AweCraft.exe`
 
 ## Ops rules
 - **AFTER EACH completed + verified task: `git add -A` (`.gitignore` excludes .scratch/web/export) + commit (incl. `tasks/AC-NNNN/`) + PUSH to `origin`** (user rule 2026-08-19). Remote added 2026-08-19: https://github.com/JacobGrealy/awecraft (public, ssh, branch `master`).
-- **HTTPS server: single canonical launcher `python3 serve_web.py --ssl --daemon`** (setsid-detached daemon, pidfile `.scratch/serve_web.pid`, log `.scratch/awecraft-web-https.log`) — detaches from the opencode process group so it SURVIVES opencode restarts (plain `nohup &` dies on every session restart — that's what kept taking it down). Port-in-use guard is built in. NEVER kill the python server pid from subagents (they only kill specific godot/Xvfb pids).
+- **Serving daemons (setsid-detached, SURVIVE opencode restarts — plain `nohup &` dies on every session restart, that's what kept taking the web server down):** (1) HTTPS web = `python3 serve_web.py --ssl --daemon` (pidfile `.scratch/serve_web.pid`, log `.scratch/awecraft-web-https.log`, https 8443); (2) Windows-export download = `python3 -m http.server 8080 --bind 0.0.0.0 --directory exports/windows` (pidfile `.scratch/serve_win_export.pid`, log `.scratch/awecraft-winexport-http.log`, spawned/restarted by `build_windows.sh`). Both have port-in-use guards. NEVER kill any of these python server pids from subagents (they only kill specific godot/Xvfb pids).
 - Godot runs **ONE at a time** (concurrent runs corrupt the `.godot` cache and hang). Never run two godot processes in parallel, including subagents.
 - Renders: ~300000 ms bash timeout, keep render radius R=1-2, always headless-verify FIRST, at most one small render after.
 - Kill stray godot/Xvfb/chrome pids (by pid, never pkill your own shell) before re-running if something hung.
@@ -44,7 +45,7 @@ Then continue the task list in CONTINUITY.md §6. Do not re-derive state; the ch
 After each Godot feature or fix: `./build_web.sh` → ensure server running (`serve_web.py`) → report localhost + LAN URLs → user tests in browser → next task. Browser bugs are first-class: reproduce reasoning from the spec (`index.html` is the reference) but fix in `godot/`.
 
 ## Task status (canonical)
-`godot/CONTINUITY.md` §6 — AC-0062–AC-0066 + AC-0072 done (2026-08-21); AC-0071 streaming plan delivered, awaiting user review (gates AC-0034); next in queue: AC-0067 viewmodel-on-top.
+`godot/CONTINUITY.md` §6 — AC-0062–AC-0074 all done (2026-08-22/23: 0067 viewmodel-on-top, 0070 tool voxxel redo, 0072 sliders, 0073 tool orientation+scale, 0068 water per wiki, 0074 windows export pipeline); AC-0071 streaming plan delivered (gates AC-0034); next in queue: **AC-0034 chunk streaming** (user moved up 2026-08-22).
 
 ## Game semantics reference (user 2026-08-20)
 - Minecraft wiki is the canonical reference for how tools/crafting/blocks should behave — AweCraft must match it **exactly unless the user specifies otherwise**: https://minecraft.wiki/w/Tool , https://minecraft.wiki/w/Block (plus related: Tool_durability, Mining, Crafting_table, Item_repair, Item).

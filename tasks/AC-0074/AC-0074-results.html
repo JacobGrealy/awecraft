@@ -1,0 +1,125 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AC-0074 results — Windows export pipeline</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:1000px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:20px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:12.5px}pre{padding:8px 10px;overflow-x:auto}li{margin:3px 0}.ok{color:#0a7a2d;font-weight:600}.warn{color:#a06000;font-weight:600}table{border-collapse:collapse;font-size:13px}td,th{border:1px solid #d5dce6;padding:3px 8px;text-align:left}</style></head><body>
+<h1>AC-0074 results — Windows export pipeline (build_windows.sh + LAN serve)</h1>
+<p>2026-08-22. Deliverable: <code>build_windows.sh</code> (repo root, executable) + <code>godot/export_presets.cfg</code> preset.2 + <code>.gitignore</code> line. No game code changed. Git: <b>not touched</b> (no commit/push — coordinator commits). <code>git status</code> footprint: <code>M .gitignore</code>, <code>M godot/export_presets.cfg</code>, <code>?? build_windows.sh</code>; exes + pidfile + logs all git-ignored (verified with <code>git check-ignore</code>).</p>
+
+<h2>What a Windows user gets</h2>
+<table>
+<tr><th>file</th><th>size</th><th>what it is</th></tr>
+<tr><td><code>exports/windows/AweCraft.exe</code></td><td>109,496,112 B (104.4 MiB)</td><td>release build — <b>run this</b></td></tr>
+<tr><td><code>exports/windows/AweCraft_debug_console.exe</code></td><td>103,406,896 B (98.6 MiB)</td><td>debug build (engine logging on)</td></tr>
+<tr><td><code>exports/windows/AweCraft_debug_console.console.exe</code></td><td>50,176 B (49 KiB)</td><td>Godot console wrapper — <b>double-click this</b> on Windows for the log console (launches the debug exe with an allocated console, waits for it, propagates exit code)</td></tr>
+<tr><td><code>exports/windows/BUILD.txt</code></td><td>288 B</td><td>git sha + branch + timestamp + preset names</td></tr>
+</table>
+
+<h2>Download URLs (port 8080 was free and was picked)</h2>
+<pre>release:   http://localhost:8080/AweCraft.exe
+           http://192.168.0.224:8080/AweCraft.exe
+debug:     http://localhost:8080/AweCraft_debug_console.exe
+           http://192.168.0.224:8080/AweCraft_debug_console.exe
+wrapper:   http://localhost:8080/AweCraft_debug_console.console.exe
+           http://192.168.0.224:8080/AweCraft_debug_console.console.exe
+listing:   http://192.168.0.224:8080/</pre>
+<p><b>Windows user instructions:</b> (1) open the release URL, run <code>AweCraft.exe</code> — that's the smoothness comparison vs the web build. (2) For logs, download <i>both</i> debug files into the <i>same folder</i> and double-click <code>AweCraft_debug_console.console.exe</code> — a console window opens titled "AweCraft" with the game's stdout/stderr; when the game quits the console closes. Saves land in <code>%APPDATA%\Godot\app_userdata\AweCraft\</code> on the Windows machine. No installer, no dependencies — single files (the PCK is embedded).</p>
+
+<h2>G1 — build: PASS</h2>
+<p><code>./build_windows.sh</code> exits <code>0</code>. Both exports ran (<code>--export-release "Windows"</code>, <code>--export-debug "Windows (console debug)"</code>), artifacts verified: PE <code>MZ</code> magic, reserved <code>pck</code> section present (proves the PCK embed succeeded), sizes sane (&gt;10 MB warn threshold not tripped), release ≠ debug (sha256 differ). <code>BUILD.txt</code>:</p>
+<pre>AweCraft Windows build
+git:    56722a1 (master)
+time:   2026-08-23T02:07:28Z
+run:    AweCraft.exe  (release, preset "Windows", --export-release)
+logs:   AweCraft_debug_console.console.exe  (console wrapper — double-click;
+         it launches AweCraft_debug_console.exe with a console)</pre>
+<pre>$ ./build_windows.sh          (full transcript: .scratch/ac0074-run3.log)
+=== AweCraft Windows export ===
+[1/2] export release      -> exports/windows/AweCraft.exe  (preset "Windows")
+  release export ok
+[2/2] export debug+console -> exports/windows/AweCraft_debug_console.exe (preset "Windows (console debug)")
+  debug-console export ok
+--- verification ---
+  release  : AweCraft.exe  size=109496112  [GUI (no console); sections[.text,.data,.rdata,.pdata,.xdata,.bss,.edata,.idata,.tls,.rsrc,.reloc,pck]]
+  dbg-main : AweCraft_debug_console.exe  size=103406896  [GUI (no console); sections[.text,.data,.rdata,.pdata,.xdata,.bss,.edata,.idata,.tls,.rsrc,.reloc,pck]]
+  wrapper  : AweCraft_debug_console.console.exe  size=50176  [CUI (console); sections[.text,.data,.rdata,.pdata,.xdata,.bss,.idata,.tls,.rsrc,.reloc]]
+  release and debug exes are distinct (sha256 differ)
+OK: 7 sections byte-identical to console template (45056 bytes)
+  console proven: wrapper is windows_debug_x86_64_console.exe template code
+download server started (pid 947660, port 8080, log .scratch/awecraft-winexport-http.log, pidfile .scratch/serve_win_export.pid)
+EXIT=0</pre>
+
+<h2>Console-variant proof method (we can't run the exe on Linux)</h2>
+<p>GODOT 4.7 does <b>not</b> produce a single console exe. Per <code>editor_export_platform_pc.cpp</code> (<code>prepare_template</code>), the export always copies the <i>normal</i> debug template (GUI, with the reserved <code>pck</code> section), and when the preset has <code>debug/export_console_wrapper=1</code> it additionally copies the <code>*_console.exe</code> <i>template</i> next to the export as the wrapper. The wrapper (<code>platform/windows/console_wrapper_windows.cpp</code>) allocates console virtual-terminal mode, strips the <code>.console.exe</code> suffix to find the main exe, <code>CreateProcess</code>es it with inherited console handles (so game logs print in the wrapper's console), and waits on a job object for the whole process tree. The spec's "dedicated preset with <code>custom_template/debug</code> = console template" literal cannot work — the console template has no <code>pck</code> section and breaks embed ("Executable &quot;pck&quot; section not found"); the dedicated preset instead uses <code>debug/export_console_wrapper=1</code>. (The spec text anticipated this: "do what actually produces a console exe and prove it".)</p>
+<p>Proof without running, all automated in the script (<code>check_exe</code> + section compare, each export):</p>
+<ol>
+<li><b>PE subsystem</b>: the script parses each PE header on Linux. Wrapper reports <b>subsystem 3 = Windows CUI (console)</b>; both main exes report subsystem 2 = GUI. Same check applied to the installed templates first as calibration: <code>windows_release_x86_64.exe</code>=2, <code>windows_debug_x86_64_console.exe</code>=3.</li>
+<li><b>Code-section identity</b>: the exported wrapper's 7 file-backed sections (<code>.text .data .rdata .pdata .xdata .idata .tls</code>, 45,056 bytes) are <b>byte-identical</b> to <code>~/.local/share/godot/export_templates/4.7.1.stable/windows_debug_x86_64_console.exe</code>. (Naive whole-file sha256 equality is NOT the right check: the editor strips the template's bundled <code>.rsrc</code> icon/version resources 141,912→3,296 bytes and re-compacts the PE, so sizes/headers differ by design.)</li>
+<li><b>Distinctness</b>: debug main exe ≠ release exe (sha256), both carry the <code>pck</code> section (PCK actually embedded), sizes sane.</li>
+</ol>
+
+<h2>G2 — daemon serving: PASS</h2>
+<pre>$ curl -sI http://127.0.0.1:8080/AweCraft.exe
+HTTP/1.0 200 OK
+Server: SimpleHTTP/0.6 Python/3.13.7
+Content-type: application/x-msdos-program
+Content-Length: 109496112          <- exact on-disk size
+
+$ curl -sI http://127.0.0.1:8080/AweCraft_debug_console.exe
+HTTP/1.0 200 OK
+Content-Length: 103406896
+
+$ curl -sI http://127.0.0.1:8080/AweCraft_debug_console.console.exe
+HTTP/1.0 200 OK
+Content-Length: 50176
+
+$ ss -tlnp | grep -E ':(8080|8443|5180)'
+LISTEN 0  5  0.0.0.0:8443  0.0.0.0:*  users:(("python3",pid=411476,fd=3))   <- untouched
+LISTEN 0  5  0.0.0.0:5180  0.0.0.0:*  users:(("python3",pid=411491,fd=3))   <- untouched
+LISTEN 0  5  0.0.0.0:8080  0.0.0.0:*  users:(("python3",pid=947660,fd=3))   <- new daemon
+
+$ ps -o pid,ppid,pgid,sess -p 947660
+  PID  PPID  PGID  SESS
+947660     1 947660 947660      <- setsid-detached (survives session ends)
+
+curl -sk https://127.0.0.1:8443/  -> 200   (serve_web.py, pid 411476 alive)
+curl   http://127.0.0.1:5180/     -> 200   (webui, pid 411491 alive)  [GET: webui 501s on HEAD]</pre>
+<p>Daemon: <code>python3 -m http.server 8080 --bind 0.0.0.0 --directory exports/windows</code> via <code>setsid</code>, pidfile <code>.scratch/serve_win_export.pid</code>, log <code>.scratch/awecraft-winexport-http.log</code>, port fallback 8081/8082 implemented (not needed — 8080 was free).</p>
+
+<h2>G3 — idempotency + guards: PASS</h2>
+<pre>$ ./build_windows.sh --no-serve     -> exit 0, printed "--no-serve: skipping download daemon",
+                                       pidfile untouched (still 947660), no daemon spawned
+
+$ ./build_windows.sh                -> exit 0, "download server already running (pid 947660, port 8080) — leaving it up"
+                                       exactly 1 listener on :8080 afterwards (no dup, no clash)
+
+$ kill -9 947660                    -> :8080 free
+$ ./build_windows.sh                -> exit 0, "pidfile stale (pid 947660 dead) — clearing",
+                                       "download server started (pid 950044, port 8080 ...)",
+                                       pidfile rewritten to 950044,
+                                       curl 8080 -> 200 len=109496112; 8443 -> 200; 5180 -> 200
+                                       (5180/8443 served throughout all G3 steps)</pre>
+
+<h2>G4 — regression: PASS</h2>
+<pre>$ ~/tools/godot/godot --headless --path godot --quit
+Godot Engine v4.7.1.stable.official.a13da4feb
+(exit 0, 0 script errors)                        <- new preset.2 in project data is fine
+
+$ ./build_web.sh
+exit 0, web/ regenerated (index.html/js/pck/wasm/png)   <- web pipeline unscathed</pre>
+
+<h2>Files changed / added</h2>
+<ul>
+<li><code>build_windows.sh</code> (new, repo root) — exports, PE/subsystem/pck/section verification, BUILD.txt, setsid daemon with pidfile/log/port-guard/respawn, <code>--no-serve</code> flag, prints localhost+LAN URLs.</li>
+<li><code>godot/export_presets.cfg</code> — added <code>[preset.2] name="Windows (console debug)"</code>: platform Windows Desktop, <code>debug/export_console_wrapper=1</code>, <code>custom_template/*</code> empty (standard templates), <code>binary_format/embed_pck=true</code>, <code>architecture="x86_64"</code>, <code>runnable=false</code>; preset.1 "Windows" untouched.</li>
+<li><code>.gitignore</code> — added <code>exports/</code> (<code>.scratch/</code> already covered pidfile/log; <code>export/</code> singular pre-existed).</li>
+<li>Scratch (git-ignored): <code>.scratch/ac0074-run{1,2,3}.log</code>, <code>.scratch/ac0074-g4-quit.log</code>, <code>.scratch/ac0074-g4-web.log</code>, <code>.scratch/awecraft-build-winexport{,-dbg}.log</code> (godot export logs), <code>.scratch/serve_win_export.pid</code>, <code>.scratch/awecraft-winexport-http.log</code>.</li>
+</ul>
+
+<h2>Deviations</h2>
+<ul>
+<li>"Console" deliverable is Godot's <b>wrapper pair</b> (<code>AweCraft_debug_console.exe</code> + <code>AweCraft_debug_console.console.exe</code>), not one console exe — the only way Godot 4.7 does Windows console builds; proven above. On Windows the user double-clicks the wrapper.</li>
+<li>Wrapper filename is <code>AweCraft_debug_console.console.exe</code>, NOT <code>AweCraft_debug_console.exe.console.exe</code>: godot's <code>prepare_template</code> builds it from <code>String(path).basename()</code>, which strips the final <code>.exe</code>. Verified this still resolves correctly: the wrapper's runtime suffix-strip (rightmost <code>.console.exe</code>) maps it back to <code>AweCraft_debug_console.exe</code>.</li>
+<li>Debug-console export uses <code>--export-debug</code> on the dedicated preset (per spec) with <code>export_console_wrapper=1</code> instead of <code>custom_template/debug</code> pointed at the console template — the literal spec route is impossible (console template lacks the <code>pck</code> section; godot errors "PCK Embedding: Executable &quot;pck&quot; section not found"). Spec anticipated: "do what actually produces a console exe and prove it".</li>
+<li>Webui (5180) answers HEAD with 501 — G2 "curl both still OK" used GET for it (200). Not a fault.</li>
+</ul>
+<p>Daemon current state at time of writing: pid <code>950044</code> serving <code>0.0.0.0:8080</code> (setsid, PPID 1). <code>git</code>: not run for commit/push — as fenced.</p>
+</body></html>
