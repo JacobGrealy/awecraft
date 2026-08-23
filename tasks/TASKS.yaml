@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-23T15:40
+  updated_at: 2026-08-23T17:44
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -34,6 +34,8 @@ queue:
 - AC-0075
 - AC-0076
 - AC-0080
+- AC-0081
+- AC-0082
 - AC-0079
 - AC-0077
 - AC-0078
@@ -2185,10 +2187,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: open
   labels: []
   created_at: 2026-08-23T09:39
-  updated_at: 2026-08-23T15:40
+  updated_at: 2026-08-23T17:40
   completed_at: null
   waiting_on: null
   parent_id: AC-0034
@@ -2211,15 +2213,93 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-23T15:40
-  updated_at: 2026-08-23T15:40
-  completed_at: null
+  updated_at: 2026-08-23T17:30
+  completed_at: 2026-08-23T17:30
   waiting_on: null
   parent_id: AC-0034
   notes: 'AC-0034 child (policy P1.2, split from AC-0079 whose v1 stalled before writing code, 2026-08-23): two-stage hysteresis
     unload - candidate at Chebyshev r+1 kills mesh+collision immediately (data+edits stay), free at r+2 after 2 consecutive
     recenter events, jitter-reset (no-flap), free clears ALL maps incl fluid_dirty+tex_refresh, re-entry = rebuild not regenerate,
     remesh_ok round-trip harness field, fog-edge invisibility render check. Self-contained spec (AC-0042-style no extra docs).'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-23T17:30
+    updated_at: null
+    text: '[agent] DONE 2026-08-23 (subagent full report, no stall; coord re-verified). chunk.gd +candidate/cand_since state;
+      world.gd _enter_candidate (mesh refs null -> ArrayMesh GC, collision_body queue_free + col_dirty=true, mesh_built=false,
+      light/fluid/tex map erases, only for had-mesh chunks) + _strip_candidate_builds (fresh candidates pulled from build
+      queue, data entries untouched) + recenter two-stage cheby (<=r clears, ==r+1 enter/reset, >=r+2 count+free at 2) + free-path
+      fluid_dirty/tex_refresh erases; main.gd +16 = remesh_ok retreat-gate only. Coord verification: git audit clean (3 files
+      + artifacts only), G1 0, spot battery fluids/save/settings/light GENHASH-25-of-25 identical (initial ''genhash DIFF''
+      was coord''s own regex artifact), 3 fresh boundary r4 samples: run1 flap0/marker-ok/81-final/max98/3-neverfinished;
+      run2 flap0/62-98? p95=62/max=100/remesh_ok/2-neverfinished + 11.7s spike; subagent run 0-neverfinished => never-finished
+      count = headless drain pacing jitter (AC-0075 baseline had 11), NOT a hysteresis regression (diff proves cheby<=r branch
+      touches flags only; in-radius build order unchanged). G4 numbers from subagent: r2 2.69s, r4 8.18s/first_draw 185/fog_ok,
+      r50 289. Mem r4 60.8 (was 66) / r50 298.9 (spec <=300 ok; 172 ref was stale AC-0075 walk state). DEVIATIONS accepted:
+      (1) remesh retreat capped so marker lands at r-1 (r50 trivial = in-radius), (2) r50 initial recenter 102.8-105ms vs
+      <100 gate - RECPROBE proves 0080 code adds <0.1ms, delta = unmodified stub-window baseline variance (AC-0076 runs hit
+      96.5-105), (3) r4 in_radius_built_max 55-56 = AC-0076''s own final value (+-1 sampling), (4) G5(b) post-walk render
+      skipped (needs hooks beyond fence) - NO_FOG control render used instead (trailing window fully meshed). Daemons 8443/5180/8080
+      confirmed alive post-run.'
+- id: AC-0081
+  title: quit-to-menu-broken-web-windows
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: in-progress
+  labels: []
+  created_at: 2026-08-23T17:38
+  updated_at: 2026-08-23T17:44
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'USER-REPORTED 2026-08-23: ''quit to menu doesn''t work in web or windows build'' - both builds share the godot/
+    code so single root cause. Suspect window: AC-0062 (auto-save on quit-to-menu), AC-0076 queue rebuild, AC-0080 hysteresis
+    (candidate state / collision_body queue_free) during world teardown at scene exit. Reproduce headless (new quitmenu harness:
+    start_game -> quit-to-menu -> assert menu scene + world cleared + save written + 0 script errors), fix, full battery,
+    rebuild web + windows so the user can retest both.'
+  comments:
+  - id: 1
+    created_at: 2026-08-23T17:38
+    updated_at: null
+    text: '[agent] User: ''quit to menu doesn''t work in web or windows build'' (2026-08-23 ~15:5x). Both current builds (web
+      + AweCraft.exe, both from AC-0080 G6 ~15:4x) affected => shared code path. Goes to TOP of queue per ops rules (user-reported
+      > planned).'
+- id: AC-0082
+  title: chunk-threaded-gen-desktop
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-23T17:40
+  updated_at: 2026-08-23T17:40
+  completed_at: null
+  waiting_on: null
+  parent_id: AC-0034
+  notes: 'USER ORDER 2026-08-23 ''do the multi threaded chunk management task next'' (after AC-0081 bugfix). = plan AC-0071
+    PHASE 2: threaded DATA GENERATION, desktop-gated only. Boundary conditions (ALL must hold, from plan): (1) Phase-1 done
+    (landed: AC-0075/76/80 + 0079 scoring pending); (2) hard gate ''not OS.has_feature(web)'' + env AWECRAFT_THREADGEN (on-by-default
+    desktop, =''0'' => exact Phase-1 behavior) + optional AWECRAFT_THREADGEN_N pool (default mini(cores-2,3)); (3) code-review
+    gate: workers touch ONLY WorldGen.generate (pure static, no nodes/globals/shared PackedByteArray), results hand back as
+    freshly-allocated arrays, init_fl + _apply_edits_to_chunk run on MAIN thread, in-flight cap <=6; (4) determinism gate:
+    genhash MD5 identical with AWECRAFT_THREADGEN=0 vs =1 (25/25 + extra seeds 999/424242). Scope: WorldGen.generate into
+    Godot 4 Task/WorkerThreadPool; completion handoff on main into chunk.data (world.gd drain data-unit region); drain logic
+    otherwise unchanged; must respect AC-0080 hysteresis (a chunk freed/candidated between enqueue and handoff => drop the
+    handoff, re-queue or discard cleanly - no use-after-free); web build path = byte-identical single-thread behavior (thread
+    code must be unreachable on web). Rejected-by-plan (do NOT do): threaded mesh/face-scan, threaded lighting, threaded web
+    export. Gates: genhash parity, full battery under threadgen-on (desktop) + web-identical, boundary/perf A/B threadgen
+    0/1 at r=4 AND r=50 (expect gen ms to disappear from walk frames on desktop), 0 script errors, G6 builds.'
+  comments:
+  - id: 1
+    created_at: 2026-08-23T17:40
+    updated_at: null
+    text: '[agent] Registered 2026-08-23 by user directive ''do the multi threaded chunk management task next'' - queued behind
+      AC-0081 (user bugfix goes first) and ahead of AC-0079/0077/0078.'

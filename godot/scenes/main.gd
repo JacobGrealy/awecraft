@@ -4555,6 +4555,21 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 	for s in fluid_samples:
 		if float(s) > fluid_max:
 			fluid_max = float(s)
+	# AC-0080 re-entry rebuild gate: retreat toward the start so the marker
+	# chunk (freed for small r during the walk) re-enters in-radius, let the
+	# drain re-mesh it, then verify mesh + collision + preserved edit.
+	var mkey := "%d,%d" % [int(floorf(float(mx) / 16.0)), int(floorf(float(mz) / 16.0))]
+	var rx := mini(float(p.position.x) - 8.0 * 16.0, 16.0 * float(r) + 8.0)
+	p.position.x = rx
+	p.velocity = Vector3.ZERO
+	var remesh_ok := false
+	for i in 3000:
+		await get_tree().physics_frame
+		p.velocity = Vector3.ZERO
+		var mc = world.chunks.get(mkey)
+		if mc != null and mc.mesh_built and mc.collision_body != null and world.get_block(mx, my, mz) == new_id:
+			remesh_ok = true
+			break
 	var ok := crossings == walk_lines and marker_ok
 	Debug.result({
 		"ok": ok,
@@ -4581,6 +4596,7 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		"mem_delta_mb": roundf((int(mem_after) - int(mem_before)) / 1048576.0 * 10.0) / 10.0,
 		"marker": [mx, my, mz, orig_id, new_id],
 		"marker_ok": bool(marker_ok),
+		"remesh_ok": bool(remesh_ok),
 		"resident_final": int(resident_final),
 		"built_final": built_final,
 		"in_radius_built_final": irb_final,

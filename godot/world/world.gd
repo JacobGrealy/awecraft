@@ -502,6 +502,57 @@ func _build_queue_for_center(pcx: int, pcz: int) -> void:
 	queue_size = qs
 	_rp_stub_n = new_n
 
+func _enter_candidate(key: String, c: Node3D) -> bool:
+	# AC-0080 candidacy: keep node + data + fl + edits, kill the expensive
+	# parts. col_dirty forces a collision rebuild on re-entry; mesh_built
+	# false makes re-enterers re-queue themselves as "build" in
+	# _build_queue_for_center and skips them in the flush loops.
+	c.candidate = true
+	c.cand_since = 0
+	var had_mesh: bool = c.mesh_built
+	c.mesh_built = false
+	c.col_dirty = true
+	if had_mesh:
+		if c.mesh_instance != null:
+			c.mesh_instance.mesh = null
+		if c.fluid_instance != null:
+			c.fluid_instance.mesh = null
+		if c.flora_instance != null:
+			c.flora_instance.mesh = null
+		if c.collision_body != null:
+			c.collision_body.queue_free()
+			c.collision_body = null
+		# Pending mesh-bound work on an invisible chunk is waste; re-entry
+		# marks it dirty again via the rebuild path.
+		light_pending_set.erase(key)
+		light_pending.erase(key)
+		fluid_dirty.erase(key)
+		tex_refresh.erase(key)
+	return had_mesh
+
+
+func _strip_candidate_builds(keys: Array) -> void:
+	# Remove surviving "build" queue entries of freshly-candidated chunks so
+	# the drain cannot re-mesh them while they are invisible. "data" entries
+	# are left in place (data gen on the r+1 ring is unchanged behavior).
+	if keys.is_empty():
+		return
+	var kset := {}
+	for k in keys:
+		kset[k] = true
+	for b in range(band_buckets.size()):
+		var arr: Array = band_buckets[b]
+		var i := 0
+		while i < arr.size():
+			var e: Dictionary = arr[i]
+			if not bool(e["data_only"]) and kset.has(e["key"]):
+				queued_keys.erase(e["key"])
+				arr.remove_at(i)
+				queue_size -= 1
+			else:
+				i += 1
+
+
 func recenter(wx: float, wz: float, mesh_now := true) -> void:
 	last_pcx = int(floorf(wx / 16.0))
 	last_pcz = int(floorf(wz / 16.0))
@@ -515,18 +566,42 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 	_rp_dequeue_ms = 0.0
 	_rp_deq_n = 0
 	var rt0 := Time.get_ticks_usec()
+	# AC-0080 two-stage hysteresis: r+1 = candidate (kill expensive parts,
+	# keep node+data+edits); r+2+ for 2 recenter events = free. Jitter at
+	# r+1 resets cand_since, so a chunk never flaps in and out.
+	var rr := render_radius
 	var to_free: Array[String] = []
+	var cand_builds: Array = []
 	for key in chunks:
 		var c: Node3D = chunks[key]
-		if absi(c.cx - pcx) > render_radius + 1 or absi(c.cz - pcz) > render_radius + 1:
-			to_free.append(key)
+		var cheby := maxi(absi(c.cx - pcx), absi(c.cz - pcz))
+		if cheby <= rr:
+			if c.candidate:
+				c.candidate = false
+				c.cand_since = 0
+		elif cheby == rr + 1:
+			if not c.candidate:
+				if _enter_candidate(key, c):
+					cand_builds.append(key)
+			else:
+				c.cand_since = 0
+		else:
+			if not c.candidate:
+				if _enter_candidate(key, c):
+					cand_builds.append(key)
+			c.cand_since += 1
+			if c.cand_since >= 2:
+				to_free.append(key)
 	var tf1 := Time.get_ticks_usec()
+	_strip_candidate_builds(cand_builds)
 	for key in to_free:
 		var c: Node3D = chunks[key]
 		chunks.erase(key)
 		queued_keys.erase(key)
 		light_pending_set.erase(key)
 		light_pending.erase(key)
+		fluid_dirty.erase(key)
+		tex_refresh.erase(key)
 		c.queue_free()
 	_rp_free_ms += (Time.get_ticks_usec() - tf1) / 1000.0
 	if not mesh_now:

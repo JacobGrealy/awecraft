@@ -16,6 +16,11 @@ var mesh_built := false
 var collision_enabled := true
 var col_dirty := true
 var last_eff: Dictionary = {}
+# AC-0080 two-stage hysteresis: candidate = at Chebyshev r+1 with expensive
+# parts killed (mesh/collision), data+edits kept; cand_since = count of
+# recenter events spent at >= r+2 (free at >= 2).
+var candidate := false
+var cand_since := 0
 
 var mesh_instance: MeshInstance3D = null
 var fluid_instance: MeshInstance3D = null
