@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AC-0075 — chunk-streaming baseline (r=2/4/50)</title>
+<style>
+body{font-family:system-ui,'Segoe UI',sans-serif;margin:24px 40px;max-width:1150px;line-height:1.5;color:#1b232f}
+h1{font-size:21px}h2{font-size:16px;margin-top:26px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}
+h3{font-size:13.5px;margin-top:16px}
+table{border-collapse:collapse;font-size:12.5px;margin:8px 0;width:100%}
+th,td{border:1px solid #cdd6e3;padding:4px 8px;text-align:right;vertical-align:top}
+th{background:#eef1f6;text-align:center}
+td.l,th.l{text-align:left}
+code{background:#eef1f6;border-radius:3px;font-size:12px;padding:0 4px}
+pre{background:#f5f7fa;border:1px solid #dfe5ec;border-radius:5px;padding:8px 12px;font-size:11.5px;overflow-x:auto;line-height:1.45}
+.ok{color:#1a7a2e;font-weight:600}.warn{color:#b06d00;font-weight:600}.bad{color:#b3261e;font-weight:600}
+.note{font-size:12px;color:#556}
+.box{background:#f4f7fb;border:1px solid #dfe5ec;border-radius:5px;padding:10px 14px;margin:10px 0;font-size:13px}
+.key{background:#fff8f0;border-left:4px solid #e08b2d;padding:8px 14px;margin:12px 0;font-size:13px}
+ul{margin:6px 0 6px 20px}li{margin:3px 0}
+</style>
+</head>
+<body>
+<h1>AC-0075 — chunk-streaming: boundary/first-load harness + r-sweep baseline (AC-0034 child 1/4)</h1>
+<p class="note">Measurement-only task (plan AC-0071 "step 0: measure first"). Adds the <code>AWECRAFT_LOGIC=boundary</code> harness + extends <code>AWECRAFT_LOGIC=perf</code>, and records the r=2/4/50 baseline that children 2–4 will be judged against. <b>No streaming behavior was changed</b> — the only non-harness code touched is one read-only instrumentation stamp in <code>world.gd</code> (called out below). Everything headless; no renders.</p>
+
+<div class="key"><b>Headline findings for the web-vs-native r=50 decision:</b><br>
+(1) Native r=50 steady-state memory ≈ <b>7.7 GB at 8 483 chunks → ≈9 GB full radius</b> (~0.86 MB/built chunk). That is 25–90 GB in a wasm/GPU browser tab per the §1.6 3–10× per-chunk multiplier — <b>r=50 is not browser-feasible.</b><br>
+(2) r=50 is dominated by the <b>recenter re-enqueue cost</b>, not meshing: first-draw <b>7.6 s</b> is almost all an <b>O(n²) initial recenter (7 397 ms)</b>; the boundary walk's frame p95 is <b>841 ms / max 991 ms</b> because every crossing re-inserts ~101 new chunks through <code>_insert_sorted</code>, which walks the ~12 290-entry queue. The plan's "$\lt$1 ms recenter" holds only at r≤8 (≤361 entries).<br>
+(3) At a realistic 1 chunk/s walk the drain keeps the radius <b>partially built even at r=4</b> (in-radius peaked 64/81 during the walk; 11/20 leading edges never finished before streaming out) and is hopelessly behind at r=50 (236/10 201). Phase 1's scored queue / bulk-light / staged collision are required before r≥4 walks are smooth.</div>
+
+<h2>Gates</h2>
+<table>
+<tr><th class="l">Gate</th><th class="l">Result</th></tr>
+<tr><td class="l">G1 — headless <code>--quit</code>, 0 script errors</td><td class="l"><span class="ok">PASS</span> — rc=0, 0 script errors (re-checked after every edit; all 32 battery modes + 6 sweep runs also 0 script errors each)</td></tr>
+<tr><td class="l">G2 — no-behavior proof (full battery byte-identical vs pre-change)</td><td class="l"><span class="ok">PASS</span> — 23/30 modes byte-identical pre↔post; genhash bit-identical 25/25; the other 7 modes differ only in intrinsically timing-dependent fields (proven intrinsic by a 2nd identical post run — see below)</td></tr>
+<tr><td class="l">G3 — boundary+perf at r=2/4/50 ok / exit 0 with new fields</td><td class="l"><span class="ok">PASS</span> — boundary <code>ok:true</code> at all radii; perf exit 0 at all radii with first_draw_ms / p50 / p95 / mem before+after / chunks_built / drain_s populated (perf_r50 hit its 857 s drain cap → <code>all_meshed:false</code>, reported as data)</td></tr>
+<tr><td class="l">G4 — <code>build_web.sh</code> + <code>build_windows.sh</code> exit 0</td><td class="l"><span class="ok">PASS</span> — web godot exit 0 (stamp restored); windows exit 0 (see note)</td></tr>
+</table>
+
+<h2>Baseline — first-load / drain (<code>AWECRAFT_LOGIC=perf</code>)</h2>
+<p class="note">Player never spawned; measures recenter → full-ratio drain. <code>drain_s = total_ms</code>. <code>chunks/s</code> = chunks_built / drain_s. <code>first_draw_ms</code> = recenter start → spawn chunk <code>mesh_built</code> (player-controllable moment).</p>
+<table>
+<tr><th class="l">r</th><th>first_draw_ms</th><th>recenter_ms</th><th>drain_s</th><th>chunks_built</th><th>total_chunks (resident)</th><th>all_meshed</th><th>chunks/s</th><th>frame p95 / max ms</th><th>mem Δ MB (before→after)</th></tr>
+<tr><td class="l">2</td><td>183</td><td>0</td><td>2.68</td><td>25</td><td>49</td><td>true</td><td>9.3</td><td>53 / 74</td><td>19.2</td></tr>
+<tr><td class="l">4</td><td>183</td><td>2</td><td>7.98</td><td>81</td><td>121</td><td>true</td><td>10.1</td><td>53 / 88</td><td>57.1</td></tr>
+<tr><td class="l">50</td><td>7 578</td><td>7 397</td><td>857.38 <span class="warn">(hit cap)</span></td><td>8 483</td><td>10 609</td><td class="warn">false</td><td>9.9</td><td>60 / 82</td><td>7 304 (7.13 GB)</td></tr>
+</table>
+<ul class="note">
+<li>Memory before = t0 (pre-recenter, ~41 MB); after = fully drained (r=2/4) or at the 857 s cap (r=50). Per built chunk ≈ 0.86 MB (r=50). Full r=50 radius (10 201 built + 2 089 data ring) ≈ <b>8.9–9.2 GB process</b>.</li>
+<li>Throughput is flat ≈ 10 chunks/s across r (the 1–3 units/frame, 30 ms-guard drain is unit-stable, so bigger radii just take proportionally longer, not slower per-chunk).</li>
+<li>r=50 first-draw is <b>dominated by the O(n²) recenter</b> (7.397 s of the 7.578 s), not the ~180 ms spawn-chunk mesh. That is the single biggest r=50 first-load offender.</li>
+</ul>
+
+<h2>Baseline — boundary walk (<code>AWECRAFT_LOGIC=boundary</code>)</h2>
+<p class="note">Real play-path: recenter → await 3×3 core → spawn a fly player → walk +X at 16 blocks/s (1.0 chunk/s, <code>AWECRAFT_WALK_SPEED</code>) across 20 chunk lines; crossing detection is the <b>real</b> path (player chunk change → <code>player.gd _recenter</code> → <code>world.recenter</code>). Per-frame frame cost excludes harness bookkeeping. <code>burst</code> = time from crossing until that crossing's new east-edge column (2r+1 chunks) is built; <b>−1</b> = the leading edge never caught up before streaming out (a real failure, not a missing measurement). <code>marker</code> = an edited cell ~8 blocks ahead that must survive stream-out/in.</p>
+<table>
+<tr><th class="l">r</th><th>walk_s</th><th>frame p50</th><th>frame p95</th><th>frame max</th><th>burst p50</th><th>burst p95</th><th>burst max</th><th>bursts resolved</th><th>flap</th><th>loads / unloads</th><th>in-radius built min/max (final / target)</th><th>mem Δ MB</th><th>fluid tick p95 (n)</th><th>marker_ok</th></tr>
+<tr><td class="l">2</td><td>19.5</td><td>14</td><td>56</td><td>112</td><td>469</td><td>973</td><td>1 747</td><td>20/20</td><td>0</td><td>140 / 140</td><td>10 / 25 (25 / 25)</td><td>18.2</td><td>12.6 (102)</td><td class="ok">true</td></tr>
+<tr><td class="l">4</td><td>19.5</td><td>0</td><td>60</td><td>97</td><td>5 677</td><td>8 554</td><td>8 867</td><td class="warn">9/20</td><td>0</td><td>220 / 220</td><td>13 / 64 (81 / 81)</td><td>66.2</td><td>12.4 (198)</td><td class="ok">true</td></tr>
+<tr><td class="l">50</td><td>20.3</td><td>0</td><td>841</td><td>991</td><td>—</td><td>—</td><td>—</td><td class="bad">0/20</td><td>0</td><td>1 957 / 1 957</td><td>13 / 32 (236 / 10 201)</td><td>172.5</td><td>2.8 (120)</td><td class="ok">true</td></tr>
+</table>
+<ul class="note">
+<li><b>Frame ceiling:</b> r=2/4 walk frames stay well under a 60 fps budget except short spikes (p95 56/60 ms). r=50 walk frames spike to p95 841 ms / max 991 ms — these are the per-crossing O(queue) <code>recenter</code> re-enqueues, not meshing. That is a ~250 ms–1 s hitch on every chunk boundary at r=50.</li>
+<li><b>Streaming lag:</b> at r=4 the in-radius only reaches 64/81 built during the active walk (settles to 81 after stopping); 11/20 leading edges stream out before finishing. At r=50 the in-radius is 13–32 built of 10 201 during the walk — the radius is never anywhere near full while moving.</li>
+<li><b>loads == unloads</b> and <b>flap = 0</b> at every radius (straight +X walk: the new east column loads, the west column streams out, nothing is re-loaded — consistent with no-jitter behavior). <b>marker_ok = true</b> everywhere: the edited cell survived stream-out/in (at r=50 the marker chunk never left a r=50 radius, so that case is trivial; at r=2/4 it genuinely streamed out and back via <code>world.edits</code> re-apply on regen).</li>
+<li>Fluid tick p95 ≈ 12.6 ms at r=2/4 (the sliding ±14-block window re-wakes a ~20 k-cell scan on boundary crossings — suspect #3, still live) vs 2.8 ms at r=50 (drier window, mostly asleep).</li>
+</ul>
+
+<h2>Cross-check vs §1.6 committed numbers</h2>
+<table>
+<tr><th class="l">Metric (headless, this box)</th><th>Committed (§1.6 / PERF gates)</th><th>Measured now (r=4)</th><th>Δ</th><th class="l">Verdict</th></tr>
+<tr><td class="l">r=4 full drain, chunks meshed</td><td>81</td><td>81</td><td>0</td><td class="l"><span class="ok">match</span></td></tr>
+<tr><td class="l">r=4 full drain, total_ms</td><td>7 998</td><td>7 982</td><td>−0.2%</td><td class="l"><span class="ok">match (±20%)</span></td></tr>
+<tr><td class="l">r=4 drain frames</td><td>196</td><td>193</td><td>−1.5%</td><td class="l"><span class="ok">match (±20%)</span></td></tr>
+<tr><td class="l">r=4 max frame</td><td>63</td><td>88</td><td>+40%</td><td class="l"><span class="warn">timing variance</span> — the single heaviest build frame (incl. hidden diagonal-neighbor generates) varies run-to-run; total drain time is identical, so throughput is unchanged.</td></tr>
+<tr><td class="l">WorldGen.generate</td><td>≈31 ms/chunk (PERF3c-1)</td><td>GENMS 785/25 = 31.4 ms/chunk</td><td>+1%</td><td class="l"><span class="ok">match</span></td></tr>
+</table>
+<p class="note">No machine or logic drift — the committed r=4 baseline reproduces. (A second independent post-change run reproduced it too: perf_r4 total_ms 7 982 vs pre 7 958, 81 chunks both.)</p>
+
+<h2>Full RESULT JSONs</h2>
+<h3>boundary r=2</h3>
+<pre>RESULT {"built_final":30,"burst_max_ms":1747,"burst_ms_per_crossing":[1747,933,560,471,468,469,487,488,469,458,476,468,466,458,492,484,467,465,454,432],"burst_p50_ms":469,"burst_p95_ms":973,"crossings":20,"flap":0,"fluid_tick_max_ms":12.7,"fluid_tick_ms_p95":12.58,"fluid_tick_n":102,"in_radius_built_final":25,"in_radius_built_max":25,"in_radius_built_min":10,"in_radius_present_final":25,"loads":140,"marker":[16,31,8,4,3],"marker_ok":true,"max_ms":112,"mem_after_bytes":70009351,"mem_before_bytes":50970235,"mem_delta_mb":18.2,"ok":true,"p50_ms":14,"p95_ms":56,"radius":2,"resident_final":50,"target_in_radius":25,"unloads":140,"walk_chunks":20,"walk_s":19.52,"walk_speed":16.0}</pre>
+<h3>boundary r=4</h3>
+<pre>RESULT {"built_final":89,"burst_max_ms":8867,"burst_ms_per_crossing":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,8867,8086,7244,6466,5677,4860,4034,3254,2472],"burst_p50_ms":5677,"burst_p95_ms":8554,"crossings":20,"flap":0,"fluid_tick_max_ms":13.28,"fluid_tick_ms_p95":12.4,"fluid_tick_n":198,"in_radius_built_final":81,"in_radius_built_max":64,"in_radius_built_min":13,"in_radius_present_final":81,"loads":220,"marker":[16,31,8,4,3],"marker_ok":true,"max_ms":97,"mem_after_bytes":123211659,"mem_before_bytes":53815399,"mem_delta_mb":66.2,"ok":true,"p50_ms":0,"p95_ms":60,"radius":4,"resident_final":122,"target_in_radius":81,"unloads":220,"walk_chunks":20,"walk_s":19.47,"walk_speed":16.0}</pre>
+<h3>boundary r=50</h3>
+<pre>RESULT {"built_final":236,"burst_max_ms":0,"burst_ms_per_crossing":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"burst_p50_ms":0,"burst_p95_ms":0,"crossings":20,"flap":0,"fluid_tick_max_ms":12.16,"fluid_tick_ms_p95":2.8,"fluid_tick_n":120,"in_radius_built_final":236,"in_radius_built_max":32,"in_radius_built_min":13,"in_radius_present_final":10201,"loads":1957,"marker":[16,31,8,4,3],"marker_ok":true,"max_ms":991,"mem_after_bytes":274470475,"mem_before_bytes":93600423,"mem_delta_mb":172.5,"ok":true,"p50_ms":0,"p95_ms":841,"radius":50,"resident_final":10609,"target_in_radius":10201,"unloads":1957,"walk_chunks":20,"walk_s":20.29,"walk_speed":16.0}</pre>
+<h3>perf r=2</h3>
+<pre>RESULT {"all_meshed":true,"build_ms":1232,"build_units":69,"chunks":25,"chunks_built":25,"collision_shapes":25,"drain_frames":65,"drain_s":2.68,"first_draw_ms":183,"fog_edge":48.0,"fog_far":45.6,"fog_near":12.0,"fog_ok":true,"frame_max_ms":74,"frames":168,"gen_ms":1436,"max_drain_ms":73.0,"max_frame_ms":74,"mem_after_bytes":61653095,"mem_before_bytes":41502019,"p50_ms":0,"p95_ms":53,"recenter_ms":0,"render_radius":2,"total_chunks":49,"total_ms":2679}</pre>
+<h3>perf r=4</h3>
+<pre>RESULT {"all_meshed":true,"build_ms":3945,"build_units":197,"chunks":81,"chunks_built":81,"collision_shapes":81,"drain_frames":193,"drain_s":7.98,"first_draw_ms":183,"fog_edge":80.0,"fog_far":76.0,"fog_near":20.0,"fog_ok":true,"frame_max_ms":88,"frames":485,"gen_ms":3978,"max_drain_ms":88.0,"max_frame_ms":88,"mem_after_bytes":101342243,"mem_before_bytes":41502019,"p50_ms":0,"p95_ms":53,"recenter_ms":2,"render_radius":4,"total_chunks":121,"total_ms":7982}</pre>
+<h3>perf r=50 (hit the 857 s drain cap; still draining)</h3>
+<pre>RESULT {"all_meshed":false,"build_ms":473513,"build_units":17256,"chunks":8483,"chunks_built":8483,"collision_shapes":8483,"drain_frames":17254,"drain_s":857.38,"first_draw_ms":7578,"fog_edge":816.0,"fog_far":775.2,"fog_near":204.0,"fog_ok":true,"frame_max_ms":82,"frames":51005,"gen_ms":365546,"max_drain_ms":81.0,"max_frame_ms":82,"mem_after_bytes":7698287783,"mem_before_bytes":41502019,"p50_ms":0,"p95_ms":60,"recenter_ms":7397,"render_radius":50,"total_chunks":10609,"total_ms":857376}</pre>
+
+<h2>What this means for web vs native at r=50 (6-core / ~63 GB box)</h2>
+<div class="box">
+<table>
+<tr><th class="l">Quantity</th><th>Native (measured)</th><th>Browser (projected, §1.6 3–10× per-chunk)</th></tr>
+<tr><td class="l">Resident memory (full r=50 radius)</td><td>≈ 9 GB process</td><td>≈ <b>25–90 GB</b> (wasm heap + GPU) — far beyond any tab's ~2–4 GB ceiling → OOM/terminate</td></tr>
+<tr><td class="l">First-draw (Play → playable)</td><td>≈ 7.6 s (O(n²) recenter 7.4 s + spawn mesh)</td><td>≈ 23 s–76 s (single-threaded wasm, 3–10×)</td></tr>
+<tr><td class="l">Per-crossing hitch (walk p95 / max)</td><td>841 / 991 ms (recenter re-enqueue)</td><td>≈ 2.5 s–8.4 s longtasks — several dropped seconds per 16-block step</td></tr>
+<tr><td class="l">Full-radius drain</td><td>≈ 10 chunks/s → ~18 min</td><td>≈ 1–3 chunks/s → 1.2–3.8 h to fill the radius</td></tr>
+</table>
+<p><b>Reading:</b> r=50 as a <i>native</i> default is "works but stutters" — the world fills slowly (~10 chunks/s) and each chunk-boundary crossing is a ~0.5–1 s hitch; it is playable but not smooth. As a <i>web</i> default it is <b>not feasible</b> at all (memory alone rules it out). The AC-0072 slider default of 50 should therefore stay <b>native-only</b>; the web default should be ≤ 8 (r=4 native is smooth at 60 fps with p95 53 ms first-load frames and 19.2–57 MB memory; r=4 walks keep up mostly with only transient lag). Phase 1 items (scored O(1)-insert queue to kill the O(n²)/O(queue) recenter, bulk batch light, staged collision, fluid prescreen) are what make r≥4 walks smooth and would cut the r=50 recenter from seconds to near-zero — but they do <b>not</b> change the r=50 memory story, which is why the web ceiling must be low.</p>
+</div>
+
+<h2>Instrumentation exceptions (called out)</h2>
+<ul>
+<li><code>world/world.gd</code> — added <code>var fluid_tick_samples: Array = []</code> and two <code>fluid_tick_samples.append((Time.get_ticks_usec()-t0)/1000.0)</code> lines at the two existing <code>TICKMS</code> sites in <code>tick_fluids()</code> (early-sleep return + end-of-scan). This is the <b>only</b> non-harness change. It is read-only measurement (nothing reads it for a decision), adds no block writes/reads, and is provably bit-identical to the simulation — the <code>fluids</code>/<code>fluidsettle</code>/<code>fluidfall</code>/<code>webfall</code>/<code>buckets</code>/<code>water</code> battery modes are all byte-identical pre↔post. Rationale: the spec asked for <code>fluid_tick_ms_p95</code> from the TICKMS signal, but the harness runs in-process and has no stdout capture, so the smallest possible in-process stamp at the exact TICKMS sites was the minimal way to collect those samples.</li>
+</ul>
+
+<h2>Deviations / notes</h2>
+<ul>
+<li><b>Memory API:</b> spec said <code>OS.get_used_memory()</code>; that symbol does not exist in this Godot 4.7.1 build (verified via method probe). Used the available <code>OS.get_static_memory_usage()</code> (returns process heap bytes) — same role for the before/after Δ.</li>
+<li><b>Walk speed:</b> <code>AWECRAFT_WALK_SPEED</code> default 16.0 blocks/s = 1.0 chunk/s (in the spec's 0.8–1.2 range). Measured 16.4 blocks/s. At a slower "realistic sprint" (5.6 blocks/s) the drain would keep up better; the 1.0 chunk/s baseline is intentionally a stress case per spec and is what exposes the r≥4 lag.</li>
+<li><b>perf frame cap:</b> was a fixed 1200 frames (≈20 s) — far too small for a 10 201-chunk radius. Made it <code>maxi(1200, (2r+1)²·5)</code>: r≤8 keeps 1200 (r=2/4 behavior unchanged, §1.6 still matches); r=50 → 51 005 frames (857 s), which still ended with <code>all_meshed:false</code> (full r=50 drain ≈ 18 min &gt; 1 200 s budget) — reported as data, not a failure.</li>
+<li><b>burst semantics:</b> measured as time-to-build that crossing's new east-edge column (2r+1 chunks). Crossings whose leading edge never finished before streaming out report −1 — this is a genuine streaming-lag signal (9/20 at r=4, 20/20 at r=50), not a measurement gap.</li>
+<li><b>wallshot</b> excluded from the headless G2 battery: it is a render-only mode that hangs on <code>await Debug.snap</code> → <code>frame_post_draw</code> (never fires headless). Pre-existing; unaffected by this change (separate dispatch branch); the task is headless-only. Included in the 31-mode list on both runs (timed out with no RESULT, identically pre and post).</li>
+<li><b>G2 timing-field modes:</b> 7 modes (player, swing, survival, hunger, daynight, editperf, perf) carry inherently non-deterministic RESULT fields (wall-clock ms, day/night cycle rate, time-of-day, sway animation samples). They differ pre↔post <i>and</i> post↔post2 (two identical-code runs) in the same field set — proving the variance is intrinsic machine timing, not this change. Every deterministic field in those 7 is byte-identical pre↔post.</li>
+</ul>
+
+<h2>Scratch / reproduction</h2>
+<pre># battery (one godot at a time); pre=pre-change, post/post2=post-change
+bash .scratch/run_battery.sh .scratch/ac0075_prebattery
+bash .scratch/run_battery.sh .scratch/ac0075_postbattery
+bash .scratch/run_battery.sh .scratch/ac0075_postbattery2
+# r-sweep
+bash .scratch/run_sweep.sh
+# individual
+env AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=4  ~/tools/godot/godot --headless --path godot
+env AWECRAFT_LOGIC=perf     AWECRAFT_RADIUS=50 ~/tools/godot/godot --headless --path godot</pre>
+<p class="note">Logs/results: <code>.scratch/ac0075_prebattery/</code>, <code>.scratch/ac0075_postbattery/</code>, <code>.scratch/ac0075_postbattery2/</code>, <code>.scratch/ac0075_sweep/</code>. genhash MD5s (25 lines) bit-identical across all runs. git = no (coordinator commits).</p>
+</body>
+</html>

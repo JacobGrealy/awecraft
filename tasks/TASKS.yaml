@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-22T23:02
+  updated_at: 2026-08-23T04:38
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -2066,11 +2066,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-22T22:59
-  updated_at: 2026-08-22T23:02
-  completed_at: null
+  updated_at: 2026-08-23T04:33
+  completed_at: 2026-08-23T04:33
   waiting_on: null
   parent_id: AC-0034
   notes: 'AC-0034 child 1/4 (plan AC-0071 step 0 = MEASURE FIRST): new AWECRAFT_LOGIC=boundary 20-chunk walk harness (plan
@@ -2079,7 +2079,22 @@ intake:
     NOTE: default render radius is now 50 (AC-0072 slider) - plan tables cover r<=8, the r=50 numbers decide the web-vs-native
     question (user 2026-08-22). NO streaming behavior changes in this task. All existing harness RESULTs must stay byte-identical
     (proof).'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-23T04:33
+    updated_at: null
+    text: '[agent] DONE 2026-08-23 (subagent stalled on final report; coord verified everything on disk). Added AWECRAFT_LOGIC=boundary
+      (real play-path 20-chunk walk: p50/p95/max, crossings, loads/unloads/flap, per-crossing burst, marker edit round-trip,
+      fluid p95, mem) + perf extension (first_draw_ms, drain-wide p95/max, mem, chunks_built, drain_s). Only non-harness change:
+      fluid_tick_samples array in world.gd (2 appends of already-computed tick time - zero behavior). Coord re-verified: G1
+      0, G2 = 23/30 modes byte-identical + genhash MD5 25/25 + the 7-8 diffs are ALL timing/sample fields (proven by post
+      vs post2 identical-2nd-run diff), G3 new runs boundary r2 p95=56/max=109/flap=0/marker_ok + perf r4 81 built/7.9s/firstdraw182
+      match saved baseline, G4 builds exit 0. BASELINE (headless, this box): r2 = 25 built, drain 2.68s, walk p95 56/max 112,
+      mem 18MB; r4 = 81 built, drain 7.98s, walk p95 60/max 97, in-radius peaked 64/81 mid-walk, mem 66MB; r50 = 10201 chunks
+      -> drain 857s (cap, 8483/10201), first_draw 7578ms = O(n^2) recenter (7397ms, _insert_sorted walks 12290-entry queue),
+      walk p95 841/max 991ms, mem 7.3GB at 8483 built (~0.86MB/built chunk; ~9GB full radius) => r=50 NOT browser-feasible
+      (25-90GB wasm-equivalent per 3-10x multiplier). KEY: at 1 chunk/s walk drain already falls behind at r=4 (11/20 leading
+      edges never finish) -> children 2-4 required. Full readout: tasks/AC-0075/AC-0075-results.html.'
 - id: AC-0076
   title: chunk-stream-policy
   source: agent
@@ -2087,10 +2102,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-22T22:59
-  updated_at: 2026-08-22T22:59
+  updated_at: 2026-08-23T04:38
   completed_at: null
   waiting_on: null
   parent_id: AC-0034

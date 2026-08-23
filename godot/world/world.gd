@@ -38,6 +38,7 @@ var perf_drain_frames := 0
 var perf_max_drain_ms := 0
 var perf_gen_ms := 0
 var perf_build_ms := 0
+var fluid_tick_samples: Array = []
 var fluid_dirty := {}
 var fluid_sim_enabled := true
 var fluid_timer: Timer = null
@@ -730,6 +731,7 @@ func tick_fluids() -> void:
 	if fluid_sleep and _fluid_stable >= 3:
 		if tick_time:
 			print("TICKMS ", (Time.get_ticks_usec() - t0) / 1000.0)
+		fluid_tick_samples.append((Time.get_ticks_usec() - t0) / 1000.0)
 		return
 	var hmax := Data.HEIGHT - 1
 	for pos in cl:
@@ -813,6 +815,7 @@ func tick_fluids() -> void:
 									set_block(nx, y, nz, 9, false)
 	if tick_time:
 		print("TICKMS ", (Time.get_ticks_usec() - t0) / 1000.0)
+	fluid_tick_samples.append((Time.get_ticks_usec() - t0) / 1000.0)
 
 
 func _fluid_near(x: int, y: int, z: int) -> bool:

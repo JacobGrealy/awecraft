@@ -767,9 +767,19 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			return
 		if logic == "perf":
 			var t0 := Time.get_ticks_msec()
+			var pmem_before: int = OS.get_static_memory_usage()
 			world.recenter(spawn.x, spawn.z, true)
 			var recenter_ms := Time.get_ticks_msec() - t0
-			await _perf_test(spawn, t0, recenter_ms)
+			await _perf_test(spawn, t0, recenter_ms, pmem_before)
+			return
+		if logic == "boundary":
+			world.fluid_sim_enabled = true
+			world.tick_time = OS.get_environment("AWECRAFT_TICKTIME") == "1"
+			var bt0 := Time.get_ticks_msec()
+			world.recenter(spawn.x, spawn.z, true)
+			await _await_boundary_core(spawn, 900)
+			player = _spawn_player()
+			await _boundary_test(spawn, bt0)
 			return
 		if logic == "atlas":
 			world.collision_enabled = false
@@ -4242,18 +4252,23 @@ func _count_shapes(n: Node) -> int:
 	return c
 
 
-func _perf_test(spawn: Vector3, t0: int, recenter_ms: int) -> void:
+func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> void:
 	var pcx := int(floorf(spawn.x / 16.0))
 	var pcz := int(floorf(spawn.z / 16.0))
 	var frames := 0
 	var max_frame_ms := 0
+	var first_draw_ms := -1
+	var frame_ms_list: Array = []
 	var all := false
-	while frames < 1200:
+	var rr_now: int = world.render_radius
+	var max_frames := maxi(1200, (2 * rr_now + 1) * (2 * rr_now + 1) * 5)
+	while frames < max_frames:
 		var fb := Time.get_ticks_msec()
 		await get_tree().physics_frame
 		var fe := Time.get_ticks_msec()
 		if fe - fb > max_frame_ms:
 			max_frame_ms = fe - fb
+		frame_ms_list.append(fe - fb)
 		frames += 1
 		all = true
 		for key in world.chunks:
@@ -4262,6 +4277,10 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int) -> void:
 				if not c.mesh_built:
 					all = false
 					break
+		if first_draw_ms < 0:
+			var sc = world.chunks.get("%d,%d" % [pcx, pcz])
+			if sc != null and sc.mesh_built:
+				first_draw_ms = fe - t0
 		if all:
 			break
 	if OS.get_environment("AWECRAFT_MESH_INFO") != "":
@@ -4273,6 +4292,9 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int) -> void:
 		if c.mesh_built:
 			built += 1
 	var total_ms := Time.get_ticks_msec() - t0
+	var mem_after: int = OS.get_static_memory_usage()
+	var ms_sorted: Array = frame_ms_list.duplicate()
+	ms_sorted.sort()
 	var shapes := _count_shapes(get_tree().root)
 	var rr: int = world.render_radius
 	var edge := (float(rr) + 1.0) * 16.0
@@ -4295,8 +4317,295 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int) -> void:
 		"max_drain_ms": roundf(world.perf_max_drain_ms * 10.0) / 10.0,
 		"gen_ms": world.perf_gen_ms,
 		"build_ms": world.perf_build_ms,
+		"first_draw_ms": first_draw_ms,
+		"p50_ms": int(_percentile(frame_ms_list, 0.50)),
+		"p95_ms": int(_percentile(frame_ms_list, 0.95)),
+		"frame_max_ms": int(ms_sorted.back()) if not ms_sorted.is_empty() else 0,
+		"mem_before_bytes": int(mem_before),
+		"mem_after_bytes": int(mem_after),
+		"chunks_built": built,
+		"drain_s": roundf(total_ms / 1000.0 * 100.0) / 100.0,
 	})
 	get_tree().quit()
+
+
+func _percentile(arr: Array, pct: float) -> float:
+	if arr.is_empty():
+		return 0.0
+	var s: Array = arr.duplicate()
+	s.sort()
+	var n: int = s.size()
+	if n == 1:
+		return float(s[0])
+	var idx: float = (n - 1) * pct
+	var lo: int = int(floorf(idx))
+	var hi: int = int(ceilf(idx))
+	if lo == hi:
+		return float(s[lo])
+	var frac: float = idx - float(lo)
+	return float(s[lo]) + (float(s[hi]) - float(s[lo])) * frac
+
+
+func _await_boundary_core(spawn: Vector3, max_frames: int) -> void:
+	var pcx := int(floorf(spawn.x / 16.0))
+	var pcz := int(floorf(spawn.z / 16.0))
+	var waited := 0
+	while waited < max_frames:
+		var allb := true
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
+				if c == null or not c.mesh_built:
+					allb = false
+					break
+		if allb:
+			return
+		await get_tree().physics_frame
+		waited += 1
+	print("BOUNDARYCORE not fully built after %d frames" % max_frames)
+
+
+func _boundary_test(spawn: Vector3, t0: int) -> void:
+	var r: int = world.render_radius
+	var walk_lines := 20
+	var we := OS.get_environment("AWECRAFT_WALK")
+	if we != "":
+		walk_lines = we.to_int()
+	var walk_speed := 16.0
+	var se := OS.get_environment("AWECRAFT_WALK_SPEED")
+	if se != "":
+		walk_speed = se.to_float()
+	var count_every := maxi(1, r / 4)
+
+	var mx := int(spawn.x) + 8
+	var mz := int(spawn.z)
+	var my: int = world.surface_top(mx, mz)
+	var orig_id: int = world.get_block(mx, my, mz)
+	var new_id := 3 if orig_id != 3 else 2
+	world.set_block(mx, my, mz, new_id)
+	for i in 10:
+		await get_tree().physics_frame
+
+	var max_h := -1
+	for bx in range(int(spawn.x), int(spawn.x) + walk_lines * 16 + 4, 4):
+		var h := WorldGen.terrain_height(bx, mz, Game.world_seed)
+		max_h = maxi(max_h, h)
+	var fly_y := float(maxi(max_h, 0)) + 8.0
+
+	var p = Game.player
+	p.position = Vector3(spawn.x, fly_y, spawn.z)
+	p.velocity = Vector3.ZERO
+	p.set_fly(true)
+	p.look(-PI / 2.0, 0.0)
+	for i in 6:
+		await get_tree().physics_frame
+
+	world.fluid_tick_samples.clear()
+	var mem_before: int = OS.get_static_memory_usage()
+	var t_walk0 := Time.get_ticks_msec()
+
+	var frame_ms_list: Array = []
+	var max_ms := 0
+	var loads := 0
+	var unloads := 0
+	var flap := 0
+	var crossings := 0
+	var cross_at: Array = []
+	var cross_cx: Array = []
+	var cross_cz: Array = []
+	var cross_burst: Array = []
+	var cross_resolved: Array = []
+	var prev_pcx := int(floorf(p.position.x / 16.0))
+	var prev_keys: Dictionary = {}
+	for key in world.chunks:
+		prev_keys[key] = true
+	var freed_recent: Dictionary = {}
+	var min_irb := 1000000000
+	var max_irb := 0
+	var walk_frames := 0
+	var walk_max_frames := 30000
+	var prev_t := Time.get_ticks_msec()
+	while crossings < walk_lines and walk_frames < walk_max_frames:
+		var fb := Time.get_ticks_msec()
+		await get_tree().physics_frame
+		var fe := Time.get_ticks_msec()
+		var fms := fe - fb
+		frame_ms_list.append(fms)
+		if fms > max_ms:
+			max_ms = fms
+		walk_frames += 1
+		var cx_now := int(floorf(p.position.x / 16.0))
+		var cz_now := int(floorf(p.position.z / 16.0))
+		if walk_frames % count_every == 0:
+			var cur_keys: Dictionary = {}
+			var pir_present := 0
+			var pir_built := 0
+			for key in world.chunks:
+				var c: Node3D = world.chunks[key]
+				cur_keys[key] = true
+				if absi(int(c.cx) - cx_now) <= r and absi(int(c.cz) - cz_now) <= r:
+					pir_present += 1
+					if c.mesh_built:
+						pir_built += 1
+			if pir_built < min_irb:
+				min_irb = pir_built
+			if pir_built > max_irb:
+				max_irb = pir_built
+			for key in cur_keys:
+				if not prev_keys.has(key):
+					loads += 1
+					if freed_recent.has(key):
+						flap += 1
+						freed_recent.erase(key)
+			for key in prev_keys:
+				if not cur_keys.has(key):
+					unloads += 1
+					freed_recent[key] = true
+			prev_keys = cur_keys
+			for ci in range(cross_burst.size()):
+				if cross_resolved[ci]:
+					continue
+				var ccx: int = int(cross_cx[ci])
+				var ccz: int = int(cross_cz[ci])
+				var allb := true
+				for zc in range(ccz - r, ccz + r + 1):
+					var ch = world.chunks.get("%d,%d" % [ccx, zc])
+					if ch == null or not ch.mesh_built:
+						allb = false
+						break
+				if allb:
+					cross_resolved[ci] = true
+					cross_burst[ci] = fe - int(cross_at[ci])
+		if cx_now > prev_pcx:
+			crossings += cx_now - prev_pcx
+			cross_at.append(fe)
+			cross_cx.append(cx_now + r)
+			cross_cz.append(cz_now)
+			cross_burst.append(-1)
+			cross_resolved.append(false)
+			prev_pcx = cx_now
+		var dt := (fe - prev_t) / 1000.0
+		prev_t = fe
+		p.position.x += walk_speed * dt
+		p.velocity = Vector3.ZERO
+
+	var settle_frames := 0
+	var settle_max := 1200
+	var last_pir_built := -1
+	var quiet := 0
+	while settle_frames < settle_max:
+		var fb := Time.get_ticks_msec()
+		await get_tree().physics_frame
+		var fe := Time.get_ticks_msec()
+		var cx_now := int(floorf(p.position.x / 16.0))
+		var cz_now := int(floorf(p.position.z / 16.0))
+		settle_frames += 1
+		if settle_frames % count_every == 0:
+			var pir_built := 0
+			for key in world.chunks:
+				var c: Node3D = world.chunks[key]
+				if absi(int(c.cx) - cx_now) <= r and absi(int(c.cz) - cz_now) <= r and c.mesh_built:
+					pir_built += 1
+			if pir_built == last_pir_built:
+				quiet += 1
+			else:
+				quiet = 0
+				last_pir_built = pir_built
+		var all_resolved := true
+		for ci in range(cross_burst.size()):
+			if cross_resolved[ci]:
+				continue
+			var ccx: int = int(cross_cx[ci])
+			var allb := true
+			for zc in range(int(cross_cz[ci]) - r, int(cross_cz[ci]) + r + 1):
+				var ch = world.chunks.get("%d,%d" % [ccx, zc])
+				if ch == null or not ch.mesh_built:
+					allb = false
+					break
+			if allb:
+				cross_resolved[ci] = true
+				cross_burst[ci] = fe - int(cross_at[ci])
+			else:
+				all_resolved = false
+		if all_resolved and quiet >= 30:
+			break
+
+	var marker_ok: bool = world.get_block(mx, my, mz) == new_id
+
+	var resident_final: int = world.chunks.size()
+	var built_final := 0
+	var irb_final := 0
+	var irp_final := 0
+	var cx_end := int(floorf(p.position.x / 16.0))
+	var cz_end := int(floorf(p.position.z / 16.0))
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if c.mesh_built:
+			built_final += 1
+		if absi(int(c.cx) - cx_end) <= r and absi(int(c.cz) - cz_end) <= r:
+			irp_final += 1
+			if c.mesh_built:
+				irb_final += 1
+
+	var mem_after: int = OS.get_static_memory_usage()
+	var walk_s := roundf((prev_t - t_walk0) / 1000.0 * 100.0) / 100.0
+	var fluid_samples: Array = world.fluid_tick_samples
+	var fluid_p95 := _percentile(fluid_samples, 0.95)
+	var fluid_max := 0.0
+	for s in fluid_samples:
+		if float(s) > fluid_max:
+			fluid_max = float(s)
+	var ok := crossings == walk_lines and marker_ok
+	Debug.result({
+		"ok": ok,
+		"radius": r,
+		"walk_chunks": walk_lines,
+		"walk_speed": roundf(walk_speed * 100.0) / 100.0,
+		"walk_s": walk_s,
+		"crossings": crossings,
+		"p50_ms": int(_percentile(frame_ms_list, 0.50)),
+		"p95_ms": int(_percentile(frame_ms_list, 0.95)),
+		"max_ms": int(max_ms),
+		"loads": loads,
+		"unloads": unloads,
+		"flap": flap,
+		"burst_ms_per_crossing": cross_burst,
+		"burst_p50_ms": int(_percentile(_resolved_bursts(cross_burst), 0.50)),
+		"burst_p95_ms": int(_percentile(_resolved_bursts(cross_burst), 0.95)),
+		"burst_max_ms": int(_max_int(cross_burst)),
+		"fluid_tick_ms_p95": roundf(fluid_p95 * 100.0) / 100.0,
+		"fluid_tick_max_ms": roundf(fluid_max * 100.0) / 100.0,
+		"fluid_tick_n": int(fluid_samples.size()),
+		"mem_before_bytes": int(mem_before),
+		"mem_after_bytes": int(mem_after),
+		"mem_delta_mb": roundf((int(mem_after) - int(mem_before)) / 1048576.0 * 10.0) / 10.0,
+		"marker": [mx, my, mz, orig_id, new_id],
+		"marker_ok": bool(marker_ok),
+		"resident_final": int(resident_final),
+		"built_final": built_final,
+		"in_radius_built_final": irb_final,
+		"in_radius_present_final": irp_final,
+		"in_radius_built_min": min_irb if min_irb < 1000000000 else 0,
+		"in_radius_built_max": max_irb,
+		"target_in_radius": (2 * r + 1) * (2 * r + 1),
+	})
+	get_tree().quit()
+
+
+func _resolved_bursts(bursts: Array) -> Array:
+	var out: Array = []
+	for b in bursts:
+		if int(b) >= 0:
+			out.append(int(b))
+	return out
+
+
+func _max_int(arr: Array) -> int:
+	var m := -1
+	for v in arr:
+		if int(v) > m:
+			m = int(v)
+	return m if m >= 0 else 0
 
 
 func _atlas_test(spawn: Vector3) -> void:
