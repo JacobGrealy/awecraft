@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-23T14:50
+  updated_at: 2026-08-23T15:40
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -33,6 +33,7 @@ queue:
 - AC-0074
 - AC-0075
 - AC-0076
+- AC-0080
 - AC-0079
 - AC-0077
 - AC-0078
@@ -859,7 +860,7 @@ intake:
   labels:
   - godot
   created_at: 2026-08-18T12:00
-  updated_at: 2026-08-23T09:39
+  updated_at: 2026-08-23T15:40
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -888,6 +889,13 @@ intake:
     text: '[agent] SPLIT UPDATE 2026-08-23: AC-0076 first attempt stalled (no code on disk, no hung procs) -> AC-0076 REVISED
       to recenter-O(n^2)-fix + budgets + P1.8 only; look-priority + hysteresis moved to new child AC-0079 (queued right behind
       0076). Queue now 0075(done) 0076 0079 0077 0078.'
+  - id: 5
+    created_at: 2026-08-23T15:40
+    updated_at: null
+    text: '[agent] 2026-08-23: AC-0079 v1 stalled (no code) -> split: AC-0080 hysteresis (queue pos before 0079), AC-0079
+      = scoring only. RELIABILITY pattern confirmed 3x: empty subagent reports sometimes hide FULL code on disk (0068/0067/0075/0076-v1)
+      but also sometimes NOTHING (0076-v1, 0079-v1) - always inspect disk first; when nothing landed, split+shrink, don''t
+      retry same scope.'
 - id: AC-0035
   title: m5a2-light-bake
   source: agent
@@ -2171,7 +2179,7 @@ intake:
     Continue stops waiting for full radius, streams around existing player).'
   comments: []
 - id: AC-0079
-  title: chunk-stream-policy2-lookpriority-hysteresis
+  title: chunk-stream-look-priority-scoring
   source: agent
   projects:
   - awecraft
@@ -2180,14 +2188,38 @@ intake:
   status: in-progress
   labels: []
   created_at: 2026-08-23T09:39
-  updated_at: 2026-08-23T14:50
+  updated_at: 2026-08-23T15:40
   completed_at: null
   waiting_on: null
   parent_id: AC-0034
-  notes: 'AC-0034 child 2b/4 (split from AC-0076 after its first attempt stalled, 2026-08-23): look-priority + collision-need
-    scored queue (plan P1.1: score = manhattan + lookPenalty (K~0.75, re-score at recenter + ~2x/s throttle) + collPenalty)
-    + two-stage hysteresis unload (P1.2: candidate at r+1 kills mesh+collision immediately, free at r+2 after 2 recenter events,
-    clear ALL per-chunk maps incl fluid_dirty+tex_refresh, no-flap, flush skips candidates) + unload invisible check. Improves
-    the r=4 walk (baseline: 11/20 bursts never finished, in_radius_built_max 64/81) and memory churn. Runs AFTER AC-0076 (recenter
-    O(n^2) fix).'
+  notes: 'AC-0034 child (policy P1.1, after hysteresis split off to AC-0080 when 0079-v1 stalled 2026-08-23): look-priority
+    + collision-need scored queue on the band-bucket structure (score = manhattan + lookPenalty (1-angleAlignment)*K~0.75
+    distScale, ±70° of player yaw first, K soft <1; re-score at recenter + ~2x/s throttle; drain picks best-ready near-band
+    entry; O(n) recenter <100ms @r50 no-regression) + boundary harness look fields (yaw faces +X during walk; forward_wall_ms/trailing_wall_ms
+    per crossing) + gates r=4: forward p95 <= trailing p95, forward wall p95 <=3000ms (AC-0076 ~4900), in_radius_built_max
+    >=70/81. Self-contained spec to follow.'
+  comments:
+  - id: 1
+    created_at: 2026-08-23T15:40
+    updated_at: null
+    text: '[agent] v1 stalled before writing code (clean tree, no hung procs, daemons survived). SPLIT: hysteresis (P1.2)
+      -> new AC-0080 (queued ahead); 0079 = look-priority scoring (P1.1) only; spec rewrite due before relaunch.'
+- id: AC-0080
+  title: chunk-stream-hysteresis-unload
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: in-progress
+  labels: []
+  created_at: 2026-08-23T15:40
+  updated_at: 2026-08-23T15:40
+  completed_at: null
+  waiting_on: null
+  parent_id: AC-0034
+  notes: 'AC-0034 child (policy P1.2, split from AC-0079 whose v1 stalled before writing code, 2026-08-23): two-stage hysteresis
+    unload - candidate at Chebyshev r+1 kills mesh+collision immediately (data+edits stay), free at r+2 after 2 consecutive
+    recenter events, jitter-reset (no-flap), free clears ALL maps incl fluid_dirty+tex_refresh, re-entry = rebuild not regenerate,
+    remesh_ok round-trip harness field, fog-edge invisibility render check. Self-contained spec (AC-0042-style no extra docs).'
   comments: []
