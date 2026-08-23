@@ -190,7 +190,7 @@ func _make_menu() -> CanvasLayer:
 	menu_ui.on_play = Callable(self, "_menu_play")
 	menu_ui.on_new_world = Callable(self, "_menu_new_world")
 	menu_ui.on_resume = Callable(self, "_menu_resume")
-	menu_ui.on_quit_to_menu = Callable(self, "_quit_to_menu")
+	menu_ui.on_quit_to_menu = Callable(self, "quit_to_menu")
 	menu_ui.on_continue = Callable(self, "_menu_continue")
 	add_child(menu_ui)
 	return menu_ui
@@ -808,6 +808,19 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			return
 		if logic == "save":
 			await _save_test()
+			return
+		if logic == "quitmenu":
+			Save.clear(0)
+			Save.clear(1)
+			Save.clear(2)
+			_make_menu()
+			var qslot := Save.first_empty_slot()
+			Save.active_slot = qslot
+			world.recenter(spawn.x, spawn.z, true)
+			await _await_spawn_floor(spawn, 300)
+			player = _spawn_player()
+			Game.start()
+			await _quitmenu_test(qslot, spawn)
 			return
 		world.collision_enabled = false
 		world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
@@ -3726,6 +3739,56 @@ func _save_test() -> void:
 		"iso_base": iso_base,
 		"pos_before": pos_before,
 		"pos_after": pos_after,
+	})
+	get_tree().quit()
+
+
+func _quitmenu_test(slot: int, spawn: Vector3) -> void:
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	var top: int = world.surface_top(sx, sz)
+	Debug.set_block(sx + 5, top, sz + 5, 3)
+	Debug.set_block(sx + 6, top, sz + 5, 4)
+	Debug.set_block(sx + 5, top + 1, sz + 5, 6)
+	Debug.set_block(sx + 4, top - 2, sz + 5, 16)
+	Debug.set_block(sx + 5, top, sz + 6, 23)
+	Debug.set_block(sx + 4, top, sz + 4, 22)
+	for i in 12:
+		await get_tree().physics_frame
+	Game.pause()
+	for i in 8:
+		await get_tree().physics_frame
+	var paused_ok: bool = menu_ui != null and menu_ui._state == "pause"
+	var wref := world
+	var pref := player
+	menu_ui._on_quit_btn_pressed()
+	for i in 30:
+		await get_tree().physics_frame
+	var mode_ok := Game.mode == "menu"
+	var menu_active: bool = menu_ui != null and menu_ui._state == "main"
+	var world_cleared := world == null and Game.world == null and player == null and Game.player == null \
+		and not is_instance_valid(wref) and not is_instance_valid(pref)
+	var save_written := Save.file_exists(slot)
+	var slotdata := Save.load_full(slot)
+	var seed_ok := int(slotdata.get("seed", -1)) == int(Game.world_seed)
+	var edits_ok := Save.edit_count(slotdata.get("edits", {})) >= 6
+	var script_errors_seen := true
+	var sef := OS.get_environment("AWECRAFT_STDERR_FILE")
+	if sef != "":
+		var cnt: Array = []
+		OS.execute("grep", ["-c", "SCRIPT ERROR:", sef], cnt)
+		script_errors_seen = not (cnt.size() == 0 or int(cnt[0]) == 0)
+	var ok: bool = paused_ok and mode_ok and menu_active and world_cleared and save_written and seed_ok and edits_ok and not script_errors_seen
+	Debug.result({
+		"ok": ok,
+		"paused_ok": paused_ok,
+		"menu_scene_active": mode_ok and menu_active,
+		"world_cleared": world_cleared,
+		"save_written": save_written,
+		"seed_ok": seed_ok,
+		"edits_ok": edits_ok,
+		"slot": slot,
+		"script_errors_seen": script_errors_seen,
 	})
 	get_tree().quit()
 

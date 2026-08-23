@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0084 — Flowers / 2D objects render as sprites, not cubes</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+.report{background:#fff8e6;border:1px solid #e0c56d;border-radius:8px;padding:12px 14px}
+.ok{color:#1a7f37;font-weight:600}.bad{color:#b42318;font-weight:600}
+.gate{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+</style></head><body>
+<h1>AC-0084 — Flowers / 2D objects render as sprites, not cubes</h1>
+<p><b>Status:</b> open (top priority) · <b>Source:</b> user report 2026-08-23 · <b>Project:</b> AweCraft (Godot port) ·
+<b>Spec reference:</b> frozen web <code>../index.html</code> — source of truth for block types + appearance.</p>
+
+<div class="report"><b>User report (verbatim):</b> "flowers and other 2d objects should appear as rotating sprites, not cubes."</div>
+
+<h2>Requirement</h2>
+<p>In the Godot build, flower/plant/cross-type blocks (poppy, tall grass, and any other planar/non-rectangular block) currently
+render as <b>full cubes</b>. They must render as <b>sprites</b> — cross/billboard geometry with the block texture, not solid cubes.
+Per the user they should "appear as rotating sprites": FIRST check the frozen web spec's block table to see exactly which block ids
+are cross/plant type AND how the web draws them (static crossed quads vs camera-facing billboard vs actual spin), then
+<b>match the web</b> (frozen spec = source of truth). A camera-facing billboard reads as "rotating" to the viewer; for a chunk-merged
+mesh the performant equivalent is crossed-quads (XQ) geometry.</p>
+
+<h2>Known location / state</h2>
+<ul>
+<li><code>godot/world/chunk.gd</code> <code>build_mesh</code> — where the per-block world geometry is emitted. <span class="bad">Find the pass that emits a full cube for cross-type blocks and route those ids to cross-quad geometry instead.</span></li>
+<li><b>Existing XQ cross-quad machinery:</b> AC-0066 already built chunk cross-quad (XQ) geometry (<code>ALPHA_SCISSOR</code> + <code>CULL_DISABLED</code>) and a held cross mesh in <code>godot/core/held_mesh.gd</code>. AC-0073 notes a flower is "real icon pixels on a cross-quad" in some context — reuse/adapt the XQ geometry for the world.</li>
+<li><code>godot/autoload/data.gd</code> (Data.blocks) — where to mark the cross/plant block ids. <b>Derive the id list from the frozen web spec's block table, not by guess.</b></li>
+<li><code>godot/core/atlas.gd</code> / assets — block texture lookup (Data.block_rect / atlas_tex).</li>
+</ul>
+
+<h2>Scope</h2>
+<ul>
+<li>(a) Mark the cross/plant block ids as cross-type in the block data (from the web spec).</li>
+<li>(b) In the chunk mesh, emit cross-quad billboard geometry (two crossed quads carrying the block texture) for those ids instead of a full cube.</li>
+<li>(c) Keep alpha/scissor/cull correct (reuse the XQ material settings).</li>
+<li><span class="bad">HARD GATE: this is a MESH/APPEARANCE change only. DO NOT change terrain or fluid DATA — the sea-stability + genhash gates must stay byte-identical.</span></li>
+</ul>
+
+<h2>Verification gates (hard)</h2>
+<div class="gate"><b>G1</b> Headless load → <b>zero script errors</b>.</div>
+<div class="gate"><b>G2</b> Full logic battery 0 script errors, <b>no data regression</b>: <code>AWECRAFT_LOGIC=player|interact|light|fluids|buckets</code> each exits 0; fluids/sea results must match the known-stable numbers (sea surface/backed counts unchanged).</div>
+<div class="gate"><b>G3</b> Genhash parity: <code>AWECRAFT_LOGIC=genhash</code> (or the terrain hash gate) byte-identical to before — proves terrain data untouched.</div>
+<div class="gate"><b>G4</b> Render proof: an <code>xvfb-run</code> screenshot (R=1–2, <code>AWECRAFT_NO_FOG=1</code> if needed for a clear frame) showing flowers/plants as <b>sprites (crossed quads), NOT cubes</b>. Save PNG into <code>tasks/AC-0084/</code>.</div>
+<div class="gate"><b>G5</b> Web rebuild (coordinator runs <code>./build_web.sh</code> + <code>./build_windows.sh</code> after the subagent).</div>
+
+<h2>Deliverables</h2>
+<ul>
+<li>Block-type marking + chunk cross-quad emission for cross/plant ids.</li>
+<li>Render screenshot(s) in <code>tasks/AC-0084/</code> + self-contained <code>tasks/AC-0084/AC-0084-results.html</code> (which ids became cross, before/after, gates, embedded screenshot).</li>
+</ul>
+
+<h2>Constraints</h2>
+<ul>
+<li><b>Do NOT run git</b> — coordinate via the report only; the coordinator commits.</li>
+<li><b>Do NOT kill/restart any python serving process</b> (8443/5180/8080 are the user's daemons).</li>
+<li>Godot one at a time; renders ~300000 ms timeout; headless FIRST, then at most one small render; keep R=1–2.</li>
+<li>Honest partial report &gt; empty. Zero script errors is a hard gate.</li>
+</ul>
+</body></html>

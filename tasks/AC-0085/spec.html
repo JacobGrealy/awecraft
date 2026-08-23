@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0085 — Held items swing (rotate), vertical at rest, handle below the view port</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+.report{background:#fff8e6;border:1px solid #e0c56d;border-radius:8px;padding:12px 14px}
+.ok{color:#1a7f37;font-weight:600}.bad{color:#b42318;font-weight:600}
+.gate{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+</style></head><body>
+<h1>AC-0085 — Held items: swing = rotate, vertical at rest, handle off camera</h1>
+<p><b>Status:</b> open (top priority) · <b>Source:</b> user report 2026-08-23 · <b>Project:</b> AweCraft (Godot port) ·
+<b>Spec references:</b> frozen web <code>../index.html</code> (held/attack representation) + Minecraft first-person (minecraft.wiki Sword / File:ShieldFirstPerson).</p>
+
+<div class="report"><b>User report (verbatim):</b> "held items like sword, axes should swing (rotate), not just move out and in
+positionally. Also they should be held more or less straight up and down before the swing. the handles should be off camera (lower than
+the view port). The held cubes should also be lower in the view port."</div>
+
+<h2>Requirement</h2>
+<p>Four changes to the first-person viewmodel (hands + held item):</p>
+<ol>
+<li><b>Swing = rotation, not translation.</b> The current swing moves the held item out-and-in by <i>position</i> (a position lerp). It must instead <b>ROTATE the tool through an arc about a shoulder/hand pivot</b> (a real swing), like Minecraft and the web spec.</li>
+<li><b>Vertical at rest.</b> Before/during the swing start, the tool should be held <b>roughly straight up and down</b> (more vertical), not horizontal/diagonal.</li>
+<li><b>Handle off camera.</b> Lower the whole viewmodel so the tool <b>handle goes off-screen below the bottom of the viewport</b> (off camera), like Minecraft first-person.</li>
+<li><b>Held cubes lower.</b> The held block/cube should also sit <b>lower</b> in the view port (consistent with #3).</li>
+</ol>
+
+<h2>Known location / state (keep intact)</h2>
+<ul>
+<li><code>godot/player/player.gd</code> — viewmodel root/pose + swing driver (AC-0048 swing sweep 0.1→0.2 s; AC-0060 walk sway via <code>sway_root</code>; swing loop LMB-hold). <span class="bad">The swing pose math (position lerp → rotation arc) lives here.</span></li>
+<li><code>godot/core/held_mesh.gd</code> — held box/cross/tool voxel meshes (geometry; pose/transform is applied by player.gd).</li>
+<li><b>KEEP intact:</b> AC-0067 (viewmodel always on-top / no depth test), AC-0070 (voxel tool models), AC-0073 (tool orientation + scale ×2, TOOL_POSE_ROT), AC-0060 (walk sway).</li>
+</ul>
+
+<h2>Scope</h2>
+<ul>
+<li>Change the swing to a rotation arc about a pivot; adjust the resting/swing-start pose to be more vertical; lower the viewmodel so the handle clears below the viewport and held cubes sit lower.</li>
+<li>If the <code>AWECRAFT_LOGIC=swing</code> harness thresholds were tuned to the old translation animation, <b>re-tune them</b> to the new rotation animation (keep the gate meaningful: it should still assert a real swing cycle occurs and settles).</li>
+</ul>
+
+<h2>Verification gates (hard)</h2>
+<div class="gate"><b>G1</b> Headless load → <b>zero script errors</b>.</div>
+<div class="gate"><b>G2</b> <code>AWECRAFT_LOGIC=swing</code> harness → <b>ok:true</b> (swing cycle + settle). Re-tune thresholds if the animation changed.</div>
+<div class="gate"><b>G3</b> Full logic battery 0 script errors (player/interact/light/fluids/buckets no regression).</div>
+<div class="gate"><b>G4</b> Render proof: <code>xvfb-run</code> screenshots (R=1–2) showing (a) the <b>resting vertical pose with the handle below the viewport</b>, and (b) a <b>mid-swing rotation frame</b>. Save PNGs into <code>tasks/AC-0085/</code>.</div>
+<div class="gate"><b>G5</b> Web rebuild (coordinator runs <code>./build_web.sh</code> + <code>./build_windows.sh</code> after the subagent).</div>
+
+<h2>Deliverables</h2>
+<ul>
+<li>Rotation-arc swing + vertical resting pose + lowered viewmodel in <code>godot/player/player.gd</code> (and <code>held_mesh.gd</code> if needed).</li>
+<li>Render screenshot(s) in <code>tasks/AC-0085/</code> + self-contained <code>tasks/AC-0085/AC-0085-results.html</code> (before/after pose, swing frames, gates, embedded screenshots).</li>
+</ul>
+
+<h2>Constraints</h2>
+<ul>
+<li><b>Do NOT run git</b> — coordinate via the report only; the coordinator commits.</li>
+<li><b>Do NOT kill/restart any python serving process</b> (8443/5180/8080 are the user's daemons).</li>
+<li>Godot one at a time; renders ~300000 ms timeout; headless FIRST, then a small render; keep R=1–2.</li>
+<li>Honest partial report &gt; empty. Zero script errors is a hard gate.</li>
+</ul>
+</body></html>

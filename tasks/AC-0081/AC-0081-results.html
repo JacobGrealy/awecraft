@@ -1,0 +1,68 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AC-0081 — results: fix quit-to-menu (web + windows)</title>
+<style>body{font-family:system-ui,Segoe UI,sans-serif;margin:24px 40px;max-width:1000px;line-height:1.5;color:#1b232f}h1{font-size:20px}h2{font-size:15px;margin-top:18px;border-bottom:1px solid #cdd6e3;padding-bottom:4px}code,pre{background:#eef1f6;border-radius:3px;font-size:12.5px}pre{padding:10px 12px;overflow-x:auto}li{margin:3px 0}.ok{color:#1a7f37;font-weight:600}.bad{color:#b35900;font-weight:600}table{border-collapse:collapse;font-size:13px}td,th{border:1px solid #cdd6e3;padding:4px 8px;text-align:left}</style></head><body>
+<h1>AC-0081 — USER BUG "quit to menu doesn't work in web or windows build" — FIXED</h1>
+<p>Status: <b>DONE</b> (2026-08-23). Single-line root-cause fix + <code>AWECRAFT_LOGIC=quitmenu</code> harness. Files changed: <code>godot/scenes/main.gd</code> only (1-line fix + harness). git=no (subagent fence).</p>
+
+<h2>1. Root cause — <code>godot/scenes/main.gd:193</code> (dangling Callable)</h2>
+<pre>menu_ui.on_quit_to_menu = Callable(self, "_quit_to_menu")   // method _quit_to_menu DOES NOT EXIST</pre>
+<p>The real handler is <code>func quit_to_menu()</code> at <code>godot/scenes/main.gd:233</code> (no leading underscore). The "Quit to Menu" button's press handler is <code>_on_quit_btn_pressed()</code> in <code>godot/ui/menu.gd:215-217</code>:</p>
+<pre>func _on_quit_btn_pressed() -> void:
+	if on_quit_to_menu.is_valid():
+		on_quit_to_menu.call()
+</pre>
+<p>Godot 4.7.1 semantics (probed on this exact engine build, temporary probe script, deleted after):</p>
+<pre>ISVALID false
+SCRIPT ERROR: Invalid call. Nonexistent function 'SceneTree(ac0081_probe.gd)::no_such_method_xyz (Callable)'.
+</pre>
+<p>So <code>Callable(self, "_quit_to_menu").is_valid() == false</code> → the guard at menu.gd:216 fails → <b>the button is a perfect silent no-op</b>: no save write, no world teardown, no scene change, and <b>no script error at all</b> (stderr stays clean — which is why it looked like "nothing happens" on both platforms). One shared codebase, one deterministic root cause, identical on web + windows/desktop.</p>
+<p><b>Provenance (git log):</b> both lines were introduced together already mismatched in commit <code>9727c3f</code> (2026-08-20, AC-0048): the diff adds <code>menu_ui.on_quit_to_menu = Callable(self, "_quit_to_menu")</code> and, 13 lines below, <code>func quit_to_menu() -> void:</code>. The button has therefore <b>never worked</b> since the pause menu shipped; AC-0033/AC-0062 verified the pause overlay and the save API directly, never the button itself. The spec's suspect window (AC-0080 hysteresis / AC-0076 queue / AC-0062 auto-save interaction) is <b>ruled out</b>: the failure is 100% deterministic on the plain path (no walking, no pause/unpause cycling needed), and post-fix the full teardown of AC-0080-era chunk state passes cleanly.</p>
+
+<h2>2. Failing state (pre-fix)</h2>
+<p>Harness <code>AWECRAFT_LOGIC=quitmenu</code> (new in <code>main.gd</code>): clears the 3 save slots → builds the real menu (<code>_make_menu()</code>, same wiring as live boot) → real play start (recenter play-path, spawn player, <code>Game.start()</code> — same sequence as the perf harness) → 6 real block edits via <code>Debug.set_block</code> → <code>Game.pause()</code> (the live P-key path) → calls the button's exact handler <code>menu_ui._on_quit_btn_pressed()</code> → awaits bounded frames → asserts.</p>
+<pre># pre-fix (captured: .scratch/ac0081/pre_fix_stdout.log / pre_fix_stderr.txt)
+RESULT {"edits_ok":false,"menu_scene_active":false,"ok":false,"paused_ok":true,"save_written":false,
+        "script_errors_seen":false,"seed_ok":false,"slot":0,"world_cleared":false}
+# stderr: EMPTY (0 script errors — the button silently did nothing)
+</pre>
+<p><code>paused_ok:true</code> proves the game + pause overlay work; everything after the button press is false = the button never ran its handler.</p>
+
+<h2>3. The fix — <code>godot/scenes/main.gd:193</code> (minimal, causal, shared path)</h2>
+<pre>-	menu_ui.on_quit_to_menu = Callable(self, "_quit_to_menu")
++	menu_ui.on_quit_to_menu = Callable(self, "quit_to_menu")
+</pre>
+<p>Aligns the callable with the existing method name (no rename, no new code). No platform branches — the quit path (<code>quit_to_menu</code> → <code>_autosave()</code> → <code>_free_game_nodes()</code> → <code>Game.mode="menu"</code> → <code>menu_ui.show_main()</code>) is the same code web and windows play, and the harness now drives it end-to-end.</p>
+
+<h2>4. Post-fix evidence</h2>
+<pre># .scratch/ac0081/post_fix_stdout.log (stderr empty, 0 errors)
+RESULT {"edits_ok":true,"menu_scene_active":true,"ok":true,"paused_ok":true,"save_written":true,
+        "script_errors_seen":false,"seed_ok":true,"slot":0,"world_cleared":true}
+</pre>
+<ul>
+<li><code>menu_scene_active:true</code> — <code>Game.mode=="menu"</code> + menu main box visible after button press</li>
+<li><code>world_cleared:true</code> — world/player nulled AND <code>is_instance_valid()==false</code> (queue_free completed; AC-0080 hysteresis chunk states tear down without errors)</li>
+<li><code>save_written:true</code> + <code>seed_ok/edits_ok:true</code> — auto-save wrote slot 0 with all 6 edit deltas (the quit path's AC-0062 auto-save now actually runs)</li>
+</ul>
+
+<h2>5. Gates</h2>
+<table>
+<tr><th>Gate</th><th>Result</th><th>Detail</th></tr>
+<tr><td>G1</td><td class="ok">PASS</td><td><code>godot --headless --quit</code> exit 0, <b>0</b> script errors (pre-fix log + post-fix log in .scratch/ac0081/g1_prefix2.log, g1_postfix.log)</td></tr>
+<tr><td>G2</td><td class="ok">PASS</td><td><code>AWECRAFT_LOGIC=quitmenu</code> → <code>ok:true</code>, all assertions true, 0 stderr errors; pre-fix failing capture kept in .scratch/ac0081/ (pre_fix_*.log/.txt)</td></tr>
+<tr><td>G3</td><td class="ok">PASS</td><td>Full 30-mode battery vs <code>.scratch/ac0075_postbattery2/</code> (runner .scratch/run_battery.sh, results .scratch/ac0081/battery/ + compare.txt). genhash MD5 <b>25/25 identical</b>; <b>save byte-identical</b>; trees identical; 21 modes IDENTICAL; timing-only diffs in known-variance modes (player/survival/hunger; daynight <code>cycle_actual</code> 0.008416→0.008411; editperf/perf frame-ms/mem/recenter fields — same signature as the AC-0080 post-battery). wallshot: reference ALSO timed out (240 s, 0-byte result, identical log end) → parity. <code>interact drop_spawned</code> True→False in the battery run = the documented pre-existing RNG flake (CONTINUITY.md §5, ~1/8); 4/4 re-runs clean with all fields identical → not a regression</td></tr>
+<tr><td>G4</td><td class="ok">PASS</td><td><code>./build_web.sh</code> exit 0 (web/ rebuilt 18:18) + <code>./build_windows.sh</code> exit 0 (exports/windows/AweCraft.exe 109.5 MB, BUILD.txt stamped 2026-08-23T22:18Z). Daemons after builds: 8443 (pid 1079621), 5180 (pid 1079626), 8080 (pid 1076658) — all still listening, untouched</td></tr>
+</table>
+
+<h2>6. User test surfaces (fresh builds in place)</h2>
+<ul>
+<li>Web: <code>https://localhost:8443/</code> + <code>https://192.168.0.224:8443/</code> (self-signed — accept the one-time warning)</li>
+<li>Windows: <code>http://localhost:8080/AweCraft.exe</code> + <code>http://192.168.0.224:8080/AweCraft.exe</code></li>
+<li>Repro steps for the user: start a world → make a few edits → <b>P</b> → <b>Quit to Menu</b> → back on the main menu with the slot showing the edit count; Continue restores the edits.</li>
+</ul>
+
+<h2>7. Deviations / follow-ups</h2>
+<ul>
+<li>None functional. The quitmenu harness reads <code>AWECRAFT_STDERR_FILE</code> (env, not in HARNESS_ENVS) so its <code>script_errors_seen</code> field counts "<code>SCRIPT ERROR:</code>" lines in its own stderr capture file; always set it when running this mode (used in all G2 runs).</li>
+<li>No follow-up tasks needed: teardown of AC-0080 candidate-chunk state and the AC-0076 queue were exercised by the post-fix harness with zero errors (they were never the cause).</li>
+</ul>
+</body></html>

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0083 — Item drop shows the broken block's texture (not a solid color)</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+.report{background:#fff8e6;border:1px solid #e0c56d;border-radius:8px;padding:12px 14px}
+.ok{color:#1a7f37;font-weight:600}.bad{color:#b42318;font-weight:600}
+.gate{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px;font-size:13px}
+</style></head><body>
+<h1>AC-0083 — Item drop shows the broken block's texture</h1>
+<p><b>Status:</b> open (top priority) · <b>Source:</b> user report 2026-08-23 · <b>Project:</b> AweCraft (Godot port, live work) ·
+<b>Spec reference:</b> frozen web <code>../index.html</code> (build 20260816-r12) — source of truth for ALL behavior/data.</p>
+
+<div class="report"><b>User report (verbatim):</b> "when you break blocks, the small block that you can then pickup should have
+the texture of the block you broke, but currently they just have a solid color."</div>
+
+<h2>Requirement</h2>
+<p>When a block is broken, the world <b>drop entity</b> (the small pickup item that spawns and can be walked up to and collected)
+must render with the <b>same UV-mapped block-face texture as the block it drops</b> — not a flat solid color. It should look like a
+small version of the broken block.</p>
+
+<h2>Known location</h2>
+<ul>
+<li><code>godot/entities/drop.gd</code> — the drop item entity (0.3 box + Area3D r1.1, attract &lt;2.5, pickup &lt;1.1, 120 s life). This is where the solid-color box is created. <span class="bad">REPLACE the solid material with a per-face block texture.</span></li>
+<li><code>godot/core/held_mesh.gd</code> — <b>reference implementation</b>: already produces a per-face-UV 1×1×1 box (Data.block_rect top/side/bottom + <code>Data.atlas_tex</code> + block_tint vertex colors). Mirror this approach for the drop.</li>
+<li><code>godot/world/world.gd</code> <code>spawn_drop(...)</code> — creates the drop; keep its size/area/life behavior unchanged.</li>
+</ul>
+
+<p>Derive the texture id from the drop's block id via <code>Data.block(id)</code> (same mapping the held block uses). Check the frozen
+web spec for how it represents a dropped/pickup item (size/proportions) and match it where the web differs from a plain cube.</p>
+
+<h2>Scope</h2>
+<ul>
+<li>Change ONLY the drop's mesh/material (solid → textured). Keep box size (0.3), Area3D, attract/pickup radii, and 120 s life unchanged.</li>
+<li>Do NOT change block data, terrain, fluids, or held/viewmodel code.</li>
+</ul>
+
+<h2>Verification gates (hard)</h2>
+<div class="gate"><b>G1</b> Headless load: <code>~/tools/godot/godot --headless --path godot --quit</code> → <b>zero script errors</b>.</div>
+<div class="gate"><b>G2</b> Full logic battery 0 script errors, no regression:
+<code>AWECRAFT_LOGIC=player|interact|light|fluids|buckets</code> each exits 0 with a sane <code>RESULT {...}</code> (fluids/sea must match the known-stable numbers).</div>
+<div class="gate"><b>G3</b> Render proof: an <code>xvfb-run</code> <code>gl_compatibility</code> screenshot (R=1–2) showing a broken block's drop
+carrying the <b>block's texture</b> (not a solid color). Save PNG into <code>tasks/AC-0083/</code>.</div>
+<div class="gate"><b>G4</b> Web rebuild so the user can retest in the browser (coordinator runs <code>./build_web.sh</code> + <code>./build_windows.sh</code> after the subagent). </div>
+
+<h2>Deliverables</h2>
+<ul>
+<li>Code change in <code>godot/entities/drop.gd</code> (textured drop).</li>
+<li>Screenshot(s) in <code>tasks/AC-0083/</code> + a self-contained <code>tasks/AC-0083/AC-0083-results.html</code> (what changed, gates, embedded screenshot).</li>
+</ul>
+
+<h2>Constraints</h2>
+<ul>
+<li><b>Do NOT run git</b> — coordinate only via the report; the coordinator commits.</li>
+<li><b>Do NOT kill or restart any python serving process</b> (web 8443 / webui 5180 / windows 8080 are the user's daemons). Never pkill/pgrep/kill python by pid or pattern.</li>
+<li>Godot one at a time; renders ~300000 ms timeout; headless FIRST, then at most one small render.</li>
+<li>Honest partial report &gt; empty. Zero script errors is a hard gate.</li>
+</ul>
+</body></html>
