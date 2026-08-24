@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-24T11:01
+  updated_at: 2026-08-24T11:04
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -24,6 +24,8 @@ queue:
 - AC-0058
 - AC-0056
 - AC-0059
+- AC-0112
+- AC-0113
 - AC-0060
 - AC-0057
 - AC-0048
@@ -81,7 +83,6 @@ queue:
 - AC-0090
 - AC-0091
 - AC-0111
-- AC-0112
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -3086,7 +3087,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-24T11:01
-  updated_at: 2026-08-24T11:01
+  updated_at: 2026-08-24T11:04
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -3115,5 +3116,40 @@ intake:
     for block/tool/flower/fist at rest + mid-swing; battery green.
 
 
-    Refs: player.gd: TOOL_POSE_RETUNE/TOOL_POSE_POS/HAND_BASE_POS, held_box/sprite/fist/tool setup; AC-0067/0070/0073/0085/0097.'
+    Refs: player.gd: TOOL_POSE_RETUNE/TOOL_POSE_POS/HAND_BASE_POS, held_box/sprite/fist/tool setup; AC-0067/0070/0073/0085/0097.
+
+
+    Post-review FIX: after audit, retune per-type params to correct positions/sizes (block scale ~0.35 vs tool scale, flower
+    cross scale, fist scale) so each looks correct at rest + mid-swing. This task covers audit + new params table; implementation
+    lands in follow-on AC-0113.'
+  comments: []
+- id: AC-0113
+  title: held-item-per-type-positioning-fix
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-24T11:04
+  updated_at: 2026-08-24T11:04
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Implement per-type held positioning/sizing from AC-0112 review.
+
+
+    Apply independent position/scale/rotation per held type (block / tool / flower-cross / fist) in player.gd — no shared
+    TOOL_POSE leak. Retune so each type is correctly framed (MC first-person): block centered in hand, tool handle bottom-right
+    with head at crosshair, flower cross upright with stem grip, fist centered.
+
+
+    Keep AC-0067 on-top (no_depth_test), AC-0070 voxel detail, AC-0060 sway composition, AC-0085 swing arc.
+
+    Verify: G0 0 errors; per-type pose harness (held_box/tool/flower/fist) at rest + AWECRAFT_LOGIC=swing mid-fraction + viewmodel
+    R=1 renders for all 4 types; battery green.
+
+
+    Depends: AC-0112 review table.'
   comments: []
