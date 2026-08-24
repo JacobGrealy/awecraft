@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-23T23:17
+  updated_at: 2026-08-23T23:20
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -45,6 +45,7 @@ queue:
 - AC-0078
 - AC-0034
 - AC-0035
+- AC-0092
 - AC-0036
 - AC-0037
 - AC-0038
@@ -2562,4 +2563,23 @@ intake:
     fluid sim, spawn/bedrock, save format, render/mesh, recenter/build queue, headless harnesses (genhash, fluids, boundary).
     Hard gates: genhash parity at new heights, sea stable, 0 script errors. Reference index.html spec for current generation
     then remap to new Y range.'
+  comments: []
+- id: AC-0092
+  title: water-column-fill-to-terrain
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-23T23:20
+  updated_at: 2026-08-23T23:20
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'BUG: water is only one layer - it should have layers all the way down in a column until it hits another block (bodies
+    of water and waterfalls). Water sim must fill full vertical column to terrain (no empty space below, fills to block, spreads
+    at bottom per minecraft.wiki/w/Water). Currently sea/placed water renders/simulates as single-layer. Fix world/water.gd
+    + chunk fluid logic + mesh. Verify sea stable + fluid harnesses. Parent: before AC-0036 underwater.'
   comments: []
