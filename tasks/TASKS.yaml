@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-24T10:51
+  updated_at: 2026-08-24T10:59
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -80,6 +80,7 @@ queue:
 - AC-0042
 - AC-0090
 - AC-0091
+- AC-0111
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -3039,4 +3040,38 @@ intake:
     Verify: indoors not leaking faces, genhash unchanged, battery green.
 
     Depends: greedy-meshing (order matters: do greedy after interior skip or within).'
+  comments: []
+- id: AC-0111
+  title: transparent-blocks-dont-occlude-neighbors
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-24T10:59
+  updated_at: 2026-08-24T10:59
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Blocks with transparency (e.g. leaves) must not occlude faces behind them.
+
+
+    Current chunk.gd _faces skips a face if neighbor stab[nb]>0 (solid). Leaves use cutout/transparency and should be treated
+    as non-occluding: a face adjacent to a transparent block (leaves, glass if added, etc.) must still emit even if surrounded.
+    The bug: leaf interior in center of leaf cluster does not render when completely surrounded by leaf blocks, because each
+    surrounding leaf is considered solid/occluding.
+
+
+    Fix: distinguish opaque-solid vs transparent-solid. Use ktab/ttab or alpha/tint presence or explicit transparent list
+    (leaves id=??, check Data.block) to gate occlusion. Stab should only occlude if neighbor is opaque-solid. Faces of transparent
+    blocks themselves still emit per current cutout path.
+
+
+    Verify: G0 zero script errors; leaf cluster center still has faces (render R=1 with tree, top cam); genhash unchanged
+    (no terrain change, just meshing); battery green; web render leaves dense not hollow.
+
+
+    Refs: chunk.gd:138 _faces stab check, 513 stab fill, world/chunk.gd cutout handling, Data.block transparent flag.'
   comments: []
