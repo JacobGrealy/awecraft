@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-24T09:56
+  updated_at: 2026-08-24T10:14
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -2822,7 +2822,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-24T09:56
-  updated_at: 2026-08-24T09:56
+  updated_at: 2026-08-24T10:14
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -2831,5 +2831,25 @@ intake:
     expected RESULT shapes, snapshot names). Coordinator reviews plan.html then queues Run 2. Run 2 (medium, one Godot) implements
     plan -> G0 + smoke subset (AC-0061 tiered) + <=1 R=1 render if needed + results.html. Add trivial label bypass (skip Run
     1, straight to medium builder with spec.html). Update coordinator launch templates + HARNESS.md refs. No Godot in Run
-    1.'
-  comments: []
+    1.
+
+
+    Suggested wiring for homeserver1/Qwen3.8-27B-UD-Q4_K_M xhigh->subagent low->xhigh (another chat):
+
+    - Plugin $DSH_HOME/plugins/subagent-reasoning.ts (Context @deepseek-ai/cordis, ReasoningEffortId @deepseek-ai/dsh-llm,
+    check delegationDepth/origin/parentSession SessionHeader): agent/request waterfall -> if isSubagent then override reasoningEffort
+    to cfg.subagentEffort (low|xhigh). Validated vs reasoning.efforts else UNSUPPORTED_REASONING_EFFORT.
+
+    - Mount via $DSH_HOME/cordis.patch.yml: insert id subagent-reasoning ./plugins/subagent-reasoning.ts config subagentEffort
+    low, plus tool-subagent pinned provider homeserver1 model Qwen3.8-27B-UD-Q4_K_M. Root stays agent-default-model xhigh.
+
+    Ref: packages/llm/llm-pi-ai/README.md:88, agent-loop/src/agent.ts:457, etc. Implementer to verify DSH paths and keep trivial
+    bypass.
+
+    '
+  comments:
+  - id: 1
+    created_at: 2026-08-24T10:14
+    updated_at: null
+    text: '[agent] Appended wiring suggestion from another chat: subagent-reasoning.ts plugin + cordis.patch.yml (xhigh root
+      -> low subagent) for DSH, per user 2026-08-23.'
