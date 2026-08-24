@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-23T23:08
+  updated_at: 2026-08-23T23:13
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -59,6 +59,7 @@ queue:
 - AC-0088
 - AC-0089
 - AC-0061
+- AC-0090
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -2519,4 +2520,25 @@ intake:
   notes: 'Analog tuning controls: Options > Controls sliders for look sensitivity (right-stick), per-stick deadzone, invert
     Y (and optional invert X). Affects both gamepad look and any analog movement. Persist to Settings (user:// -> IndexedDB).
     Scope after AC-0087. Parent split of AC-0069.'
+  comments: []
+- id: AC-0090
+  title: threejs-procedural-ragdoll-character-style
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-23T23:13
+  updated_at: 2026-08-23T23:13
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Build with Three.js and explore a new procedurally generated 3D character style: ragdoll-like characters composed
+    of primitive shapes that look like one seamless body via a custom, mobile-performant tech-art/shader solution, with toon
+    styling, plus a procedural animation system that works for 2-legged, any-legged, no-legged (hopping) and flying characters
+    with arms. Research/prototype in Three.js (web), not Godot. Deliverable: Three.js prototype page + writeup (seam-blending
+    shader/tech-art approach, primitive-body generator, toon shading, procedural locomotion rig for 2/any/no-leg + fly+arms).
+    Place at end of queue.'
   comments: []
