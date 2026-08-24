@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-24T04:51
+  updated_at: 2026-08-24T05:38
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -60,6 +60,7 @@ queue:
 - AC-0053
 - AC-0054
 - AC-0055
+- AC-0099
 - AC-0087
 - AC-0088
 - AC-0089
@@ -2213,10 +2214,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-23T09:39
-  updated_at: 2026-08-23T17:40
+  updated_at: 2026-08-24T04:53
   completed_at: null
   waiting_on: null
   parent_id: AC-0034
@@ -2710,4 +2711,21 @@ intake:
     — they read as flat single-tint voxels. Add per-voxel shading/more color variations matching the Faithful item icons (multiple
     wood/metal tones, highlight/shadow voxels, edge detail) so voxels match icon palette, not just Data.item_tint head vs
     wood handle. Keep TOOL_GRIDS 32x32, tip tint logic, swing/pose/on-top intact. Verify held renders vs icons.
+  comments: []
+- id: AC-0099
+  title: main-menu-exit-button-windows
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-24T05:38
+  updated_at: 2026-08-24T05:38
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Main menu: add Exit button that closes the game (Windows native: get_tree().quit(); web: no-op or close tab if allowed).
+    Place in main menu button column alongside Play/Options. Verify desktop quit + web no-error.'
   comments: []
