@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-23T22:59
+  updated_at: 2026-08-23T23:08
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -1059,12 +1059,12 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels:
   - release
   created_at: 2026-08-19T12:00
-  updated_at: 2026-08-19 08:15T12:00
-  completed_at: null
+  updated_at: 2026-08-23T23:08
+  completed_at: 2026-08-23T23:08
   waiting_on: null
   parent_id: null
   notes: 'Periodic: re-export export/windows/AweCraft.exe after major batches (current exe predates trees/flora/etc.)'
@@ -1073,6 +1073,11 @@ intake:
     created_at: 2026-08-19 08:00T12:00
     updated_at: null
     text: '[agent] derived from AC-0026 + the commit-after-each-task cadence'
+  - id: 2
+    created_at: 2026-08-23T23:08
+    updated_at: null
+    text: '[agent] Closed 2026-08-23 per user: superseded by AC-0074 windows-export-pipeline (build_windows.sh gated after
+      every feature, daemon serve on 8080). No separate periodic re-export needed.'
 - id: AC-0042
   title: planet-plan
   source: user
