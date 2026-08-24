@@ -106,7 +106,8 @@ document.addEventListener('click', function (e) {
   postApi(btn.dataset.queueAct, new URLSearchParams({id: btn.dataset.id}));
 });
 async function postApi(act, body) {
-  var res = await fetch('/api/' + act, {method: 'POST', body: body});
+  var enc = body instanceof FormData ? new URLSearchParams(body) : body;
+  var res = await fetch('/api/' + act, {method: 'POST', body: enc});
   var data = {};
   try { data = await res.json(); } catch (err) { data = {ok: false, error: 'bad response'}; }
   if (!res.ok || !data.ok) { alert(data.error || ('request failed: ' + res.status)); return; }

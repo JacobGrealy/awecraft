@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-23T23:30
+  updated_at: 2026-08-23T23:31
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -46,6 +46,7 @@ queue:
 - AC-0034
 - AC-0035
 - AC-0092
+- AC-0096
 - AC-0036
 - AC-0037
 - AC-0038
@@ -2642,4 +2643,23 @@ intake:
     screenshots) over HTTP, and in the queue view show separate lists for in-progress, queued (open), and completed tasks.
     If a directory tasks/AC-NNNN/ exists, show a link to it in the queue view (spec/results/screenshots). Keep LAN 0.0.0.0
     daemon mode.'
+  comments: []
+- id: AC-0096
+  title: tasks-webapp-comment-empty-bug
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-23T23:31
+  updated_at: 2026-08-23T23:31
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'BUG: tasks webapp add comment says ''comment cannot be empty'' even when text is entered. Root cause: webui POST
+    handler parses body with parse_qs (urlencoded) but browser JS sends FormData (multipart/form-data) so form is empty. Fix
+    PAGE_JS postApi to send URLSearchParams (application/x-www-form-urlencoded) and/or add multipart parsing in tasks/webui.py
+    do_POST. Verify add comment works in browser and via CLI tasks_lib.add_comment.'
   comments: []

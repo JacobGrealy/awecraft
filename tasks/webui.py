@@ -124,7 +124,30 @@ class Handler(BaseHTTPRequestHandler):
             return
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b""
-        form = {k: v[-1] for k, v in parse_qs(raw.decode("utf-8")).items()}
+        ctype = self.headers.get("Content-Type") or ""
+        if "multipart/form-data" in ctype:
+            form = {}
+            # minimal multipart parser (stdlib only)
+            try:
+                boundary = ctype.split("boundary=")[1].split(";")[0].strip().strip('"')
+                parts = raw.split(("--" + boundary).encode())
+                for part in parts:
+                    if b'name="' not in part:
+                        continue
+                    hdr_end = part.find(b"\r\n\r\n")
+                    if hdr_end == -1:
+                        continue
+                    hdr = part[:hdr_end].decode("utf-8", "replace")
+                    val = part[hdr_end+4:].rstrip(b"\r\n").decode("utf-8", "replace")
+                    # extract name="xxx"
+                    import re as _re
+                    m = _re.search(r'name="([^"]+)"', hdr)
+                    if m:
+                        form[m.group(1)] = val
+            except Exception:
+                form = {}
+        else:
+            form = {k: v[-1] for k, v in parse_qs(raw.decode("utf-8")).items()}
         action = parsed.path[len("/api/"):]
         handler_name = "_api_" + action.replace("-", "_")
         handler = getattr(self, handler_name, None)
