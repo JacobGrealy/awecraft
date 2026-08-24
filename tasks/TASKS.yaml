@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-23T23:24
+  updated_at: 2026-08-23T23:26
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -63,6 +63,7 @@ queue:
 - AC-0090
 - AC-0091
 - AC-0093
+- AC-0094
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -2602,4 +2603,23 @@ intake:
     spin in place (rotate on their own axis at fixed position, with only pickup-attract movement). Fix drop.gd rotation/translation:
     spin = local rotation, not orbital translation. Verify render: drop spins without circling. Related to AC-0083 textured
     drops.'
+  comments: []
+- id: AC-0094
+  title: drop-chopped-wood-pop-sideways-then-spin
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-23T23:26
+  updated_at: 2026-08-23T23:26
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Chopped wood blocks (and general broken blocks): should spawn at the broken block position with slight sideways
+    velocity until they hit the ground, then spin in place (see AC-0093). Currently drops spawn/hover/spin-orbit. Update world/world.gd
+    spawn_drop + entities/drop.gd physics: initial lateral impulse + gravity, ground contact -> zero lateral velocity + in-place
+    spin. Verify drop lands then spins.'
   comments: []
