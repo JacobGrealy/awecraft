@@ -4634,6 +4634,20 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 	var cross_cz: Array = []
 	var cross_burst: Array = []
 	var cross_resolved: Array = []
+	var cross_fw: Array = []
+	var cross_fw_resolved: Array = []
+	var cross_tr: Array = []
+	var cross_tr_resolved: Array = []
+	# AC-0079: spec wall reference = the player's chunk at crossing (symmetric ±r,
+	# dx==0 column excluded). Wall keys are the full set of columns ±(r+1) for
+	# presence/ever_built tracking; the gate itself is satisfied per the spec set
+	# (every tracked wall chunk counts as built if currently mesh_built OR observed
+	# mesh_built at any earlier frame — ever_built handles hysteresis frees of
+	# trailing chunks while the player keeps walking).
+	var cross_pcx: Array = []
+	var cross_pcz: Array = []
+	var wall_keys: Array = []
+	var wall_ever_built: Dictionary = {}
 	var prev_pcx := int(floorf(p.position.x / 16.0))
 	var prev_keys: Dictionary = {}
 	for key in world.chunks:
@@ -4657,11 +4671,13 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		var cz_now := int(floorf(p.position.z / 16.0))
 		if walk_frames % count_every == 0:
 			var cur_keys: Dictionary = {}
+			var cur_chunks: Dictionary = {}
 			var pir_present := 0
 			var pir_built := 0
 			for key in world.chunks:
 				var c: Node3D = world.chunks[key]
 				cur_keys[key] = true
+				cur_chunks[key] = c
 				if absi(int(c.cx) - cx_now) <= r and absi(int(c.cz) - cz_now) <= r:
 					pir_present += 1
 					if c.mesh_built:
@@ -4681,6 +4697,16 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 					unloads += 1
 					freed_recent[key] = true
 			prev_keys = cur_keys
+			# AC-0079 ever_built: remember wall chunks observed mesh_built (they
+			# may later be hysteresis-freed while the player keeps walking).
+			for ci in range(wall_keys.size()):
+				for key in wall_keys[ci]:
+					if wall_ever_built.has(key):
+						continue
+					if cur_keys.has(key):
+						var c: Node3D = world.chunks[key]
+						if c.mesh_built:
+							wall_ever_built[key] = true
 			for ci in range(cross_burst.size()):
 				if cross_resolved[ci]:
 					continue
@@ -4695,6 +4721,18 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 				if allb:
 					cross_resolved[ci] = true
 					cross_burst[ci] = fe - int(cross_at[ci])
+			for ci in range(cross_fw.size()):
+				if cross_fw_resolved[ci]:
+					continue
+				if _ac0079_wall_built(ci, 1, r, cross_pcx, cross_pcz, cur_chunks, wall_ever_built):
+					cross_fw_resolved[ci] = true
+					cross_fw[ci] = fe - int(cross_at[ci])
+			for ci in range(cross_tr.size()):
+				if cross_tr_resolved[ci]:
+					continue
+				if _ac0079_wall_built(ci, -1, r, cross_pcx, cross_pcz, cur_chunks, wall_ever_built):
+					cross_tr_resolved[ci] = true
+					cross_tr[ci] = fe - int(cross_at[ci])
 		if cx_now > prev_pcx:
 			crossings += cx_now - prev_pcx
 			cross_at.append(fe)
@@ -4702,6 +4740,17 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 			cross_cz.append(cz_now)
 			cross_burst.append(-1)
 			cross_resolved.append(false)
+			cross_fw.append(-1)
+			cross_fw_resolved.append(false)
+			cross_tr.append(-1)
+			cross_tr_resolved.append(false)
+			cross_pcx.append(cx_now)  # AC-0079: spec wall reference = player chunk at crossing
+			cross_pcz.append(cz_now)
+			var wk: Array = []
+			for zc in range(cz_now - r - 1, cz_now + r + 2):
+				for xc in range(cx_now - r - 1, cx_now + r + 2):
+					wk.append("%d,%d" % [xc, zc])
+			wall_keys.append(wk)
 			prev_pcx = cx_now
 		var dt := (fe - prev_t) / 1000.0
 		prev_t = fe
@@ -4744,6 +4793,34 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 			if allb:
 				cross_resolved[ci] = true
 				cross_burst[ci] = fe - int(cross_at[ci])
+			else:
+				all_resolved = false
+		# AC-0079: settle loop also observes ever_built every frame (chunk map
+		# presence is enough to sample the live set).
+		var settle_cur: Dictionary = {}
+		for key in world.chunks:
+			settle_cur[key] = world.chunks[key]
+		for ci in range(wall_keys.size()):
+			for key in wall_keys[ci]:
+				if wall_ever_built.has(key):
+					continue
+				var c = settle_cur.get(key)
+				if c != null and c.mesh_built:
+					wall_ever_built[key] = true
+		for ci in range(cross_fw.size()):
+			if cross_fw_resolved[ci]:
+				continue
+			if _ac0079_wall_built(ci, 1, r, cross_pcx, cross_pcz, settle_cur, wall_ever_built):
+				cross_fw_resolved[ci] = true
+				cross_fw[ci] = fe - int(cross_at[ci])
+			else:
+				all_resolved = false
+		for ci in range(cross_tr.size()):
+			if cross_tr_resolved[ci]:
+				continue
+			if _ac0079_wall_built(ci, -1, r, cross_pcx, cross_pcz, settle_cur, wall_ever_built):
+				cross_tr_resolved[ci] = true
+				cross_tr[ci] = fe - int(cross_at[ci])
 			else:
 				all_resolved = false
 		if all_resolved and quiet >= 30:
@@ -4807,6 +4884,12 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		"burst_p50_ms": int(_percentile(_resolved_bursts(cross_burst), 0.50)),
 		"burst_p95_ms": int(_percentile(_resolved_bursts(cross_burst), 0.95)),
 		"burst_max_ms": int(_max_int(cross_burst)),
+		"forward_wall_ms_per_crossing": cross_fw,
+		"forward_p95_ms": int(_percentile(_resolved_bursts(cross_fw), 0.95)),
+		"forward_max_ms": int(_max_int(cross_fw)),
+		"trailing_wall_ms_per_crossing": cross_tr,
+		"trailing_p95_ms": int(_percentile(_resolved_bursts(cross_tr), 0.95)),
+		"trailing_max_ms": int(_max_int(cross_tr)),
 		"fluid_tick_ms_p95": roundf(fluid_p95 * 100.0) / 100.0,
 		"fluid_tick_max_ms": roundf(fluid_max * 100.0) / 100.0,
 		"fluid_tick_n": int(fluid_samples.size()),
@@ -4841,6 +4924,28 @@ func _max_int(arr: Array) -> int:
 		if int(v) > m:
 			m = int(v)
 	return m if m >= 0 else 0
+
+
+# AC-0079: spec wall check. dir=+1 forward (dx in 1..r), dir=-1 trailing (dx in -r..-1),
+# relative to the crossing player chunk (cross_pcx); dx==0 column excluded;
+# zc in -(r)..r. A chunk counts as built if it is present + mesh_built now, or was
+# observed mesh_built at any earlier frame (ever_built) — hysteresis-freed trailing
+# chunks still satisfy the wall ("built while in radius").
+func _ac0079_wall_built(ci: int, dir: int, r: int, pcx_arr: Array, pcz_arr: Array, cur: Dictionary, ever_built: Dictionary) -> bool:
+	var pcx: int = int(pcx_arr[ci])
+	var ccz: int = int(pcz_arr[ci])
+	var d0 := 1 if dir > 0 else -r
+	var d1 := r if dir > 0 else -1
+	for dx in range(d0, d1 + 1):
+		for zc in range(ccz - r, ccz + r + 1):
+			var key := "%d,%d" % [pcx + dx, zc]
+			var c = cur.get(key)
+			if c == null:
+				if not ever_built.has(key):
+					return false
+			elif not c.mesh_built and not ever_built.has(key):
+				return false
+	return true
 
 
 func _atlas_test(spawn: Vector3) -> void:

@@ -85,6 +85,10 @@ var _tg_capdrop := 0
 var _tg_handoff := 0
 var _tg_stale := 0
 var _tg_datadrop := 0
+var _look_yaw := 0.0
+var _look_dir := Vector2(1, 0)
+const PICK_POOL_CAP := 512
+const PICK_LOOK_REFRESH_DEG := 10.0
 
 func _ready() -> void:
 	timing = OS.get_environment("AWECRAFT_TIMING") == "1"
@@ -400,70 +404,63 @@ func _build_unit(c: Node3D, cx: int, cz: int) -> int:
 	perf_build_ms += dt
 	return dt
 
-func _drain_data_wave() -> int:
-	if dq_b >= band_buckets.size():
-		return 0
-	var db := dq_b
-	var di := dq_i
-	while db < band_buckets.size():
-		var arr: Array = band_buckets[db]
-		if di >= arr.size():
-			db += 1
-			di = 0
-			continue
-		var e: Dictionary = arr[di]
-		var cx: int = int(e["cx"])
-		var cz: int = int(e["cz"])
-		var c = chunks.get(e["key"])
-		if c == null:
-			if absi(cx - last_pcx) > render_radius + 1 or absi(cz - last_pcz) > render_radius + 1:
-				di += 1
-				continue
-			var s0 := Time.get_ticks_usec() if _recprobe else 0
-			stub_chunk(cx, cz)
-			if _recprobe:
-				_rp_drain_stub_ms += (Time.get_ticks_usec() - s0) / 1000.0
-				_rp_drain_stub_n += 1
-			c = chunks.get(e["key"])
-		if not c.data.is_empty():
-			di += 1
-			continue
-		var dg := _gen_unit(c, cx, cz)
-		dq_b = db
-		dq_i = di
-		return dg
-	dq_b = db
-	dq_i = di
-	return 0
+func _refresh_look_dir() -> void:
+	var p = Game.player
+	if p == null:
+		return
+	var dy := float(p._yaw) - _look_yaw
+	dy = fposmod(dy + PI, TAU)
+	if dy > PI:
+		dy = TAU - dy
+	if dy * 180.0 / PI < PICK_LOOK_REFRESH_DEG:
+		return
+	# AC-0079 fix: match player.gd aim_dir() = Basis.from_euler(pitch,yaw,0)*(0,0,-1)
+	# = (-sin(yaw), -cos(yaw)) in (x,z). Old (cos,sin) pointed sideways at yaw=-PI/2.
+	var d := Vector2(-sin(float(p._yaw)), -cos(float(p._yaw)))
+	var l := d.length()
+	_look_dir = d / l if l > 1e-6 else Vector2(1, 0)
+	_look_yaw = float(p._yaw)
 
-func _mesh_head_ready() -> int:
-	while mq_b < band_buckets.size():
-		var marr: Array = band_buckets[mq_b]
-		if mq_i >= marr.size():
-			mq_b += 1
-			mq_i = 0
-			continue
-		var me: Dictionary = marr[mq_i]
-		var cx: int = int(me["cx"])
-		var cz: int = int(me["cz"])
-		var c = chunks.get(me["key"])
-		if c == null:
-			if absi(cx - last_pcx) > render_radius + 1 or absi(cz - last_pcz) > render_radius + 1:
-				mq_i += 1
-				continue
-			return 0
-		if bool(me["data_only"]):
-			if c.data.is_empty():
-				return 0
-			mq_i += 1
-			continue
-		if c.data.is_empty():
-			return 0
-		if c.mesh_built:
-			mq_i += 1
-			continue
-		return 1 if _build_ready(cx, cz) else 0
-	return 0
+func _entry_score(e: Dictionary, pcx: int, pcz: int, px: float, pz: float) -> float:
+	var cx := int(e["cx"])
+	var cz := int(e["cz"])
+	var d := absi(cx - pcx) + absi(cz - pcz)
+	var to_cx := float(cx * 16 + 8) - px
+	var to_cz := float(cz * 16 + 8) - pz
+	var l := Vector2(to_cx, to_cz).length()
+	var dot := _look_dir.x * to_cx + _look_dir.y * to_cz
+	var a := dot / l if l > 1e-6 else 0.0
+	a = clampf(a, 0.0, 1.0)
+	var cheby := maxi(absi(cx - pcx), absi(cz - pcz))
+	var boost := 2.0 if cheby <= 1 else 0.0
+	return float(d) + (1.0 - a) * 0.75 * float(d) - boost
+
+func _collect_pool(build: bool) -> Array:
+	# AC-0079 round 3: the pick is score-driven (spec: generate the LOWEST score
+	# among no-data entries), so the pool must not be clipped by the sticky FIFO
+	# cursors — a stale dq_b/mq_b (entries consumed out of band order, cursor
+	# parked past the last band) would empty the pool and starve the drain
+	# forever. Cursors are bookkeeping only (cursor-advance on consume, exact
+	# queue_size); the pool scans every band with the same cap as before.
+	var out: Array = []
+	for b in range(band_buckets.size()):
+		var arr: Array = band_buckets[b]
+		for i in range(arr.size()):
+			if out.size() >= PICK_POOL_CAP:
+				return out
+			var e: Dictionary = arr[i]
+			var c = chunks.get(e["key"])
+			if build:
+				if bool(e["data_only"]):
+					continue
+				if c == null or c.data.is_empty() or c.mesh_built:
+					continue
+				out.append(e)
+			else:
+				if c == null or not c.data.is_empty():
+					continue
+				out.append(e)
+	return out
 
 func _drain_build_queue() -> void:
 	if queue_size == 0:
@@ -473,21 +470,81 @@ func _drain_build_queue() -> void:
 	var budget_us := int(drain_budget_ms * 1000)
 	var gen_used_ms := 0
 	var units := 0
+	var px: float = Game.player.position.x if Game.player != null else 0.0
+	var pz: float = Game.player.position.z if Game.player != null else 0.0
 	while budget > 0:
 		if Time.get_ticks_usec() - t0 > budget_us:
 			break
 		var u := 0
-		var gm := 0
-		if _mesh_head_ready() == 1:
-			var he: Dictionary = band_buckets[mq_b][mq_i]
-			var hc: Node3D = chunks.get(he["key"])
-			_build_unit(hc, int(he["cx"]), int(he["cz"]))
+		_refresh_look_dir()
+		var bp: Array = _collect_pool(true)
+		var best_e: Dictionary = {}
+		var best_c: Node3D = null
+		var best_s := 1e30
+		for e in bp:
+			var c = chunks.get(e["key"])
+			if c == null or c.data.is_empty() or c.mesh_built:
+				continue
+			if not _build_ready(int(e["cx"]), int(e["cz"])):
+				continue
+			var s := _entry_score(e, last_pcx, last_pcz, px, pz)
+			if s < best_s:
+				best_s = s
+				best_e = e
+				best_c = c
+		if best_c != null:
+			_build_unit(best_c, int(best_e["cx"]), int(best_e["cz"]))
+			_remove_entry(best_e)
 			u = 1
-		elif gen_budget_ms < 0 or gen_used_ms < gen_budget_ms:
-			gm = _drain_data_wave()
-			if gm > 0:
-				u = 1
-				gen_used_ms += gm
+		if u == 0 and (gen_budget_ms < 0 or gen_used_ms < gen_budget_ms):
+			# AC-0079 round 3: scored DATA pick. The spec requires the lowest-score
+			# no-data entry (not FIFO), else forward leading-edge data only arrives
+			# after all nearer-band data drains and _build_ready stalls the forward
+			# mesh. Pool = _collect_pool(false) (band scan from the dq cursor,
+			# capped at PICK_POOL_CAP, same as before); each candidate is scored
+			# with _entry_score and the lowest wins. Per-consumption FIFO cursor
+			# bookkeeping (dq_b/dq_i advance past the consumed entry) is kept so
+			# entries are never re-picked and queue_size stays exact.
+			var dp: Array = _collect_pool(false)
+			var dp_e: Dictionary = {}
+			var dp_s := 1e30
+			for e in dp:
+				var s := _entry_score(e, last_pcx, last_pcz, px, pz)
+				if s < dp_s:
+					dp_s = s
+					dp_e = e
+			if not dp_e.is_empty():
+				_advance_dq_past(int(dp_e["cx"]), int(dp_e["cz"]))
+				var cx: int = int(dp_e["cx"])
+				var cz: int = int(dp_e["cz"])
+				var c = chunks.get(dp_e["key"])
+				if c == null:
+					if absi(cx - last_pcx) > render_radius + 1 or absi(cz - last_pcz) > render_radius + 1:
+						# Out-of-radius stale pool candidate (possible after a
+						# recenter mid-frame): skip this pick, leave the entry
+						# queued for the next recenter rebuild to drop it.
+						pass
+					else:
+						var s0 := Time.get_ticks_usec() if _recprobe else 0
+						stub_chunk(cx, cz)
+						if _recprobe:
+							_rp_drain_stub_ms += (Time.get_ticks_usec() - s0) / 1000.0
+							_rp_drain_stub_n += 1
+						c = chunks.get(dp_e["key"])
+				if c != null and c.data.is_empty():
+					var dg := _gen_unit(c, cx, cz)
+					u = 1
+					gen_used_ms += dg
+			if u == 0:
+				# Pool exhausted this frame (all entries consumed): park the
+				# cursor past the scanned region, same as the old FIFO scan.
+				var db := dq_b
+				var di := dq_i
+				while db < band_buckets.size() and di < band_buckets[db].size():
+					db += 1
+					di = 0
+				dq_b = db
+				dq_i = di
 		if u == 0:
 			break
 		units += 1
@@ -498,6 +555,31 @@ func _drain_build_queue() -> void:
 		var fm := (Time.get_ticks_usec() - t0) / 1000.0
 		if fm > perf_max_drain_ms:
 			perf_max_drain_ms = fm
+
+func _advance_dq_past(cx: int, cz: int) -> void:
+	# AC-0079 round 3: advance the sticky data cursor (dq_b/dq_i) past the entry
+	# at (cx,cz), keeping the cursor consistent with the scored pool pick the
+	# way the old FIFO scan did (entries at/below the cursor are considered
+	# consumed). Fallback-only bookkeeping: the pick itself is score-driven.
+	for b in range(dq_b, band_buckets.size()):
+		var arr: Array = band_buckets[b]
+		for i in range(dq_i if b == dq_b else 0, arr.size()):
+			if int(arr[i]["cx"]) == cx and int(arr[i]["cz"]) == cz:
+				dq_b = b
+				dq_i = i + 1
+				while dq_b < band_buckets.size() and dq_i >= band_buckets[dq_b].size():
+					dq_b += 1
+					dq_i = 0
+				return
+
+func _remove_entry(e: Dictionary) -> void:
+	for b in range(band_buckets.size()):
+		var arr: Array = band_buckets[b]
+		for i in range(arr.size()):
+			if arr[i]["key"] == e["key"]:
+				arr.remove_at(i)
+				queue_size -= 1
+				return
 func _key(cx: int, cz: int) -> String:
 	var k := cx * 65536 + cz
 	var s = chunk_keys.get(k)

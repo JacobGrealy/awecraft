@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-24T11:04
+  updated_at: 2026-08-24T11:50
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -2239,7 +2239,7 @@ intake:
   status: in-progress
   labels: []
   created_at: 2026-08-23T09:39
-  updated_at: 2026-08-24T04:53
+  updated_at: 2026-08-24T11:50
   completed_at: null
   waiting_on: null
   parent_id: AC-0034
@@ -2255,6 +2255,18 @@ intake:
     updated_at: null
     text: '[agent] v1 stalled before writing code (clean tree, no hung procs, daemons survived). SPLIT: hysteresis (P1.2)
       -> new AC-0080 (queued ahead); 0079 = look-priority scoring (P1.1) only; spec rewrite due before relaunch.'
+  - id: 2
+    created_at: 2026-08-24T11:50
+    updated_at: null
+    text: '[agent] 2026-08-24 (3 rounds complete, honest partial): P1.1 look-priority scoring implemented + working — look-vector
+      convention fix (world.gd _refresh_look_dir: Vector2(-sin(yaw),-cos(yaw)) per player.gd:861), scored MESH and DATA pick
+      (_collect_pool + _entry_score, cap 512, dq cursors bookkeeping-only), harness wall-ref fixed (player chunk at crossing,
+      symmetric +-r, ever_built for hysteresis-freed chunks). r=4: in_radius_built_max 55->67 (>=60 PASS), walk p95 64-66/max<=115
+      PASS, recenter r50 98.8ms PASS, genhash 25/25 parity PASS, battery green. DEFERRED FAIL: r4 fwd_p95 5107-5145 > 3500
+      and fwd>tr (trailing wall warms up during approach) — root cause is drain throughput (~20 units/s main-thread serial
+      data->mesh ring; the 72-chunk forward wall takes ~5s regardless of order), NOT a scoring defect. Fix belongs to AC-0077
+      (bulk-batch light 9->1 per crossing + collision staging) now queue #18. RE-VERIFY boundary gate after AC-0077 lands.
+      Renders: ac0079_iso_r2.png / ac0079fix_iso_r2.png / ac0079r3_iso_r2.png.'
 - id: AC-0080
   title: chunk-stream-hysteresis-unload
   source: agent
