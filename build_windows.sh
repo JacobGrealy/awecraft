@@ -23,8 +23,9 @@
 set -o pipefail
 
 GODOT="$HOME/tools/godot/godot"
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PROJECT="$ROOT/AweCraft"
+# Repo root = the directory containing this script (CWD-independent).
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+PROJECT="$ROOT"
 SCRATCH="$PROJECT/.scratch"
 EXPORT_DIR="$PROJECT/exports/windows"
 RELEASE_EXE="$EXPORT_DIR/AweCraft.exe"

@@ -809,6 +809,12 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "save":
 			await _save_test()
 			return
+		if logic == "dropshot":
+			world.recenter(spawn.x, spawn.z, true)
+			await _await_spawn_floor(spawn, 300)
+			player = _spawn_player()
+			await _dropshot_test(spawn, snapshot_path)
+			return
 		if logic == "quitmenu":
 			Save.clear(0)
 			Save.clear(1)
@@ -1538,6 +1544,49 @@ func _interact_test() -> void:
 		"after_place_cell": after_place,
 		"place_ok": after_place == tid,
 	})
+	get_tree().quit()
+
+
+func _dropshot_test(spawn: Vector3, path: String) -> void:
+	var p = Game.player
+	await _await_world_build(spawn, 3000)
+	var target: Vector3i = Vector3i(int(spawn.x) + 2, int(spawn.y), int(spawn.z))
+	for dy in range(6, -1, -1):
+		if world.get_block(target.x, target.y + dy, target.z) != 0:
+			target.y = target.y + dy
+			break
+	world.set_block(target.x, target.y, target.z, 2)
+	Debug.fly(true)
+	Debug.teleport(float(target.x) + 0.5, float(target.y) + 3.0, float(target.z) + 0.5)
+	var dir := Vector3(float(target.x) + 0.5 - (p.position.x), float(target.y) + 0.5 - (p.position.y + p.EYE), float(target.z) + 0.5 - p.position.z)
+	if dir.length() > 0.01:
+		dir = dir.normalized()
+		p.look(atan2(-dir.x, -dir.z), asin(clampf(dir.y, -1.0, 1.0)))
+	for i in 4:
+		await get_tree().physics_frame
+	p.start_mine()
+	var frames := int(ceilf(float(Data.block(2).hard) * 60.0)) + 20
+	for i in range(frames):
+		await get_tree().physics_frame
+	p.release_mine()
+	var spawned := false
+	for i in 60:
+		if Game.drops.get_child_count() > 0:
+			spawned = true
+			break
+		await get_tree().physics_frame
+	for i in 50:
+		await get_tree().physics_frame
+	var cam := Vector3(float(target.x) + 3.5, float(target.y) + 2.2, float(target.z) + 3.5)
+	var look_at := Vector3(float(target.x) + 0.5, float(target.y) + 0.6, float(target.z) + 0.5)
+	camera = _make_camera()
+	camera.position = cam
+	camera.look_at(look_at, Vector3(0, 1, 0))
+	camera.current = true
+	for i in 8:
+		await get_tree().physics_frame
+	await Debug.snap(path)
+	Debug.result({"dropshot": true, "spawned": spawned, "drop_count": Game.drops.get_child_count(), "cam": "dropshot"})
 	get_tree().quit()
 
 

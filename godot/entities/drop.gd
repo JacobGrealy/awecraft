@@ -10,18 +10,16 @@ var _mesh: MeshInstance3D = null
 
 func _ready() -> void:
 	_vel = Vector3((randf() - 0.5) * 3.0, 3.0 + randf() * 2.0, (randf() - 0.5) * 3.0)
-	var color := Color(0.6, 0.6, 0.6)
-	var info = Data.block(id)
-	if info != null:
-		color = info.color.side
-	var bm := BoxMesh.new()
-	bm.size = Vector3(0.3, 0.3, 0.3)
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = color
 	_mesh = MeshInstance3D.new()
-	_mesh.mesh = bm
-	_mesh.material_override = mat
+	var info = Data.block(id)
+	var is_cross := info != null and bool(info.get("cross", false)) and not bool(info.get("thin", false))
+	if is_cross:
+		_mesh.mesh = HeldMeshes.cross_mesh(id)
+		_mesh.material_override = HeldMeshes.cross_material()
+	else:
+		_mesh.mesh = HeldMeshes.box_mesh(id)
+		_mesh.material_override = HeldMeshes.box_material()
+	_mesh.scale = Vector3(0.3, 0.3, 0.3)
 	add_child(_mesh)
 	var area := Area3D.new()
 	var col := CollisionShape3D.new()
