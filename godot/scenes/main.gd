@@ -815,6 +815,11 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			player = _spawn_player()
 			await _dropshot_test(spawn, snapshot_path)
 			return
+		if logic == "crossshot":
+			world.recenter(spawn.x, spawn.z, true)
+			await _await_spawn_floor(spawn, 300)
+			await _crossshot_test(spawn, snapshot_path)
+			return
 		if logic == "quitmenu":
 			Save.clear(0)
 			Save.clear(1)
@@ -1587,6 +1592,37 @@ func _dropshot_test(spawn: Vector3, path: String) -> void:
 		await get_tree().physics_frame
 	await Debug.snap(path)
 	Debug.result({"dropshot": true, "spawned": spawned, "drop_count": Game.drops.get_child_count(), "cam": "dropshot"})
+	get_tree().quit()
+
+
+func _crossshot_test(spawn: Vector3, path: String) -> void:
+	await _await_world_build(spawn, 3000)
+	var tx := int(spawn.x) + 2
+	var tz := int(spawn.z) + 2
+	var ty := int(spawn.y)
+	for dy in range(8, -1, -1):
+		if world.get_block(tx, ty + dy, tz) != 0:
+			ty = ty + dy
+			break
+	var placed := 0
+	var ids := [18, 19, 18, 19]
+	var offs := [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1)]
+	for i in range(4):
+		if world.get_block(tx + int(offs[i].x), ty + 1, tz + int(offs[i].y)) == 0:
+			world.set_block(tx + int(offs[i].x), ty + 1, tz + int(offs[i].y), ids[i])
+			placed += 1
+	for i in 10:
+		await get_tree().physics_frame
+	var cam := Vector3(float(tx) + 2.8, float(ty) + 2.4, float(tz) + 2.8)
+	var look_at := Vector3(float(tx) + 0.5, float(ty) + 0.7, float(tz) + 0.5)
+	camera = _make_camera()
+	camera.position = cam
+	camera.look_at(look_at, Vector3(0, 1, 0))
+	camera.current = true
+	for i in 8:
+		await get_tree().physics_frame
+	await Debug.snap(path)
+	Debug.result({"crossshot": true, "placed": placed, "tx": tx, "ty": ty, "tz": tz})
 	get_tree().quit()
 
 
