@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0103 — HARNESS.md results</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+.gate{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+.ok{color:#1a7f37;font-weight:600}.warn{color:#9a6700;font-weight:600}
+table{border-collapse:collapse;font-size:13px}td,th{border:1px solid #ccc;padding:3px 8px;text-align:left}
+</style></head><body>
+<h1>AC-0103 — tasks/HARNESS.md (docs-only)</h1>
+<p>Deliverable: <code>tasks/HARNESS.md</code> (10 244 B, written 2026-08-24).
+All logic runs headless on this box (6-core, llvmpipe), engine <code>~/tools/godot/godot</code> 4.7.1,
+repo state: git clean before this task. No code files touched.</p>
+
+<h2>G0 — no code changes</h2>
+<div class="gate"><b>G0 <span class="ok">PASS</span></b> — <code>git status --short</code> before runs: <b>empty</b> (clean tree).
+Only new/changed files after: <code>tasks/HARNESS.md</code> + <code>tasks/AC-0103/AC-0103-results.html</code> (+ <code>.scratch/</code> scratch, gitignored).
+Headless <code>--headless --path godot --quit</code>: <b>RC=0</b>, <b>0</b> script-error lines (<code>.scratch/ac0103_g0.log</code>).</div>
+
+<h2>G1 — coverage</h2>
+<div class="gate"><b>G1 <span class="ok">PASS</span></b> — grep <code>logic == "</code> in <code>godot/scenes/main.gd</code>: <b>37</b> lines
+= <b>36 mode branches</b> + 1 incidental comparison (main.gd:102, the headless-idle check).
+Table rows: <b>36/36 = 100%</b>. Excluded non-branch hooks listed under “Not in table”:
+the <code>logic == ""</code> idle check, <code>AWECRAFT_PROBE</code>/<code>AWECRAFT_BCELL</code> debug prints,
+<code>AWECRAFT_MESH_INFO</code> (fallback path), <code>AWECRAFT_IMPORT_PACK</code> (_ready probe).</div>
+
+<h2>G2 — accuracy spot-check (5 rows re-run fresh, 2026-08-24)</h2>
+<p class="ok">Bonus row re-run (beyond the 5 required): <code>look</code> — 1 s, rc 0,
+<code>ok:true</code>, all 18 tabled fields present (see HARNESS.md look row, wall updated to measured).</p>
+<div class="gate"><b>G2 <span class="ok">PASS</span></b> — five rows (fluids, genhash, boundary [slow], interact, light) re-run headless;
+every RESULT field named in the table appears in the actual output; 2 env effects tested:
+<code>AWECRAFT_RADIUS</code> on boundary (r4 → <code>built_final</code> 81 / <code>in_radius_built_max</code> 67 vs r3 → 49/49)
+and <code>AWECRAFT_SEED</code> on genhash (default 44 vs seed 99 → all <b>25</b> GENHASH lines differ).</div>
+<details><summary>Actual RESULT lines (fresh)</summary><pre>fluids:
+RESULT {"sea_backed_before":1406,"sea_backed_final":1406,"sea_stable":true,"sea_surface_before":2730,"sea_surface_final":2730,"shore_after":[5,7],"sideways_lava_result":9,"source_after":[5,8],"water_delta":1,"water_on_lava_result":25}
+FLUIDSTAT region_water_before=3591 region_water_final=3592 sea_surface_before=2730 sea_surface_final=2730 sea_backed_before=1406 sea_backed_final=1406
+
+interact:
+RESULT {"after_mine_cell":0,"after_place_cell":2,"breakable_id":2,"drop_spawned":true,"highlight_visible":true,"inv_grew":{"id":2,"n":1},"place_cell":[8,34,8],"place_ok":true,"target_cell":[8,34,8]}
+
+light:
+RESULT {"cave_eff":0,"surface_eff":15,"torch_far_after":9,"torch_far_before":0,"torch_level":14}
+
+genhash (seed 44): 25× "GENHASH cx cz &lt;32-hex&gt;" + GENMS 797/998; seed 99: diff → 25 differing lines (25/25)
+
+boundary r4 (AWECRAFT_RADIUS=4):
+RESULT {"built_final":81,"burst_max_ms":10684,"burst_p95_ms":5668,"crossings":20,"flap":0,"in_radius_built_final":81,"in_radius_built_max":67,"in_radius_built_min":17,"loads":220,"marker":[16,31,8,4,3],"marker_ok":true,"max_ms":98,"mem_delta_mb":58.0,"ok":true,"p50_ms":11,"p95_ms":65,"radius":4,"remesh_ok":true,"target_in_radius":81,"walk_chunks":20,"walk_s":19.52,"walk_speed":16.0}
+
+boundary r3 (AWECRAFT_RADIUS=3):
+RESULT {"built_final":49,"burst_max_ms":2923,"burst_p95_ms":2671,"crossings":20,"flap":0,"in_radius_built_final":49,"in_radius_built_max":49,"in_radius_built_min":16,"loads":180,"max_ms":112,"mem_delta_mb":31.8,"ok":true,"p50_ms":13,"p95_ms":63,"radius":3,"target_in_radius":49,"walk_chunks":20,"walk_s":19.52,"walk_speed":16.0}</pre></details>
+
+<h2>G3 — known-stable values (fresh runs, not from memory)</h2>
+<div class="gate"><b>G3 <span class="ok">PASS</span></b> — all values below from the 2026-08-24 runs above; table in HARNESS.md §3 matches.</div>
+<table>
+<tr><th>gate</th><th>fresh 2026-08-24</th><th>expected</th></tr>
+<tr><td>fluids sea_surface before/final</td><td>2730 / 2730</td><td>2730 / 2730 ✓</td></tr>
+<tr><td>fluids sea_backed before/final</td><td>1406 / 1406</td><td>1406 / 1406 ✓</td></tr>
+<tr><td>fluids sea_stable / reactions</td><td>true / 25,9</td><td>true / 25,9 ✓</td></tr>
+<tr><td>interact drop_spawned / place_ok</td><td>true / true</td><td>true / true ✓</td></tr>
+<tr><td>light torch_level</td><td>14</td><td>14 ✓</td></tr>
+<tr><td>genhash parity</td><td>25/25 lines (seed 44)</td><td>25/25 ✓</td></tr>
+<tr><td>boundary r4 in_radius_built_max</td><td>67</td><td>67 (post-AC-0079) ✓</td></tr>
+</table>
+
+<h2>Wall-time table (measured 2026-08-24, headless, this box)</h2>
+<table>
+<tr><th>run</th><th>wall</th><th>rc</th><th>note</th></tr>
+<tr><td><code>--quit</code> (G0)</td><td>&lt;5 s</td><td>0</td><td>0 script errors</td></tr>
+<tr><td>fluids</td><td>5 s</td><td>0</td><td></td></tr>
+<tr><td>interact</td><td>3 s</td><td>0</td><td></td></tr>
+<tr><td>light</td><td>4 s</td><td>0</td><td></td></tr>
+<tr><td>genhash (44) / genhash (99)</td><td>2 s / 2 s</td><td>0</td><td>GENMS 797 / 998</td></tr>
+<tr><td>player</td><td>3–4 s</td><td>0</td><td></td></tr>
+<tr><td>smoke battery <code>player;interact;light;fluids;genhash</code></td><td>33 s</td><td>0</td><td>BATTMODE 2739/1349/2879/3763/884 ms</td></tr>
+<tr><td>boundary r3</td><td>45 s</td><td>0</td><td>walk 19.52 s</td></tr>
+<tr><td>look</td><td>1 s</td><td>0</td><td>ok:true (bonus spot-check row)</td></tr>
+<tr><td>boundary r4</td><td>46 s</td><td>0</td><td>walk 19.52 s</td></tr>
+<tr><td>boundary r50</td><td>~23 min</td><td>0</td><td><b>from 2026-08-24 10:34 log</b> <code>.scratch/ac0079r3_battery/b_r50.log</code> (not re-run; same code state)</td></tr>
+<tr><td>perf r4</td><td>~15 s</td><td>0</td><td>total_ms 12 334 <b>from 2026-08-24 log</b> <code>.scratch/ac0082_g4_perf_r4_t1.log</code></td></tr>
+<tr><td>perf r50</td><td>~14 min</td><td>0</td><td>total_ms 850 s, 6061/10201 chunks <b>from 2026-08-24 03:25 log</b> <code>.scratch/ac0082_g4_perf_r50_t1.log</code> (not re-run)</td></tr>
+</table>
+<p class="warn">Slowest modes: boundary r50 (~23 min wall), perf r50 (~14 min / 850 s total_ms) → 3000 s bash timeout.
+boundary r4 itself is fast today (46 s) because AC-0079/0082 streaming kept bursts ≈5 s/crossing; the 08-23 spec estimate
+of ~10+ min for r4 no longer applies — r50 remains the slow case.</p>
+
+<h2>Deviations</h2>
+<ul>
+<li>Rows for modes not re-run on 08-24 (look, craft, guiclick, combat, swing, survival, hunger, daynight, tint,
+fluidprobe, fluidfall, webfall, fluidsettle, buckets, water, fpv, held, toolres, toolpose, viewmodel, wallshot,
+editperf, atlas, trees, save, dropshot, crossshot, quitmenu, settings) carry wall estimates marked “not re-run 08-24;
+same class as …” — their RESULT field lists were verified against the harness code in main.gd (every field quoted
+exists in the corresponding <code>Debug.result(…)</code> dict). The 5 spot-checked rows + battery are fresh.</li>
+<li>boundary r50 / perf r50 walls quoted from same-day 2026-08-24 .scratch logs (code state unchanged since, per
+checkpoint) instead of re-running ~23+14 min; marked “from &lt;date&gt; log” in HARNESS.md.</li>
+<li>Background-job sandbox quirk: run scripts in <code>.scratch/</code> or <code>/tmp</code> could not survive to the background
+job (ephemeral per-call sandbox) — all timed runs were executed as foreground commands instead; no impact on data.</li>
+<li>No renders (docs task; render hooks documented from code).</li>
+</ul>
+</body></html>
