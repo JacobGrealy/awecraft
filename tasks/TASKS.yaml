@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-24T10:59
+  updated_at: 2026-08-24T11:01
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -81,6 +81,7 @@ queue:
 - AC-0090
 - AC-0091
 - AC-0111
+- AC-0112
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -3074,4 +3075,45 @@ intake:
 
 
     Refs: chunk.gd:138 _faces stab check, 513 stab fill, world/chunk.gd cutout handling, Data.block transparent flag.'
+  comments: []
+- id: AC-0112
+  title: held-item-positioning-per-type-review
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-24T11:01
+  updated_at: 2026-08-24T11:01
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Audit + split held-item positioning so adjustments to one type do not affect others.
+
+
+    Problem: each fix to one held type (block / tool / flower/cross / empty fist) has been tuning shared TOOL_POSE / scale
+    / hand_root transforms (player.gd: TOOL_POSE_RETUNE, TOOL_POSE_POS, held_box 0.70, HAND_BASE_POS, sway_root). Subsequent
+    tasks regress previous types (e.g. AC-0073 doubled held scale, AC-0085 lowered HAND_BASE_POS, AC-0070 replaced voxels).
+    AC-0097 still shows occlusion after AC-0067.
+
+
+    Scope: godot/player/player.gd _update_held + hand/hand_root/sway_root/tool nodes + HeldMeshes.
+
+    - Catalog per-type current transforms: block (HeldMeshes.box_mesh 1x1x1), tool (TOOL_GRIDS voxel head+handle), flower/cross
+    (HeldMeshes.cross_mesh XQ), fist (held_fist).
+
+    - Define independent params per type: position, scale, rotation (TOOL_POSE_ROTx), swing arc, sway amplitude — no shared
+    global that leaks.
+
+    - Keep AC-0067 depth-disabled on-top, AC-0070 voxel detail, AC-0060 sway composition.
+
+    - Propose or implement per-type poses that look correct at rest + mid-swing (MC first-person reference per type).
+
+    Verify: G0 zero script errors; per-type harness (toolpose + viewmodel) for all 4 types + diag_2x + depth; R=1 renders
+    for block/tool/flower/fist at rest + mid-swing; battery green.
+
+
+    Refs: player.gd: TOOL_POSE_RETUNE/TOOL_POSE_POS/HAND_BASE_POS, held_box/sprite/fist/tool setup; AC-0067/0070/0073/0085/0097.'
   comments: []
