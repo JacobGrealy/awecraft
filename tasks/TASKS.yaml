@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-24T11:54
+  updated_at: 2026-08-24T13:26
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -83,6 +83,7 @@ queue:
 - AC-0090
 - AC-0091
 - AC-0111
+- AC-0114
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -3164,4 +3165,35 @@ intake:
 
 
     Depends: AC-0112 review table.'
+  comments: []
+- id: AC-0114
+  title: task-board-systemd-boot-service
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-24T13:26
+  updated_at: 2026-08-24T13:26
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Make the tasks board (tasks/webui.py on :5180) auto-start at boot via systemd.
+
+
+    Scope: create a systemd user service (or system service) that runs python3 tasks/webui.py --daemon (or foreground with
+    Restart=always) on boot, replaces manual python3 tasks/webui.py --daemon.
+
+    Ensure: binds 0.0.0.0:5180, uses pidfile .scratch/tasks_webui.pid / log .scratch/tasks-webui.log, survives reboots, enabled
+    via systemctl enable.
+
+    Check existing daemons: serve_web.py already has systemd? Align both web + tasks boards. Handle DSH sandbox? Service file
+    at ~/.config/systemd/user/awecraft-tasks.service or /etc/systemd/system.
+
+    Verify: reboot or systemctl status active, curl localhost:5180, queue list via webui, logs.
+
+
+    Refs: tasks/webui.py, serve_web.py --daemon, AGENTS.md daemon rules.'
   comments: []
