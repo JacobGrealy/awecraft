@@ -794,6 +794,8 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			await _atlas_test(spawn)
 			return
 		if logic == "genhash":
+			if seed_env != "":
+				Game.world_seed = seed_env.to_int()
 			var t0 := Time.get_ticks_msec()
 			for cx in range(-2, 3):
 				for cz in range(-2, 3):

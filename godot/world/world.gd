@@ -72,9 +72,37 @@ var _fluid_write := false
 var _fluid_stable := 0
 var _fluid_sig := ""
 var tex_refresh: Array = []
+var threadgen := false
+var threadgen_max := 3
+var threadgen_pool = null
+var threadgen_inflight: Array = []
+var _tg_slots = {}
+var _tg_inflight_keys: Dictionary = {}
+var _tg_debug := false
+var _tg_enq := 0
+var _tg_dedup := 0
+var _tg_capdrop := 0
+var _tg_handoff := 0
+var _tg_stale := 0
+var _tg_datadrop := 0
 
 func _ready() -> void:
 	timing = OS.get_environment("AWECRAFT_TIMING") == "1"
+	var tg := OS.get_environment("AWECRAFT_THREADGEN")
+	if OS.get_environment("AWECRAFT_FORCE_WEB") == "1":
+		print("THREADGEN off (web sim) threadgen=false pool=0")
+	elif tg != "0" and OS.has_feature("web_nothreads"):
+		print("THREADGEN off (web_nothreads) threadgen=false pool=0")
+	elif tg != "0":
+		var nenv := OS.get_environment("AWECRAFT_THREADGEN_N")
+		threadgen_max = maxi(1, mini(OS.get_processor_count() - 2, 3))
+		if nenv != "":
+			threadgen_max = maxi(1, nenv.to_int())
+		threadgen_max = mini(threadgen_max, 6)
+		threadgen_pool = Engine.get_singleton("WorkerThreadPool")
+		threadgen = true
+		_tg_debug = OS.get_environment("AWECRAFT_TGDEBUG") == "1"
+		print("THREADGEN on threadgen=true pool=%d" % threadgen_max)
 	_recprobe = OS.get_environment("AWECRAFT_RECPROBE") == "1"
 	var dr := OS.get_environment("AWECRAFT_DRAIN_MS")
 	if dr != "" and dr.to_int() > 0:
@@ -90,6 +118,9 @@ func _ready() -> void:
 	fluid_timer.autostart = true
 	fluid_timer.timeout.connect(_on_fluid_tick)
 	add_child(fluid_timer)
+
+func _exit_tree() -> void:
+	threadgen = false
 
 func _on_fluid_tick() -> void:
 	if fluid_sim_enabled and (Game.mode == "play" or Game.mode == "pause"):
@@ -168,6 +199,7 @@ func _process(_delta: float) -> void:
 			cc.build_mesh(get_block, cc.last_eff)
 		else:
 			fluid_dirty[_key(int(cc.cx), int(cc.cz))] = true
+	threadgen_poll()
 	_drain_build_queue()
 	_drain_tex_refresh()
 
@@ -273,6 +305,11 @@ func _pending_box() -> Dictionary:
 
 func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	var tg := Time.get_ticks_msec()
+	if threadgen and absi(cx) > 0 and absi(cz) > 0:
+		threadgen_enqueue(cx, cz, _key(cx, cz), c.get_instance_id())
+		if timing:
+			print("GENCHUNK %d,%d gen_ms=0 thread=1" % [cx, cz])
+		return 0
 	c.data = WorldGen.generate(cx, cz, Game.world_seed)
 	c.init_fl()
 	_apply_edits_to_chunk(c)
@@ -281,6 +318,77 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 		print("GENCHUNK %d,%d gen_ms=%d" % [cx, cz, dg])
 	perf_gen_ms += dg
 	return dg
+
+func threadgen_enqueue(cx: int, cz: int, key: String, inst: int) -> void:
+	if _tg_inflight_keys.has(key):
+		_tg_dedup += 1
+		return
+	if threadgen_inflight.size() >= threadgen_max:
+		_tg_capdrop += 1
+		if _tg_debug:
+			print("TGEN CAPDROP %d,%d inflight=%d" % [cx, cz, threadgen_inflight.size()])
+		return
+	var entry := {"key": key, "cx": cx, "cz": cz, "inst": inst, "args": [cx, cz, Game.world_seed, Data.HEIGHT, Data.SEA]}
+	var tid = threadgen_pool.add_task(_threadgen_worker)
+	entry["tid"] = tid
+	_tg_slots[tid] = entry
+	threadgen_inflight.append(entry)
+	_tg_inflight_keys[key] = true
+	_tg_enq += 1
+	if _tg_debug:
+		print("TGEN ENQ %d,%d inflight=%d" % [cx, cz, threadgen_inflight.size()])
+
+func _threadgen_worker() -> void:
+	var tid = threadgen_pool.get_caller_task_id()
+	var entry = _tg_slots.get(tid)
+	if entry == null:
+		return
+	var a: Array = entry["args"]
+	var d := WorldGen.generate_args(int(a[0]), int(a[1]), int(a[2]), int(a[3]), int(a[4]))
+	entry["result"] = d
+
+func threadgen_poll() -> void:
+	if threadgen_inflight.is_empty():
+		return
+	var i := 0
+	while i < threadgen_inflight.size():
+		var e: Dictionary = threadgen_inflight[i]
+		var tid = int(e["tid"])
+		if threadgen_pool.is_task_completed(tid):
+			threadgen_inflight.remove_at(i)
+			_tg_inflight_keys.erase(e["key"])
+			_tg_slots.erase(tid)
+			threadgen_handoff(e, e.get("result", null))
+			continue
+		i += 1
+
+func threadgen_handoff(e: Dictionary, data: PackedByteArray) -> void:
+	if data == null or data.size() == 0:
+		return
+	var key: String = e["key"]
+	var c = chunks.get(key)
+	if c == null:
+		_tg_stale += 1
+		if _tg_debug:
+			print("TGEN STALE %d,%d (chunk gone)" % [int(e["cx"]), int(e["cz"])])
+		return
+	var expected_inst: int = int(e["inst"])
+	if expected_inst >= 0 and int(c.get_instance_id()) != expected_inst:
+		_tg_stale += 1
+		if _tg_debug:
+			print("TGEN STALE %d,%d (inst mismatch %d != %d)" % [int(e["cx"]), int(e["cz"]), expected_inst, int(c.get_instance_id())])
+		return
+	if c.data.size() != 0:
+		_tg_datadrop += 1
+		if _tg_debug:
+			print("TGEN DATADROP %d,%d (data already set)" % [int(e["cx"]), int(e["cz"])])
+		return
+	c.data = data
+	c.init_fl()
+	_apply_edits_to_chunk(c)
+	_tg_handoff += 1
+	if timing or _tg_debug:
+		print("GENHAND %d,%d" % [int(e["cx"]), int(e["cz"])])
 
 func _build_unit(c: Node3D, cx: int, cz: int) -> int:
 	var tb := Time.get_ticks_msec()
@@ -423,10 +531,17 @@ func stub_chunk(cx: int, cz: int) -> Node3D:
 func _chunk_data(cx: int, cz: int) -> Node3D:
 	var c = chunks.get(_key(cx, cz))
 	if c == null:
+		if threadgen:
+			var key := _key(cx, cz)
+			threadgen_enqueue(cx, cz, key, -1)
+			c = chunks.get(key)
+			if c != null:
+				return c
 		c = create_chunk(cx, cz, false)
 		if absi(cx - last_pcx) <= render_radius and absi(cz - last_pcz) <= render_radius:
 			_enqueue_build(cx, cz)
-	elif c.data.is_empty():
+		return c
+	if c.data.is_empty():
 		var tg := Time.get_ticks_msec()
 		c.data = WorldGen.generate(cx, cz, Game.world_seed)
 		c.init_fl()
@@ -604,6 +719,7 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 		tex_refresh.erase(key)
 		c.queue_free()
 	_rp_free_ms += (Time.get_ticks_usec() - tf1) / 1000.0
+	threadgen_poll()
 	if not mesh_now:
 		var make: Array[Dictionary] = []
 		for dx in range(-render_radius, render_radius + 1):

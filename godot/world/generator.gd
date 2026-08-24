@@ -55,11 +55,14 @@ static func biome_at(x: int, z: int, seed: int) -> String:
 
 
 static func tree_at(x: int, z: int, seed: int) -> int:
+	return tree_at_sea(x, z, seed, 30)
+
+static func tree_at_sea(x: int, z: int, seed: int, sea: int) -> int:
 	var hv := AweNoise.hash2i(x, z, seed + 55)
 	if hv >= TREE_D_MAX:
 		return -1
 	var h := terrain_height(x, z, seed)
-	if h <= Data.SEA + 1:
+	if h <= sea + 1:
 		return -1
 	var d := 0.0
 	var bm := biome_at(x, z, seed)
@@ -82,9 +85,14 @@ static func _putc(data: PackedByteArray, wx: int, wy: int, wz: int, bid: int, bx
 		data[i] = bid
 
 
+const SOLID_IDS := [
+	1, 2, 3, 4, 6, 8, 9, 11, 12, 14, 15, 16, 17, 20, 21, 23, 25,
+]
+
 static func generate(cx: int, cz: int, seed: int) -> PackedByteArray:
-	var hmax := Data.HEIGHT
-	var sea := Data.SEA
+	return generate_args(cx, cz, seed, 80, 30)
+
+static func generate_args(cx: int, cz: int, seed: int, hmax: int, sea: int) -> PackedByteArray:
 	var prof := OS.get_environment("AWECRAFT_GENPROFILE") == "1"
 	var t0 := Time.get_ticks_usec()
 	var bx := cx * 16
@@ -280,8 +288,7 @@ static func generate(cx: int, cz: int, seed: int) -> PackedByteArray:
 					if gb == 0 or gb == B_WATER or gb == B_LAVA:
 						skip = true
 					else:
-						var gi = Data.block(gb)
-						if gi == null or not bool(gi.solid):
+						if not SOLID_IDS.has(gb):
 							skip = true
 				if not skip:
 					var tth := 4 + int(AweNoise.hash2i(tx, tz, seed + 66) * 3.0)

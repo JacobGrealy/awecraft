@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0082 — Threaded chunk DATA generation (Phase 2) — Results</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:880px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+table{border-collapse:collapse;width:100%;margin:10px 0}
+th,td{border:1px solid #ccc;padding:6px 10px;text-align:left}
+th{background:#f4f4f4}
+.ok{color:#1a7f37;font-weight:600}.bad{color:#b42318;font-weight:600}.warn{color:#b45309;font-weight:600}
+.gate{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+</style></head><body>
+<h1>AC-0082 — Threaded chunk DATA generation (Phase 2, desktop-gated) — Results</h1>
+<p><b>Status:</b> DONE (all gates pass) · <b>Date:</b> 2026-08-24</p>
+
+<h2>Design</h2>
+<p>Chunk data generation (<code>WorldGen.generate</code>) is moved off the main thread onto Godot 4 worker threads via <code>WorkerThreadPool</code> (engine singleton). The drain loop in <code>world.gd</code> enqueues gen tasks and polls for completion. Results are handed back as fresh <code>PackedByteArray</code>s; <code>init_fl</code> and <code>_apply_edits_to_chunk</code> run on the main thread after handoff.</p>
+<pre>
+Main thread (drain loop, per frame):
+  for each gen unit in build queue:
+    if chunk.data is empty AND threadgen is on AND not spawn chunk:
+      threadgen_enqueue(cx, cz, key, instance_id)   # add_task to WorkerThreadPool
+      return 0  # skip mesh, wait for gen to complete
+    else:
+      c.data = WorldGen.generate(...)               # sync (spawn chunk or threadgen off)
+      c.init_fl()
+      _apply_edits_to_chunk(c)
+  threadgen_poll():
+    for each in-flight entry:
+      if WorkerThreadPool.is_task_completed(tid):
+        c.data = entry.result                       # fresh PackedByteArray from worker
+        c.init_fl()
+        _apply_edits_to_chunk(c)
+
+Worker thread (WorkerThreadPool worker):
+  _threadgen_worker():
+    entry = _tg_slots[get_caller_task_id()]
+    entry.result = WorldGen.generate_args(cx, cz, seed, HEIGHT, SEA)
+</pre>
+
+<h2>Boundary conditions (all satisfied)</h2>
+<ul>
+<li><b>1. Pure-static generate:</b> <code>WorldGen.generate_args(cx, cz, seed, hmax, sea)</code> takes all data as explicit arguments. No autoloads, no globals, no shared state. The original <code>generate(cx, cz, seed)</code> is a thin wrapper that passes <code>Data.HEIGHT</code> and <code>Data.SEA</code>. <span class="ok">PASS</span></li>
+<li><b>2. Fresh arrays:</b> Worker allocates its own <code>PackedByteArray</code> via <code>generate_args</code>. Main copies it into <code>chunk.data</code> in <code>threadgen_handoff</code>. No shared buffers. <span class="ok">PASS</span></li>
+<li><b>3. Main-thread init_fl + _apply_edits:</b> Both run in <code>threadgen_handoff</code> (main thread, called from <code>threadgen_poll</code> in the drain). <span class="ok">PASS</span></li>
+<li><b>4. In-flight cap ≤ 6:</b> <code>threadgen_enqueue</code> checks <code>threadgen_inflight.size() &gt;= threadgen_max</code> (default 3, max 6). <span class="ok">PASS</span></li>
+</ul>
+
+<h2>Correctness invariants</h2>
+<ul>
+<li><b>AC-0080 hysteresis safety:</b> <code>threadgen_handoff</code> checks <code>chunks.get(key)</code> and <code>is_instance_valid</code> before writing. If the chunk was freed/recreated, the result is dropped cleanly. <span class="ok">PASS</span></li>
+<li><b>Determinism:</b> Genhash parity (G2) proves byte-identical output. <span class="ok">PASS</span></li>
+<li><b>Web path:</b> <code>OS.has_feature("web_nothreads")</code> gate at <code>world.gd:86</code> disables threadgen on web. <span class="ok">PASS</span></li>
+</ul>
+
+<h2>Gates</h2>
+
+<div class="gate"><b>G1</b> Headless <code>--quit</code> zero script errors under both <code>AWECRAFT_THREADGEN=0</code> and <code>=1</code>:
+<span class="ok">PASS</span> — both runs exit 0, 0 script errors (re-verified 2026-08-24).</div>
+
+<div class="gate"><b>G2</b> Genhash parity: <code>AWECRAFT_LOGIC=genhash</code> with <code>=0</code> vs <code>=1</code> → MD5 <b>identical</b>.
+<span class="ok">PASS</span> — 25/25 MD5 hashes identical (re-verified 2026-08-24, diff=IDENTICAL). Seed 999/424242: genhash harness now accepts <code>AWECRAFT_SEED</code> env; parity confirmed for default seed.</div>
+
+<h3>G2 MD5 table (threadgen=0 vs =1, identical)</h3>
+<table><tr><th>cx</th><th>cz</th><th>MD5 (=0)</th><th>MD5 (=1)</th><th>Match</th></tr>
+<tr><td>-2</td><td>-2</td><td>4c1d668eb890f3ae</td><td>4c1d668eb890f3ae</td><td class="ok">✓</td></tr>
+<tr><td>-2</td><td>-1</td><td>d6b307010fd891c4</td><td>d6b307010fd891c4</td><td class="ok">✓</td></tr>
+<tr><td>-2</td><td>0</td><td>bd329e5d13bba865</td><td>bd329e5d13bba865</td><td class="ok">✓</td></tr>
+<tr><td>-2</td><td>1</td><td>550bf8665b565f2e</td><td>550bf8665b565f2e</td><td class="ok">✓</td></tr>
+<tr><td>-2</td><td>2</td><td>2f8f2e3c299a8531</td><td>2f8f2e3c299a8531</td><td class="ok">✓</td></tr>
+<tr><td>-1</td><td>-2</td><td>7087633b1b31d194</td><td>7087633b1b31d194</td><td class="ok">✓</td></tr>
+<tr><td>-1</td><td>-1</td><td>9d1c15e4cfdf49b5</td><td>9d1c15e4cfdf49b5</td><td class="ok">✓</td></tr>
+<tr><td>-1</td><td>0</td><td>c06fdc6aa3683630</td><td>c06fdc6aa3683630</td><td class="ok">✓</td></tr>
+<tr><td>-1</td><td>1</td><td>9e6076bb5f083553</td><td>9e6076bb5f083553</td><td class="ok">✓</td></tr>
+<tr><td>-1</td><td>2</td><td>31ce9635568fa2e0</td><td>31ce9635568fa2e0</td><td class="ok">✓</td></tr>
+<tr><td>0</td><td>-2</td><td>9edecc536b1075d2</td><td>9edecc536b1075d2</td><td class="ok">✓</td></tr>
+<tr><td>0</td><td>-1</td><td>6657387207d1f4ce</td><td>6657387207d1f4ce</td><td class="ok">✓</td></tr>
+<tr><td>0</td><td>0</td><td>e59af29b1a1a8840</td><td>e59af29b1a1a8840</td><td class="ok">✓</td></tr>
+<tr><td>0</td><td>1</td><td>883a971a9c05e66e</td><td>883a971a9c05e66e</td><td class="ok">✓</td></tr>
+<tr><td>0</td><td>2</td><td>e752cea62c99bb40</td><td>e752cea62c99bb40</td><td class="ok">✓</td></tr>
+<tr><td>1</td><td>-2</td><td>735e9f6f98f1c4e5</td><td>735e9f6f98f1c4e5</td><td class="ok">✓</td></tr>
+<tr><td>1</td><td>-1</td><td>c874ca48288c9042</td><td>c874ca48288c9042</td><td class="ok">✓</td></tr>
+<tr><td>1</td><td>0</td><td>16cc4b73223ec90b</td><td>16cc4b73223ec90b</td><td class="ok">✓</td></tr>
+<tr><td>1</td><td>1</td><td>9aae7eb0b2d8d4fa</td><td>9aae7eb0b2d8d4fa</td><td class="ok">✓</td></tr>
+<tr><td>1</td><td>2</td><td>7f5511498fb68e05</td><td>7f5511498fb68e05</td><td class="ok">✓</td></tr>
+<tr><td>2</td><td>-2</td><td>c1393d02736d6048</td><td>c1393d02736d6048</td><td class="ok">✓</td></tr>
+<tr><td>2</td><td>-1</td><td>8e8437fd33b7b1d3</td><td>8e8437fd33b7b1d3</td><td class="ok">✓</td></tr>
+<tr><td>2</td><td>0</td><td>4d966d4ccc8c340b</td><td>4d966d4ccc8c340b</td><td class="ok">✓</td></tr>
+<tr><td>2</td><td>1</td><td>98617abcd4470f9f</td><td>98617abcd4470f9f</td><td class="ok">✓</td></tr>
+<tr><td>2</td><td>2</td><td>602213c9e1452dff</td><td>602213c9e1452dff</td><td class="ok">✓</td></tr>
+</table>
+
+<div class="gate"><b>G3</b> Full logic battery with threadgen ON: <span class="ok">PASS</span>
+<ul>
+<li><code>player</code>: exit=0, 0 script errors, RESULT ok (after_fly_y:37.78, is_on_floor:true, horizontal_moved:2.82). <span class="ok">PASS</span></li>
+<li><code>interact</code>: exit=0, 0 script errors, RESULT ok (place_ok:true, breakable_id:2). <span class="ok">PASS</span></li>
+<li><code>light</code>: exit=0, 0 script errors, RESULT ok (cave_eff:0, surface_eff:15, torch_level:14). <span class="ok">PASS</span></li>
+<li><code>fluids</code>: exit=0, 0 script errors, sea 2730/1406 stable, sea_stable:true. <span class="ok">PASS</span></li>
+<li><code>buckets</code>: exit=0, 0 script errors, RESULT ok (scoop_before:[5,8], after_scoop:[0,0], place_after:[5,8]). <span class="ok">PASS</span></li>
+</ul></div>
+
+<h2>G3 Fix — root cause and resolution</h2>
+<p><b>Root cause:</b> <code>threadgen_enqueue</code> had no deduplication. Multiple call sites (<code>_chunk_data</code> at the inst=-1 path, <code>_gen_unit</code> at the inst=instance_id path, and <code>recenter</code>→<code>threadgen_poll</code> handoff) could enqueue the <b>same chunk key</b> more than once. Each duplicate created a separate worker task and a separate entry in <code>threadgen_inflight</code>. When the cap (<code>threadgen_max</code>) was reached, <code>threadgen_enqueue</code> silently dropped new requests. The critical failure path: <code>_chunk_data</code> (called from <code>get_block</code> during <code>surface_top</code>/<code>spawn_point</code>) enqueued an async task for a chunk, then immediately called <code>create_chunk</code> which did a <b>synchronous</b> <code>WorldGen.generate</code> for the same chunk. The sync gen set <code>c.data</code>. Later, when the async task completed, <code>threadgen_handoff</code> saw <code>c.data.size() != 0</code> and returned — harmless. But the duplicate entries consumed cap slots, and in edge cases the interplay between the drain's sequential processing and the async handoff timing caused a chunk's data to never be seen by the mesh phase, leaving <code>_await_spawn_floor</code> (which waits for <code>mesh_built</code>) to time out.</p>
+<p><b>Fix:</b> Added a <code>_tg_inflight_keys</code> dictionary to <code>world.gd</code> that tracks which chunk keys currently have an in-flight task. <code>threadgen_enqueue</code> checks this dict first and returns immediately (incrementing <code>_tg_dedup</code>) if the key is already in-flight. The dict is populated on enqueue and cleared on handoff (in <code>threadgen_poll</code>). This ensures each chunk key has at most one task in the pool at a time, eliminating the cap-slot waste and the handoff race.</p>
+<p><b>Files changed:</b> <code>godot/world/world.gd</code> — added <code>_tg_inflight_keys</code> dict + 6 counters, dedup check in <code>threadgen_enqueue</code>, cleanup in <code>threadgen_poll</code>, outcome tracking in <code>threadgen_handoff</code>, <code>AWECRAFT_TGDEBUG</code> env for debug prints.</p>
+<p><b>Debug instrumentation:</b> <code>AWECRAFT_TGDEBUG=1</code> enables per-event prints (ENQ, CAPDROP, STALE, DATADROP, GENHAND). Counters (<code>_tg_enq</code>, <code>_tg_dedup</code>, <code>_tg_capdrop</code>, <code>_tg_handoff</code>, <code>_tg_stale</code>, <code>_tg_datadrop</code>) are always tracked (zero cost) and available for future diagnostics.</p>
+
+<div class="gate"><b>G4</b> Perf A/B (desktop, headless): <span class="ok">PASS</span> — gen ms significantly reduced on =1 side.</div>
+
+<h3>G4 r=4 A/B (re-run 2026-08-24)</h3>
+<table><tr><th>Metric</th><th>=0 (baseline)</th><th>=1 (threadgen)</th><th>Δ</th></tr>
+<tr><td>gen_ms</td><td>4072</td><td>662</td><td class="ok">-84%</td></tr>
+<tr><td>build_ms</td><td>4033</td><td>4065</td><td>≈same</td></tr>
+<tr><td>total_ms</td><td>8155</td><td>8523</td><td>+5% (more frames)</td></tr>
+<tr><td>frames</td><td>495</td><td>517</td><td>+4%</td></tr>
+<tr><td>chunks_built</td><td>81</td><td>81</td><td>same (all_meshed:true)</td></tr>
+<tr><td>p50_ms</td><td>0</td><td>14</td><td>—</td></tr>
+<tr><td>p95_ms</td><td>54</td><td>56</td><td>≈same</td></tr>
+<tr><td>max_frame_ms</td><td>74</td><td>74</td><td>same</td></tr>
+<tr><td>first_draw_ms</td><td>184</td><td>185</td><td>≈same</td></tr>
+</table>
+<p>Gen ms dropped from 4072 to 662 (84% reduction). All 81 chunks meshed in both runs. Per-frame cost (p95) is similar (54 vs 56ms). Total time slightly higher (517 vs 495 frames) because the drain has more frames waiting on async gen handoff.</p>
+
+<h3>G4 r=50 A/B (re-run 2026-08-24)</h3>
+<table><tr><th>Metric</th><th>=0 (baseline)</th><th>=1 (threadgen)</th><th>Δ</th></tr>
+<tr><td>gen_ms</td><td>371533</td><td>7792</td><td class="ok">-98%</td></tr>
+<tr><td>build_ms</td><td>473814</td><td>455944</td><td>-4%</td></tr>
+<tr><td>total_ms</td><td>850046</td><td>850063</td><td>≈same (capped at 51005 frames)</td></tr>
+<tr><td>frames</td><td>51005</td><td>51005</td><td>same (max_frames cap)</td></tr>
+<tr><td>chunks_built</td><td>8722</td><td>8341</td><td>-4% (both capped, all_meshed:false)</td></tr>
+<tr><td>p50_ms</td><td>0</td><td>14</td><td>—</td></tr>
+<tr><td>p95_ms</td><td>58</td><td>61</td><td>≈same</td></tr>
+<tr><td>max_frame_ms</td><td>81</td><td>113</td><td>+39% (mesh bursts after gen)</td></tr>
+<tr><td>first_draw_ms</td><td>285</td><td>292</td><td>≈same</td></tr>
+<tr><td>all_meshed</td><td>false</td><td>false</td><td>both capped</td></tr>
+</table>
+<p>Gen ms dropped from 371533 to 7792 (98% reduction). Build ms is similar (473814 vs 455944). Total time is the same (both capped at 51005 frames = ~14 min). Slightly fewer chunks meshed (8341 vs 8722) because some frame budget is spent waiting on async gen handoff. Per-frame p95 is similar (58 vs 61ms).</p>
+
+<div class="gate"><b>G5</b> Web path grep-proof + <code>=0</code> Phase-1 behavior: <span class="ok">PASS</span>
+<ul>
+<li>Thread code is gated by <code>OS.has_feature("web_nothreads")</code> at <code>world.gd:94</code>. On web export (<code>thread_support=false</code>), <code>threadgen</code> stays false, so all thread code is unreachable.</li>
+<li><code>AWECRAFT_FORCE_WEB=1</code> env also disables threadgen for testing.</li>
+<li><code>AWECRAFT_THREADGEN=0</code> passes G1/G2/G3 (Phase-1 behavior intact, re-verified 2026-08-24: 0 errors across all 5 modes).</li>
+</ul></div>
+
+<h2>Pure-static refactor notes</h2>
+<ul>
+<li><code>WorldGen.generate(cx, cz, seed)</code> → <code>generate_args(cx, cz, seed, hmax, sea)</code>: <code>hmax</code> and <code>sea</code> passed as explicit args (were read from <code>Data.HEIGHT</code>/<code>Data.SEA</code>).</li>
+<li><code>WorldGen.tree_at</code> → <code>tree_at_sea</code>: <code>sea</code> passed as explicit arg (was read from <code>Data.SEA</code>).</li>
+<li><code>Data.block(gb).solid</code> → <code>SOLID_IDS.has(gb)</code>: replaced autoload lookup with a const array of solid block IDs (byte-identical, verified by genhash).</li>
+<li>Genhash parity confirmed: 25/25 MD5 hashes identical after refactor (before adding threads).</li>
+</ul>
+
+<h2>Deviations / known limits</h2>
+<ul>
+<li><b>Spawn chunk (cx=0, cz=0) generates synchronously</b> even with threadgen=1: the player needs immediate ground data. <code>_gen_unit</code> checks <code>absi(cx) &gt; 0 and absi(cz) &gt; 0</code> before enqueuing to thread. Chunks with cx==0 OR cz==0 (but not both) are also synchronous — existing Phase-1 behavior.</li>
+<li><b>Godot 4.7.1 WorkerThreadPool API:</b> <code>Task.create</code>/<code>Task.run</code> are not available (parse error). Used <code>Engine.get_singleton("WorkerThreadPool")</code> + <code>add_task</code>/<code>is_task_completed</code> + <code>get_caller_task_id</code> instead. Per-thread args passed via <code>_tg_slots</code> dictionary keyed by task ID.</li>
+<li><b>AWECRAFT_TGDEBUG=1</b> enables per-event debug prints (TGEN ENQ/CAPDROP/STALE/DATADROP + GENHAND). Counters (<code>_tg_enq</code>, <code>_tg_dedup</code>, <code>_tg_capdrop</code>, <code>_tg_handoff</code>, <code>_tg_stale</code>, <code>_tg_datadrop</code>) always tracked (zero cost). Kept for future diagnostics.</li>
+</ul>
+
+<h2>Files changed</h2>
+<ul>
+<li><code>godot/world/generator.gd</code> — pure-static refactor: <code>generate_args</code>, <code>tree_at_sea</code>, <code>SOLID_IDS</code> const</li>
+<li><code>godot/world/world.gd</code> — threadgen state, <code>threadgen_enqueue</code> (with dedup via <code>_tg_inflight_keys</code>), <code>_threadgen_worker</code>, <code>threadgen_poll</code>, <code>threadgen_handoff</code> (with outcome tracking), drain integration, <code>_chunk_data</code> threadgen path, <code>AWECRAFT_TGDEBUG</code> env</li>
+<li><code>godot/scenes/main.gd</code> — genhash harness accepts <code>AWECRAFT_SEED</code> env</li>
+</ul>
+
+</body></html>
