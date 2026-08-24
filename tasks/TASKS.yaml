@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-24T09:28
+  updated_at: 2026-08-24T09:41
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -44,6 +44,7 @@ queue:
 - AC-0080
 - AC-0081
 - AC-0079
+- AC-0061
 - AC-0077
 - AC-0078
 - AC-0082
@@ -64,7 +65,6 @@ queue:
 - AC-0087
 - AC-0088
 - AC-0089
-- AC-0061
 - AC-0100
 - AC-0095
 - AC-0042
@@ -1626,15 +1626,23 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-21T08:49
-  updated_at: 2026-08-21T08:49
+  updated_at: 2026-08-24T09:41
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'From user 2026-08-21 (why does verify so long): (a) single-process logic battery (one Godot launch + one world,
-    all AWECRAFT_LOGIC modes sequentially, per-mode RESULT), (b) cheap UI-shot path (skip world gen / R=1 for UI-only snapshots),
-    (c) cap renders+shots per task to the minimum in specs, (d) browser gates only for web/UI-affecting changes, lower viewport,
-    one session for all gates. No rigor reduction: zero-script-errors + RESULT gates + before/after pixels stay.'
-  comments: []
+  notes: 'Tiered verify pipeline (user 2026-08-23: battery is overkill). (1) SMOKE per-task: G0 headless --quit 0 errors always
+    + only 2-4 relevant AWECRAFT_LOGIC modes + genhash 5x5 quick check for world/* changes, cheap R=1 UI path, no browser
+    unless UI/mesh. (2) FULL coordinator: single-process logic battery (one Godot launch + one recenter spawn 44, all modes
+    sequentially via AWECRAFT_ONLY, per-mode RESULT) run once before build_web.sh/build_windows.sh. (3) DEPENDENCY gate: fluids/genhash
+    only if world/*, guiclick/craft only if player/inventory, toolres/toolpose/held only if held_mesh, etc. (4) CAP renders/browser
+    to min per spec. No rigor loss: G0 + RESULT + pixels stay. See godot/scenes/main.gd AWECRAFT_LOGIC set and godot/CONTINUITY.md
+    process.'
+  comments:
+  - id: 1
+    created_at: 2026-08-24T09:41
+    updated_at: null
+    text: '[agent] Updated 2026-08-23 per user discussion: tiered pipeline = smoke (G0 + 2-4 relevant modes) + full single-process
+      coordinator + dependency gate + cap renders. Moved to front after AC-0079 for early delivery.'
 - id: AC-0062
   title: save-continue-multi-slot
   source: user
