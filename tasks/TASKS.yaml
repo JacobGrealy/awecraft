@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-23T23:13
+  updated_at: 2026-08-23T23:17
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -60,6 +60,7 @@ queue:
 - AC-0089
 - AC-0061
 - AC-0090
+- AC-0091
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -2541,4 +2542,24 @@ intake:
     with arms. Research/prototype in Three.js (web), not Godot. Deliverable: Three.js prototype page + writeup (seam-blending
     shader/tech-art approach, primitive-body generator, toon shading, procedural locomotion rig for 2/any/no-leg + fly+arms).
     Place at end of queue.'
+  comments: []
+- id: AC-0091
+  title: world-height-minecraft-Y-64-to-319
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-23T23:17
+  updated_at: 2026-08-23T23:17
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Update chunk/world height to match Minecraft: Y=-64 to Y=319 (384 total blocks height; sea level Y=62). Currently
+    16xHx16 with H~80, sea y30. Requires: world/generator.gd, world/chunk.gd data indexing (y<<8 etc), lighting sky column,
+    fluid sim, spawn/bedrock, save format, render/mesh, recenter/build queue, headless harnesses (genhash, fluids, boundary).
+    Hard gates: genhash parity at new heights, sea stable, 0 script errors. Reference index.html spec for current generation
+    then remap to new Y range.'
   comments: []
