@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-24T09:46
+  updated_at: 2026-08-24T09:56
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -7,6 +7,7 @@ queue:
 - AC-0083
 - AC-0084
 - AC-0085
+- AC-0104
 - AC-0097
 - AC-0093
 - AC-0094
@@ -2810,4 +2811,25 @@ intake:
   parent_id: null
   notes: 'SDLC 2026-08-23 (4): add tasks/HARNESS.md table (AWECRAFT_LOGIC mode -> main.gd harness, assert, env, seed/radius).
     Shrinks sub-agent prompts (point at HARNESS.md instead of grepping main.gd:441).'
+  comments: []
+- id: AC-0104
+  title: two-phase-subagent-research-then-build
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-24T09:56
+  updated_at: 2026-08-24T09:56
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Implement two-phase sub-agent workflow (DSH, local LLM, no parallel): Run 1 (xhigh, no Godot, read-only) researches
+    task -> writes tasks/AC-NNNN/plan.html (self-contained: files, index.html r12 constants, Data.* ids, verify gates with
+    expected RESULT shapes, snapshot names). Coordinator reviews plan.html then queues Run 2. Run 2 (medium, one Godot) implements
+    plan -> G0 + smoke subset (AC-0061 tiered) + <=1 R=1 render if needed + results.html. Add trivial label bypass (skip Run
+    1, straight to medium builder with spec.html). Update coordinator launch templates + HARNESS.md refs. No Godot in Run
+    1.'
   comments: []
