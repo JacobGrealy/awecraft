@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-24T10:25
+  updated_at: 2026-08-24T10:51
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -12,6 +12,11 @@ queue:
 - AC-0102
 - AC-0104
 - AC-0105
+- AC-0106
+- AC-0107
+- AC-0108
+- AC-0109
+- AC-0110
 - AC-0097
 - AC-0093
 - AC-0094
@@ -2904,4 +2909,134 @@ intake:
     coordinator templates (prompt strings) + example plan.html for one pilot task.
 
     '
+  comments: []
+- id: AC-0106
+  title: greedy-meshing-opaque-faces
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-24T10:51
+  updated_at: 2026-08-24T10:51
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Merge co-planar adjacent opaque faces into larger quads before emit to cut verts ~60-80%.
+
+    Scope: godot/world/chunk.gd _emit_faces path for ro (solid opaque). Group by fi + face light + block tint? Evaluate per-tier
+    trade: full greedy vs per-y-row strip merge.
+
+    Keep stab cull, keep xtab/ktab exempt. No change to fluid/flora paths.
+
+    Verify: G0 zero script errors; genhash 25/25 byte-identical (terrain unchanged); mesh_info verts drop; battery player/interact/light/fluids/buckets
+    green; optional R=1 render vs baseline.
+
+    Depends: none. Blocks: sub-chunk chunk split benefits more if done after, but independent.
+
+    Refs: chunk.gd:138 _faces, 225 _emit_faces, 568 Acc handling.'
+  comments: []
+- id: AC-0107
+  title: threaded-mesh-light-build-phase3-desktop
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-24T10:51
+  updated_at: 2026-08-24T10:51
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Move chunk mesh+light build off main thread (after AC-0082 data-gen). WorkerThreadPool returns Acc buffers; main
+    thread only creates ArrayMesh+StaticBody.
+
+    Desktop-gated (!OS.has_feature("web_nothreads"), same gate as AC-0082 world.gd:98). Adapt _build_unit + Lighting.compute_light_flat
+    + _build_snap/_emit_* to be pure-static (no Game autoload) with fresh-array handoff like AC-0082.
+
+    Verify: G1 0; G2 genhash identical; G3 battery green threaded; G4 A/B build_ms improvement; web_nothreads branch unchanged.
+
+    Depends: AC-0082 done (data-gen threaded).'
+  comments: []
+- id: AC-0108
+  title: vertical-subchunks-16x16x16
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-24T10:51
+  updated_at: 2026-08-24T10:51
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Split 16x80x16 column chunk into 5x 16x16x16 subchunks (y 0-15,16-31,32-47,48-63,64-79).
+
+    Each subchunk owns its own MeshInstance3D + ConcavePolygonShape3D; data/fl layout stays column for edit compat but build_mesh/col
+    rebuild per-slab.
+
+    Benefit: finer distance/frustum/greedy culling, faster col rebuilds on edits. Memory: candidate handling per-slab.
+
+    Verify: R=50 memory drop, edits{}_apply_edits_to_chunk per slab, r=4 walk p95, G0/G1 gates.
+
+    Depends: none, but benefits greedy + frustum.'
+  comments: []
+- id: AC-0109
+  title: frustum-culling-chunks
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-24T10:51
+  updated_at: 2026-08-24T10:51
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Per-frame Camera3D frustum cull for chunk/subchunk mesh_instances.
+
+    In world.gd _process or _recenter, test chunk AABB vs camera frustum; set mesh_instance/fluid/flora visible=false when
+    outside frustum (keep data/mesh resident unlike distance candidate).
+
+    Keep radial candidate logic; frustum is additional immediate cull.
+
+    Verify: 360 spin no pop, queue_size stable, GPU verts visible drop when looking down, battery green.
+
+    Depends: vertical-subchunks if implemented (per-slab AABB better), otherwise column AABB.'
+  comments: []
+- id: AC-0110
+  title: occlusion-culling-caves-interior
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-24T10:51
+  updated_at: 2026-08-24T10:51
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Occlusion for underground caves / interior faces.
+
+    Stage A: enable VisualServer occlusion culling (OccluderInstance3D boxes for render_radius shell, ProjectSettings camera
+    occlusion).
+
+    Stage B: software interior-face flood-fill skip: voxels fully surrounded by 6 solid neighbours (stab) skip entirely (occluded
+    interior) — cheap pre-pass before _faces.
+
+    Measure: r=4 underground verts, cave AABB.
+
+    Verify: indoors not leaking faces, genhash unchanged, battery green.
+
+    Depends: greedy-meshing (order matters: do greedy after interior skip or within).'
   comments: []
