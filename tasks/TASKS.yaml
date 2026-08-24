@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-24T05:38
+  updated_at: 2026-08-24T09:28
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -65,6 +65,7 @@ queue:
 - AC-0088
 - AC-0089
 - AC-0061
+- AC-0100
 - AC-0095
 - AC-0042
 - AC-0090
@@ -2728,4 +2729,22 @@ intake:
   parent_id: null
   notes: 'Main menu: add Exit button that closes the game (Windows native: get_tree().quit(); web: no-op or close tab if allowed).
     Place in main menu button column alongside Play/Options. Verify desktop quit + web no-error.'
+  comments: []
+- id: AC-0100
+  title: build-scripts-datetime-release-names
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-24T09:28
+  updated_at: 2026-08-24T09:28
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Build scripts (build_web.sh, build_windows.sh) should stamp release file names with datetime code (e.g. AweCraft-20260823-2359).
+    Windows: exports/windows/AweCraft-YYYYMMDD-HHMM.exe (+ debug). Web: web/ or zip. Keep un-stamped latest symlink/copy for
+    LAN serve.'
   comments: []
