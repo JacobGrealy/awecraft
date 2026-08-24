@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-23T23:32
+  updated_at: 2026-08-23T23:41
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -47,6 +47,7 @@ queue:
 - AC-0035
 - AC-0092
 - AC-0096
+- AC-0097
 - AC-0036
 - AC-0037
 - AC-0038
@@ -2668,3 +2669,25 @@ intake:
     updated_at: null
     text: '[agent] Hotfixed 2026-08-23: PAGE_JS now sends URLSearchParams instead of raw FormData + webui.py adds multipart
       fallback parser. Comment add verified.'
+- id: AC-0097
+  title: held-item-still-occluded-not-on-top-regression
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-23T23:41
+  updated_at: 2026-08-23T23:41
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'BUG (regression of AC-0067 viewmodel-always-on-top, user 2026-08-23: not fixed): held item/hand/held block is still
+    occluded by environment blocks instead of always rendering on top (MC-style). AC-0067 was marked done 2026-08-22 with
+    depth-disabled viewmodel (held_box override, held_sprite.no_depth_test, _voxel_mat, HeldMeshes._base_mat) and harness
+    depth{block,cross,fist,sprite,tool} passing, but user reports it never worked in web+windows builds. Re-investigate: verify
+    godot/player/player.gd viewmodel nodes (held_box, held_sprite, held_fist, voxel tools via core/held_mesh.gd) actually
+    have no_depth_test / depth-disabled material in exported builds (web vs desktop) and that gl_compatibility renderer respects
+    it. Fix + render A/B (face-against-wall before/after) + browser gate.'
+  comments: []
