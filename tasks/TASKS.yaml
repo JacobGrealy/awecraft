@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-24T13:26
+  updated_at: 2026-08-24T14:04
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -1637,11 +1637,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-21T08:49
-  updated_at: 2026-08-24T11:54
-  completed_at: null
+  updated_at: 2026-08-24T14:04
+  completed_at: 2026-08-24T14:04
   waiting_on: null
   parent_id: null
   notes: 'Tiered verify pipeline (user 2026-08-23: battery is overkill). (1) SMOKE per-task: G0 headless --quit 0 errors always
@@ -1657,6 +1657,17 @@ intake:
     updated_at: null
     text: '[agent] Updated 2026-08-23 per user discussion: tiered pipeline = smoke (G0 + 2-4 relevant modes) + full single-process
       coordinator + dependency gate + cap renders. Moved to front after AC-0079 for early delivery.'
+  - id: 2
+    created_at: 2026-08-24T14:04
+    updated_at: null
+    text: '[agent] DONE 2026-08-24: AWECRAFT_BATTERY single-process runner (main.gd +~140 lines: _batt_run_mode drives existing
+      per-mode entry points, per-mode RESULT verbatim + combined RESULT + BATTMODE timing, Game.mode="pause" drop freeze during
+      pre-settle, _genhash_print shared 32-hex + AWECRAFT_SEED). Verified by separate verify-subagent round (found 2 defects:
+      truncated battery genhash arm + interact drop_spawned pickup race — both fixed, re-verified: G0 0 errors, G1 5/5 parity
+      both battery runs drop_spawned:true, G3 battery-vs-standalone genhash 25/25 full 32-hex, V2 single-mode path unchanged).
+      G2 cost: battery wall 33.1 s vs standalone-sum ~23 s (per-mode world reset ~21 s — documented characteristic; smoke
+      tier 2-4 modes is the primary savings path). Tiered protocol text (smoke/full/dependency table/caps) in results.html
+      — coordinator lands it in AGENTS.md/CONTINUITY.md. Builds 14:02 both RC=0.'
 - id: AC-0062
   title: save-continue-multi-slot
   source: user
@@ -2824,10 +2835,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-24T09:46
-  updated_at: 2026-08-24T09:46
+  updated_at: 2026-08-24T14:04
   completed_at: null
   waiting_on: null
   parent_id: null

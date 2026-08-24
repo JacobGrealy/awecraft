@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0103 — tasks/HARNESS.md mode table</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+.report{background:#fff8e6;border:1px solid #e0c56d;border-radius:8px;padding:12px 14px}
+.gate{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+</style></head><body>
+<h1>AC-0103 — tasks/HARNESS.md: AWECRAFT_LOGIC mode table (SDLC 2026-08-23 item 4)</h1>
+<p><b>Status:</b> open (priority 1, queue position 2) · <b>Source:</b> user SDLC batch · <b>Type:</b> documentation task —
+<b>NO code changes</b>. Purpose: a single reference table so future subagent prompts can say "read tasks/HARNESS.md" instead of
+grepping main.gd (e.g. main.gd:441) for mode names, RESULT shapes, envs and timings.</p>
+
+<div class="report"><b>Deliverable:</b> <code>tasks/HARNESS.md</code> — markdown, one section per topic:
+(1) the MODE TABLE (main deliverable), (2) render/shot env hooks, (3) battery + known-stable values, (4) run recipes (the exact
+sandboxed command line per mode class). Written from the code as it is NOW (post-AC-0082/0085/0079/0061) — line refs may drift,
+mode names + RESULT fields + envs are the stable contract.</div>
+
+<h2>MODE TABLE (one row per <code>AWECRAFT_LOGIC</code> mode)</h2>
+<p>Enumerate <b>every</b> <code>logic == "..."</code> branch in <code>godot/scenes/main.gd</code> (grep is the starting point; verify
+each against its harness function). Columns:</p>
+<table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse;font-size:13px">
+<tr><th>mode</th><th>harness entry (func name)</th><th>what it tests (1 line)</th><th>key RESULT fields</th><th>envs</th><th>typical wall</th><th>notes</th></tr>
+<tr><td colspan="7">(example rows the subagent must verify/replace: player, interact, light, fluids, buckets, genhash, swing, toolpose, toolres, held, viewmodel, boundary, perf, dropshot, crossshot, …)</td></tr>
+</table>
+<ul>
+<li><b>envs column:</b> everything the mode honors: <code>AWECRAFT_RADIUS</code>, <code>AWECRAFT_SEED</code>, <code>AWECRAFT_TIME</code>,
+<code>AWECRAFT_WALK</code>/<code>AWECRAFT_WALK_SPEED</code>, <code>AWECRAFT_THREADGEN</code>/<code>AWECRAFT_THREADGEN_N</code>/<code>AWECRAFT_TGDEBUG</code>,
+<code>AWECRAFT_RECPROBE</code>, <code>AWECRAFT_DRAIN_MS</code>, <code>AWECRAFT_GEN_BUDGET</code>, <code>AWECRAFT_VMITEM</code>/<code>AWECRAFT_VMSHOT</code>/<code>AWECRAFT_VMFRACTION</code>,
+<code>AWECRAFT_ONLY</code> (chunk-visibility filter — NOT the battery), …</li>
+<li><b>typical wall:</b> measured by the subagent (run it; headless; one run each, record ms with the date); mark slow modes (boundary r=50, perf r=50) and their required bash timeouts.</li>
+</ul>
+
+<h2>Other sections</h2>
+<ul>
+<li><b>Render/shot hooks:</b> <code>AWECRAFT_SNAPSHOT</code>/<code>AWECRAFT_SNAPSHOT2</code>, <code>AWECRAFT_CAM</code> (top/iso/iso2/sky/eyeup/…),
+<code>AWECRAFT_SIZE</code>, <code>AWECRAFT_MENU_SHOT</code>, <code>AWECRAFT_FLUID_SHOT</code>, <code>AWECRAFT_ANIM_SHOT</code>/<code>AWECRAFT_ANIM_PHASE</code> — one row each: what it does, required flags (xvfb-run + gl_compatibility), typical timeout.</li>
+<li><b>Battery + known-stable values:</b> <code>AWECRAFT_BATTERY=a;b;c</code> semantics (single process, per-mode RESULT + combined RESULT,
+<code>BATTMODE</code> timing prints, genhash parity); the known-stable gate values (fluids sea_surface 2730 / sea_backed 1406 / sea_stable true,
+reactions 25/9; genhash 25/25; interact drop_spawned/place_ok true; light torch_level 14; boundary r4 walk p95 ~64/max ~100,
+in_radius_built_max 67 post-AC-0079) with the task that established each.</li>
+<li><b>Run recipes:</b> the exact sandboxed one-liners (HOME=/tmp/dsh_home trick, one godot at a time, timeout values) for: G0 quit,
+single mode, smoke battery, full battery, render.</li>
+</ul>
+
+<h2>Verification gates (hard)</h2>
+<div class="gate"><b>G0</b> Headless <code>--quit</code> 0 script errors (documentation task — code must be untouched: <code>git status</code>
+shows only <code>tasks/HARNESS.md</code> new/changed).</div>
+<div class="gate"><b>G1</b> <b>Coverage:</b> the table lists ≥ 95% of the <code>logic == "..."</code> branches found by grep in main.gd (report the
+grep count vs table row count; any deliberately excluded branch — e.g. debug-only — is listed in a "not in table" note with the reason).</div>
+<div class="gate"><b>G2</b> <b>Accuracy spot-check:</b> 5 rows (chosen by the subagent, must include fluids + genhash + one slow mode) —
+re-run each mode headless and confirm the RESULT fields listed in the table actually appear in the output (and the envs listed are
+the ones that change behavior — test at least 2 env effects, e.g. AWECRAFT_RADIUS on boundary, AWECRAFT_SEED on genhash).</div>
+<div class="gate"><b>G3</b> Known-stable values section matches a FRESH run of fluids + interact + light (not copied from memory).</div>
+<div class="gate"><b>G4</b> Builds: N/A (docs only) — coordinator skips.</div>
+
+<h2>Fences</h2>
+<ul>
+<li>Changes: <code>tasks/HARNESS.md</code> ONLY (+ results file <code>tasks/AC-0103/AC-0103-results.html</code>). <b>No code changes.</b>
+No git. No coordination files. No python kills. No renders needed.</li>
+<li><b>Sandbox env:</b> every godot call in ONE bash command: <code>export HOME=/tmp/dsh_home; mkdir -p $HOME; ~/tools/godot/godot ...</code>;
+godot one at a time; scratch → .scratch/.</li>
+<li>Deliverable <code>tasks/AC-0103/AC-0103-results.html</code>: self-contained — coverage count, spot-check evidence (actual RESULT lines),
+wall-time table date, deviations.</li>
+</ul>
+</body></html>

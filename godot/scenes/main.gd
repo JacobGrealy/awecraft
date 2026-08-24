@@ -19,6 +19,7 @@ var env: Environment
 var inventory_ui: CanvasLayer
 var menu_ui: CanvasLayer
 var aero := false
+var _batt := false
 var aero_sky: MeshInstance3D
 var aero_sky_mat: ShaderMaterial
 var aero_wash: MeshInstance3D
@@ -86,6 +87,10 @@ func _ready() -> void:
 		return
 
 	var menu_boot := OS.get_environment("AWECRAFT_MENU_BOOT") == "1"
+	var battery_env := OS.get_environment("AWECRAFT_BATTERY")
+	if battery_env != "":
+		await _run_battery(seed_env, battery_env)
+		return
 	if logic != "":
 		await _run_game(seed_env, logic, cam, snapshot_path)
 		return
@@ -107,6 +112,134 @@ func _ready() -> void:
 				await _snapshot_finish(cam)
 	elif not headless_idle:
 		await _run_game(seed_env, logic, cam, snapshot_path)
+
+
+const _BATT_RESET_WASD := ["move_forward", "move_back", "move_left", "move_right"]
+
+
+var _batt_drop_freeze := false
+
+
+func _batt_reset_state(spawn: Vector3) -> void:
+	_batt_drop_freeze = true
+	Game.mode = "pause"
+	var old_player: Node = Game.player
+	Game.player = null
+	if old_player != null:
+		old_player.free()
+	for e in world.chunks.values():
+		e.data.fill(0)
+		e.fl.fill(0)
+	for ch in Game.drops.get_children():
+		ch.free()
+	world.light_dirty.clear()
+	world.light_pending.clear()
+	world.light_pending_set.clear()
+	world.fluid_dirty.clear()
+	world.tex_refresh.clear()
+	world.fluid_sim_enabled = false
+	world.render_radius = 4
+	for a in _BATT_RESET_WASD:
+		if Input.is_action_pressed(a):
+			Input.action_release(a)
+	Game.time_of_day = 0.3
+	world.recenter(spawn.x, spawn.z, true)
+	await _await_world_build(spawn, 3000)
+
+
+func _genhash_print(seed_env: String) -> void:
+	if seed_env != "":
+		Game.world_seed = seed_env.to_int()
+	var t0 := Time.get_ticks_msec()
+	for cx in range(-2, 3):
+		for cz in range(-2, 3):
+			var d := WorldGen.generate(cx, cz, Game.world_seed)
+			var h := HashingContext.new()
+			h.start(HashingContext.HASH_MD5)
+			h.update(d)
+			var md5: PackedByteArray = h.finish()
+			var hx := ""
+			for i in range(16):
+				hx += "%02x" % md5[i]
+			print("GENHASH ", cx, " ", cz, " ", hx)
+	print("GENMS ", Time.get_ticks_msec() - t0)
+
+
+func _batt_run_mode(mode: String, spawn: Vector3, seed_env: String) -> void:
+	if mode == "settings":
+		_settings_test()
+		return
+	_create_game_nodes()
+	var sp: Vector3 = world.spawn_point()
+	world.fluid_sim_enabled = false
+	match mode:
+		"player":
+			world.recenter(spawn.x, spawn.z, true)
+			await _await_spawn_floor(spawn, 300)
+			player = _spawn_player()
+			await _player_logic_test_body()
+		"interact":
+			world.recenter(spawn.x, spawn.z, true)
+			player = _spawn_player()
+			await _interact_test_body()
+		"light":
+			world.collision_enabled = false
+			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
+			_light_test(spawn)
+		"fluids":
+			world.collision_enabled = false
+			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
+			_fluids_test(spawn)
+		"buckets":
+			world.collision_enabled = false
+			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
+			player = _spawn_player()
+			await _buckets_test_body()
+		"genhash":
+			_genhash_print(seed_env)
+		_:
+			print("BATTSKIP ", mode)
+	if sp != spawn:
+		print("BATTWARN spawn_moved ", mode)
+	Game.time_of_day = 0.3
+
+
+func _run_battery(seed_env: String, battery_env: String) -> void:
+	_batt = true
+	OS.set_environment("AWECRAFT_IGNORE_SETTINGS", "1")
+	Settings.load_settings()
+	OS.set_environment("AWECRAFT_IGNORE_SETTINGS", "")
+	var modes: Array = []
+	for m in battery_env.split(";"):
+		if m != "":
+			modes.append(m)
+	var t_start := Time.get_ticks_msec()
+	var summary: Dictionary = {}
+	var ok_all := true
+	for mode in modes:
+		var t0 := Time.get_ticks_msec()
+		Game.new_world(44 if seed_env == "" else seed_env.to_int())
+		_create_game_nodes()
+		var spawn: Vector3 = world.spawn_point()
+		await _batt_run_mode(mode, spawn, seed_env)
+		print("BATTMODE %s ms=%d" % [mode, Time.get_ticks_msec() - t0])
+		var rf := FileAccess.open("user://debug_result.json", FileAccess.READ)
+		var parsed: Dictionary = {}
+		if rf != null:
+			var rd: Variant = JSON.parse_string(rf.get_as_text())
+			if typeof(rd) == TYPE_DICTIONARY:
+				parsed = rd
+			rf.close()
+		parsed["ms"] = Time.get_ticks_msec() - t0
+		summary[mode] = parsed
+		if mode != "genhash" and not parsed.get("ok", true):
+			ok_all = false
+		if mode != modes[modes.size() - 1]:
+			await _batt_reset_state(spawn)
+		_batt_drop_freeze = false
+		Game.mode = "play"
+	Debug.result({"battery": summary, "ok": ok_all, "total_ms": Time.get_ticks_msec() - t_start})
+	get_tree().quit()
 
 
 func _create_game_nodes() -> void:
@@ -142,7 +275,7 @@ const HARNESS_ENVS := [
 	"AWECRAFT_HELD", "AWECRAFT_WALK_SHOT", "AWECRAFT_EMPTYHAND", "AWECRAFT_SWING", "AWECRAFT_FPV_ITEM",
 	"AWECRAFT_ANIM_SHOT", "AWECRAFT_PROBE", "AWECRAFT_BCELL", "AWECRAFT_MESH_INFO", "AWECRAFT_ONLY",
 	"AWECRAFT_DBG", "AWECRAFT_SETTLE_TICKS", "AWECRAFT_SEED", "AWECRAFT_TIME", "AWECRAFT_ANIM_PHASE",
-	"AWECRAFT_SIZE", "AWECRAFT_HP", "AWECRAFT_HUNGER",
+	"AWECRAFT_SIZE", "AWECRAFT_HP", "AWECRAFT_HUNGER", "AWECRAFT_BATTERY",
 ]
 
 
@@ -794,21 +927,7 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			await _atlas_test(spawn)
 			return
 		if logic == "genhash":
-			if seed_env != "":
-				Game.world_seed = seed_env.to_int()
-			var t0 := Time.get_ticks_msec()
-			for cx in range(-2, 3):
-				for cz in range(-2, 3):
-					var d := WorldGen.generate(cx, cz, Game.world_seed)
-					var h := HashingContext.new()
-					h.start(HashingContext.HASH_MD5)
-					h.update(d)
-					var md5: PackedByteArray = h.finish()
-					var hx := ""
-					for i in range(8):
-						hx += "%02x" % md5[i]
-					print("GENHASH ", cx, " ", cz, " ", hx)
-			print("GENMS ", Time.get_ticks_msec() - t0)
+			_genhash_print(seed_env)
 			get_tree().quit()
 			return
 		if logic == "trees":
@@ -1355,6 +1474,11 @@ func _sky_readout(t: float, apply: bool) -> Dictionary:
 
 
 func _player_logic_test() -> void:
+	await _player_logic_test_body()
+	get_tree().quit()
+
+
+func _player_logic_test_body() -> void:
 	var p = Game.player
 	for i in 10:
 		await get_tree().physics_frame
@@ -1407,7 +1531,6 @@ func _player_logic_test() -> void:
 		"time_before": time_before,
 		"time_after": time_after,
 	})
-	get_tree().quit()
 
 
 func _look_test() -> void:
@@ -1490,13 +1613,19 @@ func _look_test() -> void:
 
 
 func _interact_test() -> void:
+	await _interact_test_body()
+	get_tree().quit()
+
+
+func _interact_test_body() -> void:
 	var p = Game.player
+	if _batt_drop_freeze:
+		Game.mode = "play"
 	for i in 5:
 		await get_tree().physics_frame
 	var aim := _find_aim_spot()
 	if aim.is_empty():
 		Debug.result({"error": "no breakable aim spot near spawn"})
-		get_tree().quit()
 		return
 	var target: Vector3i = aim["cell"]
 	var tid: int = int(aim["id"])
@@ -1557,7 +1686,6 @@ func _interact_test() -> void:
 		"after_place_cell": after_place,
 		"place_ok": after_place == tid,
 	})
-	get_tree().quit()
 
 
 func _dropshot_test(spawn: Vector3, path: String) -> void:
@@ -3503,6 +3631,11 @@ func _fluids_test(spawn: Vector3) -> void:
 
 
 func _buckets_test() -> void:
+	await _buckets_test_body()
+	get_tree().quit()
+
+
+func _buckets_test_body() -> void:
 	var p = Game.player
 	for i in 10:
 		await get_tree().physics_frame
@@ -3553,7 +3686,6 @@ func _buckets_test() -> void:
 		"place_after": place_after,
 		"inv_place": inv_place,
 	})
-	get_tree().quit()
 
 
 func _water_test(spawn: Vector3) -> void:
