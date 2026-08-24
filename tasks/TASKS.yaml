@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-23T23:41
+  updated_at: 2026-08-23T23:51
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -10,6 +10,7 @@ queue:
 - AC-0097
 - AC-0093
 - AC-0094
+- AC-0098
 - AC-0058
 - AC-0056
 - AC-0059
@@ -2690,4 +2691,23 @@ intake:
     godot/player/player.gd viewmodel nodes (held_box, held_sprite, held_fist, voxel tools via core/held_mesh.gd) actually
     have no_depth_test / depth-disabled material in exported builds (web vs desktop) and that gl_compatibility renderer respects
     it. Fix + render A/B (face-against-wall before/after) + browser gate.'
+  comments: []
+- id: AC-0098
+  title: voxel-tool-shading-variation
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-23T23:51
+  updated_at: 2026-08-23T23:51
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: Held voxel tools (pickaxe/axe/shovel/sword from AC-0051/0070/0073) lack color/shading variation vs Minecraft 2D icons
+    — they read as flat single-tint voxels. Add per-voxel shading/more color variations matching the Faithful item icons (multiple
+    wood/metal tones, highlight/shadow voxels, edge detail) so voxels match icon palette, not just Data.item_tint head vs
+    wood handle. Keep TOOL_GRIDS 32x32, tip tint logic, swing/pose/on-top intact. Verify held renders vs icons.
   comments: []
