@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-24T09:41
+  updated_at: 2026-08-24T09:46
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -45,6 +45,9 @@ queue:
 - AC-0081
 - AC-0079
 - AC-0061
+- AC-0101
+- AC-0102
+- AC-0103
 - AC-0077
 - AC-0078
 - AC-0082
@@ -2755,4 +2758,56 @@ intake:
   notes: 'Build scripts (build_web.sh, build_windows.sh) should stamp release file names with datetime code (e.g. AweCraft-20260823-2359).
     Windows: exports/windows/AweCraft-YYYYMMDD-HHMM.exe (+ debug). Web: web/ or zip. Keep un-stamped latest symlink/copy for
     LAN serve.'
+  comments: []
+- id: AC-0101
+  title: build-cache-incremental-exports
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-24T09:46
+  updated_at: 2026-08-24T09:46
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'SDLC 2026-08-23 (2): incremental build_web.sh/build_windows.sh. Hash res:// + export_presets.cfg; skip full re-export
+    if only tasks/docs changed (keep daemon 8443/8080 alive, reuse web/ + exports/windows/ PCK/wasm, still log BUILD.txt).
+    Gate: git diff --name-only check + cache .godot/.'
+  comments: []
+- id: AC-0102
+  title: spec-template-generator
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-24T09:46
+  updated_at: 2026-08-24T09:46
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'SDLC 2026-08-23 (3): tasks/scripts/spec_template.py to auto-fill tasks/AC-NNNN/spec.html (index.html r12 refs, Data.*
+    constants, verify gates, RESULT shapes) from TASKS.yaml entry. Cuts coordinator context before sub-agent launch.'
+  comments: []
+- id: AC-0103
+  title: harness-md-table
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-24T09:46
+  updated_at: 2026-08-24T09:46
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'SDLC 2026-08-23 (4): add tasks/HARNESS.md table (AWECRAFT_LOGIC mode -> main.gd harness, assert, env, seed/radius).
+    Shrinks sub-agent prompts (point at HARNESS.md instead of grepping main.gd:441).'
   comments: []
