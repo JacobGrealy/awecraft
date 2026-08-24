@@ -7,6 +7,7 @@ queue:
 - AC-0083
 - AC-0084
 - AC-0085
+- AC-0061
 - AC-0104
 - AC-0105
 - AC-0097
@@ -46,7 +47,6 @@ queue:
 - AC-0080
 - AC-0081
 - AC-0079
-- AC-0061
 - AC-0101
 - AC-0102
 - AC-0103
@@ -2875,12 +2875,32 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-24T10:17
-  updated_at: 2026-08-24T10:17
+  updated_at: 2026-08-24T10:28
   completed_at: null
   waiting_on: null
   parent_id: null
   notes: 'Implement two-phase workflow templates for DSH (local LLM, no parallel) after plugin lands: Run 1 xhigh read-only
     researches -> writes tasks/AC-NNNN/plan.html (files, index.html r12, Data.* ids, expected RESULT shapes from godot/scenes/main.gd:441).
     Coordinator gates plan.html then Run 2 medium builder (one Godot G0 + smoke AC-0061 + <=1 R=1 render). Add trivial label
-    bypass (skip Run 1). Update coordinator prompts to point at HARNESS.md + plan.html.'
+    bypass (skip Run 1). Update coordinator prompts to point at HARNESS.md + plan.html.
+
+
+    Additions 2026-08-23 (user approved):
+
+    - plan.html schema (required sections): 1) Goal (1 sentence), 2) Files to touch (godot/ paths), 3) Frozen spec refs (index.html
+    r12 build + exact constants: sea/HEIGHT/biome thresholds), 4) Data.* ids (block/item ids, TOOL_GRIDS), 5) Harness gates
+    (AWECRAFT_LOGIC modes from godot/scenes/main.gd:441 with expected RESULT JSON shape + ok:true condition), 6) Snapshot/render
+    names (AWECRAFT_SNAPSHOT + CAM), 7) Risks/edge cases.
+
+    - Coordinator prompt diff: sub-agent Run1 prompt points at ARCHITECTURE.md + CONTINUITY.md + HARNESS.md (not inlined)
+    + plan.html output path; Run2 prompt points at plan.html + HARNESS.md + AC-0061 smoke subset; gating: plan.html exists
+    + constants cited verbatim -> queue Run2.
+
+    - trivial label definition: if task has label trivial OR title matches build-scripts|menu Exit|webapp artifacts, skip
+    Run1, go straight to medium builder with spec.html (AC-0102 template).
+
+    - Dependency: requires AC-0104 plugin wiring + AC-0103 HARNESS.md + AC-0061 tiered verify pipeline. Deliverable: updated
+    coordinator templates (prompt strings) + example plan.html for one pilot task.
+
+    '
   comments: []
