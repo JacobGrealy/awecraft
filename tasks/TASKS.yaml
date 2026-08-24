@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-24T10:14
+  updated_at: 2026-08-24T10:15
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -2822,7 +2822,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-24T09:56
-  updated_at: 2026-08-24T10:14
+  updated_at: 2026-08-24T10:15
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -2834,7 +2834,7 @@ intake:
     1.
 
 
-    Suggested wiring for homeserver1/Qwen3.8-27B-UD-Q4_K_M xhigh->subagent low->xhigh (another chat):
+    Required: create plugin for homeserver1/Qwen3.8-27B-UD-Q4_K_M xhigh->subagent low->xhigh (another chat):
 
     - Plugin $DSH_HOME/plugins/subagent-reasoning.ts (Context @deepseek-ai/cordis, ReasoningEffortId @deepseek-ai/dsh-llm,
     check delegationDepth/origin/parentSession SessionHeader): agent/request waterfall -> if isSubagent then override reasoningEffort
@@ -2853,3 +2853,8 @@ intake:
     updated_at: null
     text: '[agent] Appended wiring suggestion from another chat: subagent-reasoning.ts plugin + cordis.patch.yml (xhigh root
       -> low subagent) for DSH, per user 2026-08-23.'
+  - id: 2
+    created_at: 2026-08-24T10:15
+    updated_at: null
+    text: '[agent] User clarified 2026-08-23: AC-0104 must CREATE the plugin file $DSH_HOME/plugins/subagent-reasoning.ts
+      (not just spec it) + cordis.patch.yml entry.'
