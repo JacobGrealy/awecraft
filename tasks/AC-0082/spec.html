@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0082 — Threaded chunk DATA generation (Phase 2, desktop-gated)</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+.report{background:#fff8e6;border:1px solid #e0c56d;border-radius:8px;padding:12px 14px}
+.ok{color:#1a7f37;font-weight:600}.bad{color:#b42318;font-weight:600}
+.gate{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+</style></head><body>
+<h1>AC-0082 — Threaded chunk DATA generation (Phase 2, desktop-gated)</h1>
+<p><b>Status:</b> open (priority 1) · <b>Source:</b> user order 2026-08-23 "do the multi threaded chunk management task next" ·
+<b>Parent:</b> AC-0034 (chunk streaming) · <b>Plan:</b> AC-0071 Phase 2 (<code>tasks/AC-0071/AC-0071-plan.html</code>) ·
+<b>Prereqs landed:</b> Phase 1 = AC-0075/0076/0080 (budgeted main-thread streaming + hysteresis) — done.</p>
+
+<div class="report"><b>Goal:</b> move chunk <b>data generation</b> (<code>WorldGen.generate</code> — the ~0.03–0.7 s/chunk
+terrain/cave/ore computation) off the main thread onto a worker pool, so desktop walk/recenter frames no longer pay gen cost.
+<b>Mesh/face-scan, lighting, and the web export stay exactly as they are</b> (rejected-by-plan — do NOT thread them).</div>
+
+<h2>Requirement</h2>
+<ul>
+<li>Generate chunk data (<code>world/generator.gd</code> <code>WorldGen.generate</code>) on Godot 4 worker threads
+(<code>Task</code>/<code>WorkerThreadPool</code>), triggered from the existing drain loop in <code>world/world.gd</code>
+where data-gen currently runs on the main thread.</li>
+<li><b>Desktop-gated.</b> Threaded path active only when <code>not OS.has_feature("web")</code> AND
+<code>AWECRAFT_THREADGEN</code> is not "0" (on-by-default desktop; <code>=0</code> ⇒ byte-exact Phase-1 single-thread behavior).
+Optional <code>AWECRAFT_THREADGEN_N</code> = worker pool size (default <code>mini(cores-2, 3)</code>).</li>
+</ul>
+
+<h2>Boundary conditions (ALL must hold — code-review gate)</h2>
+<ol>
+<li>Workers touch <b>ONLY</b> <code>WorldGen.generate</code>. It must be <b>pure-static</b>: no nodes, no autoloads/globals,
+no shared mutable state — in particular <b>no shared PackedByteArray</b> between tasks. If <code>generate</code> currently reads
+autoload state or module globals, refactor it to receive everything as explicit arguments (seed, chunk coords, and any data
+needed), keeping its output byte-identical.</li>
+<li>Results hand back to main as <b>freshly-allocated arrays</b> (worker allocates its own PackedByteArrays; main copies/moves
+them into <code>chunk.data</code> in the existing drain data-unit region). No worker keeps a reference into shared buffers.</li>
+<li><code>init_fl</code> + <code>_apply_edits_to_chunk</code> run on the <b>MAIN thread</b> after handoff (fluid init +
+AC-0062 edit-delta re-apply must never run in a worker).</li>
+<li>In-flight generation cap <b>≤ 6</b> chunks (queue depth for the worker pool).</li>
+</ol>
+
+<h2>Correctness invariants (hard)</h2>
+<ul>
+<li><b>AC-0080 hysteresis safety:</b> a chunk may be freed/candidated between enqueue and handoff ⇒ on handoff, if the target
+chunk no longer exists (or is a different object), <b>drop the result cleanly</b> (free the arrays, no use-after-free, no crash).
+No re-queue needed; the region policy will re-request if still wanted.</li>
+<li><b>Determinism:</b> terrain output is a pure function of (seed, coords) — threaded runs must be byte-identical to single-thread
+(genhash gate below proves it).</li>
+<li><b>Web path:</b> thread code must be <b>unreachable</b> on web (the <code>OS.has_feature("web")</code> gate); web behavior stays
+byte-identical single-thread Phase-1.</li>
+</ul>
+
+<h2>Verification gates (hard)</h2>
+<div class="gate"><b>G1</b> Headless load with ZERO script errors under <b>both</b> <code>AWECRAFT_THREADGEN=0</code> and <code>=1</code>:
+<code>~/tools/godot/godot --headless --path godot --quit</code> (check stderr, not just exit code).</div>
+<div class="gate"><b>G2</b> <b>Genhash parity:</b> <code>AWECRAFT_LOGIC=genhash</code> with <code>AWECRAFT_THREADGEN=0</code> vs
+<code>=1</code> → MD5 <b>identical</b> (the 25/25 set + extra seeds 999/424242 — check the harness envs in main.gd). This proves
+data-gen output is unchanged.</div>
+<div class="gate"><b>G3</b> Full logic battery with threadgen ON (desktop): <code>AWECRAFT_LOGIC=player|interact|light|fluids|buckets</code>
+each exit 0, sane RESULT, 0 script errors; fluids sea stays 2730/1406 sea_stable (AC-0062 edits + fluid init still main-thread).</div>
+<div class="gate"><b>G4</b> Perf A/B (desktop, headless perf harness from AC-0075/0076 — <code>AWECRAFT_LOGIC=perf</code> +
+<code>AWECRAFT_TIMING=1</code> with the existing caps): at <b>r=4 AND r=50</b>, <code>AWECRAFT_THREADGEN=0</code> vs <code>=1</code> →
+expect <b>gen ms to disappear from walk/recenter frames</b> on the =1 side (recenter/first_draw/walk p95 table before/after in results).
+Keep r=50 runs capped per the existing harness caps; do not let a run exceed ~15 min each.</div>
+<div class="gate"><b>G5</b> Web path: grep-proof that the thread path is unreachable on web (the gate check) +
+<code>AWECRAFT_THREADGEN=0</code> behavior = Phase-1 behavior (G2/G3 with =0 must also pass).</div>
+<div class="gate"><b>G6</b> Builds (coordinator runs <code>./build_web.sh</code> + <code>./build_windows.sh</code> after the subagent;
+both must exit 0; web export = single-thread behavior).</div>
+
+<h2>Scope (files expected to change)</h2>
+<ul>
+<li><code>godot/world/generator.gd</code> — <code>WorldGen.generate</code> pure-static refactor (arguments in, fresh arrays out) if needed.</li>
+<li><code>world/world.gd</code> — drain loop: enqueue data-gen tasks (cap ≤6), main-thread handoff into <code>chunk.data</code>
++ <code>init_fl</code>/<code>_apply_edits_to_chunk</code> on main; hysteresis-safe drop on stale handoff.</li>
+<li><code>scenes/main.gd</code> — <code>AWECRAFT_THREADGEN</code> / <code>AWECRAFT_THREADGEN_N</code> env parse (pass through to world).</li>
+<li>NO UI changes. NO mesh/lighting changes. NO web-export changes.</li>
+</ul>
+
+<h2>Deliverables</h2>
+<ul>
+<li>Code per scope above.</li>
+<li><code>tasks/AC-0082/AC-0082-results.html</code>: self-contained — design notes (task flow, handoff, cap, hysteresis drop),
+all gate outcomes with actual values (G2 MD5s, G4 r=4/r=50 A/B tables), deviations.</li>
+</ul>
+
+<h2>Constraints</h2>
+<ul>
+<li><b>Do NOT run git</b> — coordinate only via the report; the coordinator commits.</li>
+<li><b>Do NOT kill/restart any python serving process</b> (8443/5180/8080 are the user's daemons). Never pkill/pgrep/kill python by pid or pattern.</li>
+<li>Godot one at a time. Headless-first. No renders needed for this data-only change (G4 is headless timing).</li>
+<li><b>Sandbox env (this session):</b> real $HOME read-only, /tmp EPHEMERAL per bash call → every godot call:
+<code>export HOME=/tmp/dsh_home; mkdir -p $HOME; ~/tools/godot/godot ...</code> in the same command.</li>
+<li>Honest partial report &gt; empty. Zero script errors is a hard gate.</li>
+</ul>
+</body></html>
