@@ -8,6 +8,8 @@ queue:
 - AC-0084
 - AC-0085
 - AC-0061
+- AC-0103
+- AC-0102
 - AC-0104
 - AC-0105
 - AC-0097
@@ -48,8 +50,6 @@ queue:
 - AC-0081
 - AC-0079
 - AC-0101
-- AC-0102
-- AC-0103
 - AC-0077
 - AC-0078
 - AC-0082
@@ -2823,7 +2823,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-24T09:56
-  updated_at: 2026-08-24T10:25
+  updated_at: 2026-08-24T10:30
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -2840,11 +2840,12 @@ intake:
     \ want} // validated vs reasoning.efforts packages/llm/llm/src/index.ts:793 else UNSUPPORTED_REASONING_EFFORT\n  })\n\
     }\n\n2. Mount it + pin subagent to same model $DSH_HOME/cordis.patch.yml (insert + replace whole config packages/boot/app-boot/README.md:60):\n\
     \n- insert:\n  - id: subagent-reasoning\n    name: ./plugins/subagent-reasoning.ts\n    config:\n      subagentEffort:\
-    \ low  # off|low|medium|high|xhigh|max -> your wire low|xhigh|xhigha\n- id: tool-subagent\n  config:\n    provider: spawn\n\
-    \    toolName: subagent\n    backgroundMode: continuable\n    agentOptions:\n      provider: homeserver1\n      model:\
-    \ Qwen3.8-27B-UD-Q4_K_M\nRoot stays agent-default-model: {provider:homeserver1, model:Qwen3.8-27B-UD-Q4_K_M, reasoningEffort:xhigh}\
-    \ packages/bundle/base/cordis.patch.yml:63.\n\nAlso per follow-up: support medium subagent as well (need configurable\
-    \ low|medium).\n\nVerify DSH loads, root xhigh + subagent low/medium.\n"
+    \ low  # and medium variant (plugin must handle ReasoningEffortId for both)|medium  # support both low and medium per\
+    \ user follow-up (off|low|medium|high|xhigh|max) -> wire low for impl, medium for research\n- id: tool-subagent\n  config:\n\
+    \    provider: spawn\n    toolName: subagent\n    backgroundMode: continuable\n    agentOptions:\n      provider: homeserver1\n\
+    \      model: Qwen3.8-27B-UD-Q4_K_M\nRoot stays agent-default-model: {provider:homeserver1, model:Qwen3.8-27B-UD-Q4_K_M,\
+    \ reasoningEffort:xhigh} packages/bundle/base/cordis.patch.yml:63.\n\nAlso per follow-up: support medium subagent as well\
+    \ (need configurable low|medium).\n\nVerify DSH loads, root xhigh + subagent low/medium.\n"
   comments:
   - id: 1
     created_at: 2026-08-24T10:14
