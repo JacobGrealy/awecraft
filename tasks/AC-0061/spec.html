@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0061 — Tiered verify pipeline</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+.report{background:#fff8e6;border:1px solid #e0c56d;border-radius:8px;padding:12px 14px}
+.gate{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+</style></head><body>
+<h1>AC-0061 — Tiered verify pipeline (user 2026-08-23: "the battery is overkill")</h1>
+<p><b>Status:</b> open (priority 1, queue head) · <b>Source:</b> user directive + agent design · <b>Type:</b> process/tooling task —
+deliverable is a <b>single-process multi-mode battery harness</b> plus the <b>tiered verify protocol</b> (smoke / full / dependency gates / caps).
+No game-visual changes; <b>no renders needed</b>.</p>
+
+<div class="report"><b>Goal:</b> cut per-task verification cost WITHOUT losing rigor (G0 zero-script-errors + per-mode RESULT + pixels stay).
+Three tiers: (1) SMOKE per task (subagent), (2) FULL single-process battery once before builds (coordinator), (3) DEPENDENCY gates that pick
+only the relevant modes per change area, plus hard caps on renders/browser.</div>
+
+<h2>Deliverable A — single-process multi-mode battery (<code>godot/scenes/main.gd</code>)</h2>
+<ul>
+<li>New env <code>AWECRAFT_BATTERY</code> = semicolon-separated list of <code>AWECRAFT_LOGIC</code> mode names
+(e.g. <code>AWECRAFT_BATTERY=player;interact;light;fluids;buckets</code>). <b>Do NOT reuse
+<code>AWECRAFT_ONLY</code></b> — that name is already taken by the chunk-visibility filter (main.gd:854).</li>
+<li>One godot launch, one spawn/recenter: run each listed mode <b>sequentially in the same process</b>, reusing the existing
+<code>AWECRAFT_LOGIC</code> dispatch code paths (player/interact/light/fluids/buckets/genhash/toolres/toolpose/held/swing/… —
+whatever exists; don't fork the mode implementations, drive the same entry points).</li>
+<li>Emit each mode's <code>RESULT {...}</code> line verbatim as today, then a final combined
+<code>RESULT {"battery":{mode:{...}}, "script_errors":N, "ok":true|false}</code>, then quit.</li>
+<li><b>State isolation:</b> between modes the world/player state must be clean enough that each mode's RESULT equals its
+standalone run. Minimal reset that achieves parity (recenter + await build, respawn player, clear edits/fluid/timing accumulators
+as needed) — document exactly what the reset does.</li>
+</ul>
+
+<h2>Deliverable B — tiered protocol (protocol text; coordinator lands it in AGENTS.md/CONTINUITY.md at commit time)</h2>
+<ol>
+<li><b>SMOKE (every task, run by the subagent):</b> G0 = headless <code>--quit</code> with 0 script errors, ALWAYS; + 2–4 relevant
+<code>AWECRAFT_LOGIC</code> modes per the dependency table (below); + <code>genhash</code> (already 5×5 = 25 chunks, main.gd:796)
+<b>only if <code>world/*</code> changed</b>; a cheap R=1 render <b>only if the task spec requires a visual</b>; no browser.</li>
+<li><b>FULL (coordinator, once, before builds):</b> <code>AWECRAFT_BATTERY=player;interact;light;fluids;buckets</code>
+(+ <code>genhash</code> when <code>world/*</code> changed) — single launch; then <code>./build_web.sh</code> + <code>./build_windows.sh</code>.</li>
+<li><b>DEPENDENCY gates (which modes per change area — build the table from the <code>AWECRAFT_LOGIC</code> set in main.gd +
+historical task usage, and document it in results.html):</b>
+<ul>
+<li><code>world/*</code> (generator/world/chunk) → genhash + fluids (+ interact if edit paths touched)</li>
+<li><code>player/player.gd</code> → player + swing + toolpose (+ held)</li>
+<li><code>core/held_mesh.gd</code> → held + toolres + toolpose (+ viewmodel render if pose changed)</li>
+<li><code>entities/drop.gd</code> → interact (+ dropshot/crossshot render if visual)</li>
+<li>inventory/craft → guiclick + interact</li>
+<li>fluids/* → fluids + buckets + genhash</li>
+<li>settings/ui → settings + guiclick</li>
+</ul></li>
+<li><b>Caps:</b> renders ≤ 1–2 small (R=1–2) per task per the task spec; browser retest only after a fresh build (user's call);
+no re-running the full battery for tasks whose smoke+full already passed (coordinator reviews subagent report + screenshots).</li>
+</ol>
+
+<h2>Verification gates (hard)</h2>
+<div class="gate"><b>G0</b> Headless <code>--quit</code>: ZERO script errors.</div>
+<div class="gate"><b>G1</b> <b>No cross-mode contamination:</b> <code>AWECRAFT_BATTERY=player;interact;light;fluids;buckets</code> in ONE
+launch → 5 RESULT lines; each mode's non-timing RESULT fields <b>identical</b> to a standalone <code>AWECRAFT_LOGIC=&lt;mode&gt;</code>
+run of the same mode (record both, diff in results.html; fluids sea 2730/1406; genhash 25/25 MD5 identical if included).</div>
+<div class="gate"><b>G2</b> <b>Cost:</b> report wall time of the single battery launch vs the sum of 5 standalone launches (honest
+numbers; the tool must not be slower than the 5 separate runs by more than ~10% — if it is, analyze why and say so).</div>
+<div class="gate"><b>G3</b> genhash 25/25 unchanged vs current (this task must not touch terrain output).</div>
+<div class="gate"><b>G4</b> Builds (coordinator: web + windows, both exit 0).</div>
+
+<h2>Scope / fences</h2>
+<ul>
+<li>Changes: <code>godot/scenes/main.gd</code> (battery runner + reset) ONLY. No world/*, player.gd, chunk.gd, generator,
+mesh/light/fluid changes. No renders. No UI.</li>
+<li>No git; no coordination files (AGENTS.md/CONTINUITY.md — coordinator writes the protocol section at commit time);
+no python kills (8443/5180/8080); godot one at a time.</li>
+<li><b>Sandbox env:</b> every godot call in ONE bash command: <code>export HOME=/tmp/dsh_home; mkdir -p $HOME; ~/tools/godot/godot ...</code></li>
+<li>Deliverable: <code>tasks/AC-0061/AC-0061-results.html</code> — self-contained: battery mechanics + reset description,
+G1 parity table (per-mode fields battery vs standalone), G2 cost numbers, the DEPENDENCY table (Deliverable B.3) as the
+coordinator-ready protocol text, deviations.</li>
+</ul>
+</body></html>
