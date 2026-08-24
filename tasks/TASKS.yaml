@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-23T23:20
+  updated_at: 2026-08-23T23:24
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -62,6 +62,7 @@ queue:
 - AC-0061
 - AC-0090
 - AC-0091
+- AC-0093
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -2582,4 +2583,23 @@ intake:
     of water and waterfalls). Water sim must fill full vertical column to terrain (no empty space below, fills to block, spreads
     at bottom per minecraft.wiki/w/Water). Currently sea/placed water renders/simulates as single-layer. Fix world/water.gd
     + chunk fluid logic + mesh. Verify sea stable + fluid harnesses. Parent: before AC-0036 underwater.'
+  comments: []
+- id: AC-0093
+  title: drop-spin-in-place-not-orbit
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-23T23:24
+  updated_at: 2026-08-23T23:24
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'BUG: broken blocks (item drops from world/entities/drop.gd) spin while moving around a circular path (orbit). Should
+    spin in place (rotate on their own axis at fixed position, with only pickup-attract movement). Fix drop.gd rotation/translation:
+    spin = local rotation, not orbital translation. Verify render: drop spins without circling. Related to AC-0083 textured
+    drops.'
   comments: []
