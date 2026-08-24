@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0102 — tasks/scripts/spec_template.py</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+.report{background:#fff8e6;border:1px solid #e0c56d;border-radius:8px;padding:12px 14px}
+.gate{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+</style></head><body>
+<h1>AC-0102 — <code>tasks/scripts/spec_template.py</code>: auto-fill spec.html from a TASKS.yaml entry (SDLC 2026-08-23 item 3)</h1>
+<p><b>Status:</b> open (priority 1) · <b>Source:</b> user SDLC batch · <b>Goal:</b> cut coordinator context before subagent launch — the spec for a task should be
+<b>generated</b> (metadata, frozen-spec refs, Data.* constants, default verify gates, expected RESULT shapes) from the registry entry + repo facts,
+leaving only the task-specific sections for the coordinator to fill.</p>
+
+<div class="report"><b>Deliverable:</b> <code>tasks/scripts/spec_template.py</code> (stdlib-only python3, same style/conventions as
+<code>tasks/scripts/tasks.py</code> — read it first). Usage:
+<code>python3 tasks/scripts/spec_template.py AC-NNNN [--force] [--out PATH]</code> → writes <code>tasks/AC-NNNN/spec.html</code>.</div>
+
+<h2>Behavior (hard requirements)</h2>
+<ol>
+<li><b>Inputs:</b> TASKS.yaml entry for the id (notes/title/source/parent/created_at — the same parse tasks.py uses); <code>tasks/HARNESS.md</code>
+(the AC-0103 mode table); <code>godot/core/data.gd</code> (or wherever <code>Data.*</code> lives — locate it) for the canonical constants.</li>
+<li><b>Generated sections (auto-filled):</b>
+<ul>
+<li>Header: id/title/status/parent/created + the registry <code>notes</code> verbatim (quoted, not interpreted).</li>
+<li><b>Frozen spec refs:</b> index.html = build <code>20260816-r12</code>, "source of truth, do NOT modify" + the minecraft.wiki canonical-refs line
+(Tool/Block/Mining/Crafting_table/Item) — fixed boilerplate.</li>
+<li><b>Data.* constants:</b> parse <code>data.gd</code> for the key constants (SEA level, HEIGHT, biome thresholds, block/fluid id tables — whichever are
+top-level constants; render as a table with the <b>current</b> values from the file, file:line refs) so the spec never carries stale numbers.</li>
+<li><b>Verify gates (default):</b> G0 zero-script-errors; the AC-0061 tiered protocol summary (SMOKE by subagent / FULL battery by coordinator / dependency
+table pointer → <code>tasks/AC-0061/AC-0061-results.html</code>); sandbox env block (the <code>HOME=/tmp/dsh_home</code> one-liner) + "one godot at a time".</li>
+<li><b>RESULT shapes:</b> pull the relevant rows from <code>tasks/HARNESS.md</code> for the default battery modes (player/interact/light/fluids/buckets) + genhash —
+embed as a small table (mode | key RESULT fields | typical wall) so the coordinator doesn't grep main.gd.</li>
+<li><b>Known-stable values:</b> the current stable gate values (parse from HARNESS.md's known-stable section if possible, else fixed boilerplate listing
+sea 2730/1406 etc. with "verify fresh" note).</li>
+</ul></li>
+<li><b>Coordinator-fill sections (clear placeholders, NOT auto-invented):</b> <code>## Goal</code> (one line from notes, marked "REVIEW"),
+<code>## Task-specific requirements</code>, <code>## Task-specific gates</code>, <code>## Scope (files expected to change)</code>,
+<code>## Fences</code> — each with an HTML comment <code>&lt;!-- FILL: ... --&gt;</code> and a 1-line example. The tool must be
+<b>obviously a scaffold</b>: auto sections labeled "AUTO (from TASKS.yaml/HARNESS.md/data.gd — do not hand-edit)", fill sections labeled "FILL BY COORDINATOR".</li>
+<li><b>Refuse to overwrite:</b> if <code>tasks/AC-NNNN/spec.html</code> exists → error + exit 1 (print what exists); <code>--force</code> overwrites.
+<code>--out PATH</code> writes elsewhere (for tests). Unknown task id → exit 2. Task with status <code>done</code> → warn but allow (coordinator may regenerate).</li>
+<li><b>No network, no godot, stdlib only.</b> Must not modify TASKS.yaml or any other file.</li>
+</ol>
+
+<h2>Verification gates (hard)</h2>
+<div class="gate"><b>G1</b> <b>No-overwrite:</b> run against an id whose spec.html exists (e.g. AC-0061) → exit 1, file untouched (mtime+hash before/after);
+<code>--force</code> → overwrites.</div>
+<div class="gate"><b>G2</b> <b>Bad inputs:</b> unknown id → exit 2 with a clear message; missing TASKS.yaml → clean error, no traceback.</div>
+<div class="gate"><b>G3</b> <b>Content (dogfood):</b> generate a spec for a real <b>open</b> task that has NO spec.html yet (pick the next queue task the
+coordinator hasn't spec'd — if every candidate already has a spec, use <code>--out /tmp/…</code> or a scratch copy of TASKS.yaml with a fake task) →
+verify: (a) registry notes appear verbatim, (b) Data.* table values MATCH the actual data.gd constants (spot 5 values), (c) HARNESS.md RESULT rows for
+the 5 battery modes + genhash are present and match HARNESS.md, (d) all 5 FILL sections present with comments, (e) valid HTML (opens, no unclosed tags —
+basic well-formedness check).</div>
+<div class="gate"><b>G4</b> <b>Reproducibility:</b> run twice → byte-identical output (no timestamps in the file except a "generated" note that is
+deterministic — e.g. the date is allowed to be the task's created_at, NOT today's clock).</div>
+<div class="gate"><b>G5</b> G0: no godot involved — but confirm <code>git status</code> shows only <code>tasks/scripts/spec_template.py</code> +
+<code>tasks/AC-0102/</code> artifacts (no code changes, no stray writes).</div>
+
+<h2>Fences / deliverables</h2>
+<ul>
+<li>Changes: <code>tasks/scripts/spec_template.py</code> (+ <code>tasks/AC-0102/AC-0102-results.html</code> evidence: test matrix with actual
+exit codes + the dogfood spec embedded/summarized + spot-check table). No .gd changes. No TASKS.yaml changes. No git. No coordination files. No python kills.</li>
+<li>Stdlib only (os/sys/argparse/re/html/yaml-if-tasks.py-uses-it-check — if tasks.py uses PyYAML, the template may use it the same way; if tasks.py is
+hand-rolled YAML, match that approach). Match tasks.py CLI conventions (argparse, exit codes, no fancy deps).</li>
+<li>Report ≤15 lines: files changed, test matrix (G1–G5 outcomes with exit codes), dogfood target + spot-check results, deviations.</li>
+</ul>
+</body></html>

@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-24T14:43
+  updated_at: 2026-08-24T15:35
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -2818,16 +2818,26 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-24T09:46
-  updated_at: 2026-08-24T14:43
-  completed_at: null
+  updated_at: 2026-08-24T15:35
+  completed_at: 2026-08-24T15:35
   waiting_on: null
   parent_id: null
   notes: 'SDLC 2026-08-23 (3): tasks/scripts/spec_template.py to auto-fill tasks/AC-NNNN/spec.html (index.html r12 refs, Data.*
     constants, verify gates, RESULT shapes) from TASKS.yaml entry. Cuts coordinator context before sub-agent launch.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-24T15:35
+    updated_at: null
+    text: '[agent] DONE 2026-08-24: tasks/scripts/spec_template.py (395 lines, stdlib+PyYAML matching tasks.py) - auto-fills
+      spec.html scaffold from TASKS.yaml + HARNESS.md + data.gd/generator.gd (fresh file:line-parsed values), 5 coordinator
+      FILL sections, exit 0/1/2 contract. COORD RE-VERIFIED ALL GATES ON DISK (subagent run interrupted post-work; deliverables
+      complete): G1 refuse exit=1 sha+mtime untouched, --force exit=0; G2 unknown=2 malformed=2 missing-TASKS.yaml=1 no traceback;
+      G3 dogfood AC-0034 (notes verbatim, 5/5 FILL sections+comments, 6/6 HARNESS RESULT rows, data.gd 5/5 spot-check incl
+      line refs, HTML well-formed); G4 two runs byte-identical (cb8ade8c...); G5 tree = tool + AC-0102/ only. No builds needed
+      (python task tool, not game code - AC-0103 docs precedent).'
 - id: AC-0103
   title: harness-md-table
   source: user

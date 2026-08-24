@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0102 — results (spec_template.py)</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:24px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto;white-space:pre-wrap}
+table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}
+.pass{background:#eaf7ea;border-left:4px solid #2f9e44;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+.note{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+.meta{color:#555;font-size:14px}
+</style></head><body>
+<h1>AC-0102 — <code>tasks/scripts/spec_template.py</code> (auto-fill spec scaffold)</h1>
+<p class="meta">Deliverable built + all five verification gates (G1–G5) run with real exit codes.
+Pure python (stdlib + PyYAML, matching <code>tasks.py</code>). No godot, no network, no git writes, no python kills.
+<code>data.gd</code> resolved to <code>godot/autoload/data.gd</code> (the <code>Data</code> autoload), biome/world-gen constants in <code>godot/world/generator.gd</code>.</p>
+
+<h2>Files changed</h2>
+<ul>
+<li><code>tasks/scripts/spec_template.py</code> (395 lines, stdlib + PyYAML) — the tool.</li>
+<li><code>tasks/AC-0102/AC-0102-results.html</code> (this file) — evidence.</li>
+</ul>
+<p>No <code>.gd</code> changes. No <code>TASKS.yaml</code> changes. No coordination files touched. No git commands except one read-only <code>git status</code> for G5.</p>
+
+<h2>Usage</h2>
+<pre>python3 tasks/scripts/spec_template.py AC-NNNN [--force] [--out PATH]
+  -> writes tasks/AC-NNNN/spec.html (or --out PATH)
+
+exit 0  wrote the spec
+exit 1  spec.html already exists (refuse; --force overrides) / TASKS.yaml missing
+        / constants file missing / I/O error
+exit 2  unknown task id / malformed id (not AC-NNNN)</pre>
+
+<h2>Test matrix — G1–G5 (ACTUAL exit codes)</h2>
+<table>
+<tr><th>gate</th><th>check</th><th>command / method</th><th>actual exit</th><th>observed</th><th>result</th></tr>
+<tr><td><b>G1</b></td><td>No-overwrite (refuse)</td><td>run on <code>AC-0061</code> (spec.html exists)</td>
+    <td><code>1</code></td><td>printed <code>error: …/tasks/AC-0061/spec.html already exists (use --force to overwrite)</code>;
+    before/after sha256 + mtime + size <b>identical</b> (<code>949f7e…</code>, mtime 1787586840, 6358 B)</td><td class="pass"><b>PASS</b></td></tr>
+<tr><td><b>G1</b></td><td><code>--force</code> overwrites</td><td><code>AC-0061 --force --out .scratch/…</code></td>
+    <td><code>0</code></td><td>wrote 15462 B; real AC-0061 spec.html hash unchanged (we used --out, so no in-place clobber)</td><td class="pass"><b>PASS</b></td></tr>
+<tr><td><b>G2</b></td><td>Unknown id</td><td><code>AC-9999</code></td>
+    <td><code>2</code></td><td><code>error: unknown task id 'AC-9999' (no such entry in TASKS.yaml)</code></td><td class="pass"><b>PASS</b></td></tr>
+<tr><td><b>G2</b></td><td>Malformed id</td><td><code>NOTANID</code></td>
+    <td><code>2</code></td><td><code>error: 'NOTANID' is not a valid task id (expected AC-NNNN)</code></td><td class="pass"><b>PASS</b></td></tr>
+<tr><td><b>G2</b></td><td>Missing TASKS.yaml</td><td><code>AWECRAFT_TASKS_FILE=.scratch/ac0102_g2_missing.yaml AC-0034</code></td>
+    <td><code>1</code></td><td><code>error: TASKS.yaml not found at …/ac0102_g2_missing.yaml (set AWECRAFT_TASKS_FILE to override)</code>; <b>0</b> "Traceback" in stderr</td><td class="pass"><b>PASS</b></td></tr>
+<tr><td><b>G3</b></td><td>Dogfood content (a)–(e)</td><td>generate <code>AC-0034</code> (open, no spec.html) → <code>--out .scratch/ac0102_dogfood/spec.html</code></td>
+    <td><code>0</code></td><td>see G3 table below — all 5 sub-checks pass</td><td class="pass"><b>PASS</b></td></tr>
+<tr><td><b>G4</b></td><td>Reproducibility</td><td>two runs → <code>--out g4a.html</code> / <code>g4b.html</code></td>
+    <td><code>0</code> ×2</td><td>sha256 <b>identical</b>: <code>cb8ade8c0bbce0923f51c3b194e0ba9b5c2fd21719fe803c4c17b11dfa239913</code></td><td class="pass"><b>PASS</b></td></tr>
+<tr><td><b>G5</b></td><td>Tree clean</td><td><code>git status --short</code> (read-only)</td>
+    <td>n/a</td><td>my artifacts = <code>?? tasks/scripts/spec_template.py</code> + <code>?? tasks/AC-0102/</code>; no .gd, no TASKS.yaml. Two <code>M</code> files are the <b>coordinator's</b> checkpoint writes, not mine (see note below)</td><td class="pass"><b>PASS</b></td></tr>
+</table>
+
+<h3>G3 dogfood sub-checks (target <code>AC-0034</code> "hitch", status in-progress, no spec.html)</h3>
+<table>
+<tr><th>sub-check</th><th>method</th><th>result</th></tr>
+<tr><td>(a) registry notes verbatim</td><td>read <code>AC-0034.notes</code> from TASKS.yaml, substring-match in generated HTML</td><td class="pass">PASS — <code>"Block-break hitches remain: PERF3c-2 diagnostics (recenter sync gen, worst boundary-chunk build, tick_fluids locality, snapshot drain) + fixes"</code> present verbatim in a <code>&lt;blockquote&gt;&lt;pre&gt;</code></td></tr>
+<tr><td>(b) 5 Data.* values match file:line</td><td>compare generated table rows to <code>godot/autoload/data.gd</code></td><td class="pass">PASS — see spot-check table below (5/5 match value <i>and</i> line)</td></tr>
+<tr><td>(c) HARNESS.md RESULT rows</td><td>for each of the 6 modes, pull the "key RESULT fields" cell from HARNESS.md §1 and substring-match (HTML-escaped) in the generated table</td><td class="pass">PASS — player / interact / light / fluids / buckets / genhash all present <b>and fields-match</b></td></tr>
+<tr><td>(d) 5 FILL sections</td><td>require each <code>&lt;h2&gt;</code> heading <b>and</b> a <code>&lt;!-- FILL: … --&gt;</code> comment</td><td class="pass">PASS — Goal, Task-specific requirements, Task-specific gates, Scope (files expected to change), Fences (5/5)</td></tr>
+<tr><td>(e) HTML well-formedness</td><td>stdlib <code>html.parser</code> walk: track open/close stack, void elements excluded</td><td class="pass">PASS — no unclosed tags, no stray closers</td></tr>
+</table>
+
+<h3>G3(b) — Data.* 5-value spot-check (value + file:line, all MATCH <code>godot/autoload/data.gd</code>)</h3>
+<table>
+<tr><th>const</th><th>value (in generated spec)</th><th>file:line (in generated spec)</th><th>matches data.gd?</th></tr>
+<tr><td><code>CHUNK</code></td><td><code>16</code></td><td><code>data.gd:3</code></td><td class="pass">✓ (line 3 = <code>const CHUNK := 16</code>)</td></tr>
+<tr><td><code>HEIGHT</code></td><td><code>80</code></td><td><code>data.gd:4</code></td><td class="pass">✓ (line 4 = <code>const HEIGHT := 80</code>)</td></tr>
+<tr><td><code>SEA</code></td><td><code>30</code></td><td><code>data.gd:5</code></td><td class="pass">✓ (line 5 = <code>const SEA := 30</code>)</td></tr>
+<tr><td><code>TILE_PX</code></td><td><code>32</code></td><td><code>data.gd:34</code></td><td class="pass">✓ (line 34 = <code>const TILE_PX := 32</code>)</td></tr>
+<tr><td><code>ATLAS_PX</code></td><td><code>1024.0</code></td><td><code>data.gd:33</code></td><td class="pass">✓ (line 33 = <code>const ATLAS_PX := 1024.0</code>)</td></tr>
+</table>
+<p>The generated spec also carries the full color palette (<code>C_*</code>, <code>TINT_*</code>), <code>TOOL_BLOCKS</code>, and a second table of the
+world-gen constants from <code>godot/world/generator.gd</code> (<code>B_*</code> block ids, <code>TREE_D_*</code>, <code>SPAWN_*</code>, <code>SOLID_IDS</code>) — all parsed fresh at run time with file:line refs, so the spec never carries stale numbers.
+Biome thresholds are computed in <code>biome_at()</code> (not top-level consts), so the spec notes them inline rather than tabling them.</p>
+
+<h2>Dogfood spec (embedded)</h2>
+<p class="meta">Full generated scaffold for <code>AC-0034</code> — <code>14923</code> bytes, sha256
+<code>cb8ade8c0bbce0923f51c3b194e0ba9b5c2fd21719fe803c4c17b11dfa239913</code> (same as the G4 pair, confirming determinism).
+Auto sections are labeled "AUTO (… do not hand-edit)"; the five coordinator sections are "FILL BY COORDINATOR" with a <code>&lt;!-- FILL --&gt;</code> comment + one-line example each.</p>
+<pre id="dogfood">&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;en&quot;&gt;&lt;head&gt;&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;title&gt;AC-0034 — spec (generated scaffold)&lt;/title&gt;
+&lt;style&gt;body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.auto{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.fill{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:10px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}&lt;/style&gt;&lt;/head&gt;&lt;body&gt;
+&lt;h1&gt;AC-0034 — hitch&lt;/h1&gt;
+&lt;div class=&quot;auto&quot;&gt;&lt;b&gt;AUTO (from TASKS.yaml — do not hand-edit)&lt;/b&gt;&lt;/div&gt;
+&lt;p class=&quot;meta&quot;&gt;&lt;b&gt;id:&lt;/b&gt; &lt;code&gt;AC-0034&lt;/code&gt; · &lt;b&gt;status:&lt;/b&gt; &lt;code&gt;in-progress&lt;/code&gt; · &lt;b&gt;priority:&lt;/b&gt; 3 · &lt;b&gt;source:&lt;/b&gt; user · &lt;b&gt;created:&lt;/b&gt; 2026-08-18T12:00 · &lt;b&gt;parent:&lt;/b&gt; —&lt;/p&gt;
+&lt;p class=&quot;note&quot;&gt;Registry &lt;code&gt;notes&lt;/code&gt; (verbatim, quoted):&lt;/p&gt;
+&lt;blockquote&gt;&lt;pre&gt;Block-break hitches remain: PERF3c-2 diagnostics (recenter sync gen, worst boundary-chunk build, tick_fluids locality, snapshot drain) + fixes&lt;/pre&gt;&lt;/blockquote&gt;
+&lt;h2&gt;Goal&lt;/h2&gt;
+&lt;div class=&quot;fill&quot;&gt;&lt;b&gt;FILL BY COORDINATOR&lt;/b&gt; — one line, from the registry notes (marked REVIEW until confirmed). &lt;b&gt;REVIEW&lt;/b&gt;&lt;/div&gt;
+&lt;!-- FILL: Goal — one sentence. Example: &quot;Add a torch-light-bake pass to the chunk mesher so caves are readable at night.&quot; --&gt;
+&lt;p&gt;&lt;em&gt;REVIEW — draft from notes: Block-break hitches remain: PERF3c-2 diagnostics (recenter sync gen, worst boundary-chunk build, tick_fluids locality, snapshot drain) + fixes.&lt;/em&gt;&lt;/p&gt;
+&lt;h2&gt;Frozen spec references&lt;/h2&gt;
+&lt;div class=&quot;auto&quot;&gt;&lt;b&gt;AUTO (fixed boilerplate — do not hand-edit)&lt;/b&gt;&lt;/div&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;code&gt;index.html&lt;/code&gt; — build &lt;code&gt;20260816-r12&lt;/code&gt; (Three.js single-file) is the &lt;b&gt;source of truth for ALL behavior/data — do NOT modify&lt;/b&gt;. The Godot port is faithful; when unsure, the web file wins.&lt;/li&gt;
+&lt;li&gt;Minecraft wiki = canonical reference for tools/crafting/blocks, match exactly unless the user specifies otherwise: &lt;a href=&quot;https://minecraft.wiki/w/Tool&quot;&gt;Tool&lt;/a&gt;, &lt;a href=&quot;https://minecraft.wiki/w/Block&quot;&gt;Block&lt;/a&gt;, &lt;a href=&quot;https://minecraft.wiki/w/Mining&quot;&gt;Mining&lt;/a&gt;, &lt;a href=&quot;https://minecraft.wiki/w/Crafting_table&quot;&gt;Crafting_table&lt;/a&gt;, &lt;a href=&quot;https://minecraft.wiki/w/Item&quot;&gt;Item&lt;/a&gt;.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h2&gt;Data.* world constants&lt;/h2&gt;
+&lt;div class=&quot;auto&quot;&gt;&lt;b&gt;AUTO (parsed from godot/autoload/data.gd + godot/world/generator.gd at generation time — do not hand-edit; values are current as of the run)&lt;/b&gt;&lt;/div&gt;
+&lt;h3&gt;godot/autoload/data.gd&lt;/h3&gt;
+&lt;table&gt;&lt;tr&gt;&lt;th&gt;const&lt;/th&gt;&lt;th&gt;value&lt;/th&gt;&lt;th&gt;file:line&lt;/th&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;CHUNK&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;16&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:3&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;HEIGHT&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;80&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:4&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;SEA&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;30&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:5&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_GRASS_TOP&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.416, 0.667, 0.251)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:7&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_DIRT&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.525, 0.376, 0.263)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:8&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_GRASS_SIDE&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.545, 0.404, 0.294)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:9&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_STONE&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.463, 0.463, 0.471)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:10&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_SAND&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.855, 0.804, 0.62)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:11&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_WATER&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.157, 0.431, 0.863)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:12&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_BEDROCK&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.294, 0.294, 0.306)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:13&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_SNOW&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.922, 0.949, 0.98)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:14&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_SNOW_SIDE&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.732, 0.663, 0.622)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:15&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_COAL_ORE&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.30, 0.30, 0.32)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:16&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_IRON_ORE&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.518, 0.494, 0.467)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:17&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_DIAMOND_ORE&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.30, 0.72, 0.70)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:18&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_LAVA&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.976, 0.447, 0.082)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:19&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_OBSIDIAN&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.118, 0.078, 0.165)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:20&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_TORCH&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.98, 0.71, 0.35)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:21&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_GLOWSTONE&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.98, 0.85, 0.60)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:22&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_COBBLE&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.447, 0.447, 0.455)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:23&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_LEAVES&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.235, 0.549, 0.188)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:24&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_ROSE&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.863, 0.157, 0.157)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:25&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;C_DANDELION&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(0.941, 0.824, 0.157)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:26&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;ATLAS_PX&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;1024.0&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:33&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;TILE_PX&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;32&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:34&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;TINT_GRASS_TOP&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(93.0 / 255.0, 178.0 / 255.0, 55.0 / 255.0)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:36&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;TINT_LEAVES&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(60.0 / 255.0, 140.0 / 255.0, 48.0 / 255.0)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:37&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;TINT_WATER&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;Color(47.0 / 255.0, 107.0 / 255.0, 235.0 / 255.0)&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:38&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;TOOL_BLOCKS&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;{&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/autoload/data.gd:41&lt;/td&gt;&lt;/tr&gt;
+&lt;/table&gt;
+&lt;h3&gt;godot/world/generator.gd&lt;/h3&gt;
+&lt;table&gt;&lt;tr&gt;&lt;th&gt;const&lt;/th&gt;&lt;th&gt;value&lt;/th&gt;&lt;th&gt;file:line&lt;/th&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_GRASS&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;1&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:3&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_DIRT&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;2&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:4&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_STONE&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;3&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:5&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_SAND&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;4&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:6&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_WATER&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;5&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:7&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_LOG&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;6&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:8&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_LEAVES&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;7&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:9&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_BEDROCK&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;11&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:10&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_SNOW_GRASS&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;12&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:11&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_COAL_ORE&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;14&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:12&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_IRON_ORE&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;15&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:13&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_DIAMOND_ORE&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;16&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:14&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_ROSE&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;18&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:15&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_DANDELION&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;19&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:16&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_LAVA&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;24&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:17&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_OBSIDIAN&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;25&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:18&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;TREE_D_FOREST&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;0.14&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:20&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;TREE_D_PLAIN&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;0.02&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:21&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;TREE_D_MAX&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;0.14&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:22&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;SPAWN_X&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;8&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:24&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;SPAWN_Z&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;8&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:25&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;SPAWN_H&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;34&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:26&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;SOLID_IDS&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;[&lt;/code&gt;&lt;/td&gt;&lt;td class=&#x27;note&#x27;&gt;godot/world/generator.gd:88&lt;/td&gt;&lt;/tr&gt;
+&lt;/table&gt;
+&lt;p class=&#x27;note&#x27;&gt;Biome thresholds are computed in &lt;code&gt;generator.gd biome_at()&lt;/code&gt; (t &amp;lt; -0.25 snow; t &amp;gt; 0.35 &amp;amp; m &amp;lt; 0.1 desert; m &amp;gt; 0.25 forest; else plains) — not top-level constants, so they are not in the tables above.&lt;/p&gt;
+&lt;h2&gt;Verify gates (default)&lt;/h2&gt;
+&lt;div class=&quot;auto&quot;&gt;&lt;b&gt;AUTO (from tasks/HARNESS.md — do not hand-edit)&lt;/b&gt;&lt;/div&gt;
+&lt;div class=&quot;auto&quot;&gt;&lt;b&gt;G0&lt;/b&gt; — &lt;code&gt;~/tools/godot/godot --headless --path godot --quit&lt;/code&gt; exits 0 with &lt;b&gt;zero&lt;/b&gt; &lt;code&gt;SCRIPT ERROR&lt;/code&gt; lines.&lt;/div&gt;
+&lt;div class=&quot;auto&quot;&gt;&lt;b&gt;AC-0061 tiered protocol&lt;/b&gt; — subagent runs the &lt;b&gt;SMOKE&lt;/b&gt; tier (2–4 dependency-mapped modes + genhash); the &lt;b&gt;coordinator&lt;/b&gt; runs the &lt;b&gt;FULL battery&lt;/b&gt; before build; the dependency table points at &lt;code&gt;tasks/AC-0061/AC-0061-results.html&lt;/code&gt;.&lt;/div&gt;
+&lt;div class=&quot;auto&quot;&gt;&lt;b&gt;Sandbox env&lt;/b&gt; — every godot call is ONE bash command that sets HOME first; &lt;b&gt;one godot at a time&lt;/b&gt; (concurrent runs corrupt the &lt;code&gt;.godot&lt;/code&gt; cache and hang). Scratch to project-local &lt;code&gt;.scratch/&lt;/code&gt;.&lt;/div&gt;
+&lt;pre&gt;export HOME=/tmp/dsh_home; mkdir -p $HOME; cd /home/angrygiant/github_projects/AweCraft&lt;/pre&gt;
+&lt;h2&gt;Expected RESULT shapes (default battery + genhash)&lt;/h2&gt;
+&lt;div class=&quot;auto&quot;&gt;&lt;b&gt;AUTO (rows pulled from tasks/HARNESS.md §1 — do not hand-edit)&lt;/b&gt;&lt;/div&gt;
+&lt;table&gt;&lt;tr&gt;&lt;th&gt;mode&lt;/th&gt;&lt;th&gt;key RESULT fields&lt;/th&gt;&lt;th&gt;typical wall&lt;/th&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;player&lt;/code&gt;&lt;/td&gt;&lt;td&gt;`start`, `after_fwd`, `horizontal_moved`, `is_on_floor`, `jump_peak_y`, `after_fly_y`, `time_before`, `time_after`&lt;/td&gt;&lt;td&gt;3 s (standalone) / 2.7 s battery&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;interact&lt;/code&gt;&lt;/td&gt;&lt;td&gt;`target_cell`, `breakable_id`, `highlight_visible`, `after_mine_cell`, `drop_spawned`, `inv_grew`, `place_cell`, `after_place_cell`, `place_ok`&lt;/td&gt;&lt;td&gt;3 s (standalone) / 1.3 s battery&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;light&lt;/code&gt;&lt;/td&gt;&lt;td&gt;`surface_eff` (15), `cave_eff` (0), `torch_level` (14), `torch_far_before` (0), `torch_far_after` (9)&lt;/td&gt;&lt;td&gt;4 s (standalone) / 2.9 s battery&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;fluids&lt;/code&gt;&lt;/td&gt;&lt;td&gt;`shore_after` ([5,7]), `source_after` ([5,8]), `water_delta` (1), `water_on_lava_result` (25), `sideways_lava_result` (9), `sea_stable` (true), `sea_surface_before`/`_final` (2730), `sea_backed_before`/`_final` (1406); prints `FLUIDSTAT` line&lt;/td&gt;&lt;td&gt;5 s (standalone) / 3.8 s battery&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;buckets&lt;/code&gt;&lt;/td&gt;&lt;td&gt;`scoop_before`, `after_scoop`, `inv_scoop`, `place_after`, `inv_place`&lt;/td&gt;&lt;td&gt;~5 s (standalone, not re-run 08-24) / ~3 s battery&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;genhash&lt;/code&gt;&lt;/td&gt;&lt;td&gt;prints `GENHASH cx cz &amp;lt;32-hex&amp;gt;` ×25 + `GENMS` (no RESULT dict)&lt;/td&gt;&lt;td&gt;2 s&lt;/td&gt;&lt;/tr&gt;
+&lt;/table&gt;
+&lt;h2&gt;Known-stable gate values&lt;/h2&gt;
+&lt;div class=&quot;auto&quot;&gt;&lt;b&gt;AUTO (from tasks/HARNESS.md §3, else boilerplate — verify fresh on any fluids/world-touching change)&lt;/b&gt;&lt;/div&gt;
+&lt;table&gt;&lt;tr&gt;&lt;th&gt;value&lt;/th&gt;&lt;th&gt;fresh result (2026-08-24)&lt;/th&gt;&lt;th&gt;established by&lt;/th&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;fluids `sea_surface_before`/`_final`&lt;/td&gt;&lt;td&gt;**2730 / 2730** (FLAT)&lt;/td&gt;&lt;td&gt;AC-0068 (sea zero-write invariant)&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;fluids `sea_backed_before`/`_final`&lt;/td&gt;&lt;td&gt;**1406 / 1406**&lt;/td&gt;&lt;td&gt;AC-0068&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;fluids `sea_stable`&lt;/td&gt;&lt;td&gt;**true** (`water_delta` 1, `shore_after` [5,7], `source_after` [5,8])&lt;/td&gt;&lt;td&gt;AC-0068&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;fluids `water_on_lava_result` / `sideways_lava_result`&lt;/td&gt;&lt;td&gt;**25 / 9** (obsidian / stone)&lt;/td&gt;&lt;td&gt;M6 fluids port&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;interact `drop_spawned` / `place_ok`&lt;/td&gt;&lt;td&gt;**true / true** (`breakable_id` 2, `after_place_cell` 2)&lt;/td&gt;&lt;td&gt;M4 interaction&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;light `torch_level`&lt;/td&gt;&lt;td&gt;**14** (`surface_eff` 15, `cave_eff` 0, `torch_far_after` 9)&lt;/td&gt;&lt;td&gt;M5 lighting&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;genhash&lt;/td&gt;&lt;td&gt;**25/25** `GENHASH` lines, 32-hex MD5 each; default seed 44; seed 99 → all 25 lines differ&lt;/td&gt;&lt;td&gt;AC-0082 (world/* parity gate)&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;boundary r4 `in_radius_built_max`&lt;/td&gt;&lt;td&gt;**67** (`built_final` 81, `ok` true, `flap` 0, `p95_ms` 65)&lt;/td&gt;&lt;td&gt;AC-0079 (look-priority scoring; pre-fix gate was 55)&lt;/td&gt;&lt;/tr&gt;
+&lt;/table&gt;
+&lt;h2&gt;Task-specific requirements&lt;/h2&gt;
+&lt;div class=&quot;fill&quot;&gt;&lt;b&gt;FILL BY COORDINATOR&lt;/b&gt; — the concrete behavior/data changes this task makes.&lt;/div&gt;
+&lt;!-- FILL: Task-specific requirements. Example: e.g. &amp;quot;fluids: source water over a hole writes 0 cells (zero-write invariant)&amp;quot; --&gt;
+&lt;h2&gt;Task-specific gates&lt;/h2&gt;
+&lt;div class=&quot;fill&quot;&gt;&lt;b&gt;FILL BY COORDINATOR&lt;/b&gt; — the specific mode(s)/values that must be green beyond the defaults.&lt;/div&gt;
+&lt;!-- FILL: Task-specific gates. Example: e.g. &amp;quot;G1: AWECRAFT_LOGIC=fluids → sea_stable true, sea_surface 2730&amp;quot; --&gt;
+&lt;h2&gt;Scope (files expected to change)&lt;/h2&gt;
+&lt;div class=&quot;fill&quot;&gt;&lt;b&gt;FILL BY COORDINATOR&lt;/b&gt; — the exact files this task will edit (helps G5 stay clean).&lt;/div&gt;
+&lt;!-- FILL: Scope (files expected to change). Example: e.g. &amp;quot;godot/world/chunk.gd, godot/scenes/main.gd (fluids branch only)&amp;quot; --&gt;
+&lt;h2&gt;Fences&lt;/h2&gt;
+&lt;div class=&quot;fill&quot;&gt;&lt;b&gt;FILL BY COORDINATOR&lt;/b&gt; — what this task must NOT touch.&lt;/div&gt;
+&lt;!-- FILL: Fences. Example: e.g. &amp;quot;no .gd outside the listed scope; no TASKS.yaml edits; no git&amp;quot; --&gt;
+&lt;p class=&quot;note&quot;&gt;Scaffold generated by &lt;code&gt;tasks/scripts/spec_template.py&lt;/code&gt; (no wall-clock timestamps; the only date is the registry created_at). Auto sections are reproducible byte-for-byte; fill sections are for the coordinator.&lt;/p&gt;
+&lt;/body&gt;&lt;/html&gt;
+</pre>
+
+<h2>Deviations / notes</h2>
+<div class="note"><b>G5 — two <code>M</code> files are the coordinator's, not mine.</b>
+<code>git status --short</code> shows <code>M AGENTS.md</code> (+1 line, the "SUBAGENTS ARE BLOCKING" rule) and
+<code>M godot/CONTINUITY.md</code> (+6 lines, the §00a checkpoint that references <i>this very launch</i>).
+Both were written at 14:54–14:59 — <b>before</b> my first edit (the tool file was created 15:09:38). I only read/wrote
+<code>tasks/scripts/spec_template.py</code> and <code>tasks/AC-0102/</code> plus <code>.scratch/</code> scratch. The "only my two paths" expectation
+holds for my own changes.</div>
+<div class="note"><b>Dogfood target = <code>AC-0034</code> (open/in-progress, no spec.html).</b> Per the fence I generated it into
+<code>--out .scratch/ac0102_dogfood/spec.html</code> (project-local scratch, gitignored) rather than inside <code>tasks/AC-0034/</code>,
+so no stray spec.html lands in another task's folder. <code>.scratch/</code> is excluded from <code>git status</code> by <code>.gitignore</code>.</div>
+<div class="note"><b>PyYAML used (same as <code>tasks.py</code>/<code>tasks_lib.py</code>)</b> — the spec explicitly allows this ("if tasks.py uses PyYAML, the template may use it the same way"). Registry parse reuses the same
+"iterate every list-of-task dict, match <code>id</code>" approach as <code>tasks_lib.iter_tasks</code>. The tool is otherwise stdlib-only.</div>
+<div class="note"><b>Refuse-overwrite honored even for a <code>done</code> task</b> — running on <code>AC-0061</code> (status <code>done</code>) first
+warns <code>"status 'done'; regenerating anyway"</code>, then refuses (exit 1) because spec.html exists; <code>--force</code> is required to write.</div>
+<p class="meta">Scratch used (project-local, gitignored): <code>.scratch/ac0102_dogfood/</code> (dogfood + g4a/g4b + spec1/spec2),
+<code>.scratch/ac0102_g1_forced.html</code>, <code>.scratch/ac0102_g2_missing.yaml</code> (empty path target). <code>/tmp</code> untouched.</p>
+</body></html>
