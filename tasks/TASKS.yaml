@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-24T10:17
+  updated_at: 2026-08-24T10:25
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -2823,15 +2823,28 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-24T09:56
-  updated_at: 2026-08-24T10:17
+  updated_at: 2026-08-24T10:25
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'Create DSH plugin for xhigh->subagent low->xhigh wiring (homeserver1/Qwen3.8-27B-UD-Q4_K_M). Create $DSH_HOME/plugins/subagent-reasoning.ts
-    (Context @deepseek-ai/cordis, ReasoningEffortId @deepseek-ai/dsh-llm, agent/request waterfall, isSubagent via delegationDepth/origin/parentSession,
-    override reasoningEffort to cfg.subagentEffort). Create/update $DSH_HOME/cordis.patch.yml: insert subagent-reasoning ./plugins/subagent-reasoning.ts
-    config subagentEffort low + pin tool-subagent provider homeserver1 model Qwen3.8-27B-UD-Q4_K_M (root agent-default-model
-    xhigh stays). Verify DSH loads, subagent low + root xhigh. No Godot.'
+  notes: "Full implementation plan sent by user 2026-08-23 (use verbatim):\n\n1. Create file plugin $DSH_HOME/plugins/subagent-reasoning.ts\
+    \ (relative resolves config-relative packages/boot/app-boot/README.md:32):\n\nimport type { Context } from '@deepseek-ai/cordis'\n\
+    import z from '@deepseek-ai/schemastery'\nimport { ReasoningEffortId } from '@deepseek-ai/dsh-llm'\n\nexport const name\
+    \ = 'subagent-reasoning'\nexport const inject = ['agents'] as const\n\nexport interface Config { subagentEffort: string\
+    \ }\nexport const Config: z<Config> = z.object({ subagentEffort: z.string().required() })\n\nfunction isSubagent(a:any){\n\
+    \  const h=a.session.header as any // SessionHeader.delegationDepth/origin/parentSession packages/core/session/src/types.ts:91\n\
+    \  return (h.delegationDepth??0)>0 || h.origin==='subagent' || !!h.parentSession\n}\n\nexport function apply(ctx: Context,\
+    \ cfg: Config){\n  ctx.on('agent/request', async (payload, next)=>{\n    const base = await next() // waterfall: must\
+    \ delegate docs/cordis-primer.md:30\n    if(!isSubagent(payload.agent)) return base\n    const want = ReasoningEffortId(cfg.subagentEffort)\
+    \ // Branded packages/llm/llm/src/brand.ts:55\n    if(base.reasoningEffort===want) return base\n    return {...base, reasoningEffort:\
+    \ want} // validated vs reasoning.efforts packages/llm/llm/src/index.ts:793 else UNSUPPORTED_REASONING_EFFORT\n  })\n\
+    }\n\n2. Mount it + pin subagent to same model $DSH_HOME/cordis.patch.yml (insert + replace whole config packages/boot/app-boot/README.md:60):\n\
+    \n- insert:\n  - id: subagent-reasoning\n    name: ./plugins/subagent-reasoning.ts\n    config:\n      subagentEffort:\
+    \ low  # off|low|medium|high|xhigh|max -> your wire low|xhigh|xhigha\n- id: tool-subagent\n  config:\n    provider: spawn\n\
+    \    toolName: subagent\n    backgroundMode: continuable\n    agentOptions:\n      provider: homeserver1\n      model:\
+    \ Qwen3.8-27B-UD-Q4_K_M\nRoot stays agent-default-model: {provider:homeserver1, model:Qwen3.8-27B-UD-Q4_K_M, reasoningEffort:xhigh}\
+    \ packages/bundle/base/cordis.patch.yml:63.\n\nAlso per follow-up: support medium subagent as well (need configurable\
+    \ low|medium).\n\nVerify DSH loads, root xhigh + subagent low/medium.\n"
   comments:
   - id: 1
     created_at: 2026-08-24T10:14
@@ -2843,6 +2856,15 @@ intake:
     updated_at: null
     text: '[agent] User clarified 2026-08-23: AC-0104 must CREATE the plugin file $DSH_HOME/plugins/subagent-reasoning.ts
       (not just spec it) + cordis.patch.yml entry.'
+  - id: 3
+    created_at: 2026-08-24T10:22
+    updated_at: null
+    text: '[user] need to support "medium" sub agent as well'
+  - id: 4
+    created_at: 2026-08-24T10:25
+    updated_at: null
+    text: '[agent] Restored full user-sent implementation plan verbatim 2026-08-23 (plugin + cordis.patch.yml) per user complaint;
+      previous summary was insufficient.'
 - id: AC-0105
   title: two-phase-workflow-templates
   source: user
