@@ -756,6 +756,12 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			player = _spawn_player()
 			await _toolpose_test()
 			return
+		if logic == "viewmodel":
+			world.recenter(spawn.x, spawn.z, true)
+			player = _spawn_player()
+			await _await_spawn_floor(spawn, 600)
+			await _viewmodel_shot()
+			return
 		if logic == "wallshot":
 			world.recenter(spawn.x, spawn.z, true)
 			await _await_spawn_floor(spawn, 300)
@@ -2763,20 +2769,28 @@ func _swing_test() -> void:
 	p.start_mine()
 	var saw_mid := false
 	var mid_frac := 0.0
+	var swing_max_rot := 0.0
+	var swing_min_rot := INF
 	var settled := false
 	for i in range(60):
 		await get_tree().physics_frame
 		var f: float = p.swing_frac()
+		var pr: Vector3 = p.hand_pose_rot()
+		var rotmag := Vector2(pr.x, pr.z).length()
+		swing_max_rot = maxf(swing_max_rot, rotmag)
+		swing_min_rot = minf(swing_min_rot, rotmag)
 		if f > 0.3 and f < 0.95:
 			saw_mid = true
 			mid_frac = f
 		if not p.swing_active():
-			settled = p.hand_pose_offset().length() < 0.001
+			settled = p.hand_pose_rot().length() < 0.05
 			break
 	r["saw_mid_swing"] = saw_mid
 	r["mid_frac"] = roundf(mid_frac * 100.0) / 100.0
+	r["swing_max_rot"] = roundf(swing_max_rot * 1000.0) / 1000.0
+	r["swing_min_rot"] = roundf(swing_min_rot * 1000.0) / 1000.0
 	r["settled"] = settled
-	ok = ok and saw_mid and settled
+	ok = ok and saw_mid and settled and swing_max_rot > 0.4
 	for i in 4:
 		await get_tree().physics_frame
 	for i in p.inv.size():
@@ -2787,17 +2801,21 @@ func _swing_test() -> void:
 	r["fist_empty_hand"] = p.held_fist.visible
 	ok = ok and r["fist_empty_hand"]
 	p.start_swing()
-	var punch_moved := 0.0
+	var punch_max_rot := 0.0
+	var punch_settled := false
 	for i in range(40):
 		await get_tree().physics_frame
-		var off: float = p.hand_pose_offset().length()
-		if off > punch_moved:
-			punch_moved = off
+		var pr2: Vector3 = p.hand_pose_rot()
+		var rotmag2 := Vector2(pr2.x, pr2.z).length()
+		if rotmag2 > punch_max_rot:
+			punch_max_rot = rotmag2
 		if not p.swing_active():
+			punch_settled = p.hand_pose_rot().length() < 0.05
 			break
-	r["punch_max_offset"] = roundf(punch_moved * 1000.0) / 1000.0
+	r["punch_max_rot"] = roundf(punch_max_rot * 1000.0) / 1000.0
+	r["punch_settled"] = punch_settled
 	r["punch_done"] = not p.swing_active()
-	ok = ok and punch_moved > 0.1 and r["punch_done"]
+	ok = ok and punch_max_rot > 0.3 and punch_settled and r["punch_done"]
 	Debug.give_item(6, 1)
 	p.sel = _slot_of(p, 6)
 	for i in 4:
@@ -2814,9 +2832,10 @@ func _swing_test() -> void:
 		if not p.swing_active():
 			held_stayed_active = false
 		var f2: float = p.swing_frac()
-		var off2: float = p.hand_pose_offset().length()
-		if off2 > loop_max_off:
-			loop_max_off = off2
+		var pr3: Vector3 = p.hand_pose_rot()
+		var rotmag3 := Vector2(pr3.x, pr3.z).length()
+		if rotmag3 > loop_max_off:
+			loop_max_off = rotmag3
 		if f2 > 0.5:
 			in_high = true
 		elif in_high and f2 < 0.25:
@@ -2826,14 +2845,14 @@ func _swing_test() -> void:
 	var settle_ok := false
 	for i in 16:
 		await get_tree().physics_frame
-		if not p.swing_active() and p.hand_pose_offset().length() < 0.001:
+		if not p.swing_active() and p.hand_pose_rot().length() < 0.05:
 			settle_ok = true
 			break
 	r["loop_cycles_0.9s"] = cycles
-	r["loop_max_offset"] = roundf(loop_max_off * 1000.0) / 1000.0
+	r["loop_max_rot"] = roundf(loop_max_off * 1000.0) / 1000.0
 	r["loop_held_stayed_active"] = held_stayed_active
 	r["loop_settles_on_release"] = settle_ok
-	ok = ok and cycles >= 3 and cycles <= 5 and held_stayed_active and settle_ok
+	ok = ok and cycles >= 3 and cycles <= 5 and held_stayed_active and settle_ok and loop_max_off > 0.4
 	var toolork := {}
 	var expected_type := {111: "pick", 115: "axe", 119: "shovel", 123: "sword", 113: "pick"}
 	for tid in expected_type:
@@ -3908,6 +3927,47 @@ func _await_world_build(where: Vector3, max_frames: int) -> void:
 	print("SNAPDRAIN not fully drained after %d frames" % max_frames)
 
 
+func _viewmodel_shot() -> void:
+	var p = Game.player
+	var shot := OS.get_environment("AWECRAFT_VMSHOT")
+	var item := OS.get_environment("AWECRAFT_VMITEM")
+	var frac_env := OS.get_environment("AWECRAFT_VMFRACTION")
+	if item != "":
+		Debug.give_item(item.to_int(), 1)
+		p.sel = _slot_of(p, item.to_int())
+	await _await_world_build(p.position, 300)
+	for i in 10:
+		await get_tree().physics_frame
+	var cam: Camera3D = p.camera
+	var idle_ih := Vector3.INF
+	var idle_ip := Vector3.INF
+	var apex_ih := Vector3.INF
+	var apex_ip := Vector3.INF
+	if p.held_tool != null and p.held_tool.visible:
+		var head_mi := p.held_tool.get_node_or_null("head") as MeshInstance3D
+		var handle_mi := p.held_tool.get_node_or_null("handle") as MeshInstance3D
+		idle_ih = _toolpose_centroid(cam, head_mi)
+		idle_ip = _toolpose_centroid(cam, handle_mi)
+	if frac_env != "":
+		p.hold_swing(frac_env.to_float(), p.SWING_ITEM)
+		for i in 6:
+			await get_tree().physics_frame
+		if p.held_tool != null and p.held_tool.visible:
+			var head_mi := p.held_tool.get_node_or_null("head") as MeshInstance3D
+			var handle_mi := p.held_tool.get_node_or_null("handle") as MeshInstance3D
+			apex_ih = _toolpose_centroid(cam, head_mi)
+			apex_ip = _toolpose_centroid(cam, handle_mi)
+	if shot != "":
+		await Debug.snap(shot)
+	Debug.result({
+		"vmshot": shot, "frac": frac_env, "idle_head": [roundf(idle_ih.x * 1000.0) / 1000.0, roundf(idle_ih.y * 1000.0) / 1000.0, roundf(idle_ih.z * 1000.0) / 1000.0],
+		"idle_handle": [roundf(idle_ip.x * 1000.0) / 1000.0, roundf(idle_ip.y * 1000.0) / 1000.0, roundf(idle_ip.z * 1000.0) / 1000.0],
+		"apex_head": [roundf(apex_ih.x * 1000.0) / 1000.0, roundf(apex_ih.y * 1000.0) / 1000.0, roundf(apex_ih.z * 1000.0) / 1000.0],
+		"apex_handle": [roundf(apex_ip.x * 1000.0) / 1000.0, roundf(apex_ip.y * 1000.0) / 1000.0, roundf(apex_ip.z * 1000.0) / 1000.0],
+	})
+	get_tree().quit()
+
+
 func _held_test() -> void:
 	var p = Game.player
 	for i in 10:
@@ -4167,11 +4227,13 @@ func _toolpose_test() -> void:
 		var handle_mi := tool.get_node_or_null("handle") as MeshInstance3D
 		var ih: Vector3 = _toolpose_centroid(cam, head_mi)
 		var ip: Vector3 = _toolpose_centroid(cam, handle_mi)
+		var ir: Vector3 = p.hand_pose_rot()
 		p.hold_swing(0.5, p.SWING_ITEM)
 		for i in 10:
 			await get_tree().physics_frame
 		var ah: Vector3 = _toolpose_centroid(cam, head_mi)
 		var ap: Vector3 = _toolpose_centroid(cam, handle_mi)
+		var ar: Vector3 = p.hand_pose_rot()
 		p.clear_swing()
 		for i in 10:
 			await get_tree().physics_frame
@@ -4190,14 +4252,19 @@ func _toolpose_test() -> void:
 		var pos_ok := ih.z < ip.z and ih.y > ip.y and absf(ih.x) < absf(ip.x)
 		var d_idle := Vector2(ih.x, ih.y).length()
 		var d_apex := Vector2(ah.x, ah.y).length()
-		var arc_ok := d_idle > 0.05 and d_apex <= 0.8 * d_idle
+		var rot_delta := (ar - ir).length()
+		var arc_ok := rot_delta > 0.4
+		var hdy := ih.y - ip.y
+		var hdx := ih.x - ip.x
+		var vert_ok := hdy > 0.0 and hdy > 0.3 * absf(hdx)
+		var below_ok := ip.y < -0.55
 		var dtool := true
 		for c in tool.get_children():
 			if c is MeshInstance3D:
 				var tm = (c as MeshInstance3D).material_override
 				dtool = dtool and tm is StandardMaterial3D and (tm as StandardMaterial3D).depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
 		tool_d_ok = tool_d_ok and dtool
-		var row_ok: bool = String(p.held_tool_type) == String(exp_type[tid]) and pos_ok and arc_ok and diag_ok and dtool
+		var row_ok: bool = String(p.held_tool_type) == String(exp_type[tid]) and pos_ok and arc_ok and diag_ok and dtool and vert_ok and below_ok
 		ok = ok and row_ok
 		res["tool_%d" % tid] = {
 			"type": String(p.held_tool_type),
@@ -4206,8 +4273,10 @@ func _toolpose_test() -> void:
 			"apex_head": [roundf(ah.x * 1000.0) / 1000.0, roundf(ah.y * 1000.0) / 1000.0, roundf(ah.z * 1000.0) / 1000.0],
 			"apex_handle": [roundf(ap.x * 1000.0) / 1000.0, roundf(ap.y * 1000.0) / 1000.0, roundf(ap.z * 1000.0) / 1000.0],
 			"head_in_front": ih.z < ip.z, "head_above": ih.y > ip.y, "head_centered": absf(ih.x) < absf(ip.x),
+			"rest_dy": roundf(hdy * 1000.0) / 1000.0, "rest_dx": roundf(hdx * 1000.0) / 1000.0,
+			"vertical_ok": vert_ok, "handle_below_cam": ip.y < -0.55,
+			"rot_delta": roundf(rot_delta * 1000.0) / 1000.0, "arc_ok": arc_ok,
 			"d_idle": roundf(d_idle * 1000.0) / 1000.0, "d_apex": roundf(d_apex * 1000.0) / 1000.0,
-			"closer_pct": roundf((1.0 - d_apex / d_idle) * 100.0),
 			"bbox_diag": roundf(diag * 1000.0) / 1000.0, "diag_2x_ok": diag_ok,
 			"depth_disabled": dtool, "ok": row_ok,
 		}

@@ -69,7 +69,7 @@ var _held_texs := {}
 var _held_item_texs := {}
 var _tool_mats := {}
 var _held_key := ""
-const HAND_BASE_POS := Vector3(0.45, -0.42, -0.8)
+const HAND_BASE_POS := Vector3(0.45, -0.62, -0.7)
 const TOOL_TARGET_DIAG := {"pick": 1.224, "axe": 1.10, "shovel": 1.10, "sword": 0.796}
 const HELD_ITEM_SCALE := 0.70
 const HANDLE_C := Color(0.47, 0.33, 0.18)
@@ -457,8 +457,8 @@ func _tint_tex(col: Color) -> ImageTexture:
 	return t
 
 
-const TOOL_POSE_ROT := Vector3(0.467168, 2.956413, -0.394178)
-const TOOL_POSE_POS := Vector3(0.0, 0.0, 0.0)
+const TOOL_POSE_ROT := Vector3(0.632, 2.639, -0.2)
+const TOOL_POSE_POS := Vector3(0.2, -0.3, 0.0)
 
 
 const TOOL_GRIDS := {
@@ -813,11 +813,11 @@ func _apply_swing(frac: float) -> void:
 		_reset_hand_pose()
 		return
 	if _swing_kind == SWING_PUNCH:
-		hand_root.position = Vector3(-0.12 * a, 0.03 * a, -0.34 * a)
-		hand_root.rotation = Vector3(-0.12 * a, 0.0, 0.12 * a)
+		hand_root.position = Vector3.ZERO
+		hand_root.rotation = Vector3(-0.45 * a, 0.0, 0.0)
 	else:
-		hand_root.position = Vector3(-0.18 * a, 0.25 * a, -0.12 * a)
-		hand_root.rotation = Vector3(-0.3 * a, 0.7 * a, -0.15 * a)
+		hand_root.position = Vector3.ZERO
+		hand_root.rotation = Vector3(-0.85 * a, 0.0, -0.12 * a)
 
 
 func _reset_hand_pose() -> void:
@@ -831,6 +831,12 @@ func hand_pose_offset() -> Vector3:
 	if sway_root == null or hand_root == null:
 		return Vector3.ZERO
 	return sway_root.position + hand_root.position - HAND_BASE_POS
+
+
+func hand_pose_rot() -> Vector3:
+	if hand_root == null:
+		return Vector3.ZERO
+	return hand_root.rotation
 
 
 func sway_bobs() -> float:
