@@ -10,19 +10,48 @@ Workflow:
     [trivial-bypass check] ──yes──► Run 2 (medium builder, spec.html)
            │no
            ▼
-    Run 1 (xhigh, read-only research) ──► tasks/AC-NNNN/plan.html
+    Run 1 (xhigh, read-only research, via the `subagent_plan` tool)
+           ──► tasks/AC-NNNN/plan.html
            │
            ▼
     COORDINATOR GATE (plan.html exists + §3 constants verbatim)
            │pass                          │fail
            ▼                             ▼
-    Run 2 (medium builder)         bounce Run 1 back with the stale lines
+    Run 2 (medium builder, via the        bounce Run 1 back with the
+    `subagent` tool)                      stale lines
+
+---
+
+## EFFORT ROUTING — how each run is launched (user 2026-08-25)
+
+The `$DSH_HOME` plugin `subagent-reasoning` pins the child's reasoning effort
+**by the tool name used to launch it** (not by a per-run flag — the subagent
+tools take no effort argument):
+
+    subagent_plan          → xhigh   (planner / Run-1 research)
+    subagent               → medium  (builder / Run-2 implementation)
+    subagent_implement     → medium  (same as `subagent`, if present)
+    anything else / no match → fallback: the patch's `subagentEffort` config
+                                (currently `medium`)
+
+Consequently:
+- **Run 1 is launched with the `subagent_plan` tool.** Launching a research
+  pass with plain `subagent` would downgrade it to medium — do not.
+- **Run 2 is launched with the `subagent` tool** (background; completion
+  arrives as a notice — the blocking rule still applies).
+- The mapping lives in `~/.dsh/cordis.patch.yml` +
+  `~/.dsh/plugins/subagent-reasoning.js` and is composed **at DSH host start**:
+  a patch/plugin edit takes effect on the NEXT restart. A host restart KILLS
+  in-flight subagents — after one, inspect the task folder + `.scratch/AC-NNNN/`
+  for partial progress and relaunch with a resume message pointing at the disk
+  state (do not redo completed steps).
 
 ---
 
 ## RUN 1 TEMPLATE — xhigh, read-only research → plan.html
 
-Paste as the subagent prompt (subagent tier: **xhigh**).
+Paste as the prompt to the **`subagent_plan` tool** (the plugin pins that tool
+to **xhigh**). Read-only research → writes `tasks/AC-NNNN/plan.html`.
 
 ```
 You are the Run-1 research subagent for AweCraft task AC-NNNN.
@@ -106,8 +135,8 @@ Decision:
 
 ## RUN 2 TEMPLATE — medium, builder
 
-Paste as the subagent prompt (subagent tier: **medium**). Only send after the
-gate PASSES.
+Paste as the prompt to the **`subagent` tool** (the plugin pins `subagent` to
+**medium**). Only send after the gate PASSES.
 
 ```
 You are the Run-2 builder subagent for AweCraft task AC-NNNN.
@@ -155,9 +184,10 @@ Before launching Run 1, the coordinator checks the task in `tasks/TASKS.yaml`:
 - BYPASS=yes → **skip Run 1 entirely** (no plan.html, no gate). The task gets
   its spec from the AC-0102 template: `python3 tasks/scripts/spec_template.py
   AC-NNNN` (writes `tasks/AC-NNNN/spec.html`; if the spec already exists use
-  it), then launch the **Run 2 medium builder directly** with that spec.html
-  (same prompt as Run 2 above, minus the plan.html reference — point at
-  spec.html + HARNESS.md; verification stays G0 + SMOKE + ≤1 R=1 render).
+  it), then launch the **Run 2 medium builder directly via the `subagent`
+  tool** with that spec.html (same prompt as Run 2 above, minus the plan.html
+  reference — point at spec.html + HARNESS.md; verification stays G0 + SMOKE +
+  ≤1 R=1 render).
 - BYPASS=no → normal two-phase flow (Run 1 → gate → Run 2).
 
 Rationale: trivial tasks are self-evident from the spec; the research pass
