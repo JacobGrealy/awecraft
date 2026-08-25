@@ -56,6 +56,7 @@ before any mode; without it, harness envs force radius 4.
 | `dropshot` | `_dropshot_test` | textured block-drop render (AC-0083) | `dropshot` (true), `spawned`, `drop_count`, `cam` | `AWECRAFT_SNAPSHOT` (output path) | render mode (~300 s) | xvfb |
 | `crossshot` | `_crossshot_test` | flower cross-sprite render (AC-0084) | `crossshot` (true), `placed`, `tx`, `ty`, `tz` | `AWECRAFT_SNAPSHOT` | render mode (~300 s) | xvfb |
 | `quitmenu` | `_quitmenu_test` | pause→quit-to-menu: save written, world freed, back to active menu (AC-0081) | `ok`, `paused_ok`, `menu_scene_active`, `world_cleared`, `save_written`, `seed_ok`, `edits_ok`, `slot`, `script_errors_seen` | — | ~10–20 s (not re-run 08-24) | clears all 3 slots first |
+| `mainmenuexit` | `_mainmenuexit_test` | main-menu Exit button: menu-first boot, finds Exit button, press → app quit (AC-0099) | `menu`, `menu_state`, `menu_visible`, `exit_found`, `web_nothreads`, `ready_to_quit` | — | ~5–10 s | self-quit harness (Exit press → `get_tree().quit()` on desktop); intercepted in `_ready()` BEFORE the game dispatch; BATTSKIP in battery (self-quits the process) |
 
 `settings` is also a valid battery mode (`AWECRAFT_BATTERY=settings;…`) — it runs the
 same `_settings_test` inside the battery (see its table row).

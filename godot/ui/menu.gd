@@ -217,6 +217,12 @@ func _on_quit_btn_pressed() -> void:
 		on_quit_to_menu.call()
 
 
+func _on_exit_pressed() -> void:
+	if OS.has_feature("web_nothreads"):
+		return
+	get_tree().quit()
+
+
 func _open_pack_dialog() -> void:
 	if _is_web:
 		return
@@ -426,6 +432,7 @@ func _build_main() -> void:
 	for s in range(3):
 		vb.add_child(_mk_slot_row(s))
 	vb.add_child(_mk_btn("Options", func(): open_options("main")))
+	vb.add_child(_mk_btn("Exit", _on_exit_pressed))
 	var packb := _mk_btn("Load Texture Pack (.mcpack / .zip)", _open_pack_dialog)
 	if _is_web:
 		packb.disabled = true

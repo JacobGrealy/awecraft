@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0099 — plan (Run-1)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:940px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.flag{background:#fdecec;border-left:4px solid #c0392b;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.note{font-size:13px;color:#555}.ok{color:#1a7f37;font-weight:600}</style></head><body>
+<h1>AC-0099 — plan (Run-1, research only)</h1>
+<p class="note">Run-1 deliverable per <code>tasks/templates/two-phase.md</code> (7 sections, in order). All line numbers re-parsed from current source on 2026-08-25; baseline G0 re-run clean (RC=0, 0 <code>SCRIPT ERROR</code>).</p>
+
+<h2>1. Goal</h2>
+<p>Add an <b>Exit</b> button to the main menu&rsquo;s centered button column (below <i>Options</i>, matching the existing full-width <code>_mk_btn</code> style) that quits the app on desktop via <code>get_tree().quit()</code> and is a safe no-op on web (<code>OS.has_feature("web_nothreads")</code> early-return), verified headless by a new <code>AWECRAFT_LOGIC=mainmenuexit</code> harness, the existing <code>quitmenu</code> regression harness, one main-menu render, and the G0/smoke battery.</p>
+
+<h2>2. Files to touch</h2>
+<table><tr><th>file</th><th>change (exact location)</th></tr>
+<tr><td><code>godot/ui/menu.gd</code></td><td>
+<b>THE feature file.</b> (Spec &ldquo;Scope&rdquo; says <code>godot/gui/menu.gd</code> &mdash; typo: the file is <code>godot/ui/menu.gd</code>; there is no <code>gui/</code> dir. Deviation D1, flagged.)<br>
+(a) After line 428 (<code>vb.add_child(_mk_btn("Options", func(): open_options("main")))</code>), before the pack-button lines 429&ndash;433, insert one line: <code>vb.add_child(_mk_btn("Exit", _on_exit_pressed))</code>. Full-width (w default &minus;1 &rarr; <code>SIZE_EXPAND_FILL</code>, 40&nbsp;px height, font 17) &mdash; identical style to Play/Options.<br>
+(b) After line 217 (end of <code>_on_quit_btn_pressed</code>), add the handler:<pre>func _on_exit_pressed() -> void:
+	if OS.has_feature("web_nothreads"):
+		return
+	get_tree().quit()</pre>
+No new <code>on_*</code> Callable needed: the action is a pure engine call, no main.gd state involved. <code>_mk_btn</code> (menu.gd:341&ndash;353) wires <code>b.pressed.connect(cb)</code> &mdash; same pattern as every other menu button. Button is present AND enabled on web (spec: present, press = no-op); the early-return is the whole web behavior &mdash; zero side effects by construction.</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>
+<b>Harness only (spec-sanctioned &ldquo;small hook&rdquo;).</b><br>
+(a) In <code>_ready()</code>, after line 93 (the <code>AWECRAFT_BATTERY</code> if-block), before line 94 (<code>if logic != "":</code>), insert:<pre>if logic == "mainmenuexit":
+	await _mainmenuexit_test()
+	return</pre>
+It MUST intercept before the <code>logic != ""</code> dispatch: every mode inside <code>_run_game</code> (main.gd:94&ndash;96, dispatch bodies 904&ndash;962) boots the world game-first &mdash; <code>mainmenuexit</code> instead needs the <b>menu-first</b> startup state (the real main menu, no world), which only <code>_boot_menu()</code> (main.gd:289&ndash;292) provides. (Same &ldquo;intercept in <code>_ready()</code>&rdquo; pattern as the existing <code>AWECRAFT_MENU_SHOT</code> hook, main.gd:76&ndash;87.)<br>
+(b) After line 4031 (end of <code>_quitmenu_test</code>, the AC-0081 harness) add two functions:<pre>func _mainmenuexit_test() -> void:
+	await _boot_menu()
+	for i in 6:
+		await get_tree().process_frame
+	var state_ok := menu_ui != null and menu_ui._state == "main" and menu_ui.visible
+	var exit_btn := _find_exit_button()
+	Debug.result({
+		"menu": "mainmenuexit",
+		"menu_state": String(menu_ui._state) if menu_ui != null else "null",
+		"menu_visible": menu_ui != null and menu_ui.visible,
+		"exit_found": exit_btn != null,
+		"web_nothreads": OS.has_feature("web_nothreads"),
+		"ready_to_quit": state_ok and exit_btn != null,
+	})
+	if not (state_ok and exit_btn != null):
+		get_tree().quit(1)
+		return
+	exit_btn.pressed.emit()
+
+func _find_exit_button() -> Button:
+	var stack := [menu_ui.main_box]
+	while stack.size() > 0:
+		var n: Node = stack.pop_back()
+		if n is Button and (n as Button).text == "Exit":
+			return n as Button
+		for c in n.get_children():
+			stack.append(c)
+	return null</pre>
+The press goes through <code>pressed.emit()</code> (not a direct call) so the signal wiring itself is exercised &mdash; the stronger check; the AC-0081 harness calls the handler directly (main.gd:4002) but that predates this button. RESULT is printed <b>before</b> the press because the desktop press ends the process: the RESULT asserts the preconditions (menu actually shown, button found), and the clean exit (RC=0, zero script errors) is the quit assertion itself. On precondition failure <code>quit(1)</code> &rarr; non-zero RC fails the gate loudly.</td></tr>
+<tr><td><code>tasks/AC-0099/</code></td><td>plan.html (this file, Run-1) + Run-2 adds continuity.md, AC-0099-results.html, main_menu_exit.png.</td></tr>
+</table>
+<p class="note">Read-only refs used by this plan: <code>godot/autoload/debug.gd</code> (<code>result()</code> line 30: prints <code>RESULT {json}</code> + writes <code>user://debug_result.json</code>), <code>godot/autoload/save.gd</code> (<code>active_slot := -1</code> line 7), <code>godot/world/world.gd:98</code> (canonical web gate), <code>tasks/HARNESS.md</code> (mode table, battery semantics, render recipe).</p>
+
+<h2>3. Frozen spec refs</h2>
+<ul>
+<li><code>index.html</code> build <code>20260816-r12</code> (Three.js single-file) = source of truth, unmodified. The frozen web spec has <b>no</b> exit button (browser tab closes the game); this is a Godot-native addition per the registry note (&ldquo;web: no-op or close tab if allowed&rdquo; &rarr; no-op chosen: JS/browser tab-close is not available to the engine, and <code>get_tree().quit()</code> has no web equivalent in a single-tab game).</li>
+<li>World constants (task touches <b>no</b> world/data code &mdash; cited verbatim for the gate; world stays byte-identical):
+<table><tr><th>const</th><th>verbatim</th><th>file:line</th></tr>
+<tr><td><code>CHUNK</code></td><td><code>const CHUNK := 16</code></td><td>godot/autoload/data.gd:3</td></tr>
+<tr><td><code>HEIGHT</code></td><td><code>const HEIGHT := 80</code></td><td>godot/autoload/data.gd:4</td></tr>
+<tr><td><code>SEA</code></td><td><code>const SEA := 30</code></td><td>godot/autoload/data.gd:5</td></tr></table>
+</li>
+<li>Biome thresholds, <code>biome_at()</code> (godot/world/generator.gd, function at :45) &mdash; verbatim:
+<pre>if t &lt; -0.25:            # line 48 &rarr; "snow"   (line 49)
+if t &gt; 0.35 and m &lt; 0.1:  # line 50 &rarr; "desert" (line 51)
+if m &gt; 0.25:              # line 52 &rarr; "forest" (line 53)
+return "plains"           # line 54</pre>
+</li>
+</ul>
+
+<h2>4. Data.* ids</h2>
+<p><b>None touched.</b> This is a pure-GUI task: no block ids, no item ids, no <code>TOOL_GRIDS</code>, no <code>B_*</code> ids (godot/world/generator.gd:3&ndash;18) &mdash; hence no genhash gate (spec fence: world byte-identical). The identifiers this task actually touches, verbatim:</p>
+<table><tr><th>identifier</th><th>value</th><th>file:line</th></tr>
+<tr><td>main-menu column buttons (existing order)</td><td><code>"Play"</code> / <code>"New World"</code> / <code>"Worlds"</code> label / slot rows (<code>"Continue"</code>, <code>"Clear"</code>) / <code>"Options"</code></td><td>godot/ui/menu.gd:407, 416, 419, 173&ndash;174, 428</td></tr>
+<tr><td>new button</td><td><code>"Exit"</code> (unique in main_box; pause menu&rsquo;s quit button is <code>"Quit to Menu"</code>, menu.gd:471 &mdash; no text collision)</td><td>inserted after godot/ui/menu.gd:428</td></tr>
+<tr><td>web gate feature (canonical, AC-0082)</td><td><code>OS.has_feature("web_nothreads")</code></td><td>godot/world/world.gd:98 (existing use); spec requirement line 114</td></tr>
+<tr><td>menu state strings</td><td><code>_state</code> &isin; <code>"main" | "pause" | "opt_main" | "opt_pause" | "ingame"</code></td><td>godot/ui/menu.gd:42, 45&ndash;52</td></tr>
+<tr><td>main-menu box member (harness walk root)</td><td><code>main_box: Control</code></td><td>godot/ui/menu.gd:21</td></tr></table>
+
+<h2>5. Harness gates</h2>
+<p>Engine recipe (HARNESS.md &sect;4): one bash command, <code>export HOME=/tmp/dsh_home; mkdir -p $HOME</code>, <code>cd</code> repo root, <code>S=/home/angrygiant/tools/godot/godot</code>, always <code>--path godot</code>, one godot at a time, timeout as listed.</p>
+<table><tr><th>gate</th><th>command</th><th>expected (exact)</th></tr>
+<tr><td><b>G0</b> load clean</td><td><code>timeout 300 $S --headless --path godot --quit</code></td><td>RC=0, zero <code>SCRIPT ERROR</code> lines (baseline re-verified by Run-1: clean).</td></tr>
+<tr><td><b>G1</b> desktop quit (new mode)</td><td><code>timeout 240 env AWECRAFT_LOGIC=mainmenuexit $S --headless --path godot</code></td><td>stdout <code>RESULT {"menu":"mainmenuexit","menu_state":"main","menu_visible":true,"exit_found":true,"web_nothreads":false,"ready_to_quit":true}</code>; then the <b>press is the last action</b>: process exits on its own, <b>RC=0</b>, zero <code>SCRIPT ERROR</code>. (Headless boot decides menu-vs-world at main.gd:101&ndash;106: with no env the headless-idle check skips the menu; this hook is precisely the env-gated way to reach the real startup main menu headless.)</td></tr>
+<tr><td><b>G2</b> web no-error</td><td colspan="2"><b>Honest statement: code-path + construction, NOT a headless web-simulated run.</b> Probed on this box: Godot 4.7.1&rsquo;s scriptable <code>OS</code> class has <code>has_feature</code> but <b>no <code>add_feature_tag</code></b> (probe: <code>.scratch/AC-0099/probe_feature.gd</code>, <code>OS.get_method_list()</code> filter) &rarr; the <code>web_nothreads</code> feature cannot be simulated headless, so no web-sim hook exists or is buildable. What <i>is</i> verified: (a) the gate expression is byte-identical to the proven web gate at godot/world/world.gd:98 (AC-0082 &ldquo;web gate&rdquo;); (b) the branch is an early <code>return</code> &mdash; on web the press executes zero side effects (no quit call, no Save, no state change), so it is no-error by construction; (c) G1 proves the shared path (button found &rarr; handler runs &rarr; gate evaluates false &rarr; quit) executes with zero script errors. Optional post-build confirmation (coordinator, after <code>./build_web.sh</code>): browser-load the 8443 build, click Exit, assert no console error &mdash; recorded in results, not a Run-2 gate.</td></tr>
+<tr><td><b>G3</b> menu render</td><td><code>xvfb-run -a env AWECRAFT_MENU_SHOT=tasks/AC-0099/main_menu_exit.png AWECRAFT_SIZE=1280,720 $S --path godot --rendering-method gl_compatibility</code> (300&nbsp;000&nbsp;ms timeout)</td><td>Existing hook main.gd:76&ndash;87 (no new render hook needed): <code>RESULT {"menu":true,"mode":...,"build":...,"values":...}</code> + PNG showing <b>Exit</b> in the column below Options. Menu renders under xvfb proven since AC-0033 (p3_* pixel gates).</td></tr>
+<tr><td><b>G4</b> smoke + clean tree</td><td>(a) <code>timeout 240 env AWECRAFT_LOGIC=quitmenu $S --headless --path godot</code> &nbsp; (b) spec-literal: <code>timeout 300 env 'AWECRAFT_BATTERY=quitmenu;player' $S --headless --path godot</code> &nbsp; (c) <code>git status</code> (coordinator) / changed-file list</td><td>(a) AC-0081 regression: <code>RESULT</code> with <code>"ok":true</code> (<code>paused_ok</code>, <code>menu_scene_active</code>, <code>world_cleared</code>, <code>save_written</code>, <code>seed_ok</code>, <code>edits_ok</code> all true, <code>script_errors_seen</code> false) &mdash; the pause-menu quit path is untouched. (b) Combined <code>RESULT {"battery":{...},"ok":true}</code> &mdash; <b>but note D2</b>: the battery runner (main.gd:175&ndash;201) has no <code>quitmenu</code> case, so the <code>quitmenu</code> arm prints <code>BATTSKIP quitmenu</code> and exercises nothing (the quitmenu harness also self-terminates the process at main.gd:4031, so it structurally cannot be a battery arm). The standalone run (a) is the real quitmenu regression; (b) is run verbatim because the spec names it. (c) only <code>godot/ui/menu.gd</code>, <code>godot/scenes/main.gd</code>, <code>tasks/AC-0099/*</code> changed.</td></tr>
+</table>
+
+<h2>6. Snapshot/render names</h2>
+<ul>
+<li>One render (the cap): <code>AWECRAFT_MENU_SHOT=tasks/AC-0099/main_menu_exit.png</code>, <code>AWECRAFT_SIZE=1280,720</code>, no <code>AWECRAFT_CAM</code> (menu hook uses its own camera, main.gd:78), no <code>AWECRAFT_RADIUS</code> (no world built). Command shape = HARNESS.md &sect;4 render line 169 with the menu-shot env: <code>xvfb-run -a env AWECRAFT_MENU_SHOT=... AWECRAFT_SIZE=1280,720 $S --path godot --rendering-method gl_compatibility</code>.</li>
+<li>Run-2 saves the PNG under <code>tasks/AC-0099/</code> and embeds it in <code>AC-0099-results.html</code>.</li>
+</ul>
+
+<h2>7. Risks/edge cases</h2>
+<ul>
+<li><b>D1 (spec typo):</b> spec Scope says <code>godot/gui/menu.gd</code>; actual file <code>godot/ui/menu.gd</code> (menu code is in <code>ui/</code>, no <code>gui/</code> dir exists). Run-2 edits <code>godot/ui/menu.gd</code>; coordinator to fix the spec line when committing.</li>
+<li><b>D2 (spec G4 literal is partly vacuous):</b> <code>AWECRAFT_BATTERY="quitmenu;player"</code> BATTSKIPs the quitmenu arm (HARNESS.md &sect;3: &ldquo;anything else prints <code>BATTSKIP &lt;mode&gt;</code> (no RESULT, no failure)&rdquo;). Run the literal command (green, cheap) AND the standalone <code>AWECRAFT_LOGIC=quitmenu</code> (the effective AC-0081 regression). Do NOT add a quitmenu case to the battery (out of fence; it would kill the battery process).</li>
+<li><b>Wrong dispatch location = wrong test:</b> if Run-2 wires <code>mainmenuexit</code> inside <code>_run_game</code> (like <code>quitmenu</code>), the world boots first &mdash; that tests the pause-menu-adjacent menu, not the startup main menu, and adds 10&ndash;20&nbsp;s of world gen. The <code>_ready()</code>-intercept placement in &sect;2 is deliberate.</li>
+<li><b>Headless quit semantics:</b> <code>get_tree().quit()</code> default exit code = EXIT_SUCCESS (0) &mdash; RC=0 is the assertion. Any teardown-time script error would land on stderr &rarr; caught by the zero-<code>SCRIPT ERROR</code> grep. Precondition failure uses <code>quit(1)</code> so a missing button/menu never masquerades as a green run.</li>
+<li><b>Menu-shown vs world (startup decision):</b> menu-first boot is the default on every display platform (main.gd:103&ndash;106, AC-0033); <code>Play</code> continues the first occupied save slot else starts a new world (main.gd:332&ndash;342) &mdash; fresh-start vs loaded-save is irrelevant to Exit: from the main menu the handler touches neither world nor Save (<code>Save.active_slot := -1</code>, save.gd:7; auto-save lives only in <code>quit_to_menu</code>, main.gd:366&ndash;367, which Exit never calls). Spec fence &ldquo;no save writes from Exit&rdquo; satisfied by construction.</li>
+<li><b>AC-0081 path intact:</b> the new button/handler are additive; <code>_on_quit_btn_pressed</code>/<code>on_quit_to_menu</code>/<code>quit_to_menu()</code> are not touched. G4(a) re-proves it (<code>ok:true</code>).</li>
+<li><b>In-game Exit press is N/A:</b> the button exists only in <code>main_box</code> (visible only when <code>_state == "main"</code>, menu.gd:45&ndash;52); the pause menu keeps its own <code>"Quit to Menu"</code>.</li>
+<li><b>Button discovery robustness:</b> <code>_find_exit_button</code> walks <code>main_box</code> descendants matching <code>Button.text == "Exit"</code> &mdash; unique in that subtree (verified: no other <code>"Exit"</code> text in menu.gd). Fallback if Run-2 prefers explicit naming: set <code>b.name = "ExitButton"</code> at creation and use <code>find_child("ExitButton", true, false)</code> &mdash; either is acceptable; record which in continuity.md.</li>
+<li><b>Web button stays enabled</b> (unlike the web-disabled pack button): spec requires present + pressable-but-no-op; do not copy the <code>disabled</code>/tooltip pattern from menu.gd:430&ndash;432.</li>
+<li><b>No comments</b> in .gd edits (ARCHITECTURE.md &sect;1); no world/* or data.gd edits; no git, no builds, no <code>~/.dsh</code>, never kill python server pids (spec fences).</li>
+<li><b>Doc drift (coordinator, post-Run-2):</b> <code>tasks/HARNESS.md</code> &sect;1 mode table gains a <code>mainmenuexit</code> row (36&rarr;37 modes) &mdash; coordinator update, not a Run-2 deliverable.</li>
+</ul>
+<p class="note">Plan written 2026-08-25 by Run-1 (research only; no .gd edits, no renders, baseline G0 + feature-tag probe under <code>.scratch/AC-0099/</code> only).</p>
+</body></html>

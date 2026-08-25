@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-25T17:12
+  updated_at: 2026-08-25T18:00
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -2768,16 +2768,29 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-24T05:38
-  updated_at: 2026-08-25T17:12
-  completed_at: null
+  updated_at: 2026-08-25T18:00
+  completed_at: 2026-08-25T18:00
   waiting_on: null
   parent_id: null
   notes: 'Main menu: add Exit button that closes the game (Windows native: get_tree().quit(); web: no-op or close tab if allowed).
     Place in main menu button column alongside Play/Options. Verify desktop quit + web no-error.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-25T18:00
+    updated_at: null
+    text: '[agent] DONE 2026-08-25 (two-phase). Main menu Exit button: godot/ui/menu.gd _mk_btn(''Exit'') below Options in
+      _build_main + _on_exit_pressed() = web_nothreads early-return no-op else get_tree().quit(); godot/scenes/main.gd new
+      AWECRAFT_LOGIC=mainmenuexit harness (intercepted in _ready() before game dispatch, _boot_menu first, _find_exit_button
+      walks main_box, RESULT printed before press; self-quit). Gates: G0 RC=0 0 err; G1 mainmenuexit RESULT {menu_state:main,
+      menu_visible:true, exit_found:true, web_nothreads:false, ready_to_quit:true} -> self-exit RC=0 0 err; G2 web = code-path
+      only (honest: no headless web sim, OS.add_feature_tag absent in 4.7.1; branch byte-identical to world.gd:98 gate, side-effect-free);
+      G3 main_menu_exit.png 1280x720 (coord viewed: full-width Exit below Options); G4a quitmenu standalone ok:true (AC-0081
+      intact), G4b literal battery BATTSKIP quitmenu (D2: self-quit arm) + player green (2.82), G4c tree = 2 .gd + task folder.
+      Deviations: D1 spec path typo gui/->ui/ (spec fixed), D2 battery arm vacuous (documented). +HARNESS.md mainmenuexit
+      row. Results tasks/AC-0099/AC-0099-results.html.'
 - id: AC-0100
   title: build-scripts-datetime-release-names
   source: user

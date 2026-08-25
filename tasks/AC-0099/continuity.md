@@ -1,0 +1,18 @@
+# AC-0099 continuity log
+
+## RUN 2 (builder) — 2026-08-25
+- Resume check: no prior continuity.md existed (Run-1 left only plan.html + .scratch baseline/probe). Started from plan.html (gated) + spec.html. No re-research.
+- **Files changed** (exact diff in AC-0099-results.html):
+  - `godot/ui/menu.gd` (+7): `_on_exit_pressed()` after `_on_quit_btn_pressed` (web gate `OS.has_feature("web_nothreads")` early-return, then `get_tree().quit()`); `vb.add_child(_mk_btn("Exit", _on_exit_pressed))` right after the Options `_mk_btn` in `_build_main`, before the texture-pack row. Full-width (w=-1 default), no custom style.
+  - `godot/scenes/main.gd` (+34): `_ready()` intercept `if logic == "mainmenuexit": await _mainmenuexit_test(); return` placed AFTER the AWECRAFT_BATTERY block and BEFORE `if logic != ""` (menu-first via `_boot_menu()`, per plan §2a); new `_mainmenuexit_test()` + `_find_exit_button()` (walks `menu_ui.main_box` descendants matching `Button.text == "Exit"` — walk approach, not the plan's optional named-child fallback) after `_quitmenu_test`.
+- **Deviation (plan §2 code, 1 line):** `var state_ok := ...` failed parse ("Cannot infer the type of state_ok" — `menu_ui._state` is untyped in menu.gd) → `var state_ok: bool = ...`. Everything else byte-identical to the gated plan.
+- **Gate results (all passed):**
+  - G0: RC=0, 0 `SCRIPT ERROR` (first G0 attempt caught the parse error above; clean after the 1-line type fix).
+  - G1: `AWECRAFT_LOGIC=mainmenuexit` headless → `RESULT {"exit_found":true,"menu":"mainmenuexit","menu_state":"main","menu_visible":true,"ready_to_quit":true,"web_nothreads":false}`, process self-exited on the emitted press, RC=0, 0 script errors. RESULT printed BEFORE the press (plan ordering).
+  - G2: code-path only (no headless web sim exists — plan D2; `OS.add_feature_tag` absent in 4.7.1 per Run-1 probe). Gate expression byte-identical to world.gd:98; branch is an early return = no-op by construction.
+  - G3: xvfb `AWECRAFT_MENU_SHOT` + `AWECRAFT_SIZE=1280,720` → `tasks/AC-0099/main_menu_exit.png` (1280x720, 52 KB), `RESULT {"build":"dev","menu":true,"mode":"menu",...}`. Render visually verified: full-width Exit in the column below Options, above Load Texture Pack.
+  - G4(a): standalone `AWECRAFT_LOGIC=quitmenu` + `AWECRAFT_STDERR_FILE` (required by the AC-0081 harness — without it `script_errors_seen` defaults true and `ok` false) → `RESULT {"edits_ok":true,"menu_scene_active":true,"ok":true,"paused_ok":true,"save_written":true,"script_errors_seen":false,"seed_ok":true,"slot":0,"world_cleared":true}`, RC=0, 0 script errors.
+  - G4(b): spec-literal `AWECRAFT_BATTERY="quitmenu;player"` → prints `BATTSKIP quitmenu` (runner has no quitmenu case — plan D2), player arm green (`horizontal_moved 2.82`, `is_on_floor true`, exact known-stable), combined `RESULT {...,"ok":true,"total_ms":11671}`, RC=0, 0 script errors.
+  - G4(c): `git status --short` → only `godot/ui/menu.gd` + `godot/scenes/main.gd` modified, `tasks/AC-0099/` untracked (plan.html, main_menu_exit.png; spec.html already tracked). World/* untouched.
+- **Ops discovery:** `--path godot` chdirs the Godot process into `godot/` (project dir), so RELATIVE `AWECRAFT_MENU_SHOT`/`AWECRAFT_SNAPSHOT` paths silently fail (`Image.save_png` RC 7, SNAP line still prints). Use ABSOLUTE paths for snapshot/menu-shot envs. (First G3 attempt lost the PNG this way; re-ran with the absolute path.)
+- **Current state:** ALL gates passed; results.html written. Nothing left for Run-2. Next (coordinator): fix spec Scope typo `godot/gui/menu.gd` → `godot/ui/menu.gd` (D1), add `mainmenuexit` row to tasks/HARNESS.md §1 (37 modes), optional post-build web console check on the 8443 build, commit+push.

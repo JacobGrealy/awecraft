@@ -91,6 +91,9 @@ func _ready() -> void:
 	if battery_env != "":
 		await _run_battery(seed_env, battery_env)
 		return
+	if logic == "mainmenuexit":
+		await _mainmenuexit_test()
+		return
 	if logic != "":
 		await _run_game(seed_env, logic, cam, snapshot_path)
 		return
@@ -4029,6 +4032,37 @@ func _quitmenu_test(slot: int, spawn: Vector3) -> void:
 		"script_errors_seen": script_errors_seen,
 	})
 	get_tree().quit()
+
+
+func _mainmenuexit_test() -> void:
+	await _boot_menu()
+	for i in 6:
+		await get_tree().process_frame
+	var state_ok: bool = menu_ui != null and menu_ui._state == "main" and menu_ui.visible
+	var exit_btn := _find_exit_button()
+	Debug.result({
+		"menu": "mainmenuexit",
+		"menu_state": String(menu_ui._state) if menu_ui != null else "null",
+		"menu_visible": menu_ui != null and menu_ui.visible,
+		"exit_found": exit_btn != null,
+		"web_nothreads": OS.has_feature("web_nothreads"),
+		"ready_to_quit": state_ok and exit_btn != null,
+	})
+	if not (state_ok and exit_btn != null):
+		get_tree().quit(1)
+		return
+	exit_btn.pressed.emit()
+
+
+func _find_exit_button() -> Button:
+	var stack := [menu_ui.main_box]
+	while stack.size() > 0:
+		var n: Node = stack.pop_back()
+		if n is Button and (n as Button).text == "Exit":
+			return n as Button
+		for c in n.get_children():
+			stack.append(c)
+	return null
 
 
 func _await_spawn_floor(spawn: Vector3, max_frames: int) -> void:
