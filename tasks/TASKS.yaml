@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-25T09:44
+  updated_at: 2026-08-25T09:50
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -85,6 +85,7 @@ queue:
 - AC-0111
 - AC-0114
 - AC-0115
+- AC-0116
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -3293,3 +3294,65 @@ intake:
 
     Refs: godot/ARCHITECTURE.md, CONTINUITY.md §4 structure, TASKS.yaml queue.'
   comments: []
+- id: AC-0116
+  title: subagent-reasoning-plugin-fix-out-of-band
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: done
+  labels: []
+  created_at: 2026-08-25T09:50
+  updated_at: 2026-08-25T09:50
+  completed_at: 2026-08-25T09:50
+  waiting_on: null
+  parent_id: null
+  notes: 'Document out-of-band fix for subagent reasoning plugin (closed immediately — work done outside normal task flow).
+
+
+    Goal: Qwen3.8-27B homeserver1 reasoningEfforts {low:low, xhigh:xhigh} settings.yaml:12 root xhigh -> plan subagent xhigh,
+    implement subagent medium. tool-subagent.agentOptions is provider/model/maxTokens only packages/subagent/tool-subagent/src/index.ts:88
+    docs/subsystems/core.md:159, reasoningEffort materializes from adapter defaultEffort packages/core/agent-loop/src/agent.ts:441
+    packages/llm/llm/src/index.ts:793.
+
+
+    Work:
+
+    1. Plugin ~/.dsh/plugins/subagent-reasoning.js:1 - agent/request waterfall packages/core/agent-loop/src/agent.ts:457 replaces
+    reasoningEffort. Queue pending Map<parentSession, effort[]> filled in tools/pre-execute packages/subagent/subagent-in-process-driver/tests/structured.spec.ts:4
+    (exec.name->xhigh for subagent_plan, medium for subagent). isSubagent() via SessionHeader.delegationDepth/origin/parentSession
+    packages/core/session/src/types.ts:91.
+
+    2. Fix cordis.patch.yml path - name: ./plugins/... resolves against profiles/web vendor/loader/src/config/entry.ts:280
+    packages/boot/app-boot/README.md:32 -> ERR_MODULE_NOT_FOUND /tmp/dsh-web.log:1 -> absolute /home/angrygiant/.dsh/plugins/subagent-reasoning.js.
+
+    3. Fix ERR_REQUIRE_CYCLE_MODULE - top-level ESM import {ReasoningEffortId} from ''@deepseek-ai/dsh-llm'' + schemastery
+    cycled when Loader require()''d external .ts vendor/loader/src/config/entry.ts:287 -> rewrote to CJS exports.* with no
+    runtime imports, want as plain string (branded ReasoningEffortId packages/llm/llm/src/brand.ts:55 not needed).
+
+    4. Two blocking tools ~/.dsh/cordis.patch.yml:6 tool-subagent (medium) + tool-subagent-plan (xhigh) provider: spawn backgroundMode:
+    one-shot enableRunInBackground: false agentOptions: {provider:homeserver1, model:Qwen3.8-...} packages/subagent/tool-subagent/README.md:24
+    packages/subagent/tool-subagent/src/index.ts:438 settleForegroundRun() - coordinator blocks until output (vs continuable
+    background). disabled: false override for web global disabled:true.
+
+    5. Verify dsh web --dump-config | grep -A2 subagent-reasoning exit 0, curl http://127.0.0.1:3081/ 200 ss 127.0.0.1:3081
+    pid 169448 dsh-web.service, coordinator now subagent_plan (plan, xhigh) then subagent (implement, medium) on same physical
+    model.
+
+
+    Refs: ~/.dsh/plugins/subagent-reasoning.js, ~/.dsh/cordis.patch.yml, dsh web 3081.'
+  comments:
+  - id: 1
+    created_at: 2026-08-25T09:50
+    updated_at: null
+    text: '[user] Fixed outside normal task flow but documented here.
+
+      **Goal:** Qwen3.8-27B-UD-Q4_K_M homeserver1 reasoningEfforts: {low:low, xhigh:xhigh} settings.yaml:12 with root xhigh
+      → plan subagent xhigh, implement subagent medium – tool-subagent.agentOptions is provider/model/maxTokens only packages/subagent/tool-subagent/src/index.ts:88
+      docs/subsystems/core.md:159, reasoningEffort materializes from adapter defaultEffort packages/core/agent-loop/src/agent.ts:441
+      packages/llm/llm/src/index.ts:793.
+
+
+      Work 1-5 as in notes. Verify: dsh web --dump-config | grep -A2 subagent-reasoning exit 0, curl 127.0.0.1:3081 200, pid
+      169448.'
