@@ -13,7 +13,7 @@ Depends: AC-0082 done (data-gen threaded).</pre></blockquote>
 <h2>Goal</h2>
 <div class="fill"><b>FILL BY COORDINATOR</b> — one line, from the registry notes (marked REVIEW until confirmed). <b>REVIEW</b></div>
 <!-- FILL: Goal — one sentence. Example: "Add a torch-light-bake pass to the chunk mesher so caves are readable at night." -->
-<p><em>REVIEW — draft from notes: Move chunk mesh+light build off main thread (after AC-0082 data-gen).</em></p>
+<p><b>Goal (confirmed 2026-08-25):</b> Move the chunk MESH + LIGHT build off the main thread on desktop (Phase 3, after AC-0082&rsquo;s threaded data-gen): workers run pure-static mesh/light functions and return fresh Acc buffers; the main thread only creates ArrayMesh/StaticBody. Web (<code>web_nothreads</code>) keeps the current synchronous path byte-identical.</p>
 <h2>Frozen spec references</h2>
 <div class="auto"><b>AUTO (fixed boilerplate — do not hand-edit)</b></div>
 <ul>
@@ -110,16 +110,46 @@ Depends: AC-0082 done (data-gen threaded).</pre></blockquote>
 <tr><td>boundary r4 `in_radius_built_max`</td><td>**67** (`built_final` 81, `ok` true, `flap` 0, `p95_ms` 65)</td><td>AC-0079 (look-priority scoring; pre-fix gate was 55)</td></tr>
 </table>
 <h2>Task-specific requirements</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the concrete behavior/data changes this task makes.</div>
-<!-- FILL: Task-specific requirements. Example: e.g. &quot;fluids: source water over a hole writes 0 cells (zero-write invariant)&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-25)</b></div>
+<ul>
+<li>On <b>desktop</b> (<code>!OS.has_feature("web_nothreads")</code>, the canonical gate at <code>godot/world/world.gd:98</code> from AC-0082), the per-chunk mesh+light build runs on the existing <code>WorkerThreadPool</code>: workers execute the full pipeline (light compute <code>Lighting.compute_light_flat</code> → <code>_build_unit</code>/<code>_build_snap</code>/<code>_emit_*</code> → complete multi-surface Acc buffers, including the AC-0106/AC-0117 merged opaque path). The main thread only assembles <code>ArrayMesh</code>/<code>StaticBody</code> from returned buffers.</li>
+<li>Adapt the mesh/light functions to be <b>pure-static</b>: no <code>Game</code> autoload, no chunk-node/scene state — inputs = chunk data (blocks array, dimensions) + constants + merge-atlas info. Fresh-array handoff exactly like AC-0082 (<code>world.gd:323/359</code>-style dedup by chunk key, in-flight cap ≤6, stale-target drop, spawn chunk (0,0) built synchronously).</li>
+<li><b>Thread-safety of the AC-0106 merged-atlas static cache</b> (<code>chunk.gd _merge_atlas()/_ms_*</code>): the plan MUST state how workers access it safely (e.g. main thread pre-builds the extended atlas at world start / first mesh dispatch; workers only read the cached dict+texture) — no data race, no per-worker atlas rebuilds.</li>
+<li><b>Kill switch:</b> an env (e.g. <code>AWECRAFT_THREADMESH</code>, mirroring AC-0082&rsquo;s <code>AWECRAFT_THREADGEN</code>) defaulting ON on desktop, <code>"0"</code> = legacy synchronous path. The A/B perf gate and any rollback rely on it.</li>
+<li>Correctness invariants: produced geometry must be IDENTICAL to the synchronous path (same Acc contents per chunk — merged verts included); world DATA untouched (genhash 25/25 byte-identical); FULL battery values exact (lighting correctness is the risk: torch_level 14, sea 2730/1406 stable).</li>
+<li>Web (<code>web_nothreads</code>) branch: synchronous path unchanged (code stays reachable and byte-identical in behavior); no web feature added/removed.</li>
+</ul>
 <h2>Task-specific gates</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the specific mode(s)/values that must be green beyond the defaults.</div>
-<!-- FILL: Task-specific gates. Example: e.g. &quot;G1: AWECRAFT_LOGIC=fluids → sea_stable true, sea_surface 2730&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-25)</b> — FULL tier (threading touches the hot path; races are the risk).</div>
+<ul>
+<li><b>G1 — headless clean (threaded ON by default on desktop):</b> <code>~/tools/godot/godot --headless --path godot --quit</code> and the default logic runs → RC=0, zero script errors, with the kill switch both <code>"0"</code> and default. No hang (AC-0082&rsquo;s duplicate-enqueue hang is the known failure mode — dedup + in-flight cap + stale-target drop required).</li>
+<li><b>G2 — genhash 25/25 byte-identical</b> (threaded ON): world data untouched.</li>
+<li><b>G3 — FULL battery green, threaded ON:</b> <code>AWECRAFT_BATTERY="player;interact;light;fluids;buckets"</code> → <code>ok:true</code>, ALL known-stable values exact: sea 2730/2730 + 1406/1406 (sea_stable true), torch_level 14, horizontal_moved 2.82, place_ok/drop_spawned true, water_on_lava 25, sideways_lava 9.</li>
+<li><b>G4 — A/B perf (the point of the task):</b> perf mode (r4 and/or r50, same seed) with kill switch <code>"0"</code> vs default: report <code>build_ms</code> (and drain/build wall metrics) both ways → threaded must IMPROVE build_ms (report the delta %). If there is no measurable improvement, that is a FAIL — report honestly.</li>
+<li><b>G5 — race flake loop:</b> repeat the race-sensitive arms (player + buckets, threaded ON) ≥4× each → all green, no hang (mirrors the AC-0082 flake loops).</li>
+<li><b>G6 — render A/B:</b> R=1 iso render threaded ON vs <code>"0"</code> → identical except water/lava anim frames (report diff %); lighting visibly correct (caves/torch not black).</li>
+<li><b>G7 — web branch untouched:</b> the <code>web_nothreads</code> synchronous path is code-identical in behavior (diff shows it intact); the web build is the coordinator&rsquo;s job (runs after) — subagent just proves the branch exists and is unchanged.</li>
+<li><b>G8 — tree clean:</b> only the listed files + task folder changed; <code>tasks/AC-0107/AC-0107-results.html</code> self-contained (A/B perf table, flake-loop log, render diff).</li>
+</ul>
 <h2>Scope (files expected to change)</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the exact files this task will edit (helps G5 stay clean).</div>
-<!-- FILL: Scope (files expected to change). Example: e.g. &quot;godot/world/chunk.gd, godot/scenes/main.gd (fluids branch only)&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-25)</b></div>
+<ul>
+<li><code>godot/world/chunk.gd</code> — mesh builders to pure-static (no node/Game state): <code>_build_unit</code>/<code>_build_snap</code>/<code>_emit_*</code>, and the merged path (<code>_emit_ro_merged</code>/<code>_qwrite_merged</code>) + a thread-safe way to consume the <code>_merge_atlas()</code> static cache (pre-build on main thread; workers read-only). This is the core of the task.</li>
+<li><code>godot/autoload/lighting.gd</code> — <code>compute_light_flat</code> (and whatever it needs) to pure-static, callable from a worker on a fresh copy of the chunk light data.</li>
+<li><code>godot/world/world.gd</code> — the dispatch: hand chunk data to the WorkerThreadPool for mesh+light (dedup by key, in-flight cap, stale-target drop, spawn-chunk sync), and the main-thread assembly (ArrayMesh/StaticBody from returned Acc buffers) + the <code>AWECRAFT_THREADMESH</code> kill switch + desktop gate. Keep the AC-0082 data-gen dispatch intact (mesh build is downstream of it).</li>
+<li><code>tasks/AC-0107/</code> — plan.html, continuity.md, AC-0107-results.html, render A/B PNGs.</li>
+</ul>
+<p class="note">If the plan finds a function elsewhere must also go static to keep the worker path allocation-free of node refs, name the exact file:line in plan.html; the coordinator approves scope additions before Run-2.</p>
 <h2>Fences</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — what this task must NOT touch.</div>
-<!-- FILL: Fences. Example: e.g. &quot;no .gd outside the listed scope; no TASKS.yaml edits; no git&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-25)</b></div>
+<ul>
+<li>Do NOT modify <code>index.html</code> (frozen web spec) or anything under <code>web/</code>.</li>
+<li>Do NOT change world data / gen / constants — genhash must stay byte-identical (mesh build is downstream of data-gen; AC-0082&rsquo;s threaded data-gen path is NOT to be altered).</li>
+<li>Do NOT change the <b>synchronous</b> (web / kill-switch-<code>"0"</code>) output — geometry produced by the threaded path must be byte-identical to it; no behavior change beyond WHERE the work runs.</li>
+<li>Do NOT remove or degrade the AC-0106/AC-0117 merged-mesh path on desktop (merged verts must still be produced, and the texture fix must hold).</li>
+<li>No git (coordinator commits). No builds (coordinator runs <code>./build_web.sh</code> / <code>./build_windows.sh</code> after). No <code>~/.dsh</code>. Do NOT kill any python server pid.</li>
+<li>Godot runs ONE at a time (threaded godot + any second godot = cache corruption/hang). At most the small A/B renders after headless-verify (R=1). Every godot call: <code>HOME=/tmp/dsh_home</code> (mkdir in the same call); /tmp is ephemeral per call.</li>
+<li>Keep the append-only <code>tasks/AC-0107/continuity.md</code>. Final report ≤20 lines.</li>
+</ul>
 <p class="note">Scaffold generated by <code>tasks/scripts/spec_template.py</code> (no wall-clock timestamps; the only date is the registry created_at). Auto sections are reproducible byte-for-byte; fill sections are for the coordinator.</p>
 </body></html>
