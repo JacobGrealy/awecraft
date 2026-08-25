@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-25T13:58
+  updated_at: 2026-08-25T17:07
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -3372,11 +3372,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-25T13:58
-  updated_at: 2026-08-25T13:58
-  completed_at: null
+  updated_at: 2026-08-25T17:07
+  completed_at: 2026-08-25T17:07
   waiting_on: null
   parent_id: null
   notes: 'User report (2026-08-25): AC-0106 greedy-meshing introduced wrong block textures - many blocks now show another
@@ -3385,4 +3385,17 @@ intake:
     runtime-extended atlas merge-strip layout / per-block strip origins, _qwrite_merged slope-31 strip UVs vs per-fi corner
     mapping, merged-surface material texture binding (_opaque_material). A/B reproduce with the AWECRAFT_MERGE=0 kill switch.
     genhash + battery must stay byte-stable.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-25T17:07
+    updated_at: null
+    text: '[agent] Fixed 2026-08-25 (two-phase, both runs same session). Root cause: _merge_atlas() cache-hit return (chunk.gd:47)
+      omitted the ''h'' key (extended-atlas height 1760) that only the fresh-build path had -> _emit_ro_merged defaulted ms_h
+      to ATLAS_PX=1024 (chunk.gd:439) -> every chunk after the first scaled merged y-UVs x1.71875 down the 1024x1760 extended
+      atlas -> foreign tiles (log-side -> snowgrass top/bottom = user''s ''dirt trunks''; stone -> planks). Fix = 1 line (add
+      ''h'' to cached return, mirroring :107) + 1-token hardening of unreachable fallback (:427, Vector2 denominator). Gates
+      all PASS: G0 RC=0 0 err; G1 genhash 25/25 byte-identical; G2 seed-16 A/B R=1 iso diff>4=0.694% (pre-fix 1.97%), zero
+      foreign tiles, trunks cross-checked vs merge-OFF ground truth on disk by coord (brown wood, tan dirt cliff identical
+      ON vs OFF); G3 FULL battery ok:true all known-stable exact (sea 2730/1406, torch 14, horiz 2.82, lava 25/9); G4 MINFO
+      r4 opaque=125552 EXACT (AC-0106 win intact); G5 only chunk.gd + task folder. AC-0106''s own gate missed it: seed-44
+      R=1 iso showed only the (correct) first chunk. Coord-verified diff + renders on disk. Results tasks/AC-0117/AC-0117-results.html.'

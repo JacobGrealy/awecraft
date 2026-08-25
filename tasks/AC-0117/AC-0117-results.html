@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0117 — results (Run-2 implementation)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:24px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.note{font-size:13px;color:#555}.pass{color:#0a7a2d;font-weight:600}img{max-width:100%;border:1px solid #ccc;border-radius:4px;margin:6px 0}figure{margin:10px 0}figcaption{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0117 — results: greedy-mesh texture mismatch (AC-0106 regression) FIXED</h1>
+<p class="meta">Run-2 (builder/implementation) — 2026-08-25. Implements coordinator-gated <code>plan.html</code>; Run-1 research evidence in <code>continuity.md</code>.</p>
+
+<h2>Root cause (one para)</h2>
+<p><code>_merge_atlas()</code> in <code>godot/world/chunk.gd</code> caches the runtime-extended 1024×1760 merge atlas in statics (<code>_ms_tex</code>/<code>_ms_rects</code>). The fresh-build path returned <code>{"tex", "rects", "h": float(img2.get_height())}</code> (chunk.gd:107) but the <b>cache-hit path</b> returned <code>{"tex", "rects"}</code> with no <code>"h"</code> key (chunk.gd:46-47). <code>_emit_ro_merged</code> reads <code>ms_h = float(ms.get("h", Data.ATLAS_PX))</code> (chunk.gd:439), so every chunk built <i>after</i> the first one in the build queue (the d=0 spawn chunk gets the fresh-build dict; every other chunk hits the cache) divided its merged y-UVs by 1024 instead of the real texture height 1760 — a ×1.71875 y-scale error that pushed every merged quad's sampled row down into a foreign block's strip (stone → planks; log-side → snowgrass top/bottom = the user's "tree trunks show dirt"; grass → dirt/stone). Seed 44 (AC-0106's gate seed) is blind to the bug: at R=1 iso its only visible land is the spawn chunk, the one chunk with the correct <code>"h"</code>.</p>
+
+<h2>Exact diff (git diff godot/world/chunk.gd)</h2>
+<pre>diff --git a/godot/world/chunk.gd b/godot/world/chunk.gd
+index 46b669d..df55434 100644
+--- a/godot/world/chunk.gd
++++ b/godot/world/chunk.gd
+@@ -44,7 +44,7 @@ static var _ms_rects := {}
+ 
+ func _merge_atlas() -> Dictionary:
+ 	if _ms_key == Data.atlas_tex:
+-		return {"tex": _ms_tex, "rects": _ms_rects}
++		return {"tex": _ms_tex, "rects": _ms_rects, "h": float(_ms_tex.get_image().get_height())}
+ 	_ms_key = Data.atlas_tex
+ 	_ms_tex = null
+ 	_ms_rects = {}
+@@ -424,7 +424,7 @@ func _qwrite_merged(acc: Acc, fi: int, n: Vector3i, cva: Array, c0: Array, W: in
+ 			else:
+ 				cu = cv.x
+ 				cvv = 1.0 - cv.y
+-			acc.u[b + j] = (Vector2(tl) + Vector2(0.5 + cu * 31.0, 0.5 + cvv * 31.0)) / Data.ATLAS_PX
++			acc.u[b + j] = (Vector2(tl) + Vector2(0.5 + cu * 31.0, 0.5 + cvv * 31.0)) / Vector2(Data.ATLAS_PX, ms_h)
+ 	acc.i[ib] = b
+ 	acc.i[ib + 1] = b + 2
+ 	acc.i[ib + 2] = b + 1</pre>
+<p>Line 1 = <b>the fix</b> (plan §7: cache-hit return now mirrors the fresh-build branch; <code>ImageTexture.get_image()</code> returns the stored image, no re-decode, called once per chunk build). Line 2 = <b>optional hardening, INCLUDED</b> (see below). Nothing else touched — no comments added; unmerged <code>_emit_faces</code>, cutout (xtab), fluid (ktab), data.gd, assets, world gen all untouched.</p>
+
+<h2>Gate results</h2>
+<table>
+<tr><th>gate</th><th>requirement</th><th>measured</th><th>verdict</th></tr>
+<tr><td>G0</td><td><code>--headless --quit</code> RC=0, zero script errors</td><td>RC=0, 0 <code>SCRIPT ERROR</code> lines (log: <code>.scratch/AC-0117/g0.log</code>)</td><td class="pass">PASS</td></tr>
+<tr><td>G1</td><td>genhash 25/25 byte-identical to AC-0106 baseline</td><td>25 <code>GENHASH</code> lines; every (cx,cz) 16-hex prefix identical to <code>.scratch/ac0106/genhash_baseline_44.log</code> (baseline stores 16-hex prefixes; new run prints full 32-hex, all 25 prefixes match)</td><td class="pass">PASS</td></tr>
+<tr><td>G2 (bug gate)</td><td>seed 16 A/B: no foreign-tile substitution; tree crops show wood; diff far below pre-fix 1.97%</td><td>diff>4 = <b>0.694%</b>, diff>8 = <b>0.629%</b> (pre-fix baseline 1.97% @>8); diff mask = fine speckle across merged surfaces, no solid blocks; trunk crops: log-side wood in ON, matches OFF; cliff edges: stone/sand speckle in ON, matches OFF</td><td class="pass">PASS</td></tr>
+<tr><td>G3</td><td>full battery RC=0, ok:true, known-stable values</td><td>RC=0, <code>ok:true</code>; sea 2730/2730 + 1406/1406, sea_stable true, torch_level 14, horizontal_moved 2.82, place_ok true, drop_spawned true, water_on_lava 25, sideways_lava 9 (all exact)</td><td class="pass">PASS</td></tr>
+<tr><td>G4</td><td>r4 sum of surface-0 (opaque) verts over all 81 chunks = 125552 exactly</td><td>81/81 chunks built (all_meshed true), opaque vert sum = <b>125552 exactly</b> (AC-0106 value; vertex win intact, −67.2% vs pre-AC-0106 383244)</td><td class="pass">PASS</td></tr>
+<tr><td>G5</td><td>only chunk.gd + task folder modified; no scratch outside .scratch/AC-0117/</td><td><code>git status --short</code>: <code>M godot/world/chunk.gd</code> + untracked <code>tasks/AC-0117/</code> files only; all Run-2 scratch logs in <code>.scratch/AC-0117/</code></td><td class="pass">PASS</td></tr>
+</table>
+
+<h2>A/B evidence (seed 16, R=1, iso, AWECRAFT_NO_FOG=1)</h2>
+<p>ON = merge ON (default, the fixed path), OFF = <code>AWECRAFT_MERGE=0</code> reference. Zoom crops at 3× in <code>.scratch/AC-0117/</code> (<code>left_tree_*</code>, <code>edge_row_*</code>).</p>
+<table>
+<tr><td><figure><img src="post_seed16_on.png" alt="post-fix merge ON"><figcaption>post-fix, merge ON (default)</figcaption></figure></td>
+<td><figure><img src="post_seed16_off.png" alt="merge OFF reference"><figcaption>merge OFF (AWECRAFT_MERGE=0, reference)</figcaption></figure></td></tr>
+</table>
+<table>
+<tr><td><figure><img src="post_seed16_on_tree_crop.png" alt="tree crop ON"><figcaption>tree-region crop, merge ON — trunks = brown wood (log-side tile)</figcaption></figure></td>
+<td><figure><img src="post_seed16_off_tree_crop.png" alt="tree crop OFF"><figcaption>same region, merge OFF — trunks = brown wood (identical)</figcaption></figure></td></tr>
+</table>
+<p><figure><img src="post_seed16_diffmask.png" alt="diff mask"><figcaption>ON vs OFF diff mask (white = diff>4, 0.694% of frame). Pre-fix mask (<code>repro_seed16_diffmask.png</code>) showed solid whole-face color blocks across every non-spawn chunk (1.97% @>8); post-fix the residual is confined to intra-tile speckle on merged quads + the lava-lake animation frame.</figcaption></figure></p>
+<p><b>Tree-crop verdict:</b> no foreign-tile substitution anywhere. The pre-fix signature (white/brown snowgrass-top+bottom checker on trunks, tan planks on stone cliffs — see <code>repro_seed16_crop_on.png</code>) is gone; ON and OFF match tile-for-tile.</p>
+
+<h2>Residual diff explanation (31/32 slope nuance)</h2>
+<p>Measured residual 0.629% (diff>8) vs pre-fix 1.97% — ≈⅓ of the pre-fix value, and qualitatively different (speckle vs solid blocks). This is the AC-0106-shipped slope-31 strip sampling, not a regression: merged quads sample a 31px-per-cell span across 32px-pitch strip repeats, so a W×H quad shows up to (W−1)/(H−1)px of intra-tile pattern shift vs the per-block render (both arms sample the SAME tile; 1×1 quads are pixel-identical in both arms because both sample [0.5, 31.5] of the same tile). The residual therefore appears as fine speckle over grass/stone/wood surfaces with W&gt;1 or H&gt;1 groups, plus the animated lava lake (frame differs between the two render runs). Plan §7 documents this as out-of-scope: fixing it would require re-designing the strips (31px pitch bleeds across tile edges; per-block UVs kill the vertex win). No crop shows a clearly foreign tile, so the gate criterion ("no wrong-tile substitution") is met.</p>
+
+<h2>Hardening decision</h2>
+<p><b>Included.</b> The tile-bearing fallback branch in <code>_qwrite_merged</code> (chunk.gd:427 — blocks that have an atlas tile but no merge strip) divided its y-UV by <code>Data.ATLAS_PX</code> (1024) while emitting onto the 1024×1760 texture — the same latent bug class as the root cause. Changed the denominator to <code>Vector2(Data.ATLAS_PX, ms_h)</code> (1 token). The branch is currently unreachable (all 17 merge-eligible block ids have all three face tiles, so <code>_merge_strip</code> never fails — plan §4), so behavior is byte-identical today: genhash 25/25, battery exact, and the 125552 vert count confirm it. It makes the fallback correct if the blocks table ever gains a strip-less textured block.</p>
+
+<h2>Deviations</h2>
+<ul>
+<li><b>G4 invocation:</b> the prompt's <code>AWECRAFT_LOGIC=meshdump</code> is not a real logic mode — the unknown-logic fallback (main.gd:965) prints <code>MINFO</code> <i>before</i> meshes settle (all 121 entries <code>built:false</code>, no verts). Used <code>AWECRAFT_LOGIC=perf</code> instead: its <code>_perf_test</code> waits until every chunk in render radius is built (<code>all_meshed:true</code>, 81/81) and then prints the same <code>world.mesh_info()</code> <code>MINFO</code> entries (main.gd:4637-4639). Same data source, authoritative built state.</li>
+<li><b>First render pass (no NO_FOG) was fog-washed</b> and unusable for the pre-fix baseline comparison; both arms were re-rendered with <code>AWECRAFT_NO_FOG=1</code> (plan §6 command) to match Run-1's measurement conditions. Final PNGs are the NO_FOG pair.</li>
+<li>Env syntax: <code>HOME=/…</code> must be passed via <code>env</code> to <code>xvfb-run</code> (a bare <code>xvfb-run -a VAR=… cmd</code> fails with RC=127 "not found").</li>
+</ul>
+
+<p class="note">Logs: <code>.scratch/AC-0117/</code> — g0.log, g1_genhash.log, g2_on/off.log, g3_battery.log, g4_perf.log (+ g4_meshdump.log first attempt), zoom crops. Pre-fix evidence: <code>repro_*.png</code> in this folder (Run-1). No git, no builds — coordinator commits.</p>
+</body></html>

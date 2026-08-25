@@ -44,7 +44,7 @@ static var _ms_rects := {}
 
 func _merge_atlas() -> Dictionary:
 	if _ms_key == Data.atlas_tex:
-		return {"tex": _ms_tex, "rects": _ms_rects}
+		return {"tex": _ms_tex, "rects": _ms_rects, "h": float(_ms_tex.get_image().get_height())}
 	_ms_key = Data.atlas_tex
 	_ms_tex = null
 	_ms_rects = {}
@@ -424,7 +424,7 @@ func _qwrite_merged(acc: Acc, fi: int, n: Vector3i, cva: Array, c0: Array, W: in
 			else:
 				cu = cv.x
 				cvv = 1.0 - cv.y
-			acc.u[b + j] = (Vector2(tl) + Vector2(0.5 + cu * 31.0, 0.5 + cvv * 31.0)) / Data.ATLAS_PX
+			acc.u[b + j] = (Vector2(tl) + Vector2(0.5 + cu * 31.0, 0.5 + cvv * 31.0)) / Vector2(Data.ATLAS_PX, ms_h)
 	acc.i[ib] = b
 	acc.i[ib + 1] = b + 2
 	acc.i[ib + 2] = b + 1

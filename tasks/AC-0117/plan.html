@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0117 — plan (Run-1 research output)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:980px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.note{font-size:13px;color:#555}li{margin:4px 0}</style></head><body>
+<h1>AC-0117 — plan: greedy-mesh texture mismatch (AC-0106 regression)</h1>
+
+<h2>1. Goal</h2>
+<p>Fix the AC-0106 merged-mesh texture regression — the cache-hit path of <code>_merge_atlas()</code> omits the <code>"h"</code> (extended-atlas height) key, so every chunk built after the first divides merged y-UVs by <code>ATLAS_PX</code> (1024) instead of the real texture height (1760) and samples another block's tile — by adding that key to the cached return so all chunks use the correct y-scale. UV-only change; geometry and the AC-0106 vertex win are untouched.</p>
+
+<h2>2. Files to touch</h2>
+<table><tr><th>path</th><th>note</th></tr>
+<tr><td><code>godot/world/chunk.gd</code></td><td><b>ONLY file edited.</b> <code>_merge_atlas()</code> :45 (cache-hit return :46-47 = root cause; fresh-build return :107 already has <code>"h"</code>); <code>_qwrite_merged()</code> :342 (UV division :412 — read-only; unreachable tile-bearing fallback branch :427 — optional hardening); <code>_emit_ro_merged()</code> :437 (<code>ms_h</code> read :439 — read-only); <code>build_mesh()</code> :719 (merge dispatch :830-836 — read-only). No comments added (ARCHITECTURE.md).</td></tr>
+<tr><td><code>godot/autoload/data.gd</code></td><td>Read-only: <code>ATLAS_PX</code> :33, <code>TILE_PX</code> :34, <code>blocks</code> table :150-174, <code>block_rect()</code> (strip keys), atlas load in <code>_ready()</code> :178.</td></tr>
+<tr><td><code>godot/world/generator.gd</code></td><td>Read-only: <code>B_*</code> block ids :3-18, <code>SPAWN_X/Z/H</code> :24-26, <code>biome_at()</code> :45-55.</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>Read-only: <code>_build_queue_for_center()</code> :635 (build order = why only chunk (0,0) was correct), <code>mesh_info()</code> :981 (G4 vert counts).</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>Read-only: <code>AWECRAFT_MESH_INFO</code> MINFO hook :965 (unknown-logic fallback → <code>_logic_check()</code>), camera presets :1003-1047 (<code>top</code> :1003, <code>iso</code> :1008), <code>AWECRAFT_BCELL</code> :743, probe block :586.</td></tr>
+<tr><td><code>tasks/AC-0117/</code></td><td>Deliverables: <code>AC-0117-results.html</code>, A/B + crop PNGs (names in §6), <code>continuity.md</code> (append-only, already started by Run-1).</td></tr>
+</table>
+
+<h2>3. Frozen spec refs</h2>
+<ul>
+<li><code>index.html</code> — build <code>20260816-r12</code>, frozen web SPEC (source of truth; do NOT modify). Its UV model (<code>tileUV</code>, <code>ATLAS_SIZE=512</code>, <code>TILE=32</code>) has no pad compression; the Godot port's 31px-in-32px tile sampling is the accepted port deviation (AC-0106 shipped it) and is <b>not</b> part of this bug.</li>
+<li><code>godot/autoload/data.gd:3</code> <code>const CHUNK := 16</code> · :4 <code>const HEIGHT := 80</code> · :5 <code>const SEA := 30</code> · :33 <code>const ATLAS_PX := 1024.0</code> · :34 <code>const TILE_PX := 32</code> — verbatim (re-parsed for this plan; the <code>ms_h</code> default at chunk.gd:439 falls back to <code>Data.ATLAS_PX</code>).</li>
+<li><code>godot/world/generator.gd:45-55</code> <code>biome_at()</code> thresholds, verbatim: <code>if t &lt; -0.25:</code> → <code>"snow"</code>; <code>if t &gt; 0.35 and m &lt; 0.1:</code> → <code>"desert"</code>; <code>if m &gt; 0.25:</code> → <code>"forest"</code>; else <code>"plains"</code> (t = fbm2(x/260+900, z/260+900, seed+21, 3)·2−1; m = fbm2(x/260+1700, z/260+1700, seed+33, 3)·2−1). Seed-16 world is all-forest (verified via <code>AWECRAFT_PROBE=biome/map</code>).</li>
+<li><code>godot/world/generator.gd:24-26</code> <code>const SPAWN_X := 8</code> · <code>const SPAWN_Z := 8</code> · <code>const SPAWN_H := 34</code> — spawn chunk (0,0) = the first chunk built = the only one that currently renders merged faces correctly.</li>
+<li><code>godot/assets/blocks_atlas.json</code> + <code>blocks_atlas.png</code> — 1024×1024 real-color atlas; every row-0 tile is at y=0 (lava anim col x=0 rows 32-672, water anim col x=224 rows 0-992); maxy=64 → extended canvas 1024×1760 (base=96, 25 strips). Verified live in Godot: the runtime-extended image is CORRECT (probe SPOT checks pass — see continuity.md), so the atlas is NOT the bug.</li>
+</ul>
+
+<h2>4. Data.* ids this task touches</h2>
+<ul>
+<li>Merged (<code>ro</code>) opaque ids — solid &amp; !cross &amp; !cutout from the <code>blocks</code> table (<code>godot/autoload/data.gd:150-174</code>; generator ids verbatim from <code>godot/world/generator.gd:3-18</code>): <code>1</code> (B_GRASS :3), <code>2</code> (B_DIRT :4), <code>3</code> (B_STONE :5), <code>4</code> (B_SAND :6), <code>6</code> (B_LOG :9), <code>8</code> (planks, no B_ const), <code>9</code> (cobble, no B_ const), <code>11</code> (B_BEDROCK :10), <code>12</code> (B_SNOW_GRASS :11), <code>14</code> (B_COAL_ORE :12), <code>15</code> (B_IRON_ORE :13), <code>16</code> (B_DIAMOND_ORE :14), <code>17</code> (brick, no B_ const), <code>20</code> (crafting, no B_ const), <code>21</code> (furnace, no B_ const), <code>23</code> (glowstone, no B_ const), <code>25</code> (B_OBSIDIAN :18). All 17 have all three face tiles → <code>_merge_strip()</code> (chunk.gd:330) never fails for them → the fallback branch chunk.gd:427 is currently unreachable.</li>
+<li>Exempt (must stay byte-identical): xtab cross ids <code>5</code> (B_WATER :7, anim), <code>18</code> (B_ROSE :15), <code>19</code> (B_DANDELION :16), <code>22</code> (torch, no B_ const), <code>24</code> (B_LAVA :17, anim) — <code>_emit_faces</code> cutout path; ktab cutout <code>7</code> (B_LEAVES :8) — fluid/cutout emitters untouched.</li>
+<li>Where the broken UVs land (derived, ×1760/1024 = 1.71875 y-scale; strip origin → actual sample region; strip layout itself verified correct by the live Godot probe):
+<table><tr><th>face (id)</th><th>strip</th><th>broken sample lands in</th></tr>
+<tr><td>grass-top (1)</td><td>(0,96)</td><td>H≤2: own strip (safe, phase shift only); H≥3: +grass-bottom (dirt), H=4: +stone</td></tr>
+<tr><td>grass-side (1)</td><td>(512,96)</td><td>H≤2: own strip; H≥3: +dirt, H=4: +stone</td></tr>
+<tr><td>grass-bottom (1)</td><td>(0,224)</td><td>stone + log-top</td></tr>
+<tr><td>dirt (2)</td><td>(512,224)</td><td>stone + log-side</td></tr>
+<tr><td>stone (3)</td><td>(0,352)</td><td><b>planks + bedrock — the observed tan cliff</b></td></tr>
+<tr><td>sand (4)</td><td>(512,352)</td><td>cobblestone + snowgrass-top</td></tr>
+<tr><td>log-top (6)</td><td>(0,480)</td><td>bedrock + snowgrass-side + coal-ore edge</td></tr>
+<tr><td>log-side (6)</td><td>(512,480)</td><td><b>snowgrass-top + snowgrass-bottom (+ iron edge) = the user's "trunks show dirt" (brown/white checker)</b></td></tr>
+<tr><td>planks (8)</td><td>(0,608)</td><td>coal-ore + diamond-ore</td></tr>
+<tr><td>cobble (9)</td><td>(512,608)</td><td>iron-ore + brick</td></tr>
+<tr><td>bedrock (11)</td><td>(0,736)</td><td>crafting-top + crafting-bottom</td></tr>
+<tr><td>snowgrass-top (12)</td><td>(512,736)</td><td>crafting-side + furnace-top</td></tr>
+<tr><td>snowgrass-side (12)</td><td>(0,864)</td><td>crafting-bottom + furnace-side + obsidian</td></tr>
+<tr><td>snowgrass-bottom (12)</td><td>(512,864)</td><td>furnace-top + glowstone + unwritten canvas area (black)</td></tr>
+<tr><td>coal-ore (14)</td><td>(0,992)</td><td>obsidian strip bottom + clamped last row (flat obsidian)</td></tr>
+<tr><td>iron-ore (15)</td><td>(512,992)</td><td>unwritten canvas area + clamped last row (black)</td></tr>
+<tr><td>sy≥1120 (16,17,20,21,23,25)</td><td>rows 8-12</td><td>fully clamped to canvas last row: x=0 strips → flat last row of the obsidian strip; x=512 strips → last row of the unwritten area (black). These ids are player-placed/rare, absent from natural-terrain repros.</td></tr>
+</table></li>
+</ul>
+
+<h2>5. Harness gates</h2>
+<ul>
+<li><b>G0</b> — <code>~/tools/godot/godot --headless --path godot --quit</code> → RC=0, <b>zero script errors</b> (hard gate; also after every edit).</li>
+<li><b>SMOKE battery</b> (world/ touched → genhash mandatory): <code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code> — <code>genhash</code> must print <b>25/25</b> <code>GENHASH cx cz &lt;32-hex&gt;</code> lines identical to the AC-0106 values (world/* gate; UV-only change cannot touch block data); <code>light</code> must return the known-stable values <code>surface_eff 15</code>, <code>cave_eff 0</code>, <code>torch_level 14</code>, <code>torch_far_before 0</code>, <code>torch_far_after 9</code> (HARNESS.md:32); <code>player</code>/<code>interact</code>/<code>fluids</code> <code>ok:true</code> with timings in the AC-0106 ranges (battery wall ≈33 s, HARNESS.md:124-125).</li>
+<li><b>G2 — A/B render gate (task-specific)</b>: seed <b>16</b> (terrain-rich; seed 44 is a sky-only R=1 iso view — AC-0106's gate seed — and must NOT be reused), R=1, <code>AWECRAFT_NO_FOG=1</code>, cameras <code>iso</code> and <code>top</code>: merge ON vs <code>AWECRAFT_MERGE=0</code>. PASS = (a) tight trunk crop shows the log-side tile (brown bark), not dirt/snowgrass; (b) tight cliff crop shows stone speckle, not planks-X; (c) full-frame diff contains NO wrong-tile substitution — residual diff is confined to the documented slope-31 phase drift on merged quads with W&gt;1 or H&gt;1 (≤(W−1)/(H−1)px intra-tile shift; 1×1 quads pixel-identical — see §7); report the measured diff % (pre-fix baseline: 1.97% on iso seed 16). FAIL = any crop shows a foreign tile, or the diff re-spreads into whole-face color blocks.</li>
+<li><b>G3</b> — full battery per spec.html (player/interact/light/fluids/buckets + genhash), all <code>ok:true</code>, values stable vs AC-0106.</li>
+<li><b>G4 — vert win preserved</b>: <code>AWECRAFT_LOGIC=meshdump AWECRAFT_MESH_INFO=1 AWECRAFT_RADIUS=4</code> (default seed 44) → parse the <code>MINFO {…}</code> lines (main.gd:965, unknown-logic fallback; per-chunk per-surface vert counts from <code>world.mesh_info()</code> world.gd:981); sum surface-0 (opaque) verts over all 81 chunks → must equal the AC-0106 value <b>125552</b> exactly (UV-only fix → identical geometry). Also confirm per-surface count layout (surf0 opaque, others cutout/fluid) is unchanged.</li>
+</ul>
+
+<h2>6. Snapshot / render names</h2>
+<p>Command shape (HARNESS.md §4, proven): <code>xvfb-run -a env AWECRAFT_SEED=16 AWECRAFT_SNAPSHOT=&lt;ABS path&gt; AWECRAFT_CAM=iso AWECRAFT_RADIUS=1 AWECRAFT_NO_FOG=1 ~/tools/godot/godot --path godot --rendering-method gl_compatibility</code> (with <code>AWECRAFT_MERGE=0</code> added for the OFF arm; absolute snapshot path required under xvfb; <code>HOME=/tmp/dsh_home</code> in the same bash call; one godot at a time; headless-verify first).</p>
+<ul>
+<li><code>tasks/AC-0117/verify_seed16_iso_on.png</code> / <code>verify_seed16_iso_off.png</code> — post-fix A/B pair (iso, R=1).</li>
+<li><code>tasks/AC-0117/verify_seed16_top_on.png</code> / <code>verify_seed16_top_off.png</code> — post-fix A/B pair (top, R=1) — the 3×3 chunk grid must show a UNIFORM diff pattern (no single clean chunk ring — proves the cache-hit fix, not a first-chunk fluke).</li>
+<li><code>tasks/AC-0117/verify_trunk_crop_on.png</code> + <code>verify_cliff_crop_on.png</code> — tight crops (trunk = log tile; cliff = stone tile) embedded in results.html.</li>
+<li>Pre-fix evidence already saved: <code>repro_seed16_on/off.png</code>, <code>repro_seed16_top_on/off.png</code>, <code>repro_seed16_crop_on/off.png</code>, <code>repro_diffband_on/off.png</code>, <code>repro_seed16_diffmask.png</code>.</li>
+</ul>
+
+<h2>7. Risks / edge cases</h2>
+<ul>
+<li><b>Exact fix (chunk.gd:47, 1 line, no comments):</b> <code>return {"tex": _ms_tex, "rects": _ms_rects, "h": float(_ms_tex.get_image().get_height())}</code> — the cache-hit branch must mirror the fresh-build branch (chunk.gd:107). <code>ImageTexture.get_image()</code> returns the stored image (no re-decode), called once per <code>build_mesh()</code> — negligible. Alternative (static <code>_ms_h</code> var) rejected as less minimal (touches 3 lines vs 1). The fresh-build and <code>AWECRAFT_MERGE=0</code> fallback (chunk.gd:831-832) paths are unchanged.</li>
+<li><b>Optional hardening (chunk.gd:427, 1 token):</b> the tile-bearing fallback (blocks that have a tile but no strip — unreachable today, §4) divides the y-UV by <code>Data.ATLAS_PX</code> on the 1024×1760 texture — same bug class, latent. Change denominator to <code>Vector2(Data.ATLAS_PX, ms_h)</code>. Behavior-identical with the current blocks table; include it (keeps G5 "only chunk.gd" true) or drop it — builder's call, note in results.html.</li>
+<li><b>31/32 phase drift vs the spec's "≤1px pad band" wording:</b> the spec G2 assumes merged UVs equal per-block UVs except ≤1px. That assumption was never true: AC-0106's merged quads sample a slope-31 span over 32px-pitch strip repeats, so a W×H quad shows up to (W−1)/(H−1)px of intra-tile pattern shift vs the per-block render (1×1 quads are exactly identical — both sample [0.5, 31.5] of the same tile). This drift shipped in AC-0106 and is visually benign for the noisy tiles used; fixing it would require re-designing the strips (31px pitch bleeds across tile edges; per-block UVs kill the vertex win). <b>Out of scope for AC-0117</b> — the user's report is about wrong TILES. G2 therefore gates on "no foreign-tile substitution" (crops + diff-band analysis), not strict pixel identity; report the measured residual % in results.html. If the residual % surprises (≫ pre-fix 1.97%), stop and re-check rather than paper over it.</li>
+<li><b>Vertex impact:</b> zero — quads/groups unchanged, UV-only. G4 expects 125552 exactly (AC-0106 r4 seed-44 measurement). Merging is NOT disabled (spec: do not remove the win).</li>
+<li><b>Why AC-0106's gate missed it:</b> its A/B used seed 44 (R=1 iso ≈ sky + spawn-chunk land only) — and the spawn chunk (0,0) is the FIRST chunk built, the only one with the fresh-build <code>"h"</code> key → pixel-identical by construction. G2 uses seed 16 + top view to make every chunk visible.</li>
+<li><b>genhash/battery risk:</b> none expected (no data/geometry change); genhash still mandatory (world/ touched) and must match AC-0106 byte-for-byte.</li>
+<li><b>Fallback if post-fix A/B still shows a foreign tile:</b> strip contents and UV math are both numerically verified correct (continuity.md: 11067-cell simulation + live Godot atlas probe) — the remaining suspect would be texture upload/filtering of the 1024×1760 image (check material texture filter in <code>_opaque_material</code> chunk.gd:656); add a one-shot debug UV dump then, and report before continuing.</li>
+</ul>
+
+<p class="note">Run-1 research artifact — does not trigger a code change by itself. Constants re-parsed from source on 2026-08-25; re-grep before implementation if any file drifted. Evidence: tasks/AC-0117/continuity.md + .scratch/AC-0117/ (sim_merge_atlas.py, ac0117_probe.gd, extended_atlas_godot.png, render/probe logs).</p>
+</body></html>
