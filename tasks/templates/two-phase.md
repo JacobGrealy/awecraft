@@ -42,9 +42,11 @@ Consequently:
 - The mapping lives in `~/.dsh/cordis.patch.yml` +
   `~/.dsh/plugins/subagent-reasoning.js` and is composed **at DSH host start**:
   a patch/plugin edit takes effect on the NEXT restart. A host restart KILLS
-  in-flight subagents — after one, inspect the task folder + `.scratch/AC-NNNN/`
-  for partial progress and relaunch with a resume message pointing at the disk
-  state (do not redo completed steps).
+  in-flight subagents — after one, inspect `tasks/AC-NNNN/continuity.md`
+  (the builder's continuity log, if present — see the RUN 2 CONTINUITY LOG
+  block) + the task folder + `.scratch/AC-NNNN/` for partial progress and
+  relaunch with a resume message pointing at the log's last entry (do not
+  redo completed steps).
 
 ---
 
@@ -152,6 +154,14 @@ READ FIRST, in order, BY PATH:
 IMPLEMENT per plan.html — sections 2 (files) and 4 (Data.* ids) are your
 edit map. Stay inside the plan; if you must deviate, record the deviation in
 the results page.
+
+CONTINUITY LOG (mandatory — makes an interrupted run resumable): keep an
+append-only log at tasks/AC-NNNN/continuity.md. After every discovery or
+milestone — a file changed, a key finding or deviation decision, a verify
+gate run green/red, a blocker — APPEND one short entry: what happened,
+current state, next step. Write it to disk promptly (don't batch at the end).
+If the log already exists when you start, this run is a RESUME: read it FIRST
+and continue from its last entry — do not redo any step it records as done.
 
 VERIFY (AC-0061 tiered protocol, SMOKE tier — see tasks/HARNESS.md §3):
   G0    one godot headless load: zero SCRIPT ERROR lines (hard gate).
