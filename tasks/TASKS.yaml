@@ -1,8 +1,9 @@
 meta:
-  updated_at: 2026-08-25T09:50
+  updated_at: 2026-08-25T13:58
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
+- AC-0117
 - AC-0086
 - AC-0083
 - AC-0084
@@ -2990,11 +2991,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-24T10:51
-  updated_at: 2026-08-25T07:33
-  completed_at: null
+  updated_at: 2026-08-25T13:34
+  completed_at: 2026-08-25T13:34
   waiting_on: null
   parent_id: null
   notes: 'Merge co-planar adjacent opaque faces into larger quads before emit to cut verts ~60-80%.
@@ -3010,7 +3011,15 @@ intake:
     Depends: none. Blocks: sub-chunk chunk split benefits more if done after, but independent.
 
     Refs: chunk.gd:138 _faces, 225 _emit_faces, 568 Acc handling.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-25T13:34
+    updated_at: null
+    text: '[agent] DONE 2026-08-25 (Run-2 builder, gate PASS): chunk.gd only — bounded 2D greedy merge (id+fi+fni+exact-shade
+      key, H<=4), runtime-extended atlas, AWECRAFT_MERGE=0 kill-switch. Opaque verts -67.2% (383244->125552), mem 102->78.7MB.
+      G0 0err; genhash 25/25 byte-identical; FULL battery ok:true (sea 2730/1406 flat, torch 14, hmoved 2.82 true-baseline);
+      render pixel-identical to merge-OFF A/B. 4 bugs found+fixed (corner-y mirror, fi2/fi3 swap, bit-key collision y>=16,
+      atlas bail). Coord verified on disk; results tasks/AC-0106/AC-0106-results.html.'
 - id: AC-0107
   title: threaded-mesh-light-build-phase3-desktop
   source: user
@@ -3356,3 +3365,24 @@ intake:
 
       Work 1-5 as in notes. Verify: dsh web --dump-config | grep -A2 subagent-reasoning exit 0, curl 127.0.0.1:3081 200, pid
       169448.'
+- id: AC-0117
+  title: greedy-mesh-texture-mismatch-ac0106-regression
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: in-progress
+  labels: []
+  created_at: 2026-08-25T13:58
+  updated_at: 2026-08-25T13:58
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User report (2026-08-25): AC-0106 greedy-meshing introduced wrong block textures - many blocks now show another
+    block''s texture (example: tree trunks render with the dirt texture). Two-phase fix: Run-1 research (subagent_plan, xhigh)
+    -> tasks/AC-0117/plan.html, then Run-2 implement (subagent, medium). Prime suspects per the AC-0106 continuity log (tasks/AC-0106/continuity.md):
+    runtime-extended atlas merge-strip layout / per-block strip origins, _qwrite_merged slope-31 strip UVs vs per-fi corner
+    mapping, merged-surface material texture binding (_opaque_material). A/B reproduce with the AWECRAFT_MERGE=0 kill switch.
+    genhash + battery must stay byte-stable.'
+  comments: []

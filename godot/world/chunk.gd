@@ -37,6 +37,76 @@ class Acc:
 	var q := 0
 
 
+static var _ms_key
+static var _ms_tex: ImageTexture = null
+static var _ms_rects := {}
+
+
+func _merge_atlas() -> Dictionary:
+	if _ms_key == Data.atlas_tex:
+		return {"tex": _ms_tex, "rects": _ms_rects}
+	_ms_key = Data.atlas_tex
+	_ms_tex = null
+	_ms_rects = {}
+	var at = Data.atlas_tex
+	if at == null:
+		return {"tex": null, "rects": {}}
+	var img: Image = at.get_image()
+	if img == null:
+		return {"tex": null, "rects": {}}
+	var maxy := 0
+	for k in Data.atlas_rects:
+		var e = Data.atlas_rects[k]
+		if e == null:
+			continue
+		for f in e:
+			var r = e[f]
+			if r is Array and r.size() == 4:
+				maxy = maxi(maxy, int(r[1]) + int(r[3]))
+	var pairs: Array = []
+	for id in range(1, 256):
+		var b = Data.block(id)
+		if b == null:
+			continue
+		if not bool(b.solid) or bool(b.cross) or bool(b.get("cutout", false)):
+			continue
+		for face in ["top", "side", "bottom"]:
+			var rc: Vector2i = Data.block_rect(id, face)
+			if rc.x < 0:
+				continue
+			pairs.append([id, face, rc])
+	var uniq: Array = []
+	var seen := {}
+	for p in pairs:
+		if not seen.has(p[2]):
+			seen[p[2]] = true
+			uniq.append(p[2])
+	var base := (maxy + 8) / 32 * 32 + 32
+	# each strip occupies 4 tile-rows (128px) so merged quads of height H<=4
+	# can tile vertically along the strip as well (2D greedy). The canvas is
+	# grown downward (never resized in place) below the original tiles.
+	var rowh := 128
+	var total_h: int = base + (uniq.size() / 2 + 1) * rowh
+	if total_h > 4096:
+		return {"tex": null, "rects": {}}
+	var iw: int = img.get_width()
+	var img2: Image = Image.create_empty(iw, maxi(total_h, img.get_height()), false, Image.FORMAT_RGBA8)
+	img2.blit_rect(img, Rect2i(0, 0, iw, img.get_height()), Vector2i.ZERO)
+	var i := 0
+	for rc in uniq:
+		var sx := (i % 2) * 512
+		var sy := base + (i / 2) * rowh
+		for row in range(4):
+			for rep in range(16):
+				img2.blit_rect(img2, Rect2i(rc.x, rc.y, 32, 32), Vector2i(sx + rep * 32, sy + row * 32))
+		seen[rc] = Vector2i(sx, sy)
+		i += 1
+	for p in pairs:
+		_ms_rects["%d_%s" % [int(p[0]), p[1]]] = seen[p[2]]
+	_ms_tex = ImageTexture.create_from_image(img2)
+	return {"tex": _ms_tex, "rects": _ms_rects, "h": float(img2.get_height())}
+
+
 func get_local(lx: int, y: int, lz: int) -> int:
 	return data[(y << 8) | (lz << 4) | lx]
 
@@ -257,6 +327,187 @@ func _emit_faces(recs: Array, acc: Acc, lmn: Vector3i, larr: PackedByteArray, lw
 		acc.q += 1
 
 
+func _merge_strip(rects: Dictionary, id: int, fni: int) -> Vector2i:
+	var face_name := "side"
+	if fni == 1:
+		face_name = "top"
+	elif fni == 2:
+		face_name = "bottom"
+	var sr = rects.get("%d_%s" % [id, face_name])
+	if sr == null:
+		return Vector2i(-1, -1)
+	return sr
+
+
+func _qwrite_merged(acc: Acc, fi: int, n: Vector3i, cva: Array, c0: Array, W: int, H: int, has_tex: bool, ct: PackedColorArray, cs: PackedColorArray, cb: PackedColorArray, sr: Vector2i, ms_h: float) -> void:
+	var id: int = c0[0]
+	var fni: int = c0[1]
+	var shade: float = c0[2]
+	var u0: int = c0[3]
+	var v0: int = c0[4]
+	var plane: int = c0[5]
+	var face_name := "side"
+	var face_color: Color
+	if fni == 1:
+		face_color = ct[id]
+		face_name = "top"
+	elif fni == 2:
+		face_color = cb[id]
+		face_name = "bottom"
+	else:
+		face_color = cs[id]
+	var c: Color = _light_color(shade, face_color, has_tex)
+	if has_tex:
+		c = c * Data.block_tint(id, face_name)
+	var tl: Vector2i = Data.block_rect(id, face_name)
+	var b := acc.q * 4
+	var ib := acc.q * 6
+	for j in range(4):
+		var cv: Vector3 = cva[j]
+		var px: float
+		var py: float
+		var pz: float
+		var uu: float
+		var vv: float
+		if fi == 2:
+			px = float(u0) + cv.x * float(W)
+			py = float(plane) + 1.0
+			pz = float(v0) + cv.z * float(H)
+			uu = 0.5 + cv.x * float(W) * 31.0
+			vv = 0.5 + cv.z * float(H) * 31.0
+		elif fi == 3:
+			px = float(u0) + cv.x * float(W)
+			py = float(plane)
+			pz = float(v0) + cv.z * float(H)
+			uu = 0.5 + cv.x * float(W) * 31.0
+			vv = 0.5 + cv.z * float(H) * 31.0
+		elif fi == 0:
+			px = float(plane)
+			py = float(v0) + cv.y * float(H)
+			pz = float(u0) + cv.z * float(W)
+			uu = 0.5 + cv.z * float(W) * 31.0
+			vv = 0.5 + (1.0 - cv.y) * float(H) * 31.0
+		elif fi == 1:
+			px = float(plane) + 1.0
+			py = float(v0) + cv.y * float(H)
+			pz = float(u0) + cv.z * float(W)
+			uu = 0.5 + cv.z * float(W) * 31.0
+			vv = 0.5 + (1.0 - cv.y) * float(H) * 31.0
+		elif fi == 4:
+			px = float(u0) + cv.x * float(W)
+			py = float(v0) + cv.y * float(H)
+			pz = float(plane)
+			uu = 0.5 + cv.x * float(W) * 31.0
+			vv = 0.5 + (1.0 - cv.y) * float(H) * 31.0
+		else:
+			px = float(u0) + cv.x * float(W)
+			py = float(v0) + cv.y * float(H)
+			pz = float(plane) + 1.0
+			uu = 0.5 + cv.x * float(W) * 31.0
+			vv = 0.5 + (1.0 - cv.y) * float(H) * 31.0
+		acc.v[b + j] = Vector3(px, py, pz)
+		acc.n[b + j] = Vector3(n)
+		acc.c[b + j] = c
+		if sr != Vector2i(-1, -1):
+			acc.u[b + j] = (Vector2(sr) + Vector2(uu, vv)) / Vector2(Data.ATLAS_PX, ms_h)
+		elif tl.x < 0:
+			acc.u[b + j] = Vector2.ZERO
+		else:
+			var cu: float
+			var cvv: float
+			if fi == 2 or fi == 3:
+				cu = cv.x
+				cvv = cv.z
+			elif fi == 0 or fi == 1:
+				cu = cv.z
+				cvv = 1.0 - cv.y
+			else:
+				cu = cv.x
+				cvv = 1.0 - cv.y
+			acc.u[b + j] = (Vector2(tl) + Vector2(0.5 + cu * 31.0, 0.5 + cvv * 31.0)) / Data.ATLAS_PX
+	acc.i[ib] = b
+	acc.i[ib + 1] = b + 2
+	acc.i[ib + 2] = b + 1
+	acc.i[ib + 3] = b
+	acc.i[ib + 4] = b + 3
+	acc.i[ib + 5] = b + 2
+	acc.q += 1
+
+
+func _emit_ro_merged(recs: Array, acc: Acc, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, has_tex: bool, fn: Array, fsh: PackedFloat32Array, fcv: Array, ct: PackedColorArray, cs: PackedColorArray, cb: PackedColorArray, ms: Dictionary) -> void:
+	var rects: Dictionary = ms.rects
+	var ms_h: float = float(ms.get("h", Data.ATLAS_PX))
+	var wx0 := cx * SIZE
+	var wz0 := cz * SIZE
+	var hgt := Data.HEIGHT
+	# grid layout per face: [id, fni, shade, u0, v0, plane] with
+	# key = plane * (vmax * 16) + v0 * 16 + u0 (arithmetic — bit packing collides for y >= 16).
+	# fi0/1: plane = lx, v0 = y,  u0 = lz (strip runs along z).
+	# fi2/3: plane = y,  v0 = lz, u0 = lx (strip runs along x; 3D so columns with
+	#      multiple exposed top/bottom faces at different y all survive).
+	# fi4/5: plane = lz, v0 = y,  u0 = lx (strip runs along x).
+	var grids: Array = []
+	for f in range(6):
+		var g: Array = []
+		g.resize(16 * hgt * 16)
+		grids.append(g)
+	for r in recs:
+		var lx: int = r[0]
+		var y: int = r[1]
+		var lz: int = r[2]
+		var fi: int = r[3]
+		var id: int = r[4]
+		var fni: int = r[5]
+		var n: Vector3i = fn[fi]
+		var shade: float = float(fsh[fi]) * _face_light(id, wx0 + lx, y, wz0 + lz, n, lmn, larr, lw, ld)
+		if fi == 2 or fi == 3:
+			grids[fi][y * 256 + lz * 16 + lx] = [id, fni, shade, lx, lz, y]
+		elif fi == 0 or fi == 1:
+			grids[fi][lx * (hgt * 16) + y * 16 + lz] = [id, fni, shade, lz, y, lx]
+		else:
+			grids[fi][lz * (hgt * 16) + y * 16 + lx] = [id, fni, shade, lx, y, lz]
+	for fi in range(6):
+		var n: Vector3i = fn[fi]
+		var cva: Array = fcv[fi]
+		var g: Array = grids[fi]
+		var horiz := fi == 2 or fi == 3
+		var pmax: int = hgt if horiz else 16
+		var vmax: int = 16 if horiz else hgt
+		var pstride: int = vmax * 16
+		for plane in range(pmax):
+			var pi := plane * pstride
+			for v0 in range(vmax):
+				var vi := pi + v0 * 16
+				for u0 in range(16):
+					var c0 = g[vi | u0]
+					if c0 == null:
+						continue
+					var w := 1
+					while u0 + w < 16:
+						var cn = g[vi | (u0 + w)]
+						if cn == null or cn[0] != c0[0] or cn[1] != c0[1] or cn[2] != c0[2]:
+							break
+						w += 1
+						g[vi | (u0 + w - 1)] = null
+					# bounded 2D growth: extend down (v-axis) up to H=4 while the
+					# full width matches on every row (atlas strips tile 4 rows).
+					var h := 1
+					while h < 4 and v0 + h < vmax:
+						var vmatch := true
+						for u in range(u0, u0 + w):
+							var cc = g[vi + h * 16 + u]
+							if cc == null or cc[0] != c0[0] or cc[1] != c0[1] or cc[2] != c0[2]:
+								vmatch = false
+								break
+						if not vmatch:
+							break
+						for u in range(u0, u0 + w):
+							g[vi + h * 16 + u] = null
+						h += 1
+					g[vi | u0] = null
+					_qwrite_merged(acc, fi, n, cva, c0, w, h, has_tex, ct, cs, cb, _merge_strip(rects, int(c0[0]), int(c0[1])), ms_h)
+
+
 func _emit_xquad(recs: Array, acc: Acc, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, has_tex: bool, ct: PackedColorArray) -> void:
 	var rc := {}
 	var uvc := {}
@@ -402,10 +653,14 @@ func _build_snap(snap: PackedByteArray, snap_fl: PackedByteArray, get_world_bloc
 						snap_fl[sxy] = fv
 
 
-func _opaque_material() -> StandardMaterial3D:
+func _opaque_material(at: Texture2D = null) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.vertex_color_use_as_albedo = true
-	if Data.atlas_tex != null:
+	if at != null:
+		m.albedo_texture = at
+		m.albedo_color = Color.WHITE
+		m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	elif Data.atlas_tex != null:
 		m.albedo_texture = Data.atlas_tex
 		m.albedo_color = Color.WHITE
 		m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
@@ -446,6 +701,11 @@ func _fluid_anim_material(id: int) -> Material:
 
 
 func _surface(arr: Acc) -> Array:
+	arr.v.resize(arr.q * 4)
+	arr.n.resize(arr.q * 4)
+	arr.c.resize(arr.q * 4)
+	arr.u.resize(arr.q * 4)
+	arr.i.resize(arr.q * 6)
 	var a: Array = []
 	a.resize(Mesh.ARRAY_MAX)
 	a[Mesh.ARRAY_VERTEX] = arr.v
@@ -566,8 +826,14 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 				else:
 					_faces(ro, xtab, stab, fn, lx, y, lz, id, snap)
 	var ao := Acc.new()
-	_qgrow(ao, ro.size())
-	_emit_faces(ro, ao, lmn, larr, lw, ld, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
+	_qgrow(ao, maxi(ro.size(), 1))
+	var ms := _merge_atlas()
+	if OS.get_environment("AWECRAFT_MERGE") == "0":
+		ms = {"tex": null, "rects": {}}
+	if ms.tex != null and ro.size() > 0:
+		_emit_ro_merged(ro, ao, lmn, larr, lw, ld, has_tex, fn, fsh, fcv, ct, cs, cb, ms)
+	else:
+		_emit_faces(ro, ao, lmn, larr, lw, ld, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
 	var ac := Acc.new()
 	_qgrow(ac, rc_o.size())
 	_emit_faces(rc_o, ac, lmn, larr, lw, ld, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
@@ -586,7 +852,7 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	var mesh := ArrayMesh.new()
 	if ao.q > 0:
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ao))
-		mesh.surface_set_material(0, _opaque_material())
+		mesh.surface_set_material(0, _opaque_material(ms.tex))
 	if mesh.get_surface_count() > 0:
 		var mi := MeshInstance3D.new()
 		mi.mesh = mesh
