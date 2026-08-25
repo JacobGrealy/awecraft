@@ -135,7 +135,7 @@ Depends: AC-0082 done (data-gen threaded).</pre></blockquote>
 <div class="fill"><b>COORDINATOR (2026-08-25)</b></div>
 <ul>
 <li><code>godot/world/chunk.gd</code> — mesh builders to pure-static (no node/Game state): <code>_build_unit</code>/<code>_build_snap</code>/<code>_emit_*</code>, and the merged path (<code>_emit_ro_merged</code>/<code>_qwrite_merged</code>) + a thread-safe way to consume the <code>_merge_atlas()</code> static cache (pre-build on main thread; workers read-only). This is the core of the task.</li>
-<li><code>godot/autoload/lighting.gd</code> — <code>compute_light_flat</code> (and whatever it needs) to pure-static, callable from a worker on a fresh copy of the chunk light data.</li>
+<li><code>godot/world/lighting.gd</code> — <code>compute_light_flat</code> (and whatever it needs) to pure-static, callable from a worker on a fresh copy of the chunk light data. (Path corrected post-Run-1: real file is <code>godot/world/lighting.gd</code>, not <code>autoload/</code>.)</li>
 <li><code>godot/world/world.gd</code> — the dispatch: hand chunk data to the WorkerThreadPool for mesh+light (dedup by key, in-flight cap, stale-target drop, spawn-chunk sync), and the main-thread assembly (ArrayMesh/StaticBody from returned Acc buffers) + the <code>AWECRAFT_THREADMESH</code> kill switch + desktop gate. Keep the AC-0082 data-gen dispatch intact (mesh build is downstream of it).</li>
 <li><code>tasks/AC-0107/</code> — plan.html, continuity.md, AC-0107-results.html, render A/B PNGs.</li>
 </ul>
