@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0105 — spec (generated scaffold)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.auto{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.fill{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:10px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0105 — two-phase-workflow-templates</h1>
+<div class="auto"><b>AUTO (from TASKS.yaml — do not hand-edit)</b></div>
+<p class="meta"><b>id:</b> <code>AC-0105</code> · <b>status:</b> <code>open</code> · <b>priority:</b> 1 · <b>source:</b> user · <b>created:</b> 2026-08-24T10:17 · <b>parent:</b> —</p>
+<p class="note">Registry <code>notes</code> (verbatim, quoted):</p>
+<blockquote><pre>Implement two-phase workflow templates for DSH (local LLM, no parallel) after plugin lands: Run 1 xhigh read-only researches -&gt; writes tasks/AC-NNNN/plan.html (files, index.html r12, Data.* ids, expected RESULT shapes from godot/scenes/main.gd:441). Coordinator gates plan.html then Run 2 medium builder (one Godot G0 + smoke AC-0061 + &lt;=1 R=1 render). Add trivial label bypass (skip Run 1). Update coordinator prompts to point at HARNESS.md + plan.html.
+
+Additions 2026-08-23 (user approved):
+- plan.html schema (required sections): 1) Goal (1 sentence), 2) Files to touch (godot/ paths), 3) Frozen spec refs (index.html r12 build + exact constants: sea/HEIGHT/biome thresholds), 4) Data.* ids (block/item ids, TOOL_GRIDS), 5) Harness gates (AWECRAFT_LOGIC modes from godot/scenes/main.gd:441 with expected RESULT JSON shape + ok:true condition), 6) Snapshot/render names (AWECRAFT_SNAPSHOT + CAM), 7) Risks/edge cases.
+- Coordinator prompt diff: sub-agent Run1 prompt points at ARCHITECTURE.md + CONTINUITY.md + HARNESS.md (not inlined) + plan.html output path; Run2 prompt points at plan.html + HARNESS.md + AC-0061 smoke subset; gating: plan.html exists + constants cited verbatim -&gt; queue Run2.
+- trivial label definition: if task has label trivial OR title matches build-scripts|menu Exit|webapp artifacts, skip Run1, go straight to medium builder with spec.html (AC-0102 template).
+- Dependency: requires AC-0104 plugin wiring + AC-0103 HARNESS.md + AC-0061 tiered verify pipeline. Deliverable: updated coordinator templates (prompt strings) + example plan.html for one pilot task.
+</pre></blockquote>
+<h2>Goal</h2>
+<div class="fill" style="background:#eaf7ea;border-left-color:#2f9e44"><b>COORDINATOR-FILLED 2026-08-25 (REVIEW confirmed against registry notes)</b> — Implement the two-phase subagent workflow (Run 1 = xhigh read-only research → <code>plan.html</code>; Run 2 = medium builder; trivial-label bypass) as concrete coordinator prompt templates + a gate check, and prove it with one pilot <code>plan.html</code>.</div>
+<h2>Frozen spec references</h2>
+<div class="auto"><b>AUTO (fixed boilerplate — do not hand-edit)</b></div>
+<ul>
+<li><code>index.html</code> — build <code>20260816-r12</code> (Three.js single-file) is the <b>source of truth for ALL behavior/data — do NOT modify</b>. The Godot port is faithful; when unsure, the web file wins.</li>
+<li>Minecraft wiki = canonical reference for tools/crafting/blocks, match exactly unless the user specifies otherwise: <a href="https://minecraft.wiki/w/Tool">Tool</a>, <a href="https://minecraft.wiki/w/Block">Block</a>, <a href="https://minecraft.wiki/w/Mining">Mining</a>, <a href="https://minecraft.wiki/w/Crafting_table">Crafting_table</a>, <a href="https://minecraft.wiki/w/Item">Item</a>.</li>
+</ul>
+<h2>Data.* world constants</h2>
+<div class="auto"><b>AUTO (parsed from godot/autoload/data.gd + godot/world/generator.gd at generation time — do not hand-edit; values are current as of the run)</b></div>
+<h3>godot/autoload/data.gd</h3>
+<table><tr><th>const</th><th>value</th><th>file:line</th></tr>
+<tr><td><code>CHUNK</code></td><td><code>16</code></td><td class='note'>godot/autoload/data.gd:3</td></tr>
+<tr><td><code>HEIGHT</code></td><td><code>80</code></td><td class='note'>godot/autoload/data.gd:4</td></tr>
+<tr><td><code>SEA</code></td><td><code>30</code></td><td class='note'>godot/autoload/data.gd:5</td></tr>
+<tr><td><code>C_GRASS_TOP</code></td><td><code>Color(0.416, 0.667, 0.251)</code></td><td class='note'>godot/autoload/data.gd:7</td></tr>
+<tr><td><code>C_DIRT</code></td><td><code>Color(0.525, 0.376, 0.263)</code></td><td class='note'>godot/autoload/data.gd:8</td></tr>
+<tr><td><code>C_GRASS_SIDE</code></td><td><code>Color(0.545, 0.404, 0.294)</code></td><td class='note'>godot/autoload/data.gd:9</td></tr>
+<tr><td><code>C_STONE</code></td><td><code>Color(0.463, 0.463, 0.471)</code></td><td class='note'>godot/autoload/data.gd:10</td></tr>
+<tr><td><code>C_SAND</code></td><td><code>Color(0.855, 0.804, 0.62)</code></td><td class='note'>godot/autoload/data.gd:11</td></tr>
+<tr><td><code>C_WATER</code></td><td><code>Color(0.157, 0.431, 0.863)</code></td><td class='note'>godot/autoload/data.gd:12</td></tr>
+<tr><td><code>C_BEDROCK</code></td><td><code>Color(0.294, 0.294, 0.306)</code></td><td class='note'>godot/autoload/data.gd:13</td></tr>
+<tr><td><code>C_SNOW</code></td><td><code>Color(0.922, 0.949, 0.98)</code></td><td class='note'>godot/autoload/data.gd:14</td></tr>
+<tr><td><code>C_SNOW_SIDE</code></td><td><code>Color(0.732, 0.663, 0.622)</code></td><td class='note'>godot/autoload/data.gd:15</td></tr>
+<tr><td><code>C_COAL_ORE</code></td><td><code>Color(0.30, 0.30, 0.32)</code></td><td class='note'>godot/autoload/data.gd:16</td></tr>
+<tr><td><code>C_IRON_ORE</code></td><td><code>Color(0.518, 0.494, 0.467)</code></td><td class='note'>godot/autoload/data.gd:17</td></tr>
+<tr><td><code>C_DIAMOND_ORE</code></td><td><code>Color(0.30, 0.72, 0.70)</code></td><td class='note'>godot/autoload/data.gd:18</td></tr>
+<tr><td><code>C_LAVA</code></td><td><code>Color(0.976, 0.447, 0.082)</code></td><td class='note'>godot/autoload/data.gd:19</td></tr>
+<tr><td><code>C_OBSIDIAN</code></td><td><code>Color(0.118, 0.078, 0.165)</code></td><td class='note'>godot/autoload/data.gd:20</td></tr>
+<tr><td><code>C_TORCH</code></td><td><code>Color(0.98, 0.71, 0.35)</code></td><td class='note'>godot/autoload/data.gd:21</td></tr>
+<tr><td><code>C_GLOWSTONE</code></td><td><code>Color(0.98, 0.85, 0.60)</code></td><td class='note'>godot/autoload/data.gd:22</td></tr>
+<tr><td><code>C_COBBLE</code></td><td><code>Color(0.447, 0.447, 0.455)</code></td><td class='note'>godot/autoload/data.gd:23</td></tr>
+<tr><td><code>C_LEAVES</code></td><td><code>Color(0.235, 0.549, 0.188)</code></td><td class='note'>godot/autoload/data.gd:24</td></tr>
+<tr><td><code>C_ROSE</code></td><td><code>Color(0.863, 0.157, 0.157)</code></td><td class='note'>godot/autoload/data.gd:25</td></tr>
+<tr><td><code>C_DANDELION</code></td><td><code>Color(0.941, 0.824, 0.157)</code></td><td class='note'>godot/autoload/data.gd:26</td></tr>
+<tr><td><code>ATLAS_PX</code></td><td><code>1024.0</code></td><td class='note'>godot/autoload/data.gd:33</td></tr>
+<tr><td><code>TILE_PX</code></td><td><code>32</code></td><td class='note'>godot/autoload/data.gd:34</td></tr>
+<tr><td><code>TINT_GRASS_TOP</code></td><td><code>Color(93.0 / 255.0, 178.0 / 255.0, 55.0 / 255.0)</code></td><td class='note'>godot/autoload/data.gd:36</td></tr>
+<tr><td><code>TINT_LEAVES</code></td><td><code>Color(60.0 / 255.0, 140.0 / 255.0, 48.0 / 255.0)</code></td><td class='note'>godot/autoload/data.gd:37</td></tr>
+<tr><td><code>TINT_WATER</code></td><td><code>Color(47.0 / 255.0, 107.0 / 255.0, 235.0 / 255.0)</code></td><td class='note'>godot/autoload/data.gd:38</td></tr>
+<tr><td><code>TOOL_BLOCKS</code></td><td><code>{</code></td><td class='note'>godot/autoload/data.gd:41</td></tr>
+</table>
+<h3>godot/world/generator.gd</h3>
+<table><tr><th>const</th><th>value</th><th>file:line</th></tr>
+<tr><td><code>B_GRASS</code></td><td><code>1</code></td><td class='note'>godot/world/generator.gd:3</td></tr>
+<tr><td><code>B_DIRT</code></td><td><code>2</code></td><td class='note'>godot/world/generator.gd:4</td></tr>
+<tr><td><code>B_STONE</code></td><td><code>3</code></td><td class='note'>godot/world/generator.gd:5</td></tr>
+<tr><td><code>B_SAND</code></td><td><code>4</code></td><td class='note'>godot/world/generator.gd:6</td></tr>
+<tr><td><code>B_WATER</code></td><td><code>5</code></td><td class='note'>godot/world/generator.gd:7</td></tr>
+<tr><td><code>B_LOG</code></td><td><code>6</code></td><td class='note'>godot/world/generator.gd:8</td></tr>
+<tr><td><code>B_LEAVES</code></td><td><code>7</code></td><td class='note'>godot/world/generator.gd:9</td></tr>
+<tr><td><code>B_BEDROCK</code></td><td><code>11</code></td><td class='note'>godot/world/generator.gd:10</td></tr>
+<tr><td><code>B_SNOW_GRASS</code></td><td><code>12</code></td><td class='note'>godot/world/generator.gd:11</td></tr>
+<tr><td><code>B_COAL_ORE</code></td><td><code>14</code></td><td class='note'>godot/world/generator.gd:12</td></tr>
+<tr><td><code>B_IRON_ORE</code></td><td><code>15</code></td><td class='note'>godot/world/generator.gd:13</td></tr>
+<tr><td><code>B_DIAMOND_ORE</code></td><td><code>16</code></td><td class='note'>godot/world/generator.gd:14</td></tr>
+<tr><td><code>B_ROSE</code></td><td><code>18</code></td><td class='note'>godot/world/generator.gd:15</td></tr>
+<tr><td><code>B_DANDELION</code></td><td><code>19</code></td><td class='note'>godot/world/generator.gd:16</td></tr>
+<tr><td><code>B_LAVA</code></td><td><code>24</code></td><td class='note'>godot/world/generator.gd:17</td></tr>
+<tr><td><code>B_OBSIDIAN</code></td><td><code>25</code></td><td class='note'>godot/world/generator.gd:18</td></tr>
+<tr><td><code>TREE_D_FOREST</code></td><td><code>0.14</code></td><td class='note'>godot/world/generator.gd:20</td></tr>
+<tr><td><code>TREE_D_PLAIN</code></td><td><code>0.02</code></td><td class='note'>godot/world/generator.gd:21</td></tr>
+<tr><td><code>TREE_D_MAX</code></td><td><code>0.14</code></td><td class='note'>godot/world/generator.gd:22</td></tr>
+<tr><td><code>SPAWN_X</code></td><td><code>8</code></td><td class='note'>godot/world/generator.gd:24</td></tr>
+<tr><td><code>SPAWN_Z</code></td><td><code>8</code></td><td class='note'>godot/world/generator.gd:25</td></tr>
+<tr><td><code>SPAWN_H</code></td><td><code>34</code></td><td class='note'>godot/world/generator.gd:26</td></tr>
+<tr><td><code>SOLID_IDS</code></td><td><code>[</code></td><td class='note'>godot/world/generator.gd:88</td></tr>
+</table>
+<p class='note'>Biome thresholds are computed in <code>generator.gd biome_at()</code> (t &lt; -0.25 snow; t &gt; 0.35 &amp; m &lt; 0.1 desert; m &gt; 0.25 forest; else plains) — not top-level constants, so they are not in the tables above.</p>
+<h2>Verify gates (default)</h2>
+<div class="auto"><b>AUTO (from tasks/HARNESS.md — do not hand-edit)</b></div>
+<div class="auto"><b>G0</b> — <code>~/tools/godot/godot --headless --path godot --quit</code> exits 0 with <b>zero</b> <code>SCRIPT ERROR</code> lines.</div>
+<div class="auto"><b>AC-0061 tiered protocol</b> — subagent runs the <b>SMOKE</b> tier (2–4 dependency-mapped modes + genhash); the <b>coordinator</b> runs the <b>FULL battery</b> before build; the dependency table points at <code>tasks/AC-0061/AC-0061-results.html</code>.</div>
+<div class="auto"><b>Sandbox env</b> — every godot call is ONE bash command that sets HOME first; <b>one godot at a time</b> (concurrent runs corrupt the <code>.godot</code> cache and hang). Scratch to project-local <code>.scratch/</code>.</div>
+<pre>export HOME=/tmp/dsh_home; mkdir -p $HOME; cd /home/angrygiant/github_projects/AweCraft</pre>
+<h2>Expected RESULT shapes (default battery + genhash)</h2>
+<div class="auto"><b>AUTO (rows pulled from tasks/HARNESS.md §1 — do not hand-edit)</b></div>
+<table><tr><th>mode</th><th>key RESULT fields</th><th>typical wall</th></tr>
+<tr><td><code>player</code></td><td>`start`, `after_fwd`, `horizontal_moved`, `is_on_floor`, `jump_peak_y`, `after_fly_y`, `time_before`, `time_after`</td><td>3 s (standalone) / 2.7 s battery</td></tr>
+<tr><td><code>interact</code></td><td>`target_cell`, `breakable_id`, `highlight_visible`, `after_mine_cell`, `drop_spawned`, `inv_grew`, `place_cell`, `after_place_cell`, `place_ok`</td><td>3 s (standalone) / 1.3 s battery</td></tr>
+<tr><td><code>light</code></td><td>`surface_eff` (15), `cave_eff` (0), `torch_level` (14), `torch_far_before` (0), `torch_far_after` (9)</td><td>4 s (standalone) / 2.9 s battery</td></tr>
+<tr><td><code>fluids</code></td><td>`shore_after` ([5,7]), `source_after` ([5,8]), `water_delta` (1), `water_on_lava_result` (25), `sideways_lava_result` (9), `sea_stable` (true), `sea_surface_before`/`_final` (2730), `sea_backed_before`/`_final` (1406); prints `FLUIDSTAT` line</td><td>5 s (standalone) / 3.8 s battery</td></tr>
+<tr><td><code>buckets</code></td><td>`scoop_before`, `after_scoop`, `inv_scoop`, `place_after`, `inv_place`</td><td>~5 s (standalone, not re-run 08-24) / ~3 s battery</td></tr>
+<tr><td><code>genhash</code></td><td>prints `GENHASH cx cz &lt;32-hex&gt;` ×25 + `GENMS` (no RESULT dict)</td><td>2 s</td></tr>
+</table>
+<h2>Known-stable gate values</h2>
+<div class="auto"><b>AUTO (from tasks/HARNESS.md §3, else boilerplate — verify fresh on any fluids/world-touching change)</b></div>
+<table><tr><th>value</th><th>fresh result (2026-08-24)</th><th>established by</th></tr>
+<tr><td>fluids `sea_surface_before`/`_final`</td><td>**2730 / 2730** (FLAT)</td><td>AC-0068 (sea zero-write invariant)</td></tr>
+<tr><td>fluids `sea_backed_before`/`_final`</td><td>**1406 / 1406**</td><td>AC-0068</td></tr>
+<tr><td>fluids `sea_stable`</td><td>**true** (`water_delta` 1, `shore_after` [5,7], `source_after` [5,8])</td><td>AC-0068</td></tr>
+<tr><td>fluids `water_on_lava_result` / `sideways_lava_result`</td><td>**25 / 9** (obsidian / stone)</td><td>M6 fluids port</td></tr>
+<tr><td>interact `drop_spawned` / `place_ok`</td><td>**true / true** (`breakable_id` 2, `after_place_cell` 2)</td><td>M4 interaction</td></tr>
+<tr><td>light `torch_level`</td><td>**14** (`surface_eff` 15, `cave_eff` 0, `torch_far_after` 9)</td><td>M5 lighting</td></tr>
+<tr><td>genhash</td><td>**25/25** `GENHASH` lines, 32-hex MD5 each; default seed 44; seed 99 → all 25 lines differ</td><td>AC-0082 (world/* parity gate)</td></tr>
+<tr><td>boundary r4 `in_radius_built_max`</td><td>**67** (`built_final` 81, `ok` true, `flap` 0, `p95_ms` 65)</td><td>AC-0079 (look-priority scoring; pre-fix gate was 55)</td></tr>
+</table>
+<h2>Task-specific requirements</h2>
+<div class="fill" style="background:#eaf7ea;border-left-color:#2f9e44"><b>COORDINATOR-FILLED 2026-08-25</b> — a <b>process/tooling</b> task (NOT a godot task; the AUTO godot sections above are boilerplate that does not apply). Deliver the two-phase workflow as concrete, reusable coordinator artifacts + one worked pilot. Full requirements are the AC-0105 notes in <code>tasks/TASKS.yaml</code> — read them IN FULL. Summary:</div>
+<ul>
+<li><b>Two-phase workflow (local LLM, NO parallel — one subagent at a time, sequential):</b>
+  <ul>
+  <li><b>Run 1 (xhigh, read-only research):</b> investigates the repo and writes <code>tasks/AC-NNNN/plan.html</code> containing the 7 required sections below. Reads only — must NOT edit code.</li>
+  <li><b>Coordinator gate:</b> plan.html exists AND its frozen-spec constants are cited <b>verbatim</b> (match current <code>data.gd</code>/<code>generator.gd</code>) → queue Run 2; otherwise bounce back.</li>
+  <li><b>Run 2 (medium, builder):</b> implements per plan.html. Verification = one godot <code>G0</code> (zero script errors) + the AC-0061 <b>SMOKE</b> subset (dependency-mapped 2–4 modes + genhash if world/* touched) + ≤1 render at <code>R=1</code>.</li>
+  </ul>
+</li>
+<li><b>plan.html schema (7 required sections, in order):</b> (1) Goal (1 sentence); (2) Files to touch (godot/ paths); (3) Frozen spec refs (index.html r12 build + exact constants: sea/HEIGHT/biome thresholds); (4) Data.* ids (block/item ids, TOOL_GRIDS); (5) Harness gates (AWECRAFT_LOGIC modes from <code>godot/scenes/main.gd:441</code> with expected RESULT JSON shape + the <code>ok:true</code> condition); (6) Snapshot/render names (<code>AWECRAFT_SNAPSHOT</code> + <code>CAM</code>); (7) Risks/edge cases.</li>
+<li><b>Coordinator prompt diff (deliver as concrete template text):</b> Run-1 prompt points at <code>ARCHITECTURE.md</code> + <code>CONTINUITY.md</code> + <code>HARNESS.md</code> (by path, NOT inlined) + the plan.html output path; Run-2 prompt points at <code>plan.html</code> + <code>HARNESS.md</code> + the AC-0061 smoke subset. These are the reusable prompt strings the coordinator will copy — make them copy-paste ready with the <code>AC-NNNN</code> placeholder.</li>
+<li><b>trivial-label bypass:</b> if the task has label <code>trivial</code> OR its title matches <code>build-scripts</code> | <code>menu Exit</code> | <code>webapp artifacts</code> → skip Run 1, go straight to the medium builder using the spec.html from the AC-0102 template (<code>tasks/scripts/spec_template.py</code>).</li>
+<li><b>Dependencies (all landed):</b> AC-0104 plugin wiring (xhigh root / low+medium subagent), AC-0103 <code>tasks/HARNESS.md</code>, AC-0061 tiered verify pipeline. Reference them by path.</li>
+</ul>
+<h2>Task-specific gates</h2>
+<div class="fill" style="background:#eaf7ea;border-left-color:#2f9e44"><b>COORDINATOR-FILLED 2026-08-25</b></div>
+<ol>
+<li><b>G1 templates present + well-formed:</b> the Run-1 and Run-2 prompt templates + the trivial-bypass rule exist as concrete copy-paste text (in <code>AC-0105-results.html</code> and/or a <code>tasks/templates/</code> file); Run-1 template names all 7 plan.html sections and points at the 3 doc paths + plan.html output; Run-2 template points at plan.html + HARNESS.md + the smoke subset. No inlined doc content (paths only).</li>
+<li><b>G2 pilot plan.html (the worked example):</b> produce <code>plan.html</code> for ONE real open godot task (pick the next real godot task in the queue that has no plan.html yet — read its registry notes). Verify all 7 sections present, and the frozen-spec constants in §3 are cited <b>verbatim</b> and match current <code>godot/autoload/data.gd</code>/<code>godot/world/generator.gd</code> (spot ≥5 values). Harness-gates section cites real mode names from <code>main.gd:441</code> + the RESULT shape.</li>
+<li><b>G3 gate logic demonstrated:</b> show the coordinator gate actually works — (a) a plan.html with a stale/wrong constant is REJECTED (constants not verbatim), (b) the correct pilot plan.html PASSES. This proves the "constants cited verbatim → queue Run 2" gate is checkable, not hand-waved.</li>
+<li><b>G4 bypass demonstrated:</b> show the trivial-bypass decision on a concrete task that matches one of the bypass title/label patterns (e.g. a build-scripts or menu-Exit task) → it routes straight to the medium builder, skipping Run 1.</li>
+<li><b>G5 cleanliness:</b> repo tree = only the deliverable files (results + templates + pilot plan.html) under <code>tasks/</code>; NO <code>.gd</code> changes; NO <code>godot/</code> changes; NO TASKS.yaml edit; NO git; NO ~/.dsh changes. (This is a pure docs/templates deliverable.)</li>
+</ol>
+<p class="note">Because this is docs/templates only, there is NO godot run, NO web/windows build, and NO <code>plan.html</code> that touches runtime. The "pilot" plan.html is a worked example for the coordinator to review — it is NOT a launch of that task.</p>
+<h2>Scope (files expected to change)</h2>
+<div class="fill" style="background:#eaf7ea;border-left-color:#2f9e44"><b>COORDINATOR-FILLED 2026-08-25</b></div>
+<ul>
+<li><code>tasks/AC-0105/AC-0105-results.html</code> — evidence: the two prompt templates (verbatim), the trivial-bypass rule, the pilot plan.html (embedded or linked), the G2/G3/G4 gate demonstrations.</li>
+<li><code>tasks/templates/two-phase-run1.md</code> + <code>tasks/templates/two-phase-run2.md</code> (or a single <code>tasks/templates/two-phase.md</code>) — the reusable copy-paste prompt templates + bypass rule. (Location your choice; keep it discoverable.)</li>
+<li><code>tasks/&lt;pilot-task&gt;/plan.html</code> — the one worked pilot plan.html (a real open godot task).</li>
+</ul>
+<h2>Fences</h2>
+<div class="fill" style="background:#eaf7ea;border-left-color:#2f9e44"><b>COORDINATOR-FILLED 2026-08-25</b></div>
+<ul>
+<li><b>No <code>.gd</code> / <code>godot/</code> changes</b> — this is a docs/templates deliverable. The pilot plan.html is a worked example, NOT a code change and NOT a launch.</li>
+<li>No TASKS.yaml edits, no git, no <code>~/.dsh</code> changes, no python-daemon kills, no network, no godot runs, no web/windows builds.</li>
+<li>Do not overwrite the pilot task's existing <code>spec.html</code> if present — plan.html is a separate file. If the pilot task already has a plan.html, pick a different pilot.</li>
+<li>Keep the templates pointing at doc paths (<code>ARCHITECTURE.md</code>, <code>CONTINUITY.md</code>, <code>HARNESS.md</code>, <code>plan.html</code>) — do NOT inline their contents into the templates.</li>
+</ul>
+<p class="note">Scaffold generated by <code>tasks/scripts/spec_template.py</code> (no wall-clock timestamps; the only date is the registry created_at). Auto sections are reproducible byte-for-byte; fill sections are for the coordinator.</p>
+</body></html>

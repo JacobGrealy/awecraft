@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-25T04:59
+  updated_at: 2026-08-25T07:33
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -2937,11 +2937,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-24T10:17
-  updated_at: 2026-08-24T10:28
-  completed_at: null
+  updated_at: 2026-08-25T07:31
+  completed_at: 2026-08-25T07:31
   waiting_on: null
   parent_id: null
   notes: 'Implement two-phase workflow templates for DSH (local LLM, no parallel) after plugin lands: Run 1 xhigh read-only
@@ -2968,7 +2968,19 @@ intake:
     coordinator templates (prompt strings) + example plan.html for one pilot task.
 
     '
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-25T07:31
+    updated_at: null
+    text: '[agent] DONE 2026-08-25: two-phase workflow delivered: tasks/templates/two-phase.md (Run-1 xhigh read-only -> 7-section
+      plan.html; coordinator verbatim-constant gate; Run-2 medium builder = G0 + AC-0061 SMOKE + <=1 R=1 render; trivial-bypass
+      rule; AC-NNNN placeholder; docs by path only) + worked pilot tasks/AC-0106/plan.html (greedy-meshing, 7 sections, 14
+      constants verbatim). COORD RE-VERIFIED ALL GATES: G1 18/18 template checklist; G2 spot-checked 6 constants + biome thresholds
+      verbatim vs data.gd:3-5/generator.gd:48-54; G3 re-ran gate_check.py myself (original PASS exit=0, stale SEA 28 REJECTED
+      exit=1); G4 bypass on AC-0099/AC-0100 + AC-0106 non-bypass contrast; G5 tree clean (only tasks/ additions; TASKS.yaml
+      diff = my own status flip). WORKFLOW ACTIVATION: AC-0106 launches Run-2-only (plan.html gate-passed at pilot time).
+      NOTE: low/medium effort pinning (AC-0104) loads on next DSH host restart; until then builders run at root xhigh on this
+      host.'
 - id: AC-0106
   title: greedy-meshing-opaque-faces
   source: user
@@ -2976,10 +2988,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-24T10:51
-  updated_at: 2026-08-24T10:51
+  updated_at: 2026-08-25T07:33
   completed_at: null
   waiting_on: null
   parent_id: null

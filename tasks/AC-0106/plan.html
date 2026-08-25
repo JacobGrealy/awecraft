@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0106 — plan.html (Run-1 research output — worked example)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.note{font-size:13px;color:#555}.meta{color:#555;font-size:14px}</style></head><body>
+<h1>AC-0106 — plan.html (greedy-meshing-opaque-faces)</h1>
+<p class="meta">Run-1 (xhigh read-only research) output — 7 sections in schema order. Produced 2026-08-25 as the AC-0105 worked pilot example; <b>NOT a launch, NOT a code change</b>. All constants below were copied verbatim from the current files on that date; the coordinator gate re-checks them against <code>godot/autoload/data.gd</code> / <code>godot/world/generator.gd</code> before Run 2.</p>
+
+<h2>1. Goal</h2>
+<p>Merge co-planar adjacent opaque block faces into larger quads in the chunk mesh builder to cut vertex/triangle counts by ~60–80% with zero terrain, fluid, or flora behavior change (genhash must stay 25/25 byte-identical).</p>
+
+<h2>2. Files to touch</h2>
+<table>
+<tr><th>file:area</th><th>note</th></tr>
+<tr><td><code>godot/world/chunk.gd</code> — <code>_faces</code> (~:138)</td><td>face-collection pass feeding <code>_emit_faces</code>; where per-face geometry (corners, light, tint) is gathered for the solid (ro) path. Greedy grouping (by face index + light level + tint) is evaluated here or immediately downstream.</td></tr>
+<tr><td><code>godot/world/chunk.gd</code> — <code>_emit_faces</code> (~:225)</td><td>emit path for solid opaque faces; where the merged quads get emitted (fewer, larger quads instead of per-block quads). Primary edit site.</td></tr>
+<tr><td><code>godot/world/chunk.gd</code> — Acc handling (~:568)</td><td>Acc (per-vertex color) handling in the emitter; merged quads must carry correct per-corner Acc values (corner-interpolated, not averaged).</td></tr>
+<tr><td><code>godot/world/chunk.gd</code> — stab cull / xtab / ktab</td><td>KEEP unchanged: stab culling stays as-is; xtab (cross/flower, ids 18/19) and ktab paths are EXEMPT from merging; fluid and flora (cross-quad) paths untouched.</td></tr>
+</table>
+<p class="note">No other files expected. If the merge needs a per-chunk scratch structure, keep it local to chunk.gd (no new autoload, no scene change).</p>
+
+<h2>3. Frozen spec refs</h2>
+<p>Source of truth: <code>index.html</code>, build <code>20260816-r12</code> (Three.js single-file, frozen — do NOT modify). The Godot port is faithful; when unsure, the web file wins.</p>
+<p>World constants the task depends on, cited verbatim from the current files:</p>
+<table>
+<tr><th>constant</th><th>value (verbatim)</th><th>source</th></tr>
+<tr><td><code>CHUNK</code></td><td><code>16</code></td><td>godot/autoload/data.gd:3</td></tr>
+<tr><td><code>HEIGHT</code></td><td><code>80</code></td><td>godot/autoload/data.gd:4</td></tr>
+<tr><td><code>SEA</code></td><td><code>30</code></td><td>godot/autoload/data.gd:5</td></tr>
+<tr><td>biome threshold — snow</td><td><code>t &lt; -0.25</code></td><td>godot/world/generator.gd:48 (<code>biome_at</code>)</td></tr>
+<tr><td>biome threshold — desert</td><td><code>t &gt; 0.35 and m &lt; 0.1</code></td><td>godot/world/generator.gd:50</td></tr>
+<tr><td>biome threshold — forest</td><td><code>m &gt; 0.25</code></td><td>godot/world/generator.gd:52</td></tr>
+<tr><td>biome default</td><td><code>return "plains"</code></td><td>godot/world/generator.gd:54</td></tr>
+</table>
+<p class="note">Why they matter to this task: merging is per-chunk (chunk is 16×16, <code>CHUNK</code>=16, data.gd:3); quads never cross the y-extent <code>HEIGHT</code>=80 (data.gd:4); sea level <code>SEA</code>=30 (data.gd:5) bounds water-adjacent terrain that must not change. The biome thresholds above define which block palettes appear where — the merge must be biome-agnostic (pure geometry), and any terrain change would show up as a genhash mismatch, so these thresholds are a regression sentinel only, not an input to the merge.</p>
+
+<h2>4. Data.* ids</h2>
+<table>
+<tr><th>id / const</th><th>value</th><th>source</th><th>role in this task</th></tr>
+<tr><td><code>B_GRASS</code></td><td><code>1</code></td><td>godot/world/generator.gd:3</td><td>tinted opaque (grass top tint) — tint grouping must keep per-id tint intact when merging</td></tr>
+<tr><td><code>B_DIRT</code></td><td><code>2</code></td><td>godot/world/generator.gd:4</td><td>opaque, tinted sides</td></tr>
+<tr><td><code>B_STONE</code></td><td><code>3</code></td><td>godot/world/generator.gd:5</td><td>dominant opaque — biggest merge wins</td></tr>
+<tr><td><code>B_SAND</code></td><td><code>4</code></td><td>godot/world/generator.gd:6</td><td>opaque, tinted</td></tr>
+<tr><td><code>B_WATER</code></td><td><code>5</code></td><td>godot/world/generator.gd:7</td><td>EXEMPT — fluid path untouched</td></tr>
+<tr><td><code>B_LOG</code></td><td><code>6</code></td><td>godot/world/generator.gd:8</td><td>opaque, per-face tiles</td></tr>
+<tr><td><code>B_LEAVES</code></td><td><code>7</code></td><td>godot/world/generator.gd:9</td><tint-grouped opaque (tinted foliage)</td></tr>
+<tr><td><code>B_BEDROCK</code></td><td><code>11</code></td><td>godot/world/generator.gd:10</td><td>opaque</td></tr>
+<tr><td><code>B_SNOW_GRASS</code></td><td><code>12</code></td><td>godot/world/generator.gd:11</td><td>tinted (snow biome)</td></tr>
+<tr><td><code>B_ROSE</code></td><td><code>18</code></td><td>godot/world/generator.gd:15</td><td>EXEMPT — cross-quad (xtab) path, never merged</td></tr>
+<tr><td><code>B_DANDELION</code></td><td><code>19</code></td><td>godot/world/generator.gd:16</td><td>EXEMPT — cross-quad (xtab) path, never merged</td></tr>
+</table>
+<p class="note">Merge grouping key per face run: block id + face index (fi) + face light level + block tint (and per-corner Acc). Ids 18/19 route through the xtab cross-quad path and must be excluded before merging. <code>TOOL_GRIDS</code>/<code>TOOL_BLOCKS</code> (godot/autoload/data.gd:41+) are item/tool data and are <b>not</b> touched by this task.</p>
+
+<h2>5. Harness gates</h2>
+<p>Modes from <code>godot/scenes/main.gd</code> (logic dispatch reads <code>AWECRAFT_LOGIC</code> at main.gd:57; the mode table in <code>tasks/HARNESS.md</code> §1 is the reference — modes, RESULT fields, and envs are the stable contract there; the exact dispatch line referenced by the task notes, main.gd:441, is inside the harness dispatch region of that file).</p>
+<table>
+<tr><th>mode</th><th>harness entry</th><th>key RESULT fields (expected shape)</th><th>ok:true condition</th></tr>
+<tr><td><code>player</code></td><td><code>_player_logic_test</code></td><td><code>start</code>, <code>after_fwd</code>, <code>horizontal_moved</code>, <code>is_on_floor</code>, <code>jump_peak_y</code>, <code>after_fly_y</code>, <code>time_before</code>, <code>time_after</code></td><td>movement/floor/jump/fly values match known-stable baseline (HARNESS.md §3); no new script errors</td></tr>
+<tr><td><code>interact</code></td><td><code>_interact_test</code></td><td><code>target_cell</code>, <code>breakable_id</code>, <code>highlight_visible</code>, <code>after_mine_cell</code>, <code>drop_spawned</code>, <code>inv_grew</code>, <code>place_cell</code>, <code>after_place_cell</code>, <code>place_ok</code></td><td><code>drop_spawned:true</code> AND <code>place_ok:true</code> (known-stable, HARNESS.md §3)</td></tr>
+<tr><td><code>light</code></td><td><code>_light_test</code></td><td><code>surface_eff</code> (15), <code>cave_eff</code> (0), <code>torch_level</code> (14), <code>torch_far_before</code> (0), <code>torch_far_after</code> (9)</td><td><code>torch_level</code> == 14 and sky/cave values unchanged (mesh change must not affect light compute)</td></tr>
+<tr><td><code>fluids</code></td><td><code>_fluids_test</code></td><td><code>shore_after</code> ([5,7]), <code>source_after</code> ([5,8]), <code>water_delta</code> (1), <code>water_on_lava_result</code> (25), <code>sideways_lava_result</code> (9), <code>sea_stable</code> (true), <code>sea_surface_before</code>/<code>_final</code> (2730), <code>sea_backed_before</code>/<code>_final</code> (1406); prints <code>FLUIDSTAT</code></td><td><code>sea_stable:true</code> AND 2730/2730 + 1406/1406 flat (AC-0068 invariant)</td></tr>
+<tr><td><code>genhash</code></td><td><code>_genhash_print</code></td><td>prints <code>GENHASH cx cz &lt;32-hex&gt;</code> ×25 + <code>GENMS</code> (no RESULT dict)</td><td><b>25/25 lines byte-identical to pre-change baseline</b> (terrain unchanged — the hard gate for this task; AC-0082 parity gate, default seed 44)</td></tr>
+</table>
+<p class="note">Per the task notes the full battery is <code>player;interact;light;fluids;buckets</code> green + genhash 25/25; for the SMOKE tier (AC-0061, HARNESS.md §3) the subagent runs 2–4 dependency-mapped modes + genhash — for a mesh-only change: <code>player;interact;light</code> + <code>genhash</code> (fluids optional; <code>buckets</code> is a FULL-tier mode, not in the 08-24 smoke). Extra (non-harness) check: <code>mesh_info</code> vertex count drop vs baseline (the perf win itself).</p>
+
+<h2>6. Snapshot / render names</h2>
+<table>
+<tr><th>item</th><th>value</th></tr>
+<tr><td><code>AWECRAFT_SNAPSHOT</code></td><td><code>tasks/AC-0106/meshing_iso.png</code> (iso view) — one R=1 render vs the pre-change baseline</td></tr>
+<tr><td><code>AWECRAFT_CAM</code></td><td><code>iso</code> (default first-person spawn also acceptable for an A/B)</td></tr>
+<tr><td><code>AWECRAFT_RADIUS</code></td><td><code>1</code> (≤1 render, R=1, per task notes "optional R=1 render vs baseline")</td></tr>
+</table>
+<pre>timeout 300000 xvfb-run -a env AWECRAFT_SNAPSHOT=tasks/AC-0106/meshing_iso.png AWECRAFT_CAM=iso AWECRAFT_RADIUS=1 ~/tools/godot/godot --path godot --rendering-method gl_compatibility</pre>
+<p class="note">Recipe shape from <code>tasks/HARNESS.md</code> §4; one godot at a time; HOME set first. The render is OPTIONAL (the gate is genhash + battery); if it runs, compare against the pre-change baseline shot visually (same seed 44).</p>
+
+<h2>7. Risks / edge cases</h2>
+<ul>
+<li><b>genhash parity</b> — merging must be geometry-only: terrain data (WorldGen, block arrays) is untouched, so 25/25 GENHASH must stay byte-identical. Any change to data generation is an immediate stop.</li>
+<li><b>Per-corner Acc / light interpolation</b> — a merged quad spanning cells with different light levels or tints must keep per-corner attributes (corner-interpolated), not average them; otherwise lighting/tint banding appears (caught by the light mode + iso render).</li>
+<li><b>xtab/ktab + stab cull exemption</b> — cross-quad (ids 18/19), fluid, and stab-cull paths must stay byte-identical behavior; do not let the merge path swallow them (task notes: "Keep stab cull, keep xtab/ktab exempt").</li>
+<li><b>Grouping key completeness</b> — merge only runs sharing id + face index + face light + tint; a missing key dimension produces wrong-color merged quads (caught by iso render + tint mode).</li>
+<li><b>Per-tier trade</b> — full greedy vs per-y-row strip merge: start with per-y-row strip merge (simpler, ~60% of the win) and only escalate if the vertex target (~60–80% cut) is missed; measure via mesh_info.</li>
+<li><b>Fallback</b> — if verts don't drop ≥60% after strip merge, report the measured drop and propose the greedy variant in the results page; do not ship a sub-target result silently.</li>
+</ul>
+
+<p class="note">Schema: 7 sections in order (Goal / Files to touch / Frozen spec refs / Data.* ids / Harness gates / Snapshot+render names / Risks). Produced by the Run-1 template in <code>tasks/templates/two-phase.md</code> (AC-0105).</p>
+</body></html>

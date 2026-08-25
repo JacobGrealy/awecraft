@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0105 — results (two-phase workflow templates)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:24px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto;font-size:12.5px}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.note{font-size:13px;color:#555}.pass{color:#1a7f37;font-weight:600}.fail{color:#cf222e;font-weight:600}.meta{color:#555;font-size:14px}.ok{background:#eaf7ea;border-left:4px solid #2f9e44;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}</style></head><body>
+<h1>AC-0105 — results: two-phase subagent workflow templates</h1>
+<p class="meta">Process/templating task (NOT a godot task). Deliverables: reusable coordinator templates + one worked pilot plan.html + gate demonstrations. No code change, no godot run, no build.</p>
+
+<h2>Deliverables</h2>
+<ul>
+<li><code>tasks/templates/two-phase.md</code> — Run-1 (xhigh read-only) prompt, Run-2 (medium builder) prompt, coordinator gate rule, trivial-bypass rule. Copy-paste ready, <code>AC-NNNN</code> placeholder, docs by path only.</li>
+<li><code>tasks/AC-0106/plan.html</code> — worked pilot (greedy-meshing-opaque-faces, next godot task in queue after the DSH cluster; had no plan.html and no spec.html — created fresh, nothing overwritten).</li>
+<li><code>tasks/AC-0105/AC-0105-results.html</code> — this page.</li>
+</ul>
+
+<h2>Templates (verbatim)</h2>
+<pre># AC-0105 — two-phase subagent workflow (reusable coordinator templates)
+
+Process artifact for the DSH-coordinated AweCraft pipeline (local LLM, ONE
+subagent at a time, sequential). Replace every `AC-NNNN` with the real task id
+before pasting. Templates reference docs BY PATH only — never inline their
+content into a prompt.
+
+Workflow:
+
+    [trivial-bypass check] ──yes──► Run 2 (medium builder, spec.html)
+           │no
+           ▼
+    Run 1 (xhigh, read-only research) ──► tasks/AC-NNNN/plan.html
+           │
+           ▼
+    COORDINATOR GATE (plan.html exists + §3 constants verbatim)
+           │pass                          │fail
+           ▼                             ▼
+    Run 2 (medium builder)         bounce Run 1 back with the stale lines
+
+---
+
+## RUN 1 TEMPLATE — xhigh, read-only research → plan.html
+
+Paste as the subagent prompt (subagent tier: **xhigh**).
+
+```
+You are the Run-1 research subagent for AweCraft task AC-NNNN.
+
+READ FIRST, in order, BY PATH (do not paste their contents into your reply):
+1. godot/CONTINUITY.md          — state checkpoint, ops rules, task context
+2. godot/ARCHITECTURE.md        — architecture + subagent contract (mandatory)
+3. tasks/HARNESS.md             — every AWECRAFT_LOGIC mode, RESULT shapes,
+                                  envs, smoke-tier protocol, run recipes
+4. tasks/AC-NNNN/spec.html      — this task&#x27;s requirements + verify gates
+5. The AC-NNNN entry in tasks/TASKS.yaml (its notes), if the spec references it.
+
+YOUR JOB — RESEARCH ONLY. You must NOT edit any code, scene, .gd, or other
+file except the single output below. No godot runs, no builds.
+
+Investigate the repo (grep/read godot/ sources as needed) and WRITE exactly
+one file: tasks/AC-NNNN/plan.html — a small self-contained HTML page with
+EXACTLY these 7 sections, IN THIS ORDER:
+
+  1. Goal                 — 1 sentence: what AC-NNNN changes and why.
+  2. Files to touch       — every godot/ path you expect to edit or read,
+                            with a one-line note per file (function/area).
+  3. Frozen spec refs     — index.html build 20260816-r12 (source of truth) +
+                            the EXACT world constants the task depends on,
+                            cited VERBATIM from the current source:
+                            SEA, HEIGHT, CHUNK from godot/autoload/data.gd and
+                            the biome thresholds from godot/world/generator.gd
+                            biome_at() (t/m cutoffs). Quote each value with
+                            file:line. Do not paraphrase or round values.
+  4. Data.* ids           — the block/item ids the task touches (Data.* in
+                            godot/autoload/data.gd, TOOL_GRIDS, B_* ids in
+                            godot/world/generator.gd), each with file:line.
+  5. Harness gates        — the AWECRAFT_LOGIC mode(s) from
+                            godot/scenes/main.gd that verify this task
+                            (grep &#x27;AWECRAFT_LOGIC=&#x27; / the mode branches in
+                            main.gd; the mode table in tasks/HARNESS.md is
+                            the reference). For each: mode name, expected
+                            RESULT JSON shape (key fields), and the ok:true
+                            condition the run must satisfy.
+  6. Snapshot/render names — the AWECRAFT_SNAPSHOT output path(s) (under
+                            tasks/AC-NNNN/) + AWECRAFT_CAM preset(s) to use,
+                            plus the R=1 render command shape from
+                            tasks/HARNESS.md §4.
+  7. Risks/edge cases     — what could break (e.g. genhash parity if world/*
+                            is touched, fluid invariants, xtab/ktab exemption),
+                            and the fallback if the plan is wrong.
+
+CONSTANTS RULE (this is the gate the coordinator checks): every frozen-spec
+value in §3/§4 must match the CURRENT data.gd / generator.gd byte-for-byte —
+copy it straight out of the file. If you are unsure of a value, grep the file
+again; never write from memory.
+
+When done, reply in &lt;= 20 lines: the 7 section titles, the file paths you
+cite, and any open questions. Your deliverable is tasks/AC-NNNN/plan.html.
+```
+
+---
+
+## COORDINATOR GATE — after Run 1, before Run 2
+
+The coordinator (not the subagent) checks, in order:
+
+1. `tasks/AC-NNNN/plan.html` exists. (No file → bounce Run 1 back.)
+2. All 7 sections present, in order.
+3. Every frozen-spec constant in §3/§4 is cited **verbatim** — the coordinator
+   re-greps the cited file:line and compares the value character-for-character
+   against current `godot/autoload/data.gd` / `godot/world/generator.gd`.
+   Helper: re-run `python3 tasks/scripts/spec_template.py AC-NNNN --out
+   .scratch/&lt;task&gt;-consts.html` (it re-parses both files fresh) and diff the
+   cited values against that table.
+
+Decision:
+
+- PASS (all constants verbatim, 7 sections) → **queue Run 2** (medium builder).
+- FAIL (any constant stale/wrong or section missing) → **bounce Run 1 back**
+  with the exact stale lines listed (value cited vs value in file) and ask for
+  the file to be re-cited from the current source. Do NOT patch plan.html by
+  hand and do NOT queue Run 2 on a failed gate.
+
+---
+
+## RUN 2 TEMPLATE — medium, builder
+
+Paste as the subagent prompt (subagent tier: **medium**). Only send after the
+gate PASSES.
+
+```
+You are the Run-2 builder subagent for AweCraft task AC-NNNN.
+
+READ FIRST, in order, BY PATH:
+1. tasks/AC-NNNN/plan.html    — your implementation plan (7 sections; the
+                                 gate has verified its constants are current)
+2. tasks/AC-NNNN/spec.html    — requirements + deliverables
+3. tasks/HARNESS.md           — harness modes, RESULT shapes, run recipes,
+                                 AC-0061 SMOKE-tier protocol
+4. godot/CONTINUITY.md + godot/ARCHITECTURE.md (ops rules + subagent contract)
+
+IMPLEMENT per plan.html — sections 2 (files) and 4 (Data.* ids) are your
+edit map. Stay inside the plan; if you must deviate, record the deviation in
+the results page.
+
+VERIFY (AC-0061 tiered protocol, SMOKE tier — see tasks/HARNESS.md §3):
+  G0    one godot headless load: zero SCRIPT ERROR lines (hard gate).
+  SMOKE one smoke battery launch with the 2–4 dependency-mapped modes for
+        this change area (HARNESS.md dependency table: e.g. world/* →
+        player;interact;light;fluids + genhash) + genhash ALWAYS when
+        world/* or data.gd is touched (25/25 byte-identical GENHASH lines).
+  RENDER ≤ 1 render at AWECRAFT_RADIUS=1 into the snapshot path from
+        plan.html §6 (xvfb, gl_compatibility); view it; save the PNG under
+        tasks/AC-NNNN/.
+
+One godot at a time (concurrent runs corrupt the .godot cache). All runs:
+one bash command, HOME set first, from repo root (recipes in HARNESS.md §4).
+
+DELIVER: screenshots into tasks/AC-NNNN/ + a self-contained
+tasks/AC-NNNN/AC-NNNN-results.html (G0 output, smoke RESULT JSON, render
+PNG, deviations). Report &lt;= 20 lines: files changed, RESULT values, gates
+green/red.
+```
+
+---
+
+## TRIVIAL-LABEL BYPASS RULE
+
+Before launching Run 1, the coordinator checks the task in `tasks/TASKS.yaml`:
+
+    BYPASS  if labels contain `trivial`
+        OR the title matches:  build-scripts | menu Exit | webapp artifacts
+
+- BYPASS=yes → **skip Run 1 entirely** (no plan.html, no gate). The task gets
+  its spec from the AC-0102 template: `python3 tasks/scripts/spec_template.py
+  AC-NNNN` (writes `tasks/AC-NNNN/spec.html`; if the spec already exists use
+  it), then launch the **Run 2 medium builder directly** with that spec.html
+  (same prompt as Run 2 above, minus the plan.html reference — point at
+  spec.html + HARNESS.md; verification stays G0 + SMOKE + ≤1 R=1 render).
+- BYPASS=no → normal two-phase flow (Run 1 → gate → Run 2).
+
+Rationale: trivial tasks are self-evident from the spec; the research pass
+buys nothing and costs a full xhigh round on a single-request LLM.
+
+---
+
+## Notes for the coordinator
+
+- Local LLM serves ONE request at a time: never queue Run 1 and Run 2 (or any
+  two subagents) concurrently. Run 2 goes out only after the gate is green.
+- plan.html is a RESEARCH artifact: it never triggers a code change by itself
+  and is not a &quot;launch&quot;.
+- Templates keep doc references as paths (CONTINUITY.md, ARCHITECTURE.md,
+  HARNESS.md, spec.html, plan.html). Inlining their content bloats every
+  prompt and drifts out of date.
+- The verbatim-constants gate is checkable mechanically: re-grep the cited
+  file:line (or re-run spec_template.py) and diff. A one-value mismatch is a
+  full bounce of Run 1, not a negotiation.
+</pre>
+
+<h2>Pilot plan.html (AC-0106, worked example — NOT a launch)</h2>
+<p class="note">Source: <code>tasks/AC-0106/plan.html</code> (file on disk, canonical). Embedded below for review.</p>
+<pre>&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;en&quot;&gt;&lt;head&gt;&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;title&gt;AC-0106 — plan.html (Run-1 research output — worked example)&lt;/title&gt;
+&lt;style&gt;body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.note{font-size:13px;color:#555}.meta{color:#555;font-size:14px}&lt;/style&gt;&lt;/head&gt;&lt;body&gt;
+&lt;h1&gt;AC-0106 — plan.html (greedy-meshing-opaque-faces)&lt;/h1&gt;
+&lt;p class=&quot;meta&quot;&gt;Run-1 (xhigh read-only research) output — 7 sections in schema order. Produced 2026-08-25 as the AC-0105 worked pilot example; &lt;b&gt;NOT a launch, NOT a code change&lt;/b&gt;. All constants below were copied verbatim from the current files on that date; the coordinator gate re-checks them against &lt;code&gt;godot/autoload/data.gd&lt;/code&gt; / &lt;code&gt;godot/world/generator.gd&lt;/code&gt; before Run 2.&lt;/p&gt;
+
+&lt;h2&gt;1. Goal&lt;/h2&gt;
+&lt;p&gt;Merge co-planar adjacent opaque block faces into larger quads in the chunk mesh builder to cut vertex/triangle counts by ~60–80% with zero terrain, fluid, or flora behavior change (genhash must stay 25/25 byte-identical).&lt;/p&gt;
+
+&lt;h2&gt;2. Files to touch&lt;/h2&gt;
+&lt;table&gt;
+&lt;tr&gt;&lt;th&gt;file:area&lt;/th&gt;&lt;th&gt;note&lt;/th&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;godot/world/chunk.gd&lt;/code&gt; — &lt;code&gt;_faces&lt;/code&gt; (~:138)&lt;/td&gt;&lt;td&gt;face-collection pass feeding &lt;code&gt;_emit_faces&lt;/code&gt;; where per-face geometry (corners, light, tint) is gathered for the solid (ro) path. Greedy grouping (by face index + light level + tint) is evaluated here or immediately downstream.&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;godot/world/chunk.gd&lt;/code&gt; — &lt;code&gt;_emit_faces&lt;/code&gt; (~:225)&lt;/td&gt;&lt;td&gt;emit path for solid opaque faces; where the merged quads get emitted (fewer, larger quads instead of per-block quads). Primary edit site.&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;godot/world/chunk.gd&lt;/code&gt; — Acc handling (~:568)&lt;/td&gt;&lt;td&gt;Acc (per-vertex color) handling in the emitter; merged quads must carry correct per-corner Acc values (corner-interpolated, not averaged).&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;godot/world/chunk.gd&lt;/code&gt; — stab cull / xtab / ktab&lt;/td&gt;&lt;td&gt;KEEP unchanged: stab culling stays as-is; xtab (cross/flower, ids 18/19) and ktab paths are EXEMPT from merging; fluid and flora (cross-quad) paths untouched.&lt;/td&gt;&lt;/tr&gt;
+&lt;/table&gt;
+&lt;p class=&quot;note&quot;&gt;No other files expected. If the merge needs a per-chunk scratch structure, keep it local to chunk.gd (no new autoload, no scene change).&lt;/p&gt;
+
+&lt;h2&gt;3. Frozen spec refs&lt;/h2&gt;
+&lt;p&gt;Source of truth: &lt;code&gt;index.html&lt;/code&gt;, build &lt;code&gt;20260816-r12&lt;/code&gt; (Three.js single-file, frozen — do NOT modify). The Godot port is faithful; when unsure, the web file wins.&lt;/p&gt;
+&lt;p&gt;World constants the task depends on, cited verbatim from the current files:&lt;/p&gt;
+&lt;table&gt;
+&lt;tr&gt;&lt;th&gt;constant&lt;/th&gt;&lt;th&gt;value (verbatim)&lt;/th&gt;&lt;th&gt;source&lt;/th&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;CHUNK&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;16&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/autoload/data.gd:3&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;HEIGHT&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;80&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/autoload/data.gd:4&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;SEA&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;30&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/autoload/data.gd:5&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;biome threshold — snow&lt;/td&gt;&lt;td&gt;&lt;code&gt;t &amp;lt; -0.25&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/world/generator.gd:48 (&lt;code&gt;biome_at&lt;/code&gt;)&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;biome threshold — desert&lt;/td&gt;&lt;td&gt;&lt;code&gt;t &amp;gt; 0.35 and m &amp;lt; 0.1&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/world/generator.gd:50&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;biome threshold — forest&lt;/td&gt;&lt;td&gt;&lt;code&gt;m &amp;gt; 0.25&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/world/generator.gd:52&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;biome default&lt;/td&gt;&lt;td&gt;&lt;code&gt;return &quot;plains&quot;&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/world/generator.gd:54&lt;/td&gt;&lt;/tr&gt;
+&lt;/table&gt;
+&lt;p class=&quot;note&quot;&gt;Why they matter to this task: merging is per-chunk (chunk is 16×16, &lt;code&gt;CHUNK&lt;/code&gt;=16, data.gd:3); quads never cross the y-extent &lt;code&gt;HEIGHT&lt;/code&gt;=80 (data.gd:4); sea level &lt;code&gt;SEA&lt;/code&gt;=30 (data.gd:5) bounds water-adjacent terrain that must not change. The biome thresholds above define which block palettes appear where — the merge must be biome-agnostic (pure geometry), and any terrain change would show up as a genhash mismatch, so these thresholds are a regression sentinel only, not an input to the merge.&lt;/p&gt;
+
+&lt;h2&gt;4. Data.* ids&lt;/h2&gt;
+&lt;table&gt;
+&lt;tr&gt;&lt;th&gt;id / const&lt;/th&gt;&lt;th&gt;value&lt;/th&gt;&lt;th&gt;source&lt;/th&gt;&lt;th&gt;role in this task&lt;/th&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_GRASS&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;1&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/world/generator.gd:3&lt;/td&gt;&lt;td&gt;tinted opaque (grass top tint) — tint grouping must keep per-id tint intact when merging&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_DIRT&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;2&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/world/generator.gd:4&lt;/td&gt;&lt;td&gt;opaque, tinted sides&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_STONE&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;3&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/world/generator.gd:5&lt;/td&gt;&lt;td&gt;dominant opaque — biggest merge wins&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_SAND&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;4&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/world/generator.gd:6&lt;/td&gt;&lt;td&gt;opaque, tinted&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_WATER&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;5&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/world/generator.gd:7&lt;/td&gt;&lt;td&gt;EXEMPT — fluid path untouched&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_LOG&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;6&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/world/generator.gd:8&lt;/td&gt;&lt;td&gt;opaque, per-face tiles&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_LEAVES&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;7&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/world/generator.gd:9&lt;/td&gt;&lt;tint-grouped opaque (tinted foliage)&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_BEDROCK&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;11&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/world/generator.gd:10&lt;/td&gt;&lt;td&gt;opaque&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_SNOW_GRASS&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;12&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/world/generator.gd:11&lt;/td&gt;&lt;td&gt;tinted (snow biome)&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_ROSE&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;18&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/world/generator.gd:15&lt;/td&gt;&lt;td&gt;EXEMPT — cross-quad (xtab) path, never merged&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;B_DANDELION&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;19&lt;/code&gt;&lt;/td&gt;&lt;td&gt;godot/world/generator.gd:16&lt;/td&gt;&lt;td&gt;EXEMPT — cross-quad (xtab) path, never merged&lt;/td&gt;&lt;/tr&gt;
+&lt;/table&gt;
+&lt;p class=&quot;note&quot;&gt;Merge grouping key per face run: block id + face index (fi) + face light level + block tint (and per-corner Acc). Ids 18/19 route through the xtab cross-quad path and must be excluded before merging. &lt;code&gt;TOOL_GRIDS&lt;/code&gt;/&lt;code&gt;TOOL_BLOCKS&lt;/code&gt; (godot/autoload/data.gd:41+) are item/tool data and are &lt;b&gt;not&lt;/b&gt; touched by this task.&lt;/p&gt;
+
+&lt;h2&gt;5. Harness gates&lt;/h2&gt;
+&lt;p&gt;Modes from &lt;code&gt;godot/scenes/main.gd&lt;/code&gt; (logic dispatch reads &lt;code&gt;AWECRAFT_LOGIC&lt;/code&gt; at main.gd:57; the mode table in &lt;code&gt;tasks/HARNESS.md&lt;/code&gt; §1 is the reference — modes, RESULT fields, and envs are the stable contract there; the exact dispatch line referenced by the task notes, main.gd:441, is inside the harness dispatch region of that file).&lt;/p&gt;
+&lt;table&gt;
+&lt;tr&gt;&lt;th&gt;mode&lt;/th&gt;&lt;th&gt;harness entry&lt;/th&gt;&lt;th&gt;key RESULT fields (expected shape)&lt;/th&gt;&lt;th&gt;ok:true condition&lt;/th&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;player&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;_player_logic_test&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;start&lt;/code&gt;, &lt;code&gt;after_fwd&lt;/code&gt;, &lt;code&gt;horizontal_moved&lt;/code&gt;, &lt;code&gt;is_on_floor&lt;/code&gt;, &lt;code&gt;jump_peak_y&lt;/code&gt;, &lt;code&gt;after_fly_y&lt;/code&gt;, &lt;code&gt;time_before&lt;/code&gt;, &lt;code&gt;time_after&lt;/code&gt;&lt;/td&gt;&lt;td&gt;movement/floor/jump/fly values match known-stable baseline (HARNESS.md §3); no new script errors&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;interact&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;_interact_test&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;target_cell&lt;/code&gt;, &lt;code&gt;breakable_id&lt;/code&gt;, &lt;code&gt;highlight_visible&lt;/code&gt;, &lt;code&gt;after_mine_cell&lt;/code&gt;, &lt;code&gt;drop_spawned&lt;/code&gt;, &lt;code&gt;inv_grew&lt;/code&gt;, &lt;code&gt;place_cell&lt;/code&gt;, &lt;code&gt;after_place_cell&lt;/code&gt;, &lt;code&gt;place_ok&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;drop_spawned:true&lt;/code&gt; AND &lt;code&gt;place_ok:true&lt;/code&gt; (known-stable, HARNESS.md §3)&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;light&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;_light_test&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;surface_eff&lt;/code&gt; (15), &lt;code&gt;cave_eff&lt;/code&gt; (0), &lt;code&gt;torch_level&lt;/code&gt; (14), &lt;code&gt;torch_far_before&lt;/code&gt; (0), &lt;code&gt;torch_far_after&lt;/code&gt; (9)&lt;/td&gt;&lt;td&gt;&lt;code&gt;torch_level&lt;/code&gt; == 14 and sky/cave values unchanged (mesh change must not affect light compute)&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;fluids&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;_fluids_test&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;shore_after&lt;/code&gt; ([5,7]), &lt;code&gt;source_after&lt;/code&gt; ([5,8]), &lt;code&gt;water_delta&lt;/code&gt; (1), &lt;code&gt;water_on_lava_result&lt;/code&gt; (25), &lt;code&gt;sideways_lava_result&lt;/code&gt; (9), &lt;code&gt;sea_stable&lt;/code&gt; (true), &lt;code&gt;sea_surface_before&lt;/code&gt;/&lt;code&gt;_final&lt;/code&gt; (2730), &lt;code&gt;sea_backed_before&lt;/code&gt;/&lt;code&gt;_final&lt;/code&gt; (1406); prints &lt;code&gt;FLUIDSTAT&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;sea_stable:true&lt;/code&gt; AND 2730/2730 + 1406/1406 flat (AC-0068 invariant)&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;genhash&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;_genhash_print&lt;/code&gt;&lt;/td&gt;&lt;td&gt;prints &lt;code&gt;GENHASH cx cz &amp;lt;32-hex&amp;gt;&lt;/code&gt; ×25 + &lt;code&gt;GENMS&lt;/code&gt; (no RESULT dict)&lt;/td&gt;&lt;td&gt;&lt;b&gt;25/25 lines byte-identical to pre-change baseline&lt;/b&gt; (terrain unchanged — the hard gate for this task; AC-0082 parity gate, default seed 44)&lt;/td&gt;&lt;/tr&gt;
+&lt;/table&gt;
+&lt;p class=&quot;note&quot;&gt;Per the task notes the full battery is &lt;code&gt;player;interact;light;fluids;buckets&lt;/code&gt; green + genhash 25/25; for the SMOKE tier (AC-0061, HARNESS.md §3) the subagent runs 2–4 dependency-mapped modes + genhash — for a mesh-only change: &lt;code&gt;player;interact;light&lt;/code&gt; + &lt;code&gt;genhash&lt;/code&gt; (fluids optional; &lt;code&gt;buckets&lt;/code&gt; is a FULL-tier mode, not in the 08-24 smoke). Extra (non-harness) check: &lt;code&gt;mesh_info&lt;/code&gt; vertex count drop vs baseline (the perf win itself).&lt;/p&gt;
+
+&lt;h2&gt;6. Snapshot / render names&lt;/h2&gt;
+&lt;table&gt;
+&lt;tr&gt;&lt;th&gt;item&lt;/th&gt;&lt;th&gt;value&lt;/th&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;AWECRAFT_SNAPSHOT&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;tasks/AC-0106/meshing_iso.png&lt;/code&gt; (iso view) — one R=1 render vs the pre-change baseline&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;AWECRAFT_CAM&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;iso&lt;/code&gt; (default first-person spawn also acceptable for an A/B)&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;AWECRAFT_RADIUS&lt;/code&gt;&lt;/td&gt;&lt;td&gt;&lt;code&gt;1&lt;/code&gt; (≤1 render, R=1, per task notes &quot;optional R=1 render vs baseline&quot;)&lt;/td&gt;&lt;/tr&gt;
+&lt;/table&gt;
+&lt;pre&gt;timeout 300000 xvfb-run -a env AWECRAFT_SNAPSHOT=tasks/AC-0106/meshing_iso.png AWECRAFT_CAM=iso AWECRAFT_RADIUS=1 ~/tools/godot/godot --path godot --rendering-method gl_compatibility&lt;/pre&gt;
+&lt;p class=&quot;note&quot;&gt;Recipe shape from &lt;code&gt;tasks/HARNESS.md&lt;/code&gt; §4; one godot at a time; HOME set first. The render is OPTIONAL (the gate is genhash + battery); if it runs, compare against the pre-change baseline shot visually (same seed 44).&lt;/p&gt;
+
+&lt;h2&gt;7. Risks / edge cases&lt;/h2&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;b&gt;genhash parity&lt;/b&gt; — merging must be geometry-only: terrain data (WorldGen, block arrays) is untouched, so 25/25 GENHASH must stay byte-identical. Any change to data generation is an immediate stop.&lt;/li&gt;
+&lt;li&gt;&lt;b&gt;Per-corner Acc / light interpolation&lt;/b&gt; — a merged quad spanning cells with different light levels or tints must keep per-corner attributes (corner-interpolated), not average them; otherwise lighting/tint banding appears (caught by the light mode + iso render).&lt;/li&gt;
+&lt;li&gt;&lt;b&gt;xtab/ktab + stab cull exemption&lt;/b&gt; — cross-quad (ids 18/19), fluid, and stab-cull paths must stay byte-identical behavior; do not let the merge path swallow them (task notes: &quot;Keep stab cull, keep xtab/ktab exempt&quot;).&lt;/li&gt;
+&lt;li&gt;&lt;b&gt;Grouping key completeness&lt;/b&gt; — merge only runs sharing id + face index + face light + tint; a missing key dimension produces wrong-color merged quads (caught by iso render + tint mode).&lt;/li&gt;
+&lt;li&gt;&lt;b&gt;Per-tier trade&lt;/b&gt; — full greedy vs per-y-row strip merge: start with per-y-row strip merge (simpler, ~60% of the win) and only escalate if the vertex target (~60–80% cut) is missed; measure via mesh_info.&lt;/li&gt;
+&lt;li&gt;&lt;b&gt;Fallback&lt;/b&gt; — if verts don&#x27;t drop ≥60% after strip merge, report the measured drop and propose the greedy variant in the results page; do not ship a sub-target result silently.&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p class=&quot;note&quot;&gt;Schema: 7 sections in order (Goal / Files to touch / Frozen spec refs / Data.* ids / Harness gates / Snapshot+render names / Risks). Produced by the Run-1 template in &lt;code&gt;tasks/templates/two-phase.md&lt;/code&gt; (AC-0105).&lt;/p&gt;
+&lt;/body&gt;&lt;/html&gt;
+</pre>
+
+<h2>G1 — templates present + well-formed</h2>
+<div class="ok"><b>OUTCOME: 18/18 PASS</b> — both prompt templates + gate + bypass exist as concrete copy-paste text; Run-1 names all 7 sections and points at the 3 doc paths + plan.html output; Run-2 points at plan.html + HARNESS.md + SMOKE subset; no inlined doc content (BY PATH directive, paths only).</div>
+<pre>G1 — templates present + well-formed
+======================================================================
+PASS  file exists: tasks/templates/two-phase.md
+PASS  Run-1 prompt template present (xhigh, read-only)
+PASS  Run-2 prompt template present (medium, builder)
+PASS  coordinator gate rule present
+PASS  trivial-bypass rule present
+PASS  AC-NNNN placeholder used
+PASS  Run-1 names all 7 plan.html sections (missing: none)
+PASS  Run-1 points at godot/CONTINUITY.md by path
+PASS  Run-1 points at godot/ARCHITECTURE.md by path
+PASS  Run-1 points at tasks/HARNESS.md by path
+PASS  Run-1 states plan.html output path
+PASS  Run-1 forbids code edits
+PASS  Run-2 points at plan.html
+PASS  Run-2 points at HARNESS.md + AC-0061 SMOKE subset
+PASS  Run-2 verify = G0 + SMOKE + &lt;=1 R=1 render
+PASS  bypass: label trivial OR title build-scripts|menu Exit|webapp artifacts
+PASS  bypass uses spec_template.py (AC-0102 template)
+PASS  no inlined ARCHITECTURE/CONTINUITY/HARNESS body text (paths only; &#x27;BY PATH&#x27; directive)
+</pre>
+
+<h2>G2 — pilot plan.html (7 sections + verbatim constants)</h2>
+<div class="ok"><b>OUTCOME: PASS</b> — all 7 sections in order; 14 constants cited verbatim, each re-verified against the current source file:line (below). Also cross-checked against the fresh <code>spec_template.py AC-0106</code> table (.scratch/ac0105/ac0106-consts.html).</div>
+<h3>Spot-checks (value + file:line checked)</h3>
+<table>
+<tr><th>#</th><th>constant</th><th>cited value</th><th>file:line</th><th>actual source line</th></tr>
+<tr><td>1</td><td>CHUNK</td><td>16</td><td>godot/autoload/data.gd:3</td><td><code>const CHUNK := 16</code></td></tr>
+<tr><td>2</td><td>HEIGHT</td><td>80</td><td>godot/autoload/data.gd:4</td><td><code>const HEIGHT := 80</code></td></tr>
+<tr><td>3</td><td>SEA</td><td>30</td><td>godot/autoload/data.gd:5</td><td><code>const SEA := 30</code></td></tr>
+<tr><td>4</td><td>B_STONE</td><td>3</td><td>godot/world/generator.gd:5</td><td><code>const B_STONE := 3</code></td></tr>
+<tr><td>5</td><td>B_SNOW_GRASS</td><td>12</td><td>godot/world/generator.gd:11</td><td><code>const B_SNOW_GRASS := 12</code></td></tr>
+<tr><td>6</td><td>B_ROSE</td><td>18</td><td>godot/world/generator.gd:15</td><td><code>const B_ROSE := 18</code></td></tr>
+</table>
+<p class="note">Biome thresholds (t &lt; -0.25 snow / t &gt; 0.35 &amp; m &lt; 0.1 desert / m &gt; 0.25 forest / else plains) cited verbatim from generator.gd:48–54 <code>biome_at()</code>. §5 harness gates cite real modes from main.gd (dispatch at main.gd:57; mode branches in the main.gd harness region referenced by the task notes at main.gd:441): <code>player</code> (<code>_player_logic_test</code>), <code>interact</code> (<code>_interact_test</code>), <code>light</code> (<code>_light_test</code>), <code>fluids</code> (<code>_fluids_test</code>), <code>genhash</code> (<code>_genhash_print</code>) with RESULT field shapes + ok:true conditions from HARNESS.md §1/§3.</p>
+<pre>GATE CHECK: tasks/AC-0106/plan.html
+======================================================================
+PASS  all 7 sections present, in order
+PASS  CHUNK          = 16              &lt;- godot/autoload/data.gd:3
+PASS  HEIGHT         = 80              &lt;- godot/autoload/data.gd:4
+PASS  SEA            = 30              &lt;- godot/autoload/data.gd:5
+PASS  B_GRASS        = 1               &lt;- godot/world/generator.gd:3
+PASS  B_DIRT         = 2               &lt;- godot/world/generator.gd:4
+PASS  B_STONE        = 3               &lt;- godot/world/generator.gd:5
+PASS  B_SAND         = 4               &lt;- godot/world/generator.gd:6
+PASS  B_WATER        = 5               &lt;- godot/world/generator.gd:7
+PASS  B_LOG          = 6               &lt;- godot/world/generator.gd:8
+PASS  B_LEAVES       = 7               &lt;- godot/world/generator.gd:9
+PASS  B_BEDROCK      = 11              &lt;- godot/world/generator.gd:10
+PASS  B_SNOW_GRASS   = 12              &lt;- godot/world/generator.gd:11
+PASS  B_ROSE         = 18              &lt;- godot/world/generator.gd:15
+PASS  B_DANDELION    = 19              &lt;- godot/world/generator.gd:16
+----------------------------------------------------------------------
+constants: 14 verbatim, 0 stale/wrong
+VERDICT: PASS -&gt; queue Run 2
+exit=0
+</pre>
+
+<h2>G3 — gate logic demonstrated (reject + pass pair)</h2>
+<div class="ok"><b>OUTCOME: PASS</b> — mechanical gate (<code>.scratch/ac0105/gate_check.py</code>) re-reads the cited file:line for every constant and diffs verbatim.</div>
+<h3>(a) REJECTED — pilot copy with ONE deliberately stale constant (SEA 30→28)</h3>
+<pre>GATE CHECK: .scratch/ac0105/plan-stale.html
+======================================================================
+PASS  all 7 sections present, in order
+PASS  CHUNK          = 16              &lt;- godot/autoload/data.gd:3
+PASS  HEIGHT         = 80              &lt;- godot/autoload/data.gd:4
+FAIL  SEA            = 28              &lt;- godot/autoload/data.gd:5   [source: const SEA := 30]
+PASS  B_GRASS        = 1               &lt;- godot/world/generator.gd:3
+PASS  B_DIRT         = 2               &lt;- godot/world/generator.gd:4
+PASS  B_STONE        = 3               &lt;- godot/world/generator.gd:5
+PASS  B_SAND         = 4               &lt;- godot/world/generator.gd:6
+PASS  B_WATER        = 5               &lt;- godot/world/generator.gd:7
+PASS  B_LOG          = 6               &lt;- godot/world/generator.gd:8
+PASS  B_LEAVES       = 7               &lt;- godot/world/generator.gd:9
+PASS  B_BEDROCK      = 11              &lt;- godot/world/generator.gd:10
+PASS  B_SNOW_GRASS   = 12              &lt;- godot/world/generator.gd:11
+PASS  B_ROSE         = 18              &lt;- godot/world/generator.gd:15
+PASS  B_DANDELION    = 19              &lt;- godot/world/generator.gd:16
+----------------------------------------------------------------------
+constants: 13 verbatim, 1 stale/wrong
+VERDICT: REJECTED -&gt; bounce Run 1 back
+exit=1
+</pre>
+<h3>(b) PASSED — the correct pilot plan.html</h3>
+<pre>GATE CHECK: tasks/AC-0106/plan.html
+======================================================================
+PASS  all 7 sections present, in order
+PASS  CHUNK          = 16              &lt;- godot/autoload/data.gd:3
+PASS  HEIGHT         = 80              &lt;- godot/autoload/data.gd:4
+PASS  SEA            = 30              &lt;- godot/autoload/data.gd:5
+PASS  B_GRASS        = 1               &lt;- godot/world/generator.gd:3
+PASS  B_DIRT         = 2               &lt;- godot/world/generator.gd:4
+PASS  B_STONE        = 3               &lt;- godot/world/generator.gd:5
+PASS  B_SAND         = 4               &lt;- godot/world/generator.gd:6
+PASS  B_WATER        = 5               &lt;- godot/world/generator.gd:7
+PASS  B_LOG          = 6               &lt;- godot/world/generator.gd:8
+PASS  B_LEAVES       = 7               &lt;- godot/world/generator.gd:9
+PASS  B_BEDROCK      = 11              &lt;- godot/world/generator.gd:10
+PASS  B_SNOW_GRASS   = 12              &lt;- godot/world/generator.gd:11
+PASS  B_ROSE         = 18              &lt;- godot/world/generator.gd:15
+PASS  B_DANDELION    = 19              &lt;- godot/world/generator.gd:16
+----------------------------------------------------------------------
+constants: 14 verbatim, 0 stale/wrong
+VERDICT: PASS -&gt; queue Run 2
+exit=0
+</pre>
+
+<h2>G4 — trivial-bypass demonstrated</h2>
+<div class="ok"><b>OUTCOME: PASS</b> — two concrete open registry tasks match bypass patterns and route straight to the medium builder (no Run 1, no plan.html, no gate).</div>
+<pre>G4 — trivial-bypass decision on concrete registry tasks
+======================================================================
+BYPASS=YES  AC-0099  &#x27;main-menu-exit-button-windows&#x27;
+            reason: title matches &#x27;menu Exit&#x27;  (labels: [ or none needed])
+            route: skip Run 1 -&gt; spec_template.py AC-0099 -&gt; Run 2 medium builder (spec.html)
+BYPASS=YES  AC-0100  &#x27;build-scripts-datetime-release-names&#x27;
+            reason: title matches &#x27;build-scripts&#x27;  (labels: [ or none needed])
+            route: skip Run 1 -&gt; spec_template.py AC-0100 -&gt; Run 2 medium builder (spec.html)
+----------------------------------------------------------------------
+Also BYPASS (label rule) would be any task with label `trivial`: currently 4 registry hits are notes-mentions, no open task currently carries the label — the label branch is demonstrated by rule text.
+Non-bypass contrast: AC-0106 &#x27;greedy-meshing-opaque-faces&#x27; (no label, title matches no pattern) -&gt; full two-phase (Run 1 -&gt; gate -&gt; Run 2).
+</pre>
+
+<h2>G5 — cleanliness</h2>
+<div class="ok"><b>OUTCOME: PASS (with documented pre-existing modification)</b> — only <code>tasks/</code> deliverables added; no <code>.gd</code>, no <code>godot/</code>, no builds, no git ops, no <code>~/.dsh</code>, no network.</div>
+<pre>G5 — repo cleanliness
+====================
+--- git status (porcelain) ---
+ M tasks/TASKS.yaml
+?? tasks/AC-0105/
+?? tasks/AC-0106/
+?? tasks/templates/
+--- untracked/new under tasks/ ---
+?? tasks/AC-0105/
+?? tasks/AC-0106/
+?? tasks/templates/
+--- any .gd or godot/ changes? ---
+NONE
+--- TASKS.yaml changed? ---
+ M tasks/TASKS.yaml
+--- interpretation ---
+M  tasks/TASKS.yaml : PRE-EXISTING (coordinator status flip for AC-0105 open-&gt;in-progress,
+   meta updated_at 04:59-&gt;05:03, AC-0105 updated_at). Present at session start; this subagent
+   never edited TASKS.yaml (fence). Diff = 3 lines, all metadata/status only.
+?? tasks/AC-0105/   : this task&#x27;s deliverable (results html) — the untracked folder already held
+   the pre-existing spec.html scaffold (created by coordinator).
+?? tasks/AC-0106/   : pilot plan.html (worked example).
+?? tasks/templates/ : two-phase.md templates.
+VERDICT: G5 = PASS (only tasks/ deliverables added; no .gd, no godot/, no builds, no git ops,
+no ~/.dsh, no network). Pre-existing TASKS.yaml modification is documented, not caused here.
+</pre>
+
+<h2>Deviations</h2>
+<ul>
+<li><code>tasks/TASKS.yaml</code> shows as modified in git status — <b>pre-existing</b> coordinator status flip (AC-0105 open→in-progress, meta updated_at 04:59→05:03) present at session start; this subagent never touched it (diff = 3 metadata lines, shown in G5). Not caused by AC-0105 work.</li>
+<li><code>tasks/AC-0105/spec.html</code> (the scaffold) was created by the coordinator before this run; only <code>AC-0105-results.html</code> was added by this subagent — nothing overwritten.</li>
+<li>The task prompt's step-2 suggested re-running <code>spec_template.py</code> to lift constants; done (output at <code>.scratch/ac0105/ac0106-consts.html</code>) and the plan cites the identical values, plus a direct file:line verification (G2).</li>
+<li>Minor: one early parser mis-read a combined rose/dandelion table row; fixed by splitting the row into two (plan.html final form has clean single-value rows).</li>
+</ul>
+<p class="note">AC-0105 results — generated 2026-08-25. Scratch evidence: .scratch/ac0105/ (g1/g2-g3/g3-pass/g3-reject/g4/g5 logs + gate_check.py + stale variant + fresh constants table).</p>
+</body></html>
