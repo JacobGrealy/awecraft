@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-25T18:06
+  updated_at: 2026-08-25T19:57
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -16,9 +16,15 @@ queue:
 - AC-0106
 - AC-0099
 - AC-0107
+- AC-0118
+- AC-0077
+- AC-0119
+- AC-0078
+- AC-0120
 - AC-0108
 - AC-0109
 - AC-0110
+- AC-0079
 - AC-0097
 - AC-0093
 - AC-0094
@@ -57,10 +63,7 @@ queue:
 - AC-0076
 - AC-0080
 - AC-0081
-- AC-0079
 - AC-0101
-- AC-0077
-- AC-0078
 - AC-0082
 - AC-0034
 - AC-0035
@@ -3412,3 +3415,62 @@ intake:
       ON vs OFF); G3 FULL battery ok:true all known-stable exact (sea 2730/1406, torch 14, horiz 2.82, lava 25/9); G4 MINFO
       r4 opaque=125552 EXACT (AC-0106 win intact); G5 only chunk.gd + task folder. AC-0106''s own gate missed it: seed-44
       R=1 iso showed only the (correct) first chunk. Coord-verified diff + renders on disk. Results tasks/AC-0117/AC-0117-results.html.'
+- id: AC-0118
+  title: recenter-budgeted-amortized-rebuild
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-25T19:57
+  updated_at: 2026-08-25T19:57
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Budget recenter() O(R^2) stub+queue rebuild: world.gd:635 _build_queue_for_center + 753 recenter stub loops 818-834
+    still 97ms @r50 every crossing (AC-0076). Make it amortized/budgeted like web updateWorldStreaming 1295 (3/frame ring
+    scan + 8ms cap): slice want/band_buckets creation over N frames with time budget, or lazy incremental ring expansion.
+    Must keep hysteresis/candidate, band_buckets sticky cursors, and queue_size exact. Gate: r50 recenter p95 <15ms, r4 walk
+    p95 unchanged, genhash 25/25, battery green.'
+  comments: []
+- id: AC-0119
+  title: get-block-air-on-miss-no-sync-gen
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-25T19:57
+  updated_at: 2026-08-25T19:57
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Remove hidden sync generation on read path: world.gd:613 _chunk_data c.data.is_empty() branch 626-632 + get_block
+    847 and lighting.gd 87/110/172/196, fluid _nb_block 1080 all sync WorldGen.generate (31ms each, up to 4 per build). Change
+    to air-on-miss like web world.block 882: missing chunk => 0/air, never generate. Data gen only via drain/threagen path
+    (310 _gen_unit, 626 stub path). Gate: no ONDEMANDGEN on mesh/light neighbor snapshot, frontier builds use air for diagonals,
+    genhash 25/25, battery green.'
+  comments: []
+- id: AC-0120
+  title: shared-material-cache-no-per-build-alloc
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-25T19:57
+  updated_at: 2026-08-25T19:57
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Cache/reuse StandardMaterial3D per chunk build: chunk.gd:860 per-build 3-5 new materials (~18/crossing) vs web 3
+    shared mats 1290. Introduce shared material cache keyed by tile/tint (Data.ATLAS_PX 1024, merge_atlas h 1760) reused across
+    chunks; ArrayMesh creation stays per-chunk but material alloc becomes O(1). Gate: material alloc per crossing 0, same
+    visuals (greedy-mesh uv intact AC-0117), battery green, r4 verts 125552 intact.'
+  comments: []
