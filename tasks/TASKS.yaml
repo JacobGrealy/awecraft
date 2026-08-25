@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-25T07:33
+  updated_at: 2026-08-25T09:44
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -84,6 +84,7 @@ queue:
 - AC-0091
 - AC-0111
 - AC-0114
+- AC-0115
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -3251,4 +3252,44 @@ intake:
 
 
     Refs: tasks/webui.py, serve_web.py --daemon, AGENTS.md daemon rules.'
+  comments: []
+- id: AC-0115
+  title: codebase-code-smell-review-split-monoliths
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-25T09:44
+  updated_at: 2026-08-25T09:44
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Review godot/ codebase for code smells / maintainability for future agents+humans.
+
+
+    Scope: audit godot/ (scenes/main.gd ~5k lines, player/player.gd, world/world.gd ~1220 lines, world/chunk.gd 650 lines,
+    etc.) for:
+
+    - Monoliths: files/functions >300-500 lines that should be split (e.g. main.gd harnesses _quitmenu/_toolpose/_viewmodel
+    etc., world.gd recenter/drain/fluid tick, chunk.gd build_mesh/emit paths)
+
+    - Duplicate code: repeated _face_light / _corner_uv / material builders, light/fluid tex refresh loops, chunk key handling,
+    etc.
+
+    - Godot-specific smells: large _process, mixed responsibilities (render vs logic vs persistence), missing autoload boundaries,
+    deep nesting
+
+
+    Deliverable: tasks/AC-NNNN/AC-NNNN-code-review.html (table: file:line, smell type, impact, proposed split/extract, effort,
+    priority) + prioritized split proposals (e.g. extract lighting/fluid/drain modules, harness modules, held_mesh vs player).
+    No code changes in this task — research/report only; follow-on split tasks to be created from findings.
+
+
+    Verify: G0 still 0 errors (no code change), report reviewed by coordinator.
+
+
+    Refs: godot/ARCHITECTURE.md, CONTINUITY.md §4 structure, TASKS.yaml queue.'
   comments: []
