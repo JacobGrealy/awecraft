@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-24T15:35
+  updated_at: 2026-08-25T04:59
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -2870,11 +2870,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-24T09:56
-  updated_at: 2026-08-24T10:30
-  completed_at: null
+  updated_at: 2026-08-25T04:59
+  completed_at: 2026-08-25T04:59
   waiting_on: null
   parent_id: null
   notes: "Full implementation plan sent by user 2026-08-23 (use verbatim):\n\n1. Create file plugin $DSH_HOME/plugins/subagent-reasoning.ts\
@@ -2916,6 +2916,20 @@ intake:
     updated_at: null
     text: '[agent] Restored full user-sent implementation plan verbatim 2026-08-23 (plugin + cordis.patch.yml) per user complaint;
       previous summary was insufficient.'
+  - id: 5
+    created_at: 2026-08-25T04:59
+    updated_at: null
+    text: '[agent] DONE 2026-08-25: DSH plugin $DSH_HOME/plugins/subagent-reasoning.ts (verbatim user plan + 1 documented
+      line: import type {} from @deepseek-ai/dsh-agent for the agent/request Events merge) + $DSH_HOME/cordis.patch.yml (plugin
+      mount subagentEffort: low + tool-subagent pin homeserver1/Qwen3.8-27B-UD-Q4_K_M). G1-G5 all PASS against REAL DSH code
+      (G1 baseline-diff 0 new diagnostics; G2 real Config+ReasoningEffortId accept low AND medium, reject bogus; G3 real apply()
+      4 cases incl same-ref no-rewrite; G4 offline dsh --profile web --dump-config composes patch as top home layer exit 0,
+      root xhigh preserved; G5 tree clean, checkout HEAD b150a551 unchanged, settings/.credentials sha-identical). COORD INSTALL
+      DONE (user-approved escalation): both files copied into ~/.dsh, shas verified byte-identical to staged (11af40f9.../3f191e72...).
+      ACTIVATION: takes effect on NEXT DSH host start (web GUI restart) - root stays xhigh, subagent effort=low; flip the
+      one subagentEffort value to medium for research. Notes: web surface base tool-subagent row is disabled:true (agent plane
+      behind per-session presets) - effort pinning is surface-independent; live-restart verification DEFERRED per fence (live
+      process hosts this session).'
 - id: AC-0105
   title: two-phase-workflow-templates
   source: user

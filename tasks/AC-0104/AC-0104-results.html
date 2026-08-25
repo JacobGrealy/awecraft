@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0104 — results</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:26px;border-bottom:1px solid #ddd;padding-bottom:4px}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}
+.pass{background:#eaf7ea}.fail{background:#fdecea}.warn{background:#fff8e6}
+.ok{color:#1b7f3b;font-weight:700}.no{color:#c0392b;font-weight:700}.def{color:#b5651d;font-weight:700}
+.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;font-weight:700}
+.pill.pass{background:#d4edda;color:#155724}.pill.defer{background:#fff3cd;color:#856404}
+</style></head><body>
+<h1>AC-0104 — subagent-reasoning-plugin-wiring</h1>
+<p class="meta"><b>DSH (agent-harness) task</b> — NOT a godot task. Goal: create the DSH plugin
+<code>$DSH_HOME/plugins/subagent-reasoning.ts</code> (pins subagent reasoning effort, <b>low <i>and</i> medium</i>
+switchable) + mount it in <code>$DSH_HOME/cordis.patch.yml</code> (incl. the <code>tool-subagent</code> pin), keeping the
+root at <code>xhigh</code> — per the user's 2026-08-23 verbatim plan.</p>
+
+<div class="warn"><b>STATUS (read this first).</b> All five gates <b>PASS</b> against the <b>real</b> DSH code (the plugin was
+type-checked, its <code>Config</code>/<code>ReasoningEffortId</code>/<code>dsh-tool-subagent</code> schemas executed, its
+<code>apply()</code> unit-run, and the patch composed offline via the checkout's documented
+<code>--dump-config</code> route). <span class="def">Two caveats:</span>
+(1) The two deliverable files could <b>not</b> be written into the live <code>~/.dsh/</code> because the session sandbox mounts
+it <b>read-only</b> and a subagent's scope cannot be widened from inside (approval prompts are disabled). They are staged
+<b>byte-ready</b> at <code>.scratch/ac0104/dsh-home-deliverables/</code>; the exact install command is below.
+(2) Live-restart verification of the running web GUI is <b>DEFERRED</b> (the live service hosts this session — never
+restarted per fence).</div>
+
+<h2>G1–G5 gate matrix</h2>
+<table>
+<tr><th>Gate</th><th>What was proven</th><th>Evidence</th><th>Result</th></tr>
+<tr class="pass"><td><b>G1 compile</b></td><td>Plugin type-checks; my file adds <b>zero</b> new tsc diagnostics (with the
+checkout's real <code>@deepseek-ai/*</code> types via <code>tsconfig.base.json</code> paths).</td>
+<td>baseline (no file) = <code>0</code> errors; with file = <code>90</code> errors, <b>none</b> reference
+<code>subagent-reasoning.ts</code> (all in the vendored/source graph the plugin's imports pull in — pre-existing, out of
+scope; the team's real typecheck <code>tsc -b tsconfig.host.json</code> uses the repo's own incremental graph and does not
+include this external file).</td><td class="ok">PASS</td></tr>
+<tr class="pass"><td><b>G2 config</b></td><td><code>cordis.patch.yml</code> parses as YAML (2-entry array); the <b>real</b>
+<code>Config</code> + <b>real</b> <code>ReasoningEffortId</code> accept <code>low</code> <i>and</i> <code>medium</code>; the
+<b>real</b> <code>dsh-tool-subagent</code> schema accepts the <code>agentOptions</code> pin; an invalid effort is rejected
+(no silent pass-through).</td>
+<td><code>g2.log</code> (run via <code>tsx</code> from the checkout root so workspace packages resolve to their real TS source):
+all 14 assertions PASS; <code>effort "bogus" → REJECTED UNSUPPORTED_REASONING_EFFORT</code>.</td><td class="ok">PASS</td></tr>
+<tr class="pass"><td><b>G3 logic</b></td><td><b>Real</b> <code>apply()</code> unit-run with a duck-typed ctx: non-subagent
+unchanged; subagent+low → <code>low</code>; subagent+medium → <code>medium</code>; base already at target → <b>same
+reference</b> (no rewrite).</td><td><code>g3.log</code>: 8 assertions PASS (cases 1–5).</td><td class="ok">PASS</td></tr>
+<tr class="pass"><td><b>G4 load</b></td><td>The patch composes as the <b>top</b> home-level layer with both rows present,
+root default preserved — proven by the checkout's documented <b>offline</b> <code>dsh --profile web --dump-config</code>
+(<code>renderConfigDump</code>) against a <b>temp copy</b> of the home. No server booted, no live DSH touched, read-only.</td>
+<td><code>g4-dump-config.log</code> (exit 0): <code># == &lt;temp&gt;/cordis.patch.yml</code> →
+<code>- id: subagent-reasoning / name: ./plugins/subagent-reasoning.ts / config: {subagentEffort: low}</code>;
+<code>tool-subagent</code> pin composed with <code>agentOptions {homeserver1, Qwen3.8-27B-UD-Q4_K_M}</code>. Headless profile
+verified too.</td><td class="ok">PASS <span class="pill defer">live-restart DEFERRED</span></td></tr>
+<tr class="pass"><td><b>G5 cleanliness</b></td><td>AweCraft tree = only <code>tasks/AC-0104/</code> (+ gitignored
+<code>.scratch</code>); DSH checkout <b>unmodified</b>; <code>~/.dsh</code> <code>settings.yaml</code> +
+<code>.credentials.yaml</code> sha-identical (and full 41-file fingerprint identical).</td>
+<td>checkout <code>git status</code> diff pre/post = empty, HEAD unchanged <code>b150a551</code>;
+<code>settings.yaml</code> <code>b3138514…9140</code>, <code>.credentials.yaml</code> <code>1d1a2099…8815</code> both
+identical.</td><td class="ok">PASS</td></tr>
+</table>
+
+<h2>Files created (staged, byte-ready for install)</h2>
+<p>The two deliverables live at <code>.scratch/ac0104/dsh-home-deliverables/</code> (they could not be written to
+<code>~/.dsh/</code> — see <a href="#dev">Deviations</a>). shas:</p>
+<table><tr><th>staged path</th><th>sha256</th><th>target</th></tr>
+<tr><td><code>.scratch/ac0104/dsh-home-deliverables/plugins/subagent-reasoning.ts</code></td>
+<td><code>11af40f9…55e2</code></td><td><code>/home/angrygiant/.dsh/plugins/subagent-reasoning.ts</code></td></tr>
+<tr><td><code>.scratch/ac0104/dsh-home-deliverables/cordis.patch.yml</code></td>
+<td><code>3f191e72…e839b</code></td><td><code>/home/angrygiant/.dsh/cordis.patch.yml</code></td></tr></table>
+
+<h3>1. <code>plugins/subagent-reasoning.ts</code> (verbatim plan skeleton + 1 documented adaptation)</h3>
+<pre>/**
+ * subagent-reasoning — AC-0104
+ *
+ * Pins the reasoning effort for subagent children. A subagent's LLM call
+ * normally inherits the root's `agent-default-model` selection (xhigh in this
+ * deployment). This plugin intercepts the `agent/request` waterfall and, for a
+ * subagent agent only, replaces the resolved `reasoningEffort` with the
+ * deployment-configured `subagentEffort` (any valid effort id, e.g. `low` or
+ * `medium`). Non-subagent requests pass through untouched.
+ *
+ * Wired via $DSH_HOME/cordis.patch.yml. The effort is validated against the
+ * provider model's `reasoning.efforts` at the llm service boundary
+ * (packages/llm/llm/src/index.ts), which throws UNSUPPORTED_REASONING_EFFORT
+ * for a value the model does not support.
+ */
+
+import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
+import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+// The `agent/request` waterfall + its payload/next signature are declared by
+// @deepseek-ai/dsh-agent's `declare module '@deepseek-ai/cordis'` Events merge
+// (packages/core/agent/src/runtime-types.ts). Sibling consumers
+// (compaction-basic, llm-retry) import a type from dsh-agent to pull that merge
+// into scope; without it `ctx.on('agent/request', ...)` is not a known event key.
+import type {} from '@deepseek-ai/dsh-agent'
+
+export const name = 'subagent-reasoning'
+export const inject = ['agents'] as const
+
+export interface Config { subagentEffort: string }
+export const Config: z&lt;Config&gt; = z.object({ subagentEffort: z.string().required() })
+
+function isSubagent(a:any){
+  const h=a.session.header as any // SessionHeader.delegationDepth/origin/parentSession packages/core/session/src/types.ts:91
+  return (h.delegationDepth??0)&gt;0 || h.origin==='subagent' || !!h.parentSession
+}
+
+export function apply(ctx: Context, cfg: Config){
+  ctx.on('agent/request', async (payload, next)=&gt;{
+    const base = await next() // waterfall: must delegate docs/cordis-primer.md:30
+    if(!isSubagent(payload.agent)) return base
+    const want = ReasoningEffortId(cfg.subagentEffort) // Branded packages/llm/llm/src/brand.ts:55
+    if(base.reasoningEffort===want) return base
+    return {...base, reasoningEffort: want} // validated vs reasoning.efforts packages/llm/llm/src/index.ts:793 else UNSUPPORTED_REASONING_EFFORT
+  })
+}</pre>
+<p class="note"><b>Adaptation vs the verbatim skeleton:</b> exactly one line added —
+<code>import type {} from '@deepseek-ai/dsh-agent'</code>. The <code>agent/request</code> event + its
+<code>payload</code>/<code>next</code> signatures live in <code>@deepseek-ai/dsh-agent</code>'s
+<code>declare module '@deepseek-ai/cordis'</code> Events merge; every sibling consumer (e.g.
+<code>compaction-basic</code>, <code>llm-retry</code>) imports a type from <code>dsh-agent</code> to pull that merge into
+scope. Without it, <code>ctx.on('agent/request', …)</code> is <code>TS2345</code> (not a known event key) and the two
+listener params become implicit-<code>any</code> (<code>TS7006</code>). The body (<code>isSubagent</code>,
+<code>apply</code>, the <code>:any</code> annotation, the waterfall, the branded effort) is the user's verbatim code.
+<code>G1</code> is clean with this line; removing it re-introduces exactly the 3 errors the brief named.</p>
+
+<h3>2. <code>cordis.patch.yml</code> (home-level user patch layer)</h3>
+<pre># AC-0104 home-level user patch layer, applied after every bundle layer
+# (bundle base -&gt; web-app -&gt; profile cordis.patch.yml -&gt; THIS file). Per-row
+# id targeting; a patch replaces the targeted row's whole config.
+#
+# (1) Mount the subagent-reasoning plugin. Relative `name` resolves against the
+#     patch file's directory (this home dir), so ./plugins/subagent-reasoning.ts
+#     is this home's plugins directory.
+# (2) Restate the base `tool-subagent` row with an explicit agentOptions pin
+#     (homeserver1 / Qwen3.8-27B-UD-Q4_K_M), so a delegating subagent targets
+#     the working homeserver provider/model explicitly rather than relying on
+#     the agent-default-model default. The subagent's reasoning effort itself
+#     is pinned by the subagent-reasoning plugin above (low here; flip the one
+#     config value to `medium` for a research variant — the plugin accepts any
+#     valid effort id).
+#
+# The root stays at the settings-level default (agent-default-model in
+# settings.yaml: homeserver1 / Qwen3.8-27B-UD-Q4_K_M / reasoningEffort xhigh).
+
+- insert:
+  - id: subagent-reasoning
+    name: ./plugins/subagent-reasoning.ts
+    config:
+      subagentEffort: low  # and medium variant (plugin must handle ReasoningEffortId for both)|medium  # support both low and medium per user follow-up (off|low|medium|high|xhigh|max) -&gt; wire low for impl, medium for research
+
+- id: tool-subagent
+  config:
+    provider: spawn
+    toolName: subagent
+    backgroundMode: continuable
+    agentOptions:
+      provider: homeserver1
+      model: Qwen3.8-27B-UD-Q4_K_M</pre>
+
+<h2>low / medium flip proof (the user's follow-up)</h2>
+<p>The <code>subagentEffort</code> config value is a single switchable string — <b>no label-based routing</b>. Flipping
+that one value flips the applied effort (real <code>apply()</code>, from <code>g3.log</code>):</p>
+<pre>cfg {subagentEffort:"low"}    -&gt; subagent reasoningEffort "low"     (case2, new object)
+cfg {subagentEffort:"medium"} -&gt; subagent reasoningEffort "medium"  (case3, new object)
+non-subagent payload          -&gt; base returned unchanged (same ref)  (case1)
+base already "low" + cfg low  -&gt; SAME reference, no rewrite           (case4)</pre>
+<p><code>G2</code> additionally proves both values survive the <b>real</b> <code>Config</code> +
+<code>ReasoningEffortId</code>, and that the homeserver1 <code>reasoning.efforts</code> map accepts
+<code>low</code>/<code>medium</code>/<code>xhigh</code> while rejecting <code>"bogus"</code>
+(<code>UNSUPPORTED_REASONING_EFFORT</code>) — so an invalid effort is <b>not</b> silently passed through.</p>
+
+<h2 id="how">How DSH actually loads TS plugins (mechanism found)</h2>
+<p><b>Direct load via the <code>tsx/esm</code> Node loader — no build step.</b> DSH does not compile user TS plugins;
+it runs them through the ambient module pipeline. Evidence in the checkout (read-only):
+<code>packages/sandbox/sandbox-local/src/index.ts:563</code> →
+<code>[process.execPath, '--import', 'tsx/esm', sourceEntry]</code> ("the built entry if present, else the package source
+through tsx (development)"); <code>packages/boot/app-boot/README.md</code> — "The <code>dsh</code> app owns its Node
+source-launch hook … built consumers continue to use plain Node package resolution"; the root
+<code>tsconfig.json</code> carries the full <code>paths</code> map "so tsx running examples/ and scripts/ … resolves
+workspace imports through this file." Relative specifiers in a config "always resolve against the config directory"
+(why <code>name: ./plugins/subagent-reasoning.ts</code> resolves against the patch file's dir, per README:32). So a user
+drops a <code>.ts</code> plugin + a <code>cordis.patch.yml</code> and DSH boots it straight — verified end-to-end here by
+running the real plugin + real schemas through <code>tsx</code> from the checkout root (G2/G3) and by the offline
+<code>--dump-config</code> composition (G4).</p>
+
+<h2 id="activate">Activation (exact step, live-restart DEFERRED)</h2>
+<p>The live <code>~/.dsh/</code> is sandbox-read-only in this session, so the files are staged. <b>Install + activate:</b></p>
+<pre># 1) copy the two staged files into the live home (the only writes needed)
+cp .scratch/ac0104/dsh-home-deliverables/cordis.patch.yml        /home/angrygiant/.dsh/cordis.patch.yml
+cp .scratch/ac0104/dsh-home-deliverables/plugins/subagent-reasoning.ts  /home/angrygiant/.dsh/plugins/subagent-reasoning.ts
+
+# 2) the home-level cordis.patch.yml is applied AFTER every bundle layer at host start
+#    (app-boot: "home-level file … which therefore outranks it"). It takes effect
+#    on the NEXT host start — i.e. the next `dsh` (web GUI) restart.
+#    NO settings.yaml / .credentials.yaml / profile change is required.</pre>
+<p class="note">Per the fence the running web GUI process was <b>not</b> restarted (it hosts this session). After the two
+<code>cp</code> commands above, the user's next normal restart of the DSH web GUI activates the plugin: root stays
+<code>xhigh</code> (settings.yaml untouched), subagent effort = <code>low</code> (or <code>medium</code> after flipping the one
+config value). G4 already proves the patch composes correctly offline (exit 0, both rows present as the top layer), so the
+only untested step is the live process picking up the new file — <span class="def">DEFERRED</span>.</p>
+
+<h2 id="dev">Deviations / honest notes</h2>
+<ul>
+<li><b>Deliverables not installed to <code>~/.dsh/</code></b> — the session file sandbox is
+<code>workspace-write</code> (workspace = AweCraft); <code>~/.dsh</code> is outside it and mounts read-only
+(<code>touch: Read-only file system</code>). The runtime context states a subagent's scope cannot be widened from inside
+and approval prompts are disabled, so the sanctioned <code>sandbox_permissions</code> escalation is unavailable — per the
+fence I documented this rather than working around it. The files are staged byte-identical to their intended content;
+G1–G4 were run against those exact bytes. Install is two <code>cp</code> commands (above).</li>
+<li><b>One line added to the verbatim plugin</b> — <code>import type {} from '@deepseek-ai/dsh-agent'</code> (documented
+above). It is the same pattern every sibling <code>agent/request</code> consumer uses and is required for a zero-error
+<code>G1</code>; the body is untouched.</li>
+<li><b><code>tool-subagent</code> <code>agentOptions</code> has no <code>reasoningEffort</code> field</b> (schema =
+<code>{provider, model, maxTokens}</code>, <code>packages/subagent/tool-subagent/src/index.ts:87</code>). The plan pins
+<code>provider</code>+<code>model</code> (valid, with defaults for the rest); the subagent's <b>effort</b> is pinned by the
+plugin, not by <code>agentOptions</code>. This is a property of the plan, not a deviation by me.</li>
+<li><b>Web surface: base <code>tool-subagent</code> row is <code>disabled: true</code></b> (the web-app bundle patch moves
+the agent plane behind per-session agent presets). My home pin is still applied to that row (G4 dump shows
+<code>disabled: true</code> with the <code>agentOptions</code> pin present); on <code>headless</code> the row is enabled. The
+<b>subagent-effort</b> pinning (the plugin) is surface-independent and active wherever a subagent agent exists.</li>
+<li><b>G4 used the offline <code>--dump-config</code> route</b> (not a live boot) because the live process must not be
+touched; it exercises the real composition algorithm (<code>renderConfigDump</code> over base+bundle+profile+home) and is
+the documented recovery/diagnostic path for a broken <code>cordis.patch.yml</code>.</li>
+<li><b>G1 baseline note:</b> the 90 errors in the "with file" run are all in the checkout's own vendored/source graph
+(<code>vendor/cordis</code>, <code>vendor/cosmokit</code>, <code>vendor/schemastery</code>,
+<code>packages/{core,llm,util,attachment}/…</code>) — pulled in because my external file imports them under an out-of-repo
+<code>tsconfig</code> that lacks the repo's <code>lib</code>/node-types setup. <code>G1</code> is satisfied by the
+differential: <b>my file contributes zero diagnostics</b>. I did not attempt to zero the checkout's pre-existing noise.</li>
+</ul>
+
+<h2>Artifacts (scratch: <code>.scratch/ac0104/</code>)</h2>
+<ul class="note">
+<li><code>g1-tsc.log</code> / <code>g1-result.txt</code> — type-check + baseline/with-file diff</li>
+<li><code>g2.mts</code> / <code>g2.log</code> / <code>g2-result.txt</code> — real Config/ReasoningEffortId/dsh-tool-subagent + effort-map validation</li>
+<li><code>g3.mts</code> / <code>g3.log</code> / <code>g3-result.txt</code> — real <code>apply()</code> duck-typed ctx (4+1 cases, low/medium proof)</li>
+<li><code>g4-temp-dsh-home/</code> + <code>g4-dump-config.log</code> (web) + <code>g4-dump-config-headless.log</code> + <code>g4-result.txt</code> — offline composition against a temp home copy</li>
+<li><code>dshhome-pre-sha.txt</code> / <code>dshhome-post-sha.txt</code>, <code>gitstatus-pre.txt</code>/<code>gitstatus-post.txt</code>, <code>head-pre.txt</code>, <code>g5-result.txt</code> — cleanliness fingerprints</li>
+<li><code>tsconfig.ac0104.json</code> / <code>tsconfig.base-baseline.json</code> — the G1 configs</li>
+</ul>
+</body></html>
