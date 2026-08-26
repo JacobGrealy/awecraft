@@ -10,7 +10,7 @@
 <h2>Goal</h2>
 <div class="fill"><b>FILL BY COORDINATOR</b> — one line, from the registry notes (marked REVIEW until confirmed). <b>REVIEW</b></div>
 <!-- FILL: Goal — one sentence. Example: "Add a torch-light-bake pass to the chunk mesher so caves are readable at night." -->
-<p><em>REVIEW — draft from notes: Budget recenter() O(R^2) stub+queue rebuild: world.</em></p>
+<p><b>Goal (confirmed 2026-08-25):</b> Amortize <code>recenter()</code>&rsquo;s O(R²) want/band_buckets + stub queue rebuild over frames with a time budget (like web <code>updateWorldStreaming</code> 1295: 3/frame ring scan + 8ms cap) so chunk-boundary crossings stop taking ~97 ms @r50 on the main thread.</p>
 <h2>Frozen spec references</h2>
 <div class="auto"><b>AUTO (fixed boilerplate — do not hand-edit)</b></div>
 <ul>
@@ -107,16 +107,42 @@
 <tr><td>boundary r4 `in_radius_built_max`</td><td>**67** (`built_final` 81, `ok` true, `flap` 0, `p95_ms` 65)</td><td>AC-0079 (look-priority scoring; pre-fix gate was 55)</td></tr>
 </table>
 <h2>Task-specific requirements</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the concrete behavior/data changes this task makes.</div>
-<!-- FILL: Task-specific requirements. Example: e.g. &quot;fluids: source water over a hole writes 0 cells (zero-write invariant)&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-25)</b></div>
+<ul>
+<li><b>Budget the recenter rebuild:</b> the full O(R²) <code>want</code> + <code>band_buckets</code> regeneration and the recenter stub loops (<code>godot/world/world.gd</code>: <code>_build_queue_for_center</code> ~:635, <code>recenter</code> ~:753, stub loops ~818-834 — re-verify line numbers) must no longer run in one frame. Slice it over N frames with a time budget (web <code>updateWorldStreaming</code> ~1295 is the reference: 3-chunks/frame ring scan + ~8ms frame cap), OR implement lazy incremental ring expansion — the plan chooses and must justify against the frozen web pattern.</li>
+<li><b>Must keep exact:</b> hysteresis/candidate behavior, <code>band_buckets</code> sticky cursors, and <code>queue_size</code> semantics — the drain must still see the same final set of chunks in the same priority order; no missing chunks, no duplicate enqueues (the AC-0082 dedup pattern stays authoritative), no stall (every crossing eventually drains to <code>queue_size == 0</code>).</li>
+<li><b>No world-data change:</b> this is scheduling only — genhash stays byte-identical (25/25), and battery values stay EXACT (sea 2730/1406, torch 14, horiz 2.82, lava 25/9, place/drop true). The final meshed world after a crossing must be identical to today&rsquo;s.</li>
+<li><b>Both platforms:</b> this is main-thread scheduling (applies on web too — the frozen web spec already amortizes; the port should match it). No platform gate needed; a kill switch is NOT required, but the A/B harness must measure recenter cost before/after (the AC-0076 PERF3c-2 diagnostic measured the 97 ms; Run-1 identifies the exact measurement hook).</li>
+<li><b>Interaction with AC-0107:</b> the threaded mesh dispatch (in-flight cap, dedup, stale drop) must keep working with the amortized recenter — recentered work feeds the same drain; verify no cap-starvation or re-trigger storms under the new pacing.</li>
+</ul>
 <h2>Task-specific gates</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the specific mode(s)/values that must be green beyond the defaults.</div>
-<!-- FILL: Task-specific gates. Example: e.g. &quot;G1: AWECRAFT_LOGIC=fluids → sea_stable true, sea_surface 2730&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-25)</b> — FULL tier (streaming/drain scheduling touched).</div>
+<ul>
+<li><b>G1 — headless clean:</b> <code>~/tools/godot/godot --headless --path godot --quit</code> + default logic runs → RC=0, zero script errors, no hang.</li>
+<li><b>G2 — genhash 25/25 byte-identical</b> (scheduling-only invariant).</li>
+<li><b>G3 — FULL battery green, ALL known-stable values EXACT:</b> <code>AWECRAFT_BATTERY="player;interact;light;fluids;buckets"</code> → <code>ok:true</code>; sea 2730/2730 + 1406/1406 (sea_stable true), torch_level 14, horizontal_moved 2.82, place_ok/drop_spawned true, water_on_lava 25, sideways_lava 9.</li>
+<li><b>G4 — recenter perf A/B (the point of the task):</b> r50 boundary walk (AC-0076/AC-0079 walk harness — Run-1 names the exact mode+env): recenter p95 before ≈ 97 ms (re-measure pre-change baseline) → after <b>&lt;15 ms</b> (registry gate); r4 walk p95 and <code>in_radius_built_max</code>=67 UNCHANGED (±noise — no regression); report full A/B table (p95, worst, mean).</li>
+<li><b>G5 — drain completeness + flake loop:</b> after the amortized recenter, a walk crossing multiple chunk boundaries drains to <code>queue_size == 0</code> with every in-radius chunk built (no stalls, no duplicates — dedup intact); flake loop: player ×4 (crossing runs) all green, no hang. Run this with AC-0107 threading ON (default) — the interaction is part of the gate.</li>
+<li><b>G6 — tree clean:</b> only the listed files + task folder changed; <code>tasks/AC-0118/AC-0118-results.html</code> self-contained (A/B perf table, drain-completeness evidence, flake log).</li>
+</ul>
 <h2>Scope (files expected to change)</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the exact files this task will edit (helps G5 stay clean).</div>
-<!-- FILL: Scope (files expected to change). Example: e.g. &quot;godot/world/chunk.gd, godot/scenes/main.gd (fluids branch only)&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-25)</b></div>
+<ul>
+<li><code>godot/world/world.gd</code> — the core: <code>recenter()</code> (~:753), <code>_build_queue_for_center</code> (~:635), the stub loops (~818-834), <code>band_buckets</code> sticky cursors, and the drain integration point where the amortized slices feed the queue. This is where the feature lives.</li>
+<li><code>godot/scenes/main.gd</code> — ONLY if a new/extended timing harness is needed to print recenter cost (p95/worst/mean per crossing) for G4; the existing walk/perf harness fields are preferred if they already carry it (Run-1 decides and states it in plan.html).</li>
+<li><code>tasks/AC-0118/</code> — plan.html, continuity.md, AC-0118-results.html.</li>
+</ul>
+<p class="note">If the plan finds that <code>chunk.gd</code> or the AC-0107 threadmesh dispatch must also change to keep the drain semantics exact, name the exact file:line in plan.html; the coordinator approves scope additions before Run-2.</p>
 <h2>Fences</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — what this task must NOT touch.</div>
-<!-- FILL: Fences. Example: e.g. &quot;no .gd outside the listed scope; no TASKS.yaml edits; no git&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-25)</b></div>
+<ul>
+<li>Do NOT modify <code>index.html</code> (frozen web spec) or anything under <code>web/</code>.</li>
+<li>Do NOT change world data / gen / constants — genhash must stay byte-identical (25/25); battery values stay exact.</li>
+<li>Do NOT touch the AC-0107 threaded-mesh dispatch internals (dedup/cap/stale-drop/spawn-sync) or the AC-0082 threaded data-gen dispatch — only how recentered work FEEDS the existing drain (integration point only).</li>
+<li>Do NOT change the mesh/light build code (<code>chunk.gd</code>/<code>lighting.gd</code> static mirrors) or the AC-0106/AC-0117 merged path.</li>
+<li>No git (coordinator commits). No builds (coordinator runs <code>./build_web.sh</code> / <code>./build_windows.sh</code> after). No <code>~/.dsh</code>. Do NOT kill any python server pid. No TASKS.yaml edits (coordinator owns the registry).</li>
+<li>Godot runs ONE at a time. At most the small A/B perf runs + ≤1 render after headless-verify (R=1). Every godot call: <code>HOME=/tmp/dsh_home</code> (mkdir in the same call); /tmp is ephemeral per call; <code>--path godot</code> chdirs (absolute snapshot paths only).</li>
+<li>Keep the append-only <code>tasks/AC-0118/continuity.md</code>. Final report ≤20 lines.</li>
+</ul>
 <p class="note">Scaffold generated by <code>tasks/scripts/spec_template.py</code> (no wall-clock timestamps; the only date is the registry created_at). Auto sections are reproducible byte-for-byte; fill sections are for the coordinator.</p>
 </body></html>
