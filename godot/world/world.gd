@@ -141,11 +141,27 @@ var _look_yaw := 0.0
 var _look_dir := Vector2(1, 0)
 const PICK_POOL_CAP := 512
 const PICK_LOOK_REFRESH_DEG := 10.0
+# AC-0079 v3 pick-order probe: a bounded log of every mesh-build DISPATCH
+# (any _mesh_dispatch that actually dispatches — sync fallbacks included,
+# dedup re-picks excluded). The boundary harness reads it to count, per
+# crossing, how many of the FIRST 10 dispatches are forward (dx > 0) chunks.
+var build_dispatch_total := 0
+var build_dispatch_log: Array = []
+const BUILD_DISPATCH_LOG_CAP := 16384
+
+func _bd_log(cx: int, cz: int) -> void:
+	build_dispatch_total += 1
+	build_dispatch_log.append(Vector2i(cx, cz))
+	if build_dispatch_log.size() > BUILD_DISPATCH_LOG_CAP:
+		build_dispatch_log.pop_front()
 
 func _ready() -> void:
 	timing = OS.get_environment("AWECRAFT_TIMING") == "1"
 	var nenv := OS.get_environment("AWECRAFT_THREADGEN_N")
-	threadgen_max = maxi(1, mini(OS.get_processor_count() - 2, 3))
+	# AC-0079 v3 C3: default threadgen = mini(cores, 6). The r4 cold wall is the
+	# 36-chunk crossing-1 core fill: 36 x ~220 ms of gen paced by the pool size
+	# (3 -> 2.64 s vs 6 -> 1.32 s). Env override above stays; final cap below.
+	threadgen_max = mini(OS.get_processor_count(), 6)
 	if nenv != "":
 		threadgen_max = maxi(1, nenv.to_int())
 	threadgen_max = mini(threadgen_max, 6)
@@ -154,7 +170,13 @@ func _ready() -> void:
 	_tg_debug = OS.get_environment("AWECRAFT_TGDEBUG") == "1"
 	print("THREADGEN on threadgen=true pool=%d" % threadgen_max)
 	var menv := OS.get_environment("AWECRAFT_THREADMESH_N")
-	threadmesh_max = maxi(1, mini(OS.get_processor_count() - 2, 3))
+	# AC-0079 v3 C2 (pool-saturation mitigation, plan risk (c)): contained light
+	# now runs on the mesh workers (64 ms/chunk instead of 44), so TM3 + TG6 +
+	# main = 10 threads on 6 cores oversubscribes the cold phase (measured:
+	# X1 wall 4256-4325 ms with TM3 vs 3342 ms with TM2; walk p95 61 either way,
+	# max 121 vs 111). TM2 keeps build capacity (15.6 chunks/s) above the
+	# steady r4 demand (9-14/s). Env override above stays; cap below stays.
+	threadmesh_max = maxi(1, mini(OS.get_processor_count() - 2, 2))
 	if menv != "":
 		threadmesh_max = maxi(1, menv.to_int())
 	threadmesh_max = mini(threadmesh_max, 6)
@@ -584,6 +606,7 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 		c.build_mesh(get_block, eff)
 		_count_collision_build(c)
 		_stage_check(c, key)
+		_bd_log(cx, cz)
 		return true
 	var nbs: Dictionary = {}
 	for dx in range(-1, 2):
@@ -596,6 +619,7 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 				c.build_mesh(get_block, eff)
 				_count_collision_build(c)
 				_stage_check(c, key)
+				_bd_log(cx, cz)
 				return true
 			nbs["%d,%d" % [dx, dz]] = {"d": nc.data.duplicate(), "f": nc.fl.duplicate()}
 	if _tm_inflight_keys.has(key):
@@ -610,6 +634,7 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 		c.build_mesh(get_block, eff)
 		_count_collision_build(c)
 		_stage_check(c, key)
+		_bd_log(cx, cz)
 		return true
 	var ms_w: Dictionary
 	if not _tm_ms_full.rects.is_empty():
@@ -627,6 +652,7 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 	_tm_inflight_keys[key] = tid
 	threadmesh_inflight.append(entry)
 	_tm_enq += 1
+	_bd_log(cx, cz)
 	if _tm_debug:
 		print("TMESH ENQ %d,%d inflight=%d" % [cx, cz, threadmesh_inflight.size()])
 	return true
@@ -636,23 +662,12 @@ func _build_unit(c: Node3D, cx: int, cz: int) -> int:
 	# AC-0107: threaded dispatch when eligible; sync fallbacks inside keep the
 	# legacy path. dt is the MAIN-thread cost (dispatch/apply), the worker-side
 	# total is reported via perf_build_worker_ms / BUILDCHUNK_T.
-	# AC-0077: cached crossing-batched eff when it matches the chunk data.
-	# A want-set chunk that reaches a build pick before the batch step gets a
-	# single-item batch eff on the spot (same contained kernel, cached) so the
-	# worker still skips its own light; only non-want or failed cases self-
-	# compute (counted).
+	# AC-0079 v3 C2 (the AC-0077 follow-up): contained light is OFF the main
+	# thread — cached eff when it matches the chunk data (the cache is now fed
+	# by worker handoffs via _eff_cache_put), otherwise an empty eff and the
+	# worker self-lights its own fresh copy through the byte-identical
+	# contained kernel (ChunkScript.build_accs / Lighting.compute_light_flat_chunk).
 	var eff := _eff_for(c, cx, cz)
-	if eff.is_empty():
-		var wkey := _key(cx, cz)
-		if _bl_want.has(wkey):
-			var single: Array = Lighting.compute_light_flat_batch([{"data": c.data.duplicate(), "cx": cx, "cz": cz}])
-			if not single.is_empty():
-				eff = single[0]
-				perf_light_batch_chunks += 1
-				_eff_cache_put(wkey, c.data, eff)
-				_bl_want.erase(wkey)
-				if _bl_want.is_empty():
-					perf_light_batch_calls += 1
 	if eff.is_empty():
 		perf_light_self_computes += 1
 	_mesh_dispatch(c, cx, cz, eff)
@@ -694,13 +709,19 @@ func _entry_score(e: Dictionary, pcx: int, pcz: int, px: float, pz: float) -> fl
 	var boost := 2.0 if cheby <= 1 else 0.0
 	return float(d) + (1.0 - a) * 0.75 * float(d) - boost
 
-func _collect_pool(build: bool) -> Array:
+func _collect_pool(build: bool, include_fb := false) -> Array:
 	# AC-0079 round 3: the pick is score-driven (spec: generate the LOWEST score
 	# among no-data entries), so the pool must not be clipped by the sticky FIFO
 	# cursors — a stale dq_b/mq_b (entries consumed out of band order, cursor
 	# parked past the last band) would empty the pool and starve the drain
 	# forever. Cursors are bookkeeping only (cursor-advance on consume, exact
 	# queue_size); the pool scans every band with the same cap as before.
+	# AC-0079 v3 C1: include_fb additionally admits the forward lead column's
+	# data_only entries (cx == last_pcx + r, |cz - last_pcz| <= r) — the drain's
+	# second pass can pre-build a ready lead chunk before the general scored
+	# sweep reaches it. Bounded: the band is exactly 2r+1 entries. Admitted
+	# entries carry no data guarantee; the drain applies the full gate
+	# (data + mesh_built + _build_ready) to every candidate.
 	var out: Array = []
 	for b in range(band_buckets.size()):
 		var arr: Array = band_buckets[b]
@@ -711,6 +732,9 @@ func _collect_pool(build: bool) -> Array:
 			var c = chunks.get(e["key"])
 			if build:
 				if bool(e["data_only"]):
+					if include_fb and int(e["cx"]) == last_pcx + render_radius \
+							and absi(int(e["cz"]) - last_pcz) <= render_radius:
+						out.append(e)
 					continue
 				if c == null or c.data.is_empty() or c.mesh_built:
 					continue
@@ -725,8 +749,6 @@ func _drain_build_queue() -> void:
 	if queue_size == 0:
 		if _bl_want.is_empty() and _col_pending.is_empty():
 			return
-		if not _rec_pending:
-			_bl_batch_step()
 		_col_drain_step()
 		return
 	var t0 := Time.get_ticks_usec()
@@ -734,11 +756,6 @@ func _drain_build_queue() -> void:
 	var budget_us := int(drain_budget_ms * 1000)
 	var gen_used_ms := 0
 	var units := 0
-	# Frame budget: the ~18 ms batch slice yields to the recenter slice's own
-	# 8 ms budget (AC-0118) — overlapping them pushed walk frames past the
-	# D4 p95 gate. The pass still finishes well inside the crossing window.
-	if not _rec_pending:
-		_bl_batch_step()
 	var px: float = Game.player.position.x if Game.player != null else 0.0
 	var pz: float = Game.player.position.z if Game.player != null else 0.0
 	while budget > 0:
@@ -761,6 +778,25 @@ func _drain_build_queue() -> void:
 				best_s = s
 				best_e = e
 				best_c = c
+		if best_c == null:
+			# AC-0079 v3 C1: lead-column pre-build, second pass. The in-radius
+			# READY pool is empty — pick the lowest-score READY candidate from
+			# _collect_pool(true, true) (identical _build_ready gate, identical
+			# _build_unit/_remove_entry). In-radius READY ALWAYS wins (this pass
+			# only runs when the first pass found nothing); the forward band is
+			# exactly 2r+1 entries, so the pass is bounded.
+			var fp: Array = _collect_pool(true, true)
+			for e in fp:
+				var c = chunks.get(e["key"])
+				if c == null or c.data.is_empty() or c.mesh_built:
+					continue
+				if not _build_ready(int(e["cx"]), int(e["cz"])):
+					continue
+				var s := _entry_score(e, last_pcx, last_pcz, px, pz)
+				if s < best_s:
+					best_s = s
+					best_e = e
+					best_c = c
 		if best_c != null:
 			_build_unit(best_c, int(best_e["cx"]), int(best_e["cz"]))
 			_remove_entry(best_e)
@@ -883,63 +919,13 @@ func _eff_for(c: Node3D, cx: int, cz: int) -> Dictionary:
 		return cached.eff
 	return {}
 
-func _bl_dist(c: Node3D) -> int:
-	return maxi(absi(int(c.cx) - last_pcx), absi(int(c.cz) - last_pcz))
-
-func _bl_batch_step() -> void:
-	# Up to 2 ready want-set chunks per drain call, before the unit picks.
-	# Nearest-first (matches the scored build order) so dispatches hit the
-	# cache; a vanished chunk drops, a data-waiting chunk stays for a later
-	# drain call, a cache-hit chunk drops without recompute. One want-set
-	# pass per recenter = one batch (plan D4: "one batch per crossing");
-	# the pass counts when _bl_want empties.
-	if _bl_want.is_empty():
-		return
-	var consumed := false
-	var ready: Array = []
-	for key in _bl_want:
-		var c = chunks.get(key)
-		if c == null:
-			_bl_want.erase(key)
-			consumed = true
-			continue
-		if c.data.is_empty():
-			continue
-		var cached = _eff_cache.get(key)
-		if cached != null and c.data == cached.data:
-			_bl_want.erase(key)
-			consumed = true
-			perf_light_cache_hits += 1
-			continue
-		ready.append([c, key])
-	if ready.is_empty():
-		if consumed and _bl_want.is_empty():
-			perf_light_batch_calls += 1
-		return
-	ready.sort_custom(func(a, b): return _bl_dist(a[0]) < _bl_dist(b[0]))
-	var n := mini(2, ready.size())
-	var items: Array = []
-	for i in range(n):
-		var c: Node3D = ready[i][0]
-		items.append({"data": c.data.duplicate(), "cx": int(c.cx), "cz": int(c.cz)})
-	if items.is_empty():
-		return
-	# D4 budget: the batch slice must stay <= 18 ms/frame. Contained chunk
-	# light measures ~17-34 ms (not the 6 ms D1 assumed), so the budget lives
-	# INSIDE the batch compute loop (first chunk always runs, later chunks
-	# only while under budget) — the caller keeps the leftovers in _bl_want.
-	var res: Array = Lighting.compute_light_flat_batch(items, 18000)
-	perf_light_batch_chunks += res.size()
-	for i in range(res.size()):
-		var key: String = ready[i][1]
-		var c = chunks.get(key)
-		if c == null:
-			continue
-		_eff_cache_put(key, c.data, res[i])
-		_bl_want.erase(key)
-		consumed = true
-	if consumed and _bl_want.is_empty():
-		perf_light_batch_calls += 1
+# AC-0079 v3 C2: _bl_batch_step (the AC-0077 main-thread batch light) is
+# DELETED — contained light now runs off the main thread: workers self-light
+# their fresh copies (ChunkScript.build_accs) and the handoff feeds the eff
+# cache below. _bl_want bookkeeping stays (recenter WANT fills it, release
+# erases it); its early-return check in _drain_build_queue stays behavior-
+# neutral. No light math changed (byte-identity: compute_light_flat_batch and
+# compute_light_flat_chunk both route through _chunk_light_into).
 
 # --- AC-0077: staged collision bodies (P1.4) --------------------------------
 

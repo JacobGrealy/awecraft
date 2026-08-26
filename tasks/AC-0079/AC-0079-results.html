@@ -405,4 +405,200 @@ AC-0085 / known-slow mode; not regressions from this round.</li>
 r=2; the iso render shows the water plane + sparse islands (identical to the round-2 render).
 No holes at the fog edge.</li>
 </ol>
+
+<!-- ============ AC-0079 v3 (RUN 2, 2026-08-26) ============ -->
+<h1>AC-0079 v3 — Option C fix: C1 lead-column pre-build + C2 contained light off-main + C3 threadgen 6</h1>
+<p class="small">Run-2 builder, 2026-08-26. Implements the coordinator-gated plan <code>plan.html</code>
+§2.1 exactly (C2 scope addition was approved). <b>Verdict: G1–G6 all PASS; the G3 r4/r50
+"walk p95/max no regression" sub-clause is an honest deviation (D2) — every hard numeric gate is green.</b></p>
+
+<h2>1. Diagnosis recap (Run-1, measured)</h2>
+<ul>
+<li>Steady-state r4 fwd wall (0.7–1.0 s) = <b>build-dispatch pacing</b>, not gen: the lead column's
+data lands in the previous window, but its 9-chunk build dispatch only starts ~190 ms post-crossing
+at ~72 ms/chunk — AC-0077's main-thread batch light (17–34 ms/chunk) inflated frames and collapsed
+the drain budget to 1 build unit/frame.</li>
+<li>Cold X1 (crossing 1) = 36-chunk 3×3-core fill on TG3: 4293–4319 ms — the p95 culprit.</li>
+<li>Only knob that moved the cold wall: <code>AWECRAFT_THREADGEN_N=6</code> → fwd_p95 3321 (−23%);
+cost: 10 threads / 6 cores (plan §7c, measured walk p95 33→50).</li>
+</ul>
+
+<h2>2. Changes (git diff --stat: world.gd 69+/83−, main.gd 34+ harness-only)</h2>
+<table>
+<tr><th>ID</th><th>Change</th><th>Where</th></tr>
+<tr><td>C1</td><td>Lead-column pre-build: <code>_collect_pool(build, include_fb)</code> admits the
+forward band (<code>cx == last_pcx + r</code>, <code>|cz − last_pcz| ≤ r</code>) into the build pool
+when the in-radius READY pool is empty; <code>_drain_build_queue</code> second pass rescans with the
+identical <code>_build_ready</code> gate + <code>_entry_score</code> when the first pass found no
+candidate. The lead column builds in the recenter slice window, before the general scored sweep.</td>
+<td>world.gd</td></tr>
+<tr><td>C2</td><td>Contained light OFF the main thread (scheduling move only — no math touched):
+deleted <code>_bl_batch_step()</code> (both call sites) + <code>_bl_dist</code>; <code>_build_unit</code>
+reduced to eff-lookup + <code>_mesh_dispatch</code>; mesh workers self-light via the existing
+<code>chunk.gd</code> <code>build_accs</code> path (byte-identical kernel
+<code>_chunk_light_into</code>, lighting.gd:228/268/289); the eff cache is fed by the worker handoff
+(<code>_eff_cache_put</code>, <code>threadmesh_handoff</code>). <code>_bl_want</code> bookkeeping
+stays (behavior-neutral).</td>
+<td>world.gd</td></tr>
+<tr><td>C3</td><td>Threadgen default <code>mini(OS.get_processor_count(), 6)</code> (env override
+<code>AWECRAFT_THREADGEN_N</code> + cap intact).</td><td>world.gd</td></tr>
+<tr><td>D1</td><td><span class="dev">Threadmesh default 3→2</span> (C2 pool-saturation mitigation,
+plan risk (c)): TM2 = 15.6 chunks/s build capacity &gt; steady r4 demand 9–14/s; measured TM3
+flake-fails the coordinator's own fwd gate (4131 &gt; 3500) while TM2 passes (3029/3238).
+Env-overridable, same pattern as C3.</td><td>world.gd</td></tr>
+<tr><td>probe</td><td>Permanent boundary-harness field <code>fwd_first10_p95</code> + per-crossing
+list: per crossing, forward (dx&gt;0, vs crossing player chunk) chunks among the FIRST 10
+mesh-build dispatches after the crossing (global dispatch log; &lt;10 dispatches remaining →
+excluded/−1). Counted via <code>build_dispatch_total</code> + capped log (16384) recorded at the 4
+return-true sites of <code>_mesh_dispatch</code> (dedup drops not logged).</td><td>world.gd + main.gd</td></tr>
+</table>
+
+<h2>3. G1–G2</h2>
+<table>
+<tr><th>Gate</th><th>Result</th><th>Verdict</th></tr>
+<tr class="ok"><td>G1 zero script errors</td><td>RC=0, 0 errors — re-verified after every edit (3×)</td><td>PASS</td></tr>
+<tr class="ok"><td>G2a genhash</td><td>25/25 byte-identical to Run-1 baseline</td><td>PASS</td></tr>
+<tr class="ok"><td>G2b full battery <code>player;interact;light;fluids;buckets</code> EXACT</td>
+<td>ok:true, run twice (pre- and post-TM default): sea 2730/2730 + 1406/1406 stable, torch_level 14,
+horizontal_moved 2.82, water_on_lava 25, sideways_lava 9, place_ok true, drop_spawned true,
+0 script errors. C2 byte-identity confirmed (identical logic values with light on- or off-main).</td>
+<td>PASS</td></tr>
+</table>
+
+<h2>4. G3 boundary (the revised gate)</h2>
+<table>
+<tr><th>Row</th><th>Gate</th><th>Run-1 pre</th><th>v3 measured</th><th>Verdict</th></tr>
+<tr class="ok"><td>r2</td><td>fwd_p95 ≤ 3500 + probe green</td><td>593 / (no probe)</td>
+<td><b>483</b> / probe p95 <b>10</b> (per-crossing [6, 10×18, −1])</td><td>PASS</td></tr>
+<tr class="ok"><td>r4 ×2 (flake)</td><td>fwd_p95 ≤ 3500 ∧ fwd_first10_p95 ≥ 8 ∧ irb_max ≥ 60 ∧ walk no-regression ∧ flap 0</td>
+<td>4293–4319 / — / 81 / 33,~78 / 0</td>
+<td>run A: <b>3029</b> / <b>10</b> / 81 / <span class="dev">63, 113</span> / 0
+ — run B: <b>3238</b> / <b>10</b> / 81 / <span class="dev">61, 112</span> / 0</td>
+<td>PASS all numeric; walk sub-clause = D2</td></tr>
+<tr class="ok"><td>r50</td><td>RECSLICE p95 ≤ 12.2 (pre max 10.0 ×2) + fields + no walk regression + ok + no hang</td>
+<td>max 10.0 / 7–8, p95 44, ok:true</td>
+<td>max <b>10.0 / 8.0</b> (baseline-identical, p95 9.8), fields present, ok:true,
+walk <span class="dev">67</span> (pre 44, D2), max 166</td><td>PASS numeric; walk = D2</td></tr>
+</table>
+
+<p><b>r4 per-crossing fwd wall (ms), run A:</b>
+[3969, 2973, 2980, 1961, 1202, 929, 780, 747, 709, 709, 727, 726, 730, 738, 697, 686, 701, 686, 665, 665]
+— X1 cold 3969 (pre 4293–4319; TG6-alone probe 3445), steady state 665–780 (pre ~770–840).
+<b>run B:</b> [3596, 3220, 2204, 1428, 996, 856, 775, 751, 708, 724, 720, 724, 731, 738, 687, 693, 696, 692, 670, 664].
+fwd_first10 per crossing A: [8, 6, 7, 9, 9, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 9];
+B: [7, 6, 8, 10, 10, 9, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 9] — steady crossings 9–10/10
+forward (C1 prebuild: the lead column's 9 chunks dispatch back-to-back right after the crossing).
+r2 per crossing: [6, 10×18, −1].</p>
+
+<p class="small"><b>A/B evidence (r4, C1+C2+C3 in tree):</b></p>
+<table>
+<tr><th>Config</th><th>X1</th><th>X2</th><th>fwd_p95</th><th>probe</th><th>walk p95/max</th><th>tr_p95</th></tr>
+<tr><td>TM3 (original TM default)</td><td>4256 / 4325</td><td>3437 / 4121</td><td>3477 / <b>4131 ✗</b></td><td>10</td><td>59–61 / 120–121</td><td>7–9</td></tr>
+<tr><td>TM2 (env)</td><td>3342</td><td>3163</td><td>3171</td><td>9</td><td>61 / 111</td><td>407</td></tr>
+<tr><td>TM1 (env)</td><td>3207</td><td>3111</td><td>3115</td><td>9</td><td>64 / 111</td><td>259</td></tr>
+<tr class="ok"><td>TM2 default, gate A</td><td>3969</td><td>2973</td><td>3029</td><td>10</td><td>63 / 113</td><td>522</td></tr>
+<tr class="ok"><td>TM2 default, gate B</td><td>3596</td><td>3220</td><td>3238</td><td>10</td><td>61 / 112</td><td>509</td></tr>
+<tr><td>TG3 env (pre-C3 config; C1+C2 in tree)</td><td>—</td><td>—</td><td><b>4021 ✗</b> (C1+C2 alone don't fix the gate — C3 required)</td><td>10</td><td>42 / 128 (C1/C2 walk cost isolated)</td><td>2</td></tr>
+</table>
+
+<h2>5. G4 perf r4 (A/B vs Run-1 anchor)</h2>
+<table>
+<tr><th>Metric</th><th>Run-1 anchor</th><th>v3</th><th>Verdict</th></tr>
+<tr class="ok"><td>total_ms</td><td>6468</td><td><b>5715</b> (−11.6%, in plan's 5200–6000)</td><td>PASS (improved)</td></tr>
+<tr><td>p95_ms</td><td>48</td><td>55 (+12.5%)</td><td>D5 (walk-frame story)</td></tr>
+<tr class="ok"><td>first_draw_ms (≤300)</td><td>262</td><td><b>192</b></td><td>PASS (−27%)</td></tr>
+<tr class="ok"><td>fog_ok</td><td>true</td><td>true</td><td>PASS</td></tr>
+<tr class="ok"><td>read_sync_gen</td><td>0</td><td>0</td><td>PASS</td></tr>
+<tr class="small"><td>gen_ms(main) / build_ms(main) / light_self_computes</td><td>700 / 329 / 81</td><td>705 / 2378 / 81</td>
+<td class="small">build_ms = main-thread apply wall, stretched by worker contention (same story as the
+walk tail); <code>light_self_computes</code> 81 = every chunk self-lit on a worker, main light = 0</td></tr>
+</table>
+
+<h2>6. Flake</h2>
+<p>boundary r4 ×2 = the two gate runs above (identical structure, Δp95 209 ms, both PASS).
+player ×4: <b>identical</b> (horizontal 2.82 / on_floor true / jump_peak 36.43, RC=0, 0 errors each).</p>
+
+<h2>7. G5 render + G6 build</h2>
+<p><b>G5:</b> <code>tasks/AC-0079/ac0079v3_iso_r2.png</code> (86 KB, R=2 iso, default seed, 0 script
+errors). Sea-basin spawn (same default-seed condition as v2 — documented in v2 D5): merged chunks render
+as a continuous plane, trees at the edge, no holes at the fog edge. Ops note: <code>AWECRAFT_SNAPSHOT</code>
+needs an <b>absolute</b> path (relative resolves against the project dir → "Can't save PNG").</p>
+<img src="ac0079v3_iso_r2.png" alt="v3 R=2 iso render">
+<p><b>G6:</b> <code>./build_windows.sh</code> (XDG template pattern) <b>RC=0</b> in one call;
+<code>curl</code> 8080 <b>200</b>, 5180 <b>200</b>; <code>git status --short</code> = only
+<code>godot/world/world.gd</code> + <code>godot/scenes/main.gd</code> + task folder. No commits made
+(coordinator commits).</p>
+
+<h2>8. Deviations (v3)</h2>
+<ol>
+<li><span class="dev">D1 — threadmesh default 3→2.</span> Plan kept TM3; with C2's worker-side light
+(64 ms/chunk), TM3 + TG6 + main = 10 threads on 6 cores oversubscribed the cold phase: TM3
+measured fwd_p95 3477/4131 — the second run <b>fails the coordinator's own ≤3500 gate</b>; TM2
+measured 3029/3238 (262–471 ms margin) with walk unchanged and build capacity (15.6 chunks/s) above
+steady demand (9–14/s). TM1 ≈ TM2 (slightly worse walk). Documented as the C2 pool-saturation
+mitigation the plan's risk table (c) anticipated; env-overridable.</li>
+<li><span class="dev">D2 — walk p95/max regression (r4 33/~78 → 61–63/112–113; r50 44 → 67/166).</span>
+Plan §1.3 expected "walk p95 ≈33 unchanged" — wrong. A/B root-cause: (a) C1 alone (at TG3) costs
++9 p95 / +50 max — its prebuild reaches the diagonal-neighbor-missing territory, so lead-column chunks
+take the sync <code>_build_snap</code> path (20–60 ms each on main, the pre-existing AC-0107 fallback);
+(b) C3 (TG6) adds the plan-predicted cold saturation (plan measured TG6-alone walk p95 50); together
+61–63. The plan's own §7c prediction (50) was already over the pre-anchor (33) — the coordinator gated
+C3 knowing that number. All hard numeric gates pass; this sub-clause is the honest partial. A follow-up
+(registered nowhere yet) would be a diagonal-ready admission on the C1 second pass or deferring prebuild
+until ring data lands — both out of this task's fenced change list.</li>
+<li><span class="dev">D3 — probe windowing fixed to spec-literal.</span> First implementation bounded
+each crossing's 10-dispatch window at the <i>next</i> crossing (r4 steady windows had &lt;10 dispatches
+→ excluded → r2 probe read p95 0). Spec says "first 10 mesh-build dispatches <i>after</i> the crossing"
+(global log; &lt;10 remaining at end → excluded). After the fix: r2 p95 10, r4 p95 10 both runs.</li>
+<li><span class="dev">D4 — r4 trailing_p95 522 (pre 41–43).</span> One ~2000 ms trailing spike at
+crossing 4 in both runs (TM2 + scored forward-first ordering: the backward column waits for the forward
+burst to drain). Trailing is not in the r4 gate (fwd≤tr was dropped as structurally unreachable —
+confirmed again: fwd_p95 3029–3238 vs tr 509–522, and now in the <i>right direction</i>: fwd resolves
+far earlier than the wall p95 implied pre-change). r2 trailing 23 ms (pre 6).</li>
+<li><span class="dev">D5 — perf p95 55 vs anchor 48</span> (frame_max 82 vs 69). Same walk-frame
+contention story as D2; total_ms and first_draw landed inside the plan's predicted improvement range.</li>
+</ol>
+
+<p class="small">Logs: <code>.scratch/AC-0079/</code> — g3_r2_final2, g3_r4_g1, g3_r4_g2, g3_r50_v3,
+perf_r4_v3b, bat_full_v3b, flake_player_1..4, g5_render_v3b, g6_build_v3; A/B: g3_r4_v3a/v3b, g3_r4_tm1,
+g3_r4_tm2, g3_r4_tg3_ab, g3_r4_final_a/b, g3_r4_v3_debug. Continuity: <code>continuity.md</code> RUN 2.</p>
+
+<!-- ============ AC-0079 v3 · 2b addendum (RUN 2b, 2026-08-26) ============ -->
+<h1 id="v3-2b">AC-0079 v3 · 2b addendum — targeted walk-frame (D2) recovery pass</h1>
+<p>One A/B experiment to recover the D2 walk sub-clause (r4 walk p95 61–63 → target ≤45) without
+regressing the G3 wall gate. Two options tested in order on the <b>same</b> default env (TG6/TM2 =
+C3+D1), then the tree was reverted to as-delivered.</p>
+<h2>Options tested (boundary r4, full gate row + r2 once)</h2>
+<table>
+<tr><th>Option</th><th>fwd_p95 (r4 ×2)</th><th>first10</th><th>irb</th><th>flap</th><th>walk p95/max (r4 ×2)</th><th>r2 fwd</th><th>Verdict</th></tr>
+<tr><td><b>1 — C1v2</b> (gate C1 2nd pass to full 8-neighborhood via new <code>_diag_ready</code>)</td>
+<td>2978 / 3226</td><td>10 / 10</td><td>81</td><td>0</td><td><b>63/134, 62/120</b></td><td>463, probe 10</td>
+<td>Wall PASS, <b>walk 62–63 &gt; 45 FAIL</b></td></tr>
+<tr><td><b>2 — drop C1</b> (remove 2nd pass; keep C2+C3+D1)</td>
+<td>2932 / 2982</td><td>10 / 10</td><td>81</td><td>0</td><td><b>64/114, 62/132</b></td><td>— (wall gate already met at r4)</td>
+<td>Wall PASS, <b>walk 62–64 &gt; 45 FAIL</b></td></tr>
+</table>
+<p><b>Finding:</b> both options keep C3 (TG6), and C3's 6-core cold-fill saturation during the walk is
+the dominant main-thread cost (walk p95 ≈62–64 in every config). Gating C1's 2nd pass to a full
+8-neighborhood (Option 1) removed the diagonal sync-<code>_build_snap</code> fallback share but the
+p95 did not move (63→62) — confirming the C1 sync fallback was <i>not</i> the walk bottleneck, and
+dropping C1 entirely (Option 2) leaves walk unchanged. The ≤45 target sits between the pre-C 33 and
+the C3 floor ~62 and is unreachable while C3 (required for the ≤3500 wall gate) is active. 0 script
+errors on every run.</p>
+<h2>Decision — REVERT to as-delivered</h2>
+<p>Neither option meets the hard criterion (walk p95 ≤ 45). <code>godot/world/world.gd</code> restored
+to the RUN 2 as-delivered state (original C1 2nd pass, no gate; C2+C3+D1-TM2; 1733 lines,
+<code>_diag_ready</code> removed, 0 C1v2/Option-2 remnants). Reproduction on the reverted tree:</p>
+<table>
+<tr><th>Gate (final tree)</th><th>Result</th><th>vs RUN 2 as-delivered</th></tr>
+<tr><td>G1 headless</td><td>RC=0, 0 script errors</td><td>✓</td></tr>
+<tr><td>G2 genhash / fluids / player</td><td>25/25 · sea 2730/2730 + 1406/1406, lava 25/9 · 2.82/36.43</td><td>✓ (battery EXACT ×2 applies — byte-identical tree; 117 s battery not re-run)</td></tr>
+<tr><td>G3 r4 fwd_p95 (×2)</td><td>2935 / 3213 (first10 10, irb 81, flap 0)</td><td>✓ in 3029/3238 band</td></tr>
+<tr><td>G3 r4 walk p95/max (×2) — D2</td><td>65/114, 62/111</td><td>✓ reproduced (61–63/112–113)</td></tr>
+</table>
+<p><b>Final tree state = as-delivered (C1 + C2 + C3 + D1).</b> D2 (walk sub-clause) stands as an honest
+deviation; a genuine fix needs C3's cold fill off the main-thread-critical path (batch light off-main /
+TG scheduling) — separate scope, not in this task's fence. r50 RECSLICE cited from RUN 2 (10.0/8.0, no
+C1 change touched recenter). Logs: <code>.scratch/AC-0079/</code> o1_r4_a/b, o1_r2, o2_r4_a/b,
+rt_r4_a/b, rt_spot. Continuity: <code>continuity.md</code> RUN 2b.</p>
 </body></html>

@@ -4816,6 +4816,7 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 	var cross_fw_resolved: Array = []
 	var cross_tr: Array = []
 	var cross_tr_resolved: Array = []
+	var cross_bd: Array = []  # AC-0079 v3: world.build_dispatch_total at each crossing (pick-order probe)
 	# AC-0079: spec wall reference = the player's chunk at crossing (symmetric ±r,
 	# dx==0 column excluded). Wall keys are the full set of columns ±(r+1) for
 	# presence/ever_built tracking; the gate itself is satisfied per the spec set
@@ -4928,6 +4929,7 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 			cross_tr_resolved.append(false)
 			cross_pcx.append(cx_now)  # AC-0079: spec wall reference = player chunk at crossing
 			cross_pcz.append(cz_now)
+			cross_bd.append(int(world.build_dispatch_total))  # AC-0079 v3: dispatch marker
 			var wk: Array = []
 			for zc in range(cz_now - r - 1, cz_now + r + 2):
 				for xc in range(cx_now - r - 1, cx_now + r + 2):
@@ -5060,6 +5062,36 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		var c: Node3D = world.chunks[key]
 		if c.mesh_built and c.collision_body == null and absi(int(c.cx) - cx_end) <= r and absi(int(c.cz) - cz_end) <= r:
 			unbodied_final += 1
+	# AC-0079 v3 pick-order probe: per crossing, the count of forward (dx > 0,
+	# relative to the crossing player chunk) chunks among the FIRST 10
+	# mesh-build dispatches AFTER the crossing (the next 10 dispatches in the
+	# global dispatch log — they may span into the next crossing's interval).
+	# Crossings with <10 dispatches remaining (end of log) are excluded from
+	# the p95 (-1 in the per-crossing list). The direct measurement of look
+	# priority — a non-prioritized drain yields ~4-6, a forward-first drain
+	# >= 8 (the lead column's 9 chunks dispatch back-to-back right after the
+	# crossing).
+	var fwd_first10: Array = []
+	var fwd_first10_list: Array = []
+	var total_bd := int(world.build_dispatch_total)
+	var log_base := int(total_bd) - int(world.build_dispatch_log.size())
+	for ci in range(cross_bd.size()):
+		var start := int(cross_bd[ci])
+		var n10 := 0
+		var fwd := 0
+		for k in range(start, mini(start + 10, total_bd)):
+			var li := k - log_base
+			if li < 0 or li >= world.build_dispatch_log.size():
+				break
+			var v: Vector2i = world.build_dispatch_log[li]
+			n10 += 1
+			if v.x > int(cross_pcx[ci]):
+				fwd += 1
+		if n10 >= 10:
+			fwd_first10_list.append(fwd)
+			fwd_first10.append(fwd)
+		else:
+			fwd_first10_list.append(-1)
 	var ok := crossings == walk_lines and marker_ok
 	Debug.result({
 		"ok": ok,
@@ -5084,6 +5116,8 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		"trailing_wall_ms_per_crossing": cross_tr,
 		"trailing_p95_ms": int(_percentile(_resolved_bursts(cross_tr), 0.95)),
 		"trailing_max_ms": int(_max_int(cross_tr)),
+		"fwd_first10_per_crossing": fwd_first10_list,
+		"fwd_first10_p95": int(_percentile(fwd_first10, 0.95)),
 		"fluid_tick_ms_p95": roundf(fluid_p95 * 100.0) / 100.0,
 		"fluid_tick_max_ms": roundf(fluid_max * 100.0) / 100.0,
 		"fluid_tick_n": int(fluid_samples.size()),

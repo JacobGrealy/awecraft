@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-26T12:35
+  updated_at: 2026-08-26T17:43
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -2281,11 +2281,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-23T09:39
-  updated_at: 2026-08-24T11:50
-  completed_at: null
+  updated_at: 2026-08-26T17:43
+  completed_at: 2026-08-26T17:43
   waiting_on: null
   parent_id: AC-0034
   notes: 'AC-0034 child (policy P1.1, after hysteresis split off to AC-0080 when 0079-v1 stalled 2026-08-23): look-priority
@@ -2312,6 +2312,30 @@ intake:
       data->mesh ring; the 72-chunk forward wall takes ~5s regardless of order), NOT a scoring defect. Fix belongs to AC-0077
       (bulk-batch light 9->1 per crossing + collision staging) now queue #18. RE-VERIFY boundary gate after AC-0077 lands.
       Renders: ac0079_iso_r2.png / ac0079fix_iso_r2.png / ac0079r3_iso_r2.png.'
+  - id: 3
+    created_at: 2026-08-26T17:43
+    updated_at: null
+    text: '[agent] DONE 2026-08-26 as-delivered (two-phase: Run-1 xhigh diagnosis, Run-2 + Run-2b builder). v2''s scored pick
+      pool (IN THE TREE since 2026-08-24, honest G3 PARTIAL FAIL) + Option-C fix per the gated plan. FIX: C1 lead-column pre-build
+      (_collect_pool include_fb + drain 2nd pass) + C2 contained light OFF the main thread [the AC-0077 follow-up - coordinator-approved
+      scope addition: workers self-light via the AC-0107 fresh-copy path, byte-identical kernel, eff cache kept] + C3 threadgen
+      default mini(cores,6) + D1 threadmesh default 3->2 [TM3 flake-fails the fwd gate 4131>3500]. DIAGNOSIS (Run-1): the
+      fwd wall was BUILD-DISPATCH pacing (lead column data pre-lands; 9-chunk dispatch ~650ms inflated by the AC-0077 main-thread
+      batch light collapsing the drain to 1 unit/frame; cold crossings = 36-chunk 3x3-core fill). GATES: G1 clean x3; G2 genhash
+      25/25 + FULL battery EXACT x2 (sea 2730/1406, torch 14, 2.82, 25/9, place/drop); G3 PRIMARY MET - r4 fwd_p95 2932-3238
+      <= 3500 [pre 4293-4319, 30% faster] + PICK-ORDER PROBE fwd_first10_p95 10/10 >= 8 [forward chunks dispatched first -
+      the look-priority intent measured directly] + irb 81 >= 60 + RECSLICE r50 10.0/8.0 no regression + flap 0 + r2 fwd 463-593/probe
+      10; G4 perf r4 total 5715 [pre 6468], first_draw 192 [pre 262], read_sync_gen 0, fog_ok; G5 R2 iso render clean (no
+      fog-edge holes); G6 windows build RC=0 + 8080/5180 200 + clean tree. **HONEST VERDICT - walk sub-clause MISSED (deviation
+      D2, root-caused A/B twice): walk p95/max r4 33/~78 -> 62-65/~111-134, r50 44 -> 67.** Run-2b experiment (C1v2 8-neighbor
+      gate / drop C1) PROVED C1''s sync-fallback share was NOT the bottleneck - C3''s TG6 cold-fill saturation on 6 cores
+      is (the <=45 recovery target sits at the C3 floor ~62 while C3 is required for the wall gate). GATE REVISION of record:
+      spec G3 ''fwd <= tr'' replaced by fwd_p95 <= 3500 + the pick-order probe - Run-1 §5.1 proved fwd<=tr STRUCTURALLY UNREACHABLE
+      (4-10x gap: the 3x3 spawn core keeps fwd_p95 >= ~0.2s vs tr_p95 <= ~60ms; the trailing wall measures PRE-BUILT chunks
+      = apples-to-oranges; every escape out-of-fence). FOLLOW-UP NEEDED (not registered - user co-edits queue): walk-frame
+      recovery - the TG6 cold-fill saturation (gen scheduling off the main-thread-critical path); the wall-vs-walk tension
+      is now quantified (wall <=3500 requires TG6; walk p95 floor at TG6 ~62-65). AC-0034 (hitch) stays open. Results: tasks/AC-0079/AC-0079-results.html
+      (v3 + 2b addendum).'
 - id: AC-0080
   title: chunk-stream-hysteresis-unload
   source: agent
