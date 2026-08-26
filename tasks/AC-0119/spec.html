@@ -10,7 +10,7 @@
 <h2>Goal</h2>
 <div class="fill"><b>FILL BY COORDINATOR</b> — one line, from the registry notes (marked REVIEW until confirmed). <b>REVIEW</b></div>
 <!-- FILL: Goal — one sentence. Example: "Add a torch-light-bake pass to the chunk mesher so caves are readable at night." -->
-<p><em>REVIEW — draft from notes: Remove hidden sync generation on read path: world.</em></p>
+<p><b>Goal (confirmed 2026-08-26):</b> Remove hidden synchronous world generation from the READ path — <code>world.gd</code> <code>_chunk_data</code>&rsquo;s <code>c.data.is_empty()</code> branch (~626-632), <code>get_block</code> (:847), <code>lighting.gd</code> neighbor snapshots (:87/:110/:172/:196), and the fluids <code>_nb_block</code> (~:1080) all sync <code>WorldGen.generate</code> (31 ms each, up to 4 per build); change them to <b>air-on-miss</b> like web <code>world.block</code> (:882): a missing chunk reads as 0/air and is <i>never</i> generated on read. Data generation happens ONLY via the drain/threadgen path (<code>_gen_unit</code> :310 / stub path), which is unchanged.</p>
 <h2>Frozen spec references</h2>
 <div class="auto"><b>AUTO (fixed boilerplate — do not hand-edit)</b></div>
 <ul>
@@ -107,16 +107,44 @@
 <tr><td>boundary r4 `in_radius_built_max`</td><td>**67** (`built_final` 81, `ok` true, `flap` 0, `p95_ms` 65)</td><td>AC-0079 (look-priority scoring; pre-fix gate was 55)</td></tr>
 </table>
 <h2>Task-specific requirements</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the concrete behavior/data changes this task makes.</div>
-<!-- FILL: Task-specific requirements. Example: e.g. &quot;fluids: source water over a hole writes 0 cells (zero-write invariant)&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-26)</b></div>
+<ul>
+<li><b>Air-on-miss on every read path (web <code>world.block</code> :882 semantics):</b> <code>_chunk_data</code>&rsquo;s <code>c.data.is_empty()</code> branch (~626-632) drops its sync <code>WorldGen.generate</code> call and returns empty (reads as air); <code>get_block</code> (:847) returns 0/air for a missing chunk; the four <code>lighting.gd</code> neighbor-snapshot sites (:87/:110/:172/:196) treat missing neighbor data as air; the fluids <code>_nb_block</code> (~:1080) treats a missing neighbor as air. Run-1 must re-verify each site and find any OTHER sync-gen-on-read call (grep for <code>WorldGen.generate</code> / <code>generate</code> callers outside the drain/threadgen path — report every hit; the plan decides keep/remove per hit with a one-line reason).</li>
+<li><b>Generation stays where it belongs:</b> <code>_gen_unit</code> (:310) + the stub path are the ONLY generators (AC-0082 threadgen dispatch + drain feed). The drain still generates everything in radius — the FINAL built state must converge to the same chunk set as before (irb/built_final unchanged); only the TRANSIENT read behavior changes (frontier reads air until data lands, then the existing dirty/remesh mechanism rebuilds).</li>
+<li><b>Frontier behavior matches the web:</b> a chunk whose neighbor data is missing builds with AIR for that neighbor (web does exactly this at the streaming frontier) — no crash, no stale/wrong block, no sync stall. The 31 ms × up-to-4 per-build hidden cost is gone.</li>
+<li><b>Instrumentation:</b> a probe counting sync generations on the READ path (<code>ONDEMANDGEN</code>-style) — post-change it must report <b>0</b> on mesh/light/fluid neighbor reads (drain/threadgen generations are NOT counted); report the pre-change per-build sync-gen count + total ms as the A/B baseline.</li>
+<li><b>Invariants:</b> world data untouched (genhash 25/25 — generation still runs, just not on read); battery values EXACT (sea 2730/1406, torch 14, horiz 2.82, lava 25/9, place/drop true — the fluid battery is the key one: <code>_nb_block</code> feeding fluid spreads must not change stable-state results, only transient reads).</li>
+</ul>
 <h2>Task-specific gates</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the specific mode(s)/values that must be green beyond the defaults.</div>
-<!-- FILL: Task-specific gates. Example: e.g. &quot;G1: AWECRAFT_LOGIC=fluids → sea_stable true, sea_surface 2730&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-26)</b> — FULL tier (read paths under mesh/light/fluids touched).</div>
+<ul>
+<li><b>G1 — headless clean:</b> <code>~/tools/godot/godot --headless --path godot --quit</code> + default logic runs → RC=0, zero script errors, no hang (threading ON by default).</li>
+<li><b>G2 — genhash 25/25 byte-identical</b> (data unchanged).</li>
+<li><b>G3 — FULL battery green, ALL known-stable values EXACT:</b> <code>AWECRAFT_BATTERY="player;interact;light;fluids;buckets"</code> → ok:true; sea 2730/2730 + 1406/1406, torch_level 14, horizontal_moved 2.82, place_ok/drop_spawned true, water_on_lava 25, sideways_lava 9.</li>
+<li><b>G4 — the point of the task:</b> read-path sync-gen probe = <b>0</b> on all mesh/light/fluid neighbor reads post-change (drain/threadgen generations excluded from the count); pre-change baseline re-measured (31 ms × up to 4 per build — instrument the actual per-build sync-gen count + total ms first, then show it gone). Per-build / per-crossing wall time must not regress (report the A/B; a measurable improvement is expected since up to 124 ms of sync gen leaves the build path).</li>
+<li><b>G5 — frontier behavior + convergence:</b> (a) boundary r4 walk: in_radius_built_final 81 + ok true + flap 0 + queue/irb values unchanged from current fresh anchors (Run-1 re-measures the pre-change values — the scaffold table&rsquo;s 67/65 are pre-AC-0107-era, use fresh numbers); (b) no crash/hang on frontier builds with missing neighbors (the air-on-miss path is exercised by every streaming build — the flake loop is the exercise: player ×4 + boundary ×2 all green, no hang); (c) convergence: after the drain settles, every in-radius chunk is built (no chunk left permanently air by the change).</li>
+<li><b>G6 — tree clean:</b> only the listed files + task folder; <code>tasks/AC-0119/AC-0119-results.html</code> self-contained (pre/post probe counts + ms, the full sync-gen caller audit table, A/B, flake log).</li>
+</ul>
 <h2>Scope (files expected to change)</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the exact files this task will edit (helps G5 stay clean).</div>
-<!-- FILL: Scope (files expected to change). Example: e.g. &quot;godot/world/chunk.gd, godot/scenes/main.gd (fluids branch only)&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-26)</b></div>
+<ul>
+<li><code>godot/world/world.gd</code> — <code>_chunk_data</code>&rsquo;s <code>c.data.is_empty()</code> sync-gen branch (~626-632) → air-on-miss return; <code>get_block</code> (:847) → 0/air on miss.</li>
+<li><code>godot/world/lighting.gd</code> — the four neighbor-snapshot sites (:87/:110/:172/:196) → missing neighbor = air. (Line refs from the registry era — re-verify; the AC-0107 <code>compute_light_flat_chunk</code> / AC-0077 <code>_chunk_light_into</code> additions shifted the file.)</li>
+<li>Fluids file (<code>_nb_block</code> ~:1080 — confirm the file, likely <code>godot/world/fluids.gd</code>) → missing neighbor = air.</li>
+<li><code>godot/scenes/main.gd</code> — read-path sync-gen probe fields (count + total ms) if the plan needs harness output.</li>
+<li><code>tasks/AC-0119/</code> — plan.html, continuity.md, AC-0119-results.html.</li>
+</ul>
+<p class="note">Run-1 must deliver the full sync-gen caller audit (every <code>WorldGen.generate</code>/gen call site, keep/remove decision + reason); if a caller outside this list must change, name the exact file:line in plan.html — the coordinator approves scope additions before Run-2.</p>
 <h2>Fences</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — what this task must NOT touch.</div>
-<!-- FILL: Fences. Example: e.g. &quot;no .gd outside the listed scope; no TASKS.yaml edits; no git&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-26)</b></div>
+<ul>
+<li>Do NOT modify <code>index.html</code> (frozen web spec) or anything under <code>web/</code>.</li>
+<li>Do NOT change world data / gen / constants — genhash must stay byte-identical (25/25); battery values stay exact (stable-state fluid/light results unchanged — only TRANSIENT reads on missing data change).</li>
+<li>Do NOT touch the AC-0082 threadgen dispatch, the AC-0107 threadmesh dispatch (dedup/cap/stale-drop/spawn-sync, worker fresh-copy handoff), or the AC-0118 recenter slicing — these stay the ONLY generation path and the queue semantics; the read paths just stop calling into gen.</li>
+<li>Do NOT touch the AC-0106/AC-0117 merged-mesh path or AC-0077 batch-light/staging (they read through the same <code>_chunk_data</code> — the air-on-miss return must be compatible with the eff-cache/data-signature keys: a miss is NOT a data signature).</li>
+<li>No git (coordinator commits). No builds (coordinator runs <code>./build_web.sh</code> / <code>./build_windows.sh</code> after). No <code>~/.dsh</code>. No TASKS.yaml edits (coordinator owns the registry). Do NOT kill any python server pid.</li>
+<li>Godot runs ONE at a time (long runs may use background bash jobs — background ≠ concurrent godot; at most ONE godot process at any instant). At most ≤1 render after headless-verify (R=1) — only if a frontier visual check is genuinely needed (the gates are headless; a render is NOT required). Every godot call: <code>HOME=/tmp/dsh_home</code> (mkdir in the same call); /tmp is ephemeral per call; <code>--path godot</code> chdirs (absolute snapshot paths only).</li>
+<li>Keep the append-only <code>tasks/AC-0119/continuity.md</code>. Final report ≤20 lines.</li>
+</ul>
 <p class="note">Scaffold generated by <code>tasks/scripts/spec_template.py</code> (no wall-clock timestamps; the only date is the registry created_at). Auto sections are reproducible byte-for-byte; fill sections are for the coordinator.</p>
 </body></html>
