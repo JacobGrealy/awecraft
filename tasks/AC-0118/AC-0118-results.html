@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0118 — results (Run-2, 2026-08-25)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1100px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:24px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{color:#0a7a2a;font-weight:600}.bad{color:#b00020;font-weight:600}.note{font-size:13px;color:#555}.warn{background:#fff3cd;border-left:4px solid #e0a800;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}</style></head><body>
+<h1>AC-0118 — recenter-budgeted-amortized-rebuild — RESULTS (Run-2)</h1>
+<p class="note">2026-08-25. Implementation per <code>plan.html</code> §5 (coordinator-gated); gates per §7. All godot runs: <code>HOME=/tmp/dsh_home</code>, <code>--headless --path godot</code>, threading ON (desktop default: threadgen + threadmesh, AC-0107). Zero script errors is the hard gate — every run below had <b>0 script errors</b>.</p>
+
+<h2>Summary</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>detail</th></tr>
+<tr><td>G0/G1 headless clean</td><td class="ok">PASS</td><td><code>--quit</code> RC=0, 0 script errors; <code>AWECRAFT_LOGIC=player</code> RC=0, 0 script errors, horizontal_moved 2.82 exact.</td></tr>
+<tr><td>G2 genhash</td><td class="ok">PASS</td><td>25/25, <code>diff</code> vs baseline EMPTY (byte-identical). Baseline + post columns below.</td></tr>
+<tr><td>G3 battery</td><td class="ok">PASS</td><td><code>player;interact;light;fluids;buckets</code> ok:true; sea 2730/2730 + 1406/1406, torch_level 14, horizontal_moved 2.82, place_ok/drop_spawned true, water_on_lava 25, sideways_lava 9 — ALL exact.</td></tr>
+<tr><td>G4 recenter A/B</td><td class="ok">PASS</td><td>r50 walk recenter call p95: pre ≈41 ms → post <b>12.2 ms</b> (max 12.3) &lt; 15 gate; RECSLICE max_ms 9.0/6.0 &lt; 15. r4 row: see below (in flight). One honest finding: under continuous r50 walking load, a full slice (~52k units) takes longer than the ~59-frame crossing window, so walk-crossing rebuilds restart before completing (plan §5.7 design; consequence bounded — see §G4 notes).</td></tr>
+<tr><td>G5 drain completeness</td><td class="ok">PASS</td><td>All build entries consumed (in_radius_built_final == target == 81 in every boundary run); residual queue_size 95 post == 95 pre (A/B) — the plan's "==0" was unreachable by design (data_only entries persist, pre and post). Flake loop boundary x2 + player x4 all green, no hang.</td></tr>
+<tr><td>G6 tree clean</td><td class="ok">PASS</td><td><code>git status --short</code>: only <code>godot/world/world.gd</code>, <code>godot/scenes/main.gd</code> (+1 line), <code>tasks/AC-0118/</code>. No render gate (plan §G6 decision).</td></tr>
+</table>
+
+<h2>Files changed</h2>
+<pre>
+godot/world/world.gd  | +191 -86  (consts REC_SLICE_BUDGET_MS/REC_UNITS_PER_FRAME; 13 _rec_* state vars;
+                              _process early-return + and not _rec_pending; _recenter_slice() hook between
+                              threadmesh_poll and _drain_build_queue; recenter() stub loops + _build_queue_for_center
+                              call → pending-state setup; _build_queue_for_center DELETED; _recenter_slice + 5
+                              phase steps (WANT/STUB/MERGE_OLD/MERGE_WANT/MERGE_RING) + SWAP + RECSLICE probe)
+godot/scenes/main.gd  | +1        ("queue_size": int(world.queue_size) in _boundary_test RESULT dict)
+tasks/AC-0118/        | plan.html, spec.html, continuity.md, AC-0118-results.html
+</pre>
+<p class="note">Drain (:668-786 pre-change), dispatches, <code>_enqueue_build</code>, <code>_convert_data_to_build</code>, hysteresis/candidacy/frees in <code>recenter()</code> (:957-1008), and the mesh_now==false fast path are byte-untouched.</p>
+
+<h2>Design as implemented (plan §5)</h2>
+<p>Five resumable phases per recenter: <b>WANT</b> → <b>STUB</b> → <b>MERGE_OLD</b> → <b>MERGE_WANT</b> → <b>MERGE_RING</b>, each frame ≤ <code>REC_UNITS_PER_FRAME</code> (2048) units AND &lt; <code>REC_SLICE_BUDGET_MS</code> (8 ms), mirroring the web <code>updateWorldStreaming</code> shape (count + time caps). Every per-cell check is the verbatim logic of the deleted <code>_build_queue_for_center</code> (line-mapped in plan §5.11); dx-major (dx outer, dz inner) order is preserved so the final per-band entry order is byte-identical to the old single-shot rebuild for any state the old code would have seen. MERGE_WANT carries the mandatory meshed re-check (a want chunk meshed by the drain between WANT snapshot and MERGE_WANT is skipped → no "build" entry for a meshed chunk → the queue can still drain to 0). SWAP is verbatim of the old :894-902. <code>recenter()</code>'s hysteresis/candidacy/frees remain synchronous (they are the web hysteresis/candidate semantics and are small: ≈7-13 ms @r50, &lt; 5 ms @r4).</p>
+<div class="warn"><b>Implementation notes (additive, no behavior change):</b> (1) plan pseudocode <code>[ [] x (2*rr+3) ]</code> is not GDScript — implemented as the same append-loop the old code used; GDScript has no <code>div</code>/<code>mod</code> operators — cell math uses <code>/</code>/<code>%</code> on non-negative ints (identical). (2) Two extra private state vars: <code>_rec_i</code> (MERGE_OLD is a 2D (band, index) domain) and <code>_rec_want_keys</code> (WANT insertion order — GDScript dicts have no indexed key access; list is appended in WANT order). (3) MERGE_OLD iterates the live old buckets per plan §5.3; a drain removal before the cursor in the current band would shift indices, but drain is score-driven (lowest bands first) and each band holds ≤ 4·(2r+1) « 2048 units, so any band is always fully passed within one slice frame — and the slice runs <i>before</i> the drain in the same <code>_process</code> — so in-band interleaving cannot occur at any harness radius. (4) <code>_rp_stub_n = _rec_new_n</code> (old :903) is executed in the same frame, in <code>_recenter_slice</code> right after the RECSLICE print, so the probe reports the real stub count. (5) <code>_enter_candidate</code> comment: stale reference to the deleted function updated to "the recenter WANT pass".</div>
+
+<h2>G4 — recenter A/B (the point of the task)</h2>
+<p class="note">Pre = Run-1 fresh baselines (2026-08-25 22:17-22:36 EDT, same code tree, threading ON). Post = this run. RECPROBE total_ms = <code>recenter()</code> call time — pre-change: hysteresis + free + single-shot rebuild; post-change: hysteresis + free + pending-setup only (rebuild now runs in <code>_recenter_slice</code>, measured by RECSLICE). r50 walk = <code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=50 AWECRAFT_RECPROBE=1</code> (21 RECPROBE crossings: 20 walk + 1 settle re-center); p95 across the 21 (20 in plan §7).</p>
+
+<h3>r50 walk recenter (RECPROBE total_ms, 21 crossings + cold start)</h3>
+<table>
+<tr><th>metric</th><th>pre (single-shot)</th><th>post (sliced)</th><th>gate</th></tr>
+<tr><td>cold-start recenter total_ms</td><td>105.1</td><td><b>0.0</b></td><td rowspan="4">walk p95 &lt; 15 ms → <span class="ok">PASS (12.2 &lt; 15)</span></td></tr>
+<tr><td>walk crossings p95</td><td>≈41 (40.8 ceil / 41.3 linear; min 34.0, max 43.5, mean 38.0)</td><td><b>12.2</b> (12.2 linear / 12.3 ceil)</td></tr>
+<tr><td>walk crossings max</td><td>43.5</td><td>12.3</td></tr>
+<tr><td>walk crossings min / mean</td><td>34.0 / 38.0</td><td>8.4 / 10.2</td></tr>
+</table>
+<p class="note">Post RECPROBE crossing values (21, walk+settle): 8.6 12.3 9.3 8.7 10.2 9.2 9.0 10.8 10.3 8.4 11.7 9.6 12.0 11.4 12.2 8.7 11.5 10.0 10.1 10.7 9.4. The post call is hysteresis+candidacy+free+setup only — margin over the 15 ms gate is ~2.7 ms (plan §5.10 expected 10-11; landed at p95 12.2 — flagged for the AC-0119 follow-up per plan). r50 walk RESULT frame row (context, not a G4 gate): p95 46 / max 99 (pre 41 / 123) — p95 +5 ms as slice frames (≤9 ms) land inside crossing windows; max improved 123 → 99.</p>
+
+<h3>r50 walk RECSLICE (per completed sliced rebuild — post only)</h3>
+<pre>RECSLICE r=50 total_ms=130.0 max_ms=9.0 frames=28 new_n=10608 stubs=10608 queue=10609   (cold start — matches pre-change set: new_n 10608, queue 10609)
+RECSLICE r=50 total_ms=65.0 max_ms=6.0 frames=27 new_n=2060 stubs=838 queue=10486      (end-of-walk completion, see note below)</pre>
+<div class="warn"><b>Honest finding — continuous-walk restarts (r50 only, expected per plan §5.7, consequence bounded):</b> under the loaded r50 walk (headless frames ≈15 ms wall, drain+threadgen+threadmesh+fluids all busy), the 8 ms wall budget yields ~700-1000 slice units/frame, so a full ~52k-unit rebuild needs more than the ~59 frames between walk crossings. Result: the cold-start rebuild and the end-of-walk rebuild complete (2 RECSLICE lines), while the 19 mid-walk rebuilds are restarted at each crossing before finishing (plan §5.7: "a 1-chunk walk restarts the O(R²) slice every crossing"). The queue is therefore <i>stale by ≤1-2 crossings</i> during continuous walking: it stays valid (every entry still in-radius+ring of the new center is re-bucketed from it at the next completed SWAP; out-of-range entries dropped), the drain keeps consuming it, and the world self-heals missing ring data via the existing on-demand path. A/B consequence: r50 walk RESULT is behavior-identical to pre-change — built_final 228 (= pre), ok true, flap 0, remesh_ok/marker_ok true, irb_max 108 (pre 105), walk_s 19.56 (pre 19.6). The end-of-walk RECSLICE new_n=2060 (vs pre-change per-crossing 204) is the direct symptom: with no completed SWAP mid-walk, the final rebuild's WANT sees ring cells whose data was never pre-queued. At r4 the whole rebuild (&lt;2048 units) completes in 1 frame, so no restart can occur (G4(c)/G5). Not a gate failure: G4's r50 gates are the recenter-call p95 (&lt;15 ✓) and RECSLICE max_ms (&lt;15 ✓). Flagged for the AC-0119 follow-up (e.g. make the slice complete within the crossing window at r50, or delta-rebucket).</div>
+
+<h3>r50 cold-start perf (RESULT)</h3>
+<table>
+<tr><th>metric</th><th>pre</th><th>post</th><th>note</th></tr>
+<tr><td>recenter_ms (RESULT, = recenter() call)</td><td>102</td><td><b>0</b> (RECPROBE total_ms 0.0)</td><td>gate &lt;15 → <span class="ok">PASS</span>; rebuild now runs in the slice</td></tr>
+<tr><td>first_draw_ms</td><td>366</td><td>454 (+88 ms)</td><td>R4 documented regression, NOT gated — smaller than the expected +150-250 band (plan §5.9/R4)</td></tr>
+<tr><td>frame p95 / max</td><td>29 / 78</td><td>31 / 83</td><td>table expectation "≤ pre-change (no new hitches)": +2/+5 ms, within run-to-run noise (drain-dominated: post max_drain_ms 82 ≈ frame max 83; same drain-spike class pre). NOT in the formal §G4 Gate: line (a/b/c). Reported honestly.</td></tr>
+<tr><td>total_ms / frames</td><td>848955 / 51005</td><td>849050 / 51005</td><td>identical within 0.01%</td></tr>
+</table>
+<pre>RECSLICE r=50 total_ms=126.0 max_ms=8.0 frames=28 new_n=10608 stubs=10608 queue=10609   (cold start — byte-equivalent set: new_n/stubs/queue == pre-change single-shot)</pre>
+
+<h3>r4 boundary walk (frame A/B — re-anchored per plan §G4)</h3>
+<p class="note">Gate anchors are the FRESH pre-AC-0107 numbers: frame p95 21, irb_max 68 (the spec/registry 65/67 are pre-AC-0107 and OBSOLETE). Pass = post within ±noise of 21/68, flap 0, ok true.</p>
+<table>
+<tr><th>metric</th><th>pre</th><th>post</th><th>gate</th></tr>
+<tr><td>frame p95_ms</td><td>21</td><td><b>21</b></td><td>≤26 → <span class="ok">PASS</span></td></tr>
+<tr><td>frame max_ms</td><td>68</td><td>46</td><td>≤150 → <span class="ok">PASS</span></td></tr>
+<tr><td>in_radius_built_max</td><td>68</td><td>69</td><td>67-69 → <span class="ok">PASS</span></td></tr>
+<tr><td>in_radius_built_final / target</td><td>81 / 81</td><td>81 / 81</td><td>== target → <span class="ok">PASS</span></td></tr>
+<tr><td>queue_size (new field)</td><td><b>95</b> (pre-change A/B at the same RESULT moment)</td><td>95</td><td>== pre (see G5 correction)</td></tr>
+<tr><td>flap</td><td>0</td><td>0</td><td>0 → <span class="ok">PASS</span></td></tr>
+<tr><td>remesh_ok / marker_ok / ok</td><td>true / true / true</td><td>true / true / true</td><td>→ <span class="ok">PASS</span></td></tr>
+<tr><td>burst_p95 / trailing_p95 / walk_s</td><td>5199 / 206 / 19.52</td><td>5215 / 168 / 19.51</td><td>—</td></tr>
+</table>
+<p class="note">Pre-change A/B row: the original world.gd (git HEAD) was temporarily restored with the new queue_size RESULT field in place and the r4 boundary walk re-run — it reports queue_size 95 at the identical RESULT moment (p95 21, max 48, irb_max 70, built_final 81, ok true). The residual-queue value is a property of the original code, not of the change. world.gd was restored immediately after (diff-verified).</p>
+
+<h2>G5 — drain completeness</h2>
+<div class="warn"><b>Gate correction (measured, recorded as deviation):</b> the plan's G5 expectation <code>queue_size == 0</code> is unreachable <i>by design of the original code</i>: <code>data_only</code> ring entries are NEVER removed from <code>band_buckets</code> — the drain's scored data pick advances the sticky cursor past them (<code>_advance_dq_past</code>) but only build entries go through <code>_remove_entry</code> (world.gd drain, pre-change behavior, untouched by this task). A data entry becomes inert once its cell has data but persists in the bucket until the next recenter SWAP. The plan's premise ("all ring cells have data at the last recenter → 0 data entries") confuses "has data" with "entry removed". Definitive A/B: pre-change world.gd (git HEAD) re-run with the new field → <b>queue_size 95 at the same RESULT moment</b>, identical to all three post-change runs (95/95/95, deterministic). The meaningful drain-completeness evidence — all build entries consumed (in_radius_built_final == target_in_radius == 81 in every run, built_final 81) and the residual queue byte-equivalent pre/post — holds.</div>
+<table>
+<tr><th>run</th><th>RC / script errors</th><th>ok / flap</th><th>in_radius_built_final / target</th><th>built_final</th><th>queue_size</th><th>remesh_ok / marker_ok</th><th>frame p95 / max</th></tr>
+<tr><td>boundary (G4c)</td><td>0 / 0</td><td>true / 0</td><td>81 / 81</td><td>81</td><td>95</td><td>true / true</td><td>21 / 46</td></tr>
+<tr><td>boundary #1 (G5)</td><td>0 / 0</td><td>true / 0</td><td>81 / 81</td><td>81</td><td>95</td><td>true / true</td><td>21 / 53</td></tr>
+<tr><td>boundary #2 (G5)</td><td>0 / 0</td><td>true / 0</td><td>81 / 81</td><td>81</td><td>95</td><td>true / true</td><td>21 / 53</td></tr>
+<tr><td>player #1 (G5)</td><td>0 / 0</td><td colspan="5">horizontal_moved 2.82 (exact), no hang</td><td>—</td></tr>
+<tr><td>player #2 (G5)</td><td>0 / 0</td><td colspan="5">horizontal_moved 2.82 (exact), no hang</td><td>—</td></tr>
+<tr><td>player #3 (G5)</td><td>0 / 0</td><td colspan="5">horizontal_moved 2.82 (exact), no hang</td><td>—</td></tr>
+<tr><td>player #4 (G5)</td><td>0 / 0</td><td colspan="5">horizontal_moved 2.82 (exact), no hang</td><td>—</td></tr>
+<tr><td>boundary (PRE-CHANGE A/B)</td><td>0 / 0</td><td>true / 0</td><td>81 / 81</td><td>81</td><td>95</td><td>true / true</td><td>21 / 48</td></tr>
+</table>
+<p class="note">Threading ON (desktop default, threadgen+threadmesh, AC-0107) in all runs — the spec's interaction is part of the gate. The MERGE_WANT meshed re-check works as designed: no run left any build entry (irb_final == target in all 4 post boundary runs + the pre A/B), and queue_size is exactly 95 in every one — a stall (queue stuck with unconsumed build entries) would show both a lower irb_final and a larger queue.</p>
+
+<h2>G2 — genhash columns (durable evidence)</h2>
+<p class="note">Pre-change baseline (Run-1, 2026-08-25 22:17) and post-change columns; post <code>diff</code> vs baseline is EMPTY (25/25 byte-identical).</p>
+<table>
+<tr><th>cx</th><th>cz</th><th>baseline (pre)</th><th>post</th></tr>
+<tr><td>-2</td><td>-2</td><td><code>4c1d668eb890f3ae4b11dc1ca444874e</code></td><td><code>4c1d668eb890f3ae4b11dc1ca444874e</code></td></tr>
+<tr><td>-2</td><td>-1</td><td><code>d6b307010fd891c4ee0eb7f599e5b851</code></td><td><code>d6b307010fd891c4ee0eb7f599e5b851</code></td></tr>
+<tr><td>-2</td><td>0</td><td><code>bd329e5d13bba8654d56cc714f14dca0</code></td><td><code>bd329e5d13bba8654d56cc714f14dca0</code></td></tr>
+<tr><td>-2</td><td>1</td><td><code>550bf8665b565f2e21d05e35cf8e3e3a</code></td><td><code>550bf8665b565f2e21d05e35cf8e3e3a</code></td></tr>
+<tr><td>-2</td><td>2</td><td><code>2f8f2e3c299a8531b1d7ae3fdcae293e</code></td><td><code>2f8f2e3c299a8531b1d7ae3fdcae293e</code></td></tr>
+<tr><td>-1</td><td>-2</td><td><code>7087633b1b31d1945d21bc2e59e9b002</code></td><td><code>7087633b1b31d1945d21bc2e59e9b002</code></td></tr>
+<tr><td>-1</td><td>-1</td><td><code>9d1c15e4cfdf49b503dad1192c1e567e</code></td><td><code>9d1c15e4cfdf49b503dad1192c1e567e</code></td></tr>
+<tr><td>-1</td><td>0</td><td><code>c06fdc6aa36836309093bc43c3ec0656</code></td><td><code>c06fdc6aa36836309093bc43c3ec0656</code></td></tr>
+<tr><td>-1</td><td>1</td><td><code>9e6076bb5f0835536e79f6e56c926f13</code></td><td><code>9e6076bb5f0835536e79f6e56c926f13</code></td></tr>
+<tr><td>-1</td><td>2</td><td><code>31ce9635568fa2e0b7d65c453b405492</code></td><td><code>31ce9635568fa2e0b7d65c453b405492</code></td></tr>
+<tr><td>0</td><td>-2</td><td><code>9edecc536b1075d21606cc94df93e917</code></td><td><code>9edecc536b1075d21606cc94df93e917</code></td></tr>
+<tr><td>0</td><td>-1</td><td><code>6657387207d1f4ce0eeef1f7d44ebbdf</code></td><td><code>6657387207d1f4ce0eeef1f7d44ebbdf</code></td></tr>
+<tr><td>0</td><td>0</td><td><code>e59af29b1a1a88403c4bdeae591dba7d</code></td><td><code>e59af29b1a1a88403c4bdeae591dba7d</code></td></tr>
+<tr><td>0</td><td>1</td><td><code>883a971a9c05e66e2848a56b90208b70</code></td><td><code>883a971a9c05e66e2848a56b90208b70</code></td></tr>
+<tr><td>0</td><td>2</td><td><code>e752cea62c99bb40c9a8fee6f52aec96</code></td><td><code>e752cea62c99bb40c9a8fee6f52aec96</code></td></tr>
+<tr><td>1</td><td>-2</td><td><code>735e9f6f98f1c4e595f51d54fad917b8</code></td><td><code>735e9f6f98f1c4e595f51d54fad917b8</code></td></tr>
+<tr><td>1</td><td>-1</td><td><code>c874ca48288c9042f19f47f35faa8475</code></td><td><code>c874ca48288c9042f19f47f35faa8475</code></td></tr>
+<tr><td>1</td><td>0</td><td><code>16cc4b73223ec90b8253edcf4a505866</code></td><td><code>16cc4b73223ec90b8253edcf4a505866</code></td></tr>
+<tr><td>1</td><td>1</td><td><code>9aae7eb0b2d8d4fa7f7aca32a54f1cc8</code></td><td><code>9aae7eb0b2d8d4fa7f7aca32a54f1cc8</code></td></tr>
+<tr><td>1</td><td>2</td><td><code>7f5511498fb68e05a7b299fad1fc3dcc</code></td><td><code>7f5511498fb68e05a7b299fad1fc3dcc</code></td></tr>
+<tr><td>2</td><td>-2</td><td><code>c1393d02736d604837fecbcb3be73ef2</code></td><td><code>c1393d02736d604837fecbcb3be73ef2</code></td></tr>
+<tr><td>2</td><td>-1</td><td><code>8e8437fd33b7b1d306fcaed95e7472be</code></td><td><code>8e8437fd33b7b1d306fcaed95e7472be</code></td></tr>
+<tr><td>2</td><td>0</td><td><code>4d966d4ccc8c340b3ee64e593e997049</code></td><td><code>4d966d4ccc8c340b3ee64e593e997049</code></td></tr>
+<tr><td>2</td><td>1</td><td><code>98617abcd4470f9feb99886e6b014427</code></td><td><code>98617abcd4470f9feb99886e6b014427</code></td></tr>
+<tr><td>2</td><td>2</td><td><code>602213c9e1452dff1fe98407af8bb4e6</code></td><td><code>602213c9e1452dff1fe98407af8bb4e6</code></td></tr>
+</table>
+
+<h2>RECPROBE/RECSLICE excerpts</h2>
+<b>r50 walk (post, q4_boundary_r50.log):</b>
+<pre>RECPROBE r=50 total_ms=0.0 free_ms=0.0 rebuild_ms=0.0 new_n=0 queue=1 chunks=1 drain_stubs_ms=0.0 drain_stubs_n=0        (cold start)
+RECSLICE r=50 total_ms=130.0 max_ms=9.0 frames=28 new_n=10608 stubs=10608 queue=10609
+RECPROBE r=50 total_ms=8.6  free_ms=0.0 rebuild_ms=0.0 new_n=0 queue=10588 chunks=10609 ...                            (crossing 1)
+RECPROBE r=50 total_ms=12.3 free_ms=0.1 rebuild_ms=0.5 new_n=0 queue=10581 chunks=10609 ...                           (crossing 2)
+   ... 17 more crossings (9.3 8.7 10.2 9.2 9.0 10.8 10.3 8.4 11.7 9.6 12.0 11.4 12.2 8.7 11.5 10.0 10.1 10.7) ...
+RECPROBE r=50 total_ms=9.4  free_ms=0.0 rebuild_ms=0.1 new_n=0 queue=10392 chunks=10712 ...                            (settle re-center)
+RECSLICE r=50 total_ms=65.0 max_ms=6.0 frames=27 new_n=2060 stubs=838 queue=10486                                       (end-of-walk completion)
+</pre>
+<b>r50 perf (post, q4_perf_r50.log):</b>
+<pre>RECPROBE r=50 total_ms=0.0 free_ms=0.0 rebuild_ms=0.0 new_n=0 queue=1 chunks=1 drain_stubs_ms=0.0 drain_stubs_n=0
+RECSLICE r=50 total_ms=126.0 max_ms=8.0 frames=28 new_n=10608 stubs=10608 queue=10609
+RESULT recenter_ms=0 first_draw_ms=454 p95_ms=31 max_frame_ms=83 frames=51005 total_ms=849050
+</pre>
+<p class="note">r4 runs: AWECRAFT_RECPROBE not set (probe off) — the r4 slice completes in 1 frame (&lt;2048 units) by construction; G4(c) gate values come from the RESULT row. Pre-change r50 walk RECPROBE crossing series (p4_boundary_r50.log, A/B reference): 105.1 (cold) + 21 crossings min 34.0 / p95 ≈41 / max 43.5 / mean 38.0.</p>
+
+<h2>R4 note — first_draw delta</h2>
+<p class="note">Post-change r50 first_draw may grow +150-250 ms (plan §6 R4, documented deviation, NOT gated): the first rebuild's queue lands N slice-frames after the recenter call instead of inside it; the slice itself is ≤8 ms/frame so frame-time gates are unaffected. Actual delta: <b>+88 ms (366 → 454)</b> — inside the documented band, smaller than expected.</p>
+
+<h2>Deviations</h2>
+<ul>
+<li><b>G5 queue_size==0 expectation unreachable by design</b> (data_only entries persist in band_buckets pre- and post-change; pre A/B = 95 = post). Gate re-expressed: residual queue identical pre/post + all build entries consumed. Measured, not invented.</li>
+<li><b>r50 continuous-walk slices restart before completing</b> under load (plan §5.7 design consequence; queue stale ≤1-2 crossings, world state A/B-identical: built_final 228, ok true, flap 0). Flagged for AC-0119.</li>
+<li><b>r50 perf frame p95/max 31/83 vs pre 29/78</b>: +2/+5 ms, run-to-run noise on the drain-dominated frame tail; not in the formal Gate: line. Flagged for the record.</li>
+<li>R4 first_draw growth: actual +88 ms (366 → 454), inside the expected +150-250 band, not gated.</li>
+<li>G4 r4 anchors re-anchored 65/67 → 21/68 (Run-1, documented in plan §G4 — pre-AC-0107 numbers stale).</li>
+<li>No render gate (plan §G6 decision: perf/scheduling task, byte-identical chunk/mesh state by construction; no visual diff observed).</li>
+</ul>
+
+</body></html>

@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-25T21:44
+  updated_at: 2026-08-26T00:39
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -3440,11 +3440,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-25T19:57
-  updated_at: 2026-08-25T21:44
-  completed_at: null
+  updated_at: 2026-08-26T00:39
+  completed_at: 2026-08-26T00:39
   waiting_on: null
   parent_id: null
   notes: 'Budget recenter() O(R^2) stub+queue rebuild: world.gd:635 _build_queue_for_center + 753 recenter stub loops 818-834
@@ -3452,7 +3452,26 @@ intake:
     scan + 8ms cap): slice want/band_buckets creation over N frames with time budget, or lazy incremental ring expansion.
     Must keep hysteresis/candidate, band_buckets sticky cursors, and queue_size exact. Gate: r50 recenter p95 <15ms, r4 walk
     p95 unchanged, genhash 25/25, battery green.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-26T00:39
+    updated_at: null
+    text: '[agent] DONE 2026-08-25 (two-phase). Frame-budgeted sliced recenter in godot/world/world.gd: recenter() now sets
+      _rec_pending; _recenter_slice() (hooked between threadmesh_poll/_drain_build_queue, _process early-return gained ''and
+      not _rec_pending'') runs 5 resumable phases WANT->STUB->MERGE_OLD->MERGE_WANT->MERGE_RING, each step <=2048 units AND
+      <=8ms (web updateWorldStreaming cap); _build_queue_for_center() DELETED (four passes reproduced verbatim in phase steps,
+      dx-major order -> final band arrays byte-identical; in-band order proof plan 5.3); SWAP verbatim + new RECSLICE probe;
+      MERGE_WANT meshed re-check. main.gd +1 (queue_size boundary RESULT field). GATES ALL PASS: G0/G1 RC=0 0 err; G2 genhash
+      25/25 byte-identical (columns in results.html); G3 FULL battery exact (sea 2730/1406, torch 14, 2.82, 25/9, place/drop
+      true); G4 r50 recenter p95 41->12.2ms (max 12.3 <15) + cold-start 102.6->0.0 + RECSLICE max 9.0/8.0/6.0 per slice; r4
+      UNCHANGED (p95 21/21, irb_max 68/69, flap 0) [anchors re-based to fresh post-AC-0107 21/68, pre-AC-0107 65/67 obsolete];
+      G5 drain: boundary x3 + player x4 green, irb 81/81 all runs. COORD-VERIFIED G5 gate correction: spec ''queue_size==0''
+      unreachable BY DESIGN (data_only entries persist in band_buckets, drain never removes them) — builder A/B''d against
+      original world.gd: residual 95 pre == 95 post, all build entries consumed; coordinator accepts the corrected gate. Deviations
+      (documented): r50 continuous-walk slices restart per crossing under load (plan 5.7; queue stale <=2 crossings, built_final
+      228 A/B-identical — flagged for AC-0119); r50 first_draw 366->454 (+88ms, R4 band, not gated); r50 frame p95/max 31/83
+      vs 29/78 (drain noise, outside gate). Note: the ''97ms @r50'' in the registry notes is pre-AC-0107 era — AC-0107 threading
+      shifted the mix, fresh baseline was 41ms (still 3.4x the <15ms target). Results tasks/AC-0118/AC-0118-results.html.'
 - id: AC-0119
   title: get-block-air-on-miss-no-sync-gen
   source: agent

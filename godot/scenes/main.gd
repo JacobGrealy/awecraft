@@ -5072,6 +5072,7 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		"in_radius_built_min": min_irb if min_irb < 1000000000 else 0,
 		"in_radius_built_max": max_irb,
 		"target_in_radius": (2 * r + 1) * (2 * r + 1),
+		"queue_size": int(world.queue_size),
 	})
 	get_tree().quit()
 

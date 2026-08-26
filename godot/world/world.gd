@@ -19,6 +19,8 @@ const FLUID_DIRS := [
 const BUILD_FAST_US := 15000
 const DRAIN_FRAME_BUDGET_US := 30000
 const DRAIN_MS_DEFAULT := 30
+const REC_SLICE_BUDGET_MS := 8
+const REC_UNITS_PER_FRAME := 2048
 
 var render_radius := 4
 var fluid_tick_radius := 14
@@ -51,6 +53,19 @@ var mq_i := 0
 var queue_size := 0
 var queued_keys := {}
 var drain_budget_ms := DRAIN_MS_DEFAULT
+var _rec_pending := false
+var _rec_pcx := 0
+var _rec_pcz := 0
+var _rec_phase := 0            # 0 WANT, 1 STUB, 2 MERGE_OLD, 3 MERGE_WANT, 4 MERGE_RING
+var _rec_cursor := 0           # position in the current phase's domain
+var _rec_i := 0
+var _rec_want: Dictionary = {}
+var _rec_want_keys: Array = []
+var _rec_new_buckets: Array = []
+var _rec_slice_total_ms := 0.0
+var _rec_slice_max_ms := 0.0
+var _rec_slice_frames := 0
+var _rec_new_n := 0
 var gen_budget_ms := -1
 var last_build_us := 0
 var last_pcx := 0
@@ -196,7 +211,7 @@ func _on_fluid_tick() -> void:
 func _process(_delta: float) -> void:
 	# threadmesh_inflight keeps this running while mesh tasks are in flight
 	# even when every bookkeeping list is drained (else the poll never runs).
-	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty() and threadmesh_inflight.is_empty():
+	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty() and threadmesh_inflight.is_empty() and not _rec_pending:
 		return
 	var was_active := flush_active
 	var added := false
@@ -270,6 +285,7 @@ func _process(_delta: float) -> void:
 			fluid_dirty[_key(int(cc.cx), int(cc.cz))] = true
 	threadgen_poll()
 	threadmesh_poll()
+	_recenter_slice()
 	_drain_build_queue()
 	_drain_tex_refresh()
 
@@ -835,78 +851,11 @@ func _chunk_data(cx: int, cz: int) -> Node3D:
 			print("ONDEMANDGEN %d,%d gen_ms=%d" % [cx, cz, Time.get_ticks_msec() - tg])
 	return c
 
-func _build_queue_for_center(pcx: int, pcz: int) -> void:
-	var rr := render_radius
-	var nbands := 2 * rr + 3
-	var new_buckets: Array = []
-	for i in range(nbands):
-		new_buckets.append([])
-	var want: Dictionary = {}
-	for dx in range(-rr, rr + 1):
-		for dz in range(-rr, rr + 1):
-			var cx := pcx + dx
-			var cz := pcz + dz
-			var key := _key(cx, cz)
-			var old = queued_keys.get(key)
-			if old == "build":
-				continue
-			var c = chunks.get(key)
-			if c != null and c.mesh_built:
-				continue
-			want[key] = {"cx": cx, "cz": cz, "d": absi(dx) + absi(dz)}
-	for b in range(band_buckets.size()):
-		var arr: Array = band_buckets[b]
-		for i in range(arr.size()):
-			var e: Dictionary = arr[i]
-			var key: String = e["key"]
-			var adx := absi(int(e["cx"]) - pcx)
-			var adz := absi(int(e["cz"]) - pcz)
-			if adx > rr + 1 or adz > rr + 1:
-				if not chunks.has(key):
-					queued_keys.erase(key)
-				continue
-			if want.has(key):
-				queued_keys.erase(key)
-				continue
-			new_buckets[mini(adx + adz, nbands - 1)].append(e)
-	var new_n := 0
-	var qs := 0
-	for key in want:
-		var w: Dictionary = want[key]
-		queued_keys[key] = "build"
-		new_buckets[mini(int(w["d"]), nbands - 1)].append({"key": key, "cx": int(w["cx"]), "cz": int(w["cz"]), "data_only": false})
-		new_n += 1
-	for dx in range(-(rr + 1), rr + 2):
-		for dz in range(-(rr + 1), rr + 2):
-			if maxi(absi(dx), absi(dz)) != rr + 1:
-				continue
-			var cx := pcx + dx
-			var cz := pcz + dz
-			var key := _key(cx, cz)
-			if queued_keys.has(key):
-				continue
-			var c = chunks.get(key)
-			if c != null and not c.data.is_empty():
-				continue
-			queued_keys[key] = "data"
-			new_buckets[mini(absi(dx) + absi(dz), nbands - 1)].append({"key": key, "cx": cx, "cz": cz, "data_only": true})
-			new_n += 1
-	for b in range(nbands):
-		for e2 in new_buckets[b]:
-			qs += 1
-	band_buckets = new_buckets
-	dq_b = 0
-	dq_i = 0
-	mq_b = 0
-	mq_i = 0
-	queue_size = qs
-	_rp_stub_n = new_n
-
 func _enter_candidate(key: String, c: Node3D) -> bool:
 	# AC-0080 candidacy: keep node + data + fl + edits, kill the expensive
 	# parts. col_dirty forces a collision rebuild on re-entry; mesh_built
-	# false makes re-enterers re-queue themselves as "build" in
-	# _build_queue_for_center and skips them in the flush loops.
+	# false makes re-enterers re-queue themselves as "build" in the
+	# recenter WANT pass and skips them in the flush loops.
 	c.candidate = true
 	c.cand_since = 0
 	var had_mesh: bool = c.mesh_built
@@ -1019,23 +968,21 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 			create_chunk(e.cx, e.cz, false)
 		return
 	var tr1 := Time.get_ticks_usec()
-	for dx in range(-render_radius, render_radius + 1):
-		for dz in range(-render_radius, render_radius + 1):
-			var cxr := pcx + dx
-			var czr := pcz + dz
-			if not chunks.has(_key(cxr, czr)):
-				stub_chunk(cxr, czr)
-				_rp_stub_n += 1
-	for dx in range(-(render_radius + 1), render_radius + 2):
-		for dz in range(-(render_radius + 1), render_radius + 2):
-			if maxi(absi(dx), absi(dz)) != render_radius + 1:
-				continue
-			var cxr := pcx + dx
-			var czr := pcz + dz
-			if not chunks.has(_key(cxr, czr)):
-				stub_chunk(cxr, czr)
-				_rp_stub_n += 1
-	_build_queue_for_center(pcx, pcz)
+	_rec_pending = true
+	_rec_pcx = pcx
+	_rec_pcz = pcz
+	_rec_phase = 0
+	_rec_cursor = 0
+	_rec_i = 0
+	_rec_want = {}
+	_rec_want_keys = []
+	_rec_new_buckets = []
+	for i in range(2 * rr + 3):
+		_rec_new_buckets.append([])
+	_rec_slice_total_ms = 0.0
+	_rec_slice_max_ms = 0.0
+	_rec_slice_frames = 0
+	_rec_new_n = 0
 	_rp_walk_ms += (Time.get_ticks_usec() - tr1) / 1000.0
 	if _recprobe:
 		print("RECPROBE r=%d total_ms=%.1f free_ms=%.1f rebuild_ms=%.1f new_n=%d queue=%d chunks=%d drain_stubs_ms=%.1f drain_stubs_n=%d" % [
@@ -1044,6 +991,163 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 			_rp_free_ms, _rp_walk_ms, _rp_stub_n,
 			queue_size, chunks.size(),
 			_rp_drain_stub_ms, _rp_drain_stub_n])
+
+func _recenter_slice() -> void:
+	if not _rec_pending:
+		return
+	var t0 := Time.get_ticks_msec()
+	var units := 0
+	while _rec_pending and units < REC_UNITS_PER_FRAME and Time.get_ticks_msec() - t0 < REC_SLICE_BUDGET_MS:
+		if _rec_phase == 0:
+			_rec_want_step()
+		elif _rec_phase == 1:
+			_rec_stub_step()
+		elif _rec_phase == 2:
+			_rec_merge_old_step()
+		elif _rec_phase == 3:
+			_rec_merge_want_step()
+		else:
+			_rec_merge_ring_step()
+		units += 1
+	var fm := float(Time.get_ticks_msec() - t0)
+	_rec_slice_total_ms += fm
+	_rec_slice_frames += 1
+	if fm > _rec_slice_max_ms:
+		_rec_slice_max_ms = fm
+	if not _rec_pending:
+		if _recprobe:
+			print("RECSLICE r=%d total_ms=%.1f max_ms=%.1f frames=%d new_n=%d stubs=%d queue=%d" % [
+				render_radius, _rec_slice_total_ms, _rec_slice_max_ms,
+				_rec_slice_frames, _rec_new_n, _rp_stub_n, queue_size])
+		_rp_stub_n = _rec_new_n
+
+func _rec_want_step() -> void:
+	var rr := render_radius
+	var side := 2 * rr + 1
+	if _rec_cursor >= side * side:
+		_rec_phase = 1
+		_rec_cursor = 0
+		return
+	var dx := _rec_cursor / side - rr
+	var dz := _rec_cursor % side - rr
+	var cx := _rec_pcx + dx
+	var cz := _rec_pcz + dz
+	var key := _key(cx, cz)
+	var old = queued_keys.get(key)
+	if old != "build":
+		var c = chunks.get(key)
+		if c == null or not c.mesh_built:
+			_rec_want[key] = {"cx": cx, "cz": cz, "d": absi(dx) + absi(dz)}
+			_rec_want_keys.append(key)
+	_rec_cursor += 1
+
+func _rec_stub_step() -> void:
+	var rr := render_radius
+	var side_a := 2 * rr + 1
+	var side_b := 2 * rr + 3
+	if _rec_cursor >= side_a * side_a + side_b * side_b:
+		_rec_phase = 2
+		_rec_cursor = 0
+		_rec_i = 0
+		return
+	var dx := 0
+	var dz := 0
+	if _rec_cursor < side_a * side_a:
+		dx = _rec_cursor / side_a - rr
+		dz = _rec_cursor % side_a - rr
+	else:
+		var j := _rec_cursor - side_a * side_a
+		dx = j / side_b - rr - 1
+		dz = j % side_b - rr - 1
+		if maxi(absi(dx), absi(dz)) != rr + 1:
+			_rec_cursor += 1
+			return
+	var cx := _rec_pcx + dx
+	var cz := _rec_pcz + dz
+	if not chunks.has(_key(cx, cz)):
+		stub_chunk(cx, cz)
+		_rp_stub_n += 1
+	_rec_cursor += 1
+
+func _rec_merge_old_step() -> void:
+	var rr := render_radius
+	var b := _rec_cursor
+	if b >= band_buckets.size():
+		_rec_phase = 3
+		_rec_cursor = 0
+		return
+	var arr: Array = band_buckets[b]
+	if _rec_i >= arr.size():
+		_rec_cursor = b + 1
+		_rec_i = 0
+		return
+	var e: Dictionary = arr[_rec_i]
+	_rec_i += 1
+	var key: String = e["key"]
+	var adx := absi(int(e["cx"]) - _rec_pcx)
+	var adz := absi(int(e["cz"]) - _rec_pcz)
+	if adx > rr + 1 or adz > rr + 1:
+		if not chunks.has(key):
+			queued_keys.erase(key)
+		return
+	if _rec_want.has(key):
+		queued_keys.erase(key)
+		return
+	_rec_new_buckets[mini(adx + adz, 2 * rr + 2)].append(e)
+
+func _rec_merge_want_step() -> void:
+	var rr := render_radius
+	if _rec_cursor >= _rec_want_keys.size():
+		_rec_phase = 4
+		_rec_cursor = 0
+		return
+	var key: String = _rec_want_keys[_rec_cursor]
+	_rec_cursor += 1
+	var c = chunks.get(key)
+	if c != null and c.mesh_built:
+		return
+	var w: Dictionary = _rec_want[key]
+	queued_keys[key] = "build"
+	_rec_new_buckets[mini(int(w["d"]), 2 * rr + 2)].append({"key": key, "cx": int(w["cx"]), "cz": int(w["cz"]), "data_only": false})
+	_rec_new_n += 1
+
+func _rec_merge_ring_step() -> void:
+	var rr := render_radius
+	var side := 2 * rr + 3
+	if _rec_cursor >= side * side:
+		var qs := 0
+		for b in range(_rec_new_buckets.size()):
+			for e2 in _rec_new_buckets[b]:
+				qs += 1
+		band_buckets = _rec_new_buckets
+		dq_b = 0
+		dq_i = 0
+		mq_b = 0
+		mq_i = 0
+		queue_size = qs
+		_rec_pending = false
+		_rec_want = {}
+		_rec_want_keys = []
+		_rec_new_buckets = []
+		_rec_cursor = 0
+		_rec_i = 0
+		return
+	var dx := _rec_cursor / side - rr - 1
+	var dz := _rec_cursor % side - rr - 1
+	_rec_cursor += 1
+	if maxi(absi(dx), absi(dz)) != rr + 1:
+		return
+	var cx := _rec_pcx + dx
+	var cz := _rec_pcz + dz
+	var key := _key(cx, cz)
+	if queued_keys.has(key):
+		return
+	var c = chunks.get(key)
+	if c != null and not c.data.is_empty():
+		return
+	queued_keys[key] = "data"
+	_rec_new_buckets[mini(absi(dx) + absi(dz), 2 * rr + 2)].append({"key": key, "cx": cx, "cz": cz, "data_only": true})
+	_rec_new_n += 1
 
 func get_block(x: int, y: int, z: int) -> int:
 	if y < 0 or y >= Data.HEIGHT:
