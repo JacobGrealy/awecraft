@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0124 plan — drop browser support (Windows-only)</title>
+<style>
+body{font:14px/1.5 system-ui,sans-serif;max-width:1180px;margin:24px auto;padding:0 16px;color:#222}
+h1{font-size:22px;border-bottom:3px solid #444;padding-bottom:6px}
+h2{font-size:17px;margin-top:28px;border-left:4px solid #888;padding-left:8px}
+table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13px}
+th,td{border:1px solid #bbb;padding:4px 7px;text-align:left;vertical-align:top}
+th{background:#eee}
+code,pre{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px}
+pre{background:#f4f4f4;border:1px solid #ddd;padding:10px;overflow-x:auto}
+.del{background:#fdecea}.keep{background:#e8f5e9}.edit{background:#fff8e1}
+.tag-d{background:#c62828;color:#fff;padding:1px 6px;border-radius:3px;font-size:11px}
+.tag-k{background:#2e7d32;color:#fff;padding:1px 6px;border-radius:3px;font-size:11px}
+.tag-e{background:#ef6c00;color:#fff;padding:1px 6px;border-radius:3px;font-size:11px}
+.note{background:#f0f4ff;border-left:4px solid #3f51b5;padding:8px 12px;margin:10px 0}
+</style></head><body>
+<h1>AC-0124 plan — drop browser support (Windows-only)</h1>
+<p>User direction 2026-08-26: browser/web <b>EXPORT is dropped</b>; the Windows-native game is the product.
+<b><code>index.html</code> (build <code>20260816-r12</code>) REMAINS the frozen behavior/data spec — NEVER modified.</b>
+Only the web export and web-compat code paths are removed. Run-1 = this plan (research, xhigh, 2026-08-26). Run-2 implements.</p>
+
+<!-- ==================== 1 ==================== -->
+<h2>1. Goal</h2>
+<p>Delete every browser/web export artifact and web-compat dual path (build scripts, <code>web/</code> export, 8443 daemon,
+<code>web_nothreads</code>/<code>has_feature("web")</code>/<code>FORCE_WEB</code> gates, web-only env knobs), retune for
+Windows-native (WorkerThreadPool always-on with the spawn chunk staying sync, sync <code>build_mesh</code> kept only for its
+native fallback uses, RENDER_MAX 96 proven feasible), and update the four user-directed docs — while keeping the frozen
+spec intact and all native behavior byte-identical (genhash 25/25, battery exact, perf anchors within noise).</p>
+<p><b>Audit size: 57 rows — 19 DELETE / 24 REWRITE / 14 KEEP</b> (d1/d2 re-cite b23/b2/b6; every cited line was re-verified
+against the unmodified tree by Run-1 on 2026-08-26).</p>
+
+<!-- ==================== 2 ==================== -->
+<h2>2. Files to touch — the FULL web-compat audit (a–e)</h2>
+<p class="note">This is the first-class audit the coordinator required (spec L108). Every web reference found in
+<code>godot/</code> + build system + harness + docs, each with <b>arm</b> (web / native / spec-ref), <b>action</b>
+(DELETE / KEEP / REWRITE) and a one-line reason. <b>Run-2 deletes exactly the DELETE rows and rewrites exactly the
+REWRITE rows — nothing else.</b> G1 (gate §5) greps the survivors. Row counts: <b>57 rows — 19 DELETE, 24 REWRITE, 14 KEEP</b> (d1/d2 re-cite b23/b2/b6).</p>
+
+<h3>2(a) Build / export artifacts</h3>
+<table>
+<tr><th>#</th><th>file:line</th><th>what</th><th>arm</th><th>action</th><th>reason</th></tr>
+<tr class="del"><td>a1</td><td><code>build_web.sh</code> (whole, 34 lines)</td><td>Web export script; stamps <code>core/build_id.gd</code> (restores after), <code>--export-release "Web" ../web/index.html</code></td><td>web</td><td><span class="tag-d">DELETE file</span></td><td>No web export exists anymore. (Its build_id stamping is moot: <code>build_windows.sh</code> never stamps it — on-disk <code>Build.ID</code> = <code>"dev"</code> already, menu already shows <code>AweCraft[dev]</code>.)</td></tr>
+<tr class="del"><td>a2</td><td><code>serve_web.py</code> (whole, 408 lines)</td><td>8443-ssl / 8140-http web server + <code>--daemon</code> (pidfile <code>.scratch/serve_web.pid</code>, log <code>.scratch/awecraft-web-https.log</code>); reads <code>web/ssl/cert.pem</code>+<code>key.pem</code> (:293–294)</td><td>web</td><td><span class="tag-d">DELETE file</span></td><td>No web serving. Its pidfile/log are deleted in a5.</td></tr>
+<tr class="del"><td>a3</td><td><code>web/</code> (entire dir on disk: <code>index.html</code>, <code>index.js</code>, <code>index.wasm</code>, <code>index.pck</code>, <code>index.icon.png</code>, <code>index.png</code>, <code>index.apple-touch-icon.png</code>, <code>index.audio.worklet.js</code>, <code>index.audio.position.worklet.js</code> + <code>web/ssl/{cert.pem,key.pem}</code>)</td><td>Godot web build output + one-time self-signed cert (CN=AweCraft, made 2026-08-18 08:52 UTC by a manual <code>openssl req</code> — NO repo code generates it)</td><td>web</td><td><span class="tag-d">DELETE dir</span></td><td>100% build-generated (git-ignored via <code>.gitignore:2</code>; no user-owned content; the ONLY reader of <code>web/ssl/</code> is <code>serve_web.py</code> itself, verified by repo grep). The frozen root <code>index.html</code> SPEC is a different file and is NEVER touched.</td></tr>
+<tr class="del"><td>a4</td><td><code>godot/export_presets.cfg</code> :1–42 <code>[preset.0]</code> (name <code>Web</code>, platform <code>Web</code>, <code>export_path="../web/index.html"</code>, <code>variant/thread_support=false</code>, head_include hack, PWA block)</td><td>Web export preset</td><td>web</td><td><span class="tag-d">DELETE block</span> + renumber <code>[preset.1]</code>→<code>[preset.0]</code>, <code>[preset.2]</code>→<code>[preset.1]</code> (contents byte-identical)</td><td><code>build_windows.sh</code> exports <b>by preset NAME</b> (<code>--export-release "Windows"</code> :105, <code>--export-debug "Windows (console debug)"</code> :118) — name-based, so renumbering is transparent. Proof = G5 build RC=0 + PE checks. Godot may cosmetically rewrite the file on next editor run; functional equivalence is proven by the build, that's the gate.</td></tr>
+<tr class="del"><td>a5</td><td><code>.scratch/serve_web.pid</code> (contents: <code>5</code> — STALE, pid dead) + <code>.scratch/awecraft-web-https.log</code> + <code>.scratch/awecraft-web-http.log</code></td><td>8443 daemon pidfile + logs</td><td>web</td><td><span class="tag-d">DELETE files</span> (after the §5-G5 daemon-stop step)</td><td>Daemon is gone with the server script. <b>8443 verified NOT listening at Run-1 time</b> (ss: only 5180 + 8080 live) — 5th known death (build-adjacent, ~05:26 near the AC-0119 build); see D7d for the order-of-operations and the kill-if-revived branch.</td></tr>
+<tr class="del"><td>a6</td><td><code>.gitignore</code> :2 (<code>web/</code>)</td><td>Ignore entry for the deleted dir</td><td>web</td><td><span class="tag-d">DELETE line</span></td><td>Nothing left to ignore. (Keep the <code>export/</code> line — vestigial preset-default path, not web-specific, harmless.)</td></tr>
+</table>
+
+<h3>2(b) Code gates (<code>has_feature</code> / web-feature / web-only env arms)</h3>
+<table>
+<tr><th>#</th><th>file:line</th><th>what</th><th>arm</th><th>action</th><th>reason</th></tr>
+<tr class="del"><td>b1</td><td><code>world/world.gd</code> :147</td><td><code>var tg := OS.get_environment("AWECRAFT_THREADGEN")</code></td><td>web (sync-fallback selector)</td><td><span class="tag-d">DELETE line</span></td><td>D5: the env selector dies; threaded is the only path.</td></tr>
+<tr class="del"><td>b2</td><td><code>world/world.gd</code> :148–149</td><td><code>if OS.get_environment("AWECRAFT_FORCE_WEB") == "1":</code> → print <code>THREADGEN off (web sim) …</code> (print-only branch — the flag simply never gets set, so the threadgen body below is skipped)</td><td>web (web-sim logging arm)</td><td><span class="tag-d">DELETE lines</span></td><td><code>FORCE_WEB</code> sim arm dies (D5).</td></tr>
+<tr class="del"><td>b3</td><td><code>world/world.gd</code> :150–151</td><td><code>elif tg != "0" and OS.has_feature("web_nothreads"):</code> → print <code>THREADGEN off (web_nothreads) …</code> (same shape — flag never set)</td><td>web</td><td><span class="tag-d">DELETE lines</span></td><td><code>web_nothreads</code> arm dies.</td></tr>
+<tr class="edit"><td>b4</td><td><code>world/world.gd</code> :152–161</td><td><code>elif tg != "0":</code> body = <code>AWECRAFT_THREADGEN_N</code> read (:153), <code>threadgen_max</code> sizing (:154), _N override (:155–156), cap 6 (:157), pool creation (:158), <code>threadgen = true</code> (:159), <code>TGDEBUG</code> (:160), boot print (:161)</td><td>native</td><td><span class="tag-e">REWRITE</span>: un-gate — body runs unconditionally at boot (drop the <code>if/elif</code> chain, dedent)</td><td>Pool ALWAYS on (registry). <code>_N</code> + <code>TGDEBUG</code> knobs survive (D5). Boot print stays <code>THREADGEN on threadgen=true pool=N</code>.</td></tr>
+<tr class="del"><td>b5</td><td><code>world/world.gd</code> :162</td><td><code>var tm := OS.get_environment("AWECRAFT_THREADMESH")</code></td><td>web (sync-fallback selector)</td><td><span class="tag-d">DELETE line</span></td><td>D5.</td></tr>
+<tr class="del"><td>b6</td><td><code>world/world.gd</code> :163–164</td><td><code>if OS.get_environment("AWECRAFT_FORCE_WEB") == "1":</code> → print <code>THREADMESH off (web sim) …</code> (print-only)</td><td>web</td><td><span class="tag-d">DELETE lines</span></td><td><code>FORCE_WEB</code> arm dies.</td></tr>
+<tr class="del"><td>b7</td><td><code>world/world.gd</code> :165–166</td><td><code>elif tm != "0" and OS.has_feature("web_nothreads"):</code> → print <code>THREADMESH off (web_nothreads) …</code> (print-only)</td><td>web</td><td><span class="tag-d">DELETE lines</span></td><td><code>web_nothreads</code> arm dies.</td></tr>
+<tr class="edit"><td>b8</td><td><code>world/world.gd</code> :167–182</td><td><code>elif tm != "0":</code> body = <code>AWECRAFT_THREADMESH_N</code> read (:168), sizing (:169), _N override (:170–171), cap 6 (:172), pool (:173), pre-warm comment (:174–176), pre-warm <code>Lighting._tables()</code>/<code>make_ctx()</code>/<code>_merge_atlas()</code> (:177–179), <code>threadmesh = true</code> (:180), <code>TMDEBUG</code> (:181), boot print (:182)</td><td>native</td><td><span class="tag-e">REWRITE</span>: un-gate — body runs unconditionally at boot (drop the <code>if/elif</code> chain, dedent)</td><td>Pool ALWAYS on + pre-warm every boot (registry). <code>_N</code> + <code>TMDEBUG</code> survive (D5).</td></tr>
+<tr class="keep"><td>b9</td><td><code>world/world.gd</code> :142–143</td><td><code>const PICK_POOL_CAP := 512</code> / <code>const PICK_LOOK_REFRESH_DEG := 10.0</code></td><td>native</td><td><span class="tag-k">KEEP</span></td><td>Unrelated to web (raycast pick pool / look-refresh threshold).</td></tr>
+<tr class="keep"><td>b10</td><td><code>world/world.gd</code> :200–225</td><td><code>_exit_tree</code> bounded 1s drain of in-flight worker tasks</td><td>native</td><td><span class="tag-k">KEEP</span></td><td>Deadlock fix (AC-0107) — the pools are now ALWAYS on, so the drain is more important, not less.</td></tr>
+<tr class="keep"><td>b11</td><td><code>world/world.gd</code> :424</td><td>spawn-chunk data-gen exclusion: <code>if threadgen and absi(cx) &gt; 0 and absi(cz) &gt; 0: threadgen_enqueue(...) else sync generate</code></td><td>native</td><td><span class="tag-k">KEEP</span></td><td>D3: the (0,0) chunk data-gens SYNC at boot — the player spawns into it immediately; handoff latency/determinism, not pool readiness, is the reason.</td></tr>
+<tr class="keep"><td>b12</td><td><code>world/world.gd</code> :595–598</td><td><code>if not threadmesh or (cx == 0 and cz == 0) or c.data.is_empty():</code> → sync <code>build_mesh</code></td><td>native (spawn + no-own-data) — the <code>not threadmesh</code> clause becomes dead after b8</td><td><span class="tag-e">REWRITE</span>: simplify to <code>if (cx == 0 and cz == 0) or c.data.is_empty():</code> (mechanical — the <code>not threadmesh</code> disjunct can never fire once b8 lands)</td><td>D3: spawn + empty-data fallbacks stay sync. (Spec fence: deletion is mechanical; this is the only line-level simplification in the dispatch, called out here so it isn't a surprise.)</td></tr>
+<tr class="keep"><td>b13</td><td><code>world/world.gd</code> :600–612</td><td>missing-diagonal-neighbor sync fallback (<code>nc == null or nc.data.is_empty()</code> → sync <code>build_mesh</code>) + comment</td><td>native</td><td><span class="tag-k">KEEP</span></td><td>Workers can't on-demand-generate — this path is worker-era design, not web. G4 A/B proves behavior identical.</td></tr>
+<tr class="keep"><td>b14</td><td><code>world/world.gd</code> :618–625</td><td>cap-drop sync fallback (<code>threadmesh_inflight.size() &gt;= threadmesh_max</code> → sync <code>build_mesh</code>) + <code>TMESH CAPDROP</code> debug</td><td>native</td><td><span class="tag-k">KEEP</span></td><td>In-flight cap safety (≤3 in flight); native. Fence: "the worker path itself is unchanged".</td></tr>
+<tr class="edit"><td>b15</td><td><code>world/world.gd</code> :589</td><td>comment "<code>Sync fallbacks (kill switch, spawn chunk, no own data, missing neighbor)</code>"</td><td>stale</td><td><span class="tag-e">REWRITE</span> → "<code>Sync fallbacks (spawn chunk, no own data, missing neighbor, cap-drop)</code>"</td><td>The env kill switch no longer exists.</td></tr>
+<tr class="edit"><td>b16</td><td><code>ui/menu.gd</code> :38</td><td><code>var _is_web := false</code></td><td>web</td><td><span class="tag-d">DELETE line</span></td><td>Variable has no readers after b17–b20.</td></tr>
+<tr class="edit"><td>b17</td><td><code>ui/menu.gd</code> :56</td><td><code>_is_web = OS.has_feature("web")</code></td><td>web</td><td><span class="tag-d">DELETE line</span></td><td>Last <code>has_feature("web")</code> in the file.</td></tr>
+<tr class="edit"><td>b18</td><td><code>ui/menu.gd</code> :66–67</td><td><code>if not _is_web:</code> → <code>file_dialog.access = FileDialog.ACCESS_FILESYSTEM</code></td><td>web arm = the implicit else (web default access); native arm = ACCESS_FILESYSTEM</td><td><span class="tag-e">REWRITE</span>: always <code>file_dialog.access = FileDialog.ACCESS_FILESYSTEM</code> (drop the gate)</td><td>D7a: the <b>native side is the side that survives</b> — the FileDialog must be able to browse the real filesystem for pack import on Windows.</td></tr>
+<tr class="edit"><td>b19</td><td><code>ui/menu.gd</code> :220–223</td><td><code>_on_exit_pressed()</code>: <code>if OS.has_feature("web_nothreads"): return</code> else <code>get_tree().quit()</code></td><td>web arm = the <code>return</code>; native arm = quit</td><td><span class="tag-e">REWRITE</span>: bare <code>get_tree().quit()</code></td><td>Exit must quit on Windows. (AC-0099's web no-op dies; <code>mainmenuexit</code> harness still passes — see b23.)</td></tr>
+<tr class="edit"><td>b20</td><td><code>ui/menu.gd</code> :226–229</td><td><code>_open_pack_dialog()</code>: <code>if _is_web: return</code></td><td>web</td><td><span class="tag-e">REWRITE</span>: bare <code>file_dialog.popup_centered()</code></td><td>Pack import is a Windows feature now.</td></tr>
+<tr class="edit"><td>b21</td><td><code>ui/menu.gd</code> :437–439</td><td>main-menu pack button: <code>if _is_web:</code> disabled + tooltip "<code>Unavailable in the web build</code>"</td><td>web</td><td><span class="tag-e">REWRITE</span>: button always enabled (drop the web arm)</td><td>Windows surface shows the button.</td></tr>
+<tr class="edit"><td>b22</td><td><code>ui/menu.gd</code> :580–582</td><td>options pack button: same web disabled + tooltip</td><td>web</td><td><span class="tag-e">REWRITE</span>: always enabled</td><td>Same as b21.</td></tr>
+<tr class="del"><td>b23</td><td><code>scenes/main.gd</code> :4048</td><td><code>mainmenuexit</code> harness RESULT field <code>"web_nothreads": OS.has_feature("web_nothreads"),</code></td><td>web (informational)</td><td><span class="tag-d">DELETE line</span></td><td>Field describes a dead feature; HARNESS.md row updated in d4. (The harness's exit assertion is behavior-based — <code>get_tree().quit()</code> still happens — so the test keeps passing, just with one fewer field.)</td></tr>
+<tr class="edit"><td>b24</td><td><code>scenes/main.gd</code> :106</td><td>comment "<code>(desktop + web)</code>"</td><td>stale</td><td><span class="tag-e">REWRITE</span> → "<code>(all display platforms)</code>"</td><td>Docs comment; no behavior.</td></tr>
+<tr class="keep"><td>b25</td><td><code>scenes/main.gd</code> :458, :461, :852, :856, :3477, :3481</td><td><code>webfall</code> mode / <code>_web_waterfall</code> / <code>_webfall_test</code></td><td>name collision (water <b>FALL</b> fluid test — the spec's web-fall waterfall)</td><td><span class="tag-k">KEEP</span></td><td>NOT web-platform. HARNESS.md :39 row kept too. G1 patterns deliberately do not match <code>webfall</code>.</td></tr>
+<tr class="keep"><td>b26</td><td><code>scenes/main.gd</code> :204</td><td><code>BATTSKIP</code> = generic unknown-battery-mode fallback in the mode-match</td><td>native (generic)</td><td><span class="tag-k">KEEP</span></td><td>The spec's "battery web BATTSKIP arms" is a PHANTOM — no web-specific BATTSKIP arm exists; this is the default branch for unrecognizable mode strings.</td></tr>
+<tr class="keep"><td>b27</td><td><code>world/chunk.gd</code> :1363 (<code>build_mesh</code> body, ~185 lines) + <code>:1549</code> (<code>apply_accs</code>)</td><td>sync mesh-build body + worker handoff applier</td><td>native (build_mesh serves spawn/cap-drop/missing-neighbor; apply_accs is the worker path)</td><td><span class="tag-k">KEEP both, 0 lines changed</span></td><td>D3: with the kill-switch gone, <code>build_mesh</code> remains ONLY for its native sync uses (documented in the b15 comment); the worker path (<code>_threadmesh_worker</code> → <code>apply_accs</code>) is unchanged per the fence.</td></tr>
+<tr class="edit"><td>b28</td><td><code>world/chunk.gd</code> :606</td><td>comment in the AC-0107 worker-mirrors header: "(web + AWECRAFT_THREADMESH=0 keep byte-identical behavior and output)"</td><td>stale web-ref</td><td><span class="tag-e">REWRITE</span> → "(the sync path above — spawn chunk, missing neighbor, cap-drop — keeps byte-identical behavior and output)"</td><td>Web arm + kill switch no longer exist; the new comment contains no web-compat token (G1b-clean). The only comment edit in chunk.gd — the file body is untouched.</td></tr>
+</table>
+
+<h3>2(c) Save / net quirks</h3>
+<table>
+<tr><th>#</th><th>file:line</th><th>what</th><th>arm</th><th>action</th><th>reason</th></tr>
+<tr class="keep"><td>c1</td><td><code>autoload/save.gd</code> (whole, 110 lines)</td><td>No explicit web/IndexedDB branch EXISTS — <code>user://awecraft_save_N.json</code> is a Godot-abstracted path (web export auto-mapped it to IndexedDB; native maps to the user dir). <code>clear()</code> :101 uses <code>DirAccess.remove_absolute(ProjectSettings.globalize_path(p))</code> (AC-0062 fix)</td><td>cross-platform-safe</td><td><span class="tag-k">KEEP, 0 lines changed</span></td><td>The "IndexedDB save quirk" (spec L111) has NO code arm — it was the implicit <code>user://</code> web mapping, which simply ceases to exist once the web export is gone. <code>globalize_path</code> is native-correct and stays.</td></tr>
+<tr class="keep"><td>c2</td><td>WebRTC / ENet / <code>MultiplayerPeer</code> — <b>zero occurrences in the codebase</b> (verified: repo-wide grep <code>WebRTC|ENet|MultiplayerPeer|ENetPeer</code> → 0 hits in <code>godot/</code>)</td><td>The spec's "WebRTC/ENet dual net code (web export = WebRTC path; native = ENet — keep ENet, reserve for MP)" describes code that does not exist</td><td>n/a (phantom)</td><td><span class="tag-k">NO ACTION</span> — documented in D2</td><td>The Godot web export would have used WebRTC for <code>MultiplayerPeer</code> and native would use <code>ENetPeer</code> — but <b>no multiplayer code exists yet</b> (M13 not started). "Keep ENet, reserve for MP" = the future MP task picks <code>ENetPeer</code> for native; there is nothing to delete now. Stated in the new checkpoint so Run-2's results.html can answer the spec's net item explicitly.</td></tr>
+<tr class="keep"><td>c3</td><td><code>autoload/save.gd</code> :10–104 (funcs <code>_path</code> :10, <code>file_exists</code> :14, <code>first_empty_slot</code> :18, <code>first_occupied_slot</code> :25, <code>edit_count</code> :32, <code>meta</code> :41, <code>load_full</code> :53, <code>save_now</code> :68, <code>clear</code> :98, <code>format_time</code> :104)</td><td>Save load/clear/slot logic (AC-0081/AC-0062)</td><td>native</td><td><span class="tag-k">KEEP</span></td><td>No platform branches (see c1).</td></tr>
+</table>
+
+<h3>2(d) Harness arms</h3>
+<table>
+<tr><th>#</th><th>file:line</th><th>what</th><th>arm</th><th>action</th><th>reason</th></tr>
+<tr class="del"><td>d1</td><td><code>scenes/main.gd</code> :4048</td><td><code>mainmenuexit</code> <code>web_nothreads</code> RESULT field</td><td>web</td><td><span class="tag-d">DELETE</span> (same row as b23)</td><td>See b23.</td></tr>
+<tr class="del"><td>d2</td><td><code>world/world.gd</code> :148–149, :163–164</td><td><code>AWECRAFT_FORCE_WEB=1</code> web-sim env arm (the harness's way of simulating web)</td><td>web</td><td><span class="tag-d">DELETE</span> (same rows as b2, b6)</td><td>The "web-sim" harness mode vanishes with the feature (D5). HARNESS.md gets no FORCE_WEB row — it never had one (verified).</td></tr>
+<tr class="edit"><td>d3</td><td><code>tasks/HARNESS.md</code> :50 (<code>perf</code> row env cell), :51 (<code>boundary</code> row env cell), :175 (env note)</td><td>Env listings naming <code>AWECRAFT_THREADGEN</code> / <code>AWECRAFT_THREADGEN_N</code> / <code>AWECRAFT_TGDEBUG</code></td><td>mixed</td><td><span class="tag-e">REWRITE</span>: drop the bare <code>AWECRAFT_THREADGEN</code> knob from all three cells (e.g. :50/:51 <code>AWECRAFT_THREADGEN</code>/<code>_N</code>/<code>TGDEBUG</code> → <code>AWECRAFT_THREADGEN_N</code>/<code>TGDEBUG</code>; :175 <code>AWECRAFT_THREADGEN=1 / AWECRAFT_THREADGEN_N=n / AWECRAFT_TGDEBUG=1</code> → <code>AWECRAFT_THREADGEN_N=n / AWECRAFT_TGDEBUG=1</code>); KEEP <code>AWECRAFT_THREADGEN_N</code> + <code>AWECRAFT_TGDEBUG</code></td><td>D5: deleted knob documented as deleted; native tuning knobs stay documented.</td></tr>
+<tr class="edit"><td>d4</td><td><code>tasks/HARNESS.md</code> :59 (<code>mainmenuexit</code> row)</td><td>RESULT field list includes <code>web_nothreads</code></td><td>web</td><td><span class="tag-e">REWRITE</span>: remove <code>web_nothreads</code> from the field list</td><td>Field deleted in b23.</td></tr>
+<tr class="edit"><td>d5</td><td><code>tasks/HARNESS.md</code> :101</td><td>"menu-boot is the desktop/web default"</td><td>stale</td><td><span class="tag-e">REWRITE</span> → "menu-boot is the default (all platforms)"</td><td>Docs.</td></tr>
+<tr class="keep"><td>d6</td><td><code>tasks/HARNESS.md</code> :39 (<code>webfall</code> row) + all other rows</td><td>Waterfall test row; every other harness row</td><td>native</td><td><span class="tag-k">KEEP</span></td><td>Name collision (b25). No other row names a web arm (verified: no THREADMESH/FORCE_WEB mentions exist in HARNESS.md).</td></tr>
+</table>
+
+<h3>2(e) Docs</h3>
+<table>
+<tr><th>#</th><th>file:line</th><th>what</th><th>arm</th><th>action</th><th>reason</th></tr>
+<tr class="del"><td>e1</td><td><code>AGENTS.md</code> :17</td><td>"Web build (run AFTER EVERY feature/fix): <code>./build_web.sh</code>"</td><td>web</td><td><span class="tag-d">DELETE line</span></td><td>Spec L113: delete the web build/serve lines.</td></tr>
+<tr class="del"><td>e2</td><td><code>AGENTS.md</code> :19</td><td>"Web serve (SINGLE server, no plain-HTTP twin): <code>python3 serve_web.py --ssl</code> …"</td><td>web</td><td><span class="tag-d">DELETE line</span></td><td>Same.</td></tr>
+<tr class="edit"><td>e3</td><td><code>AGENTS.md</code> :20</td><td>"reporting any running server … web <code>https://localhost:8443/</code> + <code>https://192.168.0.224:8443/</code> … windows exes …"</td><td>mixed</td><td><span class="tag-e">REWRITE</span>: drop the web half; keep the 8080 pair (<code>http://localhost:8080/AweCraft.exe</code> + <code>http://192.168.0.224:8080/AweCraft.exe</code>)</td><td>Only the windows-serve surface is reportable now.</td></tr>
+<tr class="edit"><td>e4</td><td><code>AGENTS.md</code> :23</td><td>"<code>.gitignore</code> excludes .scratch/web/export"</td><td>stale</td><td><span class="tag-e">REWRITE</span> → "<code>.gitignore</code> excludes .scratch/export/exports"</td><td>Matches the edited <code>.gitignore</code>.</td></tr>
+<tr class="edit"><td>e5</td><td><code>AGENTS.md</code> :24 (Serving-daemons bullet, item (1))</td><td>"(1) HTTPS web = <code>python3 serve_web.py --ssl --daemon</code> (pidfile … 8443)"</td><td>web</td><td><span class="tag-e">REWRITE</span>: delete item (1); renumber the 8080 item to (1) and note the 5180 tasks-webui daemon as (2); keep the "NEVER kill python server pids except via task procedure" caveat, scoped to the remaining daemons</td><td>Daemon list minus 8443 (spec L113). 5180 (AC-0046 tasks webui) is the user's live surface — stays, and is now documented here explicitly.</td></tr>
+<tr class="edit"><td>e6</td><td><code>AGENTS.md</code> :44</td><td>"Long unattended runs: work the task list end-to-end (verify → web build → next task)"</td><td>stale</td><td><span class="tag-e">REWRITE</span> → "(verify → <code>./build_windows.sh</code> → next task)"</td><td>"run AFTER EVERY feature/fix = build_windows.sh only" (spec L113).</td></tr>
+<tr class="edit"><td>e7</td><td><code>AGENTS.md</code> :47–48</td><td>"## Web test loop (user's primary surface)" section (build_web → serve_web.py → browser URLs → user tests in browser)</td><td>web</td><td><span class="tag-e">REWRITE</span> as "## Windows test loop (user's primary surface)": <code>./build_windows.sh</code> → ensure the 8080 daemon (the script (re)starts it) → report <code>http://localhost:8080/AweCraft.exe</code> + <code>http://192.168.0.224:8080/AweCraft.exe</code> → user downloads &amp; runs the exe → next task. Keep the "reproduce reasoning from the spec (<code>index.html</code>) but fix in <code>godot/</code>" sentence.</td><td>Spec L113: web test loop → Windows-exe loop.</td></tr>
+<tr class="keep"><td>e8</td><td><code>AGENTS.md</code> :4, :10, :18 + :24 item (2)</td><td>"Web game = SPEC (frozen)" header line; web-feature backlog ref; Windows-build line; the 8080 windows-export daemon item (2) inside the :24 serving-daemons bullet (survives the e5 edit, which removes item (1) only)</td><td>spec-ref / native</td><td><span class="tag-k">KEEP</span></td><td><code>index.html</code> REMAINS the spec (fence L140). The Windows build + 8080 lines already exist and stay.</td></tr>
+<tr class="edit"><td>e9</td><td><code>godot/CONTINUITY.md</code> (top)</td><td>State checkpoint block</td><td>—</td><td><span class="tag-e">REWRITE</span>: Run-2 writes a fresh top checkpoint (AC-0124 DONE with audit counts + gate results; NEXT = AC-0125 per the queue; note the 8443 daemon removal + the ENet/MP state per D2). All historical blocks (## 00e … ## 0a, §6a–6c) are HISTORY — untouched (G1 allowlist, D7e).</td><td>Spec L113 + checkpoint rule.</td></tr>
+<tr class="edit"><td>e10</td><td><code>godot/CONTINUITY.md</code> :213 (§8 "Servers" note: 8443 single-server rule)</td><td>"web serve = single 8443 … serve_web.py …"</td><td>web</td><td><span class="tag-e">REWRITE</span> → windows-serve-only note (8080 <code>serve_win_export.pid</code> started by <code>build_windows.sh</code>; 5180 tasks-webui; the 8443 daemon was removed by AC-0124)</td><td>Live-instruction line.</td></tr>
+<tr class="edit"><td>e11</td><td><code>godot/CONTINUITY.md</code> :219 (§8 process line: "after each M-task → run <code>build_web.sh</code> → user tests <code>AweCraft/web/</code>")</td><td>stale process instruction</td><td>web</td><td><span class="tag-e">REWRITE</span> → "after each task → <code>./build_windows.sh</code> → user downloads the exe via 8080"</td><td>Live-instruction line.</td></tr>
+<tr class="edit"><td>e12</td><td><code>godot/ARCHITECTURE.md</code> :10–12 (after the spec-reference line)</td><td>No web-compat section EXISTS — all "web" mentions (:10–12, :39–40, :43, :47–48, :52–57, :62) are frozen-spec fidelity references</td><td>spec-ref</td><td><span class="tag-e">REWRITE</span>: add ONE line after :12 — "Web EXPORT dropped 2026-08-26 (AC-0124): the product is Windows-native (<code>exports/windows/</code>); <code>index.html</code> remains the frozen spec and every 'web' reference below is spec-fidelity, not platform support."</td><td>Spec L113 names this file; the one-line note keeps future readers from hunting for a web-compat section. Nothing else in this file changes.</td></tr>
+<tr class="keep"><td>e13</td><td><code>REMAINING_FEATURES.html</code> (:5, :7, :23, :44)</td><td>web-feature backlog / frozen-spec references</td><td>spec-ref</td><td><span class="tag-k">KEEP, no edit</span></td><td>Out of the 4 named doc files (fence L141) and all refs are spec-fidelity. G1 patterns don't match it.</td></tr>
+<tr class="edit"><td>e14</td><td><code>AGENTS.md</code> :51 (the "Task status (canonical)" rolling line)</td><td>Historical task-status prose containing live G1c tokens: "<code>AWECRAFT_THREADMESH</code> kill switch" (AC-0107 blurb) and "delete <code>build_web.sh</code>/<code>web/</code> export/<code>serve_web.py</code> 8443/<code>web_nothreads</code> gates/<code>IndexedDB</code> quirks" (the AC-0124 NEXT blurb)</td><td>stale web-ref</td><td><span class="tag-e">REWRITE</span> (token-clean, minimal): AC-0107 blurb → "kill switch (deleted in AC-0124)"; AC-0124 NEXT blurb → "AC-0124 done — web export + web-compat paths removed (Windows-only); then AC-0125 …" (rest of the queue unchanged)</td><td>Found by Run-1 when dry-running the G1c grep on the pre-change tree: AGENTS.md:51 hits <code>build_web</code>/<code>serve_web</code>/<code>web_nothreads</code>/<code>IndexedDB</code>/<code>AWECRAFT_THREADMESH</code>. This line is the coordinator's rolling status line anyway; Run-2 makes the minimal token-clean edit and the coordinator may polish it at commit. G1c must end at 0 hits.</td></tr>
+</table>
+<p class="note"><b>Fence-protected stale reference (named, NO action):</b> <code>build_windows.sh</code> :2 — comment
+"<code>mirrors build_web.sh</code>". The spec fence (L141) says <b>NEVER touch <code>build_windows.sh</code></b>, so the comment
+stays as a historical provenance note after <code>build_web.sh</code> is deleted; it is outside every G1 grep by scope (G1 greps the
+<code>godot/</code> tree + the four live doc files + <code>.gitignore</code>, never <code>build_windows.sh</code>); Run-2 notes it in
+results.html. (The repo-root <code>exports/*.exe</code> binaries contain 7 byte-level <code>8140</code> occurrences each — binary
+coincidences inside git-ignored build output, not textual references; G1 excludes <code>exports/</code>.)</p>
+<p class="note"><b>Files with ZERO action (verified, named for the record):</b> <code>godot/project.godot</code> (no web entries),
+<code>godot/world/lighting.gd</code> (no runtime web gate — only spec-ref comments :21, :109, :194), <code>godot/core/atlas.gd</code> :192
+(spec-ref comment), <code>godot/autoload/data.gd</code> :208 (spec-ref comment), <code>godot/world/chunk.gd</code> :1475
+(<code>AWECRAFT_MERGE</code> native debug knob — KEEP), :1294 (AC-0119 spec-ref comment — KEEP) and the file body as a whole
+(:606's comment is the single REWRITE in chunk.gd — row b28), <code>build_windows.sh</code> (name-based exports — no change, fence), repo-root
+<code>plan.html</code> (2026-08-15 legacy; "WebAudio" = JS API false positive, allowlisted), <code>README</code>/CI — <b>none exist</b>
+(no <code>README*</code>, no <code>.github/</code> in the repo — the spec's "CI/README web lines" are vacuous).</p>
+
+<!-- ==================== 3 ==================== -->
+<h2>3. Frozen spec refs</h2>
+<p><code>index.html</code> build <code>20260816-r12</code> — source of truth for ALL behavior/data, frozen, NEVER modified (fence).
+This task changes no world-generation behavior, so every constant below is cited verbatim from the current source as the
+invariance reference (coordinator re-greps per the template gate):</p>
+<table>
+<tr><th>constant</th><th>verbatim (file:line)</th></tr>
+<tr><td>CHUNK</td><td><code>const CHUNK := 16</code> — <code>godot/autoload/data.gd:3</code></td></tr>
+<tr><td>HEIGHT</td><td><code>const HEIGHT := 80</code> — <code>godot/autoload/data.gd:4</code></td></tr>
+<tr><td>SEA</td><td><code>const SEA := 30</code> — <code>godot/autoload/data.gd:5</code></td></tr>
+<tr><td>biome_at() thresholds</td><td><code>godot/world/generator.gd:45–54</code>:<br>
+<code>var t := AweNoise.fbm2(float(x) / 260.0 + 900.0, float(z) / 260.0 + 900.0, seed + 21, 3) * 2.0 - 1.0</code><br>
+<code>var m := AweNoise.fbm2(float(x) / 260.0 + 1700.0, float(z) / 260.0 + 1700.0, seed + 33, 3) * 2.0 - 1.0</code><br>
+<code>if t &lt; -0.25: return "snow"</code> · <code>if t &gt; 0.35 and m &lt; 0.1: return "desert"</code> · <code>if m &gt; 0.25: return "forest"</code> · <code>return "plains"</code></td></tr>
+</table>
+
+<!-- ==================== 4 ==================== -->
+<h2>4. Data.* ids</h2>
+<p><b>None.</b> This task touches no block/item ids — no <code>data.gd</code>, no <code>generator.gd</code>, no <code>world/*</code>
+data-table lines are edited (every world/* row in §2 is a gate/comment in <code>world.gd</code>, or a comment in
+<code>chunk.gd</code>; zero lines in <code>data.gd</code>/<code>lighting.gd</code>/<code>atlas.gd</code>/<code>generator.gd</code>
+change). The guard is G2: genhash 25/25 byte-identical (main.gd:153–168 <code>_genhash_print</code>, 5×5 grid (cx,cz) ∈ [−2,2],
+default seed 44, 32-hex MD5 per line; seed 99 → all 25 lines differ). Pre-change anchor measured: 25/25 lines,
+MD5-of-lines <code>61de26e9a542a5ce2db62e7157d6c018</code>, <code>GENMS 803</code>.</p>
+
+<!-- ==================== 5 ==================== -->
+<h2>5. Harness gates — G1–G6 (verbatim from spec) + exact commands + Run-1 pre-change anchors</h2>
+<p class="note">All runs: <code>HOME=/tmp/dsh_home</code> (mkdir in same call) · engine <code>/home/angrygiant/tools/godot/godot</code>
+(4.7.1.stable) · <code>--headless --path godot</code> · ONE godot at a time · scratch logs → <code>.scratch/AC-0124/</code>.
+Pre-change anchors below were measured by Run-1 on 2026-08-26 on the UNCHANGED tree with the production default env
+(threaded-on) — i.e. exactly the configuration that survives the task. Noise band: ±15% on timing fields, exact on
+count/flag fields, unless stated.</p>
+
+<h3>G1 — headless clean (after all web arms deleted)</h3>
+<p><i>Spec (verbatim):</i> "headless clean: <code>--quit</code> RC=0 zero script errors + default logic runs RC=0 zero errors —
+AFTER all web arms are deleted (no dead <code>has_feature("web")</code> branches, no references to deleted files/presets)."</p>
+<pre># G1-1 load:   HOME=/tmp/dsh_home godot --headless --path godot --quit          → RC=0, 0× "SCRIPT ERROR"
+# G1-2 default logic run (menu-boot idle is NOT a logic run; use the battery-free smoke):
+#              AWECRAFT_LOGIC=genhash godot --headless --path godot             → RC=0, 0× "SCRIPT ERROR", 25 GENHASH lines
+# G1-3 leftover greps (Run-1 defined; patterns chosen so surviving spec-ref comments and the
+#      "webfall" waterfall test CANNOT false-positive — bare "web" is deliberately NOT a pattern):
+cd &lt;repo&gt;
+P='web_nothreads|AWECRAFT_FORCE_WEB|has_feature\("web"\)|serve_web|build_web|:8443|:8140|web/ssl|IndexedDB|indexeddb'
+grep -rnE "$P" godot/ --include='*.gd' --include='*.cfg' --include='*.godot' --exclude-dir=.godot \
+  | grep -v '^godot/CONTINUITY.md:'        # expect: 0 hits
+grep -rnE '(AWECRAFT_THREADGEN|AWECRAFT_THREADMESH)([^_A-Za-z0-9]|$)|AWECRAFT_FORCE_WEB' \
+  godot/ --include='*.gd' --exclude-dir=.godot    # expect: 0 hits (the _N / _DEBUG knobs stay)
+grep -nE "$P|(AWECRAFT_THREADGEN|AWECRAFT_THREADMESH)([^_A-Za-z0-9]|$)" \
+  AGENTS.md tasks/HARNESS.md .gitignore             # expect: 0 hits
+grep -nE "$P" godot/CONTINUITY.md                   # expect: hits ONLY in historical sections (superseded checkpoint blocks
+                                                    # ## 00e…## 00a + ## 00/## 0a/## 0b/## 0,
+                                                    # the §5 incident note at :124, §6a–6c, §6 task-list history :153–:204);
+                                                    # NONE in the NEW top checkpoint Run-2 adds, NONE in §7/§8 live lines —
+                                                    # Run-2 rewrites :213 and :219 (e11/e12) so they carry no token</pre>
+
+<h3>G2 — genhash 25/25 byte-identical</h3>
+<p><i>Spec (verbatim):</i> "genhash 25/25 byte-identical (world data untouched by the web-drop)."</p>
+<pre>AWECRAFT_LOGIC=genhash godot --headless --path godot
+# pre-change anchor (measured 2026-08-26): 25 GENHASH lines, GENMS 803,
+#   MD5 of the 25 lines = 61de26e9a542a5ce2db62e7157d6c018
+# pass = post lines byte-identical to pre (diff the saved logs); 0 script errors</pre>
+
+<h3>G3 — FULL battery, ALL values EXACT</h3>
+<p><i>Spec (verbatim):</i> "FULL battery green, ALL values EXACT: <code>AWECRAFT_BATTERY="player;interact;light;fluids;buckets"</code>
+→ ok:true; sea 2730/2730 + 1406/1406, torch_level 14, horizontal_moved 2.82, place_ok/drop_spawned true, water_on_lava 25,
+sideways_lava 9 (threaded was already the desktop default → behavior byte-identical)."</p>
+<pre>AWECRAFT_BATTERY="player;interact;light;fluids;buckets" godot --headless --path godot
+# pre-change anchor (measured 2026-08-26, exact):
+#   RESULT ok=true; player horizontal_moved=2.82 jump_peak_y=36.43 after_fly_y=37.78 is_on_floor=true
+#   interact drop_spawned=true place_ok=true breakable_id=2 after_place_cell=2 inv_grew {id:2,n:1}
+#   light torch_level=14 surface_eff=15 cave_eff=0 torch_far_after=9
+#   fluids sea_surface 2730/2730 sea_backed 1406/1406 sea_stable=true water_delta=1 shore_after [5,7]
+#           source_after [5,8] water_on_lava_result=25 sideways_lava_result=9
+#   buckets scoop_before [5,8] place_after [5,8] inv_scoop {id:140,n:1} inv_place {id:139,n:1}
+# pass = every field above byte-equal; 0 script errors</pre>
+
+<h3>G4 — perf unchanged-or-better (threaded-now-sole)</h3>
+<p><i>Spec (verbatim):</i> "perf r4 run: total_ms / p95 / build_ms / fwd_p95 within pre-change noise (Run-1 measures the fresh
+pre-change anchors — the threaded default means the numbers must land where they landed pre-task); read_sync_gen stays hard 0
+(AC-0119); RECSLICE r50 p95 ≤ ~12.2+noise (AC-0118); plus Run-1's 'RENDER_MAX 96 default feasible' check (its definition,
+headless, at the render default and/or r96)."</p>
+<p><b>Definition of "RENDER_MAX 96 default feasible" (Run-1, decision D4 — finalized from the measured run):</b> a headless
+<code>perf</code> run at <code>AWECRAFT_RADIUS=96</code> (the slider/clamp max — <code>settings.gd:6</code>
+<code>const RENDER_MAX := 96</code>, <code>menu.gd:536</code> slider max 96, <code>main.gd:521</code> settings harness asserts
+clamp max==96) in which the r96 band progresses toward steady state <b>sustainably — no hitches, no drops, no sync-gen, no
+errors — and demonstrably reaches steady state</b>. The existing harness caps the drain at 5 frames/chunk
+(<code>main.gd:4649</code> <code>max_frames = maxi(1200, (2r+1)²·5)</code> = 186,245 frames at r96 ≈ 51.7 min wall at the
+60 Hz headless tick), and the measured run hit that cap with <b>54.8% of the band meshed</b> at a steady ~6.6 chunks/s — so
+full <code>all_meshed</code> at r96 is an <b>~90–100 min progressive pop-in</b>, which is the honest user-visible cost of the
+slider max (the AC-0072 fog — <code>fog_far=1474</code> units ≈ 92-chunk radius — hides the unfinished horizon at its edge).
+Gate = RC=0, 0 script errors + RESULT: <code>frames=186245</code>, <code>staged_dropped=0</code>,
+<code>staged_pending_final=0</code>, <code>read_sync_gen=0</code> (hard), <code>fog_ok=true</code>,
+<code>chunks_built ≥ 18000</code> (≥48% of 37249 by the cap; pre = 20424), <code>p95_ms ≤ 80</code>,
+<code>max_frame_ms ≤ 160</code>, <code>total_ms ∈ [2.6M, 3.6M]</code>. Rationale: "default feasible" = a Windows user can drag
+the slider to its max and the game holds steady state (sustainable, hitch-free, bounded progression — proven for the first 55%
++ linear extrapolation), not "instant"; the r4 anchors separately prove the default (r4) is unchanged. No harness change
+needed — the cap is an observation window, not a behavior limit (the game keeps meshing in play; the harness just stops
+watching).</p>
+<table>
+<tr><th>sub-run</th><th>command (env prefix)</th><th>pre-change anchor (measured 2026-08-26, unmodified tree, threaded default)</th><th>pass condition</th></tr>
+<tr><td>perf r4</td><td><code>AWECRAFT_LOGIC=perf AWECRAFT_RADIUS=4</code></td><td>chunks=81 all_meshed=true; total_ms=6447; build_ms=332; gen_ms=693; p95_ms=43 (p50 14); max_frame_ms=68; first_draw_ms=262; drain_frames=684; <b>read_sync_gen=0</b>; create_sync_gen=1; collision_shapes=81; light_batch_calls=1; 0 script errors</td><td>total_ms ∈ [5480, 7415] (±15%); p95_ms ≤ 50; build_ms ∈ [282, 382]; max_frame_ms ≤ 78; <b>read_sync_gen == 0</b> (hard); all_meshed=true; 0 errors</td></tr>
+<tr><td>boundary r4 (fwd_p95)</td><td><code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=4</code></td><td>ok=true; p95_ms=33 (p50 14, max 73); flap=0; <b>forward_p95_ms=4840</b>; forward_max_ms=4944; trailing_p95_ms=38; burst_p95_ms=4840; irb final/max/min = 81/81/19; in_radius_present=81; loads=220 unloads=209; mem_delta_mb=29.8; marker_ok=true remesh_ok=true; 0 script errors</td><td>forward_p95_ms ∈ [4114, 5566] (±15%); p95_ms ≤ 38; max_ms ≤ 84; flap=0; irb_min ≥ 19; ok=true; 0 errors</td></tr>
+<tr><td>boundary r50 + RECSLICE (AC-0118 anchor)</td><td><code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=50 AWECRAFT_RECPROBE=1</code></td><td>RECSLICE cold (first recenter): <code>total_ms=138.0 max_ms=11.0 frames=28</code>; RECSLICE steady (cross recenter): <code>total_ms=62.0 max_ms=7.0 frames=27</code>; RECPROBE walk-recentsers ≈ 9–11 ms total; RESULT ok=true; p95_ms=44; max_ms=108; flap=0; read_sync_gen=0; create_sync_gen=1; irb final/max/min = 350/193/20; in_radius_present=10201; queue_size=10274; 0 script errors</td><td>RECSLICE cold max_ms ≤ 13 (≈12.2+noise era); RECSLICE steady max_ms ≤ 8; RESULT p95_ms ≤ 51 (±15%); max_ms ≤ 124 (±15%); flap=0; read_sync_gen==0 (hard); ok=true; 0 errors</td></tr>
+<tr><td><b>RENDER_MAX-96 definition run</b> (D4)</td><td><code>AWECRAFT_LOGIC=perf AWECRAFT_RADIUS=96</code> (background bash job — worker-bound at the 3-in-flight cap over the 37249-chunk band; ~52 min wall to the 186,245-frame harness cap; wrap in <code>timeout 7200</code> — Run-1's first 2900 s wrap was killed mid-run (RC=124, 0 errors, no RESULT); the completed 7200 s re-run is the pre value below)</td><td><b>measured (completed re-run, wall 3096 s):</b> RC=0; 0 script errors; <code>frames=186245</code> (cap hit); <code>all_meshed=false</code> (cap shape); <b><code>chunks_built=20424</b></b> (54.8% of 37249); <code>total_chunks=38025</code>; <code>render_radius=96</code>; <code>total_ms=3,093,673</code>; <code>build_ms=10436</code>; <code>gen_ms=15832</code>; <code>first_draw_ms=1582</code>; <code>recenter_ms=1</code> (amortized); <code>p95_ms=68</code> (p50 0); <b><code>max_frame_ms=135</code></b>; <code>drain_frames=41736</code>; <code>max_drain_ms=132.0</code>; <code>staged_drained=20415 staged_dropped=0 staged_pending_final=0</code>; <b><code>read_sync_gen=0</code></b>; <code>create_sync_gen=1</code>; <code>collision_shapes=20424</code>; <code>light_batch_calls=0</code>; <code>mem_after=8.97 GB</code>; <code>fog_ok=true</code></td><td>RC=0; 0 script errors; <code>frames=186245</code>; <code>all_meshed=false</code> (same cap shape); <b><code>chunks_built ≥ 18000</code></b> (pre 20424, −15% floor); <code>staged_dropped=0</code>; <code>staged_pending_final=0</code>; <b><code>read_sync_gen==0</code></b> (hard); <code>create_sync_gen=1</code>; <code>fog_ok=true</code>; <code>p95_ms ≤ 80</code>; <code>max_frame_ms ≤ 160</code>; <code>total_ms ∈ [2.6M, 3.6M]</code> (frame-cap-bounded wall ≈ 3093 s ±15%)</td></tr>
+</table>
+
+<h3>G5 — export + daemons</h3>
+<p><i>Spec (verbatim):</i> "<code>./build_windows.sh</code> RC=0 + fresh exe + BUILD.txt stamp + 8080 serve 200 on the exe;
+<code>build_web.sh</code>/<code>web/</code> export/web preset/<code>serve_web.py</code> DELETED from the tree; the 8443 daemon STOPPED
+(pid gone, port free); 5180 + 8080 daemons still serving (200) — user's live surfaces must not be disturbed."</p>
+<pre># Run-2 order (D7d: daemon stop FIRST — it needs the pidfile while it still exists;
+# the windows build LAST so its 8080 (re)start can't be disturbed mid-verify):
+# 1) 8443 daemon stop:
+P=$(cat .scratch/serve_web.pid 2>/dev/null)
+if [ -n "$P" ] && [ -d "/proc/$P" ] && tr '\0' ' ' &lt; "/proc/$P/cmdline" | grep -q serve_web.py; then kill -TERM "$P"; sleep 1; fi
+ss -Htln 'sport = :8443'    # must be EMPTY (at Run-1 time it already is — pidfile pid 5 is dead/stale)
+# 2) deletions: rm build_web.sh serve_web.py; rm -rf web/; rm -f .scratch/serve_web.pid \
+#    .scratch/awecraft-web-https.log .scratch/awecraft-web-http.log
+#    + export_presets.cfg [preset.0] removal w/ renumber (a4) + .gitignore :2 (a6)
+# 3) ./build_windows.sh   → RC=0; expect its own printed verifications: release export ok,
+#    debug-console export ok, PE checks (MZ magic, pck section, CUI subsystem), release≠debug sha256,
+#    console-wrapper byte-identity, BUILD.txt stamp; (re)starts the 8080 daemon
+# 4) survivors: ss -Htln 'sport = :5180'  → LISTEN   (tasks webui — AC-0046)
+#               ss -Htln 'sport = :8080'  → LISTEN   (windows export serve)
+#               curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/AweCraft.exe  → 200
+#               8443 re-check: still EMPTY
+# NEVER kill the 5180/8080 pids; if the 8443 daemon ever revives before this step, the kill in (1)
+# is pidfile-pid-only AFTER the cmdline check (fence L142) — the current state (already dead) takes the no-kill path.</pre>
+
+<h3>G6 — clean tree + results.html</h3>
+<p><i>Spec (verbatim):</i> "<code>git status --short</code> → only the plan-listed files + task folder;
+<code>tasks/AC-0124/AC-0124-results.html</code> self-contained (audit table: every web reference keep/remove + reason; perf A/B;
+deletion inventory; daemon state before/after; doc updates diff summary)."</p>
+<pre>git status --short   # expected (and ONLY) working-tree entries:
+#  D  build_web.sh          D  serve_web.py
+#  M  .gitignore            M  AGENTS.md            M  godot/ARCHITECTURE.md
+#  M  godot/CONTINUITY.md   M  godot/export_presets.cfg
+#  M  godot/scenes/main.gd  M  godot/ui/menu.gd     M  godot/world/chunk.gd
+#  M  godot/world/world.gd  M  tasks/HARNESS.md     ?? tasks/AC-0124/
+# (web/ is git-ignored → its deletion shows nothing; exports/ output is git-ignored → shows nothing)
+# results.html = copy of this plan's §2 audit table (57 rows) + G4 A/B numbers + deletion inventory (a1–a6)
+# + daemon state before/after (8443 dead/stale-pid → verified gone; 5180/8080 before=after pids) + doc diff summary (e1–e14).</pre>
+
+<!-- ==================== 6 ==================== -->
+<h2>6. Snapshot / render names</h2>
+<p><b>N/A — no renders for this task.</b> The spec defines no render/screenshot gate: G1–G6 are all headless + build-based,
+and G4 explicitly states the RENDER_MAX check is "headless, at the render default and/or r96" (spec L112c).
+No <code>AWECRAFT_SNAPSHOT</code> path, no <code>AWECRAFT_CAM</code> preset. The Windows artifact is proven by
+<code>build_windows.sh</code>'s internal PE/section/subsystem checks + BUILD.txt stamp (G5), not a render.
+(For reference, the standing R=1 render command shape in HARNESS.md §4 is unchanged and stays available for future tasks:
+<code>xvfb-run -a godot --path godot --rendering-method gl_compatibility</code> + <code>AWECRAFT_SNAPSHOT=… AWECRAFT_RADIUS=1</code>.)</p>
+
+<!-- ==================== 7 ==================== -->
+<h2>7. Risks / edge cases — the 7 decisions + risks</h2>
+<h3>Decisions (Run-1's, unambiguous)</h3>
+<ol>
+<li><b>D1 — Deletion inventory (exhaustive):</b> <code>build_web.sh</code>, <code>serve_web.py</code>, <code>web/</code> (incl.
+<code>web/ssl/</code> — verified: all contents build-generated or one-time-manual openssl; git-ignored; the ONLY reader of
+<code>web/ssl</code> is <code>serve_web.py</code>:293–294), <code>godot/export_presets.cfg</code> <code>[preset.0]</code> Web
+(lines 1–42; Windows presets survive byte-identical + renumbered — <code>build_windows.sh</code> exports by NAME so this is
+transparent), <code>.scratch/serve_web.pid</code> + <code>.scratch/awecraft-web-https.log</code> +
+<code>.scratch/awecraft-web-http.log</code>, <code>.gitignore</code>:2, and the 8443 daemon (already dead at Run-1 time — the stop
+is verify + cleanup, with the kill-if-revived branch in G5). <b>NO CI/README files exist in this repo</b> (no <code>README*</code>,
+no <code>.github/</code>) — that spec item is vacuous.</li>
+<li><b>D2 — Gate removals per site:</b> exactly rows b1–b8, b16–b23 (world.gd env-parse block + menu.gd <code>_is_web</code> cluster
++ main.gd:4048 field). <b>Net-code state:</b> no multiplayer code exists (zero <code>MultiplayerPeer</code>/<code>ENetPeer</code>/
+WebRTC occurrences) — "keep ENet, reserve for MP" means the future MP task (M13) will use <code>ENetPeer</code> on native;
+nothing is deleted now. Stated in the new checkpoint + results.html so the spec's net item is answered explicitly.</li>
+<li><b>D3 — WorkerThreadPool always-on + SPAWN chunk fate:</b> the pools come up unconditionally at boot (b4, b8), INCLUDING the
+pre-warm (<code>Lighting._tables()</code> / <code>make_ctx()</code> / <code>_merge_atlas()</code>). The SPAWN chunk stays
+<b>SYNC, at both levels</b>: data gen (world.gd:424 — <code>absi(cx)&gt;0 and absi(cz)&gt;0</code>) and mesh (world.gd:595,
+<code>cx==0 and cz==0</code>). Why it's safe and stays: the player spawns INTO (0,0) immediately at boot —
+<code>spawn_point()</code> → <code>_ensure_spawn_chunk()</code> → <code>surface_top()</code> reads <code>c.data</code>
+synchronously (AC-0119 made this the one legitimate boot-time sync gen); converting spawn to a pool task would force
+<code>spawn_point()</code> (a sync function called from several call sites) to await a worker handoff — an API change for a
+single chunk whose sync cost is one <code>WorldGen.generate</code> (≈ GENMS/25 ≈ 32 ms, once at boot). The sync
+<code>build_mesh</code> body (chunk.gd:1363) is KEPT for exactly its three native uses — spawn, missing-neighbor (world.gd:608),
+cap-drop (world.gd:622) — documented in the rewritten b15 comment; per the fence, the worker path itself is unchanged and the
+deletion is mechanical (the only dispatch line touched is b12's dead <code>not threadmesh</code> disjunct, called out above).</li>
+<li><b>D4 — RENDER_MAX 96 "default feasible" definition + pre value:</b> definition in §5-G4 — r96 <code>perf</code> run (the
+186,245-frame harness cap ≈ 51.7 min wall) with <b>RC=0, 0 errors, <code>staged_dropped=0</code>,
+<code>read_sync_gen=0</code> (hard), no hitch-class frames (<code>max_frame_ms ≤ 160</code>, pre 135), and
+<code>chunks_built ≥ 18000</code> (≥48% of the 37249 band by the cap; pre = <b>20424 / 54.8%</b>)</b> — i.e. sustainable,
+hitch-free, drop-free progression to steady state, proven for the first 55% with a linear extrapolation of ~90–100 min to full
+<code>all_meshed</code> (documented as the expected r96 pop-in cost; fog hides the horizon edge). Pre value MEASURED
+(completed run, wall 3096 s, total_ms 3,093,673, p95 68, first_draw 1582, recenter_ms 1 amortized, mem_after 8.97 GB).
+Rationale: 96 is the clamp max a Windows user can select; "feasible" = steady state is reachable and held without
+hitches/drops/sync-gen (not "instant" — that is the AC-0072 fog-edge design); the r4 anchors prove the DEFAULT is unchanged —
+together that IS "default feasible" for a Windows-native product. The harness cap is an observation window only; no harness
+code changes for D4.</li>
+<li><b>D5 — Env-gate cleanup:</b> DELETE the parsing of <code>AWECRAFT_THREADGEN</code>, <code>AWECRAFT_THREADMESH</code>,
+<code>AWECRAFT_FORCE_WEB</code> (b1–b8, d2) — <b>no no-op migration window</b> (registry: the threaded path is the only path;
+an inert env var is exactly the dead code this task removes). KEEP (native tuning/debug knobs, not web arms):
+<code>AWECRAFT_THREADGEN_N</code>, <code>AWECRAFT_THREADMESH_N</code>, <code>AWECRAFT_TGDEBUG</code>,
+<code>AWECRAFT_TMDEBUG</code> — documented in HARNESS.md rows d3/d4 after the edit. No code reads the deleted names anywhere
+else (verified: only world.gd:147–182 parsed them).</li>
+<li><b>D6 — Docs edits per file:</b> AGENTS.md = e1–e7 (7 rows: 2 delete-lines, 5 rewrites); godot/CONTINUITY.md = e9–e11
+(new top checkpoint by Run-2 + live lines :213, :219 — history untouched); godot/ARCHITECTURE.md = e12 (ONE added line; the
+file has no web-compat section — all its "web" mentions are frozen-spec refs and stay); tasks/HARNESS.md = d3–d5 (3 rows);
+REMAINING_FEATURES.html = none (out of the 4 named files, spec-refs only).</li>
+<li><b>D7 — Risks (a)–(e):</b></li>
+</ol>
+<ul>
+<li><b>(a) Dual-arm sites — surviving arm marked per row.</b> The dangerous ones: menu.gd:66–67 (the <b>native</b> side is the
+<code>not _is_web</code> branch — ACCESS_FILESYSTEM must survive), menu.gd:220–223 (the <code>return</code> dies, the
+<code>quit()</code> lives), world.gd:595 (the env-gate disjunct dies, the spawn/empty-data disjuncts live). Mitigation: every
+row in §2 names its arm and its survivor; G4's A/B anchors prove no behavior drift; G1's greps catch dead tokens. Fallback if a
+site is misread: the row's "reason" column states which side is native — re-read the frozen spec line referenced, revert that
+row, re-run G0–G3.</li>
+<li><b>(b) <code>web/ssl</code> blast radius.</b> Verified: the only reader is <code>serve_web.py</code> (deleted in the same
+commit-able step); the cert was one-time manual openssl (no generator code); nothing else in the tree references
+<code>cert.pem</code>/<code>key.pem</code>. Deleting <code>web/</code> cannot break any surviving path. If the user ever wants
+TLS serving again, it's a fresh manual cert — out of scope.</li>
+<li><b>(c) Preset renumbering.</b> Godot matches presets by index internally but <code>build_windows.sh</code> passes NAMES
+(<code>"Windows"</code>, <code>"Windows (console debug)"</code>) — renumbering <code>[preset.1]→[preset.0]</code>,
+<code>[preset.2]→[preset.1]</code> keeps both resolvable. Proof gate = G5: build RC=0 + its PE checks + BUILD.txt stamp.
+Fallback: if the build fails on preset lookup, restore <code>[preset.0]</code> numbering to 1-based (i.e. keep the gap) — Godot
+tolerates non-contiguous preset indices — and re-run G5.</li>
+<li><b>(d) 8443 death race.</b> The daemon is ALREADY dead (5th build-adjacent death; stale pidfile pid 5; port free at Run-1
+time) — so the default path is verify-no-kill + cleanup, and there is no kill race. Residual risk: a HUMAN revives
+<code>serve_web.py</code> between runs → handled by G5 step 1's cmdline-verified pid-only kill. Ordering: daemon stop happens
+BEFORE the deletions (it needs the pidfile) and the whole G5 sequence ends AFTER <code>./build_windows.sh</code>, so the
+windows build's 8080 (re)start and the final 5180/8080/8443 verification are one atomic final check. The known
+build-kills-daemon pattern (subagent process cleanup) is mitigated by doing the 8443 work in the same Run-2 pass, with the
+final survivor check last.</li>
+<li><b>(e) G1 leftover-grep allowlist (explicit).</b> (1) <code>index.html</code> — frozen spec, entire file; (2)
+<code>tasks/*/</code> — ALL task folders' spec/results/plan/continuity (history legitimately references web — including
+AC-0124's own docs); (3) <code>.git/</code>, <code>.godot/</code> (cache), <code>.scratch/</code> (scratch history) — excluded
+from grep scope by design; (4) <code>godot/CONTINUITY.md</code> HISTORICAL sections only — the new top checkpoint + §7/§8 live
+lines must be clean, the old checkpoint blocks/§6 history may reference web (that's history, like results.html); (5) repo-root
+<code>plan.html</code> (2026-08-15 legacy; "WebAudio" is the JS API — a false positive no pattern in G1 matches); (6)
+<code>build_windows.sh</code> :2 (fence-protected historical comment "mirrors build_web.sh" — the file may not be touched); (7)
+<code>exports/</code> (git-ignored binary build output; "8140" hits are byte coincidences). Note:
+surviving frozen-spec comments (chunk.gd:1294, lighting.gd:109/194, world.gd:1054/1564, data.gd:208, atlas.gd:192) and the
+<code>webfall</code> waterfall test are BY DESIGN still present — bare "web" is intentionally NOT a G1 pattern; only the
+web-compat tokens above are hunted.</li>
+</ul>
+<p><b>General fallback if the plan is wrong:</b> the coordinator gate re-greps §3 constants; if a cited line is stale, bounce
+Run-1. If Run-2 hits an audit row it can't apply as written (line drifted), it stops that row, logs it in
+<code>tasks/AC-0124/continuity.md</code>, and reports — no silent reinterpretation. Any incidental perf delta in G4 must be
+explained in results.html (fence: "not silently banked").</p>
+
+</body></html>
