@@ -10,7 +10,7 @@
 <h2>Goal</h2>
 <div class="fill"><b>FILL BY COORDINATOR</b> — one line, from the registry notes (marked REVIEW until confirmed). <b>REVIEW</b></div>
 <!-- FILL: Goal — one sentence. Example: "Add a torch-light-bake pass to the chunk mesher so caves are readable at night." -->
-<p><em>REVIEW — draft from notes: Remove browser/web export: delete build_web.</em></p>
+<p><b>Goal (confirmed 2026-08-26, USER direction):</b> Drop browser/web support — Windows-native is the product. Remove the web export and every <code>web_nothreads</code> dual path (build scripts, <code>web/</code> export, <code>serve_web.py</code> 8443 daemon, web save/network quirks, web-only env gates) and retune options for Windows-native only: WorkerThreadPool always on, no <code>AWECRAFT_THREADMESH</code> fallback, RENDER_MAX 96 default feasible, GDExt/C++ hot loops permitted (next: AC-0125 plans them), ENet reserved for MP. <b><code>index.html</code> REMAINS the frozen behavior/data spec — only the web EXPORT and web-compat code paths are removed.</b></p>
 <h2>Frozen spec references</h2>
 <div class="auto"><b>AUTO (fixed boilerplate — do not hand-edit)</b></div>
 <ul>
@@ -107,16 +107,42 @@
 <tr><td>boundary r4 `in_radius_built_max`</td><td>**67** (`built_final` 81, `ok` true, `flap` 0, `p95_ms` 65)</td><td>AC-0079 (look-priority scoring; pre-fix gate was 55)</td></tr>
 </table>
 <h2>Task-specific requirements</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the concrete behavior/data changes this task makes.</div>
-<!-- FILL: Task-specific requirements. Example: e.g. &quot;fluids: source water over a hole writes 0 cells (zero-write invariant)&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-26)</b> — run-1 must deliver a FULL web-compat audit (every <code>has_feature</code>/<code>web</code> reference in <code>godot/</code> + build system + harness, each with keep/remove + reason).</div>
+<ul>
+<li><b>Web export artifacts DELETED:</b> <code>build_web.sh</code>, the <code>web/</code> export directory (export output + its ssl dir), the web export preset in <code>godot/</code> (export_presets.cfg web entries), <code>serve_web.py</code> + its pidfile/log, and the running 8443 daemon is STOPPED as part of this task (user-directed removal — this is the task, not a daemon violation; 8080 windows-serve and 5180 tasks-webui stay). The frozen root <code>index.html</code> spec is NEVER touched.</li>
+<li><b>All <code>web_nothreads</code> / web-feature dual paths removed:</b> Run-1 audits every <code>OS.has_feature("web")</code>/<code>"web_nothreads"</code>/<code>is_web</code>/FORCE_WEB reference and the plan deletes the web arm at each site: <code>world.gd</code> threadgen gate (:98 era) + threadmesh gate (the <code>AWECRAFT_THREADMESH</code>/<code>FORCE_WEB</code> selection), <code>chunk.gd</code>/<code>lighting.gd</code> web gates, <code>ui/menu.gd</code> Exit-button web no-op branch, save-path IndexedDB/web quirks (AC-0081 save code), and the WebRTC/ENet dual net code (web export = WebRTC path; native = ENet — keep ENet, reserve for MP).</li>
+<li><b>Windows-native retune (per registry):</b> (a) WorkerThreadPool ALWAYS on — the sync/threaded selection env gates (<code>AWECRAFT_THREADGEN</code>/<code>AWECRAFT_THREADMESH</code>) are deleted, threaded is the only path; the spawn-chunk sync build question is Run-1&rsquo;s to decide (the spawn chunk currently builds sync — with the pool always on, state what happens to it and why the spawn is still safe); (b) no <code>AWECRAFT_THREADMESH</code> fallback — the sync fallback branch is removed (the worker path is the only mesh path; if the sync <code>build_mesh</code> body is still needed for spawn, keep ONLY that use, documented); (c) RENDER_MAX 96 default feasible — the render slider max is already 96 (AC-0072); Run-1 defines what &ldquo;default feasible&rdquo; means and proves it (a headless perf/boundary run at the render default and/or r96 smoke); (d) GDExt/C++ hot loops PERMITTED — docs-only in this task (AC-0125, next in queue, plans them); (e) ENet only for MP — the net dual branch keeps the ENet/native arm only.</li>
+<li><b>Docs + harness updated (user-directed — builder may edit these, coordinator reviews):</b> <code>AGENTS.md</code> (Commands: delete the web build/serve lines; the web test loop section → Windows-exe loop; daemon list minus 8443; &ldquo;run AFTER EVERY feature/fix&rdquo; = <code>./build_windows.sh</code> only), <code>godot/CONTINUITY.md</code> (checkpoint), <code>godot/ARCHITECTURE.md</code> (web-compat sections), <code>tasks/HARNESS.md</code> (delete web/FORCE_WEB arms incl. the mainmenuexit web no-op arm + battery web BATTSKIP arms; keep every native arm).</li>
+<li><b>Invariants:</b> world data untouched (genhash 25/25); battery values EXACT (sea 2730/1406, torch 14, horiz 2.82, lava 25/9, place/drop true) — desktop was already threaded-by-default, so behavior must be byte-identical; the AC-0118/AC-0077/AC-0119 perf wins survive (fwd_p95, recenter p95, read_sync_gen 0).</li>
+</ul>
 <h2>Task-specific gates</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the specific mode(s)/values that must be green beyond the defaults.</div>
-<!-- FILL: Task-specific gates. Example: e.g. &quot;G1: AWECRAFT_LOGIC=fluids → sea_stable true, sea_surface 2730&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-26)</b> — hard gate = zero script errors. Fresh anchors re-measured by Run-1; scaffold AUTO table is pre-web-drop era.</div>
+<ul>
+<li><b>G1:</b> headless clean: <code>--quit</code> RC=0 zero script errors + default logic runs RC=0 zero errors — AFTER all web arms are deleted (no dead <code>has_feature("web")</code> branches, no references to deleted files/presets).</li>
+<li><b>G2:</b> genhash 25/25 byte-identical (world data untouched by the web-drop).</li>
+<li><b>G3:</b> FULL battery green, ALL values EXACT: <code>AWECRAFT_BATTERY="player;interact;light;fluids;buckets"</code> → ok:true; sea 2730/2730 + 1406/1406, torch_level 14, horizontal_moved 2.82, place_ok/drop_spawned true, water_on_lava 25, sideways_lava 9 (threaded was already the desktop default → behavior byte-identical).</li>
+<li><b>G4 (perf unchanged-or-better, threaded-now-sole):</b> perf r4 run: total_ms / p95 / build_ms / fwd_p95 within pre-change noise (Run-1 measures the fresh pre-change anchors — the threaded default means the numbers must land where they landed pre-task); read_sync_gen stays hard 0 (AC-0119); RECSLICE r50 p95 ≤ ~12.2+noise (AC-0118); plus Run-1&rsquo;s &ldquo;RENDER_MAX 96 default feasible&rdquo; check (its definition, headless, at the render default and/or r96).</li>
+<li><b>G5 (export + daemons):</b> <code>./build_windows.sh</code> RC=0 + fresh exe + BUILD.txt stamp + 8080 serve 200 on the exe; <code>build_web.sh</code>/<code>web/</code> export/web preset/<code>serve_web.py</code> DELETED from the tree; the 8443 daemon STOPPED (pid gone, port free); 5180 + 8080 daemons still serving (200) — user&rsquo;s live surfaces must not be disturbed.</li>
+<li><b>G6:</b> <code>git status --short</code> → only the plan-listed files + task folder; <code>tasks/AC-0124/AC-0124-results.html</code> self-contained (audit table: every web reference keep/remove + reason; perf A/B; deletion inventory; daemon state before/after; doc updates diff summary).</li>
+</ul>
 <h2>Scope (files expected to change)</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the exact files this task will edit (helps G5 stay clean).</div>
-<!-- FILL: Scope (files expected to change). Example: e.g. &quot;godot/world/chunk.gd, godot/scenes/main.gd (fluids branch only)&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-26)</b> — Run-1 may extend with exact file:line (plan must name every touched file); coordinator approves additions before Run-2.</div>
+<ul>
+<li><b>DELETE:</b> <code>build_web.sh</code>, <code>serve_web.py</code>, <code>web/</code> (export dir incl. <code>web/ssl/</code>), web export preset entries in <code>godot/export_presets.cfg</code> (or the presets file — Run-1 confirms layout), the running 8443 daemon + its pidfile/log, any web-export CI/README lines.</li>
+<li><b>EDIT (web arm removal + retune):</b> <code>godot/world/world.gd</code> (threadgen gate ~:98, threadmesh selection, env gates), <code>godot/world/chunk.gd</code>, <code>godot/world/lighting.gd</code> (web gates), <code>godot/ui/menu.gd</code> (Exit web no-op branch), the AC-0081 save code (IndexedDB/web quirks — Run-1 locates file:line), the net code (WebRTC/ENet dual — Run-1 locates), <code>godot/scenes/main.gd</code> (harness: FORCE_WEB arm, battery web BATTSKIP arms, mainmenuexit web no-op arm, any web probes), project settings if web-only (Run-1).</li>
+<li><b>EDIT (user-directed docs):</b> <code>AGENTS.md</code>, <code>godot/CONTINUITY.md</code>, <code>godot/ARCHITECTURE.md</code>, <code>tasks/HARNESS.md</code> (coordinator reviews the doc diffs).</li>
+<li><b>Task folder:</b> <code>tasks/AC-0124/</code> (spec/plan/results/continuity).</li>
+</ul>
 <h2>Fences</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — what this task must NOT touch.</div>
+<div class="fill"><b>COORDINATOR (2026-08-26)</b></div>
+<ul>
+<li>NEVER touch the frozen root <code>index.html</code> (the behavior/data SPEC — only the web <b>export</b> and web-compat code paths go; the spec stays for all future reference and for AC-0125+).</li>
+<li>NEVER touch <code>build_windows.sh</code>, the 8080 windows-serve daemon, or the 5180 tasks-webui daemon (the user&rsquo;s live Windows surface; only the 8443 web daemon is removed, and ONLY as this task).</li>
+<li>World data untouched: genhash 25/25 identity fence + battery EXACT stable-state values (no behavior change — desktop was threaded-by-default).</li>
+<li>Do not &ldquo;fix&rdquo; unrelated perf while removing web arms — the deletion is mechanical; any incidental perf delta must be explained in results, not silently banked. The AC-0107 sync-path deletion follows the registry (&ldquo;no AWECRAFT_THREADMESH fallback&rdquo;) but the worker path itself is unchanged.</li>
+<li>Docs edits stay in the 4 named files (AGENTS.md, godot/CONTINUITY.md, godot/ARCHITECTURE.md, tasks/HARNESS.md) + this task folder — no drive-by doc rewrites.</li>
+<li>No git (coordinator commits); no TASKS.yaml edits (the user co-edits the registry live); never kill python server pids EXCEPT the 8443 daemon this task removes (pid from its own pidfile, verified to be the serve_web.py process); scratch → <code>.scratch/AC-0124/</code>.</li>
+</ul>
 <!-- FILL: Fences. Example: e.g. &quot;no .gd outside the listed scope; no TASKS.yaml edits; no git&quot; -->
 <p class="note">Scaffold generated by <code>tasks/scripts/spec_template.py</code> (no wall-clock timestamps; the only date is the registry created_at). Auto sections are reproducible byte-for-byte; fill sections are for the coordinator.</p>
 </body></html>
