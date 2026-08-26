@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0118 — plan (Run-1 research, 2026-08-25)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{color:#0a7a2a;font-weight:600}.bad{color:#b00020;font-weight:600}.note{font-size:13px;color:#555}.warn{background:#fff3cd;border-left:4px solid #e0a800;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}</style></head><body>
+<h1>AC-0118 — recenter-budgeted-amortized-rebuild — PLAN (Run-1)</h1>
+<p class="note">Run-1 research artifact, 2026-08-25. All line refs re-verified against the current tree this run (world.gd 1425 lines). Run-2: implement exactly §5, verify exactly §7.</p>
+
+<h2>1. Goal</h2>
+<p>Amortize <code>recenter()</code>&rsquo;s O(R&sup2;) stub-creation + <code>_build_queue_for_center()</code> rebuild (97 ms cold / ~34 ms per walk crossing @r50, all on the main thread at every chunk crossing) over frames with web-style count + 8 ms time budgets, so chunk-boundary crossings stop taking tens of ms while the final queued set, band order, cursor state and <code>queue_size</code> stay <b>byte-identical</b> to today&rsquo;s single-shot rebuild.</p>
+
+<h2>2. Files to touch</h2>
+<table>
+<tr><th>path</th><th>note (function/area)</th></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>ALL changes: new constants (:19-21 area), new state vars (:46-53 area), <code>_process</code> early-return :199 + slice hook :271-274, new <code>_recenter_slice()</code> + 5 phase-step funcs (new, after <code>recenter</code> :1046), <code>recenter()</code> :1021-1039 replaced by pending-state setup, <code>_build_queue_for_center()</code> :838-903 DELETED (all four passes reproduced verbatim in the phase steps, line-mapped below), RECPROBE :1040-1046 kept + new RECSLICE probe at SWAP. Drain :668-786, dispatches :430-626, <code>_enqueue_build</code> :319-344, <code>_convert_data_to_build</code> :307-317 are <b>untouched</b>.</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>ONE line: add <code>"queue_size": int(world.queue_size)</code> to the <code>_boundary_test</code> RESULT dict (:5036-5075) so G5 can assert the queue drains to exactly 0 after settle. Nothing else — RECPROBE (world.gd) already prints per-crossing recenter cost, so no new timing harness is needed for G4.</td></tr>
+<tr><td><code>tasks/AC-0118/</code></td><td>this <code>plan.html</code>; <code>continuity.md</code> (RUN 1 entries; Run-2 appends a RUN 2 section); Run-2 writes <code>AC-0118-results.html</code> with the A/B tables + RECPROBE/RECSLICE excerpts.</td></tr>
+</table>
+
+<h2>3. Frozen spec refs</h2>
+<ul>
+<li><code>index.html</code> build <code>20260816-r12</code> — source of truth for all behavior/data; NOT modified by this task.</li>
+<li>Reference amortization pattern to match: <code>index.html</code> <code>updateWorldStreaming()</code> :1295-1326 — per-frame: gen ring scan with <b>&le;3 new chunks/frame</b> (:1299-1304), mesh ring scan with <b>8 ms time cap + &le;3 chunks/frame</b> (<code>performance.now()-t0&gt;8</code> at :1310), unload beyond UNLOAD_R (:1319-1325). No per-crossing O(R&sup2;) rebuild exists in the web; the Godot port must get the same shape (bounded per-frame work under a time cap), not just the same output.</li>
+<li>World constants (re-parsed this run from the live tree):
+<table>
+<tr><th>const</th><th>value</th><th>file:line</th></tr>
+<tr><td><code>CHUNK</code></td><td><code>16</code></td><td>godot/autoload/data.gd:3</td></tr>
+<tr><td><code>HEIGHT</code></td><td><code>80</code></td><td>godot/autoload/data.gd:4</td></tr>
+<tr><td><code>SEA</code></td><td><code>30</code></td><td>godot/autoload/data.gd:5</td></tr>
+</table>
+<li><code>biome_at()</code> (godot/world/generator.gd:45-54, verbatim): <code>if t &lt; -0.25: return "snow"</code>; <code>if t &gt; 0.35 and m &lt; 0.1: return "desert"</code>; <code>if m &gt; 0.25: return "forest"</code>; <code>return "plains"</code> — untouched.</li>
+</li>
+<li>Scheduling constants that must remain <b>undisturbed</b> (godot/world/world.gd, verbatim): <code>FLUSH_FRAME_BUDGET_MS := 40</code> (:8), <code>FLUSH_MAX_PER_FRAME := 2</code> (:9), <code>BULK_LIGHT_CELLS_MAX := 3000</code> (:10), <code>FLUID_TICK_INTERVAL := 0.2</code> (:11), <code>BUILD_FAST_US := 15000</code> (:19), <code>DRAIN_FRAME_BUDGET_US := 30000</code> (:20), <code>DRAIN_MS_DEFAULT := 30</code> (:21), <code>render_radius := 4</code> default (:23), <code>PICK_POOL_CAP := 512</code> (:108), <code>PICK_LOOK_REFRESH_DEG := 10.0</code> (:109), <code>LIGHT_FLUSH_MARGIN := 2</code> (:6), <code>LIGHT_NEIGHBOR := 1</code> (:7). None is modified; the new constants below are additive.</li>
+</ul>
+
+<h2>4. Block ID (N/A — scheduling task; constants verbatim where relevant)</h2>
+<p class="ok">NONE — this task touches no block ids, no world data, no generation.</p>
+<ul>
+<li>No B_* id is read or written by any new code; the slice only re-schedules the same stub/queue work the crossing already does. World data + generation are byte-identical by construction; genhash 25/25 (G2) is the proof (it does not even build meshes).</li>
+<li>Relevant frozen constants for this task are the scheduling ones in §3 (drain budget 30000 &micro;s, flush budgets, pick cap 512) — the new slice must not perturb them; it adds three NEW constants only (below).</li>
+</ul>
+
+<h2>5. Design &amp; mechanism</h2>
+
+<h3>5.1 Mechanism choice: frame-budgeted SLICED rebuild (web-style) — recommended, over lazy incremental ring expansion</h3>
+<p><b>Web wins on behavior, and the port must match its amortization:</b> the web never rebuilds anything on a crossing — each frame it re-scans rings around the fresh center and does bounded work (3 chunks or 8 ms). The Godot equivalent of &ldquo;bounded per-frame work under a count + time cap&rdquo; is a resumable sliced rebuild of the structures the crossing must produce (stubs + band_buckets + queued_keys + queue_size).</p>
+<p><b>Why NOT lazy incremental ring expansion:</b> on a 1-chunk crossing, EVERY existing queue entry&rsquo;s Manhattan distance from the center changes by 1&ndash;2, so the entries must be re-bucketed for the new center regardless — a lazy delta either re-walks the whole O(R&sup2;) queue anyway (no win) or keeps stale band assignments, which changes the drain&rsquo;s band/cursor semantics and exposes the AC-0079 look-priority gate (r4 <code>in_radius_built_max</code> 67 / p95 65) to priority-order drift. The spec&rsquo;s byte-identical-surface requirement (band sticky cursors, queue_size exact, final-set priority order) forces the single-shot rebuild&rsquo;s exact math; slicing is the only option that spreads that exact math over frames.</p>
+<p><b>Web-parity note (budgets):</b> web caps at 3 <i>full-gen</i> chunks/frame + 8 ms. A Godot stub is a bare node (~5.3 &micro;s, AC-0076 measured) and a queue op is a dict write (~1&ndash;2 &micro;s) — ~1/30 of a web <code>ensureChunk</code>. So the Godot count caps are looser (2048 units/frame) while the <b>time cap is the web-matched governor (8 ms/frame)</b>; effective per-frame work stays &le;8 ms.</p>
+
+<h3>5.2 New state (world.gd) — exact declarations</h3>
+<pre># constants (after :21, with the other budgets)
+const REC_SLICE_BUDGET_MS := 8
+const REC_UNITS_PER_FRAME := 2048
+
+# vars (after :53, with the queue vars)
+var _rec_pending := false
+var _rec_pcx := 0
+var _rec_pcz := 0
+var _rec_phase := 0            # 0 WANT, 1 STUB, 2 MERGE_OLD, 3 MERGE_WANT, 4 MERGE_RING
+var _rec_cursor := 0           # position in the current phase's domain
+var _rec_want: Dictionary = {}
+var _rec_new_buckets: Array = []
+var _rec_slice_total_ms := 0.0
+var _rec_slice_max_ms := 0.0
+var _rec_slice_frames := 0
+var _rec_new_n := 0</pre>
+
+<h3>5.3 Phase semantics — each mirrors today&rsquo;s code line-for-line, sliced one work-unit at a time</h3>
+<table>
+<tr><th>phase</th><th>domain (cursor → cell)</th><th>per-unit work (verbatim semantics)</th></tr>
+<tr><td><b>0 WANT</b></td><td>i in 0..(2rr+1)&sup2;-1; <code>dx = i div (2rr+1) - rr</code>, <code>dz = i mod (2rr+1) - rr</code> — <b>dx-major, exactly today&rsquo;s :845-846 loop order</b> (order matters: want dict insertion order = later in-band append order)</td><td>today&rsquo;s :847-856: <code>key=_key(cx,cz)</code>; if <code>queued_keys.get(key)=="build"</code> skip; <code>c=chunks.get(key)</code>; if <code>c!=null and c.mesh_built</code> skip; else <code>_rec_want[key]={"cx":cx,"cz":cz,"d":absi(dx)+absi(dz)}</code></td></tr>
+<tr><td><b>1 STUB</b></td><td>two sub-domains in order, both exactly today&rsquo;s loops: sub-A i in 0..(2rr+1)&sup2;-1 (in-radius, dx-major :1022-1027), then sub-B i in 0..(2rr+3)&sup2;-1 keeping only <code>maxi(absi(dx),absi(dz))==rr+1</code> (ring, dx-major :1029-1037). Same cell math as above with radius rr / rr+1.</td><td>today&rsquo;s :1026-1027/:1035-1036: if <code>not chunks.has(key)</code>: <code>stub_chunk(cx,cz); _rp_stub_n += 1</code></td></tr>
+<tr><td><b>2 MERGE_OLD</b></td><td>b in 0..nbands-1, i in 0..band_buckets[b].size()-1 (live old buckets — they may have been drained/mutated during the slice; that is exactly what today&rsquo;s single-shot would have seen if the same work had happened before it)</td><td>today&rsquo;s :860-871: entry e; <code>adx=absi(e.cx-_rec_pcx)</code>, <code>adz=absi(e.cz-_rec_pcz)</code>; if <code>adx&gt;rr+1 or adz&gt;rr+1</code>: if <code>not chunks.has(key)</code> <code>queued_keys.erase(key)</code>; continue; if <code>_rec_want.has(key)</code>: <code>queued_keys.erase(key)</code>; continue; <code>_rec_new_buckets[mini(adx+adz, nbands-1)].append(e)</code></td></tr>
+<tr><td><b>3 MERGE_WANT</b></td><td>for key in <code>_rec_want</code> (dict iteration = WANT insertion order = today&rsquo;s want order)</td><td>today&rsquo;s :874-877 <b>plus one re-check</b>: <code>c=chunks.get(key)</code>; if <code>c!=null and c.mesh_built</code> <b>continue</b> (see §5.5 — impossible today, mandatory with the time gap); else <code>queued_keys[key]="build"</code>; <code>_rec_new_buckets[mini(int(w.d), nbands-1)].append({"key":key,"cx":int(w.cx),"cz":int(w.cz),"data_only":false})</code>; <code>_rec_new_n += 1</code></td></tr>
+<tr><td><b>4 MERGE_RING</b></td><td>i in 0..(2rr+3)&sup2;-1, cell as STUB sub-B, keeping only <code>maxi(absi(dx),absi(dz))==rr+1</code> — today&rsquo;s :879-882 dx-major + cheby filter, same order</td><td>today&rsquo;s :883-892: if <code>queued_keys.has(key)</code> continue; <code>c=chunks.get(key)</code>; if <code>c!=null and not c.data.is_empty()</code> continue; <code>queued_keys[key]="data"</code>; <code>_rec_new_buckets[mini(absi(dx)+absi(dz), nbands-1)].append({"key":key,"cx":cx,"cz":cz,"data_only":true})</code>; <code>_rec_new_n += 1</code></td></tr>
+</table>
+<p><b>SWAP</b> (when MERGE_RING exhausts its domain — today&rsquo;s :894-902 verbatim): <code>qs</code> = total entries in <code>_rec_new_buckets</code>; <code>band_buckets = _rec_new_buckets</code>; <code>dq_b = 0; dq_i = 0; mq_b = 0; mq_i = 0</code>; <code>queue_size = qs</code>; <code>_rp_stub_n = _rec_new_n</code>; clear <code>_rec_pending/_rec_want/_rec_new_buckets</code>; print the RECSLICE probe line (below).</p>
+<div class="warn"><b>In-band order proof (why the drain sees an identical queue):</b> each final band array = [old entries, in old (band,index) order that survive] ++ [want entries, in WANT dx-major dict order] ++ [data-ring entries, in today&rsquo;s ring-scan order] — the exact append sequence of today&rsquo;s :857-871 / :874-878 / :879-893. <code>_collect_pool</code> (:641-666) scans bands in index order taking the first 512 → identical pool → identical scored pick order (§5.7 drift analysis covers the only exotic exception).</div>
+
+<h3>5.4 <code>recenter()</code> changes (:956-1046)</h3>
+<ul>
+<li><b>Kept byte-identical:</b> :957-1008 (last_pcx/last_pcz update, probe resets, the whole two-stage hysteresis walk :969-995, <code>_strip_candidate_builds</code> + to_free loop :996-1006, <code>threadgen_poll()/threadmesh_poll()</code> :1007-1008) and the entire <code>mesh_now==false</code> branch :1009-1020 (harness fast path, r4 only, unchanged).</li>
+<li><b>Replaced</b> :1021-1039 (both stub loops + the <code>_build_queue_for_center</code> call) with the pending-state setup: <code>_rec_pending = true; _rec_pcx = pcx; _rec_pcz = pcz; _rec_phase = 0; _rec_cursor = 0; _rec_want = {}; _rec_new_buckets = [ [] x (2*rr+3) ]; _rec_slice_total_ms = 0.0; _rec_slice_max_ms = 0.0; _rec_slice_frames = 0; _rec_new_n = 0</code>.</li>
+<li>RECPROBE :1040-1046 <b>kept, same format</b> (A/B comparability): post-change its <code>total_ms</code> = hysteresis + free + setup only (pre-change it included the 97/34 ms rebuild; <code>rebuild_ms</code> will print ~0, <code>new_n</code> ~0 until SWAP — RECSLICE carries the slice numbers).</li>
+<li><b>New RECSLICE line</b> at SWAP (gated on <code>_recprobe</code>, mirroring RECPROBE style): <code>RECSLICE r=%d total_ms=%.1f max_ms=%.1f frames=%d new_n=%d stubs=%d queue=%d</code> from the <code>_rec_slice_*</code> vars + <code>_rec_new_n</code> + <code>_rp_stub_n</code> (stub count before the <code>_rp_stub_n = _rec_new_n</code> reassignment) + <code>queue_size</code>.</li>
+</ul>
+
+<h3>5.5 Why the MERGE_WANT re-check is mandatory (correctness, not optimization)</h3>
+<p>Today WANT-snapshot and queue-append happen micro-seconds apart in one call — a want chunk cannot become meshed in between. With the slice, frames elapse between phase 0 and phase 3 while the drain keeps consuming the <i>old</i> queue. If a want chunk meshes in that gap, appending its &ldquo;build&rdquo; entry would leave a meshed chunk permanently queued: <code>_collect_pool</code> skips meshed chunks (:657 <code>c.mesh_built → continue</code>) without removing the entry → <code>queue_size</code> can never reach 0 → the G5 drain-completeness gate fails and <code>_process</code> never idles. The re-check (skip already-meshed keys at append time) reproduces exactly what today&rsquo;s single-shot would have produced (it checks <code>mesh_built</code> live in WANT and never re-queues a meshed chunk). No other phase needs a re-check: WANT and MERGE_OLD read live state per unit; MERGE_RING&rsquo;s checks are live too; freed chunks can never enter WANT (freed = cheby &ge; r+2, outside the in-radius domain).</p>
+
+<h3>5.6 <code>_process</code> integration (:196-274)</h3>
+<ul>
+<li>Early-return :199: append <code> and not _rec_pending</code> — the slice must keep advancing even when every bookkeeping list (incl. the old queue) is momentarily empty. This is the stall guard (§6 R1).</li>
+<li>Hook: insert <code>_recenter_slice()</code> between <code>threadmesh_poll()</code> (:272) and <code>_drain_build_queue()</code> (:273) — a SWAP landing in this frame is consumed by the drain in the same frame.</li>
+</ul>
+<pre>func _recenter_slice() -> void:
+    if not _rec_pending:
+        return
+    var t0 := Time.get_ticks_msec()
+    var units := 0
+    while _rec_pending and units &lt; REC_UNITS_PER_FRAME and Time.get_ticks_msec() - t0 &lt; REC_SLICE_BUDGET_MS:
+        if _rec_phase == 0: _rec_want_step()
+        elif _rec_phase == 1: _rec_stub_step()
+        elif _rec_phase == 2: _rec_merge_old_step()
+        elif _rec_phase == 3: _rec_merge_want_step()
+        else: _rec_merge_ring_step()
+        units += 1
+    if _rec_pending:
+        var fm := float(Time.get_ticks_msec() - t0)
+        _rec_slice_total_ms += fm
+        _rec_slice_frames += 1
+        if fm &gt; _rec_slice_max_ms:
+            _rec_slice_max_ms = fm
+    elif _recprobe:
+        print("RECSLICE r=%d total_ms=%.1f max_ms=%.1f frames=%d new_n=%d stubs=%d queue=%d" % [...])</pre>
+<p>Each <code>*_step()</code> processes exactly one work unit (one cell/entry) and, on domain exhaustion, advances <code>_rec_phase</code> (phase 4&rsquo;s exhaustion performs the SWAP). All five step funcs use <code>_rec_pcx/_rec_pcz</code> as the center and <code>render_radius</code> live.</p>
+
+<h3>5.7 Crossing mid-slice (player crosses again while a slice is pending) — exact rules</h3>
+<ol>
+<li><code>recenter()</code> re-runs: hysteresis/candidacy/frees run synchronously and exactly (they operate on <code>chunks</code>, which the slice has not corrupted), then the setup block <b>resets the pending state to the new center</b> (phase 0, cursor 0, fresh empty <code>_rec_want</code>/<code>_rec_new_buckets</code>). There is exactly ONE pending rebuild at any time — no double-schedule, no stacked cursors, the new center is authoritative from frame 1 (<code>last_pcx/last_pcz</code> already updated, so the drain&rsquo;s scores use the new center immediately).</li>
+<li>Partially created stubs stay (they are valid scene nodes; the fresh STUB walk skips existing chunks via <code>chunks.has</code>). Partial <code>_rec_want</code>/<code>_rec_new_buckets</code> are discarded (recomputed for the new center).</li>
+<li>The <b>old</b> <code>band_buckets</code> + <code>queued_keys</code> are untouched until the new SWAP, so work that entered the old queue mid-slice (drain consumption via <code>_remove_entry</code>, new entries via <code>_enqueue_build</code> :319-344 from edits, <code>_convert_data_to_build</code> kind flips, <code>_tm_retrigger</code> re-enqueues) is folded in by MERGE_OLD walking the live old buckets — precisely what today&rsquo;s single-shot rebuild would have done had that work existed when it ran.</li>
+<li>AC-0082 (threadgen) / AC-0107 (threadmesh) dedup stays authoritative throughout: in-flight keys are deduped at dispatch (keyed maps :79-80, :94-95); the slice neither re-enqueues in-flight work nor touches the dispatch state. A handoff landing mid-slice updates the chunk&rsquo;s data; the next drain pick / SWAP sees it (the <code>_rec_want</code> meshed-re-check and MERGE_RING&rsquo;s <code>data.is_empty()</code> check both read live state).</li>
+</ol>
+
+<h3>5.8 Byte-identical surface (what must NOT change)</h3>
+<ul>
+<li>Hysteresis/candidate semantics: world.gd :969-995 + <code>_enter_candidate</code> :905-931 + <code>_strip_candidate_builds</code> :934-953 — untouched, synchronous, run at recenter-call time (measured ≈7-8 ms @r50, §5.10).</li>
+<li>Band sticky cursors: <code>dq_b/dq_i/mq_b/mq_i</code> reset to 0 at SWAP exactly as :898-901; <code>_advance_dq_past</code> :762-777 and the drain&rsquo;s cursor parking :744-750 untouched. (mq_* is write-only today — kept for parity, reset for parity.)</li>
+<li><code>queue_size</code> accounting: only <code>_enqueue_build</code> (+1), <code>_remove_entry</code> (−1, :778-784), <code>_strip_candidate_builds</code> (−1), and the SWAP (= qs) change it — same as today, plus the SWAP replaces the old :902 write.</li>
+<li>Priority order of the final queued set: §5.3 in-band order proof; <code>_entry_score</code> :627-640, <code>_collect_pool</code> :641-666, drain :668-761 untouched → identical picks.</li>
+<li>Drain + dispatch: :513-836 untouched (fence-compliant: AC-0082 dedup/cap/stale-drop and AC-0107 threadmesh dispatch byte-identical).</li>
+</ul>
+
+<h3>5.9 Drain integration — no cap starvation, no re-trigger storm</h3>
+<ul>
+<li><b>During the slice</b> the drain operates on the old (still valid) buckets: every old entry&rsquo;s chunk node still exists except freed chunks, whose entries were already stripped/dropped by the synchronous hysteresis+strip before the slice starts; a stray r+1 &ldquo;data&rdquo; entry for a freed chunk is skipped out-of-radius by the drain&rsquo;s data pick (:729) and dropped by the SWAP&rsquo;s MERGE_OLD — today&rsquo;s exact behavior.</li>
+<li><b>Feed pacing unchanged:</b> the drain&rsquo;s unit budget (1 unit, or 3 during <code>_startup_pending()</code> :694-698, gated by <code>DRAIN_FRAME_BUDGET_US</code>) and its handoff to threadgen (<code>_gen_unit</code> :386, cap 6) / threadmesh (<code>_mesh_dispatch</code> :546, cap 3, dedup) run on the old queue during the slice, then on the swapped queue — no frame starves the pipeline; the slice only delays availability of the NEW entries by the time-to-SWAP (1-2 frames @r4, ≈15-25 frames @r50 cold start), and the old queue feeds meanwhile. AC-0107&rsquo;s finding (workers feed-paced, inflight=1) is preserved because the feed rate is unchanged.</li>
+<li><b>No re-trigger storm:</b> the slice re-queues only chunks that are not meshed and not already <code>queued_keys=="build"</code> — identical dedup set to today&rsquo;s single-shot. <code>_tm_retrigger</code>/<code>_tg</code> stale-drop paths see the same per-key in-flight state (untouched).</li>
+<li><b>Spawn-chunk sync</b> (threadmesh always builds (0,0) sync, :551-554) is independent of queue timing. <b>First-frame coverage</b> @r50: today ALL stubs exist in the recenter frame but the queue (hence any data gen) is ready at +97 ms; post-change the queue is ready at +time-to-SWAP (≈250-400 ms cold start). Both worlds show identical visuals in the gap (unstubbed/unbuilt = no mesh = invisible; collision/get_block/fluid read 0 either way — a missing in-radius cell, if reached by the drain or player first, is created on demand exactly as today&rsquo;s <code>_chunk_data</code> :816-836 does). No new holes appear; the final set is identical (it just arrives over more frames, as the spec permits).</li>
+</ul>
+
+<h3>5.10 Hysteresis stays synchronous — measured budget</h3>
+<p><b>Fresh measurement (Run-1 this run, P4):</b> walk crossing <code>total_ms</code> 34.0-43.5 = <code>rebuild_ms</code> 26.7-34.7 + <code>free_ms</code> 0.0-0.1 + <b>residual (hysteresis walk over ~10 712 chunks + frees + polls + setup + probe) = 7.2-13.3 ms, mean 8.9, p95-ish 10.3</b>. Post-change the <code>recenter()</code> call IS that residual → expected call p95 ≈ 10-11 ms, inside the &lt;15 ms gate with ~4 ms margin (note: the cold-start call is cheaper — empty chunk map → hysteresis ≈ 0, expect 5-8 ms of setup/polls). <b>Contingency (only if a POST-change measurement shows a crossing call &gt; 15 ms):</b> add phase -1 (sliced hysteresis: same per-chunk logic, cursor over <code>chunks</code> keys, to_free applied at phase end) — do NOT do this pre-emptively; the spec wants hysteresis byte-identical and the fresh measurement says it fits. If Run-2 lands at 13-15 ms, that is still PASS but note the margin in results.html and flag to the coordinator for the AC-0119 follow-up.</p>
+
+<h3>5.11 <code>_build_queue_for_center</code> deletion</h3>
+<p>Its sole caller is recenter :1038. All four of its passes are reproduced verbatim in the phase steps (line map: :845-856→WANT, :1022-1037 (recenter stub loops)→STUB, :857-871→MERGE_OLD, :874-878→MERGE_WANT (+re-check), :879-893→MERGE_RING, :894-902→SWAP). Delete the function :838-903 to avoid a second copy of the rebuild math. No other references (verified: only :1038 calls it).</p>
+
+<h2>6. Risks &amp; mitigations</h2>
+<table>
+<tr><th>#</th><th>risk</th><th>mitigation / why it&rsquo;s contained</th></tr>
+<tr><td>R1</td><td><b>Stall</b> — slice never completes → queue never empties / world never finishes streaming.</td><td>The slice is a finite-state walk with a per-frame <i>minimum</i> of 1 unit whenever <code>_rec_pending</code> (budget caps the maximum, never the minimum) and <code>_process</code> is guaranteed to run by the :199 early-return fix (§5.6). Domains are bounded ((2rr+1)&sup2; + (2rr+3)&sup2; + queue size + ring). G5 asserts the boundary walk settles with <code>queue_size==0</code> — a stall would hang the harness&rsquo; settle loop and the run would visibly not finish (3000-frame caps print BOUNDARYCORE warnings). No render/visual gate is at risk (no mesh content changes).</td></tr>
+<tr><td>R2</td><td><b>Double-recenter storm</b> — crossings mid-slice stack work / lose the new center.</td><td>Single <code>_rec_pending</code> state; a new crossing resets it to the new center (§5.7). No timer, no second scheduler. The drain budget (3 units during <code>_startup_pending</code>) is unchanged, so pick rates don&rsquo;t spike. RECPROBE/RECSLICE per-crossing lines make any storm directly visible in the A/B logs.</td></tr>
+<tr><td>R3</td><td><b>Priority-order drift</b> — drain sees a different final set / order → AC-0079 look-priority gate moves (r4 irb_max 67 / p95 65).</td><td>§5.3 in-band order proof: final band arrays are byte-identical to today&rsquo;s single-shot rebuild (same append order), so <code>_collect_pool</code> sees the same pool and <code>_entry_score</code> picks identically. The ONE exotic exception: an <code>_enqueue_build</code> landing in the old buckets during the slice window (a block edit during the ~1-2 frame r4 rebuild) re-buckets via MERGE_OLD instead of entering WANT — the final SET is identical; only an equal-score tie-break within one band could differ. The r4 harness makes no edits during its rebuild (marker set before the walk, rebuild done in 1 frame) → gate exposure is nil in practice; G4 re-runs the r4 walk to confirm.</td></tr>
+<tr><td>R4</td><td><b>First-frame coverage</b> @r50 — player sees holes appear that didn&rsquo;t exist before.</td><td>§5.9: unstubbed/unbuilt cells are visually identical to today&rsquo;s unbuilt stubs (no mesh). The spawn/center chunk is stubbed within the first slice frames (STUB sub-A dx-major reaches dx=0 mid-walk; at r4 everything lands in 1 frame). <code>first_draw_ms</code> @r50 may regress ≈+150-250 ms (cold start, 280 ms → ~450 ms expected) — measured in the A/B, documented, NOT a spec gate (the gate is per-frame recenter cost + r4 unchanged).</td></tr>
+<tr><td>R5</td><td><b>Thread interplay</b> — AC-0082/AC-0107 dispatch disturbed (cap starvation, stale-drop churn, dedup gaps).</td><td>Fence-compliant: dispatch code untouched. Handoffs land on the main thread as today; the slice&rsquo;s live-state re-checks (MERGE_WANT meshed check, MERGE_RING data check) read the same chunk state the handoffs write. Stale-drop (inst/instance_id + data compare) is queue-timing-agnostic. G5 flake loop (boundary r4 ×2 + player ×4, threading ON by default desktop) is the direct proof.</td></tr>
+<tr><td>R6</td><td><b>Hysteresis cost</b> exceeds 15 ms at r50 in the fresh measurement.</td><td>§5.10 contingency: slice it (phase -1) only if measured; AC-0079 data says ≈7-8 ms. The fresh pre-change RECPROBE breakdown in §7 settles it before Run-2 codes anything.</td></tr>
+<tr><td>R7</td><td><b>Probe-only prints</b> change stdout the harness greps.</td><td>RECPROBE keeps its exact format (A/B comparable); RECSLICE is a new prefix the harness does not parse (RESULT parsing is by the <code>RESULT</code> marker). No harness behavior depends on line counts.</td></tr>
+</table>
+
+<h2>7. Verify gates (spec G1-G6, exact commands + expected values)</h2>
+<p class="note">Every godot call from the repo root: <code>HOME=/tmp/dsh_home</code> (mkdir in the same bash call; after export use full paths — <code>~</code> re-expands), godot ONE at a time, kill stray godot/Xvfb pids by pid if a run hangs. Short runs: bash timeout 300000 ms. The two r50 runs take ~14-25 min → run them as background jobs and collect before finishing.</p>
+
+<h3>G0 (auto) + G1 — headless clean (zero script errors is a HARD gate)</h3>
+<pre>HOME=/tmp/dsh_home; mkdir -p $HOME; cd /home/angrygiant/github_projects/AweCraft
+~/tools/godot/godot --headless --path godot --quit                                  # G0
+AWECRAFT_LOGIC=player ~/tools/godot/godot --headless --path godot                   # G1 default-logic-class run, RC=0, no hang</pre>
+<p>Expected: both RC=0, <b>zero</b> <code>SCRIPT ERROR</code> lines, no hang.</p>
+
+<h3>G2 — genhash 25/25 byte-identical (scheduling-only invariant)</h3>
+<pre>HOME=/tmp/dsh_home; mkdir -p $HOME; AWECRAFT_LOGIC=genhash ~/tools/godot/godot --headless --path godot
+diff <(grep GENHASH .scratch/AC-0118/genhash_baseline.txt) <(grep GENHASH <(AWECRAFT_LOGIC=genhash ~/tools/godot/godot --headless --path godot))</pre>
+<p>Expected: 25 <code>GENHASH</code> lines post-change, <code>diff</code> empty against the pre-change baseline captured by Run-1 this run at <code>.scratch/AC-0118/genhash_baseline.txt</code> (paste both column sets into AC-0118-results.html). Genhash hashes pure generator data — world.gd scheduling changes cannot affect it; 25/25 exact is the proof no world-data code was touched.</p>
+
+<h3>G3 — FULL battery green, ALL known-stable values EXACT (r4)</h3>
+<pre>HOME=/tmp/dsh_home; mkdir -p $HOME; AWECRAFT_BATTERY="player;interact;light;fluids;buckets" ~/tools/godot/godot --headless --path godot</pre>
+<p>Expected: <code>RESULT ok:true</code> with sea_surface <b>2730/2730</b>, sea_backed <b>1406/1406</b>, sea_stable <b>true</b>, torch_level <b>14</b>, horizontal_moved <b>2.82</b>, place_ok <b>true</b>, drop_spawned <b>true</b>, water_on_lava_result <b>25</b>, sideways_lava_result <b>9</b> — every value exact.</p>
+
+<h3>G4 — recenter perf A/B (the point of the task)</h3>
+<p><b>Pre-change baselines (measured by Run-1 this run — job <code>bash-9</code>, logs in <code>.scratch/AC-0118/</code>):</b></p>
+<table>
+<tr><th>metric</th><th>source</th><th>pre-change (FRESH, measured by Run-1 this run, job bash-9)</th><th>post-change required</th></tr>
+<tr><td>r50 cold-start recenter</td><td>p3_perf_r50.log</td><td>RECPROBE initial <code>total_ms=102.6</code> (rebuild 102.6, free 0.0, new_n 10608, queue 10609); RESULT <code>recenter_ms=102</code> — consistent with AC-0076 96.5 / AC-0079 98.8-100.3</td><td class="ok">&lt;15 ms (call = hysteresis-only; cold start has an empty chunk map so hysteresis ≈ 0 — expect ≈5-8 ms of setup)</td></tr>
+<tr><td>r50 per-walk-crossing recenter p95 (p95 over the 21 crossing <code>RECPROBE total_ms</code>)</td><td>p4_boundary_r50.log RECPROBE lines</td><td><b>p95 ≈41 ms</b> (40.8 ceil-index / 41.3 linear-interp; n=21, min 34.0, max 43.5, mean 38.0; rebuild 26.7-34.7, free 0.0-0.1, residual hysteresis+setup 7.2-13.3 mean 8.9). AC-0079 era: 32.6-35.8. 22 RECPROBE lines total = 1 cold start (105.1) + 21 crossings (20 walk + 1 settle re-center with new_n=721).</td><td class="ok">&lt;15 ms</td></tr>
+<tr><td>per-frame slice peak (new RECSLICE <code>max_ms</code>)</td><td>post-change RECSLICE lines</td><td>n/a (new probe)</td><td class="ok">&lt;15 ms (budget 8 ms)</td></tr>
+<tr><td>r50 <code>first_draw_ms</code></td><td>p3 RESULT</td><td><b>366</b> (fresh; AC-0076 era 280)</td><td>≈366-550 ms (documented regression, NOT a gate; §5.9/R4)</td></tr>
+<tr><td>r50 perf frame p95 / max</td><td>p3 RESULT</td><td><code>p95_ms=29</code>, <code>max_frame_ms=78</code> (fresh; run caps at 51005 frames, <code>all_meshed=false</code> — normal at r50)</td><td>&le; pre-change (no new hitches)</td></tr>
+<tr><td>r4 boundary walk p95 / max</td><td>p2_boundary_r4.log RESULT</td><td><code>p95_ms=21</code>, <code>max_ms=68</code>, p50 14 (FRESH, threading ON default — note: the 65/96-115 values in the spec/AC-0079/HARNESS are the PRE-AC-0107 baseline; AC-0107 moved mesh+light builds to workers and cut frame p95 to 21)</td><td class="ok">21 ±noise (≤26), max ≤150</td></tr>
+<tr><td>r4 <code>in_radius_built_max</code></td><td>p2 RESULT</td><td><b>68</b> (FRESH; AC-0079 era 67-68 — spec&rsquo;s &ldquo;67&rdquo; is within the same run-to-run band)</td><td class="ok">67-69 (unchanged ±noise; look-priority gate intact)</td></tr>
+<tr><td>r4 walk extras (fresh, context)</td><td>p2 RESULT</td><td>flap 0, ok true, remesh_ok true, marker_ok true, built_final 81, target 81, forward_p95 5200, trailing_p95 206, burst_p95 5199, walk_s 19.52</td><td class="ok">flap 0 / ok true / remesh_ok true / marker_ok true</td></tr>
+<tr><td>r50 flap / remesh_ok / marker_ok / ok</td><td>p4 RESULT</td><td><b>0 / true / true / true</b> (FRESH; also p50 0, p95 41, max 123, irb_max 105 mid-walk, built_final 228, walk_s 19.6, forward/trailing walls unresolved at r50 as expected — AC-0079 same)</td><td class="ok">0 / true / true / true</td></tr>
+</table>
+<p class="note"><b>Gate re-anchoring (important):</b> the spec/registry &ldquo;r4 p95 65, in_radius_built_max 67&rdquo; are AC-0079-era values measured BEFORE AC-0107 (threaded mesh+light). The current tree already ships AC-0107, so the A/B baseline for G4 &ldquo;r4 unchanged&rdquo; is the FRESH pre-change row above (p95 21 / irb_max 68), measured with the same defaults (threading ON) Run-2 will use. &ldquo;Unchanged (±noise)&rdquo; = post-change within p95 21-26 / irb_max 67-69 / flap 0. P4 (r50 walk) p95 + per-crossing RECPROBE p95 are filled into this table and continuity.md the moment the run lands.</p>
+<p><b>Post-change commands (Run-2):</b></p>
+<pre># (a) r50 walk, per-crossing recenter p95 + RECSLICE + r50 walk p95/irb/flap:
+HOME=/tmp/dsh_home; mkdir -p $HOME; AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=50 AWECRAFT_RECPROBE=1 ~/tools/godot/godot --headless --path godot   # ~23-25 min, background job
+# (b) r50 cold start recenter + first_draw + frame p95:
+HOME=/tmp/dsh_home; mkdir -p $HOME; AWECRAFT_LOGIC=perf AWECRAFT_RADIUS=50 AWECRAFT_RECPROBE=1 ~/tools/godot/godot --headless --path godot       # ~14-15 min, background job
+# (c) r4 walk (the AC-0079 gate row):
+HOME=/tmp/dsh_home; mkdir -p $HOME; AWECRAFT_LOGIC=boundary ~/tools/godot/godot --headless --path godot                                               # ~50 s
+# p95 of recenter calls = p95 over the 20 walk RECPROBE total_ms values in (a) (the initial line is the cold start, reported separately per (b)).</pre>
+<p><b>Gate:</b> (a) walk-crossing p95(<code>RECPROBE total_ms</code>) &lt; <b>15 ms</b> (pre-change ≈33-36, fresh P4) AND every <code>RECSLICE max_ms</code> &lt; 15 ms; (b) <code>recenter_ms</code> &lt; 15 ms (pre-change 102); (c) r4 walk <code>p95_ms</code> ≤ 26 (fresh baseline 21 ±noise; the spec&rsquo;s 65 is the pre-AC-0107 value, see re-anchoring note) AND <code>in_radius_built_max</code> 67-69 (fresh baseline 68) AND flap 0 AND ok true AND remesh_ok/marker_ok true. Report p95/worst/mean for each recenter-call series in the A/B table of AC-0118-results.html (spec G4).</p>
+
+<h3>G5 — drain completeness + flake loop (no stall, dedup intact, threading ON = default desktop)</h3>
+<pre>HOME=/tmp/dsh_home; mkdir -p $HOME; AWECRAFT_LOGIC=boundary ~/tools/godot/godot --headless --path godot          # ×2 runs (r4, 20 crossings = multi-boundary walk)
+HOME=/tmp/dsh_home; mkdir -p $HOME; AWECRAFT_LOGIC=player ~/tools/godot/godot --headless --path godot           # ×4 runs (flake loop)</pre>
+<p>Expected, every run: RC=0, zero script errors, no hang; boundary RESULT: <code>queue_size</code> == <b>0</b> (new field, §2 — proves the amortized queue fully drains), <code>in_radius_built_final</code> == <code>target_in_radius</code> (81 at r4, every in-radius chunk built), <code>ok</code> true, <code>flap</code> 0, <code>remesh_ok</code> true, <code>marker_ok</code> true; player RESULT <code>ok:true</code>. Threading: leave env unset → desktop defaults = threadgen ON + threadmesh ON (AC-0107), per spec the interaction is part of the gate.</p>
+
+<h3>G6 — tree clean</h3>
+<p><code>git status --porcelain</code> shows only <code>godot/world/world.gd</code>, <code>godot/scenes/main.gd</code> (the one RESULT line) and <code>tasks/AC-0118/</code>; <code>tasks/AC-0118/AC-0118-results.html</code> self-contained: A/B perf tables (pre numbers from this plan §G4 + post numbers), RECPROBE/RECSLICE excerpts, drain-completeness evidence, flake log, gate verdicts. <b>No render gate</b> (Run-1 decision, per brief): perf/scheduling task, zero expected visual change — the sliced rebuild yields byte-identical chunk/mesh state (final set + order + data, §5.3); G3 battery + genhash + A/B metrics cover behavior. If Run-2 observes ANY visual diff (impossible per §5.3), open a render gate then and note it in results.</p>
+
+</body></html>
