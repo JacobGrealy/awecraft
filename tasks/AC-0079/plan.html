@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0079 v3 — plan (Run-1)</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1080px;margin:24px auto;padding:0 16px;color:#222;line-height:1.45}
+h1{font-size:1.35em} h2{font-size:1.15em;border-bottom:2px solid #444;margin-top:2em;padding-bottom:4px}
+table{border-collapse:collapse;width:100%;margin:10px 0;font-size:0.92em}
+th,td{border:1px solid #bbb;padding:5px 8px;text-align:left;vertical-align:top}
+th{background:#eee}
+code,pre{font-family:ui-monospace,Consolas,monospace;font-size:0.92em}
+pre{background:#f4f4f4;padding:10px;overflow-x:auto}
+.warn{background:#fff3cd;border-left:4px solid #e0a800;padding:8px 12px}
+.bad{background:#f8d7da;border-left:4px solid #c00;padding:8px 12px}
+.good{background:#d4edda;border-left:4px solid #1a7f37;padding:8px 12px}
+.small{font-size:0.85em;color:#555}
+</style></head><body>
+
+<h1>AC-0079 v3 — chunk-stream-look-priority-scoring: per-crossing bottleneck diagnosis + fix plan (Run-1)</h1>
+<p class="small">Repo /home/angrygiant/github_projects/AweCraft · tree at commit 55a3cd4 (v2 scored pick pool IN THE TREE, clean git status) · all anchors below MEASURED on this tree this session, 6-core host, Godot 4.7.1 headless. Derived values are labeled “derived” and computed from the measured probes, not guessed.</p>
+
+<h2>1. Goal</h2>
+<p>Fix the <b>actual per-crossing drain bottleneck</b> (measured: build-dispatch pacing + main-thread light, not generation) so the v3 G3 gate passes — keep the v2 scored pick pool, do not touch world data — while G1–G2/G4–G6 stay green.</p>
+
+<h3>1.1 Diagnosis (evidence, all measured this session)</h3>
+<p><b>The steady-state forward wall (r4: 0.85–1.0 s/crossing) is 100% build-dispatch pacing, not generation.</b>
+Speed-4 probe stream (4.0 s/crossing windows, <code>AWECRAFT_TGDEBUG/TMDEBUG/RECSLICE/RECPROBE</code>): the lead column (column k+r at crossing k) <b>DATA lands in the PREVIOUS crossing's window</b> (leadPre = 8 of 9 GENHANDs before the crossing; the 9th, the (k+r, 0) center chunk, is a 40 ms <b>main-thread sync gen</b> — <code>_gen_unit</code> sync rule <code>absi(cx)&gt;0 and absi(cz)&gt;0</code>, world.gd:412). But its <b>9-chunk BUILD dispatch starts ~190 ms AFTER the crossing and spans ~650 ms (≈72 ms/chunk)</b> (leadBd = 9 in [t+190, t+830]). 72 ms/dispatch = the AC-0077 batch light inflating main frames (17–34 ms/chunk) so <code>last_build_us ≥ BUILD_FAST_US</code> (15 ms) and the budget collapses to 1 build unit/frame. Worker mesh is ~44 ms/chunk off-main (wms_sum ≈ 354–428 ms/window) and is NOT on the critical path.</p>
+<p><b>Cold start (crossings 1–6) = the in-radius fill backlog from the 3×3 spawn core.</b> The +X walk starts with 3×3 built and 72 in-radius unbuilt (r4). Forward wall crossing 1 = 36-chunk fill of columns pcx+1..pcx+r: gen 36×~220 ms/3 (TG3) ≈ 2.9 s + main-light-paced build ≈ 0.9 s → measured 4908 ms baseline (4319/4293 on the gate runs). TG6 probe: 3445 ms. <b>Trailing walls crossings 1–4 are −1 (NEVER built, even with TG6):</b> the scored (forward-first) data pick generates backward columns LAST — column −3 data ready ~2.2 s even at TG6 — after the hysteresis release (cheby &gt; r+1; column −3 released at t=2.0 s at speed 16). The web spec's own ring-order gen (3/frame, <code>updateWorldStreaming</code>) would have built them; the port's scored order does not. Consequence: <code>tr_p95</code> is pinned at the check floor (42–43 ms, n=16 resolved-only).</p>
+<p><b>Dead hypotheses (proven by A/B, r4):</b> drain budget cap (DRAIN_MS=100 → 4251, neutral, walk max 73→144 harmful); mesh-pool saturation (THREADMESH_N=6 → 5127, WORSE); collision staging (COLSTAGE=0 → 4871, WORSE; collision = 313 ms total, max 3 ms); recenter slice (0–1 ms/crossing, new_n=20 in 1 frame). The only knob that helps today: THREADGEN_N=6 → 3321 (−23%), but it only cuts the COLD wall; the steady wall survives it (main-light paced).</p>
+
+<h3>1.2 Per-crossing budget table (r4 steady state, first-class)</h3>
+<p class="small">Measured from the speed-4 probe (4.0 s windows) → ×0.25 column = speed-16 (1.0 s gate) estimate. “lead” = the forward wall's last column (k+r).</p>
+<table>
+<tr><th>stage</th><th>per crossing (r4)</th><th>where</th><th>wall impact</th></tr>
+<tr><td>recenter slice (AC-0118)</td><td>0–1 ms, 1 frame, 20 units</td><td>main</td><td>none (dead)</td></tr>
+<tr><td>data gen: 9 lead + 9 in-radius landings</td><td>10×~220 ms/3 TG ≈ 0.73 s busy (4.0 s win); lead data lands in the PREVIOUS window</td><td>thread (TG)</td><td>none steady (data pre-landed); the whole cold wall at crossing 1</td></tr>
+<tr><td>build dispatch: 9 lead chunks</td><td>9 × ~72 ms ≈ 650 ms span, starts ~190 ms post-crossing</td><td>main</td><td><b>the steady wall (0.85–1.0 s)</b></td></tr>
+<tr><td>main-thread batch light (AC-0077)</td><td>10–11 chunks × 25 ms ≈ 260 ms</td><td>main</td><td>inflates every frame → 1 unit/frame budget → the 72 ms/dispatch</td></tr>
+<tr><td>sync gen, cz=0 rule</td><td>1 × 40 ms (lead center chunk)</td><td>main</td><td>negligible (data still pre-lands)</td></tr>
+<tr><td>drain pick scans + dispatch overhead</td><td>~100 ms (pool scan ≤512 + enqueues)</td><td>main</td><td>small</td></tr>
+<tr><td>fluid ticks</td><td>~21 × 12.1 ms ≈ 254 ms/win (fixed background)</td><td>main</td><td>unchanged by fix</td></tr>
+<tr><td>collision staging</td><td>~15 ms</td><td>main</td><td>negligible (COLSTAGE=0 worse)</td></tr>
+<tr><td>worker mesh (+light after C2)</td><td>~9 × 44 ms ≈ 400 ms/win (steady); +9×~20 ms light after C2</td><td>thread (TM)</td><td>off critical path</td></tr>
+<tr><td>drain idle</td><td>~2.7 s of 4.0 s win (speed 4); ~0.2–0.5 s at speed 16</td><td>—</td><td>drain is NOT unit-starved steady-state</td></tr>
+</table>
+<p class="small">r2 steady state (measured, same probe style): lead column = 5 chunks; leadPre = 4/5 threadgen in prior window (5th = sync cz=0); leadBd = 5 in [t+~200, t+~560]; wms ≈ 210–230 ms/win; wall ≈ 547 ms flat.</p>
+
+<h2>2. Files to touch</h2>
+<table>
+<tr><th>file</th><th>change</th><th>note</th></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>EDIT — C1 + C2 + C3 (below)</td><td>the drain; all three changes live here</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>READ ONLY</td><td>harness: dispatch :917–925, <code>_await_boundary_core</code> :4746 (3×3 core wait), <code>_percentile</code> :4729, <code>_boundary_test</code> :4765+, RESULT :5070+, <code>_ac0079_wall_built</code> :5145, <code>_resolved_bursts</code> (drops −1). Already measures everything G3 needs — NO edit expected</td></tr>
+<tr><td><code>godot/world/lighting.gd</code></td><td>READ ONLY</td><td>byte-identity proof for C2 (below)</td></tr>
+<tr><td><code>godot/world/chunk.gd</code></td><td>READ ONLY</td><td>worker self-light path <code>ChunkScript.build_accs</code> :1135</td></tr>
+<tr><td><code>.scratch/AC-0079/</code></td><td>probe artifacts (already created)</td><td>analyze.py, tstamp.py, probe/anchor logs</td></tr>
+</table>
+
+<h3>2.1 Chosen option: C (combo) — pre-build lead column + light off-main + threadgen 6</h3>
+<p>Options adjudicated: <b>A (drain-priority/pre-build only)</b> collapses the steady wall to the check floor but leaves the cold wall gen-paced at TG3 (crossing 1 ≈ 3.2–3.8 s — still ≤3500 but thin) and leaves perf p95 at 48 (main light). <b>B (light off-main only)</b> cuts ~260 ms/crossing off main and speeds cold build, but steady wall stays ~0.5–0.6 s (dispatch-paced at 1–2 units/frame) and r4 fwd_p95 ≈ 0.6–1.5 s — passes ≤3500 with only 2–6× margin. <b>C = A+B+C3</b> is strictly better on every number and all three pieces are small, isolated world.gd changes. C3 (threadgen default 6) is load-bearing for the r4 cold-wall margin (36×220/6 = 1.32 s vs 36×220/3 = 2.64 s gen).</p>
+<p class="warn"><b>SCOPE ADDITION FLAG (needs coordinator approval before Run-2):</b> C2 = the un-registered AC-0077 follow-up “batch light off-main” already anticipated in the v3 setup commit. Justification below with byte-identity + 6-core math. If rejected, C1+C3 alone still passes G3 r4 ≤3500 (fwd_p95 ≈ 0.6–1.5 s) — see §7(f).</p>
+
+<h4>C1 — lead-column pre-build (world.gd, ~15 lines)</h4>
+<pre># :697  func _collect_pool(build: bool) -> Array:
+#        ->  func _collect_pool(build: bool, include_fb := false) -> Array:
+#            build-branch, replace  "if bool(e["data_only"]): continue"  with:
+#              if bool(e["data_only"]):
+#                  if not (include_fb and int(e["cx"]) == last_pcx + render_radius
+#                          and absi(int(e["cz"]) - last_pcz) <= render_radius):
+#                      continue
+#                  out.append(e)
+# drain build pick, :748-766: after the in-radius scan yields best_c == null,
+# run a second pass over _collect_pool(true, true) and pick the same
+# lowest-score READY candidate (identical _build_ready gate, _build_unit,
+# _remove_entry). In-radius READY pool ALWAYS wins (second pass only when it
+# is empty); the forward band is exactly 2r+1 entries, so the pass is bounded.</pre>
+<p>Lifecycle-safe: a pre-built forward-band entry is removed on pick; the next recenter re-adds it (WANT as in-radius build entry if not mesh_built, ring data_only otherwise). It is pickable only after its data has landed (build pick requires non-empty data), and `_build_ready` (4-axial-neighbor-DATA, :368) is satisfied because the in-radius neighbor column is built first. At r50 this pass is a NO-OP (the forward band's data never lands — the 512-entry pool cap is consumed by in-radius no-data) — behavior unchanged there.</p>
+
+<h4>C2 — contained light off-main (world.gd, deletion-only; SCOPE ADDITION)</h4>
+<pre># delete :728-729  "if not _rec_pending: _bl_batch_step()"   (queue_size==0 path)
+# delete :740-741  "if not _rec_pending: _bl_batch_step()"   (main drain path)
+# delete :645-655  single-item batch branch inside _build_unit (the outer
+#                  "if eff.is_empty():" + its _bl_want single-item body);
+#                  keep :644 _eff_for cache read, :656-657 perf_light_self_
+#                  computes count, :658 _mesh_dispatch(c, cx, cz, eff) with
+#                  empty eff (worker self-lights, chunk.gd:1135)
+# _bl_batch_step (:889) left dead (Run-2 may delete); _bl_want bookkeeping
+# stays (recenter WANT fills it, release erases it; :726 early-return check
+# stays behavior-neutral) — the AC-0118 slice internals are UNTOUCHED.</pre>
+<p><b>Byte-identity:</b> <code>Lighting.compute_light_flat_batch</code> (lighting.gd:289) and <code>compute_light_flat_chunk</code> (lighting.gd:268) both route every chunk through the same contained kernel <code>_chunk_light_into</code> (lighting.gd:228); AC-0077 already verified per-chunk eff byte-identical between the two. The worker self-light path ALREADY EXISTS in production: <code>ChunkScript.build_accs</code> (chunk.gd:1135) <code>if light.is_empty(): light = Lighting.compute_light_flat_chunk(...)</code> — the r50 run measured today used exactly this path (light_self_computes 307, ok:true, zero script errors). Eff cache stays and keeps working: the worker handoff (<code>_threadmesh_worker</code>, ~:540–572) calls <code>_eff_cache_put(key, c.data, res.light)</code> when <code>eff_trust</code>, so worker light FEEDS the cache (perf anchor: 81/81 cache_hits).</p>
+<p><b>6-core math:</b> main 1 + TG 6 + TM 3 = 10 threads / 6 cores = 1.7× oversubscription. Measured with TG6 alone: r4 fwd_p95 −23% (4293→3321), walk p95 33→50 ms. C2 moves ~260 ms/crossing of light off main onto TM: steady r4 window (1.0 s) gains 9 chunks × ~20 ms light / 3 workers ≈ 60 ms worker time — fits. Cold: 36-chunk fill gen 1.32 s (TG6) with 36×28 ms/3 ≈ 340 ms of light+mesh on TM — fits.</p>
+
+<h4>C3 — threadgen default 3 → 6 (world.gd:148, 1 line)</h4>
+<pre># :148  threadgen_max = maxi(1, mini(OS.get_processor_count() - 2, 3))
+#     -> threadgen_max = mini(OS.get_processor_count(), 6)
+# (this 6-core host -> 6; 4-core -> 4; 8-core -> 6. Env override
+#  AWECRAFT_THREADGEN_N :147-150 and final cap mini(…,6) :151 unchanged.)</pre>
+
+<p>What stays untouched: score formula <code>d + (1−a)·0.75·d − (cheby≤1 ? 2.0 : 0)</code> (:683–695), look refresh (&gt;10° yaw, :664–681), data pick (lowest-score no-data, :767–808), PICK_POOL_CAP 512 (:142), DRAIN budget 30 ms (:172), recenter slice (AC-0118), AC-0119 read paths, collision staging, fluids, generator (genhash-frozen), main.gd harness.</p>
+
+<h2>3. Frozen spec refs</h2>
+<p>Spec = <code>index.html</code> build <code>"20260816-r12"</code> (frozen, web export dropped in AC-0124 — Windows is the product; the web file remains the behavior source of truth). Streaming model this task must not contradict (<code>updateWorldStreaming</code>, index.html @57988): gen = ring order r=0..CFG.GEN_R, 3 chunks/frame; mesh = ring order r=0..CFG.VIEW_R, 3 chunks or 8 ms budget, requires all 4 axial neighbors to EXIST (data), dirty flag; unload = full delete at cheby &gt; CFG.UNLOAD_R. CFG @5923: <code>VIEW_R: 6, GEN_R: 8, UNLOAD_R: 10</code>. C1 (pre-building the forward band mesh early) is directionally consistent: the spec pre-generates GEN_R=8 &gt; VIEW_R=6 and mesh-builds as data+neighbors appear — C1 only makes the forward edge faster, never changes what is shown (mesh display stays in-radius, fog unchanged). No spawn-core wait exists in the web spec — the 3×3 core wait is a Godot harness artifact (main.gd:4746); the cold start it causes is therefore spec-true for the player's first seconds.</p>
+<p>World constants, cited VERBATIM from current source (constants rule: byte-for-byte):</p>
+<pre># godot/autoload/data.gd
+const CHUNK := 16            # data.gd:3
+const HEIGHT := 80           # data.gd:4
+const SEA := 30              # data.gd:5
+const ATLAS_PX := 1024.0     # data.gd:33
+
+# godot/world/generator.gd — biome_at() t/m cutoffs (:45-54)
+if t &lt; -0.25:  return "snow"
+if t &gt; 0.35 and m &lt; 0.1:  return "desert"
+if m &gt; 0.25:  return "forest"
+return "plains"
+# generator.gd
+const TREE_D_FOREST := 0.14  # :20
+const TREE_D_PLAIN := 0.02   # :21
+const TREE_D_MAX := 0.14     # :22
+const SPAWN_X := 8           # :24
+const SPAWN_Z := 8           # :25
+const SPAWN_H := 34          # :26
+
+# godot/core/daynight.gd
+const DAY_LEN := 600.0       # :4</pre>
+
+<h2>4. Data.* ids</h2>
+<p>Task touches NO block ids (reorder/accelerate builds ≠ change data; genhash must stay 25/25). Referenced ids, verbatim:</p>
+<pre># godot/autoload/data.gd — blocks (dict opens :150)
+5:  Water     "solid": false, "cross": true, "hard": 1e9, "light": 0      # :155
+22: Torch     "solid": false, "cross": true, "thin": true, "light": 14    # :170
+23: Glowstone "solid": true, "cross": false, "hard": 0.3, "light": 12     # :171
+24: Lava      "solid": false, "cross": true, "hard": 1e9, "light": 15     # :172
+# godot/world/generator.gd
+B_GRASS:=1 :3, B_DIRT:=2 :4, B_STONE:=3 :5, B_SAND:=4 :6, B_WATER:=5 :7,
+B_LOG:=6 :8, B_LEAVES:=7 :9, B_BEDROCK:=11 :10, B_SNOW_GRASS:=12 :11,
+B_COAL_ORE:=14 :12, B_IRON_ORE:=15 :13, B_DIAMOND_ORE:=16 :14,
+B_ROSE:=18 :15, B_DANDELION:=19 :16, B_LAVA:=24 :17, B_OBSIDIAN:=25 :18</pre>
+
+<h2>5. Harness gates</h2>
+<p>Every godot call prefixed <code>HOME=/tmp/dsh_home</code> (with <code>mkdir -p /tmp/dsh_home</code> in the same shell call). Godot ONE at a time. Measured fresh anchors on the current tree (v2 scoring, TG3/TM3 defaults) → expected post values for the fixed tree (derived from the §1.2 probes).</p>
+<table>
+<tr><th>gate</th><th>exact command</th><th>ok condition / expected</th></tr>
+<tr><td>G1</td><td><code>HOME=/tmp/dsh_home ~/tools/godot/godot --headless --path godot --quit</code></td><td>zero script errors (hard gate, all runs)</td></tr>
+<tr><td>G2a</td><td><code>HOME=/tmp/dsh_home AWECRAFT_LOGIC=genhash ~/tools/godot/godot --headless --path godot</code></td><td>25 GENHASH lines, 25 unique — measured 25/25 on current tree (full list in .scratch/AC-0079/genhash.log; data path untouched by fix)</td></tr>
+<tr><td>G2b</td><td><code>HOME=/tmp/dsh_home AWECRAFT_BATTERY="player;interact;light;fluids;buckets" ~/tools/godot/godot --headless --path godot</code></td><td>EXACT: sea 2730/2730 + 1406/1406 stable, torch_level 14, horizontal_moved 2.82, water_on_lava 25, sideways_lava 9, place_ok/drop_spawned true — measured EXACT on current tree (ok:true, 117.8 s). Light kernel byte-identical → values survive C2. See §7(e) for the standalone-interact drop anomaly (not the gate command)</td></tr>
+<tr><td>G3 r2</td><td><code>HOME=/tmp/dsh_home AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=2 ~/tools/godot/godot --headless --path godot</code></td><td>RESULT: forward_p95_ms ≤ trailing_p95_ms. Pre (measured): fwd 593 vs tr 6 — FAIL (v2). Post (derived): fwd_p95 ≈ 0–45 ms, tr_p95 ≈ 0–20 ms — the 10-chunk r2 cold fill (10×220/6 = 0.37 s gen + 0.2 s build) completes before crossing 1 (1.0 s) at TG6+C2 → both p95s ≈ floor; expected PASS, margin thin (§7(d))</td></tr>
+<tr><td>G3 r4</td><td><code>HOME=/tmp/dsh_home AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=4 ~/tools/godot/godot --headless --path godot</code></td><td>forward_p95_ms ≤ trailing_p95_ms AND forward_p95_ms ≤ 3500 AND in_radius_built_max ≥ 60. Pre (measured): fwd 4293–4319, tr 41–43, irb_max 81. Post (derived): fwd ≈ [X1 1.4–2.0 s, X2 0.1–0.5 s, floor×18] → fwd_p95 ≈ X2+0.05(X1−X2) ≈ 0.2–0.6 s → ≤3500 PASS (6–17×); tr ≈ [−1×4, ~60, floor×15] → tr_p95 ≈ 45–60 ms → <b>fwd≤tr FAIL — NOT REACHABLE in scope, ceiling below</b>; irb_max 81 (fill completes ~4 s at TG6, walk ends 20 s) PASS</td></tr>
+<tr><td>G3 r50</td><td><code>HOME=/tmp/dsh_home AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=50 AWECRAFT_RECPROBE=1 ~/tools/godot/godot --headless --path godot</code></td><td>forward/trailing fields present (−1 ok at r50) + RECSLICE p95 ≤ 12.2+noise. Measured on current tree, TWO independent runs: fields present, RECSLICE r=50 max 10.0/7.0 ms and 10.0/8.0 ms (2 slices each, 27–28 frames, new_n 2060, queue 10398), ok:true, p95 44/max 106, walk ~19.5 s, queue_size 10285 → PASS (stable: max 10.0 in both runs, 24% under the 12.2 cap); the slice is untouched by the fix (C1 is a no-op at r50, §2.1)</td></tr>
+<tr><td>G4</td><td><code>HOME=/tmp/dsh_home AWECRAFT_LOGIC=perf AWECRAFT_RADIUS=4 ~/tools/godot/godot --headless --path godot</code></td><td>within noise of Run-1 fresh anchor (LOWER total/p95 = improvement, treat as within noise): fresh anchor total 6468 ms / p95 48 / p50 14 / max 69, first_draw 262, gen_ms 700 (main sync), build_ms 329, build_units 1369, light_batch 81 chunks, fog_ok true, read_sync_gen 0, recenter_ms 0, mem +29.5 MB. Post (derived): total ≈ 5200–6000 (light off-main + faster fill), p95 ≈ 30–45, first_draw ≈ 250–280 ≤ 300 (spawn 3×3 core unchanged: 5 sync cz=0/cx=0 × 40 ms + 4 threaded), fog_ok true, read_sync_gen 0</td></tr>
+<tr><td>G5</td><td>see §6 (Run-2)</td><td>one R=2 iso render, no fog-edge pop-in, no script errors</td></tr>
+<tr><td>G6</td><td><code>./build_windows.sh</code>; <code>curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/AweCraft.exe</code> → 200; same for <code>http://127.0.0.1:5180</code> → 200; <code>git status --porcelain</code> clean after commit; results.html v3 section</td><td>RC 0 + 200s + clean tree + results written</td></tr>
+</table>
+
+<h3>5.1 Gate-reachability verdict (honest, with numbers)</h3>
+<div class="good"><b>Reachable (Option C):</b> G3 r50 (already PASS, measured 10.0 ms ≤ 12.2); G3 r4 absolute (fwd_p95 ≈ 0.2–0.6 s ≤ 3500, 6–17× margin; hard floor = 36-chunk crossing-1 fill ≈ 36×220 ms/6 gen + 0.3 s build ≈ 1.6 s even if everything else were free); G3 r2 fwd≤tr (expected PASS — both p95s at the check floor, 0–45 ms); G1/G2/G4/G5/G6 (data path and kernels untouched; perf moves in the improvement direction).</div>
+<div class="bad"><b>NOT reachable in scope: G3 r4 “fwd_p95 ≤ trailing_p95”.</b> Structural ceiling: (a) the 3×3 spawn core (main.gd:4746) means the world is NOT built at crossings 1–2 — forward walls X1 ≈ 1.4–2.0 s, X2 ≈ 0.1–0.5 s can never reach the floor (36 chunks of data literally do not exist before ~1.3 s); so fwd_p95 = X2 + 0.05·(X1−X2) ≥ ~0.2 s always. (b) trailing walls for crossings 1–4 are −1 forever: column −3's data is ready ≥ 54×220/TG + build ≈ 2.2 s (TG6, measured: [−1,−1,−1,−1,62,...] even with TG6) vs hysteresis release at t=2.0 s — so only 16 of 20 trailing values resolve and tr_p95 = s[14]+0.25·(s[15]−s[14]) ≈ 45–60 ms (floor + one 60 ms outlier). Gap: 0.2 s vs 0.05 s = 4–10×. Escapes (all out of fence): TG ≥ 12 (oversubscribes 6 cores, walk p95 ~80+, fill not faster — core-bound); web ring-order data pick (reverts the v2 feature that IS the task); wider hysteresis (AC-0080's fence); full-in-radius spawn core (harness-semantics change, not “probe fields only”). If the coordinator wants r4 fwd≤tr green, the gate or the fence must change — the drain fix cannot close a 4–10× structural gap.</div>
+
+<h2>6. Snapshot/render names</h2>
+<p>One render (Run-2, after G1–G4): <code>tasks/AC-0079/AC-0079-r2-iso.png</code>, <code>AWECRAFT_CAM=iso</code>, R=2, seed default (8), command shape (HARNESS.md §4):</p>
+<pre>xvfb-run -a env HOME=/tmp/dsh_home AWECRAFT_SNAPSHOT=tasks/AC-0079/AC-0079-r2-iso.png \
+  AWECRAFT_CAM=iso AWECRAFT_RADIUS=2 \
+  ~/tools/godot/godot --path godot --rendering-method gl_compatibility</pre>
+<p class="small">~300000 ms bash timeout; headless-verify FIRST (G1–G4) before the single render. Embed the PNG in AC-0079-results.html (v3 section).</p>
+
+<h2>7. Risks / edge cases</h2>
+<table>
+<tr><th>#</th><th>risk</th><th>mitigation / fallback</th></tr>
+<tr><td>a</td><td>C1 builds the forward band's mesh before in-radius catch-up → visual difference?</td><td>None: mesh display is in-radius only (fog/display logic untouched); the spec itself pre-generates GEN_R=8 &gt; VIEW_R=6 and mesh-builds on data+neighbors — C1 is the same behavior, faster on the forward edge. R=2 iso render (G5) is the visual proof.</td></tr>
+<tr><td>b</td><td>C2 shifts ~20 ms light/chunk onto 3 TM workers → r50 walk frames?</td><td>r50 ALREADY runs 307 worker self-computes today (measured, ok:true, walk max 104 ms unchanged vs pre-AC-0107 era); r50 gate is RECSLICE p95 (slice untouched) + field presence. Steady r4: +60 ms worker time per 1.0 s window (fits).</td></tr>
+<tr><td>c</td><td>C3 default on the user's Windows machine (core count unknown): 4 cores → 4 TG + 3 TM + main = 8 threads = 2× oversubscription → possible frame-time regression there.</td><td>Formula scales as mini(cores,6); env override AWECRAFT_THREADGEN_N remains; report core-count trade-off in results.html (not a gate — G4 runs on this 6-core host).</td></tr>
+<tr><td>d</td><td>G3 r2 fwd≤tr margin is thin (both p95s ≈ floor; difference = 5% of the X1−Y1 cold gap ± floor noise ≈ ±5–15 ms).</td><td>If a run flips it by a few ms: honest report with the per-crossing arrays + coordinator decides (single-run gate). Do NOT loosen the gate or the harness to force a pass.</td></tr>
+<tr><td>e</td><td>Observation: standalone <code>AWECRAFT_LOGIC=interact</code> gives drop_spawned:false, but the spec's gate command (full 5-mode battery) gives drop_spawned:true (order-dependent, pre-existing at HEAD — not caused by any change this task makes; Run-1 edited nothing).</td><td>Flag to coordinator as an observation; interact/entity spawn is outside the drain scope. The G2 gate uses the full battery command, which is GREEN exact.</td></tr>
+<tr><td>f</td><td>C2 rejected (scope addition not approved).</td><td>C1+C3 alone: r4 fwd_p95 ≈ 0.6–1.5 s (≤3500 still PASS, 2–6× margin), r2 ≈ 0.2–0.5 s (fwd≤tr borderline), perf p95 stays ≈48 (main light remains). C2 is margin+perf, not load-bearing for the absolute gate.</td></tr>
+<tr><td>g</td><td>C1 second-pass pick churn: re-picked forward-band entries could inflate build_units (anchor 1369) or fight the recenter re-adds.</td><td>Entries are removed on pick (never re-picked within a window); recenter re-adds are idempotent (WANT checks mesh_built). Monitor build_units in the G4 run; if +50%, cap the second pass to the 2r+1 band entries only (already bounded by construction — the include_fb filter admits exactly the band).</td></tr>
+<tr><td>h</td><td>cz=0 sync-gen rule (world.gd:412) keeps one 40 ms main-thread gen per crossing (the lead center chunk).</td><td>Leave as-is (spawn-determinism rule, pre-dates this task); 40 ms « 1.0 s window. Data still pre-lands (measured: GENCHUNK at crossing+122 ms, build at +190 ms).</td></tr>
+</table>
+<p class="small">Fallback if the whole plan is wrong: revert is 3 isolated hunks in one file (world.gd) — C1 ~15 lines, C2 deletions, C3 1 line; no data-path, harness, or scene change, so genhash 25/25 + battery exact re-verify instantly (G2).</p>
+
+</body></html>
