@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0078 — spec (generated scaffold)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.auto{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.fill{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:10px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0078 — chunk-stream-fluids-firstload</h1>
+<div class="auto"><b>AUTO (from TASKS.yaml — do not hand-edit)</b></div>
+<p class="meta"><b>id:</b> <code>AC-0078</code> · <b>status:</b> <code>open</code> · <b>priority:</b> 1 · <b>source:</b> agent · <b>created:</b> 2026-08-22T22:59 · <b>parent:</b> AC-0034</p>
+<p class="note">Registry <code>notes</code> (verbatim, quoted):</p>
+<blockquote><pre>AC-0034 child 4/4 (plan AC-0071 P1.5+P1.6): fluid locality (per-chunk fluid prescreen + 32-block sleep signature, wake sources unchanged, sim results bit-identical) + first-load fast path (3x3 sync core for New world AND Continue - Continue stops waiting for full radius, streams around existing player).</pre></blockquote>
+<h2>Goal</h2>
+<div class="fill"><b>FILL BY COORDINATOR</b> — one line, from the registry notes (marked REVIEW until confirmed). <b>REVIEW</b></div>
+<!-- FILL: Goal — one sentence. Example: "Add a torch-light-bake pass to the chunk mesher so caves are readable at night." -->
+<p><b>Goal (confirmed 2026-08-26):</b> Make the fluid sim local to where fluids actually are (per-chunk prescreen + 32-block sleep signature, wake sources unchanged, sim results BIT-IDENTICAL) and make first load instantly playable: a 3×3 sync core for BOTH New world and Continue, so Continue stops waiting for the full radius and streams around the existing player (AC-0034 child 4/4, plan AC-0071 P1.5+P1.6).</p>
+<h2>Frozen spec references</h2>
+<div class="auto"><b>AUTO (fixed boilerplate — do not hand-edit)</b></div>
+<ul>
+<li><code>index.html</code> — build <code>20260816-r12</code> (Three.js single-file) is the <b>source of truth for ALL behavior/data — do NOT modify</b>. The Godot port is faithful; when unsure, the web file wins.</li>
+<li>Minecraft wiki = canonical reference for tools/crafting/blocks, match exactly unless the user specifies otherwise: <a href="https://minecraft.wiki/w/Tool">Tool</a>, <a href="https://minecraft.wiki/w/Block">Block</a>, <a href="https://minecraft.wiki/w/Mining">Mining</a>, <a href="https://minecraft.wiki/w/Crafting_table">Crafting_table</a>, <a href="https://minecraft.wiki/w/Item">Item</a>.</li>
+</ul>
+<h2>Data.* world constants</h2>
+<div class="auto"><b>AUTO (parsed from godot/autoload/data.gd + godot/world/generator.gd at generation time — do not hand-edit; values are current as of the run)</b></div>
+<h3>godot/autoload/data.gd</h3>
+<table><tr><th>const</th><th>value</th><th>file:line</th></tr>
+<tr><td><code>CHUNK</code></td><td><code>16</code></td><td class='note'>godot/autoload/data.gd:3</td></tr>
+<tr><td><code>HEIGHT</code></td><td><code>80</code></td><td class='note'>godot/autoload/data.gd:4</td></tr>
+<tr><td><code>SEA</code></td><td><code>30</code></td><td class='note'>godot/autoload/data.gd:5</td></tr>
+<tr><td><code>C_GRASS_TOP</code></td><td><code>Color(0.416, 0.667, 0.251)</code></td><td class='note'>godot/autoload/data.gd:7</td></tr>
+<tr><td><code>C_DIRT</code></td><td><code>Color(0.525, 0.376, 0.263)</code></td><td class='note'>godot/autoload/data.gd:8</td></tr>
+<tr><td><code>C_GRASS_SIDE</code></td><td><code>Color(0.545, 0.404, 0.294)</code></td><td class='note'>godot/autoload/data.gd:9</td></tr>
+<tr><td><code>C_STONE</code></td><td><code>Color(0.463, 0.463, 0.471)</code></td><td class='note'>godot/autoload/data.gd:10</td></tr>
+<tr><td><code>C_SAND</code></td><td><code>Color(0.855, 0.804, 0.62)</code></td><td class='note'>godot/autoload/data.gd:11</td></tr>
+<tr><td><code>C_WATER</code></td><td><code>Color(0.157, 0.431, 0.863)</code></td><td class='note'>godot/autoload/data.gd:12</td></tr>
+<tr><td><code>C_BEDROCK</code></td><td><code>Color(0.294, 0.294, 0.306)</code></td><td class='note'>godot/autoload/data.gd:13</td></tr>
+<tr><td><code>C_SNOW</code></td><td><code>Color(0.922, 0.949, 0.98)</code></td><td class='note'>godot/autoload/data.gd:14</td></tr>
+<tr><td><code>C_SNOW_SIDE</code></td><td><code>Color(0.732, 0.663, 0.622)</code></td><td class='note'>godot/autoload/data.gd:15</td></tr>
+<tr><td><code>C_COAL_ORE</code></td><td><code>Color(0.30, 0.30, 0.32)</code></td><td class='note'>godot/autoload/data.gd:16</td></tr>
+<tr><td><code>C_IRON_ORE</code></td><td><code>Color(0.518, 0.494, 0.467)</code></td><td class='note'>godot/autoload/data.gd:17</td></tr>
+<tr><td><code>C_DIAMOND_ORE</code></td><td><code>Color(0.30, 0.72, 0.70)</code></td><td class='note'>godot/autoload/data.gd:18</td></tr>
+<tr><td><code>C_LAVA</code></td><td><code>Color(0.976, 0.447, 0.082)</code></td><td class='note'>godot/autoload/data.gd:19</td></tr>
+<tr><td><code>C_OBSIDIAN</code></td><td><code>Color(0.118, 0.078, 0.165)</code></td><td class='note'>godot/autoload/data.gd:20</td></tr>
+<tr><td><code>C_TORCH</code></td><td><code>Color(0.98, 0.71, 0.35)</code></td><td class='note'>godot/autoload/data.gd:21</td></tr>
+<tr><td><code>C_GLOWSTONE</code></td><td><code>Color(0.98, 0.85, 0.60)</code></td><td class='note'>godot/autoload/data.gd:22</td></tr>
+<tr><td><code>C_COBBLE</code></td><td><code>Color(0.447, 0.447, 0.455)</code></td><td class='note'>godot/autoload/data.gd:23</td></tr>
+<tr><td><code>C_LEAVES</code></td><td><code>Color(0.235, 0.549, 0.188)</code></td><td class='note'>godot/autoload/data.gd:24</td></tr>
+<tr><td><code>C_ROSE</code></td><td><code>Color(0.863, 0.157, 0.157)</code></td><td class='note'>godot/autoload/data.gd:25</td></tr>
+<tr><td><code>C_DANDELION</code></td><td><code>Color(0.941, 0.824, 0.157)</code></td><td class='note'>godot/autoload/data.gd:26</td></tr>
+<tr><td><code>ATLAS_PX</code></td><td><code>1024.0</code></td><td class='note'>godot/autoload/data.gd:33</td></tr>
+<tr><td><code>TILE_PX</code></td><td><code>32</code></td><td class='note'>godot/autoload/data.gd:34</td></tr>
+<tr><td><code>TINT_GRASS_TOP</code></td><td><code>Color(93.0 / 255.0, 178.0 / 255.0, 55.0 / 255.0)</code></td><td class='note'>godot/autoload/data.gd:36</td></tr>
+<tr><td><code>TINT_LEAVES</code></td><td><code>Color(60.0 / 255.0, 140.0 / 255.0, 48.0 / 255.0)</code></td><td class='note'>godot/autoload/data.gd:37</td></tr>
+<tr><td><code>TINT_WATER</code></td><td><code>Color(47.0 / 255.0, 107.0 / 255.0, 235.0 / 255.0)</code></td><td class='note'>godot/autoload/data.gd:38</td></tr>
+<tr><td><code>TOOL_BLOCKS</code></td><td><code>{</code></td><td class='note'>godot/autoload/data.gd:41</td></tr>
+</table>
+<h3>godot/world/generator.gd</h3>
+<table><tr><th>const</th><th>value</th><th>file:line</th></tr>
+<tr><td><code>B_GRASS</code></td><td><code>1</code></td><td class='note'>godot/world/generator.gd:3</td></tr>
+<tr><td><code>B_DIRT</code></td><td><code>2</code></td><td class='note'>godot/world/generator.gd:4</td></tr>
+<tr><td><code>B_STONE</code></td><td><code>3</code></td><td class='note'>godot/world/generator.gd:5</td></tr>
+<tr><td><code>B_SAND</code></td><td><code>4</code></td><td class='note'>godot/world/generator.gd:6</td></tr>
+<tr><td><code>B_WATER</code></td><td><code>5</code></td><td class='note'>godot/world/generator.gd:7</td></tr>
+<tr><td><code>B_LOG</code></td><td><code>6</code></td><td class='note'>godot/world/generator.gd:8</td></tr>
+<tr><td><code>B_LEAVES</code></td><td><code>7</code></td><td class='note'>godot/world/generator.gd:9</td></tr>
+<tr><td><code>B_BEDROCK</code></td><td><code>11</code></td><td class='note'>godot/world/generator.gd:10</td></tr>
+<tr><td><code>B_SNOW_GRASS</code></td><td><code>12</code></td><td class='note'>godot/world/generator.gd:11</td></tr>
+<tr><td><code>B_COAL_ORE</code></td><td><code>14</code></td><td class='note'>godot/world/generator.gd:12</td></tr>
+<tr><td><code>B_IRON_ORE</code></td><td><code>15</code></td><td class='note'>godot/world/generator.gd:13</td></tr>
+<tr><td><code>B_DIAMOND_ORE</code></td><td><code>16</code></td><td class='note'>godot/world/generator.gd:14</td></tr>
+<tr><td><code>B_ROSE</code></td><td><code>18</code></td><td class='note'>godot/world/generator.gd:15</td></tr>
+<tr><td><code>B_DANDELION</code></td><td><code>19</code></td><td class='note'>godot/world/generator.gd:16</td></tr>
+<tr><td><code>B_LAVA</code></td><td><code>24</code></td><td class='note'>godot/world/generator.gd:17</td></tr>
+<tr><td><code>B_OBSIDIAN</code></td><td><code>25</code></td><td class='note'>godot/world/generator.gd:18</td></tr>
+<tr><td><code>TREE_D_FOREST</code></td><td><code>0.14</code></td><td class='note'>godot/world/generator.gd:20</td></tr>
+<tr><td><code>TREE_D_PLAIN</code></td><td><code>0.02</code></td><td class='note'>godot/world/generator.gd:21</td></tr>
+<tr><td><code>TREE_D_MAX</code></td><td><code>0.14</code></td><td class='note'>godot/world/generator.gd:22</td></tr>
+<tr><td><code>SPAWN_X</code></td><td><code>8</code></td><td class='note'>godot/world/generator.gd:24</td></tr>
+<tr><td><code>SPAWN_Z</code></td><td><code>8</code></td><td class='note'>godot/world/generator.gd:25</td></tr>
+<tr><td><code>SPAWN_H</code></td><td><code>34</code></td><td class='note'>godot/world/generator.gd:26</td></tr>
+<tr><td><code>SOLID_IDS</code></td><td><code>[</code></td><td class='note'>godot/world/generator.gd:88</td></tr>
+</table>
+<p class='note'>Biome thresholds are computed in <code>generator.gd biome_at()</code> (t &lt; -0.25 snow; t &gt; 0.35 &amp; m &lt; 0.1 desert; m &gt; 0.25 forest; else plains) — not top-level constants, so they are not in the tables above.</p>
+<h2>Verify gates (default)</h2>
+<div class="auto"><b>AUTO (from tasks/HARNESS.md — do not hand-edit)</b></div>
+<div class="auto"><b>G0</b> — <code>~/tools/godot/godot --headless --path godot --quit</code> exits 0 with <b>zero</b> <code>SCRIPT ERROR</code> lines.</div>
+<div class="auto"><b>AC-0061 tiered protocol</b> — subagent runs the <b>SMOKE</b> tier (2–4 dependency-mapped modes + genhash); the <b>coordinator</b> runs the <b>FULL battery</b> before build; the dependency table points at <code>tasks/AC-0061/AC-0061-results.html</code>.</div>
+<div class="auto"><b>Sandbox env</b> — every godot call is ONE bash command that sets HOME first; <b>one godot at a time</b> (concurrent runs corrupt the <code>.godot</code> cache and hang). Scratch to project-local <code>.scratch/</code>.</div>
+<pre>export HOME=/tmp/dsh_home; mkdir -p $HOME; cd /home/angrygiant/github_projects/AweCraft</pre>
+<h2>Expected RESULT shapes (default battery + genhash)</h2>
+<div class="auto"><b>AUTO (rows pulled from tasks/HARNESS.md §1 — do not hand-edit)</b></div>
+<table><tr><th>mode</th><th>key RESULT fields</th><th>typical wall</th></tr>
+<tr><td><code>player</code></td><td>`start`, `after_fwd`, `horizontal_moved`, `is_on_floor`, `jump_peak_y`, `after_fly_y`, `time_before`, `time_after`</td><td>3 s (standalone) / 2.7 s battery</td></tr>
+<tr><td><code>interact</code></td><td>`target_cell`, `breakable_id`, `highlight_visible`, `after_mine_cell`, `drop_spawned`, `inv_grew`, `place_cell`, `after_place_cell`, `place_ok`</td><td>3 s (standalone) / 1.3 s battery</td></tr>
+<tr><td><code>light</code></td><td>`surface_eff` (15), `cave_eff` (0), `torch_level` (14), `torch_far_before` (0), `torch_far_after` (9)</td><td>4 s (standalone) / 2.9 s battery</td></tr>
+<tr><td><code>fluids</code></td><td>`shore_after` ([5,7]), `source_after` ([5,8]), `water_delta` (1), `water_on_lava_result` (25), `sideways_lava_result` (9), `sea_stable` (true), `sea_surface_before`/`_final` (2730), `sea_backed_before`/`_final` (1406); prints `FLUIDSTAT` line</td><td>5 s (standalone) / 3.8 s battery</td></tr>
+<tr><td><code>buckets</code></td><td>`scoop_before`, `after_scoop`, `inv_scoop`, `place_after`, `inv_place`</td><td>~5 s (standalone, not re-run 08-24) / ~3 s battery</td></tr>
+<tr><td><code>genhash</code></td><td>prints `GENHASH cx cz &lt;32-hex&gt;` ×25 + `GENMS` (no RESULT dict)</td><td>2 s</td></tr>
+</table>
+<h2>Known-stable gate values</h2>
+<div class="auto"><b>AUTO (from tasks/HARNESS.md §3, else boilerplate — verify fresh on any fluids/world-touching change)</b></div>
+<table><tr><th>value</th><th>fresh result (2026-08-24)</th><th>established by</th></tr>
+<tr><td>fluids `sea_surface_before`/`_final`</td><td>**2730 / 2730** (FLAT)</td><td>AC-0068 (sea zero-write invariant)</td></tr>
+<tr><td>fluids `sea_backed_before`/`_final`</td><td>**1406 / 1406**</td><td>AC-0068</td></tr>
+<tr><td>fluids `sea_stable`</td><td>**true** (`water_delta` 1, `shore_after` [5,7], `source_after` [5,8])</td><td>AC-0068</td></tr>
+<tr><td>fluids `water_on_lava_result` / `sideways_lava_result`</td><td>**25 / 9** (obsidian / stone)</td><td>M6 fluids port</td></tr>
+<tr><td>interact `drop_spawned` / `place_ok`</td><td>**true / true** (`breakable_id` 2, `after_place_cell` 2)</td><td>M4 interaction</td></tr>
+<tr><td>light `torch_level`</td><td>**14** (`surface_eff` 15, `cave_eff` 0, `torch_far_after` 9)</td><td>M5 lighting</td></tr>
+<tr><td>genhash</td><td>**25/25** `GENHASH` lines, 32-hex MD5 each; default seed 44; seed 99 → all 25 lines differ</td><td>AC-0082 (world/* parity gate)</td></tr>
+<tr><td>boundary r4 `in_radius_built_max`</td><td>**67** (`built_final` 81, `ok` true, `flap` 0, `p95_ms` 65)</td><td>AC-0079 (look-priority scoring; pre-fix gate was 55)</td></tr>
+</table>
+<h2>Task-specific requirements</h2>
+<div class="fill"><b>COORDINATOR (2026-08-26)</b> — Run-1 maps the CURRENT boot paths (New/Continue) + the current fluid sim structure and re-anchors the AC-0071 P1.5/P1.6 design to the post-AC-0077/AC-0118/AC-0119/AC-0124/AC-0079 tree.</div>
+<ul>
+<li><b>P1.5 — fluid locality:</b> the fluid step currently processes the whole sim region every tick regardless of where fluids are. Make it local: (a) per-chunk fluid prescreen — a per-chunk &ldquo;has fluids&rdquo; bit (set on any fluid write, cleared when a chunk drains dry) so chunks with zero fluid cells are skipped entirely; (b) the 32-block sleep signature per the AC-0071 plan P1.5 (Run-1 locates the original design in <code>tasks/AC-0071/</code> and states it precisely: a signature over the 32-block window that lets a settled region sleep until a WAKE hits it); (c) wake sources UNCHANGED — bucket pours, block-place/break fluid updates, and neighbor-chunk fluid writes must wake exactly the regions the current sim would touch (the plan proves wake completeness: no reachable fluid state is ever left asleep). <b>Sim results BIT-IDENTICAL</b> — the fluids battery values (sea 2730/2730 + 1406/1406, water_on_lava 25, sideways_lava 9, torch/light unaffected) must not change a single cell: this is a SCHEDULING optimization (skip provably-settled work), never a sim-semantics change. Run-1 defines the identity proof (the battery + a fluids A/B hash over a streaming run if cheap).</li>
+<li><b>P1.6 — first-load fast path:</b> (a) NEW world: the 3×3 sync spawn core (already in the tree post-AC-0119 `_ensure_spawn_chunk` era — Run-1 verifies exactly what New does today: which chunks sync, what the player waits for, first_draw); (b) CONTINUE: the load path currently makes the player wait (full-radius or a large sync build before spawn — Run-1 maps it) — change it to: sync the 3×3 core around the SAVED player position (same core as New), spawn immediately, and stream the rest around the existing player (the AC-0119 air-on-miss reads make a not-yet-built frontier safe; recenter anchors on the player as usual). Continue must NOT regress the save/continue battery values (place/drop true, horizontal_moved 2.82) and must not break the AC-0119 boot invariant (spawn chunk data present before the player is placed).</li>
+<li><b>Interaction fences (Run-1 must confirm each):</b> AC-0119 air-on-miss (fluid reads of missing neighbors = air — the prescreen must treat a missing-neighbor chunk as dry, never generate); AC-0077 eff cache + AC-0079 C2 worker self-light (fluid writes mark chunks dirty for REMESH via the existing path — the prescreen bit must be set on that path too); AC-0080 hysteresis (a freed r+1 chunk with sleeping fluids is re-entered — its sleep state must not leak across the free/rebuild); AC-0118 recenter slicing (the core-build for Continue happens outside the sliced recenter or as its explicit first step — Run-1 decides with file:line).</li>
+</ul>
+<h2>Task-specific gates</h2>
+<div class="fill"><b>COORDINATOR (2026-08-26)</b> — Run-1 sets the fresh pre-change anchors; values below are the GATE CRITERIA (Run-1 fills the exact pre numbers; Run-2 must not regress them).</div>
+<ul>
+<li><b>G1:</b> <code>~/tools/godot/godot --headless --path godot --quit</code> → zero script errors (hard gate, all runs).</li>
+<li><b>G2 (data identity — the bit-identical fence):</b> genhash 25/25 (unchanged hash <code>61de26e9</code> set) + FULL battery <code>AWECRAFT_BATTERY="player;interact;light;fluids;buckets"</code> EXACT: sea <b>2730/2730 + 1406/1406</b> stable, torch_level 14, horizontal_moved 2.82, water_on_lava 25, sideways_lava 9, place_ok/drop_spawned true. A fluid-locality change that moves a single sim cell fails here.</li>
+<li><b>G3 (fluid locality — the point):</b> Run-1 defines the exact measurement (candidate: a fluids-sim harness mode printing per-frame sim ms + processed-chunk count over a streaming walk / the fluids battery wall time). Gate: sim work per tick drops when the fluid region is small (e.g. the sea-basin case: processed-chunk count ≈ chunks actually holding fluids, not the full radius) AND sim results unchanged (G2) AND no fluid frame-time regression in the perf mode (Run-1 anchors the pre perf fluids numbers).</li>
+<li><b>G4 (first-load fast path — the point):</b> (a) NEW: 3×3 sync core present at spawn (already true — verify + anchor first_draw ≤ 300); (b) CONTINUE: load a saved world (harness: save→quit→continue, or the existing continue path in the perf/boundary harness — Run-1 designs the minimal probe) and measure spawn-to-playable: post-fix the player spawns with the 3×3 core built and streaming in flight; gate = spawn no longer waits for the full radius (Run-1 states the exact pre/post numbers + the ≤ bound) + save/continue battery values unchanged (place/drop true, 2.82) + AC-0119 invariant (spawn chunk data present before player placement).</li>
+<li><b>G5 (no regression — the AC-0079 floor is now the floor):</b> boundary r4: walk p95 ≤ ~65 (post-AC-0079 D2 anchor 62–65 — do NOT regress further; the fluid prescreen may shift frame timing slightly), fwd_p95 ≤ 3500 + fwd_first10_p95 ≥ 8 + flap 0, RECSLICE r50 ≤ 12.2+noise, perf r4 total within noise of 5715 (improvement ok), read_sync_gen 0, fog_ok; flake: boundary r4 ×2 + player ×4.</li>
+<li><b>G6:</b> <code>./build_windows.sh</code> RC=0 + fresh exe + 8080 curl 200 + 5180 curl 200; <code>git status --short</code> → only the listed files + task folder; results.html written.</li>
+</ul>
+<h2>Scope (files expected to change)</h2>
+<div class="fill"><b>COORDINATOR (2026-08-26)</b> — Run-1 confirms against the current tree; expected:</div>
+<ul>
+<li><code>godot/world/fluids.gd</code> (the sim: per-chunk prescreen bit + 32-block sleep signature + wake plumbing) — primary file.</li>
+<li><code>godot/world/world.gd</code> (fluid write paths mark the prescreen bit; the Continue 3×3 core call site if it lives here — e.g. <code>_ensure_spawn_chunk</code> era).</li>
+<li><code>godot/scenes/main.gd</code> (boot: the Continue load path → 3×3 core + immediate spawn; the G3/G4 harness probe fields ONLY).</li>
+</ul>
+<h2>Fences</h2>
+<div class="fill"><b>COORDINATOR (2026-08-26)</b> — Run-1 confirms.</div>
+<ul>
+<li>No .gd outside the listed scope; no <code>index.html</code>; no <code>godot/export_presets.cfg</code>; no TASKS.yaml edits; no git (the coordinator commits); no builds in Run-1 (Run-2 does G6).</li>
+<li><b>Sim semantics frozen:</b> the fluid kernel (spread/cascade/displace/lava interaction) must not change — this is a scheduling/locality optimization with BIT-IDENTICAL results (G2). Wake sources are unchanged; a reachable fluid state must never be left asleep (Run-1 proves wake completeness with a concrete argument + a targeted probe if cheap).</li>
+<li>Untouched: the generator (genhash), the AC-0119 air-on-miss read paths, AC-0118 recenter slicing internals, AC-0080 hysteresis, AC-0077 eff cache / AC-0079 scored drain + C2 worker self-light, collision staging, the battery values.</li>
+<li>Continue must not break save integrity (the AC-0081-era save path: place/drop/battery values unchanged).</li>
+</ul>
+<p class="note">Scaffold generated by <code>tasks/scripts/spec_template.py</code> (no wall-clock timestamps; the only date is the registry created_at). Auto sections are reproducible byte-for-byte; fill sections are for the coordinator.</p>
+</body></html>
