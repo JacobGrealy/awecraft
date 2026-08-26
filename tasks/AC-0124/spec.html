@@ -8,8 +8,6 @@
 <p class="note">Registry <code>notes</code> (verbatim, quoted):</p>
 <blockquote><pre>Remove browser/web export: delete build_web.sh, web/ export, serve_web.py 8443 daemon, web_nothreads gates in world.gd:98, lighting/chunk, IndexedDB save quirks, WebRTC/ENet duality. Retune opts for windows native only: WorkerThreadPool always on, no AWECRAFT_THREADMESH fallback, RENDER_MAX 96 default feasible, allow GDExt/C++ hot loops, ENet only for MP. Update docs/CONTINUITY/ARCHITECTURE and HARNESS gates.</pre></blockquote>
 <h2>Goal</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — one line, from the registry notes (marked REVIEW until confirmed). <b>REVIEW</b></div>
-<!-- FILL: Goal — one sentence. Example: "Add a torch-light-bake pass to the chunk mesher so caves are readable at night." -->
 <p><b>Goal (confirmed 2026-08-26, USER direction):</b> Drop browser/web support — Windows-native is the product. Remove the web export and every <code>web_nothreads</code> dual path (build scripts, <code>web/</code> export, <code>serve_web.py</code> 8443 daemon, web save/network quirks, web-only env gates) and retune options for Windows-native only: WorkerThreadPool always on, no <code>AWECRAFT_THREADMESH</code> fallback, RENDER_MAX 96 default feasible, GDExt/C++ hot loops permitted (next: AC-0125 plans them), ENet reserved for MP. <b><code>index.html</code> REMAINS the frozen behavior/data spec — only the web EXPORT and web-compat code paths are removed.</b></p>
 <h2>Frozen spec references</h2>
 <div class="auto"><b>AUTO (fixed boilerplate — do not hand-edit)</b></div>
