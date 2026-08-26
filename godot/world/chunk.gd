@@ -603,7 +603,7 @@ static func _band(delta: int) -> Array:
 # These run on WorkerThreadPool threads over FRESH data copies + the immutable
 # main-thread ctx snapshot (make_ctx) — NO Data/Game/node access anywhere
 # below. The sync build_mesh/_build_snap/_emit_* path above stays untouched
-# (web + AWECRAFT_THREADMESH=0 keep byte-identical behavior and output).
+# (the sync path — spawn chunk, missing neighbor, cap-drop — keeps byte-identical behavior and output).
 # ---------------------------------------------------------------------------
 
 static func _s_effl(lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, x: int, y: int, z: int, h: int) -> int:

@@ -35,7 +35,6 @@ var full_check: CheckBox
 var hunger_check: CheckBox
 var file_dialog: FileDialog
 var _options_from := "main"
-var _is_web := false
 var _syncing := false
 # visibility state machine: exactly one of the boxes may be visible;
 # "ingame" = menu layer hidden entirely (except pause, via show_pause)
@@ -53,7 +52,6 @@ func _apply_state() -> void:
 
 
 func _ready() -> void:
-	_is_web = OS.has_feature("web")
 	layer = 20
 	_build_main()
 	_build_pause()
@@ -63,8 +61,7 @@ func _ready() -> void:
 	add_child(options_box)
 	file_dialog = FileDialog.new()
 	file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
-	if not _is_web:
-		file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	file_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	file_dialog.add_filter("*.zip ; *.mcpack ; *.mcpr")
 	file_dialog.file_selected.connect(_on_pack_file_selected)
 	add_child(file_dialog)
@@ -218,14 +215,10 @@ func _on_quit_btn_pressed() -> void:
 
 
 func _on_exit_pressed() -> void:
-	if OS.has_feature("web_nothreads"):
-		return
 	get_tree().quit()
 
 
 func _open_pack_dialog() -> void:
-	if _is_web:
-		return
 	file_dialog.popup_centered(Vector2i(720, 480))
 
 
@@ -434,9 +427,6 @@ func _build_main() -> void:
 	vb.add_child(_mk_btn("Options", func(): open_options("main")))
 	vb.add_child(_mk_btn("Exit", _on_exit_pressed))
 	var packb := _mk_btn("Load Texture Pack (.mcpack / .zip)", _open_pack_dialog)
-	if _is_web:
-		packb.disabled = true
-		packb.tooltip_text = "Unavailable in the web build"
 	vb.add_child(packb)
 	vb.add_child(main_status)
 	# help line: centered bottom strip, allowed to run wider than the column
@@ -577,9 +567,6 @@ func _build_options() -> void:
 	hunger_check.toggled.connect(_on_hunger_toggled)
 	vb.add_child(hunger_check)
 	var packb := _mk_btn("Load Texture Pack (.mcpack / .zip)", _open_pack_dialog, 560.0)
-	if _is_web:
-		packb.disabled = true
-		packb.tooltip_text = "Unavailable in the web build (web packs need an in-memory swap that this build does not do yet)"
 	vb.add_child(packb)
 	opt_status = Label.new()
 	opt_status.add_theme_font_size_override("font_size", 13)

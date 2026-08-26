@@ -144,42 +144,30 @@ const PICK_LOOK_REFRESH_DEG := 10.0
 
 func _ready() -> void:
 	timing = OS.get_environment("AWECRAFT_TIMING") == "1"
-	var tg := OS.get_environment("AWECRAFT_THREADGEN")
-	if OS.get_environment("AWECRAFT_FORCE_WEB") == "1":
-		print("THREADGEN off (web sim) threadgen=false pool=0")
-	elif tg != "0" and OS.has_feature("web_nothreads"):
-		print("THREADGEN off (web_nothreads) threadgen=false pool=0")
-	elif tg != "0":
-		var nenv := OS.get_environment("AWECRAFT_THREADGEN_N")
-		threadgen_max = maxi(1, mini(OS.get_processor_count() - 2, 3))
-		if nenv != "":
-			threadgen_max = maxi(1, nenv.to_int())
-		threadgen_max = mini(threadgen_max, 6)
-		threadgen_pool = Engine.get_singleton("WorkerThreadPool")
-		threadgen = true
-		_tg_debug = OS.get_environment("AWECRAFT_TGDEBUG") == "1"
-		print("THREADGEN on threadgen=true pool=%d" % threadgen_max)
-	var tm := OS.get_environment("AWECRAFT_THREADMESH")
-	if OS.get_environment("AWECRAFT_FORCE_WEB") == "1":
-		print("THREADMESH off (web sim) threadmesh=false pool=0")
-	elif tm != "0" and OS.has_feature("web_nothreads"):
-		print("THREADMESH off (web_nothreads) threadmesh=false pool=0")
-	elif tm != "0":
-		var nenv := OS.get_environment("AWECRAFT_THREADMESH_N")
-		threadmesh_max = maxi(1, mini(OS.get_processor_count() - 2, 3))
-		if nenv != "":
-			threadmesh_max = maxi(1, nenv.to_int())
-		threadmesh_max = mini(threadmesh_max, 6)
-		threadmesh_pool = Engine.get_singleton("WorkerThreadPool")
-		# Pre-warm everything the worker path touches so a worker thread
-		# never dereferences Data/Game: tables, block-table snapshot, and the
-		# merge atlas (static cache keyed by atlas identity).
-		Lighting._tables()
-		_tm_ctx = ChunkScript.make_ctx()
-		_tm_ms_full = ChunkScript._merge_atlas()
-		threadmesh = true
-		_tm_debug = OS.get_environment("AWECRAFT_TMDEBUG") == "1"
-		print("THREADMESH on threadmesh=true pool=%d" % threadmesh_max)
+	var nenv := OS.get_environment("AWECRAFT_THREADGEN_N")
+	threadgen_max = maxi(1, mini(OS.get_processor_count() - 2, 3))
+	if nenv != "":
+		threadgen_max = maxi(1, nenv.to_int())
+	threadgen_max = mini(threadgen_max, 6)
+	threadgen_pool = Engine.get_singleton("WorkerThreadPool")
+	threadgen = true
+	_tg_debug = OS.get_environment("AWECRAFT_TGDEBUG") == "1"
+	print("THREADGEN on threadgen=true pool=%d" % threadgen_max)
+	var menv := OS.get_environment("AWECRAFT_THREADMESH_N")
+	threadmesh_max = maxi(1, mini(OS.get_processor_count() - 2, 3))
+	if menv != "":
+		threadmesh_max = maxi(1, menv.to_int())
+	threadmesh_max = mini(threadmesh_max, 6)
+	threadmesh_pool = Engine.get_singleton("WorkerThreadPool")
+	# Pre-warm everything the worker path touches so a worker thread
+	# never dereferences Data/Game: tables, block-table snapshot, and the
+	# merge atlas (static cache keyed by atlas identity).
+	Lighting._tables()
+	_tm_ctx = ChunkScript.make_ctx()
+	_tm_ms_full = ChunkScript._merge_atlas()
+	threadmesh = true
+	_tm_debug = OS.get_environment("AWECRAFT_TMDEBUG") == "1"
+	print("THREADMESH on threadmesh=true pool=%d" % threadmesh_max)
 	_recprobe = OS.get_environment("AWECRAFT_RECPROBE") == "1"
 	var dr := OS.get_environment("AWECRAFT_DRAIN_MS")
 	if dr != "" and dr.to_int() > 0:
@@ -586,13 +574,13 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := true) -> bool:
 	# true = covered (sync-built now, or an in-flight task will apply);
 	# false = deduped behind an in-flight task (caller may want to retry).
-	# Sync fallbacks (kill switch, spawn chunk, no own data, missing neighbor)
+	# Sync fallbacks (spawn chunk, no own data, missing neighbor, cap-drop)
 	# run the legacy build_mesh path unchanged. eff_trust marks effs whose
 	# light values came from the contained per-chunk kernel (cache/empty);
 	# bulk flush effs are untrusted and must not enter the eff cache.
 	c.col_immediate = _col_immediate_for(cx, cz)
 	var key := _key(cx, cz)
-	if not threadmesh or (cx == 0 and cz == 0) or c.data.is_empty():
+	if (cx == 0 and cz == 0) or c.data.is_empty():
 		c.build_mesh(get_block, eff)
 		_count_collision_build(c)
 		_stage_check(c, key)

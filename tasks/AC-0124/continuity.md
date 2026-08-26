@@ -55,3 +55,49 @@ Sequence (godot ONE at a time): G0 --quit → genhash → full battery → perf 
 - **D4 (plan §5-G4 row 4 + §7) finalized** to the measured definition: RC=0/0-errors/`staged_dropped=0`/`read_sync_gen=0` hard/`fog_ok`/`p95 ≤ 80`/`max_frame ≤ 160`/`chunks_built ≥ 18000` (−15% floor)/`frames=186245`/`total_ms ∈ [2.6M,3.6M]`. No harness change needed.
 - Also this session: (1) dry-ran ALL G1 greps pre-change → baseline captured; FOUND + fixed 3 audit gaps: **e14** (AGENTS.md:51 rolling status line carries build_web/serve_web/web_nothreads/IndexedDB/AWECRAFT_THREADMESH tokens — was uncovered), **b28** (chunk.gd:606 worker-header comment — was misfiled in the zero-action note), G1d allowlist corrected (§5 :124 incident note; §8:211 claim was stale). Audit now 57 rows = 19 DELETE / 24 REWRITE / 14 KEEP. (2) Verified every doc row (e1–e14) against actual AGENTS/CONTINUITY/HARNESS/ARCHITECTURE/REMAINING_FEATURES lines. (3) Fixed cross-refs (b19→b23, b23→d4) + §6 spec-quote accuracy.
 - **STATE: plan.html COMPLETE (all 7 sections, all citations line-verified, all pre-change anchors measured, D1–D7 unambiguous). Run-1 done — hand off to coordinator → Run-2.**
+
+## RUN 2 (builder/implementation, medium) — 2026-08-26
+
+### Entry R2.0 — pre-change state verified
+- Daemons: 8443 NOT listening, pidfile pid 5 stale/dead (no kill needed); 5180 (tasks webui) + 8080 (windows serve) LISTEN.
+- Pre-change genhash anchor captured on unmodified tree: 25/25, GENMS 792, MD5-of-25-lines `61de26e9a542a5ce2db62e7157d6c018` = Run-1 anchor exactly (saved `.scratch/AC-0124/genhash_pre.log`).
+- Every cited line re-verified live before editing (world.gd 147–182/589/595, menu.gd 38/56/66–67/220–229/437–439/580–582, main.gd 106/4048, chunk.gd 606, export_presets.cfg 1–42, .gitignore:2, HARNESS.md 50/51/59/101/175, AGENTS.md 17/19/20/23/24/44/47–48/51, CONTINUITY.md 213/219) — all matched the plan; no drift.
+
+### Entry R2.1 — code edits complete (b1–b24, b28)
+- `godot/world/world.gd`: env-gate blocks ungated — threadgen + threadmesh pools ALWAYS on at boot incl. pre-warm (b4/b8); deleted `AWECRAFT_THREADGEN`/`AWECRAFT_THREADMESH`/`AWECRAFT_FORCE_WEB` parsing + both `web_nothreads` print arms (b1–b3, b5–b7); KEPT `_N`/`TGDEBUG`/`TMDEBUG` knobs. Incidental mechanical rename: second `var nenv` → `var menv` (both blocks now share `_ready` scope — avoids redefinition; no behavior change). b12: dispatch simplified to `if (cx == 0 and cz == 0) or c.data.is_empty():` (dead `not threadmesh` disjunct gone). b15: dispatch comment updated.
+- `godot/ui/menu.gd`: `_is_web` var + all 5 uses deleted (b16–b22); FileDialog always ACCESS_FILESYSTEM; `_on_exit_pressed` = bare `get_tree().quit()`; `_open_pack_dialog` = bare `popup_centered(Vector2i(720, 480))` (plan said "popup_centered()" — actual call carries the size arg, kept as-is); both pack buttons always enabled (web disabled/tooltip arms removed).
+- `godot/scenes/main.gd`: b23 `web_nothreads` RESULT field deleted from `_mainmenuexit_test`; b24 comment "(desktop + web)" → dropped (line now reads "menu-first boot on every display platform; AWECRAFT_MENU=0 = …" — avoided the plan's redundant "(all display platforms)" doubling, same meaning).
+- `godot/world/chunk.gd`: b28 worker-header comment rewritten (no web-compat token).
+- chunk.gd `build_mesh`/`apply_accs` body: 0 lines changed (b27 KEEP). lighting.gd/save.gd: 0 lines changed (c1/c3).
+
+### Entry R2.2 — deletions complete (a1–a6)
+- Deleted: `build_web.sh`, `serve_web.py`, `web/` (whole dir incl. ssl/), `.scratch/serve_web.pid` (stale pid 5), `.scratch/awecraft-web-https.log`, `.scratch/awecraft-web-http.log`.
+- `godot/export_presets.cfg`: [preset.0] Web block deleted; Windows presets renumbered [1]→[0], [2]→[1], contents byte-identical.
+- `.gitignore`: `web/` line deleted.
+- 8443 daemon: verified dead pre-deletion (port free, pid stale) → verify + cleanup path taken, NO kill (per D7d).
+
+### Entry R2.3 — docs complete (d3–d5, e1–e14 minus e9)
+- `tasks/HARNESS.md`: perf + boundary env cells → `AWECRAFT_THREADGEN_N`/`TGDEBUG` (bare THREADGEN knob dropped); :175 env note rewritten; mainmenuexit field list minus `web_nothreads`; "menu-boot is the default (all platforms)".
+- `AGENTS.md`: web build + web serve command lines deleted; server reporting = 8080 pair only; `.gitignore` note updated; daemon list = (1) windows-export 8080 + (2) tasks webui 5180 (5180 now documented explicitly); long-runs line → `./build_windows.sh`; "## Web test loop" → "## Windows test loop" (exe download loop, spec-repro sentence kept); rolling status line token-clean (AC-0107 blurb "kill switch (deleted in AC-0124)"; AC-0124 blurb → DONE summary, queue unchanged).
+- `godot/CONTINUITY.md`: :213 Servers note → windows-serve-only (8080 + 5180, 8443 removed by AC-0124); :219 process line → `./build_windows.sh` + exe via 8080. e9 fresh top checkpoint written after all gates pass.
+- `godot/ARCHITECTURE.md`: ONE line added after the spec-fidelity line (§1): web export dropped note (e12).
+- REMAINING_FEATURES.html: untouched (e13 KEEP).
+
+### Entry R2.4 — gates G1–G3 + G4 (r4 pair) PASS
+- G1-1 `--quit`: RC=0, 0 SCRIPT ERROR.
+- G1-2 + G2 genhash: RC=0, 0 err, 25/25 lines BYTE-IDENTICAL to pre anchor, MD5 `61de26e9a542a5ce2db62e7157d6c018` (pre GENMS 792 → post 790, timing noise).
+- G3 FULL battery: ok:true, 0 err; player 2.82/36.43/37.78/on_floor; interact drop+place true (2/2, inv {2,1}); light 15/0/14/9; fluids 2730/2730 + 1406/1406 + stable, water_delta 1, shore [5,7], source [5,8], lava 25/9; buckets [5,8]→140×1→[5,8], inv {139,1}. ALL EXACT vs anchors.
+- G4 perf r4: total_ms 6466 (pre 6447, in band), p95 42 (≤50), build_ms 326 (in band), max_frame 65 (≤78), read_sync_gen 0 (HARD), all_meshed true, 0 err. PASS.
+- G4 boundary r4: ok, p95 33, max 73, flap 0, forward_p95 4284 (pre 4840, in band — better), irb 81/81/20, present 81, loads 220/unloads 209, read_sync_gen 0, 0 err. PASS.
+- G4 boundary r50+RECPROBE: RUNNING (bg job bash-33, 3000 s wrap) → next entry.
+
+### Entry R2.5 — G4 complete (r50) + G5 build
+- G4 boundary r50+RECPROBE: RC=0, 0 err, ok:true. RECSLICE cold 137.0/10.0/28f (pre 138.0/11.0/28; gate ≤13 PASS), steady 66.0/8.0/27f (pre 62.0/7.0/27; gate ≤8 PASS — at boundary), RESULT p95 45 (≤51), max 106 (≤124), flap 0, read_sync_gen 0 (HARD), in_radius_present_final 10201 (exact), forward_p95 0 both pre/post (walk ends before r50 band resolves — same shape as AC-0118 era). PASS.
+- G5 first attempt: RC=1 — MY INVOCATION BUG (not code/presets): I passed `HOME=/tmp/dsh_home` to the build script and it resolves the engine as `$HOME/tools/godot/godot` → engine path broken. Re-run with host HOME + XDG template overrides → **RC=0**: fresh AweCraft.exe 109,559,552 B (12:22) + debug/console pair + wrapper "OK: 7 sections byte-identical to console template (45056 bytes)"; BUILD.txt stamped (git 4d72dbc). Both presets resolved BY NAME after renumbering → a4/c preset-proof PASS.
+- G5 daemon wrinkle (recorded, no action needed): the build ran in a DSH background-job sandbox with a private pid namespace → the script's pidfile liveness check saw the host 8080-server pid as "dead" → it started a TWIN serve on 8081 that died with the sandbox cleanup; the original 8080 server kept serving (directory serve → picks up the replaced exe automatically). 8081 is now gone; 8080 verified 200 on all 3 files (served sizes == on-disk sizes = fresh exe); 5180 200; 8443 = 0 listeners. Pidfile `.scratch/serve_win_export.pid` now holds a dead namespace-local pid — pre-existing script quirk (build_windows.sh is fence-protected: left alone), noted in the 00f checkpoint OPS NOTE.
+
+### Entry R2.6 — G1 greps + G6 + docs final state
+- G1a godot/ tree: 0 hits. G1b bare knobs in .gd: 0 hits. G1c AGENTS.md+HARNESS.md+.gitignore: 0 hits. G1d CONTINUITY.md: hits ONLY in historical sections (00e…00 checkpoint blocks, §5 :124 incident note, §6a–6c, §6 task list; final sweep first hit = line 8 = 00e block); NO hits in the new 00f block or §7/§8 live lines. (One self-inflicted fix mid-run: the first 00f draft contained the literal "IndexedDB" in the phantom blurb → reworded to "implicit browser-storage save quirk", re-verified 0.)
+- G6: `git status --short` = 16 entries, ALL audit-listed or tasks/AC-0124/ (M: .gitignore, AGENTS.md, ARCHITECTURE.md, CONTINUITY.md, export_presets.cfg, main.gd, menu.gd, chunk.gd, world.gd, continuity.md, HARNESS.md; D: build_web.sh, serve_web.py, web/ssl/cert.pem, web/ssl/key.pem — only the pems were git-tracked inside web/; ??: AC-0124-results.html). index.html + build_windows.sh untouched (absent from status). No stray godot/Xvfb.
+- `tasks/AC-0124/AC-0124-results.html` written (self-contained: gate summary, deletion inventory, 3 phantoms, full G4 A/B tables incl. r50 RECSLICE, daemon before/after + 8081 wrinkle, doc summary, G1 grep output, git status, the 57-row audit table spliced verbatim from plan §2).
+- **STATE: ALL GATES G1–G6 PASS. Run-2 COMPLETE.** Next: coordinator review → TASKS.yaml status → commit+push (per protocol; Run-2 does no git).

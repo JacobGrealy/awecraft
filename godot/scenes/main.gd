@@ -103,7 +103,7 @@ func _ready() -> void:
 
 	var headless_idle := DisplayServer.get_name() == "headless" \
 		and logic == "" and snapshot_path == "" and not menu_boot and not _harness_env_set()
-	# menu-first boot on every display platform (desktop + web); AWECRAFT_MENU=0 = explicit game-first skip
+	# menu-first boot on every display platform; AWECRAFT_MENU=0 = explicit game-first skip
 	var want_menu := not headless_idle and OS.get_environment("AWECRAFT_MENU") != "0"
 	if want_menu:
 		await _boot_menu()
@@ -4045,7 +4045,6 @@ func _mainmenuexit_test() -> void:
 		"menu_state": String(menu_ui._state) if menu_ui != null else "null",
 		"menu_visible": menu_ui != null and menu_ui.visible,
 		"exit_found": exit_btn != null,
-		"web_nothreads": OS.has_feature("web_nothreads"),
 		"ready_to_quit": state_ok and exit_btn != null,
 	})
 	if not (state_ok and exit_btn != null):

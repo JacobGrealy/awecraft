@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-26T10:54
+  updated_at: 2026-08-26T12:35
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -3622,18 +3622,41 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-26T07:32
-  updated_at: 2026-08-26T09:06
-  completed_at: null
+  updated_at: 2026-08-26T12:35
+  completed_at: 2026-08-26T12:35
   waiting_on: null
   parent_id: null
   notes: 'Remove browser/web export: delete build_web.sh, web/ export, serve_web.py 8443 daemon, web_nothreads gates in world.gd:98,
     lighting/chunk, IndexedDB save quirks, WebRTC/ENet duality. Retune opts for windows native only: WorkerThreadPool always
     on, no AWECRAFT_THREADMESH fallback, RENDER_MAX 96 default feasible, allow GDExt/C++ hot loops, ENet only for MP. Update
     docs/CONTINUITY/ARCHITECTURE and HARNESS gates.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-26T12:35
+    updated_at: null
+    text: '[agent] DONE 2026-08-26 (two-phase; Run-1 xhigh audit, Run-2 builder). Per the gated 57-row plan (19 DELETE / 24
+      REWRITE / 14 KEEP, every file:line verified): DELETED build_web.sh, serve_web.py, web/ export (incl. tracked web/ssl
+      cert+key), the web export preset (Windows preset survives, renumbered, name-based export proven via build), .gitignore
+      web line, 8443 pidfile+logs. CODE: world.gd thread pools always-on ungated (THREADGEN/THREADMESH/FORCE_WEB env parsing
+      + web_nothreads arms deleted), menu.gd _is_web gone (Exit = bare quit, FileDialog always filesystem, pack buttons always
+      enabled), main.gd/chunk.gd web arms + comments cleaned; spawn chunk stays SYNC at both levels (documented); worker path
+      unchanged. PHANTOMS VERIFIED (spec items with no code arm - no work invented): WebRTC/ENet duality [zero MP code exists],
+      IndexedDB save quirk [saves use implicit user:// only], battery web BATTSKIP arms [generic fallback only]. Docs (user-directed,
+      coordinator-reviewed): AGENTS.md (Windows-only commands/test loop/daemon list), CONTINUITY 00f checkpoint, ARCHITECTURE
+      note, HARNESS web arms. GATES ALL PASS: G1 headless clean + leftover greps 0 outside the 7-item allowlist (frozen index.html
+      + task-history exempt; bare ''web'' not a pattern); G2 genhash 25/25 (61de26e9, GENMS 792->790); G3 battery EXACT (2730/1406/14/2.82/25/9/place+drop);
+      G4 perf r4 6466/42/326/65 within noise of pre (6447/43), read_sync_gen hard 0, fwd_p95 4840->4284, RECSLICE r50 10.0/8.0;
+      RENDER_MAX-96 feasibility cited from Run-1 measurement (r96: 20424/37249 chunks @186245f, staged_dropped 0, max_frame
+      135, p95 68, 8.97GB = sustainable progression; full steady state ~90-100min fog-edge pop-in - documented); G5 windows
+      build RC=0 + fresh exe 109559552B + 8080 200 + 5180 200 + 8443 FREE; G6 clean tree (16 entries, all audit-listed + task
+      folder). NOTES: 8443 daemon was ALREADY dead at task start (5th occurrence of the reproducible background-build daemon
+      death - the task''s deletion made that moot: verify+cleanup, no kill needed); G5 build wrinkle: sandbox pid-namespace
+      made the script start an 8081 twin that died with the job (original 8080 kept serving; script fence-protected, recorded).
+      OP-SURFACE CHANGE EFFECTIVE: build gate is now ./build_windows.sh only; 8443/serve_web.py no longer exist; reporting
+      = 8080 pair only. index.html frozen spec untouched. Results: tasks/AC-0124/AC-0124-results.html.'
 - id: AC-0125
   title: gdext-cpp-hotloops-plan-only
   source: user
