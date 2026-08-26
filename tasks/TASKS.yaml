@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-25T19:57
+  updated_at: 2026-08-25T21:33
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -899,7 +899,7 @@ intake:
   labels:
   - godot
   created_at: 2026-08-18T12:00
-  updated_at: 2026-08-23T15:40
+  updated_at: 2026-08-25T21:32
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -3043,11 +3043,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-24T10:51
-  updated_at: 2026-08-25T18:06
-  completed_at: null
+  updated_at: 2026-08-25T21:33
+  completed_at: 2026-08-25T21:33
   waiting_on: null
   parent_id: null
   notes: 'Move chunk mesh+light build off main thread (after AC-0082 data-gen). WorkerThreadPool returns Acc buffers; main
@@ -3059,7 +3059,25 @@ intake:
     Verify: G1 0; G2 genhash identical; G3 battery green threaded; G4 A/B build_ms improvement; web_nothreads branch unchanged.
 
     Depends: AC-0082 done (data-gen threaded).'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-25T21:33
+    updated_at: null
+    text: '[agent] DONE 2026-08-25 (two-phase; accepted AS-DELIVERED with honest G4 note). Threaded mesh+light build (desktop):
+      workers run pure-static build_accs + Lighting.compute_light_flat_chunk on fresh duplicate() copies (chunk+8-neighbor
+      data/fl, merge-atlas rects+h only, NO Texture2D touch), return fresh Acc dicts; main thread assembles ArrayMesh/StaticBody
+      only (threadmesh_handoff/apply_accs). Dispatch mirrors AC-0082: dedup by key, cap<=6 (cap-drop->sync), stale re-trigger,
+      spawn (0,0) always sync; AWECRAFT_THREADMESH (default on desktop, "0"=sync; FORCE_WEB arm verified). Sync path byte-identical
+      (build_mesh body unmodified; G7). GATES: G1 headless clean all switch states RC=0 0 err no hang; G2 genhash 25/25 byte-identical;
+      G3 FULL battery exact (sea 2730/1406, torch 14, 2.82, 25/9, place/drop true); G4 build_ms 4336->154 (-96.5% PASS per
+      spec gate) BUT total_ms 8925->8336 (-6.6%, plan sub-threshold 10% missed — OPEN DEVIATION: workers feed-paced inflight=1,
+      wall set by frame-budget drain + AC-0082 gen re-pick churn 2342 no-op re-picks, out of scope per fence); BONUS p95 62->21,
+      max_frame 84->65; G5 exit-time deadlock found+fixed (bounded 1s _exit_tree drain, documented deviation) then player
+      6/6 + buckets 4/4; G6 render A/B R=1 iso seed44 0.109% + seed16 0.255% (coord viewed ON==OFF, diffs = lava/water anim
+      frames only); G7 sync path untouched; G8 tree clean. COORDINATOR NOTE: builder erroneously flipped AC-0034 (hitch) to
+      done via CLI without logging — REVERTED to in-progress (AC-0107 total_ms -6.6% proves hitches remain; drain churn is
+      the likely residual cause — keep as follow-up). r50 skipped (not cheap, can''t overturn r4). Results tasks/AC-0107/AC-0107-results.html
+      (6 PNGs + 2 heatmaps).'
 - id: AC-0108
   title: vertical-subchunks-16x16x16
   source: user

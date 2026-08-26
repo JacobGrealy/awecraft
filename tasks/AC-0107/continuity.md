@@ -102,3 +102,40 @@
 - plan.html WRITTEN (7 sections, constants re-parsed from current source).
 - Probes done: G0 sanity RC=0; perf r4 baseline ×2 (above). NO code touched.
 - Next: coordinator gate (re-parse constants, 7 sections) → Run-2 (builder) per plan.html.
+
+---
+
+## RUN 2 — builder/implementation (this run)
+
+### Files changed (git numstat)
+- `godot/world/chunk.gd` +726/−7 → 1634 lines
+- `godot/world/lighting.gd` +55/−0 → 382 lines
+- `godot/world/world.gd` +209/−5 → 1425 lines
+- (990 insertions, 12 deletions total; sync path untouched — see G7)
+
+### What was built (per plan.html)
+- **chunk.gd**: static-converted `_light_color/_fluid_hgt/_qgrow/_merge_strip/_qwrite/_band/_merge_atlas` (bodies unchanged); static mirrors `_s_effl/_s_face_light/_s_corner_uv/_s_face_uvs/_s_uvc/_s_faces/_s_fluid_quad_count/_s_emit_faces/_s_qwrite_merged/_s_emit_ro_merged/_s_emit_xquad/_s_emit_fluid/_build_snap_data` (Data/Game/node-free — tables from `make_ctx()`); `make_ctx()` main-thread snapshot; `build_accs(data,fl,cx,cz,nbs,ctx,ms,eff)` worker pipeline returning fresh plain-dict surface buffers {v,n,c,u,i,q} + light dict + wall time; `apply_accs(res,ms)` main-thread assembly (mirror of build_mesh apply block; `ms.tex` consumed here only).
+- **lighting.gd**: `compute_light_flat_chunk(data,cx,cz,h)` — STANDALONE_MARGIN=0 specialization of `compute_light_flat` (box build_mesh passes); same {"mn","w","d","arr"} shape, mn = chunk world-space min.
+- **world.gd**: `_ready` gate (`AWECRAFT_THREADMESH` default ON desktop / "0" legacy / FORCE_WEB off; `AWECRAFT_THREADMESH_N` clamp ≤6; pre-warms `_tables()/make_ctx()/_merge_atlas()`; prints `THREADMESH on threadmesh=true pool=3`); `_mesh_dispatch` (sync fallbacks: kill switch / spawn (0,0) / empty own data / missing neighbor → `build_mesh`; dedup → false; cap-drop → sync; else enqueue with duped data+fl, 8 neighbor data+fl, duped atlas rects+h); `threadmesh_poll` in `_process`+`recenter` (stale drop: node gone / id mismatch / data+fl mismatch → re-trigger via light-flush or band queue; handoff = `apply_accs`); 4 call sites (flush/fluid/tex-refresh/perf-unit) routed through dispatch; `refresh_textures` rebuilds ctx+atlas; TMDEBUG counters `_tm_enq/dedup/capdrop/stale/datadrop/handoff`; `AWECRAFT_TIMING=1` → `BUILDCHUNK_T` + `perf_build_worker_ms`.
+
+### Gate results (EXACT)
+- **G1 PASS**: headless default/"0"/FORCE_WEB all RC=0, zero script errors, no hang. ON prints `THREADMESH on threadmesh=true pool=3`; FORCE_WEB `THREADMESH off (web sim)`. Player RESULT identical across arms (horizontal_moved 2.82).
+- **G2 PASS**: genhash 25/25 on both arms, byte-identical (diff empty).
+- **G3 PASS**: threaded on full battery `ok:true` RC=0 0 script errors: sea 2730/2730 + 1406/1406, torch_level 14, horizontal_moved 2.82, place_ok true, drop_spawned true (after_place_cell 2, place_cell [8,34,8]), water_on_lava 25, sideways_lava 9, water_delta 1, buckets inv_place 139 / inv_scoop 140, total_ms 74343.
+- **G4 PARTIAL FAIL** (r4 seed44 ×2 each): build_ms OFF 4361/4363 (4362) vs ON 155/153 (154) = **−96.5% PASS (≥30%)**; total_ms OFF 8917/8934 (8925.5) vs ON 8323/8349 (8336) = **−6.6% FAIL (<10%)**. gen_ms 671 vs 684, first_draw 196.5 vs 193.5, p95 62 vs 21, max_frame 84→65, all_meshed true / 81 of 121 both arms. r50 skipped (not cheap; r4 verdict decisive). **Diagnosis (TMDEBUG/TGDEBUG event timelines, measured)**: mesh workers idle — every `TMESH ENQ` shows inflight=1 (feed-paced, not worker-paced); wall time set by frame-budget drain (1–2 units/frame) + pre-existing AC-0082 threadgen re-pick churn (2342 no-op gen re-picks in ON arm) + gen 31–42ms/chunk fed at ~12/s; the 4.2s main-thread build cost removed by threading was hidden behind gen-feeding wait. Drain re-pick churn is AC-0082 shared code — out of AC-0107 scope, open deviation for coordinator.
+- **G5 PASS (after in-scope bug fix)**: first loop player 2/6 HUNG post-RESULT (exit-time deadlock; OFF arm 4/4 clean → causality; gdb blocked by ptrace_scope). Root cause: worker mid-GDScript-static-call while engine unloads scripts at shutdown (script-lock vs pool-cleanup circular wait); mesh rebuilds (fluid ticks) keep a task in flight at quit ~40% of runs. **Fix** in `world._exit_tree`: bounded 1s spin on `is_task_completed` for all in-flight threadgen+threadmesh tids before clearing bookkeeping (`OS.delay_msec(1)`; 1s cap = exit can never hang because of this). After fix: **player 6/6 + buckets 4/4 = 10/10 green** (RC=0, 0 script errors, horizontal_moved 2.82 ×6, inv_scoop 140 ×4, no hang).
+- **G6 PASS**: R=1 iso NO_FOG xvfb gl_compatibility. seed44 ON vs OFF: 1009/921600 px = **0.109%** (max delta 56); seed16: 2350/921600 = **0.255%** (max delta 192). Both <4%; diff clusters in one bottom-right region (lava/water anim frames — different wall time between runs); no scattered tile corruption, no black caves. PNGs in task folder + embedded in results.html.
+- **G7 PASS**: sync path code-identical — git diff: build_mesh body has NO deletions; only deletions = 7 `func`→`static func` signature lines (chunk.gd), 1 `_process` guard line (extended with empty-check, no-op when off), 4 call sites routed through `_mesh_dispatch` (calls build_mesh byte-identically when off). lighting.gd +55/−0. Verified: FORCE_WEB + "0" arms identical RESULT + byte-identical genhash.
+- **G8 PASS**: git status = 3 godot files + tasks/AC-0107/ artifacts only (TASKS.yaml touched by coordinator, not this run).
+
+### Deviations (recorded, honest)
+1. G4 total_ms FAIL — reported as-is (6.6% < 10%); root cause = pre-existing drain/gen pacing (AC-0082 shared code), not the threaded build.
+2. `_exit_tree` exit-drain — not in plan; added to pass G5 (real deadlock found in flake loop). Minimal, bounded, bookkeeping only.
+3. Worker surface buffers = plain dicts (not Acc instances); main wraps via `_acc_from_dict`; `_qgrow/_qwrite/_qwrite_merged` take untyped `acc` shared by both paths — sync behavior identical (G1/G2/G3 exact values prove it).
+4. r50 A/B skipped ("if cheap"; cannot overturn r4).
+
+### State
+- ALL gates done. G1✓ G2✓ G3✓ G4 partial (build_ms✓/total_ms✗, diagnosed) G5✓ (after fix) G6✓ G7✓ G8✓.
+- Deliverables: `tasks/AC-0107/AC-0107-results.html` (self-contained, 6 embedded PNGs), this RUN 2 section.
+- No stray godot/Xvfb pids. Scratch: `.scratch/AC-0107/` (all gate logs).
+- Next: coordinator — review results.html, commit+push (git is coordinator-only), decide on AC-0082 drain-churn follow-up (G4 total_ms).

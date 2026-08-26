@@ -85,6 +85,24 @@ var _tg_capdrop := 0
 var _tg_handoff := 0
 var _tg_stale := 0
 var _tg_datadrop := 0
+# AC-0107 threaded mesh+light (desktop): shared WorkerThreadPool, dedup by
+# chunk key, in-flight cap, stale drop (node gone / data+fl changed).
+var threadmesh := false
+var threadmesh_max := 3
+var threadmesh_pool = null
+var threadmesh_inflight: Array = []
+var _tm_slots = {}
+var _tm_inflight_keys: Dictionary = {}
+var _tm_ctx: Dictionary = {}
+var _tm_ms_full: Dictionary = {"tex": null, "rects": {}}
+var _tm_debug := false
+var _tm_enq := 0
+var _tm_dedup := 0
+var _tm_capdrop := 0
+var _tm_stale := 0
+var _tm_datadrop := 0
+var _tm_handoff := 0
+var perf_build_worker_ms := 0
 var _look_yaw := 0.0
 var _look_dir := Vector2(1, 0)
 const PICK_POOL_CAP := 512
@@ -107,6 +125,27 @@ func _ready() -> void:
 		threadgen = true
 		_tg_debug = OS.get_environment("AWECRAFT_TGDEBUG") == "1"
 		print("THREADGEN on threadgen=true pool=%d" % threadgen_max)
+	var tm := OS.get_environment("AWECRAFT_THREADMESH")
+	if OS.get_environment("AWECRAFT_FORCE_WEB") == "1":
+		print("THREADMESH off (web sim) threadmesh=false pool=0")
+	elif tm != "0" and OS.has_feature("web_nothreads"):
+		print("THREADMESH off (web_nothreads) threadmesh=false pool=0")
+	elif tm != "0":
+		var nenv := OS.get_environment("AWECRAFT_THREADMESH_N")
+		threadmesh_max = maxi(1, mini(OS.get_processor_count() - 2, 3))
+		if nenv != "":
+			threadmesh_max = maxi(1, nenv.to_int())
+		threadmesh_max = mini(threadmesh_max, 6)
+		threadmesh_pool = Engine.get_singleton("WorkerThreadPool")
+		# Pre-warm everything the worker path touches so a worker thread
+		# never dereferences Data/Game: tables, block-table snapshot, and the
+		# merge atlas (static cache keyed by atlas identity).
+		Lighting._tables()
+		_tm_ctx = ChunkScript.make_ctx()
+		_tm_ms_full = ChunkScript._merge_atlas()
+		threadmesh = true
+		_tm_debug = OS.get_environment("AWECRAFT_TMDEBUG") == "1"
+		print("THREADMESH on threadmesh=true pool=%d" % threadmesh_max)
 	_recprobe = OS.get_environment("AWECRAFT_RECPROBE") == "1"
 	var dr := OS.get_environment("AWECRAFT_DRAIN_MS")
 	if dr != "" and dr.to_int() > 0:
@@ -125,13 +164,39 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	threadgen = false
+	threadmesh = false
+	# AC-0107 (G5 flake fix): drain in-flight worker tasks BEFORE the engine
+	# unloads scripts. A worker still executing a GDScript static call during
+	# cleanup deadlocks (observed: post-RESULT exit hang, ~40% of ON-arm runs,
+	# OFF arm clean). Bounded wait — if the pool ever wedges, continue the
+	# shutdown after the cap instead of hanging the exit.
+	if threadgen_pool != null:
+		var waited := 0
+		while waited < 1000 and (not threadgen_inflight.is_empty() or not threadmesh_inflight.is_empty()):
+			var any_pending := false
+			for e in threadgen_inflight:
+				if not threadgen_pool.is_task_completed(int(e["tid"])):
+					any_pending = true
+			for e in threadmesh_inflight:
+				if not threadgen_pool.is_task_completed(int(e["tid"])):
+					any_pending = true
+			if not any_pending:
+				break
+			OS.delay_msec(1)
+			waited += 1
+	threadgen_inflight.clear()
+	threadmesh_inflight.clear()
+	_tg_slots.clear()
+	_tm_slots.clear()
 
 func _on_fluid_tick() -> void:
 	if fluid_sim_enabled and (Game.mode == "play" or Game.mode == "pause"):
 		tick_fluids()
 
 func _process(_delta: float) -> void:
-	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty():
+	# threadmesh_inflight keeps this running while mesh tasks are in flight
+	# even when every bookkeeping list is drained (else the poll never runs).
+	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty() and threadmesh_inflight.is_empty():
 		return
 	var was_active := flush_active
 	var added := false
@@ -184,7 +249,7 @@ func _process(_delta: float) -> void:
 				continue
 			var tb := Time.get_ticks_msec()
 			var eff = flush_eff
-			c2.build_mesh(get_block, eff)
+			_mesh_dispatch(c2, int(c2.cx), int(c2.cz), eff)
 			var dt := Time.get_ticks_msec() - tb
 			if dt > perf_single_build_ms:
 				perf_single_build_ms = dt
@@ -200,15 +265,23 @@ func _process(_delta: float) -> void:
 	for c in fluid_list:
 		var cc: Node3D = c
 		if _build_ready(int(cc.cx), int(cc.cz)):
-			cc.build_mesh(get_block, cc.last_eff)
+			_mesh_dispatch(cc, int(cc.cx), int(cc.cz), cc.last_eff)
 		else:
 			fluid_dirty[_key(int(cc.cx), int(cc.cz))] = true
 	threadgen_poll()
+	threadmesh_poll()
 	_drain_build_queue()
 	_drain_tex_refresh()
 
 func refresh_textures() -> void:
 	tex_refresh = chunks.keys().duplicate()
+	# Texture swap is the only table-changing event: rebuild the worker ctx
+	# and the merge-atlas cache on the main thread. In-flight tasks keep their
+	# own copies and land with the old atlas; the tex_refresh drain re-pushes
+	# deduped keys so every chunk is rebuilt once with the new tables.
+	if threadmesh:
+		_tm_ctx = ChunkScript.make_ctx()
+		_tm_ms_full = ChunkScript._merge_atlas()
 
 func _drain_tex_refresh() -> void:
 	if tex_refresh.is_empty():
@@ -225,7 +298,10 @@ func _drain_tex_refresh() -> void:
 		if not _build_ready(int(c.cx), int(c.cz)):
 			tex_refresh.push_back(key)
 			continue
-		c.build_mesh(get_block, c.last_eff)
+		# false = a task for this chunk is still in flight (dispatch dedup):
+		# re-queue so the chunk is rebuilt once that task has landed.
+		if not _mesh_dispatch(c, int(c.cx), int(c.cz), c.last_eff):
+			tex_refresh.push_back(key)
 		done += 1
 
 func _convert_data_to_build(key: String) -> void:
@@ -394,9 +470,136 @@ func threadgen_handoff(e: Dictionary, data: PackedByteArray) -> void:
 	if timing or _tg_debug:
 		print("GENHAND %d,%d" % [int(e["cx"]), int(e["cz"])])
 
+
+# --- AC-0107 threaded mesh+light (desktop) -------------------------------
+
+func _threadmesh_worker() -> void:
+	# Worker body: pure-static pipeline (ChunkScript.build_accs) on fresh
+	# copies. Reads only its own entry (written before add_task) and writes
+	# entry["result"] — the AC-0082 handoff pattern, proven in this codebase.
+	var tid = threadmesh_pool.get_caller_task_id()
+	var entry = _tm_slots.get(tid)
+	if entry == null:
+		return
+	entry["result"] = ChunkScript.build_accs(entry["data"], entry["fl"], int(entry["cx"]), int(entry["cz"]), entry["nbs"], entry["ctx"], entry["ms"], entry["eff"])
+
+func threadmesh_poll() -> void:
+	if threadmesh_inflight.is_empty():
+		return
+	var i := 0
+	while i < threadmesh_inflight.size():
+		var e: Dictionary = threadmesh_inflight[i]
+		var tid = int(e["tid"])
+		if threadmesh_pool.is_task_completed(tid):
+			threadmesh_inflight.remove_at(i)
+			_tm_inflight_keys.erase(e["key"])
+			_tm_slots.erase(tid)
+			threadmesh_handoff(e, e.get("result", null))
+			continue
+		i += 1
+
+func _tm_retrigger(key: String, c: Node3D, e: Dictionary) -> void:
+	# A dropped result can't be applied: rebuild from current state.
+	# Meshed chunks re-enter the light-flush queue (fresh bulk eff);
+	# not-yet-meshed chunks re-enter the build band queue.
+	if bool(c.mesh_built):
+		if not light_pending_set.has(key):
+			light_pending.append(key)
+			light_pending_set[key] = true
+		flush_active = true
+	else:
+		_enqueue_build(int(e["cx"]), int(e["cz"]))
+
+func threadmesh_handoff(e: Dictionary, res) -> void:
+	var key: String = e["key"]
+	var c = chunks.get(key)
+	if c == null:
+		_tm_stale += 1
+		if _tm_debug:
+			print("TMESH STALE %d,%d (chunk gone)" % [int(e["cx"]), int(e["cz"])])
+		return
+	if int(c.get_instance_id()) != int(e["inst"]):
+		_tm_stale += 1
+		if _tm_debug:
+			print("TMESH STALE %d,%d (inst mismatch)" % [int(e["cx"]), int(e["cz"])])
+		return
+	if res == null:
+		_tm_datadrop += 1
+		if _tm_debug:
+			print("TMESH DATADROP %d,%d (no result)" % [int(e["cx"]), int(e["cz"])])
+		_tm_retrigger(key, c, e)
+		return
+	if c.data != e["data"] or c.fl != e["fl"]:
+		_tm_datadrop += 1
+		if _tm_debug:
+			print("TMESH DATADROP %d,%d (data/fl changed mid-build)" % [int(e["cx"]), int(e["cz"])])
+		_tm_retrigger(key, c, e)
+		return
+	var ta := Time.get_ticks_msec()
+	c.apply_accs(res, _tm_ms_full)
+	perf_build_ms += Time.get_ticks_msec() - ta
+	perf_build_worker_ms += int(res.get("wms", 0))
+	_tm_handoff += 1
+	if timing or _tm_debug:
+		print("BUILDCHUNK_T %d,%d build_ms=%d" % [int(e["cx"]), int(e["cz"]), int(res.get("wms", 0))])
+
+func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary) -> bool:
+	# true = covered (sync-built now, or an in-flight task will apply);
+	# false = deduped behind an in-flight task (caller may want to retry).
+	# Sync fallbacks (kill switch, spawn chunk, no own data, missing neighbor)
+	# run the legacy build_mesh path unchanged.
+	if not threadmesh or (cx == 0 and cz == 0) or c.data.is_empty():
+		c.build_mesh(get_block, eff)
+		return true
+	var nbs: Dictionary = {}
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			if (dx == 0) == (dz == 0):
+				continue
+			var nc = chunks.get(_key(cx + dx, cz + dz))
+			if nc == null or nc.data.is_empty():
+				# Workers can't on-demand-generate; the sync _build_snap can.
+				c.build_mesh(get_block, eff)
+				return true
+			nbs["%d,%d" % [dx, dz]] = {"d": nc.data.duplicate(), "f": nc.fl.duplicate()}
+	var key := _key(cx, cz)
+	if _tm_inflight_keys.has(key):
+		_tm_dedup += 1
+		if _tm_debug:
+			print("TMESH DEDUP %d,%d" % [cx, cz])
+		return false
+	if threadmesh_inflight.size() >= threadmesh_max:
+		_tm_capdrop += 1
+		if _tm_debug:
+			print("TMESH CAPDROP %d,%d inflight=%d" % [cx, cz, threadmesh_inflight.size()])
+		c.build_mesh(get_block, eff)
+		return true
+	var ms_w: Dictionary
+	if not _tm_ms_full.rects.is_empty():
+		ms_w = {"rects": _tm_ms_full.rects.duplicate(), "h": float(_tm_ms_full.get("h", 0.0))}
+	else:
+		ms_w = {"rects": {}}
+	var entry := {
+		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(),
+		"data": c.data.duplicate(), "fl": c.fl.duplicate(),
+		"nbs": nbs, "eff": eff, "ctx": _tm_ctx, "ms": ms_w,
+	}
+	var tid = threadmesh_pool.add_task(_threadmesh_worker)
+	entry["tid"] = tid
+	_tm_slots[tid] = entry
+	_tm_inflight_keys[key] = tid
+	threadmesh_inflight.append(entry)
+	_tm_enq += 1
+	if _tm_debug:
+		print("TMESH ENQ %d,%d inflight=%d" % [cx, cz, threadmesh_inflight.size()])
+	return true
+
 func _build_unit(c: Node3D, cx: int, cz: int) -> int:
 	var tb := Time.get_ticks_msec()
-	c.build_mesh(get_block)
+	# AC-0107: threaded dispatch when eligible; sync fallbacks inside keep the
+	# legacy path. dt is the MAIN-thread cost (dispatch/apply), the worker-side
+	# total is reported via perf_build_worker_ms / BUILDCHUNK_T.
+	_mesh_dispatch(c, cx, cz, {})
 	var dt := Time.get_ticks_msec() - tb
 	last_build_us = dt * 1000
 	if timing:
@@ -802,6 +1005,7 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 		c.queue_free()
 	_rp_free_ms += (Time.get_ticks_usec() - tf1) / 1000.0
 	threadgen_poll()
+	threadmesh_poll()
 	if not mesh_now:
 		var make: Array[Dictionary] = []
 		for dx in range(-render_radius, render_radius + 1):

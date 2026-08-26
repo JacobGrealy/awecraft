@@ -220,6 +220,61 @@ static func compute_light_flat(box: Dictionary, world) -> Dictionary:
 	return {"mn": mn, "w": w, "d": d, "arr": eff}
 
 
+# AC-0107: single-chunk, data-only light for worker threads — the exact
+# STANDALONE_MARGIN=0 specialization of compute_light_flat (the box build_mesh
+# passes): every column maps to the same chunk, so the world dereference +
+# get_block fallbacks are provably no-ops and the sky-scan reads ONLY the
+# passed chunk data. _tables() is warmed on the main thread (world._ready),
+# so a worker call never touches Data. Returns the same shape as
+# compute_light_flat (mn is the chunk's world-space min — the eff dict lands
+# in chunk.last_eff and must index world coordinates on later remeshes).
+static func compute_light_flat_chunk(data: PackedByteArray, cx: int, cz: int, h: int) -> Dictionary:
+	_tables()
+	var mn := Vector3i(cx * 16, 0, cz * 16)
+	var mx := Vector3i(cx * 16 + 15, h - 1, cz * 16 + 15)
+	var w := 16
+	var d := 16
+	var H: int = h
+	var sz := w * d
+	var ids := PackedByteArray()
+	ids.resize(sz * h)
+	var sky := PackedByteArray()
+	sky.resize(sz * h)
+	var blk := PackedByteArray()
+	blk.resize(sz * h)
+	var has_glow := false
+	for ix in range(w):
+		for iz in range(d):
+			var i0 := ix + iz * w
+			var open := true
+			for y in range(H - 1, mn.y - 1, -1):
+				var b: int = data[(y << 8) | (iz << 4) | ix]
+				if y > mx.y:
+					if open and _att[b] == 0:
+						open = false
+					continue
+				var i := (y - mn.y) * sz + i0
+				ids[i] = b
+				if open and _att[b] > 0:
+					sky[i] = SKY_FULL
+				var lv := _glow[b]
+				if lv > 0:
+					blk[i] = lv
+					has_glow = true
+				if open and _att[b] == 0:
+					open = false
+	_flood_flat(sky, ids, w, h, d)
+	if has_glow:
+		_flood_flat(blk, ids, w, h, d)
+	var eff := PackedByteArray()
+	eff.resize(sz * h)
+	for i in range(eff.size()):
+		var s := sky[i]
+		var b2 := blk[i]
+		eff[i] = s if s >= b2 else b2
+	return {"mn": mn, "w": w, "d": d, "arr": eff}
+
+
 static func _flood_flat(src: PackedByteArray, ids: PackedByteArray, w: int, h: int, d: int) -> void:
 	var sz := w * d
 	var size := ids.size()
