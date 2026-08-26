@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-26T07:26
+  updated_at: 2026-08-26T07:32
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -19,6 +19,7 @@ queue:
 - AC-0118
 - AC-0077
 - AC-0119
+- AC-0124
 - AC-0078
 - AC-0120
 - AC-0108
@@ -3589,4 +3590,23 @@ intake:
   notes: 'Research-only: plan client/server multiplayer for AweCraft. Survey Godot 4.7.1 multiplayer (ENet, WebRTC, WASM limits),
     headless server, world/chunk authority, latency, prediction, inventory/combat sync, save. Deliverable tasks/AC-XXXX/plan.html
     with architecture options, phased breakdown, and derived subtasks added to queue. No code.'
+  comments: []
+- id: AC-0124
+  title: drop-browser-support-windows-only
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-26T07:32
+  updated_at: 2026-08-26T07:32
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Remove browser/web export: delete build_web.sh, web/ export, serve_web.py 8443 daemon, web_nothreads gates in world.gd:98,
+    lighting/chunk, IndexedDB save quirks, WebRTC/ENet duality. Retune opts for windows native only: WorkerThreadPool always
+    on, no AWECRAFT_THREADMESH fallback, RENDER_MAX 96 default feasible, allow GDExt/C++ hot loops, ENet only for MP. Update
+    docs/CONTINUITY/ARCHITECTURE and HARNESS gates.'
   comments: []
