@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-26T05:26
+  updated_at: 2026-08-26T07:18
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -25,6 +25,8 @@ queue:
 - AC-0109
 - AC-0110
 - AC-0079
+- AC-0121
+- AC-0122
 - AC-0097
 - AC-0093
 - AC-0094
@@ -3532,4 +3534,40 @@ intake:
     shared mats 1290. Introduce shared material cache keyed by tile/tint (Data.ATLAS_PX 1024, merge_atlas h 1760) reused across
     chunks; ArrayMesh creation stays per-chunk but material alloc becomes O(1). Gate: material alloc per crossing 0, same
     visuals (greedy-mesh uv intact AC-0117), battery green, r4 verts 125552 intact.'
+  comments: []
+- id: AC-0121
+  title: debug-console-in-game
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-26T07:18
+  updated_at: 2026-08-26T07:18
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'In-game debug console: toggle with backtick/tilde or F3+? (or /), overlay TextEdit+log, command dispatch to Debug.*
+    (give_item, teleport, seed_inv, fly, set_time, light_at, etc.). Must work desktop+web, not intercept normal typing when
+    closed, scroll history. Gate: console open/close, command echo, invalid command error.'
+  comments: []
+- id: AC-0122
+  title: debug-keys-to-console-commands
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-26T07:18
+  updated_at: 2026-08-26T07:18
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: Move V/H/J/K/P debug keys from player.gd:168 unconditional handlers into console commands (seed_inv, hold_swing,
+    clear_swing, etc.). Remove or gate KEY_V/H/J/K behind console or OS.is_debug_build()/AWECRAFT_DEBUG. Keep E/P gameplay
+    keys. Verify no player gets free items via V after.
   comments: []
