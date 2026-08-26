@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-26T07:32
+  updated_at: 2026-08-26T07:36
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -20,6 +20,7 @@ queue:
 - AC-0077
 - AC-0119
 - AC-0124
+- AC-0125
 - AC-0078
 - AC-0120
 - AC-0108
@@ -3609,4 +3610,22 @@ intake:
     lighting/chunk, IndexedDB save quirks, WebRTC/ENet duality. Retune opts for windows native only: WorkerThreadPool always
     on, no AWECRAFT_THREADMESH fallback, RENDER_MAX 96 default feasible, allow GDExt/C++ hot loops, ENet only for MP. Update
     docs/CONTINUITY/ARCHITECTURE and HARNESS gates.'
+  comments: []
+- id: AC-0125
+  title: gdext-cpp-hotloops-plan-only
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-26T07:36
+  updated_at: 2026-08-26T07:36
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'PLAN ONLY (do not implement): research GDExt C++ for hot loops (WorldGen fbm/caves, Lighting BFS, chunk face scan/greedy).
+    Deliver plan.html benchmarking GDScript vs C# vs GDExt (r50 wall, build_ms), integration scope (which 2-3 files), build
+    pipeline (SCons + .gdextension + windows dll), risks, and go/no-go. No code until user approves.'
   comments: []
