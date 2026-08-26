@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-26T07:18
+  updated_at: 2026-08-26T07:26
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -27,6 +27,7 @@ queue:
 - AC-0079
 - AC-0121
 - AC-0122
+- AC-0123
 - AC-0097
 - AC-0093
 - AC-0094
@@ -3570,4 +3571,22 @@ intake:
   notes: Move V/H/J/K/P debug keys from player.gd:168 unconditional handlers into console commands (seed_inv, hold_swing,
     clear_swing, etc.). Remove or gate KEY_V/H/J/K behind console or OS.is_debug_build()/AWECRAFT_DEBUG. Keep E/P gameplay
     keys. Verify no player gets free items via V after.
+  comments: []
+- id: AC-0123
+  title: multiplayer-client-server-research-plan
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-26T07:26
+  updated_at: 2026-08-26T07:26
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Research-only: plan client/server multiplayer for AweCraft. Survey Godot 4.7.1 multiplayer (ENet, WebRTC, WASM limits),
+    headless server, world/chunk authority, latency, prediction, inventory/combat sync, save. Deliverable tasks/AC-XXXX/plan.html
+    with architecture options, phased breakdown, and derived subtasks added to queue. No code.'
   comments: []
