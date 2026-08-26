@@ -83,9 +83,8 @@ static func compute_light_split(box: Dictionary, world) -> Dictionary:
 			var czv := int(floorf(float(wz) / 16.0))
 			var lz := wz - czv * 16
 			var c = world.chunks.get(world._key(cxv, czv))
-			if c == null:
-				world.get_block(wx, 0, wz)
-				c = world.chunks.get(world._key(cxv, czv))
+			if c == null or c.data.is_empty():
+				c = null
 			var i0 := ix + iz * w
 			var open := true
 			if c != null:
@@ -107,7 +106,7 @@ static func compute_light_split(box: Dictionary, world) -> Dictionary:
 						open = false
 			else:
 				for y in range(H - 1, mn.y - 1, -1):
-					var b := int(world.get_block(wx, y, wz))
+					var b := 0  # AC-0119: missing/empty column = air (web world.block :882)
 					if y > mx.y:
 						if open and _att[b] == 0:
 							open = false
@@ -168,9 +167,8 @@ static func compute_light_flat(box: Dictionary, world) -> Dictionary:
 			var czv := int(floorf(float(wz) / 16.0))
 			var lz := wz - czv * 16
 			var c = world.chunks.get(world._key(cxv, czv))
-			if c == null:
-				world.get_block(wx, 0, wz)
-				c = world.chunks.get(world._key(cxv, czv))
+			if c == null or c.data.is_empty():
+				c = null
 			var i0 := ix + iz * w
 			var open := true
 			if c != null:
@@ -193,7 +191,7 @@ static func compute_light_flat(box: Dictionary, world) -> Dictionary:
 						open = false
 			else:
 				for y in range(H - 1, mn.y - 1, -1):
-					var b := int(world.get_block(wx, y, wz))
+					var b := 0  # AC-0119: missing/empty column = air (web world.block :882)
 					if y > mx.y:
 						if open and _att[b] == 0:
 							open = false

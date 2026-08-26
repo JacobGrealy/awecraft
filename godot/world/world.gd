@@ -41,6 +41,9 @@ var perf_drain_frames := 0
 var perf_max_drain_ms := 0
 var perf_gen_ms := 0
 var perf_build_ms := 0
+var perf_read_sync_gen := 0
+var perf_read_sync_gen_ms := 0.0
+var perf_create_sync_gen := 0
 var fluid_tick_samples: Array = []
 var fluid_dirty := {}
 var fluid_sim_enabled := true
@@ -1035,6 +1038,7 @@ func _make_chunk_node(cx: int, cz: int) -> Node3D:
 	return c
 
 func create_chunk(cx: int, cz: int, mesh_now: bool) -> Node3D:
+	perf_create_sync_gen += 1
 	var c: Node3D = _make_chunk_node(cx, cz)
 	c.data = WorldGen.generate(cx, cz, Game.world_seed)
 	c.init_fl()
@@ -1046,27 +1050,11 @@ func create_chunk(cx: int, cz: int, mesh_now: bool) -> Node3D:
 func stub_chunk(cx: int, cz: int) -> Node3D:
 	return _make_chunk_node(cx, cz)
 
+# AC-0119: pure lookup — a read NEVER generates. Missing chunk = null,
+# stub = empty data; both read as air at the call sites (web world.block
+# parity). All data generation lives in the drain/threadgen path.
 func _chunk_data(cx: int, cz: int) -> Node3D:
-	var c = chunks.get(_key(cx, cz))
-	if c == null:
-		if threadgen:
-			var key := _key(cx, cz)
-			threadgen_enqueue(cx, cz, key, -1)
-			c = chunks.get(key)
-			if c != null:
-				return c
-		c = create_chunk(cx, cz, false)
-		if absi(cx - last_pcx) <= render_radius and absi(cz - last_pcz) <= render_radius:
-			_enqueue_build(cx, cz)
-		return c
-	if c.data.is_empty():
-		var tg := Time.get_ticks_msec()
-		c.data = WorldGen.generate(cx, cz, Game.world_seed)
-		c.init_fl()
-		_apply_edits_to_chunk(c)
-		if timing:
-			print("ONDEMANDGEN %d,%d gen_ms=%d" % [cx, cz, Time.get_ticks_msec() - tg])
-	return c
+	return chunks.get(_key(cx, cz))
 
 func _enter_candidate(key: String, c: Node3D) -> bool:
 	# AC-0080 candidacy: keep node + data + fl + edits, kill the expensive
@@ -1381,6 +1369,8 @@ func get_block(x: int, y: int, z: int) -> int:
 	if y < 0 or y >= Data.HEIGHT:
 		return 0
 	var c := _chunk_data(int(floorf(float(x) / 16.0)), int(floorf(float(z) / 16.0)))
+	if c == null or c.data.is_empty():
+		return 0
 	return c.get_local(x & 15, y, z & 15)
 
 func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
@@ -1393,7 +1383,7 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 		c = _chunk_data(cx, cz)
 	else:
 		c = chunks.get(_key(cx, cz))
-	if c == null:
+	if c == null or c.data.is_empty():
 		return
 	var lx := x & 15
 	var lz := z & 15
@@ -1504,7 +1494,17 @@ func surface_top(x: int, z: int) -> int:
 				return y
 	return 0
 
+# AC-0119: the one legitimate boot-time sync gen, made explicit (port rule:
+# the spawn chunk is generated synchronously at boot, NOT on read). Idempotent.
+func _ensure_spawn_chunk() -> void:
+	var scx := int(floorf(float(WorldGen.SPAWN_X) / 16.0))
+	var scz := int(floorf(float(WorldGen.SPAWN_Z) / 16.0))
+	var c = chunks.get(_key(scx, scz))
+	if c == null or c.data.is_empty():
+		create_chunk(scx, scz, false)
+
 func spawn_point() -> Vector3:
+	_ensure_spawn_chunk()
 	var top := surface_top(WorldGen.SPAWN_X, WorldGen.SPAWN_Z)
 	return Vector3(WorldGen.SPAWN_X + 0.5, float(top) + 1.0, WorldGen.SPAWN_Z + 0.5)
 
@@ -1583,7 +1583,7 @@ func set_fluid(x: int, y: int, z: int, id: int, lvl: int, create := false) -> vo
 		c = _chunk_data(cx, cz)
 	else:
 		c = chunks.get(_key(cx, cz))
-	if c == null:
+	if c == null or c.data.is_empty():
 		return
 	var lx := x & 15
 	var lz := z & 15
@@ -1618,7 +1618,7 @@ func fluid_at(x: int, y: int, z: int) -> Array:
 func _nb_block(nc: Node3D, li: int, gx: int, gy: int, gz: int) -> int:
 	if nc != null and not nc.data.is_empty():
 		return nc.data[li]
-	return get_block(gx, gy, gz)
+	return 0
 
 func tick_fluids() -> void:
 	if chunks.is_empty():

@@ -1269,9 +1269,9 @@ func _build_snap(snap: PackedByteArray, snap_fl: PackedByteArray, get_world_bloc
 			var nzc := cz + dz
 			var nkey := "%d,%d" % [nxc, nzc]
 			var nc = world.chunks.get(nkey)
-			if nc == null:
-				get_world_block.call(nxc * SIZE + 8, 4, nzc * SIZE + 8)
-				nc = world.chunks.get(nkey)
+			# AC-0119: no read-path probe (it sync-generated up to 4 chunks per
+			# build). Missing/empty diagonal = the normal frontier case.
+			var ncready: bool = nc != null and nc.data.size() > 0
 			var xb := _band(dx)
 			var zb := _band(dz)
 			for y in range(h):
@@ -1285,13 +1285,13 @@ func _build_snap(snap: PackedByteArray, snap_fl: PackedByteArray, get_world_bloc
 						var gi: int = int(g[1])
 						var dv: int
 						var fv: int
-						if nc != null:
+						if ncready:
 							dv = int(nc.data[drow + gi])
 							fv = int(nc.fl[drow + gi])
 							if fv == 0 and (dv == 5 or dv == 24):
 								fv = 8
 						else:
-							dv = int(get_world_block.call(nxc * SIZE + gi, y, nzc * SIZE + int(e[1])))
+							dv = 0  # AC-0119: missing/empty diagonal = air (web world.block :882)
 							fv = 0
 						snap[sxy] = dv
 						snap_fl[sxy] = fv

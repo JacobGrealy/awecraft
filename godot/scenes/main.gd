@@ -4719,6 +4719,9 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> v
 		"collision_max_ms": int(world.perf_collision_max_ms),
 		"staged_drained": int(world.perf_staged_drained),
 		"staged_dropped": int(world.perf_staged_dropped),
+		"read_sync_gen": int(world.perf_read_sync_gen),
+		"read_sync_gen_ms": world.perf_read_sync_gen_ms,
+		"create_sync_gen": int(world.perf_create_sync_gen),
 		"staged_pending_final": int(world._col_pending.size()),
 	})
 	get_tree().quit()
@@ -5010,8 +5013,6 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		if all_resolved and quiet >= 30:
 			break
 
-	var marker_ok: bool = world.get_block(mx, my, mz) == new_id
-
 	var resident_final: int = world.chunks.size()
 	var built_final := 0
 	var irb_final := 0
@@ -5050,6 +5051,11 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		if mc != null and mc.mesh_built and mc.collision_body != null and world.get_block(mx, my, mz) == new_id:
 			remesh_ok = true
 			break
+	# AC-0119: marker read moved AFTER the re-entry remesh — pre-change this
+	# (at its old position, post-walk) only passed via read-path sync gen of
+	# the freed marker chunk; now it verifies edit preservation through
+	# free + re-entry at a point where the chunk is guaranteed rebuilt.
+	var marker_ok: bool = world.get_block(mx, my, mz) == new_id
 	var unbodied_final := 0
 	for key in world.chunks:
 		var c: Node3D = world.chunks[key]
@@ -5107,6 +5113,9 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		"collision_max_ms": int(world.perf_collision_max_ms),
 		"staged_drained": int(world.perf_staged_drained),
 		"staged_dropped": int(world.perf_staged_dropped),
+		"read_sync_gen": int(world.perf_read_sync_gen),
+		"read_sync_gen_ms": world.perf_read_sync_gen_ms,
+		"create_sync_gen": int(world.perf_create_sync_gen),
 		"staged_pending_final": int(world._col_pending.size()),
 		"unbodied_built_final": unbodied_final,
 	})

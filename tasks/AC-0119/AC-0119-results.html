@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0119 results — get-block-air-on-miss-no-sync-gen (Run 2)</title>
+<style>
+body{font-family:system-ui,Segoe UI,sans-serif;margin:2em auto;max-width:1100px;padding:0 1em;color:#1a1a1a;line-height:1.45}
+h1{font-size:1.5em;border-bottom:3px solid #2a7;border-bottom-width:3px;padding-bottom:.3em}
+h2{font-size:1.2em;margin-top:1.6em;color:#145}
+table{border-collapse:collapse;margin:1em 0;font-size:.92em}
+th,td{border:1px solid #999;padding:4px 9px;text-align:left}
+th{background:#eef3fa}
+.ok{background:#e6f6e6;font-weight:600}
+.bad{background:#fdecec}
+.warn{background:#fff6df}
+code,pre{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.9em}
+pre{background:#f4f4f4;padding:.8em;overflow-x:auto;border-radius:4px}
+.small{font-size:.85em;color:#555}
+.tag{display:inline-block;background:#2a7;color:#fff;border-radius:3px;padding:1px 7px;font-size:.8em;font-weight:700}
+</style>
+</head>
+<body>
+
+<h1>AC-0119 — get-block-air-on-miss-no-sync-gen <span class="tag">RUN 2 / BUILDER</span></h1>
+<p><b>Goal:</b> remove hidden sync world-generation from every READ path in <code>godot/</code> so
+missing/unloaded chunk reads return air (0/empty) like web <code>world.block</code> (<code>index.html:882-890</code>:
+<code>if(!c)return 0</code>), while generation stays ONLY on the drain/threadgen/boot path.
+<b>Result: ALL GATES G1–G6 PASS.</b> Zero script errors in every run. One deviation from the approved
+plan (the <code>_data_landed</code> re-mesh hook) was implemented, measured, and then <i>removed on
+evidence</i> — see <a href="#dev1">Deviation D1</a>.</p>
+
+<h2>Files changed (final diff stat)</h2>
+<pre>
+ godot/scenes/main.gd    | 13 +++++++++++--
+ godot/world/chunk.gd    | 10 +++++-----
+ godot/world/lighting.gd | 14 ++++++--------
+ godot/world/world.gd    | 46 +++++++++++++++++++++++-----------------------
+ 4 files changed, 45 insertions(+), 38 deletions(-)
+</pre>
+<p class="small">Plus this task folder: <code>AC-0119-results.html</code> (new), <code>continuity.md</code> (RUN 2 appended).
+No other files touched. <code>git status --short</code> (G6) = the 4 modified godot files + this folder's new file.</p>
+
+<h2>Gate summary</h2>
+<table>
+<tr><th>Gate</th><th>Verdict</th><th>Key values</th></tr>
+<tr class="ok"><td>G1 headless clean</td><td>PASS</td><td><code>--quit</code> RC=0 / 0 script errors; default-logic RC=0 / 0 errors. (2 informational field flips — see below, not gated.)</td></tr>
+<tr class="ok"><td>G2 genhash</td><td>PASS</td><td>25/25 GENHASH lines byte-identical pre/post; GENMS 823 → 800.</td></tr>
+<tr class="ok"><td>G3 full battery</td><td>PASS</td><td><code>ok:true</code>, 0 errors; ALL known-stable values EXACT (sea 2730/2730, 1406/1406, torch 14, horizontal_moved 2.82, place_ok/drop_spawned true, water_on_lava 25, sideways_lava 9, …).</td></tr>
+<tr class="ok"><td>G4 read-path sync-gen = 0</td><td>PASS</td><td><code>read_sync_gen</code> hard 0 in boundary + perf desktop + perf web-sim; <code>create_sync_gen</code> = 1 (spawn boot only) in all; 0 ONDEMANDGEN, 0 TGEN DATADROP post-change (pre: 3 DATADROP in boundary).</td></tr>
+<tr class="ok"><td>G5 frontier + convergence</td><td>PASS</td><td>Boundary r4 fresh anchors UNCHANGED (built_final 81, irb 81/81/19, flap 0, queue 93, p95 33, max 78, marker_ok true, remesh_ok true, unbodied 0); flake player ×4 + boundary ×2 all green; convergence proven (built_final 81 = full in-radius; MINFO 121/121 identical to pre-change).</td></tr>
+<tr class="ok"><td>G6 clean tree</td><td>PASS</td><td>Only the 4 approved godot files + task folder.</td></tr>
+</table>
+
+<h2 id="audit">Sync-gen caller audit — FINAL (keep/remove)</h2>
+<p>Re-verified against the final tree (<code>grep -rn "WorldGen.generate" godot/</code>). Outcome matches the plan:
+<b>2 read-path sites removed, all remaining sites are drain / threadgen-worker / boot / harness.</b> No un-audited site found.</p>
+<table>
+<tr><th>Site (final line)</th><th>Path</th><th>Decision</th></tr>
+<tr class="bad"><td><code>world.gd</code> <code>_chunk_data</code> is_empty branch (was :1062-1068)</td><td>read</td><td><b>REMOVED</b> — the ONDEMANDGEN sync <code>WorldGen.generate</code></td></tr>
+<tr class="bad"><td><code>world.gd</code> <code>_chunk_data</code> c==null → <code>create_chunk</code> (was :1058)</td><td>read</td><td><b>REMOVED</b> — sync gen from the read path; <code>_chunk_data</code> is now a pure <code>chunks.get</code> lookup</td></tr>
+<tr class="ok"><td><code>world.gd:429</code> <code>_gen_unit</code> sync branch</td><td>drain (spawn (0,0) + web path)</td><td>KEPT</td></tr>
+<tr class="ok"><td><code>world.gd:463</code> <code>_threadgen_worker</code> <code>generate_args</code></td><td>threadgen worker</td><td>KEPT</td></tr>
+<tr class="ok"><td><code>world.gd:1043</code> <code>create_chunk</code></td><td>boot — callers now = <code>recenter(false)</code> harness boot + <code>_ensure_spawn_chunk</code> (spawn boot, made explicit in <code>spawn_point()</code>)</td><td>KEPT (counts into <code>perf_create_sync_gen</code>)</td></tr>
+<tr class="ok"><td><code>main.gd</code> :159, :633, :5287, :5608, :5751-:5754, :5775</td><td>harness/diagnostics/tests (genhash arms, MINFO pre-gens, test sims)</td><td>KEPT</td></tr>
+</table>
+<p class="small">Run-1 audit stated "9 kept" at pre-change line numbers (:426/:460/:1039 + main.gd :159/:633/:5278/:5599/:5742-5745/:5766);
+same 2-removed/9-kept set, line numbers shifted by this change's own edits. Conclusion unchanged.</p>
+
+<h2 id="g4">G4 — A/B probe counts (r4, seed 44)</h2>
+<table>
+<tr><th>Run</th><th>read_sync_gen</th><th>read_sync_gen_ms</th><th>create_sync_gen</th><th>ONDEMANDGEN prints</th><th>TGEN DATADROP prints</th><th>Read-path sync gens (wall)</th></tr>
+<tr><td>boundary — <b>pre</b> (<code>pre_boundary_r4.log</code>)</td><td colspan="3" class="small">fields added by this task (not present pre-change)</td><td>0</td><td>3 — (0,0) spawn-boot read, (1,0) marker-chunk read, (4,0) re-entry read</td><td>3 × create_chunk ≈ 31 ms each (Run-1 timed 62-104 ms incl. dispatch on the marker/teleport reads)</td></tr>
+<tr class="ok"><td>boundary — <b>post</b> (<code>post2_boundary_r4.log</code>)</td><td><b>0</b></td><td><b>0.0</b></td><td><b>1</b></td><td>0</td><td>0</td><td>none — marker/teleport reads now read air, <code>marker_ok</code> still passes via the moved read (harness fix §2.5)</td></tr>
+<tr><td>perf desktop — <b>pre</b> (fresh A/B, <code>pre_perf_r4_fresh.log</code>)</td><td colspan="3" class="small">fields added by this task</td><td>0</td><td>0 (Run-1's <code>pre_perf_r4.log</code> had 1 DATADROP = spawn boot)</td><td>≤1 (spawn boot)</td></tr>
+<tr class="ok"><td>perf desktop — <b>post</b> (<code>post2_perf_r4.log</code>)</td><td><b>0</b></td><td><b>0.0</b></td><td><b>1</b></td><td>0</td><td>0</td><td>none (explicit <code>_ensure_spawn_chunk</code>)</td></tr>
+<tr><td>perf web-sim — <b>pre</b> (<code>pre_perf_r4_web.log</code>, Run-1)</td><td colspan="3" class="small">fields added by this task</td><td>0</td><td>0</td><td>spawn boot only</td></tr>
+<tr class="ok"><td>perf web-sim — <b>post</b> (<code>post2_perf_r4_web.log</code>)</td><td><b>0</b></td><td><b>0.0</b></td><td><b>1</b></td><td>0</td><td>0</td><td>none</td></tr>
+</table>
+<p class="small">Structural note: <code>perf_read_sync_gen</code> (+ms) incremented only inside the now-deleted is_empty branch, so it is 0 by
+construction; <code>perf_create_sync_gen</code> counts <code>create_chunk</code> calls — post-change the ONLY non-harness caller is the explicit
+spawn boot, hence exactly 1 in every run.</p>
+
+<h2 id="g5">G5 — boundary r4 anchors pre/post (r4, seed 44)</h2>
+<table>
+<tr><th>Metric</th><th>Pre (Run-1)</th><th>Post (final)</th><th>Verdict</th></tr>
+<tr class="ok"><td>ok / marker_ok / remesh_ok</td><td>true / true / true</td><td>true / true / true</td><td>unchanged — marker_ok now via the moved post-remesh read (pre it passed only via read-path sync gen)</td></tr>
+<tr class="ok"><td>built_final / in_radius_built_final</td><td>81 / 81</td><td>81 / 81</td><td>convergence: full in-radius built, no permanent air chunks</td></tr>
+<tr class="ok"><td>in_radius_built_max / _min</td><td>81 / 19</td><td>81 / 19</td><td>unchanged</td></tr>
+<tr class="ok"><td>flap / queue_size</td><td>0 / 93</td><td>0 / 93</td><td>unchanged</td></tr>
+<tr class="ok"><td>p50 / p95 / max ms</td><td>14 / 33 / 77</td><td>14 / 33 / 78</td><td>within noise</td></tr>
+<tr class="ok"><td>unbodied_built_final</td><td>0</td><td>0</td><td>unchanged</td></tr>
+<tr class="ok"><td>burst_p95 / forward_p95 ms</td><td>4279 / 4279</td><td>4247 / 4247</td><td>≤ pre</td></tr>
+<tr class="ok"><td>trailing_p95 / trailing_max ms</td><td>34 / 35</td><td>1 / 2</td><td>better (no re-mesh churn)</td></tr>
+<tr class="ok"><td>loads / unloads / resident_final</td><td>220 / 209 / 133</td><td>220 / 209 / 132</td><td>unchanged (±1 noise)</td></tr>
+<tr class="ok"><td>light_cache_hits / batch_calls / batch_chunks / self</td><td>226 / 15 / 253 / 24</td><td>226 / 14 / 253 / 24</td><td>unchanged (±1 noise)</td></tr>
+<tr class="ok"><td>fluid ticks n / p95 / max</td><td>212 / 12.53 / 14.31</td><td>211 / 12.45 / 13.25</td><td>unchanged (±1 noise)</td></tr>
+<tr class="ok"><td>staged drained / dropped / pending</td><td>232 / 0 / 0</td><td>232 / 0 / 0</td><td>unchanged</td></tr>
+<tr class="ok"><td>walk_s / crossings</td><td>19.52 / 20</td><td>19.52 / 20</td><td>unchanged</td></tr>
+<tr class="ok"><td>mem_delta_mb</td><td>29.6</td><td>29.5</td><td>unchanged</td></tr>
+</table>
+
+<h3>Flake loop (post-change, all seed 44)</h3>
+<table>
+<tr><th>Run</th><th>RC</th><th>Script errors</th><th>Key values</th></tr>
+<tr class="ok"><td>player ×4</td><td>0 ×4</td><td>0 ×4</td><td>horizontal_moved 2.82 ×4, is_on_floor true</td></tr>
+<tr class="ok"><td>boundary ×2</td><td>0 ×2</td><td>0 ×2</td><td>ok:true ×2, p95 33/33, max 73/78, queue 93/93</td></tr>
+</table>
+
+<h3>Convergence evidence (mesh identity)</h3>
+<p>Decisive check: <code>AWECRAFT_MESH_INFO=1</code> perf r4 pre-change (via <code>git stash</code>) vs post-change →
+<b>121/121 MINFO lines identical</b> (sorted diff empty). Every in-band chunk's mesh is vertex-identical to the pre-change
+full-neighbor build, so air-on-miss at the frontier produces <b>zero</b> permanent visual difference — no re-mesh is ever
+required when diagonal data lands. (See D1 for why this killed the approved hook.)</p>
+
+<h2 id="g1g3">G1 / G2 / G3 detail</h2>
+<p><b>G1</b> — <code>HOME=/tmp/dsh_home godot --headless --path godot --quit</code>: RC=0, 0 script errors.
+Default-logic run: RC=0, 0 errors, RESULT
+<code>{"biome_count":4,"biomes":["forest","plains","desert","snow"],"ocean_water_at_sea":false,"spawn_h":35.0,"stone_at_depth":18,"top_at_spawn":1,"y0_bedrock":11}</code>.</p>
+<table>
+<tr><th>Default-logic field</th><th>Pre</th><th>Post</th><th>Status</th></tr>
+<tr class="warn"><td>ocean_water_at_sea</td><td>true</td><td>false</td><td>INFORMATIONAL (plan §2.5) — not gated. The default-logic <code>_logic_check</code> reads not-yet-generated chunks in-band at boot; post-change those reads return air. Expected, reported per plan.</td></tr>
+<tr class="warn"><td>stone_at_depth</td><td>20</td><td>18</td><td>INFORMATIONAL — same cause (depth column sampled through an unloaded chunk returns air at the sampled y). Not gated.</td></tr>
+<tr class="ok"><td>spawn_h / top_at_spawn / y0_bedrock / biomes</td><td>35.0 / 1 / 11 / 4</td><td>35.0 / 1 / 11 / 4</td><td>unchanged</td></tr>
+</table>
+<p><b>G2</b> — <code>AWECRAFT_LOGIC=genhash</code>: 25 GENHASH lines post vs 25 pre (stashed), sorted diff empty →
+<b>25/25 byte-identical</b>. GENMS 823 (pre) → 800 (post).</p>
+<p><b>G3</b> — <code>AWECRAFT_BATTERY="player;interact;light;fluids;buckets"</code>: <code>ok:true</code>, 0 script errors. All known-stable
+values EXACT: player <code>horizontal_moved 2.82</code> / <code>is_on_floor true</code>; interact <code>place_ok true</code> / <code>drop_spawned true</code> /
+<code>after_place_cell 2</code> / <code>place_cell [8,34,8]</code>; light <code>torch_level 14</code> / <code>surface_eff 15</code> / <code>cave_eff 0</code> /
+<code>torch_far_after 9</code>; fluids <code>sea_surface 2730/2730</code> / <code>sea_backed 1406/1406</code> / <code>sea_stable true</code> /
+<code>water_on_lava 25</code> / <code>sideways_lava 9</code> / <code>water_delta 1</code> / <code>shore_after [5,7]</code> / <code>source_after [5,8]</code>;
+buckets <code>inv_scoop id 140 n1</code> / <code>inv_place id 139 n1</code> / <code>after_scoop [0,0]</code>.</p>
+
+<h2 id="dev1">Deviations</h2>
+<table>
+<tr><th>#</th><th>Deviation</th><th>Disposition</th></tr>
+<tr><td>D1</td><td><b><code>_data_landed</code> re-mesh hook (approved scope addition #2) implemented, then REMOVED on evidence.</b>
+With the hook in place, boundary r4 regressed beyond tolerance: p95 33→64, max 77→144, trailing_p95 34→429, irb_max 81→72,
+queue 93→92, collision_n 228→395 (the hook re-meshes built neighbors on every threadgen handoff, riding the 40 ms/frame
+light-flush budget and starving the drain). The MINFO A/B (121/121 identical) proves the hook provides <b>no visual
+benefit at all</b>: face emission (<code>chunk.gd _faces</code>/greedy/fluid paths) and the web spec mesher (<code>index.html:1247</code>)
+read only the CARDINAL border strip of the 18×18 snap — the four diagonal corner cells are dead data, so an air diagonal at
+build time cannot change any mesh. The plan's own fallback clause authorized isolating/removing the hook on G5(a)
+regression ("its only effect is extra light_dirty marks… document the cost"). Cost of removal: none — "air-frontier edges
+persist until next relight" is a no-op because the frontier mesh is already identical to the full-neighbor mesh.</td>
+<td class="warn">Documented. Final tree has NO re-mesh hook; hooks removed from <code>_gen_unit</code> + <code>threadgen_handoff</code>, helper deleted.
+Post-removal boundary/perf anchors all back to pre-change levels (several better: trailing 1-2 ms, burst_p95 4247 vs 4279).
+Coordinator sign-off requested (the hook was a coordinator-approved scope addition).</td></tr>
+<tr><td>D2</td><td>Default-logic field flips <code>ocean_water_at_sea</code> true→false, <code>stone_at_depth</code> 20→18.</td>
+<td class="warn">INFORMATIONAL per plan §2.5 (harness reads unloaded chunks in-band at boot). Reported, not gated, not chased.</td></tr>
+<tr><td>D3</td><td>Perf-desktop wall time with hook: total_ms 6518→8280, p95 40→67, max 83→133, build_ms 351→844.</td>
+<td class="warn">Explained by D1 (re-mesh churn) and resolved by the hook removal: final post total_ms 6451, p95 42, max 65, build_ms 329 — all within/under pre-change. No residual regression.</td></tr>
+</table>
+
+<h2>Implementation record (what the 4 files do now)</h2>
+<pre>
+world.gd
+  perf_read_sync_gen / perf_read_sync_gen_ms / perf_create_sync_gen  (probe counters; read-path one is 0 by construction)
+  _chunk_data(cx,cz)         -> PURE lookup: return chunks.get(_key(cx,cz))        (was: threadgen-enqueue + create_chunk + is_empty sync gen)
+  get_block                  -> c == null or c.data.is_empty() => return 0         (web world.block parity; kills OOB on empty stubs)
+  set_block / set_fluid      -> c == null or c.data.is_empty() => no-op            (web setBlock parity: never generates)
+  _nb_block                  -> c == null or c.data.is_empty() => return 0         (fluid neighbor read; was: get_block -> sync gen)
+  _ensure_spawn_chunk()      -> NEW, idempotent; create_chunk(0,0) if missing/empty; called at top of spawn_point()
+                               (the only legitimate boot-time sync gen, now explicit; counts into perf_create_sync_gen)
+  DO-NOT-TOUCH confirmed untouched: drain, WANT/STUB/MERGE recenter (AC-0118), threadgen dispatch, light flush, fluids.
+lighting.gd
+  compute_light_split + compute_light_flat: missing/empty neighbor chunk => c = null (no probe/refetch);
+  per-cell read in the c==null branch => b := 0 (air column).  (batch/into/chunk variants self-contained — untouched)
+chunk.gd
+  _build_snap: diagonal/neighbor probes replaced with  var ncready := nc != null and nc.data.size() > 0
+  (no read-path probe); per-cell: ncready => direct read, else dv = 0 / fv = 0.  (mandatory OOB guard — a built chunk
+  with a missing/empty diagonal is the NORMAL frontier case post-change)
+main.gd
+  perf RESULT + boundary RESULT dicts: + read_sync_gen, read_sync_gen_ms, create_sync_gen
+  boundary marker_ok read MOVED from before the re-entry remesh loop to AFTER it (pre-change it only passed via
+  read-path sync gen of a freed chunk — the exact behavior this task removes; the moved read still passes, see G5)
+</pre>
+
+<h2>Logs (all in <code>.scratch/AC-0119/</code>)</h2>
+<p class="small">
+Pre (Run-1 baselines): <code>pre_boundary_r4.log</code>, <code>pre_perf_r4.log</code>, <code>pre_perf_r4_web.log</code>, <code>pre_g1_logic.log</code>, <code>pre_g2_genhash.log</code>, <code>gh_pre.txt</code>
+<br>Post Run-2: <code>post2_g1_quit.log</code>, <code>post_g1_logic.log</code>, <code>post_g2_genhash.log</code>, <code>gh_post.txt</code>, <code>post2_g3_battery.log</code>,
+<code>post2_boundary_r4.log</code>, <code>post2_perf_r4.log</code>, <code>post2_perf_r4_web.log</code>,
+<code>pre_perf_r4_fresh.log</code> (same-session stashed A/B), <code>pre_perf_minfo.log</code>/<code>post_perf_minfo.log</code> + <code>minfo_diff.txt</code> (empty = 121/121 identical),
+<code>post2_flake_player_1..4.log</code>, <code>post2_flake_boundary_1..2.log</code>
+<br>Intermediate (D1 evidence): <code>post_boundary_r4.log</code> (with hook — regressed), <code>post_perf_r4.log</code> (with hook — regressed), <code>post_boundary_r4.log</code> D1 comparison values in D1/D3.
+</p>
+
+<p class="small">Run 2 builder — 2026-08-26. Godot 4.7.1, headless, seed 44, r4. Zero script errors in every run. No git operations (coordinator commits).</p>
+
+</body>
+</html>

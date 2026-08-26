@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-26T07:36
+  updated_at: 2026-08-26T08:49
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -3506,11 +3506,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-25T19:57
-  updated_at: 2026-08-26T05:26
-  completed_at: null
+  updated_at: 2026-08-26T08:49
+  completed_at: 2026-08-26T08:49
   waiting_on: null
   parent_id: null
   notes: 'Remove hidden sync generation on read path: world.gd:613 _chunk_data c.data.is_empty() branch 626-632 + get_block
@@ -3518,7 +3518,30 @@ intake:
     to air-on-miss like web world.block 882: missing chunk => 0/air, never generate. Data gen only via drain/threagen path
     (310 _gen_unit, 626 stub path). Gate: no ONDEMANDGEN on mesh/light neighbor snapshot, frontier builds use air for diagonals,
     genhash 25/25, battery green.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-26T08:49
+    updated_at: null
+    text: '[agent] DONE 2026-08-26 (two-phase). Air-on-miss on every READ path like web world.block :882-887: _chunk_data
+      -> pure lookup (threadgen-enqueue + create_chunk + is_empty sync-gen branch all dropped), get_block -> 0, set_block/set_fluid/_nb_block
+      -> air/no-op, both lighting.gd neighbor-snapshot fns -> air column, chunk.gd _build_snap diagonal probes gain the MANDATORY
+      empty-data OOB guard (approved scope addition); one legitimate boot gen made explicit via idempotent _ensure_spawn_chunk
+      in spawn_point. AUDIT final: 2 read-path sites removed, 3 world.gd + 8 main.gd harness sites kept (re-verified on final
+      tree; no un-audited gen call site). GATES ALL PASS: G1 RC=0 0err; G2 GENHASH 25/25 byte-identical (GENMS 823->800);
+      G3 FULL battery exact (sea 2730/1406, torch 14, 2.82, 25/9, place/drop true); G4 read_sync_gen HARD 0 + create_sync_gen
+      1 (spawn boot only) in boundary + perf desktop + perf web-sim (pre: 3 read-path create_chunk sync gens ~31ms each in
+      boundary, gone); G5 boundary anchors unchanged (built 81, irb 81/81/19, flap 0, queue 93, p95 33, max 78, marker/remesh
+      ok, unbodied 0) + flake player x4 (2.82 x4) + boundary x2 green + CONVERGENCE PROVEN (MINFO 121/121 lines identical
+      pre/post, minfo_diff empty); G6 clean tree (4 godot files + task folder). COORD SIGNED D1: the approved _data_landed
+      re-mesh hook was implemented, measured, then REMOVED on evidence (it regressed boundary p95 33->64, trailing 34->429,
+      irb_max 81->72 by remesh churn starving the light-flush budget, while MINFO proved the diagonal snap cells are never
+      read by any mesher - the hook buys zero visual benefit; the plan''s own fallback clause authorized it). Rationale of
+      record: without the hook, a built chunk''s frontier face toward a not-yet-generated neighbor stays drawn until that
+      chunk''s next rebuild (recenter pass / player movement) - web-faithful transient frontier behavior; the stale face is
+      invisible (opposite normals to the neighbor''s face, no z-fighting) and MINFO identity proves the final steady state
+      is mesh-identical. D3 (hook''s perf-desktop regression total 6518->8280) resolved by the removal: final total 6451 /
+      p95 42 / max 65 within/under pre-change. D2 informational (plan 2.5, not gated): default-logic ocean_water_at_sea true->false,
+      stone_at_depth 20->18 (those probes read not-yet-generated chunks - exactly the behavior change). Results tasks/AC-0119/AC-0119-results.html.'
 - id: AC-0120
   title: shared-material-cache-no-per-build-alloc
   source: agent

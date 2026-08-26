@@ -45,3 +45,36 @@
 
 ### State: DONE — plan.html delivered, awaiting coordinator gate → Run-2 (medium)
 - Next (Run-2): implement plan §2 exactly (world.gd a-g, lighting.gd 2 fns, chunk.gd `_build_snap`, main.gd probe fields + marker move), verify G1-G6 per plan §5.1, write AC-0119-results.html. Logs under .scratch/AC-0119/ (pre_* = baselines; post_* = Run-2's).
+
+---
+
+## RUN 2 (builder) — 2026-08-26
+
+### Files changed (final, `git diff --stat`)
+`godot/world/world.gd` (+23/−23), `godot/world/lighting.gd` (+6/−8), `godot/world/chunk.gd` (+5/−5), `godot/scenes/main.gd` (+11/−2).
+- world.gd: 3 probe counters; `_chunk_data` → pure `chunks.get` lookup (threadgen-enqueue + create_chunk + is_empty sync-gen all gone); `get_block` → 0 on null/empty; `set_block`+`set_fluid` no-op on null/empty (web setBlock parity); `_nb_block` → 0 on null/empty; `_ensure_spawn_chunk()` new (idempotent, called at top of `spawn_point()`); `create_chunk` now increments `perf_create_sync_gen`.
+- lighting.gd: `compute_light_split` + `compute_light_flat` — missing/empty neighbor chunk ⇒ `c = null` (no probe/refetch); per-cell read in c==null branch ⇒ `b := 0` air column.
+- chunk.gd: `_build_snap` probe block → `var ncready := nc != null and nc.data.size() > 0` (no read-path probe; OOB guard on empty stubs); per-cell `ncready ? direct read : dv=0/fv=0`.
+- main.gd: perf + boundary RESULT dicts gained `read_sync_gen`/`read_sync_gen_ms`/`create_sync_gen`; boundary `marker_ok` read moved from before the re-entry remesh loop to AFTER it (pre-change it only passed via read-path sync gen of a freed chunk — the exact behavior removed).
+- Untouched as fenced: drain, WANT/STUB/MERGE recenter, threadgen dispatch, light flush, fluids, worker `_build_snap_data`, `_mesh_dispatch`.
+
+### Key decisions / deviations
+- **D1 (MAJOR, coordinator sign-off requested): the approved `_data_landed` re-mesh hook was implemented, then REMOVED on evidence.**
+  1. Measured regression with hook (boundary r4): p95 33→64, max 77→144, trailing_p95 34→429, irb_max 81→72, queue 93→92, collision_n 228→395; perf desktop total 6518→8280. Cause: every threadgen handoff re-meshes built neighbors via the 40 ms/frame light-flush budget, starving the drain.
+  2. Decisive proof the hook buys nothing: `AWECRAFT_MESH_INFO=1` perf r4 pre (stashed) vs post → **121/121 MINFO lines identical** (`minfo_diff.txt` empty). Face emission (`chunk.gd _faces` + greedy + fluid paths) and the web spec mesher (`index.html:1247`) read ONLY the cardinal 18-wide border strip of the snap — the four diagonal corner cells are DEAD data; an air diagonal at build time cannot change any mesh. The plan's own fallback clause authorized isolating/removing the hook on G5(a) regression; the documented cost ("air-frontier edges persist until next relight") is a no-op because the frontier mesh is already identical to the full-neighbor mesh.
+  3. Final tree: no re-mesh hook anywhere. Post-removal anchors all back to pre-change levels, several better (trailing 1-2 ms vs 34; burst_p95 4247 vs 4279).
+- **D2 (informational, plan §2.5):** default-logic `_logic_check` field flips `ocean_water_at_sea` true→false, `stone_at_depth` 20→18 (harness reads unloaded chunks in-band at boot; air-on-miss). Not gated, not chased. Rest of the logic RESULT identical (spawn_h 35.0, top_at_spawn 1, y0_bedrock 11, biomes 4).
+- **Audit re-verified on the FINAL tree** (`grep -rn "WorldGen.generate" godot/`): 2 read-path sites removed (`_chunk_data` is_empty branch + `create_chunk`-from-`_chunk_data`); kept = world.gd :429 (`_gen_unit` sync branch), :463 (worker), :1043 (`create_chunk`, callers now = `recenter(false)` harness boot + `_ensure_spawn_chunk` only) + main.gd :159/:633/:5287/:5608/:5751-5754/:5775 (harness/diagnostics). **No un-audited gen call site found** — matches the plan's 2-removed/9-kept conclusion.
+
+### Gate results (all r4 seed 44, zero script errors in every run)
+- **G1 PASS** — `--quit` RC=0/0 errors; default-logic RC=0/0 errors (D2 flips noted).
+- **G2 PASS** — GENHASH 25/25 byte-identical; GENMS 823→800.
+- **G3 PASS** — battery ok:true, ALL known-stable values exact: sea 2730/2730 + 1406/1406, torch 14, horizontal_moved 2.82, place_ok/drop_spawned true, water_on_lava 25, sideways_lava 9, shore [5,7], source [5,8], buckets 140/139 n1.
+- **G4 PASS** — `read_sync_gen` = **hard 0** in boundary + perf desktop + perf web-sim; `create_sync_gen` = **1** (spawn boot) in all; 0 ONDEMANDGEN + 0 DATADROP post (pre: 3 DATADROP in boundary = spawn-boot + marker + re-entry read-path create_chunks ≈31 ms each). Pre/post probe fields + ms in results.html.
+- **G5 PASS** — boundary r4 fresh anchors UNCHANGED: ok/marker_ok/remesh_ok true, built_final 81, irb 81/81/19, flap 0, queue 93, p50/p95/max 14/33/78, unbodied 0 (marker_ok via the MOVED read — pre it passed only via read-path sync gen). Convergence: built_final 81 + MINFO 121/121 identical ⇒ no in-radius chunk permanently air, no visual frontier difference. Flake: player ×4 (2.82×4, RC0) + boundary ×2 (ok:true, p95 33/33, max 73/78, queue 93/93) — all green, no hang.
+- **G6 PASS** — `git status --short` = exactly the 4 modified godot files + this folder's new results.html.
+
+### State: DONE — all gates passed, results written
+- Deliverables: `tasks/AC-0119/AC-0119-results.html` (self-contained: final audit table, A/B probe counts+ms, boundary anchors pre/post, flake log, informational flips, deviations D1-D3), this continuity append.
+- Next (coordinator): sign off D1 (removal of the approved `_data_landed` hook — evidence in results.html §D1), update TASKS.yaml, commit + push (4 godot files + task folder).
+- Revert path if ever needed: `git checkout -- godot/` reverts the whole closed set (4 files).
