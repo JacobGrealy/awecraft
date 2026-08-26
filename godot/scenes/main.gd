@@ -4710,6 +4710,16 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> v
 		"mem_after_bytes": int(mem_after),
 		"chunks_built": built,
 		"drain_s": roundf(total_ms / 1000.0 * 100.0) / 100.0,
+		"light_self_computes": int(world.perf_light_self_computes),
+		"light_batch_calls": int(world.perf_light_batch_calls),
+		"light_batch_chunks": int(world.perf_light_batch_chunks),
+		"light_cache_hits": int(world.perf_light_cache_hits),
+		"collision_ms_total": int(world.perf_collision_ms),
+		"collision_n": int(world.perf_collision_n),
+		"collision_max_ms": int(world.perf_collision_max_ms),
+		"staged_drained": int(world.perf_staged_drained),
+		"staged_dropped": int(world.perf_staged_dropped),
+		"staged_pending_final": int(world._col_pending.size()),
 	})
 	get_tree().quit()
 
@@ -4824,6 +4834,10 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 	var walk_frames := 0
 	var walk_max_frames := 30000
 	var prev_t := Time.get_ticks_msec()
+	var light_comp_mark := int(world.perf_light_self_computes)
+	var light_batch_mark := int(world.perf_light_batch_calls)
+	var light_comp_cross: Array = []
+	var light_batch_cross: Array = []
 	while crossings < walk_lines and walk_frames < walk_max_frames:
 		var fb := Time.get_ticks_msec()
 		await get_tree().physics_frame
@@ -4918,6 +4932,10 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 					wk.append("%d,%d" % [xc, zc])
 			wall_keys.append(wk)
 			prev_pcx = cx_now
+			light_comp_cross.append(int(world.perf_light_self_computes) - light_comp_mark)
+			light_batch_cross.append(int(world.perf_light_batch_calls) - light_batch_mark)
+			light_comp_mark = int(world.perf_light_self_computes)
+			light_batch_mark = int(world.perf_light_batch_calls)
 		var dt := (fe - prev_t) / 1000.0
 		prev_t = fe
 		p.position.x += walk_speed * dt
@@ -5032,6 +5050,11 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		if mc != null and mc.mesh_built and mc.collision_body != null and world.get_block(mx, my, mz) == new_id:
 			remesh_ok = true
 			break
+	var unbodied_final := 0
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if c.mesh_built and c.collision_body == null and absi(int(c.cx) - cx_end) <= r and absi(int(c.cz) - cz_end) <= r:
+			unbodied_final += 1
 	var ok := crossings == walk_lines and marker_ok
 	Debug.result({
 		"ok": ok,
@@ -5073,6 +5096,19 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		"in_radius_built_max": max_irb,
 		"target_in_radius": (2 * r + 1) * (2 * r + 1),
 		"queue_size": int(world.queue_size),
+		"light_self_computes": int(world.perf_light_self_computes),
+		"light_batch_calls": int(world.perf_light_batch_calls),
+		"light_batch_chunks": int(world.perf_light_batch_chunks),
+		"light_cache_hits": int(world.perf_light_cache_hits),
+		"light_computes_per_crossing": light_comp_cross,
+		"light_batches_per_crossing": light_batch_cross,
+		"collision_ms_total": int(world.perf_collision_ms),
+		"collision_n": int(world.perf_collision_n),
+		"collision_max_ms": int(world.perf_collision_max_ms),
+		"staged_drained": int(world.perf_staged_drained),
+		"staged_dropped": int(world.perf_staged_dropped),
+		"staged_pending_final": int(world._col_pending.size()),
+		"unbodied_built_final": unbodied_final,
 	})
 	get_tree().quit()
 

@@ -20,3 +20,29 @@
 ### State / next step
 - Run-1 complete: plan.html + this log + fresh baselines + probe evidence. No .gd edits made, no git, no builds, no renders. Temp probe dir deleted; `git status --porcelain` = `?? tasks/AC-0077/plan.html` only.
 - Run-2 (builder, `subagent` tool): implement plan.html §2 D1–D3 (world.gd, chunk.gd, lighting.gd, main.gd), save pre-genhash baseline first (G2), gates G1–G6 per §5, keep THIS log appended.
+
+---
+
+## RUN 2 (implementation) — 2026-08-26, RESUMED (this span)
+
+### Files changed (final)
+- `godot/world/lighting.gd` — kernel refactored into private static `_chunk_light_into` (verbatim); `compute_light_flat_chunk` calls it (G2-identical); new `compute_light_flat_batch(items, budget_us=0)` — reused ids/sky/blk, fresh eff per item, **18 ms/frame budget enforced INSIDE the compute loop** (first chunk always runs; later chunks only while under budget).
+- `godot/world/chunk.gd` — `col_immediate` + `last_collision_build_ms`; `build_mesh`/`apply_accs` collision tail split immediate (free+build+clear) vs deferred (free stale body only, `col_dirty` stays true); `_build_collision()` self-times.
+- `godot/world/world.gd` — `_bl_want` snapshot at recenter WANT-phase completion; `_bl_batch_step()` (nearest-first, 18 ms budget, per-data-signature eff cache 128 FIFO, hit = no recompute); eff cache fed by batch + trusted worker handoffs (`eff_trust`), never bulk/`last_eff`; eviction on edit/free (NOT on candidacy — data preserved); P1.4 staging (`col_stage_enabled` env, `_stage_check` after sync build + handoff apply, `_col_pending` dedup queue, `_col_drain_step` ≤2/frame nearest-first validity-checked); **drain-loop pacing fix**: scored data pick skips `_tg_inflight_keys` entries + cursor park conditional on `dp.is_empty()`; batch yields while `_rec_pending`; counters (perf_light_*, perf_collision_*, perf_staged_*).
+- `godot/scenes/main.gd` — boundary RESULT: per-crossing light arrays + totals, collision totals, staging, `unbodied_built_final`; perf RESULT: totals.
+
+### Root-cause findings this span (measured, debug-instrumented then removed)
+1. **Pre-existing drain pacing bug (starved the batch pass):** the scored data pick re-picked the same gen-in-flight no-data entry every iteration (threadgen dedup no-op still counted `u=1`) → ~1 real enqueue per 5–6 frames → 3–4 chunks/crossing had no data when the next recenter replaced `_bl_want` → they self-computed later. Fix = skip in-flight entries. After fix: 10–12 enqueues/crossing, pass completes in every steady-state crossing, steady-state self-computes = 0.
+2. **Chunk light is 17–34 ms, not D1's 6 ms.** G2-identical kernel; heavy = glow/lava chunks. ⇒ ~150–300 ms NEW main-thread light per crossing ⇒ ~9 boosted frames/crossing ⇒ ~10% of walk frames ≥26 ms ⇒ **walk-frame p95 ≤26 is mathematically unreachable with on-main contained light** (p95 33 / max 71–79 measured, consistent across 6 post runs). D4's own "≤18 ms/frame" parenthetical was the binding budget (2-chunk slices measured 34–68 ms). Follow-up task needed for the sub-gate (off-main batch light / faster kernel).
+3. Frame profiler (temp) attributed slow frames to the batch component (avg 24 ms on ≥26 ms frames); recenter/fluid overlap negligible.
+
+### Gate results (final code)
+- G1 PASS — zero script errors in every run; player 2.82/on_floor (worker eff path live).
+- G2 PASS — 150/150 GENHASH identical vs pre (re-run final code; only GENMS differs).
+- G3 PASS — battery exact re-run on final code (sea 2730/2730+1406/1406, torch 14, 2.82, place/drop ok, water_on_lava 25, sideways_lava 9, ok:true).
+- G4 **FAIL as written (D4 clause)** — fwd p95 PASS: post 4832/4291 vs pre 5216/5148 (best-of 4291<5148, median 4562<5182); light 9→(0 self + 1 batch)/crossing steady (warmup crossings 3–8: 2–6 self, worker-side, recenter-restart churn); **walk-frame sub-gate FAIL: p95 33>26, max 71–72>68** (root cause #2); trailing 34/44≤212 ✓; ok/flap/marker/remesh ✓; built_max 81≥69 ✓ final 81 ✓; **queue_size 93 (pre 95)** = pacing fix consumed 2 extra far data_only entries (queue shrank — documented deviation); collision 307–314 ms / 228–233 builds / max 3 ms ✓; staged_drained 233 / dropped 0 / pending 0 / unbodied 0 ✓.
+- G5 PASS — (a) 2.82 exact ×4 player; (b) unbodied 0/pending 0/dropped 0 in every boundary run; (c) save run ok:true all sub-checks, spawn/continue clean; (d) flake boundary ×2 + player ×4 all ok:true/no hang (logs `.scratch/AC-0077/flake_boundary_r2.log`, `flake_r2.log`); (e) COLSTAGE=0 → staged_drained 0 (immediate-everywhere = today), ok true.
+- G6 PASS — `git status --short` = exactly the 4 .gd M + `?? tasks/AC-0077/AC-0077-results.html` (+ this log M).
+
+### State / next step
+Run-2 COMPLETE: all code + gates done, results in `tasks/AC-0077/AC-0077-results.html`. Coordinator: commit (4 .gd + task dir), no builds required by spec (no web/windows impact — logic layer only), report = fwd PASS / walk sub-gate honest FAIL-as-delivered with root cause; recommend follow-up task (off-main batch light) to close the AC-0034 walk-frame residual. Debug instrumentation fully removed (grep BLDBG/_bp_ clean). Scratch: `.scratch/AC-0077/` (bldebug2–5, blprof1–2 = instrumentation traces).

@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-26T00:50
+  updated_at: 2026-08-26T05:18
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -2218,17 +2218,39 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-22T22:59
-  updated_at: 2026-08-26T00:50
-  completed_at: null
+  updated_at: 2026-08-26T05:18
+  completed_at: 2026-08-26T05:18
   waiting_on: null
   parent_id: AC-0034
   notes: 'AC-0034 child 3/4 (plan AC-0071 P1.3+P1.4): bulk batch light for stream-in builds (union box + margin, slices into
     build_mesh eff param - 9 light computes become 1 per crossing) + collision staging (player +/-1 immediate, far chunks
     next-slot low-priority unit, single revert flag) + collision_ms per-build instrumentation.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-26T05:18
+    updated_at: null
+    text: '[agent] DONE 2026-08-26 (two-phase, as-delivered). P1.3: Lighting.compute_light_flat_batch() (per-chunk-contained
+      floods, one pass over the want set, budget_us inside the compute loop; kernel extracted to _chunk_light_into, compute_light_flat_chunk
+      zero-behavior-change wrapper; byte-identical by construction — union-box variant rejected with probe evidence 296vs160ms
+      + 74/184320 cells). Drain pre-picks batch (<=2 ready chunks/call), eff cached per data-signature (128 FIFO), fed via
+      existing eff param so threadmesh workers skip their own light. P1.4: col_stage_enabled single revert flag (AWECRAFT_COLSTAGE=0),
+      Chebyshev>1 + spawn chunk deferred to <=2/frame nearest-first _col_pending queue (dedup, validity-checked), chunk.gd
+      col_immediate tail. + instrumentation (light counts/crossing, collision_ms, unbodied_built_final). GATES: G1 clean (worker
+      eff path live, 2.82/on_floor); G2 GENHASH 150/150 byte-identical; G3 battery exact; G5 collision (2.82 x4, unbodied
+      0/pending 0/dropped 0, drained 233, save/continue ok, flake boundary x2 + player x4 green, COLSTAGE=0 = exact old behavior);
+      G6 clean tree. G4 VERDICT (honest, per D4 clause): SPEC PRIMARY MET — fwd_p95 r4 post 4832/4291 vs pre 5216/5148 (best-of
+      4291<5148 AND median 4562<5182) + light 9->(0 self + 1 batch)/crossing steady + collision_ms reported; BUT plan-D4 walk-regression
+      sub-line MISSED: boundary frame p95 33>26, max 71/72>68 on both posts. Root cause quantified: contained-chunk light
+      measures 17-34 ms (glow-heavy), not D1''s 6 ms -> ~150-300 ms NEW MAIN-THREAD light per crossing (previously worker-side)
+      -> ~10% of walk frames >=26 ms; D4''s <=18 ms/frame slice budget was binding (2-chunk slices 34-68 ms). Net: fwd wall
+      -16% (worker task 269->252 ms, 3 workers -> 11.90 chunks/s), main thread pays the light. FOLLOW-UP NEEDED (not registered
+      — user co-edits queue): move the batch light off-main (worker-owned contained compute or a faster contained kernel)
+      to recover the walk-frame budget. Also deviated: gen-pick in-flight skip (pre-existing churn bug that starved the pass
+      — steady-state self-computes 52->0-2/crossing), batch yields to AC-0118 recenter slice, _enter_candidate keeps eff cache.
+      Results tasks/AC-0077/AC-0077-results.html (full A/B + counters + flake + revert runs).'
 - id: AC-0078
   title: chunk-stream-fluids-firstload
   source: agent

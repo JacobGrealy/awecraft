@@ -15,6 +15,8 @@ var fl := PackedByteArray()
 var mesh_built := false
 var collision_enabled := true
 var col_dirty := true
+var col_immediate := true
+var last_collision_build_ms := 0
 var last_eff: Dictionary = {}
 # AC-0080 two-stage hysteresis: candidate = at Chebyshev r+1 with expensive
 # parts killed (mesh/collision), data+edits kept; cand_since = count of
@@ -1528,11 +1530,15 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 		flora_instance = fi2
 	mesh_built = true
 	if collision_enabled and col_dirty:
-		if collision_body:
+		if col_immediate:
+			if collision_body:
+				collision_body.queue_free()
+				collision_body = null
+			_build_collision()
+			col_dirty = false
+		elif collision_body:
 			collision_body.queue_free()
 			collision_body = null
-		_build_collision()
-	col_dirty = false
 
 
 # AC-0107: main-thread assembly for the worker-built surface buffers — the
@@ -1594,11 +1600,15 @@ func apply_accs(res: Dictionary, ms: Dictionary) -> void:
 		flora_instance = fi2
 	mesh_built = true
 	if collision_enabled and col_dirty:
-		if collision_body:
+		if col_immediate:
+			if collision_body:
+				collision_body.queue_free()
+				collision_body = null
+			_build_collision()
+			col_dirty = false
+		elif collision_body:
 			collision_body.queue_free()
 			collision_body = null
-		_build_collision()
-	col_dirty = false
 
 
 func _acc_from_dict(d: Dictionary) -> Acc:
@@ -1613,6 +1623,8 @@ func _acc_from_dict(d: Dictionary) -> Acc:
 
 
 func _build_collision() -> void:
+	last_collision_build_ms = 0
+	var tb := Time.get_ticks_msec()
 	if mesh_instance == null or mesh_instance.mesh == null:
 		return
 	var mesh: ArrayMesh = mesh_instance.mesh
@@ -1633,3 +1645,4 @@ func _build_collision() -> void:
 	body.add_child(col)
 	add_child(body)
 	collision_body = body
+	last_collision_build_ms = Time.get_ticks_msec() - tb

@@ -220,28 +220,20 @@ static func compute_light_flat(box: Dictionary, world) -> Dictionary:
 	return {"mn": mn, "w": w, "d": d, "arr": eff}
 
 
-# AC-0107: single-chunk, data-only light for worker threads — the exact
-# STANDALONE_MARGIN=0 specialization of compute_light_flat (the box build_mesh
-# passes): every column maps to the same chunk, so the world dereference +
-# get_block fallbacks are provably no-ops and the sky-scan reads ONLY the
-# passed chunk data. _tables() is warmed on the main thread (world._ready),
-# so a worker call never touches Data. Returns the same shape as
-# compute_light_flat (mn is the chunk's world-space min — the eff dict lands
-# in chunk.last_eff and must index world coordinates on later remeshes).
-static func compute_light_flat_chunk(data: PackedByteArray, cx: int, cz: int, h: int) -> Dictionary:
-	_tables()
+# AC-0077: AC-0107's single-chunk contained kernel (the exact
+# STANDALONE_MARGIN=0 specialization of compute_light_flat — the box
+# build_mesh passes): every column maps to the same chunk, so the sky-scan
+# reads ONLY the passed chunk data. _tables() is warmed on the main thread
+# (world._ready), so a worker call never touches Data. Buffers (ids/sky/blk,
+# sized 16x16*h with sky/blk zeroed by the caller) are reused across calls;
+# a fresh eff (16x16*h) is returned per call.
+static func _chunk_light_into(data: PackedByteArray, cx: int, cz: int, h: int, ids: PackedByteArray, sky: PackedByteArray, blk: PackedByteArray) -> PackedByteArray:
 	var mn := Vector3i(cx * 16, 0, cz * 16)
 	var mx := Vector3i(cx * 16 + 15, h - 1, cz * 16 + 15)
 	var w := 16
 	var d := 16
 	var H: int = h
 	var sz := w * d
-	var ids := PackedByteArray()
-	ids.resize(sz * h)
-	var sky := PackedByteArray()
-	sky.resize(sz * h)
-	var blk := PackedByteArray()
-	blk.resize(sz * h)
 	var has_glow := false
 	for ix in range(w):
 		for iz in range(d):
@@ -272,7 +264,53 @@ static func compute_light_flat_chunk(data: PackedByteArray, cx: int, cz: int, h:
 		var s := sky[i]
 		var b2 := blk[i]
 		eff[i] = s if s >= b2 else b2
-	return {"mn": mn, "w": w, "d": d, "arr": eff}
+	return eff
+
+
+static func compute_light_flat_chunk(data: PackedByteArray, cx: int, cz: int, h: int) -> Dictionary:
+	_tables()
+	var sz := 16 * 16
+	var ids := PackedByteArray()
+	ids.resize(sz * h)
+	var sky := PackedByteArray()
+	sky.resize(sz * h)
+	var blk := PackedByteArray()
+	blk.resize(sz * h)
+	var eff := _chunk_light_into(data, cx, cz, h, ids, sky, blk)
+	return {"mn": Vector3i(cx * 16, 0, cz * 16), "w": 16, "d": 16, "arr": eff}
+
+
+# AC-0077: batched per-chunk contained light — one call for N fresh data
+# copies, per-chunk eff byte-identical to compute_light_flat_chunk (same
+# kernel, same box, same data; the contained flood reads nothing outside its
+# 16x16xh box, so margin 0 is exact and no union flood is possible). ids/sky/
+# blk are preallocated once and reused; eff is fresh per item.
+# budget_us: stop after the first chunk once the elapsed compute time passes
+# it (the caller keeps the remaining items for a later drain call — they are
+# still in its want set). 0 = no budget.
+static func compute_light_flat_batch(items: Array, budget_us: int = 0) -> Array:
+	_tables()
+	var out: Array = []
+	if items.is_empty():
+		return out
+	var sz := 16 * 16
+	var ids := PackedByteArray()
+	ids.resize(sz * Data.HEIGHT)
+	var sky := PackedByteArray()
+	sky.resize(sz * Data.HEIGHT)
+	var blk := PackedByteArray()
+	blk.resize(sz * Data.HEIGHT)
+	var st0 := Time.get_ticks_usec()
+	for it in items:
+		if budget_us > 0 and not out.is_empty() and Time.get_ticks_usec() - st0 > budget_us:
+			break
+		var data: PackedByteArray = it["data"]
+		var h := data.size() / sz
+		sky.fill(0)
+		blk.fill(0)
+		var eff := _chunk_light_into(data, int(it["cx"]), int(it["cz"]), h, ids, sky, blk)
+		out.append({"mn": Vector3i(int(it["cx"]) * 16, 0, int(it["cz"]) * 16), "w": 16, "d": 16, "arr": eff})
+	return out
 
 
 static func _flood_flat(src: PackedByteArray, ids: PackedByteArray, w: int, h: int, d: int) -> void:

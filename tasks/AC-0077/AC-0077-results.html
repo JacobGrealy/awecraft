@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0077 results (Run 2)</title>
+<style>
+body{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;margin:24px;color:#111;max-width:1100px}
+h1{font-size:20px}h2{font-size:16px;border-bottom:2px solid #333;padding-bottom:4px;margin-top:28px}
+table{border-collapse:collapse;margin:8px 0}td,th{border:1px solid #888;padding:3px 8px;text-align:left}
+.pass{color:#060;font-weight:bold}.fail{color:#c00;font-weight:bold}
+code{background:#f0f0f0;padding:0 3px}pre{background:#f5f5f0;padding:8px;overflow-x:auto}
+</style></head><body>
+<h1>AC-0077 chunk-stream-buildcost — Run 2 (implementation) results</h1>
+<p>Child 3/4 of AC-0034: P1.3 batched per-chunk light at crossing boundaries (one batch pass of ready
+want-set chunks per recenter, 18 ms/frame compute budget, eff cached per data-signature, fed through
+<code>build_mesh</code>/<code>build_accs</code> so workers skip their own light) + P1.4 staged collision bodies
+(±1 + spawn immediate, far deferred, ≤2/frame nearest-first drain, <code>AWECRAFT_COLSTAGE=0</code> revert flag)
++ instrumentation.</p>
+
+<h2>Files changed</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/world/lighting.gd</code></td><td>Refactor: private static <code>_chunk_light_into(data,cx,cz,h,ids,sky,blk)</code> holds the original per-chunk kernel verbatim; <code>compute_light_flat_chunk</code> now calls it (zero behavior change); new pure-static <code>compute_light_flat_batch(items, budget_us=0) -&gt; Array</code> reuses preallocated ids/sky/blk across items (fresh per-item eff), with the frame budget enforced <em>inside</em> the compute loop (first chunk always runs, later chunks only while under budget).</td></tr>
+<tr><td><code>godot/world/chunk.gd</code></td><td>New <code>col_immediate</code> / <code>last_collision_build_ms</code>. <code>build_mesh</code>/<code>apply_accs</code> collision tail: immediate = free+build+clear dirty (old behavior); deferred = free stale body only, <code>col_dirty</code> stays true (staged). <code>_build_collision()</code> self-times into <code>last_collision_build_ms</code>.</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><code>_bl_want</code> want-set snapshot at recenter WANT-phase completion; <code>_bl_batch_step()</code> (nearest-first ready want-set chunks, 18 ms/frame compute budget, per-data-signature eff cache cap 128 FIFO, cache hit = no recompute); eff cache fed by batch results + trusted worker handoffs (<code>eff_trust</code>), never by bulk flush effs; evicted on edit/free. P1.4: <code>col_stage_enabled</code> (env <code>AWECRAFT_COLSTAGE</code>), <code>_stage_check()</code> build-completion hook, <code>_col_pending</code> queue (dedup set), <code>_col_drain_step()</code> (≤2/frame, nearest-first, validity-checked). <b>Drain-loop pacing fix</b>: scored data pick skips chunks whose threadgen is already in flight (pre-existing dedup no-op churn starved the batch pass); cursor park now conditional on a truly empty pool. Counters: <code>perf_light_self_computes/_batch_calls/_batch_chunks/_cache_hits</code>, <code>perf_collision_ms/_n/_max_ms</code>, <code>perf_staged_drained/_dropped</code>.</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td><code>_boundary_test</code> RESULT: per-crossing <code>light_computes_per_crossing</code> / <code>light_batches_per_crossing</code> arrays + totals (<code>light_self_computes</code>, <code>light_batch_calls</code>, <code>light_batch_chunks</code>, <code>light_cache_hits</code>), collision (<code>collision_ms_total</code>, <code>collision_n</code>, <code>collision_max_ms</code>), staging (<code>staged_drained</code>, <code>staged_dropped</code>, <code>staged_pending_final</code>), <code>unbodied_built_final</code>. <code>_perf_test</code> RESULT: same totals (no per-crossing).</td></tr>
+</table>
+
+<h2>Gates</h2>
+
+<h3>G1 — headless clean boot + worker path with eff <span class="pass">PASS</span></h3>
+<p><code>HOME=/tmp/dsh_home godot --headless --path godot --quit</code> → RC=0, zero script errors.
+<code>AWECRAFT_LOGIC=player</code> → RC=0, horizontal_moved 2.82, is_on_floor true (worker handoff + staged collision run at spawn; spawn chunk (0,0) always immediate, body present, player on floor). Zero script errors in every gate run below.</p>
+
+<h3>G2 — genhash byte-identity <span class="pass">PASS</span></h3>
+<p>6 seeds (44 1 7 42 999 424242) × 25 chunks = 150 GENHASH lines post vs pre baseline: <b>150/150 byte-identical</b>
+(only GENMS timings differ, as expected), zero errors — re-run on the final code this span. Per-chunk light kernel
+byte-identity confirmed through the refactor + batch path.</p>
+
+<h3>G3 — full battery <span class="pass">PASS</span></h3>
+<pre>AWECRAFT_BATTERY="player;interact;light;fluids;buckets" → ok:true, zero script errors
+player  horizontal_moved 2.82  is_on_floor true  jump_peak_y 36.43
+interact place_ok true  drop_spawned true  inv_grew id2 n1
+light   torch_level 14  (surface/cave eff as baseline)
+fluids  sea_surface 2730/2730  sea_backed 1406/1406  sea_stable true
+        water_on_lava 25  sideways_lava 9  water_delta 1
+buckets scoop/place id 140/139 ok</pre>
+<p>Re-run on the final code (after the drain-loop pacing fix) — all exact-match values match the known-stable set.</p>
+
+<h3>G4 — boundary r4 A/B (pre ×2 fixed; post ×2 on final code)</h3>
+<table>
+<tr><th>run</th><th>forward_p95_ms</th><th>forward_max</th><th>p95_ms</th><th>max_ms</th><th>trailing_p95</th><th>walk_s</th><th>light_self (warmup)</th><th>batches/cross (steady)</th><th>cache_hits</th><th>collision_ms (n, max)</th><th>staged_drained</th><th>unbodied_final</th></tr>
+<tr><td>pre #1</td><td>5216</td><td>5228</td><td>21</td><td>66</td><td>212</td><td>19.52</td><td colspan="7">— (no batch counters pre-AC-0077)</td></tr>
+<tr><td>pre #2</td><td>5148</td><td>5205</td><td>21</td><td>66</td><td>162</td><td>19.52</td><td colspan="7">—</td></tr>
+<tr><td>post #1</td><td><b>4832</b></td><td>4934</td><td>33</td><td>72</td><td>34</td><td>19.51</td><td>26</td><td>1 × 12 crossings</td><td>224</td><td>314 (233, 3)</td><td>233</td><td>0</td></tr>
+<tr><td>post #2</td><td><b>4291</b></td><td>4905</td><td>33</td><td>71</td><td>44</td><td>19.51</td><td>24</td><td>1 × 13 crossings</td><td>227</td><td>307 (228, 3)</td><td>233</td><td>0</td></tr>
+</table>
+<table>
+<tr><th>gate line</th><th>requirement</th><th>post #1</th><th>post #2</th><th>result</th></tr>
+<tr><td>forward p95 (best-of / median)</td><td>&lt; pre best-of 5148 / median 5182</td><td colspan="2">best-of <b>4291</b> / median <b>4562</b> (−17% / −12%)</td><td class="pass">PASS</td></tr>
+<tr><td>light computes per crossing</td><td>9 → ≤ 2 self + 1 batch (steady)</td><td colspan="2">steady crossings 9/10–20: <b>0 self + 1 batch</b>; warmup crossings 3–8: 2–6 self (worker-side light, zero main-thread cost — recenter-restart churn)</td><td class="pass">PASS</td></tr>
+<tr><td>walk frame p95 / max</td><td>≤ 26 / ≤ 68</td><td>33 / 72</td><td>33 / 71</td><td class="fail">FAIL (as-delivered)</td></tr>
+<tr><td>trailing p95</td><td>≤ 212</td><td>34</td><td>44</td><td class="pass">PASS</td></tr>
+<tr><td>ok / flap / marker / remesh</td><td>true / 0 / true / true</td><td>✓</td><td>✓</td><td class="pass">PASS</td></tr>
+<tr><td>in_radius_built max / final</td><td>≥ 69 / == 81</td><td>81 / 81</td><td>81 / 81</td><td class="pass">PASS</td></tr>
+<tr><td>queue_size</td><td>== 95 (pre)</td><td>93</td><td>93</td><td class="fail">deviation (documented below — queue shrank, no growth)</td></tr>
+<tr><td>collision counters present</td><td>present</td><td>314 ms / 233 builds / max 3 ms</td><td>307 ms / 228 / 3 ms</td><td class="pass">PASS</td></tr>
+<tr><td>staging drain to zero</td><td>pending 0, dropped 0, unbodied 0</td><td>✓</td><td>✓</td><td class="pass">PASS</td></tr>
+</table>
+<p id="g4verdict"><span class="fail">G4 verdict: FAIL as written (plan D4 honest-FAIL clause) — with the spec's primary objective met.</span><br>
+<b>Met:</b> forward-drain p95 improved on both post runs (best-of 4291 &lt; 5148, median 4562 &lt; 5182) and per-crossing light computes went 9 → (0 self + 1 batch pass) in steady state — both halves of the spec G4 statement ("forward-drain p95 r4 must IMPROVE … Per-crossing light computes: 9 → 1").
+<b>Not met:</b> the plan D4 walk-regression line (walk-frame p95 ≤ 26 / max ≤ 68): measured 33 / 71–72 in both post runs.
+<b>Root cause (quantified, instrumented):</b> plan D1 estimated contained per-chunk light at ~6 ms; the byte-identical kernel (G2-verified) measures <b>17–34 ms/chunk</b> (glow/lava-heavy chunks at the top). 9 new chunks per crossing ⇒ ~150–300 ms of <em>new main-thread</em> work per crossing (pre-AC-0077: zero on main — AC-0107 workers did the light). Even at the plan's own D4 parenthetical budget ("batch slice ≤ 18 ms/frame"), ~9 boosted frames/crossing × 13 steady crossings ≈ 110–120 walk frames ≥ 26 ms ≈ 10% of the ~1170 walk frames ⇒ p95 ≥ ~30 ms is mathematically unreachable with on-main contained light at this build pace. D1's arithmetic was wrong twice: the chunk cost is ~3× its estimate, and a 2-chunk slice at measured cost is 36–68 ms per call (contradicting D4's own "≤ 18 ms/frame"). The frame profiler (temporarily instrumented, then removed) attributed the slow frames to the batch component (avg 24 ms on ≥26 ms frames; recenter/fluid overlap ≤ 1 frame). Fixing it belongs to a follow-up task (off-main batch light or a faster contained kernel) — out of scope here by the spec's design constraints.</p>
+
+<h3>G5 — staging correctness</h3>
+<ul>
+<li><b>(a) player exactness:</b> <span class="pass">PASS</span> — horizontal_moved 2.82 exact, is_on_floor true (G3 battery re-run + player flake ×4, all RC=0).</li>
+<li><b>(b) drain to zero:</b> <span class="pass">PASS</span> — in every boundary run (post #1, post #2, COLSTAGE=0, flake ×2): <code>unbodied_built_final 0</code>, <code>staged_pending_final 0</code>, <code>staged_dropped 0</code>; <code>staged_drained 233</code> (all far builds drained nearest-first).</li>
+<li><b>(c) spawn/continue clean:</b> <span class="pass">PASS</span> — player ×4 clean; save-logic run clean (RESULT ok, no script errors).</li>
+<li><b>(d) flake boundary ×2 + player ×4:</b> <span class="pass">PASS</span> — all 6 runs RC=0, ok:true, flap 0, no hang (logs in <code>.scratch/AC-0077/flake_r2.log</code>).</li>
+<li><b>(e) <code>AWECRAFT_COLSTAGE=0</code> revert:</b> <span class="pass">PASS</span> — <code>staged_drained 0</code> (staging path fully bypassed = today's immediate-everywhere behavior), collision_n 230 (all immediate), unbodied 0, ok true, flap 0, marker/remesh ok, forward_p95 4293.</li>
+</ul>
+
+<h3>G6 — repo hygiene</h3>
+<p><span class="pass">PASS</span> — <code>git status --short</code>: exactly the 4 <code>.gd</code> files modified (<code>godot/scenes/main.gd</code>,
+<code>godot/world/chunk.gd</code>, <code>godot/world/lighting.gd</code>, <code>godot/world/world.gd</code>) + <code>tasks/AC-0077/</code>
+(continuity.md M, AC-0077-results.html new); <code>.scratch/</code> gitignored. No other files touched.</p>
+
+<h2>Design notes / deviations (documented)</h2>
+<ul>
+<li><b>Nearest-first batch order:</b> <code>_bl_batch_step</code> sorts ready want-set chunks by Chebyshev distance to the player (matches the scored build-pick order) so the build units right after the batch hit the eff cache instead of self-computing.</li>
+<li><b>Batch counter = per-pass (plan D4 semantics).</b> Plan D1/D4 both state the expectation as "one batch per crossing (9 chunks ≈ 9 drain frames)" and gate on <code>light_batches_per_crossing ≈ 1</code>; the counter therefore increments once when a want-set pass completes (<code>_bl_want</code> empties), not once per drain call. Measured: exactly 1 per steady-state crossing. <code>light_batch_chunks</code> counts every chunk light-computed through the batch (~251–253/walk).</li>
+<li><b>On-the-spot single-item batch in <code>_build_unit</code></b> (serving D4's "≤ 2 self + 1 batch call"): a want-set chunk that reaches a build pick before the batch step gets a 1-item batch on the spot (same contained kernel, cached) so the worker still skips its own light; cache is the arbiter — no double compute. In steady state it rarely fires (the pacing fix below makes the batch pass finish before build picks reach most want chunks).</li>
+<li><b>Drain-loop pacing fix — gen pick skips in-flight chunks (root-cause fix beyond D1–D6 literal scope).</b> The scored data pick re-picked the <em>same</em> gen-in-flight no-data entry every iteration (threadgen enqueue dedup no-op still counted as a consumed unit, <code>u=1</code>), burning the frame budget — measured ~1 real enqueue per 5–6 frames — which starved the batch pass: 3–4 chunks per crossing had no data when the next recenter replaced <code>_bl_want</code>, and later self-computed (the 2–6 warmup self-computes). Fix: skip <code>_tg_inflight_keys</code> entries when scoring the data pick (and cursor-park only on a truly empty pool). Effect: 10–12 data enqueues per crossing window, pass completes inside every steady-state crossing, steady-state self-computes = 0. Also improved forward drain (part of the −15% fwd p95).</li>
+<li><b>18 ms/frame compute budget lives INSIDE the batch compute loop</b> (deviation from D1's literal "≤2 per drain call" — bound by D4's own "batch slice ≤ 18 ms/frame"): a naive append-loop budget checked before <em>appending</em> items (microseconds) and still computed 2 chunks = 36–68 ms/call (measured 34.2 ms worst); the budget now checks elapsed compute time between items, so a drain call computes the first chunk plus any further chunks that fit in 18 ms (in practice 1 at 17–34 ms/chunk). Leftover items stay in <code>_bl_want</code> for the next drain call.</li>
+<li><b>Batch slice yields to the recenter slice:</b> <code>_bl_batch_step</code> is skipped while <code>_rec_pending</code> (AC-0118's 8 ms/frame recenter budget takes the frame). The pass completes a few frames later, still well inside the 85-frame crossing window — measured 1 batch/crossing unchanged.</li>
+<li><b>eff cache stores only CONTAINED effs.</b> Worker handoffs cache only when <code>eff_trust</code> is true; flush/bulk effs (<code>eff_trust=false</code>) and <code>last_eff</code>-sourced remesh dispatches never enter the cache, so a cross-chunk bulk eff can never pollute a per-chunk data-signature entry. Sync fallback builds never cache (rare paths; their rebuilds self-compute as today).</li>
+<li><b><code>_enter_candidate</code> does NOT evict the eff cache</b> (deviation from plan's "free paths erase cache"): candidacy keeps the chunk data, so the cached contained light stays valid on re-entry; only the stale staged-body entry is removed. True free (to_free loop) evicts cache + <code>_bl_want</code> + staging.</li>
+<li><b><code>col_dirty</code> semantic extended</b> to "body needs (re)building, including staged": deferred chunks keep it true until the staging drain builds the body. Verified safe for the fluids-test <code>col_dirty</code> wait (its fix chunks are ±1 of the player = always immediate).</li>
+<li><b>Drain placement:</b> batch step runs at the head of <code>_drain_build_queue</code> (before the unit loop) and collision drain at its tail; the <code>queue_size == 0</code> branch also runs both (so crossings finish their batch after the last unit) without touching unit bookkeeping.</li>
+<li><b><code>queue_size</code> 93 vs 95 (deviation, not a regression):</b> the pacing fix accelerated far <code>data_only</code> consumption — 2 extra far-ring entries got data + were consumed during the walk, so the final residual is 93 instead of 95. The queue <em>shrank</em>; no build backlog grew. All other queue-adjacent gates (ok/flap/marker/remesh/built counts) unchanged.</li>
+<li><b>Staging 1-frame body gap (accepted by plan design):</b> a chunk staged at build time and only <em>then</em> reached by the player is drained within 1–2 frames (nearest-first, ≤2/frame) rather than in the same frame as the crossing. The player's own chunk and ±1 neighbors are always <code>col_immediate</code> at dispatch time, so the only gap is a just-reached previously-far chunk for ≤2 frames; no chunk lacks a body at the end of any phase (G5b evidence).</li>
+</ul>
+
+<h2>Artifacts</h2>
+<p>Scratch logs in <code>.scratch/AC-0077/</code>: <code>genhash_pre.txt</code>, <code>genhash_post.txt</code>,
+<code>genhash_post2.txt</code> (final-code re-run), <code>baseline_boundary_r4.log</code> (pre #1),
+<code>pre_boundary_r4_run2.log</code> (pre #2), <code>post_boundary_r4_1.log</code>, <code>post_boundary_r4_2.log</code>
+(final code), <code>colstage0_run.log</code>, <code>battery_post2.log</code>, <code>flake_r2.log</code>,
+<code>bldebug2–5.log</code> + <code>blprof1–2.log</code> (debug instrumentation traces, code since cleaned).</p>
+</body></html>

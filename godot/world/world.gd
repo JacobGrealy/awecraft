@@ -118,6 +118,22 @@ var _tm_stale := 0
 var _tm_datadrop := 0
 var _tm_handoff := 0
 var perf_build_worker_ms := 0
+var col_stage_enabled := true
+var _col_pending: Array = []
+var _col_pending_set: Dictionary = {}
+var perf_collision_ms := 0
+var perf_collision_n := 0
+var perf_collision_max_ms := 0
+var perf_staged_drained := 0
+var perf_staged_dropped := 0
+var _eff_cache: Dictionary = {}
+var _eff_cache_order: Array = []
+const EFF_CACHE_CAP := 128
+var _bl_want: Dictionary = {}
+var perf_light_self_computes := 0
+var perf_light_batch_calls := 0
+var perf_light_batch_chunks := 0
+var perf_light_cache_hits := 0
 var _look_yaw := 0.0
 var _look_dir := Vector2(1, 0)
 const PICK_POOL_CAP := 512
@@ -165,6 +181,7 @@ func _ready() -> void:
 	var dr := OS.get_environment("AWECRAFT_DRAIN_MS")
 	if dr != "" and dr.to_int() > 0:
 		drain_budget_ms = dr.to_int()
+	col_stage_enabled = OS.get_environment("AWECRAFT_COLSTAGE") != "0"
 	var gb := OS.get_environment("AWECRAFT_GEN_BUDGET")
 	if gb != "" and gb.to_int() >= 0:
 		gen_budget_ms = gb.to_int()
@@ -211,7 +228,7 @@ func _on_fluid_tick() -> void:
 func _process(_delta: float) -> void:
 	# threadmesh_inflight keeps this running while mesh tasks are in flight
 	# even when every bookkeeping list is drained (else the poll never runs).
-	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty() and threadmesh_inflight.is_empty() and not _rec_pending:
+	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty() and threadmesh_inflight.is_empty() and not _rec_pending and _bl_want.is_empty() and _col_pending.is_empty():
 		return
 	var was_active := flush_active
 	var added := false
@@ -264,7 +281,7 @@ func _process(_delta: float) -> void:
 				continue
 			var tb := Time.get_ticks_msec()
 			var eff = flush_eff
-			_mesh_dispatch(c2, int(c2.cx), int(c2.cz), eff)
+			_mesh_dispatch(c2, int(c2.cx), int(c2.cz), eff, eff.is_empty())
 			var dt := Time.get_ticks_msec() - tb
 			if dt > perf_single_build_ms:
 				perf_single_build_ms = dt
@@ -280,7 +297,7 @@ func _process(_delta: float) -> void:
 	for c in fluid_list:
 		var cc: Node3D = c
 		if _build_ready(int(cc.cx), int(cc.cz)):
-			_mesh_dispatch(cc, int(cc.cx), int(cc.cz), cc.last_eff)
+			_mesh_dispatch(cc, int(cc.cx), int(cc.cz), cc.last_eff, false)
 		else:
 			fluid_dirty[_key(int(cc.cx), int(cc.cz))] = true
 	threadgen_poll()
@@ -316,7 +333,7 @@ func _drain_tex_refresh() -> void:
 			continue
 		# false = a task for this chunk is still in flight (dispatch dedup):
 		# re-queue so the chunk is rebuilt once that task has landed.
-		if not _mesh_dispatch(c, int(c.cx), int(c.cz), c.last_eff):
+		if not _mesh_dispatch(c, int(c.cx), int(c.cz), c.last_eff, false):
 			tex_refresh.push_back(key)
 		done += 1
 
@@ -555,17 +572,27 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 	c.apply_accs(res, _tm_ms_full)
 	perf_build_ms += Time.get_ticks_msec() - ta
 	perf_build_worker_ms += int(res.get("wms", 0))
+	_count_collision_build(c)
+	_stage_check(c, key)
+	if bool(e.get("eff_trust", true)):
+		_eff_cache_put(key, c.data, res.get("light", {}))
 	_tm_handoff += 1
 	if timing or _tm_debug:
 		print("BUILDCHUNK_T %d,%d build_ms=%d" % [int(e["cx"]), int(e["cz"]), int(res.get("wms", 0))])
 
-func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary) -> bool:
+func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := true) -> bool:
 	# true = covered (sync-built now, or an in-flight task will apply);
 	# false = deduped behind an in-flight task (caller may want to retry).
 	# Sync fallbacks (kill switch, spawn chunk, no own data, missing neighbor)
-	# run the legacy build_mesh path unchanged.
+	# run the legacy build_mesh path unchanged. eff_trust marks effs whose
+	# light values came from the contained per-chunk kernel (cache/empty);
+	# bulk flush effs are untrusted and must not enter the eff cache.
+	c.col_immediate = _col_immediate_for(cx, cz)
+	var key := _key(cx, cz)
 	if not threadmesh or (cx == 0 and cz == 0) or c.data.is_empty():
 		c.build_mesh(get_block, eff)
+		_count_collision_build(c)
+		_stage_check(c, key)
 		return true
 	var nbs: Dictionary = {}
 	for dx in range(-1, 2):
@@ -576,9 +603,10 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary) -> bool:
 			if nc == null or nc.data.is_empty():
 				# Workers can't on-demand-generate; the sync _build_snap can.
 				c.build_mesh(get_block, eff)
+				_count_collision_build(c)
+				_stage_check(c, key)
 				return true
 			nbs["%d,%d" % [dx, dz]] = {"d": nc.data.duplicate(), "f": nc.fl.duplicate()}
-	var key := _key(cx, cz)
 	if _tm_inflight_keys.has(key):
 		_tm_dedup += 1
 		if _tm_debug:
@@ -589,6 +617,8 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary) -> bool:
 		if _tm_debug:
 			print("TMESH CAPDROP %d,%d inflight=%d" % [cx, cz, threadmesh_inflight.size()])
 		c.build_mesh(get_block, eff)
+		_count_collision_build(c)
+		_stage_check(c, key)
 		return true
 	var ms_w: Dictionary
 	if not _tm_ms_full.rects.is_empty():
@@ -598,7 +628,7 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary) -> bool:
 	var entry := {
 		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(),
 		"data": c.data.duplicate(), "fl": c.fl.duplicate(),
-		"nbs": nbs, "eff": eff, "ctx": _tm_ctx, "ms": ms_w,
+		"nbs": nbs, "eff": eff, "eff_trust": eff_trust, "ctx": _tm_ctx, "ms": ms_w,
 	}
 	var tid = threadmesh_pool.add_task(_threadmesh_worker)
 	entry["tid"] = tid
@@ -615,7 +645,26 @@ func _build_unit(c: Node3D, cx: int, cz: int) -> int:
 	# AC-0107: threaded dispatch when eligible; sync fallbacks inside keep the
 	# legacy path. dt is the MAIN-thread cost (dispatch/apply), the worker-side
 	# total is reported via perf_build_worker_ms / BUILDCHUNK_T.
-	_mesh_dispatch(c, cx, cz, {})
+	# AC-0077: cached crossing-batched eff when it matches the chunk data.
+	# A want-set chunk that reaches a build pick before the batch step gets a
+	# single-item batch eff on the spot (same contained kernel, cached) so the
+	# worker still skips its own light; only non-want or failed cases self-
+	# compute (counted).
+	var eff := _eff_for(c, cx, cz)
+	if eff.is_empty():
+		var wkey := _key(cx, cz)
+		if _bl_want.has(wkey):
+			var single: Array = Lighting.compute_light_flat_batch([{"data": c.data.duplicate(), "cx": cx, "cz": cz}])
+			if not single.is_empty():
+				eff = single[0]
+				perf_light_batch_chunks += 1
+				_eff_cache_put(wkey, c.data, eff)
+				_bl_want.erase(wkey)
+				if _bl_want.is_empty():
+					perf_light_batch_calls += 1
+	if eff.is_empty():
+		perf_light_self_computes += 1
+	_mesh_dispatch(c, cx, cz, eff)
 	var dt := Time.get_ticks_msec() - tb
 	last_build_us = dt * 1000
 	if timing:
@@ -683,12 +732,22 @@ func _collect_pool(build: bool) -> Array:
 
 func _drain_build_queue() -> void:
 	if queue_size == 0:
+		if _bl_want.is_empty() and _col_pending.is_empty():
+			return
+		if not _rec_pending:
+			_bl_batch_step()
+		_col_drain_step()
 		return
 	var t0 := Time.get_ticks_usec()
 	var budget := 3 if _startup_pending() else (2 if last_build_us < BUILD_FAST_US else 1)
 	var budget_us := int(drain_budget_ms * 1000)
 	var gen_used_ms := 0
 	var units := 0
+	# Frame budget: the ~18 ms batch slice yields to the recenter slice's own
+	# 8 ms budget (AC-0118) — overlapping them pushed walk frames past the
+	# D4 p95 gate. The pass still finishes well inside the crossing window.
+	if not _rec_pending:
+		_bl_batch_step()
 	var px: float = Game.player.position.x if Game.player != null else 0.0
 	var pz: float = Game.player.position.z if Game.player != null else 0.0
 	while budget > 0:
@@ -728,6 +787,14 @@ func _drain_build_queue() -> void:
 			var dp_e: Dictionary = {}
 			var dp_s := 1e30
 			for e in dp:
+				# AC-0077: skip chunks whose gen is already in flight. The
+				# scored pick used to keep re-picking the same in-flight
+				# no-data entry (dedup no-op) every iteration, burning the
+				# frame budget and starving the next chunk's enqueue (~1 real
+				# enqueue / 5-6 frames), which left want-set stragglers
+				# unbuilt by the batch pass and forced self light computes.
+				if _tg_inflight_keys.has(e["key"]):
+					continue
 				var s := _entry_score(e, last_pcx, last_pcz, px, pz)
 				if s < dp_s:
 					dp_s = s
@@ -754,7 +821,7 @@ func _drain_build_queue() -> void:
 					var dg := _gen_unit(c, cx, cz)
 					u = 1
 					gen_used_ms += dg
-			if u == 0:
+			if u == 0 and dp.is_empty():
 				# Pool exhausted this frame (all entries consumed): park the
 				# cursor past the scanned region, same as the old FIFO scan.
 				var db := dq_b
@@ -774,6 +841,7 @@ func _drain_build_queue() -> void:
 		var fm := (Time.get_ticks_usec() - t0) / 1000.0
 		if fm > perf_max_drain_ms:
 			perf_max_drain_ms = fm
+	_col_drain_step()
 
 func _advance_dq_past(cx: int, cz: int) -> void:
 	# AC-0079 round 3: advance the sticky data cursor (dq_b/dq_i) past the entry
@@ -799,6 +867,155 @@ func _remove_entry(e: Dictionary) -> void:
 				arr.remove_at(i)
 				queue_size -= 1
 				return
+
+# --- AC-0077: crossing-batched per-chunk light (P1.3) ----------------------
+
+func _eff_cache_put(key: String, data: PackedByteArray, eff: Dictionary) -> void:
+	if eff.is_empty():
+		return
+	_eff_cache[key] = {"data": data.duplicate(), "eff": eff}
+	if not _eff_cache_order.has(key):
+		_eff_cache_order.append(key)
+		while _eff_cache_order.size() > EFF_CACHE_CAP:
+			_eff_cache.erase(_eff_cache_order.pop_front())
+
+func _eff_cache_evict(key: String) -> void:
+	_eff_cache.erase(key)
+	if _eff_cache_order.has(key):
+		_eff_cache_order.erase(key)
+
+func _eff_for(c: Node3D, cx: int, cz: int) -> Dictionary:
+	var key := _key(cx, cz)
+	var cached = _eff_cache.get(key)
+	if cached != null and c.data == cached.data:
+		perf_light_cache_hits += 1
+		return cached.eff
+	return {}
+
+func _bl_dist(c: Node3D) -> int:
+	return maxi(absi(int(c.cx) - last_pcx), absi(int(c.cz) - last_pcz))
+
+func _bl_batch_step() -> void:
+	# Up to 2 ready want-set chunks per drain call, before the unit picks.
+	# Nearest-first (matches the scored build order) so dispatches hit the
+	# cache; a vanished chunk drops, a data-waiting chunk stays for a later
+	# drain call, a cache-hit chunk drops without recompute. One want-set
+	# pass per recenter = one batch (plan D4: "one batch per crossing");
+	# the pass counts when _bl_want empties.
+	if _bl_want.is_empty():
+		return
+	var consumed := false
+	var ready: Array = []
+	for key in _bl_want:
+		var c = chunks.get(key)
+		if c == null:
+			_bl_want.erase(key)
+			consumed = true
+			continue
+		if c.data.is_empty():
+			continue
+		var cached = _eff_cache.get(key)
+		if cached != null and c.data == cached.data:
+			_bl_want.erase(key)
+			consumed = true
+			perf_light_cache_hits += 1
+			continue
+		ready.append([c, key])
+	if ready.is_empty():
+		if consumed and _bl_want.is_empty():
+			perf_light_batch_calls += 1
+		return
+	ready.sort_custom(func(a, b): return _bl_dist(a[0]) < _bl_dist(b[0]))
+	var n := mini(2, ready.size())
+	var items: Array = []
+	for i in range(n):
+		var c: Node3D = ready[i][0]
+		items.append({"data": c.data.duplicate(), "cx": int(c.cx), "cz": int(c.cz)})
+	if items.is_empty():
+		return
+	# D4 budget: the batch slice must stay <= 18 ms/frame. Contained chunk
+	# light measures ~17-34 ms (not the 6 ms D1 assumed), so the budget lives
+	# INSIDE the batch compute loop (first chunk always runs, later chunks
+	# only while under budget) — the caller keeps the leftovers in _bl_want.
+	var res: Array = Lighting.compute_light_flat_batch(items, 18000)
+	perf_light_batch_chunks += res.size()
+	for i in range(res.size()):
+		var key: String = ready[i][1]
+		var c = chunks.get(key)
+		if c == null:
+			continue
+		_eff_cache_put(key, c.data, res[i])
+		_bl_want.erase(key)
+		consumed = true
+	if consumed and _bl_want.is_empty():
+		perf_light_batch_calls += 1
+
+# --- AC-0077: staged collision bodies (P1.4) --------------------------------
+
+func _col_immediate_for(cx: int, cz: int) -> bool:
+	if not col_stage_enabled:
+		return true
+	if cx == 0 and cz == 0:
+		return true
+	return maxi(absi(cx - last_pcx), absi(cz - last_pcz)) <= 1
+
+func _stage_check(c: Node3D, key: String) -> void:
+	if c == null or not col_stage_enabled:
+		return
+	if not c.collision_enabled or not c.col_dirty:
+		return
+	if c.collision_body != null:
+		return
+	var ccx := int(c.cx)
+	var ccz := int(c.cz)
+	if (ccx == 0 and ccz == 0) or maxi(absi(ccx - last_pcx), absi(ccz - last_pcz)) <= 1:
+		return
+	if not _col_pending_set.has(key):
+		_col_pending.append(key)
+		_col_pending_set[key] = true
+
+func _col_dist(key: String) -> int:
+	var c = chunks.get(key)
+	if c == null:
+		return 1000000
+	return maxi(absi(int(c.cx) - last_pcx), absi(int(c.cz) - last_pcz))
+
+func _col_drain_step() -> void:
+	# <=2 staged bodies per frame, nearest-first, behind the build queue.
+	# Validity: chunk present + mesh_built + no body yet (dup guard) +
+	# collision_enabled + col_dirty + in radius; anything else drops (a
+	# rebuilt or out-of-radius chunk is cancelled, never double-bodied).
+	if _col_pending.is_empty():
+		return
+	_col_pending.sort_custom(func(a, b): return _col_dist(a) < _col_dist(b))
+	var done := 0
+	var i := 0
+	while done < 2 and i < _col_pending.size():
+		var key: String = _col_pending[i]
+		var c = chunks.get(key)
+		var ok: bool = c != null and c.mesh_built and c.collision_body == null and c.collision_enabled and c.col_dirty and maxi(absi(int(c.cx) - last_pcx), absi(int(c.cz) - last_pcz)) <= render_radius
+		_col_pending.remove_at(i)
+		_col_pending_set.erase(key)
+		if not ok:
+			perf_staged_dropped += 1
+			continue
+		c._build_collision()
+		if c.collision_body != null:
+			c.col_dirty = false
+			_count_collision_build(c)
+			perf_staged_drained += 1
+		else:
+			perf_staged_dropped += 1
+		done += 1
+
+func _count_collision_build(c: Node3D) -> void:
+	var dt := int(c.last_collision_build_ms)
+	if dt > 0:
+		perf_collision_ms += dt
+		perf_collision_n += 1
+		if dt > perf_collision_max_ms:
+			perf_collision_max_ms = dt
+
 func _key(cx: int, cz: int) -> String:
 	var k := cx * 65536 + cz
 	var s = chunk_keys.get(k)
@@ -872,11 +1089,15 @@ func _enter_candidate(key: String, c: Node3D) -> bool:
 			c.collision_body.queue_free()
 			c.collision_body = null
 		# Pending mesh-bound work on an invisible chunk is waste; re-entry
-		# marks it dirty again via the rebuild path.
+		# marks it dirty again via the rebuild path. The staged-body entry is
+		# stale too (body freed above); the eff cache stays — data is kept,
+		# so the cached light is still valid on re-entry.
 		light_pending_set.erase(key)
 		light_pending.erase(key)
 		fluid_dirty.erase(key)
 		tex_refresh.erase(key)
+		_col_pending_set.erase(key)
+		_col_pending.erase(key)
 	return had_mesh
 
 
@@ -951,6 +1172,10 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 		light_pending.erase(key)
 		fluid_dirty.erase(key)
 		tex_refresh.erase(key)
+		_eff_cache_evict(key)
+		_bl_want.erase(key)
+		_col_pending_set.erase(key)
+		_col_pending.erase(key)
 		c.queue_free()
 	_rp_free_ms += (Time.get_ticks_usec() - tf1) / 1000.0
 	threadgen_poll()
@@ -1027,6 +1252,9 @@ func _rec_want_step() -> void:
 	if _rec_cursor >= side * side:
 		_rec_phase = 1
 		_rec_cursor = 0
+		_bl_want = {}
+		for k in _rec_want:
+			_bl_want[k] = true
 		return
 	var dx := _rec_cursor / side - rr
 	var dz := _rec_cursor % side - rr
@@ -1177,6 +1405,7 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 	else:
 		c.fl[fi] = 0
 	c.col_dirty = true
+	_eff_cache_evict(_key(cx, cz))
 	_mark_light_around(cx, cz)
 	if _fluid_near(x, y, z):
 		_fluid_write = true
@@ -1214,6 +1443,7 @@ func _apply_edits_to_chunk(c: Node3D) -> void:
 		data[int(fkey)] = int(e.get("b", 0))
 		fl[int(fkey)] = int(e.get("f", 0))
 	c.col_dirty = true
+	_eff_cache_evict(key)
 	_mark_light_around(c.cx, c.cz)
 	_mark_fluid_around(c.cx, c.cz)
 
