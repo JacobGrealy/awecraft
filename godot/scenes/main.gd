@@ -279,6 +279,7 @@ const HARNESS_ENVS := [
 	"AWECRAFT_ANIM_SHOT", "AWECRAFT_PROBE", "AWECRAFT_BCELL", "AWECRAFT_MESH_INFO", "AWECRAFT_ONLY",
 	"AWECRAFT_DBG", "AWECRAFT_SETTLE_TICKS", "AWECRAFT_SEED", "AWECRAFT_TIME", "AWECRAFT_ANIM_PHASE",
 	"AWECRAFT_SIZE", "AWECRAFT_HP", "AWECRAFT_HUNGER", "AWECRAFT_BATTERY",
+	"AWECRAFT_BS_CASE", "AWECRAFT_BS_QUIESCE",
 ]
 
 
@@ -936,6 +937,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			return
 		if logic == "editperf":
 			await _editperf_test(spawn)
+			return
+		if logic == "breakspike":
+			await _breakspike_test(spawn)
 			return
 		if logic == "editslab":
 			await _editslab_test(spawn)
@@ -2796,6 +2800,227 @@ func _editperf_test(spawn: Vector3) -> void:
 		"total_ms": Time.get_ticks_msec() - t_edit,
 	})
 	get_tree().quit()
+
+
+# AC-0126 probe (env-gated by AWECRAFT_LOGIC=breakspike, never runs in
+# game): the post-break light+mesh frame spike. Pinned cells (seed 44,
+# AWECRAFT_RADIUS=6, plan §4 — every edit 3x3 is worker-buildable and
+# excludes the spawn chunk):
+#   interior: break (-32,31,32), chunk (-2,2), contained light delta = 1
+#   edge:     break (-49,31,41), chunk (-4,2), contained light delta = 296
+#   coalesce: 5 Grass cells in chunk (1,2), 3 breaks this frame + 2 next
+# Flow: recenter -> FULL steady state at r=6 (all in-radius chunks built,
+# light/col queues empty; generous wait, no timeout before the break) ->
+# scripted break(s) -> per-frame ms window from the break frame until
+# SETTLE (light_dirty + light_pending + threadmesh_inflight + _col_pending
+# empty AND every edit-set chunk mesh_built AND !any_col_dirty), bounded at
+# 600 physics frames -> RESULT with post-settle per-chunk eff-MD5, the
+# mesh_info 3x3 subset, the 4 edit counters, flush_done.
+func _breakspike_test(spawn: Vector3) -> void:
+	var case_name := OS.get_environment("AWECRAFT_BS_CASE")
+	var cells: Array = []
+	var ecx := 0
+	var ecz := 0
+	if case_name == "interior":
+		cells = [[-32, 31, 32]]
+		ecx = -2
+		ecz = 2
+	elif case_name == "edge":
+		cells = [[-49, 31, 41]]
+		ecx = -4
+		ecz = 2
+	elif case_name == "coalesce":
+		cells = [[16, 34, 41], [17, 34, 42], [16, 34, 40], [17, 34, 41], [17, 35, 43]]
+		ecx = 1
+		ecz = 2
+	elif case_name == "noop":
+		# Diagnostic only: no break — ambient frame cost at steady state.
+		pass
+	else:
+		Debug.result({"error": "unknown AWECRAFT_BS_CASE: %s" % case_name})
+		get_tree().quit()
+		return
+	var edit_keys: Array = []
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			edit_keys.append("%d,%d" % [ecx + dx, ecz + dz])
+	var rr: int = world.render_radius
+	var rr1: int = rr + 1
+	world.recenter(spawn.x, spawn.z, true)
+	# Steady state: in-radius fully mesh-built and the queues idle for 5
+	# consecutive ticks (drain quiescent). NOTE: the stub ring at rr+1 can
+	# NEVER mesh-build (outer orthogonal neighbors don't exist ->
+	# _build_ready never true), so a full-footprint wait is unsatisfiable —
+	# the ring entries persist as data_only residuals and the drain's idle
+	# scan of them is sub-ms at uncapped tick rate.
+	# IMPORTANT: the runner passes --fixed-fps 600. Default headless paces
+	# ticks at 60 Hz, and a wall-time measurement across `await physics_frame`
+	# then includes the pacing period (13-21 ms/frame floor — proven by the
+	# empty-SceneTree idle test), making the p95 gates unmeasurable. At an
+	# uncapped tick the same await measures true per-frame processing cost.
+	# AWECRAFT_BS_QUIESCE=0 skips the 5-tick quiescence (break mid-drain).
+	# Wall guard 120 s (tick-rate independent); awaited is a hang guard too.
+	var bs_debug := OS.get_environment("AWECRAFT_BS_DEBUG") == "1"
+	var bs_quiesce: bool = OS.get_environment("AWECRAFT_BS_QUIESCE") != "0"
+	var bs_steady_ms: Array = []
+	var quiet := 0
+	var st_t0 := Time.get_ticks_msec()
+	var awaited := 0
+	while awaited < 60000 and Time.get_ticks_msec() - st_t0 < 120000:
+		var n_in := 0
+		for key in world.chunks:
+			var cc: Node3D = world.chunks[key]
+			if absi(cc.cx) <= rr and absi(cc.cz) <= rr and cc.mesh_built:
+				n_in += 1
+		var queues_idle: bool = world.light_dirty.is_empty() and world.light_pending.is_empty() \
+			and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
+		if n_in == (2 * rr + 1) * (2 * rr + 1) and queues_idle:
+			quiet += 1
+		else:
+			quiet = 0
+		if quiet >= (5 if bs_quiesce else 1):
+			break
+		var st_fb := Time.get_ticks_msec()
+		await get_tree().physics_frame
+		if bs_debug:
+			bs_steady_ms.append(Time.get_ticks_msec() - st_fb)
+		awaited += 1
+	# Scripted break(s). Coalesce: 3 this frame, 2 one frame later (the
+	# second batch runs inside the window loop, frame 1).
+	var batch2: Array = []
+	if case_name == "coalesce":
+		for i in 3:
+			world.set_block(int(cells[i][0]), int(cells[i][1]), int(cells[i][2]), 0)
+		batch2 = [cells[3], cells[4]]
+	elif case_name != "noop":
+		for cl in cells:
+			world.set_block(int(cl[0]), int(cl[1]), int(cl[2]), 0)
+	# Per-frame ms window from the break frame until settle (bound 600).
+	var frame_ms: Array = []
+	var frame_ms_off: Array = []
+	var settle_frames := -1
+	var frame_n := 0
+	var batch2_done := batch2.is_empty()
+	var bs_bm := float(world.perf_build_ms)
+	var noop_cap := 60 if case_name == "noop" else 600
+	while frame_n < noop_cap:
+		var fb := Time.get_ticks_msec()
+		await get_tree().physics_frame
+		var fms := Time.get_ticks_msec() - fb
+		frame_ms.append(fms)
+		if bs_debug:
+			var inkeys: Array = []
+			for te in world.threadmesh_inflight:
+				inkeys.append(te["key"])
+			print("BSF frame=%d ms=%d inflight=%s col_pending=%d light_pending=%d build_ms_delta=%.1f qsize=%d built7=%d" % [
+				frame_n + 1, fms, inkeys,
+				world._col_pending.size(), world.light_pending.size(),
+				float(world.perf_build_ms) - bs_bm, world.queue_size,
+				_bs_built_count(7)])
+			bs_bm = float(world.perf_build_ms)
+		if not batch2_done:
+			batch2_done = true
+			for cl in batch2:
+				world.set_block(int(cl[0]), int(cl[1]), int(cl[2]), 0)
+		frame_n += 1
+		if case_name == "noop":
+			if frame_n == 30:
+				# Second pass with world processing OFF: isolates engine
+				# pacing from world._process cost (diagnostic).
+				world.set_process(false)
+			if frame_n > 30:
+				frame_ms_off.append(fms)
+			continue
+		if batch2_done and _breakspike_settled(edit_keys):
+			settle_frames = frame_n
+			break
+	if bs_debug and not bs_steady_ms.is_empty():
+		var st_sorted: Array = bs_steady_ms.duplicate()
+		st_sorted.sort()
+		print("BSSTADY frames=%d p50=%d p95=%d max=%d tail30=%s" % [
+			bs_steady_ms.size(), int(_percentile(bs_steady_ms, 0.50)),
+			int(_percentile(bs_steady_ms, 0.95)),
+			int(bs_steady_ms.max()), bs_steady_ms.slice(-30)])
+	# Post-settle identity snapshot: per-chunk eff-MD5 + mesh_info subset.
+	var eff_md5: Dictionary = {}
+	for key in edit_keys:
+		var cc: Node3D = world.chunks.get(key)
+		if cc != null and cc.last_eff != null and cc.last_eff.has("arr"):
+			eff_md5[key] = _bs_md5(cc.last_eff["arr"])
+	var minfo: Dictionary = {}
+	for e in world.mesh_info():
+		var kx: int = int(int(e["pos"][0]) / 16)
+		var kz: int = int(int(e["pos"][1]) / 16)
+		var k := "%d,%d" % [kx, kz]
+		if edit_keys.has(k):
+			minfo[k] = {"v": e.get("verts", []), "f": e.get("fverts", [])}
+	var cell_after: Array = []
+	for cl in cells:
+		cell_after.append(world.get_block(int(cl[0]), int(cl[1]), int(cl[2])))
+	Debug.result({
+		"case": case_name,
+		"seed": Game.world_seed,
+		"radius": rr,
+		"cells": cells,
+		"cell_after": cell_after,
+		"steady_waited": awaited,
+		"frame_window": {
+			"frames": frame_ms.size(),
+			"p50": int(_percentile(frame_ms, 0.50)),
+			"p95": int(_percentile(frame_ms, 0.95)),
+			"max": int(frame_ms.max()) if not frame_ms.is_empty() else 0,
+		},
+		"frame_window_off": {
+			"frames": frame_ms_off.size(),
+			"p50": int(_percentile(frame_ms_off, 0.50)) if not frame_ms_off.is_empty() else 0,
+			"p95": int(_percentile(frame_ms_off, 0.95)) if not frame_ms_off.is_empty() else 0,
+			"max": int(frame_ms_off.max()) if not frame_ms_off.is_empty() else 0,
+		},
+		"settle_frames": settle_frames,
+		"settle_bounded": settle_frames > 0 and settle_frames <= 600,
+		"eff_md5": eff_md5,
+		"minfo": minfo,
+		"counters": {
+			"edit_dispatches": world.perf_edit_dispatches,
+			"edit_defers": world.perf_edit_defers,
+			"edit_syncs": world.perf_edit_syncs,
+			"edit_light_passes": world.perf_edit_light_passes,
+			"light_self_computes": world.perf_light_self_computes,
+		},
+		"flush_done": world.light_dirty.is_empty() and world.light_pending.is_empty(),
+	})
+	get_tree().quit()
+
+
+func _bs_built_count(ring: int) -> int:
+	var n := 0
+	for key in world.chunks:
+		var cc: Node3D = world.chunks[key]
+		if absi(cc.cx) <= ring and absi(cc.cz) <= ring and cc.mesh_built:
+			n += 1
+	return n
+
+
+func _breakspike_settled(edit_keys: Array) -> bool:
+	if not (world.light_dirty.is_empty() and world.light_pending.is_empty()
+			and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()):
+		return false
+	for key in edit_keys:
+		var cc: Node3D = world.chunks.get(key)
+		if cc == null or not cc.mesh_built or cc.any_col_dirty():
+			return false
+	return true
+
+
+func _bs_md5(d: PackedByteArray) -> String:
+	var h := HashingContext.new()
+	h.start(HashingContext.HASH_MD5)
+	h.update(d)
+	var md5: PackedByteArray = h.finish()
+	var hx := ""
+	for i in 16:
+		hx += "%02x" % md5[i]
+	return hx
 
 
 func _editslab_test(spawn: Vector3) -> void:

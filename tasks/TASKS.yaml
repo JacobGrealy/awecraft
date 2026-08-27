@@ -1,9 +1,8 @@
 meta:
-  updated_at: 2026-08-27T06:50
+  updated_at: 2026-08-27T10:46
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0126
 - AC-0129
 - AC-0128
 - AC-0035
@@ -3695,18 +3694,30 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-26T20:45
-  updated_at: 2026-08-27T03:16
-  completed_at: null
+  updated_at: 2026-08-27T10:46
+  completed_at: 2026-08-27T10:46
   waiting_on: null
   parent_id: null
   notes: 'Batch block-break light+mesh: world.gd _process 134 light_dirty->pending 159 flush currently 2/40ms sync BFS+build_mesh
     719 x1-5 on edge (900 lx) = 50-120ms spike. Use bulk box 922 (like AC-0077) for edit set, stagger neighbor remesh 1/frame,
     reuse AC-0107 threaded build path, collision staged 0077. Gate: edge break p95 <15ms, interior <10ms, torch 14 unchanged,
     battery green.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-27T10:46
+    updated_at: null
+    text: 'DONE 2026-08-27 — all heavy gates PASS (bash-75 + r6 re-runs). Fix (world.gd only): edit flush staggered 1 remesh/frame
+      (EDIT_FLUSH_MAX_PER_FRAME), _mesh_dispatch +defer_on_cap (cap-drop REQUEUES never sync-builds), dead bulk-light gate
+      deleted (BULK_LIGHT_CELLS_MAX 3000 < min box 32000, _build_batch zero callers), 4 pure counters. breakspike r6 --fixed-fps
+      600: edge settle 176 p95 3/max 4 (<15), interior settle 191 p95 3/max 4 (<10), coalesce passes 11 (<=18), edit_syncs
+      0, A/B byte-identical all cases (223-238ms PRE spike gone). MINFO 121/121 byte-identical, MATINFO 3/3, battery EXACT,
+      genhash 25/25, boundary r4 x2 62/3035+63/3022/10/81/0, 223 shapes max 3ms, RECSLICE r50 11.0/8.0, r50 mem 141.7 <= 146.9
+      fence, perf 5851/194/57, player x4, build RC=0 exe 109,576,544B, 8080+5180 200. Ops: --fixed-fps 600 for frame-window
+      probes (60Hz pacing under-reports wall time), breakspike needs AWECRAFT_RADIUS=6, snapshots absolute (godot CWD = godot/).
+      See AC-0126-results.html verdict + continuity RUN 2/2.5.'
 - id: AC-0127
   title: slab-distance-culling-r50-mem
   source: agent

@@ -3,11 +3,12 @@ extends Node3D
 const ChunkScript = preload("res://world/chunk.gd")
 const DropScript = preload("res://entities/drop.gd")
 
-const LIGHT_FLUSH_MARGIN := 2
 const LIGHT_NEIGHBOR := 1
 const FLUSH_FRAME_BUDGET_MS := 40
 const FLUSH_MAX_PER_FRAME := 2
-const BULK_LIGHT_CELLS_MAX := 3000
+# AC-0126: the edit (post-break) flush staggers remeshes 1/frame on the
+# AC-0107 worker path; FLUSH_MAX_PER_FRAME stays for _drain_tex_refresh.
+const EDIT_FLUSH_MAX_PER_FRAME := 1
 const FLUID_TICK_INTERVAL := 0.2
 const FLUID_DIRS := [
 	[1, 0],
@@ -31,11 +32,16 @@ var edits := {}
 var light_dirty := {}
 var light_pending: Array = []
 var light_pending_set := {}
-var flush_eff: Dictionary = {}
 var flush_active := false
 var perf_flush_frames := 0
 var perf_max_frame_ms := 0
 var perf_single_build_ms := 0
+# AC-0126 edit-path counters (probe-first: pure counters, wired in the
+# batched edit flush; zero behavior change until the flush change lands).
+var perf_edit_dispatches := 0
+var perf_edit_defers := 0
+var perf_edit_syncs := 0
+var perf_edit_light_passes := 0
 var perf_build_units := 0
 var perf_drain_frames := 0
 var perf_max_drain_ms := 0
@@ -258,12 +264,9 @@ func _process(_delta: float) -> void:
 	light_dirty = {}
 	if added and not was_active:
 		flush_active = true
-		flush_eff = {}
 		perf_flush_frames = 0
 		perf_max_frame_ms = 0
 		perf_single_build_ms = 0
-	elif added and was_active:
-		flush_eff = {}
 	var fluid_list: Array[Node3D] = []
 	for key in fluid_dirty:
 		var c = chunks.get(key)
@@ -271,17 +274,17 @@ func _process(_delta: float) -> void:
 			fluid_list.append(c)
 	fluid_dirty = {}
 	if not light_pending.is_empty():
-		var pb := _pending_box()
-		var pbox_ok := false
-		if int(pb["mnx"]) >= 0:
-			pbox_ok = _box_ready(int(pb["mnx"]) - LIGHT_FLUSH_MARGIN, int(pb["mnz"]) - LIGHT_FLUSH_MARGIN, int(pb["mxx"]) + LIGHT_FLUSH_MARGIN, int(pb["mxz"]) + LIGHT_FLUSH_MARGIN)
-		if flush_eff.is_empty() and pbox_ok and _bulk_box_cells() <= BULK_LIGHT_CELLS_MAX:
-			flush_eff = _bulk_light()
+		# AC-0126: edit (post-break) flush — staggered 1 remesh/frame on the
+		# AC-0107 worker path. eff = {} -> the worker self-lights its contained
+		# kernel (byte-identical to the sync margin-0 path). defer_on_cap=true
+		# -> a TM2 cap drop REQUEUES the chunk instead of sync build_mesh (the
+		# old 50-120 ms edge-break spike). The spawn/missing-diagonal sync
+		# contract paths inside _mesh_dispatch stay sync (unchanged).
 		var t0 := Time.get_ticks_msec()
 		var built := 0
 		var spun := 0
 		var max_spin := light_pending.size()
-		while built < FLUSH_MAX_PER_FRAME and not light_pending.is_empty():
+		while built < EDIT_FLUSH_MAX_PER_FRAME and not light_pending.is_empty():
 			if built > 0 and Time.get_ticks_msec() - t0 > FLUSH_FRAME_BUDGET_MS:
 				break
 			var key2: String = light_pending.pop_front()
@@ -297,11 +300,19 @@ func _process(_delta: float) -> void:
 					break
 				continue
 			var tb := Time.get_ticks_msec()
-			var eff = flush_eff
-			_mesh_dispatch(c2, int(c2.cx), int(c2.cz), eff, eff.is_empty())
+			var covered := _mesh_dispatch(c2, int(c2.cx), int(c2.cz), {}, true, true)
 			var dt := Time.get_ticks_msec() - tb
 			if dt > perf_single_build_ms:
 				perf_single_build_ms = dt
+			if not covered:
+				# Cap-drop defer or in-flight dedup: re-queue (back of the line,
+				# chunk-key deduped) — never a sync build_mesh.
+				light_pending.append(key2)
+				light_pending_set[key2] = true
+				spun += 1
+				if spun >= max_spin:
+					break
+				continue
 			built += 1
 		if built > 0:
 			perf_flush_frames += 1
@@ -310,7 +321,6 @@ func _process(_delta: float) -> void:
 				perf_max_frame_ms = ft
 		if light_pending.is_empty():
 			flush_active = false
-			flush_eff = {}
 	for c in fluid_list:
 		var cc: Node3D = c
 		if _build_ready(int(cc.cx), int(cc.cz)):
@@ -398,14 +408,6 @@ func _build_ready(cx: int, cz: int) -> bool:
 			return false
 	return true
 
-func _box_ready(mnx: int, mnz: int, mxx: int, mxz: int) -> bool:
-	for cx in range(mnx, mxx + 1):
-		for cz in range(mnz, mxz + 1):
-			var c = chunks.get(_key(cx, cz))
-			if c == null or c.data.is_empty():
-				return false
-	return true
-
 func _startup_pending() -> bool:
 	for dx in range(-1, 2):
 		for dz in range(-1, 2):
@@ -413,25 +415,6 @@ func _startup_pending() -> bool:
 			if c == null or not c.mesh_built:
 				return true
 	return false
-
-func _pending_box() -> Dictionary:
-	var mnx := 2147483647
-	var mnz := 2147483647
-	var mxx := -2147483647
-	var mxz := -2147483647
-	for key in light_pending:
-		var c = chunks.get(key)
-		if c == null:
-			continue
-		var x0: int = c.cx * ChunkScript.SIZE
-		var z0: int = c.cz * ChunkScript.SIZE
-		mnx = mini(mnx, x0)
-		mxx = maxi(mxx, x0 + ChunkScript.SIZE - 1)
-		mnz = mini(mnz, z0)
-		mxz = maxi(mxz, z0 + ChunkScript.SIZE - 1)
-	if mnx > mxx:
-		return {"mnx": -1, "mnz": -1, "mxx": -1, "mxz": -1}
-	return {"mnx": mnx, "mnz": mnz, "mxx": mxx, "mxz": mxz}
 
 func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	var tg := Time.get_ticks_msec()
@@ -597,16 +580,21 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 	if timing or _tm_debug:
 		print("BUILDCHUNK_T %d,%d build_ms=%d" % [int(e["cx"]), int(e["cz"]), int(res.get("wms", 0))])
 
-func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := true) -> bool:
+func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := true, defer_on_cap := false) -> bool:
 	# true = covered (sync-built now, or an in-flight task will apply);
 	# false = deduped behind an in-flight task (caller may want to retry).
 	# Sync fallbacks (spawn chunk, no own data, missing neighbor, cap-drop)
 	# run the legacy build_mesh path unchanged. eff_trust marks effs whose
 	# light values came from the contained per-chunk kernel (cache/empty);
 	# bulk flush effs are untrusted and must not enter the eff cache.
+	# AC-0126: defer_on_cap=true (the edit flush) turns the cap-drop sync
+	# fallback into a re-queue (return false) — the spike remover. All
+	# other call sites keep the default (false = legacy sync).
 	c.col_immediate = _col_immediate_for(cx, cz)
 	var key := _key(cx, cz)
 	if (cx == 0 and cz == 0) or c.data.is_empty():
+		if defer_on_cap:
+			perf_edit_syncs += 1
 		c.build_mesh(get_block, eff)
 		_count_collision_build(c)
 		_stage_check(c, key)
@@ -620,6 +608,8 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 			var nc = chunks.get(_key(cx + dx, cz + dz))
 			if nc == null or nc.data.is_empty():
 				# Workers can't on-demand-generate; the sync _build_snap can.
+				if defer_on_cap:
+					perf_edit_syncs += 1
 				c.build_mesh(get_block, eff)
 				_count_collision_build(c)
 				_stage_check(c, key)
@@ -635,6 +625,12 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 		_tm_capdrop += 1
 		if _tm_debug:
 			print("TMESH CAPDROP %d,%d inflight=%d" % [cx, cz, threadmesh_inflight.size()])
+		if defer_on_cap:
+			# AC-0126: the edit path never syncs on a cap drop — the flush
+			# re-queues the chunk (FIFO, chunk-key deduped) and retries next
+			# frame when a worker slot frees.
+			perf_edit_defers += 1
+			return false
 		c.build_mesh(get_block, eff)
 		_count_collision_build(c)
 		_stage_check(c, key)
@@ -656,6 +652,10 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 	_tm_inflight_keys[key] = tid
 	threadmesh_inflight.append(entry)
 	_tm_enq += 1
+	if defer_on_cap:
+		perf_edit_dispatches += 1
+		if eff.is_empty():
+			perf_edit_light_passes += 1
 	_bd_log(cx, cz)
 	if _tm_debug:
 		print("TMESH ENQ %d,%d inflight=%d" % [cx, cz, threadmesh_inflight.size()])
@@ -1410,54 +1410,6 @@ func _apply_edits_to_chunk(c: Node3D) -> void:
 	_eff_cache_evict(key)
 	_mark_light_around(c.cx, c.cz)
 	_mark_fluid_around(c.cx, c.cz)
-
-func _bulk_box_cells() -> int:
-	var pb := _pending_box()
-	if int(pb["mnx"]) < 0:
-		return 0
-	var mnx: int = int(pb["mnx"])
-	var mnz: int = int(pb["mnz"])
-	var mxx: int = int(pb["mxx"])
-	var mxz: int = int(pb["mxz"])
-	return (mxx - mnx + 1 + LIGHT_FLUSH_MARGIN * 2) * (mxz - mnz + 1 + LIGHT_FLUSH_MARGIN * 2) * Data.HEIGHT
-
-func _bulk_light() -> Dictionary:
-	var pb := _pending_box()
-	if int(pb["mnx"]) < 0:
-		return {}
-	var mnx: int = int(pb["mnx"])
-	var mnz: int = int(pb["mnz"])
-	var mxx: int = int(pb["mxx"])
-	var mxz: int = int(pb["mxz"])
-	var box := {
-		"min": Vector3i(mnx - LIGHT_FLUSH_MARGIN, 0, mnz - LIGHT_FLUSH_MARGIN),
-		"max": Vector3i(mxx + LIGHT_FLUSH_MARGIN, Data.HEIGHT - 1, mxz + LIGHT_FLUSH_MARGIN),
-	}
-	return Lighting.compute_light_flat(box, self)
-
-func _build_batch(list: Array, margin: int) -> void:
-	if list.is_empty():
-		return
-	var mnx := 2147483647
-	var mnz := 2147483647
-	var mxx := -2147483647
-	var mxz := -2147483647
-	for c in list:
-		var cc: Node3D = c
-		var x0: int = cc.cx * ChunkScript.SIZE
-		var z0: int = cc.cz * ChunkScript.SIZE
-		mnx = mini(mnx, x0)
-		mxx = maxi(mxx, x0 + ChunkScript.SIZE - 1)
-		mnz = mini(mnz, z0)
-		mxz = maxi(mxz, z0 + ChunkScript.SIZE - 1)
-	var box := {
-		"min": Vector3i(mnx - margin, 0, mnz - margin),
-		"max": Vector3i(mxx + margin, Data.HEIGHT - 1, mxz + margin),
-	}
-	var eff := Lighting.compute_light_flat(box, self)
-	for c in list:
-		var cc: Node3D = c
-		cc.build_mesh(get_block, eff)
 
 func surface_top(x: int, z: int) -> int:
 	for y in range(Data.HEIGHT - 1, -1, -1):
