@@ -89,6 +89,8 @@ var tick_time := false
 var _fluid_write := false
 var _fluid_stable := 0
 var _fluid_sig := ""
+var _fluidprobe := false
+var _fp_writes := 0
 var tex_refresh: Array = []
 var threadgen := false
 var threadgen_max := 3
@@ -200,6 +202,7 @@ func _ready() -> void:
 		gen_budget_ms = gb.to_int()
 	fluid_sleep = OS.get_environment("AWECRAFT_FLUID_SLEEP") != "0"
 	tick_time = OS.get_environment("AWECRAFT_TICKTIME") == "1"
+	_fluidprobe = OS.get_environment("AWECRAFT_FLUIDPROBE") == "1"
 	Game.world = self
 	fluid_timer = Timer.new()
 	fluid_timer.wait_time = FLUID_TICK_INTERVAL
@@ -1362,6 +1365,8 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 	var lx := x & 15
 	var lz := z & 15
 	c.set_local(lx, y, lz, id)
+	if _fluidprobe:
+		_fp_writes += 1
 	var fi := (y << 8) | (lz << 4) | lx
 	if is_fluid_id(id):
 		if c.fl[fi] == 0:
@@ -1567,6 +1572,8 @@ func set_fluid(x: int, y: int, z: int, id: int, lvl: int, create := false) -> vo
 	c.set_local(lx, y, lz, id)
 	c.fl[i] = lvl
 	_fluid_write = true
+	if _fluidprobe:
+		_fp_writes += 1
 	_mark_fluid_around(cx, cz)
 	_record_edit(cx, cz, i, id, lvl)
 
@@ -1627,9 +1634,15 @@ func tick_fluids() -> void:
 	if fluid_sleep and _fluid_stable >= 3:
 		if tick_time:
 			print("TICKMS ", (Time.get_ticks_usec() - t0) / 1000.0)
+		if _fluidprobe:
+			print("FLUIDPROBE slept=1 tick_ms=%.3f window=%d wet_cells=0 writes=%d stable=%d sig=%s" % [
+				(Time.get_ticks_usec() - t0) / 1000.0, cl.size(), _fp_writes, _fluid_stable, sig])
 		fluid_tick_samples.append((Time.get_ticks_usec() - t0) / 1000.0)
 		return
 	var hmax := Data.HEIGHT - 1
+	var fp_wet := 0
+	var fp_chunks := 0
+	var fp_writes0 := _fp_writes
 	for pos in cl:
 		var c: Node3D = chunks.get(_key(pos.x, pos.y))
 		if c == null or c.data.is_empty():
@@ -1638,6 +1651,8 @@ func tick_fluids() -> void:
 		var fl: PackedByteArray = c.fl
 		var cx: int = int(c.cx)
 		var cz: int = int(c.cz)
+		if _fluidprobe:
+			fp_chunks += 1
 		var wx0: int = cx * 16
 		var wz0: int = cz * 16
 		var ne: Node3D = chunks.get(_key(cx + 1, cz))
@@ -1667,6 +1682,8 @@ func tick_fluids() -> void:
 							fl[i] = 0
 							continue
 						l = fl[i]
+						if _fluidprobe:
+							fp_wet += 1
 					var x := wx0 + lx
 					var z := wz0 + lz
 					var below: int = data[ib | lb | lx]
@@ -1711,6 +1728,9 @@ func tick_fluids() -> void:
 									set_block(nx, y, nz, 9, false)
 	if tick_time:
 		print("TICKMS ", (Time.get_ticks_usec() - t0) / 1000.0)
+	if _fluidprobe:
+		print("FLUIDPROBE slept=0 tick_ms=%.3f window=%d chunks=%d wet_cells=%d writes=%d stable=%d sig=%s" % [
+			(Time.get_ticks_usec() - t0) / 1000.0, cl.size(), fp_chunks, fp_wet, _fp_writes - fp_writes0, _fluid_stable, sig])
 	fluid_tick_samples.append((Time.get_ticks_usec() - t0) / 1000.0)
 
 func _fluid_near(x: int, y: int, z: int) -> bool:

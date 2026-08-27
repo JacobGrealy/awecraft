@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AC-0078 plan — chunk-stream-fluids-firstload (Run 1, 2026-08-26)</title>
+<style>
+ body{font-family:ui-monospace,Consolas,monospace;font-size:13px;max-width:1100px;margin:16px auto;padding:0 12px;line-height:1.45}
+ h1{font-size:20px} h2{font-size:16px;border-bottom:2px solid #888;margin-top:28px;padding-bottom:4px}
+ table{border-collapse:collapse;margin:8px 0} td,th{border:1px solid #999;padding:3px 7px;text-align:left}
+ th{background:#eee} code,pre{background:#f4f4f4} pre{padding:8px;overflow-x:auto;border-left:3px solid #aaa}
+ .ok{color:#060}.bad{color:#c00}.warn{color:#a60}
+ .num{white-space:nowrap}
+</style>
+</head>
+<body>
+<h1>AC-0078 plan — chunk-stream-fluids-firstload (P1.5 fluid locality + P1.6 first-load fast path)</h1>
+<p>Run-1 research plan (xhigh). All file:line refs verified against the current tree
+(post-AC-0079 v3, AC-0118/0119/0124 in). All anchors in §5/§7 were RE-MEASURED on this
+tree on 2026-08-26 by Run-1 (logs in <code>.scratch/AC-0078/logs/</code>).</p>
+
+<h2>1. Goal</h2>
+<p>Make the fluid simulation <b>local</b> (skip provably-dry chunks + coarsen the sleep
+signature so walking a dry world costs ~0 main-thread ms instead of ~12 ms per 0.2 s tick)
+and fix the <b>first-load fast path</b>: the Continue boot path currently waits on a
+full-radius condition that (a) degenerates to ~40 ms under AC-0118's sliced recenter and
+(b) does NOT guarantee the saved chunk is built → <b>measured fall-through: a player saved
+3 chunks from spawn falls through the world on continue</b> (dist=3 PRE probe, §5/§7).
+Both changes must keep the full battery byte-identical (G2) and every G5 floor green.</p>
+
+<h2>2. Files to touch</h2>
+<table>
+<tr><th>file</th><th>edit (exact)</th></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>
+<b>P1.5 (all in the fluid-sim section only):</b>
+<ul>
+<li><b>:87-92</b> state block — add <code>var fluid_wet := {}</code> (chunk-key → true;
+same string keys as <code>chunks</code>, <code>_key()</code> ≈:1005). No other state changes.
+<li><b>:1625</b> sleep signature (inside <code>tick_fluids</code> :1604-1735) —
+32-block quantization, current line:
+<pre>		sig = "%d:%d" % [cl.size(), int(cl[0].x) * 4096 + int(cl[0].y)]</pre>
+becomes (floor-quantize the window's min-corner chunk to 32-block cells so a 1-chunk
+column shift no longer resets stability):
+<pre>		sig = "%d:%d" % [cl.size(), int(floorf(float(cl[0].x) / 2.0)) * 4096 + int(floorf(float(cl[0].y) / 2.0))]</pre>
+(floor, not truncate: chunks −1/−2 must land in the same 32-block cell. Player-null
+mode keeps <code>sig = "all"</code> :1623-1624 unchanged → battery sleep timing untouched.)
+<li><b>:1646-1649</b> scan loop head — after the existing null/empty check
+(<code>if c == null or c.data.is_empty(): continue</code> :1648-1649), insert the
+prescreen skip:
+<pre>		if not fluid_wet.has(_key(int(c.cx), int(c.cz))):
+			continue</pre>
+Skip goes INSIDE the loop (chunk iteration order of <code>cl</code> :1605-1620 is
+otherwise untouched — required for G2, §7 invariant). Track wet cells per chunk during
+the scan; when a fully-scanned chunk has zero <code>fl[i] != 0</code> cells,
+<code>fluid_wet.erase(key)</code> (self-healing clear — the only clear site).
+<li><b>:1554-1578</b> <code>set_fluid</code> — at the successful-write tail (after
+<c>:1574</c> <code>_fluid_write = true</code>):
+<pre>	if lvl &gt; 0:
+		fluid_wet[_key(cx, cz)] = true</pre>
+(Only writes that put fluid into the chunk set the bit; clears don't — a clear can only
+make a chunk drier, and the next scan self-heals the bit.)
+<li><b>:1353-1381</b> <code>set_block</code> — in the fluid-id branch
+(<c>:1371-1373</c> <code>if is_fluid_id(id): if c.fl[fi] == 0: c.fl[fi] = 7</code>):
+<pre>	if is_fluid_id(id):
+		if c.fl[fi] == 0:
+			c.fl[fi] = 7
+		fluid_wet[_key(cx, cz)] = true</pre>
+(the <code>else: c.fl[fi] = 0</code> clear branch :1375 gets NO bit touch).
+<li><b>:1399-1417</b> <code>_apply_edits_to_chunk</code> — in the apply loop
+(<c>:1410-1413</c>), set the bit when any applied cell carries fluid level:
+<pre>	for fkey in cells:
+		var e: Dictionary = cells[fkey]
+		data[int(fkey)] = int(e.get("b", 0))
+		fl[int(fkey)] = int(e.get("f", 0))
+		if int(e.get("f", 0)) &gt; 0:
+			fluid_wet[_key(c.cx, c.cz)] = true</pre>
+(covers save/continue edits + threadgen handoff; worldgen itself never writes <code>fl</code>
+— natural ocean is <code>fl=0</code> stationary sources, so fresh chunks are born dry and bit-less.)
+</ul>
+<b>Probe fields ALREADY IN TREE (Run-1 added, keep, §5):</b> <code>_fluidprobe</code>/:92 +
+<code>AWECRAFT_FLUIDPROBE</code> parse :205-206, FLUIDPROBE prints in
+<code>tick_fluids</code> :1636-1640/:1730-1734, <code>_fp_writes</code> counters
+:1368-1369/:1575-1576. Env-gated, off by default, no behavior change (same pattern as the
+existing <code>tick_time</code>/<code>TICKMS</code> :204, :1730).</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>
+<b>P1.6 (boot path + probe fields only, per spec scope):</b>
+<ul>
+<li><b>NEW helper</b> (insert after <code>_await_world_build</code> :4226-4241), mirrors
+<code>_await_boundary_core</code> :4893-4909 but adds the data check the boundary helper
+lacks:
+<pre>func _await_core_3x3(where: Vector3, max_frames: int) -> void:
+	var pcx := int(floorf(where.x / 16.0))
+	var pcz := int(floorf(where.z / 16.0))
+	var waited := 0
+	while waited &lt; max_frames:
+		var allb := true
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
+				if c == null or c.data.is_empty() or not c.mesh_built:
+					allb = false
+					break
+		if allb:
+			return
+		await get_tree().physics_frame
+		waited += 1
+	print("CORE3X3 not fully built after %d frames" % max_frames)</pre>
+(mesh_built is sufficient — the player's own chunk is Chebyshev-0 from the recenter
+target ⇒ <code>_col_immediate_for</code> world.gd:935-940 gives it an immediate
+collision body at build; the other 8 core chunks are ±1 ⇒ also immediate. The outer
+ring of the RADIUS (not the core) is the only staged-collision surface, and the player
+is never placed there. Do NOT wait on collision bodies.)
+<li><b>:396</b> <code>_continue_slot</code> — the one-line wait swap (the fix):
+<pre> 	await _await_world_build(target, 3000)</pre>
+→
+<pre>	await _await_core_3x3(target, 3000)</pre>
+Everything else in <code>_continue_slot</code> :378-404 stays: wait is BEFORE
+<code>_spawn_player()</code> :397 + <code>_restore_player()</code> :398 (AC-0119
+invariant: saved-chunk data present before player placement ✓), second recenter :400
+stays, <code>Game.start()</code> :402 stays.
+<li><b>:435</b> <code>start_game</code> (NEW path) — <b>NO CHANGE</b>
+(<code>await _await_spawn_floor(spawn, 300)</code> stays). Deviation note: the spec's
+"3×3 sync core in New (already true)" premise is <b>stale/false</b> — NEW today
+guarantees only the spawn chunk (measured safe: sync gen world.gd:1473-1478 + immediate
+collision + AC-0119 air-on-miss; first_draw 200 ms §5). Widening NEW to the 3×3 wait is
+a 1-line swap at :435 costing a measured +~1.2 s spawn delay (continue core_ms, §5) for
+no measured safety gain at the spawn point — flagged as an open decision for the
+coordinator, default = keep as-is.
+<li><b>Continue probe ALREADY IN TREE (Run-1 designed per spec G4, keep):</b>
+dispatch <code>if logic == "continue":</code> :942-944 + <code>_continue_probe()</code>
+:3995-4107 — probe-only (runs only under <code>AWECRAFT_LOGIC=continue</code>, never in
+game), envs <code>AWECRAFT_CONTINUE_DIST</code> (chunks away from spawn) +
+<code>AWECRAFT_CONTINUE_WAIT</code> (""/pre = current <code>_await_world_build</code>
+semantics for PRE documentation; core = 3×3 wait = the designed fix). RESULT shape in §5.</td></tr>
+<tr><td><code>godot/world/chunk.gd</code></td><td>read-only. <code>fl</code> storage :14
+(<code>var fl: PackedByteArray</code>), <code>init_fl</code> :122-126 (zero-fill — fresh
+chunks are dry), <code>build_mesh</code> :1363+ (full rebuild incl. collision via
+<code>col_immediate</code> :1533/:1603). No edits.</td></tr>
+<tr><td><code>godot/autoload/debug.gd</code></td><td>read-only. Battery's 5 explicit
+<code>Debug.tick_fluids()</code> :61-63 (bypass timer, direct <code>world.tick_fluids()</code>)
+and <code>Debug.set_fluid</code> :47-49 → <code>world.set_fluid</code> → bit +
+<code>_fluid_write</code> (wake path intact).</td></tr>
+<tr><td><code>godot/player/player.gd</code></td><td>read-only. External fluid-write call
+sites that the bit must cover: bucket scoop :994 (<code>set_fluid(cell, 0, 0)</code> —
+clear, no bit needed), bucket pour :1009 (<code>set_fluid(target, bid, 8, true)</code> —
+bit + wake), place :977 / mine :1051 (<code>set_block</code> → <code>_fluid_near</code>
+wake world.gd:1379-1380).</td></tr>
+</table>
+
+<h2>3. Frozen spec refs</h2>
+<p>Spec = <code>index.html</code> build <code>20260816-r12</code> (frozen, web is
+reference-only; Windows is the product per AC-0124). World constants the task depends
+on, <b>verbatim from current source</b>:</p>
+<table>
+<tr><th>constant</th><th>value (verbatim)</th><th>file:line</th></tr>
+<tr><td>CHUNK</td><td><code>const CHUNK := 16</code></td><td>godot/autoload/data.gd:3</td></tr>
+<tr><td>HEIGHT</td><td><code>const HEIGHT := 80</code></td><td>godot/autoload/data.gd:4</td></tr>
+<tr><td>SEA</td><td><code>const SEA := 30</code></td><td>godot/autoload/data.gd:5</td></tr>
+<tr><td>chunk SIZE</td><td><code>const SIZE := 16</code></td><td>godot/world/chunk.gd:3</td></tr>
+<tr><td>biome t cutoff (snow)</td><td><code>if t &lt; -0.25: return "snow"</code></td><td>godot/world/generator.gd:48-49</td></tr>
+<tr><td>biome t/m cutoff (desert)</td><td><code>if t &gt; 0.35 and m &lt; 0.1: return "desert"</code></td><td>godot/world/generator.gd:50-51</td></tr>
+<tr><td>biome m cutoff (forest)</td><td><code>if m &gt; 0.25: return "forest"</code></td><td>godot/world/generator.gd:52-53</td></tr>
+<tr><td>biome fallback</td><td><code>return "plains"</code></td><td>godot/world/generator.gd:54</td></tr>
+<tr><td>fluid tick interval</td><td><code>const FLUID_TICK_INTERVAL := 0.2</code></td><td>godot/world/world.gd:11 (timer wait_time world.gd:208)</td></tr>
+<tr><td>fluid tick window</td><td><code>var fluid_tick_radius := 14</code></td><td>godot/world/world.gd:26</td></tr>
+<tr><td>cell index layout</td><td><code>var i := (y &lt;&lt; 8) | (lz &lt;&lt; 4) | lx</code> (256×80 = 20480 B/chunk)</td><td>godot/world/world.gd:1569 (set_fluid), :1370 (set_block)</td></tr>
+<tr><td>sleep state</td><td><code>if fluid_sleep and _fluid_stable &gt;= 3:</code> (stable≥3 ticks ≈ 600 ms)</td><td>godot/world/world.gd:1634</td></tr>
+<tr><td>slice budget</td><td><code>const REC_SLICE_BUDGET_MS := 8</code> / <code>const REC_UNITS_PER_FRAME := 2048</code></td><td>godot/world/world.gd:22-23</td></tr>
+</table>
+
+<h2>4. Data.* ids</h2>
+<table>
+<tr><th>id</th><th>verbatim line</th><th>file:line</th></tr>
+<tr><td>5 Water (fluid)</td><td><code>5: {"name": "Water", "solid": false, "cross": true, "hard": 1e9, "light": 0, "color": {"top": C_WATER, "side": C_WATER, "bottom": C_WATER}},</code></td><td>godot/autoload/data.gd:155</td></tr>
+<tr><td>24 Lava (fluid)</td><td><code>24: {"name": "Lava", "solid": false, "cross": true, "hard": 1e9, "light": 15, "color": {"top": C_LAVA, "side": C_LAVA, "bottom": C_LAVA}},</code></td><td>godot/autoload/data.gd:172</td></tr>
+<tr><td>25 Obsidian (water-on-lava, l=8)</td><td><code>25: {"name": "Obsidian", "solid": true, "cross": false, "hard": 50.0, "light": 0, "drop": 25, "color": {"top": C_OBSIDIAN, "side": C_OBSIDIAN, "bottom": C_OBSIDIAN}},</code></td><td>godot/autoload/data.gd:173</td></tr>
+<tr><td>9 reaction stone (lava-on-water / l&lt;8)</td><td><code>9: {"name": "Cobblestone", "solid": true, "cross": false, "hard": 2.0, "light": 0, "drop": 9, "color": {"top": C_COBBLE, "side": C_COBBLE, "bottom": C_COBBLE}},</code></td><td>godot/autoload/data.gd:159</td></tr>
+<tr><td>139 Bucket (empty)</td><td><code>139: {"name": "Bucket", "icon": Color(0.204, 0.204, 0.227), "stack": 1, "bucket": 0},</code></td><td>godot/autoload/data.gd:85</td></tr>
+<tr><td>140 Water Bucket</td><td><code>140: {"name": "Water Bucket", "icon": Color(0.157, 0.431, 0.863), "stack": 1, "bucket": 5},</code></td><td>godot/autoload/data.gd:86</td></tr>
+<tr><td>141 Lava Bucket</td><td><code>141: {"name": "Lava Bucket", "icon": Color(0.976, 0.431, 0.118), "stack": 1, "bucket": 24},</code></td><td>godot/autoload/data.gd:87</td></tr>
+<tr><td>is_fluid_id</td><td><code>return id == 5 or id == 24</code></td><td>godot/world/world.gd:1534-1535</td></tr>
+<tr><td>fluid levels</td><td>fl ∈ 0..8; source=8; <code>set_block</code> fluid-id path writes <code>c.fl[fi] = 7</code>; natural worldgen water = id 5 with <code>fl=0</code> (stationary, sim-skipped — AC-0068 zero-write invariant)</td><td>godot/world/world.gd:1557, :1371-1373, :1672-1680</td></tr>
+</table>
+
+<h2>5. Harness gates</h2>
+<p>All runs: repo root, one godot at a time, <code>HOME=/tmp/dsh_home</code> set in the
+same bash call (mkdir -p first), engine <code>/home/angrygiant/tools/godot/godot</code>,
+always <code>--path godot</code>. Zero <code>SCRIPT ERROR</code> lines = hard gate on
+every run. Fresh anchors below were measured by Run-1 on this tree
+(<code>.scratch/AC-0078/logs/</code>); POST = the value Run-2 must hit after the change.</p>
+<table>
+<tr><th>gate</th><th>exact command</th><th>expected (fresh PRE anchor → POST requirement)</th></tr>
+<tr><td><b>G0</b> script errors</td>
+<td><code>HOME=/tmp/dsh_home /home/angrygiant/tools/godot/godot --headless --path godot --quit</code></td>
+<td>0 <code>SCRIPT ERROR</code>/<code>Parse Error</code> lines, exit 0. <span class="ok">PRE green (Run-1, probe code in tree).</span></td></tr>
+<tr><td><b>G1</b> dependency-mapped modes</td>
+<td><code>AWECRAFT_LOGIC=fluids … --headless --path godot</code><br><code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=4 …</code><br><code>AWECRAFT_LOGIC=continue AWECRAFT_RADIUS=4 …</code> (both dist arms)</td>
+<td>fluids RESULT byte-exact (see G2 table — same values); boundary <code>ok:true</code>, <code>flap:0</code>; continue RESULT <code>edits_ok:true, pos_ok:true, fell_after_30f:false</code> (both arms, §G4).</td></tr>
+<tr><td><b>G2</b> bit-identical fence — FULL exact battery</td>
+<td><code>AWECRAFT_BATTERY="player;interact;light;fluids;buckets;genhash" … --headless --path godot</code> <span class="warn">(quote the env!)</span></td>
+<td>Every value byte-identical to the fresh anchor (Run-1 measured this exact run):
+<br>player: <code>is_on_floor:true, jump_peak_y:36.43, horizontal_moved:2.82</code>
+<br>interact: <code>drop_spawned:true, place_ok:true, breakable_id:2</code>
+<br>light: <code>torch_level:14, surface_eff:15, cave_eff:0, torch_far_after:9</code>
+<br>fluids: <code>sea_surface 2730/2730, sea_backed 1406/1406, sea_stable:true, water_delta:1, shore_after:[5,7], source_after:[5,8], water_on_lava_result:25, sideways_lava_result:9</code>
+<br>buckets: <code>place_after:[5,8], scoop_before:[5,8]</code>; combined <code>"ok":true</code>; genhash arm 25 lines (see G2b).
+<span class="bad">ANY battery value moving = design wrong, not a tuning target (risk e).</span></td></tr>
+<tr><td><b>G2b</b> genhash parity</td>
+<td>genhash arm of G2 battery (or standalone <code>AWECRAFT_LOGIC=genhash …</code>)</td>
+<td>25/25 <code>GENHASH</code> lines byte-identical to <code>.scratch/AC-0079/genhash.log</code>
+(Run-1 verified: 25/25 on current tree). world/* data path untouched by P1.5/P1.6 —
+any drift = fail.</td></tr>
+<tr><td><b>G3</b> fluid-locality measurement (Run-1 defines; probe in tree)</td>
+<td><code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=4 AWECRAFT_FLUIDPROBE=1 … --headless --path godot</code></td>
+<td>Parse the <code>FLUIDPROBE</code> lines (probe prints per tick:
+<code>slept, tick_ms, window, chunks, wet_cells, writes, stable, sig</code>; also on the
+sleep path). PRE anchors (natural dry world, 20 crossings, ~40 s run):
+<b>216 ticks = 75 scanned / 141 slept; scanned total 805.5 ms (p50 12.45, p95 13.95,
+max 16.95); wet_cells total 0; writes total 0</b>; per-window scan totals
+{6-chunk: 262.0 ms, 9-chunk: 523.9 ms, 121-chunk pre-spawn: 19.6 ms}; every one of the
+20 crossings reset the sig (each → 2 dry rescan ticks ≈ 25 ms).
+No-probe channel (RESULT, already native): <code>fluid_tick_ms_p95:12.45,
+fluid_tick_max_ms:13.18, fluid_tick_n:208</code>.
+<b>POST requirement:</b> sum(slept=0 tick_ms) <b>≪ 805.5</b> (expect &lt; 20 ms — dry
+chunks skip in O(1), wet_cells stays 0, writes stay 0), RESULT
+<code>fluid_tick_ms_p95 &lt; 1.0</code>, AND walk <code>p95_ms ≤ 65</code> (no G5
+regression) with identical walk/irb/flap values. Standalone fluids-battery probe
+(<code>AWECRAFT_LOGIC=fluids AWECRAFT_FLUIDPROBE=1 …</code>): 5 ticks
+108.9/111.4/110.4/110.9/0.018 ms PRE (81/81 chunks, 1.64M cells, 5-6 wet) → POST the
+4 full ticks scan only the wet fixture chunks (tick_ms drops from ~110 ms to low single
+digits) while RESULT stays byte-exact.</td></tr>
+<tr><td><b>G4</b> first-load fast path — NEW verify + CONTINUE spawn (Run-1 defines probe: <code>AWECRAFT_LOGIC=continue</code>, in tree)</td>
+<td><code>AWECRAFT_LOGIC=perf AWECRAFT_RADIUS=4 …</code> (NEW)<br><code>AWECRAFT_LOGIC=continue AWECRAFT_RADIUS=4 …</code> (dist 0, PRE-default arm)<br><code>AWECRAFT_LOGIC=continue AWECRAFT_RADIUS=4 AWECRAFT_CONTINUE_DIST=3 …</code> (dist 3)<br><code>AWECRAFT_LOGIC=save …</code> (existing round-trip battery)</td>
+<td><b>NEW:</b> <code>first_draw_ms ≤ 300</code> — fresh anchor 200 (PRE; path unchanged).
+<br><b>CONTINUE probe RESULT shape:</b> <code>{mode, saved_ok, edits_ok, pos_ok, render_radius, new_world_ms, wait_mode, core_ms, load_spawn_ms, save_settled, save_y, saved_chunk_built_at_spawn, col_body_at_spawn, fell_after_30f, col_body_at_25f, y_trace[31], last_pcx, last_pcz, player_pos}</code>.
+<br>Fresh PRE anchors (this tree, current <code>_continue_slot</code> = "pre" arm):
+dist0: <code>load_spawn_ms:37, saved_chunk_built_at_spawn:false, col_body_at_spawn:false, fell_after_30f:false</code> (recovers — spawn chunk sync-built);
+dist3: <code>load_spawn_ms:41, saved_chunk_built_at_spawn:false, col_body_at_spawn:false, fell_after_30f:TRUE</code>, y_trace 34.0→31.8 still falling, no collision body even at frame 25 <span class="bad">(the bug: player saved 48 blocks away falls through the world on continue)</span>.
+<br>Designed-fix anchor (probe <code>AWECRAFT_CONTINUE_WAIT=core</code> arm, same run):
+dist3: <code>load_spawn_ms:1242 (core_ms 1239), saved_chunk_built_at_spawn:true, col_body_at_spawn:true, fell_after_30f:false</code>, y_trace flat 34.0 (range across runs: core 1239-1592 ms).
+<br><b>POST requirement (after :396 swap):</b> dist0 + dist3 default arms →
+<code>fell_after_30f:false</code>, <code>saved_chunk_built_at_spawn:true</code>,
+<code>col_body_at_spawn:true</code>, y_trace flat, <code>load_spawn_ms ≈ core_ms</code>
+(~1.2-1.6 s, the bounded core wait — the gate is "no fall + no full-radius wait", NOT
+sub-second spawn), plus <code>AWECRAFT_LOGIC=save</code> still green (edits/place
+round-trip).</td></tr>
+<tr><td><b>G5</b> no-regression floors (POST-AC-0079 v3 anchors, re-measured fresh by Run-1)</td>
+<td><code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=4 …</code><br><code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=2 …</code><br><code>AWECRAFT_LOGIC=perf AWECRAFT_RADIUS=4 …</code> (r50 RECSLICE: RUN-0 anchor, optional — long run)</td>
+<td>boundary r4: <code>walk p95_ms:65 (floor ≤65), p50:13, max:111, fwd_p95_ms:3049 (≤3238), fwd_first10_p95:10, in_radius_built 81/81/17, flap:0, queue_size:95, read_sync_gen:0, ok:true</code> — fresh: 65/13/111/3049/10/81/0/95/0 ✓.
+<br>boundary r2: <code>fwd_p95_ms:506 (floor 463-593), walk p95:39, flap:0</code> ✓.
+<br>perf r4: <code>total_ms:5987 (~5700-6000), first_draw_ms:200 (≤300), read_sync_gen:0, gen_ms:719, build_ms:2465, drain 5.99s/428f, p50:14/p95:58/max:99, all_meshed:true</code> ✓.
+<br>r50: RECSLICE 10.0/8.0 (RUN-0, AC-0118 anchor — re-run only if cheap; walk ~44-67).
+Fluid sim makes frames cheaper or equal — walk p95 is a floor, not a target (risk d).</td></tr>
+<tr><td><b>G6</b> build + servers</td>
+<td><code>./build_windows.sh</code> then check daemons</td>
+<td>exe rebuilt (<code>exports/windows/AweCraft.exe</code> + debug/console variants); http 0.0.0.0:8080 (AweCraft.exe) + 0.0.0.0:5180 (tasks webui) alive — report both localhost + LAN 192.168.0.224 URLs. Never kill the python pids.</td></tr>
+</table>
+
+<h2>6. Snapshot/render names</h2>
+<p>Spec gates are headless (G0-G6 above); <b>no render is required by AC-0078</b>
+(fluid locality + boot timing are logic properties; Run-1 did zero renders per ops).
+If the coordinator wants visual proof of the Continue boot, one R=1 render at most:
+<code>tasks/AC-0078/shot_continue.png</code> via
+<code>xvfb-run -a /home/angrygiant/tools/godot/godot --path godot --rendering-method gl_compatibility</code>
++ <code>AWECRAFT_SNAPSHOT=… AWECRAFT_RADIUS=1</code> (HARNESS.md §4 recipe). Not part of
+the gate.</p>
+
+<h2>7. Risks / edge cases</h2>
+<p><b>(a) Prescreen bit drift (bit cleared while chunk still wet / never set):</b>
+mitigated by setting the bit in the LOWEST common write paths only — <code>set_fluid</code>
+(world.gd:1554), <code>set_block</code> fluid-id branch (world.gd:1371),
+<code>_apply_edits_to_chunk</code> (world.gd:1399) — which are the ONLY writers of
+<code>fl</code> (the sim's stale-clear <code>fl[i]=0</code> :1682-1684 and the
+<code>set_block</code> non-fluid clear :1375 can only make chunks drier; the sim's
+internal writes all route through <code>set_fluid</code>/<code>set_block</code>).
+Single clear site (post-scan all-dry check) makes stale bits self-heal in one tick;
+battery mode-switch resets (<code>_batt_reset_state</code>, main.gd) zero
+<code>fl</code> under a live bit → one extra dry scan, then cleared — no value impact.
+<b>Wake-completeness (every wake source reaches the sim):</b>
+<table>
+<tr><th>wake source</th><th>path</th><th>sets</th></tr>
+<tr><td>bucket pour (player.gd:1009)</td><td><code>set_fluid</code> :1554</td><td>bit + <code>_fluid_write</code> :1574</td></tr>
+<tr><td>bucket scoop (player.gd:994)</td><td><code>set_fluid</code> clear</td><td><code>_fluid_write</code> (bit: no-op, correct)</td></tr>
+<tr><td>place/mine near fluid (player.gd:977/:1051)</td><td><code>set_block</code> → <code>_fluid_near</code> :1379-1380</td><td><code>_fluid_write</code>; bit if fluid id</td></tr>
+<tr><td>sim spread across chunk boundary (world.gd:1713)</td><td><code>set_fluid(nx,y,nz,…)</code></td><td>bit of the NEIGHBOR chunk + <code>_fluid_write</code></td></tr>
+<tr><td>sim fall (world.gd:1696-1698)</td><td><code>set_fluid</code> down + clear</td><td>bit + <code>_fluid_write</code></td></tr>
+<tr><td>water/lava reactions (world.gd:1689-1694, :1714-1717)</td><td><code>set_block</code> obsidian/stone</td><td><code>_fluid_write</code> via <code>_fluid_near</code></td></tr>
+<tr><td>source persistence</td><td>sources (l=8) don't self-emit — they interact only when an adjacent wet cell is processed; that neighbor has the bit ⇒ is scanned</td><td>— (no new wake needed)</td></tr>
+<tr><td>save/continue edits (world.gd:1399; main.gd:387)</td><td><code>_apply_edits_to_chunk</code></td><td>bit if any <code>f&gt;0</code></td></tr>
+<tr><td>worldgen ocean (fl=0)</td><td>data-only writes (AC-0068)</td><td>nothing — zero-write invariant preserved</td></tr>
+<tr><td>player window shift</td><td>sig :1623-1628</td><td><code>_fluid_stable=0</code> (32-block quantized ⇒ half the resets)</td></tr>
+<tr><td>battery fixtures (debug.gd:47-49)</td><td><code>set_fluid</code></td><td>bit + <code>_fluid_write</code></td></tr>
+</table>
+A flow can enter a chunk ONLY via a <code>set_fluid</code>/<code>set_block</code> write
+(into it), and every such write sets the bit + <code>_fluid_write</code> (global wake) —
+so a frozen flow can only resume from an in-window write or a window shift, both of which
+force a full scan of bit-marked chunks. The ±14-block window (28-block span, world.gd:26)
+exceeds the sim's max single-source reach (an l=8 source spreads laterally until n_l hits
+0: 7 blocks, 1 block/tick) and every player action (reach ≤ ~6 blocks) is in-window —
+no reachable flow can be starved. <span class="ok">Proof: bit absent ⇒ all
+<code>fl==0</code> ⇒ sim inner loop hits <code>continue</code> for every cell
+(world.gd:1672-1680) ⇒ skip is observationally identical; bit present ⇒ scan body
+untouched; <code>cl</code> order untouched ⇒ G2 bit-identical. The battery (player-null)
+iterates ALL chunks :1618-1620 with <code>sig="all"</code> — its 4 full ticks + 1 sleep
+tick (measured stable 0,0,1,2,3) are reproduced exactly because fixture chunks carry the
+bit and sleep state is untouched.</span></p>
+<p><b>(b) Signature false-sleep:</b> the 32-block sig only throttles REDUNDANT rescans of
+an already-settled window — it never suppresses a write-driven wake
+(<code>_fluid_write</code> :1629-1631 resets stability regardless of sig). Reach
+argument above (7-block max spread &lt; 28-block window). Edge: floor-quantization keeps
+chunks −1/−2 in one cell (a truncation would false-wake on negatives).</p>
+<p><b>(c) Continue 3×3 core cost:</b> 9 chunks × (gen ~31 ms + build, threaded under the
+AC-0079 v3 drain) — measured <b>1239-1592 ms</b> (probe core_ms, r4). Gate = "spawn no
+longer waits a full radius AND the player no longer falls", NOT sub-second spawn. The
+core reuses the existing drain paths (<code>_gen_unit</code> world.gd:445+, sync fallback
+for (0,0) :608, <code>_mesh_dispatch</code> :599) — no new build machinery.</p>
+<p><b>(d) Sim cheaper ⇒ frames improve or stay:</b> G5 walk p95 ≤ 65 is a floor (regression
+check); 805 ms/run of main-thread fluid scans (PRE) leaving → expect equal-or-better.</p>
+<p><b>(e) Any battery value moving = design wrong</b> (not tuning) — bounce to design
+review before re-running. The bit-identical invariant + untouched <code>cl</code> order +
+untouched sleep state are the three load-bearing invariants.</p>
+<p><b>(f) Continue harness mode did not exist</b> — Run-1 designed it per spec G4
+(<code>AWECRAFT_LOGIC=continue</code>, probe-only, named, in tree, §2). No behavior
+change: only runs under the env, and the probe's "pre" wait arm hardcodes the OLD
+<code>_await_world_build</code> semantics for documentation; after the :396 swap, G4 uses
+the default (real-path) arm + the <code>core</code> arm must agree, and
+<code>AWECRAFT_LOGIC=save</code> covers the round-trip battery.</p>
+<p><b>Deviation notes (honest, for the coordinator):</b></p>
+<ul>
+<li>The task prompt's <code>godot/world/fluids.gd</code> reference is stale — the fluid
+sim lives in <code>godot/world/world.gd</code> (<code>tick_fluids</code> :1604-1735).
+No <code>fluids.gd</code> exists in the tree.</li>
+<li>The spec's "3×3 sync core in New (already true)" is <b>false</b> —
+<code>start_game</code> main.gd:435 waits spawn-chunk-only
+(<code>_await_spawn_floor</code> :4214-4224). P1.6 therefore changes CONTINUE (the
+measured-broken path) and leaves NEW unchanged (measured safe, 200 ms first_draw);
+NEW 3×3 widening stays a 1-line option, default off (§2).</li>
+<li>Run-1 added env-gated probe fields (FLUIDPROBE in world.gd, continue mode in
+main.gd) to MEASURE — spec scope allows main.gd "boot path + G3/G4 harness probe
+fields only" and world.gd "the fluid sim tick" section; both are off by default and
+G0-clean. They are KEPT in tree (Run-2 needs them for G3/G4 POST); if the coordinator
+prefers a pristine tree, Run-2 re-applies them from §2 before the POST runs
+(pristine copies at <code>.scratch/AC-0078/pristine/</code>).</li>
+<li>The old full-radius wait in <code>_continue_slot</code> (main.gd:396) is vestigial
+under AC-0118 sliced recenter (it exits when all EXISTING chunks are built — measured
+37-41 ms) — the real defect is that it never guaranteed the SAVED chunk exists, proven
+by the dist=3 fall-through (PRE: <code>saved_chunk_built_at_spawn:false</code>,
+<code>fell_after_30f:true</code>, no collision body at frame 25).</li>
+</ul>
+<p><b>Fallback if the plan is wrong:</b> G2 battery byte-identical is the arbiter — if
+any value moves, revert P1.5 (keep P1.6, which touches boot only) and re-derive the
+prescreen from the failing fixture; if dist=0 continue regresses (it must not — the
+spawn chunk is sync-built + immediate-collision today), the <code>_await_core_3x3</code>
+data check is the suspect (drop <code>c.data.is_empty()</code> if the sync path
+briefly empties <code>data</code> — it does not: sync <code>create_chunk</code> fills
+data before <code>mesh_built</code>). P1.5 and P1.6 are independently revertible:
+P1.5 = world.gd only, P1.6 = main.gd :396 + helper only.</p>
+</body>
+</html>

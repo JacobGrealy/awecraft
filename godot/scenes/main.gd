@@ -939,6 +939,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "save":
 			await _save_test()
 			return
+		if logic == "continue":
+			await _continue_probe()
+			return
 		if logic == "dropshot":
 			world.recenter(spawn.x, spawn.z, true)
 			await _await_spawn_floor(spawn, 300)
@@ -3980,6 +3983,150 @@ func _save_test() -> void:
 		"iso_base": iso_base,
 		"pos_before": pos_before,
 		"pos_after": pos_after,
+	})
+	get_tree().quit()
+
+
+# AC-0078 probe-only (env-gated by AWECRAFT_LOGIC=continue, never runs in game):
+# measures the Continue path load->spawn wait. Mirrors _continue_slot
+# (main.gd:378-403) with two extra clocks: core_ms = time until the 3x3 around
+# the SAVED position is mesh_built (the designed P1.6 wait), full_radius_ms =
+# time until the full radius is mesh_built (the current PRE wait).
+func _continue_probe() -> void:
+	var S := 44
+	Save.clear(0)
+	var t_start := Time.get_ticks_msec()
+	await _start_world_to_slot(S, 0)
+	var sp: Vector3 = world.spawn_point()
+	var sx := int(sp.x)
+	var sz := int(sp.z)
+	var top: int = world.surface_top(sx, sz)
+	var cdist := int(OS.get_environment("AWECRAFT_CONTINUE_DIST"))
+	var tx := sx + 5 + cdist * 16
+	var tz := sz + 5
+	# Wait for the SAVE-TARGET chunk to be fully built + collision-bodied before
+	# teleporting the player there (a legitimate save = resting on real ground).
+	var ttx := int(floorf(float(tx) / 16.0))
+	var ttz := int(floorf(float(tz) / 16.0))
+	var ttwait := 0
+	while ttwait < 600:
+		var tc = world.chunks.get("%d,%d" % [ttx, ttz])
+		if tc != null and not tc.data.is_empty() and tc.mesh_built and tc.collision_body != null:
+			break
+		await get_tree().physics_frame
+		ttwait += 1
+	var ttop: int = world.surface_top(tx, tz)
+	Debug.set_block(sx, top, sz, 3)
+	Debug.set_block(sx + 1, top, sz, 4)
+	Debug.set_block(sx, top + 1, sz, 6)
+	Debug.set_block(sx + 2, top, sz + 1, 23)
+	Debug.set_block(sx - 1, top, sz - 1, 22)
+	var pl = Game.player
+	Debug.give_item(111, 3)
+	Debug.teleport(float(tx) + 0.5, float(ttop) + 1.0, float(tz) + 0.5)
+	pl.sel = 2
+	for i in 20:
+		await get_tree().physics_frame
+	var save_y: float = Game.player.position.y
+	var save_settled: bool = absf(save_y - (float(ttop) + 1.0)) < 0.5
+	var saved_ok := Save.save_now(0)
+	var new_world_ms := Time.get_ticks_msec() - t_start
+	_free_game_nodes()
+	var data := Save.load_full(0)
+	Save.active_slot = 0
+	Game.new_world(int(data.get("seed", 1)))
+	_create_game_nodes()
+	world.edits = data.get("edits", {})
+	var ps: Dictionary = data.get("player", {})
+	var pos: Array = ps.get("pos", [])
+	var target: Vector3
+	if pos.size() == 3:
+		target = Vector3(float(pos[0]), float(pos[1]), float(pos[2]))
+	else:
+		target = world.spawn_point()
+	var t_c0 := Time.get_ticks_msec()
+	world.recenter(target.x, target.z, true)
+	var tpcx := int(floorf(target.x / 16.0))
+	var tpcz := int(floorf(target.z / 16.0))
+	var wait_mode := OS.get_environment("AWECRAFT_CONTINUE_WAIT")  # ""|pre = current _await_world_build semantics; core = 3x3 wait (the designed fix)
+	var core_ms := -1
+	var waited := 0
+	while waited < 3000:
+		if core_ms < 0:
+			var core := true
+			for dx in range(-1, 2):
+				for dz in range(-1, 2):
+					var c = world.chunks.get("%d,%d" % [tpcx + dx, tpcz + dz])
+					if c == null or c.data.is_empty() or not c.mesh_built:
+						core = false
+						break
+				if not core:
+					break
+			if core:
+				core_ms = Time.get_ticks_msec() - t_c0
+		if wait_mode == "core":
+			if core_ms >= 0:
+				break
+		else:
+			# current _await_world_build semantics (main.gd:4079-4094 era): all
+			# EXISTING in-radius chunks built -> exit (early-exit by design).
+			var all := true
+			for key in world.chunks:
+				var cc: Node3D = world.chunks[key]
+				if absi(cc.cx - tpcx) <= world.render_radius and absi(cc.cz - tpcz) <= world.render_radius and not cc.mesh_built:
+					all = false
+					break
+			if all:
+				break
+		await get_tree().physics_frame
+		waited += 1
+	player = _spawn_player()
+	var sc = world.chunks.get("%d,%d" % [tpcx, tpcz])
+	var saved_chunk_built_at_spawn: bool = sc != null and not sc.data.is_empty() and sc.mesh_built
+	var col_body_at_spawn: bool = sc != null and sc.collision_body != null
+	_restore_player(ps)
+	if Game.world != null:
+		world.recenter(player.position.x, player.position.z)
+	Game.time_of_day = float(data.get("time", 0.0))
+	Game.start()
+	var load_spawn_ms := Time.get_ticks_msec() - t_c0
+	var y0: float = Game.player.position.y
+	var ytrace: Array = [roundf(y0 * 10.0) / 10.0]
+	var body30 := false
+	for i in 30:
+		await get_tree().physics_frame
+		ytrace.append(roundf(Game.player.position.y * 10.0) / 10.0)
+		if i == 24:
+			var sc30 = world.chunks.get("%d,%d" % [tpcx, tpcz])
+			body30 = sc30 != null and sc30.collision_body != null
+	var fell: bool = (Game.player.position.y < y0 - 2.0)
+	var pl2 = Game.player
+	var edits_ok: bool = world.get_block(sx, top, sz) == 3 and world.get_block(sx + 1, top, sz) == 4 \
+		and world.get_block(sx, top + 1, sz) == 6 and world.get_block(sx + 2, top, sz + 1) == 23 \
+		and world.get_block(sx - 1, top, sz - 1) == 22
+	var pos_ok: bool = pl2 != null and absf(pl2.position.x - (float(tx) + 0.5)) < 0.35 \
+		and absf(pl2.position.z - (float(tz) + 0.5)) < 0.35
+	Save.clear(0)
+	Debug.result({
+		"mode": "continue",
+		"saved_ok": bool(saved_ok),
+		"edits_ok": bool(edits_ok),
+		"pos_ok": bool(pos_ok),
+		"render_radius": int(world.render_radius),
+		"new_world_ms": int(new_world_ms),
+		"wait_mode": wait_mode,
+		"core_ms": int(core_ms),
+		"load_spawn_ms": int(load_spawn_ms),
+		"save_settled": bool(save_settled),
+		"save_y": roundf(save_y * 100.0) / 100.0,
+		"saved_chunk_built_at_spawn": bool(saved_chunk_built_at_spawn),
+		"col_body_at_spawn": bool(col_body_at_spawn),
+		"fell_after_30f": bool(fell),
+		"col_body_at_25f": bool(body30),
+		"y_trace": ytrace,
+		"last_pcx": int(world.last_pcx),
+		"last_pcz": int(world.last_pcz),
+		"player_pos": [roundf(pl2.position.x * 100.0) / 100.0, roundf(pl2.position.y * 100.0) / 100.0, roundf(pl2.position.z * 100.0) / 100.0] if pl2 != null else [],
 	})
 	get_tree().quit()
 

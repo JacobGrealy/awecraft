@@ -217,3 +217,21 @@ buys nothing and costs a full xhigh round on a single-request LLM.
 - The verbatim-constants gate is checkable mechanically: re-grep the cited
   file:line (or re-run spec_template.py) and diff. A one-value mismatch is a
   full bounce of Run 1, not a negotiation.
+- **HEAVY-GATE PIPELINE (user rule 2026-08-26, from AC-0078):** Run-2 (above)
+  verifies ONLY G0 + SMOKE + ≤1 render — the heavy gates (full exact battery
+  where SMOKE does not cover it, boundary r4 ×2, perf, r50/RECSLICE,
+  task-specific probe modes, flake ×N) run as a **coordinator BACKGROUND bash
+  job** (no LLM slot): one script, godot invocations SEQUENTIAL (one godot at
+  a time), then `./build_windows.sh` (XDG pattern) + 8080/5180 curls, logging
+  everything to `.scratch/AC-NNNN/gates.log` and writing a
+  `.scratch/AC-NNNN/HEAVY_GATES_DONE` marker at the end. IMMEDIATELY after
+  kicking N's gate job, launch **N+1's Run-1** (`subagent_plan`, xhigh) in
+  parallel — research overlaps the gates. The N+1 Run-1 prompt MUST tell the
+  child: godot is busy with N's gates — do static file research first, and
+  before EVERY godot call check `pgrep -f 'godot'` (and the N
+  `HEAVY_GATES_DONE` marker) and wait if a gate job holds a godot process.
+  **Commit/push N only after its heavy gates pass** (code + results +
+  plan + build in one commit). If N's gates FAIL: bounce N's Run-2
+  (rework → re-SMOKE → re-gate); the already-running N+1 Run-1 stays valid
+  (research only, no tree changes). The background job owns godot until its
+  marker — no other godot (coordinator or otherwise) meanwhile.
