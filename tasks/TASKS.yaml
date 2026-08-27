@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-27T06:22
+  updated_at: 2026-08-27T06:50
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -39,6 +39,7 @@ queue:
 - AC-0111
 - AC-0114
 - AC-0115
+- AC-0130
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -3765,4 +3766,22 @@ intake:
     Audit per-chunk contained batch (AC-0077) vs air-on-miss frontier (AC-0119) cache/data-signature and recenter slice 0118
     neighbor readiness; probe light_at in r4 cave shows 14 next to 0 with no torch. Fix propagation/caching so cave eff is
     consistent. Gate: cave tunnel smooth gradient, no hard 14/0 cliff, MINFO/light_at green.'
+  comments: []
+- id: AC-0130
+  title: shovel-right-click-dirt-to-path
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-27T06:50
+  updated_at: 2026-08-27T06:50
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: Right-clicking dirt/grass_block with a shovel should convert it to a dirt path block (modern Minecraft behavior).
+    Hook into tool right-click interaction (player interaction / block use), check held item is shovel (any tier), target
+    block is dirt or grass_block, replace with path block, play sound/particles, consume durability if applicable.
   comments: []
