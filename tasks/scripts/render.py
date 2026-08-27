@@ -26,6 +26,10 @@ import tasks_lib  # noqa: E402
 STATUS_ORDER = {"in-progress": 0, "open": 1, "blocked": 2}
 
 CSS = """
+tr[draggable=true]{cursor:grab}
+tr.dragging{opacity:.45}
+tr.drag-over{outline:2px dashed #3b7cd8}
+td.handle{cursor:grab;text-align:center;user-select:none;color:#7a8494;width:22px}
 body{font-family:system-ui,'Segoe UI',sans-serif;margin:0;background:#f2f4f8;color:#1b232f}
 .bar{background:#1f2733;color:#eef1f6;padding:10px 22px;display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
 .bar h1{font-size:16px;margin:0;font-weight:600}
@@ -105,6 +109,51 @@ document.addEventListener('click', function (e) {
   if (!btn) return;
   postApi(btn.dataset.queueAct, new URLSearchParams({id: btn.dataset.id}));
 });
+(function(){
+  var dragId=null;
+  document.addEventListener('dragstart', function(e){
+    var tr=e.target.closest('tr[data-qid]');
+    if(!tr) return;
+    dragId=tr.dataset.qid;
+    e.dataTransfer.effectAllowed='move';
+    e.dataTransfer.setData('text/plain', dragId);
+    tr.classList.add('dragging');
+  });
+  document.addEventListener('dragend', function(e){
+    var tr=e.target.closest('tr[data-qid]');
+    if(tr) tr.classList.remove('dragging');
+    document.querySelectorAll('tr.drag-over').forEach(function(r){r.classList.remove('drag-over')});
+  });
+  document.addEventListener('dragover', function(e){
+    var tr=e.target.closest('tr[data-qid]');
+    if(!tr) return;
+    e.preventDefault();
+    tr.classList.add('drag-over');
+  });
+  document.addEventListener('dragleave', function(e){
+    var tr=e.target.closest('tr[data-qid]');
+    if(tr) tr.classList.remove('drag-over');
+  });
+  document.addEventListener('drop', function(e){
+    var tr=e.target.closest('tr[data-qid]');
+    if(!tr || !dragId) return;
+    e.preventDefault();
+    tr.classList.remove('drag-over');
+    var tbl=document.getElementById('queue-table');
+    if(!tbl) return;
+    var rows=[].slice.call(tbl.querySelectorAll('tr[data-qid]'));
+    var src=rows.find(function(r){return r.dataset.qid===dragId});
+    var dst=tr;
+    if(!src || !dst || src===dst) return;
+    var ids=rows.map(function(r){return r.dataset.qid});
+    var sidx=ids.indexOf(dragId);
+    var didx=ids.indexOf(dst.dataset.qid);
+    ids.splice(sidx,1);
+    ids.splice(didx,0,dragId);
+    postApi('queue-reorder', new URLSearchParams({order: ids.join(',')}));
+    dragId=null;
+  });
+})();
 async function postApi(act, body) {
   var enc = body instanceof FormData ? new URLSearchParams(body) : body;
   var res = await fetch('/api/' + act, {method: 'POST', body: enc});
@@ -281,26 +330,48 @@ def build_board(data, interactive=True, base="/tasks/", task_root=None):
     if interactive:
         out.append(_new_task_form())
 
+    # AC-0095: queue work order as draggable table with artifact links
     out.append('<section><h2>Queue (work order)</h2>')
     qrows = []
     for pos, tid in enumerate(queue, 1):
         item = tasks_lib.find_task(data, tid)
         title = item.get("title", "?") if item else "(missing)"
         st = (item or {}).get("status", "missing")
-        qrows.append("<tr><td>%d</td><td><code>%s</code></td><td>%s</td><td>%s</td></tr>"
-                     % (pos, escape(tid), escape(st), escape(title)))
+        links = _task_links_html(tid, task_root, base)
+        # strip wrapper for inline use in table cell
+        if links:
+            links = links.replace('<div class="links">', '').replace('</div>', '')
+        else:
+            links = '<span class="muted">no artifacts</span>'
+        drag = ' draggable="true"' if interactive else ''
+        handle = '<td class="handle" title="drag to reorder">\u2630</td>' if interactive else '<td></td>'
+        qrows.append('<tr data-qid="%s"%s>%s<td>%d</td><td><code>%s</code></td><td>%s</td><td>%s</td><td style="font-size:11px">%s</td></tr>'
+                     % (escape(tid), drag, handle, pos, escape(tid), escape(st), escape(title), links))
     if qrows:
-        out.append('<table class="done"><tr><th>#</th><th>id</th><th>status</th><th>title</th></tr>'
-                   + "".join(qrows) + "</table>")
+        hdr_handle = '<th></th>' if interactive else ''
+        out.append('<table class="done" id="queue-table"><tr>%s<th>#</th><th>id</th><th>status</th><th>title</th><th>artifacts</th></tr>'
+                   % hdr_handle + "".join(qrows) + "</table>")
+        if interactive:
+            out.append('<div class="muted" style="margin-top:4px">drag by \u2630 to reorder the queue</div>')
     else:
         out.append('<div class="muted">queue is empty</div>')
     out.append("</section>")
 
-    out.append('<section><h2>Open (%d)</h2>' % len(open_items))
-    if open_items:
-        out.extend(_card_html(i, interactive, base, task_root, queue) for i in open_items)
+    # AC-0095: separate in-progress / queued-open / blocked / done (was Open/Blocked/Done)
+    queued_open = [i for i in open_items if i.get("status") == "open"]
+    inprog = [i for i in open_items if i.get("status") == "in-progress"]
+    out.append('<section><h2>In-Progress (%d)</h2>' % len(inprog))
+    if inprog:
+        out.extend(_card_html(i, interactive, base, task_root, queue) for i in inprog)
     else:
-        out.append('<div class="muted">nothing open</div>')
+        out.append('<div class="muted">nothing in progress</div>')
+    out.append("</section>")
+
+    out.append('<section><h2>Queued — open (%d)</h2>' % len(queued_open))
+    if queued_open:
+        out.extend(_card_html(i, interactive, base, task_root, queue) for i in queued_open)
+    else:
+        out.append('<div class="muted">nothing queued</div>')
     out.append("</section>")
 
     out.append('<section><h2>Blocked (%d)</h2>' % len(blocked_items))

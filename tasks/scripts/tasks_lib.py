@@ -232,6 +232,47 @@ def queue_remove(data, task_id):
     return True
 
 
+def queue_reorder(data, ordered_ids):
+    """Replace the queue with `ordered_ids` after validating it is a permutation.
+
+    Returns True if the queue changed. The caller must contain exactly the same
+    set of ids as the current queue (no adds/removes, just reordering); this
+    keeps the drag-handle from accidentally dropping or duplicating entries.
+    """
+    cur = list(data.get("queue") or [])
+    ordered = list(ordered_ids or [])
+    if set(ordered) != set(cur) or len(ordered) != len(cur):
+        raise TaskError("queue reorder must be a permutation of the current queue")
+    for tid in ordered:
+        if find_task(data, tid) is None:
+            raise NotFound("task %s not found" % tid)
+    if ordered == cur:
+        return False
+    data["queue"] = ordered
+    _bump_meta(data)
+    return True
+
+
+def queue_move(data, task_id, to_index):
+    """Move `task_id` to `to_index` (0-based) inside the queue."""
+    queue = list(data.get("queue") or [])
+    if task_id not in queue:
+        raise NotFound("task %s not in queue" % task_id)
+    try:
+        to_index = int(to_index)
+    except (TypeError, ValueError):
+        raise TaskError("to_index must be an integer")
+    to_index = max(0, min(to_index, len(queue) - 1))
+    cur = queue.index(task_id)
+    if cur == to_index:
+        return False
+    queue.pop(cur)
+    queue.insert(to_index, task_id)
+    data["queue"] = queue
+    _bump_meta(data)
+    return True
+
+
 def queue_top(data):
     """The next live item: first queue entry that is not done (or None).
 

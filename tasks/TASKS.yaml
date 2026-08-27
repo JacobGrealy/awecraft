@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-26T20:45
+  updated_at: 2026-08-26T20:59
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -2739,11 +2739,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-23T23:30
-  updated_at: 2026-08-23T23:30
-  completed_at: null
+  updated_at: 2026-08-26T20:59
+  completed_at: 2026-08-26T20:59
   waiting_on: null
   parent_id: null
   notes: 'Tasks webapp (tasks/webui.py): serve the tasks artifact directory (tasks/AC-NNNN/ with spec.html, results.html,
