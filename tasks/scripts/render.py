@@ -460,9 +460,10 @@ def build_board(data, interactive=True, base="/tasks/", task_root=None):
             tid = it["id"]
             st = it.get("status", "done")
             title = it.get("title", "?")
-            crows.append('<tr class="task-row" data-tid="%s"><td><code>%s</code></td><td>%s</td><td>%s</td></tr>'
-                         % (escape(tid), escape(tid), escape(st), escape(title)))
-        out.append('<table class="done" id="completed-table"><tr><th>id</th><th>status</th><th>title</th></tr>%s</table>' % "".join(crows))
+            completed = it.get("completed_at") or "?"
+            crows.append('<tr class="task-row" data-tid="%s"><td><code>%s</code></td><td>%s</td><td>%s</td><td style="font-size:11px;white-space:nowrap">%s</td></tr>'
+                         % (escape(tid), escape(tid), escape(st), escape(title), escape(str(completed))))
+        out.append('<table class="done" id="completed-table"><tr><th>id</th><th>status</th><th>title</th><th>completed</th></tr>%s</table>' % "".join(crows))
         if interactive:
             out.append('<div class="muted" style="margin-top:4px">click a row for details</div>')
     out.append("</section>")
