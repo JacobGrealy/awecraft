@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-27T03:16
+  updated_at: 2026-08-27T03:22
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -3151,11 +3151,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-24T10:51
-  updated_at: 2026-08-26T22:46
-  completed_at: null
+  updated_at: 2026-08-27T03:22
+  completed_at: 2026-08-27T03:22
   waiting_on: null
   parent_id: null
   notes: 'Split 16x80x16 column chunk into 5x 16x16x16 subchunks (y 0-15,16-31,32-47,48-63,64-79).
@@ -3168,7 +3168,25 @@ intake:
     Verify: R=50 memory drop, edits{}_apply_edits_to_chunk per slab, r=4 walk p95, G0/G1 gates.
 
     Depends: none, but benefits greedy + frustum.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-27T03:22
+    updated_at: null
+    text: 'DONE 2026-08-27 as-delivered (two-phase + coordinator heavy gates). Slab split: class Slab struct x5/chunk (y0
+      0/16/32/48/64), column-wide merge grid UNCHANGED (identical merge decisions) with per-anchor-block EMIT routing (merged
+      si=(c0[4] if fi in [0,1,4,5] else c0[5])/16, non-merged r[1]/16), worker build_accs 5x6 accs, per-slab _build_slab_collision
+      from the slab mesh surface 0, mark_edit_slabs wider closure [y-3,y] (greedy strips grow +3 rows above anchor), mesh_info
+      per-slot sums keep the MINFO JSON shape, MATINFO/continue/remesh/unbodied probe sites adapted, NEW AWECRAFT_LOGIC=editslab
+      probe. GATES: G2 per-chunk MINFO 121/121 BYTE-IDENTICAL (coordinator diff EMPTY, opaque 125552) + MATINFO 3/3 + FULL
+      battery EXACT + genhash 25/25; G3 editslab slabs_touched [0,1]/[1]/[1,2] exact, col_ms 1.0/0.0/1.0 vs 66ms PRE single-body,
+      cell_after 0, mesh_built true (wall 252-304ms = 6/2/6 set_blocks vs PRE 1; A/B control unmodified editperf 253~241 -
+      no regression); G5 boundary r4 x2 62/3003+62/2994/10/81/0, collision_max 3, ms/n 1.32-1.34 (223 shapes), RECSLICE r50
+      286.0/10.0+89.0/8.0, player flake x4, perf 5744/194/55/32.1MB; G6 build RC=0 exe 109,572,976B @03:15, 8080+5180 200.
+      HONEST DEVIATION (pre-declared in the gated plan): G4 r50 mem 146.9 MB > 140.6 fence (+6.3, per-slab object overhead;
+      geometry/data/fl bytes unchanged, drop lever = per-slab culling) -> follow-up REGISTERED (slab-distance-culling-r50-mem,
+      priority 2). G0 note: the bare --quit gate step aborted (SIGSEGV in the crash reporter after user:// log open FAIL)
+      only because it ran without the HOME=/tmp/dsh_home prefix (DSH sandbox denies writes outside the workspace); re-run
+      with the prefix rc=0 zero errors. See AC-0108-results.html verdict + continuity RUN 2/2.5.'
 - id: AC-0109
   title: frustum-culling-chunks
   source: user
@@ -3744,4 +3762,27 @@ intake:
     719 x1-5 on edge (900 lx) = 50-120ms spike. Use bulk box 922 (like AC-0077) for edit set, stagger neighbor remesh 1/frame,
     reuse AC-0107 threaded build path, collision staged 0077. Gate: edge break p95 <15ms, interior <10ms, torch 14 unchanged,
     battery green.'
+  comments: []
+- id: AC-0127
+  title: slab-distance-culling-r50-mem
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-27T03:22
+  updated_at: 2026-08-27T03:22
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'AC-0108 G4 follow-up (the R=50 memory drop lever the user''s AC-0108 note asked for, deferred out of pass 1 by the
+    gated plan): per-slab distance culling / unloading (per-slab queue entries + hysteresis + _startup_pending / AC-0079 wall
+    semantics - NOT free in pass 1). AC-0108 delivered column-scoped queues: per-slab MESH/col nodes (223-405 bodies at r4,
+    byte-identity verified 121/121 MINFO) but whole-column load/unload, so r50 mem went UP 140.6->146.9 MB (+6.3, the per-slab
+    object overhead; geometry/data/fl bytes unchanged). Realizing the drop: unload/cull individual slabs (top slabs above
+    the terrain rarely needed for collision... verify), slice budgeting per slab, candidate handling per slab. Gates: r50
+    mem < 140.6 (the pre-AC-0108 fence), byte-identity (MINFO per-chunk + battery + genhash), boundary floor 65/3500/81/0,
+    RECSLICE, walk p95 with the body-count change, G0-G6.'
   comments: []

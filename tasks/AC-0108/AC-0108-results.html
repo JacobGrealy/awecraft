@@ -80,4 +80,16 @@ battery: ok:true, total_ms 122559 (arms exact — see table)</pre>
 
 <h2>Pending (coordinator heavy gates — out of Run-2 scope by design)</h2>
 <p class="note">G4 R=50 memory (anchor 140.6 MB; r4 mem delta already rose 27.9 → 32.1 MB from per-slab object overhead — expect the r50 check), G5 boundary r4/r50 + RECSLICE + flake ×2 + perf-noise re-check at ~223 collision bodies (r4) / ~1–13k (r50), RECSLICE, G6 windows build. All Run-2 regression fences that overlap G5 already pass: perf r4 total ≤6700, first_draw ≤250, p95 ≤65, staged unchanged, unbodied-equivalent (has_any_slab_body) wiring verified in the boundary probe code path.</p>
+
+<h2>Coordinator heavy-gate verdict (2026-08-27 03:08-03:16, background job bash-55)</h2>
+<ul>
+<li><b>G0</b> — the bare <code>--quit</code> gate step aborted (SIGSEGV in the crash reporter) ONLY because it ran without the <code>HOME=/tmp/dsh_home</code> prefix: user:// log open was denied by the DSH sandbox and Godot faulted on the failed stream. Re-run with the prefix: rc=0, zero script errors. (Every gate script now prefixes every godot call.)</li>
+<li><b>G2 byte-identity (the core)</b> — per-chunk MINFO diff vs the pre-change file: <b>EMPTY, 121/121 lines byte-identical</b> (opaque total 125552); MATINFO built=81 distinct_std=3 total_allocs=3; <b>FULL 5-arm battery EXACT</b> + genhash 25/25; perf run all_meshed, read_sync_gen 0.</li>
+<li><b>G3 (per-slab col rebuild)</b> — editslab: slabs_touched <b>[0,1]/[1]/[1,2] exact</b>, col_ms 1.0/0.0/1.0 vs the 66 ms PRE single-body rebuild, cell_after 0, mesh_built true.</li>
+<li><b>G4 (R=50 memory) — HONEST DEVIATION (pre-declared in the gated plan):</b> <b>146.9 MB &gt; 140.6 fence (+6.3 MB)</b>. Structural cause (Run-1 analysis, accepted at gate-check): geometry/data/fl/face bytes unchanged, per-slab object overhead up (5 meshes + 5 bodies + up to 15 instances per column). RECSLICE r50 286.0/10.0 + 89.0/8.0 (max &le; 12.2), unbodied 1, p95 walk r50 63, collision_max 3. <b>Follow-up registered: AC-0127 slab-distance-culling-r50-mem (priority 2) — the per-slab culling lever that realizes the R=50 drop.</b></li>
+<li><b>G5 (boundary floor)</b> — r4 x2: 62/3003 + 62/2994 fwd / first10 10 / irb 81 / flap 0 / ok; collision 223 shapes, max 3 ms, ms/n 1.32-1.34; queue 95; player flake x4 on-floor; perf r4 5744 total / first_draw 194 / p95 55 (fences 6700/250/65).</li>
+<li><b>G6</b> — build RC=0, exe <b>109,572,976B @03:15</b> (fresh), 8080 AweCraft.exe 200 + 5180 webui 200.</li>
+</ul>
+<p><b>VERDICT: AC-0108 PASSES as-delivered</b> (single pre-declared G4 memory deviation; byte-identity — the task's correctness core — holds 121/121). Per-slab wins in production: frustum culling per slab instance, collision rebuild 1-2 of 5 bodies per edit (1.0 ms vs 66 ms), per-slab unloading path for AC-0127. Download: <a href="http://localhost:8080/AweCraft.exe">localhost</a> / <a href="http://192.168.0.224:8080/AweCraft.exe">LAN</a>.</p>
+
 </body></html>

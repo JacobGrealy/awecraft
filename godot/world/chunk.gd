@@ -14,7 +14,6 @@ var data := PackedByteArray()
 var fl := PackedByteArray()
 var mesh_built := false
 var collision_enabled := true
-var col_dirty := true
 var col_immediate := true
 var last_collision_build_ms := 0
 var last_eff: Dictionary = {}
@@ -23,11 +22,11 @@ var last_eff: Dictionary = {}
 # recenter events spent at >= r+2 (free at >= 2).
 var candidate := false
 var cand_since := 0
-
-var mesh_instance: MeshInstance3D = null
-var fluid_instance: MeshInstance3D = null
-var flora_instance: MeshInstance3D = null
-var collision_body: StaticBody3D = null
+# AC-0108: five vertical 16x16x16 slabs (y0 = 0/16/32/48/64), each owning its
+# own mesh/fluid/flora instances + collision body; data/fl stay column-wide.
+var slabs: Array = []
+var perf_slab_body_builds := PackedInt32Array([0, 0, 0, 0, 0])
+var perf_slab_body_ms := PackedFloat32Array([0.0, 0.0, 0.0, 0.0, 0.0])
 
 
 class Acc:
@@ -39,9 +38,47 @@ class Acc:
 	var q := 0
 
 
+class Slab:
+	var y0 := 0
+	var built := false
+	var mesh_instance: MeshInstance3D = null
+	var fluid_instance: MeshInstance3D = null
+	var flora_instance: MeshInstance3D = null
+	var collision_body: StaticBody3D = null
+	var col_dirty := false
+	var sidx := PackedInt32Array()
+	var fsidx := PackedInt32Array()
+
+
 static var _ms_key
 static var _ms_tex: ImageTexture = null
 static var _ms_rects := {}
+static var _mat_atlas: Texture2D = null   # Data.atlas_tex identity at last build
+static var _mat_ms: Texture2D = null      # merged-atlas texture identity at last build
+static var _mat_cache: Dictionary = {}    # kind -> Material (opaque/cutout/flower/fluid)
+static var _mat_alloc_count := 0          # G3 build-path counter (total since boot)
+
+# AC-0120: shared material cache — static like _merge_atlas (main-thread-only in
+# practice: build_mesh sync + apply_accs handoff both run on the main thread).
+# Lazy per-kind creation; identity-key invalidation on (Data.atlas_tex, ms_tex)
+# for the opaque kind (its texture IS the key) so a texture-pack swap or an
+# AWECRAFT_MERGE=0 run clears the set once; <=4 live entries, kind-only keys.
+static func _get_mat(kind: String, ms_tex: Texture2D = null) -> Material:
+	if _mat_atlas != Data.atlas_tex or (kind == "opaque" and _mat_ms != ms_tex):
+		_mat_cache.clear()                 # texture swap / merge rebuild -> fresh set
+		_mat_atlas = Data.atlas_tex
+		_mat_ms = ms_tex
+	if _mat_cache.has(kind):
+		return _mat_cache[kind]
+	var m: StandardMaterial3D
+	match kind:
+		"opaque": m = _opaque_material(ms_tex)
+		"cutout": m = _cutout_material()
+		"flower": m = _flower_material()
+		_: m = _fluid_material()
+	_mat_cache[kind] = m
+	_mat_alloc_count += 1
+	return m
 
 
 # AC-0107: static (touches only the _ms_* statics + Data) so the main thread
@@ -298,7 +335,7 @@ static func _qwrite(acc, k: int, c: Color, n: Vector3i, uvs: PackedVector2Array,
 	acc.i[ib + 5] = b + 2
 
 
-func _emit_faces(recs: Array, acc: Acc, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, has_tex: bool, xtab: PackedByteArray, fn: Array, fsh: PackedFloat32Array, fcv: Array, ct: PackedColorArray, cs: PackedColorArray, cb: PackedColorArray) -> void:
+func _emit_faces(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, has_tex: bool, xtab: PackedByteArray, fn: Array, fsh: PackedFloat32Array, fcv: Array, ct: PackedColorArray, cs: PackedColorArray, cb: PackedColorArray) -> void:
 	var rc := {}
 	var uvc := {}
 	var wx0 := cx * SIZE
@@ -329,8 +366,9 @@ func _emit_faces(recs: Array, acc: Acc, lmn: Vector3i, larr: PackedByteArray, lw
 			c = c * Data.block_tint(id, face_name)
 		var uvs := _uvc(uvc, rc, id, fi, face_name, fn, fcv)
 		var cva = fcv[fi]
-		_qwrite(acc, acc.q, c, n, uvs, cva, lx, y, lz, float(cva[0].y), float(cva[1].y), float(cva[2].y), float(cva[3].y))
-		acc.q += 1
+		var sa = accs[y / 16]
+		_qwrite(sa, sa.q, c, n, uvs, cva, lx, y, lz, float(cva[0].y), float(cva[1].y), float(cva[2].y), float(cva[3].y))
+		sa.q += 1
 
 
 static func _merge_strip(rects: Dictionary, id: int, fni: int) -> Vector2i:
@@ -440,7 +478,7 @@ func _qwrite_merged(acc: Acc, fi: int, n: Vector3i, cva: Array, c0: Array, W: in
 	acc.q += 1
 
 
-func _emit_ro_merged(recs: Array, acc: Acc, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, has_tex: bool, fn: Array, fsh: PackedFloat32Array, fcv: Array, ct: PackedColorArray, cs: PackedColorArray, cb: PackedColorArray, ms: Dictionary) -> void:
+func _emit_ro_merged(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, has_tex: bool, fn: Array, fsh: PackedFloat32Array, fcv: Array, ct: PackedColorArray, cs: PackedColorArray, cb: PackedColorArray, ms: Dictionary) -> void:
 	var rects: Dictionary = ms.rects
 	var ms_h: float = float(ms.get("h", Data.ATLAS_PX))
 	var wx0 := cx * SIZE
@@ -511,10 +549,11 @@ func _emit_ro_merged(recs: Array, acc: Acc, lmn: Vector3i, larr: PackedByteArray
 							g[vi + h * 16 + u] = null
 						h += 1
 					g[vi | u0] = null
-					_qwrite_merged(acc, fi, n, cva, c0, w, h, has_tex, ct, cs, cb, _merge_strip(rects, int(c0[0]), int(c0[1])), ms_h)
+					var si: int = (int(c0[4]) if (fi == 0 or fi == 1 or fi == 4 or fi == 5) else int(c0[5])) / 16
+					_qwrite_merged(accs[si], fi, n, cva, c0, w, h, has_tex, ct, cs, cb, _merge_strip(rects, int(c0[0]), int(c0[1])), ms_h)
 
 
-func _emit_xquad(recs: Array, acc: Acc, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, has_tex: bool, ct: PackedColorArray) -> void:
+func _emit_xquad(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, has_tex: bool, ct: PackedColorArray) -> void:
 	var rc := {}
 	var uvc := {}
 	var wx0 := cx * SIZE
@@ -541,14 +580,15 @@ func _emit_xquad(recs: Array, acc: Acc, lmn: Vector3i, larr: PackedByteArray, lw
 				u1.append(_corner_uv(XQ_B[i], Vector3i(1, 0, 0), tl))
 			uvs = [u0, u1]
 			uvc[ukey] = uvs
-		_qwrite(acc, acc.q, c, Vector3i(0, 0, 1), uvs[0], XQ_A, lx, y, lz, 0.0, 0.0, 1.0, 1.0)
-		acc.q += 1
-		_qwrite(acc, acc.q, c, Vector3i(1, 0, 0), uvs[1], XQ_B, lx, y, lz, 0.0, 0.0, 1.0, 1.0)
-		acc.q += 1
+		var sa = accs[y / 16]
+		_qwrite(sa, sa.q, c, Vector3i(0, 0, 1), uvs[0], XQ_A, lx, y, lz, 0.0, 0.0, 1.0, 1.0)
+		sa.q += 1
+		_qwrite(sa, sa.q, c, Vector3i(1, 0, 0), uvs[1], XQ_B, lx, y, lz, 0.0, 0.0, 1.0, 1.0)
+		sa.q += 1
 
 
 
-func _emit_fluid(recs: Array, acc: Acc, snap: PackedByteArray, snap_fl: PackedByteArray, has_tex: bool, fn: Array, fcv: Array, ct: PackedColorArray, cs: PackedColorArray, cb: PackedColorArray) -> void:
+func _emit_fluid(recs: Array, accs: Array, snap: PackedByteArray, snap_fl: PackedByteArray, has_tex: bool, fn: Array, fcv: Array, ct: PackedColorArray, cs: PackedColorArray, cb: PackedColorArray) -> void:
 	var rc := {}
 	var uvc := {}
 	for r in recs:
@@ -557,6 +597,7 @@ func _emit_fluid(recs: Array, acc: Acc, snap: PackedByteArray, snap_fl: PackedBy
 		var lz: int = r[2]
 		var id: int = r[3]
 		var hgt: float = r[4]
+		var sa = accs[y / 16]
 		var rowl := (lz + 1) * SNAP_W + (lx + 1)
 		var tint_t := Data.block_tint(id, "top")
 		var tint_s := Data.block_tint(id, "side")
@@ -566,8 +607,8 @@ func _emit_fluid(recs: Array, acc: Acc, snap: PackedByteArray, snap_fl: PackedBy
 			above = snap[(y + 1) * SNAP_ROW + rowl]
 		if above != id:
 			var top_h := minf(hgt, 0.875 if id == 5 else 0.95)
-			_qwrite(acc, acc.q, Color(0.95, 0.95, 0.95, 1.0) * tint_t if has_tex else ct[id] * 0.95, Vector3i(0, 1, 0), _uvc(uvc, rc, id, 2, "top", fn, fcv), fcv[2], lx, y, lz, top_h, top_h, top_h, top_h)
-			acc.q += 1
+			_qwrite(sa, sa.q, Color(0.95, 0.95, 0.95, 1.0) * tint_t if has_tex else ct[id] * 0.95, Vector3i(0, 1, 0), _uvc(uvc, rc, id, 2, "top", fn, fcv), fcv[2], lx, y, lz, top_h, top_h, top_h, top_h)
+			sa.q += 1
 		for fi in [0, 1, 4, 5]:
 			var n: Vector3i = fn[fi]
 			var nb: int = snap[y * SNAP_ROW + rowl + n.z * SNAP_W + n.x]
@@ -577,14 +618,14 @@ func _emit_fluid(recs: Array, acc: Acc, snap: PackedByteArray, snap_fl: PackedBy
 			if hn >= hgt:
 				continue
 			var cva = fcv[fi]
-			_qwrite(acc, acc.q, Color(0.85, 0.85, 0.85, 1.0) * tint_s if has_tex else cs[id] * 0.85, n, _uvc(uvc, rc, id, fi, "side", fn, fcv), cva, lx, y, lz, hgt if cva[0].y == 1.0 else hn, hgt if cva[1].y == 1.0 else hn, hgt if cva[2].y == 1.0 else hn, hgt if cva[3].y == 1.0 else hn)
-			acc.q += 1
+			_qwrite(sa, sa.q, Color(0.85, 0.85, 0.85, 1.0) * tint_s if has_tex else cs[id] * 0.85, n, _uvc(uvc, rc, id, fi, "side", fn, fcv), cva, lx, y, lz, hgt if cva[0].y == 1.0 else hn, hgt if cva[1].y == 1.0 else hn, hgt if cva[2].y == 1.0 else hn, hgt if cva[3].y == 1.0 else hn)
+			sa.q += 1
 		var below := 0
 		if y > 0:
 			below = snap[(y - 1) * SNAP_ROW + rowl]
 		if y > 0 and below != id:
-			_qwrite(acc, acc.q, Color(0.6, 0.6, 0.6, 1.0) * tint_b if has_tex else cb[id] * 0.6, Vector3i(0, -1, 0), _uvc(uvc, rc, id, 3, "bottom", fn, fcv), fcv[3], lx, y, lz, 0.0, 0.0, 0.0, 0.0)
-			acc.q += 1
+			_qwrite(sa, sa.q, Color(0.6, 0.6, 0.6, 1.0) * tint_b if has_tex else cb[id] * 0.6, Vector3i(0, -1, 0), _uvc(uvc, rc, id, 3, "bottom", fn, fcv), fcv[3], lx, y, lz, 0.0, 0.0, 0.0, 0.0)
+			sa.q += 1
 
 
 static func _band(delta: int) -> Array:
@@ -720,7 +761,7 @@ static func _s_fluid_quad_count(lx: int, y: int, lz: int, id: int, hgt: float, s
 	return cnt
 
 
-static func _s_emit_faces(recs: Array, acc, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, cx: int, cz: int, has_tex: bool, xtab: PackedByteArray, ctx: Dictionary) -> void:
+static func _s_emit_faces(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, cx: int, cz: int, has_tex: bool, xtab: PackedByteArray, ctx: Dictionary) -> void:
 	var fn: Array = ctx["fn"]
 	var fsh: PackedFloat32Array = ctx["fsh"]
 	var fcv: Array = ctx["fcv"]
@@ -763,8 +804,9 @@ static func _s_emit_faces(recs: Array, acc, lmn: Vector3i, larr: PackedByteArray
 			c = c * tint
 		var uvs := _s_uvc(uvc, brect, id, fi, face_name, fn, fcv, atlas_px)
 		var cva = fcv[fi]
-		_qwrite(acc, acc.q, c, n, uvs, cva, lx, y, lz, float(cva[0].y), float(cva[1].y), float(cva[2].y), float(cva[3].y))
-		acc.q += 1
+		var sa = accs[y / 16]
+		_qwrite(sa, sa.q, c, n, uvs, cva, lx, y, lz, float(cva[0].y), float(cva[1].y), float(cva[2].y), float(cva[3].y))
+		sa.q += 1
 
 
 static func _s_qwrite_merged(acc, fi: int, n: Vector3i, cva: Array, c0: Array, W: int, H: int, has_tex: bool, ctx: Dictionary, sr: Vector2i, ms_h: float) -> void:
@@ -866,7 +908,7 @@ static func _s_qwrite_merged(acc, fi: int, n: Vector3i, cva: Array, c0: Array, W
 	acc.q += 1
 
 
-static func _s_emit_ro_merged(recs: Array, acc, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, cx: int, cz: int, has_tex: bool, ctx: Dictionary, ms: Dictionary) -> void:
+static func _s_emit_ro_merged(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, cx: int, cz: int, has_tex: bool, ctx: Dictionary, ms: Dictionary) -> void:
 	var rects: Dictionary = ms.rects
 	var ms_h: float = float(ms.get("h", float(ctx["atlas_px"])))
 	var wx0 := cx * SIZE
@@ -940,10 +982,11 @@ static func _s_emit_ro_merged(recs: Array, acc, lmn: Vector3i, larr: PackedByteA
 							g[vi + h * 16 + u] = null
 						h += 1
 					g[vi | u0] = null
-					_s_qwrite_merged(acc, fi, n, cva, c0, w, h, has_tex, ctx, _merge_strip(rects, int(c0[0]), int(c0[1])), ms_h)
+					var si: int = (int(c0[4]) if (fi == 0 or fi == 1 or fi == 4 or fi == 5) else int(c0[5])) / 16
+					_s_qwrite_merged(accs[si], fi, n, cva, c0, w, h, has_tex, ctx, _merge_strip(rects, int(c0[0]), int(c0[1])), ms_h)
 
 
-static func _s_emit_xquad(recs: Array, acc, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, cx: int, cz: int, has_tex: bool, ctx: Dictionary) -> void:
+static func _s_emit_xquad(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, cx: int, cz: int, has_tex: bool, ctx: Dictionary) -> void:
 	var brect: Dictionary = ctx["brect"]
 	var atlas_px: float = float(ctx["atlas_px"])
 	var h: int = int(ctx["h"])
@@ -972,13 +1015,14 @@ static func _s_emit_xquad(recs: Array, acc, lmn: Vector3i, larr: PackedByteArray
 				u1.append(_s_corner_uv(XQ_B[i], Vector3i(1, 0, 0), tl, atlas_px))
 			uvs = [u0, u1]
 			uvc[ukey] = uvs
-		_qwrite(acc, acc.q, c, Vector3i(0, 0, 1), uvs[0], XQ_A, lx, y, lz, 0.0, 0.0, 1.0, 1.0)
-		acc.q += 1
-		_qwrite(acc, acc.q, c, Vector3i(1, 0, 0), uvs[1], XQ_B, lx, y, lz, 0.0, 0.0, 1.0, 1.0)
-		acc.q += 1
+		var sa = accs[y / 16]
+		_qwrite(sa, sa.q, c, Vector3i(0, 0, 1), uvs[0], XQ_A, lx, y, lz, 0.0, 0.0, 1.0, 1.0)
+		sa.q += 1
+		_qwrite(sa, sa.q, c, Vector3i(1, 0, 0), uvs[1], XQ_B, lx, y, lz, 0.0, 0.0, 1.0, 1.0)
+		sa.q += 1
 
 
-static func _s_emit_fluid(recs: Array, acc, snap: PackedByteArray, snap_fl: PackedByteArray, has_tex: bool, ctx: Dictionary, h: int) -> void:
+static func _s_emit_fluid(recs: Array, accs: Array, snap: PackedByteArray, snap_fl: PackedByteArray, has_tex: bool, ctx: Dictionary, h: int) -> void:
 	var brect: Dictionary = ctx["brect"]
 	var atlas_px: float = float(ctx["atlas_px"])
 	var fn: Array = ctx["fn"]
@@ -990,6 +1034,7 @@ static func _s_emit_fluid(recs: Array, acc, snap: PackedByteArray, snap_fl: Pack
 		var lz: int = r[2]
 		var id: int = r[3]
 		var hgt: float = r[4]
+		var sa = accs[y / 16]
 		var rowl := (lz + 1) * SNAP_W + (lx + 1)
 		var tint_t: Color = ctx["tint_top"][id]
 		var tint_s: Color = ctx["tint_side"][id]
@@ -999,8 +1044,8 @@ static func _s_emit_fluid(recs: Array, acc, snap: PackedByteArray, snap_fl: Pack
 			above = snap[(y + 1) * SNAP_ROW + rowl]
 		if above != id:
 			var top_h := minf(hgt, 0.875 if id == 5 else 0.95)
-			_qwrite(acc, acc.q, Color(0.95, 0.95, 0.95, 1.0) * tint_t if has_tex else ctx["ct"][id] * 0.95, Vector3i(0, 1, 0), _s_uvc(uvc, brect, id, 2, "top", fn, fcv, atlas_px), fcv[2], lx, y, lz, top_h, top_h, top_h, top_h)
-			acc.q += 1
+			_qwrite(sa, sa.q, Color(0.95, 0.95, 0.95, 1.0) * tint_t if has_tex else ctx["ct"][id] * 0.95, Vector3i(0, 1, 0), _s_uvc(uvc, brect, id, 2, "top", fn, fcv, atlas_px), fcv[2], lx, y, lz, top_h, top_h, top_h, top_h)
+			sa.q += 1
 		for fi in [0, 1, 4, 5]:
 			var n: Vector3i = fn[fi]
 			var nb: int = snap[y * SNAP_ROW + rowl + n.z * SNAP_W + n.x]
@@ -1010,14 +1055,14 @@ static func _s_emit_fluid(recs: Array, acc, snap: PackedByteArray, snap_fl: Pack
 			if hn >= hgt:
 				continue
 			var cva = fcv[fi]
-			_qwrite(acc, acc.q, Color(0.85, 0.85, 0.85, 1.0) * tint_s if has_tex else ctx["cs"][id] * 0.85, n, _s_uvc(uvc, brect, id, fi, "side", fn, fcv, atlas_px), cva, lx, y, lz, hgt if cva[0].y == 1.0 else hn, hgt if cva[1].y == 1.0 else hn, hgt if cva[2].y == 1.0 else hn, hgt if cva[3].y == 1.0 else hn)
-			acc.q += 1
+			_qwrite(sa, sa.q, Color(0.85, 0.85, 0.85, 1.0) * tint_s if has_tex else ctx["cs"][id] * 0.85, n, _s_uvc(uvc, brect, id, fi, "side", fn, fcv, atlas_px), cva, lx, y, lz, hgt if cva[0].y == 1.0 else hn, hgt if cva[1].y == 1.0 else hn, hgt if cva[2].y == 1.0 else hn, hgt if cva[3].y == 1.0 else hn)
+			sa.q += 1
 		var below := 0
 		if y > 0:
 			below = snap[(y - 1) * SNAP_ROW + rowl]
 		if y > 0 and below != id:
-			_qwrite(acc, acc.q, Color(0.6, 0.6, 0.6, 1.0) * tint_b if has_tex else ctx["cb"][id] * 0.6, Vector3i(0, -1, 0), _s_uvc(uvc, brect, id, 3, "bottom", fn, fcv, atlas_px), fcv[3], lx, y, lz, 0.0, 0.0, 0.0, 0.0)
-			acc.q += 1
+			_qwrite(sa, sa.q, Color(0.6, 0.6, 0.6, 1.0) * tint_b if has_tex else ctx["cb"][id] * 0.6, Vector3i(0, -1, 0), _s_uvc(uvc, brect, id, 3, "bottom", fn, fcv, atlas_px), fcv[3], lx, y, lz, 0.0, 0.0, 0.0, 0.0)
+			sa.q += 1
 
 
 static func _build_snap_data(snap: PackedByteArray, snap_fl: PackedByteArray, data: PackedByteArray, fl: PackedByteArray, cx: int, cz: int, nbs: Dictionary, h: int) -> void:
@@ -1162,8 +1207,8 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	var rq: Array = []
 	var rf_w: Array = []
 	var rf_l: Array = []
-	var nfw := 0
-	var nfl := 0
+	var c_af_w := [0, 0, 0, 0, 0]
+	var c_af_l := [0, 0, 0, 0, 0]
 	var d: PackedByteArray = data
 	for y in range(h):
 		var dy := y << 8
@@ -1178,10 +1223,10 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 					if hgt > 0.0:
 						var fcnt := _s_fluid_quad_count(lx, y, lz, id, hgt, snap, snap_fl, h, fn)
 						if id == 5:
-							nfw += fcnt
+							c_af_w[y / 16] += fcnt
 							rf_w.append([lx, y, lz, id, hgt])
 						else:
-							nfl += fcnt
+							c_af_l[y / 16] += fcnt
 							rf_l.append([lx, y, lz, id, hgt])
 					continue
 				if oktab[id] == 0:
@@ -1195,31 +1240,50 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 					_s_faces(rk, xtab, stab, fn, lx, y, lz, id, snap, h)
 				else:
 					_s_faces(ro, xtab, stab, fn, lx, y, lz, id, snap, h)
-	var ao := _new_acc()
-	_qgrow(ao, maxi(ro.size(), 1))
+	var s_ao: Array = []
+	var s_ac: Array = []
+	var s_af_w: Array = []
+	var s_af_l: Array = []
+	var s_ak: Array = []
+	var s_ax: Array = []
+	var c_ac := [0, 0, 0, 0, 0]
+	var c_ak := [0, 0, 0, 0, 0]
+	var c_ax := [0, 0, 0, 0, 0]
+	for r in rc_o:
+		c_ac[int(r[1]) / 16] += 1
+	for r in rk:
+		c_ak[int(r[1]) / 16] += 1
+	for r in rq:
+		c_ax[int(r[1]) / 16] += 2
+	for si in range(5):
+		s_ao.append(_new_acc())
+		s_ac.append(_new_acc())
+		s_af_w.append(_new_acc())
+		s_af_l.append(_new_acc())
+		s_ak.append(_new_acc())
+		s_ax.append(_new_acc())
+		_qgrow(s_ao[si], maxi(ro.size(), 1))
+		_qgrow(s_ac[si], c_ac[si])
+		_qgrow(s_af_w[si], c_af_w[si])
+		_qgrow(s_af_l[si], c_af_l[si])
+		_qgrow(s_ak[si], c_ak[si])
+		_qgrow(s_ax[si], c_ax[si])
 	# ms carries duplicated rects + h (main-thread merge-atlas cache); an empty
 	# rects dict means "plain atlas" — mirrors build_mesh's ms.tex != null gate.
 	if not ms.rects.is_empty() and ro.size() > 0:
-		_s_emit_ro_merged(ro, ao, lmn, larr, lw, ld, cx, cz, has_tex, ctx, ms)
+		_s_emit_ro_merged(ro, s_ao, lmn, larr, lw, ld, cx, cz, has_tex, ctx, ms)
 	else:
-		_s_emit_faces(ro, ao, lmn, larr, lw, ld, cx, cz, has_tex, xtab, ctx)
-	var ac := _new_acc()
-	_qgrow(ac, rc_o.size())
-	_s_emit_faces(rc_o, ac, lmn, larr, lw, ld, cx, cz, has_tex, xtab, ctx)
-	var af_w := _new_acc()
-	_qgrow(af_w, nfw)
-	_s_emit_fluid(rf_w, af_w, snap, snap_fl, has_tex, ctx, h)
-	var af_l := _new_acc()
-	_qgrow(af_l, nfl)
-	_s_emit_fluid(rf_l, af_l, snap, snap_fl, has_tex, ctx, h)
-	var ak := _new_acc()
-	_qgrow(ak, rk.size())
-	_s_emit_faces(rk, ak, lmn, larr, lw, ld, cx, cz, has_tex, xtab, ctx)
-	var ax := _new_acc()
-	_qgrow(ax, rq.size() * 2)
-	_s_emit_xquad(rq, ax, lmn, larr, lw, ld, cx, cz, has_tex, ctx)
+		_s_emit_faces(ro, s_ao, lmn, larr, lw, ld, cx, cz, has_tex, xtab, ctx)
+	_s_emit_faces(rc_o, s_ac, lmn, larr, lw, ld, cx, cz, has_tex, xtab, ctx)
+	_s_emit_fluid(rf_w, s_af_w, snap, snap_fl, has_tex, ctx, h)
+	_s_emit_fluid(rf_l, s_af_l, snap, snap_fl, has_tex, ctx, h)
+	_s_emit_faces(rk, s_ak, lmn, larr, lw, ld, cx, cz, has_tex, xtab, ctx)
+	_s_emit_xquad(rq, s_ax, lmn, larr, lw, ld, cx, cz, has_tex, ctx)
+	var slabs_out: Array = []
+	for si in range(5):
+		slabs_out.append([s_ao[si], s_ac[si], s_af_w[si], s_af_l[si], s_ak[si], s_ax[si]])
 	return {
-		"ao": ao, "ac": ac, "af_w": af_w, "af_l": af_l, "ak": ak, "ax": ax,
+		"slabs": slabs_out,
 		"light": light,
 		"wms": Time.get_ticks_msec() - t0,
 	}
@@ -1234,6 +1298,164 @@ static func _new_acc() -> Dictionary:
 		"i": PackedInt32Array(),
 		"q": 0,
 	}
+
+
+func init_slabs() -> void:
+	if not slabs.is_empty():
+		return
+	for i in range(5):
+		var s := Slab.new()
+		s.y0 = i * 16
+		s.col_dirty = true
+		slabs.append(s)
+
+
+func slab_for_y(y: int) -> Slab:
+	if slabs.is_empty():
+		init_slabs()
+	return slabs[clampi(y / 16, 0, 4)]
+
+
+func mark_edit_slabs(y: int) -> void:
+	if slabs.is_empty():
+		init_slabs()
+	# Greedy merged quads extend DOWN (v-axis) up to 3 rows from their anchor
+	# row, so an edit at row y can reshape quads anchored at v0 in [y-3, y];
+	# mark the full closure, not just the touched slab.
+	for si in range(maxi(0, (y - 3) / 16), mini(4, (y + 1) / 16) + 1):
+		slabs[si].col_dirty = true
+
+
+func mark_all_slabs_dirty() -> void:
+	if slabs.is_empty():
+		init_slabs()
+	for s in slabs:
+		s.col_dirty = true
+
+
+func any_col_dirty() -> bool:
+	for s in slabs:
+		if s.col_dirty:
+			return true
+	return false
+
+
+func has_any_slab_body() -> bool:
+	for s in slabs:
+		if s.collision_body != null:
+			return true
+	return false
+
+
+func has_all_slab_bodies() -> bool:
+	for s in slabs:
+		if s.collision_body == null:
+			return false
+	return true
+
+
+func first_opaque_mesh() -> ArrayMesh:
+	for s in slabs:
+		if s.mesh_instance != null and s.mesh_instance.mesh != null:
+			return s.mesh_instance.mesh
+	return null
+
+
+func build_dirty_slab_bodies() -> void:
+	last_collision_build_ms = 0
+	if not collision_enabled:
+		return
+	for s in slabs:
+		if s.col_dirty and s.collision_body == null:
+			_build_slab_collision(s)
+			if s.collision_body != null or s.mesh_instance == null or s.mesh_instance.mesh == null:
+				s.col_dirty = false
+
+
+func _enter_candidate_slabs() -> void:
+	if slabs.is_empty():
+		init_slabs()
+	for s in slabs:
+		if s.mesh_instance != null:
+			s.mesh_instance.mesh = null
+		if s.fluid_instance != null:
+			s.fluid_instance.mesh = null
+		if s.flora_instance != null:
+			s.flora_instance.mesh = null
+		if s.collision_body != null:
+			s.collision_body.queue_free()
+			s.collision_body = null
+		s.built = false
+		s.col_dirty = true
+
+
+func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax: Acc, ms) -> void:
+	var sidx := PackedInt32Array([-1, -1, -1, -1])
+	var mesh := ArrayMesh.new()
+	if ao.q > 0:
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ao))
+		mesh.surface_set_material(0, _get_mat("opaque", ms.tex))
+		sidx[0] = 0
+	if mesh.get_surface_count() > 0:
+		var mi := MeshInstance3D.new()
+		mi.mesh = mesh
+		add_child(mi)
+		s.mesh_instance = mi
+	if ac.q > 0 or af_w.q > 0 or af_l.q > 0:
+		if ac.q > 0:
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ac))
+			mesh.surface_set_material(mesh.get_surface_count() - 1, _get_mat("fluid"))
+			sidx[1] = mesh.get_surface_count() - 1
+		if af_w.q > 0:
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(af_w))
+			mesh.surface_set_material(mesh.get_surface_count() - 1, _fluid_anim_material(5))
+			sidx[2] = mesh.get_surface_count() - 1
+		if af_l.q > 0:
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(af_l))
+			mesh.surface_set_material(mesh.get_surface_count() - 1, _fluid_anim_material(24))
+			sidx[3] = mesh.get_surface_count() - 1
+		var fi := MeshInstance3D.new()
+		fi.mesh = mesh
+		add_child(fi)
+		s.fluid_instance = fi
+	if ak.q > 0 or ax.q > 0:
+		var fsidx := PackedInt32Array([-1, -1])
+		var fm := ArrayMesh.new()
+		if ak.q > 0:
+			fm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ak))
+			fm.surface_set_material(0, _get_mat("cutout"))
+			fsidx[0] = 0
+		if ax.q > 0:
+			fm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ax))
+			fm.surface_set_material(fm.get_surface_count() - 1, _get_mat("flower"))
+			fsidx[1] = fm.get_surface_count() - 1
+		var fi2 := MeshInstance3D.new()
+		fi2.mesh = fm
+		add_child(fi2)
+		s.flora_instance = fi2
+		s.fsidx = fsidx
+	s.sidx = sidx
+	s.built = true
+
+
+func _post_build_collision() -> void:
+	last_collision_build_ms = 0
+	if not collision_enabled:
+		return
+	for s in slabs:
+		if not s.col_dirty:
+			continue
+		if col_immediate:
+			if s.collision_body != null:
+				s.collision_body.queue_free()
+				s.collision_body = null
+			_build_slab_collision(s)
+			s.col_dirty = false
+		elif s.collision_body != null:
+			s.collision_body.queue_free()
+			s.collision_body = null
+		elif s.mesh_instance == null or s.mesh_instance.mesh == null:
+			s.col_dirty = false
 
 
 func _build_snap(snap: PackedByteArray, snap_fl: PackedByteArray, get_world_block: Callable) -> void:
@@ -1297,7 +1519,7 @@ func _build_snap(snap: PackedByteArray, snap_fl: PackedByteArray, get_world_bloc
 						snap_fl[sxy] = fv
 
 
-func _opaque_material(at: Texture2D = null) -> StandardMaterial3D:
+static func _opaque_material(at: Texture2D = null) -> StandardMaterial3D:  # AC-0120: static (pure — only StandardMaterial3D + Data)
 	var m := StandardMaterial3D.new()
 	m.vertex_color_use_as_albedo = true
 	if at != null:
@@ -1312,20 +1534,20 @@ func _opaque_material(at: Texture2D = null) -> StandardMaterial3D:
 	return m
 
 
-func _cutout_material() -> StandardMaterial3D:
+static func _cutout_material() -> StandardMaterial3D:  # AC-0120: static (pure)
 	var m := _opaque_material()
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 	m.alpha_scissor_threshold = 0.5
 	return m
 
 
-func _flower_material() -> StandardMaterial3D:
+static func _flower_material() -> StandardMaterial3D:  # AC-0120: static (pure)
 	var m := _cutout_material()
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return m
 
 
-func _fluid_material() -> StandardMaterial3D:
+static func _fluid_material() -> StandardMaterial3D:  # AC-0120: static (pure)
 	var m := StandardMaterial3D.new()
 	m.vertex_color_use_as_albedo = true
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -1361,15 +1583,16 @@ func _surface(arr: Acc) -> Array:
 
 
 func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
-	if mesh_instance:
-		mesh_instance.queue_free()
-		mesh_instance = null
-	if fluid_instance:
-		fluid_instance.queue_free()
-		fluid_instance = null
-	if flora_instance:
-		flora_instance.queue_free()
-		flora_instance = null
+	for s in slabs:
+		if s.mesh_instance != null:
+			s.mesh_instance.queue_free()
+			s.mesh_instance = null
+		if s.fluid_instance != null:
+			s.fluid_instance.queue_free()
+			s.fluid_instance = null
+		if s.flora_instance != null:
+			s.flora_instance.queue_free()
+			s.flora_instance = null
 	var wx0 := cx * SIZE
 	var wz0 := cz * SIZE
 	var light: Dictionary = eff
@@ -1436,8 +1659,8 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	var rq: Array = []
 	var rf_w: Array = []
 	var rf_l: Array = []
-	var nfw := 0
-	var nfl := 0
+	var c_af_w := [0, 0, 0, 0, 0]
+	var c_af_l := [0, 0, 0, 0, 0]
 	var d: PackedByteArray = data
 	for y in range(Data.HEIGHT):
 		var dy := y << 8
@@ -1452,10 +1675,10 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 					if hgt > 0.0:
 						var fcnt := _fluid_quad_count(lx, y, lz, id, hgt, snap, snap_fl)
 						if id == 5:
-							nfw += fcnt
+							c_af_w[y / 16] += fcnt
 							rf_w.append([lx, y, lz, id, hgt])
 						else:
-							nfl += fcnt
+							c_af_l[y / 16] += fcnt
 							rf_l.append([lx, y, lz, id, hgt])
 					continue
 				if oktab[id] == 0:
@@ -1469,76 +1692,50 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 					_faces(rk, xtab, stab, fn, lx, y, lz, id, snap)
 				else:
 					_faces(ro, xtab, stab, fn, lx, y, lz, id, snap)
-	var ao := Acc.new()
-	_qgrow(ao, maxi(ro.size(), 1))
+	var s_ao: Array = []
+	var s_ac: Array = []
+	var s_af_w: Array = []
+	var s_af_l: Array = []
+	var s_ak: Array = []
+	var s_ax: Array = []
+	var c_ac := [0, 0, 0, 0, 0]
+	var c_ak := [0, 0, 0, 0, 0]
+	var c_ax := [0, 0, 0, 0, 0]
+	for r in rc_o:
+		c_ac[r[1] / 16] += 1
+	for r in rk:
+		c_ak[r[1] / 16] += 1
+	for r in rq:
+		c_ax[r[1] / 16] += 2
+	for si in range(5):
+		s_ao.append(Acc.new())
+		s_ac.append(Acc.new())
+		s_af_w.append(Acc.new())
+		s_af_l.append(Acc.new())
+		s_ak.append(Acc.new())
+		s_ax.append(Acc.new())
+		_qgrow(s_ao[si], maxi(ro.size(), 1))
+		_qgrow(s_ac[si], c_ac[si])
+		_qgrow(s_af_w[si], c_af_w[si])
+		_qgrow(s_af_l[si], c_af_l[si])
+		_qgrow(s_ak[si], c_ak[si])
+		_qgrow(s_ax[si], c_ax[si])
 	var ms := _merge_atlas()
 	if OS.get_environment("AWECRAFT_MERGE") == "0":
 		ms = {"tex": null, "rects": {}}
 	if ms.tex != null and ro.size() > 0:
-		_emit_ro_merged(ro, ao, lmn, larr, lw, ld, has_tex, fn, fsh, fcv, ct, cs, cb, ms)
+		_emit_ro_merged(ro, s_ao, lmn, larr, lw, ld, has_tex, fn, fsh, fcv, ct, cs, cb, ms)
 	else:
-		_emit_faces(ro, ao, lmn, larr, lw, ld, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
-	var ac := Acc.new()
-	_qgrow(ac, rc_o.size())
-	_emit_faces(rc_o, ac, lmn, larr, lw, ld, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
-	var af_w := Acc.new()
-	_qgrow(af_w, nfw)
-	_emit_fluid(rf_w, af_w, snap, snap_fl, has_tex, fn, fcv, ct, cs, cb)
-	var af_l := Acc.new()
-	_qgrow(af_l, nfl)
-	_emit_fluid(rf_l, af_l, snap, snap_fl, has_tex, fn, fcv, ct, cs, cb)
-	var ak := Acc.new()
-	_qgrow(ak, rk.size())
-	_emit_faces(rk, ak, lmn, larr, lw, ld, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
-	var ax := Acc.new()
-	_qgrow(ax, rq.size() * 2)
-	_emit_xquad(rq, ax, lmn, larr, lw, ld, has_tex, ct)
-	var mesh := ArrayMesh.new()
-	if ao.q > 0:
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ao))
-		mesh.surface_set_material(0, _opaque_material(ms.tex))
-	if mesh.get_surface_count() > 0:
-		var mi := MeshInstance3D.new()
-		mi.mesh = mesh
-		add_child(mi)
-		mesh_instance = mi
-	if ac.q > 0 or af_w.q > 0 or af_l.q > 0:
-		if ac.q > 0:
-			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ac))
-			mesh.surface_set_material(mesh.get_surface_count() - 1, _fluid_material())
-		if af_w.q > 0:
-			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(af_w))
-			mesh.surface_set_material(mesh.get_surface_count() - 1, _fluid_anim_material(5))
-		if af_l.q > 0:
-			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(af_l))
-			mesh.surface_set_material(mesh.get_surface_count() - 1, _fluid_anim_material(24))
-		var fi := MeshInstance3D.new()
-		fi.mesh = mesh
-		add_child(fi)
-		fluid_instance = fi
-	if ak.q > 0 or ax.q > 0:
-		var fm := ArrayMesh.new()
-		if ak.q > 0:
-			fm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ak))
-			fm.surface_set_material(0, _cutout_material())
-		if ax.q > 0:
-			fm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ax))
-			fm.surface_set_material(fm.get_surface_count() - 1, _flower_material())
-		var fi2 := MeshInstance3D.new()
-		fi2.mesh = fm
-		add_child(fi2)
-		flora_instance = fi2
+		_emit_faces(ro, s_ao, lmn, larr, lw, ld, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
+	_emit_faces(rc_o, s_ac, lmn, larr, lw, ld, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
+	_emit_fluid(rf_w, s_af_w, snap, snap_fl, has_tex, fn, fcv, ct, cs, cb)
+	_emit_fluid(rf_l, s_af_l, snap, snap_fl, has_tex, fn, fcv, ct, cs, cb)
+	_emit_faces(rk, s_ak, lmn, larr, lw, ld, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
+	_emit_xquad(rq, s_ax, lmn, larr, lw, ld, has_tex, ct)
+	for si in range(5):
+		_assemble_slab(slabs[si], s_ao[si], s_ac[si], s_af_w[si], s_af_l[si], s_ak[si], s_ax[si], ms)
 	mesh_built = true
-	if collision_enabled and col_dirty:
-		if col_immediate:
-			if collision_body:
-				collision_body.queue_free()
-				collision_body = null
-			_build_collision()
-			col_dirty = false
-		elif collision_body:
-			collision_body.queue_free()
-			collision_body = null
+	_post_build_collision()
 
 
 # AC-0107: main-thread assembly for the worker-built surface buffers — the
@@ -1547,68 +1744,22 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 # build_accs (worker) instead of the inline pipeline, ms is the current
 # merge-atlas dict (tex consumed here only — workers never see the Texture2D).
 func apply_accs(res: Dictionary, ms: Dictionary) -> void:
-	if mesh_instance:
-		mesh_instance.queue_free()
-		mesh_instance = null
-	if fluid_instance:
-		fluid_instance.queue_free()
-		fluid_instance = null
-	if flora_instance:
-		flora_instance.queue_free()
-		flora_instance = null
+	for s in slabs:
+		if s.mesh_instance != null:
+			s.mesh_instance.queue_free()
+			s.mesh_instance = null
+		if s.fluid_instance != null:
+			s.fluid_instance.queue_free()
+			s.fluid_instance = null
+		if s.flora_instance != null:
+			s.flora_instance.queue_free()
+			s.flora_instance = null
 	last_eff = res.light
-	var ao := _acc_from_dict(res.ao)
-	var ac := _acc_from_dict(res.ac)
-	var af_w := _acc_from_dict(res.af_w)
-	var af_l := _acc_from_dict(res.af_l)
-	var ak := _acc_from_dict(res.ak)
-	var ax := _acc_from_dict(res.ax)
-	var mesh := ArrayMesh.new()
-	if ao.q > 0:
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ao))
-		mesh.surface_set_material(0, _opaque_material(ms.tex))
-	if mesh.get_surface_count() > 0:
-		var mi := MeshInstance3D.new()
-		mi.mesh = mesh
-		add_child(mi)
-		mesh_instance = mi
-	if ac.q > 0 or af_w.q > 0 or af_l.q > 0:
-		if ac.q > 0:
-			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ac))
-			mesh.surface_set_material(mesh.get_surface_count() - 1, _fluid_material())
-		if af_w.q > 0:
-			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(af_w))
-			mesh.surface_set_material(mesh.get_surface_count() - 1, _fluid_anim_material(5))
-		if af_l.q > 0:
-			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(af_l))
-			mesh.surface_set_material(mesh.get_surface_count() - 1, _fluid_anim_material(24))
-		var fi := MeshInstance3D.new()
-		fi.mesh = mesh
-		add_child(fi)
-		fluid_instance = fi
-	if ak.q > 0 or ax.q > 0:
-		var fm := ArrayMesh.new()
-		if ak.q > 0:
-			fm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ak))
-			fm.surface_set_material(0, _cutout_material())
-		if ax.q > 0:
-			fm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ax))
-			fm.surface_set_material(fm.get_surface_count() - 1, _flower_material())
-		var fi2 := MeshInstance3D.new()
-		fi2.mesh = fm
-		add_child(fi2)
-		flora_instance = fi2
+	for si in range(5):
+		var row: Array = res.slabs[si]
+		_assemble_slab(slabs[si], _acc_from_dict(row[0]), _acc_from_dict(row[1]), _acc_from_dict(row[2]), _acc_from_dict(row[3]), _acc_from_dict(row[4]), _acc_from_dict(row[5]), ms)
 	mesh_built = true
-	if collision_enabled and col_dirty:
-		if col_immediate:
-			if collision_body:
-				collision_body.queue_free()
-				collision_body = null
-			_build_collision()
-			col_dirty = false
-		elif collision_body:
-			collision_body.queue_free()
-			collision_body = null
+	_post_build_collision()
 
 
 func _acc_from_dict(d: Dictionary) -> Acc:
@@ -1622,12 +1773,11 @@ func _acc_from_dict(d: Dictionary) -> Acc:
 	return a
 
 
-func _build_collision() -> void:
-	last_collision_build_ms = 0
+func _build_slab_collision(s: Slab) -> void:
 	var tb := Time.get_ticks_msec()
-	if mesh_instance == null or mesh_instance.mesh == null:
+	if s.mesh_instance == null or s.mesh_instance.mesh == null:
 		return
-	var mesh: ArrayMesh = mesh_instance.mesh
+	var mesh: ArrayMesh = s.mesh_instance.mesh
 	if mesh.get_surface_count() < 1:
 		return
 	var arrs := mesh.surface_get_arrays(0)
@@ -1644,5 +1794,11 @@ func _build_collision() -> void:
 	col.shape = shape
 	body.add_child(col)
 	add_child(body)
-	collision_body = body
-	last_collision_build_ms = Time.get_ticks_msec() - tb
+	s.collision_body = body
+	last_collision_build_ms += Time.get_ticks_msec() - tb
+	var si := 0
+	while si < slabs.size() and slabs[si] != s:
+		si += 1
+	if si < slabs.size():
+		perf_slab_body_builds[si] += 1
+		perf_slab_body_ms[si] += float(Time.get_ticks_msec() - tb)

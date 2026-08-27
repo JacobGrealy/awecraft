@@ -35,3 +35,13 @@
 - MINFO fverts subtlety found+fixed: old fi.mesh == mi.mesh (one shared ArrayMesh) so old fverts enumerated ALL 4 slots incl. opaque; first implementation read fluid slots only from slabs with a fluid instance (dropped ao verts of fluid-free slabs, fverts slot0 110112→57540) — fixed by reading per-slab MAIN mesh (fallback fi.mesh for fluid-only slabs) gated on chunk-has-any-fluid; rerun → 0-byte diff.
 - PENDING (coordinator heavy gates, NOT run here per scope): G4 R=50 memory (mem_delta anchor 140.6), G5 boundary r4/r50 + RECSLICE + flake, G6 windows build.
 - Deliverables: tasks/AC-0108/AC-0108-results.html + this entry + .scratch/AC-0108/ (post_perf_r4.log, post_minfo_r4.txt, post_minfo_r4_diff.txt EMPTY, post_battery.log, post_genhash.txt, post_r1_render.log). Report sent.
+
+## RUN 2.5 (coordinator heavy gates, 2026-08-27 03:08-03:16, background job bash-55)
+- Job: g0 + g2 perf/MINFO/MATINFO (per-chunk diff vs .scratch/AC-0108/pre_minfo_r4.txt) + battery5 + genhash + g4 r50 mem (RECPROBE) + g5 boundary r4 x2 + player x4 + windows build. Log .scratch/AC-0108-gates/gates.log + HEAVY_GATES_DONE.
+- G0: the bare `--quit` step rc=134 SIGSEGV — ENVIRONMENTAL: run lacked the HOME=/tmp/dsh_home prefix, so user:// log open failed (DSH sandbox denies writes outside the workspace) and Godot's crash reporter segfaulted on the failed stream. Re-run with prefix: rc=0, 0 SCRIPT ERROR. (Gate-script law: every godot call gets `env HOME=/tmp/dsh_home` — the AC-0078 v1 lesson generalized.)
+- G2 byte-identity: per-chunk MINFO diff vs PRE = **EMPTY (121/121 byte-identical)**; sums opaque 125552; MATINFO built=81 distinct_std=3 total_allocs=3; perf run all_meshed, read_sync_gen 0.
+- G1 battery5 EXACT: player 2.82/36.43/floor; interact 2/true/true; light 14/15/0/9; fluids 2730/2730+1406/1406 stable; buckets [5,8]/[5,8]. genhash 25 lines (25/25).
+- G4 r50: mem_delta **146.9 MB > 140.6 fence (+6.3)** — the pre-declared honest deviation (per-slab object overhead; geometry/data/fl bytes unchanged). RECSLICE r50 286.0/10.0 + 89.0/8.0 (max <= 12.2). unbodied 1 (<= 1 ok). p95 r50 walk 63, collision_max 3.
+- G5 boundary r4 x2: 62/3003/10/81/0 + 62/2994/10/81/0; collision 312/232=1.34 + 296/224=1.32 ms/n (223 shapes); queue 95; ok both. player flake x4 all on-floor. perf r4 5744/194/55/build 2374/32.1MB/collision_shapes 223 (fence: total <= 6700, first_draw <= 250, p95 <= 65 — PASS).
+- G6: build RC=0, exe 109,572,976B @03:15 (fresh +5.6KB), 8080 AweCraft.exe 200 + 5180 webui 200.
+- **VERDICT: PASS as-delivered** with the single pre-declared G4 deviation; follow-up AC-0127 (slab-distance-culling-r50-mem, priority 2) registered as the drop lever. Joint commit with AC-0120 code (entangled .gd files; AC-0120 gates passed 22:50).

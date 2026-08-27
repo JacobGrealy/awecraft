@@ -943,9 +943,9 @@ func _col_immediate_for(cx: int, cz: int) -> bool:
 func _stage_check(c: Node3D, key: String) -> void:
 	if c == null or not col_stage_enabled:
 		return
-	if not c.collision_enabled or not c.col_dirty:
+	if not c.collision_enabled or not c.any_col_dirty():
 		return
-	if c.collision_body != null:
+	if c.has_all_slab_bodies():
 		return
 	var ccx := int(c.cx)
 	var ccz := int(c.cz)
@@ -974,15 +974,14 @@ func _col_drain_step() -> void:
 	while done < 2 and i < _col_pending.size():
 		var key: String = _col_pending[i]
 		var c = chunks.get(key)
-		var ok: bool = c != null and c.mesh_built and c.collision_body == null and c.collision_enabled and c.col_dirty and maxi(absi(int(c.cx) - last_pcx), absi(int(c.cz) - last_pcz)) <= render_radius
+		var ok: bool = c != null and c.mesh_built and c.collision_enabled and c.any_col_dirty() and maxi(absi(int(c.cx) - last_pcx), absi(int(c.cz) - last_pcz)) <= render_radius
 		_col_pending.remove_at(i)
 		_col_pending_set.erase(key)
 		if not ok:
 			perf_staged_dropped += 1
 			continue
-		c._build_collision()
-		if c.collision_body != null:
-			c.col_dirty = false
+		c.build_dirty_slab_bodies()
+		if not c.any_col_dirty():
 			_count_collision_build(c)
 			perf_staged_drained += 1
 		else:
@@ -1011,6 +1010,7 @@ func _make_chunk_node(cx: int, cz: int) -> Node3D:
 	c.cz = cz
 	c.position = Vector3(cx * 16, 0, cz * 16)
 	c.collision_enabled = collision_enabled
+	c.init_slabs()
 	add_child(c)
 	chunks[_key(cx, cz)] = c
 	return c
@@ -1043,17 +1043,8 @@ func _enter_candidate(key: String, c: Node3D) -> bool:
 	c.cand_since = 0
 	var had_mesh: bool = c.mesh_built
 	c.mesh_built = false
-	c.col_dirty = true
+	c._enter_candidate_slabs()
 	if had_mesh:
-		if c.mesh_instance != null:
-			c.mesh_instance.mesh = null
-		if c.fluid_instance != null:
-			c.fluid_instance.mesh = null
-		if c.flora_instance != null:
-			c.flora_instance.mesh = null
-		if c.collision_body != null:
-			c.collision_body.queue_free()
-			c.collision_body = null
 		# Pending mesh-bound work on an invisible chunk is waste; re-entry
 		# marks it dirty again via the rebuild path. The staged-body entry is
 		# stale too (body freed above); the eff cache stays — data is kept,
@@ -1375,7 +1366,7 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 		fluid_wet[_key(cx, cz)] = true
 	else:
 		c.fl[fi] = 0
-	c.col_dirty = true
+	c.mark_edit_slabs(y)
 	_eff_cache_evict(_key(cx, cz))
 	_mark_light_around(cx, cz)
 	if _fluid_near(x, y, z):
@@ -1415,7 +1406,7 @@ func _apply_edits_to_chunk(c: Node3D) -> void:
 		fl[int(fkey)] = int(e.get("f", 0))
 		if int(e.get("f", 0)) > 0:
 			fluid_wet[_key(c.cx, c.cz)] = true
-	c.col_dirty = true
+	c.mark_all_slabs_dirty()
 	_eff_cache_evict(key)
 	_mark_light_around(c.cx, c.cz)
 	_mark_fluid_around(c.cx, c.cz)
@@ -1504,23 +1495,54 @@ func mesh_info() -> Array:
 	for key in chunks:
 		var c: Node3D = chunks[key]
 		var e := {"pos": [int(c.position.x), int(c.position.z)], "built": c.mesh_built}
-		var mi = c.mesh_instance
-		if mi and mi.mesh:
-			var m: ArrayMesh = mi.mesh
-			e["aabb"] = [m.get_aabb().position, m.get_aabb().size]
+		var slot_tot := [0, 0, 0, 0]
+		var fslot_tot := [0, 0, 0, 0]
+		var aabb = null
+		var faabb = null
+		var has_fluid := false
+		for s in c.slabs:
+			if s.fluid_instance != null and s.fluid_instance.mesh != null:
+				has_fluid = true
+		for s in c.slabs:
+			var mi = s.mesh_instance
+			if mi and mi.mesh:
+				var m: ArrayMesh = mi.mesh
+				var ab = m.get_aabb()
+				aabb = ab if aabb == null else aabb.merge(ab)
+				var sidx: PackedInt32Array = s.sidx
+				for si in range(sidx.size()):
+					if sidx[si] >= 0:
+						var arrs = m.surface_get_arrays(sidx[si])
+						slot_tot[si] += (arrs[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+				if has_fluid:
+					var fab = m.get_aabb()
+					faabb = fab if faabb == null else faabb.merge(fab)
+					for si in range(sidx.size()):
+						if sidx[si] >= 0:
+							var farrs = m.surface_get_arrays(sidx[si])
+							fslot_tot[si] += (farrs[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+			elif has_fluid and s.fluid_instance != null and s.fluid_instance.mesh != null:
+				var fm: ArrayMesh = s.fluid_instance.mesh
+				var fab = fm.get_aabb()
+				faabb = fab if faabb == null else faabb.merge(fab)
+				var fsi: PackedInt32Array = s.sidx
+				for si in range(fsi.size()):
+					if fsi[si] >= 0:
+						var farrs = fm.surface_get_arrays(fsi[si])
+						fslot_tot[si] += (farrs[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+		if aabb != null:
+			e["aabb"] = [aabb.position, aabb.size]
 			var vc := []
-			for s in range(m.get_surface_count()):
-				var arrs = m.surface_get_arrays(s)
-				vc.append((arrs[Mesh.ARRAY_VERTEX] as PackedVector3Array).size())
+			for t in slot_tot:
+				if t > 0:
+					vc.append(t)
 			e["verts"] = vc
-		var fi = c.fluid_instance
-		if fi and fi.mesh:
-			var fm: ArrayMesh = fi.mesh
-			e["faabb"] = [fm.get_aabb().position, fm.get_aabb().size]
+		if faabb != null:
+			e["faabb"] = [faabb.position, faabb.size]
 			var fvc := []
-			for s in range(fm.get_surface_count()):
-				var farrs = fm.surface_get_arrays(s)
-				fvc.append((farrs[Mesh.ARRAY_VERTEX] as PackedVector3Array).size())
+			for t in fslot_tot:
+				if t > 0:
+					fvc.append(t)
 			e["fverts"] = fvc
 		out.append(e)
 	return out

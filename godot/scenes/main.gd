@@ -289,6 +289,36 @@ func _harness_env_set() -> bool:
 	return false
 
 
+const _ChunkScriptM = preload("res://world/chunk.gd")  # AC-0120 G3 probe (harness-only)
+
+# AC-0120 G3: material-allocation probe — distinct materials attached to built
+# chunk meshes (mesh + fluid + flora instances; mesh_info() misses flora)
+# plus the chunk.gd build-path alloc counter. Env-gated by AWECRAFT_MESH_INFO.
+func _matinfo_counts() -> Dictionary:
+	var mat_ids := {}
+	var std_ids := {}
+	var built_n := 0
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if not c.mesh_built:
+			continue
+		built_n += 1
+		for s in c.slabs:
+			for inst in [s.mesh_instance, s.fluid_instance, s.flora_instance]:
+				if inst == null or inst.mesh == null:
+					continue
+				var am: ArrayMesh = inst.mesh
+				for ss in range(am.get_surface_count()):
+					var mat = am.surface_get_material(ss)
+					if mat == null:
+						continue
+					mat_ids[mat.get_instance_id()] = true
+					if mat is StandardMaterial3D:
+						std_ids[mat.get_instance_id()] = true
+	return {"built_chunks": built_n, "distinct_std": std_ids.size(),
+			"distinct_all": mat_ids.size(), "total_allocs": int(_ChunkScriptM._mat_alloc_count)}
+
+
 func _boot_menu() -> void:
 	await get_tree().process_frame
 	_setup_menu_camera()
@@ -907,6 +937,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "editperf":
 			await _editperf_test(spawn)
 			return
+		if logic == "editslab":
+			await _editslab_test(spawn)
+			return
 		if logic == "perf":
 			var t0 := Time.get_ticks_msec()
 			var pmem_before: int = OS.get_static_memory_usage()
@@ -984,10 +1017,11 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		for key in world.chunks:
 			var cc = world.chunks[key]
 			if not only_set.has(key):
-				if cc.mesh_instance != null:
-					cc.mesh_instance.visible = false
-				if cc.fluid_instance != null:
-					cc.fluid_instance.visible = false
+				for s in cc.slabs:
+					if s.mesh_instance != null:
+						s.mesh_instance.visible = false
+					if s.fluid_instance != null:
+						s.fluid_instance.visible = false
 	if OS.get_environment("AWECRAFT_DBG") != "":
 		for dx in range(-2, 3):
 			for dz in range(-2, 3):
@@ -996,15 +1030,17 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 				if c == null:
 					print("DBGCHUNK ", k, " MISSING")
 					continue
-				var has_mi = c.mesh_instance != null
-				var sc := -1
-				if c.mesh_instance and c.mesh_instance.mesh:
-					sc = c.mesh_instance.mesh.get_surface_count()
-				var ab = ""
-				if c.mesh_instance and c.mesh_instance.mesh:
-					var aabb = c.mesh_instance.mesh.get_aabb()
-					ab = "%s/%s" % [aabb.position, aabb.size]
-				print("DBGCHUNK ", k, " built=", c.mesh_built, " mi=", has_mi, " surf=", sc, " pos=", [int(c.position.x), int(c.position.z)], " aabb=", ab)
+				for si in c.slabs.size():
+					var s = c.slabs[si]
+					var has_mi = s.mesh_instance != null
+					var sc := -1
+					if s.mesh_instance and s.mesh_instance.mesh:
+						sc = s.mesh_instance.mesh.get_surface_count()
+					var ab = ""
+					if s.mesh_instance and s.mesh_instance.mesh:
+						var aabb = s.mesh_instance.mesh.get_aabb()
+						ab = "%s/%s" % [aabb.position, aabb.size]
+					print("DBGCHUNK ", k, " slab=", si, " built=", c.mesh_built, " mi=", has_mi, " surf=", sc, " pos=", [int(c.position.x), int(c.position.z)], " aabb=", ab)
 
 	if cam == "top":
 		camera = _make_camera()
@@ -2762,6 +2798,88 @@ func _editperf_test(spawn: Vector3) -> void:
 	get_tree().quit()
 
 
+func _editslab_test(spawn: Vector3) -> void:
+	world.recenter(spawn.x, spawn.z, true)
+	var pcx := int(floorf(spawn.x / 16.0))
+	var pcz := int(floorf(spawn.z / 16.0))
+	var awaited := 0
+	while awaited < 1200:
+		var allm := true
+		for key in world.chunks:
+			var cc: Node3D = world.chunks[key]
+			if absi(cc.cx - pcx) <= world.render_radius and absi(cc.cz - pcz) <= world.render_radius and not cc.mesh_built:
+				allm = false
+				break
+		if allm:
+			break
+		await get_tree().physics_frame
+		awaited += 1
+	var ec = world.chunks.get("%d,%d" % [pcx, pcz])
+	for i in 5:
+		ec.perf_slab_body_builds[i] = 0
+		ec.perf_slab_body_ms[i] = 0.0
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	var edits: Array = []
+	var t0 := Time.get_ticks_msec()
+	for y in range(14, 19):
+		world.set_block(sx + 2, y, sz + 2, 3)
+	world.set_block(sx + 2, 15, sz + 2, 0)
+	edits.append(await _editslab_flush(ec, 15, t0, [sx + 2, 15, sz + 2]))
+	t0 = Time.get_ticks_msec()
+	world.set_block(sx + 3, 24, sz + 3, 3)
+	world.set_block(sx + 3, 24, sz + 3, 0)
+	edits.append(await _editslab_flush(ec, 24, t0, [sx + 3, 24, sz + 3]))
+	t0 = Time.get_ticks_msec()
+	for y in range(30, 35):
+		world.set_block(sx + 4, y, sz + 4, 3)
+	world.set_block(sx + 4, 32, sz + 4, 0)
+	edits.append(await _editslab_flush(ec, 32, t0, [sx + 4, 32, sz + 4]))
+	var expected: Array = [[0, 1], [1], [1, 2]]
+	var ok := true
+	for i in range(3):
+		if edits[i]["slabs_touched"] != expected[i] or int(edits[i]["total_ms"]) > 241 or int(edits[i]["cell_after"]) != 0:
+			ok = false
+	var finfo := ""
+	for e in world.mesh_info():
+		if e.pos == [int(ec.position.x), int(ec.position.z)]:
+			finfo = JSON.stringify(e)
+			break
+	Debug.result({
+		"mode": "editslab",
+		"ok": bool(ok),
+		"pre_total_ms": 241,
+		"edits": edits,
+		"mesh_built": bool(ec.mesh_built),
+		"final_minfo": finfo,
+	})
+	get_tree().quit()
+
+
+func _editslab_flush(c: Node3D, y: int, t0: int, cell: Array) -> Dictionary:
+	var w2 := 0
+	while w2 < 300 and not (world.light_dirty.is_empty() and world.light_pending.is_empty()):
+		await get_tree().physics_frame
+		w2 += 1
+	await get_tree().physics_frame
+	var touched: Array = []
+	var col_ms := 0.0
+	for i in 5:
+		if int(c.perf_slab_body_builds[i]) > 0:
+			touched.append(i)
+		col_ms += float(c.perf_slab_body_ms[i])
+		c.perf_slab_body_builds[i] = 0
+		c.perf_slab_body_ms[i] = 0.0
+	return {
+		"y": y,
+		"slabs_touched": touched,
+		"col_ms": roundf(col_ms * 10.0) / 10.0,
+		"total_ms": int(Time.get_ticks_msec() - t0),
+		"cell_after": int(world.get_block(int(cell[0]), int(cell[1]), int(cell[2]))),
+		"mesh_built": bool(c.mesh_built),
+	}
+
+
 func _find_aim_spot() -> Dictionary:
 	var sp: Vector3 = world.spawn_point()
 	var sx := int(sp.x)
@@ -3722,7 +3840,7 @@ func _water_test(spawn: Vector3) -> void:
 		var allc := true
 		for k in fix_chunks:
 			var c: Node3D = world.chunks.get(k)
-			if c == null or c.col_dirty:
+			if c == null or c.any_col_dirty():
 				allc = false
 				break
 		if allc:
@@ -4011,7 +4129,7 @@ func _continue_probe() -> void:
 	var ttwait := 0
 	while ttwait < 600:
 		var tc = world.chunks.get("%d,%d" % [ttx, ttz])
-		if tc != null and not tc.data.is_empty() and tc.mesh_built and tc.collision_body != null:
+		if tc != null and not tc.data.is_empty() and tc.mesh_built and tc.has_any_slab_body():
 			break
 		await get_tree().physics_frame
 		ttwait += 1
@@ -4083,7 +4201,7 @@ func _continue_probe() -> void:
 	player = _spawn_player()
 	var sc = world.chunks.get("%d,%d" % [tpcx, tpcz])
 	var saved_chunk_built_at_spawn: bool = sc != null and not sc.data.is_empty() and sc.mesh_built
-	var col_body_at_spawn: bool = sc != null and sc.collision_body != null
+	var col_body_at_spawn: bool = sc != null and sc.has_any_slab_body()
 	_restore_player(ps)
 	if Game.world != null:
 		world.recenter(player.position.x, player.position.z)
@@ -4098,7 +4216,7 @@ func _continue_probe() -> void:
 		ytrace.append(roundf(Game.player.position.y * 10.0) / 10.0)
 		if i == 24:
 			var sc30 = world.chunks.get("%d,%d" % [tpcx, tpcz])
-			body30 = sc30 != null and sc30.collision_body != null
+			body30 = sc30 != null and sc30.has_any_slab_body()
 	var fell: bool = (Game.player.position.y < y0 - 2.0)
 	var pl2 = Game.player
 	var edits_ok: bool = world.get_block(sx, top, sz) == 3 and world.get_block(sx + 1, top, sz) == 4 \
@@ -4836,6 +4954,8 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> v
 	if OS.get_environment("AWECRAFT_MESH_INFO") != "":
 		for e in world.mesh_info():
 			print("MINFO ", JSON.stringify(e))
+		var mi = _matinfo_counts()
+		print("MATINFO built_chunks=%d distinct_std=%d distinct_all=%d total_allocs=%d" % [mi.built_chunks, mi.distinct_std, mi.distinct_all, mi.total_allocs])
 	var built := 0
 	for key in world.chunks:
 		var c: Node3D = world.chunks[key]
@@ -5215,7 +5335,7 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		await get_tree().physics_frame
 		p.velocity = Vector3.ZERO
 		var mc = world.chunks.get(mkey)
-		if mc != null and mc.mesh_built and mc.collision_body != null and world.get_block(mx, my, mz) == new_id:
+		if mc != null and mc.mesh_built and mc.has_any_slab_body() and world.get_block(mx, my, mz) == new_id:
 			remesh_ok = true
 			break
 	# AC-0119: marker read moved AFTER the re-entry remesh — pre-change this
@@ -5226,7 +5346,7 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 	var unbodied_final := 0
 	for key in world.chunks:
 		var c: Node3D = world.chunks[key]
-		if c.mesh_built and c.collision_body == null and absi(int(c.cx) - cx_end) <= r and absi(int(c.cz) - cz_end) <= r:
+		if c.mesh_built and not c.has_any_slab_body() and absi(int(c.cx) - cx_end) <= r and absi(int(c.cz) - cz_end) <= r:
 			unbodied_final += 1
 	# AC-0079 v3 pick-order probe: per crossing, the count of forward (dx > 0,
 	# relative to the crossing player chunk) chunks among the FIRST 10
@@ -5258,6 +5378,9 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 			fwd_first10.append(fwd)
 		else:
 			fwd_first10_list.append(-1)
+	if OS.get_environment("AWECRAFT_MESH_INFO") != "":
+		var mi = _matinfo_counts()
+		print("MATINFO built_chunks=%d distinct_std=%d distinct_all=%d total_allocs=%d" % [mi.built_chunks, mi.distinct_std, mi.distinct_all, mi.total_allocs])
 	var ok := crossings == walk_lines and marker_ok
 	Debug.result({
 		"ok": ok,
@@ -5364,14 +5487,14 @@ func _atlas_test(spawn: Vector3) -> void:
 	var pcz := int(floorf(spawn.z / 16.0))
 	var c = world.chunks.get("%d,%d" % [pcx, pcz])
 	for i in 900:
-		if c != null and c.mesh_built and c.mesh_instance != null and c.mesh_instance.mesh != null:
+		if c != null and c.mesh_built and c.first_opaque_mesh() != null:
 			break
 		await get_tree().physics_frame
-	if c == null or c.mesh_built != true or c.mesh_instance == null or c.mesh_instance.mesh == null:
+	var mesh: ArrayMesh = c.first_opaque_mesh() if c != null else null
+	if mesh == null:
 		Debug.result({"error": "spawn chunk not meshed"})
 		get_tree().quit()
 		return
-	var mesh: ArrayMesh = c.mesh_instance.mesh
 	var has_uv := false
 	var uv_min := 1.0
 	var uv_max := 0.0
@@ -5532,41 +5655,37 @@ func _tint_wait_built(tcx: int, tcz: int, max_frames: int) -> bool:
 func _tint_vertex(c: Node3D, cell: Dictionary, fluid: bool):
 	if c == null:
 		return null
-	var mesh: ArrayMesh
-	if fluid:
-		if c.fluid_instance == null or c.fluid_instance.mesh == null:
-			return null
-		mesh = c.fluid_instance.mesh
-	else:
-		if c.mesh_instance == null or c.mesh_instance.mesh == null:
-			return null
-		mesh = c.mesh_instance.mesh
 	var lx := int(cell["x"]) - int(c.cx) * 16
 	var lz := int(cell["z"]) - int(c.cz) * 16
 	var yv := float(int(cell["y"])) + (0.875 if fluid else 1.0)
 	var want: Array = [[lx, lz], [lx + 1, lz], [lx + 1, lz + 1], [lx, lz + 1]]
-	for s in range(mesh.get_surface_count()):
-		var arrs = mesh.surface_get_arrays(s)
-		var vs: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
-		var cs: PackedColorArray = arrs[Mesh.ARRAY_COLOR]
-		for i in range(vs.size() - 3):
-			if absf(vs[i].y - yv) > 0.01:
-				continue
-			var okq := true
-			var seen := {}
-			for j in range(4):
-				var vi: Vector3 = vs[i + j]
-				var key := -1
-				for w in want:
-					if absf(vi.x - float(w[0])) < 0.01 and absf(vi.z - float(w[1])) < 0.01 and absf(vi.y - yv) < 0.01:
-						key = w[0] * 1000 + w[1]
+	for s in c.slabs:
+		var inst = s.fluid_instance if fluid else s.mesh_instance
+		if inst == null or inst.mesh == null:
+			continue
+		var mesh: ArrayMesh = inst.mesh
+		for si in range(mesh.get_surface_count()):
+			var arrs = mesh.surface_get_arrays(si)
+			var vs: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+			var cs: PackedColorArray = arrs[Mesh.ARRAY_COLOR]
+			for i in range(vs.size() - 3):
+				if absf(vs[i].y - yv) > 0.01:
+					continue
+				var okq := true
+				var seen := {}
+				for j in range(4):
+					var vi: Vector3 = vs[i + j]
+					var key := -1
+					for w in want:
+						if absf(vi.x - float(w[0])) < 0.01 and absf(vi.z - float(w[1])) < 0.01 and absf(vi.y - yv) < 0.01:
+							key = w[0] * 1000 + w[1]
+							break
+					if key < 0 or seen.has(key) or not cs[i + j].is_equal_approx(cs[i]):
+						okq = false
 						break
-				if key < 0 or seen.has(key) or not cs[i + j].is_equal_approx(cs[i]):
-					okq = false
-					break
-				seen[key] = true
-			if okq and seen.size() == 4:
-				return [roundf(cs[i].r * 255.0), roundf(cs[i].g * 255.0), roundf(cs[i].b * 255.0)]
+					seen[key] = true
+				if okq and seen.size() == 4:
+					return [roundf(cs[i].r * 255.0), roundf(cs[i].g * 255.0), roundf(cs[i].b * 255.0)]
 	return null
 
 
@@ -6012,26 +6131,30 @@ func _trees_test() -> void:
 			elif v == 18 or v == 19:
 				nflower += 1
 		var ops := 0
-		if cc0.mesh_instance and cc0.mesh_instance.mesh:
-			ops = cc0.mesh_instance.mesh.get_surface_count()
-		var leaf_v := -1
+		var cv_sum := 0
+		var fv_sum := 0
+		var has_flora := false
+		for s in cc0.slabs:
+			if s.mesh_instance and s.mesh_instance.mesh:
+				ops += s.mesh_instance.mesh.get_surface_count()
+			if s.flora_instance == null or s.flora_instance.mesh == null:
+				continue
+			has_flora = true
+			var fm: ArrayMesh = s.flora_instance.mesh
+			var fs: PackedInt32Array = s.fsidx
+			if fs.size() >= 2 and fs[0] >= 0:
+				cv_sum += (fm.surface_get_arrays(fs[0])[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+			if fs.size() >= 2 and fs[1] >= 0:
+				fv_sum += (fm.surface_get_arrays(fs[1])[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
 		var flower_v := -1
 		var cutout_v := -1
 		if nleaf > 0 or nflower > 0:
-			if cc0.flora_instance == null or cc0.flora_instance.mesh == null:
+			if not has_flora:
 				mesh_info = {"error": "no_flora_instance", "nleaf": nleaf, "nflower": nflower}
 			else:
-				var fm: ArrayMesh = cc0.flora_instance.mesh
-				var sc := fm.get_surface_count()
-				for s in range(sc):
-					var arrs = fm.surface_get_arrays(s)
-					var vs: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
-					if s == 0:
-						cutout_v = vs.size()
-					if s == 1:
-						flower_v = vs.size()
+				cutout_v = cv_sum
+				flower_v = fv_sum
 				if nleaf == 0 and nflower > 0:
-					flower_v = cutout_v
 					cutout_v = -1
 				mesh_info = {"opaque_surfaces": ops, "cutout_verts": cutout_v, "flower_verts": flower_v, "nleaf": nleaf, "nflower": nflower}
 				if nflower > 0:
