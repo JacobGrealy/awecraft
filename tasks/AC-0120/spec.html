@@ -10,7 +10,7 @@
 <h2>Goal</h2>
 <div class="fill"><b>FILL BY COORDINATOR</b> — one line, from the registry notes (marked REVIEW until confirmed). <b>REVIEW</b></div>
 <!-- FILL: Goal — one sentence. Example: "Add a torch-light-bake pass to the chunk mesher so caves are readable at night." -->
-<p><em>REVIEW — draft from notes: Cache/reuse StandardMaterial3D per chunk build: chunk.</em></p>
+<p><b>Goal (confirmed 2026-08-26):</b> Kill the per-build <code>StandardMaterial3D</code> allocation in the chunk mesher (chunk.gd:860, 3–5 new materials per build ≈ 18/crossing) by introducing a shared material cache keyed by tile/tint and reused across all chunks — mirroring the web&rsquo;s 3 shared materials (<code>index.html:1290</code>) — so material allocation per crossing is 0, ArrayMesh creation stays per-chunk, and the visuals are byte-identical (greedy-mesh UVs intact, MINFO r4 verts 125552).</p>
 <h2>Frozen spec references</h2>
 <div class="auto"><b>AUTO (fixed boilerplate — do not hand-edit)</b></div>
 <ul>
@@ -107,16 +107,38 @@
 <tr><td>boundary r4 `in_radius_built_max`</td><td>**67** (`built_final` 81, `ok` true, `flap` 0, `p95_ms` 65)</td><td>AC-0079 (look-priority scoring; pre-fix gate was 55)</td></tr>
 </table>
 <h2>Task-specific requirements</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the concrete behavior/data changes this task makes.</div>
-<!-- FILL: Task-specific requirements. Example: e.g. &quot;fluids: source water over a hole writes 0 cells (zero-write invariant)&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-26)</b> — Run-1 maps the CURRENT material usage and the web&rsquo;s 3-material model, then designs the cache.</div>
+<ul>
+<li><b>Shared material cache:</b> replace the per-build material creation at chunk.gd:860 (3–5 <code>StandardMaterial3D</code> per chunk build) with a cache keyed by (material kind, tint) — the same small key space the web uses (3 shared materials at <code>index.html:1290</code>, atlas 1024 px, merged-atlas height 1760). Run-1 enumerates exactly what the 3–5 per-build materials are (opaque / water / lava / per-tint variants?), what the web&rsquo;s 3 are, and the exact cache key that makes the Godot set isomorphic to the web set (or as small as Godot&rsquo;s renderer requires — e.g. if tint is baked per-vertex in the UV/atlas, the tint key may collapse). The cache lives for the world&rsquo;s lifetime (world.gd or a material autoload — Run-1 decides with file:line); materials are NEVER per-chunk after this.</li>
+<li><b>ArrayMesh stays per-chunk</b> (geometry is per-chunk and per-UV — the AC-0117 greedy-mesh UVs must stay byte-identical: MINFO r4 verts <b>125552</b>); only the material reference changes.</li>
+<li><b>Worker compatibility (AC-0107):</b> the threadmesh workers build on fresh <code>duplicate()</code> copies — the worker path must reference the SHARED materials too (no per-build alloc on workers either); Run-1 states how the workers reach the cache (the shared material is a plain object — thread-safety of a read-only cache read from N workers, or a per-worker lookup into a shared const dict — GDScript dict reads from workers: Run-1 must confirm the WorkerThreadPool path is safe or serialize the lookup on main).</li>
+<li><b>Fluid/water material:</b> the water (semi-transparent? sorting group?) and lava materials share the same treatment — whatever flags they have today stay identical (visual identity).</li>
+<li><b>Allocation probe:</b> Run-1 designs the measurement (candidate: count DISTINCT <code>StandardMaterial3D</code> instances attached to chunk meshes at steady state via a harness scene walk — PRE ≈ 3–5 per chunk × chunks, POST = the cache size (a small constant, ideally the web&rsquo;s 3); and/or a build-path counter incremented at the former :860 site (0 hits post)). The probe field is harness-only (env-gated, off by default — the tree&rsquo;s MINFO/FLUIDPROBE pattern).</li>
+</ul>
 <h2>Task-specific gates</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the specific mode(s)/values that must be green beyond the defaults.</div>
-<!-- FILL: Task-specific gates. Example: e.g. &quot;G1: AWECRAFT_LOGIC=fluids → sea_stable true, sea_surface 2730&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-26)</b> — Run-1 sets the fresh pre-change anchors (the auto table above is AC-0079-era; the POST-AC-0078/AC-0079 floor is authoritative: boundary r4 walk p95 ~62–65, fwd_p95 ≤ 3500 + fwd_first10 ≥ 8, irb 81, perf total ~5715).</div>
+<ul>
+<li><b>G1:</b> <code>--quit</code> RC=0, zero script errors (all runs).</li>
+<li><b>G2 (visual/data identity):</b> genhash 25/25 (unchanged set) + FULL battery <code>AWECRAFT_BATTERY="player;interact;light;fluids;buckets"</code> EXACT (sea 2730/2730 + 1406/1406, torch 14, 2.82, 25/9, place/drop true) + <b>MINFO r4 verts 125552 EXACT</b> (<code>AWECRAFT_LOGIC=perf AWECRAFT_MESH_INFO=1 AWECRAFT_RADIUS=4</code> era — Run-1 states the exact invocation; the greedy UVs are untouched by this change).</li>
+<li><b>G3 (the point):</b> material allocation per crossing = <b>0</b> — the Run-1 probe: distinct <code>StandardMaterial3D</code> instances at steady state = the cache size (a small constant, target = the web&rsquo;s 3), independent of chunk count, and the former :860 allocation site is unreachable in steady state (build counter 0). Run-1 states the exact probe + pre/post numbers.</li>
+<li><b>G4 (no regression):</b> perf r4 within noise of the fresh anchor (build_ms may improve — alloc is gone; total/p95 must not regress); first_draw ≤ 300; fog_ok; read_sync_gen 0; memory does not grow (shared cache is O(1) — report it).</li>
+<li><b>G5 (boundary floor — post-AC-0078/AC-0079):</b> boundary r4: walk p95 ≤ ~65 (the AC-0079 D2 anchor), fwd_p95 ≤ 3500 + fwd_first10_p95 ≥ 8, irb ≥ 60, flap 0; RECSLICE r50 ≤ 12.2+noise; flake boundary r4 ×2 + player ×4.</li>
+<li><b>G6:</b> <code>./build_windows.sh</code> RC=0 + fresh exe + 8080/5180 200 + clean tree + results.html.</li>
+</ul>
 <h2>Scope (files expected to change)</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the exact files this task will edit (helps G5 stay clean).</div>
-<!-- FILL: Scope (files expected to change). Example: e.g. &quot;godot/world/chunk.gd, godot/scenes/main.gd (fluids branch only)&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-26)</b> — Run-1 confirms against the current tree; expected:</div>
+<ul>
+<li><code>godot/world/chunk.gd</code> — the per-build material creation (the :860 area) → the shared cache lookup (primary file).</li>
+<li><code>godot/world/world.gd</code> — the cache lifetime (the shared material set created at world ready, owned by the world, or a small autoload — Run-1 decides).</li>
+<li><code>godot/scenes/main.gd</code> — the G3 allocation-probe harness field(s) ONLY (env-gated, off by default).</li>
+</ul>
 <h2>Fences</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — what this task must NOT touch.</div>
-<!-- FILL: Fences. Example: e.g. &quot;no .gd outside the listed scope; no TASKS.yaml edits; no git&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-26)</b> — Run-1 confirms.</div>
+<ul>
+<li>No .gd outside the listed scope; no <code>index.html</code>; no <code>godot/export_presets.cfg</code>; no TASKS.yaml edits; no git (the coordinator commits); no builds in Run-1 (Run-2 does G6).</li>
+<li><b>Geometry/UV frozen:</b> the greedy mesh, the UVs, the vertex count (MINFO r4 verts 125552) must not change — this is a MATERIAL-REFERENCE change only. Any vertex/UV drift fails G2.</li>
+<li>Untouched: the texture/atlas (Data.ATLAS_PX 1024, merge_atlas h 1760), the generator (genhash), the AC-0119 air-on-miss read paths, AC-0118 recenter slicing, AC-0080 hysteresis, AC-0077 eff cache / AC-0079 scored drain + C2 worker self-light, collision staging, the fluid sim, the battery values.</li>
+<li>The shared cache must not grow unbounded (the key space is the small (kind, tint) set — no per-chunk/per-coord keys).</li>
+</ul>
 <p class="note">Scaffold generated by <code>tasks/scripts/spec_template.py</code> (no wall-clock timestamps; the only date is the registry created_at). Auto sections are reproducible byte-for-byte; fill sections are for the coordinator.</p>
 </body></html>
