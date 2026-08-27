@@ -137,12 +137,10 @@ document.addEventListener('click', function (e) {
   document.addEventListener('drop', function(e){
     var tr=e.target.closest('tr[data-qid]');
     if(!tr || !dragId) return;
-    // only allow drops inside the live queue table (done history is not reorderable)
     if(!tr.closest('#queue-table')) return;
     e.preventDefault();
     tr.classList.remove('drag-over');
     var tbl=document.getElementById('queue-table');
-    var doneTbl=document.getElementById('queue-done-table');
     if(!tbl) return;
     var rows=[].slice.call(tbl.querySelectorAll('tr[data-qid]'));
     var src=rows.find(function(r){return r.dataset.qid===dragId});
@@ -153,11 +151,7 @@ document.addEventListener('click', function (e) {
     var didx=ids.indexOf(dst.dataset.qid);
     ids.splice(sidx,1);
     ids.splice(didx,0,dragId);
-    // server permutation must include the full queue (live + done history)
-    var doneIds=[];
-    if(doneTbl) doneIds=[].slice.call(doneTbl.querySelectorAll('tr[data-qid]')).map(function(r){return r.dataset.qid});
-    var full=ids.concat(doneIds);
-    postApi('queue-reorder', new URLSearchParams({order: full.join(',')}));
+    postApi('queue-reorder', new URLSearchParams({order: ids.join(',')}));
     dragId=null;
   });
 })();
@@ -350,38 +344,19 @@ def build_board(data, interactive=True, base="/tasks/", task_root=None):
             return links.replace('<div class="links">', '').replace('</div>', '')
         return '<span class="muted">no artifacts</span>'
 
-    live_ids = [tid for tid in queue if (tasks_lib.find_task(data, tid) or {}).get("status") != "done"]
-    done_ids = [tid for tid in queue if (tasks_lib.find_task(data, tid) or {}).get("status") == "done"]
     out.append('<section><h2>Queue (work order)</h2>')
     if not queue:
         out.append('<div class="muted">queue is empty</div>')
     else:
-        # queued / live
-        out.append('<div style="font-size:12px;font-weight:600;margin:6px 0 4px;color:#2f4d7a">Queued (%d)</div>' % len(live_ids))
-        if live_ids:
-            qrows = [_qrow(pos, tid, (tasks_lib.find_task(data, tid) or {}).get("status", "missing"),
-                           (tasks_lib.find_task(data, tid) or {}).get("title", "?") if tasks_lib.find_task(data, tid) else "(missing)",
-                           _links_cell(tid), True)
-                     for pos, tid in enumerate(live_ids, 1)]
-            hdr_handle = '<th></th>' if interactive else ''
-            out.append('<table class="done" id="queue-table"><tr>%s<th>#</th><th>id</th><th>status</th><th>title</th><th>artifacts</th></tr>'
-                       % hdr_handle + "".join(qrows) + "</table>")
-            if interactive:
-                out.append('<div class="muted" style="margin-top:4px">drag by \u2630 to reorder queued items</div>')
-        else:
-            out.append('<div class="muted">nothing queued</div>')
-        # done (history — not draggable, dimmed)
-        out.append('<div style="font-size:12px;font-weight:600;margin:12px 0 4px;color:#5a6675">Done in queue (%d)</div>' % len(done_ids))
-        if done_ids:
-            drows = [_qrow(pos, tid, (tasks_lib.find_task(data, tid) or {}).get("status", "missing"),
-                           (tasks_lib.find_task(data, tid) or {}).get("title", "?") if tasks_lib.find_task(data, tid) else "(missing)",
-                           _links_cell(tid), False)
-                     for pos, tid in enumerate(done_ids, 1)]
-            hdr_handle = '<th></th>' if interactive else ''
-            out.append('<table class="done" id="queue-done-table" style="opacity:.72"><tr>%s<th>#</th><th>id</th><th>status</th><th>title</th><th>artifacts</th></tr>'
-                       % hdr_handle + "".join(drows) + "</table>")
-        else:
-            out.append('<div class="muted">no done items in queue</div>')
+        qrows = [_qrow(pos, tid, (tasks_lib.find_task(data, tid) or {}).get("status", "missing"),
+                       (tasks_lib.find_task(data, tid) or {}).get("title", "?") if tasks_lib.find_task(data, tid) else "(missing)",
+                       _links_cell(tid), True)
+                 for pos, tid in enumerate(queue, 1)]
+        hdr_handle = '<th></th>' if interactive else ''
+        out.append('<table class="done" id="queue-table"><tr>%s<th>#</th><th>id</th><th>status</th><th>title</th><th>artifacts</th></tr>'
+                   % hdr_handle + "".join(qrows) + "</table>")
+        if interactive:
+            out.append('<div class="muted" style="margin-top:4px">drag by \u2630 to reorder the queue</div>')
     out.append("</section>")
 
     # AC-0095: separate in-progress / queued-open / blocked / done (was Open/Blocked/Done)

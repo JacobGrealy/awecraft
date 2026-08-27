@@ -159,7 +159,7 @@ def add(data, title, source, priority=2, notes=""):
 
 
 def set_status(data, task_id, status):
-    """Set a task's status. done => completed_at set; leaving done => cleared."""
+    """Set a task's status. done => completed_at set + auto-dequeue; leaving done => cleared."""
     status = str(status)
     if status not in STATUSES:
         raise TaskError("status must be one of %s, got %r" % (STATUSES, status))
@@ -171,6 +171,10 @@ def set_status(data, task_id, status):
     if status == "done":
         if not item.get("completed_at"):
             item["completed_at"] = now
+        # auto-dequeue: done items leave the work queue (was historical, now we prune)
+        queue = data.get("queue") or []
+        if task_id in queue:
+            queue.remove(task_id)
     else:
         item["completed_at"] = None
     item["updated_at"] = now
@@ -274,13 +278,6 @@ def queue_move(data, task_id, to_index):
 
 
 def queue_top(data):
-    """The next live item: first queue entry that is not done (or None).
-
-    The committed queue keeps finished entries in place (a historical record of
-    the work order), so "the top" means the first entry that still has work.
-    """
-    for tid in data.get("queue") or []:
-        item = find_task(data, tid)
-        if item is None or item.get("status") != "done":
-            return tid
-    return None
+    """The next live item: first queue entry (queue now contains only live tasks)."""
+    queue = data.get("queue") or []
+    return queue[0] if queue else None

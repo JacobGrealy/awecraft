@@ -1,33 +1,12 @@
 meta:
-  updated_at: 2026-08-27T05:38
+  updated_at: 2026-08-27T06:18
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0117
-- AC-0086
-- AC-0083
-- AC-0084
-- AC-0085
-- AC-0061
-- AC-0103
-- AC-0102
-- AC-0104
-- AC-0105
-- AC-0106
-- AC-0099
-- AC-0107
-- AC-0118
-- AC-0077
-- AC-0119
-- AC-0124
-- AC-0079
+- AC-0126
 - AC-0129
 - AC-0128
 - AC-0035
-- AC-0078
-- AC-0120
-- AC-0126
-- AC-0108
 - AC-0109
 - AC-0110
 - AC-0125
@@ -38,51 +17,16 @@ queue:
 - AC-0093
 - AC-0094
 - AC-0098
-- AC-0058
-- AC-0056
-- AC-0059
 - AC-0112
 - AC-0113
-- AC-0060
-- AC-0057
-- AC-0048
-- AC-0049
-- AC-0050
-- AC-0052
-- AC-0051
-- AC-0047
-- AC-0030
-- AC-0044
-- AC-0045
-- AC-0046
-- AC-0031
-- AC-0032
-- AC-0063
-- AC-0064
-- AC-0065
-- AC-0066
-- AC-0071
-- AC-0072
-- AC-0067
-- AC-0070
-- AC-0073
-- AC-0068
-- AC-0074
-- AC-0075
-- AC-0076
-- AC-0080
-- AC-0081
 - AC-0101
-- AC-0082
 - AC-0034
 - AC-0092
-- AC-0096
 - AC-0036
 - AC-0037
 - AC-0038
 - AC-0039
 - AC-0040
-- AC-0041
 - AC-0053
 - AC-0054
 - AC-0055
@@ -90,14 +34,12 @@ queue:
 - AC-0088
 - AC-0089
 - AC-0100
-- AC-0095
 - AC-0042
 - AC-0090
 - AC-0091
 - AC-0111
 - AC-0114
 - AC-0115
-- AC-0116
 intake:
 - id: AC-0001
   title: m1-scaffold
