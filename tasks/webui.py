@@ -111,6 +111,24 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/healthz":
             self._send(200, "application/json", json.dumps({"ok": True,
                             "yaml": str(STATE["yaml_path"])}, indent=0))
+        elif path == "/api/task":
+            # GET /api/task?id=AC-NNNN — modal detail (no mutation)
+            qs = parse_qs(parsed.query)
+            tid = (qs.get("id") or [""])[0]
+            try:
+                todos = tasks_lib.load_tasks(STATE["yaml_path"])
+                item = tasks_lib.find_task(todos, tid)
+                if item is None:
+                    raise NotFound("task %s not found" % tid)
+                # render modal body server-side so the client just injects it
+                modal = render._modal_html(item, STATE["static_root"], "/tasks/", todos.get("queue") or [])
+                self._send(200, "application/json", json.dumps({"ok": True, "task": item, "modal": modal}))
+            except NotFound as exc:
+                self._send(404, "application/json", json.dumps({"ok": False, "error": str(exc)}))
+            except Exception:
+                traceback.print_exc()
+                self._send(500, "application/json", json.dumps({"ok": False, "error": "internal error"}))
+            return
         elif path.startswith("/tasks/"):
             self._serve_static(path[len("/tasks/"):])
         else:

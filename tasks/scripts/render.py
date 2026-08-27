@@ -30,6 +30,16 @@ tr[draggable=true]{cursor:grab}
 tr.dragging{opacity:.45}
 tr.drag-over{outline:2px dashed #3b7cd8}
 td.handle{cursor:grab;text-align:center;user-select:none;color:#7a8494;width:22px}
+tr.task-row{cursor:pointer}
+tr.task-row:hover{background:#eef1f6}
+#modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(16,22,32,.56);z-index:9999;padding:18px}
+#modal.open{display:flex}
+#modal .box{background:#fff;border-radius:8px;max-width:980px;width:100%;max-height:90vh;overflow:auto;border:1px solid #cdd6e3;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+#modal .boxhead{position:sticky;top:0;background:#fff;border-bottom:1px solid #e6ebf2;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px}
+#modal .boxbody{padding:14px}
+#modal .gallery{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+#modal .gallery img{max-width:220px;max-height:160px;border:1px solid #d7dee8;border-radius:4px;background:#fff}
+#modal .results-frame{border:1px solid #d7dee8;border-radius:6px;padding:10px;background:#fbfcfe;margin-top:10px;max-height:60vh;overflow:auto}
 body{font-family:system-ui,'Segoe UI',sans-serif;margin:0;background:#f2f4f8;color:#1b232f}
 .bar{background:#1f2733;color:#eef1f6;padding:10px 22px;display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
 .bar h1{font-size:16px;margin:0;font-weight:600}
@@ -102,13 +112,21 @@ document.addEventListener('submit', function (e) {
 document.addEventListener('change', function (e) {
   var sel = e.target.closest('select[data-act="status"]');
   if (!sel) return;
+  e.stopPropagation();
   postApi('status', new URLSearchParams({id: sel.dataset.id, status: sel.value}));
 });
 document.addEventListener('click', function (e) {
   var btn = e.target.closest('button[data-queue-act]');
-  if (!btn) return;
-  postApi(btn.dataset.queueAct, new URLSearchParams({id: btn.dataset.id}));
+  if (btn) { e.stopPropagation(); postApi(btn.dataset.queueAct, new URLSearchParams({id: btn.dataset.id})); return; }
+  var sel = e.target.closest('select[data-act]');
+  if (sel) return;
+  var tr = e.target.closest('tr.task-row[data-tid]');
+  if (tr) { openTaskModal(tr.dataset.tid); return; }
+  if (e.target.closest('#modal')) {
+    if (e.target.id==='modal' || e.target.closest('[data-close-modal]')) closeTaskModal();
+  }
 });
+document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeTaskModal(); });
 (function(){
   var dragId=null;
   document.addEventListener('dragstart', function(e){
@@ -164,6 +182,20 @@ async function postApi(act, body) {
   var board = document.getElementById('board');
   if (board && data.board) { board.innerHTML = data.board; }
 }
+async function openTaskModal(tid){
+  var m=document.getElementById('modal');
+  var body=m.querySelector('.boxbody');
+  m.classList.add('open');
+  body.innerHTML='<div class="muted">loading '+tid+'...</div>';
+  try{
+    var res=await fetch('/api/task?id='+encodeURIComponent(tid));
+    var data=await res.json();
+    if(!res.ok || !data.ok) throw new Error(data.error||'failed');
+    document.getElementById('modal-title').textContent=tid+' — '+data.task.title;
+    body.innerHTML=data.modal;
+  }catch(err){ body.innerHTML='<div class="waiting">failed: '+err.message+'</div>'; }
+}
+function closeTaskModal(){ var m=document.getElementById('modal'); if(m) m.classList.remove('open'); }
 """
 
 
@@ -312,31 +344,68 @@ def _new_task_form():
             "</div></form>")
 
 
+def _row_table(rows, table_id, show_handle=False, draggable=False, interactive=True):
+    """Helper for one-row-per-task tables (queue/backlog/completed)."""
+    if not rows:
+        return '<div class="muted">none</div>'
+    hdr_handle = '<th></th>' if (interactive and show_handle) else ''
+    head = '<tr>%s<th>#</th><th>id</th><th>status</th><th>title</th><th>artifacts</th></tr>' % hdr_handle
+    return '<table class="done" id="%s">%s%s</table>' % (table_id, head, "".join(rows))
+
+def _modal_html(item, task_root, base, queue):
+    """Full task detail for the modal: description, comments, results html, gallery."""
+    tid = item["id"]
+    # reuse card inner for description/meta/comments (without queue buttons duplication)
+    inner = _card_inner(item, True, base, task_root, queue)
+    # gallery + rendered results
+    gallery = ""
+    results_frame = ""
+    if task_root is not None:
+        folder = Path(task_root) / tid
+        if folder.is_dir():
+            imgs = sorted(folder.glob("*.png")) + sorted(folder.glob("*.jpg")) + sorted(folder.glob("*.jpeg"))
+            if imgs:
+                gallery = '<div class="gallery">' + "".join(
+                    '<a href="%s" target="_blank"><img src="%s" alt="%s"></a>' % (base + tid + "/" + quote(p.name), base + tid + "/" + quote(p.name), escape(p.name))
+                    for p in imgs) + '</div>'
+            results = folder / (tid + "-results.html")
+            if results.is_file():
+                try:
+                    html = results.read_text(encoding="utf-8", errors="replace")
+                    # inline: if it's a full html doc, embed as-is inside a frame
+                    results_frame = '<div class="results-frame">%s</div>' % html
+                except Exception:
+                    results_frame = '<div class="muted">results.html unreadable</div>'
+            spec = folder / "spec.html"
+            if spec.is_file():
+                results_frame = '<div style="margin-bottom:8px"><a href="%s" target="_blank">spec.html</a></div>' % (base + tid + "/spec.html") + results_frame
+    return inner + gallery + results_frame
+
+
 def build_board(data, interactive=True, base="/tasks/", task_root=None):
-    """The board fragment: queue line, then Queue/Open/Blocked/Done sections."""
+    """Board: queue (draggable) + backlog (non-queued, not done) + completed (done) — all one-row tables. Detail is in the modal."""
     data = tasks_lib.load_tasks() if data is None else data
     queue = list(data.get("queue") or [])
     items = list(tasks_lib.iter_tasks(data))
-    open_items = [i for i in items if i.get("status") in ("open", "in-progress")]
-    blocked_items = [i for i in items if i.get("status") == "blocked"]
+    queued_set = set(queue)
     done_items = [i for i in items if i.get("status") == "done"]
+    backlog_items = [i for i in items if i.get("status") != "done" and i["id"] not in queued_set]
 
-    open_key = lambda i: (0 if i.get("status") == "in-progress" else 1,
-                          i.get("priority") or 9, str(i["id"]))
-    open_items.sort(key=open_key)
-    blocked_items.sort(key=lambda i: (i.get("priority") or 9, str(i["id"])))
+    # sort backlog like before: in-progress first, then priority, then id
+    backlog_items.sort(key=lambda i: (0 if i.get("status") == "in-progress" else 1, 1 if i.get("status") == "blocked" else 0, i.get("priority") or 9, str(i["id"])))
     done_items.sort(key=lambda i: (str(i.get("completed_at") or ""), str(i["id"])), reverse=True)
 
     out = [_queue_line(queue, data)]
     if interactive:
         out.append(_new_task_form())
 
-    # Queue (work order) — split into queued/live vs done, both with artifacts + drag
-    def _qrow(pos, tid, st, title, links_html, draggable):
+    def _qrow(pos, tid, st, title, links_html, draggable, clickable_tid=None):
         drag = ' draggable="true"' if (interactive and draggable) else ''
-        handle = '<td class="handle" title="drag to reorder">\u2630</td>' if (interactive and draggable) else ('<td class="handle" style="opacity:.25">\u2630</td>' if interactive else '<td></td>')
-        return ('<tr data-qid="%s"%s>%s<td>%d</td><td><code>%s</code></td><td>%s</td><td>%s</td><td style="font-size:11px">%s</td></tr>'
-                % (escape(tid), drag, handle, pos, escape(tid), escape(st), escape(title), links_html))
+        handle = '<td class="handle" title="drag to reorder">\u2630</td>' if (interactive and draggable) else ('<td class="handle" style="opacity:.25">\u2630</td>' if interactive and show_handle else '<td></td>')
+        # clickable row — modal on click, drag handle still works; status changes stop propagation
+        click_tid = clickable_tid or tid
+        return ('<tr class="task-row" data-tid="%s" data-qid="%s"%s>%s<td>%d</td><td><code>%s</code></td><td>%s</td><td>%s</td><td style="font-size:11px">%s</td></tr>'
+                % (escape(click_tid), escape(tid), drag, handle, pos, escape(tid), escape(st), escape(title), links_html))
 
     def _links_cell(tid):
         links = _task_links_html(tid, task_root, base)
@@ -344,51 +413,53 @@ def build_board(data, interactive=True, base="/tasks/", task_root=None):
             return links.replace('<div class="links">', '').replace('</div>', '')
         return '<span class="muted">no artifacts</span>'
 
-    out.append('<section><h2>Queue (work order)</h2>')
+    # Queue — draggable, one-row, click opens modal
+    show_handle = interactive
+    out.append('<section><h2>Queue (%d)</h2>' % len(queue))
     if not queue:
         out.append('<div class="muted">queue is empty</div>')
     else:
         qrows = [_qrow(pos, tid, (tasks_lib.find_task(data, tid) or {}).get("status", "missing"),
                        (tasks_lib.find_task(data, tid) or {}).get("title", "?") if tasks_lib.find_task(data, tid) else "(missing)",
-                       _links_cell(tid), True)
+                       _links_cell(tid), True, tid)
                  for pos, tid in enumerate(queue, 1)]
-        hdr_handle = '<th></th>' if interactive else ''
-        out.append('<table class="done" id="queue-table"><tr>%s<th>#</th><th>id</th><th>status</th><th>title</th><th>artifacts</th></tr>'
-                   % hdr_handle + "".join(qrows) + "</table>")
+        out.append(_row_table(qrows, "queue-table", show_handle=True, draggable=True, interactive=interactive))
         if interactive:
-            out.append('<div class="muted" style="margin-top:4px">drag by \u2630 to reorder the queue</div>')
+            out.append('<div class="muted" style="margin-top:4px">drag by \u2630 to reorder — click a row for details</div>')
     out.append("</section>")
 
-    # AC-0095: separate in-progress / queued-open / blocked / done (was Open/Blocked/Done)
-    queued_open = [i for i in open_items if i.get("status") == "open"]
-    inprog = [i for i in open_items if i.get("status") == "in-progress"]
-    out.append('<section><h2>In-Progress (%d)</h2>' % len(inprog))
-    if inprog:
-        out.extend(_card_html(i, interactive, base, task_root, queue) for i in inprog)
+    # Backlog — non-queued, not done
+    out.append('<section><h2>Backlog (%d)</h2>' % len(backlog_items))
+    if not backlog_items:
+        out.append('<div class="muted">nothing in backlog</div>')
     else:
-        out.append('<div class="muted">nothing in progress</div>')
+        brows = []
+        for pos, it in enumerate(backlog_items, 1):
+            tid = it["id"]
+            st = it.get("status", "missing")
+            title = it.get("title", "?")
+            brows.append('<tr class="task-row" data-tid="%s"><td>%d</td><td><code>%s</code></td><td>%s</td><td>%s</td><td style="font-size:11px">%s</td></tr>'
+                         % (escape(tid), pos, escape(tid), escape(st), escape(title), _links_cell(tid)))
+        out.append(_row_table(brows, "backlog-table", show_handle=False, draggable=False, interactive=interactive))
+        if interactive:
+            out.append('<div class="muted" style="margin-top:4px">click a row for details — use queue button in modal to add to queue</div>')
     out.append("</section>")
 
-    out.append('<section><h2>Queued — open (%d)</h2>' % len(queued_open))
-    if queued_open:
-        out.extend(_card_html(i, interactive, base, task_root, queue) for i in queued_open)
+    # Completed — done
+    out.append('<section><h2>Completed (%d)</h2>' % len(done_items))
+    if not done_items:
+        out.append('<div class="muted">nothing completed yet</div>')
     else:
-        out.append('<div class="muted">nothing queued</div>')
-    out.append("</section>")
-
-    out.append('<section><h2>Blocked (%d)</h2>' % len(blocked_items))
-    if blocked_items:
-        out.extend(_card_html(i, interactive, base, task_root, queue) for i in blocked_items)
-    else:
-        out.append('<div class="muted">nothing blocked</div>')
-    out.append("</section>")
-
-    out.append('<section><h2>Done (%d)</h2>' % len(done_items))
-    if done_items:
-        for n, i in enumerate(done_items):
-            out.append(_done_card_html(i, interactive, base, task_root, queue, n < 3))
-    else:
-        out.append('<div class="muted">nothing done yet</div>')
+        crows = []
+        for pos, it in enumerate(done_items, 1):
+            tid = it["id"]
+            st = it.get("status", "done")
+            title = it.get("title", "?")
+            crows.append('<tr class="task-row" data-tid="%s"><td>%d</td><td><code>%s</code></td><td>%s</td><td>%s</td><td style="font-size:11px">%s</td></tr>'
+                         % (escape(tid), pos, escape(tid), escape(st), escape(title), _links_cell(tid)))
+        out.append(_row_table(crows, "completed-table", show_handle=False, draggable=False, interactive=interactive))
+        if interactive:
+            out.append('<div class="muted" style="margin-top:4px">click a row for details</div>')
     out.append("</section>")
     return "".join(out)
 
@@ -399,15 +470,18 @@ def render_page(data, interactive=True, base="/tasks/", task_root=None, title="A
     body_css = CSS
     js = ("<script>%s</script>" % PAGE_JS) if interactive else ""
     meta = (data.get("meta") or {}).get("updated_at", "?")
+    modal = ('<div id="modal"><div class="box"><div class="boxhead"><span id="modal-title"></span>'
+             '<button type="button" data-close-modal style="background:#fff;color:#1b232f;border:1px solid #cdd6e3">close</button></div>'
+             '<div class="boxbody"></div></div></div>') if interactive else ""
     return ("<!DOCTYPE html><html><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width, initial-scale=1'>"
             "<title>%s</title><style>%s</style>%s</head><body>"
             "<div class='bar'><h1>%s</h1>"
             "<span class='stamp'>registry updated %s</span></div>"
-            "<div class='wrap' id='board'>%s</div>"
+            "<div class='wrap' id='board'>%s</div>%s"
             "</body></html>"
             % (escape(title), body_css, js, escape(title), escape(str(meta)),
-               build_board(data, interactive=interactive, base=base, task_root=task_root)))
+               build_board(data, interactive=interactive, base=base, task_root=task_root), modal))
 
 
 def main():
