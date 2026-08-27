@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0129 plan — cave-lighting-propagation-fix (RUN 1.1)</title>
+<style>
+body{font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;margin:24px;max-width:1150px}
+h1{font-size:22px} h2{font-size:17px;margin-top:28px;border-bottom:2px solid #444;padding-bottom:4px}
+h3{font-size:14px;margin-top:18px}
+code,pre{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px}
+pre{background:#f4f4f4;padding:10px;border-radius:4px;overflow-x:auto}
+table{border-collapse:collapse;margin:10px 0} td,th{border:1px solid #bbb;padding:4px 8px;text-align:left;vertical-align:top}
+th{background:#eee}
+.ok{background:#dff5df}.bad{background:#fde3e3}.note{background:#fff8dc}
+</style></head><body>
+
+<h1>AC-0129 cave-lighting-propagation-fix — RUN 1.1 plan (research + probe-first fix design, revised)</h1>
+<p><b>Status:</b> mechanism PROVEN statically (high confidence), fresh PRE anchors captured 2026-08-27 11:30–11:33 EDT (job bash-76, <code>.scratch/AC-0129/summary.txt</code>).
+No .gd touched by Run-1 (read-only). Run-2 = <b>probe-first</b>: build <code>lightaudit</code> into the unmodified tree → G0 → PRE run (cliffs &gt; 0) → implement fix → POST run (cliffs 0) → SMOKE + genhash → exit. Coordinator runs heavy gates + build.</p>
+<p class="note"><b>RUN 1.1 revision (2026-08-27, coordinator gate-check):</b> (1) §1.3 factual correction — the web shows the SAME block-light cliff (its flood seeds the queue only from own-array &gt;0 cells, :974; a dark chunk's queue is empty → the pull :982–996 never fires → dark neighbors are never lit). The task is a user-directed correction BEYOND the web (Minecraft semantics, AGENTS.md). (2) §2 design fix — the injection gate <code>eff[B] &gt; 0</code> EXCLUDED exactly the dark boundary cell of the user's case (13 next to 0 would have survived → G1 would have failed in POST); the injection now fires UN-gated into dark cells, and the dispatch carries a SECOND strip set: the neighbor's <b>block-light-only</b> boundary values (derived main-thread from neighbor <code>data</code> + <code>last_eff</code>; sky-leak prevention moves from the gate to the strip content). Max-distributivity is no longer load-bearing; the deviation list, §5 stale-anchor note, and risks (§7 a/b/d + new h/i/j) are updated to match. Unchanged: §1.1/1.2 mechanism, §2.B bake box, §2.D probe, §5 gate values, §6 snapshots.</p>
+
+<h2>1. Goal + proven mechanism (file:line evidence)</h2>
+<p><b>User report:</b> caves show a lit cell (torch level 14) immediately adjacent to a pitch-black cell (eff 0) with no torch/source between. Torch BFS (−1/step) must fade 14→0 smoothly across the whole cave. Gate: smooth gradient, no hard cliff, MINFO/battery/genhash green.</p>
+
+<h3>1.1 Suspect verdicts (the three registered suspects)</h3>
+<table>
+<tr><th>Suspect</th><th>Fires?</th><th>Evidence</th></tr>
+<tr><td>(a) AC-0077 contained batch / worker self-light</td><td class="bad"><b>YES — this is the mechanism</b></td>
+<td>Every mesh-eff path is strictly <b>chunk-contained</b> (16×16×80; <code>STANDALONE_MARGIN := 0</code>, chunk.gd:4). The contained kernel <code>Lighting._chunk_light_into</code> (lighting.gd:228–265) reads <b>only the passed chunk data</b> (line 241: <code>data[(y&lt;&lt;8)|(iz&lt;&lt;4)|ix]</code>) — it performs <b>zero cross-chunk reads</b>, so block light (torch 14 / lava 15 / glowstone 12) can NEVER cross a chunk boundary in baked vertex-light values. Torch at chunk-local x=0: own chunk eff = 14,13,12,… east→west; neighbor chunk's local x=15 cell = <b>0</b> (should be 13). Persistent after settle: <code>_eff_for</code> (world.gd:918–924) validates the eff cache by <b>own data only</b> (<code>c.data == cached.data</code>); nothing re-requests a rebuild when a neighbor lands. Worker path: <code>build_accs</code> eff-empty branch (chunk.gd:1184–1185) → <code>compute_light_flat_chunk</code> (lighting.gd:268–278) → contained kernel. Note: <code>compute_light_flat_batch</code> (lighting.gd:289, the literal AC-0077 batch) is <b>dead code</b> — zero callers (grep: only def + comment world.gd:926–932; AC-0126 boundary RESULT <code>light_batch_calls: 0</code>). The live contained path is the AC-0107 worker self-light.</td></tr>
+<tr><td>(b) AC-0119 air-on-miss frontier</td><td class="ok">NO (for block light)</td><td>The kernel never reads neighbor data at all, so air-on-miss vs real neighbor data is irrelevant to block-light propagation. (Air-on-miss matters only to the <b>bake</b> side — see 1.2.)</td></tr>
+<tr><td>(c) AC-0118 recenter slice neighbor-readiness</td><td class="ok">NO (for block light)</td><td>Recenter re-queues only non-mesh-built chunks through the standard <code>_build_unit</code> path (world.gd:1283–1297; meshed chunks skip at :1292); readiness is irrelevant because the kernel never consults neighbors. Recenter rebuilds DO flow through the fix (same path).</td></tr>
+</table>
+
+<h3>1.2 Second mechanism found by Run-1 (bake sampling — same symptom class)</h3>
+<p>With the light box at margin 0, the bake's face-light sampler <code>_s_effl</code> (chunk.gd:650–659) and sync twin <code>_effl</code> (chunk.gd:166–175) return <b>15 (full bright) for any out-of-bounds x/z</b> (line 657–658: <code>if ix &lt; 0 or iz &lt; 0 or ix &gt;= lw or iz &gt;= ld: return 15</code>). Every face whose "across" cell (or one of its 4 diagonal samples, <code>_s_face_light</code> :662–679 — offsets reach <b>2 cells</b> past a boundary) crosses a chunk boundary is therefore baked at eff 15, even inside a pitch-black cave. The web does the opposite: <code>lightAt</code> (index.html:963–970) reads the <b>real neighbor chunk's light</b> and returns <code>[15,0]</code> only when the chunk is missing/<code>!lightOk</code>. So Godot caves show <b>two</b> artifacts: (1) the eff-value cliff 14/0 across the boundary (user-reported "14 next to 0"), and (2) boundary wall-faces rendered full-bright. <b>Both are fixed by the same design</b> (§2): a block-light-only, UN-gated boundary injection into the eff flood (fixes the values — fires into dark cells; the RUN 1.1 correction) + a 2-cell-margin bake box assembled from the neighbors' final COMBINED eff (fixes the sampling), so <code>_s_effl</code>/<code>_face_light</code> code itself stays untouched.</p>
+
+<h3>1.3 Web cross-check: the web shows the SAME cliff (the pull is PARTIAL and queue-gated)</h3>
+<pre>floodLight(dst,cx,cz,data)  index.html:971–1004
+  SEED (:974): for i: if (dst[i] &gt; 0) B[dst[i]].push(i)  — the BFS queue is seeded
+  ONLY from cells already &gt;0 in the chunk's OWN array. For the blk pass that means
+  LOCAL light sources only (set at :1019 from the column scan).
+  PULL (:982–996): fires ONLY while a frontier (queue) cell goes OUT of local bounds —
+  reads the neighbor's boundary value nv (:991, gated on nc.lightOk :987) and, if
+  nv &gt; v+1 (:992), imports nl = nv - LIGHT_ATT[data[i]] (:993) into the own boundary
+  cell and re-queues it (:994).
+  A cell ENTERS the queue only via :974 (seed, own value &gt; 0) or :994 (an earlier
+  import, &gt; 0) — NEVER a cell that is 0 in our own array.
+computeChunkLight      :1005–1026   (blk.fill(0) :1011; sky pass + blk pass, both with the PARTIAL pull)
+recomputeLightAround   :1032–1039   (edit: 9-chunk box, Chebyshev ≤14, chunkAffected :1027 —
+                                     recomputes B from B's OWN sources: dark B stays dark)
+lightOnNewChunk        :1041–1044   (new chunk: compute own + mark 4 direct neighbors dirty
+                                     → same local-only recompute)
+web lightAt            :963–970     (bake sampling reads the real neighbor chunk)
+web setBlock           :888–906     (edit → recomputeLightAround)
+web streaming remesh   :1295–1326   (remesh does NOT re-light — the web's reverse-direction gap)</pre>
+<p><b>Re-derived consequence (the factual correction to RUN 1):</b> a chunk with no local light source (a dark cave chunk) seeds an <b>EMPTY queue</b> (:974 finds no blk cell &gt; 0) → the v-loop iterates empty buckets → the flood body — including the cross-chunk pull at :982–996 — <b>never executes</b> → the chunk <b>never imports the neighbor's light</b>; and the pull can never write into a cell that is 0 in our own array (queue membership requires &gt; 0 at seed or import). <code>recomputeLightAround</code> (edit, 9-chunk box) recomputes the dark neighbor from scratch (blk.fill(0) :1011, own sources only) → the neighbor's boundary stays 0. <b>⇒ The web's per-chunk blk arrays have exactly the user-reported "lit next to pitch black" cliff at chunk boundaries:</b> torch at chunk-A local (15,y) → A's boundary cell eff 14, chunk-B local (0,y) eff 0 — the (14, 0) pair the user reported EXISTS in the web too. The web's pull is a <b>PARTIAL</b> exchange: it fires only where our own flood already reached the boundary (our boundary cell &gt; 0) AND the neighbor is brighter by ≥ 2 (nv &gt; v+1) — two adjacent torch-lit chunks do trade boundary light; a dark neighbor chunk is <b>never</b> lit by the pull. RUN 1's "web parity / web shows no cliffs" framing was wrong and is corrected here.</p>
+<p><b>Therefore the fix target is NOT web parity for this mechanism.</b> The web (frozen artifact — seed :974 + pull :982–996 are the web's own flaw) HAS this cliff; the target is the <b>Minecraft semantics</b> (the canonical reference per AGENTS.md, and the user's explicit "should fade smooth 14→0"): <b>block light must cross the boundary INTO dark cells</b> (that is the fix), while <b>sky must NOT leak full-bright into enclosed caves</b> (that is why a naive ungated COMBINED-eff injection is wrong: a surface neighbor's sky-15 would flood our cave boundary → glowing cave walls, a NEW artifact). Resolution: the injection strip carries the neighbor's <b>block-light-only</b> value per boundary cell (derivation in §2.C.1) and the injection DROPS the <code>eff[B] &gt; 0</code> gate (it fires into dark cells too; sky-leak prevention moves from the gate to the strip content). This task is a <b>user-directed spec correction going beyond the web</b> — a documented deviation.</p>
+<p><b>Known web deviations (three, all documented):</b> (i) the web does NOT re-light old neighbors when a NEW chunk lands (remesh ≠ re-light, :1295–1326) — Godot's E2 hook (§2.C.4) goes beyond the web here (strictly fewer cliffs; the web gap is a web bug, not a spec feature). (ii) The web renders sky/blk as separate color channels (buildChunkMesh :1254–1267 <code>cr=[ls/15,lb/15,…]</code>); Godot's bake uses the combined value — pre-existing divergence, out of scope (AC-0128 territory). (iii) <b>NEW:</b> the web has the block-light boundary cliff itself (per-chunk arrays seeded from local sources only, :974; the partial queue-gated pull :982–996 never lights a dark chunk) — Godot implements the full Minecraft cross-boundary block-light fade (the user-directed correction).</p>
+<p><b>Max-distributivity note:</b> RUN 1 justified a COMBINED-eff pull via max-BFS distributivity (<code>max(a−c, b−c) = max(a,b) − c</code>). That argument is <b>no longer load-bearing</b>: the injection now propagates a SINGLE kind (block light only), so no cross-kind distribution is needed. It remains TRUE and is kept only as a historical note for the combined bake-box sampling (a rendering approximation in AC-0128 territory — not a propagation claim).</p>
+
+<h2>2. Files to touch (exact, function-level)</h2>
+
+<h3>2.A godot/world/lighting.gd</h3>
+<pre>1) NEW  static func compute_light_flat_chunk_pull(data, cx, cz, h, eff_strips, blk_strips) -&gt; Dictionary
+   eff_strips: Array of 8 PackedByteArray (E,W,N,S, SE,SW,NE,NW) = the neighbor's final
+               COMBINED eff (for the §2.B 20×20 bake box; unchanged from RUN 1);
+   blk_strips: Array of 4 PackedByteArray (E,W,N,S) = the neighbor's BLOCK-LIGHT-ONLY
+               boundary values (for the injection; derivation in §2.C.1); empty = side absent.
+   SIDE strip  = 2 columns × 16 × h  (2560 B): idx = c*(16*h) + y*16 + t
+                 (c = depth into neighbor 0/1, c=0 is the cell directly across our boundary;
+                  t = 16 coords along the shared boundary: z for E/W, x for N/S)
+   CORNER strip = 2×2×h (320 B): idx = (a*2+b)*h + y (a = x-depth, b = z-depth into the
+                 diagonal neighbor)   [eff_strips corners: bake box only — the injection is
+                  4-side; a corner boundary cell is hit by BOTH adjacent side strips, max wins]
+   a) column scan IDENTICAL to _chunk_light_into:236–255 -&gt; ids, sky, blk, has_glow
+   b) eff = PackedByteArray(sz*h); eff[i] = max(sky[i], blk[i])        # combined FIRST
+   c) _flood_flat(eff, ids, 16, h, 16)                                 # local closure (1 flood;
+                                                                       # today: 2 floods sky+blk)
+   d) INJECTION (NO eff[B]&gt;0 gate — fires into DARK cells too; this IS the fix):
+        for each side s ∈ {E,W,N,S}, each (y,t):
+          B = core index of the boundary cell (4 rings × 16 × h)
+          if _att[ids[B]] &gt; 0 and blk_strips[s].size() == 2560:  # our cell must pass light
+              cand = blk_strips[s][0*(16*h) + y*16 + t] - _att[ids[B]]
+              if cand &gt; eff[B]: eff[B] = cand; changed = true
+        (the web's :993 nl = nv − LIGHT_ATT formula, verbatim — only the queue gate is gone)
+        Sky-leak prevention lives in the STRIP CONTENT, not a gate: a surface / open-column
+        neighbor cell carries 0 (§2.C.1), so sky-15 can never enter an enclosed cave. RUN 1's
+        gated combined-eff injection was wrong TWICE: the gate excluded exactly the user's
+        dark boundary cell (13 next to 0 would have survived), and an UNGATED combined strip
+        would have leaked surface sky-15 into cave boundaries — the blk-only content fixes
+        both at once.
+   e) if changed: _flood_flat(eff, ids, 16, h, 16)                     # propagate the import
+   f) return {"mn": Vector3i(cx*16,0,cz*16), "w":16, "d":16, "arr": eff, "blk_src": has_glow}
+   NOTE (correctness): fixed point by induction — each boundary cell carries the neighbor's
+   FINAL block-light value (by induction: the neighbor's own build ran the same derivation +
+   re-flood; any later change to the neighbor invalidates our cache via its eff_gen, §2.C.3,
+   and re-requests us with fresh strips). The injection seeds our boundary with that value
+   minus the enter-attenuation (the web's :993 nl formula); the re-flood closes the local
+   interior. The web's queue gate (own-array seed :974) is precisely the web's flaw — a dark
+   chunk's queue is empty, so it can never import (§1.3) — and is DROPPED by design: the
+   user-directed target is the Minecraft cross-boundary fade, not web parity.
+
+2) compute_light_flat(box, world)  (:145–218, SYNC path) — add the same injection:
+   after combine+flood, IF the box is exactly one chunk (w==16 and d==16 and
+   mn.x%16==0 and mn.z%16==0): build BOTH strip sets internally — the 8 combined eff strips
+   AND the 4 blk-only strips — via the world helper (world.gd §2.C.1; the sync kernel runs
+   on the main thread, so it has the neighbors' data + last_eff) and run the same
+   UN-gated injection + re-flood. Return gains "blk_src".
+   (Covers the three sync fallbacks: spawn (0,0), missing-diagonal, TM cap-drop.)
+
+3) UNCHANGED: compute_light_split (:62–142) — the light_at probe path the battery depends on;
+   _chunk_light_into / compute_light_flat_chunk (kept as no-strip fallback + identity ref);
+   compute_light_flat_batch (stays dead).
+   _flood_flat (:314+) reused verbatim.</pre>
+
+<h3>2.B godot/world/chunk.gd</h3>
+<pre>1) NEW var eff_gen := 0            # bumped only on eff byte-change (world.gd owns it)
+2) build_accs (:1180–1185):
+     var eff_strips: Array = ctx.get("eff_strips", [])
+     var blk_strips: Array = ctx.get("blk_strips", [])
+     var light: Dictionary = eff
+     if light.is_empty():
+         light = Lighting.compute_light_flat_chunk_pull(data, cx, cz, h, eff_strips, blk_strips)
+   BAKE BOX (new, shared static helper _bake_box(light, eff_strips, h)) — uses ONLY the
+   combined eff strips (unchanged from RUN 1):
+     if ANY eff strip non-empty: barr = PackedByteArray(20*20*h), bmn = lmn + (-2,0,-2):
+        core 16×16 at offset (+2,+2);
+        east side  x∈[16,17], z∈[0,15]:  barr  = E-stripe c=x-16, t=z
+        west side  x∈[0,1],   z∈[0,15]:  barr  = W-strip  c=1-x,  t=z
+        south side x∈[0,15],  z∈[16,17]: barr  = S-strip  c=z-16, t=x
+        north side x∈[0,15],  z∈[0,1]:   barr  = N-strip  c=1-z,  t=x
+        corners: SE(x16-17,z16-17)=SE(a=x-16,b=z-16)  SW(x0-1,z16-17)=SW(a=1-x,b=z-16)
+                 NE(x16-17,z0-1) =NE(a=x-16,b=1-z)    NW(x0-1,z0-1)  =NW(a=1-x,b=1-z)
+        (missing side/corner strip → leave those margin cells 0 — only matters when the
+         neighbor itself is unbuilt; _s_effl then reads the real (dark-or-air) value, not 15)
+     pass (bmn, barr, 20, 20) to the emit phase INSTEAD OF (lmn, larr, 16, 16).
+     _s_effl/_s_face_light (:650–679) are index-generic -&gt; ZERO emit-code changes.
+     Cache-hit path (eff non-empty) ALSO assembles the box from eff_strips -&gt; the
+     cross-boundary sampling bug is fixed on BOTH paths.
+     No strips at all (spawn (0,0) first build, no neighbors) -&gt; bake core 16×16 exactly as
+     today (out-of-bounds → 15 = the web's [15,0] for a missing chunk).
+3) res dict (:1287): add "blk_src": bool(light.get("blk_src", false))
+4) UNCHANGED: apply_accs (:1746–1763, last_eff = res.light = CORE 16×16 — no memory growth),
+   _face_light (sync), _effl (sync) — they receive the same (possibly 20×20) larr.</pre>
+
+<h3>2.C godot/world/world.gd</h3>
+<pre>1) NEW func _strips_for(cx, cz) -&gt; Dictionary   # main-thread only (dispatch + sync kernel)
+      -> {"eff": [8 strips from the neighbor chunks' last_eff CORE (16×16×h) — unchanged:
+      east  (cx+1,cz): cols lx=0,1   west (cx-1,cz): cols lx=15,14 (c=0 = our-facing cell)
+      south (cx,cz+1): rows lz=0,1   north(cx,cz-1): rows lz=15,14
+      diagonals 2×2 corners as in §2.B. Neighbor missing / last_eff empty -&gt; empty arrays],
+         "blk": [4 side strips (E,W,N,S only), BLOCK-LIGHT-ONLY, same 2×16×h layout.
+            For each boundary cell of neighbor N (the 2 depth columns × 16 positions × h;
+            cost = ONE top-down column pass per column ≈ 2×16×h = 2560 blocksLight checks
+            per side — bounded, §7h):
+              sky_n = 15 iff N's data column above (and including) the cell has no
+                      blocksLight block (web sky rule: index.html:1013–1021 — open until the
+                      first _att==0 block; Godot twin: _chunk_light_into column scan), else 0
+              eff_n = N.last_eff value at that cell
+              blk_n = L            if the cell's block id is a light source (22→14, 23→12,
+                                   24→15 — data.gd light values, read from N.data; EXACT)
+                      | eff_n      else if eff_n &gt; sky_n   # eff = max(sky,blk), blk &gt; sky
+                          #          ⇒ blk = eff — EXACT (closed column with real block light)
+                      | 0          else (eff_n == sky_n, non-source — CONSERVATIVE, §7i:
+                          #          sky_n = 15 open column ⇒ real blk &lt; 15, invisible in N's
+                          #          own combined eff (max(15,blk) = 15); closed column ⇒
+                          #          eff_n = 0 = exact. The user's case — dark cave, closed
+                          #          columns BOTH sides — always lands in the EXACT branches)
+            N missing / last_eff empty -&gt; empty strip (side absent).]}
+2) _mesh_dispatch (:583–662) — worker entry (:644–648):
+      var _s = _strips_for(cx, cz)
+      "ctx": {**_tm_ctx, "eff_strips": _s["eff"], "blk_strips": _s["blk"]},
+             "ngen": _ngens_for(cx, cz)
+   (per-entry dict spread; BOTH strip sets freshly derived+copied per dispatch = thread-safe;
+    total extra ≈ 2×11.5 KB = 23 KB/dispatch, 81 chunks ≈ 1.9 MB transient — G4 fence holds:
+    last_eff stays CORE 16×16; NO persistent blk array is added, §7j)
+   Sync call sites (:598, :613, :634): pull handled inside compute_light_flat (§2.A.2);
+   add the E2 hook after each sync build (§2.C.4).
+3) eff cache:
+   _eff_cache_put (:904): entry = {"data": data.duplicate(), "eff": eff, "ngen": ngen}
+   NEW _ngens_for(cx,cz) -&gt; [eff_gen of (cx+1,cz),(cx-1,cz),(cx,cz+1),(cx,cz-1); 0 if missing]
+   _eff_for (:918): valid iff c.data == cached.data AND cached.ngen == _ngens_for(cx,cz)
+      (own data + all 4 neighbor eff-gens — the spec's "data-signature on the batch's
+       neighbor-eff inputs"; a stale entry -&gt; {} -&gt; worker self-lights with fresh strips)
+4) NEW func _eff_landed(c, old_eff: Dictionary, new_eff: Dictionary) -&gt; void
+      changed = old_eff.is_empty() or old_eff.get("arr", PackedByteArray()) != new_eff.get("arr", PackedByteArray())
+      if changed: c.eff_gen += 1
+      if changed and bool(new_eff.get("blk_src", false)):        # own torch/lava/glowstone
+          for each of the 4 ORTHOGONAL neighbors n with chunk+data present and n.mesh_built:
+              _eff_cache_evict(nkey)
+              if not light_pending_set.has(nkey): light_pending.append(nkey); light_pending_set[nkey] = true
+              flush_active = true
+   # E2 = the web lightOnNewChunk reverse-mark + the edit-path ring: one-shot (identical
+   # re-light -&gt; no gen bump -&gt; chain dies, depth ≤ 2); fires ONLY on own block-light
+   # (blk_src), so plain surface chunk landings cause ZERO extra builds (no streaming
+   # churn). A lava-chunk landing NOW correctly lights its neighbors: their rebuild
+   # re-derives their blk strips from this chunk's data (lava source cell → 15 EXACT)
+   # + last_eff, so the injected boundary value is right (RUN 1's gate would have
+   # swallowed this case too — §1.3).
+5) threadmesh_handoff (:546–581):
+      var old_eff = c.last_eff                      # capture BEFORE apply
+      c.apply_accs(res, _tm_ms_full)                # (:572, unchanged)
+      _eff_landed(c, old_eff, res.get("light", {})) # NEW
+      if bool(e.get("eff_trust", true)):
+          _eff_cache_put(key, c.data, res.get("light", {}), e["ngen"])   # + ngen (dispatch-captured)
+   (eff_trust=false bulk fluid flush passes c.last_eff back -&gt; old==new -&gt; no E2, cache untouched ✓)
+6) UNCHANGED: set_block (:1345–1374) + _mark_light_around 3×3 (:1376–1379) — with the pull
+   kernel the 3×3 rebuilds self-light WITH strips → edit-time cliffs fixed; E2 may add a
+   one-shot ring-2 (identical output → no chain). _apply_edits_to_chunk (boot, :1392–1412)
+   unchanged. Recenter (:1140–1335) unchanged (rebuilds flow through _build_unit; meshed
+   chunks keep valid eff — freed neighbor = data gone = no contribution, web parity).
+   AC-0126 invariants hold: edit flush never regains a sync light path (worker self-light +
+   strips; cap-drop requeue; EDIT_FLUSH_MAX_PER_FRAME = 1).</pre>
+
+<h3>2.D godot/scenes/main.gd — lightaudit probe (NEW, env-gated, probe-first)</h3>
+<pre>1) dispatch: after `if logic == "light":` (:849):
+     if logic == "lightaudit":
+         await _lightaudit_test(spawn)
+         return
+2) func _lightaudit_test(spawn):
+   a) STEADY SETTLE (breakspike pattern, main.gd:2868–2883): all 81 in-radius chunks
+      mesh_built + (light_dirty, light_pending, threadmesh_inflight, _col_pending) idle for
+      5 consecutive ticks; 120 s guard. (Answers spec "after settle": the scan runs on a
+      proven-settled world.)
+   b) CLIFF SCAN (the symptom, on BAKED eff): for each built chunk O: arr = O.last_eff
+      (16×16×h core); for each cell (lx,y,lz) with Lighting._att[O's block] &gt; 0 (passable):
+      for each of the 6 neighbors (4 horizontal + y±1): resolve the neighbor cell (same or
+      adjacent chunk — adjacent chunk must be built with last_eff); if its _att &gt; 0 and
+      absi(eff_O − eff_N) &gt; 1 → candidate pair {world coords, both effs, both ids}.
+      HARD-CLIFF COUNT (the gate) = candidate pairs where BOTH ids are non-fluid
+      (0 air / 28 portal): the spec&#39;s "no hard 14/0 cliff" is an AIR-pair property, and
+      fluid interfaces legitimately carry |Δ| up to the attenuation (the web&#39;s own flood
+      subtracts LIGHT_ATT per step, index.html:997–1001: water-column bottom vs the air
+      below = Δ up to 3 per interface — present in the web too, not the bug).
+      Fluid-involving pairs reported SEPARATELY as `fluid_pairs` {count, top 3} —
+      informational, never gated. Report hard-cliff count, max_delta, top 8 by |Δ|.
+   c) TUNNEL (deterministic torch placement, fixed scan order cx∈[−4..4], cz∈[−4..4],
+      y 79→8, lx 0→15, lz 0→15; first match wins): air cell, solid below, y ≥ 8, and a
+      5-cell straight air run on BOTH sides in a direction that CROSSES a chunk boundary:
+      −x if lx≤5, +x if lx≥10, −z if lz≤5, +z if lz≥10 (checked in that order).
+      Darkness pre-check: world.light_at(cell).eff == 0 (skip cell otherwise — keeps the
+      tunnel source-free, so any lit value after placement comes from the torch).
+      Then world.set_block(tx,ty,tz,22) (torch 22) → settle again (queues idle 5 ticks,
+      600-frame guard; run under --fixed-fps 600).
+      Measure: seq = 11 mesh effs along the line (t±5, through the boundary);
+      ref  = world.light_at at the same 11 cells;
+      tunnel.ok = (no adjacent Δ&gt;1 in seq) AND (ref[i] == seq[i] for |i| ≤ 8 — the
+      margin-8 box covers the torch only within 8).
+      If NO cell qualifies: tunnel = null (rely on the natural lava cliffs + cliff scan).
+   d) WORST-SOURCE attribution: for each of the top-8 pairs, scan a 31×31×15 box (Chebyshev
+      15) for the responsible _glow source id(s) → worst_sources: [ids] (22/24/23).
+   e) RESULT (Debug.result JSON):
+      {"mode":"lightaudit","seed":..,"chunks_built":81,"queue_size":..,
+       "cliffs":{"count":N,"max_delta":M,"pairs":[[x,y,z,e1,x2,y2,z2,e2], …8]},  // HARD cliffs = non-fluid (air/portal) pairs only
+       "fluid_pairs":{"count":F,"pairs":[…3]},  // informational — legitimate attenuation, never gated
+       "tunnel": null | {"torch":[x,y,z],"dir":[dx,0,dz],"seq":[11],"ref":[11],"ok":bool},
+       "worst_sources":[ids],
+       "ok": cliffs.count == 0 and (tunnel == null or tunnel.ok)}
+   f) run: env HOME=/tmp/dsh_home AWECRAFT_LOGIC=lightaudit AWECRAFT_RADIUS=4
+           $S --headless --path godot --fixed-fps 600
+3) nothing else in main.gd changes (battery arms untouched).</pre>
+
+<h2>3. Frozen-spec references (index.html, build 20260816-r12)</h2>
+<table>
+<tr><th>Web behavior</th><th>Location</th><th>Godot port in this fix</th></tr>
+<tr><td>Cross-chunk light PULL — <b>PARTIAL (queue-gated):</b> fires only when OUR frontier (queued) cell — seeded from own-array &gt;0 cells (:974) — sits on the boundary; reads neighbor boundary value, imports <code>nl = nv − LIGHT_ATT</code> when <code>nv &gt; v+1</code>, gated on <code>nc.lightOk</code>, re-queue. A dark chunk (no local source) has an EMPTY queue → its flood never runs → it is <b>never</b> imported from; the pull does NOT light a dark neighbor chunk</td><td><code>floodLight</code> :971–1004 (seed :974, pull :982–996)</td><td>§2.A.1 step d/e — <b>blk-only UN-gated</b> injection + re-flood; goes BEYOND the web by design (Minecraft cross-boundary fade; user-directed correction, §1.3 deviation (iii)); max-distributivity no longer load-bearing (single-kind injection)</td></tr>
+<tr><td>Chunk light = sky pass + blk pass, both with the (partial) pull; blk seeded from LOCAL sources only (:1019)</td><td><code>computeChunkLight</code> :1005–1026</td><td>combined single flood (b) + one blk-only injection (d/e); the web's per-kind split is not needed — the injection is single-kind (blk), so no cross-kind distribution claim</td></tr>
+<tr><td>Edit relight: 9-chunk box, Chebyshev ≤ 14 (recomputes each chunk from its OWN sources — a dark neighbor stays dark in the web)</td><td><code>recomputeLightAround</code> :1032–1039 (+ <code>chunkAffected</code> :1027)</td><td>existing 3×3 <code>light_dirty</code> (world.gd:1376–1379) UNCHANGED + rebuilds now self-light with strips (blk-only injection un-gated → the 3×3 covers the user's edit-time case exactly) + one-shot E2 ring</td></tr>
+<tr><td>New chunk: compute own light + mark 4 direct neighbors dirty</td><td><code>lightOnNewChunk</code> :1041–1044</td><td>E2 hook §2.C.4 (goes beyond the web's remesh-only remesh: it actually re-lights the marked neighbors)</td></tr>
+<tr><td>Bake face sampling reads the REAL neighbor chunk's light ([15,0] only when missing/!lightOk)</td><td><code>lightAt</code> :963–970 (used at :1256–1265)</td><td>§2.B bake box (20×20 from neighbors' final eff; missing neighbor → margin 0, not 15)</td></tr>
+<tr><td>Web's reverse gap: streaming remesh does NOT re-light old neighbors when a new chunk lands</td><td>streaming loop :1295–1326 (no recompute in updateChunkMesh)</td><td>documented deviation (i) — Godot fixes it (E2), strictly fewer cliffs</td></tr>
+<tr><td>Web's OWN block-light boundary cliff: per-chunk arrays seeded from LOCAL sources only (:974); the partial queue-gated pull never lights a dark chunk — the (14,0) pair the user reported EXISTS in the web</td><td><code>floodLight</code> seed :974 + pull :982–996 (re-derived in §1.3)</td><td>documented deviation (iii) — Godot implements the full Minecraft cross-boundary block-light fade (the user-directed correction, §1.3)</td></tr>
+</table>
+
+<h2>4. Data.* ids + probe cells</h2>
+<table>
+<tr><th>Id</th><th>Block (godot/autoload/data.gd)</th><th>light</th><th>att</th><th>Note</th></tr>
+<tr><td>0</td><td>Air</td><td>0</td><td>1</td><td>probe passable cell</td></tr>
+<tr><td>5</td><td>Water</td><td>0</td><td>3</td><td>attenuates ×3 (web parity)</td></tr>
+<tr><td>22</td><td>Torch (cross, thin)</td><td><b>14</td><td>1</td><td>user's source; probe places it</td></tr>
+<tr><td>23</td><td>Glowstone (SOLID)</td><td>12</td><td>0</td><td>emits but doesn't propagate through itself</td></tr>
+<tr><td>24</td><td>Lava (cross)</td><td><b>15</td><td>3</td><td>generator: only y&lt;8 (generator.gd:263–270) → the only NATURAL cross-boundary source</td></tr>
+<tr><td>28</td><td>Portal</td><td>0</td><td>1</td><td>—</td></tr>
+<tr><td>others</td><td>solids</td><td>0</td><td>0</td><td>block the flood; eff 0 by model (web dst semantics)</td></tr>
+</table>
+<p><b>Probe cells:</b> no cliff coordinates exist yet (no probe can read baked eff today — the only existing last_eff consumer is the AC-0126 breakspike eff-MD5, main.gd:2948–2949, which hashes but doesn't expose values). The lightaudit probe (§2.D) discovers them deterministically in the default seed-44 r4 world: (1) cliff pairs = every adjacent passable pair with |Δ|&gt;1 across all 81 chunks (world coords); (2) tunnel torch = first deterministic cave cell with a 5+5 air run crossing a boundary (fixed scan order) — its exact (x,y,z) is recorded in the PRE RESULT and reused as-is for POST (same world, same selection); (3) light_at reference spots = the 11 tunnel cells (|i|≤8 comparison). Battery cells (pocket/far from <code>_light_test</code>, main.gd:3483–3563) need no coordinates — the battery path is untouched and must stay EXACT.</p>
+
+<h2>5. Harness gates + fresh PRE anchors (captured 2026-08-27 11:30–11:33 EDT, job bash-76, <code>.scratch/AC-0129/summary.txt</code>, tree = post-AC-0126 d37f5f5)</h2>
+<table>
+<tr><th>Gate</th><th>Command (one godot at a time; <code>S=~/tools/godot/godot</code>; <code>export HOME=/tmp/dsh_home; mkdir -p $HOME</code> first)</th><th>FRESH PRE anchor (today)</th><th>POST requirement</th></tr>
+<tr><td>G0</td><td><code>timeout 300 $S --headless --path godot --quit</code></td><td>RC=0, 0 SCRIPT ERROR</td><td>same</td></tr>
+<tr><td>G1</td><td><code>timeout 600 env 'AWECRAFT_BATTERY=player;interact;light;fluids;genhash' $S --headless --path godot</code></td>
+<td>EXACT: player 2747 ms (moved 2.82, jump 36.43, on_floor); interact 1563 ms (place/drop true, cell [8,34,8]); light 2916 ms (<b>torch 14 / surface 15 / cave 0 / far 0→9</b>); fluids 3371 ms (sea 1406/2730 FLAT, [5,7], [5,8], lava 25/9, delta 1); genhash 898 ms; ok true, total 116633 ms</td><td>byte-exact same values</td></tr>
+<tr><td>G2</td><td><code>timeout 600 env AWECRAFT_LOGIC=perf AWECRAFT_RADIUS=4 AWECRAFT_MESH_INFO=1 $S --headless --path godot</code> (+ battery genhash arm)</td>
+<td>genhash 25/25 diff 0 vs <code>.scratch/AC-0126/genhash_seed44.log</code>; MINFO 121 lines diff 0 vs <code>.scratch/AC-0108/pre_minfo_r4.txt</code> (opaque Σverts[0] 125552, fluid 110112); MATINFO built 81, distinct_std 3, total_allocs 3 (3/3 fence)</td><td>identical (world/* data + geometry + material cache unchanged; eff changes vertex COLORS only — MINFO is geometry; AC-0126 proved the same property)</td></tr>
+<tr><td>G3 (Run-2 light + coordinator heavy)</td><td><code>timeout 600 env AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=4 $S --headless --path godot</code>; perf re-run; breakspike A/B; coordinator: boundary r4 ×2, RECSLICE r50 (AWECRAFT_RECPROBE=1), r50 mem, player ×4</td>
+<td>perf r4: total <b>5875</b>, build 2374, first_draw 196, p50 14, p95 57, frame_max 70, mem 50057034→82193782 (Δ30.6 MB), collision 223, read_sync_gen 0, light_self 81, staged 72/0/0, drain_s 5.88 · boundary r4: ok, p95 <b>64</b>, max 87, fwd_p95 <b>3268</b>, fwd_first10_p95 10, burst_p95 3268, irb 81/81/18, flap 0, queue 95, mem Δ31.7 MB, collision 222, walk 20 / 19.51 s, marker/remesh ok, light_computes 9–15/crossing · (r50 mem band 140.6–146.9 and RECSLICE ≤12.2 = AC-0126 10:24–10:32 today, same tree — NOT re-run by Run-1: 25-min runs exceed probe-job bounds; the coordinator's heavy pipeline re-runs them)</td>
+<td>perf total ≤ 6400 (≈+9% band), first_draw ≤ 250, p95 ≤ 65; boundary p95 ≤ 68, fwd_p95 ≤ 3500, fwd_first10 ≥ 8, irb 81, flap 0; breakspike A/B byte-identical (both sides = new kernel); r50 mem ≤ 146.9 (last_eff stays CORE 16×16 → no persistent growth); RECSLICE ≤ 12.2</td></tr>
+<tr><td>lightaudit (task gate)</td><td><code>timeout 600 env AWECRAFT_LOGIC=lightaudit AWECRAFT_RADIUS=4 $S --headless --path godot --fixed-fps 600</code></td>
+<td><b>PRE (Run-2, probe-first, unmodified tree):</b> hard-cliff (non-fluid pair) count &gt; 0; worst pair Δ ≥ 13 (torch tunnel boundary: 13 vs 0, or natural lava 15-x vs 0); tunnel present, ok = false; RESULT recorded verbatim (incl. fluid_pairs informational)</td><td><b>POST:</b> hard-cliff (non-fluid pair) count == 0 (fluid_pairs may be &gt; 0 — legitimate attenuation, NOT gated); tunnel.ok true (seq = 14,13,… smooth across the boundary; ref == seq for |i|≤8); worst_sources consistent; ok true; then SMOKE battery + genhash re-run</td></tr>
+<tr><td>G5</td><td><code>./build_windows.sh</code> + 8080/5180 curls (coordinator)</td><td>exe 109,576,544 B (AC-0126)</td><td>RC=0 + both daemons 200</td></tr>
+</table>
+<p><b>Battery interaction (documented old→new): NONE — RE-VERIFIED for RUN 1.1.</b> All four battery light values come from <code>world.light_at</code> (world.gd:1437, margin-8 box via <code>compute_light_split</code> :62–142) — the probe path is UNTOUCHED by the fix: <code>compute_light_split</code> is a GLOBAL computation over its own box with its own floods, on the UNCHANGED list (§2.A.3); the new kernel + dual strips exist only in <code>compute_light_flat_chunk_pull</code> / the sync single-chunk branch of <code>compute_light_flat</code> → torch 14 / surface 15 / cave 0 / far 0→9 stay EXACT regardless of where the pocket sits. MINFO 125552/121 holds (geometry, not color). genhash 25/25 holds (world data). No battery cell changes, no new→old direction either.</p>
+<p><b>AC-0126 breakspike eff-MD5 anchors are STALE BY DESIGN:</b> the new kernel changes boundary eff in the edit region (the intended effect of the fix — boundary cells adjacent to torch/lava chunks now import light), so breakspike eff-MD5s pinned against AC-0126's OLD contained kernel will differ where the edit region touches a chunk boundary. Expected and to be documented in results.html — it is NOT a regression. The task gates that DO bind: lightaudit PRE/POST (the bug gate) + MINFO (geometry, 125552/121) + G3 floors + genhash 25/25 + battery EXACT.</p>
+<p><b>PRE/POST A/B method:</b> probe-first — Run-2 adds ONLY the lightaudit probe to the unmodified tree → G0 → PRE run → implements §2 → POST run (same command) → diff RESULT. The A/B is apples-to-apples (same world, same deterministic tunnel cell). The breakspike A/B (AC-0126 pattern) WITHIN this task remains byte-identical by construction because both sides run the new kernel (only the comparison against AC-0126's old-code eff-MD5 anchors is stale by design — see above).</p>
+
+<h2>6. Snapshots</h2>
+<p><b>None required.</b> The fix changes baked eff / vertex colors at sub-surface chunk boundaries — the only natural cross-boundary source (lava, y&lt;8) is not visible in an R=1 surface iso, and a fresh world has no torches. The lightaudit RESULT + battery + G3 floors are the detectors. Optional (non-gated, coordinator's call): <code>post_lightaudit_iso_r1.png</code> via <code>xvfb-run -a env AWECRAFT_SNAPSHOT=/abs/path AWECRAFT_CAM=iso AWECRAFT_RADIUS=1 $S --path godot --rendering-method gl_compatibility</code>.</p>
+
+<h2>7. Risks</h2>
+<table>
+<tr><th>#</th><th>Risk</th><th>Mitigation / argument</th></tr>
+<tr><td>a</td><td>Extra pass cost: second <code>_flood_flat</code> (20 480 cells) on the worker</td><td>Fires ONLY when the UN-gated injection actually raises a cell — a neighbor whose block light reaches the boundary (torch/lava/glowstone within ≤ 14 cells of it — the user's case) or a local source; per lava-chunk landing the 4 neighbors pay it once. Runs on the WORKER thread (AC-0107 path). Normal case is still NET FASTER: 1 combined flood replaces today's 2 (sky+blk). Main-thread deltas: ≈ 23 KB strip copy + the blk-strip derivation (§7h) + 4-gen check + 20 KB E2 memcmp. Detectors: G3 floors (perf total ≤ 6400, boundary p95 ≤ 68, fwd_p95 ≤ 3500, fwd_first10 ≥ 8) + RECSLICE (slice budget is data-units, untouched).</td></tr>
+<tr><td>b</td><td>Invalidation churn / ping-pong from the neighbor-signature</td><td>CONFIRMED churn-free under the blk-only strip. Signature = 4 <code>eff_gen</code> ints + own data (no timestamps, unchanged); gen bumps ONLY on eff byte-change → an identical re-light bumps nothing → no eviction. E2 enqueues neighbors only when the chunk has OWN block-light (<code>blk_src</code>) AND eff changed (unchanged — a lava-chunk landing NOW correctly lights its neighbors because their rebuilds re-derive their blk strips from the lava's data: source cell → 15 EXACT). Churn-free by CONSTRUCTION, not just by the gate: a plain surface landing (blk_src false) has a blk strip that is ALL-ZERO (every boundary cell is an open column: eff == sky_seed → 0; no local source) = exactly the contained result → the injection is a no-op → the contained eff is already the FINAL eff → no re-request is ever generated, independent of any gate. Worst case per lava-chunk landing = 4 one-shot neighbor rebuilds; if a rebuild raises a boundary cell its eff changes → its gen bumps → ITS neighbors rebuild once → identical output (the fade is already contained) → no further bump → chain dies at depth ≤ 2. Cache race (neighbor gen changes between dispatch capture and handoff put) is caught by the dispatch-captured <code>ngen</code> stored in the entry.</td></tr>
+<tr><td>c</td><td>Edit path shares the new kernel — AC-0126 invariants</td><td>3×3 <code>light_dirty</code> unchanged; rebuilds self-light WITH strips (edit-time cliffs fixed); no sync light path regains (worker path + cap-drop requeue + EDIT_FLUSH_MAX_PER_FRAME=1 intact — breakspike <code>edit_syncs 0</code> must hold). Breakspike A/B stays byte-identical (both sides = new kernel); if the interior/edge pinned eff-MD5s differ from the AC-0126 old-code anchors, that is the fix's intended boundary change, documented in results.html (gate = new lightaudit + G3, not the old anchors).</td></tr>
+<tr><td>d</td><td>Web parity — the task goes BEYOND the web by design (user-directed)</td><td>The web HAS the block-light boundary cliff itself (partial queue-gated pull, §1.3); the target is Minecraft semantics (AGENTS.md canonical reference; user: "should fade smooth 14→0"). Sky-leak prevention is in the blk-only STRIP CONTENT (open column → 0), not a gate — a surface neighbor's sky-15 can never enter an enclosed cave. Residual documented corners: (i) conservative 0 in open columns — hidden blk &lt; 15, masked in the neighbor's own eff; the dark cell across stays 0 (web-faithful; the pair (15,x) is a SKY-light cliff either way — not the user's block-light cliff kind; §7i); (ii) over-carry: a closed-column cell whose eff comes from LATERALLY-flooded sky (a cave MOUTH within the neighbor chunk) carries eff (= its sky) as blk — the effect is a SMOOTH continuation of the mouth light into connected passable cells across the boundary (pairs stay Δ≤1; MC-consistent for connected air; bounded ≤ 14; no full-bright leak — a true surface cell sits in an open column → 0). Max-distributivity is no longer load-bearing (single-kind injection). The probe's darkness pre-check + tunnel ref==seq catch any leak anyway.</td></tr>
+<tr><td>e</td><td>AC-0128 eff semantics (night darkness reads battery cells)</td><td>Battery probe cells (surface 15 / cave 0 / torch 14 / far 9) read <code>light_at</code> (untouched path) → EXACT; AC-0128 consumes battery values, not mesh eff. No interaction.</td></tr>
+<tr><td>f</td><td>Bake-box corner strips (diagonal 2×2)</td><td>Required: <code>_s_face_light</code> tangential samples reach (nx, y, nz±1) for a face at the corner row/col → a sample with BOTH x and z out of bounds lands in a diagonal neighbor (e.g. block (15,y,15) east face samples (16,y,16) = SE chunk local (0,0)). 4 × 320 B. If Run-2 proves a corner sample unreachable, dropping that side is a 0-byte simplification (flag it in results.html).</td></tr>
+<tr><td>g</td><td>Probe reference limit</td><td><code>light_at</code> (margin-8 box) underestimates true light &gt;8 blocks from its center — the probe compares ref==seq only for |i|≤8 (§2.D.2e); the tunnel ok-check (no Δ&gt;1) covers the rest.</td></tr>
+<tr><td>h</td><td>blk-strip derivation cost on the MAIN thread (at strip build, per dispatch)</td><td>Bounded: per side = ONE top-down column pass over 2 columns × 16 × h = 2560 blocksLight checks (sky_n) + a source-id check + eff read per strip cell (2560 + 2560) — ≈ 30k simple ops total for 4 sides ≈ ms-scale worst case in GDScript. The detectors are the G3 floors (perf total ≤ 6400, boundary p95 ≤ 68, fwd_p95 ≤ 3500, fwd_first10 ≥ 8) + RECSLICE (slice budget is data-units, untouched). Fallback if a floor is threatened: cheap pre-check — skip the column scan for a neighbor with no <code>blk_src</code> AND no boundary cell with eff &gt; 0 (its strip is provably all-0); flag any such trim in results.html.</td></tr>
+<tr><td>i</td><td>Documented corner: conservative blk_n = 0 in an OPEN column (eff_n == sky_n == 15, non-source)</td><td>Any real blk there is &lt; 15 (a non-source cell's blk comes from a flood that always subtracts ≥ 1; sources are handled by the EXACT branch first) → invisible in the neighbor's own combined eff (max(15,blk) = 15 — the neighbor renders identically). The only downstream effect: our dark boundary cell across gets 0 instead of ≤ 13 — but the pair (15, x) is a SKY-light cliff either way (x = 0 conservative → Δ15; x = blk−1 ≤ 13 exact → Δ ≥ 2; BOTH &gt; 1) → no gate-relevant change, and it is not a block-light cliff of the user's kind (that case = closed columns both sides → exact branch). Web-faithful (the web's :974/:982–996 leave that cell 0 too); MC would light it — pre-existing web-faithful behavior, out of scope.</td></tr>
+<tr><td>j</td><td>G4 fence — do NOT add a persistent per-chunk blk array</td><td>The blk strips are TRANSIENT per-dispatch copies (≈ 11.5 KB/dispatch, freed with the ctx). A "natural" optimization — storing a persistent 16×16×h blk array per chunk (20480 B) so strips could be copied instead of derived — would add ≈ +137 MB at r50 scale and FAIL the G4 fence (mem Δ ≤ 146.9 MB). Run-2: leave it out; the derivation cost is bounded and detector-covered (§7h). last_eff stays CORE 16×16 — no persistent light growth of any kind.</td></tr>
+</table>
+
+<p><i>Run-1 (subagent_plan, xhigh), 2026-08-27. Static research only — no .gd edits, no git, no builds. Fresh anchors: <code>.scratch/AC-0129/{summary.txt,g0.log,battery.log,genhash_diff.txt,perf_r4.log,pre_minfo_r4.txt,minfo_diff.txt,boundary_r4.log}</code>. <b>RUN 1.1 (2026-08-27):</b> static revision per coordinator gate-check — §1.3 web-cliff factual correction + §2 blk-only un-gated injection (dual strips, §2.A.1 d, §2.C.1), §3/§5/§7 updates; no new godot runs (bash-76 anchors stand).</i></p>
+</body></html>
