@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0120 — plan (Run-1, xhigh)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.pass{color:#1a7f37;font-weight:600}.note{color:#555;font-size:13px}.key{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}</style></head><body>
+<h1>AC-0120 — plan: shared material cache (no per-build alloc)</h1>
+<p class="note">Run-1 (subagent_plan, xhigh) — 2026-08-26. All anchors below measured fresh on THIS tree (post-AC-0079, pre-AC-0120) in the probe window after the AC-0078 gate job released godot. Scratch: <code>.scratch/AC-0120/</code>.</p>
+
+<h2>1. Goal</h2>
+<p>Kill the per-build <code>StandardMaterial3D</code> allocation in the chunk mesher (four factory calls per build at <code>godot/world/chunk.gd:1499/1508/1523/1526</code> sync and <code>:1569/1578/1593/1596</code> worker-handoff — the spec's ":860" area) by routing every one through a <b>shared material cache</b> (static in chunk.gd, keyed by material kind, ≤4 live entries) so material alloc per crossing = 0, the ArrayMesh stays per-chunk, and visuals are byte-identical (MINFO r4 verts 125552 intact, battery exact).</p>
+
+<h2>2. Files to touch</h2>
+<h3>2.1 Material topology map (exact, current tree)</h3>
+<p><b>Per-chunk-build allocations — 4 <code>StandardMaterial3D.new()</code> factories in <code>chunk.gd</code>, 2 call sites each (8 sites total):</b></p>
+<table>
+<tr><th>factory (file:line)</th><th>kind / surfaces</th><th>properties (verbatim from tree)</th><th>alloc when</th></tr>
+<tr><td><code>_opaque_material(at)</code> chunk.gd:1300-1311</td><td>opaque (mesh surface 0)</td><td><code>vertex_color_use_as_albedo=true</code>; <code>albedo_texture = at</code> (merged atlas) <b>or</b> <code>Data.atlas_tex</code> (plain) with <code>texture_filter=NEAREST</code> (both branches); <code>albedo_color=Color(1,1,1,1)</code>; <code>roughness=0.95</code></td><td>every build (81/81 chunks)</td></tr>
+<tr><td><code>_cutout_material()</code> chunk.gd:1315-1320</td><td>cutout (flora surface 0)</td><td>opaque props + <code>transparency=TRANSPARENCY_ALPHA_SCISSOR</code>, <code>alpha_scissor_threshold=0.5</code></td><td>chunks containing leaves (id 7)</td></tr>
+<tr><td><code>_flower_material()</code> chunk.gd:1322-1326</td><td>flowers (flora surface 1)</td><td>cutout props + <code>cull_mode=CULL_DISABLED</code></td><td>chunks containing rose/dandelion (18/19)</td></tr>
+<tr><td><code>_fluid_material()</code> chunk.gd:1328-1334</td><td>thin-cross (mesh fluid surface 0)</td><td>vertex colors + <code>transparency=TRANSPARENCY_ALPHA</code>, <code>albedo_color=Color(1,1,1,0.62)</code>, <code>roughness=0.15</code>, <code>Data.atlas_tex</code> NEAREST</td><td>chunks containing torches (22) — <b>none in a natural world</b></td></tr>
+</table>
+<p>Call sites — sync <code>build_mesh()</code>: <code>chunk.gd:1499</code> (opaque, <code>_opaque_material(ms.tex)</code>), <code>:1508</code> (fluid), <code>:1511</code>/<code>:1514</code> (water/lava anim), <code>:1523</code> (cutout), <code>:1526</code> (flower). Worker-handoff <code>apply_accs()</code>: <code>:1569</code> (opaque), <code>:1578</code> (fluid), <code>:1581</code>/<code>:1584</code> (water/lava anim), <code>:1593</code> (cutout), <code>:1596</code> (flower).</p>
+<p><b>Already shared (NOT per-build — untouched by this task):</b> water(5)/lava(24) animation materials = 2 <code>ShaderMaterial</code> created ONCE in <code>data.gd:218-231</code> (<code>fluid_anim.gdshader</code>, params atlas/anim_frames/frame_time 0.3/phase 0.0/alpha_scale 0.62), stored in <code>Data.fluid_anim_mats</code> (data.gd:32), created at <code>Data._ready</code> (data.gd:188). <code>_fluid_anim_material(id)</code> (chunk.gd:1336-1341) just does <code>Data.fluid_anim_mats.get(id)</code> — chunk.gd:1511/1514/1581/1584. Other tree material sites (all one-shot globals, not per-chunk, not touched): <code>main.gd:1338/1354</code> (sky/water-surface AeroLib shaders), <code>held_mesh.gd:71</code> (held-item preview), <code>player.gd:345/368/386/647</code> (hand/highlight voxels).</p>
+<div class="key"><b>Steady-state count (derived, r4 = 81 built chunks):</b> PRE = <b>81 opaque + n_leaf cutout + n_flower flower + 0 torch</b> distinct <code>StandardMaterial3D</code> (each build allocates fresh; re-meshed chunks' old mats die with the freed mesh) ≈ <b>~130–170</b>, plus the 2 shared Data ShaderMaterials. Opaque 81 is empirically anchored (MINFO r4: 81/81 built chunks carry surface 0; sum 125552). Per crossing ≈ 4–5 rebuilt chunks × 3–4 mats ≈ <b>~18 allocs/crossing</b> (the spec number). <b>Mesh structure fact (measured):</b> <code>mesh_instance</code> and <code>fluid_instance</code> reference the <b>same ArrayMesh</b> per chunk (build_mesh adds the fluid surfaces to the mesh object already parented at chunk.gd:1500-1504) — all 68 fluid chunks in the fresh MINFO run have <code>verts==fverts</code>; the flora mesh is the only second ArrayMesh. The G3 walk must dedupe by material instance id.</div>
+
+<h3>2.2 The web's 3 shared materials (frozen isomorphism target)</h3>
+<pre>index.html:739-752
+function litMaterial(opts){
+  const m=new THREE.MeshBasicMaterial(Object.assign({map:atlasTex,vertexColors:true,side:THREE.DoubleSide},opts||{}));
+  ...
+}
+const matOpaque=litMaterial();
+const matCutout=litMaterial({alphaTest:0.5});
+const matTrans=litMaterial({transparent:true,depthWrite:false});
+</pre>
+<p>Partition (index.html:1141-1146): water/lava (<code>id===5||b.blend</code>) → <code>matTrans</code>; cutout/cross (leaves, flowers, torch) → <code>matCutout</code>; everything else → <code>matOpaque</code>. One instance each, every chunk's geometry references them; water/lava animate by swapping atlas frames in the <b>shared texture</b> (updateAtlasAnims), not per-material. Key space = 3 opacity classes.</p>
+<p><b>Godot's minimal isomorphic set = 4 StandardMaterial3D, not 3 — renderer reasons:</b> (1) Godot 4 encodes transparency mode AND cull mode as <b>per-material</b> render state, so alpha-scissor (cutout), alpha-blend (torch fluid) and cull-disabled (flower) are three distinct materials, not one alphaTest material; (2) web's DoubleSide-everywhere becomes Godot's default CULL_BACK for solid geometry (unchanged) + explicit CULL_DISABLED only for flowers. The 2 animated water/lava ShaderMaterials already exist and are already shared (Data) — Godot animates per-material via shader where the web animates the shared texture. <b>Final shared set: 4 StandardMaterial3D (opaque, cutout, flower, fluid) + 2 existing ShaderMaterials = 6 distinct materials across ALL chunks</b>, vs PRE ~130-170+2. Tint collapses out of the key: tint is baked into <b>per-vertex colors</b> at mesh time (chunk.gd:327-329, 366-367 — <code>Data.block_tint(id, face)</code> × per-block light color), no material property varies by tint, so key = kind only (+ texture identity for opaque).</p>
+
+<h3>2.3 Files</h3>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/world/chunk.gd</code></td><td>PRIMARY. (a) After the <code>_ms_*</code> statics (chunk.gd:42-44): 4 new statics <code>_mat_atlas/_mat_ms/_mat_cache/_mat_alloc_count</code> + new <code>static func _get_mat(kind, ms_tex)</code> (code in §2.4). (b) 8 call-site swaps: <code>:1499</code>→<code>_get_mat("opaque", ms.tex)</code>, <code>:1508</code>→<code>_get_mat("fluid")</code>, <code>:1523</code>→<code>_get_mat("cutout")</code>, <code>:1526</code>→<code>_get_mat("flower")</code>, <code>:1569</code>/<code>:1578</code>/<code>:1593</code>/<code>:1596</code> same. Factories <code>:1300-1334</code> stay verbatim as pure constructors; <code>_fluid_anim_material</code> (chunk.gd:1336-1341) UNTOUCHED; <code>_merge_atlas</code> (chunk.gd:47-111, h=1760) UNTOUCHED.</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><b>NO CHANGE (Run-1 decision, spec §"Run-1 decides").</b> Owner = chunk.gd statics (see §2.4 rationale). world.gd has zero material references (grep-verified); worker path untouched — <code>_threadmesh_worker</code> (world.gd:526-534) still calls only <code>ChunkScript.build_accs</code>; handoff <code>threadmesh_handoff</code> (world.gd:563-598, esp. :589 <code>c.apply_accs(res, _tm_ms_full)</code>) still main-thread; <code>refresh_textures</code> (world.gd:326-334) untouched — cache invalidation is lazy (§7-d).</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>HARNESS-ONLY, env-gated, off by default. (a) <code>const _ChunkScriptM = preload("res://world/chunk.gd")</code> near top (next to existing const block, main.gd:276-282 region). (b) Helper <code>func _matinfo_counts()</code> (code in §2.5). (c) In <code>_perf_test</code>, inside the existing <code>AWECRAFT_MESH_INFO</code> block (main.gd:4836-4838): after the MINFO loop, print one <code>MATINFO ...</code> line. (d) In <code>_boundary_test</code>, immediately before the final <code>Debug.result</code> (main.gd:5262): same gated print. NO RESULT-dict shape changes.</td></tr>
+</table>
+
+<h3>2.4 Cache design (owner / creation / key / lifetime / worker path)</h3>
+<pre>godot/world/chunk.gd — inserted after the _ms_* statics (chunk.gd:42-44):
+
+static var _mat_atlas: Texture2D = null   # Data.atlas_tex identity at last build
+static var _mat_ms: Texture2D = null      # merged-atlas texture identity at last build
+static var _mat_cache: Dictionary = {}    # kind -&gt; Material (opaque/cutout/flower/fluid)
+static var _mat_alloc_count := 0          # G3 build-path counter (total since boot)
+
+# Static like _merge_atlas (chunk.gd:47-49): main-thread-only in practice
+# (build_mesh sync + apply_accs handoff both run on the main thread).
+static func _get_mat(kind: String, ms_tex: Texture2D = null) -> Material:
+	if _mat_atlas != Data.atlas_tex or _mat_ms != ms_tex:
+		_mat_cache.clear()                 # texture swap / merge rebuild -&gt; fresh set
+		_mat_atlas = Data.atlas_tex
+		_mat_ms = ms_tex
+	if _mat_cache.has(kind):
+		return _mat_cache[kind]
+	var m: StandardMaterial3D
+	match kind:
+		"opaque": m = _opaque_material(ms_tex)
+		"cutout": m = _cutout_material()
+		"flower": m = _flower_material()
+		_: m = _fluid_material()
+	_mat_cache[kind] = m
+	_mat_alloc_count += 1
+	return m
+</pre>
+<ul>
+<li><b>Owner / creation:</b> statics in chunk.gd, lazy-created on first build per kind (no eager world-ready creation needed; the first 81-chunk build creates at most 4 — amortized O(1), 0 per crossing thereafter). Chosen over a world.gd var / autoload because: (1) chunk.gd is the ONLY consumer (zero material refs in world.gd); (2) the file's existing atlas cache (<code>_ms_key/_ms_tex/_ms_rects</code>, chunk.gd:42-44) already sets the idiom AND the lifetime precedent; (3) zero wiring through world.gd — the fence shrinks to the two files that already own the material and the probe; (4) <code>ChunkScript = preload("res://world/chunk.gd")</code> (world.gd:3) already treats chunk.gd as a static namespace the world pre-warms (world.gd:191-192).</li>
+<li><b>Key format:</b> <code>kind ∈ {"opaque","cutout","flower","fluid"}</code>; opaque additionally identity-keyed on <code>(Data.atlas_tex, ms_tex)</code> so a texture-pack swap (<code>Data.apply_atlas</code> data.gd:210-215 → <code>refresh_textures</code> world.gd:326-334 → <code>_tm_ms_full</code> rebuilt) or an <code>AWECRAFT_MERGE=0</code> run invalidates and rebuilds the 4-entry set (4 allocs once per texture generation, never per crossing). Live cache size ≤ 4; key space is kind-only — no per-chunk/per-coord/per-tint keys (fence: bounded).</li>
+<li><b>Lifetime across New/Continue:</b> materials reference only global textures (the res://-cached atlas + the static merged atlas) and no per-world data, so the static cache survives world recenter/Continue/New harmlessly — <code>Data</code> is an autoload (persistent), <code>load("res://assets/blocks_atlas.png")</code> (data.gd:178) returns the same engine-cached resource across worlds, and recenter frees/re-adds chunk nodes but the cached materials simply get referenced by the new chunks (chunk.gd:1503/1508-1510/1531-1541 parenting). Texture swap = lazy clear + 4 fresh allocs; stale entries are refcounted by their (soon-freed) meshes and die with them — no leak. <b>Stated: the cache outlives worlds by design and survives harmlessly; it is rebuilt only on texture-generation change.</b></li>
+<li><b>Worker compatibility (AC-0107) — mechanism + thread-safety verdict:</b> <b>workers never touch the cache.</b> The worker body (world.gd:526-534) runs only <code>ChunkScript.build_accs(...)</code> — a pure-static pipeline over <code>Packed*Array</code> copies and the <code>ctx</code>/<code>ms</code> snapshots, with <code>ms</code> containing ONLY <code>rects</code> (a duplicated dict) + <code>h</code> — no Texture2D, no Material, no <code>Data</code> (chunk.gd:1135-1225 has zero material references; world.gd:643-647 builds <code>ms_w</code> without textures). Material assignment happens EXCLUSIVELY on the main thread: sync <code>build_mesh</code> (world.gd:610/623/638) and <code>apply_accs</code> via <code>threadmesh_handoff</code> (world.gd:589, driven by <code>threadmesh_poll</code> world.gd:536 from the main loop world.gd:321). So the shared <code>Material</code> objects are read/written only ever from the main thread; <b>no material object crosses a thread boundary, no per-worker lookup, no serialization point needed — safe by construction</b>. (Had the design passed materials to workers, Godot ref-counted objects are NOT safe for concurrent mutation and would have needed a per-build main-thread handoff — unnecessary here; the AC-0107 handoff pattern already does the assignment on main.)</li>
+</ul>
+
+<h3>2.5 G3 allocation probe (design, exact code, pre/post)</h3>
+<p>Env-gated by the EXISTING <code>AWECRAFT_MESH_INFO</code> (already in <code>HARNESS_ENVS</code> main.gd:279 — no new env var, no list change), off by default, prints one <code>MATINFO</code> line — the MINFO/FLUIDPROBE pattern. It measures BOTH spec candidates at once: (a) distinct <code>StandardMaterial3D</code> instances attached to chunk meshes at steady state, and (b) the build-path counter at the former :860 sites (<code>_mat_alloc_count</code>). The walk covers <code>mesh_instance</code> + <code>fluid_instance</code> (same mesh object — deduped by instance id) + <code>flora_instance</code> (the only surface mesh_info() misses — world.gd:1502-1526 walks only the first two).</p>
+<pre>godot/scenes/main.gd — helper (harness-only):
+
+func _matinfo_counts() -> Dictionary:
+	var mat_ids := {}
+	var std_ids := {}
+	var built_n := 0
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if not c.mesh_built:
+			continue
+		built_n += 1
+		for inst in [c.mesh_instance, c.fluid_instance, c.flora_instance]:
+			if inst == null or inst.mesh == null:
+				continue
+			var am: ArrayMesh = inst.mesh
+			for s in range(am.get_surface_count()):
+				var mat = am.surface_get_material(s)
+				if mat == null:
+					continue
+				mat_ids[mat.get_instance_id()] = true
+				if mat is StandardMaterial3D:
+					std_ids[mat.get_instance_id()] = true
+	return {"built_chunks": built_n, "distinct_std": std_ids.size(),
+			"distinct_all": mat_ids.size(), "total_allocs": int(_ChunkScriptM._mat_alloc_count)}
+</pre>
+<pre># _perf_test, main.gd:4836-4838 becomes:
+	if OS.get_environment("AWECRAFT_MESH_INFO") != "":
+		for e in world.mesh_info():
+			print("MINFO ", JSON.stringify(e))
+		var mi = _matinfo_counts()
+		print("MATINFO built_chunks=%d distinct_std=%d distinct_all=%d total_allocs=%d" % [mi.built_chunks, mi.distinct_std, mi.distinct_all, mi.total_allocs])
+# _boundary_test, immediately before Debug.result (main.gd:5262): same 3-line gated block.
+</pre>
+<p><b>Expected values:</b></p>
+<table>
+<tr><th></th><th>PRE (Run-2 measures: probe added FIRST, on the unmodified chunk.gd, then the cache)</th><th>POST</th></tr>
+<tr><td><code>MATINFO ... distinct_std</code></td><td>≈ 81 + n_leaf + n_flower ≈ <b>130–170</b> (scales with chunk count)</td><td><b>3</b> (opaque+cutout+flower; no torches in a natural world) — constant regardless of chunk count/crossings; 4 only if a torch chunk exists</td></tr>
+<tr><td><code>total_allocs</code></td><td>≈ (completed builds × kinds per chunk) — far above 81 (the fresh perf run does <code>build_units</code>=804 incl. re-meshes)</td><td><b>3</b> — one per kind at first build, then 0 for every (re)build and every crossing; stays 3 through the boundary run's 20 crossings</td></tr>
+<tr><td><code>distinct_all</code></td><td>PRE + 2 (shared water/lava ShaderMaterials)</td><td><b>5</b> (3 std + 2 anim, lava+water both present at r4) — or 4 if lava absent</td></tr>
+<tr><td><code>built_chunks</code></td><td>81 (r4)</td><td>81 (r4); 81 at boundary end</td></tr>
+</table>
+<div class="key"><b>Why one steady-state measurement proves "alloc per crossing = 0":</b> the fresh perf r4 run alone performs 804 build units (initial fill + re-meshes on neighbor-data landing) and 20-crossing-equivalent churn would add more in boundary — POST, <code>total_allocs</code> is exactly the number of kinds created at first contact and <code>distinct_std</code> never grows, in either run. PRE, both metrics scale with build count. The boundary+<code>AWECRAFT_MESH_INFO=1</code> run is the explicit post-crossing evidence (20 crossings, §5 G3b).</div>
+
+<h2>3. Frozen spec refs (verbatim, file:line)</h2>
+<ul>
+<li>Web 3 materials: <code>index.html:750-752</code> — <code>matOpaque=litMaterial()</code> / <code>matCutout=litMaterial({alphaTest:0.5})</code> / <code>matTrans=litMaterial({transparent:true,depthWrite:false})</code>; base <code>index.html:740</code> = <code>MeshBasicMaterial({map:atlasTex,vertexColors:true,side:THREE.DoubleSide})</code>; partition <code>index.html:1141-1146</code>; chunk→mesh attach <code>index.html:1287-1293</code> (<code>c.mesh=new THREE.Mesh(g.o,matOpaque)</code>, <code>cutMesh…matCutout</code>, <code>waterMesh…matTrans</code>). <b>index.html is frozen — never modified.</b></li>
+<li>Material properties that MUST be reproduced byte-identically by the shared instances (they already are — factories unchanged): <code>chunk.gd:1302-1310</code> (vertex_color_use_as_albedo; merged or plain atlas + NEAREST + white albedo; roughness 0.95), <code>:1316-1319</code> (ALPHA_SCISSOR, threshold 0.5), <code>:1323-1325</code> (+ CULL_DISABLED), <code>:1330-1333</code> (ALPHA, alpha 0.62, roughness 0.15, atlas NEAREST).</li>
+<li>Merged atlas: <code>chunk.gd:47-111</code> <code>_merge_atlas()</code> — 1024×<b>1760</b> (AC-0117 <code>"h"</code> key, chunk.gd:51/111), statics chunk.gd:42-44; the opaque material's texture is this <code>ImageTexture</code> — a single shared texture object, so sharing the material that references it is renderer-safe (textures are ref-counted resources; N meshes already share it today via the statics).</li>
+<li>Animated fluids: <code>data.gd:32</code> (<code>fluid_anim_mats</code>), <code>data.gd:218-231</code> (ShaderMaterial ×2: atlas/anim_frames/frame_time 0.3/phase 0.0/alpha_scale 0.62), refreshed by <code>data.gd:210-215</code>.</li>
+<li>MINFO r4 verts fence: <b>125552</b> = sum of surface-0 (opaque) verts over the 81 built chunks (AC-0117 G4, re-verified fresh on this tree 2026-08-26). Invocation: <code>AWECRAFT_LOGIC=perf AWECRAFT_MESH_INFO=1 AWECRAFT_RADIUS=4</code> — the <code>_perf_test</code> MINFO block (main.gd:4836-4838), NOT the unknown-logic fallback (main.gd:971-973 prints before meshes settle — all 121 <code>built:false</code>, AC-0117 G4 note).</li>
+<li>Worker model (AC-0107, frozen): worker = <code>ChunkScript.build_accs</code> on fresh <code>duplicate()</code> copies (world.gd:526-534); main assembles via <code>apply_accs</code> (world.gd:589); the spawn chunk (0,0) and sync fallbacks stay sync (world.gd:609-614, 621-627, 634-642).</li>
+</ul>
+
+<h2>4. Data.* ids</h2>
+<table>
+<tr><th>id</th><th>block</th><th>material path</th><th>key facts (data.gd file:line)</th></tr>
+<tr><td>5</td><td>Water</td><td><code>fluid_anim_mats[5]</code> (shared ShaderMaterial)</td><td>cross:true, fluid; <code>data.gd:155</code>; anim frames from <code>atlas_rects["5"].anim</code> (data.gd:234-238)</td></tr>
+<tr><td>7</td><td>Leaves</td><td>cutout material</td><td>cutout:true, <code>data.gd:157</code>; tint <code>TINT_LEAVES = Color(60/255,140/255,48/255)</code> (data.gd:37, applied at data.gd:269) — baked per-vertex, NOT a material property</td></tr>
+<tr><td>18/19</td><td>Rose/Dandelion</td><td>flower material</td><td>cross:true (non-thin), <code>data.gd:161-162</code></td></tr>
+<tr><td>22</td><td>Torch</td><td>fluid material (thin-cross)</td><td>cross:true, thin:true, <code>data.gd:170</code> — the ONLY thin-cross block → the <code>fluid</code> kind is torch-gated</td></tr>
+<tr><td>24</td><td>Lava</td><td><code>fluid_anim_mats[24]</code> (shared ShaderMaterial)</td><td>cross:true, light 15, <code>data.gd:172</code></td></tr>
+</table>
+<p>Other constants: <code>CHUNK 16</code> (data.gd:3), <code>HEIGHT 80</code> (data.gd:4), <code>SEA 30</code> (data.gd:5), <code>ATLAS_PX 1024.0</code> (data.gd:33), <code>TILE_PX 32</code> (data.gd:34). Tints <code>TINT_GRASS_TOP/WATER/...</code> (data.gd:36-40s) are consumed at mesh time (chunk.gd:327-329/366-367) — the (kind,tint) key collapses to (kind) + texture identity.</p>
+
+<h2>5. Harness gates (exact commands + expected values; all fresh anchors measured 2026-08-26 on THIS tree)</h2>
+<p class="note">Godot binary: absolute path <code>/home/angrygiant/tools/godot/godot</code> with <code>HOME=/tmp/dsh_home</code> (mkdir in the same call) — the AC-0078 gate job died using <code>$HOME/tools/godot/godot</code> (no such file in its /tmp); Run-2 and the coordinator gate job MUST use the absolute path. One godot at a time.</p>
+<p><b>FRESH PRE-CHANGE ANCHORS (measured by Run-1, logs in <code>.scratch/AC-0120/</code>):</b></p>
+<table>
+<tr><th>anchor</th><th>measured</th></tr>
+<tr><td>G0 <code>--headless --quit</code></td><td>RC=0, 0 script errors (<code>g0</code> run, tail clean)</td></tr>
+<tr><td>perf r4</td><td>total_ms <b>5870</b> (anchor ~5715, in noise), build_ms 2276, gen_ms 705, first_draw <b>191</b> (anchor 192), p50 14 / p95 57 / frame_max 70, max_drain 68.0, drain_frames 441, frames 359, fog_ok true (fog_near 20/fog_far 76/fog_edge 80), read_sync_gen 0, create_sync_gen 1, chunks 81 / total_chunks 121, all_meshed true, collision_shapes 81, build_units 804, light_self_computes 81, staged_drained 72, mem 49860702→79582790 (Δ29.72 MB) (<code>perf_r4_minfo.log</code>)</td></tr>
+<tr><td>MINFO r4</td><td>121 lines / 81 built / <b>surface-0 sum = 125552 EXACT</b>; 68 chunks with fluid surfaces (159 fluid surface entries); all 68 fluid chunks share one ArrayMesh between mesh_instance/fluid_instance (<code>perf_r4_minfo.log</code>)</td></tr>
+<tr><td>genhash</td><td>25/25 GENHASH, GENMS 791, MD5-of-25-lines = <b>61de26e9a542a5ce2db62e7157d6c018</b> (anchor match; <code>genhash.log</code>)</td></tr>
+<tr><td>battery spot light;fluids</td><td>ok:true — light: torch_level 14, surface_eff 15, cave_eff 0, torch_far 0→9; fluids: sea 2730/2730 + 1406/1406, stable true, water_delta 1, shore [5,7], source [5,8], water_on_lava 25, sideways_lava 9 (<code>battery_spot.log</code>)</td></tr>
+<tr><td>boundary r4</td><td>ok:true, built_final 81, irb max 81 / min 18, walk p95 <b>61</b> (floor 62-65 — at/better), max 119, fwd_p95 <b>3233</b> (floor 2932-3238), fwd_first10_p95 <b>10</b> (≥8), burst_p95 3233, flap <b>0</b>, crossings 20, walk_s 19.51, queue_size 95, read_sync_gen 0, loads 220 / unloads 209, remesh_ok true, mem_delta 30.9 MB (<code>boundary_r4.log</code>)</td></tr>
+<tr><td>G3 PRE distinct materials</td><td>analytic: 81 opaque (empirically anchored) + n_leaf + n_flower ≈ 130–170 + 2 shared anim; <b>exact PRE recorded by Run-2's probe-first run (see G3a)</b> — Run-1 cannot add the walk without a .gd edit (read-only role)</td></tr>
+</table>
+<table>
+<tr><th>gate</th><th>command (repo root)</th><th>expected (POST)</th></tr>
+<tr><td><b>G1</b> clean</td><td><code>HOME=/tmp/dsh_home ~/tools/godot/godot --headless --path godot --quit</code> (absolute path — see note)</td><td>RC=0, zero <code>SCRIPT ERROR</code> lines; ALL other runs also zero script errors</td></tr>
+<tr><td><b>G2a</b> genhash</td><td><code>HOME=/tmp/dsh_home AWECRAFT_LOGIC=genhash /home/angrygiant/tools/godot/godot --headless --path godot</code></td><td>25/25 GENHASH lines; MD5-of-25-lines = <b>61de26e9a542a5ce2db62e7157d6c018</b></td></tr>
+<tr><td><b>G2b</b> battery</td><td><code>HOME=/tmp/dsh_home AWECRAFT_BATTERY="player;interact;light;fluids;buckets" /home/angrygiant/tools/godot/godot --headless --path godot</code></td><td>EXACT: ok true; sea 2730/2730 + 1406/1406 stable; torch_level 14; horizontal_moved 2.82; water_on_lava 25; sideways_lava 9; place_ok/drop_spawned true (light+fluids spot already EXACT pre-change)</td></tr>
+<tr><td><b>G2c</b> MINFO verts</td><td><code>HOME=/tmp/dsh_home AWECRAFT_LOGIC=perf AWECRAFT_MESH_INFO=1 AWECRAFT_RADIUS=4 /home/angrygiant/tools/godot/godot --headless --path godot</code></td><td>sum of surface-0 verts over 81 built chunks = <b>125552 EXACT</b>; all_meshed true; (this run also carries the G3 MATINFO line)</td></tr>
+<tr><td><b>G3a</b> probe, no-crossings run</td><td>Run-2, <b>probe added first, cache NOT yet flipped</b>: same command as G2c → record PRE MATINFO line. Then flip the cache, re-run → POST:</td><td>PRE: <code>distinct_std ≈ 130–170, total_allocs ≫ 81</code> (exact value logged); POST: <code>MATINFO built_chunks=81 distinct_std=3 distinct_all=5 total_allocs=3</code> (distinct_all 4 if lava absent at r4 — gate keys on <b>distinct_std=3 and total_allocs=3</b>, both constant)</td></tr>
+<tr><td><b>G3b</b> probe, post-crossings</td><td><code>HOME=/tmp/dsh_home AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=4 AWECRAFT_MESH_INFO=1 /home/angrygiant/tools/godot/godot --headless --path godot</code></td><td>after 20 crossings: <code>MATINFO built_chunks=81 distinct_std=3 total_allocs=3</code> — material alloc per crossing = 0; boundary RESULT floors still hold (below)</td></tr>
+<tr><td><b>G4</b> perf no-regression</td><td>G2c command (RESULT fields)</td><td>total_ms within noise of 5870 (±~10%; build_ms may IMPROVE), first_draw ≤ 300 (anchor 191), p95 ≤ ~60, fog_ok true, read_sync_gen 0, all_meshed true, mem_after ≤ 79.58 MB + 0.5 MB (material delta: ~140 PRE objects × ~2 KB → 3; &lt;1.5% of the 29.7 MB world delta — reported in results.html)</td></tr>
+<tr><td><b>G5</b> boundary floor</td><td>plain boundary r4 (G3b command) + coordinator heavy-gate job: boundary r4 ×2 flake + player ×4 + RECSLICE r50</td><td>ok true; walk p95 ≤ ~65 (fresh 61); fwd_p95 ≤ 3500 (fresh 3233) + fwd_first10_p95 ≥ 8 (fresh 10); irb ≥ 60 (fresh 81); flap 0; queue_size 95; RECSLICE r50 ≤ 12.2 (AC-0118 anchor, coordinator job — NOT run by Run-1, no recenter interaction with this change)</td></tr>
+<tr><td><b>G6</b> windows build</td><td><code>./build_windows.sh</code> (Run-2 + coordinator)</td><td>RC=0, fresh <code>exports/windows/AweCraft.exe</code> + debug/console exes, 8080 + 5180 http 200, clean tree, <code>AC-0120-results.html</code> committed</td></tr>
+</table>
+<p class="note">Run-1 probe scope (done): G0, G2c (MINFO/perf), G2a, battery spot, boundary r4 — r50/RECSLICE, full battery, flake ×N, builds are Run-2/coordinator per the HEAVY-GATE PIPELINE. <b>AC-0078's heavy gates FAILED environmentally</b> (all 14 gates rc=127, <code>/tmp/dsh_home/tools/godot/godot: No such file or directory</code>, windows build rc=1 — the gate script used <code>$HOME/</code>-relative godot; logs <code>.scratch/AC-0078/gates.log</code>, marker written anyway at 20:30:02) — the coordinator must re-run AC-0078's gates with the absolute binary path before committing AC-0078; this plan's commands all use the absolute path.</p>
+
+<h2>6. Snapshot/render names (Run-2 smoke ≤1 R=1 render)</h2>
+<pre>HOME=/tmp/dsh_home AWECRAFT_SNAPSHOT=tasks/AC-0120/post_r1_iso.png AWECRAFT_CAM=iso AWECRAFT_RADIUS=1 \
+  xvfb-run -a /home/angrygiant/tools/godot/godot --path godot --rendering-method gl_compatibility
+</pre>
+<p>→ <code>tasks/AC-0120/post_r1_iso.png</code> (single R=1 iso render, embedded in <code>AC-0120-results.html</code>; visual spot = ocean/water translucency, leaves cutout, flowers, terrain texture — all must look identical to the pre-change render; no A/B render gate — the byte-identical fence is G2c verts + G2b battery + unchanged material properties).</p>
+
+<h2>7. Risks / edge cases</h2>
+<ul>
+<li><b>(a) Shared material + per-chunk mesh in Godot's renderer:</b> no per-instance material state exists in this tree — grep-verified: materials are set only at the 8 chunk.gd call sites; no <code>material_override</code> on chunk MeshInstance3Ds, no post-construction property mutation (the only material-property mutations in the tree are the player hand/highlight probes, main.gd:4616-4638 — different objects). StandardMaterial3D uniforms are per-Material; per-object variation here is entirely in per-vertex data (position/normal/color/UV), and the atlas texture is ALREADY shared across all chunks via the <code>_ms_*</code> statics (chunk.gd:42-44) — sharing the material changes no render state. <b>Confirmed: no per-chunk material property (shading/fog/transparency) — fog is global (DayNight), transparency mode is part of the kind key.</b></li>
+<li><b>(b) Transparent water/lava sorting:</b> water/lava already use the ONE shared <code>Data.fluid_anim_mats</code> ShaderMaterial today (chunk.gd:1511/1514/1581/1584) — no change at all. The alpha-blended <code>fluid</code> material (torches only) goes from per-chunk-instance to shared: Godot's transparent sorting is per-MeshInstance3D (object depth), not per-Material, so sharing changes NOTHING about sort order — and a natural world has no torch chunks anyway (kind never created, alloc count 3 not 4).</li>
+<li><b>(c) Worker thread safety (the big one) — VERDICT: safe by construction, no mechanism needed.</b> Material objects never cross a thread boundary: the worker runs only <code>build_accs</code> (pure-static, Packed*Arrays + ctx/ms snapshots, zero Material/Data/Texture access — chunk.gd:1135-1225, world.gd:526-534); assignment is main-thread-only in <code>build_mesh</code> (world.gd:610/623/638) and <code>apply_accs</code> via <code>threadmesh_handoff</code> (world.gd:589). The cache dict is therefore read/written by exactly one thread. (If a future change DID pass materials to workers: Godot ref-counted objects are safe for concurrent READ but not concurrent WRITE — a worker-side read of an immutable material would be OK, but the cache's lazy CREATE path mutates the dict, so that design would need main-thread lookup; not applicable here.)</li>
+<li><b>(d) Cache lifetime across New/Continue/texture-swap:</b> statics outlive worlds by design — materials reference only global textures (engine-cached atlas + static merged atlas) and no world data, so New/Continue/recenter is harmless (new chunks reference the same 4 materials; freed chunks' meshes free their refs, the cache keeps the 4 alive). Texture-pack swap (<code>apply_atlas</code> → <code>refresh_textures</code> world.gd:326-334) changes <code>Data.atlas_tex</code> and <code>_tm_ms_full</code> → first subsequent build sees the identity key mismatch → <code>_mat_cache.clear()</code> + up to 4 fresh allocs (once per texture generation). Stale entries stay alive only while their meshes do (refcounted) — bounded, no leak, key space kind-only (fence satisfied).</li>
+<li><b>(e) MINFO verts fence:</b> the change touches ONLY <code>surface_set_material</code> arguments — no vertex/UV/index code, no Acc, no emit path. MINFO r4 sum re-run post-change (G2c) must be 125552 EXACT; any drift = geometry regression = fail.</li>
+<li><b>(f) Memory:</b> PRE ≈ 81+n_leaf+n_flower ≈ 130–170 StandardMaterial3D (each a small ref-counted object with shared shader state, ~1–3 KB) ≈ 0.2–0.5 MB, freed/re-allocated on every re-mesh (GC churn across 804 build units); POST = 3–4 objects, Δ &lt; 0.5 MB &lt; 1.5% of the measured 29.72 MB r4 world delta — G4's "memory does not grow" holds by construction; report exact mem_before/after in results.html.</li>
+<li><b>(g) Spec line-number drift:</b> the spec's "chunk.gd:860" predates the AC-0107/AC-0117 growth of the file — the actual sites are :1499/1508/1523/1526 (sync) + :1569/1578/1593/1596 (handoff); enumerated in §2.1. Web "index.html:1290" = the chunk→material attach lines 1287-1293; the 3 material definitions are at 750-752. No behavior difference.</li>
+<li><b>(h) AWECRAFT_MERGE=0 runs:</b> <code>ms.tex=null</code> → opaque material uses plain <code>Data.atlas_tex</code>; key (atlas, null) is distinct from the merged key — a merge-mode toggle mid-session (env is per-build, chunk.gd:1475) clears + rebuilds the 4-entry set; still bounded, still O(1) per crossing. No harness gate uses MERGE=0.</li>
+</ul>
+</body></html>
