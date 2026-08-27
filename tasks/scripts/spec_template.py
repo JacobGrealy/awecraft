@@ -7,9 +7,22 @@ Usage:
 Writes tasks/AC-NNNN/spec.html (or --out PATH) as a scaffold with two kinds of
 sections:
 
-  AUTO  — generated from TASKS.yaml, tasks/HARNESS.md and the data.gd/generator.gd
-          constants (parsed fresh at run time so the spec never carries stale
-          numbers). Labeled "AUTO (… do not hand-edit)".
+  AUTO  — generated from TASKS.yaml and tasks/HARNESS.md. Labeled
+           "AUTO (… do not hand-edit)".
+
+Slim vs full: the DEFAULT output is slim — the big AUTO tables (Data.* constants,
+  RESULT shapes, known-stable values) are emitted as PATH POINTERS, not inlined
+  rows, so the scaffold stays ~6 KB instead of ~20 KB (every subagent prompt
+  that references spec.html pays for the size). Pass --full to inline the
+  tables (parsed fresh at run time so the spec never carries stale numbers) —
+  the coordinator's verbatim-constants gate diff (two-phase.md) uses --full.
+
+  The gates section is TIERED: "Builder gates (Run-2, in-session)" (G0 + SMOKE
+  + task probe + ≤1 render) vs "Coordinator Heavy Gates (background
+  bash/workflow, not builder, r50 nightly only)".
+
+Unregistered ids (AC-9999 not in TASKS.yaml) get a bare scaffold (empty
+  registry fields, status "?") with a warning — for template checks.
   FILL  — the five coordinator-only sections (Goal, Task-specific requirements,
           Task-specific gates, Scope, Fences), each a clear <!-- FILL: … -->
           placeholder with a one-line example. Labeled "FILL BY COORDINATOR".
@@ -175,7 +188,7 @@ def _const_table_row(name, val, lineno, relpath):
             % (escape(name), escape(val), escape(relpath), lineno))
 
 
-def _build_html(task, task_id):
+def _build_html(task, task_id, full=False):
     data_consts = _parse_gd_constants(DATA_GD)
     gen_consts = _parse_gd_constants(GEN_GD)
     data_rel = "godot/autoload/data.gd"
@@ -247,76 +260,139 @@ def _build_html(task, task_id):
       '<a href="https://minecraft.wiki/w/Item">Item</a>.</li>')
     a("</ul>")
 
-    # ---- Data.* constants (AUTO, parsed) ----
+    # ---- Data.* constants (AUTO; slim = path pointer, --full = tables) ----
     a('<h2>Data.* world constants</h2>')
-    a('<div class="auto"><b>AUTO (parsed from %s + %s at generation time — do not '
-      'hand-edit; values are current as of the run)</b></div>' % (escape(data_rel), escape(gen_rel)))
-    a("<h3>%s</h3>" % escape(data_rel))
-    a("<table><tr><th>const</th><th>value</th><th>file:line</th></tr>")
-    for name, val, ln in data_consts:
-        a(_const_table_row(name, val, ln, data_rel))
-    a("</table>")
-    a("<h3>%s</h3>" % escape(gen_rel))
-    a("<table><tr><th>const</th><th>value</th><th>file:line</th></tr>")
-    for name, val, ln in gen_consts:
-        a(_const_table_row(name, val, ln, gen_rel))
-    a("</table>")
-    a("<p class='note'>Biome thresholds are computed in <code>generator.gd "
-      "biome_at()</code> (t &lt; -0.25 snow; t &gt; 0.35 &amp; m &lt; 0.1 desert; "
-      "m &gt; 0.25 forest; else plains) — not top-level constants, so they are not in "
-      "the tables above.</p>")
+    if full:
+        a('<div class="auto"><b>AUTO (parsed from %s + %s at generation time — do not '
+          'hand-edit; values are current as of the run)</b></div>' % (escape(data_rel), escape(gen_rel)))
+        a("<h3>%s</h3>" % escape(data_rel))
+        a("<table><tr><th>const</th><th>value</th><th>file:line</th></tr>")
+        for name, val, ln in data_consts:
+            a(_const_table_row(name, val, ln, data_rel))
+        a("</table>")
+        a("<h3>%s</h3>" % escape(gen_rel))
+        a("<table><tr><th>const</th><th>value</th><th>file:line</th></tr>")
+        for name, val, ln in gen_consts:
+            a(_const_table_row(name, val, ln, gen_rel))
+        a("</table>")
+        a("<p class='note'>Biome thresholds are computed in <code>generator.gd "
+          "biome_at()</code> (t &lt; -0.25 snow; t &gt; 0.35 &amp; m &lt; 0.1 desert; "
+          "m &gt; 0.25 forest; else plains) — not top-level constants, so they are not in "
+          "the tables above.</p>")
+    else:
+        a('<div class="auto"><b>AUTO (paths only — regenerate with '
+          '<code>python3 tasks/scripts/spec_template.py AC-NNNN --full</code> to '
+          'inline the tables; values are parsed fresh at run time)</b></div>')
+        a("<ul>")
+        a("<li><code>%s</code> — all <code>Data.B_*</code> block ids, items, tools, "
+          "SEA/HEIGHT/CHUNK constants (grep <code>^const </code>).</li>" % escape(data_rel))
+        a("<li><code>%s</code> — biome constants + <code>T_G_*</code> tool ids; biome "
+          "thresholds are computed in <code>biome_at()</code> (t &lt; -0.25 snow; "
+          "t &gt; 0.35 &amp; m &lt; 0.1 desert; m &gt; 0.25 forest; else plains).</li>" % escape(gen_rel))
+        a("</ul>")
 
-    # ---- Verify gates (AUTO) ----
-    a('<h2>Verify gates (default)</h2>')
-    a('<div class="auto"><b>AUTO (from tasks/HARNESS.md — do not hand-edit)</b></div>')
-    a('<div class="auto"><b>G0</b> — <code>~/tools/godot/godot --headless --path godot '
-      '--quit</code> exits 0 with <b>zero</b> <code>SCRIPT ERROR</code> lines.</div>')
-    a('<div class="auto"><b>AC-0061 tiered protocol</b> — subagent runs the <b>SMOKE</b> '
-      'tier (2–4 dependency-mapped modes + genhash); the <b>coordinator</b> runs the '
-      '<b>FULL battery</b> before build; the dependency table points at '
-      '<code>tasks/AC-0061/AC-0061-results.html</code>.</div>')
+    # ---- Builder gates (AUTO — what Run-2 runs in-session) ----
+    a('<h2>Builder gates (Run-2, in-session)</h2>')
+    a('<div class="auto"><b>AUTO (tiered per tasks/HARNESS.md §3 — do not hand-edit)</b></div>')
+    a('<div class="auto"><b>G0</b> — <code>env HOME=/tmp/dsh_home godot --headless '
+      '--path godot --quit</code> exits 0 with <b>zero</b> <code>SCRIPT ERROR</code> '
+      'lines.</div>')
+    a('<div class="auto"><b>SMOKE</b> — one battery launch with the 2–4 '
+      'dependency-mapped modes for this change area (HARNESS.md §3 table, e.g. '
+      'world/* → <code>player;interact;light;fluids</code>) + the <code>genhash</code> '
+      'arm (25/25) whenever <code>world/*</code> or <code>data.gd</code> is touched; '
+      '~30 s total. The task-specific probe mode (if this spec defines one, '
+      'env-gated, headless ≤ 60 s) runs here too.</div>')
+    a('<div class="auto"><b>RENDER</b> — ≤ 1 render at <code>AWECRAFT_RADIUS=1</code> '
+      '(xvfb, gl_compatibility), PNG under <code>tasks/AC-NNNN/</code>.</div>')
+    a('<div class="auto"><b>EXIT</b> — after G0+SMOKE(+probe)+≤1 render the builder '
+      'writes results + continuity and EXITS. The heavy gates below are the '
+      'coordinator&#39;s background job — the builder never runs them.</div>')
     a('<div class="auto"><b>Sandbox env</b> — every godot call is ONE bash command that '
       'sets HOME first; <b>one godot at a time</b> (concurrent runs corrupt the '
       '<code>.godot</code> cache and hang). Scratch to project-local <code>.scratch/</code>.</div>')
     a("<pre>export HOME=/tmp/dsh_home; mkdir -p $HOME; "
       "cd /home/angrygiant/github_projects/AweCraft</pre>")
 
-    # ---- RESULT shapes (AUTO, from HARNESS.md) ----
-    a('<h2>Expected RESULT shapes (default battery + genhash)</h2>')
-    a('<div class="auto"><b>AUTO (rows pulled from tasks/HARNESS.md §1 — do not '
-      'hand-edit)</b></div>')
-    if header and hrows:
-        a("<table><tr><th>mode</th><th>key RESULT fields</th><th>typical wall</th></tr>")
-        field_idx = header.index("key RESULT fields") if "key RESULT fields" in header else 3
-        wall_idx = (header.index("typical wall (2026-08-24)")
-                    if "typical wall (2026-08-24)" in header else 5)
-        for mode in BATTERY_MODES:
-            r = hrows.get(mode)
-            if not r:
-                continue
-            fields = r[field_idx] if len(r) > field_idx else ""
-            wall = r[wall_idx] if len(r) > wall_idx else ""
-            a("<tr><td><code>%s</code></td><td>%s</td><td>%s</td></tr>"
-              % (mode, escape(fields), escape(wall)))
-        a("</table>")
-    else:
-        a("<p class='note'>HARNESS.md mode table not found — regenerate after tasks/HARNESS.md exists.</p>")
+    # ---- Coordinator heavy gates (AUTO — background bash/workflow, NOT the builder) ----
+    a('<h2>Coordinator Heavy Gates (background bash/workflow, not builder, r50 nightly only)</h2>')
+    a('<div class="auto"><b>AUTO (HEAVY-GATE PIPELINE — the coordinator runs these as a '
+      'background job (no LLM slot) after Run-2 exits; the builder NEVER runs them; '
+      'commit/push only after they pass — do not hand-edit)</b></div>')
+    a("<ul>")
+    a("<li><b>boundary r4 ×1</b> + <b>perf r4</b> — ONLY when scope touches "
+      "<code>godot/world/*</code> | <code>lighting.gd</code> (HARNESS.md §3 tier); "
+      "UI/tool tasks: SMOKE only, no boundary/perf. (Was ×2, sliced 2026-08-27.)</li>")
+    a("<li><b>genhash</b> — independent re-run (25/25) whenever <code>world/*</code>/"
+      "<code>data.gd</code> touched.</li>")
+    a("<li><b>flake ×1</b> — perf tier only (was ×4, sliced 2026-08-27).</li>")
+    a("<li><b>boundary r50 / perf r50 (RECSLICE)</b> — nightly batch only (NOT per "
+      "task; was per-task).</li>")
+    a("<li><b>task-specific probe mode</b> — when this spec&#39;s Task-specific gates "
+      "define one (the builder&#39;s SMOKE runs it; the gate job re-runs it fresh).</li>")
+    a("<li><b>windows build</b> — <code>./build_windows.sh</code> (XDG pattern) + "
+      "8080/5180 curls — every task.</li>")
+    a("</ul>")
+    a("<p class='note'>Log → <code>.scratch/AC-NNNN-gates/gates.log</code>; marker "
+      "<code>.scratch/AC-NNNN-gates/HEAVY_GATES_DONE</code>. Full protocol: "
+      "<code>AGENTS.md</code> HEAVY-GATE PIPELINE + "
+      "<code>tasks/templates/two-phase.md</code>.</p>")
 
-    # ---- Known-stable values (AUTO) ----
-    a('<h2>Known-stable gate values</h2>')
-    a('<div class="auto"><b>AUTO (from tasks/HARNESS.md §3, else boilerplate — verify '
-      'fresh on any fluids/world-touching change)</b></div>')
-    if known:
-        a("<table><tr><th>value</th><th>fresh result (2026-08-24)</th><th>established by</th></tr>")
-        for cells in known:
-            pad = cells + [""] * (3 - len(cells))
-            a("<tr><td>%s</td><td>%s</td><td>%s</td></tr>"
-              % (escape(pad[0]), escape(pad[1]), escape(pad[2])))
-        a("</table>")
+    # ---- RESULT shapes (AUTO; slim = path pointer, --full = table) ----
+    a('<h2>Expected RESULT shapes (default battery + genhash)</h2>')
+    if full:
+        a('<div class="auto"><b>AUTO (rows pulled from tasks/HARNESS.md §1 — do not '
+          'hand-edit)</b></div>')
+        if header and hrows:
+            a("<table><tr><th>mode</th><th>key RESULT fields</th><th>typical wall</th></tr>")
+            field_idx = header.index("key RESULT fields") if "key RESULT fields" in header else 3
+            wall_idx = (header.index("typical wall (2026-08-24)")
+                        if "typical wall (2026-08-24)" in header else 5)
+            for mode in BATTERY_MODES:
+                r = hrows.get(mode)
+                if not r:
+                    continue
+                fields = r[field_idx] if len(r) > field_idx else ""
+                wall = r[wall_idx] if len(r) > wall_idx else ""
+                a("<tr><td><code>%s</code></td><td>%s</td><td>%s</td></tr>"
+                  % (mode, escape(fields), escape(wall)))
+            a("</table>")
+        else:
+            a("<p class='note'>HARNESS.md mode table not found — regenerate after tasks/HARNESS.md exists.</p>")
     else:
-        a('<p class="note">sea 2730/2730 · backed 1406/1406 · sea_stable true · '
-          "water_on_lava 25 / sideways 9 · drop_spawned/place_ok true · torch 14 · "
-          "genhash 25/25 — <b>verify fresh</b> (HARNESS.md §3 not parsed).</p>")
+        a('<div class="auto"><b>AUTO (paths only — the RESULT shapes live in '
+          '<code>tasks/HARNESS.md</code> §1; inline them with <code>--full</code>)</b></div>')
+        a("<ul>")
+        a("<li>Battery arms: <code>player</code> / <code>interact</code> / "
+          "<code>light</code> / <code>fluids</code> / <code>buckets</code> / "
+          "<code>genhash</code> — key fields + ok-conditions per mode in "
+          "<code>tasks/HARNESS.md</code> §1.</li>")
+        a("<li>Heavy modes: <code>boundary</code>, <code>recprobe</code>, "
+          "<code>perf</code>, <code>minfo</code>, <code>pickorder</code> — §2.</li>")
+        a("</ul>")
+
+    # ---- Known-stable values (AUTO; slim = path pointer, --full = table) ----
+    a('<h2>Known-stable gate values</h2>')
+    if full:
+        a('<div class="auto"><b>AUTO (from tasks/HARNESS.md §3, else boilerplate — verify '
+          'fresh on any fluids/world-touching change)</b></div>')
+        if known:
+            a("<table><tr><th>value</th><th>fresh result (2026-08-24)</th><th>established by</th></tr>")
+            for cells in known:
+                pad = cells + [""] * (3 - len(cells))
+                a("<tr><td>%s</td><td>%s</td><td>%s</td></tr>"
+                  % (escape(pad[0]), escape(pad[1]), escape(pad[2])))
+            a("</table>")
+        else:
+            a('<p class="note">sea 2730/2730 · backed 1406/1406 · sea_stable true · '
+              "water_on_lava 25 / sideways 9 · drop_spawned/place_ok true · torch 14 · "
+              "genhash 25/25 — <b>verify fresh</b> (HARNESS.md §3 not parsed).</p>")
+    else:
+        a('<div class="auto"><b>AUTO (paths only — the anchor table lives in '
+          '<code>tasks/HARNESS.md</code> §3: sea 2730/2730 · backed 1406/1406 · '
+          'sea_stable true · water_on_lava 25 / sideways 9 · torch 14 · genhash '
+          '25/25; verify fresh on any fluids/world-touching change; inline with '
+          '<code>--full</code>)</b></div>')
 
     # ---- FILL sections ----
     for heading, hint, example in [
@@ -355,6 +431,9 @@ def main(argv=None):
                         help="overwrite an existing spec.html")
     parser.add_argument("--out", default=None,
                         help="write to an alternate path (for tests) instead of tasks/<id>/spec.html")
+    parser.add_argument("--full", action="store_true",
+                        help="inline the big AUTO tables (Data.* constants, RESULT "
+                             "shapes, known-stable values); default is slim (paths only)")
     args = parser.parse_args(argv)
 
     task_id = args.id
@@ -365,8 +444,13 @@ def main(argv=None):
     try:
         task = _load_task(task_id)
     except SpecError as exc:
-        print("error: %s" % exc, file=sys.stderr)
-        return 1 if "unknown task id" not in str(exc) else 2
+        if "unknown task id" in str(exc):
+            print("warning: %s is not in TASKS.yaml — writing a bare scaffold" % task_id,
+                  file=sys.stderr)
+            task = {}
+        else:
+            print("error: %s" % exc, file=sys.stderr)
+            return 1
 
     if task.get("status") == "done":
         print("warning: %s is status 'done'; regenerating anyway" % task_id, file=sys.stderr)
@@ -377,7 +461,7 @@ def main(argv=None):
         return 1
 
     try:
-        html = _build_html(task, task_id)
+        html = _build_html(task, task_id, full=args.full)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(html)
     except SpecError as exc:

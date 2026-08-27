@@ -7,7 +7,9 @@ content into a prompt.
 
 Workflow:
 
-    [trivial-bypass check] ──yes──► Run 2 (medium builder, spec.html)
+    [trivial-bypass check: labels `trivial` | title match | world/*-untouched
+     + <2 files + no Data.* ids — see TRIVIAL-LABEL BYPASS]
+            ──yes──► Run 2 (medium builder, spec.html only — no plan.html)
            │no
            ▼
     Run 1 (xhigh, read-only research, via the `subagent_plan` tool)
@@ -121,9 +123,9 @@ The coordinator (not the subagent) checks, in order:
 3. Every frozen-spec constant in §3/§4 is cited **verbatim** — the coordinator
    re-greps the cited file:line and compares the value character-for-character
    against current `godot/autoload/data.gd` / `godot/world/generator.gd`.
-   Helper: re-run `python3 tasks/scripts/spec_template.py AC-NNNN --out
-   .scratch/<task>-consts.html` (it re-parses both files fresh) and diff the
-   cited values against that table.
+   Helper: re-run `python3 tasks/scripts/spec_template.py AC-NNNN --full --out
+   .scratch/<task>-consts.html` (the --full flag inlines the constants tables,
+   parsed fresh) and diff the cited values against that table.
 
 Decision:
 
@@ -169,9 +171,26 @@ VERIFY (AC-0061 tiered protocol, SMOKE tier — see tasks/HARNESS.md §3):
         this change area (HARNESS.md dependency table: e.g. world/* →
         player;interact;light;fluids + genhash) + genhash ALWAYS when
         world/* or data.gd is touched (25/25 byte-identical GENHASH lines).
+  PROBE the task-specific probe mode(s) from spec.html's Task-specific gates,
+        when one is defined (env-gated, headless, ≤ 60 s) — this is yours.
+        The HEAVY items in that section (boundary/perf/flake/r50) are NOT
+        yours (see below).
   RENDER ≤ 1 render at AWECRAFT_RADIUS=1 into the snapshot path from
         plan.html §6 (xvfb, gl_compatibility); view it; save the PNG under
         tasks/AC-NNNN/.
+  HEAVY the heavy gates (boundary r4, perf, flake, r50, full battery where
+        SMOKE does not cover it) are the COORDINATOR's background gate job —
+        you exit after G0+SMOKE+PROBE+RENDER; do not run them and do not
+        wait for them.
+
+ONE-SHOT BOUNDARY (user 2026-08-27, from AC-0079 RUN 2b's ~40 min burn): if
+this task's scope touches godot/world/* or lighting.gd, you may run AT MOST
+ONE boundary r4 A/B probe yourself as a self-check. If it fails or shows a
+walk-p95 trade-off (the AC-0079-D2 33→63 class): do NOT try Option 1 then
+Option 2 in the same session — write the HONEST DEVIATION in results +
+continuity, name the follow-up you would file (target + approach), and EXIT.
+A hard failure (script error, ok:false on a non-trade-off field) is still a
+normal bounce.
 
 One godot at a time (concurrent runs corrupt the .godot cache). All runs:
 one bash command, HOME set first, from repo root (recipes in HARNESS.md §4).
@@ -190,6 +209,9 @@ Before launching Run 1, the coordinator checks the task in `tasks/TASKS.yaml`:
 
     BYPASS  if labels contain `trivial`
         OR the title matches:  build-scripts | menu Exit | webapp artifacts
+        OR (user 2026-08-27) the scope check passes: NO file under godot/world/*
+             is touched AND fewer than 2 files total AND no Data.* ids are
+             touched (no Data.* block/item id behavior change)
 
 - BYPASS=yes → **skip Run 1 entirely** (no plan.html, no gate). The task gets
   its spec from the AC-0102 template: `python3 tasks/scripts/spec_template.py
@@ -201,7 +223,10 @@ Before launching Run 1, the coordinator checks the task in `tasks/TASKS.yaml`:
 - BYPASS=no → normal two-phase flow (Run 1 → gate → Run 2).
 
 Rationale: trivial tasks are self-evident from the spec; the research pass
-buys nothing and costs a full xhigh round on a single-request LLM.
+buys nothing and costs a full xhigh round on a single-request LLM. The scope
+check (2026-08-27) covers single-file UI/tool/build fixes where the Run-1
+pass costs ~15 min of xhigh for a 7-section plan.html that says nothing the
+spec doesn't.
 
 ---
 
@@ -217,21 +242,31 @@ buys nothing and costs a full xhigh round on a single-request LLM.
 - The verbatim-constants gate is checkable mechanically: re-grep the cited
   file:line (or re-run spec_template.py) and diff. A one-value mismatch is a
   full bounce of Run 1, not a negotiation.
-- **HEAVY-GATE PIPELINE (user rule 2026-08-26, from AC-0078):** Run-2 (above)
-  verifies ONLY G0 + SMOKE + ≤1 render — the heavy gates (full exact battery
-  where SMOKE does not cover it, boundary r4 ×2, perf, r50/RECSLICE,
-  task-specific probe modes, flake ×N) run as a **coordinator BACKGROUND bash
-  job** (no LLM slot): one script, godot invocations SEQUENTIAL (one godot at
-  a time), then `./build_windows.sh` (XDG pattern) + 8080/5180 curls, logging
-  everything to `.scratch/AC-NNNN/gates.log` and writing a
-  `.scratch/AC-NNNN/HEAVY_GATES_DONE` marker at the end. IMMEDIATELY after
+- **HEAVY-GATE PIPELINE (user rule 2026-08-26, from AC-0078; sliced 2026-08-27):**
+  Run-2 (above) verifies ONLY G0 + SMOKE (+ the task's own probe, when the
+  spec defines one) + ≤1 render, then EXITS — the heavy gates run as a
+  **coordinator BACKGROUND bash job (or `workflow` worker — no LLM slot either
+  way)**: one script, godot invocations SEQUENTIAL (one godot at a time), then
+  `./build_windows.sh` (XDG pattern) + 8080/5180 curls, logging everything to
+  `.scratch/AC-NNNN-gates/gates.log` and writing a `.scratch/AC-NNNN-gates/
+  HEAVY_GATES_DONE` marker at the end. Sliced gate set (2026-08-27): **boundary
+  r4 ×1** (was ×2) + **flake ×1** (was ×4) + genhash re-run + the task probe,
+  and **ONLY when the scope touches `godot/world/*` | `lighting.gd`**
+  (HARNESS.md §3 dependency table) — UI/tool tasks get SMOKE only; **r50 /
+  RECSLICE = nightly batch, NOT per task** (was per-task). IMMEDIATELY after
   kicking N's gate job, launch **N+1's Run-1** (`subagent_plan`, xhigh) in
   parallel — research overlaps the gates. The N+1 Run-1 prompt MUST tell the
   child: godot is busy with N's gates — do static file research first, and
   before EVERY godot call check `pgrep -f 'godot'` (and the N
   `HEAVY_GATES_DONE` marker) and wait if a gate job holds a godot process.
   **Commit/push N only after its heavy gates pass** (code + results +
-  plan + build in one commit). If N's gates FAIL: bounce N's Run-2
-  (rework → re-SMOKE → re-gate); the already-running N+1 Run-1 stays valid
-  (research only, no tree changes). The background job owns godot until its
-  marker — no other godot (coordinator or otherwise) meanwhile.
+  plan + build in one commit), and **N+1's Run-2 is launched only after N's
+  heavy pass + commit** (N+1's Run-1 may overlap the gates; its Run-2 may not
+  start on an uncommitted/failed N). If N's gates FAIL: the one-shot rule
+  decides — a trade-off-class miss (walk p95 33→63, AC-0079-D2 shape) is an
+  HONEST-DEVIATION + follow-up task + deliver as-delivered (do NOT loop
+  Option 1 → Option 2 in one medium session — AC-0079 RUN 2b burned ~40 min);
+  a hard failure bounces N's Run-2 (fresh rework → re-SMOKE → re-gate). The
+  already-running N+1 Run-1 stays valid (research only, no tree changes). The
+  background job owns godot until its marker — no other godot (coordinator or
+  otherwise) meanwhile.
