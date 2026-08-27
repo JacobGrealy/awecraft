@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-26T18:02
+  updated_at: 2026-08-26T20:45
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -23,6 +23,7 @@ queue:
 - AC-0079
 - AC-0078
 - AC-0120
+- AC-0126
 - AC-0108
 - AC-0109
 - AC-0110
@@ -3573,10 +3574,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-25T19:57
-  updated_at: 2026-08-25T19:57
+  updated_at: 2026-08-26T20:28
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -3698,4 +3699,23 @@ intake:
   notes: 'PLAN ONLY (do not implement): research GDExt C++ for hot loops (WorldGen fbm/caves, Lighting BFS, chunk face scan/greedy).
     Deliver plan.html benchmarking GDScript vs C# vs GDExt (r50 wall, build_ms), integration scope (which 2-3 files), build
     pipeline (SCons + .gdextension + windows dll), risks, and go/no-go. No code until user approves.'
+  comments: []
+- id: AC-0126
+  title: break-batched-light-mesh
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-26T20:45
+  updated_at: 2026-08-26T20:45
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Batch block-break light+mesh: world.gd _process 134 light_dirty->pending 159 flush currently 2/40ms sync BFS+build_mesh
+    719 x1-5 on edge (900 lx) = 50-120ms spike. Use bulk box 922 (like AC-0077) for edit set, stagger neighbor remesh 1/frame,
+    reuse AC-0107 threaded build path, collision staged 0077. Gate: edge break p95 <15ms, interior <10ms, torch 14 unchanged,
+    battery green.'
   comments: []
