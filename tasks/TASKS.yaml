@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-27T03:22
+  updated_at: 2026-08-27T05:38
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -21,6 +21,9 @@ queue:
 - AC-0119
 - AC-0124
 - AC-0079
+- AC-0129
+- AC-0128
+- AC-0035
 - AC-0078
 - AC-0120
 - AC-0126
@@ -72,7 +75,6 @@ queue:
 - AC-0101
 - AC-0082
 - AC-0034
-- AC-0035
 - AC-0092
 - AC-0096
 - AC-0036
@@ -3785,4 +3787,41 @@ intake:
     the terrain rarely needed for collision... verify), slice budgeting per slab, candidate handling per slab. Gates: r50
     mem < 140.6 (the pre-AC-0108 fence), byte-identity (MINFO per-chunk + battery + genhash), boundary floor 65/3500/81/0,
     RECSLICE, walk p95 with the body-count change, G0-G6.'
+  comments: []
+- id: AC-0128
+  title: night-darkness-sky-scale
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-27T05:38
+  updated_at: 2026-08-27T05:38
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Fix night not dark enough: lighting.gd sky 15 column is time-agnostic, eff=max(sky,block) baked at chunk.gd:1185
+    stays 15 at midnight while DayNight sun dims scene only. Scale sky by dayFactor (web 1349 0.1-1.0) at bake or shader,
+    verify midnight cave sky 0 vs noon 15. Gate: night p95 <5 vs day 15, torch 14 unchanged, battery green.'
+  comments: []
+- id: AC-0129
+  title: cave-lighting-propagation-fix
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-27T05:38
+  updated_at: 2026-08-27T05:38
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Fix cave lit next to pitch black with no reason: BFS torch 14 -1/step lighting.gd:146 should fade smooth 14->0.
+    Audit per-chunk contained batch (AC-0077) vs air-on-miss frontier (AC-0119) cache/data-signature and recenter slice 0118
+    neighbor readiness; probe light_at in r4 cave shows 14 next to 0 with no torch. Fix propagation/caching so cave eff is
+    consistent. Gate: cave tunnel smooth gradient, no hard 14/0 cliff, MINFO/light_at green.'
   comments: []
