@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-26T20:59
+  updated_at: 2026-08-26T22:11
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -2264,17 +2264,31 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-22T22:59
-  updated_at: 2026-08-26T18:02
-  completed_at: null
+  updated_at: 2026-08-26T22:11
+  completed_at: 2026-08-26T22:11
   waiting_on: null
   parent_id: AC-0034
   notes: 'AC-0034 child 4/4 (plan AC-0071 P1.5+P1.6): fluid locality (per-chunk fluid prescreen + 32-block sleep signature,
     wake sources unchanged, sim results bit-identical) + first-load fast path (3x3 sync core for New world AND Continue -
     Continue stops waiting for full radius, streams around existing player).'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-26T22:11
+    updated_at: null
+    text: 'DONE 2026-08-26 (two-phase; heavy gates via coordinator background job per the new pipeline). P1.5 fluid locality
+      - fluid_wet chunk map + 32-block floor sleep sig + prescreen skip + single self-healing clear + bits at the 3 lowest
+      fl writers - boundary fluidscan 805.5ms to 0.23ms (~3500x), fluid result byte-identical (FULL 6-arm battery EXACT incl.
+      genhash 25/25; bit-identity fence held). P1.6 first-load fast path - _await_core_3x3 + _continue_slot one-line swap
+      - the saved-player FALL-THROUGH-WORLD on Continue (48 blocks from spawn, dist3 fell_after_30f TRUE pre) is FIXED: both
+      distances fell false, col_body_at_spawn true, y flat, load_spawn ~ core_ms 1.28-1.31s (+1.3s first-load wait vs full-radius
+      wait, the designed trade; NEW path unchanged per spec decision). All heavy gates PASS: r4 x3 walk 62-63, fwd 2959-3216
+      <=3500, first10 10, irb 81, flap 0; RECSLICE r50 10.0/8.0; perf 5731/first_draw 194/no regression; player flake x4;
+      build RC=0 exe 109,564,736B; 8080+5180 200. Coordinator notes - gate v1 job died on a $HOME-relative engine path (coordinator
+      bug, no damage); v2 absolute path; gate-job continue env gap (no WAIT=core) backfilled 22:06, pre-arm dist3 still falls
+      (expected A/B reference). See tasks/AC-0078/AC-0078-results.html verdict section + continuity.md RUN 2/2.5.'
 - id: AC-0079
   title: chunk-stream-look-priority-scoring
   source: agent

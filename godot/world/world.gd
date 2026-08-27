@@ -91,6 +91,7 @@ var _fluid_stable := 0
 var _fluid_sig := ""
 var _fluidprobe := false
 var _fp_writes := 0
+var fluid_wet := {}
 var tex_refresh: Array = []
 var threadgen := false
 var threadgen_max := 3
@@ -1371,6 +1372,7 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 	if is_fluid_id(id):
 		if c.fl[fi] == 0:
 			c.fl[fi] = 7
+		fluid_wet[_key(cx, cz)] = true
 	else:
 		c.fl[fi] = 0
 	c.col_dirty = true
@@ -1411,6 +1413,8 @@ func _apply_edits_to_chunk(c: Node3D) -> void:
 		var e: Dictionary = cells[fkey]
 		data[int(fkey)] = int(e.get("b", 0))
 		fl[int(fkey)] = int(e.get("f", 0))
+		if int(e.get("f", 0)) > 0:
+			fluid_wet[_key(c.cx, c.cz)] = true
 	c.col_dirty = true
 	_eff_cache_evict(key)
 	_mark_light_around(c.cx, c.cz)
@@ -1576,6 +1580,8 @@ func set_fluid(x: int, y: int, z: int, id: int, lvl: int, create := false) -> vo
 		_fp_writes += 1
 	_mark_fluid_around(cx, cz)
 	_record_edit(cx, cz, i, id, lvl)
+	if lvl > 0:
+		fluid_wet[_key(cx, cz)] = true
 
 func fluid_level(x: int, y: int, z: int) -> int:
 	if y < 0 or y >= Data.HEIGHT:
@@ -1622,7 +1628,7 @@ func tick_fluids() -> void:
 	var t0 := Time.get_ticks_usec()
 	var sig := "all"
 	if Game.player != null and not cl.is_empty():
-		sig = "%d:%d" % [cl.size(), int(cl[0].x) * 4096 + int(cl[0].y)]
+		sig = "%d:%d" % [cl.size(), int(floorf(float(cl[0].x) / 2.0)) * 4096 + int(floorf(float(cl[0].y) / 2.0))]
 	if sig != _fluid_sig:
 		_fluid_sig = sig
 		_fluid_stable = 0
@@ -1647,6 +1653,10 @@ func tick_fluids() -> void:
 		var c: Node3D = chunks.get(_key(pos.x, pos.y))
 		if c == null or c.data.is_empty():
 			continue
+		var ck := _key(int(c.cx), int(c.cz))
+		if not fluid_wet.has(ck):
+			continue
+		var wet_cells := 0
 		var data: PackedByteArray = c.data
 		var fl: PackedByteArray = c.fl
 		var cx: int = int(c.cx)
@@ -1682,6 +1692,7 @@ func tick_fluids() -> void:
 							fl[i] = 0
 							continue
 						l = fl[i]
+						wet_cells += 1
 						if _fluidprobe:
 							fp_wet += 1
 					var x := wx0 + lx
@@ -1726,6 +1737,8 @@ func tick_fluids() -> void:
 									set_block(nx, y, nz, 9, false)
 								elif nb == 24 and b == 5:
 									set_block(nx, y, nz, 9, false)
+		if wet_cells == 0:
+			fluid_wet.erase(ck)
 	if tick_time:
 		print("TICKMS ", (Time.get_ticks_usec() - t0) / 1000.0)
 	if _fluidprobe:

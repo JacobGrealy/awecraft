@@ -393,7 +393,7 @@ func _continue_slot(slot: int) -> void:
 	else:
 		target = world.spawn_point()
 	world.recenter(target.x, target.z, true)
-	await _await_world_build(target, 3000)
+	await _await_core_3x3(target, 3000)
 	player = _spawn_player()
 	_restore_player(ps)
 	if Game.world != null:
@@ -4239,6 +4239,25 @@ func _await_world_build(where: Vector3, max_frames: int) -> void:
 		await get_tree().physics_frame
 		waited += 1
 	print("SNAPDRAIN not fully drained after %d frames" % max_frames)
+
+
+func _await_core_3x3(where: Vector3, max_frames: int) -> void:
+	var pcx := int(floorf(where.x / 16.0))
+	var pcz := int(floorf(where.z / 16.0))
+	var waited := 0
+	while waited < max_frames:
+		var allb := true
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
+				if c == null or c.data.is_empty() or not c.mesh_built:
+					allb = false
+					break
+		if allb:
+			return
+		await get_tree().physics_frame
+		waited += 1
+	print("CORE3X3 not fully built after %d frames" % max_frames)
 
 
 func _viewmodel_shot() -> void:
