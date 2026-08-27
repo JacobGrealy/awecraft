@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AC-0108 plan — vertical-subchunks-16x16x16 (Run-1, 2026-08-27)</title>
+<style>
+body{font:14px/1.5 system-ui,sans-serif;max-width:1100px;margin:24px auto;padding:0 16px;color:#222}
+h1{font-size:20px}h2{font-size:16px;margin-top:28px;border-bottom:2px solid #888;padding-bottom:4px}
+code,pre{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;background:#f4f4f4;padding:1px 4px;border-radius:3px}
+pre{padding:8px;overflow-x:auto}
+table{border-collapse:collapse;margin:8px 0}td,th{border:1px solid #ccc;padding:3px 8px;font-size:12.5px;text-align:left}
+th{background:#eee}
+.note{background:#fff8e1;border-left:3px solid #e6a817;padding:6px 10px;margin:8px 0;font-size:13px}
+</style>
+</head>
+<body>
+<h1>AC-0108 — vertical-subchunks-16×16×16 · Run-1 plan (research only, no code changes)</h1>
+<p>Repo <code>/home/angrygiant/github_projects/AweCraft</code>. Research date 2026-08-27 00:10. Static map of <code>godot/world/chunk.gd</code> (1674L), <code>godot/world/world.gd</code> (1766L), <code>godot/scenes/main.gd</code> (6121L) + fresh PRE anchors (table in §5). In-tree at research: AC-0120 shared material cache (uncommitted; slabs will reference it — MATINFO 3/3 fence preserved).</p>
+
+<h2>1. Goal</h2>
+<p>Split each 16×80×16 column chunk (<code>Chunk</code> Node3D, <code>godot/world/chunk.gd</code>) into 5 vertical 16×16×16 slabs (y 0–15 / 16–31 / 32–47 / 48–63 / 64–79), each owning its own opaque+fluid <code>MeshInstance3D</code> pair and its own <code>StaticBody3D</code>/<code>ConcavePolygonShape3D</code> — giving per-slab frustum culling (free, per-instance) and per-slab collision rebuild (1–2 of 5 bodies per edit) — with byte-identical mesh output (per-chunk MINFO vert sums unchanged, total 125552), unchanged column data/fl layout, and unchanged drain/queue/recenter behavior.</p>
+
+<h2>2. Files to touch</h2>
+<table>
+<tr><th>file</th><th>area (line refs = current tree)</th></tr>
+<tr><td rowspan="12"><code>godot/world/chunk.gd</code><br>(core)</td>
+<td>L27–30: chunk-level <code>mesh_instance/fluid_instance/flora_instance/collision_body</code> → <code>slabs: Array</code> (5 <code>class Slab</code> structs: <code>y0, built, mesh_instance, fluid_instance, flora_instance, collision_body, col_dirty</code> — plain struct, NOT a Node3D; instances stay children of the chunk node). L17 <code>col_dirty</code> moves per-slab; L19 <code>last_collision_build_ms</code> stays chunk-level (sum of the slabs built in the last apply — keeps <code>world._count_collision_build</code> L992–998 unchanged); L15 <code>mesh_built</code> stays chunk-level, set atomically after all 5 slabs assemble.</td></tr>
+<tr><td>L327 <code>_emit_faces(recs, acc, …)</code> → param <code>accs: Array</code>; per-rec call becomes <code>_qwrite(accs[r[1] &gt;&gt; 4], …)</code> (non-merged opaque/cutout/flora routing by rec y).</td></tr>
+<tr><td>L469 <code>_emit_ro_merged(recs, acc, …)</code> → <code>accs: Array</code>; grid build (L481–541) stays COLUMN-WIDE (16×80×16 per face); emit site L540–541 routes: <code>si = (c0[4] if fi in [0,1,4,5] else c0[5]) / 16</code> (c0[4]=v0=block-y for x/z faces, c0[5]=plane=block-y for top/bottom) → <code>_qwrite_merged(accs[si], …)</code>. L374 <code>_qwrite_merged</code> itself unchanged.</td></tr>
+<tr><td>L543 <code>_emit_xquad</code>, L577 <code>_emit_fluid</code> → <code>accs</code>; route by <code>r[1] / 16</code> (both quads of a cross rec land in one slab).</td></tr>
+<tr><td>Worker mirrors — identical signature/routing changes: L749 <code>_s_emit_faces</code>, L895 <code>_s_emit_ro_merged</code> (grid L905+ unchanged), L972 <code>_s_emit_xquad</code>, L1007 <code>_s_emit_fluid</code>.</td></tr>
+<tr><td>L1161 <code>build_accs(…)</code>: pre-size 5×6 accs (<code>_new_acc</code> L1254); per-slab rec counts computed before emit (one counting pass over ro/rc_o/rk/rq/rf_w/rf_l by <code>r[1]/16</code>; merged slabs get the current whole-column estimate — over-capacity is harmless). Returns <code>{"slabs": [[ao,ac,af_w,af_l,ak,ax] ×5], "light": light, "wms": …}</code> (was 6 accs + light + wms at L1247–1251).</td></tr>
+<tr><td>L1389 <code>build_mesh(get_world_block, eff)</code> — SIGNATURE UNCHANGED (3 sync fallbacks in world.gd L609/623/638 + main.gd:1359 keep working). Pipeline (light L1410s, snap L1408–1415, scan L1459–1497) unchanged; assembly L1522–1556 becomes a per-slab loop ×5: slab mesh = [ao_s, ac_s, afw_s, afl_s] (non-empty only, same slot order) shared by <code>slab.mesh_instance</code> + <code>slab.fluid_instance</code> (today's shared-mesh double-instance pattern preserved per slab); flora mesh [ak_s, ax_s] → <code>slab.flora_instance</code>; <code>mesh_built = true</code> after all slabs; collision block L1558–1567 → per-slab loop over dirty slabs (immediate <code>_build_slab_collision</code> vs staged-free).</td></tr>
+<tr><td>L1575 <code>apply_accs(res, ms)</code>: assembles from <code>res["slabs"]</code> (5×6 dict-accs via <code>_acc_from_dict</code> L1640) — same per-slab loop as build_mesh (worker result path, world.gd L589 sole caller).</td></tr>
+<tr><td>L1651 <code>_build_collision()</code> → <code>_build_slab_collision(s: Slab)</code>: same face-extraction code (L1659–1667) reading the SLAB mesh surface 0 (opaque); sets <code>s.collision_body</code>; per-slab timing summed into chunk <code>last_collision_build_ms</code>.</td></tr>
+<tr><td>New chunk helpers: <code>mark_edit_slabs(y)</code> — sets slab <code>col_dirty</code> for <code>{y/16} ∪ {(y-1)/16 if y%16==0} ∪ {(y+1)/16 if y%16==15}</code>; <code>mark_all_slabs_dirty()</code> (first build / candidate re-entry / save-restore); <code>any_col_dirty()</code>; <code>has_any_slab_body()</code>; <code>has_all_slab_bodies()</code>; <code>build_dirty_slab_bodies()</code>; <code>_enter_candidate_slabs()</code> (null all slab instance meshes, free all slab bodies, clear slab col_dirty).</td></tr>
+<tr><td>Untouched: L3–7 consts, L55–70 <code>_get_mat</code> (AC-0120 cache — slabs resolve materials through it, main-thread only), L140–235 data/uv helpers, L238–257 <code>_faces</code> (hidden-face culling vs column-wide 18×18×80 snap), L260–294 fluid count/height, L295–325 <code>_qgrow/_qwrite</code>, L362 <code>_merge_strip</code>, L616 <code>_band</code>, L635–1091 worker light/uv/snap statics, L1096–1154 <code>make_ctx</code>, L1265–1323 sync <code>_build_snap</code>, L1326–1371 material factories, L1373–1386 <code>_surface</code>.</td></tr>
+<tr><td>L11–14 <code>data/fl</code> layout UNCHANGED (column-major <code>(y&lt;&lt;8)|(lz&lt;&lt;4)|lx</code> — frozen edit compat; <code>fluid_wet</code> stays column-keyed).</td></tr>
+<tr><td rowspan="7"><code>godot/world/world.gd</code></td>
+<td>L1378 <code>set_block</code>: <code>c.col_dirty = true</code> → <code>c.mark_edit_slabs(y)</code>. L1558–1584 <code>set_fluid</code>: UNCHANGED (no col_dirty today — fluids produce no opaque body; mesh-only update via <code>fluid_dirty</code> flush).</td></tr>
+<tr><td>L1418 <code>_apply_edits_to_chunk</code>: <code>c.col_dirty = true</code> → <code>c.mark_all_slabs_dirty()</code> (save/restore can carry any cell).</td></tr>
+<tr><td>L943–956 <code>_stage_check</code>: <code>c.col_dirty</code>→<code>c.any_col_dirty()</code>, <code>c.collision_body != null</code>→<code>c.has_all_slab_bodies()</code> (chunk-keyed staging unchanged; nearest-first drain of ≤2 chunks/frame builds that chunk's dirty slab bodies).</td></tr>
+<tr><td>L964–990 <code>_col_drain_step</code>: validity L977 → <code>c.mesh_built and c.collision_enabled and c.any_col_dirty() and in-radius</code>; L983 <code>c._build_collision()</code> → <code>c.build_dirty_slab_bodies()</code>; L984–985 clear + count unchanged.</td></tr>
+<tr><td>L1037–1067 <code>_enter_candidate</code>: mesh-nulling L1048–1053 + body-free L1054–1056 → <code>c._enter_candidate_slabs()</code>; pending-erase L1061–1066 unchanged.</td></tr>
+<tr><td>L1502–1526 <code>mesh_info()</code>: per-chunk line kept, <code>verts</code> = per-surface-slot sum across the chunk's slab instances (slot order opaque/ac/af_w/af_l), <code>faabb/fverts</code> analogous, <code>aabb</code> = union — identical JSON shape so the per-chunk MINFO diff works.</td></tr>
+<tr><td>Untouched: L28–30 chunk registry, L161–210 _ready (TM2/AC-0120 pre-warm), L245–324 _process, L436–598 threadgen/threadmesh pools + handoff (L589 call site unchanged), L600–662 <code>_mesh_dispatch</code>, L664–683 <code>_build_unit</code>, L730–924 drain/band buckets, L1008–1029 node creation (slabs init in <code>_make_chunk_node</code> L1008–1016), L1092–1344 recenter 5-phase slices (column-scoped), L1346–1383 read/set path, L1447–1469 <code>_build_batch</code>, L1610–1747 tick_fluids.</td></tr>
+<tr><td rowspan="6"><code>godot/scenes/main.gd</code><br>(harness-only)</td>
+<td>L297–318 <code>_matinfo_counts</code>: walk <code>c.slabs</code> (each slab's 3 instances) → MATINFO distinct_std=3 / total_allocs=3 fence preserved (AC-0120).</td></tr>
+<tr><td>L4827–4831 <code>_count_shapes</code>: works as-is (recursive CollisionShape3D count) — perf RESULT <code>collision_shapes</code> becomes ~300–405 at r4 (report, not a failure); <code>collision_ms_total/n/max</code> fields unchanged.</td></tr>
+<tr><td>L4043 <code>_continue_probe</code> gate, L5249 <code>remesh_ok</code>, L5257–5261 <code>unbodied_final</code>: <code>c.collision_body == null / != null</code> → <code>not c.has_any_slab_body()</code> / <code>c.has_any_slab_body()</code>.</td></tr>
+<tr><td>L1008–1036 <code>AWECRAFT_ONLY</code> + <code>DBGCHUNK</code> env-gated debug blocks: per-chunk instance reads → per-slab reads (env-gated, default off).</td></tr>
+<tr><td>NEW G3 probe <code>AWECRAFT_LOGIC=editslab</code> (env-gated, added to <code>HARNESS_ENVS</code> L276–282, default off) — design in §5.</td></tr>
+<tr><td>L1359 (<code>c.build_mesh(world.get_block, {})</code>), L4273–4289 <code>_await_core_3x3</code>, L4865–4869 MINFO/MATINFO prints: unchanged (signatures/fields preserved).</td></tr>
+</table>
+<p>No <code>.tscn</code> changes (chunks are created at runtime, <code>world.gd:1009</code> <code>ChunkScript.new()</code>; slabs are structs, not scene nodes). <code>godot/world/lighting.gd</code> untouched (light stays column-wide: <code>compute_light_flat_chunk/batch</code> — byte-identity kernel).</p>
+
+<h2>3. Frozen spec refs</h2>
+<p><code>index.html</code> (build <b>20260816-r12</b>) is the frozen behavior SPEC: one chunk = 16×80×16 rendered as ONE mesh — the slab split is a Godot-side implementation detail invisible to behavior (same verts, same materials, same per-chunk collision semantics). Verbatim constants the task depends on:</p>
+<pre>
+godot/autoload/data.gd:3   const CHUNK := 16
+godot/autoload/data.gd:4   const HEIGHT := 80
+godot/autoload/data.gd:5   const SEA := 30
+godot/autoload/data.gd:33  const ATLAS_PX := 1024.0
+godot/world/chunk.gd:3     const SIZE := 16
+godot/world/chunk.gd:6     const SNAP_W := 18
+godot/world/chunk.gd:7     const SNAP_ROW := 324
+</pre>
+<p>Slab layout: <code>HEIGHT 80 / SIZE 16 = 5</code> slabs, y0 ∈ {0, 16, 32, 48, 64}. Snap ring stays 18×18×80 (column-wide context — §7 risk (a)). Biome thresholds, verbatim <code>godot/world/generator.gd:45–54</code> <code>biome_at()</code>:</p>
+<pre>
+var t := AweNoise.fbm2(float(x) / 260.0 + 900.0, float(z) / 260.0 + 900.0, seed + 21, 3) * 2.0 - 1.0
+var m := AweNoise.fbm2(float(x) / 260.0 + 1700.0, float(z) / 260.0 + 1700.0, seed + 33, 3) * 2.0 - 1.0
+if t &lt; -0.25:            return "snow"
+if t &gt; 0.35 and m &lt; 0.1: return "desert"
+if m &gt; 0.25:             return "forest"
+return "plains"
+</pre>
+
+<h2>4. Data.* ids</h2>
+<p>Block ids the slab routing must categorize identically (scan at chunk.gd L1193–1223 / L1459–1497):</p>
+<table>
+<tr><th>id</th><th>verbatim entry (file:line)</th><th>route</th></tr>
+<tr><td>0</td><td>absent from <code>blocks</code> (data.gd:150 dict starts at id 1) → <code>Data.block(0)</code> null → oktab 0 → air/skip</td><td>—</td></tr>
+<tr><td>1</td><td>data.gd:151 <code>1: {"name": "Grass", "solid": true, "cross": false, "hard": 0.6, "light": 0, "drop": 2, …}</code></td><td>ro (merged opaque)</td></tr>
+<tr><td>2</td><td>data.gd:152 <code>2: {"name": "Dirt", "solid": true, "cross": false, …}</code></td><td>ro</td></tr>
+<tr><td>3</td><td>data.gd:153 <code>3: {"name": "Stone", "solid": true, "cross": false, "hard": 1.5, …}</code></td><td>ro</td></tr>
+<tr><td>4</td><td>data.gd:154 <code>4: {"name": "Sand", "solid": true, …}</code></td><td>ro</td></tr>
+<tr><td>5</td><td>data.gd:155 <code>5: {"name": "Water", "solid": false, "cross": true, "hard": 1e9, "light": 0, …}</code></td><td>rf_w (fluid)</td></tr>
+<tr><td>6</td><td>data.gd:156 <code>6: {"name": "Oak Log", "solid": true, "cross": false, …}</code></td><td>ro</td></tr>
+<tr><td>7</td><td>data.gd:157 <code>7: {"name": "Leaves", "solid": false, "cross": false, "cutout": true, …}</code></td><td>rk (cutout)</td></tr>
+<tr><td>18/19</td><td>data.gd:161 <code>18: {"name": "Rose", "solid": false, "cross": true, …}</code>; data.gd:162 <code>19: {"name": "Dandelion", …}</code></td><td>rq (flowers, 2 xquads)</td></tr>
+<tr><td>22</td><td>data.gd:170 <code>22: {"name": "Torch", "solid": false, "cross": true, "thin": true, "light": 14, …}</code></td><td>rc_o (thin cross faces)</td></tr>
+<tr><td>24</td><td>data.gd:172 <code>24: {"name": "Lava", "solid": false, "cross": true, "hard": 1e9, "light": 15, …}</code></td><td>rf_l (fluid)</td></tr>
+<tr><td>139/140/141</td><td>data.gd:85–87 items: <code>139: {"name": "Bucket", …, "bucket": 0}</code>, <code>140: {"name": "Water Bucket", …, "bucket": 5}</code>, <code>141: {"name": "Lava Bucket", …, "bucket": 24}</code></td><td>buckets (fluid id 5/24 — G1 fluids/buckets arms)</td></tr>
+</table>
+<p>Scan categories (frozen): fluid <code>id == 5 or id == 24</code>; <code>xtab&gt;0 and ttab&gt;0</code> → rc_o; <code>xtab&gt;0</code> → rq; <code>ktab&gt;0</code> → rk; else → ro. <code>TOOL_BLOCKS</code> (data.gd:41–45) untouched (edit path only).</p>
+
+<h2>5. Harness gates</h2>
+<p>All runs from repo root: <code>HOME=/tmp/dsh_home</code> (mkdir in same call) + engine <code>/home/angrygiant/tools/godot/godot --headless --path godot</code>, one godot at a time. r50 timeout 480000 ms. Scratch <code>.scratch/AC-0108/</code>.</p>
+
+<h3>Fresh PRE anchors (measured 2026-08-26 22:41–22:49 on the current tree, <code>.scratch/AC-0120/gates.log</code> — all gates rc=0; + 2 fresh runs 2026-08-27 00:10 in <code>.scratch/AC-0108/probe.log</code>)</h3>
+<table>
+<tr><th>anchor</th><th>value</th></tr>
+<tr><td>G0</td><td>rc 0, 0 SCRIPT ERROR (re-confirmed in probe.log 2026-08-27)</td></tr>
+<tr><td>battery5 exact</td><td>player {after_fly_y 37.78, jump_peak_y 36.43, after_fwd [8.5,5.68], horizontal_moved 2.82, is_on_floor true}; interact {breakable_id 2, place_cell [8,34,8], after_mine_cell 0, drop_spawned true, place_ok true}; light {surface_eff 15, torch_level 14, torch_far 0→9, cave_eff 0}; fluids {sea_backed 1406, sea_surface 2730, water_delta 1, water_on_lava 25, sideways_lava 9, shore [5,7]}; buckets {scoop [5,8]→[0,0], inv id 139}</td></tr>
+<tr><td>genhash 25/25</td><td>.scratch/AC-0108/pre_genhash.txt (0,0 = e59af29b1a1a88403c4bdeae591dba7d)</td></tr>
+<tr><td>MINFO r4</td><td>.scratch/AC-0108/pre_minfo_r4.txt — 121 lines, 81 built, opaque (verts[0]) total <b>125552 exact</b>, fluid total 110112</td></tr>
+<tr><td>MATINFO</td><td>built_chunks=81 distinct_std=3 distinct_all=5 total_allocs=3</td></tr>
+<tr><td>perf r4</td><td>total_ms 5829, build_ms 2417, first_draw 195, p50 14, p95 56, frame_max 70, mem 49887221→79177557 (27.9 MB), collision_shapes 81, collision_ms_total 58 / n 54 / max 2, build_units 722, drain_frames 418, gen_ms 709, staged 72/0/0, chunks 81/121, all_meshed</td></tr>
+<tr><td>boundary r4 ×3</td><td>walk p95 62/62/62 (max 119–122), fwd_p95 2992/2959/2975, fwd_first10_p95 10/10/10, irb 81, flap 0, mem_delta 30.6 MB, collision 306/226/max4 · 299/224/max3 · 305/230/max3, staged_drained 232–233, unbodied 0, marker_ok + remesh_ok true, queue_size 95, resident 132</td></tr>
+<tr><td>boundary r50</td><td><b>mem_delta 140.6 MB</b> (101471593→248863453) — fresh G4 anchor (replaces AC-0078's 144.6), walk p95 60, flap 0, fwd_p95 0, first10 9, collision 414/271/max4, RECSLICE total 68.0 / max 8.0 (frames 27), built 297/10201, resident 10712, unbodied 1</td></tr>
+<tr><td>editperf r4 (NEW — G3 anchor)</td><td>cell [8,34,8] (y=34 = <b>slab 2</b>), edited_id 1→0, <b>total_ms 241</b>, single_build_ms 66, max_frame_build_ms 66, flush_frames 5 — spawn chunk = sync build + immediate col rebuild = PRE full-column edit cost</td></tr>
+</table>
+
+<h3>Gate commands + pass conditions</h3>
+<p><b>G0</b> — <code>/home/angrygiant/tools/godot/godot --headless --path godot --quit</code> → rc 0, zero <code>SCRIPT ERROR</code> lines.</p>
+<p><b>G1</b> — <code>AWECRAFT_BATTERY="player;interact;light;fluids" AWECRAFT_LOGIC=battery /home/angrygiant/tools/godot/godot --headless --path godot</code> → battery RESULT <code>ok:true</code> + every per-mode RESULT field equal to the PRE values above (timing fields ms/total_ms excluded).</p>
+<p><b>G2 byte-identity</b> (world/* changed → mandatory):</p>
+<ol>
+<li><code>AWECRAFT_LOGIC=genhash …</code> → 25 GENHASH lines byte-equal to pre_genhash.txt.</li>
+<li><code>AWECRAFT_LOGIC=perf AWECRAFT_RADIUS=4 AWECRAFT_MESH_INFO=1 …</code> → 121 MINFO lines. <b>Per-chunk MINFO diff method</b>: parse each <code>MINFO {json}</code> line; for every chunk <code>pos</code> key, POST <code>verts</code> (all surface slots) and <code>built</code> must equal PRE line-for-line (pre_minfo_r4.txt); sums: opaque total 125552, fluid total 110112. <code>mesh_info()</code> (world.gd:1502) keeps the per-chunk JSON shape by summing per surface slot across slab instances — that is what makes the diff work with zero new harness.</li>
+<li>MATINFO line from the same run: <code>distinct_std=3 total_allocs=3</code> (slab instances resolve materials via <code>_get_mat</code>, AC-0120 cache — no new allocs).</li>
+<li>Battery exact (as G1).</li>
+</ol>
+<p><b>G3 per-slab col rebuild probe</b> — NEW env-gated harness mode (Run-2 adds, default off): <code>AWECRAFT_LOGIC=editslab /home/angrygiant/tools/godot/godot --headless --path godot</code> (r4, spawn). Design: (1) recenter at spawn, wait all in-radius built (same wait as editperf, main.gd:2744–2754); (2) instrument <code>_build_slab_collision</code> with chunk-level counters <code>perf_slab_body_builds: PackedInt32Array(5)</code> + <code>perf_slab_body_ms: PackedFloat32Array(5)</code>; (3) scripted edits, each followed by a light-flush wait (same loop as editperf L2777–2780):
+<ul>
+<li>E1 border y=15/16: place stone (id 3) pillar at (sx+2, 14..18, sz+2), then break cell y=15 → expect <code>slabs_touched = [0, 1]</code> ({15/16=0} ∪ {15%16==15 → +(16/16)=1}).</li>
+<li>E2 interior y=24: place+break at (sx+3, 24, sz+3) → expect <code>[1]</code> only.</li>
+<li>E3 border y=31/32: pillar at y=30..34, break y=32 → expect <code>[1, 2]</code> ({32/16=2} ∪ {32%16==0 → +31/16=1}).</li>
+</ul>
+RESULT: per-edit <code>{y, slabs_touched, col_ms, total_ms, cell_after}</code> + <code>pre_total_ms: 241</code>. <b>Pass</b> = each <code>slabs_touched</code> equals the expected set (body rebuilds on unaffected slabs == 0), per-edit wall <code>total_ms ≤ 241</code> (PRE full-column anchor; same flush pacing both sides), <code>cell_after == 0</code> everywhere, <code>mesh_built</code> true throughout, and a final per-chunk MINFO pass with the edit chunk's opaque vert total matching the PRE line minus exactly the removed block's contribution (mesh output byte-identical under edit).</p>
+<p><b>G4 R=50 memory</b> — <code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=50 AWECRAFT_RECPROBE=1 …</code> (timeout 480000 ms) → RESULT <code>mem_delta_mb</code> POST ≤ <b>140.6</b>. Report the delta honestly. Structural expectation (stated up front): flat to slightly UP in pass 1 — geometry bytes, data+fl (column layout frozen), and concave face bytes are unchanged; per-slab object overhead grows (≤5 ArrayMesh + 5 bodies + ≤15 MeshInstance3D per chunk vs 3 instances + 1 body). If POST &gt; 140.6 → document deviation + register the per-slab culling follow-up (the real memory lever) rather than hide it.</p>
+<p><b>G5 boundary floor</b> — <code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=4 AWECRAFT_RECPROBE=1 …</code> (Run-2 ×1; coordinator flake ×2): walk <code>p95 ≤ 65</code> (PRE 62 — this is the 5×-bodies broadphase watch: r4 81→~300–405 bodies, r50 271→~9–13k), <code>fwd_p95 ≤ 3500</code> (PRE 2959–2992) + <code>fwd_first10_p95 ≥ 8</code> (PRE 10), <code>in_radius_built_final ≥ 60</code> (PRE 81), <code>flap == 0</code>, collision-cost check at up-to-405 bodies: <code>collision_max_ms ≤ 10</code> (PRE 4) and <code>collision_ms_total/collision_n ≤ 2.0</code> (PRE 1.35–1.5), RECSLICE <code>max_ms ≤ 12.2 + noise</code> (PRE r50 8.0; RECPROBE per-call totals ≤ ~17), perf no-regression (perf r4 <code>total_ms ≤ 6700</code> [PRE 5829×1.15], <code>first_draw ≤ 250</code> [PRE 195], <code>p95 ≤ 65</code> [PRE 56]), <code>remesh_ok + marker_ok true</code>, <code>unbodied_built_final ≤ 1</code> (PRE r4 0 / r50 1).</p>
+<p><b>G6</b> — <code>./build_windows.sh</code> (coordinator after Run-2 SMOKE): 8080 + 5180 http 200, exe shipped, BUILD.txt updated.</p>
+
+<h2>6. Snapshot/render names</h2>
+<p>Exactly one render (Run-2 SMOKE, after G0+SMOKE):</p>
+<pre>
+AWECRAFT_SNAPSHOT=tasks/AC-0108/post_r1_iso.png AWECRAFT_CAM=iso AWECRAFT_RADIUS=1 AWECRAFT_SEED=44 \
+  timeout 300000 xvfb-run -a /home/angrygiant/tools/godot/godot --path godot --rendering-method gl_compatibility
+</pre>
+<p>Output: <code>tasks/AC-0108/post_r1_iso.png</code> (R=1 iso). Visual baseline: <code>tasks/AC-0120/post_r1_iso.png</code> (same camera/seed); render-gate tolerance precedent 25 px / 921600 (AC-0120) — larger diff triggers the §7 fluid-ordering check. No other renders; Run-1 (this run) is headless-only.</p>
+
+<h2>7. Risks / edge cases</h2>
+<ol type="a">
+<li><b>Slab-boundary drift (top risk)</b> — if any builder used a slab-LOCAL merge grid, a strip anchored 3 rows below a slab top (merged quads grow H≤4 along v=y for fi 0/1/4/5) would be clipped on one side and re-emitted on the other → different quad counts (e.g. border face −4/+8 verts), missing/extra walls at y=16/32/48/64. Design prevents it: the merge grid stays COLUMN-WIDE (L481–541 unchanged — identical merge decisions); only the emit destination routes per anchor block. Detector: G2 per-chunk MINFO diff (exact per-chunk vert arrays) + iso render. Fallback: revert routing to a single mesh (task degenerates to col-only split — still a valid partial delivery).</li>
+<li><b>5× collision bodies → broadphase cost</b> — r4 81→~300–405, r50 ~9–13k StaticBody3D+Concave shapes. Watch: G5 walk p95 ≤ 65, collision_max_ms ≤ 10, ms/n ≤ 2.0, r50 RECSLICE/queue behavior. If walk p95 &gt; 65: decouple — keep ONE column-wide body per chunk for collision (slabs own meshes only); the per-slab win then narrows to mesh/frustum but G2/G4 still pass.</li>
+<li><b>Worker handoff shape</b> — <code>build_accs</code> returns 30 acc dicts (5×6) instead of 6; <code>apply_accs</code>/<code>_acc_from_dict</code> consume <code>res["slabs"]</code>. A missed key = runtime SCRIPT ERROR → G0 catches immediately. Drain pacing unchanged (1 dispatch/apply per column, TM cap 2, dedup by chunk key) — perf r4 build_units 722 / drain_frames 418 / first_draw 195 are the regression fence.</li>
+<li><b>Probe adaptation</b> — every per-chunk instance-field reader must move to slab loops or break: <code>_matinfo_counts</code> (main.gd:297–318 — MATINFO 3/3 fence), <code>mesh_info</code> (world.gd:1502–1526 — MINFO shape for G2), <code>collision_body</code> refs (world.gd:948/977/984; main.gd:4043/5249/5260), AWECRAFT_ONLY (1008–1019) + DBGCHUNK (1020–1036). Missing one = a harness crash or a stale-fence false signal, not a game bug — G0 + gate values catch it.</li>
+<li><b>Recenter/drain slices</b> — stay column-scoped: 1 build unit per column (world.gd L807 <code>u = 1</code>), slab work happens inside it; AC-0118 5-phase budget (8 ms/≤2048 units) and RECSLICE semantics unchanged (gate ≤ 12.2+noise). Unload frees all 5 slabs via <code>c.queue_free()</code> (L1145) — slab structs die with the chunk, no leaks; candidate kill must null slab meshes before freeing bodies (existing pattern, looped).</li>
+<li><b>Memory flat/up (honest)</b> — no structural drop in pass 1 (geometry/data/fl/face bytes unchanged; per-slab object overhead up). G4 is a fence (≤ 140.6), not a promised drop. If it passes flat/up, report it and register per-slab culling (per-slab queue entries + hysteresis + <code>_startup_pending</code>/AC-0079 wall semantics — NOT free in this pass) as the follow-up that realizes the R=50 drop.</li>
+<li><b>mesh_built intermediate state</b> — build_mesh/apply_accs assemble all 5 slabs in one main-thread call → <code>mesh_built</code> flips exactly once per column build (no partial visibility to <code>_startup_pending</code> L409–415, <code>_await_core_3x3</code> main.gd:4273, AC-0079 wall checks, or the boundary settle loop).</li>
+<li><b>MATINFO fence / materials</b> — slab assembly MUST resolve materials through <code>_get_mat</code> (chunk.gd:55–70, AC-0120 static cache, main-thread only; materials never cross threads). An inline <code>_fluid_material()</code>-style call per slab would blow <code>total_allocs</code> past 3 → G2 catches. Fluid anim material (L1366) stays per-id cache as today.</li>
+<li><b>Fluid double-blend ordering</b> — today each chunk's [opaque+cutout+water+lava] mesh is drawn by BOTH mesh_instance and fluid_instance (fluid alpha 0.62 effectively drawn twice — today's look, preserved per slab). Only the cross-slab ordering of translucent quads can differ (disjoint slab AABBs; rare overlap at a slab border). Detector: iso R=1 pixel diff vs post_r1_iso baseline; mitigation: slab instances added in y order 0→4 (natural loop order).</li>
+<li><b>Edit flush pacing</b> — <code>set_block</code> still marks the 3×3 light neighborhood (LIGHT_NEIGHBOR=1, world.gd:1385–1388) → flush frame count unchanged (editperf flush_frames 5 anchor); G3 per-edit wall ≤ 241 ms is the fence. <code>set_fluid</code> path untouched (fluids never produce opaque body geometry — no col_dirty today, none after; save/restore <code>_apply_edits_to_chunk</code> marks all 5 slabs dirty and rebuilds all bodies).</li>
+</ol>
+</body>
+</html>

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0120 — results (Run-2, builder, medium)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.pass{color:#1a7f37;font-weight:600}.fail{color:#b3261e;font-weight:600}.note{color:#555;font-size:13px}.key{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}img{max-width:100%;border:1px solid #ccc;border-radius:6px}</style></head><body>
+<h1>AC-0120 — shared-material-cache-no-per-build-alloc — Run-2 results</h1>
+<p class="note">Builder (medium), 2026-08-26. Per the HEAVY-GATE PIPELINE this run verified G0 + SMOKE battery + the two MATINFO measurement runs (G3a PRE/POST) + 1 R=1 render, then EXIT. Heavy gates (G3b boundary+MESH_INFO, G4 full perf no-regression, G5 boundary r4 floor + RECSLICE r50 + flake ×N, G6 windows build) run LATER by the coordinator as a background job (absolute godot path <code>/home/angrygiant/tools/godot/godot</code>). All logs: <code>.scratch/AC-0120/</code>. Handoff log: <code>continuity.md</code> (RUN 2 section).</p>
+
+<h2>Verdict</h2>
+<div class="key"><b class="pass">SMOKE COMPLETE.</b> Material alloc per crossing = 0: POST <code>MATINFO</code> = <code>distinct_std=3 total_allocs=3</code> (constant — opaque/cutout/flower; the fluid-torch kind never exists in natural worlds) vs PRE <code>distinct_std=180 total_allocs=325</code> (scales with build count). MINFO r4 surface-0 verts = <b>125552 EXACT</b> (both PRE and POST). SMOKE battery ALL EXACT. Render visually identical (25/921600 px Δ, max channel Δ2 — fluid-anim phase jitter). Zero script errors in every run (G0 ×2, PRE, POST, battery, render). Awaiting coordinator heavy gates.</div>
+
+<h2>1. What changed (diff stat)</h2>
+<pre> godot/scenes/main.gd        | 34 ++++++++++++++++++++++++++++++   (harness probe only, env-gated, off by default)
+ godot/world/chunk.gd        | 50 ++++++++++++++++++++++++++++++++++-----------   (cache + 8 call-site swaps + static factories)
+ tasks/AC-0120/continuity.md |  9 ++++++++
+ 3 files changed, 81 insertions(+), 12 deletions(-)</pre>
+
+<table>
+<tr><th>file:line</th><th>change</th></tr>
+<tr><td><code>chunk.gd:45-48</code></td><td>4 new statics: <code>_mat_atlas</code> / <code>_mat_ms</code> (texture identity keys) / <code>_mat_cache</code> (kind → Material, ≤4 entries) / <code>_mat_alloc_count</code> (G3 build-path counter)</td></tr>
+<tr><td><code>chunk.gd:55-69</code></td><td><code>static func _get_mat(kind, ms_tex)</code> — lazy per-kind creation; identity-key invalidation on <code>(Data.atlas_tex, ms_tex)</code> for the opaque kind (texture-pack swap / <code>AWECRAFT_MERGE</code> toggle clears the set ONCE per texture generation); increments <code>_mat_alloc_count</code></td></tr>
+<tr><td><code>chunk.gd:1525/1534/1549/1552</code></td><td>sync <code>build_mesh()</code> call sites swapped: opaque→<code>_get_mat("opaque", ms.tex)</code>, fluid→<code>_get_mat("fluid")</code>, cutout→<code>_get_mat("cutout")</code>, flower→<code>_get_mat("flower")</code></td></tr>
+<tr><td><code>chunk.gd:1595/1604/1619/1622</code></td><td>worker-handoff <code>apply_accs()</code> call sites swapped identically (all 8 sites; workers never touch the cache — assignment stays main-thread-only, AC-0107 handoff unchanged)</td></tr>
+<tr><td><code>chunk.gd:1326/1341/1348/1354</code></td><td>4 factories became <code>static func</code> (bodies VERBATIM — pure: only <code>StandardMaterial3D</code> + <code>Data</code> autoload, zero instance state; required because <code>_get_mat</code> is static)</td></tr>
+<tr><td><code>chunk.gd:1370</code></td><td><code>_fluid_anim_material</code> UNTOUCHED (its <code>_fluid_material()</code> fallback still resolves — instance func calling static is fine). Water/lava anim sites <code>:1537/:1540/:1607/:1610</code> UNTOUCHED (shared <code>Data.fluid_anim_mats</code>). <code>_merge_atlas</code> UNTOUCHED</td></tr>
+<tr><td><code>main.gd:292</code></td><td><code>const _ChunkScriptM = preload("res://world/chunk.gd")</code> (harness-only)</td></tr>
+<tr><td><code>main.gd:297-318</code></td><td><code>func _matinfo_counts()</code> — walks mesh+fluid+flora instances of all built chunks (mesh_info() misses flora), dedupes by material instance id, returns built_chunks / distinct_std / distinct_all / total_allocs</td></tr>
+<tr><td><code>main.gd:4868-4869</code></td><td>MATINFO print in <code>_perf_test</code> inside the existing <code>AWECRAFT_MESH_INFO</code> block (no new env var; off by default)</td></tr>
+<tr><td><code>main.gd:5293-5294</code></td><td>Same gated MATINFO print in <code>_boundary_test</code> before final <code>Debug.result</code> (this is the coordinator's G3b post-crossings probe — ready, Run-2 did not run boundary)</td></tr>
+</table>
+<p class="note">world.gd: NO CHANGE (per plan §2.3 — zero material refs there; handoff <code>threadmesh_handoff</code> unchanged).</p>
+
+<h2>2. G3 — PRE → POST MATINFO (verbatim)</h2>
+<pre># PRE (probe + factory counter added FIRST, cache NOT yet flipped — plan §5 G3a):
+MATINFO built_chunks=81 distinct_std=180 distinct_all=182 total_allocs=325
+# POST (cache flipped):
+MATINFO built_chunks=81 distinct_std=3 distinct_all=5 total_allocs=3</pre>
+<ul>
+<li><b>PRE</b> <code>distinct_std=180</code> (plan band 130–170; the fresh perf run does 804 build units and freed chunks' meshes still hold refs at walk time) + 2 shared water/lava ShaderMaterials = 182. <code>total_allocs=325</code> (factory counter counts the call chain: cutout→opaque+cutout, flower→+2). Both metrics scale with build count — the per-build allocation the spec kills.</li>
+<li><b>POST</b> <code>distinct_std=3</code> (opaque/cutout/flower — fluid-torch kind absent in natural worlds), <code>distinct_all=5</code> (3 std + 2 anim ShaderMaterials), <code>total_allocs=3</code> — one alloc per kind at first contact, then <b>0 for every (re)build and every crossing</b>; constant regardless of chunk count. The boundary+MESH_INFO post-crossings run (G3b, 20 crossings) is the coordinator's explicit evidence that <code>total_allocs</code> stays 3.</li>
+</ul>
+
+<h2>3. G0 + MINFO fence (both runs)</h2>
+<table>
+<tr><th>run</th><th>G0 / script errors</th><th>MINFO r4 surface-0 verts (81 built)</th><th>perf fields</th></tr>
+<tr><td>PRE (before flip)</td><td class="pass">rc=0, 0</td><td class="pass"><b>125552 EXACT</b></td><td>total 5737 / build 2348 / first_draw 192 / fog_ok / read_sync_gen 0 / all_meshed</td></tr>
+<tr><td>POST (after flip)</td><td class="pass">rc=0, 0</td><td class="pass"><b>125552 EXACT</b></td><td>total 5844 / build 2341 / first_draw 189 / p95 56 / fog_ok / read_sync_gen 0 / all_meshed / mem 49.89→79.18 MB (Δ29.29 MB vs PRE-anchor Δ29.72 MB)</td></tr>
+</table>
+<p class="note">Invocation both runs: <code>HOME=/tmp/dsh_home AWECRAFT_LOGIC=perf AWECRAFT_MESH_INFO=1 AWECRAFT_RADIUS=4 /home/angrygiant/tools/godot/godot --headless --path godot</code>. Sum = <code>verts[0]</code> over built MINFO lines (method re-verified against Run-1's log first: reproduces 125552). G4's full no-regression gate (noise band, flake) is the coordinator's job; the POST numbers above are already within noise of the 5870/191/57 anchor.</p>
+
+<h2>4. SMOKE battery — RESULT JSON (exact)</h2>
+<p><code>HOME=/tmp/dsh_home AWECRAFT_BATTERY="player;interact;light;fluids;buckets;genhash" /home/angrygiant/tools/godot/godot --headless --path godot</code> — rc=0, 0 script errors. Every arm EXACT:</p>
+<pre>player  RESULT {"after_fly_y":37.78,"after_fwd":[8.5,5.68],"horizontal_moved":2.82,"is_on_floor":true,"jump_peak_y":36.43,"start":[8.5,35.0,8.5],...}
+interact RESULT {"after_mine_cell":0,"after_place_cell":2,"breakable_id":2,"drop_spawned":true,"highlight_visible":true,"inv_grew":{"id":2,"n":1},"place_cell":[8,34,8],"place_ok":true,"target_cell":[8,34,8]}
+light   RESULT {"cave_eff":0,"surface_eff":15,"torch_far_after":9,"torch_far_before":0,"torch_level":14}
+fluids  RESULT {"sea_backed_before":1406,"sea_backed_final":1406,"sea_stable":true,"sea_surface_before":2730,"sea_surface_final":2730,"shore_after":[5,7],"sideways_lava_result":9,"source_after":[5,8],"water_delta":1,"water_on_lava_result":25}
+buckets RESULT {"after_scoop":[0,0],"inv_place":{"id":139,"n":1},"inv_scoop":{"id":140,"n":1},"place_after":[5,8],"scoop_before":[5,8]}
+genhash 25/25 GENHASH lines · GENMS 783 · MD5-of-25-lines = 61de26e9a542a5ce2db62e7157d6c018 (ANCHOR MATCH — and the 25 lines are byte-identical to Run-1's pre-change genhash.log)</pre>
+<p class="note">Gate values all match the spec table: player is_on_floor true / 36.43 / 2.82 · interact true/true/2 · light 14/15/0/9 · fluids 2730/2730 + 1406/1406 stable, water_delta 1, shore [5,7], source [5,8], 25/9 · buckets [5,8]/[5,8] · genhash 25/25. Nothing moved — this is a material-reference-only change, as required.</p>
+
+<h2>5. Render (≤1, R=1 iso)</h2>
+<pre>HOME=/tmp/dsh_home AWECRAFT_SNAPSHOT=/home/angrygiant/github_projects/AweCraft/tasks/AC-0120/post_r1_iso.png AWECRAFT_CAM=iso AWECRAFT_RADIUS=1 \
+  xvfb-run -a /home/angrygiant/tools/godot/godot --path godot --rendering-method gl_compatibility</pre>
+<img src="post_r1_iso.png" alt="AC-0120 post-change R=1 iso render">
+<p class="note">rc=0, 0 script errors (1280×720, 82077 B). Pixel-diff vs the current-tree reference <code>tasks/AC-0078/ac0078_iso_r1.png</code>: <b>25/921600 pixels differ, max channel-sum Δ2</b> — fluid-animation 1-frame phase jitter on water edges (the water shader animates by wall-clock <code>frame_time</code>; snapshot phases differ by one frame). Ocean translucency, terrain, tree/leaf cutouts visually identical. No A/B render gate per plan — the byte-identity fence is MINFO verts + battery + unchanged material properties, all green.</p>
+
+<h2>6. Deviations (2, both fixes forced by the tree — documented in continuity.md)</h2>
+<ol>
+<li><b><code>_get_mat</code> opaque-guard (1 line).</b> Plan §2.4 code verbatim re-clears the cache on <i>every</i> build: the per-chunk call order is opaque(<code>ms.tex</code>) → fluid/cutout/flower(<code>ms_tex=null</code> default), so after opaque sets <code>_mat_ms</code>=merged-tex, the next kind's <code>null</code> mismatches → clear; the next chunk's opaque mismatches again → POST would be ~4 allocs/build and the <code>total_allocs=3</code> gate would fail. Fix: <code>if _mat_atlas != Data.atlas_tex or (kind == "opaque" and _mat_ms != ms_tex)</code> — matches §2.4's own key text ("opaque <b>additionally</b> identity-keyed on (Data.atlas_tex, ms_tex)"). All 8 call-site swaps unchanged from plan. Result verified: POST total_allocs=3.</li>
+<li><b>Factories → <code>static func</code>.</b> Plan assumed the static <code>_get_mat</code> can call the 4 factories, but they were instance funcs → 5 parse errors on first G0 POST (<code>Cannot call non-static function ... from the static function "_get_mat()"</code>). Fix: all 4 factories <code>static func</code>, bodies verbatim (pure — only <code>StandardMaterial3D</code> + <code>Data</code>; no external callers, grep-verified). G0 then clean.</li>
+<li class="note">(Ops note, not a code deviation: plan §6's render recipe uses a relative <code>AWECRAFT_SNAPSHOT</code> path, which Godot rejects — "Can't save PNG at path"; prior renders AC-0078/AC-0106 used the absolute path, which was used here.)</li>
+</ol>
+
+<h2>7. Pending (coordinator heavy-gate background job — NOT run by Run-2)</h2>
+<ul>
+<li><b>G3b</b> <code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=4 AWECRAFT_MESH_INFO=1</code> → after 20 crossings expect <code>MATINFO built_chunks=81 distinct_std=3 total_allocs=3</code> (probe already wired at main.gd:5293-5294) + boundary floors.</li>
+<li><b>G4</b> perf no-regression full (POST observation: total 5844 vs anchor 5870, first_draw 189, p95 56, mem Δ29.29 MB — already within noise).</li>
+<li><b>G5</b> boundary r4 floor (walk p95 ≤ ~65, fwd ≤ 3500 + first10 ≥ 8, irb ≥ 60, flap 0) ×2 flake + player ×4 + RECSLICE r50 ≤ 12.2.</li>
+<li><b>G6</b> <code>./build_windows.sh</code> + 8080/5180 checks + commit/push (Run-2 did no git, per pipeline).</li>
+</ul>
+<p class="note">AC-0120-results.html · Run-2 (builder, medium) · 2026-08-26 · SMOKE complete — awaiting coordinator heavy gates</p>
+
+<h2>Coordinator heavy-gate verdict (2026-08-26 22:41–22:50, background job bash-52)</h2>
+<ul>
+<li><b>ALL HEAVY GATES PASS</b> — <code>.scratch/AC-0120/gates.log</code>, 11/11 steps rc=0, 0 script errors.</li>
+<li><b>G1</b> zero script errors across every run.</li>
+<li><b>G2a genhash</b>: 25/25, GENMS 808.</li>
+<li><b>G2b full 5-arm battery</b> EXACT: player 2.82/36.43/floor · interact 2/true/true · light 14/15/0/9 · fluids sea 2730/2730 + 1406/1406 stable, delta 1, [5,7]/[5,8], 25/9 · buckets [5,8]/[5,8].</li>
+<li><b>G2c MINFO fence</b>: surface-0 vert sum over 81 chunks = <b>125552 EXACT</b> (geometry untouched); MATINFO (perf run) built_chunks=81 distinct_std=3 distinct_all=5 total_allocs=3.</li>
+<li><b>G3 (the gate)</b>: boundary r4 with 20 crossings → MATINFO <b>distinct_std=3, total_allocs=3 — constant, 0 material allocs per crossing</b> (pre-change the counter scaled with builds: 325 at 81 builds). Note: that walk's <code>built_chunks=24</code> counts currently-meshed resident chunks (88 of 132 resident were unload-mesh-freed behind the player; <code>mesh_built</code> reset at world.gd:1045) — the gate values key on distinct/allocs, which are exact.</li>
+<li><b>G4 perf</b>: total 5829 (anchor 5870, improved), build_ms 2417, first_draw 195, p95 56, fog_ok, read_sync_gen 0, mem_after 79.18 MB (anchor 79.58, improved), collision_shapes 81.</li>
+<li><b>G5 boundary floors</b>: g3b run p95 62 / fwd 2992 / first10 10 / irb 81 / flap 0 / queue 95 / ok; flake ×2 (62/2959, 62/2975, both 10/0/95); player flake ×4 (all on-floor, 36.43, 2.82); RECSLICE r50 135.0/10.0 + 68.0/8.0 (≤ 12.2 + noise).</li>
+<li><b>G6 build</b>: RC=0, exe <b>109,567,376B @22:49</b> (fresh, +2.6 KB vs AC-0078), 8080 AweCraft.exe 200 + 5180 webui 200 (single 8080 daemon; the 8081 line in the build log is informational).</li>
+</ul>
+<p><b>VERDICT: AC-0120 PASSES — shared material cache ships.</b> 4 statics + lazy <code>_get_mat</code> + 8 call-site swaps; PRE 180 distinct / 325 allocs → POST 3/3; MINFO 125552 exact; battery exact. Download: <a href="http://localhost:8080/AweCraft.exe">localhost</a> / <a href="http://192.168.0.224:8080/AweCraft.exe">LAN</a>.</p>
+
+</body></html>

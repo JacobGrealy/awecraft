@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-26T22:11
+  updated_at: 2026-08-27T03:16
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -3151,10 +3151,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-24T10:51
-  updated_at: 2026-08-24T10:51
+  updated_at: 2026-08-26T22:46
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -3588,18 +3588,30 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-25T19:57
-  updated_at: 2026-08-26T20:28
-  completed_at: null
+  updated_at: 2026-08-27T00:48
+  completed_at: 2026-08-27T00:48
   waiting_on: null
   parent_id: null
   notes: 'Cache/reuse StandardMaterial3D per chunk build: chunk.gd:860 per-build 3-5 new materials (~18/crossing) vs web 3
     shared mats 1290. Introduce shared material cache keyed by tile/tint (Data.ATLAS_PX 1024, merge_atlas h 1760) reused across
     chunks; ArrayMesh creation stays per-chunk but material alloc becomes O(1). Gate: material alloc per crossing 0, same
     visuals (greedy-mesh uv intact AC-0117), battery green, r4 verts 125552 intact.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-27T00:48
+    updated_at: null
+    text: 'DONE 2026-08-26 (two-phase + coordinator heavy gates). Shared material cache: 4 statics + lazy _get_mat(kind, ms_tex)
+      in chunk.gd (identity-key invalidation on atlas/merged-tex; kind=="opaque" guard on the ms half - plan-verbatim would
+      re-clear every build), 4 factories -> static (bodies verbatim), all 8 call sites swapped (sync build_mesh + worker-handoff
+      apply_accs); water/lava ShaderMaterials (Data.fluid_anim_mats) and world.gd untouched. MATINFO gate: PRE distinct_std=180/total_allocs=325
+      (scales with builds) -> POST distinct_std=3/total_allocs=3, constant through 20 boundary crossings (0 allocs per crossing);
+      MINFO surface-0 sum 125552 EXACT pre/post (geometry untouched); FULL battery EXACT + genhash 25/25; render pixel-diff
+      25/921600 px max-d2 (fluid-anim phase). Heavy gates: r4 p95 62 / fwd 2992-2975 / first10 10 / irb 81 / flap 0 / flake
+      x2; player flake x4; RECSLICE r50 135.0/10.0+68.0/8.0; perf 5829/195/56/79.18MB (no regression, mem improved); build
+      RC=0 exe 109,567,376B; 8080+5180 200. See AC-0120-results.html verdict section + continuity.md RUN 2.'
 - id: AC-0121
   title: debug-console-in-game
   source: agent
@@ -3721,10 +3733,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-26T20:45
-  updated_at: 2026-08-26T20:45
+  updated_at: 2026-08-27T03:16
   completed_at: null
   waiting_on: null
   parent_id: null
