@@ -569,13 +569,15 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		_tm_retrigger(key, c, e)
 		return
 	var ta := Time.get_ticks_msec()
+	var old_eff = c.last_eff
 	c.apply_accs(res, _tm_ms_full)
 	perf_build_ms += Time.get_ticks_msec() - ta
 	perf_build_worker_ms += int(res.get("wms", 0))
 	_count_collision_build(c)
 	_stage_check(c, key)
+	_eff_landed(c, old_eff, res.get("light", {}))
 	if bool(e.get("eff_trust", true)):
-		_eff_cache_put(key, c.data, res.get("light", {}))
+		_eff_cache_put(key, c.data, res.get("light", {}), e.get("ngen", null))
 	_tm_handoff += 1
 	if timing or _tm_debug:
 		print("BUILDCHUNK_T %d,%d build_ms=%d" % [int(e["cx"]), int(e["cz"]), int(res.get("wms", 0))])
@@ -595,7 +597,9 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 	if (cx == 0 and cz == 0) or c.data.is_empty():
 		if defer_on_cap:
 			perf_edit_syncs += 1
+		var old_eff = c.last_eff
 		c.build_mesh(get_block, eff)
+		_eff_landed(c, old_eff, c.last_eff)
 		_count_collision_build(c)
 		_stage_check(c, key)
 		_bd_log(cx, cz)
@@ -610,7 +614,9 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 				# Workers can't on-demand-generate; the sync _build_snap can.
 				if defer_on_cap:
 					perf_edit_syncs += 1
+				var old_eff = c.last_eff
 				c.build_mesh(get_block, eff)
+				_eff_landed(c, old_eff, c.last_eff)
 				_count_collision_build(c)
 				_stage_check(c, key)
 				_bd_log(cx, cz)
@@ -631,7 +637,9 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 			# frame when a worker slot frees.
 			perf_edit_defers += 1
 			return false
+		var old_eff = c.last_eff
 		c.build_mesh(get_block, eff)
+		_eff_landed(c, old_eff, c.last_eff)
 		_count_collision_build(c)
 		_stage_check(c, key)
 		_bd_log(cx, cz)
@@ -641,10 +649,18 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 		ms_w = {"rects": _tm_ms_full.rects.duplicate(), "h": float(_tm_ms_full.get("h", 0.0))}
 	else:
 		ms_w = {"rects": {}}
+	# AC-0129: fresh strip copies ride on the entry (the worker self-lights
+	# through the pull kernel / bakes its 20x20 box from them); ngen = the
+	# 4 neighbor eff_gens at THIS dispatch (the cache-entry validation key).
+	var strips = _strips_for(cx, cz)
+	var ctx_w: Dictionary = _tm_ctx.duplicate()
+	ctx_w["eff_strips"] = strips["eff"]
+	ctx_w["blk_strips"] = strips["blk"]
 	var entry := {
 		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(),
 		"data": c.data.duplicate(), "fl": c.fl.duplicate(),
-		"nbs": nbs, "eff": eff, "eff_trust": eff_trust, "ctx": _tm_ctx, "ms": ms_w,
+		"nbs": nbs, "eff": eff, "eff_trust": eff_trust,
+		"ctx": ctx_w, "ms": ms_w, "ngen": _ngens_for(cx, cz),
 	}
 	var tid = threadmesh_pool.add_task(_threadmesh_worker)
 	entry["tid"] = tid
@@ -901,10 +917,224 @@ func _remove_entry(e: Dictionary) -> void:
 
 # --- AC-0077: crossing-batched per-chunk light (P1.3) ----------------------
 
-func _eff_cache_put(key: String, data: PackedByteArray, eff: Dictionary) -> void:
+# AC-0129: per-dispatch fresh strip copies (main thread only; workers get the
+# copies in their entry). eff strips = 8 combined last_eff rings [E,W,N,S,
+# SE,SW,NE,NW] for the 20x20 bake box margins (Chunk._bake_box); blk strips =
+# 4 side rings [E,W,N,S] derived from neighbor data+last_eff (source light
+# EXACT, eff>sky EXACT, else 0 CONSERVATIVE — one top-down column pass each,
+# web sky rule index.html:1013-1021). Neighbor missing/never lit -> empty
+# (0-length) arrays: bake margin stays 0, no injection from that side.
+func _strips_for(cx: int, cz: int) -> Dictionary:
+	var h: int = Data.HEIGHT
+	var effs: Array = []
+	var blks: Array = []
+	var sides := [[1, 0], [-1, 0], [0, 1], [0, -1]]
+	for s in sides:
+		var nc = chunks.get(_key(cx + int(s[0]), cz + int(s[1])))
+		var e := PackedByteArray()
+		var b := PackedByteArray()
+		if nc != null and not nc.data.is_empty() and not nc.last_eff.is_empty():
+			e = _side_eff_strip(nc, int(s[0]), int(s[1]), h)
+			b = _side_blk_strip(nc, int(s[0]), int(s[1]), h)
+		effs.append(e)
+		blks.append(b)
+	var corners := [[1, 1], [-1, 1], [1, -1], [-1, -1]]
+	for s in corners:
+		var nc = chunks.get(_key(cx + int(s[0]), cz + int(s[1])))
+		var e := PackedByteArray()
+		if nc != null and not nc.data.is_empty() and not nc.last_eff.is_empty():
+			e = _corner_eff_strip(nc, int(s[0]), int(s[1]), h)
+		effs.append(e)
+	return {"eff": effs, "blk": blks}
+
+
+func _side_eff_strip(nc: Node3D, dx: int, dz: int, h: int) -> PackedByteArray:
+	# c=0 the column directly across our boundary, c=1 the next; t = our z
+	# (E/W) or our x (S/N). 2*16*h bytes, idx = c*(16*h) + y*16 + t.
+	var e := PackedByteArray()
+	e.resize(2560)
+	var narr: PackedByteArray = nc.last_eff["arr"]
+	var colsz := 16 * h
+	var nx0: int = 0 if dx > 0 else 15
+	var nz0: int = 0 if dz > 0 else 15
+	if dx != 0:
+		for c in range(2):
+			for y in range(h):
+				var srow := y * 16
+				for t in range(16):
+					e[c * colsz + srow + t] = narr[(y << 8) | (t << 4) | (nx0 - c)]
+	else:
+		for c in range(2):
+			for y in range(h):
+				var srow := y * 16
+				for t in range(16):
+					e[c * colsz + srow + t] = narr[(y << 8) | ((nz0 - c) << 4) | t]
+	return e
+
+
+func _side_blk_strip(nc: Node3D, dx: int, dz: int, h: int) -> PackedByteArray:
+	# Derivation per plan §2.C.1, column by column (2 cols x 16 t = 32 cols).
+	# POST fix (sky carry): v = source EXACT (22->14, 23->12, 24->15)
+	# > max(eff_n above own sky, sky_n) — i.e. the neighbor boundary cell's
+	# TRUE light, with the sky part DATA-ONLY (open column = 15) so it is
+	# correct even before the neighbor's eff exists. The MC lateral step
+	# cand = v - att(own) is then exact and can never over-inject
+	# (sky_n <= the neighbor's true eff). Remaining documented gap: DECAYED
+	# sky across 2+ covered columns needs the intermediate chunk's re-light
+	# (E2 covers the source case per plan §2; sky landings are out of scope
+	# for the perf gate).
+	var b := PackedByteArray()
+	b.resize(2560)
+	var narr: PackedByteArray = nc.last_eff["arr"]
+	var nd: PackedByteArray = nc.data
+	Lighting._tables()
+	var colsz := 16 * h
+	var nx0: int = 0 if dx > 0 else 15
+	var nz0: int = 0 if dz > 0 else 15
+	for c in range(2):
+		for t in range(16):
+			var nx: int
+			var nz: int
+			if dx != 0:
+				nx = nx0 - c
+				nz = t
+			else:
+				nx = t
+				nz = nz0 - c
+			var open := true
+			for y in range(h - 1, -1, -1):
+				var idx: int = (y << 8) | (nz << 4) | nx
+				var bl: int = nd[idx]
+				var sky_n := 0
+				if open and Lighting._att[bl] > 0:
+					sky_n = 15
+				if open and Lighting._att[bl] == 0:
+					open = false
+				var eff_n: int = narr[idx]
+				var lv := Lighting._glow[bl]
+				var v: int
+				if lv > 0:
+					v = lv
+				else:
+					var vb: int = eff_n if eff_n > sky_n else 0
+					v = vb if vb >= sky_n else sky_n
+				b[c * colsz + y * 16 + t] = v
+	return b
+
+
+func _corner_eff_strip(nc: Node3D, dx: int, dz: int, h: int) -> PackedByteArray:
+	# a = x-depth (0 = directly across), b = z-depth (0 = directly across);
+	# 2x2*h bytes, idx = (a*2+b)*h + y.
+	var e := PackedByteArray()
+	e.resize(320)
+	var narr: PackedByteArray = nc.last_eff["arr"]
+	var nx0: int = 0 if dx > 0 else 15
+	var nz0: int = 0 if dz > 0 else 15
+	for a in range(2):
+		for b in range(2):
+			var nx: int = nx0 - a
+			var nz: int = nz0 - b
+			for y in range(h):
+				e[(a * 2 + b) * h + y] = narr[(y << 8) | (nz << 4) | nx]
+	return e
+
+
+func _ngens_for(cx: int, cz: int) -> Array:
+	# eff_gens of (E,W,N,S); 0 for a missing chunk. An eff-cache entry is
+	# valid iff own data matches AND this 4-tuple matches — the data-
+	# signature on the batch's neighbor-eff inputs (plan §2.C.3).
+	var out: Array = []
+	for s in [[1, 0], [-1, 0], [0, 1], [0, -1]]:
+		var nc = chunks.get(_key(cx + int(s[0]), cz + int(s[1])))
+		out.append(0 if nc == null else int(nc.eff_gen))
+	return out
+
+
+# AC-0129 E2 (web lightOnNewChunk :1041-1044, beyond it: actually re-lights):
+# called right after last_eff lands (handoff + every sync build). A changed
+# byte array bumps our eff_gen (neighbor caches see it via ngen); if the
+# change came from our own block light (blk_src), the 4 orthogonal
+# mesh_built neighbors are evicted + re-enqueued ONCE — an identical
+# re-light bumps no gens, so the chain dies at depth 2. Plain surface
+# landings (blk_src false) cost ZERO extra builds.
+# Per-side FRAME gate (perf, correctness-identical; plan 2.C.2 says "evict +
+# re-enqueue 4 built neighbors" unconditionally — the gate only skips sides
+# whose shared 2-deep boundary frame is byte-identical old->new, i.e. the
+# neighbor's import is unchanged and its re-light a provable no-op; eff only
+# ever increases, so no staleness can be masked).
+func _eff_landed(c: Node3D, old_eff: Dictionary, new_eff: Dictionary) -> void:
+	if new_eff.is_empty():
+		return
+	var changed: bool = old_eff.is_empty() or old_eff.get("arr", PackedByteArray()) != new_eff.get("arr", PackedByteArray())
+	if not changed:
+		return
+	c.eff_gen += 1
+	if not bool(new_eff.get("blk_src", false)):
+		return
+	# AWECRAFT_E2=off: diagnostic kill switch — suppress the re-enqueue wave
+	# (strip-carry + frame-gate stay on). Restores pre-AC-0129 load profile.
+	if OS.get_environment("AWECRAFT_E2") == "off":
+		return
+	var cx := int(c.cx)
+	var cz := int(c.cz)
+	var old_arr: PackedByteArray = old_eff.get("arr", PackedByteArray())
+	var new_arr: PackedByteArray = new_eff.get("arr", PackedByteArray())
+	# Per-side FRAME gate (perf, correctness-identical): a neighbor's strips
+	# read ONLY the 2-deep boundary frame on the shared side (side strips
+	# c=0/1 + corner strips), so if that frame is byte-identical old->new the
+	# neighbor's import is unchanged and its re-light is a provable no-op.
+	# This is what keeps the lava-ocean initial load from 2x-churning: a
+	# chunk-center lava pocket never reaches the boundary -> zero enqueues.
+	var ns := [[cx + 1, cz], [cx - 1, cz], [cx, cz + 1], [cx, cz - 1]]
+	for side in range(4):
+		if not _frame_changed(old_arr, new_arr, side):
+			continue
+		var nkey := _key(int(ns[side][0]), int(ns[side][1]))
+		var nc = chunks.get(nkey)
+		if nc == null or nc.data.is_empty() or not nc.mesh_built:
+			continue
+		_eff_cache_evict(nkey)
+		if not light_pending_set.has(nkey):
+			light_pending.append(nkey)
+			light_pending_set[nkey] = true
+	flush_active = true
+
+
+# side 0=E (our lx 14,15) 1=W (lx 0,1) 2=S (lz 14,15) 3=N (lz 0,1); arrays
+# are 16x16xh, idx = (y<<8) | (lz<<4) | lx.
+func _frame_changed(a: PackedByteArray, b: PackedByteArray, side: int) -> bool:
+	if a.size() != b.size():
+		return true
+	var h := a.size() / 256
+	for y in range(h):
+		var row := y << 8
+		if side == 0:
+			for lz in range(16):
+				var i := row | (lz << 4) | 14
+				if a[i] != b[i] or a[i | 1] != b[i | 1]:
+					return true
+		elif side == 1:
+			for lz in range(16):
+				var i := row | (lz << 4)
+				if a[i] != b[i] or a[i | 1] != b[i | 1]:
+					return true
+		elif side == 2:
+			for lx in range(16):
+				var i := row | (14 << 4) | lx
+				if a[i] != b[i] or a[i | 16] != b[i | 16]:
+					return true
+		else:
+			for lx in range(16):
+				var i := row | lx
+				if a[i] != b[i] or a[i | 240] != b[i | 240]:
+					return true
+	return false
+
+
+func _eff_cache_put(key: String, data: PackedByteArray, eff: Dictionary, ngen = null) -> void:
 	if eff.is_empty():
 		return
-	_eff_cache[key] = {"data": data.duplicate(), "eff": eff}
+	_eff_cache[key] = {"data": data.duplicate(), "eff": eff, "ngen": ngen}
 	if not _eff_cache_order.has(key):
 		_eff_cache_order.append(key)
 		while _eff_cache_order.size() > EFF_CACHE_CAP:
@@ -918,10 +1148,17 @@ func _eff_cache_evict(key: String) -> void:
 func _eff_for(c: Node3D, cx: int, cz: int) -> Dictionary:
 	var key := _key(cx, cz)
 	var cached = _eff_cache.get(key)
-	if cached != null and c.data == cached.data:
-		perf_light_cache_hits += 1
-		return cached.eff
-	return {}
+	if cached == null:
+		return {}
+	if c.data != cached.data:
+		return {}
+	# AC-0129: the entry's light is only valid while the 4 neighbor eff_gens
+	# (captured at its dispatch) are unchanged — a stale entry -> {} -> the
+	# worker self-lights with fresh strips.
+	if cached.get("ngen", null) == null or cached.ngen != _ngens_for(cx, cz):
+		return {}
+	perf_light_cache_hits += 1
+	return cached.eff
 
 # AC-0079 v3 C2: _bl_batch_step (the AC-0077 main-thread batch light) is
 # DELETED — contained light now runs off the main thread: workers self-light

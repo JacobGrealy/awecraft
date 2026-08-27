@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0129 cave-lighting-propagation-fix — RUN 2 results</title>
+<style>
+body{font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;max-width:1080px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px;border-bottom:3px solid #2a6;border-bottom-width:2px}h2{font-size:17px;margin-top:28px;color:#036}
+table{border-collapse:collapse;margin:10px 0;font-size:13px}td,th{border:1px solid #bbb;padding:4px 8px;text-align:left}
+th{background:#eef}pre{background:#f6f8fa;border:1px solid #ddd;border-radius:4px;padding:10px;overflow-x:auto;font-size:12px}
+.ok{color:#080;font-weight:600}.bad{color:#c00;font-weight:600}.warn{color:#b60;font-weight:600}
+code{background:#f0f0f0;padding:1px 4px;border-radius:3px;font-size:12.5px}
+.verdict{background:#eaf7ea;border:1px solid #9c9;border-radius:6px;padding:12px;margin:14px 0}
+.finding{background:#fff8e6;border:1px solid #dd9;border-radius:6px;padding:12px;margin:14px 0}
+</style></head><body>
+
+<h1>AC-0129 cave-lighting-propagation-fix — RUN 2 (builder, medium)</h1>
+<p>Tree base: d37f5f5 (AC-0126). Godot 4.7.1, engine <code>~/tools/godot/godot</code>, seed 44, r4 unless noted.
+Plan: <code>tasks/AC-0129/plan.html</code> (RUN 1 + 1.1 + 1.2 amendments). Scratch: <code>.scratch/AC-0129/</code>.</p>
+
+<div class="verdict">
+<b>VERDICT: FIX WORKS — user-visible bug gone, zero script errors, all SMOKE values exact.</b><br>
+lightaudit PRE → POST: hard cliffs <b>1711 → 0</b>, boundary tunnel seq == exact ref (was <code>…10, 0</code>, now <code>…10, 9</code>).<br>
+TWO items for the coordinator's heavy gates (G3): <span class="warn">(F1)</span> perf total_ms 5875 → 6978 (+1103, &gt; +300 budget) and
+<span class="warn">(F2)</span> MINFO verts[0] anchor 125552 → 127396 (+1.47%) — <i>both are legitimate consequences of the fix, evidence below; neither is a defect</i>, but both exceed the stated numeric gates, so per the pipeline they are reported, not papered over.
+</div>
+
+<h2>1. Mechanism (RUN 1, proven static)</h2>
+<p>Every mesh-eff path was chunk-contained (STANDALONE_MARGIN=0; <code>_chunk_light_into</code> does zero cross-chunk reads) → block light (torch 14 / glowstone 12 / lava 15) could never cross a chunk boundary in baked eff. Compounded by the bake sampler <code>_s_effl</code> returning 15 for out-of-bounds → boundary faces in dark caves baked full-bright (the "14 next to 0 with no torch" the user saw). The web (<code>index.html</code>) has the SAME block-light cliff (floodLight seeds only from local sources, RUN 1.1) — the smooth MC fade is a user-directed correction beyond the web = <b>documented deviation (iii)</b>.</p>
+
+<h2>2. Fix as implemented (plan §2 + 2 deviations)</h2>
+<table>
+<tr><th>File</th><th>What</th></tr>
+<tr><td><code>godot/world/lighting.gd</code></td><td>
+NEW <code>compute_light_flat_chunk_pull</code> (lighting.gd:300): same column scan as the contained kernel; combined <code>eff = max(sky, blk)</code>; ONE <code>_flood_flat</code> (local closure); <code>_chunk_blk_inject</code> (lighting.gd:342) then injects the 4 boundary blk-strips UNGATED (<code>cand = strip − att[own]</code>, fires into dark cells — the user's case); re-flood only if raised; returns core 16×16 + <code>blk_src</code>. Byte-identical to the contained result when all strips are 0 (max-distributivity).
+<code>compute_light_flat</code> routes exact-single-chunk boxes to the pull kernel (multi-chunk path unchanged).
+<b>UNCHANGED: <code>compute_light_split</code>, <code>_chunk_light_into</code>, <code>compute_light_flat_chunk</code>, <code>_flood_flat</code>, <code>_tables</code></b> (light_at / battery path untouched).</td></tr>
+<tr><td><code>godot/world/chunk.gd</code></td><td>
+<code>eff_gen</code> var (chunk.gd:23). <code>build_accs</code> reads <code>ctx["eff_strips"]</code>/<code>ctx["blk_strips"]</code>; eff-empty → pull kernel; NEW <code>_bake_box</code> (chunk.gd:1308) assembles a 20×20×h bake box (core at offset (2,2), margins from the 8 strips; missing/short strip → margin 0) and ALL five emits (worker + sync) receive <code>(bb["mn"], bb["arr"], 20, 20)</code> — samplers <code>_s_effl</code>/<code>_s_face_light</code> are index-generic, zero changes. <code>last_eff</code> stays CORE 16×16 (G4 mem fence — no persistent arrays).</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>
+<code>_strips_for</code> (:927) → transient per-dispatch: 8 eff strips (2 cols × 16 × h each, <code>idx = c*(16h) + y*16 + t</code>) from neighbors' <code>last_eff</code> + 4 blk strips via <code>_side_blk_strip</code> (:975, per-column derivation: source ids exact 14/12/15; else <code>v = lv&gt;0 ? lv : max(eff_n&gt;sky_n?eff_n:0, sky_n)</code>). <code>_ngens_for</code> (:1042); eff-cache entries carry <code>ngen</code> (4-neighbor eff_gens at dispatch, <code>_eff_cache_put</code> :1134) and <code>_eff_for</code> (:1148) validates own data AND ngen. <code>_mesh_dispatch</code> ctx = <code>duplicate()</code> + strips + ngen; 3 sync fallbacks wrapped. <b>E2</b> <code>_eff_landed</code> (:1065): eff byte-change → <code>eff_gen += 1</code>; change && <code>blk_src</code> → per-side <code>_frame_changed</code> gate (:1105) → evict + re-enqueue the orthogonal mesh_built neighbor(s) via <code>light_pending</code> (AC-0126 stagger 1/frame), <code>flush_active = true</code>. Hooked in <code>threadmesh_handoff</code> + 3 sync paths.</td></tr>
+</table>
+
+<h3>Deviations from plan §2 (both proven by POST, both correctness-preserving)</h3>
+<ol>
+<li><b>Sky-carry rule (amends §2.C.1's conservative 0-for-open-columns).</b> The plan carried 0 for open-sky columns (web-faithful). First POST run left <b>424 hard cliffs</b>, all 15↔7/8 open-sky-vs-covered pairs, <code>worst_sources:[]</code> — MC's lateral sky propagation was being dropped (a boundary air cell in an open column carries sky 15 laterally into the neighbor chunk; the web's own sky fill does this, <code>:1013–1021</code>). Fixed: blk strip for a non-source cell carries <code>max(eff_n &gt; sky_n ? eff_n : 0, sky_n)</code> where <code>sky_n</code> = data-only open-column scan (15 if open, 0 if covered). <code>sky_n ≤ true eff_n</code> always → <code>cand = strip − att</code> can never over-inject; the value is correct even before the neighbor's eff exists (data-only) → zero E2 churn for sky. POST: 424 → 0.</li>
+<li><b>E2 per-side FRAME gate (refines §2.C.2) + <code>AWECRAFT_E2=off</code> kill switch (house style, cf. <code>AWECRAFT_COLSTAGE</code>).</b> Plan: "evict + re-enqueue 4 built neighbors" unconditionally on source landings. The frame gate skips a side only when the 2-deep boundary frame that side's neighbor reads (side strips c=0/1 + corners) is byte-identical old→new — the neighbor's import is then unchanged and its re-light a provable no-op (eff only ever increases, so no staleness is masked; the inductive argument is in the world.gd:1057–1070 comment). Measured: enqueued 95 → 86 on this seed (lava ocean reaches most chunk boundaries, so the first wave is mostly legitimate); larger savings in torch-sparse worlds. Kill switch restores pre-AC-0129 load profile for the coordinator's G3 A/B if wanted.</li>
+</ol>
+<p><b>Errors found &amp; fixed en route (not plan deviations):</b> (a) strip stride bug — first implementation wrote the c=1 strip column at <code>c*2560</code> instead of <code>c*(16*h)</code> → out-of-bounds script error at POST, caught, fixed before the valid POST runs; (b) two GDScript parse errors (no dict-spread syntax → <code>duplicate()</code> + key assignment; typed <code>Array = null</code> default → untyped param). All fixed; G0 clean after every change.</p>
+
+<h2>3. lightaudit A/B (seed 44, r4, probe in <code>main.gd</code> <code>AWECRAFT_LOGIC=lightaudit</code>, <code>--fixed-fps 600</code>)</h2>
+<table>
+<tr><th></th><th>PRE (unmodified tree)</th><th>POST (fixed)</th></tr>
+<tr><td>hard cliffs (non-fluid, |Δ|&gt;1)</td><td class="bad">1711, max Δ14</td><td class="ok">0, max Δ0</td></tr>
+<tr><td>worst_sources</td><td>[24] (lava, y&lt;8 generator)</td><td>[]</td></tr>
+<tr><td>tunnel (torch [-53,22,-49], dir +x across boundary)</td><td class="bad">ok:false — seq <code>[9,10,11,12,13,14,13,12,11,10,0]</code> (10 next to 0)</td><td class="ok">ok:true — seq <code>[9,10,11,12,13,14,13,12,11,10,9]</code> == ref exact</td></tr>
+<tr><td>fluid_pairs (informational, never gated — RUN 1.2)</td><td>7</td><td>2 (legit water interfaces, Δ≤3)</td></tr>
+<tr><td>ok / chunks_built / queue_size</td><td>false / 81 / 40</td><td class="ok">true / 81 / 40</td></tr>
+</table>
+<pre>PRE  RESULT {"chunks_built":81,"cliffs":{"count":1711,"max_delta":14,...},"fluid_pairs":{"count":7,...},"mode":"lightaudit","ok":false,"queue_size":40,"seed":44,"tunnel":{"dir":[1,0,0],"ok":false,"ref":[9,10,11,12,13,14,13,12,11,10,9],"seq":[9,10,11,12,13,14,13,12,11,10,0],"torch":[-53,22,-49]},"worst_sources":[24]}
+POST RESULT {"chunks_built":81,"cliffs":{"count":0,"max_delta":0,"pairs":[]},"fluid_pairs":{"count":2,"pairs":[[2,30,15,12,2,30,16,15,5,5],[13,30,-1,15,13,30,0,12,5,5]]},"mode":"lightaudit","ok":true,"queue_size":40,"seed":44,"tunnel":{"dir":[1,0,0],"ok":true,"ref":[9,10,11,12,13,14,13,12,11,10,9],"seq":[9,10,11,12,13,14,13,12,11,10,9],"torch":[-53,22,-49]},"worst_sources":[]}</pre>
+<p class="ok">POST re-confirmed on the final (cleaned) code: cliffs 0 / ok:true / tunnel exact — the E2 frame gate does not alter the fix. Zero SCRIPT ERROR in every run (PRE, POST×3, battery×2, genhash×2, perf×4, G0×6).</p>
+
+<h2>4. SMOKE battery (5 arms, <code>AWECRAFT_BATTERY="player;interact;light;fluids;buckets"</code>) — ALL EXACT vs summary.txt baseline</h2>
+<table>
+<tr><th>Arm</th><th>Values</th><th>vs baseline</th></tr>
+<tr><td>player</td><td>after_fly_y 37.78 · horizontal_moved 2.82 · jump_peak_y 36.43 · is_on_floor true</td><td class="ok">exact</td></tr>
+<tr><td>interact</td><td>after_mine_cell 0 · after_place_cell 2 · place_ok true · drop_spawned true</td><td class="ok">exact</td></tr>
+<tr><td>light</td><td>torch_level 14 · surface_eff 15 · cave_eff 0 · torch_far 0 → 9</td><td class="ok">14/15/0/9 exact (compute_light_split untouched — HELD)</td></tr>
+<tr><td>fluids</td><td>sea 2730/2730 + 1406/1406 stable · shore [5,7] · source [5,8] · 25/9 · water_delta 1</td><td class="ok">exact</td></tr>
+<tr><td>buckets</td><td>scoop [5,8] → place [5,8] · after_scoop [0,0] · inv 139/140</td><td class="ok">exact</td></tr>
+<tr><td>total</td><td>ok:true (final run total_ms 73486 — sim-time accumulator, varies run-to-run; the gated per-arm values above are exact in every run, incl. final)</td><td>per-arm exact</td></tr>
+</table>
+<p><b>genhash: 25/25 identical, diff 0</b> vs <code>.scratch/AC-0126/genhash_seed44.log</code> (world data untouched — verified both before and after final cleanup).
+<span class="warn">New harness note:</span> <code>SNAPDRAIN not fully drained after 3000 frames</code> ×1–2 (after the player/interact arms; absent in baseline) — E2 re-light passes occupy the 2-worker pool during initial load, delaying first-build completion; all RESULT values still exact. Quantified in §6.</p>
+
+<h2>5. MINFO — anchor 125552 does NOT hold (finding F2, legitimate)</h2>
+<table>
+<tr><th>Field</th><th>Old (AC-0108 ref)</th><th>New (final run)</th><th>Δ</th></tr>
+<tr><td>lines</td><td>121</td><td>121</td><td class="ok">hold</td></tr>
+<tr><td><b>verts[0] total (the 125552 anchor)</b></td><td>125552</td><td><b>127396</b></td><td class="warn">+1844 (+1.47%)</td></tr>
+<tr><td>vertsΣ / fverts[0] / fvertsΣ</td><td>194024 / 110112 / 178584</td><td>195868 / 111660 / 180132</td><td>+1844 / +1548 / +1548</td></tr>
+<tr><td>per-chunk</td><td colspan="2">73/81 chunks changed; 35 increases / 38 decreases; per-chunk max −252 … +660</td><td>mixed</td></tr>
+<tr><td>aabb / faabb / built flags</td><td colspan="2" class="ok">all identical</td><td>hold</td></tr>
+</table>
+<p><b>Why it moves (evidence, not hand-wave):</b> MINFO's <code>verts</code> = final ArrayMesh surface vertex counts — i.e. <b>after greedy meshing</b> (AC-0106). The greedy run-merge keys on <code>[id, fni, shade]</code> — <code>shade</code> is the merge key (chunk.gd:969 <code>cn[2] != c0[2]</code>). Face EXISTENCE is provably light-independent (<code>_s_faces</code> chunk.gd:722–741 reads only <code>snap</code> data adjacency + <code>stab</code> — zero light references), so the quad set is fixed by genhash (identical). But this fix changes boundary-face <i>shade</i> (that is the fix), which changes the run-length merge pattern, which moves vertex counts. Mixed direction + ≤±3%/chunk + identical aabbs are exactly what shade-driven re-merging produces; a geometry bug would move aabbs and skew one direction. <b>The plan's "MINFO (geometry not color — AC-0126 proved same property)" premise was correct for face existence but wrong for this anchor, which measures greedy-mesh output.</b> Requested coordinator reading: adopt 127396/121 as the new AC-0129 MINFO anchor.</p>
+
+<h2>6. PERF r4 (finding F1) + MATINFO + memory</h2>
+<pre>FINAL  RESULT {"all_meshed":true,"build_ms":4105,"build_units":2020,"chunks":81,"chunks_built":81,"drain_frames":1496,"drain_s":6.98,"first_draw_ms":664,"frame_max_ms":533,"gen_ms":709,"light_self_computes":81,"max_frame_ms":533,"mem_after_bytes":82836622,"mem_before_bytes":50269162,"p50_ms":10,"p95_ms":215,"read_sync_gen":0,"staged_drained":72,"staged_dropped":0,"total_ms":6978,"collision_shapes":223}
+BASE   total_ms:5875 build_ms:2374 frame_max_ms:70 p95_ms:57 drain_frames:430 drain_s:5.88 first_draw_ms:196 light_self_computes:81 mem 50057034→82193782</pre>
+<div class="finding"><b>FINDING F1 — perf total_ms 5875 → 6978 (+1103 &gt; +300 budget) — reported, NOT weakened.</b>
+Measured breakdown (temp counters, since removed): <code>AWECRAFT_E2=off</code> (kill switch) → total 6208 → <b>core mechanism (pull kernel + per-dispatch strip derivation + 20×20 bake box + ngen validation) = +333 ms</b>; the remaining <b>+738 ms = the E2 first wave</b>: this seed's generator puts lava in nearly every chunk (y&lt;8 lava ocean) → ~82 source-chunk landings each legitimately re-light their built boundary neighbors (86 enqueued, one extra full build each, staggered 1/frame by AC-0126). frame_max 70→524 = handoff-assembly burst of the wave; p95 57→227. Memory UNCHANGED (50.27→82.74 MB vs 50.06→82.19 — no persistent arrays, G4 fence holds). Collision 223 shapes hold. <b>Follow-up candidate (not done — new kernel, new surface):</b> a "boundary-only re-light" dispatch for the E2 wave — <code>new_eff = max(old_eff, flood_from_boundary(new_strip))</code> is EXACTLY MC-correct (eff is max-distributive over sources; old_eff already carries the data-only internal flood; strips only increase) and would skip the column scan + internal flood per re-light (~40–50% of a re-light). Not added now: it could not bring this seed under the +300 budget anyway (first wave ≈ +700), so report and let G3 decide.</div>
+<p class="ok">MATINFO 81/3/5/3 — hold. <code>read_sync_gen</code> 0 — hold. staged 72/0/0 — hold. light_self_computes 81 — hold.</p>
+
+<h2>7. Not run by RUN 2 (coordinator heavy pipeline)</h2>
+<p>boundary r4/r50, RECSLICE, r50-mem, flake ×N, <code>./build_windows.sh</code> — all pending the coordinator's background job. <b>Heads-up for the boundary probe:</b> the AC-0126 breakspike eff-MD5 anchors are <b>stale by design</b> (plan §5) — the new kernel changes boundary eff in the edit region (that is the fix); the boundary run should expect diffs in eff-MD5 fields while geometry/queue/walk fields hold. r50-mem: no new persistent per-chunk state (strips transient, last_eff core 16×16) → the 140.6–146.9 MB band should hold; the per-dispatch transient cost is the one thing to watch.</p>
+
+<h2>8. Deviations &amp; findings summary</h2>
+<table>
+<tr><th>#</th><th>Type</th><th>Summary</th></tr>
+<tr><td>D1</td><td>deviation</td><td>Sky-carry rule amends §2.C.1 (conservative 0 → data-only sky carry) — POST-forced (424 → 0), correctness-proof in world.gd comment</td></tr>
+<tr><td>D2</td><td>deviation</td><td>E2 per-side frame gate refines §2.C.2 (correctness-identical skip of provably no-op re-lights) + <code>AWECRAFT_E2=off</code> kill switch</td></tr>
+<tr><td>F1</td><td>finding</td><td>perf +1071 ms (core +333 / E2 first wave +738), frame_max 524 — reported per pipeline, fix not weakened; follow-up candidate documented</td></tr>
+<tr><td>F2</td><td>finding</td><td>MINFO anchor 125552 → 127396 (+1.47%) — shade-keyed greedy merge over changed boundary shades; face set provably fixed (data-only); new anchor requested</td></tr>
+<tr><td>N1</td><td>note</td><td>SNAPDRAIN ×2 warning (initial-build delay from E2 pool occupancy) — values exact; symptom of F1</td></tr>
+</table>
+
+<p><b>Render (step G): NONE</b> — sub-surface lighting effect with no torches/glowstone in fresh r4/r1 probe worlds; the coordinator's G5 build is the visual surface. Deliverables: this file, <code>continuity.md</code> RUN 2, scratch logs in <code>.scratch/AC-0129/</code>.</p>
+
+<h2>9. Coordinator heavy-gate verdict (2026-08-27 16:40–16:50, background job bash-89)</h2>
+<p><b>ALL GREEN EXCEPT G3 (boundary r4) — verdict: DELIVERED AS-DELIVERED per the
+one-shot rule (user 2026-08-27, AC-0079-D2 shape).</b> Log:
+<code>.scratch/AC-0129-gates/gates.log</code> (marker
+<code>HEAVY_GATES_DONE</code>).</p>
+<table>
+<tr><th>gate</th><th>result</th><th>verdict</th></tr>
+<tr><td>g0 clean load</td><td>rc=0, 0 SCRIPT ERROR</td><td>PASS</td></tr>
+<tr><td>g1 lightaudit (r4, --fixed-fps 600)</td><td>cliffs count=0 (max Δ0), fluid_pairs 2 (informational, web-faithful water-column Δ≤3), torch tunnel [−53,22,−49] seq == ref EXACT, ok=true</td><td>PASS (reproducible)</td></tr>
+<tr><td>g1 battery5</td><td>player 2.82/36.43/floor · interact 2/true/true (drop_spawned T this run — flaky field) · light 15/0/14/0/9 · fluids 2730/2730+1406/1406 stable, [5,7]/[5,8]/25/9 · buckets [5,8]/[5,8] inv 140/139 — battery ok=true</td><td>PASS (5 arms EXACT)</td></tr>
+<tr><td>g2 genhash</td><td>25/25</td><td>PASS</td></tr>
+<tr><td>g2 MINFO</td><td>121 lines; F2 drift vs AC-0108 anchor = 73 changed chunks / total +1844 verts (documented in FINDING F2); determinism vs Run-2 final = 2 chunks ±16 verts ([32,−16] 1568↔1580, [64,−16] 1784↔1788) — deterministic per eff-state; residual = E2 landing order on two boundary-chunk shade keys (aabb/faabb/face set identical)</td><td>PASS (band documented)</td></tr>
+<tr><td>g1 breakspike r6 edge/interior</td><td>settle 272/243 (≤600 guard), frame_window p95 4/4 (fence), max 16/16 (a single E2 re-light frame = 1 frame of 60 fps budget — noted), settle_bounded true</td><td>PASS (noted)</td></tr>
+<tr><td>g3 RECSLICE/RECPROBE r50</td><td>RECSLICE max 10.0 (fence ≤12.2; anchor 11.0/8.0), RECPROBE queue drained, new_n 10609</td><td>PASS</td></tr>
+<tr><td>flake player ×4</td><td>4/4 EXACT (2.82/36.43/floor)</td><td>PASS</td></tr>
+<tr><td>windows build + daemons</td><td>RC=0, AweCraft.exe 109,591,856 B; 8080 exe 200, 5180 200</td><td>PASS</td></tr>
+<tr><td><b>g3 boundary r4 ×2</b></td><td><b>p95 85/83 (fence ≤65; pre-AC-0129 anchor 62–63), fwd_p95 4019/4437 (fence ≤3500; anchor 3022–3035), max 102/145 ms, burst_max 4418/4813, flap 0, in_radius 81/81, ok=true</b></td><td><b>FAIL — trade-off class</b></td></tr>
+</table>
+<p><b>One-shot-rule verdict:</b> trade-off-class miss (walk-path p95 33→85 class,
+AC-0079-D2 shape) → HONEST DEVIATION (this section) + follow-up <b>AC-0131
+walk-path-relight-cost-recovery</b> (P1, registered, candidates in its notes) +
+DELIVER AS-DELIVERED. No same-session option loop (AC-0079 RUN 2b precedent:
+~40 min burned). AC-0034 (hitch) stays open — AC-0131 is linked. Anchors of
+record: r4 initial-load 6978/215/533 (F1 band), MINFO total 195868 (F2),
+boundary r4 fence 65/3500 restored to AC-0131's gate (current 85/4019–4437 = the
+documented deviation baseline).</p>
+
+</body></html>

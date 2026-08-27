@@ -852,6 +852,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			_light_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "lightaudit":
+			await _lightaudit_test(spawn)
+			return
 		if logic == "daynight":
 			world.collision_enabled = false
 			world.render_radius = 0
@@ -3561,6 +3564,225 @@ func _light_test(spawn: Vector3) -> void:
 		"torch_far_before": far_before,
 		"torch_far_after": far_after,
 	})
+
+
+# AC-0129 probe (env-gated by AWECRAFT_LOGIC=lightaudit, never runs in game):
+# steady-settle, scan baked last_eff for cross-chunk cliffs, deterministic torch
+# tunnel A/B (mesh seq vs light_at). Probe only — no logic changes here.
+func _la_settle(max_frames: int) -> int:
+	var rr: int = world.render_radius
+	var quiet := 0
+	var t0 := Time.get_ticks_msec()
+	var awaited := 0
+	while awaited < max_frames and Time.get_ticks_msec() - t0 < 120000:
+		var n_in := 0
+		for key in world.chunks:
+			var cc: Node3D = world.chunks[key]
+			if absi(cc.cx) <= rr and absi(cc.cz) <= rr and cc.mesh_built:
+				n_in += 1
+		var queues_idle: bool = world.light_dirty.is_empty() and world.light_pending.is_empty() \
+			and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
+		if n_in == (2 * rr + 1) * (2 * rr + 1) and queues_idle:
+			quiet += 1
+		else:
+			quiet = 0
+		if quiet >= 5:
+			break
+		await get_tree().physics_frame
+		awaited += 1
+	return awaited
+
+
+func _la_cliff_pair(x1: int, y1: int, z1: int, e1: int, id1: int, x2: int, y2: int, z2: int, e2: int, id2: int, hard: Array, fluid: Array) -> void:
+	var p: Array = [x1, y1, z1, e1, x2, y2, z2, e2, id1, id2]
+	if (id1 == 0 or id1 == 28) and (id2 == 0 or id2 == 28):
+		hard.append(p)
+	else:
+		fluid.append(p)
+
+
+func _lightaudit_test(spawn: Vector3) -> void:
+	Lighting._tables()
+	var rr: int = world.render_radius
+	var H: int = Data.HEIGHT
+	world.recenter(spawn.x, spawn.z, true)
+	await _la_settle(60000)
+	var chunks_built := 0
+	for key in world.chunks:
+		var cc: Node3D = world.chunks[key]
+		if absi(cc.cx) <= rr and absi(cc.cz) <= rr and cc.mesh_built:
+			chunks_built += 1
+	var hard_pairs: Array = []
+	var fluid_pairs: Array = []
+	for key in world.chunks:
+		var o: Node3D = world.chunks[key]
+		if not o.mesh_built or o.last_eff.is_empty():
+			continue
+		var oarr: PackedByteArray = o.last_eff["arr"]
+		var od: PackedByteArray = o.data
+		var ocx: int = int(o.cx)
+		var ocz: int = int(o.cz)
+		for y in range(H):
+			var row := y << 8
+			for lz in range(16):
+				var idx := row | (lz << 4) | 15
+				var id_o: int = od[idx]
+				if Lighting._att[id_o] > 0:
+					var e_o: int = oarr[idx]
+					var n: Node3D = world.chunks.get(world._key(ocx + 1, ocz))
+					if n != null and n.mesh_built and not n.last_eff.is_empty():
+						var nidx := row | (lz << 4)
+						var id_n: int = n.data[nidx]
+						if Lighting._att[id_n] > 0:
+							var e_n: int = n.last_eff["arr"][nidx]
+							if absi(e_o - e_n) > 1:
+								_la_cliff_pair(ocx * 16 + 15, y, ocz * 16 + lz, e_o, id_o, (ocx + 1) * 16, y, ocz * 16 + lz, e_n, id_n, hard_pairs, fluid_pairs)
+			for lx in range(16):
+				var idx := row | (15 << 4) | lx
+				var id_o: int = od[idx]
+				if Lighting._att[id_o] > 0:
+					var e_o: int = oarr[idx]
+					var n: Node3D = world.chunks.get(world._key(ocx, ocz + 1))
+					if n != null and n.mesh_built and not n.last_eff.is_empty():
+						var nidx := row | lx
+						var id_n: int = n.data[nidx]
+						if Lighting._att[id_n] > 0:
+							var e_n: int = n.last_eff["arr"][nidx]
+							if absi(e_o - e_n) > 1:
+								_la_cliff_pair(ocx * 16 + lx, y, ocz * 16 + 15, e_o, id_o, ocx * 16 + lx, y, (ocz + 1) * 16, e_n, id_n, hard_pairs, fluid_pairs)
+	var hard_sorted: Array = hard_pairs.duplicate()
+	hard_sorted.sort_custom(func(a, b): return absi(int(a[3]) - int(a[7])) > absi(int(b[3]) - int(b[7])))
+	var top8: Array = []
+	for i in range(mini(8, hard_sorted.size())):
+		top8.append(hard_sorted[i])
+	var maxd := 0
+	for p in hard_sorted:
+		maxd = maxi(maxd, absi(int(p[3]) - int(p[7])))
+	var fsorted: Array = fluid_pairs.duplicate()
+	fsorted.sort_custom(func(a, b): return absi(int(a[3]) - int(a[7])) > absi(int(b[3]) - int(b[7])))
+	var ftop3: Array = []
+	for i in range(mini(3, fsorted.size())):
+		ftop3.append(fsorted[i])
+	var ws: Dictionary = {}
+	for p in top8:
+		var px: int = int(p[0])
+		var py: int = int(p[1])
+		var pz: int = int(p[2])
+		for bx in range(px - 15, px + 16):
+			for bz in range(pz - 15, pz + 16):
+				for by in range(maxi(py - 15, 0), mini(py + 15, H - 1) + 1):
+					var bid: int = world.get_block(bx, by, bz)
+					if bid == 22 or bid == 23 or bid == 24:
+						ws[bid] = true
+	var worst_sources: Array = []
+	for k in ws:
+		worst_sources.append(int(k))
+	worst_sources.sort()
+	var tunnel = await _la_tunnel()
+	Debug.result({
+		"mode": "lightaudit",
+		"seed": Game.world_seed,
+		"chunks_built": chunks_built,
+		"queue_size": world.queue_size,
+		"cliffs": {"count": hard_pairs.size(), "max_delta": maxd, "pairs": top8},
+		"fluid_pairs": {"count": fluid_pairs.size(), "pairs": ftop3},
+		"tunnel": tunnel,
+		"worst_sources": worst_sources,
+		"ok": hard_pairs.size() == 0 and (tunnel == null or bool(tunnel.get("ok", false))),
+	})
+	get_tree().quit()
+
+
+func _la_tunnel() -> Variant:
+	var H: int = Data.HEIGHT
+	var found := false
+	var torch: Array = []
+	var dir := Vector3i.ZERO
+	for tcx in range(-4, 5):
+		if found:
+			break
+		for tcz in range(-4, 5):
+			if found:
+				break
+			for ty in range(H - 1, 7, -1):
+				if found:
+					break
+				for tlx in range(16):
+					if found:
+						break
+					for tlz in range(16):
+						if found:
+							break
+						var tx: int = tcx * 16 + tlx
+						var tz: int = tcz * 16 + tlz
+						if world.get_block(tx, ty, tz) != 0:
+							continue
+						if not _is_solid(tx, ty - 1, tz):
+							continue
+						if tlx <= 5:
+							dir = Vector3i(-1, 0, 0)
+						elif tlx >= 10:
+							dir = Vector3i(1, 0, 0)
+						elif tlz <= 5:
+							dir = Vector3i(0, 0, -1)
+						elif tlz >= 10:
+							dir = Vector3i(0, 0, 1)
+						else:
+							continue
+						var run_ok := true
+						for i in range(1, 6):
+							if world.get_block(tx + dir.x * i, ty, tz + dir.z * i) != 0:
+								run_ok = false
+							if world.get_block(tx - dir.x * i, ty, tz - dir.z * i) != 0:
+								run_ok = false
+						if not run_ok:
+							continue
+						var ex: int = tx + dir.x * 5
+						var ez: int = tz + dir.z * 5
+						var qx: int = tx - dir.x * 5
+						var qz: int = tz - dir.z * 5
+						var ecx := int(floorf(float(ex) / 16.0))
+						var ecz := int(floorf(float(ez) / 16.0))
+						var qcx := int(floorf(float(qx) / 16.0))
+						var qcz := int(floorf(float(qz) / 16.0))
+						if ecx == qcx and ecz == qcz:
+							continue
+						var ec: Node3D = world.chunks.get(world._key(ecx, ecz))
+						var qc: Node3D = world.chunks.get(world._key(qcx, qcz))
+						if ec == null or not ec.mesh_built or ec.last_eff.is_empty():
+							continue
+						if qc == null or not qc.mesh_built or qc.last_eff.is_empty():
+							continue
+						var dl: Dictionary = world.light_at(tx, ty, tz)
+						if int(dl.eff) != 0:
+							continue
+						found = true
+						torch = [tx, ty, tz]
+						break
+	if not found:
+		return null
+	world.set_block(int(torch[0]), int(torch[1]), int(torch[2]), 22)
+	await _la_settle(600)
+	var seq: Array = []
+	var ref: Array = []
+	for i in range(-5, 6):
+		var sx: int = int(torch[0]) + dir.x * i
+		var sz: int = int(torch[2]) + dir.z * i
+		var c2: Node3D = world.chunks.get(world._key(int(floorf(float(sx) / 16.0)), int(floorf(float(sz) / 16.0))))
+		var qe := -1
+		if c2 != null and not c2.last_eff.is_empty():
+			qe = int(c2.last_eff["arr"][(int(torch[1]) << 8) | ((sz & 15) << 4) | (sx & 15)])
+		seq.append(qe)
+		var ql: Dictionary = world.light_at(sx, int(torch[1]), sz)
+		ref.append(int(ql.eff))
+	var tok := true
+	for i in range(10):
+		if absi(int(seq[i]) - int(seq[i + 1])) > 1:
+			tok = false
+	for i in range(11):
+		if absi(i - 5) <= 8 and int(ref[i]) != int(seq[i]):
+			tok = false
+	return {"torch": torch, "dir": [dir.x, 0, dir.z], "seq": seq, "ref": ref, "ok": tok}
 
 
 func _probe_water_positions() -> Dictionary:

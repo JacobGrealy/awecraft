@@ -149,6 +149,14 @@ static func compute_light_flat(box: Dictionary, world) -> Dictionary:
 	var w := mx.x - mn.x + 1
 	var d := mx.z - mn.z + 1
 	var h := mx.y - mn.y + 1
+	# AC-0129: box exactly one chunk -> the pull kernel (self-light with fresh
+	# neighbor strips); the multi-chunk margin box keeps the old contained
+	# two-flood path unchanged (no caller passes it in practice).
+	if w == 16 and d == 16 and mn.y == 0 and h == Data.HEIGHT and mn.x % 16 == 0 and mn.z % 16 == 0:
+		var c = world.chunks.get(world._key(mn.x / 16, mn.z / 16))
+		if c != null and not c.data.is_empty():
+			var s = world._strips_for(mn.x / 16, mn.z / 16)
+			return compute_light_flat_chunk_pull(c.data, mn.x / 16, mn.z / 16, h, s["eff"], s["blk"])
 	var sz := w * d
 	var H: int = Data.HEIGHT
 	var ids := PackedByteArray()
@@ -276,6 +284,89 @@ static func compute_light_flat_chunk(data: PackedByteArray, cx: int, cz: int, h:
 	blk.resize(sz * h)
 	var eff := _chunk_light_into(data, cx, cz, h, ids, sky, blk)
 	return {"mn": Vector3i(cx * 16, 0, cz * 16), "w": 16, "d": 16, "arr": eff}
+
+
+# AC-0129: single-chunk light with cross-boundary block-light PULL (Minecraft
+# semantics, user-directed — the web's own floodLight never lights a dark
+# chunk, index.html:974; deviation (iii)). Column scan IDENTICAL to
+# _chunk_light_into; ONE combined flood (eff = max(sky, blk) seeds —
+# max-distributivity keeps the local closure byte-identical to the contained
+# two-flood kernel) + ONE blk-only UN-gated injection from the neighbor blk
+# strips, re-flood if any cell was raised. blk_strips = 4 side strips
+# [E,W,N,S], 2 cols x 16 x h, idx = c*(16*h) + y*16 + t (c=0 the cell directly
+# across the boundary; t = our z for E/W, our x for S/N); empty/short strip =
+# that side stays as its own flood left it. eff_strips rides along for the
+# caller's 20x20 bake box (unused here).
+static func compute_light_flat_chunk_pull(data: PackedByteArray, cx: int, cz: int, h: int, eff_strips: Array, blk_strips: Array) -> Dictionary:
+	var sz := 16 * 16
+	var ids := PackedByteArray()
+	ids.resize(sz * h)
+	var sky := PackedByteArray()
+	sky.resize(sz * h)
+	var blk := PackedByteArray()
+	blk.resize(sz * h)
+	var has_glow := false
+	for ix in range(16):
+		for iz in range(16):
+			var i0 := ix + iz * 16
+			var open := true
+			for y in range(h - 1, -1, -1):
+				var b: int = data[(y << 8) | (iz << 4) | ix]
+				var i := y * sz + i0
+				ids[i] = b
+				if open and _att[b] > 0:
+					sky[i] = SKY_FULL
+				var lv := _glow[b]
+				if lv > 0:
+					blk[i] = lv
+					has_glow = true
+				if open and _att[b] == 0:
+					open = false
+	var eff := PackedByteArray()
+	eff.resize(sz * h)
+	for i in range(sz * h):
+		var s := sky[i]
+		var b2 := blk[i]
+		eff[i] = s if s >= b2 else b2
+	_flood_flat(eff, ids, 16, h, 16)
+	if _chunk_blk_inject(eff, ids, h, blk_strips):
+		_flood_flat(eff, ids, 16, h, 16)
+	return {"mn": Vector3i(cx * 16, 0, cz * 16), "w": 16, "d": 16, "arr": eff, "blk_src": has_glow}
+
+
+# AC-0129: the one boundary injection (per side [E,W,N,S]). UN-gated:
+# cand = strip[c0] - att[own boundary cell]; raise when cand > eff. The
+# eff>0 gate is deliberately ABSENT (RUN 1.1 correction — it would exclude
+# the 13-next-to-0 case); sky-leak prevention lives in the strip content
+# (blk is 0 under open sky / behind sky), not in a gate.
+static func _chunk_blk_inject(eff: PackedByteArray, ids: PackedByteArray, h: int, blk_strips: Array) -> bool:
+	if blk_strips.size() < 4:
+		return false
+	var changed := false
+	for si in range(4):
+		var strip: PackedByteArray = blk_strips[si]
+		if strip == null or strip.size() != 2560:
+			continue
+		for y in range(h):
+			var row := y * 256
+			var srow := y * 16
+			for t in range(16):
+				var B: int
+				match si:
+					0:
+						B = row + t * 16 + 15
+					1:
+						B = row + t * 16
+					2:
+						B = row + 15 * 16 + t
+					_:
+						B = row + t
+				if _att[ids[B]] > 0:
+					var cand: int = strip[srow + t] - _att[ids[B]]
+					if cand > eff[B]:
+						eff[B] = cand
+						changed = true
+	return changed
 
 
 # AC-0077: batched per-chunk contained light — one call for N fresh data

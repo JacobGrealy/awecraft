@@ -17,6 +17,10 @@ var collision_enabled := true
 var col_immediate := true
 var last_collision_build_ms := 0
 var last_eff: Dictionary = {}
+# AC-0129: bumped when last_eff's byte array changes (world._eff_landed);
+# neighbors' eff-cache entries carry our gen at their dispatch (ngen) and
+# invalidate when it moves — the pull strips derive from our last_eff.
+var eff_gen := 0
 # AC-0080 two-stage hysteresis: candidate = at Chebyshev r+1 with expensive
 # parts killed (mesh/collision), data+edits kept; cand_since = count of
 # recenter events spent at >= r+2 (free at >= 2).
@@ -1180,13 +1184,17 @@ static func make_ctx() -> Dictionary:
 static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: int, nbs: Dictionary, ctx: Dictionary, ms: Dictionary, eff: Dictionary) -> Dictionary:
 	var t0 := Time.get_ticks_msec()
 	var h: int = int(ctx["h"])
+	# AC-0129: strips ride in on the ctx (main-thread copies, freed with it);
+	# empty eff -> self-light through the PULL kernel (neighbor block light
+	# crosses the boundary), cached eff -> validated upstream by ngen.
+	var eff_strips: Array = ctx.get("eff_strips", [])
+	var blk_strips: Array = ctx.get("blk_strips", [])
 	var light: Dictionary = eff
 	if light.is_empty():
-		light = Lighting.compute_light_flat_chunk(data, cx, cz, h)
-	var lmn: Vector3i = light["mn"]
-	var larr: PackedByteArray = light["arr"]
-	var lw := int(light["w"])
-	var ld := int(light["d"])
+		light = Lighting.compute_light_flat_chunk_pull(data, cx, cz, h, eff_strips, blk_strips)
+	# 20x20 bake box: face light samples the neighbors' FINAL eff at the
+	# boundary (web lightAt :963 — missing neighbor -> margin 0, not 15).
+	var bb := _bake_box(light, eff_strips, h)
 	var snap := PackedByteArray()
 	snap.resize(SNAP_ROW * h)
 	var snap_fl := PackedByteArray()
@@ -1271,14 +1279,14 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	# ms carries duplicated rects + h (main-thread merge-atlas cache); an empty
 	# rects dict means "plain atlas" — mirrors build_mesh's ms.tex != null gate.
 	if not ms.rects.is_empty() and ro.size() > 0:
-		_s_emit_ro_merged(ro, s_ao, lmn, larr, lw, ld, cx, cz, has_tex, ctx, ms)
+		_s_emit_ro_merged(ro, s_ao, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, ctx, ms)
 	else:
-		_s_emit_faces(ro, s_ao, lmn, larr, lw, ld, cx, cz, has_tex, xtab, ctx)
-	_s_emit_faces(rc_o, s_ac, lmn, larr, lw, ld, cx, cz, has_tex, xtab, ctx)
+		_s_emit_faces(ro, s_ao, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, xtab, ctx)
+	_s_emit_faces(rc_o, s_ac, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, xtab, ctx)
 	_s_emit_fluid(rf_w, s_af_w, snap, snap_fl, has_tex, ctx, h)
 	_s_emit_fluid(rf_l, s_af_l, snap, snap_fl, has_tex, ctx, h)
-	_s_emit_faces(rk, s_ak, lmn, larr, lw, ld, cx, cz, has_tex, xtab, ctx)
-	_s_emit_xquad(rq, s_ax, lmn, larr, lw, ld, cx, cz, has_tex, ctx)
+	_s_emit_faces(rk, s_ak, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, xtab, ctx)
+	_s_emit_xquad(rq, s_ax, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, ctx)
 	var slabs_out: Array = []
 	for si in range(5):
 		slabs_out.append([s_ao[si], s_ac[si], s_af_w[si], s_af_l[si], s_ak[si], s_ax[si]])
@@ -1287,6 +1295,95 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 		"light": light,
 		"wms": Time.get_ticks_msec() - t0,
 	}
+
+
+# AC-0129: 20x20 bake box for face-light sampling — the core 16x16 at box
+# offset (2,2) + a 2-cell margin per side from the neighbor EFF strips (web
+# lightAt :963-970: the real neighbor light; a missing strip here keeps the
+# margin cells at 0 = dark, NOT 15 = full bright, the (b) mechanism). Strip
+# order [E,W,N,S, SE,SW,NE,NW]; SIDE idx = c*(16*h) + y*16 + t (c=0 the cell
+# directly across, t = our z for E/W, our x for S/N); CORNER idx =
+# (a*2+b)*h + y (a = x-depth, b = z-depth, 0 = closest). Light only scales
+# vertex shade (geometry is snap-only) -> MINFO counts unaffected.
+static func _bake_box(light: Dictionary, eff_strips: Array, h: int) -> Dictionary:
+	var w := 20
+	var arr := PackedByteArray()
+	arr.resize(w * w * h)
+	var bmn := Vector3i(-2, 0, -2)
+	if light.is_empty():
+		return {"mn": bmn, "w": w, "d": w, "arr": arr}
+	var mn: Vector3i = light["mn"]
+	var arrc: PackedByteArray = light["arr"]
+	var lwc := int(light["w"])
+	var ldc := int(light["d"])
+	bmn = Vector3i(mn.x - 2, 0, mn.z - 2)
+	for y in range(h):
+		var src_row := y * lwc * ldc
+		var dst_row := y * w * w
+		for bz in range(2, 18):
+			var dst_z := dst_row + bz * w
+			var src_z := src_row + (bz - 2) * lwc
+			for bx in range(2, 18):
+				arr[dst_z + bx] = arrc[src_z + (bx - 2)]
+	if eff_strips.size() >= 8:
+		var c1 := 16 * h
+		var E: PackedByteArray = eff_strips[0]
+		if E.size() == 2560:
+			for y in range(h):
+				var row := y * w * w
+				var srow := y * 16
+				for t in range(16):
+					arr[row + (2 + t) * w + 18] = E[srow + t]
+					arr[row + (2 + t) * w + 19] = E[c1 + srow + t]
+		var W: PackedByteArray = eff_strips[1]
+		if W.size() == 2560:
+			for y in range(h):
+				var row := y * w * w
+				var srow := y * 16
+				for t in range(16):
+					arr[row + (2 + t) * w + 1] = W[srow + t]
+					arr[row + (2 + t) * w + 0] = W[c1 + srow + t]
+		var S: PackedByteArray = eff_strips[2]
+		if S.size() == 2560:
+			for y in range(h):
+				var row := y * w * w
+				var srow := y * 16
+				for t in range(16):
+					arr[row + 18 * w + (2 + t)] = S[srow + t]
+					arr[row + 19 * w + (2 + t)] = S[c1 + srow + t]
+		var N: PackedByteArray = eff_strips[3]
+		if N.size() == 2560:
+			for y in range(h):
+				var row := y * w * w
+				var srow := y * 16
+				for t in range(16):
+					arr[row + 1 * w + (2 + t)] = N[srow + t]
+					arr[row + 0 * w + (2 + t)] = N[c1 + srow + t]
+		var SE: PackedByteArray = eff_strips[4]
+		if SE.size() == 320:
+			for a in range(2):
+				for b in range(2):
+					for y in range(h):
+						arr[(18 + b) * w + (18 + a)] = SE[(a * 2 + b) * h + y]
+		var SW: PackedByteArray = eff_strips[5]
+		if SW.size() == 320:
+			for a in range(2):
+				for b in range(2):
+					for y in range(h):
+						arr[(18 + b) * w + (1 - a)] = SW[(a * 2 + b) * h + y]
+		var NE: PackedByteArray = eff_strips[6]
+		if NE.size() == 320:
+			for a in range(2):
+				for b in range(2):
+					for y in range(h):
+						arr[(1 - b) * w + (18 + a)] = NE[(a * 2 + b) * h + y]
+		var NW: PackedByteArray = eff_strips[7]
+		if NW.size() == 320:
+			for a in range(2):
+				for b in range(2):
+					for y in range(h):
+						arr[(1 - b) * w + (1 - a)] = NW[(a * 2 + b) * h + y]
+	return {"mn": bmn, "w": w, "d": w, "arr": arr}
 
 
 static func _new_acc() -> Dictionary:
@@ -1596,16 +1693,16 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	var wx0 := cx * SIZE
 	var wz0 := cz * SIZE
 	var light: Dictionary = eff
+	# AC-0129: the 20x20 bake box margins need the neighbor eff strips; the
+	# self-light compute_light_flat pulls through the same ones internally.
+	var st = Game.world._strips_for(cx, cz)
 	if light.is_empty():
 		light = Lighting.compute_light_flat({
 			"min": Vector3i(wx0 - STANDALONE_MARGIN, 0, wz0 - STANDALONE_MARGIN),
 			"max": Vector3i(wx0 + SIZE - 1 + STANDALONE_MARGIN, Data.HEIGHT - 1, wz0 + SIZE - 1 + STANDALONE_MARGIN),
 		}, Game.world)
 	last_eff = light
-	var lmn: Vector3i = light["mn"]
-	var larr: PackedByteArray = light["arr"]
-	var lw := int(light["w"])
-	var ld := int(light["d"])
+	var bb := _bake_box(light, st["eff"], Data.HEIGHT)
 	var snap := PackedByteArray()
 	snap.resize(SNAP_ROW * Data.HEIGHT)
 	var snap_fl := PackedByteArray()
@@ -1724,14 +1821,14 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	if OS.get_environment("AWECRAFT_MERGE") == "0":
 		ms = {"tex": null, "rects": {}}
 	if ms.tex != null and ro.size() > 0:
-		_emit_ro_merged(ro, s_ao, lmn, larr, lw, ld, has_tex, fn, fsh, fcv, ct, cs, cb, ms)
+		_emit_ro_merged(ro, s_ao, bb["mn"], bb["arr"], 20, 20, has_tex, fn, fsh, fcv, ct, cs, cb, ms)
 	else:
-		_emit_faces(ro, s_ao, lmn, larr, lw, ld, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
-	_emit_faces(rc_o, s_ac, lmn, larr, lw, ld, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
+		_emit_faces(ro, s_ao, bb["mn"], bb["arr"], 20, 20, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
+	_emit_faces(rc_o, s_ac, bb["mn"], bb["arr"], 20, 20, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
 	_emit_fluid(rf_w, s_af_w, snap, snap_fl, has_tex, fn, fcv, ct, cs, cb)
 	_emit_fluid(rf_l, s_af_l, snap, snap_fl, has_tex, fn, fcv, ct, cs, cb)
-	_emit_faces(rk, s_ak, lmn, larr, lw, ld, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
-	_emit_xquad(rq, s_ax, lmn, larr, lw, ld, has_tex, ct)
+	_emit_faces(rk, s_ak, bb["mn"], bb["arr"], 20, 20, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
+	_emit_xquad(rq, s_ax, bb["mn"], bb["arr"], 20, 20, has_tex, ct)
 	for si in range(5):
 		_assemble_slab(slabs[si], s_ao[si], s_ac[si], s_af_w[si], s_af_l[si], s_ak[si], s_ax[si], ms)
 	mesh_built = true

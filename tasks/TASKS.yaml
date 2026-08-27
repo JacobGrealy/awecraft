@@ -1,9 +1,8 @@
 meta:
-  updated_at: 2026-08-27T10:49
+  updated_at: 2026-08-27T17:42
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0129
 - AC-0128
 - AC-0035
 - AC-0109
@@ -848,7 +847,7 @@ intake:
   labels:
   - godot
   created_at: 2026-08-18T12:00
-  updated_at: 2026-08-27T06:22
+  updated_at: 2026-08-27T17:38
   completed_at: 2026-08-27T06:22
   waiting_on: null
   parent_id: null
@@ -884,6 +883,13 @@ intake:
       = scoring only. RELIABILITY pattern confirmed 3x: empty subagent reports sometimes hide FULL code on disk (0068/0067/0075/0076-v1)
       but also sometimes NOTHING (0076-v1, 0079-v1) - always inspect disk first; when nothing landed, split+shrink, don''t
       retry same scope.'
+  - id: 6
+    created_at: 2026-08-27T17:38
+    updated_at: null
+    text: '2026-08-27: AC-0129 (cave-light fix, delivered as-delivered) added a NEW walk-path cost component on top of the
+      existing ones: boundary r4 walk p95 62-63→85/83, fwd 3022-3035→4019/4437 (E2 neighbor re-light wave + pull kernel on
+      chunk crossings). Follow-up AC-0131 (walk-path-relight-cost-recovery) owns recovering the p95 ≤65 / fwd ≤3500 fence.
+      AC-0034 stays open until AC-0131 + the AC-0079 D2 walk-frame recovery both land.'
 - id: AC-0035
   title: m5a2-light-bake
   source: agent
@@ -3748,10 +3754,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-27T05:38
-  updated_at: 2026-08-27T05:38
+  updated_at: 2026-08-27T16:47
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -3766,18 +3772,27 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-27T05:38
-  updated_at: 2026-08-27T10:49
-  completed_at: null
+  updated_at: 2026-08-27T17:42
+  completed_at: 2026-08-27T17:42
   waiting_on: null
   parent_id: null
   notes: 'Fix cave lit next to pitch black with no reason: BFS torch 14 -1/step lighting.gd:146 should fade smooth 14->0.
     Audit per-chunk contained batch (AC-0077) vs air-on-miss frontier (AC-0119) cache/data-signature and recenter slice 0118
     neighbor readiness; probe light_at in r4 cave shows 14 next to 0 with no torch. Fix propagation/caching so cave eff is
     consistent. Gate: cave tunnel smooth gradient, no hard 14/0 cliff, MINFO/light_at green.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-27T17:37
+    updated_at: null
+    text: 'Heavy gates (coordinator background job, 2026-08-27 16:40-16:50): ALL GREEN EXCEPT G3 boundary r4 (p95 85/83 >
+      fence 65; fwd 4019/4437 > fence 3500 — pre-fix anchors 62-63/3022-3035). lightaudit reproducible (cliffs 0, tunnel seq==ref
+      ok), battery 5 arms EXACT (14/15/0/9), genhash 25/25, MINFO 121 lines + F2 drift 73 chunks/+1844 verts (determinism
+      band: 2 chunks ±16 verts per-eff-state), RECSLICE r50 max 10.0 ≤12.2, flake x4 EXACT, build OK + daemons 200. VERDICT
+      per one-shot rule (user 2026-08-27, AC-0079-D2 shape): trade-off-class miss → HONEST DEVIATION + follow-up registered
+      (walk-path-relight-cost-recovery) + DELIVERED AS-DELIVERED. No same-session option loop.'
 - id: AC-0130
   title: shovel-right-click-dirt-to-path
   source: user
@@ -3799,4 +3814,28 @@ intake:
 
     Also: player moves 15% faster when on/bounding a path block (speed multiplier 1.15 when standing on dirt_path). Apply
     in player movement/physics (check block under feet or standing AABB).'
+  comments: []
+- id: AC-0131
+  title: walk-path-relight-cost-recovery
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-27T17:37
+  updated_at: 2026-08-27T17:37
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'AC-0129 G3 trade-off deviation (2026-08-27): boundary r4 walk p95 62-63→85/83 (fence ≤65) + fwd 3022-3035→4019/4437
+    (fence ≤3500) after AC-0129 cross-chunk block-light fix — the E2 neighbor re-light wave (eff byte-change at boundary frames)
+    + the combined pull kernel (8 strips + 20x20 bake box) hit every chunk crossing on the walk/recenter path. Target: recover
+    p95 ≤65 + fwd ≤3500 (the AC-0126-era anchors) WITHOUT reverting the AC-0129 light fix (lightaudit cliffs 0 + tunnel seq==ref
+    must hold). Candidates (not committed to): (1) boundary-only re-light — new_eff = max(old_eff, flood from the changed
+    boundary frame) instead of the full 3x3 re-flood when the frame changed; (2) tighter E2 gate — re-enqueue only when the
+    frame delta touches cells that can actually change eff (skip pure-sky-only frames); (3) budget/stagger E2 re-light passes
+    on crossing frames. Gate: boundary r4 A/B (p95 ≤65, fwd ≤3500, 10/81/0) + lightaudit reproducible + battery EXACT + genhash
+    25/25 + breakspike floors.'
   comments: []
