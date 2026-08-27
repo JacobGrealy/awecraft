@@ -14,7 +14,7 @@ Depends: none, but benefits greedy + frustum.</pre></blockquote>
 <h2>Goal</h2>
 <div class="fill"><b>FILL BY COORDINATOR</b> — one line, from the registry notes (marked REVIEW until confirmed). <b>REVIEW</b></div>
 <!-- FILL: Goal — one sentence. Example: "Add a torch-light-bake pass to the chunk mesher so caves are readable at night." -->
-<p><em>REVIEW — draft from notes: Split 16x80x16 column chunk into 5x 16x16x16 subchunks (y 0-15,16-31,32-47,48-63,64-79).</em></p>
+<p><b>Goal (confirmed 2026-08-26):</b> Split the 16×80×16 column chunk into 5 vertical 16×16×16 slabs (y 0–15, 16–31, 32–47, 48–63, 64–79), each owning its own <code>MeshInstance3D</code> + <code>ConcavePolygonShape3D</code>; the <code>data</code>/<code>fl</code> storage layout stays column (edit compatibility), but mesh/collision rebuild becomes per-slab — finer frustum/greedy culling, faster per-edit collision rebuilds, and an R=50 memory drop, with byte-identical behavior.</p>
 <h2>Frozen spec references</h2>
 <div class="auto"><b>AUTO (fixed boilerplate — do not hand-edit)</b></div>
 <ul>
@@ -111,16 +111,42 @@ Depends: none, but benefits greedy + frustum.</pre></blockquote>
 <tr><td>boundary r4 `in_radius_built_max`</td><td>**67** (`built_final` 81, `ok` true, `flap` 0, `p95_ms` 65)</td><td>AC-0079 (look-priority scoring; pre-fix gate was 55)</td></tr>
 </table>
 <h2>Task-specific requirements</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the concrete behavior/data changes this task makes.</div>
-<!-- FILL: Task-specific requirements. Example: e.g. &quot;fluids: source water over a hole writes 0 cells (zero-write invariant)&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-26)</b> — Run-1 maps the current column-chunk structure and every subsystem that keys off it, then designs the slab split. Binding constraints first:</div>
+<ul>
+<li><b>Data/fl layout STAYS column</b> (registry note, hard): the <code>data</code>/<code>fl</code> PackedByteArrays per column-chunk and the <code>world.block(x,y,z)</code> / <code>set_block</code> / <code>set_fluid</code> / <code>_apply_edits_to_chunk</code> surface (the AC-0119 air-on-miss read paths, the AC-0078 fl-writer set, the fluid sim) are UNCHANGED. Only the MESH + COLLISION representation becomes per-slab.</li>
+<li><b>Run-1 must map, with file:line:</b> (a) chunk.gd — the SNAP build inputs, <code>build_mesh</code> (the per-chunk MeshInstance3D/fluid_instance/flora_instance creation, the 3 ArrayMeshes, AC-0120's shared materials), the collision shape build (the ConcavePolygonShape3D + body creation), the merged-atlas <code>_ms_*</code> statics (AC-0117); (b) world.gd — the chunk registry (<code>world.chunks</code>, mesh_built flags), the boundary/drain/recenter queues (AC-0118's 5-phase slice + queue_size), the AC-0107 threadmesh worker path (<code>build_accs</code> on fresh <code>duplicate()</code> copies, <code>apply_accs</code> handoff at :589), the AC-0077/0079 light pipeline (eff cache, contained-light, drain 2nd pass), AC-0078's <code>fluid_wet</code> map (column-keyed — STAYS column-keyed); (c) main.gd — where chunk nodes are parented, the MINFO/MATINFO/RECSLICE/FLUIDPROBE harness fields, the memory delta measurement in the boundary/perf harnesses.</li>
+<li><b>Slab object model (Run-1 decides with rationale):</b> the column chunk keeps its data/fl + identity (key, mesh_built aggregation, queue membership); 5 slab child nodes per column each own a MeshInstance3D (mesh/fluid/flora surfaces for that y-range) + a collision body. Run-1 states the exact node ownership, who frees/creates slabs (load/unload/recenter/edit), and the per-slab state fields (built flag, mesh, body, light scope).</li>
+<li><b>THE CORE CORRECTNESS QUESTION — slab-boundary faces:</b> today greedy/AO/light run over the full column; per-slab builds see only 16 y-rows. Faces at slab borders (y = 16, 32, 48, 64) need the neighbor slab's block/fl data for correct hidden-face culling, greedy merging, AO sampling and light lookup. Run-1 designs how the slab builder gets cross-slab context (candidate: the builder receives the column's full data view for sampling but only EMITS geometry for its y-range — i.e. per-slab EMIT, column-scope CONTEXT — and states why that makes the output byte-identical to today's column build; the MINFO per-chunk vert sums are the proof gate).</li>
+<li><b>Worker path (AC-0107):</b> the workers run pure-static <code>build_accs</code> on fresh <code>duplicate()</code> copies; Run-1 decides whether workers build all 5 slabs of a column in one pass (returning per-slab accs — one worker call per column, main thread splits into 5 meshes) or slabs build on main — with the perf argument (build_ms budget, the AC-0079 drain pacing) and the thread-safety argument (materials/AC-0120 cache never cross threads — slabs inherit the same rule).</li>
+<li><b>Collision:</b> per-slab ConcavePolygonShape3D bodies (81 → up to 405 bodies at r4). Run-1 states the physics-cost impact (body count, broadphase) and what the walk p95 gate covers; col rebuild on edit touches only the affected slab(s) (the registry note's <code>_apply_edits_to_chunk per slab</code>) — Run-1 designs the edit→slab mapping (an edit at y affects its slab + the slab above/below if it touches a border face: state the exact rule + the mesh-rebuild scope rule).</li>
+<li><b>Unload/recenter interaction (Run-1 decides scope, first pass minimal-correct):</b> frustum culling is automatic per-MeshInstance3D (free win); the distance-unload + recenter queues may STAY column-scoped in this task (slabs are children — unloading a column frees its 5 slabs) — per-slab distance culling is a candidate FOLLOW-UP, not this task, UNLESS Run-1 shows it falls out for free. AC-0118's slice budgeting must stay byte-identical in behavior (RECSLICE gate).</li>
+<li><b>Memory probe (R=50):</b> Run-1 measures the fresh PRE r50 memory delta (the AC-0078 gate run shows 144.6 MB at r50) and defines the POST gate (must IMPROVE or hold — report the drop; the per-slab candidate handling + per-slab mesh objects is where the delta comes from; if it regresses, that's a fail, not a deviation).</li>
+</ul>
 <h2>Task-specific gates</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the specific mode(s)/values that must be green beyond the defaults.</div>
-<!-- FILL: Task-specific gates. Example: e.g. &quot;G1: AWECRAFT_LOGIC=fluids → sea_stable true, sea_surface 2730&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-26)</b> — Run-1 sets fresh pre-change anchors on THIS tree (post-AC-0078/AC-0079/AC-0120); the auto table above is stale.</div>
+<ul>
+<li><b>G1:</b> <code>--quit</code> RC=0, zero script errors (all runs).</li>
+<li><b>G2 (byte-identical behavior):</b> genhash 25/25 (61de26e9) + FULL battery <code>AWECRAFT_BATTERY="player;interact;light;fluids;buckets"</code> EXACT (2.82/36.43, 2/true/true, 14/15/0/9, sea 2730/2730+1406/1406 stable/1/[5,7]/[5,8]/25/9, buckets [5,8]/[5,8]) + <b>MINFO: per-chunk surface-0 vert sums UNCHANGED</b> (r4 sum 125552 EXACT — the slab split must not change a single vert; the MINFO harness must be extended to report per-chunk sums so the coordinator can diff pre/post per chunk, not just the total) + MATINFO distinct_std=3/total_allocs=3 unchanged (AC-0120 intact — slabs reference the shared materials).</li>
+<li><b>G3 (the point — per-slab col rebuild):</b> an edit probe (harness, env-gated) breaks/places blocks at a SLAB BORDER (y=15/16 and y=63/64) and interior: per-slab col rebuild touches only the affected slab(s); per-edit rebuild cost ≤ the pre-change full-column cost (Run-1 records the PRE full-col rebuild ms and sets the exact POST expectation); mesh vert sums after the edit still byte-identical to the pre-change mesh (the edit path's rebuild output must equal today's).</li>
+<li><b>G4 (memory, R=50):</b> fresh PRE r50 mem_delta (Run-1 measures; AC-0078 gate anchor 144.6 MB) vs POST — POST ≤ PRE with the drop reported (the registry's "R=50 memory drop"); r50 wall time no regression beyond noise.</li>
+<li><b>G5 (boundary floor — post-AC-0078/0079/0120):</b> boundary r4: walk p95 ≤ ~65 (fresh 61–63), fwd_p95 ≤ 3500 + fwd_first10_p95 ≥ 8, irb ≥ 60 (fresh 81), flap 0, marker_ok, remesh_ok; <b>collision cost check:</b> with up to 405 col bodies, the r4 walk p95 + collision_max_ms must not regress vs fresh (Run-1 records the PRE collision_ms_total/n — the 5× body count is the risk); RECSLICE r50 ≤ 12.2+noise; perf r4 within noise (build_ms may change — the per-slab work split — total/p95 must not regress); flake boundary r4 ×2 + player ×4.</li>
+<li><b>G6:</b> <code>./build_windows.sh</code> RC=0 + fresh exe + 8080/5180 200 + clean tree + results.html.</li>
+</ul>
 <h2>Scope (files expected to change)</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the exact files this task will edit (helps G5 stay clean).</div>
-<!-- FILL: Scope (files expected to change). Example: e.g. &quot;godot/world/chunk.gd, godot/scenes/main.gd (fluids branch only)&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-26)</b> — Run-1 confirms against the current tree; expected:</div>
+<ul>
+<li><code>godot/world/chunk.gd</code> — slab build (per-slab emit with column-scope context), per-slab collision build, the slab node model (primary file).</li>
+<li><code>godot/world/world.gd</code> — slab node parenting/lifetime, the queue/recenter integration (column-scoped first pass), the edit→slab mapping.</li>
+<li><code>godot/scenes/main.gd</code> — harness probes ONLY (per-chunk MINFO sums, the G3 edit probe, env-gated, off by default).</li>
+</ul>
 <h2>Fences</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — what this task must NOT touch.</div>
-<!-- FILL: Fences. Example: e.g. &quot;no .gd outside the listed scope; no TASKS.yaml edits; no git&quot; -->
+<div class="fill"><b>COORDINATOR (2026-08-26)</b> — Run-1 confirms.</div>
+<ul>
+<li>No .gd outside the listed scope; no <code>index.html</code>; no <code>godot/export_presets.cfg</code>; no TASKS.yaml edits; no git (the coordinator commits); no builds in Run-1 (Run-2 does G6).</li>
+<li><b>Data/fl layout frozen:</b> the column <code>data</code>/<code>fl</code> arrays, the <code>world.block</code>/<code>set_block</code>/<code>set_fluid</code> surface, <code>_apply_edits_to_chunk</code> (adapts internally but keeps its contract), the AC-0119 read paths, the AC-0078 <code>fluid_wet</code> column-keyed map, the fluid sim — all UNCHANGED in behavior.</li>
+<li><b>Byte-identity fence:</b> genhash 25/25, the full battery exact, MINFO per-chunk vert sums unchanged (total 125552), MATINFO 3/3 (the AC-0120 shared materials — slabs reference them, no new allocs), the AC-0077/0079 light values (eff cache, torch 14), the AC-0118 RECSLICE behavior.</li>
+<li>Untouched: the generator, the greedy algorithm itself (per-slab EMIT may reframe how it's invoked, but the algorithm and its UV output are frozen — AC-0117), the merged atlas, the AC-0078 continue core-3x3 wait, the AC-0079 drain/boundary pacing, collision STAGING (AC-0077 D2) semantics.</li>
+<li>The slab split must not change the world's logical chunk count (r4 = 121 total / 81 in-radius stays; only the node count under each chunk grows).</li>
+</ul>
 <p class="note">Scaffold generated by <code>tasks/scripts/spec_template.py</code> (no wall-clock timestamps; the only date is the registry created_at). Auto sections are reproducible byte-for-byte; fill sections are for the coordinator.</p>
 </body></html>
