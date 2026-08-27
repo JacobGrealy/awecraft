@@ -3781,7 +3781,11 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: Right-clicking dirt/grass_block with a shovel should convert it to a dirt path block (modern Minecraft behavior).
+  notes: 'Right-clicking dirt/grass_block with a shovel should convert it to a dirt path block (modern Minecraft behavior).
     Hook into tool right-click interaction (player interaction / block use), check held item is shovel (any tier), target
     block is dirt or grass_block, replace with path block, play sound/particles, consume durability if applicable.
+
+
+    Also: player moves 15% faster when on/bounding a path block (speed multiplier 1.15 when standing on dirt_path). Apply
+    in player movement/physics (check block under feet or standing AABB).'
   comments: []
