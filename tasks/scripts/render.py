@@ -137,9 +137,12 @@ document.addEventListener('click', function (e) {
   document.addEventListener('drop', function(e){
     var tr=e.target.closest('tr[data-qid]');
     if(!tr || !dragId) return;
+    // only allow drops inside the live queue table (done history is not reorderable)
+    if(!tr.closest('#queue-table')) return;
     e.preventDefault();
     tr.classList.remove('drag-over');
     var tbl=document.getElementById('queue-table');
+    var doneTbl=document.getElementById('queue-done-table');
     if(!tbl) return;
     var rows=[].slice.call(tbl.querySelectorAll('tr[data-qid]'));
     var src=rows.find(function(r){return r.dataset.qid===dragId});
@@ -150,7 +153,11 @@ document.addEventListener('click', function (e) {
     var didx=ids.indexOf(dst.dataset.qid);
     ids.splice(sidx,1);
     ids.splice(didx,0,dragId);
-    postApi('queue-reorder', new URLSearchParams({order: ids.join(',')}));
+    // server permutation must include the full queue (live + done history)
+    var doneIds=[];
+    if(doneTbl) doneIds=[].slice.call(doneTbl.querySelectorAll('tr[data-qid]')).map(function(r){return r.dataset.qid});
+    var full=ids.concat(doneIds);
+    postApi('queue-reorder', new URLSearchParams({order: full.join(',')}));
     dragId=null;
   });
 })();
