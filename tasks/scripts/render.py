@@ -428,36 +428,36 @@ def build_board(data, interactive=True, base="/tasks/", task_root=None):
             out.append('<div class="muted" style="margin-top:4px">drag by \u2630 to reorder — click a row for details</div>')
     out.append("</section>")
 
-    # Backlog — non-queued, not done
+    # Backlog — non-queued, not done (no # column)
     out.append('<section><h2>Backlog (%d)</h2>' % len(backlog_items))
     if not backlog_items:
         out.append('<div class="muted">nothing in backlog</div>')
     else:
         brows = []
-        for pos, it in enumerate(backlog_items, 1):
+        for it in backlog_items:
             tid = it["id"]
             st = it.get("status", "missing")
             title = it.get("title", "?")
-            brows.append('<tr class="task-row" data-tid="%s"><td>%d</td><td><code>%s</code></td><td>%s</td><td>%s</td><td style="font-size:11px">%s</td></tr>'
-                         % (escape(tid), pos, escape(tid), escape(st), escape(title), _links_cell(tid)))
-        out.append(_row_table(brows, "backlog-table", show_handle=False, draggable=False, interactive=interactive))
+            brows.append('<tr class="task-row" data-tid="%s"><td><code>%s</code></td><td>%s</td><td>%s</td><td style="font-size:11px">%s</td></tr>'
+                         % (escape(tid), escape(tid), escape(st), escape(title), _links_cell(tid)))
+        out.append('<table class="done" id="backlog-table"><tr><th>id</th><th>status</th><th>title</th><th>artifacts</th></tr>%s</table>' % "".join(brows))
         if interactive:
             out.append('<div class="muted" style="margin-top:4px">click a row for details — use queue button in modal to add to queue</div>')
     out.append("</section>")
 
-    # Completed — done
+    # Completed — done (no # column)
     out.append('<section><h2>Completed (%d)</h2>' % len(done_items))
     if not done_items:
         out.append('<div class="muted">nothing completed yet</div>')
     else:
         crows = []
-        for pos, it in enumerate(done_items, 1):
+        for it in done_items:
             tid = it["id"]
             st = it.get("status", "done")
             title = it.get("title", "?")
-            crows.append('<tr class="task-row" data-tid="%s"><td>%d</td><td><code>%s</code></td><td>%s</td><td>%s</td><td style="font-size:11px">%s</td></tr>'
-                         % (escape(tid), pos, escape(tid), escape(st), escape(title), _links_cell(tid)))
-        out.append(_row_table(crows, "completed-table", show_handle=False, draggable=False, interactive=interactive))
+            crows.append('<tr class="task-row" data-tid="%s"><td><code>%s</code></td><td>%s</td><td>%s</td><td style="font-size:11px">%s</td></tr>'
+                         % (escape(tid), escape(tid), escape(st), escape(title), _links_cell(tid)))
+        out.append('<table class="done" id="completed-table"><tr><th>id</th><th>status</th><th>title</th><th>artifacts</th></tr>%s</table>' % "".join(crows))
         if interactive:
             out.append('<div class="muted" style="margin-top:4px">click a row for details</div>')
     out.append("</section>")
