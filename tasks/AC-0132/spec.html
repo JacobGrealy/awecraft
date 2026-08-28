@@ -8,9 +8,8 @@
 <p class="note">Registry <code>notes</code> (verbatim, quoted):</p>
 <blockquote><pre>Add missing torch recipe 22: coal 106 + stick 100 -&gt; torch 22x4 (MC vertical C over S), shapeless or shaped 2-wide, grid 2 (E) + 3 (table) both. Data.gd:96 shapeless /120 shaped currently 0 entries for 22, so E/table shows nothing. Gate: coal+stick vertical 1+1 -&gt; 4 torches in 2x2 and 3x3, charcoal variant if present.</pre></blockquote>
 <h2>Goal</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — one line, from the registry notes (marked REVIEW until confirmed). <b>REVIEW</b></div>
-<!-- FILL: Goal — one sentence. Example: "Add a torch-light-bake pass to the chunk mesher so caves are readable at night." -->
-<p><em>REVIEW — draft from notes: Add missing torch recipe 22: coal 106 + stick 100 -&gt; torch 22x4 (MC vertical C over S), shapeless or shaped 2-wide, grid 2 (E) + 3 (table) both.</em></p>
+<div class="auto"><b>FILLED BY COORDINATOR (2026-08-28, before Run-1; the plan.html carries the full design)</b></div>
+<p>Make torches craftable: add the missing shapeless recipe <b>coal (106) ×1 + stick (100) ×1 → torch (22) ×4</b> to <code>Data.shapeless</code>, craftable in <b>both</b> the 2×2 E-inventory grid and the 3×3 crafting-table grid — the user's vertical C-over-S placement included (shapeless ⇒ every placement works). A user-directed addition (deviation class ii): the frozen web has <b>no torch recipe in either table</b> (verified by full read of index.html:251-290) — Minecraft-wiki canonical (https://minecraft.wiki/w/Torch). Charcoal variant: <b>skipped</b> (verified NO charcoal item exists in this game — items 100-147, blocks 1-25).</p>
 <h2>Frozen spec references</h2>
 <div class="auto"><b>AUTO (fixed boilerplate — do not hand-edit)</b></div>
 <ul>
@@ -51,16 +50,26 @@
 <h2>Known-stable gate values</h2>
 <div class="auto"><b>AUTO (paths only — the anchor table lives in <code>tasks/HARNESS.md</code> §3: sea 2730/2730 · backed 1406/1406 · sea_stable true · water_on_lava 25 / sideways 9 · torch 14 · genhash 25/25; verify fresh on any fluids/world-touching change; inline with <code>--full</code>)</b></div>
 <h2>Task-specific requirements</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the concrete behavior/data changes this task makes.</div>
-<!-- FILL: Task-specific requirements. Example: e.g. &quot;fluids: source water over a hole writes 0 cells (zero-write invariant)&quot; -->
+<div class="auto"><b>FILLED BY COORDINATOR</b></div>
+<ol>
+<li><b>R1</b> — One line appended to <code>Data.shapeless</code> (after the arrow entry, data.gd:118): <code>{"in": {106: 1, 100: 1}, "grid": 2, "out": {"id": 22, "n": 4}},</code>. <code>"grid": 2</code> = craftable in BOTH grids (skip rule <code>r.grid &gt; grid_size</code>, data.gd:367; callers pass gs ∈ {2,3}, player.gd:1415-1421 — pinned with evidence in plan §5.2). Placement-independent by the exact-count matcher ⇒ vertical C-over-S works trivially; no shaped variant (a shaped entry would be grid:3 = table-only).</li>
+<li><b>R2</b> — Charcoal variant: <b>skip + document</b> (no charcoal item exists; "if present" per the registry note).</li>
+<li><b>R3 (finding, corrected 2026-08-28 by Run-1)</b> — the Godot recipe tables are a <b>FULL 1:1 port</b> of the frozen web: 22/22 shapeless (data.gd:97-118 = index.html:252-273) + 14/14 shaped (data.gd:121-134 = index.html:276-289) — the "3/22 subset" assumption in the launch prompt was STALE; after this task Godot has 23 vs 22 shapeless (the single user-directed addition). No parity gap. (Item-id corrections: 9 = Cobblestone, 143 = Arrow, crafting table = BLOCK 20.)</li>
+</ol>
 <h2>Task-specific gates</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the specific mode(s)/values that must be green beyond the defaults.</div>
-<!-- FILL: Task-specific gates. Example: e.g. &quot;G1: AWECRAFT_LOGIC=fluids → sea_stable true, sea_surface 2730&quot; -->
+<div class="auto"><b>FILLED BY COORDINATOR</b></div>
+<ul>
+<li><b>G1 craft probe</b> — the <b>EXISTING</b> <code>AWECRAFT_LOGIC=craft</code> mode (main.gd:886-890 dispatch, <code>_craft_test</code> :2285-2553) extended with arms Tneg/T1/T2/T3/T4 (plan §5.4): Tneg coal-only → [0,0]; T1 E-grid vertical C-over-S → [22,4] + 4 torches + grid drained; T2 E-grid horizontal → [22,4] + 8 cumulative (placement independence); T3 TABLE vertical → [22,4] + 12 cumulative (<b>the grid:2-reaches-3×3 proof</b>); T4 regression 9+100 → [143,4] arrows + drained. PRE (arms landed, recipe NOT yet): ok:false, T1-T3 [0,0], T4 [143,4]. POST: ok:true + every T-* field per plan. RESULT envelope unchanged; all pre-existing arms' keys unchanged (they are the regression baseline).</li>
+<li><b>G2</b> — SMOKE <code>player;interact;light</code> EXACT vs HARNESS known-stable + <b>genhash 25/25</b> (data.gd touched; recipe lists are read only by matchers + recipe UI — world gen untouched ⇒ byte-identical expected).</li>
+<li><b>G3</b> — ≤1 R=1 <code>AWECRAFT_INV=1</code> render (the hook seeds logs/planks/sticks — NOT extended for this task; the probe RESULT is the behavioral proof).</li>
+<li>Tier: crafting/tool = SMOKE only — NO boundary/perf/flake (no <code>world/*</code>|<code>lighting.gd</code> scope). Coordinator job: g0 + craft probe fresh + genhash + smoke3 + build + curls.</li>
+</ul>
 <h2>Scope (files expected to change)</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — the exact files this task will edit (helps G5 stay clean).</div>
-<!-- FILL: Scope (files expected to change). Example: e.g. &quot;godot/world/chunk.gd, godot/scenes/main.gd (fluids branch only)&quot; -->
+<div class="auto"><b>FILLED BY COORDINATOR</b></div>
+<p><code>godot/autoload/data.gd</code> (ONE line — the recipe entry) + <code>godot/scenes/main.gd</code> (probe arms appended to the existing <code>_craft_test</code> only) + <code>tasks/AC-0132/</code> deliverables. <b>No UI change needed</b>: the "Craftable" list reads <code>Data.shapeless</code> directly with the same grid filter (inventory.gd:651-691) — the torch row appears in both UIs automatically (verified by plan §2 read).</p>
+
 <h2>Fences</h2>
-<div class="fill"><b>FILL BY COORDINATOR</b> — what this task must NOT touch.</div>
-<!-- FILL: Fences. Example: e.g. &quot;no .gd outside the listed scope; no TASKS.yaml edits; no git&quot; -->
+<div class="auto"><b>FILLED BY COORDINATOR</b></div>
+<p>No .gd outside the listed scope; no new items/blocks; <code>godot/ui/inventory.gd</code> untouched; no <code>world/*</code>|<code>lighting.gd</code>; <code>index.html</code> frozen (the web's missing torch recipe stays missing — user-directed addition lives in the Godot port only); no git in Run-2; never touch <code>docs/halo-loot-brainstorm.html</code> (foreign).</p>
 <p class="note">Scaffold generated by <code>tasks/scripts/spec_template.py</code> (no wall-clock timestamps; the only date is the registry created_at). Auto sections are reproducible byte-for-byte; fill sections are for the coordinator.</p>
 </body></html>

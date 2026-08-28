@@ -2544,6 +2544,77 @@ func _craft_test() -> void:
 	r["F_cell"] = world.get_block(fsc.x, fsc.y, fsc.z)
 	ok = ok and int(fhit.get("id", 0)) == 20 and r["F_mode"] == "table" and r["F_held"] == [1, 5] and r["F_cell"] == 20
 	p.close_inventory()
+	# --- AC-0132: torch recipe probe (Tneg/T1/T2/T3/T4) ---
+	for i in 36:
+		p.inv[i] = {"id": 0, "n": 0}
+	p.held = {}
+	# Tneg: single coal alone -> no match (exact-count; torch needs coal + stick)
+	p.open_inventory("inv")
+	p.craft_grid[0] = {"id": 106, "n": 1}
+	p.recompute_craft()
+	r["Tneg_out"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	ok = ok and r["Tneg_out"] == [0, 0]
+	# T1: E vertical C-over-S (coal top-left, stick bottom-left) -> torch x4
+	p.craft_grid[2] = {"id": 100, "n": 1}
+	p.recompute_craft()
+	r["T1_out"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	ok = ok and r["T1_out"] == [22, 4]
+	Debug.craft()
+	r["T1_torch"] = _count_item(p, 22)
+	ok = ok and r["T1_torch"] == 4
+	var t1_grid: Array = []
+	for gi in 4:
+		t1_grid.append([int(p.craft_grid[gi]["id"]), int(p.craft_grid[gi]["n"])])
+	r["T1_grid"] = t1_grid
+	ok = ok and t1_grid == [[0, 0], [0, 0], [0, 0], [0, 0]]
+	# T2: E horizontal (coal top-left, stick top-right) -> placement-independent, +4 torch
+	p.craft_grid[0] = {"id": 106, "n": 1}
+	p.craft_grid[1] = {"id": 100, "n": 1}
+	p.recompute_craft()
+	r["T2_out"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	ok = ok and r["T2_out"] == [22, 4]
+	Debug.craft()
+	r["T2_torch"] = _count_item(p, 22)
+	ok = ok and r["T2_torch"] == 8
+	var t2_filled := 0
+	for i in p.craft_grid.size():
+		if int(p.craft_grid[i]["id"]) != 0:
+			t2_filled += 1
+	r["T2_filled"] = t2_filled
+	ok = ok and t2_filled == 0
+	# T3: table vertical C-over-S (grid:2 reaches the 3x3 table) -> +4 torch
+	p.close_inventory()
+	p.open_inventory("table")
+	p.table_grid[0] = {"id": 106, "n": 1}
+	p.table_grid[3] = {"id": 100, "n": 1}
+	p.recompute_craft()
+	r["T3_out"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	ok = ok and r["T3_out"] == [22, 4]
+	Debug.craft()
+	r["T3_torch"] = _count_item(p, 22)
+	ok = ok and r["T3_torch"] == 12
+	var t3_filled := 0
+	for i in p.table_grid.size():
+		if int(p.table_grid[i]["id"]) != 0:
+			t3_filled += 1
+	r["T3_filled"] = t3_filled
+	ok = ok and t3_filled == 0
+	# T4: regression — existing grid-2 recipe 9(Cobblestone)+100(Stick) -> Arrow 143 x4
+	p.close_inventory()
+	p.open_inventory("inv")
+	p.craft_grid[0] = {"id": 9, "n": 1}
+	p.craft_grid[2] = {"id": 100, "n": 1}
+	p.recompute_craft()
+	r["T4_out"] = [int(p.craft_out.get("id", 0)), int(p.craft_out.get("n", 0)) if p.craft_out != {} else 0]
+	ok = ok and r["T4_out"] == [143, 4]
+	Debug.craft()
+	r["T4_arrow"] = _count_item(p, 143)
+	ok = ok and r["T4_arrow"] == 4
+	var t4_grid: Array = []
+	for gi in 4:
+		t4_grid.append([int(p.craft_grid[gi]["id"]), int(p.craft_grid[gi]["n"])])
+	r["T4_grid"] = t4_grid
+	ok = ok and t4_grid == [[0, 0], [0, 0], [0, 0], [0, 0]]
 	Debug.result({
 		"ok": ok,
 		"data": r,

@@ -1,9 +1,8 @@
 meta:
-  updated_at: 2026-08-28T08:13
+  updated_at: 2026-08-28T08:44
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0132
 - AC-0133
 - AC-0134
 - AC-0135
@@ -3888,17 +3887,27 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-27T20:08
-  updated_at: 2026-08-27T20:08
-  completed_at: null
+  updated_at: 2026-08-28T08:44
+  completed_at: 2026-08-28T08:44
   waiting_on: null
   parent_id: null
   notes: 'Add missing torch recipe 22: coal 106 + stick 100 -> torch 22x4 (MC vertical C over S), shapeless or shaped 2-wide,
     grid 2 (E) + 3 (table) both. Data.gd:96 shapeless /120 shaped currently 0 entries for 22, so E/table shows nothing. Gate:
     coal+stick vertical 1+1 -> 4 torches in 2x2 and 3x3, charcoal variant if present.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-28T08:44
+    updated_at: null
+    text: '[agent 2026-08-28 08:45] DONE. Shapeless {coal 106 x1 + stick 100 x1 -> torch 22 x4}, grid:2 = BOTH grids (skip
+      rule r.grid>grid_size; the T3 table arm proves it), appended after the arrow entry in data.gd. Gates: PRE ok:false /
+      POST ok=true (reproduced fresh in the coordinator job), genhash 25/25, smoke3 exact, build RC=0 + daemons 200. Findings:
+      (1) the Godot recipe tables are a FULL 1:1 port of the frozen web (22/22 shapeless + 14/14 shaped) - the ''subset''
+      assumption was stale, no parity gap; (2) the frozen web has NO torch recipe (user-directed addition class ii, MC-wiki
+      canonical); (3) charcoal variant skipped (item absent); (4) id corrections: 9=Cobblestone, 143=Arrow, crafting table=block
+      20. Craft probe now has Tneg-T4 arms (existing mode extended).'
 - id: AC-0133
   title: ac128-regression-stars-move-with-sky
   source: user

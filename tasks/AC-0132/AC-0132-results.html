@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0132 — results (torch-crafting-recipe)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:24px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{background:#eef7ee;border-left:4px solid #2e8b2e;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.warn{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}img{max-width:100%;border:1px solid #ccc;border-radius:6px}</style></head><body>
+<h1>AC-0132 — torch-crafting-recipe · results (Run-2, builder)</h1>
+<p class="meta">2026-08-28 · engine Godot 4.7.1 · <b>ALL GATES PASS</b>. One data.gd line (torch recipe) + probe arms Tneg/T1–T4 appended to the existing <code>_craft_test()</code> harness mode. No UI, world, or other <code>godot/</code> changes (fences held; plan §2 proves <code>inventory.gd</code> needs none).</p>
+
+<h2>1. The change</h2>
+<pre># godot/autoload/data.gd — appended after the arrow entry (:118), before the closing ] :
+{"in": {106: 1, 100: 1}, "grid": 2, "out": {"id": 22, "n": 4}},
+
+# godot/scenes/main.gd — probe arms Tneg/T1/T2/T3/T4 appended to _craft_test()
+#   after arm F's close_inventory(), before Debug.result(...) — see plan §5.4.</pre>
+<p>Form: <b>shapeless, grid 2</b> — placement-independent, so the required vertical C-over-S placement works in <b>both</b> the 2×2 E grid (gs = 2) and the 3×3 table (gs = 3; the matcher skips only when <code>r.grid &gt; grid_size</code>, data.gd:367). No shaped variant needed (a shaped entry is grid 3 ⇒ table-only and would fail in the E grid). Append-safe: no existing entry references item 106 in any input (plan §5.3) ⇒ no first-match shadowing either direction.</p>
+
+<h2>2. Probe A/B (G1, <code>AWECRAFT_LOGIC=craft</code> — standalone, BATTSKIP mode)</h2>
+<h3>2.1 PRE — arms landed, recipe NOT yet added (expect red, honest A/B)</h3>
+<pre>RESULT {"armor":{"armor":[0,0,0,0],"points":0},"data":{"A_grid":[[8,1],[8,1],[8,1],[100,1]],"A_hot_planks":0,"A_inv9":[8,4],"A_out":[0,0],"A_vis_planks":4,"B_filled":0,"B_grid0":[6,1],"B_logs":5,"B_out":[111,1],"B_out_pre":[8,4],"B_pick":1,"C1_inv8":[12,3],"C1_inv9":[0,0],"C2_inv0":[0,0],"C2_inv9":[5,7],"C_out":[8,4],"D0_held":[2,5],"D0_inv35":[0,0],"D1_hot4":[2,5],"D2_held":[0,0],"D2_hot4":[0,0],"D2_inv35":[2,5],"D_dirt":5,"D_out_inv":[0,0],"D_out_table":[109,1],"D_sword":1,"E_drops":3,"E_logs":0,"E_planks":4,"F_aim":[true,20],"F_cell":20,"F_held":[1,5],"F_mode":"table","T1_grid":[[106,1],[0,0],[100,1],[0,0]],"T1_out":[0,0],"T1_torch":0,"T2_filled":3,"T2_out":[0,0],"T2_torch":0,"T3_filled":2,"T3_out":[0,0],"T3_torch":0,"T4_arrow":4,"T4_grid":[[0,0],[0,0],[0,0],[0,0]],"T4_out":[143,4],"Tneg_out":[0,0],"armor_head":127,"armor_swap":[131,127,2],"armor_uneq":[0,131],"close_grid0":0,"close_ui":"","held_r1":[6,1],"held_return":[0,6],"logs_a":1,"logs_b":0,"logs_start":2,"out_a":[8,4],"out_b":[8,4],"out_c":[100,4],"out_nomatch":[0,0],"planks_a":4,"planks_b":8,"planks_c":6,"planks_close":5,"points_head":1,"sticks_c":4},"inv":{"armor":[0,0,0,0],"craft_grid":[],"craft_out":{},"held":{},"points":0,"sel":0,"slots":[{"i":0,"id":106,"n":1},{"i":1,"id":100,"n":1},{"i":2,"id":143,"n":4}],"table_grid":[]},"ok":false}</pre>
+<p>PRE as predicted: <code>ok:false</code>; T1/T2/T3 out <code>[0,0]</code> (no torch recipe), Tneg <code>[0,0]</code>, T4 <code>[143,4]</code> with 4 arrows (regression already green pre-fix); T2_filled 3 / T3_filled 2 are the unconsumed inputs left in the grids (nothing crafted); every PRE-EXISTING key (<code>out_a…F_mode</code>) = the old-arms baseline, unchanged.</p>
+<h3>2.2 POST — recipe line added (expect all green)</h3>
+<pre>RESULT {"armor":{"armor":[0,0,0,0],"points":0},"data":{"A_grid":[[8,1],[8,1],[8,1],[100,1]],"A_hot_planks":0,"A_inv9":[8,4],"A_out":[0,0],"A_vis_planks":4,"B_filled":0,"B_grid0":[6,1],"B_logs":5,"B_out":[111,1],"B_out_pre":[8,4],"B_pick":1,"C1_inv8":[12,3],"C1_inv9":[0,0],"C2_inv0":[0,0],"C2_inv9":[5,7],"C_out":[8,4],"D0_held":[2,5],"D0_inv35":[0,0],"D1_hot4":[2,5],"D2_held":[0,0],"D2_hot4":[0,0],"D2_inv35":[2,5],"D_dirt":5,"D_out_inv":[0,0],"D_out_table":[109,1],"D_sword":1,"E_drops":3,"E_logs":0,"E_planks":4,"F_aim":[true,20],"F_cell":20,"F_held":[1,5],"F_mode":"table","T1_grid":[[0,0],[0,0],[0,0],[0,0]],"T1_out":[22,4],"T1_torch":4,"T2_filled":0,"T2_out":[22,4],"T2_torch":8,"T3_filled":0,"T3_out":[22,4],"T3_torch":12,"T4_arrow":4,"T4_grid":[[0,0],[0,0],[0,0],[0,0]],"T4_out":[143,4],"Tneg_out":[0,0],"armor_head":127,"armor_swap":[131,127,2],"armor_uneq":[0,131],"close_grid0":0,"close_ui":"","held_r1":[6,1],"held_return":[0,6],"logs_a":1,"logs_b":0,"logs_start":2,"out_a":[8,4],"out_b":[8,4],"out_c":[100,4],"out_nomatch":[0,0],"planks_a":4,"planks_b":8,"planks_c":6,"planks_close":5,"points_head":1,"sticks_c":4},"inv":{"armor":[0,0,0,0],"craft_grid":[],"craft_out":{},"held":{},"points":0,"sel":0,"slots":[{"i":0,"id":22,"n":12},{"i":1,"id":143,"n":4}],"table_grid":[]},"ok":true}</pre>
+<h3>2.3 T-* field verdict (plan §5.4 PASS matrix)</h3>
+<table>
+<tr><th>field</th><th>PRE</th><th>POST</th><th>expected</th><th>verdict</th></tr>
+<tr><td><code>Tneg_out</code> (single coal alone)</td><td>[0,0]</td><td>[0,0]</td><td>[0,0]</td><td>PASS — exact-count: no single-coal recipe</td></tr>
+<tr><td><code>T1_out</code> (E vertical C-over-S)</td><td>[0,0]</td><td><b>[22,4]</b></td><td>[22,4]</td><td>PASS</td></tr>
+<tr><td><code>T1_torch</code> / <code>T1_grid</code></td><td>0 / inputs kept</td><td><b>4</b> / <b>all [0,0]</b></td><td>4 / drained</td><td>PASS — both input cells drained (1 − 4 ≤ 0)</td></tr>
+<tr><td><code>T2_out</code> (E horizontal)</td><td>[0,0]</td><td><b>[22,4]</b></td><td>[22,4]</td><td>PASS — placement independence</td></tr>
+<tr><td><code>T2_torch</code> / <code>T2_filled</code></td><td>0 / 3</td><td><b>8</b> / <b>0</b></td><td>8 / 0</td><td>PASS — cumulative, grid drained</td></tr>
+<tr><td><code>T3_out</code> (table vertical C-over-S)</td><td>[0,0]</td><td><b>[22,4]</b></td><td>[22,4]</td><td>PASS — <b>the "grid:2 reaches the 3×3 table" proof</b></td></tr>
+<tr><td><code>T3_torch</code> / <code>T3_filled</code></td><td>0 / 2</td><td><b>12</b> / <b>0</b></td><td>12 / 0</td><td>PASS — cumulative, table drained</td></tr>
+<tr><td><code>T4_out</code> (regression 9+100→143×4)</td><td>[143,4]</td><td>[143,4]</td><td>[143,4]</td><td>PASS — green pre-fix AND post-fix (no shadowing)</td></tr>
+<tr><td><code>T4_arrow</code> / <code>T4_grid</code></td><td>4 / drained</td><td>4 / drained</td><td>4 / drained</td><td>PASS</td></tr>
+<tr><td>every pre-existing <code>r</code> key (out_a…F_mode)</td><td colspan="2" style="text-align:center">identical PRE vs POST (byte-compare of both data dicts)</td><td>old-arms baseline</td><td>PASS</td></tr>
+<tr><td><code>ok</code></td><td>false</td><td><b>true</b></td><td>false → true</td><td>PASS — honest A/B</td></tr>
+</table>
+
+<h2>3. Gates</h2>
+<table>
+<tr><th>gate</th><th>result</th></tr>
+<tr><td>G0 PRE (<code>--headless --quit</code>)</td><td class="ok">RC 0, 0 SCRIPT ERROR</td></tr>
+<tr><td>G0 POST</td><td class="ok">RC 0, 0 SCRIPT ERROR</td></tr>
+<tr><td>G1 probe PRE / POST</td><td class="ok">RC 0 / RC 0, 0 SCRIPT ERROR each; ok:false → ok:true; every T-* per §5.4 (§2.3)</td></tr>
+<tr><td>SMOKE <code>AWECRAFT_BATTERY=player;interact;light;genhash</code></td><td class="ok">combined <code>ok:true</code> (total_ms 65346 incl. resets); <b>player</b> horizontal_moved 2.82 / is_on_floor true / jump_peak_y 36.43; <b>interact</b> drop_spawned true / place_ok true / breakable_id 2 / after_place_cell 2; <b>light</b> surface_eff 15 / cave_eff 0 / torch_level 14 / torch_far_after 9 — all EXACT vs HARNESS §3 known-stable</td></tr>
+<tr><td>genhash arm</td><td class="ok"><b>25/25</b> GENHASH lines, BYTE-IDENTICAL to the last verified run (<code>.scratch/AC-0035/genhash.log</code>) — expected: recipe lists are read only by the matchers + recipe-list UI, never by world gen</td></tr>
+<tr><td>RENDER (≤1)</td><td class="ok">one R=1 <code>AWECRAFT_INV=1</code> shot (7 s, RC 0, 0 SCRIPT ERROR, RESULT m4:ok 1280×720). The existing hook (main.gd:1386) also writes the <code>_placed</code> autofill variant — two PNGs from the single call, both below. <b>The AWECRAFT_INV hook was NOT extended</b> (fence): it seeds logs/planks/sticks, not coal+stick — the behavioral proof is the probe RESULT.</td></tr>
+<tr><td>Heavy tier</td><td class="note">NOT run by the builder (coordinator's background job): genhash independent re-run + <code>./build_windows.sh</code> + 8080/5180 curls. No boundary/perf/flake — scope touches no <code>world/*</code>|<code>lighting.gd</code>.</td></tr>
+</table>
+<p class="note">Scratch logs: <code>.scratch/AC-0132/</code> (g0_pre/post.log, probe_pre/post.log, smoke.log, render.log, genhash_ac0132.txt). Wall times: G0 ~2 s each, probe ~2 s each, battery 66 s, render 7 s — all far inside budget (no craft-mode creep, plan §7 risk 4).</p>
+
+<h3>E-inventory render (the Craftable list renders correctly; the new torch row lands LAST — below this list's visible viewport)</h3>
+<img src="inv_torch_ui.png" alt="E inventory, log → 4 planks in the 2×2 grid, Craftable list (Planks / Crafting Table / Stick visible)">
+<h3><code>_placed</code> variant (hook autofill, main.gd:1386)</h3>
+<img src="inv_torch_ui_placed.png" alt="E inventory after autofill">
+
+<h2>4. Notes (required disclosures)</h2>
+<h3>4.1 Prompt-mislabel correction (Run-2 used the verified ids)</h3>
+<div class="warn">The launch prompt's "regression arm crafts the existing crafting-table recipe (planks 9 + stick 100 → 143×4)" mislabels two ids. Verified against the committed tree + frozen web: <b>9 = Cobblestone</b> (data.gd:159; index.html:201) — NOT planks (that's 8); <b>143 = Arrow</b> (data.gd:89; index.html:245) — NOT the crafting table (that's BLOCK 20, data.gd:163). The regression recipe <code>{"in": {9: 1, 100: 1}, "grid": 2, "out": {"id": 143, "n": 4}}</code> is in the <b>shapeless</b> list (data.gd:118; index.html:273), grid:2 ⇒ both grids. T4 is coded against the correct ids and is green pre- and post-fix.</div>
+<h3>4.2 Charcoal variant — SKIPPED (verified absent)</h3>
+<p>No Charcoal item exists: the <code>items</code> dict (data.gd:46-94) spans 100-147 with no such entry, and the <code>blocks</code> dict (1-25) has none either (23 = Glowstone, 24 = Lava). Spec says "charcoal variant <i>if present</i>" ⇒ skip. The MC-wiki charcoal variant is uncraftable here for lack of the item, not by omission.</p>
+<h3>4.3 Exact-count semantics (web-faithful, not a bug)</h3>
+<p><code>match_shapeless</code> requires the input multiset to match EXACTLY (data.gd:370-378 = web :296-300): "2 coal + 1 stick" does NOT match the torch recipe (extras break it) — Tneg guards the single-item side, and the matcher's no-extras check covers the rest. This is the frozen web's behavior, ported faithfully.</p>
+<h3>4.4 Consumption quirk (pre-existing, web :2021, port kept)</h3>
+<p>Crafting subtracts <code>out.n</code> from EVERY non-empty grid cell (player.gd:1541-1546): a 1-coal + 1-stick grid of stacks n=1 each is fully drained (1 − 4 ≤ 0 each). Had a stack held &gt;4, the excess would be consumed per craft. Pre-existing behavior, out of scope, unchanged by this task (T1_grid/T4_grid drained as expected).</p>
+<h3>4.5 Web-parity finding (corrects the stale "3 of 22 shapeless" note)</h3>
+<p>The Godot tables are a <b>FULL 1:1 port</b> of the frozen web — <b>22/22 shapeless</b> (data.gd:97-118 vs index.html:252-273, identical ids/counts) and <b>14/14 shaped</b> (data.gd:121-135 vs index.html:276-289). Godot's <code>grid</code>/<code>grid3</code> fields are port-side extensions implementing the MC-style 2×2 E grid (the frozen web shows 9 slots in both UIs, filters by no size). The frozen web itself has <b>no torch recipe</b> (no out.id 22 in either table — verified by full read) ⇒ this is a <b>user-directed addition (deviation class ii)</b>, Minecraft-wiki canonical (coal + stick, shapeless, 4 torches, <a href="https://minecraft.wiki/w/Torch">minecraft.wiki/w/Torch</a>). After this task Godot has 23 vs 22 shapeless — the single addition; documented in the task registry only (<code>index.html</code> is NEVER modified).</p>
+
+<h2>5. Fences held</h2>
+<p>Changed files: <code>godot/autoload/data.gd</code> (1 line), <code>godot/scenes/main.gd</code> (probe arms only, existing mode) + task deliverables. No UI changes (plan §2), no other <code>godot/</code> files, <code>index.html</code> untouched, no <code>world/*</code>|<code>lighting.gd</code>, no git (coordinator commits after heavy gates). <code>git status --short</code> = the two in-scope .gd edits + <code>tasks/AC-0132/</code> (+ the foreign untracked <code>docs/halo-loot-brainstorm.html</code> — NOT touched, NOT mine).</p>
+<p class="note">Results authored by Run-2 (builder, 2026-08-28). PRE/POST RESULT lines are verbatim from <code>.scratch/AC-0132/probe_{pre,post}.log</code>.</p>
+
+<h2>Coordinator heavy-gate verdict (2026-08-28 08:39-08:40, bash-96) — FINAL: PASS, DONE</h2>
+<div class="ok"><b>VERDICT: AC-0132 DONE.</b> All gates PASS and the craft probe REPRODUCES fresh in the coordinator job (no subagent live): g0 rc=0/0 SCRIPT ERROR; craft probe <b>ok=true</b> — Tneg [0,0], T1 [22,4]/4 torches/drained, T2 [22,4]/8/0, T3 [22,4]/12/0 (grid:2 reaches the 3×3 table — REPRODUCED), T4 [143,4]/4/drained; genhash <b>25/25</b>; SMOKE player;interact;light EXACT; build RC=0 AweCraft.exe 109,622,568 B @08:40; daemons 8080 + 5180 → 200. No deviations. Torches are now craftable in both grids; the recipe row appears in the Craftable list automatically (no UI change).</div>
+</body></html>
