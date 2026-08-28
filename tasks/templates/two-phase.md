@@ -153,23 +153,19 @@ current state, next step. Write it to disk promptly (don't batch at the end).
 If the log already exists when you start, this run is a RESUME: read it FIRST
 and continue from its last entry — do not redo any step it records as done.
 
-VERIFY (AC-0061 tiered protocol, SMOKE tier — see tasks/HARNESS.md §3):
-  G0    one godot headless load: zero SCRIPT ERROR lines (hard gate).
-  SMOKE one smoke battery launch with the 2–4 dependency-mapped modes for
-        this change area (HARNESS.md dependency table: e.g. world/* →
-        player;interact;light;fluids + genhash) + genhash ALWAYS when
-        world/* or data.gd is touched (25/25 byte-identical GENHASH lines).
-  PROBE the task-specific probe mode(s) from spec.html's Task-specific gates,
-        when one is defined (env-gated, headless, ≤ 60 s) — this is yours.
-        The HEAVY items in that section (boundary/perf/flake/r50) are NOT
-        yours (see below).
-  RENDER ≤ 1 render at AWECRAFT_RADIUS=1 into the snapshot path from
-        plan.html §6 (xvfb, gl_compatibility); view it; save the PNG under
-        tasks/AC-NNNN/.
-  HEAVY the heavy gates (boundary r4, perf, flake, r50, full battery where
-        SMOKE does not cover it) are the COORDINATOR's background gate job —
-        you exit after G0+SMOKE+PROBE+RENDER; do not run them and do not
-        wait for them.
+VERIFY (AC-0061 tiered, see tasks/HARNESS.md §3):
+  G0    one godot headless load: zero SCRIPT ERROR lines (hard gate — always).
+  SMOKE + PROBE + RENDER as needed (let xhigh plan guide you; HARNESS.md §3
+        is the ref). Typical: SMOKE = 2–4 dependency-mapped modes for the
+        change area + genhash when world/* or data.gd is touched; PROBE = the
+        task's probe mode from spec.html when defined (≤60s, headless).
+  RENDER only when the change is visual (new block/mesh/shader/held/UI):
+        ≤1 render at AWECRAFT_RADIUS=1 into tasks/AC-NNNN/ (xvfb,
+        gl_compatibility) and save the PNG. Non-visual tasks (data-only,
+        harness, webui, build scripts) skip the render.
+  HEAVY boundary/perf/flake/r50 and full battery beyond SMOKE are the
+        COORDINATOR's background gate job — you exit after your gates; do not
+        run or wait for them.
 
 ONE-SHOT BOUNDARY (user 2026-08-27, from AC-0079 RUN 2b's ~40 min burn): if
 this task's scope touches godot/world/* or lighting.gd, you may run AT MOST
@@ -183,10 +179,10 @@ normal bounce.
 One godot at a time (concurrent runs corrupt the .godot cache). All runs:
 one bash command, HOME set first, from repo root (recipes in HARNESS.md §4).
 
-DELIVER: screenshots into tasks/AC-NNNN/ + a self-contained
-tasks/AC-NNNN/AC-NNNN-results.html (G0 output, smoke RESULT JSON, render
-PNG, deviations). Report <= 20 lines: files changed, RESULT values, gates
-green/red.
+DELIVER: a self-contained tasks/AC-NNNN/AC-NNNN-results.html for every
+task (G0 output + smoke RESULT JSON + deviations; include render PNG only
+when the change is visual). Report <= 20 lines: files changed, RESULT values,
+gates green/red.
 ```
 
 ---
