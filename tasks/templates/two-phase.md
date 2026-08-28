@@ -74,13 +74,16 @@ YOUR JOB — PLAN + IMPLEMENT in one turn.
                                 (the mode table in tasks/HARNESS.md is the ref).
                                 For each: mode name + the ok:true condition.
 
-   Then add any of the following ONLY if the task needs them (let your
-   xhigh reasoning decide — do not add boilerplate):
+Then add any of the following ONLY if the task needs them (let your
+xhigh reasoning decide — do not add boilerplate):
 
      - Frozen refs          — EXACT world constants with file:line. Only when world/* touched.
      - Data.* ids           — Data.* / B_* ids with file:line. Only when ids change.
      - Snapshot/render names — AWECRAFT_SNAPSHOT path(s) + CAM preset. Only when visual.
      - Risks/edge cases     — what could break + fallback. Only when non-trivial.
+     - Fences               — e.g. "no commits/pushes (coordinator handles; read-only git log/show allowed); no TASKS.yaml edits outside queue"
+
+Fences rule: "no git" means no commits/pushes/new branches — coordinator commits. Read-only `git log/show/diff/status` to review previous commits is allowed; do not run `git commit/push/add`.
 
    Keep it lean — one page is enough for a P3 tweak; depth is for reasoning, not paperwork.
 
