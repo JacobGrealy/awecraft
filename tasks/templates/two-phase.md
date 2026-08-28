@@ -73,67 +73,55 @@ file except the single output below. No godot runs, no builds.
 
 Investigate the repo (grep/read godot/ sources as needed) and WRITE exactly
 one file: tasks/AC-NNNN/plan.html — a small self-contained HTML page with
-EXACTLY these 7 sections, IN THIS ORDER:
+AT LEAST these 3 sections, IN THIS ORDER:
 
   1. Goal                 — 1 sentence: what AC-NNNN changes and why.
   2. Files to touch       — every godot/ path you expect to edit or read,
-                            with a one-line note per file (function/area).
-  3. Frozen spec refs     — index.html build 20260816-r12 (source of truth) +
-                            the EXACT world constants the task depends on,
-                            cited VERBATIM from the current source:
-                            SEA, HEIGHT, CHUNK from godot/autoload/data.gd and
-                            the biome thresholds from godot/world/generator.gd
-                            biome_at() (t/m cutoffs). Quote each value with
-                            file:line. Do not paraphrase or round values.
-  4. Data.* ids           — the block/item ids the task touches (Data.* in
-                            godot/autoload/data.gd, TOOL_GRIDS, B_* ids in
-                            godot/world/generator.gd), each with file:line.
-  5. Harness gates        — the AWECRAFT_LOGIC mode(s) from
-                            godot/scenes/main.gd that verify this task
-                            (grep 'AWECRAFT_LOGIC=' / the mode branches in
-                            main.gd; the mode table in tasks/HARNESS.md is
-                            the reference). For each: mode name, expected
-                            RESULT JSON shape (key fields), and the ok:true
-                            condition the run must satisfy.
-  6. Snapshot/render names — the AWECRAFT_SNAPSHOT output path(s) (under
-                            tasks/AC-NNNN/) + AWECRAFT_CAM preset(s) to use,
-                            plus the R=1 render command shape from
-                            tasks/HARNESS.md §4.
-  7. Risks/edge cases     — what could break (e.g. genhash parity if world/*
-                            is touched, fluid invariants, xtab/ktab exemption),
-                            and the fallback if the plan is wrong.
+                             with a one-line note per file (function/area).
+  3. Harness gates        — the AWECRAFT_LOGIC mode(s) from
+                             godot/scenes/main.gd that verify this task
+                             (the mode table in tasks/HARNESS.md is the ref).
+                             For each: mode name + the ok:true condition.
 
-CONSTANTS RULE (this is the gate the coordinator checks): every frozen-spec
-value in §3/§4 must match the CURRENT data.gd / generator.gd byte-for-byte —
-copy it straight out of the file. If you are unsure of a value, grep the file
-again; never write from memory.
+Then add any of the following ONLY if the task needs them (let your
+xhigh reasoning decide — do not add boilerplate):
 
-When done, reply in <= 20 lines: the 7 section titles, the file paths you
-cite, and any open questions. Your deliverable is tasks/AC-NNNN/plan.html.
+  - Frozen spec refs     — index.html build 20260816-r12 + the EXACT world
+                           constants (SEA/HEIGHT/CHUNK, biome_at thresholds)
+                           cited verbatim with file:line. Required only when
+                           world/* or generator is touched.
+  - Data.* ids           — Data.* / B_* ids with file:line. Only when ids change.
+  - Snapshot/render names — AWECRAFT_SNAPSHOT path(s) + CAM preset. Only when
+                           a render is part of the gate.
+  - Risks/edge cases     — what could break + fallback. Only when non-trivial.
+
+Keep the plan lean — one page is enough for a P3 tweak; xhigh depth is for
+reasoning, not paperwork.
+
+When done, reply in <= 20 lines: the section titles you wrote, the file paths
+you cite, and any open questions. Your deliverable is tasks/AC-NNNN/plan.html.
 ```
 
 ---
 
 ## COORDINATOR GATE — after Run 1, before Run 2
 
-The coordinator (not the subagent) checks, in order:
+The coordinator (not the subagent) checks:
 
 1. `tasks/AC-NNNN/plan.html` exists. (No file → bounce Run 1 back.)
-2. All 7 sections present, in order.
-3. Every frozen-spec constant in §3/§4 is cited **verbatim** — the coordinator
-   re-greps the cited file:line and compares the value character-for-character
-   against current `godot/autoload/data.gd` / `godot/world/generator.gd`.
-   Helper: re-run `python3 tasks/scripts/spec_template.py AC-NNNN --full --out
-   .scratch/<task>-consts.html` (the --full flag inlines the constants tables,
-   parsed fresh) and diff the cited values against that table.
+2. Sections 1-3 present, in order, with at least one harness gate citing
+   `tasks/HARNESS.md`. Optional sections (Frozen refs / Data.* ids / renders /
+   risks) are allowed but not required — gate them only if present.
 
 Decision:
 
-- PASS (all constants verbatim, 7 sections) → **queue Run 2** (medium builder).
-- FAIL (any constant stale/wrong or section missing) → **bounce Run 1 back**
-  with the exact stale lines listed (value cited vs value in file) and ask for
-  the file to be re-cited from the current source. Do NOT patch plan.html by
-  hand and do NOT queue Run 2 on a failed gate.
+- PASS → **queue Run 2** (medium builder).
+- FAIL (missing plan or missing §1-3) → **bounce Run 1 back** with what is
+  missing. Do NOT patch plan.html by hand and do NOT queue Run 2 on a failed gate.
+
+Note: the old verbatim-constants gate (re-grep data.gd / generator.gd) now
+runs only when the plan includes a Frozen spec refs section — trivial / UI
+tasks skip it.
 
 ---
 
