@@ -1,9 +1,12 @@
 meta:
-  updated_at: 2026-08-28T07:41
+  updated_at: 2026-08-28T08:13
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
 - AC-0132
+- AC-0133
+- AC-0134
+- AC-0135
 - AC-0109
 - AC-0110
 - AC-0125
@@ -3895,4 +3898,58 @@ intake:
   notes: 'Add missing torch recipe 22: coal 106 + stick 100 -> torch 22x4 (MC vertical C over S), shapeless or shaped 2-wide,
     grid 2 (E) + 3 (table) both. Data.gd:96 shapeless /120 shaped currently 0 entries for 22, so E/table shows nothing. Gate:
     coal+stick vertical 1+1 -> 4 torches in 2x2 and 3x3, charcoal variant if present.'
+  comments: []
+- id: AC-0133
+  title: ac128-regression-stars-move-with-sky
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-28T08:13
+  updated_at: 2026-08-28T08:13
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'AC-0128 regression: stars do not move with sky, look like dead pixels. Stars should scroll/rotate with sky dome
+    (or remain fixed to sky, not screen). Audit star rendering (likely screen-space vs world-space) and restore movement with
+    sky. Gate: stars move with sky, not dead pixels.'
+  comments: []
+- id: AC-0134
+  title: ac128-regression-random-lit-chunks-at-night
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-28T08:13
+  updated_at: 2026-08-28T08:13
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'AC-0128 regression: random fully-lit chunks next to pitch-black chunks at night with no light source for either.
+    Probe midnight light_at / chunk bake eff shows alternating 15 vs 0. Root likely sky-scale caching/batching (AC-0077 eff
+    cache) or AC-0128 dayFactor not per-chunk. Fix so night sky light is consistent per cave depth, no lottery. Gate: midnight
+    unlit cave uniformly dark, no 15/0 lottery across chunks.'
+  comments: []
+- id: AC-0135
+  title: moon-ambient-5-percent
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-28T08:13
+  updated_at: 2026-08-28T08:13
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Not a bug but: add ~5% ambient moon light so night is not pitch black. Scale or min floor on sky/eff at night (e.g.
+    min 0.05*15). Gate: midnight with no torch still faintly visible, cave 0.75 not 0.'
   comments: []
