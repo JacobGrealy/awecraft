@@ -491,8 +491,7 @@ def render_page(data, interactive=True, base="/tasks/", task_root=None, title="A
 
 
 def main():
-    p = argparse.ArgumentParser(description="Render TASKS.yaml as a board HTML page")
-    p.add_argument("--out", default=None, help="write the page here (default: print to stdout)")
+    p = argparse.ArgumentParser(description="Render TASKS.yaml as a board HTML page (stdout only; file export removed)")
     p.add_argument("--file", default=None, help="alternative TASKS.yaml path (default: env "
                    "AWECRAFT_TASKS_FILE or tasks/TASKS.yaml)")
     p.add_argument("--base", default="", help="URL prefix for task-folder links "
@@ -503,11 +502,7 @@ def main():
     data = tasks_lib.load_tasks(path)
     task_root = path.parent if args.file else tasks_lib.TASKS_DIR
     html = render_page(data, interactive=False, base=args.base, task_root=task_root)
-    if args.out:
-        Path(args.out).write_text(html)
-        print("wrote %s" % args.out)
-    else:
-        print(html)
+    print(html)
 
 
 if __name__ == "__main__":

@@ -7,10 +7,7 @@ This is the single source of truth for structure, conventions, and the headless 
 - Project root: `/home/angrygiant/github_projects/AweCraft/godot/`
 - Language: **GDScript**, Godot **4.7** (engine at `~/tools/godot/godot`). Run with `--path AweCraft/godot`.
 - **No comments.** snake_case. 4-space indent. Type hints where trivial.
-- This is a **faithful behavioral port** of the web game
-  `/home/angrygiant/github_projects/AweCraft/index.html` (frozen at build `20260816-r12` = the SPEC).
-  Port behavior, not literal code. When unsure, the web file is the source of truth for data + mechanics.
-  Web EXPORT dropped 2026-08-26 (AC-0124): the product is Windows-native (`exports/windows/`); `index.html` remains the frozen spec and every "web" reference below is spec-fidelity, not platform support.
+- Godot `godot/` is the source of truth for behavior/data. Windows-native product (`exports/windows/`).
 - **1 subagent = 1 task.** Build on what earlier tasks already created. Do not build other tasks.
 - Every task ends with verification (render screenshot and/or headless logic assert) + a short report.
 - Surgical edits. No comments. Do not reformat unrelated files.

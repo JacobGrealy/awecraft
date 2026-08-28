@@ -86,10 +86,9 @@ AT LEAST these 3 sections, IN THIS ORDER:
 Then add any of the following ONLY if the task needs them (let your
 xhigh reasoning decide — do not add boilerplate):
 
-  - Frozen spec refs     — index.html build 20260816-r12 + the EXACT world
-                           constants (SEA/HEIGHT/CHUNK, biome_at thresholds)
-                           cited verbatim with file:line. Required only when
-                           world/* or generator is touched.
+  - Frozen refs          — EXACT world constants (SEA/HEIGHT/CHUNK,
+                           biome_at thresholds) cited verbatim with file:line.
+                           Only when world/* or generator is touched.
   - Data.* ids           — Data.* / B_* ids with file:line. Only when ids change.
   - Snapshot/render names — AWECRAFT_SNAPSHOT path(s) + CAM preset. Only when
                            a render is part of the gate.
