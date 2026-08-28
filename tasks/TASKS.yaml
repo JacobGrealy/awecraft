@@ -1,11 +1,12 @@
 meta:
-  updated_at: 2026-08-28T08:44
+  updated_at: 2026-08-28T09:16
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
 - AC-0133
 - AC-0134
 - AC-0135
+- AC-0136
 - AC-0109
 - AC-0110
 - AC-0125
@@ -3915,10 +3916,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-28T08:13
-  updated_at: 2026-08-28T08:13
+  updated_at: 2026-08-28T08:50
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -3961,4 +3962,26 @@ intake:
   parent_id: null
   notes: 'Not a bug but: add ~5% ambient moon light so night is not pitch black. Scale or min floor on sky/eff at night (e.g.
     min 0.05*15). Gate: midnight with no torch still faintly visible, cave 0.75 not 0.'
+  comments: []
+- id: AC-0136
+  title: texture-filtering-sharp-nearest-regression
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-28T09:16
+  updated_at: 2026-08-28T09:16
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Textures are not sharp after AC-0128: filtering looks linear/blurry instead of pixel-sharp NEAREST (used before
+    via StandardMaterial3D.texture_filter=NEAREST). AC-0128 switched opaque/cutout/flower/fluid to unlit shaders (chunk_lit_*.gdshader)
+    with uniform sampler2D tex (no filter hint) sampling runtime ImageTextures from ImageTexture.create_from_image (data.gd
+    tint bake + chunk.gd lit_atlas). Runtime textures likely default to LINEAR, so shader samples blurry. Fix: set shader
+    sampler to filter_nearest (uniform sampler2D tex : filter_nearest) and/or ensure ImageTexture filter is NEAREST at creation.
+    Verify with close-up block: single-pixel texels stay crisp at any distance/FOV; compare with pre-0128 StandardMaterial
+    NEAREST. Gate: close-up dirt/grass remains pixel-sharp, no bilinear blur.'
   comments: []
