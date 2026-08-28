@@ -1,9 +1,8 @@
 meta:
-  updated_at: 2026-08-28T01:50
+  updated_at: 2026-08-28T07:41
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0035
 - AC-0132
 - AC-0109
 - AC-0110
@@ -904,12 +903,12 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels:
   - godot
   created_at: 2026-08-16T12:00
-  updated_at: 2026-08-27T22:12
-  completed_at: null
+  updated_at: 2026-08-28T07:41
+  completed_at: 2026-08-28T07:41
   waiting_on: null
   parent_id: null
   notes: 'Bake per-voxel light into mesh vertex colors (Lighting from AC-0005 ready) + web uDay terrain uniform + stars. BUNDLED
@@ -3832,7 +3831,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-27T17:37
-  updated_at: 2026-08-28T01:50
+  updated_at: 2026-08-28T07:41
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -3869,6 +3868,16 @@ intake:
       as hot loops). AC-0128 also left the darkside 24401 issue RESOLVED by the fix (flood-visited is exact at the boundary;
       residual 5168 = cross-boundary SKY leak over-count, correctly dark — not a block miss; drop the mask-extension follow-up
       from this list).'
+  - id: 3
+    created_at: 2026-08-28T07:41
+    updated_at: null
+    text: '[agent 2026-08-28 07:35] AC-0035 CLOSED as-delivered — THIRD cost component for the recovery plan (gate-confirmed):
+      boundary r4 typical fwd_p95 5056 (gate 8141 spike outlier / re-run 5056) vs AC-0128 baseline 4588 + same-moment control
+      4471; walk p95 96-99 vs 92; per-crossing TOTAL work NEUTRAL (65.4 vs 67.2 s). Mechanism candidate: AC-0035''s per-frame
+      main-thread additions (uniform pushes x4 materials, star-node eye-follow, viewmodel TTL light_at 3-7ms/cell-change)
+      erode the frame-budgeted build drain (AC-0077) -> fix candidate: throttle uniform pushes to <=10Hz / value-changed.
+      AC-0131 now owns: AC-0129 E2 wave + AC-0128 per-glow-chunk-bake flood + AC-0035 drain-erosion. Target = the pre-AC-0129
+      fence 65/3500.'
 - id: AC-0132
   title: torch-crafting-recipe
   source: user

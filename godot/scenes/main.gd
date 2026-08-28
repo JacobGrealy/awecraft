@@ -24,6 +24,8 @@ var aero_sky: MeshInstance3D
 var aero_sky_mat: ShaderMaterial
 var aero_wash: MeshInstance3D
 var aero_wash_mesh: QuadMesh
+var _star_node: MeshInstance3D
+var _star_mat: ShaderMaterial
 
 
 func _ready() -> void:
@@ -271,6 +273,75 @@ func _create_game_nodes() -> void:
 	inventory_ui.name = "Inventory"
 	add_child(inventory_ui)
 	Game.hotbar = inventory_ui
+	if _star_node != null:
+		_star_node.queue_free()
+		_star_node = null
+	_star_mat = ShaderMaterial.new()
+	_star_mat.shader = load("res://core/star.gdshader")
+	_star_mat.set_shader_parameter("u_opacity", 1.0)
+	_star_node = MeshInstance3D.new()
+	_star_node.name = "Stars"
+	_star_node.mesh = _build_star_mesh()
+	_star_node.material_override = _star_mat
+	_star_node.visible = false
+	add_child(_star_node)
+
+
+static func _vl_mb_wrap(a: int) -> int:
+	var r := a & 0xFFFFFFFF
+	if r >= 0x80000000:
+		r -= 0x100000000
+	return r
+
+
+static func _vl_mb_ursh(x: int, n: int) -> int:
+	return (x & 0xFFFFFFFF) >> n
+
+
+static func _vl_mb_imul(a: int, b: int) -> int:
+	return _vl_mb_wrap(a * b)
+
+
+static func _vl_mb_next(st: Array) -> float:
+	var a: int = _vl_mb_wrap(int(st[0]))
+	a = _vl_mb_wrap(a + 0x6D2B79F5)
+	var t0: int = _vl_mb_imul(a ^ _vl_mb_ursh(a, 15), 1 | a)
+	var t1: int = _vl_mb_wrap(t0 + _vl_mb_imul(t0 ^ _vl_mb_ursh(t0, 7), 61 | t0))
+	var t: int = t1 ^ t0
+	st[0] = a
+	var r: int = t ^ _vl_mb_ursh(t, 14)
+	return float(_vl_mb_ursh(r, 0)) / 4294967296.0
+
+
+func _build_star_mesh() -> ArrayMesh:
+	var st := [42]
+	var v := PackedVector3Array()
+	var u := PackedVector2Array()
+	var idx := PackedInt32Array()
+	for i in 500:
+		var u1: float = _vl_mb_next(st)
+		var u2: float = _vl_mb_next(st)
+		var phi: float = acos(2.0 * u1 - 1.0)
+		var theta: float = u2 * TAU
+		var p := Vector3(320.0 * sin(phi) * sin(theta), 320.0 * cos(phi), 320.0 * sin(phi) * cos(theta))
+		var base := v.size()
+		for cv in [Vector2(0.0, 0.0), Vector2(1.0, 0.0), Vector2(1.0, 1.0), Vector2(0.0, 1.0)]:
+			v.append(p)
+			u.append(cv)
+		idx.append(base)
+		idx.append(base + 1)
+		idx.append(base + 2)
+		idx.append(base)
+		idx.append(base + 2)
+		idx.append(base + 3)
+	var arrs: Array = []
+	arrs.resize(Mesh.ARRAY_MAX)
+	arrs[Mesh.ARRAY_VERTEX] = v
+	arrs[Mesh.ARRAY_TEX_UV] = u
+	arrs[Mesh.ARRAY_INDEX] = idx
+	var m := ArrayMesh.new()
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrs)
+	return m
 
 
 const HARNESS_ENVS := [
@@ -858,6 +929,10 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "nightday":
 			await _nightday_test(spawn)
 			return
+		if logic == "viewlight":
+			player = _spawn_player()
+			await _viewlight_test(spawn)
+			return
 		if logic == "daynight":
 			world.collision_enabled = false
 			world.render_radius = 0
@@ -1148,6 +1223,14 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		player = _spawn_player()
 		Game.start()
 
+	if snapshot_path != "" and player == null:
+		# AC-0035: named-camera snapshot paths (top/iso/eyeup/...) skip the
+		# spawn above; G6-style shots need the player in-frame (viewmodel hand
+		# + player-light halo) so spawn on demand.
+		await _await_spawn_floor(spawn, 300)
+		player = _spawn_player()
+		Game.start()
+
 	if snapshot_path != "":
 		await _snapshot_finish(cam)
 
@@ -1187,8 +1270,22 @@ func _snapshot_finish(cam: String) -> void:
 				player.look(aim["yaw"], aim["pitch"])
 				aimed = true
 		else:
+			# AC-0035: deterministic snapshot camera override
+			# (x,y,z,yaw,pitch; x/y/z at EYE height). The raycast aim below
+			# depends on chunk-build timing (SNAPDRAIN), which shifts the
+			# frame between runs; a fixed cam makes G6 shots reproducible.
+			var aimenv := OS.get_environment("AWECRAFT_AIM")
+			if aimenv != "":
+				var p := aimenv.split(",")
+				if p.size() == 5:
+					Debug.fly(true)
+					Debug.give_item(3, 12)
+					Debug.give_item(111, 1)
+					Debug.teleport(float(p[0]), float(p[1]) - player.EYE, float(p[2]))
+					player.look(float(p[3]), float(p[4]))
+					aimed = true
 			var aim := _find_aim_spot()
-			if not aim.is_empty():
+			if not aimed and not aim.is_empty():
 				Debug.fly(true)
 				Debug.give_item(3, 12)
 				Debug.give_item(111, 1)
@@ -1201,7 +1298,15 @@ func _snapshot_finish(cam: String) -> void:
 						Debug.give_item(fpid, 1)
 					player.sel = _slot_of(player, fpid)
 				Debug.teleport(aim["cam"].x, aim["cam"].y - player.EYE, aim["cam"].z)
-				player.look(aim["yaw"], aim["pitch"])
+				# AC-0035: the eyeup night shot must show sky (stars) + ground
+				# (player-light halo) + viewmodel in one frame. The held item
+				# sits ~17 deg below the horizon and ~24 deg off-axis, so a
+				# slight UP pitch (~8.6 deg) keeps it in-frame while leaving
+				# ~38% sky on top for the stars.
+				var epitch: float = aim["pitch"]
+				if cam == "eyeup":
+					epitch = 0.15
+				player.look(aim["yaw"], epitch)
 				aimed = true
 	var inv_env := OS.get_environment("AWECRAFT_INV")
 	if inv_env != "" and player != null:
@@ -1461,7 +1566,33 @@ func _update_sky() -> void:
 	# AC-0128: per-frame u_day uniform for the unlit chunk shaders (web parity:
 	# DayNight.day(t), the web day factor, updated every frame at index.html
 	# :3222).
-	_ChunkScriptM.set_day_factor(DayNight.day(t))
+	var day := DayNight.day(t)
+	_ChunkScriptM.set_day_factor(day)
+	if _star_node != null:
+		var scam: Camera3D = null
+		if player != null:
+			scam = player.get_node_or_null("Camera3D")
+		if scam != null:
+			_star_node.global_transform = scam.global_transform
+			_star_node.visible = true
+		else:
+			_star_node.visible = false
+	if _star_mat != null:
+		_star_mat.set_shader_parameter("u_opacity", 1.0 - day)
+
+	var ppos := Vector3.ZERO
+	var plvl := 0.0
+	var prad := 5.0
+	if player != null:
+		ppos = player.position
+		plvl = float(player.PLAYER_LIGHT_LEVEL)
+		prad = float(player.PLAYER_LIGHT_RADIUS)
+	for k in _ChunkScriptM._mat_cache:
+		var cm = _ChunkScriptM._mat_cache[k]
+		if cm is ShaderMaterial:
+			cm.set_shader_parameter("u_player_pos", ppos)
+			cm.set_shader_parameter("u_player_light", plvl)
+			cm.set_shader_parameter("u_player_radius", prad)
 	sun.light_color = AeroLib.SUN_TINT if aero else Color.WHITE
 	sun.light_energy = DayNight.sun_energy(t) * (AeroLib.SUN_BOOST if aero else 1.0)
 	sun.look_at(DayNight.sun_direction(t), Vector3.UP)
@@ -4198,6 +4329,174 @@ func _nightday_test(spawn: Vector3) -> void:
 	if out.torch_night.class != null:
 		oktnight = float(out.torch_night.class)
 	out["ok"] = out.mech == "unlit-formula" and okcave_day >= 14.1 and okcave_night < 5.0 and oktday == oktnight
+	Debug.result(out)
+	get_tree().quit()
+
+
+# AC-0035 probe (env-gated by AWECRAFT_LOGIC=viewlight, never runs in game):
+# steady-settle r4; deterministic cells borrowed from the proven _light_test
+# battery pattern (surface eff-15 / light-0 pocket / torch 14); measures the
+# viewmodel rendered light (web :746 at the player eye cell) + star opacity at
+# t 0.0/0.5 + the player-light contribution. PRE (no feature) reports the
+# current mechanism (shared lit material albedo white -> mat_L 1.0 at every
+# cell = the bug; no stars; no player light). POST reports the unshaded
+# player-local values + the star node + the player light.
+func _vl_r5(x: float) -> float:
+	return roundf(x * 100000.0) / 100000.0
+
+
+func _vl_measure(cell: Vector3i) -> Dictionary:
+	player.position = Vector3(float(cell.x) + 0.5, float(cell.y) - 1.0, float(cell.z) + 0.5)
+	var l: Dictionary = world.light_at(cell.x, cell.y, cell.z)
+	var sky: float = float(l.sky)
+	var blk: float = float(l.block)
+	var day := DayNight.day(Game.time_of_day)
+	var lno := 0.12 + 0.88 * maxf(day * sky / 15.0, blk / 15.0)
+	var lvl: float = 0.0
+	var lvm := lno
+	if player.has_method("vm_refresh"):
+		lvl = float(player.PLAYER_LIGHT_LEVEL)
+		lvm = maxf(lno, 0.12 + 0.88 * minf(lvl, 15.0) / 15.0)
+		player.vm_refresh(true)
+	var mat_l := 1.0
+	var mo = player.held_box.material_override if player.held_box != null else null
+	if mo is StandardMaterial3D:
+		mat_l = float((mo as StandardMaterial3D).albedo_color.r)
+	return {
+		"sky": int(sky),
+		"blk": int(blk),
+		"eff": int(l.eff),
+		"vm_no_pl": _vl_r5(lno),
+		"vm": _vl_r5(lvm),
+		"pl_contrib": _vl_r5(lvm - lno),
+		"mat_L": _vl_r5(mat_l),
+	}
+
+
+func _viewlight_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	Lighting._tables()
+	world.recenter(spawn.x, spawn.z, true)
+	await _nd_settle(60000)
+	var has_vm: bool = player != null and player.has_method("vm_refresh")
+	var star_present: bool = _star_mat != null
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	var top: int = world.surface_top(sx, sz)
+	var surface_cell := Vector3i(-1, -1, -1)
+	for dx in range(-6, 7, 3):
+		if surface_cell.x >= 0:
+			break
+		for dz in range(-6, 7, 3):
+			var tt: int = world.surface_top(sx + dx, sz + dz)
+			var cell := Vector3i(sx + dx, tt + 1, sz + dz)
+			if world.get_block(cell.x, cell.y, cell.z) != 0:
+				continue
+			var l: Dictionary = world.light_at(cell.x, cell.y, cell.z)
+			if int(l.eff) >= 15:
+				surface_cell = cell
+				break
+	var lavas: Array[Vector3i] = []
+	for lx in range(sx - 36, sx + 37):
+		for lz in range(sz - 36, sz + 37):
+			for ly in range(0, 8):
+				if world.get_block(lx, ly, lz) == WorldGen.B_LAVA:
+					lavas.append(Vector3i(lx, ly, lz))
+	var pocket := Vector3i(-1, -1, -1)
+	var depth := 6
+	while depth < 30 and pocket.x < 0:
+		var cy: int = top - depth
+		if cy >= 5:
+			for dx in range(-16, 17):
+				if pocket.x >= 0:
+					break
+				for dz in range(-16, 17):
+					var cx := sx + dx
+					var cz := sz + dz
+					if world.get_block(cx, cy, cz) != 0:
+						continue
+					if not _is_solid(cx, cy + 1, cz):
+						continue
+					if cy < 23:
+						var farx := cx + 5
+						var clear := true
+						for lav in lavas:
+							if absi(lav.x - cx) + absi(lav.y - cy) + absi(lav.z - cz) < 15 \
+									or absi(lav.x - farx) + absi(lav.y - cy) + absi(lav.z - cz) < 15:
+								clear = false
+								break
+						if not clear:
+							continue
+					var far := Vector3i(cx + 5, cy, cz)
+					for i in range(1, 6):
+						var c := Vector3i(cx + i, cy, cz)
+						if world.get_block(c.x, c.y, c.z) != 0:
+							world.set_block(c.x, c.y, c.z, 0)
+					var lb: Dictionary = world.light_at(far.x, far.y, far.z)
+					if int(lb.eff) > 5:
+						continue
+					var l0: Dictionary = world.light_at(cx, cy, cz)
+					if int(l0.eff) != 0:
+						continue
+					pocket = Vector3i(cx, cy, cz)
+					break
+		depth += 1
+	if surface_cell.x < 0 or pocket.x < 0:
+		Debug.result({"mode": "viewlight", "seed": Game.world_seed, "radius": world.render_radius, "ok": false, "err": "no deterministic cell", "surface": [surface_cell.x, surface_cell.y, surface_cell.z], "pocket": [pocket.x, pocket.y, pocket.z], "elapsed_ms": Time.get_ticks_msec() - t0})
+		get_tree().quit()
+		return
+	player.inv_add(22, 1)
+	player.sel = player.find_slot(22)
+	player.refresh_held()
+	for i in 3:
+		await get_tree().process_frame
+	var noon_day: float = DayNight.day(0.5)
+	var mid_day: float = DayNight.day(0.0)
+	Game.time_of_day = 0.5
+	_update_sky()
+	var op_noon := -1.0
+	if star_present:
+		op_noon = float(_star_mat.get_shader_parameter("u_opacity"))
+	var outdoor := _vl_measure(surface_cell)
+	Game.time_of_day = 0.0
+	_update_sky()
+	var op_mid := -1.0
+	if star_present:
+		op_mid = float(_star_mat.get_shader_parameter("u_opacity"))
+	var cave0 := _vl_measure(pocket)
+	world.set_block(pocket.x, pocket.y, pocket.z, 22)
+	var torch := _vl_measure(pocket)
+	var lvl: float = float(player.PLAYER_LIGHT_LEVEL) if has_vm else 0.0
+	var pl_d0: float = 0.12 + 0.88 * minf(lvl, 15.0) / 15.0
+	var out := {
+		"mode": "viewlight",
+		"seed": Game.world_seed,
+		"radius": world.render_radius,
+		"mechanism": "post-viewlight" if has_vm else "pre-no-viewlight",
+		"uDay_noon": _vl_r5(noon_day),
+		"uDay_mid": _vl_r5(mid_day),
+		"outdoor": outdoor,
+		"cave0": cave0,
+		"torch": torch,
+		"star": {
+			"present": star_present,
+			"count": 500 if star_present else 0,
+			"opacity_noon": _vl_r5(op_noon) if star_present else null,
+			"opacity_midnight": _vl_r5(op_mid) if star_present else null,
+		},
+		"player_light": {"level": lvl, "d0": _vl_r5(pl_d0)},
+		"ambient_night": _vl_r5(DayNight.ambient_energy(0.0)),
+		"surface_cell": [surface_cell.x, surface_cell.y, surface_cell.z],
+		"pocket_cell": [pocket.x, pocket.y, pocket.z],
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+	}
+	var ok := false
+	if has_vm:
+		ok = float(outdoor.mat_L) >= 0.94 and float(cave0.vm_no_pl) <= 0.12 + 0.001 \
+				and float(cave0.vm) > float(cave0.vm_no_pl) \
+				and absf(float(torch.mat_L) - 0.94133) <= 0.01 \
+				and star_present and op_noon < 0.05 and op_mid > 0.95
+	out["ok"] = ok
 	Debug.result(out)
 	get_tree().quit()
 

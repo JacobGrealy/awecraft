@@ -2,6 +2,8 @@ extends CharacterBody3D
 
 const EYE := 1.62
 const P_H := 1.8
+const PLAYER_LIGHT_LEVEL := 5.0
+const PLAYER_LIGHT_RADIUS := 5.0
 const P_HALF := 0.3
 const GRAV := 26.0
 const JUMP := 8.4
@@ -93,6 +95,14 @@ var _dragging := false
 var _mine_cell := Vector3i(0, 0, 0)
 var _mine_id := -1
 var _mine_prog := 0.0
+var _vm_mats: Array = []
+var _vm_box_mats := {}
+var _vm_sprite_mat: StandardMaterial3D = null
+var _vm_eye_cell := Vector3i(-1, -1, -1)
+var _vm_light_ms := 0
+var _vm_sky := 0.0
+var _vm_blk := 0.0
+var _vm_L := 1.0
 
 
 func _ready() -> void:
@@ -121,6 +131,7 @@ func _process(dt: float) -> void:
 	_update_swing_loop()
 	_update_swing(dt)
 	_update_sway(dt)
+	vm_refresh(false)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -388,6 +399,7 @@ func _build_held() -> void:
 	fmat.albedo_color = Color(0.87, 0.73, 0.57)
 	fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	held_fist.material_override = fmat
+	_vm_mats.append([fmat, fmat.albedo_color])
 	held_fist.position = Vector3(0.0, -0.05, 0.0)
 	held_fist.visible = false
 	hand_root.add_child(held_fist)
@@ -412,10 +424,10 @@ func _update_held(id: int, n: int) -> void:
 	if binfo != null:
 		if bool(binfo.get("cross", false)) and not bool(binfo.get("thin", false)):
 			held_box.mesh = HeldMeshes.cross_mesh(id)
-			held_box.material_override = HeldMeshes.cross_material()
+			held_box.material_override = _vm_kind_mat("cross", HeldMeshes.cross_material())
 		else:
 			held_box.mesh = HeldMeshes.box_mesh(id)
-			held_box.material_override = HeldMeshes.box_material()
+			held_box.material_override = _vm_kind_mat("box", HeldMeshes.box_material())
 		held_box.position = Vector3(0.0, 0.0, -0.18)
 		held_box.visible = true
 		return
@@ -431,7 +443,62 @@ func _update_held(id: int, n: int) -> void:
 			held_sprite.texture = _item_atlas_tex(id)
 		else:
 			held_sprite.texture = _tint_tex(Data.item_tint(id))
+		if _vm_sprite_mat == null:
+			_vm_sprite_mat = StandardMaterial3D.new()
+			_vm_sprite_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			_vm_mats.append([_vm_sprite_mat, Color.WHITE])
+		held_sprite.material_override = _vm_sprite_mat
 		held_sprite.visible = true
+
+
+func _vm_kind_mat(kind: String, src: Material) -> StandardMaterial3D:
+	var m = _vm_box_mats.get(kind)
+	if m == null:
+		m = (src as StandardMaterial3D).duplicate()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		# AC-0035: the held-box source material (HeldMeshes._base_mat) uses
+		# vertex_color_use_as_albedo, which in 4.7.1 darkens the textured box
+		# to near-invisibility (VMFORCE A/B: textured+vertex avg 10 vs 25). The
+		# viewmodel modulates albedo_color per-frame for light (R3), so use the
+		# plain albedo_color x texture path (proven visible, L-modulated).
+		m.vertex_color_use_as_albedo = false
+		_vm_box_mats[kind] = m
+		_vm_mats.append([m, (m as StandardMaterial3D).albedo_color])
+	return m
+
+
+func _vm_register_mat(m: Material, base: Color) -> void:
+	if m is StandardMaterial3D:
+		for ent in _vm_mats:
+			if ent[0] == m:
+				return
+		_vm_mats.append([m, base])
+
+
+func vm_refresh(force: bool = false) -> void:
+	if _vm_mats.is_empty():
+		return
+	var day := DayNight.day(Game.time_of_day)
+	var eye := Vector3i(int(floorf(position.x)), int(floorf(position.y + EYE)), int(floorf(position.z)))
+	var now := Time.get_ticks_msec()
+	if force or eye != _vm_eye_cell or now - _vm_light_ms >= 500:
+		var w = Game.world
+		if w != null:
+			var l: Dictionary = w.light_at(eye.x, eye.y, eye.z)
+			_vm_sky = float(l.sky)
+			_vm_blk = float(l.block)
+		else:
+			_vm_sky = 0.0
+			_vm_blk = 0.0
+		_vm_eye_cell = eye
+		_vm_light_ms = now
+	var lvm := 0.12 + 0.88 * maxf(day * _vm_sky / 15.0, _vm_blk / 15.0)
+	lvm = maxf(lvm, 0.12 + 0.88 * minf(PLAYER_LIGHT_LEVEL, 15.0) / 15.0)
+	_vm_L = lvm
+	for ent in _vm_mats:
+		# Color * scalar would also scale alpha (GDScript) — RGB only, keep opaque.
+		var bc := ent[1] as Color
+		(ent[0] as StandardMaterial3D).albedo_color = Color(bc.r * lvm, bc.g * lvm, bc.b * lvm, 1.0)
 
 
 func _item_atlas_tex(id: int) -> ImageTexture:
@@ -702,6 +769,8 @@ func _setup_held_tool(id: int, type: String) -> void:
 	handle_mi.mesh = _tool_part_mesh(handle_cells, half)
 	handle_mi.material_override = _voxel_mat(HANDLE_C)
 	held_tool.add_child(handle_mi)
+	_vm_register_mat(head_mi.material_override, tcolor)
+	_vm_register_mat(handle_mi.material_override, HANDLE_C)
 	_tool_voxel_count = head_cells.size() + handle_cells.size()
 	_tool_diag = target
 	held_tool_type = type
