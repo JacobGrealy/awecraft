@@ -1,10 +1,11 @@
 meta:
-  updated_at: 2026-08-27T17:42
+  updated_at: 2026-08-27T20:08
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
 - AC-0128
 - AC-0035
+- AC-0132
 - AC-0109
 - AC-0110
 - AC-0125
@@ -3838,4 +3839,22 @@ intake:
     frame delta touches cells that can actually change eff (skip pure-sky-only frames); (3) budget/stagger E2 re-light passes
     on crossing frames. Gate: boundary r4 A/B (p95 ≤65, fwd ≤3500, 10/81/0) + lightaudit reproducible + battery EXACT + genhash
     25/25 + breakspike floors.'
+  comments: []
+- id: AC-0132
+  title: torch-crafting-recipe
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-27T20:08
+  updated_at: 2026-08-27T20:08
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Add missing torch recipe 22: coal 106 + stick 100 -> torch 22x4 (MC vertical C over S), shapeless or shaped 2-wide,
+    grid 2 (E) + 3 (table) both. Data.gd:96 shapeless /120 shaped currently 0 entries for 22, so E/table shows nothing. Gate:
+    coal+stick vertical 1+1 -> 4 torches in 2x2 and 3x3, charcoal variant if present.'
   comments: []
