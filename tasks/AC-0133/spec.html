@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>AC-0133 — spec (stars-move-with-sky regression)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:920px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:21px}h2{font-size:16px;margin-top:20px;border-bottom:1px solid #ddd;padding-bottom:3px}code{font:13px/1.4 ui-monospace,Menlo,monospace;background:#f4f4f4;padding:1px 4px;border-radius:3px}.meta{color:#555;font-size:14px}.warn{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;border-radius:0 6px 6px 0}</style></head><body>
+<h1>AC-0133 — spec: stars-move-with-sky regression (user-reported, TOP of queue)</h1>
+<p class="meta">Registry note (verbatim): "AC-0128 regression: stars do not move with sky, look like dead pixels. Stars should scroll/rotate with sky dome (or remain fixed to sky, not screen). Audit star rendering (likely screen-space vs world-space) and restore movement with sky. Gate: stars move with sky, not dead pixels." — created 2026-08-28T08:13 by the user (the stars are AC-0035's node; the user groups it under the AC-0128-era night work). User-reported = top priority.</p>
+
+<h2>Goal</h2>
+<p>Restore the web-parity star behavior the user sees in the frozen web: the star field is a <b>WORLD-SPACE</b> object (a child of the world root, NOT parented to the camera) that is recentered on the camera <b>position</b> every frame — web :3248 <code>window.__stars.position.copy(camera.position)</code> — with its ROTATION never set. Consequence (the web's actual behavior): the field does not parallax with camera movement (it follows the eye) and appears fixed to the sky — when you turn your head, the stars rotate in your view (you see different parts of the fixed field), but when you walk they stay put in the sky. The user's report — "stars do not move with sky, look like dead pixels" — is the signature of a <b>screen-fixed</b> field: the node is parented to the camera (or its transform is camera-composed), so it inherits the camera's rotation and the stars are locked to the screen. Fix the transform/parentage so the stars are fixed to the sky, not the screen.</p>
+
+<h2>Requirements</h2>
+<ol>
+<li><b>R1 — Audit (Run-1, pin with line refs):</b> the "Stars" node in <code>godot/scenes/main.gd</code> (AC-0035): its PARENT (camera? world root?), the per-frame update (which space is <code>position</code> set in — local vs global?), any rotation handling, and the star.gdshader billboarding (view-space quads are fine either way, but if the node is camera-parented the quad orientation composes with the camera — state what happens). State the exact current transform chain camera→node.</li>
+<li><b>R2 — Fix (Run-2):</b> the Stars node must be a child of the WORLD ROOT (the same level as the chunk mesh instances — Run-1 to name the parent node), NOT a child of any camera. Per-frame: <code>stars.global_position = player eye position</code> (the eye-position source is already computed for AC-0035's viewmodel/nightday path — reuse it) and the field's rotation stays IDENTITY (never set, never inherited). This matches web :3248 exactly (position copy only).</li>
+<li><b>R3 — No distribution change:</b> the 500-point <code>mulberry32(42)</code> port (r=320 sphere + the three web anchors) stays byte-identical — this task changes the node's transform/parentage only. If Run-1 finds the positions were baked camera-relative (they should be absolute world coords per web :719-726), correct that in the plan and note it.</li>
+<li><b>R4 — Keep the rest of AC-0035 intact:</b> <code>u_opacity = 1 − day</code> (0.0 @ noon / 1.0 @ midnight), count 500, no fog, depthWrite false — the viewlight probe's star fields must stay EXACT after the fix.</li>
+</ol>
+
+<h2>Gates</h2>
+<ol>
+<li><b>G0</b> — headless load, zero SCRIPT ERROR (hard gate).</li>
+<li><b>G1 stars probe (new, Run-1 designs; env-gated <code>AWECRAFT_LOGIC=stars</code>, headless ≤60 s, deterministic)</b> — at night (u_day 0, stars visible): record the star node's path, parent node name, <code>global_position</code>, <code>global_rotation</code>, and the player eye position; then ROTATE the camera yaw by 90° (direct set — no input) and record the same fields again. <b>PASS</b> = parent is NOT the camera (parent name ≠ the camera node) AND the field's <code>global_rotation</code> is ~IDENTITY at both samples (the field is fixed in world space — it does NOT rotate with the camera; Δrotation &lt; 1°) AND <code>global_position</code> tracks the eye (Δ &lt; 0.01) at both samples. PRE (buggy) = fails the rotation and/or parent checks (field rotates with the camera = screen-fixed). RESULT JSON keyed: {ok, parent_name, eye_a, eye_b, star_pos_a, star_pos_b, star_rot_a, star_rot_b, yaw_delta_deg, opacity_a, count}.</li>
+<li><b>G2</b> — the EXISTING <code>AWECRAFT_LOGIC=viewlight</code> probe re-run: star fields must stay EXACT (count 500, opacity 1.0 @ midnight / 0.0 @ noon, present true) — regression check on the AC-0035 feature.</li>
+<li><b>G3 SMOKE</b> — 2–3 dependency-mapped arms (main.gd scene level: player;interact) EXACT vs known-stable. NO genhash (no <code>world/*</code>|<code>data.gd</code> touched) and NO boundary/perfl (no world/*|lighting.gd scope — tier = SMOKE only).</li>
+<li><b>G4 RENDER (≤1)</b> — one night R=1 render (<code>AWECRAFT_TIME=0.0</code>), stars visible in the sky (visual confirmation for the user; the probe RESULT is the behavioral proof).</li>
+</ol>
+
+<h2>Coordinator heavy gates (background job after Run-2)</h2>
+<p>g0 + stars probe fresh + viewlight fresh + smoke3 + build + curls (SMOKE-only tier — no boundary/perf/flake/genhash; no r50). Commit+push only after the pass.</p>
+
+<h2>Fences</h2>
+<ul>
+<li>Star distribution unchanged (500 points, mulberry32 port, r=320 + anchors); u_day/opacity semantics unchanged; no <code>godot/world/*</code>, <code>lighting.gd</code>, <code>data.gd</code> changes; <code>index.html</code> frozen; no git in Run-2; do not touch <code>docs/halo-loot-brainstorm.html</code> (foreign) or other in-flight task folders.</li>
+<li>AC-0035 lesson (binding): the per-frame hook stays tiny (one transform write + the existing opacity write); if Run-1 finds the current hook does more, simplify in the fix.</li>
+</ul>
+</body></html>

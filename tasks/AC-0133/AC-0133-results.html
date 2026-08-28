@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0133 — results (stars-move-with-sky regression, fixed)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1040px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:24px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow-x:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{background:#eef7ee;border-left:4px solid #2e8b2e;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}img{max-width:100%;border:1px solid #ccc;border-radius:6px}</style></head><body>
+<h1>AC-0133 — results: stars-move-with-sky regression (user-reported "stars look like dead pixels")</h1>
+<p class="meta">Run-2 (builder) · 2026-08-28 · tier SMOKE-only (main.gd + star.gdshader) · gates G0 + G1-PRE/POST + G2 viewlight + G3 smoke2 + G4 render (≤1 final render). Plan: <code>plan.html</code> (Run-1, binding). Heavy gates (g0 + stars fresh + viewlight fresh + smoke + build + curls) = coordinator's background job — NOT run here.</p>
+
+<div class="ok"><b>Done.</b> Root cause fixed, honest A/B reproduced: PRE probe <b>ok:false</b> (field rotates [0,90,0] with the camera — the dead-pixel signature), POST probe <b>ok:true</b> (field basis 0.0° at both samples, position tracks the eye, count 500, opacity 1.0). Viewlight re-pass EXACT, smoke2 EXACT, night render shows screen-facing star <b>dots</b>. Two files changed: <code>godot/scenes/main.gd</code> (one-line fix + probe) + <code>godot/core/star.gdshader</code> (vertex stage).</div>
+
+<h2>1. Root cause (one-liner)</h2>
+<p>The <code>Stars</code> node was already a child of the world root (parent was never the bug) — the per-frame hook at <code>main.gd:1576</code> copied the camera's <b>full</b> transform (<code>global_transform = scam.global_transform</code>) instead of its position, and <code>star.gdshader</code> compensated with a local-space quad offset — so the r=320 star sphere's world orientation rotated in lockstep with the camera and every star stayed on the same screen pixel: "dead pixels".</p>
+<h3>Web-parity rationale</h3>
+<p>The frozen web (<code>index.html</code> build 20260816-r12) does the opposite: the star field is a THREE.Points at the <b>scene root</b> (:729) with absolute r=320 coordinates (mulberry32(42), :720-726), and the ONLY per-frame write is <b><code>index.html:3248</code> — <code>window.__stars.position.copy(camera.position)</code> (position-only copy; the node's rotation is never written anywhere in the file — grep-verified, exactly 5 <code>__stars</code> refs :727/:728/:729/:1347/:3248)</b>. Consequence: the field is fixed in world orientation and recentered on the eye — under camera yaw the field rotates in the view (different stars come into view, "scroll with the sky"); under walking it follows the eye 1:1 (no parallax). The fix restores exactly this.</p>
+
+<h2>2. The fix (plan §5, as shipped)</h2>
+<pre># godot/scenes/main.gd _update_sky() — :1576, one-liner (surrounding null-guards kept):
+#   - _star_node.global_transform = scam.global_transform
+#   + _star_node.global_position  = scam.global_position   # web :3248 parity, position copy ONLY
+
+# godot/core/star.gdshader — vertex stage (world-space camera-basis billboard;
+# mesh data, u_opacity, render_mode, fragment stage UNCHANGED):
+void vertex() {
+	vec3 w = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;          // star center, world space
+	mat3 v = mat3(VIEW_MATRIX);
+	vec3 cam_right = transpose(v) * vec3(1.0, 0.0, 0.0);       // row 0 of the view rotation = camera right (world)
+	vec3 cam_up = transpose(v) * vec3(0.0, 1.0, 0.0);          // row 1 = camera up (world)
+	vec3 off = (cam_right * (UV.x - 0.5) + cam_up * (UV.y - 0.5)) * quad_size;
+	VERTEX = w + off - MODEL_MATRIX[3].xyz;                    // back to node-local (basis = identity, origin = eye)
+}</pre>
+<p>Why it works: with the node basis left at identity (rotation never written, parent "Main" identity), the star centers stay at their baked r=320 world-space offsets from the eye; the quad corner is offset along the camera's world-space right/up basis extracted from <code>VIEW_MATRIX</code> (row 0/row 1 of the view rotation = camera right/up in world), so every quad faces the camera in world space — the same screen-aligned quad the web's <code>PointsMaterial(sizeAttenuation:false)</code> draws. Distribution untouched (500 × mulberry32(42), r=320, mesh builder byte-identical). <code>u_opacity = 1 − day</code> untouched.</p>
+
+<h2>3. G1 stars probe — honest A/B (RESULT verbatim)</h2>
+<h3>PRE (probe landed, fix NOT applied — must fail, and does)</h3>
+<pre>RESULT {"count":500,"elapsed_ms":0,"eye_a":[8.5,36.6199989318848,8.5],"eye_b":[8.5,36.6199989318848,8.5],"mode":"stars","ok":false,"opacity_a":1.0,"parent_name":"Main","path":"/root/Main/Stars","seed":44,"star_pos_a":[8.5,36.6199989318848,8.5],"star_pos_b":[8.5,36.6199989318848,8.5],"star_rot_a":[0.0,0.0,0.0],"star_rot_b":[0.0,90.0,0.0],"yaw_delta_deg":90.0}</pre>
+<p>Fails <b>exactly the rotation check</b>: after the 90° camera yaw the field's world rotation is <code>[0,90,0]</code> (basis angle 90° &gt; 1°) — the star field rotates with the camera = screen-fixed = the user's dead pixels. Parent ("Main", not a camera) and position (star_pos == eye at both samples) pass PRE, as the plan pinned: the parent was never the bug, the discriminating check is rotation.</p>
+<h3>POST (fix applied — must pass, and does)</h3>
+<pre>RESULT {"count":500,"elapsed_ms":0,"eye_a":[8.5,36.6199989318848,8.5],"eye_b":[8.5,36.6199989318848,8.5],"mode":"stars","ok":true,"opacity_a":1.0,"parent_name":"Main","path":"/root/Main/Stars","seed":44,"star_pos_a":[8.5,36.6199989318848,8.5],"star_pos_b":[8.5,36.6199989318848,8.5],"star_rot_a":[0.0,0.0,0.0],"star_rot_b":[0.0,0.0,0.0],"yaw_delta_deg":90.0}</pre>
+<p><b>ok:true</b> — the field does NOT rotate when the camera yaws 90° (basis 0.0° at both samples), position tracks the eye (Δ 0.0 &lt; 0.01) at both samples, opacity 1.0 @ night, count 500. Both runs rc 0, 0 SCRIPT ERROR, probe wall &lt; 60 s (sync, no world settle).</p>
+
+<h2>4. Gates</h2>
+<table>
+<tr><th>gate</th><th>result</th></tr>
+<tr><td>G0 headless <code>--quit</code></td><td><b>PASS</b> — rc 0, 0 SCRIPT ERROR (PRE and POST trees).</td></tr>
+<tr><td>G1-PRE stars probe</td><td><b>PASS (as designed: ok:false on rotation)</b> — verbatim above; recorded in <code>continuity.md</code>.</td></tr>
+<tr><td>G1-POST stars probe</td><td><b>PASS (ok:true)</b> — verbatim above.</td></tr>
+<tr><td>G2 viewlight re-pass</td><td><b>PASS EXACT</b> — star <code>{"present":true,"count":500,"opacity_noon":0.0,"opacity_midnight":1.0}</code>; cave0 0.41333 (vm_no_pl 0.12), outdoor 1.0, torch 0.94133, player_light d0 0.41333 @ level 5, surface [2,32,2], pocket [0,25,-4], ok:true, rc 0, 0 SCRIPT ERROR — byte-identical to the AC-0035 gate values (the probe reads only <code>u_opacity</code> + presence, never the transform).</td></tr>
+<tr><td>G3 SMOKE <code>player;interact</code></td><td><b>PASS EXACT</b> — player 2.82 / 36.43 / on_floor true; interact breakable 2 / drop_spawned true / place_ok true; battery ok:true, rc 0, 0 SCRIPT ERROR. No genhash (no world/*|data.gd touched), no boundary/perf (tier = SMOKE only).</td></tr>
+<tr><td>G4 RENDER (≤1 final)</td><td><b>PASS</b> — one night R=1 <code>eyeup</code> render → <code>tasks/AC-0133/stars_night.png</code>; rc 0, 0 shader/error lines; star <b>dots</b> visible across the sky (image below). See §5 for the one in-budget shader fix between throws.</td></tr>
+</table>
+
+<h3>5. G4 throw history (honest)</h3>
+<p>Render throw 1 (the shipped plan §5.2 verbatim shader): <code>SHADER ERROR: Invalid arguments for the built-in function: "vec3(vec4)"</code> at <code>vec3(MODEL_MATRIX[3])</code> — this 4.7.1 shading language rejects the vec4→vec3 constructor; stars failed to render (146 KB PNG, broken). Fixed within plan §5.2's design (same math, swizzle instead of constructor: <code>MODEL_MATRIX[3].xyz</code>) → throwaway compile-check render (scratch path, 0 shader/error lines) → final render to the task path (239 KB, clean log). Net: one final G4 render on the final shader, per plan §7 row 2. Note: the first render log also carried the known transient <code>threadgen_handoff</code> world.gd flake (documented in AC-0035 continuity; world/* untouched by this task) — it does not appear in the final render log.</p>
+
+<h2>6. Render (G4) — night, R=1, seed 44, t=0.0, eyeup</h2>
+<p>Stars as small screen-facing dots across the sky, fading with the night gradient toward the horizon — dots, not streaks, not missing. This is the GL check of the new vertex shader (headless is blind to spatial shaders).</p>
+<img src="stars_night.png" alt="AC-0133 night render: star dots in the sky, eyeup framing">
+
+<h2>7. Files changed (fence — nothing else in godot/)</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>(1) the one-line fix in <code>_update_sky()</code> (<code>global_transform</code> → <code>global_position</code>, with the web-parity comment); (2) the new <code>AWECRAFT_LOGIC=stars</code> probe branch after the viewlight branch; (3) <code>_stars_test(spawn)</code> + <code>_star_basis_deg(n)</code> appended beside the viewlight probe block. Probe API notes (engine 4.7.1, parse-only deviations from the plan's pseudocode): basis angle via trace <code>acos((tr(R)−1)/2)</code> (no <code>Quaternion.angle_to</code>/<code>deg()</code> in this build; Euler-free, same measure), mesh arrays via <code>surface_get_arrays(0)</code>.</td></tr>
+<tr><td><code>godot/core/star.gdshader</code></td><td>Vertex stage → world-space camera-basis billboard (§2); header comment rewritten for the fixed design. <code>render_mode</code>, both uniforms, fragment stage byte-identical.</td></tr>
+</table>
+<p>Untouched (verified by <code>git status</code>/<code>diff --stat</code>): <code>_build_star_mesh</code> + mulberry helpers (distribution byte-identical), star node creation, viewlight probe, player.gd, world/*, lighting.gd, data.gd, index.html, docs/halo-loot-brainstorm.html (foreign). No git ops in Run-2. No build_windows.sh (coordinator's heavy job).</p>
+
+<h2>Coordinator heavy-gate verdict (2026-08-28 09:59-10:00, bash-97) — FINAL: PASS, DONE</h2>
+<div class="ok"><b>VERDICT: AC-0133 DONE.</b> The stars probe REPRODUCES fresh in the coordinator job (no subagent live): ok=true — parent <b>Main</b> (world root, NOT the camera), star field rotation <b>[0,0,0] at BOTH</b> samples (the 90° camera yaw does NOT rotate the field — the dead-pixels symptom is gone), opacity 1.0 @ midnight, count 500; viewlight re-pass EXACT (star 500/1.0/0.0, cave0 0.41333, outdoor 1.0, torch 0.94133); SMOKE player;interact EXACT; build RC=0 AweCraft.exe 109,625,224 B @10:00; daemons 8080 + 5180 → 200. One documented syntax deviation: <code>vec3(MODEL_MATRIX[3])</code> → <code>MODEL_MATRIX[3].xyz</code> swizzle (4.7.1 shading language, identical math) — GL-verified by the night render (star dots, not streaks).</div>
+</body></html>

@@ -1,9 +1,8 @@
 meta:
-  updated_at: 2026-08-28T09:16
+  updated_at: 2026-08-28T10:03
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0133
 - AC-0134
 - AC-0135
 - AC-0136
@@ -3916,17 +3915,31 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-28T08:13
-  updated_at: 2026-08-28T08:50
-  completed_at: null
+  updated_at: 2026-08-28T10:03
+  completed_at: 2026-08-28T10:03
   waiting_on: null
   parent_id: null
   notes: 'AC-0128 regression: stars do not move with sky, look like dead pixels. Stars should scroll/rotate with sky dome
     (or remain fixed to sky, not screen). Audit star rendering (likely screen-space vs world-space) and restore movement with
     sky. Gate: stars move with sky, not dead pixels.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-28T10:03
+    updated_at: null
+    text: '[agent 2026-08-28 10:05] DONE. Root cause (audit, not parentage — the Stars node was already world-root-parented):
+      main.gd:1576 copied the camera''s FULL transform (position+rotation) to the star field every frame — AC-0035 shipped
+      a full-transform copy instead of the plan''s position-only copy (web :3248 copies position only, never rotation) — so
+      the field''s orientation tracked the camera and every star was locked to its screen pixel (''dead pixels''). Fix: one
+      line (global_transform -> global_position; the field rotation stays identity forever) + star.gdshader vertex = world-space
+      camera-basis billboard (the old local-space billboard only worked because the node frame tracked the camera). Gates:
+      PRE probe ok:false (rotation check fails: [0,90,0] after 90° yaw — honest A/B) / POST ok:true (rot [0,0,0] both samples,
+      pos==eye, opacity 1.0, count 500), reproduced fresh in the coordinator job; viewlight EXACT (AC-0035 star fields unchanged);
+      smoke2 EXACT; night render GL-verified (dots, not streaks). Deviation of record: MODEL_MATRIX[3].xyz swizzle (4.7.1
+      syntax, same math). Process note: AC-0035''s G6 single-frame render + opacity-only viewlight check were blind to a transform
+      bug — the new AWECRAFT_LOGIC=stars probe (yaw A/B) is now in the tree to guard this.'
 - id: AC-0134
   title: ac128-regression-random-lit-chunks-at-night
   source: user

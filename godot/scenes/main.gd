@@ -933,6 +933,10 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			player = _spawn_player()
 			await _viewlight_test(spawn)
 			return
+		if logic == "stars":
+			player = _spawn_player()
+			_stars_test(spawn)
+			return
 		if logic == "daynight":
 			world.collision_enabled = false
 			world.render_radius = 0
@@ -1573,7 +1577,10 @@ func _update_sky() -> void:
 		if player != null:
 			scam = player.get_node_or_null("Camera3D")
 		if scam != null:
-			_star_node.global_transform = scam.global_transform
+			# AC-0133 fix (web parity, index.html :3248): position copy ONLY —
+			# the field's rotation is never set, so it stays fixed in world
+			# orientation (fixed to the sky, not to the screen).
+			_star_node.global_position = scam.global_position
 			_star_node.visible = true
 		else:
 			_star_node.visible = false
@@ -4569,6 +4576,77 @@ func _viewlight_test(spawn: Vector3) -> void:
 				and star_present and op_noon < 0.05 and op_mid > 0.95
 	out["ok"] = ok
 	Debug.result(out)
+	get_tree().quit()
+
+
+# AC-0133 probe (env-gated by AWECRAFT_LOGIC=stars, never runs in game):
+# transform-behavior A/B for the star field. Web parity (index.html :3248):
+# the per-frame hook writes the star node's POSITION only (rotation never
+# set), so the field is fixed in world orientation and recentered on the eye.
+# Night (t=0.0, opacity 1.0); sample A at the spawn orientation, sample B
+# after a 90-degree camera yaw (player.look = the AWECRAFT_AIM direct-set
+# pattern). Sync: no await between set and read (one call stack, physics
+# inert, Game.mode != "play"). ok = parent is not the camera AND the field
+# basis is ~identity (angle from identity < 1 degree) at BOTH samples AND
+# the field position tracks the eye (< 0.01) at both AND opacity > 0.95
+# AND count 500. PRE (full camera-transform copy at the per-frame hook)
+# fails basis_deg_b (90 degrees) = the honest A/B.
+func _star_basis_deg(n: Node3D) -> float:
+	var b := n.global_basis
+	var tr: float = b.x.x + b.y.y + b.z.z
+	return acos(clampf((tr - 1.0) / 2.0, -1.0, 1.0)) * 180.0 / PI
+
+
+func _stars_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	if _star_node == null or _star_mat == null or player == null:
+		Debug.result({"mode": "stars", "seed": Game.world_seed, "ok": false, "err": "missing star node", "elapsed_ms": Time.get_ticks_msec() - t0})
+		get_tree().quit()
+		return
+	Game.time_of_day = 0.0
+	_update_sky()
+	var cam: Camera3D = player.get_node("Camera3D")
+	player.look(0.0, 0.0)
+	_update_sky()
+	var eye_a: Vector3 = cam.global_position
+	var star_pos_a: Vector3 = _star_node.global_position
+	var star_rot_a: Vector3 = _star_node.global_rotation
+	var basis_deg_a: float = _star_basis_deg(_star_node)
+	var opacity_a: float = float(_star_mat.get_shader_parameter("u_opacity"))
+	var sa: Array = _star_node.mesh.surface_get_arrays(0)
+	var count: int = int((sa[Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 6)
+	player.look(PI / 2.0, 0.0)
+	_update_sky()
+	var eye_b: Vector3 = cam.global_position
+	var star_pos_b: Vector3 = _star_node.global_position
+	var star_rot_b: Vector3 = _star_node.global_rotation
+	var basis_deg_b: float = _star_basis_deg(_star_node)
+	var parent_name: String = ""
+	if _star_node.get_parent() != null:
+		parent_name = _star_node.get_parent().name
+	var parent_ok: bool = _star_node.get_parent() != null and _star_node.get_parent() != cam and parent_name != "Camera3D"
+	var ok: bool = parent_ok \
+			and basis_deg_a < 1.0 and basis_deg_b < 1.0 \
+			and star_pos_a.distance_to(eye_a) < 0.01 \
+			and star_pos_b.distance_to(eye_b) < 0.01 \
+			and opacity_a > 0.95 and count == 500
+	Debug.result({
+		"mode": "stars",
+		"seed": Game.world_seed,
+		"path": _star_node.get_path(),
+		"parent_name": parent_name,
+		"eye_a": [eye_a.x, eye_a.y, eye_a.z],
+		"eye_b": [eye_b.x, eye_b.y, eye_b.z],
+		"star_pos_a": [star_pos_a.x, star_pos_a.y, star_pos_a.z],
+		"star_pos_b": [star_pos_b.x, star_pos_b.y, star_pos_b.z],
+		"star_rot_a": [_vl_r5(star_rot_a.x * 180.0 / PI), _vl_r5(star_rot_a.y * 180.0 / PI), _vl_r5(star_rot_a.z * 180.0 / PI)],
+		"star_rot_b": [_vl_r5(star_rot_b.x * 180.0 / PI), _vl_r5(star_rot_b.y * 180.0 / PI), _vl_r5(star_rot_b.z * 180.0 / PI)],
+		"yaw_delta_deg": 90.0,
+		"opacity_a": _vl_r5(opacity_a),
+		"count": count,
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+		"ok": ok,
+	})
 	get_tree().quit()
 
 
