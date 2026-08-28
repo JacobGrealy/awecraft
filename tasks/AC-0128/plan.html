@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0128 — Run-1 plan (night-darkness-sky-scale)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:24px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{background:#eef7ee;border-left:4px solid #2e8b2e;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.warn{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0128 — Run-1 plan: night-darkness-sky-scale</h1>
+<p class="meta">Run-1 (research/planner) · 2026-08-27 · static file research only — <b>zero godot runs</b> (every anchor below was read from the committed tree). All quoted constants verified verbatim this run.</p>
+
+<h2>1. Goal</h2>
+<p>Make night actually dark in the Godot port with <b>web parity</b>: the rendered brightness of baked vertex light must follow the web formula <code>0.12 + 0.88·max(uDay·sky, block) × faceShade</code> (index.html:736-746). A sky-lit cave cell renders 15-class at noon (uDay = 1 → factor 1.0) and lands on the 0.12 floor at midnight (uDay = 0); torch/block light (14/12/15) is UNSCALED — "torches stay bright at night" (index.html:737). Mechanism: <b>shader uniform <code>u_day</code></b> updated per frame from <code>DayNight.day(t)</code> (web :1349 parity), with a <b>mask-bit hybrid channel</b> repacking vColor (chosen design, §5).</p>
+
+<h2>2. Files to touch</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/world/chunk.gd</code></td><td>(a) vColor repack in every emit path: r = sky_part, g = blk_part, b = faceShade (web :736 layout), computed from the existing eff sample + a bake-time <b>mask</b> (§5.2); merge key <code>shade = fsh×clamp(eff/15, MIN_AMB, 1)</code> UNCHANGED. Sites: <code>_light_color</code> :221-224, <code>_emit_faces</code> :367-370, <code>_qwrite_merged</code> :407-409, <code>_emit_ro_merged</code> grid payload :510-516 (key stays cn[0]id/cn[1]fni/cn[2]shade — payload gains eff + mask), <code>_emit_xquad</code> :570-575, static mirrors <code>_s_emit_faces</code> :768, <code>_s_emit_ro_merged</code> :915, <code>_s_emit_xquad</code> :993. (b) Mask evidence: per-chunk Chebyshev-14 distance transform over glow sources {22,23,24} in own-chunk data (transient scratch, §5.2), consulted per face at the 5 sample cells. (c) Material swap: <code>_opaque_material</code> :1619 / <code>_cutout_material</code> :1634 / <code>_flower_material</code> :1641 / <code>_fluid_material</code> :1647 (the torch path — see §5.5) → unlit formula <code>ShaderMaterial</code>s (new files, §5.4), keeping each kind's existing cull/transparency behavior; keep the legacy lit <code>StandardMaterial3D</code> path as the no-atlas fallback (dev-only). (d) Vertex tint dropped when atlas present: sync-path <code>Data.block_tint</code> multiplications :370/:409/:573 guarded by <code>if not has_tex</code>; <code>make_ctx</code> :1146-1152 builds the ctx tint arrays as WHITE when <code>has_tex</code> (the emit-site multiplications :791-833/:1008/:1043-1045 then no-op, zero emit diff). (e) Static <code>_day_factor</code> + <code>set_day_factor()</code> so cached/new ShaderMaterials always carry the current uniform.</td></tr>
+<tr><td><code>godot/world/chunk_lit.gdshader</code> + 3 sibling shader files (NEW)</td><td>Unlit spatial shaders, one per material kind (opaque cull_back; cutout cull_back+<code>discard</code>&lt;0.5; flower cull_disabled+discard; torch/blend cull_back+<code>ALPHA=0.62*tex.a</code> preserving the current 0.62 look), all with the exact web formula fragment (§5.4) + <code>uniform float u_day</code>.</td></tr>
+<tr><td><code>godot/autoload/data.gd</code></td><td><code>_ready</code> :177-181: bake the classic tints into the atlas <b>image</b> once at load (mirrors web :629-630 <code>applyNeutralTint</code> placement): multiply the pixels of tile rects id 1 "top" (TINT_GRASS_TOP :36), id 7 all faces (TINT_LEAVES :37), id 5 all faces (TINT_WATER :38) → <code>atlas_tex</code> = tinted <code>ImageTexture</code>. Godot's existing MULTIPLY math is preserved exactly — relocated, not re-derived (do NOT adopt the web's average-scale normalization; that would shift colors).</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>(a) <code>_update_sky</code> :1454: one line — <code>Chunk.set_day_factor(DayNight.day(Game.time_of_day))</code> (web :3222 per-frame parity). (b) <code>nightday</code> probe: dispatch next to :855-856 (<code>AWECRAFT_LOGIC=nightday</code>, env-gated, default off) + <code>_nightday_test()</code> + <code>_nd_settle()</code> mirroring the AC-0129 lightaudit probe (:3572-3693, steady settle = all r4 chunks mesh_built + light/threadmesh/col queues idle ×5 quiet frames). RESULT shape §6.1.</td></tr>
+<tr><td><code>tasks/AC-0128/</code></td><td>This plan, continuity.md RUN 1, Run-2 results.html + midnight/noon PNGs, probe logs to <code>.scratch/AC-0128/</code>.</td></tr>
+<tr><td>NOT touched (fences)</td><td><code>index.html</code> (frozen); <code>godot/world/lighting.gd</code> (kernel frozen — the mask is derived at BAKE from data+eff+strips; no light-time change, so AC-0129 strip injection/E2 and battery arms 14/15/0/9 stay byte-exact); <code>generator.gd</code> (genhash 25/25); world.gd eff-cache (:141-143, EFF_CACHE_CAP 128, combined-only — untouched); TASKS.yaml; no git in Run-2.</td></tr>
+</table>
+
+<h2>3. Frozen spec references (verbatim)</h2>
+<h3>3.1 Web (index.html, frozen) — the parity target</h3>
+<pre>// :736
+// unlit materials: all lighting is baked per-vertex (vColor = (skyLevel, blockLevel, faceShade))
+// :737
+// fragment composes brightness = 0.12 + 0.88*max(uDay*sky, block) — torches stay bright at night
+// :738
+const litUniforms={value:1};
+// :740 (litMaterial base)
+const m=new THREE.MeshBasicMaterial(Object.assign({map:atlasTex,vertexColors:true,side:THREE.DoubleSide},opts||{}));
+// :742
+sh.uniforms.uDay=litUniforms;
+// :746 (the formula)
+'diffuseColor.rgb *= (0.12+0.88*max(uDay*vColor.x,vColor.y))*vColor.z;'
+// :1147-1148 (cross bake)
+const l=lightAt(wx,y,wz);
+const cr=[l[0]/15,l[1]/15,0.9];
+// :1165-1166 (thin/torch bake)
+const l=lightAt(wx,y,wz);
+const cr=[l[0]/15,l[1]/15,1];
+// :1195-1196 / :1214-1215 / :1230-1231 (fluid top/side/bottom bakes)
+const l=lightAt(wx,y+1,wz);   const cr=[l[0]/15,l[1]/15,0.95];
+const l=lightAt(nbx,y,nbz);   const cr=[l[0]/15,l[1]/15,0.85];
+const l=lightAt(wx,y-1,wz);   const cr=[l[0]/15,l[1]/15,0.6];
+// :1256-1267 (solid face: opposite cell + 3 axis probes, per-channel max)
+const l=lightAt(wx+F.n[0],y+F.n[1],wz+F.n[2]);
+ls=l[0];lb=l[1];
+for(let a=0;a&lt;3;a++){ ... l1=lightAt(±1 probe); if(l1[0]&gt;ls)ls=l1[0];if(l1[1]&gt;lb)lb=l1[1]; }
+const cr=[ls/15,lb/15,0.5+0.5*F.sh];
+// :1333
+function sunElevation(){return Math.sin((time-0.25)*Math.PI*2)}
+// :1335-1338
+time=(time+dt/CFG.DAY_LEN)%1;
+const el=sunElevation();
+const day=THREE.MathUtils.clamp((el+0.12)/0.35,0,1);
+sun.intensity=0.1+day*0.95;
+// :1341-1349
+ambient.intensity=0.25+day*0.4;
+skyColor.copy(nightC).lerp(dayC,day);
+const dusk=THREE.MathUtils.clamp(1-Math.abs(el)/0.25,0,1);
+skyColor.lerp(duskC,dusk*0.45);
+window.__stars.material.opacity=1-day;
+isNight=el&lt;-0.08;
+dayFactor=world&amp;&amp;world.type==='nether'?0.5:day;
+// :3217-3222 (per-frame uniform update, play/pause/dead)
+if(world&amp;&amp;(state==='play'||state==='pause'||state==='dead')){
+  updateSky(dt); ... litUniforms.value=dayFactor;
+}
+// :107
+DAY_LEN: 600,
+// :629-630 (web bakes classic tints into the atlas image at load)
+// modern vanilla ships grayscale grass/leaves/water + in-game biome tints; bake classic colors
+const NEUTRAL_TINTS={'0':[93,178,55],'5':[47,107,235],'8':[60,140,48]}; // grass top, water, oak leaves
+// :1110-1116 (FACES sh) — 0.8, 0.8, 1.0, 0.55, 0.65, 0.65</pre>
+<p class="note">Web terrain is UNLIT (<code>MeshBasicMaterial</code> :740) — the scene sun/ambient (:1338/:1341) light the scene, not the terrain; the terrain brightness is entirely the vertex formula. The web's solid faceShade is <code>0.5+0.5*F.sh</code> (:1267); Godot uses <code>fsh</code> directly (core/math.gd:3-10 sh = 0.8/0.8/1.0/0.5/0.8/0.8) — a pre-existing face-shade divergence, OUT OF SCOPE (this task wraps the existing fsh, it does not re-tune it).</p>
+<h3>3.2 Godot current state (the gap) — verbatim anchors</h3>
+<pre>chunk.gd:5        const MIN_AMB := 0.08
+chunk.gd:182-201  _face_light(...): opposite cell + 4 side probes, v=max over _effl, returns
+                 clampf(float(v)/15.0, MIN_AMB, 1.0)          (:201)
+chunk.gd:221-224  _light_color(shade, face_color, has_tex) → has_tex ? Color(shade,shade,shade,1.0)
+                 : face_color*shade                            ← COMBINED eff grayscale, ×tint
+chunk.gd:367-370  shade = fsh[fi] * _face_light(...); c = _light_color(...); if has_tex: c *= Data.block_tint(id, face_name)
+chunk.gd:510-512  merged grid entry [id, fni, shade, u0, v0, plane]  (key compares cn[0]/cn[1]/cn[2] at :536/:547)
+chunk.gd:570-575  xquad s = clampf(_effl(...)/15.0, MIN_AMB, 1.0) * 0.9
+chunk.gd:1051/1062/1068  fluid emit: Color(0.95/0.85/0.6, ...) * tint — NO eff at all (web :1196/:1215/:1231
+                 bake lightAt — pre-existing fluid-light gap, documented, out of scope)
+chunk.gd:1619-1656  materials = StandardMaterial3D, vertex_color_use_as_albedo=true, LIT PBR,
+                 roughness 0.95/0.15; cutout = ALPHA_SCISSOR 0.5; flower = cull_disabled;
+                 "fluid" kind = TRANSPARENCY_ALPHA albedo_color (1,1,1,0.62)  ← TORCHES render here
+chunk.gd:1659-1663  water/lava quads → Data.fluid_anim_mats (fluid_anim.gdshader, lit spatial)
+core/fluid_anim.gdshader:22-23  ALBEDO = tex.rgb * COLOR.rgb;  ALPHA = alpha_scale * tex.a;  (alpha_scale 0.62)
+core/daynight.gd:27-32  elevation(t) = sin((t-0.25)*TAU);  day(t) = clampf((elevation(t)+0.12)/0.35,0,1)
+core/daynight.gd:39-44  sun_energy = 0.1 + day*0.95;  ambient_energy = 0.25 + day*0.4
+core/daynight.gd:47-50  sky_color mirrors web :1342-1344; :35-36 is_night el&lt;-0.08; :4 DAY_LEN 600
+core/math.gd:3-10   FACES sh 0.8/0.8/1.0/0.5/0.8/0.8
+core/aero.gd:12-13  TONE_MAPPER_ACES, EXPOSURE 0.85 (aero default-ON via :48-49 — existing global post,
+                 applies to everything, probe is raster-independent); SUN/AMBIENT_BOOST = 1.0 (:14-15)
+scenes/main.gd:67-69   AWECRAFT_TIME → Game.time_of_day = fmod(time_env,1.0)
+scenes/main.gd:1424    Game.time_of_day advances per frame (DAY_LEN); :1454-1469 _update_sky (sun/ambient/sky/fog)
+scenes/main.gd:3572-3693  AC-0129 lightaudit probe: _la_settle (5 quiet frames, all r4 built + queues idle),
+                 last_eff["arr"] scans, deterministic torch tunnel (_la_tunnel :3696+), Debug.result + quit
+lighting.gd:300-334    compute_light_flat_chunk_pull: column scan builds sky[] and blk[] SEPARATELY (:309-324),
+                 combines eff[i]=s if s&gt;=b2 else b2 (:327-330), ONE combined flood (:331) + blk-strip
+                 injection (:332-333); returns {"mn","w","d","arr":eff,"blk_src"} — sky/blk DROPPED
+lighting.gd:29-48      _tables: _att (opaque 0; air/torch/cross 1; water/lava 3), _glow (22→14, 23→12, 24→15)
+world.gd:141-143,1134-1160  _eff_cache (EFF_CACHE_CAP 128) stores COMBINED eff only:
+                 {"data":data.duplicate(),"eff":eff,"ngen":ngen}
+world.gd:975-1042      _side_blk_strip: source EXACT (22→14/23→12/24→15) &gt; max(eff_n above sky, sky_n)
+                 — strips DO carry block-source evidence (D1)
+world.gd:1065-1099     _eff_landed E2 boundary re-enqueue (AWECRAFT_E2=off kill)
+autoload/data.gd:170   22: {"name": "Torch", ..., "light": 14, ...}   ← cross:true AND thin:true
+autoload/data.gd:171   23: {"name": "Glowstone", ..., "light": 12, ...}
+autoload/data.gd:172   24: {"name": "Lava", ..., "light": 15, ...}
+autoload/data.gd:36-38 TINT_GRASS_TOP (93/255,178/255,55/255) / TINT_LEAVES (60,140,48)/255 / TINT_WATER (47,107,235)/255
+autoload/data.gd:265-272  block_tint(id,face): id1 top→grass, id7→leaves, id5→water, else WHITE
+autoload/data.gd:177-181 _ready: atlas_tex = load("res://assets/blocks_atlas.png")  (file EXISTS)
+world/chunk.gd:1242-1245  dispatch: if xtab&gt;0: if ttab&gt;0: _s_faces(rc_o…) ELSE rq…  → TORCH → rc_o →
+                 "ac" acc → "fluid" material (:1504)  (only cross+thin block = 22; rose/dandelion → rq/flower)
+world/generator.gd:17,269  B_LAVA 24 is the ONLY natural light source (lava pools y&lt;8); no natural torch/glowstone
+grep "nether" godot/**/*.gd → ZERO hits (no nether world exists in Godot)</pre>
+<div class="warn"><b>Why night is not dark today (root cause, confirmed):</b> the vertex color is a single combined-eff grayscale <code>(s×tint, s×tint, s×tint)</code> (chunk.gd:221/:367-370) and the material is <b>LIT</b> StandardMaterial3D (chunk.gd:1619) — so a cave cell with eff 15 stays at 15-class baked value at midnight and is floored by <code>ambient_energy 0.25</code> (daynight.gd:43) → night ≥ ~3.75-class + sun 0.1, vs the web's 0.12 floor. Double-dim by day (baked eff × scene light) and wrong floor by night. Both are fixed by switching the terrain material to the web's UNLIT formula path.</div>
+
+<h2>4. Data.* ids (binding, verified)</h2>
+<table><tr><th>id</th><th>name</th><th>light</th><th>note</th></tr>
+<tr><td>22</td><td>Torch</td><td>14</td><td>cross+thin → "ac"/"fluid" material path (chunk.gd:1243/:1504); battery <code>torch_level</code> 14 EXACT (light_at path, untouched)</td></tr>
+<tr><td>23</td><td>Glowstone</td><td>12</td><td>solid; placeable only (no natural spawn)</td></tr>
+<tr><td>24</td><td>Lava</td><td>15</td><td>fluid path (chunk.gd:1228-1240); the only NATURAL source (generator.gd:269 y&lt;8 pools)</td></tr>
+<tr><td>5</td><td>Water</td><td>0</td><td>fluid path; _att 3 (absorbing)</td></tr>
+<tr><td>1 / 7</td><td>Grass / Leaves</td><td>0</td><td>tinted (data.gd:36-37 → atlas at load per §2)</td></tr>
+<tr><td colspan="4" class="note">World: CHUNK 16 (data.gd:3), HEIGHT 80 (:4), SEA 30 (:5), ATLAS_PX 1024.0 (:33), TILE_PX 32 (:34). Spawn 8/8/34 (generator.gd:24-26). Default seed 44 (HARNESS genhash anchor).</td></tr>
+</table>
+
+<h2>5. THE RESOLUTION</h2>
+<h3>5.1 Chosen design — mask-bit hybrid + unlit shader uniform (web parity)</h3>
+<p>vColor is repacked to the <b>exact web layout</b> (index.html:736): <code>r = sky_part</code>, <code>a</code> stays 1.0 — i.e.</p>
+<pre>r = mask ? 0.0 : s        g = mask ? s : 0.0        b = fsh[fi]        (s = clampf(eff/15, MIN_AMB, 1.0), the EXISTING scalar)
+xquad (flower) b = 0.9 (web :1148); torch/thin via fsh[fi] (Godot shape, existing)
+shader fragment (each new .gdshader):
+  vec4 tex = texture(atlas, UV);
+  float L = 0.12 + 0.88 * max(u_day * COLOR.r, COLOR.g);
+  ALBEDO = tex.rgb * COLOR.b * L;   (torch variant: ALPHA = 0.62 * tex.a)</pre>
+<p><b>u_day</b> = <code>DayNight.day(Game.time_of_day)</code>, set per frame in <code>_update_sky</code> (main.gd:1454) onto the 4 cached ShaderMaterials (<code>Chunk.set_day_factor</code>, web :3222 parity). The eff SAMPLES are byte-identical to today (<code>_face_light</code> :182-201, 20×20 bake box, AC-0129 strips) — only the COLOR packing, the material model, and the atlas tint location change. Merge key unchanged → mesh/vertices unchanged → <b>MINFO byte-identical</b> (§6.2).</p>
+<h3>5.2 Mask rule (bake-time, from data + eff — no light-time change)</h3>
+<pre>per chunk build: sources = {cells in own-chunk data with id ∈ {22,23,24}}
+  evidence = Chebyshev distance transform (3 separable 2-pass sweeps over 16×16×80, µs-class)
+mask(face) = (eff15 &gt; 0) AND (evidence[d] ≤ 14 for ANY of the face's 5 light-sample cells d)
+  — distance-14 ball = block light's exact reach (15 − attenuation; battery torch_far_after 9 = 14−5·… consistent with the flood's attenuation table lighting.gd:29-48)</pre>
+<p><b>Why not the naive <code>mask = (eff &gt; sky_column_scan)</code>:</b> the data-only column scan under-estimates flooded sky at cave MOUTHS (AC-0129 D1 — sky floods in laterally); a mouth cell with sky-derived eff 15 and a lava pool 14 away in-chunk would get mask=1 and render bright at night. The evidence-conjunction keeps mask=1 only when a real source can explain the eff. <b>Own-chunk-only evidence</b> (side-neighbor data is NOT in the worker dispatch — chunk.gd:1233-1249 dispatch carries diagonals only) keeps the dispatch/memory frozen; the cross-boundary gap (a source ≤14 in a side neighbor) is quantified by the probe's <code>darkside_candidates</code> count and, if significant, is Run-2's documented fallback (4×20480 B TRANSIENT per dispatch — still inside the memory fence; NOT the default).</p>
+<h3>5.3 Exactness argument (eff = max(sky, blk) — the pull kernel's own combination, lighting.gd:327-330)</h3>
+<ul>
+<li><b>Noon (uDay = 1):</b> L = 0.12 + 0.88·max(sky_part, blk_part) = 0.12 + 0.88·s — mask-independent. Every cell renders exactly the web's noon value for the same eff. Geometry/merge unchanged → MINFO byte-identical, genhash 25/25, battery exact.</li>
+<li><b>Night, mask = 1:</b> L = 0.12 + 0.88·blk_part = 0.12 + 0.88·s, uDay-INDEPENDENT → torch day == night EXACT (gate G1). Where eff is block-derived (blk = eff) this is the web value EXACTLY. Where eff is sky-derived but a source exists within 14 (mouth cells, open lava-adjacent sky: eff 15 = sky and the source's own 15), it renders s instead of the web's 0 — <b>over-bright by construction, never under</b> (L_mask1 ≥ L_web always at night). Counted by the probe (<code>mouth_bright_cells</code>), accepted as documented one-sided error.</li>
+<li><b>Night, mask = 0:</b> L = 0.12 + 0.88·uDay·s. EXACT when blk = 0 (sky-only cells — surface cells, the probe's cave cell). Under-bright ONLY when blk &gt; 0 but no own-chunk source within 14 (cross-boundary source) — the <code>darkside_candidates</code> count. Natural r4 world: the only natural source is lava (generator.gd:269), so exposure is bounded by lava-pool proximity to chunk boundaries.</li>
+<li>Tie cells (sky == blk): inexact by ≤0 in the max (0-difference) — exact.</li>
+</ul>
+<h3>5.4 Rejected options</h3>
+<ul>
+<li><b>(i) Full sky/block channel split (r=sky, g=blk, true values):</b> requires true post-flood sky AND blk per build. The pull kernel computes them separately then DROPS them (lighting.gd:300-334); the AC-0129 eff cache (world.gd:141-143, cap 128) stores combined-only. Options: second flood pass per light compute (extra boundary cost on the path AC-0131 is recovering), or +2.5 MB skyf per 128-cache entry (r50 141.7 → ~144.2 — inside the 140.6–146.9 band but ~80% of the headroom + cache code changes + the eff==skyf tie still needs blk for the lava-open case). Strictly more cost and memory for the same one-sided caveats as §5.3. REJECTED.</li>
+<li><b>(iii) Scale the whole combined eff by a dayFactor curve:</b> dims torches/lava at night — violates the binding "BLOCK channel UNSCALED" parity (index.html:737). The shader cannot recover per-vertex block-ness from a grayscale channel. REJECTED.</li>
+<li><b>Keep lit StandardMaterial3D + <code>shader_parameter</code> hooks:</b> the engine PBR lighting (sun×NdotL + ambient) cannot express <code>0.12+0.88·max(uDay·sky, blk)</code> as a per-vertex multiplier of the lit result; the 0.12 floor and the uDay-scaled max are non-separable from PBR. REJECTED — hence the unlit shader swap (which is also what the web does: MeshBasicMaterial, :740).</li>
+</ul>
+<h3>5.5 dayFactor mapping</h3>
+<p><code>DayNight.day(t)</code> (daynight.gd:31-32: <code>clampf((elevation(t)+0.12)/0.35,0,1)</code>, elevation :27-28 <code>sin((t-0.25)*TAU)</code>) is the byte-for-byte port of web :1333/:1337 (same sin form, same 0.12/0.35 constants; DAY_LEN 600 = web :107). <code>AWECRAFT_TIME=0.5</code> → el = 1 → uDay = 1.0 (noon); <code>AWECRAFT_TIME=0.0</code> (or 1.0) → el = −1 → uDay = 0.0 (midnight, satisfies the probe's "uDay ≤ 0.1"). The web's nether branch (<code>world.type==='nether'?0.5</code>, :1349) is DROPPED — <code>grep "nether" godot/**/*.gd</code> returns zero hits (no nether world in Godot); noted in results, no dead code added.</p>
+<h3>5.6 DayNight interaction verdict</h3>
+<p>Godot's DayNight already mirrors web :1338-1348 exactly (sun 0.1+0.95·day :39-40, ambient 0.25+0.4·day :43-44, sky lerp :47-50, is_night :35-36) — it drives the SCENE (sky, fog, sun, aero dome). The web's terrain is unlit, so those scene values never touch terrain brightness; Godot's terrain is currently LIT → today's night floor is ambient 0.25 (≥3.75-class), the user-visible bug. Switching the 4 terrain materials to the unlit formula COMPLETES parity (terrain brightness = the web formula only) and does NOT double-dim: at noon uDay=1 the formula returns ≥0.88·eff — brighter than the old lit path (engine lighting &lt;1), at night it floors at 0.12 — darker than the old ambient floor. That is the intended, spec-mandated change. DayNight itself is untouched (scope = vertex-light scaling only). Note: aero's ACES tonemap/exposure 0.85 (aero.gd:12-13, default-ON) remaps final display for everything — pre-existing, probe is raster-independent.</p>
+<h3>5.7 Torch path detail (found this run)</h3>
+<p>Torch (id 22) is the ONLY cross+thin block (data.gd:170) → dispatch chunk.gd:1243-1245 routes it to <code>rc_o</code> → "ac" acc → <b>"fluid" material</b> (_assemble_slab :1504), currently a lit, 0.62-alpha-blended StandardMaterial3D. Therefore the "fluid"-kind material MUST also take the unlit formula (else torches dim at night → G1 torch-gate fails). Its 0.62 blend + cull behavior are PRESERVED in the new shader (look unchanged except the day/night formula); web-parity alpha (scissor 0.5, DoubleSide) is noted but NOT adopted (out of scope). Godot's torch renders full 6-face quads (web :1163-1185 is a 1/8-thin stick) — pre-existing shape divergence, out of scope, noted.</p>
+<h3>5.8 Tint relocation (vertex → atlas image)</h3>
+<p>The new vColor has no free channel for tint (r/g/b are sky/blk/fsh; a = 1.0). The product must stay color-identical: multiply the tinted tiles into the atlas IMAGE at load (data.gd _ready :177-181 — tiles: id 1 "top", id 7 ×3, id 5 ×3 via <code>Data.block_rect</code>) and make the vertex tint a no-op (make_ctx :1146-1152 → WHITE when has_tex; sync-path :370/:409/:573 guarded <code>if not has_tex</code>). Same multiply math, relocated — the noon colors are unchanged. The fluid-anim material reads the same shared atlas → water/lava tiles arrive pre-tinted and the (now white) ctx tint no-ops → product identical. The merge atlas (chunk.gd:47, extended height 1760) copies tiles from the source atlas → inherits the tint automatically. Item atlas / held mesh untouched. No-atlas fallback (dev-only, <code>Data.atlas_tex == null</code>) keeps the legacy lit materials + vertex tint — byte-identical to today in that mode.</p>
+
+<h2>6. Harness gates (tightened)</h2>
+<h3>6.1 G1 — nightday probe (probe-first, <code>AWECRAFT_LOGIC=nightday</code>, env-gated, default off)</h3>
+<pre>boot r4 world (recenter to spawn, mirror main.gd:3608) → _nd_settle(60000) (mirror _la_settle :3572-3593:
+  all r4 chunks mesh_built + light_dirty/light_pending/threadmesh_inflight/_col_pending idle ×5)
+CAVE cell: deterministic first scan (cx,cz ascending in [-rr..rr]², y descending, lz,lx ascending) of built
+  chunks for: id==0 AND last_eff["arr"][i] == 15 AND own column closed (opaque above in own data)
+  AND no id 22/23/24 within Chebyshev 14 in own-chunk data (guarantees mask=0, sky-derived eff)
+TORCH cell: mirror _la_tunnel (:3696+): first air cell with eff==0 (darkness pre-check) →
+  world.set_block(x,y,z,22) → settle again → read eff (expect 14)
+MOUTH cell (informational): first cell eff≥10, closed column, evidence=true → documents §5.3 over-bright
+TIME: Game.time_of_day = 0.5 → _update_sky() → read ACTUAL u_day (from the chunk ShaderMaterial) +
+  DayNight.day(0.5) = uDay_noon; then 0.0 → uDay_midnight (≤ 0.1 per spec)
+BREAD: read ACTUAL baked vColor — walk the probe chunk's slab mesh surfaces
+  (surface_get_arrays, Mesh.ARRAY_COLOR/ARRAY_VERTEX) at the face vertices of the cave cell / torch cell /
+  mouth cell; report r (sky_read), g (blk_read), b (shade_read) + recomputed expected from last_eff +
+  mask rule + fsh (mesh-read must match recompute)
+RESULT: {"mode":"nightday","seed":N,"mechanism":"post-unlit-shader"|"pre-lit-std",
+  "uDay_noon":1.0,"uDay_midnight":0.0,
+  "cave":{"pos":[x,y,z],"eff":15,"sky_read":..,"blk_read":..,"shade_read":..,"day":..,"night":..},
+  "torch":{"pos":[x,y,z],"eff":14,"sky_read":..,"blk_read":..,"shade_read":..,"day":..,"night":..},
+  "mouth":{"pos":[x,y,z],"eff":..,"day":..,"night":..},
+  "counts":{"closed_col_cells":N,"evidence_cells":N,"darkside_candidates":N,"mouth_bright_cells":N},
+  "ac_nonempty":false,"ok":..}
+where day/night = 0.12 + 0.88·max(uDay·sky_read, blk_read)  (the web :746 formula on REAL values)
+PASS = mechanism=="post-unlit-shader" AND cave.day ≥ 0.94 (15-class at eff 15 → 1.0) AND
+       cave.night &lt; 0.333 (5/15; at uDay 0 → 0.12; at uDay 0.1 → 0.208) AND
+       torch.day == torch.night (EXACT, both 0.12+0.88·14/15 = 0.94133) AND torch.day ≥ 0.9 AND
+       ac_nonempty == false
+PRE (pre-fix tree): mechanism="pre-lit-std", day/night = null, reports baked eff (15, time-independent) +
+  material class + scene light inputs at midnight (sun 0.1, ambient 0.25 → ≥3.75-class floor = THE BUG),
+  ok=false — a real A/B (the probe file lands BEFORE the fix and must run green-on-shape pre-fix)</pre>
+<h3>6.2 G2 — MINFO</h3>
+<p>Expectation: <b>byte-identical to the post-AC-0129 anchor</b> (<code>.scratch/AC-0129-gates/gate_minfo.txt</code>: total 195868 / 121 lines) — the merge key (id/fni/<code>shade = fsh×clamp(eff/15, MIN_AMB, 1)</code>) and face set are UNCHANGED; MINFO counts vertices/aabb per chunk (world.gd:1682+), it never sees color bytes. If the packing somehow forces a merge-key or face-set change → the spec's F2-class documented reshuffle applies (same face set, genhash untouched, per-chunk delta recorded) — but that is the fallback signature, not the expectation.</p>
+<h3>6.3 G3 — boundary r4</h3>
+<p class="warn">Spec floor (p95 ≤ 65, fwd ≤ 3500) predates AC-0129's documented deviation. Binding criterion on the AC-0129 tree: <b>no WORSE than the AC-0129 baseline — walk p95 ≤ 85/83, fwd ≤ 4019/4437</b>, first10 = 10, irb = 81, flap = 0 (AC-0131 owns recovery of the pre-AC-0129 floors). AC-0128 adds per-build µs-class work (distance transform) and NO new light passes → expected neutral; the mask adds zero dispatch bytes.</p>
+<h3>6.4 G4 — r50 RECPROBE + memory fence</h3>
+<p>RECSLICE r50 ≤ 12.2 (current 10.0) and r50 mem band 140.6–146.9 (current 141.7). Memory argument: <b>no new persistent per-chunk state</b> — the mask reuses existing vColor bytes (a stays 1.0), the evidence transform is transient per-build scratch, the eff cache (128 entries, combined-only) is untouched, <code>u_day</code> is 4 shader floats, the tinted atlas is in-place on the already-loaded Image (~0 B delta). Expected in-band.</p>
+<h3>6.5 G5/G6 — flake ×4 + Windows build + daemon curls</h3>
+<p>Smoke battery 5 arms EXACT (light 15/0/14/0/9; interact 2/true/true; player 2.82/36.43/floor; fluids 2730/2730 + 1406/1406, [5,7]/[5,8], 25/9; buckets [5,8]/[5,8]) — <code>compute_light_split</code>/<code>light_at</code> untouched, light mode reads the kernel not the mesh → exact. genhash 25/25 (world data frozen). <code>./build_windows.sh</code> + 8080/5180 curls (coordinator, heavy tier).</p>
+<h3>6.6 G7 — render (≤1, the right one)</h3>
+<p>One <b>MIDNIGHT</b> render: <code>AWECRAFT_TIME=0.0</code> (uDay = 0), R=1, <code>xvfb-run -a ~/tools/godot/godot --path godot --rendering-method gl_compatibility</code> + <code>AWECRAFT_SNAPSHOT=tasks/AC-0128/night.png</code> — visible deliverable: sky-lit surfaces at the ~0.12 floor, cave dark, torch bright, night sky + stars. Noon A/B render (<code>AWECRAFT_TIME=0.5</code>) optional if cheap — documents the intended lit→unlit noon model change.</p>
+<h3>6.7 Run-2 verify tier (per HEAVY-GATE PIPELINE)</h3>
+<p>Run-2 (subagent, medium): probe file FIRST (PRE run, mechanism=pre-lit-std, ok=false, honest A/B) → fix → POST run (ok=true) → G0 (--headless --quit, zero SCRIPT ERROR) → SMOKE battery (light + fluids + genhash, world-scope) → ≤1 render (the midnight one). Heavy gates (boundary r4, flake ×4, r50, MINFO vs anchor, build+curls) = coordinator background job. One godot at a time; check <code>ps -eo pid,comm,args | grep -E '^\s*[0-9]+ (godot|Xvfb)'</code> before every call; <code>.scratch/AC-0129-gates/HEAVY_GATES_DONE</code> must exist (it does).</p>
+
+<h2>7. Risks / edge cases</h2>
+<table>
+<tr><th>risk</th><th>mitigation / disposition</th></tr>
+<tr><td>Midnight render shows wrong brightness (tonemap, gamma)</td><td>Probe computes the formula on real baked values (raster-independent); aero ACES + exposure 0.85 (aero.gd:12-13) remap ALL output pre-existing — visual check is "dark vs bright", not absolute values</td></tr>
+<tr><td>Tint relocation double-tints or drops a tint</td><td>Single source of truth: atlas image (data.gd) × WHITE ctx tint; no-atlas fallback keeps legacy vertex tint; noon A/B render + MINFO aabb identity catch regressions; <code>ac_nonempty</code> probe field asserts the torch path</td></tr>
+<tr><td>Mouth / lava-adjacent sky cells over-bright at night (§5.3, one-sided)</td><td>Probe <code>mouth_bright_cells</code> + <code>mouth</code> cell reported; never darker than web; documented in results</td></tr>
+<tr><td>Cross-boundary source → dark-side cells at night</td><td>Probe <code>darkside_candidates</code> count; natural world = lava-only exposure; if significant → documented fallback (transient side-neighbor data in dispatch, +81920 B per dispatch, still fence-legal) as follow-up, NOT in this task</td></tr>
+<tr><td>Merged quad spanning eff 0..1 (both clamp to MIN_AMB)</td><td>Quad takes s = 0.08 for all its faces (uniform); web would give 0.12/0.1787 vs Godot 0.1904 — ≤0.012 absolute on near-floor cells, documented, keeps MINFO byte-identical (the alternative — eff in the merge key — breaks the MINFO signature)</td></tr>
+<tr><td>Boundary p95 regression beyond the AC-0129 baseline</td><td>Design adds no light passes and no dispatch bytes; if the one-shot boundary self-check shows worse → honest deviation + follow-up + exit (pipeline rule), no same-session loop</td></tr>
+<tr><td>u_day stale on first frame / after material cache rebuild (texture swap)</td><td><code>set_day_factor</code> stores a static <code>_day_factor</code>; <code>_get_mat</code> cache-miss path applies the stored value on creation (chunk.gd:62-83 pattern); refresh_textures (data.gd:210-214) rebuild path must re-apply — listed for Run-2</td></tr>
+<tr><td>Probe cell not found (no eff==15 closed-column cave cell in the r4 world)</td><td>Probe degrades honestly: report <code>cave:null</code> + scan stats + ok=false (never fabricate); the deterministic scan over 81 chunks × 80 heights is large — natural caves exist (AC-0129 lightaudit found cave eff cells)</td></tr>
+<tr><td>Time advance during probe (main.gd:1424 per frame)</td><td>Probe sets <code>Game.time_of_day</code> immediately before each read (pattern of _daynight_test :1478-1504); drift between set and read &lt;1 frame ≈ 0.000027 → uDay delta ≈ 0; RESULT reports the ACTUAL read uniform, so any drift is visible</td></tr>
+<tr><td>Water/lava surface brightness at night (fluid_anim shader stays lit)</td><td>Pre-existing gap (web bakes lightAt into fluid quads :1196/:1215/:1231; Godot :1051-1069 bakes constant 0.95/0.85/0.6 + scene light). OUT OF SCOPE — documented; lava glow at night actually benefits (lit by scene sun/ambient); follow-up candidate if the midnight render shows it wrong</td></tr>
+</table>
+<p class="note">Plan authored by Run-1 (static research, 0 godot runs). All file:line anchors verified against the committed tree 2026-08-27.</p>
+</body></html>

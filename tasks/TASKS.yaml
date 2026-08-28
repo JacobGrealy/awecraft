@@ -1,9 +1,8 @@
 meta:
-  updated_at: 2026-08-27T20:08
+  updated_at: 2026-08-28T01:50
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0128
 - AC-0035
 - AC-0132
 - AC-0109
@@ -848,7 +847,7 @@ intake:
   labels:
   - godot
   created_at: 2026-08-18T12:00
-  updated_at: 2026-08-27T17:38
+  updated_at: 2026-08-28T01:50
   completed_at: 2026-08-27T06:22
   waiting_on: null
   parent_id: null
@@ -891,6 +890,13 @@ intake:
       existing ones: boundary r4 walk p95 62-63→85/83, fwd 3022-3035→4019/4437 (E2 neighbor re-light wave + pull kernel on
       chunk crossings). Follow-up AC-0131 (walk-path-relight-cost-recovery) owns recovering the p95 ≤65 / fwd ≤3500 fence.
       AC-0034 stays open until AC-0131 + the AC-0079 D2 walk-frame recovery both land.'
+  - id: 7
+    created_at: 2026-08-28T01:50
+    updated_at: null
+    text: '[agent 2026-08-28 01:40] AC-0128 closed as-delivered adding a bounded deviation to the walk path: boundary r4 walk
+      p95 85/83 -> 92, fwd_p95 4019/4437 -> 4588 (same-machine control 3587). Same recovery as before: AC-0131 (walk-path-relight-cost-recovery)
+      must now recover AC-0129''s E2 wave AND AC-0128''s per-glow-chunk-bake flood cost (gate-confirmed numbers on the AC-0131
+      thread).'
 - id: AC-0035
   title: m5a2-light-bake
   source: agent
@@ -898,11 +904,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels:
   - godot
   created_at: 2026-08-16T12:00
-  updated_at: 2026-08-21T07:34
+  updated_at: 2026-08-27T22:12
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -3755,11 +3761,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-27T05:38
-  updated_at: 2026-08-27T16:47
-  completed_at: null
+  updated_at: 2026-08-28T01:50
+  completed_at: 2026-08-28T01:50
   waiting_on: null
   parent_id: null
   notes: 'Fix night not dark enough: lighting.gd sky 15 column is time-agnostic, eff=max(sky,block) baked at chunk.gd:1185
@@ -3826,7 +3832,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-27T17:37
-  updated_at: 2026-08-27T17:37
+  updated_at: 2026-08-28T01:50
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -3839,7 +3845,30 @@ intake:
     frame delta touches cells that can actually change eff (skip pure-sky-only frames); (3) budget/stagger E2 re-light passes
     on crossing frames. Gate: boundary r4 A/B (p95 ≤65, fwd ≤3500, 10/81/0) + lightaudit reproducible + battery EXACT + genhash
     25/25 + breakspike floors.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-27T23:36
+    updated_at: null
+    text: '[agent 2026-08-27 23:35] AC-0128 boundary gate data (for the recovery task): (1) AC-0129 baseline (clean): walk
+      p95 85/83, fwd_p95 4019/4437, per-crossing decays 4418->766. (2) AC-0128 tree gate: walk p95 104, fwd_p95 10902-11446
+      (2 runs; control A/B on dd070f3 in flight to confirm attribution). Root-cause candidate for the fwd regression: per-bake
+      _s_gdist chamfer mask sweep (chunk.gd:315, ~140k GDScript ops, called at :1498/:2042 on EVERY bake incl. E2 re-light
+      re-bakes) -> recovery options: transient gen-keyed cache (skip recompute when chunk data gen unchanged), or derive mask
+      from the blk-flood visited set in lighting.gd compute_light_flat_chunk_pull (exact, zero added cost). (3) SEPARATE AC-0128
+      deviation (independent of the perf recovery): own-chunk-only mask leaves 24401 darkside cells (cross-boundary block
+      sources, e.g. neighbor-chunk torches within 14 of a boundary) rendering dim at night vs the web''s torch-bright — mask
+      extension via blk-strip source evidence is the candidate; probe counts it (nightday darkside_candidates field).'
+  - id: 2
+    created_at: 2026-08-28T01:50
+    updated_at: null
+    text: '[agent 2026-08-28 01:40] AC-0128 CLOSED as-delivered (commit follows) — gate-confirmed deviation for the recovery
+      plan: boundary r4 walk p95 92 (max 117) / fwd_p95 4588 (max 4790) vs AC-0129 baseline 85/83 + 4019/4437 and same-machine
+      control 83 + 3587 (fwd +13-28%, walk +11%, no stall; RUN 2''s 3x + 11.4 s stall eliminated by the flood-visited mask).
+      Measured residual per crossing at r4: 8-12 self-computes (light_cache_hits 0, incl. E2 re-bakes), each glow-chunk bake
+      pays mask fill + blk flood + ring build (~45k GDScript ops). C-level candidate = AC-0125 plan (blk flood + mask + ring
+      as hot loops). AC-0128 also left the darkside 24401 issue RESOLVED by the fix (flood-visited is exact at the boundary;
+      residual 5168 = cross-boundary SKY leak over-count, correctly dark — not a block miss; drop the mask-extension follow-up
+      from this list).'
 - id: AC-0132
   title: torch-crafting-recipe
   source: user

@@ -156,7 +156,7 @@ static func compute_light_flat(box: Dictionary, world) -> Dictionary:
 		var c = world.chunks.get(world._key(mn.x / 16, mn.z / 16))
 		if c != null and not c.data.is_empty():
 			var s = world._strips_for(mn.x / 16, mn.z / 16)
-			return compute_light_flat_chunk_pull(c.data, mn.x / 16, mn.z / 16, h, s["eff"], s["blk"])
+			return compute_light_flat_chunk_pull(c.data, mn.x / 16, mn.z / 16, h, s["eff"], s["blk"], s["blk_b"])
 	var sz := w * d
 	var H: int = Data.HEIGHT
 	var ids := PackedByteArray()
@@ -297,7 +297,7 @@ static func compute_light_flat_chunk(data: PackedByteArray, cx: int, cz: int, h:
 # across the boundary; t = our z for E/W, our x for S/N); empty/short strip =
 # that side stays as its own flood left it. eff_strips rides along for the
 # caller's 20x20 bake box (unused here).
-static func compute_light_flat_chunk_pull(data: PackedByteArray, cx: int, cz: int, h: int, eff_strips: Array, blk_strips: Array) -> Dictionary:
+static func compute_light_flat_chunk_pull(data: PackedByteArray, cx: int, cz: int, h: int, eff_strips: Array, blk_strips: Array, blk_strips_b: Array) -> Dictionary:
 	var sz := 16 * 16
 	var ids := PackedByteArray()
 	ids.resize(sz * h)
@@ -331,7 +331,56 @@ static func compute_light_flat_chunk_pull(data: PackedByteArray, cx: int, cz: in
 	_flood_flat(eff, ids, 16, h, 16)
 	if _chunk_blk_inject(eff, ids, h, blk_strips):
 		_flood_flat(eff, ids, 16, h, 16)
-	return {"mn": Vector3i(cx * 16, 0, cz * 16), "w": 16, "d": 16, "arr": eff, "blk_src": has_glow}
+	# AC-0128 RUN 3: block-light VISITED mask (mask=1 iff the blk flood
+	# reached the cell — own glow sources + neighbor blk-strip injection,
+	# EXACTLY the seeds the eff got). Replaces the per-bake Chebyshev-14
+	# distance transform in chunk.gd: exact (no over-bright mouths — a
+	# walled-off source does not visit; cross-boundary sources DO visit via
+	# the strips — the dark-side miss is gone) and far cheaper (one seeded
+	# scan + small BFS vs 6 full-array sweeps). Transient: rides the light
+	# dict for the bake + bounded eff cache, freed after; materialized only
+	# when something actually lit (else a zero-filled buffer, C-level fill).
+	# The mask flood seeds on the BLOCK-ONLY strip companion (no sky floor):
+	# visited => block-derived. The eff strip above carries the sky floor
+	# (AC-0129) so the same values would over-mark sky-carry cells.
+	var blk_inj := false
+	if has_glow:
+		_flood_flat(blk, ids, 16, h, 16)
+	blk_inj = _chunk_blk_inject(blk, ids, h, blk_strips_b)
+	if blk_inj:
+		_flood_flat(blk, ids, 16, h, 16)
+	var mask := PackedByteArray()
+	mask.resize(sz * h)
+	var ring := PackedInt32Array()
+	if has_glow or blk_inj:
+		for i in range(sz * h):
+			mask[i] = 1 if blk[i] > 0 else 0
+		# AC-0128 RUN 3: the SPARSE boundary block-light RING - only the LIT
+		# boundary cells (pack: (side << 16) | (yy << 8) | level, yy = y*16+t,
+		# 4 sides x 16*h). The TRUE flooded block light at our own boundary
+		# columns (own sources + cross-boundary, transitive), persisted per
+		# chunk (a few hundred bytes for a lava chunk, 0 for a sky-only
+		# chunk - memory fence r50) and read by the neighbor's mask strip:
+		# the eff-derived "eff>sky" test cannot separate true block light
+		# from laterally-leaked sky in closed columns, so the neighbor reads
+		# our flooded values directly.
+		for y in range(h):
+			var row := y << 8
+			for t in range(16):
+				var yy := y * 16 + t
+				var lv0: int = blk[row | (t << 4) | 15]
+				if lv0 > 0:
+					ring.append((0 << 16) | (yy << 8) | lv0)
+				var lv1: int = blk[row | (t << 4)]
+				if lv1 > 0:
+					ring.append((1 << 16) | (yy << 8) | lv1)
+				var lv2: int = blk[row | (15 << 4) | t]
+				if lv2 > 0:
+					ring.append((2 << 16) | (yy << 8) | lv2)
+				var lv3: int = blk[row | t]
+				if lv3 > 0:
+					ring.append((3 << 16) | (yy << 8) | lv3)
+	return {"mn": Vector3i(cx * 16, 0, cz * 16), "w": 16, "d": 16, "arr": eff, "blk_src": has_glow, "mask": mask, "ring": ring}
 
 
 # AC-0129: the one boundary injection (per side [E,W,N,S]). UN-gated:

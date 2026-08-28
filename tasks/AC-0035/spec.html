@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0035 — spec (generated scaffold)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.auto{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.fill{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:10px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0035 — m5a2-light-bake</h1>
+<div class="auto"><b>AUTO (from TASKS.yaml — do not hand-edit)</b></div>
+<p class="meta"><b>id:</b> <code>AC-0035</code> · <b>status:</b> <code>in-progress</code> · <b>priority:</b> 2 · <b>source:</b> agent · <b>created:</b> 2026-08-16T12:00 · <b>parent:</b> —</p>
+<p class="note">Registry <code>notes</code> (verbatim, quoted):</p>
+<blockquote><pre>Bake per-voxel light into mesh vertex colors (Lighting from AC-0005 ready) + web uDay terrain uniform + stars. BUNDLED (user 2026-08-21, do after AC-0033+AC-0034): viewmodel lighting — held block/item/hand must darken with the light level at the player (caves/night). BUNDLED 2 (user 2026-08-21): the player should emit a small amount of light so it is never completely pitch black near them.</pre></blockquote>
+<h2>Goal</h2>
+<p><b>Complete the M5a2 light-bake bundle.</b> The per-voxel light bake + the web uDay terrain uniform are ALREADY IN the tree (AC-0129 combined-eff bake; AC-0128 unlit vColor (r=sky_part, g=blk_part, b=faceShade) + exact web :746 formula + per-frame <code>u_day</code>) — this task ships what remains: <b>(1)</b> the web night-sky <b>stars</b>; <b>(2)</b> <b>viewmodel lighting</b> — hand + held block/item darken with the light level at the player (user bundle, 2026-08-21); <b>(3)</b> a <b>small player light emission</b> so it is never pitch black near the player (user bundle 2, 2026-08-21 — user-directed, NOT in the web: documented deviation).</p>
+<h2>Frozen spec references</h2>
+<div class="auto"><b>AUTO (fixed boilerplate — do not hand-edit)</b></div>
+<ul>
+<li><code>index.html</code> — build <code>20260816-r12</code> (Three.js single-file) is the <b>source of truth for ALL behavior/data — do NOT modify</b>. The Godot port is faithful; when unsure, the web file wins.</li>
+<li>Minecraft wiki = canonical reference for tools/crafting/blocks, match exactly unless the user specifies otherwise: <a href="https://minecraft.wiki/w/Tool">Tool</a>, <a href="https://minecraft.wiki/w/Block">Block</a>, <a href="https://minecraft.wiki/w/Mining">Mining</a>, <a href="https://minecraft.wiki/w/Crafting_table">Crafting_table</a>, <a href="https://minecraft.wiki/w/Item">Item</a>.</li>
+</ul>
+<h2>Data.* world constants</h2>
+<div class="auto"><b>AUTO (paths only — regenerate with <code>python3 tasks/scripts/spec_template.py AC-NNNN --full</code> to inline the tables; values are parsed fresh at run time)</b></div>
+<ul>
+<li><code>godot/autoload/data.gd</code> — all <code>Data.B_*</code> block ids, items, tools, SEA/HEIGHT/CHUNK constants (grep <code>^const </code>).</li>
+<li><code>godot/world/generator.gd</code> — biome constants + <code>T_G_*</code> tool ids; biome thresholds are computed in <code>biome_at()</code> (t &lt; -0.25 snow; t &gt; 0.35 &amp; m &lt; 0.1 desert; m &gt; 0.25 forest; else plains).</li>
+</ul>
+<h2>Builder gates (Run-2, in-session)</h2>
+<div class="auto"><b>AUTO (tiered per tasks/HARNESS.md §3 — do not hand-edit)</b></div>
+<div class="auto"><b>G0</b> — <code>env HOME=/tmp/dsh_home godot --headless --path godot --quit</code> exits 0 with <b>zero</b> <code>SCRIPT ERROR</code> lines.</div>
+<div class="auto"><b>SMOKE</b> — one battery launch with the 2–4 dependency-mapped modes for this change area (HARNESS.md §3 table, e.g. world/* → <code>player;interact;light;fluids</code>) + the <code>genhash</code> arm (25/25) whenever <code>world/*</code> or <code>data.gd</code> is touched; ~30 s total. The task-specific probe mode (if this spec defines one, env-gated, headless ≤ 60 s) runs here too.</div>
+<div class="auto"><b>RENDER</b> — ≤ 1 render at <code>AWECRAFT_RADIUS=1</code> (xvfb, gl_compatibility), PNG under <code>tasks/AC-NNNN/</code>.</div>
+<div class="auto"><b>EXIT</b> — after G0+SMOKE(+probe)+≤1 render the builder writes results + continuity and EXITS. The heavy gates below are the coordinator&#39;s background job — the builder never runs them.</div>
+<div class="auto"><b>Sandbox env</b> — every godot call is ONE bash command that sets HOME first; <b>one godot at a time</b> (concurrent runs corrupt the <code>.godot</code> cache and hang). Scratch to project-local <code>.scratch/</code>.</div>
+<pre>export HOME=/tmp/dsh_home; mkdir -p $HOME; cd /home/angrygiant/github_projects/AweCraft</pre>
+<h2>Coordinator Heavy Gates (background bash/workflow, not builder, r50 nightly only)</h2>
+<div class="auto"><b>AUTO (HEAVY-GATE PIPELINE — the coordinator runs these as a background job (no LLM slot) after Run-2 exits; the builder NEVER runs them; commit/push only after they pass — do not hand-edit)</b></div>
+<ul>
+<li><b>boundary r4 ×1</b> + <b>perf r4</b> — ONLY when scope touches <code>godot/world/*</code> | <code>lighting.gd</code> (HARNESS.md §3 tier); UI/tool tasks: SMOKE only, no boundary/perf. (Was ×2, sliced 2026-08-27.)</li>
+<li><b>genhash</b> — independent re-run (25/25) whenever <code>world/*</code>/<code>data.gd</code> touched.</li>
+<li><b>flake ×1</b> — perf tier only (was ×4, sliced 2026-08-27).</li>
+<li><b>boundary r50 / perf r50 (RECSLICE)</b> — nightly batch only (NOT per task; was per-task).</li>
+<li><b>task-specific probe mode</b> — when this spec&#39;s Task-specific gates define one (the builder&#39;s SMOKE runs it; the gate job re-runs it fresh).</li>
+<li><b>windows build</b> — <code>./build_windows.sh</code> (XDG pattern) + 8080/5180 curls — every task.</li>
+</ul>
+<p class='note'>Log → <code>.scratch/AC-NNNN-gates/gates.log</code>; marker <code>.scratch/AC-NNNN-gates/HEAVY_GATES_DONE</code>. Full protocol: <code>AGENTS.md</code> HEAVY-GATE PIPELINE + <code>tasks/templates/two-phase.md</code>.</p>
+<h2>Expected RESULT shapes (default battery + genhash)</h2>
+<div class="auto"><b>AUTO (paths only — the RESULT shapes live in <code>tasks/HARNESS.md</code> §1; inline them with <code>--full</code>)</b></div>
+<ul>
+<li>Battery arms: <code>player</code> / <code>interact</code> / <code>light</code> / <code>fluids</code> / <code>buckets</code> / <code>genhash</code> — key fields + ok-conditions per mode in <code>tasks/HARNESS.md</code> §1.</li>
+<li>Heavy modes: <code>boundary</code>, <code>recprobe</code>, <code>perf</code>, <code>minfo</code>, <code>pickorder</code> — §2.</li>
+</ul>
+<h2>Known-stable gate values</h2>
+<div class="auto"><b>AUTO (paths only — the anchor table lives in <code>tasks/HARNESS.md</code> §3: sea 2730/2730 · backed 1406/1406 · sea_stable true · water_on_lava 25 / sideways 9 · torch 14 · genhash 25/25; verify fresh on any fluids/world-touching change; inline with <code>--full</code>)</b></div>
+<h2>Task-specific requirements</h2>
+<ul>
+<li><b>R1 Stars</b> — a night-sky star field per web <code>index.html:718-729</code> (white points, <code>size 1.8</code>, <code>sizeAttenuation false</code>, <code>fog false</code>, <code>depthWrite false</code>, <code>frustumCulled false</code>) with per-frame opacity <code>1 - day</code> (<code>index.html:1347</code>: invisible at noon, full at midnight). Deterministic distribution, per-frame cost trivial (single node, no per-chunk work).</li>
+<li><b>R2 Viewmodel lighting</b> — the Godot hand + held block/item (<code>held_mesh.gd</code>) render with the SAME web light model at the PLAYER cell (<code>index.html:746</code>: <code>0.12+0.88*max(uDay*sky, blk)*shade</code> applied to the player cell's sky/blk), i.e. the light level the player actually sees: ≈1.0-class outdoor noon; cave/night ≈ the player cell's eff class. Tint/texture of the held item preserved (no double-dim — the held-mesh double-tint fix from AC-0128 stays).</li>
+<li><b>R3 Player light (user-directed, documented deviation — the web has NO player light: <code>index.html:714-716</code> is sun + ambient only)</b> — the area near the player is never completely pitch black. Design is Run-1's: the leading candidate is a <b>per-fragment add in the unlit shader via uniforms</b> (player world-position + light level + falloff radius) — zero re-bake, zero persistent per-chunk state; a bake-time option (<code>eff' = max(eff, playerLight)</code> within radius) is expected REJECTED (re-bake churn on every chunk crossing = the AC-0129 cost class). Magnitude: small (Run-1 proposes; probe-verifiable).</li>
+<li><b>R4 (verify-only)</b> — the original note's "bake per-voxel light + web uDay terrain uniform" half is delivered by AC-0129/AC-0128: verify via the AC-0128 <code>nightday</code> probe (below), do NOT re-implement.</li>
+</ul>
+<h2>Task-specific gates</h2>
+<ul>
+<li><b>G1 <code>viewlight</code> probe (NEW, env-gated <code>AWECRAFT_LOGIC=viewlight</code>, headless, ≤60 s, r4 steady settle)</b> — report, for deterministic probe cells (outdoor noon / deep cave / torch cell): the player-cell eff + the viewmodel's rendered light level (web formula at the player cell) + star opacity at <code>AWECRAFT_TIME</code> 0.0 and 0.5 + the player-light contribution at the probe cell. PASS = viewmodel L matches the web formula at the player cell for each probe cell (outdoor-noon ≥0.94-class; cave/night ≈ player-cell eff class) ∧ star opacity noon &lt;0.05 ∧ star opacity midnight &gt;0.9 ∧ player light: dark-cave probe cell's rendered light strictly above its no-player-light value (pitch-black guard). The PRE run reports the current mechanism (no stars / viewmodel unlit-at-full / no player light) for an honest A/B. (Probe cell picks + RESULT shape: Run-1 plan §6.)</li>
+<li><b>G2 AC-0128 <code>nightday</code> probe still PASS</b> (cave day ≥0.94-class ∧ cave night &lt;0.333 ∧ torch day==night EXACT) — no regression from R1–R3.</li>
+<li><b>G3 ONE-SHOT boundary r4</b> (world-adjacent scope, at most one) — no WORSE than the AC-0128 gate baseline (<code>.scratch/AC-0128-gates/gates.log</code>, read at Run-2 time): the player-light shader path is uniform-only and must add no crossing-path cost.</li>
+<li><b>G4 MINFO byte-identical</b> vs <code>.scratch/AC-0129-gates/gate_minfo.txt</code> (121 lines / 195868) — R1–R3 add no chunk-mesh bytes (uniforms + separate star/viewmodel nodes only).</li>
+<li><b>G5</b> battery 5 arms EXACT + genhash 25/25.</li>
+<li><b>G6 RENDER</b> — 1 midnight render at <code>AWECRAFT_RADIUS=1 AWECRAFT_TIME=0.0</code>: stars visible + hand visible + dark area with the player-light halo; PNG under <code>tasks/AC-0035/</code>.</li>
+<li><b>HEAVY</b> — the coordinator's background job: boundary r4 ×1, perf r4 + MINFO diff, genhash re-run, flake ×1, task probe (viewlight + nightday), windows build + 8080/5180 curls. r50/RECSLICE = nightly only.</li>
+</ul>
+<h2>Scope (files expected to change)</h2>
+<ul>
+<li><code>godot/scenes/main.gd</code> — star node + per-frame star opacity + player-light uniform push + viewmodel light hookup + <code>viewlight</code> probe branch.</li>
+<li>the AC-0128 unlit <code>.gdshader</code> file(s) — add <code>u_player_pos</code>/<code>u_player_light</code> (and falloff) uniforms + the per-fragment player-light add.</li>
+<li>the held-mesh/viewmodel source (<code>held_mesh.gd</code> — Run-1 pinpoints path:line) — viewmodel light application.</li>
+<li><code>godot/core/daynight.gd</code> — ONLY if a day-factor/stars hook needs a new accessor (Run-1 decides; prefer main.gd).</li>
+<li><code>tasks/AC-0035/</code> deliverables (plan/results/continuity/PNG).</li>
+</ul>
+<p class="note">Run-1 pins exact paths in plan.html §2 before Run-2 starts; Run-2 stays inside that list (deviations recorded, as AC-0128's <code>held_mesh.gd</code> double-tint fix was).</p>
+<h2>Fences</h2>
+<ul>
+<li><b>No persistent per-chunk state</b> — the r50 resident band 140.6–146.9 MB holds: player light is uniforms + shader-side only; the eff cache, bake, strips and E2 re-enqueue are UNTOUCHED (<code>godot/world/lighting.gd</code>, <code>godot/world/world.gd</code>, <code>godot/world/chunk.gd</code> read-only for this task).</li>
+<li><b>Chunk mesh stream unchanged</b> — MINFO byte-identical (G4), genhash 25/25, battery EXACT: no vColor bytes, no merge-key inputs, no emit-path edits.</li>
+<li><code>index.html</code> (frozen spec) unchanged; no <code>TASKS.yaml</code> edits by the builder; no git in Run-2; the foreign untracked <code>docs/halo-loot-brainstorm.html</code> is never touched/committed.</li>
+<li>Stars live in a SEPARATE scene node (never in a chunk mesh); the viewmodel is separate from the greedy-merge chunk path.</li>
+</ul>
+<p class="note">Scaffold generated by <code>tasks/scripts/spec_template.py</code> (no wall-clock timestamps; the only date is the registry created_at). Auto sections are reproducible byte-for-byte; fill sections are for the coordinator.</p>
+</body></html>

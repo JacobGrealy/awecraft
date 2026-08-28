@@ -184,8 +184,41 @@ func _ready() -> void:
 		f.close()
 		if j is Dictionary:
 			atlas_rects = j
+	# AC-0128: bake the block tints into the atlas pixels BEFORE the
+	# fluid_anim materials capture the atlas texture (they sample it directly).
+	_bake_atlas_tints()
 	_load_item_atlas()
 	_make_fluid_anim_mats()
+
+
+# AC-0128: the web block tints (TINT_GRASS_TOP/LEAVES/WATER) move from the
+# vertex color into the atlas pixels — multiply the tile pixels once at load
+# (id 1 top, id 7 x3 faces, id 5 x3 faces; block_tint is white elsewhere).
+# The atlas_tex identity changes -> the merge-atlas + material caches
+# (identity-keyed) rebuild automatically.
+func _bake_atlas_tints() -> void:
+	if atlas_tex == null or atlas_rects.is_empty():
+		return
+	var img: Image = atlas_tex.get_image()
+	if img == null:
+		return
+	for tid in [1, 7, 5]:
+		for face in ["top", "side", "bottom"]:
+			var t: Color = block_tint(tid, face)
+			if t == Color.WHITE:
+				continue
+			var rc: Vector2i = block_rect(tid, face)
+			if rc.x < 0:
+				continue
+			for py in range(TILE_PX):
+				for px in range(TILE_PX):
+					var x: int = rc.x + px
+					var y: int = rc.y + py
+					if x < 0 or x >= img.get_width() or y < 0 or y >= img.get_height():
+						continue
+					var col: Color = img.get_pixel(x, y)
+					img.set_pixel(x, y, Color(col.r * t.r, col.g * t.g, col.b * t.b, col.a))
+	atlas_tex = ImageTexture.create_from_image(img)
 
 
 func _load_item_atlas() -> void:
@@ -210,6 +243,10 @@ func apply_items_atlas(image: Image, rects: Dictionary) -> void:
 func apply_atlas(image: Image, rects: Dictionary) -> void:
 	atlas_tex = ImageTexture.create_from_image(image)
 	atlas_rects = rects
+	# AC-0128: texture-pack swaps go through the same tint bake (identity
+	# change -> chunk material caches rebuild; re-point the fluid_anim mats
+	# at the baked texture below).
+	_bake_atlas_tints()
 	for bid in fluid_anim_mats:
 		fluid_anim_mats[bid].set_shader_parameter("atlas", atlas_tex)
 		fluid_anim_mats[bid].set_shader_parameter("anim_frames", float(block_anim_frames(bid)))

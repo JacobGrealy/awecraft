@@ -656,6 +656,7 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 	var ctx_w: Dictionary = _tm_ctx.duplicate()
 	ctx_w["eff_strips"] = strips["eff"]
 	ctx_w["blk_strips"] = strips["blk"]
+	ctx_w["blk_strips_b"] = strips["blk_b"]
 	var entry := {
 		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(),
 		"data": c.data.duplicate(), "fl": c.fl.duplicate(),
@@ -928,6 +929,7 @@ func _strips_for(cx: int, cz: int) -> Dictionary:
 	var h: int = Data.HEIGHT
 	var effs: Array = []
 	var blks: Array = []
+	var blks_b: Array = []
 	var sides := [[1, 0], [-1, 0], [0, 1], [0, -1]]
 	for s in sides:
 		var nc = chunks.get(_key(cx + int(s[0]), cz + int(s[1])))
@@ -935,7 +937,11 @@ func _strips_for(cx: int, cz: int) -> Dictionary:
 		var b := PackedByteArray()
 		if nc != null and not nc.data.is_empty() and not nc.last_eff.is_empty():
 			e = _side_eff_strip(nc, int(s[0]), int(s[1]), h)
-			b = _side_blk_strip(nc, int(s[0]), int(s[1]), h)
+			var sb: Dictionary = _side_blk_strip(nc, int(s[0]), int(s[1]), h)
+			b = sb["v"]
+			blks_b.append(sb["b"])
+		else:
+			blks_b.append(PackedByteArray())
 		effs.append(e)
 		blks.append(b)
 	var corners := [[1, 1], [-1, 1], [1, -1], [-1, -1]]
@@ -945,7 +951,7 @@ func _strips_for(cx: int, cz: int) -> Dictionary:
 		if nc != null and not nc.data.is_empty() and not nc.last_eff.is_empty():
 			e = _corner_eff_strip(nc, int(s[0]), int(s[1]), h)
 		effs.append(e)
-	return {"eff": effs, "blk": blks}
+	return {"eff": effs, "blk": blks, "blk_b": blks_b}
 
 
 func _side_eff_strip(nc: Node3D, dx: int, dz: int, h: int) -> PackedByteArray:
@@ -972,7 +978,7 @@ func _side_eff_strip(nc: Node3D, dx: int, dz: int, h: int) -> PackedByteArray:
 	return e
 
 
-func _side_blk_strip(nc: Node3D, dx: int, dz: int, h: int) -> PackedByteArray:
+func _side_blk_strip(nc: Node3D, dx: int, dz: int, h: int) -> Dictionary:
 	# Derivation per plan §2.C.1, column by column (2 cols x 16 t = 32 cols).
 	# POST fix (sky carry): v = source EXACT (22->14, 23->12, 24->15)
 	# > max(eff_n above own sky, sky_n) — i.e. the neighbor boundary cell's
@@ -985,7 +991,26 @@ func _side_blk_strip(nc: Node3D, dx: int, dz: int, h: int) -> PackedByteArray:
 	# for the perf gate).
 	var b := PackedByteArray()
 	b.resize(2560)
+	var bm := PackedByteArray()
+	bm.resize(2560)
 	var narr: PackedByteArray = nc.last_eff["arr"]
+	# AC-0128 RUN 3: the neighbor's SPARSE boundary block-light ring (their
+	# TRUE flooded block light at the shared boundary, set at their bake;
+	# pack (side << 16) | (yy << 8) | level). The eff-derived "eff > local
+	# sky" test cannot separate true block light from laterally-leaked sky
+	# in closed columns, so the mask reads the flooded values directly. An
+	# empty ring (a chunk that only ever took a cached eff, or sky-only)
+	# reads 0: the cross-boundary mask visit is lost (documented gap).
+	var ring: PackedInt32Array = nc.last_blk_ring
+	var rside := 0
+	if dx > 0:
+		rside = 1
+	elif dx < 0:
+		rside = 0
+	elif dz > 0:
+		rside = 3
+	elif dz < 0:
+		rside = 2
 	var nd: PackedByteArray = nc.data
 	Lighting._tables()
 	var colsz := 16 * h
@@ -1019,7 +1044,11 @@ func _side_blk_strip(nc: Node3D, dx: int, dz: int, h: int) -> PackedByteArray:
 					var vb: int = eff_n if eff_n > sky_n else 0
 					v = vb if vb >= sky_n else sky_n
 				b[c * colsz + y * 16 + t] = v
-	return b
+	for i in range(ring.size()):
+		var p: int = ring[i]
+		if (p >> 16) == rside:
+			bm[(p >> 8) & 4095] = p & 15
+	return {"v": b, "b": bm}
 
 
 func _corner_eff_strip(nc: Node3D, dx: int, dz: int, h: int) -> PackedByteArray:

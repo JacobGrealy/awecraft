@@ -94,7 +94,9 @@ static func _build_box(id: int, has_tex: bool) -> ArrayMesh:
 		var shade := float(f.sh)
 		var col: Color
 		if has_tex:
-			col = Color(shade, shade, shade, 1.0) * Data.block_tint(id, face_name)
+			# AC-0128: the block tints are baked into the atlas pixels now —
+			# the vertex color carries shade only (no double tint).
+			col = Color(shade, shade, shade, 1.0)
 		else:
 			var fc: Color
 			if face_name == "top":
@@ -119,7 +121,8 @@ static func _build_cross(id: int, has_tex: bool) -> ArrayMesh:
 	var tl := Data.block_rect(id, "top")
 	var col: Color
 	if has_tex:
-		col = Color(0.9, 0.9, 0.9, 1.0) * Data.block_tint(id, "top")
+		# AC-0128: tint baked into the atlas — shade only (no double tint).
+		col = Color(0.9, 0.9, 0.9, 1.0)
 	else:
 		col = binfo["color"]["top"] * 0.9
 	var v := PackedVector3Array()

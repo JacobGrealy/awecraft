@@ -855,6 +855,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "lightaudit":
 			await _lightaudit_test(spawn)
 			return
+		if logic == "nightday":
+			await _nightday_test(spawn)
+			return
 		if logic == "daynight":
 			world.collision_enabled = false
 			world.render_radius = 0
@@ -1455,6 +1458,10 @@ func _update_sky() -> void:
 	if sun == null:
 		return
 	var t := Game.time_of_day
+	# AC-0128: per-frame u_day uniform for the unlit chunk shaders (web parity:
+	# DayNight.day(t), the web day factor, updated every frame at index.html
+	# :3222).
+	_ChunkScriptM.set_day_factor(DayNight.day(t))
 	sun.light_color = AeroLib.SUN_TINT if aero else Color.WHITE
 	sun.light_energy = DayNight.sun_energy(t) * (AeroLib.SUN_BOOST if aero else 1.0)
 	sun.look_at(DayNight.sun_direction(t), Vector3.UP)
@@ -3783,6 +3790,416 @@ func _la_tunnel() -> Variant:
 		if absi(i - 5) <= 8 and int(ref[i]) != int(seq[i]):
 			tok = false
 	return {"torch": torch, "dir": [dir.x, 0, dir.z], "seq": seq, "ref": ref, "ok": tok}
+
+
+# AC-0128 probe (env-gated by AWECRAFT_LOGIC=nightday, never runs in game):
+# steady-settle r4; deterministic cave-open-to-sky cell + deterministic torch
+# cell + informational mouth cell; reads ACTUAL u_day uniform + ACTUAL baked
+# vColor from the slab surfaces + the DayNight day factor. The PRE (pre-fix)
+# tree reports mechanism "pre-lit-std" with the ambient-floor numbers.
+func _nd_settle(max_frames: int) -> int:
+	var rr: int = world.render_radius
+	var quiet := 0
+	var t0 := Time.get_ticks_msec()
+	var awaited := 0
+	while awaited < max_frames and Time.get_ticks_msec() - t0 < 120000:
+		var n_in := 0
+		for key in world.chunks:
+			var cc: Node3D = world.chunks[key]
+			if absi(cc.cx) <= rr and absi(cc.cz) <= rr and cc.mesh_built:
+				n_in += 1
+		var queues_idle: bool = world.light_dirty.is_empty() and world.light_pending.is_empty() \
+			and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
+		if n_in == (2 * rr + 1) * (2 * rr + 1) and queues_idle:
+			quiet += 1
+		else:
+			quiet = 0
+		if quiet >= 5:
+			break
+		await get_tree().physics_frame
+		awaited += 1
+	return awaited
+
+
+func _nd_sorted_chunks() -> Array:
+	var out: Array = []
+	for key in world.chunks:
+		var cc: Node3D = world.chunks[key]
+		if absi(cc.cx) <= 4 and absi(cc.cz) <= 4 and cc.mesh_built and not cc.last_eff.is_empty():
+			out.append(cc)
+	out.sort_custom(func(a, b):
+		if a.cx != b.cx:
+			return a.cx < b.cx
+		return a.cz < b.cz
+	)
+	return out
+
+
+func _nd_pick_cells() -> Dictionary:
+	var H: int = Data.HEIGHT
+	var cave: Array = []
+	var mouth: Array = []
+	for cc in _nd_sorted_chunks():
+		if cave.size() > 0 and mouth.size() > 0:
+			break
+		var d: PackedByteArray = cc.data
+		var eff: PackedByteArray = cc.last_eff["arr"]
+		var srcs: Array = []
+		for i in range(d.size()):
+			var bid: int = d[i]
+			if bid == 22 or bid == 23 or bid == 24:
+				srcs.append([i & 15, i >> 8, (i >> 4) & 15])
+		for y in range(H):
+			var row := y << 8
+			for lz in range(16):
+				for lx in range(16):
+					var idx := row | (lz << 4) | lx
+					if d[idx] != 0 or eff[idx] != 15:
+						continue
+					var open_col := true
+					for yy in range(y + 1, H):
+						if d[(yy << 8) | (lz << 4) | lx] != 0:
+							open_col = false
+							break
+					if not open_col:
+						continue
+					var near14 := false
+					var near15 := false
+					for s2 in srcs:
+						var dist := maxi(maxi(absi(lx - int(s2[0])), absi(lz - int(s2[2]))), absi(y - int(s2[1])))
+						if dist <= 14:
+							near14 = true
+						if dist <= 15:
+							near15 = true
+					var ndir: Array = []
+					if near14 and mouth.size() == 0:
+						mouth = [cc.cx, cc.cz, lx, y, lz]
+					# AC-0128: the face mask samples the cave cell + 4 axis
+					# probes (adjacent cells, distance -1), so a clean mask=0
+					# cave needs NO own-chunk source within Chebyshev 15.
+					if near15:
+						continue
+					for dd in [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]:
+						var ax := lx + int(dd[0])
+						var ay := y + int(dd[1])
+						var az := lz + int(dd[2])
+						if ax < 0 or ax > 15 or ay < 0 or ay > H - 1 or az < 0 or az > 15:
+							continue
+						var nid: int = d[(ay << 8) | (az << 4) | ax]
+						if nid == 0 or nid == 5 or nid == 24 or nid == 22 or nid == 23:
+							continue
+						ndir = dd
+						break
+					if ndir.is_empty():
+						continue
+					if cave.size() == 0:
+						cave = [cc.cx, cc.cz, lx, y, lz, ndir[0], ndir[1], ndir[2]]
+					break
+				if cave.size() > 0 and mouth.size() > 0:
+					break
+			if cave.size() > 0 and mouth.size() > 0:
+				break
+	return {"cave": cave, "mouth": mouth}
+
+
+func _nd_tunnel() -> Array:
+	var H: int = Data.HEIGHT
+	var found := false
+	var torch: Array = []
+	var dir := Vector3i.ZERO
+	for tcx in range(-4, 5):
+		if found:
+			break
+		for tcz in range(-4, 5):
+			if found:
+				break
+			for ty in range(H - 1, 7, -1):
+				if found:
+					break
+				for tlx in range(16):
+					if found:
+						break
+					for tlz in range(16):
+						if found:
+							break
+						var tx: int = tcx * 16 + tlx
+						var tz: int = tcz * 16 + tlz
+						if world.get_block(tx, ty, tz) != 0:
+							continue
+						if not _is_solid(tx, ty - 1, tz):
+							continue
+						if tlx <= 5:
+							dir = Vector3i(-1, 0, 0)
+						elif tlx >= 10:
+							dir = Vector3i(1, 0, 0)
+						elif tlz <= 5:
+							dir = Vector3i(0, 0, -1)
+						elif tlz >= 10:
+							dir = Vector3i(0, 0, 1)
+						else:
+							continue
+						var run_ok := true
+						for i in range(1, 6):
+							if world.get_block(tx + dir.x * i, ty, tz + dir.z * i) != 0:
+								run_ok = false
+							if world.get_block(tx - dir.x * i, ty, tz - dir.z * i) != 0:
+								run_ok = false
+						if not run_ok:
+							continue
+						var ex: int = tx + dir.x * 5
+						var ez: int = tz + dir.z * 5
+						var qx: int = tx - dir.x * 5
+						var qz: int = tz - dir.z * 5
+						var ecx := int(floorf(float(ex) / 16.0))
+						var ecz := int(floorf(float(ez) / 16.0))
+						var qcx := int(floorf(float(qx) / 16.0))
+						var qcz := int(floorf(float(qz) / 16.0))
+						if ecx == qcx and ecz == qcz:
+							continue
+						var ec: Node3D = world.chunks.get(world._key(ecx, ecz))
+						var qc: Node3D = world.chunks.get(world._key(qcx, qcz))
+						if ec == null or not ec.mesh_built or ec.last_eff.is_empty():
+							continue
+						if qc == null or not qc.mesh_built or qc.last_eff.is_empty():
+							continue
+						var dl: Dictionary = world.light_at(tx, ty, tz)
+						if int(dl.eff) != 0:
+							continue
+						found = true
+						torch = [tx, ty, tz]
+						break
+	if not found:
+		return []
+	world.set_block(int(torch[0]), int(torch[1]), int(torch[2]), 22)
+	await _nd_settle(600)
+	return torch
+
+
+func _nd_read_face(mis: Array, pos: Vector3, nrm: Vector3) -> Dictionary:
+	var axis := 0
+	if absf(nrm.y) > 0.5:
+		axis = 1
+	elif absf(nrm.z) > 0.5:
+		axis = 2
+	var pa: int = -1
+	var pb: int = -1
+	for a in range(3):
+		if a != axis:
+			if pa < 0:
+				pa = a
+			else:
+				pb = a
+	var cxv := pos[pa] + 0.5
+	var cyv := pos[pb] + 0.5
+	var plane_val := pos[axis]
+	for mi in mis:
+		if mi == null or mi.mesh == null:
+			continue
+		var mesh: ArrayMesh = mi.mesh
+		for si in range(mesh.get_surface_count()):
+			var arrs := mesh.surface_get_arrays(si)
+			var verts: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
+			var idx: PackedInt32Array = arrs[Mesh.ARRAY_INDEX]
+			for t in range(idx.size() / 3):
+				var i0 := int(idx[t * 3])
+				var i1 := int(idx[t * 3 + 1])
+				var i2 := int(idx[t * 3 + 2])
+				if norms[i0].dot(nrm) < 0.99999 or norms[i1].dot(nrm) < 0.99999 or norms[i2].dot(nrm) < 0.99999:
+					continue
+				if absf(verts[i0][axis] - plane_val) > 1e-4 or absf(verts[i1][axis] - plane_val) > 1e-4 or absf(verts[i2][axis] - plane_val) > 1e-4:
+					continue
+				var a2 := Vector2(verts[i0][pa], verts[i0][pb])
+				var b2 := Vector2(verts[i1][pa], verts[i1][pb])
+				var c2 := Vector2(verts[i2][pa], verts[i2][pb])
+				var p2 := Vector2(cxv, cyv)
+				var d1 := (p2 - a2).cross(b2 - a2)
+				var d2 := (p2 - b2).cross(c2 - b2)
+				var d3 := (p2 - c2).cross(a2 - c2)
+				if (d1 >= 0.0 or d1 <= 0.0) and (d2 >= 0.0 or d2 <= 0.0) and (d3 >= 0.0 or d3 <= 0.0) and not (d1 == 0.0 and d2 == 0.0 and d3 == 0.0):
+					var has_neg := (d1 < 0.0) or (d2 < 0.0) or (d3 < 0.0)
+					var has_pos := (d1 > 0.0) or (d2 > 0.0) or (d3 > 0.0)
+					if not (has_neg and has_pos):
+						var col: Color = arrs[Mesh.ARRAY_COLOR][i0]
+						var mat: Material = mesh.surface_get_material(si)
+						var mech := "pre-lit-std"
+						var ud: Variant = null
+						if mat is ShaderMaterial:
+							mech = "unlit-formula"
+							ud = float(mat.get_shader_parameter("u_day"))
+						return {"mech": mech, "u_day": ud, "col": [roundf(col.r * 100000.0) / 100000.0, roundf(col.g * 100000.0) / 100000.0, roundf(col.b * 100000.0) / 100000.0]}
+	return {"mech": "no-face", "u_day": null, "col": null}
+
+
+# AC-0128 RUN 3: darkside = a cell whose BAKED eff is block-derived (eff
+# exceeds the own-chunk sky flood - no lateral sky can explain it) yet the
+# block-light flood did not VISIT (mask=0, fresh pull compute with the
+# current neighbor strips). Settled state => 0 by construction: the pull eff
+# = max(sky_self_flood, blk_self_flood, strip_injection_flood) and the mask
+# covers exactly the two block terms. >0 = a stale eff/mask pair or an E2
+# wave that has not settled. (The old RUN 2 definition - no own-chunk glow
+# source within Chebyshev 13 - counted 24401 cells, all sky-derived: not a
+# miss under the flood-visited mask.)
+func _nd_darkside_count() -> int:
+	var H: int = Data.HEIGHT
+	var cnt := 0
+	for cc in _nd_sorted_chunks():
+		var d: PackedByteArray = cc.data
+		var eff: PackedByteArray = cc.last_eff["arr"]
+		var cx: int = int(cc.cx)
+		var cz: int = int(cc.cz)
+		var strips: Dictionary = world._strips_for(cx, cz)
+		var pk: Dictionary = Lighting.compute_light_flat_chunk_pull(d, cx, cz, H, strips["eff"], strips["blk"], strips["blk_b"])
+		var mask: PackedByteArray = pk["mask"]
+		var sky: Dictionary = Lighting.compute_light_split({"min": Vector3i(cx * 16, 0, cz * 16), "max": Vector3i(cx * 16 + 15, H - 1, cz * 16 + 15)}, world)["sky"]
+		for y in range(H):
+			var row := y << 8
+			for lz in range(16):
+				for lx in range(16):
+					var idx := row | (lz << 4) | lx
+					if eff[idx] <= 0:
+						continue
+					var blocked := false
+					for yy in range(y + 1, H):
+						var bid2: int = d[(yy << 8) | (lz << 4) | lx]
+						if bid2 != 0 and bid2 != 5:
+							blocked = true
+							break
+					if not blocked:
+						continue
+					if mask[idx] > 0:
+						continue
+					var cell := Vector3i(cx * 16 + lx, y, cz * 16 + lz)
+					if int(eff[idx]) <= int(sky.get(cell, 0)):
+						continue
+					cnt += 1
+	return cnt
+
+
+func _nightday_test(spawn: Vector3) -> void:
+	Lighting._tables()
+	world.recenter(spawn.x, spawn.z, true)
+	await _nd_settle(60000)
+	var picked := _nd_pick_cells()
+	var cave: Array = picked.cave
+	var mouth: Array = picked.mouth
+	var torch: Array = await _nd_tunnel()
+	if cave.is_empty() or torch.is_empty():
+		Debug.result({"mode": "nightday", "seed": Game.world_seed, "radius": world.render_radius, "ok": false, "err": "no deterministic cell", "cave": cave, "torch": torch, "mouth": mouth})
+		get_tree().quit()
+		return
+	var darkside := _nd_darkside_count()
+	var ccx: int = int(cave[0])
+	var ccz: int = int(cave[1])
+	var clx: int = int(cave[2])
+	var cy: int = int(cave[3])
+	var clz: int = int(cave[4])
+	var cdd: Array = [cave[5], cave[6], cave[7]]
+	var cchunk: Node3D = world.chunks.get(world._key(ccx, ccz))
+	var nax := clx + int(cdd[0])
+	var nay := cy + int(cdd[1])
+	var naz := clz + int(cdd[2])
+	var npos := Vector3(float(nax), float(nay), float(naz))
+	for k in range(3):
+		if int(cdd[k]) < 0:
+			npos[k] += 1.0
+	var nnrm := Vector3(-int(cdd[0]), -int(cdd[1]), -int(cdd[2]))
+	var tchunk: Node3D = world.chunks.get(world._key(int(floorf(float(torch[0]) / 16.0)), int(floorf(float(torch[2]) / 16.0))))
+	var tpos: Vector3 = Vector3(float(int(torch[0]) & 15), float(int(torch[1])), float(int(torch[2]) & 15))
+	var tnrm := Vector3(0, 1, 0)
+	var tfound := false
+	var tdata: PackedByteArray = tchunk.data
+	var tidx := (int(torch[1]) << 8) | ((int(torch[2]) & 15) << 4) | (int(torch[0]) & 15)
+	for dd in [[0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, -1, 0]]:
+		var ax := (int(torch[0]) & 15) + int(dd[0])
+		var ay := int(torch[1]) + int(dd[1])
+		var az := (int(torch[2]) & 15) + int(dd[2])
+		var aid := 0
+		if ax >= 0 and ax < 16 and ay >= 0 and ay < Data.HEIGHT and az >= 0 and az < 16:
+			aid = int(tdata[(ay << 8) | (az << 4) | ax])
+		if aid == 0:
+			tpos = Vector3(float(int(torch[0]) & 15), float(int(torch[1])), float(int(torch[2]) & 15))
+			for k in range(3):
+				if int(dd[k]) > 0:
+					tpos[k] += 1.0
+			tnrm = Vector3(int(dd[0]), int(dd[1]), int(dd[2]))
+			tfound = true
+			break
+	if not tfound:
+		Debug.result({"mode": "nightday", "seed": Game.world_seed, "radius": world.render_radius, "ok": false, "err": "torch face not found", "cave": cave, "torch": torch, "mouth": mouth})
+		get_tree().quit()
+		return
+	var cave_slab = cchunk.slabs[nay / 16]
+	var torch_slab = tchunk.slabs[int(torch[1]) / 16]
+	var cave_eff: int = int(cchunk.last_eff["arr"][(cy << 8) | (clz << 4) | clx])
+	var torch_eff: int = int(tchunk.last_eff["arr"][(int(torch[1]) << 8) | ((int(torch[2]) & 15) << 4) | (int(torch[0]) & 15)])
+	Game.time_of_day = 0.5
+	_update_sky()
+	var df_day := DayNight.day(Game.time_of_day)
+	var cave_day: Variant = _nd_read_face([cave_slab.mesh_instance, cave_slab.flora_instance, cave_slab.fluid_instance], npos, nnrm)
+	if cave_day == null or not (cave_day is Dictionary and cave_day.has("col")):
+		cave_day = {"mech": "no-face", "u_day": null, "col": null}
+	var torch_day: Variant = _nd_read_face([torch_slab.fluid_instance, torch_slab.mesh_instance, torch_slab.flora_instance], tpos, tnrm)
+	if torch_day == null or not (torch_day is Dictionary and torch_day.has("col")):
+		torch_day = {"mech": "no-face", "u_day": null, "col": null}
+	Game.time_of_day = 0.0
+	_update_sky()
+	var df_night := DayNight.day(Game.time_of_day)
+	var cave_night: Variant = _nd_read_face([cave_slab.mesh_instance, cave_slab.flora_instance, cave_slab.fluid_instance], npos, nnrm)
+	if cave_night == null or not (cave_night is Dictionary and cave_night.has("col")):
+		cave_night = {"mech": "no-face", "u_day": null, "col": null}
+	var torch_night: Variant = _nd_read_face([torch_slab.fluid_instance, torch_slab.mesh_instance, torch_slab.flora_instance], tpos, tnrm)
+	if torch_night == null or not (torch_night is Dictionary and torch_night.has("col")):
+		torch_night = {"mech": "no-face", "u_day": null, "col": null}
+	var out := {
+		"mode": "nightday",
+		"seed": Game.world_seed,
+		"radius": world.render_radius,
+		"darkside_candidates": darkside,
+		"df_day": roundf(df_day * 100000.0) / 100000.0,
+		"df_night": roundf(df_night * 100000.0) / 100000.0,
+		"cave": [ccx * 16 + clx, cy, ccz * 16 + clz],
+		"cave_eff": cave_eff,
+		"torch": [torch[0], torch[1], torch[2]],
+		"torch_eff": torch_eff,
+		"mouth": ([mouth[0] * 16 + mouth[2], mouth[3], mouth[1] * 16 + mouth[4]] if mouth.size() > 0 else null),
+	}
+	for tag in ["day", "night"]:
+		var rd: Dictionary = cave_day if tag == "day" else cave_night
+		var rt: Dictionary = torch_day if tag == "day" else torch_night
+		var cd: Variant = rd.col
+		var ct: Variant = rt.col
+		var cud: Variant = rd.u_day
+		var tud: Variant = rt.u_day
+		var cL: Variant = null
+		var tL: Variant = null
+		if cd != null and cud != null:
+			# web formula (index.html :746): (0.12 + 0.88 * max(uDay*r, g)) * 15
+			cL = roundf((0.12 + 0.88 * maxf(float(cud) * float(cd[0]), float(cd[1]))) * 15.0 * 100000.0) / 100000.0
+		elif cd != null:
+			cL = roundf(float(cd[0]) * 15.0 * 100000.0) / 100000.0
+		if ct != null and tud != null:
+			tL = roundf((0.12 + 0.88 * maxf(float(tud) * float(ct[0]), float(ct[1]))) * 15.0 * 100000.0) / 100000.0
+		elif ct != null:
+			tL = roundf(float(ct[0]) * 15.0 * 100000.0) / 100000.0
+		out["cave_" + tag] = {"col": cd, "u_day": cud, "class": cL, "mech": rd.mech}
+		out["torch_" + tag] = {"col": ct, "u_day": tud, "class": tL, "mech": rt.mech}
+	out["mech"] = cave_day.mech
+	var okcave_day: float = -1.0
+	var okcave_night: float = -1.0
+	var oktday: float = -1.0
+	var oktnight: float = -1.0
+	if out.cave_day.class != null:
+		okcave_day = float(out.cave_day.class)
+	if out.cave_night.class != null:
+		okcave_night = float(out.cave_night.class)
+	if out.torch_day.class != null:
+		oktday = float(out.torch_day.class)
+	if out.torch_night.class != null:
+		oktnight = float(out.torch_night.class)
+	out["ok"] = out.mech == "unlit-formula" and okcave_day >= 14.1 and okcave_night < 5.0 and oktday == oktnight
+	Debug.result(out)
+	get_tree().quit()
 
 
 func _probe_water_positions() -> Dictionary:

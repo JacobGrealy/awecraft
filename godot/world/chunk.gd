@@ -17,6 +17,7 @@ var collision_enabled := true
 var col_immediate := true
 var last_collision_build_ms := 0
 var last_eff: Dictionary = {}
+var last_blk_ring: PackedInt32Array = PackedInt32Array()
 # AC-0129: bumped when last_eff's byte array changes (world._eff_landed);
 # neighbors' eff-cache entries carry our gen at their dispatch (ngen) and
 # invalidate when it moves — the pull strips derive from our last_eff.
@@ -62,11 +63,83 @@ static var _mat_ms: Texture2D = null      # merged-atlas texture identity at las
 static var _mat_cache: Dictionary = {}    # kind -> Material (opaque/cutout/flower/fluid)
 static var _mat_alloc_count := 0          # G3 build-path counter (total since boot)
 
+# AC-0128: u_day = DayNight.day(Game.time_of_day), pushed every frame by
+# main.gd _update_sky (web parity: the per-frame day uniform, index.html
+# :3222). Shared by all cached ShaderMaterials — one set_shader_parameter
+# per kind per frame.
+static var _day_factor := 1.0
+static var _lit_atlas_key: Texture2D = null
+static var _lit_atlas: Texture2D = null
+
+
+static func set_day_factor(d: float) -> void:
+	_day_factor = d
+	for k in _mat_cache:
+		var m = _mat_cache[k]
+		if m is ShaderMaterial:
+			m.set_shader_parameter("u_day", d)
+
+
+# AC-0128: the lit (unshaded) materials sample the atlas through RUNTIME
+# ImageTextures — Godot 4.7.1 has no per-texture runtime filter override
+# (set_filter does not exist; only BaseMaterial3D.texture_filter + the import
+# settings), and a shader uniform sampler uses the texture's own filter.
+# Runtime ImageTextures default to NEAREST (the Texture2D class default), so
+# every lit kind gets the crisp look the current StandardMaterials forced via
+# TEXTURE_FILTER_NEAREST. cutout/flower/fluid share ONE runtime copy of
+# Data.atlas_tex so the shared imported texture's own filter is left alone
+# (the fluid_anim water/lava materials keep today's look).
+static func _lit_atlas_tex() -> Texture2D:
+	if _lit_atlas_key != Data.atlas_tex:
+		_lit_atlas_key = Data.atlas_tex
+		_lit_atlas = null
+		var at: Texture2D = Data.atlas_tex
+		if at != null:
+			var img: Image = at.get_image()
+			if img != null:
+				var c: Image = img.duplicate()
+				_lit_atlas = ImageTexture.create_from_image(c)
+	return _lit_atlas
+
+
+static func _lit_material(kind: String, ms_tex: Texture2D) -> Material:
+	var path := ""
+	var tex: Texture2D = null
+	match kind:
+		"opaque":
+			path = "res://world/chunk_lit_opaque.gdshader"
+			# ms_tex is a runtime ImageTexture (NEAREST default); the fallback
+			# rides the shared runtime copy for the same reason.
+			tex = ms_tex if ms_tex != null else _lit_atlas_tex()
+		"cutout":
+			path = "res://world/chunk_lit_cutout.gdshader"
+			tex = _lit_atlas_tex()
+		"flower":
+			path = "res://world/chunk_lit_flower.gdshader"
+			tex = _lit_atlas_tex()
+		_:
+			path = "res://world/chunk_lit_fluid.gdshader"
+			tex = _lit_atlas_tex()
+	if tex == null:
+		return null
+	var sh: Shader = load(path)
+	if sh == null:
+		return null
+	var sm := ShaderMaterial.new()
+	sm.shader = sh
+	sm.set_shader_parameter("u_day", _day_factor)
+	sm.set_shader_parameter("tex", tex)
+	return sm
+
+
 # AC-0120: shared material cache — static like _merge_atlas (main-thread-only in
 # practice: build_mesh sync + apply_accs handoff both run on the main thread).
 # Lazy per-kind creation; identity-key invalidation on (Data.atlas_tex, ms_tex)
 # for the opaque kind (its texture IS the key) so a texture-pack swap or an
 # AWECRAFT_MERGE=0 run clears the set once; <=4 live entries, kind-only keys.
+# AC-0128: with the atlas loaded the four kinds become unlit ShaderMaterials
+# (the web :746 day/night formula); without it the legacy lit materials stay
+# (byte-identical no-atlas behavior).
 static func _get_mat(kind: String, ms_tex: Texture2D = null) -> Material:
 	if _mat_atlas != Data.atlas_tex or (kind == "opaque" and _mat_ms != ms_tex):
 		_mat_cache.clear()                 # texture swap / merge rebuild -> fresh set
@@ -74,12 +147,15 @@ static func _get_mat(kind: String, ms_tex: Texture2D = null) -> Material:
 		_mat_ms = ms_tex
 	if _mat_cache.has(kind):
 		return _mat_cache[kind]
-	var m: StandardMaterial3D
-	match kind:
-		"opaque": m = _opaque_material(ms_tex)
-		"cutout": m = _cutout_material()
-		"flower": m = _flower_material()
-		_: m = _fluid_material()
+	var m: Material
+	if Data.atlas_tex != null:
+		m = _lit_material(kind, ms_tex)
+	if m == null:
+		match kind:
+			"opaque": m = _opaque_material(ms_tex)
+			"cutout": m = _cutout_material()
+			"flower": m = _flower_material()
+			_: m = _fluid_material()
 	_mat_cache[kind] = m
 	_mat_alloc_count += 1
 	return m
@@ -218,10 +294,63 @@ func _corner_uv(cv: Vector3, n: Vector3i, tl: Vector2i) -> Vector2:
 	return (Vector2(tl) + Vector2(0.5 + u * 31.0, 0.5 + v * 31.0)) / Data.ATLAS_PX
 
 
-static func _light_color(shade: float, face_color: Color, has_tex: bool) -> Color:
+# AC-0128: vColor repack = the web index.html :736 channel layout.
+# has_tex: r = sky channel (light scalar s), g = block-light channel (s when
+# the face has block-light source evidence within Chebyshev 14 in own-chunk
+# data, else 0), b = face shade — the unlit shader computes the web :746
+# formula L = 0.12 + 0.88*max(u_day*r, g). Without the atlas the legacy
+# behavior stays: face_color * shade (shade = fsh * s).
+static func _light_color(s: float, fsh: float, mask: int, face_color: Color, has_tex: bool) -> Color:
 	if has_tex:
-		return Color(shade, shade, shade, 1.0)
-	return face_color * shade
+		if mask > 0:
+			return Color(0.0, s, fsh, 1.0)
+		return Color(s, 0.0, fsh, 1.0)
+	return face_color * (fsh * s)
+
+
+# AC-0128 RUN 3: mask evidence for ONE light sample cell - 1 iff the cell is
+# VISITED by the block-light flood (own glow sources + neighbor blk-strip
+# injection - the same seeds the light eff got, computed once in the pull
+# kernel, lighting.gd; layout (y<<8)|(lz<<4)|lx, 16x16xh). visited iff lit,
+# so no eff check is needed; a visited cell's eff is always > 0 in the same
+# light dict. Cells outside the own chunk (bake-box margin) have no mask
+# evidence -> 0 (the face follows the day cycle, the web dark-side case).
+# An empty/short buffer (a light dict without a mask) reads 0 everywhere.
+static func _mask_sample(wx: int, y: int, wz: int, lmn: Vector3i, h: int, bmask: PackedByteArray) -> int:
+	if bmask.size() != 256 * h:
+		return 0
+	var lx := (wx - lmn.x) - 2
+	var lz := (wz - lmn.z) - 2
+	if y < 0 or y >= h or lx < 0 or lx >= 16 or lz < 0 or lz >= 16:
+		return 0
+	return bmask[(y << 8) | (lz << 4) | lx]
+
+
+# AC-0128: per-face mask - 1 iff ANY of the face's light sample cells (the
+# SAME 5 cells _face_light reads: opposite + 4 axis probes; id 22 = own cell
+# only) is block-light flood-visited. Pinned faces keep their g channel
+# (bright at night); sky-only faces ride r = s through the day cycle.
+static func _face_mask(id: int, wx: int, y: int, wz: int, n: Vector3i, lmn: Vector3i, h: int, bmask: PackedByteArray) -> int:
+	if id == 22:
+		return _mask_sample(wx, y, wz, lmn, h, bmask)
+	var nx := wx + n.x
+	var ny := y + n.y
+	var nz := wz + n.z
+	var m := _mask_sample(nx, ny, nz, lmn, h, bmask)
+	if id != 5 and id != 24 and m == 0:
+		if n.x == 0:
+			m = _mask_sample(nx + 1, ny, nz, lmn, h, bmask)
+			if m == 0:
+				m = _mask_sample(nx - 1, ny, nz, lmn, h, bmask)
+		if m == 0 and n.y == 0:
+			m = _mask_sample(nx, ny + 1, nz, lmn, h, bmask)
+			if m == 0:
+				m = _mask_sample(nx, ny - 1, nz, lmn, h, bmask)
+		if m == 0 and n.z == 0:
+			m = _mask_sample(nx, ny, nz + 1, lmn, h, bmask)
+			if m == 0:
+				m = _mask_sample(nx, ny - 1, nz, lmn, h, bmask)
+	return m
 
 
 func _face_rect(rc: Dictionary, id: int, fi: int, face_name: String) -> Vector2i:
@@ -339,7 +468,7 @@ static func _qwrite(acc, k: int, c: Color, n: Vector3i, uvs: PackedVector2Array,
 	acc.i[ib + 5] = b + 2
 
 
-func _emit_faces(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, has_tex: bool, xtab: PackedByteArray, fn: Array, fsh: PackedFloat32Array, fcv: Array, ct: PackedColorArray, cs: PackedColorArray, cb: PackedColorArray) -> void:
+func _emit_faces(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, has_tex: bool, xtab: PackedByteArray, fn: Array, fsh: PackedFloat32Array, fcv: Array, ct: PackedColorArray, cs: PackedColorArray, cb: PackedColorArray, bmask: PackedByteArray) -> void:
 	var rc := {}
 	var uvc := {}
 	var wx0 := cx * SIZE
@@ -364,10 +493,13 @@ func _emit_faces(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray,
 			face_color = cs[id]
 		if xtab[id] > 0:
 			face_name = "side"
-		var shade: float = float(fsh[fi]) * _face_light(id, wx0 + lx, y, wz0 + lz, n, lmn, larr, lw, ld)
-		var c: Color = _light_color(shade, face_color, has_tex)
-		if has_tex:
-			c = c * Data.block_tint(id, face_name)
+		# AC-0128: s = the light scalar (merge key shade = fsh * s stays
+		# byte-identical); mask = own-chunk block-light evidence. The block
+		# tints no longer ride the vertex color — they are baked into the
+		# atlas pixels (data.gd _bake_atlas_tints).
+		var s: float = _face_light(id, wx0 + lx, y, wz0 + lz, n, lmn, larr, lw, ld)
+		var mask: int = _face_mask(id, wx0 + lx, y, wz0 + lz, n, lmn, Data.HEIGHT, bmask)
+		var c: Color = _light_color(s, float(fsh[fi]), mask, face_color, has_tex)
 		var uvs := _uvc(uvc, rc, id, fi, face_name, fn, fcv)
 		var cva = fcv[fi]
 		var sa = accs[y / 16]
@@ -387,13 +519,16 @@ static func _merge_strip(rects: Dictionary, id: int, fni: int) -> Vector2i:
 	return sr
 
 
-func _qwrite_merged(acc: Acc, fi: int, n: Vector3i, cva: Array, c0: Array, W: int, H: int, has_tex: bool, ct: PackedColorArray, cs: PackedColorArray, cb: PackedColorArray, sr: Vector2i, ms_h: float) -> void:
+# AC-0128: c0 payload = [id, fni, shade(=fsh*s merge key), s, mask, u0, v0, plane].
+func _qwrite_merged(acc: Acc, fi: int, n: Vector3i, cva: Array, c0: Array, W: int, H: int, has_tex: bool, ct: PackedColorArray, cs: PackedColorArray, cb: PackedColorArray, fsh: PackedFloat32Array, sr: Vector2i, ms_h: float) -> void:
 	var id: int = c0[0]
 	var fni: int = c0[1]
 	var shade: float = c0[2]
-	var u0: int = c0[3]
-	var v0: int = c0[4]
-	var plane: int = c0[5]
+	var s: float = c0[3]
+	var mask: int = c0[4]
+	var u0: int = c0[5]
+	var v0: int = c0[6]
+	var plane: int = c0[7]
 	var face_name := "side"
 	var face_color: Color
 	if fni == 1:
@@ -404,9 +539,9 @@ func _qwrite_merged(acc: Acc, fi: int, n: Vector3i, cva: Array, c0: Array, W: in
 		face_name = "bottom"
 	else:
 		face_color = cs[id]
-	var c: Color = _light_color(shade, face_color, has_tex)
-	if has_tex:
-		c = c * Data.block_tint(id, face_name)
+	# AC-0128: repacked vColor (s, fsh, mask) — tints live in the atlas now.
+	# (fsh is indexed by fi; fni collapses top/bottom/side for face_color only.)
+	var c: Color = _light_color(s, float(fsh[fi]), mask, face_color, has_tex)
 	var tl: Vector2i = Data.block_rect(id, face_name)
 	var b := acc.q * 4
 	var ib := acc.q * 6
@@ -482,14 +617,16 @@ func _qwrite_merged(acc: Acc, fi: int, n: Vector3i, cva: Array, c0: Array, W: in
 	acc.q += 1
 
 
-func _emit_ro_merged(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, has_tex: bool, fn: Array, fsh: PackedFloat32Array, fcv: Array, ct: PackedColorArray, cs: PackedColorArray, cb: PackedColorArray, ms: Dictionary) -> void:
+func _emit_ro_merged(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, has_tex: bool, fn: Array, fsh: PackedFloat32Array, fcv: Array, ct: PackedColorArray, cs: PackedColorArray, cb: PackedColorArray, ms: Dictionary, bmask: PackedByteArray) -> void:
 	var rects: Dictionary = ms.rects
 	var ms_h: float = float(ms.get("h", Data.ATLAS_PX))
 	var wx0 := cx * SIZE
 	var wz0 := cz * SIZE
 	var hgt := Data.HEIGHT
-	# grid layout per face: [id, fni, shade, u0, v0, plane] with
+	# grid layout per face: [id, fni, shade, s, mask, u0, v0, plane] with
 	# key = plane * (vmax * 16) + v0 * 16 + u0 (arithmetic — bit packing collides for y >= 16).
+	# AC-0128: the merge key stays [id, fni, shade] (byte-identical MINFO); s and
+	# the own-chunk block-light mask ride along for the repacked vColor.
 	# fi0/1: plane = lx, v0 = y,  u0 = lz (strip runs along z).
 	# fi2/3: plane = y,  v0 = lz, u0 = lx (strip runs along x; 3D so columns with
 	#      multiple exposed top/bottom faces at different y all survive).
@@ -507,13 +644,15 @@ func _emit_ro_merged(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteAr
 		var id: int = r[4]
 		var fni: int = r[5]
 		var n: Vector3i = fn[fi]
-		var shade: float = float(fsh[fi]) * _face_light(id, wx0 + lx, y, wz0 + lz, n, lmn, larr, lw, ld)
+		var sl: float = _face_light(id, wx0 + lx, y, wz0 + lz, n, lmn, larr, lw, ld)
+		var mask: int = _face_mask(id, wx0 + lx, y, wz0 + lz, n, lmn, hgt, bmask)
+		var shade: float = float(fsh[fi]) * sl
 		if fi == 2 or fi == 3:
-			grids[fi][y * 256 + lz * 16 + lx] = [id, fni, shade, lx, lz, y]
+			grids[fi][y * 256 + lz * 16 + lx] = [id, fni, shade, sl, mask, lx, lz, y]
 		elif fi == 0 or fi == 1:
-			grids[fi][lx * (hgt * 16) + y * 16 + lz] = [id, fni, shade, lz, y, lx]
+			grids[fi][lx * (hgt * 16) + y * 16 + lz] = [id, fni, shade, sl, mask, lz, y, lx]
 		else:
-			grids[fi][lz * (hgt * 16) + y * 16 + lx] = [id, fni, shade, lx, y, lz]
+			grids[fi][lz * (hgt * 16) + y * 16 + lx] = [id, fni, shade, sl, mask, lx, y, lz]
 	for fi in range(6):
 		var n: Vector3i = fn[fi]
 		var cva: Array = fcv[fi]
@@ -553,11 +692,12 @@ func _emit_ro_merged(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteAr
 							g[vi + h * 16 + u] = null
 						h += 1
 					g[vi | u0] = null
-					var si: int = (int(c0[4]) if (fi == 0 or fi == 1 or fi == 4 or fi == 5) else int(c0[5])) / 16
-					_qwrite_merged(accs[si], fi, n, cva, c0, w, h, has_tex, ct, cs, cb, _merge_strip(rects, int(c0[0]), int(c0[1])), ms_h)
+					# AC-0128: the y coordinate moved from c0[4]/c0[5] to c0[6]/c0[7].
+					var si: int = (int(c0[6]) if (fi == 0 or fi == 1 or fi == 4 or fi == 5) else int(c0[7])) / 16
+					_qwrite_merged(accs[si], fi, n, cva, c0, w, h, has_tex, ct, cs, cb, fsh, _merge_strip(rects, int(c0[0]), int(c0[1])), ms_h)
 
 
-func _emit_xquad(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, has_tex: bool, ct: PackedColorArray) -> void:
+func _emit_xquad(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, has_tex: bool, ct: PackedColorArray, bmask: PackedByteArray) -> void:
 	var rc := {}
 	var uvc := {}
 	var wx0 := cx * SIZE
@@ -567,10 +707,14 @@ func _emit_xquad(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray,
 		var y: int = r[1]
 		var lz: int = r[2]
 		var id: int = r[3]
-		var s := clampf(float(_effl(lmn, larr, lw, ld, wx0 + lx, y, wz0 + lz)) / 15.0, MIN_AMB, 1.0) * 0.9
+		# AC-0128: s = light scalar (the 0.9 face shade moves to the b channel
+		# of the repack); mask = own-cell evidence (cross blocks sample only
+		# their own cell for light, like _face_light id==22).
+		var s: float = clampf(float(_effl(lmn, larr, lw, ld, wx0 + lx, y, wz0 + lz)) / 15.0, MIN_AMB, 1.0)
+		var mask: int = _mask_sample(wx0 + lx, y, wz0 + lz, lmn, Data.HEIGHT, bmask)
 		var c: Color
 		if has_tex:
-			c = Color(s, s, s, 1.0) * Data.block_tint(id, "top")
+			c = _light_color(s, 0.9, mask, Color.WHITE, true)
 		else:
 			c = ct[id] * 0.9
 		var ukey := id * 8 + 2
@@ -603,15 +747,15 @@ func _emit_fluid(recs: Array, accs: Array, snap: PackedByteArray, snap_fl: Packe
 		var hgt: float = r[4]
 		var sa = accs[y / 16]
 		var rowl := (lz + 1) * SNAP_W + (lx + 1)
-		var tint_t := Data.block_tint(id, "top")
-		var tint_s := Data.block_tint(id, "side")
-		var tint_b := Data.block_tint(id, "bottom")
+		# AC-0128: fluid surface quads keep the legacy gray vColor (no eff
+		# bake — pre-existing gap, plan §7 out of scope) but the block tints
+		# are dropped: they are baked into the atlas pixels now.
 		var above := 0
 		if y + 1 < Data.HEIGHT:
 			above = snap[(y + 1) * SNAP_ROW + rowl]
 		if above != id:
 			var top_h := minf(hgt, 0.875 if id == 5 else 0.95)
-			_qwrite(sa, sa.q, Color(0.95, 0.95, 0.95, 1.0) * tint_t if has_tex else ct[id] * 0.95, Vector3i(0, 1, 0), _uvc(uvc, rc, id, 2, "top", fn, fcv), fcv[2], lx, y, lz, top_h, top_h, top_h, top_h)
+			_qwrite(sa, sa.q, Color(0.95, 0.95, 0.95, 1.0) if has_tex else ct[id] * 0.95, Vector3i(0, 1, 0), _uvc(uvc, rc, id, 2, "top", fn, fcv), fcv[2], lx, y, lz, top_h, top_h, top_h, top_h)
 			sa.q += 1
 		for fi in [0, 1, 4, 5]:
 			var n: Vector3i = fn[fi]
@@ -622,13 +766,13 @@ func _emit_fluid(recs: Array, accs: Array, snap: PackedByteArray, snap_fl: Packe
 			if hn >= hgt:
 				continue
 			var cva = fcv[fi]
-			_qwrite(sa, sa.q, Color(0.85, 0.85, 0.85, 1.0) * tint_s if has_tex else cs[id] * 0.85, n, _uvc(uvc, rc, id, fi, "side", fn, fcv), cva, lx, y, lz, hgt if cva[0].y == 1.0 else hn, hgt if cva[1].y == 1.0 else hn, hgt if cva[2].y == 1.0 else hn, hgt if cva[3].y == 1.0 else hn)
+			_qwrite(sa, sa.q, Color(0.85, 0.85, 0.85, 1.0) if has_tex else cs[id] * 0.85, n, _uvc(uvc, rc, id, fi, "side", fn, fcv), cva, lx, y, lz, hgt if cva[0].y == 1.0 else hn, hgt if cva[1].y == 1.0 else hn, hgt if cva[2].y == 1.0 else hn, hgt if cva[3].y == 1.0 else hn)
 			sa.q += 1
 		var below := 0
 		if y > 0:
 			below = snap[(y - 1) * SNAP_ROW + rowl]
 		if y > 0 and below != id:
-			_qwrite(sa, sa.q, Color(0.6, 0.6, 0.6, 1.0) * tint_b if has_tex else cb[id] * 0.6, Vector3i(0, -1, 0), _uvc(uvc, rc, id, 3, "bottom", fn, fcv), fcv[3], lx, y, lz, 0.0, 0.0, 0.0, 0.0)
+			_qwrite(sa, sa.q, Color(0.6, 0.6, 0.6, 1.0) if has_tex else cb[id] * 0.6, Vector3i(0, -1, 0), _uvc(uvc, rc, id, 3, "bottom", fn, fcv), fcv[3], lx, y, lz, 0.0, 0.0, 0.0, 0.0)
 			sa.q += 1
 
 
@@ -765,7 +909,7 @@ static func _s_fluid_quad_count(lx: int, y: int, lz: int, id: int, hgt: float, s
 	return cnt
 
 
-static func _s_emit_faces(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, cx: int, cz: int, has_tex: bool, xtab: PackedByteArray, ctx: Dictionary) -> void:
+static func _s_emit_faces(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, cx: int, cz: int, has_tex: bool, xtab: PackedByteArray, ctx: Dictionary, bmask: PackedByteArray) -> void:
 	var fn: Array = ctx["fn"]
 	var fsh: PackedFloat32Array = ctx["fsh"]
 	var fcv: Array = ctx["fcv"]
@@ -802,8 +946,12 @@ static func _s_emit_faces(recs: Array, accs: Array, lmn: Vector3i, larr: PackedB
 		if xtab[id] > 0:
 			face_name = "side"
 			tint = ctx["tint_side"][id]
-		var shade: float = float(fsh[fi]) * _s_face_light(id, wx0 + lx, y, wz0 + lz, n, lmn, larr, lw, ld, h)
-		var c: Color = _light_color(shade, face_color, has_tex)
+		# AC-0128: s + own-chunk mask (tints are baked into the atlas; the
+		# ctx tint arrays are white with the atlas, so the multiply below is
+		# a no-op in the lit path).
+		var sl: float = _s_face_light(id, wx0 + lx, y, wz0 + lz, n, lmn, larr, lw, ld, h)
+		var mask: int = _face_mask(id, wx0 + lx, y, wz0 + lz, n, lmn, h, bmask)
+		var c: Color = _light_color(sl, float(fsh[fi]), mask, face_color, has_tex)
 		if has_tex:
 			c = c * tint
 		var uvs := _s_uvc(uvc, brect, id, fi, face_name, fn, fcv, atlas_px)
@@ -813,13 +961,16 @@ static func _s_emit_faces(recs: Array, accs: Array, lmn: Vector3i, larr: PackedB
 		sa.q += 1
 
 
+# AC-0128: c0 payload = [id, fni, shade(=fsh*s merge key), s, mask, u0, v0, plane].
 static func _s_qwrite_merged(acc, fi: int, n: Vector3i, cva: Array, c0: Array, W: int, H: int, has_tex: bool, ctx: Dictionary, sr: Vector2i, ms_h: float) -> void:
 	var id: int = c0[0]
 	var fni: int = c0[1]
 	var shade: float = c0[2]
-	var u0: int = c0[3]
-	var v0: int = c0[4]
-	var plane: int = c0[5]
+	var s: float = c0[3]
+	var mask: int = c0[4]
+	var u0: int = c0[5]
+	var v0: int = c0[6]
+	var plane: int = c0[7]
 	var face_name := "side"
 	var face_color: Color
 	var tint: Color = ctx["tint_side"][id]
@@ -833,7 +984,9 @@ static func _s_qwrite_merged(acc, fi: int, n: Vector3i, cva: Array, c0: Array, W
 		tint = ctx["tint_bottom"][id]
 	else:
 		face_color = ctx["cs"][id]
-	var c: Color = _light_color(shade, face_color, has_tex)
+	# AC-0128: repacked vColor (s, fsh[fi], mask); ctx tints are white with
+	# the atlas, so the multiply below stays a no-op in the lit path.
+	var c: Color = _light_color(s, float(ctx["fsh"][fi]), mask, face_color, has_tex)
 	if has_tex:
 		c = c * tint
 	var tl: Vector2i = ctx["brect"].get("%d_%s" % [id, face_name], Vector2i(-1, -1))
@@ -912,7 +1065,7 @@ static func _s_qwrite_merged(acc, fi: int, n: Vector3i, cva: Array, c0: Array, W
 	acc.q += 1
 
 
-static func _s_emit_ro_merged(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, cx: int, cz: int, has_tex: bool, ctx: Dictionary, ms: Dictionary) -> void:
+static func _s_emit_ro_merged(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, cx: int, cz: int, has_tex: bool, ctx: Dictionary, ms: Dictionary, bmask: PackedByteArray) -> void:
 	var rects: Dictionary = ms.rects
 	var ms_h: float = float(ms.get("h", float(ctx["atlas_px"])))
 	var wx0 := cx * SIZE
@@ -940,13 +1093,16 @@ static func _s_emit_ro_merged(recs: Array, accs: Array, lmn: Vector3i, larr: Pac
 		var id: int = r[4]
 		var fni: int = r[5]
 		var n: Vector3i = fn[fi]
-		var shade: float = float(fsh[fi]) * _s_face_light(id, wx0 + lx, y, wz0 + lz, n, lmn, larr, lw, ld, hgt)
+		# AC-0128: merge key stays [id, fni, shade]; s + own-chunk mask ride along.
+		var sl: float = _s_face_light(id, wx0 + lx, y, wz0 + lz, n, lmn, larr, lw, ld, hgt)
+		var mask: int = _face_mask(id, wx0 + lx, y, wz0 + lz, n, lmn, hgt, bmask)
+		var shade: float = float(fsh[fi]) * sl
 		if fi == 2 or fi == 3:
-			grids[fi][y * 256 + lz * 16 + lx] = [id, fni, shade, lx, lz, y]
+			grids[fi][y * 256 + lz * 16 + lx] = [id, fni, shade, sl, mask, lx, lz, y]
 		elif fi == 0 or fi == 1:
-			grids[fi][lx * (hgt * 16) + y * 16 + lz] = [id, fni, shade, lz, y, lx]
+			grids[fi][lx * (hgt * 16) + y * 16 + lz] = [id, fni, shade, sl, mask, lz, y, lx]
 		else:
-			grids[fi][lz * (hgt * 16) + y * 16 + lx] = [id, fni, shade, lx, y, lz]
+			grids[fi][lz * (hgt * 16) + y * 16 + lx] = [id, fni, shade, sl, mask, lx, y, lz]
 	for fi in range(6):
 		var n: Vector3i = fn[fi]
 		var cva: Array = fcv[fi]
@@ -986,11 +1142,12 @@ static func _s_emit_ro_merged(recs: Array, accs: Array, lmn: Vector3i, larr: Pac
 							g[vi + h * 16 + u] = null
 						h += 1
 					g[vi | u0] = null
-					var si: int = (int(c0[4]) if (fi == 0 or fi == 1 or fi == 4 or fi == 5) else int(c0[5])) / 16
+					# AC-0128: the y coordinate moved from c0[4]/c0[5] to c0[6]/c0[7].
+					var si: int = (int(c0[6]) if (fi == 0 or fi == 1 or fi == 4 or fi == 5) else int(c0[7])) / 16
 					_s_qwrite_merged(accs[si], fi, n, cva, c0, w, h, has_tex, ctx, _merge_strip(rects, int(c0[0]), int(c0[1])), ms_h)
 
 
-static func _s_emit_xquad(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, cx: int, cz: int, has_tex: bool, ctx: Dictionary) -> void:
+static func _s_emit_xquad(recs: Array, accs: Array, lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, cx: int, cz: int, has_tex: bool, ctx: Dictionary, bmask: PackedByteArray) -> void:
 	var brect: Dictionary = ctx["brect"]
 	var atlas_px: float = float(ctx["atlas_px"])
 	var h: int = int(ctx["h"])
@@ -1002,10 +1159,13 @@ static func _s_emit_xquad(recs: Array, accs: Array, lmn: Vector3i, larr: PackedB
 		var y: int = r[1]
 		var lz: int = r[2]
 		var id: int = r[3]
-		var s := clampf(float(_s_effl(lmn, larr, lw, ld, wx0 + lx, y, wz0 + lz, h)) / 15.0, MIN_AMB, 1.0) * 0.9
+		# AC-0128: s = light scalar (0.9 face shade -> b channel); mask =
+		# own-cell evidence; ctx tints are white with the atlas.
+		var s: float = clampf(float(_s_effl(lmn, larr, lw, ld, wx0 + lx, y, wz0 + lz, h)) / 15.0, MIN_AMB, 1.0)
+		var mask: int = _mask_sample(wx0 + lx, y, wz0 + lz, lmn, h, bmask)
 		var c: Color
 		if has_tex:
-			c = Color(s, s, s, 1.0) * ctx["tint_top"][id]
+			c = _light_color(s, 0.9, mask, Color.WHITE, true) * ctx["tint_top"][id]
 		else:
 			c = ctx["ct"][id] * 0.9
 		var ukey := id * 8 + 2
@@ -1146,10 +1306,20 @@ static func make_ctx() -> Dictionary:
 	var tint_top := PackedColorArray(); tint_top.resize(256)
 	var tint_side := PackedColorArray(); tint_side.resize(256)
 	var tint_bottom := PackedColorArray(); tint_bottom.resize(256)
+	# AC-0128: with the atlas loaded the block tints are baked into the atlas
+	# pixels (data.gd _bake_atlas_tints) — the vertex-color tints go WHITE so
+	# every emit-site multiply becomes a no-op (the no-atlas path keeps the
+	# legacy tint-free face colors, exactly as before).
+	var _tint_white := Data.atlas_tex != null
 	for bi in range(256):
-		tint_top[bi] = Data.block_tint(bi, "top")
-		tint_side[bi] = Data.block_tint(bi, "side")
-		tint_bottom[bi] = Data.block_tint(bi, "bottom")
+		if _tint_white:
+			tint_top[bi] = Color.WHITE
+			tint_side[bi] = Color.WHITE
+			tint_bottom[bi] = Color.WHITE
+		else:
+			tint_top[bi] = Data.block_tint(bi, "top")
+			tint_side[bi] = Data.block_tint(bi, "side")
+			tint_bottom[bi] = Data.block_tint(bi, "bottom")
 	# Precomputed per-face rects, keyed "%d_%s" like the merge-atlas cache.
 	# The sync path's _face_rect fallback resolves the same (id, face_name)
 	# pairs, so values are identical.
@@ -1189,9 +1359,10 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	# crosses the boundary), cached eff -> validated upstream by ngen.
 	var eff_strips: Array = ctx.get("eff_strips", [])
 	var blk_strips: Array = ctx.get("blk_strips", [])
+	var blk_strips_b: Array = ctx.get("blk_strips_b", [])
 	var light: Dictionary = eff
-	if light.is_empty():
-		light = Lighting.compute_light_flat_chunk_pull(data, cx, cz, h, eff_strips, blk_strips)
+	if light.is_empty() or light.get("mask", null) == null:
+		light = Lighting.compute_light_flat_chunk_pull(data, cx, cz, h, eff_strips, blk_strips, blk_strips_b)
 	# 20x20 bake box: face light samples the neighbors' FINAL eff at the
 	# boundary (web lightAt :963 — missing neighbor -> margin 0, not 15).
 	var bb := _bake_box(light, eff_strips, h)
@@ -1278,15 +1449,18 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 		_qgrow(s_ax[si], c_ax[si])
 	# ms carries duplicated rects + h (main-thread merge-atlas cache); an empty
 	# rects dict means "plain atlas" — mirrors build_mesh's ms.tex != null gate.
+	# AC-0128 RUN 3: the block-light flood mask rides the light dict (pull
+	# kernel / eff cache) - transient, never per-chunk state.
+	var bmask: PackedByteArray = light["mask"]
 	if not ms.rects.is_empty() and ro.size() > 0:
-		_s_emit_ro_merged(ro, s_ao, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, ctx, ms)
+		_s_emit_ro_merged(ro, s_ao, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, ctx, ms, bmask)
 	else:
-		_s_emit_faces(ro, s_ao, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, xtab, ctx)
-	_s_emit_faces(rc_o, s_ac, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, xtab, ctx)
+		_s_emit_faces(ro, s_ao, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, xtab, ctx, bmask)
+	_s_emit_faces(rc_o, s_ac, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, xtab, ctx, bmask)
 	_s_emit_fluid(rf_w, s_af_w, snap, snap_fl, has_tex, ctx, h)
 	_s_emit_fluid(rf_l, s_af_l, snap, snap_fl, has_tex, ctx, h)
-	_s_emit_faces(rk, s_ak, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, xtab, ctx)
-	_s_emit_xquad(rq, s_ax, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, ctx)
+	_s_emit_faces(rk, s_ak, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, xtab, ctx, bmask)
+	_s_emit_xquad(rq, s_ax, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, ctx, bmask)
 	var slabs_out: Array = []
 	for si in range(5):
 		slabs_out.append([s_ao[si], s_ac[si], s_af_w[si], s_af_l[si], s_ak[si], s_ax[si]])
@@ -1696,12 +1870,10 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	# AC-0129: the 20x20 bake box margins need the neighbor eff strips; the
 	# self-light compute_light_flat pulls through the same ones internally.
 	var st = Game.world._strips_for(cx, cz)
-	if light.is_empty():
-		light = Lighting.compute_light_flat({
-			"min": Vector3i(wx0 - STANDALONE_MARGIN, 0, wz0 - STANDALONE_MARGIN),
-			"max": Vector3i(wx0 + SIZE - 1 + STANDALONE_MARGIN, Data.HEIGHT - 1, wz0 + SIZE - 1 + STANDALONE_MARGIN),
-		}, Game.world)
-	last_eff = light
+	if light.is_empty() or light.get("mask", null) == null:
+		light = Lighting.compute_light_flat_chunk_pull(data, cx, cz, Data.HEIGHT, st["eff"], st["blk"], st["blk_b"])
+	last_eff = _eff_store(light)
+	last_blk_ring = light.get("ring", PackedInt32Array())
 	var bb := _bake_box(light, st["eff"], Data.HEIGHT)
 	var snap := PackedByteArray()
 	snap.resize(SNAP_ROW * Data.HEIGHT)
@@ -1820,19 +1992,33 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	var ms := _merge_atlas()
 	if OS.get_environment("AWECRAFT_MERGE") == "0":
 		ms = {"tex": null, "rects": {}}
+	# AC-0128 RUN 3: the block-light flood mask rides the light dict -
+	# transient, never per-chunk state.
+	var bmask: PackedByteArray = light["mask"]
 	if ms.tex != null and ro.size() > 0:
-		_emit_ro_merged(ro, s_ao, bb["mn"], bb["arr"], 20, 20, has_tex, fn, fsh, fcv, ct, cs, cb, ms)
+		_emit_ro_merged(ro, s_ao, bb["mn"], bb["arr"], 20, 20, has_tex, fn, fsh, fcv, ct, cs, cb, ms, bmask)
 	else:
-		_emit_faces(ro, s_ao, bb["mn"], bb["arr"], 20, 20, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
-	_emit_faces(rc_o, s_ac, bb["mn"], bb["arr"], 20, 20, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
+		_emit_faces(ro, s_ao, bb["mn"], bb["arr"], 20, 20, has_tex, xtab, fn, fsh, fcv, ct, cs, cb, bmask)
+	_emit_faces(rc_o, s_ac, bb["mn"], bb["arr"], 20, 20, has_tex, xtab, fn, fsh, fcv, ct, cs, cb, bmask)
 	_emit_fluid(rf_w, s_af_w, snap, snap_fl, has_tex, fn, fcv, ct, cs, cb)
 	_emit_fluid(rf_l, s_af_l, snap, snap_fl, has_tex, fn, fcv, ct, cs, cb)
-	_emit_faces(rk, s_ak, bb["mn"], bb["arr"], 20, 20, has_tex, xtab, fn, fsh, fcv, ct, cs, cb)
-	_emit_xquad(rq, s_ax, bb["mn"], bb["arr"], 20, 20, has_tex, ct)
+	_emit_faces(rk, s_ak, bb["mn"], bb["arr"], 20, 20, has_tex, xtab, fn, fsh, fcv, ct, cs, cb, bmask)
+	_emit_xquad(rq, s_ax, bb["mn"], bb["arr"], 20, 20, has_tex, ct, bmask)
 	for si in range(5):
 		_assemble_slab(slabs[si], s_ao[si], s_ac[si], s_af_w[si], s_af_l[si], s_ak[si], s_ax[si], ms)
 	mesh_built = true
 	_post_build_collision()
+
+
+# AC-0128 RUN 3: the chunk keeps only the eff bytes (+blk_src) in last_eff -
+# the 16KB block-light mask rides the light dict for the bake + the bounded
+# eff cache (world.gd, EFF_CACHE_CAP) and is never pinned per-chunk (memory
+# fence r50).
+static func _eff_store(light: Dictionary) -> Dictionary:
+	var t := {"mn": light["mn"], "w": light["w"], "d": light["d"], "arr": light["arr"]}
+	if light.has("blk_src"):
+		t["blk_src"] = light["blk_src"]
+	return t
 
 
 # AC-0107: main-thread assembly for the worker-built surface buffers — the
@@ -1851,7 +2037,8 @@ func apply_accs(res: Dictionary, ms: Dictionary) -> void:
 		if s.flora_instance != null:
 			s.flora_instance.queue_free()
 			s.flora_instance = null
-	last_eff = res.light
+	last_eff = _eff_store(res.light)
+	last_blk_ring = res.light.get("ring", PackedInt32Array())
 	for si in range(5):
 		var row: Array = res.slabs[si]
 		_assemble_slab(slabs[si], _acc_from_dict(row[0]), _acc_from_dict(row[1]), _acc_from_dict(row[2]), _acc_from_dict(row[3]), _acc_from_dict(row[4]), _acc_from_dict(row[5]), ms)
