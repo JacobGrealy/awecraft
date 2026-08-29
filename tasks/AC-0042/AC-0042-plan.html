@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AC-0042 — Planet Plan v2 — Plays Flat, Looks Spherical + Solar System → Galaxy (Mass Relay)</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a20; --card:#1d212b; --line:#2a2f3d; --text:#e6e8ee; --muted:#9aa3b2; --accent:#7cc4ff; --accent2:#a78bfa; --good:#34d399; --warn:#fbbf24; --bad:#f87171; --mono: ui-monospace, SFMono-Regular, Menlo, monospace; --sans: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.55}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header{position:sticky;top:0;z-index:10;background:rgba(15,17,21,.92);backdrop-filter: blur(8px);border-bottom:1px solid var(--line)}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+  header .wrap{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;gap:16px;flex-wrap:wrap}
+  .tag{font:600 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;padding:6px 8px;border-radius:999px;background:#1e293b;border:1px solid #334155;color:#93c5fd}
+  .tag.ring{color:#fde68a;background:#2a2200;border-color:#6b5a00}
+  .tag.sphere{color:#c4b5fd;background:#1e1a33;border-color:#4c3b8a}
+  .tag.relay{color:#86efac;background:#12201a;border-color:#234d3a}
+  h1{font-size:22px;margin:0;line-height:1.2}
+  h1 span{font-weight:400;color:var(--muted)}
+  .sub{color:var(--muted);font-size:13px;margin-top:4px}
+  nav.toc{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  nav.toc a{font:600 12px var(--mono);padding:6px 10px;border-radius:999px;background:var(--card);border:1px solid var(--line);color:var(--muted)}
+  nav.toc a:hover{color:var(--text);border-color:#3a4156}
+  main{padding:22px 0 40px}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px;margin:16px 0}
+  section h2{font-size:16px;margin:0 0 10px;display:flex;align-items:center;gap:10px}
+  section h2 .num{font:700 11px var(--mono);background:var(--card);border:1px solid var(--line);padding:4px 7px;border-radius:999px;color:var(--muted)}
+  h3{font-size:14px;margin:16px 0 8px;color:#dbe1ea}
+  h4{font-size:13px;margin:10px 0 6px}
+  p, li{font-size:13.5px;color:#d4dae6}
+  li{margin:4px 0}
+  .muted{color:var(--muted)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:860px){.grid2{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 13px}
+  .card h4{margin:0 0 6px;font-size:13px}
+  .kvs{display:grid;grid-template-columns:140px 1fr;gap:6px 12px;font-size:13px}
+  .kvs dt{color:var(--muted);font:600 12px var(--mono)}
+  .kvs dd{margin:0}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0}
+  th,td{border:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}
+  th{background:#1a1e27;font:700 11px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:#aeb8c9}
+  td{color:#d4dae6}
+  tr:nth-child(even) td{background:rgba(255,255,255,.02)}
+  .pill{font:700 10px var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:3px 6px;border-radius:999px;display:inline-block}
+  .pill.good{background:rgba(52,211,153,.15);color:var(--good);border:1px solid rgba(52,211,153,.35)}
+  .pill.warn{background:rgba(251,191,36,.14);color:var(--warn);border:1px solid rgba(251,191,36,.32)}
+  .pill.bad{background:rgba(248,113,113,.13);color:var(--bad);border:1px solid rgba(248,113,113,.32)}
+  .pill.info{background:rgba(124,196,255,.12);color:var(--accent);border:1px solid rgba(124,196,255,.28)}
+  code, .mono{font-family:var(--mono);font-size:12.5px}
+  code{background:#0b0e14;border:1px solid #242a38;padding:1px 5px;border-radius:6px}
+  pre{background:#0b0e14;border:1px solid #242a38;padding:12px;border-radius:10px;overflow:auto;font:12px var(--mono);line-height:1.5;color:#cbd5e1}
+  .callout{border-left:3px solid var(--accent);background:rgba(124,196,255,.08);padding:10px 12px;border-radius:8px;margin:10px 0}
+  .callout.warn{border-left-color:var(--warn);background:rgba(251,191,36,.08)}
+  .callout.good{border-left-color:var(--good);background:rgba(52,211,153,.08)}
+  .callout.relay{border-left-color:var(--good);background:rgba(52,211,153,.06)}
+  .diagram{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch}
+  .diagram .box{flex:1;min-width:220px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+  .diagram .box h4{margin:0 0 6px}
+  .foot{color:var(--muted);font-size:12px;text-align:center;margin-top:18px}
+  .update{border:1px solid #234d3a;background:linear-gradient(135deg, rgba(52,211,153,.08), rgba(124,196,255,.06));border-radius:12px;padding:12px 13px;margin:10px 0}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span class="tag">AC-0042 · research / plan-only</span>
+        <span class="tag sphere">spherical planets · uniform grid</span>
+        <span class="tag relay">solar system → galaxy · mass relay</span>
+        <span class="tag ring" style="opacity:.55">rings deferred — later</span>
+        <span class="tag" style="background:#12201a;border-color:#234d3a;color:#86efac">no code — doc only</span>
+      </div>
+      <h1>Planet-Contained World <span>— v2 plays flat, looks spherical (Godot 4.7.1, Windows-only)</span></h1>
+      <div class="sub">Hard requirement: <strong>plays exactly like flat MC</strong> — no shell doubling, uniform 1 m cubes. Looks spherical. Home planet <code>R=4000</code> exactly; other planets <code>R∈[2000,8000]</code> per seed · solar system → galaxy via Mass Relay · <code>2026-08-29 v2 — home R=4000</code></div>
+      <nav class="toc">
+        <a href="#goal">1 Goal</a><a href="#direction">2 Your direction</a><a href="#uniform">3 Uniform spherical</a><a href="#options">4 Options re-scored</a><a href="#matrix">5 Matrix</a><a href="#solar">6 Solar → Galaxy + Relay</a><a href="#gravity">7 Gravity</a><a href="#gen">8 World-gen</a><a href="#origin">9 Origin</a><a href="#phasing">10 Phasing</a><a href="#rings">11 Rings later</a><a href="#risks">12 Risks</a><a href="#refs">Refs</a>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+<div class="update">
+  <strong style="color:var(--good)">v2 update — your clarification:</strong> "we don't need to hide that it's a sphere — ideally it <strong>plays flat but looks spherical</strong>."
+  <ul style="margin:6px 0 0">
+    <li>Was: fog hid curvature at ground (5–6° dip over 50 chunks concealed). Now: <strong>curvature is intentionally visible</strong> — horizon dips, distant terrain drops, planet limb visible from hills/towers even at ground level.</li>
+    <li>Controls/physics/collision still project onto tangent plane → walking/mining is flat. The sphere is a <em>visual + placement</em> truth, not a physics tax.</li>
+    <li>Solar system now → galaxy via Mass Relay, spherical planets first, no shell doubling — unchanged from v1.</li>
+  </ul>
+</div>
+
+<section id="goal">
+  <h2><span class="num">01</span> Goal — one sentence + success gates</h2>
+  <p><strong>The world is contained to spherical planets that <em>look</em> spherical from the surface (curved horizon, planet limb, dropping terrain) but <em>play</em> byte-identical to flat Minecraft — walk/mine/build on a tangent plane — then fly seamlessly into space, hop between planets in-system, and later jump between solar systems/galaxies via a Mass-Relay network.</strong></p>
+  <div class="grid2">
+    <div class="card">
+      <h4>Must play flat on the ground</h4>
+      <ul>
+        <li>Minecraft controls/capsule/raycast unchanged — movement projected onto tangent plane so mining/step feels flat.</li>
+        <li>Eye +1.62, capsule r0.3/h1.8, jump 8.4, gravity 26 — all per-chunk unchanged.</li>
+        <li><strong>But looks spherical:</strong> horizon visibly dips, distant chunks drop with curvature, towers/hills show limb.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Must feel like a solar system from space</h4>
+      <ul>
+        <li>Ground → air → orbit is continuous (no loading screen).</li>
+        <li>Multiple planets in one save; walk around any of them and you loop (true sphere).</li>
+        <li>Inter-planet flight inside a system; inter-system/galaxy = relay jump (instant load + cinematic).</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout good"><strong>Hard gate:</strong> surface <em>play</em> keeps <code>genhash 25/25</code> parity + battery EXACT (<code>player,interact,light,fluids,craft</code>). Curvature is a <em>placement + camera</em> truth, not a block-size change — looks round, plays flat.</div>
+</section>
+
+<section id="direction">
+  <h2><span class="num">02</span> Your direction — what we lock into the plan</h2>
+  <div class="kvs">
+    <dt>Scale</dt><dd><strong>Solar system now → galaxy later.</strong> P1 ships one playable planet + space around it. P2 adds 3–6 planets in one system. P3 adds relay network to other systems/galaxies. Galaxy is tens of thousands of systems — only reachable by relay, never by sublight flight.</dd>
+    <dt>Shape</dt><dd><strong>Spherical planets first.</strong> Not rings. Rings return as a separate buildable Halo-type megastructure (future optional task).</dd>
+    <dt>Voxel rule</dt><dd><strong>No shells, no doubling, no grid-size changes.</strong> A block is 1 m everywhere. A chunk is <code>16×H×16</code> everywhere (H = 80 today → 384 after AC-0091). Planet curvature never changes block scale.</dd>
+    <dt>Transit fantasy</dt><dd><strong>Mass-Effect relay:</strong> to leave a solar system / galaxy you must build/find/activate a relay that shoots the ship. Inside a system you fly normally. This bounds streaming + saves us from needing 10-hour sublight voids.</dd>
+  </div>
+</section>
+
+<section id="uniform">
+  <h2><span class="num">03</span> How we keep blocks uniform on a sphere — <span class="pill good">no shell doubling</span></h2>
+  <p>Blocky Planet's shells (1 block → 4 above at each boundary) solve "thin near core, fat at surface" but <strong>violate your hard requirement</strong>. We drop them. Instead: the planet is a <strong>uniform-thickness spherical shell</strong> — only the outer <code>H</code> blocks are stored/playable. The interior is not subdivided finer.</p>
+
+  <div class="diagram">
+    <div class="box">
+      <h4>Geometry</h4>
+<pre>planet center C
+radius R  ≈ 6 000–12 000 blocks
+thickness H = 80 (now) → 384 (AC-0091)
+surface = sphere radius R
+bedrock floor = sphere radius R-H
+playable = radial shell [R-H, R]
+core inside R-H = empty / inaccessible
+        (or single filler, not voxelized at 1 m)
+</pre>
+      <p>Over 384 blocks of thickness, radial divergence from center is <code>H/R ≈ 3–6%</code> — negligible. Blocks can stay cubes.</p>
+    </div>
+    <div class="box">
+      <h4>Mapping that keeps 1 m cubes</h4>
+      <ul>
+        <li><strong>Cube-sphere with pre-warp, no doubling.</strong> Take a cube at the origin, give each face an <code>N×N</code> grid where <code>N = 2πR / 16</code>. Pre-warp the flat grid to compensate normalization, then <code>normalize()</code> each vertex onto the sphere. With large R the area distortion after pre-warp is ~2–5% (vs 30–40% raw gnomonic) — invisible in 1 m voxels.</li>
+        <li>Each face's grid is rectangular → your chunk infra survives: a chunk is one <code>16×16</code> patch of that grid extruded radially by H. No 1→4 vertical splits, no sector-edge resolution mismatch.</li>
+        <li>Inside a chunk, blocks remain axis-aligned to the chunk's tangent plane. The chunk itself is rotated so its <code>+Y</code> = outward radial. Neighbor across a cube edge is a rotation (u↔v swap + flip) but <strong>same scale</strong>.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Why this is "plays flat, looks spherical"</h3>
+  <div class="grid2">
+    <div class="card">
+      <h4>Plays flat (physics guarantee)</h4>
+      <ul>
+        <li>At R=8000, tilt between adjacent chunks = <code>atan(16/R) ≈ 0.11°</code>. Inside one chunk gravity deviation &lt;0.12° — capsule rotation imperceptible, step/slope/place feel flat.</li>
+        <li>Greedy meshing, box collision, and light BFS stay per-chunk at uniform scale — same thresholds, same shapes.</li>
+        <li>Controls are projected onto the tangent plane at the player's foot — no "walking uphill toward the pole."</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Looks spherical (visual — now intentional, not hidden)</h4>
+      <ul>
+        <li>Over 50 chunks (≈800 m) horizon dip ≈ 5.7° — <strong>not fogged out</strong>. We show it: horizon line drops, distant terrain sinks, sky gradient wraps with planet curvature.</li>
+        <li>From a hill/tower at ~80–384 m height you see the limb/terminator and curvature — key "you are on a planet" moment without any physics cost.</li>
+        <li>We <em>keep</em> fog for far-chunk pop hiding but tune <code>DayNight.fog_near/far</code> so it fades <em>with</em> curvature falloff, not before it. Previously: <code>fog_far = (r+1)*16*0.95</code> hid it; now: extend far to limb.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Code shape with this choice</h3>
+  <pre>core/sphere_math.gd  (new, pure static) — cube-face ↔ sphere, chunk key ↔ sphere sector
+  world/world.gd       — chunk key becomes (face, cx, cz), neighbor = rotate+translate sector edge
+  world/chunk.gd       — chunk node basis = rotation that maps local +Y → radial out; mesh is built
+                         in local space then node transform places it on sphere (no per-vertex warp)
+  world/generator.gd   — sample 3D noise at sphere_pos = normalize(cube_pos) * (R + height),
+                         or sample 2D heightmap per face with seamless edge blending (cheaper)
+  player/player.gd     — gravity = -normalize(pos - C), movement projected onto tangent plane
+  scenes/main.gd       — per-planet origin (see §9), sky/space lerp by altitude = |pos-C| - R</pre>
+  <div class="callout">Uniform-grid also kills the "12 pentagonal defects" worry of icosahedral hex: cube-sphere defects are just the 8 cube corners where 3 faces meet — there we emit 3 quads meeting at a point (no 1→4 split, just a corner seam). Culling hides interior faces as today.</div>
+
+  <h3 style="margin-top:18px">Where flat faces meet — edge (2 faces) vs corner (3 faces)</h3>
+  <div class="grid2">
+    <div class="card">
+      <h4>Edge — 2 faces meet (12 edges)</h4>
+      <p class="muted" style="font-size:12px;margin:0 0 8px">1 ↔ 1 neighbor with rotation (u↔v swap + flip). Gapless if both faces compute same edge point — guaranteed by pre-warp.</p>
+      <div style="display:flex;gap:14px;align-items:center;justify-content:center;padding:8px 0 4px">
+        <!-- Edge diagram: two flat grids sharing an edge -->
+        <svg width="170" height="110" viewBox="0 0 170 110" style="background:#0b0e14;border:1px solid #242a38;border-radius:8px">
+          <rect x="12" y="18" width="68" height="68" fill="#1e293b" stroke="#334155"/>
+          <rect x="90" y="18" width="68" height="68" fill="#1e293b" stroke="#334155"/>
+          <!-- grids -->
+          <line x1="29" y1="18" x2="29" y2="86" stroke="#2a3347" stroke-width="1"/><line x1="46" y1="18" x2="46" y2="86" stroke="#2a3347"/><line x1="63" y1="18" x2="63" y2="86" stroke="#2a3347"/>
+          <line x1="107" y1="18" x2="107" y2="86" stroke="#2a3347"/><line x1="124" y1="18" x2="124" y2="86" stroke="#2a3347"/><line x1="141" y1="18" x2="141" y2="86" stroke="#2a3347"/>
+          <line x1="12" y1="35" x2="80" y2="35" stroke="#2a3347"/><line x1="12" y1="52" x2="80" y2="52" stroke="#2a3347"/><line x1="12" y1="69" x2="80" y2="69" stroke="#2a3347"/>
+          <line x1="90" y1="35" x2="158" y2="35" stroke="#2a3347"/><line x1="90" y1="52" x2="158" y2="52" stroke="#2a3347"/><line x1="90" y1="69" x2="158" y2="69" stroke="#2a3347"/>
+          <!-- shared edge highlight -->
+          <line x1="80" y1="16" x2="80" y2="88" stroke="#7cc4ff" stroke-width="2.5" stroke-dasharray="6 3"/>
+          <line x1="90" y1="16" x2="90" y2="88" stroke="#7cc4ff" stroke-width="2.5" stroke-dasharray="6 3"/>
+          <text x="46" y="103" fill="#9aa3b2" font-family="monospace" font-size="7.5" text-anchor="middle">face +X</text>
+          <text x="124" y="103" fill="#9aa3b2" font-family="monospace" font-size="7.5" text-anchor="middle">face +Z</text>
+          <text x="85" y="13" fill="#7cc4ff" font-family="monospace" font-size="6.5" text-anchor="middle">shared edge</text>
+        </svg>
+        <div style="font:12px var(--mono);color:#9aa3b2;line-height:1.4">neighbor<br>= rotate<br><code style="font-size:10px">u ↔ -v</code></div>
+      </div>
+      <ul style="margin:6px 0 0">
+        <li>Today: <code>cx±1</code>. On sphere: <code>(face,cx,cz) → (face',cx',cz')</code> via 12-entry table.</li>
+        <li>Greedy stops at the edge — no cross-face merge (perf seam, not hole).</li>
+        <li>Headless probe: slab straddling edge = no hole / no Z-fight.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Corner — 3 faces meet (8 corners)</h4>
+      <p class="muted" style="font-size:12px;margin:0 0 8px">The only place 3 blocks meet (normally 4). Your feet never sit *on* the point.</p>
+      <div style="display:flex;gap:16px;align-items:flex-start;justify-content:center;padding:6px 0 2px;flex-wrap:wrap">
+        <!-- Normal 4-way cross -->
+        <div style="text-align:center">
+          <svg width="86" height="86" viewBox="0 0 86 86" style="background:#0b0e14;border:1px solid #242a38;border-radius:8px">
+            <rect x="4" y="4" width="37" height="37" fill="#1e293b" stroke="#334155"/><rect x="45" y="4" width="37" height="37" fill="#1e293b" stroke="#334155"/>
+            <rect x="4" y="45" width="37" height="37" fill="#1e293b" stroke="#334155"/><rect x="45" y="45" width="37" height="37" fill="#1e293b" stroke="#334155"/>
+            <line x1="43" y1="4" x2="43" y2="82" stroke="#475569" stroke-width="1.2"/><line x1="4" y1="43" x2="82" y2="43" stroke="#475569" stroke-width="1.2"/>
+            <circle cx="43" cy="43" r="2.2" fill="#e6e8ee"/>
+          </svg>
+          <div style="font:10px var(--mono);color:#9aa3b2;margin-top:4px">normal: 4 meet<br><code style="font-size:9px">+ cross</code></div>
+        </div>
+        <!-- Corner 3-way Y -->
+        <div style="text-align:center">
+          <svg width="86" height="86" viewBox="0 0 86 86" style="background:#0b0e14;border:1px solid #242a38;border-radius:8px">
+            <!-- three quads around center -->
+            <path d="M43 43 L43 4 L4 4 L4 43 Z" fill="#1e293b" stroke="#334155"/>
+            <path d="M43 43 L82 4 L82 43 Z" fill="#1b2a3a" stroke="#334155"/>
+            <path d="M43 43 L4 82 L43 82 Z" fill="#1e2b1e" stroke="#334155"/>
+            <!-- Y seams -->
+            <line x1="43" y1="43" x2="43" y2="4" stroke="#7cc4ff" stroke-width="1.6"/>
+            <line x1="43" y1="43" x2="82" y2="4" stroke="#a78bfa" stroke-width="1.6"/>
+            <line x1="43" y1="43" x2="4" y2="82" stroke="#34d399" stroke-width="1.6"/>
+            <circle cx="43" cy="43" r="2.6" fill="#fbbf24" stroke="#0b0e14" stroke-width="1.2"/>
+            <text x="27" y="26" fill="#93c5fd" font-size="6" font-family="monospace" text-anchor="middle">+X</text>
+            <text x="66" y="22" fill="#c4b5fd" font-size="6" font-family="monospace" text-anchor="middle">+Y</text>
+            <text x="22" y="66" fill="#86efac" font-size="6" font-family="monospace" text-anchor="middle">+Z</text>
+          </svg>
+          <div style="font:10px var(--mono);color:#fbbf24;margin-top:4px">corner: 3 meet<br><code style="font-size:9px">Y seam</code></div>
+        </div>
+        <!-- Eye-height mock -->
+        <div style="text-align:center;min-width:92px">
+          <svg width="92" height="86" viewBox="0 0 92 86" style="background:#0b0e14;border:1px solid #242a38;border-radius:8px">
+            <!-- ground plane with perspective -->
+            <polygon points="6,62 86,62 72,78 20,78" fill="#1e293b" stroke="#334155"/>
+            <!-- grid lines receding -->
+            <line x1="28" y1="62" x2="34" y2="78" stroke="#2a3347"/><line x1="46" y1="62" x2="46" y2="78" stroke="#7cc4ff" stroke-width="1.2"/><line x1="64" y1="62" x2="58" y2="78" stroke="#2a3347"/>
+            <line x1="6" y1="68" x2="86" y2="68" stroke="#2a3347"/><line x1="14" y1="73" x2="78" y2="73" stroke="#2a3347"/>
+            <!-- Y seam emanating forward -->
+            <line x1="46" y1="62" x2="26" y2="46" stroke="#fbbf24" stroke-width="1.4" stroke-dasharray="4 2"/>
+            <line x1="46" y1="62" x2="66" y2="46" stroke="#fbbf24" stroke-width="1.4" stroke-dasharray="4 2"/>
+            <!-- horizon dip -->
+            <path d="M6 36 Q46 42 86 36" fill="none" stroke="#475569" stroke-width="1" stroke-dasharray="3 3"/>
+            <text x="46" y="18" fill="#9aa3b2" font-size="5.5" font-family="monospace" text-anchor="middle">horizon dips ~5.7°</text>
+            <text x="46" y="84" fill="#9aa3b2" font-size="6" font-family="monospace" text-anchor="middle">feet: flat</text>
+          </svg>
+          <div style="font:10px var(--mono);color:#9aa3b2;margin-top:4px">eye height<br><span style="color:#e6e8ee">flat under feet</span></div>
+        </div>
+      </div>
+      <ul style="margin:6px 0 0">
+        <li>Standing on it: ground under capsule is one face → <strong>flat</strong>. Y-seam is 0.5–8 m away.</li>
+        <li>Look down: grout is a <code>Y</code>, not a <code>+</code> — 3 quads meet at a point. No hole if edge vertices are bitwise identical.</li>
+        <li>Look out: distant seam stays a single faint line (same as any chunk border), kink &lt;0.5° — horizon still reads as smooth sphere.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout good"><strong>What to verify headless:</strong> spawn a <code>5×5</code> slab centered on each of the 8 corners + walk a capsule across every edge (12) and corner (8) at <code>R=8000</code> — probe asserts <code>block_at</code> round-trips, <code>light_at</code> has no dark line, and a 60 Hz walk keeps <code>on_floor</code> true with no bump. Visual gate: ground render from 1.62 m eye shows a <code>Y</code> grout, not a hole or Z-fight.</div>
+
+  <h3 style="margin-top:18px">High-level intuition — blankets on a beach ball</h3>
+  <div class="card" style="background:#0f141c;border-color:#2a3347">
+    <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap">
+      <div style="flex:1;min-width:260px">
+        <p style="margin:0 0 8px"><strong>Forget code — picture 6 square blankets draped over a beach ball</strong> (front/back/left/right/top/bottom). Each blanket is a normal flat Minecraft grid (<code>1 m</code> squares, same <code>16×16</code> chunks you have today) gently bent to the ball. That's the planet.</p>
+        <ul style="margin:6px 0 0">
+          <li><strong>Middle of a blanket:</strong> flat MC — you can't tell you're on a ball.</li>
+          <li><strong>Where 2 blankets meet (edge):</strong> two sheets taped edge-to-edge — like a normal chunk border, just rotated. You walk and build right across it.</li>
+          <li><strong>Where 3 blankets meet (corner):</strong> 3 corners touch one point. On a bathroom floor 4 tiles meet (<code>+</code>); here 3 meet (<code>Y</code>). The tops are flush so your feet feel flat.</li>
+          <li><strong>The gap:</strong> under those 3 tops, their side walls leave a tiny triangular gap — a few centimeters at <code>R=8000</code>, completely <em>below</em> the ground you walk on. We drop an invisible foundation stone in it (same as bedrock today) so the game never thinks there's a hole or light leak. You never see it, never mine it.</li>
+          <li>Result: <em>plays</em> flat (your blanket is flat where you stand), <em>looks</em> round (distant blankets visibly curve and the horizon dips ~5.7° over 50 chunks).</li>
+        </ul>
+      </div>
+      <div style="flex:0 0 280px;display:flex;flex-direction:column;gap:10px;align-items:center">
+        <svg width="260" height="160" viewBox="0 0 260 160" style="background:#0b0e14;border:1px solid #242a38;border-radius:10px">
+          <text x="130" y="12" fill="#9aa3b2" font-size="6" font-family="monospace" text-anchor="middle">flat net → folded cube → sphere (curved, but same connectivity)</text>
+          <!-- LEFT: flat net (3 squares) -->
+          <g opacity="1">
+            <rect x="10" y="10" width="84" height="16" rx="3" fill="#0f172a" stroke="#2a3347"/>
+            <text x="52" y="20" fill="#9aa3b2" font-size="5.5" font-family="monospace" text-anchor="middle">flat net (unfolded)</text>
+            <!-- front -->
+            <rect x="22" y="54" width="32" height="32" fill="#1e293b" stroke="#7cc4ff" stroke-width="1.3"/>
+            <text x="38" y="74" fill="#7cc4ff" font-size="6" font-family="monospace" text-anchor="middle">front</text>
+            <!-- top (above front — shares top edge of front) -->
+            <rect x="22" y="22" width="32" height="32" fill="#1b2436" stroke="#a78bfa" stroke-width="1.3"/>
+            <text x="38" y="40" fill="#c4b5fd" font-size="6" font-family="monospace" text-anchor="middle">top</text>
+            <!-- right (to right of front — shares right edge of front) -->
+            <rect x="54" y="54" width="32" height="32" fill="#143025" stroke="#34d399" stroke-width="1.3"/>
+            <text x="70" y="74" fill="#86efac" font-size="6" font-family="monospace" text-anchor="middle">right</text>
+            <!-- shared corner point in net -->
+            <circle cx="54" cy="54" r="2.8" fill="#fbbf24" stroke="#0b0e14" stroke-width="1"/>
+            <text x="54" y="102" fill="#fbbf24" font-size="5" font-family="monospace" text-anchor="middle">• gap in net:</text>
+            <text x="54" y="108" fill="#9aa3b2" font-size="4.5" font-family="monospace" text-anchor="middle">top & right touch</text>
+            <text x="54" y="114" fill="#9aa3b2" font-size="4.5" font-family="monospace" text-anchor="middle">only at • (detached)</text>
+            <!-- edge highlights in net -->
+            <line x1="22" y1="54" x2="54" y2="54" stroke="#a78bfa" stroke-width="1.6"/>
+            <line x1="54" y1="54" x2="54" y2="86" stroke="#34d399" stroke-width="1.6"/>
+            <!-- fold arrows -->
+            <path d="M38 50 L38 58" fill="none" stroke="#475569" stroke-width="1" marker-end="url(#arrowNet)"/>
+            <path d="M48 70 L56 70" fill="none" stroke="#475569" stroke-width="1" marker-end="url(#arrowNet)"/>
+          </g>
+          <defs><marker id="arrowNet" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L6 3 L0 6" fill="none" stroke="#475569" stroke-width="1"/></marker></defs>
+          <!-- MIDDLE arrow net → folded -->
+          <text x="106" y="68" fill="#475569" font-size="14" text-anchor="middle">→</text>
+          <text x="106" y="76" fill="#475569" font-size="4.5" font-family="monospace" text-anchor="middle">fold</text>
+          <!-- RIGHT: folded cube (isometric) — gapLESS -->
+          <g>
+            <rect x="124" y="10" width="128" height="16" rx="3" fill="#0f172a" stroke="#2a3347"/>
+            <text x="188" y="20" fill="#e6e8ee" font-size="5.5" font-family="monospace" text-anchor="middle">folded cube — gapLESS (isometric)</text>
+            <!-- isometric cube: 3 faces meeting at Ct -->
+            <!-- Ct = corner where all 3 meet -->
+            <!-- top face: diamond -->
+            <polygon points="188,28 162,42 188,56 214,42" fill="#2a1f3a" stroke="#a78bfa" stroke-width="1.4"/>
+            <!-- front face -->
+            <polygon points="162,42 162,74 188,88 188,56" fill="#1e293b" stroke="#7cc4ff" stroke-width="1.4"/>
+            <!-- right face -->
+            <polygon points="188,56 188,88 214,74 214,42" fill="#143025" stroke="#34d399" stroke-width="1.4"/>
+            <!-- shared edges — drawn on top -->
+            <!-- front↔top -->
+            <line x1="162" y1="42" x2="188" y2="56" stroke="#0b0e14" stroke-width="4" opacity=".45"/>
+            <line x1="162" y1="42" x2="188" y2="56" stroke="#e6e8ee" stroke-width="1.2"/>
+            <!-- front↔right -->
+            <line x1="188" y1="56" x2="188" y2="88" stroke="#0b0e14" stroke-width="4" opacity=".45"/>
+            <line x1="188" y1="56" x2="188" y2="88" stroke="#e6e8ee" stroke-width="1.2"/>
+            <!-- top↔right — THE edge that looks detached in net but is contiguous when folded -->
+            <line x1="188" y1="56" x2="214" y2="42" stroke="#0b0e14" stroke-width="4.4" opacity=".5"/>
+            <line x1="188" y1="56" x2="214" y2="42" stroke="#fbbf24" stroke-width="2.2"/>
+            <line x1="188" y1="56" x2="214" y2="42" stroke="#0b0e14" stroke-width="1" stroke-dasharray="5 2" opacity=".7"/>
+            <!-- corner dot all 3 meet -->
+            <circle cx="188" cy="56" r="3.6" fill="#fbbf24" stroke="#0b0e14" stroke-width="1.3"/>
+            <circle cx="188" cy="56" r="1.1" fill="#0b0e14"/>
+            <text x="228" y="42" fill="#fbbf24" font-size="5.5" font-family="monospace" font-weight="700">top↔right</text>
+            <text x="228" y="48" fill="#e6e8ee" font-size="4.5" font-family="monospace">contiguous</text>
+            <text x="188" y="102" fill="#9aa3b2" font-size="4.5" font-family="monospace" text-anchor="middle">sphere = same but curved</text>
+          </g>
+          <!-- bottom annotation -->
+          <path d="M68 126 Q130 133 192 126" fill="none" stroke="#475569" stroke-width="1" stroke-dasharray="3 2" opacity=".65"/>
+          <text x="130" y="144" fill="#9aa3b2" font-size="6" font-family="monospace" text-anchor="middle">net = detached at • → folded = gapless at • (all 3 edges contiguous)</text>
+          <text x="130" y="152" fill="#475569" font-size="5" font-family="monospace" text-anchor="middle">sphere blankets are the folded cube bent to a ball — no gaps</text>
+        </svg>
+        <svg width="260" height="88" viewBox="0 0 260 88" style="background:#0b0e14;border:1px solid #242a38;border-radius:10px">
+          <text x="65" y="14" fill="#9aa3b2" font-size="7" font-family="monospace" text-anchor="middle">bathroom floor: 4 meet</text>
+          <text x="195" y="14" fill="#fbbf24" font-size="7" font-family="monospace" text-anchor="middle">beach-ball corner: 3 meet</text>
+          <!-- 4-way -->
+          <rect x="28" y="22" width="18" height="18" fill="#1e293b" stroke="#334155"/><rect x="46" y="22" width="18" height="18" fill="#1e293b" stroke="#334155"/>
+          <rect x="28" y="40" width="18" height="18" fill="#1e293b" stroke="#334155"/><rect x="46" y="40" width="18" height="18" fill="#1e293b" stroke="#334155"/>
+          <line x1="46" y1="22" x2="46" y2="58" stroke="#e6e8ee" stroke-width="1.2"/><line x1="28" y1="40" x2="64" y2="40" stroke="#e6e8ee" stroke-width="1.2"/>
+          <text x="46" y="72" fill="#9aa3b2" font-size="7" font-family="monospace" text-anchor="middle">+ cross</text>
+          <!-- 3-way -->
+          <path d="M195 40 L195 22 L177 22 L177 40 Z" fill="#1e293b" stroke="#334155"/>
+          <path d="M195 40 L213 22 L213 40 Z" fill="#1b2a3a" stroke="#334155"/>
+          <path d="M195 40 L177 58 L195 58 Z" fill="#1e2b1e" stroke="#334155"/>
+          <line x1="195" y1="40" x2="195" y2="22" stroke="#fbbf24" stroke-width="1.4"/>
+          <line x1="195" y1="40" x2="213" y2="22" stroke="#fbbf24" stroke-width="1.4"/>
+          <line x1="195" y1="40" x2="177" y2="58" stroke="#fbbf24" stroke-width="1.4"/>
+          <circle cx="195" cy="40" r="2.3" fill="#fbbf24" stroke="#0b0e14" stroke-width="1"/>
+          <text x="195" y="72" fill="#fbbf24" font-size="7" font-family="monospace" text-anchor="middle">Y seam (gap below)</text>
+          <!-- hidden gap note -->
+          <text x="130" y="84" fill="#475569" font-size="5.5" font-family="monospace" text-anchor="middle">gap = underground foundation stone — invisible, not minable</text>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <h3 style="margin-top:18px">Building up — why towers diverge and how we keep them uniform</h3>
+  <div class="grid2">
+    <div class="card">
+      <h4>Side view — columns spread with height</h4>
+      <div style="display:flex;justify-content:center;padding:6px 0">
+        <svg width="260" height="140" viewBox="0 0 260 140" style="background:#0b0e14;border:1px solid #242a38;border-radius:10px">
+          <!-- sphere center below -->
+          <circle cx="130" cy="220" r="158" fill="none" stroke="#1e293b" stroke-width="1" stroke-dasharray="4 3" opacity=".5"/>
+          <text x="130" y="134" fill="#475569" font-size="5" font-family="monospace" text-anchor="middle">planet center C (R≈4000 avg, per-planet variable)</text>
+          <!-- ground arc -->
+          <path d="M62 92 Q130 68 198 92" fill="#1e293b" stroke="#7cc4ff" stroke-width="1.4"/>
+          <text x="130" y="88" fill="#7cc4ff" font-size="5.5" font-family="monospace" text-anchor="middle">ground (R per planet)</text>
+          <!-- two columns — diverging outward (radial) -->
+          <!-- left column -->
+          <polygon points="108,92 124,92 128,38 104,38" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+          <polygon points="124,92 128,38 144,38 140,92" fill="#1b2436" stroke="#334155" stroke-width="1" opacity=".9"/>
+          <!-- right column -->
+          <polygon points="140,92 156,92 162,38 144,38" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+          <polygon points="156,92 162,38 178,38 172,92" fill="#143025" stroke="#334155" stroke-width="1" opacity=".9"/>
+          <!-- ground gap = 0, top gap = ~5cm per block -->
+          <line x1="124" y1="92" x2="140" y2="92" stroke="#34d399" stroke-width="1.6"/>
+          <text x="132" y="99" fill="#34d399" font-size="5" font-family="monospace" text-anchor="middle">touch at ground</text>
+          <line x1="128" y1="38" x2="144" y2="38" stroke="#fbbf24" stroke-width="1.6" stroke-dasharray="3 2"/>
+          <text x="136" y="34" fill="#fbbf24" font-size="5" font-family="monospace" text-anchor="middle">~9.6 cm / block at 384 m (R=4000)</text>
+          <text x="136" y="28" fill="#9aa3b2" font-size="4.5" font-family="monospace" text-anchor="middle">(+9.6% at R=4000 avg)</text>
+          <!-- radial lines -->
+          <line x1="130" y1="220" x2="116" y2="38" stroke="#475569" stroke-width="0.7" stroke-dasharray="2 2" opacity=".6"/>
+          <line x1="130" y1="220" x2="144" y2="38" stroke="#475569" stroke-width="0.7" stroke-dasharray="2 2" opacity=".6"/>
+          <text x="112" y="52" fill="#475569" font-size="4.5" font-family="monospace" text-anchor="middle" transform="rotate(-8 112 52)">radial</text>
+          <!-- height annotation -->
+          <line x1="192" y1="92" x2="192" y2="38" stroke="#475569" stroke-width="0.8"/>
+          <polygon points="192,92 190,88 194,88" fill="#475569"/><polygon points="192,38 190,42 194,42" fill="#475569"/>
+          <text x="206" y="68" fill="#9aa3b2" font-size="5.5" font-family="monospace" text-anchor="middle">H=384</text>
+          <!-- bottom note -->
+          <text x="130" y="120" fill="#9aa3b2" font-size="5" font-family="monospace" text-anchor="middle">cubes stay 1 m — gap between columns, hidden in grout</text>
+        </svg>
+      </div>
+      <ul style="margin:6px 0 0">
+        <li><code>R=4000 avg</code> (per-planet <code>R∈[2000,8000]</code>): ground gap = 0, at <code>+384 m</code> gap ≈ <code>384/R ≈ 9.6%</code> → <code>9.6 cm</code> / block at 4000 (≈4.8 cm at 8000, ≈19 cm at 2000 clamp).</li>
+        <li>Up to 100 m it's <code>~2.4%</code> at 4000 — still sub-pixel in grout.</li>
+        <li>Columns lean <code>0.23°</code> / 16 m at 4000 — still flat under feet, just `2×` the hairline.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Digging down — the mirror (overlap, not gap)</h4>
+      <div style="display:flex;justify-content:center;padding:6px 0">
+        <svg width="260" height="118" viewBox="0 0 260 118" style="background:#0b0e14;border:1px solid #242a38;border-radius:10px">
+          <!-- ground arc at top -->
+          <path d="M62 22 Q130 10 198 22" fill="#1e293b" stroke="#7cc4ff" stroke-width="1.4"/>
+          <text x="130" y="18" fill="#7cc4ff" font-size="5.5" font-family="monospace" text-anchor="middle">ground (R)</text>
+          <!-- underground columns — converging inward -->
+          <!-- left column -->
+          <polygon points="104,58 128,58 124,86 108,86" fill="#1e293b" stroke="#334155" stroke-width="1" opacity=".9"/>
+          <polygon points="108,86 124,86 120,104 104,104" fill="#1e293b" stroke="#334155" stroke-width="1" opacity=".65"/>
+          <!-- right column -->
+          <polygon points="128,58 152,58 156,86 140,86" fill="#1e293b" stroke="#334155" stroke-width="1" opacity=".9"/>
+          <polygon points="140,86 156,86 160,104 142,104" fill="#1e293b" stroke="#334155" stroke-width="1" opacity=".65"/>
+          <!-- overlap highlight at depth -->
+          <rect x="120" y="88" width="20" height="14" fill="rgba(248,113,113,.22)" stroke="#f87171" stroke-width="0.9" stroke-dasharray="3 2"/>
+          <text x="130" y="97" fill="#f87171" font-size="5" font-family="monospace" text-anchor="middle">~9.6 cm overlap (R=4000)</text>
+          <!-- center lines converging -->
+          <line x1="130" y1="220" x2="118" y2="58" stroke="#475569" stroke-width="0.7" stroke-dasharray="2 2" opacity=".45"/>
+          <line x1="130" y1="220" x2="142" y2="58" stroke="#475569" stroke-width="0.7" stroke-dasharray="2 2" opacity=".45"/>
+          <!-- depth annotation -->
+          <line x1="192" y1="22" x2="192" y2="104" stroke="#475569" stroke-width="0.8"/>
+          <polygon points="192,22 190,26 194,26" fill="#475569"/><polygon points="192,104 190,100 194,100" fill="#475569"/>
+          <text x="206" y="66" fill="#9aa3b2" font-size="5.5" font-family="monospace" text-anchor="middle">384 deep</text>
+          <text x="130" y="112" fill="#9aa3b2" font-size="5" font-family="monospace" text-anchor="middle">cubes stay 1 m — slight overlap underground, hidden (interior faces culled)</text>
+        </svg>
+      </div>
+      <ul style="margin:6px 0 0">
+        <li>Mirror: at <code>-384 m</code> columns would need to be <code>9.6%</code> narrower at <code>R=4000</code> — we keep <code>1 m</code>, so they <strong>overlap</strong> <code>~9.6 cm</code> / block (vs 4.8 cm at 8000).</li>
+        <li><strong>Horizon (realistic culling, locked):</strong> ground horizon from <code>h=1.62 m</code> at <code>R=4000</code> is <code>d≈√(2·R·h) ≈ 114 m</code> (~7 chunks). A <code>30</code>-block tower's top horizon is <code>√(2·R·30)≈490 m</code> → visible out to <code>114+490≈604 m</code> (~37 chunks). Taller = farther, like ships at sea. Hill <code>50 m → 632 m</code>, tower <code>384 m → 1.7 km</code>.</li>
+        <li>Overlap is between side faces <em>underground</em> — interior faces are culled, you never see Z-fighting.</li>
+        <li>Collision stays <code>1 m</code> cubes — overlap makes deep tunnels <em>slightly</em> tighter by centimeters, not blocks.</li>
+      </ul>
+      <div class="callout" style="margin:8px 0 0;padding:8px 10px">
+        <strong>Symmetric fix:</strong> up = gap (filled with hidden grout), down = overlap (hidden by culling). Both keep cubes uniform and are invisible to play — same filler idea as the corner <code>Y</code>.
+      </div>
+    </div>
+    <div class="card">
+      <h4>How we keep it uniform (no wider blocks) — up</h4>
+      <ul>
+        <li><strong>Keep cubes perfect</strong> — collision stays <code>1×1×1</code> cubes, greedy thresholds unchanged.</li>
+        <li>The divergence is a hairline *between* columns, not inside a block. At ground you see no crack; at 384 m it's a `5 cm` line hidden in side-face grout.</li>
+        <li>For a tall wall the top course has that `0.8 m` spread across 16 columns — we seal it with the same hidden filler as the corner `Y` (never exposed, never minable).</li>
+        <li>Alternative (rejected): taper blocks `1.00 → 1.05 m` would close it perfectly but breaks your <code>uniform 1 m</code> gate and complicates <code>Data</code>.</li>
+      </ul>
+      <div class="callout" style="margin:8px 0 0;padding:8px 10px">
+        <strong>What you feel building up:</strong> place a tower 384 high — it stays straight under your feet, no widening. Look down from the top and the horizon still dips `~5.7°` (plays flat, looks spherical holds at any height).
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="options">
+  <h2><span class="num">04</span> Spherical options re-scored after your Picks</h2>
+
+  <h3>B1 — Lat-lon / equirectangular — <span class="pill bad">rejected</span></h3>
+  <p>Single rectangle draped on sphere. Polar singularities → many 1 m blocks squeezed into wedges at poles, chunk topology degenerate. Cannot keep uniform grid without extreme waste at poles. Keep only as a skybox panorama projection, not as playable geometry.</p>
+
+  <h3>B2 — Cube-sphere / quad-sphere — uniform shell — <span class="pill good">chosen for planets</span></h3>
+  <div class="grid2">
+    <div class="card">
+      <h4>Why it wins now</h4>
+      <ul>
+        <li>Only approach that keeps rectangular <code>16×16</code> chunks + uniform 1 m cubes + modest distortion (pre-warped).</li>
+        <li>Proven for voxels (Blocky Planet, Outerra, NMS far-field). Without shell doubling it is exactly your constraint.</li>
+        <li>Each face is a quadtree — streaming/recenter/band-buckets map directly (just 6 faces).</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Remaining cost (no doubling)</h4>
+      <ul>
+        <li>Sector-edge neighbor = rotation+flip (u↔v). Not free, but constant cost and testable headless.</li>
+        <li>3D noise or per-face 2D heightmap with edge stitch (choose 2D for P1 to keep genhash cheap, 3D later for caves that wrap poles seam-free).</li>
+        <li>Physics bodies are rotated per chunk — Godot <code>StaticBody3D</code> transform handles this; no per-block warp.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>B3 — Icosahedral / geodesic / hex — <span class="pill warn">deferred</span></h3>
+  <p>Most uniform area, but faces are triangles/hexes — breaks your square chunks, square textures, and greedy quads. Would require rewriting <code>chunk.gd</code> meshing + atlas. Not justified when cube-sphere already hits &lt;5% distortion at R≥6000 with your uniform-shell trick.</p>
+
+  <h3>B4 — Visual sphere + flat playable (NMS hybrid) — <span class="pill info">now a visual amplifier, not a hide</span></h3>
+  <p>With "plays flat, looks spherical" this becomes a <strong>visual LOD helper</strong>: at orbit distance you see a textured sphere mesh that already shows curvature; on approach you stream the real uniform-shell chunks that <em>also</em> show curvature. The trick is no longer hiding flatness — it's keeping distant chunks as an impostor so you see the whole planet silhouette without streaming 3000 equatorial chunks. Playable layer is still B2.</p>
+
+  <h3 style="margin-top:14px">LOD swap — impostor ↔ chunks hidden in atmosphere (locked)</h3>
+  <div class="card" style="background:#0f141c;border-color:#2a3347">
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start">
+      <div style="flex:1;min-width:280px">
+        <svg width="320" height="150" viewBox="0 0 320 150" style="background:#0b0e14;border:1px solid #242a38;border-radius:10px">
+          <!-- planet -->
+          <circle cx="160" cy="128" r="62" fill="#0f172a" stroke="#334155" stroke-width="1.2"/>
+          <ellipse cx="160" cy="128" rx="62" ry="18" fill="none" stroke="#1e293b" stroke-width="1" stroke-dasharray="3 2" opacity=".5"/>
+          <!-- atmosphere haze band 2000→500 (exaggerated thickness) -->
+          <ellipse cx="160" cy="128" rx="74" ry="74" fill="none" stroke="#7cc4ff" stroke-width="8" stroke-opacity="0.07"/>
+          <ellipse cx="160" cy="128" rx="74" ry="74" fill="none" stroke="#7cc4ff" stroke-width="1" stroke-dasharray="4 2" opacity=".35"/>
+          <text x="235" y="66" fill="#7cc4ff" font-size="4.8" font-family="monospace">atmosphere</text>
+          <!-- altitude markers -->
+          <line x1="40" y1="42" x2="40" y2="128" stroke="#475569" stroke-width="0.8"/>
+          <polygon points="40,42 38,46 42,46" fill="#475569"/><polygon points="40,128 38,124 42,124" fill="#475569"/>
+          <text x="18" y="52" fill="#475569" font-size="4.5" font-family="monospace" text-anchor="middle">2000</text>
+          <text x="18" y="118" fill="#475569" font-size="4.5" font-family="monospace" text-anchor="middle">500</text>
+          <text x="18" y="88" fill="#9aa3b2" font-size="4" font-family="monospace" text-anchor="middle">m</text>
+          <!-- ship path descending -->
+          <path d="M160 22 C158 58 162 92 160 124" fill="none" stroke="#e6e8ee" stroke-width="1.2" stroke-dasharray="5 2"/>
+          <polygon points="160,22 158,28 162,28" fill="#e6e8ee"/>
+          <text x="172" y="28" fill="#e6e8ee" font-size="5.5" font-family="monospace">descent</text>
+          <!-- zone labels -->
+          <!-- >2000 -->
+          <rect x="52" y="14" width="84" height="18" rx="4" fill="#1e293b" stroke="#334155"/>
+          <text x="94" y="22" fill="#93c5fd" font-size="5" font-family="monospace" text-anchor="middle">>2000 m</text>
+          <text x="94" y="28" fill="#9aa3b2" font-size="4.5" font-family="monospace" text-anchor="middle">impostor only</text>
+          <!-- 2000→500 -->
+          <rect x="52" y="52" width="84" height="22" rx="4" fill="#1a2332" stroke="#7cc4ff"/>
+          <text x="94" y="61" fill="#7cc4ff" font-size="5" font-family="monospace" text-anchor="middle">2000 → 500 m</text>
+          <text x="94" y="68" fill="#e6e8ee" font-size="4.5" font-family="monospace" text-anchor="middle">both + haze + dither</text>
+          <!-- <500 -->
+          <rect x="52" y="96" width="84" height="22" rx="4" fill="#143025" stroke="#34d399"/>
+          <text x="94" y="105" fill="#86efac" font-size="5" font-family="monospace" text-anchor="middle">&lt;500 m</text>
+          <text x="94" y="112" fill="#9aa3b2" font-size="4.5" font-family="monospace" text-anchor="middle">chunks only</text>
+          <!-- ground chunks patch at bottom -->
+          <path d="M132 96 Q160 92 188 96 L184 106 Q160 102 136 106 Z" fill="#1e293b" stroke="#7cc4ff" stroke-width="1"/>
+          <text x="160" y="102" fill="#7cc4ff" font-size="4.5" font-family="monospace" text-anchor="middle">~400 chunks</text>
+          <!-- impostor sphere label -->
+          <text x="236" y="128" fill="#c4b5fd" font-size="5" font-family="monospace">impostor sphere</text>
+          <text x="236" y="134" fill="#9aa3b2" font-size="4.5" font-family="monospace">6×512² baked</text>
+        </svg>
+      </div>
+      <div style="flex:1;min-width:240px">
+        <ul style="margin:0">
+          <li><strong>&gt;2000 m:</strong> impostor sphere only — <code>6×512²</code> texture from same fbm as chunks, no voxel streaming. Limb is impostor.</li>
+          <li><strong>2000→500 m — the hide:</strong> both render — impostor `1–2 m` below real terrain (no Z-fight). Real chunks cover the nadir patch (`~400`); limb stays impostor. <strong>Atmosphere haze</strong> (blue shift + desat) already covers the mid-distance, so color mismatch is masked. Impostor alpha <code>smoothstep(500,2000, alt)</code> with dither dissolves, not pops.</li>
+          <li><strong>&lt;500 m:</strong> impostor alpha 0 — chunks only. Horizon beyond `~114 m` is sphere-culling, not fog.</li>
+          <li>Impostor baked once per planet seed — same palette as chunks, so no flash. Scale-invariant: cost `~1.5M` samples whether <code>R=2000</code> or <code>8000</code>.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="matrix">
+  <h2><span class="num">05</span> Updated comparison matrix — with your constraints</h2>
+  <table>
+    <tr><th>Approach</th><th>Sphere truth</th><th>Block uniformity</th><th>MC-feel</th><th>Chunk reuse</th><th>Code risk</th><th>Verdict</th></tr>
+    <tr><td><strong>B2 uniform shell (chosen)</strong></td><td>True sphere (shell thickness H)</td><td><span class="pill good">uniform 1 m</span> — no doubling, pre-warp only</td><td><span class="pill good">plays flat</span> (&lt;0.12°/chunk) + <span class="pill info">looks round</span></td><td><span class="pill good">high</span> — 16×H×16 + 6 faces</td><td><span class="pill warn">med</span> — sector rotation</td><td><span class="pill good">ship P1</span></td></tr>
+    <tr><td>B2 with shells (Blocky Planet full)</td><td>True solid sphere</td><td><span class="pill bad">1→4 doubling</span> violates requirement</td><td>Good</td><td>Med — 1↔4 addr</td><td>High</td><td><span class="pill bad">rejected</span> — requirement</td></tr>
+    <tr><td>B4 hybrid (impostor + flat bubble)</td><td>Fake (visual only)</td><td>Uniform (flat bubble)</td><td>Excellent when landed</td><td>100% reuse</td><td>Med — seam</td><td><span class="pill info">use as LOD</span></td></tr>
+    <tr><td>B1 lat-lon</td><td>True sphere</td><td><span class="pill bad">non-uniform</span> polar pinch</td><td>Poor at poles</td><td>Poor</td><td>High</td><td>Rejected</td></tr>
+    <tr><td>B3 icosa/hex</td><td>True sphere (most uniform area)</td><td>Uniform but tri/hex</td><td>Good</td><td>Poor (tri/hex)</td><td>High</td><td>Deferred</td></tr>
+    <tr><td style="opacity:.6">Ring A1/A3 (Halo)</td><td>Ring, not sphere</td><td>Uniform</td><td>Excellent</td><td>~95% reuse</td><td>Low</td><td style="opacity:.6">Deferred → future megastructure task</td></tr>
+  </table>
+</section>
+
+<section id="solar">
+  <h2><span class="num">06</span> Solar system → galaxy via Mass Relay — <span class="pill relay">your transit fantasy, scoped</span></h2>
+  <div class="grid2">
+    <div class="card">
+      <h4>What we ship when</h4>
+      <ul>
+        <li><strong>P1 — One planet + space:</strong> single sphere radius R, space around it is just skybox + starfield (AC-0035) + free flight. Validates uniform-shell math + gravity + origin rebase.</li>
+        <li><strong>P2 — Solar system:</strong> 3–6 planets + sun, each planet is its own uniform-shell world with its own origin. Inter-planetary flight is manual (sublight). Distances are compressed (e.g. 50k–200k blocks between planets) so 5-minute flight is enough — or we keep AU-scale and require warp.</li>
+        <li><strong>P3 — Galaxy via relay:</strong> thousands of systems exist as data (seed + orbit), but you cannot fly there. To go inter-system / inter-galaxy you must <strong>build/find a Mass Relay</strong> — an activatable structure that instant-jumps the ship (scene/origin swap + cinematic).</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Mass Relay — gameplay sketch (Mass Effect–style)</h4>
+      <ul>
+        <li><strong>Build / discover:</strong> relay is a craftable megastructure (costly — late game) or a found derelict you repair (ore + crafted parts). Tied to <code>Data.items</code> + new <code>structures</code> table.</li>
+        <li><strong>Pairing:</strong> relays are paired or networked (primary relay → any secondary in range). UI picks destination system/galaxy from discovered relay network.</li>
+        <li><strong>Activation:</strong> fuel/charge + alignment check, then <code>ship → relay beam → jump</code> (screen warp, unload old planet chunks, load new system). No sublight void — we skip the empty light-years.</li>
+        <li><strong>Why this helps tech:</strong> galaxy is data-only until you jump; only current system streams chunks. Float-precision stays per-system; save is system-local.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Scale numbers (so "galaxy" doesn't blow up streaming)</h3>
+  <table>
+    <tr><th>Level</th><th>Representative size</th><th>What streams</th><th>Travel</th></tr>
+    <tr><td>Planet</td><td>R=8000 (circumference ~50k blocks ≈ 3140 chunks around equator)</td><td>Nearby face chunks only (R=50 → ~200–400 chunks resident, not 10k)</td><td>Walk/fly, wrap around sphere</td></tr>
+    <tr><td>System</td><td>Sun + planets 50k–200k apart</td><td>Current planet's shell only; other planets are impostors</td><td>Sublight flight 2–5 min inter-planet, or in-system relay hop</td></tr>
+    <tr><td>Galaxy</td><td>10k–100k systems (procedural, on-demand)</td><td>Only current system resident; others are seeds + relay graph</td><td><strong>Relay jump only</strong> — instant origin swap, no streaming void</td></tr>
+  </table>
+  <div class="callout relay"><strong>Scope control:</strong> P1/P2 never pay galaxy cost. Galaxy relay is a data + UI + jump cinematic task — not a streaming task. This is why your "start solar system scale" is the right cut.</div>
+</section>
+
+<section id="gravity">
+  <h2><span class="num">07</span> Gravity & player — "Y is not up"</h2>
+  <div class="grid2">
+    <div class="card">
+      <h4>On any planet surface</h4>
+      <ul>
+        <li><code>up = normalize(player_pos - planet_center)</code>, <code>gravity = -up * 26</code>.</li>
+        <li>Move: project WASD onto tangent plane (<code>basis = tangent/bitangent</code>), then <code>move_and_slide</code> with rotated capsule — capsule tilt &lt;0.12°/chunk, so no uphill feel.</li>
+        <li>Mine/place ray: DDA in world space — no +Y assumption (already true for <code>core/math.gd</code>).</li>
+        <li><strong>Visual:</strong> horizon dip is now a feature — once chunks sit on sphere, distant chunks naturally drop (≈5.7° over 50 chunks). We <em>extend</em> fog/sky to the limb instead of hiding it (see §3 "Looks spherical").</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Air → space → other planet</h4>
+      <ul>
+        <li>Altitude <code>a = |pos-C| - R</code>. Below ~400 m: surface gravity + step. Above: blend to free 6-DOF (no ground snap, thrust).</li>
+        <li>Atmosphere entry on another planet: re-orient capsule to new planet's <code>up</code> before re-enabling step.</li>
+        <li>HUD/markers: per-planet tangent space (the GDC "marker over building on another planet" problem) — affects later quest/compass, not P1.</li>
+      </ul>
+    </div>
+  </div>
+  <pre>sphere up:       up = normalize(pos - C)
+tangent basis:   t = normalize(cross(up, north)), b = cross(up, t)
+altitude:        alt = length(pos - C) - R
+surface check:   on_ground = alt &lt;= H_ground_epsilon  (~0.3)</pre>
+</section>
+
+<section id="gen">
+  <h2><span class="num">08</span> World-gen — keep Minecraft biomes without shell tax</h2>
+  <div class="grid2">
+    <div class="card">
+      <h4>P1 — per-face 2D heightmap (cheapest, genhash-friendly)</h4>
+      <ul>
+        <li>Keep today's <code>generator.gd</code> fbm3/biome thresholds verbatim. For each cube face, sample the <em>same</em> 2D fbm at face-local <code>(u,v)</code> with seamless edge blending (lerp across 4-texel border).</li>
+        <li>Height = radial displacement <code>R + h(u,v)</code>. Caves = 3D noise in local space extruded radially.</li>
+        <li>Genhash stays deterministic per seed; each face reuses one noise tiling → cheap, no polar seam.</li>
+        <li>Limit: caves that cross a cube edge need cross-face stitch — acceptable for P1 to have slightly sparser caves at the 12 edges.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Later — 3D noise on sphere (seam-free)</h4>
+      <ul>
+        <li>Sample FBM at <code>p = normalize(cube_pos) * scale</code> for any radius — no seams, no per-face blending.</li>
+        <li>Better for true spherical caves/ores, but ~2–3× cost. Pair with AC-0125 GDExt hotloops if walk p95 regresses.</li>
+        <li>Transition is data-compatible: same block ids, just different noise domain. Keep uniform shell thickness H so no 1→4 change needed regardless.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout warn"><strong>AC-0091 ordering:</strong> Y=-64→319 (384 tall) lands before any spherical work. Shell thickness H is that height. Planet R is independent — pick 8000–12000 for v1 (curvature <em>visible</em> at distance but still &lt;0.12°/chunk locally, so it reads as a planet without breaking step physics).</div>
+</section>
+
+<section id="origin">
+  <h2><span class="num">09</span> Floating origin & precision — per-planet, not per-galaxy</h2>
+  <p>float32 loses ~1 m past 10k and ~1 km past 1M. A planet at R=8000 already pushes the origin if you store absolute solar-system coords.</p>
+  <div class="grid2">
+    <div class="card">
+      <h4>Scheme — per-planet local space</h4>
+      <table>
+        <tr><th>Space</th><th>Origin</th><th>What's there</th></tr>
+        <tr><td>Planet-local</td><td>Planet center C = (0,0,0) while landed</td><td>All chunks + player in [R-H,R] shell — fits in ~12k extent → float32 safe.</td></tr>
+        <tr><td>System space</td><td>Star at (0,0,0) while in flight</td><td>Planet impostors + ship; planet chunks inactive.</td></tr>
+        <tr><td>Relay jump</td><td>Swap system (unload old, load new)</td><td>Galaxy = relay graph, not continuous space.</td></tr>
+      </table>
+      <p>Rebase when <code>|player| &gt; 20k</code> inside planet-local, or on every relay jump. Translate all chunk nodes by <code>-player_pos</code> (one <code>world.transform.origin</code> shift) — chunk keys unchanged (they're face+cx+cz).</p>
+    </div>
+    <div class="card">
+      <h4>Implementation hook</h4>
+      <pre>core/origin_shift.gd
+  func world_to_render(p: Vector3) -&gt; Vector3
+  func rebase_if_needed(player_pos)
+  signal rebased(offset: Vector3)  # world.gd re-keys physics
+</pre>
+      <ul>
+        <li>Chunks stored by logical key <code>(face,cx,cz)</code>, rendered at <code>render_pos = logical_pos - origin_offset</code>.</li>
+        <li>Save file stores logical key + seed + relay graph — never the render offset.</li>
+        <li>Galaxy-scale needs no 64-bit Vector3: each system stores planet orbits as doubles on disk, but live simulation is always planet-local or system-local float.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="phasing">
+  <h2><span class="num">10</span> Phasing — recommended order with your picks</h2>
+  <table>
+    <tr><th>Phase</th><th>Deliverable</th><th>Player gets</th><th>Gate / risk</th></tr>
+    <tr><td><span class="pill info">P0</span> AC-0091</td><td>Y=-64→319 (384 height)</td><td>Taller world</td><td>High churn; do before any spherical math.</td></tr>
+    <tr><td><span class="pill good">P1a</span> Uniform spherical planet</td><td>One planet, R≈8000, uniform 1 m shell, 6-face cube-sphere (no doubling), per-face 2D heightmap</td><td>Walk around the planet — true sphere, flat MC feel</td><td><span class="pill warn">Med</span> — sector rotation; genhash per face; walk p95 must hold.</td></tr>
+    <tr><td><span class="pill info">P1b</span> Atmosphere + flight</td><td>Altitude fog/sky lerp, horizon dip, 6-DOF flight, origin rebase</td><td>Seamless ground→orbit→re-entry on same planet</td><td>Med — gravity blend + rebase window.</td></tr>
+    <tr><td><span class="pill info">P2</span> Solar system</td><td>3–6 planets + sun, each its own shell + seed, system-space impostors</td><td>Fly planet-to-planet inside one system</td><td>Med — second-planet save + impostor LOD.</td></tr>
+    <tr><td><span class="pill relay">P3</span> Relay network → galaxy</td><td>Mass Relay structure (craftable/found), relay graph, jump cinematic, galaxy seed</td><td>Jump between systems/galaxies (no void flight)</td><td>Med — unlock gating + relay UI, but <em>no streaming void</em>.</td></tr>
+    <tr><td style="opacity:.55"><span class="pill">P4</span> Rings (future)</td><td>Halo-type ring megastructure as buildable/derelict</td><td>Ring world variant for variety</td><td>Low — reuse P1 math with R→∞ torus.</td></tr>
+  </table>
+  <div class="callout good"><strong>Why this order preserves your hard gate:</strong> P1a keeps block size uniform by construction (no doubling), so surface mining/building/light/fluids are unchanged — only chunk placement rotates. P1b adds flight without touching voxel size. Galaxy (P3) pays almost nothing in streaming because relays skip the void.</div>
+  <div class="callout warn"><strong>What not to do:</strong> shell doubling (1→4) — rejected. Lat-lon polar pinch — rejected. Doing galaxy continuous flight without relays — rejected (would require streaming light-years of empty space and 64-bit everywhere).</div>
+
+  <h3>Task split derived from this plan — file only after you approve</h3>
+  <pre>AC-0042 (this doc) — plan only ✅
+AC-0142 P1a-sphere-uniform       — cube-sphere uniform shell, 6 faces, per-face heightmap, sector rotation, no doubling
+AC-0143 P1b-atmosphere-flight    — altitude fog/sky/star lerp, gravity blend, 6-DOF, per-planet origin rebase
+AC-0144 P2-solar-system          — second planet + sun, system-space impostors, inter-planetary flight, save per planet
+AC-0145 P3-relay-galaxy          — Mass Relay structure + relay graph + jump cinematic + galaxy seed (data-only galaxy)
+AC-0146 P4-ring-megastructure    — (future) Halo ring as optional planet variant
+</pre>
+  <p class="muted">These are not yet in <code>tasks/TASKS.yaml</code> — I won't file them until you confirm this v1 (or I can file them now if you say so).</p>
+</section>
+
+<section id="rings">
+  <h2><span class="num">11</span> Rings — deferred, but how they'd return</h2>
+  <p>When you want a Halo ring later, it reuses almost all of P1a: a ring is a torus with major radius <code>R_major ≫ R_minor</code> where <code>R_minor ≈ R_planet</code>. Gravity = toward ring axis, blocks still uniform. Build it as a derelict megastructure you can land on alongside spherical planets — no conflict with the sphere pipeline, just a different center math (<code>core/ring_math.gd</code> alongside <code>sphere_math.gd</code>).</p>
+</section>
+
+<section id="risks">
+  <h2><span class="num">12</span> Risks & follow-ons</h2>
+  <table>
+    <tr><th>#</th><th>Risk</th><th>Mitigation</th><th>Where</th></tr>
+    <tr><td>R1</td><td>Sector-edge seam: neighbor lookup must rotate</td><td>Table of 12 cube edges (u↔v swap + flip) + headless seam probe; per-sector greedy only</td><td>P1a</td></tr>
+    <tr><td>R2</td><td>Save compatibility</td><td><code>save.gd edits{}</code> key becomes <code>(planet_id, face, cx, cz, local)</code>; migrate old flat saves by normalizing to face 0</td><td>P1a</td></tr>
+    <tr><td>R3</td><td>Caves across cube edge look cut</td><td>Accept slight sparsity at 12 edges for P1a (2D per-face); upgrade to 3D sphere noise later if needed</td><td>P1a→P2</td></tr>
+    <tr><td>R4</td><td>Physics bodies rotated per chunk break at rebase moment</td><td>Rebase in <code>_physics_process</code> idle window, re-add bodies after shift; test with tossed drops (AC-0093)</td><td>P1b</td></tr>
+    <tr><td>R5</td><td>Planet too small → curvature obvious on foot (breaks "flat MC" gate)</td><td>R ≥ 6000 keeps tilt &lt;0.12°/chunk; compute <code>tilt = atan(16/R)</code>. Recommend 8000–12000.</td><td>P1a constant</td></tr>
+    <tr><td>R6</td><td>Galaxy streaming temptation</td><td>Enforce relay-only for inter-system; galaxy is seed+graph until jump — never stream voids</td><td>P3</td></tr>
+  </table>
+</section>
+
+<section id="refs">
+  <h2><span class="num">13</span> References — build v1 without re-research</h2>
+  <ul>
+    <li>NMS GDC <em>Building Worlds Using Math(s)</em> — Sean Murray: Y-is-not-up, always-outside-float-accuracy, nothing pre-baked. <code>https://www.gdcvault.com/play/1024514/Building-Worlds-Using</code> · <code>https://www.youtube.com/watch?v=C9RyEiEzMiU</code></li>
+    <li>NMS GDC <em>Continuous World Generation in NMS</em> — Innes McKendrick: voxel → polygonize → population. <code>https://www.gdcvault.com/play/1024265/Continuous-World-Generation-in-No</code></li>
+    <li>Blocky Planet — spherical voxels, quad-sphere tuned, shell doubling &amp; 1↔4 neighbors (we <em>drop</em> the doubling per your constraint, keep the pre-warp). <code>https://mundobytes.com/en/Blocky-Planet%3A-How-to-transfer-voxels-to-a-spherical-planet/</code></li>
+    <li>Dimitrijević 2016 — Cube map projection comparison (Tissot area+angle). <code>https://docslib.org/doc/860041/...</code></li>
+    <li>Lambers 2019 — Sigmoid-tuned gnomonic vs QSC. <code>https://marlam.de/publications/cubemaps/lambers2019cubemaps.pdf</code></li>
+    <li>IcoSphere vs Cubemapped Sphere — tri vs quad trade. <code>https://stackoverflow.com/questions/32923976/icosphere-versus-cubemapped-sphere</code></li>
+  </ul>
+  <div class="callout">
+    <strong>Locked answer:</strong> Uniform-shell cube-sphere at R≈8000 with per-face 2D heightmap gives you true spherical planets where <strong>every block is 1 m, every chunk is 16×H×16, and surface play is indistinguishable from flat Minecraft</strong> — no shell doubling. Solar system is the next hop; galaxy is a relay graph you jump through, not fly through.
+  </div>
+  <p class="muted">Deliverable: <code>tasks/AC-0042/AC-0042-plan.html</code> — self-contained, offline, no external assets. No code in this task per its <code>research</code> label.</p>
+</section>
+
+  <div class="foot">
+  AC-0042 v2 · 2026-08-29 · AweCraft · Godot 4.7.1 Windows-only · <em>plays flat, looks spherical</em> — uniform 1 m, no doubling · Home <code>R=4000</code> exactly; others <code>R∈[2000,8000]</code> variable per seed → solar system → galaxy via Mass Relay · Rings = future P4
+</div>
+
+</main>
+</body>
+</html>

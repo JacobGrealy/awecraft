@@ -1,9 +1,15 @@
 meta:
-  updated_at: 2026-08-29T11:00
+  updated_at: 2026-08-29T12:13
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
 - AC-0138
+- AC-0091
+- AC-0143
+- AC-0144
+- AC-0145
+- AC-0146
+- AC-0147
 - AC-0139
 - AC-0140
 - AC-0141
@@ -14,6 +20,7 @@ queue:
 - AC-0112
 - AC-0113
 - AC-0093
+- AC-0109
 - AC-0110
 - AC-0125
 - AC-0123
@@ -32,14 +39,14 @@ queue:
 - AC-0087
 - AC-0088
 - AC-0089
-- AC-0042
 - AC-0090
-- AC-0091
 - AC-0111
 - AC-0114
 - AC-0115
 - AC-0130
 - AC-0137
+- AC-0148
+- AC-0149
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -1080,12 +1087,12 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels:
   - research
   created_at: 2026-08-19T12:00
-  updated_at: 2026-08-22T17:22
-  completed_at: null
+  updated_at: 2026-08-29T12:13
+  completed_at: 2026-08-29T12:13
   waiting_on: null
   parent_id: null
   notes: 'Research/plan ONLY (do not implement): world contained to a planet — flat Minecraft feel on surface, seamless ground→space
@@ -1104,6 +1111,13 @@ intake:
     text: '[agent] SCOPE (user 2026-08-22): also write up the spherical-planet version - several approaches to mapping onto
       a sphere (lat-lon/equirect, cubemap/cube-sphere, icosahedral/geodesic, visual-sphere+flat-playable NMS style) with pros/cons
       vs each other AND vs ring worlds. Deliverable tasks/AC-0042/AC-0042-plan.html.'
+  - id: 3
+    created_at: 2026-08-29T12:13
+    updated_at: null
+    text: '[agent] Plan v4.8 locked: home R=4000 exactly, others R∈[2000,8000] variable, uniform 1m no doubling, realistic
+      horizon 114m, LOD 2000→500m atmosphere cross-fade, galaxy via relay. Hosted at http://192.168.0.224:8200/AC-0042-plan.html
+      (tasks/AC-0042/AC-0042-plan.html 57K). Filed AC-0143..AC-0149 (7 tasks) and re-queued AC-0091 after AC-0138 then 0143-0147;
+      0148/0149 at end as future.'
 - id: AC-0043
   title: endgame
   source: user
@@ -3165,11 +3179,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: done
+  status: in-progress
   labels: []
   created_at: 2026-08-24T10:51
-  updated_at: 2026-08-29T11:00
-  completed_at: 2026-08-29T11:00
+  updated_at: 2026-08-29T08:41
+  completed_at: null
   waiting_on: null
   parent_id: null
   notes: 'Per-frame Camera3D frustum cull for chunk/subchunk mesh_instances.
@@ -3182,28 +3196,7 @@ intake:
     Verify: 360 spin no pop, queue_size stable, GPU verts visible drop when looking down, battery green.
 
     Depends: vertical-subchunks if implemented (per-slab AABB better), otherwise column AABB.'
-  comments:
-  - id: 1
-    created_at: 2026-08-29T11:00
-    updated_at: null
-    text: 'DONE 2026-08-29 (xhigh single, spec de-webbed pre-launch per user 2026-08-29). Per-frame 6-plane frustum cull (camera
-      xf/fov/aspect/near-far) of built chunk mesh instances: per-slab AABB test [culled iff exists plane d+span < -M, M=32.0
-      m margin], column early-out both ways, visible set-on-change, world-level fixed scratch [no per-chunk state, no per-frame
-      allocs, no O(chunk2)], kill-switch AWECRAFT_FRUSTUM_CULL=0, radial candidate path untouched; world.gd +141 / main.gd
-      +173; new AWECRAFT_LOGIC=spin probe + invalidate_cull_cache(). Gates: G0 rc=0 [4x known threadgen transient = AC-0137
-      class]; SPIN fresh ok:true — transitions 0 over 360deg, queue flat 40x50, vis_start==vis_end 51, verts_visible_sidelook
-      268096 < total_built 371444 [28% drop = cull provably active] [built_chunks 77 = pre-existing settle shortfall, AC-0137
-      class]; MINFO 121 lines/81 chunks all_meshed, drift vs AC-0129 baseline A/B-attributed pre-existing [with-cull 3-chunk
-      small-vert drift; kill-switch run [AC-0109 fully inert] still drifts [16,48] 2012 vs 2020 = same merge-reshuffle class
-      as AC-0136 -48 flake; cull only writes instance.visible, provably no mesh impact]; SMOKE 5 EXACT [player 37.78, interact
-      all true, light torch 14/far 9, fluids 2730/1406, nightday cave 15.0/3.0]; genhash 25/25 byte-identical vs AC-0134 ref;
-      boundary r4 walk p95 133 [band 108-126; builder one-shot same code 120 -> run noise, fwd 12076 mid-band] + burst p95
-      13522; build 20260829-1042 109,674,968 B + 8080 un-stamped byte-matched + stamped 200 + 5180=200 [BUILD.txt 8081 URL
-      = sandbox-killed duplicate-daemon artifact, canonical 8080 healthy]. Deviations: (i) MINFO pre-existing drift class,
-      A/B-documented; (ii) gate-job MINFO step first ran wrong arm [quitmenu, 1-line dump] -> re-run via AWECRAFT_LOGIC=perf+MESH_INFO
-      [correct arm per main.gd:7858 _perf_test]; (iii) spin settle bounded-wait [pre-existing 120s _nd_settle stall w/ player
-      — AC-0137 owns]; (iv) 3 probe bugs fixed in-run by builder. NEXT per user live queue = AC-0138 leaves-always-black [p1
-      user-reported, spec pre-written + de-webbed].'
+  comments: []
 - id: AC-0110
   title: occlusion-culling-caves-interior
   source: user
@@ -4194,4 +4187,190 @@ intake:
   parent_id: null
   notes: Extract hardcoded mob tables from autoload/data.gd (mobs 4+ skeleton/chicken/wolf/spider entries) into godot/data/mobs.json
     alongside the blocks/items split (AC-0141). Keep data.gd as loader + lookups so callers unchanged.
+  comments: []
+- id: AC-0143
+  title: planet-p1a-sphere-math-world-keys
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-29T12:09
+  updated_at: 2026-08-29T12:09
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User story: As a player I want the world to know it is a sphere (home R=4000) so that later ground, flight and planet-hopping
+    can be spherical — no visuals yet, just the math and save shape.
+
+
+    Technical details: New core/sphere_math.gd (pure static): face_for_dir, uv_to_world(face,u,v,R), world_to_face(pos,R),
+    neighbor_key(face,cx,cz,dir) 12-edge table (u↔v swap+flip) + 8-corner Y handling, pre-warp to make edge vertices bitwise
+    identical before normalize(). world/world.gd: chunk key becomes (face,cx,cz), recenter/band_buckets per face, get_block/set_block
+    via world_to_face, neighbor lookup uses table (1↔1, no 1→4 — no shell doubling). save.gd: edits key becomes planet_id:face:cx:cz:local,
+    planets[{id,R,orbit}] stored, home R=4000 exactly, others R∈[2000,8000] clamped per seed. Gates: G0 0 errors, headless
+    neighbor_key across 12 edges + 8 corners round-trip, block_at across edge round-trip, light/fluid not yet.
+
+
+    Depends: AC-0091 Y=-64..319. Ref: tasks/AC-0042/AC-0042-plan.html §3 (uniform shell, no doubling) + plan §3 LOD. Verify
+    headless only.'
+  comments: []
+- id: AC-0144
+  title: planet-p1a-curved-ground-plays-flat
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-29T12:09
+  updated_at: 2026-08-29T12:09
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User story: As a player I want to walk on a sphere that looks round (horizon dips) but plays flat — mine/place/step
+    feels like flat MC, I can walk around the planet and cross the Y corner without a bump.
+
+
+    Technical details: world/chunk.gd: chunk node basis rotated so local +Y = radial out (pos-C), mesh built flat local then
+    node transform places it on sphere (no per-vertex warp, 16×H×16 uniform 1m stays). Greedy stops at face edges (no cross-face
+    merge). world/generator.gd: per-face heightmap h=R+fbm(u,v) with 4-texel edge blend (same height on both sides), Y-corner
+    gap filled with hidden filler tetra (never exposed/minable). Horizon culling realistic: cull if dot(chunk-C, eye-C) <
+    R², horizon dist √(2·R·h) ≈114m at 1.62m on R=4000. Gates: 5×5 slab on each Y no hole, walk 12 edges + 8 corners on_floor
+    true, horizon 114m, 30-block tower visible ~604m.
+
+
+    Depends: AC-0143. Ref: plan §3 blanket + building-up + digging + corner diagrams.'
+  comments: []
+- id: AC-0145
+  title: planet-p1b-gravity-flight
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-29T12:09
+  updated_at: 2026-08-29T12:09
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User story: As a player I want to fly seamlessly off the planet into space and land on any face — gravity always
+    pulls toward the center, walking stays tangent-flat, flying is 6-DOF above atmosphere.
+
+
+    Technical details: player/player.gd: up=normalize(pos-C), gravity=-up*26, WASD projected onto tangent/bitangent while
+    on_floor, CharacterBody3D basis slerps to align local Y→up (0.23°/chunk at R=4000). scenes/main.gd: alt=|pos-C|-R drives
+    blend: <~500m surface gravity+step, >~2000m 6-DOF thrust. Origin rebase hook core/origin_shift.gd (planet-local C=(0,0,0)
+    while landed, translate world when |player|>20k). Gates: walk→fly→orbit→re-enter on different face lands flat, up slerp
+    across edge no snap, horizon culling still holds.
+
+
+    Depends: AC-0144. Ref: plan §7 + §9.'
+  comments: []
+- id: AC-0146
+  title: planet-p1b-atmosphere-impostor-lod
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-29T12:09
+  updated_at: 2026-08-29T12:09
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User story: As a player I want the planet to look round from orbit and dissolve seamlessly into real voxels as I
+    descend — no pop, hidden in atmosphere haze.
+
+
+    Technical details: Impostor sphere mesh (6×512² baked height+biome texture from same fbm as chunks, once per seed, ~1.5M
+    samples) rendered 1–2m below real terrain (no Z-fight). LOD: >2000m impostor only, 2000→500m both + atmosphere haze (blue
+    shift/desat) + dither alpha smoothstep(500,2000,alt), <500m chunks only. Fog = min(flat fog, horizon) so inside 114m ground
+    horizon it is thin depth haze, beyond that sphere culling hides terrain. Gates: >2000 impostor, 2000→500 both, <500 chunks,
+    tower visibility holds.
+
+
+    Depends: AC-0145. Ref: plan §4 B4 + §LOD swap diagram.'
+  comments: []
+- id: AC-0147
+  title: planet-p2-solar-system
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-29T12:10
+  updated_at: 2026-08-29T12:10
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User story: As a player I want to fly to other planets in the same solar system — each a different size — and land
+    on them with the same flat feel.
+
+
+    Technical details: Save: planets[{id,R∈[2000,8000], orbit}] per seed, home R=4000 exactly, others clamped variable. System
+    space: star at (0,0,0) while in flight, planet impostors for distant planets. Each planet reuses P1a sphere uniform pipeline
+    (face+cx+cz, rotated chunks). Distance between planets 25–50km at R=4000 scale. Gates: home exact, other R clamped, inter-planet
+    flight ~25km, save per planet, no galaxy void streaming.
+
+
+    Depends: AC-0146. Ref: plan §6 + §10 P2.'
+  comments: []
+- id: AC-0148
+  title: planet-p3-relay-galaxy
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-29T12:10
+  updated_at: 2026-08-29T12:10
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User story: As a player I want to leave my solar system/galaxy via a Mass-Effect relay — build/repair it and instantly
+    jump to another system, eventually galaxy scale.
+
+
+    Technical details: Relay structure (derelict in home system for P2, repair cost iron+diamond-like), relay graph per save,
+    jump = cinematic + unload old system / load new seed system (galaxy = data-only graph until jump, never streamed void).
+    No continuous inter-system flight. Gates: relay repair → jump to second system, galaxy data-only, no >2000m void streaming.
+
+
+    Depends: AC-0147. Ref: plan §6 relay.'
+  comments: []
+- id: AC-0149
+  title: planet-p4-ring-megastructure
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-29T12:10
+  updated_at: 2026-08-29T12:10
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User story: As a player I want a future Halo-like ring megastructure I can land on alongside spheres — same uniform
+    1m feel.
+
+
+    Technical details: core/ring_math.gd torus R_major≫R_minor≈4000 alongside sphere_math.gd, uniform 1m, same Y-corner filler
+    and horizon logic. Derelict ring variant. Gates: ring gapless Y holds, shares P1a math.
+
+
+    Depends: AC-0146 (after LOD). Ref: plan §11. Future — not queued until galaxy proven.'
   comments: []
