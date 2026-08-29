@@ -978,76 +978,215 @@ func _side_eff_strip(nc: Node3D, dx: int, dz: int, h: int) -> PackedByteArray:
 	return e
 
 
+# AC-0134 run-2 (fix-6): per-chunk face-boundary BLOCK-light cache for
+# _side_blk_strip: _face_blk[key] = [data_snapshot (PackedByteArray),
+# faces (4 x 2560 PackedByteArray, idx = c*(16*h) + y*16 + t — c=0 the face
+# row, which is the ONLY half _chunk_blk_inject reads; c=1 zero), deps
+# (4 x [neighbor_key, neighbor_eff_gen], _FACE_SIDES order)]. Face order =
+# ring side convention: 0=E (x=15) 1=W (x=0) 2=S (z=15) 3=N (z=0).
+#
+# FIX-6 ROOT CAUSE (lightaudit REGRESSION 2026-08-28, fix-5): the fix-5
+# face was the IN-CHUNK glow flood only — a 1-hop carrier. Source chunk C
+# lights neighbor A (A's kernel injects C's boundary row), but A's OWN
+# in-chunk flood never sees the imported level, so A's face to A's neighbor
+# B is 0 and block light DIES AT THE SECOND BOUNDARY. Empirically: 1173
+# hard cliffs, all cross-boundary 14/0 lava pairs (source two chunks from
+# the dark cell), while the AC-0129 lightaudit — 0 cliffs on the
+# final-state ring carrier — regressed. The face now mirrors the kernel's
+# OWN blk pipeline (lighting.gd: seed glow -> flood -> inject neighbor
+# strips -> re-flood): the chunk's SETTLED block light, sky NEVER included
+# (the kernel's arr is max(sky,blk) and would re-leak the AC-0134 phantom).
+# The source-within-G induction still holds (inject cand = L-att with L
+# source-at-G-L keeps every carried level a true block-light path), so the
+# fix-3/4 phantom class — bright, marked, no source within 14 — stays
+# impossible and the nightlot leak gate stays green by the same proof, now
+# with 2-hop (and transitive) propagation restored.
+# A face depends only on (own data, neighbors' faces) — never on own eff —
+# and any data change that could alter a face (att/glow change) forces a
+# re-light (eff_gen bump), so the (key, eff_gen) deps are a sufficient
+# invalidation key.
+var _face_blk: Dictionary = {}
+# Cycle guard for the recursive face fetch: a neighbor still computing
+# contributes an empty strip this pass; its landing's E2 re-fire converges
+# the wave (the same pull semantics as the kernel's re-dispatch).
+var _face_blk_inflight: Dictionary = {}
+var _FACE_SIDES: Array = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+
+
+# The face index of the NEIGHBOR's face set [E,W,S,N] that faces us across
+# the shared boundary (dx,dz = us -> neighbor): east neighbor shows its W
+# face (local x=0), west its E (x=15), north its N (local z=0), south its
+# S (z=15).
+func _shared_face(dx: int, dz: int) -> int:
+	if dx > 0:
+		return 1
+	if dx < 0:
+		return 0
+	if dz > 0:
+		return 3
+	return 2
+
+
+func _face_deps(c: Node3D) -> Array:
+	var out: Array = []
+	for s in _FACE_SIDES:
+		var m = chunks.get(_key(int(c.cx) + int(s[0]), int(c.cz) + int(s[1])))
+		if m == null:
+			out.append(["", 0])
+		else:
+			out.append([_key(int(m.cx), int(m.cz)), int(m.eff_gen)])
+	return out
+
+
+func _face_deps_ok(c: Node3D, deps: Array) -> bool:
+	for side in range(4):
+		var s: Array = _FACE_SIDES[side]
+		var m = chunks.get(_key(int(c.cx) + int(s[0]), int(c.cz) + int(s[1])))
+		var k: String = "" if m == null else _key(int(m.cx), int(m.cz))
+		var g: int = 0 if m == null else int(m.eff_gen)
+		if deps[side][0] != k or deps[side][1] != g:
+			return false
+	return true
+
+
+func _face_of(c: Node3D, fi: int) -> PackedByteArray:
+	# Memoized final block face. Valid iff own data matches AND all 4
+	# neighbor (key, eff_gen) deps match — no face outlives its
+	# neighborhood state.
+	var nkey: String = _key(int(c.cx), int(c.cz))
+	if _face_blk_inflight.has(nkey):
+		return PackedByteArray()
+	var cur: Array = _face_blk.get(nkey, [])
+	if cur.size() == 3 and c.data == cur[0]:
+		var deps: Array = cur[2]
+		if _face_deps_ok(c, deps):
+			return cur[1][fi]
+	var fresh: Array = _compute_face_blk(c)
+	_face_blk[nkey] = [c.data, fresh, _face_deps(c)]
+	return fresh[fi]
+
+
+func _compute_face_blk(c: Node3D) -> Array:
+	# fix-6: the chunk's SETTLED block light — own glow flood, then the
+	# neighbors' FINAL faces injected (the [E,W,N,S] strip order
+	# _chunk_blk_inject expects), then re-flood. Block-only twin of the
+	# kernel's eff pipeline; sky never enters (see the _face_blk doc).
+	# 2560-wide faces: c=0 half = face row (the inject half), c=1 zero.
+	var h: int = Data.HEIGHT
+	var nd: PackedByteArray = c.data
+	Lighting._tables()
+	var ids := PackedByteArray()
+	ids.resize(nd.size())
+	var blk := PackedByteArray()
+	blk.resize(nd.size())
+	var has := false
+	for i in range(nd.size()):
+		ids[i] = nd[i]
+		var g: int = Lighting._glow[nd[i]]
+		if g > 0:
+			blk[i] = g
+			has = true
+	if has:
+		Lighting._flood_flat(blk, ids, 16, h, 16)
+	var fk0: String = _key(int(c.cx), int(c.cz))
+	_face_blk_inflight[fk0] = true
+	var strips: Array = []
+	for side in range(4):
+		var s: Array = _FACE_SIDES[side]
+		var nc = chunks.get(_key(int(c.cx) + int(s[0]), int(c.cz) + int(s[1])))
+		var st: PackedByteArray = PackedByteArray()
+		if nc != null and not nc.data.is_empty():
+			st = _face_of(nc, _shared_face(int(s[0]), int(s[1])))
+		strips.append(st)
+	_face_blk_inflight.erase(fk0)
+	var inj: bool = Lighting._chunk_blk_inject(blk, ids, h, strips)
+	if has or inj:
+		Lighting._flood_flat(blk, ids, 16, h, 16)
+	var fe := PackedByteArray()
+	fe.resize(2560)
+	var fw := PackedByteArray()
+	fw.resize(2560)
+	var fs := PackedByteArray()
+	fs.resize(2560)
+	var fn := PackedByteArray()
+	fn.resize(2560)
+	for y in range(h):
+		var rowb: int = y * 16
+		var row: int = y << 8
+		for t in range(16):
+			fe[rowb + t] = blk[row | (t << 4) | 15]
+			fw[rowb + t] = blk[row | (t << 4)]
+			fs[rowb + t] = blk[row | (15 << 4) | t]
+			fn[rowb + t] = blk[row | t]
+	return [fe, fw, fs, fn]
+
+
 func _side_blk_strip(nc: Node3D, dx: int, dz: int, h: int) -> Dictionary:
-	# Derivation per plan §2.C.1, column by column (2 cols x 16 t = 32 cols).
-	# POST fix (sky carry): v = source EXACT (22->14, 23->12, 24->15)
-	# > max(eff_n above own sky, sky_n) — i.e. the neighbor boundary cell's
-	# TRUE light, with the sky part DATA-ONLY (open column = 15) so it is
-	# correct even before the neighbor's eff exists. The MC lateral step
-	# cand = v - att(own) is then exact and can never over-inject
-	# (sky_n <= the neighbor's true eff). Remaining documented gap: DECAYED
-	# sky across 2+ covered columns needs the intermediate chunk's re-light
-	# (E2 covers the source case per plan §2; sky landings are out of scope
-	# for the perf gate).
+	# fix-7: TWO channels (AC-0129 wiring, sound content):
+	#   v (the eff import): the neighbor boundary cell's TRUE light with the
+	#   sky part DATA-ONLY (AC-0129 "sky carry", verbatim formula): source
+	#   EXACT (22->14, 23->12, 24->15), else max(eff_n, sky_n) where sky_n =
+	#   15 iff the neighbor's boundary column is open to the sky (data scan,
+	#   the kernel's binary sky) and eff_n = the neighbor's settled baked eff
+	#   (0 until its first landing — the data-only sky fallback stays exact
+	#   then). The sky carry is REQUIRED: the kernel's sky is per-chunk, so
+	#   cross-chunk SKY corner-bleed (a sealed cell next to an open column:
+	#   14/13/...) crosses the boundary ONLY via this strip. fix-5/6's
+	#   blk-only eff strip killed it => 1173 lightaudit cliffs (14 on the
+	#   open side, 0 across the boundary; the in-chunk value is provably
+   #   not block light — the final-blk face is 0 there). Cannot over-
+	#   inject: sky_n (open column = 15) <= the neighbor's true eff at that
+	#   cell, and eff_n is the neighbor's settled value.
+	#   b (the mask import): the neighbor's FINAL block face (fix-6 memo) —
+	#   block-only, sourced, lossless (supersedes AC-0129's lossy ring).
+	#   The mask marks block-derived light for the bake's night scale; sky
+	#   never marks. c=1 half zero: _chunk_blk_inject reads c=0 only.
 	var b := PackedByteArray()
 	b.resize(2560)
-	var bm := PackedByteArray()
-	bm.resize(2560)
-	var narr: PackedByteArray = nc.last_eff["arr"]
-	# AC-0128 RUN 3: the neighbor's SPARSE boundary block-light ring (their
-	# TRUE flooded block light at the shared boundary, set at their bake;
-	# pack (side << 16) | (yy << 8) | level). The eff-derived "eff > local
-	# sky" test cannot separate true block light from laterally-leaked sky
-	# in closed columns, so the mask reads the flooded values directly. An
-	# empty ring (a chunk that only ever took a cached eff, or sky-only)
-	# reads 0: the cross-boundary mask visit is lost (documented gap).
-	var ring: PackedInt32Array = nc.last_blk_ring
-	var rside := 0
-	if dx > 0:
-		rside = 1
-	elif dx < 0:
-		rside = 0
-	elif dz > 0:
-		rside = 3
-	elif dz < 0:
-		rside = 2
 	var nd: PackedByteArray = nc.data
+	var narr: PackedByteArray = PackedByteArray()
+	if not nc.last_eff.is_empty():
+		narr = nc.last_eff["arr"]
+	var nvalid: bool = narr.size() == nd.size()
 	Lighting._tables()
-	var colsz := 16 * h
 	var nx0: int = 0 if dx > 0 else 15
 	var nz0: int = 0 if dz > 0 else 15
-	for c in range(2):
-		for t in range(16):
-			var nx: int
-			var nz: int
-			if dx != 0:
-				nx = nx0 - c
-				nz = t
+	for t in range(16):
+		var nx: int
+		var nz: int
+		if dx != 0:
+			nx = nx0
+			nz = t
+		else:
+			nx = t
+			nz = nz0
+		var open := true
+		for y in range(h - 1, -1, -1):
+			var idx: int = (y << 8) | (nz << 4) | nx
+			var bl: int = nd[idx]
+			var sky_n := 0
+			if open and Lighting._att[bl] > 0:
+				sky_n = 15
+			if open and Lighting._att[bl] == 0:
+				open = false
+			var eff_n: int = 0
+			if nvalid:
+				eff_n = narr[idx]
+			var lv: int = Lighting._glow[bl]
+			var v: int
+			if lv > 0:
+				v = lv
+			elif eff_n > sky_n:
+				v = eff_n
 			else:
-				nx = t
-				nz = nz0 - c
-			var open := true
-			for y in range(h - 1, -1, -1):
-				var idx: int = (y << 8) | (nz << 4) | nx
-				var bl: int = nd[idx]
-				var sky_n := 0
-				if open and Lighting._att[bl] > 0:
-					sky_n = 15
-				if open and Lighting._att[bl] == 0:
-					open = false
-				var eff_n: int = narr[idx]
-				var lv := Lighting._glow[bl]
-				var v: int
-				if lv > 0:
-					v = lv
-				else:
-					var vb: int = eff_n if eff_n > sky_n else 0
-					v = vb if vb >= sky_n else sky_n
-				b[c * colsz + y * 16 + t] = v
-	for i in range(ring.size()):
-		var p: int = ring[i]
-		if (p >> 16) == rside:
-			bm[(p >> 8) & 4095] = p & 15
+				v = sky_n
+			b[y * 16 + t] = v
+	var sf: PackedByteArray = _face_of(nc, _shared_face(dx, dz))
+	var bm := PackedByteArray()
+	if sf.size() == 2560:
+		bm = sf.duplicate()
+	else:
+		bm.resize(2560)
 	return {"v": b, "b": bm}
 
 
@@ -1079,13 +1218,12 @@ func _ngens_for(cx: int, cz: int) -> Array:
 	return out
 
 
-# AC-0129 E2 (web lightOnNewChunk :1041-1044, beyond it: actually re-lights):
-# called right after last_eff lands (handoff + every sync build). A changed
-# byte array bumps our eff_gen (neighbor caches see it via ngen); if the
-# change came from our own block light (blk_src), the 4 orthogonal
-# mesh_built neighbors are evicted + re-enqueued ONCE — an identical
-# re-light bumps no gens, so the chain dies at depth 2. Plain surface
-# landings (blk_src false) cost ZERO extra builds.
+# AC-0129 E2 (web lightOnNewChunk :1041-1044, beyond it: actually re-lights);
+# AC-0134 fix-6: the re-enqueue is no longer gated on blk_src — non-glow
+# chunks relay imported block light, so EVERY arr-changing landing refreshes
+# the face cache (dep-invalidated) and the per-side frame-gated neighbors
+# are evicted + re-enqueued ONCE — an identical re-light bumps no gens, so
+# the chain dies when all frames settle.
 # Per-side FRAME gate (perf, correctness-identical; plan 2.C.2 says "evict +
 # re-enqueue 4 built neighbors" unconditionally — the gate only skips sides
 # whose shared 2-deep boundary frame is byte-identical old->new, i.e. the
@@ -1098,10 +1236,21 @@ func _eff_landed(c: Node3D, old_eff: Dictionary, new_eff: Dictionary) -> void:
 	if not changed:
 		return
 	c.eff_gen += 1
-	if not bool(new_eff.get("blk_src", false)):
-		return
-	# AWECRAFT_E2=off: diagnostic kill switch — suppress the re-enqueue wave
-	# (strip-carry + frame-gate stay on). Restores pre-AC-0129 load profile.
+	# AC-0134 run-2 (fix-6): refresh the face-boundary cache for EVERY
+	# landed chunk — fix-5 gated this on blk_src, wrong for fix-6: a
+	# non-glow chunk's settled face is non-zero via imports, and this
+	# landing is the moment its neighborhood deps (neighbor eff_gens) can
+	# have changed. Stale entries are also rebuilt lazily at read time
+	# (_face_of). Skipped entirely for arr-unchanged landings (no gen bump).
+	var fk0 := _key(int(c.cx), int(c.cz))
+	var cur: Array = _face_blk.get(fk0, [])
+	if cur.size() != 3 or c.data != cur[0] or not _face_deps_ok(c, cur[2]):
+		_face_blk[fk0] = [c.data, _compute_face_blk(c), _face_deps(c)]
+	# fix-6: the E2 re-enqueue is NO LONGER gated on blk_src — a non-glow
+	# chunk is a RELAY: its settled face (and hence its neighbors' imports)
+	# changes when its own imported light lands. The per-side frame gate
+	# still skips byte-identical sides (perf), and AWECRAFT_E2=off still
+	# kills the whole wave (diagnostic kill switch).
 	if OS.get_environment("AWECRAFT_E2") == "off":
 		return
 	var cx := int(c.cx)
@@ -1396,6 +1545,7 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 		fluid_dirty.erase(key)
 		tex_refresh.erase(key)
 		_eff_cache_evict(key)
+		_face_blk.erase(key)
 		_bl_want.erase(key)
 		_col_pending_set.erase(key)
 		_col_pending.erase(key)

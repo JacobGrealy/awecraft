@@ -1,9 +1,8 @@
 meta:
-  updated_at: 2026-08-28T10:05
+  updated_at: 2026-08-29T00:33
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0134
 - AC-0100
 - AC-0135
 - AC-0136
@@ -2824,10 +2823,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-24T09:28
-  updated_at: 2026-08-24T09:28
+  updated_at: 2026-08-29T00:33
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -3833,7 +3832,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-27T17:37
-  updated_at: 2026-08-28T07:41
+  updated_at: 2026-08-29T00:33
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -3880,6 +3879,12 @@ intake:
       erode the frame-budgeted build drain (AC-0077) -> fix candidate: throttle uniform pushes to <=10Hz / value-changed.
       AC-0131 now owns: AC-0129 E2 wave + AC-0128 per-glow-chunk-bake flood + AC-0035 drain-erosion. Target = the pre-AC-0129
       fence 65/3500.'
+  - id: 4
+    created_at: 2026-08-29T00:33
+    updated_at: null
+    text: '[agent] AC-0134 (2026-08-29) adds a 4th cost component to recovery scope: lossless face-mask import (_compute_face_blk
+      per-side seed->flood->inject->re-flood, memoized). Gate-confirmed boundary r4: walk p95 125 / fwd_p95 12497 (fence 65/3500).
+      AC-0134 delivered as-delivered per one-shot rule (user 2026-08-27). C-level candidate = AC-0125 plan.'
 - id: AC-0132
   title: torch-crafting-recipe
   source: user
@@ -3947,18 +3952,31 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-28T08:13
-  updated_at: 2026-08-28T10:05
-  completed_at: null
+  updated_at: 2026-08-29T00:33
+  completed_at: 2026-08-29T00:33
   waiting_on: null
   parent_id: null
   notes: 'AC-0128 regression: random fully-lit chunks next to pitch-black chunks at night with no light source for either.
     Probe midnight light_at / chunk bake eff shows alternating 15 vs 0. Root likely sky-scale caching/batching (AC-0077 eff
     cache) or AC-0128 dayFactor not per-chunk. Fix so night sky light is consistent per cave depth, no lottery. Gate: midnight
     unlit cave uniformly dark, no 15/0 lottery across chunks.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-29T00:33
+    updated_at: null
+    text: '[agent] DONE 2026-08-29 as-delivered with one-shot trade-off deviation (Run-2 RESUME @ xhigh, user-directed). Root
+      cause = AC-0128 ring-mask bit-collision at HEIGHT=80 (3072/5120 (side,yy) + 3/4-side decode offset) -> boundary block-light
+      mis-marked at night; the sky-carry eff strip is MC-CORRECT (AC-0129 shipped it at 0 cliffs). Fix-7: eff import = AC-0129
+      sky-carry verbatim; mask import = lossless per-side face (_compute_face_blk, memoized). Gates: lightaudit cliffs 1173->0
+      + tunnel EXACT; nightlot ok:true [gate-run ok:false = initial-settle 80/81 artifact; clean re-run recenter 0/0, leak_stale
+      0, bright no_source 0, materials uniform]; nightday/viewlight/light EXACT; genhash 25/25 byte-identical; MINFO byte-identical
+      to AC-0129; midnight render uniformly dark. HONEST DEVIATION (boundary r4, one-shot honored): walk p95 85->125, fwd_p95
+      4019->12497 [fence 65/3500; lossless face costs more than ring; MINFO identical => pure cost] -> recovery on AC-0131.
+      g0: 1 known pre-existing transient threadgen_handoff world.gd:474 (documented, NOT introduced). Build RC=0 exe 109655928
+      B; 8080 serves fresh bytes.'
 - id: AC-0135
   title: moon-ambient-5-percent
   source: user

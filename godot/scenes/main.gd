@@ -929,6 +929,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "nightday":
 			await _nightday_test(spawn)
 			return
+		if logic == "nightlot":
+			await _nightlot_test(spawn)
+			return
 		if logic == "viewlight":
 			player = _spawn_player()
 			await _viewlight_test(spawn)
@@ -3817,19 +3820,188 @@ func _la_cliff_pair(x1: int, y1: int, z1: int, e1: int, id1: int, x2: int, y2: i
 		fluid.append(p)
 
 
+# AC-0134 spec R3 re-anchor: per-chunk own-column CLOSED masks for the 4
+# boundary columns. m[t*H + y] = 1 iff a solid (att==0) sits ABOVE y in that
+# chunk-local column — the kernel's own-sky test (such a cell has sky_n=0).
+# col 0=E (x=15) 1=W (x=0) 2=S (z=15) 3=N (z=0); t = the along-boundary coord.
+func _la_col_masks(o: Node3D, H: int) -> Array:
+	var d: PackedByteArray = o.data
+	var out: Array = []
+	for k in range(4):
+		var m := PackedByteArray()
+		m.resize(16 * H)
+		for t in range(16):
+			var open := true
+			for y in range(H - 1, -1, -1):
+				var idx: int
+				match k:
+					0: idx = (y << 8) | (t << 4) | 15
+					1: idx = (y << 8) | (t << 4)
+					2: idx = (y << 8) | (15 << 4) | t
+					_: idx = (y << 8) | t
+				m[t * H + y] = 0 if open else 1
+				if Lighting._att[d[idx]] == 0:
+					open = false
+		out.append(m)
+	return out
+
+
+# AC-0134 transient diagnostic (fix-6): lava pair — the 2-hop cliff cell.
+# Runs at the FIRST settle (before the tunnel test): lava is natural, the
+# pair (A=(-2,0) cell local (1,15,15) lit vs B=(-2,1) cell (1,15,0) dark)
+# isolates whether A's FACE carries A's imported (non-in-chunk) level.
+func _ac134_diag_lava(H: int) -> void:
+	var ka: String = world._key(-2, 0)
+	var kb: String = world._key(-2, 1)
+	var na = world.chunks.get(ka)
+	var nbb = world.chunks.get(kb)
+	if na == null or nbb == null:
+		print("DIAG134 lava chunks missing")
+		return
+	var iS: int = (15 << 8) | (15 << 4) | 1  # lavaA local (x=1,z=15,y=15)
+	print("DIAG134 lavaA built=%s eff_empty=%s gen=%d face_blk=%s" % [str(na.mesh_built), str(na.last_eff.is_empty()), int(na.eff_gen), str(world._face_blk.has(ka))])
+	print("DIAG134 lavaA_cell baked_eff=%d id=%d" % [int(na.last_eff["arr"][iS]), int(na.data[iS])])
+	var fba: Array = world._face_blk.get(ka, [])
+	if fba.size() >= 2:
+		print("DIAG134 faceS[15*16+1]=%d data_match=%s" % [int(fba[1][2][15 * 16 + 1]), str(na.data == fba[0])])
+	var fresh_a: Array = world._compute_face_blk(na)
+	print("DIAG134 fresh_computeA faceS[15*16+1]=%d" % [int(fresh_a[2][15 * 16 + 1])])
+	var sba: Dictionary = world._side_blk_strip(na, 0, -1, H)
+	print("DIAG134 stripS_v v[15*16+1]=%d b[15*16+1]=%d" % [int(sba["v"][15 * 16 + 1]), int(sba["b"][15 * 16 + 1])])
+	if not nbb.last_eff.is_empty():
+		print("DIAG134 lavaB_baked_(1,15,0)eff=%d id=%d gen=%d" % [int(nbb.last_eff["arr"][(15 << 8) | 1]), int(nbb.data[(15 << 8) | 1]), int(nbb.eff_gen)])
+	# --- fix-6 source trace for A's (1,15,15) = 14 ---
+	var iA: int = (15 << 8) | (15 << 4) | 1
+	var stripsA = world._strips_for(-2, 0)
+	var resA = Lighting.compute_light_flat_chunk_pull(na.data, -2, 0, H, stripsA["eff"], stripsA["blk"], stripsA["blk_b"])
+	print("DIAG134 lavaA_fresh_eff=%d mask=%d" % [int(resA["arr"][iA]), int(resA["mask"][iA])])
+	var blk0: Array = [PackedByteArray(), PackedByteArray(), PackedByteArray(), PackedByteArray()]
+	var resA0 = Lighting.compute_light_flat_chunk_pull(na.data, -2, 0, H, stripsA["eff"], blk0, blk0)
+	print("DIAG134 lavaA_fresh_eff_nostrips=%d" % int(resA0["arr"][iA]))
+	var bsz: Array = []
+	for bb in stripsA["blk"]:
+		bsz.append(int(bb.size()))
+	print("DIAG134 stripsA blk_sizes=%s blk_s_v[15*16+1]=%d" % [str(bsz), int(stripsA["blk"][3][15 * 16 + 1])])
+	var col15: Array = []
+	var col14: Array = []
+	for yy in range(15, 20):
+		col15.append(int(na.data[(yy << 8) | (15 << 4) | 1]))
+		col14.append(int(na.data[(yy << 8) | (14 << 4) | 1]))
+	print("DIAG134 colA x=1 z=15 ids y15..19=%s z=14 ids y15..19=%s" % [str(col15), str(col14)])
+	print("DIAG134 A_baked neighbors: (1,15,14)=%d (0,15,15)=%d (2,15,15)=%d (1,14,15)=%d (1,15,15)=%d" % [int(na.last_eff["arr"][(15 << 8) | (14 << 4) | 1]), int(na.last_eff["arr"][(15 << 8) | (15 << 4) | 0]), int(na.last_eff["arr"][(15 << 8) | (15 << 4) | 2]), int(na.last_eff["arr"][(14 << 8) | (15 << 4) | 1]), int(na.last_eff["arr"][iA])])
+	var kc: String = world._key(-2, -1)
+	var ncC = world.chunks.get(kc)
+	if ncC == null or ncC.data.is_empty():
+		print("DIAG134 C(-2,-1) missing/empty")
+	else:
+		var lavas: Array = []
+		for y in range(H):
+			var row := y << 8
+			for z in range(16):
+				for x in range(16):
+					if ncC.data[row | (z << 4) | x] == 24 and lavas.size() < 6:
+						lavas.append([x, y, z])
+		print("DIAG134 C lava positions(local)=%s built=%s eff_empty=%s gen=%d face_blk=%s" % [str(lavas), str(ncC.mesh_built), str(ncC.last_eff.is_empty()), int(ncC.eff_gen), str(world._face_blk.has(kc))])
+		var fcc: Array = world._face_blk.get(kc, [])
+		if fcc.size() >= 2:
+			print("DIAG134 C faceS[15*16+1]=%d data_match=%s deps=%s" % [int(fcc[1][2][15 * 16 + 1]), str(ncC.data == fcc[0]), str(fcc[2])])
+		var freshC: Array = world._compute_face_blk(ncC)
+		print("DIAG134 C fresh faceS[15*16+1]=%d" % int(freshC[2][15 * 16 + 1]))
+		var depsA: Array = world._face_blk.get(ka, [])
+		if depsA.size() >= 3:
+			print("DIAG134 A face deps=%s" % str(depsA[2]))
+	var strips2 = world._strips_for(-2, 1)
+	var bsz2: Array = []
+	for bb2 in strips2["blk"]:
+		bsz2.append(int(bb2.size()))
+	print("DIAG134 strips(-2,1) blk_sizes=%s" % str(bsz2))
+	var res2 = Lighting.compute_light_flat_chunk_pull(nbb.data, -2, 1, H, strips2["eff"], strips2["blk"], strips2["blk_b"])
+	print("DIAG134 lavaB_fresh_(1,15,0)eff=%d" % int(res2["arr"][(15 << 8) | 1]))
+
+# AC-0134 transient diagnostic (fix-6): torch tunnel — runs AFTER the
+# tunnel test (the torch only exists after _la_tunnel places it + settles).
+func _ac134_diag_torch(H: int, tunnel: Dictionary) -> void:
+	var torch: Array = tunnel.get("torch", [])
+	var dir: Vector3i = tunnel.get("dir", Vector3i.ZERO)
+	if torch.is_empty():
+		print("DIAG134 no torch")
+		return
+	var tcx := int(floorf(float(int(torch[0])) / 16.0))
+	var tcz := int(floorf(float(int(torch[2])) / 16.0))
+	var k: String = world._key(tcx, tcz)
+	var nc = world.chunks.get(k)
+	if nc == null:
+		print("DIAG134 torch chunk missing")
+		return
+	var lx := int(torch[0]) - tcx * 16
+	var ly := int(torch[1])
+	var lz := int(torch[2]) - tcz * 16
+	var fi: int
+	var ft: int
+	var nkey: String
+	if dir.x > 0:
+		fi = 0
+		ft = lz
+		nkey = world._key(tcx + 1, tcz)
+	elif dir.x < 0:
+		fi = 1
+		ft = lz
+		nkey = world._key(tcx - 1, tcz)
+	elif dir.z < 0:
+		fi = 3
+		ft = lx
+		nkey = world._key(tcx, tcz - 1)
+	else:
+		fi = 2
+		ft = lx
+		nkey = world._key(tcx, tcz + 1)
+	var iFace: int
+	if dir.x != 0:
+		iFace = (ly << 8) | (lz << 4) | (15 if dir.x > 0 else 0)
+	else:
+		iFace = (ly << 8) | ((15 if dir.z > 0 else 0) << 4) | lx
+	print("DIAG134 torch baked facecell_eff=%d id=%d" % [int(nc.last_eff["arr"][iFace]), int(nc.data[iFace])])
+	var cur: Array = world._face_blk.get(k, [])
+	if cur.size() >= 2:
+		print("DIAG134 face cache fi=%d val=%d data_match=%s" % [fi, int(cur[1][fi][ly * 16 + ft]), str(nc.data == cur[0])])
+	var fresh: Array = world._compute_face_blk(nc)
+	print("DIAG134 fresh_compute fi=%d val=%d" % [fi, int(fresh[fi][ly * 16 + ft])])
+	var nb = world.chunks.get(nkey)
+	if nb == null:
+		print("DIAG134 receiving chunk missing")
+		return
+	var iRecv: int
+	if dir.x != 0:
+		iRecv = (ly << 8) | (lz << 4) | (0 if dir.x > 0 else 15)
+	else:
+		iRecv = (ly << 8) | ((0 if dir.z > 0 else 15) << 4) | lx
+	if not nb.last_eff.is_empty():
+		print("DIAG134 recv_baked_eff=%d id=%d gen=%d" % [int(nb.last_eff["arr"][iRecv]), int(nb.data[iRecv]), int(nb.eff_gen)])
+	var strips = world._strips_for(int(nb.cx), int(nb.cz))
+	var res = Lighting.compute_light_flat_chunk_pull(nb.data, int(nb.cx), int(nb.cz), H, strips["eff"], strips["blk"], strips["blk_b"])
+	print("DIAG134 recv_fresh_eff=%d" % int(res["arr"][iRecv]))
+
 func _lightaudit_test(spawn: Vector3) -> void:
 	Lighting._tables()
 	var rr: int = world.render_radius
 	var H: int = Data.HEIGHT
 	world.recenter(spawn.x, spawn.z, true)
 	await _la_settle(60000)
+	_ac134_diag_lava(H)
 	var chunks_built := 0
 	for key in world.chunks:
 		var cc: Node3D = world.chunks[key]
 		if absi(cc.cx) <= rr and absi(cc.cz) <= rr and cc.mesh_built:
 			chunks_built += 1
+	# AC-0134 spec R3: hard = both cells CLOSED in their own column (a true
+	# block-light cliff between sealed cells, must stay 0 post-fix). At least
+	# one cell open-own-column with a Δ>1 = expected post-fix (sky no longer
+	# crosses the boundary: open column 15 next to sealed neighbor 0) and is
+	# informational only (sky_pairs never flips ok).
 	var hard_pairs: Array = []
 	var fluid_pairs: Array = []
+	var sky_pairs: Array = []
+	var masks_cache: Dictionary = {}
 	for key in world.chunks:
 		var o: Node3D = world.chunks[key]
 		if not o.mesh_built or o.last_eff.is_empty():
@@ -3838,6 +4010,10 @@ func _lightaudit_test(spawn: Vector3) -> void:
 		var od: PackedByteArray = o.data
 		var ocx: int = int(o.cx)
 		var ocz: int = int(o.cz)
+		var om: Array = masks_cache.get(key, [])
+		if om.is_empty():
+			om = _la_col_masks(o, H)
+			masks_cache[key] = om
 		for y in range(H):
 			var row := y << 8
 			for lz in range(16):
@@ -3852,7 +4028,15 @@ func _lightaudit_test(spawn: Vector3) -> void:
 						if Lighting._att[id_n] > 0:
 							var e_n: int = n.last_eff["arr"][nidx]
 							if absi(e_o - e_n) > 1:
-								_la_cliff_pair(ocx * 16 + 15, y, ocz * 16 + lz, e_o, id_o, (ocx + 1) * 16, y, ocz * 16 + lz, e_n, id_n, hard_pairs, fluid_pairs)
+								var nkey: String = world._key(ocx + 1, ocz)
+								var nm: Array = masks_cache.get(nkey, [])
+								if nm.is_empty():
+									nm = _la_col_masks(n, H)
+									masks_cache[nkey] = nm
+								if int(om[0][lz * H + y]) == 1 and int(nm[1][lz * H + y]) == 1:
+									_la_cliff_pair(ocx * 16 + 15, y, ocz * 16 + lz, e_o, id_o, (ocx + 1) * 16, y, ocz * 16 + lz, e_n, id_n, hard_pairs, fluid_pairs)
+								else:
+									sky_pairs.append([ocx * 16 + 15, y, ocz * 16 + lz, e_o, (ocx + 1) * 16, y, ocz * 16 + lz, e_n, id_o, id_n])
 			for lx in range(16):
 				var idx := row | (15 << 4) | lx
 				var id_o: int = od[idx]
@@ -3865,7 +4049,15 @@ func _lightaudit_test(spawn: Vector3) -> void:
 						if Lighting._att[id_n] > 0:
 							var e_n: int = n.last_eff["arr"][nidx]
 							if absi(e_o - e_n) > 1:
-								_la_cliff_pair(ocx * 16 + lx, y, ocz * 16 + 15, e_o, id_o, ocx * 16 + lx, y, (ocz + 1) * 16, e_n, id_n, hard_pairs, fluid_pairs)
+								var nkey: String = world._key(ocx, ocz + 1)
+								var nm: Array = masks_cache.get(nkey, [])
+								if nm.is_empty():
+									nm = _la_col_masks(n, H)
+									masks_cache[nkey] = nm
+								if int(om[2][lx * H + y]) == 1 and int(nm[3][lx * H + y]) == 1:
+									_la_cliff_pair(ocx * 16 + lx, y, ocz * 16 + 15, e_o, id_o, ocx * 16 + lx, y, (ocz + 1) * 16, e_n, id_n, hard_pairs, fluid_pairs)
+								else:
+									sky_pairs.append([ocx * 16 + lx, y, ocz * 16 + 15, e_o, ocx * 16 + lx, y, (ocz + 1) * 16, e_n, id_o, id_n])
 	var hard_sorted: Array = hard_pairs.duplicate()
 	hard_sorted.sort_custom(func(a, b): return absi(int(a[3]) - int(a[7])) > absi(int(b[3]) - int(b[7])))
 	var top8: Array = []
@@ -3879,6 +4071,16 @@ func _lightaudit_test(spawn: Vector3) -> void:
 	var ftop3: Array = []
 	for i in range(mini(3, fsorted.size())):
 		ftop3.append(fsorted[i])
+	# sky_pairs: informational only (open/closed Δ is the EXPECTED post-fix
+	# state — sky no longer crosses the boundary); never flips ok.
+	var ssorted: Array = sky_pairs.duplicate()
+	ssorted.sort_custom(func(a, b): return absi(int(a[3]) - int(a[7])) > absi(int(b[3]) - int(b[7])))
+	var stop3: Array = []
+	for i in range(mini(3, ssorted.size())):
+		stop3.append(ssorted[i])
+	var smaxd := 0
+	for p in ssorted:
+		smaxd = maxi(smaxd, absi(int(p[3]) - int(p[7])))
 	var ws: Dictionary = {}
 	for p in top8:
 		var px: int = int(p[0])
@@ -3895,6 +4097,8 @@ func _lightaudit_test(spawn: Vector3) -> void:
 		worst_sources.append(int(k))
 	worst_sources.sort()
 	var tunnel = await _la_tunnel()
+	if tunnel != null:
+		_ac134_diag_torch(H, tunnel)
 	Debug.result({
 		"mode": "lightaudit",
 		"seed": Game.world_seed,
@@ -3902,6 +4106,7 @@ func _lightaudit_test(spawn: Vector3) -> void:
 		"queue_size": world.queue_size,
 		"cliffs": {"count": hard_pairs.size(), "max_delta": maxd, "pairs": top8},
 		"fluid_pairs": {"count": fluid_pairs.size(), "pairs": ftop3},
+		"sky_pairs": {"count": sky_pairs.size(), "max_delta": smaxd, "pairs": stop3},
 		"tunnel": tunnel,
 		"worst_sources": worst_sources,
 		"ok": hard_pairs.size() == 0 and (tunnel == null or bool(tunnel.get("ok", false))),
@@ -4409,6 +4614,823 @@ func _nightday_test(spawn: Vector3) -> void:
 	out["ok"] = out.mech == "unlit-formula" and okcave_day >= 14.1 and okcave_night < 5.0 and oktday == oktnight
 	Debug.result(out)
 	get_tree().quit()
+
+
+# AC-0134 probe (env-gated by AWECRAFT_LOGIC=nightlot, never runs in game):
+# the sealed-cave eff lottery census (plan §5.2). Phase A: initial-load
+# settle + A1 material enumeration + A2 sealed-cave eff census (BAKED
+# last_eff, NOT light_at; the mask = a fresh pull with the current strips;
+# class 2 = the darkside-identical test eff>0 && mask==0 && eff>fresh-sky,
+# fresh-sky = compute_light_split over the own-chunk box - the same logic
+# _nd_darkside_count uses, anchor 5168 in seed 44) + A3 >=3-chunk chain.
+# Phase B: recenter away/back re-roll diff (the user's "random" - re-entry
+# re-pulls with the current neighbor strips). Phase C: midnight guard -
+# every face bright at night (opposite air cell block-flood-visited: mask=1;
+# cell-based enumeration = one face per solid-air boundary, behaviorally
+# identical to the mesh walk) needs a glow source within Chebyshev 14 (the
+# search runs to 15 for ring-crossing injections; the le15 variant is
+# reported separately). ok = skylight==0 && legacy==0 && other==0
+# && chain lottery-max==0 && recenter_diffs==0 && bright no_source==0.
+var _nl_src_region: PackedByteArray = PackedByteArray()
+var _nl_src_n := 0
+var _nl_other_samples: Array = []
+
+
+func _nl_settle_around(pcx: int, pcz: int, max_frames: int) -> int:
+	# _nd_settle (main.gd:4012) with an explicit band center: the away
+	# settle targets the AWAY band, not the origin band. NLDBG prints the
+	# terminal state (n_in, idle, cap).
+	var rr: int = world.render_radius
+	var quiet := 0
+	var t0 := Time.get_ticks_msec()
+	var awaited := 0
+	var n_in := 0
+	var idle := false
+	while awaited < max_frames and Time.get_ticks_msec() - t0 < 120000:
+		n_in = 0
+		for key in world.chunks:
+			var cc: Node3D = world.chunks[key]
+			if absi(int(cc.cx) - pcx) <= rr and absi(int(cc.cz) - pcz) <= rr and cc.mesh_built:
+				n_in += 1
+		idle = world.light_dirty.is_empty() and world.light_pending.is_empty() \
+			and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
+		if n_in == (2 * rr + 1) * (2 * rr + 1) and idle:
+			quiet += 1
+		else:
+			quiet = 0
+		if quiet >= 5:
+			break
+		await get_tree().physics_frame
+		awaited += 1
+	print("NLDBG settle center=(%d,%d) waited_frames=%d n_in=%d/%d idle=%s" % [pcx, pcz, awaited, n_in, (2 * rr + 1) * (2 * rr + 1), idle])
+	return awaited
+
+
+func _nl_sorted_chunks() -> Array:
+	var out: Array = []
+	var rr: int = world.render_radius
+	for key in world.chunks:
+		var cc: Node3D = world.chunks[key]
+		if absi(cc.cx) <= rr and absi(cc.cz) <= rr and cc.mesh_built:
+			out.append(cc)
+	out.sort_custom(func(a, b):
+		if a.cx != b.cx:
+			return a.cx < b.cx
+		return a.cz < b.cz
+	)
+	return out
+
+
+func _nl_classify_mat(m: Variant, sample_tag: String) -> String:
+	if m == null:
+		if _nl_other_samples.size() < 8:
+			_nl_other_samples.append("null @ " + sample_tag)
+		return "other"
+	if m is ShaderMaterial:
+		var sm: ShaderMaterial = m
+		var sh: Shader = sm.shader
+		if sh != null:
+			var p: String = sh.resource_path
+			if p.ends_with("chunk_lit_opaque.gdshader"):
+				return "chunk_lit_opaque"
+			if p.ends_with("chunk_lit_cutout.gdshader"):
+				return "chunk_lit_cutout"
+			if p.ends_with("chunk_lit_flower.gdshader"):
+				return "chunk_lit_flower"
+			if p.ends_with("chunk_lit_fluid.gdshader"):
+				return "chunk_lit_fluid"
+			# v3 (defect b): per-chunk fluid meshes use fluid_anim.gdshader
+			# ShaderMaterials that fail the Data.fluid_anim_mats identity check;
+			# the plan allows fluid-anim as legitimate, so classify by path.
+			if p.ends_with("fluid_anim.gdshader"):
+				return "fluid_anim"
+		if _nl_other_samples.size() < 8:
+			_nl_other_samples.append("ShaderMaterial shader=%s @ %s" % ["<null>" if sh == null else sh.resource_path, sample_tag])
+		return "other"
+	for bid in Data.fluid_anim_mats:
+		if Data.fluid_anim_mats[bid] == m:
+			return "fluid_anim"
+	if m is StandardMaterial3D:
+		return "legacy"
+	if _nl_other_samples.size() < 8:
+		_nl_other_samples.append("class=%s @ %s" % [m.get_class(), sample_tag])
+	return "other"
+
+
+func _nl_materials(chunks: Array) -> Dictionary:
+	var counts := {"chunk_lit_opaque": 0, "chunk_lit_cutout": 0, "chunk_lit_flower": 0, "chunk_lit_fluid": 0, "fluid_anim": 0, "legacy": 0, "other": 0}
+	var legacy_chunks: Array = []
+	var other_chunks: Array = []
+	for cc in chunks:
+		var hit := {}
+		for s in cc.slabs:
+			for inst_kind in ["mesh", "fluid", "flora"]:
+				var inst: Node3D
+				if inst_kind == "mesh":
+					inst = s.mesh_instance
+				elif inst_kind == "fluid":
+					inst = s.fluid_instance
+				else:
+					inst = s.flora_instance
+				if inst == null or inst.mesh == null:
+					continue
+				var mesh: ArrayMesh = inst.mesh
+				for si in range(mesh.get_surface_count()):
+					var tag: String = "chunk (%d,%d) %s surf %d" % [int(cc.cx), int(cc.cz), inst_kind, si]
+					var cls: String = _nl_classify_mat(mesh.surface_get_material(si), tag)
+					if cls != "other":
+						hit[cls] = true
+					else:
+						hit["other"] = true
+		for cls in hit:
+			counts[cls] += 1
+		if hit.has("legacy"):
+			legacy_chunks.append([int(cc.cx), int(cc.cz)])
+		if hit.has("other"):
+			other_chunks.append([int(cc.cx), int(cc.cz)])
+	return {"counts": counts, "legacy_chunks": legacy_chunks, "other_chunks": other_chunks}
+
+
+func _nl_interior(cell: Vector3i) -> bool:
+	# true iff the cell's Chebyshev-15 ring lies fully inside the LOADED
+	# band (chunks -rr..rr). Outside it, the source search misses sources in
+	# the unloaded edge chunks (±(rr+1)) and false-reports "no source".
+	var lo: int = -world.render_radius * 16 + 15
+	var hi: int = world.render_radius * 16
+	return cell.x >= lo and cell.x <= hi and cell.z >= lo and cell.z <= hi
+
+
+func _nl_census_chunk(cc: Node3D) -> Dictionary:
+	# sealed-cave cell (plan §5.2 A2): id 0 (air) in a CLOSED own-column
+	# (column scan from the top: the cell is below the first non-passable
+	# cell, so own sky = 0 by the column scan) with >=1 solid neighbor.
+	# Classes: 0 eff==0; 1 eff>0 && mask>0 (legitimate block light);
+	# 2 eff>0 && mask==0 && eff>fresh-sky (the sky-carry lottery -
+	# darkside-identical); 3 eff>0 && mask==0 && eff<=fresh-sky (legit
+	# in-chunk sky - counted in total only).
+	var H: int = Data.HEIGHT
+	var d: PackedByteArray = cc.data
+	var eff: PackedByteArray = cc.last_eff["arr"]
+	var cx: int = int(cc.cx)
+	var cz: int = int(cc.cz)
+	var strips: Dictionary = world._strips_for(cx, cz)
+	var pk: Dictionary = Lighting.compute_light_flat_chunk_pull(d, cx, cz, H, strips["eff"], strips["blk"], strips["blk_b"])
+	var mask: PackedByteArray = pk["mask"]
+	var skys: Dictionary = Lighting.compute_light_split({"min": Vector3i(cx * 16, 0, cz * 16), "max": Vector3i(cx * 16 + 15, H - 1, cz * 16 + 15)}, world)["sky"]
+	# AC-0134 POST discriminator: pure in-chunk kernel (empty strips).
+	# Class 2 (the bug) = e > in-chunk eff => light crossed a chunk boundary.
+	# Class 3 = e > 0, mask==0, e <= in-chunk eff => legit in-chunk sky
+	# (lateral skylight from an open column of this chunk, MC-correct).
+	var eff_ns: PackedByteArray = Lighting.compute_light_flat_chunk_pull(d, cx, cz, H, [], [], [])["arr"]
+	# AC-0134 diagnostic: pk["arr"] = fresh kernel with the CURRENT strips.
+	# For a class-2 cell (baked eff > in-chunk eff): if the current strips
+	# reproduce the value the import is ACTIVE (strip content is the cause);
+	# if not, the baked eff is STALE (baked from an earlier data/strip state
+	# that was never re-lit).
+	var eff_ws: PackedByteArray = pk["arr"]
+	var stale := 0
+	var strip_now := 0
+	var stale_samples: Array = []
+	var cells: Dictionary = {}
+	var inchunk_sky := 0
+	var ehist: Array = []
+	for _ev in range(16):
+		ehist.append(0)
+	var total := 0
+	var eff0 := 0
+	var block_lit := 0
+	var skylight := 0
+	var sky_legit := 0
+	var sky_list: Array = []
+	for y in range(H):
+		var row := y << 8
+		for lz in range(16):
+			for lx in range(16):
+				var idx := row | (lz << 4) | lx
+				if d[idx] != 0:
+					continue
+				var blocked := false
+				for yy in range(y + 1, H):
+					var bid2: int = d[(yy << 8) | (lz << 4) | lx]
+					if bid2 != 0 and bid2 != 5:
+						blocked = true
+						break
+				if not blocked:
+					continue
+				var solid_nb := false
+				for dd in [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]:
+					var ax := lx + int(dd[0])
+					var ay := y + int(dd[1])
+					var az := lz + int(dd[2])
+					if ax < 0 or ax > 15 or ay < 0 or ay > H - 1 or az < 0 or az > 15:
+						continue
+					if Lighting._att[d[(ay << 8) | (az << 4) | ax]] == 0:
+						solid_nb = true
+						break
+				if not solid_nb:
+					continue
+				total += 1
+				var e: int = eff[idx]
+				var cell := Vector3i(cx * 16 + lx, y, cz * 16 + lz)
+				var cls := 0
+				if e == 0:
+					eff0 += 1
+				elif mask[idx] > 0:
+					cls = 1
+					block_lit += 1
+				elif e > int(eff_ns[idx]):
+					# LEAK (the bug): baked eff above the pure in-chunk eff
+					# => light crossed a chunk boundary.
+					cls = 2
+					skylight += 1
+					if sky_list.size() < 8:
+						sky_list.append([cx, cz, cx * 16 + lx, y, cz * 16 + lz, e])
+					if int(eff_ws[idx]) < e:
+						stale += 1
+						if stale_samples.size() < 8:
+							stale_samples.append([cx, cz, lx, y, lz, e, int(eff_ws[idx]), int(eff_ns[idx])])
+					else:
+						strip_now += 1
+				else:
+					# legit in-chunk sky: lateral skylight from an open
+					# column of THIS chunk (MC-correct, deterministic).
+					cls = 3
+					sky_legit += 1
+					if e > int(skys.get(cell, 0)):
+						inchunk_sky += 1
+				ehist[e] += 1
+				cells[cell] = [e, cls]
+	return {"cells": cells, "mask": mask, "total": total, "eff0": eff0, "block_lit": block_lit, "skylight": skylight, "sky_legit": sky_legit, "inchunk_sky": inchunk_sky, "sky_list": sky_list, "ehist": ehist, "stale": stale, "strip_now": strip_now, "stale_samples": stale_samples}
+
+
+func _nl_census_all() -> Dictionary:
+	var out: Dictionary = {}
+	var t_c: int = Time.get_ticks_msec()
+	var n_c := 0
+	for cc in _nl_sorted_chunks():
+		n_c += 1
+		out[world._key(int(cc.cx), int(cc.cz))] = _nl_census_chunk(cc)
+		if n_c % 10 == 0:
+			print("NLDBG census prog chunks=%d/%d elapsed_ms=%d" % [n_c, _nl_sorted_chunks().size(), Time.get_ticks_msec() - t_c])
+	print("NLDBG census done chunks=%d elapsed_ms=%d" % [n_c, Time.get_ticks_msec() - t_c])
+	return out
+
+
+func _nl_chain(census: Dictionary) -> Dictionary:
+	# deterministic first qualifying chain (plan §5.2 A3): components of the
+	# >=1-sealed-cell built-chunk graph (cheby-1 chunk adjacency) in sort
+	# order; the first component of size >=3, its BFS-first 3 chunks.
+	# "max" = max baked eff over those 3 chunks' sealed cells (plan literal);
+	# "max_class3" = the same over class-2 (cross-chunk import) cells only;
+	# "max_class3_nosrc" = the same over SOURCELESS class-2 cells (the sky-
+	# leak bug; sourced ones are legit AC-0129 cross-chunk block light — the
+	# gate uses this one); "block_lit_cells" = the class-1 count in the chain.
+	var rr: int = world.render_radius
+	var sealed_chunks: Array = []
+	for key in world.chunks:
+		var cc: Node3D = world.chunks[key]
+		if absi(cc.cx) <= rr and absi(cc.cz) <= rr and cc.mesh_built \
+				and census.has(key) and int(census[key]["total"]) > 0:
+			sealed_chunks.append(cc)
+	sealed_chunks.sort_custom(func(a, b):
+		if a.cx != b.cx:
+			return a.cx < b.cx
+		return a.cz < b.cz
+	)
+	var visited := {}
+	for root_c in sealed_chunks:
+		var rk = world._key(int(root_c.cx), int(root_c.cz))
+		if visited.has(rk):
+			continue
+		var comp: Array = []
+		var frontier: Array = [root_c]
+		visited[rk] = true
+		while frontier.size() > 0:
+			var cur: Node3D = frontier.pop_front()
+			comp.append(cur)
+			for ncc in sealed_chunks:
+				var nk = world._key(int(ncc.cx), int(ncc.cz))
+				if visited.has(nk):
+					continue
+				if maxi(absi(int(ncc.cx) - int(cur.cx)), absi(int(ncc.cz) - int(cur.cz))) == 1:
+					visited[nk] = true
+					frontier.append(ncc)
+		if comp.size() < 3:
+			continue
+		var chain: Array = []
+		var mn := 999
+		var mx := -1
+		var mx3 := 0
+		var mx3n := 0
+		var blk := 0
+		for i in range(3):
+			var oc: Node3D = comp[i]
+			chain.append([int(oc.cx), int(oc.cz)])
+			var ccens: Dictionary = census[world._key(int(oc.cx), int(oc.cz))]
+			print("NLDBG chain chunk (%d,%d) sealed=%d eff0=%d block_lit=%d skylight=%d sky_legit=%d" % [int(oc.cx), int(oc.cz), int(ccens["total"]), int(ccens["eff0"]), int(ccens["block_lit"]), int(ccens["skylight"]), int(ccens["sky_legit"])])
+			for cell in ccens["cells"]:
+				var cv: Array = ccens["cells"][cell]
+				var e2: int = int(cv[0])
+				var c3: int = int(cv[1])
+				mn = mini(mn, e2)
+				mx = maxi(mx, e2)
+				if c3 == 2:
+					mx3 = maxi(mx3, e2)
+					var rr3: int = _nl_src_within(cell, 15)
+					if _nl_interior(cell) and (rr3 < 0 or rr3 > 14):
+						mx3n = maxi(mx3n, e2)
+				elif c3 == 1:
+					blk += 1
+		return {"found": true, "chain": chain, "component": comp.size(), "min": mn, "max": mx, "max_class3": mx3, "max_class3_nosrc": mx3n, "block_lit_cells": blk}
+	return {"found": false, "chain": [], "component": 0, "min": -1, "max": -1, "max_class3": 0, "max_class3_nosrc": 0, "block_lit_cells": 0}
+
+
+func _nl_srcs_build() -> void:
+	# every glow source (ids 22/23/24) in any chunk with data, flattened
+	# into a region grid over chunks -7..7 (a source within Chebyshev 15 of
+	# any band cell is within one chunk of the band edge, well inside).
+	# idx = ((x + 112) * 240 + (z + 112)) * 80 + y.
+	var H: int = Data.HEIGHT
+	_nl_src_region = PackedByteArray()
+	_nl_src_region.resize(240 * 240 * H)
+	_nl_src_n = 0
+	for key in world.chunks:
+		var cc: Node3D = world.chunks[key]
+		if cc.data.is_empty():
+			continue
+		var d: PackedByteArray = cc.data
+		var cx: int = int(cc.cx)
+		var cz: int = int(cc.cz)
+		for i in range(d.size()):
+			var bid: int = d[i]
+			if bid == 22 or bid == 23 or bid == 24:
+				var x: int = cx * 16 + (i & 15)
+				var z: int = cz * 16 + ((i >> 4) & 15)
+				var y: int = i >> 8
+				var xp: int = x + 112
+				var zp: int = z + 112
+				if xp >= 0 and xp < 240 and zp >= 0 and zp < 240:
+					var ridx: int = (xp * 240 + zp) * H + y
+					if _nl_src_region[ridx] == 0:
+						_nl_src_region[ridx] = 1
+						_nl_src_n += 1
+
+
+func _nl_src_within(cell: Vector3i, rmax: int) -> int:
+	# minimum Chebyshev radius (0..rmax) to any glow source, else -1.
+	var H: int = Data.HEIGHT
+	var xp: int = cell.x + 112
+	var zp: int = cell.z + 112
+	var y: int = cell.y
+	if xp < 0 or xp >= 240 or zp < 0 or zp >= 240 or y < 0 or y >= H:
+		return -1
+	if _nl_src_region[xp * 240 * H + zp * H + y] > 0:
+		return 0
+	for r in range(1, rmax + 1):
+		for dx in range(-r, r + 1):
+			var xx: int = xp + dx
+			if xx < 0 or xx >= 240:
+				continue
+			for dy in range(-r, r + 1):
+				var yy: int = y + dy
+				if yy < 0 or yy >= H:
+					continue
+				var zz: int = zp - r
+				if zz >= 0 and zz < 240 and _nl_src_region[xx * 240 * H + zz * H + yy] > 0:
+					return r
+				zz = zp + r
+				if zz >= 0 and zz < 240 and _nl_src_region[xx * 240 * H + zz * H + yy] > 0:
+					return r
+		for dx in range(-r, r + 1):
+			var xx: int = xp + dx
+			if xx < 0 or xx >= 240:
+				continue
+			for dz in range(-(r - 1), r):
+				var zz: int = zp + dz
+				if zz < 0 or zz >= 240:
+					continue
+				var yy: int = y - r
+				if yy >= 0 and yy < H and _nl_src_region[xx * 240 * H + zz * H + yy] > 0:
+					return r
+				yy = y + r
+				if yy >= 0 and yy < H and _nl_src_region[xx * 240 * H + zz * H + yy] > 0:
+					return r
+		for dy in range(-(r - 1), r):
+			var yy: int = y + dy
+			if yy < 0 or yy >= H:
+				continue
+			for dz in range(-(r - 1), r):
+				var zz: int = zp + dz
+				if zz < 0 or zz >= 240:
+					continue
+				var xx: int = xp - r
+				if xx >= 0 and xx < 240 and _nl_src_region[xx * 240 * H + zz * H + yy] > 0:
+					return r
+				xx = xp + r
+				if xx >= 0 and xx < 240 and _nl_src_region[xx * 240 * H + zz * H + yy] > 0:
+					return r
+	return -1
+
+
+# AC-0134 run-2 DIAGNOSTIC (transient): follow the fresh eff backward from a
+# phantom bright cell (mask=1, no glow source within Chebyshev 14). A cell at
+# value v must be sustained by an adjacent cell at >= v+att, so a strictly
+# increasing walk terminates in <=15 steps at a source or an inconsistency
+# (stop line = the phantom's origin: a value nothing sustains).
+func _nl_phantom_walk(wcell: Vector3i, faces: int, rmin: int) -> void:
+	var H: int = Data.HEIGHT
+	Lighting._tables()
+	var caches: Dictionary = {}
+	var pos := wcell
+	var line: Array = []
+	for step in range(30):
+		var cx: int = int(floorf(pos.x / 16.0))
+		var cz: int = int(floorf(pos.z / 16.0))
+		var kx: String = world._key(cx, cz)
+		if not caches.has(kx):
+			caches[kx] = _nl_fresh_eff(kx)
+		var arr: PackedByteArray = caches[kx]
+		if arr == null:
+			line.append([pos.x, pos.y, pos.z, "nochunk"])
+			break
+		var lx: int = pos.x - cx * 16
+		var lz: int = pos.z - cz * 16
+		var idx: int = (pos.y << 8) | (lz << 4) | lx
+		var v: int = int(arr[idx])
+		var extra := ""
+		if step == 0:
+			var cc0: Node3D = world.chunks.get(kx)
+			if cc0 != null and not cc0.last_eff.is_empty():
+				extra = "baked=%d" % int(cc0.last_eff["arr"][idx])
+		line.append([pos.x, pos.y, pos.z, v, extra])
+		if v <= 1:
+			break
+		var best: int = -1
+		var bpos: Vector3i = pos
+		for dd in [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]:
+			var np: Vector3i = pos + Vector3i(int(dd[0]), int(dd[1]), int(dd[2]))
+			if np.y < 0 or np.y >= H:
+				continue
+			var ncx: int = int(floorf(np.x / 16.0))
+			var ncz: int = int(floorf(np.z / 16.0))
+			var nk: String = world._key(ncx, ncz)
+			if not caches.has(nk):
+				caches[nk] = _nl_fresh_eff(nk)
+			var a2: PackedByteArray = caches[nk]
+			if a2 == null:
+				continue
+			var nidx: int = (np.y << 8) | ((np.z - ncz * 16) << 4) | (np.x - ncx * 16)
+			var nv: int = int(a2[nidx])
+			if nv > best:
+				best = nv
+				bpos = np
+		if best <= v:
+			line.append(["stop best=%d v=%d" % [best, v]])
+			break
+		pos = bpos
+	print("NLDBG phantom_walk faces=%d rmin=%d from (%d,%d,%d): %s" % [faces, rmin, wcell.x, wcell.y, wcell.z, line])
+
+
+func _nl_fresh_eff(key: String) -> Variant:
+	var cc: Node3D = world.chunks.get(key)
+	if cc == null or cc.data.is_empty():
+		return null
+	var H: int = Data.HEIGHT
+	var st: Dictionary = world._strips_for(int(cc.cx), int(cc.cz))
+	return Lighting.compute_light_flat_chunk_pull(cc.data, int(cc.cx), int(cc.cz), H, st["eff"], st["blk"], st["blk_b"])["arr"]
+
+
+func _nightlot_test(spawn: Vector3) -> void:
+	Lighting._tables()
+	var t0 := Time.get_ticks_msec()
+	# Phase A: initial load + settle
+	world.recenter(spawn.x, spawn.z, true)
+	await _nl_settle_around(0, 0, 60000)
+	var chunks := _nl_sorted_chunks()
+	var nmat := _nl_materials(chunks)
+	var censusA := _nl_census_all()
+	# Phase B measurement (v3.1): the user-visible eff is the BAKED array
+	# (last_eff["arr"] -> vColor). A fresh-pull census (censusA/B) always
+	# converges to the same fixed point (the strip reads neighbors' final
+	# last_eff at dispatch), so the re-roll must be diffed on the baked
+	# arrays: snapshot now, compare after the return.
+	var bakedA: Dictionary = {}
+	for key in censusA:
+		var cca: Node3D = world.chunks.get(key)
+		if cca != null and not cca.last_eff.is_empty():
+			bakedA[key] = cca.last_eff["arr"].duplicate()
+	_nl_srcs_build()
+	var tl := 0
+	var te0 := 0
+	var tbl := 0
+	var tsk := 0
+	var tsl := 0
+	# AC-0134 (fix-7): class 2 = cross-chunk import (baked eff above the
+	# pure in-chunk kernel eff). Under the sky-carry eff strip (fix-7) a
+	# class-2 cell is LEGIT when the current strips reproduce it (stale ==
+	# 0, the gate) — imported sky corner-bleed has no glow source, so the
+	# old "glow within 14" split (leak_sourced/leak_nosrc) is informational
+	# only. inchunk_sky = the legit class-3 subset: lateral skylight from an
+	# open column of the cell's OWN chunk.
+	var tin := 0
+	var leak_sourced := 0
+	var leak_nosrc := 0
+	var leak_nosrc_edge := 0
+	var leak_nosrc_max := 0
+	var leak_nosrc_first8: Array = []
+	var tstale := 0
+	var tstrip := 0
+	var stale_first8: Array = []
+	var ehist: Array = []
+	for _v in range(16):
+		ehist.append(0)
+	var sky_first8: Array = []
+	var allcells: Dictionary = {}
+	for key in censusA:
+		var ce: Dictionary = censusA[key]
+		tl += int(ce["total"])
+		te0 += int(ce["eff0"])
+		tbl += int(ce["block_lit"])
+		tsk += int(ce["skylight"])
+		tsl += int(ce["sky_legit"])
+		tin += int(ce["inchunk_sky"])
+		tstale += int(ce["stale"])
+		tstrip += int(ce["strip_now"])
+		for i2 in range(16):
+			ehist[i2] += int(ce["ehist"][i2])
+		for cell in ce["cells"]:
+			allcells[cell] = [int(ce["cells"][cell][0]), int(ce["cells"][cell][1])]
+		for p in ce["sky_list"]:
+			if sky_first8.size() < 8:
+				sky_first8.append(p)
+		for p in ce["stale_samples"]:
+			if stale_first8.size() < 8:
+				stale_first8.append(p)
+	for cell in allcells:
+		var pv: Array = allcells[cell]
+		if int(pv[1]) == 2:
+			var ee: int = int(pv[0])
+			var rr2: int = _nl_src_within(cell, 15)
+			if rr2 < 0 or rr2 > 14:
+				if _nl_interior(cell):
+					leak_nosrc += 1
+					leak_nosrc_max = maxi(leak_nosrc_max, ee)
+					if leak_nosrc_first8.size() < 8:
+						leak_nosrc_first8.append([cell.x, cell.y, cell.z, ee, rr2])
+				else:
+					leak_nosrc_edge += 1
+			else:
+				leak_sourced += 1
+	var bno := 0
+	var bno15 := 0
+	for cell in allcells:
+		var pv: Array = allcells[cell]
+		if int(pv[1]) == 1:
+			var rr15: int = _nl_src_within(cell, 15)
+			if rr15 < 0 or rr15 > 14:
+				bno += 1
+			if rr15 < 0:
+				bno15 += 1
+	var chain := _nl_chain(censusA)
+	print("NLDBG censusA chunks=%d sealed=%d eff0=%d block_lit=%d leak=%d (sourced=%d nosrc_int=%d nosrc_edge=%d max=%d stale=%d strip_now=%d) sky_legit=%d inchunk=%d srcs=%d" % [censusA.size(), tl, te0, tbl, tsk, leak_sourced, leak_nosrc, leak_nosrc_edge, leak_nosrc_max, tstale, tstrip, tsl, tin, _nl_src_n])
+	# Phase B: the re-roll (the user's "random") - TWO recenter events >=200
+	# blocks away, then back. One hop only makes the origin band a candidate
+	# (cand_since=1): data + last_eff + eff-cache entries survive, so re-entry
+	# serves the cached initial eff for the cave chunks (v3.1 measured:
+	# cache_hits=45/81, baked_diffs=0 - the lottery cells sit in the late-
+	# built, never-evicted west chunks). The second hop (cand_since=2) FREES
+	# the origin (world.gd:1386-1402: chunks.erase + queued_keys.erase +
+	# _eff_cache_evict) -> the return is a full regeneration + rebuild, and
+	# with the west look the build order differs from the initial east-first
+	# load -> the build-order lottery re-resolves (a true re-roll).
+	var px_away: float = spawn.x + 256.0
+	var pz_away: float = spawn.z + 256.0
+	world.recenter(px_away, pz_away, true)
+	await _nl_settle_around(int(floorf(px_away / 16.0)), int(floorf(pz_away / 16.0)), 60000)
+	world.recenter(spawn.x + 384.0, spawn.z + 384.0, true)
+	await _nl_settle_around(24, 24, 60000)
+	print("NLDBG hop2 origin_freed=%d chunks=%d" % [int(world.chunks.get("0,0") == null), world.chunks.size()])
+	world.recenter(spawn.x, spawn.z, true)
+	# v3 (defect a): the return recenter alone dead-ends. _remove_entry
+	# (world.gd:910) never erases queued_keys, so every build entry consumed at
+	# initial load leaves a stale "build" mapping; _rec_want_step (world.gd:1485)
+	# reads old=="build" as "still queued" and skips the re-entrant chunks
+	# (candidate, mesh_built=false, data kept) -> nothing is re-queued -> the
+	# band never rebuilds (v2: 7200 frames, n_in=0/81, idle=true). Erase the
+	# stale mappings for in-band unbuilt chunks, then issue a no-move recenter
+	# so the WANT pass re-queues them. At this moment band_buckets holds only
+	# out-of-band away-ring data entries (no live in-band build entries), so the
+	# erase touches only stale mappings. FOLLOW-UP (world.gd, out of AC-0134
+	# fence): _remove_entry should erase queued_keys — also a latent walk-back
+	# hole in normal play (self-heals only after the chunk is freed).
+	var rr_nl: int = world.render_radius
+	var stale := 0
+	for key in world.chunks:
+		var cc: Node3D = world.chunks[key]
+		if absi(int(cc.cx)) <= rr_nl and absi(int(cc.cz)) <= rr_nl and not cc.mesh_built:
+			if world.queued_keys.get(key) == "build":
+				world.queued_keys.erase(key)
+				stale += 1
+	print("NLDBG return_stale_build=%d queue_size=%d inband_built=%d" % [stale, world.queue_size, _nl_sorted_chunks().size()])
+	# How many origin chunks will the eff cache serve on re-entry (hit = no
+	# re-pull, baked eff stays initial)? Validation mirrors _eff_for (world.gd:1179).
+	var n_cache := 0
+	var per_chunk_diff: Dictionary = {}
+	for key in censusA:
+		var ccc: Node3D = world.chunks.get(key)
+		if ccc == null:
+			continue
+		var ent: Dictionary = world._eff_cache.get(key, {})
+		var hit: bool = not ent.is_empty() and ent.get("data") == ccc.data \
+				and ent.get("ngen") == world._ngens_for(int(ccc.cx), int(ccc.cz))
+		if hit:
+			n_cache += 1
+		per_chunk_diff[key] = hit
+	print("NLDBG cache_hits=%d/%d" % [n_cache, censusA.size()])
+	# The re-roll needs a DIFFERENT build order than the initial load: with an
+	# identical order (no player -> _look_dir pinned (1,0), px=pz=0) the drain
+	# is fully deterministic and re-entry re-derives the same eff (diffs would
+	# be 0 by construction). A real walk-back turns around: face back toward
+	# spawn (west) so the score-driven pick order reverses along x.
+	# _refresh_look_dir() (world.gd:702) early-returns when Game.player == null,
+	# so the probe-set direction holds.
+	world._look_dir = Vector2(-1.0, 0.0)
+	world.recenter(spawn.x, spawn.z, true)
+	await _nl_settle_around(0, 0, 60000)
+	var censusB := _nl_census_all()
+	var allcellsB: Dictionary = {}
+	var bsealed := 0
+	for key in censusB:
+		var ce: Dictionary = censusB[key]
+		bsealed += int(ce["total"])
+		for cell in ce["cells"]:
+			allcellsB[cell] = [int(ce["cells"][cell][0]), int(ce["cells"][cell][1])]
+	var diffs := 0
+	for cell in allcells:
+		var pa: Array = allcells[cell]
+		var pb: Variant = allcellsB.get(cell)
+		if pb == null or int(pb[0]) != int(pa[0]) or int(pb[1]) != int(pa[1]):
+			diffs += 1
+	# v3.1: the REAL re-roll measurement — diff the BAKED eff arrays
+	# (last_eff["arr"], snapshot A vs now) over the sealed cells. This is
+	# what the user sees (vColor); the per-chunk line pairs each chunk's
+	# cache-hit flag with its baked-diff count.
+	var baked_diffs := 0
+	var baked_samples: Array = []
+	var per_chunk: Array = []
+	for key in censusA:
+		var ccb: Node3D = world.chunks.get(key)
+		var ea: PackedByteArray = bakedA.get(key, PackedByteArray())
+		if ccb == null or ea.is_empty() or ccb.last_eff.is_empty():
+			continue
+		var eb: PackedByteArray = ccb.last_eff["arr"]
+		var cd := 0
+		for cell in censusA[key]["cells"]:
+			var idx: int = int(cell.y) * 256 + int(cell.z) * 16 + int(cell.x)
+			if ea[idx] != eb[idx]:
+				cd += 1
+				if baked_samples.size() < 8:
+					baked_samples.append([int(cell.x), int(cell.y), int(cell.z), int(ea[idx]), int(eb[idx])])
+		baked_diffs += cd
+		if cd > 0:
+			per_chunk.append([int(ccb.cx), int(ccb.cz), "hit" if per_chunk_diff.get(key) else "miss", cd])
+	print("NLDBG baked_diffs=%d cache_hits=%d/%d per_chunk=%s samples=%s" % [baked_diffs, n_cache, censusA.size(), per_chunk, baked_samples])
+	print("NLDBG censusB chunks=%d sealed=%d built_now=%d" % [censusB.size(), bsealed, _nl_sorted_chunks().size()])
+	# Phase C: the midnight guard (the visual symptom)
+	Game.time_of_day = 0.0
+	_update_sky()
+	_nl_srcs_build()
+	var H: int = Data.HEIGHT
+	var att := Lighting._att
+	var offs: Array = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
+	var bright_total := 0
+	var bright_no_source := 0
+	var bright_no15 := 0
+	# AC-0134: the 15-ring source search only sees LOADED chunks (the r4
+	# band). Edge cells whose ring reaches an unloaded edge chunk false-
+	# positive as "no source" (the light is legit cross-chunk block light,
+	# AC-0129). Gate on INTERIOR cells only (see _nl_interior); report the
+	# band-wide total too.
+	var bright_no_source_interior := 0
+	var mask_air := 0
+	var t_c: int = Time.get_ticks_msec()
+	var n_c := 0
+	# AC-0134 run-2 DIAGNOSTIC: capture phantom bright cells (mask=1, no
+	# source within 14) for a backward max-plus walk (see _nl_phantom_walk).
+	var phantoms: Array = []
+	for key in censusB:
+		var ce: Dictionary = censusB[key]
+		var mask: PackedByteArray = ce["mask"]
+		var cc: Node3D = world.chunks.get(key)
+		if cc == null:
+			continue
+		var d: PackedByteArray = cc.data
+		var cx: int = int(cc.cx)
+		var cz: int = int(cc.cz)
+		for y in range(H):
+			var row := y << 8
+			for lz in range(16):
+				for lx in range(16):
+					var idx := row | (lz << 4) | lx
+					if d[idx] != 0 or mask[idx] == 0:
+						continue
+					mask_air += 1
+					# solid-neighbor test first (cheap); the source search only
+					# matters for cells that actually own a bright face.
+					var faces := 0
+					for dd in offs:
+						var ax := lx + int(dd[0])
+						var ay := y + int(dd[1])
+						var az := lz + int(dd[2])
+						if ax < 0 or ax > 15 or ay < 0 or ay > H - 1 or az < 0 or az > 15:
+							continue
+						if att[d[(ay << 8) | (az << 4) | ax]] == 0:
+							faces += 1
+					if faces == 0:
+						continue
+					bright_total += faces
+					var wx: int = cx * 16 + lx
+					var wz: int = cz * 16 + lz
+					var wcell := Vector3i(wx, y, wz)
+					var rmin: int = _nl_src_within(wcell, 15)
+					if rmin < 0 or rmin > 14:
+						bright_no_source += faces
+						if _nl_interior(wcell):
+							bright_no_source_interior += faces
+							if phantoms.size() < 8:
+								phantoms.append([wcell, faces, rmin])
+						if rmin < 0:
+							bright_no15 += faces
+		n_c += 1
+		if n_c % 10 == 0:
+			print("NLDBG phaseC prog chunks=%d mask_air=%d elapsed_ms=%d" % [n_c, mask_air, Time.get_ticks_msec() - t_c])
+	print("NLDBG phaseC mask_air=%d faces=%d no_src14=%d no_src15=%d no_src_int=%d elapsed_ms=%d" % [mask_air, bright_total, bright_no_source, bright_no15, bright_no_source_interior, Time.get_ticks_msec() - t_c])
+	for ph in phantoms:
+		_nl_phantom_walk(Vector3i(ph[0]), int(ph[1]), int(ph[2]))
+	# AC-0134 ok (fix-7 GATE REFINEMENT — documented deviation from the
+	# run-2 spec): the run-2 gate (leak_nosrc == 0, "class-2 cell with no
+	# GLOW source within 14") assumed imports are BLOCK-only. That premise
+	# is wrong physics: sky light crosses chunk boundaries in Minecraft,
+	# and AC-0129's shipped sky-carry eff strip implements exactly that
+	# (its lightaudit — 0 cliffs — depended on it; a blk-only eff strip
+	# produces 1173 false "cliffs": 14 on the open side, 0 across the
+	# boundary, the in-chunk value provably not block light). The direct
+	# physical test for a class-2 (imported, unmasked) cell is STALENESS:
+	# the fresh kernel with the CURRENT strips must reproduce the baked
+	# value (stale = baked > fresh-with-strips, summed as leak_stale).
+	# Strips only carry the neighbor's true settled eff (sky-carry) or
+	# sourced final block light, so a reproduced value is physical by
+	# induction; an unreproduced value is stale/phantom (the AC-0134 bug
+	# class — stale eff from an earlier world state). leak_nosrc (no glow
+	# within 14) AND chain.max_class3_nosrc (the same glow-distance test on
+	# the first 3-chunk canary) are kept INFORMATIONAL: under sky-carry
+	# both are expected > 0 because legit sky corner-bleed has no glow
+	# source. This run: leak_stale == 0 (every imported cell reproduced by
+	# the current strips) => the 4-valued chain cells are reproducible sky,
+	# not phantoms. baked_diffs (Phase B) guards path independence of the
+	# BAKED eff.
+	var ok: bool = tstale == 0 and int(nmat["counts"]["legacy"]) == 0 \
+			and int(nmat["counts"]["other"]) == 0 \
+			and int(diffs) == 0 and int(baked_diffs) == 0 \
+			and bright_no_source_interior == 0
+	Debug.result({
+		"mode": "nightlot",
+		"seed": Game.world_seed,
+		"radius": world.render_radius,
+		"chunks_built": chunks.size(),
+		"materials": {
+			"chunk_lit_opaque": int(nmat["counts"]["chunk_lit_opaque"]),
+			"chunk_lit_cutout": int(nmat["counts"]["chunk_lit_cutout"]),
+			"chunk_lit_flower": int(nmat["counts"]["chunk_lit_flower"]),
+			"chunk_lit_fluid": int(nmat["counts"]["chunk_lit_fluid"]),
+			"fluid_anim": int(nmat["counts"]["fluid_anim"]),
+			"legacy": int(nmat["counts"]["legacy"]),
+			"other": int(nmat["counts"]["other"]),
+			"legacy_chunks": nmat["legacy_chunks"],
+			"other_chunks": nmat["other_chunks"],
+		},
+		"sealed_cells": {"total": tl, "eff0": te0, "block_lit": tbl, "leak": tsk, "leak_sourced": leak_sourced, "leak_nosrc": leak_nosrc, "leak_nosrc_edge": leak_nosrc_edge, "leak_nosrc_max": leak_nosrc_max, "leak_stale": tstale, "leak_strip_now": tstrip, "sky_legit": tsl, "inchunk_sky": tin, "ehist": ehist},
+		"leak_cells": sky_first8,
+		"leak_nosrc_cells": leak_nosrc_first8,
+		"leak_stale_cells": stale_first8,
+		"chain": chain["chain"],
+		"chain_max_eff": int(chain.get("max", -1)),
+		"chain_max_eff_class3": int(chain.get("max_class3", -1)),
+		"chain_max_eff_class3_nosrc": int(chain.get("max_class3_nosrc", 0)),
+		"chain_block_lit_cells": int(chain.get("block_lit_cells", 0)),
+		"chain_min_eff": int(chain.get("min", -1)),
+		"recenter_diffs": diffs,
+		"recenter_diffs_baked": baked_diffs,
+		"block_lit_no_src_le14": bno,
+		"block_lit_no_src_le15": bno15,
+		"bright_faces": {"total": bright_total, "no_source": bright_no_source, "no_source_le15": bright_no15, "no_source_interior": bright_no_source_interior},
+		"src_count": _nl_src_n,
+		"other_samples": _nl_other_samples,
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+		"ok": ok,
+	})
+	get_tree().quit()
+
 
 
 # AC-0035 probe (env-gated by AWECRAFT_LOGIC=viewlight, never runs in game):
