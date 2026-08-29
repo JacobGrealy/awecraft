@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0135 — spec (generated scaffold)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.auto{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.fill{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:10px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0135 — moon-ambient-5-percent</h1>
+<div class="auto"><b>AUTO (from TASKS.yaml — do not hand-edit)</b></div>
+<p class="meta"><b>id:</b> <code>AC-0135</code> · <b>status:</b> <code>open</code> · <b>priority:</b> 2 · <b>source:</b> user · <b>created:</b> 2026-08-28T08:13 · <b>parent:</b> —</p>
+<p class="note">Registry <code>notes</code> (verbatim, quoted):</p>
+<blockquote><pre>Not a bug but: add ~5% ambient moon light so night is not pitch black. Scale or min floor on sky/eff at night (e.g. min 0.05*15). Gate: midnight with no torch still faintly visible, cave 0.75 not 0.</pre></blockquote>
+<h2>Goal</h2>
+<p>Add a ~5% ambient "moon light" <b>floor</b> to rendered light at night (min 0.05×15 = 0.75 on the 0–15 eff scale) so a sealed, sourceless cave is faintly visible at midnight instead of pitch black. The floor lives on the <b>u_day/shader side</b> — NOT in the eff array (AC-0134 kept the two separable on purpose). Daytime rendering must be unchanged.</p>
+<h2>Frozen spec references</h2>
+<div class="auto"><b>AUTO (fixed boilerplate — do not hand-edit)</b></div>
+<ul>
+<li><code>index.html</code> — build <code>20260816-r12</code> (Three.js single-file) is the <b>source of truth for ALL behavior/data — do NOT modify</b>. The Godot port is faithful; when unsure, the web file wins.</li>
+<li>Minecraft wiki = canonical reference for tools/crafting/blocks, match exactly unless the user specifies otherwise: <a href="https://minecraft.wiki/w/Tool">Tool</a>, <a href="https://minecraft.wiki/w/Block">Block</a>, <a href="https://minecraft.wiki/w/Mining">Mining</a>, <a href="https://minecraft.wiki/w/Crafting_table">Crafting_table</a>, <a href="https://minecraft.wiki/w/Item">Item</a>.</li>
+</ul>
+<h2>Data.* world constants</h2>
+<div class="auto"><b>AUTO (paths only — regenerate with <code>python3 tasks/scripts/spec_template.py AC-NNNN --full</code> to inline the tables; values are parsed fresh at run time)</b></div>
+<ul>
+<li><code>godot/autoload/data.gd</code> — all <code>Data.B_*</code> block ids, items, tools, SEA/HEIGHT/CHUNK constants (grep <code>^const </code>).</li>
+<li><code>godot/world/generator.gd</code> — biome constants + <code>T_G_*</code> tool ids; biome thresholds are computed in <code>biome_at()</code> (t &lt; -0.25 snow; t &gt; 0.35 &amp; m &lt; 0.1 desert; m &gt; 0.25 forest; else plains).</li>
+</ul>
+<h2>Builder gates (Run-2, in-session)</h2>
+<div class="auto"><b>AUTO (tiered per tasks/HARNESS.md §3 — do not hand-edit)</b></div>
+<div class="auto"><b>G0</b> — <code>env HOME=/tmp/dsh_home godot --headless --path godot --quit</code> exits 0 with <b>zero</b> <code>SCRIPT ERROR</code> lines.</div>
+<div class="auto"><b>SMOKE</b> — one battery launch with the 2–4 dependency-mapped modes for this change area (HARNESS.md §3 table, e.g. world/* → <code>player;interact;light;fluids</code>) + the <code>genhash</code> arm (25/25) whenever <code>world/*</code> or <code>data.gd</code> is touched; ~30 s total. The task-specific probe mode (if this spec defines one, env-gated, headless ≤ 60 s) runs here too.</div>
+<div class="auto"><b>RENDER</b> — ≤ 1 render at <code>AWECRAFT_RADIUS=1</code> (xvfb, gl_compatibility), PNG under <code>tasks/AC-NNNN/</code>.</div>
+<div class="auto"><b>EXIT</b> — after G0+SMOKE(+probe)+≤1 render the builder writes results + continuity and EXITS. The heavy gates below are the coordinator&#39;s background job — the builder never runs them.</div>
+<div class="auto"><b>Sandbox env</b> — every godot call is ONE bash command that sets HOME first; <b>one godot at a time</b> (concurrent runs corrupt the <code>.godot</code> cache and hang). Scratch to project-local <code>.scratch/</code>.</div>
+<pre>export HOME=/tmp/dsh_home; mkdir -p $HOME; cd /home/angrygiant/github_projects/AweCraft</pre>
+<h2>Coordinator Heavy Gates (background bash/workflow, not builder, r50 nightly only)</h2>
+<div class="auto"><b>AUTO (HEAVY-GATE PIPELINE — the coordinator runs these as a background job (no LLM slot) after Run-2 exits; the builder NEVER runs them; commit/push only after they pass — do not hand-edit)</b></div>
+<ul>
+<li><b>boundary r4 ×1</b> + <b>perf r4</b> — ONLY when scope touches <code>godot/world/*</code> | <code>lighting.gd</code> (HARNESS.md §3 tier); UI/tool tasks: SMOKE only, no boundary/perf. (Was ×2, sliced 2026-08-27.)</li>
+<li><b>genhash</b> — independent re-run (25/25) whenever <code>world/*</code>/<code>data.gd</code> touched.</li>
+<li><b>flake ×1</b> — perf tier only (was ×4, sliced 2026-08-27).</li>
+<li><b>boundary r50 / perf r50 (RECSLICE)</b> — nightly batch only (NOT per task; was per-task).</li>
+<li><b>task-specific probe mode</b> — when this spec&#39;s Task-specific gates define one (the builder&#39;s SMOKE runs it; the gate job re-runs it fresh).</li>
+<li><b>windows build</b> — <code>./build_windows.sh</code> (XDG pattern) + 8080/5180 curls — every task.</li>
+</ul>
+<p class='note'>Log → <code>.scratch/AC-NNNN-gates/gates.log</code>; marker <code>.scratch/AC-NNNN-gates/HEAVY_GATES_DONE</code>. Full protocol: <code>AGENTS.md</code> HEAVY-GATE PIPELINE + <code>tasks/templates/two-phase.md</code>.</p>
+<h2>Expected RESULT shapes (default battery + genhash)</h2>
+<div class="auto"><b>AUTO (paths only — the RESULT shapes live in <code>tasks/HARNESS.md</code> §1; inline them with <code>--full</code>)</b></div>
+<ul>
+<li>Battery arms: <code>player</code> / <code>interact</code> / <code>light</code> / <code>fluids</code> / <code>buckets</code> / <code>genhash</code> — key fields + ok-conditions per mode in <code>tasks/HARNESS.md</code> §1.</li>
+<li>Heavy modes: <code>boundary</code>, <code>recprobe</code>, <code>perf</code>, <code>minfo</code>, <code>pickorder</code> — §2.</li>
+</ul>
+<h2>Known-stable gate values</h2>
+<div class="auto"><b>AUTO (paths only — the anchor table lives in <code>tasks/HARNESS.md</code> §3: sea 2730/2730 · backed 1406/1406 · sea_stable true · water_on_lava 25 / sideways 9 · torch 14 · genhash 25/25; verify fresh on any fluids/world-touching change; inline with <code>--full</code>)</b></div>
+<h2>Task-specific requirements</h2>
+<ul>
+<li><b>Core behavior:</b> at night, a cell with eff 0 (sealed cave, no light source) renders at ≈ <b>0.75 on the 0–15 scale (0.05 normalized)</b>, not 0. User gate verbatim: "midnight with no torch still faintly visible, cave 0.75 not 0".</li>
+<li><b>Nightness scaling:</b> the floor scales with nightness — full at midnight (u_day = 0), zero in day (u_day = 1) — so daytime output is EXACTLY unchanged (floor contribution 0.05×(1−u_day) → 0 in day).</li>
+<li><b>Render-side only:</b> implement in the 4 <code>chunk_lit_*</code> shaders (opaque/cutout/flower/fluid) via the existing vColor/u_day light path (a per-fragment <code>max()</code> floor, or an equivalent <code>u_night_floor</code>-style uniform pushed alongside <code>u_day</code> from <code>world.gd</code> — builder's choice, simplest correct mechanism). NO changes to the eff array, light build, strips, ring, mesher, or the AC-0129/AC-0134 lighting machinery. MINFO must stay byte-identical (face culling reads the eff array, which is untouched).</li>
+<li><b>Max() semantics:</b> the floor is a MINIMUM — cells with eff ≥ 1 are unaffected at night (0.05 &lt; their light), so no existing lit value may change; only eff-0 (and sub-floor) cells rise to 0.75/15.</li>
+<li><b>Interactions to verify:</b> player light (AC-0035 per-fragment additive) and stars (u_opacity = 1−day) compose independently of the floor — the floor must not double-brighten; check in the viewlight probe (if its cave cell is measured at night, a +0.05 shift on the eff-0 base is EXPECTED and must be documented, order = floor first, player light additive after).</li>
+<li><b>Web reference (Run-1):</b> check whether the frozen web build (<code>index.html</code>) night-lighting path already has an ambient floor of its own. If YES → port its exact value/mechanism verbatim (web is the source of truth). If NO → implement the user's ~5% spec as a user-directed feature (class ii — user note wins over web silence).</li>
+</ul>
+<h2>Task-specific gates</h2>
+<ul>
+<li><b>G1 (task probe, new, env-gated headless ≤60 s):</b> a midnight run (no torch) measures the rendered light of a sealed-cave eff-0 cell → ≈ <b>0.05 normalized (0.75/15)</b>, not 0; an eff ≥ 1 cell → value EXACT vs AC-0134 baseline (max() no-op); a day run → floor contribution 0, all measured values EXACT. PRE (current code) shows 0.000 at the midnight eff-0 cell → <code>ok:false</code>; POST → <code>ok:true</code> (both reproduced). Probe name is the builder's choice (e.g. <code>AWECRAFT_LOGIC=floor</code>); it joins the SMOKE battery and is re-run fresh by the coordinator's gate job.</li>
+<li><b>G2 (nightday, AC-0128 probe):</b> EXACT on all lit cells (cave 15.0/1.8, torch 14.11996 day==night, etc.); the ONLY permitted delta is eff-0 cells at night rising 0 → 0.75 (the floor itself) — any such cells must be listed in the report.</li>
+<li><b>G3 (battery + genhash):</b> <code>light;player;interact;fluids</code> EXACT vs known-stable (the <code>light</code> arm reads the eff array — unchanged ⇒ EXACT) + <code>genhash</code> 25/25 (no world-data change).</li>
+<li><b>G4 (viewlight):</b> day and eff≥1 values EXACT; a night cave0 measurement may shift +0.05 on the eff-0 base only (documented, expected).</li>
+<li><b>G5 (coordinator heavy, after builder exits):</b> MINFO byte-identical to AC-0134; boundary r4 — shader-only change ⇒ build cost unchanged: walk p95 / fwd_p95 must match the AC-0134 baseline (125 / 12497) within noise — must NOT worsen it (the fence-65/3500 miss is AC-0134's carried deviation, tracked on AC-0131, not this task's); midnight R=1 render — cave faintly visible, nothing blown out, stars/halo intact.</li>
+</ul>
+<h2>Scope (files expected to change)</h2>
+<p><code>godot/world/shaders/chunk_lit_*.gdshader</code> (the four lit shaders — locate exact filenames), <code>godot/world/world.gd</code> (only the <code>u_day</code> push site, and only if a floor uniform is needed), <code>godot/scenes/main.gd</code> (task-probe branch only). Expect a small diff (≤ ~40 lines).</p>
+<h2>Fences</h2>
+<p>No eff-array / light-build / strip / ring / mesher changes (AC-0129/AC-0134 machinery frozen); no fluid data path; no new autoloads; no <code>build_windows.sh</code> (AC-0100 just shipped); no TASKS.yaml edits; no git (coordinator commits); <code>docs/</code> is off-limits (foreign user files); keep the diff minimal and shaders-only + probe where possible.</p>
+<p class="note">Scaffold generated by <code>tasks/scripts/spec_template.py</code> (no wall-clock timestamps; the only date is the registry created_at). Auto sections are reproducible byte-for-byte; fill sections are for the coordinator.</p>
+</body></html>

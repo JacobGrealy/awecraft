@@ -6,14 +6,20 @@
 #   ./build_windows.sh --no-serve   export only, leave the daemon alone
 #
 # Artifacts (NOT committed; exports/ is git-ignored):
-#   exports/windows/AweCraft.exe               release build (run this)
-#   exports/windows/AweCraft_debug_console.exe debug build (engine logs on)
-#   exports/windows/AweCraft_debug_console.console.exe
+#   exports/windows/AweCraft-YYYYMMDD-HHMM.exe               stamped release build
+#   exports/windows/AweCraft-YYYYMMDD-HHMM_debug_console.exe stamped debug build (engine logs on)
+#   exports/windows/AweCraft-YYYYMMDD-HHMM_debug_console.console.exe
 #        Godot's console wrapper (it strips the final extension of the export
 #        path with String::basename, hence this name). Double-click THIS on
 #        Windows to get the game's logs in a console window (it launches the
 #        debug exe with an allocated console and waits for it). Must sit next
 #        to the debug exe.
+#   exports/windows/AweCraft.exe + AweCraft_debug_console.exe +
+#   AweCraft_debug_console.console.exe  byte-identical copies of the stamped
+#        artifacts (always the latest build — the 8080 serve contract; never
+#        deleted by retention).
+#   Stamped retention: the newest 3 stamped pairs (3 files sharing one stamp)
+#        are kept; older pairs are deleted after a successful build.
 #   exports/windows/BUILD.txt                  git sha + branch + stamp
 #
 # Download server: plain HTTP (python3 -m http.server) serving exports/windows/,
@@ -38,6 +44,11 @@ DBG_LOG="$SCRATCH/awecraft-build-winexport-dbg.log"
 PIDFILE="$SCRATCH/serve_win_export.pid"
 SERVER_LOG="$SCRATCH/awecraft-winexport-http.log"
 PORTS="8080 8081 8082"
+
+STAMP="$(date +%Y%m%d-%H%M)"
+RELEASE_STAMPED="$EXPORT_DIR/AweCraft-$STAMP.exe"
+DEBUG_STAMPED="$EXPORT_DIR/AweCraft-${STAMP}_debug_console.exe"
+WRAPPER_STAMPED="${DEBUG_STAMPED%.exe}.console.exe"
 
 NO_SERVE=0
 for arg in "$@"; do
@@ -100,10 +111,10 @@ check_exe() {
 
 # ------------------------------------------------------------------ 1. release
 
-echo "=== AweCraft Windows export ==="
-echo "[1/2] export release      -> exports/windows/AweCraft.exe  (preset \"Windows\")"
+echo "=== AweCraft Windows export (stamp $STAMP) ==="
+echo "[1/2] export release      -> exports/windows/AweCraft-$STAMP.exe  (preset \"Windows\")"
 "$GODOT" --headless --path godot --export-release "Windows" \
-	"$RELEASE_EXE" >"$LOG" 2>&1
+	"$RELEASE_STAMPED" >"$LOG" 2>&1
 rc=$?
 if [ $rc -ne 0 ]; then
 	echo "godot release export FAILED (exit $rc)" >&2; tail_log "$LOG"; exit 1
@@ -112,11 +123,11 @@ echo "  release export ok"
 
 # ---------------------------------------------------------- 2. debug + console
 
-echo "[2/2] export debug+console -> exports/windows/AweCraft_debug_console.exe (preset \"Windows (console debug)\")"
+echo "[2/2] export debug+console -> exports/windows/AweCraft-${STAMP}_debug_console.exe (preset \"Windows (console debug)\")"
 echo "      (Godot 4.7 console builds = normal debug exe + a .console.exe wrapper"
 echo "       copied next to it when debug/export_console_wrapper=1 — see spec notes)"
 "$GODOT" --headless --path godot --export-debug "Windows (console debug)" \
-	"$DEBUG_EXE" >"$DBG_LOG" 2>&1
+	"$DEBUG_STAMPED" >"$DBG_LOG" 2>&1
 rc=$?
 if [ $rc -ne 0 ]; then
 	echo "godot debug-console export FAILED (exit $rc)" >&2; tail_log "$DBG_LOG"; exit 1
@@ -125,16 +136,16 @@ echo "  debug-console export ok"
 
 # ------------------------------------------------------------------- verify
 
-echo "--- verification ---"
-check_exe "$RELEASE_EXE" "release  " "pck"
-check_exe "$DEBUG_EXE"   "dbg-main " "pck"
-check_exe "$WRAPPER_EXE" "wrapper  " "CUI (console)"
+echo "--- verification (stamped artifacts) ---"
+check_exe "$RELEASE_STAMPED" "release  " "pck"
+check_exe "$DEBUG_STAMPED"   "dbg-main " "pck"
+check_exe "$WRAPPER_STAMPED" "wrapper  " "CUI (console)"
 
-[ "$(stat -c%s "$RELEASE_EXE")" -lt 10485760 ] && \
+[ "$(stat -c%s "$RELEASE_STAMPED")" -lt 10485760 ] && \
 	echo "  WARN: release exe under 10MB — suspicious export"
 
 # release and debug builds must be distinct binaries
-if [ "$(sha256sum "$RELEASE_EXE" | cut -d' ' -f1)" = "$(sha256sum "$DEBUG_EXE" | cut -d' ' -f1)" ]; then
+if [ "$(sha256sum "$RELEASE_STAMPED" | cut -d' ' -f1)" = "$(sha256sum "$DEBUG_STAMPED" | cut -d' ' -f1)" ]; then
 	die "release and debug builds are byte-identical — export bug"
 fi
 echo "  release and debug exes are distinct (sha256 differ)"
@@ -145,7 +156,7 @@ echo "  release and debug exes are distinct (sha256 differ)"
 # identity = every non-rsrc section byte-identical + CUI subsystem.
 WRAPPER_TMPL="$TEMPLATE_DIR/windows_debug_x86_64_console.exe"
 if [ -f "$WRAPPER_TMPL" ]; then
-	python3 - "$WRAPPER_EXE" "$WRAPPER_TMPL" <<'PYEOF'
+	python3 - "$WRAPPER_STAMPED" "$WRAPPER_TMPL" <<'PYEOF'
 import struct, sys
 
 def secs(path):
@@ -190,6 +201,40 @@ else
 	echo "  WARN: console template not found at $WRAPPER_TMPL — wrapper identity not cross-checked"
 fi
 
+# ------------------------------------------------- 3. un-stamped latest copies
+# The un-stamped names are the 8080 serve contract: byte-identical copies of
+# the stamped artifacts, always the latest build, never deleted.
+
+echo "--- latest copies (un-stamped) ---"
+for pair in "$RELEASE_STAMPED $RELEASE_EXE" "$DEBUG_STAMPED $DEBUG_EXE" "$WRAPPER_STAMPED $WRAPPER_EXE"; do
+	set -- $pair
+	cp -f "$1" "$2" || die "latest copy failed: $1 -> $2"
+	if [ "$(sha256sum "$1" | cut -d' ' -f1)" != "$(sha256sum "$2" | cut -d' ' -f1)" ]; then
+		die "latest copy not byte-identical: $1 -> $2"
+	fi
+done
+echo "  un-stamped copies are byte-identical to the stamped artifacts (sha256 verified)"
+
+# --------------------------------------------------------------- 4. retention
+# Keep the newest 3 stamped pairs (a pair = the 3 files sharing one stamp);
+# delete older pairs. Un-stamped files are never touched.
+
+prune_stamped() {
+	local keep=0 s
+	for s in $(ls -1 "$EXPORT_DIR" | grep -Eo '^AweCraft-[0-9]{8}-[0-9]{4}\.exe$' \
+			| sed 's/^AweCraft-//; s/\.exe$//' | sort -ru); do
+		if [ "$keep" -lt 3 ]; then
+			keep=$((keep + 1))
+			continue
+		fi
+		rm -f "$EXPORT_DIR/AweCraft-$s.exe" \
+			"$EXPORT_DIR/AweCraft-${s}_debug_console.exe" \
+			"$EXPORT_DIR/AweCraft-${s}_debug_console.console.exe"
+		echo "  retention: removed stamped pair $s (keeping newest 3)"
+	done
+}
+prune_stamped
+
 GIT_REV="$(git -C "$PROJECT" rev-parse --short HEAD 2>/dev/null || echo nogit)"
 GIT_BRANCH="$(git -C "$PROJECT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo nobranch)"
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -197,9 +242,13 @@ cat >"$EXPORT_DIR/BUILD.txt" <<EOF
 AweCraft Windows build
 git:    $GIT_REV ($GIT_BRANCH)
 time:   $TS
-run:    AweCraft.exe  (release, preset "Windows", --export-release)
-logs:   AweCraft_debug_console.console.exe  (console wrapper — double-click;
-         it launches AweCraft_debug_console.exe with a console)
+stamp:  $STAMP
+run:    AweCraft-$STAMP.exe  (release, preset "Windows", --export-release)
+logs:   AweCraft-${STAMP}_debug_console.console.exe  (console wrapper — double-click;
+         it launches AweCraft-${STAMP}_debug_console.exe with a console)
+latest: AweCraft.exe / AweCraft_debug_console.exe / AweCraft_debug_console.console.exe
+         (byte-identical copies of the stamped artifacts — latest build,
+          the 8080 serve contract; stamped retention keeps the newest 3 pairs)
 EOF
 echo "  BUILD.txt:"
 sed 's/^/    /' "$EXPORT_DIR/BUILD.txt"
@@ -225,9 +274,12 @@ print_urls() {
 	ip="$(lan_ip)"
 	echo
 	echo "Windows downloads (from a Windows machine on this LAN):"
-	echo "  release (single file):"
+	echo "  release (single file, latest):"
 	echo "    http://localhost:$port/AweCraft.exe"
 	echo "    http://$ip:$port/AweCraft.exe"
+	echo "  stamped release ($STAMP):"
+	echo "    http://localhost:$port/AweCraft-$STAMP.exe"
+	echo "    http://$ip:$port/AweCraft-$STAMP.exe"
 	echo "  debug console (download BOTH files, same folder on the"
 	echo "    Windows machine; double-click the wrapper for logs):"
 	echo "    http://localhost:$port/AweCraft_debug_console.exe"

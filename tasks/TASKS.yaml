@@ -1,9 +1,8 @@
 meta:
-  updated_at: 2026-08-29T00:33
+  updated_at: 2026-08-29T01:11
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0100
 - AC-0135
 - AC-0136
 - AC-0109
@@ -2823,17 +2822,30 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-24T09:28
-  updated_at: 2026-08-29T00:33
-  completed_at: null
+  updated_at: 2026-08-29T01:05
+  completed_at: 2026-08-29T01:05
   waiting_on: null
   parent_id: null
   notes: 'Build scripts (build_web.sh, build_windows.sh) should stamp release file names with datetime code (e.g. AweCraft-20260823-2359).
     Windows: exports/windows/AweCraft-YYYYMMDD-HHMM.exe (+ debug). Web: web/ or zip. Keep un-stamped latest symlink/copy for
     LAN serve.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-29T01:05
+    updated_at: null
+    text: '[agent] DONE 2026-08-29 (trivial bypass, medium builder). build_windows.sh only (+71/-19): STAMP=$(date +%Y%m%d-%H%M)
+      local, once/run -> stamped trio (AweCraft-$STAMP.exe / _debug_console.exe / .console.exe wrapper); byte-identical un-stamped
+      latest copies (in-script sha256, die on mismatch); prune_stamped() keeps newest 3 stamped pairs (older deleted, un-stamped
+      never touched); BUILD.txt + print_urls gain stamped URLs; --no-serve + daemon mechanics frozen. Gates G1-G5 ALL PASS
+      (gating build STAMP=20260829-0059): G1 planted 3 fake stamped pairs pre-build; G2 single-call build RC=0; G3 fakes deleted
+      (2 pairs in full; 3rd inside newest-3 window, post-gate cleanup); G4 sha256 stamped==un-stamped EQUAL x3 + PE checks
+      (GUI+pck release, CUI wrapper); G5 8080 un-stamped + stamped 200 + downloaded bytes == disk. 5180 half = documented
+      env constraint (sandbox-spawned daemons die at call end; host restart: python3 tasks/webui.py --daemon). Bug caught+fixed
+      in-run (D1): bare $STAMP_debug_console expanded to undefined var (first build wrote AweCraft-.exe) -> ${STAMP}_ braces
+      in 4 spots.'
 - id: AC-0101
   title: build-cache-incremental-exports
   source: user
@@ -3984,10 +3996,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-28T08:13
-  updated_at: 2026-08-28T08:13
+  updated_at: 2026-08-29T01:11
   completed_at: null
   waiting_on: null
   parent_id: null
