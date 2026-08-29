@@ -939,6 +939,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "floor":
 			await _floor_test(spawn)
 			return
+		if logic == "leaves":
+			await _leaves_test(spawn)
+			return
 		if logic == "sharpx":
 			await _sharpx_test(spawn)
 			return
@@ -5928,6 +5931,227 @@ func _floor_test(spawn: Vector3) -> void:
 			and int(open_noon.eff) == 15 \
 			and u_mid == 0.0 and u_noon == 1.0
 	out["ok"] = ok
+	Debug.result(out)
+	get_tree().quit()
+
+
+# AC-0138 probe (env-gated by AWECRAFT_LOGIC=leaves, inert unless set):
+# steady-settle spawn; finds the first lit exposed leaves (id 7) cell in
+# deterministic chunk order, samples the ACTUAL cutout-surface vertex
+# (vColor + UV) from the built mesh plus the atlas texel under that UV,
+# then evaluates the shader-side L (AC-0135 formula, AC-0136 filter_nearest
+# sampling) at day (u_day=1) and night (u_day=0). Gates: day L>0.25,
+# night L>=0.18 (floor), albedo green >0.15, rendered green not black.
+func _leaves_tile_center(aimg: Image) -> Array:
+	if aimg == null:
+		return [-1, -1, -1, -1]
+	var rc := Data.block_rect(7, "side")
+	if rc.x < 0:
+		return [-1, -1, -1, -1]
+	var a: Color = aimg.get_pixel(rc.x + 15, rc.y + 15)
+	var b: Color = aimg.get_pixel(rc.x + 16, rc.y + 16)
+	return [
+		roundf((a.r + b.r) / 2.0 * 255.0),
+		roundf((a.g + b.g) / 2.0 * 255.0),
+		roundf((a.b + b.b) / 2.0 * 255.0),
+		roundf((a.a + b.a) / 2.0 * 255.0),
+	]
+
+
+func _leaves_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	Lighting._tables()
+	world.recenter(spawn.x, spawn.z, true)
+	await _nd_settle(60000)
+	var H: int = Data.HEIGHT
+	var rc := Data.block_rect(7, "side")
+	var u0: float = (float(rc.x) + 0.5) / 1024.0
+	var u1: float = (float(rc.x) + 31.5) / 1024.0
+	var v0: float = (float(rc.y) + 0.5) / 1024.0
+	var v1: float = (float(rc.y) + 31.5) / 1024.0
+	var cell := Vector3i(-1, -1, -1)
+	var ccx := 0
+	var ccy := 0
+	var pick := false
+	var dbg := {"chunks": 0, "leaf_cells": 0, "exposed": 0, "lit": 0}
+	for lit_req in [true, false]:
+		if pick:
+			break
+		for cc in _nd_sorted_chunks():
+			if absi(int(cc.cx)) > 2 or absi(int(cc.cz)) > 2:
+				continue
+			var d: PackedByteArray = cc.data
+			var eff: PackedByteArray = cc.last_eff["arr"]
+			if eff.size() != H * 256:
+				continue
+			dbg["chunks"] += 1
+			for y in range(10, H):
+				if pick:
+					break
+				var row := y << 8
+				for lz in range(16):
+					if pick:
+						break
+					for lx in range(16):
+						var idx := row | (lz << 4) | lx
+						if d[idx] != 7:
+							continue
+						dbg["leaf_cells"] += 1
+						if int(eff[idx]) > 0:
+							dbg["lit"] += 1
+						if lit_req and int(eff[idx]) <= 0:
+							continue
+						var wx := int(cc.cx) * 16 + lx
+						var wz := int(cc.cz) * 16 + lz
+						var exposed := false
+						for fd in VoxelMath.FACES:
+							var n: Vector3i = fd.n
+							var ny := y + n.y
+							if ny < 0 or ny >= H:
+								continue
+							var nb: int = world.get_block(wx + n.x, ny, wz + n.z)
+							if nb == 7:
+								continue
+							var ninfo = Data.block(nb) if nb != 0 else null
+							if nb != 0 and ninfo != null and bool(ninfo.solid):
+								continue
+							exposed = true
+							break
+						if not exposed:
+							continue
+						dbg["exposed"] += 1
+						cell = Vector3i(wx, y, wz)
+						ccx = int(cc.cx)
+						ccy = int(cc.cz)
+						pick = true
+						break
+	if not pick:
+		Debug.result({"mode": "leaves", "seed": Game.world_seed, "radius": world.render_radius, "ok": false, "err": "no exposed leaves cell", "dbg": dbg, "elapsed_ms": Time.get_ticks_msec() - t0})
+		get_tree().quit()
+		return
+	var linfo: Dictionary = world.light_at(cell.x, cell.y, cell.z)
+	var u_day_cut := -1.0
+	var mat_path := ""
+	var cut_tex: Texture2D = null
+	for k in _ChunkScriptM._mat_cache:
+		var cm = _ChunkScriptM._mat_cache[k]
+		if cm is ShaderMaterial and String(cm.shader.resource_path).ends_with("chunk_lit_cutout.gdshader"):
+			u_day_cut = float(cm.get_shader_parameter("u_day"))
+			mat_path = String(cm.shader.resource_path)
+			cut_tex = cm.get_shader_parameter("tex")
+	var aimg: Image = null
+	if cut_tex != null:
+		aimg = cut_tex.get_image()
+	if aimg == null and Data.atlas_tex != null:
+		aimg = Data.atlas_tex.get_image()
+	var bake_check := {"tint": [roundf(Data.TINT_LEAVES.r * 255.0), roundf(Data.TINT_LEAVES.g * 255.0), roundf(Data.TINT_LEAVES.b * 255.0)]}
+	var dimg: Image = Data.atlas_tex.get_image() if Data.atlas_tex != null else null
+	if dimg != null:
+		bake_check["data_fmt"] = str(int(dimg.get_format()))
+		bake_check["data_px_320_31"] = [roundf(dimg.get_pixel(320, 31).r * 255.0), roundf(dimg.get_pixel(320, 31).g * 255.0), roundf(dimg.get_pixel(320, 31).b * 255.0), roundf(dimg.get_pixel(320, 31).a * 255.0)]
+		bake_check["data_px_322_2"] = [roundf(dimg.get_pixel(322, 2).r * 255.0), roundf(dimg.get_pixel(322, 2).g * 255.0), roundf(dimg.get_pixel(322, 2).b * 255.0), roundf(dimg.get_pixel(322, 2).a * 255.0)]
+	if aimg != null:
+		bake_check["cut_fmt"] = str(int(aimg.get_format()))
+		bake_check["cut_px_320_31"] = [roundf(aimg.get_pixel(320, 31).r * 255.0), roundf(aimg.get_pixel(320, 31).g * 255.0), roundf(aimg.get_pixel(320, 31).b * 255.0), roundf(aimg.get_pixel(320, 31).a * 255.0)]
+	var colv := Color(0.0, 0.0, 0.0, 1.0)
+	var uvv := Vector2.ZERO
+	var found_v := false
+	var scan := {"leaves_texels": 0, "black_texels": 0, "col_b_zero": 0, "col_rg_zero": 0}
+	if aimg != null:
+		var lxi := cell.x - ccx * 16
+		var lzi := cell.z - ccy * 16
+		for cc in _nd_sorted_chunks():
+			if absi(int(cc.cx)) > 2 or absi(int(cc.cz)) > 2:
+				continue
+			for s in cc.slabs:
+				var fi = s.flora_instance
+				if fi == null or fi.mesh == null:
+					continue
+				var m: ArrayMesh = fi.mesh
+				for si in range(m.get_surface_count()):
+					var mat = m.surface_get_material(si)
+					if not (mat is ShaderMaterial):
+						continue
+					if not String(mat.shader.resource_path).ends_with("chunk_lit_cutout.gdshader"):
+						continue
+					var arrs = m.surface_get_arrays(si)
+					var pos: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+					var uva: PackedVector2Array = arrs[Mesh.ARRAY_TEX_UV]
+					var colsa: PackedColorArray = arrs[Mesh.ARRAY_COLOR]
+					if uva.size() != pos.size() or colsa.size() != pos.size():
+						continue
+					for vi in range(pos.size()):
+						var uv: Vector2 = uva[vi]
+						if uv.x < u0 or uv.x > u1 or uv.y < v0 or uv.y > v1:
+							continue
+						scan["leaves_texels"] += 1
+						var tx := clampi(int(floorf(uv.x * 1024.0)), 0, aimg.get_width() - 1)
+						var ty := clampi(int(floorf(uv.y * 1024.0)), 0, aimg.get_height() - 1)
+						var tp: Color = aimg.get_pixel(tx, ty)
+						if maxf(tp.r, maxf(tp.g, tp.b)) < 0.031:
+							scan["black_texels"] += 1
+						var cv: Color = colsa[vi]
+						if cv.b <= 0.001:
+							scan["col_b_zero"] += 1
+						if cv.r + cv.g <= 0.001:
+							scan["col_rg_zero"] += 1
+						if found_v:
+							continue
+						var p: Vector3 = pos[vi]
+						var inx := absf(p.x - float(lxi)) < 0.01 or absf(p.x - float(lxi + 1)) < 0.01
+						var iny := p.y >= float(cell.y) - 0.01 and p.y <= float(cell.y) + 1.01
+						var inz := absf(p.z - float(lzi)) < 0.01 or absf(p.z - float(lzi + 1)) < 0.01
+						if not (inx and iny and inz):
+							continue
+						found_v = true
+						colv = cv
+						uvv = uv
+	var texel := [0, 0, 0, 0]
+	if found_v and aimg != null:
+		var tx := clampi(int(floorf(uvv.x * 1024.0)), 0, aimg.get_width() - 1)
+		var ty := clampi(int(floorf(uvv.y * 1024.0)), 0, aimg.get_height() - 1)
+		var tp: Color = aimg.get_pixel(tx, ty)
+		texel = [roundf(tp.r * 255.0), roundf(tp.g * 255.0), roundf(tp.b * 255.0), roundf(tp.a * 255.0)]
+	var L_day := 0.20 + 0.80 * maxf(1.0 * float(colv.r), float(colv.g))
+	var L_night := 0.20 + 0.80 * maxf(0.0 * float(colv.r), float(colv.g))
+	var sky15 := float(linfo.sky) / 15.0
+	var blk15 := float(linfo.block) / 15.0
+	var L_day_light := 0.20 + 0.80 * maxf(sky15, blk15)
+	var L_night_light := 0.20 + 0.80 * blk15
+	var g_day := float(texel[1]) / 255.0 * float(colv.b) * L_day
+	var g_night := float(texel[1]) / 255.0 * float(colv.b) * L_night
+	var ok := found_v \
+			and L_day > 0.25 \
+			and L_night >= 0.18 \
+			and float(texel[1]) / 255.0 > 0.15 \
+			and g_day > 0.02 \
+			and g_night > 0.008
+	var out := {
+		"mode": "leaves",
+		"seed": Game.world_seed,
+		"radius": world.render_radius,
+		"cell": [cell.x, cell.y, cell.z],
+		"chunk": [ccx, ccy],
+		"vcolor": [roundf(float(colv.r) * 1000.0) / 1000.0, roundf(float(colv.g) * 1000.0) / 1000.0, roundf(float(colv.b) * 1000.0) / 1000.0],
+		"uv": [roundf(uvv.x * 10000.0) / 10000.0, roundf(uvv.y * 10000.0) / 10000.0],
+		"atlas_texel_rgba": texel,
+		"light": {"sky": int(linfo.sky), "block": int(linfo.block), "eff": int(linfo.eff)},
+		"L_day": roundf(L_day * 1000.0) / 1000.0,
+		"L_night": roundf(L_night * 1000.0) / 1000.0,
+		"L_day_light": roundf(L_day_light * 1000.0) / 1000.0,
+		"L_night_light": roundf(L_night_light * 1000.0) / 1000.0,
+		"green_day": roundf(g_day * 1000.0) / 1000.0,
+		"green_night": roundf(g_night * 1000.0) / 1000.0,
+		"u_day_cut": roundf(u_day_cut * 1000.0) / 1000.0,
+		"cut_mat": mat_path,
+		"tile_center_rgba": _leaves_tile_center(aimg),
+		"bake_check": bake_check,
+		"dbg": dbg,
+		"scan": scan,
+		"found_v": found_v,
+		"ok": ok,
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+	}
 	Debug.result(out)
 	get_tree().quit()
 

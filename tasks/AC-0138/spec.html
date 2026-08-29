@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0138 — leaves-always-black-regression — spec</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}.auto{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.fill{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:10px 0;border-radius:0 6px 6px 0}.meta{color:#555}</style></head><body>
+<h1>AC-0138 — leaves-always-black-regression</h1>
+<p class="meta"><b>id:</b> <code>AC-0138</code> · <b>status:</b> <code>in-progress</code> · <b>priority:</b> 1 · <b>source:</b> user · <b>queue:</b> top</p>
+
+<h2>Goal</h2>
+<div class="fill">Fix tree leaves (block id 7, cutout) rendering black both day and night — regression from the AC-0128/AC-0134/AC-0135/AC-0136 lighting window.</div>
+
+<h2>Frozen spec references</h2>
+<div class="auto">No web spec — user 2026-08-29. Source of truth is in-repo Godot code + user directives. Minecraft wiki is canonical for block/tool semantics if needed.</div>
+
+<h2>Data</h2>
+<div class="auto">Block 7 Leaves: solid=false cutout=true, tint C_LEAVES / TINT_LEAVES (data.gd). Shader: chunk_lit_cutout.gdshader (unshaded + alpha discard, same L formula as opaque: L=0.20+0.80*max(u_day*r,g) * shade). Atlas tint baking in data.gd _bake_atlas_tints for tid 7. vColor repack in chunk.gd: r=sky s, g=blk channel, b=face shade.</div>
+
+<h2>Task-specific requirements</h2>
+<div class="fill">
+<ul>
+<li>Reproduce: confirm leaves are black day (u_day=1) and night (u_day~0) while trunks/grass render lit. Day and night renders must show at least one tree in-frame.</li>
+<li>Root-cause among candidates (check each, report which is the cause): (1) cutout shader L path (u_day, COLOR.r/g/b wiring); (2) vColor repack for cutout faces (mask/blk channel wiring, _compute_face / last_blk_ring interaction); (3) Lighting BFS treating leaves as opaque blocker vs transparent (solid/occluder check); (4) atlas tint bake for id 7 (double-tint or missing tint, filter_nearest correctness); (5) face-shade or normal path.</li>
+<li>Fix minimal: likely one of chunk.gd cutout vColor assignment, lighting.gd is_solid/occludes check for leaves, or chunk_lit_cutout.gdshader L/shade wiring. Keep AC-0135 frozen L-line (0.20 floor) and AC-0136 filter_nearest intact. No out-of-scope refactor.</li>
+<li>Gates + renders prove fix both day and night: leaves show green tint (≈ TINT_LEAVES) and are not black. No foreign-tile regression (grass/dirt/trunk unchanged).</li>
+</ul>
+</div>
+
+<h2>Task-specific gates</h2>
+<div class="fill">
+<ul>
+<li><b>G0</b> headless --quit: 0 SCRIPT ERROR.</li>
+<li><b>SMOKE</b> battery with world/* touch: player;interact;light;fluids + genhash 25/25.</li>
+<li><b>Leaf gate</b>: headless probe or screenshot-sample that asserts leaves face not black: e.g. sample leaves block at known tree pos, read its baked light / vColor / rendered pixel — day L>0.25 and night L>=0.18 (floor) and ALBEDO green channel >0.15. PRE must be black (fail), POST must pass — reproduce both. Use AWECRAFT_LOGIC=leaves or extend light probe; keep ≤60s.</li>
+<li><b>RENDER</b> two R=1 renders (xvfb, gl_compatibility, AWECRAFT_RADIUS=1): (1) day with tree in-frame, (2) midnight with same tree. Embed both in results. Coordinator views — leaves must be visibly green, not black, both times.</li>
+<li><b>No regressions</b>: chunk_lit_opaque still lit, fluid_anim unchanged, genhash 25/25, nightday still shows moon floor 0.20 for non-leaves.</li>
+</ul>
+</div>
+
+<h2>Scope (files expected to change)</h2>
+<div class="fill"><code>godot/world/chunk.gd</code>, <code>godot/world/chunk_lit_cutout.gdshader</code> (1-2 lines), possibly <code>godot/world/lighting.gd</code> (leaves occluder check) or <code>godot/autoload/data.gd</code> (tint bake). No other .gd/.gdshader outside this list without justification.</div>
+
+<h2>Fences</h2>
+<div class="fill">No TASKS.yaml edits outside tasks_lib; no git commits/pushes (coordinator pushes); no builds; no changes to opaque/flower/fluid shaders unless proven related; keep AC-0135 L formula and AC-0136 filter_nearest verbatim; no out-of-scope .gd reformat.</div>
+
+<h2>Builder gates (Run-2, in-session)</h2>
+<div class="auto"><b>G0</b> — headless --quit zero SCRIPT ERROR. <b>SMOKE</b> — 2-4 battery modes + genhash when world/* touched + leaf probe ≤60s. <b>RENDER</b> — ≤2 renders (day+night tree). <b>EXIT</b> after G0+SMOKE+probe+render → write results + continuity and EXIT. Heavy gates = coordinator background.</div>
+<pre>export HOME=/tmp/dsh_home; mkdir -p $HOME; cd /home/angrygiant/github_projects/AweCraft</pre>
+
+<h2>Coordinator Heavy Gates (background)</h2>
+<div class="auto">boundary r4 ×1 + perf r4 only when world/*|lighting.gd touched; genhash re-run; flake ×1; r50 nightly; windows build + 8080/5180 curls.</div>
+<p class="meta">Scaffold via tasks/scripts/spec_template.py — fill sections by coordinator 2026-08-29.</p>
+</body></html>

@@ -203,14 +203,19 @@ func _bake_atlas_tints() -> void:
 	var img: Image = atlas_tex.get_image()
 	if img == null:
 		return
+	# AC-0138: blocks 5/7 share ONE tile across all three faces — baking per
+	# face multiplied the tint 3x on the same pixels (leaves -> (1,19,0)
+	# black; water -> near-black). Bake each unique rect exactly once.
+	var baked := {}
 	for tid in [1, 7, 5]:
 		for face in ["top", "side", "bottom"]:
 			var t: Color = block_tint(tid, face)
 			if t == Color.WHITE:
 				continue
 			var rc: Vector2i = block_rect(tid, face)
-			if rc.x < 0:
+			if rc.x < 0 or baked.has(rc):
 				continue
+			baked[rc] = true
 			for py in range(TILE_PX):
 				for px in range(TILE_PX):
 					var x: int = rc.x + px

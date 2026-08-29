@@ -1,9 +1,8 @@
 meta:
-  updated_at: 2026-08-29T12:13
+  updated_at: 2026-08-29T13:13
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0138
 - AC-0091
 - AC-0143
 - AC-0144
@@ -4104,18 +4103,43 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-29T08:29
-  updated_at: 2026-08-29T08:29
-  completed_at: null
+  updated_at: 2026-08-29T13:13
+  completed_at: 2026-08-29T13:13
   waiting_on: null
   parent_id: null
   notes: 'User-reported (2026-08-29): tree leaves always render black both day and night. Introduced by one of the recent
     lighting changes (AC-0128/AC-0134/AC-0135/AC-0136 window). Leaves are block id 7 (solid=false cutout=true, tint TINT_LEAVES
     / C_LEAVES, shader chunk_lit_cutout). Reproduce and fix minimal shader/chunk/data change. Needs day/night renders with
     tree in-frame.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-29T13:13
+    updated_at: null
+    text: 'DONE 2026-08-29 (xhigh single, spec pre-written + de-webbed). ROOT CAUSE = spec candidate 4 (atlas tint bake, NOT
+      occluder/NEAREST [both runtime-disproved — rendered vertex vcolor [1.0,0,0.8] u_day 1.0 L_day 1.0 pre-fix]): Data._bake_atlas_tints()
+      [AC-0128] multiplies tile pixels by the per-face tint — blocks 7 (leaves) + 5 (water) share ONE 32x32 rect across top/side/bottom
+      faces => tint applied 3x on the same pixels (119,117,119)->(28,64,22)->(6,35,4)->(1,19,0) = black albedo; grass (block
+      1) has distinct per-face rects => unaffected [matches user report exactly]. FIX = godot/autoload/data.gd rect-dedup
+      "baked" set in _bake_atlas_tints [~4 lines — bake each unique rect exactly once; water near-black fixed by the same
+      dedup] + AWECRAFT_LOGIC=leaves probe [main.gd, env-gated, inert unless set]. AC-0135 L-line + AC-0136 filter_nearest
+      hints byte-verbatim; NO shader changes; eff arrays untouched [planned lighting.gd B2 fix not applied — proven not the
+      cause]. Gates: leaf probe PRE ok:false texel (1,19,0) green_day 0.06 / POST ok:true texel (28,64,22,255) green_day 0.201,
+      L 1.0/0.2 [seed 44 cell [-28,35,34]]; G0 rc=0 [0 script errors in gate run; builder run 3x known threadgen transient
+      AC-0137 class]; SMOKE all EXACT [player 37.78, interact all-true, light 14/9, fluids 2730/1406, nightday cave 15.0/3.0
+      + torch 14.19996] + genhash 25/25 byte-identical; boundary r4 one-shot [builder, world/* untouched so no gate boundary]
+      walk p95 123 / fwd 11725 IN BAND; 2 sanctioned renders [day: tree (11,1) in-frame leaves clearly GREEN / night: same
+      tree at 0.20 floor tinted-not-black — AWECRAFT_AIM deterministic override [named cams dont survive snapshot respawn],
+      AWECRAFT_SNAPSHOT requires absolute path]; heavy gates ALL PASS: g0 rc=0 0 errors, leaves FRESH ok:true texel (28,64,22,255)
+      L_day 1.0 L_night 0.2, player flake 37.78 EXACT, genhash 25/25 byte-identical, build 20260829-1311 109,681,080 B + 8080
+      un-stamped byte-matched + stamped 200 + 5180=200. Deviations: (i) root-cause redirection 3->4 [runtime evidence, documented];
+      (ii) probe-internal bugs fixed in-run [sentinel, Image.Format ctor]; (iii) water same-class triple-bake fixed by same
+      dedup [same root cause, documented, no separate registration]; (iv) unattributed 20260829-1210 stamp build found in
+      exports [no log, not in builder continuity, inside builder run window 10:50-13:05 or user manual — harmless: gate build
+      1311 authoritative + 8080 byte-matched, retention-3 pruned the 0809]. NEXT per queue = AC-0139 split-main-menu-into-own-scene
+      [user p1, spec pre-written + parked].'
 - id: AC-0139
   title: split-main-menu-into-own-scene
   source: user
