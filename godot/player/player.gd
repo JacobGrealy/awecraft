@@ -492,7 +492,7 @@ func vm_refresh(force: bool = false) -> void:
 			_vm_blk = 0.0
 		_vm_eye_cell = eye
 		_vm_light_ms = now
-	var lvm := 0.12 + 0.88 * maxf(day * _vm_sky / 15.0, _vm_blk / 15.0)
+	var lvm := 0.20 + 0.80 * maxf(day * _vm_sky / 15.0, _vm_blk / 15.0)
 	lvm = maxf(lvm, 0.12 + 0.88 * minf(PLAYER_LIGHT_LEVEL, 15.0) / 15.0)
 	_vm_L = lvm
 	for ent in _vm_mats:

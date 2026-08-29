@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0135 — moon-ambient night floor — results (Run-2)</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 2em auto; max-width: 1000px; line-height: 1.55; color: #222; }
+  h1 { font-size: 1.5em; border-bottom: 3px solid #4a7; padding-bottom: .3em; }
+  h2 { font-size: 1.15em; margin-top: 1.6em; border-left: 4px solid #4a7; padding-left: .5em; }
+  table { border-collapse: collapse; width: 100%; margin: .8em 0; font-size: .92em; }
+  th, td { border: 1px solid #bbb; padding: 5px 9px; text-align: left; vertical-align: top; }
+  th { background: #eef4f0; }
+  .ok { color: #060; font-weight: 600; }
+  .warn { color: #a60; font-weight: 600; }
+  .code { font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace; font-size: .88em; background: #f3f3f3; padding: 1px 5px; border-radius: 3px; }
+  pre { background: #f6f6f6; border: 1px solid #ddd; border-radius: 6px; padding: 10px 14px; overflow-x: auto; font-size: .85em; }
+  img { max-width: 640px; border: 1px solid #888; display: block; margin: .8em 0; }
+  .fig { font-size: .88em; color: #444; }
+  blockquote { margin: .6em 0; padding: .4em 1em; border-left: 4px solid #ccc; color: #333; background: #fafafa; }
+  .dev { background: #fff8e6; border: 1px solid #e0c97a; border-radius: 6px; padding: .6em 1em; margin: .8em 0; }
+</style>
+</head>
+<body>
+
+<h1>AC-0135 — moon-ambient night floor — results (Run-2, 2026-08-29)</h1>
+<p><b>Verdict (Run-2, all in-session gates green):</b> Run-1 shipped the 0.12 constant floor (the L-formula structure existed in-tree since AC-0128; the coordinator's heavy gates verified that state: g0 clean, genhash 25/25, boundary r4 walk p95 115 ≤ 125, build RC=0). The user found night <b>still looks pitch black in the real build</b> and directed the floor to <b>~20% of full sunlight: L = 0.20 + 0.80·max(u_day·sky, blk)</b> — constant + gain = 1.0, so noon full-sky stays EXACTLY 1.0. Run-2 made exactly that change in all four <span class="code">chunk_lit_*.gdshader</span> light lines (plus the probe expectations that mirror the formula), captured the floor probe <b>PRE (ok:false, actual 0.12) → POST (ok:true, actual 0.20)</b>, and re-baselined nightday/viewlight. No web spec is referenced anywhere in this task's artifacts (user directive 2026-08-29); provenance = the in-repo AC-0128 L-formula structure, value 0.20 user-directed.</p>
+
+<h2>1. The change</h2>
+<p>In each of <span class="code">godot/world/chunk_lit_{opaque,cutout,flower,fluid}.gdshader</span>, the light line changed from <span class="code">float L = 0.12 + 0.88 * max(u_day * COLOR.r, COLOR.g);</span> to <span class="code">float L = 0.20 + 0.80 * max(u_day * COLOR.r, COLOR.g);</span> (header comments updated in the same four files). The constant is NOT day/night-split — the existing structure's constant IS the floor, and it is now 0.20 day AND night. The player-halo term <span class="code">L = max(L, 0.12 + 0.88 * pr / 15.0)</span> (AC-0035) is a different contribution, not the ambient floor, and was deliberately left unchanged (d0 0.4133 anchor preserved; it also sums to 1.0 at pr = 15). Formula mirrors updated: <span class="code">main.gd</span> floor/nightday/viewlight probes, <span class="code">player.gd</span> viewmodel <span class="code">vm_refresh</span> mirror (proven dependency — the viewlight probe asserts on those actual values), and one stale comment in <span class="code">chunk.gd</span>. Grep for 0.12/0.88 in <span class="code">godot/</span> proves no other functional dependency (remaining hits: the halo term ×3, unrelated 0.12 viewmodel offsets, daynight smoothing).</p>
+
+<h2>2. New baseline values (supersede the Run-1 "EXACT vs AC-0128" anchors)</h2>
+<table>
+<tr><th>Cell (seed 44)</th><th>Run-1 (0.12/0.88)</th><th>Run-2 (0.20/0.80)</th><th>Gate</th></tr>
+<tr><td>eff-0 sealed cave, midnight <span class="code">[0,17,-26]</span></td><td>0.12 = 1.8/15</td><td class="ok">0.20 = 3.0/15 (L15 3.0)</td><td>floor probe G1 + nightday G2</td></tr>
+<tr><td>eff-0 sealed cave, noon</td><td>0.12 (const floor, day unchanged)</td><td class="ok">0.20 = 3.0/15 (day==night)</td><td>floor probe G1</td></tr>
+<tr><td>torch cell (blk 14), midnight == noon</td><td>0.94133 = 14.11996/15</td><td class="ok">0.94667 = 14.2/15 (0.20 + 0.80·14/15); nightday probe class 14.19996 day==night (col-rounding)</td><td>floor G1 + nightday G2 + viewlight G4</td></tr>
+<tr><td>open-sky full-sky, noon</td><td>1.0 EXACT</td><td class="ok">1.0 EXACT (0.20 + 0.80·1.0 = 1.0)</td><td>floor G1 + viewlight G4</td></tr>
+<tr><td>open-sky, midnight</td><td>0.12</td><td class="ok">0.20 (= pocket midnight)</td><td>floor G1</td></tr>
+<tr><td>viewlight cave0 <span class="code">[0,25,-4]</span> vm_no_pl / vm</td><td>0.12 / 0.41333</td><td class="ok">0.20 / 0.41333 (halo lift preserved, pl_contrib 0.21333)</td><td>viewlight G4</td></tr>
+<tr><td>viewlight torch mat_L</td><td>0.94133</td><td class="ok">0.94667</td><td>viewlight G4</td></tr>
+<tr><td>player halo d0 (pr = 5/15) / stars</td><td>0.41333 / 500 @ 1.0/0.0</td><td class="ok">0.41333 UNCHANGED / 500 @ 1.0/0.0</td><td>viewlight G4</td></tr>
+</table>
+<p>Intermediate m cells shift by +0.08·(1−m) (e.g. eff-8 at noon +0.04) — the user-directed visual change, not regressions.</p>
+
+<h2>3. Floor probe PRE → POST (AWECRAFT_LOGIC=floor, r4, seed 44)</h2>
+<pre>PRE (pre-shader-edit, 0.12 shaders, new 0.20 spec):
+ok:false  actual_floor 0.12 (L15 1.8)  pocket_mid/noon 0.12  torch 0.94133 (14.12/15) day==night
+          open_noon 1.0  open_mid 0.12  u_day 0.0/1.0  spec_floor 0.20
+POST (0.20 shaders):
+ok:true   actual_floor 0.20 (L15 3.0)  pocket_mid/noon 0.20  torch 0.94667 (14.2/15) day==night
+          open_noon 1.0  open_mid 0.20  u_day 0.0/1.0  spec_floor 0.20</pre>
+<p>Logs: <span class="code">.scratch/AC-0135/run2_floor_pre.log</span>, <span class="code">run2_floor_post.log</span>.</p>
+
+<h2>4. Gates (in-session, Run-2)</h2>
+<table>
+<tr><th>Gate</th><th>Result</th></tr>
+<tr><td>G0 (pre + post shader edit)</td><td class="ok">RC=0, zero script errors both runs</td></tr>
+<tr><td>SMOKE battery <span class="code">player;interact;light;fluids;genhash</span></td><td class="ok">EXACT: player start [8.5,35,8.5]; interact drop/place ok; light arm eff-array cave_eff 0 / surface_eff 15 / torch 14 / far-after 9 (unchanged); fluids sea 2730/2730, backed 1406/1406, stable</td></tr>
+<tr><td>genhash</td><td class="ok">25/25 byte-identical vs AC-0134 gate ref (shader-only ⇒ world data untouched)</td></tr>
+<tr><td>nightday (new baseline)</td><td class="ok">ok:true — cave 15.0 noon EXACT / 3.0 midnight (was 1.8), torch 14.19996 day==night, mech unlit-formula, u_day 1.0/0.0</td></tr>
+<tr><td>viewlight (new baseline)</td><td class="ok">ok:true — cave0 0.2→0.41333 halo lift, outdoor 1.0, torch 0.94667, star 500 @ 1.0/0.0, d0 0.41333 unchanged</td></tr>
+<tr><td>boundary r4 one-shot (shader-only ⇒ cost UNCHANGED check)</td><td class="ok">ok:true — walk p95 108 (0.12-state: 113; band 113–125), fwd_p95 11575 (0.12-state: 10898; noisy band 10898–13019) — in-band, no material worsening; 20 crossings, marker_ok, 0 script errors</td></tr>
+<tr><td>Render (≤1)</td><td class="ok">1 run (ac0135_cave_midnight_run2.png, 62895 B) — see §5; the pre-existing threadgen transient (AC-0137) hit it (3×), per directive NOT chased</td></tr>
+</table>
+
+<h2>5. Render evidence (1 run, midnight, R=1, seed 44)</h2>
+<img src="ac0135_cave_midnight_run2.png" alt="Midnight cave interior at the 0.20 floor (Run-2 render)">
+<p class="fig"><b>Figure 1 — <span class="code">ac0135_cave_midnight_run2.png</span> (62895 B, 1280×720, <span class="code">AWECRAFT_RADIUS=1 AWECRAFT_TIME=midnight</span>, aim eye (−3.5, 19.7, −24.5) inside the sealed eff-0 chamber, yaw −1.5708 / pitch −0.1, 15000-frame drain with pose-guard + time re-pin).</b>
+The <b>right wall (+Z, 0.7–3.5 m) now clearly reads as stone</b> — visibly brighter than the Run-1 0.12 image — the 0.20 floor (3.0/15) plus the player halo (AC-0035, radius 5 m) working together; the <b>floor strip at the bottom</b> is likewise visible. Nothing is blown out (no 1.0-white patches in the cave). The <b>black center/left/ceiling regions are the pre-existing <span class="code">threadgen_handoff</span> transient</b> (world.gd:474, tracked AC-0137, 3× in this run's log) killing the +X-wall chunk's data handoff for the process life — the same artifact documented in Run-1's renders 5–6. Per the Run-2 directive (≤1 render, do not chase), this image ships with the headless probe evidence as the primary proof. No stars are visible through the hole in this frame (contrast: Run-1's render 6 showed the skybox + stars through its hole).</p>
+<img src="ac0135_cave_midnight.png" alt="Run-1: midnight cave at the 0.12 floor (historical comparison)">
+<p class="fig"><b>Figure 2 — <span class="code">ac0135_cave_midnight.png</span> (Run-1, 0.12 floor, same pose family) for before/after comparison: the same walls render markedly darker at 0.12 — the user's "still looks pitch black" observation is visible here.</b></p>
+
+<h2>6. Deviations / notes</h2>
+<div class="dev">
+<ol>
+<li><b>0.05 premise superseded (user-directed):</b> the original spec's ~5% floor (0.75/15) framing and its web-spec provenance are superseded by the user directive 2026-08-29 (Run-2): floor = 0.20 (3.0/15), ~20% of sunlight. All artifacts de-webbed per the directive; the formula structure (constant + gain, sums to 1.0) existed in-repo since AC-0128 — stated factually, no external citation.</li>
+<li><b>Day/night split NOT added:</b> the floor stays the formula's constant (0.20 day AND night), as the existing structure dictates and the directive anticipated ("do NOT add day/night split unless trivially needed").</li>
+<li><b>Player halo term unchanged:</b> <span class="code">0.12 + 0.88·pr/15</span> (AC-0035's small player light) is a distinct contribution, not the ambient floor; keeping it preserves the d0 0.4133 viewlight anchor and avoids an unrequested halo change. (It also sums to 1.0 at pr = 15.)</li>
+<li><b>player.gd + chunk.gd touched beyond shaders/main.gd:</b> player.gd's <span class="code">vm_refresh</span> L-formula mirror is a proven functional dependency (the viewlight probe asserts on its actual mat_L values; torch.mat_L 0.94667 requires it) — updated; chunk.gd got a comment-only accuracy fix (the old comment cited the 0.12/0.88 constants and the frozen file). No other file contains a functional 0.12/0.88 dependency (grep-verified).</li>
+<li><b>Render count: 1</b> (plan ≤1, honored — Run-1's 6-render saga is the cautionary example; the transient hit was documented, not chased).</li>
+<li><b>PRE protocol detail:</b> the floor probe mirrors the shader formula in GDScript, so the PRE capture used the 0.12 mirror against the new 0.20 spec (ok:false, actual 0.12) and the mirror flips to 0.20/0.80 with the shader edit (POST ok:true).</li>
+<li><b>Known pre-existing transient:</b> <span class="code">threadgen_handoff</span> Nil→PackedByteArray at world.gd:474 appeared in the battery (5×), floor POST (2×), viewlight (2×), and render (3×) runs of this task — documented since AC-0035, present in AC-0134/Run-1 gate runs, tracked as <b>AC-0137</b>; no OTHER script error occurred in any run. G0 itself: zero errors.</li>
+</ol>
+</div>
+
+<h2>7. Deliverables</h2>
+<ul>
+<li><span class="code">godot/world/chunk_lit_opaque.gdshader</span>, <span class="code">chunk_lit_cutout.gdshader</span>, <span class="code">chunk_lit_flower.gdshader</span>, <span class="code">chunk_lit_fluid.gdshader</span> — light line 0.12/0.88 → 0.20/0.80 + header comments</li>
+<li><span class="code">godot/scenes/main.gd</span> — floor probe (spec 0.20, expectations 0.20/3.0/0.94667/1.0, actual_floor now measured), nightday + viewlight probe formula mirrors and anchors</li>
+<li><span class="code">godot/player/player.gd</span> — vm_refresh L-formula mirror 0.20/0.80</li>
+<li><span class="code">godot/world/chunk.gd</span> — comment-only accuracy fix</li>
+<li><span class="code">tasks/AC-0135/spec.html</span> (Run-2 rewrite, de-webbed) · <span class="code">AC-0135-results.html</span> (this file) · <span class="code">continuity.md</span> (Run-2 appended) · <span class="code">ac0135_cave_midnight_run2.png</span> (Run-2 render) + Run-1 PNGs retained</li>
+<li><span class="code">.scratch/AC-0135/</span> — run2_* logs (g0 ×2, floor pre/post, battery, nightday, viewlight, render, boundary_r4)</li>
+</ul>
+
+<p><b>Bottom line (Run-2):</b> the night ambient floor is now 0.20 of full sunlight (3.0/15) in all four chunk_lit shaders, user-directed; noon full-sky stays EXACT 1.0 (const+gain = 1.0); floor probe PRE ok:false (0.12) → POST ok:true (0.20); nightday/viewlight re-baselined to the new values and green; battery + genhash 25/25 exact; boundary r4 build cost unchanged (108/11575, in-band); one honest render showing the visibly brighter cave. Coordinator heavy gates + windows build remain.</p>
+
+</body>
+</html>

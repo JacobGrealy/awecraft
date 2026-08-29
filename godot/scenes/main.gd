@@ -936,6 +936,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			player = _spawn_player()
 			await _viewlight_test(spawn)
 			return
+		if logic == "floor":
+			await _floor_test(spawn)
+			return
 		if logic == "stars":
 			player = _spawn_player()
 			_stars_test(spawn)
@@ -1356,9 +1359,41 @@ func _snapshot_finish(cam: String) -> void:
 	var drain_at := spawn
 	if player != null:
 		drain_at = player.position
-	await _await_world_build(drain_at, 3000)
+	# AC-0135: AWECRAFT_AIM teleports can force a cold recenter of the R band;
+	# under llvmpipe that outbuilds the fixed 3000-frame drain (SNAPDRAIN).
+	# Env override (default 3000 = existing behavior, gates untouched) lets a
+	# far teleport settle before the snapshot.
+	var drain_max := 3000
+	var drain_env := OS.get_environment("AWECRAFT_SNAP_DRAIN")
+	var aim_pose := Vector3.ZERO
+	var aim_pose_on := false
+	if drain_env != "":
+		drain_max = max(1, drain_env.to_int())
+		if player != null and aimed:
+			# AC-0135: while the band builds around a far aim target, collision
+			# de-penetration against the freshly built chunks can shove the
+			# aim player out of its pocket. Re-pin the aim pose every 300
+			# frames while the drain runs (fire-and-forget companion) and once
+			# more right after it.
+			aim_pose = player.position
+			aim_pose_on = true
+			_aim_pose_guard(aim_pose, player._yaw, player._pitch, drain_max)
+	await _await_world_build(drain_at, drain_max)
+	if aim_pose_on and player != null:
+		player.position = aim_pose
+		player.look(player._yaw, player._pitch)
 	for i in 8:
 		await get_tree().physics_frame
+	# AC-0135: a long AWECRAFT_SNAP_DRAIN drifts the clock — _update_sky
+	# advances Game.time_of_day in real time (main.gd:1553). Re-pin the
+	# requested AWECRAFT_TIME right before the snapshot. Gated on the drain
+	# override being set so default runs keep their exact prior behavior.
+	if drain_env != "":
+		var stime_env := OS.get_environment("AWECRAFT_TIME")
+		if stime_env != "":
+			Game.time_of_day = fmod(stime_env.to_float(), 1.0)
+			_update_sky()
+
 	if OS.get_environment("AWECRAFT_WALK_SHOT") == "1" and player != null:
 		await _walk_shot_finish(snapshot_path, spawn)
 		return
@@ -4588,12 +4623,13 @@ func _nightday_test(spawn: Vector3) -> void:
 		var cL: Variant = null
 		var tL: Variant = null
 		if cd != null and cud != null:
-			# web formula (index.html :746): (0.12 + 0.88 * max(uDay*r, g)) * 15
-			cL = roundf((0.12 + 0.88 * maxf(float(cud) * float(cd[0]), float(cd[1]))) * 15.0 * 100000.0) / 100000.0
+			# in-repo L formula (AC-0128 structure, const+gain = 1.0; user-directed
+			# 0.20 floor, AC-0135 Run-2): (0.20 + 0.80 * max(uDay*r, g)) * 15
+			cL = roundf((0.20 + 0.80 * maxf(float(cud) * float(cd[0]), float(cd[1]))) * 15.0 * 100000.0) / 100000.0
 		elif cd != null:
 			cL = roundf(float(cd[0]) * 15.0 * 100000.0) / 100000.0
 		if ct != null and tud != null:
-			tL = roundf((0.12 + 0.88 * maxf(float(tud) * float(ct[0]), float(ct[1]))) * 15.0 * 100000.0) / 100000.0
+			tL = roundf((0.20 + 0.80 * maxf(float(tud) * float(ct[0]), float(ct[1]))) * 15.0 * 100000.0) / 100000.0
 		elif ct != null:
 			tL = roundf(float(ct[0]) * 15.0 * 100000.0) / 100000.0
 		out["cave_" + tag] = {"col": cd, "u_day": cud, "class": cL, "mech": rd.mech}
@@ -5436,7 +5472,8 @@ func _nightlot_test(spawn: Vector3) -> void:
 # AC-0035 probe (env-gated by AWECRAFT_LOGIC=viewlight, never runs in game):
 # steady-settle r4; deterministic cells borrowed from the proven _light_test
 # battery pattern (surface eff-15 / light-0 pocket / torch 14); measures the
-# viewmodel rendered light (web :746 at the player eye cell) + star opacity at
+# viewmodel rendered light (the in-repo AC-0128 L formula at the player eye
+# cell; user-directed 0.20 floor since AC-0135 Run-2) + star opacity at
 # t 0.0/0.5 + the player-light contribution. PRE (no feature) reports the
 # current mechanism (shared lit material albedo white -> mat_L 1.0 at every
 # cell = the bug; no stars; no player light). POST reports the unshaded
@@ -5451,7 +5488,7 @@ func _vl_measure(cell: Vector3i) -> Dictionary:
 	var sky: float = float(l.sky)
 	var blk: float = float(l.block)
 	var day := DayNight.day(Game.time_of_day)
-	var lno := 0.12 + 0.88 * maxf(day * sky / 15.0, blk / 15.0)
+	var lno := 0.20 + 0.80 * maxf(day * sky / 15.0, blk / 15.0)
 	var lvl: float = 0.0
 	var lvm := lno
 	if player.has_method("vm_refresh"):
@@ -5592,10 +5629,128 @@ func _viewlight_test(spawn: Vector3) -> void:
 	}
 	var ok := false
 	if has_vm:
-		ok = float(outdoor.mat_L) >= 0.94 and float(cave0.vm_no_pl) <= 0.12 + 0.001 \
+		ok = float(outdoor.mat_L) >= 0.94 and float(cave0.vm_no_pl) <= 0.20 + 0.001 \
 				and float(cave0.vm) > float(cave0.vm_no_pl) \
-				and absf(float(torch.mat_L) - 0.94133) <= 0.01 \
+				and absf(float(torch.mat_L) - 0.94667) <= 0.01 \
 				and star_present and op_noon < 0.05 and op_mid > 0.95
+	out["ok"] = ok
+	Debug.result(out)
+	get_tree().quit()
+
+
+# AC-0135 probe (env-gated by AWECRAFT_LOGIC=floor, never runs in game):
+# steady-settle r4; deterministic sealed eff-0 pocket + eff-15 open-sky cell
+# + torch placed in the pocket; measures the exact unlit formula the four
+# chunk_lit shaders run (AC-0128 structure, const+gain = 1.0; user-directed
+# 0.20 floor, AC-0135 Run-2 2026-08-29):
+#   L = 0.20 + 0.80 * max(u_day * sky, blk)
+# at midnight (t 0.0, u_day 0) and noon (t 0.5, u_day 1). The 0.20 constant
+# is the user-directed night ambient floor (~20% of full sunlight): an eff-0
+# cave renders 0.20 (3.0/15) day AND night; const+gain = 1.0 keeps noon
+# full-sky EXACT 1.0. Pinned here: eff-0 at midnight = 0.20 (L15 3.0) exactly,
+# pocket day==night, torch 0.94667 (0.20+0.80*14/15) day==night, open-sky
+# noon 1.0, open-midnight == pocket-midnight, u_day 0.0/1.0.
+func _floor_scan_cells() -> Dictionary:
+	var H: int = Data.HEIGHT
+	var pocket := Vector3i(-1, -1, -1)
+	var open_cell := Vector3i(-1, -1, -1)
+	for cc in _nd_sorted_chunks():
+		if pocket.x >= 0 and open_cell.x >= 0:
+			break
+		if absi(int(cc.cx)) > 3 or absi(int(cc.cz)) > 3:
+			continue
+		var d: PackedByteArray = cc.data
+		var eff: PackedByteArray = cc.last_eff["arr"]
+		for y in range(H):
+			if pocket.x >= 0 and open_cell.x >= 0:
+				break
+			var row := y << 8
+			for lz in range(16):
+				if pocket.x >= 0 and open_cell.x >= 0:
+					break
+				for lx in range(16):
+					var idx := row | (lz << 4) | lx
+					if d[idx] != 0:
+						continue
+					var e: int = eff[idx]
+					if e == 0 and pocket.x < 0:
+						pocket = Vector3i(int(cc.cx) * 16 + lx, y, int(cc.cz) * 16 + lz)
+					elif e == 15 and open_cell.x < 0:
+						open_cell = Vector3i(int(cc.cx) * 16 + lx, y, int(cc.cz) * 16 + lz)
+	return {"pocket": pocket, "open": open_cell}
+
+
+func _floor_L(cell: Vector3i, day: float) -> Dictionary:
+	var l: Dictionary = world.light_at(cell.x, cell.y, cell.z)
+	var sky: float = float(l.sky)
+	var blk: float = float(l.block)
+	var lno := 0.20 + 0.80 * maxf(day * sky / 15.0, blk / 15.0)
+	return {"sky": int(sky), "blk": int(blk), "eff": int(l.eff), "L": _vl_r5(lno), "L15": _vl_r5(lno * 15.0)}
+
+
+func _floor_mat_u_day() -> float:
+	for k in _ChunkScriptM._mat_cache:
+		var cm = _ChunkScriptM._mat_cache[k]
+		if cm is ShaderMaterial:
+			return float(cm.get_shader_parameter("u_day"))
+	return -1.0
+
+
+func _floor_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	Lighting._tables()
+	world.recenter(spawn.x, spawn.z, true)
+	await _nd_settle(60000)
+	var cells: Dictionary = _floor_scan_cells()
+	var pocket: Vector3i = cells.pocket
+	var open_cell: Vector3i = cells.open
+	if pocket.x < 0 or open_cell.x < 0:
+		Debug.result({"mode": "floor", "seed": Game.world_seed, "radius": world.render_radius, "ok": false, "err": "no deterministic cell", "pocket": [pocket.x, pocket.y, pocket.z], "open": [open_cell.x, open_cell.y, open_cell.z], "elapsed_ms": Time.get_ticks_msec() - t0})
+		get_tree().quit()
+		return
+	Game.time_of_day = 0.0
+	_update_sky()
+	var pocket_mid := _floor_L(pocket, DayNight.day(0.0))
+	var open_mid := _floor_L(open_cell, DayNight.day(0.0))
+	var u_mid := _floor_mat_u_day()
+	Game.time_of_day = 0.5
+	_update_sky()
+	var pocket_noon := _floor_L(pocket, DayNight.day(0.5))
+	var open_noon := _floor_L(open_cell, DayNight.day(0.5))
+	var u_noon := _floor_mat_u_day()
+	world.set_block(pocket.x, pocket.y, pocket.z, 22)
+	var torch_mid := _floor_L(pocket, DayNight.day(0.0))
+	var torch_noon := _floor_L(pocket, DayNight.day(0.5))
+	world.set_block(pocket.x, pocket.y, pocket.z, 0)
+	var out := {
+		"mode": "floor",
+		"seed": Game.world_seed,
+		"radius": world.render_radius,
+		"mech": "user-directed-0.20-const-floor (AC-0128 L-formula structure, AC-0135 Run-2)",
+		"spec_floor": 0.20,
+		"actual_floor": _vl_r5(float(pocket_mid.L)),
+		"u_day_mid": _vl_r5(u_mid),
+		"u_day_noon": _vl_r5(u_noon),
+		"pocket": [pocket.x, pocket.y, pocket.z],
+		"open": [open_cell.x, open_cell.y, open_cell.z],
+		"pocket_mid": pocket_mid,
+		"pocket_noon": pocket_noon,
+		"open_mid": open_mid,
+		"open_noon": open_noon,
+		"torch_mid": torch_mid,
+		"torch_noon": torch_noon,
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+	}
+	var ok := int(pocket_mid.eff) == 0 \
+			and absf(float(pocket_mid.L) - 0.20) <= 0.001 \
+			and absf(float(pocket_mid.L15) - 3.0) <= 0.001 \
+			and float(pocket_mid.L) == float(pocket_noon.L) \
+			and absf(float(torch_mid.L) - 0.94667) <= 0.001 \
+			and float(torch_mid.L) == float(torch_noon.L) \
+			and absf(float(open_noon.L) - 1.0) <= 0.001 \
+			and float(open_mid.L) == float(pocket_mid.L) \
+			and int(open_noon.eff) == 15 \
+			and u_mid == 0.0 and u_noon == 1.0
 	out["ok"] = ok
 	Debug.result(out)
 	get_tree().quit()
@@ -6691,6 +6846,22 @@ func _await_world_build(where: Vector3, max_frames: int) -> void:
 		await get_tree().physics_frame
 		waited += 1
 	print("SNAPDRAIN not fully drained after %d frames" % max_frames)
+
+
+# AC-0135: fire-and-forget companion to _await_world_build for long
+# AWECRAFT_SNAP_DRAIN runs. Re-pins the aim player's pose every 300 physics
+# frames so collision de-penetration (fresh chunk bodies closing in on a far
+# teleport target) cannot drift the snapshot camera.
+func _aim_pose_guard(pose: Vector3, yaw: float, pitch: float, max_frames: int) -> void:
+	var waited := 0
+	while waited < max_frames:
+		for i in 300:
+			await get_tree().physics_frame
+		waited += 300
+		if player == null:
+			return
+		player.position = pose
+		player.look(yaw, pitch)
 
 
 func _await_core_3x3(where: Vector3, max_frames: int) -> void:

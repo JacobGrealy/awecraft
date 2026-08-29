@@ -1,9 +1,8 @@
 meta:
-  updated_at: 2026-08-29T01:11
+  updated_at: 2026-08-29T06:02
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0135
 - AC-0136
 - AC-0109
 - AC-0110
@@ -37,6 +36,7 @@ queue:
 - AC-0114
 - AC-0115
 - AC-0130
+- AC-0137
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -3996,16 +3996,30 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-28T08:13
-  updated_at: 2026-08-29T01:11
-  completed_at: null
+  updated_at: 2026-08-29T05:53
+  completed_at: 2026-08-29T05:53
   waiting_on: null
   parent_id: null
   notes: 'Not a bug but: add ~5% ambient moon light so night is not pitch black. Scale or min floor on sky/eff at night (e.g.
     min 0.05*15). Gate: midnight with no torch still faintly visible, cave 0.75 not 0.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-29T05:53
+    updated_at: null
+    text: '[agent] DONE 2026-08-29 (Run-2 @ xhigh, user-directed change). Run-1: spec''s 0.05 premise was stale — in-repo
+      AC-0128 L-formula already floors eff-0 at 0.12=1.8/15 => no shader change, added AWECRAFT_LOGIC=floor probe; v1 heavy
+      gates PASS. USER 2026-08-29: 0.12 looks pitch black => floor = ~20% of sunlight (0.20=3.0/15); also: stop referencing
+      the web spec (in-repo provenance + user-directed values only). Run-2: 4x chunk_lit shaders L = 0.20+0.80*max(u_day*sky,
+      blk) [const+gain=1.0 => noon full-sky EXACT 1.0; eff-0 floor 0.20 day==night] + floor probe spec 0.20 + player.gd vm
+      mirror + chunk.gd comment. Gates: floor PRE ok:false 0.12 / POST ok:true 0.20 [pocket 3.0/15 day==night, torch 0.94667,
+      open_noon 1.0 EXACT]; NEW baselines [nightday cave 15.0/3.0 + torch 14.19996; viewlight cave0 vm_no_pl 0.2, halo d0
+      0.41333 preserved]; battery 5 EXACT + genhash 25/25 byte-identical [eff array untouched]; heavy gates v2: g0 0 errors,
+      boundary walk 126/fwd 11129 in-band [no cost change], build RC=0 stamp 20260829-0548, 8080 byte-matched. 1 render: cave
+      visibly moonlit. Deviations: 0.05 premise superseded by user 0.20; constant day/night floor kept; intermediate-m cells
+      shift +0.08*(1-m) = the user-directed change; artifacts de-webbed per user directive.'
 - id: AC-0136
   title: texture-filtering-sharp-nearest-regression
   source: user
@@ -4013,10 +4027,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-28T09:16
-  updated_at: 2026-08-28T09:16
+  updated_at: 2026-08-29T06:02
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -4027,4 +4041,28 @@ intake:
     sampler to filter_nearest (uniform sampler2D tex : filter_nearest) and/or ensure ImageTexture filter is NEAREST at creation.
     Verify with close-up block: single-pixel texels stay crisp at any distance/FOV; compare with pre-0128 StandardMaterial
     NEAREST. Gate: close-up dirt/grass remains pixel-sharp, no bilinear blur.'
+  comments: []
+- id: AC-0137
+  title: threadgen-handoff-nil-pba-chunk-holes
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-29T04:36
+  updated_at: 2026-08-29T04:36
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Reliability (builder-observed, not user-reported): intermittent ''Invalid type in function threadgen_handoff ...
+    Cannot convert argument 2 from Nil to PackedByteArray'' (world.gd:474, AC-0107 threaded mesh+light build handoff). Pre-existing
+    since AC-0035 era; non-fatal (rc=0) but when it fires it KILLS in-frame chunks'' meshes -> visible sky-through-chunk holes.
+    Evidence: AC-0134 g0 gate run (.scratch/AC-0134-gates/gates.log line 10) + AC-0135 builder midnight render (tasks/AC-0135/ac0135_cave_midnight_transient_hole.png;
+    full saga in tasks/AC-0135/continuity.md; headless full-settle probes show all 81 chunks built+lit+correct data, so it
+    is a timing race, not data). Task: reproduce under load (repeated recenter/boundary walks, headless), root-cause the worker->main
+    handoff race (which arg arrives Nil), fix + zero script errors + a regression probe (AWECRAFT_LOGIC=... or extended g0
+    loop) that trips if the transient recurs. Candidate fold-in: AC-0131 scope if it shares the crossing-path machinery, else
+    standalone.'
   comments: []

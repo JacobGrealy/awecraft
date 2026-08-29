@@ -1,6 +1,6 @@
-// AC-0128: unlit web-faithful day/night shading for cutout (leaves) faces.
+// AC-0128: unlit day/night shading for cutout (leaves) faces.
 // Same vColor repack + formula as chunk_lit_opaque.gdshader, plus the
-// alpha-scissor discard (web :740 cutout path, threshold 0.5).
+// alpha-scissor discard (cutout path, threshold 0.5).
 shader_type spatial;
 render_mode unshaded, cull_back;
 
@@ -18,7 +18,7 @@ void vertex() {
 void fragment() {
 	vec4 t = texture(tex, UV);
 	if (t.a < 0.5) discard;
-	float L = 0.12 + 0.88 * max(u_day * COLOR.r, COLOR.g);
+	float L = 0.20 + 0.80 * max(u_day * COLOR.r, COLOR.g);
 	float pr = clamp(u_player_light - distance(v_world_pos, u_player_pos), 0.0, u_player_radius);
 	L = max(L, 0.12 + 0.88 * pr / 15.0);
 	ALBEDO = t.rgb * COLOR.b * L;

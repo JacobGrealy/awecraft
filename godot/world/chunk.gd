@@ -294,11 +294,12 @@ func _corner_uv(cv: Vector3, n: Vector3i, tl: Vector2i) -> Vector2:
 	return (Vector2(tl) + Vector2(0.5 + u * 31.0, 0.5 + v * 31.0)) / Data.ATLAS_PX
 
 
-# AC-0128: vColor repack = the web index.html :736 channel layout.
+# AC-0128: vColor repack channel layout.
 # has_tex: r = sky channel (light scalar s), g = block-light channel (s when
 # the face has block-light source evidence within Chebyshev 14 in own-chunk
-# data, else 0), b = face shade — the unlit shader computes the web :746
-# formula L = 0.12 + 0.88*max(u_day*r, g). Without the atlas the legacy
+# data, else 0), b = face shade — the unlit shader computes the L formula
+# L = 0.20 + 0.80*max(u_day*r, g) (AC-0128 structure, const+gain = 1.0,
+# user-directed 0.20 floor, AC-0135 Run-2). Without the atlas the legacy
 # behavior stays: face_color * shade (shade = fsh * s).
 static func _light_color(s: float, fsh: float, mask: int, face_color: Color, has_tex: bool) -> Color:
 	if has_tex:

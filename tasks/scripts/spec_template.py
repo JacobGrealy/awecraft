@@ -249,8 +249,9 @@ def _build_html(task, task_id, full=False):
     a('<div class="auto"><b>AUTO (fixed boilerplate — do not hand-edit)</b></div>')
     a("<ul>")
     a('<li><code>index.html</code> — build <code>20260816-r12</code> (Three.js single-file) '
-      "is the <b>source of truth for ALL behavior/data — do NOT modify</b>. The Godot "
-      "port is faithful; when unsure, the web file wins.</li>")
+      "is a FROZEN historical artifact — do NOT modify. <b>User 2026-08-29: the web spec is no "
+      "longer referenced</b> — never cite it as the justification for behavior or values. "
+      "Source of truth = the in-repo Godot code + user directives.</li>")
     a('<li>Minecraft wiki = canonical reference for tools/crafting/blocks, match exactly '
       'unless the user specifies otherwise: '
       '<a href="https://minecraft.wiki/w/Tool">Tool</a>, '

@@ -1,6 +1,6 @@
-// AC-0128: unlit web-faithful day/night shading for cross (flower) quads.
+// AC-0128: unlit day/night shading for cross (flower) quads.
 // Same vColor repack + formula as chunk_lit_opaque.gdshader, plus the
-// alpha discard + cull_disabled (web :740 cross path, two-sided).
+// alpha discard + cull_disabled (cross path, two-sided).
 shader_type spatial;
 render_mode unshaded, cull_disabled;
 
@@ -18,7 +18,7 @@ void vertex() {
 void fragment() {
 	vec4 t = texture(tex, UV);
 	if (t.a < 0.5) discard;
-	float L = 0.12 + 0.88 * max(u_day * COLOR.r, COLOR.g);
+	float L = 0.20 + 0.80 * max(u_day * COLOR.r, COLOR.g);
 	float pr = clamp(u_player_light - distance(v_world_pos, u_player_pos), 0.0, u_player_radius);
 	L = max(L, 0.12 + 0.88 * pr / 15.0);
 	ALBEDO = t.rgb * COLOR.b * L;
