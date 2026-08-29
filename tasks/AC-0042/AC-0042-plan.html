@@ -743,9 +743,53 @@ AC-0146 P4-ring-megastructure    — (future) Halo ring as optional planet varia
     <li>IcoSphere vs Cubemapped Sphere — tri vs quad trade. <code>https://stackoverflow.com/questions/32923976/icosphere-versus-cubemapped-sphere</code></li>
   </ul>
   <div class="callout">
-    <strong>Locked answer:</strong> Uniform-shell cube-sphere at R≈8000 with per-face 2D heightmap gives you true spherical planets where <strong>every block is 1 m, every chunk is 16×H×16, and surface play is indistinguishable from flat Minecraft</strong> — no shell doubling. Solar system is the next hop; galaxy is a relay graph you jump through, not fly through.
+    <strong>Locked answer:</strong> Uniform-shell cube-sphere at R≈4000 home (others R∈[2000,8000] variable) with per-face 2D heightmap gives you true spherical planets where <strong>every block is 1 m, every chunk is 16×H×16, and surface play is indistinguishable from flat Minecraft</strong> — no shell doubling. Solar system is the next hop; galaxy is a relay graph you jump through, not fly through.
   </div>
   <p class="muted">Deliverable: <code>tasks/AC-0042/AC-0042-plan.html</code> — self-contained, offline, no external assets. No code in this task per its <code>research</code> label.</p>
+</section>
+
+<section id="mp">
+  <h2><span class="num">14</span> Multiplayer — planet-aware addendum (8 players, client-trusted, persistent)</h2>
+  <p class="muted" style="font-size:12px;margin:-6px 0 8px">Added 2026-08-29 per your direction: 8-player, trust clients (no anti-cheat), persistent server so anyone can join even if host idle, LAN/Tailscale now, Steam Networking later. This is the spec for <code>AC-0123</code>.</p>
+  <div class="grid2">
+    <div class="card">
+      <h4>User stories</h4>
+      <ul>
+        <li><strong>Different planets at once:</strong> As a player I want to mine on home while a friend is on the desert planet — both horizons/builds correct, so the system feels shared.</li>
+        <li><strong>Always in the right place:</strong> As a player I want my pos to just work ground/tower/orbit/other planet — no glitch when crossing a face edge or jumping systems.</li>
+        <li><strong>Only load around me:</strong> As a player I want the game fast even when 8 are split across planets — I only load ~400 chunks around me (114 m horizon), not theirs.</li>
+        <li><strong>Jump together:</strong> As a player I want the crew to gather at the relay, ready-check, and arrive together — a shared event, not a solo load.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>How (client-trusted)</h4>
+      <ul>
+        <li><strong>Client generates:</strong> Each client knows <code>seed+R+face+cx+cz</code> and builds its own ~400 chunks (gen/mesh/physics local). Server never generates voxels.</li>
+        <li><strong>Server is thin relay + save:</strong> Holds <code>planets[{R,orbit}] + edits{planet_id:face:cx:cz} + relay graph</code> and forwards <code>block edits + player pos</code> (~KB/s). No anti-cheat sim.</li>
+        <li><strong>Persistent:</strong> Headless Godot ENet stays up with save on disk — zero players → idles, but anyone can join later and find builds.</li>
+        <li><strong>8-player headroom:</strong> Worst 8× solo = ~3.2k chunks if all split (dedup if shared), ready-check on relay.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="grid2" style="margin-top:10px">
+    <div class="card">
+      <h4>Hosting — now vs later</h4>
+      <table>
+        <tr><th>When</th><th>How</th><th>Addr</th></tr>
+        <tr><td><span class="pill good">now</span></td><td>ENet direct, persistent headless</td><td><code>LAN 192.168.0.224:4242</code> or <code>Tailscale 100.x:4242</code> — no port-forward, works over internet via Tailscale overlay</td></tr>
+        <tr><td><span class="pill info">later</span></td><td>Steam Networking (relay + NAT punch)</td><td>No public IP, no Tailscale install — queued after solar system, not needed for P1a/P1b</td></tr>
+      </table>
+      <p class="muted" style="font-size:11px;margin:6px 0 0">Hosting by any member: whoever runs <code>AweCraft --server</code> becomes the ENet host; server stays up even if that player leaves the game (headless process).</p>
+    </div>
+    <div class="card">
+      <h4>Per-planet origin (shared with single-player)</h4>
+      <ul>
+        <li>Planet-local <code>C=(0,0,0)</code> while landed, system <code>(0,0,0)=star</code> while in flight, relay jump = swap <code>planet_id</code>. Same <code>core/origin_shift.gd</code> as §9.</li>
+        <li>Interest is per-player per-planet: server runs one <code>recenter</code> per connected player on their planet — same band-buckets, just 8 interests.</li>
+        <li>Spec lives in <code>AC-0123 multiplayer-client-server-research-plan</code> — planet-aware, ENet, client-trusted, persistent, 8-player.</li>
+      </ul>
+    </div>
+  </div>
 </section>
 
   <div class="foot">

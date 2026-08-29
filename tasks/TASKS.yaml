@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-29T14:08
+  updated_at: 2026-08-29T14:24
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -2646,10 +2646,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-23T23:17
-  updated_at: 2026-08-23T23:17
+  updated_at: 2026-08-29T14:24
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -3663,9 +3663,41 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'Research-only: plan client/server multiplayer for AweCraft. Survey Godot 4.7.1 multiplayer (ENet, WebRTC, WASM limits),
-    headless server, world/chunk authority, latency, prediction, inventory/combat sync, save. Deliverable tasks/AC-XXXX/plan.html
-    with architecture options, phased breakdown, and derived subtasks added to queue. No code.'
+  notes: 'User story: As a group of up to 8 players I want to share a solar system of spherical planets that I can join anytime
+    — even if no one else is on — with no anti-cheat, LAN/Tailscale now and Steam Networking later.
+
+
+    High level what we want:
+
+    - Different planets at once: mine on home R=4000 while friend is on desert planet R∈[2000,8000] — both correct.
+
+    - Always in right place: pos just works ground/tower/orbit/other planet, no glitch crossing face edge or jumping.
+
+    - Only load around me: ~400 chunks around me (114m horizon at R=4000), not everyone else''s.
+
+    - Jump together: gather at relay, ready-check, arrive together.
+
+
+    Technical details:
+
+    - Client-trusted (no anti-cheat): each client generates/meshes its own ~400 chunks from seed+R+face+cx+cz (same as single-player
+    P1a), handles its own physics (up=normalize(pos-C)). Server never generates voxels.
+
+    - Server is thin persistent relay + save: headless Godot ENet holds planets[{R,orbit}] + edits{planet_id:face:cx:cz} +
+    relay graph + player planet_id, forwards block edits + pos (~KB/s). Stays up zero-players (save on disk) so anyone can
+    join anytime.
+
+    - Per-planet origin: planet-local C=(0,0,0) while landed, system (0,0,0)=star while in flight, relay jump = swap planet_id.
+    Same core/origin_shift.gd as planet plan §9. Per-player per-planet recenter (band_buckets per player), dedup if sharing
+    planet.
+
+    - Hosting now: LAN 192.168.0.224:4242 or Tailscale 100.x:4242 direct ENet (no port-forward, internet via Tailscale overlay).
+    Later: Steam Networking relay+NAT punch (no public IP). Queued after solar system, not needed for P1a/P1b.
+
+    - Target 8 players, ready-check on relay. Research-only: no code until AC-0143..AC-0145 proven. Ref: tasks/AC-0042/AC-0042-plan.html
+    §14.
+
+    '
   comments: []
 - id: AC-0124
   title: drop-browser-support-windows-only
@@ -4168,18 +4200,18 @@ intake:
       instantiates the scene]; main.tscn + project.godot UNTOUCHED. Gates: G0 RC=0 0 errors [first run red = stale class cache
       for new class_name Menu -> one --import pass fixed, documented]; SMOKE all EXACT [player after_fly_y 37.78, interact
       all-true, quitmenu ok:true, mainmenuexit ready_to_quit:true exit_found:true menu_state:main menu_visible:true]; 2 sanctioned
-      renders [menu_boot.png: menu on screen, no world behind, {"menu":true,"mode":"menu"}
-      / play_from_menu.png: real menu_ui.play_clicked() -> new world seed 44 -> world+player visible, menu gone, {"m4":"ok"}];
-      dead-import audit CLEAN [only menu ref in main.gd = MenuRes preload = the intended path; _ChunkScriptM = pre-existing
-      AC-0120 harness preload = AC-0140 scope]. Heavy gates ALL PASS [UI tier: no boundary/perf/genhash — world/*|data.gd
-      untouched]: g0 rc=0, player 37.78 EXACT, interact all-true, quitmenu ok:true script_errors_seen:false [stderr 0 lines],
-      mainmenuexit all-true, build 20260829-1406 109,683,536 B + 8080 un-stamped byte-matched + stamped 200 + 5180=200. Deviations:
-      (i) quitmenu gate-job false alarm — the arm defaults script_errors_seen:=true UNLESS AWECRAFT_STDERR_FILE is set AND
-      the invoker redirects godot stderr there [main.gd:7391-7396]; first gate invocation lacked it -> ok:false false negative;
-      re-run with "AWECRAFT_STDERR_FILE=$f ... 2>$f" = ok:true 0 stderr lines — INVOCATION LESSON for future gate jobs; (ii)
-      4x known AC-0137 threadgen transient in builder render [non-fatal]; (iii) R=1 SNAPDRAIN artifact in render 2 [transition
-      still proven by RESULT {"m4":"ok"}]; (iv) _placed PNG byproduct = same render run, not an extra invocation. NEXT per
-      queue = AC-0140 extract-harness-from-main-gd [user p2].'
+      renders [menu_boot.png: menu on screen, no world behind, {"menu":true,"mode":"menu"} / play_from_menu.png: real menu_ui.play_clicked()
+      -> new world seed 44 -> world+player visible, menu gone, {"m4":"ok"}]; dead-import audit CLEAN [only menu ref in main.gd
+      = MenuRes preload = the intended path; _ChunkScriptM = pre-existing AC-0120 harness preload = AC-0140 scope]. Heavy
+      gates ALL PASS [UI tier: no boundary/perf/genhash — world/*|data.gd untouched]: g0 rc=0, player 37.78 EXACT, interact
+      all-true, quitmenu ok:true script_errors_seen:false [stderr 0 lines], mainmenuexit all-true, build 20260829-1406 109,683,536
+      B + 8080 un-stamped byte-matched + stamped 200 + 5180=200. Deviations: (i) quitmenu gate-job false alarm — the arm defaults
+      script_errors_seen:=true UNLESS AWECRAFT_STDERR_FILE is set AND the invoker redirects godot stderr there [main.gd:7391-7396];
+      first gate invocation lacked it -> ok:false false negative; re-run with "AWECRAFT_STDERR_FILE=$f ... 2>$f" = ok:true
+      0 stderr lines — INVOCATION LESSON for future gate jobs; (ii) 4x known AC-0137 threadgen transient in builder render
+      [non-fatal]; (iii) R=1 SNAPDRAIN artifact in render 2 [transition still proven by RESULT {"m4":"ok"}]; (iv) _placed
+      PNG byproduct = same render run, not an extra invocation. NEXT per queue = AC-0140 extract-harness-from-main-gd [user
+      p2].'
 - id: AC-0140
   title: extract-harness-from-main-gd
   source: user
