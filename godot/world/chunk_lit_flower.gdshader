@@ -5,7 +5,7 @@ shader_type spatial;
 render_mode unshaded, cull_disabled;
 
 uniform float u_day : hint_range(0.0, 1.0) = 1.0;
-uniform sampler2D tex;
+uniform sampler2D tex : filter_nearest;
 uniform vec3 u_player_pos = vec3(0.0, 0.0, 0.0);
 uniform float u_player_light = 0.0;
 uniform float u_player_radius = 5.0;

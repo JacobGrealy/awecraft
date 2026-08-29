@@ -939,6 +939,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "floor":
 			await _floor_test(spawn)
 			return
+		if logic == "sharpx":
+			await _sharpx_test(spawn)
+			return
 		if logic == "stars":
 			player = _spawn_player()
 			_stars_test(spawn)
@@ -5754,6 +5757,227 @@ func _floor_test(spawn: Vector3) -> void:
 	out["ok"] = ok
 	Debug.result(out)
 	get_tree().quit()
+
+
+# AC-0136 probe (env-gated by AWECRAFT_LOGIC=sharpx, inert unless set):
+# texel-boundary framebuffer A/B for the chunk_lit sampler filter. Finds a
+# deterministic sky-lit (outdoor) or eff-0 (cave) grass/dirt/stone side face
+# near spawn, places the eye 2.5 m off the face center, and samples an 11-px
+# strip across one high-contrast texel boundary at the tile center row:
+# NEAREST => every strip pixel equals one of the two texel-center pixels
+# (off<=1); LINEAR => interior pixels are blends (off>=6). 4.7.1 exposes no
+# GDScript filter getter (verified empirically), so it also reports the
+# texture classes in force (imported CompressedTexture2D vs runtime
+# ImageTexture bake copies) for the cause-layer record. Framebuffer part
+# needs a real renderer (xvfb render mode); headless skips the sampling.
+func _sharpx_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	Lighting._tables()
+	world.collision_enabled = false
+	world.recenter(spawn.x, spawn.z, true)
+	await _nd_settle(60000)
+	var filters := {
+		"imported_atlas_class": String(Data.atlas_tex.get_class()) if Data.atlas_tex != null else "",
+		"filter_api_exposed": bool(Data.atlas_tex.has_method("get_filter")) if Data.atlas_tex != null else false,
+		"lit_atlas_class": "",
+		"lit_atlas_class_set": false,
+	}
+	var lt: Texture2D = _ChunkScriptM._lit_atlas_tex()
+	if lt != null:
+		filters["lit_atlas_class"] = String(lt.get_class())
+		filters["lit_atlas_class_set"] = true
+	player = _spawn_player()
+	var outdoor := await _sharpx_wall_test([1, 3], true, 12)
+	var cave := await _sharpx_wall_test([9, 1, 3], false, 20)
+	var out := {
+		"mode": "sharpx",
+		"seed": Game.world_seed,
+		"radius": world.render_radius,
+		"tile_px": Data.TILE_PX,
+		"headless": DisplayServer.get_name() == "headless",
+		"filters": filters,
+		"outdoor": outdoor,
+		"cave": cave,
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+	}
+	var ov := String(outdoor.get("verdict", ""))
+	out["ok"] = ov != "" and ov != "inconclusive" and ov != "no_pair"
+	Debug.result(out)
+	get_tree().quit()
+
+
+func _sharpx_wall_test(ids: Array, is_outdoor: bool, max_r: int) -> Dictionary:
+	var sp: Vector3 = world.spawn_point()
+	var bx0 := int(sp.x)
+	var bz0 := int(sp.z)
+	var dirs := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
+	var bid := 0
+	var wall := Vector3i(-1, -1, -1)
+	var dir := Vector3i.ZERO
+	var found := false
+	for r in range(0, max_r + 1):
+		if found:
+			break
+		for x in range(-r, r + 1):
+			if found:
+				break
+			for z in range(-r, r + 1):
+				if found:
+					break
+				if maxi(absi(x), absi(z)) != r:
+					continue
+				for d in dirs:
+					for y in range(Data.HEIGHT - 2, 1, -1):
+						var bx := bx0 + x
+						var bz := bz0 + z
+						var b: int = world.get_block(bx, y, bz)
+						if not ids.has(b):
+							continue
+						var ax := bx + int(d.x)
+						var az := bz + int(d.z)
+						if world.get_block(ax, y, az) != 0:
+							continue
+						var la: Dictionary = world.light_at(ax, y, az)
+						var sky: int = int(la.sky)
+						if is_outdoor and sky < 15:
+							continue
+						if not is_outdoor and (sky != 0 or int(la.block) != 0):
+							continue
+						if world.get_block(ax + int(d.x), y, az + int(d.z)) != 0:
+							continue
+						if world.get_block(ax + int(d.x) * 2, y, az + int(d.z) * 2) != 0:
+							continue
+						if world.get_block(ax + int(d.x), y, az + int(d.z)) != 0:
+							continue
+						bid = b
+						wall = Vector3i(bx, y, bz)
+						dir = d
+						found = true
+						break
+	if not found:
+		return {"found": false, "is_outdoor": is_outdoor, "verdict": ""}
+	var face := Vector3(float(wall.x + 0.5), float(wall.y + 0.5), float(wall.z + 0.5))
+	var eye := face + Vector3(float(dir.x) * 3.0, 0.0, float(dir.z) * 3.0)
+	var yaw := atan2(float(dir.x), float(dir.z))
+	Debug.fly(true)
+	Debug.teleport(eye.x, eye.y - player.EYE, eye.z)
+	player.look(yaw, 0.0)
+	Game.time_of_day = 0.5
+	_update_sky()
+	await _await_world_build(eye, 3000)
+	for i in 12:
+		await get_tree().physics_frame
+	var res := {
+		"found": true,
+		"is_outdoor": is_outdoor,
+		"block": bid,
+		"wall": [wall.x, wall.y, wall.z],
+		"dir": [dir.x, dir.y, dir.z],
+		"eye": [roundf(eye.x * 1000.0) / 1000.0, roundf(eye.y * 1000.0) / 1000.0, roundf(eye.z * 1000.0) / 1000.0],
+		"aim": "%.4f,%.4f,%.4f,%.4f,%.4f" % [eye.x, eye.y, eye.z, yaw, 0.0],
+		"verdict": "",
+	}
+	if DisplayServer.get_name() == "headless":
+		res["verdict"] = "skipped_headless"
+		return res
+	for i in 4:
+		await RenderingServer.frame_post_draw
+	var img := get_tree().root.get_viewport().get_texture().get_image()
+	if img == null or img.get_width() < 8:
+		res["verdict"] = "no_image"
+		return res
+	var W := img.get_width()
+	var H := img.get_height()
+	var fov_rad := deg_to_rad(float(player.camera.fov))
+	var pxm := (float(H) * 0.5) / tan(fov_rad * 0.5) / 2.5
+	var rect: Vector2i = Data.block_rect(bid, "side")
+	var at_img: Image = Data.atlas_tex.get_image()
+	var row_order := [16, 15, 17, 14, 18, 13, 19, 12, 20, 11, 21, 10, 22, 9, 23, 8, 24, 7, 25, 6, 26, 5, 27, 4, 28, 3, 29, 2, 30, 1, 31, 0]
+	var chosen_c := -1
+	var chosen_r := -1
+	var chosen_d := 0
+	for ps in range(2):
+		if chosen_c >= 0:
+			break
+		for rr in row_order:
+			var bd := 0
+			var bc := -1
+			for c in range(Data.TILE_PX - 1):
+				var ca: Color = at_img.get_pixel(int(rect.x) + c, int(rect.y) + rr)
+				var cb: Color = at_img.get_pixel(int(rect.x) + c + 1, int(rect.y) + rr)
+				var dm := _sharpx_d8(ca, cb)
+				if dm > bd:
+					bd = dm
+					bc = c
+			var thr: int = 24 if ps == 0 else 12
+			if bd >= thr:
+				chosen_c = bc
+				chosen_r = rr
+				chosen_d = bd
+				break
+	if chosen_c < 0:
+		res["verdict"] = "no_pair"
+		return res
+	var uvm := Vector2((float(chosen_c) + 1.0) / float(Data.TILE_PX), (float(chosen_r) + 0.5) / float(Data.TILE_PX))
+	var uva := Vector2((float(chosen_c) + 0.5) / float(Data.TILE_PX), uvm.y)
+	var uvb := Vector2((float(chosen_c) + 1.5) / float(Data.TILE_PX), uvm.y)
+	var sxb := Vector2i(int(round(float(W) * 0.5 + (uvm.x - 0.5) * pxm)), int(round(float(H) * 0.5 + (uvm.y - 0.5) * pxm)))
+	var sax := Vector2i(int(round(float(W) * 0.5 + (uva.x - 0.5) * pxm)), sxb.y)
+	var sbx := Vector2i(int(round(float(W) * 0.5 + (uvb.x - 0.5) * pxm)), sxb.y)
+	var pa: Color = img.get_pixel(sax.x, sax.y)
+	var pb: Color = img.get_pixel(sbx.x, sbx.y)
+	var pm: Color = img.get_pixel(sxb.x, sxb.y)
+	# AC-0136: off = ramp pixels WITHIN the predicted [sax, sbx] a-b window
+	# (strip pixels outside it belong to neighboring texels, not blending).
+	var xa := mini(sax.x, sbx.x)
+	var xb := maxi(sax.x, sbx.x)
+	var off := 0
+	var strip: Array = []
+	for k in range(-5, 6):
+		var xx := sxb.x + k
+		var p: Color = img.get_pixel(xx, sxb.y)
+		strip.append(_sharpx_p8(p))
+		if xx >= xa and xx <= xb and mini(_sharpx_d8(p, pa), _sharpx_d8(p, pb)) > 2:
+			off += 1
+	var rdb := _sharpx_d8(pa, pb)
+	if rdb == 0:
+		_sharpx_dump(wall, dir, bid)
+	if rdb < 8:
+		res["verdict"] = "pair_low_contrast"
+	elif off <= 1:
+		res["verdict"] = "pure_nearest"
+	elif off >= 3:
+		res["verdict"] = "blended_linear"
+	else:
+		res["verdict"] = "inconclusive"
+	res["pair"] = {"c": chosen_c, "r": chosen_r, "atlas_d8": chosen_d, "render_d8": rdb}
+	res["px"] = {"a": _sharpx_p8(pa), "b": _sharpx_p8(pb), "mid": _sharpx_p8(pm), "strip": strip, "off": off}
+	res["samples"] = {"a": [sax.x, sax.y], "b": [sbx.x, sbx.y], "mid": [sxb.x, sxb.y]}
+	return res
+
+
+func _sharpx_dump(wall: Vector3i, dir: Vector3i, bid: int) -> void:
+	var chars := {0: ".", 1: "g", 3: "d", 5: "~", 9: "s", 11: "b"}
+	for k in range(3, -2, -1):
+		var zz := wall.z + int(dir.z) * k
+		for dy in range(-2, 3):
+			var row := "DUMP z=%d y=%d " % [zz, wall.y + dy]
+			for dx in range(-3, 4):
+				var b: int = world.get_block(wall.x + dx, wall.y + dy, zz)
+				row += chars.get(b, "#")
+			print(row)
+	var la: Dictionary = world.light_at(wall.x + int(dir.x), wall.y, wall.z + int(dir.z))
+	print("DUMP face_light sky=%s blk=%s eff=%s wall_block=%d" % [la.sky, la.block, la.eff, bid])
+
+
+func _sharpx_p8(c: Color) -> Array:
+	return [int(c.r * 255.0 + 0.5), int(c.g * 255.0 + 0.5), int(c.b * 255.0 + 0.5)]
+
+
+func _sharpx_d8(a: Color, b: Color) -> int:
+	var da := absi(int(a.r * 255.0 + 0.5) - int(b.r * 255.0 + 0.5))
+	var db := absi(int(a.g * 255.0 + 0.5) - int(b.g * 255.0 + 0.5))
+	return maxi(da, absi(int(a.b * 255.0 + 0.5) - int(b.b * 255.0 + 0.5)))
 
 
 # AC-0133 probe (env-gated by AWECRAFT_LOGIC=stars, never runs in game):

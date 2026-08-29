@@ -1,21 +1,21 @@
 meta:
-  updated_at: 2026-08-29T06:02
+  updated_at: 2026-08-29T08:29
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0136
+- AC-0138
+- AC-0121
+- AC-0122
+- AC-0097
+- AC-0112
+- AC-0113
+- AC-0093
 - AC-0109
 - AC-0110
 - AC-0125
-- AC-0121
-- AC-0122
 - AC-0123
-- AC-0097
-- AC-0093
 - AC-0094
 - AC-0098
-- AC-0112
-- AC-0113
 - AC-0101
 - AC-0092
 - AC-0036
@@ -4027,11 +4027,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-28T09:16
-  updated_at: 2026-08-29T06:02
-  completed_at: null
+  updated_at: 2026-08-29T08:27
+  completed_at: 2026-08-29T08:27
   waiting_on: null
   parent_id: null
   notes: 'Textures are not sharp after AC-0128: filtering looks linear/blurry instead of pixel-sharp NEAREST (used before
@@ -4041,7 +4041,21 @@ intake:
     sampler to filter_nearest (uniform sampler2D tex : filter_nearest) and/or ensure ImageTexture filter is NEAREST at creation.
     Verify with close-up block: single-pixel texels stay crisp at any distance/FOV; compare with pre-0128 StandardMaterial
     NEAREST. Gate: close-up dirt/grass remains pixel-sharp, no bilinear blur.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-29T08:27
+    updated_at: null
+    text: 'DONE 2026-08-29 (xhigh single): root cause = shader-hint layer only — Godot 4.7.1 bare sampler2D defaults LINEAR,
+      runtime ImageTextures expose no filter API (filter_api_exposed=false, sharpx-verified) ⇒ '': filter_nearest'' on all
+      4 chunk_lit shaders is the sole authority; chunk.gd:87 ''NEAREST default'' comment was false. Fix = 4 shaders ×1 line
+      only (AC-0135 frozen L-line byte-identical). Audit: fluid_anim.gdshader already had the hint [fluids were sharp — documented
+      out-of-scope], viewmodel NEAREST preserved. sharpx probe PRE blended_linear off=7 [5-7px ramp] / POST pure_nearest off=0
+      [hard 1px step]; 3 renders [PRE closeup blurry / POST closeup sharp / midnight cave G2]. Heavy gates ALL PASS: g0 0
+      errors [2× known threadgen_handoff transient = AC-0137 class], sharpx ok:true, genhash 25/25 byte-identical vs AC-0134
+      ref, boundary walk p95 123 / fwd 11675 in-band [AC-0134 125/12497], player flake byte-identical vs AC-0135, build 20260829-0809
+      [109,667,064 B] + 8080 un-stamped+stamped 200 byte-matched, 5180=200. Deviations: MINFO -48 verts merge-reshuffle flake
+      [rerun-verified]; micro-cave probe face absent [pre-existing, informational]; builder ran one extra build_windows.sh
+      at 08:01 [fence note, harmless — byte-identical to gate build].'
 - id: AC-0137
   title: threadgen-handoff-nil-pba-chunk-holes
   source: agent
@@ -4065,4 +4079,23 @@ intake:
     handoff race (which arg arrives Nil), fix + zero script errors + a regression probe (AWECRAFT_LOGIC=... or extended g0
     loop) that trips if the transient recurs. Candidate fold-in: AC-0131 scope if it shares the crossing-path machinery, else
     standalone.'
+  comments: []
+- id: AC-0138
+  title: leaves-always-black-regression
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: in-progress
+  labels: []
+  created_at: 2026-08-29T08:29
+  updated_at: 2026-08-29T08:29
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User-reported (2026-08-29): tree leaves always render black both day and night. Introduced by one of the recent
+    lighting changes (AC-0128/AC-0134/AC-0135/AC-0136 window). Leaves are block id 7 (solid=false cutout=true, tint TINT_LEAVES
+    / C_LEAVES, shader chunk_lit_cutout). Reproduce and fix minimal shader/chunk/data change. Needs day/night renders with
+    tree in-frame.'
   comments: []
