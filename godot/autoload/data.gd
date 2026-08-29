@@ -1,8 +1,11 @@
 extends Node
 
 const CHUNK := 16
-const HEIGHT := 80
-const SEA := 30
+# AC-0091: world height 80 -> 384. Internal 0-based y, y=0 = bedrock =
+# Minecraft Y=-64, y=383 = MC Y=319. MC Y = y - 64 at coordinate surfaces.
+# Sea level: internal y=126 (MC Y=62), the spec-directed level.
+const HEIGHT := 384
+const SEA := 126
 
 const C_GRASS_TOP := Color(0.416, 0.667, 0.251)
 const C_DIRT := Color(0.525, 0.376, 0.263)

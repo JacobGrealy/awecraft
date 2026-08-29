@@ -296,7 +296,8 @@ func _frustum_cull_pass() -> void:
 			continue
 		var ox := float(int(c.cx)) * 16.0
 		var oz := float(int(c.cz)) * 16.0
-		_cull_cen = Vector3(ox + 8.0, 40.0, oz + 8.0)
+		# AC-0091: column center = world mid-height (H/2 = 192), was 40.0 at H=80.
+		_cull_cen = Vector3(ox + 8.0, float(Data.HEIGHT) * 0.5, oz + 8.0)
 		var culled := false
 		var all_in := true
 		for i in 6:
@@ -315,8 +316,9 @@ func _frustum_cull_pass() -> void:
 				_cull_set_vis(s, true)
 			continue
 		for s in c.slabs:
-			# slab center y = y0+8, column center y = 40 -> dy = y0-32
-			var dy := float(s.y0) - 32.0
+			# slab center y = y0+8, column center y = H/2 -> dy = y0+8-H/2
+			# (AC-0091: was y0-32 at H=80).
+			var dy := float(s.y0) + 8.0 - float(Data.HEIGHT) * 0.5
 			var vis := true
 			for i in 6:
 				if _cull_dc[i] + dy * _cull_ny[i] + _cull_slab_span[i] < -m:
@@ -365,7 +367,8 @@ func _cull_frustum_planes(cam: Camera3D) -> void:
 	for i in 6:
 		var n: Vector3 = _cull_planes[i].normal
 		_cull_ny[i] = n.y
-		_cull_col_span[i] = 8.0 * absf(n.x) + 40.0 * absf(n.y) + 8.0 * absf(n.z)
+		# AC-0091: column half-span = H/2 (was 40.0 at H=80).
+		_cull_col_span[i] = 8.0 * absf(n.x) + float(Data.HEIGHT) * 0.5 * absf(n.y) + 8.0 * absf(n.z)
 		_cull_slab_span[i] = 8.0 * absf(n.x) + 8.0 * absf(n.y) + 8.0 * absf(n.z)
 
 func _cull_plane(a: Vector3, b: Vector3, c: Vector3, cen: Vector3) -> Plane:
@@ -1098,8 +1101,9 @@ func _strips_for(cx: int, cz: int) -> Dictionary:
 func _side_eff_strip(nc: Node3D, dx: int, dz: int, h: int) -> PackedByteArray:
 	# c=0 the column directly across our boundary, c=1 the next; t = our z
 	# (E/W) or our x (S/N). 2*16*h bytes, idx = c*(16*h) + y*16 + t.
+	# AC-0091: sized by h (was hard-coded 2560 = H=80).
 	var e := PackedByteArray()
-	e.resize(2560)
+	e.resize(2 * 16 * h)
 	var narr: PackedByteArray = nc.last_eff["arr"]
 	var colsz := 16 * h
 	var nx0: int = 0 if dx > 0 else 15
@@ -1121,7 +1125,7 @@ func _side_eff_strip(nc: Node3D, dx: int, dz: int, h: int) -> PackedByteArray:
 
 # AC-0134 run-2 (fix-6): per-chunk face-boundary BLOCK-light cache for
 # _side_blk_strip: _face_blk[key] = [data_snapshot (PackedByteArray),
-# faces (4 x 2560 PackedByteArray, idx = c*(16*h) + y*16 + t — c=0 the face
+# faces (4 x 2*16*h PackedByteArray, AC-0091, idx = c*(16*h) + y*16 + t — c=0 the face
 # row, which is the ONLY half _chunk_blk_inject reads; c=1 zero), deps
 # (4 x [neighbor_key, neighbor_eff_gen], _FACE_SIDES order)]. Face order =
 # ring side convention: 0=E (x=15) 1=W (x=0) 2=S (z=15) 3=N (z=0).
@@ -1212,7 +1216,8 @@ func _compute_face_blk(c: Node3D) -> Array:
 	# neighbors' FINAL faces injected (the [E,W,N,S] strip order
 	# _chunk_blk_inject expects), then re-flood. Block-only twin of the
 	# kernel's eff pipeline; sky never enters (see the _face_blk doc).
-	# 2560-wide faces: c=0 half = face row (the inject half), c=1 zero.
+	# 2*16*h-wide faces (AC-0091; was 2560 at H=80): c=0 half = face row
+	# (the inject half), c=1 zero.
 	var h: int = Data.HEIGHT
 	var nd: PackedByteArray = c.data
 	Lighting._tables()
@@ -1243,14 +1248,15 @@ func _compute_face_blk(c: Node3D) -> Array:
 	var inj: bool = Lighting._chunk_blk_inject(blk, ids, h, strips)
 	if has or inj:
 		Lighting._flood_flat(blk, ids, 16, h, 16)
+	var fsize := 2 * 16 * h
 	var fe := PackedByteArray()
-	fe.resize(2560)
+	fe.resize(fsize)
 	var fw := PackedByteArray()
-	fw.resize(2560)
+	fw.resize(fsize)
 	var fs := PackedByteArray()
-	fs.resize(2560)
+	fs.resize(fsize)
 	var fn := PackedByteArray()
-	fn.resize(2560)
+	fn.resize(fsize)
 	for y in range(h):
 		var rowb: int = y * 16
 		var row: int = y << 8
@@ -1283,7 +1289,7 @@ func _side_blk_strip(nc: Node3D, dx: int, dz: int, h: int) -> Dictionary:
 	#   The mask marks block-derived light for the bake's night scale; sky
 	#   never marks. c=1 half zero: _chunk_blk_inject reads c=0 only.
 	var b := PackedByteArray()
-	b.resize(2560)
+	b.resize(2 * 16 * h)  # AC-0091: was hard-coded 2560 = H=80
 	var nd: PackedByteArray = nc.data
 	var narr: PackedByteArray = PackedByteArray()
 	if not nc.last_eff.is_empty():
@@ -1324,18 +1330,18 @@ func _side_blk_strip(nc: Node3D, dx: int, dz: int, h: int) -> Dictionary:
 			b[y * 16 + t] = v
 	var sf: PackedByteArray = _face_of(nc, _shared_face(dx, dz))
 	var bm := PackedByteArray()
-	if sf.size() == 2560:
+	if sf.size() == 2 * 16 * h:  # AC-0091: face width by h (was 2560)
 		bm = sf.duplicate()
 	else:
-		bm.resize(2560)
+		bm.resize(2 * 16 * h)
 	return {"v": b, "b": bm}
 
 
 func _corner_eff_strip(nc: Node3D, dx: int, dz: int, h: int) -> PackedByteArray:
 	# a = x-depth (0 = directly across), b = z-depth (0 = directly across);
-	# 2x2*h bytes, idx = (a*2+b)*h + y.
+	# 2x2*h bytes, idx = (a*2+b)*h + y. AC-0091: sized by h (was 320 = H=80).
 	var e := PackedByteArray()
-	e.resize(320)
+	e.resize(4 * h)
 	var narr: PackedByteArray = nc.last_eff["arr"]
 	var nx0: int = 0 if dx > 0 else 15
 	var nz0: int = 0 if dz > 0 else 15

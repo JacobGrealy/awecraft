@@ -73,6 +73,10 @@ func save_now(slot: int) -> bool:
 	var data := {
 		"version": SAVE_VERSION,
 		"seed": int(Game.world_seed),
+		# AC-0091: world height at save time; a mismatch on load means the save
+		# predates the height change -> soft-fail to a fresh world (same seed),
+		# never a script error. Old saves lack this key entirely.
+		"height": int(Data.HEIGHT),
 		"time": float(Game.time_of_day),
 		"ts": int(Time.get_unix_time_from_system()),
 		"edits": w.edits,

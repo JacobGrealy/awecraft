@@ -23,23 +23,36 @@ const TREE_D_MAX := 0.14
 
 const SPAWN_X := 8
 const SPAWN_Z := 8
-const SPAWN_H := 34
+# AC-0091: SPAWN_H 34 -> 136 = int(2.6 * 34 + 48) under the remap below
+# (spawn pad sits at MC Y=72, in the grassland band MC 62-100).
+const SPAWN_H := 136
+# AC-0091: terrain ceiling. The remapped formula peaks ~346 before clamping;
+# clamp at 300 (MC Y=236) so mountains top out well below the sky limit 319.
+const TERRAIN_H_MAX := 300
 
 
+# AC-0091 exact remap (documented in tasks/AC-0091/spec.html + results.html):
+#   old (H=80):  y = 22 + c*14 + h*20; if r>0.62: y += (r-0.62)*150; clamp [3,74]
+#   new (H=384): y = 105.2 + c*36.4 + h*52.0; if r>0.62: y += (r-0.62)*390; clamp [3,300]
+# i.e. y_new = int(2.6 * y_old_raw + 48) — the same affine applied to the raw
+# (pre-clamp) formula, so every noise sample keeps its relative rank: ocean
+# (y_old < 30) maps EXACTLY to y_new < 126 = Data.SEA. Grassland (old 22-56)
+# -> new 105-193 (MC 41-129, core band MC 62-100); mountains (r-boost) reach
+# new ~300 (MC ~236, the "200+" band). Same fbm calls, same thresholds.
 static func terrain_height(x: int, z: int, seed: int) -> int:
 	var c := AweNoise.fbm2(float(x) / 220.0, float(z) / 220.0, seed, 3)
 	var h := AweNoise.fbm2(float(x) / 70.0 + 333.0, float(z) / 70.0 + 333.0, seed + 7, 4)
 	var r := AweNoise.fbm2(float(x) / 300.0 + 500.0, float(z) / 300.0 + 500.0, seed + 13, 3)
-	var y := 22.0 + c * 14.0 + h * 20.0
+	var y := 105.2 + c * 36.4 + h * 52.0
 	if r > 0.62:
-		y += (r - 0.62) * 150.0
+		y += (r - 0.62) * 390.0
 	var d := Vector2(float(x) - float(SPAWN_X), float(z) - float(SPAWN_Z)).length()
 	if d <= 6.0:
 		y = float(SPAWN_H)
 	elif d <= 10.0:
 		var w := 1.0 - smoothstep(6.0, 10.0, d)
 		y = y * (1.0 - w) + float(SPAWN_H) * w
-	return clampi(int(floorf(y)), 3, 74)
+	return clampi(int(floorf(y)), 3, TERRAIN_H_MAX)
 
 
 static func biome_at(x: int, z: int, seed: int) -> String:
@@ -55,7 +68,7 @@ static func biome_at(x: int, z: int, seed: int) -> String:
 
 
 static func tree_at(x: int, z: int, seed: int) -> int:
-	return tree_at_sea(x, z, seed, 30)
+	return tree_at_sea(x, z, seed, Data.SEA)
 
 static func tree_at_sea(x: int, z: int, seed: int, sea: int) -> int:
 	var hv := AweNoise.hash2i(x, z, seed + 55)
@@ -90,7 +103,8 @@ const SOLID_IDS := [
 ]
 
 static func generate(cx: int, cz: int, seed: int) -> PackedByteArray:
-	return generate_args(cx, cz, seed, 80, 30)
+	# AC-0091: height/sea come from Data (was hard-coded 80/30).
+	return generate_args(cx, cz, seed, Data.HEIGHT, Data.SEA)
 
 static func generate_args(cx: int, cz: int, seed: int, hmax: int, sea: int) -> PackedByteArray:
 	var prof := OS.get_environment("AWECRAFT_GENPROFILE") == "1"
@@ -127,9 +141,10 @@ static func generate_args(cx: int, cz: int, seed: int, hmax: int, sea: int) -> P
 			var cf := acc_c[idx]
 			var hf := acc_h[idx]
 			var rf := acc_r[idx]
-			var y := 22.0 + cf * 14.0 + hf * 20.0
+			# AC-0091: same remap as terrain_height (y_new = 2.6*y_old_raw + 48).
+			var y := 105.2 + cf * 36.4 + hf * 52.0
 			if rf > 0.62:
-				y += (rf - 0.62) * 150.0
+				y += (rf - 0.62) * 390.0
 			if absi(x - SPAWN_X) <= 10 and absi(z - SPAWN_Z) <= 10:
 				var dx := float(x) - float(SPAWN_X)
 				var dz := float(z) - float(SPAWN_Z)
@@ -139,7 +154,7 @@ static func generate_args(cx: int, cz: int, seed: int, hmax: int, sea: int) -> P
 				elif d <= 10.0:
 					var w := 1.0 - smoothstep(6.0, 10.0, d)
 					y = y * (1.0 - w) + float(SPAWN_H) * w
-			heights[idx] = clampi(int(floorf(y)), 3, 74)
+			heights[idx] = clampi(int(floorf(y)), 3, TERRAIN_H_MAX)
 			var tv := acc_t[idx] * 2.0 - 1.0
 			var mv := acc_m[idx] * 2.0 - 1.0
 			var bc := 3
@@ -155,46 +170,50 @@ static func generate_args(cx: int, cz: int, seed: int, hmax: int, sea: int) -> P
 	var t1 := Time.get_ticks_usec()
 	var data := PackedByteArray()
 	data.resize(256 * hmax)
+	# AC-0091: these scratch/out buffers are indexed by y up to the tallest
+	# column (yend = h-4, h up to TERRAIN_H_MAX; cave yc up to h). They were
+	# sized for H=80 (96/48) and would overflow at 384. Size to hmax.
 	var n1 := PackedFloat64Array()
-	n1.resize(96)
+	n1.resize(hmax)
 	var n2 := PackedFloat64Array()
-	n2.resize(96)
+	n2.resize(hmax)
 	var n3 := PackedFloat64Array()
-	n3.resize(96)
+	n3.resize(hmax)
 	var nc1 := PackedFloat64Array()
-	nc1.resize(96)
+	nc1.resize(hmax)
 	var nc2 := PackedFloat64Array()
-	nc2.resize(96)
+	nc2.resize(hmax)
 	var p0a := PackedFloat64Array()
-	p0a.resize(48)
+	p0a.resize(hmax)
 	var p0c := PackedFloat64Array()
-	p0c.resize(48)
+	p0c.resize(hmax)
 	var p1a := PackedFloat64Array()
-	p1a.resize(48)
+	p1a.resize(hmax)
 	var p1c := PackedFloat64Array()
-	p1c.resize(48)
-	var t71 := _ytable(7.0, 1.0, 0.0)
+	p1c.resize(hmax)
+	# AC-0091: _ytable now takes hmax (tables sized to the world height).
+	var t71 := _ytable(7.0, 1.0, 0.0, hmax)
 	var t71y: PackedInt32Array = t71[0]
 	var t71v: PackedFloat64Array = t71[1]
-	var t72 := _ytable(7.0, 2.0, 0.0)
+	var t72 := _ytable(7.0, 2.0, 0.0, hmax)
 	var t72y: PackedInt32Array = t72[0]
 	var t72v: PackedFloat64Array = t72[1]
-	var t91 := _ytable(9.0, 1.0, 0.0)
+	var t91 := _ytable(9.0, 1.0, 0.0, hmax)
 	var t91y: PackedInt32Array = t91[0]
 	var t91v: PackedFloat64Array = t91[1]
-	var t92 := _ytable(9.0, 2.0, 0.0)
+	var t92 := _ytable(9.0, 2.0, 0.0, hmax)
 	var t92y: PackedInt32Array = t92[0]
 	var t92v: PackedFloat64Array = t92[1]
-	var t61 := _ytable(6.0, 1.0, 0.0)
+	var t61 := _ytable(6.0, 1.0, 0.0, hmax)
 	var t61y: PackedInt32Array = t61[0]
 	var t61v: PackedFloat64Array = t61[1]
-	var t62 := _ytable(6.0, 2.0, 0.0)
+	var t62 := _ytable(6.0, 2.0, 0.0, hmax)
 	var t62y: PackedInt32Array = t62[0]
 	var t62v: PackedFloat64Array = t62[1]
-	var t101 := _ytable(10.0, 1.0, 0.0)
+	var t101 := _ytable(10.0, 1.0, 0.0, hmax)
 	var t101y: PackedInt32Array = t101[0]
 	var t101v: PackedFloat64Array = t101[1]
-	var t99 := _ytable(9.0, 1.0, 900.0)
+	var t99 := _ytable(9.0, 1.0, 900.0, hmax)
 	var t99y: PackedInt32Array = t99[0]
 	var t99v: PackedFloat64Array = t99[1]
 	lz = 0
@@ -341,13 +360,15 @@ static func generate_args(cx: int, cz: int, seed: int, hmax: int, sea: int) -> P
 	return data
 
 
-static func _ytable(s: float, f: float, oy: float) -> Array:
+# AC-0091: tables sized by hmax (was hard-coded 96 for H=80); indexed by y
+# up to the tallest column, which can reach hmax-4 in a 384-tall world.
+static func _ytable(s: float, f: float, oy: float, hmax: int) -> Array:
 	var yi := PackedInt32Array()
-	yi.resize(96)
+	yi.resize(hmax)
 	var vv := PackedFloat64Array()
-	vv.resize(96)
+	vv.resize(hmax)
 	var y := 0
-	while y < 96:
+	while y < hmax:
 		var yf := float(y) / s * f + oy
 		var i := int(floorf(yf))
 		yi[y] = i

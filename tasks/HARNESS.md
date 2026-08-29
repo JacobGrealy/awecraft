@@ -125,18 +125,28 @@ All render hooks need the software-GL recipe (§4); typical timeout **300 000 ms
 Fresh smoke battery 2026-08-24 (`player;interact;light;fluids;genhash`): wall 33 s;
 BATTMODE: player 2739 ms, interact 1349 ms, light 2879 ms, fluids 3763 ms, genhash 884 ms.
 
-### Known-stable gate values (FRESH runs, 2026-08-24)
+### Known-stable gate values (FRESH runs — RE-ESTABLISHED 2026-08-29 by AC-0091, H 80→384)
 
-| value | fresh result (2026-08-24) | established by |
+AC-0091 raised world height 80→384 (sea y30→y126). **Every world-geometry-derived
+baseline changed; the table below is the NEW set.** Values that are pure mechanics
+(torch propagation, water-on-lava reaction, interact booleans) are unchanged and
+carry their original provenance.
+
+| value | fresh result (2026-08-29, H=384) | established by |
 |---|---|---|
-| fluids `sea_surface_before`/`_final` | **2730 / 2730** (FLAT) | AC-0068 (sea zero-write invariant) |
-| fluids `sea_backed_before`/`_final` | **1406 / 1406** | AC-0068 |
+| player `start` | **[8.5, 137.0, 8.5]** (spawn pad top SPAWN_H=136 = MC Y 72); `jump_peak_y` 135.43, `after_fly_y` 136.78 | AC-0091 (was [8.5,35,8.5] @ H=80) |
+| fluids `sea_surface_before`/`_final` | **2730 / 2730** (FLAT — xz-only, unchanged by height) | AC-0068 (sea zero-write invariant) |
+| fluids `sea_backed_before`/`_final` | **888 / 888** (deeper water columns @ sea y126) | AC-0091 (was 1406 @ H=80) |
 | fluids `sea_stable` | **true** (`water_delta` 1, `shore_after` [5,7], `source_after` [5,8]) | AC-0068 |
 | fluids `water_on_lava_result` / `sideways_lava_result` | **25 / 9** (obsidian / stone) | M6 fluids port |
-| interact `drop_spawned` / `place_ok` | **true / true** (`breakable_id` 2, `after_place_cell` 2) | M4 interaction |
-| light `torch_level` | **14** (`surface_eff` 15, `cave_eff` 0, `torch_far_after` 9) | M5 lighting |
-| genhash | **25/25** `GENHASH` lines, 32-hex MD5 each; default seed 44; seed 99 → all 25 lines differ | AC-0082 (world/* parity gate) |
-| boundary r4 `in_radius_built_max` | **67** (`built_final` 81, `ok` true, `flap` 0, `p95_ms` 65) | AC-0079 (look-priority scoring; pre-fix gate was 55) |
+| interact `drop_spawned` / `place_ok` | **true / true** (`breakable_id` 2, `place_cell`/`target_cell` [8,136,8], `after_place_cell` 2) | M4 interaction (place y 35→136 @ AC-0091) |
+| light `torch_level` | **14** (`surface_eff` 15, `torch_far_after` 9) | M5 lighting |
+| light `cave_eff` / `torch_far_before` | **10 / 1** (cave pocket re-scaled with terrain; dark-cave semantics hold) | AC-0091 (was 0 / 0 @ H=80) |
+| basis (new arm `AWECRAFT_LOGIC=basis`) | bedrock id 11 @ y=0; sea id 5 @ y=126 air-above; spawn_top 136 solid + air-above; surface sky/eff 15/15; `mc_y` {bedrock:-64, sea:62, spawn_top:72, world_top:319}; `ok` true | AC-0091 (MC Y = internal − 64 surface contract) |
+| nightday `cave` / `torch` | **15.0 day / 3.0 night**, torch **14.19996** day==night | AC-0135 (EXACT, height-invariant) |
+| genhash | **25/25** `GENHASH` lines, 32-hex MD5 each, deterministic (2 runs byte-identical); all 25 hashes NEW vs H=80; → `.scratch/AC-0091-gates/genhash_new.txt` | AC-0082 gate / AC-0091 values |
+| MINFO | **121 lines, chunks_built 81/81, all_meshed true, empty_verts 0**, built:false=40 (queued far chunks), total verts 483032 → `.scratch/AC-0091-gates/minfo_new.txt` | AC-0091 (AC-0129 121-line shape retained) |
+| boundary r4 one-shot | `ok`/`remesh_ok`/`marker_ok` true, `p95_ms` **344**, `forward_p95_ms` **46404**, `in_radius_built_max` 22, `staged_pending_final` 0 — **NEW band** (H=384 streams ~2.6× walk / ~3.9× fwd vs H=80; one-shot run establishes it) | AC-0091 (old band 108–133 / 10898–13019 VOID) |
 
 ## 4. Run recipes (sandboxed, one godot at a time)
 

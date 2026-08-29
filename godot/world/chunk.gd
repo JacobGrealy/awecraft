@@ -27,11 +27,24 @@ var eff_gen := 0
 # recenter events spent at >= r+2 (free at >= 2).
 var candidate := false
 var cand_since := 0
-# AC-0108: five vertical 16x16x16 slabs (y0 = 0/16/32/48/64), each owning its
-# own mesh/fluid/flora instances + collision body; data/fl stay column-wide.
+# AC-0108: vertical 16x16x16 slabs, each owning its own mesh/fluid/flora
+# instances + collision body; data/fl stay column-wide. AC-0091: the slab
+# COUNT is (Data.HEIGHT + 15) / 16 = 24 at H=384 (was 5 at H=80) — computed
+# at runtime (a const can't reference the Data autoload); see slab_n().
+static var _slab_n := 0
+static func slab_n() -> int:
+	if _slab_n == 0:
+		_slab_n = (Data.HEIGHT + 15) / 16
+	return _slab_n
+# AC-0091: zero-filled length-n array (GDScript has no [0] * n repetition).
+static func _zeros(n: int) -> Array:
+	var out: Array = []
+	for i in range(n):
+		out.append(0)
+	return out
 var slabs: Array = []
-var perf_slab_body_builds := PackedInt32Array([0, 0, 0, 0, 0])
-var perf_slab_body_ms := PackedFloat32Array([0.0, 0.0, 0.0, 0.0, 0.0])
+var perf_slab_body_builds := PackedInt32Array()
+var perf_slab_body_ms := PackedFloat32Array()
 
 
 class Acc:
@@ -1387,8 +1400,10 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	var rq: Array = []
 	var rf_w: Array = []
 	var rf_l: Array = []
-	var c_af_w := [0, 0, 0, 0, 0]
-	var c_af_l := [0, 0, 0, 0, 0]
+	# AC-0091: per-slab counters sized by the runtime slab count (24 @ H=384;
+	# was hard-coded 5 for H=80).
+	var c_af_w := _zeros(slab_n())
+	var c_af_l := _zeros(slab_n())
 	var d: PackedByteArray = data
 	for y in range(h):
 		var dy := y << 8
@@ -1426,16 +1441,16 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	var s_af_l: Array = []
 	var s_ak: Array = []
 	var s_ax: Array = []
-	var c_ac := [0, 0, 0, 0, 0]
-	var c_ak := [0, 0, 0, 0, 0]
-	var c_ax := [0, 0, 0, 0, 0]
+	var c_ac := _zeros(slab_n())  # AC-0091: runtime slab count (was 5)
+	var c_ak := _zeros(slab_n())
+	var c_ax := _zeros(slab_n())
 	for r in rc_o:
 		c_ac[int(r[1]) / 16] += 1
 	for r in rk:
 		c_ak[int(r[1]) / 16] += 1
 	for r in rq:
 		c_ax[int(r[1]) / 16] += 2
-	for si in range(5):
+	for si in range(slab_n()):  # AC-0091: runtime slab count (was 5)
 		s_ao.append(_new_acc())
 		s_ac.append(_new_acc())
 		s_af_w.append(_new_acc())
@@ -1463,7 +1478,7 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	_s_emit_faces(rk, s_ak, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, xtab, ctx, bmask)
 	_s_emit_xquad(rq, s_ax, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, ctx, bmask)
 	var slabs_out: Array = []
-	for si in range(5):
+	for si in range(slab_n()):  # AC-0091: runtime slab count (was 5)
 		slabs_out.append([s_ao[si], s_ac[si], s_af_w[si], s_af_l[si], s_ak[si], s_ax[si]])
 	return {
 		"slabs": slabs_out,
@@ -1501,9 +1516,13 @@ static func _bake_box(light: Dictionary, eff_strips: Array, h: int) -> Dictionar
 			for bx in range(2, 18):
 				arr[dst_z + bx] = arrc[src_z + (bx - 2)]
 	if eff_strips.size() >= 8:
+		# AC-0091: side strips are 2 cols x 16 x h, corners 4 x h (was
+		# hard-coded 2560/320 for H=80).
 		var c1 := 16 * h
+		var fsize := 2 * 16 * h
+		var csize := 4 * h
 		var E: PackedByteArray = eff_strips[0]
-		if E.size() == 2560:
+		if E.size() == fsize:
 			for y in range(h):
 				var row := y * w * w
 				var srow := y * 16
@@ -1511,7 +1530,7 @@ static func _bake_box(light: Dictionary, eff_strips: Array, h: int) -> Dictionar
 					arr[row + (2 + t) * w + 18] = E[srow + t]
 					arr[row + (2 + t) * w + 19] = E[c1 + srow + t]
 		var W: PackedByteArray = eff_strips[1]
-		if W.size() == 2560:
+		if W.size() == fsize:
 			for y in range(h):
 				var row := y * w * w
 				var srow := y * 16
@@ -1519,7 +1538,7 @@ static func _bake_box(light: Dictionary, eff_strips: Array, h: int) -> Dictionar
 					arr[row + (2 + t) * w + 1] = W[srow + t]
 					arr[row + (2 + t) * w + 0] = W[c1 + srow + t]
 		var S: PackedByteArray = eff_strips[2]
-		if S.size() == 2560:
+		if S.size() == fsize:
 			for y in range(h):
 				var row := y * w * w
 				var srow := y * 16
@@ -1527,7 +1546,7 @@ static func _bake_box(light: Dictionary, eff_strips: Array, h: int) -> Dictionar
 					arr[row + 18 * w + (2 + t)] = S[srow + t]
 					arr[row + 19 * w + (2 + t)] = S[c1 + srow + t]
 		var N: PackedByteArray = eff_strips[3]
-		if N.size() == 2560:
+		if N.size() == fsize:
 			for y in range(h):
 				var row := y * w * w
 				var srow := y * 16
@@ -1535,25 +1554,25 @@ static func _bake_box(light: Dictionary, eff_strips: Array, h: int) -> Dictionar
 					arr[row + 1 * w + (2 + t)] = N[srow + t]
 					arr[row + 0 * w + (2 + t)] = N[c1 + srow + t]
 		var SE: PackedByteArray = eff_strips[4]
-		if SE.size() == 320:
+		if SE.size() == csize:
 			for a in range(2):
 				for b in range(2):
 					for y in range(h):
 						arr[(18 + b) * w + (18 + a)] = SE[(a * 2 + b) * h + y]
 		var SW: PackedByteArray = eff_strips[5]
-		if SW.size() == 320:
+		if SW.size() == csize:
 			for a in range(2):
 				for b in range(2):
 					for y in range(h):
 						arr[(18 + b) * w + (1 - a)] = SW[(a * 2 + b) * h + y]
 		var NE: PackedByteArray = eff_strips[6]
-		if NE.size() == 320:
+		if NE.size() == csize:
 			for a in range(2):
 				for b in range(2):
 					for y in range(h):
 						arr[(1 - b) * w + (18 + a)] = NE[(a * 2 + b) * h + y]
 		var NW: PackedByteArray = eff_strips[7]
-		if NW.size() == 320:
+		if NW.size() == csize:
 			for a in range(2):
 				for b in range(2):
 					for y in range(h):
@@ -1575,7 +1594,11 @@ static func _new_acc() -> Dictionary:
 func init_slabs() -> void:
 	if not slabs.is_empty():
 		return
-	for i in range(5):
+	var sn: int = slab_n()  # AC-0091: runtime slab count (24 at H=384)
+	if perf_slab_body_builds.size() != sn:
+		perf_slab_body_builds.resize(sn)
+		perf_slab_body_ms.resize(sn)
+	for i in range(sn):
 		var s := Slab.new()
 		s.y0 = i * 16
 		s.col_dirty = true
@@ -1585,7 +1608,7 @@ func init_slabs() -> void:
 func slab_for_y(y: int) -> Slab:
 	if slabs.is_empty():
 		init_slabs()
-	return slabs[clampi(y / 16, 0, 4)]
+	return slabs[clampi(y / 16, 0, slab_n() - 1)]  # AC-0091: runtime slab count
 
 
 func mark_edit_slabs(y: int) -> void:
@@ -1594,7 +1617,7 @@ func mark_edit_slabs(y: int) -> void:
 	# Greedy merged quads extend DOWN (v-axis) up to 3 rows from their anchor
 	# row, so an edit at row y can reshape quads anchored at v0 in [y-3, y];
 	# mark the full closure, not just the touched slab.
-	for si in range(maxi(0, (y - 3) / 16), mini(4, (y + 1) / 16) + 1):
+	for si in range(maxi(0, (y - 3) / 16), mini(slab_n() - 1, (y + 1) / 16) + 1):
 		slabs[si].col_dirty = true
 
 
@@ -1929,8 +1952,9 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	var rq: Array = []
 	var rf_w: Array = []
 	var rf_l: Array = []
-	var c_af_w := [0, 0, 0, 0, 0]
-	var c_af_l := [0, 0, 0, 0, 0]
+	# AC-0091: per-slab counters sized by the runtime slab count (24 @ H=384).
+	var c_af_w := _zeros(slab_n())
+	var c_af_l := _zeros(slab_n())
 	var d: PackedByteArray = data
 	for y in range(Data.HEIGHT):
 		var dy := y << 8
@@ -1968,16 +1992,16 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	var s_af_l: Array = []
 	var s_ak: Array = []
 	var s_ax: Array = []
-	var c_ac := [0, 0, 0, 0, 0]
-	var c_ak := [0, 0, 0, 0, 0]
-	var c_ax := [0, 0, 0, 0, 0]
+	var c_ac := _zeros(slab_n())  # AC-0091: runtime slab count (was 5)
+	var c_ak := _zeros(slab_n())
+	var c_ax := _zeros(slab_n())
 	for r in rc_o:
 		c_ac[r[1] / 16] += 1
 	for r in rk:
 		c_ak[r[1] / 16] += 1
 	for r in rq:
 		c_ax[r[1] / 16] += 2
-	for si in range(5):
+	for si in range(slab_n()):  # AC-0091: runtime slab count (was 5)
 		s_ao.append(Acc.new())
 		s_ac.append(Acc.new())
 		s_af_w.append(Acc.new())
@@ -2005,7 +2029,7 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	_emit_fluid(rf_l, s_af_l, snap, snap_fl, has_tex, fn, fcv, ct, cs, cb)
 	_emit_faces(rk, s_ak, bb["mn"], bb["arr"], 20, 20, has_tex, xtab, fn, fsh, fcv, ct, cs, cb, bmask)
 	_emit_xquad(rq, s_ax, bb["mn"], bb["arr"], 20, 20, has_tex, ct, bmask)
-	for si in range(5):
+	for si in range(slab_n()):  # AC-0091: runtime slab count (was 5)
 		_assemble_slab(slabs[si], s_ao[si], s_ac[si], s_af_w[si], s_af_l[si], s_ak[si], s_ax[si], ms)
 	mesh_built = true
 	_post_build_collision()
@@ -2040,7 +2064,7 @@ func apply_accs(res: Dictionary, ms: Dictionary) -> void:
 			s.flora_instance = null
 	last_eff = _eff_store(res.light)
 	last_blk_ring = res.light.get("ring", PackedInt32Array())
-	for si in range(5):
+	for si in range(slab_n()):  # AC-0091: runtime slab count (was 5)
 		var row: Array = res.slabs[si]
 		_assemble_slab(slabs[si], _acc_from_dict(row[0]), _acc_from_dict(row[1]), _acc_from_dict(row[2]), _acc_from_dict(row[3]), _acc_from_dict(row[4]), _acc_from_dict(row[5]), ms)
 	mesh_built = true

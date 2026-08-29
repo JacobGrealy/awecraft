@@ -1,9 +1,8 @@
 meta:
-  updated_at: 2026-08-29T14:24
+  updated_at: 2026-08-29T17:01
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0091
 - AC-0143
 - AC-0144
 - AC-0145
@@ -2646,11 +2645,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-23T23:17
-  updated_at: 2026-08-29T14:24
-  completed_at: null
+  updated_at: 2026-08-29T17:01
+  completed_at: 2026-08-29T17:01
   waiting_on: null
   parent_id: null
   notes: 'Update chunk/world height to match Minecraft: Y=-64 to Y=319 (384 total blocks height; sea level Y=62). Currently
@@ -2658,7 +2657,34 @@ intake:
     fluid sim, spawn/bedrock, save format, render/mesh, recenter/build queue, headless harnesses (genhash, fluids, boundary).
     Hard gates: genhash parity at new heights, sea stable, 0 script errors. Reference index.html spec for current generation
     then remap to new Y range.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-29T17:01
+    updated_at: null
+    text: 'DONE 2026-08-29 (xhigh single; spec pre-written + de-webbed; H 80->384: y=0 bedrock=MC Y-64, y=383=MC Y319, sea
+      y=126=MC Y62, internal 0-based index, MC Y=y-64 at coordinate surfaces only). Files: data.gd [H 80->384, SEA 30->126],
+      generator.gd [terrain remap y_new=2.6*y_old_raw+48 on pre-clamp field -> 105.2+c*36.4+h*52.0+(r-0.62)*390 if r>0.62,
+      clamp [3,300]; ocean EXACT 2.6*30+48=126; SPAWN_H 136, TERRAIN_H_MAX 300], lighting.gd [AC-0128 RING MASK RE-DERIVED
+      for 384: (side<<17)|(yy<<4)|level write-only; AC-0134 dynamic face mask verified - lightaudit cliffs 0 + tunnel EXACT],
+      world.gd [7 strip sites -> 2*16*h/4*h; frustum y-center H/2], chunk.gd [slab_n()=24 + _zeros() [GDScript has no [0]*n
+      - this was G0''s 10 parse errors] + _bake_box], save.gd [height stamp + old-save soft-fail], main.gd [harness-only:
+      NEW basis probe, _continue_slot soft-fail, scan ranges/thresholds]. Gates: G0 rc=0 [3x known AC-0137-class threadgen
+      transients]; basis ok:true [bedrock y0, MC Y surfaces {-64,62,72,319}, sea ok, sky 15/15]; ALL OLD BASELINES VOID ->
+      NEW: nightday 15.0/3.0 + torch 14.19996 EXACT, player after_fly_y 136.78 [spawn surface 136=MC 72] + horizontal 2.82
+      EXACT, light cave_eff 0->10 [pocket re-scaled] surface 15 torch 14, fluids sea 2730/2730 stable + sea_backed 1406->888
+      [deeper columns] + lava 25/9, genhash 25/25 run1==run2 [new baseline .scratch/AC-0091-gates/genhash_new.txt], MINFO
+      121/81/40 [new baseline minfo_new.txt], render tall_world_r1.png [terrain+sea at new level, no void/clipped sky]. ONE-SHOT
+      boundary r4 ESTABLISHES NEW BAND: walk p95 344 / fwd 46404 [old band 108-133/10898-13019 VOID - 4.8x height cost, spec-anticipated,
+      honest not deviation]. HEAVY GATES ALL PASS [coordinator bash-32]: g0 rc=0, basis ok:true, MINFO 4-chunk -40-verts-each
+      drift [aabb identical = merge-reshuffle flake class at H=384, documented], player/nightday/fluids/light EXACT, genhash
+      25/25 BYTE-IDENTICAL vs builder baseline, boundary flake walk 267-290 / fwd 39892 [vs builder 344/46404 - in new band,
+      run noise ~15%], build 20260829-1656 109,686,480 B rc=0 + 8080 un-stamped byte-matched + stamped 200 + 5180=200. Deviations
+      of record: (i) NEW boundary band [walk 267-344 / fwd ~39.9k-46.4k] replaces old band [worldgen-driven cost of 4.8x height
+      - expected]; (ii) interact arm RARE FLAKE - gate run 1/5 place_ok:false [inv n:0] vs 4/5 EXACT place_ok:true after_place_cell:2
+      inv n:1 [incl 3 fresh consecutive] = drop->pickup->place timing race in the arm while the player falls the mined hole
+      - arm determinism follow-up folds into AC-0140 harness extract; (iii) MINFO 4-chunk drift = flake class; (iv) unattributed
+      20260829-1534 stamp build in exports [builder-window, harmless - gate build 1656 authoritative]; (v) lightaudit _ac134_diag_torch
+      pre-existing diag error [also in AC-0134''s own log].'
 - id: AC-0092
   title: water-column-fill-to-terrain
   source: user

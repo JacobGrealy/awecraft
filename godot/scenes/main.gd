@@ -481,23 +481,30 @@ func _continue_slot(slot: int) -> void:
 	var data := Save.load_full(int(slot))
 	if data.is_empty():
 		return
+	# AC-0091 SOFT-FAIL: a save recorded at a different world height (H=80
+	# pre-AC-0091 saves lack the "height" key entirely) is treated as a NEW
+	# world at the SAME seed: edits and the saved player pose are dropped
+	# (their y-space no longer matches the terrain), spawn_point is used.
+	# Never a script error.
+	var height_ok: bool = int(data.get("height", 0)) == Data.HEIGHT
 	Save.active_slot = int(slot)
 	if world != null:
 		_free_game_nodes()
 	Game.new_world(int(data.get("seed", 1)))
 	_create_game_nodes()
-	world.edits = data.get("edits", {})
+	if height_ok:
+		world.edits = data.get("edits", {})
 	var ps: Dictionary = data.get("player", {})
 	var pos: Array = ps.get("pos", [])
 	var target: Vector3
-	if pos.size() == 3:
+	if height_ok and pos.size() == 3:
 		target = Vector3(float(pos[0]), float(pos[1]), float(pos[2]))
 	else:
 		target = world.spawn_point()
 	world.recenter(target.x, target.z, true)
 	await _await_core_3x3(target, 3000)
 	player = _spawn_player()
-	_restore_player(ps)
+	_restore_player(ps if height_ok else {})
 	if Game.world != null:
 		world.recenter(player.position.x, player.position.z)
 	Game.time_of_day = float(data.get("time", 0.0))
@@ -735,7 +742,7 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 						gen_cache[gkey] = WorldGen.generate(gxx, gzz, Game.world_seed)
 					var g: PackedByteArray = gen_cache[gkey]
 					var hgt := 0
-					for yy in range(75, -1, -1):
+					for yy in range(Data.HEIGHT - 1, -1, -1):  # AC-0091: full column (was 75)
 						if g[(yy << 8) | ((z & 15) << 4) | (x & 15)] != 0:
 							hgt = yy
 							break
@@ -760,7 +767,8 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 				for x in range(-160, 161, 4):
 					var bt2 := WorldGen.biome_at(x, z, Game.world_seed)
 					var hgt2 := WorldGen.terrain_height(x, z, Game.world_seed)
-					if hgt2 <= Data.SEA or hgt2 > 40:
+					# AC-0091: grassland band top remapped 40 -> 152 (= 2.6*40+48).
+					if hgt2 <= Data.SEA or hgt2 > 152:
 						continue
 					var gxx2 := int(floorf(float(x) / 16.0))
 					var gzz2 := int(floorf(float(z) / 16.0))
@@ -768,7 +776,7 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 					if g2 == null:
 						continue
 					var top2 := 0
-					for yy in range(75, -1, -1):
+					for yy in range(Data.HEIGHT - 1, -1, -1):  # AC-0091: full column (was 75)
 						if g2[(yy << 8) | ((z & 15) << 4) | (x & 15)] != 0:
 							top2 = g2[(yy << 8) | ((z & 15) << 4) | (x & 15)]
 							break
@@ -819,9 +827,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 						bch = "d"
 					if mh2 <= Data.SEA + 2:
 						ch = "."
-					elif mh2 < 38:
+					elif mh2 < 147:  # AC-0091: 38 -> 147 (= 2.6*38+48)
 						ch = "-"
-					elif mh2 < 44:
+					elif mh2 < 162:  # AC-0091: 44 -> 162 (= 2.6*44+48)
 						ch = "+"
 					else:
 						ch = "#"
@@ -854,7 +862,7 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 				var bt3 := WorldGen.biome_at(bxc, bzc, Game.world_seed)
 				var top3 := 0
 				var ty3 := -1
-				for yy in range(74, -1, -1):
+				for yy in range(Data.HEIGHT - 1, -1, -1):  # AC-0091: full column (was 74)
 					top3 = world.get_block(bxc, yy, bzc)
 					if top3 != 0:
 						ty3 = yy
@@ -921,6 +929,10 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			world.collision_enabled = false
 			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
 			_light_test(spawn)
+			get_tree().quit()
+			return
+		if logic == "basis":
+			await _basis_test(spawn)
 			get_tree().quit()
 			return
 		if logic == "lightaudit":
@@ -3830,6 +3842,78 @@ func _light_test(spawn: Vector3) -> void:
 	})
 
 
+# AC-0091 basis-sanity probe (spec gate; env-gated by AWECRAFT_LOGIC=basis,
+# never runs in game): bedrock at y=0; sea surface at y=126 in an ocean
+# column; spawn surface solid + air above; sky-lit surface reports light 15
+# day / 15 sky; MC Y in RESULT = internal y - 64 (coordinate-surface
+# contract). Probe only — no logic changes here.
+func _basis_test(spawn: Vector3) -> void:
+	var out := {}
+	var ok := true
+	var bx := int(WorldGen.SPAWN_X)
+	var bz := int(WorldGen.SPAWN_Z)
+	# 1. bedrock at y=0 in the spawn column (boot sync-gen chunk).
+	var bed: int = world.get_block(bx, 0, bz)
+	out["bedrock_y0"] = bed
+	out["bedrock_ok"] = bed == WorldGen.B_BEDROCK
+	ok = ok and out["bedrock_ok"]
+	# 2. sea surface at Data.SEA in an ocean column: nearest column with
+	#    terrain strictly below the sea, so water occupies y=Data.SEA.
+	var ox := -1
+	var oz := -1
+	var best := 1 << 30
+	for z2 in range(-64, 65, 4):
+		for x2 in range(-64, 65, 4):
+			if WorldGen.terrain_height(x2, z2, Game.world_seed) < Data.SEA:
+				var dd := absi(x2 - bx) + absi(z2 - bz)
+				if dd < best:
+					best = dd
+					ox = x2
+					oz = z2
+	out["ocean_at"] = [ox, oz]
+	if ox < 0:
+		out["sea_ok"] = false
+		ok = false
+	else:
+		world.recenter(float(ox), float(oz), false)
+		await _await_core_3x3(Vector3(float(ox), 0.0, float(oz)), 3000)
+		var sw: int = world.get_block(ox, Data.SEA, oz)
+		var swa: int = world.get_block(ox, Data.SEA + 1, oz)
+		var ob: int = world.get_block(ox, 0, oz)
+		out["sea_cell"] = sw
+		out["sea_above"] = swa
+		out["ocean_bedrock_y0"] = ob
+		out["sea_ok"] = sw == WorldGen.B_WATER and swa == 0 and ob == WorldGen.B_BEDROCK
+		ok = ok and out["sea_ok"]
+		world.recenter(float(bx), float(bz), false)
+		await _await_core_3x3(spawn, 3000)
+	# 3. spawn column: surface block solid, air directly above it.
+	var top: int = world.surface_top(bx, bz)
+	var sb: int = world.get_block(bx, top, bz)
+	var sab: int = world.get_block(bx, top + 1, bz)
+	out["spawn_top_y"] = top
+	out["spawn_top_solid"] = bool(Data.block(sb).solid)
+	out["spawn_above_air"] = sab == 0
+	ok = ok and out["spawn_top_solid"] and out["spawn_above_air"]
+	# 4. sky-lit surface at noon: the air cell just above the spawn surface
+	#    reports sky 15 / eff 15.
+	Game.time_of_day = 0.5
+	var l: Dictionary = world.light_at(bx, top + 1, bz)
+	out["surface_sky"] = int(l.sky)
+	out["surface_eff"] = int(l.eff)
+	out["surface_light_ok"] = int(l.sky) == 15 and int(l.eff) == 15
+	ok = ok and out["surface_light_ok"]
+	# 5. MC Y exposure = internal y - 64 (the only place MC Y appears).
+	out["mc_y"] = {
+		"bedrock": 0 - 64,
+		"sea": Data.SEA - 64,
+		"spawn_top": top - 64,
+		"world_top": (Data.HEIGHT - 1) - 64,
+	}
+	out["ok"] = ok
+	Debug.result(out)
+
+
 # AC-0129 probe (env-gated by AWECRAFT_LOGIC=lightaudit, never runs in game):
 # steady-settle, scan baked last_eff for cross-chunk cliffs, deterministic torch
 # tunnel A/B (mesh seq vs light_at). Probe only — no logic changes here.
@@ -5164,7 +5248,7 @@ func _nl_srcs_build() -> void:
 	# every glow source (ids 22/23/24) in any chunk with data, flattened
 	# into a region grid over chunks -7..7 (a source within Chebyshev 15 of
 	# any band cell is within one chunk of the band edge, well inside).
-	# idx = ((x + 112) * 240 + (z + 112)) * 80 + y.
+	# idx = ((x + 112) * 240 + (z + 112)) * H + y (AC-0091: H = Data.HEIGHT).
 	var H: int = Data.HEIGHT
 	_nl_src_region = PackedByteArray()
 	_nl_src_region.resize(240 * 240 * H)
@@ -8726,7 +8810,8 @@ func _tint_find_cell(bm: String, seed: int):
 			if WorldGen.biome_at(x, z, seed) != bm:
 				continue
 			var h := WorldGen.terrain_height(x, z, seed)
-			if h <= Data.SEA + 1 or h > 74:
+			# AC-0091: world max height remapped 74 -> 300 (TERRAIN_H_MAX).
+			if h <= Data.SEA + 1 or h > 300:
 				continue
 			var cx2 := int(floorf(float(x) / 16.0))
 			var cz2 := int(floorf(float(z) / 16.0))
@@ -9136,7 +9221,8 @@ func _trees_test() -> void:
 			if WorldGen.biome_at(x, z, seed) != "desert":
 				continue
 			var hd := WorldGen.terrain_height(x, z, seed)
-			if hd <= Data.SEA + 1 or hd > 40:
+			# AC-0091: grassland band top remapped 40 -> 152 (= 2.6*40+48).
+			if hd <= Data.SEA + 1 or hd > 152:
 				continue
 			desert_checked = hd
 			if _rget(ref_data, x, hd + 1, z) == 6:

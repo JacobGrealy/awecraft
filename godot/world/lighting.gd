@@ -356,30 +356,32 @@ static func compute_light_flat_chunk_pull(data: PackedByteArray, cx: int, cz: in
 		for i in range(sz * h):
 			mask[i] = 1 if blk[i] > 0 else 0
 		# AC-0128 RUN 3: the SPARSE boundary block-light RING - only the LIT
-		# boundary cells (pack: (side << 16) | (yy << 8) | level, yy = y*16+t,
-		# 4 sides x 16*h). The TRUE flooded block light at our own boundary
-		# columns (own sources + cross-boundary, transitive), persisted per
-		# chunk (a few hundred bytes for a lava chunk, 0 for a sky-only
-		# chunk - memory fence r50) and read by the neighbor's mask strip:
-		# the eff-derived "eff>sky" test cannot separate true block light
-		# from laterally-leaked sky in closed columns, so the neighbor reads
-		# our flooded values directly.
+		# boundary cells, 4 sides x 16*h. The TRUE flooded block light at our
+		# own boundary columns (own sources + cross-boundary, transitive),
+		# persisted per chunk (a few hundred bytes for a lava chunk, 0 for a
+		# sky-only chunk - memory fence r50). AC-0134: the face mask
+		# (_compute_face_blk) supersedes this ring as the live carrier; the
+		# ring is retained (write-only) for provenance.
+		# AC-0091 re-derived pack (the old (side<<16)|(yy<<8)|level collided:
+		# yy = y*16+t reaches 6143 = 13 bits at H=384, overlapping the side
+		# field): (side << 17) | (yy << 4) | level — level 4 bits (0-15),
+		# yy 13 bits (0-8191, h up to 512), side 2 bits (0-3); 19 bits total.
 		for y in range(h):
 			var row := y << 8
 			for t in range(16):
 				var yy := y * 16 + t
 				var lv0: int = blk[row | (t << 4) | 15]
 				if lv0 > 0:
-					ring.append((0 << 16) | (yy << 8) | lv0)
+					ring.append((0 << 17) | (yy << 4) | lv0)
 				var lv1: int = blk[row | (t << 4)]
 				if lv1 > 0:
-					ring.append((1 << 16) | (yy << 8) | lv1)
+					ring.append((1 << 17) | (yy << 4) | lv1)
 				var lv2: int = blk[row | (15 << 4) | t]
 				if lv2 > 0:
-					ring.append((2 << 16) | (yy << 8) | lv2)
+					ring.append((2 << 17) | (yy << 4) | lv2)
 				var lv3: int = blk[row | t]
 				if lv3 > 0:
-					ring.append((3 << 16) | (yy << 8) | lv3)
+					ring.append((3 << 17) | (yy << 4) | lv3)
 	return {"mn": Vector3i(cx * 16, 0, cz * 16), "w": 16, "d": 16, "arr": eff, "blk_src": has_glow, "mask": mask, "ring": ring}
 
 
@@ -394,7 +396,8 @@ static func _chunk_blk_inject(eff: PackedByteArray, ids: PackedByteArray, h: int
 	var changed := false
 	for si in range(4):
 		var strip: PackedByteArray = blk_strips[si]
-		if strip == null or strip.size() != 2560:
+		# AC-0091: side strip = 2 cols x 16 x h (was hard-coded 2560 = H=80).
+		if strip == null or strip.size() != 2 * 16 * h:
 			continue
 		for y in range(h):
 			var row := y * 256

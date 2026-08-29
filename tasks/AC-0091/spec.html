@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0091 — spec</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}.fill{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:10px 0;border-radius:0 6px 6px 0}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0091 — world-height-minecraft-Y-64-to-319</h1>
+<p class="meta">id: <code>AC-0091</code> · priority 2 · source user · status in-progress · queued top (user re-queue 2026-08-29, ahead of the planet series AC-0143..0147 and AC-0140)</p>
+
+<h2>Goal</h2>
+<div class="fill">Update chunk/world height to match Minecraft: <b>Y = −64 … 319</b> (384 block levels; <b>sea level Y = 62</b>). Currently 16×H×16 with H = 80 (sea y30). The in-repo generator (generator.gd terrain/biome formulas + data.gd constants) is the provenance — <b>the web spec (index.html) is NO LONGER referenced (user 2026-08-29)</b>; remap the existing in-repo generation to the new Y range.</div>
+
+<h2>Design decisions (binding unless in-run evidence forces a documented change)</h2>
+<div class="fill">
+<ul>
+<li><b>Internal index stays 0-based:</b> y = 0 is the bottom (bedrock, MC Y=−64), y = H−1 = 383 (MC Y=319). MC coordinate Y = y − 64 is exposed ONLY at coordinate surfaces (harness RESULT output, any UI text). This keeps every data-indexing expression (y&lt;&lt;8 class packing, light arrays, slab splits, ring masks) a constant-scale change, not a signed-coordinate rewrite.</li>
+<li><b>H = 384.</b> Bedrock fills y = 0 (and the generator's existing bedrock layering if any, remapped to the bottom). Sea level: y = 126 (MC Y=62). Spawn at the terrain surface of the spawn column (generator-driven, same rules, new scale).</li>
+<li><b>Save format:</b> stores the same internal 0-based y — old saves are forward-INCOMPATIBLE (world height changed); on load, a height mismatch must fail soft (treat as new world / clear edits) — never a script error.</li>
+<li><b>Terrain remap:</b> the generator's heightfield/noise→y mapping is re-derived so typical surface lands mid-range (grassland around MC Y 62–100, mountains to ~200+, caves from the same 3D noise re-scaled). Keep biome thresholds and block placement identical; only the vertical scale shifts. Document the exact mapping formula in the results.</li>
+<li><b>The H=80 traps (MUST verify each):</b> (1) AC-0134's lossless per-side face mask + AC-0128's ring mask encode (side, yy) pairs sized for H=80 — re-derive the encodings for H=384 (or prove they scale) and re-run the nightday + lightaudit arms. (2) lighting sky columns / eff strips span H — check strip lengths. (3) fluid sim column limits. (4) recenter/build-queue slab math. (5) any `<<8`/bit-pack with y in the low bits.</li>
+</ul>
+</div>
+
+<h2>Scope (files expected to change)</h2>
+<div class="fill"><code>godot/autoload/data.gd</code> (H, SEA, HEIGHT, spawn), <code>godot/world/generator.gd</code> (terrain remap, bedrock), <code>godot/world/chunk.gd</code> (data indexing, slab split, mesh), <code>godot/world/lighting.gd</code> (sky columns, strips, face/ring masks), <code>godot/world/world.gd</code> (recenter/build queue, save format), <code>godot/player/player.gd</code> (spawn) if needed, <code>godot/scenes/main.gd</code> (harness expected-value updates: RESULT asserts that hard-code heights), <code>tasks/HARNESS.md</code> (known-stable values table → NEW baselines).</div>
+
+<h2>Task-specific gates</h2>
+<div class="fill">
+<ul>
+<li>G0: <code>godot --headless --path godot --quit</code> rc=0, zero <code>SCRIPT ERROR</code> (known PRE-EXISTING threadgen_handoff transient world.gd:474 = AC-0137 class — document if seen; any OTHER error = failure).</li>
+<li><b>New-baseline battery (world/* touched — ALL of them):</b> player / interact / light / fluids / genhash — the OLD known-stable values (player 37.78, sea 2730, backed 1406, nightday 15.0/3.0, genhash ref AC-0134) are VOID at H=384. Record every NEW value in the results + HARNESS.md table + checkpoint. genhash 25/25 = each of the 25 seeds deterministic across a repeat run (new baseline file saved to <code>.scratch/AC-0091-gates/genhash_new.txt</code>).</li>
+<li><b>Basis sanity asserts (add to a small env-gated probe or reuse an existing arm):</b> bedrock at y=0; sea surface at y=126 in an ocean column; spawn column surface block is solid air-above; a sky-lit surface cell reports light 15 day / 15 sky; MC Y coordinates in RESULT output are (internal − 64).</li>
+<li>ONE-SHOT boundary r4 (world/* touched): the OLD band (walk p95 ~108–133 / fwd ~10898–13019) is VOID — the builder's one-shot run ESTABLISHES THE NEW BASELINE (record values + honest note that a 384-tall world costs more). Hard fail (crash/hang/queue never drains) = bounce.</li>
+<li>RENDER (1 sanctioned, R=1): tall-world shot showing terrain + sea at the new level (no black void below, no clipped sky above).</li>
+<li>MINFO (new baseline): <code>AWECRAFT_LOGIC=perf AWECRAFT_MESH_INFO=1</code> headless — save the fresh dump to <code>.scratch/AC-0091-gates/minfo_new.txt</code>; verify all chunks meshed + no per-chunk vertex zero; the AC-0129 121-line baseline is VOID.</li>
+</ul>
+</div>
+
+<h2>Builder gates (sliced, per HARNESS §3)</h2>
+<div class="fill">G0 + full battery (new baselines) + basis sanity + one-shot boundary + 1 render + MINFO dump. Heavy re-runs (boundary flake, genhash repeat, MINFO diff, build + curls) = coordinator's background job. NO r50.</div>
+
+<h2>Fences</h2>
+<div class="fill">No gameplay-mechanics changes beyond the height remap (mining/crafting/mob behavior unchanged); no TASKS.yaml edits; no git; no builds (coordinator gate job builds); no web-spec references anywhere (provenance = in-repo code + user-directed values Y=−64..319, sea=62); no unrelated .gd reformat; NEVER kill python daemon pids. main.gd changes = harness expected-value updates ONLY (the harness extraction itself is AC-0140).</div>
+
+<p class="note">Written by coordinator 2026-08-29. Queue: user re-queued AC-0091 + planet series (AC-0143..0147) ahead of AC-0140 on 2026-08-29.</p>
+</body></html>
