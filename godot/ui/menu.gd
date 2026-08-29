@@ -1,10 +1,8 @@
-extends CanvasLayer
+class_name Menu
+extends Control
 
 const AtlasScript = preload("res://core/atlas.gd")
 
-const OVERLAY_BG := Color(0.0, 0.0, 0.0, 0.72)
-const MENU_BG := Color(0.055, 0.055, 0.078, 1.0)
-const TITLE_C := Color(1.0, 1.0, 1.0, 1.0)
 const SUB_C := Color(0.75, 0.75, 0.78, 1.0)
 const HELP_C := Color(0.62, 0.62, 0.66, 1.0)
 const RES_MODES := ["1280x720", "1600x900", "1920x1080", "2560x1440"]
@@ -24,6 +22,7 @@ var options_box: Control
 var main_status: Label
 var opt_status: Label
 var seed_edit: LineEdit
+var version_label: Label
 var render_slider: HSlider
 var sim_slider: HSlider
 var volume_slider: HSlider
@@ -52,19 +51,37 @@ func _apply_state() -> void:
 
 
 func _ready() -> void:
-	layer = 20
-	_build_main()
-	_build_pause()
-	_build_options()
-	add_child(main_box)
-	add_child(pause_box)
-	add_child(options_box)
-	file_dialog = FileDialog.new()
+	main_box = get_node("Layer/MainBox")
+	pause_box = get_node("Layer/PauseBox")
+	options_box = get_node("Layer/OptionsBox")
+	version_label = get_node("Layer/MainBox/Center/VBox/Version")
+	main_status = get_node("Layer/MainBox/Center/VBox/MainStatus")
+	opt_status = get_node("Layer/OptionsBox/Center/VBox/OptStatus")
+	seed_edit = get_node("Layer/MainBox/Center/VBox/SeedRow/SeedEdit")
+	render_slider = get_node("Layer/OptionsBox/Center/VBox/RenderRow/RenderSlider")
+	sim_slider = get_node("Layer/OptionsBox/Center/VBox/SimRow/SimSlider")
+	volume_slider = get_node("Layer/OptionsBox/Center/VBox/VolumeRow/VolumeSlider")
+	render_val = get_node("Layer/OptionsBox/Center/VBox/RenderRow/RenderVal")
+	sim_val = get_node("Layer/OptionsBox/Center/VBox/SimRow/SimVal")
+	volume_val = get_node("Layer/OptionsBox/Center/VBox/VolumeRow/VolumeVal")
+	res_option = get_node("Layer/OptionsBox/Center/VBox/ResRow/ResOption")
+	full_check = get_node("Layer/OptionsBox/Center/VBox/FullscreenCheck")
+	hunger_check = get_node("Layer/OptionsBox/Center/VBox/HungerCheck")
+	file_dialog = get_node("Layer/PackDialog")
+	slot_labels = []
+	slot_conts = []
+	slot_clears = []
+	for i in range(3):
+		var row: Node = get_node("Layer/MainBox/Center/VBox/SlotRow%d" % i)
+		slot_labels.append(row.get_node("SlotLabel"))
+		slot_conts.append(row.get_node("ContinueButton"))
+		slot_clears.append(row.get_node("ClearButton"))
+	version_label.text = "AweCraft[" + Build.ID + "]"
+	seed_edit.text = str(int(Settings.values.get("seed", 44)))
 	file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	file_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	file_dialog.add_filter("*.zip ; *.mcpack ; *.mcpr")
 	file_dialog.file_selected.connect(_on_pack_file_selected)
-	add_child(file_dialog)
 	show_main()
 
 
@@ -155,26 +172,6 @@ func _clear_slot(slot: int) -> void:
 	refresh_slots()
 	if main_status != null:
 		main_status.text = "Slot %d cleared" % (slot + 1)
-
-
-func _mk_slot_row(s: int) -> Control:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	var l := Label.new()
-	l.text = ""
-	l.add_theme_font_size_override("font_size", 14)
-	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	l.custom_minimum_size = Vector2(0, 34.0)
-	row.add_child(l)
-	var cont := _mk_btn("Continue", func(): continue_clicked(s), 120.0)
-	var clr := _mk_btn("Clear", func(): _clear_slot(s), 70.0)
-	row.add_child(cont)
-	row.add_child(clr)
-	slot_labels.append(l)
-	slot_conts.append(cont)
-	slot_clears.append(clr)
-	return row
 
 
 func refresh_slots() -> void:
@@ -335,242 +332,3 @@ func _on_hunger_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("hunger_enabled", on)
-
-
-func _mk_btn(text: String, cb: Callable, w: float = -1.0) -> Button:
-	var b := Button.new()
-	b.text = text
-	if w >= 0.0:
-		b.custom_minimum_size = Vector2(w, 40.0)
-		b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	else:
-		b.custom_minimum_size = Vector2(0, 40.0)
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	b.add_theme_font_size_override("font_size", 17)
-	if cb.is_valid():
-		b.pressed.connect(cb)
-	return b
-
-
-func _full_box() -> Control:
-	var c := Control.new()
-	c.size = get_viewport().get_visible_rect().size
-	var cb := func() -> void: c.size = get_viewport().get_visible_rect().size
-	get_viewport().size_changed.connect(cb)
-	return c
-
-
-func _mk_full_bg(color: Color) -> ColorRect:
-	var c := ColorRect.new()
-	c.color = color
-	c.set_anchors_preset(Control.PRESET_FULL_RECT)
-	return c
-
-
-func _build_main() -> void:
-	main_box = _full_box()
-	main_box.add_child(_mk_full_bg(MENU_BG))
-	main_status = Label.new()
-	main_status.add_theme_font_size_override("font_size", 13)
-	main_status.add_theme_color_override("font_color", SUB_C)
-	main_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	# centered fixed-width column (MC-menu-like); holds at any resolution
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var vb := VBoxContainer.new()
-	vb.custom_minimum_size = Vector2(720.0, 0)
-	vb.alignment = BoxContainer.ALIGNMENT_CENTER
-	vb.add_theme_constant_override("separation", 10)
-	center.add_child(vb)
-	main_box.add_child(center)
-	var title := Label.new()
-	title.text = "AweCraft"
-	title.add_theme_font_size_override("font_size", 52)
-	title.add_theme_color_override("font_color", TITLE_C)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(title)
-	var sub := Label.new()
-	sub.text = "a minecraft-ish voxel sandbox"
-	sub.add_theme_font_size_override("font_size", 15)
-	sub.add_theme_color_override("font_color", SUB_C)
-	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(sub)
-	var ver := Label.new()
-	ver.text = "AweCraft[" + Build.ID + "]"
-	ver.add_theme_font_size_override("font_size", 13)
-	ver.add_theme_color_override("font_color", HELP_C)
-	ver.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(ver)
-	vb.add_child(Control.new())
-	vb.add_child(_mk_btn("Play", play_clicked))
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	seed_edit = LineEdit.new()
-	seed_edit.placeholder_text = "world seed (optional)"
-	seed_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	seed_edit.custom_minimum_size = Vector2(0, 34.0)
-	seed_edit.text = str(int(Settings.values.get("seed", 44)))
-	row.add_child(seed_edit)
-	row.add_child(_mk_btn("New World", new_world_clicked, 130.0))
-	vb.add_child(row)
-	var wlab := Label.new()
-	wlab.text = "Worlds"
-	wlab.add_theme_font_size_override("font_size", 14)
-	wlab.add_theme_color_override("font_color", HELP_C)
-	vb.add_child(wlab)
-	slot_labels = []
-	slot_conts = []
-	slot_clears = []
-	for s in range(3):
-		vb.add_child(_mk_slot_row(s))
-	vb.add_child(_mk_btn("Options", func(): open_options("main")))
-	vb.add_child(_mk_btn("Exit", _on_exit_pressed))
-	var packb := _mk_btn("Load Texture Pack (.mcpack / .zip)", _open_pack_dialog)
-	vb.add_child(packb)
-	vb.add_child(main_status)
-	# help line: centered bottom strip, allowed to run wider than the column
-	var help := Label.new()
-	help.text = "WASD move · Space jump/swim · F fly · G day/night · P pause · Left click mine/attack · Right click place/use · E inventory · 1-9/scroll select"
-	help.add_theme_font_size_override("font_size", 12)
-	help.add_theme_color_override("font_color", HELP_C)
-	help.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	help.anchor_left = 0.0
-	help.anchor_top = 1.0
-	help.anchor_right = 1.0
-	help.anchor_bottom = 1.0
-	help.offset_top = -36.0
-	help.offset_bottom = 0.0
-	main_box.add_child(help)
-
-
-func _build_pause() -> void:
-	pause_box = _full_box()
-	pause_box.visible = false
-	pause_box.add_child(_mk_full_bg(OVERLAY_BG))
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var vb := VBoxContainer.new()
-	vb.custom_minimum_size = Vector2(480.0, 0)
-	vb.alignment = BoxContainer.ALIGNMENT_CENTER
-	vb.add_theme_constant_override("separation", 12)
-	center.add_child(vb)
-	pause_box.add_child(center)
-	var t := Label.new()
-	t.text = "Game Paused"
-	t.add_theme_font_size_override("font_size", 34)
-	t.add_theme_color_override("font_color", TITLE_C)
-	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(t)
-	vb.add_child(_mk_btn("Back to Game", _on_resume_btn_pressed))
-	vb.add_child(_mk_btn("Options", func(): open_options("pause")))
-	vb.add_child(_mk_btn("Quit to Menu", _on_quit_btn_pressed))
-	var hint := Label.new()
-	hint.text = "P or Esc resumes"
-	hint.add_theme_font_size_override("font_size", 12)
-	hint.add_theme_color_override("font_color", HELP_C)
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(hint)
-
-
-func _options_row(vb: VBoxContainer, label_text: String, slider: HSlider, val: Label) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 10)
-	var l := Label.new()
-	l.text = label_text
-	l.add_theme_font_size_override("font_size", 15)
-	l.custom_minimum_size = Vector2(170.0, 0)
-	row.add_child(l)
-	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	slider.step = 1.0
-	slider.custom_minimum_size = Vector2(0, 24.0)
-	row.add_child(slider)
-	val = _val_label(val)
-	val.custom_minimum_size = Vector2(44.0, 0)
-	row.add_child(val)
-	vb.add_child(row)
-
-
-func _val_label(val: Label) -> Label:
-	val.add_theme_font_size_override("font_size", 15)
-	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	return val
-
-
-func _build_options() -> void:
-	options_box = _full_box()
-	options_box.visible = false
-	options_box.add_child(_mk_full_bg(OVERLAY_BG))
-	var center := Control.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var vb := VBoxContainer.new()
-	vb.size = Vector2(560, 0)
-	vb.alignment = BoxContainer.ALIGNMENT_CENTER
-	vb.add_theme_constant_override("separation", 12)
-	var c := CenterContainer.new()
-	c.set_anchors_preset(Control.PRESET_FULL_RECT)
-	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	c.add_child(vb)
-	center.add_child(c)
-	options_box.add_child(center)
-	var t := Label.new()
-	t.text = "Options"
-	t.add_theme_font_size_override("font_size", 26)
-	t.add_theme_color_override("font_color", TITLE_C)
-	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(t)
-	render_slider = HSlider.new()
-	render_slider.min_value = 4.0
-	render_slider.max_value = 96.0
-	render_slider.value_changed.connect(_on_render_changed)
-	render_val = Label.new()
-	_options_row(vb, "Render distance (chunks)", render_slider, render_val)
-	sim_slider = HSlider.new()
-	sim_slider.min_value = 1.0
-	sim_slider.max_value = float(int(Settings.values["render_dist"]))
-	sim_slider.value_changed.connect(_on_sim_changed)
-	sim_val = Label.new()
-	_options_row(vb, "Simulation distance (chunks)", sim_slider, sim_val)
-	volume_slider = HSlider.new()
-	volume_slider.min_value = 0.0
-	volume_slider.max_value = 100.0
-	volume_slider.value_changed.connect(_on_volume_changed)
-	volume_val = Label.new()
-	_options_row(vb, "Sound volume (%)", volume_slider, volume_val)
-	var rrow := HBoxContainer.new()
-	rrow.add_theme_constant_override("separation", 10)
-	var rl := Label.new()
-	rl.text = "Resolution"
-	rl.add_theme_font_size_override("font_size", 15)
-	rl.custom_minimum_size = Vector2(170.0, 0)
-	rrow.add_child(rl)
-	res_option = OptionButton.new()
-	res_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	res_option.item_selected.connect(_on_res_selected)
-	rrow.add_child(res_option)
-	vb.add_child(rrow)
-	full_check = CheckBox.new()
-	full_check.text = "Fullscreen"
-	full_check.add_theme_font_size_override("font_size", 15)
-	full_check.toggled.connect(_on_full_toggled)
-	vb.add_child(full_check)
-	var gp := Label.new()
-	gp.text = "Gameplay"
-	gp.add_theme_font_size_override("font_size", 15)
-	gp.add_theme_color_override("font_color", SUB_C)
-	vb.add_child(gp)
-	hunger_check = CheckBox.new()
-	hunger_check.text = "Hunger"
-	hunger_check.add_theme_font_size_override("font_size", 15)
-	hunger_check.toggled.connect(_on_hunger_toggled)
-	vb.add_child(hunger_check)
-	var packb := _mk_btn("Load Texture Pack (.mcpack / .zip)", _open_pack_dialog, 560.0)
-	vb.add_child(packb)
-	opt_status = Label.new()
-	opt_status.add_theme_font_size_override("font_size", 13)
-	opt_status.add_theme_color_override("font_color", SUB_C)
-	opt_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(opt_status)
-	vb.add_child(_mk_btn("Back", close_options, 200.0))

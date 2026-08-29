@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-29T13:13
+  updated_at: 2026-08-29T14:08
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -9,7 +9,6 @@ queue:
 - AC-0145
 - AC-0146
 - AC-0147
-- AC-0139
 - AC-0140
 - AC-0141
 - AC-0142
@@ -4147,17 +4146,40 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-29T09:28
-  updated_at: 2026-08-29T09:28
-  completed_at: null
+  updated_at: 2026-08-29T14:08
+  completed_at: 2026-08-29T14:08
   waiting_on: null
   parent_id: null
   notes: 'Split Main single-scene into two scenes: Main gameplay (scenes/main.tscn+main.gd) and Menu (scenes/menu.tscn+ui/menu.gd).
     Extract menu code/state out of main.gd, move menu UI construction to its own scene/script, and remove now-unused imports/preloads
     from both files. Verify menu still opens/closes, play starts via menu, and no dead imports remain.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-29T14:08
+    updated_at: null
+    text: 'DONE 2026-08-29 (xhigh single, spec pre-written + de-webbed). DESIGN = minimum-change: main.tscn stays the project
+      main scene [zero env/boot-path change for ALL harness arms + snapshot flow]; new godot/scenes/menu.tscn [root Menu Control
+      -> CanvasLayer layer 20 [exact old draw order] -> full menu node tree; all 22 signal connections declared IN the .tscn
+      incl. bound args] + ui/menu.gd class_name Menu [state machine/handlers kept; 576->334 lines -242; 9 builder funcs deleted
+      — menu state machine was already extracted pre-task, so main.gd delta = 4 lines: preload->MenuRes, menu_ui: Menu, _make_menu()
+      instantiates the scene]; main.tscn + project.godot UNTOUCHED. Gates: G0 RC=0 0 errors [first run red = stale class cache
+      for new class_name Menu -> one --import pass fixed, documented]; SMOKE all EXACT [player after_fly_y 37.78, interact
+      all-true, quitmenu ok:true, mainmenuexit ready_to_quit:true exit_found:true menu_state:main menu_visible:true]; 2 sanctioned
+      renders [menu_boot.png: menu on screen, no world behind, {"menu":true,"mode":"menu"}
+      / play_from_menu.png: real menu_ui.play_clicked() -> new world seed 44 -> world+player visible, menu gone, {"m4":"ok"}];
+      dead-import audit CLEAN [only menu ref in main.gd = MenuRes preload = the intended path; _ChunkScriptM = pre-existing
+      AC-0120 harness preload = AC-0140 scope]. Heavy gates ALL PASS [UI tier: no boundary/perf/genhash — world/*|data.gd
+      untouched]: g0 rc=0, player 37.78 EXACT, interact all-true, quitmenu ok:true script_errors_seen:false [stderr 0 lines],
+      mainmenuexit all-true, build 20260829-1406 109,683,536 B + 8080 un-stamped byte-matched + stamped 200 + 5180=200. Deviations:
+      (i) quitmenu gate-job false alarm — the arm defaults script_errors_seen:=true UNLESS AWECRAFT_STDERR_FILE is set AND
+      the invoker redirects godot stderr there [main.gd:7391-7396]; first gate invocation lacked it -> ok:false false negative;
+      re-run with "AWECRAFT_STDERR_FILE=$f ... 2>$f" = ok:true 0 stderr lines — INVOCATION LESSON for future gate jobs; (ii)
+      4x known AC-0137 threadgen transient in builder render [non-fatal]; (iii) R=1 SNAPDRAIN artifact in render 2 [transition
+      still proven by RESULT {"m4":"ok"}]; (iv) _placed PNG byproduct = same render run, not an extra invocation. NEXT per
+      queue = AC-0140 extract-harness-from-main-gd [user p2].'
 - id: AC-0140
   title: extract-harness-from-main-gd
   source: user

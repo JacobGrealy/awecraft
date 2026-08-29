@@ -5,7 +5,7 @@ const PlayerRes = preload("res://player/player.tscn")
 const InventoryScript = preload("res://ui/inventory.gd")
 const AtlasScript = preload("res://core/atlas.gd")
 const DayNight = preload("res://core/daynight.gd")
-const MenuScript = preload("res://ui/menu.gd")
+const MenuRes = preload("res://scenes/menu.tscn")
 const AeroLib = preload("res://core/aero.gd")
 
 var world: Node3D
@@ -17,7 +17,7 @@ var sun: DirectionalLight3D
 var world_env: WorldEnvironment
 var env: Environment
 var inventory_ui: CanvasLayer
-var menu_ui: CanvasLayer
+var menu_ui: Menu
 var aero := false
 var _batt := false
 var aero_sky: MeshInstance3D
@@ -422,8 +422,8 @@ func _setup_menu_camera() -> void:
 	camera.current = true
 
 
-func _make_menu() -> CanvasLayer:
-	menu_ui = MenuScript.new()
+func _make_menu() -> Menu:
+	menu_ui = MenuRes.instantiate()
 	menu_ui.name = "Menu"
 	menu_ui.on_play = Callable(self, "_menu_play")
 	menu_ui.on_new_world = Callable(self, "_menu_new_world")

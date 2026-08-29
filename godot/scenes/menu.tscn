@@ -1,0 +1,462 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://ui/menu.gd" id="1_menu"]
+
+[node name="Menu" type="Control"]
+mouse_filter = 2
+script = ExtResource("1_menu")
+
+[node name="Layer" type="CanvasLayer" parent="."]
+layer = 20
+
+[node name="MainBox" type="Control" parent="Layer"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Bg" type="ColorRect" parent="Layer/MainBox"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.055, 0.055, 0.078, 1)
+
+[node name="Center" type="CenterContainer" parent="Layer/MainBox"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="VBox" type="VBoxContainer" parent="Layer/MainBox/Center"]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+custom_minimum_size = Vector2(720, 0)
+
+[node name="Title" type="Label" parent="Layer/MainBox/Center/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_font_sizes/font_size = 52
+text = "AweCraft"
+horizontal_alignment = 1
+
+[node name="Sub" type="Label" parent="Layer/MainBox/Center/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.75, 0.75, 0.78, 1)
+theme_override_font_sizes/font_size = 15
+text = "a minecraft-ish voxel sandbox"
+horizontal_alignment = 1
+
+[node name="Version" type="Label" parent="Layer/MainBox/Center/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.62, 0.66, 1)
+theme_override_font_sizes/font_size = 13
+text = ""
+horizontal_alignment = 1
+
+[node name="Spacer" type="Control" parent="Layer/MainBox/Center/VBox"]
+layout_mode = 2
+
+[node name="PlayButton" type="Button" parent="Layer/MainBox/Center/VBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 17
+custom_minimum_size = Vector2(0, 40)
+text = "Play"
+
+[node name="SeedRow" type="HBoxContainer" parent="Layer/MainBox/Center/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="SeedEdit" type="LineEdit" parent="Layer/MainBox/Center/VBox/SeedRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 34)
+placeholder_text = "world seed (optional)"
+
+[node name="NewWorldButton" type="Button" parent="Layer/MainBox/Center/VBox/SeedRow"]
+layout_mode = 2
+size_flags_horizontal = 5
+theme_override_font_sizes/font_size = 17
+custom_minimum_size = Vector2(130, 40)
+text = "New World"
+
+[node name="WorldsLabel" type="Label" parent="Layer/MainBox/Center/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.62, 0.66, 1)
+theme_override_font_sizes/font_size = 14
+text = "Worlds"
+
+[node name="SlotRow0" type="HBoxContainer" parent="Layer/MainBox/Center/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="SlotLabel" type="Label" parent="Layer/MainBox/Center/VBox/SlotRow0"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.62, 0.62, 0.66, 1)
+theme_override_font_sizes/font_size = 14
+custom_minimum_size = Vector2(0, 34)
+vertical_alignment = 1
+
+[node name="ContinueButton" type="Button" parent="Layer/MainBox/Center/VBox/SlotRow0"]
+layout_mode = 2
+size_flags_horizontal = 5
+theme_override_font_sizes/font_size = 17
+custom_minimum_size = Vector2(120, 40)
+text = "Continue"
+
+[node name="ClearButton" type="Button" parent="Layer/MainBox/Center/VBox/SlotRow0"]
+layout_mode = 2
+size_flags_horizontal = 5
+theme_override_font_sizes/font_size = 17
+custom_minimum_size = Vector2(70, 40)
+text = "Clear"
+
+[node name="SlotRow1" type="HBoxContainer" parent="Layer/MainBox/Center/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="SlotLabel" type="Label" parent="Layer/MainBox/Center/VBox/SlotRow1"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.62, 0.62, 0.66, 1)
+theme_override_font_sizes/font_size = 14
+custom_minimum_size = Vector2(0, 34)
+vertical_alignment = 1
+
+[node name="ContinueButton" type="Button" parent="Layer/MainBox/Center/VBox/SlotRow1"]
+layout_mode = 2
+size_flags_horizontal = 5
+theme_override_font_sizes/font_size = 17
+custom_minimum_size = Vector2(120, 40)
+text = "Continue"
+
+[node name="ClearButton" type="Button" parent="Layer/MainBox/Center/VBox/SlotRow1"]
+layout_mode = 2
+size_flags_horizontal = 5
+theme_override_font_sizes/font_size = 17
+custom_minimum_size = Vector2(70, 40)
+text = "Clear"
+
+[node name="SlotRow2" type="HBoxContainer" parent="Layer/MainBox/Center/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="SlotLabel" type="Label" parent="Layer/MainBox/Center/VBox/SlotRow2"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.62, 0.62, 0.66, 1)
+theme_override_font_sizes/font_size = 14
+custom_minimum_size = Vector2(0, 34)
+vertical_alignment = 1
+
+[node name="ContinueButton" type="Button" parent="Layer/MainBox/Center/VBox/SlotRow2"]
+layout_mode = 2
+size_flags_horizontal = 5
+theme_override_font_sizes/font_size = 17
+custom_minimum_size = Vector2(120, 40)
+text = "Continue"
+
+[node name="ClearButton" type="Button" parent="Layer/MainBox/Center/VBox/SlotRow2"]
+layout_mode = 2
+size_flags_horizontal = 5
+theme_override_font_sizes/font_size = 17
+custom_minimum_size = Vector2(70, 40)
+text = "Clear"
+
+[node name="OptionsButton" type="Button" parent="Layer/MainBox/Center/VBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 17
+custom_minimum_size = Vector2(0, 40)
+text = "Options"
+
+[node name="ExitButton" type="Button" parent="Layer/MainBox/Center/VBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 17
+custom_minimum_size = Vector2(0, 40)
+text = "Exit"
+
+[node name="PackButton" type="Button" parent="Layer/MainBox/Center/VBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 17
+custom_minimum_size = Vector2(0, 40)
+text = "Load Texture Pack (.mcpack / .zip)"
+
+[node name="MainStatus" type="Label" parent="Layer/MainBox/Center/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.75, 0.75, 0.78, 1)
+theme_override_font_sizes/font_size = 13
+text = ""
+horizontal_alignment = 1
+
+[node name="Help" type="Label" parent="Layer/MainBox"]
+anchors_preset = 8
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -36.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.62, 0.62, 0.66, 1)
+theme_override_font_sizes/font_size = 12
+text = "WASD move · Space jump/swim · F fly · G day/night · P pause · Left click mine/attack · Right click place/use · E inventory · 1-9/scroll select"
+horizontal_alignment = 1
+
+[node name="PauseBox" type="Control" parent="Layer"]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Bg" type="ColorRect" parent="Layer/PauseBox"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.72)
+
+[node name="Center" type="CenterContainer" parent="Layer/PauseBox"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="VBox" type="VBoxContainer" parent="Layer/PauseBox/Center"]
+layout_mode = 2
+theme_override_constants/separation = 12
+alignment = 1
+custom_minimum_size = Vector2(480, 0)
+
+[node name="Title" type="Label" parent="Layer/PauseBox/Center/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_font_sizes/font_size = 34
+text = "Game Paused"
+horizontal_alignment = 1
+
+[node name="ResumeButton" type="Button" parent="Layer/PauseBox/Center/VBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 17
+custom_minimum_size = Vector2(0, 40)
+text = "Back to Game"
+
+[node name="OptionsButton" type="Button" parent="Layer/PauseBox/Center/VBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 17
+custom_minimum_size = Vector2(0, 40)
+text = "Options"
+
+[node name="QuitButton" type="Button" parent="Layer/PauseBox/Center/VBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 17
+custom_minimum_size = Vector2(0, 40)
+text = "Quit to Menu"
+
+[node name="Hint" type="Label" parent="Layer/PauseBox/Center/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.62, 0.66, 1)
+theme_override_font_sizes/font_size = 12
+text = "P or Esc resumes"
+horizontal_alignment = 1
+
+[node name="OptionsBox" type="Control" parent="Layer"]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Bg" type="ColorRect" parent="Layer/OptionsBox"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.72)
+
+[node name="Center" type="CenterContainer" parent="Layer/OptionsBox"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="VBox" type="VBoxContainer" parent="Layer/OptionsBox/Center"]
+layout_mode = 2
+theme_override_constants/separation = 12
+alignment = 1
+custom_minimum_size = Vector2(560, 0)
+
+[node name="Title" type="Label" parent="Layer/OptionsBox/Center/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_font_sizes/font_size = 26
+text = "Options"
+horizontal_alignment = 1
+
+[node name="RenderRow" type="HBoxContainer" parent="Layer/OptionsBox/Center/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="RowLabel" type="Label" parent="Layer/OptionsBox/Center/VBox/RenderRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+custom_minimum_size = Vector2(170, 0)
+text = "Render distance (chunks)"
+
+[node name="RenderSlider" type="HSlider" parent="Layer/OptionsBox/Center/VBox/RenderRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 24)
+min_value = 4.0
+max_value = 96.0
+step = 1.0
+value = 4.0
+
+[node name="RenderVal" type="Label" parent="Layer/OptionsBox/Center/VBox/RenderRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+custom_minimum_size = Vector2(44, 0)
+horizontal_alignment = 2
+
+[node name="SimRow" type="HBoxContainer" parent="Layer/OptionsBox/Center/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="RowLabel" type="Label" parent="Layer/OptionsBox/Center/VBox/SimRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+custom_minimum_size = Vector2(170, 0)
+text = "Simulation distance (chunks)"
+
+[node name="SimSlider" type="HSlider" parent="Layer/OptionsBox/Center/VBox/SimRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 24)
+min_value = 1.0
+max_value = 96.0
+step = 1.0
+value = 1.0
+
+[node name="SimVal" type="Label" parent="Layer/OptionsBox/Center/VBox/SimRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+custom_minimum_size = Vector2(44, 0)
+horizontal_alignment = 2
+
+[node name="VolumeRow" type="HBoxContainer" parent="Layer/OptionsBox/Center/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="RowLabel" type="Label" parent="Layer/OptionsBox/Center/VBox/VolumeRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+custom_minimum_size = Vector2(170, 0)
+text = "Sound volume (%)"
+
+[node name="VolumeSlider" type="HSlider" parent="Layer/OptionsBox/Center/VBox/VolumeRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 24)
+max_value = 100.0
+step = 1.0
+
+[node name="VolumeVal" type="Label" parent="Layer/OptionsBox/Center/VBox/VolumeRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+custom_minimum_size = Vector2(44, 0)
+horizontal_alignment = 2
+
+[node name="ResRow" type="HBoxContainer" parent="Layer/OptionsBox/Center/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="RowLabel" type="Label" parent="Layer/OptionsBox/Center/VBox/ResRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+custom_minimum_size = Vector2(170, 0)
+text = "Resolution"
+
+[node name="ResOption" type="OptionButton" parent="Layer/OptionsBox/Center/VBox/ResRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="FullscreenCheck" type="CheckBox" parent="Layer/OptionsBox/Center/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+text = "Fullscreen"
+
+[node name="GameplayLabel" type="Label" parent="Layer/OptionsBox/Center/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.75, 0.75, 0.78, 1)
+theme_override_font_sizes/font_size = 15
+text = "Gameplay"
+
+[node name="HungerCheck" type="CheckBox" parent="Layer/OptionsBox/Center/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+text = "Hunger"
+
+[node name="PackButton" type="Button" parent="Layer/OptionsBox/Center/VBox"]
+layout_mode = 2
+size_flags_horizontal = 5
+theme_override_font_sizes/font_size = 17
+custom_minimum_size = Vector2(560, 40)
+text = "Load Texture Pack (.mcpack / .zip)"
+
+[node name="OptStatus" type="Label" parent="Layer/OptionsBox/Center/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.75, 0.75, 0.78, 1)
+theme_override_font_sizes/font_size = 13
+text = ""
+horizontal_alignment = 1
+
+[node name="BackButton" type="Button" parent="Layer/OptionsBox/Center/VBox"]
+layout_mode = 2
+size_flags_horizontal = 5
+theme_override_font_sizes/font_size = 17
+custom_minimum_size = Vector2(200, 40)
+text = "Back"
+
+[node name="PackDialog" type="FileDialog" parent="Layer"]
+
+[connection signal="pressed" from="Layer/MainBox/Center/VBox/PlayButton" to="." method="play_clicked"]
+[connection signal="pressed" from="Layer/MainBox/Center/VBox/SeedRow/NewWorldButton" to="." method="new_world_clicked"]
+[connection signal="pressed" from="Layer/MainBox/Center/VBox/OptionsButton" to="." method="open_options" binds=["main"]]
+[connection signal="pressed" from="Layer/MainBox/Center/VBox/ExitButton" to="." method="_on_exit_pressed"]
+[connection signal="pressed" from="Layer/MainBox/Center/VBox/PackButton" to="." method="_open_pack_dialog"]
+[connection signal="pressed" from="Layer/MainBox/Center/VBox/SlotRow0/ContinueButton" to="." method="continue_clicked" binds=[0]]
+[connection signal="pressed" from="Layer/MainBox/Center/VBox/SlotRow0/ClearButton" to="." method="_clear_slot" binds=[0]]
+[connection signal="pressed" from="Layer/MainBox/Center/VBox/SlotRow1/ContinueButton" to="." method="continue_clicked" binds=[1]]
+[connection signal="pressed" from="Layer/MainBox/Center/VBox/SlotRow1/ClearButton" to="." method="_clear_slot" binds=[1]]
+[connection signal="pressed" from="Layer/MainBox/Center/VBox/SlotRow2/ContinueButton" to="." method="continue_clicked" binds=[2]]
+[connection signal="pressed" from="Layer/MainBox/Center/VBox/SlotRow2/ClearButton" to="." method="_clear_slot" binds=[2]]
+[connection signal="pressed" from="Layer/PauseBox/Center/VBox/ResumeButton" to="." method="_on_resume_btn_pressed"]
+[connection signal="pressed" from="Layer/PauseBox/Center/VBox/OptionsButton" to="." method="open_options" binds=["pause"]]
+[connection signal="pressed" from="Layer/PauseBox/Center/VBox/QuitButton" to="." method="_on_quit_btn_pressed"]
+[connection signal="value_changed" from="Layer/OptionsBox/Center/VBox/RenderRow/RenderSlider" to="." method="_on_render_changed"]
+[connection signal="value_changed" from="Layer/OptionsBox/Center/VBox/SimRow/SimSlider" to="." method="_on_sim_changed"]
+[connection signal="value_changed" from="Layer/OptionsBox/Center/VBox/VolumeRow/VolumeSlider" to="." method="_on_volume_changed"]
+[connection signal="item_selected" from="Layer/OptionsBox/Center/VBox/ResRow/ResOption" to="." method="_on_res_selected"]
+[connection signal="toggled" from="Layer/OptionsBox/Center/VBox/FullscreenCheck" to="." method="_on_full_toggled"]
+[connection signal="toggled" from="Layer/OptionsBox/Center/VBox/HungerCheck" to="." method="_on_hunger_toggled"]
+[connection signal="pressed" from="Layer/OptionsBox/Center/VBox/PackButton" to="." method="_open_pack_dialog"]
+[connection signal="pressed" from="Layer/OptionsBox/Center/VBox/BackButton" to="." method="close_options"]
