@@ -1054,6 +1054,10 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			player = _spawn_player()
 			await _boundary_test(spawn, bt0)
 			return
+		if logic == "spin":
+			player = _spawn_player()
+			await _spin_test(spawn)
+			return
 		if logic == "atlas":
 			world.collision_enabled = false
 			world.render_radius = 0
@@ -4249,6 +4253,175 @@ func _la_tunnel() -> Variant:
 # cell + informational mouth cell; reads ACTUAL u_day uniform + ACTUAL baked
 # vColor from the slab surfaces + the DayNight day factor. The PRE (pre-fix)
 # tree reports mechanism "pre-lit-std" with the ambient-floor numbers.
+# AC-0109 G1 spin probe. Camera-only drive: the player camera is parked at
+# the settled eye position and yawed 0..360 in 120 x 3-degree steps (pitch 0).
+# The player and world never move -> no recenter -> drain queue must stay
+# flat. Per step: verts_visible from a per-instance vertex cache built ONCE
+# after settle (no per-frame surface reads), chunk visible = ALL its
+# instances visible. transitions = a visible->invisible edge where the chunk
+# was invisible again within the previous 8 steps (on-screen flicker).
+# Then a bottom-look sample (pitch -90) and a return-to-start sample.
+const SPIN_STEPS := 120
+const SPIN_FLICKER_WINDOW := 8
+
+func _spin_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	world.render_radius = 4
+	world.recenter(spawn.x, spawn.z, true)
+	# Bounded settle (AC-0137-class transients can leave a few r4 chunks
+	# unbuilt forever — proceed with what is built, report the count).
+	var settled := 0
+	while settled < 2400:
+		var n_in := 0
+		var n_tot := 0
+		for key in world.chunks:
+			var cc: Node3D = world.chunks[key]
+			if absi(int(cc.cx)) <= 4 and absi(int(cc.cz)) <= 4:
+				n_tot += 1
+				if cc.mesh_built:
+					n_in += 1
+		if n_tot >= 64 and n_in == n_tot:
+			break
+		await get_tree().physics_frame
+		settled += 1
+	var cam: Camera3D = player.camera
+	get_window().size = Vector2i(1280, 720)
+	var eye := cam.global_position
+	var chunk_rows := []
+	var built_n := 0
+	var total_built := 0
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if absi(int(c.cx)) > 4 or absi(int(c.cz)) > 4 or not c.mesh_built:
+			continue
+		built_n += 1
+		var row := []
+		for s in c.slabs:
+			for inst in [s.mesh_instance, s.fluid_instance, s.flora_instance]:
+				if inst == null or inst.mesh == null:
+					continue
+				var v := 0
+				var am: ArrayMesh = inst.mesh
+				for su in range(am.get_surface_count()):
+					var arrs := am.surface_get_arrays(su)
+					v += (arrs[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+				total_built += v
+				row.append([inst, v])
+		chunk_rows.append(row)
+	if built_n == 0:
+		Debug.result({"mode": "spin", "seed": Game.world_seed, "radius": 4, "ok": false, "err": "no built chunks", "settled_frames": settled})
+		get_tree().quit()
+		return
+	var yaw_step := TAU / float(SPIN_STEPS)
+	var vis_start := -1
+	var vis_bottom := -1
+	var vis_end := -1
+	var verts_start := -1
+	var verts_sideways := -1
+	var transitions := 0
+	var prev_vis := []
+	var last_invis := {}
+	var queue_samples := []
+	# The cull pass may have already latched the camera transform before any
+	# chunks existed (world starts before the player/camera) — force a fresh
+	# evaluation at the first probe pose so step 0 and the final return pose
+	# are both measured through the pass.
+	world.invalidate_cull_cache()
+	for step in range(SPIN_STEPS + 1):
+		var set_xf := Transform3D(Basis(Vector3.UP, float(step) * yaw_step), eye)
+		cam.global_transform = set_xf
+		await get_tree().process_frame
+		if step == 0:
+			# Phase sync: the first set lands on a physics_frame emission, so
+			# the world's _process of that frame already ran — give the cull
+			# pass one full frame to evaluate T0 before sampling.
+			await get_tree().process_frame
+		queue_samples.append(int(world.queue_size))
+		var verts_vis := 0
+		var vis_count := 0
+		var step_vis := []
+		for ci in range(built_n):
+			var all_vis := true
+			for e in chunk_rows[ci]:
+				var inst = e[0]
+				if not is_instance_valid(inst) or not inst.visible:
+					all_vis = false
+					break
+				verts_vis += int(e[1])
+			step_vis.append(all_vis)
+			if all_vis:
+				vis_count += 1
+		if step == 0:
+			vis_start = vis_count
+			verts_start = verts_vis
+		elif step == SPIN_STEPS / 4:
+			verts_sideways = verts_vis
+		var flips := []
+		if step >= 1:
+			for ci in range(built_n):
+				if step_vis[ci] != prev_vis[ci]:
+					flips.append(ci)
+				if not step_vis[ci] and prev_vis[ci]:
+					# sentinel far enough that a first-ever edge never flickers
+					var li: int = last_invis.get(ci, -9999)
+					if li >= step - SPIN_FLICKER_WINDOW:
+						transitions += 1
+					last_invis[ci] = step
+		prev_vis = step_vis
+		if OS.get_environment("AWECRAFT_SPINDBG") != "":
+			print("SPINDBG step=%d vis=%d verts=%d q=%d lp=%d tmi=%d ld=%d tr=%d flips=%s" % [step, vis_count, verts_vis, int(world.queue_size), int(world.light_pending.size()), int(world.threadmesh_inflight.size()), int(world.light_dirty.size()), int(world.tex_refresh.size()), flips])
+	# bottom look: pitch -90 (straight down), 3 frames for the cull pass
+	cam.global_transform = Transform3D(Basis(Vector3.RIGHT, -PI / 2.0), eye)
+	for i in 3:
+		await get_tree().process_frame
+	vis_bottom = _spin_vis_count(chunk_rows)
+	# back to the start orientation, 3 frames, state must be restored
+	cam.global_transform = Transform3D(Basis(Vector3.UP, 0.0), eye)
+	for i in 3:
+		await get_tree().process_frame
+	vis_end = _spin_vis_count(chunk_rows)
+	var qmin: int = int(queue_samples[0])
+	var qmax: int = int(queue_samples[0])
+	for q in queue_samples:
+		qmin = mini(qmin, int(q))
+		qmax = maxi(qmax, int(q))
+	var queue_flat: bool = qmin == qmax
+	var verts_drop: bool = verts_sideways < total_built
+	var ok: bool = transitions == 0 and verts_drop and vis_end == vis_start and queue_flat
+	Debug.result({
+		"mode": "spin",
+		"seed": Game.world_seed,
+		"radius": 4,
+		"ok": ok,
+		"transitions": transitions,
+		"vis_start": vis_start,
+		"vis_bottom": vis_bottom,
+		"vis_end": vis_end,
+		"verts_visible_start": verts_start,
+		"verts_visible_sidelook": verts_sideways,
+		"total_built": total_built,
+		"queue_flat": queue_flat,
+		"queue_samples": queue_samples,
+		"steps": SPIN_STEPS,
+		"built_chunks": built_n,
+		"settled_frames": settled,
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+	})
+	get_tree().quit()
+
+func _spin_vis_count(chunk_rows: Array) -> int:
+	var vis_count := 0
+	for row in chunk_rows:
+		var all_vis := true
+		for e in row:
+			var inst = e[0]
+			if not is_instance_valid(inst) or not inst.visible:
+				all_vis = false
+				break
+		if all_vis:
+			vis_count += 1
+	return vis_count
+
 func _nd_settle(max_frames: int) -> int:
 	var rr: int = world.render_radius
 	var quiet := 0

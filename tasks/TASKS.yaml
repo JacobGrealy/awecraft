@@ -1,16 +1,19 @@
 meta:
-  updated_at: 2026-08-29T08:29
+  updated_at: 2026-08-29T11:00
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
 - AC-0138
+- AC-0139
+- AC-0140
+- AC-0141
+- AC-0142
 - AC-0121
 - AC-0122
 - AC-0097
 - AC-0112
 - AC-0113
 - AC-0093
-- AC-0109
 - AC-0110
 - AC-0125
 - AC-0123
@@ -3162,11 +3165,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-24T10:51
-  updated_at: 2026-08-24T10:51
-  completed_at: null
+  updated_at: 2026-08-29T11:00
+  completed_at: 2026-08-29T11:00
   waiting_on: null
   parent_id: null
   notes: 'Per-frame Camera3D frustum cull for chunk/subchunk mesh_instances.
@@ -3179,7 +3182,28 @@ intake:
     Verify: 360 spin no pop, queue_size stable, GPU verts visible drop when looking down, battery green.
 
     Depends: vertical-subchunks if implemented (per-slab AABB better), otherwise column AABB.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-29T11:00
+    updated_at: null
+    text: 'DONE 2026-08-29 (xhigh single, spec de-webbed pre-launch per user 2026-08-29). Per-frame 6-plane frustum cull (camera
+      xf/fov/aspect/near-far) of built chunk mesh instances: per-slab AABB test [culled iff exists plane d+span < -M, M=32.0
+      m margin], column early-out both ways, visible set-on-change, world-level fixed scratch [no per-chunk state, no per-frame
+      allocs, no O(chunk2)], kill-switch AWECRAFT_FRUSTUM_CULL=0, radial candidate path untouched; world.gd +141 / main.gd
+      +173; new AWECRAFT_LOGIC=spin probe + invalidate_cull_cache(). Gates: G0 rc=0 [4x known threadgen transient = AC-0137
+      class]; SPIN fresh ok:true — transitions 0 over 360deg, queue flat 40x50, vis_start==vis_end 51, verts_visible_sidelook
+      268096 < total_built 371444 [28% drop = cull provably active] [built_chunks 77 = pre-existing settle shortfall, AC-0137
+      class]; MINFO 121 lines/81 chunks all_meshed, drift vs AC-0129 baseline A/B-attributed pre-existing [with-cull 3-chunk
+      small-vert drift; kill-switch run [AC-0109 fully inert] still drifts [16,48] 2012 vs 2020 = same merge-reshuffle class
+      as AC-0136 -48 flake; cull only writes instance.visible, provably no mesh impact]; SMOKE 5 EXACT [player 37.78, interact
+      all true, light torch 14/far 9, fluids 2730/1406, nightday cave 15.0/3.0]; genhash 25/25 byte-identical vs AC-0134 ref;
+      boundary r4 walk p95 133 [band 108-126; builder one-shot same code 120 -> run noise, fwd 12076 mid-band] + burst p95
+      13522; build 20260829-1042 109,674,968 B + 8080 un-stamped byte-matched + stamped 200 + 5180=200 [BUILD.txt 8081 URL
+      = sandbox-killed duplicate-daemon artifact, canonical 8080 healthy]. Deviations: (i) MINFO pre-existing drift class,
+      A/B-documented; (ii) gate-job MINFO step first ran wrong arm [quitmenu, 1-line dump] -> re-run via AWECRAFT_LOGIC=perf+MESH_INFO
+      [correct arm per main.gd:7858 _perf_test]; (iii) spin settle bounded-wait [pre-existing 120s _nd_settle stall w/ player
+      — AC-0137 owns]; (iv) 3 probe bugs fixed in-run by builder. NEXT per user live queue = AC-0138 leaves-always-black [p1
+      user-reported, spec pre-written + de-webbed].'
 - id: AC-0110
   title: occlusion-culling-caves-interior
   source: user
@@ -4098,4 +4122,76 @@ intake:
     lighting changes (AC-0128/AC-0134/AC-0135/AC-0136 window). Leaves are block id 7 (solid=false cutout=true, tint TINT_LEAVES
     / C_LEAVES, shader chunk_lit_cutout). Reproduce and fix minimal shader/chunk/data change. Needs day/night renders with
     tree in-frame.'
+  comments: []
+- id: AC-0139
+  title: split-main-menu-into-own-scene
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-29T09:28
+  updated_at: 2026-08-29T09:28
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Split Main single-scene into two scenes: Main gameplay (scenes/main.tscn+main.gd) and Menu (scenes/menu.tscn+ui/menu.gd).
+    Extract menu code/state out of main.gd, move menu UI construction to its own scene/script, and remove now-unused imports/preloads
+    from both files. Verify menu still opens/closes, play starts via menu, and no dead imports remain.'
+  comments: []
+- id: AC-0140
+  title: extract-harness-from-main-gd
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-29T09:29
+  updated_at: 2026-08-29T09:29
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'main.gd is 8939 lines / 179 funcs — mixes coordinator (Game.mode, World/Player lifecycle, sky/fog), full AWECRAFT_LOGIC
+    harness (battery + 30+ probe funcs: player, interact, light, fluids, craft, survival, held, tool, perf, boundary, etc.),
+    and menu wiring. Extract harness/test battery into autoload/debug.gd or harness/ folder (e.g. harness/battery.gd + harness/probes/*.gd),
+    leave main.gd as thin coordinator (~400 lines). No behavior change, just move code and clean imports.'
+  comments: []
+- id: AC-0141
+  title: split-blocks-items-into-json
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-29T09:39
+  updated_at: 2026-08-29T09:39
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: Extract hardcoded block/item tables from autoload/data.gd (blocks 1..28 at :155, items 100..147) into godot/data/blocks.json
+    + items.json (and recipes.json/tiles.json if clean). Keep data.gd as loader + lookups (block(), item(), match_shapeless/shaped)
+    so callers unchanged. Update spec_template grep and genhash/battery gates to account for data file move.
+  comments: []
+- id: AC-0142
+  title: split-mobs-into-json
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-29T09:53
+  updated_at: 2026-08-29T09:53
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: Extract hardcoded mob tables from autoload/data.gd (mobs 4+ skeleton/chicken/wolf/spider entries) into godot/data/mobs.json
+    alongside the blocks/items split (AC-0141). Keep data.gd as loader + lookups so callers unchanged.
   comments: []

@@ -5,7 +5,7 @@
 <p class="meta">Registry note (verbatim): "Per-frame Camera3D frustum cull for chunk/subchunk mesh_instances. In world.gd _process or _recenter, test chunk AABB vs camera frustum; set mesh_instance/fluid/flora visible=false when outside frustum (keep data/mesh resident unlike distance candidate). Keep radial candidate logic; frustum is additional immediate cull. Verify: 360 spin no pop, queue_size stable, GPU verts visible drop when looking down, battery green. Depends: vertical-subchunks if implemented (per-slab AABB better), otherwise column AABB."</p>
 
 <h2>Goal</h2>
-<p>Make the Godot port match the frozen web's per-mesh visibility behavior: <b>the web draws every chunk mesh as a plain <code>THREE.Mesh</code> — frustum-culled by the renderer by default</b> (<code>frustumCulled</code> defaults to true; the chunk mesh nodes in <code>index.html</code> never disable it). The port currently renders every BUILT chunk (distance-candidate logic only: un-built chunks are culled, built ones always drawn). Add a per-frame frustum test so built-but-behind-camera chunks stop being drawn — no pop-in, no mesh/data destruction, radial candidate logic unchanged.</p>
+<p>The port currently renders every BUILT chunk (distance-candidate logic only: un-built chunks are culled, built ones always drawn). Standard renderers frustum-cull per-mesh by default; this port never does. Add a per-frame frustum test so built-but-behind-camera chunks stop being drawn — no pop-in, no mesh/data destruction, radial candidate logic unchanged. (User-queued P2 performance task; no external spec references — provenance = in-repo code + user directive.)</p>
 
 <h2>Requirements</h2>
 <ol>
@@ -13,26 +13,26 @@
 <li><b>R2</b> — Outside frustum: set the chunk's mesh/fluid/flora instances <code>visible=false</b> (all of the chunk's draw instances together — one visibility state per chunk). <b>Keep data + mesh resident</b> — this is NOT the distance-candidate path (no queue entry, no unbuild, no recenter effect). Inside frustum again: <code>visible=true</b>.</li>
 <li><b>R3</b> — Hysteresis / no-pop: a chunk must not flicker at the frustum edge. Cull with a margin (shrink the frustum or grow the AABB by a margin — Run-1 to pick the mechanism + value), and/or keep the last-visible state until clearly outside. Acceptance: the 360° spin probe shows zero visible→invisible→visible transitions on any chunk within the window (no pop).</li>
 <li><b>R4</b> — Keep the radial candidate logic exactly as-is (frustum = additional immediate cull on top, not a replacement). The queue/drain behavior must be unaffected: queue_size stable during the spin.</li>
-<li><b>R5</b> — Scope check: this is a PARITY task (web default behavior) — document the web refs (the chunk mesh creation lines in index.html + the fact that no <code>frustumCulled=false</code> is ever set on them; the stars Points DO set frustumCulled=false — cite both). If Run-1 finds the port already culls behind-camera chunks somehow, report it and adjust scope.</li>
+<li><b>R5</b> — Scope check: standard per-mesh frustum culling (what any engine does by default). Audit in-repo for any existing visibility culling on the chunk mesh instances (the stars field is set to always-draw — leave it alone). If Run-1 finds the port already culls behind-camera chunks somehow, report it and adjust scope.</li>
 </ol>
 
 <h2>Gates (verify; tier = full sliced set — scope touches godot/world/*)</h2>
 <ol>
 <li><b>G0</b> — headless load, zero SCRIPT ERROR (hard gate).</li>
 <li><b>G1 spin probe (new, Run-1 designs)</b> — env-gated (e.g. <code>AWECRAFT_LOGIC=spin</code>, headless, ≤60 s, deterministic): build a fixed radius (r4 or r2 if cheaper — Run-1 decides), then rotate the camera 360° (N→E→S→W→N) at a fixed height/position, sampling per step: (a) <b>no-pop</b> = no chunk that was visible 2+ steps earlier becomes invisible again within the window (zero transition count), (b) <b>visible-verts drop</b> = sum of visible-instance verts while looking down/sideways is strictly LESS than the all-built total while looking at the center (the cull is provably active), (c) <b>queue_size stable</b> = the drain queue does not churn (no extra candidates enqueued by the cull — sample queue depth across the spin, flat), (d) <b>all-chunks-restore</b> = after the spin returns to the start orientation, every built chunk is visible again. RESULT JSON keyed (ok, transitions, vis_start/vis_bottom/vis_end, verts_visible_start/verts_visible_sidelook/total_built, queue_samples). PRE (probe landed, feature off or absent) = transitions 0 but verts identical in all looks (no cull) + ok:false; POST = ok:true with the drop.</li>
-<li><b>G2 MINFO</b> — expectation: BYTE-IDENTICAL to the current baseline (<code>.scratch/AC-0035-gates/gate_minfo.txt</code>, 121 lines) — visibility is a node property, no mesh change. Coordinator diffs.</li>
-<li><b>G3 ONE-SHOT boundary r4 (builder self-check, at most one)</b> — must NOT worsen the AC-0035 baseline (walk p95 96–99 / fwd_p95 5056 typical). The per-frame addition is tiny (81 AABB tests) — expect unchanged. If worse: HONEST DEVIATION + EXIT (no option loop).</li>
+<li><b>G2 MINFO</b> — expectation: BYTE-IDENTICAL to the current baseline (<code>.scratch/AC-0129-gates/gate_minfo.txt</code> — AC-0129 state, which AC-0134/AC-0135/AC-0136 all kept byte-identical; the older AC-0035 121-line file is STALE pre-AC-0129) — visibility is a node property, no mesh change. Coordinator diffs.</li>
+<li><b>G3 ONE-SHOT boundary r4 (builder self-check, at most one)</b> — must NOT materially worsen the current band (walk p95 ~108–126 / fwd_p95 ~10898–13019; AC-0136 gate = 123/11675). The per-frame addition is tiny (81 AABB tests) — expect unchanged. If worse: HONEST DEVIATION + EXIT (no option loop).</li>
 <li><b>G4 SMOKE</b> — battery per HARNESS §3 (world/* scope: 2–4 dependency-mapped arms, e.g. player;interact;fluids + genhash 25/25 — gen data untouched by visibility, but the arm is required by scope) — EXACT vs known-stable.</li>
 <li><b>G5</b> — ≤1 R=1 render (optional; a sideways-looking shot with the spin probe's camera is not required for Windows parity — the probe RESULT is the proof; render only if cheap).</li>
 </ol>
 
 <h2>Coordinator heavy gates (after Run-2 exits, background job)</h2>
-<p>g0 + spin probe (fresh) + MINFO diff + boundary r4 ×1 authoritative (acceptance ≤ AC-0035 baseline 96/5056-class; if worse → adjudicate, control A/B if needed) + flake ×1 + genhash + SMOKE 5 arms + build + curls. NO r50 (no new persistent per-chunk state — <code>visible</code> is a node property; confirm Run-1/Run-2 add no per-chunk arrays). Commit+push only after the pass.</p>
+<p>g0 + spin probe (fresh) + MINFO diff + boundary r4 ×1 authoritative (acceptance = current band walk ~108–126 / fwd ~10898–13019; if outside → adjudicate, control A/B if needed) + flake ×1 + genhash + SMOKE 5 arms + build + curls. NO r50 (no new persistent per-chunk state — <code>visible</code> is a node property; confirm Run-1/Run-2 add no per-chunk arrays). Commit+push only after the pass.</p>
 
 <h2>Fences</h2>
 <ul>
 <li>No mesh/geometry change (MINFO byte-identical); no unbuild/rebuild path; radial candidate logic unchanged; no new persistent per-chunk state (no new arrays in chunk data structures); no per-frame O(chunk²) work.</li>
-<li><code>index.html</code> frozen; no git in Run-2; do not touch <code>tasks/AC-0132/</code> (in flight) or <code>docs/halo-loot-brainstorm.html</code> (foreign).</li>
+<li>No web-spec references in any artifact (user 2026-08-29 — provenance = in-repo code + user directives); <code>index.html</code> frozen and NOT cited; no git; do not touch <code>docs/</code> (foreign files); <code>build_windows.sh</code> off limits (coordinator's gate job builds); NEVER kill python daemon pids.</li>
 <li>AC-0035 lesson (binding): any per-frame main-thread addition must be provably tiny — the spin probe + one-shot boundary both guard this; if the one-shot shows a walk-p95 worsen, it is a deviation, not a retry loop.</li>
 </ul>
 </body></html>

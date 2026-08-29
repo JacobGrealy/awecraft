@@ -22,6 +22,11 @@ const DRAIN_FRAME_BUDGET_US := 30000
 const DRAIN_MS_DEFAULT := 30
 const REC_SLICE_BUDGET_MS := 8
 const REC_UNITS_PER_FRAME := 2048
+# AC-0109: per-frame frustum cull of built chunk slab instances. Meters — a
+# slab is hidden only once fully past the frustum expanded by this margin, so
+# show/hide transitions happen off-screen (no pop-in). Engine 4.7.1 exposes no
+# per-instance culling margin (verified), so the test lives here in GDScript.
+const FRUSTUM_CULL_MARGIN := 32.0
 
 var render_radius := 4
 var fluid_tick_radius := 14
@@ -61,6 +66,17 @@ var mq_b := 0
 var mq_i := 0
 var queue_size := 0
 var queued_keys := {}
+# AC-0109 cull-pass scratch (world-level only — no per-chunk state, no
+# per-frame allocations growing with chunk count; all fixed-size, filled
+# once per camera-transform change).
+var _cull_enabled := false
+var _cull_cam_xform := Transform3D()
+var _cull_planes: Array = []
+var _cull_col_span := PackedFloat32Array()
+var _cull_slab_span := PackedFloat32Array()
+var _cull_ny := PackedFloat32Array()
+var _cull_dc := PackedFloat32Array()
+var _cull_cen := Vector3()
 var drain_budget_ms := DRAIN_MS_DEFAULT
 var _rec_pending := false
 var _rec_pcx := 0
@@ -208,6 +224,9 @@ func _ready() -> void:
 	if gb != "" and gb.to_int() >= 0:
 		gen_budget_ms = gb.to_int()
 	fluid_sleep = OS.get_environment("AWECRAFT_FLUID_SLEEP") != "0"
+	# AC-0109 kill switch (default on); AWECRAFT_ONLY set = probe-only
+	# visibility filter (main.gd) must stay authoritative, so cull defers.
+	_cull_enabled = OS.get_environment("AWECRAFT_FRUSTUM_CULL") != "0" and OS.get_environment("AWECRAFT_ONLY") == ""
 	tick_time = OS.get_environment("AWECRAFT_TICKTIME") == "1"
 	_fluidprobe = OS.get_environment("AWECRAFT_FLUIDPROBE") == "1"
 	Game.world = self
@@ -248,7 +267,129 @@ func _on_fluid_tick() -> void:
 	if fluid_sim_enabled and (Game.mode == "play" or Game.mode == "pause"):
 		tick_fluids()
 
+# AC-0109: per-frame frustum cull. Column AABB early-out both directions,
+# then per-slab (16x16x16) exact test when the column straddles a plane.
+# Visible state is written only on change (instance.visible is the last
+# state — no per-chunk bookkeeping). Rebuilt/candidate instances (mesh
+# null) are no-ops; a freshly assembled instance defaults visible=true
+# until the next camera-change pass re-tests it (transient, off-screen).
+func invalidate_cull_cache() -> void:
+	# Force the cull pass to re-evaluate on the next camera read (probe hook).
+	_cull_cam_xform = Transform3D(Basis.IDENTITY, Vector3(1e9, 1e9, 1e9))
+
+func _frustum_cull_pass() -> void:
+	if not _cull_enabled:
+		return
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	var xf := cam.global_transform
+	if xf == _cull_cam_xform:
+		return
+	_cull_cam_xform = xf
+	_cull_frustum_planes(cam)
+	var m := FRUSTUM_CULL_MARGIN
+	var planes: Array = _cull_planes
+	for key in chunks:
+		var c: Node3D = chunks[key]
+		if c == null:
+			continue
+		var ox := float(int(c.cx)) * 16.0
+		var oz := float(int(c.cz)) * 16.0
+		_cull_cen = Vector3(ox + 8.0, 40.0, oz + 8.0)
+		var culled := false
+		var all_in := true
+		for i in 6:
+			var d: float = planes[i].distance_to(_cull_cen)
+			_cull_dc[i] = d
+			if d + _cull_col_span[i] < -m:
+				culled = true
+			elif d - _cull_col_span[i] < -m:
+				all_in = false
+		if culled:
+			for s in c.slabs:
+				_cull_set_vis(s, false)
+			continue
+		if all_in:
+			for s in c.slabs:
+				_cull_set_vis(s, true)
+			continue
+		for s in c.slabs:
+			# slab center y = y0+8, column center y = 40 -> dy = y0-32
+			var dy := float(s.y0) - 32.0
+			var vis := true
+			for i in 6:
+				if _cull_dc[i] + dy * _cull_ny[i] + _cull_slab_span[i] < -m:
+					vis = false
+					break
+			_cull_set_vis(s, vis)
+
+func _cull_frustum_planes(cam: Camera3D) -> void:
+	if _cull_planes.size() != 6:
+		_cull_planes = [
+			Plane(Vector3(0, 0, -1), Vector3.ZERO),
+			Plane(Vector3(0, 0, 1), Vector3.ZERO),
+			Plane(Vector3(-1, 0, 0), Vector3.ZERO),
+			Plane(Vector3(1, 0, 0), Vector3.ZERO),
+			Plane(Vector3(0, 1, 0), Vector3.ZERO),
+			Plane(Vector3(0, -1, 0), Vector3.ZERO),
+		]
+		_cull_col_span = PackedFloat32Array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+		_cull_slab_span = PackedFloat32Array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+		_cull_ny = PackedFloat32Array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+		_cull_dc = PackedFloat32Array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+	var B := cam.global_transform.basis
+	var O := cam.global_transform.origin
+	var sz := get_viewport().get_visible_rect().size
+	var aspect := float(sz.x) / maxf(float(sz.y), 1.0)
+	var tv := tan(deg_to_rad(float(cam.fov)) * 0.5)
+	var th := tv * aspect
+	var nr := maxf(float(cam.near), 0.01)
+	var fr := maxf(float(cam.far), nr + 1.0)
+	# camera-local corners (x right, y up, -z forward), world space
+	var cn0 := O + B * Vector3(-th * nr, -tv * nr, -nr)
+	var cn1 := O + B * Vector3(th * nr, -tv * nr, -nr)
+	var cn2 := O + B * Vector3(-th * nr, tv * nr, -nr)
+	var cn3 := O + B * Vector3(th * nr, tv * nr, -nr)
+	var cf0 := O + B * Vector3(-th * fr, -tv * fr, -fr)
+	var cf1 := O + B * Vector3(th * fr, -tv * fr, -fr)
+	var cf2 := O + B * Vector3(-th * fr, tv * fr, -fr)
+	var cf3 := O + B * Vector3(th * fr, tv * fr, -fr)
+	var cen := O + B * Vector3(0.0, 0.0, -fr * 0.5)
+	_cull_planes[0] = _cull_plane(cn0, cn1, cn3, cen)
+	_cull_planes[1] = _cull_plane(cf0, cf1, cf3, cen)
+	_cull_planes[2] = _cull_plane(cn0, cn2, cf2, cen)
+	_cull_planes[3] = _cull_plane(cn1, cn3, cf3, cen)
+	_cull_planes[4] = _cull_plane(cn2, cn3, cf2, cen)
+	_cull_planes[5] = _cull_plane(cn0, cn1, cf1, cen)
+	for i in 6:
+		var n: Vector3 = _cull_planes[i].normal
+		_cull_ny[i] = n.y
+		_cull_col_span[i] = 8.0 * absf(n.x) + 40.0 * absf(n.y) + 8.0 * absf(n.z)
+		_cull_slab_span[i] = 8.0 * absf(n.x) + 8.0 * absf(n.y) + 8.0 * absf(n.z)
+
+func _cull_plane(a: Vector3, b: Vector3, c: Vector3, cen: Vector3) -> Plane:
+	var n: Vector3 = (b - a).cross(c - a)
+	if n.length_squared() < 0.00000001:
+		return Plane(Vector3(0, 0, -1), a)
+	n = n.normalized()
+	if n.dot(cen - a) < 0.0:
+		n = -n
+	return Plane(n, a)
+
+func _cull_set_vis(s, vis: bool) -> void:
+	var mi: MeshInstance3D = s.mesh_instance
+	if mi != null and mi.visible != vis:
+		mi.visible = vis
+	var fi: MeshInstance3D = s.fluid_instance
+	if fi != null and fi.visible != vis:
+		fi.visible = vis
+	var fa: MeshInstance3D = s.flora_instance
+	if fa != null and fa.visible != vis:
+		fa.visible = vis
+
 func _process(_delta: float) -> void:
+	_frustum_cull_pass()
 	# threadmesh_inflight keeps this running while mesh tasks are in flight
 	# even when every bookkeeping list is drained (else the poll never runs).
 	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty() and threadmesh_inflight.is_empty() and not _rec_pending and _bl_want.is_empty() and _col_pending.is_empty():
