@@ -758,7 +758,7 @@ AC-0146 P4-ring-megastructure    — (future) Halo ring as optional planet varia
         <li><strong>Different planets at once:</strong> As a player I want to mine on home while a friend is on the desert planet — both horizons/builds correct, so the system feels shared.</li>
         <li><strong>Always in the right place:</strong> As a player I want my pos to just work ground/tower/orbit/other planet — no glitch when crossing a face edge or jumping systems.</li>
         <li><strong>Only load around me:</strong> As a player I want the game fast even when 8 are split across planets — I only load ~400 chunks around me (114 m horizon), not theirs.</li>
-        <li><strong>Jump together:</strong> As a player I want the crew to gather at the relay, ready-check, and arrive together — a shared event, not a solo load.</li>
+        <li><strong>Jump per ship (not whole server):</strong> As a player I want to jump solo in my ship whenever I'm at the relay — I don't have to wait for all 8. If we're in the same ship or all ships are at the relay together, we can jump together and split the cost (economic incentive).</li>
       </ul>
     </div>
     <div class="card">
@@ -767,7 +767,7 @@ AC-0146 P4-ring-megastructure    — (future) Halo ring as optional planet varia
         <li><strong>Client generates:</strong> Each client knows <code>seed+R+face+cx+cz</code> and builds its own ~400 chunks (gen/mesh/physics local). Server never generates voxels.</li>
         <li><strong>Server is thin relay + save:</strong> Holds <code>planets[{R,orbit}] + edits{planet_id:face:cx:cz} + relay graph</code> and forwards <code>block edits + player pos</code> (~KB/s). No anti-cheat sim.</li>
         <li><strong>Persistent:</strong> Headless Godot ENet stays up with save on disk — zero players → idles, but anyone can join later and find builds.</li>
-        <li><strong>8-player headroom:</strong> Worst 8× solo = ~3.2k chunks if all split (dedup if shared), ready-check on relay.</li>
+        <li><strong>8-player headroom:</strong> Worst 8× solo = ~3.2k chunks if all split (dedup if shared), per-ship jump (no server-wide ready-check; group jump splits cost).</li>
       </ul>
     </div>
   </div>

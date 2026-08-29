@@ -3675,7 +3675,8 @@ intake:
 
     - Only load around me: ~400 chunks around me (114m horizon at R=4000), not everyone else''s.
 
-    - Jump together: gather at relay, ready-check, arrive together.
+    - Jump per ship: solo jump whenever at relay — don''t wait for all 8. Same ship or all ships together can co-jump and
+    split fuel cost (economic incentive).
 
 
     Technical details:
@@ -3694,8 +3695,8 @@ intake:
     - Hosting now: LAN 192.168.0.224:4242 or Tailscale 100.x:4242 direct ENet (no port-forward, internet via Tailscale overlay).
     Later: Steam Networking relay+NAT punch (no public IP). Queued after solar system, not needed for P1a/P1b.
 
-    - Target 8 players, ready-check on relay. Research-only: no code until AC-0143..AC-0145 proven. Ref: tasks/AC-0042/AC-0042-plan.html
-    §14.
+    - Target 8 players, per-ship jump (no server-wide ready-check; group co-jump splits cost). Research-only: no code until
+    AC-0143..AC-0145 proven. Ref: tasks/AC-0042/AC-0042-plan.html §14.
 
     '
   comments: []
