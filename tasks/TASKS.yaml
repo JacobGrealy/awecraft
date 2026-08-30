@@ -1,13 +1,15 @@
 meta:
-  updated_at: 2026-08-30T11:26
+  updated_at: 2026-08-30T12:27
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
 - AC-0151
+- AC-0152
+- AC-0154
+- AC-0109
 - AC-0150
 - AC-0092
 - AC-0036
-- AC-0109
 - AC-0111
 - AC-0144
 - AC-0145
@@ -2701,8 +2703,10 @@ intake:
     of water and waterfalls). Water sim must fill full vertical column to terrain (no empty space below, fills to block, spreads
     at bottom per minecraft.wiki/w/Water). Currently sea/placed water renders/simulates as single-layer. Fix world/water.gd
     + chunk fluid logic + mesh. Sub-point: caves under sea must stay water-filled — generator.gd caves carve at generator.gd:286
-    (cbk != B_WATER skip) but seabed y=h still carves to air, leaving water sheet with holes; after cave carve flood any 0/air
-    at y < sea in ocean columns (h < sea) back to B_WATER. Verify sea stable + fluid harnesses. Parent: before AC-0036 underwater.'
+    (cbk != B_WATER skip) but seabed y=h still carves to air, leaving holes; after carve for ocean columns (h < sea) do vertical-shadow
+    flood (water_above walk sea down: B_WATER above && 0 below -> B_WATER, isolated stays 0) then recursive 7..1 spread with
+    fall-reset (spread finds drop -> fall column at same level then spread at n_l-1, chains). Verify sea stable + fluid harnesses.
+    Parent: before AC-0036 underwater.'
   comments: []
 - id: AC-0093
   title: drop-spin-in-place-not-orbit
@@ -3256,7 +3260,22 @@ intake:
   - id: 1
     created_at: 2026-08-30T02:35
     updated_at: null
-    text: '[done 2026-08-30, coordinator-verified] Stage A: per-slab OccluderInstance3D + BoxOccluder3D 15^3 @ (8, y0+8, 8) [0.5 inset] for fully-solid slabs (c_ns==0, chunk.gd both build paths, 7-elem slab row row[6]) + project.godot [rendering] occlusion_culling master + camera cull_3d/cull_2d [canonical rendering/ keys verified via in-engine property-list probe]; headless-gated (DisplayServer). xvfb node graph: occluders 25 == full_solid_slabs 25 [r4 seed 44], box_sample (8, 56, 8) 15^3. Stage B: _s_is_interior 6-solid pre-pass (padded snap grid) = PROVEN NO-OP [AC-0106 greedy mesher already culls interior faces - MESHRECS 81/81 identical, recorded as legitimate outcome]. Gates ALL GREEN (coordinator re-ran post-subagent): G0 0 err; genhash 25/25 run1==run2 byte-identical to AC-0143 baseline; SMOKE 5 EXACT [player 136.78/2.82, interact place_ok cell 2 breakable 2, light 10/15/14, fluids 2730/888 stable 25/9, genhash]; occlude arm headless ok:true leaking_cells/faces 0; cave render enclosed torch-lit no leaks. Measured r4: total_verts 698196 / underground_verts 494864 (70.9%) / underground_faces 123716/174549 / interior_voxels 2192711 / cave 1417 cells aabb [-64,67,-64]..[-54,85,-23] open:false. New harness: AWECRAFT_LOGIC=occlude + AWECRAFT_CAM=cave [300-frame settle]. LIMITATION: Stage A draw-call reduction unprovable on this box [no forward_plus GPU - node-graph + settings + no-regression verified; user Windows forward_plus build = real proof]. Build 20260830-1130 109,722,192 B + 8080 byte-matched [9733a5210423ee0784757da60668be60] + 5180=200 [8443 down pre-build, serve_web.py absent - noted, not started]. Files: godot/project.godot, godot/world/chunk.gd, godot/scenes/main.gd [+595 harness-only / 0 del], tasks/HARNESS.md [occlude row + cave cam + stable row]. Plan: spec.html; results: AC-0110-results.html. Next: tasks.py next.'
+    text: '[done 2026-08-30, coordinator-verified] Stage A: per-slab OccluderInstance3D + BoxOccluder3D 15^3 @ (8, y0+8, 8)
+      [0.5 inset] for fully-solid slabs (c_ns==0, chunk.gd both build paths, 7-elem slab row row[6]) + project.godot [rendering]
+      occlusion_culling master + camera cull_3d/cull_2d [canonical rendering/ keys verified via in-engine property-list probe];
+      headless-gated (DisplayServer). xvfb node graph: occluders 25 == full_solid_slabs 25 [r4 seed 44], box_sample (8, 56,
+      8) 15^3. Stage B: _s_is_interior 6-solid pre-pass (padded snap grid) = PROVEN NO-OP [AC-0106 greedy mesher already culls
+      interior faces - MESHRECS 81/81 identical, recorded as legitimate outcome]. Gates ALL GREEN (coordinator re-ran post-subagent):
+      G0 0 err; genhash 25/25 run1==run2 byte-identical to AC-0143 baseline; SMOKE 5 EXACT [player 136.78/2.82, interact place_ok
+      cell 2 breakable 2, light 10/15/14, fluids 2730/888 stable 25/9, genhash]; occlude arm headless ok:true leaking_cells/faces
+      0; cave render enclosed torch-lit no leaks. Measured r4: total_verts 698196 / underground_verts 494864 (70.9%) / underground_faces
+      123716/174549 / interior_voxels 2192711 / cave 1417 cells aabb [-64,67,-64]..[-54,85,-23] open:false. New harness: AWECRAFT_LOGIC=occlude
+      + AWECRAFT_CAM=cave [300-frame settle]. LIMITATION: Stage A draw-call reduction unprovable on this box [no forward_plus
+      GPU - node-graph + settings + no-regression verified; user Windows forward_plus build = real proof]. Build 20260830-1130
+      109,722,192 B + 8080 byte-matched [9733a5210423ee0784757da60668be60] + 5180=200 [8443 down pre-build, serve_web.py absent
+      - noted, not started]. Files: godot/project.godot, godot/world/chunk.gd, godot/scenes/main.gd [+595 harness-only / 0
+      del], tasks/HARNESS.md [occlude row + cave cam + stable row]. Plan: spec.html; results: AC-0110-results.html. Next:
+      tasks.py next.'
 - id: AC-0111
   title: transparent-blocks-dont-occlude-neighbors
   source: user
@@ -4548,14 +4567,86 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-30T11:20
-  updated_at: 2026-08-30T11:20
-  completed_at: null
+  updated_at: 2026-08-30T12:30
+  completed_at: 2026-08-30T12:30
   waiting_on: null
   parent_id: null
   notes: Water grey 31/32 frames blue flicker frame0 only. Root cause data.gd:203 bake only base 32x32 but water anim 32 strip
     1024px (blocks_atlas.json anim 32 at 224,0 fluid_anim.gdshader TILE_F 1/32). Fix loop f over anim_frames tint rc.y+f*32.
     Scope data.gd _bake + apply_atlas.
+  comments:
+  - id: 1
+    created_at: 2026-08-30T12:30
+    updated_at: null
+    text: '[done 2026-08-30, coordinator-verified] Fix: data.gd _bake_atlas_tints - per-tile pixel loop wrapped in "for f
+      in range(block_anim_frames(tid))" tinting row rc.y + f*TILE_PX (all 32 water anim frames, no hard-coded 32); apply_atlas
+      covered via delegation to the same fn [data.gd:258]; AC-0138 dedup + WHITE skip retained; grass/leaves anim 1 -> unchanged.
+      Coordinator independent probe: 32 frames x 49 px = 1568 samples, 0 bad, max dev 2 [float->uint8 rounding], frame0 center
+      [35,81,178] frame16 [32,73,160] [exact match to builder probe], 3 distinct center values [animation intact], grass control
+      tile dev 3 [unchanged]. Gates ALL GREEN: G0 0 err; genhash 25/25 run1==run2 == AC-0143 baseline; SMOKE 5 EXACT [player
+      136.78/2.82, interact place_ok true cell 2 breakable 2, light 10/15/14, fluids 2730/888 stable 25/9]; xvfb render mid-strip
+      frame = BLUE with tinted per-frame noise, no grey [tasks/AC-0151/screenshots/water-frame-mid.png]. Known non-fatal:
+      17x threadgen_handoff Nil->PackedByteArray [world.gd:627] across battery = pre-existing class [builder stash-verified
+      with fix reverted; count varies 3-17 per run]. DEVIATIONS: "all 32 frames equal" unsatisfiable by design [base strip
+      genuinely animates - 3 distinct noise values; invariant = per-frame baked == raw x TINT_WATER]; AWECRAFT_TIME sets day/night
+      not shader frame [elapsed TIME + AWECRAFT_ANIM_PHASE, 0.3s/frame]. FINDING (out of scope, unfixed): lava id 24 has anim
+      20 @ 0,32 but block_tint(24) == WHITE - never tinted by design. Build 20260830-1223 109,722,032 B + 8080 byte-matched
+      [9ef7f66dddfa050d4a3be41def2dc88f] + 5180=200 [8443 down - noted, not started]. Files: godot/autoload/data.gd [+6/-6],
+      tasks/AC-0151/ [spec builder notes, continuity, results, screenshot]. Next: tasks.py next.'
+- id: AC-0152
+  title: bedrock-realms-sim4-lod-render-50
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-30T12:08
+  updated_at: 2026-08-30T12:08
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Bedrock Realms Simulate 4 default (wiki taxicab diamond 41 not 9x9 81, spawn circle 44 blocks). Render 50 should
+    be circle ~7850 not 10201 square. Bands: 0-4 diamond exact 16x16x16 41 columns, 5-12 merged 32x32x32 diamond 104, 13-50
+    heightmap impostor circle 7705 quads. Tick only diamond, render circle. Stream 3x3 spawn 1s then trickle. Fences: no height
+    cut.'
+  comments: []
+- id: AC-0153
+  title: y-axis-lod-vertical-bands
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-08-30T12:23
+  updated_at: 2026-08-30T12:23
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Future: vertical LOD per slab. 0-4 diamond XZ is 24 slabs exact 16x16x16 today. Consider Y bands: +-4 slabs (~64
+    blocks) exact, +-8 merged 32x32x32, beyond impostor/fog. Not needed for AC-0152 XZ diamond/circle, keep as backlog.'
+  comments: []
+- id: AC-0154
+  title: lazy-caves-dont-carve-unseen
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-30T12:27
+  updated_at: 2026-08-30T12:27
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Waste: caves carved for every r=50 column (n1/n2/n3 + nc1/nc2 per 98k) though >90% are interior never visible. After
+    AC-0152, skip nc1/nc2 for 13-50 impostor (heightmap only), and for 5-12 merged 32x32x32 use 1-bit mask not per-m. Lazy
+    carve on dig toward uncarved stone. Depends AC-0152.'
   comments: []

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AC-0151 results — water-always-blue-tint-strip</title>
+<style>
+ body { font: 14px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace; margin: 2rem auto; max-width: 1050px; color: #1c2330; }
+ h1 { font-size: 1.35rem; border-bottom: 3px solid #2b6cb0; padding-bottom: .4rem; }
+ h2 { font-size: 1.05rem; margin-top: 1.6rem; color: #2b6cb0; }
+ table { border-collapse: collapse; width: 100%; margin: .6rem 0; }
+ th, td { border: 1px solid #cbd5e0; padding: 4px 8px; text-align: left; vertical-align: top; font-size: 13px; }
+ th { background: #edf2f7; }
+ .ok { color: #166534; font-weight: bold; }
+ .note { background: #fffbeb; border-left: 4px solid #d69e2e; padding: .5rem .8rem; margin: .6rem 0; }
+ code { background: #edf2f7; padding: 1px 4px; border-radius: 3px; }
+ img { max-width: 100%; border: 1px solid #cbd5e0; margin: .4rem 0; }
+ .small { font-size: 12px; color: #4a5568; }
+</style>
+</head>
+<body>
+<h1>AC-0151 — water-always-blue-tint-strip · results · 2026-08-30</h1>
+<p><b>Verdict: DONE — all gates green, coordinator re-verified independently.</b> The atlas tint bake
+(<code>data.gd::_bake_atlas_tints</code>) now tints <b>all 32 anim frames</b> of the water strip
+(row <code>rc.y + f*TILE_PX</code>), so the <code>fluid_anim</code> shader (TILE_F 1/32) never shows a
+grey frame. Water is blue every frame; the per-frame noise animation is preserved (tint is
+multiplicative, per-pixel).</p>
+
+<h2>1. The fix</h2>
+<p><code>godot/autoload/data.gd</code> (only code file): the per-tile pixel loop in
+<code>_bake_atlas_tints</code> is wrapped in <code>for f in range(block_anim_frames(tid))</code>, tinting
+row <code>rc.y + f*TILE_PX + py</code>. <code>apply_atlas</code> (texture-pack swaps) needs no second copy —
+it delegates to the same function (data.gd:258), verified in-diff. AC-0138 dedup
+(<code>baked.has(rc)</code>) and the WHITE-tint skip are retained; grass/leaves have <code>anim 1</code> so
+their behavior is byte-identical (loop runs once); only water (id 5, <code>anim: 32</code>, strip at
+atlas (224,0), 1024px) gains rows 1–31. No hard-coded 32.</p>
+
+<h2>2. Gates (coordinator re-runs, independent of the subagent's)</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>expected</th><th>status</th></tr>
+<tr><td>G0 headless</td><td><code>--quit</code>, 0 SCRIPT ERROR</td><td>0</td><td class="ok">PASS</td></tr>
+<tr><td>tintverify (coordinator's own probe, <code>extends SceneTree</code>, runtime <code>/root/Data</code> lookup, raw = <code>res://assets/blocks_atlas.png</code> vs baked <code>Data.atlas_tex</code>)</td><td>32 frames × 49 samples = <b>1,568 px</b>, <b>0 bad</b>, max per-px deviation 2 (float→uint8 rounding); frame0 center [35,81,178], frame16 center [32,73,160] — exact match to the builder's probe values; 3 distinct center values (animation intact); grass control tile dev 3 (unchanged)</td><td>every frame ≈ raw × TINT_WATER (47,107,235) ±2; no grey frame</td><td class="ok">PASS</td></tr>
+<tr><td>genhash (r4, seed 44)</td><td>25/25, run1 == run2, byte-identical to AC-0143 baseline</td><td>unchanged (atlas tint ≠ world data)</td><td class="ok">PASS</td></tr>
+<tr><td>SMOKE battery (player;interact;light;fluids;genhash)</td><td>5 EXACT: player 136.78/2.82; interact place_ok true / cell 2 / breakable 2; light 10/15/14; fluids 2730/2730 + 888 stable + 25/9</td><td>HARNESS §3 exact values</td><td class="ok">PASS</td></tr>
+<tr><td>render (xvfb, R=1, straight-down over water cell (−1,10), <code>AWECRAFT_TIME=0.15</code> + <code>AWECRAFT_ANIM_PHASE=0.15</code>)</td><td>water fills the frame <b>blue</b> with the tinted per-frame noise pattern — no grey (<code>screenshots/water-frame-mid.png</code>)</td><td>blue at a non-zero anim frame</td><td class="ok">PASS</td></tr>
+</table>
+<p class="small">Logs: <code>.scratch/AC-0151-gates/</code> (g0 via inline count, genhash1/2.txt, battery.txt, render via builder).
+Known non-fatal noise: 17× <code>threadgen_handoff</code> "Cannot convert argument 2 from Nil to PackedByteArray"
+(world.gd:627) across the 5 battery arms — <b>pre-existing class</b> (builder stash-verified: identical lines
+with the fix reverted; count varies 3–17 per run, AC-0137-class threadgen transients). All arm values EXACT regardless.</p>
+
+<h2>3. Deviations (of record)</h2>
+<ul>
+<li><b>"All 32 frames equal" is unsatisfiable by design:</b> the base water strip genuinely animates
+(3 distinct per-frame noise values, raw f0 ≠ f16 — the pre-fix "raw" centers were grey (194,194,194)/(174,174,174)).
+The real invariant is per-frame <code>baked == raw × TINT_WATER</code> (no grey anywhere), which the probes assert pixel-wise.</li>
+<li><b>Render frame index is not set by <code>AWECRAFT_TIME</code>:</b> that env sets <code>Game.time_of_day</code>
+(day/night); the shader frame = elapsed TIME + <code>AWECRAFT_ANIM_PHASE</code> (0.3 s/frame, confirmed in
+<code>data.gd:274</code> + <code>fluid_anim.gdshader</code>). Immaterial post-fix: the pixel probe proves every
+frame is identically tinted, so blue at any frame.</li>
+<li>First builder render attempt used a relative snapshot path (PNG save denied by session sandbox); re-run
+with absolute path succeeded. (Coordinator runs use workspace-relative fine — different sandbox surface.)</li>
+</ul>
+
+<h2>4. Findings (out of scope, not fixed)</h2>
+<p>Lava (id 24) also has an anim strip (<code>anim: 20</code> @ (0,32)) but <code>block_tint(24)</code> returns WHITE —
+lava was never tinted by design; no grey-flicker analog. Nothing to do within this task's scope.</p>
+
+<h2>5. Water, blue, mid-strip frame</h2>
+<img src="screenshots/water-frame-mid.png" alt="Water surface — blue with tinted per-frame noise pattern, no grey">
+
+<h2>6. Files</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/autoload/data.gd</code></td><td>+6/−6 in <code>_bake_atlas_tints</code>: anim-frame loop around the tint pixel loop</td></tr>
+<tr><td><code>tasks/AC-0151/spec.html</code></td><td>Builder notes section appended (AUTO sections untouched)</td></tr>
+<tr><td><code>tasks/AC-0151/continuity.md</code></td><td>§01 builder log</td></tr>
+<tr><td><code>tasks/AC-0151/screenshots/water-frame-mid.png</code></td><td>render proof</td></tr>
+</table>
+<p class="small">AC-0151 · coordinator-verified 2026-08-30 · build 20260830-12xx (see TASKS.yaml DONE comment) ·
+next queue: AC-0152 (user-inserted) → AC-0109 → AC-0150.</p>
+</body>
+</html>

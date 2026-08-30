@@ -219,14 +219,19 @@ func _bake_atlas_tints() -> void:
 			if rc.x < 0 or baked.has(rc):
 				continue
 			baked[rc] = true
-			for py in range(TILE_PX):
-				for px in range(TILE_PX):
-					var x: int = rc.x + px
-					var y: int = rc.y + py
-					if x < 0 or x >= img.get_width() or y < 0 or y >= img.get_height():
-						continue
-					var col: Color = img.get_pixel(x, y)
-					img.set_pixel(x, y, Color(col.r * t.r, col.g * t.g, col.b * t.b, col.a))
+			# AC-0151: tint every stacked anim frame of the strip — the
+			# fluid_anim shader (TILE_F 1/32) scrolls uv.y through row f at
+			# rc.y + f*TILE_PX, so frame 0 only tinted water grey 31/32 frames.
+			# Grass/leaves have anim 1 (single tile) -> unchanged.
+			for f in range(block_anim_frames(tid)):
+				for py in range(TILE_PX):
+					for px in range(TILE_PX):
+						var x: int = rc.x + px
+						var y: int = rc.y + f * TILE_PX + py
+						if x < 0 or x >= img.get_width() or y < 0 or y >= img.get_height():
+							continue
+						var col: Color = img.get_pixel(x, y)
+						img.set_pixel(x, y, Color(col.r * t.r, col.g * t.g, col.b * t.b, col.a))
 	atlas_tex = ImageTexture.create_from_image(img)
 
 
