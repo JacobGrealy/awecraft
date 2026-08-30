@@ -57,13 +57,14 @@ before any mode; without it, harness envs force radius 4.
 | `crossshot` | `_crossshot_test` | flower cross-sprite render (AC-0084) | `crossshot` (true), `placed`, `tx`, `ty`, `tz` | `AWECRAFT_SNAPSHOT` | render mode (~300 s) | xvfb |
 | `quitmenu` | `_quitmenu_test` | pause→quit-to-menu: save written, world freed, back to active menu (AC-0081) | `ok`, `paused_ok`, `menu_scene_active`, `world_cleared`, `save_written`, `seed_ok`, `edits_ok`, `slot`, `script_errors_seen` | — | ~10–20 s (not re-run 08-24) | clears all 3 slots first |
 | `mainmenuexit` | `_mainmenuexit_test` | main-menu Exit button: menu-first boot, finds Exit button, press → app quit (AC-0099) | `menu`, `menu_state`, `menu_visible`, `exit_found`, `ready_to_quit` | — | ~5–10 s | self-quit harness (Exit press → `get_tree().quit()` on desktop); intercepted in `_ready()` BEFORE the game dispatch; BATTSKIP in battery (self-quits the process) |
+| `occlude` | `_occlude_test` | interior-skip audit + occluder node graph (AC-0110): leaking 6-solid-neighbor faces, per-slab full-solid occluders, enclosed-cave flood, underground verts | `ok`, `chunks_built`, `total_verts`, `underground_verts`, `underground_faces`, `full_solid_slabs`, `occluders`, `box_sample`, `leaking_cells`, `leaking_faces`, `interior_voxels`, `no_emitter`, `cave` (`cells`,`aabb_min`,`aabb_max`,`seed`,`open`), `cull_3d`, `use_occl`, `radius` | — | ~60–90 s (r4 build) | headless: `occluders` 0 (gated off, DisplayServer check); under xvfb: `occluders` == `full_solid_slabs` (25 @ r4 seed 44, box 15³) |
 
 `settings` is also a valid battery mode (`AWECRAFT_BATTERY=settings;…`) — it runs the
 same `_settings_test` inside the battery (see its table row).
 
 ### Not in table (deliberately excluded)
 - `logic == ""` (main.gd:102) — incidental comparison in the headless-idle check, not a
-  mode branch. Grep count is therefore 37 lines = 36 modes + 1 incidental; table
+  mode branch. Grep count is therefore 38 lines = 37 modes + 1 incidental; table
   coverage = 36/36 = 100%.
 - `AWECRAFT_PROBE`/`AWECRAFT_BCELL` (main.gd:586–758) — not `logic` branches; debug
   print hooks (`PROBE ocean_cells=…`, `MAP`/`BIO` rows, `SEED` scan, `BCELL`) that run
@@ -83,7 +84,7 @@ All render hooks need the software-GL recipe (§4); typical timeout **300 000 ms
 |---|---|---|
 | `AWECRAFT_SNAPSHOT=path.png` | boot world (menu-first unless `AWECRAFT_MENU_BOOT=1`), wait for build, snap viewport PNG | xvfb-run -a + `--rendering-method gl_compatibility`; sets `RESULT {"m4":"ok",w,h,cam}` |
 | `AWECRAFT_SNAPSHOT2=path.png` | second snap in `AWECRAFT_CAM=shaft` (after fluid settle) | only with cam=shaft |
-| `AWECRAFT_CAM=top\|iso\|iso2\|sky\|eyeup\|sandpad\|shaft` | camera preset for snapshot runs (main.gd:1003–1083) | `sky`/`eyeup` look at sun; `shaft` drops a water column + double-snap; default (empty) = first-person player spawn |
+| `AWECRAFT_CAM=top\|iso\|iso2\|sky\|eyeup\|sandpad\|shaft\|cave` | camera preset for snapshot runs (main.gd:1003–1083) | `sky`/`eyeup` look at sun; `shaft` drops a water column + double-snap; `cave` teleports into the first enclosed cave pocket + 3D torch array + 300-frame settle (AC-0110); default (empty) = first-person player spawn |
 | `AWECRAFT_SIZE=W,H` | force window size (e.g. `1280,720`) before boot | no-size → `Settings.apply_window` |
 | `AWECRAFT_MENU_SHOT=path.png` | snap the main menu (skips world boot); `AWECRAFT_MENU_VIEW=options` opens options panel | `RESULT {"menu":true,"mode",…,"build","values"}` |
 | `AWECRAFT_FLUID_SHOT=1` | with snapshot: teleport player to shore aim, place water bucket, snap before+after | needs player spawn (default cam) |
@@ -149,6 +150,7 @@ carry their original provenance.
 | boundary r4 one-shot | `ok`/`remesh_ok`/`marker_ok` true, walk `p95_ms` **267–401** (one-shot spread: AC-0091 267/290/344, AC-0143 356/401), `forward_p95_ms` **~39.9k–47.6k** (AC-0091 39926–46404, AC-0143 42154/47634) — run-to-run spread, NOT a shift (home path byte-identical at AC-0143: genhash+SMOKE exact; non-home keying never exercised by the walk) | AC-0091 (old band 108–133 / 10898–13019 VOID), confirmed AC-0143 |
 | sphere probe (new arm `AWECRAFT_LOGIC=sphere`) | `ok` true — keying round-trip **240/240** (`key_bad` 0, `key_home_ok` true), edge points **884/884 bitwise-identical** (`edge_max_d` 0.0), world↔face 300/300 (max_d 0.0), neighbor_key 240/240 (rt_max 1), corners 32 (min_dot 0.9999992), home spot-checks bedrock 11 / sea 5 @y0 / spawn top 136 | AC-0143 (12-face convention, home pair = faces 0,1) |
 | save v2 (arm `AWECRAFT_LOGIC=save`) | `ok` true — `SAVE_VERSION` **2**, `planets:[{id:0,R:4000,orbit:null}]`, edits re-keyed `"0:<face>:<ccx>:<ccz>:<local>"` (face 0 = ccx≥0 / face 1 = ccx<0), block+player round-trip exact, **v1 save soft-fails** (edits discarded, clear log line `SAVE SOFT-FAIL (old save format: …)`); continue arm re-validates+converts v2 keys (`edits_ok` true); R clamp [2000,8000] → `Game.planet_R` | AC-0143 (non-home faces never record edits in P1a — data-level only) |
+| occlude (arm `AWECRAFT_LOGIC=occlude`, r4 seed 44) | `ok` true — `leaking_cells`/`leaking_faces` **0** (no interior face leaks), `full_solid_slabs` **25** = `occluders` **25** [xvfb node graph; headless 0 — gated], `underground_verts` **494864** / `total_verts` **698196**, `underground_faces` 123716, `interior_voxels` 2192711 [Stage-B pre-pass skip set], `cave` 1417 cells aabb [-64,67,-64]→[-54,85,-23], `cull_3d` + `use_occlusion_culling` true [canonical `rendering/` keys] | AC-0110 (Stage B = geometry NO-OP: AC-0106 greedy mesher already culls interior faces — MESHRECS 81/81 per-slab identical, genhash + SMOKE 5 exact; Stage A execution unprovable on this box [no forward_plus GPU] — node-graph + no-regression verified) |
 
 ## 4. Run recipes (sandboxed, one godot at a time)
 

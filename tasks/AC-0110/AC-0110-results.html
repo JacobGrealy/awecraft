@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AC-0110 results — occlusion-culling-caves-interior</title>
+<style>
+ body { font: 14px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace; margin: 2rem auto; max-width: 1050px; color: #1c2330; }
+ h1 { font-size: 1.35rem; border-bottom: 3px solid #2b6cb0; padding-bottom: .4rem; }
+ h2 { font-size: 1.05rem; margin-top: 1.6rem; color: #2b6cb0; }
+ table { border-collapse: collapse; width: 100%; margin: .6rem 0; }
+ th, td { border: 1px solid #cbd5e0; padding: 4px 8px; text-align: left; vertical-align: top; font-size: 13px; }
+ th { background: #edf2f7; }
+ .ok { color: #166534; font-weight: bold; }
+ .no { color: #92400e; }
+ .note { background: #fffbeb; border-left: 4px solid #d69e2e; padding: .5rem .8rem; margin: .6rem 0; }
+ code { background: #edf2f7; padding: 1px 4px; border-radius: 3px; }
+ img { max-width: 100%; border: 1px solid #cbd5e0; margin: .4rem 0; }
+ .small { font-size: 12px; color: #4a5568; }
+</style>
+</head>
+<body>
+<h1>AC-0110 — occlusion-culling-caves-interior · results · 2026-08-30</h1>
+<p><b>Verdict: DONE — all gates green, no regression.</b> Stage A (per-slab occluders + engine
+occlusion-culling master switch) implemented and node-graph-verified (25/25). Stage B (interior
+pre-pass) implemented and <b>proven a geometry NO-OP by design</b>: the AC-0106 greedy mesher already
+emits zero faces for a voxel with 6 solid neighbours, so the pre-pass only skips the call — it cannot
+and did not change any vertex (MESHRECS 81/81 identical, genhash byte-identical). Plan + deviations:
+<code>spec.html</code>.</p>
+
+<h2>1. Gates (all re-run by coordinator after subagent handoff)</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>baseline / expected</th><th>status</th></tr>
+<tr><td>G0 headless</td><td><code>--quit</code> 0 script errors</td><td>0</td><td class="ok">PASS</td></tr>
+<tr><td>genhash (r4, seed 44)</td><td>25/25, run1 == run2, byte-identical to AC-0143 baseline <code>.scratch/AC-0143-gates/genhash_new.txt</code></td><td>25/25 == baseline (Stage B no-op proof, data layer)</td><td class="ok">PASS</td></tr>
+<tr><td>MESHRECS (per-slab rec counts, 81 chunks)</td><td>81/81 identical to pre-change baseline</td><td>identical (Stage B no-op proof, geometry layer)</td><td class="ok">PASS</td></tr>
+<tr><td>SMOKE battery (player;interact;light;fluids;genhash)</td><td>5 EXACT: player 136.78/2.82 floor+jump ok; interact place_ok true, cell 2, breakable 2; light 10/15/14; fluids 2730/2730 backed 888 stable, 25/9</td><td>HARNESS §3 exact values</td><td class="ok">PASS</td></tr>
+<tr><td>occlude arm, headless</td><td><code>ok:true</code>, <code>leaking_cells 0</code>, <code>leaking_faces 0</code>, occluders 0 (gated), <code>cull_3d</code>/<code>use_occl</code> true</td><td>ok + zero leaks</td><td class="ok">PASS</td></tr>
+<tr><td>occlude arm, xvfb node graph</td><td><code>occluders 25</code> == <code>full_solid_slabs 25</code>; box_sample 15³ @ (8, 56, 8) [slab y0=48 → +8 ✓]; cull_3d + use_occlusion_culling true; leaks 0/0</td><td>occluders == fully-solid slabs, correct size/placement</td><td class="ok">PASS</td></tr>
+<tr><td>ProjectSettings (in-project probe, engine property list)</td><td>canonical keys present + set: <code>rendering/occlusion_culling/use_occlusion_culling=true</code>, <code>…/camera/cull_3d=true</code>, <code>…/camera/cull_2d=true</code> (file uses section-relative keys under <code>[rendering]</code>)</td><td>canonical engine keys configured</td><td class="ok">PASS</td></tr>
+<tr><td>cave interior render</td><td><code>cave</code> cam: enclosed torch-lit stone pocket, no sky, no face leaks — <code>screenshots/cave-interior.png</code></td><td>enclosed interior, no leaks</td><td class="ok">PASS</td></tr>
+</table>
+<p class="small">Gate logs: <code>.scratch/AC-0110-gates/</code> (g0*.txt, genhash*.txt, battery*.txt, occlude_headless.txt, occlude_xvfb.txt, cave_render*.txt, meshrecs_*.txt, minfo*.log, probe_settings.gd).
+Known non-fatal noise present in logs: AC-0137-class threadgen transients + CORE3X3 wait timeout (also in AC-0091 logs).</p>
+
+<h2>2. Measurements (new <code>occlude</code> arm, r4 seed 44, 81 chunks built)</h2>
+<table>
+<tr><th>metric</th><th>value</th><th>note</th></tr>
+<tr><td><code>total_verts</code></td><td>698,196</td><td>verts_mesh 483,044 + verts_fluid 134,392 + verts_flora 80,760</td></tr>
+<tr><td><code>underground_verts</code></td><td>494,864 (70.9%)</td><td>task metric "underground verts at r4" — the payload occlusion culling must save at draw level</td></tr>
+<tr><td><code>underground_faces</code></td><td>123,716 / 174,549 (70.9%)</td><td>underground face share</td></tr>
+<tr><td><code>interior_voxels</code></td><td>2,192,711</td><td>Stage-B pre-pass skip set (voxels with 6 solid neighbours — emit no faces anyway)</td></tr>
+<tr><td><code>full_solid_slabs</code></td><td>25 of 81×24 = 1,944 slabs (1.3%)</td><td>occluder count at r4 (deep solid mass under sea floor)</td></tr>
+<tr><td><code>no_emitter</code></td><td>32,269</td><td>solid voxels on exposed surfaces that still emit no faces (mesher interior edges)</td></tr>
+<tr><td><code>cave</code></td><td>1417 cells, aabb [-64,67,-64]→[-54,85,-23], <code>open:false</code>, seed [-4,-4,10,80,3]</td><td>first fully-enclosed air pocket (chunk order, AABB-deduped) — roof check alone is insufficient (skylit/coastal masses fail the air-flood-under-terrain test)</td></tr>
+</table>
+
+<h3>2.1 Stage A — per-slab occluders (implemented, node-graph verified)</h3>
+<ul>
+<li><code>world/chunk.gd</code>: <code>build_accs</code> + <code>build_mesh</code> count non-solid cells per slab
+(<code>c_ns</code>); a slab with <code>c_ns == 0</code> is fully solid → <code>_assemble_slab</code> attaches an
+<code>OccluderInstance3D</code> with a <code>BoxOccluder3D</code> size <b>15³</b> at local (8, y0+8, 8) — a 0.5
+inset on every side so the occluder box never coincides with a neighbouring slab's mesh faces
+(close-camera culling artifacts at slab edges). Freed in all three rebuild paths.</li>
+<li><code>project.godot</code>: <code>[rendering]</code> section — <code>occlusion_culling/use_occlusion_culling=true</code>
+(master; camera culling is inert without it) + <code>camera/cull_3d=true</code> + <code>camera/cull_2d=true</code>.
+Verified against the engine's canonical property list: these resolve to <code>rendering/occlusion_culling/…</code>.</li>
+<li>Headless gate: occluder nodes are only created when <code>DisplayServer != "headless"</code> — headless
+(dummy VisualServer) would register 0 useful occluders and skew harness counts; the arm reports 0 there by design.</li>
+</ul>
+<div class="note"><b>Limitation (recorded, not a failure):</b> the actual draw-call reduction from Stage A is
+<b>unprovable on this box</b> — no forward_plus GPU (gl_compatibility software GL only, and occlusion culling's
+ray-casting path is renderer-dependent). Verified instead: (1) node graph correct (25 occluders, right size/
+placement), (2) engine settings canonically enabled, (3) zero no-regression across every gate. The user's
+Windows forward_plus build is the real proof; the <code>occlude</code> arm's <code>box_sample</code> field prints the
+first occluder's transform for spot-checking there.</div>
+
+<h3>2.2 Stage B — 6-solid-neighbour interior pre-pass (implemented, no-op by design)</h3>
+<p><code>chunk.gd::_s_is_interior</code> (padded <code>snap</code> grid, boundary voxels never interior) skips
+face emission for fully-embedded voxels in both build paths. <b>Outcome: zero geometry change</b> — the
+AC-0106 greedy mesher's per-face neighbour culling already emits nothing for such a voxel, so the pre-pass
+is a redundant-but-cheap guard (one table lookup vs six) that the greedy mesher's integration can build on.
+Proven: MESHRECS 81/81 identical + genhash byte-identical + SMOKE exact. This is a legitimate task outcome,
+recorded as such per the plan.</p>
+
+<h2>3. New harness surface (HARNESS.md updated)</h2>
+<ul>
+<li><code>AWECRAFT_LOGIC=occlude</code> → <code>_occlude_test</code> (headless or xvfb): builds r4 world, counts
+leaking interior cells/faces, enumerates slab occluders, floods the first enclosed cave (air flood must be
+fully under <code>WorldGen.terrain_height</code>), reports underground vert/face totals + <code>box_sample</code>.</li>
+<li><code>AWECRAFT_CAM=cave</code> (snapshot runs): teleports the eye block clear, plants a 3D torch array
+(axis d1+d2) to light the pocket, 300-frame settle (EDIT_FLUSH_MAX_PER_FRAME=1 → a 40-frame settle snapshots
+a half-lit/half-remeshed cave), snaps.</li>
+</ul>
+
+<h2>4. Cave interior (enclosed, torch-lit, no leaks)</h2>
+<img src="screenshots/cave-interior.png" alt="Cave interior — enclosed stone pocket, torch-lit, no sky, no face leaks">
+<p class="small"><code>.scratch/AC-0110-gates/cave_interior.png</code> — <code>xvfb-run -a</code> render,
+<code>AWECRAFT_CAM=cave AWECRAFT_SNAPSHOT</code>, 300-frame settle.</p>
+
+<h2>5. Files</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/project.godot</code></td><td>+3: occlusion-culling master + camera cull keys under <code>[rendering]</code></td></tr>
+<tr><td><code>godot/world/chunk.gd</code></td><td>+53: <code>c_ns</code> slab counter (both build paths), <code>_s_is_interior</code> pre-pass skip, <code>Slab.occluder</code> + attach/free, 7-element slab row (<code>row[6]</code> = full-solid flag) through <code>apply_accs</code></td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>+595 (0 deletions, harness-only): <code>_occlude_test</code> arm + <code>_occl_*</code> helpers + <code>cave</code> cam</td></tr>
+<tr><td><code>tasks/HARNESS.md</code></td><td>§1 occlude row (+ mode count 37), §2 <code>cave</code> cam, §3 occlude stable-value row</td></tr>
+<tr><td><code>tasks/AC-0110/spec.html</code></td><td>subagent plan + deviations</td></tr>
+<tr><td><code>tasks/AC-0110/screenshots/cave-interior.png</code></td><td>cave interior render</td></tr>
+</table>
+
+<p class="small">AC-0110 · coordinator-verified 2026-08-30 · all gates re-run post-subagent ·
+next queue: AC-0150 (user-reported face-boundary trench/void, p1).</p>
+</body>
+</html>

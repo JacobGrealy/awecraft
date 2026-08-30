@@ -64,6 +64,7 @@ class Slab:
 	var fluid_instance: MeshInstance3D = null
 	var flora_instance: MeshInstance3D = null
 	var collision_body: StaticBody3D = null
+	var occluder: OccluderInstance3D = null
 	var col_dirty := false
 	var sidx := PackedInt32Array()
 	var fsidx := PackedInt32Array()
@@ -76,6 +77,11 @@ static var _mat_atlas: Texture2D = null   # Data.atlas_tex identity at last buil
 static var _mat_ms: Texture2D = null      # merged-atlas texture identity at last build
 static var _mat_cache: Dictionary = {}    # kind -> Material (opaque/cutout/flower/fluid)
 static var _mat_alloc_count := 0          # G3 build-path counter (total since boot)
+static var _occl_ok: int = -1             # -1 unknown, 0 disabled (headless), 1 enabled
+static func _occl_enabled() -> bool:
+	if _occl_ok < 0:
+		_occl_ok = 1 if DisplayServer.get_name() != "headless" else 0
+	return _occl_ok == 1
 
 # AC-0128: u_day = DayNight.day(Game.time_of_day), pushed every frame by
 # main.gd _update_sky (web parity: the per-frame day uniform, index.html
@@ -878,6 +884,18 @@ static func _s_uvc(uvc: Dictionary, brect: Dictionary, id: int, fi: int, face_na
 	return uvs
 
 
+static func _s_is_interior(lx: int, y: int, lz: int, snap: PackedByteArray, stab: PackedByteArray, h: int) -> bool:
+	if y == 0 or y == h - 1:
+		return false
+	var mid := (lz + 1) * SNAP_W + (lx + 1)
+	var row := y * SNAP_ROW + mid
+	var rowd := (y - 1) * SNAP_ROW + mid
+	var rowu := (y + 1) * SNAP_ROW + mid
+	return stab[snap[row - 1]] > 0 and stab[snap[row + 1]] > 0 \
+		and stab[snap[row - SNAP_W]] > 0 and stab[snap[row + SNAP_W]] > 0 \
+		and stab[snap[rowu]] > 0 and stab[snap[rowd]] > 0
+
+
 static func _s_faces(recs: Array, xtab: PackedByteArray, stab: PackedByteArray, fn: Array, lx: int, y: int, lz: int, id: int, snap: PackedByteArray, h: int) -> void:
 	var sxi := (lz + 1) * SNAP_W + (lx + 1)
 	for fi in range(6):
@@ -1405,6 +1423,7 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	# was hard-coded 5 for H=80).
 	var c_af_w := _zeros(slab_n())
 	var c_af_l := _zeros(slab_n())
+	var c_ns := _zeros(slab_n())
 	var d: PackedByteArray = data
 	for y in range(h):
 		var dy := y << 8
@@ -1412,6 +1431,8 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 			var drow := dy + (lz << 4)
 			for lx in range(SIZE):
 				var id := d[drow + lx]
+				if stab[id] == 0:
+					c_ns[y / 16] += 1
 				if id == 0:
 					continue
 				if id == 5 or id == 24:
@@ -1426,6 +1447,8 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 							rf_l.append([lx, y, lz, id, hgt])
 					continue
 				if oktab[id] == 0:
+					continue
+				if stab[id] > 0 and _s_is_interior(lx, y, lz, snap, stab, h):
 					continue
 				if xtab[id] > 0:
 					if ttab[id] > 0:
@@ -1480,7 +1503,7 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	_s_emit_xquad(rq, s_ax, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, ctx, bmask)
 	var slabs_out: Array = []
 	for si in range(slab_n()):  # AC-0091: runtime slab count (was 5)
-		slabs_out.append([s_ao[si], s_ac[si], s_af_w[si], s_af_l[si], s_ak[si], s_ax[si]])
+		slabs_out.append([s_ao[si], s_ac[si], s_af_w[si], s_af_l[si], s_ak[si], s_ax[si], c_ns[si] == 0])
 	return {
 		"slabs": slabs_out,
 		"light": light,
@@ -1681,11 +1704,14 @@ func _enter_candidate_slabs() -> void:
 		if s.collision_body != null:
 			s.collision_body.queue_free()
 			s.collision_body = null
+		if s.occluder != null:
+			s.occluder.queue_free()
+			s.occluder = null
 		s.built = false
 		s.col_dirty = true
 
 
-func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax: Acc, ms) -> void:
+func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax: Acc, ms, full_solid: bool) -> void:
 	var sidx := PackedInt32Array([-1, -1, -1, -1])
 	var mesh := ArrayMesh.new()
 	if ao.q > 0:
@@ -1730,6 +1756,14 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 		add_child(fi2)
 		s.flora_instance = fi2
 		s.fsidx = fsidx
+	if full_solid and _occl_enabled():
+		var oc := OccluderInstance3D.new()
+		var box := BoxOccluder3D.new()
+		box.size = Vector3(15.0, 15.0, 15.0)
+		oc.occluder = box
+		oc.position = Vector3(8.0, float(s.y0) + 8.0, 8.0)
+		add_child(oc)
+		s.occluder = oc
 	s.sidx = sidx
 	s.built = true
 
@@ -1889,6 +1923,9 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 		if s.flora_instance != null:
 			s.flora_instance.queue_free()
 			s.flora_instance = null
+		if s.occluder != null:
+			s.occluder.queue_free()
+			s.occluder = null
 	var wx0 := cx * SIZE
 	var wz0 := cz * SIZE
 	var light: Dictionary = eff
@@ -1956,6 +1993,7 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	# AC-0091: per-slab counters sized by the runtime slab count (24 @ H=384).
 	var c_af_w := _zeros(slab_n())
 	var c_af_l := _zeros(slab_n())
+	var c_ns := _zeros(slab_n())
 	var d: PackedByteArray = data
 	for y in range(Data.HEIGHT):
 		var dy := y << 8
@@ -1963,6 +2001,8 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 			var drow := dy + (lz << 4)
 			for lx in range(SIZE):
 				var id := d[drow + lx]
+				if stab[id] == 0:
+					c_ns[y / 16] += 1
 				if id == 0:
 					continue
 				if id == 5 or id == 24:
@@ -1977,6 +2017,8 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 							rf_l.append([lx, y, lz, id, hgt])
 					continue
 				if oktab[id] == 0:
+					continue
+				if stab[id] > 0 and _s_is_interior(lx, y, lz, snap, stab, Data.HEIGHT):
 					continue
 				if xtab[id] > 0:
 					if ttab[id] > 0:
@@ -2031,7 +2073,7 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	_emit_faces(rk, s_ak, bb["mn"], bb["arr"], 20, 20, has_tex, xtab, fn, fsh, fcv, ct, cs, cb, bmask)
 	_emit_xquad(rq, s_ax, bb["mn"], bb["arr"], 20, 20, has_tex, ct, bmask)
 	for si in range(slab_n()):  # AC-0091: runtime slab count (was 5)
-		_assemble_slab(slabs[si], s_ao[si], s_ac[si], s_af_w[si], s_af_l[si], s_ak[si], s_ax[si], ms)
+		_assemble_slab(slabs[si], s_ao[si], s_ac[si], s_af_w[si], s_af_l[si], s_ak[si], s_ax[si], ms, c_ns[si] == 0)
 	mesh_built = true
 	_post_build_collision()
 
@@ -2063,11 +2105,14 @@ func apply_accs(res: Dictionary, ms: Dictionary) -> void:
 		if s.flora_instance != null:
 			s.flora_instance.queue_free()
 			s.flora_instance = null
+		if s.occluder != null:
+			s.occluder.queue_free()
+			s.occluder = null
 	last_eff = _eff_store(res.light)
 	last_blk_ring = res.light.get("ring", PackedInt32Array())
 	for si in range(slab_n()):  # AC-0091: runtime slab count (was 5)
 		var row: Array = res.slabs[si]
-		_assemble_slab(slabs[si], _acc_from_dict(row[0]), _acc_from_dict(row[1]), _acc_from_dict(row[2]), _acc_from_dict(row[3]), _acc_from_dict(row[4]), _acc_from_dict(row[5]), ms)
+		_assemble_slab(slabs[si], _acc_from_dict(row[0]), _acc_from_dict(row[1]), _acc_from_dict(row[2]), _acc_from_dict(row[3]), _acc_from_dict(row[4]), _acc_from_dict(row[5]), ms, bool(row[6]))
 	mesh_built = true
 	_post_build_collision()
 

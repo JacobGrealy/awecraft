@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>AC-0110 spec — occlusion culling (caves / interior faces)</title>
+<style>
+body{font:14px/1.5 monospace;max-width:1000px;margin:24px auto;padding:0 12px}
+h1{font-size:20px}h2{font-size:16px;margin-top:28px;border-bottom:1px solid #999;padding-bottom:4px}
+code{background:#eee;padding:1px 4px}table{border-collapse:collapse}td,th{border:1px solid #bbb;padding:4px 8px;text-align:left}
+.ok{color:#080}.no{color:#a00}
+</style></head>
+<body>
+<h1>AC-0110 — occlusion-culling-caves-interior</h1>
+<p>Two stages: <b>A</b> render-only VisualServer occlusion (occluder boxes + camera culling setting);
+<b>B</b> software interior-face skip in the chunk mesher. Plus a headless measure arm and an in-cave render.</p>
+
+<h2>0. Findings that shaped the design (read the mesher first)</h2>
+<ul>
+<li>A <b>greedy mesher already exists</b> (AC-0106, as-delivered): opaque faces are emitted per-face into
+<code>recs</code> (<code>_faces</code> instance / <code>_s_faces</code> static), then the merged-atlas path
+(<code>_emit_ro_merged</code>/<code>_s_emit_ro_merged</code>) greedily unions coplanar same-shade faces into
+quads; fallback <code>_emit_faces</code> keeps one quad per face. So Stage B only has to be
+<b>recs-compatible</b> (it is — it filters recs at the source; both greedy and fallback paths see the same recs).
+No new mesher is built (that would be out of scope).</li>
+<li><b>Face-level interior culling already exists.</b> <code>_s_faces</code> skips a face iff
+<code>nb == id or stab[nb] &gt; 0</code> (out-of-range y reads 0). A solid voxel with 6 solid neighbours
+therefore already contributes <b>0 faces</b>. Stage B is NOT a geometry change — it is the explicit
+<b>voxel pre-pass</b>: one 6-neighbour solid test that skips the whole per-voxel face loop for interior
+voxels (the large underground majority), keeping the emitted geometry <b>byte-identical</b> (MINFO must
+match <code>.scratch/AC-0143-gates/minfo_new.txt</code> exactly). Proof: the pre-pass fires only when all
+6 neighbours have <code>stab[nb] &gt; 0</code> and <code>y ∈ [1, h-2]</code>; under exactly that condition
+the face loop would append zero recs, so nothing that was emitted is removed.</li>
+<li>Cross-chunk reads are already handled: the mesher works on a padded <code>snap</code>
+(18×18×H, <code>SNAP_W=18</code>), margin ring filled from the 4 ortho neighbour chunks
+(<code>_build_snap</code> sync / <code>_build_snap_data</code> worker, <code>nbs</code>). The 6-neighbour
+test reads only ortho margin cells — always populated (worker dispatch guarantees nbs present; sync path
+treats missing as air, same as today's face loop). No new lookup surface.</li>
+<li>Slab structure (AC-0108): chunks are 24 vertical 16×16×16 slabs (H=384). This drives the Stage A box
+placement: a <b>fully-solid slab</b> is a provably-opaque 16³ region.</li>
+<li>Solid set: ids 1,2,3,4,6,8,9,17,20,21,11,12,14,15,16,23,25 (<code>stab</code>); fluids 5/24 and
+cross/cutout blocks are non-solid. No block is both solid and cross/cutout, so the pre-pass condition
+<code>stab[id] &gt; 0</code> touches only the opaque branch behaviour.</li>
+</ul>
+
+<h2>1. Stage B — interior pre-pass (godot/world/chunk.gd)</h2>
+<ul>
+<li>New static <code>_s_is_interior(lx,y,lz,snap,stab,h)</code>: y∈[1,h-2] and all 6 neighbours
+<code>stab[snap[…]] &gt; 0</code> via the padded snap (±1 x, ±SNAP_W z, row±SNAP_ROW y).</li>
+<li>In BOTH voxel loops (<code>build_accs</code> worker, <code>build_mesh</code> sync), after the
+<code>oktab</code> check, before the xtab/ktab/else branch:
+<code>if stab[id] &gt; 0 and _s_is_interior(...): continue</code>. Cross/cutout/other paths are untouched.</li>
+<li>Worker purity: uses only <code>snap</code>/<code>stab</code> (per-call copies) — thread-safe, no node
+access. No world-data, collision, or lighting change.</li>
+<li>Perf: interior voxels (the underground bulk) pay one 6-read test instead of the 6-face loop; boundary
+voxels pay the test + loop. Net neutral-to-positive in the face phase; geometry unchanged by construction.</li>
+</ul>
+
+<h2>2. Stage A — occluder boxes + camera culling (render-only)</h2>
+<ul>
+<li><b>Box placement = per fully-solid slab.</b> In both mesh loops a per-slab counter marks cells that are
+NOT solid blocks; a slab with zero non-solid cells (all 4096 solid) gets one <code>OccluderInstance3D</code>
+with a <code>BoxOccluder3D</code> of size <b>15³ (0.5 inset per side)</b> centred on the slab.
+(Godot 4.7.1: the <code>occluder</code> property is typed <code>Occluder3D</code>; <code>BoxShape3D</code>
+is <i>not</i> an <code>Occluder3D</code> in this engine, so the dedicated <code>BoxOccluder3D</code>
+resource with its <code>size</code> property is used.)
+The inset is deliberate: the slab's own boundary faces (emitted against non-solid neighbours) then lie
+outside the occluder AABB, so Godot's AABB-containment cull test can never cull the slab's own mesh; the
+inset only makes edge-on culling marginally less aggressive. A fully-solid slab can contain no air, fluid,
+cross or cutout cell, so:
+  <ul>
+  <li>the camera can never be inside an occluder (no air in it) — "camera chunk never culled" holds by construction;</li>
+  <li>every sky-facing chunk has air in its top slab → never fully solid → never an occluder — "no chunk with visible sky" holds by construction;</li>
+  <li>water/leaves/torch slabs are non-solid → no occluder (nothing opaque to hide).</li>
+  </ul></li>
+<li>Lifecycle rides the slab mesh lifecycle: created in <code>_assemble_slab</code> (flag carried from the
+mesh loop; worker path adds it as the 7th <code>slabs_out</code> row element), freed at the top of
+<code>build_mesh</code>/<code>apply_accs</code> and in <code>_enter_candidate_slabs</code> (candidate
+slabs at r+1 kill mesh <i>and</i> occluder, else an unrendered slab would cull the world behind it).</li>
+<li><code>project.godot</code> [rendering]: <code>occlusion_culling/camera/cull_3d=true</code> +
+<code>cull_2d=true</code> (section-relative keys) + the master toggle
+<code>occlusion_culling/use_occlusion_culling=true</code> — camera culling is inert without it
+(default false; verified by <code>ProjectSettings</code> read-back in the occlude RESULT).</li>
+<li><b>Headless = literal no-op:</b> creation is gated by a cached
+<code>DisplayServer.get_name() != "headless"</code> check — under <code>--headless</code> zero
+OccluderInstance3D nodes are created, zero VisualServer work, no RESULT value touched.</li>
+</ul>
+
+<h2>3. Verification (headless harness + one xvfb render)</h2>
+<ul>
+<li><b>G0</b> clean; <b>genhash</b> 25/25 run1==run2 == <code>.scratch/AC-0143-gates/genhash_new.txt</code>
+(data layer untouched); <b>SMOKE 5</b> exact per tasks/HARNESS.md §3; <b>MINFO</b> byte-identical to
+<code>.scratch/AC-0143-gates/minfo_new.txt</code> (mesh fingerprint — the Stage B identity proof, empirically).</li>
+<li><b>New arm <code>AWECRAFT_LOGIC=occlude</code></b> (main.gd, r4, headless):
+  <ul>
+  <li>settle r4 (81 built in |cx|,|cz|≤4, bounded 2400 frames, report count) — the full radius, so the
+  cave flood can never read an unbuilt chunk as air (a 64-chunk early break let the flood escape into
+  the 17 still-queued chunks on the first run);</li>
+  <li>per-chunk interior mark: solid cell with 6 solid neighbours (in-chunk <code>data</code>, margin via
+  <code>world.get_block</code> — the same cross-chunk query the mesher uses);</li>
+  <li>quad audit of every surface of every built r4 chunk: every 4 consecutive verts = 1 quad (all emitters
+  write 4 verts per quad in index order; merged-atlas quads are the same, just &gt;1 m wide). Constant-axis
+  detection finds the face plane; the emitter cell is the non-zero side (per row cell for merged quads);</li>
+  <li><code>leaking_interior</code> = quads whose emitter cell (any row cell) is an interior solid →
+  <b>must be 0</b> (the "indoors not leaking faces" numeric assert);</li>
+  <li><code>underground</code>: column surface = highest solid y in the column; a quad counts when ALL its
+  row cells have emitter y &lt; column surface (merged quads straddling a surface edge are excluded —
+  conservative, documented);</li>
+  <li>cave pocket: <b>first enclosed</b> air cell in chunk order — candidate = air, y∈[80,260] band first
+  (full range fallback), ≥4 solid neighbours, roofed (a solid in the column above), and its 6-connected
+  air flood (cap 20000, bounded to the r4 region) is fully below ground (<code>open==false</code>) →
+  <code>cave.aabb</code> + cell count + seed. (Earlier picks at chunk (-4,-4) y=80 / (2,0) y=90 were
+  skylit/coastal air masses, not enclosed caves.)</li>
+  <li>RESULT: total_verts / total_faces / underground_verts / underground_faces / interior_voxels /
+  leaking_interior / full_solid_slabs / occluders (0 headless) / cave{…} / ok.</li>
+  </ul></li>
+<li><b>Node-graph assert (non-headless):</b> same arm under <code>xvfb-run</code> (gl_compatibility):
+occluder node count == full_solid_slabs (built r4), sampled box size 15³, and
+<code>cull_3d</code> setting read-back true. This is what is verifiable here.</li>
+<li><b>Enclosure test (both arms):</b> the air flood reports <code>open</code> = any cell at/above its
+column's <code>WorldGen.terrain_height</code> (column-heights cached per flood). A roofed seed is not
+enough — the r4 region's biggest air masses are skylit/coastal systems, so "cave" means the flood is
+fully below ground.</li>
+<li><b>In-cave render (gate 5 record):</b> new <code>AWECRAFT_CAM=cave</code> preset in
+<code>_snapshot_finish</code>: over all r4 chunks flood every roofed seed (aabb-deduped), keep enclosed
+(<code>open==false</code>) regions with a clear eye-line (cell above seed is air), pick the largest →
+recenter → await build → player eye inside the seed cell → <b>torch in every air axis-neighbour at
+distance 1 and 2</b> (12 candidate cells; the eye block at +y·1 is kept clear; a big cave needs light
+from all sides or the far walls stay pitch black) → aim at the <b>thickest wall</b> (solid neighbour
+with a solid cell 2 away; tie → first of x±,z±,y±) → settle <b>300 physics frames</b> (the edit flush
+remeshes only <code>EDIT_FLUSH_MAX_PER_FRAME=1</code> chunk/frame and each torch dirties a 3×3
+neighbourhood, so a 40-frame settle snapshots a half-lit, partially-remeshed cave — the inverse
+"more torches → darker" symptom) → snapshot
+<code>.scratch/AC-0110-gates/cave_interior.png</code> (absolute path — <code>save_png</code> resolves
+relative paths against the <code>godot/</code> project dir, so a repo-root-relative path silently fails).
+Fallback when no enclosed cave exists: largest open region, so the gate still records a PNG.</li>
+</ul>
+
+<h2>4. Known limits (report to coordinator)</h2>
+<ul>
+<li>Whether <b>gl_compatibility actually executes</b> camera occlusion queries cannot be proven on this box:
+headless uses the dummy server, and there is no forward_plus GPU path here. Verifiable: config landed
+(read-back), occluder node graph (xvfb), zero regression everywhere (battery/genhash/MINFO). Forward_plus
+pickup = code review (standard OccluderInstance3D + project setting only).</li>
+<li>"Underground" is a column-surface definition (see §3), not a light-based one; cave wall counts are
+flood-region-based and informational.</li>
+<li>tasks/HARNESS.md mode table (§1) row for <code>occlude</code> + <code>cave</code> cam = coordinator
+doc update (this task must not touch it).</li>
+</ul>
+
+<h2>5. Files</h2>
+<p><code>godot/world/chunk.gd</code> (pre-pass + occluder lifecycle + full-solid flag),
+<code>godot/project.godot</code> (2 settings), <code>godot/scenes/main.gd</code> (occlude arm + cave cam),
+this spec.</p>
+</body></html>

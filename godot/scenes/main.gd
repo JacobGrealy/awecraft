@@ -1002,6 +1002,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "sharpx":
 			await _sharpx_test(spawn)
 			return
+		if logic == "occlude":
+			await _occlude_test(spawn)
+			return
 		if logic == "stars":
 			player = _spawn_player()
 			_stars_test(spawn)
@@ -1316,6 +1319,9 @@ func _snapshot_finish(cam: String) -> void:
 	var snapshot_path := OS.get_environment("AWECRAFT_SNAPSHOT")
 	var spawn: Vector3 = world.spawn_point()
 	var fluid_shot := OS.get_environment("AWECRAFT_FLUID_SHOT") == "1"
+	if cam == "cave":
+		await _cave_snapshot_finish(cam, snapshot_path, spawn)
+		return
 	var held_env := OS.get_environment("AWECRAFT_HELD")
 	if held_env != "" and player != null:
 		var hid: int = held_env.to_int()
@@ -9834,3 +9840,618 @@ func _sphere_test(spawn: Vector3) -> void:
 	ok = ok and out["home_bedrock_ok"] and out["home_spawn_top_ok"] and out["home_spawn_solid"] and out["home_spawn_above_air"]
 	out["ok"] = ok
 	Debug.result(out)
+
+
+func _occl_stab() -> PackedByteArray:
+	var stab := PackedByteArray()
+	stab.resize(256)
+	for bi in range(256):
+		var b = Data.block(bi)
+		if b != null and bool(b.solid) and not bool(b.cross):
+			stab[bi] = 1
+	return stab
+
+
+func _occl_blk(wx: int, y: int, wz: int, c: Node3D, d: PackedByteArray) -> int:
+	var lx := wx - int(c.cx) * 16
+	var lz := wz - int(c.cz) * 16
+	if lx >= 0 and lx < 16 and lz >= 0 and lz < 16:
+		return int(d[(y << 8) | (lz << 4) | lx])
+	return int(world.get_block(wx, y, wz))
+
+
+func _occl_built_chunks(r: int) -> Array:
+	var out: Array = []
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if absi(int(c.cx)) <= r and absi(int(c.cz)) <= r and c.mesh_built:
+			out.append(c)
+	return out
+
+
+func _occl_chunk_stats(c: Node3D, stab: PackedByteArray) -> Dictionary:
+	var d: PackedByteArray = c.data
+	var slab_ns: Array = []
+	for i in range(Data.HEIGHT / 16):
+		slab_ns.append(0)
+	var srf := PackedInt32Array()
+	srf.resize(256)
+	for i in range(256):
+		srf[i] = -1
+	var interior := 0
+	var cxw := int(c.cx) * 16
+	var czw := int(c.cz) * 16
+	for y in range(Data.HEIGHT):
+		for lz in range(16):
+			for lx in range(16):
+				var idx := (y << 8) | (lz << 4) | lx
+				var bid := int(d[idx])
+				if stab[bid] == 0:
+					slab_ns[y >> 4] += 1
+					continue
+				srf[lz * 16 + lx] = y
+				if y == 0 or y == Data.HEIGHT - 1:
+					continue
+				var wx := cxw + lx
+				var wz := czw + lz
+				if stab[_occl_blk(wx, y - 1, wz, c, d)] == 0:
+					continue
+				if stab[_occl_blk(wx, y + 1, wz, c, d)] == 0:
+					continue
+				if stab[_occl_blk(wx - 1, y, wz, c, d)] == 0:
+					continue
+				if stab[_occl_blk(wx + 1, y, wz, c, d)] == 0:
+					continue
+				if stab[_occl_blk(wx, y, wz - 1, c, d)] == 0:
+					continue
+				if stab[_occl_blk(wx, y, wz + 1, c, d)] == 0:
+					continue
+				interior += 1
+	return {"slab_ns": slab_ns, "srf": srf, "interior": interior}
+
+
+func _occl_is_interior(wx: int, y: int, wz: int, stab: PackedByteArray) -> bool:
+	if y <= 0 or y >= Data.HEIGHT - 1:
+		return false
+	if stab[int(world.get_block(wx, y - 1, wz))] == 0:
+		return false
+	if stab[int(world.get_block(wx, y + 1, wz))] == 0:
+		return false
+	if stab[int(world.get_block(wx - 1, y, wz))] == 0:
+		return false
+	if stab[int(world.get_block(wx + 1, y, wz))] == 0:
+		return false
+	if stab[int(world.get_block(wx, y, wz - 1))] == 0:
+		return false
+	if stab[int(world.get_block(wx, y, wz + 1))] == 0:
+		return false
+	return true
+
+
+func _occl_cave_seed(c: Node3D, srf: PackedInt32Array, stab: PackedByteArray) -> Array:
+	var r1: Array = _occl_cave_seed_range(c, srf, stab, 80, 260)
+	if not r1.is_empty():
+		return r1
+	return _occl_cave_seed_range(c, srf, stab, 1, Data.HEIGHT - 2)
+
+
+func _occl_cave_seed_range(c: Node3D, srf: PackedInt32Array, stab: PackedByteArray, ylo: int, yhi: int) -> Array:
+	var d: PackedByteArray = c.data
+	var cxw := int(c.cx) * 16
+	var czw := int(c.cz) * 16
+	for y in range(ylo, yhi + 1):
+		for lz in range(16):
+			for lx in range(16):
+				var col := lz * 16 + lx
+				if y > int(srf[col]) - 2:
+					continue
+				var idx := (y << 8) | (lz << 4) | lx
+				if int(d[idx]) != 0:
+					continue
+				var wx := cxw + lx
+				var wz := czw + lz
+				var sn := 0
+				if stab[_occl_blk(wx, y - 1, wz, c, d)] > 0:
+					sn += 1
+				if stab[_occl_blk(wx, y + 1, wz, c, d)] > 0:
+					sn += 1
+				if stab[_occl_blk(wx - 1, y, wz, c, d)] > 0:
+					sn += 1
+				if stab[_occl_blk(wx + 1, y, wz, c, d)] > 0:
+					sn += 1
+				if stab[_occl_blk(wx, y, wz - 1, c, d)] > 0:
+					sn += 1
+				if stab[_occl_blk(wx, y, wz + 1, c, d)] > 0:
+					sn += 1
+				if sn >= 4 and _occl_has_roof(wx, y, wz, stab):
+					return [int(c.cx), int(c.cz), lx, y, lz]
+	return []
+
+
+func _occl_has_roof(wx: int, y: int, wz: int, stab: PackedByteArray) -> bool:
+	for yy in range(y + 1, Data.HEIGHT):
+		var cid: int = int(world.get_block(wx, yy, wz))
+		if stab[cid] > 0:
+			return true
+	return false
+
+
+func _occl_flood(seed: Array, stab: PackedByteArray, cap: int, region: int) -> Dictionary:
+	var start := Vector3i(int(seed[0]) * 16 + int(seed[2]), int(seed[3]), int(seed[1]) * 16 + int(seed[4]))
+	var visited := {start: true}
+	var q: Array = [start]
+	var head := 0
+	var minx := start.x
+	var miny := start.y
+	var minz := start.z
+	var maxx := start.x
+	var maxy := start.y
+	var maxz := start.z
+	var dirs := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0), Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
+	var open := false
+	var colh := {}
+	while head < q.size() and q.size() < cap:
+		var p: Vector3i = q[head]
+		head += 1
+		for dd in dirs:
+			var n: Vector3i = p + dd
+			if n.y < 0 or n.y >= Data.HEIGHT:
+				continue
+			var nxc := int(floorf(float(n.x) / 16.0))
+			var nzc := int(floorf(float(n.z) / 16.0))
+			if nxc < -region or nxc > region or nzc < -region or nzc > region:
+				continue
+			if visited.has(n):
+				continue
+			if int(world.get_block(n.x, n.y, n.z)) != 0:
+				continue
+			visited[n] = true
+			q.append(n)
+			if n.x < minx:
+				minx = n.x
+			if n.y < miny:
+				miny = n.y
+			if n.z < minz:
+				minz = n.z
+			if n.x > maxx:
+				maxx = n.x
+			if n.y > maxy:
+				maxy = n.y
+			if n.z > maxz:
+				maxz = n.z
+			if not open:
+				var ck := n.x * 100000 + n.z
+				var th: int = int(colh.get(ck, -1))
+				if th < 0:
+					th = WorldGen.terrain_height(n.x, n.z, Game.world_seed)
+					colh[ck] = th
+				if n.y >= th:
+					open = true
+	return {"cells": q.size(), "aabb_min": [minx, miny, minz], "aabb_max": [maxx, maxy, maxz], "open": open}
+
+
+func _occl_flat(a: Array, eps: float) -> bool:
+	var m := float(a[0])
+	for v in a:
+		if absf(float(v) - m) > eps:
+			return false
+	return true
+
+
+func _occl_quad_audit(chunks: Array, stab: PackedByteArray, col_surf: Dictionary) -> Dictionary:
+	var total_verts := 0
+	var total_faces := 0
+	var verts_mesh := 0
+	var verts_fluid := 0
+	var verts_flora := 0
+	var underground_verts := 0
+	var underground_faces := 0
+	var leaking_cells := 0
+	var leaking_faces := 0
+	var no_emitter := 0
+	var eps := 0.001
+	for c in chunks:
+		var cx := int(c.cx)
+		var cz := int(c.cz)
+		var cxw := cx * 16
+		var czw := cz * 16
+		for s in c.slabs:
+			var insts: Array = [s.mesh_instance, s.fluid_instance, s.flora_instance]
+			var itype := 0
+			for inst in insts:
+				itype += 1
+				if inst == null or inst.mesh == null:
+					continue
+				for su in inst.mesh.get_surface_count():
+					var arrs: Array = inst.mesh.surface_get_arrays(su)
+					var verts: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+					total_verts += verts.size()
+					if itype == 1:
+						verts_mesh += verts.size()
+					elif itype == 2:
+						verts_fluid += verts.size()
+					else:
+						verts_flora += verts.size()
+					var nq := verts.size() / 4
+					total_faces += nq
+					for k in range(nq):
+						var v0 := verts[k * 4]
+						var v1 := verts[k * 4 + 1]
+						var v2 := verts[k * 4 + 2]
+						var v3 := verts[k * 4 + 3]
+						var xs := [v0.x, v1.x, v2.x, v3.x]
+						var ys := [v0.y, v1.y, v2.y, v3.y]
+						var zs := [v0.z, v1.z, v2.z, v3.z]
+						var axis := -1
+						if _occl_flat(xs, eps):
+							axis = 0
+						elif _occl_flat(ys, eps):
+							axis = 1
+						elif _occl_flat(zs, eps):
+							axis = 2
+						if axis < 0:
+							continue
+						var pw := 0
+						if axis == 0:
+							pw = cxw + int(round(v0.x))
+						elif axis == 1:
+							pw = int(round(v0.y))
+						else:
+							pw = czw + int(round(v0.z))
+						var varax: Array = []
+						if axis != 0:
+							varax.append(0)
+						if axis != 1:
+							varax.append(1)
+						if axis != 2:
+							varax.append(2)
+						var ranges := {}
+						for va in varax:
+							var vals: Array
+							if va == 0:
+								vals = xs
+							elif va == 1:
+								vals = ys
+							else:
+								vals = zs
+							var lo := float(vals.min())
+							var hi := float(vals.max())
+							var wlo: int
+							var whi: int
+							if va == 0:
+								wlo = cxw + int(round(lo))
+								whi = cxw + int(round(hi))
+							elif va == 2:
+								wlo = czw + int(round(lo))
+								whi = czw + int(round(hi))
+							else:
+								wlo = int(round(lo))
+								whi = int(round(hi))
+							ranges[va] = [wlo, whi - 1]
+						var va0: int = varax[0]
+						var va1: int = varax[1]
+						var r0: Array = ranges[va0]
+						var r1: Array = ranges[va1]
+						var idA := 0
+						var idB := 0
+						var cen0 := (int(r0[0]) + int(r0[1])) / 2
+						var cen1 := (int(r1[0]) + int(r1[1])) / 2
+						var cellA := Vector3i.ZERO
+						var cellB := Vector3i.ZERO
+						if va0 == 0:
+							cellA.x = cen0
+							cellB.x = cen0
+						elif va0 == 1:
+							cellA.y = cen0
+							cellB.y = cen0
+						else:
+							cellA.z = cen0
+							cellB.z = cen0
+						if va1 == 0:
+							cellA.x = cen1
+							cellB.x = cen1
+						elif va1 == 1:
+							cellA.y = cen1
+							cellB.y = cen1
+						else:
+							cellA.z = cen1
+							cellB.z = cen1
+						if axis == 0:
+							cellA.x = pw - 1
+							cellB.x = pw
+						elif axis == 1:
+							cellA.y = pw - 1
+							cellB.y = pw
+						else:
+							cellA.z = pw - 1
+							cellB.z = pw
+						idA = int(world.get_block(cellA.x, cellA.y, cellA.z))
+						idB = int(world.get_block(cellB.x, cellB.y, cellB.z))
+						var stabA := int(stab[idA])
+						var stabB := int(stab[idB])
+						var quad_under := false
+						var quad_leak := false
+						if stabA > 0 and stabB == 0:
+							var cc := pw - 1
+							for a in range(int(r0[0]), int(r0[1]) + 1):
+								for b in range(int(r1[0]), int(r1[1]) + 1):
+									var cell := Vector3i.ZERO
+									if va0 == 0:
+										cell.x = a
+									elif va0 == 1:
+										cell.y = a
+									else:
+										cell.z = a
+									if va1 == 0:
+										cell.x = b
+									elif va1 == 1:
+										cell.y = b
+									else:
+										cell.z = b
+									if axis == 0:
+										cell.x = cc
+									elif axis == 1:
+										cell.y = cc
+									else:
+										cell.z = cc
+									var cid := int(world.get_block(cell.x, cell.y, cell.z))
+									if cid == 0 or stab[cid] == 0:
+										continue
+									var surf := int(col_surf.get(Vector2i(cell.x, cell.z), -1))
+									if cell.y < surf:
+										quad_under = true
+									if _occl_is_interior(cell.x, cell.y, cell.z, stab):
+										quad_leak = true
+										leaking_cells += 1
+						elif stabB > 0 and stabA == 0:
+							var cc := pw
+							for a in range(int(r0[0]), int(r0[1]) + 1):
+								for b in range(int(r1[0]), int(r1[1]) + 1):
+									var cell := Vector3i.ZERO
+									if va0 == 0:
+										cell.x = a
+									elif va0 == 1:
+										cell.y = a
+									else:
+										cell.z = a
+									if va1 == 0:
+										cell.x = b
+									elif va1 == 1:
+										cell.y = b
+									else:
+										cell.z = b
+									if axis == 0:
+										cell.x = cc
+									elif axis == 1:
+										cell.y = cc
+									else:
+										cell.z = cc
+									var cid := int(world.get_block(cell.x, cell.y, cell.z))
+									if cid == 0 or stab[cid] == 0:
+										continue
+									var surf := int(col_surf.get(Vector2i(cell.x, cell.z), -1))
+									if cell.y < surf:
+										quad_under = true
+									if _occl_is_interior(cell.x, cell.y, cell.z, stab):
+										quad_leak = true
+										leaking_cells += 1
+						elif stabA > 0 and stabB > 0:
+							quad_leak = true
+							leaking_cells += 2
+						elif idA == 0 and idB == 0:
+							quad_leak = true
+							leaking_cells += 2
+						else:
+							no_emitter += 1
+						if quad_under:
+							underground_faces += 1
+							underground_verts += 4
+						if quad_leak:
+							leaking_faces += 1
+	return {
+		"total_verts": total_verts,
+		"verts_mesh": verts_mesh,
+		"verts_fluid": verts_fluid,
+		"verts_flora": verts_flora,
+		"total_faces": total_faces,
+		"underground_verts": underground_verts,
+		"underground_faces": underground_faces,
+		"leaking_cells": leaking_cells,
+		"leaking_faces": leaking_faces,
+		"no_emitter": no_emitter,
+	}
+
+
+func _occlude_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var stab := _occl_stab()
+	world.recenter(spawn.x, spawn.z, true)
+	var chunks: Array = []
+	var frames := 0
+	while frames < 2400:
+		chunks = _occl_built_chunks(4)
+		if chunks.size() >= 81:
+			break
+		await get_tree().physics_frame
+		frames += 1
+	chunks.sort_custom(func(a, b):
+		if a.cx != b.cx:
+			return a.cx < b.cx
+		return a.cz < b.cz
+	)
+	var interior_voxels := 0
+	var full_solid_slabs := 0
+	var occluders := 0
+	var box_sample: Array = []
+	var col_surf := {}
+	var cave_seed: Array = []
+	var seen_cave: Array = []
+	for c in chunks:
+		var st := _occl_chunk_stats(c, stab)
+		interior_voxels += st.interior
+		for i in range(st.slab_ns.size()):
+			if st.slab_ns[i] == 0:
+				full_solid_slabs += 1
+		for s in c.slabs:
+			if s.occluder != null:
+				occluders += 1
+				if box_sample.is_empty():
+					var bb: BoxOccluder3D = s.occluder.occluder
+					box_sample = [s.occluder.position, bb.size, s.y0]
+		var cxw := int(c.cx) * 16
+		var czw := int(c.cz) * 16
+		for col in range(256):
+			if int(st.srf[col]) >= 0:
+				col_surf[Vector2i(cxw + col / 16, czw + col % 16)] = int(st.srf[col])
+		if cave_seed.is_empty():
+			var sd := _occl_cave_seed(c, st.srf, stab)
+			if not sd.is_empty():
+				var stt := Vector3i(int(sd[0]) * 16 + int(sd[2]), int(sd[3]), int(sd[1]) * 16 + int(sd[4]))
+				var dupc := false
+				for r in seen_cave:
+					if stt.x >= int(r.aabb_min[0]) and stt.x <= int(r.aabb_max[0]) and stt.y >= int(r.aabb_min[1]) and stt.y <= int(r.aabb_max[1]) and stt.z >= int(r.aabb_min[2]) and stt.z <= int(r.aabb_max[2]):
+						dupc = true
+						break
+				if not dupc:
+					var flc := _occl_flood(sd, stab, 20000, 4)
+					seen_cave.append(flc)
+					if not bool(flc.open):
+						cave_seed = sd
+	var audit := _occl_quad_audit(chunks, stab, col_surf)
+	var cave := {"cells": 0, "aabb_min": null, "aabb_max": null, "seed": cave_seed}
+	if not cave_seed.is_empty():
+		var fl := _occl_flood(cave_seed, stab, 20000, 4)
+		cave = fl
+		cave["seed"] = cave_seed
+	var out := {
+		"mode": "occlude",
+		"radius": 4,
+		"chunks_built": chunks.size(),
+		"total_verts": audit.total_verts,
+		"verts_mesh": audit.verts_mesh,
+		"verts_fluid": audit.verts_fluid,
+		"verts_flora": audit.verts_flora,
+		"total_faces": audit.total_faces,
+		"underground_verts": audit.underground_verts,
+		"underground_faces": audit.underground_faces,
+		"interior_voxels": interior_voxels,
+		"leaking_cells": audit.leaking_cells,
+		"leaking_faces": audit.leaking_faces,
+		"no_emitter": audit.no_emitter,
+		"full_solid_slabs": full_solid_slabs,
+		"occluders": occluders,
+		"box_sample": box_sample,
+		"cull_3d": ProjectSettings.get_setting("rendering/occlusion_culling/camera/cull_3d") == true,
+		"use_occl": ProjectSettings.get_setting("rendering/occlusion_culling/use_occlusion_culling") == true,
+		"cave": cave,
+		"ok": audit.leaking_cells == 0,
+	}
+	Debug.result(out)
+	get_tree().quit()
+
+
+func _cave_snapshot_finish(cam: String, snapshot_path: String, spawn: Vector3) -> void:
+	var stab := _occl_stab()
+	var chunks: Array = []
+	var frames := 0
+	while frames < 2400:
+		chunks = _occl_built_chunks(4)
+		if chunks.size() >= 81:
+			break
+		await get_tree().physics_frame
+		frames += 1
+	chunks.sort_custom(func(a, b):
+		if a.cx != b.cx:
+			return a.cx < b.cx
+		return a.cz < b.cz
+	)
+	var seed: Array = []
+	var best_enclosed: Array = []
+	var best_enclosed_cells := 0
+	var best_any: Array = []
+	var best_any_cells := 0
+	var seen: Array = []
+	for c in chunks:
+		var st := _occl_chunk_stats(c, stab)
+		var sd := _occl_cave_seed(c, st.srf, stab)
+		if sd.is_empty():
+			continue
+		var start := Vector3i(int(sd[0]) * 16 + int(sd[2]), int(sd[3]), int(sd[1]) * 16 + int(sd[4]))
+		var dup := false
+		for r in seen:
+			if start.x >= int(r.aabb_min[0]) and start.x <= int(r.aabb_max[0]) and start.y >= int(r.aabb_min[1]) and start.y <= int(r.aabb_max[1]) and start.z >= int(r.aabb_min[2]) and start.z <= int(r.aabb_max[2]):
+				dup = true
+				break
+		if dup:
+			continue
+		var f := _occl_flood(sd, stab, 20000, 4)
+		seen.append(f)
+		var ncells := int(f.cells)
+		var eye_clear := int(world.get_block(int(sd[0]) * 16 + int(sd[2]), int(sd[3]) + 1, int(sd[1]) * 16 + int(sd[4]))) == 0
+		if not bool(f.open) and eye_clear and ncells > best_enclosed_cells:
+			best_enclosed_cells = ncells
+			best_enclosed = sd
+		if ncells > best_any_cells:
+			best_any_cells = ncells
+			best_any = sd
+	seed = best_enclosed if not best_enclosed.is_empty() else best_any
+	if seed.is_empty():
+		Debug.result({"mode": "cave", "cam": cam, "ok": false, "why": "no_cave"})
+		get_tree().quit()
+		return
+	var cx0 := int(seed[0])
+	var cz0 := int(seed[1])
+	var lx0 := int(seed[2])
+	var y0 := int(seed[3])
+	var lz0 := int(seed[4])
+	var wx0 := cx0 * 16 + lx0
+	var wy0 := y0
+	var wz0 := cz0 * 16 + lz0
+	world.recenter(wx0, wz0, true)
+	await _await_world_build(Vector3(float(wx0) + 0.5, float(wy0), float(wz0) + 0.5), 3000)
+	if player == null:
+		player = _spawn_player()
+	Debug.fly(true)
+	Debug.teleport(float(wx0) + 0.5, float(wy0) + player.EYE, float(wz0) + 0.5)
+	var dirs6 := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1), Vector3i(0, 1, 0), Vector3i(0, -1, 0)]
+	var aimdir := Vector3i.ZERO
+	var torch_pos := Vector3i.ZERO
+	var torches: Array = []
+	var best_aim := 0
+	for dd in dirs6:
+		var nb: Vector3i = Vector3i(wx0, wy0, wz0) + dd
+		var bid := int(world.get_block(nb.x, nb.y, nb.z))
+		if stab[bid] > 0:
+			var nb2: Vector3i = Vector3i(wx0, wy0, wz0) + dd * 2
+			var sc := 1
+			if int(world.get_block(nb2.x, nb2.y, nb2.z)) != 0:
+				sc += 1
+			if sc > best_aim:
+				best_aim = sc
+				aimdir = dd
+	for k in [1, 2]:
+		for dd in dirs6:
+			if k == 1 and dd == Vector3i(0, 1, 0):
+				continue
+			var tp: Vector3i = Vector3i(wx0, wy0, wz0) + dd * k
+			if int(world.get_block(tp.x, tp.y, tp.z)) == 0:
+				if torch_pos == Vector3i.ZERO:
+					torch_pos = tp
+				torches.append(tp)
+	for t in torches:
+		Debug.set_block(int(t.x), int(t.y), int(t.z), 22)
+	if not torches.is_empty():
+		for i in 300:
+			await get_tree().physics_frame
+	if aimdir != Vector3i.ZERO:
+		var eye := Vector3(float(wx0) + 0.5, float(wy0) + player.EYE, float(wz0) + 0.5)
+		var target := Vector3(float(wx0) + 0.5 + float(aimdir.x), float(wy0) + 0.5 + float(aimdir.y), float(wz0) + 0.5 + float(aimdir.z))
+		var dir := (target - eye).normalized()
+		var yaw := atan2(-dir.x, -dir.z)
+		var pitch := asin(clampf(dir.y, -1.0, 1.0))
+		player.look(yaw, pitch)
+	for i in 8:
+		await get_tree().physics_frame
+	await Debug.snap(snapshot_path)
+	Debug.result({"mode": "cave", "cam": cam, "ok": true, "seed": [wx0, wy0, wz0], "torch": [torch_pos.x, torch_pos.y, torch_pos.z], "w": int(get_viewport().size.x), "h": int(get_viewport().size.y)})
+	get_tree().quit()

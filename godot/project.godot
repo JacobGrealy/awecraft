@@ -72,4 +72,7 @@ ui_pause={
 
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
+occlusion_culling/use_occlusion_culling=true
+occlusion_culling/camera/cull_3d=true
+occlusion_culling/camera/cull_2d=true
 

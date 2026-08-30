@@ -24,3 +24,6 @@ You are the **orchestrator/coordinator** — plan, launch subagents, verify resu
 
 ## Task status
 Run `python3 tasks/scripts/tasks.py next` — `godot/CONTINUITY.md` §6 is authoritative. Report running servers with both `localhost` and LAN addresses.
+
+## Maintenance
+Compact `godot/CONTINUITY.md` when **>100 lines or >3 checkpoints** — keep latest 2 (`00o` + prior), archive rest to `godot/CONTINUITY.archive.md`.

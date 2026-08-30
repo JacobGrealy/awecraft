@@ -1,9 +1,14 @@
 meta:
-  updated_at: 2026-08-29T21:05
+  updated_at: 2026-08-30T11:26
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0110
+- AC-0151
+- AC-0150
+- AC-0092
+- AC-0036
+- AC-0109
+- AC-0111
 - AC-0144
 - AC-0145
 - AC-0146
@@ -17,14 +22,11 @@ queue:
 - AC-0112
 - AC-0113
 - AC-0093
-- AC-0109
 - AC-0125
 - AC-0123
 - AC-0094
 - AC-0098
 - AC-0101
-- AC-0092
-- AC-0036
 - AC-0037
 - AC-0038
 - AC-0039
@@ -36,13 +38,10 @@ queue:
 - AC-0088
 - AC-0089
 - AC-0090
-- AC-0111
 - AC-0114
 - AC-0115
 - AC-0130
 - AC-0137
-- AC-0148
-- AC-0149
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -2701,7 +2700,9 @@ intake:
   notes: 'BUG: water is only one layer - it should have layers all the way down in a column until it hits another block (bodies
     of water and waterfalls). Water sim must fill full vertical column to terrain (no empty space below, fills to block, spreads
     at bottom per minecraft.wiki/w/Water). Currently sea/placed water renders/simulates as single-layer. Fix world/water.gd
-    + chunk fluid logic + mesh. Verify sea stable + fluid harnesses. Parent: before AC-0036 underwater.'
+    + chunk fluid logic + mesh. Sub-point: caves under sea must stay water-filled — generator.gd caves carve at generator.gd:286
+    (cbk != B_WATER skip) but seabed y=h still carves to air, leaving water sheet with holes; after cave carve flood any 0/air
+    at y < sea in ocean columns (h < sea) back to B_WATER. Verify sea stable + fluid harnesses. Parent: before AC-0036 underwater.'
   comments: []
 - id: AC-0093
   title: drop-spin-in-place-not-orbit
@@ -3205,7 +3206,7 @@ intake:
   status: in-progress
   labels: []
   created_at: 2026-08-24T10:51
-  updated_at: 2026-08-29T08:41
+  updated_at: 2026-08-30T02:20
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -3219,7 +3220,11 @@ intake:
     Verify: 360 spin no pop, queue_size stable, GPU verts visible drop when looking down, battery green.
 
     Depends: vertical-subchunks if implemented (per-slab AABB better), otherwise column AABB.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-30T09:35
+    updated_at: null
+    text: '[user] Why is this still open? I thought this was finished?'
 - id: AC-0110
   title: occlusion-culling-caves-interior
   source: user
@@ -3227,11 +3232,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-24T10:51
-  updated_at: 2026-08-24T10:51
-  completed_at: null
+  updated_at: 2026-08-30T02:20
+  completed_at: 2026-08-30T02:20
   waiting_on: null
   parent_id: null
   notes: 'Occlusion for underground caves / interior faces.
@@ -3247,7 +3252,11 @@ intake:
     Verify: indoors not leaking faces, genhash unchanged, battery green.
 
     Depends: greedy-meshing (order matters: do greedy after interior skip or within).'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-30T02:35
+    updated_at: null
+    text: '[done 2026-08-30, coordinator-verified] Stage A: per-slab OccluderInstance3D + BoxOccluder3D 15^3 @ (8, y0+8, 8) [0.5 inset] for fully-solid slabs (c_ns==0, chunk.gd both build paths, 7-elem slab row row[6]) + project.godot [rendering] occlusion_culling master + camera cull_3d/cull_2d [canonical rendering/ keys verified via in-engine property-list probe]; headless-gated (DisplayServer). xvfb node graph: occluders 25 == full_solid_slabs 25 [r4 seed 44], box_sample (8, 56, 8) 15^3. Stage B: _s_is_interior 6-solid pre-pass (padded snap grid) = PROVEN NO-OP [AC-0106 greedy mesher already culls interior faces - MESHRECS 81/81 identical, recorded as legitimate outcome]. Gates ALL GREEN (coordinator re-ran post-subagent): G0 0 err; genhash 25/25 run1==run2 byte-identical to AC-0143 baseline; SMOKE 5 EXACT [player 136.78/2.82, interact place_ok cell 2 breakable 2, light 10/15/14, fluids 2730/888 stable 25/9, genhash]; occlude arm headless ok:true leaking_cells/faces 0; cave render enclosed torch-lit no leaks. Measured r4: total_verts 698196 / underground_verts 494864 (70.9%) / underground_faces 123716/174549 / interior_voxels 2192711 / cave 1417 cells aabb [-64,67,-64]..[-54,85,-23] open:false. New harness: AWECRAFT_LOGIC=occlude + AWECRAFT_CAM=cave [300-frame settle]. LIMITATION: Stage A draw-call reduction unprovable on this box [no forward_plus GPU - node-graph + settings + no-regression verified; user Windows forward_plus build = real proof]. Build 20260830-1130 109,722,192 B + 8080 byte-matched [9733a5210423ee0784757da60668be60] + 5180=200 [8443 down pre-build, serve_web.py absent - noted, not started]. Files: godot/project.godot, godot/world/chunk.gd, godot/scenes/main.gd [+595 harness-only / 0 del], tasks/HARNESS.md [occlude row + cave cam + stable row]. Plan: spec.html; results: AC-0110-results.html. Next: tasks.py next.'
 - id: AC-0111
   title: transparent-blocks-dont-occlude-neighbors
   source: user
@@ -4337,25 +4346,23 @@ intake:
   - id: 2
     created_at: 2026-08-30T01:25
     updated_at: null
-    text: '[agent] DONE 2026-08-30 01:25 - M1-M5 + M5b ALL GATED: M1 core/sphere_math.gd 212 lines [12-face convention,
-      faces 0/1 = flat home pair, 884/884 bitwise-identical edges, 8-corner tie order]; M2 AWECRAFT_LOGIC=sphere probe ok:true
-      [240/240 keying round-trips, world<->face 300/300, nk 240/240, corners 32, home 11/5/136]; M3 world.gd (face,cx,cz) keying
-      [key_for_sphere_pos single resolver; faces 2-11 sparse 1024-cell FIFO 512 data-level only; get/set_block_key]; M4
-      generate_face 2D per-face noise [home-pipeline reuse, per-face salt seed^(face*1000003), face-disjoint domain face*64
-      chunks, face 0 never routed]; M5 save v2 [SAVE_VERSION 2, planets [{id:0,R:4000,orbit:null}], edits
-      "0:face:ccx:ccz:local", R clamp [2000,8000] -> Game.planet_R, v1 soft-fail with clear log line, _conv_edits_v2 shared
-      by _continue_slot+_continue_probe, non-home edits not recorded P1a]; M5b continue arm conversion fix [edits_ok true].
-      FINAL BATTERY ALL GREEN: G0 0 err; genhash 25/25 run1==run2 byte-identical to AC-0091 ref
-      [.scratch/AC-0143-gates/genhash_new.txt]; SMOKE 5 EXACT [player 136.78/2.82, interact place_ok cell 2 inv 1, light
-      10/15/14, fluids 2730/888/25/9, nightday 15.0/3.0/14.19996]; save arm ok:true incl v1_softfail true; MINFO 121/81/40
-      [minfo_new.txt]; boundary ok:true [p95 401 / fwd 42154 - run-noise envelope 267-401 / 42.2k-47.6k across AC-0091+AC-0143
-      runs, no systematic shift - home path byte-identical]. Build 20260830-0113 109,704,784 B + 8080 byte-matched +
-      5180=200 [8443 https daemon already down pre-build, serve_web.py absent from repo - noted, not started]. Files:
-      godot/core/sphere_math.gd [new], godot/world/world.gd, godot/world/generator.gd, godot/world/chunk.gd,
+    text: '[agent] DONE 2026-08-30 01:25 - M1-M5 + M5b ALL GATED: M1 core/sphere_math.gd 212 lines [12-face convention, faces
+      0/1 = flat home pair, 884/884 bitwise-identical edges, 8-corner tie order]; M2 AWECRAFT_LOGIC=sphere probe ok:true [240/240
+      keying round-trips, world<->face 300/300, nk 240/240, corners 32, home 11/5/136]; M3 world.gd (face,cx,cz) keying [key_for_sphere_pos
+      single resolver; faces 2-11 sparse 1024-cell FIFO 512 data-level only; get/set_block_key]; M4 generate_face 2D per-face
+      noise [home-pipeline reuse, per-face salt seed^(face*1000003), face-disjoint domain face*64 chunks, face 0 never routed];
+      M5 save v2 [SAVE_VERSION 2, planets [{id:0,R:4000,orbit:null}], edits "0:face:ccx:ccz:local", R clamp [2000,8000] ->
+      Game.planet_R, v1 soft-fail with clear log line, _conv_edits_v2 shared by _continue_slot+_continue_probe, non-home edits
+      not recorded P1a]; M5b continue arm conversion fix [edits_ok true]. FINAL BATTERY ALL GREEN: G0 0 err; genhash 25/25
+      run1==run2 byte-identical to AC-0091 ref [.scratch/AC-0143-gates/genhash_new.txt]; SMOKE 5 EXACT [player 136.78/2.82,
+      interact place_ok cell 2 inv 1, light 10/15/14, fluids 2730/888/25/9, nightday 15.0/3.0/14.19996]; save arm ok:true
+      incl v1_softfail true; MINFO 121/81/40 [minfo_new.txt]; boundary ok:true [p95 401 / fwd 42154 - run-noise envelope 267-401
+      / 42.2k-47.6k across AC-0091+AC-0143 runs, no systematic shift - home path byte-identical]. Build 20260830-0113 109,704,784
+      B + 8080 byte-matched + 5180=200 [8443 https daemon already down pre-build, serve_web.py absent from repo - noted, not
+      started]. Files: godot/core/sphere_math.gd [new], godot/world/world.gd, godot/world/generator.gd, godot/world/chunk.gd,
       godot/autoload/save.gd, godot/autoload/game.gd [planet_R], godot/scenes/main.gd [probe + save v2 + _conv_edits_v2].
       Deliverables: tasks/AC-0143/AC-0143-results.html + continuity.md + tasks/HARNESS.md 3 [boundary envelope + sphere +
       save-v2 rows]. NO render (headless-only). Next: tasks.py next.]'
-
 - id: AC-0144
   title: planet-p1a-curved-ground-plays-flat
   source: user
@@ -4512,4 +4519,43 @@ intake:
 
 
     Depends: AC-0146 (after LOD). Ref: plan §11. Future — not queued until galaxy proven.'
+  comments: []
+- id: AC-0150
+  title: world-gap-at-sphere-face-boundary-trench-void
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-30T09:29
+  updated_at: 2026-08-30T09:34
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User-reported 2026-08-30 with screenshots/world-gap-2026-08-30-0928.jpg: large trench/void separating terrain where
+    sphere faces meet (see screenshot - water trench down to stone/void, chunks missing, not a small height-mismatch cliff).
+    AC-0143 spec.html:19 says terrain height seams are acceptable, but geometric gaps/holes must be gapless via pre-warp bitwise-identical
+    edge points (spec.html:15). This is a face-boundary generation/streaming gap (likely world.gd key_for_sphere_pos / neighbor_key
+    / generator per-face seeding for home faces 0/1, or missing chunk generation at face edge). Check godot/core/sphere_math.gd
+    _EDGES/world_to_face and godot/world/world.gd face-aware keying + generator.'
+  comments: []
+- id: AC-0151
+  title: water-always-blue-tint-strip
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-30T11:20
+  updated_at: 2026-08-30T11:20
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: Water grey 31/32 frames blue flicker frame0 only. Root cause data.gd:203 bake only base 32x32 but water anim 32 strip
+    1024px (blocks_atlas.json anim 32 at 224,0 fluid_anim.gdshader TILE_F 1/32). Fix loop f over anim_frames tint rc.y+f*32.
+    Scope data.gd _bake + apply_atlas.
   comments: []
