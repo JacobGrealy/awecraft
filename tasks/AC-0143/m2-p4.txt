@@ -1,0 +1,43 @@
+	# --- (4) home face (face 0) = AC-0091 flat world identity ---
+	var bx := int(WorldGen.SPAWN_X)
+	var bz := int(WorldGen.SPAWN_Z)
+	# sea surface at Data.SEA in the nearest ocean column (basis-probe method).
+	var ox := -1
+	var oz := -1
+	var best := 1 << 30
+	for z2 in range(-64, 65, 8):
+		for x2 in range(-64, 65, 8):
+			if WorldGen.terrain_height(x2, z2, Game.world_seed) < Data.SEA:
+				var dd := absi(x2 - bx) + absi(z2 - bz)
+				if dd < best:
+					best = dd
+					ox = x2
+					oz = z2
+	if ox < 0:
+		out["home_sea_ok"] = false
+		ok = false
+	else:
+		world.recenter(float(ox), float(oz), false)
+		await _await_core_3x3(Vector3(float(ox), 0.0, float(oz)), 3000)
+		var sw: int = world.get_block(ox, Data.SEA, oz)
+		var swa: int = world.get_block(ox, Data.SEA + 1, oz)
+		out["home_sea_at"] = [ox, oz]
+		out["home_sea_cell"] = sw
+		out["home_sea_ok"] = sw == WorldGen.B_WATER and swa == 0
+		ok = ok and out["home_sea_ok"]
+		world.recenter(float(bx), float(bz), false)
+		await _await_core_3x3(Vector3(float(bx), 0.0, float(bz)), 3000)
+	# spawn column (spawn chunk sync-generated at boot, AC-0119).
+	var bed: int = world.get_block(bx, 0, bz)
+	var top: int = world.surface_top(bx, bz)
+	var sb: int = world.get_block(bx, top, bz)
+	var sab: int = world.get_block(bx, top + 1, bz)
+	out["home_bedrock_y0"] = bed
+	out["home_spawn_top"] = top
+	out["home_bedrock_ok"] = bed == WorldGen.B_BEDROCK
+	out["home_spawn_top_ok"] = top == WorldGen.SPAWN_H
+	out["home_spawn_solid"] = bool(Data.block(sb).solid)
+	out["home_spawn_above_air"] = sab == 0
+	ok = ok and out["home_bedrock_ok"] and out["home_spawn_top_ok"] and out["home_spawn_solid"] and out["home_spawn_above_air"]
+	out["ok"] = ok
+	Debug.result(out)

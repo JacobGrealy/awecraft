@@ -1,0 +1,13 @@
+	# AC-0091 SOFT-FAIL: a save recorded at a different world height (H=80
+	# pre-AC-0091 saves lack the "height" key entirely) is treated as a NEW
+	# world at the SAME seed: edits and the saved player pose are dropped
+	# (their y-space no longer matches the terrain), spawn_point is used.
+	# Never a script error.
+	var height_ok: bool = int(data.get("height", 0)) == Data.HEIGHT
+	Save.active_slot = int(slot)
+	if world != null:
+		_free_game_nodes()
+	Game.new_world(int(data.get("seed", 1)))
+	_create_game_nodes()
+	if height_ok:
+		world.edits = data.get("edits", {})

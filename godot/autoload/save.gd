@@ -2,7 +2,7 @@ extends Node
 
 const SLOTS := 3
 const BASE := "user://awecraft_save"
-const SAVE_VERSION := 1
+const SAVE_VERSION := 2
 
 var active_slot := -1
 
@@ -79,7 +79,15 @@ func save_now(slot: int) -> bool:
 		"height": int(Data.HEIGHT),
 		"time": float(Game.time_of_day),
 		"ts": int(Time.get_unix_time_from_system()),
-		"edits": w.edits,
+		# AC-0143 M5 v2: edits re-keyed "0:<face>:<ccx>:<ccz>:<local>" (home
+		# pair: face 0 = ccx >= 0 half, face 1 = ccx < 0 half; non-home faces
+		# are data-level in P1a and never record edits).
+		"edits": _edits_v2(w.edits),
+		# AC-0143 M5 v2: planet list - P1a stores home only (id=0, R=4000
+		# exact, orbit=null until AC-0147); load clamps R to [2000, 8000].
+		"planets": [
+			{"id": 0, "R": 4000, "orbit": null},
+		],
 		"player": {
 			"pos": [float(p.position.x), float(p.position.y), float(p.position.z)],
 			"yaw": float(p.get_yaw()),
@@ -112,3 +120,24 @@ func format_time(t: float) -> String:
 	var hh := int(total / 60) % 24
 	var mm := int(total % 60)
 	return "%02d:%02d" % [hh, mm]
+
+# AC-0143 M5: v2 edit key form "0:<face>:<ccx>:<ccz>:<local>" (home pair
+# only in P1a; the planet_id:face:cx:cz:local form addresses non-home faces
+# from AC-0144+ when the player can reach them). Old runtime key
+# "<ccx>,<ccz>" maps to face 0 (ccx >= 0) / face 1 (ccx < 0) - no column
+# straddles the x=0 midline.
+func _edits_v2(old: Dictionary) -> Dictionary:
+	var v2: Dictionary = {}
+	for ck in old:
+		var parts: PackedStringArray = String(ck).split(",")
+		if parts.size() != 2:
+			continue
+		var ccx: int = parts[0].to_int()
+		var ccz: int = parts[1].to_int()
+		var face: int = 1 if ccx < 0 else 0
+		var cells = old[ck]
+		if typeof(cells) != TYPE_DICTIONARY:
+			continue
+		for li in cells:
+			v2["0:%d:%d:%d:%d" % [face, ccx, ccz, li]] = cells[li]
+	return v2

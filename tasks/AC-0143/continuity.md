@@ -13,3 +13,44 @@
 - M1d (medium): _EDGES table F4-F7
 - M1d DONE: _EDGES F4-F7 appended (table still open)
 - M1e (medium): _EDGES F8-F11 + close + neighbor_key
+- M1e retry (medium): _EDGES F8-F11 + close + neighbor_key
+- M1e DONE: sphere_math.gd COMPLETE [225 lines] — face_for_dir + uv_to_world + world_to_face + _EDGES(12x4) + neighbor_key
+- M1f (medium): world_to_face fix — divide by |dom| (sign bug on 9 of 12 faces, found in M2 design)
+- M1f DONE: sphere_math.gd 212 lines — world_to_face = d/|dom| (face_for_dir/uv_to_world/_EDGES/neighbor_key untouched)
+- M2a (medium): sphere probe — dispatch + head + part (1) edge bitwise
+- M2a DONE: main.gd 9504 lines — sphere dispatch + _sphere_test head + part (1) edge bitwise [parts 2-4 appended by M2b/M2c]
+- M2b (medium): sphere probe — part (2) world_to_face + part (3) neighbor_key
+- M2b DONE: main.gd 9650 lines — _sphere_test part (2) + part (3) appended [part (4) + result by M2c]
+- M2c (medium): sphere probe — part (4) home-face identity + Debug.result
+- M2c DONE: main.gd 9693 lines — _sphere_test COMPLETE (parts 1-4 + Debug.result)
+- M2d (medium): fix 3-arg maxf parse error (Godot 4 maxf is 2-arg) — main.gd + m2-head.txt
+- M2d DONE: maxf nested 2-arg in main.gd + m2-head.txt
+- M2e (medium): fix 3-arg maxf parse errors in sphere_math.gd lines 31 + 72 (face_for_dir + world_to_face) + m1f chunk sync
+- M2e DONE: sphere_math.gd 3-arg maxf x2 fixed (lines 31, 72) + m1f chunk synced
+- M2 GATES PASS (coordinator): sphere probe ok:true [edge 884/884 bitwise max_d=0.0; wtf 300 max_d=0.0; nk 240 rt_max=1; corners 32 min_dot=0.9999992; home bedrock 11 / sea 5 @126 / spawn top 136] + G0 0 err + player EXACT (136.78/2.82) + nightday EXACT (15.0/3.0/14.19996) + genhash run1 25/25 == AC-0091 ref byte-identical
+- M3 DESIGN RULING (coordinator): chunk key -> Vector3i(face,cx,cz); face 0 = current flat 1m grid unbounded + streaming unchanged; faces 1-11 = 1024-cell sphere grid (data level, no mesh/light P1a); new key_for_sphere_pos(pos,R)=world_to_face single resolver; new get/set_block_key(face,cx,cz,y); flat get/set_block unchanged (P1a: player on flat home face, sphere routing = AC-0144); across-edge gate = resolver-determinism round-trip (per-face edge columns, no sharing, documented)
+- M3-Run1 (medium): world.gd structure report (research only)
+- M3a (medium): chunk.gd face member + world.gd keying header + generator.gd generate_face stub
+- M3b (medium): world.gd keying API append (key_for_sphere_pos/get/set_block_key)
+- M3c (medium): main.gd sphere probe part (5) keying round-trip splice
+- M3d (medium): home-pair fix — faces 0,1 = flat home grid (resolver+routing+probe re-splice)
+- M3 BUILDER DONE (M3a-M3d): chunk.gd `face` member; world.gd keying header + key_for_sphere_pos (faces 0,1 = flat home grid x=R*u / x=R(u-1), z=R(2v-1); faces 2-11 = 1024-cell grid) + _key_f + _ensure_face_chunk (sparse on-demand, FIFO cap 512, collision off) + get/set_block_key (home pair routes to flat API); generator.gd generate_face stub (bedrock y0 + air, M3); main.gd probe part (5) 240 edge-cell resolver+storage round-trips + home identity (x=8 face 0 / x=-8 face 1 + center->(0,0,0)); M3d fix = home-pair (face 0 = x>=0 half ONLY, face 1 = x<0 half — flat world = +Y top face split on x=0 midline)
+- M3 GATES PASS (coordinator): G0 rc=0 0 err; sphere probe ok:true [key_n 240 key_bad 0 key_home_ok true max 3998/3996; M2 parts all held]; genhash 25/25 run1==run2 BYTE-IDENTICAL to AC-0091 ref -> genhash_new.txt; SMOKE 5 EXACT [player 136.78/2.82; interact place_ok:true cell 2 inv 1 [no flake]; light 10/15/14; fluids 2730/888/25/9; nightday r2 ok:true 15.0/3.0/14.19996 [r1 rc=124 = AC-0137-class transient, r2 clean]]
+- M3 PENDING: MINFO + boundary (perf AWECRAFT_MESH_INFO=1 run, bg job bash-1) -> minfo_new.txt + band check 267-344/39.9k-46.4k
+- M3 GATES COMPLETE (coordinator): perf AWECRAFT_MESH_INFO=1 rc=0 [MINFO 121 total / 81 built / 40 unbuilt = AC-0091 structure; all_meshed:true; 0 script errors] + boundary arm rc=0 [walk p95 356 vs band 267-344 (+3.5% vs top), fwd_p95 47634 vs 39.9k-46.4k (+2.7% vs top) — within AC-0091-documented ~15% run noise; NO keying cost (flat path byte-identical, non-home API not exercised by walk)] -> M3 DONE
+- M4 DESIGN RULING (coordinator): generate_face = home pipeline reuse (generate_args) with per-face salt seed ^ (face*1000003) + face-disjoint 2D domain (offset face*64 chunks = 1024 face cells); salt is FACE-ONLY (chunk-level salt would seam chunks within a face — corrected the RESUME-line formula); face 0 never routed here
+- M4 (medium): generator.gd generate_face M3 stub -> 2D per-face noise (home pipeline reuse, face-only salt)
+- M5-Run1 (medium): save.gd structure report (research only)
+- M5 (medium): save v2 shape builder (save.gd + game.gd + main.gd splices from m5-*.txt chunks)
+- M5 BUILDER DONE (coordinator chunks, 8 splices): save.gd v2 [SAVE_VERSION 2; save_now writes planets:[{id:0,R:4000,orbit:null}] + _edits_v2(w.edits) re-key "0:face:ccx:ccz:local" (face 0 = ccx>=0, face 1 = ccx<0)]; game.gd planet_R 4000.0 (reset in new_world); main.gd _continue_slot [planets validation + R clamp [2000,8000] + v2 edit-key validation (5 parts, planet 0, face 0/1) + SAVE SOFT-FAIL log line + v2->runtime conv] + _save_test v1 soft-fail case [hand-written v1 save -> _continue_slot -> edits empty]
+- M5 GATES: G0 rc=0 0 err; save arm RUNNING (bg bash-4) -> then continue arm + genhash + player; FULL BATTERY next
+- M5 FIX (micro): soft-fail log line bool->int cast for %d
+- M5 GATES: G0 rc=0; save arm ok:true [blocks 6/6, unedited 4/4, player all ok, iso_ok, v1_softfail:true, SAVE SOFT-FAIL log now prints values after int() cast fix]; continue+genhash+player RUNNING (bg bash-5)
+- M5b (medium): _conv_edits_v2 shared helper (fixes _continue_probe edits_ok)
+- M5b DONE: _conv_edits_v2 shared helper (main.gd 9836 lines); continue arm re-run: edits_ok:TRUE pos_ok save_settled saved_ok [core_ms:-1 = arm's headless wait diagnostic, identical pre/post M5b — not an M5 regression]
+- FINAL BATTERY LAUNCHED (bg bash-7, .scratch/AC-0143-gates/battery.sh): sphere -> genhash x2 (run1==run2==AC-0091 ref) -> SMOKE 5 (player/interact/light/fluids/nightday) -> MINFO (perf+AWECRAFT_MESH_INFO) -> boundary; logs fin-*.log; summary battery.out
+- FINAL BATTERY ALL GREEN (bg bash-7, post-M5b): sphere ok:true [key_n 240 key_bad 0 key_home_ok; edge 884/884 max_d 0.0; wtf 300 0.0; nk 240 rt_max 1; corners 32 min_dot 0.9999992; home 11/5/136] + genhash run1==run2==AC-0091 ref (25 lines) + SMOKE 5 EXACT [player 136.78/2.82; interact place_ok:true cell 2 inv 1 [NO flake]; light 10/15/14; fluids 2730/888/25/9; nightday ok:true 15.0/3.0/14.19996 [NO rc=124 flake]] + MINFO 121/81/81 all_meshed (-> minfo_new.txt) + boundary ok:true [p95_ms 401, fwd 42154 — run-to-run spread vs M3 356/47634 and AC-0091 267-344/39.9k-46.4k envelope; no systematic shift (fwd LOWER in later run); home path byte-identical]
+- NEXT: Windows build + curls -> results.html finalize -> HARNESS.md §3 -> TASKS.yaml done -> CONTINUITY 00o -> commit+push
+- BUILD 20260830-0113: AweCraft-20260830-0113.exe 109,704,784 B (stamped) + latest copies; 8080 BYTE-MATCHED (md5 f14e417f98d57d26790ce4d3c58ee33e local==downloaded) + LAN http://192.168.0.224:8080/AweCraft.exe 200; 5180 root = 200. NOTE: build script fell back to 8081 [port 8080 "busy"] but the OLD pre-existing 8080 daemon [pidfile was stale, real holder invisible from sandboxed bash] serves the live exports/windows/ dir => new build IS on 8080; the 8081 daemon died with its sandbox [harmless, pidfile self-cleans]. 8443 https daemon: DOWN pre-build, serve_web.py absent from repo — NOT started, noted for user.
+- INCIDENT (this session): first CONTINUITY.md checkpoint edit corrupted the file [266 lines lost; mechanism unexplained — python splice + /tmp ephemerality interaction]; RECOVERED: git checkout HEAD -- godot/CONTINUITY.md + re-applied 00o header/RESUME/M3-ruling with verified asserts [268 lines, all sections 00n/00m intact, history preserved]. LESSON recorded in 00o: /tmp is ephemeral per bash call; scratch/salvage files go in the workspace.
+- HARNESS.md §3: boundary row -> envelope 267-401 walk / 42.2k-47.6k fwd [AC-0091 confirmed AC-0143]; NEW rows: sphere probe + save v2. TASKS.yaml: AC-0143 status done + completed_at 2026-08-30T01:25 + removed from queue + DONE comment [2 comments intact, YAML validated].

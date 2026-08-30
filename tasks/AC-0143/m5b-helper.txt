@@ -1,0 +1,18 @@
+# AC-0143 M5: v2 save edits ("0:face:ccx:ccz:local") -> runtime form
+# ("<ccx>,<ccz>" -> {local: {b,f}}). Only 5-part keys are converted; any
+# other shape means the save soft-failed in _continue_slot first.
+func _conv_edits_v2(edits_raw) -> Dictionary:
+	var conv: Dictionary = {}
+	if typeof(edits_raw) != TYPE_DICTIONARY:
+		return conv
+	for ek in edits_raw:
+		var ep: PackedStringArray = String(ek).split(":")
+		if ep.size() != 5:
+			continue
+		var ck: String = "%d,%d" % [int(ep[2]), int(ep[3])]
+		if not conv.has(ck):
+			conv[ck] = {}
+		conv[ck][int(ep[4])] = edits_raw[ek]
+	return conv
+
+

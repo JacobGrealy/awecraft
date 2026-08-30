@@ -1,0 +1,29 @@
+	var clear_ok := not FileAccess.file_exists("user://awecraft_save_1.json") and Save.meta(1).is_empty()
+	# AC-0143 M5: a v1-format save (no planets, old "cx,cz" edit keys) must
+	# soft-fail on load: edits discarded, fresh world, one clear log line.
+	var v1_data := {
+		"version": 1,
+		"seed": S,
+		"height": Data.HEIGHT,
+		"time": 0.7,
+		"ts": 123,
+		"edits": {
+			"%d,%d" % [int(sx) / 16, int(sz) / 16]: { 0: {"b": 3, "f": 0} },
+		},
+		"player": {
+			"pos": [float(tx) + 0.5, float(ttop) + 1.0, float(tz) + 0.5],
+			"yaw": 0.0, "pitch": 0.0, "sel": 0, "hp": 20.0, "hunger": 20.0,
+			"inv": [], "armor": [],
+		},
+	}
+	var v1_softfail: bool = false
+	var vf := FileAccess.open("user://awecraft_save_0.json", FileAccess.WRITE)
+	var v1_written: bool = vf != null
+	if v1_written:
+		vf.store_string(JSON.stringify(v1_data))
+		vf.close()
+		await _continue_slot(0)
+		v1_softfail = world.edits.is_empty()
+	Save.clear(0)
+	Save.clear(2)
+	var ok: bool = saved_ok and slot0_ok and iso_ok and clear_pre_ok and clear_ok and v1_written and v1_softfail

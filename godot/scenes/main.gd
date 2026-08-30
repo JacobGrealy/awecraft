@@ -477,6 +477,24 @@ func quit_to_menu() -> void:
 		menu_ui.refresh_slots()
 
 
+# AC-0143 M5: v2 save edits ("0:face:ccx:ccz:local") -> runtime form
+# ("<ccx>,<ccz>" -> {local: {b,f}}). Only 5-part keys are converted; any
+# other shape means the save soft-failed in _continue_slot first.
+func _conv_edits_v2(edits_raw) -> Dictionary:
+	var conv: Dictionary = {}
+	if typeof(edits_raw) != TYPE_DICTIONARY:
+		return conv
+	for ek in edits_raw:
+		var ep: PackedStringArray = String(ek).split(":")
+		if ep.size() != 5:
+			continue
+		var ck: String = "%d,%d" % [int(ep[2]), int(ep[3])]
+		if not conv.has(ck):
+			conv[ck] = {}
+		conv[ck][int(ep[4])] = edits_raw[ek]
+	return conv
+
+
 func _continue_slot(slot: int) -> void:
 	var data := Save.load_full(int(slot))
 	if data.is_empty():
@@ -487,13 +505,36 @@ func _continue_slot(slot: int) -> void:
 	# (their y-space no longer matches the terrain), spawn_point is used.
 	# Never a script error.
 	var height_ok: bool = int(data.get("height", 0)) == Data.HEIGHT
+	# AC-0143 M5 SOFT-FAIL: v2 saves carry planets:[{id,R,orbit}] and edits
+	# keyed "planet_id:face:cx:cz:local" (home pair: face 0 = ccx >= 0 half,
+	# face 1 = ccx < 0 half; planet 0). Old saves (no planets, old "cx,cz"
+	# edit keys, or a non-home face/planet in an edit key) are discarded:
+	# fresh world at the same seed + one clear log line. R is clamped to
+	# [2000, 8000] on load (AC-0147 range). P1a never records non-home edits
+	# (faces 2-11 are data-level only; player edits land with AC-0144+).
+	var planets = data.get("planets", null)
+	var planets_ok: bool = typeof(planets) == TYPE_ARRAY and (planets as Array).size() > 0
+	var edits_raw = data.get("edits", {})
+	var edits_v2_ok: bool = typeof(edits_raw) == TYPE_DICTIONARY
+	if edits_v2_ok:
+		for ek in edits_raw:
+			var ep: PackedStringArray = String(ek).split(":")
+			if ep.size() != 5 or int(ep[0]) != 0 or int(ep[1]) < 0 or int(ep[1]) > 1:
+				edits_v2_ok = false
+				break
+	if height_ok and (not planets_ok or not edits_v2_ok):
+		print("SAVE SOFT-FAIL (old save format: planets_ok=%d edits_v2_ok=%d) - edits discarded, fresh world" % [int(planets_ok), int(edits_v2_ok)])
 	Save.active_slot = int(slot)
 	if world != null:
 		_free_game_nodes()
 	Game.new_world(int(data.get("seed", 1)))
+	if planets_ok:
+		var home = (planets as Array)[0]
+		if typeof(home) == TYPE_DICTIONARY:
+			Game.planet_R = clampf(float((home as Dictionary).get("R", 4000.0)), 2000.0, 8000.0)
 	_create_game_nodes()
-	if height_ok:
-		world.edits = data.get("edits", {})
+	if height_ok and planets_ok and edits_v2_ok:
+		world.edits = _conv_edits_v2(edits_raw)
 	var ps: Dictionary = data.get("player", {})
 	var pos: Array = ps.get("pos", [])
 	var target: Vector3
@@ -933,6 +974,10 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			return
 		if logic == "basis":
 			await _basis_test(spawn)
+			get_tree().quit()
+			return
+		if logic == "sphere":
+			await _sphere_test(spawn)
 			get_tree().quit()
 			return
 		if logic == "lightaudit":
@@ -7275,9 +7320,34 @@ func _save_test() -> void:
 		iso_ok = false
 	Save.clear(1)
 	var clear_ok := not FileAccess.file_exists("user://awecraft_save_1.json") and Save.meta(1).is_empty()
+	# AC-0143 M5: a v1-format save (no planets, old "cx,cz" edit keys) must
+	# soft-fail on load: edits discarded, fresh world, one clear log line.
+	var v1_data := {
+		"version": 1,
+		"seed": S,
+		"height": Data.HEIGHT,
+		"time": 0.7,
+		"ts": 123,
+		"edits": {
+			"%d,%d" % [int(sx) / 16, int(sz) / 16]: { 0: {"b": 3, "f": 0} },
+		},
+		"player": {
+			"pos": [float(tx) + 0.5, float(ttop) + 1.0, float(tz) + 0.5],
+			"yaw": 0.0, "pitch": 0.0, "sel": 0, "hp": 20.0, "hunger": 20.0,
+			"inv": [], "armor": [],
+		},
+	}
+	var v1_softfail: bool = false
+	var vf := FileAccess.open("user://awecraft_save_0.json", FileAccess.WRITE)
+	var v1_written: bool = vf != null
+	if v1_written:
+		vf.store_string(JSON.stringify(v1_data))
+		vf.close()
+		await _continue_slot(0)
+		v1_softfail = world.edits.is_empty()
 	Save.clear(0)
 	Save.clear(2)
-	var ok: bool = saved_ok and slot0_ok and iso_ok and clear_pre_ok and clear_ok
+	var ok: bool = saved_ok and slot0_ok and iso_ok and clear_pre_ok and clear_ok and v1_written and v1_softfail
 	Debug.result({
 		"ok": ok,
 		"saved_ok": saved_ok,
@@ -7291,6 +7361,7 @@ func _save_test() -> void:
 		"pos_ok": pos_ok, "sel_ok": sel_ok, "hp_ok": hp_ok, "hunger_ok": hunger_ok, "time_ok": time_ok,
 		"inv_match": inv_match,
 		"slot0_ok": slot0_ok,
+		"v1_softfail": v1_softfail,
 		"iso_ok": iso_ok,
 		"iso_base": iso_base,
 		"pos_before": pos_before,
@@ -7348,7 +7419,7 @@ func _continue_probe() -> void:
 	Save.active_slot = 0
 	Game.new_world(int(data.get("seed", 1)))
 	_create_game_nodes()
-	world.edits = data.get("edits", {})
+	world.edits = _conv_edits_v2(data.get("edits", {}))
 	var ps: Dictionary = data.get("player", {})
 	var pos: Array = ps.get("pos", [])
 	var target: Vector3
@@ -9420,3 +9491,346 @@ func _tref_tree_cells(x: int, z: int, h: int, th: int, dicts: Dictionary) -> Dic
 			out["ok"] = false
 			out["fails"].append("%d,%d,%d=%d" % [ck[0], ck[1], ck[2], got])
 	return out
+# AC-0143 probe (env-gated by AWECRAFT_LOGIC=sphere, harness-only, never
+# runs in game): runtime gate for core/sphere_math.gd.
+# (1) gapless shared edges: both faces of every _EDGES segment agree
+#     within 1e-9*R; dyadic samples (k/8) are bitwise-identical (counted;
+#     the two 0.5-offset segments may differ by ~1 ulp on non-dyadic t).
+# (2) world_to_face: face == face_for_dir, (u,v) in [0,1]^2, round-trip
+#     within 1e-6*R.
+# (3) neighbor_key: 12 edges x 5 cells + 8 corner cells x 4 dirs —
+#     deterministic, table face B, edge-adjacent line, A->B->A within
+#     +/-1 cell, corners stay at the corner.
+# (4) home face (face 0) = AC-0091 flat world identity.
+func _sphere_test(spawn: Vector3) -> void:
+	var out := {}
+	var ok := true
+	var R := 4000.0
+	var N := SphereMath.CELLS_PER_FACE
+	# --- (1) gapless shared edges: dual-face direct (u,v) evaluation ---
+	var n1 := 0
+	var max_d1 := 0.0
+	var bit_exact1 := 0
+	for f in 12:
+		for e in 4:
+			var segs: Array = SphereMath._EDGES[f][e]
+			for seg in segs:
+				var tlo: float = float(seg[0])
+				var span: float = float(seg[1]) - tlo
+				# 8 dyadic samples (k/8, exact in float) + 9 non-dyadic (j/9).
+				for k in 17:
+					var t: float
+					if k < 8:
+						t = tlo + span * (float(k) / 8.0)
+					else:
+						t = tlo + span * (float(k - 8) / 9.0)
+					var uA: float
+					var vA: float
+					if e == 0:
+						uA = 1.0
+						vA = t
+					elif e == 1:
+						uA = 0.0
+						vA = t
+					elif e == 2:
+						uA = t
+						vA = 1.0
+					else:
+						uA = t
+						vA = 0.0
+					var B: int = int(seg[2])
+					var eB: int = int(seg[3])
+					var s: float = float(seg[4]) + float(seg[5]) * t
+					var uB: float
+					var vB: float
+					if eB == 0:
+						uB = 1.0
+						vB = s
+					elif eB == 1:
+						uB = 0.0
+						vB = s
+					elif eB == 2:
+						uB = s
+						vB = 1.0
+					else:
+						uB = s
+						vB = 0.0
+					var pA: Vector3 = SphereMath.uv_to_world(f, uA, vA, R)
+					var pB: Vector3 = SphereMath.uv_to_world(B, uB, vB, R)
+					n1 += 1
+					var d1: float = maxf(maxf(absf(pA.x - pB.x), absf(pA.y - pB.y)), absf(pA.z - pB.z))
+					if d1 > max_d1:
+						max_d1 = d1
+					if pA == pB:
+						bit_exact1 += 1
+					if d1 > 1e-9 * R:
+						ok = false
+						out["edge_fail"] = [f, e, k, B, [pA.x, pA.y, pA.z], [pB.x, pB.y, pB.z]]
+	out["edge_samples"] = n1
+	out["edge_max_d"] = max_d1
+	out["edge_bitwise"] = bit_exact1
+	# --- (2) world_to_face: face / range / round-trip ---
+	var n2 := 0
+	var max_d2 := 0.0
+	var gvs: Array = [0.0, 0.25, 0.5, 0.75, 1.0]
+	for f in 12:
+		for u in gvs:
+			for v in gvs:
+				var p: Vector3 = SphereMath.uv_to_world(f, float(u), float(v), R)
+				var r: Dictionary = SphereMath.world_to_face(p, R)
+				var rf: int = int(r["face"])
+				n2 += 1
+				if rf != SphereMath.face_for_dir(p.normalized()):
+					ok = false
+					out["wtf_face_fail"] = [f, u, v, rf]
+				var ru: float = float(r["u"])
+				var rv: float = float(r["v"])
+				if ru < -1e-9 or ru > 1.0 + 1e-9 or rv < -1e-9 or rv > 1.0 + 1e-9:
+					ok = false
+					out["wtf_range_fail"] = [f, u, v, ru, rv]
+				var q: Vector3 = SphereMath.uv_to_world(rf, ru, rv, R)
+				var d2: float = (q - p).length()
+				if d2 > max_d2:
+					max_d2 = d2
+				if d2 > 1e-6 * R:
+					ok = false
+					out["wtf_roundtrip_fail"] = [f, u, v, d2]
+	out["wtf_samples"] = n2
+	out["wtf_max_d"] = max_d2
+	# --- (3) neighbor_key: 12-edge walks + 8 corner walks ---
+	var n3 := 0
+	var max_rt := 0
+	var ec: Array = [1, 256, 511, 768, 1022]
+	for f in 12:
+		for e in 4:
+			var dirA: Vector2i
+			if e == 0:
+				dirA = Vector2i(1, 0)
+			elif e == 1:
+				dirA = Vector2i(-1, 0)
+			elif e == 2:
+				dirA = Vector2i(0, 1)
+			else:
+				dirA = Vector2i(0, -1)
+			for c in ec:
+				var cx: int
+				var cz: int
+				if e == 0:
+					cx = N - 1
+					cz = c
+				elif e == 1:
+					cx = 0
+					cz = c
+				elif e == 2:
+					cx = c
+					cz = N - 1
+				else:
+					cx = c
+					cz = 0
+				var r1: Dictionary = SphereMath.neighbor_key(f, cx, cz, dirA)
+				var r1b: Dictionary = SphereMath.neighbor_key(f, cx, cz, dirA)
+				n3 += 1
+				if r1 != r1b:
+					ok = false
+					out["nk_nondet"] = [f, e, c]
+				var B: int = int(r1["face"])
+				var cxB: int = int(r1["cx"])
+				var czB: int = int(r1["cz"])
+				if B < 0 or B > 11 or cxB < 0 or cxB >= N or czB < 0 or czB >= N:
+					ok = false
+					out["nk_range"] = [f, e, c, r1]
+				# expected landing from the table (same lookup as neighbor_key).
+				var t: float = (cz + 0.5) / float(N) if e < 2 else (cx + 0.5) / float(N)
+				var segs3: Array = SphereMath._EDGES[f][e]
+				var seg3: Array = segs3[segs3.size() - 1]
+				for sg in segs3:
+					if t < float(sg[1]):
+						seg3 = sg
+						break
+				var eB: int = int(seg3[3])
+				if B != int(seg3[2]):
+					ok = false
+					out["nk_face"] = [f, e, c, B, int(seg3[2])]
+				var on_line: bool
+				if eB == 0:
+					on_line = cxB == N - 1
+				elif eB == 1:
+					on_line = cxB == 0
+				elif eB == 2:
+					on_line = czB == N - 1
+				else:
+					on_line = czB == 0
+				if not on_line:
+					ok = false
+					out["nk_edge"] = [f, e, c, r1, eB]
+				var dirB: Vector2i
+				if eB == 0:
+					dirB = Vector2i(1, 0)
+				elif eB == 1:
+					dirB = Vector2i(-1, 0)
+				elif eB == 2:
+					dirB = Vector2i(0, 1)
+				else:
+					dirB = Vector2i(0, -1)
+				var r2: Dictionary = SphereMath.neighbor_key(B, cxB, czB, dirB)
+				var df: bool = int(r2["face"]) == f
+				var dx: int = absi(int(r2["cx"]) - cx)
+				var dy: int = absi(int(r2["cz"]) - cz)
+				max_rt = maxi(max_rt, maxi(dx, dy))
+				if not df or dx > 1 or dy > 1:
+					ok = false
+					out["nk_rt"] = [f, e, c, r1, r2]
+	# 8 cube corners: owner cell from world_to_face; every step must land
+	# within +/-1 cell of the same physical corner.
+	var n4 := 0
+	var min_dot := 2.0
+	for sx in [-1, 1]:
+		for sy in [-1, 1]:
+			for sz in [-1, 1]:
+				var pc: Vector3 = Vector3(float(sx), float(sy), float(sz)).normalized() * R
+				var rc: Dictionary = SphereMath.world_to_face(pc, R)
+				var fc: int = int(rc["face"])
+				var uc: float = float(rc["u"])
+				var vc: float = float(rc["v"])
+				var cxc: int = 0 if uc < 0.5 else N - 1
+				var czc: int = 0 if vc < 0.5 else N - 1
+				var dirs4: Array = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+				for dir5 in dirs4:
+					var rr: Dictionary = SphereMath.neighbor_key(fc, cxc, czc, dir5)
+					n4 += 1
+					var fr: int = int(rr["face"])
+					var crx: int = int(rr["cx"])
+					var crz: int = int(rr["cz"])
+					if fr < 0 or fr > 11 or crx < 0 or crx >= N or crz < 0 or crz >= N:
+						ok = false
+						out["corner_range"] = [sx, sy, sz, [dir5.x, dir5.y], rr]
+					var wc: Vector3 = SphereMath.uv_to_world(fr, (float(crx) + 0.5) / float(N), (float(crz) + 0.5) / float(N), R)
+					var dot: float = wc.normalized().dot(pc.normalized())
+					if dot < min_dot:
+						min_dot = dot
+					if dot < 0.999:
+						ok = false
+						out["corner_off"] = [sx, sy, sz, [dir5.x, dir5.y], rr, dot]
+	out["nk_samples"] = n3
+	out["nk_roundtrip_max"] = max_rt
+	out["corner_samples"] = n4
+	out["corner_min_dot"] = min_dot
+	# --- (4) home face (face 0) = AC-0091 flat world identity ---
+	var bx := int(WorldGen.SPAWN_X)
+	var bz := int(WorldGen.SPAWN_Z)
+	# sea surface at Data.SEA in the nearest ocean column (basis-probe method).
+	var ox := -1
+	var oz := -1
+	var best := 1 << 30
+	for z2 in range(-64, 65, 8):
+		for x2 in range(-64, 65, 8):
+			if WorldGen.terrain_height(x2, z2, Game.world_seed) < Data.SEA:
+				var dd := absi(x2 - bx) + absi(z2 - bz)
+				if dd < best:
+					best = dd
+					ox = x2
+					oz = z2
+	if ox < 0:
+		out["home_sea_ok"] = false
+		ok = false
+	else:
+		world.recenter(float(ox), float(oz), false)
+		await _await_core_3x3(Vector3(float(ox), 0.0, float(oz)), 3000)
+		var sw: int = world.get_block(ox, Data.SEA, oz)
+		var swa: int = world.get_block(ox, Data.SEA + 1, oz)
+		out["home_sea_at"] = [ox, oz]
+		out["home_sea_cell"] = sw
+		out["home_sea_ok"] = sw == WorldGen.B_WATER and swa == 0
+		ok = ok and out["home_sea_ok"]
+		world.recenter(float(bx), float(bz), false)
+		await _await_core_3x3(Vector3(float(bx), 0.0, float(bz)), 3000)
+	# spawn column (spawn chunk sync-generated at boot, AC-0119).
+	var bed: int = world.get_block(bx, 0, bz)
+	var top: int = world.surface_top(bx, bz)
+	var sb: int = world.get_block(bx, top, bz)
+	var sab: int = world.get_block(bx, top + 1, bz)
+	out["home_bedrock_y0"] = bed
+	out["home_spawn_top"] = top
+	out["home_bedrock_ok"] = bed == WorldGen.B_BEDROCK
+	out["home_spawn_top_ok"] = top == WorldGen.SPAWN_H
+	out["home_spawn_solid"] = bool(Data.block(sb).solid)
+	out["home_spawn_above_air"] = sab == 0
+	# --- (5) world keying (M3): (face,cx,cz) resolver + storage round-trip ---
+	var n5 := 0
+	var bad5 := 0
+	var max_cx5 := 0
+	var max_cz5 := 0
+	var cells5: Array = [1, 256, 511, 768, 1022]
+	for face5 in 12:
+		for edge5 in 4:
+			for cell5 in cells5:
+				# cell adjacent to the edge: edge axis fixed at its boundary
+				# cell center, other axis at (cell5+0.5)/N.
+				var ua5: float = 0.5
+				var va5: float = 0.5
+				var t5: float = (float(cell5) + 0.5) / float(N)
+				if edge5 == 0:
+					ua5 = (float(N) - 0.5) / float(N)
+					va5 = t5
+				elif edge5 == 1:
+					ua5 = 0.5 / float(N)
+					va5 = t5
+				elif edge5 == 2:
+					ua5 = t5
+					va5 = (float(N) - 0.5) / float(N)
+				else:
+					ua5 = t5
+					va5 = 0.5 / float(N)
+				var P5: Vector3 = SphereMath.uv_to_world(face5, ua5, va5, R)
+				var k5: Dictionary = world.key_for_sphere_pos(P5, R)
+				var k5b: Dictionary = world.key_for_sphere_pos(P5, R)
+				if k5 != k5b:
+					bad5 += 1
+				var f5: int = int(k5["face"])
+				var ax5: int = int(k5["cx"])
+				var az5: int = int(k5["cz"])
+				var inrange5 := false
+				if f5 >= 0 and f5 <= 11:
+					if f5 == 0 or f5 == 1:
+						inrange5 = absi(ax5) <= int(R) + 1 and absi(az5) <= int(R) + 1
+					else:
+						inrange5 = ax5 >= 0 and ax5 < N and az5 >= 0 and az5 < N
+				if not inrange5:
+					bad5 += 1
+					n5 += 1
+					continue
+				max_cx5 = maxi(max_cx5, absi(ax5))
+				max_cz5 = maxi(max_cz5, absi(az5))
+				if f5 == 0 or f5 == 1:
+					var ccx5: int = int(floorf(float(ax5) / 16.0))
+					var ccz5: int = int(floorf(float(az5) / 16.0))
+					var kkey5: String = "%d,%d" % [ccx5, ccz5]
+					if not world.chunks.has(kkey5):
+						world.create_chunk(ccx5, ccz5, false)
+				var pre5: int = world.get_block_key(f5, ax5, az5, 10)
+				world.set_block_key(f5, ax5, az5, 10, 250)
+				var post5: int = world.get_block_key(f5, ax5, az5, 10)
+				if post5 != 250 or pre5 == 250:
+					bad5 += 1
+				n5 += 1
+	# (5b) home identity: key API == flat API on home-pair columns
+	# (face 0 = x >= 0 half, face 1 = x < 0 half); the face-center sphere
+	# position resolves to the flat origin.
+	var home5 := true
+	for yy5 in [0, 11, Data.SEA, WorldGen.SPAWN_H]:
+		if world.get_block_key(0, 8, 8, yy5) != world.get_block(8, yy5, 8):
+			home5 = false
+		if world.get_block_key(1, -8, 8, yy5) != world.get_block(-8, yy5, 8):
+			home5 = false
+	var kc5: Dictionary = world.key_for_sphere_pos(Vector3(0.0, R, 0.0), R)
+	if int(kc5["face"]) != 0 or int(kc5["cx"]) != 0 or int(kc5["cz"]) != 0:
+		home5 = false
+	out["key_n"] = n5
+	out["key_bad"] = bad5
+	out["key_max_cx"] = max_cx5
+	out["key_max_cz"] = max_cz5
+	out["key_home_ok"] = home5
+	ok = ok and bad5 == 0 and home5
+	ok = ok and out["home_bedrock_ok"] and out["home_spawn_top_ok"] and out["home_spawn_solid"] and out["home_spawn_above_air"]
+	out["ok"] = ok
+	Debug.result(out)

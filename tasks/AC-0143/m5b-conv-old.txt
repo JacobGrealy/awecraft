@@ -1,0 +1,9 @@
+	if height_ok and planets_ok and edits_v2_ok:
+		var conv: Dictionary = {}
+		for ek in edits_raw:
+			var ep: PackedStringArray = String(ek).split(":")
+			var ck: String = "%d,%d" % [int(ep[2]), int(ep[3])]
+			if not conv.has(ck):
+				conv[ck] = {}
+			conv[ck][int(ep[4])] = edits_raw[ek]
+		world.edits = conv

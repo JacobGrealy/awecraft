@@ -1,0 +1,78 @@
+# AC-0143 probe (env-gated by AWECRAFT_LOGIC=sphere, harness-only, never
+# runs in game): runtime gate for core/sphere_math.gd.
+# (1) gapless shared edges: both faces of every _EDGES segment agree
+#     within 1e-9*R; dyadic samples (k/8) are bitwise-identical (counted;
+#     the two 0.5-offset segments may differ by ~1 ulp on non-dyadic t).
+# (2) world_to_face: face == face_for_dir, (u,v) in [0,1]^2, round-trip
+#     within 1e-6*R.
+# (3) neighbor_key: 12 edges x 5 cells + 8 corner cells x 4 dirs —
+#     deterministic, table face B, edge-adjacent line, A->B->A within
+#     +/-1 cell, corners stay at the corner.
+# (4) home face (face 0) = AC-0091 flat world identity.
+func _sphere_test(spawn: Vector3) -> void:
+	var out := {}
+	var ok := true
+	var R := 4000.0
+	var N := SphereMath.CELLS_PER_FACE
+	# --- (1) gapless shared edges: dual-face direct (u,v) evaluation ---
+	var n1 := 0
+	var max_d1 := 0.0
+	var bit_exact1 := 0
+	for f in 12:
+		for e in 4:
+			var segs: Array = SphereMath._EDGES[f][e]
+			for seg in segs:
+				var tlo: float = float(seg[0])
+				var span: float = float(seg[1]) - tlo
+				# 8 dyadic samples (k/8, exact in float) + 9 non-dyadic (j/9).
+				for k in 17:
+					var t: float
+					if k < 8:
+						t = tlo + span * (float(k) / 8.0)
+					else:
+						t = tlo + span * (float(k - 8) / 9.0)
+					var uA: float
+					var vA: float
+					if e == 0:
+						uA = 1.0
+						vA = t
+					elif e == 1:
+						uA = 0.0
+						vA = t
+					elif e == 2:
+						uA = t
+						vA = 1.0
+					else:
+						uA = t
+						vA = 0.0
+					var B: int = int(seg[2])
+					var eB: int = int(seg[3])
+					var s: float = float(seg[4]) + float(seg[5]) * t
+					var uB: float
+					var vB: float
+					if eB == 0:
+						uB = 1.0
+						vB = s
+					elif eB == 1:
+						uB = 0.0
+						vB = s
+					elif eB == 2:
+						uB = s
+						vB = 1.0
+					else:
+						uB = s
+						vB = 0.0
+					var pA: Vector3 = SphereMath.uv_to_world(f, uA, vA, R)
+					var pB: Vector3 = SphereMath.uv_to_world(B, uB, vB, R)
+					n1 += 1
+					var d1: float = maxf(maxf(absf(pA.x - pB.x), absf(pA.y - pB.y)), absf(pA.z - pB.z))
+					if d1 > max_d1:
+						max_d1 = d1
+					if pA == pB:
+						bit_exact1 += 1
+					if d1 > 1e-9 * R:
+						ok = false
+						out["edge_fail"] = [f, e, k, B, [pA.x, pA.y, pA.z], [pB.x, pB.y, pB.z]]
+	out["edge_samples"] = n1
+	out["edge_max_d"] = max_d1
+	out["edge_bitwise"] = bit_exact1

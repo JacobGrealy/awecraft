@@ -28,7 +28,7 @@ const CELLS_PER_FACE := 1024
 
 static func face_for_dir(d: Vector3) -> int:
 	# 12-way: dominant axis (tie -> sign order), then sector.
-	var n: float = maxf(absf(d.x), absf(d.y), absf(d.z))
+	var n: float = maxf(maxf(absf(d.x), absf(d.y)), absf(d.z))
 	if n <= 0.0:
 		return 0
 	var x: float = d.x / n
@@ -60,48 +60,35 @@ static func uv_to_world(face: int, u: float, v: float, R: float) -> Vector3:
 	return c.normalized() * R
 
 static func world_to_face(pos: Vector3, R: float) -> Dictionary:
-	# Invert the affine cube map: C = d rescaled so the dominant component is
-	# exactly +-1 (the cube-face plane); (u,v) = C's coords in the face frame.
+	# Invert the affine cube map: C = d rescaled so the dominant component
+	# is exactly +-1 by |dom| (dividing by the signed dominant would flip
+	# the sign of the other components on negative-axis faces); (u,v) =
+	# C's coords in the face frame.
 	var len: float = pos.length()
 	if len <= 0.0:
 		return { "face": 0, "u": 0.5, "v": 0.5 }
 	var d: Vector3 = pos / len
 	var face: int = face_for_dir(d)
-	var axis: int = face / 2
-	var px: float
-	var py: float
-	var pz: float
-	match axis:
-		0, 1: # Y faces: C = (d.x/d.y, +-1, d.z/d.y)
-			px = d.x / d.y
-			py = 1.0 if axis == 0 else -1.0
-			pz = d.z / d.y
-		2, 3: # X faces: C = (+-1, d.y/d.x, d.z/d.x)
-			px = 1.0 if axis == 2 else -1.0
-			py = d.y / d.x
-			pz = d.z / d.x
-		_: # Z faces: C = (d.x/d.z, d.y/d.z, +-1)
-			px = d.x / d.z
-			py = d.y / d.z
-			pz = 1.0 if axis == 4 else -1.0
+	var dom: float = maxf(maxf(absf(d.x), absf(d.y)), absf(d.z))
+	var C: Vector3 = d / dom
 	var u: float
 	var v: float
 	match face:
 		0, 2, 8, 10:
-			u = px
+			u = C.x
 		1, 3, 9, 11:
-			u = px + 1.0
+			u = C.x + 1.0
 		4, 5, 6, 7:
-			u = (py + 1.0) * 0.5
+			u = (C.y + 1.0) * 0.5
 	match face:
 		0, 1, 2, 3:
-			v = (pz + 1.0) * 0.5
+			v = (C.z + 1.0) * 0.5
 		4, 6:
-			v = pz
+			v = C.z
 		5, 7:
-			v = pz + 1.0
+			v = C.z + 1.0
 		8, 9, 10, 11:
-			v = (py + 1.0) * 0.5
+			v = (C.y + 1.0) * 0.5
 	return { "face": face, "u": u, "v": v }
 
 # Neighbor edge table (P1a). _EDGES[face][edge], edge 0=u=1, 1=u=0, 2=v=1,
@@ -160,3 +147,66 @@ const _EDGES: Array = [
 		[[0.0, 1.0, 6, 3, 0.0, 1.0]],
 		[[0.0, 1.0, 11, 1, 0.0, 1.0]],
 	],
+
+	[ # face 8 (+Z even)
+		[[0.0, 1.0, 4, 2, 0.0, 1.0]],
+		[[0.0, 1.0, 9, 0, 0.0, 1.0]],
+		[[0.0, 1.0, 0, 2, 0.0, 1.0]],
+		[[0.0, 1.0, 2, 2, 0.0, 1.0]],
+	],
+	[ # face 9 (+Z odd)
+		[[0.0, 1.0, 8, 1, 0.0, 1.0]],
+		[[0.0, 1.0, 6, 2, 0.0, 1.0]],
+		[[0.0, 1.0, 1, 2, 0.0, 1.0]],
+		[[0.0, 1.0, 3, 2, 0.0, 1.0]],
+	],
+	[ # face 10 (-Z even)
+		[[0.0, 1.0, 5, 3, 0.0, 1.0]],
+		[[0.0, 1.0, 11, 0, 0.0, 1.0]],
+		[[0.0, 1.0, 0, 3, 0.0, 1.0]],
+		[[0.0, 1.0, 2, 3, 0.0, 1.0]],
+	],
+	[ # face 11 (-Z odd)
+		[[0.0, 1.0, 10, 1, 0.0, 1.0]],
+		[[0.0, 1.0, 7, 3, 0.0, 1.0]],
+		[[0.0, 1.0, 1, 3, 0.0, 1.0]],
+		[[0.0, 1.0, 3, 3, 0.0, 1.0]],
+	],
+]
+
+static func neighbor_key(face: int, cx: int, cz: int, dir: Vector2i) -> Dictionary:
+	# One cell step in dir (Vector2i, single axis) from (cx, cz). Interior ->
+	# same face. Edge -> _EDGES table: deterministic; 2:1 cell ratio across
+	# cube edges (documented "sector edge resolution mismatch"); corner cells
+	# resolved by the face_for_dir tie order.
+	var u1: float = (cx + 0.5) / float(CELLS_PER_FACE) + float(dir.x) / float(CELLS_PER_FACE)
+	var v1: float = (cz + 0.5) / float(CELLS_PER_FACE) + float(dir.y) / float(CELLS_PER_FACE)
+	if u1 > 0.0 and u1 < 1.0 and v1 > 0.0 and v1 < 1.0:
+		return { "face": face, "cx": cx + dir.x, "cz": cz + dir.y }
+	var e: int
+	if dir.x > 0:
+		e = 0
+	elif dir.x < 0:
+		e = 1
+	elif dir.y > 0:
+		e = 2
+	else:
+		e = 3
+	var t: float = (cz + 0.5) / float(CELLS_PER_FACE) if e < 2 else (cx + 0.5) / float(CELLS_PER_FACE)
+	var segs: Array = _EDGES[face][e]
+	var seg: Array = segs[segs.size() - 1]
+	for s_ in segs:
+		if t < float(s_[1]):
+			seg = s_
+			break
+	var s: float = float(seg[4]) + float(seg[5]) * t
+	var along: int = clampi(int(floor(s * float(CELLS_PER_FACE))), 0, CELLS_PER_FACE - 1)
+	var cxB: int
+	var czB: int
+	if int(seg[3]) < 2:
+		cxB = CELLS_PER_FACE - 1 if int(seg[3]) == 0 else 0
+		czB = along
+	else:
+		cxB = along
+		czB = CELLS_PER_FACE - 1 if int(seg[3]) == 2 else 0
+	return { "face": int(seg[2]), "cx": cxB, "cz": czB }

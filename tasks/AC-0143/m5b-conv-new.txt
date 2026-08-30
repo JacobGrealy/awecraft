@@ -1,0 +1,2 @@
+	if height_ok and planets_ok and edits_v2_ok:
+		world.edits = _conv_edits_v2(edits_raw)

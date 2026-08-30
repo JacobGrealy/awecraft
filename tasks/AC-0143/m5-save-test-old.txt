@@ -1,0 +1,4 @@
+	var clear_ok := not FileAccess.file_exists("user://awecraft_save_1.json") and Save.meta(1).is_empty()
+	Save.clear(0)
+	Save.clear(2)
+	var ok: bool = saved_ok and slot0_ok and iso_ok and clear_pre_ok and clear_ok

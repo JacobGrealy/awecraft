@@ -28,6 +28,15 @@ const REC_UNITS_PER_FRAME := 2048
 # per-instance culling margin (verified), so the test lives here in GDScript.
 const FRUSTUM_CULL_MARGIN := 32.0
 
+# AC-0143 M3 keying: the chunks dict is (face, cx, cz)-qualified.
+#   faces 0,1 (+Y halves, home pair) = the flat home world: key "%d,%d",
+#     1m columns; streaming/recenter byte-identical to pre-M3. Sphere
+#     mapping covers |x|,|z| <= R (face 0 = x >= 0, face 1 = x < 0).
+#   faces 2-11 = sparse on-demand data chunks: key "%d:%d:%d" (face,cx,cz)
+#     over the 1024-cell SphereMath grid (chunk = 16x16 cells); data level
+#     only in P1a (no meshing/lighting, AC-0144+).
+# Position->key single resolver: key_for_sphere_pos() (world_to_face).
+# P1a: flat get/set_block stay the home pair (player on the flat home face).
 var render_radius := 4
 var fluid_tick_radius := 14
 var collision_enabled := true
@@ -2301,3 +2310,88 @@ func _fluid_near(x: int, y: int, z: int) -> bool:
 	if is_fluid_id(get_block(x, y, z - 1)) or fluid_level(x, y, z - 1) > 0:
 		return true
 	return false
+
+# --- AC-0143 M3: (face, cx, cz) keying API (non-home faces, data level) ---
+# Non-home faces are sparse on-demand chunks: generated on first
+# key_for_sphere_pos / get_block_key / set_block_key access, FIFO-capped,
+# never meshed or lit in P1a (AC-0144+). Faces 0,1 (+Y halves) stay the
+# flat home grid (legacy "%d,%d" key, flat grid, streaming unchanged).
+const FACE_CELLS := 1024  # SphereMath.CELLS_PER_FACE
+const FACE_CHUNK_CAP := 512  # max resident non-home chunks (FIFO)
+var _face_order: Array = []  # FIFO of non-home chunk keys (eviction)
+
+func _key_f(face: int, ccx: int, ccz: int) -> String:
+	return "%d:%d:%d" % [face, ccx, ccz]
+
+# Single position->key resolver for planet-surface positions (radius R).
+# +Y halves (faces 0,1) = the flat home world (1m columns): face 0
+# x = R*u (x in [0,R]), face 1 x = R*(u-1) (x in [-R,0]); z = R*(2v-1).
+# Faces 2-11 resolve to their 1024-cell grid columns. Deterministic:
+# same position + R => same key.
+func key_for_sphere_pos(pos: Vector3, R: float) -> Dictionary:
+	var r: Dictionary = SphereMath.world_to_face(pos, R)
+	var face: int = int(r["face"])
+	var u: float = float(r["u"])
+	var v: float = float(r["v"])
+	if face == 0 or face == 1:
+		var fx: float = R * u if face == 0 else R * (u - 1.0)
+		return {"face": face, "cx": int(roundf(fx)), "cz": int(roundf(R * (2.0 * v - 1.0)))}
+	return {
+		"face": face,
+		"cx": clampi(int(floorf(u * float(FACE_CELLS))), 0, FACE_CELLS - 1),
+		"cz": clampi(int(floorf(v * float(FACE_CELLS))), 0, FACE_CELLS - 1),
+	}
+
+func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
+	var ccx: int = int(floorf(float(colx) / 16.0))
+	var ccz: int = int(floorf(float(colz) / 16.0))
+	var key: String = _key_f(face, ccx, ccz)
+	var c: Node3D = chunks.get(key)
+	if c != null:
+		return c
+	c = ChunkScript.new()
+	c.face = face
+	c.cx = ccx
+	c.cz = ccz
+	c.position = Vector3(ccx * 16, 0, ccz * 16)
+	c.collision_enabled = false
+	c.init_slabs()
+	add_child(c)
+	c.data = WorldGen.generate_face(face, ccx, ccz, Game.world_seed)
+	c.init_fl()
+	chunks[key] = c
+	_face_order.append(key)
+	if _face_order.size() > FACE_CHUNK_CAP:
+		var old: String = String(_face_order.pop_front())
+		if chunks.has(old):
+			var oc: Node3D = chunks[old]
+			chunks.erase(old)
+			oc.queue_free()
+	return c
+
+# Storage-level block access, any face. Face 0 (colx,colz) = flat 1m world
+# columns (routes to the flat API); faces 1-11 (colx,colz) = 1024-cell grid
+# columns (chunk = 16x16 cells). Non-home reads generate on first access
+# (data level; AC-0119's never-generate rule covers the flat read path).
+func get_block_key(face: int, colx: int, colz: int, y: int) -> int:
+	if y < 0 or y >= Data.HEIGHT:
+		return 0
+	if face == 0 or face == 1:
+		return get_block(colx, y, colz)
+	var c: Node3D = _ensure_face_chunk(face, colx, colz)
+	if c == null or c.data.is_empty():
+		return 0
+	return c.get_local(colx & 15, y, colz & 15)
+
+func set_block_key(face: int, colx: int, colz: int, y: int, id: int) -> void:
+	if y < 0 or y >= Data.HEIGHT:
+		return
+	if face == 0 or face == 1:
+		set_block(colx, y, colz, id)
+		return
+	var c: Node3D = _ensure_face_chunk(face, colx, colz)
+	if c == null or c.data.is_empty():
+		return
+	var fi: int = (y << 8) | ((colz & 15) << 4) | (colx & 15)
+	c.set_local(colx & 15, y, colz & 15, id)
+	c.fl[fi] = 0

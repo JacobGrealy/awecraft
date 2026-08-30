@@ -1,0 +1,79 @@
+	# --- (5) world keying (M3): (face,cx,cz) resolver + storage round-trip ---
+	var n5 := 0
+	var bad5 := 0
+	var max_cx5 := 0
+	var max_cz5 := 0
+	var cells5: Array = [1, 256, 511, 768, 1022]
+	for face5 in 12:
+		for edge5 in 4:
+			for cell5 in cells5:
+				# cell adjacent to the edge: edge axis fixed at its boundary
+				# cell center, other axis at (cell5+0.5)/N.
+				var ua5: float = 0.5
+				var va5: float = 0.5
+				var t5: float = (float(cell5) + 0.5) / float(N)
+				if edge5 == 0:
+					ua5 = (float(N) - 0.5) / float(N)
+					va5 = t5
+				elif edge5 == 1:
+					ua5 = 0.5 / float(N)
+					va5 = t5
+				elif edge5 == 2:
+					ua5 = t5
+					va5 = (float(N) - 0.5) / float(N)
+				else:
+					ua5 = t5
+					va5 = 0.5 / float(N)
+				var P5: Vector3 = SphereMath.uv_to_world(face5, ua5, va5, R)
+				var k5: Dictionary = world.key_for_sphere_pos(P5, R)
+				var k5b: Dictionary = world.key_for_sphere_pos(P5, R)
+				if k5 != k5b:
+					bad5 += 1
+				var f5: int = int(k5["face"])
+				var ax5: int = int(k5["cx"])
+				var az5: int = int(k5["cz"])
+				var inrange5 := false
+				if f5 >= 0 and f5 <= 11:
+					if f5 == 0 or f5 == 1:
+						inrange5 = absi(ax5) <= int(R) + 1 and absi(az5) <= int(R) + 1
+					else:
+						inrange5 = ax5 >= 0 and ax5 < N and az5 >= 0 and az5 < N
+				if not inrange5:
+					bad5 += 1
+					n5 += 1
+					continue
+				max_cx5 = maxi(max_cx5, absi(ax5))
+				max_cz5 = maxi(max_cz5, absi(az5))
+				if f5 == 0 or f5 == 1:
+					var ccx5: int = int(floorf(float(ax5) / 16.0))
+					var ccz5: int = int(floorf(float(az5) / 16.0))
+					var kkey5: String = "%d,%d" % [ccx5, ccz5]
+					if not world.chunks.has(kkey5):
+						world.create_chunk(ccx5, ccz5, false)
+				var pre5: int = world.get_block_key(f5, ax5, az5, 10)
+				world.set_block_key(f5, ax5, az5, 10, 250)
+				var post5: int = world.get_block_key(f5, ax5, az5, 10)
+				if post5 != 250 or pre5 == 250:
+					bad5 += 1
+				n5 += 1
+	# (5b) home identity: key API == flat API on home-pair columns
+	# (face 0 = x >= 0 half, face 1 = x < 0 half); the face-center sphere
+	# position resolves to the flat origin.
+	var home5 := true
+	for yy5 in [0, 11, Data.SEA, WorldGen.SPAWN_H]:
+		if world.get_block_key(0, 8, 8, yy5) != world.get_block(8, yy5, 8):
+			home5 = false
+		if world.get_block_key(1, -8, 8, yy5) != world.get_block(-8, yy5, 8):
+			home5 = false
+	var kc5: Dictionary = world.key_for_sphere_pos(Vector3(0.0, R, 0.0), R)
+	if int(kc5["face"]) != 0 or int(kc5["cx"]) != 0 or int(kc5["cz"]) != 0:
+		home5 = false
+	out["key_n"] = n5
+	out["key_bad"] = bad5
+	out["key_max_cx"] = max_cx5
+	out["key_max_cz"] = max_cz5
+	out["key_home_ok"] = home5
+	ok = ok and bad5 == 0 and home5
+	ok = ok and out["home_bedrock_ok"] and out["home_spawn_top_ok"] and out["home_spawn_solid"] and out["home_spawn_above_air"]
+	out["ok"] = ok
+	Debug.result(out)

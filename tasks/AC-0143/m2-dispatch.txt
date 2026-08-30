@@ -1,0 +1,4 @@
+		if logic == "sphere":
+			await _sphere_test(spawn)
+			get_tree().quit()
+			return

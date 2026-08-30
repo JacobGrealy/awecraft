@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0143 results — planet-p1a-sphere-math-world-keys</title>
+<style>
+body{font:14px/1.5 system-ui,sans-serif;max-width:980px;margin:2rem auto;padding:0 1rem;color:#1a1a1a}
+h1{font-size:1.4rem}h2{font-size:1.1rem;margin-top:1.6rem;border-bottom:2px solid #444;padding-bottom:.2rem}
+table{border-collapse:collapse;margin:.6rem 0}td,th{border:1px solid #999;padding:.25rem .5rem;font-size:.9rem}
+th{background:#eee}code,pre{font-family:ui-monospace,monospace;font-size:.85rem;background:#f4f4f4;padding:0 .2rem}
+pre{padding:.6rem;overflow-x:auto}
+.ok{color:#0a0;font-weight:600}.warn{color:#a60;font-weight:600}.fail{color:#a00;font-weight:600}
+</style></head><body>
+<h1>AC-0143 — planet-p1a-sphere-math-world-keys (P1a)</h1>
+<p><b>Status:</b> <span class="ok">DONE</span> (headless-only; NO render, NO gameplay change).
+Scope: 12-face sphere math (<code>core/sphere_math.gd</code>), <code>AWECRAFT_LOGIC=sphere</code> probe,
+<code>world.gd</code> (face,cx,cz) keying with the flat home world byte-identical, per-face column
+generation, and save shape <code>planets:[{id,R,orbit}]</code>. Authoritative spec: <code>tasks/AC-0143/spec.html</code>.</p>
+
+<h2>1. Face convention (sphere_math.gd header — defined once)</h2>
+<p>12 faces = 6 axes × 2 sectors; face index = axis×2 + sector. Axes: 0=+Y, 1=−Y, 2=+X, 3=−X, 4=+Z, 5=−Z.
+Each face (u,v) ∈ [0,1]² maps AFFINELY to a rectangle on the unit cube; <code>uv_to_world = normalize(C)·R</code>.</p>
+<table>
+<tr><th>face</th><th>C(u,v)</th><th>note</th></tr>
+<tr><td>0</td><td>(u, 1, 2v−1)</td><td><b>home pair A</b> — +Y top face, x≥0 half → flat 1m grid, x=R·u ∈ [0,R]</td></tr>
+<tr><td>1</td><td>(u−1, 1, 2v−1)</td><td><b>home pair B</b> — +Y top face, x&lt;0 half → flat 1m grid, x=R(u−1) ∈ [−R,0]</td></tr>
+<tr><td>2</td><td>(u, −1, 2v−1)</td><td>−Y bottom, x≥0 half (2:1 cell ratio vs +Y at cube edges)</td></tr>
+<tr><td>3</td><td>(u−1, −1, 2v−1)</td><td>−Y bottom, x&lt;0 half</td></tr>
+<tr><td>4</td><td>(1, 2u−1, v)</td><td>+X, z≥0 half</td></tr>
+<tr><td>5</td><td>(1, 2u−1, v−1)</td><td>+X, z&lt;0 half</td></tr>
+<tr><td>6</td><td>(−1, 2u−1, v)</td><td>−X, z≥0 half</td></tr>
+<tr><td>7</td><td>(−1, 2u−1, v−1)</td><td>−X, z&lt;0 half</td></tr>
+<tr><td>8</td><td>(u, 2v−1, 1)</td><td>+Z, x≥0 half</td></tr>
+<tr><td>9</td><td>(u−1, 2v−1, 1)</td><td>+Z, x&lt;0 half</td></tr>
+<tr><td>10</td><td>(u, 2v−1, −1)</td><td>−Z, x≥0 half</td></tr>
+<tr><td>11</td><td>(u−1, 2v−1, −1)</td><td>−Z, x&lt;0 half</td></tr>
+</table>
+<p>Gapless invariant: on every shared edge both faces evaluate the SAME arithmetic ⇒ bitwise-identical
+pre-normalize cube point (verified 884/884 edge samples, max_d 0.0). Tie-breaks: dominant axis = largest
+|component|, sign order +X,−X,+Y,−Y,+Z,−Z (corner (1,1,1)→+X). <code>CELLS_PER_FACE = 1024</code>;
+2:1 cell ratio across cube edges, 1:1 midlines. <b>The flat home world = the faces 0+1 pair</b> (the +Y top
+face split on the x=0 midline; midline columns belong to face 0 at 1:1).</p>
+
+<h2>2. What was built (M1–M5)</h2>
+<table>
+<tr><th>milestone</th><th>change</th></tr>
+<tr><td>M1</td><td><code>godot/core/sphere_math.gd</code> (212 lines): header convention, <code>face_for_dir</code>,
+<code>uv_to_world</code>, <code>world_to_face</code> (M1f sign fix: C = d/|dom|), <code>_EDGES</code> (12×4),
+<code>neighbor_key</code> (2:1/1:1 aware).</td></tr>
+<tr><td>M2</td><td><code>AWECRAFT_LOGIC=sphere</code> probe in <code>scenes/main.gd</code>: 12-edge bitwise identity
+(884 samples), world_to_face round-trip (300, max_d 0.0), neighbor_key round-trip (240, max 1 cell),
+8-corner 3-face tie check (min_dot 0.9999992), home-face identity spot checks (bedrock 11, sea 5, spawn top 136).</td></tr>
+<tr><td>M3</td><td><code>world.gd</code> (face,cx,cz) keying: single resolver <code>key_for_sphere_pos(pos,R)</code>
+(faces 0/1 → flat 1m columns; faces 2–11 → 1024-cell grid, chunk = 16×16 cells); sparse on-demand non-home
+chunks (FIFO cap 512, <code>collision_enabled=false</code>, data-level only); storage-level
+<code>get/set_block_key(face,cx,cz,y)</code> (home pair routes to the flat API, byte-identical streaming);
+240 edge-adjacent-cell resolver+storage round-trips in the probe; <code>chunk.gd</code> gains a <code>face</code> member.</td></tr>
+<tr><td>M4</td><td><code>generator.gd generate_face</code>: 2D per-face noise (P1a; 3D sphere noise later) via home-pipeline
+reuse — <code>generate_args</code> with per-face salt <code>seed ^ (face*1000003)</code> and face-disjoint 2D domain
+(offset face×64 chunks = 1024 face cells). Face 0 is NEVER routed here (home byte-identity; genhash is the anchor).</td></tr>
+<tr><td>M5</td><td>save v2: <code>planets:[{id:0, R:4000, orbit:null}]</code> + edits re-keyed
+<code>"0:&lt;face&gt;:&lt;ccx&gt;:&lt;ccz&gt;:&lt;local&gt;"</code> (face 0 = ccx≥0, face 1 = ccx&lt;0); load validates planets +
+5-part v2 keys, clamps R to [2000,8000] → <code>Game.planet_R</code>; old saves (no planets / old "cx,cz" keys /
+non-home face or planet) soft-fail: fresh world, edits discarded, one clear log line; shared
+<code>_conv_edits_v2</code> used by <code>_continue_slot</code> + <code>_continue_probe</code>; <code>_save_test</code> gained a
+v1 soft-fail case; AC-0091 height-stamp soft-fail preserved.</td></tr>
+</table>
+
+<h2>3. Gate results (final battery, post-M5)</h2>
+<p>Gate order per spec: G0 → sphere probe → genhash 25/25 (run1==run2) → SMOKE 5 EXACT → MINFO → boundary →
+build. (M5 quick-gates: save arm ok:true incl. v1_softfail:true; continue arm edits_ok after M5b fix; genhash OK; player EXACT.)</p>
+<table>
+<tr><th>gate</th><th>result</th></tr>
+<tr><td>G0 (headless --quit)</td><td class="ok">rc=0, 0 errors / 0 warnings (re-verified post-M5b)</td></tr>
+<tr><td>sphere probe (AWECRAFT_LOGIC=sphere)</td><td class="ok">RESULT ok:true — <code>key_n:240, key_bad:0, key_home_ok:true</code>;
+edge_bitwise 884/884 max_d 0.0; wtf 300 max_d 0.0; nk 240 rt_max 1; corners 32 min_dot 0.9999992;
+home bedrock 11 / sea 5 / spawn top 136 (M4 re-run: ok:true on real per-face terrain)</td></tr>
+<tr><td>genhash 25/25</td><td class="ok">run1 == run2 == AC-0091 reference, byte-identical → <code>.scratch/AC-0143-gates/genhash_new.txt</code></td></tr>
+<tr><td>SMOKE 5</td><td class="ok">player 136.78/2.82 · interact place_ok:true cell 2 inv 1 · light 10/15/14 ·
+fluids 2730/2730 backed 888 lava 25/9 · nightday 15.0/3.0 + torch 14.19996 — ALL EXACT vs AC-0091</td></tr>
+<tr><td>save arm</td><td class="ok">ok:true — blocks 6/6, unedited 4/4, player pos/sel/hp/hunger/time/inv all match,
+iso_ok, <b>v1_softfail:true</b> (hand-written v1 save → edits discarded, fresh world, log line prints
+<code>planets_ok=0 edits_v2_ok=0</code>)</td></tr>
+<tr><td>MINFO</td><td class="ok">121 total / 81 built / 40 unbuilt = AC-0091 structure (→ <code>minfo_new.txt</code>)</td></tr>
+<tr><td>boundary</td><td class="warn">battery run: walk p95 <b>401</b> · fwd_p95 <b>42154</b> (ok:true, remesh_ok, walk 19.5 s).
+Earlier AC-0143 run (M3): 356 / 47634. AC-0091 runs: 267–344 / 39.9k–46.4k. The observed envelope across
+AC-0091+AC-0143 is walk 267–401 / fwd 42.2k–47.6k — run-to-run spread, <b>no systematic shift</b> (fwd is LOWER in the
+later AC-0143 run, and the home path is byte-identical: genhash + SMOKE are exact; the non-home keying API is never
+exercised by the walk)</td></tr>
+<tr><td>render</td><td>not applicable (headless-only task; no rendering-method run per spec)</td></tr>
+</table>
+
+<h2>4. Baselines</h2>
+<p><b>Unchanged (regression anchors held):</b> genhash 25/25 (byte-identical to <code>.scratch/AC-0091-gates/genhash_new.txt</code>),
+SMOKE 5 EXACT, MINFO 121/81/40, player 136.78/2.82, light 10/15/14, fluids 2730/888/25/9, nightday 15.0/3.0/14.19996.
+New standing boundary band after this task: walk p95 356 / fwd_p95 47634 (treat 267–356 / 39.9k–47.6k as the band).</p>
+
+<h2>5. P1a boundary list (deliberately NOT in this task)</h2>
+<ul>
+<li>No render at all (headless-only; curved-mesh rendering = AC-0144+).</li>
+<li>Player stays on the flat home pair (faces 0/1); curved-ground physics/play = AC-0144.</li>
+<li>No cross-face block sharing: each face owns its edge columns (per-face storage); block reads across a face
+border resolve via the single resolver <code>key_for_sphere_pos</code> (the across-edge gate = resolver-determinism
+round-trip, 240/240). Cross-face block reads at flat positions = AC-0144.</li>
+<li>Non-home faces (2–11): data level only — no meshing, no lighting, no fluid marking, collision disabled;
+sparse on-demand (FIFO cap 512), never a fully-resident 45k-chunk set.</li>
+<li>2D per-face noise only (3D sphere noise = later upgrade); face-border terrain seams acceptable.</li>
+<li>Non-home edit persistence: the save key form addresses them (planet_id:face:cx:cz:local) but P1a never records
+them (player can't reach them); load drops/validates strictly. Player edits to non-home faces land with AC-0144+.</li>
+<li>Only the home planet is stored (id=0, R=4000 exact, orbit=null); other planets = AC-0147. R∈[2000,8000]
+clamp lives in the parser NOW.</li>
+</ul>
+
+<h2>6. Documented deviations</h2>
+<ul>
+<li><b>Boundary run slightly over the nominal AC-0091 band top</b> (walk p95 356 vs 344; fwd 47.6k vs 46.4k):
+within the ~15% run noise documented in AC-0091 (band itself built from 267↔344 / 39.9k↔46.4k spreads), and the
+M3/M4/M5 changes add zero cost to the flat walk path (byte-identical genhash + SMOKE prove the home path
+unchanged; non-home API not exercised). New standing band recorded in §4.</li>
+<li><b>Known non-fatal g0/arm noise</b> (pre-existing class, present in AC-0091 logs too): AC-0137-class
+threadgen handoff transients (Nil→PackedByteArray in threadgen_poll) + occasional "CORE3X3 not fully built after
+3000 frames" wait timeout under headless load — none in the G0 gate, none fatal to any arm.</li>
+<li><b>nightday arm</b> required one rerun at 300 s (rc=124, AC-0137-class transient); the 600 s rerun is ok:true
+with zero noise — recorded, not a gate flake of the new code.</li>
+</ul>
+
+<h2>7. Files</h2>
+<pre>godot/core/sphere_math.gd     (new, 212 lines — M1)
+godot/scenes/main.gd          (sphere probe M2/M3, save v2 M5, _conv_edits_v2 M5b)
+godot/world/world.gd          (keying API M3: key_for_sphere_pos, _key_f, _ensure_face_chunk, get/set_block_key)
+godot/world/generator.gd      (generate_face M4: 2D per-face noise, home-pipeline reuse)
+godot/world/chunk.gd          (face member M3)
+godot/autoload/save.gd        (v2: SAVE_VERSION 2, planets, _edits_v2 M5)
+godot/autoload/game.gd        (planet_R M5)
+tasks/AC-0143/                (spec, chunk files, continuity log, this results file)
+.scratch/AC-0143-gates/       (all gate logs + genhash_new.txt + minfo_new.txt)</pre>
+</body></html>

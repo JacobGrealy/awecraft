@@ -1,0 +1,9 @@
+		# AC-0143 M5 v2: edits re-keyed "0:<face>:<ccx>:<ccz>:<local>" (home
+		# pair: face 0 = ccx >= 0 half, face 1 = ccx < 0 half; non-home faces
+		# are data-level in P1a and never record edits).
+		"edits": _edits_v2(w.edits),
+		# AC-0143 M5 v2: planet list - P1a stores home only (id=0, R=4000
+		# exact, orbit=null until AC-0147); load clamps R to [2000, 8000].
+		"planets": [
+			{"id": 0, "R": 4000, "orbit": null},
+		],

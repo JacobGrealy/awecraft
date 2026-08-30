@@ -1,0 +1,12 @@
+
+# AC-0143 M3: per-face column generation (non-home faces only — face 0
+# always uses generate(); home-face byte-identity). M3 stub: bedrock at
+# y=0 + air, deterministic. M4 replaces the body with seeded 2D per-face
+# noise (salt = seed ^ (face*1000003) ^ (cx*9176) ^ cz).
+static func generate_face(_face: int, _cx: int, _cz: int, _seed: int) -> PackedByteArray:
+	var d := PackedByteArray()
+	d.resize(256 * Data.HEIGHT)
+	for lx in 16:
+		for lz in 16:
+			d[(0 << 8) | (lz << 4) | lx] = B_BEDROCK
+	return d

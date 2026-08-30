@@ -1,0 +1,146 @@
+	# --- (2) world_to_face: face / range / round-trip ---
+	var n2 := 0
+	var max_d2 := 0.0
+	var gvs: Array = [0.0, 0.25, 0.5, 0.75, 1.0]
+	for f in 12:
+		for u in gvs:
+			for v in gvs:
+				var p: Vector3 = SphereMath.uv_to_world(f, float(u), float(v), R)
+				var r: Dictionary = SphereMath.world_to_face(p, R)
+				var rf: int = int(r["face"])
+				n2 += 1
+				if rf != SphereMath.face_for_dir(p.normalized()):
+					ok = false
+					out["wtf_face_fail"] = [f, u, v, rf]
+				var ru: float = float(r["u"])
+				var rv: float = float(r["v"])
+				if ru < -1e-9 or ru > 1.0 + 1e-9 or rv < -1e-9 or rv > 1.0 + 1e-9:
+					ok = false
+					out["wtf_range_fail"] = [f, u, v, ru, rv]
+				var q: Vector3 = SphereMath.uv_to_world(rf, ru, rv, R)
+				var d2: float = (q - p).length()
+				if d2 > max_d2:
+					max_d2 = d2
+				if d2 > 1e-6 * R:
+					ok = false
+					out["wtf_roundtrip_fail"] = [f, u, v, d2]
+	out["wtf_samples"] = n2
+	out["wtf_max_d"] = max_d2
+	# --- (3) neighbor_key: 12-edge walks + 8 corner walks ---
+	var n3 := 0
+	var max_rt := 0
+	var ec: Array = [1, 256, 511, 768, 1022]
+	for f in 12:
+		for e in 4:
+			var dirA: Vector2i
+			if e == 0:
+				dirA = Vector2i(1, 0)
+			elif e == 1:
+				dirA = Vector2i(-1, 0)
+			elif e == 2:
+				dirA = Vector2i(0, 1)
+			else:
+				dirA = Vector2i(0, -1)
+			for c in ec:
+				var cx: int
+				var cz: int
+				if e == 0:
+					cx = N - 1
+					cz = c
+				elif e == 1:
+					cx = 0
+					cz = c
+				elif e == 2:
+					cx = c
+					cz = N - 1
+				else:
+					cx = c
+					cz = 0
+				var r1: Dictionary = SphereMath.neighbor_key(f, cx, cz, dirA)
+				var r1b: Dictionary = SphereMath.neighbor_key(f, cx, cz, dirA)
+				n3 += 1
+				if r1 != r1b:
+					ok = false
+					out["nk_nondet"] = [f, e, c]
+				var B: int = int(r1["face"])
+				var cxB: int = int(r1["cx"])
+				var czB: int = int(r1["cz"])
+				if B < 0 or B > 11 or cxB < 0 or cxB >= N or czB < 0 or czB >= N:
+					ok = false
+					out["nk_range"] = [f, e, c, r1]
+				# expected landing from the table (same lookup as neighbor_key).
+				var t: float = (cz + 0.5) / float(N) if e < 2 else (cx + 0.5) / float(N)
+				var segs3: Array = SphereMath._EDGES[f][e]
+				var seg3: Array = segs3[segs3.size() - 1]
+				for sg in segs3:
+					if t < float(sg[1]):
+						seg3 = sg
+						break
+				var eB: int = int(seg3[3])
+				if B != int(seg3[2]):
+					ok = false
+					out["nk_face"] = [f, e, c, B, int(seg3[2])]
+				var on_line: bool
+				if eB == 0:
+					on_line = cxB == N - 1
+				elif eB == 1:
+					on_line = cxB == 0
+				elif eB == 2:
+					on_line = czB == N - 1
+				else:
+					on_line = czB == 0
+				if not on_line:
+					ok = false
+					out["nk_edge"] = [f, e, c, r1, eB]
+				var dirB: Vector2i
+				if eB == 0:
+					dirB = Vector2i(1, 0)
+				elif eB == 1:
+					dirB = Vector2i(-1, 0)
+				elif eB == 2:
+					dirB = Vector2i(0, 1)
+				else:
+					dirB = Vector2i(0, -1)
+				var r2: Dictionary = SphereMath.neighbor_key(B, cxB, czB, dirB)
+				var df: bool = int(r2["face"]) == f
+				var dx: int = absi(int(r2["cx"]) - cx)
+				var dy: int = absi(int(r2["cz"]) - cz)
+				max_rt = maxi(max_rt, maxi(dx, dy))
+				if not df or dx > 1 or dy > 1:
+					ok = false
+					out["nk_rt"] = [f, e, c, r1, r2]
+	# 8 cube corners: owner cell from world_to_face; every step must land
+	# within +/-1 cell of the same physical corner.
+	var n4 := 0
+	var min_dot := 2.0
+	for sx in [-1, 1]:
+		for sy in [-1, 1]:
+			for sz in [-1, 1]:
+				var pc: Vector3 = Vector3(float(sx), float(sy), float(sz)).normalized() * R
+				var rc: Dictionary = SphereMath.world_to_face(pc, R)
+				var fc: int = int(rc["face"])
+				var uc: float = float(rc["u"])
+				var vc: float = float(rc["v"])
+				var cxc: int = 0 if uc < 0.5 else N - 1
+				var czc: int = 0 if vc < 0.5 else N - 1
+				var dirs4: Array = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+				for dir5 in dirs4:
+					var rr: Dictionary = SphereMath.neighbor_key(fc, cxc, czc, dir5)
+					n4 += 1
+					var fr: int = int(rr["face"])
+					var crx: int = int(rr["cx"])
+					var crz: int = int(rr["cz"])
+					if fr < 0 or fr > 11 or crx < 0 or crx >= N or crz < 0 or crz >= N:
+						ok = false
+						out["corner_range"] = [sx, sy, sz, [dir5.x, dir5.y], rr]
+					var wc: Vector3 = SphereMath.uv_to_world(fr, (float(crx) + 0.5) / float(N), (float(crz) + 0.5) / float(N), R)
+					var dot: float = wc.normalized().dot(pc.normalized())
+					if dot < min_dot:
+						min_dot = dot
+					if dot < 0.999:
+						ok = false
+						out["corner_off"] = [sx, sy, sz, [dir5.x, dir5.y], rr, dot]
+	out["nk_samples"] = n3
+	out["nk_roundtrip_max"] = max_rt
+	out["corner_samples"] = n4
+	out["corner_min_dot"] = min_dot

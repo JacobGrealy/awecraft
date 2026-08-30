@@ -1,0 +1,10 @@
+# AC-0143 M4: per-face column generation (non-home faces only — face 0
+# always uses generate(); home-face byte-identity). 2D per-face noise
+# (P1a; 3D sphere noise = later upgrade): reuses the home-column pipeline
+# (generate_args) with a per-face salt seed ^ (face*1000003) and a
+# face-disjoint 2D domain (offset face*64 chunks = 1024 face cells).
+# No cross-face continuity in P1a (face-border terrain seams acceptable,
+# documented). Deterministic per (face, cx, cz, seed).
+static func generate_face(face: int, cx: int, cz: int, seed: int) -> PackedByteArray:
+	var fsalt: int = seed ^ (face * 1000003)
+	return generate_args(face * 64 + cx, face * 64 + cz, fsalt, Data.HEIGHT, Data.SEA)

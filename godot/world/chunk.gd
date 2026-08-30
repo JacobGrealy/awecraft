@@ -10,6 +10,7 @@ const XQ_B := [Vector3(0.5, 0, 0), Vector3(0.5, 0, 1), Vector3(0.5, 1, 1), Vecto
 
 var cx := 0
 var cz := 0
+var face := 0
 var data := PackedByteArray()
 var fl := PackedByteArray()
 var mesh_built := false

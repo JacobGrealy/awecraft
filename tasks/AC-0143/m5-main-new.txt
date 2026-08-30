@@ -1,0 +1,43 @@
+	# AC-0091 SOFT-FAIL: a save recorded at a different world height (H=80
+	# pre-AC-0091 saves lack the "height" key entirely) is treated as a NEW
+	# world at the SAME seed: edits and the saved player pose are dropped
+	# (their y-space no longer matches the terrain), spawn_point is used.
+	# Never a script error.
+	var height_ok: bool = int(data.get("height", 0)) == Data.HEIGHT
+	# AC-0143 M5 SOFT-FAIL: v2 saves carry planets:[{id,R,orbit}] and edits
+	# keyed "planet_id:face:cx:cz:local" (home pair: face 0 = ccx >= 0 half,
+	# face 1 = ccx < 0 half; planet 0). Old saves (no planets, old "cx,cz"
+	# edit keys, or a non-home face/planet in an edit key) are discarded:
+	# fresh world at the same seed + one clear log line. R is clamped to
+	# [2000, 8000] on load (AC-0147 range). P1a never records non-home edits
+	# (faces 2-11 are data-level only; player edits land with AC-0144+).
+	var planets = data.get("planets", null)
+	var planets_ok: bool = typeof(planets) == TYPE_ARRAY and (planets as Array).size() > 0
+	var edits_raw = data.get("edits", {})
+	var edits_v2_ok: bool = typeof(edits_raw) == TYPE_DICTIONARY
+	if edits_v2_ok:
+		for ek in edits_raw:
+			var ep: PackedStringArray = String(ek).split(":")
+			if ep.size() != 5 or int(ep[0]) != 0 or int(ep[1]) < 0 or int(ep[1]) > 1:
+				edits_v2_ok = false
+				break
+	if height_ok and (not planets_ok or not edits_v2_ok):
+		print("SAVE SOFT-FAIL (old save format: planets_ok=%d edits_v2_ok=%d) - edits discarded, fresh world" % [planets_ok, edits_v2_ok])
+	Save.active_slot = int(slot)
+	if world != null:
+		_free_game_nodes()
+	Game.new_world(int(data.get("seed", 1)))
+	if planets_ok:
+		var home = (planets as Array)[0]
+		if typeof(home) == TYPE_DICTIONARY:
+			Game.planet_R = clampf(float((home as Dictionary).get("R", 4000.0)), 2000.0, 8000.0)
+	_create_game_nodes()
+	if height_ok and planets_ok and edits_v2_ok:
+		var conv: Dictionary = {}
+		for ek in edits_raw:
+			var ep: PackedStringArray = String(ek).split(":")
+			var ck: String = "%d,%d" % [int(ep[2]), int(ep[3])]
+			if not conv.has(ck):
+				conv[ck] = {}
+			conv[ck][int(ep[4])] = edits_raw[ek]
+		world.edits = conv

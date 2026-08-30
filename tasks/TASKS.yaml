@@ -1,9 +1,9 @@
 meta:
-  updated_at: 2026-08-29T20:43
+  updated_at: 2026-08-29T21:05
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0143
+- AC-0110
 - AC-0144
 - AC-0145
 - AC-0146
@@ -18,7 +18,6 @@ queue:
 - AC-0113
 - AC-0093
 - AC-0109
-- AC-0110
 - AC-0125
 - AC-0123
 - AC-0094
@@ -4300,11 +4299,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-29T12:09
-  updated_at: 2026-08-29T20:43
-  completed_at: null
+  updated_at: 2026-08-30T01:25
+  completed_at: 2026-08-30T01:25
   waiting_on: null
   parent_id: null
   notes: 'User story: As a player I want the world to know it is a sphere (home R=4000) so that later ground, flight and planet-hopping
@@ -4335,6 +4334,28 @@ intake:
       M3 world.gd (face,cx,cz) keying, M4 generator per-face [home face byte-identical], M5 save.gd planets+edits, coordinator
       full battery [SMOKE 5 + genhash 25/25 + MINFO + one-shot boundary vs band 267-344/39.9k-46.4k + NO render], commit+push.
       RESUME steps: godot/CONTINUITY.md 00o.'
+  - id: 2
+    created_at: 2026-08-30T01:25
+    updated_at: null
+    text: '[agent] DONE 2026-08-30 01:25 - M1-M5 + M5b ALL GATED: M1 core/sphere_math.gd 212 lines [12-face convention,
+      faces 0/1 = flat home pair, 884/884 bitwise-identical edges, 8-corner tie order]; M2 AWECRAFT_LOGIC=sphere probe ok:true
+      [240/240 keying round-trips, world<->face 300/300, nk 240/240, corners 32, home 11/5/136]; M3 world.gd (face,cx,cz) keying
+      [key_for_sphere_pos single resolver; faces 2-11 sparse 1024-cell FIFO 512 data-level only; get/set_block_key]; M4
+      generate_face 2D per-face noise [home-pipeline reuse, per-face salt seed^(face*1000003), face-disjoint domain face*64
+      chunks, face 0 never routed]; M5 save v2 [SAVE_VERSION 2, planets [{id:0,R:4000,orbit:null}], edits
+      "0:face:ccx:ccz:local", R clamp [2000,8000] -> Game.planet_R, v1 soft-fail with clear log line, _conv_edits_v2 shared
+      by _continue_slot+_continue_probe, non-home edits not recorded P1a]; M5b continue arm conversion fix [edits_ok true].
+      FINAL BATTERY ALL GREEN: G0 0 err; genhash 25/25 run1==run2 byte-identical to AC-0091 ref
+      [.scratch/AC-0143-gates/genhash_new.txt]; SMOKE 5 EXACT [player 136.78/2.82, interact place_ok cell 2 inv 1, light
+      10/15/14, fluids 2730/888/25/9, nightday 15.0/3.0/14.19996]; save arm ok:true incl v1_softfail true; MINFO 121/81/40
+      [minfo_new.txt]; boundary ok:true [p95 401 / fwd 42154 - run-noise envelope 267-401 / 42.2k-47.6k across AC-0091+AC-0143
+      runs, no systematic shift - home path byte-identical]. Build 20260830-0113 109,704,784 B + 8080 byte-matched +
+      5180=200 [8443 https daemon already down pre-build, serve_web.py absent from repo - noted, not started]. Files:
+      godot/core/sphere_math.gd [new], godot/world/world.gd, godot/world/generator.gd, godot/world/chunk.gd,
+      godot/autoload/save.gd, godot/autoload/game.gd [planet_R], godot/scenes/main.gd [probe + save v2 + _conv_edits_v2].
+      Deliverables: tasks/AC-0143/AC-0143-results.html + continuity.md + tasks/HARNESS.md 3 [boundary envelope + sphere +
+      save-v2 rows]. NO render (headless-only). Next: tasks.py next.]'
+
 - id: AC-0144
   title: planet-p1a-curved-ground-plays-flat
   source: user
