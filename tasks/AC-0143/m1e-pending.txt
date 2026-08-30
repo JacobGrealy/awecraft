@@ -1,0 +1,98 @@
+M1e PENDING APPEND (sphere_math.gd is 162 lines; `_EDGES` const array is OPEN — ends at face 7's `],`)
+=====================================================================================================
+Resuming builder (medium, small prescriptive run — see AGENTS.md token-discipline note):
+  1. append one line to tasks/AC-0143/continuity.md: `- M1e retry (medium): _EDGES F8-F11 + close + neighbor_key`
+  2. `read` godot/core/sphere_math.gd with offset 140 (tail only).
+  3. `edit` append after the current last line (face 7's closing `],`) EXACTLY the block below.
+  4. append to continuity.md: `- M1e DONE: sphere_math.gd COMPLETE [N lines] — face_for_dir + uv_to_world + world_to_face + _EDGES(12x4) + neighbor_key`
+  NO godot calls (coordinator runs all gates). Report ≤4 lines.
+
+THE BLOCK (append verbatim — one blank line before it):
+
+	[ # face 8 (+Z even)
+		[[0.0, 1.0, 4, 2, 0.0, 1.0]],
+		[[0.0, 1.0, 9, 0, 0.0, 1.0]],
+		[[0.0, 1.0, 0, 2, 0.0, 1.0]],
+		[[0.0, 1.0, 2, 2, 0.0, 1.0]],
+	],
+	[ # face 9 (+Z odd)
+		[[0.0, 1.0, 8, 1, 0.0, 1.0]],
+		[[0.0, 1.0, 6, 2, 0.0, 1.0]],
+		[[0.0, 1.0, 1, 2, 0.0, 1.0]],
+		[[0.0, 1.0, 3, 2, 0.0, 1.0]],
+	],
+	[ # face 10 (-Z even)
+		[[0.0, 1.0, 5, 3, 0.0, 1.0]],
+		[[0.0, 1.0, 11, 0, 0.0, 1.0]],
+		[[0.0, 1.0, 0, 3, 0.0, 1.0]],
+		[[0.0, 1.0, 2, 3, 0.0, 1.0]],
+	],
+	[ # face 11 (-Z odd)
+		[[0.0, 1.0, 10, 1, 0.0, 1.0]],
+		[[0.0, 1.0, 7, 3, 0.0, 1.0]],
+		[[0.0, 1.0, 1, 3, 0.0, 1.0]],
+		[[0.0, 1.0, 3, 3, 0.0, 1.0]],
+	],
+]
+
+static func neighbor_key(face: int, cx: int, cz: int, dir: Vector2i) -> Dictionary:
+	# One cell step in dir (Vector2i, single axis) from (cx, cz). Interior ->
+	# same face. Edge -> _EDGES table: deterministic; 2:1 cell ratio across
+	# cube edges (documented "sector edge resolution mismatch"); corner cells
+	# resolved by the face_for_dir tie order.
+	var u1: float = (cx + 0.5) / float(CELLS_PER_FACE) + float(dir.x) / float(CELLS_PER_FACE)
+	var v1: float = (cz + 0.5) / float(CELLS_PER_FACE) + float(dir.y) / float(CELLS_PER_FACE)
+	if u1 > 0.0 and u1 < 1.0 and v1 > 0.0 and v1 < 1.0:
+		return { "face": face, "cx": cx + dir.x, "cz": cz + dir.y }
+	var e: int
+	if dir.x > 0:
+		e = 0
+	elif dir.x < 0:
+		e = 1
+	elif dir.y > 0:
+		e = 2
+	else:
+		e = 3
+	var t: float = (cz + 0.5) / float(CELLS_PER_FACE) if e < 2 else (cx + 0.5) / float(CELLS_PER_FACE)
+	var segs: Array = _EDGES[face][e]
+	var seg: Array = segs[segs.size() - 1]
+	for s_ in segs:
+		if t < float(s_[1]):
+			seg = s_
+			break
+	var s: float = float(seg[4]) + float(seg[5]) * t
+	var along: int = clampi(int(floor(s * float(CELLS_PER_FACE))), 0, CELLS_PER_FACE - 1)
+	var cxB: int
+	var czB: int
+	if int(seg[3]) < 2:
+		cxB = CELLS_PER_FACE - 1 if int(seg[3]) == 0 else 0
+		czB = along
+	else:
+		cxB = along
+		czB = CELLS_PER_FACE - 1 if int(seg[3]) == 2 else 0
+	return { "face": int(seg[2]), "cx": cxB, "cz": czB }
+
+DESIGN NOTES (why the table is shaped this way — for the probe writer, not the applier):
+- _EDGES[face][edge], edge 0=u=1, 1=u=0, 2=v=1, 3=v=0. Segment = [tlo, thi, B, edgeB, a, b]:
+  for t in [tlo, thi) the crossing lands on face B's edge edgeB at coordinate s = a + b*t
+  (t = cell-center coord along the source edge). Landed cell = B's edge-adjacent cell
+  (column/row 0 or CELLS-1) at floor(s*CELLS) along the edge.
+- 4 edges are 2-segment (face 0 u=1, face 1 u=0, face 2 u=1, face 3 u=0): the home-axis
+  mid-plane edges meet the two opposite-axis sector halves (z>=0 / z<0 branch at t=0.5).
+- 2:1 segments (b=±2 or b=±0.5) = "sector edge resolution mismatch" (plan §3): a length-2
+  cube edge meets two length-1 edges. 1:1 pairs: midlines (x/z=0 splits) and the
+  length-2↔length-2 pairs. Cell round-trips are EXACT on 1:1 edges and within ±1 on 2:1
+  edges — the probe asserts that, not bitwise cell round-trip.
+- Bitwise edge-point invariant (the real gapless gate): for a physical edge point, both
+  faces' uv_to_world evaluate the SAME arithmetic (same literals / same 2t-1 forms on
+  equal t) ⇒ bitwise-identical pre-normalize cube vector ⇒ identical world point. Probe
+  tests this by dual-face direct (u,v) evaluation, NOT via a world_to_face round-trip
+  (double normalization is not bitwise-invertible for interior points — by design).
+- world_to_face returns the AFFINE inverse: C = d rescaled so the dominant component is
+  exactly ±1 (C = d/d_dom with the axis literal restored), then (u,v) = C's face-frame
+  coords. Interior round-trip p' = uv_to_face(world_to_face(p)) is within ~1-2 ulps of p.
+- face_for_dir tie-break: divide by max |component| (winner is exactly ±1.0 in float),
+  first hit in sign order +X, -X, +Y, -Y, +Z, -Z (corner (1,1,1) -> +X face). Sector:
+  ±Y split on X, ±X split on Z, ±Z split on X; >=0 -> even sector.
+- Corner ownership: the 8 cube-corner cells belong to the tie-break winner face; the
+  table is consistent around every corner (verified by the probe's 8-corner walk).

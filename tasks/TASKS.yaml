@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-29T17:01
+  updated_at: 2026-08-29T20:43
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -4300,10 +4300,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-29T12:09
-  updated_at: 2026-08-29T12:09
+  updated_at: 2026-08-29T20:43
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -4321,7 +4321,20 @@ intake:
 
     Depends: AC-0091 Y=-64..319. Ref: tasks/AC-0042/AC-0042-plan.html §3 (uniform shell, no doubling) + plan §3 LOD. Verify
     headless only.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-29T20:43
+    updated_at: null
+    text: '[agent] CHAT-HANDOFF 2026-08-29 night: M1 (sphere_math.gd) 75% done via SMALL prescriptive medium micro-runs [xhigh
+      dead 4/4 + medium dead on design responses — local llama.cpp per-response token cap, DSH sends no max_tokens, max-tokens
+      = terminal; proven pattern: <=50 lines/run, exact code in prompt, one small tool call/response, no godot in run — see
+      godot/CONTINUITY.md 00o INFRA FINDING v2]. DONE: header contract + CELLS_PER_FACE + face_for_dir + uv_to_world + world_to_face
+      [affine inverse C=d/d_dom] + _EDGES F0-F7 [12x4 table, 4 two-segment edges, 2:1 segments at cube edges = plan ''sector
+      edge resolution mismatch'']. PENDING: M1e = exact append block saved at tasks/AC-0143/m1e-pending.txt [F8-11 + close
+      + neighbor_key] — one tiny medium run. Then M2 main.gd sphere probe [probe contract in 00o], coordinator G0+probe+SMOKE2,
+      M3 world.gd (face,cx,cz) keying, M4 generator per-face [home face byte-identical], M5 save.gd planets+edits, coordinator
+      full battery [SMOKE 5 + genhash 25/25 + MINFO + one-shot boundary vs band 267-344/39.9k-46.4k + NO render], commit+push.
+      RESUME steps: godot/CONTINUITY.md 00o.'
 - id: AC-0144
   title: planet-p1a-curved-ground-plays-flat
   source: user

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0143 spec — planet p1a: sphere math + world keys</title></head>
+<body style="font-family:monospace;max-width:980px;margin:24px auto;line-height:1.45">
+<h1>AC-0143 — planet-p1a-sphere-math-world-keys</h1>
+<p><b>Source:</b> user (p1, top of planet series). <b>Depends:</b> AC-0091 (H=384, done). <b>Provenance (in-repo only; web spec is DEAD):</b> the AC-0143 registry notes in tasks/TASKS.yaml (user, 2026-08-29 12:09) + <code>tasks/AC-0042/AC-0042-plan.html</code> §3 (uniform shell, no doubling; 1↔1 neighbor with rotation u↔v swap+flip; 8 cube corners where 3 faces meet; pre-warp ⇒ bitwise-identical edge points; "12 edges for P1a (2D per-face); upgrade to 3D sphere noise later if needed"; <code>planets[{R,orbit}] + edits{planet_id:face:cx:cz}</code>) + user directives. Read plan §3 before designing the face layout — it is the reference for the sector split.</p>
+
+<h2>What ships (math + save shape ONLY — no visuals, no gameplay change)</h2>
+<ul>
+<li><b>1. New <code>godot/core/sphere_math.gd</code></b> — <code>class_name SphereMath</code>, pure static (no nodes, no per-frame state; a plain GDScript class file). API:</li>
+  <ul>
+  <li><code>face_for_dir(d: Vector3) -> int</code> — 12-way.</li>
+  <li><code>uv_to_world(face: int, u: float, v: float, R: float) -> Vector3</code> — face-local (u,v)∈[0,1] → point on the sphere (radius R).</li>
+  <li><code>world_to_face(pos: Vector3, R: float) -> Dictionary</code> — inverse; returns {face, u, v}; <b>deterministic</b> with a documented tie-break at edge/corner ties.</li>
+  <li><code>neighbor_key(face: int, cx: int, cz: int, dir: Vector2i) -> Dictionary|null</code> — the 12-edge table, 1↔1 with u↔v swap+flip; stepping off a face grid edge returns the <i>neighboring face's</i> chunk key; the 8 corners (3 faces meet) get an explicit deterministic owner rule.</li>
+  <li><b>Pre-warp invariant:</b> adjacent faces must compute <b>bitwise-identical</b> edge points (this is the gapless guarantee from plan §3 — the probe asserts it).</li>
+  <li>Face convention: 12 faces = 6 axes × 2 sectors per plan §3. <b>Coordinator ruling: face 0 = the home face = the current flat world</b> (the face the player lives on). Define the deterministic index→(axis,sector) mapping once in the file header (a comment table) and nowhere else.</li>
+  </ul>
+<li><b>2. <code>godot/world/world.gd</code></b> — chunk key becomes <b>(face, cx, cz)</b> (internal key representation is the builder's choice but must be stable + hashable; the face dimension participates everywhere the old (cx,cz) key was used). Recenter/band_buckets are per-face. <code>get_block</code>/<code>set_block</code> resolve through <b><code>world_to_face</b> as the single position→key resolver</b>. Neighbor lookup (streaming adjacency) uses the table (1↔1 — no 1→4, no shell doubling). The player's face (home, face 0) streams exactly as today; other faces exist at data level only (generated + addressable + saved; meshing/lighting of non-home faces is OUT of P1a — that is AC-0144+).</li>
+<li><b>3. <code>godot/world/generator.gd</code></b> — 2D per-face noise for P1a (3D sphere noise = later upgrade, do not build it). <b>Home face (face 0) must reproduce AC-0091 terrain byte-identically</b> (spawn + smoke-battery continuity depend on it). Other faces: seeded per-face (document the salt derivation); no cross-face continuity required in P1a (terrain seams at face borders are acceptable + documented; surface geometry is gapless via pre-warp, terrain need not be).</li>
+<li><b>4. <code>godot/autoload/save.gd</code></b> — new shape: <code>planets:[{id, R, orbit}]</code> (P1a stores home only: id=0, <b>R=4000 exactly</b>; the R∈[2000,8000] per-seed clamp + other planets land with AC-0147, but the field + clamp must be in the parser now) + edits keyed <code>planet_id:face:cx:cz:local</code>. Old saves (no planets / old edit keys) → <b>soft-fail</b>: discard edits, fresh world, clear log line (AC-0091 precedent). Keep the height-stamp soft-fail from AC-0091.</li>
+<li><b>5. <code>godot/scenes/main.gd</code></b> — harness ONLY: new <code>AWECRAFT_LOGIC=sphere</code> probe arm (see gates). Nothing else moves. Remember the AC-0139 invocation lesson: any arm with <code>script_errors_seen</code> must be invoked with <code>AWECRAFT_STDERR_FILE=$f … 2>$f</code> or it false-fails.</li>
+</ul>
+
+<h2>P1a boundary (out of scope — document in results, do not build)</h2>
+<p>No radial visuals or meshing of non-home faces; lighting + meshing strips stay <b>face-local</b> (no cross-face light propagation in P1a — a block read across a face border via get_block still resolves correctly, but the light kernels do not cross); player physics stays flat on the home face (AC-0144 curved-ground-plays-flat); gravity/flight (AC-0145); atmosphere impostor LOD (AC-0146); solar system (AC-0147); 3D sphere noise; multi-planet seeds.</p>
+
+<h2>Gates (builder-run, then coordinator heavy)</h2>
+<ol>
+<li><b>G0</b>: <code>~/tools/godot/godot --headless --path godot --quit</code> → <b>0 script errors</b>. New <code>class_name</code> ⇒ stale-cache lesson: one <code>--import</code> pass first if the first run fails on unknown class.</li>
+<li><b><code>sphere</code> probe (headless, ≤60 s)</b> — must print one RESULT JSON, ok:true:
+  <ul>
+  <li>uv_to_world / world_to_face round-trip on all 12 faces (sample grid per face, |Δ| &lt; 1e-6 or exact per the builder's documented tolerance);</li>
+  <li><b>neighbor_key round-trip across all 12 edges + 8 corners</b>: stepping A→B then B→(reverse dir) returns A's key; edge points from both faces <b>bitwise-identical</b> (pre-warp assertion);</li>
+  <li><b>block_at across-edge round-trip</b>: set_block on face A's edge column, read it back resolving the same world position through face B's key → same block id;</li>
+  <li>home-face (face 0) identity spot-checks: a few known AC-0091 cells (bedrock y=0, sea y=126, spawn surface 136) read correctly through world_to_face.</li>
+  </ul></li>
+<li><b>genhash 25/25 twice, run1==run2</b> → write <code>.scratch/AC-0143-gates/genhash_new.txt</code> (key shape changed ⇒ old AC-0091 baseline void; home-face terrain itself is AC-0091-identical).</li>
+<li><b>SMOKE 5 arms EXACT vs AC-0091 baselines</b>: player (after_fly_y 136.78, horiz 2.82), interact (place_ok:true, after_place_cell 2, inv n:1 — rare-flake class documented in AC-0091: if 1 run false-fails, rerun and record), light (cave_eff 10, surface 15, torch 14), fluids (sea 2730/2730 stable, backed 888, lava 25/9), nightday (15.0/3.0 + torch 14.19996).</li>
+<li><b>MINFO dump</b> (<code>AWECRAFT_LOGIC=perf AWECRAFT_MESH_INFO=1</code>) → <code>.scratch/AC-0143-gates/minfo_new.txt</code> (baseline voided by the key change — record the new one; home-face chunks' vert counts should match AC-0091's; note any drift).</li>
+<li><b>ONE-SHOT boundary r4</b> (world/* touched): band = AC-0091's NEW standing band <b>walk p95 267–344 / fwd_p95 ~39.9k–46.4k</b>. Walk p95 must hold; if keying added cost, honest deviation with the numbers.</li>
+<li><b>No render</b> — this is a headless-only task (no visuals changed).</li>
+</ol>
+
+<h2>Deliverables</h2>
+<ul>
+<li><code>tasks/AC-0143/continuity.md</code> — FIRST action: append <code>## RUN — $(date) — AC-0143</code>, then milestones (files changed, gates green/red).</li>
+<li><code>tasks/AC-0143/AC-0143-results.html</code> — self-contained: the face convention table (index→(axis,sector)), probe RESULT values, new baselines (genhash/MINFO/boundary), P1a boundary list, deviations.</li>
+<li><code>tasks/HARNESS.md</code> §3 — update any baseline that changed (genhash, MINFO, boundary band if it moved).</li>
+<li>Report to coordinator: ≤20 lines (files changed, RESULT values, deviations).</li>
+</ul>
+
+<h2>Ops (from CONTINUITY.md)</h2>
+<p><code>HOME=/tmp/dsh_home</code> on every godot call; always <code>--path godot</code>; godot ONE at a time; persistent logs in <code>.scratch/AC-0143-gates/</code> (/tmp is per-call tmpfs); NO Windows build (coordinator runs it in heavy gates); never kill the python daemon pids; scratch never committed.</p>
+</body></html>
