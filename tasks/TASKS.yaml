@@ -1,19 +1,21 @@
 meta:
-  updated_at: 2026-08-30T12:27
+  updated_at: 2026-08-30T15:01
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0151
 - AC-0152
+- AC-0155
+- AC-0158
 - AC-0154
 - AC-0109
 - AC-0150
+- AC-0137
 - AC-0092
-- AC-0036
-- AC-0111
 - AC-0144
 - AC-0145
 - AC-0146
+- AC-0111
+- AC-0036
 - AC-0147
 - AC-0140
 - AC-0141
@@ -25,7 +27,6 @@ queue:
 - AC-0113
 - AC-0093
 - AC-0125
-- AC-0123
 - AC-0094
 - AC-0098
 - AC-0101
@@ -33,9 +34,6 @@ queue:
 - AC-0038
 - AC-0039
 - AC-0040
-- AC-0053
-- AC-0054
-- AC-0055
 - AC-0087
 - AC-0088
 - AC-0089
@@ -43,7 +41,6 @@ queue:
 - AC-0114
 - AC-0115
 - AC-0130
-- AC-0137
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -3427,7 +3424,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-25T09:44
-  updated_at: 2026-08-25T09:44
+  updated_at: 2026-08-30T14:57
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -3456,7 +3453,12 @@ intake:
 
 
     Refs: godot/ARCHITECTURE.md, CONTINUITY.md §4 structure, TASKS.yaml queue.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-30T14:57
+    updated_at: null
+    text: '[user] significant changes have been made since this was written, so follow the spirit of it (break up monoliths,  refactor
+      duplicate code, etc) rather than any specific smells in the description.'
 - id: AC-0116
   title: subagent-reasoning-plugin-fix-out-of-band
   source: user
@@ -4167,7 +4169,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-29T04:36
-  updated_at: 2026-08-29T04:36
+  updated_at: 2026-08-30T15:01
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -4180,7 +4182,11 @@ intake:
     handoff race (which arg arrives Nil), fix + zero script errors + a regression probe (AWECRAFT_LOGIC=... or extended g0
     loop) that trips if the transient recurs. Candidate fold-in: AC-0131 scope if it shares the crossing-path machinery, else
     standalone.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-30T15:01
+    updated_at: null
+    text: '[user] older bug, may no longer be an issue, please review'
 - id: AC-0138
   title: leaves-always-black-regression
   source: user
@@ -4479,16 +4485,20 @@ intake:
   waiting_on: null
   parent_id: null
   notes: 'User story: As a player I want to fly to other planets in the same solar system — each a different size — and land
-    on them with the same flat feel.
+    on them with the same flat feel and seamless biomes.
 
 
     Technical details: Save: planets[{id,R∈[2000,8000], orbit}] per seed, home R=4000 exactly, others clamped variable. System
     space: star at (0,0,0) while in flight, planet impostors for distant planets. Each planet reuses P1a sphere uniform pipeline
-    (face+cx+cz, rotated chunks). Distance between planets 25–50km at R=4000 scale. Gates: home exact, other R clamped, inter-planet
-    flight ~25km, save per planet, no galaxy void streaming.
+    (face+cx+cz, rotated chunks). Distance between planets 25–50km at R=4000 scale. At the same time swap gen from 2D per-face
+    h=R+fbm(u,v) + 4-texel edge blend (P1a) → 3D sphere p=normalize(cube_pos)*scale for h + biomes (seamless across all 12
+    edges, same palette, no throwaway). C++ (AC-0125) fast-follows only if walk p95 shows it needs it. Gates: home exact,
+    other R clamped, biomes cross faces seamless, inter-planet flight ~25km, save per planet, no galaxy void streaming.
 
 
-    Depends: AC-0146. Ref: plan §6 + §10 P2.'
+    Depends: AC-0146. Ref: plan §6 + §8 + §10 P2. Replaces 2D with final 3D — no separate follow-on.
+
+    '
   comments: []
 - id: AC-0148
   title: planet-p3-relay-galaxy
@@ -4549,7 +4559,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-30T09:29
-  updated_at: 2026-08-30T09:34
+  updated_at: 2026-08-30T14:50
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -4559,7 +4569,12 @@ intake:
     edge points (spec.html:15). This is a face-boundary generation/streaming gap (likely world.gd key_for_sphere_pos / neighbor_key
     / generator per-face seeding for home faces 0/1, or missing chunk generation at face edge). Check godot/core/sphere_math.gd
     _EDGES/world_to_face and godot/world/world.gd face-aware keying + generator.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-30T14:50
+    updated_at: null
+    text: '[user] If you can''t find an error with the sphere boundaries, It could be an issue with rendering after crossing
+      into chunk that triggers rendering new chunks at edge, maybe they don''t line up or don''t always get rendered or something'
 - id: AC-0151
   title: water-always-blue-tint-strip
   source: user
@@ -4570,8 +4585,8 @@ intake:
   status: done
   labels: []
   created_at: 2026-08-30T11:20
-  updated_at: 2026-08-30T12:30
-  completed_at: 2026-08-30T12:30
+  updated_at: 2026-08-30T12:29
+  completed_at: 2026-08-30T12:29
   waiting_on: null
   parent_id: null
   notes: Water grey 31/32 frames blue flicker frame0 only. Root cause data.gd:203 bake only base 32x32 but water anim 32 strip
@@ -4644,9 +4659,81 @@ intake:
   created_at: 2026-08-30T12:27
   updated_at: 2026-08-30T12:27
   completed_at: null
-  waiting_on: null
+  waiting_on: AC-0152
   parent_id: null
   notes: 'Waste: caves carved for every r=50 column (n1/n2/n3 + nc1/nc2 per 98k) though >90% are interior never visible. After
     AC-0152, skip nc1/nc2 for 13-50 impostor (heightmap only), and for 5-12 merged 32x32x32 use 1-bit mask not per-m. Lazy
     carve on dig toward uncarved stone. Depends AC-0152.'
+  comments: []
+- id: AC-0155
+  title: full-chunk-save-not-edits
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-30T13:41
+  updated_at: 2026-08-30T13:41
+  completed_at: null
+  waiting_on: AC-0152
+  parent_id: null
+  notes: Save every chunk fully to disk like Bedrock LevelDB / Java region (palette + bitpack per 16x16x16 x24 for 384) not
+    edits diff. After chunk becomes partially generated, always saved entirely. Fixes r=50 10k GENMS wall, revisits don't
+    re-gen. Depends AC-0152. May make AC-0154 lazy-caves unnecessary.
+  comments: []
+- id: AC-0156
+  title: light-cache-per-section
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-30T13:50
+  updated_at: 2026-08-30T13:50
+  completed_at: null
+  waiting_on: AC-0155
+  parent_id: null
+  notes: 'Follow-on after AC-0155 full-chunk-save: save BlockLight/SkyLight 2048 nibbles per 16x16x16 x24 (48KB per column)
+    alongside palette. Saves ~400ms of 600ms GENMS on r=4 diamond revisit (light pull 20x20x384). Dirty on set_block/torch.
+    Not needed for 13-50 impostor. Depends AC-0155.'
+  comments: []
+- id: AC-0157
+  title: 3d-density-terrain-shape
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-30T14:13
+  updated_at: 2026-08-30T14:13
+  completed_at: null
+  waiting_on: AC-0152
+  parent_id: null
+  notes: 'Post-LOD shape upgrade: replace 2D h = 105.2 + c*36.4 + h*52 (+ridge) per x,z + y=5..h cave punch (nc1/nc2) with
+    3D density(x,y,z) >0 rock else air/water per y. Enables overhangs/floating islands, caves as shape not holes. Keep 384
+    high, AC-0152 bands still LOD. Depends AC-0152.'
+  comments: []
+- id: AC-0158
+  title: 20hz-diamond-game-tick
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-30T14:28
+  updated_at: 2026-08-30T14:28
+  completed_at: null
+  waiting_on: AC-0155
+  parent_id: null
+  notes: 'Bedrock Realms 20Hz tick on Simulate 4 diamond 41 (|dx|+|dz|<=4, 41 not 81) not 5Hz square: 1 randomTick per 16x16x16
+    per tick (~1/68s per wheat), fluid 20Hz, redstone 1-tick dust, mob spawn 24-44 circle + n-1 diamond. Efficiency + correctness,
+    half columns, far 13-50 never tick. Depends AC-0155.'
   comments: []
