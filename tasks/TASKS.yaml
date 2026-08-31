@@ -1,11 +1,14 @@
 meta:
-  updated_at: 2026-08-30T15:37
+  updated_at: 2026-08-30T20:47
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
 - AC-0152
+- AC-0160
 - AC-0155
 - AC-0158
+- AC-0151
+- AC-0159
 - AC-0154
 - AC-0109
 - AC-0150
@@ -17,6 +20,9 @@ queue:
 - AC-0111
 - AC-0036
 - AC-0147
+- AC-0161
+- AC-0148
+- AC-0149
 - AC-0140
 - AC-0141
 - AC-0142
@@ -4743,4 +4749,67 @@ intake:
   notes: 'Bedrock Realms 20Hz tick on Simulate 4 diamond 41 (|dx|+|dz|<=4, 41 not 81) not 5Hz square: 1 randomTick per 16x16x16
     per tick (~1/68s per wheat), fluid 20Hz, redstone 1-tick dust, mob spawn 24-44 circle + n-1 diamond. Efficiency + correctness,
     half columns, far 13-50 never tick. Depends AC-0155.'
+  comments: []
+- id: AC-0159
+  title: smooth-lighting-ao-per-vertex
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-30T15:38
+  updated_at: 2026-08-30T15:38
+  completed_at: null
+  waiting_on: AC-0156
+  parent_id: null
+  notes: 'Per-vertex BlockLight+SkyLight + AO after AC-0156 nibbles: 4 corners avg(4 lights) * (1-AO 0.8/0.6/0.2) lerp lightmap
+    in chunk_lit shaders. Flat today.'
+  comments: []
+- id: AC-0160
+  title: AC-0152-defect-black-floating-impostors-and-slow-spawn
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-30T16:43
+  updated_at: 2026-08-30T16:43
+  completed_at: null
+  waiting_on: null
+  parent_id: AC-0152
+  notes: 'Defect caused by AC-0152: impostors render as black floating rectangles (stale _tm_ctx has_tex/brect -1, winding
+    0,2,1 faces -Y culled, UV flipped) and spawn 3x3 11.7s vs 1s with queue 7710 stranded. Fix: refresh ctx after atlas bake,
+    flip winding to 0,1,2 + vv=1-z, cap drain spawn-fast. Blocks AC-0152 DONE.'
+  comments: []
+- id: AC-0161
+  title: planet-ship-drydock-build
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-30T20:47
+  updated_at: 2026-08-30T20:47
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User story: As a player I want to build a flyable ship by placing a rare portal-like frame and filling it — any
+    block attached to the core must keep working — and walk around inside it while in space (not airtight v1).
+
+
+    Technical details: Drydock = any WxH rectangular Reinforced Frame (rare, min 4x5, max ~400 chunk budget) built like Nether
+    portal — if closed+upright it''s a valid yard. Ship = flood-fill from single Ship Core (6-dir BFS) to find connected blob
+    (only Core-touched blocks fly; stray blocks inside frame stay as dock). Any BlockType+TileEntity must function while flying
+    (chest/furnace/hopper/redstone tick on ship-owner). Dock/Undock: Activate (Core→Ignite) converts blob→entity, Dock (Core→Deactivate)
+    welds back to static inside any frame large enough to contain bounds. Walkable interior in space: player parented to ship
+    (pos=ship_pos+ship_basis*local), ship-local gravity down=-ship_up rolls with hull (barrel roll keeps you on floor); lerp
+    world→ship over 2s after >500m alt. Not airtight v1 (open deck still breathable). Owner streams pos/vel @10Hz + TileEntity
+    ticks, others interpolate; docked = no stream. Per-ship relay jump (fuel split if co-jump). Gates: any-size frame validates,
+    flood-fill finds blob, any block ticks while flying, walkable interior in space, dock↔undock, owner stream.'
   comments: []
