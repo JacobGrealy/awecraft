@@ -1,15 +1,28 @@
 meta:
-  updated_at: 2026-08-31T14:05
+  updated_at: 2026-08-31T18:05
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0158
-- AC-0159
+- AC-0178
+- AC-0167
+- AC-0168
+- AC-0169
 - AC-0154
+- AC-0156
+- AC-0175
+- AC-0121
+- AC-0122
+- AC-0170
+- AC-0171
+- AC-0172
+- AC-0173
+- AC-0174
+- AC-0159
 - AC-0109
 - AC-0150
 - AC-0137
 - AC-0092
+- AC-0165
 - AC-0144
 - AC-0145
 - AC-0146
@@ -22,8 +35,6 @@ queue:
 - AC-0140
 - AC-0141
 - AC-0142
-- AC-0121
-- AC-0122
 - AC-0097
 - AC-0112
 - AC-0113
@@ -3862,11 +3873,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-27T03:22
-  updated_at: 2026-08-27T03:22
-  completed_at: null
+  updated_at: 2026-08-31T12:58
+  completed_at: 2026-08-31T12:58
   waiting_on: null
   parent_id: null
   notes: 'AC-0108 G4 follow-up (the R=50 memory drop lever the user''s AC-0108 note asked for, deferred out of pass 1 by the
@@ -3877,7 +3888,11 @@ intake:
     the terrain rarely needed for collision... verify), slice budgeting per slab, candidate handling per slab. Gates: r50
     mem < 140.6 (the pre-AC-0108 fence), byte-identity (MINFO per-chunk + battery + genhash), boundary floor 65/3500/81/0,
     RECSLICE, walk p95 with the body-count change, G0-G6.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-31T12:58
+    updated_at: null
+    text: '[user] cancelling'
 - id: AC-0128
   title: night-darkness-sky-scale
   source: user
@@ -4634,35 +4649,33 @@ intake:
   completed_at: 2026-08-31T05:55
   waiting_on: null
   parent_id: null
-  notes: 'Bedrock Realms Simulate 4 default (wiki taxicab diamond 41 not 9x9 81, spawn circle 44 blocks). Render 50 should
-    be circle ~7850 not 10201 square. Bands: 0-4 diamond exact 16x16x16 41 columns, 5-12 merged 32x32x32 diamond 104, 13-50
-    heightmap impostor circle 7705 quads. Tick only diamond, render circle. Stream 3x3 spawn 1s then trickle. Fences: no height
-    cut.'
+  notes: 'SUPERSEDED by AC-0177 (no cardboard) - Bedrock Realms Simulate 4 default (wiki taxicab diamond 41 not 9x9 81, spawn
+    circle 44 blocks). Render 50 should be circle ~7850 not 10201 square. Bands: 0-4 diamond exact 16x16x16 41 columns, 5-12
+    merged 32x32x32 diamond 104, 13-50 heightmap impostor circle 7705 quads. Tick only diamond, render circle. Stream 3x3
+    spawn 1s then trickle. Fences: no height cut.'
   comments:
   - id: 1
     created_at: 2026-08-31T05:55
     updated_at: null
-    text: '[done 2026-08-31, coordinator-verified, closes with AC-0160 single commit] Shipped: render set = Euclidean
-      circle R=50 [7845 columns, not 10201 square]; tick/collision set = taxicab diamond 4 [41 columns, full 16c mesh];
-      band1 = taxicab 5-8 [104 columns, coarse merged uv_scale 2, no tick/collide]; band2 = circle outside band1 [7700
-      columns] - impostor REMOVED per user decision 2026-08-30 (AC-0160), now normal full-fidelity chunk mesh no
-      tick/collide; band3 = collar + circle-boundary 8-neighborhood ring [408 chunks @ R=50] data-only so circle-edge
-      band2 chunks build against real neighbor data [no stranded queue, no height wall at render edge]; stream set 8253;
-      settings sim_dist default 1->4 wired to band0_r; AWECRAFT_BAND0/BAND1 env overrides; spawn 3x3 fast-then-trickle
-      [5x5 spawn data burst, all-8-neighbor gate, drain never sync-builds, pool caps TG=4/TM=6 TM-priority]. Gates ALL
-      GREEN (coordinator re-runs, final code, logs .scratch/AC-0152-gates/coord-* + .scratch/AC-0160-gates/coord-*): G0
-      exit 0 0 err; bandmap tick 41 / circle 7845 / bands 41-104-7700-408 / stream 8253 / b0 41-41 built / 0 B0LOST /
-      band2 full mesh 4133 quads / trickle 8244->8169 monotone / spawn3x3_ms 3192; genhash x2 25/25 byte-identical to
-      baseline [only GENMS + pool banner]; SMOKE 4 exact [player 136.78/2.82, interact true/2/2, light 10/15/14, fluids
-      2756/914 stable + 25/9 = NEW baseline, old 2730/888 void - r4 resident set 121->69 chunks]; boundary r4 one-shot
-      ok, NEW walk p95 ~54ms [old 267-401 void]; render R=10 top-down [seed 44, AWECRAFT_AIM] band boundary visible as
-      texture-frequency change, no impostor quads, no wall at band edges, spawn normal. DEVIATIONS (documented):
-      spawn3x3 3.2-4.0s vs ~1-2s target = measured machine floor [gen 1.35s + builds 0.92s + (0,0) face-cache/eff
-      cascade 1.3s + handoffs 0.5s], 3.6x faster than the 11.7s defect; fluids sea counters 2756/914 (invariants
-      unchanged); boundary new band ~54ms. Known non-fatal: 20-26s one-off burst at boundary crossing 16 + Invalid Task
-      ID at recenter world.gd:2258 (every new-streaming-code run, non-blocking, follow-up recommended). Files:
-      godot/world/world.gd, godot/world/chunk.gd, godot/autoload/settings.gd, godot/scenes/main.gd, tasks/AC-0152/,
-      tasks/AC-0160/, tasks/TASKS.yaml, tasks/HARNESS.md, godot/CONTINUITY.md.'
+    text: '[done 2026-08-31, coordinator-verified, closes with AC-0160 single commit] Shipped: render set = Euclidean circle
+      R=50 [7845 columns, not 10201 square]; tick/collision set = taxicab diamond 4 [41 columns, full 16c mesh]; band1 = taxicab
+      5-8 [104 columns, coarse merged uv_scale 2, no tick/collide]; band2 = circle outside band1 [7700 columns] - impostor
+      REMOVED per user decision 2026-08-30 (AC-0160), now normal full-fidelity chunk mesh no tick/collide; band3 = collar
+      + circle-boundary 8-neighborhood ring [408 chunks @ R=50] data-only so circle-edge band2 chunks build against real neighbor
+      data [no stranded queue, no height wall at render edge]; stream set 8253; settings sim_dist default 1->4 wired to band0_r;
+      AWECRAFT_BAND0/BAND1 env overrides; spawn 3x3 fast-then-trickle [5x5 spawn data burst, all-8-neighbor gate, drain never
+      sync-builds, pool caps TG=4/TM=6 TM-priority]. Gates ALL GREEN (coordinator re-runs, final code, logs .scratch/AC-0152-gates/coord-*
+      + .scratch/AC-0160-gates/coord-*): G0 exit 0 0 err; bandmap tick 41 / circle 7845 / bands 41-104-7700-408 / stream 8253
+      / b0 41-41 built / 0 B0LOST / band2 full mesh 4133 quads / trickle 8244->8169 monotone / spawn3x3_ms 3192; genhash x2
+      25/25 byte-identical to baseline [only GENMS + pool banner]; SMOKE 4 exact [player 136.78/2.82, interact true/2/2, light
+      10/15/14, fluids 2756/914 stable + 25/9 = NEW baseline, old 2730/888 void - r4 resident set 121->69 chunks]; boundary
+      r4 one-shot ok, NEW walk p95 ~54ms [old 267-401 void]; render R=10 top-down [seed 44, AWECRAFT_AIM] band boundary visible
+      as texture-frequency change, no impostor quads, no wall at band edges, spawn normal. DEVIATIONS (documented): spawn3x3
+      3.2-4.0s vs ~1-2s target = measured machine floor [gen 1.35s + builds 0.92s + (0,0) face-cache/eff cascade 1.3s + handoffs
+      0.5s], 3.6x faster than the 11.7s defect; fluids sea counters 2756/914 (invariants unchanged); boundary new band ~54ms.
+      Known non-fatal: 20-26s one-off burst at boundary crossing 16 + Invalid Task ID at recenter world.gd:2258 (every new-streaming-code
+      run, non-blocking, follow-up recommended). Files: godot/world/world.gd, godot/world/chunk.gd, godot/autoload/settings.gd,
+      godot/scenes/main.gd, tasks/AC-0152/, tasks/AC-0160/, tasks/TASKS.yaml, tasks/HARNESS.md, godot/CONTINUITY.md.'
 - id: AC-0153
   title: y-axis-lod-vertical-bands
   source: user
@@ -4670,15 +4683,16 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-30T12:23
   updated_at: 2026-08-30T12:23
-  completed_at: null
+  completed_at: 2026-08-31T13:05
   waiting_on: null
   parent_id: null
-  notes: 'Future: vertical LOD per slab. 0-4 diamond XZ is 24 slabs exact 16x16x16 today. Consider Y bands: +-4 slabs (~64
-    blocks) exact, +-8 merged 32x32x32, beyond impostor/fog. Not needed for AC-0152 XZ diamond/circle, keep as backlog.'
+  notes: 'SUPERSEDED by AC-0177 coarse-lod-horizontal-and-vertical (merged horiz+vert) - Future: vertical LOD per slab. 0-4
+    diamond XZ is 24 slabs exact 16x16x16 today. Consider Y bands: +-4 slabs (~64 blocks) exact, +-8 merged 32x32x32, beyond
+    impostor/fog. Not needed for AC-0152 XZ diamond/circle, keep as backlog.'
   comments: []
 - id: AC-0154
   title: lazy-caves-dont-carve-unseen
@@ -4759,12 +4773,12 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-30T14:28
-  updated_at: 2026-08-30T14:28
-  completed_at: null
-  waiting_on: AC-0155
+  updated_at: 2026-08-31T18:05
+  completed_at: 2026-08-31T18:05
+  waiting_on: null
   parent_id: null
   notes: 'Bedrock Realms 20Hz tick on Simulate 4 diamond 41 (|dx|+|dz|<=4, 41 not 81) not 5Hz square: 1 randomTick per 16x16x16
     per tick (~1/68s per wheat), fluid 20Hz, redstone 1-tick dust, mob spawn 24-44 circle + n-1 diamond. Efficiency + correctness,
@@ -4801,37 +4815,35 @@ intake:
   completed_at: 2026-08-31T05:55
   waiting_on: null
   parent_id: AC-0152
-  notes: 'Defect caused by AC-0152: impostors render as black floating rectangles (stale _tm_ctx has_tex/brect -1, winding
-    0,2,1 faces -Y culled, UV flipped) and spawn 3x3 11.7s vs 1s with queue 7710 stranded. Fix: refresh ctx after atlas bake,
-    flip winding to 0,1,2 + vv=1-z, cap drain spawn-fast. Blocks AC-0152 DONE.'
+  notes: 'SUPERSEDED (impostors reverted) - Defect caused by AC-0152: impostors render as black floating rectangles (stale
+    _tm_ctx has_tex/brect -1, winding 0,2,1 faces -Y culled, UV flipped) and spawn 3x3 11.7s vs 1s with queue 7710 stranded.
+    Fix: refresh ctx after atlas bake, flip winding to 0,1,2 + vv=1-z, cap drain spawn-fast. Blocks AC-0152 DONE.'
   comments:
   - id: 1
     created_at: 2026-08-31T05:55
     updated_at: null
     text: '[done 2026-08-31, coordinator-verified, single commit with AC-0152] USER DECISION 2026-08-30 superseded the note
-      fix: "let us just get rid of billboards" - impostor/billboard machinery REMOVED ENTIRELY (no fixes/variants):
-      chunk.gd build_impostor/apply_impostor/_impostor_quad_acc/_lod_material + world.gd band-2 dispatch/handoff/worker
-      branches, _impostor_dispatch, _build_ready band-2 self-only; the defect ctx/winding/UV classes are MOOT (they
-      lived in the removed path); band 2 = normal full-fidelity chunk mesh (same builder path as band 0, no tick/collide).
-      The drain fix (the remaining defect class) landed: root causes = shared 6-thread pool letting gen starve builds +
-      drain sync-fallbacks (270-1235ms main-thread builds) on every cap-drop/missing-8-neighbor + recenter slice racing
-      the spawn window [keying it on _startup_pending() disabled the data pass for the whole walk -> empty world ahead,
-      35s stall]. Fixes: TM builds always high priority / TG data low [caps threadgen_max=4 threadmesh_max=6,
-      env-overridable], drain NEVER sync-builds [all-8-neighbor-data gate else defer], 5x5 spawn data one high-priority
-      3-wide group at recenter held until landed then 9 spawn chunks dispatch in one frame [TM cap 9 during startup],
-      recenter slice pauses only for one-shot _spawn_fast flag, burst group task ids tracked [slot arrays stable under
-      running workers]. Result: spawn3x3_ms 11.7s -> 3192-3962ms [5 runs], 3.6x faster; bounded continuous trickle
-      [8244->8169 strictly monotone], no stranded queue; + circle-boundary data-only ring (band 3, 408 chunks @ R=50)
-      so circle-edge band-2 chunks have neighbor data. Gates ALL GREEN (coordinator re-runs): G0 exit 0; bandmap
-      spawn3x3_ms 3192 + trickle monotone + b0 41/41 + 0 B0LOST + band2 full mesh; genhash x2 25/25 == baseline; SMOKE 4
-      exact [fluids 2756/914 stable + 25/9 = NEW standing baseline, old 2730/888 void]; boundary r4 one-shot ok, NEW walk
-      p95 ~54ms; render: no impostor quads anywhere, no wall at band edges, spawn normal. DEVIATION (documented): spawn
-      3.2-4.0s vs ~1-2s target unreachable on this box - component floor [gen 1.35s + 9 builds 0.92s + (0,0)
-      face-cache/eff cascade ~1.3s (AC-0134) + handoffs ~0.5s]; the 1-2s model assumed ~0.5s gen and omitted the
-      cascade. FOLLOW-UP recommended (non-blocking): 20-26s one-off burst at boundary crossing 16 + engine "Invalid Task
-      ID" at is_task_completed from recenter (world.gd:2258) in every new-streaming-code run; run completes, queue
-      drains - not a hard fail. Evidence: .scratch/AC-0160-gates/ [coord-boundary.log, coord-bands3.png, bres.json] +
-      .scratch/AC-0152-gates/coord-*.'
+      fix: "let us just get rid of billboards" - impostor/billboard machinery REMOVED ENTIRELY (no fixes/variants): chunk.gd
+      build_impostor/apply_impostor/_impostor_quad_acc/_lod_material + world.gd band-2 dispatch/handoff/worker branches, _impostor_dispatch,
+      _build_ready band-2 self-only; the defect ctx/winding/UV classes are MOOT (they lived in the removed path); band 2 =
+      normal full-fidelity chunk mesh (same builder path as band 0, no tick/collide). The drain fix (the remaining defect
+      class) landed: root causes = shared 6-thread pool letting gen starve builds + drain sync-fallbacks (270-1235ms main-thread
+      builds) on every cap-drop/missing-8-neighbor + recenter slice racing the spawn window [keying it on _startup_pending()
+      disabled the data pass for the whole walk -> empty world ahead, 35s stall]. Fixes: TM builds always high priority /
+      TG data low [caps threadgen_max=4 threadmesh_max=6, env-overridable], drain NEVER sync-builds [all-8-neighbor-data gate
+      else defer], 5x5 spawn data one high-priority 3-wide group at recenter held until landed then 9 spawn chunks dispatch
+      in one frame [TM cap 9 during startup], recenter slice pauses only for one-shot _spawn_fast flag, burst group task ids
+      tracked [slot arrays stable under running workers]. Result: spawn3x3_ms 11.7s -> 3192-3962ms [5 runs], 3.6x faster;
+      bounded continuous trickle [8244->8169 strictly monotone], no stranded queue; + circle-boundary data-only ring (band
+      3, 408 chunks @ R=50) so circle-edge band-2 chunks have neighbor data. Gates ALL GREEN (coordinator re-runs): G0 exit
+      0; bandmap spawn3x3_ms 3192 + trickle monotone + b0 41/41 + 0 B0LOST + band2 full mesh; genhash x2 25/25 == baseline;
+      SMOKE 4 exact [fluids 2756/914 stable + 25/9 = NEW standing baseline, old 2730/888 void]; boundary r4 one-shot ok, NEW
+      walk p95 ~54ms; render: no impostor quads anywhere, no wall at band edges, spawn normal. DEVIATION (documented): spawn
+      3.2-4.0s vs ~1-2s target unreachable on this box - component floor [gen 1.35s + 9 builds 0.92s + (0,0) face-cache/eff
+      cascade ~1.3s (AC-0134) + handoffs ~0.5s]; the 1-2s model assumed ~0.5s gen and omitted the cascade. FOLLOW-UP recommended
+      (non-blocking): 20-26s one-off burst at boundary crossing 16 + engine "Invalid Task ID" at is_task_completed from recenter
+      (world.gd:2258) in every new-streaming-code run; run completes, queue drains - not a hard fail. Evidence: .scratch/AC-0160-gates/
+      [coord-boundary.log, coord-bands3.png, bres.json] + .scratch/AC-0152-gates/coord-*.'
 - id: AC-0161
   title: planet-ship-drydock-build
   source: agent
@@ -4917,4 +4929,351 @@ intake:
     behind AC-0161 Drydock proven. Backlog (not queued).
 
     '
+  comments: []
+- id: AC-0164
+  title: thread chunk I/O off main thread
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: done
+  labels: []
+  created_at: 2026-08-31T11:39
+  updated_at: 2026-08-31T18:05
+  completed_at: 2026-08-31T18:05
+  waiting_on: null
+  parent_id: null
+  notes: 'Keep full-column saves (every 16x384x16 col on to_free at world.gd:2242 via _queue_chunk_save -> _drain_save_queue).
+    Goal = cut re-gen cost by serving revisits from disk, but current path at chunk_io.gd:48 encode ~26ms + chunk_io.gd:75
+    decode ~20ms + FileAccess at world.gd:2709/2756 runs on main thread (FLUSH_FRAME_BUDGET_MS 40 at world.gd:8, 1-2/frame
+    at world.gd:2767). Thread the whole I/O: encode/decode+FileAccess on WorkerThreadPool (mirror threadgen at world.gd:282
+    / threadmesh at world.gd:316; chunk_io.gd:7 already worker-safe). Main thread only enqueues in _queue_chunk_save at world.gd:2745
+    and polls. Preserve AWCC v1 blob at chunk_io.gd:51 and SAVE_VERSION 3 at save.gd:5; keep AWECRAFT_LOGIC=chunkio gate at
+    scenes/main.gd:1136 (41/41 byte-identical, disk/gen counters, r50 revisit) and boundary p95 73/89. No policy change (still
+    save every data col, stubs skipped at world.gd:2746).'
+  comments: []
+- id: AC-0165
+  title: GDExtension native chunk I/O codec
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-31T11:39
+  updated_at: 2026-08-31T11:39
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Follow-up to AC-0164: replace godot/core/chunk_io.gd palette+bitpack GDScript loops at chunk_io.gd:123 _encode_array
+    / chunk_io.gd:200 _bitpack (~26ms enc/20ms dec at 00p) with native C++ GDExtension. Keep identical API (dir_for/path_for/encode_column/decode_column/ensure_dir/clear_dir)
+    and AWCC v1 format at chunk_io.gd:51 so save.gd:5 SAVE_VERSION 3 and world.gd:2709/2756 call sites unchanged and AWECRAFT_LOGIC=chunkio
+    at scenes/main.gd:1136 stays byte-identical. Build with godot-cpp + SConstruct -> bin/libchunkio.linux.debug.so + bin/libchunkio.windows.release.dll
+    + .gdextension, integrate into build_windows.sh and 8080 serve. Do NOT port game to C# (.NET engine + templates churn);
+    keep GDScript game logic. Optional next: WorldGen.generate native if gen still hot.'
+  comments: []
+- id: AC-0166
+  title: chunks flicker unload/reload at distance line (band/cull hysteresis)
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: done
+  labels: []
+  created_at: 2026-08-31T11:43
+  updated_at: 2026-08-31T12:28
+  completed_at: 2026-08-31T12:28
+  waiting_on: null
+  parent_id: null
+  notes: 'Repro: walk forward, approaching chunks temporarily vanish then reappear; crossing a sharp distance line back-and-forth
+    retriggers. Next line ahead repeats. Not permanent unload — mesh rebuild race. Hypotheses: 1) recenter band change at
+    world.gd:2480 (c.mesh_built=false + _enter_candidate_slabs) kills mesh instantly even when old band 0/1/2 -> new 0/1/2
+    are both meshable (AC-0160 band2 impostor removed, all now full-mesh path) — hole until threadmesh lands (world.gd:1094
+    _mesh_dispatch). 2) hysteresis at world.gd:2217 in_stream_set (circle ∪ diamond(b1+1) ∪ ring) -> _enter_candidate at world.gd:2222
+    destroys slabs; jitter on boundary (render_radius 50 vs taxi b1+2) flips candidate. 3) frustum cull at world.gd:422 _frustum_cull_pass
+    with FRUSTUM_CULL_MARGIN 32 and _cull_col_span H/2=192 — far-plane/column-center (192) false positive at ground-level
+    view; slab-level dy test may toggle. Isolation: AWECRAFT_FRUSTUM_CULL=0, AWECRAFT_BAND0/1=50, AWECRAFT_RECPROBE=1 log
+    recenter WANT vs cull state. Fix direction: keep mesh visible on meshable->meshable band change (swap on land, not kill),
+    tighten in_stream_set two_out at world.gd:2231 and _rec_want_step band3 handling.'
+  comments:
+  - id: 1
+    created_at: 2026-08-31T12:28
+    updated_at: null
+    text: '[user] cancellig'
+- id: AC-0167
+  title: band change kills mesh even when old and new band use same mesh
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-31T11:47
+  updated_at: 2026-08-31T11:47
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User-confirmed repro: walking hits periodic line where outer chunks vanish then reappear; band bands are the cause.
+    Since AC-0160 band-2 impostor removed, bands 0/1/2 all use same full-mesh build_accs path (world.gd band_of), but recenter
+    WANT at world.gd:2479 still does c.mesh_built=false + _enter_candidate_slabs() on any band != nb, even meshable->meshable
+    (0<->1<->2). That kills the visible mesh and re-queues threadmesh until handoff, creating the hole. Fix: keep mesh visible
+    on meshable->meshable band change — only update c.band/collision_enabled and re-queue without destroying slabs; only kill
+    when transitioning to/from band 3 data-only. Preserve full-save and chunkio gates.'
+  comments: []
+- id: AC-0168
+  title: retain mesh at r+1 candidate (hide not kill)
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-31T11:53
+  updated_at: 2026-08-31T11:53
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User decision after discussion: r+1 hysteresis should retain mesh AND keep it visible (not visible=false). Currently
+    AC-0080 _enter_candidate at world.gd:2142 kills mesh (mesh_built=false + _enter_candidate_slabs() frees ArrayMesh + collision).
+    This causes load/unload flip on back-and-forth across circle/collar edge (world.gd:2217 in_stream_set). Fix: at r+1 keep
+    slabs/mesh/collision resident and visible - just mark candidate flag for free-logic, let fog (fog_far=(R+1)*16*0.95) +
+    frustum cull handle hiding. True free only at r+2 after cand_since>=2 (world.gd:2236). Cost ~300-400 extra visible columns
+    at R=50 (~4% draw) but step-back is zero cost and no pop. Do not hide via _cull_set_vis.'
+  comments: []
+- id: AC-0169
+  title: 'debug stats overlay: CPU/RAM/VRAM/FPS'
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-31T11:56
+  updated_at: 2026-08-31T11:56
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Add debug stats overlay showing: CPU usage (process %), RAM usage (process + system), VRAM usage (RenderingServer
+    / Performance), and frame rate (FPS/frame time). Use Performance singleton (TIME_FPS, MEMORY_STATIC/MAX, RENDER_*), OS.get_static_memory_usage,
+    RenderingServer.get_rendering_info. Must be toggleable in Settings (Options menu under video/debug, persisted via Settings/PATH
+    at autoload/settings.gd) in addition to F3 toggle. Headless probe AWECRAFT_LOGIC=stats. No perf regression when hidden.'
+  comments: []
+- id: AC-0170
+  title: debug logging toggle in options (log to in-game console)
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-31T12:14
+  updated_at: 2026-08-31T12:14
+  completed_at: null
+  waiting_on: null
+  parent_id: AC-0121
+  notes: 'Follow-up to AC-0121 debug-console-in-game. Add a toggle in Options/Settings (persisted via autoload/settings.gd)
+    that when enabled, routes debug log lines (the output behind AC-0121 console + existing Debug/perf prints at world.gd
+    timing/RECPROBE/fluid probes) to the in-game console (AC-0121). Off by default. Headless: env AWECRAFT_DEBUG_LOG respected.'
+  comments: []
+- id: AC-0171
+  title: debug logging to file (persist console + stats)
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-31T12:20
+  updated_at: 2026-08-31T12:20
+  completed_at: null
+  waiting_on: null
+  parent_id: AC-0170
+  notes: Follow-up to AC-0169 (stats overlay) and AC-0170 (console toggle). When debug logging is enabled (Settings toggle
+    from AC-0170, persisted via autoload/settings.gd), also tee log lines to user://logs/awecraft_YYYYMMDD.log with rotation
+    (cap ~5MB / 5 files). Include F3 stats snapshots + timing/RECPROBE/fluid probes. Headless still writes .scratch/<task>-gates/;
+    file is for player sessions.
+  comments: []
+- id: AC-0172
+  title: one-click bug capture (dump repro + screenshot)
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-31T12:21
+  updated_at: 2026-08-31T12:21
+  completed_at: null
+  waiting_on: null
+  parent_id: AC-0171
+  notes: 'When debug logging/file toggle is on (AC-0170/AC-0171), F-key (e.g. F8 or F3 extended) dumps a single bug bundle:
+    seed + player pos/yaw/pitch + chunk key (cx,cz) + render_radius/band0/1 + candidate/cand_since counts + recenter WANT/band
+    state (RECPROBE) + perf (fps, p95) + screenshot to user://logs/bug_YYYYMMDD_HHMMSS.json + .png. No env restart. Headless
+    probe AWECRAFT_LOGIC=bugcap validates bundle schema. Follows AC-0171 file logger.'
+  comments: []
+- id: AC-0173
+  title: crash/error capture to file + console toast
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-31T12:23
+  updated_at: 2026-08-31T12:23
+  completed_at: null
+  waiting_on: null
+  parent_id: AC-0172
+  notes: 'Central push_error / unhandled exception handler: capture stack + chunk_origin + seed/pos/band/candidate state +
+    last perf frame to user://logs/crash_YYYYMMDD_HHMMSS.log (rotated) and toast in AC-0121 in-game console (AC-0170 toggle
+    respects it, but crashes always file). Covers known transients like is_task_completed Invalid Task ID at world.gd:2258
+    and threadgen handoff nil. Follows AC-0171/AC-0172 file logger.'
+  comments: []
+- id: AC-0174
+  title: visual dev overlays as Options toggles
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-31T12:25
+  updated_at: 2026-08-31T12:25
+  completed_at: null
+  waiting_on: null
+  parent_id: AC-0169
+  notes: 'Add separate toggles in Options/Settings (persisted via autoload/settings.gd) for in-game visual dev overlays: band/debug
+    (color by band 0/1/2/3 + candidate hatch + R circle wireframe), light/debug (eff/bmask heatmap per 16^3 + face sample
+    dots, replaces AWECRAFT_LOGIC=lightaudit restarts), collision/debug (StaticBody boxes + col_dirty pending at world.gd:2043).
+    Off by default, composable, no perf when off. Follow-up to AC-0169 stats overlay.'
+  comments: []
+- id: AC-0175
+  title: switch chunk saves to region format (32x32 cols per file)
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-31T12:42
+  updated_at: 2026-08-31T12:42
+  completed_at: null
+  waiting_on: null
+  parent_id: AC-0164
+  notes: 'Replace per-column files at chunk_io.gd:23 user://chunkdir_<slot>/<face>_<cx>_<cz>.bin (7845 files at R=50) with
+    region files: 32x32 columns per region file, e.g. user://chunkdir_<slot>/r.<rx>.<rz>.bin with header offset table + per-column
+    AWCC v1 blobs (chunk_io.gd:51). Keep _queue_chunk_save at world.gd:2745 and _try_disk_load at world.gd:2709 APIs but backed
+    by region seeks. Incremental writes (only evicted cols via _drain_save_queue at world.gd:2767, 1-2/frame via AC-0164 threading),
+    fewer stat/open ops, same ~8.3KB/col. Migration: read old per-column files if region missing; Save.clear at save.gd:115
+    wipes region dir. Follows AC-0164/AC-0165.'
+  comments: []
+- id: AC-0176
+  title: use custom user dir so saves are AweCraft not Godot
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-31T12:45
+  updated_at: 2026-08-31T12:45
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Exported exe currently writes to %APPDATA%/Godot/app_userdata/AweCraft (default user:// at docs.godotengine.org/en/stable/tutorials/io/data_paths.html).
+    Enable application/config/use_custom_user_dir=true in project.godot so user:// goes to %APPDATA%/AweCraft. When enabled:
+    Windows %APPDATA%/AweCraft, macOS ~/Library/Application Support/AweCraft, Linux ~/.local/share/AweCraft. Set custom_user_dir_name="AweCraft".
+    Verify exported Windows exe writes to correct dir. Follows saves tasks AC-0155/0175.'
+  comments: []
+- id: AC-0177
+  title: coarse-lod-horizontal-and-vertical-distant-chunks
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-31T13:03
+  updated_at: 2026-08-31T13:03
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: Coarse 2x2x2 LOD (32-block period, 2x UV, cutout->opaque, no flora) for distant chunks both horizontally (taxi>4
+    to render circle) and vertically (+-4 slabs full, +-8 merged, beyond culled/fog). No impostor/cardboard. Replaces AC-0152
+    band2.
+  comments: []
+- id: AC-0178
+  title: loading screen bypass throttles for first load and render-distance change
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-31T13:19
+  updated_at: 2026-08-31T13:19
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'Add loading screen shown on first spawn and when Options render_distance changes. While screen visible: bypass world.gd
+    throttles (FLUSH_FRAME_BUDGET_MS 40 at world.gd:8, _drain_save_queue 1-2/frame at world.gd:2767, threadgen world.gd:267
+    / threadmesh_handoff world.gd:1027 budget) and saturate WorkerThreadPool (gen+decode+mesh prep max threads, main only
+    handoff/create_mesh). Show progress % cols disk/gen/meshed. Follows AC-0164 threaded I/O for true parallel decode; pairs
+    with AC-0165 native for max win. Verify R=50 7845 cols first load wall vs spread.'
+  comments: []
+- id: AC-0179
+  title: fix MINFO drift from threaded greedy-merge reshuffle flake
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-31T13:31
+  updated_at: 2026-08-31T13:31
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'MINFO byte-identical gate fails due to pre-existing flake class (AC-0109-results.html:60, AC-0136): threaded greedy-merge
+    reshuffles order nondeterministically => same voxels different quad pack => +-8-48 verts on random chunks (AC-0109: [16,48]
+    2012 vs 2020 -8). Baseline .scratch/AC-0129-gates/gate_minfo.txt from 2026-08-27 stale. FIX CONSTRAINT: do NOT hurt runtime
+    perf (no extra sync/sort on hot path that regresses walk p95 ~108-126 / fwd ~11k). Preferred fix: refresh baseline from
+    current tree or allow small tolerance / A/B with kill-switch; if a code fix is done it must be zero-cost (e.g. deterministic
+    tie-break without locking). Verify MINFO byte-identical across 3 runs or documented tolerance, walk/fwd budget unchanged.'
+  comments: []
+- id: AC-0180
+  title: texture slides on block break due to greedy repack UV
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-31T13:33
+  updated_at: 2026-08-31T13:33
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'When destroying a block the neighboring face texture visibly shifts a few pixels. Root is world.gd greedy mesher
+    repacking: break triggers chunk + neighbor re-mesh, big quads repacked differently, UV islands slide inside blocks_atlas.
+    Not caused by AC-0179 MINFO thread-order flake (headless only). Fix: keep UV stable across repack (anchor UVs or no repack
+    on single-block edit, or per-face UV pinning). Verify: break center block in plains/stone flat, neighbor top face UV doesn''t
+    move between before/after screenshots.'
   comments: []

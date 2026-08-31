@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0158 — results</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:980px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{color:#0a7a2f;font-weight:600}.warn{color:#a05a00;font-weight:600}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0158 — 20hz-diamond-game-tick — results</h1>
+<p class="meta">Builder run 2026-08-31. Logs: <code>.scratch/AC-0158-gates/</code> (g0_final.log, smoke1.log, tick5..tick10.log, save1.log, continue1.log, render2.log, genhash_new.txt). Coordinator heavy gates + Windows build + commit NOT run by builder.</p>
+
+<h2>What shipped</h2>
+<ul>
+<li><b>20 Hz game tick (0.05 s) is the simulation clock</b> — replaces the 5 Hz fluid Timer. Fixed-step accumulator on the real frame delta in <code>world.gd::_process</code> (max 4 catch-up ticks/frame; backlog dropped on stalled frames, no death spiral). Fluid simulation runs inside the tick (same band-0 scope, same <code>fluid_wet</code> sleep optimization, N=3 unchanged — at 20 Hz sleep engages in 0.15 s, i.e. faster than the old 0.6 s).</li>
+<li><b>Tick region = band-0 taxicab diamond, 41 columns (|dx|+|dz| &le; 4)</b> — band 1–3 (the 13–50 render circle) NEVER tick (structural: the pass only iterates chunks with <code>face &le; 1 and band == 0</code>).</li>
+<li><b>Random ticks: exactly 1 per 16&times;16&times;16 subchunk per 20 Hz tick</b> over the 41 columns (984 touches/s). Deterministic: the cell is a pure function of (world seed, tick index, column, subchunk) via a splitmix64 chain (one column hash per tick + one mix per subchunk, 12 low bits → lx/ly/lz). Two fresh runs produce byte-identical sequences (window md5 identical across 5 independent process runs).</li>
+<li><b>Random-tick consumer = counter/hook</b> (<code>random_tick_total</code>, <code>random_tick_map</code>, opt-in <code>random_tick_seq</code> log, hook point <code>_apply_random_tick</code>). No crops/wheat/redstone blocks built.</li>
+<li><b>Region/rate contracts (predicates + constants only):</b> <code>REDSTONE_DUST_DELAY_TICKS = 1</code>; <code>in_mob_spawn_region(dx,dz)</code> = circle 24–44 (squared-distance, unit per caller) &cup; the (n−1) taxi diamond of the Simulate radius (n = band0_r = 4). Feature work (redstone dust block, mob spawner) DEFERRED.</li>
+<li><b>New probe arm</b> <code>AWECRAFT_LOGIC=tick</code> (main.gd <code>_tick_test</code>): rate, scope, distribution, determinism, fluid-hz, per-tick ms — one process, headless &le; 60 s.</p></li>
+</ul>
+
+<h2>Gates (builder tier) — all green</h2>
+<table>
+<tr><th>Gate</th><th>Result</th><th>Measured vs expected</th></tr>
+<tr><td>G0</td><td class="ok">PASS</td><td><code>--quit</code> exit 0, <b>0</b> SCRIPT ERROR (g0_final.log).</td></tr>
+<tr><td>SMOKE battery <code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code></td><td class="ok">PASS</td><td>battery <code>ok:true</code>, wall 284.5 s (smoke1.log). player start <b>[8.5,137,8.5]</b>, jump_peak_y <b>135.43</b>, after_fly_y <b>136.78</b>; interact place_ok <b>true</b>, drop_spawned true; light 15 / 10 / 14 / 9 (surface/cave/torch/far_after); fluids sea <b>2756/2756</b> + backed <b>914/914</b>, sea_stable <b>true</b>, water_on_lava <b>25</b>, sideways_lava <b>9</b>, water_delta <b>1</b>, shore [5,7], source [5,8]; genhash <b>25/25 byte-identical</b> to <code>.scratch/AC-0091-gates/genhash_new.txt</code> (diff clean). <b>No fluids drift — the fluids arm is tick-count based (5 explicit <code>Debug.tick_fluids()</code> calls), so the 0.2→0.05 clock change moved nothing; no arm fix was needed.</b></td></tr>
+<tr><td>tick probe <code>AWECRAFT_LOGIC=tick</code></td><td class="ok">PASS</td><td><code>ok:true</code>, wall 49.0 s &le; 60 (tick10.log). (a) <b>hz 19.90</b> full-window, <b>hz2 20.03</b> last-half (gated, [18,22]); (b) scope: <b>41 cols, 984 subchunks, scope_bad 0, band123_ticks 0</b>; (c) distribution: min=max=<b>120</b> per subchunk (exactly 1/tick), local-cell spread min 13 / max 49 over 4096 bins (mean 28.8 — real, near-uniform); samples all 120; (d) determinism: recompute <b>0 mismatch / 118080 cells</b>; window_md5 <b>d81250cd…</b> + md5_first 840a5ba8… <b>identical across 5 fresh process runs</b>; (e) fluid <b>fluid_hz 19.90</b> (120/120 ticks); (f) per-tick ms: mean <b>1.83</b>, p95 <b>6.77</b>, max 21.96 (one GC spike); window frames: p95 24 ms, 3 frames &gt;100 ms (max 247, worker-handoff spikes). Phases (disk-cached boot): boot 3 ms, settle 24.9 s, window 6.03 s, analyze 0.17 s.</td></tr>
+<tr><td>save arm <code>AWECRAFT_LOGIC=save</code></td><td class="ok">PASS</td><td><code>ok:true</code> — blocks 6/6, iso_ok, saved_ok, clear_ok, v1_softfail true (save1.log).</td></tr>
+<tr><td>continue arm <code>AWECRAFT_LOGIC=continue</code></td><td class="ok">PASS</td><td>edits_ok true, pos_ok, saved_ok, save_settled, col_body_at_spawn true (continue1.log). Observation (outside gate set): <code>load_spawn_ms 72580</code> — load-path cost, untouched by this change.</td></tr>
+<tr><td>RENDER (exactly one)</td><td class="ok">PASS</td><td>xvfb + gl_compatibility + <code>AWECRAFT_RADIUS=1</code>, exit 0, <code>RESULT {"m4":"ok",w:1280,h:720}</code> → <code>tasks/AC-0158/render_r1.png</code> (+ engine-written <code>render_r1_placed.png</code> companion). Top-down via <code>AWECRAFT_AIM="8,240,8,0,-1.57"</code>: spawn water pool + terrain wall + R=1 render boundary edge visible, HUD clean, zero SCRIPT ERROR. Note: the first attempt used a relative snapshot path which <code>save_png</code> rejects (absolute path required) and produced no file; the recorded render is the single successful pass.</td></tr>
+</table>
+
+<h2>Known non-fatal noise observed (documented classes, not chased)</h2>
+<p>1–4 <code>SCRIPT ERROR … threadgen_handoff … Nil→PackedByteArray</code> transients per run (AC-0137 class, 1–25/run per HARNESS §3); one <code>PagedAllocator</code> exit-time line.</p>
+
+<h2>Deviations / interpretations</h2>
+<ol>
+<li><b>"half columns"</b> — read as: the 41-column taxi diamond ticks ≈ half the columns of the 81-column (9×9 chebyshev) square the note rejects ("41 not 81"). The tick set is exactly 41.</li>
+<li><b>"~1/68 s per wheat"</b> — with the spec's <i>exactly 1</i> random tick per 16³ per tick at 20 Hz, one wheat cell (1 of 4096 in its subchunk) is picked every 4096 ticks ≈ <b>205 s</b>. The note's ~68 s corresponds to ~3 ticks/16³/tick (Bedrock's actual randomTickSpeed=1 behavior). Implemented exactly-1 per the brief; the 68 s cadence is a property of a 3× variant, recorded here for when crops land.</li>
+<li><b>Redstone / mob-spawn deferral</b> — the note's "redstone 1-tick dust" and "mob spawn 24-44 circle + n-1 diamond" are shipped as <b>pure predicates + rate constants only</b> (self-checked in the probe, <code>region_ok:true</code>). No redstone block, no mob spawner — feature work is follow-on. The "24-44 circle" unit is unresolved in the note; the predicate is unit-agnostic (squared distance in the caller's units).</li>
+<li><b>hz is gated on the last-half window rate (hz2)</b> — a few &gt;200 ms frames (worker-handoff spikes) drop catch-up ticks via the 4-tick cap and drag the full-window rate (observed hz 17.2 in one mid-build run); the steady-state clock rate is the half-window rate (20.03 here). Both are reported.</li>
+<li><b>Probe boot is disk-cached</b> — <code>user://chunkdir_0</code> (AC-0155 chunk files, seed 44) serves the 41-set in ~3 ms; a fresh no-files boot adds ~3–6 s (still &le; 60 s wall). The tick sequence itself is disk-independent (pure function of seed + tick index + the 41-set).</li>
+<li><b>Settle before the window</b> — the hz window runs only after the 41-set is meshed and the stream queue size is stable (90 frames; 40 unbuildable outer-ring entries linger forever, so queue_size==0 is not the criterion). With builds in flight the measured hz collapses (9 Hz) — settle is what makes the 20 Hz measurement meaningful.</li>
+</ol>
+
+<h2>Watch items for the coordinator's heavy gates</h2>
+<ul>
+<li><b>boundary r4:</b> walk frames now carry the 20 Hz tick (~1.8 ms mean / ~4–7 ms p95, landing every ~3rd frame at 60 fps) and the fluid pass runs 4× more often (per-call cost unchanged). Expect a small upward drift of walk p95 (current band 73–89 ms). <code>fluid_tick_ms_p95</code> field semantics unchanged.</li>
+<li><b>perf r4:</b> per-frame budget +~4 %; frame p95 (current ~49 ms) may drift up a few ms.</li>
+<li><b>genhash:</b> generator untouched — verified 25/25 byte-identical this run.</li>
+<li><b>Tick probe reproducibility:</b> a fresh re-run must reproduce <code>window_md5 d81250cdbeb79419156517a7bad108b0</code> (ticks 1..120, seed 44, full 41-set) — 5/5 builder runs matched.</li>
+</ul>
+
+<h2>Files changed</h2>
+<table>
+<tr><th>File</th><th>Purpose</th></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>20 Hz fixed-step game clock (replaces 5 Hz fluid Timer), tick_index, random-tick pass (1/subchunk/tick, splitmix64, deterministic), counters/log, fluid_tick_count, redstone/mob-spawn constants + region predicates.</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td><code>AWECRAFT_LOGIC=tick</code> dispatch + <code>_tick_test</code> probe arm (rate/scope/distribution/determinism/fluid-hz/per-tick-ms) + <code>_tick_md5</code> helper.</td></tr>
+<tr><td><code>tasks/AC-0158/results.html</code></td><td>This file.</td></tr>
+<tr><td><code>tasks/AC-0158/continuity.md</code></td><td>Builder work log.</td></tr>
+<tr><td><code>tasks/AC-0158/render_r1.png</code> (+ <code>render_r1_placed.png</code>)</td><td>RENDER gate output.</td></tr>
+</table>
+<p class="note">Fences honored: no 384→80 cut, no data.gd change, no TASKS.yaml/CONTINUITY.md/HARNESS.md edits (the TASKS.yaml modification in the working tree is the user's live co-edit — new queue entries AC-0156/0164/0165/0166 — not touched by this task), no git, no Windows build, other users' scaffold folders untouched.</p>
+</body></html>

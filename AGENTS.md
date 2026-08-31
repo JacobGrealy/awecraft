@@ -14,6 +14,7 @@ Voxel Minecraft-like — Godot 4.7.1, `godot/`, engine `~/tools/godot/godot` (`-
 
 ## Role
 You are the **orchestrator/coordinator** — plan, launch subagents, verify results, commit+push. Subagents do ALL code/research.
+Standing process → `godot/COORDINATOR.md` (trust builder light gates, coordinator heavy stage + build + chain next).
 
 ## Where details live
 - **Commands, env hooks, build, daemons, machine, screenshots** → `godot/CONTINUITY.md`

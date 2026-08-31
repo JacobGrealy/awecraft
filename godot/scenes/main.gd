@@ -1136,6 +1136,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "chunkio":
 			await _chunkio_test(spawn)
 			return
+		if logic == "tick":
+			await _tick_test(spawn)
+			return
 		if logic == "genhash":
 			_genhash_print(seed_env)
 			get_tree().quit()
@@ -8461,6 +8464,278 @@ func _chunkio_test(spawn: Vector3) -> void:
 		"disk_reads_total": world.disk_reads,
 		"disk_read_ms": world.disk_read_ms,
 		"gen_count_total": world.gen_count,
+		"io": {
+			"enq": world._io_enq,
+			"dedup": world._io_dedup,
+			"wdedup": world._io_wdedup,
+			"writes": world._io_write_n,
+			"drops": world._io_drops,
+			"fails": world._io_fails,
+			"main_read_ms": world._io_main_read_ms,
+			"main_write_ms": world._io_main_write_ms,
+		},
+	})
+	get_tree().quit()
+
+
+# AC-0158 probe (AWECRAFT_LOGIC=tick): the 20 Hz game tick on the band-0
+# diamond, in one process. The tick clock starts only once the 41-set is
+# resident and tick_index resets to 0 at that point, so ticks 1..W are a
+# pure function of (seed, tick index, full 41-set): the window md5 is
+# byte-identical across fresh runs (determinism gate). Headless <= 60 s.
+func _tick_md5(arr: PackedByteArray) -> String:
+	var h := HashingContext.new()
+	h.start(HashingContext.HASH_MD5)
+	h.update(arr)
+	var md: PackedByteArray = h.finish()
+	var hx := ""
+	for i in range(16):
+		hx += "%02x" % md[i]
+	return hx
+
+func _tick_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var W := 120
+	world.collision_enabled = false
+	world.fluid_sim_enabled = false
+	world.game_tick_enabled = false
+	world.render_radius = 4
+	world.recenter(spawn.x, spawn.z, true)
+	var diamond := []
+	for dx in range(-4, 5):
+		for dz in range(-4, 5):
+			if absi(dx) + absi(dz) <= 4:
+				diamond.append([dx, dz])
+	var t_ready0 := Time.get_ticks_msec()
+	var ready_waited := 0
+	var n_ready := 0
+	while ready_waited < 1800:
+		n_ready = 0
+		for dc in diamond:
+			var c = world.chunks.get("%d,%d" % [dc[0], dc[1]])
+			if c != null and not c.data.is_empty():
+				n_ready += 1
+		if n_ready == diamond.size():
+			break
+		await get_tree().physics_frame
+		ready_waited += 1
+	var set_ready := n_ready == diamond.size()
+	# Settle: the hz measurement needs a QUIET world — with trickle builds
+	# in flight, frames stretch past the TICK_MAX_CATCHUP window and the
+	# accumulator drops ticks (measured 9 Hz vs 20 Hz at rest). Settle =
+	# the full 41-set meshed AND the stream queue size stable for 90 frames
+	# (40 unbuildable outer-ring entries linger in the queue forever, so
+	# queue_size == 0 is NOT the criterion).
+	var t_settle0 := Time.get_ticks_msec()
+	var q_waited := 0
+	var q_prev := -1
+	var q_stable := 0
+	var all_b0_meshed := false
+	while q_waited < 1800:
+		var qn: int = world.queue_size
+		if qn == q_prev:
+			q_stable += 1
+		else:
+			q_stable = 0
+			q_prev = qn
+		all_b0_meshed = true
+		for dc in diamond:
+			var c2 = world.chunks.get("%d,%d" % [dc[0], dc[1]])
+			if c2 == null or not c2.mesh_built:
+				all_b0_meshed = false
+				break
+		if q_stable >= 90 and all_b0_meshed:
+			break
+		if q_waited % 60 == 0:
+			print("SETTLE f=%d q=%d stable=%d b0m=%s" % [q_waited, qn, q_stable, str(all_b0_meshed)])
+		await get_tree().physics_frame
+		q_waited += 1
+	var queue_settled: bool = q_stable >= 90 and all_b0_meshed
+	# Fresh tick epoch: the measurement window is ticks 1..W over the full
+	# 41-set (fluid sim on, so the fluid pass rides the same clock).
+	world.tick_index = 0
+	world._tick_acc = 0.0
+	world.random_tick_total = 0
+	world.random_tick_map.clear()
+	world.random_tick_seq.clear()
+	world.game_tick_samples.clear()
+	world.fluid_tick_samples.clear()
+	world.fluid_tick_count = 0
+	world.random_tick_log = true
+	world.fluid_sim_enabled = true
+	world.game_tick_enabled = true
+	var t_win_start := Time.get_ticks_msec()
+	var frame_wall0 := Time.get_ticks_msec()
+	var frame_times: Array = []
+	var frame_big := 0
+	var half_wall := -1
+	while world.tick_index < W:
+		await get_tree().physics_frame
+		var fd: int = Time.get_ticks_msec() - frame_wall0
+		frame_wall0 = Time.get_ticks_msec()
+		frame_times.append(fd)
+		if fd > 100:
+			frame_big += 1
+		if half_wall < 0 and world.tick_index >= W / 2:
+			half_wall = Time.get_ticks_msec()
+	var t_win_end := Time.get_ticks_msec()
+	var wall_ms := t_win_end - t_win_start
+	frame_times.sort()
+	var frame_p95: float = float(frame_times[mini(frame_times.size() - 1, int(0.95 * float(frame_times.size())))]) if not frame_times.is_empty() else -1.0
+	var frame_max: int = int(frame_times.max()) if not frame_times.is_empty() else -1
+	var t_analyze0 := Time.get_ticks_msec()
+	var n_ticks: int = world.tick_index
+	var hz := float(W) / (float(wall_ms) / 1000.0)
+	# hz2 = the LAST-HALF rate: a few >0.2 s frames (worker handoff spikes)
+	# drop catch-up ticks via TICK_MAX_CATCHUP and drag the full-window rate;
+	# the steady-state clock rate is the half-window rate.
+	var hz2 := float(W - W / 2) / (float(t_win_end - half_wall) / 1000.0) if half_wall > 0 else -1.0
+	var fluid_hz := float(world.fluid_tick_count) / (float(wall_ms) / 1000.0)
+	# Truncate the log to the first W ticks (the accumulator may overshoot
+	# by up to TICK_MAX_CATCHUP on the final frame).
+	if world.random_tick_seq.size() > W:
+		world.random_tick_seq.resize(W)
+	# (b) scope: every ticking subchunk belongs to a band-0 diamond column;
+	# band 1-3 tick count must be exactly 0.
+	var scope_bad := 0
+	var band123_ticks := 0
+	var cols_seen := {}
+	var expected_subs: int = 41 * world.SUBCHUNKS_PER_COLUMN
+	for sk in world.random_tick_map:
+		var k: int = sk
+		var col_base: int = k / 24
+		var cz := int(col_base) % 16384 - 4096
+		var cx := (int(col_base) - (cz + 4096)) / 16384 - 4096
+		cols_seen["%d,%d" % [cx, cz]] = true
+		var c = world.chunks.get("%d,%d" % [cx, cz])
+		var b := int(c.band) if c != null else -1
+		if b != 0 or (absi(cx - world.last_pcx) + absi(cz - world.last_pcz)) > 4:
+			scope_bad += 1
+		if b != 0:
+			band123_ticks += 1
+	# (c) distribution from the log: every subchunk gets exactly W ticks.
+	var counts := {}
+	var local_cnt := {}
+	var recompute_mismatch := 0
+	var cells_compared := 0
+	var seq_bytes: PackedByteArray = PackedByteArray()
+	var md5_first := ""
+	var md5_last := ""
+	var colhash_cache := {}
+	for i in world.random_tick_seq.size():
+		var seq: PackedInt32Array = world.random_tick_seq[i]
+		var t: int = i + 1
+		var bb := seq.to_byte_array()
+		if i == 0:
+			md5_first = _tick_md5(bb)
+		if i == world.random_tick_seq.size() - 1:
+			md5_last = _tick_md5(bb)
+		seq_bytes.append_array(bb)
+		var j := 0
+		while j < seq.size():
+			var base: int = int(seq[j])
+			var sub: int = int(seq[j + 1])
+			var lx: int = int(seq[j + 2])
+			var ly: int = int(seq[j + 3])
+			var lz: int = int(seq[j + 4])
+			var cz := base % 16384 - 4096
+			var cx := (base - (cz + 4096)) / 16384 - 4096
+			var sk: int = base * 24 + sub
+			counts[sk] = int(counts.get(sk, 0)) + 1
+			var lc: int = (ly << 8) | (lx << 4) | lz
+			local_cnt[lc] = int(local_cnt.get(lc, 0)) + 1
+			# (d) recompute: the logged cell must equal the spec function.
+			var hck: int = (t << 30) + base
+			var hcol: int
+			if colhash_cache.has(hck):
+				hcol = int(colhash_cache[hck])
+			else:
+				hcol = world._rt_colhash(t, cx, cz)
+				colhash_cache[hck] = hcol
+			var h: int = world._rt_mix64(hcol ^ (sub * 0x9E3779B9))
+			if (h & 15) != lx or ((h >> 4) & 15) != ly or ((h >> 8) & 15) != lz:
+				recompute_mismatch += 1
+			cells_compared += 1
+			j += 5
+	var min_count := 1 << 30
+	var max_count := 0
+	for sk in counts:
+		if int(counts[sk]) < min_count:
+			min_count = int(counts[sk])
+		if int(counts[sk]) > max_count:
+			max_count = int(counts[sk])
+	var local_min := 1 << 30
+	var local_max := 0
+	for k in local_cnt:
+		if int(local_cnt[k]) < local_min:
+			local_min = int(local_cnt[k])
+		if int(local_cnt[k]) > local_max:
+			local_max = int(local_cnt[k])
+	var samples := {}
+	for probe_col in [[0, 0, 0], [0, 0, 11], [0, 0, 23], [4, 0, 0], [-4, 0, 23], [0, -4, 17]]:
+		var pk: int = ((int(probe_col[0]) + 4096) * 16384 + (int(probe_col[1]) + 4096)) * 24 + int(probe_col[2])
+		samples["%d,%d:%d" % [int(probe_col[0]), int(probe_col[1]), int(probe_col[2])]] = int(counts.get(pk, -1))
+	# (f) per-tick ms (whole game tick: random pass + fluid pass).
+	var ms: Array = []
+	for i in mini(W, world.game_tick_samples.size()):
+		ms.append(float(world.game_tick_samples[i]))
+	ms.sort()
+	var p95: float = float(ms[mini(ms.size() - 1, int(0.95 * float(ms.size())))]) if not ms.is_empty() else -1.0
+	var ms_max: float = float(ms.max()) if not ms.is_empty() else -1.0
+	var ms_sum := 0.0
+	for m in ms:
+		ms_sum += m
+	# Region/rate contract self-check (redstone 1-tick dust; mob-spawn
+	# 24-44 circle + (n-1) diamond — predicates only, feature work deferred).
+	var region_ok: bool = world.in_mob_spawn_region(3, 0) and world.in_mob_spawn_region(24, 0) \
+		and world.in_mob_spawn_region(44, 0) and world.in_mob_spawn_region(17, 17) \
+		and not world.in_mob_spawn_region(4, 0) and not world.in_mob_spawn_region(45, 0) \
+		and not world.in_mob_spawn_region(16, 16) and world.REDSTONE_DUST_DELAY_TICKS == 1
+	var wall := Time.get_ticks_msec() - t0
+	var ok: bool = set_ready and queue_settled and n_ticks >= W and hz2 >= 18.0 and hz2 <= 22.0 \
+		and scope_bad == 0 and band123_ticks == 0 and cols_seen.size() == 41 \
+		and counts.size() == expected_subs and min_count == W and max_count == W \
+		and recompute_mismatch == 0 and cells_compared == W * expected_subs \
+		and world.fluid_tick_count >= W and p95 >= 0.0 and region_ok and wall <= 60000
+	Debug.result({
+		"ok": ok,
+		"wall_ms": wall,
+		"phase_ms": {
+			"boot_ready": t_ready0 - t0,
+			"settle": t_win_start - t_settle0,
+			"window": wall_ms,
+			"analyze": Time.get_ticks_msec() - t_analyze0,
+		},
+		"queue_settled": queue_settled,
+		"window": W,
+		"n_ticks": n_ticks,
+		"hz": hz,
+		"hz2": hz2,
+		"fluid_hz": fluid_hz,
+		"fluid_tick_count": world.fluid_tick_count,
+		"random_total": world.random_tick_total,
+		"subchunks": counts.size(),
+		"cols": cols_seen.size(),
+		"min_count": min_count,
+		"max_count": max_count,
+		"expected_subs": expected_subs,
+		"scope_bad": scope_bad,
+		"band123_ticks": band123_ticks,
+		"region_ok": region_ok,
+		"samples": samples,
+		"local_min": local_min,
+		"local_max": local_max,
+		"recompute_mismatch": recompute_mismatch,
+		"cells_compared": cells_compared,
+		"md5_first": md5_first,
+		"md5_last": md5_last,
+		"window_md5": _tick_md5(seq_bytes),
+		"tick_ms_p95": p95,
+		"tick_ms_max": ms_max,
+		"tick_ms_mean": ms_sum / float(ms.size()) if not ms.is_empty() else -1.0,
+		"frame_p95_ms": frame_p95,
+		"frame_max_ms": frame_max,
+		"frames_over_100ms": frame_big,
 	})
 	get_tree().quit()
 

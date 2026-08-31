@@ -10,7 +10,20 @@ const FLUSH_MAX_PER_FRAME := 2
 # AC-0126: the edit (post-break) flush staggers remeshes 1/frame on the
 # AC-0107 worker path; FLUSH_MAX_PER_FRAME stays for _drain_tex_refresh.
 const EDIT_FLUSH_MAX_PER_FRAME := 1
-const FLUID_TICK_INTERVAL := 0.2
+# AC-0158: Bedrock Realms simulation clock — 20 Hz game tick (0.05 s).
+# Replaces the 5 Hz fluid Timer: fluids run inside the game tick, and the
+# random-tick pass (1 per 16x16x16 subchunk) keys off the tick index.
+const TICK_INTERVAL := 0.05
+const TICK_MAX_CATCHUP := 4
+const SUBCHUNKS_PER_COLUMN := 24  # Data.HEIGHT 384 / 16
+# AC-0158: Bedrock region/rate contracts for the 20 Hz model (the redstone
+# and mob-spawn FEATURE work is deferred — predicates + rate constants only,
+# see tasks/AC-0158 results). Redstone dust delay = 1 tick. Mob-spawn
+# region = circle 24-44 (unit per caller, squared-distance test) ∪ the
+# (n-1) diamond of the Simulate radius (band0_r).
+const REDSTONE_DUST_DELAY_TICKS := 1
+const MOB_SPAWN_CIRCLE_MIN := 24
+const MOB_SPAWN_CIRCLE_MAX := 44
 const FLUID_DIRS := [
 	[1, 0],
 	[-1, 0],
@@ -84,10 +97,43 @@ var gen_ms_total := 0.0
 var chunk_origin := {}
 var _save_queue: Array = []
 var _gen_last_disk := false
+# AC-0164: threaded column I/O on the threadgen pool (the per-tid slot +
+# stale-drop handoff pattern, _tg_slots/_tm_slots). The main thread only
+# enqueues (evict save, data-landing read) and polls (io_poll); encode,
+# decode, and FileAccess all run inside the worker. Pending keys are
+# checked at every data-landing site so a load in flight is never
+# re-enqueued for generation and never built early.
+var io_pool = null
+var _io_read_inflight: Array = []
+var _io_read_keys: Dictionary = {}
+var _io_write_inflight: Array = []
+var _io_write_keys: Dictionary = {}
+var _io_slots: Dictionary = {}
+var _io_enq := 0
+var _io_dedup := 0
+var _io_wdedup := 0
+var _io_drops := 0
+var _io_fails := 0
+var _io_write_n := 0
+var _io_main_read_ms := 0.0
+var _io_main_write_ms := 0.0
 var fluid_tick_samples: Array = []
 var fluid_dirty := {}
 var fluid_sim_enabled := true
-var fluid_timer: Timer = null
+# AC-0158: 20 Hz game-tick state (see TICK_INTERVAL above). tick_index is
+# the deterministic seed for the random-tick sequence (world seed + index).
+var game_tick_enabled := true
+var tick_index := 0
+var _tick_acc := 0.0
+var game_tick_samples: Array = []
+var fluid_tick_count := 0
+var random_tick_total := 0
+var random_tick_map := {}
+var random_tick_log := false
+var random_tick_seq: Array = []
+var _rt_c1 := 0
+var _rt_c2 := 0
+var _rt_c3 := 0
 var band_buckets: Array = []
 var dq_b := 0
 var dq_i := 0
@@ -267,6 +313,7 @@ func _ready() -> void:
 	threadgen_max = mini(threadgen_max, 6)
 	threadgen_pool = Engine.get_singleton("WorkerThreadPool")
 	threadgen = true
+	io_pool = threadgen_pool  # AC-0164: column I/O shares the threadgen pool
 	_tg_debug = OS.get_environment("AWECRAFT_TGDEBUG") == "1"
 	print("THREADGEN on threadgen=true pool=%d" % threadgen_max)
 	var menv := OS.get_environment("AWECRAFT_THREADMESH_N")
@@ -324,11 +371,11 @@ func _ready() -> void:
 	tick_time = OS.get_environment("AWECRAFT_TICKTIME") == "1"
 	_fluidprobe = OS.get_environment("AWECRAFT_FLUIDPROBE") == "1"
 	Game.world = self
-	fluid_timer = Timer.new()
-	fluid_timer.wait_time = FLUID_TICK_INTERVAL
-	fluid_timer.autostart = true
-	fluid_timer.timeout.connect(_on_fluid_tick)
-	add_child(fluid_timer)
+	# AC-0158: splitmix64 constants — built from 32-bit halves (GDScript has
+	# no hex literal > 2^63-1); int arithmetic wraps mod 2^64.
+	_rt_c1 = (0x9E3779B9 << 32) | 0x7F4A7C15
+	_rt_c2 = (0xBF58476D << 32) | 0x1CE4E5B9
+	_rt_c3 = (0x94D049BB << 32) | 0x133111EB
 
 func _exit_tree() -> void:
 	threadgen = false
@@ -340,13 +387,19 @@ func _exit_tree() -> void:
 	# shutdown after the cap instead of hanging the exit.
 	if threadgen_pool != null:
 		var waited := 0
-		while waited < 1000 and (not threadgen_inflight.is_empty() or not threadmesh_inflight.is_empty()):
+		while waited < 1000 and (not threadgen_inflight.is_empty() or not threadmesh_inflight.is_empty() or not _io_read_inflight.is_empty() or not _io_write_inflight.is_empty()):
 			var any_pending := false
 			for e in threadgen_inflight:
 				if not threadgen_pool.is_task_completed(int(e["tid"])):
 					any_pending = true
 			for e in threadmesh_inflight:
 				if not threadgen_pool.is_task_completed(int(e["tid"])):
+					any_pending = true
+			for e in _io_read_inflight:
+				if not io_pool.is_task_completed(int(e["tid"])):
+					any_pending = true
+			for e in _io_write_inflight:
+				if not io_pool.is_task_completed(int(e["tid"])):
 					any_pending = true
 			if not any_pending:
 				break
@@ -356,10 +409,35 @@ func _exit_tree() -> void:
 	threadmesh_inflight.clear()
 	_tg_slots.clear()
 	_tm_slots.clear()
+	_io_read_inflight.clear()  # AC-0164
+	_io_write_inflight.clear()
+	_io_slots.clear()
 
-func _on_fluid_tick() -> void:
-	if fluid_sim_enabled and (Game.mode == "play" or Game.mode == "pause"):
+# AC-0158: fixed-step 20 Hz game tick on the real frame delta (Bedrock
+# Realms simulation clock; replaces the 5 Hz fluid Timer). A stalled frame
+# drops its backlog (max TICK_MAX_CATCHUP catch-up ticks) instead of
+# death-spiraling. tick_index is the deterministic random-tick seed.
+func _game_tick_accumulate(delta: float) -> void:
+	if not game_tick_enabled:
+		return
+	if Game.mode != "play" and Game.mode != "pause":
+		return
+	_tick_acc += delta
+	var n := 0
+	while _tick_acc >= TICK_INTERVAL and n < TICK_MAX_CATCHUP:
+		_tick_acc -= TICK_INTERVAL
+		n += 1
+		_game_tick()
+	if n == TICK_MAX_CATCHUP:
+		_tick_acc = 0.0
+
+func _game_tick() -> void:
+	var t0 := Time.get_ticks_usec()
+	tick_index += 1
+	_random_tick_pass(tick_index)
+	if fluid_sim_enabled:
 		tick_fluids()
+	game_tick_samples.append((Time.get_ticks_usec() - t0) / 1000.0)
 
 # AC-0109: per-frame frustum cull. Column AABB early-out both directions,
 # then per-slab (16x16x16) exact test when the column straddles a plane.
@@ -486,6 +564,7 @@ func _cull_set_vis(s, vis: bool) -> void:
 		fa.visible = vis
 
 func _process(_delta: float) -> void:
+	_game_tick_accumulate(_delta)  # AC-0158: 20 Hz game tick (simulation clock)
 	_drain_save_queue()  # AC-0155: amortized full-column writes (1-2/frame)
 	# AC-0160: keep the worker ctx in sync with the atlas identity. If Data
 	# bakes/loads the atlas after World._ready captured the ctx (or a
@@ -501,7 +580,7 @@ func _process(_delta: float) -> void:
 	_frustum_cull_pass()
 	# threadmesh_inflight keeps this running while mesh tasks are in flight
 	# even when every bookkeeping list is drained (else the poll never runs).
-	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty() and threadmesh_inflight.is_empty() and not _rec_pending and _bl_want.is_empty() and _col_pending.is_empty():
+	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty() and threadmesh_inflight.is_empty() and _io_read_inflight.is_empty() and _io_write_inflight.is_empty() and not _rec_pending and _bl_want.is_empty() and _col_pending.is_empty():
 		return
 	var was_active := flush_active
 	var added := false
@@ -586,6 +665,7 @@ func _process(_delta: float) -> void:
 			fluid_dirty[_key(int(cc.cx), int(cc.cz))] = true
 	threadgen_poll()
 	threadmesh_poll()
+	io_poll()  # AC-0164: land finished column I/O tasks
 	_recenter_slice()
 	_drain_build_queue()
 	_drain_tex_refresh()
@@ -757,13 +837,20 @@ func _startup_pending() -> bool:
 func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	var tg := Time.get_ticks_msec()
 	_gen_last_disk = false
-	# AC-0155: disk-first — a saved column is read + inflated instead of
-	# re-running the generator (revisits never re-gen). The drain breaks the
-	# frame after a disk read (one main-thread inflate per frame).
-	if c.data.is_empty() and _try_disk_load(c, cx, cz):
-		_gen_last_disk = true
-		_apply_edits_to_chunk(c)
-		return 0
+	if c.data.is_empty():
+		if cx == 0 and cz == 0:
+			# AC-0155/AC-0164: the spawn column keeps the synchronous
+			# disk-first read (spawn contract: immediate ground under the
+			# player; one column, once per boot).
+			if _try_disk_load(c, cx, cz):
+				_gen_last_disk = true
+				_apply_edits_to_chunk(c)
+				return 0
+		elif _io_read_enqueue(cx, cz, _key(cx, cz), true):
+			# AC-0164: disk-first off the main thread — file read + decode
+			# on a worker; the data lands in _io_read_handoff (edits
+			# applied there, provenance marked when it LANDS).
+			return 0
 	# AC-0152: sync gen is now ONLY the spawn chunk (0,0) — the documented
 	# spawn contract (AC-0082: "the player needs immediate ground data").
 	# The old axis exclusion (cx==0 OR cz==0 sync) was pre-AC-0082 Phase-1
@@ -1424,6 +1511,10 @@ func _drain_build_queue() -> void:
 				# enqueue / 5-6 frames), which left want-set stragglers
 				# unbuilt by the batch pass and forced self light computes.
 				if _tg_inflight_keys.has(e["key"]):
+					continue
+				# AC-0164: a disk read in flight owns the data landing —
+				# never re-pick it for generation (same dedup rationale).
+				if _io_read_keys.has(e["key"]):
 					continue
 				# AC-0160 run 2: while the SPAWN fast path is active, the
 				# data pass enqueues NOTHING — the recenter 5x5 burst (a
@@ -2206,6 +2297,7 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 	_rp_free_ms += (Time.get_ticks_usec() - tf1) / 1000.0
 	threadgen_poll()
 	threadmesh_poll()
+	io_poll()  # AC-0164
 	if not mesh_now:
 		# AC-0152: sync-fill the whole stream set (circle ∪ collar ∪ ring;
 		# the ring reaches one chunk past the circle edge).
@@ -2299,13 +2391,18 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 				if not in_stream_set(bwx, bwz):
 					continue
 				var bc = chunks.get(_key(bwx, bwz))
-				# AC-0155: a saved 5x5 column loads from disk (main thread) so the
-				# had_data snapshot below reads true and the burst worker skips it.
+				# AC-0164: a saved 5x5 column is read by a WORKER (the old
+				# sync 24-column load was the ~500 ms recenter hitch). A
+				# successful enqueue (file exists, or a read is already in
+				# flight) marks the had_data snapshot true so the burst
+				# worker skips it; the read lands via io_poll and the
+				# pending key keeps gen from re-enqueueing the column.
+				var had_data: bool = bc != null and not bc.data.is_empty()
 				if bc != null and bc.data.is_empty():
-					_try_disk_load(bc, bwx, bwz)
+					had_data = _io_read_enqueue(bwx, bwz, _key(bwx, bwz), false)
 				# args snapshot in the element (worker never derefs Game/Data —
 				# the _threadgen_worker entry pattern).
-				_startup_gen_elems.append([absi(bwx - pcx) + absi(bwz - pcz), bwx, bwz, bool(bc != null and not bc.data.is_empty()), Game.world_seed, Data.HEIGHT, Data.SEA])
+				_startup_gen_elems.append([absi(bwx - pcx) + absi(bwz - pcz), bwx, bwz, had_data, Game.world_seed, Data.HEIGHT, Data.SEA])
 				_startup_gen_slots.append(null)
 		_startup_gen_elems.sort_custom(func(a, b): return int(a[0]) < int(b[0]) or (int(a[0]) == int(b[0]) and (int(a[1]) < int(b[1]) or (int(a[1]) == int(b[1]) and int(a[2]) < int(b[2])))))
 		var _burst_need := 0
@@ -2680,6 +2777,10 @@ func _try_disk_load(c: Node3D, cx: int, cz: int) -> bool:
 	return true
 
 func _materialize_chunk_data(c: Node3D, cx: int, cz: int) -> int:
+	if c.data.is_empty() and _io_read_keys.has(_key(cx, cz)):
+		# AC-0164: a worker read is in flight for this column — the data is
+		# on its way; never sync-load or sync-gen on top of it.
+		return 0
 	if c.data.is_empty() and _try_disk_load(c, cx, cz):
 		return 0
 	if c.data.is_empty():
@@ -2696,24 +2797,17 @@ func _materialize_chunk_data(c: Node3D, cx: int, cz: int) -> int:
 func _queue_chunk_save(c: Node3D) -> void:
 	if Save.active_slot < 0 or c.data.is_empty():
 		return
+	# AC-0164: the slot is captured AT ENQUEUE — the active slot can change
+	# mid-flight (continue / new game) and a write in flight must still land
+	# in the captured slot's dir, not the current one's.
 	_save_queue.append({
+		"slot": int(Save.active_slot),
 		"face": _chunk_face(int(c.cx)),
 		"cx": int(c.cx),
 		"cz": int(c.cz),
 		"data": c.data.duplicate(),
 		"fl": c.fl.duplicate(),
 	})
-
-func _write_chunk_file(face: int, cx: int, cz: int, data: PackedByteArray, fl: PackedByteArray) -> void:
-	if Save.active_slot < 0 or data.is_empty():
-		return
-	ChunkIO.ensure_dir(Save.active_slot)
-	var blob := ChunkIO.encode_column(data, fl, int(Game.world_seed), int(Data.HEIGHT))
-	var f := FileAccess.open(ChunkIO.path_for(Save.active_slot, face, cx, cz), FileAccess.WRITE)
-	if f == null:
-		return
-	f.store_buffer(blob)
-	f.close()
 
 func _drain_save_queue() -> void:
 	if _save_queue.is_empty():
@@ -2723,7 +2817,162 @@ func _drain_save_queue() -> void:
 		if _save_queue.is_empty():
 			break
 		var e: Dictionary = _save_queue.pop_front()
-		_write_chunk_file(int(e["face"]), int(e["cx"]), int(e["cz"]), e["data"], e["fl"])
+		# AC-0164: enqueue only — encode + file write run on a worker.
+		_io_write_enqueue(e)
+
+func _io_write_enqueue(e: Dictionary) -> void:
+	var cx := int(e["cx"])
+	var cz := int(e["cz"])
+	var key := _key(cx, cz)
+	if _io_write_keys.has(key):
+		# A write for this column is already in flight: its snapshot (plus
+		# the JSON edits diff on load) is valid; the newer one would race the
+		# same file path. Drop it.
+		_io_wdedup += 1
+		return
+	var t0 := Time.get_ticks_usec()
+	var slot := int(e["slot"])
+	ChunkIO.ensure_dir(slot)
+	var entry := {
+		"key": key,
+		"path": ChunkIO.path_for(slot, int(e["face"]), cx, cz),
+		"data": e["data"],
+		"fl": e["fl"],
+		"seed": int(Game.world_seed),
+		"height": int(Data.HEIGHT),
+	}
+	var tid = io_pool.add_task(_io_write_worker, false)
+	entry["tid"] = tid
+	_io_slots[tid] = entry
+	_io_write_inflight.append(entry)
+	_io_write_keys[key] = true
+	_io_write_n += 1
+	_io_main_write_ms += (Time.get_ticks_usec() - t0) / 1000.0
+
+func _io_write_worker() -> void:
+	# AC-0164: encode + FileAccess on a worker. The worker owns its entry's
+	# data copies (duplicated at enqueue) — no shared state is touched.
+	var tid = io_pool.get_caller_task_id()
+	var entry = _io_slots.get(tid)
+	var ns := 0
+	while entry == null and ns < 200:
+		OS.delay_msec(1)
+		entry = _io_slots.get(tid)
+		ns += 1
+	if entry == null:
+		return
+	var blob := ChunkIO.encode_column(PackedByteArray(entry["data"]), PackedByteArray(entry["fl"]), int(entry["seed"]), int(entry["height"]))
+	var f = FileAccess.open(String(entry["path"]), FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_buffer(blob)
+	f.close()
+
+func _io_read_enqueue(cx: int, cz: int, key: String, apply_edits: bool) -> bool:
+	# AC-0164: true = the column is covered by a worker read (file exists,
+	# or a read for it is already in flight). The caller must NOT enqueue
+	# generation for that column. Main-thread cost = file_exists + add_task.
+	if Save.active_slot < 0:
+		return false
+	if _io_read_keys.has(key):
+		_io_dedup += 1
+		return true
+	var t0 := Time.get_ticks_usec()
+	var slot := int(Save.active_slot)
+	var path := ChunkIO.path_for(slot, _chunk_face(cx), cx, cz)
+	if not FileAccess.file_exists(path):
+		return false
+	var entry := {
+		"key": key,
+		"cx": cx,
+		"cz": cz,
+		"path": path,
+		"seed": int(Game.world_seed),
+		"height": int(Data.HEIGHT),
+		"apply_edits": apply_edits,
+	}
+	var tid = io_pool.add_task(_io_read_worker, false)
+	entry["tid"] = tid
+	_io_slots[tid] = entry
+	_io_read_inflight.append(entry)
+	_io_read_keys[key] = true
+	_io_enq += 1
+	_io_main_read_ms += (Time.get_ticks_usec() - t0) / 1000.0
+	return true
+
+func _io_read_worker() -> void:
+	# AC-0164: file read + decode on a worker. Fails closed: any open/decode
+	# problem (missing file, torn write) leaves result empty and the
+	# handoff falls back to generation — never a silent empty column.
+	var tid = io_pool.get_caller_task_id()
+	var entry = _io_slots.get(tid)
+	var ns := 0
+	while entry == null and ns < 200:
+		OS.delay_msec(1)
+		entry = _io_slots.get(tid)
+		ns += 1
+	if entry == null:
+		return
+	var t0 := Time.get_ticks_usec()
+	var res := {}
+	var f = FileAccess.open(String(entry["path"]), FileAccess.READ)
+	if f != null:
+		var bytes := f.get_buffer(f.get_length())
+		f.close()
+		var r = ChunkIO.decode_column(bytes, int(entry["seed"]), int(entry["height"]))
+		if typeof(r) == TYPE_DICTIONARY and not (r as Dictionary).is_empty():
+			res = r
+	entry["result"] = res
+	entry["ms"] = (Time.get_ticks_usec() - t0) / 1000.0
+
+func io_poll() -> void:
+	if _io_read_inflight.is_empty() and _io_write_inflight.is_empty():
+		return
+	var i := 0
+	while i < _io_read_inflight.size():
+		var e: Dictionary = _io_read_inflight[i]
+		if io_pool.is_task_completed(int(e["tid"])):
+			_io_read_inflight.remove_at(i)
+			_io_slots.erase(int(e["tid"]))
+			_io_read_keys.erase(e["key"])
+			_io_read_handoff(e)
+			continue
+		i += 1
+	i = 0
+	while i < _io_write_inflight.size():
+		var w: Dictionary = _io_write_inflight[i]
+		if io_pool.is_task_completed(int(w["tid"])):
+			_io_write_inflight.remove_at(i)
+			_io_slots.erase(int(w["tid"]))
+			_io_write_keys.erase(w["key"])
+			continue
+		i += 1
+
+func _io_read_handoff(e: Dictionary) -> void:
+	# AC-0164: main-thread handoff (the AC-0082 pattern). Provenance is
+	# marked when the data LANDS. A failed decode with an empty column
+	# falls back to threadgen (fail closed, column still materializes).
+	var key: String = e["key"]
+	var c = chunks.get(key)
+	if c == null:
+		_io_drops += 1
+		return
+	if not c.data.is_empty():
+		_io_drops += 1
+		return
+	var res = e.get("result", {})
+	var ok := typeof(res) == TYPE_DICTIONARY and not (res as Dictionary).is_empty()
+	if not ok:
+		_io_fails += 1
+		threadgen_enqueue(int(e["cx"]), int(e["cz"]), key, int(c.get_instance_id()))
+		return
+	c.data = res["data"]
+	c.fl = res["fl"]
+	disk_reads += 1
+	disk_read_ms += float(e.get("ms", 0.0))
+	chunk_origin[key] = "disk"
+	if bool(e.get("apply_edits", false)):
+		_apply_edits_to_chunk(c)
 
 func surface_top(x: int, z: int) -> int:
 	for y in range(Data.HEIGHT - 1, -1, -1):
@@ -2896,6 +3145,7 @@ func _nb_block(nc: Node3D, li: int, gx: int, gy: int, gz: int) -> int:
 	return 0
 
 func tick_fluids() -> void:
+	fluid_tick_count += 1  # AC-0158: fluid pass now runs inside the 20 Hz game tick
 	if chunks.is_empty():
 		return
 	var cl: Array[Vector2i] = []
@@ -3036,6 +3286,78 @@ func tick_fluids() -> void:
 		print("FLUIDPROBE slept=0 tick_ms=%.3f window=%d chunks=%d wet_cells=%d writes=%d stable=%d sig=%s" % [
 			(Time.get_ticks_usec() - t0) / 1000.0, cl.size(), fp_chunks, fp_wet, _fp_writes - fp_writes0, _fluid_stable, sig])
 	fluid_tick_samples.append((Time.get_ticks_usec() - t0) / 1000.0)
+
+# AC-0158: one random tick per 16x16x16 subchunk per game tick, over the
+# band-0 diamond (Simulate 4 = 41 columns; band 1-3 / far 13-50 NEVER tick).
+# Deterministic: the chosen cell is a pure function of (world seed, tick
+# index, column, subchunk) via a splitmix64 chain, so two fresh runs
+# produce identical sequences. The consumer is a counter/hook — crops and
+# wheat do not exist in this codebase yet; future growth/redstone ticks
+# attach in _apply_random_tick (world cell = cx*16+lx, sub*16+ly, cz*16+lz).
+func _random_tick_pass(t: int) -> void:
+	var cols: Array = []
+	for key in chunks:
+		var c: Node3D = chunks[key]
+		if int(c.face) > 1 or int(c.band) != 0 or c.data.is_empty():
+			continue
+		cols.append([int(c.cx), int(c.cz)])
+	if cols.is_empty():
+		return
+	var seq: PackedInt32Array = PackedInt32Array()
+	if random_tick_log:
+		cols.sort()
+	for col in cols:
+		var cx := int(col[0])
+		var cz := int(col[1])
+		var base: int = (cx + 4096) * 16384 + (cz + 4096)
+		var hcol: int = _rt_colhash(t, cx, cz)
+		for sub in SUBCHUNKS_PER_COLUMN:
+			var h := _rt_mix64(hcol ^ (sub * 0x9E3779B9))
+			var lx := h & 15
+			var ly := (h >> 4) & 15
+			var lz := (h >> 8) & 15
+			_apply_random_tick(base, sub, lx, ly, lz, seq)
+	if random_tick_log:
+		random_tick_seq.append(seq)
+
+func _apply_random_tick(base: int, sub: int, lx: int, ly: int, lz: int, seq: PackedInt32Array) -> void:
+	random_tick_total += 1
+	var sk: int = base * 24 + sub
+	random_tick_map[sk] = int(random_tick_map.get(sk, 0)) + 1
+	if random_tick_log:
+		seq.append(base)
+		seq.append(sub)
+		seq.append(lx)
+		seq.append(ly)
+		seq.append(lz)
+	# consumer hook: base encodes the column ((cx+4096)*16384+(cz+4096));
+	# decode cz = base % 16384 - 4096, cx = (base - (cz+4096)) / 16384 - 4096;
+	# world cell (cx*16+lx, sub*16+ly, cz*16+lz)
+
+func _rt_mix64(x: int) -> int:
+	x = x + _rt_c1
+	x = ((x ^ (x >> 30)) * _rt_c2)
+	x = ((x ^ (x >> 27)) * _rt_c3)
+	return (x ^ (x >> 31))
+
+func _rt_colhash(t: int, cx: int, cz: int) -> int:
+	var h := Game.world_seed
+	h = _rt_mix64(h + t)
+	h = _rt_mix64(h ^ (cx * 0x85EBCA6B))
+	h = _rt_mix64(h ^ (cz * 0xC2B2AE35))
+	return h
+
+# AC-0158: Bedrock region contracts (pure predicates — feature work
+# deferred). in_mob_spawn_region = circle 24-44 (squared distance in the
+# caller's units) ∪ the (n-1) taxi diamond of the Simulate radius.
+func in_mob_spawn_circle(d2: int) -> bool:
+	return d2 >= MOB_SPAWN_CIRCLE_MIN * MOB_SPAWN_CIRCLE_MIN and d2 <= MOB_SPAWN_CIRCLE_MAX * MOB_SPAWN_CIRCLE_MAX
+
+func in_mob_spawn_diamond(dx: int, dz: int) -> bool:
+	return absi(dx) + absi(dz) <= band0_r - 1
+
+func in_mob_spawn_region(dx: int, dz: int) -> bool:
+	return in_mob_spawn_diamond(dx, dz) or in_mob_spawn_circle(dx * dx + dz * dz)
 
 func _fluid_near(x: int, y: int, z: int) -> bool:
 	if is_fluid_id(get_block(x, y, z)) or fluid_level(x, y, z) > 0:

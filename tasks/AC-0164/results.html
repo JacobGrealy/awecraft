@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0164 — results (thread chunk I/O off main thread)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{color:#0a7a2f;font-weight:600}.dev{color:#b35900;font-weight:600}.meta{color:#555;font-size:14px}</style></head><body>
+<h1>AC-0164 — thread chunk I/O off main thread</h1>
+<p class="meta">Builder report · 2026-08-31 · gates run in-session (builder tier: G0/SMOKE/chunkio/save/continue/render; boundary+perf+build = coordinator)</p>
+
+<h2>What shipped</h2>
+<p><b>Design: FileAccess-on-worker (the primary directive), NOT the sanctioned fallback.</b> The whole column I/O now runs on the
+WorkerThreadPool (the same pool + singleton as threadgen — the proven AC-0082 per-tid-slot / stale-drop handoff pattern):
+file open/read/write, <code>ChunkIO.encode_column</code> (~26 ms) and <code>ChunkIO.decode_column</code> (~20 ms) all execute inside worker
+tasks. The main thread only enqueues (evict save, data-landing read) and polls (<code>io_poll</code>). No hang, no crash, no torn file in any
+gate run (torn/corrupt files would fail the blob MD5 → decode fail → fail-closed gen fallback; <code>fails:0</code> in both chunkio runs), so the
+fallback (main-thread syscall, worker-only codec) was not needed.</p>
+<ul>
+<li><b>Writes:</b> <code>_queue_chunk_save</code> now captures <b>slot + face + cx + cz + data + fl at enqueue time</b> (the active slot can change
+mid-flight on continue/new-game; a write in flight goes to the CAPTURED slot's dir). <code>_drain_save_queue</code> (same 1–2/frame pacing)
+just enqueues; encode + <code>FileAccess(WRITE)</code> run in <code>_io_write_worker</code>. Per-key write dedup: a second save of a column already in
+flight is dropped (<code>wdedup</code>) — its snapshot + the JSON edits diff (re-applied on load) keep the data correct.</li>
+<li><b>Reads:</b> new pending-load registry (<code>_io_read_inflight</code> / <code>_io_read_keys</code>, keyed by chunk key, per-tid slots in
+<code>_io_slots</code>). Checked at <b>every</b> data-landing site: drain data pass (pick skip, like <code>_tg_inflight_keys</code>),
+<code>_materialize_chunk_data</code> (never sync-loads/gens over an in-flight read), and the recenter 5×5 burst (a successful enqueue — file exists
+or read already in flight — sets the <code>had_data</code> snapshot true so the burst worker skips the column). A column with a load in flight is
+therefore never re-enqueued for generation and never built early (builds are gated on 8-neighbor data). Provenance counters
+(<code>chunk_origin</code> disk/gen, <code>disk_reads</code>, <code>disk_read_ms</code>) are marked when the data <b>LANDS</b> in
+<code>_io_read_handoff</code>. Fail-closed: a decode failure (missing/torn file) falls back to threadgen — never a silent empty column.</li>
+<li><b>Recenter 5×5:</b> the ~500 ms synchronous 24-column disk load (known-limit of record) is gone — it's 24 low-priority worker reads now.
+The drain's 1-inflate-per-frame pacing is gone with it (decode is off-main; enqueue is ~0 ms). <b>The (0,0) spawn column stays synchronous</b>
+(spawn contract: immediate ground under the player; one column, once per boot).</li>
+<li><b>Shutdown:</b> <code>_exit_tree</code> drains in-flight read+write tasks before script unload (same bounded-wait loop as threadgen/threadmesh).</li>
+</ul>
+<p>Unchanged by contract: save policy (every data column saved on evict, pure stubs skipped), <code>SAVE_VERSION 3</code>, AWCC v1 blob bytes
+(<code>chunk_io.gd</code> untouched — it already ran worker-safe), the <code>chunkio</code> arm, and the threadgen no-disk-first rule.</p>
+
+<h2>Main-thread cost before → after (measured, same chunkio probe, this box)</h2>
+<table>
+<tr><th>metric (main thread)</th><th>before (baseline run, instrumented)</th><th>after run 1</th><th>after run 2</th></tr>
+<tr><td>per save (evict-queue-add)</td><td>3520.4 ms / 108 = <b>32.6 ms</b></td><td>5.7 ms / 117 = <b>0.049 ms</b></td><td>11.9 ms / 112 = <b>0.106 ms</b></td></tr>
+<tr><td>per disk-read (enqueue)</td><td>3235.4 ms / 106 = <b>30.5 ms</b></td><td>3.4 ms / 107 = <b>0.032 ms</b></td><td>6.2 ms / 105 = <b>0.059 ms</b></td></tr>
+</table>
+<p>≈ 300–950× per-operation reduction; the after-cost is file_exists + dict + <code>add_task</code> only. The ~26 ms encode and ~20 ms decode now
+cost worker-thread time (chunkio <code>disk_read_ms</code> reports worker-side read+decode: 2956 / 4429 ms total over ~107–109 landed reads — same
+work, different thread).</p>
+
+<h2>Gates (builder tier — all in-session, one godot at a time, fresh HOME each run)</h2>
+<table>
+<tr><th>gate</th><th>expect</th><th>result</th><th></th></tr>
+<tr><td>G0 ×2 (<code>--quit</code>)</td><td>exit 0, zero SCRIPT ERROR</td><td>exit 0 / exit 0, 0 / 0 script errors</td><td class="ok">PASS</td></tr>
+<tr><td>SMOKE battery <code>player;interact;light;fluids;genhash</code></td><td>player [8.5,137,8.5]/135.43/136.78 · interact place_ok true · light 15/10/14/9 · fluids 2756/2756 + 914/914 stable + 25/9 · genhash 25/25 vs AC-0091 baseline</td><td>battery <code>ok:true</code>, all values EXACT; genhash 25/25 byte-identical to <code>.scratch/AC-0091-gates/genhash_new.txt</code></td><td class="ok">PASS</td></tr>
+<tr><td>chunkio ×2 (fresh HOME)</td><td>ok:true, 41/41 files, 41/41 byte-identical, r4 revisit origin 41 disk / 0 gen, r50 disk 41 / gen 0, wall ≤ 60 s</td><td>run1: ok:true, 41/41, 41/0, r50 41/0, wall 40.7 s, 0 script errors, io{enq 107, drops 0, fails 0}; run2: ok:true, 41/41, 41/0, r50 41/0, wall 35.4 s, 0 script errors, io{enq 105, drops 0, fails 0}</td><td class="ok">PASS</td></tr>
+<tr><td>save arm</td><td>ok:true</td><td>ok:true (blocks 6/6, unedited 4/4, iso_ok, v1_softfail, player round-trip exact)</td><td class="ok">PASS</td></tr>
+<tr><td>continue arm</td><td>ok:true-class</td><td><code>edits_ok:true</code>, <code>pos_ok:true</code>, <code>saved_chunk_built_at_spawn:true</code>, stable y_trace 135×30, core_ms 4904 (AC-0155: 4355/4436)</td><td class="ok">PASS</td></tr>
+<tr><td>RENDER (exactly one, xvfb, gl_compatibility, R=1)</td><td>clean PNG under tasks/AC-0164/</td><td><code>tasks/AC-0164/render_R1.png</code> 1280×720, m4:ok, 0 script errors — grass/trees/water/stone + HUD render clean</td><td class="ok">PASS</td></tr>
+</table>
+<p>Log files: <code>.scratch/AC-0164-gates/</code> (g0_1.log, g0_2.log, smoke.log, chunkio_1.log, chunkio_2.log, save.log, continue.log, render.log).</p>
+
+<h2>Deviations / known notes for the coordinator's heavy gates</h2>
+<ul>
+<li><b>Boundary r4 walk p95: expect it to DROP below the 73–89 band.</b> The evict-time write cost (1–2 × ~33 ms of encode+write inside
+main-thread frames at every recenter, worst at the crossing-16 eviction burst) is gone — those frames now pay ~0.1 ms. A lower p95 (or at least
+no rise) is the expected direction; the crossing-16 burst wall may also shrink since the eviction burst no longer stalls frames.</li>
+<li><code>Invalid Task ID</code> engine errors at <code>is_task_completed</code> (recenter burst-group prune, world.gd) — <b>pre-existing known
+class</b> (present in AC-0155/AC-0152 gate logs; backtrace verified as the same site in this run's logs). 6 occurrences in chunkio run 2, all
+from <code>recenter</code>, none from the new <code>io_poll</code>.</li>
+<li>SMOKE log contains <b>one</b> <code>threadgen_handoff</code> Nil→PackedByteArray transient — the documented AC-0137-class known noise
+(also present once in AC-0155's smoke.log and smoke2.log); not chased per the non-fatal list.</li>
+<li>Render: the box's xvfb did not hang this time; no environmental deviation. (Infra note: <code>/tmp</code> is ephemeral per bash call here —
+the snapshot was written to an absolute /tmp path and copied into <code>tasks/AC-0164/</code> within the same invocation; a relative
+<code>AWECRAFT_SNAPSHOT</code> path fails Godot's <code>save_png</code>.)</li>
+<li>Run-to-run spread is normal: chunkio wall 34–44 s across runs (≤ 60 s gate), saved-column count 108–117 (drain timing decides how many
+stream-set columns hold data at evict; the gated 41-diamond checks are exact in every run).</li>
+</ul>
+
+<h2>Files changed</h2>
+<table>
+<tr><th>file</th><th>purpose</th></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>threaded column I/O: <code>io_pool</code> + pending read/write registries + <code>_io_read_enqueue</code>/<code>_io_read_worker</code>/<code>io_poll</code>/<code>_io_read_handoff</code>/<code>_io_write_enqueue</code>/<code>_io_write_worker</code>; <code>_gen_unit</code> async disk-first ((0,0) stays sync); recenter 5×5 burst enqueues worker reads; <code>_queue_chunk_save</code> captures slot; <code>_drain_save_queue</code> enqueues only; <code>_materialize_chunk_data</code> in-flight guard; drain pick skips pending reads; <code>_process</code> early-return + poll; <code>_exit_tree</code> drains I/O tasks</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>chunkio arm result gains an <code>io</code> block (enq/dedup/wdedup/writes/drops/fails/main_read_ms/main_write_ms) — gate fields untouched</td></tr>
+<tr><td><code>tasks/AC-0164/render_R1.png</code> <b>(new)</b></td><td>R=1 render evidence (gl_compatibility, xvfb)</td></tr>
+</table>
+<p class="meta"><code>chunk_io.gd</code> and <code>save.gd</code> untouched (codec bytes + SAVE_VERSION 3 unchanged). No TASKS.yaml / CONTINUITY.md /
+HARNESS.md edits, no git, no Windows build (coordinator closeout).</p>
+</body></html>
