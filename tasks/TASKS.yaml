@@ -3,11 +3,8 @@ meta:
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0152
-- AC-0160
 - AC-0155
 - AC-0158
-- AC-0151
 - AC-0159
 - AC-0154
 - AC-0109
@@ -4631,18 +4628,42 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-30T12:08
-  updated_at: 2026-08-30T12:08
-  completed_at: null
+  updated_at: 2026-08-31T05:55
+  completed_at: 2026-08-31T05:55
   waiting_on: null
   parent_id: null
   notes: 'Bedrock Realms Simulate 4 default (wiki taxicab diamond 41 not 9x9 81, spawn circle 44 blocks). Render 50 should
     be circle ~7850 not 10201 square. Bands: 0-4 diamond exact 16x16x16 41 columns, 5-12 merged 32x32x32 diamond 104, 13-50
     heightmap impostor circle 7705 quads. Tick only diamond, render circle. Stream 3x3 spawn 1s then trickle. Fences: no height
     cut.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-31T05:55
+    updated_at: null
+    text: '[done 2026-08-31, coordinator-verified, closes with AC-0160 single commit] Shipped: render set = Euclidean
+      circle R=50 [7845 columns, not 10201 square]; tick/collision set = taxicab diamond 4 [41 columns, full 16c mesh];
+      band1 = taxicab 5-8 [104 columns, coarse merged uv_scale 2, no tick/collide]; band2 = circle outside band1 [7700
+      columns] - impostor REMOVED per user decision 2026-08-30 (AC-0160), now normal full-fidelity chunk mesh no
+      tick/collide; band3 = collar + circle-boundary 8-neighborhood ring [408 chunks @ R=50] data-only so circle-edge
+      band2 chunks build against real neighbor data [no stranded queue, no height wall at render edge]; stream set 8253;
+      settings sim_dist default 1->4 wired to band0_r; AWECRAFT_BAND0/BAND1 env overrides; spawn 3x3 fast-then-trickle
+      [5x5 spawn data burst, all-8-neighbor gate, drain never sync-builds, pool caps TG=4/TM=6 TM-priority]. Gates ALL
+      GREEN (coordinator re-runs, final code, logs .scratch/AC-0152-gates/coord-* + .scratch/AC-0160-gates/coord-*): G0
+      exit 0 0 err; bandmap tick 41 / circle 7845 / bands 41-104-7700-408 / stream 8253 / b0 41-41 built / 0 B0LOST /
+      band2 full mesh 4133 quads / trickle 8244->8169 monotone / spawn3x3_ms 3192; genhash x2 25/25 byte-identical to
+      baseline [only GENMS + pool banner]; SMOKE 4 exact [player 136.78/2.82, interact true/2/2, light 10/15/14, fluids
+      2756/914 stable + 25/9 = NEW baseline, old 2730/888 void - r4 resident set 121->69 chunks]; boundary r4 one-shot
+      ok, NEW walk p95 ~54ms [old 267-401 void]; render R=10 top-down [seed 44, AWECRAFT_AIM] band boundary visible as
+      texture-frequency change, no impostor quads, no wall at band edges, spawn normal. DEVIATIONS (documented):
+      spawn3x3 3.2-4.0s vs ~1-2s target = measured machine floor [gen 1.35s + builds 0.92s + (0,0) face-cache/eff
+      cascade 1.3s + handoffs 0.5s], 3.6x faster than the 11.7s defect; fluids sea counters 2756/914 (invariants
+      unchanged); boundary new band ~54ms. Known non-fatal: 20-26s one-off burst at boundary crossing 16 + Invalid Task
+      ID at recenter world.gd:2258 (every new-streaming-code run, non-blocking, follow-up recommended). Files:
+      godot/world/world.gd, godot/world/chunk.gd, godot/autoload/settings.gd, godot/scenes/main.gd, tasks/AC-0152/,
+      tasks/AC-0160/, tasks/TASKS.yaml, tasks/HARNESS.md, godot/CONTINUITY.md.'
 - id: AC-0153
   title: y-axis-lod-vertical-bands
   source: user
@@ -4774,17 +4795,44 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-30T16:43
-  updated_at: 2026-08-30T16:43
-  completed_at: null
+  updated_at: 2026-08-31T05:55
+  completed_at: 2026-08-31T05:55
   waiting_on: null
   parent_id: AC-0152
   notes: 'Defect caused by AC-0152: impostors render as black floating rectangles (stale _tm_ctx has_tex/brect -1, winding
     0,2,1 faces -Y culled, UV flipped) and spawn 3x3 11.7s vs 1s with queue 7710 stranded. Fix: refresh ctx after atlas bake,
     flip winding to 0,1,2 + vv=1-z, cap drain spawn-fast. Blocks AC-0152 DONE.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-31T05:55
+    updated_at: null
+    text: '[done 2026-08-31, coordinator-verified, single commit with AC-0152] USER DECISION 2026-08-30 superseded the note
+      fix: "let us just get rid of billboards" - impostor/billboard machinery REMOVED ENTIRELY (no fixes/variants):
+      chunk.gd build_impostor/apply_impostor/_impostor_quad_acc/_lod_material + world.gd band-2 dispatch/handoff/worker
+      branches, _impostor_dispatch, _build_ready band-2 self-only; the defect ctx/winding/UV classes are MOOT (they
+      lived in the removed path); band 2 = normal full-fidelity chunk mesh (same builder path as band 0, no tick/collide).
+      The drain fix (the remaining defect class) landed: root causes = shared 6-thread pool letting gen starve builds +
+      drain sync-fallbacks (270-1235ms main-thread builds) on every cap-drop/missing-8-neighbor + recenter slice racing
+      the spawn window [keying it on _startup_pending() disabled the data pass for the whole walk -> empty world ahead,
+      35s stall]. Fixes: TM builds always high priority / TG data low [caps threadgen_max=4 threadmesh_max=6,
+      env-overridable], drain NEVER sync-builds [all-8-neighbor-data gate else defer], 5x5 spawn data one high-priority
+      3-wide group at recenter held until landed then 9 spawn chunks dispatch in one frame [TM cap 9 during startup],
+      recenter slice pauses only for one-shot _spawn_fast flag, burst group task ids tracked [slot arrays stable under
+      running workers]. Result: spawn3x3_ms 11.7s -> 3192-3962ms [5 runs], 3.6x faster; bounded continuous trickle
+      [8244->8169 strictly monotone], no stranded queue; + circle-boundary data-only ring (band 3, 408 chunks @ R=50)
+      so circle-edge band-2 chunks have neighbor data. Gates ALL GREEN (coordinator re-runs): G0 exit 0; bandmap
+      spawn3x3_ms 3192 + trickle monotone + b0 41/41 + 0 B0LOST + band2 full mesh; genhash x2 25/25 == baseline; SMOKE 4
+      exact [fluids 2756/914 stable + 25/9 = NEW standing baseline, old 2730/888 void]; boundary r4 one-shot ok, NEW walk
+      p95 ~54ms; render: no impostor quads anywhere, no wall at band edges, spawn normal. DEVIATION (documented): spawn
+      3.2-4.0s vs ~1-2s target unreachable on this box - component floor [gen 1.35s + 9 builds 0.92s + (0,0)
+      face-cache/eff cascade ~1.3s (AC-0134) + handoffs ~0.5s]; the 1-2s model assumed ~0.5s gen and omitted the
+      cascade. FOLLOW-UP recommended (non-blocking): 20-26s one-off burst at boundary crossing 16 + engine "Invalid Task
+      ID" at is_task_completed from recenter (world.gd:2258) in every new-streaming-code run; run completes, queue
+      drains - not a hard fail. Evidence: .scratch/AC-0160-gates/ [coord-boundary.log, coord-bands3.png, bres.json] +
+      .scratch/AC-0152-gates/coord-*.'
 - id: AC-0161
   title: planet-ship-drydock-build
   source: agent

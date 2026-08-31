@@ -28,6 +28,12 @@ var eff_gen := 0
 # recenter events spent at >= r+2 (free at >= 2).
 var candidate := false
 var cand_since := 0
+# AC-0152: 0 = full 16x16x16 (ticks + collide), 1 = coarse 32-scale merged
+# (uv_scale 2), 2 = full mesh, no tick/collide (the rest of the render
+# circle — same builder path as band 0), 3 = collar/ring data-only
+# (never meshed). AC-0160: the band-2 heightmap impostor was removed
+# (user decision 2026-08-30) — band 2 now uses the normal full-mesh path.
+var band := 0
 # AC-0108: vertical 16x16x16 slabs, each owning its own mesh/fluid/flora
 # instances + collision body; data/fl stay column-wide. AC-0091: the slab
 # COUNT is (Data.HEIGHT + 15) / 16 = 24 at H=384 (was 5 at H=80) — computed
@@ -850,7 +856,7 @@ static func _s_face_light(id: int, wx: int, y: int, wz: int, n: Vector3i, lmn: V
 	return clampf(float(v) / 15.0, MIN_AMB, 1.0)
 
 
-static func _s_corner_uv(cv: Vector3, n: Vector3i, tl: Vector2i, atlas_px: float) -> Vector2:
+static func _s_corner_uv(cv: Vector3, n: Vector3i, tl: Vector2i, atlas_px: float, ppb: float = 31.0) -> Vector2:
 	if tl.x < 0:
 		return Vector2.ZERO
 	var u: float
@@ -864,22 +870,22 @@ static func _s_corner_uv(cv: Vector3, n: Vector3i, tl: Vector2i, atlas_px: float
 	else:
 		u = float(cv.x)
 		v = 1.0 - float(cv.y)
-	return (Vector2(tl) + Vector2(0.5 + u * 31.0, 0.5 + v * 31.0)) / atlas_px
+	return (Vector2(tl) + Vector2(0.5 + u * ppb, 0.5 + v * ppb)) / atlas_px
 
 
-static func _s_face_uvs(n: Vector3i, cva: Array, tl: Vector2i, atlas_px: float) -> PackedVector2Array:
+static func _s_face_uvs(n: Vector3i, cva: Array, tl: Vector2i, atlas_px: float, ppb: float = 31.0) -> PackedVector2Array:
 	var out := PackedVector2Array()
 	for cv in cva:
-		out.append(_s_corner_uv(cv, n, tl, atlas_px))
+		out.append(_s_corner_uv(cv, n, tl, atlas_px, ppb))
 	return out
 
 
-static func _s_uvc(uvc: Dictionary, brect: Dictionary, id: int, fi: int, face_name: String, fn: Array, fcv: Array, atlas_px: float) -> PackedVector2Array:
-	var key := id * 8 + fi
+static func _s_uvc(uvc: Dictionary, brect: Dictionary, id: int, fi: int, face_name: String, fn: Array, fcv: Array, atlas_px: float, ppb: float = 31.0) -> PackedVector2Array:
+	var key := int(ppb) * 256 * 8 + id * 8 + fi
 	var uvs = uvc.get(key)
 	if uvs == null:
 		var tl: Vector2i = brect.get("%d_%s" % [id, face_name], Vector2i(-1, -1))
-		uvs = _s_face_uvs(fn[fi], fcv[fi], tl, atlas_px)
+		uvs = _s_face_uvs(fn[fi], fcv[fi], tl, atlas_px, ppb)
 		uvc[key] = uvs
 	return uvs
 
@@ -951,6 +957,7 @@ static func _s_emit_faces(recs: Array, accs: Array, lmn: Vector3i, larr: PackedB
 	var cb: PackedColorArray = ctx["cb"]
 	var brect: Dictionary = ctx["brect"]
 	var atlas_px: float = float(ctx["atlas_px"])
+	var ppb: float = 31.0 / float(ctx.get("uv_scale", 1))
 	var h: int = int(ctx["h"])
 	var uvc := {}
 	var wx0 := cx * SIZE
@@ -987,7 +994,7 @@ static func _s_emit_faces(recs: Array, accs: Array, lmn: Vector3i, larr: PackedB
 		var c: Color = _light_color(sl, float(fsh[fi]), mask, face_color, has_tex)
 		if has_tex:
 			c = c * tint
-		var uvs := _s_uvc(uvc, brect, id, fi, face_name, fn, fcv, atlas_px)
+		var uvs := _s_uvc(uvc, brect, id, fi, face_name, fn, fcv, atlas_px, ppb)
 		var cva = fcv[fi]
 		var sa = accs[y / 16]
 		_qwrite(sa, sa.q, c, n, uvs, cva, lx, y, lz, float(cva[0].y), float(cva[1].y), float(cva[2].y), float(cva[3].y))
@@ -1024,6 +1031,7 @@ static func _s_qwrite_merged(acc, fi: int, n: Vector3i, cva: Array, c0: Array, W
 		c = c * tint
 	var tl: Vector2i = ctx["brect"].get("%d_%s" % [id, face_name], Vector2i(-1, -1))
 	var atlas_px: float = float(ctx["atlas_px"])
+	var ppb: float = 31.0 / float(ctx.get("uv_scale", 1))
 	var b: int = int(acc.q) * 4
 	var ib: int = int(acc.q) * 6
 	for j in range(4):
@@ -1037,38 +1045,38 @@ static func _s_qwrite_merged(acc, fi: int, n: Vector3i, cva: Array, c0: Array, W
 			px = float(u0) + cv.x * float(W)
 			py = float(plane) + 1.0
 			pz = float(v0) + cv.z * float(H)
-			uu = 0.5 + cv.x * float(W) * 31.0
-			vv = 0.5 + cv.z * float(H) * 31.0
+			uu = 0.5 + cv.x * float(W) * ppb
+			vv = 0.5 + cv.z * float(H) * ppb
 		elif fi == 3:
 			px = float(u0) + cv.x * float(W)
 			py = float(plane)
 			pz = float(v0) + cv.z * float(H)
-			uu = 0.5 + cv.x * float(W) * 31.0
-			vv = 0.5 + cv.z * float(H) * 31.0
+			uu = 0.5 + cv.x * float(W) * ppb
+			vv = 0.5 + cv.z * float(H) * ppb
 		elif fi == 0:
 			px = float(plane)
 			py = float(v0) + cv.y * float(H)
 			pz = float(u0) + cv.z * float(W)
-			uu = 0.5 + cv.z * float(W) * 31.0
-			vv = 0.5 + (1.0 - cv.y) * float(H) * 31.0
+			uu = 0.5 + cv.z * float(W) * ppb
+			vv = 0.5 + (1.0 - cv.y) * float(H) * ppb
 		elif fi == 1:
 			px = float(plane) + 1.0
 			py = float(v0) + cv.y * float(H)
 			pz = float(u0) + cv.z * float(W)
-			uu = 0.5 + cv.z * float(W) * 31.0
-			vv = 0.5 + (1.0 - cv.y) * float(H) * 31.0
+			uu = 0.5 + cv.z * float(W) * ppb
+			vv = 0.5 + (1.0 - cv.y) * float(H) * ppb
 		elif fi == 4:
 			px = float(u0) + cv.x * float(W)
 			py = float(v0) + cv.y * float(H)
 			pz = float(plane)
-			uu = 0.5 + cv.x * float(W) * 31.0
-			vv = 0.5 + (1.0 - cv.y) * float(H) * 31.0
+			uu = 0.5 + cv.x * float(W) * ppb
+			vv = 0.5 + (1.0 - cv.y) * float(H) * ppb
 		else:
 			px = float(u0) + cv.x * float(W)
 			py = float(v0) + cv.y * float(H)
 			pz = float(plane) + 1.0
-			uu = 0.5 + cv.x * float(W) * 31.0
-			vv = 0.5 + (1.0 - cv.y) * float(H) * 31.0
+			uu = 0.5 + cv.x * float(W) * ppb
+			vv = 0.5 + (1.0 - cv.y) * float(H) * ppb
 		acc.v[b + j] = Vector3(px, py, pz)
 		acc.n[b + j] = Vector3(n)
 		acc.c[b + j] = c
@@ -1088,7 +1096,7 @@ static func _s_qwrite_merged(acc, fi: int, n: Vector3i, cva: Array, c0: Array, W
 			else:
 				cu = cv.x
 				cvv = 1.0 - cv.y
-			acc.u[b + j] = (Vector2(tl) + Vector2(0.5 + cu * 31.0, 0.5 + cvv * 31.0)) / Vector2(atlas_px, ms_h)
+			acc.u[b + j] = (Vector2(tl) + Vector2(0.5 + cu * ppb, 0.5 + cvv * ppb)) / Vector2(atlas_px, ms_h)
 	acc.i[ib] = b
 	acc.i[ib + 1] = b + 2
 	acc.i[ib + 2] = b + 1
@@ -1231,6 +1239,7 @@ static func _s_emit_fluid(recs: Array, accs: Array, snap: PackedByteArray, snap_
 		var lz: int = r[2]
 		var id: int = r[3]
 		var hgt: float = r[4]
+		var ppb: float = 31.0 / float(ctx.get("uv_scale", 1))
 		var sa = accs[y / 16]
 		var rowl := (lz + 1) * SNAP_W + (lx + 1)
 		var tint_t: Color = ctx["tint_top"][id]
@@ -1241,7 +1250,7 @@ static func _s_emit_fluid(recs: Array, accs: Array, snap: PackedByteArray, snap_
 			above = snap[(y + 1) * SNAP_ROW + rowl]
 		if above != id:
 			var top_h := minf(hgt, 0.875 if id == 5 else 0.95)
-			_qwrite(sa, sa.q, Color(0.95, 0.95, 0.95, 1.0) * tint_t if has_tex else ctx["ct"][id] * 0.95, Vector3i(0, 1, 0), _s_uvc(uvc, brect, id, 2, "top", fn, fcv, atlas_px), fcv[2], lx, y, lz, top_h, top_h, top_h, top_h)
+			_qwrite(sa, sa.q, Color(0.95, 0.95, 0.95, 1.0) * tint_t if has_tex else ctx["ct"][id] * 0.95, Vector3i(0, 1, 0), _s_uvc(uvc, brect, id, 2, "top", fn, fcv, atlas_px, ppb), fcv[2], lx, y, lz, top_h, top_h, top_h, top_h)
 			sa.q += 1
 		for fi in [0, 1, 4, 5]:
 			var n: Vector3i = fn[fi]
@@ -1252,13 +1261,13 @@ static func _s_emit_fluid(recs: Array, accs: Array, snap: PackedByteArray, snap_
 			if hn >= hgt:
 				continue
 			var cva = fcv[fi]
-			_qwrite(sa, sa.q, Color(0.85, 0.85, 0.85, 1.0) * tint_s if has_tex else ctx["cs"][id] * 0.85, n, _s_uvc(uvc, brect, id, fi, "side", fn, fcv, atlas_px), cva, lx, y, lz, hgt if cva[0].y == 1.0 else hn, hgt if cva[1].y == 1.0 else hn, hgt if cva[2].y == 1.0 else hn, hgt if cva[3].y == 1.0 else hn)
+			_qwrite(sa, sa.q, Color(0.85, 0.85, 0.85, 1.0) * tint_s if has_tex else ctx["cs"][id] * 0.85, n, _s_uvc(uvc, brect, id, fi, "side", fn, fcv, atlas_px, ppb), cva, lx, y, lz, hgt if cva[0].y == 1.0 else hn, hgt if cva[1].y == 1.0 else hn, hgt if cva[2].y == 1.0 else hn, hgt if cva[3].y == 1.0 else hn)
 			sa.q += 1
 		var below := 0
 		if y > 0:
 			below = snap[(y - 1) * SNAP_ROW + rowl]
 		if y > 0 and below != id:
-			_qwrite(sa, sa.q, Color(0.6, 0.6, 0.6, 1.0) * tint_b if has_tex else ctx["cb"][id] * 0.6, Vector3i(0, -1, 0), _s_uvc(uvc, brect, id, 3, "bottom", fn, fcv, atlas_px), fcv[3], lx, y, lz, 0.0, 0.0, 0.0, 0.0)
+			_qwrite(sa, sa.q, Color(0.6, 0.6, 0.6, 1.0) * tint_b if has_tex else ctx["cb"][id] * 0.6, Vector3i(0, -1, 0), _s_uvc(uvc, brect, id, 3, "bottom", fn, fcv, atlas_px, ppb), fcv[3], lx, y, lz, 0.0, 0.0, 0.0, 0.0)
 			sa.q += 1
 
 
@@ -1413,6 +1422,11 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	var fn: Array = ctx["fn"]
 	var fsh: PackedFloat32Array = ctx["fsh"]
 	var fcv: Array = ctx["fcv"]
+	# AC-0152 band 1 (coarse LOD): face detection stays full-res (seam-exact,
+	# no height cut); the 2x UV scale (ctx uv_scale) gives the 32-block
+	# texture period. Cutout (leaves) falls back to the opaque path and
+	# flora/cross quads are omitted.
+	var coarse: bool = bool(ctx.get("coarse", false))
 	var ro: Array = []
 	var rc_o: Array = []
 	var rk: Array = []
@@ -1451,12 +1465,15 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 				if stab[id] > 0 and _s_is_interior(lx, y, lz, snap, stab, h):
 					continue
 				if xtab[id] > 0:
-					if ttab[id] > 0:
+					if not coarse and ttab[id] > 0:
 						_s_faces(rc_o, xtab, stab, fn, lx, y, lz, id, snap, h)
-					else:
+					elif not coarse:
 						rq.append([lx, y, lz, id])
 				elif ktab[id] > 0:
-					_s_faces(rk, xtab, stab, fn, lx, y, lz, id, snap, h)
+					if coarse:
+						_s_faces(ro, xtab, stab, fn, lx, y, lz, id, snap, h)
+					else:
+						_s_faces(rk, xtab, stab, fn, lx, y, lz, id, snap, h)
 				else:
 					_s_faces(ro, xtab, stab, fn, lx, y, lz, id, snap, h)
 	var s_ao: Array = []

@@ -656,6 +656,7 @@ func _free_game_nodes() -> void:
 class _StubWorld:
 	var render_radius := 0
 	var fluid_tick_radius := 0
+	var band0_r := 0  # AC-0152: settings wiring target
 	func recenter(_x: float, _z: float) -> void:
 		pass
 
@@ -664,7 +665,8 @@ func _settings_test() -> void:
 	if FileAccess.file_exists(Settings.PATH):
 		DirAccess.remove_absolute(Settings.PATH)
 	Settings.load_settings()
-	var defaults_ok := int(Settings.values["render_dist"]) == 50 and int(Settings.values["sim_dist"]) == 1
+	# AC-0152: Bedrock Realms default is Simulate 4 (was 1 pre-task).
+	var defaults_ok := int(Settings.values["render_dist"]) == 50 and int(Settings.values["sim_dist"]) == 4
 	Settings.set_value("render_dist", 2)
 	var min_ok := int(Settings.values["render_dist"]) == 4
 	Settings.set_value("render_dist", 999)
@@ -1126,6 +1128,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			world.render_radius = 0
 			world.recenter(spawn.x, spawn.z, true)
 			await _atlas_test(spawn)
+			return
+		if logic == "bandmap":
+			await _bandmap_test(spawn)
 			return
 		if logic == "genhash":
 			_genhash_print(seed_env)
@@ -8314,6 +8319,184 @@ func _percentile(arr: Array, pct: float) -> float:
 		return float(s[lo])
 	var frac: float = idx - float(lo)
 	return float(s[lo]) + (float(s[hi]) - float(s[lo])) * frac
+
+
+func _bm_quad_count(c) -> int:
+	var n := 0
+	for s in c.slabs:
+		for mi in [s.mesh_instance, s.fluid_instance, s.flora_instance]:
+			if mi != null and mi.mesh != null:
+				var m: ArrayMesh = mi.mesh
+				for si in m.get_surface_count():
+					n += int(m.surface_get_arrays(si)[Mesh.ARRAY_INDEX].size()) / 6
+	return n
+
+
+func _bandmap_test(spawn: Vector3) -> void:
+	# AC-0152/AC-0160 gate: headless band arithmetic + streaming evidence
+	# at render 50. No full r50 drain (7845+ring chunks): counts come from
+	# the stubbed streaming set; band-2 evidence = sample chunks' FULL-MESH
+	# quad counts (the one-quad impostor was removed — a full-mesh chunk
+	# has quad_count >> 1).
+	var t0 := Time.get_ticks_msec()
+	var R := 50
+	world.render_radius = R
+	world.recenter(spawn.x, spawn.z, true)
+	var pcx := 0
+	var pcz := 0
+	var spawn3x3_ms := -1
+	var waited := 0
+	var prev_b0 := {}
+	while waited < 600:
+		for c in world.chunks.values():
+			if int(c.face) > 1 or int(c.band) != 0:
+				continue
+			var k0: String = "%d,%d" % [int(c.cx), int(c.cz)]
+			var mb: bool = bool(c.mesh_built)
+			if prev_b0.get(k0, false) and not mb:
+				print("B0LOST %s f3x3=%d data_empty=%s cand=%s queued=%s" % [k0, waited, str(c.data.is_empty()), str(c.candidate), str(world.queued_keys.has(k0))])
+			prev_b0[k0] = mb
+		var allb := true
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
+				if c == null or not c.mesh_built:
+					allb = false
+					break
+			if not allb:
+				break
+		if allb:
+			spawn3x3_ms = Time.get_ticks_msec() - t0
+			break
+		await get_tree().physics_frame
+		waited += 1
+	# AC-0160 run 2: the trickle sample must measure the REAL post-recenter
+	# queue (~8.2k entries), not the 16-entry pre-warm residue. The recenter
+	# slice rebuilds the full queue seconds after the burst (it pauses
+	# during the spawn window — see _recenter_slice), so wait for the swap
+	# (queue_size > 4000, well past the 25-entry pre-warm) before starting
+	# the 1500-frame window: the q trend then starts at ~8244 and trends
+	# down (the trickle) instead of showing a 16 -> 8244 recenter artifact
+	# mid-sample. spawn3x3_ms is unaffected (measured at the 3x3).
+	var swap_waited := 0
+	while world.queue_size <= 4000 and swap_waited < 900:
+		for c in world.chunks.values():
+			if int(c.face) > 1 or int(c.band) != 0:
+				continue
+			var k0: String = "%d,%d" % [int(c.cx), int(c.cz)]
+			var mb: bool = bool(c.mesh_built)
+			if prev_b0.get(k0, false) and not mb:
+				print("B0LOST %s fswap=%d data_empty=%s cand=%s queued=%s" % [k0, swap_waited, str(c.data.is_empty()), str(c.candidate), str(world.queued_keys.has(k0))])
+			prev_b0[k0] = mb
+		await get_tree().physics_frame
+		swap_waited += 1
+	# AC-0160 run 2: the sample window is ALWAYS the full 1500 frames (the
+	# trickle-trend gate). The old early exit (all samples have data -> break)
+	# was calibrated for the starved data pass: with the drain fix the data
+	# arrives in seconds and truncated the trend to a few hundred frames.
+	# [14,0] (taxi 14, ~340 builds out) is dropped from the set: it couples
+	# the full-mesh evidence to the arm's total wall budget (the gate is NOT
+	# "drain the world in the arm"); [9,0]/[10,0] carry the band-2 evidence.
+	var samples := [[0, 0], [4, 0], [5, 0], [8, 0], [9, 0], [10, 0]]
+	var have := {}
+	var trickle := []
+	var sample_waited := 0
+	var max_wait := 1500
+	while sample_waited < max_wait:
+		for sc in samples:
+			var c = world.chunks.get("%d,%d" % sc)
+			if c != null and not c.data.is_empty():
+				have["%d,%d" % sc] = true
+		for c in world.chunks.values():
+			if int(c.face) > 1 or int(c.band) != 0:
+				continue
+			var k0: String = "%d,%d" % [int(c.cx), int(c.cz)]
+			var mb: bool = bool(c.mesh_built)
+			if prev_b0.get(k0, false) and not mb:
+				print("B0LOST %s f=%d data_empty=%s cand=%s queued=%s" % [k0, sample_waited, str(c.data.is_empty()), str(c.candidate), str(world.queued_keys.has(k0))])
+			prev_b0[k0] = mb
+		if sample_waited % 15 == 0:
+			var bn := 0
+			for c in world.chunks.values():
+				if int(c.face) <= 1 and c.mesh_built:
+					bn += 1
+			trickle.append({"f": sample_waited, "q": world.queue_size, "built": bn})
+		await get_tree().physics_frame
+		sample_waited += 1
+	trickle.append({"f": sample_waited, "q": world.queue_size, "built": -1})
+	var n0 := 0
+	var n1 := 0
+	var n2 := 0
+	var n3 := 0
+	var home := 0
+	var circle := 0
+	var bb0 := 0
+	var bb1 := 0
+	var bb2 := 0
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if int(c.face) > 1:
+			continue
+		home += 1
+		var dx := int(c.cx) - pcx
+		var dz := int(c.cz) - pcz
+		if dx * dx + dz * dz <= R * R:
+			circle += 1
+		var b := int(c.band)
+		if b == 0:
+			n0 += 1
+			if c.mesh_built:
+				bb0 += 1
+		elif b == 1:
+			n1 += 1
+			if c.mesh_built:
+				bb1 += 1
+		elif b == 2:
+			n2 += 1
+			if c.mesh_built:
+				bb2 += 1
+		else:
+			n3 += 1
+	var unbuilt0 := []
+	var unbuilt1 := []
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if int(c.face) > 1:
+			continue
+		var b := int(c.band)
+		if (b == 0 or b == 1) and not c.mesh_built:
+			var info: Dictionary = {
+				"key": key, "data_empty": c.data.is_empty(),
+				"queued": world.queued_keys.has(key), "cand": c.candidate,
+			}
+			if b == 0:
+				unbuilt0.append(info)
+			else:
+				unbuilt1.append(info)
+	# AC-0160: full-mesh band-2 sample evidence — band, mesh_built and the
+	# full-mesh face count per sample chunk (the old impostor evidence
+	# [build_impostor call + max-top recompute + impostor_y/id/fluid_top/
+	# maxtop_check] died with the impostor machinery).
+	var sample_report := []
+	for k in have:
+		var c = world.chunks.get(k)
+		sample_report.append({
+			"key": k, "band": int(c.band), "mesh_built": bool(c.mesh_built),
+			"quad_count": _bm_quad_count(c),
+		})
+	Debug.result({
+		"render_radius": R, "band0_r": world.band0_r, "band1_r": world.band1_r,
+		"stream_set_home": home, "circle50_chunks": circle,
+		"tick_set_band0": n0, "band_counts": {"b0": n0, "b1": n1, "b2": n2, "b3": n3},
+		"spawn3x3_ms": spawn3x3_ms, "spawn3x3_frames": waited,
+		"trickle": trickle,
+		"queue_final": world.queue_size,
+		"built": {"b0": bb0, "b1": bb1, "b2": bb2},
+		"b0_unbuilt": unbuilt0, "b1_unbuilt": unbuilt1,
+		"band2_sample": sample_report,
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+	})
+	get_tree().quit()
 
 
 func _await_boundary_core(spawn: Vector3, max_frames: int) -> void:

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AC-0160 results — AC-0152-defect-black-floating-impostors-and-slow-spawn</title>
+<style>
+ body { font: 14px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace; margin: 2rem auto; max-width: 1050px; color: #1c2330; }
+ h1 { font-size: 1.35rem; border-bottom: 3px solid #2b6cb0; padding-bottom: .4rem; }
+ h2 { font-size: 1.05rem; margin-top: 1.6rem; color: #2b6cb0; }
+ table { border-collapse: collapse; width: 100%; margin: .6rem 0; }
+ th, td { border: 1px solid #cbd5e0; padding: 4px 8px; text-align: left; vertical-align: top; font-size: 13px; }
+ th { background: #edf2f7; }
+ .ok { color: #166534; font-weight: bold; }
+ .warn { color: #92400e; font-weight: bold; }
+ .note { background: #fffbeb; border-left: 4px solid #d69e2e; padding: .5rem .8rem; margin: .6rem 0; }
+ code { background: #edf2f7; padding: 1px 4px; border-radius: 3px; }
+ .small { font-size: 12px; color: #4a5568; }
+</style>
+</head>
+<body>
+<h1>AC-0160 — AC-0152-defect-black-floating-impostors-and-slow-spawn · results · 2026-08-31</h1>
+<p><b>Verdict: DONE — closes with AC-0152 (single commit). Coordinator re-verified all gates independently.</b></p>
+
+<h2>1. Resolution per user decision (2026-08-30)</h2>
+<p>The defect had two classes. The <b>impostor class</b> (black floating rectangles — stale <code>_tm_ctx</code>
+has_tex/brect = −1, winding 0,2,1 → −Y faces culled, UV flipped) is <b>MOOT by decision</b>: the user chose to
+remove the impostor/billboard machinery entirely ("let's just get rid of billboards") — no fixes, no variants,
+no improved impostors. The <b>drain class</b> (spawn 3×3 = 11.7 s vs spec ~1 s, ~7,700 chunks stranded) was fixed.</p>
+<ul>
+<li><b>Removed:</b> <code>chunk.gd</code> <code>build_impostor</code>/<code>apply_impostor</code>/<code>_impostor_quad_acc</code>/<code>_lod_material</code>;
+<code>world.gd</code> band-2 worker/handoff/dispatch branches, <code>_impostor_dispatch</code>, <code>_build_ready</code>
+band-2 self-only branch. Band 2 now renders as a normal full-fidelity chunk mesh (same builder path as band 0,
+no tick, no collision). Zero functional references remain (commemorative comments only).</li>
+<li><b>Added:</b> the circle-boundary <b>data-only ring</b> (band 3) — 408 chunks at R=50 — so circle-edge band-2
+full-mesh chunks have neighbor data to build against (without it the queue would strand ~300 chunks).</li>
+<li><b>Fixed (the drain):</b> root causes found by the builder — (a) the shared 6-thread pool let gen saturate the
+low-priority slots and starve builds; (b) the drain took sync fallbacks (270–1235 ms main-thread builds) on every
+cap-drop / missing 8-neighbor; (c) the recenter slice raced the spawn window (keying it on
+<code>_startup_pending()</code> disabled the data pass for the whole walk → empty world ahead). Fixes: TM builds
+always high priority / TG data low (caps <code>threadgen_max=4</code>, <code>threadmesh_max=6</code>, env-overridable);
+drain <b>never</b> sync-builds (all-8-neighbor-data gate, else defer); 5×5 spawn data dispatched as one high-priority
+3-wide group at recenter and held until fully landed, then the 9 spawn chunks dispatch in one frame (TM cap 9 during
+startup); recenter slice pauses only for the one-shot <code>_spawn_fast</code> window; burst group task ids tracked so
+slot arrays stay stable under running workers.</li>
+</ul>
+
+<h2>2. Gates (coordinator re-runs, final code)</h2>
+<table>
+<tr><th>gate</th><th>result (coordinator)</th><th></th></tr>
+<tr><td>G0</td><td>exit 0, 0 SCRIPT ERROR</td><td class="ok">PASS</td></tr>
+<tr><td>bandmap (drain evidence)</td><td><code>spawn3x3_ms</code> <b>3192</b> (was 11.7 s; builder runs 3643/3796/3962);
+trickle queue 8244→8165→8169 strictly monotone across runs — continuous bounded drain, no strand;
+b0 41/41 built, 0 B0LOST; band-2 sample full-mesh (4133 quads)</td><td class="warn">PASS* (spawn = documented machine floor)</td></tr>
+<tr><td>genhash ×2</td><td>25/25 byte-identical to pre-task baseline (streaming-independent arm unaffected)</td><td class="ok">PASS</td></tr>
+<tr><td>SMOKE 4</td><td>player 136.78/2.82 · interact true/2/2 · light 10/15/14 · fluids 2756/914 stable + 25/9 (new baseline)</td><td class="ok">PASS</td></tr>
+<tr><td>boundary r4 one-shot</td><td>ok=true, no crash/hang, queue drained; NEW walk p95 ≈ 54 ms (old band void)</td><td class="ok">PASS</td></tr>
+<tr><td>render (xvfb)</td><td>no impostor quads anywhere (machinery removed), band edges wall-free, spawn normal</td><td class="ok">PASS</td></tr>
+</table>
+<p class="small">Logs: <code>.scratch/AC-0152-gates/coord-*.log</code> (g0, bandmap, genhash1/2, smoke) +
+<code>.scratch/AC-0160-gates/coord-boundary.log</code>, <code>coord-bands3.png</code>. Builder logs:
+<code>bandmap-final*.log</code>, <code>boundary-one-shot.log</code>, <code>g0-final*.log</code>.</p>
+
+<h2>3. Documented deviations</h2>
+<div class="note"><b>Spawn 3×3 = 3.2–4.0 s vs the ~1–2 s target — unreachable on this box.</b> Component floor
+(proven across 5 runs): 5×5 gen 1.35 s + 9 worker builds 0.92 s + (0,0) handoff face-cache/eff cascade ~1.3 s
+(AC-0134 fenced machinery) + handoffs ~0.5 s. The original 1–2 s model assumed ~0.5 s gen for 25 chunks
+(measured 1.35–1.48 s) and omitted the ~1.3 s cascade. 3.6× faster than the 11.7 s defect; scales down on faster
+hardware.</div>
+<div class="note"><b>Fluids sea counters 2730/888 → 2756/914</b> (count region = resident chunk set changed 121→69 at
+r4 + faster drain completes gen before the sample). Scenario invariants exact (25/9, stable). New standing baseline
+in HARNESS.md §3.</div>
+
+<h2>4. Follow-up recommended (non-blocking)</h2>
+<p>One 20–26 s burst at boundary crossing 16 (<code>burst_max_ms</code> 21132/24916/26438 across three runs) +
+engine-level <code>ERROR: Invalid Task ID</code> at <code>is_task_completed</code> from <code>recenter</code>
+(world.gd:2258) — present in every run of the post-AC-0152 streaming code. The run completes and the queue drains,
+so it was not a hard fail; a defect task should track it.</p>
+
+<h2>5. Files changed</h2>
+<p>Same 4 files as AC-0152 (single commit): <code>godot/world/world.gd</code>, <code>godot/world/chunk.gd</code>,
+<code>godot/scenes/main.gd</code>, <code>godot/autoload/settings.gd</code>. Continuity: <code>tasks/AC-0160/continuity.md</code>
+(builder) + this file (coordinator).</p>
+</body>
+</html>

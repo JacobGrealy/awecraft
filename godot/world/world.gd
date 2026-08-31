@@ -39,6 +39,17 @@ const FRUSTUM_CULL_MARGIN := 32.0
 # P1a: flat get/set_block stay the home pair (player on the flat home face).
 var render_radius := 4
 var fluid_tick_radius := 14
+# AC-0152 Bedrock Realms bands: band 0 = taxicab diamond <= band0_r (full
+# 16x16x16, TICKS, collision), band 1 = taxicab <= band1_r (coarse 32-scale
+# merged, uv_scale 2), band 2 = the rest of the Euclidean render circle
+# (NORMAL full mesh — same builder path as band 0, no tick, no collision),
+# band 3 = collar (diamond band1+1 outside the circle) ∪ circle ring
+# (points outside the circle touching it within 8-neighbors): data-only,
+# never meshed. Harness-overridable: AWECRAFT_BAND0/BAND1.
+# AC-0160: the band-2 heightmap impostor was removed (user decision) —
+# band 2 flows through the normal build_accs path like band 0/1.
+var band0_r := 4
+var band1_r := 8
 var collision_enabled := true
 var chunks := {}
 var chunk_keys := {}
@@ -75,6 +86,15 @@ var mq_b := 0
 var mq_i := 0
 var queue_size := 0
 var queued_keys := {}
+# AC-0160: key -> band-bucket index for O(1) removal in _remove_entry (the old
+# full-queue scan ran once per consumed mesh unit and dominated the drain at
+# r50). Rebuilt on recenter; kept in lockstep at every mutation site.
+var _qb := {}
+# AC-0160: windowed drain. _drain_win_b = max bucket index the drain's pool
+# scans admit (spawn-fast = b1_eff+2, grows one bucket / 15 frames in the
+# trickle); _drain_win_b < 0 = unset.
+var _drain_win_b := -1
+var _drain_win_acc := 0
 # AC-0109 cull-pass scratch (world-level only — no per-chunk state, no
 # per-frame allocations growing with chunk count; all fixed-size, filled
 # once per camera-transform change).
@@ -147,7 +167,36 @@ var _tm_slots = {}
 var _tm_inflight_keys: Dictionary = {}
 var _tm_ctx: Dictionary = {}
 var _tm_ms_full: Dictionary = {"tex": null, "rects": {}}
+# AC-0160: atlas identity _tm_ctx was built against (null until the first
+# build); _process re-points the ctx when it moves (post-bake/swap staleness
+# blackened every worker-built mesh emitted from it).
+var _tm_ctx_atlas: Texture2D = null
 var _tm_debug := false
+# AC-0160 run 2: 5x5 startup burst state. elems = [[cx, cz, had_data], ...]
+# (index = group-task element id); slots = per-element result storage
+# (worker i writes ONLY slots[i] — the AC-0082 own-slot handoff pattern).
+var _startup_gen_elems: Array = []
+var _startup_gen_slots: Array = []
+# AC-0160 run 2: in-flight burst group task ids. A recenter whose burst is
+# still running must NOT reset _startup_gen_elems/_startup_gen_slots: the
+# in-flight workers index those arrays (a reset races them — measured in
+# the boundary gate: "Invalid assignment of index '22'" crashes + a stale
+# worker could write chunk A's terrain into chunk B's slot). The guard
+# keeps the array stable until the group completes (see recenter()).
+var _startup_gen_group_tids: Array = []
+# AC-0160 run 2: the SPAWN fast path is one-shot. It gates the aggressive
+# parts (data pass off, recenter-slice pause) so the burst + 3x3 build run
+# unopposed at world start. It must NOT key on _startup_pending() (3x3
+# around the center not built): that flag is true for the ENTIRE walking
+# session (every recenter's forward 3x3 is unbuilt), which permanently
+# disabled the data pass + queue rebuild and emptied the world ahead of the
+# player (boundary gate regression: built_final=0, resident_final=0, 35 s
+# drain stall). Cleared on the first frame the spawn 3x3 is built.
+var _spawn_fast := true
+# AC-0160 run 2: count of real burst gens not yet applied (main-thread
+# bookkeeping; the apply pass decrements exactly once per slot). > 0 while
+# the 5x5 is in flight — the drain holds all startup builds until it hits 0.
+var _startup_gen_pending_n := 0
 var _tm_enq := 0
 var _tm_dedup := 0
 var _tm_capdrop := 0
@@ -196,6 +245,14 @@ func _ready() -> void:
 	# 36-chunk crossing-1 core fill: 36 x ~220 ms of gen paced by the pool size
 	# (3 -> 2.64 s vs 6 -> 1.32 s). Env override above stays; final cap below.
 	threadgen_max = mini(OS.get_processor_count(), 6)
+	# AC-0160 run 2: the 6-wide data pass is SLOWER per task than 4-wide here
+	# (measured wms 360-530 ms at 6 concurrent vs 120-170 at 3; allocator/
+	# memory-bandwidth contention on 6 cores) and would pile 6 far-data
+	# tasks on top of the 4 build slots during the startup window. 4-wide
+	# keeps the 5x5 spawn data (24 chunks) at ~1.3 s while the builds
+	# pipeline behind it. Placed BEFORE the env override so
+	# AWECRAFT_THREADGEN_N can still select 5/6 (final cap 6 below).
+	threadgen_max = mini(threadgen_max, 4)
 	if nenv != "":
 		threadgen_max = maxi(1, nenv.to_int())
 	threadgen_max = mini(threadgen_max, 6)
@@ -210,7 +267,18 @@ func _ready() -> void:
 	# X1 wall 4256-4325 ms with TM3 vs 3342 ms with TM2; walk p95 61 either way,
 	# max 121 vs 111). TM2 keeps build capacity (15.6 chunks/s) above the
 	# steady r4 demand (9-14/s). Env override above stays; cap below stays.
-	threadmesh_max = maxi(1, mini(OS.get_processor_count() - 2, 2))
+	# AC-0160 run 2: cap 2 -> cores (6 here). The priority split changes the
+	# calculus: TM tasks are HIGH priority (they always get their share) and
+	# the drain data path is idle during the startup window (the recenter
+	# 5x5 burst group task owns the data), so the 9 spawn builds can use all
+	# 6 pool threads (9 x ~320 ms / 6 = ~0.7 s) — the spawn 3x3 lands in
+	# ~1.5 s. In the trickle, TM6 + TG (low-priority, capped at 3 of 6
+	# threads by the pool's low-priority ratio) = 9 runnable on 6 cores:
+	# ~10 mesh tasks/s, the front advances ~5/s net — well past taxi 10
+	# inside the 1500-frame bandmap sample. (The old all-low-priority
+	# oversubscription measured by AC-0079 — TM3 + TG6 = 10, X1 wall 4.3 s —
+	# no longer applies: TG is capped at 4 and low priority after startup.)
+	threadmesh_max = maxi(1, mini(OS.get_processor_count(), 6))
 	if menv != "":
 		threadmesh_max = maxi(1, menv.to_int())
 	threadmesh_max = mini(threadmesh_max, 6)
@@ -221,6 +289,7 @@ func _ready() -> void:
 	Lighting._tables()
 	_tm_ctx = ChunkScript.make_ctx()
 	_tm_ms_full = ChunkScript._merge_atlas()
+	_tm_ctx_atlas = Data.atlas_tex  # AC-0160: stamp for the _process staleness guard
 	threadmesh = true
 	_tm_debug = OS.get_environment("AWECRAFT_TMDEBUG") == "1"
 	print("THREADMESH on threadmesh=true pool=%d" % threadmesh_max)
@@ -228,6 +297,13 @@ func _ready() -> void:
 	var dr := OS.get_environment("AWECRAFT_DRAIN_MS")
 	if dr != "" and dr.to_int() > 0:
 		drain_budget_ms = dr.to_int()
+	# AC-0152: harness band overrides (default 4/8 per Bedrock Realms).
+	var b0e := OS.get_environment("AWECRAFT_BAND0")
+	if b0e != "":
+		band0_r = maxi(0, b0e.to_int())
+	var b1e := OS.get_environment("AWECRAFT_BAND1")
+	if b1e != "":
+		band1_r = maxi(0, b1e.to_int())
 	col_stage_enabled = OS.get_environment("AWECRAFT_COLSTAGE") != "0"
 	var gb := OS.get_environment("AWECRAFT_GEN_BUDGET")
 	if gb != "" and gb.to_int() >= 0:
@@ -401,6 +477,17 @@ func _cull_set_vis(s, vis: bool) -> void:
 		fa.visible = vis
 
 func _process(_delta: float) -> void:
+	# AC-0160: keep the worker ctx in sync with the atlas identity. If Data
+	# bakes/loads the atlas after World._ready captured the ctx (or a
+	# texture-pack swap re-bakes it), the stale ctx (has_tex=false,
+	# brect=-1) blackens every worker-built mesh emitted from it; rebuild
+	# here — _get_mat self-invalidates by the same atlas identity, so
+	# materials re-point on the next dispatch.
+	var _at: Texture2D = Data.atlas_tex
+	if _at != _tm_ctx_atlas:
+		_tm_ctx = ChunkScript.make_ctx()
+		_tm_ctx_atlas = _at
+		_tm_ms_full = ChunkScript._merge_atlas()
 	_frustum_cull_pass()
 	# threadmesh_inflight keeps this running while mesh tasks are in flight
 	# even when every bookkeeping list is drained (else the poll never runs).
@@ -426,13 +513,20 @@ func _process(_delta: float) -> void:
 		if c != null and c.mesh_built and not light_pending_set.has(key):
 			fluid_list.append(c)
 	fluid_dirty = {}
-	if not light_pending.is_empty():
+	if not light_pending.is_empty() and not _startup_pending():
 		# AC-0126: edit (post-break) flush — staggered 1 remesh/frame on the
 		# AC-0107 worker path. eff = {} -> the worker self-lights its contained
 		# kernel (byte-identical to the sync margin-0 path). defer_on_cap=true
 		# -> a TM2 cap drop REQUEUES the chunk instead of sync build_mesh (the
 		# old 50-120 ms edge-break spike). The spawn/missing-diagonal sync
 		# contract paths inside _mesh_dispatch stay sync (unchanged).
+		# AC-0160 run 2: while the spawn 3x3 is still pending, the re-light
+		# flush YIELDS the 2 mesh-worker slots to the first builds — the E2
+		# wave ping-pongs between the landing spawn chunks (each landing
+		# re-enqueues its built neighbors) and held ~1 of the 2 slots,
+		# pushing spawn3x3 past the 2 s gate. Nothing is dropped: entries
+		# wait in light_pending (key-deduped) and drain at 1/frame after
+		# startup; final light values are unchanged, only the remesh timing.
 		var t0 := Time.get_ticks_msec()
 		var built := 0
 		var spun := 0
@@ -495,6 +589,7 @@ func refresh_textures() -> void:
 	if threadmesh:
 		_tm_ctx = ChunkScript.make_ctx()
 		_tm_ms_full = ChunkScript._merge_atlas()
+		_tm_ctx_atlas = Data.atlas_tex  # AC-0160: re-stamp (the _process guard would catch it, but stamp now)
 
 func _drain_tex_refresh() -> void:
 	if tex_refresh.is_empty():
@@ -529,6 +624,68 @@ func _convert_data_to_build(key: String) -> void:
 					mq_i = i
 				return
 
+# AC-0152: effective band radii (render-radius-clamped; at R < band1_r the
+# diamond is the outer set and there is no band-2 ring).
+func b0_eff() -> int:
+	return mini(band0_r, mini(band1_r, render_radius))
+
+
+func b1_eff() -> int:
+	return mini(band1_r, render_radius)
+
+
+func in_render_circle(dx: int, dz: int) -> bool:
+	return dx * dx + dz * dz <= render_radius * render_radius
+
+
+# AC-0152 ring: outside the render circle but touching it within the
+# 8-neighborhood. Band-2 edge chunks build against their 4-axis neighbors,
+# which sit OUTSIDE the circle at large R (the diamond collar is far inside
+# the circle) — without this ring their data never arrives and ~400 boundary
+# chunks strand the queue. Data-only, band 3, never meshed.
+# The min squared distance over the 8-neighborhood is the SUM of the per-axis
+# mins (axis 0 stays 0, axis |a| drops to (|a|-1)^2) — closed form, no loop:
+# the ring walk runs this per box cell, so the 9-test loop was ~3x the walk.
+func in_circle_ring(dx: int, dz: int) -> bool:
+	if in_render_circle(dx, dz):
+		return false
+	var ax := absi(dx)
+	var az := absi(dz)
+	var gx := ax - 1 if ax > 0 else 0
+	var gz := az - 1 if az > 0 else 0
+	return gx * gx + gz * gz <= render_radius * render_radius
+
+
+func in_stream_set(dx: int, dz: int) -> bool:
+	# circle(R) ∪ diamond(b1_eff + 1) ∪ circle ring: the extra sets are band
+	# 3 (data-only) — the collar covers band 0/1 edge neighbors at small R,
+	# the ring covers band 2 edge neighbors at large R.
+	return in_render_circle(dx, dz) or absi(dx) + absi(dz) <= b1_eff() + 1 or in_circle_ring(dx, dz)
+
+
+# 0 = full (tick+collide), 1 = coarse, 2 = full mesh (no tick/collide),
+# 3 = collar ∪ circle ring data-only. -1 = outside the stream set.
+# Note: band 2 is everything inside the circle OUTSIDE the diamond — at
+# r50 that is 7700 of the 7845 chunks (taxi ranges to ~100 in the circle).
+func band_of(dx: int, dz: int) -> int:
+	var taxi := absi(dx) + absi(dz)
+	if in_render_circle(dx, dz):
+		if taxi <= b0_eff():
+			return 0
+		if taxi <= b1_eff():
+			return 1
+		return 2
+	if taxi <= b1_eff() + 1:
+		return 3  # collar: diamond ring outside the circle (small R only)
+	if in_circle_ring(dx, dz):
+		return 3  # circle ring: data-only band for band-2 edge builds
+	return -1
+
+
+func _bucket_count() -> int:
+	return maxi(2 * render_radius + 3, 2 * (b1_eff() + 1) + 2)
+
+
 func _enqueue_build(cx: int, cz: int) -> void:
 	var key := _key(cx, cz)
 	var c = chunks.get(key)
@@ -541,10 +698,11 @@ func _enqueue_build(cx: int, cz: int) -> void:
 		_convert_data_to_build(key)
 		return
 	if band_buckets.is_empty():
-		for i in range(2 * render_radius + 3):
+		for i in range(_bucket_count()):
 			band_buckets.append([])
 	var b := mini(absi(cx - last_pcx) + absi(cz - last_pcz), band_buckets.size() - 1)
 	band_buckets[b].append({"key": key, "cx": cx, "cz": cz, "data_only": false})
+	_qb[key] = b  # AC-0160
 	queued_keys[key] = "build"
 	queue_size += 1
 	if b < dq_b:
@@ -555,7 +713,24 @@ func _enqueue_build(cx: int, cz: int) -> void:
 		mq_i = 0
 
 func _build_ready(cx: int, cz: int) -> bool:
-	for n in [[1, 0], [-1, 0], [0, 1], [0, -1]]:
+	var c = chunks.get(_key(cx, cz))
+	if c != null:
+		# AC-0152: band 3 (collar ∪ circle ring) never meshes at all — its
+		# data is what the set's edge chunks build against. Band 2 needs its
+		# 4-axis neighbors like band 0/1 (it is a normal full mesh now; the
+		# impostor's self-only readiness is gone with the impostor).
+		if int(c.band) == 3:
+			return false
+	# AC-0160 run 2 (the actual drain fix): ALL 8 neighbors must hold data
+	# for EVERY dispatch — startup AND trickle. The gate was startup-only:
+	# after the 3x3 landed, a trickle build with a still-generating diagonal
+	# fell into the missing-neighbor sync fallback (one 300-500 ms
+	# main-thread build per frame, ~0.08 units/frame). The circle-ring band-3
+	# data exists exactly to feed the diagonals at the circle edge (a
+	# circle chunk's 8-neighborhood is always circle ∪ ring — closed form
+	# in_circle_ring), so the 8-neighbor gate is reachable for every
+	# meshable chunk at any radius; nothing strands on it.
+	for n in [[1, 1], [1, -1], [-1, 1], [-1, -1], [1, 0], [-1, 0], [0, 1], [0, -1]]:
 		var nc = chunks.get(_key(cx + int(n[0]), cz + int(n[1])))
 		if nc == null or nc.data.is_empty():
 			return false
@@ -571,17 +746,25 @@ func _startup_pending() -> bool:
 
 func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	var tg := Time.get_ticks_msec()
-	if threadgen and absi(cx) > 0 and absi(cz) > 0:
+	# AC-0152: sync gen is now ONLY the spawn chunk (0,0) — the documented
+	# spawn contract (AC-0082: "the player needs immediate ground data").
+	# The old axis exclusion (cx==0 OR cz==0 sync) was pre-AC-0082 Phase-1
+	# legacy with no recorded rationale; at render 50 it is 200 axis chunks
+	# x ~125 ms of main-thread gen that paced the drain and made the
+	# spawn-3x3 ~1 s target unreachable (measured 11.7 s). All other chunks
+	# threadgen through the identical handoff (data/init_fl/edits, stale-drop,
+	# dedup — proven at r50 in AC-0082 G4: gen_ms −98%).
+	if threadgen and (cx != 0 or cz != 0):
 		threadgen_enqueue(cx, cz, _key(cx, cz), c.get_instance_id())
 		if timing:
-			print("GENCHUNK %d,%d gen_ms=0 thread=1" % [cx, cz])
+			print("GENCHUNK %d,%d gen_ms=0 thread=1 t=%d" % [cx, cz, Time.get_ticks_msec()])
 		return 0
 	c.data = WorldGen.generate(cx, cz, Game.world_seed)
 	c.init_fl()
 	_apply_edits_to_chunk(c)
 	var dg := Time.get_ticks_msec() - tg
 	if timing:
-		print("GENCHUNK %d,%d gen_ms=%d" % [cx, cz, dg])
+		print("GENCHUNK %d,%d gen_ms=%d t=%d" % [cx, cz, dg, Time.get_ticks_msec()])
 	perf_gen_ms += dg
 	return dg
 
@@ -595,7 +778,16 @@ func threadgen_enqueue(cx: int, cz: int, key: String, inst: int) -> void:
 			print("TGEN CAPDROP %d,%d inflight=%d" % [cx, cz, threadgen_inflight.size()])
 		return
 	var entry := {"key": key, "cx": cx, "cz": cz, "inst": inst, "args": [cx, cz, Game.world_seed, Data.HEIGHT, Data.SEA]}
-	var tid = threadgen_pool.add_task(_threadgen_worker)
+	# AC-0160 run 2: the data pass runs LOW priority always. The mesh builds
+	# are ALWAYS high priority (the critical path), so they take any free
+	# thread first and can no longer be starved by data (the original
+	# starvation was all-default-priority: TG filled the 3 low-priority
+	# slots and the LOW TM queued behind them). The spawn 5x5 data is owned
+	# by the high-priority burst group task, not this path; and high data
+	# during walking would fight the forward mesh builds for threads.
+	# Low priority paces the data pass at 3-wide, which this machine's
+	# allocator-bound gen prefers over 4-6-wide anyway.
+	var tid = threadgen_pool.add_task(_threadgen_worker, false)
 	entry["tid"] = tid
 	_tg_slots[tid] = entry
 	threadgen_inflight.append(entry)
@@ -610,8 +802,54 @@ func _threadgen_worker() -> void:
 	if entry == null:
 		return
 	var a: Array = entry["args"]
+	var wt := Time.get_ticks_msec()
 	var d := WorldGen.generate_args(int(a[0]), int(a[1]), int(a[2]), int(a[3]), int(a[4]))
+	if timing:
+		print("TGENW %d,%d wms=%d t=%d" % [int(a[0]), int(a[1]), Time.get_ticks_msec() - wt, Time.get_ticks_msec()])
 	entry["result"] = d
+
+func _startup_gen_worker(i: int) -> void:
+	# AC-0160 run 2: one group element = one 5x5 chunk gen. Writes ONLY its
+	# own slot (AC-0082 handoff pattern); the main thread applies it. The
+	# recenter side keeps the elems/slots arrays stable while a burst is in
+	# flight (_startup_gen_group_tids guard), so i is always a valid slot
+	# index — the bounds check is a belt against a pool regression.
+	if i >= _startup_gen_elems.size() or i >= _startup_gen_slots.size():
+		return
+	var e: Array = _startup_gen_elems[i]
+	if bool(e[3]):
+		return
+	var wbt := Time.get_ticks_usec()
+	_startup_gen_slots[i] = WorldGen.generate_args(int(e[1]), int(e[2]), int(e[4]), int(e[5]), int(e[6]))
+	if timing:
+		print("GENBURSTW %d,%d wms=%d t=%d" % [int(e[1]), int(e[2]), (Time.get_ticks_usec() - wbt) / 1000, Time.get_ticks_msec()])
+
+func _startup_gen_apply() -> void:
+	# AC-0160 run 2: main-thread handoff for the burst results — the exact
+	# threadgen_handoff shape (data + init_fl + edits). Applies every ready
+	# slot each frame; the burst slots land spread over ~1.2 s, so the
+	# per-frame cost tracks the burst's own rate. Duplicates (a drain TG
+	# enqueue raced the group) are dropped on c.data already set. The slot
+	# array is stable while the burst is in flight (the recenter
+	# _startup_gen_group_tids guard), so a slot's elems[i] is always the
+	# chunk the worker generated.
+	if _startup_gen_slots.is_empty():
+		return
+	for i in _startup_gen_slots.size():
+		var d = _startup_gen_slots[i]
+		if d == null:
+			continue
+		_startup_gen_slots[i] = null
+		_startup_gen_pending_n = maxi(0, _startup_gen_pending_n - 1)
+		var e: Array = _startup_gen_elems[i]
+		var c = chunks.get(_key(int(e[1]), int(e[2])))
+		if c == null or not c.data.is_empty():
+			continue
+		c.data = d
+		c.init_fl()
+		_apply_edits_to_chunk(c)
+		if timing:
+			print("GENHAND %d,%d t=%d" % [int(e[1]), int(e[2]), Time.get_ticks_msec()])
 
 func threadgen_poll() -> void:
 	if threadgen_inflight.is_empty():
@@ -654,7 +892,7 @@ func threadgen_handoff(e: Dictionary, data: PackedByteArray) -> void:
 	_apply_edits_to_chunk(c)
 	_tg_handoff += 1
 	if timing or _tg_debug:
-		print("GENHAND %d,%d" % [int(e["cx"]), int(e["cz"])])
+		print("GENHAND %d,%d t=%d" % [int(e["cx"]), int(e["cz"]), Time.get_ticks_msec()])
 
 
 # --- AC-0107 threaded mesh+light (desktop) -------------------------------
@@ -664,9 +902,25 @@ func _threadmesh_worker() -> void:
 	# copies. Reads only its own entry (written before add_task) and writes
 	# entry["result"] — the AC-0082 handoff pattern, proven in this codebase.
 	var tid = threadmesh_pool.get_caller_task_id()
+	# AC-0152: the dispatcher sets _tm_slots[tid] a couple of statements AFTER
+	# add_task returns; an idle worker thread can preempt the main thread in
+	# that window and see no slot yet. The slot always appears (it is set
+	# before the main thread can yield to the pool again and only erased at
+	# completion, i.e. after this worker returns), so spin briefly instead of
+	# dropping the task. Giving up still lands in the handoff datadrop +
+	# retrigger path, which re-queues (the _remove_entry queued_keys fix
+	# makes that re-queue effective).
 	var entry = _tm_slots.get(tid)
+	var ns := 0
+	while entry == null and ns < 200:
+		OS.delay_msec(1)
+		entry = _tm_slots.get(tid)
+		ns += 1
 	if entry == null:
 		return
+	# AC-0152/AC-0160: all bands (0/1/2) flow through the normal build_accs
+	# path — band 2 lost its one-quad impostor (removed per user decision)
+	# and is a full mesh now, so every entry carries nbs/eff like 0/1.
 	entry["result"] = ChunkScript.build_accs(entry["data"], entry["fl"], int(entry["cx"]), int(entry["cz"]), entry["nbs"], entry["ctx"], entry["ms"], entry["eff"])
 
 func threadmesh_poll() -> void:
@@ -721,6 +975,14 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			print("TMESH DATADROP %d,%d (data/fl changed mid-build)" % [int(e["cx"]), int(e["cz"])])
 		_tm_retrigger(key, c, e)
 		return
+	# AC-0152: the band can change mid-flight (recenter on player movement)
+	# — a stale-band result is dropped and the chunk re-queues fresh.
+	if int(e.get("band", int(c.band))) != int(c.band):
+		_tm_datadrop += 1
+		if _tm_debug:
+			print("TMESH BANDBREAK %d,%d (band %d != %d)" % [int(e["cx"]), int(e["cz"]), int(e.get("band", -1)), int(c.band)])
+		_enqueue_build(int(e["cx"]), int(e["cz"]))
+		return
 	var ta := Time.get_ticks_msec()
 	var old_eff = c.last_eff
 	c.apply_accs(res, _tm_ms_full)
@@ -732,8 +994,28 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 	if bool(e.get("eff_trust", true)):
 		_eff_cache_put(key, c.data, res.get("light", {}), e.get("ngen", null))
 	_tm_handoff += 1
+	# AC-0160: a meshed chunk must never keep a queued entry (the pools skip
+	# mesh_built entries forever). The pre-warm queue runs in parallel with
+	# the recenter slice, so an entry consumed before the merge swap can be
+	# re-added by the WANT rebuild and strand the drain — drop it here.
+	_drop_queued(key)
 	if timing or _tm_debug:
-		print("BUILDCHUNK_T %d,%d build_ms=%d" % [int(e["cx"]), int(e["cz"]), int(res.get("wms", 0))])
+		print("BUILDCHUNK_T %d,%d build_ms=%d t=%d" % [int(e["cx"]), int(e["cz"]), int(res.get("wms", 0)), Time.get_ticks_msec()])
+
+func _drop_queued(key: String) -> void:
+	# AC-0160: O(bucket) removal by key (the _qb fast path of _remove_entry
+	# without the entry dict). No-op when the key is not queued.
+	var b0: int = int(_qb.get(key, -1))
+	if b0 < 0 or b0 >= band_buckets.size():
+		return
+	var arr0: Array = band_buckets[b0]
+	for i in range(arr0.size()):
+		if arr0[i]["key"] == key:
+			arr0.remove_at(i)
+			_qb.erase(key)
+			queued_keys.erase(key)
+			queue_size -= 1
+			return
 
 func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := true, defer_on_cap := false) -> bool:
 	# true = covered (sync-built now, or an in-flight task will apply);
@@ -747,7 +1029,20 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 	# other call sites keep the default (false = legacy sync).
 	c.col_immediate = _col_immediate_for(cx, cz)
 	var key := _key(cx, cz)
-	if (cx == 0 and cz == 0) or c.data.is_empty():
+	# AC-0152/AC-0160: band 2 has no special path anymore — the impostor
+	# dispatch was removed; it builds a full mesh through the same
+	# nbs/eff/worker pipeline as band 0/1.
+	# AC-0160 run 2: the spawn chunk (0,0) now BUILDS through the workers
+	# like every other chunk — the gate's model is "5x5 data + 9 worker
+	# builds", and the (0,0) sync BUILD was the startup serializer: a
+	# 650 ms main-thread mesh + ~600 ms face-block-light cascade (~1.3 s
+	# block) that froze the drain and idled the pool. The spawn contract
+	# that stays is the SYNC GEN one (AC-0082: "the player needs immediate
+	# ground DATA" — recenter() sync-gens (0,0) before the first drain
+	# frame). The data-empty sync below still covers the degenerate case
+	# (a dispatch reaching (0,0) before its data — impossible in the
+	# normal flow: the recenter burst owns it).
+	if c.data.is_empty():
 		if defer_on_cap:
 			perf_edit_syncs += 1
 		var old_eff = c.last_eff
@@ -764,6 +1059,16 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 				continue
 			var nc = chunks.get(_key(cx + dx, cz + dz))
 			if nc == null or nc.data.is_empty():
+				# AC-0160 spawn fast path: while the spawn 3x3 is pending, a
+				# missing neighbor must NOT force the sync fallback (the
+				# on-demand gen is 100-500 ms of main-thread build that paced
+				# the drain to ~1 unit/frame — 10s for the 3x3). Defer: the
+				# caller's retry path re-queues; threadgen delivers the
+				# missing data within ~500 ms. The drain itself never hits
+				# this (its _build_ready startup gate already requires all 8
+				# neighbors), so no queue entry is consumed by a defer.
+				if _startup_pending():
+					return false
 				# Workers can't on-demand-generate; the sync _build_snap can.
 				if defer_on_cap:
 					perf_edit_syncs += 1
@@ -780,7 +1085,18 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 		if _tm_debug:
 			print("TMESH DEDUP %d,%d" % [cx, cz])
 		return false
-	if threadmesh_inflight.size() >= threadmesh_max:
+	# AC-0160 run 2: the spawn frame dispatches all nine 3x3 builds in one
+	# drain frame. The default cap (6) would defer-on-cap three of them;
+	# their retry lands on the frame of the FIRST landing — whose handoff
+	# face-cache refresh blocks the main thread ~2.5 s (the region cascade
+	# runs on fresh d=2 data) — pushing the 3x3 back to ~4.5 s. A 9-wide
+	# cap during startup only: the 6-thread pool queues the last three
+	# high-priority tasks and runs them as the first round finishes (no
+	# main-thread involvement). Post-startup the cap is threadmesh_max.
+	var tm_cap := threadmesh_max
+	if _startup_pending() and tm_cap < 9:
+		tm_cap = 9
+	if threadmesh_inflight.size() >= tm_cap:
 		_tm_capdrop += 1
 		if _tm_debug:
 			print("TMESH CAPDROP %d,%d inflight=%d" % [cx, cz, threadmesh_inflight.size()])
@@ -810,13 +1126,26 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 	ctx_w["eff_strips"] = strips["eff"]
 	ctx_w["blk_strips"] = strips["blk"]
 	ctx_w["blk_strips_b"] = strips["blk_b"]
+	if int(c.band) == 1:
+		# AC-0152 band 1: coarse LOD — 2x UV scale (32-block texture
+		# period), cutout falls back opaque, flora dropped (in build_accs).
+		ctx_w["coarse"] = true
+		ctx_w["uv_scale"] = 2
 	var entry := {
 		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(),
 		"data": c.data.duplicate(), "fl": c.fl.duplicate(),
+		"band": int(c.band),
 		"nbs": nbs, "eff": eff, "eff_trust": eff_trust,
 		"ctx": ctx_w, "ms": ms_w, "ngen": _ngens_for(cx, cz),
 	}
-	var tid = threadmesh_pool.add_task(_threadmesh_worker)
+	# AC-0160 run 2: HIGH priority. The pool is the same 6-thread
+	# WorkerThreadPool the data pass shares, and Godot caps LOW-priority
+	# tasks at half the threads (measured 3 of 6: the old all-default mix ran
+	# data gen at ~23/s and starved the builds to ~2/s — 13 s for the 3x3).
+	# High priority admits build tasks to the run queue unconditionally, so
+	# the 2 build slots run at ~7/s while the data pass takes its
+	# low-priority share.
+	var tid = threadmesh_pool.add_task(_threadmesh_worker, true)
 	entry["tid"] = tid
 	_tm_slots[tid] = entry
 	_tm_inflight_keys[key] = tid
@@ -831,7 +1160,10 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 		print("TMESH ENQ %d,%d inflight=%d" % [cx, cz, threadmesh_inflight.size()])
 	return true
 
-func _build_unit(c: Node3D, cx: int, cz: int) -> int:
+func _build_unit(c: Node3D, cx: int, cz: int) -> bool:
+	# Returns true when DEFERRED (worker slots full / task already in flight
+	# for this key — the caller keeps the queue entry and ends the frame);
+	# false when covered (sync-built now, or a worker task owns it).
 	var tb := Time.get_ticks_msec()
 	# AC-0107: threaded dispatch when eligible; sync fallbacks inside keep the
 	# legacy path. dt is the MAIN-thread cost (dispatch/apply), the worker-side
@@ -844,13 +1176,28 @@ func _build_unit(c: Node3D, cx: int, cz: int) -> int:
 	var eff := _eff_for(c, cx, cz)
 	if eff.is_empty():
 		perf_light_self_computes += 1
-	_mesh_dispatch(c, cx, cz, eff)
+	# AC-0160 run 2: the drain dispatch is defer-on-cap. The cap-drop SYNC
+	# fallback was the real spawn serializer (NOT the missing-neighbor branch
+	# the 8-neighbor gate already covered): while the 2 TM slots were busy
+	# (E2 re-lights included) every drain dispatch sync-built 270-1235 ms on
+	# the main thread — 1 unit/frame, 14.6 s for the 3x3. defer_on_cap turns
+	# the cap drop into a defer (true return -> the caller keeps the entry);
+	# the 8-neighbor _build_ready gate makes the missing-neighbor sync branch
+	# unreachable from the drain; the (0,0) spawn-chunk sync contract stays
+	# inside _mesh_dispatch unchanged. (The AC-0152 "sync = third build
+	# worker" measurement predates the gate: it traded main-thread frames for
+	# throughput; the AC-0160 gate requires frames ~40 ms, so the workers are
+	# the only build path.)
+	var covered := _mesh_dispatch(c, cx, cz, eff, true, true)
 	var dt := Time.get_ticks_msec() - tb
 	last_build_us = dt * 1000
 	if timing:
-		print("BUILDCHUNK %d,%d gen_ms=0 build_ms=%d" % [cx, cz, dt])
+		if covered:
+			print("BUILDCHUNK %d,%d gen_ms=0 build_ms=%d t=%d" % [cx, cz, dt, Time.get_ticks_msec()])
+		else:
+			print("BUILDDEFER %d,%d t=%d" % [cx, cz, Time.get_ticks_msec()])
 	perf_build_ms += dt
-	return dt
+	return not covered
 
 func _refresh_look_dir() -> void:
 	var p = Game.player
@@ -883,7 +1230,7 @@ func _entry_score(e: Dictionary, pcx: int, pcz: int, px: float, pz: float) -> fl
 	var boost := 2.0 if cheby <= 1 else 0.0
 	return float(d) + (1.0 - a) * 0.75 * float(d) - boost
 
-func _collect_pool(build: bool, include_fb := false) -> Array:
+func _collect_pool(build: bool, include_fb := false, maxb := -1) -> Array:
 	# AC-0079 round 3: the pick is score-driven (spec: generate the LOWEST score
 	# among no-data entries), so the pool must not be clipped by the sticky FIFO
 	# cursors — a stale dq_b/mq_b (entries consumed out of band order, cursor
@@ -897,7 +1244,12 @@ func _collect_pool(build: bool, include_fb := false) -> Array:
 	# entries carry no data guarantee; the drain applies the full gate
 	# (data + mesh_built + _build_ready) to every candidate.
 	var out: Array = []
-	for b in range(band_buckets.size()):
+	# AC-0160: maxb caps the scan at bucket index maxb (the drain window);
+	# -1 = unbounded (legacy behavior for out-of-drain callers).
+	var last_b := band_buckets.size() - 1
+	if maxb >= 0:
+		last_b = mini(maxb, last_b)
+	for b in range(last_b + 1):
 		var arr: Array = band_buckets[b]
 		for i in range(arr.size()):
 			if out.size() >= PICK_POOL_CAP:
@@ -920,14 +1272,56 @@ func _collect_pool(build: bool, include_fb := false) -> Array:
 	return out
 
 func _drain_build_queue() -> void:
+	_startup_gen_apply()
 	if queue_size == 0:
 		if _bl_want.is_empty() and _col_pending.is_empty():
 			return
 		_col_drain_step()
 		return
 	var t0 := Time.get_ticks_usec()
-	var budget := 3 if _startup_pending() else (2 if last_build_us < BUILD_FAST_US else 1)
-	var budget_us := int(drain_budget_ms * 1000)
+	# AC-0160 spawn-fast: while the spawn 3x3 is still pending, raise the
+	# per-frame unit budget (3 -> 12) and time budget (x2) so the spawn ring
+	# lands in ~1s; afterwards the bounded trickle budget (2/1) drains the
+	# rest of the set toward steady state. (Old 3-unit budget + O(queue) pool
+	# scans = 11.7s spawn and ~7.7k entries stranded at r50.)
+	var startup := _startup_pending()
+	# AC-0160 run 2: the spawn fast path ends the first frame the spawn 3x3
+	# is built — after that the data pass and the recenter slice run
+	# normally (walking recenters must stream, see the _spawn_fast note).
+	if _spawn_fast and not startup:
+		_spawn_fast = false
+	# AC-0160 run 2: hold ALL startup builds until the 5x5 burst is fully
+	# applied (the apply already ran at the top of this frame). Dispatching
+	# (0,0) as soon as its d=1 gate passes (t+0.5 s) lands its handoff
+	# face-cache refresh on the main thread BEFORE the d=2 apply, which
+	# blocked the apply and staggered the other 8 3x3 gates — measured
+	# 3x3: 4.5 s. With the hold, all 9 gates pass on one frame at burst
+	# completion and all 9 dispatches go out together (the 9-wide startup
+	# TM cap below), landing in ~2.3 s.
+	if startup and _startup_gen_pending_n > 0:
+		return
+	var budget := 12 if startup else (2 if last_build_us < BUILD_FAST_US else 1)
+	# AC-0160 run 2: the startup budget used to be 2x drain_budget_ms
+	# (60 ms) — but the spawn frame dispatches ALL nine 3x3 builds and each
+	# dispatch costs ~30-50 ms of main-thread strip/nbs work, so 60 ms cut
+	# the frame off after ~2 dispatches and the tail re-dispatched on the
+	# first-landing frame (cascade-blocked) — measured 3x3: 4.5 s. The
+	# 12-unit budget is the real cap now; the time budget only bounds the
+	# trickle (post-startup) as before.
+	var budget_us := int(1e9 if startup else drain_budget_ms * 1000)
+	# AC-0160: windowed pool scan. The drain scans buckets 0.._drain_win_b
+	# only (spawn-fast covers the spawn ring at b1_eff+2); the trickle window
+	# grows one bucket per 15 frames until it spans the whole queue, so the
+	# queue trends down continuously instead of stranding the far tail.
+	if _drain_win_b < 0:
+		_drain_win_b = b1_eff() + 2
+	if not startup:
+		_drain_win_acc += 1
+		if _drain_win_acc >= 15:
+			_drain_win_acc = 0
+			if _drain_win_b < _bucket_count() - 1:
+				_drain_win_b += 1
+	var maxb := mini(_drain_win_b, band_buckets.size() - 1)
 	var gen_used_ms := 0
 	var units := 0
 	var px: float = Game.player.position.x if Game.player != null else 0.0
@@ -937,7 +1331,7 @@ func _drain_build_queue() -> void:
 			break
 		var u := 0
 		_refresh_look_dir()
-		var bp: Array = _collect_pool(true)
+		var bp: Array = _collect_pool(true, false, maxb)
 		var best_e: Dictionary = {}
 		var best_c: Node3D = null
 		var best_s := 1e30
@@ -959,7 +1353,7 @@ func _drain_build_queue() -> void:
 			# _build_unit/_remove_entry). In-radius READY ALWAYS wins (this pass
 			# only runs when the first pass found nothing); the forward band is
 			# exactly 2r+1 entries, so the pass is bounded.
-			var fp: Array = _collect_pool(true, true)
+			var fp: Array = _collect_pool(true, true, maxb)
 			for e in fp:
 				var c = chunks.get(e["key"])
 				if c == null or c.data.is_empty() or c.mesh_built:
@@ -972,7 +1366,17 @@ func _drain_build_queue() -> void:
 					best_e = e
 					best_c = c
 		if best_c != null:
-			_build_unit(best_c, int(best_e["cx"]), int(best_e["cz"]))
+			var deferred := _build_unit(best_c, int(best_e["cx"]), int(best_e["cz"]))
+			if deferred:
+				# AC-0160 run 2: worker slots full (or a task already in
+				# flight for this key) — the entry stays queued (NOT removed)
+				# and the frame ends; the next frame re-dispatches when a slot
+				# frees. The drain NEVER takes the sync fallback: the 8-
+				# neighbor gate above guarantees the nbs snapshot, and
+				# defer_on_cap turns the cap drop into this defer instead of
+				# a 270-1235 ms main-thread build (the measured spawn
+				# serializer).
+				break
 			_remove_entry(best_e)
 			u = 1
 		if u == 0 and (gen_budget_ms < 0 or gen_used_ms < gen_budget_ms):
@@ -984,7 +1388,7 @@ func _drain_build_queue() -> void:
 			# with _entry_score and the lowest wins. Per-consumption FIFO cursor
 			# bookkeeping (dq_b/dq_i advance past the consumed entry) is kept so
 			# entries are never re-picked and queue_size stays exact.
-			var dp: Array = _collect_pool(false)
+			var dp: Array = _collect_pool(false, false, maxb)
 			var dp_e: Dictionary = {}
 			var dp_s := 1e30
 			for e in dp:
@@ -995,6 +1399,17 @@ func _drain_build_queue() -> void:
 				# enqueue / 5-6 frames), which left want-set stragglers
 				# unbuilt by the batch pass and forced self light computes.
 				if _tg_inflight_keys.has(e["key"]):
+					continue
+				# AC-0160 run 2: while the SPAWN fast path is active, the
+				# data pass enqueues NOTHING — the recenter 5x5 burst (a
+				# single high-priority group task) owns the 3x3's full
+				# 8-neighborhood, and far data behind the group would only
+				# steal threads from the spawn build window. The pass
+				# resumes the frame after the spawn 3x3 builds (_spawn_fast
+				# clears) — it must not wait on _startup_pending(), which is
+				# true for the whole walking session and would starve the
+				# forward edge of all data (boundary gate regression).
+				if _spawn_fast:
 					continue
 				var s := _entry_score(e, last_pcx, last_pcz, px, pz)
 				if s < dp_s:
@@ -1022,6 +1437,13 @@ func _drain_build_queue() -> void:
 					var dg := _gen_unit(c, cx, cz)
 					u = 1
 					gen_used_ms += dg
+					# AC-0160: the threadgen pool is saturated — every further
+					# iteration would re-pick + cap-drop the same entry (11
+					# wasted ~2ms pool scans per frame while the handoffs are
+					# still in flight). End the frame; the slots free next
+					# frame and the pick resumes there.
+					if threadgen_inflight.size() >= threadgen_max:
+						break
 			if u == 0 and dp.is_empty():
 				# Pool exhausted this frame (all entries consumed): park the
 				# cursor past the scanned region, same as the old FIFO scan.
@@ -1042,6 +1464,8 @@ func _drain_build_queue() -> void:
 		var fm := (Time.get_ticks_usec() - t0) / 1000.0
 		if fm > perf_max_drain_ms:
 			perf_max_drain_ms = fm
+		if timing:
+			print("DRAINMS units=%d ms=%.1f t=%d inflight=%d enq=%d cap=%d dedup=%d" % [units, fm, Time.get_ticks_msec(), threadgen_inflight.size(), _tg_enq, _tg_capdrop, _tg_dedup])
 	_col_drain_step()
 
 func _advance_dq_past(cx: int, cz: int) -> void:
@@ -1061,13 +1485,42 @@ func _advance_dq_past(cx: int, cz: int) -> void:
 				return
 
 func _remove_entry(e: Dictionary) -> void:
+	# AC-0160: fast path via the key -> bucket map (O(bucket) instead of
+	# O(queue)); the full scan stays as the fallback and rebuilds the map
+	# when it was stale (recenter races).
+	var b0: int = int(_qb.get(e["key"], -1))
+	if b0 >= 0 and b0 < band_buckets.size():
+		var arr0: Array = band_buckets[b0]
+		for i in range(arr0.size()):
+			if arr0[i]["key"] == e["key"]:
+				arr0.remove_at(i)
+				_qb.erase(e["key"])
+				queued_keys.erase(e["key"])
+				queue_size -= 1
+				return
+		_qb.erase(e["key"])
 	for b in range(band_buckets.size()):
 		var arr: Array = band_buckets[b]
 		for i in range(arr.size()):
 			if arr[i]["key"] == e["key"]:
 				arr.remove_at(i)
+				# AC-0152: keep queued_keys in lockstep with band_buckets (the
+				# invariant _strip_candidate_builds maintained). Without this,
+				# a consumed "build" entry left a stale queued_keys flag and
+				# _enqueue_build's dedup no-op'd the _tm_retrigger re-queue —
+				# a threadmesh handoff drop (worker lost the add_task/slot
+				# race) then stranded the chunk unbuilt and unqueued forever.
+				queued_keys.erase(e["key"])
 				queue_size -= 1
+				_rebuild_qb()
 				return
+
+func _rebuild_qb() -> void:
+	# AC-0160: (re)build the key -> bucket map from band_buckets.
+	_qb = {}
+	for b in range(band_buckets.size()):
+		for e2 in band_buckets[b]:
+			_qb[e2["key"]] = b
 
 # --- AC-0077: crossing-batched per-chunk light (P1.3) ----------------------
 
@@ -1580,7 +2033,11 @@ func _make_chunk_node(cx: int, cz: int) -> Node3D:
 	c.cx = cx
 	c.cz = cz
 	c.position = Vector3(cx * 16, 0, cz * 16)
-	c.collision_enabled = collision_enabled
+	# AC-0152: band 0 gets collision; 1/2/3 do not. Out-of-set (stale
+	# caller) clamps to collar so it can never mesh by accident.
+	var nb := band_of(int(cx) - last_pcx, int(cz) - last_pcz)
+	c.band = nb if nb >= 0 else 3
+	c.collision_enabled = collision_enabled and c.band == 0
 	c.init_slabs()
 	add_child(c)
 	chunks[_key(cx, cz)] = c
@@ -1645,6 +2102,7 @@ func _strip_candidate_builds(keys: Array) -> void:
 			var e: Dictionary = arr[i]
 			if not bool(e["data_only"]) and kset.has(e["key"]):
 				queued_keys.erase(e["key"])
+				_qb.erase(e["key"])  # AC-0160
 				arr.remove_at(i)
 				queue_size -= 1
 			else:
@@ -1672,24 +2130,34 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 	var cand_builds: Array = []
 	for key in chunks:
 		var c: Node3D = chunks[key]
-		var cheby := maxi(absi(c.cx - pcx), absi(c.cz - pcz))
-		if cheby <= rr:
+		# AC-0143 face 2-11 chunks live in the 1024-cell sphere grid — the
+		# home streaming set has no claim on them. (The old Chebyshev walk
+		# swept them by accident; AC-0152 scopes it to home chunks.)
+		if int(c.face) > 1:
+			continue
+		var dx := int(c.cx) - pcx
+		var dz := int(c.cz) - pcz
+		if in_stream_set(dx, dz):
 			if c.candidate:
 				c.candidate = false
-				c.cand_since = 0
-		elif cheby == rr + 1:
-			if not c.candidate:
-				if _enter_candidate(key, c):
-					cand_builds.append(key)
-			else:
 				c.cand_since = 0
 		else:
 			if not c.candidate:
 				if _enter_candidate(key, c):
 					cand_builds.append(key)
-			c.cand_since += 1
-			if c.cand_since >= 2:
-				to_free.append(key)
+			# Free once TWO rings clear the set after 2 recenter events;
+			# one-ring-out chunks keep node+data as candidates (the old r+1
+			# behavior). AC-0152 ring: the Euclidean one-ring-out predicate
+			# is in_circle_ring itself — the old L2 (R+1)^2 threshold missed
+			# the diagonal ring corners ((R+1,1) at R^2+2R+2 > (R+1)^2),
+			# which would have been freed instead of kept as candidates.
+			var two_out := not in_circle_ring(dx, dz) and absi(dx) + absi(dz) > b1_eff() + 2
+			if not two_out:
+				c.cand_since = 0
+			else:
+				c.cand_since += 1
+				if c.cand_since >= 2:
+					to_free.append(key)
 	var tf1 := Time.get_ticks_usec()
 	_strip_candidate_builds(cand_builds)
 	for key in to_free:
@@ -1710,9 +2178,14 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 	threadgen_poll()
 	threadmesh_poll()
 	if not mesh_now:
+		# AC-0152: sync-fill the whole stream set (circle ∪ collar ∪ ring;
+		# the ring reaches one chunk past the circle edge).
+		var half := maxi(rr + 1, b1_eff() + 1)
 		var make: Array[Dictionary] = []
-		for dx in range(-render_radius, render_radius + 1):
-			for dz in range(-render_radius, render_radius + 1):
+		for dx in range(-half, half + 1):
+			for dz in range(-half, half + 1):
+				if not in_stream_set(dx, dz):
+					continue
 				var cx := pcx + dx
 				var cz := pcz + dz
 				if not chunks.has(_key(cx, cz)):
@@ -1731,13 +2204,114 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 	_rec_want = {}
 	_rec_want_keys = []
 	_rec_new_buckets = []
-	for i in range(2 * rr + 3):
+	for i in range(_bucket_count()):
 		_rec_new_buckets.append([])
 	_rec_slice_total_ms = 0.0
 	_rec_slice_max_ms = 0.0
 	_rec_slice_frames = 0
 	_rec_new_n = 0
 	_rp_walk_ms += (Time.get_ticks_usec() - tr1) / 1000.0
+	# AC-0160 spawn fast path (the pre-warm): the queue normally only exists
+	# once the recenter slice's MERGE phase finishes (~2s of wall at r50:
+	# 8k stubs), and the drain idles the whole time. Queue the spawn 5x5
+	# (taxi <= 2 — exactly the 8-neighborhood the startup _build_ready gate
+	# needs) NOW so the threadgen data pass starts while the slice walks:
+	# the 3x3 data gen overlaps the stub walk instead of serializing behind
+	# it. The merge rebuild re-queues these keys (WANT) or moves the
+	# survivors; the handoff drop + finalization sweep (AC-0160) keep the
+	# consumed entries from stranding the queue.
+	for pdx in range(-2, 3):
+		for pdz in range(-2, 3):
+			if not in_stream_set(pcx + pdx, pcz + pdz):
+				continue
+			var wcx := pcx + pdx
+			var wcz := pcz + pdz
+			if not chunks.has(_key(wcx, wcz)):
+				stub_chunk(wcx, wcz)
+			_enqueue_build(wcx, wcz)
+	# AC-0160 run 2: the 5x5 startup burst. The drain's data pass paces one
+	# threadgen enqueue per frame, so the 5x5 (the 3x3's full 8-neighborhood)
+	# landed in 2.5-3.1 s and the spawn 3x3 in ~5 s. A single HIGH-priority
+	# GROUP task instead feeds all 24 non-center chunks to the pool at once
+	# (tasks_needed = 6 of 6 threads -> 4 sequential gens per thread): the
+	# 5x5 data lands in ~0.6-0.8 s and the 8 build gates pass together, so
+	# the 3x3 builds pipeline right behind it. Workers run only
+	# WorldGen.generate_args (the worker-safe core of _threadgen_worker)
+	# and store the result in their own slot; the main-thread apply pass
+	# (_startup_gen_apply) does the handoff (data + init_fl + edits) at a
+	# bounded 4/frame. (0,0) is excluded: the spawn contract keeps its sync
+	# gen in _gen_unit. A later recenter over already-generated terrain is a
+	# no-op (had_data snapshot). The drain's data path keeps the 5x5 scope
+	# as a fallback (TG enqueues race the group harmlessly: the apply pass
+	# and the handoff both drop duplicates).
+	# AC-0160 run 2: prune finished burst groups. A recenter whose group is
+	# STILL in flight must leave the elems/slots arrays untouched: the
+	# in-flight workers index those arrays (a reset races them — measured
+	# in the boundary gate: "Invalid assignment of index '22'" worker
+	# crashes, and a stale worker could write chunk A's terrain into chunk
+	# B's slot). In that case the in-flight burst lands data on its own
+	# chunks (still in the world — the player moved at most a couple of
+	# chunks), this recenter's new forward chunks get data from the drain's
+	# data pass, and pending_n = 0 keeps the drain hold from sticking.
+	var _grp_keep: Array = []
+	for _t in _startup_gen_group_tids:
+		if not threadgen_pool.is_task_completed(int(_t)):
+			_grp_keep.append(_t)
+	_startup_gen_group_tids = _grp_keep
+	if _startup_gen_group_tids.is_empty():
+		_startup_gen_elems = []
+		_startup_gen_slots = []
+		for pdx in range(-2, 3):
+			for pdz in range(-2, 3):
+				if pdx == 0 and pdz == 0:
+					continue
+				var bwx := pcx + pdx
+				var bwz := pcz + pdz
+				if not in_stream_set(bwx, bwz):
+					continue
+				var bc = chunks.get(_key(bwx, bwz))
+				# args snapshot in the element (worker never derefs Game/Data —
+				# the _threadgen_worker entry pattern).
+				_startup_gen_elems.append([absi(bwx - pcx) + absi(bwz - pcz), bwx, bwz, bool(bc != null and not bc.data.is_empty()), Game.world_seed, Data.HEIGHT, Data.SEA])
+				_startup_gen_slots.append(null)
+		_startup_gen_elems.sort_custom(func(a, b): return int(a[0]) < int(b[0]) or (int(a[0]) == int(b[0]) and (int(a[1]) < int(b[1]) or (int(a[1]) == int(b[1]) and int(a[2]) < int(b[2])))))
+		var _burst_need := 0
+		for _be in _startup_gen_elems:
+			if not bool(_be[3]):
+				_burst_need += 1
+		_startup_gen_pending_n = _burst_need
+		if _burst_need > 0:
+			# HIGH priority + 3-wide: measured on this Godot build, a LOW
+			# priority GROUP task runs its elements strictly serially on ONE
+			# thread (24 x 120 ms = 2.9 s) even with tasks_needed=3 — so the
+			# burst must stay high priority (3-wide, ~165 ms/task, 24 chunks in
+			# ~1.3 s). The FIFO overlap problem a high-priority group would
+			# cause (TM builds queueing behind the 24 gen elements) is gone by
+			# construction: the drain hold below keeps ALL builds out of the
+			# pool until the burst is fully applied, so the group runs alone on
+			# 3 of the 6 threads and the 9 spawn builds start on the 6 free
+			# threads the frame after the burst lands. 3-wide keeps the gen wms
+			# near the solo floor (6-wide runs ~320 ms/task here — allocator/
+			# bandwidth bound). Elements are taxi-ordered (d=1 first).
+			_startup_gen_group_tids.append(threadgen_pool.add_group_task(_startup_gen_worker, _startup_gen_elems.size(), 3, true))
+			if timing:
+				print("GENBURST n=%d t=%d" % [_burst_need, Time.get_ticks_msec()])
+	else:
+		# A previous burst is still landing: its apply pass owns the
+		# pending count bookkeeping for its own chunks; this recenter
+		# adds nothing to the pool (the data pass covers the new edge).
+		_startup_gen_pending_n = 0
+	# (0,0) keeps its sync gen (the spawn contract: immediate ground under
+	# the player) — done here in recenter so it exists before the first
+	# drain frame; the group burst and the drain data path both skip it.
+	var c0 = chunks.get(_key(pcx, pcz))
+	if c0 != null and c0.data.is_empty():
+		var sg0 := Time.get_ticks_usec()
+		c0.data = WorldGen.generate(pcx, pcz, Game.world_seed)
+		c0.init_fl()
+		_apply_edits_to_chunk(c0)
+		if timing:
+			print("GENCHUNK %d,%d gen_ms=%d t=%d" % [pcx, pcz, (Time.get_ticks_usec() - sg0) / 1000, Time.get_ticks_msec()])
 	if _recprobe:
 		print("RECPROBE r=%d total_ms=%.1f free_ms=%.1f rebuild_ms=%.1f new_n=%d queue=%d chunks=%d drain_stubs_ms=%.1f drain_stubs_n=%d" % [
 			render_radius,
@@ -1748,6 +2322,23 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 
 func _recenter_slice() -> void:
 	if not _rec_pending:
+		return
+	# AC-0160 run 2: pause the slice for the SPAWN window only (_spawn_fast,
+	# cleared when the spawn 3x3 builds). The rebuild walk/stubs are ~5 s of
+	# main-thread work at r50; racing it against the burst inflates the gen
+	# wms, and racing it against the spawn handoffs starves them (the (0,0)
+	# handoff's face-cache refresh is ~1.2 s of main-thread work, and the
+	# other 8 handoffs then wait on slice frame gaps — measured 3x3
+	# 4.0-5.6 s with the slice running). Paused: the burst runs 3-wide at
+	# solo wms (~1.3 s) and the 9 spawn handoffs run on a free main thread
+	# right after the worker wave lands. The slice then takes its ~5 s and
+	# the queue swap lands a couple of seconds after the 3x3 (the bandmap
+	# arm waits for the swap before the trickle sample). Keying this on
+	# _startup_pending() instead broke walking: that flag stays true for
+	# every recenter (the forward 3x3 is unbuilt), the slice never rebuilt
+	# the queue, and the drain had nothing to stream (35 s stall, empty
+	# world ahead of the player — boundary gate regression).
+	if _spawn_fast:
 		return
 	var t0 := Time.get_ticks_msec()
 	var units := 0
@@ -1776,8 +2367,12 @@ func _recenter_slice() -> void:
 		_rp_stub_n = _rec_new_n
 
 func _rec_want_step() -> void:
-	var rr := render_radius
-	var side := 2 * rr + 1
+	# AC-0152: walk the stream-set bounding box (circle ∪ collar ∪ ring);
+	# skip out-of-set cells. Band changes on existing chunks reband (kill
+	# the old representation, keep data) and re-queue under the new band's
+	# dispatch path.
+	var half := maxi(render_radius + 1, b1_eff() + 1)
+	var side := 2 * half + 1
 	if _rec_cursor >= side * side:
 		_rec_phase = 1
 		_rec_cursor = 0
@@ -1785,49 +2380,63 @@ func _rec_want_step() -> void:
 		for k in _rec_want:
 			_bl_want[k] = true
 		return
-	var dx := _rec_cursor / side - rr
-	var dz := _rec_cursor % side - rr
+	var dx := _rec_cursor / side - half
+	var dz := _rec_cursor % side - half
+	_rec_cursor += 1
+	if not in_stream_set(dx, dz):
+		return
+	var nb := band_of(dx, dz)
+	if nb == 3:
+		# Band 3 (collar ∪ circle ring): data only — MERGE_RING enqueues
+		# the data entries.
+		return
 	var cx := _rec_pcx + dx
 	var cz := _rec_pcz + dz
 	var key := _key(cx, cz)
+	var c = chunks.get(key)
 	var old = queued_keys.get(key)
-	if old != "build":
-		var c = chunks.get(key)
-		if c == null or not c.mesh_built:
-			_rec_want[key] = {"cx": cx, "cz": cz, "d": absi(dx) + absi(dz)}
-			_rec_want_keys.append(key)
-	_rec_cursor += 1
+	if c != null and int(c.band) != nb:
+		c.band = nb
+		c.collision_enabled = collision_enabled and nb == 0
+		if c.mesh_built:
+			c.mesh_built = false
+			c._enter_candidate_slabs()
+			light_pending_set.erase(key)
+			light_pending.erase(key)
+			fluid_dirty.erase(key)
+			tex_refresh.erase(key)
+			_col_pending_set.erase(key)
+			_col_pending.erase(key)
+		if old == "data":
+			_convert_data_to_build(key)
+			old = queued_keys.get(key)
+	if old != "build" and (c == null or not c.mesh_built):
+		_rec_want[key] = {"cx": cx, "cz": cz, "d": absi(dx) + absi(dz)}
+		_rec_want_keys.append(key)
 
 func _rec_stub_step() -> void:
-	var rr := render_radius
-	var side_a := 2 * rr + 1
-	var side_b := 2 * rr + 3
-	if _rec_cursor >= side_a * side_a + side_b * side_b:
+	# AC-0152: stub every missing stream-set chunk (circle ∪ collar ∪ ring).
+	# The old Chebyshev r+1 data-ring stub walk is folded into the band-3
+	# walk of the MERGE_RING phase.
+	var half := maxi(render_radius + 1, b1_eff() + 1)
+	var side := 2 * half + 1
+	if _rec_cursor >= side * side:
 		_rec_phase = 2
 		_rec_cursor = 0
 		_rec_i = 0
 		return
-	var dx := 0
-	var dz := 0
-	if _rec_cursor < side_a * side_a:
-		dx = _rec_cursor / side_a - rr
-		dz = _rec_cursor % side_a - rr
-	else:
-		var j := _rec_cursor - side_a * side_a
-		dx = j / side_b - rr - 1
-		dz = j % side_b - rr - 1
-		if maxi(absi(dx), absi(dz)) != rr + 1:
-			_rec_cursor += 1
-			return
+	var dx := _rec_cursor / side - half
+	var dz := _rec_cursor % side - half
+	_rec_cursor += 1
+	if not in_stream_set(dx, dz):
+		return
 	var cx := _rec_pcx + dx
 	var cz := _rec_pcz + dz
 	if not chunks.has(_key(cx, cz)):
 		stub_chunk(cx, cz)
 		_rp_stub_n += 1
-	_rec_cursor += 1
 
 func _rec_merge_old_step() -> void:
-	var rr := render_radius
 	var b := _rec_cursor
 	if b >= band_buckets.size():
 		_rec_phase = 3
@@ -1841,19 +2450,18 @@ func _rec_merge_old_step() -> void:
 	var e: Dictionary = arr[_rec_i]
 	_rec_i += 1
 	var key: String = e["key"]
-	var adx := absi(int(e["cx"]) - _rec_pcx)
-	var adz := absi(int(e["cz"]) - _rec_pcz)
-	if adx > rr + 1 or adz > rr + 1:
+	var adxs := int(e["cx"]) - _rec_pcx
+	var adzs := int(e["cz"]) - _rec_pcz
+	if not in_stream_set(adxs, adzs):
 		if not chunks.has(key):
 			queued_keys.erase(key)
 		return
 	if _rec_want.has(key):
 		queued_keys.erase(key)
 		return
-	_rec_new_buckets[mini(adx + adz, 2 * rr + 2)].append(e)
+	_rec_new_buckets[mini(absi(adxs) + absi(adzs), _rec_new_buckets.size() - 1)].append(e)
 
 func _rec_merge_want_step() -> void:
-	var rr := render_radius
 	if _rec_cursor >= _rec_want_keys.size():
 		_rec_phase = 4
 		_rec_cursor = 0
@@ -1865,18 +2473,42 @@ func _rec_merge_want_step() -> void:
 		return
 	var w: Dictionary = _rec_want[key]
 	queued_keys[key] = "build"
-	_rec_new_buckets[mini(int(w["d"]), 2 * rr + 2)].append({"key": key, "cx": int(w["cx"]), "cz": int(w["cz"]), "data_only": false})
+	_rec_new_buckets[mini(int(w["d"]), _rec_new_buckets.size() - 1)].append({"key": key, "cx": int(w["cx"]), "cz": int(w["cz"]), "data_only": false})
 	_rec_new_n += 1
 
 func _rec_merge_ring_step() -> void:
-	var rr := render_radius
-	var side := 2 * rr + 3
+	# AC-0152: the old Chebyshev r+1 data ring is now the BAND-3 walk —
+	# band 3 chunks (the collar: diamond b1_eff+1 outside the circle, plus
+	# the circle ring: outside the circle, touching it within 8-neighbors)
+	# get data-only entries so band 0/1 edge chunks (small R) and band 2
+	# edge chunks (large R) build against real 4-axis neighbors.
+	var half := maxi(render_radius + 1, b1_eff() + 1)
+	var side := 2 * half + 1
 	if _rec_cursor >= side * side:
+		# AC-0160: the pre-warm queue ran in parallel with this walk, so the
+		# drain may have consumed entries the walk also moved/re-queued. An
+		# entry whose chunk is now done (build: mesh_built, data: has data)
+		# would strand the queue forever (both pools skip it) — drop the
+		# stale ones against the LIVE chunk state, not the walk-time state.
+		for b in range(_rec_new_buckets.size()):
+			var arrf: Array = _rec_new_buckets[b]
+			var i := 0
+			while i < arrf.size():
+				var e2: Dictionary = arrf[i]
+				var c2 = chunks.get(e2["key"])
+				if c2 != null and (not c2.data.is_empty() if bool(e2["data_only"]) else c2.mesh_built):
+					queued_keys.erase(e2["key"])
+					arrf.remove_at(i)
+					continue
+				i += 1
 		var qs := 0
 		for b in range(_rec_new_buckets.size()):
 			for e2 in _rec_new_buckets[b]:
 				qs += 1
 		band_buckets = _rec_new_buckets
+		_rebuild_qb()  # AC-0160
+		_drain_win_b = b1_eff() + 2  # AC-0160: restart the drain window at the new center
+		_drain_win_acc = 0
 		dq_b = 0
 		dq_i = 0
 		mq_b = 0
@@ -1889,10 +2521,10 @@ func _rec_merge_ring_step() -> void:
 		_rec_cursor = 0
 		_rec_i = 0
 		return
-	var dx := _rec_cursor / side - rr - 1
-	var dz := _rec_cursor % side - rr - 1
+	var dx := _rec_cursor / side - half
+	var dz := _rec_cursor % side - half
 	_rec_cursor += 1
-	if maxi(absi(dx), absi(dz)) != rr + 1:
+	if band_of(dx, dz) != 3:
 		return
 	var cx := _rec_pcx + dx
 	var cz := _rec_pcz + dz
@@ -1903,7 +2535,7 @@ func _rec_merge_ring_step() -> void:
 	if c != null and not c.data.is_empty():
 		return
 	queued_keys[key] = "data"
-	_rec_new_buckets[mini(absi(dx) + absi(dz), 2 * rr + 2)].append({"key": key, "cx": cx, "cz": cz, "data_only": true})
+	_rec_new_buckets[mini(absi(dx) + absi(dz), _rec_new_buckets.size() - 1)].append({"key": key, "cx": cx, "cz": cz, "data_only": true})
 	_rec_new_n += 1
 
 func get_block(x: int, y: int, z: int) -> int:
@@ -2158,15 +2790,18 @@ func tick_fluids() -> void:
 		return
 	var cl: Array[Vector2i] = []
 	if Game.player != null:
-		var px := floori(Game.player.position.x)
-		var pz := floori(Game.player.position.z)
-		var cx0 := int(floorf(float(px - fluid_tick_radius) / 16.0))
-		var cx1 := int(floorf(float(px + fluid_tick_radius) / 16.0))
-		var cz0 := int(floorf(float(pz - fluid_tick_radius) / 16.0))
-		var cz1 := int(floorf(float(pz + fluid_tick_radius) / 16.0))
-		for cx in range(cx0, cx1 + 1):
-			for cz in range(cz0, cz1 + 1):
-				cl.append(Vector2i(cx, cz))
+		# AC-0152: the tick region is the band-0 taxicab diamond (Bedrock
+		# Simulate 4 = 41 chunks), not the fluid_tick_radius BLOCKS square.
+		# The per-chunk `fluid_wet` gate below keeps the scan cheap (the
+		# natural ocean is stationary fl=0 → zero work).
+		for key in chunks:
+			var c: Node3D = chunks[key]
+			if int(c.face) > 1:
+				continue
+			if int(c.band) != 0:
+				continue
+			cl.append(Vector2i(int(c.cx), int(c.cz)))
+		cl.sort()
 	else:
 		for key in chunks:
 			var c: Node3D = chunks[key]

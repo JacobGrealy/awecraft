@@ -8,7 +8,8 @@ const SIM_MIN := 1
 
 const DEFAULTS := {
 	"render_dist": 50,
-	"sim_dist": 1,
+	# AC-0152: Bedrock Realms default — Simulate 4 (taxicab diamond, 41 chunks).
+	"sim_dist": 4,
 	"volume": 100,
 	"fullscreen": false,
 	"resolution": "1280x720",
@@ -104,6 +105,9 @@ func apply_world() -> void:
 	if Game.world != null:
 		Game.world.render_radius = int(values["render_dist"])
 		Game.world.fluid_tick_radius = int(values["sim_dist"]) * 16
+		# AC-0152: the tick diamond follows Simulate (chunks); fluid_tick_radius
+		# (blocks) stays for the legacy mapping.
+		Game.world.band0_r = mini(int(values["sim_dist"]), int(values["render_dist"]))
 
 
 func apply_render_distance() -> void:
@@ -116,3 +120,4 @@ func apply_render_distance() -> void:
 func apply_sim_distance() -> void:
 	if Game.world != null:
 		Game.world.fluid_tick_radius = int(values["sim_dist"]) * 16
+		Game.world.band0_r = mini(int(values["sim_dist"]), int(values["render_dist"]))
