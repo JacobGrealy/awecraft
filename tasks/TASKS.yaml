@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-30T21:12
+  updated_at: 2026-08-30T21:29
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -4842,6 +4842,32 @@ intake:
 
 
     Backlog (not queued) — decide queue after AC-0161 ships proven. Ref: plan §7 ship-local grav.
+
+    '
+  comments: []
+- id: AC-0163
+  title: spawn-crashed-ship-wreck
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-30T21:29
+  updated_at: 2026-08-30T21:29
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User story: As a player I want to spawn next to a crashed Drydock wreck that teaches ship building — a ruined Reinforced
+    Frame portal with a dead Core and a Burst jetpack inside — so I learn to repair and launch.
+
+
+    Technical details: World spawn generates a ruined Drydock wreck on flat terrain (valid face, not cliff/seam) — Reinforced
+    Frame at ~70% (needs 4 blocks crafted, rare), Ship Core present 0 fuel, Fuel Canister empty, chest with Burst jetpack
+    (3x ~8s, coal refuel) for face-hop. Player must gather → craft missing frame blocks → refuel → Activate (flood-fill) to
+    first Undock. Teaches Drydock/portal + flood-fill without giving flying ship day-1. Log points to planet 2 coords. Gated
+    behind AC-0161 Drydock proven. Backlog (not queued).
 
     '
   comments: []
