@@ -2,6 +2,7 @@ extends Node3D
 
 const ChunkScript = preload("res://world/chunk.gd")
 const DropScript = preload("res://entities/drop.gd")
+const ChunkIO = preload("res://core/chunk_io.gd")  # AC-0155
 
 const LIGHT_NEIGHBOR := 1
 const FLUSH_FRAME_BUDGET_MS := 40
@@ -75,6 +76,14 @@ var perf_build_ms := 0
 var perf_read_sync_gen := 0
 var perf_read_sync_gen_ms := 0.0
 var perf_create_sync_gen := 0
+# AC-0155: full-chunk persistence — origin + counters for the chunkio probe.
+var disk_reads := 0
+var disk_read_ms := 0.0
+var gen_count := 0
+var gen_ms_total := 0.0
+var chunk_origin := {}
+var _save_queue: Array = []
+var _gen_last_disk := false
 var fluid_tick_samples: Array = []
 var fluid_dirty := {}
 var fluid_sim_enabled := true
@@ -477,6 +486,7 @@ func _cull_set_vis(s, vis: bool) -> void:
 		fa.visible = vis
 
 func _process(_delta: float) -> void:
+	_drain_save_queue()  # AC-0155: amortized full-column writes (1-2/frame)
 	# AC-0160: keep the worker ctx in sync with the atlas identity. If Data
 	# bakes/loads the atlas after World._ready captured the ctx (or a
 	# texture-pack swap re-bakes it), the stale ctx (has_tex=false,
@@ -746,6 +756,14 @@ func _startup_pending() -> bool:
 
 func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	var tg := Time.get_ticks_msec()
+	_gen_last_disk = false
+	# AC-0155: disk-first — a saved column is read + inflated instead of
+	# re-running the generator (revisits never re-gen). The drain breaks the
+	# frame after a disk read (one main-thread inflate per frame).
+	if c.data.is_empty() and _try_disk_load(c, cx, cz):
+		_gen_last_disk = true
+		_apply_edits_to_chunk(c)
+		return 0
 	# AC-0152: sync gen is now ONLY the spawn chunk (0,0) — the documented
 	# spawn contract (AC-0082: "the player needs immediate ground data").
 	# The old axis exclusion (cx==0 OR cz==0 sync) was pre-AC-0082 Phase-1
@@ -761,11 +779,14 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 		return 0
 	c.data = WorldGen.generate(cx, cz, Game.world_seed)
 	c.init_fl()
+	gen_count += 1
 	_apply_edits_to_chunk(c)
 	var dg := Time.get_ticks_msec() - tg
 	if timing:
 		print("GENCHUNK %d,%d gen_ms=%d t=%d" % [cx, cz, dg, Time.get_ticks_msec()])
 	perf_gen_ms += dg
+	gen_ms_total += dg
+	chunk_origin[_key(cx, cz)] = "gen"
 	return dg
 
 func threadgen_enqueue(cx: int, cz: int, key: String, inst: int) -> void:
@@ -847,6 +868,8 @@ func _startup_gen_apply() -> void:
 			continue
 		c.data = d
 		c.init_fl()
+		gen_count += 1
+		chunk_origin[_key(int(e[1]), int(e[2]))] = "gen"  # AC-0155
 		_apply_edits_to_chunk(c)
 		if timing:
 			print("GENHAND %d,%d t=%d" % [int(e[1]), int(e[2]), Time.get_ticks_msec()])
@@ -889,6 +912,8 @@ func threadgen_handoff(e: Dictionary, data: PackedByteArray) -> void:
 		return
 	c.data = data
 	c.init_fl()
+	gen_count += 1
+	chunk_origin[e["key"]] = "gen"  # AC-0155
 	_apply_edits_to_chunk(c)
 	_tg_handoff += 1
 	if timing or _tg_debug:
@@ -1437,6 +1462,10 @@ func _drain_build_queue() -> void:
 					var dg := _gen_unit(c, cx, cz)
 					u = 1
 					gen_used_ms += dg
+					# AC-0155: a disk read is a main-thread inflate (~20 ms) —
+					# one per frame, same pacing rationale as the sync gen.
+					if _gen_last_disk:
+						break
 					# AC-0160: the threadgen pool is saturated — every further
 					# iteration would re-pick + cap-drop the same entry (11
 					# wasted ~2ms pool scans per frame while the handoffs are
@@ -2046,8 +2075,7 @@ func _make_chunk_node(cx: int, cz: int) -> Node3D:
 func create_chunk(cx: int, cz: int, mesh_now: bool) -> Node3D:
 	perf_create_sync_gen += 1
 	var c: Node3D = _make_chunk_node(cx, cz)
-	c.data = WorldGen.generate(cx, cz, Game.world_seed)
-	c.init_fl()
+	_materialize_chunk_data(c, cx, cz)  # AC-0155: disk-first, else sync gen
 	_apply_edits_to_chunk(c)
 	if mesh_now:
 		c.build_mesh(get_block)
@@ -2162,6 +2190,7 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 	_strip_candidate_builds(cand_builds)
 	for key in to_free:
 		var c: Node3D = chunks[key]
+		_queue_chunk_save(c)  # AC-0155: full column to disk on evict (stubs skipped)
 		chunks.erase(key)
 		queued_keys.erase(key)
 		light_pending_set.erase(key)
@@ -2270,6 +2299,10 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 				if not in_stream_set(bwx, bwz):
 					continue
 				var bc = chunks.get(_key(bwx, bwz))
+				# AC-0155: a saved 5x5 column loads from disk (main thread) so the
+				# had_data snapshot below reads true and the burst worker skips it.
+				if bc != null and bc.data.is_empty():
+					_try_disk_load(bc, bwx, bwz)
 				# args snapshot in the element (worker never derefs Game/Data —
 				# the _threadgen_worker entry pattern).
 				_startup_gen_elems.append([absi(bwx - pcx) + absi(bwz - pcz), bwx, bwz, bool(bc != null and not bc.data.is_empty()), Game.world_seed, Data.HEIGHT, Data.SEA])
@@ -2307,8 +2340,7 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 	var c0 = chunks.get(_key(pcx, pcz))
 	if c0 != null and c0.data.is_empty():
 		var sg0 := Time.get_ticks_usec()
-		c0.data = WorldGen.generate(pcx, pcz, Game.world_seed)
-		c0.init_fl()
+		_materialize_chunk_data(c0, pcx, pcz)  # AC-0155: disk-first, else sync gen
 		_apply_edits_to_chunk(c0)
 		if timing:
 			print("GENCHUNK %d,%d gen_ms=%d t=%d" % [pcx, pcz, (Time.get_ticks_usec() - sg0) / 1000, Time.get_ticks_msec()])
@@ -2614,6 +2646,84 @@ func _apply_edits_to_chunk(c: Node3D) -> void:
 	_eff_cache_evict(key)
 	_mark_light_around(c.cx, c.cz)
 	_mark_fluid_around(c.cx, c.cz)
+
+# AC-0155: full-column persistence (Bedrock LevelDB / Java region style).
+# Every generated 16xHx16 column is saved whole (data + fl, palette+bitpack
+# per 16^3 subchunk, zlib, versioned) when it leaves the streaming set; a
+# revisit reads the file instead of re-running the generator. Edits are
+# already baked into c.data, so the file is the source of truth and the
+# JSON edits diff is redundant-but-idempotent on load (re-applied below).
+
+func _chunk_face(cx: int) -> int:
+	return 1 if cx < 0 else 0
+
+func _try_disk_load(c: Node3D, cx: int, cz: int) -> bool:
+	if Save.active_slot < 0:
+		return false
+	var path := ChunkIO.path_for(Save.active_slot, _chunk_face(cx), cx, cz)
+	if not FileAccess.file_exists(path):
+		return false
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return false
+	var bytes := f.get_buffer(f.get_length())
+	f.close()
+	var t0 := Time.get_ticks_usec()
+	var res = ChunkIO.decode_column(bytes, int(Game.world_seed), int(Data.HEIGHT))
+	disk_read_ms += (Time.get_ticks_usec() - t0) / 1000.0
+	if res == null or (typeof(res) != TYPE_DICTIONARY) or (res as Dictionary).is_empty():
+		return false
+	c.data = res["data"]
+	c.fl = res["fl"]
+	disk_reads += 1
+	chunk_origin[_key(cx, cz)] = "disk"
+	return true
+
+func _materialize_chunk_data(c: Node3D, cx: int, cz: int) -> int:
+	if c.data.is_empty() and _try_disk_load(c, cx, cz):
+		return 0
+	if c.data.is_empty():
+		var tg := Time.get_ticks_msec()
+		c.data = WorldGen.generate(cx, cz, Game.world_seed)
+		c.init_fl()
+		gen_count += 1
+		var dg := Time.get_ticks_msec() - tg
+		gen_ms_total += dg
+		chunk_origin[_key(cx, cz)] = "gen"
+		return dg
+	return 0
+
+func _queue_chunk_save(c: Node3D) -> void:
+	if Save.active_slot < 0 or c.data.is_empty():
+		return
+	_save_queue.append({
+		"face": _chunk_face(int(c.cx)),
+		"cx": int(c.cx),
+		"cz": int(c.cz),
+		"data": c.data.duplicate(),
+		"fl": c.fl.duplicate(),
+	})
+
+func _write_chunk_file(face: int, cx: int, cz: int, data: PackedByteArray, fl: PackedByteArray) -> void:
+	if Save.active_slot < 0 or data.is_empty():
+		return
+	ChunkIO.ensure_dir(Save.active_slot)
+	var blob := ChunkIO.encode_column(data, fl, int(Game.world_seed), int(Data.HEIGHT))
+	var f := FileAccess.open(ChunkIO.path_for(Save.active_slot, face, cx, cz), FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_buffer(blob)
+	f.close()
+
+func _drain_save_queue() -> void:
+	if _save_queue.is_empty():
+		return
+	var n := 2 if _save_queue.size() > 8 else 1
+	for k in n:
+		if _save_queue.is_empty():
+			break
+		var e: Dictionary = _save_queue.pop_front()
+		_write_chunk_file(int(e["face"]), int(e["cx"]), int(e["cz"]), e["data"], e["fl"])
 
 func surface_top(x: int, z: int) -> int:
 	for y in range(Data.HEIGHT - 1, -1, -1):

@@ -1,9 +1,8 @@
 meta:
-  updated_at: 2026-08-30T21:29
+  updated_at: 2026-08-31T14:05
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0155
 - AC-0158
 - AC-0159
 - AC-0154
@@ -4706,12 +4705,12 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-30T13:41
-  updated_at: 2026-08-30T13:41
-  completed_at: null
-  waiting_on: AC-0152
+  updated_at: 2026-08-31T14:05
+  completed_at: 2026-08-31T14:05
+  waiting_on: null
   parent_id: null
   notes: Save every chunk fully to disk like Bedrock LevelDB / Java region (palette + bitpack per 16x16x16 x24 for 384) not
     edits diff. After chunk becomes partially generated, always saved entirely. Fixes r=50 10k GENMS wall, revisits don't

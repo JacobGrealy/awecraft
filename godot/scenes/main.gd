@@ -7,6 +7,7 @@ const AtlasScript = preload("res://core/atlas.gd")
 const DayNight = preload("res://core/daynight.gd")
 const MenuRes = preload("res://scenes/menu.tscn")
 const AeroLib = preload("res://core/aero.gd")
+const ChunkIO = preload("res://core/chunk_io.gd")  # AC-0155
 
 var world: Node3D
 var camera: Camera3D
@@ -1131,6 +1132,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			return
 		if logic == "bandmap":
 			await _bandmap_test(spawn)
+			return
+		if logic == "chunkio":
+			await _chunkio_test(spawn)
 			return
 		if logic == "genhash":
 			_genhash_print(seed_env)
@@ -8330,6 +8334,135 @@ func _bm_quad_count(c) -> int:
 				for si in m.get_surface_count():
 					n += int(m.surface_get_arrays(si)[Mesh.ARRAY_INDEX].size()) / 6
 	return n
+
+
+func _chunkio_wait(diamond: Array, limit: int) -> int:
+	var w := 0
+	while w < limit:
+		var ready := 0
+		for dc in diamond:
+			var c = world.chunks.get("%d,%d" % [dc[0], dc[1]])
+			if c != null and not c.data.is_empty():
+				ready += 1
+		if ready == diamond.size():
+			return w
+		await get_tree().physics_frame
+		w += 1
+	return w
+
+func _chunkio_hash(diamond: Array) -> Dictionary:
+	var out := {}
+	for dc in diamond:
+		var c = world.chunks.get("%d,%d" % [dc[0], dc[1]])
+		if c == null or c.data.is_empty():
+			continue
+		var h := HashingContext.new()
+		h.start(HashingContext.HASH_MD5)
+		h.update(c.data)
+		var md: PackedByteArray = h.finish()
+		var hx := ""
+		for i in range(16):
+			hx += "%02x" % md[i]
+		out["%d,%d" % [dc[0], dc[1]]] = hx
+	return out
+
+func _chunkio_file_count(diamond: Array, slot: int) -> int:
+	var n := 0
+	for dc in diamond:
+		if FileAccess.file_exists(ChunkIO.path_for(slot, 1 if dc[0] < 0 else 0, dc[0], dc[1])):
+			n += 1
+	return n
+
+# AC-0155 probe: full-column save round-trip in one process. Fresh r=4 41-set
+# generated (first visit) -> hash -> recenter far (evict, files written) ->
+# recenter back (41 read from disk, byte-identical, GENMS 0) -> r=50 revisit
+# (saved chunks served from disk, no re-gen). Headless, wall <= 60 s.
+func _chunkio_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var SLOT := 0
+	Save.active_slot = SLOT
+	ChunkIO.clear_dir(SLOT)
+	world.fluid_sim_enabled = false
+	var diamond := []
+	for dx in range(-4, 5):
+		for dz in range(-4, 5):
+			if absi(dx) + absi(dz) <= 4:
+				diamond.append([dx, dz])
+	var diamond_n := diamond.size()
+	# Phase A: fresh r=4 first visit.
+	world.render_radius = 4
+	world.recenter(spawn.x, spawn.z, true)
+	await _chunkio_wait(diamond, 900)
+	var gen_a: int = world.gen_count
+	var disk_a: int = world.disk_reads
+	var hashes := _chunkio_hash(diamond)
+	# Phase B: recenter far twice -> the 41 evict -> files written.
+	world.recenter(1000.0, 1000.0, true)
+	for i in 30:
+		await get_tree().physics_frame
+	world.recenter(1000.0, 1000.0, true)
+	var files_waited := 0
+	while files_waited < 2400 and _chunkio_file_count(diamond, SLOT) < diamond_n:
+		await get_tree().physics_frame
+		files_waited += 1
+	var files_exist := _chunkio_file_count(diamond, SLOT)
+	# Phase C: revisit r=4 -> 41 read from disk.
+	world.render_radius = 4
+	world.recenter(spawn.x, spawn.z, true)
+	await _chunkio_wait(diamond, 900)
+	var byte_identical := 0
+	var origin_disk := 0
+	var origin_gen := 0
+	var hashes_c := _chunkio_hash(diamond)
+	for dc in diamond:
+		var key := "%d,%d" % [dc[0], dc[1]]
+		if hashes_c.get(key) == hashes.get(key):
+			byte_identical += 1
+		var o = world.chunk_origin.get(key)
+		if o == "disk":
+			origin_disk += 1
+		elif o == "gen":
+			origin_gen += 1
+	var gen_delta_c: int = world.gen_count - gen_a
+	var disk_delta_c: int = world.disk_reads - disk_a
+	# Phase D: free the 41, then r=50 revisit -> served from disk.
+	world.render_radius = 4
+	world.recenter(1000.0, 1000.0, true)
+	for i in 30:
+		await get_tree().physics_frame
+	world.recenter(1000.0, 1000.0, true)
+	for i in 30:
+		await get_tree().physics_frame
+	world.render_radius = 50
+	world.recenter(spawn.x, spawn.z, true)
+	await _chunkio_wait(diamond, 1200)
+	var d50_disk := 0
+	var d50_gen := 0
+	for dc in diamond:
+		var o = world.chunk_origin.get("%d,%d" % [dc[0], dc[1]])
+		if o == "disk":
+			d50_disk += 1
+		elif o == "gen":
+			d50_gen += 1
+	var wall := Time.get_ticks_msec() - t0
+	var ok := files_exist == diamond_n and byte_identical == diamond_n and origin_disk == diamond_n and origin_gen == 0 and d50_disk == diamond_n and d50_gen == 0 and wall <= 60000
+	Debug.result({
+		"ok": ok,
+		"wall_ms": wall,
+		"diamond": diamond_n,
+		"files_exist": files_exist,
+		"byte_identical": byte_identical,
+		"origin_disk": origin_disk,
+		"origin_gen": origin_gen,
+		"gen_delta_c": gen_delta_c,
+		"disk_delta_c": disk_delta_c,
+		"phaseA": {"gen": gen_a, "disk": disk_a},
+		"r50": {"disk": d50_disk, "gen": d50_gen},
+		"disk_reads_total": world.disk_reads,
+		"disk_read_ms": world.disk_read_ms,
+		"gen_count_total": world.gen_count,
+	})
+	get_tree().quit()
 
 
 func _bandmap_test(spawn: Vector3) -> void:

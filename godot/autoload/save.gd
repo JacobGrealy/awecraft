@@ -2,7 +2,8 @@ extends Node
 
 const SLOTS := 3
 const BASE := "user://awecraft_save"
-const SAVE_VERSION := 2
+const SAVE_VERSION := 3  # AC-0155: full-chunk-save era (load validates by shape, not version)
+const ChunkIO = preload("res://core/chunk_io.gd")  # AC-0155
 
 var active_slot := -1
 
@@ -111,6 +112,7 @@ func clear(slot: int) -> void:
 	var p := _path(int(slot))
 	if FileAccess.file_exists(p):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
+	ChunkIO.clear_dir(int(slot))  # AC-0155: drop the slot's saved columns too
 
 
 func format_time(t: float) -> String:

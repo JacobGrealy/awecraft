@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0155 results — full-chunk-save-not-edits</title>
+<style>
+ body { font: 14px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace; margin: 2rem auto; max-width: 1050px; color: #1c2330; }
+ h1 { font-size: 1.35rem; border-bottom: 3px solid #2b6cb0; padding-bottom: .4rem; }
+ h2 { font-size: 1.05rem; margin-top: 1.6rem; color: #2b6cb0; }
+ table { border-collapse: collapse; width: 100%; margin: .6rem 0; }
+ th, td { border: 1px solid #cbd5e0; padding: 4px 8px; text-align: left; vertical-align: top; font-size: 13px; }
+ th { background: #edf2f7; }
+ .ok { color: #166534; font-weight: bold; }
+ .warn { color: #92400e; font-weight: bold; }
+ .note { background: #fffbeb; border-left: 4px solid #d69e2e; padding: .5rem .8rem; margin: .6rem 0; }
+ code { background: #edf2f7; padding: 1px 4px; border-radius: 3px; }
+ img { max-width: 100%; border: 1px solid #cbd5e0; margin: .4rem 0; }
+ .small { font-size: 12px; color: #4a5568; }
+ pre { background:#f4f4f4; padding:8px; border-radius:6px; overflow:auto; font-size:12px; }
+</style>
+</head>
+<body>
+
+<h1>AC-0155 — full-chunk-save-not-edits · results · 2026-08-31</h1>
+
+<div class="note"><b>Verdict: DONE — all light gates green.</b> Full-column (16×384×16) save/restore is
+implemented, measured, and gated. Writes happen on evict only (amortized 1–2 columns/frame); revisits
+read the column from disk and never re-run the generator. The coordinator re-runs the heavy gates
+(r50 boundary walk + Windows build) + commit/push after this exit.</div>
+
+<h2>1. What shipped</h2>
+<ul>
+  <li><b>NEW <code>godot/core/chunk_io.gd</code></b> — static codec for one full column. Per 16³ subchunk:
+    a palette (≤256) + bits-per-cell + a word-accumulator bitpack, with an <code>n==1</code> uniform-subchunk
+    fast path (writes 512 zero bytes, skips the 4096-iter packer). Column = 24 subchunks + the <code>fl</code>
+    fluid-level array (256 levels × 256 columns). File = <code>[u32 raw_size][deflate(blob)]</code>; blob =
+    <code>"AWCC"</code> + version(1) + u32 seed + u16 height + u16 sub + u32 data_len + data + u32 fl_len + fl +
+    16-byte MD5. Decode validates magic / version / seed / height / sizes / MD5 and returns <code>{}</code> on any
+    mismatch (wrong-seed and wrong-height columns are rejected — verified). Statics: <code>dir_for</code> /
+    <code>path_for</code> / <code>ensure_dir</code> / <code>clear_dir</code> / <code>encode_column</code> / <code>decode_column</code>.</li>
+  <li><b><code>godot/world/world.gd</code></b> — write-on-evict + disk-first read at every data-landing point:
+    <ul>
+      <li>Counters <code>disk_reads</code> / <code>disk_read_ms</code> / <code>gen_count</code> / <code>gen_ms_total</code> +
+          <code>chunk_origin</code> map (<code>"disk"</code>|<code>"gen"</code>) so the probe can prove provenance.</li>
+      <li><code>_try_disk_load</code> (file_exists → read → decode → set data/fl, guarded by <code>Save.active_slot &lt; 0</code>)
+          and <code>_materialize_chunk_data</code> (disk-first, else sync-gen) used by <code>create_chunk</code>, the recenter
+          (0,0) sync path, and the recenter 5×5 burst construction (disk-first before enqueueing the gen worker).</li>
+      <li>Drain data-pick is disk-first (one 20 ms inflate/frame via <code>_gen_last_disk</code>); <code>threadgen_handoff</code>
+          and <code>_startup_gen_apply</code> bump <code>gen_count</code> + origin.</li>
+      <li>Evict path: the recenter <code>to_free</code> loop calls <code>_queue_chunk_save</code> (duplicates data+fl) before
+          <code>erase</code>/<code>queue_free</code>; <code>_process</code> drains the queue 1–2 columns/frame (main-thread only;
+          pure stubs — empty data — are never written).</li>
+    </ul></li>
+  <li><b><code>godot/autoload/save.gd</code></b> — <code>SAVE_VERSION</code> 2→3 (load stays shape-validated, not version-gated,
+      so v2 JSON saves still load); <code>clear(slot)</code> now also wipes the slot's <code>chunkdir_N</code>.</li>
+  <li><b><code>godot/scenes/main.gd</code></b> — new <code>AWECRAFT_LOGIC=chunkio</code> harness arm (<code>_chunkio_test</code>) —
+      env-gated, headless, wall ≤ 60 s (below).</li>
+</ul>
+
+<h2>2. Gates (light — run by the implementer; logs in <code>.scratch/AC-0155-gates/</code>)</h2>
+<table>
+  <tr><th>gate</th><th>requirement</th><th>result</th><th></th></tr>
+  <tr><td>G0</td><td>exit 0, zero SCRIPT ERROR</td><td>exit 0, 0 errors (final state)</td><td class="ok">PASS</td></tr>
+  <tr><td>chunkio (new)</td><td>fresh r=4 41-set → evict → files exist → revisit re-reads byte-identical, GENMS 0 for the 41-set; r50 revisit served from disk; wall ≤ 60 s</td>
+      <td><code>ok:true</code>, wall 33.7 s, 41/41 files, 41/41 byte-identical, r4 revisit <code>origin_disk:41 origin_gen:0</code>, r50 <code>disk:41 gen:0</code>, phaseA <code>gen:54 disk:0</code></td><td class="ok">PASS</td></tr>
+  <tr><td>SMOKE (player;interact;light;fluids;genhash)</td><td>exact standing values; genhash 25/25 byte-identical to baseline</td>
+      <td>player 135.43/136.78 · interact place_ok true/2 · light 15/10/14/9 · fluids 2756/2756 + 914/914 stable + 25/9 · genhash 25/25 (only the GENMS timing line differs) · final <code>ok:true</code></td><td class="ok">PASS</td></tr>
+  <tr><td>save</td><td>arms unchanged; v1 soft-fail + slot isolation</td>
+      <td><code>ok:true</code>, blocks 6/6, unedited 4/4, iso_ok, v1_softfail true</td><td class="ok">PASS</td></tr>
+  <tr><td>continue</td><td>arm unchanged; saved chunk rebuilt at spawn</td>
+      <td>edits_ok / pos_ok / save_settled / saved_chunk_built_at_spawn / col_body_at_spawn all true; fell_after_30f false</td><td class="ok">PASS</td></tr>
+  <tr><td>render (xvfb, gl_compatibility, R=1)</td><td>exactly one PNG under <code>tasks/AC-0155/</code></td>
+      <td><code>render_R1.png</code> 1280×720 RGBA, <code>m4:ok</code> — world renders clean (grass/tree/water/stone/HUD)</td><td class="ok">PASS</td></tr>
+</table>
+
+<div class="small">
+<b>chunkio RESULT (verbatim):</b>
+<pre>{"byte_identical":41,"diamond":41,"disk_delta_c":53,"disk_read_ms":2302.143,"disk_reads_total":106,"files_exist":41,"gen_count_total":72,"gen_delta_c":17,"ok":true,"origin_disk":41,"origin_gen":0,"phaseA":{"disk":0,"gen":54},"r50":{"disk":41,"gen":0},"wall_ms":33687}</pre>
+<b>Read-out:</b> phase A (fresh r=4) = 54 gen / 0 disk (first visit, nothing on disk). Phase B (recenter far
+×2) writes all 41 columns. Phase C (revisit r=4) re-reads all 41 from disk: <b>41/41 byte-identical</b> (MD5 of the
+98304-byte column) and <b>origin 41 disk / 0 gen</b> for the 41-set — the "second-visit GENMS 0" assertion.
+<code>gen_delta_c:17</code> is the <i>global</i> counter (other band-1/ring chunks streamed in during phase C, not the 41).
+Phase D (r=50 revisit) serves all 41 from disk (<code>disk:41 gen:0</code>). <code>disk_read_ms</code> 2302 ms over 106 reads ≈
+21.7 ms/read — consistent with the codec benchmark.
+</div>
+
+<h2>3. Documented deviations / notes</h2>
+<table>
+  <tr><th>item</th><th>note</th></tr>
+  <tr><td class="warn">Battery-as-one-run is slow on this box (275 s total)</td>
+      <td>All 5 modes still emit the <b>exact</b> standing values and the final RESULT is <code>ok:true</code>. The wall time is
+      inter-mode <code>_await_world_build</code> mesh-drain waits (each up to the 3000-frame cap) under headless/llvmpipe load.
+      Not an AC-0155 regression: the battery never evicts a chunk, so the new save queue is a no-op in that run
+      (save-queue only fills on the recenter <code>to_free</code> path, which the battery does not hit). A single arm runs
+      at its normal pace (fluids standalone 15 s).</td></tr>
+  <tr><td class="warn">Boundary walk p95 expected to move up (coordinator's heavy gate)</td>
+      <td>Write-on-evict drains 1–2 columns/frame at ~26 ms encode each. On a walking r4 walk the evict rate is
+      low, so the amortized cost is a small upward drift on p95 (old band ≈ 54 ms). This is the intended
+      amortization — no per-frame sync write. The coordinator measures the final p95.</td></tr>
+  <tr><td>Codec cost (measured, this box)</td>
+      <td>~26 ms encode / ~20 ms decode per 16×384×16 column (98304 B data + 256 fl), ~8.3 KB compressed file,
+          lossless. The <code>n==1</code> uniform-subchunk fast path (most subchunks at surface height) is what keeps
+          encode out of the 36–51 ms dict-palette range.</td></tr>
+  <tr><td>Engine API facts (Godot 4.7.1, empirical)</td>
+      <td><code>compress()</code> round-trips only for int modes 0–3 (SPEED/SIZE/FAST/NORMAL); modes 4/7/8/9
+          (MAX/ZLIB/DEFLATE/GZIP) fail → <code>MODE := 0</code>. <code>CompressionMode</code> is <b>not</b> a GDScript-visible global
+          (parse error in real project context) → int literal. MD5 via a <code>HashingContext</code> instance
+          (<code>start(HASH_MD5)</code>/<code>finish()</code>, 16-byte return) — no static API, no <code>final_md5()</code>.</td></tr>
+  <tr><td>Revisit recenter does a synchronous 5×5 disk-load</td>
+      <td>The recenter burst construction disk-loads the 5×5 (≤25 columns × ~20 ms ≈ 500 ms) in one frame.
+          One-time per recenter-to-a-saved-area; a known limit (no paced read on that path). Not in the gate set;
+          noted so the coordinator can chase a paced variant if the hitch matters in play.</td></tr>
+  <tr><td>Pre-existing non-fatal noise (not from AC-0155)</td>
+      <td><code>Invalid Task ID</code> (engine, recenter <code>is_task_completed</code>) and AC-0137-class
+          <code>threadgen_handoff</code> Nil→PackedByteArray transients (1–2/run here) — documented in §00o/§00n as
+          pre-existing, stash-verified. The <code>Invalid Task ID</code> burst also appears in the chunkio run (non-fatal).</td></tr>
+</table>
+
+<h2>4. Files changed</h2>
+<table>
+  <tr><th>file</th><th>change</th></tr>
+  <tr><td><code>godot/core/chunk_io.gd</code> <b>(new)</b></td><td>full-column codec (palette+bitpack per subchunk, zlib, versioned, MD5, seed/height validation) + dir/path/clear/encode/decode statics</td></tr>
+  <tr><td><code>godot/world/world.gd</code></td><td>counters + origin map; <code>_try_disk_load</code>/<code>_materialize_chunk_data</code>; disk-first in create_chunk / recenter(0,0) / recenter 5×5 burst / drain; write-on-evict queue in the <code>to_free</code> loop; <code>_process</code> drain (1–2/frame); handoff + startup-gen <code>gen_count</code>/origin</td></tr>
+  <tr><td><code>godot/autoload/save.gd</code></td><td><code>SAVE_VERSION</code> 2→3; <code>clear(slot)</code> wipes <code>chunkdir_N</code>; <code>ChunkIO</code> preload</td></tr>
+  <tr><td><code>godot/scenes/main.gd</code></td><td><code>AWECRAFT_LOGIC=chunkio</code> dispatch arm + <code>_chunkio_test</code> + helpers; <code>ChunkIO</code> preload</td></tr>
+  <tr><td><code>tasks/AC-0155/render_R1.png</code> <b>(new)</b></td><td>R=1 render evidence (gl_compatibility, xvfb)</td></tr>
+</table>
+
+<div class="small">
+Render evidence (R=1, default first-person at spawn — grass/tree/water/stone + HUD, clean):
+<br><img src="render_R1.png" alt="R=1 render">
+<br>Gate logs: <code>.scratch/AC-0155-gates/</code> (g0_final.log, smoke2.log, fluids_solo.log, genhash_new.txt, save.log, continue.log, render.log, chunkio output captured in this file).
+</div>
+
+</body>
+</html>
