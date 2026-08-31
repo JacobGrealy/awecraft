@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-08-30T20:47
+  updated_at: 2026-08-30T21:12
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -4812,4 +4812,36 @@ intake:
     world→ship over 2s after >500m alt. Not airtight v1 (open deck still breathable). Owner streams pos/vel @10Hz + TileEntity
     ticks, others interpolate; docked = no stream. Per-ship relay jump (fuel split if co-jump). Gates: any-size frame validates,
     flood-fill finds blob, any block ticks while flying, walkable interior in space, dock↔undock, owner stream.'
+  comments: []
+- id: AC-0162
+  title: jetpack-equipment-gameplay
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-30T21:12
+  updated_at: 2026-08-30T21:12
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User story: As a player I want a chest-slot jetpack that helps building and short-range traversal without breaking
+    the Minecraft gather→scaffold→bridge→explore loop.
+
+
+    Technical details: Chest-slot equipment (like Elytra), X toggle, space hold to ascend / shift descend. Gameplay-first:
+    Burst early (3x ~8s charges, coal refuel, ~30-block hop for face/seam ridges, fall arrest at 26 grav), Stratus/hover late
+    only after first Drydock launch and planet 2 (diamond+membrane, ~10s hold for building Drydock frames without dirt pillars).
+    Fuel = durability + Fuel Canister block (any block on ship refuels when docked), heat caps hold time. Short-range ~500m
+    personal vs ship 25km inter-planet (ship = any block haul, fuel split co-jump). Walkable ship interior: hover lets you
+    re-anchor after barrel roll (down=-ship_up). Gated like Elytra — F-fly in AC-0145 stays debug only; sustained hover not
+    before AC-0161 ships. Gates: burst doesn''t trivialize scaffold/bridging, hover only late, fall arrest forgiving off ship
+    deck.
+
+
+    Backlog (not queued) — decide queue after AC-0161 ships proven. Ref: plan §7 ship-local grav.
+
+    '
   comments: []
