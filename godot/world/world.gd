@@ -3,6 +3,7 @@ extends Node3D
 const ChunkScript = preload("res://world/chunk.gd")
 const DropScript = preload("res://entities/drop.gd")
 const ChunkIO = preload("res://core/chunk_io.gd")  # AC-0155
+const LoadingScreen = preload("res://ui/loading_screen.gd")  # AC-0178
 
 const LIGHT_NEIGHBOR := 1
 const FLUSH_FRAME_BUDGET_MS := 40
@@ -10,6 +11,32 @@ const FLUSH_MAX_PER_FRAME := 2
 # AC-0126: the edit (post-break) flush staggers remeshes 1/frame on the
 # AC-0107 worker path; FLUSH_MAX_PER_FRAME stays for _drain_tex_refresh.
 const EDIT_FLUSH_MAX_PER_FRAME := 1
+# AC-0178: loading-screen bypass caps (active ONLY while loading_active):
+# the drain's per-frame unit/time budgets, the in-flight pool caps, and the
+# flush remesh caps. Steady state keeps every legacy constant.
+const LOAD_DRAIN_UNITS := 1000000
+# Per-frame drain time budget while loading: bounded so the frame yields and
+# the polls (the handoffs) keep running — an unbounded block starved the
+# worker pools between dispatch waves (measured: 2.6 s frames, ~80% pool idle).
+const LOAD_DRAIN_BUDGET_MS := 300
+# TG in-flight cap while loading (low-priority share = 3 of 6 pool threads;
+# 24 deep = ~8 waves of queue, the pool never sees an empty queue).
+const LOAD_TG_CAP := 24
+# TM in-flight cap while loading: 64 = ~11 waves of 6-thread work — the pool
+# stays saturated across the main thread's poll/dispatch cadence.
+const LOAD_TM_CAP := 64
+# AC-0178: TM handoff batch cap per frame while loading. Each handoff's
+# _eff_landed face-block refresh is ~70 ms avg (0.4-1.0 s tail on the first
+# landing wave); a full batch blocked the main thread 1-2.5 s and let the
+# pool queue drain to idle between dispatch waves (~40% pool idle measured).
+# 6/frame keeps the frame bounded; the inflight gate oscillates at the
+# handoff rate so the pool queue stays deep.
+const LOAD_TM_HANDOFF := 6
+const LOAD_POOL_CAP := 24
+# AC-0178: flush/tex remesh caps while loading — 6 (was 16): each dispatch
+# is ~45 ms of main-thread strip work, 16/frame = 0.7 s of one frame.
+const LOAD_FLUSH_MAX_PER_FRAME := 6
+const LOAD_SAVE_PER_FRAME := 16
 # AC-0158: Bedrock Realms simulation clock — 20 Hz game tick (0.05 s).
 # Replaces the 5 Hz fluid Timer: fluids run inside the game tick, and the
 # random-tick pass (1 per 16x16x16 subchunk) keys off the tick index.
@@ -218,6 +245,23 @@ var threadmesh := false
 var threadmesh_max := 3
 var threadmesh_pool = null
 var threadmesh_inflight: Array = []
+# AC-0178: loading-screen state. loading_bypass comes from AWECRAFT_LOADBYPASS
+# (headless A/B override: "0" = never enter the loading window, i.e. the
+# legacy spread drain). While loading_active the drain/flush/save/I/O caps
+# below are raised; stop_loading() restores the normal caps byte-for-byte.
+var loading_bypass := true
+var loading_active := false
+# AC-0178: set in _exit_tree before the poll drain — a TG null-result retry
+# must NOT re-enqueue at shutdown (the slot maps are cleared right after the
+# drain; a retry task would spin its slot-spin, drop a null result, and
+# re-enqueue forever past the drain cap).
+var _shutting_down := false
+var _load_done_once := false
+var _loading_target := 0
+var _loading_radius := 0
+var _loading_screen = null
+var _tg_max_norm := 3
+var _tm_max_norm := 3
 var _tm_slots = {}
 var _tm_inflight_keys: Dictionary = {}
 var _tm_ctx: Dictionary = {}
@@ -370,6 +414,15 @@ func _ready() -> void:
 	_cull_enabled = OS.get_environment("AWECRAFT_FRUSTUM_CULL") != "0" and OS.get_environment("AWECRAFT_ONLY") == ""
 	tick_time = OS.get_environment("AWECRAFT_TICKTIME") == "1"
 	_fluidprobe = OS.get_environment("AWECRAFT_FLUIDPROBE") == "1"
+	# AC-0178: loading-screen wiring. Bypass override for the headless A/B
+	# probe (default ON); remember the normal pool caps; build the UI node
+	# (hidden; harmless headless — never awaited).
+	loading_bypass = OS.get_environment("AWECRAFT_LOADBYPASS") != "0"
+	_tg_max_norm = threadgen_max
+	_tm_max_norm = threadmesh_max
+	_loading_screen = LoadingScreen.new()
+	_loading_screen.name = "LoadingScreen"
+	add_child(_loading_screen)
 	Game.world = self
 	# AC-0158: splitmix64 constants — built from 32-bit halves (GDScript has
 	# no hex literal > 2^63-1); int arithmetic wraps mod 2^64.
@@ -385,26 +438,38 @@ func _exit_tree() -> void:
 	# cleanup deadlocks (observed: post-RESULT exit hang, ~40% of ON-arm runs,
 	# OFF arm clean). Bounded wait — if the pool ever wedges, continue the
 	# shutdown after the cap instead of hanging the exit.
+	# AC-0178: the wait is now a POLL DRAIN, not an is_task_completed poll:
+	# (1) the old loop checked TM task ids against THREADGEN_POOL (wrong pool:
+	# "Invalid Task ID" at every exit, the 1000 ms cap always consumed);
+	# (2) at the loading window's depths (64 TM + 24 TG) the 1000 ms cap is
+	# far too short — a 64-deep queue needs ~4-10 s to drain, and any task
+	# still QUEUED when this node frees starts its worker AFTER the free:
+	# the worker's bound Callable then hits the dangling ObjectID (segfault
+	# at shutdown — measured once: EXIT=139 at the 45-min cap with 58 TM in
+	# flight). Draining via the real polls hands each task off on the live
+	# node and empties the pool queue before the free; the 20 s cap covers
+	# 64 x 1.0 s outlier builds / 6 threads + the TG share with margin.
+	_shutting_down = true
 	if threadgen_pool != null:
 		var waited := 0
-		while waited < 1000 and (not threadgen_inflight.is_empty() or not threadmesh_inflight.is_empty() or not _io_read_inflight.is_empty() or not _io_write_inflight.is_empty()):
-			var any_pending := false
-			for e in threadgen_inflight:
-				if not threadgen_pool.is_task_completed(int(e["tid"])):
-					any_pending = true
-			for e in threadmesh_inflight:
-				if not threadgen_pool.is_task_completed(int(e["tid"])):
-					any_pending = true
-			for e in _io_read_inflight:
-				if not io_pool.is_task_completed(int(e["tid"])):
-					any_pending = true
-			for e in _io_write_inflight:
-				if not io_pool.is_task_completed(int(e["tid"])):
-					any_pending = true
-			if not any_pending:
-				break
+		while waited < 20000 and (not threadgen_inflight.is_empty() or not threadmesh_inflight.is_empty() or not _io_read_inflight.is_empty() or not _io_write_inflight.is_empty()):
+			threadgen_poll()
+			threadmesh_poll()
+			io_poll()
 			OS.delay_msec(1)
 			waited += 1
+	# AC-0178: consume the 5x5 burst GROUP tasks. Godot frees a group's Group
+	# object only via wait_for_group_task_completion — the burst is otherwise
+	# never consumed (the drain holds builds until the burst lands, nothing
+	# waits on the group) and it leaks at exit: "Pages in use exist at exit
+	# in PagedAllocator: N16WorkerThreadPool5GroupE". A still-running burst
+	# finishes its remaining elements first (bounded: 24 x ~165 ms / 3-wide
+	# ~= 1.3 s worst case) — the pool is torn down right after, so the wait
+	# can't hang the exit any longer than the burst itself.
+	if threadgen_pool != null and not _startup_gen_group_tids.is_empty():
+		for _t in _startup_gen_group_tids:
+			threadgen_pool.wait_for_group_task_completion(int(_t))
+		_startup_gen_group_tids.clear()
 	threadgen_inflight.clear()
 	threadmesh_inflight.clear()
 	_tg_slots.clear()
@@ -566,6 +631,9 @@ func _cull_set_vis(s, vis: bool) -> void:
 func _process(_delta: float) -> void:
 	_game_tick_accumulate(_delta)  # AC-0158: 20 Hz game tick (simulation clock)
 	_drain_save_queue()  # AC-0155: amortized full-column writes (1-2/frame)
+	# AC-0178: BEFORE the idle early-return — the completion state IS the
+	# all-idle state, so the check must not sit behind that return.
+	_loading_tick()
 	# AC-0160: keep the worker ctx in sync with the atlas identity. If Data
 	# bakes/loads the atlas after World._ready captured the ctx (or a
 	# texture-pack swap re-bakes it), the stale ctx (has_tex=false,
@@ -620,8 +688,10 @@ func _process(_delta: float) -> void:
 		var built := 0
 		var spun := 0
 		var max_spin := light_pending.size()
-		while built < EDIT_FLUSH_MAX_PER_FRAME and not light_pending.is_empty():
-			if built > 0 and Time.get_ticks_msec() - t0 > FLUSH_FRAME_BUDGET_MS:
+		# AC-0178: loading window — no FLUSH_FRAME_BUDGET_MS / 1-per-frame cap.
+		var flush_cap := LOAD_FLUSH_MAX_PER_FRAME if loading_active else EDIT_FLUSH_MAX_PER_FRAME
+		while built < flush_cap and not light_pending.is_empty():
+			if built > 0 and not loading_active and Time.get_ticks_msec() - t0 > FLUSH_FRAME_BUDGET_MS:
 				break
 			var key2: String = light_pending.pop_front()
 			light_pending_set.erase(key2)
@@ -686,8 +756,10 @@ func _drain_tex_refresh() -> void:
 		return
 	var t0 := Time.get_ticks_msec()
 	var done := 0
-	while done < FLUSH_MAX_PER_FRAME and not tex_refresh.is_empty():
-		if done > 0 and Time.get_ticks_msec() - t0 > FLUSH_FRAME_BUDGET_MS:
+	# AC-0178: loading window — raise the cap + drop the 40 ms budget.
+	var tex_cap := LOAD_FLUSH_MAX_PER_FRAME if loading_active else FLUSH_MAX_PER_FRAME
+	while done < tex_cap and not tex_refresh.is_empty():
+		if done > 0 and not loading_active and Time.get_ticks_msec() - t0 > FLUSH_FRAME_BUDGET_MS:
 			break
 		var key = tex_refresh.pop_back()
 		var c: Node3D = chunks.get(key)
@@ -701,6 +773,85 @@ func _drain_tex_refresh() -> void:
 		if not _mesh_dispatch(c, int(c.cx), int(c.cz), c.last_eff, false):
 			tex_refresh.push_back(key)
 		done += 1
+
+# --- AC-0178: loading window (first spawn / render-distance change) --------
+
+# Entry. No-op when AWECRAFT_LOADBYPASS=0 (the legacy spread drain). Raises
+# the in-flight caps + drain budgets (each site checks loading_active) and
+# shows the screen. Target = the render circle's column count (band 3 is
+# data-only, never meshed — it is excluded by construction).
+func start_loading(title: String) -> void:
+	if not loading_bypass:
+		return
+	loading_active = true
+	_loading_target = circle_count()
+	_loading_radius = render_radius
+	# AC-0178: saturate the 6-thread pool — TG keeps its low-priority 3-thread
+	# share (gen feeds the mesh builds, which take the 6 high-priority
+	# threads); the in-flight DEPTHS are the saturation (the pool queue must
+	# never go empty while loading).
+	threadgen_max = LOAD_TG_CAP
+	threadmesh_max = LOAD_TM_CAP
+	if _loading_screen != null:
+		_loading_screen.show_loading(_loading_target, title)
+
+# Exit. Restores every cap the entry raised — steady state is byte-for-byte
+# the legacy throttles.
+func stop_loading() -> void:
+	if not loading_active:
+		return
+	loading_active = false
+	_load_done_once = true
+	threadgen_max = _tg_max_norm
+	threadmesh_max = _tm_max_norm
+	if _loading_screen != null:
+		_loading_screen.hide_screen()
+
+# AC-0178: called from Settings.apply_render_distance (the Options path).
+# Re-enters the loading window on a real radius change after the first load
+# completed. New-world boot + later Options changes only: the continue and
+# harness flows never run start_game, so _load_done_once stays false and this
+# is a no-op there.
+func note_render_distance(prev: int) -> void:
+	if _load_done_once and int(prev) != render_radius:
+		start_loading("Loading render distance %d" % render_radius)
+
+func circle_count() -> int:
+	var n := 0
+	for dx in range(-render_radius, render_radius + 1):
+		for dz in range(-render_radius, render_radius + 1):
+			if in_render_circle(dx, dz):
+				n += 1
+	return n
+
+# Meshed columns of the current render circle (progress evidence from the
+# chunk nodes themselves — no shadow counters to drift).
+func meshed_in_circle() -> int:
+	var n := 0
+	for dx in range(-render_radius, render_radius + 1):
+		for dz in range(-render_radius, render_radius + 1):
+			if not in_render_circle(dx, dz):
+				continue
+			var c = chunks.get(_key(last_pcx + dx, last_pcz + dz))
+			if c != null and c.mesh_built:
+				n += 1
+	return n
+
+# Per-frame: refresh the UI from the real provenance counters, then test the
+# completion predicate — circle fully meshed and both worker pools drained.
+func _loading_tick() -> void:
+	if not loading_active:
+		return
+	# A radius change mid-load (Options over a paused load) re-anchors the
+	# target instead of stalling on the stale one.
+	if render_radius != _loading_radius:
+		_loading_radius = render_radius
+		_loading_target = circle_count()
+	var m := meshed_in_circle()
+	if _loading_screen != null:
+		_loading_screen.update_progress(m, _loading_target, disk_reads, gen_count)
+	if m >= _loading_target and threadmesh_inflight.is_empty() and threadgen_inflight.is_empty():
+		stop_loading()
 
 func _convert_data_to_build(key: String) -> void:
 	for b in range(band_buckets.size()):
@@ -907,7 +1058,19 @@ func threadgen_enqueue(cx: int, cz: int, key: String, inst: int) -> void:
 func _threadgen_worker() -> void:
 	var tid = threadgen_pool.get_caller_task_id()
 	var entry = _tg_slots.get(tid)
+	# AC-0178: the slot is set a couple of statements AFTER add_task returns;
+	# a worker preempting in that window used to see no slot and return with
+	# NO result -> null handoff (AC-0137-class SCRIPT ERROR + a stranded
+	# column; 4 hits in the 30-min pre-fix probe). Spin until the slot
+	# appears; giving up still lands in the threadgen_poll re-enqueue below.
+	var ns := 0
+	while entry == null and ns < 2000:
+		OS.delay_msec(1)
+		entry = _tg_slots.get(tid)
+		ns += 1
 	if entry == null:
+		if timing:
+			print("TGSPIN_GIVEUP tid=%d" % tid)  # AC-0178 diag (timing-gated)
 		return
 	var a: Array = entry["args"]
 	var wt := Time.get_ticks_msec()
@@ -972,7 +1135,21 @@ func threadgen_poll() -> void:
 			threadgen_inflight.remove_at(i)
 			_tg_inflight_keys.erase(e["key"])
 			_tg_slots.erase(tid)
-			threadgen_handoff(e, e.get("result", null))
+			var res = e.get("result", null)
+			if res == null or (res is PackedByteArray and res.size() == 0):
+				# AC-0178: the worker finished without a result (slot-spin
+				# gave up) — re-enqueue the gen instead of a null handoff
+				# (SCRIPT ERROR + stranded column). Dedup-safe: the key was
+				# just erased above, the chunk is still data-empty. At
+				# SHUTDOWN the world is being freed — drop instead of
+				# re-enqueue (see _shutting_down).
+				if _shutting_down:
+					continue
+				if _tg_debug:
+					print("TGEN RETRY %d,%d (no result)" % [int(e["cx"]), int(e["cz"])])
+				threadgen_enqueue(int(e["cx"]), int(e["cz"]), e["key"], int(e["inst"]))
+				continue
+			threadgen_handoff(e, res)
 			continue
 		i += 1
 
@@ -1038,8 +1215,19 @@ func _threadmesh_worker() -> void:
 func threadmesh_poll() -> void:
 	if threadmesh_inflight.is_empty():
 		return
+	# AC-0178: loading window — pace the handoff batch. Each handoff's
+	# _eff_landed face-block refresh costs ~70 ms avg (0.4-1.0 s tail on the
+	# first landing wave), so a full batch (up to LOAD_TM_CAP deep) blocks
+	# the main thread 1-2.5 s — long enough to let the pool's queue drain to
+	# idle between dispatch waves (measured ~40% pool idle). Capping the
+	# batch to LOAD_TM_HANDOFF/frame keeps the frame bounded; the inflight
+	# gate oscillates at the handoff rate so the pool queue stays deep
+	# (~LOAD_TM_CAP - lag - running) and the workers never starve.
+	var hb_max := LOAD_TM_HANDOFF if loading_active else 64
+	var hb_t0 := Time.get_ticks_usec() if timing else 0
+	var hb_n := 0
 	var i := 0
-	while i < threadmesh_inflight.size():
+	while i < threadmesh_inflight.size() and hb_n < hb_max:
 		var e: Dictionary = threadmesh_inflight[i]
 		var tid = int(e["tid"])
 		if threadmesh_pool.is_task_completed(tid):
@@ -1047,8 +1235,11 @@ func threadmesh_poll() -> void:
 			_tm_inflight_keys.erase(e["key"])
 			_tm_slots.erase(tid)
 			threadmesh_handoff(e, e.get("result", null))
+			hb_n += 1
 			continue
 		i += 1
+	if timing and hb_n > 0:
+		print("TMPOLL n=%d ms=%.1f t=%d" % [hb_n, (Time.get_ticks_usec() - hb_t0) / 1000.0, Time.get_ticks_msec()])  # AC-0178 diag (timing-gated)
 
 func _tm_retrigger(key: String, c: Node3D, e: Dictionary) -> void:
 	# A dropped result can't be applied: rebuild from current state.
@@ -1100,9 +1291,14 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 	c.apply_accs(res, _tm_ms_full)
 	perf_build_ms += Time.get_ticks_msec() - ta
 	perf_build_worker_ms += int(res.get("wms", 0))
+	var tb := Time.get_ticks_msec() if timing else 0  # AC-0178 diag (timing-gated)
 	_count_collision_build(c)
+	var tc := Time.get_ticks_msec() if timing else 0
 	_stage_check(c, key)
+	var td := Time.get_ticks_msec() if timing else 0
 	_eff_landed(c, old_eff, res.get("light", {}))
+	if timing:
+		print("TMH_PART %d,%d apply=%d col=%d stage=%d eff=%d t=%d" % [int(e["cx"]), int(e["cz"]), tb - ta, tc - tb, td - tc, Time.get_ticks_msec() - td, Time.get_ticks_msec()])  # AC-0178 diag (timing-gated)
 	if bool(e.get("eff_trust", true)):
 		_eff_cache_put(key, c.data, res.get("light", {}), e.get("ngen", null))
 	_tm_handoff += 1
@@ -1412,7 +1608,9 @@ func _drain_build_queue() -> void:
 	# TM cap below), landing in ~2.3 s.
 	if startup and _startup_gen_pending_n > 0:
 		return
-	var budget := 12 if startup else (2 if last_build_us < BUILD_FAST_US else 1)
+	# AC-0178: loading window — unbounded unit budget, LOAD_DRAIN_BUDGET_MS
+	# time budget (steady state: 2/1 units, drain_budget_ms).
+	var budget := LOAD_DRAIN_UNITS if loading_active else (12 if startup else (2 if last_build_us < BUILD_FAST_US else 1))
 	# AC-0160 run 2: the startup budget used to be 2x drain_budget_ms
 	# (60 ms) — but the spawn frame dispatches ALL nine 3x3 builds and each
 	# dispatch costs ~30-50 ms of main-thread strip/nbs work, so 60 ms cut
@@ -1427,17 +1625,110 @@ func _drain_build_queue() -> void:
 	# queue trends down continuously instead of stranding the far tail.
 	if _drain_win_b < 0:
 		_drain_win_b = b1_eff() + 2
-	if not startup:
+	if not startup and not loading_active:
 		_drain_win_acc += 1
 		if _drain_win_acc >= 15:
 			_drain_win_acc = 0
 			if _drain_win_b < _bucket_count() - 1:
 				_drain_win_b += 1
-	var maxb := mini(_drain_win_b, band_buckets.size() - 1)
+	# AC-0178: loading window — full window (no trickle growth limit).
+	var maxb := band_buckets.size() - 1 if loading_active else mini(_drain_win_b, band_buckets.size() - 1)
 	var gen_used_ms := 0
 	var units := 0
+	# AC-0178: cap the per-frame disk-read enqueues during the loading window
+	# (a render-distance change over a fully-saved area would otherwise
+	# enqueue thousands of cheap-but-main-threaded tasks in one frame).
+	var io_n0 := _io_read_inflight.size() if loading_active else 0
 	var px: float = Game.player.position.x if Game.player != null else 0.0
 	var pz: float = Game.player.position.z if Game.player != null else 0.0
+	# AC-0178: loading window — two independent feed phases per frame. The
+	# single steady-state loop below starves the TG pool while loading: the
+	# build-ready set is always non-empty (gen leads mesh), so the data pass
+	# (pass 2) never ran and gen froze at ~3/s while the mesh pool idled
+	# between dispatch waves (measured pre-fix: 3020/7845 gen'd in 30 min,
+	# the pools ~80% idle). Phase 1 dispatches builds until the TM depth
+	# (threadmesh_max = LOAD_TM_CAP) or the frame budget; phase 2 enqueues
+	# gen until the TG depth (threadgen_max = LOAD_TG_CAP) or the io cap.
+	# The frame is bounded (LOAD_DRAIN_BUDGET_MS) so the polls — the
+	# handoffs — run every frame and the in-flight counters stay fresh; the
+	# DEPTHS keep both pools saturated in between. Steady state: this block
+	# never runs; the loop below is the unchanged legacy path.
+	if loading_active:
+		var lp_t0 := Time.get_ticks_usec()
+		while Time.get_ticks_usec() - lp_t0 < LOAD_DRAIN_BUDGET_MS * 1000:
+			# Phase 1: nearest build-ready entry -> worker build. The
+			# per-iteration re-pick (fresh _collect_pool + re-score) keeps the
+			# dispatch order adaptive: as chunks land mid-frame their scores
+			# and _build_ready gates change, and a compact frontier keeps the
+			# E2 light-convergence wave from re-meshing (measured: a
+			# score-once snapshot order raised the full-load churn 1.3x ->
+			# 1.94x — ~5000 wasted re-meshes, a net ~10 min regression).
+			var lb: Array = _collect_pool(true, false, maxb)
+			var le: Dictionary = {}
+			var lc: Node3D = null
+			var ls := 1e30
+			for e in lb:
+				var c = chunks.get(e["key"])
+				if c == null or c.data.is_empty() or c.mesh_built:
+					continue
+				if not _build_ready(int(e["cx"]), int(e["cz"])):
+					continue
+				var s := _entry_score(e, last_pcx, last_pcz, px, pz)
+				if s < ls:
+					ls = s
+					le = e
+					lc = c
+			if lc == null:
+				break
+			if _build_unit(lc, int(le["cx"]), int(le["cz"])):
+				break  # TM depth reached — phase 2 feeds the TG pool now
+			_remove_entry(le)
+			units += 1
+		# Phase 2: nearest no-data entry -> TG pool (disk read first).
+		while threadgen_inflight.size() < threadgen_max:
+			var dp: Array = _collect_pool(false, false, maxb)
+			if dp.is_empty():
+				break
+			var de: Dictionary = {}
+			var ds := 1e30
+			for e in dp:
+				if _tg_inflight_keys.has(e["key"]):
+					continue
+				if _io_read_keys.has(e["key"]):
+					continue
+				if _spawn_fast:
+					continue
+				var s := _entry_score(e, last_pcx, last_pcz, px, pz)
+				if s < ds:
+					ds = s
+					de = e
+			if de.is_empty():
+				break
+			_advance_dq_past(int(de["cx"]), int(de["cz"]))
+			var cx: int = int(de["cx"])
+			var cz: int = int(de["cz"])
+			var c = chunks.get(de["key"])
+			if c == null:
+				if absi(cx - last_pcx) > render_radius + 1 or absi(cz - last_pcz) > render_radius + 1:
+					break  # stale out-of-radius candidate — leave it queued
+				stub_chunk(cx, cz)
+				c = chunks.get(de["key"])
+			if c == null or not c.data.is_empty():
+				break
+			_gen_unit(c, cx, cz)
+			units += 1
+			if _io_read_inflight.size() - io_n0 >= LOAD_POOL_CAP:
+				break  # one pool-width of disk reads per frame
+		if units > 0:
+			perf_build_units += units
+			perf_drain_frames += 1
+			var fm := (Time.get_ticks_usec() - t0) / 1000.0
+			if fm > perf_max_drain_ms:
+				perf_max_drain_ms = fm
+			if timing:
+				print("DRAINMS units=%d ms=%.1f t=%d inflight=%d enq=%d cap=%d dedup=%d" % [units, fm, Time.get_ticks_msec(), threadgen_inflight.size(), _tg_enq, _tg_capdrop, _tg_dedup])
+		_col_drain_step()
+		return
 	while budget > 0:
 		if Time.get_ticks_usec() - t0 > budget_us:
 			break
@@ -1555,7 +1846,7 @@ func _drain_build_queue() -> void:
 					gen_used_ms += dg
 					# AC-0155: a disk read is a main-thread inflate (~20 ms) —
 					# one per frame, same pacing rationale as the sync gen.
-					if _gen_last_disk:
+					if _gen_last_disk and not loading_active:
 						break
 					# AC-0160: the threadgen pool is saturated — every further
 					# iteration would re-pick + cap-drop the same entry (11
@@ -2376,7 +2667,17 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 	# data pass, and pending_n = 0 keeps the drain hold from sticking.
 	var _grp_keep: Array = []
 	for _t in _startup_gen_group_tids:
-		if not threadgen_pool.is_task_completed(int(_t)):
+		if threadgen_pool.is_group_task_completed(int(_t)):
+			# AC-0178: a completed burst is CONSUMED here. The pool frees its
+			# Group object only via wait_for_group_task_completion — without
+			# it every burst leaks a Group ("Pages in use exist at exit in
+			# PagedAllocator: WorkerThreadPool::Group"). The old
+			# is_task_completed check was the wrong API for a group id: it
+			# printed "Invalid Task ID" and returned false, so nothing was
+			# ever pruned and the no-new-burst branch below stuck for the
+			# whole session.
+			threadgen_pool.wait_for_group_task_completion(int(_t))
+		else:
 			_grp_keep.append(_t)
 	_startup_gen_group_tids = _grp_keep
 	if _startup_gen_group_tids.is_empty():
@@ -2812,7 +3113,9 @@ func _queue_chunk_save(c: Node3D) -> void:
 func _drain_save_queue() -> void:
 	if _save_queue.is_empty():
 		return
-	var n := 2 if _save_queue.size() > 8 else 1
+	# AC-0178: loading window — lift the 1-2 cols/frame write pacing
+	# (encode+write already run on the AC-0164 worker).
+	var n := LOAD_SAVE_PER_FRAME if loading_active else (2 if _save_queue.size() > 8 else 1)
 	for k in n:
 		if _save_queue.is_empty():
 			break

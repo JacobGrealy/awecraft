@@ -1,15 +1,17 @@
 meta:
-  updated_at: 2026-08-31T18:05
+  updated_at: 2026-09-01T02:00
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0178
-- AC-0167
+- AC-0181
+- AC-0182
 - AC-0168
 - AC-0169
-- AC-0154
 - AC-0156
 - AC-0175
+- AC-0087
+- AC-0154
+- AC-0186
 - AC-0121
 - AC-0122
 - AC-0170
@@ -17,42 +19,36 @@ queue:
 - AC-0172
 - AC-0173
 - AC-0174
-- AC-0159
-- AC-0109
+- AC-0040
 - AC-0150
-- AC-0137
-- AC-0092
-- AC-0165
 - AC-0144
 - AC-0145
 - AC-0146
-- AC-0111
-- AC-0036
-- AC-0147
-- AC-0161
-- AC-0148
-- AC-0149
 - AC-0140
-- AC-0141
-- AC-0142
+- AC-0159
+- AC-0092
 - AC-0097
 - AC-0112
 - AC-0113
 - AC-0093
-- AC-0125
-- AC-0094
 - AC-0098
-- AC-0101
-- AC-0037
 - AC-0038
 - AC-0039
-- AC-0040
-- AC-0087
+- AC-0036
+- AC-0130
+- AC-0094
+- AC-0137
 - AC-0088
 - AC-0089
-- AC-0090
+- AC-0111
+- AC-0141
+- AC-0142
+- AC-0101
+- AC-0037
 - AC-0115
-- AC-0130
+- AC-0090
+- AC-0161
+- AC-0147
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -953,12 +949,16 @@ intake:
   labels:
   - godot
   created_at: 2026-08-18T12:00
-  updated_at: 2026-08-19 08:15T12:00
+  updated_at: 2026-08-31T16:57
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'Underwater view: hide water cells around the eye + underwater visual effect (overlay tint; research web''s approach
-    first)'
+  notes: '1) User Story: As a player going underwater I want water around my eyes hidden and a simple blue tint so I can see.
+
+
+    2) Technical Details: Keep as is for now (no 30s transition). Underwater view: hide water cells around eye (no face inside
+    camera) + underwater visual effect overlay tint (research web approach first). fog/water fog deferred. Verify no water
+    face at eye, blue tint present, research note kept.'
   comments:
   - id: 1
     created_at: 2026-08-18 19:30T12:00
@@ -2704,18 +2704,18 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-23T23:20
-  updated_at: 2026-08-23T23:20
+  updated_at: 2026-08-31T16:45
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'BUG: water is only one layer - it should have layers all the way down in a column until it hits another block (bodies
-    of water and waterfalls). Water sim must fill full vertical column to terrain (no empty space below, fills to block, spreads
-    at bottom per minecraft.wiki/w/Water). Currently sea/placed water renders/simulates as single-layer. Fix world/water.gd
-    + chunk fluid logic + mesh. Sub-point: caves under sea must stay water-filled — generator.gd caves carve at generator.gd:286
-    (cbk != B_WATER skip) but seabed y=h still carves to air, leaving holes; after carve for ocean columns (h < sea) do vertical-shadow
-    flood (water_above walk sea down: B_WATER above && 0 below -> B_WATER, isolated stays 0) then recursive 7..1 spread with
-    fall-reset (spread finds drop -> fall column at same level then spread at n_l-1, chains). Verify sea stable + fluid harnesses.
-    Parent: before AC-0036 underwater.'
+  notes: '1) User Story: As a player swimming over ocean I do not want one layer of water then empty air that drops me to
+    the void — the ocean should be water from the surface all the way to the bottom.
+
+
+    2) Technical Details: Modern MC sea is Y=62 (our Data.SEA 126 at godot/autoload/data.gd:8 with HEIGHT 384, Y=-64 offset
+    => 62+64=126 already correct). Fill full column SEA 126 -> ocean floor like wiki/w/Altitude Air on Y=62 and lower is replaced
+    by water, not a 1-thick sheet. Aquifers (independent underground water) deferred. Verify ocean column is solid water to
+    floor, no fall-through.'
   comments: []
 - id: AC-0093
   title: drop-spin-in-place-not-orbit
@@ -2727,13 +2727,17 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-23T23:24
-  updated_at: 2026-08-23T23:24
+  updated_at: 2026-08-31T17:23
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'BUG: broken blocks (item drops from world/entities/drop.gd) spin while moving around a circular path (orbit). Should
-    spin in place (rotate on their own axis at fixed position, with only pickup-attract movement). Fix drop.gd rotation/translation:
-    spin = local rotation, not orbital translation. Verify render: drop spins without circling. Related to AC-0083 textured
+  notes: '1) User Story: As a player I want broken block drops to spin in place, not orbit in a circle, while they sit on
+    the ground.
+
+
+    2) Technical Details: BUG: broken blocks (item drops from world/entities/drop.gd) spin while moving around circular path
+    (orbit). Should spin in place (rotate on own axis at fixed position, with only pickup-attract movement). Fix drop.gd rotation/translation:
+    spin = local rotation, not orbital translation. Verify render drop spins without circling. Related to AC-0083 textured
     drops.'
   comments: []
 - id: AC-0094
@@ -2808,17 +2812,18 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-23T23:41
-  updated_at: 2026-08-23T23:41
+  updated_at: 2026-08-31T17:23
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'BUG (regression of AC-0067 viewmodel-always-on-top, user 2026-08-23: not fixed): held item/hand/held block is still
-    occluded by environment blocks instead of always rendering on top (MC-style). AC-0067 was marked done 2026-08-22 with
-    depth-disabled viewmodel (held_box override, held_sprite.no_depth_test, _voxel_mat, HeldMeshes._base_mat) and harness
-    depth{block,cross,fist,sprite,tool} passing, but user reports it never worked in web+windows builds. Re-investigate: verify
-    godot/player/player.gd viewmodel nodes (held_box, held_sprite, held_fist, voxel tools via core/held_mesh.gd) actually
-    have no_depth_test / depth-disabled material in exported builds (web vs desktop) and that gl_compatibility renderer respects
-    it. Fix + render A/B (face-against-wall before/after) + browser gate.'
+  notes: '1) User Story: As a player I want the held item/hand to always render on top of the world (Minecraft-style) so the
+    block in my hand is never hidden behind the ground.
+
+
+    2) Technical Details: BUG regression of AC-0067 viewmodel-always-on-top (user 2026-08-23). Held item/hand/block still
+    occluded by environment blocks instead of always-on-top. Re-investigate godot/player/player.gd viewmodel nodes (held_box,
+    held_sprite, held_fist, voxel tools via core/held_mesh.gd) actually have no_depth_test / depth-disable. Was marked done
+    with depth-disabled but user reports never worked in web+windows. Verify render shows held always on top.'
   comments: []
 - id: AC-0098
   title: voxel-tool-shading-variation
@@ -3216,11 +3221,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-24T10:51
-  updated_at: 2026-08-30T02:20
-  completed_at: null
+  updated_at: 2026-08-31T16:36
+  completed_at: 2026-08-31T16:36
   waiting_on: null
   parent_id: null
   notes: 'Per-frame Camera3D frustum cull for chunk/subchunk mesh_instances.
@@ -3238,6 +3243,10 @@ intake:
     created_at: 2026-08-30T09:35
     updated_at: null
     text: '[user] Why is this still open? I thought this was finished?'
+  - id: 2
+    created_at: 2026-08-31T16:36
+    updated_at: null
+    text: '[user] Close out per 2026-08-31 — functional at world.gd:43/452 with G1 28% drop; MINFO drift tracked as AC-0179'
 - id: AC-0110
   title: occlusion-culling-caves-interior
   source: user
@@ -3295,29 +3304,18 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-24T10:59
-  updated_at: 2026-08-24T10:59
+  updated_at: 2026-08-31T16:57
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'Blocks with transparency (e.g. leaves) must not occlude faces behind them.
+  notes: '1) User Story: As a player I want transparent objects to not hide what is behind them — if a block is transparent
+    I should see through it.
 
 
-    Current chunk.gd _faces skips a face if neighbor stab[nb]>0 (solid). Leaves use cutout/transparency and should be treated
-    as non-occluding: a face adjacent to a transparent block (leaves, glass if added, etc.) must still emit even if surrounded.
-    The bug: leaf interior in center of leaf cluster does not render when completely surrounded by leaf blocks, because each
-    surrounding leaf is considered solid/occluding.
-
-
-    Fix: distinguish opaque-solid vs transparent-solid. Use ktab/ttab or alpha/tint presence or explicit transparent list
-    (leaves id=??, check Data.block) to gate occlusion. Stab should only occlude if neighbor is opaque-solid. Faces of transparent
-    blocks themselves still emit per current cutout path.
-
-
-    Verify: G0 zero script errors; leaf cluster center still has faces (render R=1 with tree, top cam); genhash unchanged
-    (no terrain change, just meshing); battery green; web render leaves dense not hollow.
-
-
-    Refs: chunk.gd:138 _faces stab check, 513 stab fill, world/chunk.gd cutout handling, Data.block transparent flag.'
+    2) Technical Details: Blocks with transparency (leaves, flora cross, glass/water if added) must not occlude faces behind
+    them. Current chunk.gd _face_mask / _faces skips face if neighbor stab[nb]>0 (solid). Fix: treat transparent via Data.block(id).transparent
+    / cutout as non-occluding so leaf interior inside leaf cluster still emits. Verify leaf crown interior visible, no missing
+    faces, no extra draw when surrounded by solid stone.'
   comments: []
 - id: AC-0112
   title: held-item-positioning-per-type-review
@@ -3329,41 +3327,18 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-24T11:01
-  updated_at: 2026-08-24T11:04
+  updated_at: 2026-08-31T17:23
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'Audit + split held-item positioning so adjustments to one type do not affect others.
+  notes: '1) User Story: As a developer I want a review that catalogs per-type held positioning so tuning one held type never
+    breaks another.
 
 
-    Problem: each fix to one held type (block / tool / flower/cross / empty fist) has been tuning shared TOOL_POSE / scale
-    / hand_root transforms (player.gd: TOOL_POSE_RETUNE, TOOL_POSE_POS, held_box 0.70, HAND_BASE_POS, sway_root). Subsequent
-    tasks regress previous types (e.g. AC-0073 doubled held scale, AC-0085 lowered HAND_BASE_POS, AC-0070 replaced voxels).
-    AC-0097 still shows occlusion after AC-0067.
-
-
-    Scope: godot/player/player.gd _update_held + hand/hand_root/sway_root/tool nodes + HeldMeshes.
-
-    - Catalog per-type current transforms: block (HeldMeshes.box_mesh 1x1x1), tool (TOOL_GRIDS voxel head+handle), flower/cross
-    (HeldMeshes.cross_mesh XQ), fist (held_fist).
-
-    - Define independent params per type: position, scale, rotation (TOOL_POSE_ROTx), swing arc, sway amplitude — no shared
-    global that leaks.
-
-    - Keep AC-0067 depth-disabled on-top, AC-0070 voxel detail, AC-0060 sway composition.
-
-    - Propose or implement per-type poses that look correct at rest + mid-swing (MC first-person reference per type).
-
-    Verify: G0 zero script errors; per-type harness (toolpose + viewmodel) for all 4 types + diag_2x + depth; R=1 renders
-    for block/tool/flower/fist at rest + mid-swing; battery green.
-
-
-    Refs: player.gd: TOOL_POSE_RETUNE/TOOL_POSE_POS/HAND_BASE_POS, held_box/sprite/fist/tool setup; AC-0067/0070/0073/0085/0097.
-
-
-    Post-review FIX: after audit, retune per-type params to correct positions/sizes (block scale ~0.35 vs tool scale, flower
-    cross scale, fist scale) so each looks correct at rest + mid-swing. This task covers audit + new params table; implementation
-    lands in follow-on AC-0113.'
+    2) Technical Details: Audit + split held-item positioning. Problem: each fix to one held type (block / tool / flower/cross
+    / empty fist) has been tuning shared TOOL_POSE / scale / hand_root transforms (player.gd TOOL_POSE_RETUNE, hand_root).
+    Subsequent tasks regress previous types (e.g. AC-0073, AC-0085). Scope: godot/player/player.gd _update_held + hand/hand_root/sway_root/tool
+    nodes + HeldMeshes. Catalog per type current pose, propose independent per-type transforms.'
   comments: []
 - id: AC-0113
   title: held-item-per-type-positioning-fix
@@ -3375,25 +3350,18 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-24T11:04
-  updated_at: 2026-08-24T11:04
+  updated_at: 2026-08-31T17:23
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'Implement per-type held positioning/sizing from AC-0112 review.
+  notes: '1) User Story: As a player I want each held type (block / tool / flower / fist) positioned and sized correctly on
+    its own, so none of them look off.
 
 
-    Apply independent position/scale/rotation per held type (block / tool / flower-cross / fist) in player.gd — no shared
-    TOOL_POSE leak. Retune so each type is correctly framed (MC first-person): block centered in hand, tool handle bottom-right
-    with head at crosshair, flower cross upright with stem grip, fist centered.
-
-
-    Keep AC-0067 on-top (no_depth_test), AC-0070 voxel detail, AC-0060 sway composition, AC-0085 swing arc.
-
-    Verify: G0 0 errors; per-type pose harness (held_box/tool/flower/fist) at rest + AWECRAFT_LOGIC=swing mid-fraction + viewmodel
-    R=1 renders for all 4 types; battery green.
-
-
-    Depends: AC-0112 review table.'
+    2) Technical Details: Implement per-type held positioning/sizing from AC-0112 review. Apply independent position/scale/rotation
+    per held type (block / tool / flower-cross / fist) in player.gd — no shared TOOL_POSE leak. Retune so each type is correctly
+    framed (MC first-person): block centered, tool handle bottom-right, flower upright, fist centered. Keep AC-0067 on-top,
+    AC-0070 voxel, AC-0060 sway, AC-0085 swing. Verify per-type pose harness at rest + AWECRAFT_LOGIC=swing.'
   comments: []
 - id: AC-0114
   title: task-board-systemd-boot-service
@@ -3698,13 +3666,17 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-26T07:18
-  updated_at: 2026-08-26T07:18
+  updated_at: 2026-08-31T16:32
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'In-game debug console: toggle with backtick/tilde or F3+? (or /), overlay TextEdit+log, command dispatch to Debug.*
-    (give_item, teleport, seed_inv, fly, set_time, light_at, etc.). Must work desktop+web, not intercept normal typing when
-    closed, scroll history. Gate: console open/close, command echo, invalid command error.'
+  notes: '1) User Story: As a player or dev I want an in-game console opened with backtick that lets me type commands like
+    give, so I do not need hidden key combos.
+
+
+    2) Technical Details: In-game debug console: toggle with backtick/tilde (or F3), overlay TextEdit+log, command dispatch
+    to Debug.* (give, tp, time, etc.), handles input focus vs player look. Followed by AC-0122 moving V/H/J/K into it and
+    AC-0185 moving pause to Esc. Verify toggle, command executes, log scrolls.'
   comments: []
 - id: AC-0122
   title: debug-keys-to-console-commands
@@ -3716,13 +3688,18 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-26T07:18
-  updated_at: 2026-08-26T07:18
+  updated_at: 2026-08-31T16:32
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: Move V/H/J/K/P debug keys from player.gd:168 unconditional handlers into console commands (seed_inv, hold_swing,
-    clear_swing, etc.). Remove or gate KEY_V/H/J/K behind console or OS.is_debug_build()/AWECRAFT_DEBUG. Keep E/P gameplay
-    keys. Verify no player gets free items via V after.
+  notes: '1) User Story: As a player I do not want V/H/J/K debug keys triggering by accident during play — they should live
+    as typed console commands, while P for pause stays as a hotkey until it moves to Esc.
+
+
+    2) Technical Details: Move V/H/J/K debug handlers from player.gd:168 unconditional handlers into console commands (seed_inv,
+    hold_swing, clear, etc.) via AC-0121 console. P stays as hotkey for now; AC-0185 will remap pause to Esc (browser owns
+    Esc on web, so keep P fallback until desktop-only remap lands). Verify V/H/J/K no longer do anything outside console,
+    console commands still work, P still pauses.'
   comments: []
 - id: AC-0123
   title: multiplayer-client-server-research-plan
@@ -3824,17 +3801,21 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-26T07:36
-  updated_at: 2026-08-26T07:36
-  completed_at: null
+  updated_at: 2026-08-31T17:29
+  completed_at: 2026-08-31T17:29
   waiting_on: null
   parent_id: null
   notes: 'PLAN ONLY (do not implement): research GDExt C++ for hot loops (WorldGen fbm/caves, Lighting BFS, chunk face scan/greedy).
     Deliver plan.html benchmarking GDScript vs C# vs GDExt (r50 wall, build_ms), integration scope (which 2-3 files), build
     pipeline (SCons + .gdextension + windows dll), risks, and go/no-go. No code until user approves.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-31T17:29
+    updated_at: null
+    text: '[user] cancelled'
 - id: AC-0126
   title: break-batched-light-mesh
   source: user
@@ -4193,19 +4174,16 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-29T04:36
-  updated_at: 2026-08-30T15:01
+  updated_at: 2026-08-31T16:45
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'Reliability (builder-observed, not user-reported): intermittent ''Invalid type in function threadgen_handoff ...
-    Cannot convert argument 2 from Nil to PackedByteArray'' (world.gd:474, AC-0107 threaded mesh+light build handoff). Pre-existing
-    since AC-0035 era; non-fatal (rc=0) but when it fires it KILLS in-frame chunks'' meshes -> visible sky-through-chunk holes.
-    Evidence: AC-0134 g0 gate run (.scratch/AC-0134-gates/gates.log line 10) + AC-0135 builder midnight render (tasks/AC-0135/ac0135_cave_midnight_transient_hole.png;
-    full saga in tasks/AC-0135/continuity.md; headless full-settle probes show all 81 chunks built+lit+correct data, so it
-    is a timing race, not data). Task: reproduce under load (repeated recenter/boundary walks, headless), root-cause the worker->main
-    handoff race (which arg arrives Nil), fix + zero script errors + a regression probe (AWECRAFT_LOGIC=... or extended g0
-    loop) that trips if the transient recurs. Candidate fold-in: AC-0131 scope if it shares the crossing-path machinery, else
-    standalone.'
+  notes: '1) User Story: As a player I do not want random holes where a chunk never appears after generation.
+
+
+    2) Technical Details: threadgen-handoff Nil->PBA chunk holes at godot/world/world.gd:611. AC-0109 probe still shows built
+    78/81 with queue flat 40 and 120s settle cap (results.html:62) — 2-7 chunks dropped with no requeue. Fix handoff to retry
+    or requeue, keep as P1. Verify spin probe builds 81/81 and queue drains to 0.'
   comments:
   - id: 1
     created_at: 2026-08-30T15:01
@@ -4306,14 +4284,18 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-29T09:29
-  updated_at: 2026-08-29T09:29
+  updated_at: 2026-08-31T17:21
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'main.gd is 8939 lines / 179 funcs — mixes coordinator (Game.mode, World/Player lifecycle, sky/fog), full AWECRAFT_LOGIC
-    harness (battery + 30+ probe funcs: player, interact, light, fluids, craft, survival, held, tool, perf, boundary, etc.),
-    and menu wiring. Extract harness/test battery into autoload/debug.gd or harness/ folder (e.g. harness/battery.gd + harness/probes/*.gd),
-    leave main.gd as thin coordinator (~400 lines). No behavior change, just move code and clean imports.'
+  notes: '1) User Story: As a developer I want the test harness out of main.gd so the coordinator code is readable and small.
+
+
+    2) Technical Details: main.gd is 8939 lines / 179 funcs — mixes coordinator (Game.mode, World/Player lifecycle, sky/fog),
+    full AWECRAFT_LOGIC harness (battery + 30+ probe funcs: player, interact, light, fluids, craft, survival, held, tool,
+    perf, boundary, etc.), and menu wiring. Extract harness/test battery into autoload/debug.gd or harness/ folder (e.g. harness/battery.gd
+    + harness/probes/*.gd), leave main.gd as thin coordinator (~400 lines). No behavior change, just move code and clean imports.
+    Verify battery green, no behavior change.'
   comments: []
 - id: AC-0141
   title: split-blocks-items-into-json
@@ -4325,13 +4307,18 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-29T09:39
-  updated_at: 2026-08-29T09:39
+  updated_at: 2026-08-31T17:21
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: Extract hardcoded block/item tables from autoload/data.gd (blocks 1..28 at :155, items 100..147) into godot/data/blocks.json
-    + items.json (and recipes.json/tiles.json if clean). Keep data.gd as loader + lookups (block(), item(), match_shapeless/shaped)
-    so callers unchanged. Update spec_template grep and genhash/battery gates to account for data file move.
+  notes: '1) User Story: As a developer or modder I want blocks and items defined in JSON data files so I can tweak them without
+    editing code.
+
+
+    2) Technical Details: Extract hardcoded block/item tables from autoload/data.gd (blocks 1..28 at :155, items 100..147)
+    into godot/data/blocks.json + items.json (and recipes.json/tiles.json if clean). Keep data.gd as loader + lookups (block(),
+    item(), match_shapeless/shaped) so callers unchanged. Update spec_template grep and genhash/battery gates to account for
+    data file move. Verify all lookups unchanged, battery green.'
   comments: []
 - id: AC-0142
   title: split-mobs-into-json
@@ -4343,12 +4330,17 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-29T09:53
-  updated_at: 2026-08-29T09:53
+  updated_at: 2026-08-31T17:23
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: Extract hardcoded mob tables from autoload/data.gd (mobs 4+ skeleton/chicken/wolf/spider entries) into godot/data/mobs.json
-    alongside the blocks/items split (AC-0141). Keep data.gd as loader + lookups so callers unchanged.
+  notes: '1) User Story: As a developer or modder I want mob tables in JSON (like blocks/items) so I can tweak mobs without
+    editing code.
+
+
+    2) Technical Details: Extract hardcoded mob tables from autoload/data.gd (mobs 4+ skeleton/chicken/wolf/spider entries)
+    into godot/data/mobs.json alongside the blocks/items split (AC-0141). Keep data.gd as loader + lookups so callers unchanged.
+    Verify lookups unchanged, battery green.'
   comments: []
 - id: AC-0143
   title: planet-p1a-sphere-math-world-keys
@@ -4450,22 +4442,18 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-29T12:09
-  updated_at: 2026-08-29T12:09
+  updated_at: 2026-08-31T16:57
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'User story: As a player I want to fly seamlessly off the planet into space and land on any face — gravity always
+  notes: '1) User Story: As a player I want to fly seamlessly off the planet into space and land on any face — gravity always
     pulls toward the center, walking stays tangent-flat, flying is 6-DOF above atmosphere.
 
 
-    Technical details: player/player.gd: up=normalize(pos-C), gravity=-up*26, WASD projected onto tangent/bitangent while
-    on_floor, CharacterBody3D basis slerps to align local Y→up (0.23°/chunk at R=4000). scenes/main.gd: alt=|pos-C|-R drives
-    blend: <~500m surface gravity+step, >~2000m 6-DOF thrust. Origin rebase hook core/origin_shift.gd (planet-local C=(0,0,0)
-    while landed, translate world when |player|>20k). Gates: walk→fly→orbit→re-enter on different face lands flat, up slerp
-    across edge no snap, horizon culling still holds.
-
-
-    Depends: AC-0144. Ref: plan §7 + §9.'
+    2) Technical Details: Keep as spec at plan P1b. player/player.gd: up=normalize(pos-C), gravity=-up*26, WASD projected
+    onto tangent/bitangent while on_floor, CharacterBody3D basis slerps to align local Y->up (0.23°/chunk at R=4000). scenes/main.gd:
+    alt=|pos-C|-R drives blend: <~500m surface walk+step, >~2000m 6-DOF thrust/roll (interpolated between). Verify walk 12
+    edges + 8 corners on_floor true, takeoff/landing seamless on any face.'
   comments: []
 - id: AC-0146
   title: planet-p1b-atmosphere-impostor-lod
@@ -4477,22 +4465,19 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-29T12:09
-  updated_at: 2026-08-29T12:09
+  updated_at: 2026-08-31T17:17
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'User story: As a player I want the planet to look round from orbit and dissolve seamlessly into real voxels as I
-    descend — no pop, hidden in atmosphere haze.
+  notes: '1) User Story: As a player I want the planet to look round from orbit and dissolve seamlessly into real voxels as
+    I descend — no pop, hidden in atmosphere haze.
 
 
-    Technical details: Impostor sphere mesh (6×512² baked height+biome texture from same fbm as chunks, once per seed, ~1.5M
-    samples) rendered 1–2m below real terrain (no Z-fight). LOD: >2000m impostor only, 2000→500m both + atmosphere haze (blue
-    shift/desat) + dither alpha smoothstep(500,2000,alt), <500m chunks only. Fog = min(flat fog, horizon) so inside 114m ground
-    horizon it is thin depth haze, beyond that sphere culling hides terrain. Gates: >2000 impostor, 2000→500 both, <500 chunks,
-    tower visibility holds.
-
-
-    Depends: AC-0145. Ref: plan §4 B4 + §LOD swap diagram.'
+    2) Technical Details: Start with single impostor level + mipmaps (no multi-LOD cascade yet, add later if needed). Impostor:
+    6x512^2 baked height+biome texture from same fbm(u,v) as generator.gd chunks, once per seed (~1.5M samples), rendered
+    1-2m below real terrain (no Z-fight). LOD: >2000m impostor only, 2000->500m both + atmosphere haze (blue shift/desat)
+    + dither alpha smoothstep(500,2000,alt), <500m chunks only. Fog = min(flat fog, horizon fog). Mip handles 25-50km speck;
+    future add explicit 128/256 far LOD if speck needs saving. Verify no pop through haze, snapshot shows sphere at orbit.'
   comments: []
 - id: AC-0147
   title: planet-p2-solar-system
@@ -4504,25 +4489,18 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-29T12:10
-  updated_at: 2026-08-29T12:10
+  updated_at: 2026-08-31T16:57
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'User story: As a player I want to fly to other planets in the same solar system — each a different size — and land
-    on them with the same flat feel and seamless biomes.
+  notes: '1) User Story: As a player I want to fly to other planets in the same solar system — each a different size — and
+    land on them with the same flat feel and seamless biomes.
 
 
-    Technical details: Save: planets[{id,R∈[2000,8000], orbit}] per seed, home R=4000 exactly, others clamped variable. System
-    space: star at (0,0,0) while in flight, planet impostors for distant planets. Each planet reuses P1a sphere uniform pipeline
-    (face+cx+cz, rotated chunks). Distance between planets 25–50km at R=4000 scale. At the same time swap gen from 2D per-face
-    h=R+fbm(u,v) + 4-texel edge blend (P1a) → 3D sphere p=normalize(cube_pos)*scale for h + biomes (seamless across all 12
-    edges, same palette, no throwaway). C++ (AC-0125) fast-follows only if walk p95 shows it needs it. Gates: home exact,
-    other R clamped, biomes cross faces seamless, inter-planet flight ~25km, save per planet, no galaxy void streaming.
-
-
-    Depends: AC-0146. Ref: plan §6 + §8 + §10 P2. Replaces 2D with final 3D — no separate follow-on.
-
-    '
+    2) Technical Details: Keep as spec plan P2. Save: planets[{id,R in [2000,8000], orbit}] per seed, home R=4000 exactly.
+    System space star at (0,0,0) while in flight, planet impostors for distant planets. Each planet reuses P1a sphere uniform
+    pipeline (face+cx+cz, rotated chunks). Distance 25-50km at R=4000 scale. Verify fly home->other and land flat, R variable
+    clamped.'
   comments: []
 - id: AC-0148
   title: planet-p3-relay-galaxy
@@ -4534,20 +4512,18 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-29T12:10
-  updated_at: 2026-08-29T12:10
+  updated_at: 2026-08-31T17:21
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'User story: As a player I want to leave my solar system/galaxy via a Mass-Effect relay — build/repair it and instantly
-    jump to another system, eventually galaxy scale.
+  notes: '1) User Story: As a player I want to leave my solar system/galaxy via a Mass-Effect relay — build/repair it and
+    instantly jump to another system, eventually galaxy scale.
 
 
-    Technical details: Relay structure (derelict in home system for P2, repair cost iron+diamond-like), relay graph per save,
-    jump = cinematic + unload old system / load new seed system (galaxy = data-only graph until jump, never streamed void).
-    No continuous inter-system flight. Gates: relay repair → jump to second system, galaxy data-only, no >2000m void streaming.
-
-
-    Depends: AC-0147. Ref: plan §6 relay.'
+    2) Technical Details: Relay structure (derelict in home system for P2, repair cost iron+diamond-like), relay graph per
+    save, jump = cinematic + unload old system / load new seed system (galaxy = data-only graph until jump, never streamed
+    void). No continuous inter-system flight. Depends AC-0147. Ref plan §6 relay. Verify relay repair -> jump to second system,
+    galaxy data-only.'
   comments: []
 - id: AC-0149
   title: planet-p4-ring-megastructure
@@ -4559,19 +4535,17 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-29T12:10
-  updated_at: 2026-08-29T12:10
+  updated_at: 2026-08-31T17:21
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'User story: As a player I want a future Halo-like ring megastructure I can land on alongside spheres — same uniform
+  notes: '1) User Story: As a player I want a future Halo-like ring megastructure I can land on alongside spheres — same uniform
     1m feel.
 
 
-    Technical details: core/ring_math.gd torus R_major≫R_minor≈4000 alongside sphere_math.gd, uniform 1m, same Y-corner filler
-    and horizon logic. Derelict ring variant. Gates: ring gapless Y holds, shares P1a math.
-
-
-    Depends: AC-0146 (after LOD). Ref: plan §11. Future — not queued until galaxy proven.'
+    2) Technical Details: Backlog — not queued until galaxy proven. core/ring_math.gd torus R_major>>R_minor≈4000 alongside
+    sphere_math.gd, uniform 1m, same Y-corner filler and horizon logic at world.gd. Derelict ring variant. Gates: ring gapless
+    Y holds, shares P1a math. Depends AC-0146 (after LOD). Ref plan §11.'
   comments: []
 - id: AC-0150
   title: world-gap-at-sphere-face-boundary-trench-void
@@ -4583,16 +4557,17 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-30T09:29
-  updated_at: 2026-08-30T14:50
+  updated_at: 2026-08-31T16:45
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'User-reported 2026-08-30 with screenshots/world-gap-2026-08-30-0928.jpg: large trench/void separating terrain where
-    sphere faces meet (see screenshot - water trench down to stone/void, chunks missing, not a small height-mismatch cliff).
-    AC-0143 spec.html:19 says terrain height seams are acceptable, but geometric gaps/holes must be gapless via pre-warp bitwise-identical
-    edge points (spec.html:15). This is a face-boundary generation/streaming gap (likely world.gd key_for_sphere_pos / neighbor_key
-    / generator per-face seeding for home faces 0/1, or missing chunk generation at face edge). Check godot/core/sphere_math.gd
-    _EDGES/world_to_face and godot/world/world.gd face-aware keying + generator.'
+  notes: '1) User Story: As a player walking far out, I do not want to see a trench or void where the world wraps or sphere
+    faces meet.
+
+
+    2) Technical Details: World-gap at sphere face boundary / trench void in WorldGen sphere mapping (was at old H80, now
+    H384 24 slabs at world.gd:36). Faces need stitched height/noise so edge has no gap. Verify no void at face seams, genhash
+    unchanged except seam.'
   comments:
   - id: 1
     created_at: 2026-08-30T14:50
@@ -4704,13 +4679,18 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-30T12:27
-  updated_at: 2026-08-30T12:27
+  updated_at: 2026-08-31T16:27
   completed_at: null
   waiting_on: AC-0152
   parent_id: null
-  notes: 'Waste: caves carved for every r=50 column (n1/n2/n3 + nc1/nc2 per 98k) though >90% are interior never visible. After
-    AC-0152, skip nc1/nc2 for 13-50 impostor (heightmap only), and for 5-12 merged 32x32x32 use 1-bit mask not per-m. Lazy
-    carve on dig toward uncarved stone. Depends AC-0152.'
+  notes: '1) User Story: As a player I want caves only where I could ever see them so distant columns generate faster and
+    the game uses less CPU with no visible change.
+
+
+    2) Technical Details: Waste: caves carved for every r=50 column (n1/n2/n3 + nc1/nc2 per 98k) though >90% interior never
+    visible. After AC-0167 keep same-mesh and AC-0168 retain, skip cave carve for interior columns that are never in frustum/distance
+    band. No slider for now (pure perf). Verify generation time drops, no visible cave difference, MINFO unchanged except
+    fewer carved interiors.'
   comments: []
 - id: AC-0155
   title: full-chunk-save-not-edits
@@ -4740,13 +4720,19 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-30T13:50
-  updated_at: 2026-08-30T13:50
+  updated_at: 2026-08-31T16:27
   completed_at: null
   waiting_on: AC-0155
   parent_id: null
-  notes: 'Follow-on after AC-0155 full-chunk-save: save BlockLight/SkyLight 2048 nibbles per 16x16x16 x24 (48KB per column)
-    alongside palette. Saves ~400ms of 600ms GENMS on r=4 diamond revisit (light pull 20x20x384). Dirty on set_block/torch.
-    Not needed for 13-50 impostor. Depends AC-0155.'
+  notes: '1) User Story: As a player revisiting a place I have already been, I want light to come back instantly without recomputing,
+    just like Minecraft does.
+
+
+    2) Technical Details: Follow-on after AC-0155 full-chunk-save: save BlockLight/SkyLight 2048 nibbles per 16x16x16 x24
+    (48KB per column, 4096 each per section) alongside the chunk data in the same region file from AC-0175 (32x32 cols/file),
+    not a separate light/ dir — matches Minecraft Anvil (light stored in-section inside r.<x>.<z>.mca). Extend ChunkIO AWCC
+    v1 at core/chunk_io.gd to include light. Verify revisiting chunk has instant correct light without recompute, Save.clear
+    wipes together.'
   comments: []
 - id: AC-0157
   title: 3d-density-terrain-shape
@@ -4794,12 +4780,19 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-30T15:38
-  updated_at: 2026-08-30T15:38
+  updated_at: 2026-08-31T16:40
   completed_at: null
   waiting_on: AC-0156
   parent_id: null
-  notes: 'Per-vertex BlockLight+SkyLight + AO after AC-0156 nibbles: 4 corners avg(4 lights) * (1-AO 0.8/0.6/0.2) lerp lightmap
-    in chunk_lit shaders. Flat today.'
+  notes: '1) User Story: As a player I want block corners shaded smoothly like Java so light does not look blocky and caves
+    feel darker in corners.
+
+
+    2) Technical Details: Per-vertex smooth lighting + AO like Java Fancy (minecraft.wiki Graphics_settings Smooth lighting
+    Yes). Sample 3 neighbors + 4 Block/Sky lights per face corner, interpolate 0-15 to vertex color at godot/world/world.gd
+    mesh build, AO 0.2 per occluding solid (vertex mult 1.0/0.8/0.6/0.4). Start Java curve (darker caves), Bedrock lighter
+    reserved for later toggle if needed. Verify corner gradient vs flat, no perf regression when frustum cull at world.gd:452
+    is on.'
   comments: []
 - id: AC-0160
   title: AC-0152-defect-black-floating-impostors-and-slow-spawn
@@ -4854,23 +4847,19 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-30T20:47
-  updated_at: 2026-08-30T20:47
+  updated_at: 2026-08-31T17:21
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'User story: As a player I want to build a flyable ship by placing a rare portal-like frame and filling it — any
-    block attached to the core must keep working — and walk around inside it while in space (not airtight v1).
+  notes: '1) User Story: As a player I want to build a flyable ship by placing a rare portal-like frame and filling it — any
+    block attached to the core must keep working — and walk around inside it while in space.
 
 
-    Technical details: Drydock = any WxH rectangular Reinforced Frame (rare, min 4x5, max ~400 chunk budget) built like Nether
-    portal — if closed+upright it''s a valid yard. Ship = flood-fill from single Ship Core (6-dir BFS) to find connected blob
-    (only Core-touched blocks fly; stray blocks inside frame stay as dock). Any BlockType+TileEntity must function while flying
-    (chest/furnace/hopper/redstone tick on ship-owner). Dock/Undock: Activate (Core→Ignite) converts blob→entity, Dock (Core→Deactivate)
-    welds back to static inside any frame large enough to contain bounds. Walkable interior in space: player parented to ship
-    (pos=ship_pos+ship_basis*local), ship-local gravity down=-ship_up rolls with hull (barrel roll keeps you on floor); lerp
-    world→ship over 2s after >500m alt. Not airtight v1 (open deck still breathable). Owner streams pos/vel @10Hz + TileEntity
-    ticks, others interpolate; docked = no stream. Per-ship relay jump (fuel split if co-jump). Gates: any-size frame validates,
-    flood-fill finds blob, any block ticks while flying, walkable interior in space, dock↔undock, owner stream.'
+    2) Technical Details: Drydock = any WxH rectangular Reinforced Frame (rare, min 4x5, max ~400 chunk budget) built like
+    Nether portal — if closed+upright it is a valid yard. Ship = flood-fill from single Ship Core (6-dir BFS) to find connected
+    blob (only Core-touched blocks fly; stray blocks inside frame stay as dock). Any BlockType+TileEntity must function while
+    flying (chest/furnace etc. keep inventory). Walk inside ship while in space. Verify frame validates, BFS finds core blob,
+    ship flies and interior walk works.'
   comments: []
 - id: AC-0162
   title: jetpack-equipment-gameplay
@@ -4963,16 +4952,18 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-31T11:39
-  updated_at: 2026-08-31T11:39
+  updated_at: 2026-08-31T16:45
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'Follow-up to AC-0164: replace godot/core/chunk_io.gd palette+bitpack GDScript loops at chunk_io.gd:123 _encode_array
-    / chunk_io.gd:200 _bitpack (~26ms enc/20ms dec at 00p) with native C++ GDExtension. Keep identical API (dir_for/path_for/encode_column/decode_column/ensure_dir/clear_dir)
-    and AWCC v1 format at chunk_io.gd:51 so save.gd:5 SAVE_VERSION 3 and world.gd:2709/2756 call sites unchanged and AWECRAFT_LOGIC=chunkio
-    at scenes/main.gd:1136 stays byte-identical. Build with godot-cpp + SConstruct -> bin/libchunkio.linux.debug.so + bin/libchunkio.windows.release.dll
-    + .gdextension, integrate into build_windows.sh and 8080 serve. Do NOT port game to C# (.NET engine + templates churn);
-    keep GDScript game logic. Optional next: WorldGen.generate native if gen still hot.'
+  notes: '1) User Story: As a player I want chunk saving and loading to never hitch, so the 20ms decode does not freeze the
+    game.
+
+
+    2) Technical Details: GDExtension native chunk I/O codec for ChunkIO bitpack/palette loops at core/chunk_io.gd:123 _encode_array
+    / 200 _bitpack that cause AC-0155 p95 73/89ms. Build src/chunk_io.cpp via SConstruct to bin/libchunkio.*.so/.dll + .gdextension,
+    keep AWCC v1 intact at world.gd path. Gated after AC-0164 threaded (P2). Verify encode/decode ~10x faster, boundary p95
+    down, build + Windows export still work.'
   comments: []
 - id: AC-0166
   title: chunks flicker unload/reload at distance line (band/cull hysteresis)
@@ -5010,11 +5001,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-31T11:47
-  updated_at: 2026-08-31T11:47
-  completed_at: null
+  updated_at: 2026-08-31T15:58
+  completed_at: 2026-08-31T15:58
   waiting_on: null
   parent_id: null
   notes: 'User-confirmed repro: walking hits periodic line where outer chunks vanish then reappear; band bands are the cause.
@@ -5023,7 +5014,11 @@ intake:
     (0<->1<->2). That kills the visible mesh and re-queues threadmesh until handoff, creating the hole. Fix: keep mesh visible
     on meshable->meshable band change — only update c.band/collision_enabled and re-queue without destroying slabs; only kill
     when transitioning to/from band 3 data-only. Preserve full-save and chunkio gates.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-08-31T15:58
+    updated_at: null
+    text: '[user] superceded by AC-0181'
 - id: AC-0168
   title: retain mesh at r+1 candidate (hide not kill)
   source: user
@@ -5034,16 +5029,18 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-31T11:53
-  updated_at: 2026-08-31T11:53
+  updated_at: 2026-08-31T16:27
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'User decision after discussion: r+1 hysteresis should retain mesh AND keep it visible (not visible=false). Currently
-    AC-0080 _enter_candidate at world.gd:2142 kills mesh (mesh_built=false + _enter_candidate_slabs() frees ArrayMesh + collision).
-    This causes load/unload flip on back-and-forth across circle/collar edge (world.gd:2217 in_stream_set). Fix: at r+1 keep
-    slabs/mesh/collision resident and visible - just mark candidate flag for free-logic, let fog (fog_far=(R+1)*16*0.95) +
-    frustum cull handle hiding. True free only at r+2 after cand_since>=2 (world.gd:2236). Cost ~300-400 extra visible columns
-    at R=50 (~4% draw) but step-back is zero cost and no pop. Do not hide via _cull_set_vis.'
+  notes: '1) User Story: As a player walking near the edge of render distance, I want chunks at r+1 to stay on screen (fog
+    hides them) so stepping back doesn''t make the edge flicker or pop.
+
+
+    2) Technical Details: User decision after discussion: r+1 hysteresis should retain mesh AND keep it visible (not visible=false).
+    Currently AC-0080 hysteresis: r+1 candidate keep data+mesh, >=r+2 free after 2 frames. Keep mesh_built true at r+1, fog_far=(R+1)*16*0.95
+    hides it, true free only at r+2. Follows AC-0167 same-mesh band fix. Verify walking edge shows no unload/reload flicker
+    at distance line. Extra ~300-400 cols at R=50 (7845 circle).'
   comments: []
 - id: AC-0169
   title: 'debug stats overlay: CPU/RAM/VRAM/FPS'
@@ -5055,14 +5052,17 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-31T11:56
-  updated_at: 2026-08-31T11:56
+  updated_at: 2026-08-31T16:27
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'Add debug stats overlay showing: CPU usage (process %), RAM usage (process + system), VRAM usage (RenderingServer
-    / Performance), and frame rate (FPS/frame time). Use Performance singleton (TIME_FPS, MEMORY_STATIC/MAX, RENDER_*), OS.get_static_memory_usage,
-    RenderingServer.get_rendering_info. Must be toggleable in Settings (Options menu under video/debug, persisted via Settings/PATH
-    at autoload/settings.gd) in addition to F3 toggle. Headless probe AWECRAFT_LOGIC=stats. No perf regression when hidden.'
+  notes: '1) User Story: As a player I want a toggle in Options menu that turns the CPU/RAM/VRAM/FPS overlay on so it just
+    stays on while I play without hitting a key each time.
+
+
+    2) Technical Details: Add debug stats overlay showing CPU usage (process %), RAM (process+system), VRAM (RenderingServer),
+    FPS (Performance). Toggle in Options/Settings persisted via autoload/settings.gd (Settings.PATH), enabled stays on during
+    gameplay. Uses Performance/OS/RenderingServer. Verify overlay visible when toggled on, off when off, persists after restart.'
   comments: []
 - id: AC-0170
   title: debug logging toggle in options (log to in-game console)
@@ -5074,13 +5074,17 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-31T12:14
-  updated_at: 2026-08-31T12:14
+  updated_at: 2026-08-31T16:32
   completed_at: null
   waiting_on: null
   parent_id: AC-0121
-  notes: 'Follow-up to AC-0121 debug-console-in-game. Add a toggle in Options/Settings (persisted via autoload/settings.gd)
-    that when enabled, routes debug log lines (the output behind AC-0121 console + existing Debug/perf prints at world.gd
-    timing/RECPROBE/fluid probes) to the in-game console (AC-0121). Off by default. Headless: env AWECRAFT_DEBUG_LOG respected.'
+  notes: '1) User Story: As a player who turned on debug, I want a toggle in Options that sends debug logging to the in-game
+    console so I can see it without opening a file.
+
+
+    2) Technical Details: Follow-up to AC-0121 console. Add toggle in Options/Settings persisted via autoload/settings.gd
+    (default off) that when on, Debug.print / push_error tee to the console overlay. No verbose level for now. Verify toggle
+    persists after restart, console shows logs only when on.'
   comments: []
 - id: AC-0171
   title: debug logging to file (persist console + stats)
@@ -5092,14 +5096,17 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-31T12:20
-  updated_at: 2026-08-31T12:20
+  updated_at: 2026-08-31T16:32
   completed_at: null
   waiting_on: null
   parent_id: AC-0170
-  notes: Follow-up to AC-0169 (stats overlay) and AC-0170 (console toggle). When debug logging is enabled (Settings toggle
-    from AC-0170, persisted via autoload/settings.gd), also tee log lines to user://logs/awecraft_YYYYMMDD.log with rotation
-    (cap ~5MB / 5 files). Include F3 stats snapshots + timing/RECPROBE/fluid probes. Headless still writes .scratch/<task>-gates/;
-    file is for player sessions.
+  notes: '1) User Story: As a player who hit a bug, I want each play session to save its log to a new file and keep the last
+    5 runs so I can send the right one.
+
+
+    2) Technical Details: Follow-up to AC-0169 stats overlay and AC-0170 console toggle. When debug logging is on, tee console+stats
+    to user://logs/awecraft_<timestamp>.log, new file each run, prune to keep past 5. No single append. Verify log file per
+    launch, 6th run deletes oldest, contains console + FPS/RAM lines.'
   comments: []
 - id: AC-0172
   title: one-click bug capture (dump repro + screenshot)
@@ -5111,14 +5118,17 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-31T12:21
-  updated_at: 2026-08-31T12:21
+  updated_at: 2026-08-31T16:36
   completed_at: null
   waiting_on: null
   parent_id: AC-0171
-  notes: 'When debug logging/file toggle is on (AC-0170/AC-0171), F-key (e.g. F8 or F3 extended) dumps a single bug bundle:
-    seed + player pos/yaw/pitch + chunk key (cx,cz) + render_radius/band0/1 + candidate/cand_since counts + recenter WANT/band
-    state (RECPROBE) + perf (fps, p95) + screenshot to user://logs/bug_YYYYMMDD_HHMMSS.json + .png. No env restart. Headless
-    probe AWECRAFT_LOGIC=bugcap validates bundle schema. Follows AC-0171 file logger.'
+  notes: '1) User Story: As a player who hit a weird bug I want to press F8 or type bugreport in console and get a single
+    zip with seed/pos/repro + screenshot so I can send it.
+
+
+    2) Technical Details: When AC-0170/0171 debug logging/file is on, F8 hotkey AND console command bugreport dump a bug bundle:
+    seed + chunk_origin + band/candidate + last log + stats + AWECRAFT_SNAPSHOT screenshot to user://bugs/awecraft_bug_<timestamp>.zip.
+    Verify both F8 and bugreport create same zip, contains screenshot and log.'
   comments: []
 - id: AC-0173
   title: crash/error capture to file + console toast
@@ -5130,14 +5140,17 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-31T12:23
-  updated_at: 2026-08-31T12:23
+  updated_at: 2026-08-31T16:36
   completed_at: null
   waiting_on: null
   parent_id: AC-0172
-  notes: 'Central push_error / unhandled exception handler: capture stack + chunk_origin + seed/pos/band/candidate state +
-    last perf frame to user://logs/crash_YYYYMMDD_HHMMSS.log (rotated) and toast in AC-0121 in-game console (AC-0170 toggle
-    respects it, but crashes always file). Covers known transients like is_task_completed Invalid Task ID at world.gd:2258
-    and threadgen handoff nil. Follows AC-0171/AC-0172 file logger.'
+  notes: '1) User Story: As a player whose game hit an error, I want to see a message I can read and then click a button to
+    exit, and have the error saved to file for later.
+
+
+    2) Technical Details: Central push_error / unhandled exception handler captures stack + chunk_origin + seed/pos/band/candidate
+    + last lines, writes to user://logs/awecraft_<timestamp>.log (keep 5), shows modal dialog with message + Exit Game button
+    (must be clickable before quit). Also toast in console if open. Verify crash shows dialog, Exit closes cleanly, file exists.'
   comments: []
 - id: AC-0174
   title: visual dev overlays as Options toggles
@@ -5149,14 +5162,17 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-31T12:25
-  updated_at: 2026-08-31T12:25
+  updated_at: 2026-08-31T16:36
   completed_at: null
   waiting_on: null
   parent_id: AC-0169
-  notes: 'Add separate toggles in Options/Settings (persisted via autoload/settings.gd) for in-game visual dev overlays: band/debug
-    (color by band 0/1/2/3 + candidate hatch + R circle wireframe), light/debug (eff/bmask heatmap per 16^3 + face sample
-    dots, replaces AWECRAFT_LOGIC=lightaudit restarts), collision/debug (StaticBody boxes + col_dirty pending at world.gd:2043).
-    Off by default, composable, no perf when off. Follow-up to AC-0169 stats overlay.'
+  notes: '1) User Story: As a player or dev I want separate Options toggles for band, light, and collision overlays that I
+    can turn on independently at the same time while playing.
+
+
+    2) Technical Details: Add separate toggles in Options/Settings persisted via autoload/settings.gd for visual dev overlays:
+    band/debug, light levels, collision shapes. Independently controlled, can all be on together. Draw gizmos in world.gd.
+    Verify each toggle on/off persists, combinations work, no perf regression when off.'
   comments: []
 - id: AC-0175
   title: switch chunk saves to region format (32x32 cols per file)
@@ -5168,16 +5184,18 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-31T12:42
-  updated_at: 2026-08-31T12:42
+  updated_at: 2026-08-31T16:32
   completed_at: null
   waiting_on: null
   parent_id: AC-0164
-  notes: 'Replace per-column files at chunk_io.gd:23 user://chunkdir_<slot>/<face>_<cx>_<cz>.bin (7845 files at R=50) with
-    region files: 32x32 columns per region file, e.g. user://chunkdir_<slot>/r.<rx>.<rz>.bin with header offset table + per-column
-    AWCC v1 blobs (chunk_io.gd:51). Keep _queue_chunk_save at world.gd:2745 and _try_disk_load at world.gd:2709 APIs but backed
-    by region seeks. Incremental writes (only evicted cols via _drain_save_queue at world.gd:2767, 1-2/frame via AC-0164 threading),
-    fewer stat/open ops, same ~8.3KB/col. Migration: read old per-column files if region missing; Save.clear at save.gd:115
-    wipes region dir. Follows AC-0164/AC-0165.'
+  notes: '1) User Story: As a player I want my world saved as a few big region files instead of 7845 tiny files so saving
+    and loading is faster and does not clutter my save folder.
+
+
+    2) Technical Details: Replace per-column files at core/chunk_io.gd:23 user://chunkdir_<slot>/<face>_<cx>_<cz>.bin (7845
+    files at R=50) with region format 32x32 cols per file r.<rx>.<rz>.bin plus offset table, keeping AWCC v1 blobs (core/chunk_io.gd:48
+    encode 26ms / 75 decode 20ms) intact. Incremental writes via AC-0164 threading. Verify region files count ~8 at R=50,
+    load still disk-first at world.gd:2709, gen_count 0 on revisit.'
   comments: []
 - id: AC-0176
   title: use custom user dir so saves are AweCraft not Godot
@@ -5223,18 +5241,22 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-31T13:19
-  updated_at: 2026-08-31T13:19
-  completed_at: null
+  updated_at: 2026-09-01T02:00
+  completed_at: 2026-09-01T02:00
   waiting_on: null
   parent_id: null
-  notes: 'Add loading screen shown on first spawn and when Options render_distance changes. While screen visible: bypass world.gd
-    throttles (FLUSH_FRAME_BUDGET_MS 40 at world.gd:8, _drain_save_queue 1-2/frame at world.gd:2767, threadgen world.gd:267
-    / threadmesh_handoff world.gd:1027 budget) and saturate WorkerThreadPool (gen+decode+mesh prep max threads, main only
-    handoff/create_mesh). Show progress % cols disk/gen/meshed. Follows AC-0164 threaded I/O for true parallel decode; pairs
-    with AC-0165 native for max win. Verify R=50 7845 cols first load wall vs spread.'
+  notes: '1) User Story: As a player starting a world or moving the render-distance slider in Options, I want a loading screen
+    that loads everything as fast as possible so I don''t watch chunks trickle in for 25 seconds.
+
+
+    2) Technical Details: Add loading screen shown on first spawn and when Options render_distance changes. While visible,
+    bypass world.gd throttles (FLUSH_FRAME_BUDGET_MS 40 at world.gd:8, _drain_save_queue 1-2/frame at world.gd:2767, threadgen
+    at world.gd:267 / threadmesh_handoff at world.gd:1027) and saturate WorkerThreadPool (gen+decode+mesh prep max threads,
+    main only handoff/create_mesh). Show progress % cols disk/gen/meshed. Gated on AC-0164 threaded I/O; pairs with AC-0165
+    native. Verify R=50 7845 cols first-load wall vs spread.'
   comments: []
 - id: AC-0179
   title: fix MINFO drift from threaded greedy-merge reshuffle flake
@@ -5277,3 +5299,151 @@ intake:
     on single-block edit, or per-face UV pinning). Verify: break center block in plains/stone flat, neighbor top face UV doesn''t
     move between before/after screenshots.'
   comments: []
+- id: AC-0181
+  title: make 0-12 full, 13+ coarse uniform
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-31T15:53
+  updated_at: 2026-08-31T22:01
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player walking out from spawn, I want the world to look sharp up close and the same kind of
+    a bit lower-detail far away, so I never see it go sharp->blurry->sharp again as I walk.
+
+
+    2) Technical Details: Was high->low->high (0<=4 full, 4<taxi<=8 coarse 32-scale uv_scale2 at godot/world/world.gd:1353,
+    >8 full since AC-0160 removed impostor at world.gd:72). Fix to monotonic: taxi<=12 full 16^3 (band0+1+2-inner), taxi>=13
+    coarse 32-scale uniform to R (uv_scale2, flora cut, cutout->opaque). Set band1_r 12 (world.gd:75) and route band2 (>=13)
+    through same coarse as old band1. Keep sim band0_r 4 untouched. Verify no high->low->high pop walking to R=50, beyond
+    13 looks uniform.'
+  comments:
+  - id: 1
+    created_at: 2026-08-31T22:01
+    updated_at: null
+    text: '[user] trivial, use low reasoning sub agent'
+- id: AC-0182
+  title: LOD transition — retain+hysteresis+cache both (no hole/flicker at 12/13, instant switch)
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-08-31T15:58
+  updated_at: 2026-08-31T16:21
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player walking across the 12/13 block ring, I want no hole and no flicker when the detail changes,
+    and if I step back and forth it should switch instantly instead of rebuilding each time.
+
+
+    2) Technical Details: Covers prior AC-0182/0183/0184 for AC-0181 (0-12 full, 13+ coarse). Retain old LOD visible until
+    new build_accs at godot/world/world.gd:902 is ready then atomic swap at world.gd:2480 (no hole, like AC-0167). Add hysteresis
+    at world.gd:872 band_of (need 2 frames / +-1 taxi, like AC-0168 r+1 and FRUSTUM 32 at world.gd:43) so ring does not flip
+    each frame. Cache both full+coarse for taxi 11-14 (chunk.gd:46 Slab mesh/fluid/flora x2) so second crossing is visible
+    toggle at world.gd:452 0 ms (like frustum cull). Verify walk 12/13 ring shows no hole, no rapid full<->coarse flicker,
+    and second crossing instant.'
+  comments: []
+- id: AC-0183
+  title: LOD hysteresis at 12/13 band so we don't flip constantly
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: done
+  labels: []
+  created_at: 2026-08-31T16:01
+  updated_at: 2026-08-31T16:18
+  completed_at: 2026-08-31T16:18
+  waiting_on: null
+  parent_id: null
+  notes: Like AC-0168 retain at r+1 and AC-0166 band/cull hysteresis, add hysteresis to the 12/13 LOD line from AC-0181 (0-12
+    full, 13+ coarse). Require e.g. 2 consecutive frames or +/-1 taxi margin before swapping LOD so walking on the ring doesn't
+    flicker full<->coarse each frame. Pairs with AC-0182 (hold old until new ready). Keep band_of at world.gd:872 with margin/cand_since
+    style. Verify 360 walk on ring shows zero flicker, stable mesh_built.
+  comments:
+  - id: 1
+    created_at: 2026-08-31T16:18
+    updated_at: null
+    text: '[user] merged into AC-0182 (combined retain+hysteresis) — closing as duplicate'
+- id: AC-0184
+  title: cache both LODs at 11-14 transition ring for instant switch
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: done
+  labels: []
+  created_at: 2026-08-31T16:04
+  updated_at: 2026-08-31T16:19
+  completed_at: 2026-08-31T16:19
+  waiting_on: null
+  parent_id: null
+  notes: At the 12/13 LOD line from AC-0181 (0-12 full, 13+ coarse) keep both meshes resident for the transition ring taxi
+    11-14 (≈2 either side with hysteresis AC-0183) so flip is visible toggle not rebuild. Chunk slabs at world.gd:46 keep
+    full + coarse MeshInstance (like frustum visible at world.gd:452 and AC-0168 retain). Full built once, coarse built once,
+    then 0 ms switch. Pairs with AC-0182 hold-until-ready but eliminates rebuild cost on crossing. Verify walking 12/13 ring
+    flips instantly with no build, RAM +~400 slabs.
+  comments:
+  - id: 1
+    created_at: 2026-08-31T16:19
+    updated_at: null
+    text: '[user] merged into AC-0182 (retain+hysteresis+cache) — closing as duplicate'
+- id: AC-0185
+  title: move pause menu to Esc (keep P until remap)
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-31T16:30
+  updated_at: 2026-08-31T16:30
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want to press Esc to pause/open the menu like most games, so I don''t have to remember
+    P.\n\n2) Technical Details: Currently pause bound to P at player.gd:168 / main.gd menu handling because browser owns Esc.
+    Remap to Esc for desktop Windows build (exports/windows/AweCraft.exe), keep P as fallback until Esc reliably captures
+    (browser canvas focus). Update input_map (ui_cancel / pause), test Options menu still reachable, handle web vs desktop
+    feature tag. Verify Esc pauses in desktop, P still works until removed.'
+  comments: []
+- id: AC-0186
+  title: loading-screen-continue-saved-world
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-08-31T23:32
+  updated_at: 2026-08-31T23:32
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player continuing a previously saved world I want a loading screen until my saved chunks around
+    spawn are loaded, so I do not see half-loaded void popping in.
+
+
+    2) Technical Details: When Continue is pressed (Menu continueBtn -> Save.active_slot -> world.gd load from Save), show
+    same loading screen as new-world gen (cover + progress %). Block player input / keep menu cover until spawn radius R~8
+    fully disk-loaded + meshed (reuse world.gd spawn gating, _try_disk_load + threadmesh_handoff). Reuse UI from AC-0178 loading
+    screen but trigger on continue path as well as new world. Verify continue on world with 1k+ cols shows loading cover until
+    spawn chunks visible, no void pop.'
+  comments:
+  - id: 1
+    created_at: 2026-08-31T23:32
+    updated_at: null
+    text: '[user] add a task for adding a loading screen when continuing a previously saved world'

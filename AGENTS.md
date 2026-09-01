@@ -23,6 +23,9 @@ Standing process → `godot/COORDINATOR.md` (trust builder light gates, coordina
 - **Ops rules** (commit+push after each task, push workarounds, daemon survival, Godot one-at-a-time, render limits) → `godot/CONTINUITY.md`
 - **Game semantics** (Minecraft wiki canonical) → `godot/CONTINUITY.md` footer
 
+## Task format
+When filing a task, `notes` must have two sections: `1) User Story` (high-level plain language what the change should accomplish for the player) + `2) Technical Details` (files/lines/AC refs, verify steps).
+
 ## Task status
 Run `python3 tasks/scripts/tasks.py next` — `godot/CONTINUITY.md` §6 is authoritative. Report running servers with both `localhost` and LAN addresses.
 

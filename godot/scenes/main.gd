@@ -583,6 +583,7 @@ func start_game(seed: int) -> void:
 	_create_game_nodes()
 	var spawn: Vector3 = world.spawn_point()
 	world.recenter(spawn.x, spawn.z, true)
+	world.start_loading("Generating world...")  # AC-0178: first-spawn loading window
 	await _await_spawn_floor(spawn, 300)
 	player = _spawn_player()
 	Game.start()
@@ -1138,6 +1139,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			return
 		if logic == "tick":
 			await _tick_test(spawn)
+			return
+		if logic == "load":
+			await _load_test(spawn)
 			return
 		if logic == "genhash":
 			_genhash_print(seed_env)
@@ -8492,6 +8496,64 @@ func _tick_md5(arr: PackedByteArray) -> String:
 	for i in range(16):
 		hx += "%02x" % md[i]
 	return hx
+
+func _load_test(spawn: Vector3) -> void:
+	# AC-0178: first-load wall probe at R=50. t0 = the recenter that starts
+	# streaming; done = render circle fully meshed + both worker pools drained.
+	# AWECRAFT_LOADBYPASS=0 runs the SAME arm under the legacy spread drain
+	# (start_loading no-ops) — the A/B baseline. Counts are the real
+	# provenance counters (disk_reads / gen_count / mesh_built).
+	var lb := OS.get_environment("AWECRAFT_LOADBYPASS") != "0"
+	world.collision_enabled = false
+	world.fluid_sim_enabled = false
+	world.render_radius = 50
+	world.recenter(spawn.x, spawn.z, true)
+	if lb:
+		world.start_loading("AC-0178 load probe")
+	var target: int = world.circle_count()
+	var t0 := Time.get_ticks_msec()
+	var spawn3x3_ms := -1
+	var screen_hidden_ms := -1
+	var screen_up := false
+	while true:
+		await get_tree().process_frame
+		if spawn3x3_ms < 0 and not world._startup_pending():
+			spawn3x3_ms = Time.get_ticks_msec() - t0
+		if lb and world.loading_active and not screen_up:
+			screen_up = bool(world._loading_screen.visible)
+		if lb and not world.loading_active and screen_hidden_ms < 0:
+			screen_hidden_ms = Time.get_ticks_msec() - t0
+		# Completion = the _loading_tick predicate itself: circle fully meshed
+		# AND both worker pools drained (stop_loading has run, screen hidden).
+		if world.meshed_in_circle() >= target and world.threadmesh_inflight.is_empty() and world.threadgen_inflight.is_empty():
+			break
+		# AC-0178: 60-min in-arm cap — the bypass arm finishes the circle in
+		# ~25-30 min (the screen hides once the pools drain); the spread
+		# baseline (AWECRAFT_LOADBYPASS=0) needs ~50 min, so 60 covers both.
+		if Time.get_ticks_msec() - t0 > 3600000:
+			break
+	var wall := Time.get_ticks_msec() - t0
+	var meshed: int = world.meshed_in_circle()
+	Debug.result({
+		"ok": meshed >= target,
+		"bypass": lb,
+		"wall_ms": wall,
+		"gen_per_s": roundf(1000.0 * world.gen_count / maxi(wall, 1)),
+		"mesh_per_s": roundf(1000.0 * float(meshed) / maxi(wall, 1)),
+		"cols": target,
+		"meshed": meshed,
+		"disk": world.disk_reads,
+		"gen": world.gen_count,
+		"spawn3x3_ms": spawn3x3_ms,
+		"screen_hidden_ms": screen_hidden_ms,
+		"queue_final": world.queue_size,
+		"tg_inflight": world.threadgen_inflight.size(),
+		"tm_inflight": world.threadmesh_inflight.size(),
+		"loading_active_final": world.loading_active,
+		"screen_up": screen_up,
+		"screen_visible_final": bool(world._loading_screen.visible),
+	})
+	get_tree().quit()
 
 func _tick_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()

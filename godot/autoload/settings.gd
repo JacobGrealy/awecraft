@@ -112,9 +112,11 @@ func apply_world() -> void:
 
 func apply_render_distance() -> void:
 	if Game.world != null:
+		var prev := int(Game.world.render_radius)
 		Game.world.render_radius = int(values["render_dist"])
 		if Game.player != null:
 			Game.world.recenter(Game.player.position.x, Game.player.position.z)
+		Game.world.note_render_distance(prev)  # AC-0178: Options render_distance trigger
 
 
 func apply_sim_distance() -> void:
