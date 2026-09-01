@@ -81,16 +81,20 @@ const FRUSTUM_CULL_MARGIN := 32.0
 var render_radius := 4
 var fluid_tick_radius := 14
 # AC-0152 Bedrock Realms bands: band 0 = taxicab diamond <= band0_r (full
-# 16x16x16, TICKS, collision), band 1 = taxicab <= band1_r (coarse 32-scale
-# merged, uv_scale 2), band 2 = the rest of the Euclidean render circle
-# (NORMAL full mesh — same builder path as band 0, no tick, no collision),
-# band 3 = collar (diamond band1+1 outside the circle) ∪ circle ring
-# (points outside the circle touching it within 8-neighbors): data-only,
-# never meshed. Harness-overridable: AWECRAFT_BAND0/BAND1.
+# 16x16x16, TICKS, collision), band 1 = taxicab <= band1_r (FULL 16x16x16
+# mesh, no tick, no collision — same builder path as band 0), band 2 = the
+# rest of the Euclidean render circle (COARSE 32-scale merged, uv_scale 2,
+# flora cut, cutout->opaque, no tick, no collision), band 3 = collar
+# (diamond band1+1 outside the circle) ∪ circle ring (points outside the
+# circle touching it within 8-neighbors): data-only, never meshed.
+# Harness-overridable: AWECRAFT_BAND0/BAND1.
 # AC-0160: the band-2 heightmap impostor was removed (user decision) —
 # band 2 flows through the normal build_accs path like band 0/1.
+# AC-0181: monotonic LOD — band1_r widened to 12 (taxi 0-12 full), band 2
+# (taxi >= 13) takes the old band-1 coarse ctx: uniform out to R, no more
+# high->low->high pop while walking.
 var band0_r := 4
-var band1_r := 8
+var band1_r := 12
 var collision_enabled := true
 var chunks := {}
 var chunk_keys := {}
@@ -904,10 +908,12 @@ func in_stream_set(dx: int, dz: int) -> bool:
 	return in_render_circle(dx, dz) or absi(dx) + absi(dz) <= b1_eff() + 1 or in_circle_ring(dx, dz)
 
 
-# 0 = full (tick+collide), 1 = coarse, 2 = full mesh (no tick/collide),
-# 3 = collar ∪ circle ring data-only. -1 = outside the stream set.
-# Note: band 2 is everything inside the circle OUTSIDE the diamond — at
-# r50 that is 7700 of the 7845 chunks (taxi ranges to ~100 in the circle).
+# 0 = full (tick+collide), 1 = full mesh (no tick/collide), 2 = coarse
+# (no tick/collide), 3 = collar ∪ circle ring data-only. -1 = outside the
+# stream set. Note: band 2 is everything inside the circle OUTSIDE the
+# diamond — at r50 that is 7532 of the 7845 chunks (taxi ranges to ~100 in
+# the circle). AC-0181: band 1/2 fidelity swapped vs AC-0152 (0-12 full,
+# 13+ coarse).
 func band_of(dx: int, dz: int) -> int:
 	var taxi := absi(dx) + absi(dz)
 	if in_render_circle(dx, dz):
@@ -1434,9 +1440,11 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 	ctx_w["eff_strips"] = strips["eff"]
 	ctx_w["blk_strips"] = strips["blk"]
 	ctx_w["blk_strips_b"] = strips["blk_b"]
-	if int(c.band) == 1:
-		# AC-0152 band 1: coarse LOD — 2x UV scale (32-block texture
-		# period), cutout falls back opaque, flora dropped (in build_accs).
+	if int(c.band) == 2:
+		# AC-0152 coarse LOD (was the band-1 ctx): 2x UV scale (32-block
+		# texture period), cutout falls back opaque, flora dropped (in
+		# build_accs). AC-0181: routed to band 2 (taxi >= 13) — uniform
+		# coarse out to R; band 1 (taxi 5-12) now builds full like band 0.
 		ctx_w["coarse"] = true
 		ctx_w["uv_scale"] = 2
 	var entry := {

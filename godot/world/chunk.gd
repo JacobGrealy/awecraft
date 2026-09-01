@@ -28,11 +28,12 @@ var eff_gen := 0
 # recenter events spent at >= r+2 (free at >= 2).
 var candidate := false
 var cand_since := 0
-# AC-0152: 0 = full 16x16x16 (ticks + collide), 1 = coarse 32-scale merged
-# (uv_scale 2), 2 = full mesh, no tick/collide (the rest of the render
-# circle — same builder path as band 0), 3 = collar/ring data-only
+# AC-0152: 0 = full 16x16x16 (ticks + collide), 1 = full mesh, no
+# tick/collide (same builder path as band 0), 2 = coarse 32-scale merged
+# (uv_scale 2 — the rest of the render circle), 3 = collar/ring data-only
 # (never meshed). AC-0160: the band-2 heightmap impostor was removed
-# (user decision 2026-08-30) — band 2 now uses the normal full-mesh path.
+# (user decision 2026-08-30) — band 2 uses the normal build path.
+# AC-0181: band 1/2 fidelity swapped — 0-12 full, 13+ coarse uniform.
 var band := 0
 # AC-0108: vertical 16x16x16 slabs, each owning its own mesh/fluid/flora
 # instances + collision body; data/fl stay column-wide. AC-0091: the slab

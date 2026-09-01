@@ -1,0 +1,48 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AC-0181 — make 0-12 full, 13+ coarse uniform</title>
+<style>
+body{font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;max-width:920px;margin:32px auto;padding:0 20px;color:#1a1a1a}
+h1{font-size:24px;border-bottom:2px solid #444;padding-bottom:8px}
+h2{font-size:19px;margin-top:28px}
+code,pre{background:#f4f4f4;padding:2px 6px;border-radius:4px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+pre{padding:12px;overflow:auto}
+table{border-collapse:collapse;width:100%;margin:12px 0}
+th,td{border:1px solid #ccc;padding:6px 10px;text-align:left;font-size:14px}
+th{background:#eee}
+.ok{color:#1a7f37;font-weight:600}.warn{color:#b35900;font-weight:600}
+.note{background:#fff8e1;border-left:4px solid #f0a500;padding:10px 14px;border-radius:4px}
+</style></head>
+<body>
+<h1>AC-0181 — make 0-12 full, 13+ coarse uniform</h1>
+<p><b>Status:</b> <span class="ok">CLOSED</span> · <b>Source:</b> user · <b>Closed:</b> 2026-09-01T16:42</p>
+<p><b>User story:</b> As a player walking out from spawn, I want the world to look sharp up close and the same kind of a bit lower-detail far away, so I never see it go sharp→blurry→sharp again as I walk.</p>
+
+<div class="note"><b>Closed without the full verification pass.</b> The implementation was co-edited directly in the working tree and the task is being closed on the user's instruction ("no more tests — we've wasted so much time on this, write a summary and close it out"). The gate battery below was <b>designed and staged</b> (the <code>lodband</code> probe arm exists in <code>main.gd</code>) but was <b>not run</b> in this closeout. The heavy boundary/perf stage and the Windows build were also deferred. Re-run the gates on the stable tree before treating the boundary/perf standing values as moved.</div>
+
+<h2>What changed (co-edit, already in tree)</h2>
+<p>Monotonic LOD banding. The old AC-0152/0160 scheme produced a <code>full → coarse → full</code> pop walking outward (0-4 full, 5-8 coarse 32-scale, &gt;8 full after the impostor was removed). AC-0181 makes it monotonic: <b>taxi ≤ 12 = FULL 16³ mesh</b>, <b>taxi ≥ 13 = COARSE 32-scale uniform out to R</b>.</p>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><code>band1_r</code> 8 → <b>12</b>; band 1/2 fidelity <b>swapped</b> — band 1 (taxi 5-12) now the FULL 16³ mesh (band-0 builder path, no tick/collide), band 2 (taxi ≥ 13) now the COARSE 32-scale ctx (uv_scale 2, flora cut, cutout→opaque). The <code>_mesh_dispatch</code> coarse-ctx gate moved from <code>c.band == 1</code> to <code>c.band == 2</code>. <code>band0_r</code> (sim diamond, taxi ≤ 4) untouched.</td></tr>
+<tr><td><code>godot/world/chunk.gd</code></td><td>band-enum comments updated to match the swap.</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>New harness arm <code>AWECRAFT_LOGIC=lodband</code> → <code>_lodband_test</code> + <code>_lod_fidelity</code> helper (classifies a built chunk's fidelity from its mesh UV period: 31 px/block = full, 15.5 = coarse uv_scale 2). <code>_bandmap_test</code> sample set extended with <code>[12,0]</code>/<code>[13,0]</code> to pin the boundary.</td></tr>
+</table>
+<p><b>Expected band counts at R=50</b> (from the co-edit comment): b0 = 41 (diamond), b1 grew, b2 shrank to ~7532 of 7845 (taxi ranges to ~100 in the circle).</p>
+
+<h2>Gates that WERE staged (not run this closeout)</h2>
+<table>
+<tr><th>Gate</th><th>Mode / arm</th><th>ok condition</th></tr>
+<tr><td>G0</td><td>headless <code>--quit</code></td><td>zero <code>SCRIPT ERROR</code> lines</td></tr>
+<tr><td>LOD boundary (the real gate)</td><td><code>AWECRAFT_LOGIC=lodband</code></td><td><code>ok:true</code> = <code>violations</code> empty AND <code>spawn_monotonic:true</code>; per-step <code>ahead12</code>=full(1), <code>ahead13</code>=coarse(2); <code>spawn_hist</code> = <code>full* coarse*</code></td></tr>
+<tr><td>Streaming evidence</td><td><code>AWECRAFT_LOGIC=bandmap</code></td><td><code>band_counts</code> b0=41, b1 grown, b2 shrunken; <code>[12,0]</code> full (quad ≫ 1), <code>[13,0]</code> coarse</td></tr>
+<tr><td>SMOKE (world/* touched)</td><td><code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code></td><td>all arms <code>ok:true</code>; genhash 25/25 byte-identical</td></tr>
+<tr><td>Render (visual)</td><td><code>AWECRAFT_RADIUS=4</code>, xvfb <code>gl_compatibility</code></td><td>one PNG to <code>tasks/AC-0181/</code></td></tr>
+</table>
+
+<h2>Deviations / known limits</h2>
+<ul>
+<li>Verification pass deferred per user instruction — no <code>RESULT</code> values recorded in this closeout.</li>
+<li>Heavy boundary/perf stage + <code>./build_windows.sh</code> (8080/5180) deferred — <b>Windows export is stale relative to this code</b>; re-run <code>./build_windows.sh</code> before shipping.</li>
+<li>HARNESS §3 standing values (boundary r4 p95, band counts) NOT updated — re-confirm on the stable tree first.</li>
+</ul>
+</body></html>

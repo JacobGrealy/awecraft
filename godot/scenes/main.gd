@@ -1134,6 +1134,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "bandmap":
 			await _bandmap_test(spawn)
 			return
+		if logic == "lodband":
+			await _lodband_test(spawn)
+			return
 		if logic == "chunkio":
 			await _chunkio_test(spawn)
 			return
@@ -8803,11 +8806,12 @@ func _tick_test(spawn: Vector3) -> void:
 
 
 func _bandmap_test(spawn: Vector3) -> void:
-	# AC-0152/AC-0160 gate: headless band arithmetic + streaming evidence
-	# at render 50. No full r50 drain (7845+ring chunks): counts come from
-	# the stubbed streaming set; band-2 evidence = sample chunks' FULL-MESH
-	# quad counts (the one-quad impostor was removed — a full-mesh chunk
-	# has quad_count >> 1).
+	# AC-0152/AC-0160/AC-0181 gate: headless band arithmetic + streaming
+	# evidence at render 50. No full r50 drain (7845+ring chunks): counts
+	# come from the stubbed streaming set; sample chunks carry quad counts
+	# — after AC-0181 band 1 (taxi 5-12) is FULL mesh (quad_count >> 1)
+	# and band 2 (taxi >= 13) is the COARSE 32-scale mesh; [12,0]/[13,0]
+	# pin the new boundary.
 	var t0 := Time.get_ticks_msec()
 	var R := 50
 	world.render_radius = R
@@ -8866,8 +8870,10 @@ func _bandmap_test(spawn: Vector3) -> void:
 	# arrives in seconds and truncated the trend to a few hundred frames.
 	# [14,0] (taxi 14, ~340 builds out) is dropped from the set: it couples
 	# the full-mesh evidence to the arm's total wall budget (the gate is NOT
-	# "drain the world in the arm"); [9,0]/[10,0] carry the band-2 evidence.
-	var samples := [[0, 0], [4, 0], [5, 0], [8, 0], [9, 0], [10, 0]]
+	# "drain the world in the arm"); [9,0]/[10,0] carry the band-2 (coarse
+	# after AC-0181) evidence; [12,0]/[13,0] pin the AC-0181 boundary
+	# (full at 12, coarse at 13).
+	var samples := [[0, 0], [4, 0], [5, 0], [8, 0], [9, 0], [10, 0], [12, 0], [13, 0]]
 	var have := {}
 	var trickle := []
 	var sample_waited := 0
@@ -8967,6 +8973,162 @@ func _bandmap_test(spawn: Vector3) -> void:
 		"elapsed_ms": Time.get_ticks_msec() - t0,
 	})
 	get_tree().quit()
+
+
+# AC-0181 probe (AWECRAFT_LOGIC=lodband, harness-only, never runs in game):
+# walk radially +X from spawn (player chunk 0,3,6,9,12,13,14) at render 50.
+# At each step: recenter, settle the taxi <= 13 neighborhood, then classify
+# EVERY meshed chunk's fidelity from its built UV period (full 16^3 = 31 px
+# per block; coarse uv_scale 2 = 15.5) and assert the monotonic contract:
+# meshed + taxi <= 12 => FULL, meshed + taxi >= 13 => COARSE, band 3 never
+# meshed, ahead-12 FULL / ahead-13 COARSE at every step, and the spawn
+# chunk's fidelity history is full* coarse* (no full->coarse->full pop).
+func _lodband_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var R := 50
+	world.render_radius = R
+	var steps := [0, 3, 6, 9, 12, 13, 14]
+	var report := []
+	var violations := []
+	var spawn_hist := []
+	for st in steps:
+		world.recenter(spawn.x + float(st) * 16.0, spawn.z, true)
+		var pcx := int(world.last_pcx)
+		var pcz := int(world.last_pcz)
+		# wait for the recenter slice walk to finish first: until it does,
+		# built chunks still carry their PREVIOUS band + mesh (band
+		# reassignment lags the recenter by the full stream-set walk) —
+		# sampling then would report stale-band "violations" that are not
+		# real. After it, band-changed chunks are cleared + re-queued, so
+		# the settle below also waits for their re-mesh.
+		var rw := 0
+		while world._rec_pending and rw < 3600:
+			await get_tree().physics_frame
+			rw += 1
+		# settle: every chunk with taxi <= 13 around the player is built.
+		var sw := 0
+		var max_sw := 4800 if st == 0 else 2400
+		while sw < max_sw:
+			var allb := true
+			for dx in range(-13, 14):
+				for dz in range(-13, 14):
+					if absi(dx) + absi(dz) > 13:
+						continue
+					var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
+					if c == null or not c.mesh_built:
+						allb = false
+						break
+				if not allb:
+					break
+			if allb:
+				break
+			await get_tree().physics_frame
+			sw += 1
+		var full_ok := 0
+		var coarse_ok := 0
+		var uncl := 0
+		var meshed := 0
+		for key in world.chunks:
+			var c: Node3D = world.chunks[key]
+			if int(c.face) > 1 or not c.mesh_built:
+				continue
+			if int(c.band) == 3:
+				violations.append("band3 meshed %s" % str(key))
+				continue
+			meshed += 1
+			var taxi := absi(int(c.cx) - pcx) + absi(int(c.cz) - pcz)
+			var f: int = _lod_fidelity(c)
+			if taxi <= 12:
+				if f == 1:
+					full_ok += 1
+				elif f == 2:
+					violations.append("full-zone coarse %s (taxi %d)" % [str(key), taxi])
+				else:
+					uncl += 1
+			else:
+				if f == 2:
+					coarse_ok += 1
+				elif f == 1:
+					violations.append("coarse-zone full %s (taxi %d)" % [str(key), taxi])
+				else:
+					uncl += 1
+		var a12 = world.chunks.get("%d,%d" % [pcx + 12, pcz])
+		var a13 = world.chunks.get("%d,%d" % [pcx + 13, pcz])
+		var sk = world.chunks.get("0,0")
+		spawn_hist.append(_lod_fidelity(sk) if sk != null and sk.mesh_built else -1)
+		report.append({
+			"st": st, "pc": [pcx, pcz], "walk_frames": rw, "settle_frames": sw,
+			"meshed": meshed, "full_ok": full_ok, "coarse_ok": coarse_ok,
+			"unclassified": uncl,
+			"ahead12": _lod_fidelity(a12) if a12 != null and a12.mesh_built else -1,
+			"ahead13": _lod_fidelity(a13) if a13 != null and a13.mesh_built else -1,
+		})
+	# monotonic landmark: the spawn chunk must go full* coarse* along the
+	# outward walk (a FULL after a COARSE = high->low->high pop).
+	var seen_c := false
+	var mono := true
+	for h in spawn_hist:
+		if h == 2:
+			seen_c = true
+		elif h == 1:
+			if seen_c:
+				mono = false
+		else:
+			mono = false
+	Debug.result({
+		"render_radius": R, "steps": steps, "report": report,
+		"spawn_hist": spawn_hist, "spawn_monotonic": mono,
+		"violations": violations, "ok": violations.size() == 0 and mono,
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+	})
+	get_tree().quit()
+
+
+# AC-0181 probe helper: classify a BUILT chunk's mesh fidelity from the UV
+# period of its main (opaque merged) mesh. Every merged quad spans WxH
+# blocks; its u-axis (strip) UV is 31/uv_scale px per block over ATLAS_PX,
+# so any u-axis edge of world length L gives ppb = |du| * ATLAS_PX / L:
+# 31 => full 16^3, 15.5 => coarse uv_scale 2. Returns 1 (full), 2 (coarse),
+# 0 (unclassified), -1 (no mesh data).
+func _lod_fidelity(c) -> int:
+	var cands := PackedFloat32Array()
+	for s in c.slabs:
+		if cands.size() >= 64:
+			break
+		var mi = s.mesh_instance
+		if mi == null or mi.mesh == null:
+			continue
+		var m: ArrayMesh = mi.mesh
+		for si in m.get_surface_count():
+			var a = m.surface_get_arrays(si)
+			var pos: PackedVector3Array = a[Mesh.ARRAY_VERTEX]
+			var uv: PackedVector2Array = a[Mesh.ARRAY_TEX_UV]
+			var idx: PackedInt32Array = a[Mesh.ARRAY_INDEX]
+			for qi in range(0, idx.size(), 6):
+				var p0 := idx[qi]
+				var p1 := idx[qi + 1]
+				var p2 := idx[qi + 2]
+				var p3 := idx[qi + 3]
+				for ep in [[p0, p1], [p1, p2], [p2, p3], [p3, p0]]:
+					var du: float = absf(uv[ep[0]].x - uv[ep[1]].x)
+					var dv: float = absf(uv[ep[0]].y - uv[ep[1]].y)
+					if du < 1e-6 or dv > 1e-6:
+						continue  # v-axis edge (ms_h-scaled) or flat uv
+					var L: float = (pos[ep[0]] - pos[ep[1]]).length()
+					if L < 0.99:
+						continue
+					cands.append(du * Data.ATLAS_PX / L)
+		if cands.size() >= 64:
+			break
+	if cands.is_empty():
+		return -1
+	cands.sort()
+	var med: float = cands[cands.size() / 2]
+	if absf(med - 31.0) < 1.0:
+		return 1
+	if absf(med - 15.5) < 1.0:
+		return 2
+	return 0
 
 
 func _await_boundary_core(spawn: Vector3, max_frames: int) -> void:
