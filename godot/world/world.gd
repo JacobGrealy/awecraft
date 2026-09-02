@@ -568,9 +568,11 @@ func _game_tick() -> void:
 # AC-0109: per-frame frustum cull. Column AABB early-out both directions,
 # then per-slab (16x16x16) exact test when the column straddles a plane.
 # Visible state is written only on change (instance.visible is the last
-# state — no per-chunk bookkeeping). Rebuilt/candidate instances (mesh
-# null) are no-ops; a freshly assembled instance defaults visible=true
-# until the next camera-change pass re-tests it (transient, off-screen).
+# state — no per-chunk bookkeeping). Rebuilt instances (mesh null) are
+# no-ops; a freshly assembled instance defaults visible=true until the
+# next camera-change pass re-tests it (transient, off-screen). AC-0168
+# candidates keep their mesh and their visible state — candidacy never
+# hides an instance (the fog does).
 func invalidate_cull_cache() -> void:
 	# Force the cull pass to re-evaluate on the next camera read (probe hook).
 	_cull_cam_xform = Transform3D(Basis.IDENTITY, Vector3(1e9, 1e9, 1e9))
@@ -2983,22 +2985,21 @@ func _chunk_data(cx: int, cz: int) -> Node3D:
 	return chunks.get(_key(cx, cz))
 
 func _enter_candidate(key: String, c: Node3D) -> bool:
-	# AC-0080 candidacy: keep node + data + fl + edits, kill the expensive
-	# parts. col_dirty forces a collision rebuild on re-entry; mesh_built
-	# false makes re-enterers re-queue themselves as "build" in the
-	# recenter WANT pass and skips them in the flush loops.
+	# AC-0168 hide-not-kill candidacy: keep node + data + fl + edits AND the
+	# mesh (mesh_built stays true, slabs whole, instances never hidden) —
+	# the fog at fog_far=(R+1)*16*0.95 covers the whole r+1 band, so
+	# stepping back re-enters the chunk instantly (no re-queue, no re-mesh,
+	# no collision gap). True free stays at r+2 after the 2-recenter
+	# hysteresis in recenter(); the retained mesh dies with the node.
 	c.candidate = true
 	c.cand_since = 0
 	c.lod_pending = false
 	c.clear_lod_cache()
 	var had_mesh: bool = c.mesh_built
-	c.mesh_built = false
-	c._enter_candidate_slabs()
 	if had_mesh:
-		# Pending mesh-bound work on an invisible chunk is waste; re-entry
-		# marks it dirty again via the rebuild path. The staged-body entry is
-		# stale too (body freed above); the eff cache stays — data is kept,
-		# so the cached light is still valid on re-entry.
+		# Pending mesh-bound work on an out-of-set chunk is stale; re-entry
+		# re-marks it dirty via the normal paths. The eff cache stays — data
+		# is kept, so the cached light is still valid on re-entry.
 		light_pending_set.erase(key)
 		light_pending.erase(key)
 		fluid_dirty.erase(key)
@@ -3044,9 +3045,10 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 	_rp_dequeue_ms = 0.0
 	_rp_deq_n = 0
 	var rt0 := Time.get_ticks_usec()
-	# AC-0080 two-stage hysteresis: r+1 = candidate (kill expensive parts,
-	# keep node+data+edits); r+2+ for 2 recenter events = free. Jitter at
-	# r+1 resets cand_since, so a chunk never flaps in and out.
+	# AC-0080 two-stage hysteresis (AC-0168 hide-not-kill): r+1 = candidate
+	# (keep node+data+edits+mesh, the fog hides it); r+2+ for 2 recenter
+	# events = free. Jitter at r+1 resets cand_since, so a chunk never
+	# flaps in and out.
 	var rr := render_radius
 	var to_free: Array[String] = []
 	var cand_builds: Array = []
@@ -3063,6 +3065,7 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 			if c.candidate:
 				c.candidate = false
 				c.cand_since = 0
+				_stage_check(c, key)
 		else:
 			if not c.candidate:
 				if _enter_candidate(key, c):

@@ -1140,6 +1140,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "lodswap":
 			await _lodswap_test(spawn)
 			return
+		if logic == "edgeretain":
+			await _edgeretain_test(spawn)
+			return
 		if logic == "editfront":
 			await _editfront_test(spawn)
 			return
@@ -9504,6 +9507,317 @@ func _lod_fidelity(c) -> int:
 	if absf(med - 15.5) < 1.0:
 		return 2
 	return 0
+
+
+func _er_built_count() -> int:
+	var n := 0
+	for key in world.chunks:
+		if world.chunks[key].mesh_built:
+			n += 1
+	return n
+
+
+func _er_ring_counts(pcx: int, pcz: int) -> Dictionary:
+	var in_set := 0
+	var one_out := 0
+	var one_retained := 0
+	var one_visible := 0
+	var two_out := 0
+	var two_retained := 0
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if int(c.face) > 1:
+			continue
+		var dx := int(c.cx) - pcx
+		var dz := int(c.cz) - pcz
+		var built: bool = c.mesh_built
+		if world.in_stream_set(dx, dz):
+			in_set += 1
+			continue
+		if (not world.in_circle_ring(dx, dz)) and (absi(dx) + absi(dz) > world.b1_eff() + 2):
+			two_out += 1
+			if built:
+				two_retained += 1
+		else:
+			one_out += 1
+			if built:
+				one_retained += 1
+				if _er_chunk_vis(c) > 0:
+					one_visible += 1
+	return {"in_set": in_set, "one_out": one_out, "one_retained": one_retained, "one_visible": one_visible, "two_out": two_out, "two_retained": two_retained}
+
+
+func _er_chunk_vis(c) -> int:
+	var n := 0
+	for s in c.slabs:
+		var mi = s.mesh_instance
+		if mi != null and mi.mesh != null and mi.visible:
+			n += 1
+	return n
+
+
+func _er_chunk_has_mesh(c) -> bool:
+	for s in c.slabs:
+		var mi = s.mesh_instance
+		if mi != null and mi.mesh != null:
+			return true
+	return false
+
+
+func _er_chunk_mesh_id(c) -> int:
+	for s in c.slabs:
+		var mi = s.mesh_instance
+		if mi != null and mi.mesh != null:
+			return int(mi.mesh.get_instance_id())
+	return 0
+
+
+func _er_track_state(e: Dictionary, pcx: int, pcz: int) -> String:
+	var cc = world.chunks.get(e["k"])
+	if cc == null:
+		return "freed"
+	var dx := int(cc.cx) - pcx
+	var dz := int(cc.cz) - pcz
+	if world.in_stream_set(dx, dz):
+		return "set"
+	if (not world.in_circle_ring(dx, dz)) and (absi(dx) + absi(dz) > world.b1_eff() + 2):
+		return "two_out"
+	return "one_out"
+
+
+func _er_settle(st: Dictionary, back_phase: bool) -> void:
+	for i in range(30):
+		await get_tree().physics_frame
+		for e in st["track"]:
+			var cc = world.chunks.get(e["k"])
+			if cc == null:
+				continue
+			var dx := int(cc.cx) - int(world.last_pcx)
+			var dz := int(cc.cz) - int(world.last_pcz)
+			if int(cc.band) >= 3:
+				continue
+			if not world.in_stream_set(dx, dz) and back_phase and _er_chunk_vis(cc) == 0:
+				st["back_hidden"] += 1
+			elif world.in_stream_set(dx, dz) and not bool(cc.mesh_built) and back_phase:
+				st["back_hole"] += 1
+	var wr := 0
+	while wr < 1200 and world._rec_pending:
+		await get_tree().process_frame
+		wr += 1
+	for i in range(6):
+		await get_tree().physics_frame
+
+
+func _er_sample(st: Dictionary, ph: String, pcx: int, pcz: int, back_phase: bool) -> void:
+	var rc := _er_ring_counts(pcx, pcz)
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if c.mesh_built:
+			st["ever_built"][key] = true
+	for key in st["ever_built"]:
+		var c2: Node3D = world.chunks.get(key)
+		if c2 == null:
+			continue
+		var dx2 := int(c2.cx) - pcx
+		var dz2 := int(c2.cz) - pcz
+		if not world.in_stream_set(dx2, dz2) and bool(c2.candidate) and not c2.mesh_built:
+			st["killed"] += 1
+	if int(rc["one_retained"]) > int(st["one_ret_max"]):
+		st["one_ret_max"] = int(rc["one_retained"])
+	if int(rc["two_retained"]) > int(st["two_ret_max"]):
+		st["two_ret_max"] = int(rc["two_retained"])
+	for e in st["track"]:
+		var stt := _er_track_state(e, pcx, pcz)
+		e["states"].append(stt)
+		var cc = world.chunks.get(e["k"])
+		if cc == null:
+			if int(e["freed_at"]) < 0:
+				e["freed_at"] = int(st["n"])
+			continue
+		if int(cc.band) < 3:
+			if not bool(cc.mesh_built) or not _er_chunk_has_mesh(cc):
+				e["killed_seen"] = true
+				if back_phase:
+					st["back_hole"] += 1
+			elif int(_er_chunk_mesh_id(cc)) != int(e["mesh_id"]):
+				e["remeshed"] = true
+			var v := _er_chunk_vis(cc)
+			if int(e["vis_min"]) < 0 or v < int(e["vis_min"]):
+				e["vis_min"] = v
+			if stt != "set" and v == 0:
+				e["hidden_cand"] = true
+		if stt == "two_out":
+			e["two_out_events"] = int(e["two_out_events"]) + 1
+	var row := {"ph": ph, "pcx": pcx - int(st["pcx0"]), "ring": rc, "states": {}}
+	for e in st["track"]:
+		row["states"][e["k"]] = str(e["states"][-1])
+	st["samples"].append(row)
+	st["n"] = int(st["n"]) + 1
+
+
+func _edgeretain_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var R := 8
+	world.render_radius = R
+	world.recenter(spawn.x, spawn.z, true)
+	var pcx0 := int(world.last_pcx)
+	var pcz0 := int(world.last_pcz)
+	var core_ok := false
+	var wboot := 0
+	while wboot < 20000:
+		var allb := true
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				var c = world.chunks.get("%d,%d" % [pcx0 + dx, pcz0 + dz])
+				if c == null or not c.mesh_built:
+					allb = false
+					break
+			if not allb:
+				break
+		if allb:
+			core_ok = true
+			break
+		if wboot % 2000 == 0:
+			print("ERBOOT f=%d chunks=%d queue=%d" % [wboot, world.chunks.size(), world.queue_size])
+		await get_tree().process_frame
+		wboot += 1
+	if not core_ok:
+		Debug.result({"ok": false, "error": "core 3x3 never built", "radius": R, "chunks": world.chunks.size(), "queue": world.queue_size})
+		get_tree().quit()
+		return
+	var track: Array = [
+		{"k": "%d,%d" % [pcx0 - 8, pcz0]},
+		{"k": "%d,%d" % [pcx0 - 6, pcz0 + 5]},
+		{"k": "%d,%d" % [pcx0 - 5, pcz0 - 6]},
+	]
+	var edge_ok := true
+	var edge_diag: Array = []
+	for e in track:
+		var we := 0
+		var cc = world.chunks.get(e["k"])
+		while we < 20000 and (cc == null or not cc.mesh_built or not _er_chunk_has_mesh(cc)):
+			if we % 2000 == 0 and we > 0:
+				print("EREDGE f=%d k=%s queue=%d built=%d" % [we, e["k"], world.queue_size, _er_built_count()])
+			await get_tree().process_frame
+			cc = world.chunks.get(e["k"])
+			we += 1
+		if cc == null or not cc.mesh_built or not _er_chunk_has_mesh(cc):
+			edge_diag.append({"k": e["k"], "present": cc != null, "built": cc != null and bool(cc.mesh_built), "queued": str(world.queued_keys.get(e["k"], ""))})
+			edge_ok = false
+		else:
+			e["mesh_id"] = _er_chunk_mesh_id(cc)
+			e["band"] = int(cc.band)
+			e["lod_builds"] = int(cc.lod_builds)
+			e["states"] = []
+			e["vis_min"] = -1
+			e["freed_at"] = -1
+			e["remeshed"] = false
+			e["two_out_events"] = 0
+			e["killed_seen"] = false
+			e["hidden_cand"] = false
+	if not edge_ok:
+		Debug.result({"ok": false, "error": "tracked edge chunk never built", "radius": R, "chunks": world.chunks.size(), "queue": world.queue_size, "diag": edge_diag})
+		get_tree().quit()
+		return
+	player = _spawn_player()
+	var p = Game.player
+	var max_h := -1
+	for bx in range(int(spawn.x), int(spawn.x) + 8 * 16, 4):
+		var h := WorldGen.terrain_height(bx, int(spawn.z), Game.world_seed)
+		max_h = maxi(max_h, h)
+	var fly_y := float(maxi(max_h, 0)) + 8.0
+	p.position = Vector3(float(pcx0) * 16.0 + 8.0, fly_y, float(pcz0) * 16.0 + 8.0)
+	p.velocity = Vector3.ZERO
+	p.set_fly(true)
+	p.look(PI / 2.0, 0.0)
+	for i in range(6):
+		await get_tree().physics_frame
+	var st := {
+		"pcx0": pcx0,
+		"track": track,
+		"ever_built": {},
+		"killed": 0,
+		"one_ret_max": 0,
+		"two_ret_max": 0,
+		"back_hole": 0,
+		"back_hidden": 0,
+		"samples": [],
+		"n": 0,
+	}
+	for key in world.chunks:
+		if world.chunks[key].mesh_built:
+			st["ever_built"][key] = true
+	_er_sample(st, "boot", pcx0, pcz0, false)
+	p.position = Vector3(float(pcx0 + 1) * 16.0 + 8.0, fly_y, float(pcz0) * 16.0 + 8.0)
+	p.velocity = Vector3.ZERO
+	await _er_settle(st, false)
+	_er_sample(st, "out1", int(world.last_pcx), int(world.last_pcz), false)
+	p.position = Vector3(float(pcx0 + 2) * 16.0 + 8.0, fly_y, float(pcz0) * 16.0 + 8.0)
+	p.velocity = Vector3.ZERO
+	await _er_settle(st, false)
+	_er_sample(st, "out2", int(world.last_pcx), int(world.last_pcz), false)
+	for i in range(3):
+		world.recenter(p.position.x, p.position.z, true)
+		var wh := 0
+		while wh < 600 and world._rec_pending:
+			await get_tree().process_frame
+			wh += 1
+		for j in range(4):
+			await get_tree().physics_frame
+		_er_sample(st, "hold%d" % (i + 1), int(world.last_pcx), int(world.last_pcz), false)
+	p.position = Vector3(float(pcx0 + 3) * 16.0 + 8.0, fly_y, float(pcz0) * 16.0 + 8.0)
+	p.velocity = Vector3.ZERO
+	await _er_settle(st, false)
+	_er_sample(st, "out3", int(world.last_pcx), int(world.last_pcz), false)
+	p.position = Vector3(float(pcx0 + 2) * 16.0 + 8.0, fly_y, float(pcz0) * 16.0 + 8.0)
+	p.velocity = Vector3.ZERO
+	await _er_settle(st, true)
+	_er_sample(st, "back1", int(world.last_pcx), int(world.last_pcz), true)
+	p.position = Vector3(float(pcx0 + 1) * 16.0 + 8.0, fly_y, float(pcz0) * 16.0 + 8.0)
+	p.velocity = Vector3.ZERO
+	await _er_settle(st, true)
+	_er_sample(st, "back2", int(world.last_pcx), int(world.last_pcz), true)
+	var e0: Dictionary = st["track"][0]
+	var e1: Dictionary = st["track"][1]
+	var e2: Dictionary = st["track"][2]
+	var t1_one := int(e0["states"].count("one_out"))
+	var t1_freed := int(e0["freed_at"]) >= 0
+	var t1_ok := not t1_freed and t1_one >= 4 and int(e0["vis_min"]) > 0 \
+			and not bool(e0["killed_seen"]) and not bool(e0["remeshed"]) and not bool(e0["hidden_cand"])
+	var t2_ok := int(e1["two_out_events"]) == 1 and int(e1["freed_at"]) >= 3 \
+			and int(e1["freed_at"]) <= 5 and not bool(e1["hidden_cand"])
+	var t3_two_idx := int(e2["states"].find("two_out"))
+	var t3_back_idx := -1
+	for si in range(t3_two_idx + 1, int(e2["states"].size())):
+		if str(e2["states"][si]) == "set":
+			t3_back_idx = si
+			break
+	var t3_ok := t3_back_idx >= 7 \
+			and not bool(e2["killed_seen"]) and not bool(e2["remeshed"]) and not bool(e2["hidden_cand"])
+	var fog_near := DayNight.fog_near(R)
+	var fog_far := DayNight.fog_far(R)
+	var ring_face := (R + 1) * 16.0 - 8.0
+	var fog_covers := ring_face <= fog_far
+	var ok := int(st["killed"]) == 0 and t1_ok and t2_ok and t3_ok \
+			and int(st["one_ret_max"]) >= 1 and int(st["two_ret_max"]) >= 1 \
+			and int(st["back_hole"]) == 0 and int(st["back_hidden"]) == 0 and fog_covers
+	var out := {
+		"ok": ok,
+		"radius": R,
+		"fog": {"fog_near": fog_near, "fog_far": fog_far, "ring_near_face": ring_face, "fog_covers_ring": fog_covers},
+		"one_retained_max": int(st["one_ret_max"]),
+		"two_retained_max": int(st["two_ret_max"]),
+		"killed_while_candidate": int(st["killed"]),
+		"back_hole_frames": int(st["back_hole"]),
+		"back_hidden_frames": int(st["back_hidden"]),
+		"t1_axial_full": {"key": e0["k"], "band": int(e0["band"]), "states": e0["states"], "one_out_events": t1_one, "freed": t1_freed, "vis_min": int(e0["vis_min"]), "killed_seen": bool(e0["killed_seen"]), "remeshed": bool(e0["remeshed"]), "hidden_cand": bool(e0["hidden_cand"]), "ok": t1_ok},
+		"t2_free_path": {"key": e1["k"], "band": int(e1["band"]), "states": e1["states"], "two_out_events": int(e1["two_out_events"]), "freed_at": int(e1["freed_at"]), "ok": t2_ok},
+		"t3_back_path": {"key": e2["k"], "band": int(e2["band"]), "states": e2["states"], "reentered_at": t3_back_idx, "vis_min": int(e2["vis_min"]), "killed_seen": bool(e2["killed_seen"]), "remeshed": bool(e2["remeshed"]), "hidden_cand": bool(e2["hidden_cand"]), "ok": t3_ok},
+		"samples": st["samples"],
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+	}
+	Debug.result(out)
+	get_tree().quit()
 
 
 func _await_boundary_core(spawn: Vector3, max_frames: int) -> void:

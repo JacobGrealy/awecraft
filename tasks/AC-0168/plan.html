@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0168 — plan</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}</style></head><body>
+<h1>AC-0168 — retain mesh at r+1 candidate (hide not kill)</h1>
+
+<h2>Goal</h2>
+<p>A chunk one render-ring past the radius (r+1, hidden by the fog at <code>fog_far=(R+1)*16*0.95</code>) keeps its mesh (<code>mesh_built</code> stays true) and stays visible (never <code>visible=false</code>, never mesh-nulled), so stepping back re-enters it instantly with no unload/reload flicker or pop. True free stays at r+2 after the existing 2-recenter-event hysteresis.</p>
+
+<h2>What the code actually does today (verified)</h2>
+<ul>
+<li>Stream set = <code>circle(R) ∪ diamond(b1_eff+1) ∪ circle-ring</code> (<code>world.gd in_stream_set:981</code>). The ring (one out, fog-hidden) is <em>in</em> the stream set: the WANT pass early-returns on <code>nb==3</code>, so a meshed chunk crossing the circle edge into the ring already keeps its mesh intact.</li>
+<li>One recenter later the chunk leaves the ring → <code>_enter_candidate</code> (<code>world.gd:2985</code>) <em>kills</em> the expensive parts: <code>mesh_built=false</code> + <code>chunk._enter_candidate_slabs()</code> (mesh/fluid/flora instances mesh-nulled, collision bodies + occluders freed). So the mesh dies exactly one recenter after the circle edge — at r+2 in the task's wording.</li>
+<li>Free pass (<code>world.gd recenter:3062-3082</code>): <code>two_out</code> = not circle-ring AND taxi &gt; b1_eff+2; <code>cand_since</code> increments per two_out recenter, free at ≥2.</li>
+<li>Flicker mechanics: player oscillates at the edge → fog-line chunk goes ring (mesh kept) → candidate (mesh killed) → player steps back → re-enters with <code>mesh_built=false</code> → WANT re-queues "build" → worker re-mesh (frames) → hole at the fog line → pop.</li>
+<li>Fog (<code>core/daynight.gd:11-12</code>): <code>fog_far(R)=(R+1)*16*0.95</code>, applied <code>main.gd:1760-1761</code> — ring near-face distance is <code>(R+1)*16−8</code> (R≤8: fog ends past the face) or the fog ends before the face (R≥9, e.g. R=50: 775.2 &lt; 808) → the r+1 band is fully fog-covered. <b>Already correct — not touched.</b></li>
+</ul>
+
+<h2>Fix (hide not kill)</h2>
+<ul>
+<li><code>world.gd _enter_candidate</code>: stop killing. Keep <code>mesh_built</code>, keep the slabs whole (mesh/fluid/flora instances, collision bodies, occluders). Candidate = node + data + edits + mesh, all retained; still clears pending light/fluid/tex/col work (re-entry re-marks dirty via the normal paths).</li>
+<li><code>chunk.gd</code>: <code>_enter_candidate_slabs()</code> becomes unused → removed.</li>
+<li>Re-entry: chunk back in the stream set with mesh alive → instantly visible, zero re-mesh, zero collision gap; also closes the AC-0134 stale-<code>queued_keys</code> re-entry hole for r+1 chunks (a meshed re-entrant is never WANT-queued). One guard added on the re-entry branch: <code>_stage_check(c, key)</code> re-stages a band-0 collision body if it was still pending (body not yet staged) when the chunk became a candidate — with the old kill the re-mesh path re-staged it; retaining the mesh removes that trigger.</li>
+<li>Free timing <b>unchanged</b>: still 2 recenter events after leaving the r+1 band; the retained mesh is freed with the node. Memory = at most ~2 recenter-events of edge arc (R=50: tens of coarse chunks; the task accepts the extra ~300–400 cols).</li>
+<li>Staleness: a retained candidate can only have data touched by band-0 fluid ticks (small R) → that path marks <code>fluid_dirty</code> → the flush loop re-meshes it (<code>mesh_built</code> gate passes) — fresher than today's dead mesh. Edits/light waves can't reach (16+ blocks). Atlas swap re-meshes all (mesh gate passes).</li>
+<li>No comments in new code (ARCHITECTURE §1); two stale existing comments updated to match the new behavior.</li>
+</ul>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><code>_enter_candidate</code> retains mesh/slabs (drop the 2 kill lines); re-entry branch calls <code>_stage_check</code> (collision re-stage guard); refresh the recenter-hysteresis + candidate + cull doc comments (stale after change).</td></tr>
+<tr><td><code>godot/world/chunk.gd</code></td><td>remove now-unused <code>_enter_candidate_slabs()</code>.</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>new <code>logic == "edgeretain"</code> dispatch branch + <code>_edgeretain_test()</code> probe (R=8: boot, wait core+edge build, fly east 1 chunk/step watching the trailing ring, hold-still recenter events, step back, then out to free; per-step ring evidence + tracked-chunk lifecycle + mesh-identity no-flicker + free-only-at-r+2 + fog coverage) — no other main.gd changes.</td></tr>
+<tr><td><code>tasks/AC-0168/*</code></td><td>plan.html, continuity.md, results.html, spec FILL sections.</td></tr>
+</table>
+<p>Not touched: <code>daynight.gd</code>, fog application (verified correct), LOD bands (AC-0181/0182), edit-front (AC-0187), band constants, <code>TASKS.yaml</code> (coordinator closeout).</p>
+
+<h2>Harness gates</h2>
+<table>
+<tr><th>gate</th><th>command (one godot at a time, HOME=/tmp/dsh_home)</th><th>pass</th></tr>
+<tr><td>G0</td><td><code>timeout 300 godot --headless --path godot --quit</code></td><td>exit 0, zero <code>SCRIPT ERROR</code></td></tr>
+<tr><td>edgeretain (NEW)</td><td><code>timeout 900 env AWECRAFT_LOGIC=edgeretain godot --headless --path godot</code> (background)</td><td><code>ok:true</code>; per-step r+1 ring: retained&gt;0, killed_while_candidate=0, visible not hidden; back-step: same mesh identity, no unload/requeue/remesh, hole_frames=0; free only after 2 two_out events (held through multiple one_out events); fog covers ring</td></tr>
+<tr><td>SMOKE</td><td><code>timeout 300 env 'AWECRAFT_BATTERY=player;interact;light;fluids;genhash' godot --headless --path godot</code></td><td>all <code>ok:true</code>; genhash 25/25 byte-identical to AC-0187/0182 runs</td></tr>
+<tr><td>lodswap (AC-0182 regression)</td><td><code>timeout 300 env AWECRAFT_LOGIC=lodswap godot --headless --path godot</code></td><td><code>ok:true</code> unchanged (probe stays in-circle; candidate path is separate)</td></tr>
+<tr><td>RENDER (optional, one)</td><td>xvfb snapshot at the edge</td><td>fog fade visible, no pop; headless probe carries if xvfb hangs</td></tr>
+</table>
+<p>Boundary r4 / perf / heavy + <code>./build_windows.sh</code> = coordinator's job (out of scope here).</p>
+
+<h2>Risks</h2>
+<ul>
+<li><b>Boundary/perf r4 baselines:</b> at R=4 every r+1/r+2 candidate is band-3 data-only (never meshed) → retention is a no-op there; loads/unloads/flap/built_final/p95 expected unchanged. (Coordinator re-runs heavy anyway.)</li>
+<li><b>Memory:</b> large probe jumps (nltest-style 256-block hops) hold the whole old world's meshes for one extra recenter event — same meshes, no double allocation; freed at the unchanged cand_since=2. Bounded by design.</li>
+<li><b>LOD interplay:</b> re-entry reband still runs (WANT pass, <code>_reband</code>); a retained mesh now serves as the old-mesh during retain-until-swap (strictly better than a null-mesh candidate). <code>lodswap</code> gate re-checked.</li>
+<li><b>Frustum cull vs "visible":</b> cull still runs normally; the probe asserts the tracked ring chunk is not hidden (visible meshes &gt; 0, all slab meshes present) while in frustum — candidacy must not force-hide.</li>
+</ul>
+
+</body></html>

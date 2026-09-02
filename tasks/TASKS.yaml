@@ -3,7 +3,6 @@ meta:
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0168
 - AC-0169
 - AC-0156
 - AC-0175
@@ -5188,11 +5187,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-31T11:53
   updated_at: 2026-08-31T16:27
-  completed_at: null
+  completed_at: 2026-09-02T06:05
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player walking near the edge of render distance, I want chunks at r+1 to stay on screen (fog
@@ -5208,6 +5207,10 @@ intake:
     created_at: '2026-09-01T02:12:48.549746'
     updated_at: null
     text: '[coordinator] Reasoning: xhigh (non-trivial, plan+verify) — '
+  - id: 2
+    created_at: '2026-09-02T06:05:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE 2026-09-02 — r+1 candidate now RETAINS its mesh (mesh_built + slabs kept, not killed) and stays visible; the existing fog_far=(R+1)*16*0.95 (daynight.gd:11-12) hides the band so stepping back shows no unload/reload flicker or pop. True free stays at r+2 after the 2-recenter-event hysteresis. _enter_candidate retain path + recenter re-entry _stage_check guard; _enter_candidate_slabs() removed from chunk.gd; NEW AWECRAFT_LOGIC=edgeretain R=8 probe (3 tracked edge chunks: held through 5 one_out events never freed, back-step re-enters remeshed:false, killed_while_candidate:0, back_hole/hidden_frames:0, fog covers ring). Gates: G0 0; edgeretain ok:true; SMOKE all baselines; genhash 25/25 IDENTICAL (x2); lodswap ok:true (AC-0182 regression); HEAVY boundary r4 x2 p95 31/27 (in band) + perf r4 p95 23 + fog_ok; build 109,826,640 B sha f341a964 8080 byte-match + 5180=200 + 8443 down. Results: tasks/AC-0168/AC-0168-results.html.'
 - id: AC-0169
   title: 'debug stats overlay: CPU/RAM/VRAM/FPS'
   source: user

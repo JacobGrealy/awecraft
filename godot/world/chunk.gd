@@ -1832,26 +1832,6 @@ func build_dirty_slab_bodies() -> void:
 				s.col_dirty = false
 
 
-func _enter_candidate_slabs() -> void:
-	if slabs.is_empty():
-		init_slabs()
-	for s in slabs:
-		if s.mesh_instance != null:
-			s.mesh_instance.mesh = null
-		if s.fluid_instance != null:
-			s.fluid_instance.mesh = null
-		if s.flora_instance != null:
-			s.flora_instance.mesh = null
-		if s.collision_body != null:
-			s.collision_body.queue_free()
-			s.collision_body = null
-		if s.occluder != null:
-			s.occluder.queue_free()
-			s.occluder = null
-		s.built = false
-		s.col_dirty = true
-
-
 func drop_slab_bodies() -> void:
 	for s in slabs:
 		if s.collision_body != null:
