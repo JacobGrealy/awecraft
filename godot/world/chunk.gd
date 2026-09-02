@@ -2358,6 +2358,7 @@ func apply_accs(res: Dictionary, ms: Dictionary) -> void:
 
 
 func apply_edit_accs(res: Dictionary, ms: Dictionary) -> void:
+	var pms := {"tex": null, "rects": {}, "h": 0.0}
 	var si0 := int(res.get("si0", 0))
 	var si1 := int(res.get("si1", slab_n() - 1))
 	for si in range(si0, si1 + 1):
@@ -2378,7 +2379,7 @@ func apply_edit_accs(res: Dictionary, ms: Dictionary) -> void:
 	last_blk_ring = res.light.get("ring", PackedInt32Array())
 	for i in range(si1 - si0 + 1):
 		var row: Array = res.slabs[i]
-		_assemble_slab(slabs[si0 + i], _acc_from_dict(row[0]), _acc_from_dict(row[1]), _acc_from_dict(row[2]), _acc_from_dict(row[3]), _acc_from_dict(row[4]), _acc_from_dict(row[5]), ms, bool(row[6]))
+		_assemble_slab(slabs[si0 + i], _acc_from_dict(row[0]), _acc_from_dict(row[1]), _acc_from_dict(row[2]), _acc_from_dict(row[3]), _acc_from_dict(row[4]), _acc_from_dict(row[5]), pms, bool(row[6]))
 	mesh_built = true
 	mesh_gen += 1
 	_post_build_collision()

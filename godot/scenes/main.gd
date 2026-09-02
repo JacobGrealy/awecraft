@@ -1146,6 +1146,12 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "editfront":
 			await _editfront_test(spawn)
 			return
+		if logic == "editmat":
+			await _editmat_test(spawn)
+			return
+		if logic == "editmatshot":
+			await _editmat_shot(spawn)
+			return
 		if logic == "chunkio":
 			await _chunkio_test(spawn)
 			return
@@ -3321,6 +3327,241 @@ func _editfront_present(T: Node3D) -> bool:
 		if s.flora_instance != null and s.flora_instance.mesh != null:
 			return true
 	return false
+
+
+# AC-0187 black-lines fix probe (AWECRAFT_LOGIC=editmat, harness-only):
+# the scoped (edit) build emits opaque faces in PLAIN-atlas UV space, so the
+# edited slab's opaque material must sample the PLAIN atlas, not the merged
+# one. Builds a stable chunk at small R, breaks a surface block, and reads
+# the scoped-rebuilt slab's opaque surface IMMEDIATELY after the scoped
+# handoff (before the light wave's full merged-UV rebuild): asserts the
+# material's sampled texture IS the plain lit atlas (ChunkScript._lit_atlas_tex)
+# and NOT the merged texture (ChunkScript._merge_atlas()["tex"]), and that
+# every opaque UV is within [0,1]. Deterministic — no render timing.
+func _editmat_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var R := 2
+	world.render_radius = R
+	world.recenter(spawn.x, spawn.z, true)
+	var pcx := int(world.last_pcx)
+	var pcz := int(world.last_pcz)
+	var pkey := "%d,%d" % [pcx, pcz]
+	var wb := 0
+	var quiet := 0
+	while wb < 3600:
+		var allm := true
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
+				if c == null or not c.mesh_built:
+					allm = false
+					break
+			if not allm:
+				break
+		var idle: bool = world.light_dirty.is_empty() and world.light_pending.is_empty() and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
+		if allm and idle:
+			quiet += 1
+		else:
+			quiet = 0
+		if quiet >= 5:
+			break
+		await get_tree().process_frame
+		wb += 1
+	var T = world.chunks.get(pkey)
+	if T == null or not T.mesh_built:
+		Debug.result({"ok": false, "error": "player chunk never built"})
+		get_tree().quit()
+		return
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	var cell := Vector3i(sx, world.surface_top(sx, sz), sz)
+	var okc := _breakable(world.get_block(cell.x, cell.y, cell.z))
+	if not okc:
+		for dx in range(-8, 9, 2):
+			if okc:
+				break
+			for dz in range(-8, 9, 2):
+				var t2: int = world.surface_top(sx + dx, sz + dz)
+				if _breakable(world.get_block(sx + dx, t2, sz + dz)):
+					cell = Vector3i(sx + dx, t2, sz + dz)
+					okc = true
+					break
+	if not okc:
+		Debug.result({"ok": false, "error": "no breakable surface cell near spawn"})
+		get_tree().quit()
+		return
+	var r1 := await _editmat_case(T, cell)
+	Debug.result({
+		"ok": bool(r1.get("ok", false)),
+		"mode": "editmat",
+		"R": R,
+		"cell": [cell.x, cell.y, cell.z],
+		"atlas_present": Data.atlas_tex != null,
+		"opaque_mat_is_plain": r1.get("opaque_mat_is_plain", false),
+		"merged_tex_present": r1.get("merged_tex_present", false),
+		"uv_min": r1.get("uv_min", []),
+		"uv_max": r1.get("uv_max", []),
+		"uv_in_range": r1.get("uv_in_range", false),
+		"probe": r1,
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+	})
+	get_tree().quit()
+
+
+func _editmat_case(T: Node3D, cell: Vector3i) -> Dictionary:
+	var key := "%d,%d" % [int(T.cx), int(T.cz)]
+	var mesh_before := {}
+	for i in range(T.slabs.size()):
+		var sb = T.slabs[i]
+		if sb.mesh_instance != null and sb.mesh_instance.mesh != null:
+			mesh_before[i] = sb.mesh_instance.mesh
+	world._editprobe_key = key
+	world._editprobe_ms = -1.0
+	world._editprobe_kind = ""
+	world._editprobe_t0_usec = Time.get_ticks_usec()
+	world.set_block(cell.x, cell.y, cell.z, 0)
+	var frames := 0
+	while frames < 600 and world._editprobe_ms < 0.0:
+		await get_tree().process_frame
+		frames += 1
+	if world._editprobe_ms < 0.0:
+		world._editprobe_key = ""
+		return {"ok": false, "error": "scoped handoff never landed"}
+	var kind: String = world._editprobe_kind
+	world._editprobe_key = ""
+	var read_si := -1
+	var read_mesh = null
+	var read_mat = null
+	var read_tex = null
+	for i in range(T.slabs.size()):
+		var sb = T.slabs[i]
+		if sb.mesh_instance == null or sb.mesh_instance.mesh == null:
+			continue
+		var old = mesh_before.get(i, null)
+		if sb.mesh_instance.mesh == old:
+			continue
+		if sb.mesh_instance.mesh.get_surface_count() < 1:
+			continue
+		read_si = i
+		read_mesh = sb.mesh_instance.mesh
+		read_mat = read_mesh.surface_get_material(0)
+		if read_mat is ShaderMaterial:
+			read_tex = read_mat.get_shader_parameter("tex")
+		break
+	var plain: Texture2D = _ChunkScriptM._lit_atlas_tex()
+	var merged: Dictionary = _ChunkScriptM._merge_atlas()
+	var merged_tex = merged.get("tex", null)
+	var merged_present: bool = merged_tex != null
+	var is_plain: bool = read_tex != null and read_tex == plain and (not merged_present or read_tex != merged_tex)
+	var uv_min := Vector2(INF, INF)
+	var uv_max := Vector2(-INF, -INF)
+	var uv_count := 0
+	var uv_ok := false
+	if read_mesh != null and read_mesh.get_surface_count() > 0:
+		var arrs = read_mesh.surface_get_arrays(0)
+		var uvs: PackedVector2Array = arrs[Mesh.ARRAY_TEX_UV]
+		uv_count = uvs.size()
+		for u in uvs:
+			uv_min.x = minf(uv_min.x, u.x)
+			uv_min.y = minf(uv_min.y, u.y)
+			uv_max.x = maxf(uv_max.x, u.x)
+			uv_max.y = maxf(uv_max.y, u.y)
+		uv_ok = uv_count > 0 and uv_min.x >= 0.0 and uv_min.y >= 0.0 and uv_max.x <= 1.0 and uv_max.y <= 1.0
+	return {
+		"ok": kind == "edit" and is_plain and uv_ok,
+		"kind": kind,
+		"frames": frames,
+		"read_slab": read_si,
+		"opaque_mat_is_plain": is_plain,
+		"mat_class": String(read_mat.get_class()) if read_mat != null else "",
+		"tex_class": String(read_tex.get_class()) if read_tex != null else "",
+		"plain_class": String(plain.get_class()) if plain != null else "",
+		"merged_tex_present": merged_present,
+		"uv_count": uv_count,
+		"uv_min": [uv_min.x, uv_min.y],
+		"uv_max": [uv_max.x, uv_max.y],
+		"uv_in_range": uv_ok,
+		"cell_after": world.get_block(cell.x, cell.y, cell.z),
+	}
+
+
+# AC-0187 black-lines fix render shot (AWECRAFT_LOGIC=editmatshot +
+# AWECRAFT_SNAPSHOT, xvfb gl_compatibility only): breaks a surface block near
+# spawn, lets the scoped remesh + light wave settle, then snaps a top-down view
+# of the edited region to confirm no black lines / wrong texels on the rebuilt
+# slab. The scoped-window material identity is the headless editmat gate; this
+# is a steady-state visual sanity check of the edited block.
+func _editmat_shot(spawn: Vector3) -> void:
+	var snapshot_path := OS.get_environment("AWECRAFT_SNAPSHOT")
+	var R := 2
+	world.render_radius = R
+	world.recenter(spawn.x, spawn.z, true)
+	var pcx := int(world.last_pcx)
+	var pcz := int(world.last_pcz)
+	var pkey := "%d,%d" % [pcx, pcz]
+	var wb := 0
+	var quiet := 0
+	while wb < 3600:
+		var allm := true
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
+				if c == null or not c.mesh_built:
+					allm = false
+					break
+			if not allm:
+				break
+		var idle: bool = world.light_dirty.is_empty() and world.light_pending.is_empty() and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
+		if allm and idle:
+			quiet += 1
+		else:
+			quiet = 0
+		if quiet >= 5:
+			break
+		await get_tree().process_frame
+		wb += 1
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	var cell := Vector3i(sx, world.surface_top(sx, sz), sz)
+	var okc := _breakable(world.get_block(cell.x, cell.y, cell.z))
+	if not okc:
+		for dx in range(-8, 9, 2):
+			if okc:
+				break
+			for dz in range(-8, 9, 2):
+				var t2: int = world.surface_top(sx + dx, sz + dz)
+				if _breakable(world.get_block(sx + dx, t2, sz + dz)):
+					cell = Vector3i(sx + dx, t2, sz + dz)
+					okc = true
+					break
+	if not okc:
+		Debug.result({"ok": false, "error": "no breakable surface cell near spawn"})
+		get_tree().quit()
+		return
+	player = _spawn_player()
+	await _await_spawn_floor(spawn, 600)
+	Debug.fly(true)
+	world.set_block(cell.x, cell.y, cell.z, 0)
+	var st := 0
+	var squiet := 0
+	while st < 600:
+		var s_idle: bool = world.light_dirty.is_empty() and world.light_pending.is_empty() and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
+		if s_idle:
+			squiet += 1
+		else:
+			squiet = 0
+		if squiet >= 5:
+			break
+		await get_tree().process_frame
+		st += 1
+	var feet_y := float(cell.y) + 7.4
+	Debug.teleport(float(cell.x) + 0.5, feet_y, float(cell.z) + 0.5)
+	player.look(0.0, -1.55)
+	for i in range(15):
+		await get_tree().physics_frame
+	await Debug.snap(snapshot_path)
+	Debug.result({"editmatshot": true, "ok": true, "cell": [cell.x, cell.y, cell.z], "w": int(get_viewport().size.x), "h": int(get_viewport().size.y)})
+	get_tree().quit()
 
 
 # AC-0126 probe (env-gated by AWECRAFT_LOGIC=breakspike, never runs in

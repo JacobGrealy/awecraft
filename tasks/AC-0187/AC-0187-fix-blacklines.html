@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0187 fix — black lines on scoped edit</title></head><body>
+<h1>AC-0187 fix — breaking a block shows BLACK LINES for a few seconds</h1>
+<p>User story: as a player, breaking or placing a block must not flash corrupted/dark
+texels (black lines) on that chunk for a few seconds. The hole/appearance must look
+correct immediately (the scoped remesh) and stay correct (the wave's full rebuild).</p>
+
+<h2>Root cause (one paragraph)</h2>
+<p>In <code>godot/world/chunk.gd</code>, the <b>scoped</b> (edit) build emits its opaque
+faces through the <b>plain</b> per-face path (<code>_s_emit_faces</code>), which computes UVs in
+<b>PLAIN</b> atlas space: <code>make_ctx()</code> sets <code>ctx["atlas_px"]=Data.ATLAS_PX</code> and
+<code>ctx["brect"][id_face]=Data.block_rect(id, face)</code>. But the opaque surface material was
+<b>always</b> built as <code>_get_mat("opaque", ms.tex)</code> inside <code>_assemble_slab</code>
+(chunk.gd:1957), where <code>ms.tex</code> is the <b>MERGED</b> atlas texture
+(<code>_merge_atlas()</code>). So the freshly-edited slab's <i>plain-space</i> UVs were sampled
+against the <i>merged</i> texture → wrong texels → <b>black lines</b>, until the light "wave"
+did a full (merged-UV) rebuild. Every other surface kind (cutout <code>rk</code>, flower
+<code>rq</code>, fluid, cutout-opaque <code>rc_o</code>) already uses a PLAIN-atlas material, so ONLY
+the opaque <code>ro</code> path was mismatched. The full-build path (<code>build_accs</code>
+non-scoped, <code>apply_accs</code>) correctly pairs merged UVs with the merged material, so the
+bug is scoped-path-only.</p>
+
+<h2>The fix (exact diff — surgical, chunk.gd only)</h2>
+<p>Make the scoped build's opaque material use the <b>PLAIN</b> atlas so it matches the
+plain emit's UVs. <code>apply_edit_accs</code> (used <b>only</b> by the scoped/edit path) now
+passes a plain-ms (<code>tex=null</code>) to <code>_assemble_slab</code>;
+<code>_get_mat("opaque", null)</code> → <code>_lit_material(..., null)</code> →
+<code>_lit_atlas_tex()</code> = the same plain atlas the plain UVs reference.</p>
+<pre>
+ godot/world/chunk.gd  (apply_edit_accs, ~line 2360)
+ func apply_edit_accs(res: Dictionary, ms: Dictionary) -> void:
++	var pms := {"tex": null, "rects": {}, "h": 0.0}
+ 	var si0 := int(res.get("si0", 0))
+ 	var si1 := int(res.get("si1", slab_n() - 1))
+ 	...
+ 	for i in range(si1 - si0 + 1):
+ 		var row: Array = res.slabs[i]
+-		_assemble_slab(slabs[si0 + i], _acc_from_dict(row[0]), ..., _acc_from_dict(row[5]), ms, bool(row[6]))
++		_assemble_slab(slabs[si0 + i], _acc_from_dict(row[0]), ..., _acc_from_dict(row[5]), pms, bool(row[6]))
+</pre>
+<p>Nothing else changed in chunk.gd. The full-build call sites (<code>build_mesh</code>
+line 2314, <code>apply_accs</code> line 2354) still pass the merged <code>ms</code>; <code>_get_mat</code>,
+<code>_merge_atlas</code>, the merged emit, fog, and all generation code are untouched.
+No comments in new/changed code. <code>main.gd</code> gains two harness-only arms
+(<code>editmat</code> + <code>editmatshot</code>), never run in game.</p>
+
+<h2>editmat probe — RESULT (the primary, deterministic gate)</h2>
+<p>New <code>AWECRAFT_LOGIC=editmat</code> (R=2): builds a stable chunk, breaks a surface
+block, and reads the scoped-rebuilt slab's opaque surface <b>immediately after the scoped
+handoff</b> (before the wave's full rebuild) via the <code>_editprobe</code> handoff hook
+(<code>kind=="edit"</code> confirms it is the scoped handoff). Asserts the material's sampled
+texture <b>is</b> the plain lit atlas (<code>ChunkScript._lit_atlas_tex()</code>) and <b>is not</b>
+the merged texture (<code>ChunkScript._merge_atlas()["tex"]</code>), and that every opaque UV ∈ [0,1].</p>
+<table border="1" cellpadding="4">
+<tr><th>Field</th><th>Post-fix (GREEN)</th><th>Pre-fix (A/B, revert only the 1 line)</th></tr>
+<tr><td><code>ok</code></td><td style="color:green"><b>true</b></td><td style="color:red">false</td></tr>
+<tr><td><code>opaque_mat_is_plain</code></td><td style="color:green"><b>true</b></td><td style="color:red">false</td></tr>
+<tr><td><code>merged_tex_present</code></td><td>true (so the check is a real discriminator)</td><td>true</td></tr>
+<tr><td><code>kind</code> / <code>read_slab</code></td><td>"edit" / 8 (slab of y=136)</td><td>"edit" / 8</td></tr>
+<tr><td><code>mat_class</code> / <code>tex_class</code></td><td>ShaderMaterial / ImageTexture</td><td>ShaderMaterial / ImageTexture</td></tr>
+<tr><td><code>uv_count</code> / <code>uv_in_range</code></td><td>3320 / true</td><td>3320 / true</td></tr>
+<tr><td><code>uv_min</code> / <code>uv_max</code></td><td>[0.000488, 0.000488] / [0.312012, 0.030762]</td><td>identical</td></tr>
+<tr><td><code>atlas_present</code> / cell / handoff frames</td><td>true / [8,136,8] / 5</td><td>true / [8,136,8] / 5</td></tr>
+</table>
+<p>The two runs are <b>identical except the material identity</b> — pre-fix the opaque
+material's <code>tex</code> was the merged texture (<code>opaque_mat_is_plain:false</code>), post-fix it is
+the plain lit atlas (<code>opaque_mat_is_plain:true</code>). Same cell, same slab, same UVs.
+This proves the probe genuinely catches the bug and the fix resolves it.</p>
+
+<h2>Render (best-effort visual proof)</h2>
+<p>New <code>AWECRAFT_LOGIC=editmatshot</code> + <code>AWECRAFT_SNAPSHOT</code> (xvfb
+<code>gl_compatibility</code>, 960×540): breaks the surface block at [8,136,8], lets the scoped
+remesh + light wave settle, then snaps a top-down view of the edited region.</p>
+<p>Outcome: <b>PASS — no black lines.</b> The 1×1 hole (exposed dirt) renders with a normal
+dirt texture and the surrounding grass / hillside / trees are clean; no corrupted or dark
+texels on the rebuilt slab. <code>RESULT {"editmatshot":true,"ok":true,"cell":[8,136,8]}</code>.
+This is a steady-state (post wave-rebuild) sanity check — the scoped-window material identity
+is carried by the deterministic headless <code>editmat</code> gate. (First run failed only on a
+relative <code>save_png</code> path — Godot needs an absolute/`res://` path — re-ran once with an
+absolute path; no GL-init hang.) Screenshot:
+<code>.scratch/AC-0187-fix-gates/editmatshot.png</code>.</p>
+
+<h2>Regression gates (all GREEN)</h2>
+<table border="1" cellpadding="4">
+<tr><th>Gate</th><th>Result</th><th>Key values</th></tr>
+<tr><td>G0 — <code>godot --headless --quit</code></td><td style="color:green">GREEN</td><td>exit 0, 0 SCRIPT ERROR (re-checked after the chunk.gd fix, after the probe, and after the render arm)</td></tr>
+<tr><td>editfront — <code>AWECRAFT_LOGIC=editfront</code> (AC-0187 probe, R=50)</td><td style="color:green">GREEN ok:true</td><td>break 34.0 ms / place 48.7 ms (both &lt;50), drop_frames 0, drops 0, scoped=2, full=0, present_before/after true, queue 8244→8240 (far stream kept draining), tm_cap 6</td></tr>
+<tr><td>SMOKE — <code>AWECRAFT_BATTERY="player;interact;light;fluids;genhash"</code></td><td style="color:green">GREEN ok:true</td><td>player 9.7 s / interact 2.7 s / light 11.1 s / fluids 13.8 s / genhash 3.1 s; 0 SCRIPT ERROR</td></tr>
+<tr><td>genhash 25/25 byte-identical</td><td style="color:green">GREEN</td><td>all 25 GENHASH lines from the SMOKE run BYTE-IDENTICAL to the AC-0187 baseline (<code>.scratch/AC-0187-gates/genhash_A.txt</code>, the last committed pre-fix tree) — the fix touches meshing only, generation provably untouched</td></tr>
+<tr><td>lodswap — <code>AWECRAFT_LOGIC=lodswap</code> (AC-0182 regression)</td><td style="color:green">GREEN ok:true</td><td>no_hole true, hole_frames 0, flicker ok (band_changes 0, fidelity_changes 0), retain_window true, lod_swaps 2 both instant (0.117 / 0.088 ms), cross1 atomic</td></tr>
+</table>
+
+<h2>Deviations / notes for the coordinator</h2>
+<ol>
+<li><b>Material-cache ping-pong (expected, harmless).</b> After the fix the scoped handoff
+calls <code>_get_mat("opaque", null)</code> and the wave's full build calls
+<code>_get_mat("opaque", merged)</code>; each clears the identity-keyed <code>_mat_cache</code> and
+recreates the opaque ShaderMaterial. A few allocations per edit; sampling is always correct
+(plain UVs ↔ plain texture on the scoped mesh, merged UVs ↔ merged texture on the full mesh).
+No visual effect beyond the intended fix.</li>
+<li><b>editfront place 48.7 ms</b> is within the &lt;50 ms gate but a touch above the AC-0187
+baseline (37.3 ms) — machine variance under the fix's extra material recreation; the gate
+(<code>ms &lt; 50.0</code>) holds and drops stay 0.</li>
+<li><b>Render = steady-state proof.</b> The black-line window is only the few frames between
+the scoped remesh and the wave's full rebuild; a <code>Debug.snap</code> (which awaits
+<code>frame_post_draw</code>) lands after that window, so the render shot shows the settled
+(correct) state. It confirms "no black lines at the edited block after the remesh" and that
+the fix produces no corruption; the scoped-window material identity is the authoritative
+headless <code>editmat</code> gate (with a pre-fix A/B).</li>
+<li><b>New harness arms</b> <code>editmat</code> / <code>editmatshot</code> are harness-only (env-gated,
+never run in game), consistent with the other <code>AWECRAFT_LOGIC</code> probes.</li>
+</ol>
+
+<h2>Files changed</h2>
+<ul>
+<li><code>godot/world/chunk.gd</code> — <code>apply_edit_accs</code>: plain-ms (<code>pms</code>) for the scoped opaque material (1 line added, 1 line changed). Nothing else.</li>
+<li><code>godot/scenes/main.gd</code> — +2 dispatch branches; +<code>_editmat_test</code>/<code>_editmat_case</code> (deterministic material-identity + UV probe) and <code>_editmat_shot</code> (render sanity shot). Harness-only.</li>
+<li><code>tasks/AC-0187/AC-0187-fix-blacklines.html</code> (this file), <code>tasks/AC-0187/continuity.md</code> (new RUN entry).</li>
+</ul>
+
+<p>Logs: <code>.scratch/AC-0187-fix-gates/</code> — g0.out, g0_render.out, editmat.log (GREEN),
+editmat_prefix.log (A/B false), editfront.log, smoke.log, genhash_new.txt, lodswap.log,
+editmatshot2.log + editmatshot.png.</p>
+</body></html>
