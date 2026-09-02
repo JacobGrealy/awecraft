@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0197 results — sparse air slabs (skip empty top)</title></head>
+<body style="font-family: ui-monospace, monospace; font-size: 14px; max-width: 1050px; margin: 24px auto; line-height: 1.45">
+<h1>AC-0197 — sparse-air-slabs-skip-empty-top — RESULTS</h1>
+<p>Status: <b id="status">DONE — all gates green except the as-written p95 build_worker &lt;30 ms
+target (see R50 row: 240 ms; unreachable at full-build granularity — real deltas below).</b>
+Subagent single xhigh turn (plan+implement+verify).
+In-memory representation stays dense; sparseness is in the codec (v3) and in the per-chunk work skipped.
+<b>#1 invariant: round-trip lossless + genhash byte-identical.</b></p>
+
+<h2>What changed (files)</h2>
+<table border="1" cellpadding="4"><tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/world/chunk.gd</code></td><td><code>top</code> field + <code>update_top()</code> (top-down, row early-out); <code>set_local</code> monotonic raise; <code>init_fl</code> rescan (all 5 gen paths); <code>build_accs</code> top clamp (<code>si1</code> at top slab, <code>y_hi = top+1</code>) via <code>ctx.get("top", -1)</code> (scoped edit path untouched); <code>_bake_box</code> row-scoped allocation (153600 B → ~(y_hi-y_lo+1)·400 B, <code>bmn.y = y_lo</code>); <code>apply_accs</code> range-aware over partial <code>res.slabs</code>; <code>scoped</code> stays false for a top-clamped FULL build (keeps merge-atlas emit + full accumulator list).</td></tr>
+<tr><td><code>godot/world/lighting.gd</code></td><td>Pull kernel <code>top</code> param: column scan + eff flood/inject/re-flood truncated to <code>top+1</code> (eff rows above top filled 15 directly — provably identical); own-glow flood truncated to <code>top+15</code>; <b>imported (neighbor-strip) light + mask stay full-height</b> → block-light mask byte-identical in every cell; <code>_flood_flat(..., hact)</code> (seed scan + up-step + pattern sized to active rows); <code>_chunk_blk_inject(..., hgate)</code> (eff pass only).</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><code>update_top()</code> at both disk-load sites + edit application; <code>ctx_w["top"]</code> on full dispatch; <code>perf_build_worker_ms_list</code> (+appends at both handoffs, worker p50/p95 gate).</td></tr>
+<tr><td><code>godot/core/chunk_io.gd</code></td><td><code>VERSION := 3</code> (decode accepts 1/2/3; v2 = AC-0156 dense+light, decodable, never written); v3 sections = <code>u8 n_present + u16 slab idx + self-delimiting payloads</code>, absent slab zero-filled; slabs &gt; top/16 omitted without scanning, others early-exit scanned; <code>encode_column(..., top)</code> self-derives; decoder fail-closed.</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td><code>colbytes</code> probe (storage gate, codec-agnostic); perf arm: <code>AWECRAFT_PERF_FRAMES</code>, band&gt;2 skip in <code>all</code> (collar made it unreachable), PERFPROG line /10 s, RESULT gains <code>built_final / band3_in_square / build_worker_n/p50/p95/max</code> (null-safe so the same arm runs the before baseline).</td></tr>
+</table>
+
+<h2>Gate results</h2>
+<table border="1" cellpadding="4">
+<tr><th>Gate</th><th>Result</th><th>Values</th></tr>
+<tr><td>G0 headless</td><td><b>PASS</b></td><td>EXIT=0, 0 SCRIPT ERROR</td></tr>
+<tr><td>GENHASH 25/25 vs baseline</td><td><b>PASS — IDENTICAL</b></td><td>25/25 lines byte-identical (raw diff) vs <code>.scratch/AC-0156-gates/genhash_A.txt</code>, first line <code>GENHASH -2 -2 8b4cf7c7…</code>; 0 SCRIPT ERROR</td></tr>
+<tr><td>Codec self-test (v3)</td><td><b>PASS</b></td><td><code>v3_selftest.gd</code> 14/14 true: round-trip data/fl/blk/mask/arr with+without top (explicit vs derived → identical blob), v1 (20526 B) + v2 (20835 B) decode, v3 20802 B, corrupt-byte reject, wrong-seed/wrong-height reject, no-light mode</td></tr>
+<tr><td>STORAGE before→after</td><td><b>PASS</b></td><td>before (v2): avg <b>4338 B</b> / min 2806 / max 5947 / 6362 ms; after (v3): avg <b>4258 B</b> (−1.8%) / min 2734 / max 5867 / 6267 ms; same 25 cols, tops identical (143–219). Modest by construction — zlib already crushed zero slabs (see note 6)</td></tr>
+<tr><td>SMOKE battery</td><td><b>PASS</b></td><td><code>player;interact;light;fluids;genhash</code> all green, 0 SCRIPT ERROR. Light arm EXACT: surface_eff <b>15</b>, cave_eff <b>10</b>, torch_level <b>14</b>, torch_far <b>1→9</b></td></tr>
+<tr><td>R50 perf before→after</td><td><b>built_final PASS; p95 target MISS</b></td><td>
+same env <code>perf R=50 PERF_FRAMES=108000</code>, both runs in the same load window (after-run machine was
+actually slower per frame: 29.6 vs 31.95 fps).<br>
+<b>built_final 7845 → 7845 ✓</b> (target met, <code>all_meshed</code> both).<br>
+frames to full mesh: <b>99,244 → 88,910 (−10.4%)</b>.<br>
+build_ms (cumulative worker build total): <b>668,805 → 617,398 (−7.7%)</b>.<br>
+frame max (tail): <b>4876 → 3282 ms (−32.7%)</b>; frame p95 143 → 163 ms (+14%, load artifact).<br>
+build_worker n/p50/p95/max (after-only, full-build granularity, incl. light-driven rebuilds): <b>22,553 / 191 / 240 / 431 ms</b> —
+the as-written <code>p95 &lt; 30 ms</code> target is <b>not met</b>: a full 24-slab build on a 3×-loaded 6-core box
+with 6 workers + 4 gen threads cannot be 30 ms, and the metric did not exist on the before side.<br>
+mem_after: 6,087 → 5,978 MB (−109 MB); staged_dropped 0 both.</td></tr>
+<tr><td>Coordinator HEAVY (r4 boundary ×2 + perf + genhash ×2)</td><td><b>PASS</b></td><td>genhash ×2 IDENTICAL 25/25, and byte-identical to the AC-0156 ref (generation provably untouched). boundary r4 ×2 ok:true, remesh_ok + marker_ok, resident 101, loads/unloads ≈ baseline; p95 35/40 (box was 3×-loaded during the R50 runs) → clean re-run at load 1.17 <b>p95 32</b> (in band 30-37, no regression — the 35/40 was load inflation). perf r4 (arm upgraded by this task: all_meshed early-terminate + build_worker n/p50/p95/max) p95 77 over 525 build-heavy frames, build_worker p95 194 ms (full-build granularity — the same metric the R50 target used; confirms &lt;30 ms is unreachable at this granularity, not a regression). fog_ok.</td></tr>
+<tr><td>Windows build</td><td><b>PASS</b></td><td>BUILD_EXIT=0 · <code>exports/windows/AweCraft.exe</code> · <b>109,855,584 B</b> · sha <code>f87da865…</code> · 8080 byte-match YES · 5180=200 · 8443 down · only 8080 listening.</td></tr>
+</table>
+
+<h2>Deviation / notes log</h2>
+<ol>
+<li><b>top is derived by a post-gen scan, not a generator formula.</b> <code>update_top()</code> scans
+   the data (top-down, ≤256 tests per empty row, early-out) at every data-finalization point;
+   <code>set_local</code> raises it monotonically between rescans (stale-high = extra work only,
+   never wrong; stale-low impossible). The generator is untouched — genhash is identical by
+   construction, verified empirically.</li>
+<li><b>Before-baseline run discipline.</b> First R50 before attempt (new arm + pre-edit code)
+   exited 124 with no RESULT: the arm's RESULT section referenced the new
+   <code>world.perf_build_worker_ms_list</code> property (absent in pre-edit world.gd) and the
+   arm had no progress output, so a slow headless tick masked it. Fixed (null-safe read +
+   PERFPROG line) and re-run against pre-edit world/chunk/lighting/io staged from the git index
+   (post-edit copies backed up; md5s in <code>.scratch/AC-0197-gates/md5_state.txt</code>). The
+   <code>scoped</code> redefinition (top-clamped full build keeps the full/merge-atlas path) was
+   found by review of the same pass and fixed before the after run.</li>
+<li><b>In-memory stays dense.</b> <code>chunk.data/fl</code> keep full 98304 B; every existing
+   consumer (get_block, fluid sim, face probes, strips) is unchanged. Sparseness = codec v3 +
+   skipped scan/flood/mesh work. This is the lowest-risk shape of the win.</li>
+<li><b>Back-compat: v2 saves decode</b> (accept {1,2,3}); writes are v3. An old reader meeting a
+   v3 blob rejects and recomputes (fail-closed, per AC-0156 contract). AC-0175 region storage
+   reuses <code>encode_column/decode_column</code>, so it rides v3 automatically.</li>
+<li><b><code>_compute_face_blk</code> intentionally NOT truncated.</b> Block light relays
+   transitively across chunk boundaries from taller neighbors at any y (a torch at y≈300 on a
+   mountain lights a sealed cave at y≈180 on a neighbor whose own top is 190) — own-top
+   truncation would corrupt cross-boundary block light. Same cost before/after (fair comparison).</li>
+<li><b>Storage delta is modest by construction</b> — v2 zlib already crushes zero slabs
+   (before avg 4338 B, not the 8 KB in the notes). Expected win: codec section ~20% smaller
+   uncompressed (measured 22.4% on the reference column in the format self-test), compressed
+   delta smaller; the headline is CPU (scan 98k→~51k cells, eff flood 98k→~51k, bake-box
+   153600 B → ~65k B per build).</li>
+<li><b>D3 — pre-existing cross-thread slot race fixed (required to run the R50 gate at all).</b>
+   The first R50 before attempt segfaulted (signal 11) at ~22 min in the threadmesh worker's
+   <code>_tm_slots.get</code> spin (a worker thread reading a Dictionary the main thread
+   concurrently set/erases — AC-0152/AC-0178 spin pattern; Dictionaries have no internal
+   locking). Fix: a <code>Mutex</code> around every <code>_tm_slots</code>/<code>_tg_slots</code>
+   access, applied identically to the before and after code (behavior-neutral; spin semantics
+   unchanged). Evidence: <code>r50_before_crash1.log</code> (propagate_notification ERROR +
+   signal 11 backtrace, frame 80400). Re-run with the fix passed the old crash point cleanly.</li>
+<li><b>Arm bug in the 2nd before attempt (mine, fixed).</b> <code>var wml: Array = world.get(...)</code>
+    assigns Nil into a typed Array var, a GDScript runtime error on the pre-edit world.gd (property
+    absent) - the coroutine died before <code>Debug.result</code> and idled to the timeout (exit 124).
+    Note the meshing had COMPLETED by then (<code>all</code> true at ~frame 98500, PERFPROG
+    built=7831/7845). Fixed: untyped <code>var wml</code>. Log: <code>r50_before_partial2.log</code>.</li>
+<li><b>3rd before attempt killed by machine load (external).</b> Machine loadavg rose to ~4.2 on 6
+    cores (external job), halving the headless tick rate 64 to 32 fps; the run would have missed
+    its 3200 s timeout by ~2 min. Killed cleanly (no orphan), relaunched with a 4800 s timeout,
+    completed EXIT=0. The after run shares the same load window, so the before/after comparison is
+    load-fair; absolute ms are not comparable to AC-0178's idle-machine numbers.</li>
+<li><b>Two syntax slips caught by the gate run itself (fixed, gates re-run).</b> (a) The v3 rewrite
+    dropped <code>return {"arr": out, "off": o}</code> from legacy <code>_decode_array</code>, a parse
+    error cascading to the <code>save.gd</code> autoload (2 SCRIPT ERRORs on G0; the genhash arm does
+    not touch ChunkIO so its 25 lines were still valid, but G0 was re-run clean after the fix).
+    (b) An orphaned over-indented line in <code>v3_selftest.gd</code>. Both fixed; all gates green on
+    re-run (see table).</li>
+</ol>
+
+<h2>Log index</h2>
+<ul>
+<li><code>.scratch/AC-0197-gates/r50_before.log</code> — R50 before (arm PERFPROG lines + RESULT)</li>
+<li><code>.scratch/AC-0197-gates/r50_after.log</code> — R50 after</li>
+<li><code>.scratch/AC-0197-gates/colbytes_before.log</code> / <code>colbytes_after.log</code> — storage probe</li>
+<li><code>.scratch/AC-0197-gates/g0.log</code>, <code>genhash_after.log</code>, <code>selftest.log</code>, <code>smoke.log</code></li>
+<li><code>.scratch/AC-0197-gates/v3_selftest.gd</code> — codec self-test script (res://)</li>
+<li><code>.scratch/AC-0197-gates/after_backup/</code> + <code>before_src/</code> + <code>md5_state.txt</code> — baseline staging artifacts</li>
+</ul>
+</body></html>

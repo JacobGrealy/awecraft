@@ -27,6 +27,35 @@ var last_blk_ring: PackedInt32Array = PackedInt32Array()
 # invalidate when it moves — the pull strips derive from our last_eff.
 var eff_gen := 0
 var data_gen := 0
+# AC-0197: max y holding any non-air block in this column (-1 = no data yet).
+# Every row above top is air BY DEFINITION, so slabs > top/16 are empty:
+# build_accs stops at top/16, the pull kernel fills eff=15 above top and
+# skips the flood there, and the codec omits the null slabs. set_local only
+# RAISES it (mining the top settles back down on the next update_top);
+# gen/load/edit finalization rescan.
+var top := -1
+
+
+func update_top() -> void:
+	if data.is_empty():
+		top = -1
+		return
+	var t := -1
+	var y := Data.HEIGHT - 1
+	while y >= 0:
+		var row := y << 8
+		var anyv := false
+		var i := 0
+		while i < 256:
+			if data[row + i] != 0:
+				anyv = true
+				break
+			i += 1
+		if anyv:
+			t = y
+			break
+		y -= 1
+	top = t
 # AC-0080 two-stage hysteresis: candidate = at Chebyshev r+1 with expensive
 # parts killed (mesh/collision), data+edits kept; cand_since = count of
 # recenter events spent at >= r+2 (free at >= 2).
@@ -276,6 +305,8 @@ func get_local(lx: int, y: int, lz: int) -> int:
 func set_local(lx: int, y: int, lz: int, id: int) -> void:
 	data[(y << 8) | (lz << 4) | lx] = id
 	data_gen += 1
+	if id != 0 and y > top:
+		top = y
 
 
 func init_fl() -> void:
@@ -283,6 +314,7 @@ func init_fl() -> void:
 	# 0 -> 8 for display and sim), so the natural ocean never falls or churns.
 	# Player/bucket water arrives later with an explicit fl (8) and flows.
 	fl.resize(data.size())
+	update_top()  # AC-0197: every gen path finalizes data here
 
 
 func _effl(lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, x: int, y: int, z: int) -> int:
@@ -1423,12 +1455,29 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	var ph_snap := 0
 	var ph_faces := 0
 	var h: int = int(ctx["h"])
+	var topv := int(ctx.get("top", -1))
+	# AC-0197: a full build (no explicit si1) stays on the FULL path even
+	# after the top clamp shrinks si1 — "scoped" selects the AC-0187 edit
+	# fast-pass and the per-face (non-merged) emit path, which would strip
+	# merge-atlas packing from every clamped full build.
+	var was_full := si1 < 0
 	si0 = clampi(si0, 0, slab_n() - 1)
 	if si1 < 0:
 		si1 = slab_n() - 1
+		# AC-0197: a full build stops at the column's top slab — every slab
+		# above is all-air (rows above top are air by definition). Scoped
+		# edit builds keep their explicit bounds (they may touch the top slab
+		# right after a placement raised top).
+		if topv >= 0:
+			si1 = mini(si1, topv / 16)
 	si1 = clampi(maxi(si1, si0), si0, slab_n() - 1)
 	var y_lo := si0 * 16
 	var y_hi := mini(h, (si1 + 1) * 16)
+	if topv >= 0 and si1 == topv / 16:
+		# The rows of the top slab above the topmost block are air by
+		# definition — stop the scan one row past the top block. The +1
+		# margin below (snap/bake) still covers face/interior sampling.
+		y_hi = mini(y_hi, topv + 1)
 	# AC-0129: strips ride in on the ctx (main-thread copies, freed with it);
 	# empty eff -> self-light through the PULL kernel (neighbor block light
 	# crosses the boundary), cached eff -> validated upstream by ngen.
@@ -1439,7 +1488,7 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	var light_recomputed := light.is_empty() or light.get("mask", null) == null
 	if light_recomputed:
 		var tl := Time.get_ticks_msec()
-		light = Lighting.compute_light_flat_chunk_pull(data, cx, cz, h, eff_strips, blk_strips, blk_strips_b)
+		light = Lighting.compute_light_flat_chunk_pull(data, cx, cz, h, eff_strips, blk_strips, blk_strips_b, topv)
 		ph_light = Time.get_ticks_msec() - tl
 	var tb := Time.get_ticks_msec()
 	var bb := _bake_box(light, eff_strips, h, maxi(0, y_lo - 2), mini(h - 1, y_hi + 1))
@@ -1476,7 +1525,12 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	var c_af_l := _zeros(slab_n())
 	var c_ns := _zeros(slab_n())
 	var d: PackedByteArray = data
-	var scoped := (si1 - si0 + 1) < slab_n()
+	# AC-0197: a top-clamped FULL build keeps the full path (scoped=false):
+	# its window [0, top+1] contains every solid cell in the column, so
+	# merged-atlas runs are fully validatable and the fast ymask interior
+	# test is a no-op optimization we don't need. Only a genuine edit
+	# (explicit si0/si1) is scoped.
+	var scoped := (not was_full) and ((si1 - si0 + 1) < slab_n())
 	var sgrid := PackedByteArray()
 	var ymask := PackedInt32Array()
 	if scoped:
@@ -1663,22 +1717,26 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 # (a*2+b)*h + y (a = x-depth, b = z-depth, 0 = closest). Light only scales
 # vertex shade (geometry is snap-only) -> MINFO counts unaffected.
 static func _bake_box(light: Dictionary, eff_strips: Array, h: int, y_lo := 0, y_hi := -1) -> Dictionary:
+	# AC-0197: the box only allocates the y_lo..y_hi rows (callers clamp
+	# y_hi to top+2); emitters index via (y - mn.y), so mn.y carries the row
+	# offset. The full-height call (0, -1) stays byte-identical to before.
 	var w := 20
-	var arr := PackedByteArray()
-	arr.resize(w * w * h)
-	var bmn := Vector3i(-2, 0, -2)
 	if y_hi < 0:
 		y_hi = h - 1
+	var rows := y_hi - y_lo + 1
+	var arr := PackedByteArray()
+	arr.resize(w * w * rows)
+	var bmn := Vector3i(-2, y_lo, -2)
 	if light.is_empty():
 		return {"mn": bmn, "w": w, "d": w, "arr": arr}
 	var mn: Vector3i = light["mn"]
 	var arrc: PackedByteArray = light["arr"]
 	var lwc := int(light["w"])
 	var ldc := int(light["d"])
-	bmn = Vector3i(mn.x - 2, 0, mn.z - 2)
+	bmn = Vector3i(mn.x - 2, y_lo, mn.z - 2)
 	for y in range(y_lo, y_hi + 1):
 		var src_row := y * lwc * ldc
-		var dst_row := y * w * w
+		var dst_row := (y - y_lo) * w * w
 		for bz in range(2, 18):
 			var dst_z := dst_row + bz * w
 			var src_z := src_row + (bz - 2) * lwc
@@ -1693,7 +1751,7 @@ static func _bake_box(light: Dictionary, eff_strips: Array, h: int, y_lo := 0, y
 		var E: PackedByteArray = eff_strips[0]
 		if E.size() == fsize:
 			for y in range(y_lo, y_hi + 1):
-				var row := y * w * w
+				var row := (y - y_lo) * w * w
 				var srow := y * 16
 				for t in range(16):
 					arr[row + (2 + t) * w + 18] = E[srow + t]
@@ -1701,7 +1759,7 @@ static func _bake_box(light: Dictionary, eff_strips: Array, h: int, y_lo := 0, y
 		var W: PackedByteArray = eff_strips[1]
 		if W.size() == fsize:
 			for y in range(y_lo, y_hi + 1):
-				var row := y * w * w
+				var row := (y - y_lo) * w * w
 				var srow := y * 16
 				for t in range(16):
 					arr[row + (2 + t) * w + 1] = W[srow + t]
@@ -1709,7 +1767,7 @@ static func _bake_box(light: Dictionary, eff_strips: Array, h: int, y_lo := 0, y
 		var S: PackedByteArray = eff_strips[2]
 		if S.size() == fsize:
 			for y in range(y_lo, y_hi + 1):
-				var row := y * w * w
+				var row := (y - y_lo) * w * w
 				var srow := y * 16
 				for t in range(16):
 					arr[row + 18 * w + (2 + t)] = S[srow + t]
@@ -1717,7 +1775,7 @@ static func _bake_box(light: Dictionary, eff_strips: Array, h: int, y_lo := 0, y
 		var N: PackedByteArray = eff_strips[3]
 		if N.size() == fsize:
 			for y in range(y_lo, y_hi + 1):
-				var row := y * w * w
+				var row := (y - y_lo) * w * w
 				var srow := y * 16
 				for t in range(16):
 					arr[row + 1 * w + (2 + t)] = N[srow + t]
@@ -2356,8 +2414,13 @@ func apply_accs(res: Dictionary, ms: Dictionary) -> void:
 	last_blk_ring = res.light.get("ring", PackedInt32Array())
 	if bool(res.get("light_recomputed", false)):
 		light_recomputes += 1
-	for si in range(slab_n()):  # AC-0091: runtime slab count (was 5)
-		var row: Array = res.slabs[si]
+	# AC-0197: res.slabs is PARTIAL (si0..si1 only). A full build now stops
+	# at the top slab, so slabs above si1 were freed in the loop above and
+	# stay empty (air) — exactly what the null rows carried before.
+	var fsi0 := int(res.get("si0", 0))
+	var fsi1 := int(res.get("si1", slab_n() - 1))
+	for si in range(fsi0, fsi1 + 1):
+		var row: Array = res.slabs[si - fsi0]
 		_assemble_slab(slabs[si], _acc_from_dict(row[0]), _acc_from_dict(row[1]), _acc_from_dict(row[2]), _acc_from_dict(row[3]), _acc_from_dict(row[4]), _acc_from_dict(row[5]), ms, bool(row[6]))
 	mesh_built = true
 	mesh_gen += 1

@@ -1,13 +1,14 @@
 meta:
-  updated_at: 2026-09-02T12:11
+  updated_at: 2026-09-02T14:18
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0197
+- AC-0203
+- AC-0204
 - AC-0198
+- AC-0199
 - AC-0175
 - AC-0140
-- AC-0199
 - AC-0191
 - AC-0121
 - AC-0122
@@ -6005,11 +6006,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-02T14:55
   updated_at: 2026-09-02T14:55
-  completed_at: null
+  completed_at: 2026-09-02T17:55
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want sky over hills to cost nothing so R50 does not hitch on 11 empty slabs per column
@@ -6027,6 +6028,10 @@ intake:
     created_at: 2026-09-02T14:55
     updated_at: null
     text: '[user] top of queue per request - sparse air optimization (retry from AC-0191 conflict)'
+  - id: 2
+    created_at: '2026-09-02T17:55:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE 2026-09-02 (with an honest caveat on the numeric targets) — empty top slabs (sky above the terrain) are now skipped: per-column top (max non-air y) threaded generator->world->chunk/lighting/chunk_io; build_accs early-bounds si1 to the top slab (no 98k air scan), _bake_box row-scoped (153600 B -> ~65k), the lighting pull skips the flood above top+2 (eff=15 there), chunk_io v3 writes an offset table of only non-null slabs (v1/v2 decode kept). LOSSLESS: genhash 25/25 byte-identical (the #1 invariant — same world). REAL R50 wins (same env, before/after): built_final 7845->7845, build_ms -7.7%, frames-to-full-mesh -10.4%, frame max -33%, mem -109 MB. BONUS: found + fixed a pre-existing _tm_slots/_tg_slots cross-thread race (Mutex; the R50 before-run segfaulted at 22 min without it). **CAVEAT (targets miscalibrated in the notes, not an implementation failure):** (1) p95 build_worker <30 ms NOT met -> measured 240 ms (full-24-slab-build granularity on a 6-core box with 6 workers + 4 gen threads — cannot be 30 ms at that granularity; the metric did not exist on the before side). (2) 8 KB/col -> 5 KB NOT met -> measured 4338 -> 4258 B (-1.8%): zlib already crushes the zero slabs (the notes assumed the air storage was the bottleneck; it was not — the real before avg was 4338 B, not 8 KB). The R50 build is NOT dominated by the air-cell scan (non-air cells + meshing + collision + light dominate), so the ~45% the notes predicted is not reachable by skipping the air alone. If a bigger R50 win is wanted, the bottleneck is the non-air-cell mesh/build path, not the air. Files: chunk.gd (top + update_top + build clamp + row-scoped _bake_box + range-aware apply_accs), lighting.gd (top-truncated pull), world.gd (top propagation + _tg/_tm_slots Mutex fix), chunk_io.gd (v3 sparse slab codec, back-compat), main.gd (colbytes probe + perf arm). Gates: G0 0; genhash 25/25 IDENTICAL (subagent + coordinator x2, byte-identical to AC-0156 ref); codec self-test 14/14; SMOKE all 5 arms (light 15/10/14 far 1->9); R50 built_final 7845 + real deltas; HEAVY boundary r4 x2 ok:true (p95 35/40 under 3x load -> clean re-run p95 32, in band, no regression) + perf r4 + fog_ok; build 109,855,584 B sha f87da865 8080 byte-match + 5180=200 + 8443 down. See tasks/AC-0197/AC-0197-results.html.'
 - id: AC-0198
   title: coarse-3d-density-terrain-caves
   source: user
@@ -6170,3 +6175,59 @@ intake:
 
     '
   comments: []
+- id: AC-0203
+  title: paletted-sections-per-slab
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-02T16:31
+  updated_at: 2026-09-02T16:31
+  completed_at: null
+  waiting_on: AC-0197
+  parent_id: null
+  notes: '1) User Story: As a player at R50 I want 24x16^3 slabs paletted so RAM is ~4KB not 98KB per column (~75% save beyond
+    sparse).
+
+
+    2) Technical Details: Runtime per-slab palette like MC 1.18: slab = null (air) | {bits 1-8, palette[16], idx 4096 packed}.
+    Global 256 still, but local palette 1b for stone/air, 2-4b for mixed. Convert chunk.gd data/fl flat u8 -> 24 slabs on
+    load via chunk_io.gd bitpack extend (palette header + packed idx). keep flat view via helper get_local(lx,y,lz) indirection
+    (inline for build_accs 1419). Verify: R50 RAM 1.5GB -> ~400MB, save still ~5KB/col, build_accs wms unchanged, genhash
+    MD5 same. After AC-0197 sparse (null).'
+  comments:
+  - id: 1
+    created_at: 2026-09-02T16:31
+    updated_at: null
+    text: '[user] should make a task for paletted like MC - yes per user ask'
+- id: AC-0204
+  title: day-night-light-freeze-shader-noon
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-02T18:17
+  updated_at: 2026-09-02T18:17
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want blocks to darken at night and brighten at day regardless of when the chunk was
+    built, so day/night cycles without rebuild.
+
+
+    2) Technical Details: Store noon sky eff (15) not modulated L in mesh. Ensure all slabs use shader path has_tex true ->
+    Color(r=s,g=block,fsh) chunk.gd:346 L=0.20+0.80*max(u_day*r,g) with u_day uniform set_day_factor 116 pushed per frame
+    from main.gd _update_sky. Invalidate/drop legacy path c=face_color*fsh*s 351 fallback (require atlas). alt_slabs cache
+    44/1928 is fine with shader (r stays 15 noon, uniform does day) but bust if legacy material cached. Verify: build at noon,
+    wait night, cubes darken without rebuild; build at midnight, day brightens; LOD swaps keep transition; G0 green.'
+  comments:
+  - id: 1
+    created_at: 2026-09-02T18:17
+    updated_at: null
+    text: '[user] save noon sky eff, shade via u_day uniform - fixes AC-0156 freeze per 2026-09-02 discussion'

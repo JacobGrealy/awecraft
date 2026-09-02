@@ -175,6 +175,85 @@ func _genhash_print(seed_env: String) -> void:
 	print("GENMS ", Time.get_ticks_msec() - t0)
 
 
+# AC-0197: per-column encoded-byte probe (storage gate). Generates N real
+# columns (spawn + golden-angle ring for terrain spread), self-lights each,
+# encodes through the current codec and reports the on-disk byte stats +
+# per-column top (max non-air y). Codec-agnostic: run against v2 (before)
+# and v3 (after) for the byte delta.
+func _colbytes_test(seed_env: String) -> void:
+	var seed := Game.world_seed
+	if seed_env != "":
+		seed = seed_env.to_int()
+	var hmax := Data.HEIGHT
+	var n := int(OS.get_environment("AWECRAFT_COLBYTES_N"))
+	if n <= 0:
+		n = 25
+	Lighting._tables()
+	var pts: Array = [[0, 0]]
+	var k := 0
+	while pts.size() < n:
+		var ang := float(k) * 2.399963229728653
+		var cxr := int(floorf(cos(ang) * 24.0))
+		var czr := int(floorf(sin(ang) * 24.0))
+		if cxr != 0 or czr != 0:
+			pts.append([cxr, czr])
+		k += 1
+	var per: Array = []
+	var tot := 0
+	var mn_b := 1073741824
+	var mx_b := 0
+	var top_min := 1073741824
+	var top_max := -1
+	var t0 := Time.get_ticks_msec()
+	for p in pts:
+		var cx := int(p[0])
+		var cz := int(p[1])
+		var d := WorldGen.generate(cx, cz, seed)
+		var f := PackedByteArray()
+		f.resize(d.size())
+		var l := Lighting.compute_light_flat_chunk_pull(d, cx, cz, hmax, [], [], [])
+		var blob := ChunkIO.encode_column(d, f, seed, hmax, l)
+		var top := -1
+		var y := hmax - 1
+		while y >= 0:
+			var row := y << 8
+			var anyv := false
+			var i := 0
+			while i < 256:
+				if d[row + i] != 0:
+					anyv = true
+					break
+				i += 1
+			if anyv:
+				top = y
+				break
+			y -= 1
+		if top < top_min:
+			top_min = top
+		if top > top_max:
+			top_max = top
+		tot += blob.size()
+		if blob.size() < mn_b:
+			mn_b = blob.size()
+		if blob.size() > mx_b:
+			mx_b = blob.size()
+		per.append({"cx": cx, "cz": cz, "top": top, "bytes": blob.size()})
+	Debug.result({
+		"ok": true,
+		"n": pts.size(),
+		"seed": seed,
+		"codec_version": ChunkIO.VERSION,
+		"bytes_min": mn_b,
+		"bytes_avg": tot / pts.size(),
+		"bytes_max": mx_b,
+		"top_min": top_min,
+		"top_max": top_max,
+		"ms": Time.get_ticks_msec() - t0,
+		"per_col": per,
+	})
+	get_tree().quit()
+
+
 func _batt_run_mode(mode: String, spawn: Vector3, seed_env: String) -> void:
 	if mode == "settings":
 		_settings_test()
@@ -1199,6 +1278,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "genhash":
 			_genhash_print(seed_env)
 			get_tree().quit()
+			return
+		if logic == "colbytes":
+			await _colbytes_test(seed_env)
 			return
 		if logic == "trees":
 			await _trees_test()
@@ -8779,6 +8861,11 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> v
 	var all := false
 	var rr_now: int = world.render_radius
 	var max_frames := maxi(1200, (2 * rr_now + 1) * (2 * rr_now + 1) * 5)
+	# AC-0197: env override for the R50 gate (a full drain exceeds the
+	# default budget; the arm exits early once every mesh-eligible chunk is built).
+	var mfenv := int(OS.get_environment("AWECRAFT_PERF_FRAMES"))
+	if mfenv > 0:
+		max_frames = mfenv
 	while frames < max_frames:
 		var fb := Time.get_ticks_msec()
 		await get_tree().physics_frame
@@ -8787,9 +8874,19 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> v
 			max_frame_ms = fe - fb
 		frame_ms_list.append(fe - fb)
 		frames += 1
+		# AC-0197: progress line so a stalled R50 drain is visible
+		# in the log (600 frames = 10 s of real time).
+		if frames % 600 == 0:
+			var nb := 0
+			for kk in world.chunks:
+				if (world.chunks[kk] as Node3D).mesh_built:
+					nb += 1
+			print("PERFPROG frames=%d chunks=%d built=%d gen=%d all=%s" % [frames, world.chunks.size(), nb, world.gen_count, str(all)])
 		all = true
 		for key in world.chunks:
 			var c: Node3D = world.chunks[key]
+			if int(c.band) > 2:
+				continue
 			if absi(c.cx - pcx) <= world.render_radius and absi(c.cz - pcz) <= world.render_radius:
 				if not c.mesh_built:
 					all = false
@@ -8806,10 +8903,21 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> v
 		var mi = _matinfo_counts()
 		print("MATINFO built_chunks=%d distinct_std=%d distinct_all=%d total_allocs=%d" % [mi.built_chunks, mi.distinct_std, mi.distinct_all, mi.total_allocs])
 	var built := 0
+	var band3sq := 0
+	# AC-0197: null-safe — the pre-AC-0197 world.gd has no such property
+	# (the before-baseline run loads old world.gd with this same arm).
+	# Untyped var on purpose: Object.get() returns Nil for the missing
+	# property, and assigning Nil into a typed Array var is a runtime
+	# error in GDScript (would kill the arm before Debug.result).
+	var wml = world.get("perf_build_worker_ms_list")
+	if wml == null:
+		wml = []
 	for key in world.chunks:
 		var c: Node3D = world.chunks[key]
 		if c.mesh_built:
 			built += 1
+		elif int(c.band) > 2 and absi(c.cx - pcx) <= world.render_radius and absi(c.cz - pcz) <= world.render_radius:
+			band3sq += 1
 	var total_ms := Time.get_ticks_msec() - t0
 	var mem_after: int = OS.get_static_memory_usage()
 	var ms_sorted: Array = frame_ms_list.duplicate()
@@ -8843,6 +8951,13 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> v
 		"mem_before_bytes": int(mem_before),
 		"mem_after_bytes": int(mem_after),
 		"chunks_built": built,
+		"built_final": built,
+		"band3_in_square": band3sq,
+		"max_frames": max_frames,
+		"build_worker_n": int(wml.size()),
+		"build_worker_p50_ms": int(_percentile(wml, 0.50)),
+		"build_worker_p95_ms": int(_percentile(wml, 0.95)),
+		"build_worker_max_ms": int(wml.max()) if not wml.is_empty() else 0,
 		"drain_s": roundf(total_ms / 1000.0 * 100.0) / 100.0,
 		"light_self_computes": int(world.perf_light_self_computes),
 		"light_batch_calls": int(world.perf_light_batch_calls),

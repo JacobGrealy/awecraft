@@ -278,6 +278,12 @@ var threadgen_max := 3
 var threadgen_pool = null
 var threadgen_inflight: Array = []
 var _tg_slots = {}
+# AC-0197: slots dicts are read from pool worker threads (the
+# AC-0152/AC-0178 spin-waits) while the main thread sets/erases
+# them; a Godot Dictionary has no internal locking — the 22-min
+# R50 perf soak segfaulted (signal 11) in _tm_worker_run's slot
+# get. A mutex around every access; neutral otherwise.
+var _tg_slots_mutex := Mutex.new()
 var _tg_inflight_keys: Dictionary = {}
 var _tg_debug := false
 var _tg_enq := 0
@@ -310,6 +316,7 @@ var _loading_screen = null
 var _tg_max_norm := 3
 var _tm_max_norm := 3
 var _tm_slots = {}
+var _tm_slots_mutex := Mutex.new()  # AC-0197: see _tg_slots_mutex
 var _tm_inflight_keys: Dictionary = {}
 var _tm_next_slot := 0
 var threadmesh_edit_pool = null
@@ -352,6 +359,7 @@ var _tm_stale := 0
 var _tm_datadrop := 0
 var _tm_handoff := 0
 var perf_build_worker_ms := 0
+var perf_build_worker_ms_list: Array = []  # AC-0197: per-build worker ms (p50/p95 gate)
 var col_stage_enabled := true
 var _col_pending: Array = []
 var _col_pending_set: Dictionary = {}
@@ -529,8 +537,12 @@ func _exit_tree() -> void:
 		_startup_gen_group_tids.clear()
 	threadgen_inflight.clear()
 	threadmesh_inflight.clear()
+	_tg_slots_mutex.lock()
 	_tg_slots.clear()
+	_tg_slots_mutex.unlock()
+	_tm_slots_mutex.lock()
 	_tm_slots.clear()
+	_tm_slots_mutex.unlock()
 	_io_read_inflight.clear()  # AC-0164
 	_io_write_inflight.clear()
 	_io_slots.clear()
@@ -1134,7 +1146,9 @@ func threadgen_enqueue(cx: int, cz: int, key: String, inst: int) -> void:
 	# allocator-bound gen prefers over 4-6-wide anyway.
 	var tid = threadgen_pool.add_task(_threadgen_worker, false)
 	entry["tid"] = tid
+	_tg_slots_mutex.lock()
 	_tg_slots[tid] = entry
+	_tg_slots_mutex.unlock()
 	threadgen_inflight.append(entry)
 	_tg_inflight_keys[key] = true
 	_tg_enq += 1
@@ -1143,7 +1157,9 @@ func threadgen_enqueue(cx: int, cz: int, key: String, inst: int) -> void:
 
 func _threadgen_worker() -> void:
 	var tid = threadgen_pool.get_caller_task_id()
+	_tg_slots_mutex.lock()
 	var entry = _tg_slots.get(tid)
+	_tg_slots_mutex.unlock()
 	# AC-0178: the slot is set a couple of statements AFTER add_task returns;
 	# a worker preempting in that window used to see no slot and return with
 	# NO result -> null handoff (AC-0137-class SCRIPT ERROR + a stranded
@@ -1152,7 +1168,9 @@ func _threadgen_worker() -> void:
 	var ns := 0
 	while entry == null and ns < 2000:
 		OS.delay_msec(1)
+		_tg_slots_mutex.lock()
 		entry = _tg_slots.get(tid)
+		_tg_slots_mutex.unlock()
 		ns += 1
 	if entry == null:
 		if timing:
@@ -1220,7 +1238,9 @@ func threadgen_poll() -> void:
 		if threadgen_pool.is_task_completed(tid):
 			threadgen_inflight.remove_at(i)
 			_tg_inflight_keys.erase(e["key"])
+			_tg_slots_mutex.lock()
 			_tg_slots.erase(tid)
+			_tg_slots_mutex.unlock()
 			var res = e.get("result", null)
 			if res == null or (res is PackedByteArray and res.size() == 0):
 				# AC-0178: the worker finished without a result (slot-spin
@@ -1287,11 +1307,15 @@ func _tm_worker_run(skey: int) -> void:
 	# instead of dropping the task. Giving up still lands in the handoff
 	# datadrop + retrigger path, which re-queues (the _remove_entry
 	# queued_keys fix makes that re-queue effective).
+	_tm_slots_mutex.lock()
 	var entry = _tm_slots.get(skey)
+	_tm_slots_mutex.unlock()
 	var ns := 0
 	while entry == null and ns < 200:
 		OS.delay_msec(1)
+		_tm_slots_mutex.lock()
 		entry = _tm_slots.get(skey)
+		_tm_slots_mutex.unlock()
 		ns += 1
 	if entry == null:
 		return
@@ -1337,7 +1361,9 @@ func threadmesh_poll() -> void:
 				threadmesh_inflight.remove_at(j)
 				_tm_inflight_keys.erase(ee["key"])
 				if eskey >= 0:
+					_tm_slots_mutex.lock()
 					_tm_slots.erase(eskey)
+					_tm_slots_mutex.unlock()
 				_editprobe_prime_flag = true
 				threadmesh_handoff(ee, ee.get("result", null))
 				hb_n += 1
@@ -1357,7 +1383,9 @@ func threadmesh_poll() -> void:
 			threadmesh_inflight.remove_at(i)
 			_tm_inflight_keys.erase(e["key"])
 			if skey >= 0:
+				_tm_slots_mutex.lock()
 				_tm_slots.erase(skey)
+				_tm_slots_mutex.unlock()
 			_editprobe_prime_flag = false
 			threadmesh_handoff(e, e.get("result", null))
 			hb_n += 1
@@ -1452,6 +1480,7 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		c.saved_light = {}
 		perf_build_ms += Time.get_ticks_msec() - ta2
 		perf_build_worker_ms += int(res.get("wms", 0))
+		perf_build_worker_ms_list.append(int(res.get("wms", 0)))
 		_count_collision_build(c)
 		_stage_check(c, key)
 		_eff_landed(c, old_eff2, res.get("light", {}))
@@ -1476,6 +1505,7 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		c.store_lod_cache(lod_cap, lkind, ltaxi >= LOD_HYS_RING_MIN and ltaxi <= LOD_HYS_RING_MAX)
 	perf_build_ms += Time.get_ticks_msec() - ta
 	perf_build_worker_ms += int(res.get("wms", 0))
+	perf_build_worker_ms_list.append(int(res.get("wms", 0)))
 	var tb := Time.get_ticks_msec() if timing else 0  # AC-0178 diag (timing-gated)
 	_count_collision_build(c)
 	var tc := Time.get_ticks_msec() if timing else 0
@@ -1680,7 +1710,9 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 	entry["tid"] = tid
 	entry["skey"] = skey
 	entry["epool"] = true
+	_tm_slots_mutex.lock()
 	_tm_slots[skey] = entry
+	_tm_slots_mutex.unlock()
 	_tm_inflight_keys[key] = tid
 	threadmesh_inflight.append(entry)
 	edit_inflight_count += 1
@@ -1803,6 +1835,7 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 	ctx_w["eff_strips"] = strips["eff"]
 	ctx_w["blk_strips"] = strips["blk"]
 	ctx_w["blk_strips_b"] = strips["blk_b"]
+	ctx_w["top"] = int(c.top)  # AC-0197: full builds stop at the top slab
 	if int(c.band) == 2:
 		# AC-0152 coarse LOD (was the band-1 ctx): 2x UV scale (32-block
 		# texture period), cutout falls back opaque, flora dropped (in
@@ -1829,7 +1862,9 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 	var tid = threadmesh_pool.add_task(_tm_worker_run.bind(skey), true)
 	entry["tid"] = tid
 	entry["skey"] = skey
+	_tm_slots_mutex.lock()
 	_tm_slots[skey] = entry
+	_tm_slots_mutex.unlock()
 	_tm_inflight_keys[key] = tid
 	threadmesh_inflight.append(entry)
 	_tm_enq += 1
@@ -3612,6 +3647,7 @@ func _apply_edits_to_chunk(c: Node3D) -> bool:
 			fluid_wet[_key(c.cx, c.cz)] = true
 	if not changed and not fl_changed:
 		return false
+	c.update_top()  # AC-0197: edits may raise (or clear) the top
 	c.mark_all_slabs_dirty()
 	_eff_cache_evict(key)
 	if changed:
@@ -3648,6 +3684,7 @@ func _try_disk_load(c: Node3D, cx: int, cz: int) -> bool:
 		return false
 	c.data = res["data"]
 	c.fl = res["fl"]
+	c.update_top()  # AC-0197: disk-loaded column top
 	c.saved_light = _saved_light_from_res(res.get("light", {}), cx, cz)
 	disk_reads += 1
 	chunk_origin[_key(cx, cz)] = "disk"
@@ -3885,6 +3922,7 @@ func _io_read_handoff(e: Dictionary) -> void:
 		return
 	c.data = res["data"]
 	c.fl = res["fl"]
+	c.update_top()  # AC-0197: disk-loaded column top
 	c.saved_light = _saved_light_from_res(res.get("light", {}), int(e["cx"]), int(e["cz"]))
 	disk_reads += 1
 	disk_read_ms += float(e.get("ms", 0.0))

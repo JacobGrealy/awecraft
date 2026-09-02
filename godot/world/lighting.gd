@@ -297,8 +297,18 @@ static func compute_light_flat_chunk(data: PackedByteArray, cx: int, cz: int, h:
 # across the boundary; t = our z for E/W, our x for S/N); empty/short strip =
 # that side stays as its own flood left it. eff_strips rides along for the
 # caller's 20x20 bake box (unused here).
-static func compute_light_flat_chunk_pull(data: PackedByteArray, cx: int, cz: int, h: int, eff_strips: Array, blk_strips: Array, blk_strips_b: Array) -> Dictionary:
+static func compute_light_flat_chunk_pull(data: PackedByteArray, cx: int, cz: int, h: int, eff_strips: Array, blk_strips: Array, blk_strips_b: Array, top := -1) -> Dictionary:
+	# AC-0197: rows above the column's top (max non-air y) are ALL air — open
+	# sky, so eff == 15 there and nothing below can raise them above 15. The
+	# scan/floods run only on rows 0..top (block glow bleeds 14 up from a
+	# source, so the blk/mask pass runs to top+14); eff rows above top are
+	# filled 15 directly (byte-identical to the full scan).
 	var sz := 16 * 16
+	var hact := h
+	var hblk := h
+	if top >= 0:
+		hact = top + 1
+		hblk = mini(h, top + 15)
 	var ids := PackedByteArray()
 	ids.resize(sz * h)
 	var sky := PackedByteArray()
@@ -310,7 +320,7 @@ static func compute_light_flat_chunk_pull(data: PackedByteArray, cx: int, cz: in
 		for iz in range(16):
 			var i0 := ix + iz * 16
 			var open := true
-			for y in range(h - 1, -1, -1):
+			for y in range(hact - 1, -1, -1):
 				var b: int = data[(y << 8) | (iz << 4) | ix]
 				var i := y * sz + i0
 				ids[i] = b
@@ -324,13 +334,17 @@ static func compute_light_flat_chunk_pull(data: PackedByteArray, cx: int, cz: in
 					open = false
 	var eff := PackedByteArray()
 	eff.resize(sz * h)
-	for i in range(sz * h):
+	for y in range(hact, h):
+		var row := y * sz
+		for x in range(sz):
+			eff[row + x] = SKY_FULL
+	for i in range(sz * hact):
 		var s := sky[i]
 		var b2 := blk[i]
 		eff[i] = s if s >= b2 else b2
-	_flood_flat(eff, ids, 16, h, 16)
-	if _chunk_blk_inject(eff, ids, h, blk_strips):
-		_flood_flat(eff, ids, 16, h, 16)
+	_flood_flat(eff, ids, 16, h, 16, hact)
+	if _chunk_blk_inject(eff, ids, h, blk_strips, hact):
+		_flood_flat(eff, ids, 16, h, 16, hact)
 	# AC-0128 RUN 3: block-light VISITED mask (mask=1 iff the blk flood
 	# reached the cell — own glow sources + neighbor blk-strip injection,
 	# EXACTLY the seeds the eff got). Replaces the per-bake Chebyshev-14
@@ -343,9 +357,14 @@ static func compute_light_flat_chunk_pull(data: PackedByteArray, cx: int, cz: in
 	# The mask flood seeds on the BLOCK-ONLY strip companion (no sky floor):
 	# visited => block-derived. The eff strip above carries the sky floor
 	# (AC-0129) so the same values would over-mark sky-carry cells.
+	# AC-0197: the own-glow flood is truncated (glow sources sit at y <= top,
+	# attenuation >= 1/step, so blk is 0 above top+14 — the flood cannot reach
+	# further). The IMPORTED light (neighbor strip) may carry block light above
+	# our top (a tall neighbor's torch), so the inject/re-flood/mask stay full
+	# height — the mask is byte-identical to the pre-AC-0197 kernel.
 	var blk_inj := false
 	if has_glow:
-		_flood_flat(blk, ids, 16, h, 16)
+		_flood_flat(blk, ids, 16, h, 16, hblk)
 	blk_inj = _chunk_blk_inject(blk, ids, h, blk_strips_b)
 	if blk_inj:
 		_flood_flat(blk, ids, 16, h, 16)
@@ -390,16 +409,17 @@ static func compute_light_flat_chunk_pull(data: PackedByteArray, cx: int, cz: in
 # eff>0 gate is deliberately ABSENT (RUN 1.1 correction — it would exclude
 # the 13-next-to-0 case); sky-leak prevention lives in the strip content
 # (blk is 0 under open sky / behind sky), not in a gate.
-static func _chunk_blk_inject(eff: PackedByteArray, ids: PackedByteArray, h: int, blk_strips: Array) -> bool:
+static func _chunk_blk_inject(eff: PackedByteArray, ids: PackedByteArray, h: int, blk_strips: Array, hgate := -1) -> bool:
 	if blk_strips.size() < 4:
 		return false
 	var changed := false
+	var hrow := h if hgate < 0 else hgate
 	for si in range(4):
 		var strip: PackedByteArray = blk_strips[si]
 		# AC-0091: side strip = 2 cols x 16 x h (was hard-coded 2560 = H=80).
 		if strip == null or strip.size() != 2 * 16 * h:
 			continue
-		for y in range(h):
+		for y in range(hrow):
 			var row := y * 256
 			var srow := y * 16
 			for t in range(16):
@@ -454,9 +474,14 @@ static func compute_light_flat_batch(items: Array, budget_us: int = 0) -> Array:
 	return out
 
 
-static func _flood_flat(src: PackedByteArray, ids: PackedByteArray, w: int, h: int, d: int) -> void:
+static func _flood_flat(src: PackedByteArray, ids: PackedByteArray, w: int, h: int, d: int, hact := -1) -> void:
+	# AC-0197: hact = active row count (rows 0..hact-1). Cells at or above
+	# hact are never seeded nor stepped into (their values are final by the
+	# caller's proof: eff rows above top are 15; block glow cannot reach
+	# above top+14). Omitted (default) = full height, byte-identical to before.
 	var sz := w * d
-	var size := ids.size()
+	var rows := h if hact < 0 else mini(hact, h)
+	var size := sz * rows
 	var patt := PackedByteArray()
 	patt.resize(size)
 	for i in range(size):
@@ -481,7 +506,7 @@ static func _flood_flat(src: PackedByteArray, ids: PackedByteArray, w: int, h: i
 			var n := i - 1
 			if patt[n] > 0 and src[n] < lv:
 				spr = true
-		if not spr and yy + 1 < h:
+		if not spr and yy + 1 < rows:
 			var n := i + sz
 			if patt[n] > 0 and src[n] < lv:
 				spr = true
@@ -525,7 +550,7 @@ static func _flood_flat(src: PackedByteArray, ids: PackedByteArray, w: int, h: i
 					if nl > 0 and nl > src[n]:
 						src[n] = nl
 						buckets[nl].append(n)
-			if yy + 1 < h:
+			if yy + 1 < rows:
 				var n := i + sz
 				var t := patt[n]
 				if t > 0:

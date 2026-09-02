@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0197 plan — sparse air slabs (skip empty top)</title></head>
+<body style="font-family: ui-monospace, monospace; font-size: 14px; max-width: 1000px; margin: 24px auto; line-height: 1.45">
+<h1>AC-0197 — sparse-air-slabs-skip-empty-top</h1>
+<p><b>Goal:</b> the sky above terrain (top of each column) is all air. Stop scanning / storing / meshing / light-flooding it.
+<b>#1 invariant (lossless):</b> the sparse representation must round-trip to EXACTLY the same blocks, and <b>genhash (25 lines) stays byte-identical</b>. Generation code is untouched — only the representation and the per-chunk work are made sparse.</p>
+
+<h2>Design</h2>
+<ol>
+<li><b>Per-column top</b> — <code>chunk.gd: var top := -1</code> = max y with any non-air DATA byte (water/lava count; the fl overlay always rides a fluid data id, so a data-only scan is complete).
+  <ul>
+    <li><code>set_local()</code> (the only per-cell writer, used by set_block AND set_fluid) <b>monotonically raises</b> top. Stale-high is safe (only extra work); stale-low is impossible.</li>
+    <li>Full rescans at every data-finalization point: <code>init_fl()</code> (covers ALL 5 gen paths: sync gen, startup apply, threadgen handoff, materialize, face chunk), both disk-load sites (<code>_try_disk_load</code>, <code>_io_read_handoff</code>), and <code>_apply_edits_to_chunk</code> (an edit may clear the top).</li>
+    <li><code>update_top()</code> = top-down scan with per-row early-out (~256 tests per empty row).</li>
+  </ul></li>
+<li><b>Mesh build</b> — <code>build_accs</code> reads <code>ctx.get("top", -1)</code> (default -1 = legacy, so the AC-0187 scoped edit path is untouched):
+  <ul>
+    <li>full builds: <code>si1 = mini(slab_n()-1, top/16)</code> — slabs above top are empty by definition;</li>
+    <li>plus <code>y_hi = mini(y_hi, top+1)</code> when <code>si1 == top/16</code> — the rows above the topmost block are air by definition; the +1 snap/bake margin still covers face/interior sampling (bake fills to y_hi+1 ≤ top+2 ✓).</li>
+  </ul></li>
+<li><b>Bake box</b> — <code>_bake_box</code> allocates only rows <code>y_lo..y_hi</code> with <code>bmn.y = y_lo</code> (was a full w*w*h = 153600 B). Every emitter samples via <code>(y - lmn.y)</code> (<code>_s_effl</code>/<code>_effl</code>) — no emitter changes. The full-height call (0, -1) stays byte-identical (y_lo = 0).</li>
+<li><b>Light kernel</b> — <code>compute_light_flat_chunk_pull(..., top := -1)</code>: <code>hact = top+1</code>.
+  <ul>
+    <li>column scan runs only y &lt; hact; <b>eff rows above top are filled 15 directly</b> — provably identical to the old kernel (nothing above top → open sky → eff 15 exactly; flood only raises, 15 is the max).</li>
+    <li>eff flood + eff blk-inject + re-flood truncated to hact (an imported raise above top is impossible: cand ≤ 14 &lt; 15).</li>
+    <li>own-glow flood truncated to <code>hblk = min(h, top+15)</code> (glow sources ≤ top, attenuation ≥ 1/step → cannot reach above top+14).</li>
+    <li><b>imported light (neighbor strip) stays FULL height</b> — a tall neighbor's torch can carry block light above our top; the mask there stays byte-identical to the old kernel. Cost delta is one 24k-cell inject loop — negligible.</li>
+    <li><code>_flood_flat(..., hact := -1)</code>: seed scan + upward-step bound + pattern buffer sized to the active rows; default = full height (every other caller unchanged).</li>
+  </ul></li>
+<li><b>Codec v3</b> — <code>chunk_io.gd VERSION := 3</code>; decode accepts <b>{1, 2, 3}</b> (v2 = AC-0156 dense+light, decodable, never written again).
+  <ul>
+    <li>v3 section format: <code>u8 n_present + n_present × u16 slab index (ascending) + self-delimiting payloads</code> (n, bits, order, bitpack — unchanged per slab). Absent slab → zero-filled (out array pre-zeroed).</li>
+    <li>slabs &gt; top/16 omitted without scanning; slabs ≤ top/16 get an early-exit 4096-byte zero scan (mid-column carved-out slabs also skip).</li>
+    <li><code>encode_column(..., top := -1)</code> derives the top internally (<code>_column_top</code>) — the io write worker needs no world.gd change.</li>
+    <li>decoder fail-closed: count, index range/duplication, palette/bit consistency, truncated payload → reject.</li>
+    <li>Light section format unchanged.</li>
+  </ul></li>
+<li><b>Dispatch</b> — <code>world._mesh_dispatch</code> carries <code>ctx_w["top"] = int(c.top)</code> alongside the strips. <code>apply_accs</code> becomes range-aware (<code>res.slabs[si - si0]</code>) for partial full builds; <code>apply_edit_accs</code> was already partial-aware — untouched.</li>
+</ol>
+
+<h2>Deliberate non-changes</h2>
+<ul>
+<li><b><code>_compute_face_blk</code> (world.gd:2466) is NOT top-truncated</b> — block light relays transitively across chunk boundaries from taller neighbors at any y (a torch at y≈300 on a mountain lights a sealed cave at y≈180 on a neighbor whose own top is 190). Truncating it by own-top would corrupt cross-boundary block light. Same cost before/after → fair comparison.</li>
+<li>In-memory representation stays <b>dense</b> (all consumers unchanged). Sparseness is in the codec (v3) and in the work skipped (scan/build/flood). This is the lowest-risk shape of the win.</li>
+<li>Genhash path: untouched by construction (no generator.gd edits).</li>
+</ul>
+
+<h2>Verification plan (gates I own)</h2>
+<table border="1" cellpadding="4">
+<tr><th>Gate</th><th>Command / env</th><th>Pass criteria</th></tr>
+<tr><td>G0</td><td><code>godot --headless --path godot --quit</code></td><td>zero SCRIPT ERROR</td></tr>
+<tr><td>GENHASH</td><td><code>AWECRAFT_LOGIC=genhash</code></td><td>25/25 lines byte-identical to <code>.scratch/AC-0156-gates/genhash_A.txt</code></td></tr>
+<tr><td>CODEC self-test</td><td><code>godot --headless --path godot -s res://.scratch/AC-0197-gates/v3_selftest.gd</code></td><td>all *_ok true (v3 round-trip ±top ±light, v1/v2 decode, corrupt reject, v3 &lt; v2 bytes)</td></tr>
+<tr><td>STORAGE</td><td><code>AWECRAFT_LOGIC=colbytes</code> (25 real columns)</td><td>avg bytes down vs v2 baseline (4338 B); round-trip exact</td></tr>
+<tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY='player;interact;light;fluids;genhash'</code></td><td>all ok:true; light arm at baseline (surface 15 / cave 10 / torch 14, far 1→9)</td></tr>
+<tr><td>R50 perf</td><td><code>AWECRAFT_LOGIC=perf AWECRAFT_RADIUS=50 AWECRAFT_PERF_FRAMES=108000</code></td><td>before→after: built_final 7845, p95 build_worker ms down (target &lt; 30 ms); arm instrumentation identical before/after</td></tr>
+</table>
+
+<p>Coordinator owns: r4 heavy + genhash×2 + Windows build (NOT run by this subagent).</p>
+
+<h2>Files</h2>
+<ul>
+<li><code>godot/world/chunk.gd</code> — top var + update_top; set_local bump; init_fl rescan; build_accs top clamp + pull-kernel arg; _bake_box rows-scoped; apply_accs range-aware.</li>
+<li><code>godot/world/lighting.gd</code> — pull kernel top truncation; _flood_flat hact; _chunk_blk_inject hgate (eff pass only).</li>
+<li><code>godot/world/world.gd</code> — disk-load/edit update_top; ctx_w["top"]; perf_build_worker_ms_list (+appends at both handoffs).</li>
+<li><code>godot/core/chunk_io.gd</code> — VERSION 3, V2_VERSION; sparse encode/decode; ver {1,2,3} acceptance; _column_top.</li>
+<li><code>godot/scenes/main.gd</code> — colbytes probe (storage gate); perf arm: AWECRAFT_PERF_FRAMES, band&gt;2 skip, worker p50/p95/max in RESULT.</li>
+</ul>
+
+<h2>Risk register</h2>
+<ul>
+<li><b>partial res.slabs index error in apply_accs</b> (clamped full builds produce si0..si1 only) — fixed by the range-aware loop; the pre-fix code would crash on any column with top &lt; 383.</li>
+<li><b>v2 saves</b> — decode accepts ver 2 (dense path) so existing saves keep working; writes are v3.</li>
+<li><b>eff above top</b> — provably 15 (open sky, no attenuation path exists there); filled directly, flood never touches it.</li>
+<li><b>mask above top+14</b> — the own-glow flood cannot reach there; the imported-light path is left full-height, so the mask is byte-identical to the pre-change kernel in ALL cells (including the unobservable ones).</li>
+<li><b>stale-high top after mining</b> — only extra work until the next rescan; correctness intact. Settle happens on any gen/load/edit finalization; disk round-trip rescans.</li>
+<li><b>storage delta may be modest</b> — zlib already crushes zero slabs in v2 (before avg 4338 B, not the 8 KB in the notes). The headline win is CPU; report measured bytes honestly.</li>
+</ul>
+</body></html>
