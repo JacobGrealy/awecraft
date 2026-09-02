@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0156 — plan (light-cache-per-section)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0156 — plan: light-cache-per-section</h1>
+
+<h2>Goal</h2>
+<p>Embed the column's light (the <code>eff</code> channel + the block-light <code>mask</code> — the exact channels the renderer consumes) into the per-column AWCC blob so a revisited column loads its light <b>instantly with zero kernel recompute</b>; legacy v1 blobs (no light) still decode and recompute as today; <code>Save.clear</code> wipes light together with blocks. Per-column data-format change only — AC-0175's region-file layout change reads/writes through the same <code>encode_column</code>/<code>decode_column</code> and preserves the light automatically.</p>
+
+<h2>What is saved (honest scope note)</h2>
+<p>The engine's light kernel returns <b>one</b> merged channel the renderer consumes: <code>eff = max(sky, blk)</code> per cell (0–15), plus a 0/1 <code>mask</code> ("visited by the block-light flood") that drives the AC-0134 face-mask bake. Separate sky/blk channels are kernel-internal and are never persisted anywhere today. So the blob carries <b>eff + mask</b> — the same channels the renderer consumes — nibble-packed per 16³ section (4096 nibbles/section/channel = 2048 B/section/channel; ~96 KB uncompressed per column, zlib → tiny). Neighbor-dependency: block light crosses column borders; the saved eff/mask are a consistent snapshot taken <b>with</b> the saved block data (same blob). A neighbor edit after save is reconciled by the existing edit-time recompute (E2 <code>_eff_landed</code> wave re-bakes the affected column fresh and the next save captures the update). A save-time pending re-light mark suppresses the capture (falls back to recompute-on-load) so a pre-settle light is never persisted.</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/core/chunk_io.gd</code></td><td><code>VERSION := 2</code>. <code>encode_column(data, fl, seed, height, light = {})</code> appends a light section (u32 size + payload: present flag, blk_src, eff nibbles, mask nibbles); <code>decode_column</code> accepts v1 (no section → no light) and v2 (section → <code>{"arr","mask","blk_src"}</code>); new <code>encode_column_legacy</code> (v1 layout) for the back-compat probe; <code>_encode_light</code>/<code>_decode_light</code>/<code>_nibble_pack</code>/<code>_nibble_unpack</code>. MD5 spans the light section. Fails closed: any malformed light section → <code>light = {}</code> (recompute path), never a bad blob accepted.</td></tr>
+<tr><td><code>godot/world/chunk.gd</code></td><td><code>saved_light</code> (restored light dict, consumed by the first build), <code>light_recomputes</code> (per-chunk kernel recompute counter: <code>build_mesh</code> self-light branch + <code>build_accs</code> self-light reported via <code>res["light_recomputed"]</code> into <code>apply_accs</code>/<code>apply_edit_accs</code>).</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>Save: <code>_queue_chunk_save</code> captures the full light dict from the eff cache (data-equal + no pending re-light) else no light. Load: <code>_io_read_handoff</code> + <code>_try_disk_load</code> store <code>c.saved_light</code> (wrapped mn/w/d/arr/mask/blk_src); <code>_apply_edits_to_chunk</code> returns "changed" and a changed edit clears <code>saved_light</code> (3 disk-load call sites). Build: <code>_build_unit</code> feeds <code>c.saved_light</code> as the dispatch eff when the cache is empty (mask present → <code>build_accs</code> skips the kernel); <code>saved_light</code> cleared at every apply point (worker handoff ×2, sync <code>build_mesh</code> ×3) so later edits always recompute fresh. New <code>light_saved_restores</code> counter.</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>New <code>AWECRAFT_LOGIC=lightcache</code> arm: R=2 boot (R=1 keeps the 3x3 corners in band-3 data-only, so <code>_startup_pending()</code> never clears and the light flush stalls) → dig a 5-deep shaft at spawn + place torch (id 22) → wait for the (0,0) eff cache to be fresh (data-equal + mask present, no pending re-light) → capture eff/mask → save via the real save path (<code>_queue_chunk_save</code> → <code>_drain_save_queue</code> → io poll) → verify on-disk decode → surgical revisit (free + <code>create_chunk</code> disk-first + build) → assert <code>light_recomputes == 0</code> + restored channels byte-identical → legacy v1 blob → assert recompute → <code>Save.clear</code> → assert blob gone + recompute on next load → <code>RESULT</code> JSON.</td></tr>
+</table>
+
+<h2>Harness gates (builder)</h2>
+<ul>
+<li><b>G0</b>: <code>godot --headless --path godot --quit</code> → exit 0, zero <code>SCRIPT ERROR</code>.</li>
+<li><b>lightcache</b> (new probe): <code>ok:true</code>, <code>light_saved_nonzero:true</code>, <code>restored_no_recompute:true</code>, <code>recompute_count:0</code>, <code>restored_matches_saved:true</code>, <code>legacy_v1_recomputes:true</code>, <code>clear_wipes_light:true</code>.</li>
+<li><b>SMOKE</b>: <code>AWECRAFT_BATTERY='player;interact;light;fluids;genhash'</code> all <code>ok:true</code>; <b>light arm baseline held</b> (surface 15 / cave 10 / torch 14, far 1→9); <b>genhash 25/25 byte-identical</b> to the AC-0178 baseline (<code>.scratch/AC-0178-gates/genhash_base_sorted.txt</code>) — generation must be unchanged.</li>
+<li><b>RENDER</b> (optional, one): lit-chunk snapshot; the headless probe carries if not.</li>
+</ul>
+<p class="note">Heavy (boundary r4 ×2 + perf) and <code>./build_windows.sh</code> = coordinator. NOT run here.</p>
+
+<h2>Risks</h2>
+<ul>
+<li><b>Mask availability at save</b>: the mask is transient (never pinned per-chunk — memory fence r50). Source = the bounded eff cache (cap 128, LRU) at evict time; typical r≤4 streaming sets (≤69 chunks) always hit; a cache miss (or pending re-light) degrades gracefully to "no light saved" → recompute on load (today's behavior, never wrong).</li>
+<li><b>Deferred builds must not lose the saved light</b>: <code>saved_light</code> is consumed only at apply points, not at dispatch, so cap-drop deferrals / dedup retries keep feeding it; freed chunks drop it with the node.</li>
+<li><b>Edit staleness</b>: re-applied JSON edits that actually change a cell invalidate <code>saved_light</code> (recompute); idempotent re-apply (AC-0155: file is ≥ edits) preserves it.</li>
+<li><b>E2 settle wave on revisit</b>: a restored chunk's own settle re-bakes <i>neighbors</i> (byte-identical, no cascade via the per-side frame gate); the target's own counter stays 0 in the isolated revisit. A neighbor edited <i>after</i> its region save is the documented Minecraft-class staleness, healed by the existing edit-time recompute.</li>
+<li><b>AC-0175 forward-compat</b>: only the per-column blob changes; region grouping later reuses the same codec → light preserved with zero further work.</li>
+</ul>
+
+</body></html>

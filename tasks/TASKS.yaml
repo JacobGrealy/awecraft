@@ -1,27 +1,31 @@
 meta:
-  updated_at: 2026-09-01T19:16
+  updated_at: 2026-09-02T10:56
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0156
+- AC-0197
+- AC-0193
 - AC-0175
-- AC-0087
-- AC-0154
-- AC-0186
+- AC-0191
 - AC-0121
 - AC-0122
 - AC-0170
 - AC-0171
 - AC-0172
 - AC-0173
+- AC-0087
+- AC-0154
+- AC-0186
 - AC-0174
 - AC-0040
+- AC-0196
 - AC-0150
 - AC-0144
 - AC-0145
 - AC-0146
 - AC-0140
 - AC-0159
+- AC-0192
 - AC-0092
 - AC-0165
 - AC-0188
@@ -41,9 +45,11 @@ queue:
 - AC-0088
 - AC-0089
 - AC-0111
+- AC-0194
 - AC-0141
 - AC-0142
 - AC-0101
+- AC-0195
 - AC-0037
 - AC-0115
 - AC-0090
@@ -4865,11 +4871,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-30T13:50
   updated_at: 2026-08-31T16:27
-  completed_at: null
+  completed_at: 2026-09-02T08:20
   waiting_on: AC-0155
   parent_id: null
   notes: '1) User Story: As a player revisiting a place I have already been, I want light to come back instantly without recomputing,
@@ -4886,6 +4892,10 @@ intake:
     created_at: '2026-09-01T02:12:48.549752'
     updated_at: null
     text: '[coordinator] Reasoning: xhigh (non-trivial, plan+verify) — '
+  - id: 2
+    created_at: '2026-09-02T08:20:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE 2026-09-02 — per-column AWCC blob v1→v2 now carries the column light (eff=max(sky,blk) channel + block-light flood mask, nibble-packed per 16^3 section, same file as blocks — Minecraft Anvil style). Revisit restores light with ZERO kernel recompute (probe recompute_count:0, restored eff+mask byte-identical incl. on-disk decode); legacy v1 blobs decode to "no saved light" → recompute (back-compat); Save.clear wipes light with blocks. Save captures the eff-cache entry only when data-equal + no pending re-light (never a pre-settle light); a block edit invalidates (recompute) + the next save captures the update. AC-0175 region storage rides the same encode_column/decode_column — light preserved automatically. Codec decode bug caught+fixed during verify (fe-end vs post-light MD5 offset — every v2 blob rejected; rewritten with fixed offsets, self-test green on v1/v2±light/wrong-seed). Files: chunk_io.gd (v2 codec + _encode_light/_decode_light/_nibble_pack + encode_column_legacy + fail-closed decode), chunk.gd (saved_light + light_recomputes), world.gd (save capture + load restore feed in _build_unit + edit invalidation + _apply_edits_to_chunk idempotent early-return), main.gd (AWECRAFT_LOGIC=lightcache probe, R=2). Gates: G0 0; lightcache ok:true (light_saved_nonzero mask_sum 1172 torch 14, restored_no_recompute, recompute_count 0, restored_matches_saved, legacy_v1_recomputes, clear_wipes_light, saved_restores 1); SMOKE all baselines (light 15/10/14 far 1→9); genhash 25/25 IDENTICAL (world/* generation untouched); RENDER R=1 clean; HEAVY boundary r4 x2 p95 32/28 (in band) + perf r4 p95 25 + fog_ok; build 109,846,752 B sha dfef0143 8080 byte-match + 5180=200 + 8443 down. See tasks/AC-0156/AC-0156-results.html.'
 - id: AC-0157
   title: 3d-density-terrain-shape
   source: user
@@ -5209,7 +5219,14 @@ intake:
   - id: 2
     created_at: '2026-09-02T06:05:00.000000'
     updated_at: null
-    text: '[coordinator] DONE 2026-09-02 — r+1 candidate now RETAINS its mesh (mesh_built + slabs kept, not killed) and stays visible; the existing fog_far=(R+1)*16*0.95 (daynight.gd:11-12) hides the band so stepping back shows no unload/reload flicker or pop. True free stays at r+2 after the 2-recenter-event hysteresis. _enter_candidate retain path + recenter re-entry _stage_check guard; _enter_candidate_slabs() removed from chunk.gd; NEW AWECRAFT_LOGIC=edgeretain R=8 probe (3 tracked edge chunks: held through 5 one_out events never freed, back-step re-enters remeshed:false, killed_while_candidate:0, back_hole/hidden_frames:0, fog covers ring). Gates: G0 0; edgeretain ok:true; SMOKE all baselines; genhash 25/25 IDENTICAL (x2); lodswap ok:true (AC-0182 regression); HEAVY boundary r4 x2 p95 31/27 (in band) + perf r4 p95 23 + fog_ok; build 109,826,640 B sha f341a964 8080 byte-match + 5180=200 + 8443 down. Results: tasks/AC-0168/AC-0168-results.html.'
+    text: '[coordinator] DONE 2026-09-02 — r+1 candidate now RETAINS its mesh (mesh_built + slabs kept, not killed) and stays
+      visible; the existing fog_far=(R+1)*16*0.95 (daynight.gd:11-12) hides the band so stepping back shows no unload/reload
+      flicker or pop. True free stays at r+2 after the 2-recenter-event hysteresis. _enter_candidate retain path + recenter
+      re-entry _stage_check guard; _enter_candidate_slabs() removed from chunk.gd; NEW AWECRAFT_LOGIC=edgeretain R=8 probe
+      (3 tracked edge chunks: held through 5 one_out events never freed, back-step re-enters remeshed:false, killed_while_candidate:0,
+      back_hole/hidden_frames:0, fog covers ring). Gates: G0 0; edgeretain ok:true; SMOKE all baselines; genhash 25/25 IDENTICAL
+      (x2); lodswap ok:true (AC-0182 regression); HEAVY boundary r4 x2 p95 31/27 (in band) + perf r4 p95 23 + fog_ok; build
+      109,826,640 B sha f341a964 8080 byte-match + 5180=200 + 8443 down. Results: tasks/AC-0168/AC-0168-results.html.'
 - id: AC-0169
   title: 'debug stats overlay: CPU/RAM/VRAM/FPS'
   source: user
@@ -5239,7 +5256,17 @@ intake:
   - id: 2
     created_at: '2026-09-02T07:40:00.000000'
     updated_at: null
-    text: '[coordinator] DONE 2026-09-02 — debug_stats setting (default false, bool-clamped) persisted via Settings.PATH; Options-menu CheckBox "Show debug stats (CPU/RAM/VRAM/FPS)" (programmatic in menu.gd, after HungerCheck) -> Settings.set_value; top-left CanvasLayer(25)+Label overlay visible iff debug_stats, refreshed every 0.25 s, stays on during gameplay + above the pause menu, mouse-filter-ignored. Godot 4.7.1 API audit: the task-suggested OS.get_cpu_usage/get_process_memory_usage/get_total_memory do NOT exist in 4.7 -> FPS=Performance.TIME_FPS, CPU=ΔPerformance.TIME_PROCESS (% of 1 core), system RAM=OS.get_memory_info(), process RAM=OS.get_static_memory_usage() (debug builds only, 0 in release — labeled), VRAM=Performance.RENDER_VIDEO_MEM_USED (real renderer stat). NEW AWECRAFT_LOGIC=debugstats arm (two-run persistence). Gates: G0 0; debugstats ok:true (visible_when_on:true, hidden-when-off:true [field misnamed visible_when_off], text_has_fields:true, persisted_after_restart:true across 2 runs, cfg_saved:true); SMOKE all baselines; genhash 25/25 IDENTICAL (world/* untouched); RENDER 2 PNGs (overlay + options toggle, verified via read_image); HEAVY boundary r4 x2 p95 27/30 (in band) + perf r4 p95 23 + fog_ok; build 109,837,456 B sha d35e66c8 8080 byte-match + 5180=200 + 8443 down. See tasks/AC-0169/AC-0169-results.html.'
+    text: '[coordinator] DONE 2026-09-02 — debug_stats setting (default false, bool-clamped) persisted via Settings.PATH;
+      Options-menu CheckBox "Show debug stats (CPU/RAM/VRAM/FPS)" (programmatic in menu.gd, after HungerCheck) -> Settings.set_value;
+      top-left CanvasLayer(25)+Label overlay visible iff debug_stats, refreshed every 0.25 s, stays on during gameplay + above
+      the pause menu, mouse-filter-ignored. Godot 4.7.1 API audit: the task-suggested OS.get_cpu_usage/get_process_memory_usage/get_total_memory
+      do NOT exist in 4.7 -> FPS=Performance.TIME_FPS, CPU=ΔPerformance.TIME_PROCESS (% of 1 core), system RAM=OS.get_memory_info(),
+      process RAM=OS.get_static_memory_usage() (debug builds only, 0 in release — labeled), VRAM=Performance.RENDER_VIDEO_MEM_USED
+      (real renderer stat). NEW AWECRAFT_LOGIC=debugstats arm (two-run persistence). Gates: G0 0; debugstats ok:true (visible_when_on:true,
+      hidden-when-off:true [field misnamed visible_when_off], text_has_fields:true, persisted_after_restart:true across 2
+      runs, cfg_saved:true); SMOKE all baselines; genhash 25/25 IDENTICAL (world/* untouched); RENDER 2 PNGs (overlay + options
+      toggle, verified via read_image); HEAVY boundary r4 x2 p95 27/30 (in band) + perf r4 p95 23 + fog_ok; build 109,837,456
+      B sha d35e66c8 8080 byte-match + 5180=200 + 8443 down. See tasks/AC-0169/AC-0169-results.html.'
 - id: AC-0170
   title: debug logging toggle in options (log to in-game console)
   source: user
@@ -5570,7 +5597,13 @@ intake:
   - id: 2
     created_at: 2026-09-01T20:34
     updated_at: null
-    text: '[coordinator] DONE + PUSHED 2026-09-01 (goal round). Dead-band hysteresis (full->coarse commits @taxi>=14, coarse->full @taxi<=11, 12/13 keeps current), retain-until-ready (old mesh kept, worker builds, atomic handoff swap), dual-LOD alt-cache for taxi 11-14 (instant re-crossing). Subagent run hit the LLM output cap before its final report but all work landed; coordinator re-ran ALL gates on the stable tree: G0 0, lodswap ok:true (no_hole/retain/no-flicker/instant, 1 build), lodband ok:true @R50 (spawn_monotonic), SMOKE all baselines, genhash 25/25 IDENTICAL, bandmap {b0 41,b1 272,b2 7532,b3 408} + [12,0] full/[13,0] coarse, boundary r4 p95 35/32 (in-band), perf p95 25, build 109,796,112 B sha aebb3128 8080 byte-match. See AC-0182-results.html.'
+    text: '[coordinator] DONE + PUSHED 2026-09-01 (goal round). Dead-band hysteresis (full->coarse commits @taxi>=14, coarse->full
+      @taxi<=11, 12/13 keeps current), retain-until-ready (old mesh kept, worker builds, atomic handoff swap), dual-LOD alt-cache
+      for taxi 11-14 (instant re-crossing). Subagent run hit the LLM output cap before its final report but all work landed;
+      coordinator re-ran ALL gates on the stable tree: G0 0, lodswap ok:true (no_hole/retain/no-flicker/instant, 1 build),
+      lodband ok:true @R50 (spawn_monotonic), SMOKE all baselines, genhash 25/25 IDENTICAL, bandmap {b0 41,b1 272,b2 7532,b3
+      408} + [12,0] full/[13,0] coarse, boundary r4 p95 35/32 (in-band), perf p95 25, build 109,796,112 B sha aebb3128 8080
+      byte-match. See AC-0182-results.html.'
 - id: AC-0183
   title: LOD hysteresis at 12/13 band so we don't flip constantly
   source: user
@@ -5700,11 +5733,28 @@ intake:
   - id: 2
     created_at: 2026-09-02T02:53
     updated_at: null
-    text: '[coordinator] DONE + PUSHED 2026-09-02 (goal round). edit_front priority queue + sync scoped remesh: set_block stashes pre-edit eff, appends slab closure, evicts eff, marks 3x3 wave, dispatches immediately via _mesh_dispatch_edit (defer-on-cap). Slab-scoped build_accs (si0/si1/d_off) + apply_edit_accs (retain-until-swap, never an empty frame). Edit-yield: while edit_inflight>0 the far-queue drain/flush/tex/non-edit handoff are skipped (priority pass ungated, no deadlock). Also fixed a pre-existing flush_active stale-true bug (D2) that had inflated editperf counters. Gates: G0 0; editfront ok:true (queue 8244, break 32.5ms/place 37.3ms <50ms, 0 drops, tm_cap 6 enforced, far stream kept draining); editperf 9/22/22 = baseline; lodswap ok:true (AC-0182 regression); SMOKE all baselines; genhash 25/25 IDENTICAL (x2); HEAVY boundary r4 p95 31/27 (in band), perf p95 24; build 109,817,440 B sha d592a095 8080 byte-match. See AC-0187-results.html (D1-D8).'
+    text: '[coordinator] DONE + PUSHED 2026-09-02 (goal round). edit_front priority queue + sync scoped remesh: set_block
+      stashes pre-edit eff, appends slab closure, evicts eff, marks 3x3 wave, dispatches immediately via _mesh_dispatch_edit
+      (defer-on-cap). Slab-scoped build_accs (si0/si1/d_off) + apply_edit_accs (retain-until-swap, never an empty frame).
+      Edit-yield: while edit_inflight>0 the far-queue drain/flush/tex/non-edit handoff are skipped (priority pass ungated,
+      no deadlock). Also fixed a pre-existing flush_active stale-true bug (D2) that had inflated editperf counters. Gates:
+      G0 0; editfront ok:true (queue 8244, break 32.5ms/place 37.3ms <50ms, 0 drops, tm_cap 6 enforced, far stream kept draining);
+      editperf 9/22/22 = baseline; lodswap ok:true (AC-0182 regression); SMOKE all baselines; genhash 25/25 IDENTICAL (x2);
+      HEAVY boundary r4 p95 31/27 (in band), perf p95 24; build 109,817,440 B sha d592a095 8080 byte-match. See AC-0187-results.html
+      (D1-D8).'
   - id: 3
     created_at: '2026-09-02T06:40:00.000000'
     updated_at: null
-    text: '[coordinator] BUGFIX 2026-09-02 (user-reported regression): breaking a block showed BLACK LINES on that chunk for a few seconds. Root cause: the scoped edit remesh emits opaque faces via the plain per-face path whose UVs are in the PLAIN-atlas space (make_ctx: Data.ATLAS_PX + Data.block_rect), but the opaque material is always _get_mat("opaque", ms.tex) = the MERGED atlas (chunk.gd:1957) — plain-space UVs sampled on the merged texture = wrong texels until the wave''s full (merged-UV) rebuild. Fix (surgical, chunk.gd apply_edit_accs only): pass a plain-ms (tex:null) to _assemble_slab so the scoped opaque material uses the plain atlas, matching its plain UVs (cutout/flower/fluid already used plain materials — only opaque was mismatched). Verified: NEW editmat probe ok:true opaque_mat_is_plain:true merged_tex_present:true (3320 UVs in [0,1]); A/B (revert that line -> opaque_mat_is_plain:false); render 1 shot = no black lines; editfront ok:true (break 34.0/place 48.7 ms <50, 0 drops); SMOKE ok; genhash 25/25 IDENTICAL (x2 + vs AC-0187 ref); lodswap ok:true; HEAVY boundary r4 x2 p95 29/28 (in band) + perf r4 p95 23 + fog_ok; G0 0 SCRIPT ERROR. See tasks/AC-0187/AC-0187-fix-blacklines.html.'
+    text: '[coordinator] BUGFIX 2026-09-02 (user-reported regression): breaking a block showed BLACK LINES on that chunk for
+      a few seconds. Root cause: the scoped edit remesh emits opaque faces via the plain per-face path whose UVs are in the
+      PLAIN-atlas space (make_ctx: Data.ATLAS_PX + Data.block_rect), but the opaque material is always _get_mat("opaque",
+      ms.tex) = the MERGED atlas (chunk.gd:1957) — plain-space UVs sampled on the merged texture = wrong texels until the
+      wave''s full (merged-UV) rebuild. Fix (surgical, chunk.gd apply_edit_accs only): pass a plain-ms (tex:null) to _assemble_slab
+      so the scoped opaque material uses the plain atlas, matching its plain UVs (cutout/flower/fluid already used plain materials
+      — only opaque was mismatched). Verified: NEW editmat probe ok:true opaque_mat_is_plain:true merged_tex_present:true
+      (3320 UVs in [0,1]); A/B (revert that line -> opaque_mat_is_plain:false); render 1 shot = no black lines; editfront
+      ok:true (break 34.0/place 48.7 ms <50, 0 drops); SMOKE ok; genhash 25/25 IDENTICAL (x2 + vs AC-0187 ref); lodswap ok:true;
+      HEAVY boundary r4 x2 p95 29/28 (in band) + perf r4 p95 23 + fog_ok; G0 0 SCRIPT ERROR. See tasks/AC-0187/AC-0187-fix-blacklines.html.'
 - id: AC-0188
   title: gdext-gen-fbm-caves
   source: user
@@ -5784,3 +5834,170 @@ intake:
     created_at: 2026-09-01T23:15
     updated_at: null
     text: '[user] split AC-0125 plan hotloops into separate tasks queued after AC-0165'
+- id: AC-0191
+  title: 'test-range: isolated combat/movement range'
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-02T09:42
+  updated_at: 2026-09-02T09:42
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: As a player testing Halo-feel combat and movement, I want a preplanned isolated range I can load\
+    \ without worldgen so I can iterate on movement and combat (swords/bows now, guns later) and water/lava interaction quickly.\n\
+    \n2) Technical Details: New scene godot/scenes/test_range.tscn — flat greybox range with 10/25/50m targets + water pit\
+    \ + lava trench, no ChunkWorld/worldgen. Targets are StaticBodies. Reuses actual player.gd + Inventory.gd (DebugInventory:\
+    \ infinite, no ore costs, allow_build=false) for swim/drown/lava damage + swords/bows + placeholder hitscan stub; procedural\
+    \ Halo-gun picker (tier/rarity/affix) is follow-up once weapon system exists. Reuses real viewmodel/swing.\n   Harness:\
+    \ AWECRAFT_LOGIC=range — main.gd auto-loads test_range instead of world, spawns player+target, validates movement/swim/drown/lava/swing/bow/hitscan,\
+    \ emits RESULT ok:true. Saves isolated (no awecraft_save_*.json write). Console available in range (AC-0121 debug console,\
+    \ same InputMap) for spawning enemies/weapons via commands. Launch: Main Menu → Test Range button.\n   Verify: G0 zero\
+    \ SCRIPT ERROR + AWECRAFT_LOGIC=range ok:true + 1 render (xvfb, gl_compatibility) no worldgen chunks."
+  comments: []
+- id: AC-0192
+  title: 'test-fluid: isolated fluid tray'
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-02T09:54
+  updated_at: 2026-09-02T09:54
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a dev testing water/lava sim I want a flat isolated fluid tray without full worldgen so spread/fall/level
+    decay is instant and deterministic.
+
+
+    2) Technical Details: New scene godot/scenes/tests/test_fluid.tscn — slope + basins on 3x3 stub chunks (no WorldGen, just
+    Data+fl arrays), no player. Reuses water.gd tick_fluids only. Harness: AWECRAFT_LOGIC=fluid_tray headless level 0-8 asserts
+    ok:true. Verify: G0 + fluid_tray ok:true + 1 render.'
+  comments: []
+- id: AC-0193
+  title: 'test-light: isolated lighting cave'
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-02T09:54
+  updated_at: 2026-09-02T09:54
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a dev testing block/sky light I want an enclosed cave harness so torch/lava bleed is reproducible
+    without full worldgen.
+
+
+    2) Technical Details: New scene godot/scenes/tests/test_light.tscn — 3x3 chunk grid with stub Data (no WorldGen/fluid),
+    torch/lava grid, uses real lighting.gd Lighting.compute_light_flat_chunk/batch on that grid only. Harness: AWECRAFT_LOGIC=light
+    headless light bleed asserts ok:true. Verify: G0 + light ok:true + 1 render.'
+  comments: []
+- id: AC-0194
+  title: 'test-inventory: isolated UI harness'
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-02T09:54
+  updated_at: 2026-09-02T09:54
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a dev fixing inventory I want a standalone UI harness so drag/hover/craft/36+4+grid works without
+    spawning the world.
+
+
+    2) Technical Details: New scene godot/scenes/tests/test_inventory.tscn — Inventory UI only (36 = 9 hotbar + 27 backpack
+    9x3, +4 armor, 2x2 vs 3x3 table), no ChunkWorld/player. Harness: AWECRAFT_LOGIC=inventory ok:true. Verify: G0 + guiclick
+    ok:true + 1 render.'
+  comments: []
+- id: AC-0195
+  title: 'test-mobs: isolated mob arena'
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-02T09:54
+  updated_at: 2026-09-02T09:54
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a dev testing mobs I want a flat arena with spawn table and cover so AI chase, line-of-sight and
+    pathing are instant without waiting for night or digging.
+
+
+    2) Technical Details: New scene godot/scenes/tests/test_mobs.tscn — flat arena + cover blocks (walls/pillars for LOS/pathing)
+    + spawn table for 9 mob types, no ChunkWorld (mock floor StaticBodies). Reuses mob AI + Navigation. Harness: AWECRAFT_LOGIC=mobs
+    ok:true. Verify: G0 + mobs harness + 1 render.'
+  comments: []
+- id: AC-0196
+  title: 'test-planet: hollow shell (surface-only, no ocean)'
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-02T10:06
+  updated_at: 2026-09-02T10:06
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a dev testing planet flight/LOD I want a full hollow planet stub (surface-only) I can fly around/land
+    on without caves/biomes so space, LOD cross-fade and face-boundary gaps are instant.
+
+
+    2) Technical Details: New scene godot/scenes/tests/test_planet.tscn — full planet stub R=4000 shell H=384 (same as real
+    planet, interior void not air chunks), surface 2-3 layers + cheap Perlin hills ~8m, palette grass/dirt/snow/stone/cobble,
+    no caves/ore/ocean (no water), minimal WorldGen, full cube-sphere face/sector/chunk shell. Reuses P1a/P1b/P1c curved-ground/gravity/LOD/impostor
+    + AC-0150 gap check. Tests vertical approach LOD 2000→500m + horizontal flight across face edge. Playable: spawn player
+    on surface with full movement/flight, Menu → Test Planet. Harness: AWECRAFT_LOGIC=planet_grey headless approach+horizontal
+    LOD asserts ok:true. Verify: G0 + planet_grey ok:true + 1 render (r=4 lazy stream, 81 chunks).'
+  comments: []
+- id: AC-0197
+  title: sparse-air-slabs-skip-empty-top
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-02T14:55
+  updated_at: 2026-09-02T14:55
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want sky over hills to cost nothing so R50 does not hitch on 11 empty slabs per column
+    (~45% of 98k * 7845 = 770M checks).
+
+
+    2) Technical Details: Data.HEIGHT 384 -> 24 slabs chunk.gd:59. Heights ~80-180 Sea 126 -> top 208-384 fully air. Make
+    data/fl 24x (null|16^3 palette) null=air. generator.gd:109 fill only y<h+1. chunk.gd:1419 build_accs early si1=top//16
+    reuse scoped 1479/1588 null append (skip 98k scan, _qgrow 1602, _s_emit 1619), _bake_box 1445/1665 clamp y_lo/hi to top+2,
+    _build_snap_data 1446 skip. lighting.gd:300 pull skips flood above top+2 (eff=15). core/chunk_io.gd:123 + region AC-0175
+    write offset table only non-null slabs (save 40% 26ms enc). Verify: R50 built_final 7845, p95 wms <30ms, 8KB/col -> 5KB,
+    headless genhash 25 MD5 unchanged.'
+  comments:
+  - id: 1
+    created_at: 2026-09-02T14:55
+    updated_at: null
+    text: '[user] top of queue per request - sparse air optimization (retry from AC-0191 conflict)'

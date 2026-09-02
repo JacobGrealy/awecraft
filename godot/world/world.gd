@@ -368,6 +368,7 @@ var perf_light_self_computes := 0
 var perf_light_batch_calls := 0
 var perf_light_batch_chunks := 0
 var perf_light_cache_hits := 0
+var light_saved_restores := 0
 var _look_yaw := 0.0
 var _look_dir := Vector2(1, 0)
 const PICK_POOL_CAP := 512
@@ -1448,6 +1449,7 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		var ta2 := Time.get_ticks_msec()
 		var old_eff2 = c.last_eff
 		c.apply_edit_accs(res, _tm_ms_full)
+		c.saved_light = {}
 		perf_build_ms += Time.get_ticks_msec() - ta2
 		perf_build_worker_ms += int(res.get("wms", 0))
 		_count_collision_build(c)
@@ -1467,6 +1469,7 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 	if lod_swap:
 		lod_cap = c.capture_lod()
 	c.apply_accs(res, _tm_ms_full)
+	c.saved_light = {}
 	if lod_swap:
 		var ltaxi := absi(int(c.cx) - last_pcx) + absi(int(c.cz) - last_pcz)
 		var lkind := 0 if int(e["band"]) == 2 else 1
@@ -1717,6 +1720,7 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 			perf_edit_syncs += 1
 		var old_eff = c.last_eff
 		c.build_mesh(get_block, eff)
+		c.saved_light = {}
 		_eff_landed(c, old_eff, c.last_eff)
 		_count_collision_build(c)
 		_stage_check(c, key)
@@ -1744,6 +1748,7 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 					perf_edit_syncs += 1
 				var old_eff = c.last_eff
 				c.build_mesh(get_block, eff)
+				c.saved_light = {}
 				_eff_landed(c, old_eff, c.last_eff)
 				_count_collision_build(c)
 				_stage_check(c, key)
@@ -1779,6 +1784,7 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 			return false
 		var old_eff = c.last_eff
 		c.build_mesh(get_block, eff)
+		c.saved_light = {}
 		_eff_landed(c, old_eff, c.last_eff)
 		_count_collision_build(c)
 		_stage_check(c, key)
@@ -1850,6 +1856,9 @@ func _build_unit(c: Node3D, cx: int, cz: int) -> bool:
 	# worker self-lights its own fresh copy through the byte-identical
 	# contained kernel (ChunkScript.build_accs / Lighting.compute_light_flat_chunk).
 	var eff := _eff_for(c, cx, cz)
+	if eff.is_empty() and not c.saved_light.is_empty():
+		eff = c.saved_light
+		light_saved_restores += 1
 	if eff.is_empty():
 		perf_light_self_computes += 1
 	# AC-0160 run 2: the drain dispatch is defer-on-cap. The cap-drop SYNC
@@ -3576,27 +3585,40 @@ func _record_edit(cx: int, cz: int, fi: int, b: int, f: int) -> void:
 		edits[key] = {}
 	edits[key][fi] = {"b": b, "f": f}
 
-func _apply_edits_to_chunk(c: Node3D) -> void:
+func _apply_edits_to_chunk(c: Node3D) -> bool:
 	var key := _key(c.cx, c.cz)
 	if not edits.has(key):
-		return
+		return false
 	var data: PackedByteArray = c.data
 	if data.is_empty():
-		return
+		return false
 	var fl: PackedByteArray = c.fl
 	if fl.size() != data.size():
 		fl.resize(data.size())
 	var cells: Dictionary = edits[key]
+	var changed := false
+	var fl_changed := false
 	for fkey in cells:
 		var e: Dictionary = cells[fkey]
-		data[int(fkey)] = int(e.get("b", 0))
-		fl[int(fkey)] = int(e.get("f", 0))
-		if int(e.get("f", 0)) > 0:
+		var b := int(e.get("b", 0))
+		var f := int(e.get("f", 0))
+		if data[int(fkey)] != b:
+			changed = true
+		if fl[int(fkey)] != f:
+			fl_changed = true
+		data[int(fkey)] = b
+		fl[int(fkey)] = f
+		if f > 0:
 			fluid_wet[_key(c.cx, c.cz)] = true
+	if not changed and not fl_changed:
+		return false
 	c.mark_all_slabs_dirty()
 	_eff_cache_evict(key)
-	_mark_light_around(c.cx, c.cz)
+	if changed:
+		c.saved_light = {}
+		_mark_light_around(c.cx, c.cz)
 	_mark_fluid_around(c.cx, c.cz)
+	return changed
 
 # AC-0155: full-column persistence (Bedrock LevelDB / Java region style).
 # Every generated 16xHx16 column is saved whole (data + fl, palette+bitpack
@@ -3626,9 +3648,26 @@ func _try_disk_load(c: Node3D, cx: int, cz: int) -> bool:
 		return false
 	c.data = res["data"]
 	c.fl = res["fl"]
+	c.saved_light = _saved_light_from_res(res.get("light", {}), cx, cz)
 	disk_reads += 1
 	chunk_origin[_key(cx, cz)] = "disk"
 	return true
+
+func _saved_light_from_res(light: Dictionary, cx: int, cz: int) -> Dictionary:
+	if light.is_empty():
+		return {}
+	var arr: PackedByteArray = light.get("arr", PackedByteArray())
+	var mask: PackedByteArray = light.get("mask", PackedByteArray())
+	if arr.size() != 256 * Data.HEIGHT or mask.size() != 256 * Data.HEIGHT:
+		return {}
+	return {
+		"mn": Vector3i(cx * 16, 0, cz * 16),
+		"w": 16,
+		"d": 16,
+		"arr": arr,
+		"mask": mask,
+		"blk_src": bool(light.get("blk_src", false)),
+	}
 
 func _materialize_chunk_data(c: Node3D, cx: int, cz: int) -> int:
 	if c.data.is_empty() and _io_read_keys.has(_key(cx, cz)):
@@ -3654,6 +3693,8 @@ func _queue_chunk_save(c: Node3D) -> void:
 	# AC-0164: the slot is captured AT ENQUEUE — the active slot can change
 	# mid-flight (continue / new game) and a write in flight must still land
 	# in the captured slot's dir, not the current one's.
+	var key := _key(int(c.cx), int(c.cz))
+	var light: Dictionary = _save_light_for(c, key)
 	_save_queue.append({
 		"slot": int(Save.active_slot),
 		"face": _chunk_face(int(c.cx)),
@@ -3661,7 +3702,26 @@ func _queue_chunk_save(c: Node3D) -> void:
 		"cz": int(c.cz),
 		"data": c.data.duplicate(),
 		"fl": c.fl.duplicate(),
+		"light": light,
 	})
+
+func _save_light_for(c: Node3D, key: String) -> Dictionary:
+	var out := {}
+	if light_pending_set.has(key) or light_dirty.has(key):
+		return out
+	var cached = _eff_cache.get(key)
+	if cached == null or c.data != cached.data:
+		return out
+	var full: Dictionary = cached.eff
+	var arr: PackedByteArray = full.get("arr", PackedByteArray())
+	var mask: PackedByteArray = full.get("mask", PackedByteArray())
+	if arr.is_empty() or mask.is_empty():
+		return out
+	return {
+		"arr": arr.duplicate(),
+		"mask": mask.duplicate(),
+		"blk_src": bool(full.get("blk_src", false)),
+	}
 
 func _drain_save_queue() -> void:
 	if _save_queue.is_empty():
@@ -3694,6 +3754,7 @@ func _io_write_enqueue(e: Dictionary) -> void:
 		"path": ChunkIO.path_for(slot, int(e["face"]), cx, cz),
 		"data": e["data"],
 		"fl": e["fl"],
+		"light": e.get("light", {}),
 		"seed": int(Game.world_seed),
 		"height": int(Data.HEIGHT),
 	}
@@ -3717,7 +3778,7 @@ func _io_write_worker() -> void:
 		ns += 1
 	if entry == null:
 		return
-	var blob := ChunkIO.encode_column(PackedByteArray(entry["data"]), PackedByteArray(entry["fl"]), int(entry["seed"]), int(entry["height"]))
+	var blob := ChunkIO.encode_column(PackedByteArray(entry["data"]), PackedByteArray(entry["fl"]), int(entry["seed"]), int(entry["height"]), entry.get("light", {}))
 	var f = FileAccess.open(String(entry["path"]), FileAccess.WRITE)
 	if f == null:
 		return
@@ -3824,6 +3885,7 @@ func _io_read_handoff(e: Dictionary) -> void:
 		return
 	c.data = res["data"]
 	c.fl = res["fl"]
+	c.saved_light = _saved_light_from_res(res.get("light", {}), int(e["cx"]), int(e["cz"]))
 	disk_reads += 1
 	disk_read_ms += float(e.get("ms", 0.0))
 	chunk_origin[key] = "disk"

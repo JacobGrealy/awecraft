@@ -1005,6 +1005,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			_light_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "lightcache":
+			await _lightcache_test(spawn)
+			return
 		if logic == "debugstats":
 			await _debugstats_test()
 			return
@@ -9023,6 +9026,135 @@ func _chunkio_test(spawn: Vector3) -> void:
 		},
 	})
 	get_tree().quit()
+
+
+func _lightcache_cache_fresh(key: String, max_frames: int) -> bool:
+	var waited := 0
+	while waited < max_frames:
+		await get_tree().physics_frame
+		waited += 1
+		var c = world.chunks.get(key)
+		if c == null or c.data.is_empty():
+			continue
+		if world.light_pending_set.has(key) or world.light_dirty.has(key) or world.edit_front_set.has(key):
+			continue
+		var cached = world._eff_cache.get(key)
+		if cached == null or c.data != cached.data:
+			continue
+		if (cached.eff as Dictionary).get("mask", null) == null:
+			continue
+		return true
+	return false
+
+func _lightcache_revisit(key: String) -> Node3D:
+	var c: Node3D = world.chunks.get(key)
+	if c != null:
+		world.chunks.erase(key)
+		c.queue_free()
+	world._eff_cache_evict(key)
+	await get_tree().physics_frame
+	var nc = world.create_chunk(0, 0, false)
+	world._enqueue_build(0, 0)
+	var waited := 0
+	while waited < 1200:
+		if nc != null and bool(nc.mesh_built):
+			break
+		await get_tree().physics_frame
+		waited += 1
+	return nc
+
+func _lightcache_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var SLOT := 0
+	Save.active_slot = SLOT
+	ChunkIO.clear_dir(SLOT)
+	world.fluid_sim_enabled = false
+	world.collision_enabled = false
+	world.render_radius = 2
+	world.recenter(spawn.x, spawn.z, true)
+	await _await_core_3x3(spawn, 3000)
+	var key := "0,0"
+	var c0: Node3D = world.chunks.get(key)
+	var top: int = world.surface_top(8, 8)
+	for i in range(5):
+		world.set_block(8, top - i, 8, 0)
+	world.set_block(8, top - 5, 8, 22)
+	var fresh0 := await _lightcache_cache_fresh(key, 2400)
+	c0 = world.chunks.get(key)
+	var full0: Dictionary = world._eff_cache.get(key, {}).get("eff", {})
+	var saved_arr: PackedByteArray = PackedByteArray(c0.last_eff.get("arr", PackedByteArray()))
+	var saved_mask: PackedByteArray = PackedByteArray(full0.get("mask", PackedByteArray()))
+	var blk_src0 := bool(full0.get("blk_src", false))
+	var torch_l: Dictionary = world.light_at(8, top - 5, 8)
+	var mask_sum := 0
+	for m in saved_mask:
+		mask_sum += int(m)
+	var light_saved_nonzero := mask_sum > 0 and int(torch_l.get("block", 0)) >= 13
+	world._queue_chunk_save(c0)
+	world._drain_save_queue()
+	var iw := 0
+	while iw < 900 and not world._io_write_inflight.is_empty():
+		await get_tree().physics_frame
+		iw += 1
+	var path := ChunkIO.path_for(SLOT, 0, 0, 0)
+	var file_ok := FileAccess.file_exists(path)
+	var disk_light_ok := false
+	var disk_mask_ok := false
+	if file_ok:
+		var f := FileAccess.open(path, FileAccess.READ)
+		if f != null:
+			var bytes := f.get_buffer(f.get_length())
+			f.close()
+			var dec = ChunkIO.decode_column(bytes, int(Game.world_seed), int(Data.HEIGHT))
+			if typeof(dec) == TYPE_DICTIONARY and not (dec as Dictionary).is_empty():
+				var dl: Dictionary = (dec as Dictionary).get("light", {})
+				disk_light_ok = PackedByteArray(dl.get("arr", PackedByteArray())) == saved_arr and bool(dl.get("blk_src", false)) == blk_src0
+				disk_mask_ok = PackedByteArray(dl.get("mask", PackedByteArray())) == saved_mask
+	var n1 = await _lightcache_revisit(key)
+	await _lightcache_cache_fresh(key, 900)
+	var built1 := n1 != null and bool(n1.mesh_built)
+	var recompute_count := int(n1.light_recomputes) if built1 else -1
+	var restored_arr := PackedByteArray(n1.last_eff.get("arr", PackedByteArray())) if built1 else PackedByteArray()
+	var restored_full: Dictionary = world._eff_cache.get(key, {}).get("eff", {})
+	var restored_mask := PackedByteArray(restored_full.get("mask", PackedByteArray()))
+	var last1_empty := bool(n1 == null or (n1.last_eff as Dictionary).is_empty())
+	var restored_no_recompute := built1 and recompute_count == 0 and not last1_empty
+	var restored_matches_saved := restored_arr == saved_arr and restored_mask == saved_mask and disk_light_ok and disk_mask_ok
+	var legacy_v1_recomputes := false
+	if built1:
+		var leg := ChunkIO.encode_column_legacy(PackedByteArray(n1.data), PackedByteArray(n1.fl), int(Game.world_seed), int(Data.HEIGHT))
+		var f2 = FileAccess.open(path, FileAccess.WRITE)
+		if f2 != null:
+			f2.store_buffer(leg)
+			f2.close()
+		var n2 = await _lightcache_revisit(key)
+		legacy_v1_recomputes = n2 != null and bool(n2.mesh_built) and int(n2.light_recomputes) >= 1 and bool(not (n2.last_eff as Dictionary).is_empty())
+	Save.clear(SLOT)
+	var wiped := not FileAccess.file_exists(path)
+	var n3 = await _lightcache_revisit(key)
+	var clear_wipes_light := wiped and n3 != null and bool(n3.mesh_built) and int(n3.light_recomputes) >= 1 and bool(not (n3.last_eff as Dictionary).is_empty())
+	var wall := Time.get_ticks_msec() - t0
+	var ok := built1 and fresh0 and file_ok and disk_light_ok and disk_mask_ok and light_saved_nonzero and restored_no_recompute and recompute_count == 0 and restored_matches_saved and legacy_v1_recomputes and clear_wipes_light and wall <= 90000
+	Debug.result({
+		"ok": ok,
+		"wall_ms": wall,
+		"light_saved_nonzero": light_saved_nonzero,
+		"restored_no_recompute": restored_no_recompute,
+		"recompute_count": recompute_count,
+		"restored_matches_saved": restored_matches_saved,
+		"legacy_v1_recomputes": legacy_v1_recomputes,
+		"clear_wipes_light": clear_wipes_light,
+		"disk_light_ok": disk_light_ok,
+		"disk_mask_ok": disk_mask_ok,
+		"file_ok": file_ok,
+		"cache_fresh": fresh0,
+		"mask_sum": mask_sum,
+		"torch_block": int(torch_l.get("block", 0)),
+		"saved_restores": world.light_saved_restores,
+	})
+	get_tree().quit()
+
+
 
 
 # AC-0158 probe (AWECRAFT_LOGIC=tick): the 20 Hz game tick on the band-0

@@ -19,6 +19,8 @@ var collision_enabled := true
 var col_immediate := true
 var last_collision_build_ms := 0
 var last_eff: Dictionary = {}
+var saved_light: Dictionary = {}
+var light_recomputes := 0
 var last_blk_ring: PackedInt32Array = PackedInt32Array()
 # AC-0129: bumped when last_eff's byte array changes (world._eff_landed);
 # neighbors' eff-cache entries carry our gen at their dispatch (ngen) and
@@ -1434,7 +1436,8 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	var blk_strips: Array = ctx.get("blk_strips", [])
 	var blk_strips_b: Array = ctx.get("blk_strips_b", [])
 	var light: Dictionary = eff
-	if light.is_empty() or light.get("mask", null) == null:
+	var light_recomputed := light.is_empty() or light.get("mask", null) == null
+	if light_recomputed:
 		var tl := Time.get_ticks_msec()
 		light = Lighting.compute_light_flat_chunk_pull(data, cx, cz, h, eff_strips, blk_strips, blk_strips_b)
 		ph_light = Time.get_ticks_msec() - tl
@@ -1640,6 +1643,7 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	return {
 		"slabs": slabs_out,
 		"light": light,
+		"light_recomputed": light_recomputed,
 		"wms": Time.get_ticks_msec() - t0,
 		"si0": si0,
 		"si1": si1,
@@ -2172,6 +2176,7 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	var st = Game.world._strips_for(cx, cz)
 	if light.is_empty() or light.get("mask", null) == null:
 		light = Lighting.compute_light_flat_chunk_pull(data, cx, cz, Data.HEIGHT, st["eff"], st["blk"], st["blk_b"])
+		light_recomputes += 1
 	last_eff = _eff_store(light)
 	last_blk_ring = light.get("ring", PackedInt32Array())
 	var bb := _bake_box(light, st["eff"], Data.HEIGHT)
@@ -2349,6 +2354,8 @@ func apply_accs(res: Dictionary, ms: Dictionary) -> void:
 			s.occluder = null
 	last_eff = _eff_store(res.light)
 	last_blk_ring = res.light.get("ring", PackedInt32Array())
+	if bool(res.get("light_recomputed", false)):
+		light_recomputes += 1
 	for si in range(slab_n()):  # AC-0091: runtime slab count (was 5)
 		var row: Array = res.slabs[si]
 		_assemble_slab(slabs[si], _acc_from_dict(row[0]), _acc_from_dict(row[1]), _acc_from_dict(row[2]), _acc_from_dict(row[3]), _acc_from_dict(row[4]), _acc_from_dict(row[5]), ms, bool(row[6]))
@@ -2377,6 +2384,8 @@ func apply_edit_accs(res: Dictionary, ms: Dictionary) -> void:
 			s.occluder = null
 	last_eff = _eff_store(res.light)
 	last_blk_ring = res.light.get("ring", PackedInt32Array())
+	if bool(res.get("light_recomputed", false)):
+		light_recomputes += 1
 	for i in range(si1 - si0 + 1):
 		var row: Array = res.slabs[i]
 		_assemble_slab(slabs[si0 + i], _acc_from_dict(row[0]), _acc_from_dict(row[1]), _acc_from_dict(row[2]), _acc_from_dict(row[3]), _acc_from_dict(row[4]), _acc_from_dict(row[5]), pms, bool(row[6]))

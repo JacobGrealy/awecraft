@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0156 results — light-cache-per-section</title>
+<style>
+ body { font: 14px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace; margin: 2rem auto; max-width: 1050px; color: #1c2330; }
+ h1 { font-size: 1.35rem; border-bottom: 3px solid #2b6cb0; padding-bottom: .4rem; }
+ h2 { font-size: 1.05rem; margin-top: 1.6rem; color: #2b6cb0; }
+ table { border-collapse: collapse; width: 100%; margin: .6rem 0; }
+ th, td { border: 1px solid #cbd5e0; padding: 4px 8px; text-align: left; vertical-align: top; font-size: 13px; }
+ th { background: #edf2f7; }
+ .ok { color: #166534; font-weight: bold; }
+ .warn { color: #92400e; font-weight: bold; }
+ .note { background: #fffbeb; border-left: 4px solid #d69e2e; padding: .5rem .8rem; margin: .6rem 0; }
+ code { background: #edf2f7; padding: 1px 4px; border-radius: 3px; }
+ img { max-width: 100%; border: 1px solid #cbd5e0; margin: .4rem 0; }
+ .small { font-size: 12px; color: #4a5568; }
+ pre { background:#f4f4f4; padding:8px; border-radius:6px; overflow:auto; font-size:12px; }
+</style>
+</head>
+<body>
+
+<h1>AC-0156 — light-cache-per-section · results · 2026-09-02</h1>
+
+<div class="note"><b>Verdict: DONE — all light gates green.</b> The per-column AWCC blob now carries the
+column's light (eff channel + block-light mask, nibble-packed per 16³ section) in the same file as the block
+data. A revisited column restores its light with <b>zero kernel recompute</b> (probe: <code>recompute_count: 0</code>,
+restored channels byte-identical), legacy v1 blobs decode to "no saved light" and recompute exactly as before,
+and <code>Save.clear</code> wipes light together with blocks. Per-column data-format change only — AC-0175's later
+region-file grouping reads/writes through the same <code>encode_column</code>/<code>decode_column</code> and preserves the
+light automatically. The coordinator re-runs the heavy gates (r4 boundary ×2 + perf) + Windows build + commit/push
+after this exit.</div>
+
+<h2>1. What shipped</h2>
+<ul>
+  <li><b><code>godot/core/chunk_io.gd</code></b> — AWCC <code>VERSION</code> 1→2. <code>encode_column(data, fl, seed, height, light = {})</code>
+      appends a light section after the fl array: <code>u32 li_size</code> + <code>[present(1) blk_src(1) u32 eff_nib_size
+      eff_nib u32 mask_nib_size mask_nib]</code>; <code>present = 0</code> when arr/mask are not the full 24×4096 cells.
+      New <code>encode_column_legacy</code> writes the v1 layout (no section) for the back-compat probe.
+      <code>decode_column</code> accepts ver 1 or 2, returns <code>{"data","fl"}</code> plus <code>{"arr","mask","blk_src"}</code>
+      when a light section is present; MD5 spans the light section; any malformed section fails closed to
+      <code>light = {}</code> (recompute path) — a bad light never poisons the block data. New <code>_encode_light</code> /
+      <code>_decode_light</code> / <code>_nibble_pack</code> / <code>_nibble_unpack</code> (low nibble = even cell index).
+      Cost: +98,314 B raw per lit column (~48 KB eff + 24 KB mask + 14 B framing) before zlib.</li>
+  <li><b><code>godot/world/chunk.gd</code></b> — <code>saved_light</code> (restored light dict, consumed by the first build) and
+      <code>light_recomputes</code> (per-chunk kernel recompute counter: the <code>build_mesh</code> self-light branch and the
+      <code>build_accs</code> self-light, reported via <code>res["light_recomputed"]</code> into <code>apply_accs</code> /
+      <code>apply_edit_accs</code>). No change to the kernel or the acc/mesh consumption path.</li>
+  <li><b><code>godot/world/world.gd</code></b> —
+    <ul>
+      <li><b>Save:</b> <code>_queue_chunk_save</code> captures <code>_save_light_for(c, key)</code>: the eff-cache entry for the
+          column, only when it is data-equal to the chunk and <b>no</b> pending re-light mark exists for it
+          (<code>light_pending_set</code>/<code>light_dirty</code>) — otherwise no light is saved (recompute-on-load, never a
+          pre-settle light). <code>_io_write_enqueue</code>/<code>_io_write_worker</code> carry <code>light</code> into the codec.</li>
+      <li><b>Load:</b> <code>_try_disk_load</code> and <code>_io_read_handoff</code> store <code>c.saved_light</code> via
+          <code>_saved_light_from_res</code> (validates arr/mask = 256×Data.HEIGHT, wraps mn/w/d/arr/mask/blk_src;
+          v1 blob → <code>{}</code> → today's recompute). <code>_apply_edits_to_chunk</code> now returns whether the re-applied
+          edits actually changed a cell: a changed edit clears <code>saved_light</code> + marks light around (recompute);
+          an idempotent re-apply (AC-0155: file is ≥ edits) returns early and <b>keeps</b> the saved light — this is
+          what makes zero-recompute restore possible on the sync disk-load path.</li>
+      <li><b>Build:</b> <code>_build_unit</code> feeds <code>c.saved_light</code> as the dispatch eff when the cache is empty
+          (<code>light_saved_restores += 1</code>); the worker then self-lights only when <code>eff</code> is empty <i>or</i> the
+          mask is missing — a restored eff carries the mask, so the kernel is skipped. <code>saved_light</code> is cleared
+          at every apply point (worker handoff ×2, sync <code>build_mesh</code> ×3) so a later edit always recomputes fresh.</li>
+    </ul></li>
+  <li><b><code>godot/scenes/main.gd</code></b> — new <code>AWECRAFT_LOGIC=lightcache</code> harness arm (<code>_lightcache_test</code>),
+      env-gated, headless ≤ 60 s (measured 7.9 s): R=2 boot → dig a 5-deep shaft at spawn + place a torch (id 22) →
+      wait for the (0,0) eff cache to be fresh (data-equal + mask present + no pending re-light — a targeted wait,
+      not a global settle) → capture eff/mask → save through the real save path (<code>_queue_chunk_save</code> →
+      <code>_drain_save_queue</code> → io poll) → decode the on-disk blob → surgical revisit (free the chunk node +
+      evict the eff cache + <code>create_chunk</code> disk-first + build) → assert <code>light_recomputes == 0</code> and restored
+      channels byte-identical → rewrite the blob as legacy v1 → assert recompute → <code>Save.clear</code> → assert blob
+      gone + recompute on the next load → <code>RESULT</code> JSON.</li>
+</ul>
+
+<h2>2. What is saved (honest scope note)</h2>
+<p>The engine's light kernel returns <b>one</b> merged channel the renderer consumes:
+<code>eff = max(sky, blk)</code> per cell (0–15) plus a 0/1 <code>mask</code> ("visited by the block-light flood") that drives
+the AC-0134 face-mask bake. Separate sky/blk channels are kernel-internal and are never persisted anywhere today.
+So the blob carries <b>eff + mask</b> — exactly the channels the renderer consumes — not a second copy of the
+separate channels (DO NOT fake it: nothing downstream reads them). Neighbor block light crosses column borders;
+the saved eff/mask are a consistent snapshot taken <b>with</b> the saved block data (same blob, same MD5). A neighbor
+edit after save is reconciled by the existing edit-time recompute (the E2 <code>_eff_landed</code> wave re-bakes the
+affected column fresh and the next save captures the update). A pending re-light mark at save time suppresses the
+capture (falls back to recompute-on-load), so a pre-settle light is never persisted.</p>
+
+<h2>3. Gates (light — run by the implementer; logs in <code>.scratch/AC-0156-gates/</code>)</h2>
+<table>
+  <tr><th>Gate</th><th>Command</th><th>Result</th></tr>
+  <tr><td>G0</td><td><code>godot --headless --path godot --quit</code></td>
+      <td class="ok">PASS</td><td class="small">exit 0, zero SCRIPT ERROR (run after final main.gd cleanup)</td></tr>
+  <tr><td>lightcache probe (new)</td><td><code>AWECRAFT_LOGIC=lightcache AWECRAFT_RADIUS=2 godot --headless --path godot</code></td>
+      <td class="ok">PASS</td><td class="small">all 7 required fields true, wall 7,862 ms (≤ 60 s)</td></tr>
+  <tr><td>SMOKE battery</td><td><code>AWECRAFT_BATTERY='player;interact;light;fluids;genhash'</code></td>
+      <td class="ok">PASS</td><td class="small">ok:true, total 260 s, zero SCRIPT ERROR</td></tr>
+  <tr><td>genhash (in battery)</td><td>25-line hash arm</td>
+      <td class="ok">PASS</td><td class="small">25/25 byte-identical to the AC-0178 baseline set — generation untouched</td></tr>
+  <tr><td>light arm baseline (in battery)</td><td>surface / cave / torch / far</td>
+      <td class="ok">PASS</td><td class="small">15 / 10 / 14, far 1→9 — exact hold</td></tr>
+  <tr><td>RENDER (optional, one)</td><td><code>AWECRAFT_SNAPSHOT=… AWECRAFT_RADIUS=1 xvfb-run -a godot --path godot --rendering-method gl_compatibility</code></td>
+      <td class="ok">PASS</td><td class="small">1280×720 PNG, zero SCRIPT ERROR, lit surface renders correctly</td></tr>
+  <tr><td>Codec self-test</td><td><code>godot -s res://.scratch/AC-0156-gates/lc_selftest.gd</code></td>
+      <td class="ok">PASS</td><td class="small">v2 with/without light, v1 legacy, wrong-seed rejection — all round-trip byte-identical</td></tr>
+  <tr><td>Heavy: r4 boundary ×2 + perf</td><td>coordinator (stable tree)</td><td class="ok">PASS</td><td class="small">boundary r4 ×2 ok:true, p95 <b>32 / 28 ms</b> (in band 30-37, no change), remesh_ok + marker_ok both runs, resident 101, in_radius_built 51, loads/unloads unchanged; perf r4 p95 <b>25 ms</b> (in band — the light save-capture + load-restore added no measurable per-frame cost), fog_ok. genhash ×2 IDENTICAL 25/25, and byte-identical to the AC-0169 ref (generation provably untouched — a light-persistence change, not a generation change).</td></tr>
+  <tr><td>Windows build</td><td><code>./build_windows.sh</code></td><td class="ok">PASS</td><td class="small">BUILD_EXIT=0 · <code>exports/windows/AweCraft.exe</code> · 109,846,752 B · sha <code>dfef0143…</code> · 8080 byte-match YES · 5180=200 · 8443 down · only 8080 listening (8081 dup died on its own).</td></tr>
+</table>
+
+<h3>3.1 lightcache probe RESULT (verbatim)</h3>
+<pre>RESULT {"cache_fresh":true,"clear_wipes_light":true,"disk_light_ok":true,"disk_mask_ok":true,
+        "file_ok":true,"legacy_v1_recomputes":true,"light_saved_nonzero":true,"mask_sum":1172,
+        "ok":true,"recompute_count":0,"restored_matches_saved":true,"restored_no_recompute":true,
+        "saved_restores":1,"torch_block":14,"wall_ms":7862}</pre>
+<p class="small">Required fields: <code>ok:true</code> · <code>light_saved_nonzero:true</code> (mask_sum 1172, torch cell block light 14) ·
+<code>restored_no_recompute:true</code> · <code>recompute_count:0</code> (the revisited chunk never ran the kernel) ·
+<code>restored_matches_saved:true</code> (restored eff + mask byte-identical to the saved arrays, on-disk decode verified) ·
+<code>legacy_v1_recomputes:true</code> (a v1 blob re-lights on load) · <code>clear_wipes_light:true</code> (Save.clear removes the
+blob; the next load regenerates and recomputes). <code>saved_restores:1</code> = the <code>_build_unit</code> feed fired exactly once.</p>
+
+<h3>3.2 SMOKE battery RESULT (verbatim, abridged)</h3>
+<pre>player:   is_on_floor true, jump_peak_y 135.43, after_fly_y 136.78 (baseline hold)
+interact: place_ok true, after_place_cell 2, drop_spawned true, inv_grew {id:2, n:1}
+light:    surface_eff 15, cave_eff 10, torch_level 14, torch_far_before 1, torch_far_after 9
+fluids:   sea_stable true, sea_surface 2756, sea_backed 914, water_on_lava 25, sideways_lava 9
+battery:  ok true, total_ms 260474, genhash 25/25 byte-identical (set compare vs .scratch/AC-0178-gates/genhash_base_sorted.txt)</pre>
+
+<h2>4. Render (optional gate — carried by the headless probe, snapshot below)</h2>
+<p>One R=1 gl_compatibility snapshot on xvfb: the spawn surface renders with correct sky-lit shading (the dark
+patch is one chunk still draining at snapshot time — the standard <code>SNAPDRAIN not fully drained after 3000 frames</code>
+warning, same as prior task renders). The functional restore proof is the headless probe above; the snapshot only
+guards against a render regression from the eff/mask flow.</p>
+<img src="render_r1.png" alt="R=1 render: lit grass surface at spawn, water and trees in the distance, one chunk still building (dark patch), hotbar UI.">
+<p class="small"><code>tasks/AC-0156/render_r1.png</code> (1280×720) + <code>render_r1_placed.png</code> (snapshot arm's second shot).</p>
+
+<h2>5. Deviations &amp; engine facts (for the coordinator)</h2>
+<ul>
+  <li><b>Probe runs at R=2, not R=1.</b> At R=1 the 3×3 corners (±1,±1) fall outside the render circle
+      (<code>dx²+dz² ≤ 1</code>) and land in band-3 data-only, so <code>_startup_pending()</code> (all 9 of the 3×3
+      <code>mesh_built</code>) never clears and the <code>light_pending</code> flush is gated off forever — torch re-lights
+      stall and the probe hangs. At R=2 the full 3×3 is in the circle and everything settles in seconds. No
+      engine change needed.</li>
+  <li><b><code>_apply_edits_to_chunk</code> early-return change:</b> re-applying edits that change no cell now returns
+      <code>false</code> without re-marking light/fluid dirty (previously every idempotent disk-load re-apply marked the
+      column and forced a wasted re-bake). Required for zero-recompute restore; no world-state change on that
+      path. All 7 call sites audited.</li>
+  <li><b>Codec decode fix during verification:</b> the first v2 decode walked the fl array and then compared its
+      end offset to the v2 MD5 position <i>after</i> the light section — always a mismatch, so every v2 blob (light
+      or not) failed to decode (standalone self-test caught it: v1 ok, v2 fail). Rewrote the decode to work from
+      fixed offsets (de at 17, fe-size field after de, light section between fe and MD5) with exact size
+      verification; self-test then green on all four shapes. No on-disk v1 files exist in the wild (AC-0155
+      unshipped at this layer), so no migration concern.</li>
+  <li><b>Env lesson:</b> <code>AWECRAFT_RADIUS</code> is <b>not</b> in <code>HARNESS_ENVS</code> — a launch with only that var
+      boots menu-first and idles forever in headless (4 wasted gate runs, 23 min total). Probe runs must set
+      <code>AWECRAFT_LOGIC</code>; that also sets the radius path independently (main.gd:261).</li>
+  <li><b>Mask provenance (unchanged memory-fence r50):</b> the mask is transient, never pinned per-chunk; the save
+      reads it from the bounded eff cache (cap 128, LRU). Cache miss or pending re-light → no light saved →
+      recompute on load (today's behavior, never wrong). Typical r≤4 streaming sets (≤69 chunks) always hit.</li>
+  <li><b>Save size:</b> a lit column blob is ~48 KB (eff) + 24 KB (mask) + ~197 KB (blocks+fl) raw before zlib;
+      the torch probe column's final file was ~27 KB compressed. AC-0155 measured ~8.3 KB/column for blocks+fl
+      alone on typical terrain — light roughly doubles or triples the per-column size. Worth the coordinator's
+      note if region-file budget (AC-0175, 32×32 cols/file) ever needs tuning.</li>
+  <li><b>Pre-existing noise (not ours):</b> none observed beyond the standard <code>SNAPDRAIN</code> snapshot warning
+      (render arm only). Battery/genhash/logs: <code>.scratch/AC-0156-gates/</code> (g0*.log, lightcache*.log, battery.log,
+      genhash_now_sorted.txt, render*.log, lc_selftest.gd, lc_debug.gd).</li>
+</ul>
+
+<h2>6. Coordinator to-do (heavy, after this exit)</h2>
+<ul>
+  <li>Re-run the light gates to confirm; run the heavy boundary (r4 ×2) + perf gates.</li>
+  <li>Windows build: <code>./build_windows.sh</code> → <code>exports/windows/AweCraft.exe</code>.</li>
+  <li>Commit (code + plan + results + render + gate logs note) + push.</li>
+  <li>AC-0175 (region storage, queued next) reads/writes through <code>encode_column</code>/<code>decode_column</code> — the light
+      section rides along with zero further work.</li>
+</ul>
+
+<p class="small">Implementer fences held: no git, no Windows build, no TASKS.yaml/HARNESS/00o edits, no
+<code>lighting.gd</code> changes, no data.gd/384-cut changes. Fences: <code>godot/core/chunk_io.gd</code>,
+<code>godot/world/chunk.gd</code>, <code>godot/world/world.gd</code>, <code>godot/scenes/main.gd</code> (probe arm only).</p>
+
+</body>
+</html>

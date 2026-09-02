@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0156 — spec (generated scaffold)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.auto{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.fill{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:10px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0156 — light-cache-per-section</h1>
+<div class="auto"><b>AUTO (from TASKS.yaml — do not hand-edit)</b></div>
+<p class="meta"><b>id:</b> <code>AC-0156</code> · <b>status:</b> <code>open</code> · <b>priority:</b> 2 · <b>source:</b> user · <b>created:</b> 2026-08-30T13:50 · <b>parent:</b> —</p>
+<p class="note">Registry <code>notes</code> (verbatim, quoted):</p>
+<blockquote><pre>1) User Story: As a player revisiting a place I have already been, I want light to come back instantly without recomputing, just like Minecraft does.
+
+2) Technical Details: Follow-on after AC-0155 full-chunk-save: save BlockLight/SkyLight 2048 nibbles per 16x16x16 x24 (48KB per column, 4096 each per section) alongside the chunk data in the same region file from AC-0175 (32x32 cols/file), not a separate light/ dir — matches Minecraft Anvil (light stored in-section inside r.&lt;x&gt;.&lt;z&gt;.mca). Extend ChunkIO AWCC v1 at core/chunk_io.gd to include light. Verify revisiting chunk has instant correct light without recompute, Save.clear wipes together.</pre></blockquote>
+<h2>Goal</h2>
+<div class="fill"><b>FILL BY COORDINATOR</b> — one line, from the registry notes (marked REVIEW until confirmed). <b>REVIEW</b></div>
+<!-- FILL: Goal — one sentence. Example: "Add a torch-light-bake pass to the chunk mesher so caves are readable at night." -->
+<p><em>REVIEW — draft from notes: 1) User Story: As a player revisiting a place I have already been, I want light to come back instantly without recomputing, just like Minecraft does.</em></p>
+<h2>Frozen spec references</h2>
+<div class="auto"><b>AUTO (fixed boilerplate — do not hand-edit)</b></div>
+<ul>
+<li><code>index.html</code> — build <code>20260816-r12</code> (Three.js single-file) is a FROZEN historical artifact — do NOT modify. <b>User 2026-08-29: the web spec is no longer referenced</b> — never cite it as the justification for behavior or values. Source of truth = the in-repo Godot code + user directives.</li>
+<li>Minecraft wiki = canonical reference for tools/crafting/blocks, match exactly unless the user specifies otherwise: <a href="https://minecraft.wiki/w/Tool">Tool</a>, <a href="https://minecraft.wiki/w/Block">Block</a>, <a href="https://minecraft.wiki/w/Mining">Mining</a>, <a href="https://minecraft.wiki/w/Crafting_table">Crafting_table</a>, <a href="https://minecraft.wiki/w/Item">Item</a>.</li>
+</ul>
+<h2>Data.* world constants</h2>
+<div class="auto"><b>AUTO (paths only — regenerate with <code>python3 tasks/scripts/spec_template.py AC-NNNN --full</code> to inline the tables; values are parsed fresh at run time)</b></div>
+<ul>
+<li><code>godot/autoload/data.gd</code> — all <code>Data.B_*</code> block ids, items, tools, SEA/HEIGHT/CHUNK constants (grep <code>^const </code>).</li>
+<li><code>godot/world/generator.gd</code> — biome constants + <code>T_G_*</code> tool ids; biome thresholds are computed in <code>biome_at()</code> (t &lt; -0.25 snow; t &gt; 0.35 &amp; m &lt; 0.1 desert; m &gt; 0.25 forest; else plains).</li>
+</ul>
+<h2>Builder gates (Run-2, in-session)</h2>
+<div class="auto"><b>AUTO (tiered per tasks/HARNESS.md §3 — do not hand-edit)</b></div>
+<div class="auto"><b>G0</b> — <code>env HOME=/tmp/dsh_home godot --headless --path godot --quit</code> exits 0 with <b>zero</b> <code>SCRIPT ERROR</code> lines.</div>
+<div class="auto"><b>SMOKE</b> — one battery launch with the 2–4 dependency-mapped modes for this change area (HARNESS.md §3 table, e.g. world/* → <code>player;interact;light;fluids</code>) + the <code>genhash</code> arm (25/25) whenever <code>world/*</code> or <code>data.gd</code> is touched; ~30 s total. The task-specific probe mode (if this spec defines one, env-gated, headless ≤ 60 s) runs here too.</div>
+<div class="auto"><b>RENDER</b> — ≤ 1 render at <code>AWECRAFT_RADIUS=1</code> (xvfb, gl_compatibility), PNG under <code>tasks/AC-NNNN/</code>.</div>
+<div class="auto"><b>EXIT</b> — after G0+SMOKE(+probe)+≤1 render the builder writes results + continuity and EXITS. The heavy gates below are the coordinator&#39;s background job — the builder never runs them.</div>
+<div class="auto"><b>Sandbox env</b> — every godot call is ONE bash command that sets HOME first; <b>one godot at a time</b> (concurrent runs corrupt the <code>.godot</code> cache and hang). Scratch to project-local <code>.scratch/</code>.</div>
+<pre>export HOME=/tmp/dsh_home; mkdir -p $HOME; cd /home/angrygiant/github_projects/AweCraft</pre>
+<h2>Coordinator Heavy Gates (background bash/workflow, not builder, r50 nightly only)</h2>
+<div class="auto"><b>AUTO (HEAVY-GATE PIPELINE — the coordinator runs these as a background job (no LLM slot) after Run-2 exits; the builder NEVER runs them; commit/push only after they pass — do not hand-edit)</b></div>
+<ul>
+<li><b>boundary r4 ×1</b> + <b>perf r4</b> — ONLY when scope touches <code>godot/world/*</code> | <code>lighting.gd</code> (HARNESS.md §3 tier); UI/tool tasks: SMOKE only, no boundary/perf. (Was ×2, sliced 2026-08-27.)</li>
+<li><b>genhash</b> — independent re-run (25/25) whenever <code>world/*</code>/<code>data.gd</code> touched.</li>
+<li><b>flake ×1</b> — perf tier only (was ×4, sliced 2026-08-27).</li>
+<li><b>boundary r50 / perf r50 (RECSLICE)</b> — nightly batch only (NOT per task; was per-task).</li>
+<li><b>task-specific probe mode</b> — when this spec&#39;s Task-specific gates define one (the builder&#39;s SMOKE runs it; the gate job re-runs it fresh).</li>
+<li><b>windows build</b> — <code>./build_windows.sh</code> (XDG pattern) + 8080/5180 curls — every task.</li>
+</ul>
+<p class='note'>Log → <code>.scratch/AC-NNNN-gates/gates.log</code>; marker <code>.scratch/AC-NNNN-gates/HEAVY_GATES_DONE</code>. Full protocol: <code>AGENTS.md</code> HEAVY-GATE PIPELINE + <code>tasks/templates/two-phase.md</code>.</p>
+<h2>Expected RESULT shapes (default battery + genhash)</h2>
+<div class="auto"><b>AUTO (paths only — the RESULT shapes live in <code>tasks/HARNESS.md</code> §1; inline them with <code>--full</code>)</b></div>
+<ul>
+<li>Battery arms: <code>player</code> / <code>interact</code> / <code>light</code> / <code>fluids</code> / <code>buckets</code> / <code>genhash</code> — key fields + ok-conditions per mode in <code>tasks/HARNESS.md</code> §1.</li>
+<li>Heavy modes: <code>boundary</code>, <code>recprobe</code>, <code>perf</code>, <code>minfo</code>, <code>pickorder</code> — §2.</li>
+</ul>
+<h2>Known-stable gate values</h2>
+<div class="auto"><b>AUTO (paths only — the anchor table lives in <code>tasks/HARNESS.md</code> §3: sea 2730/2730 · backed 1406/1406 · sea_stable true · water_on_lava 25 / sideways 9 · torch 14 · genhash 25/25; verify fresh on any fluids/world-touching change; inline with <code>--full</code>)</b></div>
+<h2>Task-specific requirements</h2>
+<div class="fill"><b>FILL BY COORDINATOR</b> — the concrete behavior/data changes this task makes.</div>
+<!-- FILL: Task-specific requirements. Example: e.g. &quot;fluids: source water over a hole writes 0 cells (zero-write invariant)&quot; -->
+<h2>Task-specific gates</h2>
+<div class="fill"><b>FILL BY COORDINATOR</b> — the specific mode(s)/values that must be green beyond the defaults.</div>
+<!-- FILL: Task-specific gates. Example: e.g. &quot;G1: AWECRAFT_LOGIC=fluids → sea_stable true, sea_surface 2730&quot; -->
+<h2>Scope (files expected to change)</h2>
+<div class="fill"><b>FILL BY COORDINATOR</b> — the exact files this task will edit (helps G5 stay clean).</div>
+<!-- FILL: Scope (files expected to change). Example: e.g. &quot;godot/world/chunk.gd, godot/scenes/main.gd (fluids branch only)&quot; -->
+<h2>Fences</h2>
+<div class="fill"><b>FILL BY COORDINATOR</b> — what this task must NOT touch.</div>
+<!-- FILL: Fences. Example: e.g. &quot;no .gd outside the listed scope; no TASKS.yaml edits; no git&quot; -->
+<p class="note">Scaffold generated by <code>tasks/scripts/spec_template.py</code> (no wall-clock timestamps; the only date is the registry created_at). Auto sections are reproducible byte-for-byte; fill sections are for the coordinator.</p>
+</body></html>
