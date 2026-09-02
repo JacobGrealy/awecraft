@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-02T12:08
+  updated_at: 2026-09-02T12:11
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
@@ -6110,6 +6110,63 @@ intake:
 
 
     Gates: frame validates in orbit, any block ticks, walkable interior, ship dock to station.
+
+    '
+  comments: []
+- id: AC-0201
+  title: moons-orbiting-planets
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-02T12:11
+  updated_at: 2026-09-02T12:11
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User story: As a player I want moons orbiting planets — smaller spheres (R~800-1500) I can fly to and land on, same
+    flat feel, walkable, mineable.
+
+
+    Technical details: Moons = orbiting bodies per planet (1-2 per planet, R 800-1500, low gravity ~0.6g, orbit radius ~8-12km
+    at R=4000 scale). Same uniform 1m cube-sphere pipeline (face+cx+cz, rotated chunks), same per-planet save (planet_id:face:cx:cz)
+    with moon id. Reuse P1a/P2 sphere math + horizon LOD (horizon nearer at small R). Tidal lock optional v1. Spawn generation
+    same 3D sphere fbm but smaller amplitude. Ship Dock works same. Gates: moon orbits planet, land flat, 0.6g, walk→fly→re-enter.
+
+
+    Backlog (not queued) — after AC-0147 solar system + AC-0161 ships.
+
+    '
+  comments: []
+- id: AC-0202
+  title: suns-stellar-bodies
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-02T12:11
+  updated_at: 2026-09-02T12:11
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User story: As a player I want suns as stellar bodies in system/galaxy — you can fly toward them but not land (hazard),
+    they light planets.
+
+
+    Technical details: Suns = large sphere bodies (R~15000) at system center, emissive + heat hazard (damage over distance
+    <2km, no landing — invisible barrier + burn). Light: DayNight per-planet sun direction derived from planet orbit around
+    sun (no extra per-sun chunk work). System space uses star at (0,0,0) already (AC-0147), sun is impostor near + hazard
+    volume far. Galaxy relay jumps between systems each with its own sun. Gates: fly toward sun, heat damage, no voxel land,
+    planet lighting consistent.
+
+
+    Backlog (not queued) — after AC-0147 solar system.
 
     '
   comments: []
