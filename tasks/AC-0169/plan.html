@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0169 — plan</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:880px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:21px}h2{font-size:16px;margin-top:20px;border-bottom:1px solid #ddd;padding-bottom:3px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}ul{margin:6px 0}</style></head><body>
+<h1>AC-0169 — plan: debug stats overlay (CPU/RAM/VRAM/FPS)</h1>
+<h2>Goal</h2>
+<p>Options-menu toggle <code>debug_stats</code> (default false, bool-clamped, persisted in <code>user://awecraft.cfg</code> via Settings) that keeps a top-left overlay of FPS / CPU(process) / RAM(process+system) / VRAM visible during gameplay, refreshed ~4×/s, still updating while the pause/Options menu is open. Harness probe <code>AWECRAFT_LOGIC=debugstats</code> proves on/off visibility + field labels + cross-restart persistence (two godot runs, one HOME).</p>
+<h2>Files to touch</h2>
+<ul>
+<li><code>godot/autoload/settings.gd</code> — <code>debug_stats: false</code> in DEFAULTS + bool case in <code>_clamp</code>.</li>
+<li><code>godot/ui/menu.gd</code> — programmatic CheckBox "Show debug stats (CPU/RAM/VRAM/FPS)" inserted after HungerCheck in <code>Layer/OptionsBox/Center/VBox</code> (no .tscn edit); wired to <code>Settings.set_value("debug_stats",…)</code>; synced in <code>_sync_controls()</code>; OPTSYNC print gains <code>stats=</code>.</li>
+<li><code>godot/scenes/main.gd</code> — <code>stats_overlay</code> (CanvasLayer layer 25 + Label "StatsLabel", top-left) created in <code>_create_game_nodes()</code> (idempotent: frees any previous), freed in <code>_free_game_nodes()</code>; 0.25 s tick in <code>_process</code> → <code>_refresh_stats()</code> (visibility from Settings + text from APIs); <code>AWECRAFT_LOGIC=debugstats</code> arm (save phase via <code>AWECRAFT_DSSTATS_SAVE=1</code>, probe phase asserts persisted + visible_when_on/off + text_has_fields, RESULT JSON); render hooks <code>AWECRAFT_DSSTATS=1</code> (force overlay on in harness runs) + <code>AWECRAFT_OPTS_SNAP=path</code> (second snap of the Options panel inside the existing snapshot finish).</li>
+</ul>
+<h2>Godot 4.7.1 API reality (verified against 4.7 docs + source tags, not the task's map)</h2>
+<ul>
+<li>FPS: <code>Performance.get_monitor(Performance.TIME_FPS)</code> (4.7 renamed <code>MONITOR_FPS</code>→<code>TIME_FPS</code>).</li>
+<li>VRAM: <code>Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED)</code> — renderer (RenderingServer) video-mem bytes; this IS the public VRAM stat, so no "n/a" needed.</li>
+<li>System RAM: <code>OS.get_memory_info()</code> → <code>physical</code>/<code>free</code> bytes (no <code>get_total_memory</code>/<code>get_free_memory</code> in 4.7).</li>
+<li>CPU(process): no <code>OS.get_cpu_usage()</code> in 4.7 → sample <code>Performance.TIME_PROCESS</code> (s/frame) deltas over the 0.25 s window → % of 1 core consumed by the process callback; labeled honestly in the text.</li>
+<li>Process RAM: no process-RSS API in 4.7 → closest honest value <code>OS.get_static_memory_usage()</code> (engine static mem; debug builds only, 0 in release) — labeled as such + deviation note.</li>
+</ul>
+<h2>Harness gates</h2>
+<pre>G0:  godot --headless --path godot --quit  → zero SCRIPT ERROR
+P1:  run A  AWECRAFT_LOGIC=debugstats AWECRAFT_DSSTATS_SAVE=1  (set_value true, verify cfg)
+     run B  AWECRAFT_LOGIC=debugstats  (fresh process, same HOME: persisted_after_restart,
+           visible_when_on/off, text_has_fields, stats_sample) — one bash cmd, sequential
+SMOKE: 'AWECRAFT_BATTERY=player;interact;light;fluids;genhash' all ok:true, genhash 25/25 (world/* untouched)
+RENDER: xvfb gl_compatibility, AWECRAFT_SNAPSHOT + AWECRAFT_DSSTATS=1 + AWECRAFT_OPTS_SNAP (2 PNGs, 1 run)</pre>
+<h2>Risks</h2>
+<ul>
+<li>API drift vs task map — mitigated by the verified-4.7 names above; any bad call dies loudly as SCRIPT ERROR at G0/P1.</li>
+<li>Battery double-calls <code>_create_game_nodes()</code> per mode (pre-existing) → overlay creation frees any prior instance first (no leak growth).</li>
+<li>Godot one-at-a-time: every run checks ps + <code>.godot_busy</code> first; long arms in background jobs.</li>
+<li>xvfb GL-init hang → timeout -k 15 480, retry once, else record "render skipped — headless probe carries".</li>
+</ul>
+</body></html>

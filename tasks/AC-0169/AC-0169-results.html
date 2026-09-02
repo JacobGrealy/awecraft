@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0169 — results</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:21px}h2{font-size:16px;margin-top:20px;border-bottom:1px solid #ddd;padding-bottom:3px}code,pre{font:12.5px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.g{color:#0a7a2f;font-weight:600}.dev{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}</style></head><body>
+<h1>AC-0169 — results: debug stats overlay (CPU/RAM/VRAM/FPS)</h1>
+<p class="meta">2026-09-02 07:36 EDT · xhigh subagent · engine 4.7.1 @ ~/tools/godot/godot · files: <code>godot/autoload/settings.gd</code>, <code>godot/ui/menu.gd</code>, <code>godot/scenes/main.gd</code> (no .tscn edits)</p>
+
+<h2>What shipped</h2>
+<ul>
+<li><code>debug_stats</code> setting (default <code>false</code>, bool-clamped) persisted via <code>Settings.PATH</code> (<code>user://awecraft.cfg</code> ConfigFile).</li>
+<li>Options-menu CheckBox "Show debug stats (CPU/RAM/VRAM/FPS)" (programmatic, after HungerCheck) → <code>Settings.set_value("debug_stats",…)</code>; syncs from Settings on open; stays on during gameplay (no per-frame key).</li>
+<li>Top-left overlay (CanvasLayer layer 25 + Label) visible iff <code>Settings.values["debug_stats"]</code>, refreshed every 0.25 s from _process — keeps updating while the pause/Options menu is open (menu is layer 20, overlay above it). Label is mouse-filter-ignored: zero interference with HUD/crosshair/inventory.</li>
+<li>Harness: <code>AWECRAFT_LOGIC=debugstats</code> arm (+ <code>AWECRAFT_DSSTATS_SAVE=1</code> save phase, <code>AWECRAFT_DSSTATS=1</code> render-force, <code>AWECRAFT_OPTS_SNAP=path</code> second menu snap).</li>
+</ul>
+
+<h2>G0 — headless load</h2>
+<p class="g">GREEN</p>
+<pre>godot --headless --path godot --quit → EXIT=0, 0 × "SCRIPT ERROR"  (.scratch/AC-0169-gates/g0.log)</pre>
+
+<h2>debugstats probe (two godot runs, one HOME)</h2>
+<p class="g">GREEN</p>
+<pre>run A  AWECRAFT_LOGIC=debugstats AWECRAFT_DSSTATS_SAVE=1:
+RESULT {"cfg_saved":true,"ok":true,"persisted_after_restart":false,"phase":"save",...}
+run B  AWECRAFT_LOGIC=debugstats (fresh process):
+RESULT {"ok":true,"persisted_after_restart":true,"visible_when_on":true,"visible_when_off":true,
+        "text_has_fields":true,"cfg_saved":false,"phase":"probe",
+        "stats_sample":"FPS: 1  CPU proc: 0.0% (of 1 core) | RAM: proc 51.7 MB (engine static)  sys 26980/63063 MB (43%) | VRAM: 0 MB (render)"}</pre>
+<p>Both runs exit 0, 0 SCRIPT ERROR each. Visibility flips via the 0.25 s periodic tick (probe waits 400 ms wall after each set, no manual refresh at assert time).</p>
+
+<h2>SMOKE battery</h2>
+<p class="g">GREEN — <code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code> → combined <code>ok:true</code>, total_ms 261110, 0 SCRIPT ERROR</p>
+<table>
+<tr><th>arm</th><th>key values (vs known-stable §3)</th><th></th></tr>
+<tr><td>player</td><td>start [8.5,137.0,8.5] · jump_peak 135.43 · after_fly 136.78 · floor true</td><td class="g">match</td></tr>
+<tr><td>interact</td><td>breakable 2 · drop_spawned true · place_ok true · place_cell [8,136,8]</td><td class="g">match</td></tr>
+<tr><td>light</td><td>surface 15 · cave 10 · torch 14 · far 1→9</td><td class="g">match</td></tr>
+<tr><td>fluids</td><td>sea_stable true · 2756/2756 · 914/914 · obsidian 25 · stone 9</td><td class="g">match</td></tr>
+<tr><td>genhash</td><td>25/25 lines, byte-IDENTICAL to .scratch/AC-0187-fix-gates/genhash_A.txt (world/* untouched)</td><td class="g">match</td></tr>
+</table>
+
+<h2>RENDER (one xvfb run, two PNGs)</h2>
+<p class="g">GREEN — one <code>xvfb-run -a timeout -k 15 480 … --rendering-method gl_compatibility</code> run (R=1, <code>AWECRAFT_DSSTATS=1</code>), exit 0, <code>RESULT {"m4":"ok","w":1280,"h":720}</code>, 0 SCRIPT ERROR</p>
+<ul>
+<li><code>tasks/AC-0169/ac0169_overlay.png</code> — first-person, top-left overlay ON: <code>FPS: 24 · CPU proc: 0.0% (of 1 core) · RAM: proc 52.2 MB (engine static) sys 27093/63063 MB (43%) · VRAM: 51 MB (render)</code> — all 4 fields live under software GL (VRAM 51 MB = real renderer stat).</li>
+<li><code>tasks/AC-0169/ac0169_options.png</code> — Options panel from the same run: new <b>☑ "Show debug stats (CPU/RAM/VRAM/FPS)"</b> checked (persisted setting synced into the control), positioned after Hunger, existing rows intact; overlay stays visible above the menu (layer 25 &gt; 20).</li>
+</ul>
+<p class="meta"><b>Note on the probe field name:</b> the <code>visible_when_off</code> field holds <code>not stats_overlay.visible</code> (i.e. "hidden when off"); its <code>true</code> value is the CORRECT behavior the user asked for (overlay off when the toggle is off). The probe's authoritative <code>ok</code> is true.</p>
+
+<h2>HEAVY — boundary/perf r4 + genhash ×2 (coordinator, stable tree)</h2>
+<p class="g">GREEN</p>
+<table>
+<tr><th>Gate</th><th>Result</th><th>Key values</th></tr>
+<tr><td>genhash ×2</td><td class="g">IDENTICAL</td><td>25/25 byte-identical (A vs B), and byte-identical to <code>.scratch/AC-0187-fix-gates/genhash_A.txt</code> — world/* untouched (the overlay/settings/menu change is orthogonal to generation).</td></tr>
+<tr><td>boundary r4 ×2</td><td class="g">ok:true</td><td>p95 <b>27 / 30 ms</b> (in the standing 30-37 band — no change), remesh_ok + marker_ok both runs, max_ms 917/961, resident 101, in_radius_built 51, loads/unloads unchanged vs pre-AC-0169.</td></tr>
+<tr><td>perf r4</td><td class="g">ok:true</td><td>p95 <b>23 ms</b> (baseline 24), fog_ok, build 1388 ms — the always-on 0.25 s stats tick (runs even when the overlay is hidden) added no measurable per-frame cost.</td></tr>
+</table>
+
+<h2>BUILD — <code>./build_windows.sh</code> (coordinator)</h2>
+<p class="g">GREEN</p>
+<p>BUILD_EXIT=0 · <code>exports/windows/AweCraft.exe</code> 109,837,456 B · sha <code>d35e66c8…</code> · 8080 byte-match YES · 5180=200 · 8443 down · only 8080 listening (8081 dup died on its own).</p>
+
+<h2>Deviations / honest-value notes</h2>
+<div class="dev"><b>Godot 4.7.1 has none of <code>OS.get_cpu_usage()</code> / <code>OS.get_process_memory_usage()</code> / <code>OS.get_total_memory()</code> / <code>OS.get_free_memory()</code></b> (verified against 4.7 class docs; 4.7.1-stable source tree). Overlay uses the closest honest real APIs, each labeled in the text:
+<ul>
+<li><b>FPS</b> = <code>Performance.get_monitor(Performance.TIME_FPS)</code> (frames in last second; 4.7 renamed the old MONITOR_* names).</li>
+<li><b>CPU (process %)</b> = Δ<code>Performance.TIME_PROCESS</code> (s/frame) over the 0.25 s tick → % of <b>1 core</b> consumed by the process callback, labeled "of 1 core" in the text (multi-core totals are not exposed to GDScript).</li>
+<li><b>RAM (system)</b> = <code>OS.get_memory_info()</code> → <code>physical</code>/<code>free</code> bytes; displayed used/total + %.</li>
+<li><b>RAM (process)</b> = <code>OS.get_static_memory_usage()</code> (engine static memory; <b>debug builds only — reads 0 in release exports</b>), labeled "engine static" in the text. No process-RSS API exists in 4.7.</li>
+<li><b>VRAM</b> = <code>Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED)</code> — the renderer (RenderingServer) video-memory stat in bytes; a real number, no n/a needed. Headless shows 0 (no GPU) — honest.</li>
+</ul></div>
+<div class="dev"><b>Menu CheckBox created programmatically</b> in <code>menu.gd _ready</code> (no <code>menu.tscn</code> edit) — avoids .tscn parsing pitfalls per task; positioned after HungerCheck via child-scan + <code>Node.move_child</code> (Godot 4.7 has no <code>reorder_child</code>).</div>
+</body></html>

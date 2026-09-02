@@ -3,7 +3,6 @@ meta:
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0169
 - AC-0156
 - AC-0175
 - AC-0087
@@ -5218,11 +5217,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-31T11:56
   updated_at: 2026-08-31T16:27
-  completed_at: null
+  completed_at: 2026-09-02T07:40
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want a toggle in Options menu that turns the CPU/RAM/VRAM/FPS overlay on so it just
@@ -5237,6 +5236,10 @@ intake:
     created_at: '2026-09-01T02:12:48.549749'
     updated_at: null
     text: '[coordinator] Reasoning: medium (trivial, 1-2 files) — '
+  - id: 2
+    created_at: '2026-09-02T07:40:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE 2026-09-02 — debug_stats setting (default false, bool-clamped) persisted via Settings.PATH; Options-menu CheckBox "Show debug stats (CPU/RAM/VRAM/FPS)" (programmatic in menu.gd, after HungerCheck) -> Settings.set_value; top-left CanvasLayer(25)+Label overlay visible iff debug_stats, refreshed every 0.25 s, stays on during gameplay + above the pause menu, mouse-filter-ignored. Godot 4.7.1 API audit: the task-suggested OS.get_cpu_usage/get_process_memory_usage/get_total_memory do NOT exist in 4.7 -> FPS=Performance.TIME_FPS, CPU=ΔPerformance.TIME_PROCESS (% of 1 core), system RAM=OS.get_memory_info(), process RAM=OS.get_static_memory_usage() (debug builds only, 0 in release — labeled), VRAM=Performance.RENDER_VIDEO_MEM_USED (real renderer stat). NEW AWECRAFT_LOGIC=debugstats arm (two-run persistence). Gates: G0 0; debugstats ok:true (visible_when_on:true, hidden-when-off:true [field misnamed visible_when_off], text_has_fields:true, persisted_after_restart:true across 2 runs, cfg_saved:true); SMOKE all baselines; genhash 25/25 IDENTICAL (world/* untouched); RENDER 2 PNGs (overlay + options toggle, verified via read_image); HEAVY boundary r4 x2 p95 27/30 (in band) + perf r4 p95 23 + fog_ok; build 109,837,456 B sha d35e66c8 8080 byte-match + 5180=200 + 8443 down. See tasks/AC-0169/AC-0169-results.html.'
 - id: AC-0170
   title: debug logging toggle in options (log to in-game console)
   source: user

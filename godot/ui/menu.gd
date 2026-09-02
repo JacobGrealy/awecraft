@@ -32,6 +32,7 @@ var volume_val: Label
 var res_option: OptionButton
 var full_check: CheckBox
 var hunger_check: CheckBox
+var debug_check: CheckBox
 var file_dialog: FileDialog
 var _options_from := "main"
 var _syncing := false
@@ -67,6 +68,19 @@ func _ready() -> void:
 	res_option = get_node("Layer/OptionsBox/Center/VBox/ResRow/ResOption")
 	full_check = get_node("Layer/OptionsBox/Center/VBox/FullscreenCheck")
 	hunger_check = get_node("Layer/OptionsBox/Center/VBox/HungerCheck")
+	var opt_vbox := get_node("Layer/OptionsBox/Center/VBox")
+	debug_check = CheckBox.new()
+	debug_check.name = "DebugStatsCheck"
+	debug_check.text = "Show debug stats (CPU/RAM/VRAM/FPS)"
+	debug_check.add_theme_font_size_override("font_size", 15)
+	debug_check.toggled.connect(_on_debug_stats_toggled)
+	opt_vbox.add_child(debug_check)
+	var hi := -1
+	for i in opt_vbox.get_child_count():
+		if opt_vbox.get_child(i) == hunger_check:
+			hi = i
+	if hi >= 0:
+		opt_vbox.move_child(debug_check, hi + 1)
 	file_dialog = get_node("Layer/PackDialog")
 	slot_labels = []
 	slot_conts = []
@@ -120,7 +134,7 @@ func open_options(source: String) -> void:
 	_sync_controls()
 	_apply_state()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	print("OPTSYNC from=%s render=%d sim=%d vol=%d res=%s full=%s hunger=%s" % [
+	print("OPTSYNC from=%s render=%d sim=%d vol=%d res=%s full=%s hunger=%s stats=%s" % [
 		source,
 		int(Settings.values["render_dist"]),
 		int(Settings.values["sim_dist"]),
@@ -128,6 +142,7 @@ func open_options(source: String) -> void:
 		String(Settings.values["resolution"]),
 		bool(Settings.values["fullscreen"]),
 		bool(Settings.values["hunger_enabled"]),
+		bool(Settings.values["debug_stats"]),
 	])
 
 
@@ -272,6 +287,7 @@ func _sync_controls() -> void:
 		res_option.select(wi)
 	full_check.button_pressed = bool(Settings.values["fullscreen"])
 	hunger_check.button_pressed = bool(Settings.values["hunger_enabled"])
+	debug_check.button_pressed = bool(Settings.values["debug_stats"])
 	_syncing = false
 
 
@@ -332,3 +348,9 @@ func _on_hunger_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("hunger_enabled", on)
+
+
+func _on_debug_stats_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("debug_stats", on)

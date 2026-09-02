@@ -15,6 +15,7 @@ const DEFAULTS := {
 	"resolution": "1280x720",
 	"seed": 44,
 	"hunger_enabled": true,
+	"debug_stats": false,
 }
 
 var values: Dictionary = {}
@@ -58,6 +59,8 @@ func _clamp(k: String, v) -> void:
 		"fullscreen":
 			values[k] = bool(v)
 		"hunger_enabled":
+			values[k] = bool(v)
+		"debug_stats":
 			values[k] = bool(v)
 		"seed":
 			values[k] = int(v)

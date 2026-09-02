@@ -19,6 +19,10 @@ var world_env: WorldEnvironment
 var env: Environment
 var inventory_ui: CanvasLayer
 var menu_ui: Menu
+var stats_overlay: CanvasLayer
+var _stats_prev_t := -1
+var _stats_prev_proc := 0.0
+var _stats_acc := 0.0
 var aero := false
 var _batt := false
 var aero_sky: MeshInstance3D
@@ -286,6 +290,26 @@ func _create_game_nodes() -> void:
 	_star_node.material_override = _star_mat
 	_star_node.visible = false
 	add_child(_star_node)
+	if stats_overlay != null:
+		stats_overlay.queue_free()
+	stats_overlay = CanvasLayer.new()
+	stats_overlay.name = "StatsOverlay"
+	stats_overlay.layer = 25
+	var sl := Label.new()
+	sl.name = "StatsLabel"
+	sl.position = Vector2(8, 8)
+	sl.add_theme_color_override("font_color", Color(0.45, 1.0, 0.55, 1.0))
+	sl.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.9))
+	sl.add_theme_constant_override("shadow_offset_x", 1)
+	sl.add_theme_constant_override("shadow_offset_y", 1)
+	sl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sl.text = "FPS: -  CPU: -\nRAM: -\nVRAM: -"
+	stats_overlay.add_child(sl)
+	add_child(stats_overlay)
+	_stats_prev_t = -1
+	_stats_prev_proc = 0.0
+	_stats_acc = 0.0
+	_refresh_stats()
 
 
 static func _vl_mb_wrap(a: int) -> int:
@@ -637,6 +661,8 @@ func _free_game_nodes() -> void:
 		player.queue_free()
 	if inventory_ui != null:
 		inventory_ui.queue_free()
+	if stats_overlay != null:
+		stats_overlay.queue_free()
 	if world != null:
 		world.queue_free()
 	if drops != null:
@@ -645,6 +671,7 @@ func _free_game_nodes() -> void:
 		entities.queue_free()
 	player = null
 	inventory_ui = null
+	stats_overlay = null
 	world = null
 	drops = null
 	entities = null
@@ -738,6 +765,8 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		OS.set_environment("AWECRAFT_IGNORE_SETTINGS", "1")
 		Settings.load_settings()
 		OS.set_environment("AWECRAFT_IGNORE_SETTINGS", "")
+	if OS.get_environment("AWECRAFT_DSSTATS") == "1":
+		Settings.set_value("debug_stats", true)
 	_create_game_nodes()
 
 	if OS.get_environment("AWECRAFT_PROBE") != "":
@@ -975,6 +1004,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
 			_light_test(spawn)
 			get_tree().quit()
+			return
+		if logic == "debugstats":
+			await _debugstats_test()
 			return
 		if logic == "basis":
 			await _basis_test(spawn)
@@ -1538,6 +1570,15 @@ func _snapshot_finish(cam: String) -> void:
 			for i in 4:
 				await get_tree().physics_frame
 			await Debug.snap(snapshot_path.replace(".png", "_placed.png"))
+	var opts_snap := OS.get_environment("AWECRAFT_OPTS_SNAP")
+	if opts_snap != "":
+		if menu_ui == null:
+			_make_menu()
+		menu_ui.show_main()
+		menu_ui.open_options("main")
+		for i in 10:
+			await get_tree().process_frame
+		await Debug.snap(opts_snap)
 	Debug.result({"m4": "ok", "w": int(get_viewport().size.x), "h": int(get_viewport().size.y), "cam": cam})
 	get_tree().quit()
 
@@ -1684,6 +1725,11 @@ var _last_mode := ""
 
 func _process(delta: float) -> void:
 	Game.time_of_day = fmod(Game.time_of_day + minf(delta, 0.05) / DayNight.DAY_LEN, 1.0)
+	if stats_overlay != null:
+		_stats_acc += delta
+		if _stats_acc >= 0.25:
+			_stats_acc = 0.0
+			_refresh_stats()
 	_update_sky()
 	if aero and aero_sky != null:
 		var ac := _aero_camera()
@@ -1711,6 +1757,87 @@ func _process(delta: float) -> void:
 				menu_ui.show_pause()
 			elif Game.mode == "play" and from == "pause":
 				menu_ui.hide_pause()
+
+
+func _refresh_stats() -> void:
+	if stats_overlay == null:
+		return
+	var label = stats_overlay.get_node_or_null("StatsLabel")
+	if label == null:
+		return
+	stats_overlay.visible = bool(Settings.values["debug_stats"])
+	var now := Time.get_ticks_msec()
+	var proc_s := float(Performance.get_monitor(Performance.TIME_PROCESS))
+	var cpu_pct := -1.0
+	if _stats_prev_t >= 0 and now > _stats_prev_t:
+		cpu_pct = maxf((proc_s - _stats_prev_proc) / float(now - _stats_prev_t) * 100.0, 0.0)
+	(label as Label).text = _stats_text(cpu_pct)
+	_stats_prev_t = now
+	_stats_prev_proc = proc_s
+
+
+func _stats_text(cpu_pct: float) -> String:
+	var fps := int(Performance.get_monitor(Performance.TIME_FPS))
+	var cpu := "%.1f%%" % cpu_pct if cpu_pct >= 0.0 else "n/a"
+	var mem := OS.get_memory_info()
+	var total := float(mem.get("physical", -1))
+	var free := float(mem.get("free", -1))
+	var proc_mb := float(OS.get_static_memory_usage()) / 1048576.0
+	var sys := "n/a"
+	if total > 0.0 and free >= 0.0:
+		var used := total - free
+		sys = "%.0f/%.0f MB (%.0f%%)" % [used / 1048576.0, total / 1048576.0, used / total * 100.0]
+	var vram_mb := float(Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED)) / 1048576.0
+	return "FPS: %d  CPU proc: %s (of 1 core)\nRAM: proc %.1f MB (engine static)  sys %s\nVRAM: %.0f MB (render)" % [fps, cpu, proc_mb, sys, vram_mb]
+
+
+func _stats_settle(ms: int) -> void:
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < ms:
+		await get_tree().process_frame
+
+
+func _debugstats_test() -> void:
+	var save_phase := OS.get_environment("AWECRAFT_DSSTATS_SAVE") == "1"
+	var persisted := false
+	if not save_phase:
+		Settings.load_settings()
+		persisted = bool(Settings.values["debug_stats"])
+	var vis_on := false
+	var vis_off := false
+	var text_ok := false
+	var sample := ""
+	var cfg_saved := false
+	if save_phase:
+		Settings.set_value("debug_stats", true)
+		var cf := ConfigFile.new()
+		cfg_saved = cf.load(Settings.PATH) == OK and bool(cf.get_value("settings", "debug_stats", false))
+	else:
+		Settings.set_value("debug_stats", true)
+		_refresh_stats()
+		await _stats_settle(400)
+		vis_on = stats_overlay != null and stats_overlay.visible
+		var label = stats_overlay.get_node_or_null("StatsLabel") if stats_overlay != null else null
+		if label != null:
+			var t := String((label as Label).text).to_lower()
+			text_ok = t.contains("fps") and t.contains("cpu") and t.contains("ram") and t.contains("vram")
+			sample = String((label as Label).text).replace("\n", " | ")
+		Settings.set_value("debug_stats", false)
+		_refresh_stats()
+		await _stats_settle(400)
+		vis_off = stats_overlay != null and not stats_overlay.visible
+	var ok_final := cfg_saved if save_phase else (persisted and vis_on and text_ok and vis_off)
+	Debug.result({
+		"phase": "save" if save_phase else "probe",
+		"ok": ok_final,
+		"persisted_after_restart": persisted,
+		"visible_when_on": vis_on,
+		"visible_when_off": vis_off,
+		"text_has_fields": text_ok,
+		"cfg_saved": cfg_saved,
+		"stats_sample": sample,
+	})
+	get_tree().quit()
 
 
 func _update_sky() -> void:
