@@ -35,6 +35,16 @@ var cand_since := 0
 # (user decision 2026-08-30) — band 2 uses the normal build path.
 # AC-0181: band 1/2 fidelity swapped — 0-12 full, 13+ coarse uniform.
 var band := 0
+var lod_pending := false
+var alt_lod := -1
+var alt_slabs: Array = []
+var alt_data := PackedByteArray()
+var alt_fl := PackedByteArray()
+var alt_atlas: Texture2D = null
+var lod_builds := 0
+var lod_swaps := 0
+var lod_swaps_instant := 0
+var lod_last_swap_ms := 0.0
 # AC-0108: vertical 16x16x16 slabs, each owning its own mesh/fluid/flora
 # instances + collision body; data/fl stay column-wide. AC-0091: the slab
 # COUNT is (Data.HEIGHT + 15) / 16 = 24 at H=384 (was 5 at H=80) — computed
@@ -1727,6 +1737,123 @@ func _enter_candidate_slabs() -> void:
 			s.occluder = null
 		s.built = false
 		s.col_dirty = true
+
+
+func drop_slab_bodies() -> void:
+	for s in slabs:
+		if s.collision_body != null:
+			s.collision_body.queue_free()
+			s.collision_body = null
+		s.col_dirty = true
+
+
+func capture_lod() -> Array:
+	var out: Array = []
+	for s in slabs:
+		var row: Array = [null, null, null]
+		if s.mesh_instance != null:
+			row[0] = s.mesh_instance.mesh
+		if s.fluid_instance != null:
+			row[1] = s.fluid_instance.mesh
+		if s.flora_instance != null:
+			row[2] = s.flora_instance.mesh
+		out.append(row)
+	return out
+
+
+func lod_cache_valid(kind: int) -> bool:
+	if alt_lod != kind or alt_slabs.is_empty():
+		return false
+	if alt_atlas != Data.atlas_tex:
+		return false
+	if alt_data != data or alt_fl != fl:
+		return false
+	return true
+
+
+func clear_lod_cache() -> void:
+	alt_lod = -1
+	alt_slabs = []
+	alt_data = PackedByteArray()
+	alt_fl = PackedByteArray()
+	alt_atlas = null
+
+
+func store_lod_cache(cap: Array, kind: int, in_ring: bool) -> void:
+	lod_pending = false
+	lod_builds += 1
+	if not in_ring or cap.size() != slabs.size():
+		clear_lod_cache()
+		return
+	alt_slabs = cap
+	alt_lod = kind
+	alt_data = data.duplicate()
+	alt_fl = fl.duplicate()
+	alt_atlas = Data.atlas_tex
+
+
+func _set_slab_lod(s: Slab, row: Array) -> void:
+	if row[0] != null:
+		if s.mesh_instance == null:
+			var mi := MeshInstance3D.new()
+			mi.mesh = row[0]
+			add_child(mi)
+			s.mesh_instance = mi
+		else:
+			s.mesh_instance.mesh = row[0]
+	elif s.mesh_instance != null:
+		s.mesh_instance.queue_free()
+		s.mesh_instance = null
+	if row[1] != null:
+		if s.fluid_instance == null:
+			var fi := MeshInstance3D.new()
+			fi.mesh = row[1]
+			add_child(fi)
+			s.fluid_instance = fi
+		else:
+			s.fluid_instance.mesh = row[1]
+	elif s.fluid_instance != null:
+		s.fluid_instance.queue_free()
+		s.fluid_instance = null
+	if row[2] != null:
+		if s.flora_instance == null:
+			var fa := MeshInstance3D.new()
+			fa.mesh = row[2]
+			add_child(fa)
+			s.flora_instance = fa
+		else:
+			s.flora_instance.mesh = row[2]
+	elif s.flora_instance != null:
+		s.flora_instance.queue_free()
+		s.flora_instance = null
+
+
+func swap_to_cached(in_ring: bool) -> void:
+	var t0 := Time.get_ticks_usec()
+	var demote: Array = []
+	for s in slabs:
+		var row: Array = [null, null, null]
+		if s.mesh_instance != null:
+			row[0] = s.mesh_instance.mesh
+		if s.fluid_instance != null:
+			row[1] = s.fluid_instance.mesh
+		if s.flora_instance != null:
+			row[2] = s.flora_instance.mesh
+		demote.append(row)
+	for si in range(slabs.size()):
+		_set_slab_lod(slabs[si], alt_slabs[si])
+	if in_ring:
+		alt_slabs = demote
+		alt_lod = 1 - alt_lod
+		alt_data = data.duplicate()
+		alt_fl = fl.duplicate()
+		alt_atlas = Data.atlas_tex
+	else:
+		clear_lod_cache()
+	mesh_built = true
+	lod_swaps += 1
+	lod_swaps_instant += 1
+	lod_last_swap_ms = (Time.get_ticks_usec() - t0) / 1000.0
 
 
 func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax: Acc, ms, full_solid: bool) -> void:

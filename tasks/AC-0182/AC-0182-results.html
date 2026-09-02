@@ -1,0 +1,53 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AC-0182 — LOD transition: retain + hysteresis + cache both</title>
+<style>
+body{font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;max-width:940px;margin:32px auto;padding:0 20px;color:#1a1a1a}
+h1{font-size:24px;border-bottom:2px solid #444;padding-bottom:8px}
+h2{font-size:19px;margin-top:28px}
+code,pre{background:#f4f4f4;padding:2px 6px;border-radius:4px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+pre{padding:12px;overflow:auto}
+table{border-collapse:collapse;width:100%;margin:12px 0}
+th,td{border:1px solid #ccc;padding:6px 10px;text-align:left;font-size:14px;vertical-align:top}
+th{background:#eee}
+.ok{color:#1a7f37;font-weight:600}.warn{color:#b35900;font-weight:600}
+.bad{color:#b91c1c;font-weight:600}
+</style></head>
+<body>
+<h1>AC-0182 — LOD transition: retain + hysteresis + cache both (no hole/flicker at the 12/13 line, instant switch)</h1>
+<p><b>Status:</b> <span class="ok">DONE + PUSHED</span> · <b>Built on:</b> AC-0181 (0-12 full, 13+ coarse uniform) · <b>Date:</b> 2026-09-01</p>
+<p><b>User story:</b> As a player walking across the 12/13 block ring, I want no hole and no flicker when the detail changes, and if I step back and forth it should switch instantly instead of rebuilding each time.</p>
+
+<h2>What changed</h2>
+<p>Three coupled pieces, all at the reband site:</p>
+<ul>
+<li><b>Hysteresis (dead band)</b> — <code>LOD_HYS_FULL_MAX=11</code> / <code>LOD_HYS_COARSE_MIN=14</code>: a committed-FULL chunk flips coarse only at taxi ≥ 14; a committed-COARSE chunk flips full only at taxi ≤ 11; taxi 12/13 is a dead band that keeps the current LOD, so a chunk straddling the line never flips per frame. (Stateless ±1-taxi margin in <code>_rec_want_step</code>.)</li>
+<li><b>Retain-until-ready (no hole)</b> — on a fidelity reband the old mesh is <b>not</b> killed; <code>c.lod_pending</code> re-enters the existing <code>light_pending</code> flush (1/frame), the worker builds the new LOD while the old stays visible, and the handoff does capture→<code>apply_accs</code> as one atomic main-thread swap. Same-fidelity 0↔1 reband just moves collision bodies (no rebuild). The stale-band <code>BANDBREAK</code> now routes through <code>_tm_retrigger</code> (not <code>_enqueue_build</code>) so a mid-flight re-reband can't strand a <code>lod_pending</code> chunk.</li>
+<li><b>Cache both for taxi 11-14</b> — per-chunk alt slot (<code>alt_slabs</code> per-slab [mesh/fluid/flora] + <code>alt_lod</code> kind + <code>alt_data</code>/<code>alt_fl</code> + <code>alt_atlas</code>). Stored when a fidelity build lands in-ring; on re-crossing <code>swap_to_cached()</code> is a 0 ms instance-mesh toggle (demoted LOD becomes the new alt). Staleness guarded by data/fl native equality + atlas identity.</li>
+</ul>
+<p>Files: <code>godot/world/world.gd</code> (consts, <code>_rec_want_step</code> dead-band + <code>_reband</code>, <code>threadmesh_handoff</code> capture/store, BANDBREAK reroute, <code>_enter_candidate</code> clear), <code>godot/world/chunk.gd</code> (alt-cache vars + <code>capture_lod</code>/<code>store_lod_cache</code>/<code>lod_cache_valid</code>/<code>swap_to_cached</code>/<code>clear_lod_cache</code>/<code>drop_slab_bodies</code>), <code>godot/scenes/main.gd</code> (new <code>AWECRAFT_LOGIC=lodswap</code> probe + <code>_lodband_test</code> updated for the dead band).</p>
+
+<h2>Gates — ALL GREEN</h2>
+<table>
+<tr><th>Gate</th><th>Result</th><th>Key values</th></tr>
+<tr><td>G0 (hard)</td><td class="ok">PASS</td><td>headless <code>--quit</code> exit 0, zero <code>SCRIPT ERROR</code></td></tr>
+<tr><td><b>lodswap (NEW — the real gate)</b></td><td class="ok">PASS</td><td><code>ok:true</code>: <code>no_hole:true</code>/<code>hole_frames:0</code>, <code>retain_window:true</code> (old full visible 168 in-flight frames while coarse built), <code>cross1.atomic:true</code> (1 build + 1 flip), <code>flicker.ok:true</code> (band_changes 0 / fidelity_changes 0 over 120 jitter frames, ends band 2), <code>cross2.instant_swaps:2 lag_frames:0</code> + <code>cross3.instant_swaps:1</code>, <code>lod_builds:1</code> total, <code>swap_ms</code> 0.08-0.12. ~25 s @ R=15</td></tr>
+<tr><td>lodband (AC-0181 regression)</td><td class="ok">PASS</td><td><code>ok:true</code> @ R=50: dead-band contract (ahead11=1 full / ahead14=2 coarse every step), <code>full_ok:265</code> const, <code>transition:100</code> (12-13 band), <code>violations:[]</code>, <code>spawn_hist:[1,1,1,1,1,1,2]</code> → <code>spawn_monotonic:true</code>. ~12.4 min</td></tr>
+<tr><td>SMOKE battery</td><td class="ok">PASS</td><td><code>ok:true</code>: player 135.43/136.78 + 2.82, interact place_ok + inv{n:1}, light 15/10/14, fluids 2756/2756 + 914/914 stable + 25/9 — all match standing baselines</td></tr>
+<tr><td>genhash (world/* gate)</td><td class="ok">PASS</td><td><b>25/25 byte-identical</b> across two fresh runs (determinism)</td></tr>
+<tr><td>bandmap</td><td class="ok">PASS</td><td><code>band_counts {b0:41, b1:272, b2:7532, b3:408}</code> = 8253 stream set, <code>band1_r:12</code>; boundary samples <code>[12,0]</code>=band1 (full), <code>[13,0]</code>=band2 (coarse)</td></tr>
+<tr><td>boundary r4 ×2 (heavy)</td><td class="ok">PASS</td><td>both <code>ok:true</code>, <b>walk p95 35/32</b> (in standing band 30-37 — no change), p50 13, remesh_ok/marker_ok true, built_final 55/54, resident 101</td></tr>
+<tr><td>perf r4 (heavy)</td><td class="ok">PASS</td><td>p95 25 (matches AC-0178's 26), p50 14, fog_ok true, drain clean</td></tr>
+</table>
+
+<h2>Render (visual)</h2>
+<p><code>tasks/AC-0182/lodswap_ring.png</code> (+ <code>lodswap_ring_placed.png</code>) — top-down aimed at the +X 12/13 segment (camera preset <code>lodring</code>): full-mesh (in-ring) vs coarse (out-ring) terrain with a continuous surface, no hole at the line.</p>
+
+<h2>Deviations / known limits</h2>
+<ul>
+<li>Subagent run reported "failed" (its final response hit the local LLM output cap — INFRA FINDING v2) but all work landed on disk; the coordinator re-ran every gate independently on the stable tree (all green above). No continuity.md from the subagent survived; this page + the gate logs (<code>.scratch/AC-0182-gates/</code>) are the record.</li>
+<li><b>RAM</b>: ring chunks (taxi 11-14, ≤ ~208 at r50) hold a second LOD — ≈ 0.2-0.4 MB data snapshots + one extra chunk-mesh each (AC-0184 anticipated "+~400 slabs"). Non-blocking.</li>
+<li>Boundary p95 35/32 sits in the existing 30-37 band — <b>HARNESS §3 boundary value unchanged</b>.</li>
+</ul>
+<h2>Build</h2>
+<p><b>BUILD_EXIT=0.</b> <code>AweCraft.exe</code> 109,796,112 B, sha <code>aebb3128e715c136…</code>, stamp <code>20260901-2031</code>. **8080 byte-match = YES** (local == served); 5180=200; 8443 down (not started). The build's daemon step saw the stale 8080 pidfile and spawned a duplicate on 8081, which died on its own — 8080 remains the single authoritative serve. LAN: <code>http://192.168.0.224:8080/AweCraft.exe</code> · docs <code>http://192.168.0.224:5180</code>.</p>
+</body></html>

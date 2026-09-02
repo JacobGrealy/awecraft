@@ -1,0 +1,118 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AC-0182 — plan</title>
+<style>
+body{font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;max-width:920px;margin:32px auto;padding:0 20px;color:#1a1a1a}
+h1{font-size:24px;border-bottom:2px solid #444;padding-bottom:8px}
+h2{font-size:19px;margin-top:28px}
+code,pre{background:#f4f4f4;padding:2px 6px;border-radius:4px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+pre{padding:12px;overflow:auto}
+table{border-collapse:collapse;width:100%;margin:12px 0}
+th,td{border:1px solid #ccc;padding:6px 10px;text-align:left;font-size:14px}
+th{background:#eee}
+</style></head>
+<body>
+<h1>AC-0182 — LOD transition: retain + hysteresis + cache both</h1>
+
+<h2>Goal</h2>
+<p>Walking across the 12/13 LOD line shows <b>no hole</b> (old LOD stays visible until the new
+<code>build_accs</code> lands, then atomic swap), <b>no flicker</b> (±1-taxi dead band: full→coarse
+commits only at taxi ≥ 14, coarse→full only at taxi ≤ 11, so a chunk straddling the line never
+flips per frame), and a <b>0 ms re-crossing</b> (both LODs resident in the taxi 11–14 ring, so the
+second crossing is a visible mesh toggle, not a rebuild).</p>
+
+<h2>Design (three coupled pieces, all at the reband site)</h2>
+<ol>
+<li><b>Hysteresis (dead band).</b> Stateless ±1-taxi margin evaluated in the recenter walk
+(<code>_rec_want_step</code>): a committed-FULL chunk flips coarse only at taxi ≥ 14; a
+committed-COARSE chunk flips full only at taxi ≤ 11; taxi 12/13 is a dead band that keeps the
+current LOD. A straddling chunk (target oscillating 1↔2) therefore never flips — matching the
+task's "2 frames / ±1 taxi" either-or; the <code>cand_since ≥ 2</code> free-candidate style stays
+untouched at world.gd:2576.</li>
+<li><b>Retain-until-ready.</b> On a fidelity reband (full↔coarse, or 0↔1 which share the identical
+builder path) the old mesh is NOT killed. Same-fidelity 0↔1 reband just updates
+<code>band</code>/<code>collision_enabled</code> + moves collision bodies (no rebuild at all).
+Fidelity rebands set <code>c.lod_pending</code> and re-enter the existing <code>light_pending</code>
+flush (1/frame, defer-on-cap, <code>_build_ready</code>-gated) — the worker builds the new LOD while
+the old one stays visible; the handoff captures the outgoing LOD's meshes, <code>apply_accs</code>
+does the free+assemble in one main-thread step = the atomic swap. <code>mesh_built</code> stays
+true through the whole window (the drain's meshed-skip is never an issue: the flush dispatches
+directly).</li>
+<li><b>Cache both for taxi 11–14.</b> Per-chunk alt slot (<code>alt_slabs</code> per-slab
+[mesh/fluid/flora ArrayMesh] + <code>alt_lod</code> kind + <code>alt_data</code>/<code>alt_fl</code>
+snapshots + <code>alt_atlas</code> identity). Stored when a fidelity build lands while the chunk is
+inside the ring; freed on ring exit (recenter walk), candidate entry, or stale data. At commit, if
+the alt cache holds the needed kind and is valid (data/fl equality + atlas identity + no pending
+light/fluid/tex dirty) → <code>swap_to_cached()</code>: 0 ms instance-mesh toggle on the main
+thread, demoted LOD becomes the new alt cache (while still in ring). Otherwise retain + worker
+build.</li>
+</ol>
+<p>Handoff safety: the stale-band drop path (<code>BANDBREAK</code>) now routes through
+<code>_tm_retrigger</code> (meshed → <code>light_pending</code>) instead of <code>_enqueue_build</code>
+(early-returns for meshed chunks) — a re-reband mid-flight can no longer strand a
+<code>lod_pending</code> chunk.</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/world/chunk.gd</code></td>
+<td>New vars: <code>lod_pending</code>, <code>alt_lod/alt_slabs/alt_data/alt_fl/alt_atlas</code>,
+<code>lod_builds/lod_swaps/lod_swaps_instant/lod_last_swap_ms</code>. New funcs:
+<code>drop_slab_bodies</code>, <code>capture_lod</code>, <code>lod_cache_valid</code>,
+<code>clear_lod_cache</code>, <code>store_lod_cache</code>, <code>_set_slab_lod</code>,
+<code>swap_to_cached</code>.</td></tr>
+<tr><td><code>godot/world/world.gd</code></td>
+<td>Consts <code>LOD_HYS_FULL_MAX=11</code> / <code>LOD_HYS_COARSE_MIN=14</code> /
+<code>LOD_HYS_RING_MIN=11</code> / <code>LOD_HYS_RING_MAX=14</code>. <code>_rec_want_step</code>:
+dead-band target + ring-exit cache cleanup + new <code>_reband(c,key,oldb,nb)</code> (same-fidelity
+retain incl. 0↔1 body move; fidelity flip → instant swap or retain+flush-queue).
+<code>threadmesh_handoff</code>: capture → <code>apply_accs</code> → <code>store_lod_cache</code>.
+BANDBREAK → <code>_tm_retrigger</code>. <code>_enter_candidate</code>: clear lod state.</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td>
+<td>New arm <code>AWECRAFT_LOGIC=lodswap</code> → <code>_lodswap_test</code> (r15; walks the spawn
+chunk 0→14, jitters 13↔14 ×12, returns 14→11, forward 11→14; per-frame samples assert no-hole /
+retain window / flicker-free / instant crossings). <code>_lodband_test</code> updated for the dead
+band: violation rule taxi ≤ 11 full / ≥ 14 coarse / 12–13 transition (either), landmarks
+<ahead11 full / ahead14 coarse>, settle also waits <code>lod_pending</code> to clear;
+<code>spawn_monotonic</code> (full* coarse*) unchanged.</td></tr>
+</table>
+
+<h2>Harness gates</h2>
+<table>
+<tr><th>Gate</th><th>Command</th><th>ok condition</th></tr>
+<tr><td>G0</td><td>headless <code>--quit</code></td><td>zero <code>SCRIPT ERROR</code> lines</td></tr>
+<tr><td>lodswap (NEW, the real gate)</td><td><code>AWECRAFT_LOGIC=lodswap</code></td>
+<td><code>ok:true</code> = no hole (never unmeshed after first build), retain window observed
+(pending + meshed + old fidelity), flicker window 0 flips, first crossing = exactly 1 worker build
++ single atomic fidelity flip, both re-crossings instant (2 swaps, still 1 build), alt cache
+resident at end</td></tr>
+<tr><td>lodband</td><td><code>AWECRAFT_LOGIC=lodband</code></td>
+<td><code>ok:true</code> = dead-band contract (≤11 full, ≥14 coarse, 12/13 transition),
+<code>spawn_monotonic:true</code></td></tr>
+<tr><td>bandmap</td><td><code>AWECRAFT_LOGIC=bandmap</code></td>
+<td>b0=41, b1 grown / b2 shrunken, <code>[12,0]</code> full / <code>[13,0]</code> coarse
+(single recenter at spawn → hysteresis never fires → unchanged)</td></tr>
+<tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code></td>
+<td>all <code>ok:true</code>; genhash 25/25 byte-identical</td></tr>
+<tr><td>RENDER</td><td>1 × xvfb <code>gl_compatibility</code> r13, aimed top-down at the +x 12/13
+segment</td><td>1 PNG into <code>tasks/AC-0182/</code> showing full (in-ring) vs coarse (out-ring)
+terrain with a continuous surface</td></tr>
+</table>
+<p>Heavy boundary/perf + <code>./build_windows.sh</code> = coordinator's job.</p>
+
+<h2>Risks</h2>
+<ul>
+<li><b>Alt-cache staleness</b> (edit/bucket/texture-swap after cache): guarded by data/fl native
+equality + atlas identity + pending-dirty checks; on miss the retain+build path refreshes the
+cache on landing.</li>
+<li><b>Stranded <code>lod_pending</code> on mid-flight re-reband</b>: closed by the
+<code>BANDBREAK</code> → <code>_tm_retrigger</code> change (meshed chunks re-enter
+<code>light_pending</code>, which is never skipped for meshed chunks).</li>
+<li><b>Boundary p95 standing value</b>: reband now does a main-thread instant swap (≈ ms) or defers
+to the worker (was kill+requeue) — expect small, possibly better, per-frame cost; coordinator's
+heavy run confirms.</li>
+<li><b>RAM</b>: ring chunks (taxi 11–14, ≤ ~208 at r50) hold a second LOD: ≈ 0.2–0.4 MB data
+snapshots + one extra chunk-mesh each (AC-0184 anticipated "+~400 slabs").</li>
+<li><b>Headless probe wall</b>: r15 path-region build ≈ 30–90 s (drain streams ahead of the walk);
+probe is condition-waited, not fixed-wall.</li>
+</ul>
+</body></html>

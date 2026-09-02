@@ -68,6 +68,10 @@ const REC_UNITS_PER_FRAME := 2048
 # show/hide transitions happen off-screen (no pop-in). Engine 4.7.1 exposes no
 # per-instance culling margin (verified), so the test lives here in GDScript.
 const FRUSTUM_CULL_MARGIN := 32.0
+const LOD_HYS_FULL_MAX := 11
+const LOD_HYS_COARSE_MIN := 14
+const LOD_HYS_RING_MIN := 11
+const LOD_HYS_RING_MAX := 14
 
 # AC-0143 M3 keying: the chunks dict is (face, cx, cz)-qualified.
 #   faces 0,1 (+Y halves, home pair) = the flat home world: key "%d,%d",
@@ -1290,11 +1294,19 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		_tm_datadrop += 1
 		if _tm_debug:
 			print("TMESH BANDBREAK %d,%d (band %d != %d)" % [int(e["cx"]), int(e["cz"]), int(e.get("band", -1)), int(c.band)])
-		_enqueue_build(int(e["cx"]), int(e["cz"]))
+		_tm_retrigger(key, c, e)
 		return
 	var ta := Time.get_ticks_msec()
 	var old_eff = c.last_eff
+	var lod_swap := bool(c.lod_pending)
+	var lod_cap: Array = []
+	if lod_swap:
+		lod_cap = c.capture_lod()
 	c.apply_accs(res, _tm_ms_full)
+	if lod_swap:
+		var ltaxi := absi(int(c.cx) - last_pcx) + absi(int(c.cz) - last_pcz)
+		var lkind := 0 if int(e["band"]) == 2 else 1
+		c.store_lod_cache(lod_cap, lkind, ltaxi >= LOD_HYS_RING_MIN and ltaxi <= LOD_HYS_RING_MAX)
 	perf_build_ms += Time.get_ticks_msec() - ta
 	perf_build_worker_ms += int(res.get("wms", 0))
 	var tb := Time.get_ticks_msec() if timing else 0  # AC-0178 diag (timing-gated)
@@ -2487,6 +2499,8 @@ func _enter_candidate(key: String, c: Node3D) -> bool:
 	# recenter WANT pass and skips them in the flush loops.
 	c.candidate = true
 	c.cand_since = 0
+	c.lod_pending = false
+	c.clear_lod_cache()
 	var had_mesh: bool = c.mesh_built
 	c.mesh_built = false
 	c._enter_candidate_slabs()
@@ -2804,6 +2818,41 @@ func _recenter_slice() -> void:
 				_rec_slice_frames, _rec_new_n, _rp_stub_n, queue_size])
 		_rp_stub_n = _rec_new_n
 
+func _reband(c: Node3D, key: String, oldb: int, nb: int) -> void:
+	var taxi := absi(int(c.cx) - last_pcx) + absi(int(c.cz) - last_pcz)
+	var old_kind := 1 if oldb == 2 else 0
+	var new_kind := 1 if nb == 2 else 0
+	c.band = nb
+	c.collision_enabled = collision_enabled and nb == 0
+	if not bool(c.mesh_built):
+		return
+	if old_kind == new_kind:
+		if oldb == 0 and nb != 0:
+			c.drop_slab_bodies()
+		elif nb == 0 and oldb != 0:
+			c.mark_all_slabs_dirty()
+			if not _col_pending_set.has(key):
+				_col_pending.append(key)
+				_col_pending_set[key] = true
+		return
+	if new_kind == 0:
+		c.mark_all_slabs_dirty()
+		if not _col_pending_set.has(key):
+			_col_pending.append(key)
+			_col_pending_set[key] = true
+	else:
+		c.drop_slab_bodies()
+	if bool(c.lod_cache_valid(new_kind)):
+		c.swap_to_cached(taxi >= LOD_HYS_RING_MIN and taxi <= LOD_HYS_RING_MAX)
+	else:
+		c.clear_lod_cache()
+		c.lod_pending = true
+		if not light_pending_set.has(key):
+			light_pending.append(key)
+			light_pending_set[key] = true
+		flush_active = true
+
+
 func _rec_want_step() -> void:
 	# AC-0152: walk the stream-set bounding box (circle ∪ collar ∪ ring);
 	# skip out-of-set cells. Band changes on existing chunks reband (kill
@@ -2833,21 +2882,22 @@ func _rec_want_step() -> void:
 	var key := _key(cx, cz)
 	var c = chunks.get(key)
 	var old = queued_keys.get(key)
-	if c != null and int(c.band) != nb:
-		c.band = nb
-		c.collision_enabled = collision_enabled and nb == 0
-		if c.mesh_built:
-			c.mesh_built = false
-			c._enter_candidate_slabs()
-			light_pending_set.erase(key)
-			light_pending.erase(key)
-			fluid_dirty.erase(key)
-			tex_refresh.erase(key)
-			_col_pending_set.erase(key)
-			_col_pending.erase(key)
-		if old == "data":
-			_convert_data_to_build(key)
-			old = queued_keys.get(key)
+	if c != null:
+		var taxi := absi(dx) + absi(dz)
+		if int(c.alt_lod) >= 0 and not (taxi >= LOD_HYS_RING_MIN and taxi <= LOD_HYS_RING_MAX):
+			c.clear_lod_cache()
+		var cb := int(c.band)
+		if cb != nb:
+			var target := nb
+			if cb == 2 and nb == 1 and taxi > LOD_HYS_FULL_MAX:
+				target = cb
+			if cb == 1 and nb == 2 and taxi < LOD_HYS_COARSE_MIN:
+				target = cb
+			if cb != target:
+				_reband(c, key, cb, target)
+				if old == "data":
+					_convert_data_to_build(key)
+					old = queued_keys.get(key)
 	if old != "build" and (c == null or not c.mesh_built):
 		_rec_want[key] = {"cx": cx, "cz": cz, "d": absi(dx) + absi(dz)}
 		_rec_want_keys.append(key)

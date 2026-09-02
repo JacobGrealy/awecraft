@@ -1137,6 +1137,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "lodband":
 			await _lodband_test(spawn)
 			return
+		if logic == "lodswap":
+			await _lodswap_test(spawn)
+			return
 		if logic == "chunkio":
 			await _chunkio_test(spawn)
 			return
@@ -1240,6 +1243,11 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		camera = _make_camera()
 		camera.position = Vector3(spawn.x + 18.0, spawn.y + 26.0, spawn.z - 18.0)
 		camera.look_at(Vector3(spawn.x - 4.0, spawn.y - 6.0, spawn.z + 4.0), Vector3(0, 1, 0))
+		camera.current = true
+	elif cam == "lodring":
+		camera = _make_camera()
+		camera.position = Vector3(200.0, spawn.y + 124.0, -140.0)
+		camera.look_at(Vector3(200.0, spawn.y + 2.0, 8.0), Vector3(0, 1, 0))
 		camera.current = true
 	elif cam == "sky":
 		camera = _make_camera()
@@ -8977,12 +8985,14 @@ func _bandmap_test(spawn: Vector3) -> void:
 
 # AC-0181 probe (AWECRAFT_LOGIC=lodband, harness-only, never runs in game):
 # walk radially +X from spawn (player chunk 0,3,6,9,12,13,14) at render 50.
-# At each step: recenter, settle the taxi <= 13 neighborhood, then classify
-# EVERY meshed chunk's fidelity from its built UV period (full 16^3 = 31 px
-# per block; coarse uv_scale 2 = 15.5) and assert the monotonic contract:
-# meshed + taxi <= 12 => FULL, meshed + taxi >= 13 => COARSE, band 3 never
-# meshed, ahead-12 FULL / ahead-13 COARSE at every step, and the spawn
-# chunk's fidelity history is full* coarse* (no full->coarse->full pop).
+# At each step: recenter, settle the taxi <= 14 neighborhood (and wait out
+# any in-flight LOD transition), then classify EVERY meshed chunk's fidelity
+# from its built UV period (full 16^3 = 31 px per block; coarse uv_scale 2
+# = 15.5) and assert the AC-0182 dead-band contract: meshed + taxi <= 11
+# => FULL, meshed + taxi >= 14 => COARSE, taxi 12-13 = transition (either,
+# hysteresis dead band), band 3 never meshed, ahead-11 FULL / ahead-14
+# COARSE at every step, and the spawn chunk's fidelity history is full*
+# coarse* (no full->coarse->full pop).
 func _lodband_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
 	var R := 50
@@ -9005,17 +9015,18 @@ func _lodband_test(spawn: Vector3) -> void:
 		while world._rec_pending and rw < 3600:
 			await get_tree().physics_frame
 			rw += 1
-		# settle: every chunk with taxi <= 13 around the player is built.
+		# settle: every chunk with taxi <= 14 around the player is built and
+		# has finished any in-flight LOD retain->swap (lod_pending clear).
 		var sw := 0
-		var max_sw := 4800 if st == 0 else 2400
+		var max_sw := 9600 if st == 0 else 6000
 		while sw < max_sw:
 			var allb := true
-			for dx in range(-13, 14):
-				for dz in range(-13, 14):
-					if absi(dx) + absi(dz) > 13:
+			for dx in range(-14, 15):
+				for dz in range(-14, 15):
+					if absi(dx) + absi(dz) > 14:
 						continue
 					var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
-					if c == null or not c.mesh_built:
+					if c == null or not c.mesh_built or bool(c.lod_pending):
 						allb = false
 						break
 				if not allb:
@@ -9026,6 +9037,7 @@ func _lodband_test(spawn: Vector3) -> void:
 			sw += 1
 		var full_ok := 0
 		var coarse_ok := 0
+		var trans := 0
 		var uncl := 0
 		var meshed := 0
 		for key in world.chunks:
@@ -9038,30 +9050,32 @@ func _lodband_test(spawn: Vector3) -> void:
 			meshed += 1
 			var taxi := absi(int(c.cx) - pcx) + absi(int(c.cz) - pcz)
 			var f: int = _lod_fidelity(c)
-			if taxi <= 12:
+			if taxi <= 11:
 				if f == 1:
 					full_ok += 1
 				elif f == 2:
 					violations.append("full-zone coarse %s (taxi %d)" % [str(key), taxi])
 				else:
 					uncl += 1
-			else:
+			elif taxi >= 14:
 				if f == 2:
 					coarse_ok += 1
 				elif f == 1:
 					violations.append("coarse-zone full %s (taxi %d)" % [str(key), taxi])
 				else:
 					uncl += 1
-		var a12 = world.chunks.get("%d,%d" % [pcx + 12, pcz])
-		var a13 = world.chunks.get("%d,%d" % [pcx + 13, pcz])
+			else:
+				trans += 1
+		var a11 = world.chunks.get("%d,%d" % [pcx + 11, pcz])
+		var a14 = world.chunks.get("%d,%d" % [pcx + 14, pcz])
 		var sk = world.chunks.get("0,0")
 		spawn_hist.append(_lod_fidelity(sk) if sk != null and sk.mesh_built else -1)
 		report.append({
 			"st": st, "pc": [pcx, pcz], "walk_frames": rw, "settle_frames": sw,
 			"meshed": meshed, "full_ok": full_ok, "coarse_ok": coarse_ok,
-			"unclassified": uncl,
-			"ahead12": _lod_fidelity(a12) if a12 != null and a12.mesh_built else -1,
-			"ahead13": _lod_fidelity(a13) if a13 != null and a13.mesh_built else -1,
+			"transition": trans, "unclassified": uncl,
+			"ahead11": _lod_fidelity(a11) if a11 != null and a11.mesh_built else -1,
+			"ahead14": _lod_fidelity(a14) if a14 != null and a14.mesh_built else -1,
 		})
 	# monotonic landmark: the spawn chunk must go full* coarse* along the
 	# outward walk (a FULL after a COARSE = high->low->high pop).
@@ -9082,6 +9096,206 @@ func _lodband_test(spawn: Vector3) -> void:
 		"elapsed_ms": Time.get_ticks_msec() - t0,
 	})
 	get_tree().quit()
+
+
+func _lodswap_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var R := 15
+	world.render_radius = R
+	world.recenter(spawn.x, spawn.z, true)
+	var pcx0 := int(world.last_pcx)
+	var pcz0 := int(world.last_pcz)
+	var T = world.chunks.get("%d,%d" % [pcx0, pcz0])
+	if T == null:
+		Debug.result({"ok": false, "error": "spawn chunk missing"})
+		get_tree().quit()
+		return
+	var samples := []
+	var stt := {"ph": "boot"}
+	var wboot := 0
+	while wboot < 2400 and not T.mesh_built:
+		await get_tree().process_frame
+		_lodswap_snap(T, samples, stt, pcx0)
+		wboot += 1
+	if not T.mesh_built:
+		Debug.result({"ok": false, "error": "spawn chunk never built"})
+		get_tree().quit()
+		return
+	var first_built := samples.size()
+	for st in range(1, 14):
+		stt["ph"] = "out_%d" % st
+		_lodswap_walk(st)
+		for i in range(24):
+			await get_tree().process_frame
+			_lodswap_snap(T, samples, stt, pcx0)
+	stt["ph"] = "cross1"
+	var builds_c1 := int(T.lod_builds)
+	_lodswap_walk(14)
+	var w14 := 0
+	while w14 < 2400:
+		await get_tree().process_frame
+		_lodswap_snap(T, samples, stt, pcx0)
+		w14 += 1
+		if T.mesh_built and _lod_fidelity(T) == 2:
+			break
+	stt["ph"] = "jitter"
+	for j in range(12):
+		_lodswap_walk(13 if j % 2 == 0 else 14)
+		for i in range(10):
+			await get_tree().process_frame
+			_lodswap_snap(T, samples, stt, pcx0)
+	stt["ph"] = "back13"
+	_lodswap_walk(13)
+	for i in range(10):
+		await get_tree().process_frame
+		_lodswap_snap(T, samples, stt, pcx0)
+	stt["ph"] = "back12"
+	_lodswap_walk(12)
+	for i in range(10):
+		await get_tree().process_frame
+		_lodswap_snap(T, samples, stt, pcx0)
+	var swaps_c2 := int(T.lod_swaps_instant)
+	stt["ph"] = "back11"
+	var back_start_f := samples.size()
+	_lodswap_walk(11)
+	var w11 := 0
+	while w11 < 600:
+		await get_tree().process_frame
+		_lodswap_snap(T, samples, stt, pcx0)
+		w11 += 1
+		if T.mesh_built and _lod_fidelity(T) == 1:
+			break
+	var c2_swap_ms := float(T.lod_last_swap_ms)
+	stt["ph"] = "fwd12"
+	_lodswap_walk(12)
+	for i in range(10):
+		await get_tree().process_frame
+		_lodswap_snap(T, samples, stt, pcx0)
+	stt["ph"] = "fwd13"
+	_lodswap_walk(13)
+	for i in range(10):
+		await get_tree().process_frame
+		_lodswap_snap(T, samples, stt, pcx0)
+	var swaps_c3 := int(T.lod_swaps_instant)
+	stt["ph"] = "fwd14"
+	var fwd_start_f := samples.size()
+	_lodswap_walk(14)
+	var w14b := 0
+	while w14b < 600:
+		await get_tree().process_frame
+		_lodswap_snap(T, samples, stt, pcx0)
+		w14b += 1
+		if T.mesh_built and _lod_fidelity(T) == 2:
+			break
+
+	var holes := 0
+	for s in samples:
+		if int(s["f"]) >= first_built and not bool(s["mb"]):
+			holes += 1
+	var no_hole := holes == 0
+	var retain_window := false
+	for s in samples:
+		if str(s["ph"]) == "cross1" and bool(s["pend"]) and bool(s["mb"]) and int(s["fid"]) == 1:
+			retain_window = true
+			break
+	var c1_flips := 0
+	var c1_flip_f := -1
+	var c1_prev := -1
+	for s in samples:
+		if str(s["ph"]) != "cross1":
+			continue
+		var f1: int = int(s["fid"])
+		if c1_prev == 1 and f1 == 2:
+			c1_flips += 1
+			c1_flip_f = int(s["f"])
+		c1_prev = f1
+	var c1_atomic := c1_flips == 1
+	var in_flight := 0
+	for s in samples:
+		if str(s["ph"]) == "cross1" and int(s["f"]) >= c1_flip_f - 1:
+			break
+		if str(s["ph"]) == "cross1" and bool(s["pend"]) and bool(s["mb"]):
+			in_flight += 1
+	var j_band := -1
+	var j_fid := -1
+	var j_band_changes := 0
+	var j_fid_changes := 0
+	var j_frames := 0
+	var j_holes := 0
+	for s in samples:
+		if str(s["ph"]) != "jitter":
+			continue
+		j_frames += 1
+		var b2: int = int(s["band"])
+		var f2: int = int(s["fid"])
+		if not bool(s["mb"]):
+			j_holes += 1
+		if j_band < 0 or b2 != j_band:
+			if j_band >= 0:
+				j_band_changes += 1
+			j_band = b2
+		if j_fid < 0 or f2 != j_fid:
+			if j_fid >= 0:
+				j_fid_changes += 1
+			j_fid = f2
+	var flicker_ok := j_band_changes == 0 and j_fid_changes == 0 and j_holes == 0 and j_band == 2 and j_fid == 2
+	var c2_flips := 0
+	var c2_flip_f := -1
+	var c2_prev := -1
+	for s in samples:
+		if not str(s["ph"]).begins_with("back"):
+			continue
+		var f3: int = int(s["fid"])
+		if c2_prev == 2 and f3 == 1:
+			c2_flips += 1
+			c2_flip_f = int(s["f"])
+		c2_prev = f3
+	var c2_instant := int(T.lod_swaps_instant) - swaps_c2
+	var c2_lag := c2_flip_f - back_start_f if c2_flip_f >= 0 else 999999
+	var c2_ok := c2_flips == 1 and c2_instant >= 1 and c2_lag <= 8 and int(T.lod_builds) == 1
+	var c3_flips := 0
+	var c3_flip_f := -1
+	var c3_prev := -1
+	for s in samples:
+		if not str(s["ph"]).begins_with("fwd"):
+			continue
+		var f4: int = int(s["fid"])
+		if c3_prev == 1 and f4 == 2:
+			c3_flips += 1
+			c3_flip_f = int(s["f"])
+		c3_prev = f4
+	var c3_instant := int(T.lod_swaps_instant) - swaps_c3
+	var c3_lag := c3_flip_f - fwd_start_f if c3_flip_f >= 0 else 999999
+	var c3_ok := c3_flips == 1 and c3_instant >= 1 and c3_lag <= 8
+	var end_cache := int(T.alt_lod) == 0 and int(T.band) == 2 and bool(T.mesh_built)
+	var ok := no_hole and retain_window and c1_atomic and flicker_ok and c2_ok and c3_ok and end_cache
+	Debug.result({
+		"ok": ok, "radius": R, "T": [pcx0, pcz0],
+		"first_built": first_built, "sample_frames": samples.size(),
+		"no_hole": no_hole, "hole_frames": holes,
+		"retain_window": retain_window, "cross1_in_flight_frames": in_flight,
+		"cross1": {"fidelity_flips": c1_flips, "flip_frame": c1_flip_f, "atomic": c1_atomic, "builds": int(T.lod_builds) - builds_c1},
+		"flicker": {"frames": j_frames, "band_changes": j_band_changes, "fidelity_changes": j_fid_changes, "band_end": j_band, "fid_end": j_fid, "ok": flicker_ok},
+		"cross2": {"fidelity_flips": c2_flips, "flip_frame": c2_flip_f, "lag_frames": c2_lag, "instant_swaps": c2_instant, "swap_ms": c2_swap_ms, "ok": c2_ok},
+		"cross3": {"fidelity_flips": c3_flips, "flip_frame": c3_flip_f, "instant_swaps": c3_instant, "swap_ms": float(T.lod_last_swap_ms), "ok": c3_ok},
+		"lod_builds": int(T.lod_builds), "lod_swaps": int(T.lod_swaps), "lod_swaps_instant": int(T.lod_swaps_instant),
+		"alt_lod_end": int(T.alt_lod), "end_cache": end_cache,
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+	})
+	get_tree().quit()
+
+
+func _lodswap_snap(T, samples: Array, stt: Dictionary, pcx0: int) -> void:
+	samples.append({
+		"ph": stt["ph"], "f": samples.size(), "pcx": int(world.last_pcx) - pcx0,
+		"mb": bool(T.mesh_built), "band": int(T.band),
+		"fid": _lod_fidelity(T) if T.mesh_built else -1,
+		"pend": bool(T.lod_pending),
+	})
+
+
+func _lodswap_walk(pcx: int) -> void:
+	world.recenter(float(pcx * 16 + 8), 8.0)
 
 
 # AC-0181 probe helper: classify a BUILT chunk's mesh fidelity from the UV
