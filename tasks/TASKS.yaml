@@ -1,11 +1,13 @@
 meta:
-  updated_at: 2026-09-02T10:56
+  updated_at: 2026-09-02T12:08
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
 - AC-0197
-- AC-0193
+- AC-0198
 - AC-0175
+- AC-0140
+- AC-0199
 - AC-0191
 - AC-0121
 - AC-0122
@@ -14,7 +16,6 @@ queue:
 - AC-0172
 - AC-0173
 - AC-0087
-- AC-0154
 - AC-0186
 - AC-0174
 - AC-0040
@@ -23,7 +24,7 @@ queue:
 - AC-0144
 - AC-0145
 - AC-0146
-- AC-0140
+- AC-0193
 - AC-0159
 - AC-0192
 - AC-0092
@@ -1065,7 +1066,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels:
   - godot
@@ -1428,7 +1429,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 1
+  priority: 2
   status: open
   labels: []
   created_at: 2026-08-20T10:44
@@ -2672,7 +2673,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-23T23:13
@@ -2771,7 +2772,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 1
+  priority: 2
   status: open
   labels: []
   created_at: 2026-08-23T23:24
@@ -2798,7 +2799,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 1
+  priority: 2
   status: open
   labels: []
   created_at: 2026-08-23T23:26
@@ -2868,7 +2869,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 1
+  priority: 2
   status: open
   labels: []
   created_at: 2026-08-23T23:41
@@ -2895,7 +2896,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 1
+  priority: 2
   status: open
   labels: []
   created_at: 2026-08-23T23:51
@@ -2983,7 +2984,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-24T09:46
@@ -3501,7 +3502,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-25T09:44
@@ -3759,7 +3760,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-26T07:18
@@ -3785,7 +3786,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-26T07:18
@@ -4284,7 +4285,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 1
   status: open
   labels: []
   created_at: 2026-08-29T04:36
@@ -4398,7 +4399,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-29T09:29
@@ -4425,7 +4426,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-29T09:39
@@ -4452,7 +4453,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-29T09:53
@@ -4540,7 +4541,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 1
+  priority: 2
   status: open
   labels: []
   created_at: 2026-08-29T12:09
@@ -4572,7 +4573,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 1
+  priority: 2
   status: open
   labels: []
   created_at: 2026-08-29T12:09
@@ -4599,7 +4600,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 1
+  priority: 2
   status: open
   labels: []
   created_at: 2026-08-29T12:09
@@ -4627,7 +4628,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-29T12:10
@@ -4826,11 +4827,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-08-30T12:27
-  updated_at: 2026-08-31T16:27
-  completed_at: null
+  updated_at: 2026-09-02T15:02
+  completed_at: 2026-09-02T15:02
   waiting_on: AC-0152
   parent_id: null
   notes: '1) User Story: As a player I want caves only where I could ever see them so distant columns generate faster and
@@ -4846,6 +4847,11 @@ intake:
     created_at: '2026-09-01T02:12:48.549760'
     updated_at: null
     text: '[coordinator] Reasoning: xhigh (non-trivial, plan+verify) — '
+  - id: 2
+    created_at: 2026-09-02T15:02
+    updated_at: null
+    text: '[user] scrapped - replaced by AC-0198 coarse-3d-density (lazy 30% -> 5% after coarse, covered as if interior->skip
+      inside 3D) per user 2026-09-02'
 - id: AC-0155
   title: full-chunk-save-not-edits
   source: user
@@ -4895,7 +4901,20 @@ intake:
   - id: 2
     created_at: '2026-09-02T08:20:00.000000'
     updated_at: null
-    text: '[coordinator] DONE 2026-09-02 — per-column AWCC blob v1→v2 now carries the column light (eff=max(sky,blk) channel + block-light flood mask, nibble-packed per 16^3 section, same file as blocks — Minecraft Anvil style). Revisit restores light with ZERO kernel recompute (probe recompute_count:0, restored eff+mask byte-identical incl. on-disk decode); legacy v1 blobs decode to "no saved light" → recompute (back-compat); Save.clear wipes light with blocks. Save captures the eff-cache entry only when data-equal + no pending re-light (never a pre-settle light); a block edit invalidates (recompute) + the next save captures the update. AC-0175 region storage rides the same encode_column/decode_column — light preserved automatically. Codec decode bug caught+fixed during verify (fe-end vs post-light MD5 offset — every v2 blob rejected; rewritten with fixed offsets, self-test green on v1/v2±light/wrong-seed). Files: chunk_io.gd (v2 codec + _encode_light/_decode_light/_nibble_pack + encode_column_legacy + fail-closed decode), chunk.gd (saved_light + light_recomputes), world.gd (save capture + load restore feed in _build_unit + edit invalidation + _apply_edits_to_chunk idempotent early-return), main.gd (AWECRAFT_LOGIC=lightcache probe, R=2). Gates: G0 0; lightcache ok:true (light_saved_nonzero mask_sum 1172 torch 14, restored_no_recompute, recompute_count 0, restored_matches_saved, legacy_v1_recomputes, clear_wipes_light, saved_restores 1); SMOKE all baselines (light 15/10/14 far 1→9); genhash 25/25 IDENTICAL (world/* generation untouched); RENDER R=1 clean; HEAVY boundary r4 x2 p95 32/28 (in band) + perf r4 p95 25 + fog_ok; build 109,846,752 B sha dfef0143 8080 byte-match + 5180=200 + 8443 down. See tasks/AC-0156/AC-0156-results.html.'
+    text: '[coordinator] DONE 2026-09-02 — per-column AWCC blob v1→v2 now carries the column light (eff=max(sky,blk) channel
+      + block-light flood mask, nibble-packed per 16^3 section, same file as blocks — Minecraft Anvil style). Revisit restores
+      light with ZERO kernel recompute (probe recompute_count:0, restored eff+mask byte-identical incl. on-disk decode); legacy
+      v1 blobs decode to "no saved light" → recompute (back-compat); Save.clear wipes light with blocks. Save captures the
+      eff-cache entry only when data-equal + no pending re-light (never a pre-settle light); a block edit invalidates (recompute)
+      + the next save captures the update. AC-0175 region storage rides the same encode_column/decode_column — light preserved
+      automatically. Codec decode bug caught+fixed during verify (fe-end vs post-light MD5 offset — every v2 blob rejected;
+      rewritten with fixed offsets, self-test green on v1/v2±light/wrong-seed). Files: chunk_io.gd (v2 codec + _encode_light/_decode_light/_nibble_pack
+      + encode_column_legacy + fail-closed decode), chunk.gd (saved_light + light_recomputes), world.gd (save capture + load
+      restore feed in _build_unit + edit invalidation + _apply_edits_to_chunk idempotent early-return), main.gd (AWECRAFT_LOGIC=lightcache
+      probe, R=2). Gates: G0 0; lightcache ok:true (light_saved_nonzero mask_sum 1172 torch 14, restored_no_recompute, recompute_count
+      0, restored_matches_saved, legacy_v1_recomputes, clear_wipes_light, saved_restores 1); SMOKE all baselines (light 15/10/14
+      far 1→9); genhash 25/25 IDENTICAL (world/* generation untouched); RENDER R=1 clean; HEAVY boundary r4 x2 p95 32/28 (in
+      band) + perf r4 p95 25 + fog_ok; build 109,846,752 B sha dfef0143 8080 byte-match + 5180=200 + 8443 down. See tasks/AC-0156/AC-0156-results.html.'
 - id: AC-0157
   title: 3d-density-terrain-shape
   source: user
@@ -5009,7 +5028,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-30T20:47
@@ -5118,7 +5137,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 1
   status: open
   labels: []
   created_at: 2026-08-31T11:39
@@ -5273,7 +5292,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-31T12:14
@@ -5299,7 +5318,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-31T12:20
@@ -5325,7 +5344,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-31T12:21
@@ -5351,7 +5370,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-31T12:23
@@ -5377,7 +5396,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-31T12:25
@@ -5430,7 +5449,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-31T12:45
@@ -5512,7 +5531,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 1
+  priority: 2
   status: open
   labels: []
   created_at: 2026-08-31T13:33
@@ -5657,7 +5676,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-31T16:30
@@ -5677,7 +5696,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-08-31T23:32
@@ -5755,6 +5774,10 @@ intake:
       (3320 UVs in [0,1]); A/B (revert that line -> opaque_mat_is_plain:false); render 1 shot = no black lines; editfront
       ok:true (break 34.0/place 48.7 ms <50, 0 drops); SMOKE ok; genhash 25/25 IDENTICAL (x2 + vs AC-0187 ref); lodswap ok:true;
       HEAVY boundary r4 x2 p95 29/28 (in band) + perf r4 p95 23 + fog_ok; G0 0 SCRIPT ERROR. See tasks/AC-0187/AC-0187-fix-blacklines.html.'
+  - id: 4
+    created_at: 2026-09-02T15:27
+    updated_at: null
+    text: '[system] superseded by AC-0199 swap-retain-border-jump (covers edit+border)'
 - id: AC-0188
   title: gdext-gen-fbm-caves
   source: user
@@ -5840,7 +5863,7 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 3
   status: open
   labels: []
   created_at: 2026-09-02T09:42
@@ -5856,8 +5879,9 @@ intake:
     \ Halo-gun picker (tier/rarity/affix) is follow-up once weapon system exists. Reuses real viewmodel/swing.\n   Harness:\
     \ AWECRAFT_LOGIC=range — main.gd auto-loads test_range instead of world, spawns player+target, validates movement/swim/drown/lava/swing/bow/hitscan,\
     \ emits RESULT ok:true. Saves isolated (no awecraft_save_*.json write). Console available in range (AC-0121 debug console,\
-    \ same InputMap) for spawning enemies/weapons via commands. Launch: Main Menu → Test Range button.\n   Verify: G0 zero\
-    \ SCRIPT ERROR + AWECRAFT_LOGIC=range ok:true + 1 render (xvfb, gl_compatibility) no worldgen chunks."
+    \ same InputMap) for spawning enemies/weapons via commands. Launch: Main Menu → Test Range button.\n   Depends: AC-0140\
+    \ harness extraction (register in harness/ not main.gd). Verify: G0 zero SCRIPT ERROR + AWECRAFT_LOGIC=range ok:true +\
+    \ 1 render (xvfb, gl_compatibility) no worldgen chunks."
   comments: []
 - id: AC-0192
   title: 'test-fluid: isolated fluid tray'
@@ -5879,7 +5903,7 @@ intake:
 
     2) Technical Details: New scene godot/scenes/tests/test_fluid.tscn — slope + basins on 3x3 stub chunks (no WorldGen, just
     Data+fl arrays), no player. Reuses water.gd tick_fluids only. Harness: AWECRAFT_LOGIC=fluid_tray headless level 0-8 asserts
-    ok:true. Verify: G0 + fluid_tray ok:true + 1 render.'
+    ok:true. Depends: AC-0140 harness extraction (register in harness/ not main.gd). Verify: G0 + fluid_tray ok:true + 1 render.'
   comments: []
 - id: AC-0193
   title: 'test-light: isolated lighting cave'
@@ -5901,7 +5925,8 @@ intake:
 
     2) Technical Details: New scene godot/scenes/tests/test_light.tscn — 3x3 chunk grid with stub Data (no WorldGen/fluid),
     torch/lava grid, uses real lighting.gd Lighting.compute_light_flat_chunk/batch on that grid only. Harness: AWECRAFT_LOGIC=light
-    headless light bleed asserts ok:true. Verify: G0 + light ok:true + 1 render.'
+    headless light bleed asserts ok:true. Depends: AC-0140 harness extraction (register in harness/ not main.gd). Verify:
+    G0 + light ok:true + 1 render.'
   comments: []
 - id: AC-0194
   title: 'test-inventory: isolated UI harness'
@@ -5922,8 +5947,8 @@ intake:
 
 
     2) Technical Details: New scene godot/scenes/tests/test_inventory.tscn — Inventory UI only (36 = 9 hotbar + 27 backpack
-    9x3, +4 armor, 2x2 vs 3x3 table), no ChunkWorld/player. Harness: AWECRAFT_LOGIC=inventory ok:true. Verify: G0 + guiclick
-    ok:true + 1 render.'
+    9x3, +4 armor, 2x2 vs 3x3 table), no ChunkWorld/player. Harness: AWECRAFT_LOGIC=inventory ok:true. Depends: AC-0140 harness
+    extraction (register in harness/ not main.gd). Verify: G0 + guiclick ok:true + 1 render.'
   comments: []
 - id: AC-0195
   title: 'test-mobs: isolated mob arena'
@@ -5945,7 +5970,7 @@ intake:
 
     2) Technical Details: New scene godot/scenes/tests/test_mobs.tscn — flat arena + cover blocks (walls/pillars for LOS/pathing)
     + spawn table for 9 mob types, no ChunkWorld (mock floor StaticBodies). Reuses mob AI + Navigation. Harness: AWECRAFT_LOGIC=mobs
-    ok:true. Verify: G0 + mobs harness + 1 render.'
+    ok:true. Depends: AC-0140 harness extraction (register in harness/ not main.gd). Verify: G0 + mobs harness + 1 render.'
   comments: []
 - id: AC-0196
   title: 'test-planet: hollow shell (surface-only, no ocean)'
@@ -5970,7 +5995,8 @@ intake:
     no caves/ore/ocean (no water), minimal WorldGen, full cube-sphere face/sector/chunk shell. Reuses P1a/P1b/P1c curved-ground/gravity/LOD/impostor
     + AC-0150 gap check. Tests vertical approach LOD 2000→500m + horizontal flight across face edge. Playable: spawn player
     on surface with full movement/flight, Menu → Test Planet. Harness: AWECRAFT_LOGIC=planet_grey headless approach+horizontal
-    LOD asserts ok:true. Verify: G0 + planet_grey ok:true + 1 render (r=4 lazy stream, 81 chunks).'
+    LOD asserts ok:true. Depends: AC-0140 harness extraction (register in harness/ not main.gd). Verify: G0 + planet_grey
+    ok:true + 1 render (r=4 lazy stream, 81 chunks).'
   comments: []
 - id: AC-0197
   title: sparse-air-slabs-skip-empty-top
@@ -6001,3 +6027,89 @@ intake:
     created_at: 2026-09-02T14:55
     updated_at: null
     text: '[user] top of queue per request - sparse air optimization (retry from AC-0191 conflict)'
+- id: AC-0198
+  title: coarse-3d-density-terrain-caves
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-02T15:02
+  updated_at: 2026-09-02T15:02
+  completed_at: null
+  waiting_on: AC-0197
+  parent_id: null
+  notes: '1) User Story: As a player I want caves/hills from one coarse 3D density so R50 gen is cheap and caves are connected
+    (cheese/noodle) not threshold carve.
+
+
+    2) Technical Details: Replace generator.gd:109 5x fbm2x256 + 3x fbm3col + 2x vnoise3col per 98k with single coarse 4x8x4
+    3D noise ~150 pts + trilinear lerp + spline surface (MC 1.18 style). Density>0 => solid, <0 => air, aquifers at Sea 126.
+    Keep lazy as if band>1+offscreen interior -> skip 150 pts (free). Verify: gen wms 120-170 -> ~15-25ms, genhash 25 new
+    baselines + world screenshots, MINFO cave vis same/ better. After AC-0197 sparse.'
+  comments:
+  - id: 1
+    created_at: 2026-09-02T15:02
+    updated_at: null
+    text: '[user] replaces AC-0154 lazy-caves - approved yes'
+- id: AC-0199
+  title: swap-retain-mesh-border-jump
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-02T15:27
+  updated_at: 2026-09-02T15:27
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player breaking a block I want no blink or see-through neighbor — trunks/ground keep old mesh
+    until new is ready and border chunks jump to front.
+
+
+    2) Technical Details: All rebuilds (wave/LOD/edit) change chunk.gd apply_accs 2341/apply_edit_accs 2367 from queue_free
+    before build to retain-swap: keep old MeshInstance/occluder until build_accs 1419 returns, then add_child new ArrayMesh
+    + free old atomically (like swap_to_cached 1928). Edit at lx/lz in [0,1] or [14,15] (snap border 18) also dirties E/W/N/S
+    neighbor via _build_snap_data 1293 and pushes neighbor to threadmesh queue front via world.gd band_buckets 954 / drain
+    30ms reserve 1 slot (extend AC-0187). Fixes trunk blink (solid/cutout same slab) and see-through neighbor hole (one-frame
+    null). Verify: break trunk at chunk border, no blink, no see-through, p95 edit <50ms at R50 queue 7710. Supersedes AC-0187.'
+  comments:
+  - id: 1
+    created_at: 2026-09-02T15:27
+    updated_at: null
+    text: '[user] combined swap-not-delete + border jump to top (fixes trunk + see-through) per 2026-09-02'
+- id: AC-0200
+  title: space-station-build
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-02T12:08
+  updated_at: 2026-09-02T12:08
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'User story: As a player I want to build a persistent space station in orbit — walkable interior (down=-station_up),
+    any block functions — as a dock/hub between planets.
+
+
+    Technical details: Station = Drydock-like Reinforced Frame built in space (orbit >2000m, no planet gravity) — any WxH,
+    rare material, same portal validation. Once Activated, station is static anchored entity (pos fixed relative to planet/star,
+    no 10Hz flight stream; only TileEntity ticks via owner). Players walk inside via station-local gravity (down=-station_up,
+    rolls with station if rotated). Ships Dock/Undock to station frames (same flood-fill Core logic, station is larger budget
+    than ship ~800 chunks). Persistent across sessions, per-planet or system space. Backlog (not queued) — after AC-0161 ships
+    + AC-0148 relay.
+
+
+    Gates: frame validates in orbit, any block ticks, walkable interior, ship dock to station.
+
+    '
+  comments: []
