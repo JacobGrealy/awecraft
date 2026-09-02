@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0187 — plan</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}ul{margin:6px 0}</style></head><body>
+<h1>AC-0187 — priority-remesh-on-block-edit: skip the queue to the front</h1>
+
+<h2>Goal</h2>
+<p>When a player breaks or places a block, the affected chunk remeshes <b>immediately</b> — it bypasses the ~7710 queued far chunks at R=50 — so the hole/appearance change lands in <b>&lt;50 ms</b> with <b>no drop and no flicker</b>. The far-queue streaming and the AC-0182 LOD transition must not regress. The <code>threadmesh_max</code> in-flight cap stays enforced (no unbounded builds).</p>
+
+<h2>Design (5 coupled pieces — final, implemented)</h2>
+<ul>
+<li><b>1. Edit-front priority queue</b> (<code>world.gd</code>) — <code>set_block</code> stashes the chunk's last full light dict (from the eff cache, pre-eviction), pushes the chunk onto <code>edit_front</code> (deduped, merged slab ranges), and dispatches <b>synchronously</b> (in the call). A <code>_process</code> drain retries any cap-dropped/deferred entry before the AC-0126 light flush. The 3×3 neighbor re-light wave still runs afterwards on the existing path — geometry lands first, light converges over the next frames.</li>
+<li><b>2. Dedicated EditPool lane</b> (<code>world.gd</code>) — the scoped edit builds run on a private 1-thread pool (Thread + Mutex + Semaphore + guard-Mutex <code>mark_done</code> flag), not the shared 6-worker mesh pool: no contention with the ~7710-chunk far stream, cap still enforced (<code>threadmesh_max</code> checked at dispatch; drops re-queue, never unbounded). A <b>priority pass</b> in <code>threadmesh_poll</code> (called from both <code>_process</code> and <code>_physics_process</code>) hands off completed edits before any other inflight entry.</li>
+<li><b>3. Slab-scoped fast remesh</b> (<code>chunk.gd</code>) — the edit path builds <b>only the dirty slab closure</b> (rows <code>(y−3)/16 … (y+1)/16</code>, ≈ 1-3 of 24 slabs) through a <code>build_accs</code> row-range variant (scoped face loop with a ymask boundary-bitmask pre-pass; scoped acc allocation) and applies only those slabs (<code>apply_edit_accs</code>, <code>mesh_gen</code> bump) — untouched slabs retain their mesh (no flicker). Light: the stashed pre-edit light (stale-but-current) is validated against <code>c.last_eff</code> at dispatch; if the chunk was re-lit since, the fast entry drops (the wave already remeshed it). <code>eff_trust=false</code> so the stale light never re-enters the eff cache.</li>
+<li><b>4. Scoped row snapshots</b> — the worker sees per-row <code>data</code>/<code>fl</code> slices (<code>d_off…d_hi</code>, ≈ 35× smaller than the full column) + 8 scoped neighbor copies; the handoff drop check compares only the scoped rows (a change outside them cannot affect the applied slabs).</li>
+<li><b>5. Performance pieces</b> — (a) scoped strip memoization keyed on the 8 neighbors' <code>data_gen</code>/<code>eff_gen</code> (cap 32), with zero-filled b-channels (the pull-kernel is the only b consumer and frozen-light builds never run it — skips a ~190 ms <code>_face_of</code> cold miss); (b) <b>edit-yield</b>: while <code>edit_inflight_count &gt; 0</code> the main thread defers far-queue drain, light flush, tex refresh and non-edit handoffs, so the edit handoff lands on a short frame instead of behind a 300 ms drain burst; (c) scoped builds emit <b>per-face quads</b> (plain emit path) — the merge-atlas emitter measured 5-15× slower per quad and its merged runs span cells a fast build can't validate; geometry is identical, the wave's full build restores the merged mesh in 1-3 frames; (d) <code>_s_face_light</code> early-out at 15 (skips redundant max samples on lit faces).</li>
+<li><b>Probe hook</b> — <code>chunk.mesh_gen</code> int, incremented on every mesh apply (build_mesh / apply_accs / apply_edit_accs); the probe also reads dispatch/worker/handoff stamps off the entry for the RESULT breakdown.</li>
+</ul>
+
+<h2>Files to touch</h2>
+<ul>
+<li><code>godot/world/world.gd</code> — <code>edit_front</code> state + <code>_edit_front_add/_dispatch/_drain</code>, <code>set_block</code> hook, <code>_process</code>/<code>_physics_process</code> wiring, <code>class EditPool</code>, <code>_mesh_dispatch_edit</code> (scoped nbs/strips/snapshot, <code>edit_inflight_count</code>), <code>_strips_for_scoped</code> (memoized, zero b-channels), <code>_tm_worker_run</code>, <code>threadmesh_poll</code> priority pass, <code>threadmesh_handoff</code> edit branch + scoped drop check, edit-yield guards (drain/flush/tex_refresh), stale-eff stash.</li>
+<li><code>godot/world/chunk.gd</code> — <code>mesh_gen</code>/<code>data_gen</code>, <code>build_accs</code> row-range params (si0/si1/d_off) + scoped face loop (ymask pre-pass) + scoped acc allocation + per-emit timing, <code>apply_edit_accs</code>, scoped <code>_build_snap_data</code>/<code>_bake_box</code>, <code>_s_face_light</code> early-out, scoped plain-emit (merge bypass), per-slab quad counts.</li>
+<li><code>godot/scenes/main.gd</code> — new <code>AWECRAFT_LOGIC=editfront</code> arm + <code>_editfront_test</code> (R=50, far-queue populated, break + place, remesh ms, drop frames, dispatch/worker/handoff breakdown, main-thread <code>_prof_ring</code> sample).</li>
+</ul>
+
+<h2>Harness gates</h2>
+<table>
+<tr><th>Gate</th><th>Command</th><th>Pass</th></tr>
+<tr><td>G0</td><td><code>HOME=/tmp/dsh_home godot --headless --path godot --quit</code></td><td>exit 0, zero <code>SCRIPT ERROR</code></td></tr>
+<tr><td><b>editfront (NEW — the real gate)</b></td><td><code>AWECRAFT_LOGIC=editfront</code> @R50, far queue in the thousands</td><td><code>ok:true</code>, queue_size in the thousands (~7710), break remesh &lt;50 ms, place remesh &lt;50 ms, drop_frames 0, meshed before/after</td></tr>
+<tr><td>editperf (existing)</td><td><code>AWECRAFT_LOGIC=editperf</code></td><td>flush frames / build ms / no hitch, at or better than the pre-change baseline</td></tr>
+<tr><td>lodswap (AC-0182 regression)</td><td><code>AWECRAFT_LOGIC=lodswap</code></td><td><code>ok:true</code> (no hole / retain / flicker contract intact)</td></tr>
+<tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code> (quoted)</td><td>all <code>ok:true</code>, standing values match; genhash 25/25 byte-identical (world/* touched)</td></tr>
+</table>
+<p>Heavy boundary r4 ×2 + perf + <code>./build_windows.sh</code> = coordinator's job, not run by the builder.</p>
+
+<h2>Risks (final, with measured outcomes)</h2>
+<ul>
+<li><b>50 ms budget</b> — met. Measured R50: break 31.8 ms (dispatch 10.6 + worker 18 + handoff ≈3), place 39.5 ms (dispatch 0.4 + worker 37 + handoff ≈2), both with 0 drop frames. The two levers that made it fit: the scoped plain-emit (the merge-atlas emitter measured 5-15× per-quad slower — 52-143 ms on 830 quads vs ~9-22 ms plain) and the edit-yield (handoff was stalling up to 856 ms behind 300 ms+ drain bursts before the yield). Residual variance: worker emit scales with slab light complexity (9-37 ms observed); a cold strip-cache miss adds ~10-14 ms dispatch (warm: 0.4 ms).</li>
+<li><b>Stale-light visual pop</b> — accepted &amp; documented: the hole appears with pre-edit light; the 3×3 wave refreshes within ~1-3 frames (AC-0126 contract). Mesh presence never drops (retain-until-swap), so the no-hole/no-flicker contract holds.</li>
+<li><b>Scoped plain-emit mesh</b> — the fast slab mesh uses per-face quads (not merged runs); geometry is byte-identical in shape, triangle count is higher until the wave's full build restores the merged mesh (1-3 frames). Also avoids merged runs spanning cells a scoped build cannot validate.</li>
+<li><b>Drain cap −1 (−2 while an edit is pending)</b> — slightly reduces far-queue throughput when saturated (5/6 slots); the R50 probe's drain is I/O-bound (inflight 0-1 at edit time) so the probe is unaffected; steady-state r4 demand (9-14 chunks/s) still fits — coordinator re-runs the heavy boundary gates.</li>
+<li><b>Zero b-channel scoped strips</b> — the scoped build passes zero block-face strips: the only consumer is the pull-kernel self-light, which frozen-light scoped builds never run (every eff cache entry carries its mask). Also skips a ~190 ms <code>_face_of</code> cold miss on the main thread.</li>
+<li><b>flush_active bookkeeping fix</b> — the perf-counter reset was suppressed when a burst drained to empty at section start (stale-true <code>flush_active</code>), which merged an earlier E2-churn burst into the editperf RESULT (94 frames / 303-715 ms counters vs the true post-edit wave of 9 dispatches). The clear now always runs when <code>light_pending</code> is empty; counter semantics unchanged, only the stale state removed.</li>
+<li><b>LOD interaction (AC-0182)</b> — an edit on a lod_pending chunk dedupes behind the in-flight LOD task (same-key inflight check) and re-queues; the stale-band BANDBREAK reroute is untouched. lodswap gate covers it.</li>
+<li><b>Rapid re-edit</b> — second edit before the first fast task lands: stale scoped data-snapshot drop re-triggers a fresh dispatch; the light wave always terminates the sequence with a fresh self-lit 3×3, so final state is byte-correct.</li>
+</ul>
+
+</body></html>

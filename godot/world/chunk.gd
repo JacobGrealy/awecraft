@@ -14,6 +14,7 @@ var face := 0
 var data := PackedByteArray()
 var fl := PackedByteArray()
 var mesh_built := false
+var mesh_gen := 0
 var collision_enabled := true
 var col_immediate := true
 var last_collision_build_ms := 0
@@ -23,6 +24,7 @@ var last_blk_ring: PackedInt32Array = PackedInt32Array()
 # neighbors' eff-cache entries carry our gen at their dispatch (ngen) and
 # invalidate when it moves — the pull strips derive from our last_eff.
 var eff_gen := 0
+var data_gen := 0
 # AC-0080 two-stage hysteresis: candidate = at Chebyshev r+1 with expensive
 # parts killed (mesh/collision), data+edits kept; cand_since = count of
 # recenter events spent at >= r+2 (free at >= 2).
@@ -271,6 +273,7 @@ func get_local(lx: int, y: int, lz: int) -> int:
 
 func set_local(lx: int, y: int, lz: int, id: int) -> void:
 	data[(y << 8) | (lz << 4) | lx] = id
+	data_gen += 1
 
 
 func init_fl() -> void:
@@ -854,16 +857,19 @@ static func _s_face_light(id: int, wx: int, y: int, wz: int, n: Vector3i, lmn: V
 		var ny := y + n.y
 		var nz := wz + n.z
 		v = _s_effl(lmn, larr, lw, ld, nx, ny, nz, h)
-		if id != 5 and id != 24:
+		if v < 15 and id != 5 and id != 24:
 			if n.x == 0:
 				v = maxi(v, _s_effl(lmn, larr, lw, ld, nx + 1, ny, nz, h))
-				v = maxi(v, _s_effl(lmn, larr, lw, ld, nx - 1, ny, nz, h))
-			if n.y == 0:
+				if v < 15:
+					v = maxi(v, _s_effl(lmn, larr, lw, ld, nx - 1, ny, nz, h))
+			if v < 15 and n.y == 0:
 				v = maxi(v, _s_effl(lmn, larr, lw, ld, nx, ny + 1, nz, h))
-				v = maxi(v, _s_effl(lmn, larr, lw, ld, nx, ny - 1, nz, h))
-			if n.z == 0:
+				if v < 15:
+					v = maxi(v, _s_effl(lmn, larr, lw, ld, nx, ny - 1, nz, h))
+			if v < 15 and n.z == 0:
 				v = maxi(v, _s_effl(lmn, larr, lw, ld, nx, ny, nz + 1, h))
-				v = maxi(v, _s_effl(lmn, larr, lw, ld, nx, ny, nz - 1, h))
+				if v < 15:
+					v = maxi(v, _s_effl(lmn, larr, lw, ld, nx, ny, nz - 1, h))
 	return clampf(float(v) / 15.0, MIN_AMB, 1.0)
 
 
@@ -1282,15 +1288,19 @@ static func _s_emit_fluid(recs: Array, accs: Array, snap: PackedByteArray, snap_
 			sa.q += 1
 
 
-static func _build_snap_data(snap: PackedByteArray, snap_fl: PackedByteArray, data: PackedByteArray, fl: PackedByteArray, cx: int, cz: int, nbs: Dictionary, h: int) -> void:
+static func _build_snap_data(snap: PackedByteArray, snap_fl: PackedByteArray, data: PackedByteArray, fl: PackedByteArray, cx: int, cz: int, nbs: Dictionary, h: int, y_lo := 0, y_hi := -1, d_off := 0) -> void:
 	# Static mirror of _build_snap: the 8 neighbor copies are ALWAYS present in
 	# nbs (dispatch rule: a missing neighbor takes the sync path instead), so
 	# the Game.world / on-demand-generation fallback of _build_snap is absent.
+	# y_lo/y_hi scope the row fill (slab-scoped edit builds); rows outside the
+	# range stay zero (never sampled by scoped face/interior checks).
+	if y_hi < 0:
+		y_hi = h - 1
 	var d: PackedByteArray = data
 	var fd: PackedByteArray = fl
-	for y in range(h):
+	for y in range(y_lo, y_hi + 1):
 		var si := y * SNAP_ROW
-		var di := y << 8
+		var di := (y - d_off) << 8
 		for lz in range(SIZE):
 			var szi := si + (lz + 1) * SNAP_W
 			var drow := di + (lz << 4)
@@ -1310,9 +1320,9 @@ static func _build_snap_data(snap: PackedByteArray, snap_fl: PackedByteArray, da
 			var nfd: PackedByteArray = nb["f"]
 			var xb := _band(dx)
 			var zb := _band(dz)
-			for y in range(h):
+			for y in range(y_lo, y_hi + 1):
 				var si := y * SNAP_ROW
-				var di := y << 8
+				var di := (y - d_off) << 8
 				for e in zb:
 					var szi := si + int(e[0]) * SNAP_W
 					var drow := di + (int(e[1]) << 4)
@@ -1404,9 +1414,19 @@ static func make_ctx() -> Dictionary:
 # copy handed over by the main thread. Returns fresh per-surface arrays
 # (plain dicts, no Acc objects — the main thread wraps them in Acc in
 # apply_accs) plus the light dict actually used (-> last_eff on apply).
-static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: int, nbs: Dictionary, ctx: Dictionary, ms: Dictionary, eff: Dictionary) -> Dictionary:
+static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: int, nbs: Dictionary, ctx: Dictionary, ms: Dictionary, eff: Dictionary, si0 := 0, si1 := -1, d_off := 0) -> Dictionary:
 	var t0 := Time.get_ticks_msec()
+	var ph_light := 0
+	var ph_box := 0
+	var ph_snap := 0
+	var ph_faces := 0
 	var h: int = int(ctx["h"])
+	si0 = clampi(si0, 0, slab_n() - 1)
+	if si1 < 0:
+		si1 = slab_n() - 1
+	si1 = clampi(maxi(si1, si0), si0, slab_n() - 1)
+	var y_lo := si0 * 16
+	var y_hi := mini(h, (si1 + 1) * 16)
 	# AC-0129: strips ride in on the ctx (main-thread copies, freed with it);
 	# empty eff -> self-light through the PULL kernel (neighbor block light
 	# crosses the boundary), cached eff -> validated upstream by ngen.
@@ -1415,15 +1435,18 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	var blk_strips_b: Array = ctx.get("blk_strips_b", [])
 	var light: Dictionary = eff
 	if light.is_empty() or light.get("mask", null) == null:
+		var tl := Time.get_ticks_msec()
 		light = Lighting.compute_light_flat_chunk_pull(data, cx, cz, h, eff_strips, blk_strips, blk_strips_b)
-	# 20x20 bake box: face light samples the neighbors' FINAL eff at the
-	# boundary (web lightAt :963 — missing neighbor -> margin 0, not 15).
-	var bb := _bake_box(light, eff_strips, h)
+		ph_light = Time.get_ticks_msec() - tl
+	var tb := Time.get_ticks_msec()
+	var bb := _bake_box(light, eff_strips, h, maxi(0, y_lo - 2), mini(h - 1, y_hi + 1))
 	var snap := PackedByteArray()
 	snap.resize(SNAP_ROW * h)
 	var snap_fl := PackedByteArray()
 	snap_fl.resize(SNAP_ROW * h)
-	_build_snap_data(snap, snap_fl, data, fl, cx, cz, nbs, h)
+	_build_snap_data(snap, snap_fl, data, fl, cx, cz, nbs, h, maxi(0, y_lo - 2), mini(h - 1, y_hi + 1), d_off)
+	ph_box = Time.get_ticks_msec() - tb
+	var snap_done := Time.get_ticks_msec()
 	var has_tex: bool = bool(ctx["has_tex"])
 	var oktab: PackedByteArray = ctx["oktab"]
 	var xtab: PackedByteArray = ctx["xtab"]
@@ -1450,14 +1473,63 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	var c_af_l := _zeros(slab_n())
 	var c_ns := _zeros(slab_n())
 	var d: PackedByteArray = data
-	for y in range(h):
-		var dy := y << 8
+	var scoped := (si1 - si0 + 1) < slab_n()
+	var sgrid := PackedByteArray()
+	var ymask := PackedInt32Array()
+	if scoped:
+		# AC-0187: solid-grid + per-column boundary-row bitmask pre-pass. The
+		# interior test below becomes one bitmask read per solid cell instead
+		# of six snap+stab reads (a buried slab is ~95% interior cells).
+		var GW := 18
+		var yb0 := maxi(0, y_lo - 1)
+		var yb1 := mini(h - 1, y_hi)
+		sgrid.resize((yb1 - yb0 + 1) * GW * GW)
+		for y in range(yb0, yb1 + 1):
+			var grow := (y - yb0) * GW * GW
+			var dyg := (y - d_off) << 8
+			for lz in range(-1, 17):
+				var base := grow + (lz + 1) * GW
+				for lx in range(-1, 17):
+					var id2: int
+					if y >= y_lo and y < y_hi and lx >= 0 and lz >= 0:
+						id2 = d[dyg + (lz << 4) + lx]
+					else:
+						id2 = snap[y * SNAP_ROW + (lz + 1) * 18 + (lx + 1)]
+					if stab[id2] > 0:
+						sgrid[base + lx + 1] = 1
+		ymask.resize(256)
+		for lz in range(16):
+			for lx in range(16):
+				var m := 0
+				var gi0 := (y_lo - yb0) * GW * GW + (lz + 1) * GW + (lx + 1)
+				for r in range(y_hi - y_lo):
+					var gi := gi0 + r * GW * GW
+					var bnd := 0
+					if (r == 0 and y_lo == 0) or sgrid[gi - GW * GW] == 0:
+						bnd = 1
+					elif (r == y_hi - y_lo - 1 and y_hi >= h) or sgrid[gi + GW * GW] == 0:
+						bnd = 1
+					elif sgrid[gi - 1] == 0:
+						bnd = 1
+					elif sgrid[gi + 1] == 0:
+						bnd = 1
+					elif sgrid[gi - GW] == 0:
+						bnd = 1
+					elif sgrid[gi + GW] == 0:
+						bnd = 1
+					if bnd:
+						m |= 1 << r
+				ymask[(lz << 4) | lx] = m
+	var tf := Time.get_ticks_msec()
+	for y in range(y_lo, y_hi):
+		var dy := (y - d_off) << 8
+		var si := y >> 4
 		for lz in range(SIZE):
 			var drow := dy + (lz << 4)
 			for lx in range(SIZE):
 				var id := d[drow + lx]
 				if stab[id] == 0:
-					c_ns[y / 16] += 1
+					c_ns[si] += 1
 				if id == 0:
 					continue
 				if id == 5 or id == 24:
@@ -1465,16 +1537,22 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 					if hgt > 0.0:
 						var fcnt := _s_fluid_quad_count(lx, y, lz, id, hgt, snap, snap_fl, h, fn)
 						if id == 5:
-							c_af_w[y / 16] += fcnt
+							c_af_w[si] += fcnt
 							rf_w.append([lx, y, lz, id, hgt])
 						else:
-							c_af_l[y / 16] += fcnt
+							c_af_l[si] += fcnt
 							rf_l.append([lx, y, lz, id, hgt])
 					continue
 				if oktab[id] == 0:
 					continue
-				if stab[id] > 0 and _s_is_interior(lx, y, lz, snap, stab, h):
-					continue
+				if stab[id] > 0:
+					var skip := false
+					if scoped:
+						skip = (ymask[(lz << 4) | lx] & (1 << (y - y_lo))) == 0
+					else:
+						skip = _s_is_interior(lx, y, lz, snap, stab, h)
+					if skip:
+						continue
 				if xtab[id] > 0:
 					if not coarse and ttab[id] > 0:
 						_s_faces(rc_o, xtab, stab, fn, lx, y, lz, id, snap, h)
@@ -1487,6 +1565,7 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 						_s_faces(rk, xtab, stab, fn, lx, y, lz, id, snap, h)
 				else:
 					_s_faces(ro, xtab, stab, fn, lx, y, lz, id, snap, h)
+	ph_faces = Time.get_ticks_msec() - tf
 	var s_ao: Array = []
 	var s_ac: Array = []
 	var s_af_w: Array = []
@@ -1503,6 +1582,14 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	for r in rq:
 		c_ax[int(r[1]) / 16] += 2
 	for si in range(slab_n()):  # AC-0091: runtime slab count (was 5)
+		if scoped and (si < si0 or si > si1):
+			s_ao.append(null)
+			s_ac.append(null)
+			s_af_w.append(null)
+			s_af_l.append(null)
+			s_ak.append(null)
+			s_ax.append(null)
+			continue
 		s_ao.append(_new_acc())
 		s_ac.append(_new_acc())
 		s_af_w.append(_new_acc())
@@ -1520,22 +1607,46 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	# AC-0128 RUN 3: the block-light flood mask rides the light dict (pull
 	# kernel / eff cache) - transient, never per-chunk state.
 	var bmask: PackedByteArray = light["mask"]
-	if not ms.rects.is_empty() and ro.size() > 0:
+	var te := Time.get_ticks_msec()
+	var phet: Array = []
+	# AC-0187: scoped (edit) builds emit per-face quads (plain path) — the
+	# merge-atlas path costs 5-15x per quad and its merged runs span cells
+	# the fast build cannot validate; the wave's full build restores the
+	# merged mesh within 1-3 frames. Geometry is identical either way.
+	if not ms.rects.is_empty() and ro.size() > 0 and not scoped:
 		_s_emit_ro_merged(ro, s_ao, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, ctx, ms, bmask)
 	else:
 		_s_emit_faces(ro, s_ao, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, xtab, ctx, bmask)
+	phet.append(Time.get_ticks_msec() - te)
+	te = Time.get_ticks_msec()
 	_s_emit_faces(rc_o, s_ac, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, xtab, ctx, bmask)
+	phet.append(Time.get_ticks_msec() - te)
+	te = Time.get_ticks_msec()
 	_s_emit_fluid(rf_w, s_af_w, snap, snap_fl, has_tex, ctx, h)
+	phet.append(Time.get_ticks_msec() - te)
+	te = Time.get_ticks_msec()
 	_s_emit_fluid(rf_l, s_af_l, snap, snap_fl, has_tex, ctx, h)
+	phet.append(Time.get_ticks_msec() - te)
+	te = Time.get_ticks_msec()
 	_s_emit_faces(rk, s_ak, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, xtab, ctx, bmask)
+	phet.append(Time.get_ticks_msec() - te)
+	te = Time.get_ticks_msec()
 	_s_emit_xquad(rq, s_ax, bb["mn"], bb["arr"], 20, 20, cx, cz, has_tex, ctx, bmask)
+	phet.append(Time.get_ticks_msec() - te)
+	var ph_emit: int = phet[0] + phet[1] + phet[2] + phet[3] + phet[4] + phet[5]
 	var slabs_out: Array = []
-	for si in range(slab_n()):  # AC-0091: runtime slab count (was 5)
+	for si in range(si0, si1 + 1):
 		slabs_out.append([s_ao[si], s_ac[si], s_af_w[si], s_af_l[si], s_ak[si], s_ax[si], c_ns[si] == 0])
 	return {
 		"slabs": slabs_out,
 		"light": light,
 		"wms": Time.get_ticks_msec() - t0,
+		"si0": si0,
+		"si1": si1,
+		"nq": ro.size() + rc_o.size() + rk.size() + rq.size() + rf_w.size() + rf_l.size(),
+		"ns": [ro.size(), rc_o.size(), rk.size(), rq.size(), rf_w.size(), rf_l.size()],
+		"phet": phet,
+		"ph": [ph_light, ph_box, ph_emit, ph_faces],
 	}
 
 
@@ -1547,11 +1658,13 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 # directly across, t = our z for E/W, our x for S/N); CORNER idx =
 # (a*2+b)*h + y (a = x-depth, b = z-depth, 0 = closest). Light only scales
 # vertex shade (geometry is snap-only) -> MINFO counts unaffected.
-static func _bake_box(light: Dictionary, eff_strips: Array, h: int) -> Dictionary:
+static func _bake_box(light: Dictionary, eff_strips: Array, h: int, y_lo := 0, y_hi := -1) -> Dictionary:
 	var w := 20
 	var arr := PackedByteArray()
 	arr.resize(w * w * h)
 	var bmn := Vector3i(-2, 0, -2)
+	if y_hi < 0:
+		y_hi = h - 1
 	if light.is_empty():
 		return {"mn": bmn, "w": w, "d": w, "arr": arr}
 	var mn: Vector3i = light["mn"]
@@ -1559,7 +1672,7 @@ static func _bake_box(light: Dictionary, eff_strips: Array, h: int) -> Dictionar
 	var lwc := int(light["w"])
 	var ldc := int(light["d"])
 	bmn = Vector3i(mn.x - 2, 0, mn.z - 2)
-	for y in range(h):
+	for y in range(y_lo, y_hi + 1):
 		var src_row := y * lwc * ldc
 		var dst_row := y * w * w
 		for bz in range(2, 18):
@@ -1575,7 +1688,7 @@ static func _bake_box(light: Dictionary, eff_strips: Array, h: int) -> Dictionar
 		var csize := 4 * h
 		var E: PackedByteArray = eff_strips[0]
 		if E.size() == fsize:
-			for y in range(h):
+			for y in range(y_lo, y_hi + 1):
 				var row := y * w * w
 				var srow := y * 16
 				for t in range(16):
@@ -1583,7 +1696,7 @@ static func _bake_box(light: Dictionary, eff_strips: Array, h: int) -> Dictionar
 					arr[row + (2 + t) * w + 19] = E[c1 + srow + t]
 		var W: PackedByteArray = eff_strips[1]
 		if W.size() == fsize:
-			for y in range(h):
+			for y in range(y_lo, y_hi + 1):
 				var row := y * w * w
 				var srow := y * 16
 				for t in range(16):
@@ -1591,7 +1704,7 @@ static func _bake_box(light: Dictionary, eff_strips: Array, h: int) -> Dictionar
 					arr[row + (2 + t) * w + 0] = W[c1 + srow + t]
 		var S: PackedByteArray = eff_strips[2]
 		if S.size() == fsize:
-			for y in range(h):
+			for y in range(y_lo, y_hi + 1):
 				var row := y * w * w
 				var srow := y * 16
 				for t in range(16):
@@ -1599,7 +1712,7 @@ static func _bake_box(light: Dictionary, eff_strips: Array, h: int) -> Dictionar
 					arr[row + 19 * w + (2 + t)] = S[c1 + srow + t]
 		var N: PackedByteArray = eff_strips[3]
 		if N.size() == fsize:
-			for y in range(h):
+			for y in range(y_lo, y_hi + 1):
 				var row := y * w * w
 				var srow := y * 16
 				for t in range(16):
@@ -1609,25 +1722,25 @@ static func _bake_box(light: Dictionary, eff_strips: Array, h: int) -> Dictionar
 		if SE.size() == csize:
 			for a in range(2):
 				for b in range(2):
-					for y in range(h):
+					for y in range(y_lo, y_hi + 1):
 						arr[(18 + b) * w + (18 + a)] = SE[(a * 2 + b) * h + y]
 		var SW: PackedByteArray = eff_strips[5]
 		if SW.size() == csize:
 			for a in range(2):
 				for b in range(2):
-					for y in range(h):
+					for y in range(y_lo, y_hi + 1):
 						arr[(18 + b) * w + (1 - a)] = SW[(a * 2 + b) * h + y]
 		var NE: PackedByteArray = eff_strips[6]
 		if NE.size() == csize:
 			for a in range(2):
 				for b in range(2):
-					for y in range(h):
+					for y in range(y_lo, y_hi + 1):
 						arr[(1 - b) * w + (18 + a)] = NE[(a * 2 + b) * h + y]
 		var NW: PackedByteArray = eff_strips[7]
 		if NW.size() == csize:
 			for a in range(2):
 				for b in range(2):
-					for y in range(h):
+					for y in range(y_lo, y_hi + 1):
 						arr[(1 - b) * w + (1 - a)] = NW[(a * 2 + b) * h + y]
 	return {"mn": bmn, "w": w, "d": w, "arr": arr}
 
@@ -2220,6 +2333,7 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	for si in range(slab_n()):  # AC-0091: runtime slab count (was 5)
 		_assemble_slab(slabs[si], s_ao[si], s_ac[si], s_af_w[si], s_af_l[si], s_ak[si], s_ax[si], ms, c_ns[si] == 0)
 	mesh_built = true
+	mesh_gen += 1
 	_post_build_collision()
 
 
@@ -2259,6 +2373,34 @@ func apply_accs(res: Dictionary, ms: Dictionary) -> void:
 		var row: Array = res.slabs[si]
 		_assemble_slab(slabs[si], _acc_from_dict(row[0]), _acc_from_dict(row[1]), _acc_from_dict(row[2]), _acc_from_dict(row[3]), _acc_from_dict(row[4]), _acc_from_dict(row[5]), ms, bool(row[6]))
 	mesh_built = true
+	mesh_gen += 1
+	_post_build_collision()
+
+
+func apply_edit_accs(res: Dictionary, ms: Dictionary) -> void:
+	var si0 := int(res.get("si0", 0))
+	var si1 := int(res.get("si1", slab_n() - 1))
+	for si in range(si0, si1 + 1):
+		var s = slabs[si]
+		if s.mesh_instance != null:
+			s.mesh_instance.queue_free()
+			s.mesh_instance = null
+		if s.fluid_instance != null:
+			s.fluid_instance.queue_free()
+			s.fluid_instance = null
+		if s.flora_instance != null:
+			s.flora_instance.queue_free()
+			s.flora_instance = null
+		if s.occluder != null:
+			s.occluder.queue_free()
+			s.occluder = null
+	last_eff = _eff_store(res.light)
+	last_blk_ring = res.light.get("ring", PackedInt32Array())
+	for i in range(si1 - si0 + 1):
+		var row: Array = res.slabs[i]
+		_assemble_slab(slabs[si0 + i], _acc_from_dict(row[0]), _acc_from_dict(row[1]), _acc_from_dict(row[2]), _acc_from_dict(row[3]), _acc_from_dict(row[4]), _acc_from_dict(row[5]), ms, bool(row[6]))
+	mesh_built = true
+	mesh_gen += 1
 	_post_build_collision()
 
 

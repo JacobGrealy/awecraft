@@ -1140,6 +1140,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "lodswap":
 			await _lodswap_test(spawn)
 			return
+		if logic == "editfront":
+			await _editfront_test(spawn)
+			return
 		if logic == "chunkio":
 			await _chunkio_test(spawn)
 			return
@@ -3157,6 +3160,164 @@ func _editperf_test(spawn: Vector3) -> void:
 		"total_ms": Time.get_ticks_msec() - t_edit,
 	})
 	get_tree().quit()
+
+
+# AC-0187 probe (AWECRAFT_LOGIC=editfront, harness-only, never runs in game):
+# the real gate. R=50 with the far queue populated in the thousands (the
+# recenter enqueues the whole 8253 stream set, so at spawn-3x3 build time
+# queue_size sits at ~7710 like the standing load), then BREAK a surface
+# cell and separately PLACE one, measuring edit -> first mesh apply of the
+# chunk (the hole/appearance visible) via world's handoff timestamp hook.
+# Gates: queue_size in the thousands, remesh < 50 ms per case, zero drop
+# frames (mesh presence every frame), chunk meshed before and after.
+func _editfront_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var R := 50
+	world.render_radius = R
+	world.recenter(spawn.x, spawn.z, true)
+	var pcx := int(world.last_pcx)
+	var pcz := int(world.last_pcz)
+	var wb := 0
+	while wb < 3600:
+		var allm := true
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
+				if c == null or not c.mesh_built:
+					allm = false
+					break
+			if not allm:
+				break
+		if allm:
+			break
+		await get_tree().process_frame
+		wb += 1
+	var rw := 0
+	while world._rec_pending and rw < 3600:
+		await get_tree().process_frame
+		rw += 1
+	var T = world.chunks.get("%d,%d" % [pcx, pcz])
+	if T == null or not T.mesh_built:
+		Debug.result({"ok": false, "error": "player chunk never built"})
+		get_tree().quit()
+		return
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	var cell := Vector3i(sx, world.surface_top(sx, sz), sz)
+	var okc := _breakable(world.get_block(cell.x, cell.y, cell.z))
+	if not okc:
+		for dx in range(-8, 9, 2):
+			if okc:
+				break
+			for dz in range(-8, 9, 2):
+				var t2: int = world.surface_top(sx + dx, sz + dz)
+				if _breakable(world.get_block(sx + dx, t2, sz + dz)):
+					cell = Vector3i(sx + dx, t2, sz + dz)
+					okc = true
+					break
+	if not okc:
+		Debug.result({"ok": false, "error": "no breakable surface cell near spawn"})
+		get_tree().quit()
+		return
+	var tq := 0
+	var pkey := "%d,%d" % [pcx, pcz]
+	while tq < 2400 and not (world.light_dirty.is_empty() and world.light_pending.is_empty() and not world._tm_inflight_keys.has(pkey)):
+		await get_tree().process_frame
+		tq += 1
+	var q_before := int(world.queue_size)
+	var scoped0 := int(world.perf_edit_front_scoped)
+	var full0 := int(world.perf_edit_front_full)
+	var br := await _editfront_case(T, cell, 0)
+	var tw := 0
+	while tw < 2400 and not (world.light_dirty.is_empty() and world.light_pending.is_empty() and not world._tm_inflight_keys.has(pkey)):
+		await get_tree().process_frame
+		tw += 1
+	var pl := await _editfront_case(T, cell, 2)
+	Debug.result({
+		"ok": bool(br["ok"]) and bool(pl["ok"]) and q_before > 1000,
+		"R": R,
+		"queue_size": q_before,
+		"queue_after": int(world.queue_size),
+		"tm_cap": int(world.threadmesh_max),
+		"inflight_at_break": int(br["inflight"]),
+		"scoped": int(world.perf_edit_front_scoped) - scoped0,
+		"full": int(world.perf_edit_front_full) - full0,
+		"break": br,
+		"place": pl,
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+	})
+	get_tree().quit()
+
+
+func _editfront_case(T: Node3D, cell: Vector3i, new_id: int) -> Dictionary:
+	var key := "%d,%d" % [int(T.cx), int(T.cz)]
+	var gen0 := int(T.mesh_gen)
+	var inflight0 := int(world.threadmesh_inflight.size())
+	var drop_frames := 0
+	var present_before := _editfront_present(T)
+	world._editprobe_key = key
+	world._editprobe_ms = -1.0
+	world._editprobe_wms = 0
+	world._editprobe_kind = ""
+	world._editprobe_drop = 0
+	var prof: Array = world._prof_ring
+	var prof_last: Array = []
+	for i in range(prof.size()):
+		prof_last.append(prof[i])
+		if prof_last.size() >= 8:
+			prof_last.pop_front()
+	var t0u := Time.get_ticks_usec()
+	world._editprobe_t0_usec = t0u
+	var sb0 := Time.get_ticks_usec()
+	world.set_block(cell.x, cell.y, cell.z, new_id)
+	var dispatch_ms := (Time.get_ticks_usec() - sb0) / 1000.0
+	var frames := 0
+	while frames < 600 and world._editprobe_ms < 0.0:
+		await get_tree().process_frame
+		frames += 1
+		if not _editfront_present(T):
+			drop_frames += 1
+	var ms := float(world._editprobe_ms)
+	world._editprobe_key = ""
+	var present_after := _editfront_present(T)
+	return {
+		"ms": ms,
+		"frames": frames,
+		"drop_frames": drop_frames,
+		"inflight": inflight0,
+		"cell": [cell.x, cell.y, cell.z],
+		"cell_after": world.get_block(cell.x, cell.y, cell.z),
+		"gen_delta": int(T.mesh_gen) - gen0,
+		"present_before": present_before,
+		"present_after": present_after,
+		"dispatch_ms": dispatch_ms,
+		"wms": world._editprobe_wms,
+		"ph": world._editprobe_ph,
+		"dnbs": world._editprobe_dnbs,
+		"dstrips": world._editprobe_dstrips,
+		"dq": world._editprobe_dq,
+		"prof": prof_last,
+		"nq": world._editprobe_nq,
+		"prime": world._editprobe_prime,
+		"done_ms": world._editprobe_done_ms,
+		"handoff_ms": int((world._editprobe_handoff_at - t0u) / 1000.0),
+		"ns": world._editprobe_ns,
+		"phet": world._editprobe_phet,
+		"kind": world._editprobe_kind,
+		"drops": world._editprobe_drop,
+		"ok": ms >= 0.0 and ms < 50.0 and drop_frames == 0 and present_before and present_after and world.get_block(cell.x, cell.y, cell.z) == new_id,
+	}
+
+
+func _editfront_present(T: Node3D) -> bool:
+	for s in T.slabs:
+		if s.mesh_instance != null and s.mesh_instance.mesh != null:
+			return true
+		if s.fluid_instance != null and s.fluid_instance.mesh != null:
+			return true
+		if s.flora_instance != null and s.flora_instance.mesh != null:
+			return true
+	return false
 
 
 # AC-0126 probe (env-gated by AWECRAFT_LOGIC=breakspike, never runs in

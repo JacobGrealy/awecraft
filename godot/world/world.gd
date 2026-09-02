@@ -116,6 +116,45 @@ var perf_edit_dispatches := 0
 var perf_edit_defers := 0
 var perf_edit_syncs := 0
 var perf_edit_light_passes := 0
+# AC-0187: block-edit remesh front queue. set_block pushes the edited chunk's
+# key (with the dirty slab closure) here; _process drains it BEFORE the
+# AC-0126 light_pending flush so the hole lands on the next frame instead of
+# behind the far-queue drain. Each entry = {"key", "si0", "si1"}.
+var edit_front: Array = []
+var edit_front_set := {}
+# AC-0187: last full light dict (mask included) per edited chunk, stashed
+# from the eff cache BEFORE set_block's eviction. A stale-but-current light
+# lets the scoped worker build skip the whole-chunk light recompute; the
+# stored-form equality check at dispatch drops the entry when the chunk was
+# re-lit since the edit (the light wave already remeshed it).
+var _edit_stale_eff := {}
+var perf_edit_front_scoped := 0
+var perf_edit_front_full := 0
+# AC-0187: count of scoped edit builds dispatched but not yet handed off.
+# While > 0 the main thread YIELDS its heavy streaming work (far-queue
+# drain, light flush, tex refresh, non-edit handoffs) so the edit handoff
+# lands on a short frame instead of waiting behind a 300 ms drain burst.
+var edit_inflight_count := 0
+# AC-0187 probe hook: the handoff stamps the first mesh landing of the
+# probe's chunk after an edit (edit -> hole-visible wall time). Empty key =
+# probe idle; the check is one string compare per handoff.
+var _editprobe_key := ""
+var _editprobe_t0_usec := 0
+var _editprobe_ms := -1.0
+var _editprobe_wms := 0
+var _editprobe_kind := ""
+var _editprobe_drop := 0
+var _editprobe_dnbs := 0
+var _editprobe_dstrips := 0
+var _editprobe_ph := []
+var _editprobe_dq := 0
+var _editprobe_nq := 0
+var _editprobe_prime := false
+var _editprobe_handoff_at := 0
+var _editprobe_done_ms := 0
+var _editprobe_prime_flag := false
+var _editprobe_ns := []
+var _editprobe_phet := []
 var perf_build_units := 0
 var perf_drain_frames := 0
 var perf_max_drain_ms := 0
@@ -272,6 +311,8 @@ var _tg_max_norm := 3
 var _tm_max_norm := 3
 var _tm_slots = {}
 var _tm_inflight_keys: Dictionary = {}
+var _tm_next_slot := 0
+var threadmesh_edit_pool = null
 var _tm_ctx: Dictionary = {}
 var _tm_ms_full: Dictionary = {"tex": null, "rects": {}}
 # AC-0160: atlas identity _tm_ctx was built against (null until the first
@@ -391,6 +432,13 @@ func _ready() -> void:
 		threadmesh_max = maxi(1, menv.to_int())
 	threadmesh_max = mini(threadmesh_max, 6)
 	threadmesh_pool = Engine.get_singleton("WorkerThreadPool")
+	# AC-0187: dedicated lane for the block-edit fast remesh. The shared
+	# engine pool runs the far-queue builds (HIGH) and the data pass (LOW,
+	# 3-thread share) — an edit task queued there waits behind full builds
+	# (measured 460 ms at R50 streaming). A private single thread makes the
+	# edit build start the moment it is dispatched.
+	threadmesh_edit_pool = EditPool.new()
+	threadmesh_edit_pool.start()
 	# Pre-warm everything the worker path touches so a worker thread
 	# never dereferences Data/Game: tables, block-table snapshot, and the
 	# merge atlas (static cache keyed by atlas identity).
@@ -485,6 +533,11 @@ func _exit_tree() -> void:
 	_io_read_inflight.clear()  # AC-0164
 	_io_write_inflight.clear()
 	_io_slots.clear()
+	# AC-0187: the edit lane is this node's own thread (not the engine
+	# singleton); its queue is drained above, so stop it at exit.
+	if threadmesh_edit_pool != null:
+		threadmesh_edit_pool.stop()
+		threadmesh_edit_pool = null
 
 # AC-0158: fixed-step 20 Hz game tick on the real frame delta (Bedrock
 # Realms simulation clock; replaces the 5 Hz fluid Timer). A stalled frame
@@ -636,7 +689,16 @@ func _cull_set_vis(s, vis: bool) -> void:
 	if fa != null and fa.visible != vis:
 		fa.visible = vis
 
+var _prof_ring: Array = []
+
+
+func _physics_process(_d: float) -> void:
+	if not threadmesh_inflight.is_empty():
+		threadmesh_poll()
+
+
 func _process(_delta: float) -> void:
+	var pf0 := Time.get_ticks_usec()
 	_game_tick_accumulate(_delta)  # AC-0158: 20 Hz game tick (simulation clock)
 	_drain_save_queue()  # AC-0155: amortized full-column writes (1-2/frame)
 	# AC-0178: BEFORE the idle early-return — the completion state IS the
@@ -656,7 +718,7 @@ func _process(_delta: float) -> void:
 	_frustum_cull_pass()
 	# threadmesh_inflight keeps this running while mesh tasks are in flight
 	# even when every bookkeeping list is drained (else the poll never runs).
-	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty() and threadmesh_inflight.is_empty() and _io_read_inflight.is_empty() and _io_write_inflight.is_empty() and not _rec_pending and _bl_want.is_empty() and _col_pending.is_empty():
+	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty() and threadmesh_inflight.is_empty() and _io_read_inflight.is_empty() and _io_write_inflight.is_empty() and not _rec_pending and _bl_want.is_empty() and _col_pending.is_empty() and edit_front.is_empty():
 		return
 	var was_active := flush_active
 	var added := false
@@ -678,7 +740,10 @@ func _process(_delta: float) -> void:
 		if c != null and c.mesh_built and not light_pending_set.has(key):
 			fluid_list.append(c)
 	fluid_dirty = {}
-	if not light_pending.is_empty() and not _startup_pending():
+	if not edit_front.is_empty():
+		_edit_front_drain()
+	var pf1 := Time.get_ticks_usec()
+	if not light_pending.is_empty() and not _startup_pending() and edit_inflight_count == 0:
 		# AC-0126: edit (post-break) flush — staggered 1 remesh/frame on the
 		# AC-0107 worker path. eff = {} -> the worker self-lights its contained
 		# kernel (byte-identical to the sync margin-0 path). defer_on_cap=true
@@ -733,8 +798,11 @@ func _process(_delta: float) -> void:
 			var ft := Time.get_ticks_msec() - t0
 			if ft > perf_max_frame_ms:
 				perf_max_frame_ms = ft
-		if light_pending.is_empty():
-			flush_active = false
+	# AC-0187: the clear must run even when the section is skipped (a burst
+	# can drain to empty at section start); a stale-true flush_active
+	# suppresses the perf-counter reset of the next burst.
+	if light_pending.is_empty():
+		flush_active = false
 	for c in fluid_list:
 		var cc: Node3D = c
 		if _build_ready(int(cc.cx), int(cc.cz)):
@@ -747,6 +815,11 @@ func _process(_delta: float) -> void:
 	_recenter_slice()
 	_drain_build_queue()
 	_drain_tex_refresh()
+	var pf2 := Time.get_ticks_usec()
+	_prof_ring.append([float(pf1 - pf0) / 1000.0, float(pf2 - pf1) / 1000.0,
+		threadmesh_inflight.size(), queue_size, light_pending.size()])
+	if _prof_ring.size() > 120:
+		_prof_ring.pop_front()
 
 func refresh_textures() -> void:
 	tex_refresh = chunks.keys().duplicate()
@@ -760,7 +833,7 @@ func refresh_textures() -> void:
 		_tm_ctx_atlas = Data.atlas_tex  # AC-0160: re-stamp (the _process guard would catch it, but stamp now)
 
 func _drain_tex_refresh() -> void:
-	if tex_refresh.is_empty():
+	if tex_refresh.is_empty() or edit_inflight_count > 0:
 		return
 	var t0 := Time.get_ticks_msec()
 	var done := 0
@@ -1196,31 +1269,46 @@ func threadgen_handoff(e: Dictionary, data: PackedByteArray) -> void:
 
 # --- AC-0107 threaded mesh+light (desktop) -------------------------------
 
-func _threadmesh_worker() -> void:
+func _tm_worker_run(skey: int) -> void:
 	# Worker body: pure-static pipeline (ChunkScript.build_accs) on fresh
 	# copies. Reads only its own entry (written before add_task) and writes
 	# entry["result"] — the AC-0082 handoff pattern, proven in this codebase.
-	var tid = threadmesh_pool.get_caller_task_id()
-	# AC-0152: the dispatcher sets _tm_slots[tid] a couple of statements AFTER
-	# add_task returns; an idle worker thread can preempt the main thread in
-	# that window and see no slot yet. The slot always appears (it is set
-	# before the main thread can yield to the pool again and only erased at
-	# completion, i.e. after this worker returns), so spin briefly instead of
-	# dropping the task. Giving up still lands in the handoff datadrop +
-	# retrigger path, which re-queues (the _remove_entry queued_keys fix
-	# makes that re-queue effective).
-	var entry = _tm_slots.get(tid)
+	# skey is a globally unique slot id (one counter across BOTH pools) —
+	# pool-local task ids would collide between the shared pool and the
+	# dedicated edit pool.
+	# AC-0152: the dispatcher sets _tm_slots[skey] a couple of statements
+	# AFTER add_task returns; an idle worker thread can preempt the main
+	# thread in that window and see no slot yet. The slot always appears
+	# (it is set before the main thread can yield to the pool again and only
+	# erased at completion, i.e. after this worker returns), so spin briefly
+	# instead of dropping the task. Giving up still lands in the handoff
+	# datadrop + retrigger path, which re-queues (the _remove_entry
+	# queued_keys fix makes that re-queue effective).
+	var entry = _tm_slots.get(skey)
 	var ns := 0
 	while entry == null and ns < 200:
 		OS.delay_msec(1)
-		entry = _tm_slots.get(tid)
+		entry = _tm_slots.get(skey)
 		ns += 1
 	if entry == null:
 		return
+	entry["t_run"] = Time.get_ticks_usec()
 	# AC-0152/AC-0160: all bands (0/1/2) flow through the normal build_accs
 	# path — band 2 lost its one-quad impostor (removed per user decision)
 	# and is a full mesh now, so every entry carries nbs/eff like 0/1.
-	entry["result"] = ChunkScript.build_accs(entry["data"], entry["fl"], int(entry["cx"]), int(entry["cz"]), entry["nbs"], entry["ctx"], entry["ms"], entry["eff"])
+	# AC-0187: edit entries carry si0/si1 (slab-scoped fast remesh); the
+	# defaults rebuild every slab exactly as before.
+	var res = ChunkScript.build_accs(entry["data"], entry["fl"], int(entry["cx"]), int(entry["cz"]), entry["nbs"], entry["ctx"], entry["ms"], entry["eff"], int(entry.get("si0", 0)), int(entry.get("si1", -1)), int(entry.get("d_off", 0)))
+	if bool(entry.get("epool", false)):
+		# AC-0187: the edit lane has no engine task id — completion rides a
+		# per-entry flag written under the pool's guard mutex (the barrier
+		# the shared pool's is_task_completed provides for its tasks).
+		if threadmesh_edit_pool != null:
+			threadmesh_edit_pool.mark_done(entry, res)
+		else:
+			entry["result"] = res
+	else:
+		entry["result"] = res
 
 func threadmesh_poll() -> void:
 	if threadmesh_inflight.is_empty():
@@ -1236,14 +1324,38 @@ func threadmesh_poll() -> void:
 	var hb_max := LOAD_TM_HANDOFF if loading_active else 64
 	var hb_t0 := Time.get_ticks_usec() if timing else 0
 	var hb_n := 0
+	var found := true
+	while found and hb_n < hb_max:
+		found = false
+		for j in range(threadmesh_inflight.size()):
+			var ee: Dictionary = threadmesh_inflight[j]
+			if bool(ee.get("epool", false)) and bool(ee.get("done", false)):
+				var eskey = int(ee.get("skey", -1))
+				threadmesh_inflight.remove_at(j)
+				_tm_inflight_keys.erase(ee["key"])
+				if eskey >= 0:
+					_tm_slots.erase(eskey)
+				_editprobe_prime_flag = true
+				threadmesh_handoff(ee, ee.get("result", null))
+				hb_n += 1
+				found = true
+				break
 	var i := 0
-	while i < threadmesh_inflight.size() and hb_n < hb_max:
+	while i < threadmesh_inflight.size() and hb_n < hb_max and edit_inflight_count == 0:
 		var e: Dictionary = threadmesh_inflight[i]
 		var tid = int(e["tid"])
-		if threadmesh_pool.is_task_completed(tid):
+		var skey = int(e.get("skey", -1))
+		var completed := false
+		if bool(e.get("epool", false)):
+			completed = bool(e.get("done", false))
+		else:
+			completed = threadmesh_pool.is_task_completed(tid)
+		if completed:
 			threadmesh_inflight.remove_at(i)
 			_tm_inflight_keys.erase(e["key"])
-			_tm_slots.erase(tid)
+			if skey >= 0:
+				_tm_slots.erase(skey)
+			_editprobe_prime_flag = false
 			threadmesh_handoff(e, e.get("result", null))
 			hb_n += 1
 			continue
@@ -1265,6 +1377,8 @@ func _tm_retrigger(key: String, c: Node3D, e: Dictionary) -> void:
 
 func threadmesh_handoff(e: Dictionary, res) -> void:
 	var key: String = e["key"]
+	if bool(e.get("edit", false)):
+		edit_inflight_count = maxi(0, edit_inflight_count - 1)
 	var c = chunks.get(key)
 	if c == null:
 		_tm_stale += 1
@@ -1282,8 +1396,25 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			print("TMESH DATADROP %d,%d (no result)" % [int(e["cx"]), int(e["cz"])])
 		_tm_retrigger(key, c, e)
 		return
-	if c.data != e["data"] or c.fl != e["fl"]:
+	var stale := false
+	if bool(e.get("scoped_snap", false)):
+		# AC-0187: edit entries carry row-scoped snapshots (d_off..d_hi); a
+		# change outside the scoped rows cannot affect the applied slabs
+		# (geometry outside is untouched, light is frozen by design).
+		var dlo := int(e["d_off"])
+		var dhin := int(e["d_hi"])
+		for y in range(dlo, dhin + 1):
+			var full := y << 8
+			var sc := (y - dlo) << 8
+			if c.data.slice(full, full + 256) != e["data"].slice(sc, sc + 256) or c.fl.slice(full, full + 256) != e["fl"].slice(sc, sc + 256):
+				stale = true
+				break
+	else:
+		stale = c.data != e["data"] or c.fl != e["fl"]
+	if stale:
 		_tm_datadrop += 1
+		if key == _editprobe_key:
+			_editprobe_drop += 1
 		if _tm_debug:
 			print("TMESH DATADROP %d,%d (data/fl changed mid-build)" % [int(e["cx"]), int(e["cz"])])
 		_tm_retrigger(key, c, e)
@@ -1295,6 +1426,37 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		if _tm_debug:
 			print("TMESH BANDBREAK %d,%d (band %d != %d)" % [int(e["cx"]), int(e["cz"]), int(e.get("band", -1)), int(c.band)])
 		_tm_retrigger(key, c, e)
+		return
+	if not _editprobe_key.is_empty() and key == _editprobe_key:
+		_editprobe_kind = "edit" if bool(e.get("edit", false)) else "wave"
+		if _editprobe_t0_usec > 0:
+			_editprobe_ms = float(Time.get_ticks_usec() - _editprobe_t0_usec) / 1000.0
+			_editprobe_t0_usec = 0
+			_editprobe_wms = int(res.get("wms", 0))
+			_editprobe_ph = res.get("ph", [])
+			_editprobe_dq = int(int(e.get("t_run", 0)) - int(e.get("t_submit", 0)))
+			_editprobe_nq = int(res.get("nq", 0))
+			_editprobe_prime = _editprobe_prime_flag
+			_editprobe_handoff_at = Time.get_ticks_usec()
+			_editprobe_done_ms = int((int(e.get("t_done", 0)) - int(e.get("t_submit", 0))) / 1000.0)
+			_editprobe_ns = res.get("ns", [])
+			_editprobe_phet = res.get("phet", [])
+			_editprobe_prime_flag = false
+	if bool(e.get("edit", false)):
+		var ta2 := Time.get_ticks_msec()
+		var old_eff2 = c.last_eff
+		c.apply_edit_accs(res, _tm_ms_full)
+		perf_build_ms += Time.get_ticks_msec() - ta2
+		perf_build_worker_ms += int(res.get("wms", 0))
+		_count_collision_build(c)
+		_stage_check(c, key)
+		_eff_landed(c, old_eff2, res.get("light", {}))
+		if bool(e.get("eff_trust", false)):
+			_eff_cache_put(key, c.data, res.get("light", {}), e.get("ngen", null))
+		_tm_handoff += 1
+		_drop_queued(key)
+		if timing or _tm_debug:
+			print("BUILDCHUNK_E %d,%d build_ms=%d t=%d" % [int(e["cx"]), int(e["cz"]), int(res.get("wms", 0)), Time.get_ticks_msec()])
 		return
 	var ta := Time.get_ticks_msec()
 	var old_eff = c.last_eff
@@ -1342,6 +1504,186 @@ func _drop_queued(key: String) -> void:
 			queued_keys.erase(key)
 			queue_size -= 1
 			return
+
+func _eff_stored_eq(a: Dictionary, b: Dictionary) -> bool:
+	if int(a.get("w", -1)) != int(b.get("w", -1)):
+		return false
+	if int(a.get("d", -1)) != int(b.get("d", -1)):
+		return false
+	if a.get("mn", null) != b.get("mn", null):
+		return false
+	var aa: PackedByteArray = a.get("arr", PackedByteArray())
+	var bb: PackedByteArray = b.get("arr", PackedByteArray())
+	if aa.size() != bb.size():
+		return false
+	if aa != bb:
+		return false
+	if a.get("blk_src", -1) != b.get("blk_src", -1):
+		return false
+	return true
+
+
+func _edit_front_add(key: String, y: int) -> void:
+	var si0 := maxi(0, (y - 3) / 16)
+	var si1 := mini(ChunkScript.slab_n() - 1, (y + 1) / 16)
+	for e in edit_front:
+		if e["key"] == key:
+			e["si0"] = mini(int(e["si0"]), si0)
+			e["si1"] = maxi(int(e["si1"]), si1)
+			return
+	edit_front.append({"key": key, "si0": si0, "si1": si1})
+	edit_front_set[key] = true
+	_edit_front_dispatch(key)
+
+
+func _edit_front_entry(key: String):
+	for e in edit_front:
+		if e["key"] == key:
+			return e
+	return null
+
+
+func _edit_front_drop(key: String) -> void:
+	for i in range(edit_front.size()):
+		if edit_front[i]["key"] == key:
+			edit_front.remove_at(i)
+			edit_front_set.erase(key)
+			return
+
+
+func _edit_front_dispatch(key: String) -> void:
+	var e: Dictionary = _edit_front_entry(key)
+	if e == null:
+		return
+	var c = chunks.get(key)
+	if c == null or not bool(c.mesh_built):
+		_edit_front_drop(key)
+		return
+	if not _build_ready(int(c.cx), int(c.cz)):
+		return
+	if _tm_inflight_keys.has(key):
+		return
+	if _edit_stale_eff.size() > 32:
+		_edit_stale_eff.clear()
+	var cached = _edit_stale_eff.get(key)
+	if cached == null:
+		if not _mesh_dispatch(c, int(c.cx), int(c.cz), {}, true, true):
+			return
+		perf_edit_front_full += 1
+		_edit_front_drop(key)
+		return
+	if not _eff_stored_eq(cached.eff, c.last_eff):
+		_edit_front_drop(key)
+		return
+	if not _mesh_dispatch_edit(c, int(c.cx), int(c.cz), int(e["si0"]), int(e["si1"]), cached.eff):
+		return
+	perf_edit_front_scoped += 1
+	_edit_front_drop(key)
+
+
+func _edit_front_drain() -> void:
+	if _shutting_down or edit_front.is_empty():
+		return
+	var key: String = edit_front[0]["key"]
+	var c = chunks.get(key)
+	if c == null or not bool(c.mesh_built):
+		_edit_front_drop(key)
+		return
+	_edit_front_dispatch(key)
+
+
+func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_eff: Dictionary) -> bool:
+	var key := _key(cx, cz)
+	c.col_immediate = _col_immediate_for(cx, cz)
+	if c.data.is_empty():
+		return false
+	if _tm_inflight_keys.has(key):
+		_tm_dedup += 1
+		return false
+	if threadmesh_inflight.size() >= threadmesh_max:
+		_tm_capdrop += 1
+		if _tm_debug:
+			print("TMESH EDITCAPDROP %d,%d inflight=%d" % [cx, cz, threadmesh_inflight.size()])
+		return false
+	var y_lo := si0 * 16
+	var y_hi := mini(Data.HEIGHT, (si1 + 1) * 16)
+	var d_lo := maxi(0, y_lo - 2)
+	var d_hi := mini(Data.HEIGHT - 1, y_hi + 1)
+	var nrows := d_hi - d_lo + 1
+	var tn0 := Time.get_ticks_usec()
+	var sdata := PackedByteArray()
+	sdata.resize(nrows * 256)
+	sdata.clear()
+	var sfl := PackedByteArray()
+	sfl.resize(nrows * 256)
+	sfl.clear()
+	for y in range(d_lo, d_hi + 1):
+		var full := y << 8
+		sdata.append_array(c.data.slice(full, full + 256))
+		sfl.append_array(c.fl.slice(full, full + 256))
+	var nbs: Dictionary = {}
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			if (dx == 0) == (dz == 0):
+				continue
+			var nc = chunks.get(_key(cx + dx, cz + dz))
+			if nc == null or nc.data.is_empty():
+				return false
+			var sd := PackedByteArray()
+			sd.resize(nrows * 256)
+			sd.clear()
+			var sf := PackedByteArray()
+			sf.resize(nrows * 256)
+			sf.clear()
+			for y in range(d_lo, d_hi + 1):
+				var full := y << 8
+				sd.append_array(nc.data.slice(full, full + 256))
+				sf.append_array(nc.fl.slice(full, full + 256))
+			nbs["%d,%d" % [dx, dz]] = {"d": sd, "f": sf}
+	var tn1 := Time.get_ticks_usec()
+	var ms_w: Dictionary
+	if not _tm_ms_full.rects.is_empty():
+		ms_w = {"rects": _tm_ms_full.rects.duplicate(), "h": float(_tm_ms_full.get("h", 0.0))}
+	else:
+		ms_w = {"rects": {}}
+	var strips = _strips_for_scoped(cx, cz, y_lo, y_hi)
+	var tn2 := Time.get_ticks_usec()
+	_editprobe_dnbs = int(tn1 - tn0)
+	_editprobe_dstrips = int(tn2 - tn1)
+	var ctx_w: Dictionary = _tm_ctx.duplicate()
+	ctx_w["eff_strips"] = strips["eff"]
+	ctx_w["blk_strips"] = strips["blk"]
+	ctx_w["blk_strips_b"] = strips["blk_b"]
+	if int(c.band) == 2:
+		ctx_w["coarse"] = true
+		ctx_w["uv_scale"] = 2
+	var entry := {
+		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(),
+		"data": sdata, "fl": sfl,
+		"band": int(c.band),
+		"nbs": nbs, "eff": fast_eff, "eff_trust": false,
+		"ctx": ctx_w, "ms": ms_w, "ngen": _ngens_for(cx, cz),
+		"edit": true, "si0": si0, "si1": si1,
+		"scoped_snap": true, "d_off": d_lo, "d_hi": d_hi,
+		"t_submit": Time.get_ticks_usec(),
+	}
+	var skey := _tm_next_slot
+	_tm_next_slot += 1
+	var tid := -1
+	if threadmesh_edit_pool != null:
+		threadmesh_edit_pool.submit(_tm_worker_run.bind(skey))
+	entry["tid"] = tid
+	entry["skey"] = skey
+	entry["epool"] = true
+	_tm_slots[skey] = entry
+	_tm_inflight_keys[key] = tid
+	threadmesh_inflight.append(entry)
+	edit_inflight_count += 1
+	_tm_enq += 1
+	_bd_log(cx, cz)
+	if _tm_debug:
+		print("TMESH EDIT %d,%d slabs=%d-%d inflight=%d" % [cx, cz, si0, si1, threadmesh_inflight.size()])
+	return true
 
 func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := true, defer_on_cap := false) -> bool:
 	# true = covered (sync-built now, or an in-flight task will apply);
@@ -1422,6 +1764,7 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 	var tm_cap := threadmesh_max
 	if _startup_pending() and tm_cap < 9:
 		tm_cap = 9
+	tm_cap = maxi(1, tm_cap - (2 if not edit_front.is_empty() else 1))
 	if threadmesh_inflight.size() >= tm_cap:
 		_tm_capdrop += 1
 		if _tm_debug:
@@ -1473,9 +1816,12 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 	# High priority admits build tasks to the run queue unconditionally, so
 	# the 2 build slots run at ~7/s while the data pass takes its
 	# low-priority share.
-	var tid = threadmesh_pool.add_task(_threadmesh_worker, true)
+	var skey := _tm_next_slot
+	_tm_next_slot += 1
+	var tid = threadmesh_pool.add_task(_tm_worker_run.bind(skey), true)
 	entry["tid"] = tid
-	_tm_slots[tid] = entry
+	entry["skey"] = skey
+	_tm_slots[skey] = entry
 	_tm_inflight_keys[key] = tid
 	threadmesh_inflight.append(entry)
 	_tm_enq += 1
@@ -1601,6 +1947,8 @@ func _collect_pool(build: bool, include_fb := false, maxb := -1) -> Array:
 
 func _drain_build_queue() -> void:
 	_startup_gen_apply()
+	if edit_inflight_count > 0:
+		return
 	if queue_size == 0:
 		if _bl_want.is_empty() and _col_pending.is_empty():
 			return
@@ -2245,6 +2593,148 @@ func _corner_eff_strip(nc: Node3D, dx: int, dz: int, h: int) -> PackedByteArray:
 			for y in range(h):
 				e[(a * 2 + b) * h + y] = narr[(y << 8) | (nz << 4) | nx]
 	return e
+
+
+var _scoped_strips_cache := {}
+var _scoped_strips_cache_n := 0
+
+
+func _strips_for_scoped(cx: int, cz: int, y_lo: int, y_hi: int) -> Dictionary:
+	var h: int = Data.HEIGHT
+	var y0 := maxi(0, y_lo - 2)
+	var y1 := mini(h - 1, y_hi + 1)
+	var parts: Array = [cx, cz, y0, y1]
+	var sides := [[1, 0], [-1, 0], [0, 1], [0, -1]]
+	var corners := [[1, 1], [-1, 1], [1, -1], [-1, -1]]
+	for s in sides:
+		var nc = chunks.get(_key(cx + int(s[0]), cz + int(s[1])))
+		parts.append(-1 if nc == null else "%d/%d" % [int(nc.data_gen), int(nc.eff_gen)])
+	for s in corners:
+		var nc = chunks.get(_key(cx + int(s[0]), cz + int(s[1])))
+		parts.append(-1 if nc == null else "%d/%d" % [int(nc.data_gen), int(nc.eff_gen)])
+	var k := str(parts)
+	var hit = _scoped_strips_cache.get(k)
+	if hit != null:
+		return hit
+	var effs: Array = []
+	var blks: Array = []
+	var blks_b: Array = []
+	for s in sides:
+		var nc = chunks.get(_key(cx + int(s[0]), cz + int(s[1])))
+		var e := PackedByteArray()
+		var b := PackedByteArray()
+		if nc != null and not nc.data.is_empty() and not nc.last_eff.is_empty():
+			e = _side_eff_strip_scoped(nc, int(s[0]), int(s[1]), y0, y1, h)
+			b = _side_blk_v_scoped(nc, int(s[0]), int(s[1]), y0, y1, h)
+			var bm := PackedByteArray()
+			bm.resize(2 * 16 * h)
+			blks_b.append(bm)
+		else:
+			var bm0 := PackedByteArray()
+			bm0.resize(2 * 16 * h)
+			blks_b.append(bm0)
+		effs.append(e)
+		blks.append(b)
+	for s in corners:
+		var nc = chunks.get(_key(cx + int(s[0]), cz + int(s[1])))
+		var e := PackedByteArray()
+		if nc != null and not nc.data.is_empty() and not nc.last_eff.is_empty():
+			e = _corner_eff_strip_scoped(nc, int(s[0]), int(s[1]), y0, y1, h)
+		effs.append(e)
+	var out := {"eff": effs, "blk": blks, "blk_b": blks_b}
+	if _scoped_strips_cache_n >= 32:
+		_scoped_strips_cache.clear()
+		_scoped_strips_cache_n = 0
+	_scoped_strips_cache[k] = out
+	_scoped_strips_cache_n += 1
+	return out
+
+
+func _side_eff_strip_scoped(nc: Node3D, dx: int, dz: int, y0: int, y1: int, h: int) -> PackedByteArray:
+	var e := PackedByteArray()
+	e.resize(2 * 16 * h)
+	var narr: PackedByteArray = nc.last_eff["arr"]
+	var colsz := 16 * h
+	var nx0: int = 0 if dx > 0 else 15
+	var nz0: int = 0 if dz > 0 else 15
+	if dx != 0:
+		for c in range(2):
+			for y in range(y0, y1 + 1):
+				var srow := y * 16
+				for t in range(16):
+					e[c * colsz + srow + t] = narr[(y << 8) | (t << 4) | (nx0 - c)]
+	else:
+		for c in range(2):
+			for y in range(y0, y1 + 1):
+				var srow := y * 16
+				for t in range(16):
+					e[c * colsz + srow + t] = narr[(y << 8) | ((nz0 - c) << 4) | t]
+	return e
+
+
+func _corner_eff_strip_scoped(nc: Node3D, dx: int, dz: int, y0: int, y1: int, h: int) -> PackedByteArray:
+	var e := PackedByteArray()
+	e.resize(4 * h)
+	var narr: PackedByteArray = nc.last_eff["arr"]
+	var nx0: int = 0 if dx > 0 else 15
+	var nz0: int = 0 if dz > 0 else 15
+	for a in range(2):
+		for b in range(2):
+			var nx: int = nx0 - a
+			var nz: int = nz0 - b
+			for y in range(y0, y1 + 1):
+				e[(a * 2 + b) * h + y] = narr[(y << 8) | (nz << 4) | nx]
+	return e
+
+
+func _side_blk_v_scoped(nc: Node3D, dx: int, dz: int, y0: int, y1: int, h: int) -> PackedByteArray:
+	# AC-0187: v channel only. The b (mask) channel is left zero for the fast
+	# path: it is consumed exclusively by the self-light pull kernel, which a
+	# frozen-light scoped build never runs (the stale eff always carries its
+	# mask). Skipping it also skips the _face_of lookup whose cold-cache miss
+	# costs ~190 ms on the main thread.
+	var b := PackedByteArray()
+	b.resize(2 * 16 * h)
+	var nd: PackedByteArray = nc.data
+	var narr: PackedByteArray = PackedByteArray()
+	if not nc.last_eff.is_empty():
+		narr = nc.last_eff["arr"]
+	var nvalid: bool = narr.size() == nd.size()
+	Lighting._tables()
+	var nx0: int = 0 if dx > 0 else 15
+	var nz0: int = 0 if dz > 0 else 15
+	for t in range(16):
+		var nx: int
+		var nz: int
+		if dx != 0:
+			nx = nx0
+			nz = t
+		else:
+			nx = t
+			nz = nz0
+		var open := true
+		for y in range(h - 1, y0 - 1, -1):
+			var idx: int = (y << 8) | (nz << 4) | nx
+			var bl: int = nd[idx]
+			var sky_n := 0
+			if open and Lighting._att[bl] > 0:
+				sky_n = 15
+			if open and Lighting._att[bl] == 0:
+				open = false
+			var eff_n: int = 0
+			if nvalid:
+				eff_n = narr[idx]
+			var lv: int = Lighting._glow[bl]
+			var v: int
+			if lv > 0:
+				v = lv
+			elif eff_n > sky_n:
+				v = eff_n
+			else:
+				v = sky_n
+			if y >= y0:
+				b[y * 16 + t] = v
+	return b
 
 
 func _ngens_for(cx: int, cz: int) -> Array:
@@ -3059,6 +3549,8 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 	else:
 		c.fl[fi] = 0
 	c.mark_edit_slabs(y)
+	_edit_stale_eff[_key(cx, cz)] = _eff_cache.get(_key(cx, cz))
+	_edit_front_add(_key(cx, cz), y)
 	_eff_cache_evict(_key(cx, cz))
 	_mark_light_around(cx, cz)
 	if _fluid_near(x, y, z):
@@ -3823,3 +4315,58 @@ func set_block_key(face: int, colx: int, colz: int, y: int, id: int) -> void:
 	var fi: int = (y << 8) | ((colz & 15) << 4) | (colx & 15)
 	c.set_local(colx & 15, y, colz & 15, id)
 	c.fl[fi] = 0
+
+
+# AC-0187: dedicated single-thread pool for the block-edit fast remesh.
+# WorkerThreadPool is the engine singleton (not constructible), so the edit
+# lane gets its own Thread + Mutex + Semaphore. The build starts the moment
+# it is submitted — it never queues behind the shared pool's full builds
+# (measured 460 ms behind 3 in-flight builds at R50 streaming). Completion
+# is signalled per-entry (the worker sets entry["done"]); threadmesh_poll
+# checks the flag for epool entries.
+class EditPool:
+	var _thread: Thread = null
+	var _mutex := Mutex.new()
+	var _wake := Semaphore.new()
+	var _dl := Mutex.new()
+	var _queue: Array = []
+	var _stop := false
+	func mark_done(entry: Dictionary, res: Dictionary) -> void:
+		_dl.lock()
+		entry["result"] = res
+		entry["done"] = true
+		entry["t_done"] = Time.get_ticks_usec()
+		_dl.unlock()
+	func start() -> void:
+		_thread = Thread.new()
+		_thread.start(_run)
+	func submit(call: Callable) -> void:
+		_mutex.lock()
+		_queue.append(call)
+		_mutex.unlock()
+		_wake.post()
+	func stop() -> void:
+		if _thread == null:
+			return
+		_mutex.lock()
+		_stop = true
+		_queue.clear()
+		_mutex.unlock()
+		_wake.post()
+		_thread.wait_to_finish()
+		_thread = null
+	func _run() -> void:
+		while true:
+			_mutex.lock()
+			while _queue.is_empty() and not _stop:
+				_mutex.unlock()
+				_wake.wait()
+				_mutex.lock()
+			if _queue.is_empty():
+				_mutex.unlock()
+				if _stop:
+					return
+				continue
+			var call: Callable = _queue.pop_front()
+			_mutex.unlock()
+			call.call()
