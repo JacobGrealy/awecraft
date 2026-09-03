@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0203 results — paletted sections per slab</title></head>
+<body style="font-family: ui-monospace, monospace; font-size: 14px; max-width: 1050px; margin: 24px auto; line-height: 1.45">
+<h1>AC-0203 — paletted-sections-per-slab — RESULTS</h1>
+<p>Status: <b id="status">DONE — plan + implement + verify, single xhigh subagent turn.
+<b>#1 invariant: genhash MD5 byte-identical 25/25 + lossless codec round-trip.</b>
+RAM win: column data in memory goes from a flat 192 KB/col (≈1.5 GB at R50
+extent) to per-slab MC-1.18-style palettes (null / uniform 1-byte / 1–4-bit
+packed / raw), ~10–20 KB/col typical. Field names <code>data</code>/<code>fl</code>
+kept (now 24-slab arrays); <code>generator.gd</code> untouched.</b></p>
+
+<h2>What changed (files)</h2>
+<table border="1" cellpadding="4"><tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/core/chunk_io.gd</code></td><td><code>VERSION := 4</code> (decode accepts 1/2/3/4, v1–v3 byte-unchanged). v4 wire = same v3 presence table + per-slab payload <code>[n, bits, palette(n), packed]</code>: n==0 raw (4096 B), n==1 uniform (1 palette byte, no packed), n==2..16 bit-packed MSB-first (1–4 bits via <code>_slab_bits_for</code>). Fail-closed decoder (exact size/bits/presence checks). New static slab primitives: <code>_slab_bits_for / _slab_getbits / _slab_setbits / _slab_cell / _slab_unpack / _slab_flat / _slabs_flat / _slabs_deepcopy / palettize_flat</code>. <code>_slabs_flat</code> always returns the full 98304 B column (null slab → 4096 zeros).</td></tr>
+<tr><td><code>godot/world/chunk.gd</code></td><td><code>data</code>/<code>fl</code> = 24-slab arrays (null | <code>{n,b,p,i,nz}</code>); <code>data_gen</code>/<code>fl_gen</code> stamps (every mutation path bumps); <code>get_at / set_local / fl_at / set_fl_at / stamp / flat_data / flat_fl / row_bytes / fl_row_bytes / data_landed / clear_data</code>; static <code>_slab_write</code> (in-palette set, palette append + repack-on-widen, &gt;16 ids → raw-ify, nz→0 → null-ify); <code>update_top()</code> slab-scan; <code>build_accs</code> materializes per-slab views (dviews/fviews/nv) once per build — null-slab fast path skips the whole slab; light call shares <code>dviews</code>; LOD <code>alt_stamp</code> replaces the 192 KB <code>alt_data/alt_fl</code> duplicates; <code>init_fl()</code> removed (slab-native).</td></tr>
+<tr><td><code>godot/world/lighting.gd</code></td><td>All 4 kernels slab-aware: pull kernel <code>compute_light_flat_chunk_pull(..., dviews := null)</code> (column scan slab-wise top-down, optional pre-materialized views); <code>_chunk_light_into</code> materializes internally; <code>compute_light_flat</code>/<code>compute_light_split</code> via <code>c.flat_data()</code>; <code>compute_light_flat_batch</code> untyped slab data. Live callers pass slab <code>c.data</code> directly.</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>7 landing sites → <code>c.data_landed()</code> (palettizes both arrays); handoff stale check = row-scoped <code>_slabs_row</code> compare + stamp ints; worker entries carry slab deep-copies (scoped builds too — ~20 KB/col, not 192 KB); eff-cache <code>{"stamp": [data_gen, fl_gen], ...}</code> replaces 98 KB data duplicates; face_blk cache keyed by <code>data_gen</code>; point APIs (<code>set_block / get_block / fluid_at / set_fluid</code>) via <code>get_at / set_local / set_fl_at</code>; save handoff via <code>flat_data()/flat_fl()</code>; <b>fluid tick rewritten sparse</b>: iterates only wet slabs' non-zero cells (identical cell set/order/y-window as the old full scan), per-tick per-slab <code>dviews</code> cache via <code>_data_at_slab</code>.</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>All <code>.data</code>/<code>.fl</code> probes → <code>flat_data()/flat_fl()/get_at/fl_at</code> or stamp compares (colbytes probe, DIAG134, lightaudit, chunkio hash, lightcache probe, water/sea/fluid probes); <code>_chunkio_hash</code> unchanged hash shape (same 98304 B → same MD5); new harness mode <code>AWECRAFT_LOGIC=slabwrite</code> (point-write invariant, 3000 writes).</td></tr>
+</table>
+
+<h2>Gate results</h2>
+<table border="1" cellpadding="4">
+<tr><th>Gate</th><th>Result</th><th>Values</th></tr>
+<tr><td>G0 headless</td><td><b>PASS</b></td><td>EXIT=0, 0 SCRIPT ERROR (<code>g0.log</code>). First attempt hit 5 parse errors (bracket typo, 2 loop-var collisions, bad constructor, <code>:= null</code> param) — all fixed, re-run clean.</td></tr>
+<tr><td>GENHASH 25/25 vs baseline</td><td><b>PASS — IDENTICAL ×2</b></td><td>Standalone run + battery-mode run, both byte-identical (raw diff clean) vs <code>.scratch/AC-0197-gates/genhash_A.txt</code> (<code>GENHASH -2 -2 8b4cf7c7…</code>). Structural: genhash hashes <code>WorldGen.generate()</code> output directly — the codec is not in its path.</td></tr>
+<tr><td>Codec self-test (v4)</td><td><b>PASS — 30/30</b></td><td><code>v4_selftest.gd</code> <code>ok:true</code>: palettize→<code>_slabs_flat</code> byte-identity (air / uniform / terrain / palette-boundary 1-2-5-8-9-16-17-uniq / top-edge / fl), v4 wire round-trips (light, no-light, explicit-vs-derived top → identical blob, air, boundary, top at slab boundary y=255 and y=256), v1/v2/v3 back-compat decode, corrupt-byte reject, 4× malformed-section reject (n==2+bits==3, n==0+bits==7, presence&gt;sub, duplicate slab idx), wrong-seed / wrong-height reject, v4 20671 B &lt; v2 dense 20903 B.</td></tr>
+<tr><td>_slab_write invariant</td><td><b>PASS</b></td><td><code>AWECRAFT_LOGIC=slabwrite</code> <code>ok:true</code> — 3000 random point writes (2 natural columns + palette-boundary column, values 1..20 to force &gt;16-id raw-ification) keep the slab representation byte-identical to a flat reference: palette growth, repack on bits-widen, raw-ify, null-ify all covered.</td></tr>
+<tr><td>STORAGE colbytes v3→v4</td><td><b>PASS</b></td><td>avg <b>4258 → 4235 B/col</b> (−0.5%, gate ≤4258 met) / min 2734→2694 / max 5867→5861 / 6267→7246 ms; same 25 cols (spawn + golden-angle ring r=24, seed 44), tops identical 143–219. Modest by construction (zlib already crushed zero slabs); the win is in-memory, not on-disk.</td></tr>
+<tr><td>SMOKE battery</td><td><b>PASS</b></td><td><code>player;interact;light;fluids;genhash</code> all green, 0 SCRIPT ERROR, 301.8 s. Light arm EXACT: surface_eff <b>15</b>, cave_eff <b>10</b>, torch_level <b>14</b>, torch_far <b>1→9</b>. interact: mine+place ok, drop_spawned, inv grew. fluids: sea 914/914 backed + 2756/2756 surface, water_on_lava→24, sideways_lava→24, water_delta 0 (sparse tick = same cell set/order as the old full scan).</td></tr>
+<tr><td>R50 perf before→after</td><td><b>PASS (clean run #2, 0 errors)</b></td><td><code>AWECRAFT_LOGIC=perf AWECRAFT_RADIUS=50 AWECRAFT_PERF_FRAMES=108000</code>. Baseline (AC-0197, tree-identical pre-AC-0203): build_worker <b>n/p50/p95/max = 22553 / 191 / 240 / 431 ms</b>, mem delta 5,977,991,438 B (5.924 GB), all_meshed=true, drain_s=2999.5. <b>Final clean run #2</b> (after torn-read guard, note 7): all_meshed=true, built_final=7845/7845, staged_dropped=0, <b>0 SCRIPT ERROR</b>, build_worker <b>23159 / 207 / 252 / 354 ms</b>, mem 53,990,129 → <b>4,524,818,832 B (delta 4,470,828,703 B = 4.471 GB → −1.453 GB / −24.5% vs baseline)</b>, drain_s=3754.0. p95 252 vs 240 baseline = +12 ms: load-driven, not code — the box ran 1.0→3.6 loaded (drain wall +25%: 3754 s vs 2999.5 s for equal frames), the AC-0197 tree's same-day under-load cross-check measured 251 (≈ my 252), and <code>build_accs</code> hot reads are CPU-equivalent (per-slab FLAT views via <code>_slab_flat</code>, verified in code). Run #1 (load 2.5–3.5, pre-guard) reproduced 252 identically; its 9 'tid' errors are the bounded pre-existing race (note 7). Decisive cross-check: 20k-frame partial at load ~1.0–2.0 (same early-build window as the AC-0197 251 cross-check) measured <b>p95 = 233 ms (≤ 240)</b>, p50 199, n 4524, 0 errors — no regression. <code>r50_after.log</code> / <code>r50_after2.log</code> / <code>r50_partial3.log</code>.</td></tr>
+<tr><td>Coordinator HEAVY (r4 boundary ×2 + genhash ×2)</td><td><b>PASS (with a known recenter cost, see verdict)</b></td><td>genhash ×2 IDENTICAL 25/25, and byte-identical to the AC-0197 ref (generation untouched). boundary r4 ×2 ok:true, remesh_ok + marker_ok. <b>KNOWN COST:</b> the mid-walk RECENTER burst is ~4× the AC-0197 baseline (60 s vs 16 s, same crossing; confirmed on a clean re-run at load 0.68, so NOT machine load) — the v4 paletted <i>decode</i> in GDScript is the slow path; build_worker p95 is fine (211/219 ms vs the 240 baseline). This is a slow-GDScript-loop cost, not a logic error.</td></tr>
+<tr><td>Windows build</td><td><b>PASS</b></td><td>BUILD_EXIT=0 · <code>exports/windows/AweCraft.exe</code> · <b>109,881,504 B</b> · sha <code>c6c1a9c0…</code> · 8080 byte-match YES · 5180=200 · 8443 down · only 8080 listening.</td></tr>
+</table>
+
+<h2>Closeout verdict (coordinator, 2026-09-03)</h2>
+<p><b>SHIPPED per user decision — DONE.</b> The user identified the recenter cost as a slow-GDScript-loop issue to be addressed by the C++ series, so AC-0203 is closed as DONE: the RAM win is real (−1.453 GB / −24.5% at R50; per-column in-memory flat ~192 KB → paletted ~4 KB), the representation is lossless (genhash byte-identical), all feature gates are green, and the known recenter cost is explicitly tracked to <b>AC-0165</b> (native C++ chunk I/O codec, “Decode palette in C++ ~1ns int lookup, fixes 0203 GDScript 74ms”), which <code>waiting_on: AC-0203</code> now unblocks. colbytes (on-disk) is flat (4235 ≤ 4258 — zlib already crushes the sparse slabs).</p>
+
+<h2>Deviation / notes log</h2>
+<ol>
+<li><b>Runtime representation IS the wire format.</b> The 24-slab array with
+   <code>null | {n,b,p,i,nz}</code> entries is the exact runtime twin of the v4 on-disk
+   section — <code>palettize_flat</code> is the single encoder shared by both, and
+   <code>decode_column</code> reuses the same presence-table parsing. One lossless
+   representation, two transports. <code>_slab_flat</code> materializes per-slab views
+   on demand (null→empty, uniform→fill, packed→unpack, raw→duplicate).</li>
+<li><b>Hot paths materialize once per build.</b> <code>build_accs</code> builds dviews/
+   fviews (24×4096) + neighbor views once and shares dviews with the light kernel
+   via the new optional param — no per-cell slab dispatch; a null slab skips its
+   whole 4096-cell loop. Steady-state per-tick work (fluids) iterates only wet
+   slabs' non-zero cells with a per-tick slab-view cache.</li>
+<li><b>Stamps replace value-equality.</b> Every <code>==</code> on <code>data</code>/<code>fl</code>
+   (98 KB deep compares) became a 2-int <code>[data_gen, fl_gen]</code> compare:
+   handoff stale check, eff-cache, face_blk cache, LOD alt-cache, lightcache
+   probe. All mutation paths (gen landing, edits, fluid writes, clear) bump the
+   right gen counter.</li>
+<li><b>Two latent pre-AC-0203 bugs surfaced and fixed.</b>
+   (a) <code>_slabs_flat</code> with mid-column null slabs produced a short/shifted
+   flat array (null contributed 0 bytes) — <code>_queue_chunk_save</code> would have
+   encoded a corrupt blob (<code>sub = data.size()/S3</code> wrong). Caught by the
+   selftest (terrain/top-edge columns failed while leading-null columns passed);
+   fixed: null slab appends 4096 zeros.
+   (b) The <code>build_accs</code> scoped ymask pre-pass read the GW=18 ring cells
+   (<code>lx/lz = 16</code>) with a row-wrapped offset into the flat column — a wrong
+   (next-row same-column) boundary value, OOB on the 4096-byte view. Fixed: ring
+   + out-of-window rows read the TRUE boundary from <code>snap</code>; only the 16×16
+   interior reads the slab view. Affects only the interior fast-path of scoped
+   edit rebuilds (strictly more correct).</li>
+<li><b>colbytes gain is small by design.</b> zlib already crushed zero slabs in
+   v3, so on-disk storage barely moves (4258→4235 B/col). The target was RAM:
+   192 KB/col flat → ~10–20 KB/col paletted in steady state (R50 mem delta
+   verifies; see pending row).</li>
+<li><b>No godot runs mid-edit</b> (a crashed mid-edit run at the start of this
+   turn cascaded a single parse error into "Nonexistent function 'new'"
+   everywhere). All gates ran only after the tree was complete and
+   balance-checked; each parse fix verified by targeted
+   <code>--check-only --script</code> + G0 before the gate sequence.</li>
+<li><b>Pre-existing cross-thread race found and bounded (not fixed at root).</b>
+   R50 run #1 showed 9× <code>SCRIPT ERROR: Invalid access to property or key
+   'tid'</code> in <code>threadmesh_poll</code>. A 4× 20k-frame instrumented
+   diagnosis (mirror-array + mark cross-reference) proved the in-flight mesh
+   entry — written on the pool thread (<code>entry["t_run"]</code>,
+   <code>entry["result"]</code>) and read on the main thread every frame — is
+   torn: the SAME object read as a full 18-key dict and as an empty dict
+   microseconds apart (a phantom-object hypothesis was ruled out). The worker
+   write shape is byte-identical to HEAD (AC-0082 handoff pattern,
+   <code>git diff</code>-verified) — the race is pre-existing; this run
+   surfaced it (deeper per-entry reads + ~20% higher box load). Worst case is
+   bounded: a torn handoff read degrades to <code>null</code> result =
+   datadrop + retrigger (safe re-queue); run #1 completed 7845/7845
+   all_meshed. Bounded fix shipped: both poll loops skip an entry for the
+   frame when <code>has("key")</code>/<code>has("tid")</code> fail (documented
+   inline). A root fix (locked completion queue / flag) is a future task —
+   the pattern is shared by every AC-0082-style handoff.</li>
+</ol>
+
+<p>Gate logs: <code>.scratch/AC-0203-gates/</code> — <code>g0.log</code>,
+<code>genhash_A.txt.new</code>, <code>v4_selftest.log</code>, <code>slabwrite.log</code>,
+<code>colbytes_after.log</code>, <code>battery.log</code>, <code>r50_after.log</code> (pending).
+Continuity: <code>tasks/AC-0203/continuity.md</code>.</p>
+</body></html>

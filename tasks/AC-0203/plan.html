@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>AC-0203 plan — paletted-sections-per-slab</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}</style></head><body>
+<h1>AC-0203 — paletted-sections-per-slab — PLAN</h1>
+
+<h2>Goal</h2>
+<p>Represent each 16×16×16 slab in memory as a local palette (MC 1.18 style) instead of a flat u8 array, so an R50 world's column data drops from ~192 KB/col (data+fl, ~1.5 GB at R50) to ~10–20 KB/col (~200 MB), keeping the world byte-identical.</p>
+
+<p><b>#1 invariant (read twice):</b> the paletted form is <b>lossless</b> — it expands to exactly the same block/fl ids. Therefore <b>genhash (25 lines) must be byte-identical</b> to <code>.scratch/AC-0197-gates/genhash_A.txt</code>; the codec round-trip must be byte-exact (v1/v2/v3 still decode); and the <b>build_accs worker time must not regress</b> (measure <code>build_worker p95</code> before 240 ms vs after; the hot mesh loop reads paletted slabs via precomputed per-slab flat views — no per-cell Dictionary lookups in the hot loop).</p>
+
+<h2>Slab representation (in-memory, per chunk)</h2>
+<pre>chunk.data / chunk.fl : Array (24 entries, kept under the same field names)
+  null                                    = all-air slab (AC-0197 sparseness kept)
+  {n:1, b:0, p:[v], i:[], nz:k}          = uniform slab (no packed idx; 16³ cells = v)
+  {n:2..16, b:1..4, p:[≤16 u8], i:packed, nz:k}  = paletted slab (b = bits/cell,
+                                              i = b·4096 bits, MSB-first,
+                                              cell → palette index)
+  {n:0, b:8, p:[], i:4096 raw u8, nz:k}  = raw fallback slab (&gt;16 unique ids;
+                                              cell value stored directly)
+nz = count of non-zero cells (drives update_top, null-ification, sparse fluid tick)
+empty array (size 0) = column not yet generated (existing sentinel, unchanged)</pre>
+<p>Cell read (static, worker-safe): <code>_slab_cell(s, pos)</code> = <code>p[(w &gt;&gt; (16-sh-b)) &amp; mask]</code> from the two-byte window at <code>pos·b</code> bits — ~5 ops, no allocation. Hot bulk paths (build_accs, light kernel, _build_snap_data) materialize each slab ONCE into a local 4096-byte flat view (<code>_slab_flat</code>: uniform = C-level fill, mixed = byte→cells unpack for b∈{1,2,3,4}, raw = copy) and run the existing flat loops on the view.</p>
+
+<h2>Files to touch</h2>
+<table border="1" cellpadding="4"><tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/world/chunk.gd</code></td><td><code>data</code>/<code>fl</code> become the 24-slab arrays; static slab pack/unpack/cell/set helpers (delegate bit ops to <code>ChunkIO</code>); <code>data_landed(flat_d, flat_f)</code> (single flat→paletted conversion point: gen, threadgen handoff, burst handoff, disk load, io-read handoff, face gen, <code>init_fl</code> sites); <code>clear_data()</code> (battery reset = present-but-all-air, mirrors fill(0)); <code>flat_data()/flat_fl()</code> (lazy expansion for probes/save/legacy paths); <code>get_local/set_local</code> (paletted point indirection, hot), <code>fl_at/set_fl_at/get_at</code>; <code>update_top()</code> slab scan; <code>set_local</code> write path: in-palette cell set, palette extend (+bit-width repack), uniform→2-value rebuild, raw fallback at 16, nz→null re-encode; <code>build_accs</code> worker mirror rewritten slab-based (per-slab views, null-slab fast path, shared views with the light kernel); <code>_build_snap_data</code> slab views; <code>_build_snap</code>/<code>build_mesh</code> sync path via <code>flat_data()</code>; LOD cache → stamp-based (drop alt_data/alt_fl 192 KB duplicates); <code>fl_gen</code> counter.</td></tr>
+<tr><td><code>godot/core/chunk_io.gd</code></td><td><code>VERSION := 4</code>. v4 section per slab: <code>u8 present + u16 idx</code> table (as v3) + payload <code>[n, b, palette(n), packed(b·4096 bits)]</code> (n==1 omits packed; n==0 = raw 4096 B). <code>encode_column</code> KEEPS its flat signature (palettizes internally) → save/chunkio/colbytes arms unchanged. Decode: v4 → flat (lossless), v1/v2/v3 paths byte-unchanged. Bit-pack primitives live here (pure static, worker-safe) and chunk.gd reuses them (single source of truth).</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>All 7 flat-landing sites → <code>data_landed</code>; dispatch entry + nbs carry <b>slab deep-copies</b> (≈20 KB/col instead of 192 KB); stale checks: full = stamp compare (<code>[data_gen, fl_gen]</code>), scoped = per-row <code>_slabs_row</code> compare; eff cache + face_blk cache → stamp keys (drop the 98 KB data.duplicate() entries); scoped sdata/sfl windows via <code>row_bytes(y)</code>; save queue → <code>flat_data()</code>; <code>set_block</code>/<code>set_fluid</code>/<code>_nb_block</code>/<code>fluid_at</code>/<code>set_block_key</code>/<code>_apply_edits_to_chunk</code> → point APIs; fluid tick rewritten as a SPARSE scan (materialize only fl slabs with nz&gt;0, process their non-zero cells via point reads — same cell set as today's full scan).</td></tr>
+<tr><td><code>godot/world/lighting.gd</code></td><td><code>compute_light_flat_chunk_pull</code> + <code>_chunk_light_into</code> + <code>compute_light_flat_chunk</code> + <code>compute_light_flat_batch</code> take slab arrays (materialize views internally, or receive prebuilt views from build_accs); the pull kernel's per-column top-down scan is restructured slab-wise (null slab = provably air, open flag carries across slab boundaries — byte-identical semantics); multi-chunk <code>compute_light_split/_flat</code> read neighbors via <code>flat_data()</code>.</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>Harness only: battery reset → <code>clear_data()</code>; colbytes probe palettizes its generated column before the pull-kernel call; chunkio hash → <code>h.update(c.flat_data())</code> (same bytes → same MD5); eff-cache probe comparisons → stamps; every probe <code>var d: PackedByteArray = cc.data</code> → <code>cc.flat_data()</code>; DIAG point reads → <code>get_at</code>. Genhash arm untouched (hashes <code>WorldGen.generate</code> output directly — structurally invariant).</td></tr>
+</table>
+
+<h2>Not touched</h2>
+<ul>
+<li><code>generator.gd</code> — generation unchanged (genhash input is untouched by construction); it returns flat arrays, which <code>data_landed</code> converts.</li>
+<li><code>player.gd / interaction.gd / debug.gd / entities / save.gd</code> — they use world-level <code>get_block/set_block/fluid_at/set_fluid</code> APIs (no direct data/fl access — verified by grep).</li>
+<li><code>snap_fl</code> (fluid-height snapshot in the mesh pass) — a separate transient array, not data/fl.</li>
+</ul>
+
+<h2>Harness gates</h2>
+<table border="1" cellpadding="4"><tr><th>Gate</th><th>Command</th><th>Pass</th></tr>
+<tr><td>G0</td><td><code>godot --headless --path godot --quit</code></td><td>EXIT=0, 0 SCRIPT ERROR</td></tr>
+<tr><td>GENHASH (the gate)</td><td><code>AWECRAFT_LOGIC=genhash</code></td><td>25/25 byte-identical to <code>.scratch/AC-0197-gates/genhash_A.txt</code></td></tr>
+<tr><td>R50 RAM</td><td><code>AWECRAFT_LOGIC=perf AWECRAFT_RADIUS=50</code> (background, ~50 min each; load noted)</td><td>before (this tree, re-measured) vs after: process <code>mem_after − mem_before</code> drops by ≈1.1–1.5 GB (the data/fl footprint); column data footprint ~192 KB → ~10–20 KB/col</td></tr>
+<tr><td>build_accs no-regression</td><td>same perf arm, <code>build_worker p95</code></td><td>after ≤ 240 ms (before, same box/load)</td></tr>
+<tr><td>storage</td><td><code>AWECRAFT_LOGIC=colbytes</code> before (v3) vs after (v4)</td><td>avg bytes/col ≤ v3 (4258 B) — v4 omits the 512 B zero-pack of uniform slabs</td></tr>
+<tr><td>codec self-test</td><td><code>godot -s res://.scratch/AC-0203-gates/v4_selftest.gd</code></td><td>round-trip v4 (mixed/uniform/raw/null slabs) byte-exact; v1/v2/v3 decode unchanged; corrupt/wrong-seed reject</td></tr>
+<tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY="player;interact;light;fluids;genhash"</code></td><td>all ok:true; light EXACT (surface 15 / cave 10 / torch 14, far 1→9)</td></tr>
+</table>
+<p>Coordinators still run r4 heavy ×2 + genhash ×2 + <code>./build_windows.sh</code>; not run here.</p>
+
+<h2>Risks</h2>
+<ol>
+<li><b>Hot-loop cost of paletted reads</b> — mitigation: per-slab materialization (uniform slabs are C-level fills; only 2–4 mixed slabs/column pay the GDScript unpack, once per build pass, shared between the light kernel and the cell loop). Measured via build_worker p95; fallback = byte-level unpack micro-opts.</li>
+<li><b>Stamp vs value-equality semantics</b> (eff/face/LOD/dispatch caches) — every in-place mutation path (set_local, set_fl_at, _apply_edits_to_chunk, data_landed, clear_data) bumps a counter; verified by grep that no other writer exists. The SMOKE light/fluids gates exercise edit+relight churn.</li>
+<li><b>Slab invariant violations</b> (non-null all-zero slab, &gt;16 ids, bits mismatch) — palettize + set_local are the only constructors; the self-test round-trips adversarial columns (all patterns, 16+ unique ids, top-edge slabs).</li>
+<li><b>Worker-thread safety</b> — worker payloads are slab deep-copies (shared dict hazard eliminated); static helpers only, no instance state; ChunkIO stays Data/Game-free.</li>
+<li><b>R50 run time</b> (~50 min/arm ×2) — background jobs, load recorded at start of each arm; a loaded box inflates p95 (re-run clean before declaring a regression).</li>
+</ol>
+
+</body></html>

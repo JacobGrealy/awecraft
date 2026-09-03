@@ -1,0 +1,1012 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AweCraft — Humanoid Models / Animation Brainstorm</title>
+<style>
+  :root{--bg:#0c1016;--card:#151c28;--card2:#1c2535;--border:#253246;--text:#e6edf3;--muted:#8b9bb0;--accent:#4ecdc4;--accent2:#ff6b9d;--accent3:#a78bfa;--green:#3fb950;--orange:#f08833;--yellow:#d29922;--blue:#58a6ff}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.65}
+  header{max-width:1000px;margin:0 auto;padding:48px 24px 18px}
+  header h1{font-size:2.35rem;margin:0 0 8px;letter-spacing:-0.03em;line-height:1.15}
+  header p{color:var(--muted);margin:0;font-size:1.05rem;max-width:780px}
+  .meta{max-width:1000px;margin:0 auto;padding:0 24px;display:flex;gap:10px;flex-wrap:wrap}
+  .pill{border:1px solid var(--border);background:var(--card);padding:5px 12px;border-radius:999px;font-size:0.82rem;color:var(--muted)}
+  .pill strong{color:var(--text)}
+  main{max-width:1000px;margin:0 auto;padding:20px 24px 24px}
+  section{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:26px 28px;margin-bottom:18px}
+  section h2{margin:0 0 4px;font-size:1.28rem;letter-spacing:-0.01em}
+  section h2 span.num{color:var(--accent);margin-right:8px}
+  .subtitle{color:var(--muted);font-size:0.92rem;margin:0 0 14px}
+  h3{margin:20px 0 8px;font-size:1rem;color:var(--accent)}
+  h3.pink{color:var(--accent2)} h3.purple{color:var(--accent3)} h3.blue{color:var(--blue)} h3.orange{color:var(--orange)}
+  code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:0.86em}
+  pre{background:#0d1117;border:1px solid var(--border);border-radius:10px;padding:14px;overflow:auto;line-height:1.5}
+  code.inline{background:#0d1117;border:1px solid var(--border);padding:1px 6px;border-radius:6px}
+  ul,ol{margin:8px 0 0 18px} li{margin:4px 0}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  @media(max-width:820px){.grid,.grid3{grid-template-columns:1fr}}
+  .card{background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:14px 16px}
+  .card h4{margin:0 0 6px;font-size:0.95rem}
+  .card p{margin:0;color:var(--muted);font-size:0.88rem}
+  .callout{border-left:3px solid var(--accent);padding:10px 14px;background:#0d1117;border-radius:0 10px 10px 0;margin:14px 0;color:#c9d1d9;font-size:0.92rem}
+  .callout.orange{border-color:var(--orange)} .callout.green{border-color:var(--green)} .callout.purple{border-color:var(--accent3)} .callout.pink{border-color:var(--accent2)}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:0.90rem}
+  th,td{border:1px solid var(--border);padding:8px 10px;text-align:left}
+  th{background:#0d1117;color:var(--muted);font-weight:600}
+  .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:0.75rem;font-weight:700;letter-spacing:0.04em;text-transform:uppercase}
+  .badge.rec{background:rgba(78,205,196,0.15);color:var(--accent);border:1px solid rgba(78,205,196,0.35)}
+  .badge.alt{background:rgba(167,139,250,0.14);color:var(--accent3);border:1px solid rgba(167,139,250,0.3)}
+  .badge.warn{background:rgba(240,136,51,0.14);color:var(--orange);border:1px solid rgba(240,136,51,0.3)}
+  .toc{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px 28px;margin-bottom:18px}
+  .toc a{color:var(--accent);text-decoration:none}
+  .toc a:hover{text-decoration:underline}
+  .toc-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px;font-size:0.92rem}
+  @media(max-width:700px){.toc-grid{grid-template-columns:1fr}}
+  .kicker{font-size:0.78rem;letter-spacing:0.09em;text-transform:uppercase;color:var(--accent);font-weight:800;margin-bottom:6px}
+  .demo-wrap{background:#0d1117;border:1px solid var(--border);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px}
+  .demo-controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .demo-controls label{font-size:0.85rem;color:var(--muted);display:flex;gap:6px;align-items:center}
+  input[type=range]{accent-color:var(--accent)}
+  canvas{width:100%;height:220px;background:#0a0e14;border:1px solid var(--border);border-radius:10px;display:block}
+  .decision{border:1px dashed var(--border);border-radius:12px;padding:16px 18px;background:rgba(78,205,196,0.04)}
+  .decision strong{color:var(--text)}
+  footer{max-width:1000px;margin:0 auto;padding:8px 24px 48px;color:var(--muted);font-size:0.85rem}
+  .hr{height:1px;background:var(--border);margin:16px 0}
+  .two-col{display:grid;grid-template-columns:1.15fr 0.85fr;gap:16px}
+  @media(max-width:820px){.two-col{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <div class="kicker">AweCraft · Brainstorm — Not a Spec</div>
+  <h1>Humanoid Models / Animation<br><span style="color:var(--accent)">+ Procedural Generation</span></h1>
+  <p>How we go from today's viewmodel-only player to a shared blocky humanoid rig (player / zombie / skeleton) that can be animated cheaply, varied procedurally, and extended without a Blender bottleneck — now extended for <strong style="color:var(--accent)">Halo Covenant-style shooter enemies</strong> that flank, take cover, and actually fire their weapons at you. Interactive demos + tradeoff matrices — pick a path at the end.</p>
+</header>
+<div class="meta">
+  <span class="pill"><strong>Status:</strong> brainstorm</span>
+  <span class="pill"><strong>Engine:</strong> Godot 4.7.1 · gl_compatibility · Windows-only</span>
+  <span class="pill"><strong>Baseline:</strong> <code class="inline">entities/mob.gd</code> · <code class="inline">player.gd</code> · <code class="inline">held_mesh.gd</code></span>
+  <span class="pill"><strong>File:</strong> docs/humanoid-brainstorm.html</span>
+  <span class="pill"><strong>Date:</strong> 2026-09-02 · Newark</span>
+</div>
+
+<main>
+
+<nav class="toc">
+  <strong style="font-size:0.9rem">Contents — click to jump</strong>
+  <div class="toc-grid">
+    <div><a href="#baseline">1. Baseline Today</a></div>
+    <div><a href="#goals">2. Goals & Constraints</a></div>
+    <div><a href="#shape">3. Shape Language</a></div>
+    <div><a href="#source">4. Model Source — Code vs glTF</a></div>
+    <div><a href="#rig">5. Rig — One Skeleton, Many Bodies</a></div>
+    <div><a href="#anim">6. Animation — Procedural → Clips → IK</a></div>
+    <div><a href="#procgen">7. Procedural Generation — Two Axes</a></div>
+    <div><a href="#architecture">8. Recommended Architecture</a></div>
+    <div><a href="#files">9. File / Scene Layout</a></div>
+    <div><a href="#perf">10. Perf & LOD</a></div>
+    <div><a href="#demo">11. Interactive Demo</a></div>
+    <div><a href="#matrix">12. Decision Matrix</a></div>
+    <div><a href="#tasks">13. Task Slice</a></div>
+    <div><a href="#covenant">14. Covenant Shooters — What Halo Gets Right</a></div>
+    <div><a href="#arsenal">15. Arsenal — How Enemies Fire</a></div>
+    <div><a href="#brain">16. Brain — AI, Cover & Squads</a></div>
+    <div><a href="#covenant-demo">17. Covenant Demo — Firing Cone & Dodge</a></div>
+    <div><a href="#covenant-arch">18. Covenant Arch — Rig + Code To Add</a></div>
+    <div><a href="#decisions">19. Open Decisions</a></div>
+  </div>
+</nav>
+
+<section id="baseline">
+  <h2><span class="num">01</span> Baseline Today</h2>
+  <p class="subtitle">What already exists — the launchpad.</p>
+  <div class="grid">
+    <div class="card">
+      <h4>Logic only, no mesh</h4>
+      <p><code class="inline">entities/mob.gd:1</code> — <code class="inline">Mob extends Node3D</code> with <code class="inline">hp/tamed/vel</code>, <code class="inline">hurt()</code> knockback, <code class="inline">try_kill()</code> drops. No visual child. <code class="inline">autoload/data.gd:140</code> defines 8 mobs: <code class="inline">pig/sheep/cow/zombie/skeleton/chicken/wolf/spider</code> with <code class="inline">hp/w/h/speed/body/head</code> colors. The architecture at <code class="inline">ARCHITECTURE.md:31</code> promises <code class="inline">models/*.tscn</code> with hip-pivoted limbs — not yet built.</p>
+    </div>
+    <div class="card">
+      <h4>Player is first-person only</h4>
+      <p><code class="inline">player/player.gd:1</code> — <code class="inline">CharacterBody3D</code>, <code class="inline">EYE 1.62 / P_H 1.8</code>. Viewmodel is <code class="inline">hand_root → held_box / held_sprite / held_tool</code> inside <code class="inline">Camera3D</code>. Procedural walk sway via <code class="inline">_update_sway</code> (sin bob). No third-person mesh.</p>
+    </div>
+  </div>
+  <div class="grid" style="margin-top:14px">
+    <div class="card">
+      <h4>Mesh precedent</h4>
+      <p><code class="inline">core/held_mesh.gd:1</code> code-generates boxes/crosses with <code class="inline">PackedVector3Array + ArrayMesh</code>, caches by atlas identity, shades via <code class="inline">VoxelMath.FACES.sh</code>. Same pattern can generate limbs. Fluid anim mats + daynight light already modulate albedo — humanoid mats must join that pipeline.</p>
+    </div>
+    <div class="card">
+      <h4>Palette + tint already solved</h4>
+      <p><code class="inline">data.gd:15</code> <code class="inline">C_*</code> colors + atlas bake (<code class="inline">_bake_atlas_tints</code>) multiplies tints into pixels. Humanoid skin can be <code class="inline">Color.html("f2a29c")</code> style from <code class="inline">mobs.body/head</code> or sample atlas — keep one path.</p>
+    </div>
+  </div>
+  <div class="callout">Constraint: headless tests drive <code class="inline">Debug.spawn_mob()</code> and <code class="inline">xvfb-run --rendering-method gl_compatibility</code>. Anything we add must pass that probe and not require a GPU import step on CI.</div>
+</section>
+
+<section id="goals">
+  <h2><span class="num">02</span> Goals & Constraints</h2>
+  <div class="two-col">
+    <div>
+      <h3>Must have</h3>
+      <ul>
+        <li>Player / zombie / skeleton share <strong>one rig</strong> — different sizes, same bones.</li>
+        <li>Limbs pivot at <strong>hip/shoulder</strong> (M10 AC) — not center.</li>
+        <li>States: <code class="inline">idle / walk / sprint / sneak / jump / fall / swim / swing / bow-draw / eat / hurt / death</code>.</li>
+        <li>Held item + armor visible in third-person.</li>
+        <li>50 mobs at 60fps on <code class="inline">gl_compatibility</code> / llvmpipe.</li>
+        <li>First-person stays (viewmodel), third-person (F5) added.</li>
+      </ul>
+    </div>
+    <div>
+      <h3 class="pink">Constraints</h3>
+      <ul>
+        <li>Godot 4.7.1: <code class="inline">Skeleton3D</code>, <code class="inline">AnimationPlayer/Tree</code>, <code class="inline">SkeletonIK3D</code>, <code class="inline">LookAtModifier3D</code> exist — but verify before assuming (perf APIs renamed, etc.).</li>
+        <li>Mesh + collision: mobs stay <code class="inline">CharacterBody3D</code> with capsule; mesh never drives physics.</li>
+        <li>No Blender required to iterate on day one.</li>
+        <li>Windows-only export; no mobile LOD yet.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="shape">
+  <h2><span class="num">03</span> Shape Language</h2>
+  <p class="subtitle">Keep Minecraft's read — cubes, but intentionally proportioned.</p>
+  <div class="grid3">
+    <div class="card">
+      <h4 style="color:var(--accent)">Classic Steve</h4>
+      <p>Head 8×8×8, torso 8×12×4, arm 4×12×4, leg 4×12×4 (pixels). 1 pixel = 1/16 block. Ratios read instantly as "human". Best for instant Minecraft legibility. <span class="badge rec">Recommended V1</span></p>
+    </div>
+    <div class="card">
+      <h4 style="color:var(--accent3)">Slim Alex</h4>
+      <p>Arm 3×12×4. Same height, reads slimmer/faster. Good for player variant, not for zombie bulk. Add later as 1-param switch.</p>
+    </div>
+    <div class="card">
+      <h4 style="color:var(--orange)">Stylized</h4>
+      <p>Bigger head (1.2×), shorter legs. Cute / Halo-loot vibe but breaks armor fit. Save for pets or NPCs, not hostile humanoids.</p>
+    </div>
+  </div>
+  <pre>Steve @ h=1.8:  head 0.5×0.5×0.5  torso 0.5×0.75×0.25  arm 0.25×0.75×0.25  leg 0.25×0.75×0.25
+Pixel = 0.0625 block.  Pivot: arm top face center, leg top face center → matches M10.</pre>
+</section>
+
+<section id="source">
+  <h2><span class="num">04</span> Model Source — Code vs glTF</h2>
+  <p class="subtitle">Where the vertices come from. You can mix — but pick a default.</p>
+  <table>
+    <tr><th style="width:14%">Path</th><th>How</th><th>Pros</th><th>Cons</th><th>When</th></tr>
+    <tr><td><strong>A. Code-gen</strong> <span class="badge rec">V1</span></td><td>GDScript builds <code class="inline">ArrayMesh</code> from 6 boxes like <code class="inline">held_mesh.gd:82 _build_box</code>. Params: <code class="inline">Vector3 size</code> + <code class="inline">Color</code> + atlas rect.</td><td>Zero art tool, git-diffable, deterministic, reuses HeldMesh cache, tiny repo</td><td>Hand-tuning proportions slower, UVs manual</td><td>Now → M10</td></tr>
+    <tr><td><strong>B. Blender glTF</strong> <span class="badge alt">V2</span></td><td>Model in Blender, export <code class="inline">humanoid.glb</code>, import as <code class="inline">Skeleton3D + MeshInstance3D</code></td><td>Artist-friendly, better UV, blend shapes for face</td><td>Re-import churn, larger repo, CI needs import</td><td>When art locks</td></tr>
+    <tr><td><strong>C. Hybrid</strong></td><td>Code-gen body, imported head/accessories</td><td>Best of both</td><td>Most plumbing</td><td>Later</td></tr>
+  </table>
+  <div class="callout green"><strong>Recommendation:</strong> Ship V1 on A. The precedent (<code class="inline">held_mesh.gd:32 box_mesh / cross_mesh</code>) already proves this works under <code class="inline">gl_compatibility</code>. Keep importer path open — don't burn it — but don't block humanoids on it.</div>
+</section>
+
+<section id="rig">
+  <h2><span class="num">05</span> Rig — One Skeleton, Many Bodies (Deep Dive)</h2>
+  <p class="subtitle">7 bones, hip-pivoted, no weight paint. How a single <code class="inline">Skeleton3D</code> drives boxes, holds guns, and scales from Grunt 0.9m to Elite 1.9m without new art.</p>
+  <div class="two-col">
+    <div>
+      <pre>Skeleton3D (root)              bone idx  parent  rest pos
+ ├─ hips        [0]  —           -1      (0, 0.62, 0)
+ │   ├─ leg.l   [1]  hip         0       (-0.11, 0, 0)  pivot = hip top face
+ │   └─ leg.r   [2]  hip         0       (+0.11, 0, 0)
+ ├─ spine       [3]  hips        0       (0, 0.42, 0)   torso 0.5×0.75×0.25
+ │   ├─ head    [4]  spine       3       (0, 0.58, 0)   neck
+ │   ├─ arm.l   [5]  spine       3       (-0.31, 0.48, 0) shoulder top face
+ │   └─ arm.r   [6]  spine       3       (+0.31, 0.48, 0) + BoneAttachment3D → gun
+rest = T-pose. pose = rest + anim.  Godot 4.7: set_bone_pose_rotation(idx, quat) is pose, not rest.</pre>
+      <div class="callout" style="margin-top:10px"><strong>Why BoneAttachment3D not skinning:</strong> Box limbs are rigid — no elbow bend. Parenting a <code class="inline">MeshInstance3D</code> under <code class="inline">BoneAttachment3D</code> is 1 node, 0 weights, 0 import. Skinning (vertex weights) only needed if you add bent elbows/knees. Start rigid, skin later behind flag.</div>
+      <h3>Attachment points</h3>
+      <ul>
+        <li><code class="inline">arm.r / BoneAttachment3D "grip"</code> → <code class="inline">held_tool</code> (reuses <code class="inline">player.gd:406 held_tool</code> voxel mesh builder). Grip offset <code class="inline">Vector3(0, -0.22, 0.06)</code> — palm center.</li>
+        <li><code class="inline">arm.l / BoneAttachment3D "shield"</code> → Jackal shield <code class="inline">BoxMesh 0.5×0.7×0.05</code> (only Jackal enables it).</li>
+        <li>Armor = second <code class="inline">MeshInstance3D</code> per limb at <code class="inline">scale 1.02</code> (Minecraft outer layer trick), material from <code class="inline">Data.items[armor_id].mat</code> — toggle <code class="inline">visible</code> per <code class="inline">player.armor[]</code>.</li>
+        <li>Head overlay = 1.05× box for helmet, same pivot as head.</li>
+        <li>Future: <code class="inline">head / BoneAttachment3D "hat"</code> for Elite mandibles / Grunt mask (just a mesh swap).</li>
+      </ul>
+      <h3 class="purple">Transforms — the one thing to get right</h3>
+      <pre># Rest = where bones sit in T-pose (set once in rig.tscn)
+skeleton.set_bone_rest(1, Transform3D(Basis.IDENTITY, Vector3(-0.11,0,0)))
+# Pose = anim offset applied each frame (additive to rest)
+var q = Quaternion.from_euler(Vector3(leg_swing, 0, 0))
+skeleton.set_bone_pose_rotation(bone_idx, q)
+skeleton.set_bone_pose_position(bone_idx, Vector3.ZERO) # we keep pos 0, rotate only
+# To read world pos of muzzle:
+var muzzle_global = skeleton.get_bone_global_pose(6) * grip_local
+# Godot 4.7 gotcha: get_bone_global_pose returns pose-in-skeleton space, not world.
+# Multiply by skeleton.global_transform for world.</pre>
+    </div>
+    <div>
+      <div class="card">
+        <h4>Parameter sheet — one rig, many bodies</h4>
+        <table style="margin:6px 0 0">
+          <tr><th>Param</th><th>Source</th><th>How it drives rig</th></tr>
+          <tr><td>h / w</td><td><code class="inline">Data.mobs.*.h/w</code></td><td><code class="inline">skeleton.scale = Vector3(w/0.6, h/1.8, w/0.6)</code> + capsule <code class="inline">height=h, radius=w/2</code></td></tr>
+          <tr><td>body / head</td><td><code class="inline">Color.html</code></td><td>Per-limb <code class="inline">StandardMaterial3D.albedo_color</code> (unshaded + light L like <code class="inline">held_mesh.gd:72</code>)</td></tr>
+          <tr><td>arm_len / leg_len</td><td>species table</td><td><code class="inline">set_bone_rest</code> Y offset + mesh <code class="inline">BoxMesh.size.y</code> — Elite 0.75, Grunt 0.52</td></tr>
+          <tr><td>armor[]</td><td><code class="inline">player.armor</code></td><td>Overlay <code class="inline">visible</code> + mat swap</td></tr>
+          <tr><td>seed jitter</td><td><code class="inline">hash(pos)</code></td><td><code class="inline">scale *= 0.96..1.04</code> visual only — hitbox stays canonical</td></tr>
+        </table>
+        <p style="margin-top:8px">Skeleton survives rescale — same curves, different stride via <code class="inline">phase_speed *= 1.0/scale.y</code> and aim IK divides by scale.</p>
+      </div>
+      <h3 class="orange">Hip-pivot — proof it works</h3>
+      <p style="font-size:0.90rem;color:var(--muted)">Mesh origin = top-face center <code class="inline">(0, len/2, 0)</code> in local, bone origin = same world point. Rotate leg 45°: thigh stays stuck at hip, foot arcs 0.52m. Fail mode (center pivot) slides hip 0.26m — screenshot from side fails M10 gate.</p>
+      <pre style="font-size:0.82em"># Mesh build — pivot at top (not center):
+var half = Vector3(w/2, len/2, d/2)
+# vertices centered at (0,0,0) then shifted down by len/2 so top = 0
+for v in box_verts: v.y -= len/2
+# Bone rest at hip top face: rest_pos = Vector3(-0.11, 0, 0)</pre>
+      <div class="callout purple" style="margin-top:10px"><strong>Godot 4.7 quirks:</strong> No <code class="inline">reorder_child</code> (use scan+<code class="inline">move_child</code>), no <code class="inline">get_index</code> on bone. <code class="inline">Skeleton3D.get_bone_count()</code> is 7; <code class="inline">find_bone("arm.r")</code> returns idx or -1 — cache at <code class="inline">_ready</code>, don't string-lookup per frame.</div>
+      <h3 class="blue">When to switch to skinning</h3>
+      <p style="font-size:0.88rem;color:var(--muted)">Only when you need bent elbows/knees (sprint, crouch) or capes. Then: one <code class="inline">ArrayMesh</code> with <code class="inline">ARRAY_BONES + ARRAY_WEIGHTS</code>, 1 bone per vertex (weight 1.0), import via glTF or code-gen. Keep V1 rigid — you can skin-ify the same 7 bones later with no scene change.</p>
+    </div>
+  </div>
+  <div class="demo-wrap" style="margin-top:16px">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <strong style="font-size:0.90rem">Rig visualizer</strong>
+      <label>Arm <input id="rv-arm" type="range" min="-90" max="90" value="0"></label>
+      <label>Leg <input id="rv-leg" type="range" min="-60" max="60" value="0"></label>
+      <label>Scale <input id="rv-scale" type="range" min="0.7" max="1.3" step="0.05" value="1"></label>
+      <span style="color:var(--muted);font-size:0.85rem">drag — note hip stays pinned (top pivot) vs center-pivot would slide</span>
+    </div>
+    <canvas id="rv" width="900" height="220"></canvas>
+  </div>
+</section>
+
+<section id="anim">
+  <h2><span class="num">06</span> Animation — Three Layers, Ship One at a Time (Deep Dive)</h2>
+  <p class="subtitle">V1 is 40 lines of math. V2 bakes the same math into clips. V3 adds aim IK. Same bones, same rig — no rework.</p>
+  <div class="grid3">
+    <div class="card" style="border-color:rgba(78,205,196,0.4)">
+      <h4><span class="badge rec">V1</span> Procedural (math) — ship this</h4>
+      <pre style="margin-top:8px"># tick(delta, vel, on_ground, swing_t, aim_yaw, aim_pitch)
+phase += vel.length() * delta * 1.35 # 1.35 = steps per meter
+var s = sin(phase), c = cos(phase)
+arm_l.x =  s * 0.62          # ±35°
+arm_r.x = -s * 0.62 + swing  # swing = -1.2 * swing_frac
+leg_l.x = -s * 0.65
+leg_r.x =  s * 0.65
+# vertical bob + breathe
+spine.y = abs(s)*0.02 + sin(phase*2)*0.008
+head.y  = clamp(aim_yaw, -1.0, 1.0)
+head.x  = clamp(aim_pitch, -0.6, 0.6)
+# on_ground false → freeze legs, arms slight out</pre>
+      <p style="margin-top:8px"><strong>Cost:</strong> ~14 floats + 2 sin per frame. <strong>States covered:</strong> idle/walk/sprint/jump/fall/swim all from same 6 lines.</p>
+    </div>
+    <div class="card">
+      <h4><span class="badge alt">V2</span> Clips + Blend Tree — bake V1</h4>
+      <pre style="margin-top:8px"># Record V1 poses at 30fps into AnimationPlayer:
+"walk" 0..0.8s  arm/leg keys from math
+"run"   faster 1.35×, amp 1.2×
+Tree:
+  BlendSpace1D (speed 0..5.6) → idle..walk..run
+  + OneShot (swing, shoot)
+  + Additive (hurt tint, flinch)
+# Drive:
+tree["parameters/blend_position"] = vel.length()
+tree["parameters/OneShot/active"] = swing_frac>0</pre>
+      <p>Benefit: scrub in editor, retarget to Grunt (short legs auto), add mocap later. Cost: clips must be re-baked when math changes — keep V1 math as source of truth.</p>
+    </div>
+    <div class="card">
+      <h4><span class="badge warn">V3</span> IK / Physics — aim + feet</h4>
+      <pre style="margin-top:8px"># Aim IK (spine + head + arm):
+spine.yaw = lerp(spine.yaw, aim_yaw*0.6, 8*dt)
+head.yaw  = aim_yaw - spine.yaw
+arm_r.yaw/pitch = aim → BoneAttachment grip
+
+# Foot IK: raycast down 1.2m per leg
+var hit = raycast_blocks(foot+up, -up, 1.2, get_block)
+leg.y = lerp(leg.y, hit.hit? foot.y-hit.y : 0, 12*dt)
+
+# Cape spring:
+vel += (target-pos)*18*dt - vel*6*dt
+pos += vel*dt</pre>
+    </div>
+  </div>
+
+  <h3>Full V1 tick — copy-paste ready shape</h3>
+  <pre>func anim_tick(skel: Skeleton3D, dt: float, vel: Vector3, on_ground: bool,
+               swing_frac: float, aim_yaw: float, aim_pitch: float) -> void:
+    phase += vel.length() * dt * 1.35
+    var s := sin(phase)
+    var swing := -1.2 * swing_frac # swing_frac 0..1 over 0.2s
+    # legs
+    if on_ground:
+        skel.set_bone_pose_rotation(leg_l, Quaternion.from_euler(Vector3(-s*0.65,0,0)))
+        skel.set_bone_pose_rotation(leg_r, Quaternion.from_euler(Vector3( s*0.65,0,0)))
+    else:
+        skel.set_bone_pose_rotation(leg_l, Quaternion.from_euler(Vector3(-0.25,0,0)))
+        skel.set_bone_pose_rotation(leg_r, Quaternion.from_euler(Vector3( 0.25,0,0)))
+    # arms + aim
+    var aim_y := clampf(aim_yaw, -1.0, 1.0)
+    var aim_x := clampf(aim_pitch, -0.6, 0.6)
+    skel.set_bone_pose_rotation(spine, Quaternion.from_euler(Vector3(0, aim_y*0.6, 0)))
+    skel.set_bone_pose_rotation(head,  Quaternion.from_euler(Vector3(aim_x, aim_y*0.4, 0)))
+    skel.set_bone_pose_rotation(arm_l, Quaternion.from_euler(Vector3( s*0.62, 0, 0)))
+    skel.set_bone_pose_rotation(arm_r, Quaternion.from_euler(Vector3(-s*0.62 + swing + aim_x, 0, aim_y*0.15)))
+    # breathe when idle
+    if vel.length() < 0.05:
+        skel.set_bone_pose_position(spine, Vector3(0, sin(Time.get_ticks_msec()*0.002)*0.015, 0))</pre>
+
+  <div class="two-col" style="margin-top:12px">
+    <div>
+      <h3>State mapping (same bones, different inputs)</h3>
+      <table>
+        <tr><th>State</th><th>Inputs tweak</th><th>What you see</th></tr>
+        <tr><td>idle</td><td>vel 0, phase frozen</td><td>breath bob 0.015, head tracks player</td></tr>
+        <tr><td>walk / sprint</td><td>vel 1.5 / 2.8 m/s</td><td>same sin, freq 1.35×, amp 1.2× for sprint</td></tr>
+        <tr><td>sneak</td><td>vel 0.7, spine pitch +0.18</td><td>torso forward, knees bent -0.2, shorter stride</td></tr>
+        <tr><td>jump/fall</td><td>on_ground false</td><td>legs frozen open, arms slightly out</td></tr>
+        <tr><td>swing / punch</td><td>swing_frac 0→1 in 0.2s</td><td>arm.r snaps -1.2 rad, recovers</td></tr>
+        <tr><td>shoot (plasma)</td><td>shoot_t 0→1, aim_yaw/pitch live</td><td>arm.r locked to aim, muzzle flash quad</td></tr>
+        <tr><td>hurt</td><td>hurt_t flash + knockback</td><td>tint red, spine kick, 0.35s flinch cancels burst</td></tr>
+        <tr><td>death</td><td>hp 0</td><td>fall + fade, <code class="inline">try_kill()</code> drop</td></tr>
+      </table>
+    </div>
+    <div>
+      <h3 class="purple">Model side — building the boxes</h3>
+      <pre># HumanoidMeshes.box(size, color) — like held_mesh.gd:82
+func box(size: Vector3, col: Color) -> ArrayMesh:
+  var v:=PackedVector3Array(); var n:=PackedVector3Array()
+  var c:=PackedColorArray(); var uv:=PackedVector2Array(); var idx:=PackedInt32Array()
+  for fi in 6:
+    var f=VoxelMath.FACES[fi]; var shade=float(f.sh)
+    var face_col = col * shade # or sample atlas via corner_uv
+    var base=v.size()
+    for corner in f.c: # 4 corners of face
+      v.append(Vector3(corner)-Vector3(0,size.y/2,0)) # shift so top=0 (hip pivot!)
+      n.append(Vector3(f.n)); c.append(face_col * Color(shade,shade,shade))
+      uv.append(corner_uv(...))
+    idx.append_array([base,base+2,base+1, base,base+3,base+2])
+  return _to_mesh(v,n,c,uv,idx) # one material per body color, unshaded, light via albedo L</pre>
+      <p style="font-size:0.88rem;color:var(--muted)">Per-face shade <code class="inline">f.sh</code> (0.6..1.0) bakes Minecraft AO without light. Atlas tint already baked at load (<code class="inline">data.gd:_bake_atlas_tints</code>) — don't double-tint.</p>
+      <h3 class="pink">Gotchas & perf</h3>
+      <ul style="font-size:0.90rem">
+        <li><strong>Don't call <code class="inline">find_bone</code> per frame</strong> — cache idx at <code class="inline">_ready</code>.</li>
+        <li><strong>Quaternion vs Euler:</strong> <code class="inline">set_bone_pose_rotation</code> takes <code class="inline">Quaternion</code>, not <code class="inline">Vector3</code>. Use <code class="inline">Quaternion.from_euler</code>.</li>
+        <li><strong>Tree vs manual:</strong> If <code class="inline">AnimationTree.active</code>, don't <code class="inline">set_bone_pose_</code> — drive <code class="inline">tree[parameters/...]</code> instead. V1 keeps tree off.</li>
+        <li><strong>Cache meshes:</strong> <code class="inline">box_cache[(size,color)]</code> — 4 variants, not 50 builds. Share <code class="inline">StandardMaterial3D</code> per <code class="inline">body</code> color bucket.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout">Godot note: <code class="inline">AnimationTree</code> needs <code class="inline">AnimationPlayer</code> sibling + <code class="inline">active=true</code>. Drive via <code class="inline">tree.set("parameters/blend_position", speed)</code> — not bone directly when tree active. For V1 procedural, keep tree inactive and drive bones directly.</div>
+</section>
+
+<section id="procgen">
+  <h2><span class="num">07</span> Procedural Generation — Two Independent Axes</h2>
+  <div class="grid">
+    <div class="card" style="border-color:rgba(63,185,80,0.35)">
+      <h4 style="color:var(--green)">A. Variation (do first) — cheap, high value</h4>
+      <ul>
+        <li><strong>Seeded scale:</strong> <code class="inline">scale = 0.92 + hash(seed ^ x ^ z) * 0.16</code> — same zombie species, not clones.</li>
+        <li><strong>Hue jitter:</strong> <code class="inline">body = base.body * (0.95 + rand*0.1)</code> on HSV.</li>
+        <li><strong>Species param:</strong> zombie taller, skeleton leaner — stays in <code class="inline">Data.mobs</code>.</li>
+      </ul>
+      <p style="margin-top:8px">Cost: one float per spawn. No extra mesh builds — reuses template + <code class="inline">duplicate()</code>.</p>
+    </div>
+    <div class="card" style="border-color:rgba(167,139,250,0.35)">
+      <h4 style="color:var(--accent3)">B. Generation (later) — mesh synthesis</h4>
+      <ul>
+        <li><strong>Limb factory:</strong> <code class="inline">HumanoidMeshes.box(size, color, uv)</code> with size params <code class="inline">[head_w, torso_h, arm_len]</code>.</li>
+        <li><strong>Topology:</strong> noise picks nose/ear protrusion, armor trim width.</li>
+        <li><strong>Spider 8 legs:</strong> same rig + extra bones — proof the rig is extensible.</li>
+      </ul>
+      <p style="margin-top:8px">Don't build per-instance at runtime for 50 mobs — generate templates, instance. Save palette index, not vertices.</p>
+    </div>
+  </div>
+  <div class="callout orange"><strong>Not procedural:</strong> hitbox <code class="inline">w/h</code> and <code class="inline">speed/dmg</code> — keep in <code class="inline">Data.mobs</code>. Visual procgen must not desync combat.</div>
+</section>
+
+<section id="architecture">
+  <h2><span class="num">08</span> Recommended Architecture <span class="badge rec">Pick This</span></h2>
+  <p class="subtitle">Staged — each stage shippable, none blocks the next.</p>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+    <span class="badge rec">V1 — code-gen + procedural</span>
+    <span class="badge alt">V2 — clips + blend</span>
+    <span class="badge warn">V3 — IK / generation</span>
+  </div>
+  <div class="grid">
+    <div>
+      <h3>Now (V1)</h3>
+      <ul>
+        <li><code class="inline">HumanoidMeshes</code> (like <code class="inline">HeldMeshes</code>) generates 6 boxes with hip pivot, per-face shade, optional atlas tint.</li>
+        <li><code class="inline">Humanoid extends Mob</code> owns <code class="inline">Skeleton3D</code>, ticks <code class="inline">anim_procedural.gd</code>.</li>
+        <li>Player third-person: same prefab under <code class="inline">player.tscn</code>, F5 toggles <code class="inline">Camera3D</code> offset behind <code class="inline">player.global_position + Vector3(0,1.2,-3)</code>.</li>
+        <li>Fix lighting: humanoid mats join <code class="inline">player.gd:502 vm_refresh</code> L-modulation (or share <code class="inline">world.light_at</code>).</li>
+      </ul>
+    </div>
+    <div>
+      <h3 class="purple">Later</h3>
+      <ul>
+        <li>Replace tick with <code class="inline">AnimationPlayer</code> + <code class="inline">AnimationTree</code> — keep procedural as fallback for head/held.</li>
+        <li>Add <code class="inline">SkeletonIK3D</code> for feet on stair voxels; raycast already exists at <code class="inline">core/math.gd:raycast_blocks</code>.</li>
+        <li>Minecraft outer armor layer: expanded box mesh per limb.</li>
+        <li>Optional Blender import path behind feature flag.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout green"><strong>Why this order:</strong> V1 proves the game is readable on <code class="inline">gl_compatibility</code> without waiting on art. V2/V3 are additive — same skeleton, same prefab — so no rework.</div>
+</section>
+
+<section id="files">
+  <h2><span class="num">09</span> File / Scene Layout</h2>
+  <pre>godot/
+  entities/
+    mob.gd                         # base (keep)
+    humanoid/
+      meshes.gd                    # class_name HumanoidMeshes — box factory + cache
+      rig.tscn                     # Skeleton3D hierarchy (7 bones)
+      humanoid.gd                  # class_name Humanoid extends Mob — owns Skeleton3D, anim
+      anim_procedural.gd           # pure math tick(phase, speed, swing_frac, look)
+      # later:
+      anim_tree.tscn               # AnimationPlayer + AnimationTree
+      ik.gd                        # foot IK helper
+  player/
+    player.tscn  (+ humanoid instance hidden until F5)
+    player.gd    (+ F5 toggle, camera boom)</pre>
+  <p style="color:var(--muted);font-size:0.90rem">Factory: <code class="inline">HumanoidFactory.spawn(Data.mobs[key], pos)</code> → instance <code class="inline">rig.tscn</code>, call <code class="inline">meshes.build(key)</code>, add to <code class="inline">entities/manager</code>. Drops/reuse same <code class="inline">Game.entities</code> parent as today.</p>
+</section>
+
+<section id="perf">
+  <h2><span class="num">10</span> Perf & LOD</h2>
+  <div class="grid">
+    <div class="card">
+      <h4>Draw cost</h4>
+      <p>6 MeshInstance3D × 50 mobs = 300 draws if naïve. Mitigate: <code class="inline">MultiMeshInstance3D</code> per limb type, or at minimum merge torso+head, share material per <code class="inline">body</code> color bucket (reduce to ~4 mats). llvmpipe cares more about draw count than verts.</p>
+    </div>
+    <div class="card">
+      <h4>LOD / cull</h4>
+      <p><code class="inline">r &gt; 64 blocks:</code> tick anim at 15 Hz not 60; <code class="inline">r &gt; 96:</code> freeze to idle; <code class="inline">r &gt; 128:</code> hide. Physics (<code class="inline">CharacterBody3D</code>) already culls via world chunk radius.</p>
+    </div>
+  </div>
+  <ul>
+    <li>Animate on CPU once per mob, push 7 bone poses — not per-vert.</li>
+    <li>Cache meshes by <code class="inline">(key, armor_bits)</code> — not per instance.</li>
+    <li>Keep mats unshaded initially (like <code class="inline">held_mesh.gd:72 _base_mat</code>), light via vertex/albedo L — no realtime shadow pass per mob.</li>
+  </ul>
+</section>
+
+<section id="demo">
+  <h2><span class="num">11</span> Interactive Demo — What Procedural Looks Like</h2>
+  <p class="subtitle">Canvas 2.5D sketch of the V1 math. Not Godot — just to feel the walk cycle before we commit.</p>
+  <div class="demo-wrap">
+    <div class="demo-controls">
+      <label>Speed <input id="spd" type="range" min="0" max="5" step="0.1" value="1.8"></label>
+      <label>Swing <input id="swg" type="range" min="0" max="1" step="0.02" value="0"></label>
+      <label>Look <input id="look" type="range" min="-40" max="40" step="1" value="0"></label>
+      <button id="toggle" style="background:var(--accent);color:#0c1016;border:0;padding:6px 12px;border-radius:8px;font-weight:700;cursor:pointer">Pause</button>
+      <span style="color:var(--muted);font-size:0.85rem">arm/leg = ±0.6 rad sin(phase) · head = look clamp</span>
+    </div>
+    <canvas id="c" width="900" height="220"></canvas>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <span class="pill">V1 code: <code class="inline">arm.x = sin(phase)*0.6</code></span>
+      <span class="pill">Hip pivot — thigh stays attached</span>
+      <span class="pill">Swing overrides arm.r → <code class="inline">-1.2 rad</code></span>
+    </div>
+  </div>
+</section>
+
+<section id="matrix">
+  <h2><span class="num">12</span> Decision Matrix</h2>
+  <table>
+    <tr><th>Question</th><th>Option A (lean)</th><th>Option B (heavy)</th><th>Rec</th></tr>
+    <tr><td>Mesh</td><td>Code-gen boxes</td><td>Blender glTF</td><td><strong>A now, B later flag</strong></td></tr>
+    <tr><td>Rig</td><td>7-bone Skeleton3D + BoneAttachment</td><td>15-bone + fingers + blend shapes</td><td><strong>7-bone</strong></td></tr>
+    <tr><td>Anim V1</td><td>Math sin + lerp</td><td>Hand-keyed clips day one</td><td><strong>Math</strong></td></tr>
+    <tr><td>IK</td><td>None (feet clip through stair, shipped Minecraft did too)</td><td>SkeletonIK3D per leg</td><td><strong>None → add when stairs look bad</strong></td></tr>
+    <tr><td>Procedural</td><td>Variation: scale/hue jitter</td><td>Full mesh synth per spawn</td><td><strong>Variation now</strong></td></tr>
+    <tr><td>Armor</td><td>Second box at 1.02× scale</td><td>Separate skinned mesh per armor item</td><td><strong>Box overlay</strong></td></tr>
+    <tr><td>Player view</td><td>F5 third-person reuses same prefab</td><td>Separate player mesh</td><td><strong>Reuse</strong></td></tr>
+  </table>
+  <div class="callout">Pick only the Rec column for M10 — you get a shippable, testable humanoid that passes hip-pivot + model-recognition gates without blocking on art.</div>
+</section>
+
+<section id="tasks">
+  <h2><span class="num">13</span> Task Slice (if promoted)</h2>
+  <p class="subtitle">One subagent each, in order — matches <code class="inline">ARCHITECTURE.md:8 Migration checklist</code> style.</p>
+  <table>
+    <tr><th>#</th><th>Task</th><th>Verify</th></tr>
+    <tr><td>AC-A</td><td>Humanoid rig + code-gen meshes (zombie/skeleton/player T-pose, hip pivot)</td><td>xvfb PNG — each reads as its mob, leg pivots at hip when rotated 45°</td></tr>
+    <tr><td>AC-B</td><td>Procedural walk/swing/look + F5 third-person</td><td>Headless: phase advances with speed, swing 0→1 in 0.2s; render: walk cycle visible</td></tr>
+    <tr><td>AC-C</td><td>Armor overlay + held-item bone attachment + hurt/death</td><td>Equip iron chest → overlay visible, sword in arm.r hand, hurt flash tint</td></tr>
+    <tr><td>AC-D</td><td>Clip upgrade (AnimTree) + foot IK on stairs</td><td>Tree blend by speed, foot raycast snaps to voxel top on stair block</td></tr>
+    <tr><td>AC-E</td><td>Procgen variation (scale/hue) + spider 8-leg proof</td><td>Spawn 10 zombies → ≥3 distinct heights, spider has 8 legs pivoted at body</td></tr>
+  </table>
+</section>
+
+<section id="covenant">
+  <h2><span class="num">14</span> Covenant Shooters — What Halo Gets Right <span class="badge rec">New</span></h2>
+  <p class="subtitle">Don't port Halo wholesale — steal the readable combat loop that lets blocky voxel enemies feel tactical.</p>
+  <div class="two-col">
+    <div>
+      <h3>Why Covenant reads instantly</h3>
+      <ul>
+        <li><strong>Silhouette = role.</strong> Grunt hunched tiny, Jackal shield + gap, Elite tall/shoulders, Hunter wide block. You know who shoots vs who charges before they move — critical in voxels where textures are 32px.</li>
+        <li><strong>Weapon = behavior.</strong> Needler strafes and super-combines, plasma rifle holds trigger and overheats, carbine taps. One gun, one rhythm — never "random gun on random mob".</li>
+        <li><strong>Grenade + melee + gun triangle — enemies too.</strong> Grunts lob plasma, Elites lunge-melee when shields down, Jackals hold line. Enemies use the same verbs you do.</li>
+        <li><strong>Shields are language.</strong> <code class="inline">pop → crack → recharge whine</code> tells you "push now". Covenant shields crack loud + visually dim — free callout.</li>
+      </ul>
+    </div>
+    <div>
+      <h3 class="pink">Translate to AweCraft voxels</h3>
+      <div class="grid" style="grid-template-columns:1fr;gap:10px">
+        <div class="card" style="border-left:3px solid var(--accent)">
+          <h4>Gruntlette <span style="color:var(--muted);font-weight:400">— swarm · 4 hp · w0.5 h0.9</span></h4>
+          <p>Flees when alone, swarms in 3–5, plasma pistol taps. Cannon fodder that teaches leading.</p>
+        </div>
+        <div class="card" style="border-left:3px solid var(--blue)">
+          <h4>Jackal <span style="color:var(--muted);font-weight:400">— shield wall · 8 hp + 12 shield</span></h4>
+          <p>Holds <code class="inline">BoxMesh</code> shield in <code class="inline">arm.l</code>, peeks to shoot. Flank to break. One voxel shield — readable at 30 blocks.</p>
+        </div>
+        <div class="card" style="border-left:3px solid var(--accent3)">
+          <h4>Elite <span style="color:var(--muted);font-weight:400">— duelist · 16 hp + 20 shield · 1.9h</span></h4>
+          <p>Strafes at 90%, uses cover, grenades, melee lunge &lt;2.5m when your shields drop. Reuses humanoid rig directly.</p>
+        </div>
+        <div class="card" style="border-left:3px solid var(--orange)">
+          <h4>Hunter / Brute <span style="color:var(--muted);font-weight:400">— heavy · 40 hp · w1.2 h1.4</span></h4>
+          <p>Wide blocky rig (2× torso), charges, fuel-rod slow projectile. Teaches "don't peek, reposition".</p>
+        </div>
+      </div>
+      <p style="font-size:0.85rem;color:var(--muted);margin-top:8px">All four reuse §5's 7-bone rig: Grunt = short legs + big head, Jackal = shield attachment, Elite = 1:1, Hunter = double-wide torso. One skeleton, four silhouettes.</p>
+    </div>
+  </div>
+  <div class="callout green"><strong>Rule of one:</strong> one enemy archetype = one gun + one movement pattern + one shield/health shape. Proceduralize <em>inside</em> that envelope (±RPS, ±shield), never across it. A Jackal never gets a fuel rod.</div>
+</section>
+
+<section id="arsenal">
+  <h2><span class="num">15</span> Arsenal — How Enemies Fire At You</h2>
+  <p class="subtitle">Hitscan vs projectile, error cones, leading, and what the player feels. Mirrors <code class="inline">docs/halo-loot-brainstorm.html:3</code> firing pipeline — now from the mob's muzzle.</p>
+  <div class="grid">
+    <div>
+      <h3>Projectile choice (per archetype, not per roll)</h3>
+      <table>
+        <tr><th>Gun</th><th>Type</th><th>Speed</th><th>Tells</th><th>Use</th></tr>
+        <tr><td>Plasma pistol (Grunt)</td><td>projectile</td><td>28 m/s + slight gravity</td><td>purple tracer + whine, 0.35s travel at 10m</td><td>Teaches leading/dodge</td></tr>
+        <tr><td>Plasma rifle (Elite) — <span style="color:var(--green)">CORRECTED</span></td><td>projectile</td><td>~22 m/s + overheat, stun on continuous hits</td><td>purple-white bolts, vent steam on overheat</td><td>Pressure — CE 9-shot to kill, forces burst fire</td></tr>
+        <tr><td>Needler (Jackal peek)</td><td>homing-lite</td><td>18 m/s bend 8°</td><td>pink needles, supercombine at 7 hits</td><td>Anti-strafe</td></tr>
+        <tr><td>Fuel rod (Hunter)</td><td>lobbed</td><td>14 m/s + arc</td><td>green arc preview, huge pop</td><td>Flushes cover</td></tr>
+      </table>
+      <div class="callout">Halo lesson: <strong>Covenant is mostly projectile</strong> (so you can strafe), <strong>human is hitscan</strong>. Keep that split — enemies feel dodgeable, your guns feel precise.</div>
+      <h3>Firing pipeline (enemy side)</h3>
+      <pre>can_fire = has_LOS() && dist in [2, 28] && cooldown<=0 && !flinching
+aim_dir  = (player.head - muzzle).normalized()
+# lead for projectiles:
+aim_dir  = lead(aim_dir, player.vel, proj_speed)  # t = dist/speed
+# error cone — gun × enemy skill (both matter):
+error    = (weapon.base_error + (moving? 1.2° : 0) + bloom*shots_in_burst) * mob.skill
+# Grunt pistol: (3.5+0.5)*1.45=5.8°  vs  Elite rifle: (1.4+0.35)*1.05=1.8°
+aim_dir  = aim_dir + random_cone(error)
+# line of fire blocked by voxel?
+if VoxelMath.raycast_blocks(muzzle, aim_dir, dist, world.get_block).hit:  hold_fire
+else:      spawn_projectile(muzzle, aim_dir*speed) or raycast_hitscan</pre>
+    </div>
+    <div>
+      <h3 class="pink">Feel knobs — tune these, not damage</h3>
+      <ul>
+        <li><strong>RPS / burst:</strong> Grunt 1.8 RPS single, Elite 3-round burst 2.4 RPS with 0.9s pause, Hunter 0.6 RPS lob. Burst gap is the "push window".</li>
+        <li><strong>Error cone:</strong> Grunt 3.5° (spray), Elite 0.6° standing / 1.8° strafing, Jackal 1.2° peek. Player can learn to bait strafe.</li>
+        <li><strong>Wind-up tells:</strong> 0.25s arm raise + muzzle glow + audio whine before first shot. No instant peek-shoot.</li>
+        <li><strong>Flinch / suppression:</strong> On taking ≥3 dmg, <code class="inline">flinch_t=0.35s</code> — cancel burst, play hurt, add 2° error. Your shots matter immediately.</li>
+        <li><strong>Overheat (plasma):</strong> <code class="inline">heat+=0.14/shot; if heat>1.0 → 1.4s lockout + vent VFX</code> — free push window, no extra code.</li>
+      </ul>
+      <h3 class="orange">Damage to player</h3>
+      <pre>enemy_dmg = base * level_mult(enemy.level) // same curve as §7 halo doc
+player.take( amount * shield_mult vs health_mult )
+# per halo doc: plasma 1.6× vs shields, 0.7× vs flesh
+# headshot_mult only when shields == 0, same as player rule</pre>
+      <ul>
+        <li>Reuse <code class="inline">player.gd:1299 damage_player()</code> — pass <code class="inline">src="plasma"</code> for shield-mult hook.</li>
+        <li>TTK at-level: Grunt ~2.0s, Elite ~1.4s perfect, Hunter ~1.1s — inside halo 1.2–1.8s window when you strafe; longer if you dodge.</li>
+      </ul>
+      <h3 class="purple">VFX on a budget</h3>
+      <ul>
+        <li>Muzzle flash = 1 emissive quad at <code class="inline">arm.r/BoneAttachment3D</code> end, 60ms, no light.</li>
+        <li>Tracer = <code class="inline">MeshInstance3D</code> thin box lerped 0→hit in 40–120ms, or <code class="inline">ImmediateMesh</code> line.</li>
+        <li>Plasma glow uses existing <code class="inline">fluid_anim.gdshader</code> tint trick — hue from weapon, not new shader.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="brain">
+  <h2><span class="num">16</span> Brain — AI, Cover & Squads</h2>
+  <p class="subtitle">FSM is enough for V1. Behavior trees when squads need coordination. Runs at 10 Hz, not 60 — cheap.</p>
+  <div class="grid">
+    <div>
+      <h3>States (tick 10 Hz)</h3>
+      <pre>Idle: wander 4m, scan 28m sphere, LOS via raycast_blocks
+Alert: turn to player, 0.4s wind-up (tell)
+Strafe: lateral move ±3m at 0.7× speed, fire burst, keep 8–16m band
+Cover: raycast to nearest solid 1×2×1 voxel within 8m, move, peek
+Flinch: cancel fire, strafe away 1.5m, 0.35s
+Melee: if dist<2.2 && shields_down → lunge, 6 dmg (reuse player melee 2.5m)
+Flee: Grunt only — if squad<2 → run 8m, call help within 16m
+Dead: ragdoll-ish fall, try_kill() drops</pre>
+      <h3>Cover — voxels make it easy</h3>
+      <ul>
+        <li>Cover = any solid column 1×2×1 within 8m where <code class="inline">raycast_blocks(cover+1, player, 28).hit == true</code> (player blocked) but <code class="inline">raycast_blocks(self, cover+1).hit == false</code> (you can get there).</li>
+        <li>Score covers by <code class="inline">dist_to_self + angle_to_player + already_occupied</code>. No navmesh V1 — <code class="inline">CharacterBody3D</code> walks via <code class="inline">move_and_slide</code> + voxel raycast wall check.</li>
+        <li>Peek: step 0.8m sideways, fire 1 burst, step back. Jackal holds shield forward the whole time.</li>
+      </ul>
+    </div>
+    <div>
+      <h3 class="blue">Sensing</h3>
+      <ul>
+        <li><strong>LOS:</strong> <code class="inline">VoxelMath.raycast_blocks(eye, dir, 28, world.get_block)</code> — same DDA player uses for mining. No physics ray.</li>
+        <li><strong>Hearing:</strong> player sprint/jump/mine within 12m → Alert even without LOS (turn to sound pos).</li>
+        <li><strong>Memory:</strong> remember <code class="inline">last_seen_pos + 3s</code>, move there before Idle.</li>
+      </ul>
+      <h3 class="purple">Squads (cheap, effective)</h3>
+      <pre>Squad = { leader: Elite, members: [Grunt, Grunt, Jackal] }
+- spawn together within 6m, share alert (one sees → all Alert)
+- leader picks cover, members offset ±2m (no stacking)
+- Grunts flee toward leader; Jackals anchor
+- Elite calls 1 grenade per squad per 12s (lobs via projectile arc)
+- cap: 1 active squad per ~40m diamond (reuse world tick diamond)</pre>
+      <h3 class="orange">Performance</h3>
+      <ul>
+        <li>Think 10 Hz (<code class="inline">_brain_t += dt; if _brain_t <0.1: return</code>), animate 60 Hz.</li>
+        <li>LOS only on tick, not per frame. Cache <code class="inline">eye_cell + player_cell → LOS bool</code> for 0.2s.</li>
+        <li>Far &gt;48m: freeze brain, only wander. Far &gt;80m: despawn (reuse mob despawn rules).</li>
+      </ul>
+      <div class="callout purple">Godot path: <code class="inline">NavigationAgent3D</code> needs baked <code class="inline">NavigationMesh</code> — voxels have no mesh for it. Skip for V1. V2 bakes a flat heightmap navmesh per chunk at <code class="inline">y = top_solid</code> if needed; most Halo-style strafe/cover works without it.</div>
+    </div>
+  </div>
+</section>
+
+<section id="covenant-demo">
+  <h2><span class="num">17</span> Interactive Demo — Firing Cone & Dodge</h2>
+  <p class="subtitle">Top-down. Magenta = enemy, cyan = you. Cone = error. Purple dot = plasma travel. See why projectile + tells + strafe makes Covenant dodgeable.</p>
+  <div class="demo-wrap">
+    <div class="demo-controls">
+      <label>Archetype <select id="arch-sel" style="background:#0a0e14;color:var(--text);border:1px solid var(--border);border-radius:8px;padding:4px 8px"><option value="grunt">Grunt — 3.5° spray · plasma pistol</option><option value="elite" selected>Elite — plasma rifle · 5-bolt burst · overheat</option><option value="jackal">Jackal — 1.2° peek · needler</option><option value="hunter">Hunter — lobbed rod · 0.6 RPS</option></select></label>
+      <label>Strafe <input id="strafe" type="range" min="0" max="3" step="0.1" value="1.2"></label>
+      <label>Distance <input id="dist" type="range" min="4" max="26" step="1" value="12"></label>
+      <button id="fire" style="background:var(--accent2);color:white;border:0;padding:6px 14px;border-radius:8px;font-weight:800;cursor:pointer">Fire burst</button>
+      <button id="dodge" style="background:var(--accent);color:#0c1016;border:0;padding:6px 12px;border-radius:8px;font-weight:700;cursor:pointer">Dodge test</button>
+      <span style="color:var(--muted);font-size:0.85rem" id="hitread">—</span>
+    </div>
+    <canvas id="c2" width="900" height="260"></canvas>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <span class="pill">Burst gap = push window</span>
+      <span class="pill">Error cone visualizes <code class="inline">random_cone(error)</code></span>
+      <span class="pill">Projectile travel = reaction time</span>
+      <span class="pill">Jackal shield blocks 60° front</span>
+    </div>
+  </div>
+</section>
+
+<section id="covenant-arch">
+  <h2><span class="num">18</span> Covenant Arch — Rig + Code To Add <span class="badge rec">Minimal Diff</span></h2>
+  <div class="two-col">
+    <div>
+      <h3>What reuses §8's humanoid</h3>
+      <ul>
+        <li>Same <code class="inline">humanoid/rig.tscn</code> + <code class="inline">meshes.gd</code> — Grunt/Jackal/Elite are param sets, not new rigs.</li>
+        <li>Same <code class="inline">anim_procedural.gd</code> — add <code class="inline">aim_yaw / aim_pitch</code> driven by brain: <code class="inline">spine.yaw = lerp(spine.yaw, aim_yaw, 8*dt)</code>, <code class="inline">arm.r.pitch = aim_pitch</code>. Head follows via <code class="inline">LookAtModifier3D</code> later.</li>
+        <li>Same <code class="inline">BoneAttachment3D</code> for gun — just swap mesh per archetype.</li>
+      </ul>
+      <h3>New files (4, small)</h3>
+      <pre>entities/humanoid/
+  weapon.gd        # WeaponDef{type, rps, burst, error, speed, heat}
+  brain.gd         # FSM tick 10Hz, LOS, cover score, squad pointer
+  projectile.gd    # Area3D + vel+gravity, DDA vs blocks/player, tracer
+  squad.gd         # spawn + alert share + cover assign
+
+entities/projectiles.tscn  # pooled tracers (like WS7 particles)</pre>
+    </div>
+    <div>
+      <h3 class="pink">Data to add</h3>
+      <pre>Data.mobs["grunt"]  += {ranged:true, weapon:"plasma_pistol", shield:0, skill:1.45} # 1.45× = loose
+Data.mobs["jackal"] += {ranged:true, weapon:"needler", shield:12, shield_mesh:true, skill:1.15}
+Data.mobs["elite"]  += {ranged:true, weapon:"plasma_rifle", # enemy type ≠ gun — Elite *carries* plasma_rifle
+                    shield:20, skill:1.05, # 1.05× = tight; combination: gun×skill
+                    grenade:true, melee:true}
+# error/bloom live on the GUN, but final cone is gun × enemy skill:
+# final_error = (weapon.base_error + bloom*shots + moving?1.2:0) * skill_mult
+# skill_mult: Elite 1.05× (tight), Jackal 1.15×, Grunt 1.45× — so same pistol is worse on a Grunt
+# e.g. plasma_pistol 3.5°: Grunt → 3.5*1.45=5.1°, Elite → 3.5*1.05=3.7°
+Data.weapons = {
+  plasma_pistol:{burst:[1,1], rps:1.8, base_error:3.5, bloom:0.5, speed:28, gravity:0.6, shield_mult:1.6, health_mult:0.7},
+  plasma_rifle: {burst:[5,5], rps:4.2, base_error:1.4, bloom:0.35, speed:22, gravity:0.4, shield_mult:1.6, health_mult:0.7, heat:true, stun:true},
+  carbine:      {burst:[1,1], rps:2.0, base_error:0.6, hitscan:true, shield_mult:1.0, health_mult:1.0}, # marksman variant any enemy can carry
+}
+  needler:      {speed:18, homing:8.0, supercombine:7},
+  fuel_rod:     {speed:14, gravity:1.2, radius:2.5}
+}</pre>
+      <h3 class="green">Verify gates (mirror M10)</h3>
+      <ul>
+        <li>Headless: spawn Elite 10m away → within 2s it fires, raycast hits near player ± error.</li>
+        <li>Block LOS with 1 voxel wall → Elite holds fire, moves to cover.</li>
+        <li>Damage: 3 Grunt shots strip ~12 shield (plasma mult), not health — Halo split holds.</li>
+        <li>Render: PNG from player eye — Jackal shield reads as front wall, Elite tall silhouette distinct from Grunt.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout orange"><strong>Don't simulate what you can fake:</strong> no bullet drop calc for hitscan, no leading for hitscan, no physics for Grunt. A 0.25s wind-up + 8° cone + burst pause <em>feels</em> tactical for 10 lines of code.</div>
+</section>
+
+<section id="decisions">
+  <h2><span class="num">19</span> Open Decisions — Need Your Call</h2>
+  <div class="grid">
+    <div class="decision">
+      <strong>1. Proportions</strong><br>
+      Steve classic (arm 4px) vs Alex slim (3px)?<br>
+      <span style="color:var(--muted);font-size:0.88rem">Rec: Steve for hostiles, slim as player option toggle.</span>
+    </div>
+    <div class="decision">
+      <strong>2. Art pipeline</strong><br>
+      Pure code-gen for months, or unblock Blender now?<br>
+      <span style="color:var(--muted);font-size:0.88rem">Rec: Code-gen V1, import flag ready but not required.</span>
+    </div>
+    <div class="decision">
+      <strong>3. Third-person scope</strong><br>
+      Dev-only debug or player-facing F5?<br>
+      <span style="color:var(--muted);font-size:0.88rem">Rec: Player-facing — drives armor/held testing.</span>
+    </div>
+    <div class="decision">
+      <strong>4. Hitbox vs visual scale</strong><br>
+      If we jitter visual scale ±8%, does capsule scale with it?<br>
+      <span style="color:var(--muted);font-size:0.88rem">Rec: No — keep gameplay <code class="inline">w/h</code> canonical, visual only.</span>
+    </div>
+  </div>
+  <div class="grid" style="margin-top:12px">
+    <div class="decision" style="border-color:rgba(255,107,157,0.35);background:rgba(255,107,157,0.06)">
+      <strong>5. Covenant roster — how many at V1?</strong><br>
+      All four (Grunt/Jackal/Elite/Hunter) or just Grunt+Elite?<br>
+      <span style="color:var(--muted);font-size:0.88rem">Rec: Elite + Grunt V1 (cover+swarm), Jackal shield next, Hunter last — hunter needs lob arc + wide rig.</span>
+    </div>
+    <div class="decision" style="border-color:rgba(167,139,250,0.35);background:rgba(167,139,250,0.06)">
+      <strong>6. Hitscan vs projectile split</strong><br>
+      Enemies all projectile (dodgeable) or Elite hitscan for pressure?<br>
+      <span style="color:var(--muted);font-size:0.88rem">Rec: <strong style="color:var(--accent)">All projectile by default</strong> (plasma rifle/pistol/needler/rod) — you can strafe. Hitscan (carbine/beam) only as rare marksman variant. Corrected: Elite plasma rifle is projectile, not hitscan.</span>
+    </div>
+    <div class="decision" style="border-color:rgba(78,205,196,0.35);background:rgba(78,205,196,0.06)">
+      <strong>7. Shields on enemies?</strong><br>
+      Health only, or Halo shields that recharge (Jackal 12, Elite 20)?<br>
+      <span style="color:var(--muted);font-size:0.88rem">Rec: Yes for Elite/Jackal — crack + 4s recharge whine is the Halo push cue. Grunt no shield.</span>
+    </div>
+    <div class="decision" style="border-color:rgba(240,136,51,0.35);background:rgba(240,136,51,0.06)">
+      <strong>8. Squads & grenades?</strong><br>
+      Solo AI or squad alert + 1 grenade per squad /12s?<br>
+      <span style="color:var(--muted);font-size:0.88rem">Rec: Squads — even dumb share-alert + offset cover makes 3 Grunts feel coordinated for ~30 lines.</span>
+    </div>
+  </div>
+  <div style="margin-top:14px" class="callout green"><strong>Next step:</strong> Pick the Rec column (or mark alternatives for 5–8 too) → I draft <code class="inline">tasks/AC-xxxx/spec.html</code> + <code class="inline">TASKS.yaml</code> notes (User Story + Technical Details with files/lines) ready to file. No code until you green-light.</div>
+</section>
+
+</main>
+
+<footer>
+  AweCraft — Humanoid Brainstorm · 2026-09-02 · Not a spec. File: <code class="inline">docs/humanoid-brainstorm.html</code> · Served alongside <code class="inline">docs/halo-loot-brainstorm.html</code> · Godot 4.7.1 · Newark, Ohio
+</footer>
+
+<script>
+const c=document.getElementById('c'), ctx=c.getContext('2d');
+const spdEl=document.getElementById('spd'), swgEl=document.getElementById('swg'), lookEl=document.getElementById('look'), toggle=document.getElementById('toggle');
+let phase=0, running=true, swingT=0;
+function draw(){
+  const W=c.width, H=c.height;
+  ctx.clearRect(0,0,W,H);
+  // ground
+  ctx.fillStyle='#121a27'; ctx.fillRect(0,H-36,W,36);
+  ctx.strokeStyle='#253246'; ctx.beginPath(); ctx.moveTo(0,H-36); ctx.lineTo(W,H-36); ctx.stroke();
+  // params
+  const speed=parseFloat(spdEl.value), swing=parseFloat(swgEl.value), look=parseFloat(lookEl.value)/40;
+  // stick figure blocky — hip at center
+  const cx=W/2, hipY=H-36-54; // leg len 54
+  const torsoH=42, headS=26;
+  const legLen=54, armLen=42;
+  const armSwing = Math.sin(phase)*0.62;
+  const legSwing = Math.sin(phase)*0.65;
+  // swing overrides right arm
+  const rArmTarget = -1.2*swing;
+  const rArm = armSwing*-1*(1 - 0.85*swing) + rArmTarget;
+
+  function rotPoint(x,y,ang){ return [x*Math.cos(ang)-y*Math.sin(ang), x*Math.sin(ang)+y*Math.cos(ang)] }
+  function drawBox(cx,cy,w,h,angle,color,stroke){
+    ctx.save(); ctx.translate(cx,cy); ctx.rotate(angle);
+    ctx.fillStyle=color; ctx.fillRect(-w/2, -h/2, w, h);
+    ctx.strokeStyle=stroke||'#0a0e14'; ctx.lineWidth=2; ctx.strokeRect(-w/2,-h/2,w,h);
+    ctx.restore();
+  }
+  function drawLimb(px,py,len,w,angle,color){
+    const hw=w/2;
+    // pivot at top center: draw box whose top is at pivot
+    ctx.save(); ctx.translate(px,py); ctx.rotate(angle);
+    ctx.fillStyle=color; ctx.fillRect(-hw,0,w,len);
+    ctx.strokeStyle='#0a0e14'; ctx.lineWidth=2; ctx.strokeRect(-hw,0,w,len);
+    // joint dot
+    ctx.fillStyle='#0d1117'; ctx.beginPath(); ctx.arc(0,0,3,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  // legs
+  drawLimb(cx-7, hipY, legLen, 14, legSwing, '#6b7a90');
+  drawLimb(cx+7, hipY, legLen, 14, -legSwing, '#6b7a90');
+  // torso (center pivot)
+  drawBox(cx, hipY - torsoH/2, 28, torsoH, 0, '#4ecdc4', '#0d2a2a');
+  // arms
+  const shoulderY = hipY - torsoH + 8;
+  drawLimb(cx-16, shoulderY, armLen, 12, armSwing, '#8b9bb0');
+  drawLimb(cx+16, shoulderY, armLen, 12, rArm, '#ff6b9d');
+  // head + look
+  ctx.save(); ctx.translate(cx, shoulderY-18); ctx.rotate(look*0.7);
+  ctx.fillStyle='#f2e6d6'; ctx.fillRect(-headS/2,-headS/2,headS,headS);
+  ctx.strokeStyle='#0a0e14'; ctx.lineWidth=2; ctx.strokeRect(-headS/2,-headS/2,headS,headS);
+  // face hint
+  ctx.fillStyle='#0d1117'; ctx.fillRect(-6, -2, 4,4); ctx.fillRect(2,-2,4,4);
+  ctx.fillStyle='#ff6b9d'; ctx.fillRect(-4,6,8,3);
+  ctx.restore();
+  // item in right hand
+  const hx = cx+16 + Math.sin(rArm)*armLen*0.62;
+  const hy = shoulderY + Math.cos(rArm)*armLen*0.78;
+  ctx.save(); ctx.translate(hx,hy); ctx.rotate(rArm*0.3);
+  ctx.fillStyle='#d29922'; ctx.fillRect(-3,-16,6,18); ctx.strokeStyle='#0a0e14'; ctx.strokeRect(-3,-16,6,18);
+  ctx.fillStyle='#8a5a3a'; ctx.fillRect(-2,2,4,14);
+  ctx.restore();
+  // labels
+  ctx.fillStyle='#8b9bb0'; ctx.font='11px ui-monospace,monospace'; ctx.fillText(`phase ${phase.toFixed(2)}  speed ${speed.toFixed(1)}  swing ${swing.toFixed(2)}`, 12, 18);
+  ctx.fillStyle='#4ecdc4'; ctx.fillText('TORSO', cx-18, hipY - torsoH/2 +4);
+}
+function tick(dt){
+  const speed=parseFloat(spdEl.value);
+  if(running) phase += speed * dt * 2.4;
+  draw();
+  requestAnimationFrame(()=>tick(1/60));
+}
+toggle.addEventListener('click',()=>{ running=!running; toggle.textContent=running?'Pause':'Play'; toggle.style.background=running?'var(--accent)':'var(--accent3)'; });
+requestAnimationFrame(()=>tick(1/60));
+// hi-dpi
+function fit(){ const r=c.getBoundingClientRect(); const d=window.devicePixelRatio||1; c.width=r.width*d; c.height=220*d; ctx.setTransform(d,0,0,d,0,0); draw(); }
+fit(); window.addEventListener('resize',fit);
+
+// ---- Covenant demo #2 ----
+const c2=document.getElementById('c2'), ctx2=c2.getContext('2d');
+const archEl=document.getElementById('arch-sel'), strafeEl=document.getElementById('strafe'), distEl=document.getElementById('dist'), fireBtn=document.getElementById('fire'), dodgeBtn=document.getElementById('dodge'), hitread=document.getElementById('hitread');
+let shots=[], strafeT=0, dodging=false;
+const ARCH={ grunt:{label:'Grunt + plasma pistol', error:3.5,speed:28,burst:1,hitscan:false,color:'#f08833'}, elite:{label:'Elite + plasma rifle', error:1.4,speed:22,burst:5,hitscan:false,color:'#a78bfa'}, jackal:{label:'Jackal + needler', error:1.2,speed:18,burst:3,hitscan:false,color:'#58a6ff'}, hunter:{label:'Hunter + fuel rod', error:1.8,speed:14,burst:1,hitscan:false,color:'#3fb950'} };
+function draw2(){
+  const W=c2.width, H=c2.height, dpr=window.devicePixelRatio||1;
+  // clear with transform already set — reset for simplicity
+  ctx2.save(); ctx2.setTransform(1,0,0,1,0,0); ctx2.clearRect(0,0,c2.width,c2.height); ctx2.restore();
+  const w=W/dpr, h=H/dpr;
+  // grid
+  ctx2.strokeStyle='#151c28'; ctx2.lineWidth=1;
+  for(let x=0;x<w;x+=40){ ctx2.beginPath(); ctx2.moveTo(x,0); ctx2.lineTo(x,h); ctx2.stroke(); }
+  for(let y=0;y<h;y+=40){ ctx2.beginPath(); ctx2.moveTo(0,y); ctx2.lineTo(w,y); ctx2.stroke(); }
+  const dist=parseFloat(distEl.value)*10, strafe=parseFloat(strafeEl.value);
+  const enemy={x:80,y:h/2}, player={x:80+dist,y:h/2 + Math.sin(strafeT*1.8)*strafe*18};
+  const cfg=ARCH[archEl.value] || ARCH['elite'];
+  // cone
+  const ang=Math.atan2(player.y-enemy.y, player.x-enemy.x);
+  const errRad=cfg.error*Math.PI/180;
+  ctx2.fillStyle=cfg.hitscan?'rgba(167,139,250,0.12)':'rgba(255,107,157,0.10)';
+  ctx2.beginPath(); ctx2.moveTo(enemy.x,enemy.y);
+  ctx2.arc(enemy.x,enemy.y, dist+20, ang-errRad*2.2, ang+errRad*2.2); ctx2.closePath(); ctx2.fill();
+  ctx2.strokeStyle=cfg.hitscan?'rgba(167,139,250,0.35)':'rgba(255,107,157,0.35)'; ctx2.setLineDash([6,6]); ctx2.stroke(); ctx2.setLineDash([]);
+  // shield for jackal
+  if(archEl.value==='jackal'){
+    ctx2.fillStyle='rgba(88,166,255,0.18)'; ctx2.strokeStyle='#58a6ff'; ctx2.lineWidth=2;
+    ctx2.beginPath(); ctx2.arc(enemy.x,enemy.y,18, ang-0.9, ang+0.9); ctx2.lineTo(enemy.x,enemy.y); ctx2.closePath(); ctx2.fill(); ctx2.stroke();
+  }
+  // enemy
+  ctx2.fillStyle=cfg.color; ctx2.beginPath(); ctx2.arc(enemy.x,enemy.y,12,0,Math.PI*2); ctx2.fill();
+  ctx2.fillStyle='#0c1016'; ctx2.font='700 9px ui-monospace,monospace'; ctx2.textAlign='center';   ctx2.fillText(archEl.value.toUpperCase(), enemy.x, enemy.y+4); // arch = enemy+gun pair for demo; in code gun error is separate
+  ctx2.strokeStyle=cfg.color; ctx2.lineWidth=2.5; ctx2.beginPath(); ctx2.moveTo(enemy.x,enemy.y); ctx2.lineTo(enemy.x+14*Math.cos(ang), enemy.y+14*Math.sin(ang)); ctx2.stroke();
+  // player
+  ctx2.fillStyle=dodging?'#4ecdc4':'#8b9bb0'; ctx2.beginPath(); ctx2.arc(player.x,player.y,10,0,Math.PI*2); ctx2.fill();
+  ctx2.strokeStyle='#0c1016'; ctx2.lineWidth=2; ctx2.stroke();
+  ctx2.fillStyle='#0c1016'; ctx2.font='700 8px sans-serif'; ctx2.fillText('YOU', player.x, player.y+3);
+  // strafe arrow
+  ctx2.strokeStyle='rgba(78,205,196,0.5)'; ctx2.beginPath(); ctx2.moveTo(player.x,player.y-22); ctx2.lineTo(player.x,player.y+22); ctx2.stroke();
+  // shots
+  for(let s of shots){
+    if(s.hitscan){
+      ctx2.strokeStyle=cfg.color; ctx2.lineWidth=2; ctx2.globalAlpha=0.9*(1-s.t);
+      ctx2.beginPath(); ctx2.moveTo(s.x0,s.y0); ctx2.lineTo(s.x1,s.y1); ctx2.stroke(); ctx2.globalAlpha=1;
+    } else {
+      ctx2.fillStyle=cfg.color; ctx2.shadowColor=cfg.color; ctx2.shadowBlur=8;
+      ctx2.beginPath(); ctx2.arc(s.x,s.y,4.5,0,Math.PI*2); ctx2.fill(); ctx2.shadowBlur=0;
+      // trail
+      ctx2.strokeStyle=cfg.color; ctx2.globalAlpha=0.35; ctx2.lineWidth=1.5; ctx2.beginPath(); ctx2.moveTo(s.x0,s.y0); ctx2.lineTo(s.x,s.y); ctx2.stroke(); ctx2.globalAlpha=1;
+    }
+  }
+  // distance label
+  ctx2.fillStyle='#8b9bb0'; ctx2.font='11px ui-monospace,monospace'; ctx2.textAlign='left';
+  ctx2.fillText(`${(dist/10).toFixed(0)}m  cone ±${cfg.error.toFixed(1)}°  ${cfg.hitscan?'HITSCAN':'proj '+cfg.speed+'m/s'}`, 10, 18);
+  ctx2.fillStyle=dodging?'#4ecdc4':'#8b9bb0'; ctx2.fillText(dodging?'strafing — projectile dodgeable':'', 10, 34);
+}
+function fireBurst(){
+  const cfg=ARCH[archEl.value], dist=parseFloat(distEl.value)*10;
+  const enemy={x:80,y:260/2}, player={x:80+dist,y:260/2 + Math.sin(strafeT*1.8)*parseFloat(strafeEl.value)*18};
+  const baseAng=Math.atan2(player.y-enemy.y, player.x-enemy.x);
+  shots=[];
+  for(let i=0;i<cfg.burst;i++){
+    const e=(Math.random()-0.5)*2*cfg.error*Math.PI/180;
+    const ang=baseAng+e;
+    if(cfg.hitscan){
+      const miss=Math.random()<0.18 && cfg.error>2 ? 8 : 0;
+      shots.push({hitscan:true,x0:enemy.x,y0:enemy.y,x1:player.x+Math.cos(ang)*miss, y1:player.y+Math.sin(ang)*miss,t:0});
+    } else {
+      shots.push({hitscan:false,x0:enemy.x,y0:enemy.y,x:enemy.x,y:enemy.y, vx:Math.cos(ang)*cfg.speed*2.2, vy:Math.sin(ang)*cfg.speed*2.2, t:0, ang});
+    }
+  }
+  let hits=0; for(let s of shots){ if(!s.hitscan) continue; const d=Math.hypot(s.x1-player.x,s.y1-player.y); if(d<14) hits++; }
+  hitread.textContent = cfg.hitscan ? `burst ${hits}/${cfg.burst} would hit (strafe matters next 0.3s)` : `burst fired — travel ${(dist/10/cfg.speed).toFixed(2)}s to reach you`;
+  hitread.style.color=cfg.hitscan?'#a78bfa':'#ff6b9d';
+}
+function tick2(){
+  strafeT += 1/60;
+  // move projectiles
+  for(let s of shots){
+    if(!s.hitscan){ s.x+=s.vx*1/60; s.y+=s.vy*1/60; s.t+=1/60; if(s.t>1.4) s.t=1.4; }
+    else { s.t+=0.04; }
+  }
+  shots=shots.filter(s=>s.hitscan ? s.t<0.25 : s.t<1.2 && Math.hypot(s.x-80,s.y-130)<400);
+  // check dodge hits
+  const plY=130 + Math.sin(strafeT*1.8)*parseFloat(strafeEl.value)*18, plX=80+parseFloat(distEl.value)*10;
+  for(let s of shots){ if(!s.hitscan){ const d=Math.hypot(s.x-plX,s.y-plY); if(d<12 && s.t>0.08){ hitread.textContent='HIT — you stood still! strafe matters'; hitread.style.color='#ff6b9d'; } } }
+  draw2(); requestAnimationFrame(tick2);
+}
+fireBtn.addEventListener('click',fireBurst);
+dodgeBtn.addEventListener('click',()=>{
+  dodging=!dodgeBtn.classList.contains('on');
+  if(!dodging){ dodgeBtn.classList.add('on'); dodgeBtn.textContent='Stop dodge'; dodgeBtn.style.background='#4ecdc4'; dodgeBtn.style.color='#0c1016';
+    let t=0; const id=setInterval(()=>{ if(!dodgeBtn.classList.contains('on')){clearInterval(id); return;} t+=0.2; },80);
+  } else { dodgeBtn.classList.remove('on'); dodgeBtn.textContent='Dodge test'; dodgeBtn.style.background='var(--accent)'; }
+  dodging=dodgeBtn.classList.contains('on');
+});
+archEl.addEventListener('change',draw2); strafeEl.addEventListener('input',draw2); distEl.addEventListener('input',draw2);
+function fit2(){ const r=c2.getBoundingClientRect(); const d=window.devicePixelRatio||1; c2.width=r.width*d; c2.height=260*d; ctx2.setTransform(d,0,0,d,0,0); draw2(); }
+fit2(); window.addEventListener('resize',fit2); requestAnimationFrame(tick2);
+
+// ---- Rig visualizer ----
+const rv=document.getElementById('rv'), rctx=rv.getContext('2d');
+const rvArm=document.getElementById('rv-arm'), rvLeg=document.getElementById('rv-leg'), rvScale=document.getElementById('rv-scale');
+function drawRv(){
+  const dpr=window.devicePixelRatio||1;
+  rctx.save(); rctx.setTransform(1,0,0,1,0,0); rctx.clearRect(0,0,rv.width,rv.height); rctx.restore();
+  const w=rv.width/dpr, h=rv.height/dpr;
+  rctx.strokeStyle='#151c28'; for(let x=0;x<w;x+=40){ rctx.beginPath(); rctx.moveTo(x,0); rctx.lineTo(x,h); rctx.stroke(); }
+  rctx.fillStyle='#121a27'; rctx.fillRect(0,h-28,w,28);
+  const armDeg=parseFloat(rvArm.value)*Math.PI/180, legDeg=parseFloat(rvLeg.value)*Math.PI/180, sc=parseFloat(rvScale.value);
+  const cx=w/2, hipY=h-28-44*sc, torsoH=42*sc, headS=22*sc, legLen=44*sc, armLen=34*sc, shoulderY=hipY-torsoH+8*sc;
+  function limb(px,py,len,wid,ang,col){
+    rctx.save(); rctx.translate(px,py); rctx.rotate(ang);
+    rctx.fillStyle=col; rctx.fillRect(-wid/2,0,wid,len);
+    rctx.strokeStyle='#0a0e14'; rctx.lineWidth=1.5; rctx.strokeRect(-wid/2,0,wid,len);
+    rctx.fillStyle='#4ecdc4'; rctx.beginPath(); rctx.arc(0,0,3,0,Math.PI*2); rctx.fill(); // hip pivot dot
+    rctx.restore();
+    // foot dot
+    const fx=px+Math.sin(ang)*len, fy=py+Math.cos(ang)*len;
+    rctx.fillStyle='rgba(255,255,255,0.9)'; rctx.beginPath(); rctx.arc(fx,fy,2.5,0,Math.PI*2); rctx.fill();
+  }
+  // legs
+  limb(cx-9*sc, hipY, legLen, 12*sc, legDeg, '#6b7a90');
+  limb(cx+9*sc, hipY, legLen, 12*sc,-legDeg, '#6b7a90');
+  // torso
+  rctx.fillStyle='#4ecdc4'; rctx.strokeStyle='#0d2a2a'; rctx.lineWidth=2;
+  rctx.fillRect(cx-14*sc, hipY-torsoH, 28*sc, torsoH); rctx.strokeRect(cx-14*sc, hipY-torsoH, 28*sc, torsoH);
+  // arms
+  limb(cx-17*sc, shoulderY, armLen, 10*sc, armDeg, '#8b9bb0');
+  limb(cx+17*sc, shoulderY, armLen, 10*sc,-armDeg*0.9, '#ff6b9d');
+  // head
+  rctx.fillStyle='#f2e6d6'; rctx.fillRect(cx-headS/2, shoulderY-16*sc-headS, headS, headS);
+  rctx.strokeStyle='#0a0e14'; rctx.lineWidth=1.5; rctx.strokeRect(cx-headS/2, shoulderY-16*sc-headS, headS, headS);
+  // hip line
+  rctx.strokeStyle='rgba(78,205,196,0.6)'; rctx.setLineDash([4,4]); rctx.beginPath(); rctx.moveTo(cx-40,hipY); rctx.lineTo(cx+40,hipY); rctx.stroke(); rctx.setLineDash([]);
+  rctx.fillStyle='#8b9bb0'; rctx.font='10px ui-monospace,monospace'; rctx.textAlign='left';
+  rctx.fillText(`arm ${rvArm.value}°  leg ${rvLeg.value}°  scale ${sc.toFixed(2)}  hip stays pinned`, 10, 16);
+  rctx.fillStyle='rgba(78,205,196,0.9)'; rctx.fillText('hip pivot (top face)', cx+18, hipY-4);
+}
+rvArm.addEventListener('input',drawRv); rvLeg.addEventListener('input',drawRv); rvScale.addEventListener('input',drawRv);
+function fitRv(){ const r=rv.getBoundingClientRect(); const d=window.devicePixelRatio||1; rv.width=r.width*d; rv.height=220*d; rctx.setTransform(d,0,0,d,0,0); drawRv(); }
+fitRv(); window.addEventListener('resize',fitRv);
+</script>
+</body>
+</html>

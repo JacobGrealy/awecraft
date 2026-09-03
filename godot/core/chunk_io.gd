@@ -6,7 +6,8 @@ extends RefCounted
 # Pure static: no node deps, worker-safe, no Data/Game access (height is
 # derived from the array size and passed in).
 
-const VERSION := 3
+const VERSION := 4
+const V3_VERSION := 3  # AC-0197 sparse slabs (decodable, never written)
 const V2_VERSION := 2  # AC-0156 dense+light (decodable, never written)
 const LEGACY_VERSION := 1
 # Godot 4.7 has no GDScript-visible CompressionMode global; int 0 =
@@ -77,8 +78,17 @@ static func _encode_head(ver: int, data: PackedByteArray, fl: PackedByteArray, s
 	blob.append_array(_u16(height))
 	blob.append_array(_u16(sub))
 	# AC-0197: v3 = sparse slab sections (offset table of non-null slabs);
+	# AC-0203: v4 = sparse + PER-SLAB PALETTE (n, bits, palette, packed;
+	# n==1 omits the packed, n==0 = raw 8-bit slab for >16 unique ids);
 	# v1/v2 keep the dense _encode_array layout (back-compat).
 	if ver == VERSION:
+		var de := _encode_array_v4(data, sub, top)
+		blob.append_array(_u32(de.size()))
+		blob.append_array(de)
+		var fe := _encode_array_v4(fl, sub, top)
+		blob.append_array(_u32(fe.size()))
+		blob.append_array(fe)
+	elif ver == V3_VERSION:
 		var de := _encode_array_sparse(data, sub, top)
 		blob.append_array(_u32(de.size()))
 		blob.append_array(de)
@@ -141,7 +151,7 @@ static func decode_column(file_bytes: PackedByteArray, seed: int, height: int) -
 	if blob[0] != M0 or blob[1] != M1 or blob[2] != M2 or blob[3] != M3:
 		return fail
 	var ver := int(blob[4])
-	if ver != LEGACY_VERSION and ver != V2_VERSION and ver != VERSION:
+	if ver != LEGACY_VERSION and ver != V2_VERSION and ver != V3_VERSION and ver != VERSION:
 		return fail
 	if _u32r(blob, 5) != int(seed):
 		return fail
@@ -173,8 +183,8 @@ static func decode_column(file_bytes: PackedByteArray, seed: int, height: int) -
 		var li := blob.slice(fe_at + fe_size + 4, fe_at + fe_size + 4 + li_size)
 		light = _decode_light(li, sub)
 		md5_at = fe_at + fe_size + 4 + li_size
-	var dr = _decode_array_sparse(blob, de_at, sub) if ver == VERSION else _decode_array(blob, de_at, sub)
-	var fr = _decode_array_sparse(blob, fe_at, sub) if ver == VERSION else _decode_array(blob, fe_at, sub)
+	var dr = _decode_array_v4(blob, de_at, sub) if ver == VERSION else (_decode_array_sparse(blob, de_at, sub) if ver == V3_VERSION else _decode_array(blob, de_at, sub))
+	var fr = _decode_array_v4(blob, fe_at, sub) if ver == VERSION else (_decode_array_sparse(blob, fe_at, sub) if ver == V3_VERSION else _decode_array(blob, fe_at, sub))
 	if int(dr["off"]) != fe_sz_at:
 		return fail
 	if int(fr["off"]) != fe_at + fe_size:
@@ -187,6 +197,17 @@ static func decode_column(file_bytes: PackedByteArray, seed: int, height: int) -
 	if int(dr["arr"].size()) != int(height) * S * S:
 		return fail
 	var res := {"data": dr["arr"], "fl": fr["arr"]}
+	if ver == VERSION:
+		# AC-0203 recenter fix: the v4 disk handoff lands the slab array
+		# directly (the wire form IS the slab form) — the main thread skips
+		# the flat expansion + re-palettize (~35 ms/col). The flat arrays
+		# stay in res for the v1-v3 path, the chunkio arm, and probes.
+		var ds := _decode_slabs_v4(blob, de_at, sub)
+		var fs := _decode_slabs_v4(blob, fe_at, sub)
+		if int(ds["off"]) != fe_sz_at or int(fs["off"]) != fe_at + fe_size:
+			return fail
+		res["d_slabs"] = ds["slabs"]
+		res["f_slabs"] = fs["slabs"]
 	if not light.is_empty():
 		res["light"] = light
 	return res
@@ -437,6 +458,512 @@ static func _bits_for(n: int) -> int:
 	while (1 << b) < n:
 		b += 1
 	return b
+
+# AC-0203: v4 sparse paletted slabs. Same presence table as v3 (u8 count +
+# u16 ascending slab idx) with a per-slab payload: [n, bits, palette(n),
+# packed]. n==1 = uniform (bits 0, no packed — the 512 B zero-pack of v3 is
+# gone); n==2..16 = paletted (bits = _slab_bits_for(n), packed = bits*4096
+# bits MSB-first over palette INDICES); n==0 = raw 8-bit slab (bits 8, 4096
+# raw bytes — the >16-unique-ids fallback, lossless by construction).
+# Absent slabs are zero-filled by the decoder, so v4 round-trips to the
+# exact dense array (lossless).
+static func _encode_array_v4(arr: PackedByteArray, sub: int, top: int) -> PackedByteArray:
+	var out := PackedByteArray()
+	var lut := []
+	lut.resize(256)
+	var order := []
+	var vals := PackedByteArray()
+	vals.resize(S3)
+	var idxs: Array = []
+	var s := 0
+	while s < sub:
+		var present_s := true
+		if top >= 0 and s > top / S:
+			present_s = false
+		else:
+			var base0 := s * S3
+			var i := 0
+			while i < S3:
+				if arr[base0 + i] != 0:
+					break
+				i += 1
+			if i >= S3:
+				present_s = false
+		if present_s:
+			idxs.append(s)
+		s += 1
+	out.append(idxs.size())
+	for si in idxs:
+		out.append_array(_u16(int(si)))
+	for si2 in idxs:
+		for i in range(256):
+			lut[i] = -1
+		order.clear()
+		var base := int(si2) * S3
+		var i := 0
+		while i < S3:
+			var v: int = arr[base + i]
+			if lut[v] < 0:
+				lut[v] = order.size()
+				order.append(v)
+			i += 1
+		order.sort()
+		var n: int = order.size()
+		if n <= 16:
+			var remap := []
+			remap.resize(n)
+			var j := 0
+			while j < n:
+				remap[lut[order[j]]] = j
+				j += 1
+			for i2 in range(256):
+				lut[i2] = -1
+			j = 0
+			while j < n:
+				lut[order[j]] = j
+				j += 1
+			i = 0
+			while i < S3:
+				vals[i] = lut[arr[base + i]]
+				i += 1
+			out.append(n)
+			if n == 1:
+				out.append(0)
+				out.append(order[0])
+			else:
+				var bits := _slab_bits_for(n)
+				out.append(bits)
+				for v in order:
+					out.append(v)
+				out.append_array(_bitpack(vals, bits))
+		else:
+			out.append(0)
+			out.append(8)
+			out.append_array(arr.slice(base, base + S3))
+	return out
+
+
+static func _decode_array_v4(blob: PackedByteArray, off: int, sub: int) -> Dictionary:
+	var faild := PackedByteArray()
+	var out := PackedByteArray()
+	out.resize(sub * S3)
+	var o := off
+	if o >= blob.size():
+		return {"arr": faild, "off": 0}
+	var np := blob[o]
+	o += 1
+	if np > sub:
+		return {"arr": faild, "off": 0}
+	var idxs: Array = []
+	var i := 0
+	while i < np:
+		if o + 1 >= blob.size():
+			return {"arr": faild, "off": 0}
+		var si := _u16r(blob, o)
+		o += 2
+		if si < 0 or si >= sub or idxs.has(si):
+			return {"arr": faild, "off": 0}
+		idxs.append(si)
+		i += 1
+	i = 0
+	while i < np:
+		var si2 := int(idxs[i])
+		if o + 1 >= blob.size():
+			return {"arr": faild, "off": 0}
+		var n := blob[o]
+		o += 1
+		var bits := blob[o]
+		o += 1
+		var base := si2 * S3
+		if n == 0:
+			if bits != 8 or o + S3 > blob.size():
+				return {"arr": faild, "off": 0}
+			var raw := blob.slice(o, o + S3)
+			var j := 0
+			while j < S3:
+				out[base + j] = raw[j]
+				j += 1
+			o += S3
+		elif n == 1:
+			if bits != 0 or o + 1 > blob.size():
+				return {"arr": faild, "off": 0}
+			var fillv: int = blob[o]
+			o += 1
+			var j := 0
+			while j < S3:
+				out[base + j] = fillv
+				j += 1
+		else:
+			if n > 16 or bits != _slab_bits_for(n) or o + n > blob.size():
+				return {"arr": faild, "off": 0}
+			var order := []
+			var j := 0
+			while j < n:
+				order.append(blob[o])
+				o += 1
+				j += 1
+			var nbytes := (S3 * bits + 7) / 8
+			if o + nbytes > blob.size():
+				return {"arr": faild, "off": 0}
+			var packed := blob.slice(o, o + nbytes)
+			var idx := _bitunpack(packed, bits, S3)
+			j = 0
+			while j < S3:
+				out[base + j] = order[int(idx[j])]
+				j += 1
+			o += nbytes
+		i += 1
+	return {"arr": out, "off": o}
+
+# AC-0203 recenter fix: non-zero cell count of a paletted slab's packed
+# index stream (per-bits byte-parallel, same shape as _slab_unpack but
+# counts instead of emitting). Used by _decode_slabs_v4 so a v4 disk load
+# can skip the flat expansion + re-palettize round trip on the main thread.
+static func _slab_nz(i: PackedByteArray, bits: int, p: PackedByteArray) -> int:
+	var cnt := 0
+	if bits == 1:
+		for k in range(i.size()):
+			var b: int = i[k]
+			cnt += 8 - _popcount1(b, p)
+	elif bits == 2:
+		for k in range(i.size()):
+			var b: int = i[k]
+			cnt += 4 - _popcount2(b, p)
+	elif bits == 3:
+		var nb: int = i.size()
+		var k := 0
+		while k < nb:
+			var w: int = int(i[k]) << 16
+			if k + 1 < nb:
+				w |= int(i[k + 1]) << 8
+			if k + 2 < nb:
+				w |= int(i[k + 2])
+			for r in range(8):
+				if p[(w >> (21 - r * 3)) & 7] != 0:
+					cnt += 1
+			k += 3
+	elif bits == 4:
+		for k in range(i.size()):
+			var b: int = i[k]
+			if p[(b >> 4) & 15] != 0:
+				cnt += 1
+			if p[b & 15] != 0:
+				cnt += 1
+	else:
+		var j := 0
+		while j < S3:
+			if p[_slab_getbits(i, bits, j)] != 0:
+				cnt += 1
+			j += 1
+	return cnt
+
+
+static func _popcount1(b: int, p: PackedByteArray) -> int:
+	var c := 0
+	for r in range(8):
+		if p[(b >> (7 - r)) & 1] == 0:
+			c += 1
+	return c
+
+
+static func _popcount2(b: int, p: PackedByteArray) -> int:
+	var c := 0
+	for r in range(4):
+		if p[(b >> (6 - r * 2)) & 3] == 0:
+			c += 1
+	return c
+
+
+# AC-0203 recenter fix: v4 sections decoded straight into the slab array
+# (the runtime twin of the wire form): present slabs become {n,b,p,i,nz}
+# dicts (the packed index bytes ARE the slab's i — no unpack/repack),
+# absent slabs stay null. nz is counted during the pass. Fail-closed like
+# _decode_array_v4 (same structural checks + the same final offset).
+static func _decode_slabs_v4(blob: PackedByteArray, off: int, sub: int) -> Dictionary:
+	var out: Array = []
+	var i := 0
+	while i < sub:
+		out.append(null)
+		i += 1
+	var o := off
+	if o >= blob.size():
+		return {"slabs": out, "off": 0}
+	var np := blob[o]
+	o += 1
+	if np > sub:
+		return {"slabs": out, "off": 0}
+	var idxs: Array = []
+	i = 0
+	while i < np:
+		if o + 1 >= blob.size():
+			return {"slabs": out, "off": 0}
+		var si := _u16r(blob, o)
+		o += 2
+		if si < 0 or si >= sub or idxs.has(si):
+			return {"slabs": out, "off": 0}
+		idxs.append(si)
+		i += 1
+	i = 0
+	while i < np:
+		var si2 := int(idxs[i])
+		if o + 1 >= blob.size():
+			return {"slabs": out, "off": 0}
+		var n := blob[o]
+		o += 1
+		var bits := blob[o]
+		o += 1
+		if n == 0:
+			if bits != 8 or o + S3 > blob.size():
+				return {"slabs": out, "off": 0}
+			var raw := blob.slice(o, o + S3)
+			var nz := 0
+			var j := 0
+			while j < S3:
+				if raw[j] != 0:
+					nz += 1
+				j += 1
+			if nz > 0:
+				out[si2] = {"n": 0, "b": 8, "p": PackedByteArray(), "i": raw, "nz": nz}
+			o += S3
+		elif n == 1:
+			if bits != 0 or o + 1 > blob.size():
+				return {"slabs": out, "off": 0}
+			var fillv: int = blob[o]
+			o += 1
+			if fillv != 0:
+				out[si2] = {"n": 1, "b": 0, "p": PackedByteArray([fillv]), "i": PackedByteArray(), "nz": S3}
+		else:
+			if n > 16 or bits != _slab_bits_for(n) or o + n > blob.size():
+				return {"slabs": out, "off": 0}
+			var p := PackedByteArray()
+			var j := 0
+			while j < n:
+				p.append(blob[o])
+				o += 1
+				j += 1
+			var nbytes := (S3 * bits + 7) / 8
+			if o + nbytes > blob.size():
+				return {"slabs": out, "off": 0}
+			var packed := blob.slice(o, o + nbytes)
+			var nz2 := _slab_nz(packed, bits, p)
+			if nz2 > 0:
+				out[si2] = {"n": n, "b": bits, "p": p, "i": packed, "nz": nz2}
+			o += nbytes
+		i += 1
+	return {"slabs": out, "off": o}
+
+
+# AC-0203: in-memory slab representation (the runtime twin of the v4 wire
+# form). A slab is null (all air) or a Dictionary {n, b, p, i, nz}:
+#   n==1  uniform  — p[0] is the value, i empty, b 0
+#   n>=2  paletted — p holds n ids, i holds b*4096 bits (MSB-first) of
+#          palette INDICES, b = _slab_bits_for(n)
+#   n==0  raw      — i holds the 4096 cell values directly, b 8
+# nz = count of non-zero cells (top scans, null-ification, sparse fluid).
+# Pure static + worker-safe (no Data/Game) — the same code the codec uses.
+
+static func _slab_bits_for(n: int) -> int:
+	var b := 0
+	while (1 << b) < n:
+		b += 1
+	return b
+
+
+static func _slab_getbits(i: PackedByteArray, bits: int, pos: int) -> int:
+	var bo: int = (pos * bits) >> 3
+	var sh: int = (pos * bits) & 7
+	var w: int = int(i[bo]) << 8
+	if bo + 1 < i.size():
+		w |= int(i[bo + 1])
+	return (w >> (16 - sh - bits)) & ((1 << bits) - 1)
+
+
+static func _slab_setbits(i: PackedByteArray, bits: int, pos: int, val: int) -> void:
+	var bo: int = (pos * bits) >> 3
+	var sh: int = (pos * bits) & 7
+	var w: int = int(i[bo]) << 8
+	if bo + 1 < i.size():
+		w |= int(i[bo + 1])
+	var mask: int = (1 << bits) - 1
+	var sb: int = 16 - sh - bits
+	w = (w & ~(mask << sb)) | (val << sb)
+	i[bo] = (w >> 8) & 255
+	if bo + 1 < i.size():
+		i[bo + 1] = w & 255
+
+
+static func _slab_cell(s: Dictionary, pos: int) -> int:
+	var n: int = int(s["n"])
+	if n == 1:
+		return int(s["p"][0])
+	if n == 0:
+		return int(s["i"][pos])
+	return int(s["p"][_slab_getbits(s["i"], int(s["b"]), pos)])
+
+
+static func _slab_unpack(i: PackedByteArray, bits: int, p: PackedByteArray) -> PackedByteArray:
+	var out := PackedByteArray()
+	out.resize(S3)
+	if bits == 1:
+		var j := 0
+		for k in range(i.size()):
+			var b: int = i[k]
+			for r in range(8):
+				out[j] = p[(b >> (7 - r)) & 1]
+				j += 1
+	elif bits == 2:
+		var j := 0
+		for k in range(i.size()):
+			var b: int = i[k]
+			for r in range(4):
+				out[j] = p[(b >> (6 - r * 2)) & 3]
+				j += 1
+	elif bits == 3:
+		var j := 0
+		var k := 0
+		var nb: int = i.size()
+		while j < S3:
+			var w: int = int(i[k]) << 16
+			if k + 1 < nb:
+				w |= int(i[k + 1]) << 8
+			if k + 2 < nb:
+				w |= int(i[k + 2])
+			for r in range(8):
+				out[j] = p[(w >> (21 - r * 3)) & 7]
+				j += 1
+			k += 3
+	elif bits == 4:
+		var j := 0
+		for k in range(i.size()):
+			var b: int = i[k]
+			out[j] = p[(b >> 4) & 15]
+			out[j + 1] = p[b & 15]
+			j += 2
+	else:
+		var j := 0
+		while j < S3:
+			out[j] = p[_slab_getbits(i, bits, j)]
+			j += 1
+	return out
+
+
+# AC-0203 recenter fix: an all-null slab array of nsl slabs (the gen
+# landing's fl half — gen produces no fluid). Replaces a 98 KB zero-fill +
+# palettize scan on the worker.
+static func empty_slabs(nsl: int) -> Array:
+	var out: Array = []
+	var i := 0
+	while i < nsl:
+		out.append(null)
+		i += 1
+	return out
+
+
+static func _slab_flat(s) -> PackedByteArray:
+	if s == null:
+		return PackedByteArray()
+	var n: int = int(s["n"])
+	if n == 1:
+		var out := PackedByteArray()
+		out.resize(S3)
+		out.fill(int(s["p"][0]))
+		return out
+	if n == 0:
+		return (s["i"] as PackedByteArray).duplicate()
+	return _slab_unpack(s["i"], int(s["b"]), s["p"])
+
+
+static func _slabs_flat(slabs: Array) -> PackedByteArray:
+	# Always returns the FULL column (slabs.size()*S3 bytes). A null slab
+	# contributes its 4096 zero cells (NOT an empty buffer — a mid-column
+	# null must keep its position, so the flat layout stays index-identical
+	# to the legacy (y<<8)|(lz<<4)|lx column for probes / save handoff).
+	var out := PackedByteArray()
+	var zeros := PackedByteArray()
+	zeros.resize(S3)
+	for s in slabs:
+		if s == null:
+			out.append_array(zeros)
+		else:
+			out.append_array(_slab_flat(s))
+	return out
+
+
+static func _slabs_deepcopy(slabs: Array) -> Array:
+	var out: Array = []
+	for s in slabs:
+		if s == null:
+			out.append(null)
+			continue
+		out.append({
+			"n": int(s["n"]),
+			"b": int(s["b"]),
+			"p": (s["p"] as PackedByteArray).duplicate(),
+			"i": (s["i"] as PackedByteArray).duplicate(),
+			"nz": int(s["nz"]),
+		})
+	return out
+
+
+static func palettize_flat(arr: PackedByteArray, nsl: int) -> Array:
+	# AC-0203 recenter fix: LUT-based (no per-cell Dictionary hashing) +
+	# batch pack (no per-cell _slab_setbits call) — the main-thread landing
+	# path (every gen/disk column) was 35 ms/col on this measure; this form
+	# is a tight read loop + one _bitpack pass per slab.
+	var out: Array = []
+	var n := arr.size() / S3
+	var seen := []
+	seen.resize(256)
+	var order := []
+	var remap := []
+	remap.resize(256)
+	var vals := PackedByteArray()
+	vals.resize(S3)
+	var si := 0
+	while si < n:
+		var base := si * S3
+		var i := 0
+		while i < 256:
+			seen[i] = -1
+			i += 1
+		order.clear()
+		var nz := 0
+		i = 0
+		while i < S3:
+			var v: int = arr[base + i]
+			if seen[v] < 0:
+				seen[v] = order.size()
+				order.append(v)
+			if v != 0:
+				nz += 1
+			i += 1
+		var nn: int = order.size()
+		if nz == 0:
+			out.append(null)
+		elif nn == 1:
+			var k: int = int(order[0])
+			out.append({"n": 1, "b": 0, "p": PackedByteArray([k]), "i": PackedByteArray(), "nz": nz})
+		elif nn <= 16:
+			var p := PackedByteArray()
+			for u in order:
+				p.append(int(u))
+			p.sort()
+			var pn: int = p.size()
+			var j := 0
+			while j < pn:
+				remap[int(p[j])] = j
+				j += 1
+			i = 0
+			while i < S3:
+				vals[i] = remap[arr[base + i]]
+				i += 1
+			out.append({"n": pn, "b": _slab_bits_for(pn), "p": p, "i": _bitpack(vals, _slab_bits_for(pn)), "nz": nz})
+		else:
+			out.append({"n": 0, "b": 8, "p": PackedByteArray(), "i": arr.slice(base, base + S3), "nz": nz})
+		si += 1
+	while out.size() < nsl:
+		out.append(null)
+	return out
 
 static func _bitpack(vals: PackedByteArray, bits: int) -> PackedByteArray:
 	var n: int = vals.size()

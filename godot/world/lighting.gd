@@ -88,7 +88,9 @@ static func compute_light_split(box: Dictionary, world) -> Dictionary:
 			var i0 := ix + iz * w
 			var open := true
 			if c != null:
-				var nd: PackedByteArray = c.data
+				# AC-0203: neighbor column materialized flat (multi-chunk box
+				# kernel — rare probe path, not the hot lane).
+				var nd: PackedByteArray = c.flat_data()
 				for y in range(H - 1, mn.y - 1, -1):
 					var b: int = nd[(y << 8) | (lz << 4) | lx]
 					if y > mx.y:
@@ -180,7 +182,9 @@ static func compute_light_flat(box: Dictionary, world) -> Dictionary:
 			var i0 := ix + iz * w
 			var open := true
 			if c != null:
-				var nd: PackedByteArray = c.data
+				# AC-0203: neighbor column materialized flat (multi-chunk box
+				# kernel — rare probe path, not the hot lane).
+				var nd: PackedByteArray = c.flat_data()
 				for y in range(H - 1, mn.y - 1, -1):
 					var b: int = nd[(y << 8) | (lz << 4) | lx]
 					if y > mx.y:
@@ -233,34 +237,50 @@ static func compute_light_flat(box: Dictionary, world) -> Dictionary:
 # (world._ready), so a worker call never touches Data. Buffers (ids/sky/blk,
 # sized 16x16*h with sky/blk zeroed by the caller) are reused across calls;
 # a fresh eff (16x16*h) is returned per call.
-static func _chunk_light_into(data: PackedByteArray, cx: int, cz: int, h: int, ids: PackedByteArray, sky: PackedByteArray, blk: PackedByteArray) -> PackedByteArray:
+static func _chunk_light_into(data, cx: int, cz: int, h: int, ids: PackedByteArray, sky: PackedByteArray, blk: PackedByteArray) -> PackedByteArray:
+	# AC-0203: data is the 24-slab array; reads go through per-slab flat
+	# views (scan order and open-flag semantics unchanged).
 	var mn := Vector3i(cx * 16, 0, cz * 16)
 	var mx := Vector3i(cx * 16 + 15, h - 1, cz * 16 + 15)
 	var w := 16
 	var d := 16
 	var H: int = h
 	var sz := w * d
+	var dviews: Array = []
+	for s in data:
+		dviews.append(ChunkIO._slab_flat(s))
 	var has_glow := false
 	for ix in range(w):
 		for iz in range(d):
 			var i0 := ix + iz * w
 			var open := true
-			for y in range(H - 1, mn.y - 1, -1):
-				var b: int = data[(y << 8) | (iz << 4) | ix]
-				if y > mx.y:
+			for si in range((H - 1) >> 4, -1, -1):
+				var lo := si * 16
+				var c_hi: int = mini(16, H - lo)
+				var dv: PackedByteArray = dviews[si]
+				var hasv: bool = dv.size() > 0
+				var cy := c_hi - 1
+				while cy >= 0:
+					var y: int = lo + cy
+					var b: int = 0
+					if hasv:
+						b = int(dv[(cy << 8) | (iz << 4) | ix])
+					if y > mx.y:
+						if open and _att[b] == 0:
+							open = false
+						cy -= 1
+						continue
+					var i := (y - mn.y) * sz + i0
+					ids[i] = b
+					if open and _att[b] > 0:
+						sky[i] = SKY_FULL
+					var lv := _glow[b]
+					if lv > 0:
+						blk[i] = lv
+						has_glow = true
 					if open and _att[b] == 0:
 						open = false
-					continue
-				var i := (y - mn.y) * sz + i0
-				ids[i] = b
-				if open and _att[b] > 0:
-					sky[i] = SKY_FULL
-				var lv := _glow[b]
-				if lv > 0:
-					blk[i] = lv
-					has_glow = true
-				if open and _att[b] == 0:
-					open = false
+					cy -= 1
 	_flood_flat(sky, ids, w, h, d)
 	if has_glow:
 		_flood_flat(blk, ids, w, h, d)
@@ -273,7 +293,7 @@ static func _chunk_light_into(data: PackedByteArray, cx: int, cz: int, h: int, i
 	return eff
 
 
-static func compute_light_flat_chunk(data: PackedByteArray, cx: int, cz: int, h: int) -> Dictionary:
+static func compute_light_flat_chunk(data, cx: int, cz: int, h: int) -> Dictionary:
 	_tables()
 	var sz := 16 * 16
 	var ids := PackedByteArray()
@@ -297,12 +317,21 @@ static func compute_light_flat_chunk(data: PackedByteArray, cx: int, cz: int, h:
 # across the boundary; t = our z for E/W, our x for S/N); empty/short strip =
 # that side stays as its own flood left it. eff_strips rides along for the
 # caller's 20x20 bake box (unused here).
-static func compute_light_flat_chunk_pull(data: PackedByteArray, cx: int, cz: int, h: int, eff_strips: Array, blk_strips: Array, blk_strips_b: Array, top := -1) -> Dictionary:
+static func compute_light_flat_chunk_pull(data, cx: int, cz: int, h: int, eff_strips: Array, blk_strips: Array, blk_strips_b: Array, top := -1, dviews: Variant = null) -> Dictionary:
 	# AC-0197: rows above the column's top (max non-air y) are ALL air — open
 	# sky, so eff == 15 there and nothing below can raise them above 15. The
 	# scan/floods run only on rows 0..top (block glow bleeds 14 up from a
 	# source, so the blk/mask pass runs to top+14); eff rows above top are
 	# filled 15 directly (byte-identical to the full scan).
+	# AC-0203: data is the 24-slab array; the column scan (still per-column,
+	# still top-down, open carried across slab boundaries) reads per-slab
+	# flat views — byte-identical to the flat kernel. dviews (optional) is a
+	# pre-materialized view set (build_accs shares one set with its face
+	# loop); null = materialize from data.
+	if dviews == null:
+		dviews = []
+		for s in data:
+			dviews.append(ChunkIO._slab_flat(s))
 	var sz := 16 * 16
 	var hact := h
 	var hblk := h
@@ -316,22 +345,35 @@ static func compute_light_flat_chunk_pull(data: PackedByteArray, cx: int, cz: in
 	var blk := PackedByteArray()
 	blk.resize(sz * h)
 	var has_glow := false
+	var s_top: int = maxi(0, (hact - 1) >> 4)
 	for ix in range(16):
 		for iz in range(16):
 			var i0 := ix + iz * 16
 			var open := true
-			for y in range(hact - 1, -1, -1):
-				var b: int = data[(y << 8) | (iz << 4) | ix]
-				var i := y * sz + i0
-				ids[i] = b
-				if open and _att[b] > 0:
-					sky[i] = SKY_FULL
-				var lv := _glow[b]
-				if lv > 0:
-					blk[i] = lv
-					has_glow = true
-				if open and _att[b] == 0:
-					open = false
+			for si in range(s_top, -1, -1):
+				var lo := si * 16
+				var c_hi: int = mini(16, hact - lo)
+				if c_hi <= 0:
+					continue
+				var dv: PackedByteArray = dviews[si]
+				var hasv: bool = dv.size() > 0
+				var cy := c_hi - 1
+				while cy >= 0:
+					var y: int = lo + cy
+					var b: int = 0
+					if hasv:
+						b = int(dv[(cy << 8) | (iz << 4) | ix])
+					var i := y * sz + i0
+					ids[i] = b
+					if open and _att[b] > 0:
+						sky[i] = SKY_FULL
+					var lv := _glow[b]
+					if lv > 0:
+						blk[i] = lv
+						has_glow = true
+					if open and _att[b] == 0:
+						open = false
+					cy -= 1
 	var eff := PackedByteArray()
 	eff.resize(sz * h)
 	for y in range(hact, h):
@@ -465,8 +507,8 @@ static func compute_light_flat_batch(items: Array, budget_us: int = 0) -> Array:
 	for it in items:
 		if budget_us > 0 and not out.is_empty() and Time.get_ticks_usec() - st0 > budget_us:
 			break
-		var data: PackedByteArray = it["data"]
-		var h := data.size() / sz
+		var data = it["data"]
+		var h := Data.HEIGHT
 		sky.fill(0)
 		blk.fill(0)
 		var eff := _chunk_light_into(data, int(it["cx"]), int(it["cz"]), h, ids, sky, blk)

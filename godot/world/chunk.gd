@@ -11,8 +11,13 @@ const XQ_B := [Vector3(0.5, 0, 0), Vector3(0.5, 0, 1), Vector3(0.5, 1, 1), Vecto
 var cx := 0
 var cz := 0
 var face := 0
-var data := PackedByteArray()
-var fl := PackedByteArray()
+# AC-0203: per-slab palette representation (MC 1.18 style). 24 slabs of
+# 16x16x16; each is null (all air) or a ChunkIO slab dict {n,b,p,i,nz}:
+# n==1 uniform, n==2..16 paletted (packed bit indices), n==0 raw 8-bit
+# (>16 unique ids, lossless). The flat (y<<8)|(lz<<4)|lx view is provided
+# by get_local/get_at/fl_at/flat_data (lazy expansion — probes/saves only).
+var data: Array = []
+var fl: Array = []
 var mesh_built := false
 var mesh_gen := 0
 var collision_enabled := true
@@ -27,6 +32,9 @@ var last_blk_ring: PackedInt32Array = PackedInt32Array()
 # invalidate when it moves — the pull strips derive from our last_eff.
 var eff_gen := 0
 var data_gen := 0
+# AC-0203: bumped by every fl mutation (set_fl_at / data_landed / clear_data)
+# — the fl half of the stamp used by cache/dispatch invalidation.
+var fl_gen := 0
 # AC-0197: max y holding any non-air block in this column (-1 = no data yet).
 # Every row above top is air BY DEFINITION, so slabs > top/16 are empty:
 # build_accs stops at top/16, the pull kernel fills eff=15 above top and
@@ -41,20 +49,27 @@ func update_top() -> void:
 		top = -1
 		return
 	var t := -1
-	var y := Data.HEIGHT - 1
-	while y >= 0:
-		var row := y << 8
-		var anyv := false
-		var i := 0
-		while i < 256:
-			if data[row + i] != 0:
-				anyv = true
-				break
-			i += 1
-		if anyv:
-			t = y
+	var si := data.size() - 1
+	while si >= 0:
+		var s = data[si]
+		if s != null:
+			var flat := ChunkIO._slab_flat(s)
+			var cy := 15
+			while cy >= 0:
+				var row := cy << 8
+				var anyv := false
+				var i := 0
+				while i < 256:
+					if flat[row + i] != 0:
+						anyv = true
+						break
+					i += 1
+				if anyv:
+					t = si * 16 + cy
+					break
+				cy -= 1
 			break
-		y -= 1
+		si -= 1
 	top = t
 # AC-0080 two-stage hysteresis: candidate = at Chebyshev r+1 with expensive
 # parts killed (mesh/collision), data+edits kept; cand_since = count of
@@ -71,8 +86,9 @@ var band := 0
 var lod_pending := false
 var alt_lod := -1
 var alt_slabs: Array = []
-var alt_data := PackedByteArray()
-var alt_fl := PackedByteArray()
+# AC-0203: stamp [data_gen, fl_gen] captured at store/swap time replaces the
+# alt_data/alt_fl full-column duplicates (192 KB per cached chunk).
+var alt_stamp: Array = []
 var alt_atlas: Texture2D = null
 var lod_builds := 0
 var lod_swaps := 0
@@ -299,22 +315,234 @@ static func _merge_atlas() -> Dictionary:
 
 
 func get_local(lx: int, y: int, lz: int) -> int:
-	return data[(y << 8) | (lz << 4) | lx]
+	var s = data[y >> 4]
+	if s == null:
+		return 0
+	return ChunkIO._slab_cell(s, ((y & 15) << 8) | (lz << 4) | lx)
 
 
 func set_local(lx: int, y: int, lz: int, id: int) -> void:
-	data[(y << 8) | (lz << 4) | lx] = id
+	_slab_write(data, y, lz, lx, id)
 	data_gen += 1
 	if id != 0 and y > top:
 		top = y
 
 
-func init_fl() -> void:
-	# Natural water generates as a stationary source: fl stays 0 (fluid_level() maps
-	# 0 -> 8 for display and sim), so the natural ocean never falls or churns.
-	# Player/bucket water arrives later with an explicit fl (8) and flows.
-	fl.resize(data.size())
-	update_top()  # AC-0197: every gen path finalizes data here
+func get_at(fi: int) -> int:
+	return get_local(fi & 15, fi >> 8, (fi >> 4) & 15)
+
+
+func fl_at(fi: int) -> int:
+	var y: int = fi >> 8
+	var s = fl[y >> 4]
+	if s == null:
+		return 0
+	return ChunkIO._slab_cell(s, ((y & 15) << 8) | (fi & 255))
+
+
+func set_fl_at(fi: int, lvl: int) -> void:
+	var y: int = fi >> 8
+	_slab_write(fl, y, (fi >> 4) & 15, fi & 15, lvl)
+	fl_gen += 1
+
+
+func get_fl(lx: int, y: int, lz: int) -> int:
+	return fl_at((y << 8) | (lz << 4) | lx)
+
+
+func set_fl(lx: int, y: int, lz: int, lvl: int) -> void:
+	set_fl_at((y << 8) | (lz << 4) | lx, lvl)
+
+
+func stamp() -> Array:
+	return [data_gen, fl_gen]
+
+
+# AC-0203: lazy flat expansion — the only way back to the legacy
+# (y<<8)|(lz<<4)|lx view (probes, save handoff, legacy kernels). Not on the
+# R50 steady-state hot path (worker builds run on slab views).
+func flat_data() -> PackedByteArray:
+	return ChunkIO._slabs_flat(data)
+
+
+func flat_fl() -> PackedByteArray:
+	return ChunkIO._slabs_flat(fl)
+
+
+func row_bytes(y: int) -> PackedByteArray:
+	return _slabs_row(data, y)
+
+
+func fl_row_bytes(y: int) -> PackedByteArray:
+	return _slabs_row(fl, y)
+
+
+static func _slabs_row(slabs: Array, y: int) -> PackedByteArray:
+	var s = slabs[y >> 4]
+	var out := PackedByteArray()
+	out.resize(256)
+	if s != null:
+		var flat := ChunkIO._slab_flat(s)
+		var base := (y & 15) << 8
+		for i in range(256):
+			out[i] = flat[base + i]
+	return out
+
+
+# AC-0203: the single flat->paletted conversion point. Every data landing
+# (gen, threadgen/burst handoff, disk load, io-read handoff, face gen,
+# battery clear) goes through here. Natural water note (ex-init_fl): fl
+# arrives zero (or as the on-disk fl column); fluid_level() maps 0 -> 8 for
+# display and sim, so the natural ocean never falls or churns.
+func data_landed(d: PackedByteArray, f: PackedByteArray) -> void:
+	data = ChunkIO.palettize_flat(d, slab_n())
+	if f.is_empty():
+		var zf := PackedByteArray()
+		zf.resize(d.size())
+		fl = ChunkIO.palettize_flat(zf, slab_n())
+	else:
+		fl = ChunkIO.palettize_flat(f, slab_n())
+	data_gen += 1
+	fl_gen += 1
+	update_top()
+
+
+# AC-0203 recenter fix: v4 disk-landing path — the decoder already produced
+# the slab array (the wire form is the slab form), so this is a reference
+# handoff: no flat expansion, no re-palettize on the main thread.
+func slabs_landed(ds: Array, fs: Array) -> void:
+	if ds.size() != slab_n() or fs.size() != slab_n():
+		data = ChunkIO.palettize_flat(ChunkIO._slabs_flat(ds), slab_n())
+		fl = ChunkIO.palettize_flat(ChunkIO._slabs_flat(fs), slab_n())
+	else:
+		data = ds
+		fl = fs
+	data_gen += 1
+	fl_gen += 1
+	update_top()
+
+
+func clear_data() -> void:
+	var ns: Array = []
+	for i in range(slab_n()):
+		ns.append(null)
+	data = ns
+	var nf: Array = []
+	for i in range(slab_n()):
+		nf.append(null)
+	fl = nf
+	top = -1
+	data_gen += 1
+	fl_gen += 1
+
+
+# AC-0203: slab write with palette growth. The slab invariant holds on
+# return: null = all air; otherwise nz>0, n<=16 (or raw n==0 when the
+# palette overflows), i consistent with b, nz = non-zero cell count.
+static func _slab_write(slabs: Array, y: int, lz: int, lx: int, val: int) -> void:
+	var si := y >> 4
+	var pos := ((y & 15) << 8) | (lz << 4) | lx
+	var s = slabs[si]
+	if s == null:
+		if val == 0:
+			return
+		var p := PackedByteArray()
+		p.append(0)
+		p.append(val)
+		var idx := PackedByteArray()
+		idx.resize(512)
+		ChunkIO._slab_setbits(idx, 1, pos, 1)
+		slabs[si] = {"n": 2, "b": 1, "p": p, "i": idx, "nz": 1}
+		return
+	var cur: int = ChunkIO._slab_cell(s, pos)
+	if cur == val:
+		return
+	var n: int = int(s["n"])
+	if n == 0:
+		var ri: PackedByteArray = s["i"]
+		ri[pos] = val
+		var rz: int = int(s["nz"])
+		if cur != 0:
+			rz -= 1
+		if val != 0:
+			rz += 1
+		if rz == 0:
+			slabs[si] = null
+		else:
+			s["nz"] = rz
+		return
+	var p2: PackedByteArray = s["p"]
+	var pi := -1
+	var k := 0
+	while k < n:
+		if int(p2[k]) == val:
+			pi = k
+			break
+		k += 1
+	if pi < 0:
+		if n == 1:
+			var v0: int = int(p2[0])
+			var np := PackedByteArray()
+			np.append(v0)
+			np.append(val)
+			var idx2 := PackedByteArray()
+			idx2.resize(512)
+			ChunkIO._slab_setbits(idx2, 1, pos, 1)
+			var nz2: int = 0
+			if v0 != 0:
+				nz2 = 4095
+			if val != 0:
+				nz2 += 1
+			if nz2 == 0:
+				slabs[si] = null
+			else:
+				slabs[si] = {"n": 2, "b": 1, "p": np, "i": idx2, "nz": nz2}
+			return
+		if n >= 16:
+			var raw := ChunkIO._slab_flat(s)
+			raw[pos] = val
+			var nz3 := 0
+			var i := 0
+			while i < 4096:
+				if raw[i] != 0:
+					nz3 += 1
+				i += 1
+			if nz3 == 0:
+				slabs[si] = null
+			else:
+				slabs[si] = {"n": 0, "b": 8, "p": PackedByteArray(), "i": raw, "nz": nz3}
+			return
+		p2.append(val)
+		pi = n
+		var nn: int = n + 1
+		var nb: int = ChunkIO._slab_bits_for(nn)
+		var ob: int = int(s["b"])
+		if nb > ob:
+			var inv := {}
+			var kk := 0
+			while kk < n:
+				inv[p2[kk]] = kk
+				kk += 1
+			var flatv := ChunkIO._slab_flat(s)
+			var nidx := PackedByteArray()
+			nidx.resize((4096 * nb + 7) / 8)
+			var pos2 := 0
+			while pos2 < 4096:
+				ChunkIO._slab_setbits(nidx, nb, pos2, int(inv[flatv[pos2]]))
+				pos2 += 1
+			s["i"] = nidx
+		s["b"] = nb
+		s["n"] = nn
+		s["p"] = p2
+	var nz4: int = int(s["nz"])
+	if cur != 0:
+		nz4 -= 1
+	if val != 0:
+		nz4 += 1
+	ChunkIO._slab_setbits(s["i"], int(s["b"]), pos, pi)
+	s["nz"] = nz4
+	if nz4 == 0:
+		slabs[si] = null
 
 
 func _effl(lmn: Vector3i, larr: PackedByteArray, lw: int, ld: int, x: int, y: int, z: int) -> int:
@@ -1322,26 +1550,28 @@ static func _s_emit_fluid(recs: Array, accs: Array, snap: PackedByteArray, snap_
 			sa.q += 1
 
 
-static func _build_snap_data(snap: PackedByteArray, snap_fl: PackedByteArray, data: PackedByteArray, fl: PackedByteArray, cx: int, cz: int, nbs: Dictionary, h: int, y_lo := 0, y_hi := -1, d_off := 0) -> void:
+static func _build_snap_data(snap: PackedByteArray, snap_fl: PackedByteArray, dviews: Array, fviews: Array, nv: Dictionary, cx: int, cz: int, h: int, y_lo := 0, y_hi := -1) -> void:
 	# Static mirror of _build_snap: the 8 neighbor copies are ALWAYS present in
 	# nbs (dispatch rule: a missing neighbor takes the sync path instead), so
 	# the Game.world / on-demand-generation fallback of _build_snap is absent.
 	# y_lo/y_hi scope the row fill (slab-scoped edit builds); rows outside the
 	# range stay zero (never sampled by scoped face/interior checks).
+	# AC-0203: reads go through per-slab flat views (null slab = all-zero row
+	# view) — byte-identical to the old flat-array fill.
 	if y_hi < 0:
 		y_hi = h - 1
-	var d: PackedByteArray = data
-	var fd: PackedByteArray = fl
 	for y in range(y_lo, y_hi + 1):
 		var si := y * SNAP_ROW
-		var di := (y - d_off) << 8
+		var dslab: PackedByteArray = dviews[y >> 4]
+		var fslab: PackedByteArray = fviews[y >> 4]
+		var drow := (y & 15) << 8
 		for lz in range(SIZE):
 			var szi := si + (lz + 1) * SNAP_W
-			var drow := di + (lz << 4)
+			var r0 := drow + (lz << 4)
 			for lx in range(SIZE):
-				var dv: int = d[drow + lx]
+				var dv: int = 0 if dslab.is_empty() else int(dslab[r0 + lx])
 				snap[szi + lx + 1] = dv
-				var fv: int = fd[drow + lx]
+				var fv: int = 0 if fslab.is_empty() else int(fslab[r0 + lx])
 				if fv == 0 and (dv == 5 or dv == 24):
 					fv = 8
 				snap_fl[szi + lx + 1] = fv
@@ -1349,22 +1579,24 @@ static func _build_snap_data(snap: PackedByteArray, snap_fl: PackedByteArray, da
 		for dz in range(-1, 2):
 			if (dx == 0) == (dz == 0):
 				continue
-			var nb: Dictionary = nbs["%d,%d" % [dx, dz]]
-			var nd: PackedByteArray = nb["d"]
-			var nfd: PackedByteArray = nb["f"]
+			var nbv: Array = nv["%d,%d" % [dx, dz]]
+			var ndv: Array = nbv[0]
+			var nfdv: Array = nbv[1]
 			var xb := _band(dx)
 			var zb := _band(dz)
 			for y in range(y_lo, y_hi + 1):
 				var si := y * SNAP_ROW
-				var di := (y - d_off) << 8
+				var nd: PackedByteArray = ndv[y >> 4]
+				var nfd: PackedByteArray = nfdv[y >> 4]
+				var drow := (y & 15) << 8
 				for e in zb:
 					var szi := si + int(e[0]) * SNAP_W
-					var drow := di + (int(e[1]) << 4)
+					var r0 := drow + (int(e[1]) << 4)
 					for g in xb:
 						var sxy := szi + int(g[0])
 						var gi: int = int(g[1])
-						var dv: int = int(nd[drow + gi])
-						var fv: int = int(nfd[drow + gi])
+						var dv: int = 0 if nd.is_empty() else int(nd[r0 + gi])
+						var fv: int = 0 if nfd.is_empty() else int(nfd[r0 + gi])
 						if fv == 0 and (dv == 5 or dv == 24):
 							fv = 8
 						snap[sxy] = dv
@@ -1448,7 +1680,12 @@ static func make_ctx() -> Dictionary:
 # copy handed over by the main thread. Returns fresh per-surface arrays
 # (plain dicts, no Acc objects — the main thread wraps them in Acc in
 # apply_accs) plus the light dict actually used (-> last_eff on apply).
-static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: int, nbs: Dictionary, ctx: Dictionary, ms: Dictionary, eff: Dictionary, si0 := 0, si1 := -1, d_off := 0) -> Dictionary:
+static func build_accs(data, fl, cx: int, cz: int, nbs: Dictionary, ctx: Dictionary, ms: Dictionary, eff: Dictionary, si0 := 0, si1 := -1, d_off := 0) -> Dictionary:
+	# AC-0203: data/fl are the 24-slab arrays (null | {n,b,p,i,nz}); d_off is
+	# retained for signature stability (scoped builds now carry FULL slab
+	# copies — the slab index is absolute). Every hot read goes through the
+	# per-slab flat views (null slab = empty view, uniform = C fill, mixed =
+	# one unpack per build pass) — no per-cell Dictionary lookups.
 	var t0 := Time.get_ticks_msec()
 	var ph_light := 0
 	var ph_box := 0
@@ -1484,11 +1721,29 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	var eff_strips: Array = ctx.get("eff_strips", [])
 	var blk_strips: Array = ctx.get("blk_strips", [])
 	var blk_strips_b: Array = ctx.get("blk_strips_b", [])
+	var dviews: Array = []
+	var fviews: Array = []
+	var sv := 0
+	while sv < slab_n():
+		dviews.append(ChunkIO._slab_flat(data[sv]))
+		fviews.append(ChunkIO._slab_flat(fl[sv]))
+		sv += 1
+	var nv: Dictionary = {}
+	for nk in nbs:
+		var nb: Dictionary = nbs[nk]
+		var ndv: Array = []
+		var nfdv: Array = []
+		var s2 := 0
+		while s2 < slab_n():
+			ndv.append(ChunkIO._slab_flat(nb["d"][s2]))
+			nfdv.append(ChunkIO._slab_flat(nb["f"][s2]))
+			s2 += 1
+		nv[nk] = [ndv, nfdv]
 	var light: Dictionary = eff
 	var light_recomputed := light.is_empty() or light.get("mask", null) == null
 	if light_recomputed:
 		var tl := Time.get_ticks_msec()
-		light = Lighting.compute_light_flat_chunk_pull(data, cx, cz, h, eff_strips, blk_strips, blk_strips_b, topv)
+		light = Lighting.compute_light_flat_chunk_pull(data, cx, cz, h, eff_strips, blk_strips, blk_strips_b, topv, dviews)
 		ph_light = Time.get_ticks_msec() - tl
 	var tb := Time.get_ticks_msec()
 	var bb := _bake_box(light, eff_strips, h, maxi(0, y_lo - 2), mini(h - 1, y_hi + 1))
@@ -1496,7 +1751,7 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	snap.resize(SNAP_ROW * h)
 	var snap_fl := PackedByteArray()
 	snap_fl.resize(SNAP_ROW * h)
-	_build_snap_data(snap, snap_fl, data, fl, cx, cz, nbs, h, maxi(0, y_lo - 2), mini(h - 1, y_hi + 1), d_off)
+	_build_snap_data(snap, snap_fl, dviews, fviews, nv, cx, cz, h, maxi(0, y_lo - 2), mini(h - 1, y_hi + 1))
 	ph_box = Time.get_ticks_msec() - tb
 	var snap_done := Time.get_ticks_msec()
 	var has_tex: bool = bool(ctx["has_tex"])
@@ -1524,7 +1779,6 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 	var c_af_w := _zeros(slab_n())
 	var c_af_l := _zeros(slab_n())
 	var c_ns := _zeros(slab_n())
-	var d: PackedByteArray = data
 	# AC-0197: a top-clamped FULL build keeps the full path (scoped=false):
 	# its window [0, top+1] contains every solid cell in the column, so
 	# merged-atlas runs are fully validatable and the fast ymask interior
@@ -1537,19 +1791,26 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 		# AC-0187: solid-grid + per-column boundary-row bitmask pre-pass. The
 		# interior test below becomes one bitmask read per solid cell instead
 		# of six snap+stab reads (a buried slab is ~95% interior cells).
+		# AC-0203: own-chunk reads come from the per-slab views.
 		var GW := 18
 		var yb0 := maxi(0, y_lo - 1)
 		var yb1 := mini(h - 1, y_hi)
 		sgrid.resize((yb1 - yb0 + 1) * GW * GW)
 		for y in range(yb0, yb1 + 1):
 			var grow := (y - yb0) * GW * GW
-			var dyg := (y - d_off) << 8
+			var dslab: PackedByteArray = dviews[y >> 4]
+			var drowg := (y & 15) << 8
 			for lz in range(-1, 17):
 				var base := grow + (lz + 1) * GW
 				for lx in range(-1, 17):
 					var id2: int
-					if y >= y_lo and y < y_hi and lx >= 0 and lz >= 0:
-						id2 = d[dyg + (lz << 4) + lx]
+					# AC-0203: the slab view is exactly 4096 cells, so only the
+					# 16x16 interior reads from it; the GW=18 ring (lx/lz -1 or
+					# 16) and out-of-window rows read the true boundary from
+					# snap (the pre-slab code read a row-wrapped same-column
+					# value for the ring, which was a latent mis-boundary).
+					if y >= y_lo and y < y_hi and lx < 16 and lz < 16:
+						id2 = 0 if dslab.is_empty() else int(dslab[drowg + (lz << 4) + lx])
 					else:
 						id2 = snap[y * SNAP_ROW + (lz + 1) * 18 + (lx + 1)]
 					if stab[id2] > 0:
@@ -1578,50 +1839,59 @@ static func build_accs(data: PackedByteArray, fl: PackedByteArray, cx: int, cz: 
 						m |= 1 << r
 				ymask[(lz << 4) | lx] = m
 	var tf := Time.get_ticks_msec()
-	for y in range(y_lo, y_hi):
-		var dy := (y - d_off) << 8
-		var si := y >> 4
-		for lz in range(SIZE):
-			var drow := dy + (lz << 4)
-			for lx in range(SIZE):
-				var id := d[drow + lx]
-				if stab[id] == 0:
-					c_ns[si] += 1
-				if id == 0:
-					continue
-				if id == 5 or id == 24:
-					var hgt: float = _fluid_hgt(lx, y, lz, snap, snap_fl)
-					if hgt > 0.0:
-						var fcnt := _s_fluid_quad_count(lx, y, lz, id, hgt, snap, snap_fl, h, fn)
-						if id == 5:
-							c_af_w[si] += fcnt
-							rf_w.append([lx, y, lz, id, hgt])
-						else:
-							c_af_l[si] += fcnt
-							rf_l.append([lx, y, lz, id, hgt])
-					continue
-				if oktab[id] == 0:
-					continue
-				if stab[id] > 0:
-					var skip := false
-					if scoped:
-						skip = (ymask[(lz << 4) | lx] & (1 << (y - y_lo))) == 0
-					else:
-						skip = _s_is_interior(lx, y, lz, snap, stab, h)
-					if skip:
+	for si in range(si0, si1 + 1):
+		var dslab: PackedByteArray = dviews[si]
+		var lo := si * 16
+		var c_hi: int = mini(16, y_hi - lo)
+		if dslab.is_empty():
+			# All-air slab: every cell is id 0 (stab 0) — count them and skip
+			# the loop (no fluids, no faces, no recs possible).
+			c_ns[si] += c_hi * 256
+			continue
+		for cy in range(c_hi):
+			var y: int = lo + cy
+			var r0 := cy << 8
+			for lz in range(SIZE):
+				var drow := r0 + (lz << 4)
+				for lx in range(SIZE):
+					var id := int(dslab[drow + lx])
+					if stab[id] == 0:
+						c_ns[si] += 1
+					if id == 0:
 						continue
-				if xtab[id] > 0:
-					if not coarse and ttab[id] > 0:
-						_s_faces(rc_o, xtab, stab, fn, lx, y, lz, id, snap, h)
-					elif not coarse:
-						rq.append([lx, y, lz, id])
-				elif ktab[id] > 0:
-					if coarse:
-						_s_faces(ro, xtab, stab, fn, lx, y, lz, id, snap, h)
+					if id == 5 or id == 24:
+						var hgt: float = _fluid_hgt(lx, y, lz, snap, snap_fl)
+						if hgt > 0.0:
+							var fcnt := _s_fluid_quad_count(lx, y, lz, id, hgt, snap, snap_fl, h, fn)
+							if id == 5:
+								c_af_w[si] += fcnt
+								rf_w.append([lx, y, lz, id, hgt])
+							else:
+								c_af_l[si] += fcnt
+								rf_l.append([lx, y, lz, id, hgt])
+						continue
+					if oktab[id] == 0:
+						continue
+					if stab[id] > 0:
+						var skip := false
+						if scoped:
+							skip = (ymask[(lz << 4) | lx] & (1 << (y - y_lo))) == 0
+						else:
+							skip = _s_is_interior(lx, y, lz, snap, stab, h)
+						if skip:
+							continue
+					if xtab[id] > 0:
+						if not coarse and ttab[id] > 0:
+							_s_faces(rc_o, xtab, stab, fn, lx, y, lz, id, snap, h)
+						elif not coarse:
+							rq.append([lx, y, lz, id])
+					elif ktab[id] > 0:
+						if coarse:
+							_s_faces(ro, xtab, stab, fn, lx, y, lz, id, snap, h)
+						else:
+							_s_faces(rk, xtab, stab, fn, lx, y, lz, id, snap, h)
 					else:
-						_s_faces(rk, xtab, stab, fn, lx, y, lz, id, snap, h)
-				else:
-					_s_faces(ro, xtab, stab, fn, lx, y, lz, id, snap, h)
+						_s_faces(ro, xtab, stab, fn, lx, y, lz, id, snap, h)
 	ph_faces = Time.get_ticks_msec() - tf
 	var s_ao: Array = []
 	var s_ac: Array = []
@@ -1921,7 +2191,7 @@ func lod_cache_valid(kind: int) -> bool:
 		return false
 	if alt_atlas != Data.atlas_tex:
 		return false
-	if alt_data != data or alt_fl != fl:
+	if alt_stamp != stamp():
 		return false
 	return true
 
@@ -1929,8 +2199,7 @@ func lod_cache_valid(kind: int) -> bool:
 func clear_lod_cache() -> void:
 	alt_lod = -1
 	alt_slabs = []
-	alt_data = PackedByteArray()
-	alt_fl = PackedByteArray()
+	alt_stamp = []
 	alt_atlas = null
 
 
@@ -1942,8 +2211,7 @@ func store_lod_cache(cap: Array, kind: int, in_ring: bool) -> void:
 		return
 	alt_slabs = cap
 	alt_lod = kind
-	alt_data = data.duplicate()
-	alt_fl = fl.duplicate()
+	alt_stamp = stamp()
 	alt_atlas = Data.atlas_tex
 
 
@@ -2000,8 +2268,7 @@ func swap_to_cached(in_ring: bool) -> void:
 	if in_ring:
 		alt_slabs = demote
 		alt_lod = 1 - alt_lod
-		alt_data = data.duplicate()
-		alt_fl = fl.duplicate()
+		alt_stamp = stamp()
 		alt_atlas = Data.atlas_tex
 	else:
 		clear_lod_cache()
@@ -2098,8 +2365,10 @@ func _build_snap(snap: PackedByteArray, snap_fl: PackedByteArray, get_world_bloc
 					snap[y * SNAP_ROW + (lz + 1) * SNAP_W + lx + 1] = int(get_world_block.call(cx * SIZE + lx, y, cz * SIZE + lz))
 					snap_fl[y * SNAP_ROW + (lz + 1) * SNAP_W + lx + 1] = 0
 		return
-	var d: PackedByteArray = data
-	var fd: PackedByteArray = fl
+	# AC-0203: the sync path materializes the flat view once (it is the
+	# fallback lane — the worker path runs on slab views).
+	var d: PackedByteArray = flat_data()
+	var fd: PackedByteArray = flat_fl()
 	for y in range(h):
 		var si := y * SNAP_ROW
 		var di := y << 8
@@ -2124,6 +2393,8 @@ func _build_snap(snap: PackedByteArray, snap_fl: PackedByteArray, get_world_bloc
 			# AC-0119: no read-path probe (it sync-generated up to 4 chunks per
 			# build). Missing/empty diagonal = the normal frontier case.
 			var ncready: bool = nc != null and nc.data.size() > 0
+			var nnd: PackedByteArray = nc.flat_data() if ncready else PackedByteArray()
+			var nnfd: PackedByteArray = nc.flat_fl() if ncready else PackedByteArray()
 			var xb := _band(dx)
 			var zb := _band(dz)
 			for y in range(h):
@@ -2138,8 +2409,8 @@ func _build_snap(snap: PackedByteArray, snap_fl: PackedByteArray, get_world_bloc
 						var dv: int
 						var fv: int
 						if ncready:
-							dv = int(nc.data[drow + gi])
-							fv = int(nc.fl[drow + gi])
+							dv = int(nnd[drow + gi])
+							fv = int(nnfd[drow + gi])
 							if fv == 0 and (dv == 5 or dv == 24):
 								fv = 8
 						else:

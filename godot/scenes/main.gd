@@ -138,8 +138,7 @@ func _batt_reset_state(spawn: Vector3) -> void:
 	if old_player != null:
 		old_player.free()
 	for e in world.chunks.values():
-		e.data.fill(0)
-		e.fl.fill(0)
+		e.clear_data()  # AC-0203: was fill(0) on both flat arrays
 	for ch in Game.drops.get_children():
 		ch.free()
 	world.light_dirty.clear()
@@ -211,7 +210,8 @@ func _colbytes_test(seed_env: String) -> void:
 		var d := WorldGen.generate(cx, cz, seed)
 		var f := PackedByteArray()
 		f.resize(d.size())
-		var l := Lighting.compute_light_flat_chunk_pull(d, cx, cz, hmax, [], [], [])
+		# AC-0203: the pull kernel now reads the slab store.
+		var l := Lighting.compute_light_flat_chunk_pull(ChunkIO.palettize_flat(d, 24), cx, cz, hmax, [], [], [])
 		var blob := ChunkIO.encode_column(d, f, seed, hmax, l)
 		var top := -1
 		var y := hmax - 1
@@ -252,6 +252,70 @@ func _colbytes_test(seed_env: String) -> void:
 		"per_col": per,
 	})
 	get_tree().quit()
+
+
+func _slabwrite_test() -> void:
+	# AC-0203 harness (game context — needs the Data autoload): the
+	# _slab_write point-write invariant vs a flat reference. A random
+	# walk of 2000 writes over a natural column + a palette-boundary
+	# column exercises the palette-growth / repack (bits widen) /
+	# raw-ification (>16 ids) / null-ification (nz -> 0) paths.
+	var h: int = Data.HEIGHT
+	var ok := true
+	var details: Array = []
+	for seedcol in [[3, -5, 987654], [0, 0, 424242]]:
+		var base: PackedByteArray = WorldGen.generate(int(seedcol[0]), int(seedcol[1]), int(seedcol[2]))
+		var slabs: Array = ChunkIO._slabs_deepcopy(ChunkIO.palettize_flat(base, _ChunkScriptM.slab_n()))
+		var ref := PackedByteArray(base)
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 99 + int(seedcol[2]) % 7
+		for k in range(1000):
+			var y := rng.randi() % h
+			var lz := rng.randi() % 16
+			var lx := rng.randi() % 16
+			var idx := (y << 8) | (lz << 4) | lx
+			var v: int
+			if ref[idx] == 0:
+				v = 1 + rng.randi() % 20
+			else:
+				v = rng.randi() % 21
+			_ChunkScriptM._slab_write(slabs, y, lz, lx, v)
+			ref[idx] = v
+		var rt := ChunkIO._slabs_flat(slabs) == ref
+		details.append({"col": str(seedcol[0]) + "," + str(seedcol[1]), "rt": rt})
+		ok = ok and rt
+	# explicit boundary column: 16 / 17(raw) / 5 / 2 / 1 / 8 / 9 unique per slab
+	var bnd := PackedByteArray()
+	bnd.resize(256 * h)
+	for x in range(256):
+		bnd[x] = (x % 16) + 1
+		bnd[4096 + x] = (x % 17) + 1
+		bnd[8192 + x] = (x % 5) + 1
+		bnd[12288 + x] = 1 + (x & 1)
+		bnd[20480 + x] = (x % 8) + 1
+		bnd[24576 + x] = (x % 9) + 1
+	for x in range(4096):
+		bnd[16384 + x] = 7
+	var slabs2: Array = ChunkIO._slabs_deepcopy(ChunkIO.palettize_flat(bnd, _ChunkScriptM.slab_n()))
+	var ref2 := PackedByteArray(bnd)
+	var rng2 := RandomNumberGenerator.new()
+	rng2.seed = 7
+	for k in range(1000):
+		var y := rng2.randi() % 64
+		var lz := rng2.randi() % 16
+		var lx := rng2.randi() % 16
+		var idx := (y << 8) | (lz << 4) | lx
+		var v: int
+		if ref2[idx] == 0:
+			v = 1 + rng2.randi() % 20
+		else:
+			v = rng2.randi() % 21
+		_ChunkScriptM._slab_write(slabs2, y, lz, lx, v)
+		ref2[idx] = v
+	var rt2 := ChunkIO._slabs_flat(slabs2) == ref2
+	details.append({"col": "boundary", "rt": rt2})
+	ok = ok and rt2
+	Debug.result({"ok": ok, "h": h, "cols": details})
 
 
 func _batt_run_mode(mode: String, spawn: Vector3, seed_env: String) -> void:
@@ -1281,6 +1345,10 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			return
 		if logic == "colbytes":
 			await _colbytes_test(seed_env)
+			return
+		if logic == "slabwrite":
+			_slabwrite_test()
+			get_tree().quit()
 			return
 		if logic == "trees":
 			await _trees_test()
@@ -4649,7 +4717,7 @@ func _la_cliff_pair(x1: int, y1: int, z1: int, e1: int, id1: int, x2: int, y2: i
 # chunk-local column — the kernel's own-sky test (such a cell has sky_n=0).
 # col 0=E (x=15) 1=W (x=0) 2=S (z=15) 3=N (z=0); t = the along-boundary coord.
 func _la_col_masks(o: Node3D, H: int) -> Array:
-	var d: PackedByteArray = o.data
+	var d: PackedByteArray = o.flat_data()
 	var out: Array = []
 	for k in range(4):
 		var m := PackedByteArray()
@@ -4684,16 +4752,16 @@ func _ac134_diag_lava(H: int) -> void:
 		return
 	var iS: int = (15 << 8) | (15 << 4) | 1  # lavaA local (x=1,z=15,y=15)
 	print("DIAG134 lavaA built=%s eff_empty=%s gen=%d face_blk=%s" % [str(na.mesh_built), str(na.last_eff.is_empty()), int(na.eff_gen), str(world._face_blk.has(ka))])
-	print("DIAG134 lavaA_cell baked_eff=%d id=%d" % [int(na.last_eff["arr"][iS]), int(na.data[iS])])
+	print("DIAG134 lavaA_cell baked_eff=%d id=%d" % [int(na.last_eff["arr"][iS]), int(na.get_at(iS))])
 	var fba: Array = world._face_blk.get(ka, [])
 	if fba.size() >= 2:
-		print("DIAG134 faceS[15*16+1]=%d data_match=%s" % [int(fba[1][2][15 * 16 + 1]), str(na.data == fba[0])])
+		print("DIAG134 faceS[15*16+1]=%d data_match=%s" % [int(fba[1][2][15 * 16 + 1]), str(int(na.data_gen) == int(fba[0]))])
 	var fresh_a: Array = world._compute_face_blk(na)
 	print("DIAG134 fresh_computeA faceS[15*16+1]=%d" % [int(fresh_a[2][15 * 16 + 1])])
 	var sba: Dictionary = world._side_blk_strip(na, 0, -1, H)
 	print("DIAG134 stripS_v v[15*16+1]=%d b[15*16+1]=%d" % [int(sba["v"][15 * 16 + 1]), int(sba["b"][15 * 16 + 1])])
 	if not nbb.last_eff.is_empty():
-		print("DIAG134 lavaB_baked_(1,15,0)eff=%d id=%d gen=%d" % [int(nbb.last_eff["arr"][(15 << 8) | 1]), int(nbb.data[(15 << 8) | 1]), int(nbb.eff_gen)])
+		print("DIAG134 lavaB_baked_(1,15,0)eff=%d id=%d gen=%d" % [int(nbb.last_eff["arr"][(15 << 8) | 1]), int(nbb.get_at((15 << 8) | 1)), int(nbb.eff_gen)])
 	# --- fix-6 source trace for A's (1,15,15) = 14 ---
 	var iA: int = (15 << 8) | (15 << 4) | 1
 	var stripsA = world._strips_for(-2, 0)
@@ -4709,8 +4777,8 @@ func _ac134_diag_lava(H: int) -> void:
 	var col15: Array = []
 	var col14: Array = []
 	for yy in range(15, 20):
-		col15.append(int(na.data[(yy << 8) | (15 << 4) | 1]))
-		col14.append(int(na.data[(yy << 8) | (14 << 4) | 1]))
+		col15.append(int(na.get_at((yy << 8) | (15 << 4) | 1)))
+		col14.append(int(na.get_at((yy << 8) | (14 << 4) | 1)))
 	print("DIAG134 colA x=1 z=15 ids y15..19=%s z=14 ids y15..19=%s" % [str(col15), str(col14)])
 	print("DIAG134 A_baked neighbors: (1,15,14)=%d (0,15,15)=%d (2,15,15)=%d (1,14,15)=%d (1,15,15)=%d" % [int(na.last_eff["arr"][(15 << 8) | (14 << 4) | 1]), int(na.last_eff["arr"][(15 << 8) | (15 << 4) | 0]), int(na.last_eff["arr"][(15 << 8) | (15 << 4) | 2]), int(na.last_eff["arr"][(14 << 8) | (15 << 4) | 1]), int(na.last_eff["arr"][iA])])
 	var kc: String = world._key(-2, -1)
@@ -4719,16 +4787,17 @@ func _ac134_diag_lava(H: int) -> void:
 		print("DIAG134 C(-2,-1) missing/empty")
 	else:
 		var lavas: Array = []
+		var dc: PackedByteArray = ncC.flat_data()
 		for y in range(H):
 			var row := y << 8
 			for z in range(16):
 				for x in range(16):
-					if ncC.data[row | (z << 4) | x] == 24 and lavas.size() < 6:
+					if dc[row | (z << 4) | x] == 24 and lavas.size() < 6:
 						lavas.append([x, y, z])
 		print("DIAG134 C lava positions(local)=%s built=%s eff_empty=%s gen=%d face_blk=%s" % [str(lavas), str(ncC.mesh_built), str(ncC.last_eff.is_empty()), int(ncC.eff_gen), str(world._face_blk.has(kc))])
 		var fcc: Array = world._face_blk.get(kc, [])
 		if fcc.size() >= 2:
-			print("DIAG134 C faceS[15*16+1]=%d data_match=%s deps=%s" % [int(fcc[1][2][15 * 16 + 1]), str(ncC.data == fcc[0]), str(fcc[2])])
+			print("DIAG134 C faceS[15*16+1]=%d data_match=%s deps=%s" % [int(fcc[1][2][15 * 16 + 1]), str(int(ncC.data_gen) == int(fcc[0])), str(fcc[2])])
 		var freshC: Array = world._compute_face_blk(ncC)
 		print("DIAG134 C fresh faceS[15*16+1]=%d" % int(freshC[2][15 * 16 + 1]))
 		var depsA: Array = world._face_blk.get(ka, [])
@@ -4784,10 +4853,10 @@ func _ac134_diag_torch(H: int, tunnel: Dictionary) -> void:
 		iFace = (ly << 8) | (lz << 4) | (15 if dir.x > 0 else 0)
 	else:
 		iFace = (ly << 8) | ((15 if dir.z > 0 else 0) << 4) | lx
-	print("DIAG134 torch baked facecell_eff=%d id=%d" % [int(nc.last_eff["arr"][iFace]), int(nc.data[iFace])])
+	print("DIAG134 torch baked facecell_eff=%d id=%d" % [int(nc.last_eff["arr"][iFace]), int(nc.get_at(iFace))])
 	var cur: Array = world._face_blk.get(k, [])
 	if cur.size() >= 2:
-		print("DIAG134 face cache fi=%d val=%d data_match=%s" % [fi, int(cur[1][fi][ly * 16 + ft]), str(nc.data == cur[0])])
+		print("DIAG134 face cache fi=%d val=%d data_match=%s" % [fi, int(cur[1][fi][ly * 16 + ft]), str(int(nc.data_gen) == int(cur[0]))])
 	var fresh: Array = world._compute_face_blk(nc)
 	print("DIAG134 fresh_compute fi=%d val=%d" % [fi, int(fresh[fi][ly * 16 + ft])])
 	var nb = world.chunks.get(nkey)
@@ -4800,7 +4869,7 @@ func _ac134_diag_torch(H: int, tunnel: Dictionary) -> void:
 	else:
 		iRecv = (ly << 8) | ((0 if dir.z > 0 else 15) << 4) | lx
 	if not nb.last_eff.is_empty():
-		print("DIAG134 recv_baked_eff=%d id=%d gen=%d" % [int(nb.last_eff["arr"][iRecv]), int(nb.data[iRecv]), int(nb.eff_gen)])
+		print("DIAG134 recv_baked_eff=%d id=%d gen=%d" % [int(nb.last_eff["arr"][iRecv]), int(nb.get_at(iRecv)), int(nb.eff_gen)])
 	var strips = world._strips_for(int(nb.cx), int(nb.cz))
 	var res = Lighting.compute_light_flat_chunk_pull(nb.data, int(nb.cx), int(nb.cz), H, strips["eff"], strips["blk"], strips["blk_b"])
 	print("DIAG134 recv_fresh_eff=%d" % int(res["arr"][iRecv]))
@@ -4831,7 +4900,7 @@ func _lightaudit_test(spawn: Vector3) -> void:
 		if not o.mesh_built or o.last_eff.is_empty():
 			continue
 		var oarr: PackedByteArray = o.last_eff["arr"]
-		var od: PackedByteArray = o.data
+		var od: PackedByteArray = o.flat_data()
 		var ocx: int = int(o.cx)
 		var ocz: int = int(o.cz)
 		var om: Array = masks_cache.get(key, [])
@@ -4848,7 +4917,7 @@ func _lightaudit_test(spawn: Vector3) -> void:
 					var n: Node3D = world.chunks.get(world._key(ocx + 1, ocz))
 					if n != null and n.mesh_built and not n.last_eff.is_empty():
 						var nidx := row | (lz << 4)
-						var id_n: int = n.data[nidx]
+						var id_n: int = n.get_at(nidx)
 						if Lighting._att[id_n] > 0:
 							var e_n: int = n.last_eff["arr"][nidx]
 							if absi(e_o - e_n) > 1:
@@ -4869,7 +4938,7 @@ func _lightaudit_test(spawn: Vector3) -> void:
 					var n: Node3D = world.chunks.get(world._key(ocx, ocz + 1))
 					if n != null and n.mesh_built and not n.last_eff.is_empty():
 						var nidx := row | lx
-						var id_n: int = n.data[nidx]
+						var id_n: int = n.get_at(nidx)
 						if Lighting._att[id_n] > 0:
 							var e_n: int = n.last_eff["arr"][nidx]
 							if absi(e_o - e_n) > 1:
@@ -5249,7 +5318,7 @@ func _nd_pick_cells() -> Dictionary:
 	for cc in _nd_sorted_chunks():
 		if cave.size() > 0 and mouth.size() > 0:
 			break
-		var d: PackedByteArray = cc.data
+		var d: PackedByteArray = cc.flat_data()
 		var eff: PackedByteArray = cc.last_eff["arr"]
 		var srcs: Array = []
 		for i in range(d.size()):
@@ -5451,7 +5520,7 @@ func _nd_darkside_count() -> int:
 	var H: int = Data.HEIGHT
 	var cnt := 0
 	for cc in _nd_sorted_chunks():
-		var d: PackedByteArray = cc.data
+		var d: PackedByteArray = cc.flat_data()
 		var eff: PackedByteArray = cc.last_eff["arr"]
 		var cx: int = int(cc.cx)
 		var cz: int = int(cc.cz)
@@ -5515,7 +5584,7 @@ func _nightday_test(spawn: Vector3) -> void:
 	var tpos: Vector3 = Vector3(float(int(torch[0]) & 15), float(int(torch[1])), float(int(torch[2]) & 15))
 	var tnrm := Vector3(0, 1, 0)
 	var tfound := false
-	var tdata: PackedByteArray = tchunk.data
+	var tdata: PackedByteArray = tchunk.flat_data()
 	var tidx := (int(torch[1]) << 8) | ((int(torch[2]) & 15) << 4) | (int(torch[0]) & 15)
 	for dd in [[0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, -1, 0]]:
 		var ax := (int(torch[0]) & 15) + int(dd[0])
@@ -5763,7 +5832,7 @@ func _nl_census_chunk(cc: Node3D) -> Dictionary:
 	# darkside-identical); 3 eff>0 && mask==0 && eff<=fresh-sky (legit
 	# in-chunk sky - counted in total only).
 	var H: int = Data.HEIGHT
-	var d: PackedByteArray = cc.data
+	var d: PackedByteArray = cc.flat_data()
 	var eff: PackedByteArray = cc.last_eff["arr"]
 	var cx: int = int(cc.cx)
 	var cz: int = int(cc.cz)
@@ -5952,7 +6021,7 @@ func _nl_srcs_build() -> void:
 		var cc: Node3D = world.chunks[key]
 		if cc.data.is_empty():
 			continue
-		var d: PackedByteArray = cc.data
+		var d: PackedByteArray = cc.flat_data()
 		var cx: int = int(cc.cx)
 		var cz: int = int(cc.cz)
 		for i in range(d.size()):
@@ -6318,7 +6387,7 @@ func _nightlot_test(spawn: Vector3) -> void:
 		var cc: Node3D = world.chunks.get(key)
 		if cc == null:
 			continue
-		var d: PackedByteArray = cc.data
+		var d: PackedByteArray = cc.flat_data()
 		var cx: int = int(cc.cx)
 		var cz: int = int(cc.cz)
 		for y in range(H):
@@ -6617,7 +6686,7 @@ func _floor_scan_cells() -> Dictionary:
 			break
 		if absi(int(cc.cx)) > 3 or absi(int(cc.cz)) > 3:
 			continue
-		var d: PackedByteArray = cc.data
+		var d: PackedByteArray = cc.flat_data()
 		var eff: PackedByteArray = cc.last_eff["arr"]
 		for y in range(H):
 			if pocket.x >= 0 and open_cell.x >= 0:
@@ -6759,7 +6828,7 @@ func _leaves_test(spawn: Vector3) -> void:
 		for cc in _nd_sorted_chunks():
 			if absi(int(cc.cx)) > 2 or absi(int(cc.cz)) > 2:
 				continue
-			var d: PackedByteArray = cc.data
+			var d: PackedByteArray = cc.flat_data()
 			var eff: PackedByteArray = cc.last_eff["arr"]
 			if eff.size() != H * 256:
 				continue
@@ -7233,7 +7302,7 @@ func _probe_water_positions() -> Dictionary:
 		var c: Node3D = world.chunks.get(key)
 		if c == null:
 			continue
-		var d: PackedByteArray = c.data
+		var d: PackedByteArray = c.flat_data()
 		for i in range(d.size()):
 			if d[i] == 5:
 				var yy: int = i >> 8
@@ -7251,10 +7320,10 @@ func _fluidprobe_test() -> void:
 		var c: Node3D = world.chunks.get(key)
 		if c == null:
 			continue
-		var d: PackedByteArray = c.data
+		var d: PackedByteArray = c.flat_data()
 		for i in range(d.size()):
 			if d[i] == 5:
-				var v: int = c.fl[i]
+				var v: int = c.fl_at(i)
 				fl_hist[v] = int(fl_hist.get(v, 0)) + 1
 				if (i >> 8) == Data.SEA:
 					sea_hist[v] = int(sea_hist.get(v, 0)) + 1
@@ -7320,8 +7389,8 @@ func _fluidfall_scan(fx: int, fz: int, sy: int) -> Array:
 			var c: Node3D = world.chunks.get("%d,%d" % [cx, cz])
 			if c == null or c.data.is_empty():
 				continue
-			var d: PackedByteArray = c.data
-			var f: PackedByteArray = c.fl
+			var d: PackedByteArray = c.flat_data()
+			var f: PackedByteArray = c.flat_fl()
 			var lx0: int = maxi(fx - 8, cx * 16) - cx * 16
 			var lx1: int = mini(fx + 8, cx * 16 + 15) - cx * 16
 			var lz0: int = maxi(fz - 8, cz * 16) - cz * 16
@@ -9026,7 +9095,7 @@ func _chunkio_hash(diamond: Array) -> Dictionary:
 			continue
 		var h := HashingContext.new()
 		h.start(HashingContext.HASH_MD5)
-		h.update(c.data)
+		h.update(c.flat_data())  # AC-0203: same 98304 B column -> same MD5
 		var md: PackedByteArray = h.finish()
 		var hx := ""
 		for i in range(16):
@@ -9154,7 +9223,7 @@ func _lightcache_cache_fresh(key: String, max_frames: int) -> bool:
 		if world.light_pending_set.has(key) or world.light_dirty.has(key) or world.edit_front_set.has(key):
 			continue
 		var cached = world._eff_cache.get(key)
-		if cached == null or c.data != cached.data:
+		if cached == null or int(c.data_gen) != int(cached.stamp[0]) or int(c.fl_gen) != int(cached.stamp[1]):
 			continue
 		if (cached.eff as Dictionary).get("mask", null) == null:
 			continue
@@ -9237,7 +9306,7 @@ func _lightcache_test(spawn: Vector3) -> void:
 	var restored_matches_saved := restored_arr == saved_arr and restored_mask == saved_mask and disk_light_ok and disk_mask_ok
 	var legacy_v1_recomputes := false
 	if built1:
-		var leg := ChunkIO.encode_column_legacy(PackedByteArray(n1.data), PackedByteArray(n1.fl), int(Game.world_seed), int(Data.HEIGHT))
+		var leg := ChunkIO.encode_column_legacy(n1.flat_data(), n1.flat_fl(), int(Game.world_seed), int(Data.HEIGHT))
 		var f2 = FileAccess.open(path, FileAccess.WRITE)
 		if f2 != null:
 			f2.store_buffer(leg)
@@ -10533,6 +10602,7 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 	var light_batch_mark := int(world.perf_light_batch_calls)
 	var light_comp_cross: Array = []
 	var light_batch_cross: Array = []
+	var _framelog := OS.get_environment("AWECRAFT_FRAMELOG") == "1"
 	while crossings < walk_lines and walk_frames < walk_max_frames:
 		var fb := Time.get_ticks_msec()
 		await get_tree().physics_frame
@@ -10541,6 +10611,8 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		frame_ms_list.append(fms)
 		if fms > max_ms:
 			max_ms = fms
+		if _framelog:
+			print("FLOG %d %d %d" % [walk_frames, fms, fe])
 		walk_frames += 1
 		var cx_now := int(floorf(p.position.x / 16.0))
 		var cz_now := int(floorf(p.position.z / 16.0))
@@ -11113,7 +11185,7 @@ func _water_in_box(keys: Array, x0: int, x1: int, y0: int, y1: int, z0: int, z1:
 		var c: Node3D = world.chunks.get(key)
 		if c == null:
 			continue
-		var data: PackedByteArray = c.data
+		var data: PackedByteArray = c.flat_data()
 		for i in range(data.size()):
 			if data[i] != 5:
 				continue
@@ -11141,7 +11213,7 @@ func _sea_solid_backed(keys: Array) -> int:
 		var c: Node3D = world.chunks.get(key)
 		if c == null or c.data.is_empty():
 			continue
-		var data: PackedByteArray = c.data
+		var data: PackedByteArray = c.flat_data()
 		for lz in range(16):
 			var lb: int = lz << 4
 			for lx in range(16):
@@ -11161,7 +11233,7 @@ func _water_at_level(keys: Array, y: int) -> int:
 		var c: Node3D = world.chunks.get(key)
 		if c == null:
 			continue
-		var data: PackedByteArray = c.data
+		var data: PackedByteArray = c.flat_data()
 		for i in range(data.size()):
 			if (i >> 8) == y and data[i] == 5:
 				n += 1
@@ -11174,7 +11246,7 @@ func _count_fluid_cells(keys: Array, id: int) -> int:
 		var c: Node3D = world.chunks.get(key)
 		if c == null:
 			continue
-		var data: PackedByteArray = c.data
+		var data: PackedByteArray = c.flat_data()
 		for i in range(data.size()):
 			if data[i] == id:
 				n += 1
@@ -11529,7 +11601,7 @@ func _trees_test() -> void:
 	var mesh_info := {}
 	var cc0 = world.chunks.get("0,0")
 	if cc0 != null and cc0.mesh_built:
-		var d0: PackedByteArray = cc0.data
+		var d0: PackedByteArray = cc0.flat_data()
 		var nleaf := 0
 		var nflower := 0
 		for i in range(d0.size()):
@@ -11989,7 +12061,7 @@ func _occl_built_chunks(r: int) -> Array:
 
 
 func _occl_chunk_stats(c: Node3D, stab: PackedByteArray) -> Dictionary:
-	var d: PackedByteArray = c.data
+	var d: PackedByteArray = c.flat_data()
 	var slab_ns: Array = []
 	for i in range(Data.HEIGHT / 16):
 		slab_ns.append(0)
@@ -12055,7 +12127,7 @@ func _occl_cave_seed(c: Node3D, srf: PackedInt32Array, stab: PackedByteArray) ->
 
 
 func _occl_cave_seed_range(c: Node3D, srf: PackedInt32Array, stab: PackedByteArray, ylo: int, yhi: int) -> Array:
-	var d: PackedByteArray = c.data
+	var d: PackedByteArray = c.flat_data()
 	var cxw := int(c.cx) * 16
 	var czw := int(c.cz) * 16
 	for y in range(ylo, yhi + 1):

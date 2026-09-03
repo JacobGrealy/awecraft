@@ -270,6 +270,7 @@ var _fluid_write := false
 var _fluid_stable := 0
 var _fluid_sig := ""
 var _fluidprobe := false
+var _frameprobe := false
 var _fp_writes := 0
 var fluid_wet := {}
 var tex_refresh: Array = []
@@ -479,6 +480,9 @@ func _ready() -> void:
 	_cull_enabled = OS.get_environment("AWECRAFT_FRUSTUM_CULL") != "0" and OS.get_environment("AWECRAFT_ONLY") == ""
 	tick_time = OS.get_environment("AWECRAFT_TICKTIME") == "1"
 	_fluidprobe = OS.get_environment("AWECRAFT_FLUIDPROBE") == "1"
+	_frameprobe = OS.get_environment("AWECRAFT_FRAMEPROBE") == "1"
+	_cblog = OS.get_environment("AWECRAFT_CBLOG") == "1"
+	_nofree = OS.get_environment("AWECRAFT_NOFREE") == "1"
 	# AC-0178: loading-screen wiring. Bypass override for the headless A/B
 	# probe (default ON); remember the normal pool caps; build the UI node
 	# (hidden; harmless headless — never awaited).
@@ -708,6 +712,22 @@ var _prof_ring: Array = []
 
 
 func _physics_process(_d: float) -> void:
+	if _cblog:
+		print("CBW in t=%d" % Time.get_ticks_msec())
+	_physics_process_impl(_d)
+	if _cblog:
+		print("CBW out t=%d" % Time.get_ticks_msec())
+
+
+var _cblog := false
+var _nofree := false
+var _tg_concur := 0
+var _tg_concur_peak := 0
+var _tm_concur := 0
+var _tm_concur_peak := 0
+
+
+func _physics_process_impl(_d: float) -> void:
 	if not threadmesh_inflight.is_empty():
 		threadmesh_poll()
 
@@ -758,6 +778,7 @@ func _process(_delta: float) -> void:
 	if not edit_front.is_empty():
 		_edit_front_drain()
 	var pf1 := Time.get_ticks_usec()
+	var fp0 := pf1
 	if not light_pending.is_empty() and not _startup_pending() and edit_inflight_count == 0:
 		# AC-0126: edit (post-break) flush — staggered 1 remesh/frame on the
 		# AC-0107 worker path. eff = {} -> the worker self-lights its contained
@@ -813,24 +834,36 @@ func _process(_delta: float) -> void:
 			var ft := Time.get_ticks_msec() - t0
 			if ft > perf_max_frame_ms:
 				perf_max_frame_ms = ft
+		if timing and not light_pending.is_empty():
+			print("LIGHTPEND pend=%d built=%d spun=%d ft=%.0f t=%d" % [light_pending.size(), built, spun, Time.get_ticks_msec() - t0, Time.get_ticks_msec()])
 	# AC-0187: the clear must run even when the section is skipped (a burst
 	# can drain to empty at section start); a stale-true flush_active
 	# suppresses the perf-counter reset of the next burst.
 	if light_pending.is_empty():
 		flush_active = false
+	var fp1 := Time.get_ticks_usec()
 	for c in fluid_list:
 		var cc: Node3D = c
 		if _build_ready(int(cc.cx), int(cc.cz)):
 			_mesh_dispatch(cc, int(cc.cx), int(cc.cz), cc.last_eff, false)
 		else:
 			fluid_dirty[_key(int(cc.cx), int(cc.cz))] = true
+	var fp2 := Time.get_ticks_usec()
 	threadgen_poll()
+	var fp3 := Time.get_ticks_usec()
 	threadmesh_poll()
 	io_poll()  # AC-0164: land finished column I/O tasks
+	var fp4 := Time.get_ticks_usec()
 	_recenter_slice()
+	var fp5 := Time.get_ticks_usec()
 	_drain_build_queue()
+	var fp6 := Time.get_ticks_usec()
 	_drain_tex_refresh()
 	var pf2 := Time.get_ticks_usec()
+	if _frameprobe and (pf2 - pf0) > 50000:
+		print("FSEC total=%.0f book=%.0f light=%.0f fluid=%.0f tgpoll=%.0f tmpoll=%.0f rec=%.0f build=%.0f tex=%.0f t=%d" % [
+			(float(pf2 - pf0) / 1000.0), (float(pf1 - pf0) / 1000.0), (float(fp1 - fp0) / 1000.0), (float(fp2 - fp1) / 1000.0),
+			(float(fp3 - fp2) / 1000.0), (float(fp4 - fp3) / 1000.0), (float(fp5 - fp4) / 1000.0), (float(fp6 - fp5) / 1000.0), (float(pf2 - fp6) / 1000.0), Time.get_ticks_msec()])
 	_prof_ring.append([float(pf1 - pf0) / 1000.0, float(pf2 - pf1) / 1000.0,
 		threadmesh_inflight.size(), queue_size, light_pending.size()])
 	if _prof_ring.size() > 120:
@@ -1113,8 +1146,7 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 		if timing:
 			print("GENCHUNK %d,%d gen_ms=0 thread=1 t=%d" % [cx, cz, Time.get_ticks_msec()])
 		return 0
-	c.data = WorldGen.generate(cx, cz, Game.world_seed)
-	c.init_fl()
+	c.data_landed(WorldGen.generate(cx, cz, Game.world_seed), PackedByteArray())
 	gen_count += 1
 	_apply_edits_to_chunk(c)
 	var dg := Time.get_ticks_msec() - tg
@@ -1134,17 +1166,19 @@ func threadgen_enqueue(cx: int, cz: int, key: String, inst: int) -> void:
 		if _tg_debug:
 			print("TGEN CAPDROP %d,%d inflight=%d" % [cx, cz, threadgen_inflight.size()])
 		return
-	var entry := {"key": key, "cx": cx, "cz": cz, "inst": inst, "args": [cx, cz, Game.world_seed, Data.HEIGHT, Data.SEA]}
-	# AC-0160 run 2: the data pass runs LOW priority always. The mesh builds
-	# are ALWAYS high priority (the critical path), so they take any free
-	# thread first and can no longer be starved by data (the original
-	# starvation was all-default-priority: TG filled the 3 low-priority
-	# slots and the LOW TM queued behind them). The spawn 5x5 data is owned
-	# by the high-priority burst group task, not this path; and high data
-	# during walking would fight the forward mesh builds for threads.
-	# Low priority paces the data pass at 3-wide, which this machine's
-	# allocator-bound gen prefers over 4-6-wide anyway.
-	var tid = threadgen_pool.add_task(_threadgen_worker, false)
+	var entry := {"key": key, "cx": cx, "cz": cz, "inst": inst, "args": [cx, cz, Game.world_seed, Data.HEIGHT, Data.SEA], "tenq": Time.get_ticks_msec()}
+	# AC-0203 recenter fix: the data pass now runs HIGH priority.
+	# AC-0160 pinned it LOW to "pace at 3-wide" (the belief that 4.x low
+	# priority = half the threads, 3 of 6). Godot 4.7.1's WorkerThreadPool
+	# runs LOW-priority add_task work on ONE thread (measured here: 36 x
+	# 145 ms tasks, high = 5.97 eff threads, low = 1.00; raw Threads = 5.96).
+	# That one-thread lane (shared with the low-priority IO reads/writes)
+	# throttled the gen feed to ~4/s while the 6-thread mesh pool idled at
+	# 28%, starving the forward builds — the 4x recenter regression.
+	# High priority shares all 6 threads with the (also high) mesh builds;
+	# walking demand is ~1.5 threads total (3-inflight gen cap + builds),
+	# far under 6, so neither starves. IO tasks stay LOW (small, disk).
+	var tid = threadgen_pool.add_task(_threadgen_worker, true)
 	entry["tid"] = tid
 	_tg_slots_mutex.lock()
 	_tg_slots[tid] = entry
@@ -1178,10 +1212,19 @@ func _threadgen_worker() -> void:
 		return
 	var a: Array = entry["args"]
 	var wt := Time.get_ticks_msec()
-	var d := WorldGen.generate_args(int(a[0]), int(a[1]), int(a[2]), int(a[3]), int(a[4]))
 	if timing:
-		print("TGENW %d,%d wms=%d t=%d" % [int(a[0]), int(a[1]), Time.get_ticks_msec() - wt, Time.get_ticks_msec()])
-	entry["result"] = d
+		_tg_concur += 1
+		if _tg_concur > _tg_concur_peak:
+			_tg_concur_peak = _tg_concur
+	# AC-0203 recenter fix: worker-side palettize (same as the burst worker)
+	# — the drain's main-thread handoff is a reference slab landing.
+	var d := WorldGen.generate_args(int(a[0]), int(a[1]), int(a[2]), int(a[3]), int(a[4]))
+	var nsl2 := ChunkScript.slab_n()
+	var resl: Array = [ChunkIO.palettize_flat(d, nsl2), ChunkIO.empty_slabs(nsl2)]
+	if timing:
+		print("TGENW %d,%d wms=%d spin=%d cc=%d wait=%d t=%d" % [int(a[0]), int(a[1]), Time.get_ticks_msec() - wt, ns, _tg_concur, wt - int(entry.get("tenq", wt)), Time.get_ticks_msec()])
+		_tg_concur -= 1
+	entry["result"] = resl
 
 func _startup_gen_worker(i: int) -> void:
 	# AC-0160 run 2: one group element = one 5x5 chunk gen. Writes ONLY its
@@ -1195,7 +1238,12 @@ func _startup_gen_worker(i: int) -> void:
 	if bool(e[3]):
 		return
 	var wbt := Time.get_ticks_usec()
-	_startup_gen_slots[i] = WorldGen.generate_args(int(e[1]), int(e[2]), int(e[4]), int(e[5]), int(e[6]))
+	# AC-0203 recenter fix: palettize on the worker — the main-thread burst
+	# handoff becomes a reference slab landing (the flat column never hits
+	# the main thread).
+	var gdat := WorldGen.generate_args(int(e[1]), int(e[2]), int(e[4]), int(e[5]), int(e[6]))
+	var nsl := ChunkScript.slab_n()
+	_startup_gen_slots[i] = [ChunkIO.palettize_flat(gdat, nsl), ChunkIO.empty_slabs(nsl)]
 	if timing:
 		print("GENBURSTW %d,%d wms=%d t=%d" % [int(e[1]), int(e[2]), (Time.get_ticks_usec() - wbt) / 1000, Time.get_ticks_msec()])
 
@@ -1212,7 +1260,7 @@ func _startup_gen_apply() -> void:
 		return
 	for i in _startup_gen_slots.size():
 		var d = _startup_gen_slots[i]
-		if d == null:
+		if d == null or not (d is Array) or int(d.size()) != 2:
 			continue
 		_startup_gen_slots[i] = null
 		_startup_gen_pending_n = maxi(0, _startup_gen_pending_n - 1)
@@ -1220,8 +1268,8 @@ func _startup_gen_apply() -> void:
 		var c = chunks.get(_key(int(e[1]), int(e[2])))
 		if c == null or not c.data.is_empty():
 			continue
-		c.data = d
-		c.init_fl()
+		# AC-0203 recenter fix: worker-palettized slabs — reference landing.
+		c.slabs_landed(d[0], d[1])
 		gen_count += 1
 		chunk_origin[_key(int(e[1]), int(e[2]))] = "gen"  # AC-0155
 		_apply_edits_to_chunk(c)
@@ -1242,13 +1290,14 @@ func threadgen_poll() -> void:
 			_tg_slots.erase(tid)
 			_tg_slots_mutex.unlock()
 			var res = e.get("result", null)
-			if res == null or (res is PackedByteArray and res.size() == 0):
+			if res == null or not (res is Array) or int(res.size()) != 2:
 				# AC-0178: the worker finished without a result (slot-spin
 				# gave up) — re-enqueue the gen instead of a null handoff
 				# (SCRIPT ERROR + stranded column). Dedup-safe: the key was
 				# just erased above, the chunk is still data-empty. At
 				# SHUTDOWN the world is being freed — drop instead of
-				# re-enqueue (see _shutting_down).
+				# re-enqueue (see _shutting_down). AC-0203 recenter fix: the
+				# result is now a [data_slabs, fl_slabs] pair (worker-palettized).
 				if _shutting_down:
 					continue
 				if _tg_debug:
@@ -1259,8 +1308,10 @@ func threadgen_poll() -> void:
 			continue
 		i += 1
 
-func threadgen_handoff(e: Dictionary, data: PackedByteArray) -> void:
-	if data == null or data.size() == 0:
+func threadgen_handoff(e: Dictionary, resl: Array) -> void:
+	# AC-0203 recenter fix: resl = [data_slabs, fl_slabs] (worker-palettized
+	# — the flat column never lands on the main thread).
+	if resl == null or int(resl.size()) != 2 or not (resl[0] is Array):
 		return
 	var key: String = e["key"]
 	var c = chunks.get(key)
@@ -1280,8 +1331,7 @@ func threadgen_handoff(e: Dictionary, data: PackedByteArray) -> void:
 		if _tg_debug:
 			print("TGEN DATADROP %d,%d (data already set)" % [int(e["cx"]), int(e["cz"])])
 		return
-	c.data = data
-	c.init_fl()
+	c.slabs_landed(resl[0], resl[1])
 	gen_count += 1
 	chunk_origin[e["key"]] = "gen"  # AC-0155
 	_apply_edits_to_chunk(c)
@@ -1325,7 +1375,13 @@ func _tm_worker_run(skey: int) -> void:
 	# and is a full mesh now, so every entry carries nbs/eff like 0/1.
 	# AC-0187: edit entries carry si0/si1 (slab-scoped fast remesh); the
 	# defaults rebuild every slab exactly as before.
+	if timing:
+		_tm_concur += 1
+		if _tm_concur > _tm_concur_peak:
+			_tm_concur_peak = _tm_concur
 	var res = ChunkScript.build_accs(entry["data"], entry["fl"], int(entry["cx"]), int(entry["cz"]), entry["nbs"], entry["ctx"], entry["ms"], entry["eff"], int(entry.get("si0", 0)), int(entry.get("si1", -1)), int(entry.get("d_off", 0)))
+	if timing:
+		_tm_concur -= 1
 	if bool(entry.get("epool", false)):
 		# AC-0187: the edit lane has no engine task id — completion rides a
 		# per-entry flag written under the pool's guard mutex (the barrier
@@ -1356,6 +1412,10 @@ func threadmesh_poll() -> void:
 		found = false
 		for j in range(threadmesh_inflight.size()):
 			var ee: Dictionary = threadmesh_inflight[j]
+			if not ee.has("key") or not ee.has("skey"):
+				# AC-0203: torn-read guard (see loop 2 below) — the entry's
+				# dict is being written on the pool thread; skip this frame.
+				continue
 			if bool(ee.get("epool", false)) and bool(ee.get("done", false)):
 				var eskey = int(ee.get("skey", -1))
 				threadmesh_inflight.remove_at(j)
@@ -1372,6 +1432,19 @@ func threadmesh_poll() -> void:
 	var i := 0
 	while i < threadmesh_inflight.size() and hb_n < hb_max and edit_inflight_count == 0:
 		var e: Dictionary = threadmesh_inflight[i]
+		if not e.has("key") or not e.has("tid"):
+			# AC-0203: torn-read guard. The pool worker writes
+			# entry["t_run"]/["result"] on its thread while this poll reads
+			# the SAME Dictionary every frame (the AC-0082 handoff pattern —
+			# the worker write shape is pre-existing, unchanged by this
+			# task); GDScript Dictionaries are not thread-safe, so a key
+			# lookup can transiently fail (observed: the entry briefly reads
+			# as an empty dict). Skip this entry for this frame — the next
+			# poll sees a consistent dict and hands off normally. A torn
+			# handoff read degrades to null result = datadrop + retrigger
+			# (safe re-queue), never a corrupted apply.
+			i += 1
+			continue
 		var tid = int(e["tid"])
 		var skey = int(e.get("skey", -1))
 		var completed := false
@@ -1432,16 +1505,17 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		# AC-0187: edit entries carry row-scoped snapshots (d_off..d_hi); a
 		# change outside the scoped rows cannot affect the applied slabs
 		# (geometry outside is untouched, light is frozen by design).
+		# AC-0203: rows compared value-wise (256 B windows) — same coverage
+		# as the old flat slice, extracted from the slab store.
 		var dlo := int(e["d_off"])
 		var dhin := int(e["d_hi"])
-		for y in range(dlo, dhin + 1):
-			var full := y << 8
-			var sc := (y - dlo) << 8
-			if c.data.slice(full, full + 256) != e["data"].slice(sc, sc + 256) or c.fl.slice(full, full + 256) != e["fl"].slice(sc, sc + 256):
+		var y := dlo
+		while y <= dhin and not stale:
+			if c.row_bytes(y) != ChunkScript._slabs_row(e["data"], y) or c.fl_row_bytes(y) != ChunkScript._slabs_row(e["fl"], y):
 				stale = true
-				break
+			y += 1
 	else:
-		stale = c.data != e["data"] or c.fl != e["fl"]
+		stale = int(c.data_gen) != int(e["stamp"][0]) or int(c.fl_gen) != int(e["stamp"][1])
 	if stale:
 		_tm_datadrop += 1
 		if key == _editprobe_key:
@@ -1485,7 +1559,7 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		_stage_check(c, key)
 		_eff_landed(c, old_eff2, res.get("light", {}))
 		if bool(e.get("eff_trust", false)):
-			_eff_cache_put(key, c.data, res.get("light", {}), e.get("ngen", null))
+			_eff_cache_put(key, c, res.get("light", {}), e.get("ngen", null))
 		_tm_handoff += 1
 		_drop_queued(key)
 		if timing or _tm_debug:
@@ -1515,7 +1589,7 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 	if timing:
 		print("TMH_PART %d,%d apply=%d col=%d stage=%d eff=%d t=%d" % [int(e["cx"]), int(e["cz"]), tb - ta, tc - tb, td - tc, Time.get_ticks_msec() - td, Time.get_ticks_msec()])  # AC-0178 diag (timing-gated)
 	if bool(e.get("eff_trust", true)):
-		_eff_cache_put(key, c.data, res.get("light", {}), e.get("ngen", null))
+		_eff_cache_put(key, c, res.get("light", {}), e.get("ngen", null))
 	_tm_handoff += 1
 	# AC-0160: a meshed chunk must never keep a queued entry (the pools skip
 	# mesh_built entries forever). The pre-warm queue runs in parallel with
@@ -1644,18 +1718,10 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 	var y_hi := mini(Data.HEIGHT, (si1 + 1) * 16)
 	var d_lo := maxi(0, y_lo - 2)
 	var d_hi := mini(Data.HEIGHT - 1, y_hi + 1)
-	var nrows := d_hi - d_lo + 1
 	var tn0 := Time.get_ticks_usec()
-	var sdata := PackedByteArray()
-	sdata.resize(nrows * 256)
-	sdata.clear()
-	var sfl := PackedByteArray()
-	sfl.resize(nrows * 256)
-	sfl.clear()
-	for y in range(d_lo, d_hi + 1):
-		var full := y << 8
-		sdata.append_array(c.data.slice(full, full + 256))
-		sfl.append_array(c.fl.slice(full, full + 256))
+	# AC-0203: scoped entries carry FULL slab copies (~20 KB/col, not 192 KB
+	# flat) — the worker reads only rows si0..si1, and the handoff stale
+	# check value-compares the same rows it extracted at dispatch.
 	var nbs: Dictionary = {}
 	for dx in range(-1, 2):
 		for dz in range(-1, 2):
@@ -1664,17 +1730,7 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 			var nc = chunks.get(_key(cx + dx, cz + dz))
 			if nc == null or nc.data.is_empty():
 				return false
-			var sd := PackedByteArray()
-			sd.resize(nrows * 256)
-			sd.clear()
-			var sf := PackedByteArray()
-			sf.resize(nrows * 256)
-			sf.clear()
-			for y in range(d_lo, d_hi + 1):
-				var full := y << 8
-				sd.append_array(nc.data.slice(full, full + 256))
-				sf.append_array(nc.fl.slice(full, full + 256))
-			nbs["%d,%d" % [dx, dz]] = {"d": sd, "f": sf}
+			nbs["%d,%d" % [dx, dz]] = {"d": ChunkIO._slabs_deepcopy(nc.data), "f": ChunkIO._slabs_deepcopy(nc.fl)}
 	var tn1 := Time.get_ticks_usec()
 	var ms_w: Dictionary
 	if not _tm_ms_full.rects.is_empty():
@@ -1694,7 +1750,8 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 		ctx_w["uv_scale"] = 2
 	var entry := {
 		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(),
-		"data": sdata, "fl": sfl,
+		"data": ChunkIO._slabs_deepcopy(c.data), "fl": ChunkIO._slabs_deepcopy(c.fl),
+		"stamp": c.stamp(),
 		"band": int(c.band),
 		"nbs": nbs, "eff": fast_eff, "eff_trust": false,
 		"ctx": ctx_w, "ms": ms_w, "ngen": _ngens_for(cx, cz),
@@ -1723,6 +1780,15 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 	return true
 
 func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := true, defer_on_cap := false) -> bool:
+	if not timing:
+		return _mesh_dispatch_impl(c, cx, cz, eff, eff_trust, defer_on_cap)
+	var _t0 := Time.get_ticks_usec()
+	var _r: bool = _mesh_dispatch_impl(c, cx, cz, eff, eff_trust, defer_on_cap)
+	print("DISPATCHMS %d,%d ms=%.1f t=%d" % [cx, cz, (Time.get_ticks_usec() - _t0) / 1000.0, Time.get_ticks_msec()])
+	return _r
+
+
+func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := true, defer_on_cap := false) -> bool:
 	# true = covered (sync-built now, or an in-flight task will apply);
 	# false = deduped behind an in-flight task (caller may want to retry).
 	# Sync fallbacks (spawn chunk, no own data, missing neighbor, cap-drop)
@@ -1786,7 +1852,9 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 				_stage_check(c, key)
 				_bd_log(cx, cz)
 				return true
-			nbs["%d,%d" % [dx, dz]] = {"d": nc.data.duplicate(), "f": nc.fl.duplicate()}
+			# AC-0203: slab deep-copies (~20 KB/col) — the worker never sees
+			# live chunk state.
+			nbs["%d,%d" % [dx, dz]] = {"d": ChunkIO._slabs_deepcopy(nc.data), "f": ChunkIO._slabs_deepcopy(nc.fl)}
 	if _tm_inflight_keys.has(key):
 		_tm_dedup += 1
 		if _tm_debug:
@@ -1845,18 +1913,19 @@ func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := t
 		ctx_w["uv_scale"] = 2
 	var entry := {
 		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(),
-		"data": c.data.duplicate(), "fl": c.fl.duplicate(),
+		"data": ChunkIO._slabs_deepcopy(c.data), "fl": ChunkIO._slabs_deepcopy(c.fl),
+		"stamp": c.stamp(),
 		"band": int(c.band),
 		"nbs": nbs, "eff": eff, "eff_trust": eff_trust,
 		"ctx": ctx_w, "ms": ms_w, "ngen": _ngens_for(cx, cz),
 	}
 	# AC-0160 run 2: HIGH priority. The pool is the same 6-thread
-	# WorkerThreadPool the data pass shares, and Godot caps LOW-priority
-	# tasks at half the threads (measured 3 of 6: the old all-default mix ran
-	# data gen at ~23/s and starved the builds to ~2/s — 13 s for the 3x3).
+	# WorkerThreadPool the data pass shares. (AC-0203: the data pass is now
+	# high too — 4.7.1's low lane is 1 thread, not the 3-of-6 this comment
+	# assumed; with both high the pool shares all 6 threads and the ~1.5
+	# threads of walking demand leave headroom for both.)
 	# High priority admits build tasks to the run queue unconditionally, so
-	# the 2 build slots run at ~7/s while the data pass takes its
-	# low-priority share.
+	# the 2 build slots run at ~7/s alongside the data pass.
 	var skey := _tm_next_slot
 	_tm_next_slot += 1
 	var tid = threadmesh_pool.add_task(_tm_worker_run.bind(skey), true)
@@ -2488,14 +2557,40 @@ func _face_of(c: Node3D, fi: int) -> PackedByteArray:
 	var nkey: String = _key(int(c.cx), int(c.cz))
 	if _face_blk_inflight.has(nkey):
 		return PackedByteArray()
+	# AC-0203: validity key = data_gen (a face depends on own data only;
+	# every data mutation bumps the gen).
 	var cur: Array = _face_blk.get(nkey, [])
-	if cur.size() == 3 and c.data == cur[0]:
+	if cur.size() == 3 and int(cur[0]) == int(c.data_gen):
 		var deps: Array = cur[2]
 		if _face_deps_ok(c, deps):
 			return cur[1][fi]
 	var fresh: Array = _compute_face_blk(c)
-	_face_blk[nkey] = [c.data, fresh, _face_deps(c)]
+	_face_blk[nkey] = [c.data_gen, fresh, _face_deps(c)]
 	return fresh[fi]
+
+
+# AC-0203 recenter fix: glow scan over the SLAB store (a paletted slab is
+# glow-free iff its palette is glow-free — no 98 KB flat expansion needed
+# to decide). A raw slab (>16 ids) scans its 4096 values (rare).
+func _chunk_has_glow(c: Node3D) -> bool:
+	for s in c.data:
+		if s == null:
+			continue
+		if int(s["n"]) == 0:
+			var ri: PackedByteArray = s["i"]
+			var k := 0
+			while k < 4096:
+				if Lighting._glow[ri[k]] > 0:
+					return true
+				k += 1
+		else:
+			var pp: PackedByteArray = s["p"]
+			var k := 0
+			while k < pp.size():
+				if Lighting._glow[pp[k]] > 0:
+					return true
+				k += 1
+	return false
 
 
 func _compute_face_blk(c: Node3D) -> Array:
@@ -2505,22 +2600,16 @@ func _compute_face_blk(c: Node3D) -> Array:
 	# kernel's eff pipeline; sky never enters (see the _face_blk doc).
 	# 2*16*h-wide faces (AC-0091; was 2560 at H=80): c=0 half = face row
 	# (the inject half), c=1 zero.
+	# AC-0203 recenter fix: the no-glow column (the common terrain case)
+	# probes the inject on a ZERO column instead of expanding the 98 KB
+	# flat store: a zero cell attenuates by _att[0] = 1 (the minimum), so
+	# the probe reports every injection the real run would (it can over-
+	# report, never under-report); a no-change probe proves the face is
+	# exactly zero. ids pass = the flat store itself (the old separate 98
+	# KB copy loop is gone — the flood/inject only read it).
 	var h: int = Data.HEIGHT
-	var nd: PackedByteArray = c.data
 	Lighting._tables()
-	var ids := PackedByteArray()
-	ids.resize(nd.size())
-	var blk := PackedByteArray()
-	blk.resize(nd.size())
-	var has := false
-	for i in range(nd.size()):
-		ids[i] = nd[i]
-		var g: int = Lighting._glow[nd[i]]
-		if g > 0:
-			blk[i] = g
-			has = true
-	if has:
-		Lighting._flood_flat(blk, ids, 16, h, 16)
+	var glow: bool = _chunk_has_glow(c)
 	var fk0: String = _key(int(c.cx), int(c.cz))
 	_face_blk_inflight[fk0] = true
 	var strips: Array = []
@@ -2532,9 +2621,33 @@ func _compute_face_blk(c: Node3D) -> Array:
 			st = _face_of(nc, _shared_face(int(s[0]), int(s[1])))
 		strips.append(st)
 	_face_blk_inflight.erase(fk0)
-	var inj: bool = Lighting._chunk_blk_inject(blk, ids, h, strips)
-	if has or inj:
-		Lighting._flood_flat(blk, ids, 16, h, 16)
+	var nd: PackedByteArray
+	var blk := PackedByteArray()
+	if glow:
+		nd = c.flat_data()
+		blk.resize(nd.size())
+		var i := 0
+		while i < nd.size():
+			var g: int = Lighting._glow[nd[i]]
+			if g > 0:
+				blk[i] = g
+			i += 1
+		Lighting._flood_flat(blk, nd, 16, h, 16)
+	else:
+		nd = PackedByteArray()
+		nd.resize(h * 256)
+		blk.resize(h * 256)
+	var inj: bool = Lighting._chunk_blk_inject(blk, nd, h, strips)
+	if inj:
+		if not glow:
+			# the probe ran on the zero column (min attenuation) — the
+			# boundary values it wrote are over-attenuation-free; redo the
+			# inject on the REAL column so the boundary cells carry the
+			# exact cand = strip - _att[real_id] values.
+			nd = c.flat_data()
+			blk.fill(0)
+			Lighting._chunk_blk_inject(blk, nd, h, strips)
+		Lighting._flood_flat(blk, nd, 16, h, 16)
 	var fsize := 2 * 16 * h
 	var fe := PackedByteArray()
 	fe.resize(fsize)
@@ -2575,14 +2688,25 @@ func _side_blk_strip(nc: Node3D, dx: int, dz: int, h: int) -> Dictionary:
 	#   block-only, sourced, lossless (supersedes AC-0129's lossy ring).
 	#   The mask marks block-derived light for the bake's night scale; sky
 	#   never marks. c=1 half zero: _chunk_blk_inject reads c=0 only.
+	# AC-0203 recenter fix: slab-aware — NO full-column flat_data() here (it
+	# ran on EVERY dispatch and cost ~20 ms/neighbor). Per column:
+	# solid_top = the topmost att==0 cell, found by palette probe (a slab
+	# whose palette holds no solid id cannot close the column; raw slabs
+	# scan their 4096 values — rare). sky_n = 15 iff y > solid_top: every
+	# cell above solid_top is att>0 by construction, and a cell below it is
+	# closed — provably the same as the old per-cell open walk. Per-cell bl
+	# is read straight from the slab store (null -> 0, uniform -> p[0],
+	# paletted -> _slab_getbits, raw -> i[pos]).
 	var b := PackedByteArray()
 	b.resize(2 * 16 * h)  # AC-0091: was hard-coded 2560 = H=80
-	var nd: PackedByteArray = nc.data
 	var narr: PackedByteArray = PackedByteArray()
+	var nvalid := false
 	if not nc.last_eff.is_empty():
 		narr = nc.last_eff["arr"]
-	var nvalid: bool = narr.size() == nd.size()
+		nvalid = narr.size() == h * 256
 	Lighting._tables()
+	var slabs: Array = nc.data
+	var nsl: int = slabs.size()
 	var nx0: int = 0 if dx > 0 else 15
 	var nz0: int = 0 if dz > 0 else 15
 	for t in range(16):
@@ -2594,27 +2718,109 @@ func _side_blk_strip(nc: Node3D, dx: int, dz: int, h: int) -> Dictionary:
 		else:
 			nx = t
 			nz = nz0
-		var open := true
-		for y in range(h - 1, -1, -1):
-			var idx: int = (y << 8) | (nz << 4) | nx
-			var bl: int = nd[idx]
-			var sky_n := 0
-			if open and Lighting._att[bl] > 0:
-				sky_n = 15
-			if open and Lighting._att[bl] == 0:
-				open = false
+		var solid_top := -1
+		var si := nsl - 1
+		while si >= 0:
+			var s = slabs[si]
+			if s != null:
+				var has_solid := false
+				var parr: PackedByteArray
+				var pn: int
+				if int(s["n"]) == 0:
+					parr = s["i"]
+					pn = 4096
+				else:
+					parr = s["p"]
+					pn = int(s["p"].size())
+				var k := 0
+				while k < pn:
+					if Lighting._att[parr[k]] == 0:
+						has_solid = true
+						break
+					k += 1
+				if has_solid:
+					var slb0: int = si * 16
+					var k2 := 15
+					while k2 >= 0:
+						var y2: int = slb0 + k2
+						var blv: int
+						if int(s["n"]) == 1:
+							blv = int(s["p"][0])
+						elif int(s["n"]) == 0:
+							blv = int(s["i"][(k2 << 8) | (nz << 4) | nx])
+						else:
+							blv = int(s["p"][ChunkIO._slab_getbits(s["i"], int(s["b"]), (k2 << 8) | (nz << 4) | nx)])
+						if Lighting._att[blv] == 0:
+							solid_top = y2
+							break
+						k2 -= 1
+			if solid_top >= 0:
+				break
+			si -= 1
+		si = 0
+		while si < nsl:
+			var s2 = slabs[si]
+			var slb: int = si * 16
+			var ly: int = 15
+			var y: int = 0
+			var sky_n: int = 0
 			var eff_n: int = 0
-			if nvalid:
-				eff_n = narr[idx]
-			var lv: int = Lighting._glow[bl]
-			var v: int
-			if lv > 0:
-				v = lv
-			elif eff_n > sky_n:
-				v = eff_n
+			if s2 == null:
+				while ly >= 0:
+					y = slb + ly
+					sky_n = 15 if y > solid_top else 0
+					eff_n = 0
+					if nvalid:
+						eff_n = narr[(y << 8) | (nz << 4) | nx]
+					if eff_n > sky_n:
+						b[y * 16 + t] = eff_n
+					else:
+						b[y * 16 + t] = sky_n
+					ly -= 1
+			elif int(s2["n"]) == 1:
+				var blc: int = int(s2["p"][0])
+				var lvc: int = Lighting._glow[blc]
+				ly = 15
+				while ly >= 0:
+					y = slb + ly
+					sky_n = 15 if y > solid_top else 0
+					eff_n = 0
+					if nvalid:
+						eff_n = narr[(y << 8) | (nz << 4) | nx]
+					if lvc > 0:
+						b[y * 16 + t] = lvc
+					elif eff_n > sky_n:
+						b[y * 16 + t] = eff_n
+					else:
+						b[y * 16 + t] = sky_n
+					ly -= 1
 			else:
-				v = sky_n
-			b[y * 16 + t] = v
+				var packed: PackedByteArray = s2["i"]
+				var raw2: bool = int(s2["n"]) == 0
+				var pp2: PackedByteArray = s2["p"]
+				var bits: int = int(s2["b"])
+				ly = 15
+				while ly >= 0:
+					y = slb + ly
+					var pos: int = (ly << 8) | (nz << 4) | nx
+					var bl: int
+					if raw2:
+						bl = int(packed[pos])
+					else:
+						bl = int(pp2[ChunkIO._slab_getbits(packed, bits, pos)])
+					sky_n = 15 if y > solid_top else 0
+					eff_n = 0
+					if nvalid:
+						eff_n = narr[(y << 8) | (nz << 4) | nx]
+					var lv: int = Lighting._glow[bl]
+					if lv > 0:
+						b[y * 16 + t] = lv
+					elif eff_n > sky_n:
+						b[y * 16 + t] = eff_n
+					else:
+						b[y * 16 + t] = sky_n
+					ly -= 1
+			si += 1
 	var sf: PackedByteArray = _face_of(nc, _shared_face(dx, dz))
 	var bm := PackedByteArray()
 	if sf.size() == 2 * 16 * h:  # AC-0091: face width by h (was 2560)
@@ -2741,7 +2947,7 @@ func _side_blk_v_scoped(nc: Node3D, dx: int, dz: int, y0: int, y1: int, h: int) 
 	# costs ~190 ms on the main thread.
 	var b := PackedByteArray()
 	b.resize(2 * 16 * h)
-	var nd: PackedByteArray = nc.data
+	var nd: PackedByteArray = nc.flat_data()
 	var narr: PackedByteArray = PackedByteArray()
 	if not nc.last_eff.is_empty():
 		narr = nc.last_eff["arr"]
@@ -2820,8 +3026,8 @@ func _eff_landed(c: Node3D, old_eff: Dictionary, new_eff: Dictionary) -> void:
 	# (_face_of). Skipped entirely for arr-unchanged landings (no gen bump).
 	var fk0 := _key(int(c.cx), int(c.cz))
 	var cur: Array = _face_blk.get(fk0, [])
-	if cur.size() != 3 or c.data != cur[0] or not _face_deps_ok(c, cur[2]):
-		_face_blk[fk0] = [c.data, _compute_face_blk(c), _face_deps(c)]
+	if cur.size() != 3 or int(cur[0]) != int(c.data_gen) or not _face_deps_ok(c, cur[2]):
+		_face_blk[fk0] = [c.data_gen, _compute_face_blk(c), _face_deps(c)]
 	# fix-6: the E2 re-enqueue is NO LONGER gated on blk_src — a non-glow
 	# chunk is a RELAY: its settled face (and hence its neighbors' imports)
 	# changes when its own imported light lands. The per-side frame gate
@@ -2885,10 +3091,12 @@ func _frame_changed(a: PackedByteArray, b: PackedByteArray, side: int) -> bool:
 	return false
 
 
-func _eff_cache_put(key: String, data: PackedByteArray, eff: Dictionary, ngen = null) -> void:
+func _eff_cache_put(key: String, c: Node3D, eff: Dictionary, ngen = null) -> void:
 	if eff.is_empty():
 		return
-	_eff_cache[key] = {"data": data.duplicate(), "eff": eff, "ngen": ngen}
+	# AC-0203: the stamp ([data_gen, fl_gen]) replaces the 98 KB
+	# data.duplicate() — every in-place column mutation bumps a gen.
+	_eff_cache[key] = {"stamp": c.stamp(), "eff": eff, "ngen": ngen}
 	if not _eff_cache_order.has(key):
 		_eff_cache_order.append(key)
 		while _eff_cache_order.size() > EFF_CACHE_CAP:
@@ -2904,7 +3112,7 @@ func _eff_for(c: Node3D, cx: int, cz: int) -> Dictionary:
 	var cached = _eff_cache.get(key)
 	if cached == null:
 		return {}
-	if c.data != cached.data:
+	if int(c.data_gen) != int(cached.stamp[0]) or int(c.fl_gen) != int(cached.stamp[1]):
 		return {}
 	# AC-0129: the entry's light is only valid while the 4 neighbor eff_gens
 	# (captured at its dispatch) are unchanged — a stale entry -> {} -> the
@@ -3143,7 +3351,20 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 		_bl_want.erase(key)
 		_col_pending_set.erase(key)
 		_col_pending.erase(key)
-		c.queue_free()
+		if _cblog:
+			var _nf := 0
+			var _ms := 0
+			var _surfs := 0
+			for _ch in c.get_children():
+				_nf += 1
+				if _ch is MeshInstance3D:
+					var _m = (_ch as MeshInstance3D).mesh
+					if _m != null and _m is ArrayMesh:
+						_surfs += (_m as ArrayMesh).get_surface_count()
+			_nf += 1
+			print("FREECH %d,%d n=%d surfs=%d" % [int(c.cx), int(c.cz), _nf, _surfs])
+		if not _nofree:
+			c.queue_free()
 	_rp_free_ms += (Time.get_ticks_usec() - tf1) / 1000.0
 	threadgen_poll()
 	threadmesh_poll()
@@ -3590,11 +3811,11 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 		_fp_writes += 1
 	var fi := (y << 8) | (lz << 4) | lx
 	if is_fluid_id(id):
-		if c.fl[fi] == 0:
-			c.fl[fi] = 7
+		if c.fl_at(fi) == 0:
+			c.set_fl_at(fi, 7)
 		fluid_wet[_key(cx, cz)] = true
 	else:
-		c.fl[fi] = 0
+		c.set_fl_at(fi, 0)
 	c.mark_edit_slabs(y)
 	_edit_stale_eff[_key(cx, cz)] = _eff_cache.get(_key(cx, cz))
 	_edit_front_add(_key(cx, cz), y)
@@ -3602,7 +3823,7 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 	_mark_light_around(cx, cz)
 	if _fluid_near(x, y, z):
 		_fluid_write = true
-	_record_edit(cx, cz, fi, id, int(c.fl[fi]))
+	_record_edit(cx, cz, fi, id, c.fl_at(fi))
 
 func _mark_light_around(cx: int, cz: int) -> void:
 	for dx in range(-LIGHT_NEIGHBOR, LIGHT_NEIGHBOR + 1):
@@ -3624,25 +3845,22 @@ func _apply_edits_to_chunk(c: Node3D) -> bool:
 	var key := _key(c.cx, c.cz)
 	if not edits.has(key):
 		return false
-	var data: PackedByteArray = c.data
-	if data.is_empty():
+	if c.data.is_empty():
 		return false
-	var fl: PackedByteArray = c.fl
-	if fl.size() != data.size():
-		fl.resize(data.size())
 	var cells: Dictionary = edits[key]
 	var changed := false
 	var fl_changed := false
 	for fkey in cells:
 		var e: Dictionary = cells[fkey]
+		var fi := int(fkey)
 		var b := int(e.get("b", 0))
 		var f := int(e.get("f", 0))
-		if data[int(fkey)] != b:
+		if c.get_at(fi) != b:
 			changed = true
-		if fl[int(fkey)] != f:
+		if c.fl_at(fi) != f:
 			fl_changed = true
-		data[int(fkey)] = b
-		fl[int(fkey)] = f
+		c.set_local(fi & 15, fi >> 8, (fi >> 4) & 15, b)
+		c.set_fl_at(fi, f)
 		if f > 0:
 			fluid_wet[_key(c.cx, c.cz)] = true
 	if not changed and not fl_changed:
@@ -3682,13 +3900,22 @@ func _try_disk_load(c: Node3D, cx: int, cz: int) -> bool:
 	disk_read_ms += (Time.get_ticks_usec() - t0) / 1000.0
 	if res == null or (typeof(res) != TYPE_DICTIONARY) or (res as Dictionary).is_empty():
 		return false
-	c.data = res["data"]
-	c.fl = res["fl"]
-	c.update_top()  # AC-0197: disk-loaded column top
+	_land_column(c, res)
 	c.saved_light = _saved_light_from_res(res.get("light", {}), cx, cz)
 	disk_reads += 1
 	chunk_origin[_key(cx, cz)] = "disk"
 	return true
+
+# AC-0203 recenter fix: the disk-landing choke point. v4 blobs carry the
+# slab array (decode_column d_slabs/f_slabs) -> reference handoff; v1-v3
+# (old saves) fall back to the flat palettize path.
+func _land_column(c: Node3D, res: Dictionary) -> void:
+	var ds = res.get("d_slabs")
+	if ds != null and (ds is Array) and res.get("f_slabs") != null:
+		c.slabs_landed(ds, res["f_slabs"])
+	else:
+		c.data_landed(res["data"], res["fl"])
+
 
 func _saved_light_from_res(light: Dictionary, cx: int, cz: int) -> Dictionary:
 	if light.is_empty():
@@ -3715,8 +3942,7 @@ func _materialize_chunk_data(c: Node3D, cx: int, cz: int) -> int:
 		return 0
 	if c.data.is_empty():
 		var tg := Time.get_ticks_msec()
-		c.data = WorldGen.generate(cx, cz, Game.world_seed)
-		c.init_fl()
+		c.data_landed(WorldGen.generate(cx, cz, Game.world_seed), PackedByteArray())
 		gen_count += 1
 		var dg := Time.get_ticks_msec() - tg
 		gen_ms_total += dg
@@ -3737,8 +3963,12 @@ func _queue_chunk_save(c: Node3D) -> void:
 		"face": _chunk_face(int(c.cx)),
 		"cx": int(c.cx),
 		"cz": int(c.cz),
-		"data": c.data.duplicate(),
-		"fl": c.fl.duplicate(),
+		# AC-0203 recenter fix: the evict path ran on every recenter frame —
+		# flat_data()/flat_fl() expanded both 98 KB columns on the main
+		# thread. The worker encodes from the slab copies (~20 KB/col) via
+		# _slabs_flat; the on-disk bytes are unchanged (same flat -> v4).
+		"data": ChunkIO._slabs_deepcopy(c.data),
+		"fl": ChunkIO._slabs_deepcopy(c.fl),
 		"light": light,
 	})
 
@@ -3747,7 +3977,7 @@ func _save_light_for(c: Node3D, key: String) -> Dictionary:
 	if light_pending_set.has(key) or light_dirty.has(key):
 		return out
 	var cached = _eff_cache.get(key)
-	if cached == null or c.data != cached.data:
+	if cached == null or int(c.data_gen) != int(cached.stamp[0]) or int(c.fl_gen) != int(cached.stamp[1]):
 		return out
 	var full: Dictionary = cached.eff
 	var arr: PackedByteArray = full.get("arr", PackedByteArray())
@@ -3815,7 +4045,9 @@ func _io_write_worker() -> void:
 		ns += 1
 	if entry == null:
 		return
-	var blob := ChunkIO.encode_column(PackedByteArray(entry["data"]), PackedByteArray(entry["fl"]), int(entry["seed"]), int(entry["height"]), entry.get("light", {}))
+	# AC-0203 recenter fix: the entry carries slab arrays (the main thread
+	# no longer expands them); _slabs_flat reproduces the exact 98 KB column.
+	var blob := ChunkIO.encode_column(ChunkIO._slabs_flat(entry["data"]), ChunkIO._slabs_flat(entry["fl"]), int(entry["seed"]), int(entry["height"]), entry.get("light", {}))
 	var f = FileAccess.open(String(entry["path"]), FileAccess.WRITE)
 	if f == null:
 		return
@@ -3920,9 +4152,7 @@ func _io_read_handoff(e: Dictionary) -> void:
 		_io_fails += 1
 		threadgen_enqueue(int(e["cx"]), int(e["cz"]), key, int(c.get_instance_id()))
 		return
-	c.data = res["data"]
-	c.fl = res["fl"]
-	c.update_top()  # AC-0197: disk-loaded column top
+	_land_column(c, res)  # AC-0203 recenter fix: v4 slabs direct, v1-v3 flat
 	c.saved_light = _saved_light_from_res(res.get("light", {}), int(e["cx"]), int(e["cz"]))
 	disk_reads += 1
 	disk_read_ms += float(e.get("ms", 0.0))
@@ -4064,10 +4294,10 @@ func set_fluid(x: int, y: int, z: int, id: int, lvl: int, create := false) -> vo
 	var lx := x & 15
 	var lz := z & 15
 	var i := (y << 8) | (lz << 4) | lx
-	if c.get_local(lx, y, lz) == id and c.fl[i] == lvl:
+	if c.get_local(lx, y, lz) == id and c.fl_at(i) == lvl:
 		return
 	c.set_local(lx, y, lz, id)
-	c.fl[i] = lvl
+	c.set_fl_at(i, lvl)
 	_fluid_write = true
 	if _fluidprobe:
 		_fp_writes += 1
@@ -4085,9 +4315,9 @@ func fluid_level(x: int, y: int, z: int) -> int:
 	if c == null or c.data.is_empty():
 		return 0
 	var i := (y << 8) | ((z & 15) << 4) | (x & 15)
-	var v: int = c.fl[i]
+	var v: int = c.fl_at(i)
 	if v == 0:
-		var b: int = c.data[i]
+		var b: int = c.get_at(i)
 		if is_fluid_id(b):
 			v = 8
 	return v
@@ -4097,8 +4327,19 @@ func fluid_at(x: int, y: int, z: int) -> Array:
 
 func _nb_block(nc: Node3D, li: int, gx: int, gy: int, gz: int) -> int:
 	if nc != null and not nc.data.is_empty():
-		return nc.data[li]
+		return nc.get_at(li)
 	return 0
+
+
+func _data_at_slab(c: Node3D, si: int, pos: int, cache: Dictionary) -> int:
+	# AC-0203: slab-indexed data read (pos = within-slab cell), cached per
+	# call site (the fluid tick caches all slabs of one column per tick).
+	if si < 0:
+		return 0
+	if not cache.has(si):
+		cache[si] = ChunkIO._slab_flat(c.data[si])
+	var dv: PackedByteArray = cache[si]
+	return 0 if dv.is_empty() else int(dv[pos])
 
 func tick_fluids() -> void:
 	fluid_tick_count += 1  # AC-0158: fluid pass now runs inside the 20 Hz game tick
@@ -4153,9 +4394,15 @@ func tick_fluids() -> void:
 		var ck := _key(int(c.cx), int(c.cz))
 		if not fluid_wet.has(ck):
 			continue
+		# AC-0203: sparse fluid scan — only fl slabs with nz>0 are
+		# materialized and only their non-zero cells processed (the old full
+		# scan skipped every fl==0 cell anyway; same cell set, same order,
+		# same y window [1, hmax)). Natural (worldgen) water is a stationary
+		# source (fl=0, MC-style): oceans/rivers generate stationary and do
+		# not flow until block-updated — the natural ocean produces ZERO
+		# writes and stays 100% stable. Player/bucket water arrives with an
+		# explicit fl (8) and runs the full fall/spread pass below.
 		var wet_cells := 0
-		var data: PackedByteArray = c.data
-		var fl: PackedByteArray = c.fl
 		var cx: int = int(c.cx)
 		var cz: int = int(c.cz)
 		if _fluidprobe:
@@ -4166,74 +4413,77 @@ func tick_fluids() -> void:
 		var nw: Node3D = chunks.get(_key(cx - 1, cz))
 		var ns: Node3D = chunks.get(_key(cx, cz + 1))
 		var nn: Node3D = chunks.get(_key(cx, cz - 1))
-		for y in range(1, hmax):
-			var ib: int = (y - 1) << 8
-			var ia: int = y << 8
-			var ib2: int = (y - 2) << 8
-			for lz in range(16):
-				var lb: int = lz << 4
-				for lx in range(16):
-					var i := ia | lb | lx
-					var b: int = data[i]
-					var l: int
-					if fl[i] == 0:
-						# Natural (worldgen) water is a stationary source (fl=0, MC-style):
-						# oceans/rivers generate stationary and do not flow until
-						# block-updated. fl=0 cells are skipped entirely (no lava reaction,
-						# no fall, no sideways spread) so the natural ocean produces ZERO
-						# writes and stays 100% stable. Player/bucket water arrives with an
-						# explicit fl (8) and runs the full fall/spread pass below.
-						continue
-					else:
-						if not is_fluid_id(b):
-							fl[i] = 0
-							continue
-						l = fl[i]
-						wet_cells += 1
-						if _fluidprobe:
-							fp_wet += 1
-					var x := wx0 + lx
-					var z := wz0 + lz
-					var below: int = data[ib | lb | lx]
-					if b == 5 and below == 24:
-						set_block(x, y - 1, z, 25 if l == 8 else 9, false)
-						continue
-					if b == 24 and below == 5:
-						set_block(x, y - 1, z, 9, false)
-						continue
-					var n_l: int = 7 if l == 8 else l - 1
-					if fluid_replaceable(below):
-						set_fluid(x, y - 1, z, b, 8, false)
-						set_fluid(x, y, z, 0, 0, false)
-					elif n_l <= 0:
-						continue
-					else:
-						var hold := false
-						if is_fluid_id(below) and y >= 2 and fluid_replaceable(data[ib2 | lb | lx]):
-							hold = true
-						if not hold:
-							for d in FLUID_DIRS:
-								var ddx: int = int(d[0])
-								var ddz: int = int(d[1])
-								var nx := x + ddx
-								var nz := z + ddz
-								var nb: int
-								if ddx == 1 and lx == 15:
-									nb = _nb_block(ne, ia | lb, nx, y, nz)
-								elif ddx == -1 and lx == 0:
-									nb = _nb_block(nw, ia | lb | 15, nx, y, nz)
-								elif ddz == 1 and lz == 15:
-									nb = _nb_block(ns, ia | lx, nx, y, nz)
-								elif ddz == -1 and lz == 0:
-									nb = _nb_block(nn, ia | 240 | lx, nx, y, nz)
+		var dviews: Dictionary = {}
+		var si := 0
+		while si < ChunkScript.slab_n():
+			var fslab = c.fl[si]
+			if fslab != null and int(fslab["nz"]) > 0:
+				var fflat: PackedByteArray = ChunkIO._slab_flat(fslab)
+				var srow: int = si * 16
+				var cell := 0
+				while cell < 4096:
+					var l: int = int(fflat[cell])
+					if l != 0:
+						var y: int = srow + (cell >> 8)
+						if y >= 1 and y < hmax:
+							var ry: int = cell >> 8
+							var row: int = y << 8
+							var i: int = row | (cell & 255)
+							var b: int = _data_at_slab(c, si, cell & 255, dviews)
+							if not is_fluid_id(b):
+								c.set_fl_at(i, 0)
+							else:
+								wet_cells += 1
+								if _fluidprobe:
+									fp_wet += 1
+								var lx: int = cell & 15
+								var lz: int = (cell >> 4) & 15
+								var x := wx0 + lx
+								var z := wz0 + lz
+								var below_si: int = si if ry > 0 else si - 1
+								var below_pos: int = (cell & 255) - 256 if ry > 0 else (cell & 255) | (15 << 8)
+								var below: int = _data_at_slab(c, below_si, below_pos, dviews)
+								var br: int = below_pos >> 8
+								var bb_si: int = below_si if br > 0 else below_si - 1
+								var bb_pos: int = below_pos - 256 if br > 0 else (below_pos & 255) | (15 << 8)
+								if b == 5 and below == 24:
+									set_block(x, y - 1, z, 25 if l == 8 else 9, false)
+								elif b == 24 and below == 5:
+									set_block(x, y - 1, z, 9, false)
 								else:
-									nb = data[ia | ((nz & 15) << 4) | (nx & 15)]
-								if fluid_replaceable(nb):
-									set_fluid(nx, y, nz, b, n_l, false)
-								elif nb == 5 and b == 24:
-									set_block(nx, y, nz, 9, false)
-								elif nb == 24 and b == 5:
-									set_block(nx, y, nz, 9, false)
+									var n_l: int = 7 if l == 8 else l - 1
+									if fluid_replaceable(below):
+										set_fluid(x, y - 1, z, b, 8, false)
+										set_fluid(x, y, z, 0, 0, false)
+									elif n_l > 0:
+										var hold := false
+										if is_fluid_id(below) and y >= 2 and fluid_replaceable(_data_at_slab(c, bb_si, bb_pos, dviews)):
+											hold = true
+										if not hold:
+											for d in FLUID_DIRS:
+												var ddx: int = int(d[0])
+												var ddz: int = int(d[1])
+												var nx := x + ddx
+												var nz := z + ddz
+												var nb: int
+												if ddx == 1 and lx == 15:
+													nb = _nb_block(ne, row | (lz << 4), nx, y, nz)
+												elif ddx == -1 and lx == 0:
+													nb = _nb_block(nw, row | (lz << 4) | 15, nx, y, nz)
+												elif ddz == 1 and lz == 15:
+													nb = _nb_block(ns, row | lx, nx, y, nz)
+												elif ddz == -1 and lz == 0:
+													nb = _nb_block(nn, row | 240 | lx, nx, y, nz)
+												else:
+													nb = _data_at_slab(c, si, (cell & 3840) | ((nz & 15) << 4) | (nx & 15), dviews)
+												if fluid_replaceable(nb):
+													set_fluid(nx, y, nz, b, n_l, false)
+												elif nb == 5 and b == 24:
+													set_block(nx, y, nz, 9, false)
+												elif nb == 24 and b == 5:
+													set_block(nx, y, nz, 9, false)
+					cell += 1
+			si += 1
 		if wet_cells == 0:
 			fluid_wet.erase(ck)
 	if tick_time:
@@ -4380,8 +4630,7 @@ func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 	c.collision_enabled = false
 	c.init_slabs()
 	add_child(c)
-	c.data = WorldGen.generate_face(face, ccx, ccz, Game.world_seed)
-	c.init_fl()
+	c.data_landed(WorldGen.generate_face(face, ccx, ccz, Game.world_seed), PackedByteArray())
 	chunks[key] = c
 	_face_order.append(key)
 	if _face_order.size() > FACE_CHUNK_CAP:
@@ -4417,7 +4666,7 @@ func set_block_key(face: int, colx: int, colz: int, y: int, id: int) -> void:
 		return
 	var fi: int = (y << 8) | ((colz & 15) << 4) | (colx & 15)
 	c.set_local(colx & 15, y, colz & 15, id)
-	c.fl[fi] = 0
+	c.set_fl_at(fi, 0)
 
 
 # AC-0187: dedicated single-thread pool for the block-edit fast remesh.
