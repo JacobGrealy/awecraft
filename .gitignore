@@ -1,4 +1,5 @@
 .scratch/
+gdext/bin/
 export/
 exports/
 .godot/

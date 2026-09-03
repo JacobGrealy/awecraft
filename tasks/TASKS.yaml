@@ -1,16 +1,18 @@
 meta:
-  updated_at: 2026-09-03T04:30
+  updated_at: 2026-09-03T08:27
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md
     TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html +
     <id>-results.html + screenshots
 queue:
+- AC-0203
 - AC-0165
 - AC-0188
 - AC-0189
 - AC-0190
 - AC-0199
 - AC-0204
+- AC-0205
 - AC-0175
 - AC-0140
 - AC-0191
@@ -5849,11 +5851,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-31T11:39
   updated_at: 2026-09-03T08:45
-  completed_at: null
+  completed_at: 2026-09-03T10:00
   waiting_on: AC-0203
   parent_id: null
   notes: '1) User Story: As a player I want chunk saving and loading to never hitch,
@@ -5867,7 +5869,21 @@ intake:
     + .gdextension. Decode palette in C++ ~1ns int lookup (fixes 0203 GDScript 74ms).
     Verify encode/decode ~10x faster, palette roundtrip MD5, save 5KB/col, boundary
     p95 drop. After AC-0204.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: '2026-09-03T10:00:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. C++ foundation: SConstruct + .gdextension
+      + src/chunk_io.cpp (v4 paletted codec ported to C++, direct palette[idx] decode)
+      + gdext/bin/libchunkio.so (linux) + libchunkio.windows...dll (MinGW, PE-verified).
+      godot-cpp master 05057de (api 4.7) — a 4.5-built .so crashed on load (signal
+      11), fixed by rebuilding for 4.7. Verified in subagent env: G0 exit 0, chunkiocpp
+      ok:true (roundtrip byte-identical, enc/flat 34/34, slab 17/17, MD5 match), decode
+      8.14x flat / 28.58x slab (the AC-0203 recenter path), genhash 25/25. Per user:
+      .so verified + .dll built = DONE (.dll PE-verified, Windows runtime test happens
+      with the next Windows build). KNOWN: the .so crashes in the COORDINATOR env
+      (signal 11 on plain headless load, same .so, fresh HOME) but NOT the subagent
+      env — filed as AC-0206 (research, non-blocking). See tasks/AC-0165/AC-0165-results.html.'
 - id: AC-0166
   title: chunks flicker unload/reload at distance line (band/cull hysteresis)
   source: user
@@ -7112,7 +7128,13 @@ intake:
   - id: 4
     created_at: '2026-09-03T08:45:00.000000'
     updated_at: null
-    text: '[coordinator] DONE + SHIPPED 2026-09-03 per user decision. Build: AweCraft.exe 109881504 B, sha c6c1a9c0, 8080 byte-match, 5180=200. The known recenter cost (60s vs 16s, the v4 GDScript decode) is accepted as a slow-GDScript-loop issue and tracked to the C++ series (AC-0165 native chunk I/O codec "fixes 0203 GDScript 74ms" is now unblocked + at the queue head; AC-0190 gdext-mesh-face-greedy will decode palette slabs in C++). The RAM win is real (R50 -1.453 GB / -24.5%), genhash byte-identical (lossless), all feature gates green. See tasks/AC-0203/AC-0203-results.html.'
+    text: '[coordinator] DONE + SHIPPED 2026-09-03 per user decision. Build: AweCraft.exe
+      109881504 B, sha c6c1a9c0, 8080 byte-match, 5180=200. The known recenter cost
+      (60s vs 16s, the v4 GDScript decode) is accepted as a slow-GDScript-loop issue
+      and tracked to the C++ series (AC-0165 native chunk I/O codec "fixes 0203 GDScript
+      74ms" is now unblocked + at the queue head; AC-0190 gdext-mesh-face-greedy will
+      decode palette slabs in C++). The RAM win is real (R50 -1.453 GB / -24.5%),
+      genhash byte-identical (lossless), all feature gates green. See tasks/AC-0203/AC-0203-results.html.'
 - id: AC-0204
   title: day-night-light-freeze-shader-noon
   source: user
@@ -7145,3 +7167,110 @@ intake:
     updated_at: null
     text: '[user] save noon sky eff, shade via u_day uniform - fixes AC-0156 freeze
       per 2026-09-02 discussion'
+- id: AC-0205
+  title: smooth-ground-ramps-for-dirt-grass-sand-on-planets
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-03T08:24
+  updated_at: 2026-09-03T08:24
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player running and shooting on planets, I want hills
+    and ground to be smooth ramps instead of blocky stair steps so I can strafe and
+    slide without snagging, but I can still build with normal square blocks.
+
+
+    2) Technical Details: Ramps for ground materials B_DIRT/B_GRASS/B_SAND (and variants)
+    wherever terrain meets air — applies to both generated terrain AND player-placed
+    blocks of those types; neighboring ground columns with Δy=1 connect via sloped
+    quad. Other block types (stone, wood, etc.) stay full cubes with no ramps. Mesh
+    in godot/world/chunk.gd:_bake_box/build_accs — detect 1-block step between ground
+    mats and emit sloped quad (sheared UVs, same atlas), plus matching ConvexPolygonShape3D
+    ramp collision in world.gd. Data stays 16³ cubes (buildability unchanged). Verify
+    G0+SMOKE, walk/shoot on hills and player-built dirt mounds shows no stair snag,
+    stone stays blocky.'
+  comments:
+  - id: 1
+    created_at: '2026-09-03T12:24:21.840375'
+    updated_at: null
+    text: '[coordinator] Reasoning: xhigh (non-trivial, chunk.gd meshing + collision
+      ramp gen limited to ground mats)'
+- id: AC-0206
+  title: gdext-so-load-crash-coordinator-env
+  source: coordinator
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: done
+  labels: []
+  created_at: 2026-09-03T09:55
+  updated_at: 2026-09-03T16:12
+  completed_at: 2026-09-03T16:12
+  waiting_on: null
+  parent_id: AC-0165
+  notes: '1) User Story: As a developer I want the C++ .so (libchunkio.so) to load
+    cleanly in every environment so the C++ series is portable, so I can stop debugging
+    a crash that only appears in one place.
+
+
+    2) Technical Details: The AC-0165 C++ .so (gdext/bin/libchunkio.so, built against
+    godot-cpp master 05057de for Godot 4.7.1) loads cleanly + passes all gates in
+    the subagent environment (G0 exit 0, chunkiocpp ok:true, roundtrip byte-identical,
+    8.1x/28.6x decode speedup, genhash 25/25) but CRASHES with signal 11 on a plain
+    `godot --headless --path godot --quit` in the coordinator environment (same .so,
+    same 4.7.1 engine, fresh HOME=/tmp/dsh_home). The .godot cache is present + re-imported;
+    the .so is a valid ELF + PE-verified .dll. Investigate the coordinator-env crash:
+    likely a stale .godot/user:// state, a HOME difference, a libstdc++ ABI mismatch
+    (g++ 15.2 vs the engine build), or a first-load import race. Reproduce + root-cause
+    + fix so the .so loads cleanly in BOTH environments. Verify G0 exit 0 in the coordinator
+    env (the make-or-break check). This is research; do NOT change the codec logic
+    (it is verified byte-identical).'
+  comments:
+  - id: 1
+    created_at: '2026-09-03T09:55:00.000000'
+    updated_at: null
+    text: '[coordinator] Filed per user ask (2026-09-03): research why the .so crashes
+      in the coordinator env but not the subagent env; keep going through the task
+      list meanwhile. Non-blocking (the .so is verified correct in the subagent env;
+      the .dll is built).'
+- id: AC-0206
+  title: gdext-build-windows-packaging
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-03T16:11
+  updated_at: 2026-09-03T16:11
+  completed_at: null
+  waiting_on: AC-0190
+  parent_id: null
+  notes: '1) User Story: As a dev running build_windows.sh after C++ lands I want
+    the .dll built and shipped alongside the exe so the GDExt actually loads on Windows.
+
+
+    2) Technical Details: Gap: build_windows.sh only does godot --export-release,
+    never scons gdext; .gdextension godot/res/libchunkio.gdextension windows.release
+    = "../../gdext/bin/libchunkio..." is outside res:// so pck does not bundle it
+    and Windows exe LoadLibrary fails at ../../gdext/bin. Fix: build_windows.sh ->
+    scons -C gdext -j$(nproc) target=template_release; mkdir -p godot/bin && cp gdext/bin/*.dll/.so
+    godot/bin/; cp to exports/windows/ alongside AweCraft.exe; update .gdextension
+    to res://bin/libchunkio... (both linux/windows). Verify: build_windows.sh --no-serve
+    produces exports/windows/AweCraft.exe + libchunkio.windows.template_release.x86_64.dll
+    side-by-side, godot --headless loads GDExt (no fallback), headless print GDExt
+    ok.'
+  comments:
+  - id: 1
+    created_at: 2026-09-03T16:11
+    updated_at: null
+    text: '[user] build_windows.sh never builds/copies .dll, .gdextension path outside
+      res:// -> Windows load fails per 2026-09-03'

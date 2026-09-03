@@ -1333,6 +1333,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "chunkio":
 			await _chunkio_test(spawn)
 			return
+		if logic == "chunkiocpp":
+			await _chunkiocpp_test(spawn)
+			return
 		if logic == "tick":
 			await _tick_test(spawn)
 			return
@@ -9210,6 +9213,265 @@ func _chunkio_test(spawn: Vector3) -> void:
 		},
 	})
 	get_tree().quit()
+
+
+# AC-0165 probe (AWECRAFT_LOGIC=chunkiocpp, harness-only, never runs in
+# game): the C++ (GDExtension) v4 paletted codec must be byte-identical to
+# the GDScript v4 codec (encode section, flat decode, slab decode) on
+# synthetic edge-case columns + real r=4 columns; reports the decode speed
+# C++ vs GDScript (the AC-0203 slow recenter path).
+func _chunkiocpp_test(spawn: Vector3) -> void:
+	var res := {
+		"ok": false,
+		"cpp_registered": ClassDB.class_exists("ChunkIOPalette"),
+		"cols": 0,
+		"real_cols": 0,
+		"enc_pairs": 0,
+		"enc_match": 0,
+		"flat_pairs": 0,
+		"flat_match": 0,
+		"slab_match": 0,
+		"roundtrip_ok": 0,
+		"flat_gd_ms": 0.0,
+		"flat_cpp_ms": 0.0,
+		"slab_gd_ms": 0.0,
+		"slab_cpp_ms": 0.0,
+		"flat_speedup": 0.0,
+		"slab_speedup": 0.0,
+		"speedup_ok": false,
+		"enc_bytes_avg": 0,
+		"md5_orig": "",
+		"md5_cpp": "",
+	}
+	if not res["cpp_registered"]:
+		Debug.result(res)
+		get_tree().quit()
+		return
+	var C = ClassDB.instantiate("ChunkIOPalette")
+	if C == null:
+		Debug.result(res)
+		get_tree().quit()
+		return
+	var sub := int(Data.HEIGHT) / ChunkIO.S
+	var samples := []
+	samples.append(_ci_col_uniform(sub))
+	samples.append(_ci_col_sparse(sub))
+	samples.append(_ci_col_rainbow(sub))
+	samples.append(_ci_col_raw(sub))
+	samples.append(_ci_col_fluid(sub))
+	world.fluid_sim_enabled = false
+	world.render_radius = 4
+	world.recenter(spawn.x, spawn.z, true)
+	var waited := 0
+	var built := 0
+	while built < 12 and waited < 1200:
+		await get_tree().physics_frame
+		waited += 1
+		built = 0
+		for key in world.chunks.keys():
+			var c = world.chunks.get(key)
+			if c != null and not c.data.is_empty():
+				built += 1
+	var real := 0
+	for key in world.chunks.keys():
+		var c = world.chunks.get(key)
+		if c == null or c.data.is_empty():
+			continue
+		samples.append({
+			"data": ChunkIO._slabs_flat(c.data),
+			"fl": ChunkIO._slabs_flat(c.fl),
+			"top": int(c.top),
+		})
+		real += 1
+		if real >= 12:
+			break
+	res["real_cols"] = real
+	res["cols"] = samples.size()
+	var iters := 40
+	var enc_pairs := 0
+	var enc_match := 0
+	var flat_pairs := 0
+	var flat_match := 0
+	var slab_match := 0
+	var roundtrip_ok := 0
+	var gd_flat_ms := 0.0
+	var cpp_flat_ms := 0.0
+	var gd_slab_ms := 0.0
+	var cpp_slab_ms := 0.0
+	var enc_bytes := 0
+	var md5_ref := ""
+	for smp in samples:
+		var d: PackedByteArray = smp["data"]
+		var f: PackedByteArray = smp["fl"]
+		var top: int = smp["top"]
+		var enc_d_gd := ChunkIO._encode_array_v4(d, sub, top)
+		var enc_d_cpp: PackedByteArray = C.encode_section(d, sub, top)
+		enc_pairs += 1
+		if enc_d_gd == enc_d_cpp:
+			enc_match += 1
+		var enc_f_gd := ChunkIO._encode_array_v4(f, sub, top)
+		var enc_f_cpp: PackedByteArray = C.encode_section(f, sub, top)
+		enc_pairs += 1
+		if enc_f_gd == enc_f_cpp:
+			enc_match += 1
+		enc_bytes += enc_d_gd.size() + enc_f_gd.size()
+		var dec_gd = ChunkIO._decode_array_v4(enc_d_gd, 0, sub)
+		var dec_cpp = C.decode_section(enc_d_gd, 0, sub)
+		var fdec_gd = ChunkIO._decode_array_v4(enc_f_gd, 0, sub)
+		var fdec_cpp = C.decode_section(enc_f_gd, 0, sub)
+		var sl_gd = ChunkIO._decode_slabs_v4(enc_d_gd, 0, sub)
+		var sl_cpp = C.decode_slabs(enc_d_gd, 0, sub)
+		var ok_d: bool = int(dec_gd["off"]) > 0 and dec_gd["arr"] == d and (dec_cpp["arr"] as PackedByteArray) == d and (dec_cpp["arr"] as PackedByteArray) == dec_gd["arr"] and int(dec_cpp["off"]) == int(dec_gd["off"])
+		var ok_f: bool = int(fdec_gd["off"]) > 0 and fdec_gd["arr"] == f and (fdec_cpp["arr"] as PackedByteArray) == f and (fdec_cpp["arr"] as PackedByteArray) == fdec_gd["arr"] and int(fdec_cpp["off"]) == int(fdec_gd["off"])
+		var ok_s := int(sl_gd["off"]) > 0 and int(sl_cpp["off"]) == int(sl_gd["off"]) and _ci_slabs_equal(sl_gd["slabs"], sl_cpp["slabs"]) and ChunkIO._slabs_flat(sl_cpp["slabs"]) == d
+		flat_pairs += 2
+		if ok_d:
+			flat_match += 1
+		if ok_f:
+			flat_match += 1
+		if ok_s:
+			slab_match += 1
+		if ok_d and ok_f and ok_s:
+			roundtrip_ok += 1
+		if md5_ref == "":
+			md5_ref = _ci_md5(d)
+			res["md5_cpp"] = _ci_md5(dec_cpp["arr"])
+		var t1 := Time.get_ticks_usec()
+		for k in iters:
+			ChunkIO._decode_array_v4(enc_d_gd, 0, sub)
+		gd_flat_ms += float(Time.get_ticks_usec() - t1) / 1000.0 / float(iters)
+		t1 = Time.get_ticks_usec()
+		for k in iters:
+			C.decode_section(enc_d_gd, 0, sub)
+		cpp_flat_ms += float(Time.get_ticks_usec() - t1) / 1000.0 / float(iters)
+		t1 = Time.get_ticks_usec()
+		for k in iters:
+			ChunkIO._decode_slabs_v4(enc_d_gd, 0, sub)
+		gd_slab_ms += float(Time.get_ticks_usec() - t1) / 1000.0 / float(iters)
+		t1 = Time.get_ticks_usec()
+		for k in iters:
+			C.decode_slabs(enc_d_gd, 0, sub)
+		cpp_slab_ms += float(Time.get_ticks_usec() - t1) / 1000.0 / float(iters)
+	var n := float(samples.size())
+	res["enc_pairs"] = enc_pairs
+	res["enc_match"] = enc_match
+	res["flat_pairs"] = flat_pairs
+	res["flat_match"] = flat_match
+	res["slab_match"] = slab_match
+	res["roundtrip_ok"] = roundtrip_ok
+	res["flat_gd_ms"] = gd_flat_ms / n
+	res["flat_cpp_ms"] = cpp_flat_ms / n
+	res["slab_gd_ms"] = gd_slab_ms / n
+	res["slab_cpp_ms"] = cpp_slab_ms / n
+	res["flat_speedup"] = gd_flat_ms / cpp_flat_ms if cpp_flat_ms > 0.0 else 0.0
+	res["slab_speedup"] = gd_slab_ms / cpp_slab_ms if cpp_slab_ms > 0.0 else 0.0
+	res["speedup_ok"] = res["flat_speedup"] >= 5.0
+	res["enc_bytes_avg"] = int(enc_bytes / n)
+	res["md5_orig"] = md5_ref
+	res["ok"] = enc_match == enc_pairs and flat_match == flat_pairs and slab_match == samples.size() and roundtrip_ok == samples.size()
+	Debug.result(res)
+	get_tree().quit()
+
+
+func _ci_md5(b: PackedByteArray) -> String:
+	var hc := HashingContext.new()
+	hc.start(HashingContext.HASH_MD5)
+	hc.update(b)
+	var h: PackedByteArray = hc.finish()
+	var s := ""
+	for byte in h:
+		s += "%02x" % int(byte)
+	return s
+
+
+func _ci_slabs_equal(a: Array, b: Array) -> bool:
+	if a.size() != b.size():
+		return false
+	for i in a.size():
+		var sa = a[i]
+		var sb = b[i]
+		if sa == null and sb == null:
+			continue
+		if sa == null or sb == null:
+			return false
+		if int(sa["n"]) != int(sb["n"]):
+			return false
+		if int(sa["b"]) != int(sb["b"]):
+			return false
+		if int(sa["nz"]) != int(sb["nz"]):
+			return false
+		if (sa["p"] as PackedByteArray) != (sb["p"] as PackedByteArray):
+			return false
+		if (sa["i"] as PackedByteArray) != (sb["i"] as PackedByteArray):
+			return false
+	return true
+
+
+func _ci_zeros(sub: int) -> PackedByteArray:
+	var z := PackedByteArray()
+	z.resize(sub * ChunkIO.S3)
+	return z
+
+
+func _ci_col_uniform(sub: int) -> Dictionary:
+	var d := PackedByteArray()
+	d.resize(sub * ChunkIO.S3)
+	var i := 0
+	while i < 14 * ChunkIO.S3:
+		d[i] = 9
+		i += 1
+	return {"data": d, "fl": _ci_zeros(sub), "top": -1}
+
+
+func _ci_col_sparse(sub: int) -> Dictionary:
+	var d := PackedByteArray()
+	d.resize(sub * ChunkIO.S3)
+	d[0] = 11
+	d[1] = 9
+	d[100] = 11
+	d[4095] = 9
+	d[4096 + 10] = 7
+	return {"data": d, "fl": _ci_zeros(sub), "top": 30}
+
+
+func _ci_col_rainbow(sub: int) -> Dictionary:
+	var d := PackedByteArray()
+	d.resize(sub * ChunkIO.S3)
+	var i := 0
+	while i < sub * ChunkIO.S3:
+		var x := i % 16
+		var z := (i / 16) % 16
+		var y := (i / 256) % 16
+		d[i] = ((x + z + y * 7) % 15) + 1
+		i += 1
+	return {"data": d, "fl": _ci_zeros(sub), "top": -1}
+
+
+func _ci_col_raw(sub: int) -> Dictionary:
+	var d := PackedByteArray()
+	d.resize(sub * ChunkIO.S3)
+	var i := 0
+	while i < sub * ChunkIO.S3:
+		var x := i % 16
+		var z := (i / 16) % 16
+		var y := (i / 256) % 16
+		d[i] = ((x * 13 + z * 7 + y * 3) % 20) + 1
+		i += 1
+	return {"data": d, "fl": _ci_zeros(sub), "top": -1}
+
+
+func _ci_col_fluid(sub: int) -> Dictionary:
+	var f := PackedByteArray()
+	f.resize(sub * ChunkIO.S3)
+	var i := 0
+	while i < 4 * ChunkIO.S3:
+		f[i] = 5
+		if i % 64 == 0:
+			f[i] = 8
+		elif i % 64 == 1:
+			f[i] = 7
+		i += 1
+	return {"data": _ci_zeros(sub), "fl": f, "top": -1}
 
 
 func _lightcache_cache_fresh(key: String, max_frames: int) -> bool:

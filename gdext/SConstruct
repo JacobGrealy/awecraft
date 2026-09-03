@@ -1,0 +1,57 @@
+import os
+
+# AC-0165: build the libchunkio GDExtension against a prebuilt godot-cpp
+# static library. godot-cpp must be built FIRST, from its own directory
+# (relative object paths keep the ar command line under the kernel's
+# 128KB single-argument limit; building it from this directory fails with
+# "Argument list too long"):
+#   cd .scratch/godot-cpp && python3 <scons> target=template_release -j6
+
+platform = ARGUMENTS.get("platform", "linux")
+target = ARGUMENTS.get("target", "template_release")
+
+here = os.path.dirname(Dir(".").abspath)
+godot_cpp = os.environ.get("GODOT_CPP", os.path.join(here, ".scratch", "godot-cpp"))
+
+env = Environment(tools=["default"])
+env.Append(
+    CPPPATH=[
+        os.path.join(godot_cpp, "gen", "include"),
+        os.path.join(godot_cpp, "include"),
+        os.path.join(godot_cpp, "gdextension"),
+        "src",
+    ]
+)
+
+# AC-0165: Windows cross-compile with MinGW-w64 (host = linux). godot-cpp is
+# cross-built the same way (platform=windows target=template_release ->
+# bin/libgodot-cpp.windows.template_release.x86_64.a; the name ends in .a,
+# not .lib, because SCons uses the .lib suffix only for MSVC toolchains).
+# The .dll must carry the .gdextension convention name
+# libchunkio.windows.template_release.x86_64.dll.
+if platform == "windows":
+    prefix = "x86_64-w64-mingw32-"
+    env["CC"] = prefix + "gcc"
+    env["CXX"] = prefix + "g++"
+    env["AR"] = prefix + "gcc-ar"
+    env["RANLIB"] = prefix + "ranlib"
+    env["LINK"] = prefix + "g++"
+    env["SHLINK"] = prefix + "g++"
+    env["SHLIBPREFIX"] = "lib"
+    env["SHLIBSUFFIX"] = ".dll"
+    lib_base = os.path.join(godot_cpp, "bin", "libgodot-cpp.%s.%s.x86_64" % (platform, target))
+    for ext in (".a", ".lib"):
+        if os.path.exists(lib_base + ext):
+            lib = File(lib_base + ext)
+            break
+    else:
+        raise SystemExit("missing godot-cpp windows static lib: %s.{a,lib} — build it first" % lib_base)
+    libname = "bin/libchunkio.%s.%s.x86_64.dll" % (platform, target)
+else:
+    lib = File(os.path.join(godot_cpp, "bin", "libgodot-cpp.%s.%s.x86_64.a" % (platform, target)))
+    libname = "bin/libchunkio"
+
+env.Append(LIBS=[lib])
+library = env.SharedLibrary(libname, source=Glob("src/*.cpp"))
+env.NoCache(library)
+Default(library)
