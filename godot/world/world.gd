@@ -1218,9 +1218,17 @@ func _threadgen_worker() -> void:
 			_tg_concur_peak = _tg_concur
 	# AC-0203 recenter fix: worker-side palettize (same as the burst worker)
 	# — the drain's main-thread handoff is a reference slab landing.
-	var d := WorldGen.generate_args(int(a[0]), int(a[1]), int(a[2]), int(a[3]), int(a[4]))
-	var nsl2 := ChunkScript.slab_n()
-	var resl: Array = [ChunkIO.palettize_flat(d, nsl2), ChunkIO.empty_slabs(nsl2)]
+	# AC-0188: C++ generation (coarse 3D density) — the worker gets the
+	# palettized slabs straight from C++; the GDScript path stays as the
+	# fallback (AWECRAFT_GENCPP=0 or the library not loaded).
+	var g: Variant = WorldGen.gen_cpp()
+	var resl: Array
+	if g != null:
+		resl = g.generate_resl(int(a[0]), int(a[1]), int(a[2]), int(a[3]), int(a[4]))
+	else:
+		var d := WorldGen.generate_args(int(a[0]), int(a[1]), int(a[2]), int(a[3]), int(a[4]))
+		var nsl2 := ChunkScript.slab_n()
+		resl = [ChunkIO.palettize_flat(d, nsl2), ChunkIO.empty_slabs(nsl2)]
 	if timing:
 		print("TGENW %d,%d wms=%d spin=%d cc=%d wait=%d t=%d" % [int(a[0]), int(a[1]), Time.get_ticks_msec() - wt, ns, _tg_concur, wt - int(entry.get("tenq", wt)), Time.get_ticks_msec()])
 		_tg_concur -= 1
@@ -1241,9 +1249,16 @@ func _startup_gen_worker(i: int) -> void:
 	# AC-0203 recenter fix: palettize on the worker — the main-thread burst
 	# handoff becomes a reference slab landing (the flat column never hits
 	# the main thread).
-	var gdat := WorldGen.generate_args(int(e[1]), int(e[2]), int(e[4]), int(e[5]), int(e[6]))
-	var nsl := ChunkScript.slab_n()
-	_startup_gen_slots[i] = [ChunkIO.palettize_flat(gdat, nsl), ChunkIO.empty_slabs(nsl)]
+	# AC-0188: C++ generation when available (same toggle as threadgen).
+	var g: Variant = WorldGen.gen_cpp()
+	var resl: Array
+	if g != null:
+		resl = g.generate_resl(int(e[1]), int(e[2]), int(e[4]), int(e[5]), int(e[6]))
+	else:
+		var gdat := WorldGen.generate_args(int(e[1]), int(e[2]), int(e[4]), int(e[5]), int(e[6]))
+		var nsl := ChunkScript.slab_n()
+		resl = [ChunkIO.palettize_flat(gdat, nsl), ChunkIO.empty_slabs(nsl)]
+	_startup_gen_slots[i] = resl
 	if timing:
 		print("GENBURSTW %d,%d wms=%d t=%d" % [int(e[1]), int(e[2]), (Time.get_ticks_usec() - wbt) / 1000, Time.get_ticks_msec()])
 

@@ -51,7 +51,16 @@ else:
     lib = File(os.path.join(godot_cpp, "bin", "libgodot-cpp.%s.%s.x86_64.a" % (platform, target)))
     libname = "bin/libchunkio"
 
+# AC-0188: optimize the extension build (the default scons env is -O0) and
+# ban FP contraction — gen.cpp's AweNoise port must stay bit-identical to
+# the GDScript (the fade/ramp polynomials must never fold into FMA; the
+# baseline x86-64 and MinGW targets have none, this is the belt).
+env.Append(CXXFLAGS=["-O2", "-ffp-contract=off"])
+
 env.Append(LIBS=[lib])
+# AC-0188: src/gen.cpp (AweGen, the coarse 3D density generation) joins the
+# same library — the Glob below picks it up; the .gdextension entry symbol
+# (chunkio_library_init) registers both ChunkIOPalette and AweGen.
 library = env.SharedLibrary(libname, source=Glob("src/*.cpp"))
 env.NoCache(library)
 Default(library)

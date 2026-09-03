@@ -25,6 +25,13 @@
 
 using namespace godot;
 
+// AC-0188: the gen module (src/gen.cpp) shares this library — one
+// .so/.dll, one entry symbol. AweGen registers from the same initializer
+// below (namespace awegen, defined in gen.cpp).
+namespace awegen {
+void register_classes();
+}
+
 namespace {
 
 constexpr int S3 = 4096;
@@ -562,6 +569,7 @@ void initialize_chunkio_module(ModuleInitializationLevel p_level) {
 	if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE)
 		return;
 	GDREGISTER_CLASS(ChunkIOPalette);
+	awegen::register_classes(); // AC-0188: AweGen (coarse 3D density gen)
 }
 
 void uninitialize_chunkio_module(ModuleInitializationLevel p_level) {

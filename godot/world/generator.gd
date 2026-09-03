@@ -31,6 +31,25 @@ const SPAWN_H := 136
 const TERRAIN_H_MAX := 300
 
 
+# AC-0188: C++ generation toggle (gdext/src/gen.cpp — the coarse 4x8x4 3D
+# density, the AC-0198 approach ported natively on the AC-0165 pipeline).
+# Same AweNoise hash/fade/lerp (bit-for-byte — AWECRAFT_LOGIC=genprobe), a
+# NEW terrain (new genhash baseline — accepted). AWECRAFT_GENCPP=0 forces
+# the GDScript path below (fallback / A-B); AWECRAFT_GENCPP=1 or unset =
+# C++ whenever the gdext library registered AweGen.
+static var _gen_cpp: Variant = null
+static var _gen_cpp_done := false
+
+static func gen_cpp() -> Variant:
+	if not _gen_cpp_done:
+		_gen_cpp_done = true
+		if OS.get_environment("AWECRAFT_GENCPP") == "0":
+			_gen_cpp = null
+		elif ClassDB.class_exists("AweGen"):
+			_gen_cpp = ClassDB.instantiate("AweGen")
+	return _gen_cpp
+
+
 # AC-0091 exact remap (documented in tasks/AC-0091/spec.html + results.html):
 #   old (H=80):  y = 22 + c*14 + h*20; if r>0.62: y += (r-0.62)*150; clamp [3,74]
 #   new (H=384): y = 105.2 + c*36.4 + h*52.0; if r>0.62: y += (r-0.62)*390; clamp [3,300]
@@ -107,6 +126,12 @@ static func generate(cx: int, cz: int, seed: int) -> PackedByteArray:
 	return generate_args(cx, cz, seed, Data.HEIGHT, Data.SEA)
 
 static func generate_args(cx: int, cz: int, seed: int, hmax: int, sea: int) -> PackedByteArray:
+	# AC-0188: C++ path (coarse 3D density) when available — every GDScript
+	# caller (genhash, spawn sync column, face gen, probes) inherits the new
+	# terrain; workers use gen_cpp().generate_resl directly (slab form).
+	var g: Variant = gen_cpp()
+	if g != null:
+		return g.generate_flat(cx, cz, seed, hmax, sea)
 	var prof := OS.get_environment("AWECRAFT_GENPROFILE") == "1"
 	var t0 := Time.get_ticks_usec()
 	var bx := cx * 16

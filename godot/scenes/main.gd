@@ -1336,6 +1336,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "chunkiocpp":
 			await _chunkiocpp_test(spawn)
 			return
+		if logic == "genprobe":
+			await _genprobe_test()
+			return
 		if logic == "tick":
 			await _tick_test(spawn)
 			return
@@ -9405,6 +9408,103 @@ func _ci_slabs_equal(a: Array, b: Array) -> bool:
 		if (sa["i"] as PackedByteArray) != (sb["i"] as PackedByteArray):
 			return false
 	return true
+
+
+# AC-0188 probe (AWECRAFT_LOGIC=genprobe, harness-only): the C++ AweNoise
+# port (gdext/src/gen.cpp) must be bit-for-byte identical to the GDScript
+# AweNoise — the #1 invariant of the native gen. Compares hash2i/hash3i,
+# fade, vnoise2/vnoise3, fbm2/fbm3 at deterministic random points (seeded
+# RNG — reproducible), plus the cave-density wiring (density_cave must equal
+# AweNoise.fbm3 at the exact coarse-field coords/salt). Exact = f64 equality.
+func _genprobe_test() -> void:
+	var res := {
+		"ok": false,
+		"cpp_registered": ClassDB.class_exists("AweGen"),
+		"n": 0,
+		"exact": 0,
+		"max_diff": 0.0,
+		"fbm2": {"n": 0, "exact": 0},
+		"fbm3": {"n": 0, "exact": 0},
+		"vnoise2": {"n": 0, "exact": 0},
+		"vnoise3": {"n": 0, "exact": 0},
+		"hash2i": {"n": 0, "exact": 0},
+		"hash3i": {"n": 0, "exact": 0},
+		"fade": {"n": 0, "exact": 0},
+		"cave": {"n": 0, "exact": 0},
+	}
+	if not res["cpp_registered"]:
+		Debug.result(res)
+		get_tree().quit()
+		return
+	var G = ClassDB.instantiate("AweGen")
+	if G == null:
+		Debug.result(res)
+		get_tree().quit()
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 44
+	# NB: counters live in `res` — lambda captures are by value, so the
+	# lambda can only mutate things it holds by reference (the dict).
+	var cmp := func(k: String, a: float, b: float) -> void:
+		res["n"] = int(res["n"]) + 1
+		res[k]["n"] = int(res[k]["n"]) + 1
+		if a == b:
+			res["exact"] = int(res["exact"]) + 1
+			res[k]["exact"] = int(res[k]["exact"]) + 1
+		else:
+			var dd := absf(a - b)
+			if dd > float(res["max_diff"]):
+				res["max_diff"] = dd
+	for i in 1200:
+		var x := rng.randf_range(-1024.0, 1024.0)
+		var z := rng.randf_range(-1024.0, 1024.0)
+		var s := rng.randi_range(-200, 200)
+		var oct := 2 + rng.randi_range(0, 2)
+		cmp.call("fbm2", AweNoise.fbm2(x, z, s, oct), G.fbm2(x, z, s, oct))
+	for i in 1200:
+		var x := rng.randf_range(-1024.0, 1024.0)
+		var y := rng.randf_range(-1024.0, 1024.0)
+		var z := rng.randf_range(-1024.0, 1024.0)
+		var s := rng.randi_range(-200, 200)
+		var oct := 1 + rng.randi_range(0, 2)
+		cmp.call("fbm3", AweNoise.fbm3(x, y, z, s, oct), G.fbm3(x, y, z, s, oct))
+	for i in 600:
+		var x := rng.randf_range(-2048.0, 2048.0)
+		var z := rng.randf_range(-2048.0, 2048.0)
+		var s := rng.randi_range(-200, 200)
+		cmp.call("vnoise2", AweNoise.vnoise2(x, z, s), G.vnoise2(x, z, s))
+	for i in 600:
+		var x := rng.randf_range(-2048.0, 2048.0)
+		var y := rng.randf_range(-2048.0, 2048.0)
+		var z := rng.randf_range(-2048.0, 2048.0)
+		var s := rng.randi_range(-200, 200)
+		cmp.call("vnoise3", AweNoise.vnoise3(x, y, z, s), G.vnoise3(x, y, z, s))
+	for i in 400:
+		var x := rng.randi_range(-4096, 4096)
+		var z := rng.randi_range(-4096, 4096)
+		var s := rng.randi_range(-4096, 4096)
+		cmp.call("hash2i", AweNoise.hash2i(x, z, s), G.hash2i(x, z, s))
+	for i in 400:
+		var x := rng.randi_range(-4096, 4096)
+		var y := rng.randi_range(-4096, 4096)
+		var z := rng.randi_range(-4096, 4096)
+		var s := rng.randi_range(-4096, 4096)
+		cmp.call("hash3i", AweNoise.hash3i(x, y, z, s), G.hash3i(x, y, z, s))
+	for i in 200:
+		var t := rng.randf_range(-2.0, 2.0)
+		cmp.call("fade", AweNoise._fade(t), G.fade(t))
+	for i in 300:
+		# The cave-density wiring: exact coarse-field source function.
+		var x := rng.randf_range(-1024.0, 1024.0)
+		var y := rng.randf_range(0.0, 384.0)
+		var z := rng.randf_range(-1024.0, 1024.0)
+		var s := rng.randi_range(-200, 200)
+		cmp.call("cave", AweNoise.fbm3(x / 16.0, y / 10.0, z / 16.0, s + 301, 2), G.density_cave(x, y, z, s))
+	var tot := int(res["n"])
+	res["match_rate"] = float(int(res["exact"])) / float(tot) if tot > 0 else 0.0
+	res["ok"] = int(res["exact"]) == tot and tot > 0
+	Debug.result(res)
+	get_tree().quit()
 
 
 func _ci_zeros(sub: int) -> PackedByteArray:

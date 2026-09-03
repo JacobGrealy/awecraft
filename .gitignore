@@ -6,3 +6,8 @@ exports/
 .playwright-cli/
 __pycache__/
 nohup.out
+# C++ build artifacts (gdext + the installed .so/.dll) — built locally, not committed
+gdext/.sconsign.dblite
+gdext/src/*.os
+gdext/bin/
+godot/bin/

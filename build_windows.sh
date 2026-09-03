@@ -61,6 +61,18 @@ done
 cd "$PROJECT" || exit 1
 mkdir -p "$EXPORT_DIR" "$SCRATCH"
 
+# AC-0206: build GDExt before export so the .dll ships alongside the .exe (scons is vendored at .scratch/scons-src)
+if [ -d "$PROJECT/gdext/src" ]; then
+	echo "=== GDExt build ==="
+	export PYTHONPATH="$PROJECT/.scratch/scons-src:$PYTHONPATH"
+	if ! python3 -m SCons -C "$PROJECT/gdext" platform=linux target=template_release -j"$(nproc)" >"$SCRATCH/awecraft-gdext.log" 2>&1; then tail -25 "$SCRATCH/awecraft-gdext.log" >&2; echo "GDExt linux build failed" >&2; fi
+	if ! python3 -m SCons -C "$PROJECT/gdext" platform=windows target=template_release -j"$(nproc)" >"$SCRATCH/awecraft-gdext-win.log" 2>&1; then tail -25 "$SCRATCH/awecraft-gdext-win.log" >&2; echo "GDExt windows build failed" >&2; fi
+	mkdir -p "$PROJECT/godot/bin"
+	cp -f "$PROJECT/gdext/bin/"*.so "$PROJECT/godot/bin/" 2>/dev/null || true
+	cp -f "$PROJECT/gdext/bin/"*.dll "$PROJECT/godot/bin/" 2>/dev/null || true
+	echo "  GDExt staged to godot/bin/ + exports/windows/ (for pck + side-by-side DLL)"
+fi
+
 die() { echo "FAIL: $*" >&2; exit 1; }
 tail_log() { [ -f "$1" ] && tail -25 "$1" >&2; }
 
@@ -214,6 +226,12 @@ for pair in "$RELEASE_STAMPED $RELEASE_EXE" "$DEBUG_STAMPED $DEBUG_EXE" "$WRAPPE
 	fi
 done
 echo "  un-stamped copies are byte-identical to the stamped artifacts (sha256 verified)"
+# AC-0206: stage GDExt DLLs side-by-side with the exe (Windows LoadLibrary needs DLL next to exe, not inside pck)
+for dll in "$PROJECT/godot/bin/"*.dll "$PROJECT/gdext/bin/"*.dll; do
+	[ -f "$dll" ] || continue
+	cp -f "$dll" "$EXPORT_DIR/" 2>/dev/null || true
+	echo "  staged GDExt $(basename "$dll") -> exports/windows/"
+done
 
 # --------------------------------------------------------------- 4. retention
 # Keep the newest 3 stamped pairs (a pair = the 3 files sharing one stamp);
