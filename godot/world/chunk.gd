@@ -1743,7 +1743,17 @@ static func build_accs(data, fl, cx: int, cz: int, nbs: Dictionary, ctx: Diction
 	var light_recomputed := light.is_empty() or light.get("mask", null) == null
 	if light_recomputed:
 		var tl := Time.get_ticks_msec()
-		light = Lighting.compute_light_flat_chunk_pull(data, cx, cz, h, eff_strips, blk_strips, blk_strips_b, topv, dviews)
+		# AC-0189: C++ lighting (gdext/src/lighting.cpp) — the pull kernel +
+		# bucket-16 flood, a LOSSLESS port of the GDScript call below
+		# (lightprobe: same eff/mask/ring/blk_src per cell). All inputs are
+		# value copies the worker already owns (slab dicts + strips + the
+		# pre-warmed _att/_glow tables — no Data/Game deref on the worker).
+		# AWECRAFT_LIGHTCPP=0 or the library not loaded = the GDScript path.
+		var lc: Variant = Lighting.light_cpp()
+		if lc != null:
+			light = lc.compute_chunk_pull(data, cx, cz, h, eff_strips, blk_strips, blk_strips_b, topv, Lighting._att, Lighting._glow)
+		else:
+			light = Lighting.compute_light_flat_chunk_pull(data, cx, cz, h, eff_strips, blk_strips, blk_strips_b, topv, dviews)
 		ph_light = Time.get_ticks_msec() - tl
 	var tb := Time.get_ticks_msec()
 	var bb := _bake_box(light, eff_strips, h, maxi(0, y_lo - 2), mini(h - 1, y_hi + 1))

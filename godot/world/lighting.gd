@@ -16,6 +16,57 @@ static var _cross: PackedByteArray = PackedByteArray()
 static var _glow: PackedByteArray = PackedByteArray()
 static var _att: PackedByteArray = PackedByteArray()
 
+# AC-0189: C++ lighting toggle (gdext/src/lighting.cpp — the pull kernel +
+# bucket-16 flood + boundary injection, LOSSLESS port of this file's
+# compute_light_flat_chunk_pull path). Workers pass the slab array + strips
+# + the pre-warmed _att/_glow as value copies (no Data/Game on the worker).
+# AWECRAFT_LIGHTCPP=0 forces the GDScript path (fallback / A-B);
+# AWECRAFT_LIGHTCPP=1 or unset = C++ whenever the gdext library registered
+# AweLighting.
+static var _light_cpp: Variant = null
+static var _light_cpp_done := false
+
+static func light_cpp() -> Variant:
+	if not _light_cpp_done:
+		_light_cpp_done = true
+		if OS.get_environment("AWECRAFT_LIGHTCPP") == "0":
+			_light_cpp = null
+		elif ClassDB.class_exists("AweLighting"):
+			_light_cpp = ClassDB.instantiate("AweLighting")
+	return _light_cpp
+
+
+# AC-0189: optional per-flood timing for the lightprobe arm — _flood_flat
+# appends its call time (usec) when _flood_on (env AWECRAFT_FLOODMS=1, or
+# the probe sets it directly); flood_stats() drains the histogram.
+static var _flood_on := false
+static var _flood_on_done := false
+static var _flood_hist: Array = []
+
+static func _flood_probe() -> bool:
+	if not _flood_on_done:
+		_flood_on_done = true
+		_flood_on = OS.get_environment("AWECRAFT_FLOODMS") == "1"
+	return _flood_on
+
+static func flood_stats() -> Dictionary:
+	var hst := _flood_hist
+	_flood_hist = []
+	if hst.is_empty():
+		return {"n": 0, "total_ms": 0.0, "p50_ms": 0.0, "p95_ms": 0.0, "max_ms": 0.0}
+	hst.sort()
+	var n := hst.size()
+	var tot := 0
+	for v in hst:
+		tot += v
+	return {
+		"n": n,
+		"total_ms": round(float(tot / 1000.0 * 1000.0)) / 1000.0,
+		"p50_ms": round(float(hst[int((n - 1) * 0.50)]) / 1000.0 * 1000.0) / 1000.0,
+		"p95_ms": round(float(hst[int((n - 1) * 0.95)]) / 1000.0 * 1000.0) / 1000.0,
+		"max_ms": round(float(hst[n - 1]) / 1000.0 * 1000.0) / 1000.0,
+	}
+
 
 static func passes_light(b: int) -> bool:
 	# ported from web blocksLight(): air, water, lava, torch, portal always pass;
@@ -521,6 +572,12 @@ static func _flood_flat(src: PackedByteArray, ids: PackedByteArray, w: int, h: i
 	# hact are never seeded nor stepped into (their values are final by the
 	# caller's proof: eff rows above top are 15; block glow cannot reach
 	# above top+14). Omitted (default) = full height, byte-identical to before.
+	# AC-0189: optional per-call timing for the lightprobe A/B (off by
+	# default — the hot path is untouched).
+	var fp := _flood_probe()
+	var ft := 0
+	if fp:
+		ft = Time.get_ticks_usec()
 	var sz := w * d
 	var rows := h if hact < 0 else mini(hact, h)
 	var size := sz * rows
@@ -624,5 +681,6 @@ static func _flood_flat(src: PackedByteArray, ids: PackedByteArray, w: int, h: i
 					if nl > 0 and nl > src[n]:
 						src[n] = nl
 						buckets[nl].append(n)
-
+	if fp:
+		_flood_hist.append(Time.get_ticks_usec() - ft)
 

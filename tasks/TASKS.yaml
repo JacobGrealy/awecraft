@@ -1,15 +1,14 @@
 meta:
-  updated_at: 2026-09-03T13:45
+  updated_at: 2026-09-03T14:45
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0189
 - AC-0190
-- AC-0199
 - AC-0206
+- AC-0175
+- AC-0199
 - AC-0204
 - AC-0205
-- AC-0175
 - AC-0140
 - AC-0191
 - AC-0121
@@ -5831,11 +5830,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-01T23:15
   updated_at: 2026-09-03T08:45
-  completed_at: null
+  completed_at: 2026-09-03T11:10
   waiting_on: AC-0188
   parent_id: null
   notes: '1) User Story: As a player I want lighting to not hitch border builds.
@@ -5850,6 +5849,10 @@ intake:
     created_at: 2026-09-01T23:15
     updated_at: null
     text: '[user] split AC-0125 plan hotloops into separate tasks queued after AC-0165'
+  - id: 2
+    created_at: '2026-09-03T11:10:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. C++ lighting port (gdext/src/lighting.cpp — compute_light_flat_chunk_pull + _flood_flat BFS bucket 16 + _chunk_blk_inject + mask/ring, registered in the shared chunkio_library_init entry symbol, wired at chunk.gd build_accs with an AWECRAFT_LIGHTCPP=0 GDScript fallback). Light LOSSLESS: lightprobe 100% exact (32/32 chunks, 3.1M cells byte-identical, max_diff 0); SMOKE light surface 15 / cave 10 / torch 14 far 1 to 9 (standing baseline reproduced). Flood p95 8.7 -> 0.11 ms (~78x); full pull kernel 37.7 -> 0.53 ms/chunk; perf-r4 build-worker p95 170 -> 134 ms (-21%). G0 exit 0; SMOKE ok:true x4. No regression: chunkiocpp byte-identical, genhash 25/25 == AC-0188 baselines. .so 869KB + .dll 1.08MB built. CAVEAT: one-off non-repro SIGSEGV on the FIRST battery run at the AweGen.generate_flat frame (AC-0188 gen code, not lighting; passed 3x after) — a flaky gen-code crash, added to AC-0206 (the .so crash research) for root-cause. See tasks/AC-0189/AC-0189-results.html.'
 - id: AC-0190
   title: gdext-mesh-face-greedy
   source: user

@@ -270,6 +270,10 @@ latest: AweCraft.exe / AweCraft_debug_console.exe / AweCraft_debug_console.conso
 EOF
 echo "  BUILD.txt:"
 sed 's/^/    /' "$EXPORT_DIR/BUILD.txt"
+# AC-0206: zip exe + dll side-by-side for one-file download
+ZIP_STAMPED="$EXPORT_DIR/AweCraft-$STAMP.zip"
+ZIP_LATEST="$EXPORT_DIR/AweCraft.zip"
+( cd "$EXPORT_DIR" && rm -f "$ZIP_STAMPED" "$ZIP_LATEST" && zip -j -q "$ZIP_STAMPED" "AweCraft-$STAMP.exe" 2>/dev/null; for dll in libchunkio*.dll; do [ -f "$dll" ] && zip -j -q "$ZIP_STAMPED" "$dll" 2>/dev/null; done; zip -j -q "$ZIP_LATEST" "AweCraft.exe" 2>/dev/null; for dll in libchunkio*.dll; do [ -f "$dll" ] && zip -j -q "$ZIP_LATEST" "$dll" 2>/dev/null; done; [ -f "$ZIP_STAMPED" ] && echo "  zip: $(basename "$ZIP_STAMPED") ($(stat -c%s "$ZIP_STAMPED") bytes) + $(basename "$ZIP_LATEST") ($(stat -c%s "$ZIP_LATEST") bytes)" || echo "  zip: no dll yet, exe only" )
 echo "--- artifacts ---"
 ls -la "$EXPORT_DIR"
 
@@ -292,12 +296,15 @@ print_urls() {
 	ip="$(lan_ip)"
 	echo
 	echo "Windows downloads (from a Windows machine on this LAN):"
-	echo "  release (single file, latest):"
-	echo "    http://localhost:$port/AweCraft.exe"
+	echo "  zip (exe + dll, latest — unzip to one folder and run):"
+	echo "    http://localhost:$port/AweCraft.zip"
+	echo "    http://$ip:$port/AweCraft.zip"
+	echo "  stamped zip ($STAMP):"
+	echo "    http://localhost:$port/AweCraft-$STAMP.zip"
+	echo "    http://$ip:$port/AweCraft-$STAMP.zip"
+	echo "  exe only (needs dll next to it):"
+	echo "    http://localhost:$port/AweCraft.exe + libchunkio.windows.template_release.x86_64.dll"
 	echo "    http://$ip:$port/AweCraft.exe"
-	echo "  stamped release ($STAMP):"
-	echo "    http://localhost:$port/AweCraft-$STAMP.exe"
-	echo "    http://$ip:$port/AweCraft-$STAMP.exe"
 	echo "  debug console (download BOTH files, same folder on the"
 	echo "    Windows machine; double-click the wrapper for logs):"
 	echo "    http://localhost:$port/AweCraft_debug_console.exe"

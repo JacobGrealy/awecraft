@@ -1148,6 +1148,11 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			_light_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "lightprobe":
+			world.collision_enabled = false
+			await _lightprobe_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "lightcache":
 			await _lightcache_test(spawn)
 			return
@@ -4608,6 +4613,139 @@ func _light_test(spawn: Vector3) -> void:
 		"torch_level": torch_eff,
 		"torch_far_before": far_before,
 		"torch_far_after": far_after,
+	})
+
+
+# AC-0189: C++ lighting (gdext/src/lighting.cpp) LOSSLESS probe. Samples N
+# built chunks; for each, runs the GDScript pull kernel AND the C++ pull
+# kernel on the SAME inputs (the chunk's slabs, fresh strips, the chunk's
+# own top, the pre-warmed _att/_glow tables) and compares eff / mask /
+# ring / blk_src byte-for-byte. Also reports per-path flood p50/p95/max
+# (GDScript timing enabled directly; the C++ side records in the native
+# class) — the speedup gate's before/after. RESULT: match rate (gate =
+# 1.0, i.e. 100% exact at every cell), per-field match counts, max diff,
+# first mismatches, per-path wall ms, both flood stat blocks.
+func _lightprobe_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var NENV := OS.get_environment("AWECRAFT_LIGHTPROBE_N")
+	var N := int(NENV) if NENV != "" else 32
+	N = clampi(N, 1, 128)
+	world.fluid_sim_enabled = false
+	world.collision_enabled = false
+	world.render_radius = 4
+	world.recenter(spawn.x, spawn.z, true)
+	# Wait until N chunks with data + mesh built (the r4 band set drains
+	# well inside the cap; a timeout still probes whatever is ready).
+	var waited := 0
+	var built := 0
+	while built < N and waited < 3600:
+		built = 0
+		for key in world.chunks:
+			var c = world.chunks.get(key)
+			if c != null and not c.data.is_empty() and c.mesh_built:
+				built += 1
+		if built >= N:
+			break
+		await get_tree().physics_frame
+		waited += 1
+	# Deterministic sample: ready chunks ordered by (cz, cx).
+	var samples: Array = []
+	for key in world.chunks:
+		var c = world.chunks.get(key)
+		if c != null and not c.data.is_empty() and c.mesh_built:
+			samples.append(c)
+	samples.sort_custom(func(a, b): return int(a.cz) * 1024 + int(a.cx) < int(b.cz) * 1024 + int(b.cx))
+	samples.resize(mini(samples.size(), N))
+	var lc: Variant = Lighting.light_cpp()
+	var cpp: bool = lc != null
+	# Reset both flood histograms so the numbers below cover exactly the
+	# probe's calls (the build before this may have filled them).
+	Lighting._flood_on = true
+	Lighting.flood_stats()
+	if cpp:
+		lc.reset_flood_stats()
+	var h: int = Data.HEIGHT
+	var gd_wall_us := 0
+	var cpp_wall_us := 0
+	var match_chunks := 0
+	var arr_match := 0
+	var mask_match := 0
+	var ring_match := 0
+	var src_match := 0
+	var max_diff := 0
+	var mismatch: Array = []
+	for c in samples:
+		var cx: int = int(c.cx)
+		var cz: int = int(c.cz)
+		var top: int = int(c.top)
+		var st: Dictionary = world._strips_for(cx, cz)
+		var tt := Time.get_ticks_usec()
+		var gd: Dictionary = Lighting.compute_light_flat_chunk_pull(c.data, cx, cz, h, st["eff"], st["blk"], st["blk_b"], top)
+		gd_wall_us += Time.get_ticks_usec() - tt
+		if not cpp:
+			continue
+		tt = Time.get_ticks_usec()
+		var cm: Dictionary = lc.compute_chunk_pull(c.data, cx, cz, h, st["eff"], st["blk"], st["blk_b"], top, Lighting._att, Lighting._glow)
+		cpp_wall_us += Time.get_ticks_usec() - tt
+		var a_ok: bool = (PackedByteArray(gd["arr"]) == PackedByteArray(cm["arr"]))
+		var m_ok: bool = (PackedByteArray(gd["mask"]) == PackedByteArray(cm["mask"]))
+		var r_ok: bool = (PackedInt32Array(gd["ring"]) == PackedInt32Array(cm["ring"]))
+		var s_ok: bool = (bool(gd["blk_src"]) == bool(cm["blk_src"]))
+		if a_ok:
+			arr_match += 1
+		if m_ok:
+			mask_match += 1
+		if r_ok:
+			ring_match += 1
+		if s_ok:
+			src_match += 1
+		if a_ok and m_ok and r_ok and s_ok:
+			match_chunks += 1
+		# Diagnostics: first mismatches per field + the max eff diff.
+		if not a_ok:
+			var ga: PackedByteArray = gd["arr"]
+			var ca: PackedByteArray = cm["arr"]
+			for i in range(ga.size()):
+				var df := absi(int(ga[i]) - int(ca[i]))
+				if df > max_diff:
+					max_diff = df
+				if df > 0 and mismatch.size() < 4:
+					mismatch.append({"cx": cx, "cz": cz, "field": "arr", "i": i, "gd": int(ga[i]), "cpp": int(ca[i])})
+		if not m_ok:
+			var gm: PackedByteArray = gd["mask"]
+			var cm2: PackedByteArray = cm["mask"]
+			for i in range(gm.size()):
+				if gm[i] != cm2[i] and mismatch.size() < 8:
+					mismatch.append({"cx": cx, "cz": cz, "field": "mask", "i": i, "gd": int(gm[i]), "cpp": int(cm2[i])})
+		if not r_ok and mismatch.size() < 8:
+			mismatch.append({"cx": cx, "cz": cz, "field": "ring", "i": -1, "gd": (gd["ring"] as PackedInt32Array).size(), "cpp": (cm["ring"] as PackedInt32Array).size()})
+		if not s_ok and mismatch.size() < 8:
+			mismatch.append({"cx": cx, "cz": cz, "field": "blk_src", "i": -1, "gd": int(gd["blk_src"]), "cpp": int(cm["blk_src"])})
+	var gd_flood: Dictionary = Lighting.flood_stats()
+	Lighting._flood_on = false
+	var cpp_flood: Dictionary = {"n": 0}
+	if cpp:
+		cpp_flood = lc.flood_stats()
+	var n_samples := samples.size()
+	var match_rate: float = float(match_chunks) / float(n_samples) if n_samples > 0 else 0.0
+	Debug.result({
+		"ok": cpp and n_samples >= 8 and match_rate >= 1.0,
+		"cpp": cpp,
+		"n_chunks": n_samples,
+		"match_chunks": match_chunks,
+		"match_rate": match_rate,
+		"arr_match": arr_match,
+		"mask_match": mask_match,
+		"ring_match": ring_match,
+		"blk_src_match": src_match,
+		"cells_compared": n_samples * 256 * h,
+		"max_diff": max_diff,
+		"mismatch": mismatch,
+		"gd_wall_ms": round(gd_wall_us / 1000.0 * 1000.0) / 1000.0,
+		"cpp_wall_ms": round(cpp_wall_us / 1000.0 * 1000.0) / 1000.0,
+		"gd_flood": gd_flood,
+		"cpp_flood": cpp_flood,
+		"wall_ms": Time.get_ticks_msec() - t0,
 	})
 
 
