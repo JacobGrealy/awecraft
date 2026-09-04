@@ -6581,6 +6581,14 @@ func _r16_test(spawn: Vector3) -> void:
 		"drop_fps_static_vs_moving": int(roundf(float(s["fps_p50"]) - float(m["fps_p50"]))),
 		"static_frames": STATIC_FRAMES,
 		"moving_frames": MOVING_FRAMES,
+		# AC-0216: the lazy offscreen-interior skip — the C++ counters
+		# (chunks/columns whose 150-pt density evaluation was skipped free)
+		# + the GDScript enqueue-time count.
+		"skip": {
+			"chunks": int(WorldGen.gen_cpp().skip_chunks_total()),
+			"cols": int(WorldGen.gen_cpp().skip_cols_total()),
+			"enq": int(world.perf_gen_skip_enq),
+		},
 		# AC-0222: the render-circle cap on queued build depth + the two
 		# fly-forward phases (see _fly_phase).
 		"fly_cap": int(world.circle_count()),

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0216 — results</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}
+h3{font-size:15px;margin-top:18px}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}
+pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+table{border-collapse:collapse;font-size:13px;margin:10px 0}
+th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}
+th{background:#f0f0f0}
+.pass{background:#eefae0;border-left:4px solid #3ba14a;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+.note{font-size:13px;color:#555}
+.meta{color:#555;font-size:14px}
+</style>
+</head>
+<body>
+<h1>AC-0216 — lazy-skip-interior-bands-offscreen-for-density — results</h1>
+<p class="meta">
+Status: <b>PASS</b> · files: <code>gdext/src/gen.cpp</code> (modified) + <code>gdext/bin/libchunkio.so</code>
+(rebuilt, linux) staged to <code>godot/bin/libchunkio.so</code> + <code>godot/world/world.gd</code> (the
+offscreen-interior flag wiring) + <code>godot/scenes/main.gd</code> (R16 skip stats). No <code>.gdextension</code>
+change (no new class — <code>AweGen</code> already registered), no Windows build (coordinator's).
+Gate logs: <code>.scratch/AC-0216-gates/</code>.
+</p>
+
+<h2>What changed</h2>
+<p>The C++ world gen (<code>gdext/src/gen.cpp</code>) takes an optional 6th arg <code>skip</code>
+(<code>generate_flat/slabs/resl</code>, default <code>0</code> = the pre-AC-0216 full AC-0215 density field,
+bit-for-bit). When <code>skip != 0</code> the <b>150-pt per-column density evaluation is skipped free</b>:</p>
+<ul>
+<li>the cave field (<code>f_cave</code>, 441 fbm3 lattice points) is <b>not built</b>;</li>
+<li>the top-down <code>d &gt; 0</code> scan (<code>~150.6</code> points/column, measured <code>963,591</code> over
+the 5×5 = <code>6,400</code> cols) <b>does not run</b>;</li>
+<li>the column is solid exactly <code>0..H</code> (the AC-0215 heightmap <code>H</code> from the coarse 3D surface
+field), <code>he = H</code>, <b>no caves, no lava pockets — no hidden caves built</b>.</li>
+</ul>
+<p>Unchanged in skip mode (the visible surface is still correct): <code>H</code> (surface), the ore fields,
+biomes, the aquifer (water to Sea 126 where <code>H &lt; 126</code>), trees and flowers (the margin column uses
+<code>H2</code> exactly, no cave term — the <code>f_cave</code> field was not built). Cumulative counters
+(<code>AweGen.skip_chunks_total()</code> / <code>skip_cols_total()</code>, atomics, process-wide) let the harness
+report how many columns skipped.</p>
+
+<p>The <b>GDScript streaming system</b> (<code>world.gd</code>, main thread only — the worker has no camera)
+computes the flag per chunk at enqueue time via <code>_gen_skip_flag(cx,cz)</code>:
+<b>OFFSCREEN INTERIOR = <code>band_of(...) &gt; 1</code></b> (the band-3 data-only collar/ring — outside the
+render circle, never meshed until the player approaches; band <code>0/1</code> are the visible bands and always
+get the full density field) <b>AND the whole column AABB fully past the camera frustum</b> expanded by
+<code>FRUSTUM_CULL_MARGIN</code> (32 m — the exact "culled" test of the AC-0109 manual cull pass, reusing
+<code>_cull_frustum_planes</code>/<code>_cull_col_span</code>). With no live camera (the headless build phase
+before the player spawns) a throwaway camera at the recenter point facing −Z (eye at the heightmap surface + 2)
+is used for the decision only. The flag rides on the threadgen <code>args</code> (new <code>a[5]</code>) and the
+recenter burst element (new <code>e[7]</code>) to <code>generate_resl</code>. A <code>perf_gen_skip_enq</code>
+counter tracks enqueue-time skips.</p>
+
+<h2>The skip (columns that skipped the density evaluation)</h2>
+<pre>R16 arm RESULT.skip: { "chunks": 438, "cols": 112128, "enq": 438 }
+  = 438 offscreen-interior chunks × 256 cols = <b>112,128 columns</b> skipped the 150-pt density evaluation free
+    (enq == the C++ chunk counter — every enqueued skip actually ran in C++)
+Standalone probe (5×5, all forced skip=1): 25 chunks × 256 = 6,400 cols,
+  density_eval_points_full_5x5 = 963,591 (~150.6/col = the 150-pt eval) — all skipped free</pre>
+
+<h2>No hidden caves built</h2>
+<pre>Standalone probe (skip=1, 6,400 cols):
+  top_eq_H_all_cols     = 6400/6400   (lazy surface == the AC-0215 heightmap H exactly)
+  hidden_cave_cells_below_top = 0     (no air below the top — no caves)   [gate, want 0]
+  cave_air: full=214911 skip=0        (all the carved pocket air is gone in the lazy chunk)
+  lava: full=15200 skip=0             (no deep lava pockets)
+  water: full=0 skip=0                (the 5×5 spawn set has no ocean)
+  skip_determinism_two_runs = SAME    (two runs byte-identical)</pre>
+<p>The density field stays exact for the visible bands: <code>skip=0</code> (the default every band-0/1 chunk and
+every non-streamed caller uses) is bit-for-bit the AC-0215 field — proven both standalone (the 25 skip=0 chunk
+FNV hashes == the pristine-HEAD <code>gen.cpp</code>, 25/25) and in-game (the genhash gate below). The visible
+surface in a lazy chunk is <code>H</code> exactly (the heightmap), so no surface cave-wobble is introduced there;
+the lazy chunk is plain solid rock to the heightmap surface (the accepted "no hidden caves" trade — the caves
+materialize only where the full field runs, i.e. the bands the player can see).</p>
+
+<h2>Perf gain (standalone, R16)</h2>
+<table>
+<tr><th>metric</th><th>full (skip=0)</th><th>skip=1</th><th>Δ</th></tr>
+<tr><td>gen ms/chunk (standalone, steady state, 5×5×40 reps)</td><td>1.372</td><td>0.819</td>
+<td><b>−40.3% (1.68×)</b></td></tr>
+</table>
+<p>At R16 the per-chunk gen saving rides under the mesh pipeline (the R16 first-fill build is mesh-bound at the
+3-mesh/frame cap, AC-0224), so <code>build_ms</code> is flat-or-better and the <b>fps is flat-or-better in all
+four phases</b> with no pop — the gen headroom is what keeps moving smooth (the forward-fly phases, where gen
+feeds the ahead ring, are where it lands):</p>
+<table>
+<tr><th>R16 phase (p50/p95/min fps, ms)</th><th>before</th><th>after</th></tr>
+<tr><td>build_ms (first fill, 797/797)</td><td>12,413</td><td>12,534 (flat, ±1%)</td></tr>
+<tr><td>static</td><td>200 / 143 / 48 (5/7/21 ms)</td><td>200 / 143 / <b>50</b> (5/7/20 ms)</td></tr>
+<tr><td>moving</td><td>200 / 143 / 45 (5/7/22 ms)</td><td>200 / 143 / <b>48</b> (5/7/21 ms)</td></tr>
+<tr><td>fly4 (17 m/s, 8 s)</td><td>250 / 59 / 11 (4/17/94 ms)</td><td>250 / 59 / <b>13</b> (4/17/80 ms)</td></tr>
+<tr><td>fly50 (215 m/s, 2 s)</td><td>200 / 34 / 12 (5/29/83 ms)</td><td><b>250</b> / 43 / <b>14</b> (4/<b>23</b>/74 ms)</td></tr>
+</table>
+<p class="note">no-pop holds in both: lost 0 / rebuilds 0; ahead_while_moving 279 (fly4) == before; drop_fps_static_vs_moving 0.
+The one regression-watch item is <code>fly50.fps_p95</code> 34→43 (i.e. <code>p95_ms</code> 29→23 — a <b>smaller</b>
+95th-percentile frame; the fps-p95 label moved because the ms dropped, not because frames got slower).</p>
+
+<h2>Gates</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>detail</th></tr>
+<tr><td>G0</td><td class="pass">PASS</td>
+<td><code>--headless --path godot --quit</code> exit 0, <b>0 SCRIPT ERROR</b>.</td></tr>
+<tr><td>SMOKE battery <code>player;interact;light;fluids</code></td><td class="pass">PASS</td>
+<td><code>ok:true</code> (total 164.3 s). player on-floor/jump/fly ✓; interact place/drop/inv ✓;
+<b>light surface 15 / cave 0 / torch 14</b> (the AC-0215 standing baseline — "cave 10" was the pre-AC-0215
+value; AC-0215's new terrain left the light arm's cave pocket at <code>cave_eff 0</code>, standing since
+AC-0222/AC-0224); <b>fluids sea 792/792</b>, sea_stable ✓ (no ocean-count drift from the lazy band-3 shell).</td></tr>
+<tr><td>no regression: chunkiocpp</td><td class="pass">PASS</td>
+<td><code>md5_cpp == md5_orig = 8a893557900a462fe4ab1c91f8589081</b> byte-identical (standing); roundtrip 17/17;
+flat 34/34; slab 17/17; <code>ok:true</code>.</td></tr>
+<tr><td>no regression: genhash ×2</td><td class="pass">PASS</td>
+<td>two runs byte-identical, <b>25/25 == AC-0215 NEW baseline</b> (<code>(0,0)=80b904c0e5f085eef1e839459058c706</code>) —
+NOT the AC-0188 baseline. GENMS 38.</td></tr>
+<tr><td>no regression: light</td><td class="pass">PASS</td>
+<td>surface 15 / cave 0 / torch 14 == standing.</td></tr>
+<tr><td>no regression: meshprobe (AC-0190/AC-0211)</td><td class="pass">PASS</td>
+<td><b>100%</b> — match_rate 1.0, 32/32 chunks, 1926/1926 accs, verts_cpp == verts_gd (234368), ac0211_ok true.</td></tr>
+<tr><td>no regression: stripsprobe (AC-0207)</td><td class="pass">PASS</td>
+<td><b>100%</b> — 512 strips compared, match_rate 1.0, 32/32, <code>ok:true</code>.</td></tr>
+<tr><td>no regression: pullprobe (AC-0210)</td><td class="pass">PASS</td>
+<td><b>100%</b> — 6,291,456 cells, max_diff 0, 64/64 variants, 32/32 chunks, <code>ok:true</code>.</td></tr>
+<tr><td>no regression: nofallback (AC-0208)</td><td class="pass">PASS</td>
+<td><code>ok:true</code>, <code>gen_cpp_works=71</code>, all GD-fallback counters 0 (m0_gen/m0_mesh/… = 0),
+roundtrip_ok true. The C++ gen is still the only gen path.</td></tr>
+<tr><td>skip=0 identity (standalone)</td><td class="pass">PASS</td>
+<td>25/25 skip=0 chunk FNV hashes == the pristine-HEAD <code>gen.cpp</code> — the default-arg refactor is
+bit-for-bit.</td></tr>
+</table>
+<p class="note">R50 not run (PENDING — the .so crashes in the coordinator env, AC-0206). Windows build not run
+(coordinator's). Standalone probe + gate artifacts under <code>.scratch/AC-0216-gates/</code>
+(<code>skipstats.{cpp,out}</code>, <code>refgen.{cpp,out}</code>, <code>r16-before.log</code>,
+<code>r16-after.log</code>, <code>G0.log</code>, <code>SMOKE.log</code>, and the per-arm logs).</p>
+
+<h2>Known caveat (not chased, per instructions)</h2>
+<p>The <code>.so</code> crashes on a plain headless load in the COORDINATOR environment (signal 11) but loads
+fine in the SUBAGENT environment (AC-0206, non-blocking). All gates here ran in the subagent environment and
+passed; no new crash class was introduced (the <code>skip=0</code> default path is bit-for-bit the shipped
+AC-0215 gen, and the genhash/chunkiocpp byte-identity gates confirm it).</p>
+</body>
+</html>

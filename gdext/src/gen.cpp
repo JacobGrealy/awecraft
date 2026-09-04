@@ -63,6 +63,23 @@
 // full depth from the same field, and the genhash is deterministic (two
 // runs byte-identical).
 //
+// AC-0216 LAZY SKIP (offscreen interior bands): generate_flat/slabs/resl
+// take an optional 6th arg `skip` (default 0 — the pre-AC-0216 behavior,
+// bit-for-bit). When skip != 0 the 150-pt per-column DENSITY EVALUATION is
+// skipped free: the cave field (f_cave) is not built and the top-down
+// d > 0 scan does not run; the column is solid exactly 0..H (the heightmap
+// surface from the coarse 3D surface field), he = H, no caves, no lava
+// pockets — NO HIDDEN CAVES BUILT in the chunk. The surface (H), the ore
+// fields, the biomes, trees and flowers are UNCHANGED (the visible surface
+// is still correct). The caller (the GDScript streaming system, world.gd
+// _gen_skip_flag) sets skip only for OFFSCREEN INTERIOR chunks: band > 1
+// (the band-3 data-only collar/ring — outside the render circle, never
+// meshed until the player approaches) AND the whole column AABB fully
+// past the camera frustum (expanded by the AC-0109 cull margin). Visible
+// bands 0/1 always run the full density field (caves stay exact where the
+// player can see them). Cumulative counters (skip_chunks_total /
+// skip_cols_total) let the harness report how many columns skipped.
+//
 // Shares the libchunkio library (one .so/.dll, entry chunkio_library_init
 // registers ChunkIOPalette + AweGen — see chunk_io.cpp).
 
@@ -80,6 +97,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -383,19 +401,36 @@ static inline double dens_at(int H, int y, double cave, bool pad) {
 }
 
 // ---------------------------------------------------------------------------
+// AC-0216: cumulative lazy-skip counters (the harness reads them through
+// AweGen.skip_*(); the workers increment from any thread — atomics).
+// ---------------------------------------------------------------------------
+
+static std::atomic<long long> g_skip_chunks_total{0};
+static std::atomic<long long> g_skip_cols_total{0};
+
+// ---------------------------------------------------------------------------
 // Column generation.
 // ---------------------------------------------------------------------------
 
-static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int sea) {
+// skip != 0: the AC-0216 lazy path (offscreen interior band) — the 150-pt
+// density evaluation is skipped free (see the file header).
+static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int sea,
+		int skip = 0) {
 	int bx = cx * 16;
 	int bz = cz * 16;
 	int nsl = hmax / 16;
 	double ystep = (double)hmax / GY_CELLS;
 
+	if (skip) {
+		g_skip_chunks_total.fetch_add(1, std::memory_order_relaxed);
+		g_skip_cols_total.fetch_add(256, std::memory_order_relaxed);
+	}
+
 	// Coarse fields (441 lattice points each = 4x8x4 cells + 1-cell margin,
 	// 2-octave AweNoise.fbm3 per lattice point).
-	Field f_cave, f_ore1, f_ore2, f_ore3;
-	build_field(f_cave, bx, bz, ystep, seed + 301, 16.0, 10.0, 16.0, 0.0, 0.0, 0.0);
+	Field f_cave{}, f_ore1, f_ore2, f_ore3;
+	if (!skip)
+		build_field(f_cave, bx, bz, ystep, seed + 301, 16.0, 10.0, 16.0, 0.0, 0.0, 0.0);
 	build_field(f_ore1, bx, bz, ystep, seed + 77, 7.0, 7.0, 7.0, 0.0, 0.0, 0.0);
 	build_field(f_ore2, bx, bz, ystep, seed + 88, 9.0, 9.0, 9.0, 900.0, 0.0, 900.0);
 	build_field(f_ore3, bx, bz, ystep, seed + 99, 6.0, 6.0, 6.0, 1700.0, 0.0, 1700.0);
@@ -461,24 +496,35 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			double gz = (double)lz / 4.0;
 			int base = (lz << 4) | lx;
 
-			// The ONE density field, top-down: the solid flags + the
-			// effective surface (topmost d > 0). Above H + R + 1 the field is
-			// air for sure (the ramp clamps -1, |CAVE_AMP*(cave-0.5)| < 1),
-			// so the scan starts there; everything above stays the flag 0.
-			std::vector<uint8_t> solidf((size_t)hmax, 0);
-			int he = -1;
-			int top = H + 11;
-			if (top > hmax - 1)
-				top = hmax - 1;
-			for (int y = top; y >= 1; y--) {
-				double cave = tril(f_cave, gx, (double)y / ystep, gz);
-				bool s = dens_at(H, y, cave, pad) > 0.0;
-				solidf[y] = s ? 1 : 0;
-				if (s && he < 0)
-					he = y;
+			int he;
+			std::vector<uint8_t> solidf;
+			if (skip) {
+				// AC-0216: the 150-pt density evaluation is skipped free —
+				// solid exactly 0..H (the heightmap surface), no caves, no
+				// hidden caves built (no f_cave read, no scan, no lava
+				// pocket). The aquifer/surface/dirt/ore rules below apply
+				// unchanged with he = H.
+				he = H;
+			} else {
+				// The ONE density field, top-down: the solid flags + the
+				// effective surface (topmost d > 0). Above H + R + 1 the field is
+				// air for sure (the ramp clamps -1, |CAVE_AMP*(cave-0.5)| < 1),
+				// so the scan starts there; everything above stays the flag 0.
+				solidf.resize((size_t)hmax, 0);
+				he = -1;
+				int top = H + 11;
+				if (top > hmax - 1)
+					top = hmax - 1;
+				for (int y = top; y >= 1; y--) {
+					double cave = tril(f_cave, gx, (double)y / ystep, gz);
+					bool s = dens_at(H, y, cave, pad) > 0.0;
+					solidf[y] = s ? 1 : 0;
+					if (s && he < 0)
+						he = y;
+				}
+				if (he < 0)
+					he = 0; // a fully-caved column: the bedrock is the "surface"
 			}
-			if (he < 0)
-				he = 0; // a fully-caved column: the bedrock is the "surface"
 			heff[idx] = he;
 
 			for (int y = 0; y < hmax; y++) {
@@ -486,7 +532,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				if (y == 0) {
 					cell = B_BEDROCK;
 				} else {
-					bool solid = solidf[y] != 0;
+					bool solid = skip ? (y <= he) : (solidf[y] != 0);
 					if (y >= he + 1 && y <= sea && he < sea) {
 						cell = B_WATER; // aquifer: ocean fill up to Sea 126
 					} else if (y == he) {
@@ -545,6 +591,12 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			int hcol;
 			if (glx >= 0 && glx < 16 && glz >= 0 && glz < 16) {
 				hcol = heff[glz * 16 + glx];
+			} else if (skip) {
+				// AC-0216: the lazy margin column = the heightmap surface
+				// exactly (no cave term — the f_cave field was not built;
+				// the neighbor band is lazy too, so H2 is the shared
+				// surface).
+				hcol = H2;
 			} else {
 				// Margin column: the one density field's surface (the
 				// fields' 1-cell margin covers tx,tz in [bx-4, bx+20]).
@@ -758,9 +810,15 @@ public:
 		ClassDB::bind_method(D_METHOD("hash3i", "x", "y", "z", "s"), &AweGen::hash3i);
 		ClassDB::bind_method(D_METHOD("fade", "t"), &AweGen::fade);
 		ClassDB::bind_method(D_METHOD("density_cave", "x", "y", "z", "s"), &AweGen::density_cave);
-		ClassDB::bind_method(D_METHOD("generate_flat", "cx", "cz", "s", "h", "sea"), &AweGen::generate_flat);
-		ClassDB::bind_method(D_METHOD("generate_slabs", "cx", "cz", "s", "h", "sea"), &AweGen::generate_slabs);
-		ClassDB::bind_method(D_METHOD("generate_resl", "cx", "cz", "s", "h", "sea"), &AweGen::generate_resl);
+		// AC-0216: the optional 6th arg `skip` (default 0 = the pre-AC-0216
+		// full density field, bit-for-bit) — the lazy offscreen-interior
+		// skip (see the file header).
+		ClassDB::bind_method(D_METHOD("generate_flat", "cx", "cz", "s", "h", "sea", "skip"), &AweGen::generate_flat, DEFVAL(0));
+		ClassDB::bind_method(D_METHOD("generate_slabs", "cx", "cz", "s", "h", "sea", "skip"), &AweGen::generate_slabs, DEFVAL(0));
+		ClassDB::bind_method(D_METHOD("generate_resl", "cx", "cz", "s", "h", "sea", "skip"), &AweGen::generate_resl, DEFVAL(0));
+		ClassDB::bind_method(D_METHOD("skip_chunks_total"), &AweGen::skip_chunks_total);
+		ClassDB::bind_method(D_METHOD("skip_cols_total"), &AweGen::skip_cols_total);
+		ClassDB::bind_method(D_METHOD("reset_skip_stats"), &AweGen::reset_skip_stats);
 	}
 
 	// Noise probe surface (bit-exact AweNoise port).
@@ -790,8 +848,10 @@ public:
 		return awegen::fbm3(p_x / 16.0, p_y / 10.0, p_z / 16.0, p_s + 301, 2);
 	}
 
-	PackedByteArray generate_flat(int p_cx, int p_cz, int p_s, int p_h, int p_sea) const {
-		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea);
+	// AC-0216: p_skip != 0 = the lazy offscreen-interior path (the 150-pt
+	// density evaluation skipped free — see the file header). Default 0.
+	PackedByteArray generate_flat(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip) const {
+		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip);
 		PackedByteArray out;
 		out.resize((int)f.size());
 		if (!f.empty())
@@ -799,21 +859,33 @@ public:
 		return out;
 	}
 
-	Array generate_slabs(int p_cx, int p_cz, int p_s, int p_h, int p_sea) const {
-		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea);
+	Array generate_slabs(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip) const {
+		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip);
 		return awegen::palettize_slabs(f, p_h);
 	}
 
 	// [data_slabs, fl_slabs] — the exact threadgen resl shape (fl = all null;
 	// gen produces no fluid).
-	Array generate_resl(int p_cx, int p_cz, int p_s, int p_h, int p_sea) const {
-		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea);
+	Array generate_resl(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip) const {
+		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip);
 		Array resl;
 		resl.append(awegen::palettize_slabs(f, p_h));
 		Array fl;
 		fl.resize(p_h / 16); // all null
 		resl.append(fl);
 		return resl;
+	}
+
+	// AC-0216: cumulative lazy-skip counters (process-wide, all threads).
+	int64_t skip_chunks_total() const {
+		return (int64_t)g_skip_chunks_total.load(std::memory_order_relaxed);
+	}
+	int64_t skip_cols_total() const {
+		return (int64_t)g_skip_cols_total.load(std::memory_order_relaxed);
+	}
+	void reset_skip_stats() {
+		g_skip_chunks_total.store(0, std::memory_order_relaxed);
+		g_skip_cols_total.store(0, std::memory_order_relaxed);
 	}
 };
 

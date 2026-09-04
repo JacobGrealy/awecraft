@@ -3,7 +3,6 @@ meta:
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0216
 - AC-0218
 - AC-0217
 - AC-0214
@@ -6752,11 +6751,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-04T07:22
   updated_at: 2026-09-04T09:51
-  completed_at: null
+  completed_at: 2026-09-03T20:00
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want interior bands offscreen to skip density work so moving stays smooth.
@@ -6769,6 +6768,10 @@ intake:
     created_at: 2026-09-04T07:22
     updated_at: null
     text: '[user] after 213 per 2026-09-04'
+  - id: 2
+    created_at: '2026-09-03T20:00:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Skip (gdext/src/gen.cpp + world.gd): generate_flat/slabs/resl take a 6th arg skip (default 0 = pre-AC-0216, bit-for-bit). skip!=0 skips the 150-pt density eval free: f_cave not built, top-down d>0 scan not run, column solid exactly 0..H (AC-0215 heightmap), he=H - no caves, no lava, no hidden caves. Surface/ores/biomes/trees unchanged. world.gd::_gen_skip_flag (main thread, enqueue time) sets it for OFFSCREEN INTERIOR = band_of>1 (band-3 data-only ring) AND whole column AABB past the frustum+32 m margin; rides threadgen args[5] / burst e[7]. R16 = 438 chunks x 256 = 112,128 columns skipped (enq == C++ counter); probe 5x5 = 963,591 pts (~150.6/col) all free. No hidden caves: probe top_eq_H = 6400/6400, hidden_cave_cells = 0, lava 0, 2-run deterministic; skip=0 identity 25/25 (standalone + genhash). Perf: gen 1.372->0.819 ms/chunk (-40.3%, 1.68x); R16 build 12413->12534 ms (flat, mesh-bound); fps flat-or-better all 4 phases (moving min 45->48, fly50 p95 29->23 ms); no-pop lost 0/rebuilds 0. G0 0 SCRIPT ERROR. SMOKE all ok:true (light 15/0/14 = standing; sea 792/792 no drift). No regression: chunkiocpp md5 8a893557... byte-identical; genhash x2 == AC-0215 NEW baseline ((0,0)=80b904c0...); light 15/0/14; meshprobe 100% (1926/1926, 32/32, ac0211_ok); stripsprobe 100% (512); pullprobe 100% (6.29 M cells, max_diff 0); nofallback ok:true (gen_cpp_works 71). .so: rebuilt linux-only + staged godot/bin (md5 fd97fdb1...); no .gdextension change (no --import); R50/Windows not run (per instructions). See tasks/AC-0216/AC-0216-results.html.'
 - id: AC-0217
   title: debounce-collect-pool-score-only-on-move-or-turn
   source: user

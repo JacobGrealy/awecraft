@@ -196,6 +196,10 @@ var perf_build_ms := 0
 var perf_read_sync_gen := 0
 var perf_read_sync_gen_ms := 0.0
 var perf_create_sync_gen := 0
+# AC-0216: chunks enqueued to threadgen with the offscreen-interior lazy
+# skip flag (the C++ side counts the columns actually skipped via
+# AweGen.skip_cols_total).
+var perf_gen_skip_enq := 0
 # AC-0155: full-chunk persistence — origin + counters for the chunkio probe.
 var disk_reads := 0
 var disk_read_ms := 0.0
@@ -1288,6 +1292,42 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	chunk_origin[_key(cx, cz)] = "gen"
 	return dg
 
+# AC-0216: the lazy-skip decision at generation time (MAIN THREAD only —
+# the worker has no camera). OFFSCREEN INTERIOR = band > 1 (the band-3
+# data-only collar/ring — outside the render circle, never meshed until
+# the player approaches) AND the whole column AABB is offscreen (fully
+# past the camera frustum expanded by FRUSTUM_CULL_MARGIN — the exact
+# "culled" test of the AC-0109 manual cull pass). When set, the C++ gen
+# skips the 150-pt density evaluation for the chunk (lazy: solid fill to
+# the heightmap surface, no caves — no hidden caves built); visible bands
+# 0/1 always keep the full AC-0215 density field (caves exact where the
+# player can see them).
+func _gen_skip_flag(cx: int, cz: int) -> int:
+	var b := band_of(cx - last_pcx, cz - last_pcz)
+	if b <= 1:
+		return 0
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		# No live camera (the headless build phase before the player
+		# spawns): a throwaway camera at the recenter point facing -Z
+		# (default forward), eye at the heightmap surface + 2 —
+		# representative of a player standing at spawn. The skip decision
+		# only — never rendered, never added to the tree.
+		var vc := Camera3D.new()
+		vc.fov = 75.0
+		var hgt: int = WorldGen.terrain_height(last_pcx * 16 + 8, last_pcz * 16 + 8, Game.world_seed)
+		vc.global_transform = Transform3D(Basis.IDENTITY, Vector3(float(last_pcx) * 16.0 + 8.0, float(hgt) + 2.0, float(last_pcz) * 16.0 + 8.0))
+		cam = vc
+	_cull_frustum_planes(cam)
+	_cull_cen = Vector3(float(cx) * 16.0 + 8.0, float(Data.HEIGHT) * 0.5, float(cz) * 16.0 + 8.0)
+	for i in 6:
+		var d: float = _cull_planes[i].distance_to(_cull_cen)
+		# Offscreen only if the WHOLE column is past the expanded plane.
+		if d + _cull_col_span[i] < -FRUSTUM_CULL_MARGIN:
+			return 1
+	return 0
+
+
 func threadgen_enqueue(cx: int, cz: int, key: String, inst: int) -> void:
 	if _tg_inflight_keys.has(key):
 		_tg_dedup += 1
@@ -1297,7 +1337,10 @@ func threadgen_enqueue(cx: int, cz: int, key: String, inst: int) -> void:
 		if _tg_debug:
 			print("TGEN CAPDROP %d,%d inflight=%d" % [cx, cz, threadgen_inflight.size()])
 		return
-	var entry := {"key": key, "cx": cx, "cz": cz, "inst": inst, "args": [cx, cz, Game.world_seed, Data.HEIGHT, Data.SEA], "tenq": Time.get_ticks_msec()}
+	var skipf := _gen_skip_flag(cx, cz)  # AC-0216 (0 = full density)
+	if skipf:
+		perf_gen_skip_enq += 1
+	var entry := {"key": key, "cx": cx, "cz": cz, "inst": inst, "args": [cx, cz, Game.world_seed, Data.HEIGHT, Data.SEA, skipf], "tenq": Time.get_ticks_msec()}
 	# AC-0203 recenter fix: the data pass now runs HIGH priority.
 	# AC-0160 pinned it LOW to "pace at 3-wide" (the belief that 4.x low
 	# priority = half the threads, 3 of 6). Godot 4.7.1's WorkerThreadPool
@@ -1354,10 +1397,12 @@ func _threadgen_worker() -> void:
 	# GENCPP kill switch and the GDScript generate_args fallback were
 	# removed (the C++ extension is required).
 	var g: Variant = WorldGen.gen_cpp()
-	var resl: Array = g.generate_resl(int(a[0]), int(a[1]), int(a[2]), int(a[3]), int(a[4]))
+	# AC-0216: a[5] = the offscreen-interior lazy-skip flag (0 = full
+	# density, computed on the main thread at enqueue time).
+	var resl: Array = g.generate_resl(int(a[0]), int(a[1]), int(a[2]), int(a[3]), int(a[4]), int(a[5]))
 	gen_cpp_works += 1
 	if timing:
-		print("TGENW %d,%d wms=%d spin=%d cc=%d wait=%d t=%d" % [int(a[0]), int(a[1]), Time.get_ticks_msec() - wt, ns, _tg_concur, wt - int(entry.get("tenq", wt)), Time.get_ticks_msec()])
+		print("TGENW %d,%d wms=%d spin=%d cc=%d wait=%d skip=%d t=%d" % [int(a[0]), int(a[1]), Time.get_ticks_msec() - wt, ns, _tg_concur, wt - int(entry.get("tenq", wt)), int(a[5]), Time.get_ticks_msec()])
 		_tg_concur -= 1
 	entry["result"] = resl
 
@@ -1380,7 +1425,9 @@ func _startup_gen_worker(i: int) -> void:
 	# the GDScript generate_args fallback was removed (the C++ extension is
 	# required).
 	var g: Variant = WorldGen.gen_cpp()
-	var resl: Array = g.generate_resl(int(e[1]), int(e[2]), int(e[4]), int(e[5]), int(e[6]))
+	# AC-0216: e[7] = the offscreen-interior lazy-skip flag (0 = full
+	# density, computed on the main thread at burst-build time).
+	var resl: Array = g.generate_resl(int(e[1]), int(e[2]), int(e[4]), int(e[5]), int(e[6]), int(e[7]))
 	gen_cpp_works += 1
 	_startup_gen_slots[i] = resl
 	if timing:
@@ -3837,8 +3884,10 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 				if bc != null and bc.data.is_empty():
 					had_data = _io_read_enqueue(bwx, bwz, _key(bwx, bwz), false)
 				# args snapshot in the element (worker never derefs Game/Data —
-				# the _threadgen_worker entry pattern).
-				_startup_gen_elems.append([absi(bwx - pcx) + absi(bwz - pcz), bwx, bwz, had_data, Game.world_seed, Data.HEIGHT, Data.SEA])
+				# the _threadgen_worker entry pattern). AC-0216: e[7] = the
+				# offscreen-interior lazy-skip flag (the 5x5 burst is band 0
+				# in practice — never skipped — but computed for uniformity).
+				_startup_gen_elems.append([absi(bwx - pcx) + absi(bwz - pcz), bwx, bwz, had_data, Game.world_seed, Data.HEIGHT, Data.SEA, _gen_skip_flag(bwx, bwz)])
 				_startup_gen_slots.append(null)
 		_startup_gen_elems.sort_custom(func(a, b): return int(a[0]) < int(b[0]) or (int(a[0]) == int(b[0]) and (int(a[1]) < int(b[1]) or (int(a[1]) == int(b[1]) and int(a[2]) < int(b[2])))))
 		var _burst_need := 0
