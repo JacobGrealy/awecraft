@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0213 results</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:980px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+table{border-collapse:collapse;font-size:13px;margin:8px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}
+th{background:#f0f0f0}.ok{background:#eaf7ea;border-left:4px solid #2e9e44;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+.warn{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:8px 0;border-radius:0 6px 0 0}.meta{color:#555;font-size:14px}
+</style></head><body>
+<h1>AC-0213 — forward-move-inside-chunk-tanks-to-5fps-queue-budget — results</h1>
+<p class="meta">2026-09-04 · subagent · engine Godot 4.7.1 · seed 44 · C++ hot path (no fallbacks, AC-0208) ·
+<code>godot/world/world.gd</code> + <code>godot/world/lighting.gd</code> + <code>godot/player/player.gd</code> (comment) ·
+logs <code>.scratch/AC-0213-gates/</code></p>
+
+<div class="ok"><b>ALL GATES GREEN.</b> The R16 5 fps tank is gone. Root cause (proven by bisection, not
+assumed): the ~473 ms stall that AC-0212/AC-0219 had labeled a "pre-existing periodic engine event" is
+<b><code>player.vm_refresh → world.light_at</code> — the GDScript multi-chunk light kernel, called every 500 ms
+and on every eye-cell change</b>. A 17×17×17 box spans at most 4 chunks, but the kernel called
+<code>chunk.flat_data()</code> (a 98 304-cell GDScript palette decode) <b>once per column — up to 289 re-decodes per
+call ≈ 473 ms</b> (measured: 473.1 ms). The fist view-model material is always registered (<code>player.gd</code>
+<code>_build_held</code>), so the refresh never early-returned. Fix: materialize each distinct chunk once
+(+ a gen-stamped world-level cache — steady state re-materializes nothing): <b>473.1 ms → 18.9 ms cold,
+~13 ms warm; byte-identical light values</b> (25-cell A/B dump, original vs cached kernel, <code>diff</code> clean).
+On top of that, the task's queue-budget changes landed as specified: the drain paces at 1 unit/frame for
+1.5 s after any recenter (small-move budget), a recenter one chunk past the previous center within 1 s
+skips the full ahead-ring queue rebuild (requeue debounce), and recenter stays positional-only
+(camera-only look never requeues). R16: moving p95 <b>480 → 21 ms</b>, p50 71 fps, max 29 ms, no static-vs-moving
+drop; 797/797 built, no pop. G0 clean; SMOKE ok:true ×4; no-regression arms all green.</div>
+
+<h2>1. Root cause (bisection evidence)</h2>
+<p>The stall (~473 ms, ~502 ms period, ~5 % of frames, in BOTH the static and the moving R16 phase,
+starting exactly at player spawn) was bisected with a temporary diagnostic arm (removed before shipping):</p>
+<table>
+<tr><th>configuration (R4 world + 900 measured frames)</th><th>p50 / p95 / max (ms)</th><th>stall</th></tr>
+<tr><td>no player node</td><td>14 / 21 / 21</td><td>none</td></tr>
+<tr><td>bare <code>CharacterBody3D</code> + capsule (no script)</td><td>14 / 21 / 21</td><td>none</td></tr>
+<tr><td>body + <code>Camera3D</code> only</td><td>14 / 21 / 23</td><td>none</td></tr>
+<tr><td>body + <code>MeshInstance3D</code> only</td><td>14 / 21 / 21</td><td>none</td></tr>
+<tr><td>body + script + camera (<code>player.gd</code>)</td><td>1 / 476 / 496</td><td><b>the stall</b></td></tr>
+<tr><td>full player without capsule</td><td>0 / 475 / 508</td><td>the stall</td></tr>
+<tr><td>full player without hand</td><td>1 / 477 / 502</td><td>the stall</td></tr>
+<tr><td>full player</td><td>0 / 477 / 502</td><td>the stall</td></tr>
+</table>
+<p>→ the stall is in the <b>player script</b>, not physics/camera/mesh. The script's per-frame light lane is
+<code>vm_refresh</code>: it calls <code>world.light_at(eye)</code> on the 500 ms timer <i>and</i> whenever the eye cell
+changes (every cell tapped/walked through). Direct measurement: <code>light_at</code> = <b>473.1 ms</b> — an exact
+match. Cost anatomy: 289 × <code>flat_data()</code> (each re-decoding all 24 paletted slabs, 98 304 cells, in
+GDScript) + the two-flood box kernel. This is the "plus palette reads" half of the task's root-cause
+note; the queue side (below) was real but small in R16 (R16 never crosses a chunk boundary, so
+no recenter runs at all in the arm — drain sub-ms, TMWAIT 0).</p>
+
+<h2>2. What changed</h2>
+<h3>2a. <code>godot/world/lighting.gd</code> — the 473 ms fix (kernel intact, values identical)</h3>
+<table>
+<tr><th>site</th><th>change</th></tr>
+<tr><td><code>compute_light_split</code> (the multi-chunk box kernel)</td>
+<td>the per-column loop now materializes each <b>distinct chunk once</b> into a local <code>cflat</code>
+(≤4 entries for a 17-wide box) instead of calling <code>chunk.flat_data()</code> per column (≤289 calls).
+An optional <code>flat_cache</code> argument ({key: [data_gen, PackedByteArray]}) is consulted first, so a
+world-owned cache can serve warm materializations across calls.</td></tr>
+<tr><td>the full-light sibling kernel (same box pattern)</td>
+<td>same per-chunk <code>cflat</code> (no flat_cache argument — rare path, unchanged semantics).</td></tr>
+<tr><td>semantics</td><td>unchanged: same sky scan, same two floods, same eff/max dict. A/B on 25 probe cells
+(surface + deep, 5×5 around spawn): <b>byte-identical</b> sky/block/eff between original and cached kernel.</td></tr>
+</table>
+<h3>2b. <code>godot/world/world.gd</code> — cache owner + the queue-budget changes (queue logic intact)</h3>
+<table>
+<tr><th>site</th><th>change</th></tr>
+<tr><td><code>light_at</code> + new <code>_lightflat</code> dict</td>
+<td>world-owned gen-stamped flat cache: entries are reused while <code>chunk.data_gen</code> is unchanged
+(<code>set_block → set_local</code> bumps it, so edits always re-materialize), capped at 8 entries (≤786 KB).
+Steady-state <code>light_at</code> ≈ 13 ms (flood + scan only), no main-thread palette decode.</td></tr>
+<tr><td>new <code>SMALL_MOVE_BUDGET_MS = 1500</code>, <code>_sm_move_until</code></td>
+<td><b>small-move budget</b>: <code>recenter()</code> marks a 1.5 s small-move window; inside it the drain budget
+clamps to 1 unit/frame (the trickle rate) instead of 2 — a tap forward no longer bursts 2 gen/build
+units per frame on top of the recenter work. Startup (12) and loading (<code>LOAD_DRAIN_UNITS</code>) windows
+are untouched.</td></tr>
+<tr><td>new <code>AHEAD_RING_DEBOUNCE_MS = 1000</code>, <code>_last_recenter_ms/pcx/pcz</code></td>
+<td><b>ahead-ring requeue debounce</b>: a recenter whose center is exactly one chunk from the previous
+recenter's center and within 1 s skips the full want-walk queue rebuild (<code>_rec_pending</code> stays
+untouched — an in-flight walk continues, a finished walk stands). The candidate/free hysteresis walk,
+the 5×5 spawn pre-warm (dedup-safe <code>_enqueue_build</code>), the 5×5 burst bookkeeping, and the (0,0)
+sync-gen contract all still run — nothing is dropped. The next non-debounced recenter rebuilds the
+queue from the current center. Walking across boundaries at ≥4.3 m/s (≈3.7 s apart) never debounces;
+only tap-forward bursts do.</td></tr>
+<tr><td>unchanged</td><td>the drain itself (windowed pool scan, defer-on-cap, time budget, band buckets,
+scoring), the recenter slice, the handoff cap (AC-0219: 1 streaming mesh/frame), the edit lane, the
+startup burst, the loading window.</td></tr>
+</table>
+<h3>2c. <code>godot/player/player.gd</code> — camera-only guard (documentation of the existing invariant)</h3>
+<p><code>_recenter()</code> fires only on a <b>positional</b> chunk change (<code>pcx/pcz</code> vs the cached chunk);
+look changes touch nothing — camera-only moves never requeue (no code change; the invariant is now
+documented at the site).</p>
+
+<h2>3. R16 — the #1 gate (<code>AWECRAFT_LOGIC=r16</code>, 16-radius build + moving)</h2>
+<p>before = pre-AC-0213 (this session's baseline, <code>r16_before.log</code>); after = the final run
+(<code>r16_after.log</code>). Both 0 SCRIPT ERROR, <b>797/797 built (band≤2 square), built_all true, 933
+resident</b>, drop_fps_static_vs_moving 0 in both.</p>
+<table>
+<tr><th>metric</th><th>before</th><th>after</th><th>Δ / gate</th></tr>
+<tr><td>moving p50 / p95 / max (ms)</td><td>0 / <b>480</b> / 500</td><td>14 / <b>21</b> / 29</td>
+<td>p95 <b>23× better</b> — the ~480 ms p95 frames (fps_p95 = 2) are gone</td></tr>
+<tr><td>moving fps (p50 / p95 / min)</td><td>167 / <b>2</b> / 2</td><td>71 / <b>48</b> / 34</td>
+<td>the 5 fps tank is a 48+ fps floor</td></tr>
+<tr><td>static p50 / p95 / max (ms)</td><td>0 / <b>487</b> / 503</td><td>14 / <b>21</b> / 31</td>
+<td>same fix — the stall was timer-driven, phase-independent</td></tr>
+<tr><td>static fps (p50 / p95 / min)</td><td>167 / 2 / 2</td><td>71 / 48 / 32</td><td>—</td></tr>
+<tr><td>arm wall (elapsed_ms)</td><td>95 289</td><td>45 239</td><td>the 149–153 stall frames × ~0.47 s are gone</td></tr>
+</table>
+<p class="meta">The residual p95 (~21 ms ≈ 48 fps) is the periodic 500 ms view-model light refresh itself
+(~13–19 ms warm/cold <code>light_at</code>), now 1/23 of its former cost; p50 runs at 71 fps. The R16 arm keeps the
+camera inside the spawn chunk (no recenter), so it exercises the light-lane fix directly; the queue-budget
+changes are exercised in play by every chunk-boundary crossing (the SMOKE player/interact arms cross
+recenters and pass — see §4).</p>
+
+<h2>4. G0 / SMOKE / no-regression</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>vs standing</th></tr>
+<tr><td>G0 — <code>--headless --quit</code></td><td><b>EXIT 0, 0 SCRIPT ERROR</b> (2-line log, the known-good shape). The
+chain's plain <code>--headless</code> g0 arm idles in the headless menu without <code>--quit</code> (times out at 300 s
+with a 2-line banner log, 0 SCRIPT ERROR — same shape; the <code>--quit</code> form is the real check and is green).</td><td>—</td></tr>
+<tr><td>SMOKE — <code>AWECRAFT_BATTERY=player;interact;light;fluids</code></td>
+<td><b>ok:true ×4</b> — player (start [8.5,137,8.5], jump 138.43, fly 139.78, on_floor), interact (drop_spawned +
+place_ok true), light (surface_eff 15, cave/torch −1), fluids (sea 2712/2712 + backed 1066/1066,
+water_on_lava 24, sideways 24, water_delta 0, shore [0,0], sea_stable false)</td>
+<td><b>byte-identical to the AC-0219 battery</b> (the −1 cave/torch readouts and the 2712/1066/24/24 fluids
+set are the documented current-era standing output per AC-0219/AC-0208, not drift)</td></tr>
+<tr><td>chunkiocpp (codec)</td><td>ok:true — <b>md5_cpp == md5_orig</b> (8a8935…9081), enc 34/34, flat 34/34,
+slab 17/17, roundtrip 17/17</td><td>byte-identical</td></tr>
+<tr><td>genhash</td><td><b>25/25 GENHASH lines</b>, 32-hex MD5 each</td>
+<td><b>byte-identical to <code>.scratch/AC-0188-gates/genhash_new.txt</code></b> (sorted diff clean — the gen is
+untouched by this task)</td></tr>
+<tr><td>light</td><td>surface_eff <b>15</b>, cave_eff −1, torch_level −1</td>
+<td>== the standing current-era arm output per AC-0219/AC-0208 (surface 15 exact). In addition: a 25-cell
+A/B (5×5 around spawn, surface + deep) of <code>light_at</code> on the <b>original vs the cached kernel is
+byte-identical</b> (LIGHTDUMP diff clean) — the kernel change preserves every value; the −1 cave/torch
+probe outcomes are terrain-era (no cave pocket within the arm's 33×33×24 search at seeds 44/7/123 —
+identical −1/−1 with the pre-change kernel, A/B-verified)</td></tr>
+<tr><td>meshprobe (AC-0190/AC-0211)</td><td>ok:true — match_rate <b>1.0</b>, 32/32 chunks, 1770/1770 accs
+(q/u/n/i/c/arr all match), verts_cpp == verts_gd (124988), 0 mismatches</td><td>100% exact</td></tr>
+<tr><td>stripsprobe (AC-0207)</td><td>ok:true — match_rate <b>1.0</b>, 32/32 chunks: eff 32, blk 32, blkb 32,
+face 32/32 (face_rate 1.0), 512 strips compared, speedup 47.0x</td><td>100% exact</td></tr>
+<tr><td>pullprobe (AC-0210)</td><td>ok:true — match_rate <b>1.0</b>, max_diff <b>0</b>, 64/64 runtime call
+variants, 6,291,456 cells compared, C++ flood p95 0.77 ms</td><td>100% exact</td></tr>
+<tr><td>nofallback (AC-0208)</td><td>ok:true — C++ counters all &gt;0 (mesh 132, gen 88, strips 447, slab-IO 2),
+GDScript sentinels 0/0, 16 mesh chunks, torch placed + lit (eff 15), roundtrip ok</td><td>ok:true</td></tr>
+<tr><td>SCRIPT ERROR audit</td><td><b>0 across every log</b> (g0, g0_retry, g0_quit, smoke, chunkiocpp, genhash,
+light, meshprobe, stripsprobe, pullprobe, nofallback, + all R16 and bisection runs)</td><td>—</td></tr>
+</table>
+<p class="meta">Not run (per task instruction): R50 (PENDING — the .so crashes in the coordinator env, AC-0206)
+and the Windows build (coordinator scope).</p>
+
+<h2>5. Files</h2>
+<ul>
+<li><code>godot/world/lighting.gd</code> — per-chunk flat cache in the two box kernels + optional <code>flat_cache</code> argument.</li>
+<li><code>godot/world/world.gd</code> — <code>_lightflat</code> cache + <code>light_at</code>; small-move drain budget; ahead-ring requeue debounce.</li>
+<li><code>godot/player/player.gd</code> — camera-only recenter invariant documented (no code change).</li>
+<li><code>.scratch/AC-0213-gates/</code> — r16_before.log, r16_after.log, the bisection logs (stall_*_r4.log),
+light_before/after A/B + LIGHTDUMP diffs (lightdump_before.log / lightdump_after.log), g0_final.log,
+run_gates.sh, gatechain.log, the gate arm logs.</li>
+</ul>
+</body></html>

@@ -3,7 +3,6 @@ meta:
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0213
 - AC-0218
 - AC-0215
 - AC-0216
@@ -6638,11 +6637,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-04T07:04
   updated_at: 2026-09-04T07:04
-  completed_at: null
+  completed_at: 2026-09-03T16:00
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player moving forward a little inside a chunk I want to stay at 60fps, not drop to 5fps.
@@ -6658,6 +6657,10 @@ intake:
     created_at: 2026-09-04T07:04
     updated_at: null
     text: '[user] replaces stale AC-0131 for current forward-move tank per 2026-09-04'
+  - id: 2
+    created_at: '2026-09-03T16:00:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Root cause (proven by bisection, NOT the queue): the ~473 ms stall (the 5 fps tank, in both R16 phases) is player.vm_refresh -> world.light_at — the GDScript box-light kernel, called every 500 ms + on every eye-cell change. The 17^3 box spans <=4 chunks but called chunk.flat_data() (98k-cell palette decode) per column — 289x = 473.1 ms (measured). The fist material is always registered, so vm_refresh never early-returned. The queue side (ahead-band breadth) was real but small in R16 (no recenter runs in the arm). Fix: (a) lighting.gd box kernel materializes each distinct chunk once (+ optional gen-stamped flat_cache): 473.1 -> 18.9 ms cold, ~13 ms warm; 25-cell A/B dump byte-identical to the original kernel. (b) world.gd _lightflat cache in light_at (edit-safe via data_gen); small-move budget (drain paces 1 unit/frame for 1.5 s after any recenter); ahead-ring requeue debounce (a 1-chunk recenter within 1 s skips the full queue rebuild; pre-warm/burst/(0,0) contracts intact). (c) player.gd camera-only recenter invariant documented (positional-only, already true). R16 moving p95 480->21 ms (fps 2->48, p50 71), static p95 487->21, max 29-31 ms, 797/797 built, no drop, wall 95.3->45.2 s — the tank is gone (residual ~21 ms p95 = the 500 ms light refresh itself, 1/23 of former cost). G0 EXIT 0, 0 SCRIPT ERROR. SMOKE ok:true x4 (byte-identical to AC-0219). No regression: chunkiocpp md5 identical, genhash 25/25 == AC-0188, light 15/-1/-1 (standing current-era), meshprobe/stripsprobe/pullprobe 100% exact, nofallback ok:true. R50/Windows skipped per instruction. See tasks/AC-0213/AC-0213-results.html.'
 - id: AC-0214
   title: palette-reads-remaining-gdscript-to-cpp
   source: user

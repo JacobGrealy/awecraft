@@ -114,7 +114,7 @@ static func compute_light(box: Dictionary, world) -> Dictionary:
 	return compute_light_split(box, world).eff
 
 
-static func compute_light_split(box: Dictionary, world) -> Dictionary:
+static func compute_light_split(box: Dictionary, world, flat_cache = null) -> Dictionary:
 	_tables()
 	var mn: Vector3i = box.min
 	var mx: Vector3i = box.max
@@ -129,6 +129,12 @@ static func compute_light_split(box: Dictionary, world) -> Dictionary:
 	sky.resize(sz * h)
 	var blk := PackedByteArray()
 	blk.resize(sz * h)
+	# AC-0213: a box spans at most 4 distinct chunks; materialize each once.
+	# Per-column flat_data() re-decoded all 24 slabs ~289x per call — the
+	# 473 ms viewmodel light hitch (vm_refresh -> world.light_at).
+	# flat_cache (optional, world-owned): {key: [data_gen, PackedByteArray]}
+	# reused across calls — steady state re-materializes nothing.
+	var cflat: Dictionary = {}
 	for ix in range(w):
 		var wx: int = mn.x + ix
 		var cxv := int(floorf(float(wx) / 16.0))
@@ -137,15 +143,25 @@ static func compute_light_split(box: Dictionary, world) -> Dictionary:
 			var wz: int = mn.z + iz
 			var czv := int(floorf(float(wz) / 16.0))
 			var lz := wz - czv * 16
-			var c = world.chunks.get(world._key(cxv, czv))
-			if c == null or c.data.is_empty():
-				c = null
+			var ck: String = world._key(cxv, czv)
+			if not cflat.has(ck):
+				var c0 = world.chunks.get(ck)
+				if c0 == null or c0.data.is_empty():
+					cflat[ck] = null
+				elif flat_cache != null:
+					var hit = flat_cache.get(ck)
+					if hit != null and int(hit[0]) == c0.data_gen:
+						cflat[ck] = hit[1]
+					else:
+						var nd0: PackedByteArray = c0.flat_data()
+						flat_cache[ck] = [c0.data_gen, nd0]
+						cflat[ck] = nd0
+				else:
+					cflat[ck] = c0.flat_data()
 			var i0 := ix + iz * w
 			var open := true
-			if c != null:
-				# AC-0203: neighbor column materialized flat (multi-chunk box
-				# kernel — rare probe path, not the hot lane).
-				var nd: PackedByteArray = c.flat_data()
+			if cflat[ck] != null:
+				var nd: PackedByteArray = cflat[ck]
 				for y in range(H - 1, mn.y - 1, -1):
 					var b: int = nd[(y << 8) | (lz << 4) | lx]
 					if y > mx.y:
@@ -223,6 +239,8 @@ static func compute_light_flat(box: Dictionary, world) -> Dictionary:
 	var blk := PackedByteArray()
 	blk.resize(sz * h)
 	var has_glow := false
+	# AC-0213: per-chunk flat cache (same fix as compute_light_split).
+	var cflat: Dictionary = {}
 	for ix in range(w):
 		var wx: int = mn.x + ix
 		var cxv := int(floorf(float(wx) / 16.0))
@@ -231,15 +249,14 @@ static func compute_light_flat(box: Dictionary, world) -> Dictionary:
 			var wz: int = mn.z + iz
 			var czv := int(floorf(float(wz) / 16.0))
 			var lz := wz - czv * 16
-			var c = world.chunks.get(world._key(cxv, czv))
-			if c == null or c.data.is_empty():
-				c = null
+			var ck: String = world._key(cxv, czv)
+			if not cflat.has(ck):
+				var c0 = world.chunks.get(ck)
+				cflat[ck] = c0.flat_data() if (c0 != null and not c0.data.is_empty()) else null
 			var i0 := ix + iz * w
 			var open := true
-			if c != null:
-				# AC-0203: neighbor column materialized flat (multi-chunk box
-				# kernel — rare probe path, not the hot lane).
-				var nd: PackedByteArray = c.flat_data()
+			if cflat[ck] != null:
+				var nd: PackedByteArray = cflat[ck]
 				for y in range(H - 1, mn.y - 1, -1):
 					var b: int = nd[(y << 8) | (lz << 4) | lx]
 					if y > mx.y:

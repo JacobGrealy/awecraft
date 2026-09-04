@@ -279,6 +279,13 @@ var _cull_ny := PackedFloat32Array()
 var _cull_dc := PackedFloat32Array()
 var _cull_cen := Vector3()
 var drain_budget_ms := DRAIN_MS_DEFAULT
+# AC-0213: small-move (recenter) pacing state.
+var _sm_move_until := 0        # drain budget drops to 1 unit/frame until this ms
+var _last_recenter_ms := 0     # wall ms of the last recenter() entry
+var _last_recenter_pcx := 0    # center of the last recenter (debounce delta)
+var _last_recenter_pcz := 0
+const SMALL_MOVE_BUDGET_MS := 1500
+const AHEAD_RING_DEBOUNCE_MS := 1000
 var _rec_pending := false
 var _rec_pcx := 0
 var _rec_pcz := 0
@@ -2251,6 +2258,12 @@ func _drain_build_queue() -> void:
 	# AC-0178: loading window — unbounded unit budget, LOAD_DRAIN_BUDGET_MS
 	# time budget (steady state: 2/1 units, drain_budget_ms).
 	var budget := LOAD_DRAIN_UNITS if loading_active else (12 if startup else (2 if last_build_us < BUILD_FAST_US else 1))
+	# AC-0213: small-move budget — right after a recenter the ahead ring was
+	# just (re)queued; pace the drain at the trickle rate (1 unit/frame) for
+	# SMALL_MOVE_BUDGET_MS so a tap forward does not burst 2 gen+build units
+	# on top of the recenter slice work.
+	if budget > 1 and not startup and not loading_active and Time.get_ticks_msec() < _sm_move_until:
+		budget = 1
 	# AC-0160 run 2: the startup budget used to be 2x drain_budget_ms
 	# (60 ms) — but the spawn frame dispatches ALL nine 3x3 builds and each
 	# dispatch costs ~30-50 ms of main-thread strip/nbs work, so 60 ms cut
@@ -3493,6 +3506,20 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 	last_pcz = int(floorf(wz / 16.0))
 	var pcx := last_pcx
 	var pcz := last_pcz
+	# AC-0213: small-move pacing — mark the move now; the drain paces at the
+	# trickle budget until the window expires (see _drain_build_queue).
+	var _now_ms := Time.get_ticks_msec()
+	_sm_move_until = _now_ms + SMALL_MOVE_BUDGET_MS
+	# AC-0213: ahead-ring requeue debounce — a recenter one chunk past the
+	# previous center within AHEAD_RING_DEBOUNCE_MS re-queues the same ahead
+	# ring the prior rebuild just queued (tap-forward across boundaries);
+	# skip the full queue rebuild and let the in-flight/finalized walk stand.
+	# The next non-debounced recenter rebuilds from the new center.
+	var _debounced := (_now_ms - _last_recenter_ms) < AHEAD_RING_DEBOUNCE_MS \
+		and (absi(pcx - _last_recenter_pcx) + absi(pcz - _last_recenter_pcz)) == 1
+	_last_recenter_ms = _now_ms
+	_last_recenter_pcx = pcx
+	_last_recenter_pcz = pcz
 	_rp_free_ms = 0.0
 	_rp_stub_ms = 0.0
 	_rp_stub_n = 0
@@ -3591,21 +3618,27 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 			create_chunk(e.cx, e.cz, false)
 		return
 	var tr1 := Time.get_ticks_usec()
-	_rec_pending = true
-	_rec_pcx = pcx
-	_rec_pcz = pcz
-	_rec_phase = 0
-	_rec_cursor = 0
-	_rec_i = 0
-	_rec_want = {}
-	_rec_want_keys = []
-	_rec_new_buckets = []
-	for i in range(_bucket_count()):
-		_rec_new_buckets.append([])
-	_rec_slice_total_ms = 0.0
-	_rec_slice_max_ms = 0.0
-	_rec_slice_frames = 0
-	_rec_new_n = 0
+	if _debounced:
+		# AC-0213: no queue rebuild — the prior rebuild (in flight or
+		# finalized) already queued this ahead ring; the pre-warm below
+		# still enqueues the fresh 5x5 and the drain trickles the rest.
+		pass
+	else:
+		_rec_pending = true
+		_rec_pcx = pcx
+		_rec_pcz = pcz
+		_rec_phase = 0
+		_rec_cursor = 0
+		_rec_i = 0
+		_rec_want = {}
+		_rec_want_keys = []
+		_rec_new_buckets = []
+		for i in range(_bucket_count()):
+			_rec_new_buckets.append([])
+		_rec_slice_total_ms = 0.0
+		_rec_slice_max_ms = 0.0
+		_rec_slice_frames = 0
+		_rec_new_n = 0
 	_rp_walk_ms += (Time.get_ticks_usec() - tr1) / 1000.0
 	# AC-0160 spawn fast path (the pre-warm): the queue normally only exists
 	# once the recenter slice's MERGE phase finishes (~2s of wall at r50:
@@ -4387,11 +4420,18 @@ func spawn_point() -> Vector3:
 	var top := surface_top(WorldGen.SPAWN_X, WorldGen.SPAWN_Z)
 	return Vector3(WorldGen.SPAWN_X + 0.5, float(top) + 1.0, WorldGen.SPAWN_Z + 0.5)
 
+# AC-0213: flat-column cache for light_at (key -> [data_gen, PackedByteArray]).
+# Steady state (no edits) re-materializes nothing; capped so the cache
+# cannot outlive the chunks it describes.
+var _lightflat: Dictionary = {}
+
 func light_at(x: int, y: int, z: int) -> Dictionary:
 	var r := 8
 	var mn := Vector3i(x - r, maxi(y - r, 0), z - r)
 	var mx := Vector3i(x + r, mini(y + r, Data.HEIGHT - 1), z + r)
-	var res: Dictionary = Lighting.compute_light_split({"min": mn, "max": mx}, self)
+	if _lightflat.size() > 8:
+		_lightflat.clear()
+	var res: Dictionary = Lighting.compute_light_split({"min": mn, "max": mx}, self, _lightflat)
 	var c := Vector3i(x, y, z)
 	return {"sky": int(res.sky.get(c, 0)), "block": int(res.block.get(c, 0)), "eff": int(res.eff.get(c, 0))}
 

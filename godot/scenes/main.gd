@@ -6529,7 +6529,8 @@ func _r16_test(spawn: Vector3) -> void:
 	for i in STATIC_FRAMES:
 		var fb := Time.get_ticks_msec()
 		await get_tree().physics_frame
-		static_ms.append(Time.get_ticks_msec() - fb)
+		var smms := Time.get_ticks_msec() - fb
+		static_ms.append(smms)
 	# 12 m circle centered on the spawn chunk center (spans [2,14] in x/z,
 	# fully inside the 16 m chunk); yaw follows the circle so the frustum —
 	# and therefore the cull decision — changes every single frame.
@@ -6541,7 +6542,8 @@ func _r16_test(spawn: Vector3) -> void:
 		cam.global_transform = Transform3D(Basis(Vector3.UP, ang + PI), pos)
 		var fb := Time.get_ticks_msec()
 		await get_tree().physics_frame
-		moving_ms.append(Time.get_ticks_msec() - fb)
+		var mmms := Time.get_ticks_msec() - fb
+		moving_ms.append(mmms)
 	# Tail settle after the last camera change.
 	for i in 30:
 		await get_tree().physics_frame
