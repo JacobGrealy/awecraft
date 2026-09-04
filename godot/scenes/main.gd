@@ -34,6 +34,10 @@ var _star_mat: ShaderMaterial
 
 
 func _ready() -> void:
+	# AC-0208: fail fast — if the C++ extension is missing, Game._ready already
+	# pushed the error + banner and requested quit; boot nothing.
+	if not Game.cpp_ext_ok:
+		return
 	var import_pack := OS.get_environment("AWECRAFT_IMPORT_PACK")
 	if import_pack != "":
 		var imp := AtlasScript.import_pack(import_pack)
@@ -1351,6 +1355,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			return
 		if logic == "chunkiocpp":
 			await _chunkiocpp_test(spawn)
+			return
+		if logic == "nofallback":
+			await _nofallback_test(spawn)
 			return
 		if logic == "genprobe":
 			await _genprobe_test()
@@ -4638,10 +4645,10 @@ func _light_test(spawn: Vector3) -> void:
 
 
 # AC-0207: the STRIPS losslessness probe (the #1 gate for the C++ strips
-# port, gdext/src/strips.cpp). Per chunk: the GDScript _strips_for body
-# (world._side_eff_strip / _side_blk_strip / _corner_eff_strip — the pre-
-# port path, called directly so the AWECRAFT_STRIPSCPP toggle is irrelevant)
-# vs AweStrips.compute_strips (C++) on IDENTICAL inputs: same slab arrays,
+# port, gdext/src/strips.cpp). Per chunk: the GDScript strip kernels
+# (world._side_eff_strip / _side_blk_strip / _corner_eff_strip — the
+# harness reference the game no longer calls, AC-0208) vs
+# AweStrips.compute_strips (C++) on IDENTICAL inputs: same slab arrays,
 # same last_eff rows, and the SAME memoized face strips (captured once per
 # side via world._face_of and fed to both sides). Gate: 100% exact — eff x8
 # + blk x4 + blk_b x4 strips byte-identical per chunk. Also A/Bs the FACE
@@ -5187,17 +5194,21 @@ func _pullprobe_test(spawn: Vector3) -> void:
 	})
 
 
-# AC-0190: the MESH losslessness probe (the #1 gate for the C++ mesh port):
-# per chunk, ChunkScript.build_accs (GDScript) vs AweMesh.build_accs (C++,
-# gdext/src/mesh.cpp) on IDENTICAL inputs — fresh slab deep-copies both
-# sides, the SAME nbs/ctx/ms, and eff = {} (both recompute light through the
-# shared C++ pull kernel, so the light compare also covers the mesh's
-# self-light path). Gate: 100% exact q/v/n/c/u/i on every acc of every
-# sampled chunk + identical light arr/mask/ring/blk_src + identical vertex
-# totals (the MINFO invariant — the applied mesh is the trimmed q quads).
-# The comparison honors the _surface() trim contract: q must match, then
-# the FIRST 4*q verts (v/n/c/u) and 6*q indices — the GDScript pre-sized
-# tails are always discarded on apply.
+# AC-0190: the MESH losslessness probe (#1 gate for the C++ mesh port).
+# AC-0208: the GDScript ChunkScript.build_accs was REMOVED — the arm now
+# proves the DISPATCH INVARIANT per chunk: AweMesh.build_accs (C++,
+# gdext/src/mesh.cpp) over FULL-slab nbs (the legacy deep-copy shape) vs
+# the SAME C++ build_accs over the compact snap_rings nbs (the shape the
+# dispatch actually hands the worker) on IDENTICAL inputs — fresh slab
+# copies both sides, the SAME nbs/ctx/ms, and eff = {} (both builds
+# recompute light through the shared C++ pull kernel, so the light compare
+# also covers the mesh's self-light path). Gate: 100% exact q/v/n/c/u/i on
+# every acc of every sampled chunk + identical light arr/mask/ring/blk_src
+# + identical vertex totals (the MINFO invariant — the applied mesh is the
+# trimmed q quads). The comparison honors the _surface() trim contract: q
+# must match, then the FIRST 4*q verts (v/n/c/u) and 6*q indices. Field
+# names (verts_gd/verts_cpp, gres/cres) keep the AC-0190 schema; both
+# sides are C++ now.
 func _meshprobe_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
 	var NENV := OS.get_environment("AWECRAFT_MESHPROBE_N")
@@ -5249,14 +5260,14 @@ func _meshprobe_test(spawn: Vector3) -> void:
 	var cpp_wms_sum := 0
 	var skipped := 0
 	var mismatch: Array = []
-	# AC-0211: the surrounding-step checks (compact ring vs legacy full
-	# decode, slab_copy parity, rows_eq verdicts, sync_snap vs the legacy
-	# GDScript _build_snap) + the dispatch nbs cost (us, GDScript deep-copy
-	# path vs C++ ring path).
+	# AC-0211: the surrounding-step checks (full-nbs vs compact-ring build —
+	# the dispatch invariant, slab_copy parity, rows_eq verdicts) + the
+	# dispatch nbs cost (us, GDScript deep-copy path vs C++ ring path).
+	# AC-0208: the sync_snap-vs-_build_snap sub-check was removed with the
+	# GDScript _build_snap (sync snap is C++-only now).
 	var compact_ok := 0
 	var slabcopy_ok := 0
 	var rowsok := 0
-	var syncsnap_ok := 0
 	var nbs_gd_us := 0
 	var nbs_cpp_us := 0
 	for c in samples:
@@ -5264,9 +5275,16 @@ func _meshprobe_test(spawn: Vector3) -> void:
 		var cz: int = int(c.cz)
 		# Reconstruct the EXACT dispatch inputs (world.gd
 		# _mesh_dispatch_impl: 4 diagonal nbs, ctx + strips + top + band-2
-		# coarse, ms rects).
+		# coarse, ms rects). AC-0208: the GDScript build_accs reference is
+		# GONE — the arm now proves the DISPATCH INVARIANT: the C++
+		# build_accs over FULL-slab nbs (the legacy deep-copy shape, gres)
+		# must equal the C++ build_accs over the compact snap_rings nbs
+		# (the shape the dispatch actually hands the worker, cres). Field
+		# names (verts_gd/verts_cpp, gres/cres) keep the original schema;
+		# both sides are C++ now.
 		# AC-0211: time the GDScript nbs construction (the dispatch cost
-		# the C++ compact ring replaces).
+		# the C++ compact ring replaces — _slabs_deepcopy is the utility
+		# that survived AC-0208 for the save path).
 		var tcn0 := Time.get_ticks_usec()
 		var nbs: Dictionary = {}
 		var nb_ok := true
@@ -5300,12 +5318,28 @@ func _meshprobe_test(spawn: Vector3) -> void:
 		else:
 			ms_w = {"rects": {}}
 		var tt := Time.get_ticks_usec()
-		var gres: Dictionary = _ChunkScriptM.build_accs(ChunkIO._slabs_deepcopy(c.data), ChunkIO._slabs_deepcopy(c.fl), cx, cz, nbs, ctx_w, ms_w, {}, 0, -1, 0)
+		var gres: Dictionary = mc.build_accs(ChunkIO._slabs_deepcopy(c.data), ChunkIO._slabs_deepcopy(c.fl), cx, cz, nbs, ctx_w, ms_w, {}, 0, -1, 0, Lighting._att, Lighting._glow)
 		gd_wall_us += Time.get_ticks_usec() - tt
 		if not cpp:
 			continue
+		# AC-0211 sub-check (1): the compact snap-ring nbs — the SAME C++
+		# build_accs over the ring shape must produce the identical result
+		# (cres = the compact-ring C++ build).
+		var tcn1 := Time.get_ticks_usec()
+		var cnbs: Dictionary = {}
+		for ddx in range(-1, 2):
+			for ddz in range(-1, 2):
+				if (ddx == 0) == (ddz == 0):
+					continue
+				var ncc = world.chunks.get(world._key(cx + ddx, cz + ddz))
+				if ncc == null or ncc.data.is_empty():
+					continue
+				cnbs["%d,%d" % [ddx, ddz]] = mc.snap_rings(ncc.data, ncc.fl, ddx, ddz)
+		var _cd = mc.slab_copy(c.data)
+		var _cf = mc.slab_copy(c.fl)
+		nbs_cpp_us += Time.get_ticks_usec() - tcn1
 		tt = Time.get_ticks_usec()
-		var cres: Dictionary = mc.build_accs(ChunkIO._slabs_deepcopy(c.data), ChunkIO._slabs_deepcopy(c.fl), cx, cz, nbs, ctx_w, ms_w, {}, 0, -1, 0, Lighting._att, Lighting._glow)
+		var cres: Dictionary = mc.build_accs(_cd, _cf, cx, cz, cnbs, ctx_w, ms_w, {}, 0, -1, 0, Lighting._att, Lighting._glow)
 		cpp_wall_us += Time.get_ticks_usec() - tt
 		gd_wms_sum += int(gres.get("wms", 0))
 		cpp_wms_sum += int(cres.get("wms", 0))
@@ -5355,7 +5389,7 @@ func _meshprobe_test(spawn: Vector3) -> void:
 								"diag_n": _acc_diag(gm, cm, "n", 3, 4) if not bool(m["n"]) else null,
 								"diag_i": _acc_diag(gm, cm, "i", 1, 6) if not bool(m["i"]) else null,
 							})
-		# Light (both sides recompute through the shared C++ pull kernel).
+		# Light (both builds self-light through the shared C++ pull kernel).
 		var gld: Dictionary = gres["light"]
 		var cld: Dictionary = cres["light"]
 		var la_ok: bool = (PackedByteArray(gld.get("arr", PackedByteArray())) == PackedByteArray(cld.get("arr", PackedByteArray())))
@@ -5374,28 +5408,14 @@ func _meshprobe_test(spawn: Vector3) -> void:
 			chunk_ok = false
 			if mismatch.size() < 12:
 				mismatch.append({"cx": cx, "cz": cz, "field": "light", "arr": la_ok, "mask": lm_ok, "ring": lr_ok, "blk_src": ls_ok})
-		# AC-0211: the surrounding-step gates (C++ lane only).
+		# AC-0211: the surrounding-step gates (C++ lane).
 		if cpp:
-			# (1) compact ring nbs vs the legacy full-slab nbs — the SAME
-			# C++ build_accs must produce the identical result.
-			var tcn1 := Time.get_ticks_usec()
-			var cnbs: Dictionary = {}
-			for ddx in range(-1, 2):
-				for ddz in range(-1, 2):
-					if (ddx == 0) == (ddz == 0):
-						continue
-					var ncc = world.chunks.get(world._key(cx + ddx, cz + ddz))
-					if ncc == null or ncc.data.is_empty():
-						continue
-					cnbs["%d,%d" % [ddx, ddz]] = mc.snap_rings(ncc.data, ncc.fl, ddx, ddz)
-			var _cd = mc.slab_copy(c.data)
-			var _cf = mc.slab_copy(c.fl)
-			nbs_cpp_us += Time.get_ticks_usec() - tcn1
-			var c2res: Dictionary = mc.build_accs(_cd, _cf, cx, cz, cnbs, ctx_w, ms_w, {}, 0, -1, 0, Lighting._att, Lighting._glow)
-			if _ac0211_res_eq(cres["slabs"], c2res["slabs"]) and _ac0211_light_eq(cres["light"], c2res["light"]):
+			# (1) full-nbs vs compact-ring build — the dispatch invariant
+			# (the main compare above is the SAME pair, detailed per-acc).
+			if _ac0211_res_eq(gres["slabs"], cres["slabs"]) and _ac0211_light_eq(gres["light"], cres["light"]):
 				compact_ok += 1
 			elif mismatch.size() < 12:
-				mismatch.append({"cx": cx, "cz": cz, "field": "compact_ring", "slabs": _ac0211_res_eq(cres["slabs"], c2res["slabs"]), "light": _ac0211_light_eq(cres["light"], c2res["light"])})
+				mismatch.append({"cx": cx, "cz": cz, "field": "compact_ring", "slabs": _ac0211_res_eq(gres["slabs"], cres["slabs"]), "light": _ac0211_light_eq(gres["light"], cres["light"])})
 			# (2) slab_copy parity (the dispatch's own-column value-copy).
 			if _ac0211_slabcopy_eq(ChunkIO._slabs_deepcopy(c.data), _cd) and _ac0211_slabcopy_eq(ChunkIO._slabs_deepcopy(c.fl), _cf):
 				slabcopy_ok += 1
@@ -5430,40 +5450,22 @@ func _meshprobe_test(spawn: Vector3) -> void:
 				rowsok += 1
 			elif mismatch.size() < 12:
 				mismatch.append({"cx": cx, "cz": cz, "field": "rows_eq", "cpp_t": cpp_eq_true, "gd_t": gd_eq_true, "cpp_f": cpp_eq_false, "gd_f": gd_eq_false})
-			# (4) sync_snap vs the legacy GDScript _build_snap (force the
-			# legacy fill by pinning the mesh_cpp singleton to null).
-			var rings3: Array = []
-			for s3 in [[-1, 0], [1, 0], [0, -1], [0, 1]]:
-				var nc3 = world.chunks.get(world._key(cx + int(s3[0]), cz + int(s3[1])))
-				if nc3 != null and nc3.data.size() > 0:
-					rings3.append(mc.snap_rings(nc3.data, nc3.fl, int(s3[0]), int(s3[1])))
-				else:
-					rings3.append(null)
-			var r3: Dictionary = mc.sync_snap(c.data, c.fl, rings3, int(Data.HEIGHT))
-			var _smc = _ChunkScriptM._mesh_cpp
-			var _smd = _ChunkScriptM._mesh_cpp_done
-			_ChunkScriptM._mesh_cpp = null
-			_ChunkScriptM._mesh_cpp_done = true
-			var lgs: Array = c._build_snap(func(_x, _y, _z): return 0)
-			_ChunkScriptM._mesh_cpp = _smc
-			_ChunkScriptM._mesh_cpp_done = _smd
-			if PackedByteArray(r3["snap"]) == PackedByteArray(lgs[0]) and PackedByteArray(r3["snap_fl"]) == PackedByteArray(lgs[1]):
-				syncsnap_ok += 1
-			elif mismatch.size() < 12:
-				mismatch.append({"cx": cx, "cz": cz, "field": "sync_snap", "snap": PackedByteArray(r3["snap"]) == PackedByteArray(lgs[0]), "snap_fl": PackedByteArray(r3["snap_fl"]) == PackedByteArray(lgs[1])})
+			# (4) AC-0208: the sync_snap-vs-_build_snap sub-check was
+			# REMOVED — _build_snap (the GDScript sync snap fill) is gone
+			# with the build_accs fallback; sync snap is C++-only now (the
+			# nofallback arm covers the no-GDScript invariant).
 		if chunk_ok:
 			match_chunks += 1
 	var n_samples := int(samples.size()) - skipped
 	var match_rate: float = float(match_chunks) / float(n_samples) if n_samples > 0 else 0.0
 	# AC-0211: the surrounding-step gates are part of ok (C++ lane).
-	var ac0211_ok: bool = (not cpp) or (n_samples > 0 and compact_ok == n_samples and slabcopy_ok == n_samples and rowsok == n_samples and syncsnap_ok == n_samples)
+	var ac0211_ok: bool = (not cpp) or (n_samples > 0 and compact_ok == n_samples and slabcopy_ok == n_samples and rowsok == n_samples)
 	Debug.result({
 		"ok": cpp and n_samples >= 8 and match_rate >= 1.0 and verts_gd == verts_cpp and verts_gd > 0 and ac0211_ok,
 		"ac0211_ok": ac0211_ok,
 		"compact_ok": compact_ok,
 		"slabcopy_ok": slabcopy_ok,
 		"rowsok": rowsok,
-		"syncsnap_ok": syncsnap_ok,
 		"nbs_gd_us": nbs_gd_us,
 		"nbs_cpp_us": nbs_cpp_us,
 		"cpp": cpp,
@@ -10532,6 +10534,129 @@ func _chunkio_test(spawn: Vector3) -> void:
 # the GDScript v4 codec (encode section, flat decode, slab decode) on
 # synthetic edge-case columns + real r=4 columns; reports the decode speed
 # C++ vs GDScript (the AC-0203 slow recenter path).
+# AC-0208: the NO-FALLBACK gate. The game now REQUIRES the C++ extension —
+# there is no GDScript fallback for mesh / gen / light / strips / slab IO.
+# This arm boots a real world, lets the C++ lanes do real work (r4 mesh
+# build + gen), and proves (a) EVERY C++ usage counter advanced (the C++
+# series ran the whole world) and (b) every GDScript-reference sentinel
+# stayed ZERO (the game never touched the probe-only kernels). Light lane:
+# a plain boot lights entirely inside the C++ mesh workers (self-light —
+# the GDScript pull dispatch has no normal-boot callers), so the positive
+# proof is a torch glow source whose C++-landed eff (last_eff) must light
+# (torch_light > 5), plus the gd_pull_calls sentinel staying 0. Plus a
+# direct C++ slab-IO roundtrip: a real column encoded (the GDScript
+# encoder stays) and decoded through the runtime path (decode_column ->
+# C++ decode_slabs) must land byte-identical and advance the C++ decode
+# counter.
+func _nofallback_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var m0_mesh := int(world.mesh_cpp_builds)
+	var m0_gen := int(world.gen_cpp_works)
+	var m0_strips := int(world.strips_cpp_calls)
+	var m0_light := int(Lighting.cpp_pull_calls)
+	var m0_io := int(ChunkIO.cpp_slab_decodes)
+	var res := {
+		"ok": false,
+		"m0_mesh": m0_mesh,
+		"m0_gen": m0_gen,
+		"m0_strips": m0_strips,
+		"m0_light": m0_light,
+		"m0_io": m0_io,
+		"mesh_cpp_builds": 0,
+		"gen_cpp_works": 0,
+		"strips_cpp_calls": 0,
+		"light_cpp_pull_calls": 0,
+		"chunkio_cpp_slab_decodes": 0,
+		"gd_strips_calls": 0,
+		"gd_light_pull_calls": 0,
+		"mesh_chunks": 0,
+		"torch_placed": false,
+		"torch_light": 0,
+		"roundtrip_ok": false,
+		"wall_ms": 0,
+	}
+	world.fluid_sim_enabled = false
+	world.collision_enabled = false
+	world.render_radius = 4
+	world.recenter(spawn.x, spawn.z, true)
+	var waited := 0
+	var built := 0
+	while built < 16 and waited < 3600:
+		built = 0
+		for key in world.chunks:
+			var c = world.chunks.get(key)
+			if c != null and not c.data.is_empty() and c.mesh_built:
+				built += 1
+		if built >= 16:
+			break
+		await get_tree().physics_frame
+		waited += 1
+	res["mesh_chunks"] = built
+	# Force a glow-source light wave: place a torch (id 22, glow) on a
+	# surface air cell. A plain boot lights entirely inside the C++ mesh
+	# workers (self-light — the GDScript pull dispatch has no normal-boot
+	# callers), so a glow source + light_at read is the positive proof the
+	# C++ light lane works end-to-end; the gd_pull_calls sentinel (below)
+	# is the no-fallback proof that the GDScript pull kernel stayed dead.
+	var torch_placed := false
+	var torch_pos := Vector3i(0, 0, 0)
+	for key in world.chunks:
+		var c = world.chunks.get(key)
+		if c == null or c.data.is_empty() or not c.mesh_built:
+			continue
+		var wx := int(c.cx) * 16 + 8
+		var wz := int(c.cz) * 16 + 8
+		var gy := int(c.top) + 1
+		if world.get_block(wx, gy, wz) == 0:
+			world.set_block(wx, gy, wz, 22)
+			torch_placed = true
+			torch_pos = Vector3i(wx, gy, wz)
+			break
+	res["torch_placed"] = torch_placed
+	# Let the light wave settle (the worker remeshes the lit chunks).
+	var lp_waited := 0
+	while not world.light_pending.is_empty() and lp_waited < 1200:
+		await get_tree().physics_frame
+		lp_waited += 1
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var torch_light := 0
+	if torch_placed:
+		# Read the eff the C++ workers LANDED in the torch's chunk (the
+		# worker's self-light result — last_eff is the settled per-chunk
+		# eff store, indexed (y<<8)|(lz<<4)|lx local to the chunk).
+		var cchk = world.chunks.get(world._key(torch_pos.x / 16, torch_pos.z / 16))
+		if cchk != null and not cchk.last_eff.is_empty():
+			var lx := torch_pos.x - int(cchk.cx) * 16
+			var lz := torch_pos.z - int(cchk.cz) * 16
+			torch_light = int((cchk.last_eff["arr"] as PackedByteArray)[(torch_pos.y << 8) | (lz << 4) | lx])
+	res["torch_light"] = torch_light
+	# Direct C++ slab-IO roundtrip on one real column.
+	var rt_ok := false
+	for key in world.chunks:
+		var c = world.chunks.get(key)
+		if c == null or c.data.is_empty():
+			continue
+		var d: PackedByteArray = ChunkIO._slabs_flat(c.data)
+		var f: PackedByteArray = ChunkIO._slabs_flat(c.fl)
+		var before := int(ChunkIO.cpp_slab_decodes)
+		var rt: Dictionary = ChunkIO.decode_column(ChunkIO.encode_column(d, f, 0, Data.HEIGHT), 0, Data.HEIGHT)
+		rt_ok = not rt.is_empty() and (rt.get("data", PackedByteArray()) as PackedByteArray) == d and (rt.get("fl", PackedByteArray()) as PackedByteArray) == f and int(ChunkIO.cpp_slab_decodes) > before
+		break
+	res["roundtrip_ok"] = rt_ok
+	res["mesh_cpp_builds"] = int(world.mesh_cpp_builds) - m0_mesh
+	res["gen_cpp_works"] = int(world.gen_cpp_works) - m0_gen
+	res["strips_cpp_calls"] = int(world.strips_cpp_calls) - m0_strips
+	res["light_cpp_pull_calls"] = int(Lighting.cpp_pull_calls) - m0_light
+	res["chunkio_cpp_slab_decodes"] = int(ChunkIO.cpp_slab_decodes) - m0_io
+	res["gd_strips_calls"] = int(world.gd_strips_calls)
+	res["gd_light_pull_calls"] = int(Lighting.gd_pull_calls)
+	res["ok"] = res["mesh_cpp_builds"] > 0 and res["gen_cpp_works"] > 0 and res["strips_cpp_calls"] > 0 and res["chunkio_cpp_slab_decodes"] > 0 and res["gd_strips_calls"] == 0 and res["gd_light_pull_calls"] == 0 and res["mesh_chunks"] >= 16 and torch_placed and torch_light > 5 and rt_ok
+	res["wall_ms"] = Time.get_ticks_msec() - t0
+	Debug.result(res)
+	get_tree().quit()
+
+
 func _chunkiocpp_test(spawn: Vector3) -> void:
 	var res := {
 		"ok": false,
@@ -10631,11 +10756,18 @@ func _chunkiocpp_test(spawn: Vector3) -> void:
 		var dec_cpp = C.decode_section(enc_d_gd, 0, sub)
 		var fdec_gd = ChunkIO._decode_array_v4(enc_f_gd, 0, sub)
 		var fdec_cpp = C.decode_section(enc_f_gd, 0, sub)
-		var sl_gd = ChunkIO._decode_slabs_v4(enc_d_gd, 0, sub)
+		# AC-0208: the GDScript _decode_slabs_v4 was REMOVED — the slab check
+		# is the C++ decode_slabs vs the RUNTIME decode_column handoff (the
+		# v4 path lands the slab array through C++ inside decode_column) —
+		# the C++ counter must advance to prove the runtime is C++-backed.
 		var sl_cpp = C.decode_slabs(enc_d_gd, 0, sub)
+		var col_full: PackedByteArray = ChunkIO.encode_column(d, f, 0, Data.HEIGHT)
+		var dec_before := ChunkIO.cpp_slab_decodes
+		var rt: Dictionary = ChunkIO.decode_column(col_full, 0, Data.HEIGHT)
+		var rt_slabs: Array = rt.get("d_slabs", [])
 		var ok_d: bool = int(dec_gd["off"]) > 0 and dec_gd["arr"] == d and (dec_cpp["arr"] as PackedByteArray) == d and (dec_cpp["arr"] as PackedByteArray) == dec_gd["arr"] and int(dec_cpp["off"]) == int(dec_gd["off"])
 		var ok_f: bool = int(fdec_gd["off"]) > 0 and fdec_gd["arr"] == f and (fdec_cpp["arr"] as PackedByteArray) == f and (fdec_cpp["arr"] as PackedByteArray) == fdec_gd["arr"] and int(fdec_cpp["off"]) == int(fdec_gd["off"])
-		var ok_s := int(sl_gd["off"]) > 0 and int(sl_cpp["off"]) == int(sl_gd["off"]) and _ci_slabs_equal(sl_gd["slabs"], sl_cpp["slabs"]) and ChunkIO._slabs_flat(sl_cpp["slabs"]) == d
+		var ok_s := int(sl_cpp["off"]) > 0 and not rt.is_empty() and (rt.get("data", PackedByteArray()) as PackedByteArray) == d and _ci_slabs_equal(rt_slabs, sl_cpp["slabs"]) and ChunkIO._slabs_flat(sl_cpp["slabs"]) == d and ChunkIO.cpp_slab_decodes > dec_before
 		flat_pairs += 2
 		if ok_d:
 			flat_match += 1
@@ -10656,9 +10788,13 @@ func _chunkiocpp_test(spawn: Vector3) -> void:
 		for k in iters:
 			C.decode_section(enc_d_gd, 0, sub)
 		cpp_flat_ms += float(Time.get_ticks_usec() - t1) / 1000.0 / float(iters)
+		# AC-0208: no GDScript slab decode left to time — slab_gd_ms times
+		# the runtime decode_column (the C++-backed slab handoff), so
+		# slab_speedup is informational only (same C++ under both sides;
+		# the ratio is ~1 + handoff overhead).
 		t1 = Time.get_ticks_usec()
 		for k in iters:
-			ChunkIO._decode_slabs_v4(enc_d_gd, 0, sub)
+			ChunkIO.decode_column(col_full, 0, Data.HEIGHT)
 		gd_slab_ms += float(Time.get_ticks_usec() - t1) / 1000.0 / float(iters)
 		t1 = Time.get_ticks_usec()
 		for k in iters:

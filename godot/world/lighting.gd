@@ -16,23 +16,27 @@ static var _cross: PackedByteArray = PackedByteArray()
 static var _glow: PackedByteArray = PackedByteArray()
 static var _att: PackedByteArray = PackedByteArray()
 
-# AC-0189: C++ lighting toggle (gdext/src/lighting.cpp — the pull kernel +
+# AC-0189: C++ lighting (gdext/src/lighting.cpp — the pull kernel +
 # bucket-16 flood + boundary injection, LOSSLESS port of this file's
 # compute_light_flat_chunk_pull path). Workers pass the slab array + strips
 # + the pre-warmed _att/_glow as value copies (no Data/Game on the worker).
-# AWECRAFT_LIGHTCPP=0 forces the GDScript path (fallback / A-B);
-# AWECRAFT_LIGHTCPP=1 or unset = C++ whenever the gdext library registered
-# AweLighting.
+# AC-0208: the C++ extension is REQUIRED — the AWECRAFT_LIGHTCPP kill switch
+# was removed; AweLighting is the only pull path (Game._ready fails fast if
+# the library is missing).
 static var _light_cpp: Variant = null
 static var _light_cpp_done := false
+# AC-0208: no-fallback evidence (the nofallback arm asserts both: the C++
+# counter grows, the GDScript sentinel stays 0).
+static var cpp_pull_calls := 0
+static var gd_pull_calls := 0
 
 static func light_cpp() -> Variant:
 	if not _light_cpp_done:
 		_light_cpp_done = true
-		if OS.get_environment("AWECRAFT_LIGHTCPP") == "0":
-			_light_cpp = null
-		elif ClassDB.class_exists("AweLighting"):
+		if ClassDB.class_exists("AweLighting"):
 			_light_cpp = ClassDB.instantiate("AweLighting")
+		else:
+			push_error("AWECRAFT: AweLighting C++ class not registered — the gdext library is missing (AC-0208: the C++ extension is REQUIRED, no GDScript light fallback).")
 	return _light_cpp
 
 
@@ -371,11 +375,10 @@ static func compute_light_flat_chunk(data, cx: int, cz: int, h: int) -> Dictiona
 #
 # AC-0210: THE PULL DISPATCH. This entry is what the runtime pull path runs
 # (build_mesh on chunk-border crossing — the light hitch — compute_light_flat,
-# the probes). It dispatches to the C++ AweLighting.compute_chunk_pull
-# (gdext/src/lighting.cpp, AC-0189 — the bucket-16 flood + the UN-gated
-# _chunk_blk_inject port) whenever the gdext library registered the class,
-# and falls back to _pull_kernel_gd below (the AC-0129/AC-0197 body VERBATIM)
-# when AWECRAFT_LIGHTCPP=0 or the library is not loaded. Inputs are value
+# the probes). AC-0208: C++-ONLY — the AWECRAFT_LIGHTCPP kill switch and the
+# _pull_kernel_gd fallback line were removed; the entry always calls the C++
+# AweLighting.compute_chunk_pull (gdext/src/lighting.cpp, AC-0189 — the
+# bucket-16 flood + the UN-gated _chunk_blk_inject port). Inputs are value
 # copies the caller owns (slab array + strips + the pre-warmed _att/_glow
 # tables — no Data/Game deref inside the C++ call, which is synchronous).
 # LOSSLESS: AWECRAFT_LOGIC=pullprobe compares the wired entry against
@@ -383,20 +386,20 @@ static func compute_light_flat_chunk(data, cx: int, cz: int, h: int) -> Dictiona
 # and the top-clamped form) — gate 100% exact.
 static func compute_light_flat_chunk_pull(data, cx: int, cz: int, h: int, eff_strips: Array, blk_strips: Array, blk_strips_b: Array, top := -1, dviews: Variant = null) -> Dictionary:
 	_tables() # idempotent no-op once warm (world._ready); the C++ call needs _att/_glow
-	var lc: Variant = light_cpp()
-	if lc != null:
-		# AC-0210: C++ pull — the kernel materializes its own slab views
-		# (byte-identical decode), so the dviews hint is a GDScript-kernel
-		# optimization the native path does not need.
-		return lc.compute_chunk_pull(data, cx, cz, h, eff_strips, blk_strips, blk_strips_b, top, _att, _glow)
-	return _pull_kernel_gd(data, cx, cz, h, eff_strips, blk_strips, blk_strips_b, top, dviews)
+	cpp_pull_calls += 1
+	# AC-0210: C++ pull — the kernel materializes its own slab views
+	# (byte-identical decode); the dviews hint was a GDScript-kernel
+	# optimization the native path does not need.
+	return light_cpp().compute_chunk_pull(data, cx, cz, h, eff_strips, blk_strips, blk_strips_b, top, _att, _glow)
 
 
 # AC-0210: the GDScript pull kernel — the AC-0129/AC-0197 body of
-# compute_light_flat_chunk_pull VERBATIM. Kept as the AWECRAFT_LIGHTCPP=0
-# fallback and the pullprobe reference (the C++ dispatch above is a
-# drop-in replacement verified byte-identical by the probe).
+# compute_light_flat_chunk_pull VERBATIM. AC-0208: the game never calls
+# this anymore (the C++ path is the only pull lane) — it SURVIVES SOLELY as
+# the pullprobe/lightprobe A/B reference (gd_pull_counts is a no-fallback
+# sentinel: any game-side call would trip the nofallback arm).
 static func _pull_kernel_gd(data, cx: int, cz: int, h: int, eff_strips: Array, blk_strips: Array, blk_strips_b: Array, top := -1, dviews: Variant = null) -> Dictionary:
+	gd_pull_calls += 1
 	# AC-0197: rows above the column's top (max non-air y) are ALL air — open
 	# sky, so eff == 15 there and nothing below can raise them above 15. The
 	# scan/floods run only on rows 0..top (block glow bleeds 14 up from a

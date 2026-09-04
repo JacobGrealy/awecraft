@@ -15,6 +15,24 @@ const LEGACY_VERSION := 1
 const MODE := 0
 const S := 16
 const S3 := 4096
+# AC-0208: the v4 paletted slab DECODE is C++-only (gdext/src/chunk_io.cpp —
+# ChunkIOPalette.decode_slabs, byte-identical to the removed GDScript
+# _decode_slabs_v4, verified by the chunkiocpp arm). The game requires the
+# extension (Game._ready fails fast if it is missing); io_cpp() never returns
+# a silent null. cpp_slab_decodes counts runtime C++ slab decodes (the
+# nofallback arm asserts it after a disk round-trip).
+static var _io_cpp: Variant = null
+static var _io_cpp_done := false
+static var cpp_slab_decodes := 0
+
+static func io_cpp() -> Variant:
+	if not _io_cpp_done:
+		_io_cpp_done = true
+		if ClassDB.class_exists("ChunkIOPalette"):
+			_io_cpp = ClassDB.instantiate("ChunkIOPalette")
+		else:
+			push_error("AWECRAFT: ChunkIOPalette C++ class not registered — the gdext library is missing (AC-0208: the C++ extension is REQUIRED, no GDScript decode fallback).")
+	return _io_cpp
 const M0 := 65
 const M1 := 87
 const M2 := 67
@@ -202,8 +220,11 @@ static func decode_column(file_bytes: PackedByteArray, seed: int, height: int) -
 		# directly (the wire form IS the slab form) — the main thread skips
 		# the flat expansion + re-palettize (~35 ms/col). The flat arrays
 		# stay in res for the v1-v3 path, the chunkio arm, and probes.
-		var ds := _decode_slabs_v4(blob, de_at, sub)
-		var fs := _decode_slabs_v4(blob, fe_at, sub)
+		# AC-0208: the slab decode is the C++ ChunkIOPalette (the GDScript
+		# _decode_slabs_v4 was removed — no fallback).
+		var ds: Dictionary = io_cpp().decode_slabs(blob, de_at, sub)
+		var fs: Dictionary = io_cpp().decode_slabs(blob, fe_at, sub)
+		cpp_slab_decodes += 2
 		if int(ds["off"]) != fe_sz_at or int(fs["off"]) != fe_at + fe_size:
 			return fail
 		res["d_slabs"] = ds["slabs"]
@@ -615,143 +636,11 @@ static func _decode_array_v4(blob: PackedByteArray, off: int, sub: int) -> Dicti
 		i += 1
 	return {"arr": out, "off": o}
 
-# AC-0203 recenter fix: non-zero cell count of a paletted slab's packed
-# index stream (per-bits byte-parallel, same shape as _slab_unpack but
-# counts instead of emitting). Used by _decode_slabs_v4 so a v4 disk load
-# can skip the flat expansion + re-palettize round trip on the main thread.
-static func _slab_nz(i: PackedByteArray, bits: int, p: PackedByteArray) -> int:
-	var cnt := 0
-	if bits == 1:
-		for k in range(i.size()):
-			var b: int = i[k]
-			cnt += 8 - _popcount1(b, p)
-	elif bits == 2:
-		for k in range(i.size()):
-			var b: int = i[k]
-			cnt += 4 - _popcount2(b, p)
-	elif bits == 3:
-		var nb: int = i.size()
-		var k := 0
-		while k < nb:
-			var w: int = int(i[k]) << 16
-			if k + 1 < nb:
-				w |= int(i[k + 1]) << 8
-			if k + 2 < nb:
-				w |= int(i[k + 2])
-			for r in range(8):
-				if p[(w >> (21 - r * 3)) & 7] != 0:
-					cnt += 1
-			k += 3
-	elif bits == 4:
-		for k in range(i.size()):
-			var b: int = i[k]
-			if p[(b >> 4) & 15] != 0:
-				cnt += 1
-			if p[b & 15] != 0:
-				cnt += 1
-	else:
-		var j := 0
-		while j < S3:
-			if p[_slab_getbits(i, bits, j)] != 0:
-				cnt += 1
-			j += 1
-	return cnt
-
-
-static func _popcount1(b: int, p: PackedByteArray) -> int:
-	var c := 0
-	for r in range(8):
-		if p[(b >> (7 - r)) & 1] == 0:
-			c += 1
-	return c
-
-
-static func _popcount2(b: int, p: PackedByteArray) -> int:
-	var c := 0
-	for r in range(4):
-		if p[(b >> (6 - r * 2)) & 3] == 0:
-			c += 1
-	return c
-
-
-# AC-0203 recenter fix: v4 sections decoded straight into the slab array
-# (the runtime twin of the wire form): present slabs become {n,b,p,i,nz}
-# dicts (the packed index bytes ARE the slab's i — no unpack/repack),
-# absent slabs stay null. nz is counted during the pass. Fail-closed like
-# _decode_array_v4 (same structural checks + the same final offset).
-static func _decode_slabs_v4(blob: PackedByteArray, off: int, sub: int) -> Dictionary:
-	var out: Array = []
-	var i := 0
-	while i < sub:
-		out.append(null)
-		i += 1
-	var o := off
-	if o >= blob.size():
-		return {"slabs": out, "off": 0}
-	var np := blob[o]
-	o += 1
-	if np > sub:
-		return {"slabs": out, "off": 0}
-	var idxs: Array = []
-	i = 0
-	while i < np:
-		if o + 1 >= blob.size():
-			return {"slabs": out, "off": 0}
-		var si := _u16r(blob, o)
-		o += 2
-		if si < 0 or si >= sub or idxs.has(si):
-			return {"slabs": out, "off": 0}
-		idxs.append(si)
-		i += 1
-	i = 0
-	while i < np:
-		var si2 := int(idxs[i])
-		if o + 1 >= blob.size():
-			return {"slabs": out, "off": 0}
-		var n := blob[o]
-		o += 1
-		var bits := blob[o]
-		o += 1
-		if n == 0:
-			if bits != 8 or o + S3 > blob.size():
-				return {"slabs": out, "off": 0}
-			var raw := blob.slice(o, o + S3)
-			var nz := 0
-			var j := 0
-			while j < S3:
-				if raw[j] != 0:
-					nz += 1
-				j += 1
-			if nz > 0:
-				out[si2] = {"n": 0, "b": 8, "p": PackedByteArray(), "i": raw, "nz": nz}
-			o += S3
-		elif n == 1:
-			if bits != 0 or o + 1 > blob.size():
-				return {"slabs": out, "off": 0}
-			var fillv: int = blob[o]
-			o += 1
-			if fillv != 0:
-				out[si2] = {"n": 1, "b": 0, "p": PackedByteArray([fillv]), "i": PackedByteArray(), "nz": S3}
-		else:
-			if n > 16 or bits != _slab_bits_for(n) or o + n > blob.size():
-				return {"slabs": out, "off": 0}
-			var p := PackedByteArray()
-			var j := 0
-			while j < n:
-				p.append(blob[o])
-				o += 1
-				j += 1
-			var nbytes := (S3 * bits + 7) / 8
-			if o + nbytes > blob.size():
-				return {"slabs": out, "off": 0}
-			var packed := blob.slice(o, o + nbytes)
-			var nz2 := _slab_nz(packed, bits, p)
-			if nz2 > 0:
-				out[si2] = {"n": n, "b": bits, "p": p, "i": packed, "nz": nz2}
-			o += nbytes
-		i += 1
-	return {"slabs": out, "off": o}
-
+# AC-0208: the GDScript v4 slab decode (_decode_slabs_v4 + _slab_nz +
+# _popcount1/2) was REMOVED — the runtime slab decode is the C++
+# ChunkIOPalette.decode_slabs (see io_cpp() above), byte-identical (the
+# chunkiocpp arm compares the C++ decode against the runtime decode_column
+# handoff).
 
 # AC-0203: in-memory slab representation (the runtime twin of the v4 wire
 # form). A slab is null (all air) or a Dictionary {n, b, p, i, nz}:

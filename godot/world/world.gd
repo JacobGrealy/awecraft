@@ -183,6 +183,15 @@ var gen_ms_total := 0.0
 var chunk_origin := {}
 var _save_queue: Array = []
 var _gen_last_disk := false
+# AC-0208: no-fallback evidence (the C++ series is the ONLY path now).
+# The C++ counters must grow in any real world; the GDScript sentinels
+# (gd_*) count calls into the pure GDScript kernels that SURVIVE solely as
+# the harness A/B-probe references (stripsprobe/pullprobe) — the game must
+# never touch them (the nofallback arm asserts they stay 0).
+var mesh_cpp_builds := 0
+var gen_cpp_works := 0
+var strips_cpp_calls := 0
+var gd_strips_calls := 0
 # AC-0164: threaded column I/O on the threadgen pool (the per-tid slot +
 # stale-drop handoff pattern, _tg_slots/_tm_slots). The main thread only
 # enqueues (evict save, data-landing read) and polls (io_poll); encode,
@@ -1191,7 +1200,9 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	# x ~125 ms of main-thread gen that paced the drain and made the
 	# spawn-3x3 ~1 s target unreachable (measured 11.7 s). All other chunks
 	# threadgen through the identical handoff (data/init_fl/edits, stale-drop,
-	# dedup — proven at r50 in AC-0082 G4: gen_ms −98%).
+	# dedup — proven at r50 in AC-0082 G4: gen_ms −98%). AC-0208: the sync
+	# gen runs the C++ generator (WorldGen.generate = AweGen.generate_flat);
+	# the GDScript gen fallback was removed — there is no non-C++ gen path.
 	if threadgen and (cx != 0 or cz != 0):
 		threadgen_enqueue(cx, cz, _key(cx, cz), c.get_instance_id())
 		if timing:
@@ -1270,16 +1281,12 @@ func _threadgen_worker() -> void:
 	# AC-0203 recenter fix: worker-side palettize (same as the burst worker)
 	# — the drain's main-thread handoff is a reference slab landing.
 	# AC-0188: C++ generation (coarse 3D density) — the worker gets the
-	# palettized slabs straight from C++; the GDScript path stays as the
-	# fallback (AWECRAFT_GENCPP=0 or the library not loaded).
+	# palettized slabs straight from C++. AC-0208: C++-ONLY — the AWECRAFT_
+	# GENCPP kill switch and the GDScript generate_args fallback were
+	# removed (the C++ extension is required).
 	var g: Variant = WorldGen.gen_cpp()
-	var resl: Array
-	if g != null:
-		resl = g.generate_resl(int(a[0]), int(a[1]), int(a[2]), int(a[3]), int(a[4]))
-	else:
-		var d := WorldGen.generate_args(int(a[0]), int(a[1]), int(a[2]), int(a[3]), int(a[4]))
-		var nsl2 := ChunkScript.slab_n()
-		resl = [ChunkIO.palettize_flat(d, nsl2), ChunkIO.empty_slabs(nsl2)]
+	var resl: Array = g.generate_resl(int(a[0]), int(a[1]), int(a[2]), int(a[3]), int(a[4]))
+	gen_cpp_works += 1
 	if timing:
 		print("TGENW %d,%d wms=%d spin=%d cc=%d wait=%d t=%d" % [int(a[0]), int(a[1]), Time.get_ticks_msec() - wt, ns, _tg_concur, wt - int(entry.get("tenq", wt)), Time.get_ticks_msec()])
 		_tg_concur -= 1
@@ -1300,15 +1307,12 @@ func _startup_gen_worker(i: int) -> void:
 	# AC-0203 recenter fix: palettize on the worker — the main-thread burst
 	# handoff becomes a reference slab landing (the flat column never hits
 	# the main thread).
-	# AC-0188: C++ generation when available (same toggle as threadgen).
+	# AC-0188: C++ generation (same path as threadgen). AC-0208: C++-ONLY —
+	# the GDScript generate_args fallback was removed (the C++ extension is
+	# required).
 	var g: Variant = WorldGen.gen_cpp()
-	var resl: Array
-	if g != null:
-		resl = g.generate_resl(int(e[1]), int(e[2]), int(e[4]), int(e[5]), int(e[6]))
-	else:
-		var gdat := WorldGen.generate_args(int(e[1]), int(e[2]), int(e[4]), int(e[5]), int(e[6]))
-		var nsl := ChunkScript.slab_n()
-		resl = [ChunkIO.palettize_flat(gdat, nsl), ChunkIO.empty_slabs(nsl)]
+	var resl: Array = g.generate_resl(int(e[1]), int(e[2]), int(e[4]), int(e[5]), int(e[6]))
+	gen_cpp_works += 1
 	_startup_gen_slots[i] = resl
 	if timing:
 		print("GENBURSTW %d,%d wms=%d t=%d" % [int(e[1]), int(e[2]), (Time.get_ticks_usec() - wbt) / 1000, Time.get_ticks_msec()])
@@ -1446,18 +1450,17 @@ func _tm_worker_run(skey: int) -> void:
 		if _tm_concur > _tm_concur_peak:
 			_tm_concur_peak = _tm_concur
 	# AC-0190: C++ meshing (gdext/src/mesh.cpp — AweMesh.build_accs, the
-	# LOSSLESS port of ChunkScript.build_accs: slab decode (paletted slabs
-	# unpacked in C++), bake box, snap, ro scan, greedy merged emit). The
-	# worker passes the same value-copy inputs (data/fl/nbs/ctx/ms/eff) +
-	# the pre-warmed _att/_glow tables (the C++ path self-lights an empty
-	# eff through the SAME C++ pull kernel — awelight::pull). AWECRAFT_
-	# MESHCPP=0 or the library not loaded = the GDScript path (fallback).
+	# LOSSLESS port of the GDScript build_accs pipeline: slab decode
+	# (paletted slabs unpacked in C++), bake box, snap, ro scan, greedy
+	# merged emit). The worker passes the same value-copy inputs
+	# (data/fl/nbs/ctx/ms/eff) + the pre-warmed _att/_glow tables (the C++
+	# path self-lights an empty eff through the SAME C++ pull kernel —
+	# awelight::pull). AC-0208: C++-ONLY — the AWECRAFT_MESHCPP kill switch
+	# and the GDScript build_accs fallback were removed (the C++ extension
+	# is required).
 	var mc: Variant = ChunkScript.mesh_cpp()
-	var res: Dictionary
-	if mc != null:
-		res = mc.build_accs(entry["data"], entry["fl"], int(entry["cx"]), int(entry["cz"]), entry["nbs"], entry["ctx"], entry["ms"], entry["eff"], int(entry.get("si0", 0)), int(entry.get("si1", -1)), int(entry.get("d_off", 0)), Lighting._att, Lighting._glow)
-	else:
-		res = ChunkScript.build_accs(entry["data"], entry["fl"], int(entry["cx"]), int(entry["cz"]), entry["nbs"], entry["ctx"], entry["ms"], entry["eff"], int(entry.get("si0", 0)), int(entry.get("si1", -1)), int(entry.get("d_off", 0)))
+	var res: Dictionary = mc.build_accs(entry["data"], entry["fl"], int(entry["cx"]), int(entry["cz"]), entry["nbs"], entry["ctx"], entry["ms"], entry["eff"], int(entry.get("si0", 0)), int(entry.get("si1", -1)), int(entry.get("d_off", 0)), Lighting._att, Lighting._glow)
+	mesh_cpp_builds += 1
 	if timing:
 		_tm_concur -= 1
 	if bool(entry.get("epool", false)):
@@ -1586,19 +1589,12 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		# AC-0203: rows compared value-wise (256 B windows) — same coverage
 		# as the old flat slice, extracted from the slab store.
 		# AC-0211: the row windows are decoded in C++ (rows_eq — no 4096
-		# flat materialization per row) when the C++ lane is live; the
-		# verdict is byte-identical to the GDScript row loop.
+		# flat materialization per row). AC-0208: C++-ONLY — the GDScript
+		# row-loop fallback (mc2==null) was removed.
 		var dlo := int(e["d_off"])
 		var dhin := int(e["d_hi"])
 		var mc2: Variant = ChunkScript.mesh_cpp()
-		if mc2 != null:
-			stale = not (mc2.rows_eq(c.data, e["data"], dlo, dhin) and mc2.rows_eq(c.fl, e["fl"], dlo, dhin))
-		else:
-			var y := dlo
-			while y <= dhin and not stale:
-				if c.row_bytes(y) != ChunkScript._slabs_row(e["data"], y) or c.fl_row_bytes(y) != ChunkScript._slabs_row(e["fl"], y):
-					stale = true
-				y += 1
+		stale = not (mc2.rows_eq(c.data, e["data"], dlo, dhin) and mc2.rows_eq(c.fl, e["fl"], dlo, dhin))
 	else:
 		stale = int(c.data_gen) != int(e["stamp"][0]) or int(c.fl_gen) != int(e["stamp"][1])
 	if stale:
@@ -1807,9 +1803,10 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 	# AC-0203: scoped entries carry FULL slab copies (~20 KB/col, not 192 KB
 	# flat) — the worker reads only rows si0..si1, and the handoff stale
 	# check value-compares the same rows it extracted at dispatch.
-	# AC-0211: the nbs snapshot is the C++ compact ring (256 B/slab) when
-	# the C++ lane is live — the scoped stale check below uses rows_eq on
-	# the SAME paletted shape.
+	# AC-0211: the nbs snapshot is the C++ compact ring (256 B/slab) — the
+	# scoped stale check below uses rows_eq on the SAME paletted shape.
+	# AC-0208: C++-ONLY — the GDScript deep-copy nbs (the mc==null fallback)
+	# was removed.
 	var nbs: Dictionary = {}
 	var mc: Variant = ChunkScript.mesh_cpp()
 	for dx in range(-1, 2):
@@ -1819,10 +1816,7 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 			var nc = chunks.get(_key(cx + dx, cz + dz))
 			if nc == null or nc.data.is_empty():
 				return false
-			if mc != null:
-				nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz)
-			else:
-				nbs["%d,%d" % [dx, dz]] = {"d": ChunkIO._slabs_deepcopy(nc.data), "f": ChunkIO._slabs_deepcopy(nc.fl)}
+			nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz)
 	var tn1 := Time.get_ticks_usec()
 	var ms_w: Dictionary
 	if not _tm_ms_full.rects.is_empty():
@@ -1840,11 +1834,11 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 	if int(c.band) == 2:
 		ctx_w["coarse"] = true
 		ctx_w["uv_scale"] = 2
-	# AC-0211: own-column value-copy via C++ when the C++ lane is live.
+	# AC-0211: own-column value-copy via C++ (AC-0208: the only lane).
 	var entry := {
 		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(),
-		"data": mc.slab_copy(c.data) if mc != null else ChunkIO._slabs_deepcopy(c.data),
-		"fl": mc.slab_copy(c.fl) if mc != null else ChunkIO._slabs_deepcopy(c.fl),
+		"data": mc.slab_copy(c.data),  # AC-0208: C++-only value copy (the GDScript _slabs_deepcopy fallback is gone)
+		"fl": mc.slab_copy(c.fl),
 		"stamp": c.stamp(),
 		"band": int(c.band),
 		"nbs": nbs, "eff": fast_eff, "eff_trust": false,
@@ -1947,17 +1941,13 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 				_stage_check(c, key)
 				_bd_log(cx, cz)
 				return true
-			if mc != null:
-				# AC-0211: C++ compact snap ring (256 B/slab, the boundary
-				# slice only) — replaces the per-neighbor _slabs_deepcopy of
-				# all 24 slabs; the C++ build_accs consumes it directly and
-				# the worker never sees live neighbor state (the ring is a
-				# main-thread value snapshot).
-				nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz)
-			else:
-				# AC-0203: slab deep-copies (~20 KB/col) — the worker never sees
-				# live chunk state.
-				nbs["%d,%d" % [dx, dz]] = {"d": ChunkIO._slabs_deepcopy(nc.data), "f": ChunkIO._slabs_deepcopy(nc.fl)}
+			# AC-0211: C++ compact snap ring (256 B/slab, the boundary
+			# slice only) — replaces the per-neighbor _slabs_deepcopy of
+			# all 24 slabs; the C++ build_accs consumes it directly and
+			# the worker never sees live neighbor state (the ring is a
+			# main-thread value snapshot). AC-0208: C++-ONLY — the GDScript
+			# deep-copy nbs (the mc==null fallback) was removed.
+			nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz)
 	if _tm_inflight_keys.has(key):
 		_tm_dedup += 1
 		if _tm_debug:
@@ -2014,13 +2004,13 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 		# coarse out to R; band 1 (taxi 5-12) now builds full like band 0.
 		ctx_w["coarse"] = true
 		ctx_w["uv_scale"] = 2
-	# AC-0211: the own-column value-copy goes through C++ when the C++
-	# lane is live (the same copy, native speed; the worker + the handoff
-	# stale check consume the same paletted shape).
+	# AC-0211: the own-column value-copy goes through C++ (AC-0208: the
+	# only lane — the worker + the handoff stale check consume the same
+	# paletted shape).
 	var entry := {
 		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(),
-		"data": mc.slab_copy(c.data) if mc != null else ChunkIO._slabs_deepcopy(c.data),
-		"fl": mc.slab_copy(c.fl) if mc != null else ChunkIO._slabs_deepcopy(c.fl),
+		"data": mc.slab_copy(c.data),  # AC-0208: C++-only value copy (the GDScript _slabs_deepcopy fallback is gone)
+		"fl": mc.slab_copy(c.fl),
 		"stamp": c.stamp(),
 		"band": int(c.band),
 		"nbs": nbs, "eff": eff, "eff_trust": eff_trust,
@@ -2533,13 +2523,17 @@ func _rebuild_qb() -> void:
 # web sky rule index.html:1013-1021). Neighbor missing/never lit -> empty
 # (0-length) arrays: bake margin stays 0, no injection from that side.
 #
-# AC-0207: C++ strips toggle (gdext/src/strips.cpp — AweStrips, the LOSSLESS
-# port of the strip compute: _side_blk_strip's slab cell reads decode in C++
+# AC-0207: C++ strips (gdext/src/strips.cpp — AweStrips, the LOSSLESS port
+# of the strip compute: _side_blk_strip's slab cell reads decode in C++
 # [free int lookup] instead of the GDScript ChunkIO._slab_getbits per cell —
 # 24k Variant calls / dispatch = the 74 ms idle hitch; the face compute rides
-# the same C++ flood/inject kernels as the pull path). AWECRAFT_STRIPSCPP=0
-# forces the GDScript path (the fallbacks below stay intact); =1/unset = C++
-# whenever the gdext library registered AweStrips.
+# the same C++ flood/inject kernels as the pull path). AC-0208: the C++
+# extension is REQUIRED — the AWECRAFT_STRIPSCPP kill switch and the
+# GDScript strip-compute branch were removed; AweStrips is the only strip
+# path (Game._ready fails fast if the library is missing). The GDScript
+# strip kernels (_side_eff_strip/_side_blk_strip/_corner_eff_strip/
+# _compute_face_blk_gd) SURVIVE solely as the stripsprobe A/B references
+# (gd_strips_calls is the no-fallback sentinel for them).
 var _strips_cpp: Variant = null
 var _strips_cpp_done := false
 
@@ -2547,70 +2541,45 @@ var _strips_cpp_done := false
 func _strips_cpp_inst() -> Variant:
 	if not _strips_cpp_done:
 		_strips_cpp_done = true
-		if OS.get_environment("AWECRAFT_STRIPSCPP") == "0":
-			_strips_cpp = null
-		elif ClassDB.class_exists("AweStrips"):
+		if ClassDB.class_exists("AweStrips"):
 			_strips_cpp = ClassDB.instantiate("AweStrips")
+		else:
+			push_error("AWECRAFT: AweStrips C++ class not registered — the gdext library is missing (AC-0208: the C++ extension is REQUIRED, no GDScript strips fallback).")
 	return _strips_cpp
 
 
 func _strips_for(cx: int, cz: int) -> Dictionary:
 	var h: int = Data.HEIGHT
-	var sc: Variant = _strips_cpp_inst()
-	if sc != null:
-		# AC-0207: C++ strips (gdext/src/strips.cpp). The neighbor lookups +
-		# the memoized face strips (_face_of) stay in GDScript — World owns
-		# the chunks map + the _face_blk cache; the compute (eff gathers + v
-		# channel slab decode + b copy + corners) is native and
-		# byte-identical (stripsprobe: 100% exact vs the GDScript path).
-		Lighting._tables()
-		var sides: Array = []
-		for s in [[1, 0], [-1, 0], [0, 1], [0, -1]]:
-			var nc = chunks.get(_key(cx + int(s[0]), cz + int(s[1])))
-			var sd: Dictionary = {"data": [], "eff": PackedByteArray(), "face": PackedByteArray(), "have": false}
-			if nc != null and not nc.data.is_empty() and not nc.last_eff.is_empty():
-				sd["data"] = nc.data
-				sd["eff"] = nc.last_eff["arr"]
-				sd["face"] = _face_of(nc, _shared_face(int(s[0]), int(s[1])))
-				sd["have"] = true
-			sides.append(sd)
-		var corners: Array = []
-		for s in [[1, 1], [-1, 1], [1, -1], [-1, -1]]:
-			var nc = chunks.get(_key(cx + int(s[0]), cz + int(s[1])))
-			var cd: Dictionary = {"eff": PackedByteArray(), "have": false}
-			if nc != null and not nc.data.is_empty() and not nc.last_eff.is_empty():
-				cd["eff"] = nc.last_eff["arr"]
-				cd["have"] = true
-			corners.append(cd)
-		return sc.compute_strips(sides, corners, h, Lighting._att, Lighting._glow)
-	var effs: Array = []
-	var blks: Array = []
-	var blks_b: Array = []
-	var sides := [[1, 0], [-1, 0], [0, 1], [0, -1]]
-	for s in sides:
+	# AC-0207: C++ strips (gdext/src/strips.cpp). The neighbor lookups + the
+	# memoized face strips (_face_of) stay in GDScript — World owns the
+	# chunks map + the _face_blk cache; the compute (eff gathers + v channel
+	# slab decode + b copy + corners) is native and byte-identical
+	# (stripsprobe: 100% exact vs the GDScript reference).
+	Lighting._tables()
+	var sides: Array = []
+	for s in [[1, 0], [-1, 0], [0, 1], [0, -1]]:
 		var nc = chunks.get(_key(cx + int(s[0]), cz + int(s[1])))
-		var e := PackedByteArray()
-		var b := PackedByteArray()
+		var sd: Dictionary = {"data": [], "eff": PackedByteArray(), "face": PackedByteArray(), "have": false}
 		if nc != null and not nc.data.is_empty() and not nc.last_eff.is_empty():
-			e = _side_eff_strip(nc, int(s[0]), int(s[1]), h)
-			var sb: Dictionary = _side_blk_strip(nc, int(s[0]), int(s[1]), h)
-			b = sb["v"]
-			blks_b.append(sb["b"])
-		else:
-			blks_b.append(PackedByteArray())
-		effs.append(e)
-		blks.append(b)
-	var corners := [[1, 1], [-1, 1], [1, -1], [-1, -1]]
-	for s in corners:
+			sd["data"] = nc.data
+			sd["eff"] = nc.last_eff["arr"]
+			sd["face"] = _face_of(nc, _shared_face(int(s[0]), int(s[1])))
+			sd["have"] = true
+		sides.append(sd)
+	var corners: Array = []
+	for s in [[1, 1], [-1, 1], [1, -1], [-1, -1]]:
 		var nc = chunks.get(_key(cx + int(s[0]), cz + int(s[1])))
-		var e := PackedByteArray()
+		var cd: Dictionary = {"eff": PackedByteArray(), "have": false}
 		if nc != null and not nc.data.is_empty() and not nc.last_eff.is_empty():
-			e = _corner_eff_strip(nc, int(s[0]), int(s[1]), h)
-		effs.append(e)
-	return {"eff": effs, "blk": blks, "blk_b": blks_b}
+			cd["eff"] = nc.last_eff["arr"]
+			cd["have"] = true
+		corners.append(cd)
+	strips_cpp_calls += 1
+	return _strips_cpp_inst().compute_strips(sides, corners, h, Lighting._att, Lighting._glow)
 
 
 func _side_eff_strip(nc: Node3D, dx: int, dz: int, h: int) -> PackedByteArray:
+	gd_strips_calls += 1  # AC-0208: no-fallback sentinel — the game never calls this (C++ AweStrips is the only strip lane); stripsprobe only
 	# c=0 the column directly across our boundary, c=1 the next; t = our z
 	# (E/W) or our x (S/N). 2*16*h bytes, idx = c*(16*h) + y*16 + t.
 	# AC-0091: sized by h (was hard-coded 2560 = H=80).
@@ -2757,8 +2726,9 @@ func _compute_face_blk(c: Node3D) -> Array:
 	# 2*16*h-wide faces (AC-0091; was 2560 at H=80): c=0 half = face row
 	# (the inject half), c=1 zero.
 	# AC-0207: the neighbor-face fetch (the recursive _face_of pulls, under
-	# the in-flight cycle guard) is shared by the C++ and GDScript computes
-	# below — both run on the SAME captured strips.
+	# the in-flight cycle guard) feeds the C++ face compute on captured
+	# strips. AC-0208: C++-ONLY — the _compute_face_blk_gd fallback line was
+	# removed (it survives solely as the stripsprobe A/B reference).
 	var h: int = Data.HEIGHT
 	var fk0: String = _key(int(c.cx), int(c.cz))
 	_face_blk_inflight[fk0] = true
@@ -2771,16 +2741,14 @@ func _compute_face_blk(c: Node3D) -> Array:
 			st = _face_of(nc, _shared_face(int(s[0]), int(s[1])))
 		strips.append(st)
 	_face_blk_inflight.erase(fk0)
-	var sc: Variant = _strips_cpp_inst()
-	if sc != null:
-		# AC-0207: C++ face compute (gdext/src/strips.cpp) — the glow
-		# palette probe + flat expand + flood + inject through the SAME C++
-		# kernels the pull path runs (byte-identical to the GDScript below;
-		# stripsprobe face gate).
-		Lighting._tables()
-		var r: Dictionary = sc.compute_face(c.data, h, Lighting._att, Lighting._glow, strips[0], strips[1], strips[2], strips[3])
-		return r["faces"]
-	return _compute_face_blk_gd(c, h, strips)
+	# AC-0207: C++ face compute (gdext/src/strips.cpp) — the glow
+	# palette probe + flat expand + flood + inject through the SAME C++
+	# kernels the pull path runs (byte-identical to the GDScript reference;
+	# stripsprobe face gate).
+	Lighting._tables()
+	var r: Dictionary = _strips_cpp_inst().compute_face(c.data, h, Lighting._att, Lighting._glow, strips[0], strips[1], strips[2], strips[3])
+	strips_cpp_calls += 1
+	return r["faces"]
 
 
 func _compute_face_blk_gd(c: Node3D, h: int, strips: Array) -> Array:
@@ -2843,6 +2811,7 @@ func _compute_face_blk_gd(c: Node3D, h: int, strips: Array) -> Array:
 
 
 func _side_blk_strip(nc: Node3D, dx: int, dz: int, h: int) -> Dictionary:
+	gd_strips_calls += 1  # AC-0208: no-fallback sentinel — stripsprobe reference only (game uses C++ AweStrips)
 	# fix-7: TWO channels (AC-0129 wiring, sound content):
 	#   v (the eff import): the neighbor boundary cell's TRUE light with the
 	#   sky part DATA-ONLY (AC-0129 "sky carry", verbatim formula): source
@@ -3005,6 +2974,7 @@ func _side_blk_strip(nc: Node3D, dx: int, dz: int, h: int) -> Dictionary:
 
 
 func _corner_eff_strip(nc: Node3D, dx: int, dz: int, h: int) -> PackedByteArray:
+	gd_strips_calls += 1  # AC-0208: no-fallback sentinel — stripsprobe reference only (game uses C++ AweStrips)
 	# a = x-depth (0 = directly across), b = z-depth (0 = directly across);
 	# 2x2*h bytes, idx = (a*2+b)*h + y. AC-0091: sized by h (was 320 = H=80).
 	var e := PackedByteArray()
