@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AC-0218 results — neighbor-dirty-only-when-border-light-changed</title>
+<style>
+body{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;margin:2em;color:#111;max-width:1080px}
+h1{font-size:1.3em}h2{font-size:1.05em;border-bottom:1px solid #888;padding-bottom:2px;margin-top:1.6em}
+table{border-collapse:collapse;margin:0.6em 0}td,th{border:1px solid #999;padding:3px 8px;text-align:left}
+.ok{color:#060;font-weight:bold}.bad{color:#c00;font-weight:bold}.note{color:#36c}
+code{background:#eee;padding:0 3px}.pass{background:#e8f5e9}.flag{background:#fff8e1}
+</style>
+</head>
+<body>
+<h1>AC-0218 — neighbor-dirty-only-when-border-light-changed</h1>
+<p>GDScript change (no C++ port, no .so rebuild). Owner gates: G0, R16, SMOKE, no-regression suite. No R50, no Windows build, no git writes by the owner.</p>
+
+<h2>1. What the change does</h2>
+<p>The task's file pointer (<code>lighting.gd :: _data_landed</code>) is stale — that function was removed in AC-0119. The real
+"new-column neighbor marking" is <code>_eff_landed</code> in <code>godot/world/world.gd</code>: when a chunk's light lands, each built
+axial neighbor whose import from that chunk may have changed is evicted + re-enqueued into <code>light_pending</code> (the E2 wave =
+the dirty spike; each re-enqueue is a full re-light + remesh handoff).</p>
+<p>The per-side gate now does the <b>border compare</b> (cheap edge-value scan vs the full rebuild):</p>
+<ul>
+<li><b>First landing</b> (<code>old_eff</code> empty = the new column): the before-state is exactly known — every built neighbor read an
+<b>EMPTY strip</b> from that side while the column was missing (margin 0, no injection — <code>_strips_for</code>), i.e. all-zero edge
+values. New gate <code>_frame_nonzero(new_arr, side)</code> scans the 2-deep eff frame toward that side (same cell set as
+<code>_frame_changed</code>): mark the neighbor <b>only when the edge values differ</b> from the all-zero before-state.</li>
+<li>A zero frame is a <b>provable no-op</b> for the neighbor: the bake box pre-zeros its margin (an all-zero strip writes zeros),
+and eff = max(sky, blk) so a zero frame means zero block light on the border — the settled face row is inside the 2-deep frame
+(no separate face scan needed) and cand = 0 − att ≤ 0 can never raise — so the neighbor's light <i>and</i> mesh stay
+byte-identical; its full re-light + remesh is skipped.</li>
+<li><b>Steady-state landings</b> (old_eff non-empty): unchanged — the existing per-side <code>_frame_changed(old_arr, new_arr, side)</code>
+gate, which <i>is</i> the before/after border compare for re-lights.</li>
+<li>Late border changes cannot be masked: any frame value rising 0→n requires a re-light, whose <code>_eff_landed</code> re-runs the
+steady-state gate (eff only ever increases — the AC-0134 no-staleness argument).</li>
+<li>Cost of the compare: one top-down byte scan, 12288 B worst case, early-exit after the first row on surface chunks
+(open-sky rows are eff 15) — ≈0.1–0.2 ms vs the 2–10 ms full rebuild it can skip.</li>
+</ul>
+<p>Instrumentation (R16 dirty-count evidence): world counters <code>perf_lightdirty_marks</code> (new light_dirty marks in the 3×3 edit
+ring — the task's "all eight"), <code>perf_e2_marks</code> (unique built-neighbor re-enqueues), <code>perf_e2_first_marks</code>/
+<code>perf_e2_first_skips</code> (first-landing border-compare verdicts), <code>perf_e2_side_changed</code>/<code>perf_e2_side_unchanged</code>
+(steady-state gate verdicts), <code>perf_lightpend_retrigger</code>; the R16 arm reports them as a per-phase
+<code>dirty</code> block in RESULT (static/moving/settle/fly4/fly50).</p>
+
+<h2>2. Dirty count, before → after (R16, seed 44, --fixed-fps 600)</h2>
+<table>
+<tr><th>phase</th><th>metric</th><th>baseline (original gate)</th><th>after (border compare)</th><th>delta</th></tr>
+<tr><td rowspan="4">static (600 f)</td><td>light_dirty marks (3×3 ring)</td><td>0</td><td>0</td><td class="ok">0</td></tr>
+<tr><td>E2 neighbor re-enqueues (e2_marks)</td><td>0</td><td>0</td><td class="ok">0</td></tr>
+<tr><td>first-landing marks / skips</td><td>— (no first landings)</td><td>0 / 0</td><td class="ok">0</td></tr>
+<tr><td>frame p50/p95/max ms</td><td>5 / 7 / 21</td><td>5 / 7 / 23</td><td class="ok">flat</td></tr>
+<tr><td rowspan="4">moving (12 m circle, 900 f)</td><td>light_dirty marks</td><td>0</td><td>0</td><td class="ok">0 — moving inside a chunk marks NO extra neighbors</td></tr>
+<tr><td>E2 re-enqueues</td><td>0</td><td>0</td><td class="ok">0</td></tr>
+<tr><td>first-landing marks / skips</td><td>0 / 0</td><td>0 / 0</td><td class="ok">0</td></tr>
+<tr><td>frame p50/p95/max ms</td><td>5 / 7 / 22</td><td>5 / 7 / 20</td><td class="ok">flat, no dirty spike, p95 does not tank</td></tr>
+<tr><td rowspan="3">settle (30 f)</td><td>all dirty metrics</td><td>0</td><td>0</td><td class="ok">0</td></tr>
+<tr><td colspan="4" style="color:#666">— pure moving-inside-chunk marks nothing, before and after —</td></tr>
+<tr><td colspan="4"></td></tr>
+<tr><td rowspan="4">fly4 (17 m/s, 4800 f)</td><td>first-landing marks</td><td>1188</td><td>1188</td><td class="flag">0 skips — see §5</td></tr>
+<tr><td>E2 re-enqueues</td><td>1020</td><td>1024</td><td class="ok">±4 run noise</td></tr>
+<tr><td>steady-state side changed / unchanged</td><td>855 / 701</td><td>865 / 715</td><td class="ok">run noise (gate keeps skipping ~45%)</td></tr>
+<tr><td>frame p50/p95/max ms</td><td>4 / 17 / 91</td><td>4 / 16 / 84</td><td class="ok">flat-or-better</td></tr>
+<tr><td rowspan="4">fly50 (215 m/s, 1200 f)</td><td>first-landing marks</td><td>132</td><td>132</td><td class="flag">0 skips — see §5</td></tr>
+<tr><td>E2 re-enqueues</td><td>115</td><td>114</td><td class="ok">±1 run noise</td></tr>
+<tr><td>steady-state side changed / unchanged</td><td>101 / 79</td><td>103 / 81</td><td class="ok">run noise</td></tr>
+<tr><td>frame p50/p95/max ms</td><td>4 / 23 / 72</td><td>4 / 23 / 75</td><td class="ok">flat</td></tr>
+</table>
+<p>Structural R16 metrics identical: built 797/797, build_frames 120, build_ms 12398→12248, ho_max 3, lost 0, rebuilds 0,
+rec_n 9/27, ahead 279/31, queue_max 136/65, ok:true both runs.</p>
+
+<h2>3. G0</h2>
+<p class="pass">G0 (after the fix): <code>--headless --path godot --quit</code> exit 0, <b>0 SCRIPT ERROR</b>. Working tree shows only this
+task's files (<code>godot/world/world.gd</code>, <code>godot/scenes/main.gd</code>, <code>tasks/AC-0218/</code>) plus the user's live <code>TASKS.yaml</code>
+co-edit and pre-existing untracked task folders.</p>
+
+<h2>4. SMOKE + no-regression (all FRESH runs after the fix)</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>standing value</th><th>verdict</th></tr>
+<tr><td>SMOKE battery <code>player;interact;light;fluids</code></td><td>ok:true (player, interact, light, fluids all green)</td><td>all ok:true</td><td class="ok">PASS</td></tr>
+<tr><td>light (in battery)</td><td>surface_eff 15 / cave_eff 0 / torch 14</td><td>15 / 0 / 14</td><td class="ok">PASS</td></tr>
+<tr><td>fluids sea (in battery)</td><td>792 → 792</td><td>792 / 792</td><td class="ok">PASS</td></tr>
+<tr><td>chunkiocpp</td><td>md5_cpp == md5_orig = <code>8a893557900a462fe4ab1c91f8589081</code></td><td>byte-identical</td><td class="ok">PASS</td></tr>
+<tr><td>genhash ×2</td><td>25/25 lines, two runs identical, (0,0) = <code>80b904c0e5f085eef1e839459058c706</code></td><td>AC-0215 NEW baseline</td><td class="ok">PASS</td></tr>
+<tr><td>meshprobe</td><td>match_rate 1.0 — 1926/1926 accs, 32/32 chunks, ac0211_ok</td><td>100%</td><td class="ok">PASS</td></tr>
+<tr><td>stripsprobe</td><td>match_rate 1.0 — 512/512 strips, eff/blk/face 32/32</td><td>100%</td><td class="ok">PASS</td></tr>
+<tr><td>pullprobe</td><td>6,291,456 cells, match_rate 1.0, max_diff 0</td><td>100% / 0</td><td class="ok">PASS</td></tr>
+<tr><td>nofallback</td><td>ok:true — gen_cpp_works 71, mesh 97, strips 354, GDScript sentinels 0, torch lit 15</td><td>ok:true</td><td class="ok">PASS</td></tr>
+</table>
+<p>All gate logs: 0 SCRIPT ERROR. Lighting stays correct — the full light/mesh probe suite (pull 6.29 M cells, mesh 1926 accs,
+strips 512) is cell-exact, and the fly-phase remesh wave still runs for every mark that actually changes a border.</p>
+
+<h2>5. Honest analysis: why the skip count is 0 on this world</h2>
+<div class="flag"><p>The border compare is exact, but on seed 44 (open-sky grassland) a new column's border light <b>always</b> differs
+from the before-state, so no first-landing mark is eligible to skip:</p>
+<ul>
+<li><b>The frame is never all-zero on this world.</b> Rows above a column's <code>top</code> are air open to the sky → eff 15 (C++ pull
+kernel: <code>for (y = hact; y &lt; h; y++) eff = SKY_FULL</code>; GDScript reference identical; pullprobe-verified). The topmost frame
+row (y = 383) is therefore 15 for every chunk — a fully-dark enclosed frame cannot occur here, so
+<code>_frame_nonzero</code> early-exits on the first row and the skip path (<code>perf_e2_first_skips</code>) is measured but fires 0 times.
+The mechanism is live and would fire on a genuinely all-dark border (e.g. a column enclosed with no block light).</li>
+<li><b>Every first-landing mark is legitimate under the task's own rule.</b> "Only mark when the edge values differ" — they do:
+the margin the neighbor read goes 0 → 15 (sky) at the surface, so the neighbor's frontier faces are genuinely re-lit
+dark → lit (the AC-0119 frontier pop). Skipping those would leave dark cliff faces along chunk boundaries — a visible
+lighting regression, which the task explicitly forbids ("the light is still correct").</li>
+<li><b>The steady-state half of the ask is already the frame gate</b> (old frame vs new frame per side) — it keeps skipping
+~45% of re-light sides in fly4 (701→715 unchanged sides in the after run), unchanged by this task.</li>
+</ul>
+<p><b>Remaining lever (out of scope, flagged as follow-up):</b> the fly-phase re-enqueue wave (1020/chunk-run) is margin-fill
+work that is <i>visible</i> wherever the new column's boundary has air (cliff/step/cave faces). It could be reduced only by a
+mesh-level check — "does any visible face exist on the neighbor toward this column" (neighbor's boundary solid vs new
+column's air cells) — which is a data/mesh analysis, not a cheap border-light compare, and needs its own correctness case.
+Not attempted here.</p></div>
+
+<h2>6. Verification against the task's verify clause</h2>
+<table>
+<tr><th>clause</th><th>evidence</th><th>verdict</th></tr>
+<tr><td>"moving inside chunk at R16 does not mark extra neighbors when border light unchanged"</td><td>moving phase: 0 light_dirty marks, 0 E2 re-enqueues, 0 first-landing verdicts — before and after</td><td class="ok">PASS</td></tr>
+<tr><td>"frame time stays stable without the dirty spike"</td><td>moving p50 5/5, p95 7/7, max 22→20 ms; static 5/5, 7/7, 21→23 ms</td><td class="ok">PASS</td></tr>
+<tr><td>"p95 does not tank"</td><td>moving p95 7 → 7 ms; fly4 p95 17 → 16 ms; fly50 p95 23 → 23 ms</td><td class="ok">PASS</td></tr>
+<tr><td>"the light is still correct"</td><td>pullprobe 6.29 M cells max_diff 0; meshprobe 1926/1926; stripsprobe 512/512; SMOKE light 15/0/14</td><td class="ok">PASS</td></tr>
+</table>
+
+<h2>7. Commit-readiness</h2>
+<ul>
+<li class="ok">Code on disk: <code>godot/world/world.gd</code> (fix in <code>_eff_landed</code> + <code>_frame_nonzero</code> + 7 counters), <code>godot/scenes/main.gd</code>
+(R16 <code>_r16_dirty_snap</code>/<code>_r16_dirty_delta</code> + per-phase <code>dirty</code> block in RESULT).</li>
+<li class="ok">Gates green: G0, R16 (baseline + after, logs in <code>.scratch/AC-0218-gates/</code>), SMOKE, chunkiocpp, genhash ×2, meshprobe, stripsprobe, pullprobe, nofallback.</li>
+<li class="ok">No C++ change, no .so rebuild, no .gdextension change; no R50, no Windows build, no git writes by the owner (coordinator commits).</li>
+<li>Note for the commit: <code>tasks/TASKS.yaml</code> carries the user's live co-edits (flip AC-0218 to done at commit time);
+<code>docs/halo-loot-brainstorm.html</code> is user scaffold — do NOT commit it.</li>
+</ul>
+</body>
+</html>

@@ -200,6 +200,21 @@ var perf_create_sync_gen := 0
 # skip flag (the C++ side counts the columns actually skipped via
 # AweGen.skip_cols_total).
 var perf_gen_skip_enq := 0
+# AC-0218: neighbor-dirty diagnostics (pure counters; the R16 arm reports
+# per-phase deltas — "dirty count" evidence for the border-compare change).
+# ld_marks = cells newly marked light_dirty by _mark_light_around (the 3x3
+# edit ring); e2_marks = built-neighbor re-enqueues by _eff_landed (the
+# data-landed E2 wave); e2_first_marks/e2_first_skips = the first-landing
+# (old_eff empty) border-compare verdicts; retrigger = light_pending adds by
+# the _tm_retrigger drop path; e2_side_* = the per-side frame-gate verdicts
+# (steady-state landings).
+var perf_lightdirty_marks := 0
+var perf_e2_marks := 0
+var perf_e2_first_marks := 0
+var perf_e2_first_skips := 0
+var perf_lightpend_retrigger := 0
+var perf_e2_side_changed := 0
+var perf_e2_side_unchanged := 0
 # AC-0155: full-chunk persistence — origin + counters for the chunkio probe.
 var disk_reads := 0
 var disk_read_ms := 0.0
@@ -1724,6 +1739,7 @@ func _tm_retrigger(key: String, c: Node3D, e: Dictionary) -> void:
 		if not light_pending_set.has(key):
 			light_pending.append(key)
 			light_pending_set[key] = true
+			perf_lightpend_retrigger += 1  # AC-0218: drop retrigger adds
 		flush_active = true
 	else:
 		_enqueue_build(int(e["cx"]), int(e["cz"]))
@@ -3427,8 +3443,42 @@ func _eff_landed(c: Node3D, old_eff: Dictionary, new_eff: Dictionary) -> void:
 	# This is what keeps the lava-ocean initial load from 2x-churning: a
 	# chunk-center lava pocket never reaches the boundary -> zero enqueues.
 	var ns := [[cx + 1, cz], [cx - 1, cz], [cx, cz + 1], [cx, cz - 1]]
+	# AC-0218: the BORDER COMPARE (cheap edge-value compare vs the full
+	# rebuild). A first landing (old_eff empty) is the "new column" case:
+	# every built neighbor read an EMPTY strip from each side while the
+	# column was missing (margin 0, no injection — _strips_for), so the
+	# before-state edge values are all zero. Compare them against the NEW
+	# edge values (_frame_nonzero — the 2-deep eff frame toward that side):
+	# only mark light-dirty (re-enqueue the neighbor for the full light
+	# rebuild + remesh) when the edge values DIFFER. A zero frame means the
+	# neighbor's import is byte-identical (the bake box pre-zeros the
+	# margin; the block face is subsumed — arr >= blk, the face row is
+	# inside the 2-deep frame — so cand = 0 - att <= 0 cannot inject) and
+	# its re-light is a PROVABLE NO-OP: the mark is skipped. Any nonzero
+	# edge value (an open-sky frame row, block light) differs from the
+	# before state and marks exactly as before. Steady-state landings
+	# (old_eff non-empty) keep the existing per-side frame gate — that gate
+	# IS the before/after border compare for re-lights (old frame vs new
+	# frame), unchanged.
+	var first_landing := old_eff.is_empty()
 	for side in range(4):
-		if not _frame_changed(old_arr, new_arr, side):
+		var side_changed: bool
+		if first_landing:
+			side_changed = _frame_nonzero(new_arr, side)
+		else:
+			side_changed = _frame_changed(old_arr, new_arr, side)
+		# AC-0218: the border-compare verdicts (R16 dirty-count evidence).
+		if first_landing:
+			if side_changed:
+				perf_e2_first_marks += 1
+			else:
+				perf_e2_first_skips += 1
+		else:
+			if side_changed:
+				perf_e2_side_changed += 1
+			else:
+				perf_e2_side_unchanged += 1
+		if not side_changed:
 			continue
 		var nkey := _key(int(ns[side][0]), int(ns[side][1]))
 		var nc = chunks.get(nkey)
@@ -3438,6 +3488,7 @@ func _eff_landed(c: Node3D, old_eff: Dictionary, new_eff: Dictionary) -> void:
 		if not light_pending_set.has(nkey):
 			light_pending.append(nkey)
 			light_pending_set[nkey] = true
+			perf_e2_marks += 1
 	flush_active = true
 
 
@@ -3468,6 +3519,56 @@ func _frame_changed(a: PackedByteArray, b: PackedByteArray, side: int) -> bool:
 			for lx in range(16):
 				var i := row | lx
 				if a[i] != b[i] or a[i | 240] != b[i | 240]:
+					return true
+	return false
+
+
+# AC-0218: the cheap border compare for a FIRST landing (the "new column"
+# case of _eff_landed). Returns true when the new column's 2-deep eff frame
+# toward `side` differs from the before-state — the EMPTY strip every built
+# neighbor read while the column was missing (margin 0, no injection —
+# _strips_for), i.e. ALL ZERO. Same cell set as _frame_changed (side strips
+# c=0/1). A zero frame is a PROVABLE NO-OP for the neighbor: the bake box
+# pre-zeros its margin (an all-zero strip writes zeros), and eff = max(sky,
+# blk) so a zero frame means zero block light on the border too — the face
+# row is inside the 2-deep frame (no separate face scan needed) and
+# cand = 0 - att <= 0 can never raise — so the neighbor's light and mesh are
+# byte-identical and its full re-light + remesh is skipped. Scans top-down:
+# the open-sky rows above the column top (eff 15 — rows above the column's
+# max non-air y are air open to the sky) exit after the first row on
+# surface chunks; only a fully dark enclosed frame scans to the bottom and
+# earns the skip it justifies. Later border changes are still caught: any
+# frame value rising 0->n requires a re-light, whose _eff_landed re-runs the
+# steady-state old-vs-new gate (eff only ever increases — no staleness).
+func _frame_nonzero(arr: PackedByteArray, side: int) -> bool:
+	var h := arr.size() / 256
+	if side == 0:
+		for y in range(h - 1, -1, -1):
+			var row := y << 8
+			for lz in range(16):
+				var i := row | (lz << 4) | 14
+				if arr[i] != 0 or arr[i | 1] != 0:
+					return true
+	elif side == 1:
+		for y in range(h - 1, -1, -1):
+			var row := y << 8
+			for lz in range(16):
+				var i := row | (lz << 4)
+				if arr[i] != 0 or arr[i | 1] != 0:
+					return true
+	elif side == 2:
+		for y in range(h - 1, -1, -1):
+			var row := y << 8
+			for lx in range(16):
+				var i := row | (14 << 4) | lx
+				if arr[i] != 0 or arr[i | 16] != 0:
+					return true
+	else:
+		for y in range(h - 1, -1, -1):
+			var row := y << 8
+			for lx in range(16):
+				var i := row | lx
+				if arr[i] != 0 or arr[i | 240] != 0:
 					return true
 	return false
 
@@ -4243,7 +4344,12 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 func _mark_light_around(cx: int, cz: int) -> void:
 	for dx in range(-LIGHT_NEIGHBOR, LIGHT_NEIGHBOR + 1):
 		for dz in range(-LIGHT_NEIGHBOR, LIGHT_NEIGHBOR + 1):
-			light_dirty[_key(cx + dx, cz + dz)] = true
+			var k := _key(cx + dx, cz + dz)
+			# AC-0218: count only NEW marks (an already-dirty key is a no-op
+			# re-mark; the counter is the "dirty count" the R16 arm reports).
+			if not light_dirty.has(k):
+				light_dirty[k] = true
+				perf_lightdirty_marks += 1
 
 func _mark_fluid_around(cx: int, cz: int) -> void:
 	for dx in range(-LIGHT_NEIGHBOR, LIGHT_NEIGHBOR + 1):

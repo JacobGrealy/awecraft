@@ -6526,11 +6526,13 @@ func _r16_test(spawn: Vector3) -> void:
 	const STATIC_FRAMES := 600
 	const MOVING_FRAMES := 900
 	var static_ms: Array = []
+	var ds0 := _r16_dirty_snap()  # AC-0218: phase boundary (after build settle)
 	for i in STATIC_FRAMES:
 		var fb := Time.get_ticks_msec()
 		await get_tree().physics_frame
 		var smms := Time.get_ticks_msec() - fb
 		static_ms.append(smms)
+	var ds1 := _r16_dirty_snap()  # AC-0218
 	# 12 m circle centered on the spawn chunk center (spans [2,14] in x/z,
 	# fully inside the 16 m chunk); yaw follows the circle so the frustum —
 	# and therefore the cull decision — changes every single frame.
@@ -6544,9 +6546,11 @@ func _r16_test(spawn: Vector3) -> void:
 		await get_tree().physics_frame
 		var mmms := Time.get_ticks_msec() - fb
 		moving_ms.append(mmms)
+	var ds2 := _r16_dirty_snap()  # AC-0218
 	# Tail settle after the last camera change.
 	for i in 30:
 		await get_tree().physics_frame
+	var ds3 := _r16_dirty_snap()  # AC-0218
 	# AC-0222: fly-forward phases — stream priority while the player is
 	# still moving. The 4x phase (8 s) crosses ~8 chunks so the recenter
 	# ahead-ring rebuilds run; the 50x phase (2 s) flies into the circle
@@ -6555,7 +6559,9 @@ func _r16_test(spawn: Vector3) -> void:
 	# player is still moving (not only after stopping), the queue depth
 	# bound (build entries <= circle count), and no lost meshes (no pop).
 	var f4: Dictionary = await _fly_phase(4.0, 8.0, Vector3(1, 0, 0))
+	var ds4 := _r16_dirty_snap()  # AC-0218
 	var f50: Dictionary = await _fly_phase(50.0, 2.0, Vector3(1, 0, 0))
+	var ds5 := _r16_dirty_snap()  # AC-0218
 	for i in 30:
 		await get_tree().physics_frame
 	var s := _r16_stats(static_ms)
@@ -6594,9 +6600,47 @@ func _r16_test(spawn: Vector3) -> void:
 		"fly_cap": int(world.circle_count()),
 		"fly4": f4,
 		"fly50": f50,
+		# AC-0218: neighbor-dirty evidence — per-phase deltas of the world
+		# marking counters (ld_marks = the 3x3 light_dirty edit ring,
+		# e2_marks = _eff_landed built-neighbor re-enqueues, first_* = the
+		# first-landing border-compare verdicts, retrigger = _tm_retrigger
+		# adds) + the light queue depth at each phase end.
+		"dirty": {
+			"static": _r16_dirty_delta(ds0, ds1),
+			"moving": _r16_dirty_delta(ds1, ds2),
+			"settle": _r16_dirty_delta(ds2, ds3),
+			"fly4": _r16_dirty_delta(ds3, ds4),
+			"fly50": _r16_dirty_delta(ds4, ds5),
+		},
 		"elapsed_ms": Time.get_ticks_msec() - t0,
 	})
 	get_tree().quit()
+
+
+# AC-0218: per-phase neighbor-dirty snapshot (world counter deltas + queue
+# depth at the phase boundary). The "dirty count" evidence for the
+# border-compare change: which marking sites fire, in which phase.
+func _r16_dirty_snap() -> Dictionary:
+	return {
+		"ld_marks": int(world.perf_lightdirty_marks),
+		"e2_marks": int(world.perf_e2_marks),
+		"e2_first_marks": int(world.perf_e2_first_marks),
+		"e2_first_skips": int(world.perf_e2_first_skips),
+		"e2_side_changed": int(world.perf_e2_side_changed),
+		"e2_side_unchanged": int(world.perf_e2_side_unchanged),
+		"retrigger": int(world.perf_lightpend_retrigger),
+		"light_pending": int(world.light_pending.size()),
+		"light_dirty": int(world.light_dirty.size()),
+	}
+
+
+func _r16_dirty_delta(a: Dictionary, b: Dictionary) -> Dictionary:
+	var d := {}
+	for k in b:
+		d[k] = int(b[k]) - int(a.get(k, 0))
+	d["light_pending"] = int(b["light_pending"])  # depth at phase end (not a delta)
+	d["light_dirty"] = int(b["light_dirty"])
+	return d
 
 
 func _r16_stats(ms_list: Array) -> Dictionary:

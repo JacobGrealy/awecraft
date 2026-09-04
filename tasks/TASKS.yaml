@@ -1,9 +1,13 @@
 meta:
-  updated_at: 2026-09-04T11:13
+  updated_at: 2026-09-04T17:32
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0218
+- AC-0040
+- AC-0225
+- AC-0226
+- AC-0227
+- AC-0229
 - AC-0217
 - AC-0214
 - AC-0175
@@ -20,10 +24,9 @@ queue:
 - AC-0087
 - AC-0186
 - AC-0174
-- AC-0040
 - AC-0205
-- AC-0196
 - AC-0150
+- AC-0228
 - AC-0144
 - AC-0145
 - AC-0146
@@ -1075,8 +1078,15 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: 'Bouncy banana: banana trees (special tree type) grow bananas; within 10 blocks of a character, chance to fall off
-    and bounce around until at rest; pickable; eating restores health + stamina; short gorilla sfx on eat (after AC-0039)'
+  notes: '1) User Story: As a player near water, I want bouncy bananas on special banana trees that spawn in dirt right where
+    dirt meets the sand ring around water, so bananas are a beach-edge food source I can find by following shore.
+
+
+    2) Technical Details: Spawn banana trees only in dirt at the dirt<->sand transition surrounding water (generator.gd tree
+    pass checks y~SEA=126: if base is B_DIRT/B_GRASS and within 2-3 blocks of B_SAND and water nearby, roll low banana-tree
+    chance (density << forest TREE_D_FOREST 0.14, ~0.02-0.03) — not forest/jungle). Fruit B_BANANA placed hanging; when player
+    within 10 blocks, chance to fall as RigidBody3D bouncing until rest, pickup via interact, eat restores health+stamina
+    + gorilla SFX via AC-0039. Verify G0+SMOKE, trees only on shore dirt edge, not inland forest.'
   comments:
   - id: 1
     created_at: 2026-08-19 07:00T12:00
@@ -6034,11 +6044,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-09-02T10:06
-  updated_at: 2026-09-02T10:06
-  completed_at: null
+  updated_at: 2026-09-04T17:18
+  completed_at: 2026-09-04T17:18
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a dev testing planet flight/LOD I want a full hollow planet stub (surface-only) I can fly around/land
@@ -6743,7 +6753,23 @@ intake:
   - id: 2
     created_at: '2026-09-03T17:00:00.000000'
     updated_at: null
-    text: '[coordinator] DONE + SHIPPED 2026-09-03. MC 1.18 style coarse 4x8x4 3D density field (gdext/src/gen.cpp, 824 lines): one density field d = S_ramp((H-y+0.5)/10) + A(y)*(C-0.5); solid d>0, air d<0. S_ramp = quintic spline (AweNoise._fade) — the zero crossing IS the surface. C = trilinear of the coarse 4x8x4 3D cave field (7x9x7 lattice/field, AC-0188 field). A(y) = 1.8*(1+max(0,H-y-10)/8) — caves widen with depth (deepslate cheese, 30-38% air below y~120). H = 3 new 3D surface fields (fbm3, sea-slice y=126, yscale 64) affine-calibrated per field onto the old AC-0091 2D distribution (20-config scan picked this). Heightmap + per-column carve removed; aquifer = water to Sea 126 under any column below sea; y<8 cave pockets = lava. Spawn pad EXACT 136. Terrain (seed 44): grassland 133-152 (avg 140.7) around the pad, rolling; sea 65 b north at 126 / seafloor 116-125 (2.5% cols under sea, 8769 water cells); deep 3D cave network (light arm pocket at (-39,80,40), verified enclosed y67-115 by 3D flood) with lava floor; MC-style. Gen still 100% C++: nofallback ok:true (gen_cpp 88 / mesh 138 / strips 494, gd 0). Gates all green: G0 exit 0 / 0 SCRIPT ERROR; SMOKE battery ok:true (fluids sea_stable); genprobe 4900/4900; meshprobe 236972==236972, strips 32/32, pullprobe 6,291,456 cells max_diff 0; chunkiocpp byte-identical (md5 8a89...9081); light surface 15 / torch 14 / torch 0->9; genhash deterministic — 2 runs all 25 hashes identical (NEW baseline by design: (0,0)=80b904c0..., (-2,-2)=61614376..., GENMS 36/37). Drifts (terrain-derived, documented): light cave_eff 10->0 (first pocket now fully enclosed/dark — torch propagation proves C++ light); basis sea_ok false (probe uses old 2D formula); fluids sea 2756/914->792/173 (sea moved/thinned, mechanics pass). .so: rebuilt after every change (linux only, final 1,076,552 b) + staged to godot/bin/ (md5-verified); no .gdextension, no Windows build, no git. R50 not run (PENDING/AC-0206). See tasks/AC-0215/AC-0215-results.html.'
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. MC 1.18 style coarse 4x8x4 3D density field (gdext/src/gen.cpp, 824 lines):
+      one density field d = S_ramp((H-y+0.5)/10) + A(y)*(C-0.5); solid d>0, air d<0. S_ramp = quintic spline (AweNoise._fade)
+      — the zero crossing IS the surface. C = trilinear of the coarse 4x8x4 3D cave field (7x9x7 lattice/field, AC-0188 field).
+      A(y) = 1.8*(1+max(0,H-y-10)/8) — caves widen with depth (deepslate cheese, 30-38% air below y~120). H = 3 new 3D surface
+      fields (fbm3, sea-slice y=126, yscale 64) affine-calibrated per field onto the old AC-0091 2D distribution (20-config
+      scan picked this). Heightmap + per-column carve removed; aquifer = water to Sea 126 under any column below sea; y<8
+      cave pockets = lava. Spawn pad EXACT 136. Terrain (seed 44): grassland 133-152 (avg 140.7) around the pad, rolling;
+      sea 65 b north at 126 / seafloor 116-125 (2.5% cols under sea, 8769 water cells); deep 3D cave network (light arm pocket
+      at (-39,80,40), verified enclosed y67-115 by 3D flood) with lava floor; MC-style. Gen still 100% C++: nofallback ok:true
+      (gen_cpp 88 / mesh 138 / strips 494, gd 0). Gates all green: G0 exit 0 / 0 SCRIPT ERROR; SMOKE battery ok:true (fluids
+      sea_stable); genprobe 4900/4900; meshprobe 236972==236972, strips 32/32, pullprobe 6,291,456 cells max_diff 0; chunkiocpp
+      byte-identical (md5 8a89...9081); light surface 15 / torch 14 / torch 0->9; genhash deterministic — 2 runs all 25 hashes
+      identical (NEW baseline by design: (0,0)=80b904c0..., (-2,-2)=61614376..., GENMS 36/37). Drifts (terrain-derived, documented):
+      light cave_eff 10->0 (first pocket now fully enclosed/dark — torch propagation proves C++ light); basis sea_ok false
+      (probe uses old 2D formula); fluids sea 2756/914->792/173 (sea moved/thinned, mechanics pass). .so: rebuilt after every
+      change (linux only, final 1,076,552 b) + staged to godot/bin/ (md5-verified); no .gdextension, no Windows build, no
+      git. R50 not run (PENDING/AC-0206). See tasks/AC-0215/AC-0215-results.html.'
 - id: AC-0216
   title: lazy-skip-interior-bands-offscreen-for-density
   source: user
@@ -6771,7 +6797,19 @@ intake:
   - id: 2
     created_at: '2026-09-03T20:00:00.000000'
     updated_at: null
-    text: '[coordinator] DONE + SHIPPED 2026-09-03. Skip (gdext/src/gen.cpp + world.gd): generate_flat/slabs/resl take a 6th arg skip (default 0 = pre-AC-0216, bit-for-bit). skip!=0 skips the 150-pt density eval free: f_cave not built, top-down d>0 scan not run, column solid exactly 0..H (AC-0215 heightmap), he=H - no caves, no lava, no hidden caves. Surface/ores/biomes/trees unchanged. world.gd::_gen_skip_flag (main thread, enqueue time) sets it for OFFSCREEN INTERIOR = band_of>1 (band-3 data-only ring) AND whole column AABB past the frustum+32 m margin; rides threadgen args[5] / burst e[7]. R16 = 438 chunks x 256 = 112,128 columns skipped (enq == C++ counter); probe 5x5 = 963,591 pts (~150.6/col) all free. No hidden caves: probe top_eq_H = 6400/6400, hidden_cave_cells = 0, lava 0, 2-run deterministic; skip=0 identity 25/25 (standalone + genhash). Perf: gen 1.372->0.819 ms/chunk (-40.3%, 1.68x); R16 build 12413->12534 ms (flat, mesh-bound); fps flat-or-better all 4 phases (moving min 45->48, fly50 p95 29->23 ms); no-pop lost 0/rebuilds 0. G0 0 SCRIPT ERROR. SMOKE all ok:true (light 15/0/14 = standing; sea 792/792 no drift). No regression: chunkiocpp md5 8a893557... byte-identical; genhash x2 == AC-0215 NEW baseline ((0,0)=80b904c0...); light 15/0/14; meshprobe 100% (1926/1926, 32/32, ac0211_ok); stripsprobe 100% (512); pullprobe 100% (6.29 M cells, max_diff 0); nofallback ok:true (gen_cpp_works 71). .so: rebuilt linux-only + staged godot/bin (md5 fd97fdb1...); no .gdextension change (no --import); R50/Windows not run (per instructions). See tasks/AC-0216/AC-0216-results.html.'
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Skip (gdext/src/gen.cpp + world.gd): generate_flat/slabs/resl take a 6th
+      arg skip (default 0 = pre-AC-0216, bit-for-bit). skip!=0 skips the 150-pt density eval free: f_cave not built, top-down
+      d>0 scan not run, column solid exactly 0..H (AC-0215 heightmap), he=H - no caves, no lava, no hidden caves. Surface/ores/biomes/trees
+      unchanged. world.gd::_gen_skip_flag (main thread, enqueue time) sets it for OFFSCREEN INTERIOR = band_of>1 (band-3 data-only
+      ring) AND whole column AABB past the frustum+32 m margin; rides threadgen args[5] / burst e[7]. R16 = 438 chunks x 256
+      = 112,128 columns skipped (enq == C++ counter); probe 5x5 = 963,591 pts (~150.6/col) all free. No hidden caves: probe
+      top_eq_H = 6400/6400, hidden_cave_cells = 0, lava 0, 2-run deterministic; skip=0 identity 25/25 (standalone + genhash).
+      Perf: gen 1.372->0.819 ms/chunk (-40.3%, 1.68x); R16 build 12413->12534 ms (flat, mesh-bound); fps flat-or-better all
+      4 phases (moving min 45->48, fly50 p95 29->23 ms); no-pop lost 0/rebuilds 0. G0 0 SCRIPT ERROR. SMOKE all ok:true (light
+      15/0/14 = standing; sea 792/792 no drift). No regression: chunkiocpp md5 8a893557... byte-identical; genhash x2 == AC-0215
+      NEW baseline ((0,0)=80b904c0...); light 15/0/14; meshprobe 100% (1926/1926, 32/32, ac0211_ok); stripsprobe 100% (512);
+      pullprobe 100% (6.29 M cells, max_diff 0); nofallback ok:true (gen_cpp_works 71). .so: rebuilt linux-only + staged godot/bin
+      (md5 fd97fdb1...); no .gdextension change (no --import); R50/Windows not run (per instructions). See tasks/AC-0216/AC-0216-results.html.'
 - id: AC-0217
   title: debounce-collect-pool-score-only-on-move-or-turn
   source: user
@@ -6804,11 +6842,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-04T07:51
   updated_at: 2026-09-04T10:12
-  completed_at: null
+  completed_at: 2026-09-03T21:00
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want only neighbors whose light actually changed to rebuild so moving does not dirty
@@ -6850,6 +6888,10 @@ intake:
     created_at: 2026-09-04T07:51
     updated_at: null
     text: '[user] per 2026-09-04 global cap'
+  - id: 2
+    created_at: '2026-09-03T21:00:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Border compare (godot/world/world.gd): the task pointer (lighting.gd::_data_landed) is stale (removed AC-0119); the real marking is _eff_landed (world.gd). Its per-side gate now does the border compare: first landing (new column) uses new _frame_nonzero(new_arr, side) - the 2-deep border light vs the provable before-state (empty strip = all-zero margin, no injection); a zero frame = provable byte-identical no-op (bake box pre-zeros margin; eff = max(sky,blk) -> zero frame -> zero face -> cand = 0-att <= 0 -> no injection) -> the full re-light+remesh is skipped; any nonzero edge value marks exactly as before. Steady-state landings keep the existing old-vs-new frame gate (that already was the compare). Cheap: top-down byte scan, early-exits in the first row on surface chunks (~0.1 ms vs 2-10 ms rebuild). Dirty count before->after (R16): static/moving/settle all 0 -> 0 (moving inside chunk marks nothing); fly4 first-landing marks 1188->1188 (0 skips), re-enqueues 1020->1024 (noise), steady-state unchanged-sides 701->715; fly50 132->132 (0 skips). Honest: skips are 0 on seed 44 because the open-sky top row (eff 15, C++- and pullprobe-verified) makes every new border differ 0->15 - every first-landing mark is legitimate under the task own rule (frontier faces genuinely re-light dark->lit); skipping them would mean dark cliff faces (forbidden). Mechanism is live and would fire on a fully-dark border; the remaining fly-wave lever (visible-face existence check) is flagged as a follow-up in the results. Frame time / p95: static 5/7/21->5/7/23 ms; moving 5/7/22->5/7/20; fly4 4/17/91->4/16/84; fly50 4/23/72->4/23/75 - flat, no spike, p95 does not tank; built 797/797, lost 0, rebuilds 0. G0 exit 0, 0 SCRIPT ERROR. SMOKE player;interact;light;fluids all ok:true (light 15/0/14, sea 792/792). No-regression: chunkiocpp md5 8a893557... byte-identical; genhash x2 identical, (0,0)=80b904c0... == AC-0215 NEW; meshprobe 100% (1926/1926, ac0211_ok); stripsprobe 100% (512); pullprobe 100% (6,291,456 cells, max_diff 0); nofallback ok:true (gen 71). No C++/.so change, no git writes by me (coordinator commits). See tasks/AC-0218/AC-0218-results.html.'
 - id: AC-0220
   title: flight-speed-4x-walking-speed
   source: user
@@ -6930,7 +6972,23 @@ intake:
   - id: 2
     created_at: '2026-09-03T18:00:00.000000'
     updated_at: null
-    text: '[coordinator] DONE + SHIPPED 2026-09-03. Queue priority (godot/world/world.gd, drain + band buckets intact): newest ahead entries pushed to the FRONT of their band bucket (push_front in _enqueue_build + the recenter want/ring merge) — the drain per-bucket scan visits them first (wins within-band order + the 512 pool-cap tie-break; old code appended to the end, so it worked older entries first). Total queued BUILD depth capped to the render circle count (797 R16 / 7845 R50) via a lockstep _build_q_n counter (self-healing verifying scan), enforced at enqueue + recenter merge. Farthest band evicted first when full (highest bucket, oldest/tail entries); band-3 data-only feed entries exempt — they are the 8-neighbor gate fuel (AC-0160); evicting the 148 at R16 (=945-797) would strand the circle edge (flagged results S1/S6). R16 (#1 gate, fresh C++ gen, no disk shortcut) 4x (17 m/s, 8 s) / 50x (215 m/s, 2 s): chunks appear ahead while moving — 279 forward chunks first-built during 4x flight (farthest 264 m), 124 during 50x (farthest 263 m) — before and after (equal; R16 queue already shallow). Stress THREADGEN_N=1: built_all true, same ahead evidence, no stranding. fps before->after: static 200/29/18 -> 200/28/18, moving 200/143/50 -> 200/143/48 (p50/p95/min, unchanged); fly4 250->250 p50; fly50 200->200 p50. Queue bounded: build depth <=32 (4x)/<=26 (50x) vs cap 797; total <=136. No-pop: 0 lost / 0 rebuilds; ho_max=1 (AC-0219 cap intact). G0 0 SCRIPT ERROR (before + after, every arm). SMOKE player;interact;light;fluids all ok:true. No regression: chunkiocpp byte-identical (md5 8a893557900a462fe4ab1c91f8589081); genhash 2 runs 25/25 identical == AC-0215 NEW baseline ((0,0)=80b904c0e5f0...); light surface 15 / torch 14 / cave_eff 0 (AC-0215 standing); meshprobe 100% (239348==239348); stripsprobe 100% (32/32); pullprobe 100% (6,291,456 cells max_diff 0); nofallback ok:true (gd sentinels 0); ahead band still 1 mesh/frame. R50/Windows not run (per instructions). See tasks/AC-0222/AC-0222-results.html.'
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Queue priority (godot/world/world.gd, drain + band buckets intact): newest
+      ahead entries pushed to the FRONT of their band bucket (push_front in _enqueue_build + the recenter want/ring merge)
+      — the drain per-bucket scan visits them first (wins within-band order + the 512 pool-cap tie-break; old code appended
+      to the end, so it worked older entries first). Total queued BUILD depth capped to the render circle count (797 R16 /
+      7845 R50) via a lockstep _build_q_n counter (self-healing verifying scan), enforced at enqueue + recenter merge. Farthest
+      band evicted first when full (highest bucket, oldest/tail entries); band-3 data-only feed entries exempt — they are
+      the 8-neighbor gate fuel (AC-0160); evicting the 148 at R16 (=945-797) would strand the circle edge (flagged results
+      S1/S6). R16 (#1 gate, fresh C++ gen, no disk shortcut) 4x (17 m/s, 8 s) / 50x (215 m/s, 2 s): chunks appear ahead while
+      moving — 279 forward chunks first-built during 4x flight (farthest 264 m), 124 during 50x (farthest 263 m) — before
+      and after (equal; R16 queue already shallow). Stress THREADGEN_N=1: built_all true, same ahead evidence, no stranding.
+      fps before->after: static 200/29/18 -> 200/28/18, moving 200/143/50 -> 200/143/48 (p50/p95/min, unchanged); fly4 250->250
+      p50; fly50 200->200 p50. Queue bounded: build depth <=32 (4x)/<=26 (50x) vs cap 797; total <=136. No-pop: 0 lost / 0
+      rebuilds; ho_max=1 (AC-0219 cap intact). G0 0 SCRIPT ERROR (before + after, every arm). SMOKE player;interact;light;fluids
+      all ok:true. No regression: chunkiocpp byte-identical (md5 8a893557900a462fe4ab1c91f8589081); genhash 2 runs 25/25 identical
+      == AC-0215 NEW baseline ((0,0)=80b904c0e5f0...); light surface 15 / torch 14 / cave_eff 0 (AC-0215 standing); meshprobe
+      100% (239348==239348); stripsprobe 100% (32/32); pullprobe 100% (6,291,456 cells max_diff 0); nofallback ok:true (gd
+      sentinels 0); ahead band still 1 mesh/frame. R50/Windows not run (per instructions). See tasks/AC-0222/AC-0222-results.html.'
 - id: AC-0223
   title: cleanup-lod-code-no-longer-used
   source: user
@@ -6986,4 +7044,146 @@ intake:
   - id: 2
     created_at: '2026-09-03T19:00:00.000000'
     updated_at: null
-    text: '[coordinator] DONE + SHIPPED 2026-09-03. Tuning (godot/world/world.gd): STREAM_TM_HANDOFF_PER_FRAME 1->3 (burst/frame, MC-style a-few-per-tick); tunable via AWECRAFT_TM_HO (clamped 1..16) -> stream_ho_cap. Cap logic intact (process-frame counter + break + epool/shutdown/loading exemptions unchanged). R16 fps before->after (p50/p95/min): static 200/28/18 -> 200/143/48; moving 200/143/48 -> 200/143/50; fly4 250/59/12 -> 250/63/10; fly50 200/31/12 -> 250/40/12. p95 flat-or-better in all 4 phases; no sustained drop (only one 85-100 ms frame, same one-off class as baseline 82-85 ms). Build (first fill) 35.9 s -> 12.4 s (2.9x). Ahead fill: ho_max = 3 both fly phases (burst live); fly4 ahead 279 == 279 (264 m edge, bounded queue 136/31 vs cap 797); each recenter ahead ring now lands in ~10 frames (was ~30); no-pop holds: lost 0 / rebuilds 0, 797/797. G0 0 SCRIPT ERROR (before + after + final, every arm). SMOKE all ok:true (light 15/0/14, sea 792/792, player [8.5,137,8.5]). No regression: chunkiocpp md5 8a893557... byte-identical; genhash 25/25 x2 runs == AC-0215 NEW baseline ((0,0)=80b904c0...); light 15/0/14; meshprobe 100% (233448/233448, 32/32, ac0211_ok — 239348 was the 1-cap sample window, parity is the gate); stripsprobe 100% (512); pullprobe 100% (6.29M cells, max_diff 0); nofallback ok:true. Finding (fixed): first R16 run logged 1 SCRIPT ERROR — pre-existing AC-0203 torn-read (e["tid"] throws after has() passes; worker writes the same Dictionary), ~3x likelier at the 3-burst rate. Fixed: poll now e.get("tid") + skip (AC-0203 path, exception-free). Final R16: 0 SCRIPT ERROR. R50 not run (PENDING, AC-0206); Windows build not run. See tasks/AC-0224/AC-0224-results.html.'
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Tuning (godot/world/world.gd): STREAM_TM_HANDOFF_PER_FRAME 1->3 (burst/frame,
+      MC-style a-few-per-tick); tunable via AWECRAFT_TM_HO (clamped 1..16) -> stream_ho_cap. Cap logic intact (process-frame
+      counter + break + epool/shutdown/loading exemptions unchanged). R16 fps before->after (p50/p95/min): static 200/28/18
+      -> 200/143/48; moving 200/143/48 -> 200/143/50; fly4 250/59/12 -> 250/63/10; fly50 200/31/12 -> 250/40/12. p95 flat-or-better
+      in all 4 phases; no sustained drop (only one 85-100 ms frame, same one-off class as baseline 82-85 ms). Build (first
+      fill) 35.9 s -> 12.4 s (2.9x). Ahead fill: ho_max = 3 both fly phases (burst live); fly4 ahead 279 == 279 (264 m edge,
+      bounded queue 136/31 vs cap 797); each recenter ahead ring now lands in ~10 frames (was ~30); no-pop holds: lost 0 /
+      rebuilds 0, 797/797. G0 0 SCRIPT ERROR (before + after + final, every arm). SMOKE all ok:true (light 15/0/14, sea 792/792,
+      player [8.5,137,8.5]). No regression: chunkiocpp md5 8a893557... byte-identical; genhash 25/25 x2 runs == AC-0215 NEW
+      baseline ((0,0)=80b904c0...); light 15/0/14; meshprobe 100% (233448/233448, 32/32, ac0211_ok — 239348 was the 1-cap
+      sample window, parity is the gate); stripsprobe 100% (512); pullprobe 100% (6.29M cells, max_diff 0); nofallback ok:true.
+      Finding (fixed): first R16 run logged 1 SCRIPT ERROR — pre-existing AC-0203 torn-read (e["tid"] throws after has() passes;
+      worker writes the same Dictionary), ~3x likelier at the 3-burst rate. Fixed: poll now e.get("tid") + skip (AC-0203 path,
+      exception-free). Final R16: 0 SCRIPT ERROR. R50 not run (PENDING, AC-0206); Windows build not run. See tasks/AC-0224/AC-0224-results.html.'
+- id: AC-0225
+  title: configurable-chunks-mesh-per-frame-slider-1-to-100
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-04T20:11
+  updated_at: 2026-09-04T20:11
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player or dev I want a slider in Options to set how many chunk meshes are processed per frame
+    from 1 to 100 so I can tune throughput vs smoothness.
+
+
+    2) Technical Details: Add Settings chunks_per_frame 1-100 default 2-3, clamp, save. Options HSlider with label, menu.gd
+    handler, world.gd drain cap reads setting each frame. Verify: slider 1-100 changes handoff cap, persists, flying shows
+    tuning.'
+  comments:
+  - id: 1
+    created_at: 2026-09-04T20:11
+    updated_at: null
+    text: '[user] slider 1-100 per 2026-09-04'
+- id: AC-0226
+  title: pull-fog-in-to-hide-pop-in-scales-with-render-distance
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-04T20:39
+  updated_at: 2026-09-04T20:39
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want fog pulled in a bit closer so chunk pop in is hidden and it still scales with
+    render distance.
+
+
+    2) Technical Details: Current fog_far = (render_radius+1)*16*0.95. Pull in slightly closer (e.g. 0.85-0.90) to hide pop
+    in, keep scaling with render_radius. Verify: at R16 and R50 fog hides far edge pop, no hard cut, scales correctly.'
+  comments:
+  - id: 1
+    created_at: 2026-09-04T20:39
+    updated_at: null
+    text: '[user] pull fog in per 2026-09-04, scales with render distance'
+- id: AC-0227
+  title: dithered-fade-shader-for-distant-chunks-to-hide-pop-in
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-04T20:42
+  updated_at: 2026-09-04T20:42
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want distant chunks to fade in with a checkerboard dither so I do not see whole objects
+    pop in.
+
+
+    2) Technical Details: Add shader dithering for distant chunks handled by shader: screen-space dither pattern based on
+    distance/fade factor, discard fragments for far chunks to create checkerboard fade that fills in as chunks get closer.
+    Complements fog pull. Verify: far chunks show dithered fade, no hard pop, shader handles discard.'
+  comments:
+  - id: 1
+    created_at: 2026-09-04T20:42
+    updated_at: null
+    text: '[user] shader dithering per 2026-09-04'
+- id: AC-0228
+  title: cube-world-six-faces-with-center-gravity-and-face-switching
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-04T21:11
+  updated_at: 2026-09-04T21:11
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want the world to be a cube with six faces I can walk between, with gravity always
+    toward the center, so it feels like a planet.
+
+
+    2) Technical Details: Create cube world with six faces, each face flat world streaming, switching between faces at edges,
+    gravity vector toward cube center not just face down (angled at edges). Foundation before 12-face sphere. Verify: walk
+    over edge switches face, gravity toward center everywhere, no fall off.'
+  comments:
+  - id: 1
+    created_at: 2026-09-04T21:11
+    updated_at: null
+    text: '[user] cube world per 2026-09-04'
+- id: AC-0229
+  title: dynamic-mesh-per-frame-scaling-with-speed-and-render-distance
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-04T21:30
+  updated_at: 2026-09-04T21:30
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want chunk mesh creation per frame to scale with how fast I am moving and my render
+    distance so flying fast at large distance still keeps up.
+
+
+    2) Technical Details: Make per-frame mesh budget dynamic based on player speed and render_radius, higher when moving fast
+    or large render, lower when still. Keep p95 stable. Put at end of queue to play manually first with slider 0225. Verify:
+    at R16 walking vs R50 flying 50x, ahead fills at similar rate, manual slider still works.'
+  comments:
+  - id: 1
+    created_at: 2026-09-04T21:30
+    updated_at: null
+    text: '[user] dynamic scaling per 2026-09-04, play manually first'
