@@ -29,7 +29,7 @@ _ENV_FILE = os.environ.get("AWECRAFT_TASKS_FILE", "")
 TASKS_PATH = Path(_ENV_FILE).expanduser().resolve() if _ENV_FILE else TASKS_DIR / "TASKS.yaml"
 
 ID_RE = re.compile(r"^AC-(\d{4,})$")
-STATUSES = ["open", "in-progress", "blocked", "done"]
+STATUSES = ["open", "in-progress", "blocked", "done", "cancelled"]
 SOURCES = ["user", "agent"]
 PRIORITIES = (1, 2, 3)
 TASK_SECTIONS = ("intake",)
@@ -159,7 +159,7 @@ def add(data, title, source, priority=2, notes=""):
 
 
 def set_status(data, task_id, status):
-    """Set a task's status. done => completed_at set + auto-dequeue; leaving done => cleared."""
+    """Set a task's status. done/cancelled => completed_at set + auto-dequeue; leaving done/cancelled => cleared."""
     status = str(status)
     if status not in STATUSES:
         raise TaskError("status must be one of %s, got %r" % (STATUSES, status))
@@ -168,10 +168,10 @@ def set_status(data, task_id, status):
         raise NotFound("task %s not found" % task_id)
     now = now_iso()
     item["status"] = status
-    if status == "done":
+    if status in ("done", "cancelled"):
         if not item.get("completed_at"):
             item["completed_at"] = now
-        # auto-dequeue: done items leave the work queue (was historical, now we prune)
+        # auto-dequeue: done/cancelled items leave the work queue
         queue = data.get("queue") or []
         if task_id in queue:
             queue.remove(task_id)

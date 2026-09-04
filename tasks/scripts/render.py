@@ -23,7 +23,7 @@ from urllib.parse import quote
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tasks_lib  # noqa: E402
 
-STATUS_ORDER = {"in-progress": 0, "open": 1, "blocked": 2}
+STATUS_ORDER = {"in-progress": 0, "open": 1, "blocked": 2, "cancelled": 3, "done": 4}
 
 CSS = """
 tr[draggable=true]{cursor:grab}
@@ -79,7 +79,7 @@ section h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#5
 .links a{color:#2f5fa8;text-decoration:none;margin-right:10px}
 .links a:hover{text-decoration:underline}
 table.done{width:100%;border-collapse:collapse;background:#fff;border:1px solid #d7dee8;border-radius:6px;font-size:12px}
-details.dcard, details.card{cursor:default} summary.chead{list-style:none;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap} summary.chead::-webkit-details-marker{display:none} summary.chead::before{content:'\25B8';color:#7a8494;font-size:11px} details[open].card summary.chead::before{content:'\25BE'} details.card.st-done{border-left-color:#b7c1cf}table.done th{background:#eef1f6;text-align:left;font-size:11px;text-transform:uppercase;
+details.dcard, details.card{cursor:default} summary.chead{list-style:none;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap} summary.chead::-webkit-details-marker{display:none} summary.chead::before{content:'\25B8';color:#7a8494;font-size:11px} details[open].card summary.chead::before{content:'\25BE'} details.card.st-done{border-left-color:#b7c1cf}details.card.st-cancelled{border-left-color:#b7c1cf;opacity:.75}table.done th{background:#eef1f6;text-align:left;font-size:11px;text-transform:uppercase;
   letter-spacing:.05em;color:#5a6675;padding:7px 10px}
 table.done td{padding:6px 10px;border-top:1px solid #e6ebf2}
 table.done a{color:#2f5fa8;text-decoration:none}
@@ -321,7 +321,7 @@ def _queue_line(queue, data):
     for pos, tid in enumerate(queue, 1):
         item = tasks_lib.find_task(data, tid)
         st = (item or {}).get("status")
-        cls = "qchip done" if st == "done" else ("qchip live" if tid == top else "qchip")
+        cls = "qchip done" if st in ("done", "cancelled") else ("qchip live" if tid == top else "qchip")
         chips.append('<span class="%s">%d&middot;%s</span>' % (cls, pos, escape(tid)))
     return ('<div class="queue"><b>Queue</b> &nbsp;' +
             ("".join(chips) if chips else '<span class="muted">empty</span>') + "</div>")
@@ -383,13 +383,13 @@ def _modal_html(item, task_root, base, queue):
 
 
 def build_board(data, interactive=True, base="/tasks/", task_root=None):
-    """Board: queue (draggable) + backlog (non-queued, not done) + completed (done) — all one-row tables. Detail is in the modal."""
+    """Board: queue (draggable) + backlog (non-queued, not done/cancelled) + completed (done/cancelled) — all one-row tables. Detail is in the modal."""
     data = tasks_lib.load_tasks() if data is None else data
     queue = list(data.get("queue") or [])
     items = list(tasks_lib.iter_tasks(data))
     queued_set = set(queue)
-    done_items = [i for i in items if i.get("status") == "done"]
-    backlog_items = [i for i in items if i.get("status") != "done" and i["id"] not in queued_set]
+    done_items = [i for i in items if i.get("status") in ("done", "cancelled")]
+    backlog_items = [i for i in items if i.get("status") not in ("done", "cancelled") and i["id"] not in queued_set]
 
     # sort backlog like before: in-progress first, then priority, then id
     backlog_items.sort(key=lambda i: (0 if i.get("status") == "in-progress" else 1, 1 if i.get("status") == "blocked" else 0, i.get("priority") or 9, str(i["id"])))

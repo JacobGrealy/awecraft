@@ -1,33 +1,56 @@
-// AC-0188: GDExtension native port of world generation — the *coarse* 4x8x4
-// 3D density approach from the (cancelled) AC-0198 spec, ported directly to
-// C++ per the 2026-09-03 user decision.
+// AC-0215 (supersedes AC-0188): the MC 1.18 style COARSE 4x8x4 3D DENSITY
+// FIELD gen — caves AND surface come from ONE field (the user's AC-0215
+// ask: "replace the heightmap + per column cave carve").
 //
-// Replaces the GDScript generate_args hot path (5x _fbm2chunk 17 oct +
-// 3x _fbm3col + 2x _vnoise3col per 98k-cell column) with:
-//   * the AC-0091 2D heightmap (c/h/r) + biome (t/m) kept EXACT (same AweNoise
-//     calls, same remap y = 105.2 + c*36.4 + h*52 + r-boost, spawn pad 136)
-//     — sea 126, mountains, biomes, spawn contract stay;
-//   * one coarse 3D field per chunk sampled on a 4x8x4-cell grid (points
-//     extended one cell per axis for the 2-ring tree neighborhood, 7x9x7 =
-//     441 points x 4 fields), each point an AweNoise.fbm3 (2 octaves) with
-//     the OLD noise params:
-//       CAVE = fbm3(gx/16, gy/10, gz/16, seed+301, 2)   (old nc1 anisotropy)
-//       ORE1 = fbm3(gx/7,  gy/7,  gz/7,  seed+77,  2)   (old diamond n1, exact)
-//       ORE2 = fbm3(gx/9+900, gy/9, gz/9+900, seed+88, 2) (old iron n2, exact)
-//       ORE3 = fbm3(gx/6+1700, gy/6, gz/6+1700, seed+99, 2) (old coal n3, exact)
-//   * per-cell trilinear + a quintic "spline surface" ramp (MC-1.18 style):
-//       d(x,y,z) = ramp((s - y + 0.5)/6) + 1.8 * (cave(x,y,z) - 0.5)
-//       solid where d > 0 (cheese/noodle 3D caves; the surface sits s +/- 6).
-//     The ramp is clamped +/-1 with |1.8*(cave-0.5)| < 1, so d is +1 (solid)
-//     for y <= s-6 and -1 (air) for y >= s+7 — the surface band is the only
-//     region that needs the trilinear.
-//   * deep zone y<16 (non-pad columns): cave < 0.42 carves; y<8 fills LAVA
-//     (MC-style deep lakes) instead of air — replaces the 2x _vnoise3col.
-//   * ore placement keeps the OLD bands/thresholds (diamond y<16 >0.78,
-//     iron y<42 >0.8, coal y<60 >0.82) but reads the coarse ore fields;
-//     obsidian keeps the exact old per-cell hash3i(x,y,z,seed+333) < 0.02.
-//   * trees + flowers keep the exact old hash logic, but the tree base is the
-//     effective surface (h_eff) instead of the 2D height.
+// The per-cell DENSITY (one field, sampled on a coarse 4x8x4-cell grid per
+// chunk — 7x9x7 = 441 lattice points per field, the 1-cell margin covering
+// the 2-ring tree neighborhood; each lattice point an AweNoise.fbm3):
+//
+//   d(x,y,z) = S_ramp((H(x,z) - y + 0.5) / R) + A(y) * (C(x,y,z) - 0.5)
+//
+//   S_ramp = the quintic SPLINE SURFACE DENSITY (C2, the same polynomial as
+//            AweNoise._fade) clamped to +/-1: +1 (solid) below the surface,
+//            -1 (air) above, the zero crossing IS the surface. R = 10.
+//   C(x,y,z) = trilinear of the coarse 3D CAVE field (the AC-0188 field:
+//            fbm3(gx/16, gy/10, gz/16, seed+301, 2)) — the per-column cave
+//            carve (old 1D _vnoise3col / the y<16 0.42 threshold carve) is
+//            GONE: caves are where the one field says d < 0, at ANY depth.
+//   A(y) = 1.8 * (1 + max(0, H - y - R) / DEEP_GROW): the cave amplitude.
+//            1.8 in the surface band (the surface wobbles +/-~9 with the
+//            cave noise and caves break through it), growing with depth
+//            (DEEP_GROW = 8) so the 3D caves widen into the deep — MC 1.18
+//            deepslate cheese: the deep zone is ~30-38% air, opening
+//            downward (the C field is tight — mean 0.506, std 0.105 — so
+//            the fast growth is what widens the pockets).
+//   H(x,z) = the surface height derived from the coarse 3D SURFACE field —
+//            the AC-0091 2D heightmap (c/h/r fbm2) is REPLACED by the 3D
+//            fields on the same 4x8x4 grid, read at the sea-level slice
+//            y = 126 (trilinear):
+//              c = tril(f_sc, gx, 126/ystep, gz)  fbm3(X/220,  Y/64, Z/220,  seed,     3)
+//              h = tril(f_sh, gx, 126/ystep, gz)  fbm3(X/70+333,  Y/64, Z/70+333,  seed+7, 4)
+//              r = tril(f_sr, gx, 126/ystep, gz)  fbm3(X/300+500, Y/64, Z/300+500, seed+13, 3)
+//            The slice stats differ from the old 2D fbm's, so the remap is
+//            affine-calibrated per field onto the OLD 2D distribution (see
+//            surface_h — the calibration constants), keeping the AC-0091
+//            ocean/land/mountain balance (sea 126). H = 105.2 + cc*36.4 +
+//            hc*52 + (rc > 0.62 ? (rc-0.62)*390 : 0), clamp [3,300]; the
+//            SPAWN PAD stays EXACT (d<=6 -> 136, 6<d<=10 smoothstep blend —
+//            the spawn contract).
+//
+// SOLID where d > 0, AIR where d < 0. The surface, the caves, and the deep
+// lava lakes (deep cave pockets at y<8 fill LAVA instead of air) all come
+// from this one field. The aquifer is unchanged: water fills from the
+// effective surface up to SEA (126) where the surface is below sea.
+//
+// Kept from AC-0188/AC-0091:
+//   * the coarse ORE fields + OLD bands/thresholds (diamond y<16 >0.78,
+//     iron y<42 >0.8, coal y<60 >0.82); obsidian keeps the exact old
+//     per-cell hash3i(x,y,z,seed+333) < 0.02 (now y 8..9, y<8 is the
+//     non-pad lava floor);
+//   * the 2D biome texture field (t/m fbm2) for the surface block / dirt /
+//     snow / desert colors (biomes are a surface texture, not terrain);
+//   * trees + flowers: exact old hash logic, base = the effective surface
+//     (h_eff = topmost d > 0 of the one field) instead of the 2D height.
 //
 // NOISE INVARIANT: hash2i/hash3i/fade/lerp/vnoise2/vnoise3/fbm2/fbm3 are
 // bit-for-bit ports of godot/core/noise.gd (f64 math, i64/i32 integer hash,
@@ -35,8 +58,10 @@
 // compiler never contracts the fade/ramp polynomials into FMA (baseline
 // x86-64 has none, MinGW included). Verified by AWECRAFT_LOGIC=genprobe.
 //
-// The terrain is NEW (new genhash baseline — accepted, AC-0188 gate): caves
-// are 3D-connected, ore comes from the coarse fields, deep pockets are lava.
+// The terrain is NEW again (new genhash baseline — expected, AC-0215 gate):
+// the surface now comes from the coarse 3D surface field, the caves run the
+// full depth from the same field, and the genhash is deterministic (two
+// runs byte-identical).
 //
 // Shares the libchunkio library (one .so/.dll, entry chunkio_library_init
 // registers ChunkIOPalette + AweGen — see chunk_io.cpp).
@@ -180,11 +205,12 @@ constexpr int SPAWN_Z = 8;
 constexpr int SPAWN_H = 136;
 constexpr int TERRAIN_H_MAX = 300;
 
-// AC-0198 coarse-density params.
+// AC-0215 one-density-field params (MC 1.18 style).
 constexpr double CAVE_AMP = 1.8;   // |CAVE_AMP * (cave-0.5)| < 1 keeps the
-// ramp asymptotes solid/air (surface always in s +/- 6).
-constexpr double BAND = 6.0;       // ramp half-width in y blocks.
-constexpr double DEEP_T = 0.42;    // deep-zone carve threshold (y < 16).
+// ramp asymptotes solid/air (surface always in H +/- R).
+constexpr double R_BAND = 10.0;    // spline surface half-width in y blocks.
+constexpr double DEEP_GROW = 8.0; // cave-amplitude growth scale with depth.
+constexpr double SURF_YSCALE = 64.0; // 3D surface-field y-scale (slow).
 constexpr int GY_CELLS = 8;        // 4x8x4 cells -> 8 y-cells of h/8.
 
 // SOLID_IDS (generator.gd) — tree ground check.
@@ -222,28 +248,7 @@ static inline int iabs(int v) {
 	return v < 0 ? -v : v;
 }
 
-// AC-0091 exact 2D height (same formula as WorldGen.terrain_height; the
-// generate_args column variant uses the same numbers).
-static inline int height2d(int x, int z, int64_t seed) {
-	double c = fbm2((double)x / 220.0, (double)z / 220.0, seed, 3);
-	double h = fbm2((double)x / 70.0 + 333.0, (double)z / 70.0 + 333.0, seed + 7, 4);
-	double r = fbm2((double)x / 300.0 + 500.0, (double)z / 300.0 + 500.0, seed + 13, 3);
-	double y = 105.2 + c * 36.4 + h * 52.0;
-	if (r > 0.62)
-		y += (r - 0.62) * 390.0;
-	double dx = (double)x - (double)SPAWN_X;
-	double dz = (double)z - (double)SPAWN_Z;
-	double d = std::sqrt(dx * dx + dz * dz);
-	if (d <= 6.0) {
-		y = (double)SPAWN_H;
-	} else if (d <= 10.0) {
-		double w = 1.0 - smoothstep_gd(6.0, 10.0, d);
-		y = y * (1.0 - w) + (double)SPAWN_H * w;
-	}
-	return clampi((int)std::floor(y), 3, TERRAIN_H_MAX);
-}
-
-// Spawn-pad zone (box + circle, matches the height2d pad condition).
+// Spawn-pad zone (box + circle, matches the old height2d pad condition).
 static inline bool is_pad(int x, int z) {
 	if (absi((int64_t)x - SPAWN_X) > 10 || absi((int64_t)z - SPAWN_Z) > 10)
 		return false;
@@ -304,12 +309,51 @@ static inline double tril(const Field &f, double gx, double gy, double gz) {
 	return lerp_gd(lerp_gd(x00, x10, v), lerp_gd(x01, x11, v), w);
 }
 
-// AC-0198 "spline surface": quintic ramp in [-1, 1], C2 at the clamps
-// (quintic = the same polynomial as AweNoise._fade). +1 (solid) below the
-// surface, -1 (air) above; the zero crossing is the surface. The +0.5 keeps
-// an unshifted column (cave term 0) solid exactly for y <= s.
-static inline double density_ramp(double s, int y) {
-	double t = (s + 0.5 - (double)y) / BAND;
+// AC-0215: the surface height H(x,z) from the coarse 3D SURFACE field —
+// the AC-0091 2D heightmap (c/h/r fbm2, same remap) is REPLACED by the 3D
+// fields on the same 4x8x4 grid, read at the SEA-LEVEL SLICE y = 126. The
+// slice's statistics differ from the old 2D fbm's, so the remap is
+// affine-calibrated per field onto the OLD 2D distribution (measured over a
+// 640x640 block area, seed 44 — the calibration constants below):
+//   c: old mean 0.4219 std 0.1280  <-  new slice: mean 0.3681 std 0.0467
+//   h: old mean 0.4964 std 0.1361  <-  new slice: mean 0.5112 std 0.1107
+//   r: old mean 0.4292 std 0.1366  <-  new slice: mean 0.5743 std 0.1443
+// so the H distribution (the ocean/land/mountain balance, sea 126) matches
+// the AC-0091 heightmap. The spawn pad stays EXACT (the spawn contract):
+// d<=6 -> SPAWN_H, 6<d<=10 smoothstep blend.
+static inline int surface_h(int x, int z, const Field &f_sc, const Field &f_sh,
+		const Field &f_sr, double ystep, int bx, int bz) {
+	double gx = (double)(x - bx) / 4.0;
+	double gz = (double)(z - bz) / 4.0;
+	double gy = 126.0 / ystep; // the sea-level slice row
+	double c = tril(f_sc, gx, gy, gz);
+	double h = tril(f_sh, gx, gy, gz);
+	double r = tril(f_sr, gx, gy, gz);
+	// Calibrated fields (mapped onto the old 2D distribution).
+	double cc = 0.4219 + (c - 0.3681) * (0.1280 / 0.0467);
+	double hc = 0.4964 + (h - 0.5112) * (0.1361 / 0.1107);
+	double rc = 0.4292 + (r - 0.5743) * (0.1366 / 0.1443);
+	double y = 105.2 + cc * 36.4 + hc * 52.0;
+	if (rc > 0.62)
+		y += (rc - 0.62) * 390.0;
+	double dx = (double)x - (double)SPAWN_X;
+	double dz = (double)z - (double)SPAWN_Z;
+	double d = std::sqrt(dx * dx + dz * dz);
+	if (d <= 6.0) {
+		y = (double)SPAWN_H;
+	} else if (d <= 10.0) {
+		double w = 1.0 - smoothstep_gd(6.0, 10.0, d);
+		y = y * (1.0 - w) + (double)SPAWN_H * w;
+	}
+	return clampi((int)std::floor(y), 3, TERRAIN_H_MAX);
+}
+
+// AC-0215 "spline surface density": quintic ramp in [-1, 1], C2 at the
+// clamps (quintic = the same polynomial as AweNoise._fade). +1 (solid)
+// below the surface, -1 (air) above; the zero crossing IS the surface. The
+// +0.5 keeps an unshifted column (cave term 0) solid exactly for y <= H.
+static inline double density_ramp(double H, int y) {
+	double t = (H + 0.5 - (double)y) / R_BAND;
 	if (t > 1.0)
 		t = 1.0;
 	else if (t < -1.0)
@@ -317,6 +361,25 @@ static inline double density_ramp(double s, int y) {
 	double u = 0.5 * (t + 1.0);
 	double q = u * u * u * (u * (u * 6.0 - 15.0) + 10.0);
 	return 2.0 * q - 1.0;
+}
+
+// AC-0215: the cave amplitude of the one density field. CAVE_AMP in the
+// surface band (|y - H| <= R), growing with depth (the deep caves widen
+// downward — MC 1.18 cheese). The per-column deep carve is gone.
+static inline double cave_amp(int H, int y) {
+	double d = (double)H - (double)y - R_BAND;
+	if (d < 0.0)
+		d = 0.0;
+	return CAVE_AMP * (1.0 + d / DEEP_GROW);
+}
+
+// The ONE density field at a cell (solid where > 0, air where < 0). Pad
+// columns keep the exact flat surface (spawn contract: no cave term).
+static inline double dens_at(int H, int y, double cave, bool pad) {
+	double s = density_ramp((double)H, y);
+	if (pad)
+		return s;
+	return s + cave_amp(H, y) * (cave - 0.5);
 }
 
 // ---------------------------------------------------------------------------
@@ -329,12 +392,19 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	int nsl = hmax / 16;
 	double ystep = (double)hmax / GY_CELLS;
 
-	// Coarse fields (441 points each, 2-octave AweNoise.fbm3).
+	// Coarse fields (441 lattice points each = 4x8x4 cells + 1-cell margin,
+	// 2-octave AweNoise.fbm3 per lattice point).
 	Field f_cave, f_ore1, f_ore2, f_ore3;
 	build_field(f_cave, bx, bz, ystep, seed + 301, 16.0, 10.0, 16.0, 0.0, 0.0, 0.0);
 	build_field(f_ore1, bx, bz, ystep, seed + 77, 7.0, 7.0, 7.0, 0.0, 0.0, 0.0);
 	build_field(f_ore2, bx, bz, ystep, seed + 88, 9.0, 9.0, 9.0, 900.0, 0.0, 900.0);
 	build_field(f_ore3, bx, bz, ystep, seed + 99, 6.0, 6.0, 6.0, 1700.0, 0.0, 1700.0);
+	// AC-0215: the 3D SURFACE field (the AC-0091 2D heightmap's c/h/r, now
+	// 3D on the same coarse grid — replaces the heightmap).
+	Field f_sc, f_sh, f_sr;
+	build_field(f_sc, bx, bz, ystep, seed, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0);
+	build_field(f_sh, bx, bz, ystep, seed + 7, 70.0, SURF_YSCALE, 70.0, 333.0, 0.0, 333.0);
+	build_field(f_sr, bx, bz, ystep, seed + 13, 300.0, SURF_YSCALE, 300.0, 500.0, 0.0, 500.0);
 
 	std::vector<int> heights(256);
 	std::vector<int> heff(256);
@@ -346,8 +416,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			int idx = lz * 16 + lx;
 			int x = bx + lx;
 			int z = bz + lz;
-			int s = height2d(x, z, seed);
-			heights[idx] = s;
+			heights[idx] = surface_h(x, z, f_sc, f_sh, f_sr, ystep, bx, bz);
 			padcol[idx] = is_pad(x, z) ? 1 : 0;
 			double t = fbm2((double)x / 260.0 + 900.0, (double)z / 260.0 + 900.0, seed + 21, 3) * 2.0 - 1.0;
 			double m = fbm2((double)x / 260.0 + 1700.0, (double)z / 260.0 + 1700.0, seed + 33, 3) * 2.0 - 1.0;
@@ -360,30 +429,14 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			else if (m > 0.25)
 				bc = 2;
 			bcode[idx] = bc;
-			// Effective surface: pad columns keep the exact pad height (the
-			// spawn contract — no cave shift there); others take the topmost
-			// solid y of d(y) in [s-6, s+6] (d > 0 is guaranteed at s-6).
-			if (padcol[idx]) {
-				heff[idx] = s;
-			} else {
-				int he = s - 6;
-				for (int y = s + 6; y >= s - 6; y--) {
-					double cave = tril(f_cave, (double)lx / 4.0, (double)y / ystep, (double)lz / 4.0);
-					if (density_ramp((double)s, y) + CAVE_AMP * (cave - 0.5) > 0.0) {
-						he = y;
-						break;
-					}
-				}
-				heff[idx] = he;
-			}
 		}
 	}
 
 	std::vector<uint8_t> flat((size_t)hmax * 256, 0);
 
-	// Solid rock fill for a cell that is neither surface, dirt, water, air,
-	// bedrock, nor deep-carved: the old ore chain (same bands/thresholds,
-	// read from the coarse ore fields) + the exact old obsidian hash.
+	// Solid rock fill (unchanged from AC-0188): the old ore chain (same
+	// bands/thresholds, read from the coarse ore fields) + the exact old
+	// obsidian hash.
 	auto stone_ore = [&](int x, int y, int z, double gx, double gz) {
 		if (y < 16 && tril(f_ore1, gx, (double)y / ystep, gz) > 0.78)
 			return B_DIAMOND_ORE;
@@ -399,8 +452,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	for (int lz = 0; lz < 16; lz++) {
 		for (int lx = 0; lx < 16; lx++) {
 			int idx = lz * 16 + lx;
-			int s = heights[idx];
-			int he = heff[idx];
+			int H = heights[idx];
 			int bm = bcode[idx];
 			bool pad = padcol[idx] != 0;
 			int x = bx + lx;
@@ -409,23 +461,34 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			double gz = (double)lz / 4.0;
 			int base = (lz << 4) | lx;
 
+			// The ONE density field, top-down: the solid flags + the
+			// effective surface (topmost d > 0). Above H + R + 1 the field is
+			// air for sure (the ramp clamps -1, |CAVE_AMP*(cave-0.5)| < 1),
+			// so the scan starts there; everything above stays the flag 0.
+			std::vector<uint8_t> solidf((size_t)hmax, 0);
+			int he = -1;
+			int top = H + 11;
+			if (top > hmax - 1)
+				top = hmax - 1;
+			for (int y = top; y >= 1; y--) {
+				double cave = tril(f_cave, gx, (double)y / ystep, gz);
+				bool s = dens_at(H, y, cave, pad) > 0.0;
+				solidf[y] = s ? 1 : 0;
+				if (s && he < 0)
+					he = y;
+			}
+			if (he < 0)
+				he = 0; // a fully-caved column: the bedrock is the "surface"
+			heff[idx] = he;
+
 			for (int y = 0; y < hmax; y++) {
 				uint8_t cell = 0;
 				if (y == 0) {
 					cell = B_BEDROCK;
 				} else {
-					bool solid;
-					double cave = -1.0; // -1 = not computed
-					if (y < s - 6) {
-						solid = true; // ramp clamped +1: d >= 0.1 > 0 always
-					} else if (y > s + 6) {
-						solid = false; // ramp clamped -1: d <= -0.1 < 0 always
-					} else {
-						cave = tril(f_cave, gx, (double)y / ystep, gz);
-						solid = density_ramp((double)s, y) + (pad ? 0.0 : CAVE_AMP * (cave - 0.5)) > 0.0;
-					}
+					bool solid = solidf[y] != 0;
 					if (y >= he + 1 && y <= sea && he < sea) {
-						cell = B_WATER; // ocean fill (underwater pockets stay water)
+						cell = B_WATER; // aquifer: ocean fill up to Sea 126
 					} else if (y == he) {
 						// Surface block (biome top; sand on shallow non-desert).
 						cell = B_GRASS;
@@ -438,15 +501,9 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 					} else if (y >= he - 3 && solid) {
 						cell = (bm == 1) ? B_SAND : B_DIRT;
 					} else if (!solid) {
-						cell = 0; // air (cave)
-					} else if (!pad && y < 16) {
-						// Deep zone: carve + lava lakes (replaces 2x _vnoise3col).
-						if (cave < 0.0)
-							cave = tril(f_cave, gx, (double)y / ystep, gz);
-						if (cave < DEEP_T)
-							cell = (y < 8) ? B_LAVA : 0;
-						else
-							cell = stone_ore(x, y, z, gx, gz);
+						// Air (cave) — deep cave pockets at y<8 hold LAVA
+						// (the old deep-carve lava lakes, now from the field).
+						cell = (!pad && y < 8) ? B_LAVA : 0;
 					} else {
 						cell = stone_ore(x, y, z, gx, gz);
 					}
@@ -457,14 +514,21 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	}
 
 	// Trees: 20x20 neighborhood (old loop: bx-2 .. bx+17), same hash logic,
-	// base = the effective surface (inside) / computed (2-ring margin).
+	// base = the effective surface (inside) / computed from the one density
+	// field (2-ring margin).
 	for (int tz = bz - 2; tz < bz + 18; tz++) {
 		for (int tx = bx - 2; tx < bx + 18; tx++) {
 			double hv = hash2i(tx, tz, seed + 55);
 			if (hv >= 0.14)
 				continue;
-			int s2 = height2d(tx, tz, seed);
-			if (s2 <= sea + 1)
+			int glx = tx - bx;
+			int glz = tz - bz;
+			int H2;
+			if (glx >= 0 && glx < 16 && glz >= 0 && glz < 16)
+				H2 = heights[glz * 16 + glx];
+			else
+				H2 = surface_h(tx, tz, f_sc, f_sh, f_sr, ystep, bx, bz);
+			if (H2 <= sea + 1)
 				continue;
 			double tv = fbm2((double)tx / 260.0 + 900.0, (double)tz / 260.0 + 900.0, seed + 21, 3) * 2.0 - 1.0;
 			double mv = fbm2((double)tx / 260.0 + 1700.0, (double)tz / 260.0 + 1700.0, seed + 33, 3) * 2.0 - 1.0;
@@ -479,22 +543,27 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			if (hv >= dens)
 				continue;
 			int hcol;
-			int glx = tx - bx;
-			int glz = tz - bz;
 			if (glx >= 0 && glx < 16 && glz >= 0 && glz < 16) {
 				hcol = heff[glz * 16 + glx];
 			} else {
-				// Margin column: 2D height + the same surface scan (the
+				// Margin column: the one density field's surface (the
 				// fields' 1-cell margin covers tx,tz in [bx-4, bx+20]).
-				if (is_pad(tx, tz)) {
-					hcol = s2;
-				} else {
-					double gx2 = (double)(tx - bx) / 4.0;
-					double gz2 = (double)(tz - bz) / 4.0;
-					hcol = s2 - 6;
-					for (int y = s2 + 6; y >= s2 - 6; y--) {
+				hcol = 0;
+				double gx2 = (double)glx / 4.0;
+				double gz2 = (double)glz / 4.0;
+				bool pad2 = is_pad(tx, tz);
+				int top2 = H2 + 11;
+				if (top2 > hmax - 1)
+					top2 = hmax - 1;
+				for (int y = top2; y >= 1; y--) {
+					if (pad2) {
+						if (density_ramp((double)H2, y) > 0.0) {
+							hcol = y;
+							break;
+						}
+					} else {
 						double cave = tril(f_cave, gx2, (double)y / ystep, gz2);
-						if (density_ramp((double)s2, y) + CAVE_AMP * (cave - 0.5) > 0.0) {
+						if (dens_at(H2, y, cave, false) > 0.0) {
 							hcol = y;
 							break;
 						}

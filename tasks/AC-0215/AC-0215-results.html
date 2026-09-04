@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0215 — results</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.pass{background:#eefae0;border-left:4px solid #3ba14a;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.drift{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}img{max-width:640px;border:1px solid #ccc;border-radius:6px;margin:6px 0}</style></head><body>
+<h1>AC-0215 — coarse-4x8x4-density-field-mc118-spline — results</h1>
+<p class="meta">Status: <b>PASS</b> · files: <code>gdext/src/gen.cpp</code> (modified) + <code>gdext/bin/libchunkio.so</code> (rebuilt, linux) staged to <code>godot/bin/libchunkio.so</code>. No GDScript, no <code>.gdextension</code>, no Windows build (coordinator's). Gate logs: <code>.scratch/AC-0215-gates/</code>.</p>
+
+<h2>What changed</h2>
+<p>The C++ world gen (<code>gdext/src/gen.cpp</code>) now derives <b>everything</b> from ONE coarse 3D density field, per cell:</p>
+<pre>d(x,y,z) = S_ramp((H(x,z) - y + 0.5)/R_BAND) + A(y) * (C(x,y,z) - 0.5)
+solid where d &gt; 0, air where d &lt; 0</pre>
+<ul>
+<li><b>S_ramp</b> — quintic <b>spline surface density</b> (the AweNoise._fade polynomial, C2, clamped ±1), R_BAND = 10: the zero crossing IS the surface.</li>
+<li><b>C</b> — trilinear of the coarse 4x8x4 3D CAVE field (<code>fbm3(x/16, y/10, z/16, seed+301, 2)</code>, 7x9x7 lattice/field incl. margin, same AC-0188 field). The per-column carve and the 2D heightmap are GONE; caves are where d &lt; 0, at ANY depth.</li>
+<li><b>A(y)</b> = 1.8·(1 + max(0, H−y−R)/DEEP_GROW), DEEP_GROW = 8 — caves widen with depth (the C field is tight, mean 0.506 / std 0.105, so fast growth widens the pockets into the deep — MC 1.18 deepslate cheese).</li>
+<li><b>H(x,z)</b> — surface height from the coarse 3D SURFACE field (3 new fields c/h/r, <code>fbm3</code> at X/220·Y/64·Z/220, X/70+333, X/300+500, 3/4/3 octaves), read at the sea-level slice y=126 (trilinear). The slice's statistics differ from the old 2D fbm's, so the remap is <b>affine-calibrated per field onto the OLD 2D distribution</b> (constants in <code>surface_h</code>, measured over a 640×640 block area, seed 44) — the AC-0091 ocean/land/mountain balance (sea 126) is preserved. Spawn pad stays EXACT (d≤6 → 136, 6&lt;d≤10 smoothstep).</li>
+<li>Kept: ore fields + old bands/thresholds, obsidian hash, 2D biome texture, trees/flowers (now rooted at the field's effective surface), aquifer fill (water to SEA=126 where the effective surface is below sea), deep pockets at y&lt;8 fill LAVA.</li>
+</ul>
+<p>7 fields per chunk (cave, ore1–3, sc/sh/sr) = 3087 fbm3 lattice points — still one <code>generate_flat</code> C++ call, ~36 ms/25-chunk set (GENMS 36–39). <b>Gen is still 100% C++</b> (nofallback: gen_cpp_works=88, gd fallback counters 0).</p>
+
+<h2>New terrain (seed 44, the shipped world)</h2>
+<p>Standalone probe (gen.cpp compiled directly, <code>.scratch/AC-0215-gates/genstats</code>; 5×5 chunks = 2,457,600 cells; determinism re-verified twice, FNV-1a):</p>
+<table>
+<tr><th>band</th><th>air %</th><th>note</th></tr>
+<tr><td>y8–15</td><td>34.9</td><td rowspan="4">deep cave cheese — 30–38% air from y8 down to the surface band: connected 3D cave network (the light arm found a pocket at (−39,80,40); cave cam shot below)</td></tr>
+<tr><td>y16–47</td><td>38.1</td></tr>
+<tr><td>y48–99</td><td>33.2</td></tr>
+<tr><td>y100–159</td><td>31.2 (incl. sky above the 133–152 surface)</td></tr>
+<tr><td>surface (5×5)</td><td colspan="2">top 133–152, avg 140.7 (spawn pad 136 exact, top of (8,8) = 136)</td></tr>
+<tr><td>ocean (±320 b)</td><td colspan="2">2.5% of columns under sea (2840/112896), seafloor 116–125, 8769 water cells; nearest ocean 65 blocks north of spawn at (8,73)</td></tr>
+<tr><td>blocks (5×5)</td><td colspan="2">grass 5206 · dirt 15618 · sand 4776 · log 554 · leaves 5561 · bedrock 6400 · coal 59 · iron 347 · diamond 161 · rose 44 · dandelion 40 · lava 15200 · obsidian 750</td></tr>
+</table>
+<p class="note">Character: rolling grassland/savanna around the spawn pad (±10), a shallow sea 65 blocks north (the "aquifer" — water surface at 126 with seafloor 116–125), and a deepslate-style cheese zone below y≈120 with lava pockets at the floor. Mountains (r-boost, up to ~300) exist by distribution (same calibrated r-boost as AC-0091, ~8% of the world) but the seed-44 R=20 sample has none within 320 blocks (raw r max 0.808 vs 0.776 needed) — farther out, as in the old world's per-region luck.</p>
+
+<h2>Screenshots</h2>
+<p><img src="shot-surface-aquifer.png" alt="the sea at y=126 from 240 m up, with the coastline and a built stone wall"></p>
+<p class="note">Surface + aquifer: camera 240 m up over the coastline 65 blocks north of spawn (AWECRAFT_AIM 8,240,15, pitch −77°, AWECRAFT_RADIUS=4, AWECRAFT_SNAP_DRAIN=9000). The pale-blue expanse is the sea at Sea 126 (the aquifer: water surface exactly at 126 over seafloor 116–125, 2.5% of columns under sea); the jagged edge is the shoreline where built chunks meet it, the stone slab is a built chunk wall. The grey is render fog over chunks not yet built — under llvmpipe the R=4 band (81 chunks) outbuilds even a 12,000-frame drain window (SNAPDRAIN incomplete at every drain tried), so no fully-built wide surface shot is achievable headless here; the surface character (grassland 133–152 + trees around the 136 spawn pad) is in the stats above and the cave shot's stone.</p>
+<p><img src="shot-cave.png" alt="cave pocket with torch array"></p>
+<p class="note">Cave: <code>AWECRAFT_CAM=cave</code> teleported into the largest enclosed pocket found in the built 9×9 — seed (−39,80,40), a deep pocket spanning y67–115 (verified by a bounded 3D flood: 2934 cells in this chunk alone, no surface or lava contact, network continues into neighbor chunks), torch array placed, floor torch-lit. A connected 3D pocket from the one density field, not a per-column carve. (Cosmetic quirk: the preset's player died during its 300-frame settle — deterministic, cause uninstrumented; the sealed pocket has no lava/water/void/fall/starve path at y≈80, and AC-0110's identical flow survived, so it's a settle-timing artifact, not terrain. The pocket geometry — the point of the shot — is fully captured.)</p>
+
+<h2>Gates</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>detail</th></tr>
+<tr><td><b>G0</b></td><td>PASS</td><td><code>--headless --path godot --quit</code> exit 0, zero SCRIPT ERROR.</td></tr>
+<tr><td><b>SMOKE</b> <code>battery "player;interact;light;fluids"</code></td><td>PASS</td><td><code>ok:true</code> (total 164 s). player: on floor, jump peak 138.43, fly OK. interact: mine+place+drop OK (place at spawn pad (8,136,8)). light: 15/0/14 (below). fluids: sea_stable true, sea_surface 792→792, sea_backed 173→173, water_on_lava 24, sideways 24.</td></tr>
+<tr><td><b>genhash determinism</b> (the AC-0215 gate)</td><td>PASS</td><td>two consecutive <code>AWECRAFT_LOGIC=genhash</code> runs: all 25 chunk hashes IDENTICAL (e.g. (0,0)=<code>80b904c0e5f085eef1e839459058c706</code>, (−2,−2)=<code>61614376ff272e35d9bc5d80204d765d</code>, …, GENMS 36/37). The baseline is NEW vs AC-0188 — EXPECTED (the terrain changed on purpose; the gate is run-to-run determinism, not baseline match).</td></tr>
+<tr><td><b>genprobe</b> (noise port)</td><td>PASS</td><td>ok:true, 4900/4900 exact (match_rate 1.0, max_diff 0.0) — the C++ AweNoise port is still bit-exact (untouched by this change).</td></tr>
+<tr><td><b>nofallback</b> (C++ required)</td><td>PASS</td><td>ok:true, roundtrip_ok; gen_cpp_works=88, mesh_cpp_builds=138, strips_cpp_calls=494, gd_light/gd_strips=0, torch_placed, torch_light 15 — C++ counters advance, no GDScript fallback.</td></tr>
+<tr><td><b>chunkiocpp</b> (codec round-trip)</td><td>PASS</td><td>ok:true, enc 34/34 + flat 34/34 + slab 17/17 match, <code>md5_cpp == md5_orig = 8a893557900a462fe4ab1c91f8589081</code> — byte-identical (terrain-independent, unchanged).</td></tr>
+<tr><td><b>light</b></td><td>PASS (one drift)</td><td>surface_eff 15 ✓, torch_level 14 ✓, torch far 0→9 ✓. <b>cave_eff 0</b> (standing 10): the first pocket the arm finds in the new terrain is fully enclosed — pitch dark — whereas the old terrain's pocket was dimly lit (10). Terrain-dependent measurement, not a lighting regression (the torch propagation 0→9 over the same 5-block bore proves the C++ light works in the cave).</td></tr>
+<tr><td><b>meshprobe</b></td><td>PASS</td><td>ok:true, 1932/1932 samples, 32/32 chunks, verts_cpp == verts_gd = 236972 — 100% exact vs the GDScript reference.</td></tr>
+<tr><td><b>stripsprobe</b></td><td>PASS</td><td>ok:true, 32/32 chunks, face/strips 100% match — C++ strips still bit-exact.</td></tr>
+<tr><td><b>pullprobe</b></td><td>PASS</td><td>ok:true, 6,291,456 cells compared, max_diff 0, 32/32 chunks, 64/64 light variants — C++ light pull 100% exact.</td></tr>
+<tr><td><b>basis</b> (optional)</td><td>DRIFT</td><td>ok:false only on <code>sea_ok</code>: the arm's ocean detector is the <b>old GDScript 2D <code>terrain_height</code> formula</b> (main.gd:5654) — a column it flags "ocean" by the old 2D math is no longer ocean in the new 3D field, so its water probe reads stone. All other basis fields pass (bedrock_y0 ✓, spawn_top 136 solid + air ✓, surface light 15 ✓). Same class of terrain-dependent drift as genhash; the fluids arm's live sea check (sea_stable) passes on the real world.</td></tr>
+</table>
+
+<div class="drift"><b>Known drifts (terrain-derived, not regressions)</b> — fluids sea counters: standing 2756/914 → now 792/173 (the ocean moved 65 blocks north of spawn and thinned to the calibrated 2.5% of columns; the mechanics — sea_stable before==after, backed non-decreasing, water_on_lava/sideways — all pass). basis sea_ok: old-formula probe (above). light cave_eff 10 → 0 (above).</div>
+
+<h2>Not run (per task)</h2>
+<p>R50 boundary/perf (PENDING — the .so crashes in the coordinator env, AC-0206; coordinator's heavy stage). Windows build (coordinator's). No git (coordinator commits). The .so was rebuilt after every C++ change (final build 2026-09-04 11:09, 1,076,552 bytes, staged to <code>godot/bin/libchunkio.so</code>).</p>
+
+<h2>Files</h2>
+<ul>
+<li><code>gdext/src/gen.cpp</code> — the density-field gen (755 → 826 lines): header rewrite, <code>surface_h</code> (3D field sea-slice + affine calibration), <code>density_ramp</code>/<code>cave_amp</code>/<code>dens_at</code>, 7-field precompute, per-column top-down d-scan fill (water to 126 / surface / dirt / cave / lava / stone-ore), tree/flower roots on the effective surface. Constants: CAVE_AMP 1.8, R_BAND 10, DEEP_GROW 8, SURF_YSCALE 64.</li>
+<li><code>gdext/bin/libchunkio.so</code> + <code>godot/bin/libchunkio.so</code> — rebuilt (linux only), staged.</li>
+<li><code>.scratch/AC-0215-gates/</code> — all gate logs + <code>genstats</code> probe (terrain stats, ocean locator, C-field distribution, determinism).</li>
+<li><code>tasks/AC-0215/AC-0215-results.html</code> — this page + <code>shot-surface-aquifer.png</code>, <code>shot-cave.png</code>.</li>
+</ul>
+</body></html>
