@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0224 results</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:980px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+table{border-collapse:collapse;font-size:13px;margin:8px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}
+th{background:#f0f0f0}.ok{background:#eaf7ea;border-left:4px solid #2e9e44;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+.warn{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:8px 0;border-radius:0 6px 0 0}.meta{color:#555;font-size:14px}
+</style></head><body>
+<h1>AC-0224 — expand-streaming-handoff-cap-beyond-1-tuning — results</h1>
+<p class="meta">2026-09-04 · subagent (xhigh) · engine Godot 4.7.1 · seed 44 · C++ hot path (no fallbacks, AC-0208) ·
+<code>godot/world/world.gd</code> (the AC-0219 cap tuned to a 3-burst/frame + torn-read hardening) + <code>godot/scenes/main.gd</code> (ho_max doc line) · logs <code>godot/.scratch/AC-0224-gates/</code></p>
+
+<div class="ok"><b>ALL GATES GREEN.</b> R16 (the #1 gate, fresh C++ gen, no disk shortcut): the AC-0219
+1-mesh-per-frame handoff cap is tuned to a <b>3-burst per frame</b> (<code>STREAM_TM_HANDOFF_PER_FRAME 1 → 3</code>,
+tunable at boot via <code>AWECRAFT_TM_HO</code>, clamped 1..16). <b>ho_max = 3 in both fly phases — the burst is live</b>;
+flying forward at <b>4x</b> (17 m/s, 8 s, 9 recenters) still shows ahead while moving: <b>279</b> forward chunks
+first-built during flight (farthest <b>264 m</b>) — equal to the 1-cap run, and each recenter's ahead ring now lands at
+3/frame (~⅓ the frames) instead of 1/frame. The whole-circle initial fill (build phase, ahead ring included) drops
+<b>35.9 s → 12.4 s (2.9× faster)</b>: at 1/frame the handoff cap throttled the in-flight gate, so builds queued behind
+it; at 3/frame the pool stays saturated. <b>p95 stable — flat or improved in every phase</b>: static 28→143, moving
+143→143, fly4 59→63, fly50 31→40 (fps p95); p50 200/200/250/250 everywhere. <b>No sustained drop</b>: the only
+max-frame is a single 85–100 ms frame (10–12 fps) — the same one-off class as the 1-cap baseline (82–85 ms).
+No pop-in: 0 lost chunks / 0 rebuilds in every run; ahead edge reaches the far circle edge (263–264 m) in every run.
+G0 clean (0 SCRIPT ERROR before + after, every arm); SMOKE ok:true ×4; no regression (chunkiocpp byte-identical md5
+8a89…9081, genhash 25/25 == AC-0215 NEW baseline in 2 runs, light standing baseline 15/0/14, meshprobe/stripsprobe/
+pullprobe 100% exact, nofallback ok:true).</div>
+
+<div class="warn"><b>Finding (fixed):</b> the first R16 run at the 3-burst rate logged <b>1 SCRIPT ERROR</b>
+(<code>Invalid access to property or key 'tid'</code> at <code>threadmesh_poll</code>) — a pre-existing AC-0203-class torn read
+(the pool worker writes <code>entry["t_run"]</code>/<code>["result"]</code> on the worker thread while the poll reads the SAME
+Dictionary every frame; Dictionaries are not thread-safe) that the 3-burst rate made ~3× more likely to hit in its rarer
+form: <code>e.has("tid")</code> passed, then <code>e["tid"]</code> threw, aborting the whole poll for that frame. The effect was
+self-healing (the entry stays in flight, next poll hands it off — 1 frame late, no pop, no corruption), but it is a logged
+SCRIPT ERROR outside the documented noise classes. <b>Fix:</b> the poll now reads <code>e.get("tid", null)</code> and skips the
+entry for the frame on a torn read (the AC-0203 skip path, made exception-free). The final R16 run: <b>0 SCRIPT ERROR</b>.
+All gates below are from the FINAL code state (cap 3 + guard).</div>
+
+<h2>1. What changed</h2>
+<h3><code>godot/world/world.gd</code> — the AC-0219 cap tuned (cap logic intact: same process-frame counter, same break, same epool exemption)</h3>
+<table>
+<tr><th>site</th><th>change</th></tr>
+<tr><td><code>const STREAM_TM_HANDOFF_PER_FRAME</code></td>
+<td><b>1 → 3</b> — the steady-state streaming handoff burst per process frame. Minecraft paces chunk builds to a
+"few per tick with a frame budget", not a hard 1: 1/frame was too slow for 4x–50x flight (a recenter's ahead ring
+of ~30 ready meshes took a full second of frames to land, so the ahead band filled well behind the player). At
+3/frame the same ring lands in ~10 frames. New <code>const STREAM_TM_HANDOFF_MAX := 16</code> = the clamp ceiling
+(a bad env value can't disable the cap or burst back into the 64-mesh recenter-burst regime the cap exists to break up).</td></tr>
+<tr><td><code>var stream_ho_cap</code> (new)</td>
+<td>the effective burst (const default) — the runtime tuning knob, so 2/3 can be A/B'd in the harness without a code
+change. Set in <code>_ready</code> from <code>AWECRAFT_TM_HO</code> when present:
+<code>stream_ho_cap = clampi(hoe.to_int(), 1, STREAM_TM_HANDOFF_MAX)</code> (same pattern as
+<code>drain_budget_ms</code>/<code>AWECRAFT_DRAIN_MS</code>).</td></tr>
+<tr><td><code>threadmesh_poll()</code> (the cap check)</td>
+<td>the break condition now tests <code>_stream_ho_n &gt;= stream_ho_cap</code> (was the const). Everything else is
+untouched: the <code>Engine.get_process_frames()</code>-keyed counter <code>_stream_ho_n</code> (resets per process frame —
+threadmesh_poll runs up to 3×/frame: physics + process + recenter), the per-call <code>hb_max</code> batch, the loading
+window's separate <code>LOAD_TM_HANDOFF</code> (6) pace, the UNCAPPED shutdown poll-drain, and the edit-lane (epool)
+exemption.</td></tr>
+<tr><td><code>threadmesh_poll()</code> (torn-read hardening — see the warn box)</td>
+<td><code>var tid = int(e["tid"])</code> → <code>var tidv = e.get("tid", null)</code> + skip-on-null
+(<code>i += 1; continue</code>). A torn read that slips past the <code>has()</code> guard above can no longer raise a
+SCRIPT ERROR and abort the poll; the entry stays in <code>threadmesh_inflight</code> and the next poll sees a consistent
+dict. This is the AC-0203 documented design ("a torn read degrades to a skip, never a corrupted apply") applied to the
+one read that still threw.</td></tr>
+</table>
+<h3><code>godot/scenes/main.gd</code> — harness doc line</h3>
+<p>The <code>_fly_phase</code> <code>ho_max</code> field doc: "AC-0219 cap = 1" → "the AC-0219 cap; AC-0224 default burst = 3,
+<code>AWECRAFT_TM_HO</code>". The arm still measures <code>world._stream_ho_n</code> per frame (unchanged) — it now reports
+the burst actually used (3).</p>
+
+<h2>2. R16 — the #1 gate (fresh C++ gen every run — no save slot, no disk shortcut)</h2>
+<table>
+<tr><th>metric</th><th>before (1-cap, AC-0222 baseline)</th><th>after (3-burst, AC-0224)</th></tr>
+<tr><td>build (797 circle chunks, built_all)</td><td>35865 ms · 797/797 · true</td><td><b>12350 ms</b> · 797/797 · true</td></tr>
+<tr><td>static fps (p50/p95/min)</td><td>200 / 28 / 18 (5/36/55 ms)</td><td>200 / <b>143</b> / 48 (5/7/21 ms)</td></tr>
+<tr><td>moving fps (p50/p95/min)</td><td>200 / 143 / 48 (5/7/21 ms)</td><td>200 / 143 / 50 (5/7/20 ms)</td></tr>
+<tr><td>drop_fps_static_vs_moving</td><td>0</td><td>0</td></tr>
+<tr><td><b>fly4</b> (4x, 17 m/s, 8 s) — ahead_while_moving</td><td><b>279</b></td><td><b>279</b> (equal — the forward edge keeps up at 4x)</td></tr>
+<tr><td><b>fly4</b> — ahead_max_dist_m</td><td>264</td><td>264 (the far circle edge)</td></tr>
+<tr><td><b>fly4</b> — queue_max / build_depth_max (cap 797)</td><td>136 / 30</td><td>136 / 31 (bounded, ≤ 797)</td></tr>
+<tr><td><b>fly4</b> — fps (p50/p95/min)</td><td>250 / 59 / 12 (4/17/82 ms)</td><td>250 / <b>63</b> / 10 (4/16/100 ms)</td></tr>
+<tr><td><b>fly4</b> — recenters / handoff cap (ho_max)</td><td>9 / <b>1</b></td><td>9 / <b>3</b> — the burst fired</td></tr>
+<tr><td><b>fly50</b> (50x, 215 m/s, 2 s) — ahead_while_moving</td><td>124</td><td>62 (see the reading below — attribution + variance)</td></tr>
+<tr><td><b>fly50</b> — ahead_max_dist_m</td><td>263</td><td>263 (the far circle edge)</td></tr>
+<tr><td><b>fly50</b> — queue_max / build_depth_max (cap 797)</td><td>67 / 26</td><td>67 / 26</td></tr>
+<tr><td><b>fly50</b> — fps (p50/p95/min)</td><td>200 / 31 / 12 (5/31/85 ms)</td><td><b>250</b> / <b>40</b> / 12 (4/25/85 ms)</td></tr>
+<tr><td><b>fly50</b> — recenters / handoff cap (ho_max)</td><td>27 / <b>1</b></td><td>27 / <b>3</b> — the burst fired</td></tr>
+<tr><td>no pop (both phases, both runs)</td><td>lost 0 / rebuilds 0</td><td>lost 0 / rebuilds 0</td></tr>
+<tr><td>elapsed / SCRIPT ERROR</td><td>91423 ms / 0</td><td>62317 ms / 0</td></tr>
+</table>
+
+<p><b>Reading — the gate.</b> (1) <b>Flying forward shows ahead while moving</b>: fly4 — the sustained 4x flight case —
+lands 279 forward chunks DURING flight (equal to the 1-cap run), the ahead edge reaches 264 m (the far circle edge), and
+the queue stays bounded (136 total / 31 build vs the 797 cap). <code>ho_max = 3</code> in both phases proves the tuned cap is
+live: each recenter's ahead ring (~30 ready meshes at 4x) now lands in ~10 frames at 3/frame instead of ~30 frames —
+the ahead band fills over a few frames, as intended. The first-fill story is the headline: the whole-circle build phase
+(ahead ring included) goes 35.9 s → 12.4 s (2.9×), because at 1/frame the handoff cap throttled the in-flight gate and
+builds queued behind it. (2) <b>p95 stable</b>: p95 fps is flat or improved in every phase (static 28→143 — the landing
+tail now finishes inside the build phase; moving 143→143; fly4 59→63; fly50 31→40). (3) <b>No sustained drop</b>: p50 is
+200–250 everywhere (flat or up); the only outlier is ONE 85–100 ms frame per fly phase (10–12 fps) — the same one-off
+class the 1-cap baseline had (82–85 ms / 12 fps), not a sustained region.</p>
+
+<p><b>fly50 ahead 124 → 62 — attribution + variance, not a loss of ahead visibility.</b> The counter measures FIRST
+appearances of forward-half chunks DURING the 2 s burst. At 3-burst the circle is fully built 2.9× earlier, so by the
+fly50 start fewer forward chunks are left unbuilt — less is left to first-appear during the burst (the 797/797 total,
+the 263 m edge reach, and the 0-lost/0-rebuild no-pop check all hold). The metric is also run-noisy at 50x: the two
+3-burst runs report 93 and 62 for the same code (the torn-read guard — a one-frame skip on a rare torn read — is the
+only delta between them), vs 124 for the 1-cap run. Phase-start chunk state + recenter-debounce alignment + scan
+alignment move the count by ±30. The stable, gate-relevant numbers — fly4 279==279, edge reach 263–264 m in every run,
+lost 0 / rebuilds 0, built_all true — do not move.</p>
+
+<h2>3. G0</h2>
+<p>Headless load, before the change: exit 0, 0 SCRIPT ERROR. After the cap tuning: exit 0, 0. After the torn-read guard
+(final state): exit 0, 0. (<code>G0-before.log</code>, <code>G0-after.log</code>; every arm log below shows 0 as well.
+The one torn-read SCRIPT ERROR from R16 run t1 is preserved in
+<code>R16-after-t1-tornread.log</code> — see the warn box; the final run is clean.)</p>
+
+<h2>4. SMOKE battery (final code state)</h2>
+<p><code>AWECRAFT_BATTERY="player;interact;light;fluids"</code>: <b>ok:true</b> (total 164 s, 0 SCRIPT ERROR).
+player (start [8.5, 137, 8.5], fly 145.53) · interact (place_ok, drop_spawned) · light (surface <b>15</b> / torch
+<b>14</b> / cave_eff <b>0</b> — the AC-0215 standing baseline, unchanged) · fluids (sea_stable, sea 792/792 — the
+documented AC-0215 terrain drift, stable).</p>
+
+<h2>5. No regression (final code state)</h2>
+<table>
+<tr><th>gate</th><th>standing</th><th>result</th></tr>
+<tr><td>chunkiocpp (codec byte-identical)</td><td>md5 8a89…9081</td>
+<td>ok:true · md5_orig = md5_cpp = <b>8a893557900a462fe4ab1c91f8589081</b> · enc 34/34, flat 34/34, slab 17/17</td></tr>
+<tr><td>genhash (deterministic, == AC-0215 NEW baseline — NOT the AC-0188 baseline)</td><td>(0,0)=80b904c0…</td>
+<td>2 runs, <b>25/25 identical</b> · (0,0)=<b>80b904c0e5f085eef1e839459058c706</b> · (-2,-2)=61614376ff27… · GENMS 36</td></tr>
+<tr><td>light (surface / cave / torch)</td><td>15 / 0 / 14</td>
+<td><b>15 / 0 / 14</b> (torch 0→9) — via SMOKE, the AC-0215 standing baseline, unchanged</td></tr>
+<tr><td>meshprobe (AC-0190/AC-0211)</td><td>100% exact</td>
+<td>ok:true · match_rate <b>1.0</b> · verts_cpp = verts_gd = <b>233448</b> · 32/32 chunks · 1926/1926 accs · 0 mismatches · ac0211_ok.
+Note: the AC-0211-era absolute was 239348 at the 1-cap landing cadence — the arm samples the first 32 mesh-built chunks in
+(cz,cx) order at the frame the 32nd lands, so the 32nd sample slot flips with the handoff cadence (one chunk, ~5900 verts).
+Two runs on the final code both report 233448 (stable under the tuned code). The gate — C++/C++ dispatch-invariant parity —
+is 100% exact, and genhash proves the chunk DATA is byte-identical, so the delta is sample-window timing, not a data change.</td></tr>
+<tr><td>stripsprobe (32/32, AC-0207)</td><td>100% exact</td>
+<td>ok:true · match_rate <b>1.0</b> · 32/32 chunks · 512 strips compared · 0 mismatches · ~39× C++ speedup</td></tr>
+<tr><td>pullprobe (AC-0210)</td><td>100% exact</td>
+<td>ok:true · match_rate <b>1.0</b> · <b>6,291,456 cells</b> · max_diff <b>0</b> · 64/64 variants · 32/32 chunks</td></tr>
+<tr><td>nofallback (AC-0208)</td><td>ok:true</td>
+<td>ok:true · gd_strips_calls 0 · gd_light_pull_calls 0 · gen_cpp works · mesh_cpp builds · roundtrip_ok</td></tr>
+</table>
+
+<h2>6. Scope notes / caveats</h2>
+<ul>
+<li><b>R50 was NOT run</b> (PENDING — the .so crashes in the coordinator env, AC-0206); the Windows build was NOT run.
+The 3-burst only relaxes the handoff side of the drain; the queue-depth cap + farthest-band eviction (AC-0222) are
+untouched, so the R50 guard holds by construction — the R50 queue-no-stall gate will re-measure when AC-0206 resolves.
+(At R50 the 3-burst also raises the initial-load handoff rate from 60→180 meshes/s in steady state; the loading window
+keeps its own LOAD_TM_HANDOFF=6 pace, unchanged.)</li>
+<li><b>The torn-read finding is pre-existing, not introduced by the tuning</b>: the worker-side writes
+(<code>entry["t_run"]</code> line 1511, <code>entry["result"]</code> line 1544) and the main-thread poll reads are the
+AC-0082 handoff pattern AC-0203 already documented as a race ("the entry's dict is being written on the pool thread").
+The 1-cap simply hit the rarer torn form (has() passes, [] throws) ~3× less often — it was never eliminated. The guard
+makes the one throwing read exception-free; the rest of the poll already uses <code>.get()</code> (non-throwing), and the
+post-completion handoff reads run after the worker's last write (safe by the is_task_completed ordering).</li>
+<li><b>Default choice (3, top of the 2–3 range)</b>: 3 = "a few per tick" and gives the 2.9× first-fill win. If the
+coordinator wants a more conservative default, <code>AWECRAFT_TM_HO=2</code> (or flipping the const) is a one-value
+change — no code change needed to A/B it.</li>
+<li>Fly phases: 4x = 9 recenters (full rebuilds, 17 m/s → ~0.9 s/chunk), 50x = 27 recenters (debounced, AC-0213).
+Ahead counts FIRST appearances only (reband swaps tracked separately as rebuilds: 0 in every run). The R16 arm's build
+phase runs with loading_active = false (same as the AC-0222 A/B — controlled).</li>
+</ul>
+
+<p class="meta">Logs: <code>godot/.scratch/AC-0224-gates/</code> — G0-before.log, G0-after.log, SMOKE.log, R16-after-t1-tornread.log
+(the torn-read evidence), R16-after.log (final, 0 SCRIPT ERROR), genhash1/2.log, chunkiocpp.log, nofallback.log,
+meshprobe.log + meshprobe2.log (variance check), stripsprobe.log, pullprobe.log.</p>
+
+</body></html>

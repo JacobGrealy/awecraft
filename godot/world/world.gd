@@ -41,7 +41,18 @@ const LOAD_TM_HANDOFF := 6
 # loading window keeps its own LOAD_TM_HANDOFF pace; edit-lane (epool)
 # handoffs keep landing as before (a user edit must not sit behind the
 # streaming cap).
-const STREAM_TM_HANDOFF_PER_FRAME := 1
+# AC-0224: tuned 1 -> 3 (a small burst per frame, Minecraft-style "a few
+# per tick with a frame budget", not a hard 1): 1/frame is too slow for
+# 4x-50x flight — a recenter's ahead ring (up to ~30 ready meshes) took a
+# full second of frames to land at 1/frame, so the ahead band filled well
+# behind the player. At 3/frame the same ring lands in ~10 frames and the
+# forward edge shows while still moving. The frame stays bounded: 3
+# landings (each apply_accs + collision + scoped face-block refresh) is a
+# fraction of the 64-mesh recenter burst this cap exists to break up. The
+# burst is the tuning knob — AWECRAFT_TM_HO overrides it at boot (clamped
+# 1..STREAM_TM_HANDOFF_MAX) so 2/3 can be A/B'd in the harness.
+const STREAM_TM_HANDOFF_PER_FRAME := 3
+const STREAM_TM_HANDOFF_MAX := 16
 const LOAD_POOL_CAP := 24
 # AC-0178: flush/tex remesh caps while loading — 6 (was 16): each dispatch
 # is ~45 ms of main-thread strip work, 16/frame = 0.7 s of one frame.
@@ -420,6 +431,10 @@ var _tm_handoff := 0
 # recenter call), so the cap is keyed on the process frame, not the call.
 var _stream_ho_frame := -1
 var _stream_ho_n := 0
+# AC-0224: the effective per-frame streaming handoff burst (the const
+# default; _ready overrides it from AWECRAFT_TM_HO when set — the
+# tuning knob, clamped 1..STREAM_TM_HANDOFF_MAX).
+var stream_ho_cap := STREAM_TM_HANDOFF_PER_FRAME
 var perf_build_worker_ms := 0
 var perf_build_worker_ms_list: Array = []  # AC-0197: per-build worker ms (p50/p95 gate)
 var col_stage_enabled := true
@@ -524,6 +539,12 @@ func _ready() -> void:
 	var dr := OS.get_environment("AWECRAFT_DRAIN_MS")
 	if dr != "" and dr.to_int() > 0:
 		drain_budget_ms = dr.to_int()
+	# AC-0224: tuning knob for the streaming handoff burst (default
+	# STREAM_TM_HANDOFF_PER_FRAME = 3); clamped so a bad value can't
+	# disable the cap (1) or burst back to the recenter-burst regime (16).
+	var hoe := OS.get_environment("AWECRAFT_TM_HO")
+	if hoe != "":
+		stream_ho_cap = clampi(hoe.to_int(), 1, STREAM_TM_HANDOFF_MAX)
 	# AC-0152: harness band overrides (default 4/8 per Bedrock Realms).
 	var b0e := OS.get_environment("AWECRAFT_BAND0")
 	if b0e != "":
@@ -1534,22 +1555,26 @@ func threadmesh_poll() -> void:
 	# gate oscillates at the handoff rate so the pool queue stays deep
 	# (~LOAD_TM_CAP - lag - running) and the workers never starve.
 	# AC-0219: global per-frame streaming handoff cap (steady state) — at
-	# most STREAM_TM_HANDOFF_PER_FRAME non-edit meshes land per process
-	# frame, for ALL move sizes and bands (not just the small-move
-	# trickle). A recenter's ahead-band fill used to land every ready mesh
-	# at once (up to the hb_max 64) in one frame: each landing is
+	# most stream_ho_cap non-edit meshes land per process frame (the
+	# AC-0224 burst, default STREAM_TM_HANDOFF_PER_FRAME = 3; tunable via
+	# AWECRAFT_TM_HO), for ALL move sizes and bands (not just the small-
+	# move trickle). A recenter's ahead-band fill used to land every ready
+	# mesh at once (up to the hb_max 64) in one frame: each landing is
 	# apply_accs + collision + the _eff_landed face-block refresh on the
 	# main thread, so the burst tanked the frame. Capped, the ahead band
-	# fills over a few frames instead: unlanded entries simply stay in
+	# fills over a few frames instead (AC-0224: a small burst per frame —
+	# "a few per tick" like Minecraft, not a hard 1 — so a recenter's ahead
+	# ring lands in ~1/3 the frames): unlanded entries simply stay in
 	# threadmesh_inflight (nothing is dropped or re-queued — the dispatch
 	# gate already blocks re-dispatch on in-flight keys) and land next
 	# frame; no pop-in (a mesh appears the frame its build is ready, just
-	# one at a time). The loading window keeps its own LOAD_TM_HANDOFF
-	# pace and the shutdown poll-drain must run UNCAPPED or it stalls
-	# against the frozen process-frame counter (the 20 s exit cap would
-	# then force-clear in-flight tasks — the AC-0178 shutdown segfault
-	# class). Edit-lane (epool) handoffs are exempt: a user edit must not
-	# sit behind the streaming cap (the edit lane is dispatch-staggered).
+	# a small burst at a time). The loading window keeps its own
+	# LOAD_TM_HANDOFF pace and the shutdown poll-drain must run UNCAPPED or
+	# it stalls against the frozen process-frame counter (the 20 s exit cap
+	# would then force-clear in-flight tasks — the AC-0178 shutdown
+	# segfault class). Edit-lane (epool) handoffs are exempt: a user edit
+	# must not sit behind the streaming cap (the edit lane is
+	# dispatch-staggered).
 	var hb_max := LOAD_TM_HANDOFF if loading_active else 64
 	var streaming := not loading_active and not _shutting_down
 	if streaming:
@@ -1597,16 +1622,30 @@ func threadmesh_poll() -> void:
 			# (safe re-queue), never a corrupted apply.
 			i += 1
 			continue
-		# AC-0219: steady state — once this frame's one streaming slot is
-		# used, stop scanning: the unlanded entries wait in
-		# threadmesh_inflight for the next frame (nothing is dropped or
-		# re-queued; the dispatch gate already blocks re-dispatch on
-		# in-flight keys). Edit-lane (epool) entries are EXEMPT — a user
-		# edit must not sit behind the streaming cap (they are rare:
-		# loop 1 above already takes every completed epool entry).
-		if streaming and not bool(e.get("epool", false)) and _stream_ho_n >= STREAM_TM_HANDOFF_PER_FRAME:
+		# AC-0219/AC-0224: steady state — once this frame's streaming burst
+		# (stream_ho_cap, default 3) is used, stop scanning: the unlanded
+		# entries wait in threadmesh_inflight for the next frame (nothing
+		# is dropped or re-queued; the dispatch gate already blocks
+		# re-dispatch on in-flight keys). Edit-lane (epool) entries are
+		# EXEMPT — a user edit must not sit behind the streaming cap (they
+		# are rare: loop 1 above already takes every completed epool entry).
+		if streaming and not bool(e.get("epool", false)) and _stream_ho_n >= stream_ho_cap:
 			break
-		var tid = int(e["tid"])
+		var tidv = e.get("tid", null)
+		if tidv == null:
+			# AC-0203/AC-0224: torn read that slipped PAST the has() guard
+			# above — the pool worker is mid-write on this Dictionary (the
+			# AC-0082 handoff pattern; Dictionaries are not thread-safe),
+			# so the has/read pair can transiently disagree. A direct
+			# e["tid"] access would then raise a SCRIPT ERROR and abort the
+			# whole poll for the frame (observed once at the AC-0224 3-burst
+			# rate, which triples the per-frame dict reads vs the 1-cap).
+			# Skip this entry for this frame — it stays in
+			# threadmesh_inflight and the next poll sees a consistent dict
+			# (the AC-0203 skip path, made exception-free).
+			i += 1
+			continue
+		var tid = int(tidv)
 		var skey = int(e.get("skey", -1))
 		var completed := false
 		if bool(e.get("epool", false)):

@@ -6625,7 +6625,8 @@ func _r16_stats(ms_list: Array) -> Dictionary:
 #  - lost_chunks     : previously-built forward-half chunks whose mesh was
 #                       gone at phase end (a true pop) — must stay 0
 #  - rebuilds        : built->unbuilt transitions seen (reband swaps; info)
-#  - ho_max          : max streaming handoffs in one frame (AC-0219 cap = 1)
+#  - ho_max          : max streaming handoffs in one frame (the AC-0219
+#                      cap; AC-0224 default burst = 3, AWECRAFT_TM_HO)
 func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 	var n_frames := int(seconds * 600.0)
 	var speed := 4.3 * float(mult)  # player.WALK * flight_speed multiplier

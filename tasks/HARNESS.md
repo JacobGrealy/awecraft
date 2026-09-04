@@ -205,6 +205,10 @@ xvfb-run -a env AWECRAFT_SNAPSHOT=/tmp/shot.png AWECRAFT_CAM=top AWECRAFT_RADIUS
 #   AWECRAFT_RADIUS=n render radius (forces world.render_radius; default 4 under harness envs)
 #   AWECRAFT_THREADGEN_N=n / AWECRAFT_TGDEBUG=1   (world.gd)
 #   AWECRAFT_RECPROBE=1 / AWECRAFT_DRAIN_MS=ms / AWECRAFT_GEN_BUDGET=n   (world.gd streaming budgets)
+#   AWECRAFT_TM_HO=n   (AC-0224) steady-state streaming handoff burst per process
+#     frame (world.gd stream_ho_cap; default STREAM_TM_HANDOFF_PER_FRAME = 3,
+#     was 1 at AC-0219; clamped 1..16). The R16 fly phases report ho_max = the
+#     burst actually used (3 by default).
 #   AWECRAFT_TICKTIME=1   (boundary: enable world tick timing)
 #   AWECRAFT_WALK / AWECRAFT_WALK_SPEED   (boundary walk config)
 #   AWECRAFT_VMITEM / AWECRAFT_VMSHOT / AWECRAFT_VMFRACTION   (viewmodel mode)

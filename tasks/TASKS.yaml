@@ -3,7 +3,6 @@ meta:
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0224
 - AC-0216
 - AC-0218
 - AC-0217
@@ -6961,11 +6960,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-04T15:12
   updated_at: 2026-09-04T15:12
-  completed_at: null
+  completed_at: 2026-09-03T19:00
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player flying forward I want ahead chunks to appear quickly without waiting many frames, but
@@ -6981,3 +6980,7 @@ intake:
     created_at: 2026-09-04T15:12
     updated_at: null
     text: '[user] expand beyond 1 per 2026-09-04, Minecraft does few per tick'
+  - id: 2
+    created_at: '2026-09-03T19:00:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Tuning (godot/world/world.gd): STREAM_TM_HANDOFF_PER_FRAME 1->3 (burst/frame, MC-style a-few-per-tick); tunable via AWECRAFT_TM_HO (clamped 1..16) -> stream_ho_cap. Cap logic intact (process-frame counter + break + epool/shutdown/loading exemptions unchanged). R16 fps before->after (p50/p95/min): static 200/28/18 -> 200/143/48; moving 200/143/48 -> 200/143/50; fly4 250/59/12 -> 250/63/10; fly50 200/31/12 -> 250/40/12. p95 flat-or-better in all 4 phases; no sustained drop (only one 85-100 ms frame, same one-off class as baseline 82-85 ms). Build (first fill) 35.9 s -> 12.4 s (2.9x). Ahead fill: ho_max = 3 both fly phases (burst live); fly4 ahead 279 == 279 (264 m edge, bounded queue 136/31 vs cap 797); each recenter ahead ring now lands in ~10 frames (was ~30); no-pop holds: lost 0 / rebuilds 0, 797/797. G0 0 SCRIPT ERROR (before + after + final, every arm). SMOKE all ok:true (light 15/0/14, sea 792/792, player [8.5,137,8.5]). No regression: chunkiocpp md5 8a893557... byte-identical; genhash 25/25 x2 runs == AC-0215 NEW baseline ((0,0)=80b904c0...); light 15/0/14; meshprobe 100% (233448/233448, 32/32, ac0211_ok — 239348 was the 1-cap sample window, parity is the gate); stripsprobe 100% (512); pullprobe 100% (6.29M cells, max_diff 0); nofallback ok:true. Finding (fixed): first R16 run logged 1 SCRIPT ERROR — pre-existing AC-0203 torn-read (e["tid"] throws after has() passes; worker writes the same Dictionary), ~3x likelier at the 3-burst rate. Fixed: poll now e.get("tid") + skip (AC-0203 path, exception-free). Final R16: 0 SCRIPT ERROR. R50 not run (PENDING, AC-0206); Windows build not run. See tasks/AC-0224/AC-0224-results.html.'
