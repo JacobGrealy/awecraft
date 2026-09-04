@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0219 results</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:980px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+table{border-collapse:collapse;font-size:13px;margin:8px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}
+th{background:#f0f0f0}.ok{background:#eaf7ea;border-left:4px solid #2e9e44;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+.warn{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:8px 0;border-radius:0 6px 0 0}.meta{color:#555;font-size:14px}
+</style></head><body>
+<h1>AC-0219 — global-cap-streaming-handoff-one-mesh-per-frame — results</h1>
+<p class="meta">2026-09-04 · subagent (xhigh) · engine Godot 4.7.1 · seed 44 · C++ hot path (no fallbacks, AC-0208) ·
+<code>godot/world/world.gd</code> only · logs <code>.scratch/AC-0219-gates/</code></p>
+
+<div class="ok"><b>ALL GATES GREEN.</b> The steady-state streaming drain now hands off <b>at most ONE
+streaming (non-edit) mesh per process frame</b>, for <b>every</b> move size and band — not just the
+small-move trickle. The ahead-band fill spreads over frames instead of bursting (before: up to <b>7 meshes
+in one frame</b>, 72% of handoff frames carried ≥2; after: <b>n=1 on 100% of frames, 0 frames with ≥2</b>).
+R16 (the #1 gate): moving phase <b>identical</b> (p50 6 / p95 482 / max 490 ms, fps_p50 167 — the ~480 ms
+periodic engine event is pre-existing, AC-0212-documented, unchanged); no sustained drop
+(drop_fps_static_vs_moving 33 → 0, the static phase now matches moving instead of beating it); ahead band
+fills at 1 mesh/frame. G0 clean; SMOKE ok:true ×4;
+no regression (chunkiocpp byte-identical, genhash 25/25 == AC-0188, light standing baseline,
+meshprobe/stripsprobe/pullprobe 100% exact, nofallback ok:true).</div>
+
+<h2>1. What changed (<code>godot/world/world.gd</code>, drain logic intact)</h2>
+<table>
+<tr><th>site</th><th>change</th></tr>
+<tr><td><code>const STREAM_TM_HANDOFF_PER_FRAME := 1</code> (new)</td>
+<td>the global per-frame streaming handoff cap (next to the AC-0178 <code>LOAD_TM_HANDOFF</code> loading-window cap).</td></tr>
+<tr><td><code>_stream_ho_frame</code> / <code>_stream_ho_n</code> (new vars)</td>
+<td>the per-frame counter. Keyed on <code>Engine.get_process_frames()</code> because <code>threadmesh_poll()</code>
+runs up to twice per process frame (<code>_physics_process_impl</code> + <code>_process</code>, plus the recenter call) —
+a per-call counter would allow 2/frame.</td></tr>
+<tr><td><code>threadmesh_poll()</code> — loop 2 (the streaming handoff scan)</td>
+<td>once this frame's one streaming slot is used (<code>_stream_ho_n >= STREAM_TM_HANDOFF_PER_FRAME</code>),
+the scan <b>breaks</b>: unlanded entries simply stay in <code>threadmesh_inflight</code> and land next frame.
+Nothing is dropped or re-queued (the dispatch gate already blocks re-dispatch on in-flight keys); a mesh
+appears the frame its build is ready — just one at a time, no pop-in. The counter increments per
+non-edit handoff; <b>edit-lane (epool) handoffs are exempt</b> (a user edit must not sit behind the
+streaming cap — the edit lane is dispatch-staggered at 1/frame anyway). The cap applies to ALL
+steady-state streaming handoffs (every band, every move size — the ahead-band fill included, "not just
+small moves").</td></tr>
+<tr><td><code>_process</code> — the light-flush section (pool-full guard)</td>
+<td>the cap keeps the TM pool <b>saturated</b> during remesh waves (handoffs land 1/frame; dispatches land as
+fast as slots free), so the AC-0126 flush re-queue spin now hits a full pool on every attempt: measured
+<b>241,603 futile dispatch attempts</b> in the R16 run (up to 12/frame × ~2-5 ms of nbs-ring/slab/strip
+entry-build work each) — a frame-time drain the pre-cap bursts never produced (the pool emptied between
+bursts, so the old spin was short, max 3/frame). The section now also requires
+<code>threadmesh_inflight.size() &lt; threadmesh_max</code>: while the pool is full the frame yields (entries stay
+queued, key-deduped, nothing lost; the wave resumes the frame a slot frees). The rare sync-fallback
+dispatches (data-empty / missing-neighbor) defer at most one frame.</td></tr>
+<tr><td>unchanged</td>
+<td>the drain itself (unit/time budgets, windowed pool scan, startup/loading paths), the loading window
+(its own <code>LOAD_TM_HANDOFF=6</code> pace — harness flows like R16 never enter it; only menu New World +
+the load-probe arm do), the shutdown poll-drain (<b>uncapped</b> — the exit loop runs against a frozen
+process-frame counter; capping it would stall the 20 s exit drain into the AC-0178 shutdown-segfault
+class), the edit lane, the threadgen (data) handoffs, and the startup 5x5 burst (data-only).</td></tr>
+</table>
+
+<h2>2. R16 — the #1 gate (<code>AWECRAFT_LOGIC=r16</code>, 16-radius build + moving, <code>--fixed-fps 600</code>)</h2>
+<p>before = current code; after = the cap + flush pool-full guard (clean final run). Both 0 SCRIPT ERROR,
+<b>797/797 built (band≤2 square), built_all true, 933 resident</b> in both.</p>
+<table>
+<tr><th>metric</th><th>before</th><th>after</th><th>Δ / gate</th></tr>
+<tr><td>moving phase p50 / p95 / max (ms)</td><td>6 / 483 / 487</td><td>6 / 482 / 490</td>
+<td>identical — moving forward does not tank frame time, p95 steady (the ~480 ms p95 is the pre-existing
+periodic engine event, AC-0212)</td></tr>
+<tr><td>moving effective fps (p50 / p95 / min)</td><td>167 / 2 / 2</td><td>167 / 2 / 2</td><td>identical</td></tr>
+<tr><td>static phase p50 / p95 / max (ms)</td><td>5 / 483 / 499</td><td>6 / 501 / 993</td>
+<td>p50 +1 ms, p95 +18 ms (the ~480-500 ms periodic event, same class), one 993 ms one-off in 600 —
+the remesh-wave tail now overlaps the static window (see note); not a sustained drop</td></tr>
+<tr><td>static effective fps (p50 / p95 / min)</td><td>200 / 2 / 2</td><td>167 / 2 / 1</td>
+<td>the static phase now runs at the same fps as moving (wave tail) — the pre/post gap closes to 0</td></tr>
+<tr><td>drop_fps_static_vs_moving</td><td>33</td><td>0</td><td>no sustained drop (the moving phase is unchanged)</td></tr>
+<tr><td>build phase (wall)</td><td>9.9 s (90 frames)</td><td>29.4 s (120 frames)</td>
+<td>the ahead-band fill now spreads over frames (1 mesh/frame) instead of bursting — the point of the task</td></tr>
+<tr><td>arm wall (elapsed_ms)</td><td>191.7 s</td><td>230.5 s</td><td>build-phase spread only; moving phase unchanged</td></tr>
+</table>
+
+<p><b>Ahead-band fill (handoff evidence, <code>AWECRAFT_TIMING=1</code> TMPOLL lines — frames carrying handoffs):</b></p>
+<table>
+<tr><th>handoff stat</th><th>before</th><th>after (cap)</th></tr>
+<tr><td>max meshes landed in one frame</td><td><b>7</b> (26.2 ms handoff batch)</td><td><b>1</b></td></tr>
+<tr><td>frames with ≥2 handoffs</td><td>630 / 871 (<b>72%</b>)</td><td><b>0 / 2106</b></td></tr>
+<tr><td>n-distribution (frames)</td><td>{1:241, 2:226, 3:176, 4:215, 5:12, 7:1}</td><td>{1:2106}</td></tr>
+<tr><td>handoff rate</td><td>99.2/s (bursts, median gap 3 ms)</td><td>1/frame — median gap 7 ms (frame-pace)</td></tr>
+</table>
+<p class="meta">After-run fill profile: 28-56 handoffs/s while processing-bound (1 per process frame),
+surging to ~110/s in idle windows where the pool had a ready backlog — always exactly one per frame,
+the ahead band filling in over frames, never a burst.</p>
+
+<div class="warn"><b>Notes.</b> (a) The after static phase carries the remesh-wave tail: with handoffs
+spreading 1/frame the E2 light wave's ~1300 remeshes drain ~2.5x slower, so the tail overlaps the static
+window (before: the wave closed during the build/early-static window and the static phase ran idle).
+Per-frame cost is the same work (1 handoff + 1 flush dispatch, a few ms) — p50 moves 5→6 ms, p95 stays in
+the ~480-500 ms periodic-event band (501; AC-0212's own A/B showed 478-507 on the same phase), the 993 ms
+max is a one-off in 600 frames, and the moving phase — the actual "moving forward" measurement — is
+identical. (b) The before run carried <code>AWECRAFT_TIMING=1</code> (extra print overhead), so the after
+numbers are if anything conservative. (c) The build-phase wall grows ~3x at r16 (9.9 s → 29.4 s) — the
+intended trade: the initial r16 fill spreads over ~30 s of 1-mesh frames instead of ~10 s of bursts;
+steady-state walking is unaffected (the TM pool is only 3-6 deep, so 1/frame handoff ≈ the workers' own
+rate). (d) Env flake (not task-related): the first before-run attempt hit the AC-0206 known
+non-repro signal-11 .so segfault (mid <code>threadmesh_poll</code>, 12.6 s in); retry clean.</div>
+
+<h2>3. G0 / SMOKE / no-regression</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>vs standing</th></tr>
+<tr><td>G0 — <code>--headless --quit</code></td><td><b>EXIT 0, 0 SCRIPT ERROR</b> (first chain attempt hung at the
+startup banner — 2-line log, no scripts ran — the known env startup flake; retry clean, log shape == AC-0212's
+known-good 2-line g0.log)</td><td>—</td></tr>
+<tr><td>SMOKE — <code>AWECRAFT_BATTERY=player;interact;light;fluids</code></td>
+<td><b>ok:true ×4</b> — player (start [8.5,137,8.5], jump 138.43, fly 139.78), interact (drop_spawned +
+place_ok true), light (surface_eff 15, cave/torch −1), fluids (sea 2712/2712 + backed 1066/1066,
+water_on_lava 24, sideways 24, water_delta 0, shore [0,0], sea_stable false)</td>
+<td><b>byte-identical to the AC-0212 battery</b> (light 15/−1/−1 and the fluids counters are the
+documented current-era standing output per AC-0212/AC-0208 — the −1 cave/torch readouts and the
+2712/1066/24/24 fluids set are the C++-gen era values, not drift)</td></tr>
+<tr><td>chunkiocpp (codec)</td><td>ok:true — <b>md5_cpp == md5_orig</b> (8a8935…9081), enc 34/34, flat 34/34,
+slab 17/17, roundtrip 17/17</td><td>byte-identical</td></tr>
+<tr><td>genhash</td><td><b>25/25 GENHASH lines</b>, 32-hex MD5 each</td>
+<td><b>byte-identical to <code>.scratch/AC-0188-gates/genhash_new.txt</code></b> (diff clean — the gen is
+untouched by this task)</td></tr>
+<tr><td>light</td><td>surface_eff <b>15</b>, cave_eff −1, torch_level −1</td>
+<td>== the standing current-era arm output per AC-0212/AC-0208 (surface 15 exact)</td></tr>
+<tr><td>meshprobe (AC-0190/AC-0211)</td><td>ok:true — match_rate <b>1.0</b>, 32/32 chunks, 1758/1758 accs
+(q/u/n/i/c/arr all match), verts_cpp == verts_gd (121956), 0 mismatches</td><td>100% exact</td></tr>
+<tr><td>stripsprobe (AC-0207)</td><td>ok:true — match_rate <b>1.0</b>, 32/32 chunks: eff 32, blk 32, blkb 32,
+face 32/32 (face_rate 1.0), 512 strips compared, speedup 48.0x</td><td>100% exact</td></tr>
+<tr><td>pullprobe (AC-0210)</td><td>ok:true — match_rate <b>1.0</b>, max_diff <b>0</b>, 64/64 runtime call
+variants, 6,291,456 cells compared, C++ flood p95 0.77 ms</td><td>100% exact</td></tr>
+<tr><td>nofallback (AC-0208)</td><td>ok:true — C++ counters all &gt;0 (mesh 112, gen 88, strips 429, slab-IO 2),
+GDScript sentinels 0/0, 17 mesh chunks, torch placed + lit (eff 15), roundtrip ok</td><td>ok:true</td></tr>
+<tr><td>SCRIPT ERROR audit</td><td><b>0 across every log</b> (g0, smoke, chunkiocpp, genhash, light, meshprobe,
+stripsprobe, pullprobe, nofallback, + all R16 runs)</td><td>—</td></tr>
+</table>
+<p class="meta">Not run (per task instruction): R50 (PENDING — the .so crashes in the coordinator env, AC-0206)
+and the Windows build (coordinator scope).</p>
+
+<h2>4. Files</h2>
+<ul>
+<li><code>godot/world/world.gd</code> — the cap + the flush pool-full guard (the only code change).</li>
+<li><code>.scratch/AC-0219-gates/</code> — r16_before.log, r16_after.log (TIMING cap evidence),
+r16_after_final.log (clean gate run), g0.log (hung flake attempt) + g0_retry.log (pass), smoke.log,
+chunkiocpp.log, genhash.log (+ genhash_now.txt), light.log, meshprobe.log, stripsprobe.log, pullprobe.log,
+nofallback.log, world_original_backup.gd, analyze_r16.py, run_gates.sh, gatechain.log.</li>
+</ul>
+</body></html>

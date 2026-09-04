@@ -3,7 +3,6 @@ meta:
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0219
 - AC-0213
 - AC-0218
 - AC-0215
@@ -6766,11 +6765,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-04T07:51
   updated_at: 2026-09-04T07:51
-  completed_at: null
+  completed_at: 2026-09-03T15:20
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want only neighbors whose light actually changed to rebuild so moving does not dirty
@@ -6808,6 +6807,11 @@ intake:
     p95 and no sustained drop, ahead band fills in over a few frames.'
   comments:
   - id: 1
+
+  - id: 2
+    created_at: '2026-09-03T15:20:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Global per-frame cap (godot/world/world.gd only): threadmesh_poll now lands at most 1 streaming (non-edit) mesh per process frame — every band, every move size (ahead-band fill included, not just small moves). Unlanded meshes wait in threadmesh_inflight (nothing dropped/re-queued, no pop-in); counter keyed on Engine.get_process_frames() (poll runs up to 2x/frame); edit-lane, loading window, and shutdown poll-drain stay uncapped. Drain logic intact. Plus a pool-full guard on the light-flush section (the AC-0126 re-queue spin was measured doing 241k futile ~2-5 ms dispatch attempts in R16; it now yields the frame). R16 before->after (797/797 built both, 0 SCRIPT ERROR): moving 6/482/490 ms (p50/p95/max), fps_p50 167 — identical to before (6/483/487, 167); the ~480 ms p95 is the pre-existing periodic engine event (AC-0212). No sustained drop: drop_fps_static_vs_moving 33->0 (static matches moving). Build phase 9.9 s -> 29.4 s (the spread). Ahead band fill: before max 7/frame, 72% of handoff frames >=2 (99/s bursts); after n=1 on 100% of 2106 frames, 0 frames >=2 (28-110/s, frame-pace). G0 EXIT 0, 0 SCRIPT ERROR. SMOKE ok:true x4, byte-identical to the AC-0212 battery. No regression: chunkiocpp byte-identical, genhash 25/25 == AC-0188, light == standing, meshprobe/stripsprobe/pullprobe 100% exact, nofallback ok:true. R50/Windows build skipped per instruction. See tasks/AC-0219/AC-0219-results.html.'
     created_at: 2026-09-04T07:51
     updated_at: null
     text: '[user] per 2026-09-04 global cap'

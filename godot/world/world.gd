@@ -32,6 +32,16 @@ const LOAD_TM_CAP := 64
 # 6/frame keeps the frame bounded; the inflight gate oscillates at the
 # handoff rate so the pool queue stays deep.
 const LOAD_TM_HANDOFF := 6
+# AC-0219: global per-frame cap on steady-state STREAMING mesh handoffs —
+# the drain hands off at most this many non-edit meshes per process frame,
+# for every move size and band (not just the small-move trickle). The
+# ahead-band fill spreads over frames instead of bursting every ready mesh
+# into one frame (each landing = apply_accs + collision + the _eff_landed
+# face-block refresh on the main thread — a burst tanks the frame). The
+# loading window keeps its own LOAD_TM_HANDOFF pace; edit-lane (epool)
+# handoffs keep landing as before (a user edit must not sit behind the
+# streaming cap).
+const STREAM_TM_HANDOFF_PER_FRAME := 1
 const LOAD_POOL_CAP := 24
 # AC-0178: flush/tex remesh caps while loading — 6 (was 16): each dispatch
 # is ~45 ms of main-thread strip work, 16/frame = 0.7 s of one frame.
@@ -392,6 +402,11 @@ var _tm_capdrop := 0
 var _tm_stale := 0
 var _tm_datadrop := 0
 var _tm_handoff := 0
+# AC-0219: per-frame streaming handoff counter. threadmesh_poll can run up
+# to twice per process frame (_physics_process_impl + _process, plus the
+# recenter call), so the cap is keyed on the process frame, not the call.
+var _stream_ho_frame := -1
+var _stream_ho_n := 0
 var perf_build_worker_ms := 0
 var perf_build_worker_ms_list: Array = []  # AC-0197: per-build worker ms (p50/p95 gate)
 var col_stage_enabled := true
@@ -839,7 +854,18 @@ func _process(_delta: float) -> void:
 		_edit_front_drain()
 	var pf1 := Time.get_ticks_usec()
 	var fp0 := pf1
-	if not light_pending.is_empty() and not _startup_pending() and edit_inflight_count == 0:
+	if not light_pending.is_empty() and not _startup_pending() and edit_inflight_count == 0 \
+		and threadmesh_inflight.size() < threadmesh_max:
+		# AC-0219 pool-full guard: the 1/frame streaming handoff cap keeps
+		# the TM pool saturated during remesh waves (dispatches land as fast
+		# as slots free). While the pool is full, EVERY dispatch attempt in
+		# the section below would cap-drop + re-queue — 10-20 wasted entry
+		# builds (~2-5 ms each of nbs-ring/slab/strip work) per frame, a
+		# frame-time drain the pre-cap handoff bursts never produced (the
+		# pool emptied between bursts, so the spin was short). Yield the
+		# frame instead: entries stay queued (key-deduped, nothing lost) and
+		# the wave resumes the frame a slot frees. The rare sync-fallback
+		# dispatches (data-empty / missing-neighbor) defer at most one frame.
 		# AC-0126: edit (post-break) flush — staggered 1 remesh/frame on the
 		# AC-0107 worker path. eff = {} -> the worker self-lights its contained
 		# kernel (byte-identical to the sync margin-0 path). defer_on_cap=true
@@ -1485,7 +1511,30 @@ func threadmesh_poll() -> void:
 	# batch to LOAD_TM_HANDOFF/frame keeps the frame bounded; the inflight
 	# gate oscillates at the handoff rate so the pool queue stays deep
 	# (~LOAD_TM_CAP - lag - running) and the workers never starve.
+	# AC-0219: global per-frame streaming handoff cap (steady state) — at
+	# most STREAM_TM_HANDOFF_PER_FRAME non-edit meshes land per process
+	# frame, for ALL move sizes and bands (not just the small-move
+	# trickle). A recenter's ahead-band fill used to land every ready mesh
+	# at once (up to the hb_max 64) in one frame: each landing is
+	# apply_accs + collision + the _eff_landed face-block refresh on the
+	# main thread, so the burst tanked the frame. Capped, the ahead band
+	# fills over a few frames instead: unlanded entries simply stay in
+	# threadmesh_inflight (nothing is dropped or re-queued — the dispatch
+	# gate already blocks re-dispatch on in-flight keys) and land next
+	# frame; no pop-in (a mesh appears the frame its build is ready, just
+	# one at a time). The loading window keeps its own LOAD_TM_HANDOFF
+	# pace and the shutdown poll-drain must run UNCAPPED or it stalls
+	# against the frozen process-frame counter (the 20 s exit cap would
+	# then force-clear in-flight tasks — the AC-0178 shutdown segfault
+	# class). Edit-lane (epool) handoffs are exempt: a user edit must not
+	# sit behind the streaming cap (the edit lane is dispatch-staggered).
 	var hb_max := LOAD_TM_HANDOFF if loading_active else 64
+	var streaming := not loading_active and not _shutting_down
+	if streaming:
+		var pf := Engine.get_process_frames()
+		if pf != _stream_ho_frame:
+			_stream_ho_frame = pf
+			_stream_ho_n = 0
 	var hb_t0 := Time.get_ticks_usec() if timing else 0
 	var hb_n := 0
 	var found := true
@@ -1526,6 +1575,15 @@ func threadmesh_poll() -> void:
 			# (safe re-queue), never a corrupted apply.
 			i += 1
 			continue
+		# AC-0219: steady state — once this frame's one streaming slot is
+		# used, stop scanning: the unlanded entries wait in
+		# threadmesh_inflight for the next frame (nothing is dropped or
+		# re-queued; the dispatch gate already blocks re-dispatch on
+		# in-flight keys). Edit-lane (epool) entries are EXEMPT — a user
+		# edit must not sit behind the streaming cap (they are rare:
+		# loop 1 above already takes every completed epool entry).
+		if streaming and not bool(e.get("epool", false)) and _stream_ho_n >= STREAM_TM_HANDOFF_PER_FRAME:
+			break
 		var tid = int(e["tid"])
 		var skey = int(e.get("skey", -1))
 		var completed := false
@@ -1543,6 +1601,8 @@ func threadmesh_poll() -> void:
 			_editprobe_prime_flag = false
 			threadmesh_handoff(e, e.get("result", null))
 			hb_n += 1
+			if streaming and not bool(e.get("epool", false)):
+				_stream_ho_n += 1
 			continue
 		i += 1
 	if timing and hb_n > 0:
