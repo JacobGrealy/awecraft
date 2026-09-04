@@ -50,6 +50,25 @@
 // Toggle: AWECRAFT_MESHCPP=0 forces the GDScript path (chunk.gd
 // build_accs); unset/1 = C++ whenever this library registered AweMesh
 // (wired at world.gd _tm_worker_run).
+//
+// AC-0211: the remaining GDScript hot spots around build_accs moved here:
+//   * snap_rings — the dispatch's neighbor SNAP snapshot (the 16x16
+//     boundary slice per slab; replaces the per-neighbor _slabs_deepcopy
+//     of all 24 slabs — the worker reads only this slice, and parse_nbs
+//     accepts the compact PackedByteArray ring alongside the legacy
+//     paletted-slab Array);
+//   * slab_copy — the dispatch's own-column value-copy
+//     (ChunkIO._slabs_deepcopy stand-in, true byte copies);
+//   * sync_snap — the sync fallback lane's _build_snap core (chunk.gd
+//     build_mesh) — the paletted decode replaces the GDScript
+//     flat_data()/flat_fl() materialization (5 x 98k cells);
+//   * rows_eq — the scoped handoff stale check (world.gd
+//     threadmesh_handoff) — 256-B row equality without the per-row 4096
+//     flat materialization.
+// The main-thread scene handoff (ArrayMesh/MeshInstance3D/materials/
+// collision bodies) stays GDScript — Godot scene-tree + engine mesh
+// upload are main-thread work (the worker's arrays arrive already
+// trimmed and refcounted, so the handoff's data cost is engine-side).
 
 #include <gdextension_interface.h>
 
@@ -552,8 +571,27 @@ static void parse_nbs(const Dictionary &nbs, Nv &out) {
 		if (v.get_type() != Variant::DICTIONARY)
 			continue;
 		Dictionary nb = v;
-		awecommon::slab_views(nb.get("d", Array()), out.nd[k]);
-		awecommon::slab_views(nb.get("f", Array()), out.nfd[k]);
+		Variant vd = nb.get("d", Variant());
+		if (vd.get_type() == Variant::PACKED_BYTE_ARRAY) {
+			// AC-0211 compact ring: slab*256 + y_in*16 + t (the boundary
+			// slice only — build_snap_data indexes it accordingly).
+			PackedByteArray rd = vd;
+			Variant vf = nb.get("f", Variant());
+			PackedByteArray rf = (vf.get_type() == Variant::PACKED_BYTE_ARRAY) ? PackedByteArray(vf) : PackedByteArray();
+			int nsl = (int)rd.size() / 256;
+			out.nd[k].resize(nsl);
+			for (int s = 0; s < nsl; s++)
+				out.nd[k][s].assign(rd.ptr() + s * 256, rd.ptr() + s * 256 + 256);
+			int nfl = (int)rf.size() / 256;
+			out.nfd[k].resize(nfl);
+			for (int s = 0; s < nfl; s++)
+				out.nfd[k][s].assign(rf.ptr() + s * 256, rf.ptr() + s * 256 + 256);
+		} else {
+			// Legacy: paletted slab arrays (the probe + fallback shape) —
+			// full decode.
+			awecommon::slab_views(nb.get("d", Array()), out.nd[k]);
+			awecommon::slab_views(nb.get("f", Array()), out.nfd[k]);
+		}
 	}
 }
 
@@ -583,6 +621,108 @@ static Band band(int delta) {
 		}
 	}
 	return b;
+}
+
+// ---------------------------------------------------------------------------
+// AC-0211: compact neighbor SNAP RING + slab copy/row helpers.
+//
+// The worker path only ever reads ONE 16x16 boundary slice per slab from
+// each edge neighbor (the build_snap_data ring: x=15/0 for dx neighbors,
+// z=15/0 for dz neighbors) — never the full 4096-cell slab. The dispatch
+// builds the compact ring on the MAIN thread (AweMesh.snap_rings, 256 B
+// per slab — the thread-safe snapshot replaces the per-neighbor
+// _slabs_deepcopy of all 24 slabs) and the C++ build_accs consumes it
+// directly (parse_nbs accepts a PackedByteArray ring entry alongside the
+// legacy paletted-slab Array — the legacy format is still accepted for
+// probes + the AWECRAFT_MESHCPP=0 parity). Byte-identical to the full
+// decode (the meshprobe compact arm gates it, 100% exact).
+// ---------------------------------------------------------------------------
+
+// One 16x16 boundary slice of a paletted slab (null/missing slab = zeros —
+// the caller pre-zeros `out`). out[base + y_in*16 + t]: t = z for dx
+// neighbors (dx != 0, source x = dx<0 ? 15 : 0), t = x for dz neighbors
+// (dz != 0, source z = dz<0 ? 15 : 0). Decode = the same lanes as
+// slab_views (n==1 uniform / n==0 raw / else palette getbits).
+static void ring_slice(const Variant &v, int base, int dx, int dz, std::vector<uint8_t> &out) {
+	if (v.get_type() != Variant::DICTIONARY)
+		return;
+	Dictionary d = v;
+	int n = (int)d.get("n", 0);
+	int fx = (dx != 0) ? (dx < 0 ? 15 : 0) : -1;
+	int fz = (dz != 0) ? (dz < 0 ? 15 : 0) : -1;
+	if (n == 1) {
+		PackedByteArray p = d.get("p", PackedByteArray());
+		uint8_t val = p.size() > 0 ? p[0] : 0;
+		for (int j = 0; j < 256; j++)
+			out[base + j] = val;
+		return;
+	}
+	PackedByteArray ib = d.get("i", PackedByteArray());
+	if (n == 0) {
+		for (int y_in = 0; y_in < 16; y_in++) {
+			int fi = y_in * 256;
+			for (int t = 0; t < 16; t++) {
+				int x = (dx != 0) ? fx : t;
+				int z = (dz != 0) ? fz : t;
+				out[base + y_in * 16 + t] = ib[fi + z * 16 + x];
+			}
+		}
+		return;
+	}
+	int b = (int)d.get("b", 0);
+	PackedByteArray pb = d.get("p", PackedByteArray());
+	const uint8_t *i = ib.ptr();
+	int isize = (int)ib.size();
+	const uint8_t *p = pb.ptr();
+	for (int y_in = 0; y_in < 16; y_in++) {
+		int fi = y_in * 256;
+		for (int t = 0; t < 16; t++) {
+			int x = (dx != 0) ? fx : t;
+			int z = (dz != 0) ? fz : t;
+			out[base + y_in * 16 + t] = p[awecommon::slab_getbits(i, isize, b, fi + z * 16 + x)];
+		}
+	}
+}
+
+// One full 16x16 row (all x, fixed y_in) of a paletted slab (null/missing
+// = zero row) — the rows_eq 256-B window, decoded exactly like slab_views.
+static void slab_row(const Variant &v, int y_in, uint8_t *out) {
+	std::fill(out, out + 256, 0);
+	if (v.get_type() != Variant::DICTIONARY)
+		return;
+	Dictionary d = v;
+	int n = (int)d.get("n", 0);
+	int fi = y_in * 256;
+	if (n == 1) {
+		PackedByteArray p = d.get("p", PackedByteArray());
+		uint8_t val = p.size() > 0 ? p[0] : 0;
+		std::fill(out, out + 256, val);
+		return;
+	}
+	PackedByteArray ib = d.get("i", PackedByteArray());
+	if (n == 0) {
+		int sz = (int)ib.size();
+		for (int j = 0; j < 256; j++)
+			out[j] = (fi + j < sz) ? ib[fi + j] : 0;
+		return;
+	}
+	int b = (int)d.get("b", 0);
+	PackedByteArray pb = d.get("p", PackedByteArray());
+	const uint8_t *i = ib.ptr();
+	int isize = (int)ib.size();
+	const uint8_t *p = pb.ptr();
+	for (int j = 0; j < 256; j++)
+		out[j] = p[awecommon::slab_getbits(i, isize, b, fi + j)];
+}
+
+// Deep-copy a PackedByteArray (a true byte copy — the worker's slab copy
+// must not share the live chunk's COW buffer).
+static PackedByteArray pba_deep(const PackedByteArray &src) {
+	PackedByteArray o;
+	o.resize((int)src.size());
+	if (src.size() > 0)
+		std::memcpy(o.ptrw(), src.ptr(), src.size());
+	return o;
 }
 
 static void build_snap_data(std::vector<uint8_t> &snap, std::vector<uint8_t> &snap_fl, const std::vector<std::vector<uint8_t>> &dviews, const std::vector<std::vector<uint8_t>> &fviews, const Nv &nv, int h, int y_lo, int y_hi) {
@@ -629,9 +769,22 @@ static void build_snap_data(std::vector<uint8_t> &snap, std::vector<uint8_t> &sn
 					int r0 = drow + (zb.g[e] << 4);
 					for (int g2 = 0; g2 < xb.n; g2++) {
 						int sxy = szi + xb.x[g2];
-						int gi = xb.g[g2];
-						int dv = nd.empty() ? 0 : (int)nd[r0 + gi];
-						int fv = nfd.empty() ? 0 : (int)nfd[r0 + gi];
+						int dv;
+						int fv;
+						if (nd.size() == 256) {
+							// AC-0211 compact ring (the 16x16 boundary
+							// slice): index = y_in*16 + t, t = z (dx edge:
+							// e) / x (dz edge: g2) — the same cell the
+							// full-layout read (r0 + gi) addresses.
+							int t = (dx != 0) ? e : g2;
+							int ci = (y & 15) * 16 + t;
+							dv = nd.empty() ? 0 : (int)nd[ci];
+							fv = nfd.empty() ? 0 : (int)nfd[ci];
+						} else {
+							int gi = xb.g[g2];
+							dv = nd.empty() ? 0 : (int)nd[r0 + gi];
+							fv = nfd.empty() ? 0 : (int)nfd[r0 + gi];
+						}
 						if (fv == 0 && (dv == 5 || dv == 24))
 							fv = 8;
 						snap[(size_t)sxy] = (uint8_t)dv;
@@ -1248,6 +1401,12 @@ class AweMesh : public RefCounted {
 public:
 	static void _bind_methods() {
 		ClassDB::bind_method(D_METHOD("build_accs", "data", "fl", "cx", "cz", "nbs", "ctx", "ms", "eff", "si0", "si1", "d_off", "att", "glow"), &AweMesh::build_accs);
+		// AC-0211: the surrounding-step ports (dispatch snapshot + sync
+		// snap + stale-check rows) — same class, same .so.
+		ClassDB::bind_method(D_METHOD("snap_rings", "d", "f", "dx", "dz"), &AweMesh::snap_rings);
+		ClassDB::bind_method(D_METHOD("slab_copy", "slabs"), &AweMesh::slab_copy);
+		ClassDB::bind_method(D_METHOD("sync_snap", "own_d", "own_f", "rings", "h"), &AweMesh::sync_snap);
+		ClassDB::bind_method(D_METHOD("rows_eq", "a", "b", "y_lo", "y_hi"), &AweMesh::rows_eq);
 	}
 
 	// Lossless port of ChunkScript.build_accs (chunk.gd:1683). data/fl =
@@ -1547,6 +1706,111 @@ public:
 		ph.append(ph_faces);
 		res["ph"] = ph;
 		return res;
+	}
+
+	// AC-0211: deep copy of a paletted slab array — the C++ stand-in for
+	// ChunkIO._slabs_deepcopy (the dispatch's value-copy for the worker
+	// lane). Byte-identical output shape ({n,b,p,i,nz} dicts, nulls kept,
+	// p/i true byte copies — no COW sharing with the live chunk).
+	Array slab_copy(const Array &slabs) {
+		Array out;
+		out.resize(slabs.size());
+		for (int k = 0; k < (int)slabs.size(); k++) {
+			Variant v = slabs[k];
+			if (v.get_type() != Variant::DICTIONARY) {
+				out[k] = v;
+				continue;
+			}
+			Dictionary d = v;
+			Dictionary o;
+			o["n"] = (int64_t)(int)d.get("n", 0);
+			o["b"] = (int64_t)(int)d.get("b", 0);
+			o["p"] = pba_deep(d.get("p", PackedByteArray()));
+			o["i"] = pba_deep(d.get("i", PackedByteArray()));
+			o["nz"] = (int64_t)(int)d.get("nz", 0);
+			out[k] = o;
+		}
+		return out;
+	}
+
+	// AC-0211: the compact edge-neighbor snap ring (the main-thread
+	// snapshot that replaces the per-neighbor _slabs_deepcopy of all 24
+	// slabs — the worker only ever reads this boundary slice). d/f = the
+	// neighbor's paletted slab arrays; dx/dz = the edge offset
+	// (-1,0)/(1,0)/(0,-1)/(0,1). Returns {"d": PackedByteArray(slabs*256),
+	// "f": ...} with layout slab*256 + y_in*16 + t.
+	Dictionary snap_rings(const Array &d, const Array &f, int dx, int dz) {
+		std::vector<uint8_t> rd((size_t)d.size() * 256, 0);
+		std::vector<uint8_t> rf((size_t)f.size() * 256, 0);
+		for (int k = 0; k < (int)d.size(); k++)
+			ring_slice(d[k], k * 256, dx, dz, rd);
+		for (int k = 0; k < (int)f.size(); k++)
+			ring_slice(f[k], k * 256, dx, dz, rf);
+		Dictionary out;
+		out["d"] = awecommon::pba_from(rd);
+		out["f"] = awecommon::pba_from(rf);
+		return out;
+	}
+
+	// AC-0211: the sync-path snap (the chunk.gd _build_snap core) — the
+	// own 16x16 + the 4 edge-neighbor rings, the paletted slabs decoded
+	// in C++ (no GDScript flat_data()/flat_fl() materialization). rings =
+	// [west, east, south, north], each a snap_rings() Dictionary or null
+	// (missing/empty neighbor = air — the GDScript parity; the corner ring
+	// cells stay 0, as in the GDScript). Returns {"snap":
+	// PackedByteArray(18*18*h), "snap_fl": ...} byte-identical to the
+	// GDScript _build_snap output (the world==null get_world_block
+	// fallback stays GDScript).
+	Dictionary sync_snap(const Array &own_d, const Array &own_f, const Array &rings, int h) {
+		std::vector<std::vector<uint8_t>> dviews, fviews;
+		awecommon::slab_views(own_d, dviews);
+		awecommon::slab_views(own_f, fviews);
+		Nv nv;
+		for (int k = 0; k < 4; k++) {
+			Variant v = (k < (int)rings.size()) ? rings[k] : Variant();
+			if (v.get_type() != Variant::DICTIONARY)
+				continue;
+			Dictionary r = v;
+			PackedByteArray rd = r.get("d", PackedByteArray());
+			PackedByteArray rf = r.get("f", PackedByteArray());
+			int nsl = (int)rd.size() / 256;
+			nv.nd[k].resize(nsl);
+			for (int s = 0; s < nsl; s++)
+				nv.nd[k][s].assign(rd.ptr() + s * 256, rd.ptr() + s * 256 + 256);
+			int nfl = (int)rf.size() / 256;
+			nv.nfd[k].resize(nfl);
+			for (int s = 0; s < nfl; s++)
+				nv.nfd[k][s].assign(rf.ptr() + s * 256, rf.ptr() + s * 256 + 256);
+		}
+		std::vector<uint8_t> snap((size_t)SNAP_ROW * h, 0);
+		std::vector<uint8_t> snap_fl((size_t)SNAP_ROW * h, 0);
+		build_snap_data(snap, snap_fl, dviews, fviews, nv, h, 0, h - 1);
+		Dictionary out;
+		out["snap"] = awecommon::pba_from(snap);
+		out["snap_fl"] = awecommon::pba_from(snap_fl);
+		return out;
+	}
+
+	// AC-0211: the scoped handoff stale check (world.gd
+	// threadmesh_handoff) — row-by-row 256-B equality of two paletted
+	// slab arrays over y in [y_lo, y_hi], decoded in C++ (no 4096 flat
+	// materialization per row). Byte-identical verdict to the GDScript
+	// row loop (a null slab row = zero row, as in _slabs_row).
+	bool rows_eq(const Array &a, const Array &b, int y_lo, int y_hi) {
+		if (a.size() != b.size())
+			return false;
+		uint8_t ra[256];
+		uint8_t rb[256];
+		for (int y = y_lo; y <= y_hi; y++) {
+			if (y < 0 || y >= (int)a.size() * 16)
+				return false;
+			int s = y >> 4;
+			slab_row(a[s], y & 15, ra);
+			slab_row(b[s], y & 15, rb);
+			if (std::memcmp(ra, rb, 256) != 0)
+				return false;
+		}
+		return true;
 	}
 };
 

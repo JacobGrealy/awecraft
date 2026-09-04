@@ -1534,13 +1534,20 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		# (geometry outside is untouched, light is frozen by design).
 		# AC-0203: rows compared value-wise (256 B windows) — same coverage
 		# as the old flat slice, extracted from the slab store.
+		# AC-0211: the row windows are decoded in C++ (rows_eq — no 4096
+		# flat materialization per row) when the C++ lane is live; the
+		# verdict is byte-identical to the GDScript row loop.
 		var dlo := int(e["d_off"])
 		var dhin := int(e["d_hi"])
-		var y := dlo
-		while y <= dhin and not stale:
-			if c.row_bytes(y) != ChunkScript._slabs_row(e["data"], y) or c.fl_row_bytes(y) != ChunkScript._slabs_row(e["fl"], y):
-				stale = true
-			y += 1
+		var mc2: Variant = ChunkScript.mesh_cpp()
+		if mc2 != null:
+			stale = not (mc2.rows_eq(c.data, e["data"], dlo, dhin) and mc2.rows_eq(c.fl, e["fl"], dlo, dhin))
+		else:
+			var y := dlo
+			while y <= dhin and not stale:
+				if c.row_bytes(y) != ChunkScript._slabs_row(e["data"], y) or c.fl_row_bytes(y) != ChunkScript._slabs_row(e["fl"], y):
+					stale = true
+				y += 1
 	else:
 		stale = int(c.data_gen) != int(e["stamp"][0]) or int(c.fl_gen) != int(e["stamp"][1])
 	if stale:
@@ -1749,7 +1756,11 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 	# AC-0203: scoped entries carry FULL slab copies (~20 KB/col, not 192 KB
 	# flat) — the worker reads only rows si0..si1, and the handoff stale
 	# check value-compares the same rows it extracted at dispatch.
+	# AC-0211: the nbs snapshot is the C++ compact ring (256 B/slab) when
+	# the C++ lane is live — the scoped stale check below uses rows_eq on
+	# the SAME paletted shape.
 	var nbs: Dictionary = {}
+	var mc: Variant = ChunkScript.mesh_cpp()
 	for dx in range(-1, 2):
 		for dz in range(-1, 2):
 			if (dx == 0) == (dz == 0):
@@ -1757,7 +1768,10 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 			var nc = chunks.get(_key(cx + dx, cz + dz))
 			if nc == null or nc.data.is_empty():
 				return false
-			nbs["%d,%d" % [dx, dz]] = {"d": ChunkIO._slabs_deepcopy(nc.data), "f": ChunkIO._slabs_deepcopy(nc.fl)}
+			if mc != null:
+				nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz)
+			else:
+				nbs["%d,%d" % [dx, dz]] = {"d": ChunkIO._slabs_deepcopy(nc.data), "f": ChunkIO._slabs_deepcopy(nc.fl)}
 	var tn1 := Time.get_ticks_usec()
 	var ms_w: Dictionary
 	if not _tm_ms_full.rects.is_empty():
@@ -1775,9 +1789,11 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 	if int(c.band) == 2:
 		ctx_w["coarse"] = true
 		ctx_w["uv_scale"] = 2
+	# AC-0211: own-column value-copy via C++ when the C++ lane is live.
 	var entry := {
 		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(),
-		"data": ChunkIO._slabs_deepcopy(c.data), "fl": ChunkIO._slabs_deepcopy(c.fl),
+		"data": mc.slab_copy(c.data) if mc != null else ChunkIO._slabs_deepcopy(c.data),
+		"fl": mc.slab_copy(c.fl) if mc != null else ChunkIO._slabs_deepcopy(c.fl),
 		"stamp": c.stamp(),
 		"band": int(c.band),
 		"nbs": nbs, "eff": fast_eff, "eff_trust": false,
@@ -1852,6 +1868,7 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 		_bd_log(cx, cz)
 		return true
 	var nbs: Dictionary = {}
+	var mc: Variant = ChunkScript.mesh_cpp()
 	for dx in range(-1, 2):
 		for dz in range(-1, 2):
 			if (dx == 0) == (dz == 0):
@@ -1879,9 +1896,17 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 				_stage_check(c, key)
 				_bd_log(cx, cz)
 				return true
-			# AC-0203: slab deep-copies (~20 KB/col) — the worker never sees
-			# live chunk state.
-			nbs["%d,%d" % [dx, dz]] = {"d": ChunkIO._slabs_deepcopy(nc.data), "f": ChunkIO._slabs_deepcopy(nc.fl)}
+			if mc != null:
+				# AC-0211: C++ compact snap ring (256 B/slab, the boundary
+				# slice only) — replaces the per-neighbor _slabs_deepcopy of
+				# all 24 slabs; the C++ build_accs consumes it directly and
+				# the worker never sees live neighbor state (the ring is a
+				# main-thread value snapshot).
+				nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz)
+			else:
+				# AC-0203: slab deep-copies (~20 KB/col) — the worker never sees
+				# live chunk state.
+				nbs["%d,%d" % [dx, dz]] = {"d": ChunkIO._slabs_deepcopy(nc.data), "f": ChunkIO._slabs_deepcopy(nc.fl)}
 	if _tm_inflight_keys.has(key):
 		_tm_dedup += 1
 		if _tm_debug:
@@ -1938,9 +1963,13 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 		# coarse out to R; band 1 (taxi 5-12) now builds full like band 0.
 		ctx_w["coarse"] = true
 		ctx_w["uv_scale"] = 2
+	# AC-0211: the own-column value-copy goes through C++ when the C++
+	# lane is live (the same copy, native speed; the worker + the handoff
+	# stale check consume the same paletted shape).
 	var entry := {
 		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(),
-		"data": ChunkIO._slabs_deepcopy(c.data), "fl": ChunkIO._slabs_deepcopy(c.fl),
+		"data": mc.slab_copy(c.data) if mc != null else ChunkIO._slabs_deepcopy(c.data),
+		"fl": mc.slab_copy(c.fl) if mc != null else ChunkIO._slabs_deepcopy(c.fl),
 		"stamp": c.stamp(),
 		"band": int(c.band),
 		"nbs": nbs, "eff": eff, "eff_trust": eff_trust,

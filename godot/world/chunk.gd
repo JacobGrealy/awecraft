@@ -2385,18 +2385,49 @@ func _post_build_collision() -> void:
 			s.col_dirty = false
 
 
-func _build_snap(snap: PackedByteArray, snap_fl: PackedByteArray, get_world_block: Callable) -> void:
+# AC-0211: returns [snap, snap_fl] (the old in-out form is gone — the C++
+# sync_snap returns fresh arrays; the legacy fill below keeps the same
+# bytes). The world==null get_world_block fallback stays GDScript (the
+# degenerate no-world generator path — a per-cell GDScript callback with
+# no C++ bridge).
+func _build_snap(get_world_block: Callable) -> Array:
 	var world: Node3D = Game.world
 	var h := Data.HEIGHT
 	if world == null:
+		var snap0 := PackedByteArray()
+		snap0.resize(SNAP_ROW * h)
+		var snap_fl0 := PackedByteArray()
+		snap_fl0.resize(SNAP_ROW * h)
 		for y in range(h):
 			for lz in range(SIZE):
 				for lx in range(SIZE):
-					snap[y * SNAP_ROW + (lz + 1) * SNAP_W + lx + 1] = int(get_world_block.call(cx * SIZE + lx, y, cz * SIZE + lz))
-					snap_fl[y * SNAP_ROW + (lz + 1) * SNAP_W + lx + 1] = 0
-		return
-	# AC-0203: the sync path materializes the flat view once (it is the
-	# fallback lane — the worker path runs on slab views).
+					snap0[y * SNAP_ROW + (lz + 1) * SNAP_W + lx + 1] = int(get_world_block.call(cx * SIZE + lx, y, cz * SIZE + lz))
+					snap_fl0[y * SNAP_ROW + (lz + 1) * SNAP_W + lx + 1] = 0
+		return [snap0, snap_fl0]
+	var mc: Variant = mesh_cpp()
+	if mc != null and data.size() > 0:
+		# AC-0211: C++ sync snap — the paletted slabs (own + the 4 edge
+		# neighbors) are decoded in C++, replacing the GDScript
+		# flat_data()/flat_fl() materialization (5 x 98k cells). Missing /
+		# empty neighbor = air (the GDScript parity). Read live — this is
+		# the main thread and the C++ call is synchronous. (data.size() > 0:
+		# the data-empty generator fallback reads via get_world_block in
+		# the legacy fill below.)
+		var rings: Array = []
+		for s in [[-1, 0], [1, 0], [0, -1], [0, 1]]:
+			var nc = world.chunks.get("%d,%d" % [cx + int(s[0]), cz + int(s[1])])
+			if nc != null and nc.data.size() > 0:
+				rings.append(mc.snap_rings(nc.data, nc.fl, int(s[0]), int(s[1])))
+			else:
+				rings.append(null)
+		var r: Dictionary = mc.sync_snap(data, fl, rings, h)
+		return [r["snap"], r["snap_fl"]]
+	# Legacy GDScript fill (AWECRAFT_MESHCPP=0 / the C++ lib absent) — the
+	# AC-0203 flat-view materialization, kept as the fallback.
+	var snap := PackedByteArray()
+	snap.resize(SNAP_ROW * h)
+	var snap_fl := PackedByteArray()
+	snap_fl.resize(SNAP_ROW * h)
 	var d: PackedByteArray = flat_data()
 	var fd: PackedByteArray = flat_fl()
 	for y in range(h):
@@ -2448,6 +2479,7 @@ func _build_snap(snap: PackedByteArray, snap_fl: PackedByteArray, get_world_bloc
 							fv = 0
 						snap[sxy] = dv
 						snap_fl[sxy] = fv
+	return [snap, snap_fl]
 
 
 static func _opaque_material(at: Texture2D = null) -> StandardMaterial3D:  # AC-0120: static (pure — only StandardMaterial3D + Data)
@@ -2527,6 +2559,47 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 		if s.occluder != null:
 			s.occluder.queue_free()
 			s.occluder = null
+	if not data.is_empty():
+		var mc: Variant = mesh_cpp()
+		if mc != null:
+			# AC-0211: the sync fallback lane runs the SAME C++ pipeline as
+			# the workers (light -> compact nbs rings -> build_accs ->
+			# apply_accs) — the GDScript flat-view/snap/scan/emit steps
+			# below no longer run on this lane. Inputs are read live (this
+			# is the MAIN thread and the C++ call is synchronous — no value
+			# copies needed); a missing/empty neighbor reads as air (the
+			# _build_snap parity).
+			var st = Game.world._strips_for(cx, cz)
+			var light: Dictionary = eff
+			if light.is_empty() or light.get("mask", null) == null:
+				light = Lighting.compute_light_flat_chunk_pull(data, cx, cz, Data.HEIGHT, st["eff"], st["blk"], st["blk_b"])
+				light_recomputes += 1
+			var nbs: Dictionary = {}
+			for s2 in [[-1, 0], [1, 0], [0, -1], [0, 1]]:
+				var nc = Game.world.chunks.get(Game.world._key(cx + int(s2[0]), cz + int(s2[1])))
+				if nc != null and nc.data.size() > 0:
+					nbs["%d,%d" % [int(s2[0]), int(s2[1])]] = mc.snap_rings(nc.data, nc.fl, int(s2[0]), int(s2[1]))
+			var ctx_w: Dictionary = make_ctx()
+			ctx_w["eff_strips"] = st["eff"]
+			ctx_w["blk_strips"] = st["blk"]
+			ctx_w["blk_strips_b"] = st["blk_b"]
+			ctx_w["top"] = int(top)
+			if int(band) == 2:
+				ctx_w["coarse"] = true
+				ctx_w["uv_scale"] = 2
+			var ms_full: Dictionary
+			if OS.get_environment("AWECRAFT_MERGE") == "0":
+				ms_full = {"tex": null, "rects": {}}
+			else:
+				ms_full = _merge_atlas()
+			var ms_w: Dictionary
+			if not ms_full.rects.is_empty():
+				ms_w = {"rects": ms_full.rects.duplicate(), "h": float(ms_full.get("h", 0.0))}
+			else:
+				ms_w = {"rects": {}}
+			var res: Dictionary = mc.build_accs(data, fl, cx, cz, nbs, ctx_w, ms_w, light, 0, -1, 0, Lighting._att, Lighting._glow)
+			apply_accs(res, ms_full)
+			return
 	var wx0 := cx * SIZE
 	var wz0 := cz * SIZE
 	var light: Dictionary = eff
@@ -2539,11 +2612,11 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	last_eff = _eff_store(light)
 	last_blk_ring = light.get("ring", PackedInt32Array())
 	var bb := _bake_box(light, st["eff"], Data.HEIGHT)
-	var snap := PackedByteArray()
-	snap.resize(SNAP_ROW * Data.HEIGHT)
-	var snap_fl := PackedByteArray()
-	snap_fl.resize(SNAP_ROW * Data.HEIGHT)
-	_build_snap(snap, snap_fl, get_world_block)
+	# AC-0211: _build_snap returns [snap, snap_fl] (the C++ sync_snap or
+	# the legacy GDScript fill — the bytes are the same).
+	var _sp := _build_snap(get_world_block)
+	var snap: PackedByteArray = _sp[0]
+	var snap_fl: PackedByteArray = _sp[1]
 	var has_tex := Data.atlas_tex != null
 	var oktab := PackedByteArray()
 	var xtab := PackedByteArray()
@@ -2596,13 +2669,23 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	var c_af_w := _zeros(slab_n())
 	var c_af_l := _zeros(slab_n())
 	var c_ns := _zeros(slab_n())
-	var d: PackedByteArray = data
+	# AC-0211: the paletted slab store (AC-0203) is materialized ONCE for the
+	# scan (this fallback lane predates the paletted decode — the worker
+	# path never did this). d_ok=false (the degenerate data-empty generator
+	# fallback) reads the snap cell instead — the snap was filled from
+	# get_world_block there.
+	var d: PackedByteArray = flat_data()
+	var d_ok: bool = d.size() == Data.HEIGHT * SIZE * SIZE
 	for y in range(Data.HEIGHT):
 		var dy := y << 8
 		for lz in range(SIZE):
 			var drow := dy + (lz << 4)
 			for lx in range(SIZE):
-				var id := d[drow + lx]
+				var id: int
+				if d_ok:
+					id = d[drow + lx]
+				else:
+					id = int(snap[(y * SNAP_ROW) + (lz + 1) * SNAP_W + (lx + 1)])
 				if stab[id] == 0:
 					c_ns[y / 16] += 1
 				if id == 0:

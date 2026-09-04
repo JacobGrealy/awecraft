@@ -5246,12 +5246,25 @@ func _meshprobe_test(spawn: Vector3) -> void:
 	var cpp_wms_sum := 0
 	var skipped := 0
 	var mismatch: Array = []
+	# AC-0211: the surrounding-step checks (compact ring vs legacy full
+	# decode, slab_copy parity, rows_eq verdicts, sync_snap vs the legacy
+	# GDScript _build_snap) + the dispatch nbs cost (us, GDScript deep-copy
+	# path vs C++ ring path).
+	var compact_ok := 0
+	var slabcopy_ok := 0
+	var rowsok := 0
+	var syncsnap_ok := 0
+	var nbs_gd_us := 0
+	var nbs_cpp_us := 0
 	for c in samples:
 		var cx: int = int(c.cx)
 		var cz: int = int(c.cz)
 		# Reconstruct the EXACT dispatch inputs (world.gd
 		# _mesh_dispatch_impl: 4 diagonal nbs, ctx + strips + top + band-2
 		# coarse, ms rects).
+		# AC-0211: time the GDScript nbs construction (the dispatch cost
+		# the C++ compact ring replaces).
+		var tcn0 := Time.get_ticks_usec()
 		var nbs: Dictionary = {}
 		var nb_ok := true
 		for dx in range(-1, 2):
@@ -5265,6 +5278,7 @@ func _meshprobe_test(spawn: Vector3) -> void:
 				nbs["%d,%d" % [dx, dz]] = {"d": ChunkIO._slabs_deepcopy(nc.data), "f": ChunkIO._slabs_deepcopy(nc.fl)}
 			if not nb_ok:
 				break
+		nbs_gd_us += Time.get_ticks_usec() - tcn0
 		if not nb_ok:
 			skipped += 1
 			continue
@@ -5357,12 +5371,98 @@ func _meshprobe_test(spawn: Vector3) -> void:
 			chunk_ok = false
 			if mismatch.size() < 12:
 				mismatch.append({"cx": cx, "cz": cz, "field": "light", "arr": la_ok, "mask": lm_ok, "ring": lr_ok, "blk_src": ls_ok})
+		# AC-0211: the surrounding-step gates (C++ lane only).
+		if cpp:
+			# (1) compact ring nbs vs the legacy full-slab nbs — the SAME
+			# C++ build_accs must produce the identical result.
+			var tcn1 := Time.get_ticks_usec()
+			var cnbs: Dictionary = {}
+			for ddx in range(-1, 2):
+				for ddz in range(-1, 2):
+					if (ddx == 0) == (ddz == 0):
+						continue
+					var ncc = world.chunks.get(world._key(cx + ddx, cz + ddz))
+					if ncc == null or ncc.data.is_empty():
+						continue
+					cnbs["%d,%d" % [ddx, ddz]] = mc.snap_rings(ncc.data, ncc.fl, ddx, ddz)
+			var _cd = mc.slab_copy(c.data)
+			var _cf = mc.slab_copy(c.fl)
+			nbs_cpp_us += Time.get_ticks_usec() - tcn1
+			var c2res: Dictionary = mc.build_accs(_cd, _cf, cx, cz, cnbs, ctx_w, ms_w, {}, 0, -1, 0, Lighting._att, Lighting._glow)
+			if _ac0211_res_eq(cres["slabs"], c2res["slabs"]) and _ac0211_light_eq(cres["light"], c2res["light"]):
+				compact_ok += 1
+			elif mismatch.size() < 12:
+				mismatch.append({"cx": cx, "cz": cz, "field": "compact_ring", "slabs": _ac0211_res_eq(cres["slabs"], c2res["slabs"]), "light": _ac0211_light_eq(cres["light"], c2res["light"])})
+			# (2) slab_copy parity (the dispatch's own-column value-copy).
+			if _ac0211_slabcopy_eq(ChunkIO._slabs_deepcopy(c.data), _cd) and _ac0211_slabcopy_eq(ChunkIO._slabs_deepcopy(c.fl), _cf):
+				slabcopy_ok += 1
+			elif mismatch.size() < 12:
+				mismatch.append({"cx": cx, "cz": cz, "field": "slab_copy"})
+			# (3) rows_eq verdicts vs the GDScript row loop (the scoped
+			# handoff stale check) — over the first non-null slab window.
+			var s0 := -1
+			for kk in range(c.data.size()):
+				if c.data[kk] != null:
+					s0 = kk
+					break
+			if s0 < 0:
+				s0 = 0
+			var ylo := s0 * 16
+			var yhi := s0 * 16 + 15
+			var modc: Array = ChunkIO._slabs_deepcopy(c.data)
+			modc[s0] = null
+			var cpp_eq_true: bool = mc.rows_eq(c.data, c.data, ylo, yhi)
+			var cpp_eq_false: bool = mc.rows_eq(c.data, modc, ylo, yhi)
+			var gd_eq_true := true
+			var y3 := ylo
+			while y3 <= yhi and gd_eq_true:
+				gd_eq_true = c.row_bytes(y3) == _ChunkScriptM._slabs_row(c.data, y3)
+				y3 += 1
+			var gd_eq_false := true
+			y3 = ylo
+			while y3 <= yhi and gd_eq_false:
+				gd_eq_false = c.row_bytes(y3) == _ChunkScriptM._slabs_row(modc, y3)
+				y3 += 1
+			if cpp_eq_true == gd_eq_true and cpp_eq_false == gd_eq_false and cpp_eq_true == true and cpp_eq_false == false:
+				rowsok += 1
+			elif mismatch.size() < 12:
+				mismatch.append({"cx": cx, "cz": cz, "field": "rows_eq", "cpp_t": cpp_eq_true, "gd_t": gd_eq_true, "cpp_f": cpp_eq_false, "gd_f": gd_eq_false})
+			# (4) sync_snap vs the legacy GDScript _build_snap (force the
+			# legacy fill by pinning the mesh_cpp singleton to null).
+			var rings3: Array = []
+			for s3 in [[-1, 0], [1, 0], [0, -1], [0, 1]]:
+				var nc3 = world.chunks.get(world._key(cx + int(s3[0]), cz + int(s3[1])))
+				if nc3 != null and nc3.data.size() > 0:
+					rings3.append(mc.snap_rings(nc3.data, nc3.fl, int(s3[0]), int(s3[1])))
+				else:
+					rings3.append(null)
+			var r3: Dictionary = mc.sync_snap(c.data, c.fl, rings3, int(Data.HEIGHT))
+			var _smc = _ChunkScriptM._mesh_cpp
+			var _smd = _ChunkScriptM._mesh_cpp_done
+			_ChunkScriptM._mesh_cpp = null
+			_ChunkScriptM._mesh_cpp_done = true
+			var lgs: Array = c._build_snap(func(_x, _y, _z): return 0)
+			_ChunkScriptM._mesh_cpp = _smc
+			_ChunkScriptM._mesh_cpp_done = _smd
+			if PackedByteArray(r3["snap"]) == PackedByteArray(lgs[0]) and PackedByteArray(r3["snap_fl"]) == PackedByteArray(lgs[1]):
+				syncsnap_ok += 1
+			elif mismatch.size() < 12:
+				mismatch.append({"cx": cx, "cz": cz, "field": "sync_snap", "snap": PackedByteArray(r3["snap"]) == PackedByteArray(lgs[0]), "snap_fl": PackedByteArray(r3["snap_fl"]) == PackedByteArray(lgs[1])})
 		if chunk_ok:
 			match_chunks += 1
 	var n_samples := int(samples.size()) - skipped
 	var match_rate: float = float(match_chunks) / float(n_samples) if n_samples > 0 else 0.0
+	# AC-0211: the surrounding-step gates are part of ok (C++ lane).
+	var ac0211_ok: bool = (not cpp) or (n_samples > 0 and compact_ok == n_samples and slabcopy_ok == n_samples and rowsok == n_samples and syncsnap_ok == n_samples)
 	Debug.result({
-		"ok": cpp and n_samples >= 8 and match_rate >= 1.0 and verts_gd == verts_cpp and verts_gd > 0,
+		"ok": cpp and n_samples >= 8 and match_rate >= 1.0 and verts_gd == verts_cpp and verts_gd > 0 and ac0211_ok,
+		"ac0211_ok": ac0211_ok,
+		"compact_ok": compact_ok,
+		"slabcopy_ok": slabcopy_ok,
+		"rowsok": rowsok,
+		"syncsnap_ok": syncsnap_ok,
+		"nbs_gd_us": nbs_gd_us,
+		"nbs_cpp_us": nbs_cpp_us,
 		"cpp": cpp,
 		"n_samples": n_samples,
 		"skipped": skipped,
@@ -5388,6 +5488,70 @@ func _meshprobe_test(spawn: Vector3) -> void:
 		"mismatch": mismatch,
 		"wall_ms": Time.get_ticks_msec() - t0,
 	})
+
+
+# AC-0211: surrounding-step compare helpers (the meshprobe arm).
+# Two build_accs result slab sets are equal iff every slab row's 6 accs
+# (trimmed q/v/n/c/u/i) + full_solid flag match (the worker contract).
+func _ac0211_res_eq(s1: Array, s2: Array) -> bool:
+	if int(s1.size()) != int(s2.size()):
+		return false
+	for si in range(int(s1.size())):
+		var r1: Array = s1[si]
+		var r2: Array = s2[si]
+		if bool(r1[6]) != bool(r2[6]):
+			return false
+		for a in range(6):
+			var d1: Dictionary = r1[a]
+			var d2: Dictionary = r2[a]
+			if int(d1["q"]) != int(d2["q"]):
+				return false
+			if PackedVector3Array(d1["v"]) != PackedVector3Array(d2["v"]):
+				return false
+			if PackedVector3Array(d1["n"]) != PackedVector3Array(d2["n"]):
+				return false
+			if PackedColorArray(d1["c"]) != PackedColorArray(d2["c"]):
+				return false
+			if PackedVector2Array(d1["u"]) != PackedVector2Array(d2["u"]):
+				return false
+			if PackedInt32Array(d1["i"]) != PackedInt32Array(d2["i"]):
+				return false
+	return true
+
+
+func _ac0211_light_eq(l1: Dictionary, l2: Dictionary) -> bool:
+	if PackedByteArray(l1.get("arr", PackedByteArray())) != PackedByteArray(l2.get("arr", PackedByteArray())):
+		return false
+	if PackedByteArray(l1.get("mask", PackedByteArray())) != PackedByteArray(l2.get("mask", PackedByteArray())):
+		return false
+	if PackedInt32Array(l1.get("ring", PackedInt32Array())) != PackedInt32Array(l2.get("ring", PackedInt32Array())):
+		return false
+	if bool(l1.get("blk_src", false)) != bool(l2.get("blk_src", false)):
+		return false
+	return true
+
+
+# Two paletted slab arrays are equal iff every slab's n/b/nz + p + i match
+# (null == null). The slab_copy parity check.
+func _ac0211_slabcopy_eq(a: Array, b: Array) -> bool:
+	if int(a.size()) != int(b.size()):
+		return false
+	for k in range(int(a.size())):
+		var va = a[k]
+		var vb = b[k]
+		if va == null or vb == null:
+			if va != vb:
+				return false
+			continue
+		var da: Dictionary = va
+		var db: Dictionary = vb
+		if int(da["n"]) != int(db["n"]) or int(da["b"]) != int(db["b"]) or int(da["nz"]) != int(db["nz"]):
+			return false
+		if PackedByteArray(da["p"]) != PackedByteArray(db["p"]):
+			return false
+		if PackedByteArray(da["i"]) != PackedByteArray(db["i"]):
+			return false
+	return true
 
 
 # AC-0190: the per-acc trim-contract compare (see _meshprobe_test).

@@ -1,15 +1,15 @@
 meta:
-  updated_at: 2026-09-03T21:29
+  updated_at: 2026-09-03T23:07
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md
     TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html +
     <id>-results.html + screenshots
 queue:
-- AC-0211
+- AC-0212
 - AC-0208
+- AC-0175
 - AC-0199
 - AC-0204
-- AC-0175
 - AC-0205
 - AC-0140
 - AC-0191
@@ -7452,7 +7452,14 @@ intake:
   - id: 2
     created_at: '2026-09-03T12:50:00.000000'
     updated_at: null
-    text: '[coordinator] DONE + SHIPPED 2026-09-03. Wiring-only (no C++ change, no rebuild — the AC-0207-built .so/.dll already carried AweLighting.compute_chunk_pull from AC-0189): call it from the pull entry in godot/world/lighting.gd (compute_light_flat_chunk_pull + _flood_flat x2), the GDScript kernel preserved verbatim as _pull_kernel_gd, toggled by AWECRAFT_LIGHTCPP=0. Flood p95 53.1 -> 0.78 ms (68x), 100% cell-exact across 64 runtime call variants (6.29M cells) via the new pullprobe arm. No regression: chunkiocpp byte-identical, genhash 25/25 == AC-0188, meshprobe/stripsprobe 100%, G0 clean, both toggle states battery-green. See tasks/AC-0210/AC-0210-results.html.'
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Wiring-only (no C++ change, no
+      rebuild — the AC-0207-built .so/.dll already carried AweLighting.compute_chunk_pull
+      from AC-0189): call it from the pull entry in godot/world/lighting.gd (compute_light_flat_chunk_pull
+      + _flood_flat x2), the GDScript kernel preserved verbatim as _pull_kernel_gd,
+      toggled by AWECRAFT_LIGHTCPP=0. Flood p95 53.1 -> 0.78 ms (68x), 100% cell-exact
+      across 64 runtime call variants (6.29M cells) via the new pullprobe arm. No
+      regression: chunkiocpp byte-identical, genhash 25/25 == AC-0188, meshprobe/stripsprobe
+      100%, G0 clean, both toggle states battery-green. See tasks/AC-0210/AC-0210-results.html.'
 - id: AC-0211
   title: mesh-snap-and-instance-remaining-gdscript-to-cpp
   source: user
@@ -7460,11 +7467,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-04T02:22
   updated_at: 2026-09-04T02:22
-  completed_at: null
+  completed_at: 2026-09-03T13:25
   waiting_on: AC-0210
   parent_id: null
   notes: '1) User Story: As a player I want chunk mesh creation to not hitch on snap
@@ -7480,3 +7487,34 @@ intake:
     created_at: 2026-09-04T02:22
     updated_at: null
     text: '[user] remaining mesh snap/instance per 2026-09-03'
+  - id: 2
+    created_at: '2026-09-03T13:25:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. C++ mesh snap + surrounding steps (AweMesh, gdext/src/mesh.cpp, same class/.so): (1) neighbor SNAP rings (snap_rings, 256 B/slab) instead of deep-copying all 24 slabs x 4 neighbors; (2) own-column value copy (slab_copy); (3) sync build_mesh lane runs the full C++ pipeline (sync_snap replaces the 5x98k-cell GDScript flat-view materialization); (4) handoff scoped stale check (rows_eq). Stayed GDScript (why): the instance handoff (apply_accs -> MeshInstance3D/ArrayMesh/materials/collision) is main-thread engine scene-tree + mesh-upload work — nothing script-side left to move. Mesh LOSSLESS: meshprobe 100% (32/32, 1770/1770 accs, verts 124988=124988) + 4 new arms 32/32. MINFO 88/89 exact (chunk (-1,2) 1964 vs 1968 proven pre-existing, air-edge bake). Before->after: nbs+own snapshot 213->132 us/chunk (1/3 the bytes); perf r4 build_ms 120->98, worker p95 6->4 ms. G0 0; SMOKE ok:true x4 (C++ lane AND MESHCPP=0 fallback). No regression: chunkiocpp md5-identical, genhash 25/25, light surface 15, stripsprobe/pullprobe 100%, editperf == baseline. Bonus: fixed a latent pre-existing bug (var d: PackedByteArray = data -> size-24 zero PBA on the paletted Array; sync path was index-error-broken, now flat_data() + snap fallback). .so 1080648 B + .dll 3386302 B (MinGW, PE32+) rebuilt. See tasks/AC-0211/AC-0211-results.html.'
+- id: AC-0212
+  title: remove-frustum-cull-overhead-rely-on-engine
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-04T03:12
+  updated_at: 2026-09-04T03:12
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player moving the camera inside a chunk I want no extra
+    CPU hitch from manual frustum culling.
+
+
+    2) Technical Details: world.gd AC-0109 per-frame _frustum_cull_pass is extra CPU
+    on top of engine automatic MeshInstance culling. Remove or gate the manual pass,
+    rely on engine cull, keep margin behavior via engine if needed. Verify at R16
+    moving inside chunk no 5fps drop, probe counters updated, no pop.'
+  comments:
+  - id: 1
+    created_at: 2026-09-04T03:12
+    updated_at: null
+    text: '[user] try removing frustum overhead per 2026-09-03'
