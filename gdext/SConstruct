@@ -67,6 +67,10 @@ env.Append(LIBS=[lib])
 # AC-0190: src/mesh.cpp (AweMesh, the build_accs port + the C++ paletted
 # slab decode) + src/awe_common.{h,cpp} (the shared slab decode + the
 # awelight::pull bridge) join the same Glob/entry — registers AweMesh.
+# AC-0207: src/strips.cpp (AweStrips, the _strips_for/_side_blk_strip port
+# + the _compute_face_blk face compute on the shared slab decode + the
+# awelight::flood_flat/blk_inject bridges) joins the same Glob/entry —
+# registers AweStrips.
 library = env.SharedLibrary(libname, source=Glob("src/*.cpp"))
 env.NoCache(library)
 Default(library)

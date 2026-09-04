@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0207 — strips-in-cpp-fix-74ms — results</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{background:#eaf7ea;border-left:4px solid #2e9e44;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.warn{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0207 — strips-in-cpp-fix-74ms — results (C++ strips port)</h1>
+<p class="meta">2026-09-03 · subagent (xhigh) · engine Godot 4.7.1 · seed 44 · gdext pipeline AC-0165 + AC-0188 + AC-0189 + AC-0190 (godot-cpp master 05057de, api 4.7, <code>-O2 -ffp-contract=off</code>) · the LAST GDScript hot spot moved into the same gdext lib</p>
+
+<div class="ok"><b>ALL GATES GREEN.</b> Strips LOSSLESS invariant holds: C++ <code>AweStrips</code> vs GDScript = <b>100% exact on 32/32 chunks — all 512 strips (eff ×8 + blk ×4 + blk_b ×4) byte-identical, and the face compute 32/32 × 4 faces byte-identical</b> (<code>stripsprobe</code> <code>ok:true</code>, match_rate 1.0, face_rate 1.0, state_changed 0). <code>_side_blk_strip</code>: <b>1.756 ms → 0.040 ms (44×, &lt;1 ms gate met)</b>; per-dispatch <code>_strips_for</code> 9.27 → 0.251 ms. The 74 ms idle hitch is gone: perf r4 A/B <b>max_frame 1202 → 38 ms (31.6×)</b>, p95 329 → 24 ms, drain 11.34 → 0.48 s (23.6×). SMOKE battery <b>ok:true ×4</b> (values == AC-0190), G0 0 script errors, chunkiocpp md5-identical, genhash 25/25 == AC-0188, light == AC-0190 baseline, meshprobe 100% exact (AC-0190 lossless preserved). <code>.so</code> + <code>.dll</code> built; .dll PE-verified. One C++ bug found + fixed by the probe (the shipped GDScript negative-index wrap quirk — see §3).</div>
+
+<h2>1. What landed</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>gdext/src/strips.cpp</code> (NEW, ~560 lines)</td><td><code>AweStrips : RefCounted</code> with <code>compute_strips(sides, corners, h, att, glow)</code> (the <code>_strips_for</code> compute: eff gathers + v channel + b copy + corners), <code>side_blk_v(data, eff, dx, dz, h, att, glow)</code> (the <code>_side_blk_strip</code> v channel — the per-column <b>solid_top palette probe</b> (a slab whose palette holds no solid id cannot close the column) + the bottom-up per-slab cell walk (null → sky/eff, uniform → glow-or-eff/sky, paletted/raw → per-cell glow/eff/sky; AC-0129 sky carry verbatim), and <code>compute_face(data, h, att, glow, nf0..nf3)</code> (the <code>_compute_face_blk</code> port: <b>has_glow palette probe</b>, flat expansion, glow seed, bucket-16 flood + UN-gated boundary injection through the SAME C++ kernels as the pull path, the no-glow zero-column probe + real-column re-inject, the [E,W,S,N] face extract). Slab cells decode in C++ (<code>awecommon::slab_unpack</code> — free int lookup) instead of the GDScript <code>ChunkIO._slab_getbits</code> per cell (24k Variant calls / dispatch). The <b>has_solid probe reads the palette only</b> (paletted cell set == palette; raw slabs scan 4096 — rare), exactly like the GDScript. The face <b>MEMO stays in GDScript</b> (<code>World._face_blk</code>, data_gen + 4-neighbor deps + in-flight cycle guard) — <code>compute_face</code> is the pure compute; the memoized face strip is what <code>compute_strips</code> copies into the b channel (the GDScript's <code>sf.duplicate()</code>).</td></tr>
+<tr><td><code>gdext/src/awe_common.h</code> + <code>gdext/src/lighting.cpp</code></td><td><code>awelight::FloodTables</code> + <code>flood_flat()</code>/<code>blk_inject()</code> — cross-module bridges to the SAME bucket-16 flood + UN-gated injection the pull kernel runs (byte-identical by construction), used by the face compute.</td></tr>
+<tr><td><code>gdext/src/chunk_io.cpp</code></td><td><code>awestrips::register_classes()</code> from the SAME <code>chunkio_library_init</code> entry (AC-0188/0189/0190 pattern). One .so/.dll; <code>.gdextension</code> manifest unchanged.</td></tr>
+<tr><td><code>gdext/SConstruct</code></td><td>comment only — <code>Glob("src/*.cpp")</code> picks up strips.cpp.</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><code>_strips_cpp_inst()</code> toggle (<code>AWECRAFT_STRIPSCPP=0</code> → GDScript; =1/unset → C++ when registered) + the <code>_strips_for</code> C++ branch (neighbor lookups + memoized <code>_face_of</code> stays in GDScript; the compute is native) + <code>_compute_face_blk</code> restructured: the neighbor-face fetch (under the in-flight guard) is shared, then C++ <code>compute_face</code> or <code>_compute_face_blk_gd(c, h, strips)</code> — the original GDScript compute, kept intact as the fallback. <code>_side_blk_strip</code>/<code>_side_eff_strip</code>/<code>_corner_eff_strip</code>/<code>_chunk_has_glow</code> untouched (still callable, used by the fallback + the probe reference).</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td><code>AWECRAFT_LOGIC=stripsprobe</code> arm (<code>_stripsprobe_test</code>, <code>AWECRAFT_STRIPSPROBE_N</code> 1–128, default 32): per chunk the GDScript <code>_strips_for</code> body (called directly — toggle-independent) vs <code>AweStrips.compute_strips</code> on IDENTICAL inputs (same slabs, same last_eff rows, same memoized face strips captured once per side — a face-cache state change between the two calls retries the chunk once, then counts <code>state_changed</code>, never a false mismatch); A/Bs the face compute (<code>compute_face</code> vs <code>_compute_face_blk_gd</code> on the same captured neighbor faces — both pure); reports per-dispatch + per-side before/after wall + the settled 300-frame idle window.</td></tr>
+</table>
+
+<h2>2. Strips LOSSLESS (the #1 invariant) — <code>AWECRAFT_LOGIC=stripsprobe</code></h2>
+<table>
+<tr><th>metric</th><th>value</th><th>gate</th><th>status</th></tr>
+<tr><td>chunks compared (state_changed 0)</td><td>32/32</td><td>≥8</td><td>PASS</td></tr>
+<tr><td>eff strips byte-identical</td><td>32/32 chunks (×8 = 256)</td><td>100%</td><td>PASS</td></tr>
+<tr><td>blk strips byte-identical (the v channel)</td><td>32/32 chunks (×4 = 128)</td><td>100%</td><td>PASS</td></tr>
+<tr><td>blk_b strips byte-identical (the face b channel)</td><td>32/32 chunks (×4 = 128)</td><td>100%</td><td>PASS</td></tr>
+<tr><td>face compute A/B (4 faces/chunk)</td><td>32/32 chunks (128 faces), face_rate 1.0</td><td>100%</td><td>PASS</td></tr>
+<tr><td><b>match_rate / RESULT ok</b></td><td><b>1.0 / true</b></td><td>1.0</td><td><b>PASS</b></td></tr>
+</table>
+<p class="note">Total 512 strips + 128 faces compared — all byte-identical, <code>mismatch: []</code>. The GDScript reference calls the original functions directly, so the result holds regardless of the <code>AWECRAFT_STRIPSCPP</code> toggle.</p>
+
+<h2>3. The one C++ bug the probe caught (fixed, re-verified 100%)</h2>
+<p><b>GDScript packed-array negative-index wrap.</b> First probe run: blk + blk_b + faces all 32/32 exact, but <b>eff 0/32</b>. Root cause: the c=1 half of the E/N side strips and the a/b=1 half of the E/N corner strips compute a <b>negative</b> index — E: <code>(y&lt;&lt;8)|(t&lt;&lt;4)|(0-1) = -1</code> (all bits set); N: <code>(y&lt;&lt;8)|((-1)&lt;&lt;4)|t = t-16</code>. GDScript wraps negative packed-array indices from the end (<code>a[-k] = a[size-k]</code> — verified empirically on 4.7.1: <code>a[-1]=255</code>, <code>a[-13]=243</code> on a 256-byte array; high-side OOB is a fatal error that cannot occur here). So the E far-margin column wraps to the neighbor's LAST cell and the N far-margin column wraps to the neighbor's TOP row — a shipped quirk of the original, replicated verbatim by the new <code>narr_idx()</code> (wrap-then-bounds). Second probe run: <b>512/512 + 128/128 exact</b>.</p>
+
+<h2>4. Speed (before → after)</h2>
+<table>
+<tr><th>metric (same machine, seed 44)</th><th>before (GDScript)</th><th>after (C++)</th><th>speedup</th></tr>
+<tr><td><b><code>_side_blk_strip</code> per side</b> (stripsprobe, 32 chunks)</td><td>1.756 ms</td><td><b>0.040 ms</b></td><td><b>44× (&lt;1 ms gate)</b></td></tr>
+<tr><td><code>_strips_for</code> per dispatch (stripsprobe)</td><td>9.269 ms</td><td>0.251 ms</td><td>37×</td></tr>
+<tr><td>perf r4 — max_frame_ms (the hitch)</td><td>1202 ms</td><td><b>38 ms</b></td><td>31.6×</td></tr>
+<tr><td>perf r4 — frame p95 / p50 (ms)</td><td>329 / 0</td><td>24 / 14</td><td>13.7×</td></tr>
+<tr><td>perf r4 — drain (s) / total_ms</td><td>11.34 / 11341</td><td>0.48 / 475</td><td>23.6× / 23.9×</td></tr>
+<tr><td>perf r4 — max_drain_ms / first_draw_ms (ms)</td><td>447 / 1219</td><td>4.0 / 56</td><td>112× / 21.8×</td></tr>
+<tr><td>perf r4 — build_ms (ms)</td><td>1940</td><td>101</td><td>19.2×</td></tr>
+<tr><td>perf r4 — built_final / all_meshed</td><td>49 / true</td><td>49 / true</td><td>unchanged (no build regression)</td></tr>
+</table>
+<p><b>Idle 60 fps:</b> the 74 ms dispatch (74 ms on the user's Windows box per the task report; 9.3 ms per dispatch + up to ~1.2 s face-refresh-cascade frames on this box before) is gone. stripsprobe settled 300-frame idle window: p50 13.9 ms, p95 20.8 ms, max 20.9 ms — no 74 ms-class stall (headless runs uncapped; the frame deltas measure main-thread work). The drain-phase improvement (24×) is bigger than the strip cost alone because <code>_compute_face_blk</code> (the landing face-cache refresh, ~70–190 ms in GDScript with the 98 KB <code>flat_data()</code> expansion) is now the C++ <code>compute_face</code> (~0.2–0.3 ms: palette glow probe + C++ decode + the shared flood/inject kernels) — the AC-0178 "face-block refresh blocks the main thread 0.4–1.0 s" cascade is eliminated.</p>
+
+<h2>5. No-regression gates</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>status</th></tr>
+<tr><td>G0 — headless load with the strips <code>.gdextension</code></td><td>exit 0, <b>0 SCRIPT ERROR</b>, <code>AweStrips</code> registered (stripsprobe <code>cpp:true</code>)</td><td>PASS</td></tr>
+<tr><td>SMOKE — <code>AWECRAFT_BATTERY="player;interact;light;fluids"</code></td><td><b>ok:true</b> all 4 modes; values == AC-0190 battery (player horizontal_moved 2.82/is_on_floor/jump; interact place_ok+drop_spawned; light surface 15; fluids sea 1066/2712, sideways_lava 24, water_on_lava 24, water_delta 0)</td><td>PASS</td></tr>
+<tr><td><code>AWECRAFT_LOGIC=chunkiocpp</code> (codec byte-identical)</td><td>ok:true — <code>md5_cpp == md5_orig</code> (8a893557900a462fe4ab1c91f8589081), enc 34/34, flat 34/34</td><td>PASS</td></tr>
+<tr><td>genhash (gen unchanged)</td><td><b>25/25 byte-identical</b> to the AC-0188 baseline (<code>.scratch/AC-0188-gates/genhash_new.txt</code>)</td><td>PASS</td></tr>
+<tr><td>light (standing baseline)</td><td>surface 15; cave/torch -1 — <b>identical to the AC-0190 baseline on this machine</b> (pre-task <code>.scratch/AC-0190-gates/light_logic.log</code> + battery: same -1; the 15/10/14 standing value predates current machine state and AC-0190's battery passed ok:true with it). Identical with C++ and with <code>AWECRAFT_STRIPSCPP=0</code></td><td>PASS (== baseline)</td></tr>
+<tr><td>mesh (AC-0190 lossless preserved)</td><td>meshprobe ok:true — <b>match_rate 1.0</b>, 32/32 chunks, 1752/1752 accs (q/v/n/c/u/i all 100%), 124,128 verts both sides, cpp_wms_avg 3.1 ms</td><td>PASS</td></tr>
+</table>
+<p class="note">Battery run 1 hit a one-off SIGSEGV at <code>AweGen.generate_flat</code> (generator.gd:134) during a battery state reset — the KNOWN AC-0206 one-off (AC-0188 gen code, pre-AC-0207; the crash frame contains no AC-0207 code). Run 2 passed fully (the re-run to confirm non-reproduction, per task instruction). Not run (per task scope): R50 (PENDING — the .so crashes in the coordinator env, AC-0206), Windows runtime test (.dll built + PE-verified only).</p>
+
+<h2>6. Builds</h2>
+<table>
+<tr><th>artifact</th><th>status</th></tr>
+<tr><td><code>gdext/bin/libchunkio.so</code> → staged <code>godot/bin/</code></td><td>built clean (g++, <code>-O2 -ffp-contract=off</code>); all gates above run against it; AweStrips symbols present</td></tr>
+<tr><td><code>gdext/bin/libchunkio.windows.template_release.x86_64.dll</code> → staged <code>godot/bin/</code></td><td>built (MinGW x86_64-w64-mingw32-g++, <code>-O2 -ffp-contract=off -static-libgcc -static-libstdc++</code>); PE-verified: PE32+ DLL x86-64, 20 sections, exports <code>chunkio_library_init</code> (ordinal 1), 3.24 MB</td></tr>
+</table>
+
+<h2>7. Deliverables on disk</h2>
+<ul>
+<li><code>gdext/src/strips.cpp</code> (new) · <code>gdext/src/awe_common.h</code> + <code>gdext/src/lighting.cpp</code> (flood/inject bridges) · <code>gdext/src/chunk_io.cpp</code> (registration) · <code>gdext/SConstruct</code> (doc)</li>
+<li><code>godot/world/world.gd</code> (toggle + _strips_for wire + _compute_face_blk restructure, GDScript path intact) · <code>godot/scenes/main.gd</code> (stripsprobe arm)</li>
+<li>Gate logs: <code>.scratch/AC-0207-gates/</code> (g0, stripsprobe×2, perf_before/after, smoke×2, light×2, chunkiocpp, genhash, meshprobe)</li>
+<li>Fallback contract: <code>AWECRAFT_STRIPSCPP=0</code> forces the GDScript strips path (verified: light arm identical C++ vs off); the <code>.gdextension</code> manifest is unchanged (same lib, same entry symbol).</li>
+</ul>
+</body></html>

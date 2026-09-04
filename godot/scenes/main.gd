@@ -1349,6 +1349,11 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			await _meshprobe_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "stripsprobe":
+			world.collision_enabled = false
+			await _stripsprobe_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "tick":
 			await _tick_test(spawn)
 			return
@@ -4618,6 +4623,277 @@ func _light_test(spawn: Vector3) -> void:
 		"torch_level": torch_eff,
 		"torch_far_before": far_before,
 		"torch_far_after": far_after,
+	})
+
+
+# AC-0207: the STRIPS losslessness probe (the #1 gate for the C++ strips
+# port, gdext/src/strips.cpp). Per chunk: the GDScript _strips_for body
+# (world._side_eff_strip / _side_blk_strip / _corner_eff_strip — the pre-
+# port path, called directly so the AWECRAFT_STRIPSCPP toggle is irrelevant)
+# vs AweStrips.compute_strips (C++) on IDENTICAL inputs: same slab arrays,
+# same last_eff rows, and the SAME memoized face strips (captured once per
+# side via world._face_of and fed to both sides). Gate: 100% exact — eff x8
+# + blk x4 + blk_b x4 strips byte-identical per chunk. Also A/Bs the FACE
+# compute (AweStrips.compute_face vs world._compute_face_blk_gd on the same
+# captured neighbor faces — both pure), reports the per-dispatch + per-side
+# _side_blk_strip before/after wall (the 74 ms * 4 idle-hitch gate), and the
+# settled idle-frame window (the 60 fps gate). If a face-cache state change
+# lands between the GDScript reference and the C++ call (a build landing
+# mid-probe), the chunk retries once, then is counted state_changed (never
+# a false mismatch).
+func _stripsprobe_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var NENV := OS.get_environment("AWECRAFT_STRIPSPROBE_N")
+	var N := int(NENV) if NENV != "" else 32
+	N = clampi(N, 1, 128)
+	world.fluid_sim_enabled = false
+	world.collision_enabled = false
+	world.render_radius = 4
+	world.recenter(spawn.x, spawn.z, true)
+	# Wait until N mesh-built chunks (the r4 band set drains well inside the
+	# cap; a timeout still probes whatever is ready), then let the E2 re-
+	# light wave settle so the face-cache state is stable during compares.
+	var waited := 0
+	var built := 0
+	while built < N and waited < 3600:
+		built = 0
+		for key in world.chunks:
+			var c = world.chunks.get(key)
+			if c != null and not c.data.is_empty() and c.mesh_built:
+				built += 1
+		if built >= N:
+			break
+		await get_tree().physics_frame
+		waited += 1
+	var lp_waited := 0
+	while not world.light_pending.is_empty() and lp_waited < 1800:
+		await get_tree().physics_frame
+		lp_waited += 1
+	# Deterministic sample: ready chunks ordered by (cz, cx).
+	var samples: Array = []
+	for key in world.chunks:
+		var c = world.chunks.get(key)
+		if c != null and not c.data.is_empty() and c.mesh_built:
+			samples.append(c)
+	samples.sort_custom(func(a, b): return int(a.cz) * 1024 + int(a.cx) < int(b.cz) * 1024 + int(b.cx))
+	samples.resize(mini(samples.size(), N))
+	var sc: Variant = world._strips_cpp_inst()
+	var cpp: bool = sc != null
+	Lighting._tables()
+	var h: int = Data.HEIGHT
+	var SIDES: Array = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+	var CORNERS: Array = [[1, 1], [-1, 1], [1, -1], [-1, -1]]
+	var match_chunks := 0
+	var eff_match := 0
+	var blk_match := 0
+	var blkb_match := 0
+	var state_changed := 0
+	var face_chunks := 0
+	var face_compared := 0
+	var gd_wall_us := 0
+	var cpp_wall_us := 0
+	var gd_side_us := 0
+	var cpp_side_us := 0
+	var sides_timed := 0
+	var mismatch: Array = []
+	for c in samples:
+		var cx: int = int(c.cx)
+		var cz: int = int(c.cz)
+		var chunk_ok := false
+		var strips_ok := false
+		for attempt in range(2):
+			# Capture the memoized neighbor face strips ONCE (fed to the C++
+			# side; the GDScript reference pulls the same memo internally).
+			var faces0: Array = []
+			for s in SIDES:
+				var nc = world.chunks.get(world._key(cx + int(s[0]), cz + int(s[1])))
+				var f: PackedByteArray = PackedByteArray()
+				if nc != null and not nc.data.is_empty():
+					f = world._face_of(nc, world._shared_face(int(s[0]), int(s[1])))
+				faces0.append(f)
+			# The GDScript reference (the pre-port path, toggle-independent).
+			# Per-attempt deltas are committed to the totals ONLY on success
+			# (a state-changed retry is discarded, never counted).
+			var at_gd_wall := 0
+			var at_gd_side := 0
+			var at_n_sides := 0
+			var t1 := Time.get_ticks_usec()
+			var g_effs: Array = []
+			var g_blks: Array = []
+			var g_blks_b: Array = []
+			for si in range(4):
+				var s: Array = SIDES[si]
+				var nc = world.chunks.get(world._key(cx + int(s[0]), cz + int(s[1])))
+				var e := PackedByteArray()
+				var b := PackedByteArray()
+				if nc != null and not nc.data.is_empty() and not nc.last_eff.is_empty():
+					e = world._side_eff_strip(nc, int(s[0]), int(s[1]), h)
+					var t2 := Time.get_ticks_usec()
+					var sb: Dictionary = world._side_blk_strip(nc, int(s[0]), int(s[1]), h)
+					at_gd_side += Time.get_ticks_usec() - t2
+					at_n_sides += 1
+					b = sb["v"]
+					g_blks_b.append(sb["b"])
+				else:
+					g_blks_b.append(PackedByteArray())
+				g_effs.append(e)
+				g_blks.append(b)
+			for s in CORNERS:
+				var nc = world.chunks.get(world._key(cx + int(s[0]), cz + int(s[1])))
+				var e := PackedByteArray()
+				if nc != null and not nc.data.is_empty() and not nc.last_eff.is_empty():
+					e = world._corner_eff_strip(nc, int(s[0]), int(s[1]), h)
+				g_effs.append(e)
+			at_gd_wall += Time.get_ticks_usec() - t1
+			# State check: a landing between the capture and now invalidates
+			# the face memo -> retry (never a false mismatch).
+			var changed := false
+			for si in range(4):
+				var nc = world.chunks.get(world._key(cx + int(SIDES[si][0]), cz + int(SIDES[si][1])))
+				var f2: PackedByteArray = PackedByteArray()
+				if nc != null and not nc.data.is_empty():
+					f2 = world._face_of(nc, world._shared_face(int(SIDES[si][0]), int(SIDES[si][1])))
+				if f2 != faces0[si]:
+					changed = true
+			if changed:
+				continue
+			gd_wall_us += at_gd_wall
+			gd_side_us += at_gd_side
+			sides_timed += at_n_sides
+			# The C++ side — IDENTICAL inputs (same slabs, eff rows, faces).
+			var at_cpp_wall := 0
+			var at_cpp_side := 0
+			var sides: Array = []
+			for si in range(4):
+				var s: Array = SIDES[si]
+				var nc = world.chunks.get(world._key(cx + int(s[0]), cz + int(s[1])))
+				var sd: Dictionary = {"data": [], "eff": PackedByteArray(), "face": PackedByteArray(), "have": false}
+				if nc != null and not nc.data.is_empty() and not nc.last_eff.is_empty():
+					sd["data"] = nc.data
+					sd["eff"] = nc.last_eff["arr"]
+					sd["face"] = faces0[si]
+					sd["have"] = true
+					var t3 := Time.get_ticks_usec()
+					sc.side_blk_v(nc.data, nc.last_eff["arr"], int(s[0]), int(s[1]), h, Lighting._att, Lighting._glow)
+					at_cpp_side += Time.get_ticks_usec() - t3
+				sides.append(sd)
+			var corners: Array = []
+			for s in CORNERS:
+				var nc = world.chunks.get(world._key(cx + int(s[0]), cz + int(s[1])))
+				var cd: Dictionary = {"eff": PackedByteArray(), "have": false}
+				if nc != null and not nc.data.is_empty() and not nc.last_eff.is_empty():
+					cd["eff"] = nc.last_eff["arr"]
+					cd["have"] = true
+				corners.append(cd)
+			var t4 := Time.get_ticks_usec()
+			var cr: Dictionary = sc.compute_strips(sides, corners, h, Lighting._att, Lighting._glow)
+			at_cpp_wall += Time.get_ticks_usec() - t4
+			cpp_wall_us += at_cpp_wall
+			cpp_side_us += at_cpp_side
+			# Byte-identical compare: eff x8 + blk x4 + blk_b x4.
+			var ceffs: Array = cr["eff"]
+			var cblks: Array = cr["blk"]
+			var cblksb: Array = cr["blk_b"]
+			var e_ok := true
+			var b_ok := true
+			var bb_ok := true
+			for i in range(8):
+				if PackedByteArray(g_effs[i]) != PackedByteArray(ceffs[i]):
+					e_ok = false
+			for i in range(4):
+				if PackedByteArray(g_blks[i]) != PackedByteArray(cblks[i]):
+					b_ok = false
+				if PackedByteArray(g_blks_b[i]) != PackedByteArray(cblksb[i]):
+					bb_ok = false
+			if e_ok:
+				eff_match += 1
+			if b_ok:
+				blk_match += 1
+			if bb_ok:
+				blkb_match += 1
+			if e_ok and b_ok and bb_ok:
+				match_chunks += 1
+				strips_ok = true
+			else:
+				if mismatch.size() < 8:
+					mismatch.append({"cx": cx, "cz": cz, "eff_ok": e_ok, "blk_ok": b_ok, "blkb_ok": bb_ok})
+			chunk_ok = true
+			break
+		if not chunk_ok:
+			state_changed += 1
+		# The FACE compute A/B (both pure — no race): AweStrips.compute_face
+		# vs world._compute_face_blk_gd on the SAME captured neighbor faces.
+		if cpp:
+			var nstrips: Array = []
+			for s in [[1, 0], [-1, 0], [0, 1], [0, -1]]:
+				var nc = world.chunks.get(world._key(cx + int(s[0]), cz + int(s[1])))
+				var f: PackedByteArray = PackedByteArray()
+				if nc != null and not nc.data.is_empty():
+					f = world._face_of(nc, world._shared_face(int(s[0]), int(s[1])))
+				nstrips.append(f)
+			var gfaces: Array = world._compute_face_blk_gd(c, h, nstrips)
+			var cfaces: Array = sc.compute_face(c.data, h, Lighting._att, Lighting._glow, nstrips[0], nstrips[1], nstrips[2], nstrips[3])["faces"]
+			var f_ok := true
+			for i in range(4):
+				if PackedByteArray(gfaces[i]) != PackedByteArray(cfaces[i]):
+					f_ok = false
+					if mismatch.size() < 12:
+						mismatch.append({"cx": cx, "cz": cz, "face_i": i, "gd_sz": PackedByteArray(gfaces[i]).size(), "cpp_sz": PackedByteArray(cfaces[i]).size()})
+			face_compared += 1
+			if f_ok:
+				face_chunks += 1
+	# The settled idle-frame window (the 60 fps gate): drain the remaining
+	# in-range builds + re-light wave, then sample 300 physics frames.
+	var settle_waited := 0
+	while settle_waited < 1800:
+		var all_built := true
+		for key in world.chunks:
+			var c = world.chunks.get(key)
+			if c != null and int(c.band) <= 2 and not c.mesh_built:
+				all_built = false
+				break
+		if all_built and world.light_pending.is_empty():
+			break
+		await get_tree().physics_frame
+		settle_waited += 1
+	var idle_frames: Array = []
+	var last_t := Time.get_ticks_usec()
+	for i in range(300):
+		await get_tree().physics_frame
+		var nt := Time.get_ticks_usec()
+		idle_frames.append(nt - last_t)
+		last_t = nt
+	idle_frames.sort()
+	var n_samples := samples.size()
+	var compared := n_samples - state_changed
+	var match_rate: float = float(match_chunks) / float(compared) if compared > 0 else 0.0
+	var face_rate: float = float(face_chunks) / float(face_compared) if face_compared > 0 else 0.0
+	Debug.result({
+		"ok": cpp and n_samples >= 8 and compared >= 8 and match_rate >= 1.0 and face_rate >= 1.0,
+		"cpp": cpp,
+		"n_chunks": n_samples,
+		"compared": compared,
+		"match_chunks": match_chunks,
+		"match_rate": match_rate,
+		"eff_match": eff_match,
+		"blk_match": blk_match,
+		"blkb_match": blkb_match,
+		"state_changed": state_changed,
+		"face_compared": face_compared,
+		"face_match": face_chunks,
+		"face_rate": face_rate,
+		"strips_compared": compared * 16,
+		"gd_dispatch_ms": round(float(gd_wall_us) / 1000.0 / float(maxi(n_samples, 1)) * 1000.0) / 1000.0,
+		"cpp_dispatch_ms": round(float(cpp_wall_us) / 1000.0 / float(maxi(n_samples, 1)) * 1000.0) / 1000.0,
+		"gd_side_ms": round(float(gd_side_us) / 1000.0 / float(maxi(sides_timed, 1)) * 1000.0) / 1000.0,
+		"cpp_side_ms": round(float(cpp_side_us) / 1000.0 / float(maxi(sides_timed, 1)) * 1000.0) / 1000.0,
+		"speedup": round(float(gd_side_us) / float(cpp_side_us)) if cpp_side_us > 0 else 0.0,
+		"idle_frames": idle_frames.size(),
+		"idle_p50_ms": int(idle_frames[int(idle_frames.size() * 0.50)]) if not idle_frames.is_empty() else 0,
+		"idle_p95_ms": int(idle_frames[int(idle_frames.size() * 0.95)]) if not idle_frames.is_empty() else 0,
+		"idle_max_ms": int(idle_frames.back()) if not idle_frames.is_empty() else 0,
+		"mismatch": mismatch,
+		"wall_ms": Time.get_ticks_msec() - t0,
 	})
 
 

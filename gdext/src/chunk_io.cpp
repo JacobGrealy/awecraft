@@ -35,6 +35,10 @@ using namespace godot;
 // (the build_accs port + greedy merged emit + bake box + snap + the C++
 // paletted-slab decode) registers from the same initializer (namespace
 // awemesh, defined in mesh.cpp).
+// AC-0207: the strips module (src/strips.cpp) joins the same library —
+// AweStrips (the _strips_for/_side_blk_strip port + the _compute_face_blk
+// face compute with the C++ glow/solid_top palette probes) registers from
+// the same initializer (namespace awestrips, defined in strips.cpp).
 namespace awegen {
 void register_classes();
 }
@@ -42,6 +46,9 @@ namespace awelight {
 void register_classes();
 }
 namespace awemesh {
+void register_classes();
+}
+namespace awestrips {
 void register_classes();
 }
 
@@ -585,6 +592,7 @@ void initialize_chunkio_module(ModuleInitializationLevel p_level) {
 	awegen::register_classes(); // AC-0188: AweGen (coarse 3D density gen)
 	awelight::register_classes(); // AC-0189: AweLighting (pull kernel + flood)
 	awemesh::register_classes(); // AC-0190: AweMesh (build_accs + greedy emit)
+	awestrips::register_classes(); // AC-0207: AweStrips (strips + face compute)
 }
 
 void uninitialize_chunkio_module(ModuleInitializationLevel p_level) {

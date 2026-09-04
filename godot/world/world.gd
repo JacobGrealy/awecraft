@@ -2452,8 +2452,57 @@ func _rebuild_qb() -> void:
 # EXACT, eff>sky EXACT, else 0 CONSERVATIVE — one top-down column pass each,
 # web sky rule index.html:1013-1021). Neighbor missing/never lit -> empty
 # (0-length) arrays: bake margin stays 0, no injection from that side.
+#
+# AC-0207: C++ strips toggle (gdext/src/strips.cpp — AweStrips, the LOSSLESS
+# port of the strip compute: _side_blk_strip's slab cell reads decode in C++
+# [free int lookup] instead of the GDScript ChunkIO._slab_getbits per cell —
+# 24k Variant calls / dispatch = the 74 ms idle hitch; the face compute rides
+# the same C++ flood/inject kernels as the pull path). AWECRAFT_STRIPSCPP=0
+# forces the GDScript path (the fallbacks below stay intact); =1/unset = C++
+# whenever the gdext library registered AweStrips.
+var _strips_cpp: Variant = null
+var _strips_cpp_done := false
+
+
+func _strips_cpp_inst() -> Variant:
+	if not _strips_cpp_done:
+		_strips_cpp_done = true
+		if OS.get_environment("AWECRAFT_STRIPSCPP") == "0":
+			_strips_cpp = null
+		elif ClassDB.class_exists("AweStrips"):
+			_strips_cpp = ClassDB.instantiate("AweStrips")
+	return _strips_cpp
+
+
 func _strips_for(cx: int, cz: int) -> Dictionary:
 	var h: int = Data.HEIGHT
+	var sc: Variant = _strips_cpp_inst()
+	if sc != null:
+		# AC-0207: C++ strips (gdext/src/strips.cpp). The neighbor lookups +
+		# the memoized face strips (_face_of) stay in GDScript — World owns
+		# the chunks map + the _face_blk cache; the compute (eff gathers + v
+		# channel slab decode + b copy + corners) is native and
+		# byte-identical (stripsprobe: 100% exact vs the GDScript path).
+		Lighting._tables()
+		var sides: Array = []
+		for s in [[1, 0], [-1, 0], [0, 1], [0, -1]]:
+			var nc = chunks.get(_key(cx + int(s[0]), cz + int(s[1])))
+			var sd: Dictionary = {"data": [], "eff": PackedByteArray(), "face": PackedByteArray(), "have": false}
+			if nc != null and not nc.data.is_empty() and not nc.last_eff.is_empty():
+				sd["data"] = nc.data
+				sd["eff"] = nc.last_eff["arr"]
+				sd["face"] = _face_of(nc, _shared_face(int(s[0]), int(s[1])))
+				sd["have"] = true
+			sides.append(sd)
+		var corners: Array = []
+		for s in [[1, 1], [-1, 1], [1, -1], [-1, -1]]:
+			var nc = chunks.get(_key(cx + int(s[0]), cz + int(s[1])))
+			var cd: Dictionary = {"eff": PackedByteArray(), "have": false}
+			if nc != null and not nc.data.is_empty() and not nc.last_eff.is_empty():
+				cd["eff"] = nc.last_eff["arr"]
+				cd["have"] = true
+			corners.append(cd)
+		return sc.compute_strips(sides, corners, h, Lighting._att, Lighting._glow)
 	var effs: Array = []
 	var blks: Array = []
 	var blks_b: Array = []
@@ -2627,16 +2676,10 @@ func _compute_face_blk(c: Node3D) -> Array:
 	# kernel's eff pipeline; sky never enters (see the _face_blk doc).
 	# 2*16*h-wide faces (AC-0091; was 2560 at H=80): c=0 half = face row
 	# (the inject half), c=1 zero.
-	# AC-0203 recenter fix: the no-glow column (the common terrain case)
-	# probes the inject on a ZERO column instead of expanding the 98 KB
-	# flat store: a zero cell attenuates by _att[0] = 1 (the minimum), so
-	# the probe reports every injection the real run would (it can over-
-	# report, never under-report); a no-change probe proves the face is
-	# exactly zero. ids pass = the flat store itself (the old separate 98
-	# KB copy loop is gone — the flood/inject only read it).
+	# AC-0207: the neighbor-face fetch (the recursive _face_of pulls, under
+	# the in-flight cycle guard) is shared by the C++ and GDScript computes
+	# below — both run on the SAME captured strips.
 	var h: int = Data.HEIGHT
-	Lighting._tables()
-	var glow: bool = _chunk_has_glow(c)
 	var fk0: String = _key(int(c.cx), int(c.cz))
 	_face_blk_inflight[fk0] = true
 	var strips: Array = []
@@ -2648,6 +2691,30 @@ func _compute_face_blk(c: Node3D) -> Array:
 			st = _face_of(nc, _shared_face(int(s[0]), int(s[1])))
 		strips.append(st)
 	_face_blk_inflight.erase(fk0)
+	var sc: Variant = _strips_cpp_inst()
+	if sc != null:
+		# AC-0207: C++ face compute (gdext/src/strips.cpp) — the glow
+		# palette probe + flat expand + flood + inject through the SAME C++
+		# kernels the pull path runs (byte-identical to the GDScript below;
+		# stripsprobe face gate).
+		Lighting._tables()
+		var r: Dictionary = sc.compute_face(c.data, h, Lighting._att, Lighting._glow, strips[0], strips[1], strips[2], strips[3])
+		return r["faces"]
+	return _compute_face_blk_gd(c, h, strips)
+
+
+func _compute_face_blk_gd(c: Node3D, h: int, strips: Array) -> Array:
+	# AC-0134 fix-6 / AC-0203 GDScript compute (the AC-0207 fallback; the
+	# neighbor face `strips` [E,W,S,N] are passed in by _compute_face_blk).
+	# AC-0203 recenter fix: the no-glow column (the common terrain case)
+	# probes the inject on a ZERO column instead of expanding the 98 KB
+	# flat store: a zero cell attenuates by _att[0] = 1 (the minimum), so
+	# the probe reports every injection the real run would (it can over-
+	# report, never under-report); a no-change probe proves the face is
+	# exactly zero. ids pass = the flat store itself (the old separate 98
+	# KB copy loop is gone — the flood/inject only read it).
+	Lighting._tables()
+	var glow: bool = _chunk_has_glow(c)
 	var nd: PackedByteArray
 	var blk := PackedByteArray()
 	if glow:

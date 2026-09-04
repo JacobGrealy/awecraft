@@ -1,11 +1,11 @@
 meta:
-  updated_at: 2026-09-03T14:45
+  updated_at: 2026-09-03T21:29
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md
     TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html +
     <id>-results.html + screenshots
 queue:
-- AC-0207
+- AC-0210
 - AC-0208
 - AC-0199
 - AC-0204
@@ -6676,8 +6676,8 @@ intake:
   status: done
   labels: []
   created_at: 2026-09-01T23:15
-  updated_at: 2026-09-03T08:45
-  completed_at: 2026-09-03T11:45
+  updated_at: 2026-09-04T01:28
+  completed_at: 2026-09-04T01:28
   waiting_on: AC-0189
   parent_id: null
   notes: '1) User Story: As a player I want meshing at borders to not hitch (the 70-1000ms
@@ -6703,7 +6703,22 @@ intake:
   - id: 2
     created_at: '2026-09-03T11:45:00.000000'
     updated_at: null
-    text: '[coordinator] DONE + SHIPPED 2026-09-03. C++ MESH port (gdext/src/mesh.cpp 1557 lines + awe_common.{h,cpp} — build_accs + _build_snap_data + ro scan + _s_emit_ro_merged greedy + _bake_box, registered in the shared chunkio_library_init entry symbol, wired at world.gd _threadmesh_worker with an AWECRAFT_MESHCPP=0 GDScript fallback; decodes palette slabs in C++ per the AC-0203 follow-on, int lookup free vs GDScript Variant). Mesh LOSSLESS: meshprobe 100% exact (32/32 chunks, q/v/n/c/u/i all 1770/1770, 124988 verts byte-exact). Two C++ bugs found + fixed (B1: the port s_face_light z-probe read the wrong cell, 73 bottom faces 1/15 too bright; B2: the GDScript _face_mask itself samples (nx,ny-1,nz) in the z-branch — a shipped quirk, the C++ face_mask re-verbatim). build_accs 97.7->2.9 ms (~33x); pipeline build_worker p50 110->3, p95 138->4-5, max 175->6-8. MINFO 89/89 identical (the AC-0125 -28% preserved). No regression: G0 0, lightprobe 1.0, chunkiocpp md5-identical, genhash 25/25 == AC-0188, light == AC-0189, SMOKE ok:true x4. .so + .dll (PE-verified) built. R50 queue-no-stall PENDING (the .so crashes in the coordinator env — AC-0206; the build_accs ~33x is a strong signal; run the R50 when AC-0206 is resolved). See tasks/AC-0190/AC-0190-results.html.'
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. C++ MESH port (gdext/src/mesh.cpp
+      1557 lines + awe_common.{h,cpp} — build_accs + _build_snap_data + ro scan +
+      _s_emit_ro_merged greedy + _bake_box, registered in the shared chunkio_library_init
+      entry symbol, wired at world.gd _threadmesh_worker with an AWECRAFT_MESHCPP=0
+      GDScript fallback; decodes palette slabs in C++ per the AC-0203 follow-on, int
+      lookup free vs GDScript Variant). Mesh LOSSLESS: meshprobe 100% exact (32/32
+      chunks, q/v/n/c/u/i all 1770/1770, 124988 verts byte-exact). Two C++ bugs found
+      + fixed (B1: the port s_face_light z-probe read the wrong cell, 73 bottom faces
+      1/15 too bright; B2: the GDScript _face_mask itself samples (nx,ny-1,nz) in
+      the z-branch — a shipped quirk, the C++ face_mask re-verbatim). build_accs 97.7->2.9
+      ms (~33x); pipeline build_worker p50 110->3, p95 138->4-5, max 175->6-8. MINFO
+      89/89 identical (the AC-0125 -28% preserved). No regression: G0 0, lightprobe
+      1.0, chunkiocpp md5-identical, genhash 25/25 == AC-0188, light == AC-0189, SMOKE
+      ok:true x4. .so + .dll (PE-verified) built. R50 queue-no-stall PENDING (the
+      .so crashes in the coordinator env — AC-0206; the build_accs ~33x is a strong
+      signal; run the R50 when AC-0206 is resolved). See tasks/AC-0190/AC-0190-results.html.'
 - id: AC-0191
   title: 'test-range: isolated combat/movement range'
   source: user
@@ -7309,11 +7324,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-03T21:46
   updated_at: 2026-09-03T21:46
-  completed_at: null
+  completed_at: 2026-09-03T12:20
   waiting_on: AC-0190
   parent_id: null
   notes: '1) User Story: As a player standing still I want no 74ms hitch from palette
@@ -7331,6 +7346,10 @@ intake:
     created_at: 2026-09-03T21:46
     updated_at: null
     text: '[user] after 0190 - strips still GDScript 74ms before C++ per 2026-09-03'
+  - id: 2
+    created_at: '2026-09-03T12:20:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. C++ strips port (gdext/src/strips.cpp — _side_blk_strip + _strips_for + _face_of/_compute_face_blk palette probe, registered in the shared chunkio_library_init entry symbol as AweStrips, wired at world.gd strips path with an AWECRAFT_STRIPSCPP=0 GDScript fallback; decodes palette slabs in C++ with the free int lookup, NOT 24k Variant calls). Strips LOSSLESS: stripsprobe 100% exact (32/32 chunks, all 512 strips eff/blk/blk_b byte-identical + face compute 32/32x4 byte-identical, match_rate 1.0). _side_blk_strip 1.756->0.040 ms (44x, <1ms gate); dispatch 9.27->0.251 ms. 74ms hitch GONE: perf r4 A/B max_frame 1202->38 ms (31.6x), p95 329->24, drain 11.3->0.48 s (24x); idle p95 20.8ms, no 74ms-class stall. G0 exit 0 (AweStrips registered); SMOKE ok:true x4 (values == AC-0190). No regression: chunkiocpp md5-identical, genhash 25/25 == AC-0188, light == AC-0190, meshprobe 100% exact. Bug found + fixed by probe: GDScript packed-array negative-index wraps from the end (a shipped quirk, replicated via narr_idx()). .so + .dll (PE-verified) built. Caveat: battery run 1 hit the KNOWN AC-0206 one-off SIGSEGV in AweGen.generate_flat (pre-task gen code, not in this diff); run 2 fully green. See tasks/AC-0207/AC-0207-results.html.'
 - id: AC-0208
   title: remove-gdext-fallback-require-dll
   source: user
@@ -7388,3 +7407,30 @@ intake:
     created_at: 2026-09-03T22:02
     updated_at: null
     text: '[user] backlog RTX per 2026-09-03'
+- id: AC-0210
+  title: wire-aweLighting-flood-flat-in-pull
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-04T02:09
+  updated_at: 2026-09-04T02:09
+  completed_at: null
+  waiting_on: AC-0207
+  parent_id: null
+  notes: '1) User Story: As a player crossing a chunk border I want no 20ms light
+    hitch so borders load at 60fps.
+
+
+    2) Technical Details: lighting.gd:371 compute_light_flat_chunk_pull + 570 _flood_flat
+    x2 still GDScript even though AC-0189 ported src/lighting.cpp. Wire AweLighting.light_cpp()
+    in the pull kernel (pass slabs/strips value copies, use C++ bucket-16 flood +
+    _chunk_blk_inject) and verify via flood probe p95 20ms->1ms. After AC-0207.'
+  comments:
+  - id: 1
+    created_at: 2026-09-04T02:09
+    updated_at: null
+    text: '[user] follow 207 per 2026-09-03'

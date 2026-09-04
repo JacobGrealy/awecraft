@@ -422,6 +422,30 @@ PullOut pull(const Array &p_data, int p_h, const Array &p_blk_strips, const Arra
 }
 
 // ---------------------------------------------------------------------------
+// AC-0207: cross-module bridge for the strips face compute (src/strips.cpp)
+// — the SAME flood/inject kernels the pull path runs (byte-identical by
+// construction; the C++ face's block light equals the GDScript
+// Lighting._flood_flat / _chunk_blk_inject path).
+// ---------------------------------------------------------------------------
+
+static Tables tables_from_flood(const FloodTables &p_ft) {
+	Tables t;
+	t.att = p_ft.att;
+	t.att_sz = p_ft.att_sz;
+	t.glow = p_ft.glow;
+	t.glow_sz = p_ft.glow_sz;
+	return t;
+}
+
+void flood_flat(uint8_t *p_src, const uint8_t *p_ids, int p_w, int p_h, int p_d, int p_hact, const FloodTables &p_ft) {
+	flood(p_src, p_ids, p_w, p_h, p_d, p_hact, tables_from_flood(p_ft));
+}
+
+bool blk_inject(uint8_t *p_eff, const uint8_t *p_ids, int p_h, const Array &p_blk_strips, int p_hgate, const FloodTables &p_ft) {
+	return inject(p_eff, p_ids, p_h, p_blk_strips, p_hgate, tables_from_flood(p_ft));
+}
+
+// ---------------------------------------------------------------------------
 // Registered class.
 // ---------------------------------------------------------------------------
 

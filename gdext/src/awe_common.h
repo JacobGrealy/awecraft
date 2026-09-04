@@ -58,4 +58,19 @@ struct PullOut {
 // per-flood call times (usec).
 PullOut pull(const godot::Array &p_data, int h, const godot::Array &p_blk_strips, const godot::Array &p_blk_strips_b, int top, const uint8_t *att, int att_sz, const uint8_t *glow, int glow_sz, std::vector<uint32_t> *r_flood);
 
+// AC-0207: the bare bucket-16 flood + UN-gated boundary injection exposed
+// for the strips face compute (src/strips.cpp) — the SAME kernels the pull
+// kernel runs in lighting.cpp (byte-identical by construction, so the C++
+// face's block light equals the GDScript Lighting._flood_flat/_chunk_blk_
+// inject path). hact = active rows (-1 = full height); hgate = the inject
+// row cap (-1 = full height).
+struct FloodTables {
+	const uint8_t *att = nullptr;
+	int att_sz = 0;
+	const uint8_t *glow = nullptr;
+	int glow_sz = 0;
+};
+void flood_flat(uint8_t *p_src, const uint8_t *p_ids, int p_w, int p_h, int p_d, int p_hact, const FloodTables &p_t);
+bool blk_inject(uint8_t *p_eff, const uint8_t *p_ids, int p_h, const godot::Array &p_blk_strips, int p_hgate, const FloodTables &p_t);
+
 } // namespace awelight
