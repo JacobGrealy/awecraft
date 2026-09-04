@@ -120,7 +120,7 @@ var fluid_tick_radius := 14
 # (taxi >= 13) takes the old band-1 coarse ctx: uniform out to R, no more
 # high->low->high pop while walking.
 var band0_r := 4
-var band1_r := 12
+var band1_r := 96
 var collision_enabled := true
 var chunks := {}
 var chunk_keys := {}
