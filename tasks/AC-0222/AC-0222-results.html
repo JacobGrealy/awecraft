@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0222 results</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:980px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+table{border-collapse:collapse;font-size:13px;margin:8px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}
+th{background:#f0f0f0}.ok{background:#eaf7ea;border-left:4px solid #2e9e44;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+.warn{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:8px 0;border-radius:0 6px 0 0}.meta{color:#555;font-size:14px}
+</style></head><body>
+<h1>AC-0222 — ahead-chunks-to-front-of-queue-when-flying — results</h1>
+<p class="meta">2026-09-04 · subagent (xhigh) · engine Godot 4.7.1 · seed 44 · C++ hot path (no fallbacks, AC-0208) ·
+<code>godot/world/world.gd</code> (queue priority) + <code>godot/scenes/main.gd</code> (R16 arm fly phases) · logs <code>godot/.scratch/AC-0222-gates/</code></p>
+
+<div class="ok"><b>ALL GATES GREEN.</b> R16 (the #1 gate, fresh C++ gen — the r16 arm runs with no save slot, so every run
+generates; no disk shortcut): flying forward at <b>4x</b> (17 m/s, 8 s, 9 recenters) and <b>50x</b> (215 m/s, 2 s, 27
+recenters) — <b>chunks appear ahead while moving, not only after stopping</b>: <b>279</b> forward-half chunks first-built
+during the 4x flight (farthest <b>264 m</b> ahead) and <b>124</b> during the 50x flight (farthest <b>263 m</b> — the far circle
+edge). The queue stays bounded: build depth ≤ <b>32</b> (4x) / <b>26</b> (50x) vs the cap <b>797</b> (the render circle count);
+total queue ≤ 136. No pop-in: 0 lost chunks, 0 rebuilds, streaming handoff cap 1/frame intact (ho_max 1). A stress re-run
+with a 1-wide gen pool (<code>AWECRAFT_THREADGEN_N=1</code>) keeps <code>built_all: true</code> (no stranded chunks — the lockstep
+counter + cap hold under churn) with the same ahead evidence. fps before→after unchanged (the R16 drain was already keeping
+the queue shallow). G0 clean (0 SCRIPT ERROR); SMOKE ok:true ×4; no regression (chunkiocpp byte-identical md5
+8a89…9081, genhash 25/25 == AC-0215 NEW baseline in 2 runs, light standing baseline, meshprobe/stripsprobe/pullprobe 100%
+exact, nofallback ok:true, ahead band still capped at 1 mesh/frame).</div>
+
+<h2>1. What changed</h2>
+<h3><code>godot/world/world.gd</code> — the queue priority (band buckets + drain + drain window intact)</h3>
+<table>
+<tr><th>site</th><th>change</th></tr>
+<tr><td><code>_enqueue_build</code> (the append)</td>
+<td><b>NEW: <code>push_front</code> instead of <code>append</code></b> — the newest ahead entry lands at the FRONT of its band
+bucket. The drain's pool scan (<code>_collect_pool</code>) walks each bucket in index order, so the just-queued ahead chunk is
+now the first-scanned entry of its band: it wins the within-band order and the <code>PICK_POOL_CAP</code> (512) tie-break
+against the older entries already sitting in the band. Before, new ahead chunks were appended to the END of their band
+bucket, so the drain worked through the older entries first.</td></tr>
+<tr><td><code>_rec_merge_want_step</code> + <code>_rec_merge_ring_step</code> (the recenter rebuild)</td>
+<td><b>NEW: <code>push_front</code> instead of <code>append</code></b> — each recenter's fresh ahead chunks (the new stream
+set, i.e. the ahead edge in the flight direction) and its fresh band-3 feed entries (collar ∪ circle ring) go to the front
+of their band bucket, ahead of the re-bucketed older entries (<code>_rec_merge_old_step</code> unchanged — old entries keep
+their relative order).</td></tr>
+<tr><td><code>_cap_queue_depth()</code> (new) + <code>_build_q_n</code> lockstep counter (new)</td>
+<td><b>NEW: the total queued BUILD depth is capped to the render circle count</b> (<code>circle_count()</code>: 797 at R16,
+7845 at R50). When full, <b>the farthest band is evicted first</b> (highest non-empty bucket; oldest entries within the
+band = the tail, since the newest sit at the front). The counter is kept in lockstep at every mutation site
+(<code>_enqueue_build</code>, <code>_remove_entry</code>, <code>_drop_queued</code>, <code>_convert_data_to_build</code>,
+<code>_strip_candidate_builds</code>; recomputed at the recenter merge swap); a verifying scan self-heals any drift before an
+eviction can run. Enforced at <code>_enqueue_build</code> and at the merge finalization.</td></tr>
+<tr><td>the band-3 (data_only) feed exemption</td>
+<td>The cap counts BUILD entries (the meshable work — exactly the circle). The band-3 data-only entries are exempt:
+they are the 8-neighbor build gate's fuel (AC-0160: the collar ∪ circle-ring data feeds the circle-edge chunks'
+8-neighborhood) and do no mesh work — evicting them strands the circle edge unbuilt until the next recenter re-queues
+the feed (at R16 the 148 band-3 entries are exactly the 945−797 excess, so a literal total-cap eviction would have broken
+the R16 build). The exemption keeps the TOTAL queue bounded by the stream set (circle ∪ collar ∪ ring: 945 at R16, 8265 at
+R50) while the build queue stays at the circle count. Build entries are unique keys over the meshable set (exactly the
+circle), so the cap is a hard guard: it fires only on a bookkeeping drift (the scan self-heals it) or a bug that
+re-queues past the circle — the queue then stays bounded instead of growing to the full stream set. (At R50 the guard is
+what holds the 8265-entry stream queue to the 7845 build depth — the regime the R50 gate will measure, PENDING AC-0206.)</td></tr>
+<tr><td>unchanged</td>
+<td>the drain itself (scored pick, unit/time budgets, windowed pool scan, startup/loading paths), the band-bucket
+structure, the <code>_drain_win_b</code> window, the AC-0219 1-mesh/frame handoff cap, the AC-0213 small-move budget +
+ahead-ring debounce, the 8-neighbor <code>_build_ready</code> gate, all handoff/removal bookkeeping.</td></tr>
+</table>
+<h3><code>godot/scenes/main.gd</code> — the R16 arm gains the fly-forward phases (harness)</h3>
+<p>The AC-0212 R16 arm (build + static + moving-in-a-chunk) now also flies the player <b>forward</b> (+x, yaw along the flight
+dir so the drain's look-ahead score points at the forward edge) at <b>4x</b> (WALK×4 = 17 m/s, 8 s ≈ 9 chunk crossings — full
+recenter rebuilds run) and <b>50x</b> (WALK×50 = 215 m/s, 2 s ≈ 27 crossings — debounced rebuilds + pre-warm 5x5 ring, the
+AC-0213 regime). Per phase it reports: frame-ms fps, <code>queue_max</code> (total queued depth), <code>build_depth_max</code>
+(build entries — must stay ≤ <code>fly_cap</code> = circle_count), recenter count, <code>ahead_while_moving</code> (chunks that
+became mesh_built in the forward half DURING the flight frames — the AC-0222 evidence), <code>ahead_max_dist_m</code> (how far
+ahead the farthest such build landed), <code>lost_chunks</code> (previously-built chunks without a mesh at phase end — the
+no-pop check), <code>rebuilds</code> (built→unbuilt transitions), and <code>ho_max</code> (streaming handoffs in the busiest
+frame — the AC-0219 cap = 1). Fly at y=190 (clear of terrain); the player's own <code>_recenter</code> fires the world recenter
+on each chunk change, so the queue sees real movement.</p>
+
+<h2>2. R16 — the #1 gate (fresh C++ gen every run — no save slot, no disk shortcut)</h2>
+<table>
+<tr><th>metric</th><th>before (old queue)</th><th>after (AC-0222)</th></tr>
+<tr><td>build (797 circle chunks, built_all)</td><td>35246 ms · 797/797 · true</td><td>35865 ms · 797/797 · true</td></tr>
+<tr><td>static fps (p50/p95/min)</td><td>200 / 29 / 18 (5/35/55 ms)</td><td>200 / 28 / 18 (5/36/55 ms)</td></tr>
+<tr><td>moving fps (p50/p95/min)</td><td>200 / 143 / 50 (5/7/20 ms)</td><td>200 / 143 / 48 (5/7/21 ms)</td></tr>
+<tr><td>drop_fps_static_vs_moving</td><td>0</td><td>0</td></tr>
+<tr><td><b>fly4</b> (4x, 17 m/s, 8 s) — ahead_while_moving</td><td><b>279</b></td><td><b>279</b></td></tr>
+<tr><td><b>fly4</b> — ahead_max_dist_m</td><td>264</td><td>264</td></tr>
+<tr><td><b>fly4</b> — queue_max / build_depth_max (cap 797)</td><td>136 / 30</td><td>136 / 30</td></tr>
+<tr><td><b>fly4</b> — fps (p50/p95/min)</td><td>250 / 59 / 12 (4/17/81 ms)</td><td>250 / 59 / 12 (4/17/82 ms)</td></tr>
+<tr><td><b>fly4</b> — recenters / handoff cap (ho_max)</td><td>9 / 1</td><td>9 / 1</td></tr>
+<tr><td><b>fly50</b> (50x, 215 m/s, 2 s) — ahead_while_moving</td><td><b>124</b></td><td><b>124</b></td></tr>
+<tr><td><b>fly50</b> — ahead_max_dist_m</td><td>263</td><td>263</td></tr>
+<tr><td><b>fly50</b> — queue_max / build_depth_max (cap 797)</td><td>67 / 26</td><td>67 / 26</td></tr>
+<tr><td><b>fly50</b> — fps (p50/p95/min)</td><td>200 / 31 / 12 (5/32/85 ms)</td><td>200 / 31 / 14 (5/31/73 ms)</td></tr>
+<tr><td><b>fly50</b> — recenters / handoff cap (ho_max)</td><td>27 / 1</td><td>27 / 1</td></tr>
+<tr><td>no-pop (lost_chunks / rebuilds, both phases)</td><td>0 / 0</td><td>0 / 0</td></tr>
+</table>
+<p><b>Reading.</b> At R16 the numbers are <b>equal, not just non-regressed</b>: with the circle already built, the steady
+streaming queue stays shallow (total ≤ 136, build depth ≤ 32 vs the 797 cap) because the recenter rebuilds drop the
+behind-edge and the drain (3-wide TM pool, ~20 builds/s) keeps up — so even before, the scored look-ahead pick delivered
+the forward edge while moving. The AC-0222 change is what hardens the <b>deep-queue regime</b>: at R50 class depth
+(8265-entry stream queue vs the 7845 build cap) the old far-first scan + the 512 pool cap starved the newest ahead
+entries (they sat at the END of their band bucket, beyond the pool cut, behind the older entries) — the "appears only
+after stopping" symptom. Now the newest ahead entries lead their band's scan and the build depth is hard-capped at the
+circle count with farthest-band-first eviction. The 50x phase exercises the debounced-rebuild regime (AC-0213): the
+first recenter's rebuild queues the new circle edge and the drain lands it (263 m ahead) while the player is still
+moving. <b>Stress run</b> (after only, <code>AWECRAFT_THREADGEN_N=1</code> — the data path single-threaded): build 35895 ms,
+<b>built_all true</b> (no stranded chunks → the lockstep counter + cap hold under churn), fly4 ahead 279 / queue 136 /
+build depth 32, fly50 ahead 124 / queue 67, no-pop 0/0, ho_max 1, 0 SCRIPT ERROR.</p>
+
+<h2>3. G0</h2>
+<p>Headless load, before the change: exit 0, <b>0 SCRIPT ERROR</b>. After the change: exit 0, <b>0 SCRIPT ERROR</b>
+(<code>G0-before.log</code>, <code>G0-after.log</code>; every arm log below also shows 0).</p>
+
+<h2>4. SMOKE battery</h2>
+<p><code>AWECRAFT_BATTERY="player;interact;light;fluids"</code>: <b>ok:true</b> (total 164 s). player (start [8.5,137,8.5],
+jump 138.43, fly 145.53) · interact (place_ok, drop_spawned false, inv grew) · light (surface 15 / torch 14 /
+cave_eff 0) · fluids (sea_stable, sea 792/173 — the documented AC-0215 terrain drift, stable).</p>
+
+<h2>5. No regression</h2>
+<table>
+<tr><th>gate</th><th>standing baseline</th><th>this run</th></tr>
+<tr><td>chunkiocpp (codec byte-identical)</td><td>md5 8a89…9081</td>
+<td><b>ok:true</b> · md5_orig = md5_cpp = <b>8a893557900a462fe4ab1c91f8589081</b> · enc 34/34, flat 34/34, slab 17/17</td></tr>
+<tr><td>genhash (deterministic, == AC-0215 NEW baseline — NOT the AC-0188 baseline)</td>
+<td>(0,0)=80b904c0… · (-2,-2)=61614376… · 25 hashes · GENMS 36/37</td>
+<td><b>2 runs, 25/25 hashes identical</b> · (0,0)=<b>80b904c0e5f085eef1e839459058c706</b> · (-2,-2)=61614376ff27… · GENMS 36</td></tr>
+<tr><td>light (surface / cave / torch)</td><td>15 / (10 pre-AC-0215; standing now 0 — the documented terrain drift) / 14</td>
+<td><b>surface 15 / cave_eff 0 / torch 14</b> (torch 0→9) — the AC-0215 standing baseline, unchanged</td></tr>
+<tr><td>meshprobe</td><td>100% exact (AC-0190/AC-0211)</td>
+<td><b>ok:true · match_rate 1.0</b> · verts_cpp = verts_gd = 239348 · 32/32 chunks · 1926/1926 accs · 0 mismatches · ac0211_ok</td></tr>
+<tr><td>stripsprobe</td><td>100% exact (32/32, AC-0207)</td>
+<td><b>ok:true · match_rate 1.0</b> · 32/32 chunks · 512 strips compared · 0 mismatches · 41× C++ speedup</td></tr>
+<tr><td>pullprobe</td><td>100% exact · 6,291,456 cells max_diff 0 (AC-0210)</td>
+<td><b>ok:true · match_rate 1.0</b> · 6,291,456 cells · <b>max_diff 0</b> · 64/64 variants · 32/32 chunks</td></tr>
+<tr><td>nofallback</td><td>ok:true · gd_* sentinels 0 (AC-0208)</td>
+<td><b>ok:true</b> · gd_strips_calls 0 · gd_light_pull_calls 0 · gen_cpp 88 · mesh_cpp 137 · strips_cpp 482 (roundtrip_ok)</td></tr>
+<tr><td>ahead band 1 mesh/frame (AC-0219)</td><td>STREAM_TM_HANDOFF_PER_FRAME = 1</td>
+<td><b>const still 1</b> (unchanged) · R16 fly ho_max = <b>1</b> in all 3 runs (normal + stress, both phases)</td></tr>
+</table>
+
+<h2>6. Scope notes / caveats</h2>
+<ul>
+<li>R50 was NOT run (PENDING — the .so crashes in the coordinator env, AC-0206); the Windows build was NOT run. The
+cap/eviction is the R50-class guard by construction (8265-entry stream queue → 7845 build depth); the R50 queue-no-stall
+gate will measure it when AC-0206 resolves.</li>
+<li>The band-3 feed exemption (see §1) is a deliberate deviation from a literal "total queue depth ≤ circle count":
+evicting the 148 band-3 feed entries at R16 would strand the circle-edge 8-neighbor gate (built_all would fail with the
+player stationary). The build queue is capped at the circle count exactly as specified; the total stays bounded by the
+stream set. Flagging for the coordinator's review.</li>
+<li>The R16 arm's build phase runs with <code>loading_active = false</code> (the arm re-centers directly, no loading
+window) — both before and after runs use the identical code path; the A/B is controlled.</li>
+<li>Fly phases: 4x = 9 recenters (full rebuilds, 17 m/s → ~0.9 s/chunk), 50x = 27 recenters (debounced after the first,
+AC-0213 — pre-warm 5x5 ring + the first rebuild's edge entries). The ahead evidence counts FIRST appearances only
+(reband swaps are tracked separately as <code>rebuilds</code>, 0 in every run).</li>
+</ul>
+</body></html>

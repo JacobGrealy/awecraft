@@ -6547,6 +6547,17 @@ func _r16_test(spawn: Vector3) -> void:
 	# Tail settle after the last camera change.
 	for i in 30:
 		await get_tree().physics_frame
+	# AC-0222: fly-forward phases — stream priority while the player is
+	# still moving. The 4x phase (8 s) crosses ~8 chunks so the recenter
+	# ahead-ring rebuilds run; the 50x phase (2 s) flies into the circle
+	# edge and beyond at ~215 m/s (debounced rebuilds, pre-warm 5x5 ring).
+	# Evidence: chunks that become mesh_built in the forward half WHILE the
+	# player is still moving (not only after stopping), the queue depth
+	# bound (build entries <= circle count), and no lost meshes (no pop).
+	var f4: Dictionary = await _fly_phase(4.0, 8.0, Vector3(1, 0, 0))
+	var f50: Dictionary = await _fly_phase(50.0, 2.0, Vector3(1, 0, 0))
+	for i in 30:
+		await get_tree().physics_frame
 	var s := _r16_stats(static_ms)
 	var m := _r16_stats(moving_ms)
 	Debug.result({
@@ -6570,6 +6581,11 @@ func _r16_test(spawn: Vector3) -> void:
 		"drop_fps_static_vs_moving": int(roundf(float(s["fps_p50"]) - float(m["fps_p50"]))),
 		"static_frames": STATIC_FRAMES,
 		"moving_frames": MOVING_FRAMES,
+		# AC-0222: the render-circle cap on queued build depth + the two
+		# fly-forward phases (see _fly_phase).
+		"fly_cap": int(world.circle_count()),
+		"fly4": f4,
+		"fly50": f50,
 		"elapsed_ms": Time.get_ticks_msec() - t0,
 	})
 	get_tree().quit()
@@ -6591,6 +6607,114 @@ func _r16_stats(ms_list: Array) -> Dictionary:
 		"fps_p95": int(roundf(1000.0 / maxf(float(p95), 0.5))),
 		"fps_min": int(roundf(1000.0 / maxf(float(mx), 0.5))),
 	}
+
+# AC-0222: fly the player forward at WALK*mult for `seconds`, teleport-style
+# (the arm drives position directly; the player's own _recenter fires the
+# world recenter on every chunk change, so the queue sees real movement).
+# The yaw is set along the flight dir so the drain's look-ahead score
+# (_entry_score) points at the forward edge. Returns per-phase evidence:
+#  - fps_*           : frame ms while flying (fixed-fps 600 -> true CPU fps)
+#  - queue_max       : max total queued depth (world.queue_size)
+#  - build_depth_max : max queued BUILD entries (data_only=false) — must
+#                      stay <= fly_cap (the render circle count)
+#  - rec_n           : recenters fired (chunk crossings)
+#  - ahead_while_moving : chunks that became mesh_built in the forward half
+#                         (cx > player chunk) DURING the flight frames —
+#                         the AC-0222 evidence (appears while moving)
+#  - ahead_max_dist_m : how far ahead (m) the farthest such build landed
+#  - lost_chunks     : previously-built forward-half chunks whose mesh was
+#                       gone at phase end (a true pop) — must stay 0
+#  - rebuilds        : built->unbuilt transitions seen (reband swaps; info)
+#  - ho_max          : max streaming handoffs in one frame (AC-0219 cap = 1)
+func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
+	var n_frames := int(seconds * 600.0)
+	var speed := 4.3 * float(mult)  # player.WALK * flight_speed multiplier
+	var dt := 1.0 / 600.0
+	# Yaw so _look_dir = dir: _look_dir = (-sin(yaw), -cos(yaw)); dir=+x -> yaw=-PI/2.
+	var ang := atan2(-dir.x, -dir.z)
+	player.look(ang, 0.0)
+	player.flying = true
+	player.position.y = 190.0  # clear of all terrain (heightfield max < 168)
+	var ms_list: Array = []
+	var queue_max := 0
+	var build_depth_max := 0
+	var rec_n := 0
+	var last_pcx := int(world.last_pcx)
+	var last_pcz := int(world.last_pcz)
+	var ho_max := 0
+	var ahead_while_moving := 0
+	var ahead_max_dist_m := 0.0
+	var rebuilds := 0
+	var scan_every := 10
+	# built_set = currently-built (the lost-chunk/pop check is relative to it);
+	# ever_built = has a mesh at any point since the snapshot (reband swaps
+	# must NOT re-count as a first appearance).
+	var built_set := {}
+	var ever_built := {}
+	for key in world.chunks:
+		var c0: Node3D = world.chunks[key]
+		if c0.mesh_built:
+			built_set[key] = true
+			ever_built[key] = true
+	var i := 0
+	while i < n_frames:
+		player.position += dir * (speed * dt)
+		var fb := Time.get_ticks_msec()
+		await get_tree().physics_frame
+		ms_list.append(Time.get_ticks_msec() - fb)
+		queue_max = maxi(queue_max, int(world.queue_size))
+		ho_max = maxi(ho_max, int(world._stream_ho_n))
+		if int(world.last_pcx) != last_pcx or int(world.last_pcz) != last_pcz:
+			rec_n += 1
+			last_pcx = int(world.last_pcx)
+			last_pcz = int(world.last_pcz)
+		if i % scan_every == 0:
+			var bd := 0
+			for b in range(world.band_buckets.size()):
+				var arrf: Array = world.band_buckets[b]
+				for e in arrf:
+					if not bool(e["data_only"]):
+						bd += 1
+			build_depth_max = maxi(build_depth_max, bd)
+			var px := player.position.x
+			var pz := player.position.z
+			var pcx := int(floorf(px / 16.0))
+			var pcz := int(floorf(pz / 16.0))
+			for key in world.chunks:
+				var c: Node3D = world.chunks[key]
+				if c.mesh_built:
+					if not ever_built.has(key):
+						ever_built[key] = true
+						if int(c.cx) > pcx:
+							ahead_while_moving += 1
+							var dist := float(int(c.cx) * 16 + 8) - px
+							if dist > ahead_max_dist_m:
+								ahead_max_dist_m = dist
+					built_set[key] = true
+				elif built_set.has(key):
+					rebuilds += 1
+					built_set.erase(key)
+		i += 1
+	# Terminal pop check: a previously-built chunk still unbuilt at phase end.
+	var lost := 0
+	for key in built_set:
+		var c: Node3D = world.chunks.get(key)
+		if c != null and not c.mesh_built:
+			lost += 1
+	return {
+		"n": n_frames,
+		"speed_mps": int(roundf(speed)),
+		"queue_max": queue_max,
+		"build_depth_max": build_depth_max,
+		"rec_n": rec_n,
+		"ahead_while_moving": ahead_while_moving,
+		"ahead_max_dist_m": int(roundf(ahead_max_dist_m)),
+		"lost_chunks": lost,
+		"rebuilds": rebuilds,
+		"ho_max": ho_max,
+		"fps": _r16_stats(ms_list),
+	}
+
 
 func _nd_settle(max_frames: int) -> int:
 	var rr: int = world.render_radius

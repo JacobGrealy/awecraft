@@ -3,7 +3,6 @@ meta:
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0222
 - AC-0224
 - AC-0216
 - AC-0218
@@ -6906,11 +6905,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-04T15:03
   updated_at: 2026-09-04T00:00
-  completed_at: null
+  completed_at: 2026-09-03T18:00
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player flying forward fast I want new ahead chunks to start immediately and the queue to stay
@@ -6926,6 +6925,10 @@ intake:
     created_at: 2026-09-04T15:03
     updated_at: null
     text: '[user] ahead to front per 2026-09-04'
+  - id: 2
+    created_at: '2026-09-03T18:00:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Queue priority (godot/world/world.gd, drain + band buckets intact): newest ahead entries pushed to the FRONT of their band bucket (push_front in _enqueue_build + the recenter want/ring merge) — the drain per-bucket scan visits them first (wins within-band order + the 512 pool-cap tie-break; old code appended to the end, so it worked older entries first). Total queued BUILD depth capped to the render circle count (797 R16 / 7845 R50) via a lockstep _build_q_n counter (self-healing verifying scan), enforced at enqueue + recenter merge. Farthest band evicted first when full (highest bucket, oldest/tail entries); band-3 data-only feed entries exempt — they are the 8-neighbor gate fuel (AC-0160); evicting the 148 at R16 (=945-797) would strand the circle edge (flagged results S1/S6). R16 (#1 gate, fresh C++ gen, no disk shortcut) 4x (17 m/s, 8 s) / 50x (215 m/s, 2 s): chunks appear ahead while moving — 279 forward chunks first-built during 4x flight (farthest 264 m), 124 during 50x (farthest 263 m) — before and after (equal; R16 queue already shallow). Stress THREADGEN_N=1: built_all true, same ahead evidence, no stranding. fps before->after: static 200/29/18 -> 200/28/18, moving 200/143/50 -> 200/143/48 (p50/p95/min, unchanged); fly4 250->250 p50; fly50 200->200 p50. Queue bounded: build depth <=32 (4x)/<=26 (50x) vs cap 797; total <=136. No-pop: 0 lost / 0 rebuilds; ho_max=1 (AC-0219 cap intact). G0 0 SCRIPT ERROR (before + after, every arm). SMOKE player;interact;light;fluids all ok:true. No regression: chunkiocpp byte-identical (md5 8a893557900a462fe4ab1c91f8589081); genhash 2 runs 25/25 identical == AC-0215 NEW baseline ((0,0)=80b904c0e5f0...); light surface 15 / torch 14 / cave_eff 0 (AC-0215 standing); meshprobe 100% (239348==239348); stripsprobe 100% (32/32); pullprobe 100% (6,291,456 cells max_diff 0); nofallback ok:true (gd sentinels 0); ahead band still 1 mesh/frame. R50/Windows not run (per instructions). See tasks/AC-0222/AC-0222-results.html.'
 - id: AC-0223
   title: cleanup-lod-code-no-longer-used
   source: user

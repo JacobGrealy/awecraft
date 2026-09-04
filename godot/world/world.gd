@@ -246,6 +246,12 @@ var mq_b := 0
 var mq_i := 0
 var queue_size := 0
 var queued_keys := {}
+# AC-0222: queued BUILD entries (data_only=false), kept in lockstep with
+# band_buckets at every mutation site (_enqueue_build, _remove_entry,
+# _drop_queued, _convert_data_to_build, _strip_candidate_builds; recomputed
+# at the recenter merge finalization). The depth cap check is O(1) against
+# this; a verifying scan resets any drift (see _cap_queue_depth).
+var _build_q_n := 0
 # AC-0160: key -> band-bucket index for O(1) removal in _remove_entry (the old
 # full-queue scan ran once per consumed mesh unit and dominated the drain at
 # r50). Rebuilt on recenter; kept in lockstep at every mutation site.
@@ -1082,6 +1088,7 @@ func _convert_data_to_build(key: String) -> void:
 			if arr[i]["key"] == key:
 				arr[i]["data_only"] = false
 				queued_keys[key] = "build"
+				_build_q_n += 1  # AC-0222: the entry is a build entry now
 				if b < mq_b or (b == mq_b and i < mq_i):
 					mq_b = b
 					mq_i = i
@@ -1164,10 +1171,20 @@ func _enqueue_build(cx: int, cz: int) -> void:
 		for i in range(_bucket_count()):
 			band_buckets.append([])
 	var b := mini(absi(cx - last_pcx) + absi(cz - last_pcz), band_buckets.size() - 1)
-	band_buckets[b].append({"key": key, "cx": cx, "cz": cz, "data_only": false})
+	# AC-0222: push the NEWEST ahead entry to the FRONT of its band bucket
+	# (old: appended to the end, so the drain's per-bucket scan worked
+	# through the older entries first). _collect_pool walks each bucket in
+	# index order, so the just-queued ahead chunk is now the first-scanned
+	# entry of its band: it wins the within-band order and the
+	# PICK_POOL_CAP tie-break against the older entries that were already
+	# sitting in the band (chunks appear ahead while the player is still
+	# moving instead of after the older entries drain).
+	band_buckets[b].push_front({"key": key, "cx": cx, "cz": cz, "data_only": false})
 	_qb[key] = b  # AC-0160
 	queued_keys[key] = "build"
 	queue_size += 1
+	_build_q_n += 1
+	_cap_queue_depth()  # AC-0222: keep the build depth at the circle cap
 	if b < dq_b:
 		dq_b = b
 		dq_i = 0
@@ -1754,6 +1771,8 @@ func _drop_queued(key: String) -> void:
 	var arr0: Array = band_buckets[b0]
 	for i in range(arr0.size()):
 		if arr0[i]["key"] == key:
+			if not bool(arr0[i].get("data_only", false)):
+				_build_q_n -= 1  # AC-0222
 			arr0.remove_at(i)
 			_qb.erase(key)
 			queued_keys.erase(key)
@@ -2555,16 +2574,21 @@ func _remove_entry(e: Dictionary) -> void:
 		var arr0: Array = band_buckets[b0]
 		for i in range(arr0.size()):
 			if arr0[i]["key"] == e["key"]:
+				var was_build := not bool(arr0[i].get("data_only", false))  # AC-0222: capture before removal
 				arr0.remove_at(i)
 				_qb.erase(e["key"])
 				queued_keys.erase(e["key"])
 				queue_size -= 1
+				if was_build:
+					_build_q_n -= 1  # AC-0222
 				return
 		_qb.erase(e["key"])
 	for b in range(band_buckets.size()):
 		var arr: Array = band_buckets[b]
 		for i in range(arr.size()):
 			if arr[i]["key"] == e["key"]:
+				if not bool(arr[i].get("data_only", false)):
+					_build_q_n -= 1  # AC-0222
 				arr.remove_at(i)
 				# AC-0152: keep queued_keys in lockstep with band_buckets (the
 				# invariant _strip_candidate_builds maintained). Without this,
@@ -2583,6 +2607,62 @@ func _rebuild_qb() -> void:
 	for b in range(band_buckets.size()):
 		for e2 in band_buckets[b]:
 			_qb[e2["key"]] = b
+
+
+func _queue_build_depth_scan() -> int:
+	# AC-0222: verify the lockstep _build_q_n counter against the buckets
+	# (only ever run when the counter claims the cap is exceeded).
+	var n := 0
+	for b in range(band_buckets.size()):
+		var arr: Array = band_buckets[b]
+		for e in arr:
+			if not bool(e["data_only"]):
+				n += 1
+	return n
+
+
+func _cap_queue_depth() -> void:
+	# AC-0222: cap the total queued BUILD depth to the render circle count
+	# (circle_count(): about 797 at R16, 7845 at R50). When full, evict the
+	# FARTHEST band first (highest non-empty bucket, oldest entries within
+	# the band = the tail, since the newest are pushed to the front). The
+	# data_only (band-3) entries are EXEMPT: they are the 8-neighbor build
+	# gate's fuel (AC-0160: the collar ∪ circle-ring data feeds the
+	# circle-edge chunks' 8-neighborhood) and do no mesh work — evicting
+	# them strands the circle edge unbuilt until the next recenter
+	# re-queues the feed. The exemption keeps the total queue bounded by
+	# the stream set (circle ∪ collar ∪ ring) while the build queue stays
+	# at the circle count. Build entries are unique keys over the meshable
+	# set (exactly the circle), so the cap is a hard guard: it fires only
+	# on a bookkeeping drift (the scan below self-heals it) or a bug that
+	# ever re-queues past the circle — the queue then stays bounded
+	# instead of growing to the full stream set.
+	var cap := circle_count()
+	if _build_q_n <= cap:
+		return
+	var n := _queue_build_depth_scan()  # verify: never trust a drifted counter
+	_build_q_n = n
+	if n <= cap:
+		return
+	var over := n - cap
+	while over > 0:
+		var evicted := false
+		for b in range(band_buckets.size() - 1, -1, -1):  # farthest band first
+			var arr: Array = band_buckets[b]
+			var i := arr.size() - 1
+			while i >= 0 and not evicted:  # oldest of the band (the tail) first
+				var e: Dictionary = arr[i]
+				if not bool(e["data_only"]):
+					arr.remove_at(i)
+					_qb.erase(e["key"])
+					queued_keys.erase(e["key"])
+					queue_size -= 1
+					_build_q_n -= 1
+					over -= 1
+					evicted = true
+				i -= 1
+		if not evicted:
+			break  # only exempt data_only entries remain
 
 # --- AC-0077: crossing-batched per-chunk light (P1.3) ----------------------
 
@@ -3495,6 +3575,7 @@ func _strip_candidate_builds(keys: Array) -> void:
 				_qb.erase(e["key"])  # AC-0160
 				arr.remove_at(i)
 				queue_size -= 1
+				_build_q_n -= 1  # AC-0222: a build entry left the queue
 			else:
 				i += 1
 
@@ -3954,7 +4035,11 @@ func _rec_merge_want_step() -> void:
 		return
 	var w: Dictionary = _rec_want[key]
 	queued_keys[key] = "build"
-	_rec_new_buckets[mini(int(w["d"]), _rec_new_buckets.size() - 1)].append({"key": key, "cx": int(w["cx"]), "cz": int(w["cz"]), "data_only": false})
+	# AC-0222: the fresh ahead chunks (this recenter's new stream set) go to
+	# the FRONT of their band bucket — the newest entries first, ahead of
+	# the re-bucketed older entries (the drain's per-bucket scan visits
+	# index 0 first).
+	_rec_new_buckets[mini(int(w["d"]), _rec_new_buckets.size() - 1)].push_front({"key": key, "cx": int(w["cx"]), "cz": int(w["cz"]), "data_only": false})
 	_rec_new_n += 1
 
 func _rec_merge_ring_step() -> void:
@@ -3983,9 +4068,12 @@ func _rec_merge_ring_step() -> void:
 					continue
 				i += 1
 		var qs := 0
+		var bns := 0
 		for b in range(_rec_new_buckets.size()):
 			for e2 in _rec_new_buckets[b]:
 				qs += 1
+				if not bool(e2["data_only"]):
+					bns += 1
 		band_buckets = _rec_new_buckets
 		_rebuild_qb()  # AC-0160
 		_drain_win_b = b1_eff() + 2  # AC-0160: restart the drain window at the new center
@@ -3995,6 +4083,8 @@ func _rec_merge_ring_step() -> void:
 		mq_b = 0
 		mq_i = 0
 		queue_size = qs
+		_build_q_n = bns  # AC-0222: recompute the build depth at the merge swap
+		_cap_queue_depth()  # AC-0222: apply the cap to the rebuilt queue
 		_rec_pending = false
 		_rec_want = {}
 		_rec_want_keys = []
@@ -4016,7 +4106,9 @@ func _rec_merge_ring_step() -> void:
 	if c != null and not c.data.is_empty():
 		return
 	queued_keys[key] = "data"
-	_rec_new_buckets[mini(absi(dx) + absi(dz), _rec_new_buckets.size() - 1)].append({"key": key, "cx": cx, "cz": cz, "data_only": true})
+	# AC-0222: the fresh band-3 feed entries (collar ∪ circle ring) go to the
+	# FRONT of their band bucket — newest first, like the want entries.
+	_rec_new_buckets[mini(absi(dx) + absi(dz), _rec_new_buckets.size() - 1)].push_front({"key": key, "cx": cx, "cz": cz, "data_only": true})
 	_rec_new_n += 1
 
 func get_block(x: int, y: int, z: int) -> int:
