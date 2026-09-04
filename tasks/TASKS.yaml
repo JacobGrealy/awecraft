@@ -5,7 +5,7 @@ meta:
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html +
     <id>-results.html + screenshots
 queue:
-- AC-0210
+- AC-0211
 - AC-0208
 - AC-0199
 - AC-0204
@@ -7349,7 +7349,22 @@ intake:
   - id: 2
     created_at: '2026-09-03T12:20:00.000000'
     updated_at: null
-    text: '[coordinator] DONE + SHIPPED 2026-09-03. C++ strips port (gdext/src/strips.cpp — _side_blk_strip + _strips_for + _face_of/_compute_face_blk palette probe, registered in the shared chunkio_library_init entry symbol as AweStrips, wired at world.gd strips path with an AWECRAFT_STRIPSCPP=0 GDScript fallback; decodes palette slabs in C++ with the free int lookup, NOT 24k Variant calls). Strips LOSSLESS: stripsprobe 100% exact (32/32 chunks, all 512 strips eff/blk/blk_b byte-identical + face compute 32/32x4 byte-identical, match_rate 1.0). _side_blk_strip 1.756->0.040 ms (44x, <1ms gate); dispatch 9.27->0.251 ms. 74ms hitch GONE: perf r4 A/B max_frame 1202->38 ms (31.6x), p95 329->24, drain 11.3->0.48 s (24x); idle p95 20.8ms, no 74ms-class stall. G0 exit 0 (AweStrips registered); SMOKE ok:true x4 (values == AC-0190). No regression: chunkiocpp md5-identical, genhash 25/25 == AC-0188, light == AC-0190, meshprobe 100% exact. Bug found + fixed by probe: GDScript packed-array negative-index wraps from the end (a shipped quirk, replicated via narr_idx()). .so + .dll (PE-verified) built. Caveat: battery run 1 hit the KNOWN AC-0206 one-off SIGSEGV in AweGen.generate_flat (pre-task gen code, not in this diff); run 2 fully green. See tasks/AC-0207/AC-0207-results.html.'
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. C++ strips port (gdext/src/strips.cpp
+      — _side_blk_strip + _strips_for + _face_of/_compute_face_blk palette probe,
+      registered in the shared chunkio_library_init entry symbol as AweStrips, wired
+      at world.gd strips path with an AWECRAFT_STRIPSCPP=0 GDScript fallback; decodes
+      palette slabs in C++ with the free int lookup, NOT 24k Variant calls). Strips
+      LOSSLESS: stripsprobe 100% exact (32/32 chunks, all 512 strips eff/blk/blk_b
+      byte-identical + face compute 32/32x4 byte-identical, match_rate 1.0). _side_blk_strip
+      1.756->0.040 ms (44x, <1ms gate); dispatch 9.27->0.251 ms. 74ms hitch GONE:
+      perf r4 A/B max_frame 1202->38 ms (31.6x), p95 329->24, drain 11.3->0.48 s (24x);
+      idle p95 20.8ms, no 74ms-class stall. G0 exit 0 (AweStrips registered); SMOKE
+      ok:true x4 (values == AC-0190). No regression: chunkiocpp md5-identical, genhash
+      25/25 == AC-0188, light == AC-0190, meshprobe 100% exact. Bug found + fixed
+      by probe: GDScript packed-array negative-index wraps from the end (a shipped
+      quirk, replicated via narr_idx()). .so + .dll (PE-verified) built. Caveat: battery
+      run 1 hit the KNOWN AC-0206 one-off SIGSEGV in AweGen.generate_flat (pre-task
+      gen code, not in this diff); run 2 fully green. See tasks/AC-0207/AC-0207-results.html.'
 - id: AC-0208
   title: remove-gdext-fallback-require-dll
   source: user
@@ -7414,11 +7429,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-04T02:09
   updated_at: 2026-09-04T02:09
-  completed_at: null
+  completed_at: 2026-09-03T12:50
   waiting_on: AC-0207
   parent_id: null
   notes: '1) User Story: As a player crossing a chunk border I want no 20ms light
@@ -7434,3 +7449,34 @@ intake:
     created_at: 2026-09-04T02:09
     updated_at: null
     text: '[user] follow 207 per 2026-09-03'
+  - id: 2
+    created_at: '2026-09-03T12:50:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Wiring-only (no C++ change, no rebuild — the AC-0207-built .so/.dll already carried AweLighting.compute_chunk_pull from AC-0189): call it from the pull entry in godot/world/lighting.gd (compute_light_flat_chunk_pull + _flood_flat x2), the GDScript kernel preserved verbatim as _pull_kernel_gd, toggled by AWECRAFT_LIGHTCPP=0. Flood p95 53.1 -> 0.78 ms (68x), 100% cell-exact across 64 runtime call variants (6.29M cells) via the new pullprobe arm. No regression: chunkiocpp byte-identical, genhash 25/25 == AC-0188, meshprobe/stripsprobe 100%, G0 clean, both toggle states battery-green. See tasks/AC-0210/AC-0210-results.html.'
+- id: AC-0211
+  title: mesh-snap-and-instance-remaining-gdscript-to-cpp
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-04T02:22
+  updated_at: 2026-09-04T02:22
+  completed_at: null
+  waiting_on: AC-0210
+  parent_id: null
+  notes: '1) User Story: As a player I want chunk mesh creation to not hitch on snap
+    and instance setup so moving stays smooth after the palette fix.
+
+
+    2) Technical Details: After AC-0190/0207 the greedy core is C++ but snap building,
+    flat view expansion before the call, and main-thread mesh instance creation are
+    still GDScript. Move neighbor snap and instance handoff to C++ side where possible
+    to save a few ms per chunk after 210.'
+  comments:
+  - id: 1
+    created_at: 2026-09-04T02:22
+    updated_at: null
+    text: '[user] remaining mesh snap/instance per 2026-09-03'

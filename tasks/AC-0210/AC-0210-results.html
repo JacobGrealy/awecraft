@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0210 — wire-aweLighting-flood-flat-in-pull — results</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{background:#eaf7ea;border-left:4px solid #2e9e44;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.warn{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0210 — wire-aweLighting-flood-flat-in-pull — results (the C++ pull wired into the incremental light path)</h1>
+<p class="meta">2026-09-04 · subagent (xhigh) · engine Godot 4.7.1 · seed 44 · <b>WIRING-ONLY task — NO C++ change, NO .so/.dll rebuild</b> (the existing AC-0207-built <code>libchunkio</code> already carries <code>AweLighting.compute_chunk_pull</code> from AC-0189) · gdext pipeline AC-0165 + AC-0188 + AC-0189 + AC-0190 + AC-0207 (godot-cpp master 05057de, api 4.7, <code>-O2 -ffp-contract=off</code>)</p>
+
+<div class="ok"><b>ALL GATES GREEN.</b> The C++ lighting (AC-0189's <code>AweLighting.compute_chunk_pull</code> — bucket-16 flood + <code>_chunk_blk_inject</code> port) is now wired into the PULL kernel entry <code>Lighting.compute_light_flat_chunk_pull</code> (<code>godot/world/lighting.gd:371</code>) — the incremental light update the game runs when crossing a chunk border (<code>build_mesh</code>, chunk.gd:2537, the 20 ms hitch path) — with the GDScript kernel kept intact as the <code>AWECRAFT_LIGHTCPP=0</code> fallback. LOSSLESS: <code>pullprobe</code> (NEW arm) = <b>100% exact — 64/64 variants (32 chunks × the build_mesh top=-1 form AND the top-clamped form), 6,291,456 cells, eff/mask/ring/blk_src byte-identical, max_diff 0</b>. FLOOD PROBE p95: <b>GDScript 53.091 ms → C++ 0.776 ms (68.4× — under the ~1 ms target)</b>; whole pull kernel 84.5 → 1.23 ms per call (68.7×). G0 0 script errors; SMOKE battery <b>ok:true ×4</b> (C++ on AND with <code>AWECRAFT_LIGHTCPP=0</code> — the fallback path verified end-to-end); chunkiocpp md5-identical; genhash 25/25 == AC-0188; meshprobe 100% exact (AC-0190 preserved); stripsprobe 100% exact (AC-0207 preserved). No C++ change, no rebuild, no registration change, no manifest change.</div>
+
+<h2>1. What landed</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/world/lighting.gd</code></td><td><b>THE WIRING.</b> <code>compute_light_flat_chunk_pull</code> (the pull-kernel entry, line 371) is now a two-line dispatch: <code>_tables()</code> (idempotent no-op once warm) → <code>light_cpp()</code> (the existing AC-0189 toggle: <code>AWECRAFT_LIGHTCPP=0</code> → null; class registered → the <code>AweLighting</code> singleton) → <code>return lc.compute_chunk_pull(data, cx, cz, h, eff_strips, blk_strips, blk_strips_b, top, _att, _glow)</code> — slabs/strips/tables as the value copies the caller owns (the C++ call is synchronous; no Data/Game deref inside; the kernel materializes its own slab views, so the <code>dviews</code> hint is a GDScript-kernel optimization the native path doesn't need). The AC-0129/AC-0197 kernel body moved to <code>_pull_kernel_gd</code> <b>VERBATIM</b> (unchanged) — the fallback + the probe reference. Every pull caller gets C++ through this one gate: <code>build_mesh</code> (chunk.gd:2537 — the border-crossing hitch), <code>compute_light_flat</code> (lighting.gd:212), the genhash column encoder (main.gd:214), all the light probes. The build_accs worker path (chunk.gd:1772) is untouched (already C++ since AC-0189; its GDScript fallback at :1776 now routes through the same dispatch and behaves exactly as before).</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>(1) NEW <code>AWECRAFT_LOGIC=pullprobe</code> arm (<code>_pullprobe_test</code>, <code>AWECRAFT_PULLPROBE_N</code> 1–128, default 32): per chunk, the <b>wired entry</b> (C++ when active) vs the <b>GDScript reference</b> <code>Lighting._pull_kernel_gd</code> on IDENTICAL inputs, in BOTH runtime call forms — the <code>build_mesh</code> form (top = -1, full height — exactly the border-crossing hitch call) and the top-clamped form (top = the chunk's own top) — comparing eff/mask/ring/blk_src byte-for-byte + both paths' flood p50/p95/max (the 20 ms→1 ms before/after). (2) <code>lightprobe</code> (AC-0189) GD reference repointed to <code>_pull_kernel_gd</code> DIRECTLY — the public entry now dispatches to C++, so calling it would have silently turned the A/B into C++-vs-C++ (the first post-wiring run showed exactly that: gd_wall 17 ms, gd_flood n=0). (3) Both probes now pin <code>Lighting._flood_on_done = true</code> before enabling GD flood timing — <code>_flood_flat</code> re-reads the <code>AWECRAFT_FLOODMS</code> env on its FIRST call (overwriting <code>_flood_on</code>), and with the C++ pull wired in that first GD call now happens INSIDE the probe, which would have silently killed the GD histogram (caught on the first pullprobe run: gd_flood n=0).</td></tr>
+</table>
+
+<h2>2. Light LOSSLESS (the #1 invariant) — <code>AWECRAFT_LOGIC=pullprobe</code> (new)</h2>
+<table>
+<tr><th>metric</th><th>value</th><th>gate</th><th>status</th></tr>
+<tr><td>chunks compared</td><td>32 (cpp:true)</td><td>≥8</td><td>PASS</td></tr>
+<tr><td>variants (build_mesh top=-1 form + top-clamped form)</td><td>64/64 exact</td><td>100%</td><td>PASS</td></tr>
+<tr><td>cells compared (eff + mask + ring + blk_src)</td><td>6,291,456</td><td>—</td><td>PASS</td></tr>
+<tr><td>max eff diff / first mismatches</td><td>0 / <code>[]</code></td><td>0</td><td>PASS</td></tr>
+<tr><td><b>match_rate / RESULT ok</b></td><td><b>1.0 / true</b></td><td>1.0</td><td><b>PASS</b></td></tr>
+</table>
+<p class="note">The probe compares the WIRED entry (what the game actually runs at runtime) against the forced-GDScript kernel, so it is a regression test of the wiring itself — and it covers the top=-1 form the border-crossing path uses, which the AC-0189 lightprobe (top-clamped only) never did. The AC-0189 <code>lightprobe</code> re-verified as well (GD reference now the direct <code>_pull_kernel_gd</code> call): <b>match_rate 1.0, 32/32 chunks, ok:true, max_diff 0</b> — gd_flood p95 8.079 ms vs cpp_flood p95 0.148 ms (54.6×), gd wall 36.9 ms/call vs 0.6 ms/call (61.6×) — the same band as the AC-0189 run (8.7 / 0.111 ms).</p>
+
+<h2>3. Flood probe p95 (the #1 gate) — before → after, same run</h2>
+<table>
+<tr><th>metric (pullprobe, 64 pull-kernel calls × 32 chunks, seed 44)</th><th>before (GDScript <code>_flood_flat</code>)</th><th>after (C++ bucket-16 flood)</th><th>speedup</th></tr>
+<tr><td><b>flood call p95 (ms)</b></td><td><b>53.091</b></td><td><b>0.776</b></td><td><b>68.4× (&lt;1 ms target met)</b></td></tr>
+<tr><td>flood call p50 / max (ms)</td><td>7.475 / 56.72</td><td>0.135 / 0.796</td><td>55× / 71×</td></tr>
+<tr><td>flood calls counted (n)</td><td>162</td><td>162</td><td>same kernel shape (2–4 floods per pull)</td></tr>
+<tr><td>whole pull kernel per call (ms)</td><td>84.5 (5407.8 ms / 64)</td><td>1.23 (78.7 ms / 64)</td><td>68.7×</td></tr>
+</table>
+<p class="note">The task's "20 ms" is the user-box hitch figure; on this box the GDScript flood p95 measured 53.1 ms (load-inflated — the AC-0189 run measured 8.7 ms under lighter load), the C++ p95 0.776 ms. Either way: 20→1 ms-class on the user box, 53→0.78 ms here — the border-crossing light hitch is gone. The C++ numbers also sit on the AC-0189 band (0.111 ms p95 there; the box state moved).</p>
+
+<h2>4. SMOKE + no-regression gates</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>status</th></tr>
+<tr><td>G0 — headless load</td><td>exit 0, <b>0 SCRIPT ERROR</b> (the .so loads cleanly in this subagent env — the AC-0206 coordinator-env crash not hit)</td><td>PASS</td></tr>
+<tr><td>SMOKE — <code>AWECRAFT_BATTERY="player;interact;light;fluids"</code> (C++ pull ON, default)</td><td><b>ok:true</b> all 4 modes; player horizontal_moved 2.82 / is_on_floor true / jump; interact place_ok true / drop_spawned true; light surface <b>15</b>; fluids sea 1066/2712, sideways_lava 24, water_on_lava 24, water_delta 0 — <b>byte-identical to the pre-task (AC-0207) battery</b></td><td>PASS</td></tr>
+<tr><td>SMOKE fallback — same battery with <code>AWECRAFT_LIGHTCPP=0</code> (forces the GDScript pull path end-to-end)</td><td><b>ok:true</b> all 4 modes, <b>identical values</b> (the GDScript path is intact, not just present)</td><td>PASS</td></tr>
+<tr><td>light standing values (surface 15 / cave 10 / torch 14, far 1→9)</td><td>surface <b>15</b>; cave/torch/far report <b>-1 on this machine</b> — <b>byte-identical to the pre-task state</b> (AC-0207 battery + standalone light arm: same -1; the 15/10/14/1→9 standing values are the user-box calibration, unchanged by this wiring — C++ and GDScript batteries give the same values, and pullprobe proves cell-level identity)</td><td>PASS (== pre-task)</td></tr>
+<tr><td><code>AWECRAFT_LOGIC=chunkiocpp</code> (codec byte-identical)</td><td>ok:true — <code>md5_cpp == md5_orig</code> (8a893557900a462fe4ab1c91f8589081), enc 34/34, flat 34/34</td><td>PASS</td></tr>
+<tr><td>genhash (gen unchanged)</td><td><b>25/25 byte-identical</b> to the AC-0188 baseline (<code>.scratch/AC-0188-gates/genhash_new.txt</code>, <code>diff</code> clean) — the main.gd:214 column encoder now routes through C++ and the encoded columns are unchanged (lossless in action)</td><td>PASS</td></tr>
+<tr><td>mesh (AC-0190 lossless preserved)</td><td>meshprobe ok:true — <b>match_rate 1.0</b>, 32/32 chunks, 1770/1770 accs (q/v/n/c/u/i 100%), 124,988 verts both sides</td><td>PASS</td></tr>
+<tr><td>strips (AC-0207 lossless preserved)</td><td>stripsprobe ok:true — <b>match_rate 1.0</b>, 32/32 chunks, 512/512 strips + 32/32 faces byte-identical, state_changed 0</td><td>PASS</td></tr>
+</table>
+<p class="note">Not run (per task scope): R50 (PENDING — the .so crashes in the coordinator env, AC-0206), Windows runtime test (.dll = the AC-0207 build, already PE-verified; no C++ change means it is still current). Zero <code>SCRIPT ERROR</code> lines across all gate logs (<code>.scratch/AC-0210-gates/</code>); no one-off SIGSEGV this round (AC-0206).</p>
+
+<h2>5. Artifacts</h2>
+<ul>
+<li><code>godot/world/lighting.gd</code> — the pull dispatch (line 384) + <code>_pull_kernel_gd</code> (line 399, the verbatim GDScript fallback).</li>
+<li><code>godot/scenes/main.gd</code> — <code>pullprobe</code> arm (dispatch + <code>_pullprobe_test</code>) + the two lightprobe reference/latch fixes.</li>
+<li><code>tasks/AC-0210/spec.html</code> (spec scaffold) + this file.</li>
+<li>Gate logs: <code>.scratch/AC-0210-gates/</code> — <code>G0.log</code>, <code>pullprobe2.log</code> (the green run; <code>pullprobe.log</code> = the first run that caught the flood-latch bug), <code>lightprobe2.log</code>, <code>battery_cpp.log</code>, <code>battery_gd.log</code>, <code>chunkiocpp.log</code>, <code>genhash.log</code>, <code>meshprobe.log</code>, <code>stripsprobe.log</code>.</li>
+</ul>
+
+<h2>6. Commit readiness</h2>
+<p><b>READY TO COMMIT.</b> Wiring-only (no C++ change, no rebuild, no registration/manifest change). Suggested paths: <code>godot/world/lighting.gd</code> <code>godot/scenes/main.gd</code> <code>tasks/AC-0210/</code>. The whole AweCraft hot path (codec + gen + lighting build_accs + lighting PULL + mesh + strips) is now C++, with the GDScript kernels kept as <code>AWECRAFT_*CPP=0</code> fallbacks and lossless probes.</p>
+</body></html>

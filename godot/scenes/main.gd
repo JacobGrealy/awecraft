@@ -1153,6 +1153,14 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			await _lightprobe_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "pullprobe":
+			# AC-0210: the C++ PULL wiring probe (wired entry vs GDScript
+			# kernel, both the build_mesh top=-1 form and the top-clamped
+			# form; flood p95 before/after).
+			world.collision_enabled = false
+			await _pullprobe_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "lightcache":
 			await _lightcache_test(spawn)
 			return
@@ -4906,6 +4914,9 @@ func _stripsprobe_test(spawn: Vector3) -> void:
 # class) — the speedup gate's before/after. RESULT: match rate (gate =
 # 1.0, i.e. 100% exact at every cell), per-field match counts, max diff,
 # first mismatches, per-path wall ms, both flood stat blocks.
+# AC-0210: the GD side calls _pull_kernel_gd DIRECTLY (the public entry now
+# dispatches to C++ — the pull wiring — so it would no longer be a
+# GDScript reference).
 func _lightprobe_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
 	var NENV := OS.get_environment("AWECRAFT_LIGHTPROBE_N")
@@ -4941,6 +4952,10 @@ func _lightprobe_test(spawn: Vector3) -> void:
 	var cpp: bool = lc != null
 	# Reset both flood histograms so the numbers below cover exactly the
 	# probe's calls (the build before this may have filled them).
+	# AC-0210: pin the _flood_probe latch too (first _flood_flat call
+	# re-reads the env — with the C++ pull wired in, that first call now
+	# happens inside the probe and would silently kill the GD histogram).
+	Lighting._flood_on_done = true
 	Lighting._flood_on = true
 	Lighting.flood_stats()
 	if cpp:
@@ -4961,7 +4976,10 @@ func _lightprobe_test(spawn: Vector3) -> void:
 		var top: int = int(c.top)
 		var st: Dictionary = world._strips_for(cx, cz)
 		var tt := Time.get_ticks_usec()
-		var gd: Dictionary = Lighting.compute_light_flat_chunk_pull(c.data, cx, cz, h, st["eff"], st["blk"], st["blk_b"], top)
+		# AC-0210: the GD side must be the GDScript kernel DIRECTLY — the
+		# public compute_light_flat_chunk_pull entry now dispatches to C++
+		# (the pull wiring), so calling it here would compare C++ vs C++.
+		var gd: Dictionary = Lighting._pull_kernel_gd(c.data, cx, cz, h, st["eff"], st["blk"], st["blk_b"], top)
 		gd_wall_us += Time.get_ticks_usec() - tt
 		if not cpp:
 			continue
@@ -5020,6 +5038,142 @@ func _lightprobe_test(spawn: Vector3) -> void:
 		"ring_match": ring_match,
 		"blk_src_match": src_match,
 		"cells_compared": n_samples * 256 * h,
+		"max_diff": max_diff,
+		"mismatch": mismatch,
+		"gd_wall_ms": round(gd_wall_us / 1000.0 * 1000.0) / 1000.0,
+		"cpp_wall_ms": round(cpp_wall_us / 1000.0 * 1000.0) / 1000.0,
+		"gd_flood": gd_flood,
+		"cpp_flood": cpp_flood,
+		"wall_ms": Time.get_ticks_msec() - t0,
+	})
+
+
+# AC-0210: the PULL wiring probe. For N built chunks, runs the WIRED entry
+# Lighting.compute_light_flat_chunk_pull (the AC-0210 dispatch: C++
+# AweLighting.compute_chunk_pull whenever the library registered the class,
+# GDScript otherwise) AND the GDScript reference Lighting._pull_kernel_gd on
+# the SAME inputs, comparing eff / mask / ring / blk_src byte-for-byte.
+# Two call forms per chunk: the build_mesh form (top = -1, full height —
+# exactly what the chunk-border-crossing hitch path runs) and the
+# top-clamped form (top = the chunk's own top). Also reports both paths'
+# flood p50/p95/max (GD histogram via Lighting._flood_on, C++ via the native
+# class) — the 20 ms -> 1 ms gate's before/after. RESULT: match rate (gate =
+# 1.0, 100% exact at every cell of every variant), variant/chunk match
+# counts, max diff, first mismatches, per-path wall ms, both flood blocks.
+func _pullprobe_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var NENV := OS.get_environment("AWECRAFT_PULLPROBE_N")
+	var N := int(NENV) if NENV != "" else 32
+	N = clampi(N, 1, 128)
+	world.fluid_sim_enabled = false
+	world.collision_enabled = false
+	world.render_radius = 4
+	world.recenter(spawn.x, spawn.z, true)
+	# Wait until N chunks with data + mesh built (the r4 band set drains
+	# well inside the cap; a timeout still probes whatever is ready).
+	var waited := 0
+	var built := 0
+	while built < N and waited < 3600:
+		built = 0
+		for key in world.chunks:
+			var c = world.chunks.get(key)
+			if c != null and not c.data.is_empty() and c.mesh_built:
+				built += 1
+		if built >= N:
+			break
+		await get_tree().physics_frame
+		waited += 1
+	# Deterministic sample: ready chunks ordered by (cz, cx).
+	var samples: Array = []
+	for key in world.chunks:
+		var c = world.chunks.get(key)
+		if c != null and not c.data.is_empty() and c.mesh_built:
+			samples.append(c)
+	samples.sort_custom(func(a, b): return int(a.cz) * 1024 + int(a.cx) < int(b.cz) * 1024 + int(b.cx))
+	samples.resize(mini(samples.size(), N))
+	var lc: Variant = Lighting.light_cpp()
+	var cpp: bool = lc != null
+	# Reset both flood histograms so the numbers below cover exactly the
+	# probe's calls (the build before this may have filled them).
+	# AC-0210: pin the _flood_probe latch too — _flood_flat re-reads the
+	# AWECRAFT_FLOODMS env on its FIRST call (overwriting _flood_on), and
+	# with the C++ pull wired in that first call now happens INSIDE the
+	# probe, which would silently kill the GD histogram.
+	Lighting._flood_on_done = true
+	Lighting._flood_on = true
+	Lighting.flood_stats()
+	if cpp:
+		lc.reset_flood_stats()
+	var h: int = Data.HEIGHT
+	var gd_wall_us := 0
+	var cpp_wall_us := 0
+	var match_chunks := 0
+	var variant_matches := 0
+	var variants := 0
+	var max_diff := 0
+	var mismatch: Array = []
+	for c in samples:
+		var cx: int = int(c.cx)
+		var cz: int = int(c.cz)
+		var st: Dictionary = world._strips_for(cx, cz)
+		var chunk_ok := true
+		for tv in [-1, int(c.top)]: # build_mesh form + top-clamped form
+			var top: int = int(tv)
+			variants += 1
+			var tt := Time.get_ticks_usec()
+			var gd: Dictionary = Lighting._pull_kernel_gd(c.data, cx, cz, h, st["eff"], st["blk"], st["blk_b"], top)
+			gd_wall_us += Time.get_ticks_usec() - tt
+			var wr: Dictionary = gd
+			if cpp:
+				tt = Time.get_ticks_usec()
+				wr = Lighting.compute_light_flat_chunk_pull(c.data, cx, cz, h, st["eff"], st["blk"], st["blk_b"], top)
+				cpp_wall_us += Time.get_ticks_usec() - tt
+			var a_ok: bool = (PackedByteArray(gd["arr"]) == PackedByteArray(wr["arr"]))
+			var m_ok: bool = (PackedByteArray(gd["mask"]) == PackedByteArray(wr["mask"]))
+			var r_ok: bool = (PackedInt32Array(gd["ring"]) == PackedInt32Array(wr["ring"]))
+			var s_ok: bool = (bool(gd["blk_src"]) == bool(wr["blk_src"]))
+			if a_ok and m_ok and r_ok and s_ok:
+				variant_matches += 1
+			else:
+				chunk_ok = false
+			# Diagnostics: first mismatches per field + the max eff diff.
+			if not a_ok:
+				var ga: PackedByteArray = gd["arr"]
+				var wa: PackedByteArray = wr["arr"]
+				for i in range(ga.size()):
+					var df := absi(int(ga[i]) - int(wa[i]))
+					if df > max_diff:
+						max_diff = df
+					if df > 0 and mismatch.size() < 4:
+						mismatch.append({"cx": cx, "cz": cz, "top": top, "field": "arr", "i": i, "gd": int(ga[i]), "cpp": int(wa[i])})
+			if not m_ok:
+				var gm: PackedByteArray = gd["mask"]
+				var wm: PackedByteArray = wr["mask"]
+				for i in range(gm.size()):
+					if gm[i] != wm[i] and mismatch.size() < 8:
+						mismatch.append({"cx": cx, "cz": cz, "top": top, "field": "mask", "i": i, "gd": int(gm[i]), "cpp": int(wm[i])})
+			if not r_ok and mismatch.size() < 8:
+				mismatch.append({"cx": cx, "cz": cz, "top": top, "field": "ring", "i": -1, "gd": (gd["ring"] as PackedInt32Array).size(), "cpp": (wr["ring"] as PackedInt32Array).size()})
+			if not s_ok and mismatch.size() < 8:
+				mismatch.append({"cx": cx, "cz": cz, "top": top, "field": "blk_src", "i": -1, "gd": int(gd["blk_src"]), "cpp": int(wr["blk_src"])})
+		if chunk_ok:
+			match_chunks += 1
+	var gd_flood: Dictionary = Lighting.flood_stats()
+	Lighting._flood_on = false
+	var cpp_flood: Dictionary = {"n": 0}
+	if cpp:
+		cpp_flood = lc.flood_stats()
+	var n_samples := samples.size()
+	var match_rate: float = float(variant_matches) / float(variants) if variants > 0 else 0.0
+	Debug.result({
+		"ok": cpp and n_samples >= 8 and match_rate >= 1.0,
+		"cpp": cpp,
+		"n_chunks": n_samples,
+		"variants": variants,
+		"variant_matches": variant_matches,
+		"match_chunks": match_chunks,
+		"match_rate": match_rate,
+		"cells_compared": variants * 256 * h,
 		"max_diff": max_diff,
 		"mismatch": mismatch,
 		"gd_wall_ms": round(gd_wall_us / 1000.0 * 1000.0) / 1000.0,

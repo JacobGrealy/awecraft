@@ -368,7 +368,35 @@ static func compute_light_flat_chunk(data, cx: int, cz: int, h: int) -> Dictiona
 # across the boundary; t = our z for E/W, our x for S/N); empty/short strip =
 # that side stays as its own flood left it. eff_strips rides along for the
 # caller's 20x20 bake box (unused here).
+#
+# AC-0210: THE PULL DISPATCH. This entry is what the runtime pull path runs
+# (build_mesh on chunk-border crossing — the light hitch — compute_light_flat,
+# the probes). It dispatches to the C++ AweLighting.compute_chunk_pull
+# (gdext/src/lighting.cpp, AC-0189 — the bucket-16 flood + the UN-gated
+# _chunk_blk_inject port) whenever the gdext library registered the class,
+# and falls back to _pull_kernel_gd below (the AC-0129/AC-0197 body VERBATIM)
+# when AWECRAFT_LIGHTCPP=0 or the library is not loaded. Inputs are value
+# copies the caller owns (slab array + strips + the pre-warmed _att/_glow
+# tables — no Data/Game deref inside the C++ call, which is synchronous).
+# LOSSLESS: AWECRAFT_LOGIC=pullprobe compares the wired entry against
+# _pull_kernel_gd at every cell of N chunks (both the build_mesh top=-1 form
+# and the top-clamped form) — gate 100% exact.
 static func compute_light_flat_chunk_pull(data, cx: int, cz: int, h: int, eff_strips: Array, blk_strips: Array, blk_strips_b: Array, top := -1, dviews: Variant = null) -> Dictionary:
+	_tables() # idempotent no-op once warm (world._ready); the C++ call needs _att/_glow
+	var lc: Variant = light_cpp()
+	if lc != null:
+		# AC-0210: C++ pull — the kernel materializes its own slab views
+		# (byte-identical decode), so the dviews hint is a GDScript-kernel
+		# optimization the native path does not need.
+		return lc.compute_chunk_pull(data, cx, cz, h, eff_strips, blk_strips, blk_strips_b, top, _att, _glow)
+	return _pull_kernel_gd(data, cx, cz, h, eff_strips, blk_strips, blk_strips_b, top, dviews)
+
+
+# AC-0210: the GDScript pull kernel — the AC-0129/AC-0197 body of
+# compute_light_flat_chunk_pull VERBATIM. Kept as the AWECRAFT_LIGHTCPP=0
+# fallback and the pullprobe reference (the C++ dispatch above is a
+# drop-in replacement verified byte-identical by the probe).
+static func _pull_kernel_gd(data, cx: int, cz: int, h: int, eff_strips: Array, blk_strips: Array, blk_strips_b: Array, top := -1, dviews: Variant = null) -> Dictionary:
 	# AC-0197: rows above the column's top (max non-air y) are ALL air — open
 	# sky, so eff == 15 there and nothing below can raise them above 15. The
 	# scan/floods run only on rows 0..top (block glow bleeds 14 up from a
