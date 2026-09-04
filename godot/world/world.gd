@@ -1137,9 +1137,7 @@ func band_of(dx: int, dz: int) -> int:
 	if in_render_circle(dx, dz):
 		if taxi <= b0_eff():
 			return 0
-		if taxi <= b1_eff():
-			return 1
-		return 2
+		return 1
 	if taxi <= b1_eff() + 1:
 		return 3  # collar: diamond ring outside the circle (small R only)
 	if in_circle_ring(dx, dz):
