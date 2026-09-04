@@ -1344,6 +1344,11 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "genprobe":
 			await _genprobe_test()
 			return
+		if logic == "meshprobe":
+			world.collision_enabled = false
+			await _meshprobe_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "tick":
 			await _tick_test(spawn)
 			return
@@ -4747,6 +4752,282 @@ func _lightprobe_test(spawn: Vector3) -> void:
 		"cpp_flood": cpp_flood,
 		"wall_ms": Time.get_ticks_msec() - t0,
 	})
+
+
+# AC-0190: the MESH losslessness probe (the #1 gate for the C++ mesh port):
+# per chunk, ChunkScript.build_accs (GDScript) vs AweMesh.build_accs (C++,
+# gdext/src/mesh.cpp) on IDENTICAL inputs — fresh slab deep-copies both
+# sides, the SAME nbs/ctx/ms, and eff = {} (both recompute light through the
+# shared C++ pull kernel, so the light compare also covers the mesh's
+# self-light path). Gate: 100% exact q/v/n/c/u/i on every acc of every
+# sampled chunk + identical light arr/mask/ring/blk_src + identical vertex
+# totals (the MINFO invariant — the applied mesh is the trimmed q quads).
+# The comparison honors the _surface() trim contract: q must match, then
+# the FIRST 4*q verts (v/n/c/u) and 6*q indices — the GDScript pre-sized
+# tails are always discarded on apply.
+func _meshprobe_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var NENV := OS.get_environment("AWECRAFT_MESHPROBE_N")
+	var N := int(NENV) if NENV != "" else 32
+	N = clampi(N, 1, 128)
+	world.fluid_sim_enabled = false
+	world.collision_enabled = false
+	world.render_radius = 4
+	world.recenter(spawn.x, spawn.z, true)
+	# Wait until N mesh-built chunks (deterministic seed 44 default).
+	var waited := 0
+	var built := 0
+	while built < N and waited < 3600:
+		built = 0
+		for key in world.chunks:
+			var c = world.chunks.get(key)
+			if c != null and not c.data.is_empty() and c.mesh_built:
+				built += 1
+		if built >= N:
+			break
+		await get_tree().physics_frame
+		waited += 1
+	var samples: Array = []
+	for key in world.chunks:
+		var c = world.chunks.get(key)
+		if c != null and not c.data.is_empty() and c.mesh_built:
+			samples.append(c)
+	samples.sort_custom(func(a, b): return int(a.cz) * 1024 + int(a.cx) < int(b.cz) * 1024 + int(b.cx))
+	samples.resize(mini(samples.size(), N))
+	var mc: Variant = _ChunkScriptM.mesh_cpp()
+	var cpp: bool = mc != null
+	var match_chunks := 0
+	var q_match := 0
+	var v_match := 0
+	var n_match := 0
+	var c_match := 0
+	var u_match := 0
+	var i_match := 0
+	var accs_compared := 0
+	var arr_match := 0
+	var mask_match := 0
+	var ring_match := 0
+	var src_match := 0
+	var verts_gd := 0
+	var verts_cpp := 0
+	var gd_wall_us := 0
+	var cpp_wall_us := 0
+	var gd_wms_sum := 0
+	var cpp_wms_sum := 0
+	var skipped := 0
+	var mismatch: Array = []
+	for c in samples:
+		var cx: int = int(c.cx)
+		var cz: int = int(c.cz)
+		# Reconstruct the EXACT dispatch inputs (world.gd
+		# _mesh_dispatch_impl: 4 diagonal nbs, ctx + strips + top + band-2
+		# coarse, ms rects).
+		var nbs: Dictionary = {}
+		var nb_ok := true
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				if (dx == 0) == (dz == 0):
+					continue
+				var nc = world.chunks.get(world._key(cx + dx, cz + dz))
+				if nc == null or nc.data.is_empty():
+					nb_ok = false
+					break
+				nbs["%d,%d" % [dx, dz]] = {"d": ChunkIO._slabs_deepcopy(nc.data), "f": ChunkIO._slabs_deepcopy(nc.fl)}
+			if not nb_ok:
+				break
+		if not nb_ok:
+			skipped += 1
+			continue
+		var st: Dictionary = world._strips_for(cx, cz)
+		var ctx_w: Dictionary = world._tm_ctx.duplicate()
+		ctx_w["eff_strips"] = st["eff"]
+		ctx_w["blk_strips"] = st["blk"]
+		ctx_w["blk_strips_b"] = st["blk_b"]
+		ctx_w["top"] = int(c.top)
+		if int(c.band) == 2:
+			ctx_w["coarse"] = true
+			ctx_w["uv_scale"] = 2
+		var ms_w: Dictionary
+		if not world._tm_ms_full.rects.is_empty():
+			ms_w = {"rects": world._tm_ms_full.rects.duplicate(), "h": float(world._tm_ms_full.get("h", 0.0))}
+		else:
+			ms_w = {"rects": {}}
+		var tt := Time.get_ticks_usec()
+		var gres: Dictionary = _ChunkScriptM.build_accs(ChunkIO._slabs_deepcopy(c.data), ChunkIO._slabs_deepcopy(c.fl), cx, cz, nbs, ctx_w, ms_w, {}, 0, -1, 0)
+		gd_wall_us += Time.get_ticks_usec() - tt
+		if not cpp:
+			continue
+		tt = Time.get_ticks_usec()
+		var cres: Dictionary = mc.build_accs(ChunkIO._slabs_deepcopy(c.data), ChunkIO._slabs_deepcopy(c.fl), cx, cz, nbs, ctx_w, ms_w, {}, 0, -1, 0, Lighting._att, Lighting._glow)
+		cpp_wall_us += Time.get_ticks_usec() - tt
+		gd_wms_sum += int(gres.get("wms", 0))
+		cpp_wms_sum += int(cres.get("wms", 0))
+		var chunk_ok: bool = true
+		var gs: Array = gres["slabs"]
+		var cs: Array = cres["slabs"]
+		if int(gs.size()) != int(cs.size()):
+			chunk_ok = false
+			if mismatch.size() < 12:
+				mismatch.append({"cx": cx, "cz": cz, "field": "slab_count", "gd": int(gs.size()), "cpp": int(cs.size())})
+		else:
+			for si in range(int(gs.size())):
+				var grow: Array = gs[si]
+				var csl: Array = cs[si]
+				if bool(grow[6]) != bool(csl[6]):
+					chunk_ok = false
+					if mismatch.size() < 12:
+						mismatch.append({"cx": cx, "cz": cz, "slab": si, "field": "full_solid", "gd": bool(grow[6]), "cpp": bool(csl[6])})
+				for a in range(6):
+					var gm: Dictionary = grow[a]
+					var cm: Dictionary = csl[a]
+					var m: Dictionary = _acc_cmp(gm, cm)
+					accs_compared += 1
+					if m["q"]:
+						q_match += 1
+					if m["v"]:
+						v_match += 1
+					if m["n"]:
+						n_match += 1
+					if m["c"]:
+						c_match += 1
+					if m["u"]:
+						u_match += 1
+					if m["i"]:
+						i_match += 1
+					verts_gd += int(gm["q"]) * 4
+					verts_cpp += int(cm["q"]) * 4
+					if not (bool(m["q"]) and bool(m["v"]) and bool(m["n"]) and bool(m["c"]) and bool(m["u"]) and bool(m["i"])):
+						chunk_ok = false
+						if mismatch.size() < 12:
+							mismatch.append({
+								"cx": cx, "cz": cz, "slab": si, "acc": a,
+								"fields": m, "q_gd": int(gm["q"]), "q_cpp": int(cm["q"]),
+								"diag_v": _acc_diag(gm, cm, "v", 3, 4) if not bool(m["v"]) else null,
+								"diag_u": _acc_diag(gm, cm, "u", 2, 4) if not bool(m["u"]) else null,
+								"diag_c": _acc_diag(gm, cm, "c", 4, 4) if not bool(m["c"]) else null,
+								"diag_n": _acc_diag(gm, cm, "n", 3, 4) if not bool(m["n"]) else null,
+								"diag_i": _acc_diag(gm, cm, "i", 1, 6) if not bool(m["i"]) else null,
+							})
+		# Light (both sides recompute through the shared C++ pull kernel).
+		var gld: Dictionary = gres["light"]
+		var cld: Dictionary = cres["light"]
+		var la_ok: bool = (PackedByteArray(gld.get("arr", PackedByteArray())) == PackedByteArray(cld.get("arr", PackedByteArray())))
+		var lm_ok: bool = (PackedByteArray(gld.get("mask", PackedByteArray())) == PackedByteArray(cld.get("mask", PackedByteArray())))
+		var lr_ok: bool = (PackedInt32Array(gld.get("ring", PackedInt32Array())) == PackedInt32Array(cld.get("ring", PackedInt32Array())))
+		var ls_ok: bool = (bool(gld.get("blk_src", false)) == bool(cld.get("blk_src", false)))
+		if la_ok:
+			arr_match += 1
+		if lm_ok:
+			mask_match += 1
+		if lr_ok:
+			ring_match += 1
+		if ls_ok:
+			src_match += 1
+		if not (la_ok and lm_ok and lr_ok and ls_ok):
+			chunk_ok = false
+			if mismatch.size() < 12:
+				mismatch.append({"cx": cx, "cz": cz, "field": "light", "arr": la_ok, "mask": lm_ok, "ring": lr_ok, "blk_src": ls_ok})
+		if chunk_ok:
+			match_chunks += 1
+	var n_samples := int(samples.size()) - skipped
+	var match_rate: float = float(match_chunks) / float(n_samples) if n_samples > 0 else 0.0
+	Debug.result({
+		"ok": cpp and n_samples >= 8 and match_rate >= 1.0 and verts_gd == verts_cpp and verts_gd > 0,
+		"cpp": cpp,
+		"n_samples": n_samples,
+		"skipped": skipped,
+		"match_chunks": match_chunks,
+		"match_rate": match_rate,
+		"accs_compared": accs_compared,
+		"q_match": q_match,
+		"v_match": v_match,
+		"n_match": n_match,
+		"c_match": c_match,
+		"u_match": u_match,
+		"i_match": i_match,
+		"arr_match": arr_match,
+		"mask_match": mask_match,
+		"ring_match": ring_match,
+		"blk_src_match": src_match,
+		"verts_gd": verts_gd,
+		"verts_cpp": verts_cpp,
+		"gd_wms_avg": round(float(gd_wms_sum) / float(maxi(n_samples, 1)) * 1000.0) / 1000.0,
+		"cpp_wms_avg": round(float(cpp_wms_sum) / float(maxi(n_samples, 1)) * 1000.0) / 1000.0,
+		"gd_wall_ms": round(gd_wall_us / 1000.0 * 1000.0) / 1000.0,
+		"cpp_wall_ms": round(cpp_wall_us / 1000.0 * 1000.0) / 1000.0,
+		"mismatch": mismatch,
+		"wall_ms": Time.get_ticks_msec() - t0,
+	})
+
+
+# AC-0190: the per-acc trim-contract compare (see _meshprobe_test).
+func _acc_cmp(gm: Dictionary, cm: Dictionary) -> Dictionary:
+	var gq := int(gm["q"])
+	var cq := int(cm["q"])
+	var out := {"q": gq == cq, "v": false, "n": false, "c": false, "u": false, "i": false}
+	if gq != cq:
+		return out
+	if gq == 0:
+		return {"q": true, "v": true, "n": true, "c": true, "u": true, "i": true}
+	var gv: PackedVector3Array = (gm["v"] as PackedVector3Array).duplicate()
+	gv.resize(gq * 4)
+	var cv: PackedVector3Array = (cm["v"] as PackedVector3Array).duplicate()
+	cv.resize(gq * 4)
+	out["v"] = gv == cv
+	var gn: PackedVector3Array = (gm["n"] as PackedVector3Array).duplicate()
+	gn.resize(gq * 4)
+	var cn: PackedVector3Array = (cm["n"] as PackedVector3Array).duplicate()
+	cn.resize(gq * 4)
+	out["n"] = gn == cn
+	var gc: PackedColorArray = (gm["c"] as PackedColorArray).duplicate()
+	gc.resize(gq * 4)
+	var cc: PackedColorArray = (cm["c"] as PackedColorArray).duplicate()
+	cc.resize(gq * 4)
+	out["c"] = gc == cc
+	var gu: PackedVector2Array = (gm["u"] as PackedVector2Array).duplicate()
+	gu.resize(gq * 4)
+	var cu: PackedVector2Array = (cm["u"] as PackedVector2Array).duplicate()
+	cu.resize(gq * 4)
+	out["u"] = gu == cu
+	var gi: PackedInt32Array = (gm["i"] as PackedInt32Array).duplicate()
+	gi.resize(gq * 6)
+	var ci: PackedInt32Array = (cm["i"] as PackedInt32Array).duplicate()
+	ci.resize(gq * 6)
+	out["i"] = gi == ci
+	return out
+
+
+# AC-0190: first-difference diagnostic for one acc field (index + both
+# values), used by the probe's mismatch list to localize a divergence.
+func _acc_diag(gm: Dictionary, cm: Dictionary, field: String, elems: int, per: int) -> String:
+	var gq := int(gm["q"])
+	var cq := int(cm["q"])
+	var n := mini(gq, cq) * per * elems
+	var ga: Array = gm[field]
+	var ca: Array = cm[field]
+	var lim := mini(n, mini(int(ga.size()), int(ca.size())))
+	for k in range(lim):
+		var gv: Variant = ga[k]
+		var cv: Variant = ca[k]
+		if elems == 1:
+			if int(gv) != int(cv):
+				return "i=%d gd=%d cpp=%d" % [k, int(gv), int(cv)]
+		elif elems == 2:
+			var g2: Vector2 = gv
+			var c2: Vector2 = cv
+			if g2 != c2:
+				return "i=%d gd=%s cpp=%s" % [k, str(g2), str(c2)]
+		elif elems == 3:
+			var g3: Vector3 = gv
+			var c3: Vector3 = cv
+			if g3 != c3:
+				return "i=%d gd=%s cpp=%s" % [k, str(g3), str(c3)]
+		else:
+			var gc: Color = gv
+			var cc: Color = cv
+			if gc != cc:
+				return "i=%d gd=%s cpp=%s" % [k, str(gc), str(cc)]
+	return "none-in-range n=%d" % lim
 
 
 # AC-0091 basis-sanity probe (spec gate; env-gated by AWECRAFT_LOGIC=basis,

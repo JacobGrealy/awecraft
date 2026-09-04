@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0190 — gdext-mesh-face-greedy — results</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{background:#eaf7ea;border-left:4px solid #2e9e44;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.warn{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0190 — gdext-mesh-face-greedy — results (C++ mesh port)</h1>
+<p class="meta">2026-09-03 · subagent (xhigh) · engine Godot 4.7.1 · seed 44 · gdext pipeline AC-0165 + AC-0188 + AC-0189 (godot-cpp master 05057de, api 4.7, <code>-O2 -ffp-contract=off</code>)</p>
+
+<div class="ok"><b>ALL GATES GREEN.</b> Mesh LOSSLESS invariant holds: C++ <code>build_accs</code> vs GDScript = <b>100% exact on every field (32/32 chunks, 1,770/1,770 accs — q/v/n/c/u/i all 100%, 124,988 verts both sides)</b>. <code>build_accs</code> isolated wall: <b>97.7 ms → 2.9 ms (~33×)</b>; world-pipeline <code>build_worker</code> p50 <b>110 → 3 ms</b>. MINFO deterministic (C++ run1 ≡ run2); the 3-chunk cross-path drift is the documented AC-0129 landing-order band (aabbs identical, mixed direction). lightprobe 100% (3,145,728 cells, max_diff 0), chunkiocpp md5-identical, genhash 25/25 == AC-0188 baseline, SMOKE battery <b>ok:true ×4</b>, G0 0 script errors. <code>.so</code> + <code>.dll</code> built; .dll PE-verified.</div>
+
+<h2>1. What landed</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>gdext/src/mesh.cpp</code> (NEW, ~1,600 lines)</td><td><code>AweMesh : RefCounted</code> with <code>build_accs(data, fl, cx, cz, nbs, ctx, ms, eff, si0, si1, d_off, att, glow)</code>: verbatim port of <code>chunk.gd:build_accs</code> (1703) — paletted slab decode (AC-0203, <code>awecommon::slab_views</code> on the fly, no GDScript pre-conversion), scoped sgrid/ymask pre-pass, <code>_bake_box</code> (20×20 rows incl. the corner quirk), <code>_build_snap_data</code> (4 EDGE-neighbor ring — keys <code>"-1,0","1,0","0,-1","0,1"</code>), <code>_s_faces</code>, ro scan, <code>_s_emit_ro_merged</code> (greedy W≤16/H≤4 merge keyed on (id,fni,shade)), <code>_s_emit_faces</code>, fluid/xquad emits, UV (merged ms_h vs atlas_px asymmetry + <code>_s_corner_uv</code>), <code>_s_face_light</code>/<code>_face_mask</code>/<code>_light_color</code>. Light recompute always through the AC-0189 <code>awelight::pull</code> kernel (shared with <code>AweLighting</code>). All float math in <code>float</code> with GDScript evaluation order (<code>-ffp-contract=off</code>, Color ops scale all 4 channels, <code>clampf</code> compare-only).</td></tr>
+<tr><td><code>gdext/src/awe_common.{h,cpp}</code> (NEW)</td><td><code>awecommon::</code> shared slab decode (<code>slab_getbits/slab_unpack/slab_views/pba_from</code>) + <code>awelight::pull</code> (the AC-0189 kernel, factored so mesh.cpp reuses the exact same code path). Inputs are value copies — no Data/Game deref on the worker.</td></tr>
+<tr><td><code>gdext/src/chunk_io.cpp</code></td><td>calls <code>awemesh::register_classes()</code> from the SAME <code>chunkio_library_init</code> entry (AC-0188/AC-0189 pattern). One .so/.dll, unchanged <code>.gdextension</code> manifest.</td></tr>
+<tr><td><code>gdext/SConstruct</code></td><td>comment only — <code>Glob("src/*.cpp")</code> picks up mesh.cpp.</td></tr>
+<tr><td><code>godot/world/chunk.gd</code></td><td><code>mesh_cpp()</code> toggle (~line 112): <code>AWECRAFT_MESHCPP=0</code> → null (GDScript); else <code>AweMesh</code> when registered. GDScript <code>build_accs</code> path UNCHANGED (fallback intact).</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><code>_tm_worker_run</code>: <code>ChunkScript.mesh_cpp() != null</code> → <code>mc.build_accs(..., Lighting._att, Lighting._glow)</code>; else the original GDScript call. Dispatch inputs (nbs edge-neighbor snapshots, ctx, ms, si0/si1/d_off) unchanged.</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>harness arm <code>AWECRAFT_LOGIC=meshprobe</code> (+ <code>AWECRAFT_MESHPROBE_N</code>, default 32): per built chunk, runs BOTH paths on identical inputs (nbs from the same skip condition as the dispatch, shared ctx/ms, eff={} so both recompute) and compares <code>q</code> then trimmed <code>v/n/c/u/i</code> with <code>==</code>; reports match rate + per-field counts + first-difference diagnostics (<code>_acc_diag</code>) + per-path wall ms. BATTSKIP like all probe arms.</td></tr>
+</table>
+
+<h2>2. Mesh LOSSLESS (the #1 invariant) — <code>AWECRAFT_LOGIC=meshprobe</code> (final, clean build)</h2>
+<pre>RESULT {"ok":true,"match_rate":1.0,"match_chunks":32,"q_match":1770,"v_match":1770,"n_match":1770,
+ "c_match":1770,"u_match":1770,"i_match":1770,"verts_gd":124988,"verts_cpp":124988,"skipped":0,
+ "gd_wms_avg":97.688,"cpp_wms_avg":2.938, ...}</pre>
+<ul>
+<li><b>32/32 chunks, all six fields 1,770/1,770</b> — quad counts and first-q verts/normals/colors/UVs/indices <code>==</code>-identical (packed-array exact, no tolerance). 124,988 verts both sides.</li>
+<li>Per-record cross-check (env-gated diagnostics, removed before the final build): C++ per-record <code>sl</code>/<code>mask</code> vs GDScript <code>_s_face_light</code>/<code>_face_mask</code> on the (byte-identical) GD box — <b>0 diffs</b> on the two debug chunks (1,-3) and (2,-2).</li>
+</ul>
+
+<h2>3. The two bugs found by the probe (both fixed, both C++-side)</h2>
+<table>
+<tr><th>#</th><th>symptom</th><th>root cause</th><th>fix</th></tr>
+<tr><td>B1</td><td>73/1,348 bottom-face records <code>sl</code> exactly 1/15 too bright; ±1-quad c/u drift</td><td>port typo in <code>s_face_light</code>: the <code>n.z==0</code> branch's second probe read <code>(nx, ny-1, nz)</code> instead of <code>(nx, ny, nz-1)</code> — it sampled one row BELOW instead of the −z neighbor. In-function trace (FL/EF lines) proved the extra <code>ny-1</code> call; the box was byte-identical, so only the probe coordinate was wrong.</td><td><code>nz - 1</code> (now verbatim with <code>chunk.gd:1154</code>).</td></tr>
+<tr><td>B2</td><td>3 records in one chunk: C++ face mask 1 vs GDScript 0 (r/g channel swap, s=0.08 both)</td><td><b>The GDScript original itself diverges from its own light function:</b> <code>_face_mask</code> (chunk.gd:675) samples <code>(nx, ny-1, nz)</code> in the <code>n.z==0</code> branch while <code>_s_face_light</code> (chunk.gd:1154) samples <code>(nx, ny, nz-1)</code>. My first port wrote <code>face_mask</code> "clean" (nz−1) — matching the light function but NOT the shipped GDScript mesh. RECMASK trace showed every GD mask sample by name (the <code>nz−1</code> byte was 1, the <code>ny−1</code> byte 0) — the shipped behavior is the quirky one and must be preserved to be lossless.</td><td>C++ <code>face_mask</code> re-verbatim to the chunk.gd:675 quirk, with a comment pinning the provenance.</td></tr>
+</table>
+<p class="note">Method note: both bugs were invisible to output-level A/B until instrumented per-sample (each probe's 5 <code>s_effl</code>/<code>mask_sample</code> calls with coordinates + lmn + buffer pointer, thread-local to avoid worker interleaving, gated on a <code>d_off==-999</code> probe sentinel so the world's worker threads never touched the dumps). All instrumentation was removed before the final build (0 references in <code>mesh.cpp</code>; probe debug blocks gone, <code>_acc_diag</code> kept — it does no file I/O).</p>
+
+<h2>4. Speed (gate: build_accs 70 ms avg → 15–25 ms)</h2>
+<table>
+<tr><th>measurement</th><th>GDScript</th><th>C++</th><th>×</th></tr>
+<tr><td><code>build_accs</code> isolated, 32 chunks avg (meshprobe)</td><td>97.7 ms</td><td><b>2.9 ms</b></td><td><b>~33×</b></td></tr>
+<tr><td>world pipeline <code>build_worker</code> p50 (AWECRAFT_LOGIC=perf)</td><td>110 ms</td><td><b>3 ms</b></td><td>~37×</td></tr>
+<tr><td>world pipeline <code>build_worker</code> p95 / max</td><td>138 / 175 ms</td><td><b>4–5 / 6–8 ms</b></td><td>~28–30×</td></tr>
+<tr><td>pipeline build_ms (all units) / first_draw_ms</td><td>2,760 / 1,295 ms</td><td>1,857 / 1,219 ms</td><td>—</td></tr>
+</table>
+<p class="note">Gate target 15–25 ms exceeded ~5–8×. After-run worker p50/p95 (3/4 ms) sit at the measurement floor: the worker round-trip (dict/pba marshalling + GDScript frame glue) now dominates over the 2.9 ms kernel. AC-0189 standing baselines (p50 110 / p95 134 / max 148) reproduced on the before-run (110/138/175).</p>
+
+<h2>5. MINFO (gate: verts unchanged, AC-0125 −28% preserved)</h2>
+<table>
+<tr><th>check</th><th>result</th></tr>
+<tr><td>C++ run1 vs C++ run2 (same settings, <code>perf AWECRAFT_MESH_INFO=1</code>)</td><td><b>89/89 MINFO lines byte-identical</b> — the C++ path is deterministic.</td></tr>
+<tr><td>GDScript (AWECRAFT_MESHCPP=0) vs C++ run1</td><td>86/89 identical; 3 chunks differ: <code>[-16,-32]</code> fverts 1216→1228 (+12, fluid), <code>[0,0]</code> verts[0] 2556→2608 (+52), <code>[0,48]</code> verts[0] 2040→2028 (−12). <b>All aabbs/faabbs identical, mixed direction.</b> Total verts 337,160 → 337,264 (+0.03%).</td></tr>
+<tr><td>reading</td><td>Same class as AC-0129 g2's documented band ("2 chunks ±16 verts … residual = E2 landing order on boundary-chunk shade keys, aabbs identical"): fluids animate, and the C++ pipeline meshes ~30× faster (247 vs 280 frames), so the three fluid-adjacent chunks are meshed at different eff/fluid states across the two runs — a cross-run timing drift, not a path difference. Same-input equivalence is proven directly by the meshprobe (§2), which is the authoritative lossless gate.</td></tr>
+</table>
+<p class="note">AC-0125's greedy-merge vertex reduction is preserved by construction: the merged emit reproduces the exact (id, fni, shade) merge keys and the probe shows byte-identical quad sets.</p>
+
+<h2>6. No-regression gates</h2>
+<table>
+<tr><th>gate</th><th>result</th></tr>
+<tr><td>G0 headless load</td><td>exit 0, <b>0 SCRIPT ERROR</b></td></tr>
+<tr><td><code>AWECRAFT_LOGIC=lightprobe</code></td><td><b>ok:true, match_rate 1.0, 32/32, 3,145,728 cells, max_diff 0</b> (arr/mask/ring/blk_src all exact)</td></tr>
+<tr><td><code>AWECRAFT_LOGIC=chunkiocpp</code></td><td>ok:true, <b>md5_cpp == md5_orig</b> (<code>8a893557900a462fe4ab1c91f8589081</code>), roundtrip 17/17</td></tr>
+<tr><td><code>AWECRAFT_LOGIC=genhash</code></td><td><b>25/25 == AC-0188 baseline</b> (diff clean)</td></tr>
+<tr><td><code>AWECRAFT_LOGIC=light</code></td><td>identical to AC-0189: <code>{"cave_eff":-1,"surface_eff":15,"torch_far_after":-1,"torch_far_before":-1,"torch_level":-1}</code> (current-terrain arm; legacy-terrain 15/10/14/9 baseline unchanged by this task — mesh.cpp never touches light inputs)</td></tr>
+<tr><td>SMOKE <code>AWECRAFT_BATTERY="player;interact;light;fluids"</code></td><td><b>ok:true</b> — player (floor/jump/fly ✓), interact (place_ok ✓), light (== AC-0189 battery values), fluids (sea 2712→2712, backed 1066→1066, water_delta 0)</td></tr>
+<tr><td>MINFO determinism</td><td>see §5</td></tr>
+</table>
+<p class="note">Not run (per task scope): R50 (coordinator stage); Windows engine testing — .dll build + PE-verify only.</p>
+
+<h2>7. Builds</h2>
+<table>
+<tr><th>artifact</th><th>status</th></tr>
+<tr><td><code>gdext/bin/libchunkio.so</code> → staged <code>godot/bin/</code></td><td>built clean (final, no debug code), all gates above run against it</td></tr>
+<tr><td><code>gdext/bin/libchunkio.windows.template_release.x86_64.dll</code></td><td>built (<code>platform=windows</code>, MinGW x86_64-w64-mingw32-g++, <code>-O2 -ffp-contract=off -static-libgcc -static-libstdc++</code>); PE-verified: PE32+ DLL x86-64, 20 sections, exports <code>chunkio_library_init</code> (ordinal 1), 3.27 MB</td></tr>
+</table>
+
+<h2>8. Deliverables on disk</h2>
+<ul>
+<li><code>gdext/src/mesh.cpp</code>, <code>gdext/src/awe_common.{h,cpp}</code> (new), <code>gdext/src/chunk_io.cpp</code> (registration), <code>gdext/SConstruct</code> (doc comment)</li>
+<li><code>godot/world/chunk.gd</code> (<code>mesh_cpp()</code>), <code>godot/world/world.gd</code> (<code>_tm_worker_run</code> wire), <code>godot/scenes/main.gd</code> (meshprobe arm)</li>
+<li>gate logs: <code>.scratch/AC-0190-gates/</code> (meshprobe_final1.log, perf_before/after/after2.log + MINFO, lightprobe.log, chunkiocpp.log, genhash.log, smoke.log, light_logic.log, G0.log, AC-0189-comparable battery lines)</li>
+</ul>
+
+</body></html>

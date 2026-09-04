@@ -239,16 +239,24 @@ done
 
 prune_stamped() {
 	local keep=0 s
+	mkdir -p "$EXPORT_DIR/archive"
 	for s in $(ls -1 "$EXPORT_DIR" | grep -Eo '^AweCraft-[0-9]{8}-[0-9]{4}\.exe$' \
 			| sed 's/^AweCraft-//; s/\.exe$//' | sort -ru); do
 		if [ "$keep" -lt 3 ]; then
 			keep=$((keep + 1))
 			continue
 		fi
-		rm -f "$EXPORT_DIR/AweCraft-$s.exe" \
-			"$EXPORT_DIR/AweCraft-${s}_debug_console.exe" \
-			"$EXPORT_DIR/AweCraft-${s}_debug_console.console.exe"
-		echo "  retention: removed stamped pair $s (keeping newest 3)"
+		# move older than 3 to archive instead of deleting
+		for f in "$EXPORT_DIR/AweCraft-$s.exe" "$EXPORT_DIR/AweCraft-${s}_debug_console.exe" "$EXPORT_DIR/AweCraft-${s}_debug_console.console.exe" "$EXPORT_DIR/AweCraft-$s.zip" "$EXPORT_DIR/AweCraft-${s}_debug.zip"; do
+			[ -f "$f" ] && mv -f "$f" "$EXPORT_DIR/archive/" 2>/dev/null && echo "  archive: moved $(basename "$f") -> archive/"
+		done
+	done
+	# keep 50 newest in archive, prune older
+	local arch_keep=0
+	for s in $(ls -1 "$EXPORT_DIR/archive" 2>/dev/null | grep -Eo '^AweCraft-[0-9]{8}-[0-9]{4}\.exe$' | sed 's/^AweCraft-//; s/\.exe$//' | sort -ru); do
+		if [ "$arch_keep" -lt 50 ]; then arch_keep=$((arch_keep + 1)); continue; fi
+		rm -f "$EXPORT_DIR/archive/AweCraft-$s.exe" "$EXPORT_DIR/archive/AweCraft-${s}_debug_console.exe" "$EXPORT_DIR/archive/AweCraft-${s}_debug_console.console.exe" "$EXPORT_DIR/archive/AweCraft-$s.zip" "$EXPORT_DIR/archive/AweCraft-${s}_debug.zip"
+		echo "  archive retention: removed $s (keeping 50)"
 	done
 }
 prune_stamped
@@ -273,7 +281,9 @@ sed 's/^/    /' "$EXPORT_DIR/BUILD.txt"
 # AC-0206: zip exe + dll side-by-side for one-file download
 ZIP_STAMPED="$EXPORT_DIR/AweCraft-$STAMP.zip"
 ZIP_LATEST="$EXPORT_DIR/AweCraft.zip"
-( cd "$EXPORT_DIR" && rm -f "$ZIP_STAMPED" "$ZIP_LATEST" && zip -j -q "$ZIP_STAMPED" "AweCraft-$STAMP.exe" 2>/dev/null; for dll in libchunkio*.dll; do [ -f "$dll" ] && zip -j -q "$ZIP_STAMPED" "$dll" 2>/dev/null; done; zip -j -q "$ZIP_LATEST" "AweCraft.exe" 2>/dev/null; for dll in libchunkio*.dll; do [ -f "$dll" ] && zip -j -q "$ZIP_LATEST" "$dll" 2>/dev/null; done; [ -f "$ZIP_STAMPED" ] && echo "  zip: $(basename "$ZIP_STAMPED") ($(stat -c%s "$ZIP_STAMPED") bytes) + $(basename "$ZIP_LATEST") ($(stat -c%s "$ZIP_LATEST") bytes)" || echo "  zip: no dll yet, exe only" )
+ZIP_DBG_STAMPED="$EXPORT_DIR/AweCraft-${STAMP}_debug.zip"
+ZIP_DBG_LATEST="$EXPORT_DIR/AweCraft_debug.zip"
+( cd "$EXPORT_DIR" && rm -f "$ZIP_STAMPED" "$ZIP_LATEST" "$ZIP_DBG_STAMPED" "$ZIP_DBG_LATEST" && zip -j -q "$ZIP_STAMPED" "AweCraft-$STAMP.exe" 2>/dev/null; for dll in libchunkio*.dll; do [ -f "$dll" ] && zip -j -q "$ZIP_STAMPED" "$dll" 2>/dev/null; done; zip -j -q "$ZIP_LATEST" "AweCraft.exe" 2>/dev/null; for dll in libchunkio*.dll; do [ -f "$dll" ] && zip -j -q "$ZIP_LATEST" "$dll" 2>/dev/null; done; zip -j -q "$ZIP_DBG_STAMPED" "AweCraft-${STAMP}_debug_console.exe" "AweCraft-${STAMP}_debug_console.console.exe" 2>/dev/null; for dll in libchunkio*.dll; do [ -f "$dll" ] && zip -j -q "$ZIP_DBG_STAMPED" "$dll" 2>/dev/null; done; zip -j -q "$ZIP_DBG_LATEST" "AweCraft_debug_console.exe" "AweCraft_debug_console.console.exe" 2>/dev/null; for dll in libchunkio*.dll; do [ -f "$dll" ] && zip -j -q "$ZIP_DBG_LATEST" "$dll" 2>/dev/null; done; [ -f "$ZIP_STAMPED" ] && echo "  zip: $(basename "$ZIP_STAMPED") ($(stat -c%s "$ZIP_STAMPED") bytes) + $(basename "$ZIP_LATEST") ($(stat -c%s "$ZIP_LATEST") bytes) + $(basename "$ZIP_DBG_LATEST") ($(stat -c%s "$ZIP_DBG_LATEST") bytes)" || echo "  zip: no dll yet, exe only" )
 echo "--- artifacts ---"
 ls -la "$EXPORT_DIR"
 
@@ -302,13 +312,12 @@ print_urls() {
 	echo "  stamped zip ($STAMP):"
 	echo "    http://localhost:$port/AweCraft-$STAMP.zip"
 	echo "    http://$ip:$port/AweCraft-$STAMP.zip"
+	echo "  debug zip (exe + console wrapper + dll — double-click .console.exe):"
+	echo "    http://localhost:$port/AweCraft_debug.zip"
+	echo "    http://$ip:$port/AweCraft_debug.zip"
 	echo "  exe only (needs dll next to it):"
 	echo "    http://localhost:$port/AweCraft.exe + libchunkio.windows.template_release.x86_64.dll"
 	echo "    http://$ip:$port/AweCraft.exe"
-	echo "  debug console (download BOTH files, same folder on the"
-	echo "    Windows machine; double-click the wrapper for logs):"
-	echo "    http://localhost:$port/AweCraft_debug_console.exe"
-	echo "    http://localhost:$port/AweCraft_debug_console.console.exe"
 	echo "    (file listing: http://$ip:$port/)"
 }
 

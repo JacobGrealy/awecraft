@@ -57,101 +57,19 @@
 #include <mutex>
 #include <vector>
 
+#include "awe_common.h"
+
 using namespace godot;
 
 namespace awelight {
 
-constexpr int S3 = 4096; // slab cells (16x16)
+// AC-0190: the slab view decode moved to awe_common.cpp (shared with the
+// mesh module) — identical verified code, same namespace-qualified names.
+using awecommon::S3;
+using awecommon::pba_from;
+using awecommon::slab_views;
+
 constexpr int SKY_FULL = 15;
-
-// ---------------------------------------------------------------------------
-// Slab view decode — identical to chunk_io.cpp (slab_flat / _slab_flat):
-// null = empty view; n==1 = uniform fill; n==0 = raw 4096 copy; else
-// palette unpack (MSB-first bit indices over the palette).
-// ---------------------------------------------------------------------------
-
-static inline int slab_getbits(const uint8_t *i, int isize, int bits, int pos) {
-	int bo = (pos * bits) >> 3;
-	int sh = (pos * bits) & 7;
-	uint32_t w = (uint32_t)i[bo] << 8;
-	if (bo + 1 < isize)
-		w |= i[bo + 1];
-	return (w >> (16 - sh - bits)) & ((1u << bits) - 1);
-}
-
-static std::vector<uint8_t> slab_unpack(const uint8_t *i, int isize, int bits, const uint8_t *p) {
-	std::vector<uint8_t> out(S3, 0);
-	if (bits == 1) {
-		int j = 0;
-		for (int k = 0; k < isize; k++) {
-			uint32_t b = i[k];
-			for (int r = 0; r < 8; r++) {
-				out[j] = p[(b >> (7 - r)) & 1];
-				j++;
-			}
-		}
-	} else if (bits == 2) {
-		int j = 0;
-		for (int k = 0; k < isize; k++) {
-		uint32_t b = i[k];
-			for (int r = 0; r < 4; r++) {
-				out[j] = p[(b >> (6 - 2 * r)) & 3];
-				j++;
-			}
-		}
-	} else if (bits == 3) {
-		int j = 0;
-		int k = 0;
-		while (j < S3) {
-			uint32_t w = (uint32_t)i[k] << 16;
-			if (k + 1 < isize)
-				w |= (uint32_t)i[k + 1] << 8;
-			if (k + 2 < isize)
-				w |= i[k + 2];
-			for (int r = 0; r < 8; r++) {
-				out[j] = p[(w >> (21 - 3 * r)) & 7];
-				j++;
-			}
-			k += 3;
-		}
-	} else if (bits == 4) {
-		for (int k = 0; k < isize; k++) {
-			uint32_t b = i[k];
-			out[2 * k] = p[(b >> 4) & 15];
-			out[2 * k + 1] = p[b & 15];
-		}
-	} else {
-		for (int j = 0; j < S3; j++)
-			out[j] = p[slab_getbits(i, isize, bits, j)];
-	}
-	return out;
-}
-
-// Per-slab flat view (null slab = empty). data[k] is null | {n,b,p,i,nz}.
-static void slab_views(const Array &p_data, std::vector<std::vector<uint8_t>> &out) {
-	out.assign(p_data.size(), std::vector<uint8_t>());
-	for (int k = 0; k < (int)out.size(); k++) {
-		Variant v = p_data[k];
-		if (v.get_type() != Variant::DICTIONARY)
-			continue;
-		Dictionary d = v;
-		int n = d.get("n", 0);
-		if (n == 1) {
-			PackedByteArray p = d.get("p", PackedByteArray());
-			uint8_t val = p.size() > 0 ? p[0] : 0;
-			out[k].assign(S3, val);
-		} else if (n == 0) {
-			PackedByteArray i = d.get("i", PackedByteArray());
-			if (i.size() > 0)
-				out[k].assign(i.ptr(), i.ptr() + i.size());
-		} else {
-			PackedByteArray p = d.get("p", PackedByteArray());
-			PackedByteArray i = d.get("i", PackedByteArray());
-			int b = d.get("b", 0);
-			out[k] = slab_unpack(i.ptr(), (int)i.size(), b, p.ptr());
-		}
-	}
-}
 
 // ---------------------------------------------------------------------------
 // The block tables (value copies of the pre-warmed Lighting._att/_glow).
@@ -476,16 +394,36 @@ static PullResult compute_pull(const Array &p_data, int h, const Array &p_blk_st
 }
 
 // ---------------------------------------------------------------------------
-// Registered class.
+// AC-0190: cross-module bridge (declared in awe_common.h) — the mesh module
+// (src/mesh.cpp) recomputes light through THIS SAME kernel, so the C++
+// mesh's light is byte-identical to the AweLighting class path.
 // ---------------------------------------------------------------------------
 
-static PackedByteArray pba_from(const std::vector<uint8_t> &v) {
-	PackedByteArray out;
-	out.resize((int)v.size());
-	if (!v.empty())
-		std::memcpy(out.ptrw(), v.data(), v.size());
+PullOut pull(const Array &p_data, int p_h, const Array &p_blk_strips, const Array &p_blk_strips_b, int p_top, const uint8_t *p_att, int p_att_sz, const uint8_t *p_glow, int p_glow_sz, std::vector<uint32_t> *p_r_flood) {
+	Tables t;
+	if (p_att != nullptr) {
+		t.att = p_att;
+		t.att_sz = p_att_sz;
+	}
+	if (p_glow != nullptr) {
+		t.glow = p_glow;
+		t.glow_sz = p_glow_sz;
+	}
+	std::vector<uint32_t> floods;
+	PullResult r = compute_pull(p_data, p_h, p_blk_strips, p_blk_strips_b, p_top, t, floods);
+	if (p_r_flood != nullptr)
+		p_r_flood->insert(p_r_flood->end(), floods.begin(), floods.end());
+	PullOut out;
+	out.eff = std::move(r.eff);
+	out.mask = std::move(r.mask);
+	out.ring = std::move(r.ring);
+	out.blk_src = r.blk_src;
 	return out;
 }
+
+// ---------------------------------------------------------------------------
+// Registered class.
+// ---------------------------------------------------------------------------
 
 class AweLighting : public RefCounted {
 	GDCLASS(AweLighting, RefCounted)

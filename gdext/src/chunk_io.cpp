@@ -31,10 +31,17 @@ using namespace godot;
 // AC-0189: the lighting module (src/lighting.cpp) joins the same library —
 // AweLighting (the pull kernel + bucket-16 flood port) registers from the
 // same initializer (namespace awelight, defined in lighting.cpp).
+// AC-0190: the mesh module (src/mesh.cpp) joins the same library — AweMesh
+// (the build_accs port + greedy merged emit + bake box + snap + the C++
+// paletted-slab decode) registers from the same initializer (namespace
+// awemesh, defined in mesh.cpp).
 namespace awegen {
 void register_classes();
 }
 namespace awelight {
+void register_classes();
+}
+namespace awemesh {
 void register_classes();
 }
 
@@ -577,6 +584,7 @@ void initialize_chunkio_module(ModuleInitializationLevel p_level) {
 	GDREGISTER_CLASS(ChunkIOPalette);
 	awegen::register_classes(); // AC-0188: AweGen (coarse 3D density gen)
 	awelight::register_classes(); // AC-0189: AweLighting (pull kernel + flood)
+	awemesh::register_classes(); // AC-0190: AweMesh (build_accs + greedy emit)
 }
 
 void uninitialize_chunkio_module(ModuleInitializationLevel p_level) {

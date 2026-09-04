@@ -39,6 +39,7 @@ if platform == "windows":
     env["SHLINK"] = prefix + "g++"
     env["SHLIBPREFIX"] = "lib"
     env["SHLIBSUFFIX"] = ".dll"
+    env.Append(LINKFLAGS=["-static-libgcc", "-static-libstdc++"])
     lib_base = os.path.join(godot_cpp, "bin", "libgodot-cpp.%s.%s.x86_64" % (platform, target))
     for ext in (".a", ".lib"):
         if os.path.exists(lib_base + ext):
@@ -63,6 +64,9 @@ env.Append(LIBS=[lib])
 # (chunkio_library_init) registers ChunkIOPalette + AweGen.
 # AC-0189: src/lighting.cpp (AweLighting, the pull kernel + bucket-16
 # flood) joins the same Glob/entry — registers AweLighting alongside.
+# AC-0190: src/mesh.cpp (AweMesh, the build_accs port + the C++ paletted
+# slab decode) + src/awe_common.{h,cpp} (the shared slab decode + the
+# awelight::pull bridge) join the same Glob/entry — registers AweMesh.
 library = env.SharedLibrary(libname, source=Glob("src/*.cpp"))
 env.NoCache(library)
 Default(library)

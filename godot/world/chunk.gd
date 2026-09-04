@@ -109,6 +109,26 @@ static func _zeros(n: int) -> Array:
 	for i in range(n):
 		out.append(0)
 	return out
+# AC-0190: C++ mesh toggle (gdext/src/mesh.cpp — AweMesh, the LOSSLESS
+# port of this file's build_accs pipeline: slab decode (the AC-0203
+# paletted slabs are unpacked in C++, int-lookup fast), bake box, snap,
+# ro scan, greedy merged emit). Workers pass the slab arrays + nbs + ctx +
+# ms + eff as value copies (no Data/Game deref on the worker).
+# AWECRAFT_MESHCPP=0 forces the GDScript path (fallback / A-B);
+# AWECRAFT_MESHCPP=1 or unset = C++ whenever the gdext library registered
+# AweMesh (wired at world.gd _tm_worker_run).
+static var _mesh_cpp: Variant = null
+static var _mesh_cpp_done := false
+
+static func mesh_cpp() -> Variant:
+	if not _mesh_cpp_done:
+		_mesh_cpp_done = true
+		if OS.get_environment("AWECRAFT_MESHCPP") == "0":
+			_mesh_cpp = null
+		elif ClassDB.class_exists("AweMesh"):
+			_mesh_cpp = ClassDB.instantiate("AweMesh")
+	return _mesh_cpp
+
 var slabs: Array = []
 var perf_slab_body_builds := PackedInt32Array()
 var perf_slab_body_ms := PackedFloat32Array()

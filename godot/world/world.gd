@@ -1394,7 +1394,19 @@ func _tm_worker_run(skey: int) -> void:
 		_tm_concur += 1
 		if _tm_concur > _tm_concur_peak:
 			_tm_concur_peak = _tm_concur
-	var res = ChunkScript.build_accs(entry["data"], entry["fl"], int(entry["cx"]), int(entry["cz"]), entry["nbs"], entry["ctx"], entry["ms"], entry["eff"], int(entry.get("si0", 0)), int(entry.get("si1", -1)), int(entry.get("d_off", 0)))
+	# AC-0190: C++ meshing (gdext/src/mesh.cpp — AweMesh.build_accs, the
+	# LOSSLESS port of ChunkScript.build_accs: slab decode (paletted slabs
+	# unpacked in C++), bake box, snap, ro scan, greedy merged emit). The
+	# worker passes the same value-copy inputs (data/fl/nbs/ctx/ms/eff) +
+	# the pre-warmed _att/_glow tables (the C++ path self-lights an empty
+	# eff through the SAME C++ pull kernel — awelight::pull). AWECRAFT_
+	# MESHCPP=0 or the library not loaded = the GDScript path (fallback).
+	var mc: Variant = ChunkScript.mesh_cpp()
+	var res: Dictionary
+	if mc != null:
+		res = mc.build_accs(entry["data"], entry["fl"], int(entry["cx"]), int(entry["cz"]), entry["nbs"], entry["ctx"], entry["ms"], entry["eff"], int(entry.get("si0", 0)), int(entry.get("si1", -1)), int(entry.get("d_off", 0)), Lighting._att, Lighting._glow)
+	else:
+		res = ChunkScript.build_accs(entry["data"], entry["fl"], int(entry["cx"]), int(entry["cz"]), entry["nbs"], entry["ctx"], entry["ms"], entry["eff"], int(entry.get("si0", 0)), int(entry.get("si1", -1)), int(entry.get("d_off", 0)))
 	if timing:
 		_tm_concur -= 1
 	if bool(entry.get("epool", false)):
