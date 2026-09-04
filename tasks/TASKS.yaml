@@ -5,7 +5,6 @@ meta:
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html +
     <id>-results.html + screenshots
 queue:
-- AC-0212
 - AC-0208
 - AC-0175
 - AC-0199
@@ -7498,11 +7497,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-04T03:12
   updated_at: 2026-09-04T03:12
-  completed_at: null
+  completed_at: 2026-09-03T14:00
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player moving the camera inside a chunk I want no extra
@@ -7515,6 +7514,11 @@ intake:
     moving inside chunk no 5fps drop, probe counters updated, no pop.'
   comments:
   - id: 1
+
+  - id: 2
+    created_at: '2026-09-03T14:00:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Gated, not deleted: the manual _frustum_cull_pass (AC-0109) is kept intact, now behind a new toggle AWECRAFT_FRUSTUM (manual/1/on = AC-0109 pass; anything else/unset = engine cull, NEW DEFAULT). _process in engine mode = one bool check, the pass never runs. R16 (new arm AWECRAFT_LOGIC=r16, r16 build 797/797 + moving inside chunk, --fixed-fps 600): moving-phase effective fps before->after = 2 -> 200 (501 -> 5 ms p50; +198 fps — the manual pass re-evaluated all 933 resident r16 chunks every camera-change frame, ~0.5 s each). No-5fps-drop gate PASS (a gain). Counters: 901 passes/12821 flips -> 0/0. Probe counters updated: new perf_cull_passes/perf_cull_flips (world.gd) reported by both arms; the spin arm is cull-lane-aware (engine lane replicates the render server exact AABB-vs-frustum test) + new per-instance no-pop counters. No pop: spin 360 deg — inst_transitions 0 in both lanes, inst_vis_end==start (engine 55/55, manual 123/123; margin widens the visible set, no flicker), queue_flat true, ok:true both. G0 EXIT 0, 0 SCRIPT ERROR. SMOKE ok:true x4 (values identical to AC-0211 baseline). No regression: chunkiocpp md5-identical, genhash 25/25 == AC-0188, light surface 15, meshprobe/stripsprobe/pullprobe 100%. R50 not run (PENDING per AC-0206). See tasks/AC-0212/AC-0212-results.html.'
     created_at: 2026-09-04T03:12
     updated_at: null
     text: '[user] try removing frustum overhead per 2026-09-03'

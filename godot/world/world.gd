@@ -63,10 +63,22 @@ const DRAIN_FRAME_BUDGET_US := 30000
 const DRAIN_MS_DEFAULT := 30
 const REC_SLICE_BUDGET_MS := 8
 const REC_UNITS_PER_FRAME := 2048
-# AC-0109: per-frame frustum cull of built chunk slab instances. Meters — a
-# slab is hidden only once fully past the frustum expanded by this margin, so
-# show/hide transitions happen off-screen (no pop-in). Engine 4.7.1 exposes no
-# per-instance culling margin (verified), so the test lives here in GDScript.
+# AC-0109 margin (manual lane only, AC-0212). Meters — a slab is hidden only
+# once fully past the frustum expanded by this margin, so show/hide transitions
+# happen off-screen (no pop-in).
+# AC-0212: the manual per-frame pass is now OFF by default — the engine's
+# automatic per-instance frustum culling of every MeshInstance3D (render server,
+# zero script cost, exact AABB-vs-frustum, no margin) is the default cull. A
+# slab instance crossing the frustum boundary enters/leaves exactly at the view
+# edge — that is normal rendering, not a pop-in (the spin probe's
+# transitions==0 gate measures on-screen flicker, which stays 0: each chunk's
+# visible arc at r4 is ~90° ≫ the 8-step (24°) flicker window). The manual
+# pass (this margin, slab-granular) is kept intact behind the toggle for A/B:
+#   AWECRAFT_FRUSTUM=manual|1|on  -> the AC-0109 per-frame pass (legacy default)
+#   AWECRAFT_FRUSTUM=engine|0|off|"" -> engine cull (NEW DEFAULT)
+#   legacy AWECRAFT_FRUSTUM_CULL=0 still disables the manual pass when
+#   AWECRAFT_FRUSTUM is unset; AWECRAFT_ONLY (probe-only visibility filter)
+#   always wins (the manual pass defers, as at AC-0109).
 const FRUSTUM_CULL_MARGIN := 32.0
 const LOD_HYS_FULL_MAX := 11
 const LOD_HYS_COARSE_MIN := 14
@@ -227,6 +239,18 @@ var _drain_win_acc := 0
 # AC-0109 cull-pass scratch (world-level only — no per-chunk state, no
 # per-frame allocations growing with chunk count; all fixed-size, filled
 # once per camera-transform change).
+# AC-0212: cull_mode = the active frustum-cull source. "engine" (DEFAULT) —
+# rely on the render server's automatic per-MeshInstance3D frustum cull
+# (no GDScript pass at all). "manual" — the AC-0109 per-frame pass below
+# (kept for A/B + fallback; set via AWECRAFT_FRUSTUM, see the margin const).
+var cull_mode := "engine"
+# AC-0109/AC-0212 probe counters (harness-readable, updated by whichever
+# lane is active). Engine mode: both stay 0 (the pass never runs — that IS
+# the counter reading: no manual cull work). Manual mode: passes = full
+# re-evaluations (camera-transform-change frames), flips = per-instance
+# visible state changes written.
+var perf_cull_passes := 0
+var perf_cull_flips := 0
 var _cull_enabled := false
 var _cull_cam_xform := Transform3D()
 var _cull_planes: Array = []
@@ -475,9 +499,29 @@ func _ready() -> void:
 	if gb != "" and gb.to_int() >= 0:
 		gen_budget_ms = gb.to_int()
 	fluid_sleep = OS.get_environment("AWECRAFT_FLUID_SLEEP") != "0"
-	# AC-0109 kill switch (default on); AWECRAFT_ONLY set = probe-only
-	# visibility filter (main.gd) must stay authoritative, so cull defers.
-	_cull_enabled = OS.get_environment("AWECRAFT_FRUSTUM_CULL") != "0" and OS.get_environment("AWECRAFT_ONLY") == ""
+	# AC-0109 kill switch; AC-0212: ENGINE CULL IS THE NEW DEFAULT.
+	# AWECRAFT_FRUSTUM (new, authoritative when set): manual|1|on -> the
+	# AC-0109 per-frame pass; engine|0|off (or empty string) -> engine cull.
+	# When unset, the legacy AWECRAFT_FRUSTUM_CULL=0 still disables the manual
+	# pass (any other legacy value = explicit manual opt-in). AWECRAFT_ONLY
+	# set = probe-only visibility filter (main.gd) must stay authoritative, so
+	# the manual pass defers either way.
+	var fr := OS.get_environment("AWECRAFT_FRUSTUM")
+	var fc := OS.get_environment("AWECRAFT_FRUSTUM_CULL")
+	var manual_want: bool
+	if fr != "":
+		# New toggle is authoritative: only an EXPLICIT manual value enables
+		# the pass — anything else (engine/0/off/unknown) = engine cull.
+		manual_want = fr == "manual" or fr == "1" or fr == "on"
+	elif fc != "":
+		# Legacy AC-0109 switch, only when explicitly set (=0 disables,
+		# any other value = explicit manual opt-in).
+		manual_want = fc != "0"
+	else:
+		# Both unset = the AC-0212 default: ENGINE CULL.
+		manual_want = false
+	_cull_enabled = manual_want and OS.get_environment("AWECRAFT_ONLY") == ""
+	cull_mode = "manual" if _cull_enabled else "engine"
 	tick_time = OS.get_environment("AWECRAFT_TICKTIME") == "1"
 	_fluidprobe = OS.get_environment("AWECRAFT_FLUIDPROBE") == "1"
 	_frameprobe = OS.get_environment("AWECRAFT_FRAMEPROBE") == "1"
@@ -604,6 +648,7 @@ func _frustum_cull_pass() -> void:
 	if xf == _cull_cam_xform:
 		return
 	_cull_cam_xform = xf
+	perf_cull_passes += 1  # AC-0212 probe counter: a real re-evaluation
 	_cull_frustum_planes(cam)
 	var m := FRUSTUM_CULL_MARGIN
 	var planes: Array = _cull_planes
@@ -701,12 +746,15 @@ func _cull_set_vis(s, vis: bool) -> void:
 	var mi: MeshInstance3D = s.mesh_instance
 	if mi != null and mi.visible != vis:
 		mi.visible = vis
+		perf_cull_flips += 1  # AC-0212 probe counter
 	var fi: MeshInstance3D = s.fluid_instance
 	if fi != null and fi.visible != vis:
 		fi.visible = vis
+		perf_cull_flips += 1
 	var fa: MeshInstance3D = s.flora_instance
 	if fa != null and fa.visible != vis:
 		fa.visible = vis
+		perf_cull_flips += 1
 
 var _prof_ring: Array = []
 
@@ -750,7 +798,10 @@ func _process(_delta: float) -> void:
 		_tm_ctx = ChunkScript.make_ctx()
 		_tm_ctx_atlas = _at
 		_tm_ms_full = ChunkScript._merge_atlas()
-	_frustum_cull_pass()
+	# AC-0212: engine mode = no manual pass at all (the render server culls
+	# each MeshInstance3D automatically); one bool check per frame.
+	if _cull_enabled:
+		_frustum_cull_pass()
 	# threadmesh_inflight keeps this running while mesh tasks are in flight
 	# even when every bookkeeping list is drained (else the poll never runs).
 	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty() and threadmesh_inflight.is_empty() and _io_read_inflight.is_empty() and _io_write_inflight.is_empty() and not _rec_pending and _bl_want.is_empty() and _col_pending.is_empty() and edit_front.is_empty():

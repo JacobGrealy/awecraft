@@ -1316,6 +1316,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			player = _spawn_player()
 			await _spin_test(spawn)
 			return
+		if logic == "r16":
+			await _r16_test(spawn)
+			return
 		if logic == "atlas":
 			world.collision_enabled = false
 			world.render_radius = 0
@@ -6157,9 +6160,19 @@ func _spin_test(spawn: Vector3) -> void:
 	var cam: Camera3D = player.camera
 	get_window().size = Vector2i(1280, 720)
 	var eye := cam.global_position
+	# AC-0212: cull-lane awareness. "manual" (AWECRAFT_FRUSTUM=manual): the
+	# AC-0109 per-frame pass hides instances via .visible — the probe reads
+	# that (legacy behavior, unchanged). "engine" (NEW DEFAULT): .visible
+	# stays true and the render server culls each MeshInstance3D by its mesh
+	# AABB vs the camera frustum (no margin) — the probe replicates that
+	# exact test per step (see _aabb_fully_outside) so the same counters
+	# measure the engine cull instead of the removed manual pass.
+	var manual: bool = world.cull_mode == "manual"
 	var chunk_rows := []
 	var built_n := 0
 	var total_built := 0
+	var instances_total := 0
+	var instances_hidden := 0
 	for key in world.chunks:
 		var c: Node3D = world.chunks[key]
 		if absi(int(c.cx)) > 4 or absi(int(c.cz)) > 4 or not c.mesh_built:
@@ -6176,7 +6189,14 @@ func _spin_test(spawn: Vector3) -> void:
 					var arrs := am.surface_get_arrays(su)
 					v += (arrs[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
 				total_built += v
-				row.append([inst, v])
+				instances_total += 1
+				if not inst.visible:
+					instances_hidden += 1
+				# slab instances are chunk-origin children (pure translation:
+				# chunk at (cx*16,0,cz*16), instance at local origin) ->
+				# world AABB = mesh AABB + instance global position.
+				var lm: AABB = inst.mesh.get_aabb()
+				row.append([inst, v, AABB(lm.position + inst.global_position, lm.size)])
 		chunk_rows.append(row)
 	if built_n == 0:
 		Debug.result({"mode": "spin", "seed": Game.world_seed, "radius": 4, "ok": false, "err": "no built chunks", "settled_frames": settled})
@@ -6192,11 +6212,26 @@ func _spin_test(spawn: Vector3) -> void:
 	var prev_vis := []
 	var last_invis := {}
 	var queue_samples := []
+	# AC-0212: per-instance counters (the no-pop signal at H=384, where the
+	# chunk-level "ALL instances visible" definition is degenerate — a 24-slab
+	# column is never fully inside the frustum, so vis_* stays 0 in BOTH
+	# lanes). inst_vis_* = visible instance count at each key pose;
+	# inst_transitions = an instance culled then back within the 8-step
+	# window (on-screen pop-in/out).
+	var inst_vis_start := -1
+	var inst_vis_sidelook := -1
+	var inst_vis_bottom := -1
+	var inst_vis_end := -1
+	var inst_transitions := 0
+	var prev_inst_vis := []
+	var last_inst_invis := {}
 	# The cull pass may have already latched the camera transform before any
 	# chunks existed (world starts before the player/camera) — force a fresh
 	# evaluation at the first probe pose so step 0 and the final return pose
-	# are both measured through the pass.
-	world.invalidate_cull_cache()
+	# are both measured through the pass (manual lane only; the engine lane
+	# culls at render time from the live camera pose).
+	if manual:
+		world.invalidate_cull_cache()
 	for step in range(SPIN_STEPS + 1):
 		var set_xf := Transform3D(Basis(Vector3.UP, float(step) * yaw_step), eye)
 		cam.global_transform = set_xf
@@ -6207,25 +6242,40 @@ func _spin_test(spawn: Vector3) -> void:
 			# pass one full frame to evaluate T0 before sampling.
 			await get_tree().process_frame
 		queue_samples.append(int(world.queue_size))
+		# AC-0212: the probe's per-step "is it on screen" source.
+		var planes: Array = []
+		if not manual:
+			planes = _spin_frustum_planes(cam)
 		var verts_vis := 0
 		var vis_count := 0
+		var insts_seen := 0
 		var step_vis := []
+		var step_inst_vis := []
 		for ci in range(built_n):
 			var all_vis := true
 			for e in chunk_rows[ci]:
 				var inst = e[0]
-				if not is_instance_valid(inst) or not inst.visible:
+				var iv: bool = is_instance_valid(inst) and _spin_inst_vis(e, manual, planes)
+				step_inst_vis.append(iv)
+				if iv:
+					insts_seen += 1
+					# legacy verts semantics: a chunk's verts count only while
+					# its running all-visible state holds (stops at the first
+					# hidden instance).
+					if all_vis:
+						verts_vis += int(e[1])
+				else:
 					all_vis = false
-					break
-				verts_vis += int(e[1])
 			step_vis.append(all_vis)
 			if all_vis:
 				vis_count += 1
 		if step == 0:
 			vis_start = vis_count
 			verts_start = verts_vis
+			inst_vis_start = insts_seen
 		elif step == SPIN_STEPS / 4:
 			verts_sideways = verts_vis
+			inst_vis_sidelook = insts_seen
 		var flips := []
 		if step >= 1:
 			for ci in range(built_n):
@@ -6237,19 +6287,33 @@ func _spin_test(spawn: Vector3) -> void:
 					if li >= step - SPIN_FLICKER_WINDOW:
 						transitions += 1
 					last_invis[ci] = step
+			# AC-0212: per-instance flicker (the no-pop signal that stays
+			# meaningful at H=384, where no 24-slab column is ever FULLY in
+			# the frustum, so the chunk-level all-visible counter is degenerate).
+			for ii in range(step_inst_vis.size()):
+				if not step_inst_vis[ii] and prev_inst_vis[ii]:
+					var lii: int = last_inst_invis.get(ii, -9999)
+					if lii >= step - SPIN_FLICKER_WINDOW:
+						inst_transitions += 1
+					last_inst_invis[ii] = step
 		prev_vis = step_vis
+		prev_inst_vis = step_inst_vis
 		if OS.get_environment("AWECRAFT_SPINDBG") != "":
 			print("SPINDBG step=%d vis=%d verts=%d q=%d lp=%d tmi=%d ld=%d tr=%d flips=%s" % [step, vis_count, verts_vis, int(world.queue_size), int(world.light_pending.size()), int(world.threadmesh_inflight.size()), int(world.light_dirty.size()), int(world.tex_refresh.size()), flips])
 	# bottom look: pitch -90 (straight down), 3 frames for the cull pass
 	cam.global_transform = Transform3D(Basis(Vector3.RIGHT, -PI / 2.0), eye)
 	for i in 3:
 		await get_tree().process_frame
-	vis_bottom = _spin_vis_count(chunk_rows)
+	var bplanes: Array = _spin_frustum_planes(cam) if not manual else []
+	vis_bottom = _spin_vis_count(chunk_rows, manual, bplanes)
+	inst_vis_bottom = _spin_inst_vis_count(chunk_rows, manual, bplanes)
 	# back to the start orientation, 3 frames, state must be restored
 	cam.global_transform = Transform3D(Basis(Vector3.UP, 0.0), eye)
 	for i in 3:
 		await get_tree().process_frame
-	vis_end = _spin_vis_count(chunk_rows)
+	var eplanes: Array = _spin_frustum_planes(cam) if not manual else []
+	vis_end = _spin_vis_count(chunk_rows, manual, eplanes)
+	inst_vis_end = _spin_inst_vis_count(chunk_rows, manual, eplanes)
 	var qmin: int = int(queue_samples[0])
 	var qmax: int = int(queue_samples[0])
 	for q in queue_samples:
@@ -6257,13 +6321,33 @@ func _spin_test(spawn: Vector3) -> void:
 		qmax = maxi(qmax, int(q))
 	var queue_flat: bool = qmin == qmax
 	var verts_drop: bool = verts_sideways < total_built
-	var ok: bool = transitions == 0 and verts_drop and vis_end == vis_start and queue_flat
+	# AC-0212: the gate gains the per-instance no-pop pair (both lanes,
+	# any world height): no instance flicker + the return pose restores the
+	# same visible-instance set as step 0.
+	var ok: bool = transitions == 0 and inst_transitions == 0 and verts_drop \
+		and vis_end == vis_start and inst_vis_end == inst_vis_start and queue_flat
 	Debug.result({
 		"mode": "spin",
 		"seed": Game.world_seed,
 		"radius": 4,
 		"ok": ok,
+		# AC-0212: cull lane + the world's cull counters (manual lane:
+		# passes = camera-change re-evaluations, flips = visibility writes;
+		# engine lane: both 0 — the manual pass never runs, which is the
+		# counter reading that proves the per-frame cull cost is gone).
+		"cull_mode": world.cull_mode,
+		"manual_pass": manual,
+		"perf_cull_passes": int(world.perf_cull_passes),
+		"perf_cull_flips": int(world.perf_cull_flips),
+		"instances_total": instances_total,
+		"instances_hidden": instances_hidden,
 		"transitions": transitions,
+		# AC-0212: per-instance no-pop counters (H=384 meaningful)
+		"inst_transitions": inst_transitions,
+		"inst_vis_start": inst_vis_start,
+		"inst_vis_sidelook": inst_vis_sidelook,
+		"inst_vis_bottom": inst_vis_bottom,
+		"inst_vis_end": inst_vis_end,
 		"vis_start": vis_start,
 		"vis_bottom": vis_bottom,
 		"vis_end": vis_end,
@@ -6279,18 +6363,230 @@ func _spin_test(spawn: Vector3) -> void:
 	})
 	get_tree().quit()
 
-func _spin_vis_count(chunk_rows: Array) -> int:
+func _spin_vis_count(chunk_rows: Array, manual: bool, planes: Array) -> int:
 	var vis_count := 0
 	for row in chunk_rows:
 		var all_vis := true
 		for e in row:
 			var inst = e[0]
-			if not is_instance_valid(inst) or not inst.visible:
+			if not is_instance_valid(inst) or not _spin_inst_vis(e, manual, planes):
 				all_vis = false
 				break
 		if all_vis:
 			vis_count += 1
 	return vis_count
+
+# AC-0212: visible-instance count at a pose (the H=384-meaningful version of
+# the chunk-level counter — a 24-slab column is never fully in the frustum).
+func _spin_inst_vis_count(chunk_rows: Array, manual: bool, planes: Array) -> int:
+	var n := 0
+	for row in chunk_rows:
+		for e in row:
+			if is_instance_valid(e[0]) and _spin_inst_vis(e, manual, planes):
+				n += 1
+	return n
+
+# AC-0212: per-instance "is it on screen" per the ACTIVE cull lane. Manual:
+# the AC-0109 pass wrote .visible. Engine: replicate the render server's
+# exact test — the instance stays on screen unless its world AABB is fully
+# outside one of the six camera-frustum planes (no margin).
+func _spin_inst_vis(e: Array, manual: bool, planes: Array) -> bool:
+	if manual:
+		return e[0].visible
+	return not _aabb_fully_outside(e[2], planes)
+
+# AC-0212: margin-free 6-plane construction — same camera math as world.gd
+# _cull_frustum_planes (AC-0109), which the engine's per-instance cull uses.
+func _spin_frustum_planes(cam: Camera3D) -> Array:
+	var B := cam.global_transform.basis
+	var O := cam.global_transform.origin
+	var sz := get_viewport().get_visible_rect().size
+	var aspect := float(sz.x) / maxf(float(sz.y), 1.0)
+	var tv := tan(deg_to_rad(float(cam.fov)) * 0.5)
+	var th := tv * aspect
+	var nr := maxf(float(cam.near), 0.01)
+	var fr := maxf(float(cam.far), nr + 1.0)
+	var cn0 := O + B * Vector3(-th * nr, -tv * nr, -nr)
+	var cn1 := O + B * Vector3(th * nr, -tv * nr, -nr)
+	var cn2 := O + B * Vector3(-th * nr, tv * nr, -nr)
+	var cn3 := O + B * Vector3(th * nr, tv * nr, -nr)
+	var cf0 := O + B * Vector3(-th * fr, -tv * fr, -fr)
+	var cf1 := O + B * Vector3(th * fr, -tv * fr, -fr)
+	var cf2 := O + B * Vector3(-th * fr, tv * fr, -fr)
+	var cf3 := O + B * Vector3(th * fr, tv * fr, -fr)
+	var cen := O + B * Vector3(0.0, 0.0, -fr * 0.5)
+	return [
+		_spin_plane(cn0, cn1, cn3, cen),
+		_spin_plane(cf0, cf1, cf3, cen),
+		_spin_plane(cn0, cn2, cf2, cen),
+		_spin_plane(cn1, cn3, cf3, cen),
+		_spin_plane(cn2, cn3, cf2, cen),
+		_spin_plane(cn0, cn1, cf1, cen),
+	]
+
+func _spin_plane(a: Vector3, b: Vector3, c: Vector3, cen: Vector3) -> Plane:
+	var n: Vector3 = (b - a).cross(c - a)
+	if n.length_squared() < 0.00000001:
+		return Plane(Vector3(0, 0, -1), a)
+	n = n.normalized()
+	if n.dot(cen - a) < 0.0:
+		n = -n
+	return Plane(n, a)
+
+# AC-0212: AABB fully outside the frustum = for SOME plane, the AABB's
+# supporting point along the plane normal (the closest corner to the
+# frustum interior) is already on the far side. Exact convex test, no
+# corner enumeration.
+func _aabb_fully_outside(aabb: AABB, planes: Array) -> bool:
+	for i in planes.size():
+		var p: Plane = planes[i]
+		var n: Vector3 = p.normal
+		# AABB.position = min corner, +size = max corner (the supporting
+		# point along +n).
+		var mn: Vector3 = aabb.position
+		var mx: Vector3 = aabb.position + aabb.size
+		var sp := Vector3(
+			mx.x if n.x >= 0.0 else mn.x,
+			mx.y if n.y >= 0.0 else mn.y,
+			mx.z if n.z >= 0.0 else mn.z)
+		if p.distance_to(sp) < 0.0:
+			return true
+	return false
+
+
+# AC-0212 R16 (the task's #1 gate): 16-radius build + moving inside a chunk.
+# Per-frame processing cost (frame ms; run with --fixed-fps 600 so the tick
+# is uncapped and the await measures true per-frame CPU) in two phases:
+#   A. static  — 600 physics frames, camera parked at the spawn eye.
+#   B. moving  — 900 physics frames, camera on a 12 m circle inside the
+#      spawn chunk (no recenter, no streaming; the frustum changes every
+#      frame — the worst case for the AC-0109 manual cull pass, which
+#      re-evaluated EVERY resident chunk on every camera change).
+# Effective fps = 1000 / frame_ms. The no-5fps-drop gate is an A/B: run
+# this arm with AWECRAFT_FRUSTUM=manual (before) and the engine default
+# (after); the moving-phase fps must not drop by 5.
+func _r16_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	world.render_radius = maxi(world.render_radius, 16)
+	var rr: int = world.render_radius
+	world.recenter(spawn.x, spawn.z, true)
+	var pcx := int(floorf(spawn.x / 16.0))
+	var pcz := int(floorf(spawn.z / 16.0))
+	var passes0 := int(world.perf_cull_passes)
+	var flips0 := int(world.perf_cull_flips)
+	var build_t0 := Time.get_ticks_msec()
+	# 16-radius build: every band<=2 chunk in the r16 square meshed (the
+	# perf arm's "all" definition). 25-min wall cap: on a stall the arm
+	# proceeds with the partial build (reported, not fatal).
+	var frames := 0
+	var max_frames := 400000
+	var total_sq := (2 * rr + 1) * (2 * rr + 1)
+	var built_all := false
+	var built_n := 0
+	# The full square scan is O(resident chunks) — run it every 30 frames
+	# (the 30-frame post-settle below absorbs the quantization; a per-frame
+	# scan at r16 would burn a core for the whole build).
+	while frames < max_frames and Time.get_ticks_msec() - t0 < 1500000:
+		await get_tree().physics_frame
+		frames += 1
+		if frames % 30 == 0:
+			built_all = true
+			built_n = 0
+			for key in world.chunks:
+				var c: Node3D = world.chunks[key]
+				if int(c.band) > 2:
+					continue
+				if absi(c.cx - pcx) <= rr and absi(c.cz - pcz) <= rr:
+					if c.mesh_built:
+						built_n += 1
+					else:
+						built_all = false
+						break
+			if built_all:
+				break
+		if frames % 600 == 0:
+			var nb := 0
+			for key in world.chunks:
+				var cc: Node3D = world.chunks[key]
+				if int(cc.band) <= 2 and absi(cc.cx - pcx) <= rr and absi(cc.cz - pcz) <= rr and cc.mesh_built:
+					nb += 1
+			print("R16PROG frames=%d built=%d/%d t=%d ms" % [frames, nb, total_sq, Time.get_ticks_msec() - build_t0])
+	var build_ms := Time.get_ticks_msec() - build_t0
+	# Let the last handoffs land before measuring.
+	for i in 30:
+		await get_tree().physics_frame
+	player = _spawn_player()
+	for i in 30:
+		await get_tree().physics_frame
+	var cam: Camera3D = player.camera
+	get_window().size = Vector2i(1280, 720)
+	var eye := cam.global_position
+	const STATIC_FRAMES := 600
+	const MOVING_FRAMES := 900
+	var static_ms: Array = []
+	for i in STATIC_FRAMES:
+		var fb := Time.get_ticks_msec()
+		await get_tree().physics_frame
+		static_ms.append(Time.get_ticks_msec() - fb)
+	# 12 m circle centered on the spawn chunk center (spans [2,14] in x/z,
+	# fully inside the 16 m chunk); yaw follows the circle so the frustum —
+	# and therefore the cull decision — changes every single frame.
+	var cen := Vector3(pcx * 16.0 + 8.0, eye.y, pcz * 16.0 + 8.0)
+	var moving_ms: Array = []
+	for i in MOVING_FRAMES:
+		var ang := TAU * float(i) / float(MOVING_FRAMES)
+		var pos := cen + Vector3(cos(ang) * 6.0, 0.0, sin(ang) * 6.0)
+		cam.global_transform = Transform3D(Basis(Vector3.UP, ang + PI), pos)
+		var fb := Time.get_ticks_msec()
+		await get_tree().physics_frame
+		moving_ms.append(Time.get_ticks_msec() - fb)
+	# Tail settle after the last camera change.
+	for i in 30:
+		await get_tree().physics_frame
+	var s := _r16_stats(static_ms)
+	var m := _r16_stats(moving_ms)
+	Debug.result({
+		"mode": "r16",
+		"seed": Game.world_seed,
+		"radius": rr,
+		"ok": true,
+		"built": built_n,
+		"built_all": built_all,
+		"total_chunks": total_sq,
+		"resident": int(world.chunks.size()),
+		"build_ms": build_ms,
+		"build_frames": frames,
+		# AC-0212 probe counters: the manual pass's re-evaluations/flips
+		# during the WHOLE arm (build + both phases). Engine lane: 0/0.
+		"cull_mode": world.cull_mode,
+		"perf_cull_passes": int(world.perf_cull_passes) - passes0,
+		"perf_cull_flips": int(world.perf_cull_flips) - flips0,
+		"static": s,
+		"moving": m,
+		"drop_fps_static_vs_moving": int(roundf(float(s["fps_p50"]) - float(m["fps_p50"]))),
+		"static_frames": STATIC_FRAMES,
+		"moving_frames": MOVING_FRAMES,
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+	})
+	get_tree().quit()
+
+
+func _r16_stats(ms_list: Array) -> Dictionary:
+	var n := ms_list.size()
+	if n == 0:
+		return {"n": 0, "p50_ms": 0, "p95_ms": 0, "max_ms": 0, "fps_p50": 0, "fps_p95": 0, "fps_min": 0}
+	var p50 := int(_percentile(ms_list, 0.50))
+	var p95 := int(_percentile(ms_list, 0.95))
+	var mx := int(ms_list.max())
+	return {
+		"n": n,
+		"p50_ms": p50,
+		"p95_ms": p95,
+		"max_ms": mx,
+		"fps_p50": int(roundf(1000.0 / maxf(float(p50), 0.5))),
+		"fps_p95": int(roundf(1000.0 / maxf(float(p95), 0.5))),
+		"fps_min": int(roundf(1000.0 / maxf(float(mx), 0.5))),
+	}
 
 func _nd_settle(max_frames: int) -> int:
 	var rr: int = world.render_radius
