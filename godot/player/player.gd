@@ -234,7 +234,7 @@ func _physics_process_impl(dt: float) -> void:
 	var sprint := Input.is_key_pressed(KEY_SHIFT)
 	var speed: float
 	if flying:
-		speed = WALK * 4.0
+		speed = WALK * float(int(Settings.values.get("flight_speed", 4)))
 	elif swim_up:
 		speed = SWIM
 	elif in_lava:
@@ -262,7 +262,7 @@ func _physics_process_impl(dt: float) -> void:
 			vy += 1.0
 		if sprint:
 			vy -= 1.0
-		velocity.y = lerpf(velocity.y, vy * WALK * 4.0 * FLY_VS, minf(1.0, 10.0 * dt))
+		velocity.y = lerpf(velocity.y, vy * WALK * float(int(Settings.values.get("flight_speed", 4))) * FLY_VS, minf(1.0, 10.0 * dt))
 	elif in_water:
 		velocity.y = lerpf(velocity.y, -3.5, minf(1.0, 4.0 * dt))
 		if Input.is_action_pressed("jump"):

@@ -16,6 +16,7 @@ const DEFAULTS := {
 	"seed": 44,
 	"hunger_enabled": true,
 	"debug_stats": false,
+	"flight_speed": 4,
 }
 
 var values: Dictionary = {}
@@ -62,6 +63,8 @@ func _clamp(k: String, v) -> void:
 			values[k] = bool(v)
 		"debug_stats":
 			values[k] = bool(v)
+		"flight_speed":
+			values[k] = clampi(int(v), 1, 50)
 		"seed":
 			values[k] = int(v)
 		"resolution":

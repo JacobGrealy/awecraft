@@ -26,9 +26,11 @@ var version_label: Label
 var render_slider: HSlider
 var sim_slider: HSlider
 var volume_slider: HSlider
+var flight_slider: HSlider
 var render_val: Label
 var sim_val: Label
 var volume_val: Label
+var flight_val: Label
 var res_option: OptionButton
 var full_check: CheckBox
 var hunger_check: CheckBox
@@ -62,9 +64,11 @@ func _ready() -> void:
 	render_slider = get_node("Layer/OptionsBox/Center/VBox/RenderRow/RenderSlider")
 	sim_slider = get_node("Layer/OptionsBox/Center/VBox/SimRow/SimSlider")
 	volume_slider = get_node("Layer/OptionsBox/Center/VBox/VolumeRow/VolumeSlider")
+	flight_slider = get_node("Layer/OptionsBox/Center/VBox/FlightRow/FlightSlider")
 	render_val = get_node("Layer/OptionsBox/Center/VBox/RenderRow/RenderVal")
 	sim_val = get_node("Layer/OptionsBox/Center/VBox/SimRow/SimVal")
 	volume_val = get_node("Layer/OptionsBox/Center/VBox/VolumeRow/VolumeVal")
+	flight_val = get_node("Layer/OptionsBox/Center/VBox/FlightRow/FlightVal")
 	res_option = get_node("Layer/OptionsBox/Center/VBox/ResRow/ResOption")
 	full_check = get_node("Layer/OptionsBox/Center/VBox/FullscreenCheck")
 	hunger_check = get_node("Layer/OptionsBox/Center/VBox/HungerCheck")
@@ -268,9 +272,11 @@ func _sync_controls() -> void:
 	sim_slider.max_value = float(int(Settings.values["render_dist"]))
 	sim_slider.value = float(int(Settings.values["sim_dist"]))
 	volume_slider.value = float(int(Settings.values["volume"]))
+	flight_slider.value = float(int(Settings.values.get("flight_speed", 4)))
 	render_val.text = str(int(render_slider.value))
 	sim_val.text = str(int(sim_slider.value))
 	volume_val.text = str(int(volume_slider.value))
+	flight_val.text = str(int(flight_slider.value)) + "x"
 	res_option.clear()
 	for m in RES_MODES:
 		res_option.add_item(m)
@@ -325,6 +331,13 @@ func _on_volume_changed(v: float) -> void:
 	volume_val.text = str(int(v))
 	Settings.set_value("volume", int(v))
 	Settings.apply_audio()
+
+
+func _on_flight_changed(v: float) -> void:
+	if _syncing:
+		return
+	flight_val.text = str(int(v)) + "x"
+	Settings.set_value("flight_speed", int(v))
 
 
 func _on_res_selected(i: int) -> void:

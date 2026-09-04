@@ -7817,3 +7817,29 @@ intake:
     created_at: 2026-09-04T14:01
     updated_at: null
     text: '[user] flight 4x walk per 2026-09-04'
+- id: AC-0221
+  title: flight-speed-slider-1x-to-50x-in-options
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: done
+  labels: []
+  created_at: 2026-09-04T14:09
+  updated_at: 2026-09-04T14:10
+  completed_at: 2026-09-04T14:10
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want a slider in Options to change flying speed
+    from 1x to 50x walking speed so I can fly faster.
+
+
+    2) Technical Details: Add Settings flight_speed 1-50 default 4, clamp, save. Options
+    menu HSlider flight_speed with label, menu.gd sync/handler, player.gd use WALK*mult.
+    Verify: slider 1-50 changes speed, persists.'
+  comments:
+  - id: 1
+    created_at: 2026-09-04T14:09
+    updated_at: null
+    text: '[user] flight slider 1-50 per 2026-09-04'
