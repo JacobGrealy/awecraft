@@ -195,6 +195,14 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _physics_process(dt: float) -> void:
+	if OS.get_environment("AWECRAFT_CBLOG") == "1":
+		print("CBP in t=%d" % Time.get_ticks_msec())
+	_physics_process_impl(dt)
+	if OS.get_environment("AWECRAFT_CBLOG") == "1":
+		print("CBP out t=%d" % Time.get_ticks_msec())
+
+
+func _physics_process_impl(dt: float) -> void:
 	if Game.mode != "play":
 		return
 	if dead:
@@ -226,7 +234,7 @@ func _physics_process(dt: float) -> void:
 	var sprint := Input.is_key_pressed(KEY_SHIFT)
 	var speed: float
 	if flying:
-		speed = SPRINT
+		speed = WALK * 4.0
 	elif swim_up:
 		speed = SWIM
 	elif in_lava:
@@ -254,7 +262,7 @@ func _physics_process(dt: float) -> void:
 			vy += 1.0
 		if sprint:
 			vy -= 1.0
-		velocity.y = lerpf(velocity.y, vy * SPRINT * FLY_VS, minf(1.0, 10.0 * dt))
+		velocity.y = lerpf(velocity.y, vy * WALK * 4.0 * FLY_VS, minf(1.0, 10.0 * dt))
 	elif in_water:
 		velocity.y = lerpf(velocity.y, -3.5, minf(1.0, 4.0 * dt))
 		if Input.is_action_pressed("jump"):
@@ -1146,6 +1154,9 @@ func _block_at(wx: float, wy: float, wz: float) -> int:
 
 
 func _recenter() -> void:
+	# AC-0213: camera-only moves never requeue — recenter (and with it the
+	# ahead-ring queue rebuild) fires ONLY on a positional chunk change;
+	# look changes touch nothing here.
 	var pcx := int(floorf(position.x / 16.0))
 	var pcz := int(floorf(position.z / 16.0))
 	if pcx != _chunk_x or pcz != _chunk_z:
