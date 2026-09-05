@@ -1,9 +1,11 @@
 meta:
-  updated_at: 2026-09-05T09:09
+  updated_at: 2026-09-05T10:49
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0214
+- AC-0232
+- AC-0233
+- AC-0231
 - AC-0175
 - AC-0140
 - AC-0121
@@ -19,12 +21,11 @@ queue:
 - AC-0087
 - AC-0186
 - AC-0174
-- AC-0205
-- AC-0150
 - AC-0228
 - AC-0144
 - AC-0145
 - AC-0146
+- AC-0205
 - AC-0193
 - AC-0159
 - AC-0192
@@ -55,7 +56,6 @@ queue:
 - AC-0147
 - AC-0185
 - AC-0176
-- AC-0223
 intake:
 - id: AC-0001
   title: m1-scaffold
@@ -4730,11 +4730,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-08-30T09:29
-  updated_at: 2026-08-31T16:45
-  completed_at: null
+  updated_at: 2026-09-05T10:49
+  completed_at: 2026-09-05T10:49
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player walking far out, I do not want to see a trench or void where the world wraps or sphere
@@ -4754,6 +4754,10 @@ intake:
     created_at: '2026-09-01T02:12:48.549789'
     updated_at: null
     text: '[coordinator] Reasoning: xhigh (non-trivial, plan+verify) — '
+  - id: 3
+    created_at: 2026-09-05T10:49
+    updated_at: null
+    text: '[user] no longer an issue'
 - id: AC-0151
   title: water-always-blue-tint-strip
   source: user
@@ -6716,11 +6720,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-04T07:11
-  updated_at: 2026-09-04T09:52
-  completed_at: null
+  updated_at: 2026-09-05T10:28
+  completed_at: 2026-09-04T00:20
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want all block reads to be as fast as Minecraft so palette storage never costs frames.
@@ -6740,6 +6744,10 @@ intake:
     updated_at: null
     text: '[user] I think we fixed some of these since this was added, but go ahead and see if there are any other paths remaining
       that we should move over to C++'
+  - id: 3
+    created_at: '2026-09-04T00:20:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Palette reads to C++ (5 new methods on ChunkIOPalette, no .gdextension change): palettize_flat (flat->24-slab LUT+bitpack), slab_set (one-cell write, all branches), slabs_top (top scan, direct index ops), slab_row (256-cell row), slab_copy (deep copy for save worker). All runtime GDScript paths rewired: chunk.gd (get_local/fl_at->slab_cell, update_top->slabs_top, flat/row/landed, _slab_write->slab_set), lighting.gd dviews, world.gd save/fluids/cache, generator.gd banana resl. Removed kernels kept VERBATIM as sentinel-guarded A/B refs. Bug found: this godot-cpp build loses raw ptrw() writes on PackedByteArray handles shared with a Dictionary - slab_set now builds fresh byte vectors + fresh dicts (empirically verified via COW probes). Grep: no per-frame GDScript palette reads remain; all remaining refs are harness arms + A/B references (_slab_write_gd, _pull_kernel_gd, _side_blk_strip, chunk_io.gd codec defs). slabops (new A/B): ok:true - palettize 17/17, 400-write 17/17, top 34/34, row 833/833, cell 3400/3400, copy 17/17; palettize 43x faster. R16 (before->after): build 797/797; static fps p50/p95 333/200 -> 333/250 (p95_ms 5->4); moving 333/200, p95 5ms, max 18ms - unchanged; 0 SCRIPT ERROR. G0: 0 SCRIPT ERROR. SMOKE player;interact;light;fluids: ok:true. No-regression: chunkiocpp md5 byte-identical (34/34 enc, 17/17 rt); genhash 2 runs == each other == standing (25/25, GENMS 37 - note: the genhash1.log baseline in the task text was superseded in AC-0215 itself; verified vs 6 later task gates); light surface 15/torch 14 identical; meshprobe 100pct (1926/1926); stripsprobe 100pct (512/512); pullprobe 100pct (6.29M cells, max_diff 0); nofallback ok:true with slab_cpp_sets 2 / slab_gd_write_calls 0; editslab ok:true. R50 + Windows build not run (per task). See tasks/AC-0214/AC-0214-results.html.'
 - id: AC-0215
   title: coarse-4x8x4-density-field-mc118-spline
   source: user
@@ -6853,7 +6861,21 @@ intake:
   - id: 2
     created_at: '2026-09-04T00:10:00.000000'
     updated_at: null
-    text: '[coordinator] DONE + SHIPPED 2026-09-03. Debounce (GDScript, no C++ touched): the three scored picks (build/forward-lead/data) now run through _pick_build_cached/_pick_data_cached - a one-slot-per-pass cache keyed on quantized (px, pz, look dir, maxb, _spawn_fast, last_pcx/pcz) + _pool_ver (+ in-flight depths for the data pass). _pool_touch() bumps the version at all 13 queue/eligibility mutation sites (enqueue/remove/drop/cap-convert/strip/recenter-merge + every data-landing choke point). A hit is only served when nothing changed; a non-empty cached candidate is re-validated (stale -> fresh scan). Moving/turning changes the key every frame -> fresh scan -> picks byte-identical. One bug caught + fixed during the run: _pool_key format string (8->9 specifiers) - first AFTER run stalled on it (stale-empty trust + 68M-line error flood); re-run clean. Gate results (r16 --fixed-fps 600, AWECRAFT_PICKLOG=1): Idle stays 60 - static p50_ms 5->3, p95_ms 7->5, fps p50/p95 200/143 -> 333/200 (gate met with margin; ~ the predicted 1-2 ms saving). POOLCACHE: 95.7pct hits in the static window. Forward-move pick order: 2415/2415 picks identical (pass+chunk multiset 100pct common; scores equal within 5th-decimal run jitter; same-code A/B shows the same, larger jitter class - not the debounce). fly4/fly50 evidence identical (awm 279/58, queue_max 136/65, rec 9/27, lost 0). G0: exit 0, 0 SCRIPT ERROR. SMOKE battery ok:true (one interact drop_spawned 3-frame-window flake -> 3/3 standalone re-runs true). No regression: chunkiocpp md5 byte-identical; genhash 25/25 == AC-0215 NEW baseline (2 runs identical); light 15/0/14 standing; mesh/strips/pull probes 100pct exact; nofallback ok:true. R50 + Windows build not run (per task). See tasks/AC-0217/AC-0217-results.html.'
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Debounce (GDScript, no C++ touched): the three scored picks (build/forward-lead/data)
+      now run through _pick_build_cached/_pick_data_cached - a one-slot-per-pass cache keyed on quantized (px, pz, look dir,
+      maxb, _spawn_fast, last_pcx/pcz) + _pool_ver (+ in-flight depths for the data pass). _pool_touch() bumps the version
+      at all 13 queue/eligibility mutation sites (enqueue/remove/drop/cap-convert/strip/recenter-merge + every data-landing
+      choke point). A hit is only served when nothing changed; a non-empty cached candidate is re-validated (stale -> fresh
+      scan). Moving/turning changes the key every frame -> fresh scan -> picks byte-identical. One bug caught + fixed during
+      the run: _pool_key format string (8->9 specifiers) - first AFTER run stalled on it (stale-empty trust + 68M-line error
+      flood); re-run clean. Gate results (r16 --fixed-fps 600, AWECRAFT_PICKLOG=1): Idle stays 60 - static p50_ms 5->3, p95_ms
+      7->5, fps p50/p95 200/143 -> 333/200 (gate met with margin; ~ the predicted 1-2 ms saving). POOLCACHE: 95.7pct hits
+      in the static window. Forward-move pick order: 2415/2415 picks identical (pass+chunk multiset 100pct common; scores
+      equal within 5th-decimal run jitter; same-code A/B shows the same, larger jitter class - not the debounce). fly4/fly50
+      evidence identical (awm 279/58, queue_max 136/65, rec 9/27, lost 0). G0: exit 0, 0 SCRIPT ERROR. SMOKE battery ok:true
+      (one interact drop_spawned 3-frame-window flake -> 3/3 standalone re-runs true). No regression: chunkiocpp md5 byte-identical;
+      genhash 25/25 == AC-0215 NEW baseline (2 runs identical); light 15/0/14 standing; mesh/strips/pull probes 100pct exact;
+      nofallback ok:true. R50 + Windows build not run (per task). See tasks/AC-0217/AC-0217-results.html.'
 - id: AC-0218
   title: neighbor-dirty-only-when-border-light-changed
   source: user
@@ -7032,11 +7054,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-09-04T15:07
-  updated_at: 2026-09-04T00:00
-  completed_at: null
+  updated_at: 2026-09-05T13:29
+  completed_at: 2026-09-05T13:29
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a dev I want leftover LOD code removed so the codebase is clean after disabling LOD.
@@ -7050,6 +7072,10 @@ intake:
     created_at: 2026-09-04T15:07
     updated_at: null
     text: '[user] cleanup LOD per 2026-09-04'
+  - id: 2
+    created_at: 2026-09-05T13:29
+    updated_at: null
+    text: '[user] cancelled, folded into AC-0231 per 2026-09-04'
 - id: AC-0224
   title: expand-streaming-handoff-cap-beyond-1-tuning
   source: user
@@ -7335,3 +7361,102 @@ intake:
     created_at: '2026-09-05T13:07:12.654706'
     updated_at: null
     text: '[coordinator] Reasoning: xhigh (repro flight, main.gd _process follow + radius vs planet R, verify render at R50)'
+- id: AC-0231
+  title: far-lod-low-res-placeholder-with-texturing
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-05T13:25
+  updated_at: 2026-09-04T18:30
+  completed_at: null
+  waiting_on: AC-0233
+  parent_id: null
+  notes: '1) User Story: As a player I want distant far columns to show a low-res textured placeholder so far terrain is visible
+    immediately while heavy high meshes catch up.
+
+
+    2) Technical Details: Depends on AC-0233 tiered streaming. Streaming queue in godot/world/world.gd rewrites on debounced
+    move column or ~10deg turn in tier order 0 under, 1 ring1 8, 2 cone FOV by distance, 3 rest by distance, plus separate
+    dirty queue drains first 1 per frame. Low path skips 0/1 (must be high to avoid fall/step through), scans waiting streaming
+    queue in order for first with no high and no low — nearest cone with no mesh first ahead before behind, then rest by distance.
+    Builds cheap low at 4x8x4 sampling edited data, greedy on sparse grid, dominant block texture scaled UVs, not competing
+    with ThreadGen pool4/ThreadMesh pool6. Also cleans up old LOD dead code as part of this (band2 coarse paths, uv_scale
+    etc). Cone low is brief fallback when high still in flight at 4-50x; rest low is far filler. Do not downgrade already
+    built high to low — keep high until freed. When idle heavy pipeline catches up it upgrades lows to high nearest cone first
+    then nearest rest.
+
+
+    Verify: far ring shows textured low mountains, flying fast ahead fills before behind with cone low before far, no empty
+    pop, no fall through in 0/1, edits reflected via sampling edited data, high replaces low and stays high, neighboring chunks
+    update when needed.'
+  comments:
+  - id: 1
+    created_at: 2026-09-05T13:25
+    updated_at: null
+    text: '[user] far LOD placeholder per 2026-09-04'
+  - id: 2
+    created_at: 2026-09-05T09:55
+    updated_at: null
+    text: '[user] Make the distance the LOD starts configurable in settings menu.'
+- id: AC-0232
+  title: dithering-toggle-and-distance-sliders
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-05T13:57
+  updated_at: 2026-09-05T13:57
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want a toggle in Options to turn the distant dithered fade on or off, and sliders to
+    control when dithering and fog start as a percentage of render distance.
+
+
+    2) Technical Details: Add Settings dithering_enabled bool default true, dithering_start_pct and fog_start_pct 0-100 defaults
+    tuned to hide pop, Options checkbox + two sliders percent of render_distance * 16, chunk shader uniforms and WorldEnvironment
+    fog to use them. Verify: toggle on shows dithered fade for far, off shows hard pop hidden by fog, sliders move start distances
+    live, persists.'
+  comments:
+  - id: 1
+    created_at: 2026-09-05T13:57
+    updated_at: null
+    text: '[user] dithering toggle per 2026-09-04'
+- id: AC-0233
+  title: tiered-streaming-two-queues-gen-vs-mesh
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-05T14:27
+  updated_at: 2026-09-05T14:27
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player flying or walking I want the chunk under me built first so I never fall through, then
+    a ring around me, then a cone ahead matching my FOV, then the rest, with edits showing immediately.
+
+
+    2) Technical Details: godot/world/world.gd — split into streamingQueue (speculative, rewritable) and dirtyQueue (edited
+    chunks append, drains first 1 per frame). Rewrite waiting parts on debounced move column or turn ~10deg or yaw snap, not
+    every frame (0.05-0.2ms score, <1ms reorder for 800-7845 at R16-50). Tier order: 0 under, 1 ring1 8, 2 cone by FOV dot
+    ordered by taxi distance, 3 rest by distance. Separate tiered pick for gen candidates vs mesh candidates (mesh only when
+    gen+light flat ready). Do not cancel ThreadGen pool4 or ThreadMesh pool6 in-flight. Trim to render circle, evict farthest
+    first, collect on column cross at 4-50x. Keep high once built, no downgrade to low; low placeholder only for never-built
+    far per AC-0231. Verify: fall through never, flying fast ahead fills before behind, spin 180 immediately reprioritizes,
+    dirty edits immediate, idle cost ~0.'
+  comments:
+  - id: 1
+    created_at: 2026-09-05T14:27
+    updated_at: null
+    text: '[user] tiered two-queue per 2026-09-04 discussion'

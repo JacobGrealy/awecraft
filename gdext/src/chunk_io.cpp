@@ -216,6 +216,64 @@ PackedByteArray pba_from(const std::vector<uint8_t> &v) {
 	return out;
 }
 
+// AC-0214: direct bit SET (the C++ twin of chunk_io.gd _slab_setbits — the
+// slab-write hot op: write the bits-wide val at cell pos, MSB-first, 16-bit
+// carry window exactly as the GDScript).
+void slab_setbits_w(uint8_t *i, int isize, int bits, int pos, int val) {
+	int bo = (pos * bits) >> 3;
+	if (bo < 0 || bo >= isize)
+		return;
+	int sh = (pos * bits) & 7;
+	uint32_t w = (uint32_t)i[bo] << 8;
+	if (bo + 1 < isize)
+		w |= i[bo + 1];
+	uint32_t mask = (1u << bits) - 1;
+	int sb = 16 - sh - bits;
+	w = (w & ~(mask << sb)) | ((uint32_t)val << sb);
+	i[bo] = (uint8_t)((w >> 8) & 255);
+	if (bo + 1 < isize)
+		i[bo + 1] = (uint8_t)(w & 255);
+}
+
+// AC-0214: single-cell read from a slab Dictionary (the C++ twin of
+// chunk_io.gd _slab_cell — direct palette index op: n==1 uniform fill,
+// n==0 raw byte, n>=2 palette[getbits]).
+int slab_cell_of(const Dictionary &d, int pos) {
+	int n = d.get("n", 0);
+	if (n == 1) {
+		PackedByteArray p = d.get("p", PackedByteArray());
+		return p.size() > 0 ? (int)p[0] : -1;
+	}
+	if (n == 0) {
+		PackedByteArray i = d.get("i", PackedByteArray());
+		return pos < (int)i.size() ? (int)i[pos] : -1;
+	}
+	PackedByteArray p = d.get("p", PackedByteArray());
+	PackedByteArray i = d.get("i", PackedByteArray());
+	int b = d.get("b", 0);
+	int idx = slab_getbits(i.ptr(), (int)i.size(), b, pos);
+	return idx < (int)p.size() ? (int)p[idx] : -1;
+}
+
+// AC-0214: full 4096-cell value vector for a slab Dictionary (the C++ twin
+// of chunk_io.gd _slab_flat: n==1 fill, n==0 raw copy, else palette unpack).
+std::vector<uint8_t> slab_flat_of(const Dictionary &d) {
+	int n = d.get("n", 0);
+	if (n == 1) {
+		PackedByteArray p = d.get("p", PackedByteArray());
+		uint8_t v = p.size() > 0 ? p[0] : 0;
+		return std::vector<uint8_t>(S3, v);
+	}
+	if (n == 0) {
+		PackedByteArray i = d.get("i", PackedByteArray());
+		return std::vector<uint8_t>(i.ptr(), i.ptr() + i.size());
+	}
+	PackedByteArray p = d.get("p", PackedByteArray());
+	PackedByteArray i = d.get("i", PackedByteArray());
+	int b = d.get("b", 0);
+	return slab_unpack(i.ptr(), (int)i.size(), b, p.ptr());
+}
+
 std::vector<uint8_t> encode_section_impl(const uint8_t *arr, int sub, int top) {
 	std::vector<uint8_t> out;
 	std::vector<int> idxs;
@@ -456,6 +514,14 @@ public:
 		ClassDB::bind_method(D_METHOD("slabs_flat", "slabs"), &ChunkIOPalette::slabs_flat);
 		ClassDB::bind_method(D_METHOD("slab_cell", "slab", "pos"), &ChunkIOPalette::slab_cell);
 		ClassDB::bind_method(D_METHOD("slab_nz", "packed", "bits", "palette"), &ChunkIOPalette::slab_nz);
+		// AC-0214: the remaining slab ops (the per-block GDScript palette
+		// reads/writes moved to C++ — direct palette index ops, no
+		// per-cell Variant work).
+		ClassDB::bind_method(D_METHOD("palettize_flat", "arr", "nsl"), &ChunkIOPalette::palettize_flat);
+		ClassDB::bind_method(D_METHOD("slab_set", "slabs", "si", "pos", "val"), &ChunkIOPalette::slab_set);
+		ClassDB::bind_method(D_METHOD("slabs_top", "slabs"), &ChunkIOPalette::slabs_top);
+		ClassDB::bind_method(D_METHOD("slab_row", "slabs", "y"), &ChunkIOPalette::slab_row);
+		ClassDB::bind_method(D_METHOD("slab_copy", "slabs"), &ChunkIOPalette::slab_copy);
 	}
 
 	PackedByteArray encode_section(const PackedByteArray &p_data, int p_sub, int p_top) const {
@@ -576,6 +642,375 @@ public:
 		int b = d.get("b", 0);
 		int idx = slab_getbits(i.ptr(), (int)i.size(), b, p_pos);
 		return idx < (int)p.size() ? (int)p[idx] : -1;
+	}
+
+	// AC-0214: flat -> paletted slab array (the C++ port of ChunkIO
+	// palettize_flat — the single flat->paletted conversion point every data
+	// landing goes through: per-slab LUT + ONE batch bitpack, no per-cell
+	// Variant hashing). Same dict shape as the wire form: null | {n,b,p,i,nz}
+	// (n==1 uniform, n>=2 paletted with sorted palette, n==0 raw >16 ids).
+	// Byte-for-byte the GDScript output (slabops arm A/B).
+	Array palettize_flat(const PackedByteArray &p_arr, int p_nsl) const {
+		int n = (int)p_arr.size() / S3;
+		Array out;
+		out.resize(p_nsl > n ? p_nsl : n);
+		int seen[256];
+		std::vector<uint8_t> order;
+		int remap[256];
+		std::vector<uint8_t> vals(S3);
+		for (int si = 0; si < n; si++) {
+			int base = si * S3;
+			for (int i = 0; i < 256; i++)
+				seen[i] = -1;
+			order.clear();
+			int nz = 0;
+			for (int i = 0; i < S3; i++) {
+				uint8_t v = p_arr[base + i];
+				if (seen[v] < 0) {
+					seen[v] = (int)order.size();
+					order.push_back(v);
+				}
+				if (v != 0)
+					nz++;
+			}
+			if (nz == 0)
+				continue; // stays null
+			int nn = (int)order.size();
+			Dictionary sd;
+			if (nn == 1) {
+				sd["n"] = 1;
+				sd["b"] = 0;
+				std::vector<uint8_t> pv;
+				pv.push_back(order[0]);
+				sd["p"] = pba_from(pv);
+				sd["i"] = PackedByteArray();
+				sd["nz"] = nz;
+			} else if (nn <= 16) {
+				std::vector<uint8_t> p(order);
+				std::sort(p.begin(), p.end());
+				for (int i = 0; i < 256; i++)
+					remap[i] = -1;
+				for (int j = 0; j < (int)p.size(); j++)
+					remap[p[j]] = j;
+				for (int i = 0; i < S3; i++)
+					vals[i] = (uint8_t)remap[p_arr[base + i]];
+				int bits = slab_bits_for((int)p.size());
+				sd["n"] = (int)p.size();
+				sd["b"] = bits;
+				sd["p"] = pba_from(p);
+				sd["i"] = pba_from(bitpack(vals.data(), S3, bits));
+				sd["nz"] = nz;
+			} else {
+				std::vector<uint8_t> raw(p_arr.ptr() + base, p_arr.ptr() + base + S3);
+				sd["n"] = 0;
+				sd["b"] = 8;
+				sd["p"] = PackedByteArray();
+				sd["i"] = pba_from(raw);
+				sd["nz"] = nz;
+			}
+			out[si] = sd;
+		}
+		return out;
+	}
+
+	// AC-0214: single-slab write with palette growth (the C++ port of the
+	// GDScript Chunk._slab_write — the per-block edit op). Mutates the slab
+	// array IN PLACE (the passed Array shares its storage with GDScript).
+	// Invariant on return: null = all air; otherwise nz>0, n<=16 (or raw
+	// n==0 on palette overflow), i consistent with b. Covers every branch:
+	// null->slab, uniform split, bit widening + repack, raw fallback,
+	// back-to-air nullification. Byte-for-byte the GDScript output (the
+	// slabops arm A/Bs a seeded 400-write sequence per column).
+	// AC-0214: one-cell write (the C++ port of chunk.gd _slab_write).
+	// IMPORTANT (empirically verified, cowprobe): in this godot-cpp build a
+	// PackedByteArray is an opaque engine-handle wrapper — raw ptrw() writes
+	// on a handle shared with a Dictionary do NOT propagate back to the dict
+	// entry, but FRESH byte arrays (pba_from) assigned into a fresh Dictionary
+	// do. So every branch builds fresh std::vector<uint8_t> payloads, converts
+	// with pba_from, and publishes a fresh Dictionary via slabs[p_si] = nd.
+	// The branches mirror the GDScript reference exactly.
+	void slab_set(const Array &p_slabs, int p_si, int p_pos, int p_val) const {
+		if (p_si < 0 || p_si >= (int)p_slabs.size() || p_pos < 0 || p_pos >= S3 || p_val < 0 || p_val > 255)
+			return;
+		Array slabs = p_slabs; // shared ref — element assignment reaches GDScript
+		Variant vs = slabs[p_si];
+		if (vs.get_type() != Variant::DICTIONARY) {
+			if (p_val == 0)
+				return;
+			Dictionary nd;
+			std::vector<uint8_t> pv;
+			pv.push_back(0);
+			pv.push_back((uint8_t)p_val);
+			std::vector<uint8_t> idx(S3 / 8, 0);
+			slab_setbits_w(idx.data(), (int)idx.size(), 1, p_pos, 1);
+			nd["n"] = 2;
+			nd["b"] = 1;
+			nd["p"] = pba_from(pv);
+			nd["i"] = pba_from(idx);
+			nd["nz"] = 1;
+			slabs[p_si] = nd;
+			return;
+		}
+		Dictionary d = vs;
+		int cur = slab_cell_of(d, p_pos);
+		if (cur == p_val)
+			return;
+		int n = d.get("n", 0);
+		// raw slab: i holds 4096 raw value bytes
+		if (n == 0) {
+			PackedByteArray ri = d.get("i", PackedByteArray());
+			int isz = (int)ri.size();
+			std::vector<uint8_t> rv(isz);
+			if (isz > 0)
+				std::memcpy(rv.data(), ri.ptr(), isz);
+			if (p_pos < isz)
+				rv[p_pos] = (uint8_t)p_val;
+			int rz = d.get("nz", 0);
+			if (cur != 0)
+				rz--;
+			if (p_val != 0)
+				rz++;
+			if (rz == 0)
+				slabs[p_si] = Variant();
+			else {
+				Dictionary nd;
+				nd["n"] = 0;
+				nd["b"] = 8;
+				nd["p"] = PackedByteArray();
+				nd["i"] = pba_from(rv);
+				nd["nz"] = rz;
+				slabs[p_si] = nd;
+			}
+			return;
+		}
+		// paletted slab: work on local copies of palette + bitstream
+		PackedByteArray p2 = d.get("p", PackedByteArray());
+		int psz = (int)p2.size();
+		std::vector<uint8_t> pv(psz);
+		if (psz > 0)
+			std::memcpy(pv.data(), p2.ptr(), psz);
+		int pi = -1;
+		for (int k = 0; k < n && k < psz; k++) {
+			if (pv[k] == (uint8_t)p_val) {
+				pi = k;
+				break;
+			}
+		}
+		int b = d.get("b", 0);
+		PackedByteArray isrc = d.get("i", PackedByteArray());
+		int isz = (int)isrc.size();
+		std::vector<uint8_t> ibytes(isz);
+		if (isz > 0)
+			std::memcpy(ibytes.data(), isrc.ptr(), isz);
+		if (pi < 0) {
+			if (n == 1) {
+				int v0 = psz > 0 ? (int)pv[0] : 0;
+				std::vector<uint8_t> np;
+				np.push_back((uint8_t)v0);
+				np.push_back((uint8_t)p_val);
+				std::vector<uint8_t> idx2(S3 / 8, 0);
+				slab_setbits_w(idx2.data(), (int)idx2.size(), 1, p_pos, 1);
+				int nz2 = 0;
+				if (v0 != 0)
+					nz2 = S3 - 1;
+				if (p_val != 0)
+					nz2 += 1;
+				if (nz2 == 0)
+					slabs[p_si] = Variant();
+				else {
+					Dictionary nd;
+					nd["n"] = 2;
+					nd["b"] = 1;
+					nd["p"] = pba_from(np);
+					nd["i"] = pba_from(idx2);
+					nd["nz"] = nz2;
+					slabs[p_si] = nd;
+				}
+				return;
+			}
+			if (n >= 16) {
+				std::vector<uint8_t> raw = slab_flat_of(d);
+				raw[p_pos] = (uint8_t)p_val;
+				int nz3 = 0;
+				for (int i = 0; i < S3; i++) {
+					if (raw[i] != 0)
+						nz3++;
+				}
+				if (nz3 == 0)
+					slabs[p_si] = Variant();
+				else {
+					Dictionary nd;
+					nd["n"] = 0;
+					nd["b"] = 8;
+					nd["p"] = PackedByteArray();
+					nd["i"] = pba_from(raw);
+					nd["nz"] = nz3;
+					slabs[p_si] = nd;
+				}
+				return;
+			}
+			// grow the palette
+			pv.push_back((uint8_t)p_val);
+			pi = n;
+			int nn = n + 1;
+			int nb = slab_bits_for(nn);
+			if (nb > b) {
+				int inv[256];
+				for (int i = 0; i < 256; i++)
+					inv[i] = -1;
+				for (int kk = 0; kk < n; kk++)
+					inv[pv[kk]] = kk;
+				std::vector<uint8_t> flatv = slab_flat_of(d);
+				std::vector<uint8_t> nidx((S3 * nb + 7) / 8, 0);
+				for (int pos2 = 0; pos2 < S3; pos2++)
+					slab_setbits_w(nidx.data(), (int)nidx.size(), nb, pos2, inv[flatv[pos2]]);
+				ibytes = std::move(nidx);
+			}
+			b = nb;
+			n = nn;
+		}
+		// final: set this cell's bits (width b), recount nz, publish fresh dict
+		slab_setbits_w(ibytes.data(), (int)ibytes.size(), b, p_pos, pi);
+		int nz4 = d.get("nz", 0);
+		if (cur != 0)
+			nz4--;
+		if (p_val != 0)
+			nz4++;
+		if (nz4 == 0)
+			slabs[p_si] = Variant();
+		else {
+			Dictionary nd;
+			nd["n"] = n;
+			nd["b"] = b;
+			nd["p"] = pba_from(pv);
+			nd["i"] = pba_from(ibytes);
+			nd["nz"] = nz4;
+			slabs[p_si] = nd;
+		}
+	}
+
+	// AC-0214: the column top (the C++ port of Chunk.update_top — max y
+	// holding a non-air cell, -1 if none). Direct palette index ops, no
+	// flat expansion: the first non-null slab from the top is scanned row 15
+	// down (a non-null slab always has nz>0, so the first non-null slab
+	// yields the top — the GDScript behavior).
+	int slabs_top(const Array &p_slabs) const {
+		for (int si = (int)p_slabs.size() - 1; si >= 0; si--) {
+			Variant v = p_slabs[si];
+			if (v.get_type() != Variant::DICTIONARY)
+				continue;
+			Dictionary d = v;
+			int n = d.get("n", 0);
+			int cy = -1;
+			if (n == 1) {
+				PackedByteArray p = d.get("p", PackedByteArray());
+				if (p.size() > 0 && p[0] != 0)
+					cy = 15;
+			} else if (n == 0) {
+				PackedByteArray i = d.get("i", PackedByteArray());
+				for (int c = 15; c >= 0 && cy < 0; c--) {
+					int row = c << 8;
+					for (int ix = 0; ix < 256; ix++) {
+						if (row + ix < (int)i.size() && i[row + ix] != 0) {
+							cy = c;
+							break;
+						}
+					}
+				}
+			} else {
+				PackedByteArray p = d.get("p", PackedByteArray());
+				PackedByteArray i = d.get("i", PackedByteArray());
+				int b = d.get("b", 0);
+				bool pnz[16] = {false};
+				for (int k = 0; k < (int)p.size(); k++)
+					pnz[k] = (int)p[k] != 0;
+				for (int c = 15; c >= 0 && cy < 0; c--) {
+					int row = c << 8;
+					for (int ix = 0; ix < 256; ix++) {
+						int idx = slab_getbits(i.ptr(), (int)i.size(), b, row + ix);
+						if (idx < (int)p.size() && pnz[idx]) {
+							cy = c;
+							break;
+						}
+					}
+				}
+			}
+			if (cy >= 0)
+				return si * 16 + cy;
+		}
+		return -1;
+	}
+
+	// AC-0214: one 256-cell row (the C++ port of Chunk._slabs_row — the
+	// (y<<8)|(lz<<4)|lx row within slab y>>4; null slab = zero row, the
+	// GDScript parity).
+	PackedByteArray slab_row(const Array &p_slabs, int p_y) const {
+		std::vector<uint8_t> out(256, 0);
+		int si = p_y >> 4;
+		if (si >= 0 && si < (int)p_slabs.size()) {
+			Variant v = p_slabs[si];
+			if (v.get_type() == Variant::DICTIONARY) {
+				Dictionary d = v;
+				int n = d.get("n", 0);
+				int base = (p_y & 15) << 8;
+				if (n == 1) {
+					PackedByteArray p = d.get("p", PackedByteArray());
+					uint8_t val = p.size() > 0 ? p[0] : 0;
+					for (int ix = 0; ix < 256; ix++)
+						out[ix] = val;
+				} else if (n == 0) {
+					PackedByteArray i = d.get("i", PackedByteArray());
+					for (int ix = 0; ix < 256; ix++) {
+						if (base + ix < (int)i.size())
+							out[ix] = i[base + ix];
+					}
+				} else {
+					PackedByteArray p = d.get("p", PackedByteArray());
+					PackedByteArray i = d.get("i", PackedByteArray());
+					int b = d.get("b", 0);
+					for (int ix = 0; ix < 256; ix++) {
+						int idx = slab_getbits(i.ptr(), (int)i.size(), b, base + ix);
+						out[ix] = (uint8_t)(idx < (int)p.size() ? (int)p[idx] : 0);
+					}
+				}
+			}
+		}
+		return pba_from(out);
+	}
+
+	// AC-0214: deep copy of a paletted slab array (the C++ port of
+	// ChunkIO._slabs_deepcopy — the save-queue value copy; p/i are TRUE byte
+	// copies (COW isolation from the live chunk), nulls kept, the
+	// {n,b,p,i,nz} shape unchanged).
+	Array slab_copy(const Array &p_slabs) const {
+		Array out;
+		out.resize(p_slabs.size());
+		for (int k = 0; k < (int)p_slabs.size(); k++) {
+			Variant v = p_slabs[k];
+			if (v.get_type() != Variant::DICTIONARY) {
+				out[k] = v;
+				continue;
+			}
+			Dictionary d = v;
+			PackedByteArray sp = d.get("p", PackedByteArray());
+			PackedByteArray cp;
+			cp.resize(sp.size());
+			if (sp.size() > 0)
+				std::memcpy(cp.ptrw(), sp.ptr(), sp.size());
+			PackedByteArray si = d.get("i", PackedByteArray());
+			PackedByteArray ci;
+			ci.resize(si.size());
+			if (si.size() > 0)
+				std::memcpy(ci.ptrw(), si.ptr(), si.size());
+			Dictionary o;
+			o["n"] = (int)d.get("n", 0);
+			o["b"] = (int)d.get("b", 0);
+			o["p"] = cp;
+			o["i"] = ci;
+			o["nz"] = (int)d.get("nz", 0);
+			out[k] = o;
+		}
+		return out;
 	}
 
 	int slab_nz(const PackedByteArray &p_packed, int p_bits, const PackedByteArray &p_palette) const {

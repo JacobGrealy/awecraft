@@ -4771,8 +4771,11 @@ func _queue_chunk_save(c: Node3D) -> void:
 		# flat_data()/flat_fl() expanded both 98 KB columns on the main
 		# thread. The worker encodes from the slab copies (~20 KB/col) via
 		# _slabs_flat; the on-disk bytes are unchanged (same flat -> v4).
-		"data": ChunkIO._slabs_deepcopy(c.data),
-		"fl": ChunkIO._slabs_deepcopy(c.fl),
+		# AC-0214: both ops are C++ (ChunkIOPalette.slab_copy — true byte
+		# copies, COW-isolated from the live chunk — and the worker's
+		# slabs_flat below).
+		"data": ChunkIO.io_cpp().slab_copy(c.data),
+		"fl": ChunkIO.io_cpp().slab_copy(c.fl),
 		"light": light,
 	})
 
@@ -4851,7 +4854,11 @@ func _io_write_worker() -> void:
 		return
 	# AC-0203 recenter fix: the entry carries slab arrays (the main thread
 	# no longer expands them); _slabs_flat reproduces the exact 98 KB column.
-	var blob := ChunkIO.encode_column(ChunkIO._slabs_flat(entry["data"]), ChunkIO._slabs_flat(entry["fl"]), int(entry["seed"]), int(entry["height"]), entry.get("light", {}))
+	# AC-0214: the expansion is C++ (ChunkIOPalette.slabs_flat; the worker
+	# io_cpp() instantiate is the established pattern — _io_read_worker's
+	# decode_column already runs it here).
+	var io: Variant = ChunkIO.io_cpp()
+	var blob := ChunkIO.encode_column(io.slabs_flat(entry["data"]), io.slabs_flat(entry["fl"]), int(entry["seed"]), int(entry["height"]), entry.get("light", {}))
 	var f = FileAccess.open(String(entry["path"]), FileAccess.WRITE)
 	if f == null:
 		return
@@ -5147,7 +5154,8 @@ func _banana_register_disk(c: Node3D, cx: int, cz: int) -> void:
 			break
 	if not has:
 		return
-	var flat: PackedByteArray = ChunkIO._slabs_flat(slabs)
+	# AC-0214: the 98 KB expand is C++ (ChunkIOPalette.slabs_flat).
+	var flat: PackedByteArray = ChunkIO.io_cpp().slabs_flat(slabs)
 	var found: Array = []
 	var y := 0
 	while y < Data.HEIGHT:
@@ -5251,7 +5259,10 @@ func _data_at_slab(c: Node3D, si: int, pos: int, cache: Dictionary) -> int:
 	if si < 0:
 		return 0
 	if not cache.has(si):
-		cache[si] = ChunkIO._slab_flat(c.data[si])
+		# AC-0214: the cached unpacked view per section — the cache stays
+		# (per-tick Dictionary), the unpack itself is C++ (ChunkIOPalette
+		# slab_flat — direct palette index ops, no per-cell GDScript work).
+		cache[si] = ChunkIO.io_cpp().slab_flat(c.data[si])
 	var dv: PackedByteArray = cache[si]
 	return 0 if dv.is_empty() else int(dv[pos])
 
@@ -5332,7 +5343,10 @@ func tick_fluids() -> void:
 		while si < ChunkScript.slab_n():
 			var fslab = c.fl[si]
 			if fslab != null and int(fslab["nz"]) > 0:
-				var fflat: PackedByteArray = ChunkIO._slab_flat(fslab)
+				# AC-0214: the wet-fluid slab unpack is C++ (ChunkIOPalette
+				# slab_flat — the fluid tick no longer runs the GDScript
+				# _slab_getbits per cell).
+				var fflat: PackedByteArray = ChunkIO.io_cpp().slab_flat(fslab)
 				var srow: int = si * 16
 				var cell := 0
 				while cell < 4096:

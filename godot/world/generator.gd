@@ -423,8 +423,11 @@ static func apply_banana_resl(resl: Array, cx: int, cz: int, seed: int, hmax: in
 			break
 	if not has_sand:
 		return none
-	var flat: PackedByteArray = ChunkIO._slabs_flat(slabs)
+	# AC-0214: the shore expand + re-palettize are C++ (ChunkIOPalette
+	# slabs_flat / palettize_flat — the worker landing path).
+	var io: Variant = ChunkIO.io_cpp()
+	var flat: PackedByteArray = io.slabs_flat(slabs)
 	var r: Dictionary = apply_banana_trees(flat, cx, cz, seed, hmax)
 	if int(r["trees"]) > 0:
-		resl[0] = ChunkIO.palettize_flat(flat, slabs.size())
+		resl[0] = io.palettize_flat(flat, slabs.size())
 	return r

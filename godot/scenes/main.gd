@@ -1389,6 +1389,12 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "chunkiocpp":
 			await _chunkiocpp_test(spawn)
 			return
+		if logic == "slabops":
+			# AC-0214: C++ slab-op A/B (the remaining palette reads/writes
+			# moved to C++ — palettize/set/top/row/copy/cell/flat vs the
+			# surviving GDScript reference bodies).
+			await _slabops_test(spawn)
+			return
 		if logic == "nofallback":
 			await _nofallback_test(spawn)
 			return
@@ -11222,6 +11228,8 @@ func _nofallback_test(spawn: Vector3) -> void:
 	var m0_strips := int(world.strips_cpp_calls)
 	var m0_light := int(Lighting.cpp_pull_calls)
 	var m0_io := int(ChunkIO.cpp_slab_decodes)
+	var m0_sets := int(ChunkIO.slab_cpp_sets)
+	var m0_gdset := int(ChunkIO.slab_gd_write_calls)
 	var res := {
 		"ok": false,
 		"m0_mesh": m0_mesh,
@@ -11241,6 +11249,8 @@ func _nofallback_test(spawn: Vector3) -> void:
 		"torch_light": 0,
 		"roundtrip_ok": false,
 		"wall_ms": 0,
+		"slab_cpp_sets": 0,
+		"slab_gd_write_calls": 0,
 	}
 	world.fluid_sim_enabled = false
 	world.collision_enabled = false
@@ -11318,7 +11328,12 @@ func _nofallback_test(spawn: Vector3) -> void:
 	res["chunkio_cpp_slab_decodes"] = int(ChunkIO.cpp_slab_decodes) - m0_io
 	res["gd_strips_calls"] = int(world.gd_strips_calls)
 	res["gd_light_pull_calls"] = int(Lighting.gd_pull_calls)
-	res["ok"] = res["mesh_cpp_builds"] > 0 and res["gen_cpp_works"] > 0 and res["strips_cpp_calls"] > 0 and res["chunkio_cpp_slab_decodes"] > 0 and res["gd_strips_calls"] == 0 and res["gd_light_pull_calls"] == 0 and res["mesh_chunks"] >= 16 and torch_placed and torch_light > 5 and rt_ok
+	# AC-0214: the per-block write lane — the C++ slab_set counter must have
+	# advanced (the torch placement + boot edits run through the C++ write)
+	# while the GDScript _slab_write_gd reference sentinel stays 0.
+	res["slab_cpp_sets"] = int(ChunkIO.slab_cpp_sets) - m0_sets
+	res["slab_gd_write_calls"] = int(ChunkIO.slab_gd_write_calls) - m0_gdset
+	res["ok"] = res["mesh_cpp_builds"] > 0 and res["gen_cpp_works"] > 0 and res["strips_cpp_calls"] > 0 and res["chunkio_cpp_slab_decodes"] > 0 and res["gd_strips_calls"] == 0 and res["gd_light_pull_calls"] == 0 and res["mesh_chunks"] >= 16 and torch_placed and torch_light > 5 and rt_ok and res["slab_cpp_sets"] > 0 and res["slab_gd_write_calls"] == 0
 	res["wall_ms"] = Time.get_ticks_msec() - t0
 	Debug.result(res)
 	get_tree().quit()
@@ -11520,6 +11535,258 @@ func _ci_slabs_equal(a: Array, b: Array) -> bool:
 		if (sa["i"] as PackedByteArray) != (sb["i"] as PackedByteArray):
 			return false
 	return true
+
+
+# AC-0214: GDScript reference for the column top (the Chunk.update_top body
+# pre-AC-0214 — per-slab _slab_flat + top-row scan; slabops A/B only).
+func _so_top_gd(slabs: Array) -> int:
+	if slabs.is_empty():
+		return -1
+	var t := -1
+	var si := slabs.size() - 1
+	while si >= 0:
+		var s = slabs[si]
+		if s != null:
+			var flat: PackedByteArray = ChunkIO._slab_flat(s)
+			var cy := 15
+			while cy >= 0:
+				var row := cy << 8
+				var anyv := false
+				var i := 0
+				while i < 256:
+					if flat[row + i] != 0:
+						anyv = true
+						break
+					i += 1
+				if anyv:
+					t = si * 16 + cy
+					break
+				cy -= 1
+			break
+		si -= 1
+	return t
+
+
+# AC-0214: GDScript reference for the 256-cell row (the chunk.gd _slabs_row
+# body pre-AC-0214; slabops A/B only).
+func _so_row_gd(slabs: Array, y: int) -> PackedByteArray:
+	var s = slabs[y >> 4]
+	var out := PackedByteArray()
+	out.resize(256)
+	if s != null:
+		var flat: PackedByteArray = ChunkIO._slab_flat(s)
+		var base := (y & 15) << 8
+		for i in range(256):
+			out[i] = flat[base + i]
+	return out
+
+
+# AC-0214 probe (AWECRAFT_LOGIC=slabops, harness-only, never runs in game):
+# the remaining slab ops that still had GDScript bodies — palettize_flat,
+# the per-block write with palette growth (Chunk._slab_write), slabs_top,
+# slab_row, slab_copy, slab_cell, slabs_flat/slab_flat — must be EXACTLY
+# the surviving GDScript reference bodies (ChunkIO.palettize_flat /
+# _ChunkScriptM._slab_write_gd / the ChunkIO._slab_* helpers) on synthetic
+# edge-case columns (uniform/sparse/rainbow/raw/fluid) + real r=4 columns,
+# with a seeded random write sequence per column (400 writes, air-heavy + a
+# >16-wide value spread that drives every palette-growth branch: null->slab,
+# uniform split, bit widening + repack, raw overflow, back-to-air
+# nullification). The post-write columns must be byte-identical (flat) AND
+# structurally identical (slab shape). Also reports the C++ vs GDScript
+# speedup on the flat->paletted landing conversion (informational).
+func _slabops_test(spawn: Vector3) -> void:
+	var res := {
+		"ok": false,
+		"cpp_registered": ClassDB.class_exists("ChunkIOPalette"),
+		"cols": 0,
+		"real_cols": 0,
+		"palettize_pairs": 0,
+		"palettize_match": 0,
+		"set_rounds": 0,
+		"set_match": 0,
+		"top_pairs": 0,
+		"top_match": 0,
+		"row_pairs": 0,
+		"row_match": 0,
+		"copy_pairs": 0,
+		"copy_match": 0,
+		"cell_pairs": 0,
+		"cell_match": 0,
+		"flat_pairs": 0,
+		"flat_match": 0,
+		"gd_palettize_ms": 0.0,
+		"cpp_palettize_ms": 0.0,
+		"palettize_speedup": 0.0,
+		"wall_ms": 0,
+	}
+	if not res["cpp_registered"]:
+		Debug.result(res)
+		get_tree().quit()
+		return
+	var C = ClassDB.instantiate("ChunkIOPalette")
+	if C == null:
+		Debug.result(res)
+		get_tree().quit()
+		return
+	var t0 := Time.get_ticks_msec()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20260904
+	var sub := int(Data.HEIGHT) / ChunkIO.S
+	var samples: Array = []
+	samples.append(_ci_col_uniform(sub)["data"])
+	samples.append(_ci_col_sparse(sub)["data"])
+	samples.append(_ci_col_rainbow(sub)["data"])
+	samples.append(_ci_col_raw(sub)["data"])
+	samples.append(_ci_col_fluid(sub)["data"])
+	world.fluid_sim_enabled = false
+	world.render_radius = 4
+	world.recenter(spawn.x, spawn.z, true)
+	var waited := 0
+	var built := 0
+	while built < 12 and waited < 1200:
+		await get_tree().physics_frame
+		waited += 1
+		built = 0
+		for key in world.chunks.keys():
+			var c = world.chunks.get(key)
+			if c != null and not c.data.is_empty():
+				built += 1
+	var real := 0
+	for key in world.chunks.keys():
+		var c = world.chunks.get(key)
+		if c == null or c.data.is_empty():
+			continue
+		samples.append(ChunkIO._slabs_flat(c.data))
+		real += 1
+		if real >= 12:
+			break
+	res["real_cols"] = real
+	res["cols"] = samples.size()
+	var iters := 20
+	for smp in samples:
+		var d: PackedByteArray = smp
+		# (a) palettize_flat: C++ vs GDScript (structural slab equality —
+		# n/b/nz + p/i byte-identical; the landing conversion).
+		var gd_slabs: Array = ChunkIO.palettize_flat(d, sub)
+		var cpp_slabs: Array = C.palettize_flat(d, sub)
+		res["palettize_pairs"] = int(res["palettize_pairs"]) + 1
+		if _ci_slabs_equal(gd_slabs, cpp_slabs):
+			res["palettize_match"] = int(res["palettize_match"]) + 1
+		# (b) the per-block write A/B: the SAME seeded write sequence on two
+		# deep copies — one side through C++ slab_set, the other through the
+		# GDScript _slab_write_gd reference. Final columns must be
+		# byte-identical (flat) AND structurally identical (slab shape).
+		var ga: Array = ChunkIO._slabs_deepcopy(gd_slabs)
+		var ca: Array = C.slab_copy(cpp_slabs)
+		for w in 400:
+			var y := rng.randi_range(0, Data.HEIGHT - 1)
+			var lz := rng.randi_range(0, 15)
+			var lx := rng.randi_range(0, 15)
+			var r: int = rng.randi_range(0, 99)
+			var val: int
+			if r < 55:
+				val = 0
+			elif r < 80:
+				val = rng.randi_range(1, 8)
+			elif r < 95:
+				val = rng.randi_range(1, 30)
+			else:
+				val = rng.randi_range(1, 255)
+			var pos := ((y & 15) << 8) | (lz << 4) | lx
+			var si := y >> 4
+			C.slab_set(ca, si, pos, val)
+			_ChunkScriptM._slab_write_gd(ga, y, lz, lx, val)
+		var gf: PackedByteArray = ChunkIO._slabs_flat(ga)
+		var cf: PackedByteArray = C.slabs_flat(ca)
+		res["set_rounds"] = int(res["set_rounds"]) + 1
+		if gf == cf and _ci_slabs_equal(ga, ca):
+			res["set_match"] = int(res["set_match"]) + 1
+		# (c) slabs_top: C++ vs the GDScript reference (on the pre-write and
+		# post-write columns).
+		res["top_pairs"] = int(res["top_pairs"]) + 2
+		if _so_top_gd(ga) == int(C.slabs_top(ca)) and _so_top_gd(gd_slabs) == int(C.slabs_top(cpp_slabs)):
+			res["top_match"] = int(res["top_match"]) + 2
+		# (d) slab_row: C++ vs the GDScript reference over every slab
+		# boundary row + the top row (the row_bytes consumers' rows).
+		var ytop := _so_top_gd(ga)
+		var ytest: Array = []
+		for srow in range(sub):
+			ytest.append(srow * 16)
+			ytest.append(srow * 16 + 15)
+		if ytop >= 0:
+			ytest.append(ytop)
+		for yv in ytest:
+			res["row_pairs"] = int(res["row_pairs"]) + 1
+			if _so_row_gd(ga, yv) == C.slab_row(ca, yv):
+				res["row_match"] = int(res["row_match"]) + 1
+		# (e) slab_copy: C++ vs GDScript _slabs_deepcopy (shape + byte
+		# equality, and DICTIONARY independence — a field write on a copied
+		# slab dict must not reach the original; the save-queue snapshot
+		# relies on the copy being a standalone value).
+		var cc: Array = C.slab_copy(ga)
+		var dc: Array = ChunkIO._slabs_deepcopy(ca)
+		res["copy_pairs"] = int(res["copy_pairs"]) + 1
+		var iso_ok := true
+		var k0 := 0
+		while k0 < cc.size():
+			var csl = cc[k0]
+			var gsl = ga[k0]
+			if csl != null:
+				var saved_nz: int = int(gsl["nz"])
+				csl["nz"] = -42  # a dict-field write on the copy
+				if int(gsl["nz"]) != saved_nz:
+					iso_ok = false
+				csl["nz"] = saved_nz
+			elif gsl != null:
+				iso_ok = false
+			k0 += 1
+		if _ci_slabs_equal(cc, dc) and iso_ok:
+			res["copy_match"] = int(res["copy_match"]) + 1
+		# (f) slab_cell: C++ vs GDScript _slab_cell (random slab/pos, every
+		# slab kind: uniform / paletted / raw / null skipped).
+		for cp in 200:
+			var csi := rng.randi_range(0, sub - 1)
+			var cps := rng.randi_range(0, 4095)
+			if ga[csi] == null:
+				continue
+			res["cell_pairs"] = int(res["cell_pairs"]) + 1
+			if int(C.slab_cell(ca[csi], cps)) == int(ChunkIO._slab_cell(ga[csi], cps)):
+				res["cell_match"] = int(res["cell_match"]) + 1
+		# (g) slabs_flat / slab_flat: C++ vs GDScript (whole column + every
+		# non-null slab).
+		res["flat_pairs"] = int(res["flat_pairs"]) + 1
+		var fflat_ok: bool = (C.slabs_flat(ca) == ChunkIO._slabs_flat(ga))
+		for fs2 in range(sub):
+			if ga[fs2] != null:
+				fflat_ok = fflat_ok and (C.slab_flat(ca[fs2]) == ChunkIO._slab_flat(ga[fs2]))
+		if fflat_ok:
+			res["flat_match"] = int(res["flat_match"]) + 1
+	# speedup: the flat->paletted landing conversion on one real-sized
+	# column (informational — the A/B above is the gate).
+	if samples.size() > 0:
+		var sd: PackedByteArray = samples[0]
+		var t1 := Time.get_ticks_usec()
+		for k in iters:
+			ChunkIO.palettize_flat(sd, sub)
+		res["gd_palettize_ms"] = float(Time.get_ticks_usec() - t1) / 1000.0 / float(iters)
+		t1 = Time.get_ticks_usec()
+		for k in iters:
+			C.palettize_flat(sd, sub)
+		res["cpp_palettize_ms"] = float(Time.get_ticks_usec() - t1) / 1000.0 / float(iters)
+		res["palettize_speedup"] = res["gd_palettize_ms"] / res["cpp_palettize_ms"] if res["cpp_palettize_ms"] > 0.0 else 0.0
+	res["wall_ms"] = Time.get_ticks_msec() - t0
+	res["ok"] = (
+		res["palettize_match"] == res["palettize_pairs"]
+		and res["set_match"] == res["set_rounds"]
+		and res["top_match"] == res["top_pairs"]
+		and res["row_match"] == res["row_pairs"]
+		and res["copy_match"] == res["copy_pairs"]
+		and res["cell_match"] == res["cell_pairs"]
+		and res["flat_match"] == res["flat_pairs"]
+		and res["real_cols"] > 0
+	)
+	Debug.result(res)
+	get_tree().quit()
 
 
 # AC-0188 probe (AWECRAFT_LOGIC=genprobe, harness-only): the C++ AweNoise

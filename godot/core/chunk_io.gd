@@ -24,6 +24,14 @@ const S3 := 4096
 static var _io_cpp: Variant = null
 static var _io_cpp_done := false
 static var cpp_slab_decodes := 0
+# AC-0214: runtime C++ slab-op counters. slab_cpp_sets counts the C++
+# single-cell writes (chunk.gd _slab_write -> ChunkIOPalette.slab_set — the
+# per-block edit op); the nofallback arm asserts it advances (the torch
+# placement proves the C++ write lane ran). slab_gd_write_calls is the
+# no-fallback sentinel: the GDScript _slab_write_gd body (chunk.gd) survives
+# only as the slabops A/B reference — any game-side call trips it.
+static var slab_cpp_sets := 0
+static var slab_gd_write_calls := 0
 
 static func io_cpp() -> Variant:
 	if not _io_cpp_done:

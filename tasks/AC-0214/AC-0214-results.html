@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AC-0214 — palette-reads-remaining-gdscript-to-cpp</title>
+<style>
+body { font-family: monospace; margin: 2em; background: #111; color: #ddd; }
+h1 { color: #7fd; } h2 { color: #cf8; border-bottom: 1px solid #444; }
+table { border-collapse: collapse; } td, th { border: 1px solid #444; padding: 4px 10px; }
+.ok { color: #7f7; font-weight: bold; } .bad { color: #f77; font-weight: bold; } .muted { color: #888; }
+code { color: #fc6; } pre { background: #1a1a1a; padding: 1em; overflow-x: auto; }
+</style>
+</head>
+<body>
+<h1>AC-0214 — palette-reads-remaining-gdscript-to-cpp</h1>
+<p>Move ALL remaining per-block palette reads/writes out of the GDScript hot paths into
+<code>ChunkIOPalette</code> (C++). Direct palette index ops, cached unpacked views per section.
+Five new C++ methods on the existing registered class (no <code>.gdextension</code> change):
+<code>palettize_flat</code>, <code>slab_set</code>, <code>slabs_top</code>, <code>slab_row</code>, <code>slab_copy</code>.</p>
+
+<h2>1. What the ops do</h2>
+<ul>
+<li><b><code>palettize_flat(arr, nsl)</code></b> — flat column bytes → 24-slab paletted array
+(per-slab LUT + one batch bitpack, sorted palette; null if empty, n==1 uniform, n==0 raw when &gt;16 ids).</li>
+<li><b><code>slab_set(slabs, si, pos, val)</code></b> — one-cell write; mirrors the GDScript
+<code>_slab_write</code> branch-for-branch (null→slab, uniform split, palette grow + bit-widening
+repack, raw fallback at n≥16, nz recount, null when nz==0).</li>
+<li><b><code>slabs_top(slabs)</code></b> — first non-null slab from the top, per-cell direct index
+ops + per-palette non-zero prefilter (port of <code>Chunk.update_top</code>).</li>
+<li><b><code>slab_row(slabs, y)</code></b> — 256-cell row (null slab = zero row).</li>
+<li><b><code>slab_copy(slabs)</code></b> — deep copy (memcpy p/i, nulls kept) for the save worker.</li>
+</ul>
+
+<h2>2. GDScript rewiring (runtime paths → C++)</h2>
+<table>
+<tr><th>File</th><th>Runtime path</th><th>Now calls</th></tr>
+<tr><td>world/chunk.gd</td><td>get_local / fl_at (per-block read)</td><td><code>slab_cell</code></td></tr>
+<tr><td>world/chunk.gd</td><td>update_top</td><td><code>slabs_top</code></td></tr>
+<tr><td>world/chunk.gd</td><td>flat_data / flat_fl / _slabs_row</td><td><code>slabs_flat</code> / <code>slab_row</code></td></tr>
+<tr><td>world/chunk.gd</td><td>data_landed / slabs_landed</td><td><code>palettize_flat</code> / <code>slabs_flat</code></td></tr>
+<tr><td>world/chunk.gd</td><td>_slab_write (set_local / set_fl_at)</td><td><code>slab_set</code></td></tr>
+<tr><td>world/lighting.gd</td><td>_chunk_light_into dviews</td><td><code>slab_flat</code></td></tr>
+<tr><td>world/world.gd</td><td>_queue_chunk_save</td><td><code>slab_copy</code></td></tr>
+<tr><td>world/world.gd</td><td>_io_write_worker / _banana_register_disk</td><td><code>slabs_flat</code></td></tr>
+<tr><td>world/world.gd</td><td>_data_at_slab per-tick cache, tick_fluids</td><td><code>slab_flat</code></td></tr>
+<tr><td>world/generator.gd</td><td>apply_banana_resl</td><td><code>slabs_flat</code> + <code>palettize_flat</code></td></tr>
+</table>
+<p>Counters: <code>ChunkIO.slab_cpp_sets</code> / <code>ChunkIO.slab_gd_write_calls</code> (A/B sentinel pair,
+mirrors the AC-0207 pattern). The removed kernels survive VERBATIM as A/B references:
+<code>chunk.gd _slab_write_gd</code> (sentinel <code>slab_gd_write_calls</code>), <code>lighting.gd _pull_kernel_gd</code>
+(<code>gd_pull_calls</code>), <code>world.gd _side_blk_strip</code>/<code>_corner_eff_strip</code>/<code>_compute_face_blk_gd</code>
+(<code>gd_strips_calls</code>).</p>
+
+<h2>3. Bug found + fixed (godot-cpp COW semantics)</h2>
+<p>The first <code>slabops</code> A/B run failed 16/17 columns. Empirical probes
+(<code>.scratch/AC-0214-gates/cow_test.gd</code>, <code>cowcpp_dbg.gd</code>) established that in this
+godot-cpp build a <code>PackedByteArray</code> is an opaque engine-handle wrapper: <b>raw
+<code>ptrw()</code> writes on a handle shared with a Dictionary do NOT propagate back to the dict
+entry</b> (scalar fields and fresh-array assignments do). Fix: <code>slab_set</code> never mutates a
+shared packed array in place — every branch builds fresh <code>std::vector&lt;uint8_t&gt;</code> payloads,
+converts with <code>pba_from()</code>, and publishes a fresh Dictionary via <code>slabs[p_si] = nd</code>.
+Post-fix standalone write battery: 84/84 exact.</p>
+
+<h2>4. Gates</h2>
+<table>
+<tr><th>Gate</th><th>Result</th><th>Status</th></tr>
+<tr><td><b>slabops</b> (NEW A/B arm: 5 synthetic + 12 real cols; palettize / 400-write / top / row / cell / copy vs GDScript refs)</td><td>ok:true — palettize 17/17, set+flat 17/17 (400-write A/B), top 34/34, row 833/833, cell 3400/3400, copy 17/17; palettize 43.0× faster (0.198 vs 8.53 ms/col)</td><td class="ok">PASS</td></tr>
+<tr><td><b>R16</b> (<code>--fixed-fps 600</code>, seed 44)</td><td>ok:true, build 797/797 (11.96 s). static fps p50/p95 <b>333/250</b> (standing 333/200 — improved), p50/p95_ms 3/4 (was 3/5), max 17 ms. moving fps 333/200, p95 5 ms, max 18 ms — identical to standing. 272 <code>is_inside_tree</code> warnings = baseline-identical; 0 SCRIPT ERROR</td><td class="ok">PASS</td></tr>
+<tr><td><b>G0</b> headless load</td><td>exit 0, 0 SCRIPT ERROR</td><td class="ok">PASS</td></tr>
+<tr><td><b>SMOKE</b> <code>AWECRAFT_BATTERY=player;interact;light;fluids</code></td><td>ok:true — player on-floor/fly ✓, interact place+drop+inv ✓, light surface 15 / torch 14 ✓, fluids sea_stable + water-on-lava 24 ✓</td><td class="ok">PASS</td></tr>
+<tr><td><b>chunkiocpp</b> (codec byte-identical)</td><td>ok:true — md5 <code>8a893557…</code> == original, enc 34/34, flat 34/34, roundtrip 17/17 (wire format untouched)</td><td class="ok">PASS</td></tr>
+<tr><td><b>genhash</b> ×2</td><td>25/25 identical across 2 fresh runs AND == standing (AC-0227/AC-0217 <code>80b904c0…</code>, GENMS 37). Note: the AC-0215 <i>genhash1.log</i> baseline in the task text was superseded in-task (AC-0215 run-4); the standing value is verified across 6 later task gates</td><td class="ok">PASS</td></tr>
+<tr><td><b>light</b> standing arm</td><td>surface 15 / torch 14 / torch_far 9 — byte-identical to AC-0227 + AC-0217 standing</td><td class="ok">PASS</td></tr>
+<tr><td><b>meshprobe</b></td><td>ok:true — 32/32 chunks, 1926/1926 accs, match_rate 1.0, verts 240600/240600</td><td class="ok">PASS</td></tr>
+<tr><td><b>stripsprobe</b></td><td>ok:true — 32/32 chunks, 512/512 strips, face 32/32, match_rate 1.0</td><td class="ok">PASS</td></tr>
+<tr><td><b>pullprobe</b></td><td>ok:true — 32/32 chunks, 6,291,456 cells compared, max_diff 0, variants 64/64</td><td class="ok">PASS</td></tr>
+<tr><td><b>nofallback</b></td><td>ok:true — <b>slab_cpp_sets 2 &gt; 0</b>, <b>slab_gd_write_calls 0</b> (torch placement drives the C++ lane), m0_*/gd_light_pull/gd_strips all 0, roundtrip ok</td><td class="ok">PASS</td></tr>
+<tr><td><b>editslab</b> (bonus)</td><td>ok:true — 3 edits across slab boundaries (y 15/24/32, slabs_touched [0,1]/[1]/[1,2]), all mesh_built</td><td class="ok">PASS</td></tr>
+</table>
+<p class="muted">Not run (per task): R50 (crashes in coordinator env), Windows build.</p>
+
+<h2>5. Grep verification — remaining GDScript palette ops in <code>godot/</code></h2>
+<p>Per-frame runtime paths: <span class="ok">NONE</span>. All remaining references are harness/A-B only:</p>
+<ul>
+<li><code>world/chunk.gd</code> <code>_slab_write_gd</code> (L457-560) — the removed kernel, kept VERBATIM as the slabops A/B reference (sentinel <code>ChunkIO.slab_gd_write_calls</code>, only the env-gated arm calls it).</li>
+<li><code>world/lighting.gd</code> <code>_pull_kernel_gd</code> (L422-437) — pullprobe A/B reference (sentinel <code>gd_pull_calls</code>).</li>
+<li><code>world/world.gd</code> <code>_side_blk_strip</code>/<code>_corner_eff_strip</code>/<code>_compute_face_blk_gd</code> (L3404/3462) — stripsprobe A/B references (sentinel <code>gd_strips_calls</code>).</li>
+<li><code>core/chunk_io.gd</code> — the static codec definitions themselves (<code>_slab_getbits/_slab_setbits/_slab_cell/_slab_unpack/_slab_flat/_slabs_flat/_slabs_deepcopy/palettize_flat/_slab_bits_for</code>), used by the codec + the A/B references above.</li>
+<li><code>scenes/main.gd</code> — env-gated harness arms only (chunkiocpp reference codec, slabops A/B, meshprobe, editslab arms).</li>
+</ul>
+
+<h2>6. Files changed</h2>
+<pre>gdext/src/chunk_io.cpp     +5 methods on ChunkIOPalette (palettize_flat, slab_set, slabs_top, slab_row, slab_copy)
+                           + anon-namespace slab_setbits_w/slab_cell_of/slab_flat_of (codec twins)
+godot/core/chunk_io.gd     +slab_cpp_sets / slab_gd_write_calls counters
+godot/world/chunk.gd       runtime paths → C++; _slab_write body → _slab_write_gd reference
+godot/world/lighting.gd    _chunk_light_into dviews → io.slab_flat (C++)
+godot/world/world.gd       save enqueue/worker, banana disk, _data_at_slab cache, tick_fluids → C++
+godot/world/generator.gd   apply_banana_resl → io.slabs_flat + io.palettize_flat
+godot/scenes/main.gd       +slabops A/B arm; nofallback arm +slab counter checks</pre>
+<p>Logs: <code>.scratch/AC-0214-gates/</code> (slabops, g0, smoke, chunkiocpp, genhash1/2, light,
+meshprobe, stripsprobe, pullprobe, nofallback, editslab, r16, import + debug probes).
+Build: SCons linux template_release, <code>godot/bin/libchunkio.so</code> re-staged (git-ignored), one
+<code>godot --headless --import</code> (0 errors).</p>
+</body>
+</html>

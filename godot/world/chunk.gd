@@ -45,32 +45,10 @@ var top := -1
 
 
 func update_top() -> void:
-	if data.is_empty():
-		top = -1
-		return
-	var t := -1
-	var si := data.size() - 1
-	while si >= 0:
-		var s = data[si]
-		if s != null:
-			var flat := ChunkIO._slab_flat(s)
-			var cy := 15
-			while cy >= 0:
-				var row := cy << 8
-				var anyv := false
-				var i := 0
-				while i < 256:
-					if flat[row + i] != 0:
-						anyv = true
-						break
-					i += 1
-				if anyv:
-					t = si * 16 + cy
-					break
-				cy -= 1
-			break
-		si -= 1
-	top = t
+	# AC-0214: the top scan runs in C++ (ChunkIOPalette.slabs_top — direct
+	# palette index ops over the slab store, no GDScript _slab_flat
+	# expansion + per-cell Variant loop). -1 on an empty column, as before.
+	top = -1 if data.is_empty() else int(ChunkIO.io_cpp().slabs_top(data))
 # AC-0080 two-stage hysteresis: candidate = at Chebyshev r+1 with expensive
 # parts killed (mesh/collision), data+edits kept; cand_since = count of
 # recenter events spent at >= r+2 (free at >= 2).
@@ -335,10 +313,13 @@ static func _merge_atlas() -> Dictionary:
 
 
 func get_local(lx: int, y: int, lz: int) -> int:
+	# AC-0214: the per-block read is the C++ direct palette index op
+	# (ChunkIOPalette.slab_cell) — the GDScript ChunkIO._slab_cell wrapper is
+	# gone from the hot path (null slab = air, as before).
 	var s = data[y >> 4]
 	if s == null:
 		return 0
-	return ChunkIO._slab_cell(s, ((y & 15) << 8) | (lz << 4) | lx)
+	return int(ChunkIO.io_cpp().slab_cell(s, ((y & 15) << 8) | (lz << 4) | lx))
 
 
 func set_local(lx: int, y: int, lz: int, id: int) -> void:
@@ -353,11 +334,12 @@ func get_at(fi: int) -> int:
 
 
 func fl_at(fi: int) -> int:
+	# AC-0214: C++ direct palette index op (see get_local).
 	var y: int = fi >> 8
 	var s = fl[y >> 4]
 	if s == null:
 		return 0
-	return ChunkIO._slab_cell(s, ((y & 15) << 8) | (fi & 255))
+	return int(ChunkIO.io_cpp().slab_cell(s, ((y & 15) << 8) | (fi & 255)))
 
 
 func set_fl_at(fi: int, lvl: int) -> void:
@@ -381,12 +363,14 @@ func stamp() -> Array:
 # AC-0203: lazy flat expansion — the only way back to the legacy
 # (y<<8)|(lz<<4)|lx view (probes, save handoff, legacy kernels). Not on the
 # R50 steady-state hot path (worker builds run on slab views).
+# AC-0214: the expansion itself is C++ (ChunkIOPalette.slabs_flat — the
+# per-slab palette decode, no per-cell GDScript work).
 func flat_data() -> PackedByteArray:
-	return ChunkIO._slabs_flat(data)
+	return ChunkIO.io_cpp().slabs_flat(data)
 
 
 func flat_fl() -> PackedByteArray:
-	return ChunkIO._slabs_flat(fl)
+	return ChunkIO.io_cpp().slabs_flat(fl)
 
 
 func row_bytes(y: int) -> PackedByteArray:
@@ -398,15 +382,9 @@ func fl_row_bytes(y: int) -> PackedByteArray:
 
 
 static func _slabs_row(slabs: Array, y: int) -> PackedByteArray:
-	var s = slabs[y >> 4]
-	var out := PackedByteArray()
-	out.resize(256)
-	if s != null:
-		var flat := ChunkIO._slab_flat(s)
-		var base := (y & 15) << 8
-		for i in range(256):
-			out[i] = flat[base + i]
-	return out
+	# AC-0214: C++ (ChunkIOPalette.slab_row — the row's 256 cells by direct
+	# palette index op; null slab = zero row, the GDScript parity).
+	return ChunkIO.io_cpp().slab_row(slabs, y)
 
 
 # AC-0203: the single flat->paletted conversion point. Every data landing
@@ -415,13 +393,18 @@ static func _slabs_row(slabs: Array, y: int) -> PackedByteArray:
 # arrives zero (or as the on-disk fl column); fluid_level() maps 0 -> 8 for
 # display and sim, so the natural ocean never falls or churns.
 func data_landed(d: PackedByteArray, f: PackedByteArray) -> void:
-	data = ChunkIO.palettize_flat(d, slab_n())
+	# AC-0214: the flat->paletted conversion is C++ (ChunkIOPalette
+	# palettize_flat — LUT + one batch bitpack per slab, no per-cell
+	# GDScript hashing; the GDScript ChunkIO.palettize_flat survives in the
+	# codec reference only, A/B'd by the slabops arm).
+	var io: Variant = ChunkIO.io_cpp()
+	data = io.palettize_flat(d, slab_n())
 	if f.is_empty():
 		var zf := PackedByteArray()
 		zf.resize(d.size())
-		fl = ChunkIO.palettize_flat(zf, slab_n())
+		fl = io.palettize_flat(zf, slab_n())
 	else:
-		fl = ChunkIO.palettize_flat(f, slab_n())
+		fl = io.palettize_flat(f, slab_n())
 	data_gen += 1
 	fl_gen += 1
 	update_top()
@@ -431,9 +414,11 @@ func data_landed(d: PackedByteArray, f: PackedByteArray) -> void:
 # the slab array (the wire form is the slab form), so this is a reference
 # handoff: no flat expansion, no re-palettize on the main thread.
 func slabs_landed(ds: Array, fs: Array) -> void:
+	# AC-0214: the mismatch fallback (re-palettize) is C++ too.
+	var io: Variant = ChunkIO.io_cpp()
 	if ds.size() != slab_n() or fs.size() != slab_n():
-		data = ChunkIO.palettize_flat(ChunkIO._slabs_flat(ds), slab_n())
-		fl = ChunkIO.palettize_flat(ChunkIO._slabs_flat(fs), slab_n())
+		data = io.palettize_flat(io.slabs_flat(ds), slab_n())
+		fl = io.palettize_flat(io.slabs_flat(fs), slab_n())
 	else:
 		data = ds
 		fl = fs
@@ -459,7 +444,18 @@ func clear_data() -> void:
 # AC-0203: slab write with palette growth. The slab invariant holds on
 # return: null = all air; otherwise nz>0, n<=16 (or raw n==0 when the
 # palette overflows), i consistent with b, nz = non-zero cell count.
+# AC-0214: the write runs in C++ (ChunkIOPalette.slab_set — direct palette
+# index ops + in-place growth: null->slab, uniform split, bit widening +
+# repack, raw overflow, back-to-air nullification). The removed GDScript
+# body survives VERBATIM below as _slab_write_gd (the slabops A/B
+# reference — the sentinel counts any game-side call of it).
 static func _slab_write(slabs: Array, y: int, lz: int, lx: int, val: int) -> void:
+	ChunkIO.slab_cpp_sets += 1
+	ChunkIO.io_cpp().slab_set(slabs, y >> 4, ((y & 15) << 8) | (lz << 4) | lx, val)
+
+
+static func _slab_write_gd(slabs: Array, y: int, lz: int, lx: int, val: int) -> void:
+	ChunkIO.slab_gd_write_calls += 1
 	var si := y >> 4
 	var pos := ((y & 15) << 8) | (lz << 4) | lx
 	var s = slabs[si]

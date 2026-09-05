@@ -312,6 +312,9 @@ static func compute_light_flat(box: Dictionary, world) -> Dictionary:
 static func _chunk_light_into(data, cx: int, cz: int, h: int, ids: PackedByteArray, sky: PackedByteArray, blk: PackedByteArray) -> PackedByteArray:
 	# AC-0203: data is the 24-slab array; reads go through per-slab flat
 	# views (scan order and open-flag semantics unchanged).
+	# AC-0214: the view materialization is C++ (ChunkIOPalette.slab_flat —
+	# the cached unpacked view per section; the null slab stays an empty
+	# view, the GDScript parity).
 	var mn := Vector3i(cx * 16, 0, cz * 16)
 	var mx := Vector3i(cx * 16 + 15, h - 1, cz * 16 + 15)
 	var w := 16
@@ -319,8 +322,9 @@ static func _chunk_light_into(data, cx: int, cz: int, h: int, ids: PackedByteArr
 	var H: int = h
 	var sz := w * d
 	var dviews: Array = []
+	var io: Variant = ChunkIO.io_cpp()
 	for s in data:
-		dviews.append(ChunkIO._slab_flat(s))
+		dviews.append(io.slab_flat(s))
 	var has_glow := false
 	for ix in range(w):
 		for iz in range(d):
