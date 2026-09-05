@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0232 — results (dithering-toggle-and-distance-sliders)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:980px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.pass{background:#e8f6e8;border-left:4px solid #2e9e44;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.fail{background:#fdeaea;border-left:4px solid #d33;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0232 — dithering-toggle-and-distance-sliders — results</h1>
+<p class="meta note">GDScript UI task (no C++ change, no rebuild). Logs: <code>.scratch/AC-0232-gates/</code>. Engine Godot 4.7.1, <code>HOME=/tmp/dsh_home</code>, one godot at a time.</p>
+
+<h2>What was built</h2>
+<ul>
+<li><b>Settings</b> (<code>godot/autoload/settings.gd</code>): <code>dithering_enabled</code> (bool, default <b>true</b>), <code>dithering_start_pct</code> + <code>fog_start_pct</code> (int, clamped 0-100; defaults <b>45</b> = the shipped AC-0227 0.45 coefficient, <b>87</b> ~= the shipped AC-0226 0.875 coefficient kept at/under it so the full-fog boundary stays ahead of the worst-case pop-in face at every R &gt;= 7). Persisted in <code>user://awecraft.cfg</code> with every other setting.</li>
+<li><b>Options UI</b> (<code>godot/scenes/menu.tscn</code> + <code>godot/ui/menu.gd</code>): checkbox <b>“Distant dither fade (off = hard pop hidden by fog)”</b> + two 0-100 sliders <b>“Dither fade start %”</b> / <b>“Fog start %”</b> (percent of the render edge, (render_dist + 1) * 16 blocks), synced from Settings on open, saved on change (AC-0225 pattern — the per-frame reads in main.gd make the apply live, no extra call).</li>
+<li><b>Wiring</b> (<code>godot/core/daynight.gd</code> + <code>godot/scenes/main.gd</code>): <code>DayNight.dither_start(R, pct)</code> / <code>DayNight.fog_far(R, pct)</code> take the percent (single-arg calls unchanged for the harness arms). <code>_update_sky</code> pushes <code>u_dither_start/u_dither_end</code> to every cached chunk + fluid ShaderMaterial every frame (toggle off = 0/0 = the shaders' off state = hard pop); <code>_update_fog</code> pushes <code>fog_depth_end</code> every frame. Harness preloads <code>AWECRAFT_DITHER_TOGGLE</code>/<code>AWECRAFT_DITHER_PCT</code>/<code>AWECRAFT_FOG_PCT</code> (AWECRAFT_TM_HO pattern, no save); the existing <code>AWECRAFT_DITHER</code>/<code>AWECRAFT_NO_DITHER</code> A/B hooks still win. New fast arm <code>dithersettings</code> reads the pushed values back.</li>
+</ul>
+
+<h2>Toggle check — R16 (the 16-radius build), <code>AWECRAFT_LOGIC=r16 --fixed-fps 600</code></h2>
+<p class="pass"><b>PASS</b> — toggle ON (defaults) shows the dithered fade for far; toggle OFF shows the hard pop hidden by the fog. Both runs ok:true, 797/797 band-&lt;=2 chunks built (same 797 as the AC-0214 R16 baseline), 0 <code>SCRIPT ERROR</code> each (the is_inside_tree/ObjectDB exit lines are the arm's pre-existing teardown noise — identical count in the AC-0229 R16 logs).</p>
+<table>
+<tr><th>run</th><th>settings in force</th><th>dither band (start..end, blocks)</th><th>fog_far</th><th>worst pop-in face (R*16)</th><th>fog_hides_pop</th><th>ok</th><th>SCRIPT ERROR</th></tr>
+<tr><td>ON — <code>r16_dither_on.log</code></td><td>enabled=true, dither 45%, fog 87%</td><td><b>122.4 .. 269.28</b> (the shipped AC-0227 band — the far chunks dissolve in a checkerboard; a popped chunk appears 85-100% dithered AND fully fogged)</td><td>236.64</td><td>256.0</td><td>true</td><td>true</td><td>0</td></tr>
+<tr><td>OFF — <code>r16_dither_off.log</code> (AWECRAFT_DITHER_TOGGLE=0)</td><td>enabled=false, fog 87%</td><td><b>0 .. 0</b> (dither off — plain hard pop-in)</td><td>236.64</td><td>256.0</td><td>true (236.64 &lt;= 256 — the pop face is 100% fogged the instant it appears)</td><td>true</td><td>0</td></tr>
+</table>
+<p class="note">New R16 RESULT field <code>dither</code> reports the settings in force + the band + the fog-vs-pop-face verdict per run.</p>
+
+<h2>Slider check — <code>AWECRAFT_LOGIC=dithersettings</code> (fast r4 read-back arm)</h2>
+<p class="pass"><b>PASS</b> — the sliders move the start distances live: the arm reads back the actual pushed <code>u_dither_start/u_dither_end</code> uniforms + <code>fog_depth_end</code> at three settings states (on 45/87 → off 10/50 → far 90/95); every read matches the settings exactly, the toggle-off read is 0/0, and both start distances change with the values. <code>live_ok: true</code>, <code>ok: true</code>. (Log: <code>dithersettings.log</code>; values below.)</p>
+<pre>
+RESULT {"mode":"dithersettings","mats":3,"live_ok":true,"ok":true,"elapsed_ms":246,
+ "on":  {"enabled":true,  "dither_start_pct":45, "fog_start_pct":87, "start":36.0, "end":79.2,  "fog_far":69.6, "want":[36.0,79.2,69.6],"ok":true},
+ "off": {"enabled":false, "dither_start_pct":10, "fog_start_pct":50, "start":0.0,  "end":0.0,   "fog_far":40.0, "want":[0.0,0.0,40.0],  "ok":true},
+ "far": {"enabled":true,  "dither_start_pct":90, "fog_start_pct":95, "start":72.0, "end":79.2,  "fog_far":76.0, "want":[72.0,79.2,76.0],"ok":true}}
+# r4 render edge = (4+1)*16 = 80 blocks: 45% = 36.0, 87% = 69.6, 50% = 40.0, 90% = 72.0, 95% = 76.0 —
+# every pushed uniform + fog_depth_end matches the settings exactly; toggle-off = 0/0 (hard pop);
+# dither start 36.0 → 0.0 → 72.0 and fog_far 69.6 → 40.0 → 76.0 move with the sliders, live, within frames.
+</pre>
+
+<h2>Persist check — <code>AWECRAFT_LOGIC=settings</code></h2>
+<p class="pass"><b>PASS</b> — defaults true/45/87; set false/12/60 → saved → reloaded from <code>user://awecraft.cfg</code> exactly; clamp 999→100 and -5→0. Arm <code>ok: true</code> (including every pre-AC-0232 check). (Log: <code>settings.log</code>.)</p>
+<pre>
+RESULT dither = {"default_true_45_87": true, "set_false_12_60_reloaded": true, "clamp_hi_100": true, "clamp_lo_0": true}
+RESULT ok = true
+</pre>
+
+<h2>RENDER — Options panel (xvfb, gl_compatibility, ≤1 render)</h2>
+<p class="pass"><b>PASS</b> — <code>AWECRAFT_MENU_SHOT</code> + <code>AWECRAFT_MENU_VIEW=options</code>: the Options panel shows the new <b>“Distant dither fade (off = hard pop hidden by fog)”</b> checkbox (checked = default on), <b>“Dither fade start %”</b> at 45% and <b>“Fog start %”</b> at 87%; all pre-existing rows unchanged. <code>OPTSYNC … dither=true dithpct=45 fogpct=87</code> confirms the menu synced from Settings; 0 SCRIPT ERROR. Screenshot: <code>tasks/AC-0232/options_menu.png</code> (logs: <code>menu_shot.log</code>/<code>menu_shot2.log</code>).</p>
+
+<h2>G0 — headless load</h2>
+<p class="pass"><b>PASS</b> — <code>--headless --path godot --quit</code> exit 0, <b>0</b> <code>SCRIPT ERROR</code>. (Log: <code>g0.log</code>.)</p>
+
+<h2>SMOKE — <code>AWECRAFT_BATTERY=player;interact;light;fluids</code></h2>
+<p class="pass"><b>PASS</b> — combined battery <code>ok: true</code>, all four modes green (player 2624 ms, interact 1239 ms — drop_spawned/place_ok true, light 802 ms, fluids 3448 ms — sea_stable true). 0 SCRIPT ERROR. (Log: <code>smoke.log</code>.)</p>
+
+<h2>No regression</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>log</th></tr>
+<tr><td>chunkiocpp (codec byte-identical)</td><td><b>PASS</b> ok:true — enc 34/34, md5_cpp == md5_orig (<code>8a893557900a462fe4ab1c91f8589081</code>), roundtrip 17/17, slab 17/17, flat 34/34; 0 SCRIPT ERROR</td><td>chunkiocpp.log</td></tr>
+<tr><td>genhash ×2 (deterministic + AC-0215 NEW baseline (0,0)=80b904c0…)</td><td><b>PASS</b> — 25/25 GENHASH lines; 2 fresh runs byte-identical (diff clean); (0,0) = <code>80b904c0e5f085eef1e839459058c706</code> = the AC-0215 NEW baseline; GENMS 37</td><td>genhash1.log / genhash2.log</td></tr>
+<tr><td>light (in SMOKE)</td><td><b>PASS</b> — surface 15 / cave 0 / torch 14 — identical to AC-0229 (the last completed task) and to every SMOKE since AC-0214 (the task text's “cave 10” is the stale AC-0091 pre-terrain value; HARNESS.md §3 was never updated after AC-0215's MC 1.18 terrain) = the standing baseline</td><td>smoke.log</td></tr>
+<tr><td>meshprobe (AC-0190/AC-0211)</td><td><b>PASS</b> ok:true — 100% exact: 1926/1926 cells (c/i/n/q/u/v all 1926), verts_cpp == verts_gd 234368, ac0211_ok true; 0 SCRIPT ERROR</td><td>meshprobe.log</td></tr>
+<tr><td>stripsprobe (AC-0207)</td><td><b>PASS</b> ok:true — 100% exact: 512/512 strips, face_rate 1.0, 32/32 chunks; 0 SCRIPT ERROR</td><td>stripsprobe.log</td></tr>
+<tr><td>pullprobe (AC-0210)</td><td><b>PASS</b> ok:true — 100% exact: 6.29M cells (6,291,456), max_diff 0, 64/64 variants; 0 SCRIPT ERROR</td><td>pullprobe.log</td></tr>
+<tr><td>nofallback (AC-0208)</td><td><b>PASS</b> ok:true — C++ lanes all ran (mesh_cpp_builds 99, strips 361, gen 71, slab_decodes 2), GDScript sentinels 0, roundtrip ok, torch placed + lit (15); 0 SCRIPT ERROR</td><td>nofallback.log</td></tr>
+<tr><td>R50 / Windows build</td><td>NOT run (per task: .so crashes in coordinator env AC-0206; no Windows build this task)</td><td>—</td></tr>
+</table>
+
+<h2>Files changed</h2>
+<ul>
+<li><code>godot/autoload/settings.gd</code> — 3 new settings (true/45/87) + 0-100 clamp.</li>
+<li><code>godot/core/daynight.gd</code> — <code>fog_far(R, pct=87.5)</code> / <code>dither_start(R, pct=45.0)</code>.</li>
+<li><code>godot/scenes/main.gd</code> — per-frame settings wiring in <code>_update_sky</code>/<code>_update_fog</code>, harness env preloads, R16 <code>dither</code> result block, new <code>dithersettings</code> arm, <code>settings</code> arm dither section.</li>
+<li><code>godot/scenes/menu.tscn</code> + <code>godot/ui/menu.gd</code> — DitherCheck + DitherStartRow + FogStartRow nodes/connections + handlers.</li>
+<li><code>tasks/AC-0232/spec.html</code> + this file + <code>options_menu.png</code>.</li>
+</ul>
+<p class="note">Ready to commit: <b>YES</b> — G0 + toggle (R16 on/off) + sliders (live) + persist + SMOKE + every no-regression arm green; GDScript-only (no C++/rebuild); no git run by the builder (coordinator commits).</p>
+</body></html>

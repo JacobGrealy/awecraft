@@ -9,6 +9,11 @@ const SIM_MIN := 1
 # streaming handoff burst (the AC-0224 drain cap, world.gd stream_ho_cap).
 const CHUNKS_PER_FRAME_MIN := 1
 const CHUNKS_PER_FRAME_MAX := 100
+# AC-0232: the dither-fade/fog start-distance sliders — percent (0-100) of
+# the render edge ((render_dist + 1) * 16 blocks; the same base the
+# AC-0226/AC-0227 formulas scale from).
+const PCT_MIN := 0
+const PCT_MAX := 100
 
 const DEFAULTS := {
 	"render_dist": 50,
@@ -25,6 +30,19 @@ const DEFAULTS := {
 	# drain cap); 3 = the shipped AC-0224 default, so the default is a
 	# no-behavior-change.
 	"chunks_per_frame": 3,
+	# AC-0232: the distant dithered fade (AC-0227) toggle + the two start
+	# distances as a percent (0-100) of the render edge ((R+1)*16 blocks,
+	# the base the AC-0226/AC-0227 formulas scale from):
+	# - dithering_enabled: true = the far chunks dissolve in a screen-space
+	#   checkerboard; false = hard pop-in, hidden by the fog (default on).
+	# - dithering_start_pct: 45 = the shipped AC-0227 0.45 coefficient, so
+	#   the default is a no-behavior-change.
+	# - fog_start_pct: 87 ~ the shipped AC-0226 0.875 coefficient (int
+	#   slider), kept at/under 0.875 so the full-fog boundary stays ahead
+	#   of the worst-case pop-in face at every R >= 7.
+	"dithering_enabled": true,
+	"dithering_start_pct": 45,
+	"fog_start_pct": 87,
 }
 
 var values: Dictionary = {}
@@ -75,6 +93,13 @@ func _clamp(k: String, v) -> void:
 			values[k] = clampi(int(v), 1, 50)
 		"chunks_per_frame":
 			values[k] = clampi(int(v), CHUNKS_PER_FRAME_MIN, CHUNKS_PER_FRAME_MAX)
+		# AC-0232: the dither/fog settings (toggle + 0-100 percent sliders).
+		"dithering_enabled":
+			values[k] = bool(v)
+		"dithering_start_pct":
+			values[k] = clampi(int(v), PCT_MIN, PCT_MAX)
+		"fog_start_pct":
+			values[k] = clampi(int(v), PCT_MIN, PCT_MAX)
 		"seed":
 			values[k] = int(v)
 		"resolution":

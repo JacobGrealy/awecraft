@@ -19,8 +19,13 @@ static func fog_near(render_radius: int) -> float:
 # the worst-case R16 pop-in face (256) and 86 m short of R50's (800) —
 # fully hidden at every radius R >= 7 (the old 0.95 only guaranteed that
 # at R >= 19; @R16 the crossing-instant pop was 98.7% fogged = a flash).
-static func fog_far(render_radius: int) -> float:
-	return (float(render_radius) + 1.0) * 16.0 * 0.875
+# AC-0232: the coefficient is now a setting — "fog_start_pct", a percent
+# (0-100) of the render edge ((R+1)*16) — driven by the Options slider
+# (default 87 ~= 0.875, the shipped AC-0226 coefficient, so the
+# single-arg call below is still a no-behavior-change for the harness
+# arms).
+static func fog_far(render_radius: int, pct: float = 87.5) -> float:
+	return (float(render_radius) + 1.0) * 16.0 * (pct / 100.0)
 
 
 # AC-0227: dither-fade band (distance in blocks from the player) — the
@@ -36,8 +41,12 @@ static func fog_far(render_radius: int) -> float:
 #   hard pop is gone: the chunk dissolves in as a fading checkerboard.
 # R16: 122.4 .. 269.3 (fog 68..238, pop faces 248..264) -
 # R50: 367.2 .. 807.8 (fog 204..714, pop faces 792..808).
-static func dither_start(render_radius: int) -> float:
-	return (float(render_radius) + 1.0) * 16.0 * 0.45
+# AC-0232: the coefficient is now a setting — "dithering_start_pct", a
+# percent (0-100) of the render edge ((R+1)*16) — driven by the Options
+# slider (default 45 = the shipped AC-0227 0.45 coefficient, so the
+# single-arg call is still a no-behavior-change for the harness arms).
+static func dither_start(render_radius: int, pct: float = 45.0) -> float:
+	return (float(render_radius) + 1.0) * 16.0 * (pct / 100.0)
 
 
 static func dither_end(render_radius: int) -> float:

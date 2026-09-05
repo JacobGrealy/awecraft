@@ -37,6 +37,13 @@ var res_option: OptionButton
 var full_check: CheckBox
 var hunger_check: CheckBox
 var debug_check: CheckBox
+# AC-0232: the dithered-fade toggle + the two start-distance sliders
+# (percent of the render edge, (render_dist + 1) * 16 blocks).
+var dither_check: CheckBox
+var dithstart_slider: HSlider
+var fogstart_slider: HSlider
+var dithstart_val: Label
+var fogstart_val: Label
 var file_dialog: FileDialog
 var _options_from := "main"
 var _syncing := false
@@ -76,6 +83,11 @@ func _ready() -> void:
 	res_option = get_node("Layer/OptionsBox/Center/VBox/ResRow/ResOption")
 	full_check = get_node("Layer/OptionsBox/Center/VBox/FullscreenCheck")
 	hunger_check = get_node("Layer/OptionsBox/Center/VBox/HungerCheck")
+	dither_check = get_node("Layer/OptionsBox/Center/VBox/DitherCheck")
+	dithstart_slider = get_node("Layer/OptionsBox/Center/VBox/DitherStartRow/DitherStartSlider")
+	fogstart_slider = get_node("Layer/OptionsBox/Center/VBox/FogStartRow/FogStartSlider")
+	dithstart_val = get_node("Layer/OptionsBox/Center/VBox/DitherStartRow/DitherStartVal")
+	fogstart_val = get_node("Layer/OptionsBox/Center/VBox/FogStartRow/FogStartVal")
 	var opt_vbox := get_node("Layer/OptionsBox/Center/VBox")
 	debug_check = CheckBox.new()
 	debug_check.name = "DebugStatsCheck"
@@ -142,7 +154,7 @@ func open_options(source: String) -> void:
 	_sync_controls()
 	_apply_state()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	print("OPTSYNC from=%s render=%d sim=%d vol=%d res=%s full=%s hunger=%s stats=%s chunk=%d" % [
+	print("OPTSYNC from=%s render=%d sim=%d vol=%d res=%s full=%s hunger=%s stats=%s chunk=%d dither=%s dithpct=%d fogpct=%d" % [
 		source,
 		int(Settings.values["render_dist"]),
 		int(Settings.values["sim_dist"]),
@@ -152,6 +164,9 @@ func open_options(source: String) -> void:
 		bool(Settings.values["hunger_enabled"]),
 		bool(Settings.values["debug_stats"]),
 		int(Settings.values.get("chunks_per_frame", 3)),
+		bool(Settings.values.get("dithering_enabled", true)),
+		int(Settings.values.get("dithering_start_pct", 45)),
+		int(Settings.values.get("fog_start_pct", 87)),
 	])
 
 
@@ -301,6 +316,11 @@ func _sync_controls() -> void:
 	full_check.button_pressed = bool(Settings.values["fullscreen"])
 	hunger_check.button_pressed = bool(Settings.values["hunger_enabled"])
 	debug_check.button_pressed = bool(Settings.values["debug_stats"])
+	dither_check.button_pressed = bool(Settings.values["dithering_enabled"])
+	dithstart_slider.value = float(int(Settings.values["dithering_start_pct"]))
+	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
+	dithstart_val.text = str(int(dithstart_slider.value)) + "%"
+	fogstart_val.text = str(int(fogstart_slider.value)) + "%"
 	_syncing = false
 
 
@@ -355,6 +375,32 @@ func _on_chunk_changed(v: float) -> void:
 		return
 	chunk_val.text = str(int(v))
 	Settings.set_value("chunks_per_frame", int(v))
+
+
+# AC-0232: the dithered-fade toggle + the two start-distance sliders
+# (percent of the render edge, (render_dist + 1) * 16 blocks). Saving the
+# value IS the apply: main.gd's per-frame _update_sky (dither band) and
+# _update_fog (fog_depth_end) read Settings.values every frame, so the
+# change lands live within a frame — no extra apply call (the AC-0225
+# pattern).
+func _on_dither_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("dithering_enabled", on)
+
+
+func _on_dithstart_changed(v: float) -> void:
+	if _syncing:
+		return
+	dithstart_val.text = str(int(v)) + "%"
+	Settings.set_value("dithering_start_pct", int(v))
+
+
+func _on_fogstart_changed(v: float) -> void:
+	if _syncing:
+		return
+	fogstart_val.text = str(int(v)) + "%"
+	Settings.set_value("fog_start_pct", int(v))
 
 
 func _on_res_selected(i: int) -> void:

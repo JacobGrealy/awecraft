@@ -435,6 +435,61 @@ theme_override_font_sizes/font_size = 15
 custom_minimum_size = Vector2(44, 0)
 horizontal_alignment = 2
 
+[node name="DitherCheck" type="CheckBox" parent="Layer/OptionsBox/Center/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+text = "Distant dither fade (off = hard pop hidden by fog)"
+
+[node name="DitherStartRow" type="HBoxContainer" parent="Layer/OptionsBox/Center/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="RowLabel" type="Label" parent="Layer/OptionsBox/Center/VBox/DitherStartRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+custom_minimum_size = Vector2(170, 0)
+text = "Dither fade start %"
+
+[node name="DitherStartSlider" type="HSlider" parent="Layer/OptionsBox/Center/VBox/DitherStartRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 24)
+min_value = 0.0
+max_value = 100.0
+step = 1.0
+value = 45.0
+
+[node name="DitherStartVal" type="Label" parent="Layer/OptionsBox/Center/VBox/DitherStartRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+custom_minimum_size = Vector2(44, 0)
+horizontal_alignment = 2
+
+[node name="FogStartRow" type="HBoxContainer" parent="Layer/OptionsBox/Center/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="RowLabel" type="Label" parent="Layer/OptionsBox/Center/VBox/FogStartRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+custom_minimum_size = Vector2(170, 0)
+text = "Fog start %"
+
+[node name="FogStartSlider" type="HSlider" parent="Layer/OptionsBox/Center/VBox/FogStartRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 24)
+min_value = 0.0
+max_value = 100.0
+step = 1.0
+value = 87.0
+
+[node name="FogStartVal" type="Label" parent="Layer/OptionsBox/Center/VBox/FogStartRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+custom_minimum_size = Vector2(44, 0)
+horizontal_alignment = 2
+
 [node name="ResRow" type="HBoxContainer" parent="Layer/OptionsBox/Center/VBox"]
 layout_mode = 2
 theme_override_constants/separation = 10
@@ -507,6 +562,9 @@ text = "Back"
 [connection signal="value_changed" from="Layer/OptionsBox/Center/VBox/VolumeRow/VolumeSlider" to="." method="_on_volume_changed"]
 [connection signal="value_changed" from="Layer/OptionsBox/Center/VBox/FlightRow/FlightSlider" to="." method="_on_flight_changed"]
 [connection signal="value_changed" from="Layer/OptionsBox/Center/VBox/ChunkRow/ChunkSlider" to="." method="_on_chunk_changed"]
+[connection signal="toggled" from="Layer/OptionsBox/Center/VBox/DitherCheck" to="." method="_on_dither_toggled"]
+[connection signal="value_changed" from="Layer/OptionsBox/Center/VBox/DitherStartRow/DitherStartSlider" to="." method="_on_dithstart_changed"]
+[connection signal="value_changed" from="Layer/OptionsBox/Center/VBox/FogStartRow/FogStartSlider" to="." method="_on_fogstart_changed"]
 [connection signal="item_selected" from="Layer/OptionsBox/Center/VBox/ResRow/ResOption" to="." method="_on_res_selected"]
 [connection signal="toggled" from="Layer/OptionsBox/Center/VBox/FullscreenCheck" to="." method="_on_full_toggled"]
 [connection signal="toggled" from="Layer/OptionsBox/Center/VBox/HungerCheck" to="." method="_on_hunger_toggled"]

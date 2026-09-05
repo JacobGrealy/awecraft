@@ -3,7 +3,6 @@ meta:
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0232
 - AC-0233
 - AC-0231
 - AC-0175
@@ -7409,11 +7408,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-05T13:57
   updated_at: 2026-09-05T13:57
-  completed_at: null
+  completed_at: 2026-09-04T00:30
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want a toggle in Options to turn the distant dithered fade on or off, and sliders to
@@ -7429,6 +7428,10 @@ intake:
     created_at: 2026-09-05T13:57
     updated_at: null
     text: '[user] dithering toggle per 2026-09-04'
+  - id: 2
+    created_at: '2026-09-04T00:30:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Dithering toggle + distance sliders (GDScript, no C++ touched): Options gains a Distant dither fade checkbox (dithering_enabled, default true) + Dither fade start pct / Fog start pct sliders (dithering_start_pct/fog_start_pct, 0-100, clamped, defaults 45 = shipped AC-0227 0.45 and 87 ~= shipped AC-0226 0.875 kept <= it so full fog stays ahead of the worst-case pop face at every R >= 7). Percent is of the render edge (render_dist+1)*16 blocks. Wired: _update_sky pushes u_dither_start/end every frame (off = 0/0 = shader off = hard pop), _update_fog pushes fog_depth_end every frame - saving IS the apply (live within a frame). Toggle check (R16, --fixed-fps 600): ON -> enabled true, band 122.4->269.28 (far chunks dithered/fading), ok:true; OFF (env preload AWECRAFT_DITHER_TOGGLE=0) -> band 0/0 hard pop, fog_far 236.64 <= 256 pop face = hidden by fog, ok:true. Both 797/797 built, 0 SCRIPT ERROR. Slider check (new dithersettings arm): pushed uniforms + fog read back exactly at 45/87, 10/50 (off), 90/95: start 36.0->0.0->72.0, fog_far 69.6->40.0->76.0 - live_ok:true, ok:true. Persist: settings arm - defaults true/45/87, false/12/60 saved+reloaded from cfg, clamp 999->100 / -5->0, ok:true. G0: exit 0, 0 SCRIPT ERROR. SMOKE player;interact;light;fluids: battery ok:true (light surface 15 / cave 0 / torch 14 - identical to AC-0229 and every SMOKE since AC-0214; the brief cave-10 is the stale pre-AC-0215 value). No regression: chunkiocpp byte-identical (enc 34/34, md5 8a893557... == orig, rt 17/17); genhash 25/25, 2 runs byte-identical, (0,0)=80b904c0... (AC-0215 NEW baseline); meshprobe 1926/1926 100pct, stripsprobe 512/512 100pct, pullprobe 6.29M cells max_diff 0, nofallback ok:true. RENDER: Options panel screenshot shows checkbox (on) + 45pct + 87pct rows. See tasks/AC-0232/AC-0232-results.html.'
 - id: AC-0233
   title: tiered-streaming-two-queues-gen-vs-mesh
   source: user
