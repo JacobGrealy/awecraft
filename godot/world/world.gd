@@ -3765,9 +3765,10 @@ func _chunk_data(cx: int, cz: int) -> Node3D:
 func _enter_candidate(key: String, c: Node3D) -> bool:
 	# AC-0168 hide-not-kill candidacy: keep node + data + fl + edits AND the
 	# mesh (mesh_built stays true, slabs whole, instances never hidden) —
-	# the fog at fog_far=(R+1)*16*0.95 covers the whole r+1 band, so
-	# stepping back re-enters the chunk instantly (no re-queue, no re-mesh,
-	# no collision gap). True free stays at r+2 after the 2-recenter
+	# the fog at fog_far=(R+1)*16*0.875 (AC-0226) fully fogs the whole r+1
+	# band before its near face, so stepping back re-enters the chunk
+	# instantly (no re-queue, no re-mesh, no collision gap). True free
+	# stays at r+2 after the 2-recenter
 	# hysteresis in recenter(); the retained mesh dies with the node.
 	c.candidate = true
 	c.cand_since = 0

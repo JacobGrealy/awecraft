@@ -12906,7 +12906,14 @@ func _edgeretain_test(spawn: Vector3) -> void:
 	var fog_near := DayNight.fog_near(R)
 	var fog_far := DayNight.fog_far(R)
 	var ring_face := (R + 1) * 16.0 - 8.0
-	var fog_covers := ring_face <= fog_far
+	# AC-0226: the pop-in is hidden when the FULL-fog boundary (fog_depth_end)
+	# lands at/before the new ring's near face (chunk-center measure; the
+	# crossing-instant worst case is 8 m closer, also covered at R>=7) — the
+	# ring is 100% fogged the instant it appears. (Godot depth fog: factor 0
+	# at fog_depth_begin, 1 at fog_depth_end; d >= end = invisible.) Old 0.95
+	# formula left the R8 face at ~99% fog (faint pop visible); 0.875 puts
+	# full fog 10 m short of the chunk-center face (126.0 <= 136.0 @ R8).
+	var fog_covers := fog_far <= ring_face
 	var ok := int(st["killed"]) == 0 and t1_ok and t2_ok and t3_ok \
 			and int(st["one_ret_max"]) >= 1 and int(st["two_ret_max"]) >= 1 \
 			and int(st["back_hole"]) == 0 and int(st["back_hidden"]) == 0 and fog_covers

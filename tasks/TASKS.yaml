@@ -3,7 +3,6 @@ meta:
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0226
 - AC-0227
 - AC-0229
 - AC-0217
@@ -7097,11 +7096,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-04T20:39
   updated_at: 2026-09-04T20:39
-  completed_at: null
+  completed_at: 2026-09-03T23:30
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want fog pulled in a bit closer so chunk pop in is hidden and it still scales with
@@ -7115,6 +7114,10 @@ intake:
     created_at: 2026-09-04T20:39
     updated_at: null
     text: '[user] pull fog in per 2026-09-04, scales with render distance'
+  - id: 2
+    created_at: '2026-09-03T23:30:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Fog pull-in (GDScript, no C++/.so touched): DayNight.fog_far(R) (R+1)*16*0.95 -> (R+1)*16*0.875 (midpoint of requested 0.85-0.90), still a pure function of render_radius, applied per-frame in _update_fog(); fog_near unchanged. Plus: _edgeretain_test fog_covers flipped to the physically-correct hiding condition (fog_far <= ring_face - full-fog boundary at/before the pop-in face; old direction would have gone red though hiding improved) + comment updates in world.gd. Why 0.875 hides it: pop-in face sits at R*16 (crossing instant, worst) -> (R+1)*16-8 (chunk center); Godot depth fog = 100pct at/behind fog_depth_end, so hidden iff fog_far <= face. 0.875 implies hidden at every R >= 7 (old 0.95 only at R >= 19 - R16 crossing-instant pop was a 98.7pct-fogged flash, now 18 m / 86 m of full-fog margin at R16/R50). No hard cut: only the ramp end moved (R16: 68->238 m, R50: 204->714 m) - render shot shows a smooth fade. fog_far before->after: R16 258.4 -> 238.0 (fog_ok true, edge 272) - R50 775.2 -> 714.0 (fog_ok true, edge 816). G0 exit 0, 0 SCRIPT ERROR. SMOKE player;interact;light;fluids all ok:true (light 15/0/14 = standing post-AC-0215 baseline per 00z; sea 792/792 == AC-0224). R16 (AWECRAFT_LOGIC=r16 --fixed-fps 600): ok:true, 0 errors, build 797/797 (13.5 s), static/moving p95 7 ms (fps 143), fly4/fly50 lost_chunks 0, recenter 9/27 - identical to AC-0224/0225; fog hides far-edge pop, no hard cut, scales correctly. R50 (AWECRAFT_LOGIC=perf AWECRAFT_RADIUS=50 - the established R50-build arm; no literal r50 branch exists): ok, all_meshed 7845/7845, 0 errors, ran clean in the subagent env; fog hides far-edge pop, no hard cut, scales correctly. No regression: chunkiocpp ok:true byte-identical md5 8a893557...; genhash x2 25/25 identical == AC-0215 NEW baseline (genhash4.log) + AC-0225; light standing (SMOKE); meshprobe/stripsprobe 100pct exact, pullprobe 100pct exact (max_diff 0, 6.29M cells); nofallback ok:true (C++ lanes >0, GD sentinels 0); bonus: edgeretain (AC-0168 arm) ok:true with the flipped check (126.0 <= 136.0 at R8). See tasks/AC-0226/AC-0226-results.html.'
 - id: AC-0227
   title: dithered-fade-shader-for-distant-chunks-to-hide-pop-in
   source: user
