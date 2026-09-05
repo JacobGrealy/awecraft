@@ -3,7 +3,6 @@ meta:
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0040
 - AC-0225
 - AC-0226
 - AC-0227
@@ -1070,12 +1069,12 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels:
   - godot
   created_at: 2026-08-19T12:00
   updated_at: 2026-08-19 08:15T12:00
-  completed_at: null
+  completed_at: 2026-09-03T22:00
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player near water, I want bouncy bananas on special banana trees that spawn in dirt right where
@@ -1095,6 +1094,10 @@ intake:
       of a bouncing banana, the banana has a chance to fall of the tree and start bouncing around before eventually coming
       to a rest. The banana can be picked up by the character and eaten to restore health and stamina. When the banana is
       eaten a short gorilla sound effect plays. This can be implemented after we add the sound system.'
+  - id: 2
+    created_at: '2026-09-03T22:00:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Bouncy banana (GDScript feature, no C++/.so/.dll touched): banana trees spawn ONLY at the dirt-sand shore edge (post-pass in generator.gd - base B_DIRT/B_GRASS y in [127,130], sand <=Cheb 3, water <=Cheb 4, non-forest, density 0.025 - hooked into all 5 world-build landing sites in world.gd; WorldGen.generate() untouched). 2 hanging B_BANANA (id 28) fruits per tree; player within 10 blocks -> 6%/0.5 s roll plucks -> real RigidBody3D bounces (bounce 0.45) against chunk StaticBody3D colliders until rest -> magnet pickup -> item 126 (food 4) -> eating restores hp+hunger by 4 and plays Audio.play(gorilla) (AC-0039 lane - hook only, AC-0039 stays OPEN). Banana crescent painted into the atlas. G0 0 SCRIPT ERROR (12 headless rounds). banana probe (AWECRAFT_LOGIC=banana, r=6) ok:true - 2 trees / 3 fruits, re-gen deterministic, 0 out-of-spec; diag proves shore-only. banana3d e2e ok:true in 12 s - 3 plucks -> 3 RigidBody3D; tracked body 134.5 -> 125.3 with 8 bounces, at rest in 417 frames; pickup 134 ms -> item 126 -> body freed; eat: hp/hunger 0 -> 4.0, item consumed. SMOKE ok:true - light 15/0/14, sea 792/792. No regression: chunkiocpp md5 8a893557... byte-identical; genhash x2 = 25/25 == AC-0215 final; meshprobe 100%; stripsprobe 100%; pullprobe 6.29M cells max_diff 0; nofallback ok. Pre-existing bug fixed (2 GDScript call sites, world.gd recenter()): in_stream_set was called with ABSOLUTE coords in pre-warm 5x5 and startup-burst builder - at any non-origin recenter the 5x5 shrank against the origin set, so far recenters during startup window deadlocked the build pipeline. Fixed to pass the delta; at origin bit-identical. Godot 4.7.1 API: RigidBody3D uses linear_velocity/is_sleeping(); restitution on physics_material_override. Honest flake: 1 of 4 SMOKE runs SIGSEGVd in C++ AweGen.generate_flat (worker-teardown race; no banana code on stack) - other 3 passed identically. R50/Windows not run (AC-0206). See tasks/AC-0040/AC-0040-results.html.'
   - id: 2
     created_at: '2026-09-01T02:12:48.549786'
     updated_at: null

@@ -27,6 +27,8 @@ const C_COBBLE := Color(0.447, 0.447, 0.455)
 const C_LEAVES := Color(0.235, 0.549, 0.188)
 const C_ROSE := Color(0.863, 0.157, 0.157)
 const C_DANDELION := Color(0.941, 0.824, 0.157)
+# AC-0040: the hanging banana fruit (block 28 / item 126).
+const C_BANANA := Color(0.918, 0.824, 0.243)
 
 var atlas_tex: Texture2D = null
 var atlas_rects := {}
@@ -94,6 +96,9 @@ var items := {
 	145: {"name": "String", "icon": Color(0.85, 0.82, 0.75), "stack": 64},
 	146: {"name": "Raw Chicken", "icon": Color(0.98, 0.78, 0.65), "stack": 64, "food": 2},
 	147: {"name": "Cooked Chicken", "icon": Color(0.72, 0.45, 0.25), "stack": 64, "food": 5},
+	# AC-0040: bouncy-banana — eating restores health+hunger (stamina) and
+	# plays the gorilla SFX (Audio.play("gorilla"); the AC-0039 sound lane).
+	126: {"name": "Banana", "icon": C_BANANA, "stack": 64, "food": 4, "sfx": "gorilla"},
 }
 # grid: 2 = craftable in the E-inventory 2x2 grid; grid: 3 = crafting-table 3x3 only
 var shapeless := [
@@ -175,6 +180,11 @@ func _init() -> void:
 		23: {"name": "Glowstone", "solid": true, "cross": false, "hard": 0.3, "light": 12, "drop": 23, "color": {"top": C_GLOWSTONE, "side": C_GLOWSTONE, "bottom": C_GLOWSTONE}},
 		24: {"name": "Lava", "solid": false, "cross": true, "hard": 1e9, "light": 15, "color": {"top": C_LAVA, "side": C_LAVA, "bottom": C_LAVA}},
 		25: {"name": "Obsidian", "solid": true, "cross": false, "hard": 50.0, "light": 0, "drop": 25, "color": {"top": C_OBSIDIAN, "side": C_OBSIDIAN, "bottom": C_OBSIDIAN}},
+		# AC-0040: hanging banana fruit — cross (non-solid, light-passing,
+		# cutout quad like the flowers); lighting.gd already pre-wires id 28
+		# as a cross block (passes_light / _att[28]) and blocks_atlas.json
+		# reserves its tile at [32,32]. Mined with the hand -> item 126.
+		28: {"name": "Banana", "solid": false, "cross": true, "hard": 0.1, "light": 0, "drop": 126, "color": {"top": C_BANANA, "side": C_BANANA, "bottom": C_BANANA}},
 	}
 
 

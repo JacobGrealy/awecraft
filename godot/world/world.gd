@@ -2,6 +2,7 @@ extends Node3D
 
 const ChunkScript = preload("res://world/chunk.gd")
 const DropScript = preload("res://entities/drop.gd")
+const BananaScript = preload("res://entities/banana.gd")  # AC-0040 bouncy-banana
 const ChunkIO = preload("res://core/chunk_io.gd")  # AC-0155
 const LoadingScreen = preload("res://ui/loading_screen.gd")  # AC-0178
 
@@ -177,6 +178,17 @@ var _editprobe_ms := -1.0
 var _editprobe_wms := 0
 var _editprobe_kind := ""
 var _editprobe_drop := 0
+# AC-0040 bouncy-banana: the hanging B_BANANA fruit cells awaiting the
+# 10-block fall roll. Key "x,y,z" (flat world cell) -> [cx, cz] (the owning
+# flat chunk, for eviction cleanup). Face-planet chunks (AC-0143) get the
+# banana trees visually but never register fruit (the player can't reach
+# them). The roll plucks a fruit (set_block 0) and spawns a RigidBody3D
+# (BananaScript) that bounces until rest, then the drop-magnet interact
+# pickup delivers item 126 (eat = health + stamina + gorilla SFX).
+var _banana_fruits := {}
+var _banana_roll_t := 0.0
+var _banana_plucked := 0
+var _banana_spawned := 0
 var _editprobe_dnbs := 0
 var _editprobe_dstrips := 0
 var _editprobe_ph := []
@@ -864,6 +876,8 @@ func _process(_delta: float) -> void:
 	# AC-0178: BEFORE the idle early-return — the completion state IS the
 	# all-idle state, so the check must not sit behind that return.
 	_loading_tick()
+	# AC-0040 bouncy-banana: the 10-block fall roll (before the idle return).
+	_banana_tick(_delta)
 	# AC-0160: keep the worker ctx in sync with the atlas identity. If Data
 	# bakes/loads the atlas after World._ready captured the ctx (or a
 	# texture-pack swap re-bakes it), the stale ctx (has_tex=false,
@@ -1296,7 +1310,13 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 		if timing:
 			print("GENCHUNK %d,%d gen_ms=0 thread=1 t=%d" % [cx, cz, Time.get_ticks_msec()])
 		return 0
-	c.data_landed(WorldGen.generate(cx, cz, Game.world_seed), PackedByteArray())
+	# AC-0040: the banana-tree pass (shore dirt edge only) runs on the
+	# world-building landings — WorldGen.generate itself stays untouched
+	# (the genhash arm hashes it directly; the AC-0215 baseline holds).
+	var gdata: PackedByteArray = WorldGen.generate(cx, cz, Game.world_seed)
+	var gres: Dictionary = WorldGen.apply_banana_trees(gdata, cx, cz, Game.world_seed, Data.HEIGHT)
+	c.data_landed(gdata, PackedByteArray())
+	_banana_register(cx, cz, gres["fruits"])
 	gen_count += 1
 	_apply_edits_to_chunk(c)
 	var dg := Time.get_ticks_msec() - tg
@@ -1470,7 +1490,10 @@ func _startup_gen_apply() -> void:
 		if c == null or not c.data.is_empty():
 			continue
 		# AC-0203 recenter fix: worker-palettized slabs — reference landing.
+		# AC-0040: the banana-tree pass (e = [_, cx, cz, _, seed, h, sea, skip]).
+		var gres: Dictionary = WorldGen.apply_banana_resl(d, int(e[1]), int(e[2]), int(e[4]), Data.HEIGHT)
 		c.slabs_landed(d[0], d[1])
+		_banana_register(int(e[1]), int(e[2]), gres["fruits"])
 		gen_count += 1
 		chunk_origin[_key(int(e[1]), int(e[2]))] = "gen"  # AC-0155
 		_apply_edits_to_chunk(c)
@@ -1532,7 +1555,14 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 		if _tg_debug:
 			print("TGEN DATADROP %d,%d (data already set)" % [int(e["cx"]), int(e["cz"])])
 		return
+	# AC-0040: the banana-tree pass on the worker-palettized slabs (cheap
+	# sand prefilter; the full 98 KB expand happens only for shore chunks).
+	var tcx: int = int(e["cx"])
+	var tcz: int = int(e["cz"])
+	var tseed: int = int(e["args"][2])
+	var gres: Dictionary = WorldGen.apply_banana_resl(resl, tcx, tcz, tseed, Data.HEIGHT)
 	c.slabs_landed(resl[0], resl[1])
+	_banana_register(tcx, tcz, gres["fruits"])
 	gen_count += 1
 	chunk_origin[e["key"]] = "gen"  # AC-0155
 	_apply_edits_to_chunk(c)
@@ -3837,6 +3867,7 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 	for key in to_free:
 		var c: Node3D = chunks[key]
 		_queue_chunk_save(c)  # AC-0155: full column to disk on evict (stubs skipped)
+		_banana_evict(key)  # AC-0040: drop this chunk's hanging-fruit entries
 		chunks.erase(key)
 		queued_keys.erase(key)
 		light_pending_set.erase(key)
@@ -3917,7 +3948,13 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 	# consumed entries from stranding the queue.
 	for pdx in range(-2, 3):
 		for pdz in range(-2, 3):
-			if not in_stream_set(pcx + pdx, pcz + pdz):
+			# AC-0040: in_stream_set takes a DELTA from the center (its
+			# circle/diamond/ring tests are center-relative). The old call
+			# passed the ABSOLUTE (pcx+pdx, pcz+pdz), which only coincides
+			# with the delta at the origin — away from it the pre-warm 5x5
+			# silently shrank (at (1,6) only 8 of 25 cells survived),
+			# starving the recenter of its build queue.
+			if not in_stream_set(pdx, pdz):
 				continue
 			var wcx := pcx + pdx
 			var wcz := pcz + pdz
@@ -3972,7 +4009,16 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 					continue
 				var bwx := pcx + pdx
 				var bwz := pcz + pdz
-				if not in_stream_set(bwx, bwz):
+				# AC-0040: in_stream_set is CENTER-RELATIVE (dx,dz = offset
+				# from the recenter target). Passing the ABSOLUTE (bwx,bwz)
+				# filtered the 5x5 against the ORIGIN's stream set — at the
+				# spawn (pcx=pcz=0) delta==absolute so it worked; away from
+				# it the burst only kept the cells whose absolute position
+				# fell in the origin set (8 of 24 at (1,6)), so the new
+				# center's 8-neighborhood never got its data and the 3x3
+				# (and _spawn_fast) stalled. Every other call site (L3843,
+				# L3907, L4173, L4219, L4243) passes the explicit delta.
+				if not in_stream_set(pdx, pdz):
 					continue
 				var bc = chunks.get(_key(bwx, bwz))
 				# AC-0164: a saved 5x5 column is read by a WORKER (the old
@@ -4422,6 +4468,7 @@ func _try_disk_load(c: Node3D, cx: int, cz: int) -> bool:
 	if res == null or (typeof(res) != TYPE_DICTIONARY) or (res as Dictionary).is_empty():
 		return false
 	_land_column(c, res)
+	_banana_register_disk(c, cx, cz)  # AC-0040: saved hanging bananas resume
 	c.saved_light = _saved_light_from_res(res.get("light", {}), cx, cz)
 	disk_reads += 1
 	chunk_origin[_key(cx, cz)] = "disk"
@@ -4463,7 +4510,12 @@ func _materialize_chunk_data(c: Node3D, cx: int, cz: int) -> int:
 		return 0
 	if c.data.is_empty():
 		var tg := Time.get_ticks_msec()
-		c.data_landed(WorldGen.generate(cx, cz, Game.world_seed), PackedByteArray())
+		# AC-0040: the banana-tree pass (shore dirt edge only) — see the
+		# sync-gen landing above (WorldGen.generate stays untouched).
+		var gdata: PackedByteArray = WorldGen.generate(cx, cz, Game.world_seed)
+		var gres: Dictionary = WorldGen.apply_banana_trees(gdata, cx, cz, Game.world_seed, Data.HEIGHT)
+		c.data_landed(gdata, PackedByteArray())
+		_banana_register(cx, cz, gres["fruits"])
 		gen_count += 1
 		var dg := Time.get_ticks_msec() - tg
 		gen_ms_total += dg
@@ -4785,6 +4837,109 @@ func spawn_drop(id: int, pos: Vector3) -> void:
 	d.id = id
 	d.position = pos
 	Game.drops.add_child(d)
+
+
+# --- AC-0040 bouncy-banana (the fall roll + the RigidBody3D spawn) --------
+
+# The per-frame roll: every 0.5 s, each hanging banana within 10 blocks of
+# the player has a 6% chance to come loose — the B_BANANA cell is cleared
+# (remesh + light) and a RigidBody3D (entities/banana.gd) bounces from that
+# point until rest, then the drop-magnet pickup delivers item 126.
+func _banana_tick(dt: float) -> void:
+	if Game.mode != "play" or Game.player == null or _banana_fruits.is_empty():
+		return
+	_banana_roll_t += dt
+	if _banana_roll_t < 0.5:
+		return
+	_banana_roll_t = 0.0
+	var ppos: Vector3 = Game.player.position + Vector3(0.0, 1.0, 0.0)
+	var pluck: Array = []
+	for k in _banana_fruits:
+		var parts: PackedStringArray = String(k).split(",")
+		if parts.size() != 3:
+			continue
+		var cpos := Vector3(float(int(parts[0])) + 0.5, float(int(parts[1])) + 0.5, float(int(parts[2])) + 0.5)
+		if cpos.distance_to(ppos) > 10.0:
+			continue
+		if randf() < 0.06:
+			pluck.append([int(parts[0]), int(parts[1]), int(parts[2]), k])
+	for e in pluck:
+		var x: int = int(e[0])
+		var y: int = int(e[1])
+		var z: int = int(e[2])
+		# Re-verify: a concurrent mine may already have taken the fruit.
+		if get_block(x, y, z) != WorldGen.B_BANANA:
+			_banana_fruits.erase(e[3])
+			continue
+		_banana_fruits.erase(e[3])
+		set_block(x, y, z, 0)
+		_banana_plucked += 1
+		spawn_banana(Vector3(float(x) + 0.5, float(y) + 0.5, float(z) + 0.5))
+
+
+func spawn_banana(pos: Vector3) -> void:
+	if Game.drops == null:
+		return
+	if Game.drops.get_child_count() >= 80:
+		return
+	var b: Node3D = BananaScript.new()
+	b.position = pos
+	Game.drops.add_child(b)
+	_banana_spawned += 1
+
+
+# Register planted fruit cells (chunk-local [lx, y, lz]) as world cells.
+func _banana_register(cx: int, cz: int, fruits: Array) -> void:
+	for f in fruits:
+		var k := "%d,%d,%d" % [int(cx) * 16 + int(f[0]), int(f[1]), int(cz) * 16 + int(f[2])]
+		_banana_fruits[k] = [int(cx), int(cz)]
+
+
+# Saved chunks (disk landing) may already hold hanging bananas — scan the
+# slab store (cheap palette prefilter; full 98 KB expand only on a hit).
+func _banana_register_disk(c: Node3D, cx: int, cz: int) -> void:
+	if c == null or c.data.is_empty():
+		return
+	var slabs: Array = c.data
+	var has := false
+	for s in slabs:
+		if s == null:
+			continue
+		var n: int = int(s["n"])
+		if n == 1:
+			if int(s["p"][0]) == WorldGen.B_BANANA:
+				has = true
+				break
+		var p: PackedByteArray = s["p"] if n >= 2 else s["i"]
+		if p != null and p.has(WorldGen.B_BANANA):
+			has = true
+			break
+	if not has:
+		return
+	var flat: PackedByteArray = ChunkIO._slabs_flat(slabs)
+	var found: Array = []
+	var y := 0
+	while y < Data.HEIGHT:
+		var row := y << 8
+		var i := 0
+		while i < 256:
+			if flat[row + i] == WorldGen.B_BANANA:
+				found.append([i & 15, y, i >> 4])
+			i += 1
+		y += 1
+	_banana_register(cx, cz, found)
+
+
+# Eviction: drop the registry entries owned by the freed chunk.
+func _banana_evict(key: String) -> void:
+	var dead: Array = []
+	for k in _banana_fruits:
+		var v: Array = _banana_fruits[k]
+		if _key(int(v[0]), int(v[1])) == key:
+			dead.append(k)
+	for k in dead:
+		_banana_fruits.erase(k)
+
 
 func is_fluid_id(id: int) -> bool:
 	return id == 5 or id == 24
@@ -5158,7 +5313,13 @@ func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 	c.collision_enabled = false
 	c.init_slabs()
 	add_child(c)
-	c.data_landed(WorldGen.generate_face(face, ccx, ccz, Game.world_seed), PackedByteArray())
+	# AC-0040: face-planet columns get the banana trees too (same shore
+	# rule in face space — the generate_face coordinate/seed transform);
+	# no fruit registration (the player can't reach face chunks, so there
+	# is no fall/pickup — trees only, visually).
+	var fdata: PackedByteArray = WorldGen.generate_face(face, ccx, ccz, Game.world_seed)
+	WorldGen.apply_banana_trees(fdata, face * 64 + ccx, face * 64 + ccz, Game.world_seed ^ (face * 1000003), Data.HEIGHT)
+	c.data_landed(fdata, PackedByteArray())
 	chunks[key] = c
 	_face_order.append(key)
 	if _face_order.size() > FACE_CHUNK_CAP:

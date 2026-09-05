@@ -145,6 +145,7 @@ func _batt_reset_state(spawn: Vector3) -> void:
 		e.clear_data()  # AC-0203: was fill(0) on both flat arrays
 	for ch in Game.drops.get_children():
 		ch.free()
+	world._banana_fruits.clear()  # AC-0040: the chunk data below is zeroed
 	world.light_dirty.clear()
 	world.light_pending.clear()
 	world.light_pending_set.clear()
@@ -1163,6 +1164,21 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			# form; flood p95 before/after).
 			world.collision_enabled = false
 			await _pullprobe_test(spawn)
+			get_tree().quit()
+			return
+		if logic == "banana":
+			# AC-0040: the banana-tree generation probe — the shore dirt
+			# edge rule (independent re-derivation from the data), the
+			# determinism, and the density. No world build needed.
+			await _banana_test()
+			get_tree().quit()
+			return
+		if logic == "banana3d":
+			# AC-0040: the end-to-end world test — a real world build, the
+			# 10-block fall roll plucks a hanging banana, the RigidBody3D
+			# bounces until rest, the magnet pickup collects item 126, and
+			# eating it restores health + stamina.
+			await _banana3d_test()
 			get_tree().quit()
 			return
 		if logic == "lightcache":
@@ -4641,6 +4657,409 @@ func _light_test(spawn: Vector3) -> void:
 		"torch_level": torch_eff,
 		"torch_far_before": far_before,
 		"torch_far_after": far_after,
+	})
+
+
+# AC-0040: the banana-tree generation probe (AWECRAFT_LOGIC=banana,
+# headless, no world build). Runs the SAME gen+pass pipeline the world
+# build uses (WorldGen.generate + WorldGen.apply_banana_trees) over a
+# square region (default r=4 = 81 chunks; AWECRAFT_BANANA_R overrides) and
+# INDEPENDENTLY re-derives the shore rule from the post-pass data for every
+# planted fruit: fruit == B_BANANA; a B_LOG trunk column (4-6 tall, top at
+# the fruit's y, within Chebyshev 1); base == B_DIRT/B_GRASS at y in
+# [SEA+1, SEA+4]; base biome NOT forest ("not forest/jungle"); a B_SAND
+# cell in the shore band [SEA-8, SEA+4] within Chebyshev 3; a water column
+# (topmost cell B_WATER) within Chebyshev 4. Plus determinism (generate +
+# pass twice -> byte-identical) and density (trees > 0, per-chunk counts).
+func _banana_test() -> void:
+	var seed := Game.world_seed
+	var t0 := Time.get_ticks_msec()
+	var DIAG := OS.get_environment("AWECRAFT_BANANA_DIAG") == "1"
+	var r := int(OS.get_environment("AWECRAFT_BANANA_R"))
+	if r <= 0:
+		# seed 44's shore sits at cz 4..7 (z 64..119, south of spawn) —
+		# r=6 (169 chunks) covers it with margin.
+		r = 6
+	var trees_total := 0
+	var fruits_total := 0
+	var bad: Array = []
+	var per: Array = []
+	var det_same := true
+	var cx := -r
+	while cx <= r:
+		var cz := -r
+		while cz <= r:
+			var d1: PackedByteArray = WorldGen.generate(cx, cz, seed)
+			var r1: Dictionary = WorldGen.apply_banana_trees(d1, cx, cz, seed, Data.HEIGHT)
+			var d2: PackedByteArray = WorldGen.generate(cx, cz, seed)
+			var r2: Dictionary = WorldGen.apply_banana_trees(d2, cx, cz, seed, Data.HEIGHT)
+			if d1 != d2 or int(r1["trees"]) != int(r2["trees"]) or r1["fruits"] != r2["fruits"]:
+				det_same = false
+			trees_total += int(r1["trees"])
+			fruits_total += int(r1["fruits"].size())
+			for f in r1["fruits"]:
+				if not _banana_verify(d1, cx, cz, seed, int(f[0]), int(f[1]), int(f[2])):
+					bad.append([cx, cz, f])
+			var entry := {"cx": cx, "cz": cz, "trees": int(r1["trees"]), "fruits": int(r1["fruits"].size())}
+			if DIAG:
+				entry["diag"] = _banana_diag(d2, cx, cz, seed)
+			per.append(entry)
+			cz += 1
+		cx += 1
+	var ok: bool = det_same and bad.is_empty() and trees_total > 0
+	Debug.result({
+		"ok": ok,
+		"determinism": det_same,
+		"trees": trees_total,
+		"fruits": fruits_total,
+		"bad": bad,
+		"chunks": per.size(),
+		"per": per,
+		"seed": seed,
+		"ms": Time.get_ticks_msec() - t0,
+	})
+
+
+# The shore-funnel diagnostic (AWECRAFT_BANANA_DIAG=1): per chunk, count the
+# water columns, the sand-band columns, the base candidates (dirt/grass at
+# [SEA+1, SEA+4]) and how many survive the sand / water / biome / roll
+# gates — shows exactly where the funnel empties.
+func _banana_diag(data: PackedByteArray, cx: int, cz: int, seed: int) -> Dictionary:
+	var scan: Array = WorldGen._banana_col_scan(data, Data.HEIGHT)
+	var surf: PackedInt32Array = scan[0]
+	var sid: PackedInt32Array = scan[1]
+	var sand: PackedInt32Array = scan[2]
+	var water := 0
+	var sandc := 0
+	var basec := 0
+	var sandok := 0
+	var waterok := 0
+	var biomeok := 0
+	for i in range(256):
+		if int(sid[i]) == WorldGen.B_WATER:
+			water += 1
+		if int(sand[i]) >= 0:
+			sandc += 1
+		var h := int(surf[i])
+		var b := int(sid[i])
+		if (b != WorldGen.B_DIRT and b != WorldGen.B_GRASS) or h < WorldGen.BANANA_BASE_LO or h > WorldGen.BANANA_BASE_HI:
+			continue
+		basec += 1
+		var lx: int = i & 15
+		var lz: int = i >> 4
+		var s2 := false
+		for sx in range(-WorldGen.BANANA_SAND_R, WorldGen.BANANA_SAND_R + 1):
+			for sz in range(-WorldGen.BANANA_SAND_R, WorldGen.BANANA_SAND_R + 1):
+				var nx: int = lx + sx
+				var nz: int = lz + sz
+				if nx >= 0 and nx < 16 and nz >= 0 and nz < 16 and int(sand[(nz << 4) | nx]) >= 0:
+					s2 = true
+		if not s2:
+			continue
+		sandok += 1
+		var w2 := false
+		for wx2 in range(-WorldGen.BANANA_WATER_R, WorldGen.BANANA_WATER_R + 1):
+			for wz2 in range(-WorldGen.BANANA_WATER_R, WorldGen.BANANA_WATER_R + 1):
+				var nx2: int = lx + wx2
+				var nz2: int = lz + wz2
+				if nx2 >= 0 and nx2 < 16 and nz2 >= 0 and nz2 < 16 and int(sid[(nz2 << 4) | nx2]) == WorldGen.B_WATER:
+					w2 = true
+					break
+			if w2:
+				break
+		if not w2:
+			continue
+		waterok += 1
+		if WorldGen.biome_at(cx * 16 + lx, cz * 16 + lz, seed) != "forest":
+			biomeok += 1
+	return {"water_cols": water, "sand_cols": sandc, "base": basec, "sand": sandok, "water": waterok, "biome": biomeok}
+
+
+func _banana_verify(data: PackedByteArray, cx: int, cz: int, seed: int, lx: int, y: int, lz: int) -> bool:
+	if data[(y << 8) | (lz << 4) | lx] != WorldGen.B_BANANA:
+		return false
+	# The trunk: a B_LOG column whose top log is at the fruit's y, within
+	# Chebyshev 1 (the fruit hangs one cell out from the canopy edge).
+	var scan: Array = WorldGen._banana_col_scan(data, Data.HEIGHT)
+	var sand: PackedInt32Array = scan[2]
+	var sid: PackedInt32Array = scan[1]
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			var tx: int = lx + dx
+			var tz: int = lz + dz
+			if tx < 0 or tx >= 16 or tz < 0 or tz >= 16:
+				continue
+			if data[(y << 8) | (tz << 4) | tx] != WorldGen.B_LOG:
+				continue
+			var tth := 1
+			var yy := y - 1
+			while yy >= 1 and data[(yy << 8) | (tz << 4) | tx] == WorldGen.B_LOG:
+				tth += 1
+				yy -= 1
+			if tth < 4 or tth > 6:
+				continue
+			if yy < WorldGen.BANANA_BASE_LO or yy > WorldGen.BANANA_BASE_HI:
+				continue
+			var b: int = data[(yy << 8) | (tz << 4) | tx]
+			if b != WorldGen.B_DIRT and b != WorldGen.B_GRASS:
+				continue
+			if WorldGen.biome_at(cx * 16 + tx, cz * 16 + tz, seed) == "forest":
+				continue
+			var sand_near := false
+			for sx in range(-WorldGen.BANANA_SAND_R, WorldGen.BANANA_SAND_R + 1):
+				for sz in range(-WorldGen.BANANA_SAND_R, WorldGen.BANANA_SAND_R + 1):
+					var nx: int = tx + sx
+					var nz: int = tz + sz
+					if nx >= 0 and nx < 16 and nz >= 0 and nz < 16 and int(sand[(nz << 4) | nx]) >= 0:
+						sand_near = true
+			if not sand_near:
+				continue
+			var water_near := false
+			for wx2 in range(-WorldGen.BANANA_WATER_R, WorldGen.BANANA_WATER_R + 1):
+				for wz2 in range(-WorldGen.BANANA_WATER_R, WorldGen.BANANA_WATER_R + 1):
+					var nx2: int = tx + wx2
+					var nz2: int = tz + wz2
+					if nx2 >= 0 and nx2 < 16 and nz2 >= 0 and nz2 < 16 and int(sid[(nz2 << 4) | nx2]) == WorldGen.B_WATER:
+						water_near = true
+						break
+				if water_near:
+					break
+			if water_near:
+				return true
+	return false
+
+
+# AC-0040: the end-to-end world test (AWECRAFT_LOGIC=banana3d, headless,
+# real world build). (a) registers a hanging banana from a real landing;
+# (b) teleports the player to the tree (within the 10-block roll radius),
+# recenters the world there, and waits for the 0.5 s roll to pluck the
+# fruit (set_block 0 -> RigidBody3D); (c) tracks the RigidBody3D: counts
+# the bounces (down->up velocity transitions) until rest (sleeping /
+# ~zero velocity); (d) the magnet pickup (the interact channel) collects
+# item 126; (e) eating the banana restores health + stamina (food 4) via
+# the AC-0039 sfx lane (Audio stub = no-op headless).
+# AC-0040 e2e diagnostics: dump the build-pipeline state (what the drain
+# actually sees) — printed on the e2e failure paths so a future stall is
+# readable from the log (queue/slot/pool/gate state in one line).
+func _banana3d_dump_state(tag: String) -> void:
+	var w = world
+	var ck_list := []
+	for k in w.chunks:
+		var c: Node3D = w.chunks[k]
+		ck_list.append([k, c.data.is_empty(), c.mesh_built, int(c.band)])
+	var slots_ready := 0
+	for s in w._startup_gen_slots:
+		if s != null:
+			slots_ready += 1
+	print("B3DSTATE %s q=%d queued=%d spawn_fast=%s rec_pending=%s tg_infl=%d tm_infl=%d pending_n=%d elems=%d slots_ready=%d pool_build=%d pool_data=%d ready_00=%s ready_11=%s chunks=%d" % [
+		tag, w.queue_size, w.queued_keys.size(), w._spawn_fast, w._rec_pending,
+		w.threadgen_inflight.size(), w.threadmesh_inflight.size(),
+		w._startup_gen_pending_n, w._startup_gen_elems.size(), slots_ready,
+		w._collect_pool(true, false, -1).size(), w._collect_pool(false, false, -1).size(),
+		w._build_ready(0, 0), w._build_ready(1, 1), w.chunks.size()])
+	print("B3DCHUNKS %s %s" % [tag, str(ck_list)])
+
+
+func _banana3d_test() -> void:
+	var t0 := Time.get_ticks_msec()
+	var fail = func(why: String) -> void:
+		Debug.result({"ok": false, "why": why, "ms": Time.get_ticks_msec() - t0})
+	# The world already exists: _run_game ran Game.new_world + _create_game
+	# nodes before dispatching this arm (same pattern as the other logic
+	# arms — the world is NOT re-created here). Fluid sim is already
+	# disabled for every logic arm; set it again for test self-sufficiency.
+	world.fluid_sim_enabled = false
+	world.spawn_point()
+	player = _spawn_player()
+	var p = Game.player
+	if p == null:
+		fail.call("no player after world build")
+		return
+	# Recenter the world onto the shore (seed 44's banana trees sit at
+	# chunks (1,5)/(1,6) -> world x 16..31, z 80..111; center (24,96)
+	# covers both with radius 4). A FAR recenter during the startup window
+	# is safe: the recenter's pre-warm queues the full 5x5 around the new
+	# center and the startup burst feeds its data (AC-0040 in_stream_set
+	# delta fix, §6 of the results), so the new center's 3x3 builds and
+	# _spawn_fast clears even while the queue-rebuild slice is still
+	# walking. The player stays put until the fruit chunk is built, then
+	# hops to the tree (inside the 10-block roll radius).
+	Game.mode = "play"
+	world.recenter(24.0, 96.0, true)
+	# (a) wait for the hanging fruits to register: the burst-apply hook
+	# runs the banana pass on each landed 5x5 column (~2-4 s).
+	var r := 0
+	while world._banana_fruits.is_empty() and r < 3000:
+		await get_tree().physics_frame
+		r += 1
+	if world._banana_fruits.is_empty():
+		_banana3d_dump_state("no_fruits")
+		fail.call("no hanging banana registered after the shore recenter")
+		return
+	var fruit_key := String(world._banana_fruits.keys()[0])
+	var parts: PackedStringArray = fruit_key.split(",")
+	var fx := int(parts[0])
+	var fy := int(parts[1])
+	var fz := int(parts[2])
+	var fck := "%d,%d" % [fx / 16, fz / 16]
+	# (1) wait for the chunk DATA to land (the roll's get_block==28 guard
+	# requires it; get_block returns 0 before the slabs land).
+	var w := 0
+	while w < 3000 and world.get_block(fx, fy, fz) != WorldGen.B_BANANA:
+		await get_tree().physics_frame
+		w += 1
+	if world.get_block(fx, fy, fz) != WorldGen.B_BANANA:
+		fail.call("fruit chunk %s data never landed" % fck)
+		return
+	# (2) wait for the mesh + collider build (paced pipeline — be patient;
+	# the bounce needs the slab StaticBody3D colliders, which land with the
+	# mesh via _post_build_collision).
+	var ck: Node3D = null
+	var w2 := 0
+	while w2 < 6000:
+		ck = world.chunks.get(fck)
+		if ck != null and ck.mesh_built:
+			break
+		await get_tree().physics_frame
+		w2 += 1
+	if ck == null or not ck.mesh_built:
+		# diagnostic: exactly where the build pipeline is stuck
+		var built_n := 0
+		var tot := 0
+		for k2 in world.chunks:
+			var cc2: Node3D = world.chunks[k2]
+			tot += 1
+			if cc2.mesh_built:
+				built_n += 1
+		Debug.result({
+			"ok": false,
+			"why": "fruit chunk %s never mesh_built (data landed; roll would work but the bounce needs the collider)" % fck,
+			"diag": {
+				"chunks_total": tot,
+				"chunks_built": built_n,
+				"tg_handoff": world._tg_handoff,
+				"tg_stale": world._tg_stale,
+				"fruit": [fx, fy, fz],
+				"queue_size": world.queue_size,
+				"queued_keys": world.queued_keys.size(),
+				"startup_pending_n": world._startup_gen_pending_n,
+				"startup_pending": world._startup_pending(),
+				"tg_inflight": world.threadgen_inflight.size(),
+				"tm_inflight": world.threadmesh_inflight.size(),
+				"loading_active": world.loading_active,
+				"rec_pending": world._rec_pending,
+				"spawn_fast": world._spawn_fast,
+				"fruit_in_queue": world.queued_keys.has(fck),
+				"last_pcx": world.last_pcx,
+				"last_pcz": world.last_pcz,
+			},
+			"ms": Time.get_ticks_msec() - t0,
+		})
+		return
+	# (3) now that the ground is built, put the player above the fruit tree
+	# (inside the 10-block roll radius). Teleporting here — not earlier —
+	# matters: an unbuilt chunk has no colliders, so a player parked over
+	# it during the build would fall through the world and the 10-block
+	# roll would never see it.
+	p.position = Vector3(float(fx) + 0.5, float(fy) + 8.0, float(fz) + 0.5)
+	# (b) the roll plucks the fruit (0.5 s period, 6% per fruit in range).
+	var waited := 0
+	while world._banana_plucked == 0 and waited < 5400:
+		await get_tree().physics_frame
+		waited += 1
+	if world._banana_plucked == 0:
+		fail.call("no pluck within 90 s (player was at the tree)")
+		return
+	# (c) find the RigidBody3D banana and track it until rest.
+	var body: Node3D = null
+	var j := 0
+	while body == null and j < 300:
+		for ch in Game.drops.get_children():
+			if ch is RigidBody3D:
+				body = ch
+		if body == null:
+			await get_tree().physics_frame
+			j += 1
+	if body == null:
+		fail.call("no RigidBody3D in Game.drops after the pluck")
+		return
+	var start_y := body.position.y
+	var min_y := 1e9
+	var rest_y := 0.0
+	var bounces := 0
+	var dir := 0
+	var frames_to_rest := -1
+	var k := 0
+	while k < 3600:
+		if not is_instance_valid(body):
+			break
+		var v: Vector3 = body.get_linear_velocity()
+		min_y = minf(min_y, body.position.y)
+		if v.y < -0.05 and dir == 1:
+			dir = -1
+		elif v.y > 0.05:
+			if dir == -1:
+				bounces += 1
+			dir = 1
+		# Rest only counts AFTER the banana has actually fallen (the spawn
+		# impulse can be near-zero, which would read as "at rest" on frame 0).
+		if body.position.y < start_y - 0.3 and (body.is_sleeping() or v.length() < 0.25):
+			rest_y = body.position.y
+			frames_to_rest = k
+			break
+		await get_tree().physics_frame
+		k += 1
+	# (d) the magnet pickup collects item 126 (hop next to the resting
+	# body if it rolled out of the 2.5 m magnet range).
+	var pickup_ms := Time.get_ticks_msec()
+	var picked := false
+	var m := 0
+	while m < 1800:
+		if _count_item(p, 126) > 0:
+			picked = true
+			break
+		if is_instance_valid(body) and p.position.distance_to(body.position) > 2.4:
+			p.position = Vector3(body.position.x + 0.9, body.position.y + 0.6, body.position.z)
+		await get_tree().physics_frame
+		m += 1
+	pickup_ms = Time.get_ticks_msec() - pickup_ms
+	var body_freed: bool = not is_instance_valid(body)
+	if not picked:
+		fail.call("pickup did not collect item 126 within 30 s")
+		return
+	# (e) eat it: health + stamina back (food 4) + the gorilla sfx lane.
+	# use_selected() is the normal interact path (resolves Data.items[126],
+	# finds the "food" field, calls eat_selected). Positive pitch is UP in
+	# this engine (mouse-up increases pitch), so -1.3 aims steeply DOWN at
+	# the ground under the player — aim_hit's raycast must land for the eat
+	# to proceed.
+	var slot := _slot_of(p, 126)
+	if slot < 0:
+		fail.call("item 126 missing from the inventory after pickup")
+		return
+	p.hp = 0.0
+	p.hunger = 0.0
+	p.sel = slot
+	p.look(0.0, -1.3)
+	p.use_selected()
+	var hp_after: float = p.hp
+	var hun_after: float = p.hunger
+	var count_after := _count_item(p, 126)
+	var ok: bool = world._banana_plucked >= 1 and bounces >= 1 and rest_y < start_y and rest_y > 0.0 and picked and body_freed and hp_after >= 3.9 and hun_after >= 3.9 and count_after == 0
+	Debug.result({
+		"ok": ok,
+		"fruit": [fx, fy, fz],
+		"plucked": world._banana_plucked,
+		"spawned": world._banana_spawned,
+		"bounces": bounces,
+		"start_y": start_y,
+		"rest_y": rest_y,
+		"min_y": min_y,
+		"frames_to_rest": frames_to_rest,
+		"pickup_ms": pickup_ms,
+		"body_freed": body_freed,
+		"eat": {"hp": hp_after, "hunger": hun_after, "count_after": count_after},
+		"ms": Time.get_ticks_msec() - t0,
 	})
 
 

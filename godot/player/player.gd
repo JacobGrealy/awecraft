@@ -1027,7 +1027,9 @@ func eat_selected(info: Dictionary) -> void:
 		hp = minf(20.0, hp + float(info["food"]))
 		hunger = minf(20.0, hunger + float(info["food"]))
 		inv_consume_selected()
-		Audio.play("eat")
+		# AC-0040: the sfx field (banana = "gorilla", via the AC-0039 sound
+		# lane) defaults to the standard eat sound.
+		Audio.play(str(info.get("sfx", "eat")))
 	else:
 		Game.message("Too full")
 
