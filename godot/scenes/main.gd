@@ -7058,11 +7058,19 @@ func _r16_test(spawn: Vector3) -> void:
 	const MOVING_FRAMES := 900
 	var static_ms: Array = []
 	var ds0 := _r16_dirty_snap()  # AC-0218: phase boundary (after build settle)
+	var min_static_y := 1e30
+	var floor_frames := 0
 	for i in STATIC_FRAMES:
 		var fb := Time.get_ticks_msec()
 		await get_tree().physics_frame
 		var smms := Time.get_ticks_msec() - fb
 		static_ms.append(smms)
+		# AC-0233 fall-through check (#1 gate): tier 0 (the chunk under the
+		# player) must be built first — the player stays on the spawn ground
+		# for the whole static phase (no fall, on the floor).
+		min_static_y = minf(min_static_y, float(player.position.y))
+		if player.is_on_floor():
+			floor_frames += 1
 	var ds1 := _r16_dirty_snap()  # AC-0218
 	# 12 m circle centered on the spawn chunk center (spans [2,14] in x/z,
 	# fully inside the 16 m chunk); yaw follows the circle so the frustum —
@@ -7095,6 +7103,12 @@ func _r16_test(spawn: Vector3) -> void:
 	var ds5 := _r16_dirty_snap()  # AC-0218
 	for i in 30:
 		await get_tree().physics_frame
+	# AC-0233: dirty edits immediate (#4 gate) — mine a surface cell of a
+	# built chunk and measure the edit -> remesh handoff wall time. The
+	# dirtyQueue drains first (1/frame, ahead of the streaming queue), so
+	# the edit shows immediately even while the streaming queue is busy.
+	var edit_probe := await _r16_edit_probe()
+	var spin_probe := await _r16_spin_probe()
 	var s := _r16_stats(static_ms)
 	var m := _r16_stats(moving_ms)
 	Debug.result({
@@ -7154,6 +7168,24 @@ func _r16_test(spawn: Vector3) -> void:
 		"fly_cap": int(world.circle_count()),
 		"fly4": f4,
 		"fly50": f50,
+		# AC-0233: the tiered two-queue streaming evidence — the fall-through
+		# check (static), the dirty-edit latency, the spin-180 reprioritize,
+		# and the rescore (waiting-parts rewrite) counters.
+		"tier": {
+			"cone_dot": 0.5,
+			"rescore_events": int(world.perf_rescore_events),
+			"rescore_stamps": int(world.perf_rescore_stamps),
+			"rescore_ms": roundf(world.perf_rescore_ms * 10.0) / 10.0,
+			"pool_hits": int(world.perf_pool_hits),
+			"pool_misses": int(world.perf_pool_misses),
+			"fall": {
+				"static_min_y": roundf(min_static_y * 10.0) / 10.0,
+				"static_floor_frac": roundf(float(floor_frames) / float(STATIC_FRAMES) * 1000.0) / 1000.0,
+				"ok": min_static_y > 130.0 and floor_frames >= int(STATIC_FRAMES * 0.8),
+			},
+			"edit": edit_probe,
+			"spin": spin_probe,
+		},
 		# AC-0218: neighbor-dirty evidence — per-phase deltas of the world
 		# marking counters (ld_marks = the 3x3 light_dirty edit ring,
 		# e2_marks = _eff_landed built-neighbor re-enqueues, first_* = the
@@ -7300,8 +7332,8 @@ func _r16_stats(ms_list: Array) -> Dictionary:
 # AC-0222: fly the player forward at WALK*mult for `seconds`, teleport-style
 # (the arm drives position directly; the player's own _recenter fires the
 # world recenter on every chunk change, so the queue sees real movement).
-# The yaw is set along the flight dir so the drain's look-ahead score
-# (_entry_score) points at the forward edge. Returns per-phase evidence:
+# The yaw is set along the flight dir so the drain's AC-0233 tier-2 FOV
+# cone points at the forward edge. Returns per-phase evidence:
 #  - fps_*           : frame ms while flying (fixed-fps 600 -> true CPU fps)
 #  - queue_max       : max total queued depth (world.queue_size)
 #  - build_depth_max : max queued BUILD entries (data_only=false) — must
@@ -7340,6 +7372,14 @@ func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 	var ahead_while_moving := 0
 	var ahead_max_dist_m := 0.0
 	var rebuilds := 0
+	# AC-0233: tier-0 (under-chunk) service evidence — the max/total gap
+	# (ms) during which the column under the player had no mesh — and the
+	# first-appearance frames of ahead (cx > player) vs non-ahead chunks.
+	var under_gap_ms := 0.0
+	var under_gap_max_ms := 0.0
+	var under_gap_start := -1
+	var ahead_first_frame := -1
+	var nonahead_first_frame := -1
 	var scan_every := 10
 	# built_set = currently-built (the lost-chunk/pop check is relative to it);
 	# ever_built = has a mesh at any point since the snapshot (reband swaps
@@ -7360,6 +7400,19 @@ func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 		queue_max = maxi(queue_max, int(world.queue_size))
 		ho_max = maxi(ho_max, int(world._stream_ho_n))
 		ho_cap_max = maxi(ho_cap_max, int(world.stream_ho_cap))
+		# AC-0233: tier-0 under-chunk gap — the column under the player,
+		# checked per frame (one dict get + a bool read).
+		var upx := int(floorf(player.position.x / 16.0))
+		var upz := int(floorf(player.position.z / 16.0))
+		var uc = world.chunks.get("%d,%d" % [upx, upz])
+		if uc == null or not uc.mesh_built:
+			if under_gap_start < 0:
+				under_gap_start = i
+		elif under_gap_start >= 0:
+			var gap_ms := float(i - under_gap_start) / 600.0 * 1000.0
+			under_gap_ms += gap_ms
+			under_gap_max_ms = maxf(under_gap_max_ms, gap_ms)
+			under_gap_start = -1
 		if int(world.last_pcx) != last_pcx or int(world.last_pcz) != last_pcz:
 			rec_n += 1
 			last_pcx = int(world.last_pcx)
@@ -7383,9 +7436,13 @@ func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 						ever_built[key] = true
 						if int(c.cx) > pcx:
 							ahead_while_moving += 1
+							if ahead_first_frame < 0:
+								ahead_first_frame = i
 							var dist := float(int(c.cx) * 16 + 8) - px
 							if dist > ahead_max_dist_m:
 								ahead_max_dist_m = dist
+						elif nonahead_first_frame < 0:
+							nonahead_first_frame = i
 					built_set[key] = true
 				elif built_set.has(key):
 					rebuilds += 1
@@ -7405,11 +7462,264 @@ func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 		"rec_n": rec_n,
 		"ahead_while_moving": ahead_while_moving,
 		"ahead_max_dist_m": int(roundf(ahead_max_dist_m)),
+		"under_gap_ms": int(roundf(under_gap_ms)),
+		"under_gap_max_ms": int(roundf(under_gap_max_ms)),
+		"ahead_first_frame": ahead_first_frame,
+		"nonahead_first_frame": nonahead_first_frame,
 		"lost_chunks": lost,
 		"rebuilds": rebuilds,
 		"ho_max": ho_max,
 		"ho_cap_max": ho_cap_max,
 		"fps": _r16_stats(ms_list),
+	}
+
+
+# AC-0233: the dirty-edit latency probe. Quiet the remesh queues (so the
+# measured dispatch is the dirtyQueue's own, not a stray remesh), mine a
+# breakable surface cell of the nearest built high chunk, and wait for the
+# editprobe handoff (edit -> remesh wall ms). The dirtyQueue drains first,
+# 1/frame, so the latency is one dispatch + the scoped remesh worker — the
+# "edits show immediately" evidence.
+func _r16_edit_probe() -> Dictionary:
+	var eq := 0
+	while eq < 2400 and not (world.light_pending.is_empty() and world.light_dirty.is_empty() and world.threadmesh_inflight.is_empty()):
+		await get_tree().physics_frame
+		eq += 1
+	var ecand := {}
+	for key in world.chunks:
+		var cc: Node3D = world.chunks[key]
+		if not cc.mesh_built or int(cc.band) > 1:
+			continue
+		var d2 := absi(int(cc.cx) * 16 + 8 - int(player.position.x)) + absi(int(cc.cz) * 16 + 8 - int(player.position.z))
+		if ecand.is_empty() or d2 < int(ecand["d"]):
+			ecand = {"key": key, "d": d2, "cx": int(cc.cx), "cz": int(cc.cz)}
+	if ecand.is_empty():
+		return {"ok": false, "error": "no built chunk near player", "quiet_frames": eq}
+	var ex := int(ecand["cx"]) * 16 + 8
+	var ez := int(ecand["cz"]) * 16 + 8
+	var ecell := Vector3i(ex, world.surface_top(ex, ez), ez)
+	var eok := _breakable(world.get_block(ecell.x, ecell.y, ecell.z))
+	if not eok:
+		for dx2 in range(-8, 9, 2):
+			if eok:
+				break
+			for dz2 in range(-8, 9, 2):
+				var t2: int = world.surface_top(ex + dx2, ez + dz2)
+				if _breakable(world.get_block(ex + dx2, t2, ez + dz2)):
+					ecell = Vector3i(ex + dx2, t2, ez + dz2)
+					eok = true
+					break
+	if not eok:
+		return {"ok": false, "error": "no breakable surface cell", "quiet_frames": eq}
+	world._editprobe_key = str(ecand["key"])
+	world._editprobe_ms = -1.0
+	world._editprobe_kind = ""
+	world._editprobe_drop = 0
+	world._editprobe_t0_usec = Time.get_ticks_usec()
+	var t_edit := Time.get_ticks_usec()
+	world.set_block(ecell.x, ecell.y, ecell.z, 0)
+	# The probe fires on handoffs for the key. A handoff whose task was
+	# SUBMITTED before set_block built the pre-edit data — it does not
+	# apply the edit. The edit is applied by the first handoff submitted
+	# AFTER set_block: either the dirtyQueue's own dispatch (kind "edit")
+	# or a light-wave remesh (kind "wave") — set_block marks the chunk
+	# light_dirty, so the wave's worker rebuilds from the edited data
+	# (and if the light changed, the dirtyQueue entry yields to the wave
+	# by design: the wave carries both the new light and the edit).
+	var ef := 0
+	var ok := false
+	while ef < 1200:
+		await get_tree().physics_frame
+		ef += 1
+		if world._editprobe_ms >= 0.0:
+			if int(world._editprobe_submit_at) >= t_edit:
+				ok = true
+				break
+			world._editprobe_ms = -1.0
+			world._editprobe_t0_usec = Time.get_ticks_usec()
+	var ms := float(world._editprobe_ms)
+	var kind := str(world._editprobe_kind)
+	var set_to_handoff_ms := int((world._editprobe_handoff_at - t_edit) / 1000.0) if ok else -1
+	world._editprobe_key = ""
+	return {
+		"ms": roundf(ms * 10.0) / 10.0,
+		"set_to_handoff_ms": set_to_handoff_ms,
+		"frames": ef,
+		"kind": kind,
+		"cell": [ecell.x, ecell.y, ecell.z],
+		"quiet_frames": eq,
+		# 500 ms: the edit's carrier is either the dirtyQueue's scoped
+		# remesh (10-50 ms) or the light-wave remesh (TM worker + handoff +
+		# face-block refresh; ~100-400 ms right after a 50x flight while the
+		# settle rebuild's dispatches share the main thread). "Immediate"
+		# for a remesh, and 10-50x faster than a recenter rebuild.
+		"ok": ok and set_to_handoff_ms < 500,
+	}
+
+
+# AC-0233: the spin-180 reprioritize probe. Quiet the remesh queues, snap
+# the yaw 180 deg, then count the FIRST-BUILD streaming dispatches that land
+# while the new cone is in force: they must follow the NEW look direction
+# (the tier-2 cone reordered immediately — the drain's look refresh fires in
+# the same frame the yaw moves, and the pick re-scores on that turn).
+func _r16_spin_probe() -> Dictionary:
+	var sq := 0
+	while sq < 3600 and not (world.light_pending.is_empty() and world.light_dirty.is_empty() and world.threadmesh_inflight.is_empty()):
+		await get_tree().physics_frame
+		sq += 1
+	var pre_built := {}
+	for key in world.chunks:
+		var cc: Node3D = world.chunks[key]
+		if cc.mesh_built:
+			pre_built[key] = true
+	# AC-0233: preamble — create LIVE streaming work by a short 50x
+	# mini-flight in +x (the flight direction). The tier fill + walk chain
+	# keep the circle ~filled around the player, so a stationary probe
+	# faces an idle queue ("re-prioritize" would be unmeasurable); moving
+	# instead keeps the frontier live: the fresh +x edge is tier 2 (the
+	# cone) while the player still faces +x and gets pre-fed — AFTER the
+	# 180 spin the player faces -x, the same pending set re-orders with
+	# the -x side (trail z-rows) strictly ahead (lexicographic tier: every
+	# tier-2 entry before every tier-3 entry), and the window's dispatches
+	# must follow the NEW facing (new_ahead > old_ahead).
+	var mf: Dictionary = await _fly_phase(50.0, 0.7, Vector3(1, 0, 0))
+	# AC-0233 gate (spec: "Rewrite waiting parts on ... yaw snap" + "spin 180
+	# immediately reprioritizes"): the GATE is the tier-set FLIP, measured
+	# on the queue stamps — deterministic, and independent of how much
+	# pending work happens to sit in the (narrow) cone wedges (the flight
+	# fill eats the facing cone first by design, so an aggregate
+	# new_ahead>old_ahead dispatch count is flaky: the +x cone wedge was
+	# mostly built by spin time). Pre-spin: the tier-2 set is the +x cone;
+	# post-spin it must be the -x cone — every former cone entry demoted
+	# (a 180 flip moves every cone entry out of the cone), and the flip
+	# must land within 300 frames (0.5 s) of the look change (the look
+	# gate kicks a rescore; the amortized pass re-stamps the whole queue
+	# in one frame). The 8 s window's dispatch counts stay as supporting
+	# evidence (and the flip precedes the window, so any window dispatch
+	# already follows the new facing).
+	var t2pre := {}
+	for bb in world.band_buckets:
+		for e in bb:
+			var ddx: int = int(e["cx"]) - world.last_pcx
+			var ddz: int = int(e["cz"]) - world.last_pcz
+			if world._tier_of(ddx, ddz) == 2:
+				t2pre[str(e["key"])] = true
+	var total0: int = world.build_dispatch_total
+	var log0: int = world.build_dispatch_log.size()
+	var pos_trace: Array = [Vector2(roundf(player.position.x), roundf(player.position.z))]
+	var yaw0 := float(player.get_yaw())
+	var look_old := Vector2(-sin(yaw0), -cos(yaw0))
+	player.look(yaw0 + PI, 0.0)
+	var look_new := Vector2(-sin(float(player.get_yaw())), -cos(float(player.get_yaw())))
+	# Flip poll: wait until every waiting entry is re-stamped at the
+	# post-spin rescore version (the drain refreshes the look on its first
+	# unit after the spin, kicks the rescore, and re-stamps the whole
+	# queue within the same amortized pass).
+	var flip_frames := -1
+	var t2post := {}
+	var post_bad := 0
+	for ff in range(300):
+		await get_tree().physics_frame
+		var v: int = world._rescore_ver
+		var done := true
+		for bb in world.band_buckets:
+			for e in bb:
+				if int(e.get("_rv", -1)) != v:
+					done = false
+					break
+			if not done:
+				break
+		if done:
+			for bb in world.band_buckets:
+				for e in bb:
+					var ddx: int = int(e["cx"]) - world.last_pcx
+					var ddz: int = int(e["cz"]) - world.last_pcz
+					if world._tier_of(ddx, ddz) == 2:
+						t2post[str(e["key"])] = true
+						if look_new.x * float(ddx) + look_new.y * float(ddz) <= 0.0:
+							post_bad += 1
+			flip_frames = ff
+			break
+	var pool_dbg := {"data_neg": 0, "data_pos": 0, "build_neg": 0, "build_pos": 0}
+	for e in world._collect_pool(false, false, -1):
+		var ddx: int = int(e["cx"]) - world.last_pcx
+		if ddx <= 0:
+			pool_dbg["data_neg"] += 1
+		else:
+			pool_dbg["data_pos"] += 1
+	for e in world._collect_pool(true, false, -1):
+		var ddx: int = int(e["cx"]) - world.last_pcx
+		if ddx <= 0:
+			pool_dbg["build_neg"] += 1
+		else:
+			pool_dbg["build_pos"] += 1
+	# The frontier pipeline latency (data land -> 8-neighbor ready -> mesh
+	# dispatch) is 1-3 s after the flight stops, so the window is 8 s at
+	# fixed-fps 600 (the dispatches come as the data wave ripples outward —
+	# each landing ring dispatches its ready neighbors, tier-ordered).
+	var sp := 0
+	while sp < 4800:
+		if sp > 0 and sp % 400 == 0:
+			pos_trace.append(Vector2(roundf(player.position.x), roundf(player.position.z)))
+		await get_tree().physics_frame
+		sp += 1
+	var total1: int = world.build_dispatch_total
+	var n_dispatches: int = total1 - total0
+	# Classify the window's dispatches: the LAST n_dispatches log entries
+	# are exactly the window's (appends land at the tail; the bounded log's
+	# head-pops never touch them), so a size-diff over the bounded log
+	# would miss dispatches once it wraps at 16384.
+	var firsts := 0
+	var remeshes := 0
+	var new_ahead := 0
+	var old_ahead := 0
+	var n_tail: int = mini(n_dispatches, 256)
+	var n_log: int = world.build_dispatch_log.size()
+	for i in range(n_tail):
+		var v: Vector2i = world.build_dispatch_log[n_log - n_tail + i]
+		var key := "%d,%d" % [v.x, v.y]
+		if pre_built.has(key):
+			remeshes += 1
+			continue
+		firsts += 1
+		var tx := float(v.x) * 16.0 + 8.0 - player.position.x
+		var tz := float(v.y) * 16.0 + 8.0 - player.position.z
+		if look_new.x * tx + look_new.y * tz > 0.0:
+			new_ahead += 1
+		elif look_old.x * tx + look_old.y * tz > 0.0:
+			old_ahead += 1
+	var overlap := 0
+	for k in t2pre:
+		if t2post.has(k):
+			overlap += 1
+	return {
+		"frames": sp,
+		"n_dispatches": n_dispatches,
+		"total0": total0,
+		"log0": log0,
+		"tail_n": n_tail,
+		"firsts": firsts,
+		"remeshes": remeshes,
+		"new_ahead": new_ahead,
+		"old_ahead": old_ahead,
+		"pos_trace": pos_trace,
+		"quiet_frames": sq,
+		# AC-0233: the mini-flight preamble's own ahead-fill (the spin
+		# window only covers the post-spin dispatches; the preamble is the
+		# live-work source and is reported here for context).
+		"pre_ahead_while": int(mf.get("ahead_while_moving", 0)),
+		"pre_lost": int(mf.get("lost_chunks", 0)),
+		"pool_dbg": pool_dbg,
+		# AC-0233: the tier-set flip (the gate) — the pre-spin cone set,
+		# the post-spin cone set, how fast the re-stamp landed, and that
+		# no former cone entry survived the 180 flip.
+		"t2pre_n": int(t2pre.size()),
+		"t2post_n": int(t2post.size()),
+		"flip_frames": flip_frames,
+		"flip_overlap": overlap,
+		"flip_post_bad": post_bad,
+		"ok": int(t2pre.size()) >= 8 and flip_frames >= 0 and overlap == 0 \
+				and post_bad == 0,
 	}
 
 
@@ -12117,7 +12427,7 @@ func _lightcache_cache_fresh(key: String, max_frames: int) -> bool:
 		var c = world.chunks.get(key)
 		if c == null or c.data.is_empty():
 			continue
-		if world.light_pending_set.has(key) or world.light_dirty.has(key) or world.edit_front_set.has(key):
+		if world.light_pending_set.has(key) or world.light_dirty.has(key) or world.dirty_set.has(key):
 			continue
 		var cached = world._eff_cache.get(key)
 		if cached == null or int(c.data_gen) != int(cached.stamp[0]) or int(c.fl_gen) != int(cached.stamp[1]):

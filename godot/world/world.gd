@@ -173,12 +173,11 @@ var perf_edit_dispatches := 0
 var perf_edit_defers := 0
 var perf_edit_syncs := 0
 var perf_edit_light_passes := 0
-# AC-0187: block-edit remesh front queue. set_block pushes the edited chunk's
-# key (with the dirty slab closure) here; _process drains it BEFORE the
-# AC-0126 light_pending flush so the hole lands on the next frame instead of
-# behind the far-queue drain. Each entry = {"key", "si0", "si1"}.
-var edit_front: Array = []
-var edit_front_set := {}
+# AC-0233: the dirtyQueue — edited chunks append (with the dirty slab
+# closure) and drain FIRST, 1 per process frame, ahead of the streaming
+# queue work, so edits show immediately. Each entry = {"key", "si0", "si1"}.
+var dirty_queue: Array = []
+var dirty_set := {}
 # AC-0187: last full light dict (mask included) per edited chunk, stashed
 # from the eff cache BEFORE set_block's eviction. A stale-but-current light
 # lets the scoped worker build skip the whole-chunk light recompute; the
@@ -219,6 +218,7 @@ var _editprobe_dq := 0
 var _editprobe_nq := 0
 var _editprobe_prime := false
 var _editprobe_handoff_at := 0
+var _editprobe_submit_at := 0
 var _editprobe_done_ms := 0
 var _editprobe_prime_flag := false
 var _editprobe_ns := []
@@ -326,20 +326,22 @@ var _qb := {}
 # trickle); _drain_win_b < 0 = unset.
 var _drain_win_b := -1
 var _drain_win_acc := 0
-# AC-0217: the pool/score debounce. The drain's three scored picks (build /
-# forward-lead / data) each re-ran _collect_pool (up to PICK_POOL_CAP
-# entries) + _entry_score every frame even when the player stands still and
-# the world is idle — ~1000 entries of pure re-work per idle frame. A pick
-# is a pure function of (queue membership + eligibility, px, pz, look dir,
-# maxb, _spawn_fast, the recenter center, the in-flight depths). _pool_ver
-# bumps at every mutation of that state (every band_buckets mutation site —
-# the same lockstep list as the AC-0222 _build_q_n counter — plus the
-# data-landing choke points); when the quantized key (1 cm / 1e-3 look) and
-# the version are unchanged, the last pool/score result is served and the
-# rescan + rescore is skipped entirely. Any real move or look turn changes
-# the key every frame -> a fresh scan -> the forward-move pick order is
-# byte-identical to pre-AC-0217. The candidate re-validation on a hit is the
-# safety net: a stale cached candidate re-scans instead of being served.
+# AC-0217 + AC-0233: the pool/score debounce. The drain's scored picks
+# (build / forward-lead / data) re-ran _collect_pool (up to PICK_POOL_CAP
+# entries) + scoring every frame even when the player stands still and the
+# world is idle. A pick is a pure function of (queue membership +
+# eligibility, look dir, maxb, _spawn_fast, the recenter center, the
+# in-flight depths) — AC-0233: the 4-tier order depends only on the column
+# + look dir, so px/pz left the key and moving within a column no longer
+# rescans. _pool_ver bumps at every mutation of that state (every
+# band_buckets mutation site — the same lockstep list as the AC-0222
+# _build_q_n counter — plus the data-landing choke points); when the
+# quantized key and the version are unchanged, the last pool/score result is
+# served and the rescan + rescore is skipped entirely. A column cross, a
+# ~10 deg turn, a yaw snap, or a pool change changes the key -> a fresh scan
+# (the debounced rewrite of the waiting parts). The candidate re-validation
+# on a hit is the safety net: a stale cached candidate re-scans instead of
+# being served.
 var _pool_ver := 0
 var perf_pool_hits := 0
 var perf_pool_misses := 0
@@ -347,20 +349,115 @@ var _pool_b: Array = []    # [key, e, c, s, pe] last build-pass pick
 var _pool_fb: Array = []   # [key, e, c, s, pe] last forward-lead pick
 var _pool_data: Array = [] # [key, e, null, s, pe] last data-pass pick
 
+# AC-0233: the 4-tier priority cone — dot of the horizontal direction to
+# the chunk with the look direction > TIER_CONE_DOT = inside the FOV cone
+# (tier 2); anything else is tier 3 (the rest).
+const TIER_CONE_DOT := 0.5
+# AC-0233: the amortized queue-rewrite slice — entries re-stamped per drain
+# step (a full R50 7845-entry queue re-stamps in ~4 frames; R16 in one).
+const RESCORE_PER_FRAME := 2048
+# AC-0233: the debounced-recenter coverage limit (L1 chunks from the walked
+# center). A debounced recenter stands only while the standing rebuild
+# (in-flight or last-finished) still covers the new center. Past this the
+# walked circle is mostly behind the player: its entries evict (farthest
+# first) and the new circle ahead has no queue entries at all — the drain
+# starves once the pre-warmed line is exhausted (R16 50x flight: 36 chunks
+# in 2 s, the spawn walk at column 0 covers nothing at column 36). Past the
+# limit the recenter escalates to a full rebuild (one R16 walk is a single
+# 8 ms frame; even a chained walk every few chunks is a small fraction of
+# the frame budget).
+const REBUILD_COVER_L1 := 4
+var _rescore_ver := 0
+var _rescore_due := false
+var perf_rescore_events := 0
+var perf_rescore_stamps := 0
+var perf_rescore_ms := 0.0
+
 func _pool_touch() -> void:
 	_pool_ver += 1
 
-func _pool_key(maxb: int, px: float, pz: float) -> String:
-	# Quantized so an idle player's FP jitter (sub-mm, sub-degree) keeps
-	# hitting; any real move (>= 1 cm) or look turn (>= ~0.06 deg — the
-	# _look_dir refresh gate) misses.
-	return "%d_%d_%d_%d_%d_%d_%d_%d_%d" % [
+func _pool_key(maxb: int) -> String:
+	# AC-0233: the tiered pick is a pure function of (pool state + look dir
+	# + drain window + spawn-fast + recenter center) — moving WITHIN a
+	# column does not change the tier order, so px/pz left the key. The
+	# look only moves in ~10 deg snaps (the _look_dir refresh gate), so a
+	# key hit means no rescan: the waiting parts are rewritten only on a
+	# column cross (pcx/pcz), a ~10 deg turn, a yaw snap, or a pool change.
+	return "%d_%d_%d_%d_%d_%d_%d" % [
 		_pool_ver,
-		int(roundf(px * 100.0)), int(roundf(pz * 100.0)),
-		int(roundf(_look_dir.x * 1000.0)), int(roundf(_look_dir.y * 1000.0)),
+		int(roundf(_look_dir.x * 100.0)), int(roundf(_look_dir.y * 100.0)),
 		maxb, 1 if _spawn_fast else 0,
 		last_pcx, last_pcz,
 	]
+
+# AC-0233: the 4-tier priority of a waiting entry (dx,dz = offset from the
+# player's column). 0 = the chunk under the player (built first — fall
+# through never), 1 = the ring1 8 neighbors, 2 = the FOV cone (ordered by
+# taxi distance), 3 = the rest (ordered by distance).
+func _tier_of(dx: int, dz: int) -> int:
+	if dx == 0 and dz == 0:
+		return 0
+	if maxi(absi(dx), absi(dz)) == 1:
+		return 1
+	var tx := float(dx) * 16.0
+	var tz := float(dz) * 16.0
+	var dot := _look_dir.x * tx + _look_dir.y * tz
+	if dot > 0.0 and dot * dot > TIER_CONE_DOT * TIER_CONE_DOT * (tx * tx + tz * tz):
+		return 2
+	return 3
+
+func _tier_score(e: Dictionary) -> float:
+	var dx := int(e["cx"]) - last_pcx
+	var dz := int(e["cz"]) - last_pcz
+	# AC-0233: LEXICOGRAPHIC (tier, taxi) — the spec's "Tier order: 0 under,
+	# 1 ring1 8, 2 cone ..., 3 rest" is a STRICT primary order: every tier-N
+	# entry sorts before every tier-(N+1) entry, and taxi breaks ties WITHIN
+	# a tier (max render-radius taxi at R50 is ~110, so 10000 leaves room).
+	# The earlier tier + taxi*0.1 blend let a near tier-3 outrank a far
+	# tier-2, which blurred the tier boundary — a 180 spin must re-order
+	# the whole cone set ahead of the whole rest set, not interleave it.
+	return float(_tier_of(dx, dz)) * 10000.0 + float(absi(dx) + absi(dz))
+
+# AC-0233: stamp a waiting entry with its current tier + taxi rank (the
+# stored tier order the AC-0231 low-LOD scan walks; the live pick computes
+# the tier itself, so a stale stamp can only lag, never mislead).
+func _tier_stamp(e: Dictionary) -> void:
+	var dx := int(e["cx"]) - last_pcx
+	var dz := int(e["cz"]) - last_pcz
+	e["tier"] = _tier_of(dx, dz)
+	e["rank"] = absi(dx) + absi(dz)
+	e["_rv"] = _rescore_ver
+
+# AC-0233: rewrite all waiting parts — the queue is speculative and
+# rewritable; a ~10 deg turn / yaw snap or a recenter column cross kicks
+# the pass (amortized, RESCORE_PER_FRAME stamps per drain step). The
+# rewrite only re-stamps queued entries — it NEVER touches the ThreadGen
+# pool4 / ThreadMesh pool6 in-flight work.
+func _rescore_kick() -> void:
+	_rescore_ver += 1
+	_rescore_due = true
+	perf_rescore_events += 1
+
+func _rescore_step() -> void:
+	if not _rescore_due:
+		return
+	var t0 := Time.get_ticks_usec()
+	var n := 0
+	for b in range(band_buckets.size()):
+		var arr: Array = band_buckets[b]
+		for i in range(arr.size()):
+			var e: Dictionary = arr[i]
+			if int(e.get("_rv", 0)) == _rescore_ver:
+				continue
+			_tier_stamp(e)
+			n += 1
+			if n >= RESCORE_PER_FRAME:
+				perf_rescore_stamps += n
+				perf_rescore_ms += (Time.get_ticks_usec() - t0) / 1000.0
+				return
+	perf_rescore_stamps += n
+	_rescore_due = false
+	perf_rescore_ms += (Time.get_ticks_usec() - t0) / 1000.0
 # AC-0109 cull-pass scratch (world-level only — no per-chunk state, no
 # per-frame allocations growing with chunk count; all fixed-size, filled
 # once per camera-transform change).
@@ -395,6 +492,14 @@ const AHEAD_RING_DEBOUNCE_MS := 1000
 var _rec_pending := false
 var _rec_pcx := 0
 var _rec_pcz := 0
+# AC-0233: the center of the in-flight (or last-finished) rebuild — the
+# debounced-recenter coverage anchor (REBUILD_COVER_L1).
+var _rec_center_pcx := 0
+var _rec_center_pcz := 0
+# AC-0233: outrun escalation parked while a walk is in flight (see
+# recenter) — re-checked when the in-flight walk finalizes.
+var _rec_escalate_pcx := -9999
+var _rec_escalate_pcz := -9999
 var _rec_phase := 0            # 0 WANT, 1 STUB, 2 MERGE_OLD, 3 MERGE_WANT, 4 MERGE_RING
 var _rec_cursor := 0           # position in the current phase's domain
 var _rec_i := 0
@@ -971,9 +1076,26 @@ func _process(_delta: float) -> void:
 	# each MeshInstance3D automatically); one bool check per frame.
 	if _cull_enabled:
 		_frustum_cull_pass()
+	# AC-0233: settle rebuild — placed BEFORE the idle early-return (qs == 0
+	# is exactly the stale state: the circle territory has no entries at
+	# all, so every bookkeeping list is empty and the drain never runs).
+	# The debounce chain fires only on a new recenter, so a fast-then-stop
+	# flight (R16 50x: 215 m/s, the ~2.5 s walk cannot keep up, the player
+	# outruns it by ~30 chunks) parks the standing queue up to 5+ chunks
+	# behind the resting center and nothing ever fixes it. Once the
+	# recenter stream is quiet (no recenter for AHEAD_RING_DEBOUNCE_MS)
+	# and the walk center is not the resting center, run one final rebuild
+	# at the resting center: the circle re-queues, the tiered feed refills
+	# it (look-cone first), and the render circle fills in around the
+	# stopped player. Walking is unaffected: each walk anchors the center
+	# to the player (cover 0), so the settle never fires.
+	if not _rec_pending and not _spawn_fast and _last_recenter_ms > 0 \
+			and Time.get_ticks_msec() - _last_recenter_ms > AHEAD_RING_DEBOUNCE_MS \
+			and (absi(last_pcx - _rec_center_pcx) + absi(last_pcz - _rec_center_pcz)) > 0:
+		_rec_start_walk(last_pcx, last_pcz)
 	# threadmesh_inflight keeps this running while mesh tasks are in flight
 	# even when every bookkeeping list is drained (else the poll never runs).
-	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty() and threadmesh_inflight.is_empty() and _io_read_inflight.is_empty() and _io_write_inflight.is_empty() and not _rec_pending and _bl_want.is_empty() and _col_pending.is_empty() and edit_front.is_empty():
+	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty() and threadmesh_inflight.is_empty() and _io_read_inflight.is_empty() and _io_write_inflight.is_empty() and not _rec_pending and _bl_want.is_empty() and _col_pending.is_empty() and dirty_queue.is_empty():
 		return
 	var was_active := flush_active
 	var added := false
@@ -995,8 +1117,8 @@ func _process(_delta: float) -> void:
 		if c != null and c.mesh_built and not light_pending_set.has(key):
 			fluid_list.append(c)
 	fluid_dirty = {}
-	if not edit_front.is_empty():
-		_edit_front_drain()
+	if not dirty_queue.is_empty():
+		_dirty_drain()  # AC-0233: dirtyQueue drains first (1/frame), before the streaming work
 	var pf1 := Time.get_ticks_usec()
 	var fp0 := pf1
 	if not light_pending.is_empty() and not _startup_pending() and edit_inflight_count == 0 \
@@ -1312,7 +1434,9 @@ func _enqueue_build(cx: int, cz: int) -> void:
 	# PICK_POOL_CAP tie-break against the older entries that were already
 	# sitting in the band (chunks appear ahead while the player is still
 	# moving instead of after the older entries drain).
-	band_buckets[b].push_front({"key": key, "cx": cx, "cz": cz, "data_only": false})
+	var entry := {"key": key, "cx": cx, "cz": cz, "data_only": false}
+	_tier_stamp(entry)  # AC-0233: the new waiting part carries its tier
+	band_buckets[b].push_front(entry)
 	_qb[key] = b  # AC-0160
 	queued_keys[key] = "build"
 	queue_size += 1
@@ -1986,6 +2110,7 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			_editprobe_nq = int(res.get("nq", 0))
 			_editprobe_prime = _editprobe_prime_flag
 			_editprobe_handoff_at = Time.get_ticks_usec()
+			_editprobe_submit_at = int(e.get("t_submit", 0))
 			_editprobe_done_ms = int((int(e.get("t_done", 0)) - int(e.get("t_submit", 0))) / 1000.0)
 			_editprobe_ns = res.get("ns", [])
 			_editprobe_phet = res.get("phet", [])
@@ -2078,41 +2203,44 @@ func _eff_stored_eq(a: Dictionary, b: Dictionary) -> bool:
 	return true
 
 
-func _edit_front_add(key: String, y: int) -> void:
+# AC-0233: dirtyQueue append — set_block pushes the edited chunk (key + dirty
+# slab closure). NO immediate dispatch: the chunk waits for the FIRST drain
+# (1 per process frame, ahead of the streaming queue) so edits show
+# immediately without racing the set_block caller.
+func _dirty_add(key: String, y: int) -> void:
 	var si0 := maxi(0, (y - 3) / 16)
 	var si1 := mini(ChunkScript.slab_n() - 1, (y + 1) / 16)
-	for e in edit_front:
+	for e in dirty_queue:
 		if e["key"] == key:
 			e["si0"] = mini(int(e["si0"]), si0)
 			e["si1"] = maxi(int(e["si1"]), si1)
 			return
-	edit_front.append({"key": key, "si0": si0, "si1": si1})
-	edit_front_set[key] = true
-	_edit_front_dispatch(key)
+	dirty_queue.append({"key": key, "si0": si0, "si1": si1})
+	dirty_set[key] = true
 
 
-func _edit_front_entry(key: String):
-	for e in edit_front:
+func _dirty_entry(key: String):
+	for e in dirty_queue:
 		if e["key"] == key:
 			return e
 	return null
 
 
-func _edit_front_drop(key: String) -> void:
-	for i in range(edit_front.size()):
-		if edit_front[i]["key"] == key:
-			edit_front.remove_at(i)
-			edit_front_set.erase(key)
+func _dirty_drop(key: String) -> void:
+	for i in range(dirty_queue.size()):
+		if dirty_queue[i]["key"] == key:
+			dirty_queue.remove_at(i)
+			dirty_set.erase(key)
 			return
 
 
-func _edit_front_dispatch(key: String) -> void:
-	var e: Dictionary = _edit_front_entry(key)
+func _dirty_dispatch(key: String) -> void:
+	var e: Dictionary = _dirty_entry(key)
 	if e == null:
 		return
 	var c = chunks.get(key)
 	if c == null or not bool(c.mesh_built):
-		_edit_front_drop(key)
+		_dirty_drop(key)
 		return
 	if not _build_ready(int(c.cx), int(c.cz)):
 		return
@@ -2125,26 +2253,29 @@ func _edit_front_dispatch(key: String) -> void:
 		if not _mesh_dispatch(c, int(c.cx), int(c.cz), {}, true, true):
 			return
 		perf_edit_front_full += 1
-		_edit_front_drop(key)
+		_dirty_drop(key)
 		return
 	if not _eff_stored_eq(cached.eff, c.last_eff):
-		_edit_front_drop(key)
+		_dirty_drop(key)
 		return
 	if not _mesh_dispatch_edit(c, int(c.cx), int(c.cz), int(e["si0"]), int(e["si1"]), cached.eff):
 		return
 	perf_edit_front_scoped += 1
-	_edit_front_drop(key)
+	_dirty_drop(key)
 
 
-func _edit_front_drain() -> void:
-	if _shutting_down or edit_front.is_empty():
+# AC-0233: the dirtyQueue drains FIRST — 1 remesh per process frame, ahead of
+# the light_pending flush and the streaming drain, so an edit never waits
+# behind the speculative streaming queue.
+func _dirty_drain() -> void:
+	if _shutting_down or dirty_queue.is_empty():
 		return
-	var key: String = edit_front[0]["key"]
+	var key: String = dirty_queue[0]["key"]
 	var c = chunks.get(key)
 	if c == null or not bool(c.mesh_built):
-		_edit_front_drop(key)
+		_dirty_drop(key)
 		return
-	_edit_front_dispatch(key)
+	_dirty_dispatch(key)
 
 
 func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_eff: Dictionary) -> bool:
@@ -2329,7 +2460,7 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 	var tm_cap := threadmesh_max
 	if _startup_pending() and tm_cap < 9:
 		tm_cap = 9
-	tm_cap = maxi(1, tm_cap - (2 if not edit_front.is_empty() else 1))
+	tm_cap = maxi(1, tm_cap - (2 if not dirty_queue.is_empty() else 1))
 	if threadmesh_inflight.size() >= tm_cap:
 		_tm_capdrop += 1
 		if _tm_debug:
@@ -2380,6 +2511,12 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 		"band": int(c.band),
 		"nbs": nbs, "eff": eff, "eff_trust": eff_trust,
 		"ctx": ctx_w, "ms": ms_w, "ngen": _ngens_for(cx, cz),
+		# AC-0233: the dispatch wall time (the edit-lane entry carried it;
+		# the wave lane now does too) — the handoff's queue/worker split
+		# diagnostics read it, and the R16 edit probe uses it to verify a
+		# handoff's task was submitted AFTER the probe's set_block (a
+		# pre-edit in-flight handoff does not carry the edit).
+		"t_submit": Time.get_ticks_usec(),
 	}
 	# AC-0160 run 2: HIGH priority. The pool is the same 6-thread
 	# WorkerThreadPool the data pass shares. (AC-0203: the data pass is now
@@ -2454,8 +2591,7 @@ func _refresh_look_dir() -> void:
 	var p = Game.player
 	if p == null:
 		return
-	var dy := float(p._yaw) - _look_yaw
-	dy = fposmod(dy + PI, TAU)
+	var dy := fposmod(float(p._yaw) - _look_yaw, TAU)
 	if dy > PI:
 		dy = TAU - dy
 	if dy * 180.0 / PI < PICK_LOOK_REFRESH_DEG:
@@ -2466,20 +2602,11 @@ func _refresh_look_dir() -> void:
 	var l := d.length()
 	_look_dir = d / l if l > 1e-6 else Vector2(1, 0)
 	_look_yaw = float(p._yaw)
+	_rescore_kick()  # AC-0233: ~10 deg turn / yaw snap — rewrite waiting parts
 
-func _entry_score(e: Dictionary, pcx: int, pcz: int, px: float, pz: float) -> float:
-	var cx := int(e["cx"])
-	var cz := int(e["cz"])
-	var d := absi(cx - pcx) + absi(cz - pcz)
-	var to_cx := float(cx * 16 + 8) - px
-	var to_cz := float(cz * 16 + 8) - pz
-	var l := Vector2(to_cx, to_cz).length()
-	var dot := _look_dir.x * to_cx + _look_dir.y * to_cz
-	var a := dot / l if l > 1e-6 else 0.0
-	a = clampf(a, 0.0, 1.0)
-	var cheby := maxi(absi(cx - pcx), absi(cz - pcz))
-	var boost := 2.0 if cheby <= 1 else 0.0
-	return float(d) + (1.0 - a) * 0.75 * float(d) - boost
+# AC-0233: _entry_score (the continuous d + look-ahead score) is replaced by
+# the 4-tier priority (_tier_of/_tier_score) — under (0), ring1 8 (1), the
+# FOV cone by taxi (2), the rest by distance (3).
 
 func _collect_pool(build: bool, include_fb := false, maxb := -1) -> Array:
 	# AC-0079 round 3: the pick is score-driven (spec: generate the LOWEST score
@@ -2523,15 +2650,17 @@ func _collect_pool(build: bool, include_fb := false, maxb := -1) -> Array:
 	return out
 
 # --- AC-0217: the cached scored picks (the pool/score debounce) ------------
-# _pick_build_cached: the build / forward-lead scored pick (pool scan +
-# re-validate + _build_ready + _entry_score), cached against the AC-0217
-# key. On a hit the cached candidate is re-validated (c == null / data /
-# mesh_built / _build_ready); a stale candidate re-scans instead of being
-# served. A cached EMPTY pick is trusted: a membership or readiness change
-# always bumps _pool_ver, so a matching key means a fresh scan would find
-# nothing either. The scan body below is the pre-AC-0217 loop verbatim.
-func _pick_build_cached(maxb: int, px: float, pz: float, include_fb: bool) -> Dictionary:
-	var ck := _pool_key(maxb, px, pz)
+# _pick_build_cached: the MESH candidate pick (the ThreadMesh pool6 feed):
+# pool scan + re-validate + _build_ready (gen + light flat ready — the
+# 8-neighbor gate) + the AC-0233 4-tier score, cached against the AC-0217
+# key (AC-0233: column + look only — the tier order is invariant to
+# in-column moves). On a hit the cached candidate is re-validated (c == null
+# / data / mesh_built / _build_ready); a stale candidate re-scans instead of
+# being served. A cached EMPTY pick is trusted: a membership or readiness
+# change always bumps _pool_ver, so a matching key means a fresh scan would
+# find nothing either.
+func _pick_build_cached(maxb: int, include_fb: bool) -> Dictionary:
+	var ck := _pool_key(maxb)
 	var slot: Array = _pool_b if not include_fb else _pool_fb
 	if slot.size() == 5 and slot[0] == ck:
 		var e: Dictionary = slot[1]
@@ -2554,7 +2683,7 @@ func _pick_build_cached(maxb: int, px: float, pz: float, include_fb: bool) -> Di
 			continue
 		if not _build_ready(int(e["cx"]), int(e["cz"])):
 			continue
-		var s := _entry_score(e, last_pcx, last_pcz, px, pz)
+		var s := _tier_score(e)
 		if s < best_s:
 			best_s = s
 			best_e = e
@@ -2567,14 +2696,16 @@ func _pick_build_cached(maxb: int, px: float, pz: float, include_fb: bool) -> Di
 	slot[4] = bp.is_empty()
 	return {"e": best_e, "c": best_c, "s": best_s, "pool_empty": bp.is_empty()}
 
-# _pick_data_cached: the scored DATA pick (no-data pool scan + the in-flight
-# dedup gates + _entry_score), cached against the AC-0217 key PLUS the
-# in-flight depths. The dedup state of any candidate changes only when a
-# task enqueues or lands (TG: _tg_inflight_keys, disk: _io_read_keys) — and
-# every landing also bumps _pool_ver — so a matching key means the skip set
-# is unchanged. The scan body below is the pre-AC-0217 loop verbatim.
-func _pick_data_cached(maxb: int, px: float, pz: float) -> Dictionary:
-	var ck := _pool_key(maxb, px, pz) + "_" + str(threadgen_inflight.size()) + "_" + str(_io_read_inflight.size())
+# _pick_data_cached: the GEN candidate pick (the ThreadGen pool4 feed):
+# no-data pool scan + the in-flight dedup gates + the AC-0233 4-tier score.
+# SEPARATE tiered pick from _pick_build_cached — gen runs its own tiered
+# order over the no-data set; the mesh pick only sees gen + light flat
+# ready entries. Cached against the AC-0217 key PLUS the in-flight depths.
+# The dedup state of any candidate changes only when a task enqueues or
+# lands (TG: _tg_inflight_keys, disk: _io_read_keys) — and every landing
+# also bumps _pool_ver — so a matching key means the skip set is unchanged.
+func _pick_data_cached(maxb: int) -> Dictionary:
+	var ck := _pool_key(maxb) + "_" + str(threadgen_inflight.size()) + "_" + str(_io_read_inflight.size())
 	if _pool_data.size() == 5 and _pool_data[0] == ck:
 		var e: Dictionary = _pool_data[1]
 		if e.is_empty():
@@ -2614,7 +2745,7 @@ func _pick_data_cached(maxb: int, px: float, pz: float) -> Dictionary:
 		# forward edge of all data (boundary gate regression).
 		if _spawn_fast:
 			continue
-		var s := _entry_score(e, last_pcx, last_pcz, px, pz)
+		var s := _tier_score(e)
 		if s < dp_s:
 			dp_s = s
 			dp_e = e
@@ -2635,6 +2766,7 @@ func _drain_build_queue() -> void:
 			return
 		_col_drain_step()
 		return
+	_rescore_step()  # AC-0233: the amortized waiting-parts rewrite (idle = 1 bool check)
 	var t0 := Time.get_ticks_usec()
 	# AC-0160 spawn-fast: while the spawn 3x3 is still pending, raise the
 	# per-frame unit budget (3 -> 12) and time budget (x2) so the spawn ring
@@ -2694,8 +2826,6 @@ func _drain_build_queue() -> void:
 	# (a render-distance change over a fully-saved area would otherwise
 	# enqueue thousands of cheap-but-main-threaded tasks in one frame).
 	var io_n0 := _io_read_inflight.size() if loading_active else 0
-	var px: float = Game.player.position.x if Game.player != null else 0.0
-	var pz: float = Game.player.position.z if Game.player != null else 0.0
 	# AC-0178: loading window — two independent feed phases per frame. The
 	# single steady-state loop below starves the TG pool while loading: the
 	# build-ready set is always non-empty (gen leads mesh), so the data pass
@@ -2728,7 +2858,7 @@ func _drain_build_queue() -> void:
 					continue
 				if not _build_ready(int(e["cx"]), int(e["cz"])):
 					continue
-				var s := _entry_score(e, last_pcx, last_pcz, px, pz)
+				var s := _tier_score(e)
 				if s < ls:
 					ls = s
 					le = e
@@ -2753,7 +2883,7 @@ func _drain_build_queue() -> void:
 					continue
 				if _spawn_fast:
 					continue
-				var s := _entry_score(e, last_pcx, last_pcz, px, pz)
+				var s := _tier_score(e)
 				if s < ds:
 					ds = s
 					de = e
@@ -2792,7 +2922,7 @@ func _drain_build_queue() -> void:
 		# AC-0217: the scored pick is cached against (queue version + pos +
 		# yaw + maxb + spawn-fast + center) — an idle frame with an unchanged
 		# world serves the last pool/score and skips the rescan + rescore.
-		var bpick := _pick_build_cached(maxb, px, pz, false)
+		var bpick := _pick_build_cached(maxb, false)
 		var best_e: Dictionary = bpick["e"]
 		var best_c: Node3D = bpick["c"]
 		var best_s: float = bpick["s"]
@@ -2804,7 +2934,7 @@ func _drain_build_queue() -> void:
 			# _build_unit/_remove_entry). In-radius READY ALWAYS wins (this pass
 			# only runs when the first pass found nothing); the forward band is
 			# exactly 2r+1 entries, so the pass is bounded.
-			var fpick := _pick_build_cached(maxb, px, pz, true)
+			var fpick := _pick_build_cached(maxb, true)
 			if not (fpick["e"] as Dictionary).is_empty() and float(fpick["s"]) < best_s:
 				best_s = float(fpick["s"])
 				best_e = fpick["e"]
@@ -2832,14 +2962,15 @@ func _drain_build_queue() -> void:
 			# after all nearer-band data drains and _build_ready stalls the forward
 			# mesh. Pool = _collect_pool(false) (band scan from the dq cursor,
 			# capped at PICK_POOL_CAP, same as before); each candidate is scored
-			# with _entry_score and the lowest wins. Per-consumption FIFO cursor
-			# bookkeeping (dq_b/dq_i advance past the consumed entry) is kept so
-			# entries are never re-picked and queue_size stays exact.
+			# with the AC-0233 4-tier priority (_tier_score) and the lowest wins.
+			# Per-consumption FIFO cursor bookkeeping (dq_b/dq_i advance past the
+			# consumed entry) is kept so entries are never re-picked and queue_size
+			# stays exact.
 			# AC-0217: the scored data pick (pool scan + in-flight dedup
-			# gates + _entry_score) — cached against the AC-0217 key plus
+			# gates + _tier_score) — cached against the AC-0217 key plus
 			# the in-flight depths (see _pick_data_cached). The pre-AC-0217
 			# rationale for the gates lives on in that function.
-			var dpick := _pick_data_cached(maxb, px, pz)
+			var dpick := _pick_data_cached(maxb)
 			var dp_e: Dictionary = dpick["e"]
 			var dp_s: float = dpick["s"]
 			if not dp_e.is_empty():
@@ -4039,8 +4170,17 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 	# ring the prior rebuild just queued (tap-forward across boundaries);
 	# skip the full queue rebuild and let the in-flight/finalized walk stand.
 	# The next non-debounced recenter rebuilds from the new center.
+	# AC-0233: the debounce stands only while that standing rebuild still
+	# covers the new center (REBUILD_COVER_L1, L1 from the walked center).
+	# At high speed the player outruns the walked circle — past the limit
+	# the standing queue is all behind (evicting farthest-first) and the
+	# circle ahead has no entries at all, so the drain starves once the
+	# pre-warmed line is exhausted (R16 50x flight). Past the limit this
+	# recenter escalates to a full rebuild instead of debouncing.
+	var _cover := absi(pcx - _rec_center_pcx) + absi(pcz - _rec_center_pcz)
 	var _debounced := (_now_ms - _last_recenter_ms) < AHEAD_RING_DEBOUNCE_MS \
-		and (absi(pcx - _last_recenter_pcx) + absi(pcz - _last_recenter_pcz)) == 1
+		and (absi(pcx - _last_recenter_pcx) + absi(pcz - _last_recenter_pcz)) == 1 \
+		and _cover <= REBUILD_COVER_L1
 	_last_recenter_ms = _now_ms
 	_last_recenter_pcx = pcx
 	_last_recenter_pcz = pcz
@@ -4147,23 +4287,21 @@ func recenter(wx: float, wz: float, mesh_now := true) -> void:
 		# AC-0213: no queue rebuild — the prior rebuild (in flight or
 		# finalized) already queued this ahead ring; the pre-warm below
 		# still enqueues the fresh 5x5 and the drain trickles the rest.
-		pass
+		# AC-0233: a debounced column cross still REWRITES the waiting
+		# parts — re-stamp the queue's tier/rank at the new center (the
+		# pool key also changed via pcx/pcz, so the cached picks re-scan
+		# anyway; this is the cheap amortized restamp for AC-0231).
+		_rescore_kick()
+	elif _rec_pending and _cover > REBUILD_COVER_L1:
+		# AC-0233: outrun while a walk is in flight. Restarting the walk
+		# from the new center on every crossing would livelock (each
+		# restart discards the in-flight walk before it finalizes). Park
+		# the target instead; the merge finalize re-checks and chains the
+		# next walk if the player is still past coverage.
+		_rec_escalate_pcx = pcx
+		_rec_escalate_pcz = pcz
 	else:
-		_rec_pending = true
-		_rec_pcx = pcx
-		_rec_pcz = pcz
-		_rec_phase = 0
-		_rec_cursor = 0
-		_rec_i = 0
-		_rec_want = {}
-		_rec_want_keys = []
-		_rec_new_buckets = []
-		for i in range(_bucket_count()):
-			_rec_new_buckets.append([])
-		_rec_slice_total_ms = 0.0
-		_rec_slice_max_ms = 0.0
-		_rec_slice_frames = 0
-		_rec_new_n = 0
+		_rec_start_walk(pcx, pcz)
 	_rp_walk_ms += (Time.get_ticks_usec() - tr1) / 1000.0
 	# AC-0160 spawn fast path (the pre-warm): the queue normally only exists
 	# once the recenter slice's MERGE phase finishes (~2s of wall at r50:
@@ -4390,6 +4528,32 @@ func _reband(c: Node3D, key: String, oldb: int, nb: int) -> void:
 		flush_active = true
 
 
+func _rec_start_walk(pcx: int, pcz: int) -> void:
+	# AC-0233: start (or restart) the recenter rebuild walk at (pcx, pcz)
+	# and arm the coverage anchor. A restart discards the in-flight walk's
+	# partial state safely: the WANT/STUB phases are pure bookkeeping and
+	# the queue swap is atomic at the merge finalize, so nothing partial
+	# ever reaches band_buckets.
+	_rec_pending = true
+	_rec_pcx = pcx
+	_rec_pcz = pcz
+	_rec_center_pcx = pcx
+	_rec_center_pcz = pcz
+	_rec_escalate_pcx = -9999
+	_rec_escalate_pcz = -9999
+	_rec_phase = 0
+	_rec_cursor = 0
+	_rec_i = 0
+	_rec_want = {}
+	_rec_want_keys = []
+	_rec_new_buckets = []
+	for i in range(_bucket_count()):
+		_rec_new_buckets.append([])
+	_rec_slice_total_ms = 0.0
+	_rec_slice_max_ms = 0.0
+	_rec_slice_frames = 0
+	_rec_new_n = 0
+
 func _rec_want_step() -> void:
 	# AC-0152: walk the stream-set bounding box (circle ∪ collar ∪ ring);
 	# skip out-of-set cells. Band changes on existing chunks reband (kill
@@ -4429,6 +4593,11 @@ func _rec_want_step() -> void:
 			if cb == 2 and nb == 1 and taxi > LOD_HYS_FULL_MAX:
 				target = cb
 			if cb == 1 and nb == 2 and taxi < LOD_HYS_COARSE_MIN:
+				target = cb
+			# AC-0233: keep high once built — a MESHED chunk never downgrades
+			# to the low band (it stays high until freed; the low placeholder
+			# is only for never-built far chunks — AC-0231).
+			if bool(c.mesh_built) and cb <= 1 and nb == 2:
 				target = cb
 			if cb != target:
 				_reband(c, key, cb, target)
@@ -4502,7 +4671,9 @@ func _rec_merge_want_step() -> void:
 	# the FRONT of their band bucket — the newest entries first, ahead of
 	# the re-bucketed older entries (the drain's per-bucket scan visits
 	# index 0 first).
-	_rec_new_buckets[mini(int(w["d"]), _rec_new_buckets.size() - 1)].push_front({"key": key, "cx": int(w["cx"]), "cz": int(w["cz"]), "data_only": false})
+	var entry := {"key": key, "cx": int(w["cx"]), "cz": int(w["cz"]), "data_only": false}
+	_tier_stamp(entry)  # AC-0233: the new waiting part carries its tier
+	_rec_new_buckets[mini(int(w["d"]), _rec_new_buckets.size() - 1)].push_front(entry)
 	_rec_new_n += 1
 
 func _rec_merge_ring_step() -> void:
@@ -4549,12 +4720,23 @@ func _rec_merge_ring_step() -> void:
 		queue_size = qs
 		_build_q_n = bns  # AC-0222: recompute the build depth at the merge swap
 		_cap_queue_depth()  # AC-0222: apply the cap to the rebuilt queue
+		_rescore_kick()  # AC-0233: column cross — rewrite the rebuilt queue's tiers
 		_rec_pending = false
 		_rec_want = {}
 		_rec_want_keys = []
 		_rec_new_buckets = []
 		_rec_cursor = 0
 		_rec_i = 0
+		# AC-0233: outrun escalation parked in recenter while this walk was
+		# in flight — if the player is STILL past this walk's coverage,
+		# chain the next walk at the player's current center right now (one
+		# R16 walk is a single 8 ms frame, so the chain stays cheap); if
+		# they moved back inside, drop it.
+		if _rec_escalate_pcx > -9000:
+			if absi(last_pcx - _rec_pcx) + absi(last_pcz - _rec_pcz) > REBUILD_COVER_L1:
+				_rec_start_walk(last_pcx, last_pcz)
+			_rec_escalate_pcx = -9999
+			_rec_escalate_pcz = -9999
 		return
 	var dx := _rec_cursor / side - half
 	var dz := _rec_cursor % side - half
@@ -4572,7 +4754,9 @@ func _rec_merge_ring_step() -> void:
 	queued_keys[key] = "data"
 	# AC-0222: the fresh band-3 feed entries (collar ∪ circle ring) go to the
 	# FRONT of their band bucket — newest first, like the want entries.
-	_rec_new_buckets[mini(absi(dx) + absi(dz), _rec_new_buckets.size() - 1)].push_front({"key": key, "cx": cx, "cz": cz, "data_only": true})
+	var entry := {"key": key, "cx": cx, "cz": cz, "data_only": true}
+	_tier_stamp(entry)  # AC-0233: the new waiting part carries its tier
+	_rec_new_buckets[mini(absi(dx) + absi(dz), _rec_new_buckets.size() - 1)].push_front(entry)
 	_rec_new_n += 1
 
 func get_block(x: int, y: int, z: int) -> int:
@@ -4609,7 +4793,7 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 		c.set_fl_at(fi, 0)
 	c.mark_edit_slabs(y)
 	_edit_stale_eff[_key(cx, cz)] = _eff_cache.get(_key(cx, cz))
-	_edit_front_add(_key(cx, cz), y)
+	_dirty_add(_key(cx, cz), y)  # AC-0233: edited chunk -> dirtyQueue (drains first, 1/frame)
 	_eff_cache_evict(_key(cx, cz))
 	_mark_light_around(cx, cz)
 	if _fluid_near(x, y, z):
