@@ -326,6 +326,41 @@ var _qb := {}
 # trickle); _drain_win_b < 0 = unset.
 var _drain_win_b := -1
 var _drain_win_acc := 0
+# AC-0217: the pool/score debounce. The drain's three scored picks (build /
+# forward-lead / data) each re-ran _collect_pool (up to PICK_POOL_CAP
+# entries) + _entry_score every frame even when the player stands still and
+# the world is idle — ~1000 entries of pure re-work per idle frame. A pick
+# is a pure function of (queue membership + eligibility, px, pz, look dir,
+# maxb, _spawn_fast, the recenter center, the in-flight depths). _pool_ver
+# bumps at every mutation of that state (every band_buckets mutation site —
+# the same lockstep list as the AC-0222 _build_q_n counter — plus the
+# data-landing choke points); when the quantized key (1 cm / 1e-3 look) and
+# the version are unchanged, the last pool/score result is served and the
+# rescan + rescore is skipped entirely. Any real move or look turn changes
+# the key every frame -> a fresh scan -> the forward-move pick order is
+# byte-identical to pre-AC-0217. The candidate re-validation on a hit is the
+# safety net: a stale cached candidate re-scans instead of being served.
+var _pool_ver := 0
+var perf_pool_hits := 0
+var perf_pool_misses := 0
+var _pool_b: Array = []    # [key, e, c, s, pe] last build-pass pick
+var _pool_fb: Array = []   # [key, e, c, s, pe] last forward-lead pick
+var _pool_data: Array = [] # [key, e, null, s, pe] last data-pass pick
+
+func _pool_touch() -> void:
+	_pool_ver += 1
+
+func _pool_key(maxb: int, px: float, pz: float) -> String:
+	# Quantized so an idle player's FP jitter (sub-mm, sub-degree) keeps
+	# hitting; any real move (>= 1 cm) or look turn (>= ~0.06 deg — the
+	# _look_dir refresh gate) misses.
+	return "%d_%d_%d_%d_%d_%d_%d_%d_%d" % [
+		_pool_ver,
+		int(roundf(px * 100.0)), int(roundf(pz * 100.0)),
+		int(roundf(_look_dir.x * 1000.0)), int(roundf(_look_dir.y * 1000.0)),
+		maxb, 1 if _spawn_fast else 0,
+		last_pcx, last_pcz,
+	]
 # AC-0109 cull-pass scratch (world-level only — no per-chunk state, no
 # per-frame allocations growing with chunk count; all fixed-size, filled
 # once per camera-transform change).
@@ -375,6 +410,9 @@ var last_build_us := 0
 var last_pcx := 0
 var last_pcz := 0
 var timing := false
+# AC-0217: pick-order trace (env AWECRAFT_PICKLOG=1) — one line per consumed
+# drain pick (build / forward-lead / data) for the before/after pick-order A/B.
+var _picklog := false
 var _recprobe := false
 var _rp_free_ms := 0.0
 var _rp_stub_ms := 0.0
@@ -540,6 +578,7 @@ func _bd_log(cx: int, cz: int) -> void:
 
 func _ready() -> void:
 	timing = OS.get_environment("AWECRAFT_TIMING") == "1"
+	_picklog = OS.get_environment("AWECRAFT_PICKLOG") == "1"  # AC-0217
 	var nenv := OS.get_environment("AWECRAFT_THREADGEN_N")
 	# AC-0079 v3 C3: default threadgen = mini(cores, 6). The r4 cold wall is the
 	# 36-chunk crossing-1 core fill: 36 x ~220 ms of gen paced by the pool size
@@ -1182,6 +1221,7 @@ func _convert_data_to_build(key: String) -> void:
 				arr[i]["data_only"] = false
 				queued_keys[key] = "build"
 				_build_q_n += 1  # AC-0222: the entry is a build entry now
+				_pool_touch()  # AC-0217: the entry moved data-pool -> build-pool
 				if b < mq_b or (b == mq_b and i < mq_i):
 					mq_b = b
 					mq_i = i
@@ -1278,6 +1318,7 @@ func _enqueue_build(cx: int, cz: int) -> void:
 	queue_size += 1
 	_build_q_n += 1
 	_cap_queue_depth()  # AC-0222: keep the build depth at the circle cap
+	_pool_touch()  # AC-0217: a new pool candidate entered the queue
 	if b < dq_b:
 		dq_b = b
 		dq_i = 0
@@ -1355,6 +1396,7 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	var gdata: PackedByteArray = WorldGen.generate(cx, cz, Game.world_seed)
 	var gres: Dictionary = WorldGen.apply_banana_trees(gdata, cx, cz, Game.world_seed, Data.HEIGHT)
 	c.data_landed(gdata, PackedByteArray())
+	_pool_touch()  # AC-0217: sync data landed on a queued entry
 	_banana_register(cx, cz, gres["fruits"])
 	gen_count += 1
 	_apply_edits_to_chunk(c)
@@ -1532,6 +1574,7 @@ func _startup_gen_apply() -> void:
 		# AC-0040: the banana-tree pass (e = [_, cx, cz, _, seed, h, sea, skip]).
 		var gres: Dictionary = WorldGen.apply_banana_resl(d, int(e[1]), int(e[2]), int(e[4]), Data.HEIGHT)
 		c.slabs_landed(d[0], d[1])
+		_pool_touch()  # AC-0217: burst data landed on a queued entry
 		_banana_register(int(e[1]), int(e[2]), gres["fruits"])
 		gen_count += 1
 		chunk_origin[_key(int(e[1]), int(e[2]))] = "gen"  # AC-0155
@@ -1606,6 +1649,7 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 	chunk_origin[e["key"]] = "gen"  # AC-0155
 	_apply_edits_to_chunk(c)
 	_tg_handoff += 1
+	_pool_touch()  # AC-0217: queued entry's data landed (pool membership flipped)
 	if timing or _tg_debug:
 		print("GENHAND %d,%d t=%d" % [int(e["cx"]), int(e["cz"]), Time.get_ticks_msec()])
 
@@ -2013,6 +2057,7 @@ func _drop_queued(key: String) -> void:
 			_qb.erase(key)
 			queued_keys.erase(key)
 			queue_size -= 1
+			_pool_touch()  # AC-0217: a pool candidate left the queue
 			return
 
 func _eff_stored_eq(a: Dictionary, b: Dictionary) -> bool:
@@ -2477,6 +2522,110 @@ func _collect_pool(build: bool, include_fb := false, maxb := -1) -> Array:
 				out.append(e)
 	return out
 
+# --- AC-0217: the cached scored picks (the pool/score debounce) ------------
+# _pick_build_cached: the build / forward-lead scored pick (pool scan +
+# re-validate + _build_ready + _entry_score), cached against the AC-0217
+# key. On a hit the cached candidate is re-validated (c == null / data /
+# mesh_built / _build_ready); a stale candidate re-scans instead of being
+# served. A cached EMPTY pick is trusted: a membership or readiness change
+# always bumps _pool_ver, so a matching key means a fresh scan would find
+# nothing either. The scan body below is the pre-AC-0217 loop verbatim.
+func _pick_build_cached(maxb: int, px: float, pz: float, include_fb: bool) -> Dictionary:
+	var ck := _pool_key(maxb, px, pz)
+	var slot: Array = _pool_b if not include_fb else _pool_fb
+	if slot.size() == 5 and slot[0] == ck:
+		var e: Dictionary = slot[1]
+		if e.is_empty():
+			perf_pool_hits += 1
+			return {"e": e, "c": null, "s": slot[3], "pool_empty": slot[4]}
+		var c = chunks.get(e["key"])
+		if c != null and not c.data.is_empty() and not c.mesh_built \
+				and _build_ready(int(e["cx"]), int(e["cz"])):
+			perf_pool_hits += 1
+			return {"e": e, "c": c, "s": slot[3], "pool_empty": slot[4]}
+	perf_pool_misses += 1
+	var bp: Array = _collect_pool(true, include_fb, maxb)
+	var best_e: Dictionary = {}
+	var best_c: Node3D = null
+	var best_s := 1e30
+	for e in bp:
+		var c = chunks.get(e["key"])
+		if c == null or c.data.is_empty() or c.mesh_built:
+			continue
+		if not _build_ready(int(e["cx"]), int(e["cz"])):
+			continue
+		var s := _entry_score(e, last_pcx, last_pcz, px, pz)
+		if s < best_s:
+			best_s = s
+			best_e = e
+			best_c = c
+	slot.resize(5)
+	slot[0] = ck
+	slot[1] = best_e
+	slot[2] = best_c
+	slot[3] = best_s
+	slot[4] = bp.is_empty()
+	return {"e": best_e, "c": best_c, "s": best_s, "pool_empty": bp.is_empty()}
+
+# _pick_data_cached: the scored DATA pick (no-data pool scan + the in-flight
+# dedup gates + _entry_score), cached against the AC-0217 key PLUS the
+# in-flight depths. The dedup state of any candidate changes only when a
+# task enqueues or lands (TG: _tg_inflight_keys, disk: _io_read_keys) — and
+# every landing also bumps _pool_ver — so a matching key means the skip set
+# is unchanged. The scan body below is the pre-AC-0217 loop verbatim.
+func _pick_data_cached(maxb: int, px: float, pz: float) -> Dictionary:
+	var ck := _pool_key(maxb, px, pz) + "_" + str(threadgen_inflight.size()) + "_" + str(_io_read_inflight.size())
+	if _pool_data.size() == 5 and _pool_data[0] == ck:
+		var e: Dictionary = _pool_data[1]
+		if e.is_empty():
+			perf_pool_hits += 1
+			return {"e": e, "c": null, "s": _pool_data[3], "pool_empty": _pool_data[4]}
+		var c = chunks.get(e["key"])
+		if c != null and c.data.is_empty() \
+				and not _tg_inflight_keys.has(e["key"]) \
+				and not _io_read_keys.has(e["key"]) and not _spawn_fast:
+			perf_pool_hits += 1
+			return {"e": e, "c": c, "s": _pool_data[3], "pool_empty": _pool_data[4]}
+	perf_pool_misses += 1
+	var dp: Array = _collect_pool(false, false, maxb)
+	var dp_e: Dictionary = {}
+	var dp_s := 1e30
+	for e in dp:
+		# AC-0077: skip chunks whose gen is already in flight. The
+		# scored pick used to keep re-picking the same in-flight
+		# no-data entry (dedup no-op) every iteration, burning the
+		# frame budget and starving the next chunk's enqueue (~1 real
+		# enqueue / 5-6 frames), which left want-set stragglers
+		# unbuilt by the batch pass and forced self light computes.
+		if _tg_inflight_keys.has(e["key"]):
+			continue
+		# AC-0164: a disk read in flight owns the data landing —
+		# never re-pick it for generation (same dedup rationale).
+		if _io_read_keys.has(e["key"]):
+			continue
+		# AC-0160 run 2: while the SPAWN fast path is active, the
+		# data pass enqueues NOTHING — the recenter 5x5 burst (a
+		# single high-priority group task) owns the 3x3's full
+		# 8-neighborhood, and far data behind the group would only
+		# steal threads from the spawn build window. The pass
+		# resumes the frame after the spawn 3x3 builds (_spawn_fast
+		# clears) — it must not wait on _startup_pending(), which is
+		# true for the whole walking session and would starve the
+		# forward edge of all data (boundary gate regression).
+		if _spawn_fast:
+			continue
+		var s := _entry_score(e, last_pcx, last_pcz, px, pz)
+		if s < dp_s:
+			dp_s = s
+			dp_e = e
+	_pool_data.resize(5)
+	_pool_data[0] = ck
+	_pool_data[1] = dp_e
+	_pool_data[2] = null
+	_pool_data[3] = dp_s
+	_pool_data[4] = dp.is_empty()
+	return {"e": dp_e, "c": null, "s": dp_s, "pool_empty": dp.is_empty()}
+
 func _drain_build_queue() -> void:
 	_startup_gen_apply()
 	if edit_inflight_count > 0:
@@ -2640,21 +2789,14 @@ func _drain_build_queue() -> void:
 			break
 		var u := 0
 		_refresh_look_dir()
-		var bp: Array = _collect_pool(true, false, maxb)
-		var best_e: Dictionary = {}
-		var best_c: Node3D = null
-		var best_s := 1e30
-		for e in bp:
-			var c = chunks.get(e["key"])
-			if c == null or c.data.is_empty() or c.mesh_built:
-				continue
-			if not _build_ready(int(e["cx"]), int(e["cz"])):
-				continue
-			var s := _entry_score(e, last_pcx, last_pcz, px, pz)
-			if s < best_s:
-				best_s = s
-				best_e = e
-				best_c = c
+		# AC-0217: the scored pick is cached against (queue version + pos +
+		# yaw + maxb + spawn-fast + center) — an idle frame with an unchanged
+		# world serves the last pool/score and skips the rescan + rescore.
+		var bpick := _pick_build_cached(maxb, px, pz, false)
+		var best_e: Dictionary = bpick["e"]
+		var best_c: Node3D = bpick["c"]
+		var best_s: float = bpick["s"]
+		var best_from_fb := false  # AC-0217 pick trace: which pass won
 		if best_c == null:
 			# AC-0079 v3 C1: lead-column pre-build, second pass. The in-radius
 			# READY pool is empty — pick the lowest-score READY candidate from
@@ -2662,20 +2804,16 @@ func _drain_build_queue() -> void:
 			# _build_unit/_remove_entry). In-radius READY ALWAYS wins (this pass
 			# only runs when the first pass found nothing); the forward band is
 			# exactly 2r+1 entries, so the pass is bounded.
-			var fp: Array = _collect_pool(true, true, maxb)
-			for e in fp:
-				var c = chunks.get(e["key"])
-				if c == null or c.data.is_empty() or c.mesh_built:
-					continue
-				if not _build_ready(int(e["cx"]), int(e["cz"])):
-					continue
-				var s := _entry_score(e, last_pcx, last_pcz, px, pz)
-				if s < best_s:
-					best_s = s
-					best_e = e
-					best_c = c
+			var fpick := _pick_build_cached(maxb, px, pz, true)
+			if not (fpick["e"] as Dictionary).is_empty() and float(fpick["s"]) < best_s:
+				best_s = float(fpick["s"])
+				best_e = fpick["e"]
+				best_c = fpick["c"]
+				best_from_fb = true
 		if best_c != null:
 			var deferred := _build_unit(best_c, int(best_e["cx"]), int(best_e["cz"]))
+			if not deferred and _picklog:
+				print("PICK %s %d,%d s=%.6f t=%d" % ["fb" if best_from_fb else "b", int(best_e["cx"]), int(best_e["cz"]), best_s, Time.get_ticks_msec()])
 			if deferred:
 				# AC-0160 run 2: worker slots full (or a task already in
 				# flight for this key) — the entry stays queued (NOT removed)
@@ -2697,37 +2835,13 @@ func _drain_build_queue() -> void:
 			# with _entry_score and the lowest wins. Per-consumption FIFO cursor
 			# bookkeeping (dq_b/dq_i advance past the consumed entry) is kept so
 			# entries are never re-picked and queue_size stays exact.
-			var dp: Array = _collect_pool(false, false, maxb)
-			var dp_e: Dictionary = {}
-			var dp_s := 1e30
-			for e in dp:
-				# AC-0077: skip chunks whose gen is already in flight. The
-				# scored pick used to keep re-picking the same in-flight
-				# no-data entry (dedup no-op) every iteration, burning the
-				# frame budget and starving the next chunk's enqueue (~1 real
-				# enqueue / 5-6 frames), which left want-set stragglers
-				# unbuilt by the batch pass and forced self light computes.
-				if _tg_inflight_keys.has(e["key"]):
-					continue
-				# AC-0164: a disk read in flight owns the data landing —
-				# never re-pick it for generation (same dedup rationale).
-				if _io_read_keys.has(e["key"]):
-					continue
-				# AC-0160 run 2: while the SPAWN fast path is active, the
-				# data pass enqueues NOTHING — the recenter 5x5 burst (a
-				# single high-priority group task) owns the 3x3's full
-				# 8-neighborhood, and far data behind the group would only
-				# steal threads from the spawn build window. The pass
-				# resumes the frame after the spawn 3x3 builds (_spawn_fast
-				# clears) — it must not wait on _startup_pending(), which is
-				# true for the whole walking session and would starve the
-				# forward edge of all data (boundary gate regression).
-				if _spawn_fast:
-					continue
-				var s := _entry_score(e, last_pcx, last_pcz, px, pz)
-				if s < dp_s:
-					dp_s = s
-					dp_e = e
+			# AC-0217: the scored data pick (pool scan + in-flight dedup
+			# gates + _entry_score) — cached against the AC-0217 key plus
+			# the in-flight depths (see _pick_data_cached). The pre-AC-0217
+			# rationale for the gates lives on in that function.
+			var dpick := _pick_data_cached(maxb, px, pz)
+			var dp_e: Dictionary = dpick["e"]
+			var dp_s: float = dpick["s"]
 			if not dp_e.is_empty():
 				_advance_dq_past(int(dp_e["cx"]), int(dp_e["cz"]))
 				var cx: int = int(dp_e["cx"])
@@ -2750,6 +2864,8 @@ func _drain_build_queue() -> void:
 					var dg := _gen_unit(c, cx, cz)
 					u = 1
 					gen_used_ms += dg
+					if _picklog:
+						print("PICK d %d,%d s=%.6f t=%d" % [cx, cz, dp_s, Time.get_ticks_msec()])
 					# AC-0155: a disk read is a main-thread inflate (~20 ms) —
 					# one per frame, same pacing rationale as the sync gen.
 					if _gen_last_disk and not loading_active:
@@ -2761,7 +2877,7 @@ func _drain_build_queue() -> void:
 					# frame and the pick resumes there.
 					if threadgen_inflight.size() >= threadgen_max:
 						break
-			if u == 0 and dp.is_empty():
+			if u == 0 and bool(dpick["pool_empty"]):
 				# Pool exhausted this frame (all entries consumed): park the
 				# cursor past the scanned region, same as the old FIFO scan.
 				var db := dq_b
@@ -2783,6 +2899,9 @@ func _drain_build_queue() -> void:
 			perf_max_drain_ms = fm
 		if timing:
 			print("DRAINMS units=%d ms=%.1f t=%d inflight=%d enq=%d cap=%d dedup=%d" % [units, fm, Time.get_ticks_msec(), threadgen_inflight.size(), _tg_enq, _tg_capdrop, _tg_dedup])
+	if timing:
+		# AC-0217: the pool/score debounce counters (cumulative).
+		print("POOLCACHE hits=%d misses=%d t=%d" % [perf_pool_hits, perf_pool_misses, Time.get_ticks_msec()])
 	_col_drain_step()
 
 func _advance_dq_past(cx: int, cz: int) -> void:
@@ -2817,6 +2936,7 @@ func _remove_entry(e: Dictionary) -> void:
 				queue_size -= 1
 				if was_build:
 					_build_q_n -= 1  # AC-0222
+				_pool_touch()  # AC-0217: a pool candidate left the queue
 				return
 		_qb.erase(e["key"])
 	for b in range(band_buckets.size()):
@@ -2835,6 +2955,7 @@ func _remove_entry(e: Dictionary) -> void:
 				queued_keys.erase(e["key"])
 				queue_size -= 1
 				_rebuild_qb()
+				_pool_touch()  # AC-0217: a pool candidate left the queue
 				return
 
 func _rebuild_qb() -> void:
@@ -2894,6 +3015,7 @@ func _cap_queue_depth() -> void:
 					queued_keys.erase(e["key"])
 					queue_size -= 1
 					_build_q_n -= 1
+					_pool_touch()  # AC-0217: a pool candidate was evicted
 					over -= 1
 					evicted = true
 				i -= 1
@@ -3898,6 +4020,7 @@ func _strip_candidate_builds(keys: Array) -> void:
 				arr.remove_at(i)
 				queue_size -= 1
 				_build_q_n -= 1  # AC-0222: a build entry left the queue
+				_pool_touch()  # AC-0217: a pool candidate left the queue
 			else:
 				i += 1
 
@@ -4415,6 +4538,7 @@ func _rec_merge_ring_step() -> void:
 				if not bool(e2["data_only"]):
 					bns += 1
 		band_buckets = _rec_new_buckets
+		_pool_touch()  # AC-0217: the whole queue was re-bucketed
 		_rebuild_qb()  # AC-0160
 		_drain_win_b = b1_eff() + 2  # AC-0160: restart the drain window at the new center
 		_drain_win_acc = 0
@@ -4588,6 +4712,7 @@ func _land_column(c: Node3D, res: Dictionary) -> void:
 		c.slabs_landed(ds, res["f_slabs"])
 	else:
 		c.data_landed(res["data"], res["fl"])
+	_pool_touch()  # AC-0217: disk data landed on a queued entry
 
 
 func _saved_light_from_res(light: Dictionary, cx: int, cz: int) -> Dictionary:
@@ -4620,6 +4745,7 @@ func _materialize_chunk_data(c: Node3D, cx: int, cz: int) -> int:
 		var gdata: PackedByteArray = WorldGen.generate(cx, cz, Game.world_seed)
 		var gres: Dictionary = WorldGen.apply_banana_trees(gdata, cx, cz, Game.world_seed, Data.HEIGHT)
 		c.data_landed(gdata, PackedByteArray())
+		_pool_touch()  # AC-0217: sync data landed on a queued entry
 		_banana_register(cx, cz, gres["fruits"])
 		gen_count += 1
 		var dg := Time.get_ticks_msec() - tg

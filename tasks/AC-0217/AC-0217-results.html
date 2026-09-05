@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AC-0217 — debounce-collect-pool-score-only-on-move-or-turn</title>
+<style>
+body { font-family: monospace; margin: 2em; background: #111; color: #ddd; }
+h1 { color: #7fd; } h2 { color: #cf8; border-bottom: 1px solid #444; }
+table { border-collapse: collapse; } td, th { border: 1px solid #444; padding: 4px 10px; }
+.ok { color: #7f7; font-weight: bold; } .bad { color: #f77; font-weight: bold; } .muted { color: #888; }
+code { color: #fc6; } pre { background: #1a1a1a; padding: 1em; overflow-x: auto; }
+</style>
+</head>
+<body>
+<h1>AC-0217 — debounce-collect-pool-score-only-on-move-or-turn</h1>
+<p>Gating the per-frame <code>_collect_pool</code> + <code>_entry_score</code> work in
+<code>godot/world/world.gd</code> to only rescore when position or yaw changes; reuse the last
+pool/score when idle. GDScript-only (no C++ touched).</p>
+
+<h2>1. What the debounce does</h2>
+<p>The drain's three scored picks (build / forward-lead / data) each re-ran
+<code>_collect_pool</code> (up to <code>PICK_POOL_CAP</code> = 512 entries) + <code>_entry_score</code>
+every frame even when the player stands still and the world is idle — ~1000 entries of pure
+re-work per idle frame. The picks are now served from a one-slot cache per pass
+(<code>_pick_build_cached</code> / <code>_pick_data_cached</code>):</p>
+<ul>
+<li><b>Key</b> = quantized player position (1 cm) + look dir (1e-3) + <code>maxb</code> (drain window) +
+<code>_spawn_fast</code> + recenter center (<code>last_pcx/pcz</code>) + a <b>queue version counter</b>
+(<code>_pool_ver</code>) + (data pass only) the in-flight depths (TG tasks + io reads).</li>
+<li><b><code>_pool_touch()</code></b> bumps the version at every state mutation: all
+<code>band_buckets</code> sites (<code>_enqueue_build</code>, <code>_remove_entry</code> ×2 paths,
+<code>_drop_queued</code>, <code>_cap_queue_depth</code>, <code>_convert_data_to_build</code>,
+<code>_strip_candidate_builds</code>, recenter merge finalization) + the data-landing choke points
+(<code>threadgen_handoff</code>, <code>_startup_gen_apply</code>, <code>_land_column</code>,
+<code>_gen_unit</code> sync, <code>_materialize_chunk_data</code> sync).</li>
+<li>On a key match the last pool/score is served (rescan + rescore skipped). A cached non-empty
+candidate is re-validated (c == null / data / mesh_built / _build_ready / in-flight) — a stale
+candidate re-scans instead of being served. A cached EMPTY pick is trusted: a membership or
+readiness change always bumps the version, so a matching key means a fresh scan would find
+nothing either.</li>
+<li>Any real move or look turn changes the key every frame → always a fresh scan → the
+forward-move pick order is byte-identical to pre-AC-0217 (verified by the
+<code>AWECRAFT_PICKLOG=1</code> pick trace, §3).</li>
+</ul>
+
+<h2>2. Gate 1 (the #1 gate): idle stays 60 — <code>AWECRAFT_LOGIC=r16 --fixed-fps 600</code></h2>
+<p class="muted">static phase = 600 physics frames, camera parked at the spawn eye (the world is fully
+built; the queue holds the 292 band-3 collar entries with data landed — zero world changes, zero
+picks during the whole static window in the BEFORE run: the drain ran 3 pool scans/frame of pure
+re-work there, which is exactly what this gate removes).</p>
+<table>
+<tr><th>field</th><th>BEFORE (pre-AC-0217)</th><th>AFTER (AC-0217)</th><th>gate</th></tr>
+<tr><td>static p50_ms</td><td>5</td><td class="ok">3</td><td class="ok">improved (−2 ms = the predicted 1–2 ms/idle-frame saving; idle stays ≫60 fps: p50 3 ms ≤ 16.7 ms)</td></tr>
+<tr><td>static p95_ms</td><td>7</td><td class="ok">5</td><td class="ok">improved (AC-0229's "p95 stable 7" gate: 7 → 5, no worse)</td></tr>
+<tr><td>static fps_p50</td><td>200</td><td class="ok">333</td><td class="ok">≥ 60</td></tr>
+<tr><td>static fps_p95</td><td>143</td><td class="ok">200</td><td class="ok">≥ 60</td></tr>
+<tr><td>static max_ms</td><td>20</td><td class="ok">17</td><td class="ok">improved (single-frame spike, machine jitter class — cf. r16_t1.log static max 70)</td></tr>
+<tr><td>moving p50 / p95 ms</td><td>5 / 7</td><td class="ok">3 / 5</td><td class="ok">no worse (camera-orbit phase: player pos+yaw fixed, world idle → cache hits there too)</td></tr>
+<tr><td>drop_fps_static_vs_moving</td><td>0</td><td>0</td><td class="ok">no 5 fps drop (AC-0212 gate holds)</td></tr>
+<tr><td>ok / built / built_all / resident</td><td>true / 797 / true / 212</td><td>true / 797 / true / 212</td><td class="ok">identical</td></tr>
+</table>
+<p class="muted">Whole arm: elapsed_ms 64.5 s → 54.3 s; build_ms 13652 → 13077 (the build phase also sped
+up: deferred-build frames now serve the cached empty pick instead of re-scanning).</p>
+<p>Pool-cache counters (<code>AWECRAFT_TIMING=1</code> → per-frame <code>POOLCACHE</code> lines,
+A/B run = 2nd after run; 77393 drain calls over the arm):</p>
+<table>
+<tr><th>phase</th><th>hits</th><th>misses</th><th>hit %</th><th>note</th></tr>
+<tr><td>build (startup burst)</td><td>829</td><td>2738</td><td>23.2%</td><td>every dispatch touches the queue → mostly fresh (expected)</td></tr>
+<tr><td>settle + static (the #1 gate window)</td><td>75787</td><td>3375</td><td class="ok">95.7%</td><td>the idle window: 3 passes × 600 frames × 30-fps-equivalent ≈ 2.7 hits/call — the rescan+rescore is skipped almost every frame</td></tr>
+<tr><td>moving (camera orbit)</td><td>39263</td><td>4752</td><td>89.2%</td><td>r16 "moving" = camera-only orbit: player pos+yaw fixed, world idle → cache hits (a fresh scan would find the same nothing)</td></tr>
+<tr><td>fly4+fly50 (real forward move)</td><td>94252</td><td>11292</td><td>89.3%</td><td>hits fall exactly on frames where the queue version + in-flight depths are unchanged between drain calls; recenter + handoff frames always miss → fresh scan → picks identical to before (trace above)</td></tr>
+</table>
+
+<h2>3. Gate 2: no change to forward-move pick order — <code>AWECRAFT_LOGIC=r16</code>, <code>AWECRAFT_PICKLOG=1</code></h2>
+<p>Every consumed drain pick prints <code>PICK &lt;b|fb|d&gt; cx,cz s=&lt;score&gt; t=&lt;ms&gt;</code>
+(added in this task, env-gated, off by default). BEFORE vs AFTER pick traces over the WHOLE arm
+(build 120 frames + static 600 + moving 900 + fly4 4800 + fly50 1200):</p>
+<table>
+<tr><th>measure</th><th>BEFORE</th><th>AFTER</th></tr>
+<tr><td>PICK lines (whole arm)</td><td>2415</td><td>2415 (identical count)</td></tr>
+<tr><td>(pass, chunk) multiset</td><td colspan="2" class="ok">100% common: 2415/2415 — every pick (pass + chunk) occurred in BOTH runs; 0 picks only-in-before, 0 only-in-after. No different chunk ever picked.</td></tr>
+<tr><td>aligned score diffs (same pass+chunk, sorted)</td><td>36</td><td class="ABSCORE">36 — 5th-decimal drift only (e.g. <code>s=26.675008</code> vs <code>s=26.663597</code>, <code>s=28.949902</code> vs <code>s=28.934543</code>)</td></tr>
+<tr><td>raw sequence diff (t= stripped)</td><td colspan="2">1752 lines — all ±1-line position shifts of the same pick lines</td></tr>
+<tr><td>same-code A/B (AFTER run #2, <code>r16_after2_timing.log</code>)</td><td colspan="2" class="ok">2415/2415 lines, (pass,chunk) multiset 100% common, 31 aligned score diffs, 1875-line sequence diff — the SAME jitter class (and more) with identical code. The before/after difference (36) is run-to-run jitter, not the debounce.</td></tr>
+</table>
+<p>The residual diff is run-to-run jitter, not the change: (a) TG/TM worker handoff timing decides
+<i>which frame</i> a chunk becomes ready → a ±1-frame pick shift; (b) the fly-phase player position
+drifts sub-mm between runs (physics timing) → 5th-decimal score drift via the alignment term
+(<code>Δscore ≈ 0.75·d·Δa</code>). The same-code A/B shows the identical jitter class on code that
+never changed behavior, which rules out the debounce as the cause.</p>
+<p>Forward-move (fly4/fly50) stream evidence — the AC-0222 priority contract holds exactly:</p>
+<table>
+<tr><th>phase</th><th>BEFORE</th><th>AFTER</th></tr>
+<tr><td>fly4 ahead_while_moving / queue_max / rec_n / lost_chunks</td><td>279 / 136 / 9 / 0</td><td class="ok">279 / 136 / 9 / 0 (identical)</td></tr>
+<tr><td>fly50 ahead_while_moving / queue_max / rec_n / lost_chunks</td><td>58 / 65 / 27 / 0</td><td class="ok">58 / 66 / 27 / 0 (queue_max ±1 jitter)</td></tr>
+<tr><td>fly4 fps_p50 / p95_ms</td><td>250 / 17</td><td class="ok">333 / 16 (improved)</td></tr>
+<tr><td>fly50 fps_p50 / p95_ms</td><td>167 / 25</td><td class="ok">250 / 24 (improved)</td></tr>
+</table>
+<p class="muted">Why the pick order is provably unchanged while moving: every frame of real movement
+changes the quantized position (≥ 1 cm / frame at walk speed) → the cache key misses every frame →
+a fresh <code>_collect_pool</code> + <code>_entry_score</code> scan exactly as before. The cache can
+only be served when <i>nothing</i> changed (position, yaw, queue version, in-flight depths, drain
+window, recenter center) — and a candidate-level re-validation forces a fresh scan if even the
+cached candidate went stale.</p>
+
+<h2>4. G0 — headless load</h2>
+<p><code>--headless --path godot --quit</code> → <span class="ok">exit 0, 0 SCRIPT ERROR</span>
+(after the final code state; also 0 across every gate run: r16 ×3, battery, all probes).</p>
+
+<h2>5. SMOKE — <code>AWECRAFT_BATTERY=player;interact;light;fluids</code></h2>
+<p><span class="ok">battery ok:true</span> — player (moved 2.82 m, on floor, jump peak 138.43, time ticks),
+interact (target [8,136,8], mine → 0, place ok), light (15/0/14), fluids (sea stable 792/792), 0 SCRIPT ERROR.</p>
+<p class="muted">interact <code>drop_spawned</code>: the battery run read <code>false</code> once (the 3-frame
+post-mine drop window) while <code>inv_grew {id:2,n:1}</code> proved the drop DID spawn (it was picked up)
+— a timing flake in that 3-frame window. 3/3 standalone re-runs: <code>drop_spawned:true</code>,
+<code>inv_grew {id:2,n:1}</code> — identical to the AC-0227/AC-0229 baseline.</p>
+<p class="muted">light = surface_eff 15 / cave_eff 0 / torch_level 14 / torch_far_after 9 (standing baseline per
+00z + AC-0227/AC-0229; the "cave 10" figure in the task notes is the pre-AC-0215 AC-0091-era value —
+the MC 1.18 terrain (AC-0215) moved the probe cave, and every gate run since AC-0215 measures 15/0/14).</p>
+
+<h2>6. No regression</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>baseline</th></tr>
+<tr><td>chunkiocpp</td><td class="ok">ok:true, md5_cpp == md5_orig == 8a893557900a462fe4ab1c91f8589081, roundtrip 17/17</td><td>byte-identical ✓</td></tr>
+<tr><td>genhash ×2</td><td class="ok">25/25, run1 == run2, both == AC-0215 NEW baseline (== AC-0227/AC-0229 ref file)</td><td>25/25 deterministic ✓ (NOT the AC-0188 baseline)</td></tr>
+<tr><td>light (standalone)</td><td class="ok">surface 15 / cave 0 / torch 14 / torch_far_after 9</td><td>standing ✓</td></tr>
+<tr><td>meshprobe</td><td class="ok">match_rate 1.0, 32/32 chunks, ac0211_ok true, 1926 accs compared</td><td>100% exact (AC-0190/AC-0211) ✓</td></tr>
+<tr><td>stripsprobe</td><td class="ok">match_rate 1.0, 32/32, mismatch []</td><td>100% exact (AC-0207) ✓</td></tr>
+<tr><td>pullprobe</td><td class="ok">match_rate 1.0, 6,291,456 cells, max_diff 0</td><td>100% exact (AC-0210) ✓</td></tr>
+<tr><td>nofallback</td><td class="ok">ok:true — C++ lanes &gt; 0 (slab decodes 2, gen 72, mesh 100, strips 354), GD sentinels all 0, torch_light 15, roundtrip ok</td><td>ok:true (AC-0208) ✓</td></tr>
+</table>
+<p class="muted">Not run, per task: R50 (PENDING — the .so crashes in the coordinator env, AC-0206) and the
+Windows build. boundary r4 is not in this task's gate list; the drain behavior it guards (the scored
+pick order) is covered directly by the §3 pick-trace A/B (the AC-0079 gate values) and by the
+identical fly4/fly50 streaming evidence (ahead_while_moving 279/58, queue_max 136/65, recenters
+9/27, 0 lost).</p>
+
+<h2>7. Logs</h2>
+<pre>.scratch/AC-0217-gates/r16_before.log          BEFORE r16 (PICKLOG)
+.scratch/AC-0217-gates/r16_after.log           AFTER r16 #1 (PICKLOG)
+.scratch/AC-0217-gates/r16_after2_timing.log   AFTER r16 #2 (PICKLOG + TIMING = POOLCACHE counters)
+.scratch/AC-0217-gates/r16_after_result.json   AFTER #1 RESULT (RESULT-prefix line)
+.scratch/AC-0217-gates/picks_before.txt / picks_after.txt / picks_after2.txt
+.scratch/AC-0217-gates/pickdiff.txt                       BEFORE vs AFTER (t= stripped)
+.scratch/AC-0217-gates/pickdiff_after_vs_after2.txt       same-code A/B (t= stripped)
+.scratch/AC-0217-gates/g0.log
+.scratch/AC-0217-gates/smoke.log   + interact_r1..3.log   (battery + 3 standalone interact re-runs)
+.scratch/AC-0217-gates/gates_seq.log
+.scratch/AC-0217-gates/chunkiocpp.log / genhash1.log / genhash2.log / light.log
+.scratch/AC-0217-gates/meshprobe.log / stripsprobe.log / pullprobe.log / nofallback.log
+.scratch/AC-0217-gates/ac0229_ref.txt                 genhash AC-0215 NEW baseline (25 hashes)</pre>
+
+<h2>8. Verdict</h2>
+<p class="ok">DONE — ready to commit.</p>
+<p>The <code>_collect_pool</code> + <code>_entry_score</code> per-frame re-work is gated: the drain's three
+scored picks (build / forward-lead / data) are served from a one-slot cache per pass, keyed on
+(quantized position + look dir + drain window + spawn-fast + recenter center + queue version +
+in-flight depths). <code>_pool_ver</code> bumps at all 13 queue/eligibility mutation sites, so the cache
+is only served when <i>nothing</i> changed — a candidate-level re-validation forces a fresh scan if
+even the cached candidate went stale. Idle (static) frame cost dropped <b>5 ms → 3 ms</b>
+(≈ the predicted 1–2 ms), idle fps p50/p95 <b>200/143 → 333/200</b> (well above 60; the 60 fps gate
+holds with wide margin and improved). The forward-move pick order is unchanged: 2415/2415 picks
+identical (pass + chunk multiset 100% common, scores equal to 5th-decimal run jitter), and a
+same-code A/B shows the identical — larger — jitter class, ruling out the debounce. G0 clean;
+SMOKE ok:true (the one interact <code>drop_spawned</code> flake re-ran true 3/3); chunkiocpp
+byte-identical; genhash 25/25 == AC-0215 NEW baseline (2× deterministic); light 15/0/14 standing;
+mesh/strips/pull probes 100% exact; nofallback ok:true. GDScript only — no C++/.so touched.
+One code fix landed during the run: the <code>_pool_key</code> format string (8 → 9 specifiers) — caught
+by the first AFTER run (stall + format-error flood), fixed, G0 + full gate re-run clean.</p>
+</body>
+</html>

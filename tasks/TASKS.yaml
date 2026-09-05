@@ -1,9 +1,8 @@
 meta:
-  updated_at: 2026-09-04T17:32
+  updated_at: 2026-09-05T09:09
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0217
 - AC-0214
 - AC-0175
 - AC-0140
@@ -15,6 +14,7 @@ queue:
 - AC-0173
 - AC-0199
 - AC-0204
+- AC-0230
 - AC-0191
 - AC-0087
 - AC-0186
@@ -1093,7 +1093,23 @@ intake:
   - id: 2
     created_at: '2026-09-03T22:00:00.000000'
     updated_at: null
-    text: '[coordinator] DONE + SHIPPED 2026-09-03. Bouncy banana (GDScript feature, no C++/.so/.dll touched): banana trees spawn ONLY at the dirt-sand shore edge (post-pass in generator.gd - base B_DIRT/B_GRASS y in [127,130], sand <=Cheb 3, water <=Cheb 4, non-forest, density 0.025 - hooked into all 5 world-build landing sites in world.gd; WorldGen.generate() untouched). 2 hanging B_BANANA (id 28) fruits per tree; player within 10 blocks -> 6%/0.5 s roll plucks -> real RigidBody3D bounces (bounce 0.45) against chunk StaticBody3D colliders until rest -> magnet pickup -> item 126 (food 4) -> eating restores hp+hunger by 4 and plays Audio.play(gorilla) (AC-0039 lane - hook only, AC-0039 stays OPEN). Banana crescent painted into the atlas. G0 0 SCRIPT ERROR (12 headless rounds). banana probe (AWECRAFT_LOGIC=banana, r=6) ok:true - 2 trees / 3 fruits, re-gen deterministic, 0 out-of-spec; diag proves shore-only. banana3d e2e ok:true in 12 s - 3 plucks -> 3 RigidBody3D; tracked body 134.5 -> 125.3 with 8 bounces, at rest in 417 frames; pickup 134 ms -> item 126 -> body freed; eat: hp/hunger 0 -> 4.0, item consumed. SMOKE ok:true - light 15/0/14, sea 792/792. No regression: chunkiocpp md5 8a893557... byte-identical; genhash x2 = 25/25 == AC-0215 final; meshprobe 100%; stripsprobe 100%; pullprobe 6.29M cells max_diff 0; nofallback ok. Pre-existing bug fixed (2 GDScript call sites, world.gd recenter()): in_stream_set was called with ABSOLUTE coords in pre-warm 5x5 and startup-burst builder - at any non-origin recenter the 5x5 shrank against the origin set, so far recenters during startup window deadlocked the build pipeline. Fixed to pass the delta; at origin bit-identical. Godot 4.7.1 API: RigidBody3D uses linear_velocity/is_sleeping(); restitution on physics_material_override. Honest flake: 1 of 4 SMOKE runs SIGSEGVd in C++ AweGen.generate_flat (worker-teardown race; no banana code on stack) - other 3 passed identically. R50/Windows not run (AC-0206). See tasks/AC-0040/AC-0040-results.html.'
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Bouncy banana (GDScript feature, no C++/.so/.dll touched): banana trees
+      spawn ONLY at the dirt-sand shore edge (post-pass in generator.gd - base B_DIRT/B_GRASS y in [127,130], sand <=Cheb
+      3, water <=Cheb 4, non-forest, density 0.025 - hooked into all 5 world-build landing sites in world.gd; WorldGen.generate()
+      untouched). 2 hanging B_BANANA (id 28) fruits per tree; player within 10 blocks -> 6%/0.5 s roll plucks -> real RigidBody3D
+      bounces (bounce 0.45) against chunk StaticBody3D colliders until rest -> magnet pickup -> item 126 (food 4) -> eating
+      restores hp+hunger by 4 and plays Audio.play(gorilla) (AC-0039 lane - hook only, AC-0039 stays OPEN). Banana crescent
+      painted into the atlas. G0 0 SCRIPT ERROR (12 headless rounds). banana probe (AWECRAFT_LOGIC=banana, r=6) ok:true -
+      2 trees / 3 fruits, re-gen deterministic, 0 out-of-spec; diag proves shore-only. banana3d e2e ok:true in 12 s - 3 plucks
+      -> 3 RigidBody3D; tracked body 134.5 -> 125.3 with 8 bounces, at rest in 417 frames; pickup 134 ms -> item 126 -> body
+      freed; eat: hp/hunger 0 -> 4.0, item consumed. SMOKE ok:true - light 15/0/14, sea 792/792. No regression: chunkiocpp
+      md5 8a893557... byte-identical; genhash x2 = 25/25 == AC-0215 final; meshprobe 100%; stripsprobe 100%; pullprobe 6.29M
+      cells max_diff 0; nofallback ok. Pre-existing bug fixed (2 GDScript call sites, world.gd recenter()): in_stream_set
+      was called with ABSOLUTE coords in pre-warm 5x5 and startup-burst builder - at any non-origin recenter the 5x5 shrank
+      against the origin set, so far recenters during startup window deadlocked the build pipeline. Fixed to pass the delta;
+      at origin bit-identical. Godot 4.7.1 API: RigidBody3D uses linear_velocity/is_sleeping(); restitution on physics_material_override.
+      Honest flake: 1 of 4 SMOKE runs SIGSEGVd in C++ AweGen.generate_flat (worker-teardown race; no banana code on stack)
+      - other 3 passed identically. R50/Windows not run (AC-0206). See tasks/AC-0040/AC-0040-results.html.'
   - id: 2
     created_at: '2026-09-01T02:12:48.549786'
     updated_at: null
@@ -6816,11 +6832,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-04T07:35
   updated_at: 2026-09-04T09:46
-  completed_at: null
+  completed_at: 2026-09-04T00:10
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player standing still I want no per-frame scoring work so idle stays at 60fps.
@@ -6834,6 +6850,10 @@ intake:
     created_at: 2026-09-04T07:35
     updated_at: null
     text: '[user] debounce scoring per 2026-09-04'
+  - id: 2
+    created_at: '2026-09-04T00:10:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Debounce (GDScript, no C++ touched): the three scored picks (build/forward-lead/data) now run through _pick_build_cached/_pick_data_cached - a one-slot-per-pass cache keyed on quantized (px, pz, look dir, maxb, _spawn_fast, last_pcx/pcz) + _pool_ver (+ in-flight depths for the data pass). _pool_touch() bumps the version at all 13 queue/eligibility mutation sites (enqueue/remove/drop/cap-convert/strip/recenter-merge + every data-landing choke point). A hit is only served when nothing changed; a non-empty cached candidate is re-validated (stale -> fresh scan). Moving/turning changes the key every frame -> fresh scan -> picks byte-identical. One bug caught + fixed during the run: _pool_key format string (8->9 specifiers) - first AFTER run stalled on it (stale-empty trust + 68M-line error flood); re-run clean. Gate results (r16 --fixed-fps 600, AWECRAFT_PICKLOG=1): Idle stays 60 - static p50_ms 5->3, p95_ms 7->5, fps p50/p95 200/143 -> 333/200 (gate met with margin; ~ the predicted 1-2 ms saving). POOLCACHE: 95.7pct hits in the static window. Forward-move pick order: 2415/2415 picks identical (pass+chunk multiset 100pct common; scores equal within 5th-decimal run jitter; same-code A/B shows the same, larger jitter class - not the debounce). fly4/fly50 evidence identical (awm 279/58, queue_max 136/65, rec 9/27, lost 0). G0: exit 0, 0 SCRIPT ERROR. SMOKE battery ok:true (one interact drop_spawned 3-frame-window flake -> 3/3 standalone re-runs true). No regression: chunkiocpp md5 byte-identical; genhash 25/25 == AC-0215 NEW baseline (2 runs identical); light 15/0/14 standing; mesh/strips/pull probes 100pct exact; nofallback ok:true. R50 + Windows build not run (per task). See tasks/AC-0217/AC-0217-results.html.'
 - id: AC-0218
   title: neighbor-dirty-only-when-border-light-changed
   source: user
@@ -6890,7 +6910,24 @@ intake:
   - id: 2
     created_at: '2026-09-03T21:00:00.000000'
     updated_at: null
-    text: '[coordinator] DONE + SHIPPED 2026-09-03. Border compare (godot/world/world.gd): the task pointer (lighting.gd::_data_landed) is stale (removed AC-0119); the real marking is _eff_landed (world.gd). Its per-side gate now does the border compare: first landing (new column) uses new _frame_nonzero(new_arr, side) - the 2-deep border light vs the provable before-state (empty strip = all-zero margin, no injection); a zero frame = provable byte-identical no-op (bake box pre-zeros margin; eff = max(sky,blk) -> zero frame -> zero face -> cand = 0-att <= 0 -> no injection) -> the full re-light+remesh is skipped; any nonzero edge value marks exactly as before. Steady-state landings keep the existing old-vs-new frame gate (that already was the compare). Cheap: top-down byte scan, early-exits in the first row on surface chunks (~0.1 ms vs 2-10 ms rebuild). Dirty count before->after (R16): static/moving/settle all 0 -> 0 (moving inside chunk marks nothing); fly4 first-landing marks 1188->1188 (0 skips), re-enqueues 1020->1024 (noise), steady-state unchanged-sides 701->715; fly50 132->132 (0 skips). Honest: skips are 0 on seed 44 because the open-sky top row (eff 15, C++- and pullprobe-verified) makes every new border differ 0->15 - every first-landing mark is legitimate under the task own rule (frontier faces genuinely re-light dark->lit); skipping them would mean dark cliff faces (forbidden). Mechanism is live and would fire on a fully-dark border; the remaining fly-wave lever (visible-face existence check) is flagged as a follow-up in the results. Frame time / p95: static 5/7/21->5/7/23 ms; moving 5/7/22->5/7/20; fly4 4/17/91->4/16/84; fly50 4/23/72->4/23/75 - flat, no spike, p95 does not tank; built 797/797, lost 0, rebuilds 0. G0 exit 0, 0 SCRIPT ERROR. SMOKE player;interact;light;fluids all ok:true (light 15/0/14, sea 792/792). No-regression: chunkiocpp md5 8a893557... byte-identical; genhash x2 identical, (0,0)=80b904c0... == AC-0215 NEW; meshprobe 100% (1926/1926, ac0211_ok); stripsprobe 100% (512); pullprobe 100% (6,291,456 cells, max_diff 0); nofallback ok:true (gen 71). No C++/.so change, no git writes by me (coordinator commits). See tasks/AC-0218/AC-0218-results.html.'
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Border compare (godot/world/world.gd): the task pointer (lighting.gd::_data_landed)
+      is stale (removed AC-0119); the real marking is _eff_landed (world.gd). Its per-side gate now does the border compare:
+      first landing (new column) uses new _frame_nonzero(new_arr, side) - the 2-deep border light vs the provable before-state
+      (empty strip = all-zero margin, no injection); a zero frame = provable byte-identical no-op (bake box pre-zeros margin;
+      eff = max(sky,blk) -> zero frame -> zero face -> cand = 0-att <= 0 -> no injection) -> the full re-light+remesh is skipped;
+      any nonzero edge value marks exactly as before. Steady-state landings keep the existing old-vs-new frame gate (that
+      already was the compare). Cheap: top-down byte scan, early-exits in the first row on surface chunks (~0.1 ms vs 2-10
+      ms rebuild). Dirty count before->after (R16): static/moving/settle all 0 -> 0 (moving inside chunk marks nothing); fly4
+      first-landing marks 1188->1188 (0 skips), re-enqueues 1020->1024 (noise), steady-state unchanged-sides 701->715; fly50
+      132->132 (0 skips). Honest: skips are 0 on seed 44 because the open-sky top row (eff 15, C++- and pullprobe-verified)
+      makes every new border differ 0->15 - every first-landing mark is legitimate under the task own rule (frontier faces
+      genuinely re-light dark->lit); skipping them would mean dark cliff faces (forbidden). Mechanism is live and would fire
+      on a fully-dark border; the remaining fly-wave lever (visible-face existence check) is flagged as a follow-up in the
+      results. Frame time / p95: static 5/7/21->5/7/23 ms; moving 5/7/22->5/7/20; fly4 4/17/91->4/16/84; fly50 4/23/72->4/23/75
+      - flat, no spike, p95 does not tank; built 797/797, lost 0, rebuilds 0. G0 exit 0, 0 SCRIPT ERROR. SMOKE player;interact;light;fluids
+      all ok:true (light 15/0/14, sea 792/792). No-regression: chunkiocpp md5 8a893557... byte-identical; genhash x2 identical,
+      (0,0)=80b904c0... == AC-0215 NEW; meshprobe 100% (1926/1926, ac0211_ok); stripsprobe 100% (512); pullprobe 100% (6,291,456
+      cells, max_diff 0); nofallback ok:true (gen 71). No C++/.so change, no git writes by me (coordinator commits). See tasks/AC-0218/AC-0218-results.html.'
 - id: AC-0220
   title: flight-speed-4x-walking-speed
   source: user
@@ -7086,7 +7123,22 @@ intake:
   - id: 2
     created_at: '2026-09-03T23:00:00.000000'
     updated_at: null
-    text: '[coordinator] DONE + SHIPPED 2026-09-03. Slider (GDScript, no C++ touched): Options Chunk-meshes-per-frame HSlider 1-100 + value label (menu.tscn ChunkRow); menu.gd _on_chunk_changed -> Settings.set_value(chunks_per_frame, int(v)) (saved to cfg, clamp 1-100, default 3 = shipped AC-0224 cap). world.gd drain reads the setting every process frame (stream_ho_cap); AWECRAFT_TM_HO now preloads the same setting (clamped 1-100, no save). Cap before->after: was const 3 (env 1-16). R16 ho_cap at slider 1/3/10/50/100 = 1/3/10/50/100 - exact match at every position; per-poll hb_max 64 still bounds bursts. Persist: settings arm (default 3, set 7->reloaded 7, 999->100, 0->1, ok:true) + cross-process: P1 wrote chunks_per_frame=7 to awecraft.cfg, fresh P2 process booted with 7 (OPTSYNC chunk=7, RESULT values 7); screenshot tasks/AC-0225/options-shot.png shows the slider at 7. R16 flying shows tuning: build all-meshed 37.2 s (cap 1) -> 13.5 s (3) -> ~13.1 s (10/50/100) - 2.8x faster, then C++-pipeline-bound; fly4 ho_max 1/3/5/5/4 (cap-bound at <=3, supply-limited above); static p95 fps 29->143; fly phases 0 lost chunks, recenter 9/27 identical to AC-0224. G0 exit 0, 0 SCRIPT ERROR (every run: 0; the is_inside_tree transient + exit RID leaks are pre-existing AC-0216/engine noise, present in AC-0040-era logs, not script errors). SMOKE player;interact;light;fluids all ok:true - light 15/0/14 (standing post-AC-0215 baseline; the prompt cave-10 was pre-AC-0215, superseded per 00z), sea 792/792 == AC-0224. No regression: chunkiocpp ok:true, md5 8a893557... byte-identical; genhash x2 25/25 identical == AC-0215 NEW baseline (diff clean); meshprobe/stripsprobe/pullprobe all 100% exact (match_rate 1.0, max_diff 0, 6.29M cells); nofallback ok:true (C++ lanes >0, GD sentinels 0). R50 + Windows build not run, per instruction. See tasks/AC-0225/AC-0225-results.html.'
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Slider (GDScript, no C++ touched): Options Chunk-meshes-per-frame HSlider
+      1-100 + value label (menu.tscn ChunkRow); menu.gd _on_chunk_changed -> Settings.set_value(chunks_per_frame, int(v))
+      (saved to cfg, clamp 1-100, default 3 = shipped AC-0224 cap). world.gd drain reads the setting every process frame (stream_ho_cap);
+      AWECRAFT_TM_HO now preloads the same setting (clamped 1-100, no save). Cap before->after: was const 3 (env 1-16). R16
+      ho_cap at slider 1/3/10/50/100 = 1/3/10/50/100 - exact match at every position; per-poll hb_max 64 still bounds bursts.
+      Persist: settings arm (default 3, set 7->reloaded 7, 999->100, 0->1, ok:true) + cross-process: P1 wrote chunks_per_frame=7
+      to awecraft.cfg, fresh P2 process booted with 7 (OPTSYNC chunk=7, RESULT values 7); screenshot tasks/AC-0225/options-shot.png
+      shows the slider at 7. R16 flying shows tuning: build all-meshed 37.2 s (cap 1) -> 13.5 s (3) -> ~13.1 s (10/50/100)
+      - 2.8x faster, then C++-pipeline-bound; fly4 ho_max 1/3/5/5/4 (cap-bound at <=3, supply-limited above); static p95 fps
+      29->143; fly phases 0 lost chunks, recenter 9/27 identical to AC-0224. G0 exit 0, 0 SCRIPT ERROR (every run: 0; the
+      is_inside_tree transient + exit RID leaks are pre-existing AC-0216/engine noise, present in AC-0040-era logs, not script
+      errors). SMOKE player;interact;light;fluids all ok:true - light 15/0/14 (standing post-AC-0215 baseline; the prompt
+      cave-10 was pre-AC-0215, superseded per 00z), sea 792/792 == AC-0224. No regression: chunkiocpp ok:true, md5 8a893557...
+      byte-identical; genhash x2 25/25 identical == AC-0215 NEW baseline (diff clean); meshprobe/stripsprobe/pullprobe all
+      100% exact (match_rate 1.0, max_diff 0, 6.29M cells); nofallback ok:true (C++ lanes >0, GD sentinels 0). R50 + Windows
+      build not run, per instruction. See tasks/AC-0225/AC-0225-results.html.'
 - id: AC-0226
   title: pull-fog-in-to-hide-pop-in-scales-with-render-distance
   source: user
@@ -7115,7 +7167,24 @@ intake:
   - id: 2
     created_at: '2026-09-03T23:30:00.000000'
     updated_at: null
-    text: '[coordinator] DONE + SHIPPED 2026-09-03. Fog pull-in (GDScript, no C++/.so touched): DayNight.fog_far(R) (R+1)*16*0.95 -> (R+1)*16*0.875 (midpoint of requested 0.85-0.90), still a pure function of render_radius, applied per-frame in _update_fog(); fog_near unchanged. Plus: _edgeretain_test fog_covers flipped to the physically-correct hiding condition (fog_far <= ring_face - full-fog boundary at/before the pop-in face; old direction would have gone red though hiding improved) + comment updates in world.gd. Why 0.875 hides it: pop-in face sits at R*16 (crossing instant, worst) -> (R+1)*16-8 (chunk center); Godot depth fog = 100pct at/behind fog_depth_end, so hidden iff fog_far <= face. 0.875 implies hidden at every R >= 7 (old 0.95 only at R >= 19 - R16 crossing-instant pop was a 98.7pct-fogged flash, now 18 m / 86 m of full-fog margin at R16/R50). No hard cut: only the ramp end moved (R16: 68->238 m, R50: 204->714 m) - render shot shows a smooth fade. fog_far before->after: R16 258.4 -> 238.0 (fog_ok true, edge 272) - R50 775.2 -> 714.0 (fog_ok true, edge 816). G0 exit 0, 0 SCRIPT ERROR. SMOKE player;interact;light;fluids all ok:true (light 15/0/14 = standing post-AC-0215 baseline per 00z; sea 792/792 == AC-0224). R16 (AWECRAFT_LOGIC=r16 --fixed-fps 600): ok:true, 0 errors, build 797/797 (13.5 s), static/moving p95 7 ms (fps 143), fly4/fly50 lost_chunks 0, recenter 9/27 - identical to AC-0224/0225; fog hides far-edge pop, no hard cut, scales correctly. R50 (AWECRAFT_LOGIC=perf AWECRAFT_RADIUS=50 - the established R50-build arm; no literal r50 branch exists): ok, all_meshed 7845/7845, 0 errors, ran clean in the subagent env; fog hides far-edge pop, no hard cut, scales correctly. No regression: chunkiocpp ok:true byte-identical md5 8a893557...; genhash x2 25/25 identical == AC-0215 NEW baseline (genhash4.log) + AC-0225; light standing (SMOKE); meshprobe/stripsprobe 100pct exact, pullprobe 100pct exact (max_diff 0, 6.29M cells); nofallback ok:true (C++ lanes >0, GD sentinels 0); bonus: edgeretain (AC-0168 arm) ok:true with the flipped check (126.0 <= 136.0 at R8). See tasks/AC-0226/AC-0226-results.html.'
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Fog pull-in (GDScript, no C++/.so touched): DayNight.fog_far(R) (R+1)*16*0.95
+      -> (R+1)*16*0.875 (midpoint of requested 0.85-0.90), still a pure function of render_radius, applied per-frame in _update_fog();
+      fog_near unchanged. Plus: _edgeretain_test fog_covers flipped to the physically-correct hiding condition (fog_far <=
+      ring_face - full-fog boundary at/before the pop-in face; old direction would have gone red though hiding improved) +
+      comment updates in world.gd. Why 0.875 hides it: pop-in face sits at R*16 (crossing instant, worst) -> (R+1)*16-8 (chunk
+      center); Godot depth fog = 100pct at/behind fog_depth_end, so hidden iff fog_far <= face. 0.875 implies hidden at every
+      R >= 7 (old 0.95 only at R >= 19 - R16 crossing-instant pop was a 98.7pct-fogged flash, now 18 m / 86 m of full-fog
+      margin at R16/R50). No hard cut: only the ramp end moved (R16: 68->238 m, R50: 204->714 m) - render shot shows a smooth
+      fade. fog_far before->after: R16 258.4 -> 238.0 (fog_ok true, edge 272) - R50 775.2 -> 714.0 (fog_ok true, edge 816).
+      G0 exit 0, 0 SCRIPT ERROR. SMOKE player;interact;light;fluids all ok:true (light 15/0/14 = standing post-AC-0215 baseline
+      per 00z; sea 792/792 == AC-0224). R16 (AWECRAFT_LOGIC=r16 --fixed-fps 600): ok:true, 0 errors, build 797/797 (13.5 s),
+      static/moving p95 7 ms (fps 143), fly4/fly50 lost_chunks 0, recenter 9/27 - identical to AC-0224/0225; fog hides far-edge
+      pop, no hard cut, scales correctly. R50 (AWECRAFT_LOGIC=perf AWECRAFT_RADIUS=50 - the established R50-build arm; no
+      literal r50 branch exists): ok, all_meshed 7845/7845, 0 errors, ran clean in the subagent env; fog hides far-edge pop,
+      no hard cut, scales correctly. No regression: chunkiocpp ok:true byte-identical md5 8a893557...; genhash x2 25/25 identical
+      == AC-0215 NEW baseline (genhash4.log) + AC-0225; light standing (SMOKE); meshprobe/stripsprobe 100pct exact, pullprobe
+      100pct exact (max_diff 0, 6.29M cells); nofallback ok:true (C++ lanes >0, GD sentinels 0); bonus: edgeretain (AC-0168
+      arm) ok:true with the flipped check (126.0 <= 136.0 at R8). See tasks/AC-0226/AC-0226-results.html.'
 - id: AC-0227
   title: dithered-fade-shader-for-distant-chunks-to-hide-pop-in
   source: user
@@ -7145,7 +7214,24 @@ intake:
   - id: 2
     created_at: '2026-09-03T23:45:00.000000'
     updated_at: null
-    text: '[coordinator] DONE + SHIPPED 2026-09-03. Dithered fade (GDScript/shader, no C++/.so touched): Screen-space 4x4 Bayer checkerboard in the 5 chunk shaders - fragments beyond dither_start(R) = 0.45*(R+1)*16 m from the player are discarded per Bayer threshold; fade ramps 0->1 up to dither_end(R) = 0.99*(R+1)*16, so far chunks dissolve in as a checkerboard that fills in as they get closer. Complements AC-0226 fog (fog fades COLOR, dither discards FRAGMENTS): a popped chunk (faces 248-264 m at R16) appears 85-96pct dithered AND fully fogged - no hard pop. R16 band 122.4-269.3 m, R50 367.2-807.8 m. Code (7 files, +211/-0, no C++): daynight.gd (dither_start/end), 4x chunk_lit_*.gdshader + fluid_anim.gdshader (dither block inlined in fragment() - FRAGCOORD only binds in processor functions in this build), main.gd _update_sky() (per-frame band push to the shared materials + AWECRAFT_NO_DITHER=1 / AWECRAFT_DITHER=start,end harness hooks). G0 headless: exit 0, 0 SCRIPT/SHADER/ERROR (re-verified after final cleanup). SMOKE battery: ok:true; light 15/0/14 (standing post-AC-0215); sea 792/792. R16 arm: ok:true, 797/797, build 13510 ms, p95 7 ms, lost 0 - identical to AC-0224/0225/0226. R50 arm: exit 0, all_meshed 7845/7845, drain 361.7 s, p95 59 ms - AC-0226 profile. No-regression: chunkiocpp md5 8a893557... byte-identical; genhash x2 == AC-0215 NEW baseline; mesh/strips/pull probes 100pct exact (6.29M cells); nofallback ok:true. Render (xvfb + gl_compatibility): real-band A/B from the 208 m ridge vantage - far tree line (200-270 m, fade 0.46-1.0) shows the ordered Bayer dissolve (band-strip diff 4.91pct, peak cell 26.6pct, near zone 0.00pct). Full GPU proof chain in the report: FRAGCOORD pixel-unit probe, uniform readback 122.4/269.28, R4 forced-band A/B (clear checkerboard), distance-density sweep. Note: at the spawn pad the valley rim occludes most of the band in the default view (subtle by design; pop faces are double-hidden) - the ridge shot in the results page shows the band plainly. Scratch test scaffolding deleted; debug instrumentation removed. See tasks/AC-0227/AC-0227-results.html.'
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Dithered fade (GDScript/shader, no C++/.so touched): Screen-space 4x4
+      Bayer checkerboard in the 5 chunk shaders - fragments beyond dither_start(R) = 0.45*(R+1)*16 m from the player are discarded
+      per Bayer threshold; fade ramps 0->1 up to dither_end(R) = 0.99*(R+1)*16, so far chunks dissolve in as a checkerboard
+      that fills in as they get closer. Complements AC-0226 fog (fog fades COLOR, dither discards FRAGMENTS): a popped chunk
+      (faces 248-264 m at R16) appears 85-96pct dithered AND fully fogged - no hard pop. R16 band 122.4-269.3 m, R50 367.2-807.8
+      m. Code (7 files, +211/-0, no C++): daynight.gd (dither_start/end), 4x chunk_lit_*.gdshader + fluid_anim.gdshader (dither
+      block inlined in fragment() - FRAGCOORD only binds in processor functions in this build), main.gd _update_sky() (per-frame
+      band push to the shared materials + AWECRAFT_NO_DITHER=1 / AWECRAFT_DITHER=start,end harness hooks). G0 headless: exit
+      0, 0 SCRIPT/SHADER/ERROR (re-verified after final cleanup). SMOKE battery: ok:true; light 15/0/14 (standing post-AC-0215);
+      sea 792/792. R16 arm: ok:true, 797/797, build 13510 ms, p95 7 ms, lost 0 - identical to AC-0224/0225/0226. R50 arm:
+      exit 0, all_meshed 7845/7845, drain 361.7 s, p95 59 ms - AC-0226 profile. No-regression: chunkiocpp md5 8a893557...
+      byte-identical; genhash x2 == AC-0215 NEW baseline; mesh/strips/pull probes 100pct exact (6.29M cells); nofallback ok:true.
+      Render (xvfb + gl_compatibility): real-band A/B from the 208 m ridge vantage - far tree line (200-270 m, fade 0.46-1.0)
+      shows the ordered Bayer dissolve (band-strip diff 4.91pct, peak cell 26.6pct, near zone 0.00pct). Full GPU proof chain
+      in the report: FRAGCOORD pixel-unit probe, uniform readback 122.4/269.28, R4 forced-band A/B (clear checkerboard), distance-density
+      sweep. Note: at the spawn pad the valley rim occludes most of the band in the default view (subtle by design; pop faces
+      are double-hidden) - the ridge shot in the results page shows the band plainly. Scratch test scaffolding deleted; debug
+      instrumentation removed. See tasks/AC-0227/AC-0227-results.html.'
 - id: AC-0228
   title: cube-world-six-faces-with-center-gravity-and-face-switching
   source: user
@@ -7201,4 +7287,51 @@ intake:
   - id: 2
     created_at: '2026-09-03T23:55:00.000000'
     updated_at: null
-    text: '[coordinator] DONE + SHIPPED 2026-09-03. Dynamic scaling (GDScript, no C++ touched): stream_ho_cap = clampi(roundi(base x speed_factor x radius_factor), 1, 100) where base = AC-0225 slider (1-100, default 3); speed_factor = 0.5 still (<0.5 m/s), 1.0 at the 4.3 m/s walk ref (s/4.3), 12.0 saturated - sampled from actual player position, 0.3 lerp; radius_factor = R/16 clamped [1.0, 2.0]. main.gd - harness reporting (ho_dyn/ho_cap/ho_cap_max) + an env-gated AWECRAFT_WALKLOG diagnostic. Reference points (base 3): R16 still->2, walk->3 (AC-0225 no-op), 50x fly->36; R50 still->3 (0.5x2.0 = 1.0 no-op - AC-0227 profile untouched), walk->6, 50x fly->72. R16 walking (gate): ok:true, 797/797, build 13467 ms, p95 7/7 = baseline; fly4 279/8 s = 34.9 chunks/s, fly50 58/2 s = 29.0/s - byte-identical fill to baseline, 0 lost, recenter 9/27; ho_cap_max 3->8 (4x) / 3->36 (50x) - the dynamic budget tracks actual speed, ahead fills at the same rate with 2.7-12x headroom. R50 (gate): 7845/7845, drain 354.49 s = 22.1 chunks/s (baseline 21.4 - same profile), p95 59 = baseline, ho_cap 3; the targeted 50x-flight-at-R50 scenario gets cap 72 -> 4320 meshes/s vs ~430 chunks/s ahead demand (10x headroom vs the fixed cap 0.42x shortfall). Slider: TM_HO 1/3/100 -> still caps 1/2/50, fly caps up to 3-12/8-36/100-100 (monotonic, clamped at slider max) - slider still bounds the burst. p95 stable: R16 7/7 before->after, R50 59 before->after. G0: exit 0, 0 SCRIPT ERROR. SMOKE: all 4 modes ok:true (light 15/0/14 standing, sea stable). No regression: chunkiocpp byte-identical (md5 8a893557900a462fe4ab1c91f8589081); genhash 2x 25/25 == AC-0215 NEW baseline; light 15/0/14; mesh/strips/pull probes 100pct exact (234224 verts / 512 strips / 6,291,456 cells max_diff 0); nofallback ok:true (C++ lanes >0, GD sentinels 0). boundary r4 (insurance): ok:false (13/500 s) - A/B proves it environmental: original code identical; WLOG telemetry shows the walk sticks at (208.9, 161.0, 8.3) - a collision in chunk (13,8) that the fast C++ pipeline builds in place before the player arrives (pre-existing harness-vs-pipeline interaction). The dynamic 11-burst at the 16 m/s walk leaves p95 20 ms / max 42 ms - below every recorded standing - no slope re-tune needed. R50 RAN CLEAN IN THE SUBAGENT ENV (the .so loads clean there, only the coordinator env crashes - AC-0206). See tasks/AC-0229/AC-0229-results.html.'
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Dynamic scaling (GDScript, no C++ touched): stream_ho_cap = clampi(roundi(base
+      x speed_factor x radius_factor), 1, 100) where base = AC-0225 slider (1-100, default 3); speed_factor = 0.5 still (<0.5
+      m/s), 1.0 at the 4.3 m/s walk ref (s/4.3), 12.0 saturated - sampled from actual player position, 0.3 lerp; radius_factor
+      = R/16 clamped [1.0, 2.0]. main.gd - harness reporting (ho_dyn/ho_cap/ho_cap_max) + an env-gated AWECRAFT_WALKLOG diagnostic.
+      Reference points (base 3): R16 still->2, walk->3 (AC-0225 no-op), 50x fly->36; R50 still->3 (0.5x2.0 = 1.0 no-op - AC-0227
+      profile untouched), walk->6, 50x fly->72. R16 walking (gate): ok:true, 797/797, build 13467 ms, p95 7/7 = baseline;
+      fly4 279/8 s = 34.9 chunks/s, fly50 58/2 s = 29.0/s - byte-identical fill to baseline, 0 lost, recenter 9/27; ho_cap_max
+      3->8 (4x) / 3->36 (50x) - the dynamic budget tracks actual speed, ahead fills at the same rate with 2.7-12x headroom.
+      R50 (gate): 7845/7845, drain 354.49 s = 22.1 chunks/s (baseline 21.4 - same profile), p95 59 = baseline, ho_cap 3; the
+      targeted 50x-flight-at-R50 scenario gets cap 72 -> 4320 meshes/s vs ~430 chunks/s ahead demand (10x headroom vs the
+      fixed cap 0.42x shortfall). Slider: TM_HO 1/3/100 -> still caps 1/2/50, fly caps up to 3-12/8-36/100-100 (monotonic,
+      clamped at slider max) - slider still bounds the burst. p95 stable: R16 7/7 before->after, R50 59 before->after. G0:
+      exit 0, 0 SCRIPT ERROR. SMOKE: all 4 modes ok:true (light 15/0/14 standing, sea stable). No regression: chunkiocpp byte-identical
+      (md5 8a893557900a462fe4ab1c91f8589081); genhash 2x 25/25 == AC-0215 NEW baseline; light 15/0/14; mesh/strips/pull probes
+      100pct exact (234224 verts / 512 strips / 6,291,456 cells max_diff 0); nofallback ok:true (C++ lanes >0, GD sentinels
+      0). boundary r4 (insurance): ok:false (13/500 s) - A/B proves it environmental: original code identical; WLOG telemetry
+      shows the walk sticks at (208.9, 161.0, 8.3) - a collision in chunk (13,8) that the fast C++ pipeline builds in place
+      before the player arrives (pre-existing harness-vs-pipeline interaction). The dynamic 11-burst at the 16 m/s walk leaves
+      p95 20 ms / max 42 ms - below every recorded standing - no slope re-tune needed. R50 RAN CLEAN IN THE SUBAGENT ENV (the
+      .so loads clean there, only the coordinator env crashes - AC-0206). See tasks/AC-0229/AC-0229-results.html.'
+- id: AC-0230
+  title: sky-sphere-does-not-follow-player-fly-through-visible
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-05T09:07
+  updated_at: 2026-09-05T09:07
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player flying, I want the sky sphere to stay centered on me so I never fly through it and see
+    a giant sphere behind me.
+
+
+    2) Technical Details: godot/scenes/main.gd:1880 SphereMesh (AeroLib.SKY_RADIUS 1000 is sufficient) + 1926 _process aero_sky.global_position
+    = ac.global_position + cam_pos uniform is intended to follow but repro shows sphere stays at world origin (fly horizontally/vertically,
+    exit, look back to see sphere). Fix: ensure aero_sky follows camera every frame horizontally+vertically (verify aero enabled,
+    _aero_camera() non-null, global_position assignment survives reparent/visibility, no early return), radius unchanged.
+    Verify G0+SMOKE+1 render fly-through no longer possible at R50 + flight to Y 2000.'
+  comments:
+  - id: 1
+    created_at: '2026-09-05T13:07:12.654706'
+    updated_at: null
+    text: '[coordinator] Reasoning: xhigh (repro flight, main.gd _process follow + radius vs planet R, verify render at R50)'
