@@ -3,7 +3,6 @@ meta:
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0227
 - AC-0229
 - AC-0217
 - AC-0214
@@ -7125,11 +7124,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-04T20:42
   updated_at: 2026-09-04T20:42
-  completed_at: null
+  completed_at: 2026-09-03T23:45
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want distant chunks to fade in with a checkerboard dither so I do not see whole objects
@@ -7144,6 +7143,10 @@ intake:
     created_at: 2026-09-04T20:42
     updated_at: null
     text: '[user] shader dithering per 2026-09-04'
+  - id: 2
+    created_at: '2026-09-03T23:45:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Dithered fade (GDScript/shader, no C++/.so touched): Screen-space 4x4 Bayer checkerboard in the 5 chunk shaders - fragments beyond dither_start(R) = 0.45*(R+1)*16 m from the player are discarded per Bayer threshold; fade ramps 0->1 up to dither_end(R) = 0.99*(R+1)*16, so far chunks dissolve in as a checkerboard that fills in as they get closer. Complements AC-0226 fog (fog fades COLOR, dither discards FRAGMENTS): a popped chunk (faces 248-264 m at R16) appears 85-96pct dithered AND fully fogged - no hard pop. R16 band 122.4-269.3 m, R50 367.2-807.8 m. Code (7 files, +211/-0, no C++): daynight.gd (dither_start/end), 4x chunk_lit_*.gdshader + fluid_anim.gdshader (dither block inlined in fragment() - FRAGCOORD only binds in processor functions in this build), main.gd _update_sky() (per-frame band push to the shared materials + AWECRAFT_NO_DITHER=1 / AWECRAFT_DITHER=start,end harness hooks). G0 headless: exit 0, 0 SCRIPT/SHADER/ERROR (re-verified after final cleanup). SMOKE battery: ok:true; light 15/0/14 (standing post-AC-0215); sea 792/792. R16 arm: ok:true, 797/797, build 13510 ms, p95 7 ms, lost 0 - identical to AC-0224/0225/0226. R50 arm: exit 0, all_meshed 7845/7845, drain 361.7 s, p95 59 ms - AC-0226 profile. No-regression: chunkiocpp md5 8a893557... byte-identical; genhash x2 == AC-0215 NEW baseline; mesh/strips/pull probes 100pct exact (6.29M cells); nofallback ok:true. Render (xvfb + gl_compatibility): real-band A/B from the 208 m ridge vantage - far tree line (200-270 m, fade 0.46-1.0) shows the ordered Bayer dissolve (band-strip diff 4.91pct, peak cell 26.6pct, near zone 0.00pct). Full GPU proof chain in the report: FRAGCOORD pixel-unit probe, uniform readback 122.4/269.28, R4 forced-band A/B (clear checkerboard), distance-density sweep. Note: at the spawn pad the valley rim occludes most of the band in the default view (subtle by design; pop faces are double-hidden) - the ridge shot in the results page shows the band plainly. Scratch test scaffolding deleted; debug instrumentation removed. See tasks/AC-0227/AC-0227-results.html.'
 - id: AC-0228
   title: cube-world-six-faces-with-center-gravity-and-face-switching
   source: user

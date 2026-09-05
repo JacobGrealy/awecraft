@@ -2096,12 +2096,44 @@ func _update_sky() -> void:
 		ppos = player.position
 		plvl = float(player.PLAYER_LIGHT_LEVEL)
 		prad = float(player.PLAYER_LIGHT_RADIUS)
+	# AC-0227: dither-fade band (distance from the player, in blocks) — a
+	# pure function of render_radius like the AC-0226 fog bounds (fog fades
+	# the color, the shader dither discards fragments of far chunks). u_day
+	# + the player light ride the same per-frame push; the dither bounds
+	# ride it too so a render-radius change takes effect within a frame.
+	var drr: int = world.render_radius if world != null else 4
+	var dstart := DayNight.dither_start(drr)
+	var dend := DayNight.dither_end(drr)
+	# AC-0227 harness hooks: AWECRAFT_NO_DITHER=1 disables the dither (0/0
+	# band) for A/B render comparison (AWECRAFT_NO_FOG's dither twin);
+	# AWECRAFT_DITHER=start,end (blocks) overrides the band for render
+	# verification at arbitrary radii.
+	var denv := OS.get_environment("AWECRAFT_DITHER")
+	if denv != "":
+		var dp := denv.split(",")
+		if dp.size() == 2:
+			dstart = dp[0].to_float()
+			dend = dp[1].to_float()
+	if OS.get_environment("AWECRAFT_NO_DITHER") == "1":
+		dstart = 0.0
+		dend = 0.0
 	for k in _ChunkScriptM._mat_cache:
 		var cm = _ChunkScriptM._mat_cache[k]
 		if cm is ShaderMaterial:
 			cm.set_shader_parameter("u_player_pos", ppos)
 			cm.set_shader_parameter("u_player_light", plvl)
 			cm.set_shader_parameter("u_player_radius", prad)
+			cm.set_shader_parameter("u_dither_start", dstart)
+			cm.set_shader_parameter("u_dither_end", dend)
+	# AC-0227: the shared water/lava anim materials get the same dither band
+	# (the ocean rides to the render edge like any chunk).
+	for bid in Data.fluid_anim_mats:
+		var fm = Data.fluid_anim_mats[bid]
+		if fm is ShaderMaterial:
+			fm.set_shader_parameter("u_player_pos", ppos)
+			fm.set_shader_parameter("u_dither_start", dstart)
+			fm.set_shader_parameter("u_dither_end", dend)
+
 	sun.light_color = AeroLib.SUN_TINT if aero else Color.WHITE
 	sun.light_energy = DayNight.sun_energy(t) * (AeroLib.SUN_BOOST if aero else 1.0)
 	sun.look_at(DayNight.sun_direction(t), Vector3.UP)
