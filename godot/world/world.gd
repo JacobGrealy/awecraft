@@ -50,10 +50,12 @@ const LOAD_TM_HANDOFF := 6
 # forward edge shows while still moving. The frame stays bounded: 3
 # landings (each apply_accs + collision + scoped face-block refresh) is a
 # fraction of the 64-mesh recenter burst this cap exists to break up. The
-# burst is the tuning knob — AWECRAFT_TM_HO overrides it at boot (clamped
-# 1..STREAM_TM_HANDOFF_MAX) so 2/3 can be A/B'd in the harness.
+# burst is the tuning knob — AC-0225: it is now the Settings
+# "chunks_per_frame" value (the Options "Chunk meshes per frame" slider,
+# 1..100) and the drain cap reads it every process frame; AWECRAFT_TM_HO
+# preloads that same setting at boot (clamped 1..100, no save) so the
+# harness can A/B it.
 const STREAM_TM_HANDOFF_PER_FRAME := 3
-const STREAM_TM_HANDOFF_MAX := 16
 const LOAD_POOL_CAP := 24
 # AC-0178: flush/tex remesh caps while loading — 6 (was 16): each dispatch
 # is ~45 ms of main-thread strip work, 16/frame = 0.7 s of one frame.
@@ -463,8 +465,9 @@ var _tm_handoff := 0
 var _stream_ho_frame := -1
 var _stream_ho_n := 0
 # AC-0224: the effective per-frame streaming handoff burst (the const
-# default; _ready overrides it from AWECRAFT_TM_HO when set — the
-# tuning knob, clamped 1..STREAM_TM_HANDOFF_MAX).
+# default; AC-0225: refreshed every process frame in threadmesh_poll from
+# the Settings "chunks_per_frame" value — the Options slider; _ready
+# preloads that setting from AWECRAFT_TM_HO when set for the harness).
 var stream_ho_cap := STREAM_TM_HANDOFF_PER_FRAME
 var perf_build_worker_ms := 0
 var perf_build_worker_ms_list: Array = []  # AC-0197: per-build worker ms (p50/p95 gate)
@@ -570,12 +573,16 @@ func _ready() -> void:
 	var dr := OS.get_environment("AWECRAFT_DRAIN_MS")
 	if dr != "" and dr.to_int() > 0:
 		drain_budget_ms = dr.to_int()
-	# AC-0224: tuning knob for the streaming handoff burst (default
-	# STREAM_TM_HANDOFF_PER_FRAME = 3); clamped so a bad value can't
-	# disable the cap (1) or burst back to the recenter-burst regime (16).
+	# AC-0224/AC-0225: tuning knob for the streaming handoff burst (default
+	# STREAM_TM_HANDOFF_PER_FRAME = 3) — the AWECRAFT_TM_HO env preloads the
+	# same Settings "chunks_per_frame" value the Options slider drives
+	# (clamped 1..100; written to Settings.values WITHOUT save so the
+	# harness never clobbers the user's cfg; the drain cap reads the
+	# setting every process frame in threadmesh_poll).
 	var hoe := OS.get_environment("AWECRAFT_TM_HO")
 	if hoe != "":
-		stream_ho_cap = clampi(hoe.to_int(), 1, STREAM_TM_HANDOFF_MAX)
+		Settings.values["chunks_per_frame"] = clampi(
+			hoe.to_int(), Settings.CHUNKS_PER_FRAME_MIN, Settings.CHUNKS_PER_FRAME_MAX)
 	# AC-0152: harness band overrides (default 4/8 per Bedrock Realms).
 	var b0e := OS.get_environment("AWECRAFT_BAND0")
 	if b0e != "":
@@ -1674,6 +1681,13 @@ func threadmesh_poll() -> void:
 		if pf != _stream_ho_frame:
 			_stream_ho_frame = pf
 			_stream_ho_n = 0
+			# AC-0225: the burst follows the Options slider — read the
+			# Settings "chunks_per_frame" value (1-100) each process frame
+			# so a mid-session slider change lands the next frame. (The
+			# AWECRAFT_TM_HO env preloads this same setting at boot.)
+			stream_ho_cap = clampi(
+				int(Settings.values.get("chunks_per_frame", STREAM_TM_HANDOFF_PER_FRAME)),
+				Settings.CHUNKS_PER_FRAME_MIN, Settings.CHUNKS_PER_FRAME_MAX)
 	var hb_t0 := Time.get_ticks_usec() if timing else 0
 	var hb_n := 0
 	var found := true

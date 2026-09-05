@@ -5,6 +5,10 @@ const PATH := "user://awecraft.cfg"
 const RENDER_MIN := 4
 const RENDER_MAX := 96
 const SIM_MIN := 1
+# AC-0225: Options "Chunk meshes per frame" slider range — the per-frame
+# streaming handoff burst (the AC-0224 drain cap, world.gd stream_ho_cap).
+const CHUNKS_PER_FRAME_MIN := 1
+const CHUNKS_PER_FRAME_MAX := 100
 
 const DEFAULTS := {
 	"render_dist": 50,
@@ -17,6 +21,10 @@ const DEFAULTS := {
 	"hunger_enabled": true,
 	"debug_stats": false,
 	"flight_speed": 4,
+	# AC-0225: streaming chunk-mesh handoff burst per frame (the AC-0224
+	# drain cap); 3 = the shipped AC-0224 default, so the default is a
+	# no-behavior-change.
+	"chunks_per_frame": 3,
 }
 
 var values: Dictionary = {}
@@ -65,6 +73,8 @@ func _clamp(k: String, v) -> void:
 			values[k] = bool(v)
 		"flight_speed":
 			values[k] = clampi(int(v), 1, 50)
+		"chunks_per_frame":
+			values[k] = clampi(int(v), CHUNKS_PER_FRAME_MIN, CHUNKS_PER_FRAME_MAX)
 		"seed":
 			values[k] = int(v)
 		"resolution":

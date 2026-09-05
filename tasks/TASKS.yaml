@@ -3,7 +3,6 @@ meta:
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0225
 - AC-0226
 - AC-0227
 - AC-0229
@@ -7068,11 +7067,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-04T20:11
   updated_at: 2026-09-04T20:11
-  completed_at: null
+  completed_at: 2026-09-03T23:00
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player or dev I want a slider in Options to set how many chunk meshes are processed per frame
@@ -7087,6 +7086,10 @@ intake:
     created_at: 2026-09-04T20:11
     updated_at: null
     text: '[user] slider 1-100 per 2026-09-04'
+  - id: 2
+    created_at: '2026-09-03T23:00:00.000000'
+    updated_at: null
+    text: '[coordinator] DONE + SHIPPED 2026-09-03. Slider (GDScript, no C++ touched): Options Chunk-meshes-per-frame HSlider 1-100 + value label (menu.tscn ChunkRow); menu.gd _on_chunk_changed -> Settings.set_value(chunks_per_frame, int(v)) (saved to cfg, clamp 1-100, default 3 = shipped AC-0224 cap). world.gd drain reads the setting every process frame (stream_ho_cap); AWECRAFT_TM_HO now preloads the same setting (clamped 1-100, no save). Cap before->after: was const 3 (env 1-16). R16 ho_cap at slider 1/3/10/50/100 = 1/3/10/50/100 - exact match at every position; per-poll hb_max 64 still bounds bursts. Persist: settings arm (default 3, set 7->reloaded 7, 999->100, 0->1, ok:true) + cross-process: P1 wrote chunks_per_frame=7 to awecraft.cfg, fresh P2 process booted with 7 (OPTSYNC chunk=7, RESULT values 7); screenshot tasks/AC-0225/options-shot.png shows the slider at 7. R16 flying shows tuning: build all-meshed 37.2 s (cap 1) -> 13.5 s (3) -> ~13.1 s (10/50/100) - 2.8x faster, then C++-pipeline-bound; fly4 ho_max 1/3/5/5/4 (cap-bound at <=3, supply-limited above); static p95 fps 29->143; fly phases 0 lost chunks, recenter 9/27 identical to AC-0224. G0 exit 0, 0 SCRIPT ERROR (every run: 0; the is_inside_tree transient + exit RID leaks are pre-existing AC-0216/engine noise, present in AC-0040-era logs, not script errors). SMOKE player;interact;light;fluids all ok:true - light 15/0/14 (standing post-AC-0215 baseline; the prompt cave-10 was pre-AC-0215, superseded per 00z), sea 792/792 == AC-0224. No regression: chunkiocpp ok:true, md5 8a893557... byte-identical; genhash x2 25/25 identical == AC-0215 NEW baseline (diff clean); meshprobe/stripsprobe/pullprobe all 100% exact (match_rate 1.0, max_diff 0, 6.29M cells); nofallback ok:true (C++ lanes >0, GD sentinels 0). R50 + Windows build not run, per instruction. See tasks/AC-0225/AC-0225-results.html.'
 - id: AC-0226
   title: pull-fog-in-to-hide-pop-in-scales-with-render-distance
   source: user

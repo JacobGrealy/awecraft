@@ -836,6 +836,8 @@ class _StubWorld:
 	var band0_r := 0  # AC-0152: settings wiring target
 	func recenter(_x: float, _z: float) -> void:
 		pass
+	func note_render_distance(_prev: int) -> void:  # AC-0178 stub (AC-0225: keeps the arm's log SCRIPT-ERROR-free)
+		pass
 
 
 func _settings_test() -> void:
@@ -891,6 +893,20 @@ func _settings_test() -> void:
 	Settings.load_settings()
 	Settings.set_value("volume", 100)
 	Settings.reset_defaults()
+	# AC-0225: chunks_per_frame — default 3, range 1-100, save + reload
+	# (set_value writes the cfg, load_settings re-reads it from disk).
+	Settings.load_settings()
+	var chunks_default_ok := int(Settings.values["chunks_per_frame"]) == 3
+	Settings.set_value("chunks_per_frame", 7)
+	Settings.load_settings()
+	var chunks_saved_ok := int(Settings.values["chunks_per_frame"]) == 7
+	Settings.set_value("chunks_per_frame", 999)
+	var chunks_hi_ok := int(Settings.values["chunks_per_frame"]) == 100
+	Settings.set_value("chunks_per_frame", 0)
+	var chunks_lo_ok := int(Settings.values["chunks_per_frame"]) == 1
+	# Leave the file at 7 — the cross-process persist gate (a second
+	# process boot) reads it back.
+	Settings.set_value("chunks_per_frame", 7)
 	Debug.result({
 		"defaults": {"render": 50, "sim": 1, "ok": defaults_ok},
 		"range": {"min": 4, "max": 96, "min_ok": min_ok, "max_ok": max_ok},
@@ -899,7 +915,8 @@ func _settings_test() -> void:
 		"apply": {"world": [10, 160], "dist": [7, 48], "ok": apply_world_ok and apply_dist_ok},
 		"volume_ok": volume_ok,
 		"hunger": {"saved_off": hsaved, "reloaded_off": hunger_off_ok, "back_on": hunger_on_ok, "default_true": hunger_default_ok},
-		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok,
+		"chunks": {"default_3": chunks_default_ok, "set7_reloaded": chunks_saved_ok, "clamp_hi_100": chunks_hi_ok, "clamp_lo_1": chunks_lo_ok},
+		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok,
 	})
 
 
@@ -6989,6 +7006,9 @@ func _r16_test(spawn: Vector3) -> void:
 		"mode": "r16",
 		"seed": Game.world_seed,
 		"radius": rr,
+		# AC-0225: the handoff cap in force for this run (the
+		# "chunks_per_frame" setting / AWECRAFT_TM_HO preload).
+		"ho_cap": int(world.stream_ho_cap),
 		"ok": true,
 		"built": built_n,
 		"built_all": built_all,

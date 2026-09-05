@@ -27,10 +27,12 @@ var render_slider: HSlider
 var sim_slider: HSlider
 var volume_slider: HSlider
 var flight_slider: HSlider
+var chunk_slider: HSlider
 var render_val: Label
 var sim_val: Label
 var volume_val: Label
 var flight_val: Label
+var chunk_val: Label
 var res_option: OptionButton
 var full_check: CheckBox
 var hunger_check: CheckBox
@@ -69,6 +71,8 @@ func _ready() -> void:
 	sim_val = get_node("Layer/OptionsBox/Center/VBox/SimRow/SimVal")
 	volume_val = get_node("Layer/OptionsBox/Center/VBox/VolumeRow/VolumeVal")
 	flight_val = get_node("Layer/OptionsBox/Center/VBox/FlightRow/FlightVal")
+	chunk_slider = get_node("Layer/OptionsBox/Center/VBox/ChunkRow/ChunkSlider")
+	chunk_val = get_node("Layer/OptionsBox/Center/VBox/ChunkRow/ChunkVal")
 	res_option = get_node("Layer/OptionsBox/Center/VBox/ResRow/ResOption")
 	full_check = get_node("Layer/OptionsBox/Center/VBox/FullscreenCheck")
 	hunger_check = get_node("Layer/OptionsBox/Center/VBox/HungerCheck")
@@ -138,7 +142,7 @@ func open_options(source: String) -> void:
 	_sync_controls()
 	_apply_state()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	print("OPTSYNC from=%s render=%d sim=%d vol=%d res=%s full=%s hunger=%s stats=%s" % [
+	print("OPTSYNC from=%s render=%d sim=%d vol=%d res=%s full=%s hunger=%s stats=%s chunk=%d" % [
 		source,
 		int(Settings.values["render_dist"]),
 		int(Settings.values["sim_dist"]),
@@ -147,6 +151,7 @@ func open_options(source: String) -> void:
 		bool(Settings.values["fullscreen"]),
 		bool(Settings.values["hunger_enabled"]),
 		bool(Settings.values["debug_stats"]),
+		int(Settings.values.get("chunks_per_frame", 3)),
 	])
 
 
@@ -273,10 +278,12 @@ func _sync_controls() -> void:
 	sim_slider.value = float(int(Settings.values["sim_dist"]))
 	volume_slider.value = float(int(Settings.values["volume"]))
 	flight_slider.value = float(int(Settings.values.get("flight_speed", 4)))
+	chunk_slider.value = float(int(Settings.values.get("chunks_per_frame", 3)))
 	render_val.text = str(int(render_slider.value))
 	sim_val.text = str(int(sim_slider.value))
 	volume_val.text = str(int(volume_slider.value))
 	flight_val.text = str(int(flight_slider.value)) + "x"
+	chunk_val.text = str(int(chunk_slider.value))
 	res_option.clear()
 	for m in RES_MODES:
 		res_option.add_item(m)
@@ -338,6 +345,16 @@ func _on_flight_changed(v: float) -> void:
 		return
 	flight_val.text = str(int(v)) + "x"
 	Settings.set_value("flight_speed", int(v))
+
+
+# AC-0225: the per-frame streaming chunk-mesh handoff burst (the AC-0224
+# drain cap). world.gd's drain reads Settings "chunks_per_frame" every
+# process frame, so saving it here is the whole apply — no extra call.
+func _on_chunk_changed(v: float) -> void:
+	if _syncing:
+		return
+	chunk_val.text = str(int(v))
+	Settings.set_value("chunks_per_frame", int(v))
 
 
 func _on_res_selected(i: int) -> void:

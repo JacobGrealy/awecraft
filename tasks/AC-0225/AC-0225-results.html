@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>AC-0225 results — configurable chunk meshes per frame slider (1-100)</title>
+<style>
+body{font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;margin:24px;max-width:1050px}
+h1{font-size:22px} h2{font-size:17px;margin-top:28px;border-bottom:2px solid #444;padding-bottom:4px}
+table{border-collapse:collapse;width:100%;margin:10px 0}
+th,td{border:1px solid #999;padding:4px 8px;text-align:left;font-size:13px}
+th{background:#eee}
+.ok{color:#0a7d2c;font-weight:700} .bad{color:#c01c28;font-weight:700}
+code{background:#f0f0f0;padding:1px 4px;border-radius:3px;font-size:12.5px}
+pre{background:#1e1e1e;color:#d4d4d4;padding:10px;border-radius:6px;overflow-x:auto;font-size:12px}
+img{max-width:100%;border:1px solid #999;margin:8px 0}
+</style></head>
+<body>
+<h1>AC-0225 — configurable-chunks-mesh-per-frame-slider-1-to-100</h1>
+<p><b>What it does:</b> a new Options slider <b>“Chunk meshes per frame”</b> (HSlider 1–100, label + value readout,
+between Flight speed and Resolution) sets <code>Settings.chunks_per_frame</code> (default 3 = the shipped AC-0224 cap,
+clamped 1–100, saved to <code>user://awecraft.cfg</code>). The AC-0224 drain cap (<code>world.gd stream_ho_cap</code>)
+now reads that setting <b>every process frame</b> in <code>threadmesh_poll</code>, so a mid-session slider change lands
+next frame. The <code>AWECRAFT_TM_HO</code> harness env still works — it now preloads the same setting at boot
+(clamped 1–100, no save, so the harness never clobbers the user cfg). Higher slider = more chunk meshes hand off per
+frame = chunks appear faster while flying; lower = smoother frame times.</p>
+<p><b>Files:</b> <code>godot/autoload/settings.gd</code> (setting + clamp + save), <code>godot/scenes/menu.tscn</code>
+(ChunkRow: label + HSlider 1–100 + value), <code>godot/ui/menu.gd</code> (node refs, sync, <code>_on_chunk_changed</code>
+handler, OPTSYNC line), <code>godot/world/world.gd</code> (per-frame cap read; env preloads setting),
+<code>godot/scenes/main.gd</code> (settings-test chunks block; R16 <code>ho_cap</code> field; <code>_StubWorld</code>
+no-op <code>note_render_distance</code> — pre-existing SCRIPT-ERROR fix in the test stub), <code>tasks/HARNESS.md</code>
+(env-knob + r16 field docs). GDScript only — no C++ touched, no rebuild.</p>
+
+<h2>Gates</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>evidence</th></tr>
+<tr><td>G0 headless load</td><td class="ok">PASS — exit 0, 0 SCRIPT ERROR</td><td><code>.scratch/AC-0225-gates/G0.log</code></td></tr>
+<tr><td>Settings arm (default 3, clamp 1/100, save+reload 7)</td><td class="ok">PASS — ok:true, chunks all true</td><td><code>settings.log</code>: <code>"chunks":{"clamp_hi_100":true,"clamp_lo_1":true,"default_3":true,"set7_reloaded":true}</code></td></tr>
+<tr><td>Persist cross-process</td><td class="ok">PASS</td><td>P1 (settings arm, persistent HOME) wrote <code>chunks_per_frame=7</code> to <code>awecraft.cfg</code>; P2 (fresh process, same HOME) booted with <code>values.chunks_per_frame=7</code> + <code>OPTSYNC … chunk=7</code>. Screenshot: <code>options-shot.png</code></td></tr>
+<tr><td>SMOKE <code>player;interact;light;fluids</code></td><td class="ok">PASS — all ok:true</td><td><code>SMOKE.log</code>: battery ok:true (total 165.7 s); light surface 15 / cave 0 / torch 14 (the standing post-AC-0215 baseline — the pre-AC-0215 “cave 10” was superseded at the terrain change); sea 792/792, backed 173/173 — identical to AC-0224 SMOKE</td></tr>
+<tr><td>chunkiocpp byte-identical</td><td class="ok">PASS</td><td>ok:true, <code>md5_cpp == md5_orig = 8a893557900a462fe4ab1c91f8589081</code> (the standing md5)</td></tr>
+<tr><td>genhash x2</td><td class="ok">PASS — deterministic, == AC-0215 NEW baseline</td><td>25/25 GENHASH lines; run1 == run2 (diff clean); both == <code>.scratch/AC-0215-gates/genhash1.log</code> (NOT the AC-0188 baseline)</td></tr>
+<tr><td>meshprobe</td><td class="ok">PASS — 100% exact</td><td>ok:true, match_rate 1.0, 32/32 chunks, verts_cpp == verts_gd (234368)</td></tr>
+<tr><td>stripsprobe</td><td class="ok">PASS — 100% exact</td><td>ok:true, match_rate 1.0, face_rate 1.0, 32/32 chunks, mismatch []</td></tr>
+<tr><td>pullprobe</td><td class="ok">PASS — 100% exact</td><td>ok:true, match_rate 1.0, max_diff 0 over 6,291,456 cells, 64/64 variants</td></tr>
+<tr><td>nofallback</td><td class="ok">PASS — ok:true</td><td>all five C++ counters &gt; 0 (mesh 94, strips 332, gen 70, io 2 decodes), both GD sentinels 0, torch placed + lit, roundtrip ok</td></tr>
+</table>
+
+<h2>Slider → handoff cap (R16 arm, <code>ho_cap</code> = the cap in force)</h2>
+<p>R16 RESULT now reports <code>ho_cap</code> (the <code>stream_ho_cap</code> value driving the drain). Five runs with
+the setting at 1 / 3 / 10 / 50 / 100 (via the <code>AWECRAFT_TM_HO</code> preload of the same setting):</p>
+<table>
+<tr><th>slider value</th><th><code>ho_cap</code> (cap in force)</th><th>cap matches slider</th><th>r16 build all-meshed</th><th>build wall (mesh phase)</th></tr>
+<tr><td>1</td><td>1</td><td class="ok">YES</td><td>true</td><td>37.2 s</td></tr>
+<tr><td>3 (default)</td><td>3</td><td class="ok">YES</td><td>true</td><td>13.5 s</td></tr>
+<tr><td>10</td><td>10</td><td class="ok">YES</td><td>true</td><td>13.3 s</td></tr>
+<tr><td>50</td><td>50</td><td class="ok">YES</td><td>true</td><td>13.1 s</td></tr>
+<tr><td>100</td><td>100</td><td class="ok">YES</td><td>true</td><td>13.1 s</td></tr>
+</table>
+<p>Before AC-0225 the cap was the const 3 (env-tunable only, clamped 1–16); now the slider value 1/3/10/50/100 drives the
+cap exactly at every position. The per-poll <code>hb_max</code> 64 still bounds any single poll, so cap 100 never
+re-creates the recenter-burst regime.</p>
+
+<h2>R16 flying shows tuning (per-frame CPU → fps)</h2>
+<table>
+<tr><th>slider</th><th>build wall</th><th>static p95 fps</th><th>moving p95 fps</th><th>fly4 ho_max (handoffs/frame actually landed)</th><th>fly4 ahead-while-moving chunks</th><th>fly50 ho_max</th></tr>
+<tr><td>1</td><td>37.2 s</td><td class="bad">29</td><td>143</td><td>1 (cap-bound)</td><td>279</td><td>1</td></tr>
+<tr><td>3</td><td>13.5 s</td><td>143</td><td>77 (transient)</td><td>3 (cap-bound)</td><td>279</td><td>3</td></tr>
+<tr><td>10</td><td>13.3 s</td><td>143</td><td>143</td><td>5 (supply-limited)</td><td>279</td><td>4</td></tr>
+<tr><td>50</td><td>13.1 s</td><td>143</td><td>143</td><td>5 (supply-limited)</td><td>279</td><td>5</td></tr>
+<tr><td>100</td><td>13.1 s</td><td>143</td><td>143</td><td>4 (supply-limited)</td><td>279</td><td>4</td></tr>
+</table>
+<p>Reading: <b>higher slider → chunks appear faster</b> — the r16 all-meshed build collapses 37.2 s → 13.5 s (2.8×)
+going 1→3, then hits the C++ build-pipeline ceiling (≈13 s at 10/50/100); at cap 1 and 3 the cap is the binding
+constraint (ho_max == cap), above that the worker feed (~5 ready meshes/frame) is. The low-cap cost is visible in the
+frames: at cap 1 the drain tail still streams during the static phase (p95 29 fps, max frame 57 ms) vs 143 fps / 20 ms
+at cap ≥10 — the smoothness side of the knob. fps_p50 is 200 (uncapped <code>--fixed-fps 600</code> headroom) in all
+runs; queue depth (136/65) and ahead-while-moving (279/58) are cap-independent — the cap paces <i>when</i> ready meshes
+land, never <i>how many</i> build. Fly-phase inner fps (the actual flying frames): fly4 p95 59/63/59/63/63 and
+fly50 p95 40/42/42/42/42 (cap 1/3/10/50/100) — no lost chunks (0/0) and identical recenter counts (9/27) at every
+cap, matching AC-0224's fly-phase numbers (63/40): the cap changes landing pace, not worst-case flight fps.
+All five runs: 0 SCRIPT ERROR.</p>
+<p><b>Log noise (pre-existing, not from this change, not SCRIPT ERRORs):</b> the headless build phase prints the
+AC-0216 throwaway-camera engine transient (<code>Condition "!is_inside_tree()"</code> at
+<code>_cull_frustum_planes</code> ← <code>_gen_skip_flag</code>, present in AC-0040-era probe logs with the same
+backtrace) and exit prints <code>RID allocations / ObjectDB instances … leaked at exit</code> (also in AC-0040-era
+logs). The G0 contract is zero <code>SCRIPT ERROR</code> lines — every AC-0225 run has exactly 0.</p>
+
+<h2>Log index</h2>
+<p>All under <code>godot/.scratch/AC-0225-gates/</code>: G0.log, settings.log, persist1-settings.log,
+persist2-menu.log (+ <code>tasks/AC-0225/options-shot.png</code>), SMOKE.log, genhash1.log, genhash2.log,
+chunkiocpp.log, meshprobe.log, stripsprobe.log, pullprobe.log, nofallback.log, r16_ho1.log, r16_ho3.log,
+r16_ho10.log, r16_ho50.log, r16_ho100.log.</p>
+</body></html>
