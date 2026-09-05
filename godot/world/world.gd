@@ -56,6 +56,27 @@ const LOAD_TM_HANDOFF := 6
 # preloads that same setting at boot (clamped 1..100, no save) so the
 # harness can A/B it.
 const STREAM_TM_HANDOFF_PER_FRAME := 3
+# AC-0229: dynamic per-frame streaming budget — the AC-0225 slider value is
+# the BASE burst; the effective cap is base x speed_factor x radius_factor,
+# clamped to the slider range (1-100). Higher when moving fast or at a
+# large render, lower when still:
+#  - speed_factor: the player's horizontal speed (m/s) vs the WALK
+#    reference (player.gd WALK = 4.3). Still (< 0.5 m/s) -> 0.5; walking
+#    (4.3) -> 1.0 (the AC-0225 behavior is a no-op at the reference
+#    point, so the standing R16-walking p95 gate is untouched); 50x
+#    flight (215 m/s) saturates the 12.0 max.
+#  - radius_factor: the ahead ring widens ~linearly with R (~14 new
+#    chunks per chunk moved at R16, ~32 at R50). R/16 clamped to
+#    [1.0, 2.0] — R16 and below keep 1.0 (every r4 harness arm is
+#    unchanged), R32+ saturates at 2.0.
+#  Combined reference points (base = 3 default): R16 still -> 2, R16 walk
+#  -> 3 (AC-0225), R16 50x fly -> 36, R50 still -> 3 (the AC-0224/0227
+#  R50-drain profile is untouched), R50 walk -> 6, R50 50x fly -> 72.
+const DYN_SPEED_WALK := 4.3
+const DYN_SPEED_FACTOR_STILL := 0.5
+const DYN_SPEED_FACTOR_MAX := 12.0
+const DYN_RADIUS_REF := 16
+const DYN_RADIUS_FACTOR_MAX := 2.0
 const LOAD_POOL_CAP := 24
 # AC-0178: flush/tex remesh caps while loading — 6 (was 16): each dispatch
 # is ~45 ms of main-thread strip work, 16/frame = 0.7 s of one frame.
@@ -469,6 +490,17 @@ var _stream_ho_n := 0
 # the Settings "chunks_per_frame" value — the Options slider; _ready
 # preloads that setting from AWECRAFT_TM_HO when set for the harness).
 var stream_ho_cap := STREAM_TM_HANDOFF_PER_FRAME
+# AC-0229: dynamic-budget state — the player's smoothed horizontal speed
+# (m/s) + the previous position sample. Sampled once per process frame in
+# the threadmesh_poll per-frame branch (the _stream_ho_frame guard), from
+# the player's POSITION delta — not player.velocity, which is input-driven
+# (lerped toward the held keys) and stays ~0 while a harness fly phase
+# teleports player.position directly. _dyn_have_prev false = no sample yet
+# (player absent) -> speed 0 = the still factor.
+var _dyn_speed := 0.0
+var _dyn_prev_pos := Vector2.ZERO
+var _dyn_prev_t := 0
+var _dyn_have_prev := false
 var perf_build_worker_ms := 0
 var perf_build_worker_ms_list: Array = []  # AC-0197: per-build worker ms (p50/p95 gate)
 var col_stage_enabled := true
@@ -1642,6 +1674,38 @@ func _tm_worker_run(skey: int) -> void:
 	else:
 		entry["result"] = res
 
+# AC-0229: the speed factor — 0.5 while still (< 0.5 m/s), 1.0 at the
+# WALK reference (4.3 m/s, the AC-0225 no-op point), saturating at 12.0
+# (50x flight = 215 m/s is far past the knee).
+func _dyn_speed_factor() -> float:
+	if _dyn_speed < 0.5:
+		return DYN_SPEED_FACTOR_STILL
+	return clampf(_dyn_speed / DYN_SPEED_WALK, DYN_SPEED_FACTOR_STILL, DYN_SPEED_FACTOR_MAX)
+
+
+# AC-0229: the radius factor — R/16 clamped to [1.0, 2.0] (the ahead-ring
+# width ratio, R50/R16 ~ 32/14). r4 harness arms and R16 keep 1.0.
+func _dyn_radius_factor() -> float:
+	return clampf(float(render_radius) / float(DYN_RADIUS_REF), 1.0, DYN_RADIUS_FACTOR_MAX)
+
+
+# AC-0229: the dynamic-budget decomposition (harness evidence — the r16
+# and perf arms report it; base = the slider value in force, cap = the
+# effective per-frame burst the threadmesh_poll gate uses).
+func stream_ho_dyn() -> Dictionary:
+	var base := clampi(
+		int(Settings.values.get("chunks_per_frame", STREAM_TM_HANDOFF_PER_FRAME)),
+		Settings.CHUNKS_PER_FRAME_MIN, Settings.CHUNKS_PER_FRAME_MAX)
+	return {
+		"base": base,
+		"speed_mps": roundf(_dyn_speed * 10.0) / 10.0,
+		"speed_factor": roundf(_dyn_speed_factor() * 1000.0) / 1000.0,
+		"radius": int(render_radius),
+		"radius_factor": roundf(_dyn_radius_factor() * 1000.0) / 1000.0,
+		"cap": int(stream_ho_cap),
+	}
+
+
 func threadmesh_poll() -> void:
 	if threadmesh_inflight.is_empty():
 		return
@@ -1681,12 +1745,38 @@ func threadmesh_poll() -> void:
 		if pf != _stream_ho_frame:
 			_stream_ho_frame = pf
 			_stream_ho_n = 0
-			# AC-0225: the burst follows the Options slider — read the
-			# Settings "chunks_per_frame" value (1-100) each process frame
-			# so a mid-session slider change lands the next frame. (The
-			# AWECRAFT_TM_HO env preloads this same setting at boot.)
-			stream_ho_cap = clampi(
+			# AC-0225: the slider value (1-100) is the BASE burst — read it
+			# each process frame so a mid-session slider change lands the
+			# next frame (the AWECRAFT_TM_HO env preloads this same setting
+			# at boot). AC-0229: scale the base by the player's speed and
+			# the render radius (see the DYN_* constants) — higher when
+			# moving fast or at a large render, lower when still. The
+			# effective cap stays inside the slider range, so the slider
+			# still bounds the burst from above.
+			var base := clampi(
 				int(Settings.values.get("chunks_per_frame", STREAM_TM_HANDOFF_PER_FRAME)),
+				Settings.CHUNKS_PER_FRAME_MIN, Settings.CHUNKS_PER_FRAME_MAX)
+			var dp = Game.player  # untyped: Game.player has no declared type
+			if dp != null:
+				var pnow := Vector2(float(dp.position.x), float(dp.position.z))
+				if _dyn_have_prev:
+					var dtm := (float(Time.get_ticks_usec()) - float(_dyn_prev_t)) / 1000000.0
+					if dtm > 0.0:
+						var inst := pnow.distance_to(_dyn_prev_pos) / dtm
+						# Smoothed: a 0.3 lerp converges in ~10 frames
+						# (200 ms at 60 fps) and returns the cap to the
+						# still level ~250 ms after the player stops.
+						_dyn_speed = lerpf(_dyn_speed, inst, 0.3)
+				_dyn_prev_pos = pnow
+				_dyn_prev_t = Time.get_ticks_usec()
+				_dyn_have_prev = true
+			else:
+				# No player (build phase, the perf R50 arm, menu) = the
+				# still behavior.
+				_dyn_have_prev = false
+				_dyn_speed = 0.0
+			stream_ho_cap = clampi(
+				roundi(float(base) * _dyn_speed_factor() * _dyn_radius_factor()),
 				Settings.CHUNKS_PER_FRAME_MIN, Settings.CHUNKS_PER_FRAME_MAX)
 	var hb_t0 := Time.get_ticks_usec() if timing else 0
 	var hb_n := 0

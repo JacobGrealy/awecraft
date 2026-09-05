@@ -7041,6 +7041,10 @@ func _r16_test(spawn: Vector3) -> void:
 		# AC-0225: the handoff cap in force for this run (the
 		# "chunks_per_frame" setting / AWECRAFT_TM_HO preload).
 		"ho_cap": int(world.stream_ho_cap),
+		# AC-0229: the dynamic budget decomposition at arm end (base = the
+		# slider value; cap = base x speed_factor x radius_factor, clamped
+		# 1-100 — the arm ends still, so the speed factor is the 0.5 still).
+		"ho_dyn": world.stream_ho_dyn(),
 		"ok": true,
 		"built": built_n,
 		"built_all": built_all,
@@ -7150,6 +7154,10 @@ func _r16_stats(ms_list: Array) -> Dictionary:
 #  - rebuilds        : built->unbuilt transitions seen (reband swaps; info)
 #  - ho_max          : max streaming handoffs in one frame (the AC-0219
 #                      cap; AC-0224 default burst = 3, AWECRAFT_TM_HO)
+#  - ho_cap_max      : AC-0229 — the max EFFECTIVE handoff cap observed in
+#                      the phase (the dynamic budget base x speed_factor x
+#                      radius_factor; ~36 at R16 50x flight with the
+#                      default slider base 3, vs the fixed 3 pre-AC-0229)
 func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 	var n_frames := int(seconds * 600.0)
 	var speed := 4.3 * float(mult)  # player.WALK * flight_speed multiplier
@@ -7166,6 +7174,7 @@ func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 	var last_pcx := int(world.last_pcx)
 	var last_pcz := int(world.last_pcz)
 	var ho_max := 0
+	var ho_cap_max := 0  # AC-0229: the dynamic cap in force (peak, m/s-driven)
 	var ahead_while_moving := 0
 	var ahead_max_dist_m := 0.0
 	var rebuilds := 0
@@ -7188,6 +7197,7 @@ func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 		ms_list.append(Time.get_ticks_msec() - fb)
 		queue_max = maxi(queue_max, int(world.queue_size))
 		ho_max = maxi(ho_max, int(world._stream_ho_n))
+		ho_cap_max = maxi(ho_cap_max, int(world.stream_ho_cap))
 		if int(world.last_pcx) != last_pcx or int(world.last_pcz) != last_pcz:
 			rec_n += 1
 			last_pcx = int(world.last_pcx)
@@ -7236,6 +7246,7 @@ func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 		"lost_chunks": lost,
 		"rebuilds": rebuilds,
 		"ho_max": ho_max,
+		"ho_cap_max": ho_cap_max,
 		"fps": _r16_stats(ms_list),
 	}
 
@@ -10970,6 +10981,12 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> v
 		"fog_ok": DayNight.fog_far(rr) < edge,
 		"total_chunks": world.chunks.size(),
 		"all_meshed": all,
+		# AC-0229: the dynamic handoff budget at drain end (the perf arm has
+		# no player -> speed 0 = the 0.5 still factor: cap = base x 0.5 x
+		# radius_factor; at R50 default base 3 that is exactly 3 — the
+		# AC-0224/0227 drain profile, untouched by the dynamic scaling).
+		"ho_cap": int(world.stream_ho_cap),
+		"ho_dyn": world.stream_ho_dyn(),
 		"collision_shapes": shapes,
 		"total_ms": total_ms,
 		"frames": frames,
@@ -13067,6 +13084,7 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 	var light_comp_cross: Array = []
 	var light_batch_cross: Array = []
 	var _framelog := OS.get_environment("AWECRAFT_FRAMELOG") == "1"
+	var _walklog := OS.get_environment("AWECRAFT_WALKLOG") == "1"  # AC-0229 debug
 	while crossings < walk_lines and walk_frames < walk_max_frames:
 		var fb := Time.get_ticks_msec()
 		await get_tree().physics_frame
@@ -13172,6 +13190,13 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		prev_t = fe
 		p.position.x += walk_speed * dt
 		p.velocity = Vector3.ZERO
+		# AC-0229 debug (env-gated): per-120-frame walk telemetry — the dt the
+		# arm applied, the resulting position, and the measured ground speed.
+		if _walklog and walk_frames % 120 == 0:
+			print("WLOG f=%d t=%.0f dt=%.4f pos=(%.1f,%.1f,%.1f) v=%.2f m/s" % [
+				walk_frames, (fe - t_walk0) / 1000.0, dt,
+				p.position.x, p.position.y, p.position.z,
+				(p.position.x - 8.0) / maxf((fe - t_walk0) / 1000.0, 0.001)])
 
 	var settle_frames := 0
 	var settle_max := 1200
