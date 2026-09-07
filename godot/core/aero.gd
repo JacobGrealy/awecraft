@@ -61,16 +61,48 @@ static func sky_on() -> bool:
 	return OS.get_environment("AWECRAFT_AERO_SKY") != "0"
 
 
+# AC-0241 follow-up: env A/B overrides for the grade (Forward+ executes
+# the same parameters differently than gl_compatibility - glow especially);
+# each AWECRAFT_GRADE_* var replaces its constant for one launch.
+static func _envf(key: String, d: float) -> float:
+	var v := OS.get_environment(key)
+	return d if v == "" else v.to_float()
+
+
+static func glow_strength() -> float:
+	return _envf("AWECRAFT_GRADE_GLOW", GLOW_STRENGTH)
+
+
+static func glow_bloom() -> float:
+	return _envf("AWECRAFT_GRADE_BLOOM", GLOW_BLOOM)
+
+
+static func glow_threshold() -> float:
+	return _envf("AWECRAFT_GRADE_GLOWTHRESH", GLOW_THRESHOLD)
+
+
+static func tone_exposure() -> float:
+	return _envf("AWECRAFT_GRADE_EXPOSURE", EXPOSURE)
+
+
+static func adj_saturation() -> float:
+	return _envf("AWECRAFT_GRADE_SAT", ADJ_SATURATION)
+
+
+static func adj_contrast() -> float:
+	return _envf("AWECRAFT_GRADE_CONTRAST", ADJ_CONTRAST)
+
+
 static func apply_grade(env: Environment) -> void:
 	env.glow_enabled = GLOW_ENABLED
-	env.glow_strength = GLOW_STRENGTH
-	env.glow_bloom = GLOW_BLOOM
-	env.glow_hdr_threshold = GLOW_THRESHOLD
+	env.glow_strength = glow_strength()
+	env.glow_bloom = glow_bloom()
+	env.glow_hdr_threshold = glow_threshold()
 	env.tonemap_mode = TONEMAP_MODE
-	env.tonemap_exposure = EXPOSURE
+	env.tonemap_exposure = tone_exposure()
 	env.adjustment_enabled = true
-	env.adjustment_saturation = ADJ_SATURATION
-	env.adjustment_contrast = ADJ_CONTRAST
+	env.adjustment_saturation = adj_saturation()
+	env.adjustment_contrast = adj_contrast()
 
 
 static func sky_uniforms(t: float) -> Dictionary:
