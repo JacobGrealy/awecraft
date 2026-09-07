@@ -137,6 +137,9 @@ func apply_world() -> void:
 		# AC-0152: the tick diamond follows Simulate (chunks); fluid_tick_radius
 		# (blocks) stays for the legacy mapping.
 		Game.world.band0_r = mini(int(values["sim_dist"]), int(values["render_dist"]))
+		# AC-0239: the sim radius is the streaming tier-1 boundary - re-stamp.
+		if Game.world.has_method("note_sim_distance"):
+			Game.world.note_sim_distance()
 
 
 func apply_render_distance() -> void:
@@ -152,3 +155,7 @@ func apply_sim_distance() -> void:
 	if Game.world != null:
 		Game.world.fluid_tick_radius = int(values["sim_dist"]) * 16
 		Game.world.band0_r = mini(int(values["sim_dist"]), int(values["render_dist"]))
+		# AC-0239: the sim radius is the streaming tier-1 boundary - re-stamp
+		# the tier order (the has_method guard keeps the _StubWorld arm clean).
+		if Game.world.has_method("note_sim_distance"):
+			Game.world.note_sim_distance()

@@ -3,7 +3,6 @@ meta:
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0239
 - AC-0087
 - AC-0235
 - AC-0175
@@ -7934,11 +7933,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-07T08:40
   updated_at: 2026-09-07T08:40
-  completed_at: null
+  completed_at: 2026-09-07T16:50:00.000000
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want the world around me - in every direction, not just in front of my view - to be
@@ -7973,6 +7972,10 @@ intake:
       own surround; add a simulation-distance tier ahead of the cone. The sim_dist Options slider already exists (default
       4, currently drives fluid_tick_radius + band0_r only) - this task extends it to the streaming tier priority. Queue position:
       after AC-0238 (window-masked-light).'
+  - id: 2
+    author: agent
+    text: >
+
 - id: AC-0240
   title: fog-wave-disable
   source: user

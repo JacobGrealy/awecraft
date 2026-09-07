@@ -404,21 +404,25 @@ func _pool_key(maxb: int) -> String:
 	# look only moves in ~10 deg snaps (the _look_dir refresh gate), so a
 	# key hit means no rescan: the waiting parts are rewritten only on a
 	# column cross (pcx/pcz), a ~10 deg turn, a yaw snap, or a pool change.
-	return "%d_%d_%d_%d_%d_%d_%d" % [
+	return "%d_%d_%d_%d_%d_%d_%d_%d" % [
 		_pool_ver,
 		int(roundf(_look_dir.x * 100.0)), int(roundf(_look_dir.y * 100.0)),
 		maxb, 1 if _spawn_fast else 0,
 		last_pcx, last_pcz,
+		band0_r,  # AC-0239: the sim radius is the tier-1 boundary
 	]
 
-# AC-0233: the 4-tier priority of a waiting entry (dx,dz = offset from the
-# player's column). 0 = the chunk under the player (built first — fall
-# through never), 1 = the ring1 8 neighbors, 2 = the FOV cone (ordered by
-# taxi distance), 3 = the rest (ordered by distance).
+# AC-0233 4-tier priority of a waiting entry (dx,dz = offset from the
+# player's column); AC-0239: tier 1 is the SIMULATION RADIUS (Chebyshev
+# <= band0_r = the sim_dist slider, the same square the collision band 0
+# and the fluid sim use) instead of the 8 ring-1 neighbors - the whole
+# surround fills before the cone, so a turn / sideways walk never shows
+# load-in next to the player. 0 = under (built first), 1 = sim radius,
+# 2 = the FOV cone (taxi-ordered, outside the sim circle), 3 = the rest.
 func _tier_of(dx: int, dz: int) -> int:
 	if dx == 0 and dz == 0:
 		return 0
-	if maxi(absi(dx), absi(dz)) == 1:
+	if maxi(absi(dx), absi(dz)) <= band0_r:
 		return 1
 	var tx := float(dx) * 16.0
 	var tz := float(dz) * 16.0
@@ -430,8 +434,8 @@ func _tier_of(dx: int, dz: int) -> int:
 func _tier_score(e: Dictionary) -> float:
 	var dx := int(e["cx"]) - last_pcx
 	var dz := int(e["cz"]) - last_pcz
-	# AC-0233: LEXICOGRAPHIC (tier, taxi) — the spec's "Tier order: 0 under,
-	# 1 ring1 8, 2 cone ..., 3 rest" is a STRICT primary order: every tier-N
+	# AC-0233 LEXICOGRAPHIC (tier, taxi); AC-0239 tier order: 0 under, 1 sim
+	# radius, 2 cone, 3 rest. A STRICT primary order: every tier-N
 	# entry sorts before every tier-(N+1) entry, and taxi breaks ties WITHIN
 	# a tier (max render-radius taxi at R50 is ~110, so 10000 leaves room).
 	# The earlier tier + taxi*0.1 blend let a near tier-3 outrank a far
@@ -454,6 +458,12 @@ func _tier_stamp(e: Dictionary) -> void:
 # the pass (amortized, RESCORE_PER_FRAME stamps per drain step). The
 # rewrite only re-stamps queued entries — it NEVER touches the ThreadGen
 # pool4 / ThreadMesh pool6 in-flight work.
+# AC-0239: the sim radius (band0_r) is part of the tier order - a slider
+# move re-stamps the queue (Settings.apply_sim_distance / apply_world
+# call this; mirrors the apply_render_distance kick path).
+func note_sim_distance() -> void:
+	_rescore_kick()
+
 func _rescore_kick() -> void:
 	_rescore_ver += 1
 	_rescore_due = true
@@ -2800,6 +2810,7 @@ func _ready() -> void:
 	var b0e := OS.get_environment("AWECRAFT_BAND0")
 	if b0e != "":
 		band0_r = maxi(0, b0e.to_int())
+		_rescore_kick()  # AC-0239: band0_r is the tier-1 boundary
 	var b1e := OS.get_environment("AWECRAFT_BAND1")
 	if b1e != "":
 		band1_r = maxi(0, b1e.to_int())

@@ -842,10 +842,13 @@ class _StubWorld:
 	var render_radius := 0
 	var fluid_tick_radius := 0
 	var band0_r := 0  # AC-0152: settings wiring target
+	var sim_kicks := 0  # AC-0239: apply_sim_distance must re-stamp the tiers
 	func recenter(_x: float, _z: float) -> void:
 		pass
 	func note_render_distance(_prev: int) -> void:  # AC-0178 stub (AC-0225: keeps the arm's log SCRIPT-ERROR-free)
 		pass
+	func note_sim_distance() -> void:  # AC-0239 stub
+		sim_kicks += 1
 
 
 func _settings_test() -> void:
@@ -874,12 +877,12 @@ func _settings_test() -> void:
 	var w := _StubWorld.new()
 	Game.world = w
 	Settings.apply_world()
-	var apply_world_ok := w.render_radius == 10 and w.fluid_tick_radius == 160
+	var apply_world_ok := w.render_radius == 10 and w.fluid_tick_radius == 160 and w.band0_r == 10
 	Settings.set_value("render_dist", 7)
 	Settings.set_value("sim_dist", 3)
 	Settings.apply_render_distance()
 	Settings.apply_sim_distance()
-	var apply_dist_ok := w.render_radius == 7 and w.fluid_tick_radius == 48
+	var apply_dist_ok := w.render_radius == 7 and w.fluid_tick_radius == 48 and w.band0_r == 3 and w.sim_kicks >= 1
 	Game.world = null
 	Settings.set_value("volume", 37)
 	Settings.load_settings()
@@ -928,7 +931,7 @@ func _settings_test() -> void:
 	# Leave the fog setting at its default.
 	Settings.set_value("fog_start_pct", 87)
 	Debug.result({
-		"defaults": {"render": 50, "sim": 1, "ok": defaults_ok},
+		"defaults": {"render": 50, "sim": 4, "ok": defaults_ok},  # AC-0152 default is 4 (the 1 literal was pre-AC-0152)
 		"range": {"min": 4, "max": 96, "min_ok": min_ok, "max_ok": max_ok},
 		"sim_clamp": {"set_ok": sim_set_ok, "render_lower_8to4": sim_lower_ok, "sim_raise_9at5": sim_raise_ok},
 		"load_clamp": {"saved": [10, 20], "after_load": [10, 10], "ok": load_clamp_ok},
