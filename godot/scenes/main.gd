@@ -1153,6 +1153,12 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			player = _spawn_player()
 			await _player_logic_test()
 			return
+		if logic == "gamepad":
+			world.recenter(spawn.x, spawn.z, true)
+			await _await_spawn_floor(spawn, 300)
+			player = _spawn_player()
+			await _gamepad_test(spawn)
+			return
 		if logic == "look":
 			world.recenter(spawn.x, spawn.z, true)
 			player = _spawn_player()
@@ -2286,6 +2292,234 @@ func _player_logic_test_body() -> void:
 		"time_before": time_before,
 		"time_after": time_after,
 	})
+
+
+# AC-0087: Bedrock gamepad core - the controller is SIMULATED through the
+# Input API (synthetic JoypadButton/Motion events + the action state they
+# drive), so the arm is headless-safe and needs no physical pad. Covers the
+# minecraft.wiki Controls#Controller mapping: left stick move, right stick
+# look, RT attack, LT use/place, A jump, LB/RB hotbar, Y/X inventory +
+# crafting, B cancel, START pause, and D-pad/A menu navigation.
+func _pad_btn(idx: int, pressed: bool) -> InputEventJoypadButton:
+	var b := InputEventJoypadButton.new()
+	b.device = 0
+	b.button_index = idx
+	b.pressed = pressed
+	return b
+
+
+func _gamepad_test(spawn: Vector3) -> void:
+	var p = Game.player
+	for i in 10:
+		await get_tree().physics_frame
+	# InputMap wiring evidence: the actions carry the joypad events.
+	var jump_has_pad := false
+	for e in InputMap.action_get_events("jump"):
+		if e is InputEventJoypadButton and e.button_index == 0:
+			jump_has_pad = true
+	var move_has_pad := false
+	for e in InputMap.action_get_events("move_forward"):
+		if e is InputEventJoypadMotion:
+			move_has_pad = true
+	# 1) Left stick: the axis-value event drives the move_forward action.
+	var start: Vector3 = p.position
+	var mf := InputEventJoypadMotion.new()
+	mf.device = 0
+	mf.axis = JOY_AXIS_LEFT_Y
+	mf.axis_value = -1.0
+	Input.parse_input_event(mf)
+	for i in 40:
+		await get_tree().physics_frame
+	mf.axis_value = 0.0
+	Input.parse_input_event(mf)
+	for i in 8:
+		await get_tree().physics_frame
+	var horizontal_moved: float = Vector2(p.position.x, p.position.z).distance_to(Vector2(start.x, start.z))
+	var stick_move_ok: bool = move_has_pad and horizontal_moved > 0.5
+	# 2) A/Cross jump (the pad button on the jump action).
+	for i in 80:
+		if p.is_on_floor():
+			break
+		await get_tree().physics_frame
+	var peak: float = p.position.y
+	Input.parse_input_event(_pad_btn(0, true))
+	for i in 240:
+		await get_tree().physics_frame
+		if p.position.y > peak:
+			peak = p.position.y
+		if i > 10 and p.is_on_floor() and p.velocity.y <= 0.0:
+			break
+	Input.parse_input_event(_pad_btn(0, false))
+	for i in 8:
+		await get_tree().physics_frame
+	var jump_ok: bool = jump_has_pad and peak > start.y + 0.5
+	# 3) RT attack: the trigger is an ANALOG axis (4.7 SDL layout: axis 5,
+	#    value 0..1) - holding it starts mining, releasing stops it.
+	var trg := InputEventJoypadMotion.new()
+	trg.device = 0
+	trg.axis = JOY_AXIS_TRIGGER_RIGHT
+	trg.axis_value = 1.0
+	Input.parse_input_event(trg)
+	var mined := false
+	for i in 20:
+		await get_tree().physics_frame
+		if p.is_mining():
+			mined = true
+			break
+	trg.axis_value = 0.0
+	Input.parse_input_event(trg)
+	for i in 20:
+		await get_tree().physics_frame
+		if not p.is_mining():
+			break
+	var attack_ok: bool = mined and not p.is_mining()
+	# 4) LT/L2 use/place - the interact arm's place recipe, driven by the pad.
+	var aim := _find_aim_spot()
+	var place_cell := Vector3i.ZERO
+	var after_place := -1
+	if not aim.is_empty():
+		var target: Vector3i = aim["cell"]
+		# clear the surface cell so the place target (the cell below the
+		# surface, where the player is not) is the hole - the interact arm
+		# mines it for the same reason; placing into the player's own cell
+		# is rejected by _box_intersects_player.
+		world.set_block(target.x, target.y, target.z, 0)
+		Debug.fly(true)
+		Debug.teleport(float(target.x) + 0.5, float(target.y) + 1.05, float(target.z) + 0.5)
+		p.look(0.0, -p.PITCH_LIMIT)
+		for i in 3:
+			await get_tree().physics_frame
+		p.inv_add(2, 5)
+		p.sel = _slot_of(p, 2)
+		var hit2: Dictionary = p.aim_hit()
+		if hit2.hit:
+			place_cell = hit2.cell + hit2.normal
+		var ltg := InputEventJoypadMotion.new()
+		ltg.device = 0
+		ltg.axis = JOY_AXIS_TRIGGER_LEFT
+		ltg.axis_value = 1.0
+		Input.parse_input_event(ltg)
+		await get_tree().physics_frame
+		ltg.axis_value = 0.0
+		Input.parse_input_event(ltg)
+		for i in 3:
+			await get_tree().physics_frame
+		if place_cell != Vector3i.ZERO:
+			after_place = world.get_block(place_cell.x, place_cell.y, place_cell.z)
+	Debug.fly(false)
+	var use_ok: bool = after_place == 2
+	# 5) LB/RB hotbar cycling.
+	var sel0: int = p.sel
+	Input.parse_input_event(_pad_btn(10, true))  # RB (10 in 4.7)
+	await get_tree().physics_frame
+	Input.parse_input_event(_pad_btn(10, false))
+	await get_tree().physics_frame
+	var sel1: int = p.sel
+	Input.parse_input_event(_pad_btn(9, true))  # LB (9 in 4.7)
+	await get_tree().physics_frame
+	Input.parse_input_event(_pad_btn(9, false))
+	await get_tree().physics_frame
+	var sel2: int = p.sel
+	var hotbar_ok: bool = sel1 == clampi(sel0 + 1, 0, 8) and sel2 == clampi(sel0 - 1, 0, 8)
+	# 6) Right stick look (value events applied per frame by the player).
+	var yaw0: float = p.get_yaw()
+	var rs := InputEventJoypadMotion.new()
+	rs.device = 0
+	rs.axis = JOY_AXIS_RIGHT_X
+	rs.axis_value = 0.8
+	Input.parse_input_event(rs)
+	for i in 30:
+		await get_tree().physics_frame
+	var yaw1: float = p.get_yaw()
+	rs.axis_value = 0.0
+	Input.parse_input_event(rs)
+	for i in 4:
+		await get_tree().physics_frame
+	var stick_look_ok: bool = absf(yaw1 - yaw0) > 0.05
+	# 7) Y inventory, X toggles it (crafting screen = the inventory here),
+	#    B closes it.
+	Input.parse_input_event(_pad_btn(3, true))
+	await get_tree().physics_frame
+	Input.parse_input_event(_pad_btn(3, false))
+	await get_tree().physics_frame
+	var inv_open: bool = String(p.ui_mode) == "inv"
+	Input.parse_input_event(_pad_btn(2, true))
+	await get_tree().physics_frame
+	Input.parse_input_event(_pad_btn(2, false))
+	await get_tree().physics_frame
+	var inv_toggle_ok: bool = String(p.ui_mode) == ""
+	Input.parse_input_event(_pad_btn(3, true))
+	await get_tree().physics_frame
+	Input.parse_input_event(_pad_btn(3, false))
+	await get_tree().physics_frame
+	Input.parse_input_event(_pad_btn(1, true))
+	await get_tree().physics_frame
+	Input.parse_input_event(_pad_btn(1, false))
+	for i in 4:
+		await get_tree().physics_frame
+	var b_cancel_inv_ok: bool = String(p.ui_mode) == ""
+	# 8) START pause -> the pause menu; the D-pad moves the native GUI
+	#    focus; A (pad_accept) activates the focused button.
+	if menu_ui == null:
+		_make_menu()  # harness boots without the menu (the game does when the user starts from it)
+	for i in 6:
+		await get_tree().process_frame
+	Input.parse_input_event(_pad_btn(6, true))  # START (6 in 4.7)
+	await get_tree().physics_frame
+	Input.parse_input_event(_pad_btn(6, false))
+	for i in 8:
+		await get_tree().physics_frame
+	var paused: bool = Game.mode != "play"
+	var menu_state := String(menu_ui._state) if menu_ui != null else "null"
+	var f0 := get_viewport().gui_get_focus_owner()
+	var focus_resume: bool = f0 != null and f0.name == "ResumeButton"
+	Input.parse_input_event(_pad_btn(12, true))  # D-pad down (12 in 4.7)
+	for i in 8:
+		await get_tree().physics_frame
+	Input.parse_input_event(_pad_btn(13, false))
+	for i in 4:
+		await get_tree().physics_frame
+	var f1 := get_viewport().gui_get_focus_owner()
+	var nav_ok: bool = f1 != null and f1 != f0
+	var before_state := Game.mode + "|" + String(menu_ui._state) if menu_ui != null else Game.mode
+	Input.parse_input_event(_pad_btn(0, true))
+	for i in 12:
+		await get_tree().physics_frame
+	Input.parse_input_event(_pad_btn(0, false))
+	for i in 4:
+		await get_tree().physics_frame
+	var after_state := Game.mode + "|" + String(menu_ui._state) if menu_ui != null else Game.mode
+	var accept_ok: bool = after_state != before_state
+	Debug.result({
+		"mode": "gamepad",
+		"jump_has_pad": jump_has_pad,
+		"move_has_pad": move_has_pad,
+		"stick_move_ok": stick_move_ok,
+		"horizontal_moved": roundf(horizontal_moved * 100.0) / 100.0,
+		"jump_ok": jump_ok,
+		"jump_peak_y": roundf(peak * 100.0) / 100.0,
+		"attack_ok": attack_ok,
+		"use_ok": use_ok,
+		"place_cell": [place_cell.x, place_cell.y, place_cell.z],
+		"after_place_cell": after_place,
+		"hotbar_ok": hotbar_ok,
+		"sel_trace": [sel0, sel1, sel2],
+		"stick_look_ok": stick_look_ok,
+		"yaw_delta": roundf((yaw1 - yaw0) * 1000.0) / 1000.0,
+		"inv_open": inv_open,
+		"inv_toggle_ok": inv_toggle_ok,
+		"b_cancel_inv_ok": b_cancel_inv_ok,
+		"paused": paused,
+		"menu_state": menu_state,
+		"focus_resume": focus_resume,
+		"nav_ok": nav_ok,
+		"focus_after_nav": f1.name if f1 != null else "null",
+		"accept_ok": accept_ok,
+		"ok": jump_has_pad and move_has_pad and stick_move_ok and jump_ok and attack_ok \
+			and use_ok and hotbar_ok and stick_look_ok and inv_open and inv_toggle_ok \
+			and b_cancel_inv_ok and paused and focus_resume and nav_ok and accept_ok,
+	})
+	get_tree().quit()
 
 
 func _look_test() -> void:

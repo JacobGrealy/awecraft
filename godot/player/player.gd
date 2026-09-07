@@ -13,6 +13,9 @@ const SWIM := 3.2
 const LAVA_SPEED := 1.1
 const FLY_VS := 0.85
 const MOUSE_SENS := 0.0022
+# AC-0087: full-stick right-stick look speed (rad/s) - a full turn
+# in ~2.4 s, MC-like.
+const PAD_LOOK_SPEED := 2.5
 const PITCH_LIMIT := 1.55
 const REACH := 6.0
 const INV_SIZE := 36
@@ -92,6 +95,9 @@ var _swing_kind := SWING_ITEM
 var _swing_loop := false
 var _lmb_down := false
 var _mining := false
+var _pad_look := Vector2.ZERO  # AC-0087: right-stick value (applied per frame in _process)
+var _pad_mining := false  # AC-0087: RT hold-to-mine edge state
+var _pad_lt_down := false  # AC-0087: LT tap edge state
 var _dragging := false
 var _mine_cell := Vector3i(0, 0, 0)
 var _mine_id := -1
@@ -123,6 +129,12 @@ func _ready() -> void:
 
 
 func _process(dt: float) -> void:
+	# AC-0087: right-stick look - the stick sends VALUE events (not deltas),
+	# so the stored value is applied once per frame.
+	if Game.mode == "play" and ui_mode == "" and _pad_look != Vector2.ZERO:
+		_yaw -= _pad_look.x * PAD_LOOK_SPEED * dt
+		_pitch = clampf(_pitch - _pad_look.y * PAD_LOOK_SPEED * dt, -PITCH_LIMIT, PITCH_LIMIT)
+		_apply_rotation()
 	if camera == null or hand_root == null or held_box == null or held_sprite == null:
 		return
 	var it: Dictionary = inv_selected()
@@ -194,6 +206,66 @@ func _unhandled_input(event: InputEvent) -> void:
 				close_inventory()
 		elif ui_mode == "" and kc >= int(KEY_1) and kc <= int(KEY_9):
 			sel = int(kc - int(KEY_1))
+
+	# AC-0087: Bedrock controller (minecraft.wiki Controls#Controller) -
+	# left stick rides the move_* InputMap actions (analog); the right stick
+	# stores its value (applied per frame in _process); the buttons below.
+	if event is InputEventJoypadMotion:
+		var jm: InputEventJoypadMotion = event
+		if jm.device == 0 and Game.mode == "play" and ui_mode == "":
+			if jm.axis == JOY_AXIS_RIGHT_X:
+				_pad_look.x = jm.axis_value
+			elif jm.axis == JOY_AXIS_RIGHT_Y:
+				_pad_look.y = jm.axis_value
+			# AC-0087: the triggers are ANALOG axes in Godot 4.7 (SDL layout:
+			# TRIGGER_LEFT = 4, TRIGGER_RIGHT = 5, value 0.0..1.0) - RT is
+			# hold-to-attack (mine), LT is a tap = use/place.
+			elif jm.axis == JOY_AXIS_TRIGGER_RIGHT:
+				if jm.axis_value > 0.5:
+					if not _pad_mining:
+						_pad_mining = true
+						start_mine()
+				elif _pad_mining:
+					_pad_mining = false
+					if _mining:
+						release_mine()
+			elif jm.axis == JOY_AXIS_TRIGGER_LEFT:
+				if jm.axis_value > 0.5 and not _pad_lt_down:
+					_pad_lt_down = true
+					use_selected()
+				elif jm.axis_value <= 0.5:
+					_pad_lt_down = false
+	if event is InputEventJoypadButton:
+		var jb: InputEventJoypadButton = event
+		if jb.device != 0:
+			return
+		if jb.pressed:
+			# Y/Triangle toggles the inventory (the craft grid lives in it;
+			# X/Square = crafting opens the same screen - the 3x3 grid is
+			# used via a placed crafting table, as in MC).
+			if event.is_action_pressed("pad_inventory") or event.is_action_pressed("pad_craft"):
+				if ui_mode == "":
+					open_inventory("inv")
+					Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+				else:
+					close_inventory()
+				return
+			if ui_mode != "":
+				# B/Circle closes the inventory (mirrors the ESC key branch).
+				if event.is_action_pressed("pad_cancel"):
+					close_inventory()
+				return
+			# LB/RB cycle the hotbar (9/10 in the 4.7 SDL layout), Menu/START
+			# (6) pause. A/Cross = jump rides the jump action; B/Circle =
+			# sneak has no crouch in this game (no-op). RT/L2 = attack/use are
+			# the analog triggers, handled in the motion branch above.
+			if event.is_action_pressed("pad_hotbar_prev"):
+				sel = clampi(sel - 1, 0, 8)
+			elif event.is_action_pressed("pad_hotbar_next"):
+				sel = clampi(sel + 1, 0, 8)
+			elif event.is_action_pressed("pad_pause"):
+				if not dead:
+					Game.pause()
 
 
 func _physics_process(dt: float) -> void:

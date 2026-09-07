@@ -43,10 +43,25 @@ var fogstart_slider: HSlider
 var fogstart_val: Label
 var file_dialog: FileDialog
 var _options_from := "main"
+var _focus_last: Control = null  # AC-0087: gamepad focus highlight
 var _syncing := false
 # visibility state machine: exactly one of the boxes may be visible;
 # "ingame" = menu layer hidden entirely (except pause, via show_pause)
 var _state := "main"
+
+
+func _process(_dt: float) -> void:
+	# AC-0087: highlight the focused control (native navigation
+	# moves gui focus; we just paint it).
+	if _state == "ingame":
+		return
+	var f := get_viewport().gui_get_focus_owner()
+	if f != _focus_last:
+		if _focus_last != null and is_instance_valid(_focus_last):
+			_focus_last.modulate = Color.WHITE
+		_focus_last = f
+		if f != null:
+			f.modulate = Color(1.35, 1.35, 1.35)
 
 
 func _apply_state() -> void:
@@ -57,6 +72,17 @@ func _apply_state() -> void:
 	if options_box != null:
 		options_box.visible = _state == "opt_main" or _state == "opt_pause"
 	visible = _state != "ingame"
+	# AC-0087: give keyboard/gamepad a starting focus per box so the
+	# D-pad and stick navigate (the engine moves focus natively for the
+	# built-in ui_* actions; only one box is visible, so navigation
+	# stays inside it).
+	if main_box != null and _state == "main":
+		main_box.get_node("Center/VBox/PlayButton").grab_focus()
+	elif pause_box != null and _state == "pause":
+		pause_box.get_node("Center/VBox/ResumeButton").grab_focus()
+	elif options_box != null and (_state == "opt_main" or _state == "opt_pause"):
+		if render_slider != null:
+			render_slider.grab_focus()
 
 
 func _ready() -> void:
@@ -116,6 +142,27 @@ func _ready() -> void:
 func _unhandled_input(event) -> void:
 	if _state == "ingame":
 		return
+	# AC-0087: A/Cross confirm + B/Circle cancel (the built-in ui_accept/
+	# ui_cancel actions are keyboard-only in this project; D-pad and stick
+	# navigation itself is native via the built-in ui_* actions).
+	if event is InputEventJoypadButton:
+		if not event.pressed:
+			return
+		if event.is_action_pressed("pad_cancel"):
+			# mirrors the ESC branch below
+			if options_box.visible:
+				close_options()
+			elif pause_box.visible:
+				_on_resume_btn_pressed()
+			get_viewport().set_input_as_handled()
+		elif event.is_action_pressed("pad_accept"):
+			var f := get_viewport().gui_get_focus_owner()
+			if f is Button:
+				f.pressed.emit()
+				get_viewport().set_input_as_handled()
+			elif f is CheckBox:
+				f.set_pressed(not f.button_pressed)
+				get_viewport().set_input_as_handled()
 	if event is InputEventKey and event.pressed and not event.echo:
 		var kc: int = int(event.physical_keycode)
 		if kc != int(KEY_ESCAPE) and kc != int(KEY_P) and not event.is_action_pressed("ui_pause"):

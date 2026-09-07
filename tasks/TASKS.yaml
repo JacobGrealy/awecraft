@@ -3,7 +3,6 @@ meta:
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0087
 - AC-0235
 - AC-0175
 - AC-0140
@@ -2628,10 +2627,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-23T22:38
-  updated_at: 2026-08-23T22:38
+  updated_at: 2026-09-07T17:45
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -2645,6 +2644,46 @@ intake:
     created_at: '2026-09-01T02:12:48.549757'
     updated_at: null
     text: '[coordinator] Reasoning: xhigh (non-trivial, plan+verify) — '
+  - id: 2
+    author: agent
+    text: >
+      DONE + VERIFIED (2026-09-07, autonomous session). Bedrock controller core
+      (minecraft.wiki Controls#Controller). InputMap (project.godot): left stick
+      axes 0/1 on the move_* actions (analog move), A/Cross (0) on the jump
+      action, plus new actions pad_hotbar_prev/next (LB=9 / RB=10),
+      pad_inventory (Y=3), pad_craft (X=2), pad_pause (START=6 + GUIDE=5),
+      pad_accept (A=0), pad_cancel (B=1). The built-in ui_* actions were left
+      untouched (defining them would replace the engine defaults); in Godot 4.7
+      they already carry the D-pad (11-14) + right stick, so menu navigation is
+      native GUI focus movement. player.gd: right-stick look (VALUE events
+      stored and applied per frame, 2.5 rad/s full stick); the RT/LT triggers
+      are ANALOG AXES in 4.7 (SDL layout: axis 4 LT / axis 5 RT, 0..1) - RT is
+      hold-to-attack (edge-starts mining, release stops it), LT is a tap =
+      use/place. Menus: _apply_state grabs a starting focus per box (Play /
+      Resume / RenderSlider), A (pad_accept) activates the focused Button /
+      toggles CheckBox, B (pad_cancel) mirrors the ESC close behavior, and a
+      _process poll paints the focus highlight (modulate 1.35). Documented
+      no-ops (features this game does not have): B sneak (no crouch), X opens
+      the inventory (the craft grid lives in it; 3x3 via a placed table, MC
+      flow), D-pad chat/emote/perspective/drop (no chat/emote/third-person/drop
+      features). HEADLESS VERIFY (the spec's Input.action_press simulation) via
+      the new AWECRAFT_LOGIC=gamepad arm - all 14 checks ok:true: InputMap
+      wiring (jump has the A button, move_forward has the stick axis), left
+      stick moved 2.81 m, A jumped (peak +1.43), RT held started + released
+      stopped mining, LT placed a stone at the interact-arm recipe cell [8,136,8]
+      (after_place_cell 2), RB/LB cycled the hotbar (0-1-0), right stick turned
+      the yaw -0.99 rad, Y opened + X closed the inventory, B closed it, START
+      paused into the pause menu, the D-pad down moved the native GUI focus
+      ResumeButton -> OptionsButton, and A activated it. Regression: SMOKE
+      battery ok (player/interact/light/fluds at baseline), settings arm ok,
+      R16 all sub-gates green (culls 643, owed 0, gen_cov 0, gate_ok, spin ok,
+      fly50 ahead 830, fog_hides_pop, drop_fps 0). GATE LESSON: Godot
+      project.godot comments use ; not # - a # comment line in [input] was
+      parsed as a key and silently swallowed the following pad_attack action
+      (ConfigFile still reported ERR_OK); also the engine's joypad enums are
+      NOT exposed as GDScript constants in 4.7 (verified via the binary: SDL
+      layout, D-pad = 11-14, START = 6, triggers = axes 4/5).
+
 - id: AC-0088
   title: controls-remapping-menu
   source: user
