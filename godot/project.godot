@@ -70,8 +70,10 @@ ui_pause={
 
 [rendering]
 
-renderer/rendering_method="gl_compatibility"
-renderer/rendering_method.mobile="gl_compatibility"
+# AC-0241: Forward+ (was gl_compatibility - web-migration legacy; we are
+# Windows-only). GPU features for the satellite far-LOD, clustered lighting
+# for the torch setup, big-scene draw-call scaling.
+renderer/rendering_method="forward_plus"
 occlusion_culling/use_occlusion_culling=true
 occlusion_culling/camera/cull_3d=true
 occlusion_culling/camera/cull_2d=true

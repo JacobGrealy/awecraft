@@ -9,7 +9,7 @@ Voxel Minecraft-like — Godot 4.7.1, `godot/`, engine `~/tools/godot/godot` (`-
 ## Quick commands (from repo root)
 - Headless check: `~/tools/godot/godot --headless --path godot --quit`
 - Logic tests: `AWECRAFT_LOGIC=player|interact|light|fluids|buckets ~/tools/godot/godot --headless --path godot`
-- Render: `xvfb-run -a ~/tools/godot/godot --path godot --rendering-method gl_compatibility`
+- Render: `xvfb-run -a ~/tools/godot/godot --path godot` (AC-0241: Forward+ = Vulkan on Linux; needs a Vulkan device like lavapipe)
 - Windows build: `./build_windows.sh` → `exports/windows/AweCraft.exe` (+ LAN `http://192.168.0.224:8080/AweCraft.exe`)
 
 ## Role

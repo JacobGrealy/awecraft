@@ -44,7 +44,7 @@ Pure logic (class_name scripts, static funcs, no node deps):
 - **Meshing:** one chunk → one `ArrayMesh` via `SurfaceTool` from visible solid faces + level-aware fluid faces. Update on edit.
 - **Lighting (port web):** column sky light (open-to-sky) + block light BFS (torch=14, glowstone, lava). **Bake a light factor into each face's VERTS COLOR** (multiply albedo by light). One `DirectionalLight3D` "sun" modulates by `time_of_day`. Do not lean on Godot realtime GI.
 - **Fluids (port `tickFluids`):** per-cell flow level (source=8, flowing decays); water=5, lava=24; reactions water+lava→obsidian(25)/stone(9, sideways); buckets (scoop/place). Level-aware fluid mesh.
-- **Rendering method:** verify under `gl_compatibility` on llvmpipe (§7). Real play may use forward_plus; headless MUST use gl_compatibility.
+- **Rendering method (AC-0241):** `forward_plus` (was gl_compatibility, web-era legacy). Forward+ is Vulkan-based on Linux, so the software-GL xvfb render path may not work here — visual verification is the user's Windows build (headless arms are renderer-agnostic).
 - **Dimensions (M11/WS6):** two World instances; per-dimension save; portal teleport 1:1.
 
 ## 5. `Data` autoload — port these tables from web (grep the web file; do NOT transcribe from memory)
@@ -69,8 +69,8 @@ Task verify = drive these (via a throwaway test scene OR by editing Main to run 
 ```
 # LOGIC only (no GPU, no display):
 ~/tools/godot/godot --headless --path AweCraft/godot
-# RENDER (software GL under virtual X, llvmpipe):
-xvfb-run -a ~/tools/godot/godot --path AweCraft/godot --rendering-method gl_compatibility
+# RENDER (AC-0241: Forward+ is Vulkan on Linux - needs a Vulkan device, e.g. lavapipe):
+xvfb-run -a ~/tools/godot/godot --path AweCraft/godot
 ```
 - First run imports assets (prints steps) — normal.
 - `look_at` on a node not yet in the tree errors → call after `add_child` (or `look_at_from_position`).

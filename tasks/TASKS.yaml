@@ -3,9 +3,9 @@ meta:
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
+- AC-0241
 - AC-0238
 - AC-0239
-- AC-0240
 - AC-0235
 - AC-0175
 - AC-0140
@@ -7998,11 +7998,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-07T09:45
-  updated_at: 2026-09-07T09:45
-  completed_at: null
+  updated_at: 2026-09-07T10:30
+  completed_at: 2026-09-07T10:30:00.000000
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want the sky-blue loading boxes (the fog placeholders) gone -
@@ -8059,3 +8059,78 @@ intake:
       a ticket): the low lane shares the TM high-priority pool with high builds - a dedicated low
       thread (the AC-0187 edit-remesh precedent) would remove the pool-contention starvation mode;
       its urgency rises with fog off since the low is now the first visible representation.'
+- id: AC-0241
+  title: forward-plus-migration-drop-dither
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-07T10:50
+  updated_at: 2026-09-07T10:50
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want the game to use the modern high-performance renderer
+    (Forward+) so big render distances scale like Minecraft Bedrock does on PC (device defaults up
+    to 96 chunks, smooth at 40+), with GPU features available for the upcoming satellite far-LOD
+    (compute shaders). The dithered distant fade is dropped (user 2026-09-07: drop dithering) -
+    the fog pull-in stays.
+
+    2) Technical Details: We are Windows-only (AC-0124) - gl_compatibility was web-migration
+    legacy; Forward+ wants ~DX11 feature level (every 2026 Windows machine). PART A - DITHER DROP:
+    (1) the 4 chunk shaders (chunk_lit_opaque/cutout/fluid/flower.gdshader): remove the
+    u_dither_start/u_dither_end uniforms, the DITHER44 constant, and the fragment discard block
+    (KEEP v_world_pos/u_player_pos - the player-light term uses them); (2) main.gd: the per-frame
+    dither uniform push (~2160-2195 - keep the non-dither pushes in that loop), the settings-arm
+    dither tests (~910-943, fix the ok expression), the R16 dither evidence (~7209-7213), the
+    dither env/arm (~7418-7440); (3) daynight.gd: dither_start()/dither_end() statics (keep the
+    fog parts); (4) menu.gd + menu.tscn: the DitherCheck checkbox + dithstart slider + callbacks
+    + the OPTSYNC log field (the FOG start slider STAYS - it is separate); (5) settings.gd: the
+    dithering_enabled + dithering_start_pct keys + load-clamp branches (old saves may carry them -
+    the loader ignores unknown keys). PART B - FORWARD+: project.godot renderer/rendering_method =
+    forward_plus (+ drop the .mobile override - no mobile export); verify the render pipeline:
+    custom chunk shaders are renderer-agnostic (manual lighting, FRAGCOORD works), WorldEnvironment
+    fog behavior, the unshaded placeholder materials, the aero sky/star shaders; check
+    project.godot rendering settings for compatibility-era values that should change (tonemap/AA).
+    GATES: syntax 0 parse errors; SMOKE battery ok:true; R16 (seed 44) all green (the dither
+    evidence keys are gone - the arm must not read them); meshprobe 1926; settings arm green with
+    the dither tests removed. VISUAL: the user is the render oracle (headless cannot see Forward+)
+    - build_windows.sh after the commit, user verifies the Windows exe (fog edge, lighting,
+    placeholder colors, no shader warnings). WHY FIRST: the satellite far-LOD (three-distance
+    streaming, next ticket) is built ONCE on this stack - GPU-native satellite (compute pass over
+    the per-chunk top grids, CPU patches edits only) instead of a CPU-bake-first re-do. AC-0238
+    (window-masked-light) stays queued - it cuts the CPU-side compute Forward+ does not fix.'
+  comments:
+  - id: 1
+    created_at: '2026-09-07T10:50:00.000000'
+    updated_at: null
+    text: '[agent] Filed per user 2026-09-07 (drop dithering + forward migration). The Bedrock
+      reference: PC render distance 4-96 chunks, smooth at 40+ on ordinary hardware (Microsoft docs
+      + player reports) - big distance + real LOD + modern API, no low-end compromise renderer.'
+  - id: 2
+    created_at: '2026-09-07T11:15:00.000000'
+    updated_at: null
+    text: '[impl] DONE + VERIFIED 2026-09-07 (coordinator commits; PENDING user visual verify on
+      Windows - headless cannot see Forward+). PART A dither drop: all 5 shaders clean (4 chunk
+      shaders keep u_player_pos/v_world_pos for the player-light term; the fluid shader lost them
+      entirely - the dither was its only use - and its per-frame push loop is gone); main.gd: the
+      per-frame push keeps only u_player_pos/light/radius, the settings arm tests the FOG slider
+      round-trip + clamp only, the R16 evidence block is now "fog" (fog_far/pop_face_worst/
+      fog_hides_pop), the AWECRAFT_DITHER* env hooks are gone (AWECRAFT_FOG_PCT stays), and the
+      dithersettings arm became the fogsettings arm (slider -> env.fog_depth_end live within a
+      frame); daynight.gd dither_start/end removed (fog_far stays); settings.gd keys + clamps
+      removed (the loader reads only known keys - a user cfg carrying the old keys loads fine,
+      stale keys ignored); menu.gd + menu.tscn checkbox/slider/callbacks/OPTSYNC removed. PART B:
+      project.godot rendering_method = forward_plus (+ .mobile override dropped - no mobile
+      export); ARCHITECTURE.md + AGENTS.md render notes updated (Forward+ = Vulkan on Linux, so
+      the xvfb render arm needs a Vulkan device like lavapipe; the user s Windows build is the
+      render oracle). Gates (all headless-logic): syntax 0 errors (banner verified); SMOKE
+      battery EXIT=0 (one retry - the crash was the documented AC-0206 .so flake in C++
+      generate_args, renderer-irrelevant); settings arm ok:true (fog default 87, set 60
+      reloaded, clamp lo 0); R16 (seed 44) ALL GREEN - ok, built_all, owed 0, gen_cov 0, caps_ok,
+      phase_ok, churn_ok (culls 643), gen_ok, fog block fog_far 236.64 <= pop face 256
+      (fog_hides_pop true), build_ms 78836 (no logic-side delta - the dither cost was GPU
+      fragments), 0 script errors, 0 crashes.'

@@ -28,31 +28,6 @@ static func fog_far(render_radius: int, pct: float = 87.5) -> float:
 	return (float(render_radius) + 1.0) * 16.0 * (pct / 100.0)
 
 
-# AC-0227: dither-fade band (distance in blocks from the player) — the
-# alpha-discard complement of the AC-0226 fog pull (the fog fades the
-# COLOR, the dither DISCARDS fragments of far chunks in a screen-space
-# checkerboard that fills in as they get closer). Both bounds are pure
-# functions of render_radius, scaled the same way as the fog:
-# - start = 0.45*(R+1)*16: mid-way up the fog ramp (fog ~32% there), so the
-#   checkerboard only starts where the fog is already doing its job;
-# - end = 0.99*(R+1)*16: just past the worst-case pop-in faces (R*16 ..
-#   (R+1)*16-8) — a newly popped chunk appears with 85-100% of its pixels
-#   dithered away AND fully fogged (fog_far < R*16 at every R >= 7), so the
-#   hard pop is gone: the chunk dissolves in as a fading checkerboard.
-# R16: 122.4 .. 269.3 (fog 68..238, pop faces 248..264) -
-# R50: 367.2 .. 807.8 (fog 204..714, pop faces 792..808).
-# AC-0232: the coefficient is now a setting — "dithering_start_pct", a
-# percent (0-100) of the render edge ((R+1)*16) — driven by the Options
-# slider (default 45 = the shipped AC-0227 0.45 coefficient, so the
-# single-arg call is still a no-behavior-change for the harness arms).
-static func dither_start(render_radius: int, pct: float = 45.0) -> float:
-	return (float(render_radius) + 1.0) * 16.0 * (pct / 100.0)
-
-
-static func dither_end(render_radius: int) -> float:
-	return (float(render_radius) + 1.0) * 16.0 * 0.99
-
-
 static func day_rgb() -> Color:
 	return Color8(135, 206, 235, 255).srgb_to_linear()
 

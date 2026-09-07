@@ -907,27 +907,17 @@ func _settings_test() -> void:
 	# Leave the file at 7 — the cross-process persist gate (a second
 	# process boot) reads it back.
 	Settings.set_value("chunks_per_frame", 7)
-	# AC-0232: the dithering toggle + the two start-distance sliders —
-	# defaults (true/45/87), 0-100 clamp, save + reload (set_value writes
-	# the cfg, load_settings re-reads it from disk).
+	# AC-0232 (AC-0241 dropped the dither; the fog start slider stays):
+	# default 87, save + reload (set_value writes the cfg, load_settings
+	# re-reads it from disk), 0-100 clamp.
 	Settings.load_settings()
-	var dither_default_ok := bool(Settings.values["dithering_enabled"]) == true \
-			and int(Settings.values["dithering_start_pct"]) == 45 \
-			and int(Settings.values["fog_start_pct"]) == 87
-	Settings.set_value("dithering_enabled", false)
-	Settings.set_value("dithering_start_pct", 12)
+	var fog_default_ok := int(Settings.values["fog_start_pct"]) == 87
 	Settings.set_value("fog_start_pct", 60)
 	Settings.load_settings()
-	var dither_saved_ok := bool(Settings.values["dithering_enabled"]) == false \
-			and int(Settings.values["dithering_start_pct"]) == 12 \
-			and int(Settings.values["fog_start_pct"]) == 60
-	Settings.set_value("dithering_start_pct", 999)
-	var dither_hi_ok := int(Settings.values["dithering_start_pct"]) == 100
+	var fog_saved_ok := int(Settings.values["fog_start_pct"]) == 60
 	Settings.set_value("fog_start_pct", -5)
 	var fog_lo_ok := int(Settings.values["fog_start_pct"]) == 0
-	# Leave the dither settings at their defaults.
-	Settings.set_value("dithering_enabled", true)
-	Settings.set_value("dithering_start_pct", 45)
+	# Leave the fog setting at its default.
 	Settings.set_value("fog_start_pct", 87)
 	Debug.result({
 		"defaults": {"render": 50, "sim": 1, "ok": defaults_ok},
@@ -938,9 +928,9 @@ func _settings_test() -> void:
 		"volume_ok": volume_ok,
 		"hunger": {"saved_off": hsaved, "reloaded_off": hunger_off_ok, "back_on": hunger_on_ok, "default_true": hunger_default_ok},
 		"chunks": {"default_3": chunks_default_ok, "set7_reloaded": chunks_saved_ok, "clamp_hi_100": chunks_hi_ok, "clamp_lo_1": chunks_lo_ok},
-		# AC-0232: defaults true/45/87, set+reload round-trip, 0-100 clamp.
-		"dither": {"default_true_45_87": dither_default_ok, "set_false_12_60_reloaded": dither_saved_ok, "clamp_hi_100": dither_hi_ok, "clamp_lo_0": fog_lo_ok},
-		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and dither_default_ok and dither_saved_ok and dither_hi_ok and fog_lo_ok,
+		# AC-0232 (dither dropped in AC-0241): the fog slider round-trip + clamp.
+		"fog": {"default_87": fog_default_ok, "set60_reloaded": fog_saved_ok, "clamp_lo_0": fog_lo_ok},
+		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok,
 	})
 
 
@@ -954,18 +944,11 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		OS.set_environment("AWECRAFT_IGNORE_SETTINGS", "1")
 		Settings.load_settings()
 		OS.set_environment("AWECRAFT_IGNORE_SETTINGS", "")
-	# AC-0232: harness preloads for the dither/fog settings — the
-	# AWECRAFT_TM_HO pattern: written to Settings.values WITHOUT save so
-	# the harness never clobbers the user's cfg, and the game code paths
-	# run exactly the settings-wired way (main.gd reads the values every
-	# frame). AWECRAFT_DITHER_TOGGLE=1|0, AWECRAFT_DITHER_PCT=n,
-	# AWECRAFT_FOG_PCT=n (0-100).
-	var dte := OS.get_environment("AWECRAFT_DITHER_TOGGLE")
-	if dte != "":
-		Settings.values["dithering_enabled"] = dte != "0"
-	var dpe := OS.get_environment("AWECRAFT_DITHER_PCT")
-	if dpe != "":
-		Settings.values["dithering_start_pct"] = clampi(dpe.to_int(), Settings.PCT_MIN, Settings.PCT_MAX)
+	# AC-0232 (dither dropped in AC-0241): harness preload for the fog
+	# setting — the AWECRAFT_TM_HO pattern: written to Settings.values WITHOUT
+	# save so the harness never clobbers the user's cfg, and the game code
+	# path runs exactly the settings-wired way (main.gd reads the value every
+	# frame). AWECRAFT_FOG_PCT=n (0-100).
 	var fpe := OS.get_environment("AWECRAFT_FOG_PCT")
 	if fpe != "":
 		Settings.values["fog_start_pct"] = clampi(fpe.to_int(), Settings.PCT_MIN, Settings.PCT_MAX)
@@ -1398,8 +1381,8 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "loduv":
 			await _loduv_test()
 			return
-		if logic == "dithersettings":
-			await _dithersettings_test()
+		if logic == "fogsettings":
+			await _fogsettings_test()
 			return
 		if logic == "atlas":
 			world.collision_enabled = false
@@ -2144,53 +2127,15 @@ func _update_sky() -> void:
 		ppos = player.position
 		plvl = float(player.PLAYER_LIGHT_LEVEL)
 		prad = float(player.PLAYER_LIGHT_RADIUS)
-	# AC-0227: dither-fade band (distance from the player, in blocks) — a
-	# pure function of render_radius like the AC-0226 fog bounds (fog fades
-	# the color, the shader dither discards fragments of far chunks). u_day
-	# + the player light ride the same per-frame push; the dither bounds
-	# ride it too so a render-radius change takes effect within a frame.
-	var drr: int = world.render_radius if world != null else 4
-	# AC-0232: the band start is now the "dithering_start_pct" setting (a
-	# percent of the (R+1)*16 render edge; default 45 = the shipped AC-0227
-	# 0.45), and the "dithering_enabled" toggle turns the whole band off —
-	# 0/0 is the shaders' off state, so a disabled dither is a plain hard
-	# pop-in (hidden by the AC-0226 fog). Both are read every frame, so the
-	# Options checkbox + slider apply live (within a frame). The env A/B
-	# hooks below still win (harness verification).
-	var dstart := DayNight.dither_start(drr, float(Settings.values["dithering_start_pct"]))
-	var dend := DayNight.dither_end(drr)
-	if not bool(Settings.values["dithering_enabled"]):
-		dstart = 0.0
-		dend = 0.0
-	# AC-0227 harness hooks: AWECRAFT_NO_DITHER=1 disables the dither (0/0
-	# band) for A/B render comparison (AWECRAFT_NO_FOG's dither twin);
-	# AWECRAFT_DITHER=start,end (blocks) overrides the band for render
-	# verification at arbitrary radii.
-	var denv := OS.get_environment("AWECRAFT_DITHER")
-	if denv != "":
-		var dp := denv.split(",")
-		if dp.size() == 2:
-			dstart = dp[0].to_float()
-			dend = dp[1].to_float()
-	if OS.get_environment("AWECRAFT_NO_DITHER") == "1":
-		dstart = 0.0
-		dend = 0.0
+	# AC-0227's dither band was dropped in AC-0241 (the AC-0226 fog fade is
+	# the only distance fade now); the u_day + player light ride the same
+	# per-frame push.
 	for k in _ChunkScriptM._mat_cache:
 		var cm = _ChunkScriptM._mat_cache[k]
 		if cm is ShaderMaterial:
 			cm.set_shader_parameter("u_player_pos", ppos)
 			cm.set_shader_parameter("u_player_light", plvl)
 			cm.set_shader_parameter("u_player_radius", prad)
-			cm.set_shader_parameter("u_dither_start", dstart)
-			cm.set_shader_parameter("u_dither_end", dend)
-	# AC-0227: the shared water/lava anim materials get the same dither band
-	# (the ocean rides to the render edge like any chunk).
-	for bid in Data.fluid_anim_mats:
-		var fm = Data.fluid_anim_mats[bid]
-		if fm is ShaderMaterial:
-			fm.set_shader_parameter("u_player_pos", ppos)
-			fm.set_shader_parameter("u_dither_start", dstart)
-			fm.set_shader_parameter("u_dither_end", dend)
 
 	sun.light_color = AeroLib.SUN_TINT if aero else Color.WHITE
 	sun.light_energy = DayNight.sun_energy(t) * (AeroLib.SUN_BOOST if aero else 1.0)
@@ -7199,18 +7144,13 @@ func _r16_test(spawn: Vector3) -> void:
 			"cols_full": int(WorldGen.gen_cpp().gen_timing().get("cols_full", 0)),
 			"cols_skip": int(WorldGen.gen_cpp().gen_timing().get("cols_skip", 0)),
 		},
-		# AC-0232: the dither-fade toggle + the two distance sliders in
-		# force for this run (the Settings the Options menu drives; the
-		# env preloads win). fade_active = the far band is on (the dithered
-		# fade shows for far); fog_hides_pop = with the dither OFF the hard
-		# pop-in face is fully fogged (fog_far <= the crossing-instant
-		# worst-case pop-in face, R*16).
-		"dither": {
-			"enabled": bool(Settings.values["dithering_enabled"]),
-			"dither_start_pct": int(Settings.values["dithering_start_pct"]),
+		# AC-0232 (dither dropped in AC-0241; the fog fade is the only
+		# distance fade): the fog start pct in force for this run; the env
+		# preload wins. fog_hides_pop = the hard pop-in face at the render
+		# edge is fully fogged (fog_far <= the crossing-instant worst-case
+		# pop-in face, R*16).
+		"fog": {
 			"fog_start_pct": int(Settings.values["fog_start_pct"]),
-			"start": DayNight.dither_start(rr, float(Settings.values["dithering_start_pct"])) if bool(Settings.values["dithering_enabled"]) else 0.0,
-			"end": DayNight.dither_end(rr) if bool(Settings.values["dithering_enabled"]) else 0.0,
 			"fog_far": DayNight.fog_far(rr, float(Settings.values["fog_start_pct"])),
 			"pop_face_worst": float(rr) * 16.0,
 			"fog_hides_pop": DayNight.fog_far(rr, float(Settings.values["fog_start_pct"])) <= float(rr) * 16.0,
@@ -7413,15 +7353,14 @@ func _r16_test(spawn: Vector3) -> void:
 	get_tree().quit()
 
 
-# AC-0232: dither/fog settings live-wiring probe (fast, r4). Waits for the
-# first chunk materials, then reads back what the per-frame push actually
-# delivered: the u_dither_start/u_dither_end uniforms on the cached chunk
-# ShaderMaterials + the WorldEnvironment fog_depth_end. Then moves the
-# settings exactly the way the Options controls do (toggle off + new
-# slider values, then on + far values), waits a few frames each, and reads
-# again — the sliders' contract: the start distances move live within a
-# frame. Env A/B hooks (AWECRAFT_DITHER/NO_DITHER) must stay unset here.
-func _dithersettings_test() -> void:
+# AC-0232 (AC-0241 dropped the dither): the FOG start-slider live-wiring
+# probe (fast, r4). Waits for the first chunk materials, then reads back what
+# the per-frame push actually delivered (the WorldEnvironment fog_depth_end).
+# Then moves the setting exactly the way the Options control does (a new
+# slider value), waits a few frames, and reads again - the slider's contract:
+# the fog far moves live within a frame. The AWECRAFT_FOG_PCT preload must
+# stay unset here.
+func _fogsettings_test() -> void:
 	var t0 := Time.get_ticks_msec()
 	var sp: Vector3 = world.spawn_point()
 	world.recenter(sp.x, sp.z, true)
@@ -7431,68 +7370,45 @@ func _dithersettings_test() -> void:
 		n += 1
 	for i in 3:
 		await get_tree().physics_frame
-	var read_on := _dithersettings_readout()
-	Settings.values["dithering_enabled"] = false
-	Settings.values["dithering_start_pct"] = 10
+	var read_a := _fogsettings_readout()
 	Settings.values["fog_start_pct"] = 50
 	for i in 3:
 		await get_tree().physics_frame
-	var read_off := _dithersettings_readout()
-	Settings.values["dithering_enabled"] = true
-	Settings.values["dithering_start_pct"] = 90
+	var read_b := _fogsettings_readout()
 	Settings.values["fog_start_pct"] = 95
 	for i in 3:
 		await get_tree().physics_frame
-	var read_far := _dithersettings_readout()
-	# Live evidence: the toggle-off read is 0/0, and both start distances
-	# (dither band start + fog far) moved with the slider values.
-	var live_ok := float(read_off["start"]) == 0.0 and float(read_off["end"]) == 0.0 \
-			and float(read_far["start"]) != float(read_on["start"]) \
-			and float(read_far["start"]) != float(read_off["start"]) \
-			and float(read_far["fog_far"]) != float(read_on["fog_far"]) \
-			and float(read_far["fog_far"]) != float(read_off["fog_far"])
+	var read_c := _fogsettings_readout()
+	# Live evidence: the fog far moved with each slider value.
+	var live_ok := float(read_b["fog_far"]) != float(read_a["fog_far"]) \
+			and float(read_c["fog_far"]) != float(read_b["fog_far"])
 	Debug.result({
-		"mode": "dithersettings",
-		"mats": int(read_on["mats"]),
-		"on": read_on,
-		"off": read_off,
-		"far": read_far,
+		"mode": "fogsettings",
+		"mats": int(read_a["mats"]),
+		"a": read_a,
+		"b": read_b,
+		"c": read_c,
 		"live_ok": live_ok,
-		"ok": bool(read_on["ok"]) and bool(read_off["ok"]) and bool(read_far["ok"]) and live_ok,
+		"ok": bool(read_a["ok"]) and bool(read_b["ok"]) and bool(read_c["ok"]) and live_ok,
 		"elapsed_ms": Time.get_ticks_msec() - t0,
 	})
 	get_tree().quit()
 
 
-func _dithersettings_readout() -> Dictionary:
+func _fogsettings_readout() -> Dictionary:
 	var rr: int = world.render_radius
-	var want_start := 0.0
-	var want_end := 0.0
-	if bool(Settings.values["dithering_enabled"]):
-		want_start = DayNight.dither_start(rr, float(Settings.values["dithering_start_pct"]))
-		want_end = DayNight.dither_end(rr)
 	var want_fog_far := DayNight.fog_far(rr, float(Settings.values["fog_start_pct"]))
-	var got_start := -1.0
-	var got_end := -1.0
+	var got_fog := float(env.fog_depth_end)
 	var mats := 0
 	for k in _ChunkScriptM._mat_cache:
-		var cm = _ChunkScriptM._mat_cache[k]
-		if cm is ShaderMaterial:
-			got_start = maxf(got_start, float(cm.get_shader_parameter("u_dither_start")))
-			got_end = maxf(got_end, float(cm.get_shader_parameter("u_dither_end")))
+		if _ChunkScriptM._mat_cache[k] is ShaderMaterial:
 			mats += 1
-	var got_fog := float(env.fog_depth_end)
 	return {
 		"mats": mats,
-		"enabled": bool(Settings.values["dithering_enabled"]),
-		"dither_start_pct": int(Settings.values["dithering_start_pct"]),
 		"fog_start_pct": int(Settings.values["fog_start_pct"]),
-		"start": roundf(got_start * 100.0) / 100.0,
-		"end": roundf(got_end * 100.0) / 100.0,
 		"fog_far": roundf(got_fog * 100.0) / 100.0,
-		"want": [roundf(want_start * 100.0) / 100.0, roundf(want_end * 100.0) / 100.0, roundf(want_fog_far * 100.0) / 100.0],
-		"ok": mats > 0 and is_equal_approx(got_start, want_start) and is_equal_approx(got_end, want_end) \
-				and is_equal_approx(got_fog, want_fog_far),
+		"want": roundf(want_fog_far * 100.0) / 100.0,
+		"ok": mats > 0 and is_equal_approx(got_fog, want_fog_far),
 	}
 
 
