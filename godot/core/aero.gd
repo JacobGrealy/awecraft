@@ -1,7 +1,9 @@
 class_name Aero
 extends RefCounted
 
-const SKY_RADIUS := 1000.0
+# AC-0235: the sky dome is gone (sky pass now); the cloud layer
+# plane hovers at this height, MC-style (surface tops ~128-145).
+const CLOUD_H := 160.0
 
 const GLOW_ENABLED := true
 const GLOW_STRENGTH := 0.35
@@ -57,8 +59,10 @@ static func wash_on() -> bool:
 	return OS.get_environment("AWECRAFT_AERO_WASH") != "0"
 
 
-static func sky_on() -> bool:
-	return OS.get_environment("AWECRAFT_AERO_SKY") != "0"
+# AC-0235: the cloud layer (the dome's AWECRAFT_AERO_SKY flag is
+# gone with the sphere).
+static func clouds_on() -> bool:
+	return OS.get_environment("AWECRAFT_CLOUDS") != "0"
 
 
 # AC-0241 follow-up: env A/B overrides for the grade (Forward+ executes

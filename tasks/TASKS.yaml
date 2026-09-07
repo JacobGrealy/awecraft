@@ -3,7 +3,7 @@ meta:
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0235
+- AC-0243
 - AC-0175
 - AC-0140
 - AC-0121
@@ -7696,10 +7696,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-06T13:54
-  updated_at: 2026-09-06T13:54
+  updated_at: 2026-09-07T19:10
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -7718,6 +7718,43 @@ intake:
     updated_at: null
     text: '[coordinator] Reasoning: xhigh (main.gd AeroSky removal + procedural cloud shader/mesh choice, wind drift, DayNight
       integration)'
+  - id: 2
+    author: agent
+    text: >
+      DONE + VERIFIED (2026-09-07). The AeroSky sphere (aero_sky.gdshader,
+      flipped SphereMesh at SKY_RADIUS 1000, with the camera-follow logic and
+      the AeroLib.sky_on path) is deleted. The DayNight gradient + sun now
+      render in the engine SKY PASS (aero_sky_gradient.gdshader,
+      shader_type sky) - fullscreen, zero geometry, fragment math copied 1:1
+      from the dome (dome sphere centered on the camera, so its dir is
+      exactly EYEDIR). Clouds moved off the dome into a real cloud layer:
+      cloud_layer.gdshader on a 4096x4096 flat QuadMesh at CLOUD_H=160 that
+      follows the player XZ; the pattern is anchored to WORLD XZ in the
+      shader (correct parallax while moving) and scrolls by u_wind *
+      u_cloud_time (main.gd advances the clock per frame, clamped like the
+      day clock). Fog disabled on the layer (crisp at the horizon, like the
+      dome clouds), edge fade at the quad boundary, AC-0242 srgb pre-decode
+      on both materials (the sky pass needed it under Forward+ too - without
+      it the sky renders one sRGB curve brighter). The old
+      AWECRAFT_AERO_SKY flag is gone; AWECRAFT_CLOUDS=0 disables the layer.
+      GATE LESSONS (both were compile errors that headless never catches -
+      headless does not compile shaders): a sky shader COLOR is a vec3 (the
+      dome-style vec4 assign is a compile error); spatial shaders have no
+      WORLD_POSITION builtin (compute (MODEL_MATRIX * VERTEX).xz in the
+      vertex and pass it as a varying). USER-CAUGHT ON REAL GPU: first
+      shipped build had both shaders failing to compile - the sky fell back
+      to a flat clear color (no sun, no clouds) and the cloud quad rendered
+      with the error fallback (the reported ground-level z-fighting).
+      VERIFY (xvfb, Forward+/lavapipe + gl_compatibility, RADIUS 2, SEED 44,
+      frozen clock): noon eyeup shot (t=0.5) shows the blue day gradient,
+      the sun disc + halo, and white procedural clouds in the sky, no
+      z-fighting, identical under both renderers; the t=0.25 shot is the
+      faithful sunrise look (t=0.25 is sunrise in the DayNight model -
+      elevation(0.25)=0, dusk factor 1 - the pink sky is correct, not a
+      grade bug); drift check: 30 s of wind scroll changed 48% of the cloud
+      band pixels. SMOKE battery ok (player/interact/light/fluids at
+      baseline), settings arm ok. Windows exe rebuilt with the fix.
+
 - id: AC-0236
   title: chunk-io-encode-decode-to-cpp
   source: user
@@ -8183,3 +8220,34 @@ intake:
       uniform push. Frames: .scratch/ab5_fwd.png (bare, mean diff 4.25)
       and .scratch/ab6_fwd.png (graded, mean diff 2.56) vs ab3_ref/ab6_ref.
       SMOKE green. Awaiting user visual confirm on the rebuilt exe.
+
+- id: AC-0243
+  title: controller-double-tap-a-fly-mode
+  status: open
+  created_at: 2026-09-07T18:30
+  updated_at: 2026-09-07T18:30
+  notes: |
+    1) User Story: As a player with a controller I want to double-tap the A
+    button (the Bedrock jump-double-tap) to toggle fly mode on and off, and
+    while flying I want A to raise me and B to lower me, so I can fly like in
+    Minecraft Bedrock.
+
+    2) Technical Details (user request, 2026-09-07):
+    - player.gd: track jump-action presses (the "jump" action = Space key and
+      A/Cross button 0, so the double-tap works on keyboard too - Bedrock
+      parity); two presses within ~0.3 s toggle _flying and the second press
+      does not jump. While _flying: gravity off, vertical velocity =
+      +climb while A held, -climb while B (pad_cancel button 1; keyboard:
+      Shift/sneak) held, 0 otherwise; horizontal stays the normal move code.
+      Toggling off resumes gravity.
+    - AC-0087 documented B as a no-op (no crouch) - it now means "lower"
+      while flying.
+    - Gates: extend the AWECRAFT_LOGIC=gamepad arm - synthetic double-tap A
+      (two InputEventJoypadButton presses <0.3 s apart) asserts the fly state
+      toggles on, then hold A (axis/button repeat) asserts y rises, hold B
+      asserts y falls, double-tap again asserts fly off + gravity resumes;
+      then SMOKE. Commit + push.
+  comments:
+  - id: 1
+    author: user
+    text: "Double tapping A and holding it on the second tap should toggle flying on and off. B button lowers height while flying."

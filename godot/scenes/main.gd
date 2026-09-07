@@ -27,8 +27,10 @@ var _stats_prev_proc := 0.0
 var _stats_acc := 0.0
 var aero := false
 var _batt := false
-var aero_sky: MeshInstance3D
-var aero_sky_mat: ShaderMaterial
+var sky_mat: ShaderMaterial  # AC-0235: the sky-pass gradient (replaces the AeroSky dome)
+var cloud_layer: MeshInstance3D  # AC-0235: the procedural cloud quad
+var cloud_mat: ShaderMaterial
+var _cloud_time := 0.0  # AC-0235: cloud drift clock (advanced per frame)
 var aero_wash: MeshInstance3D
 var aero_wash_mesh: QuadMesh
 var _star_node: MeshInstance3D
@@ -54,7 +56,16 @@ func _ready() -> void:
 
 	world_env = WorldEnvironment.new()
 	env = Environment.new()
-	env.background_mode = Environment.BG_COLOR
+	# AC-0235: the sky gradient + sun moved from the AeroSky dome
+	# (a flipped sphere) into the engine SKY PASS - no geometry.
+	env.background_mode = Environment.BG_SKY
+	var _sky_res := Sky.new()
+	_sky_res.radiance_size = Sky.RADIANCE_SIZE_32  # IBL is unused in this game - smallest cubemap
+	sky_mat = ShaderMaterial.new()
+	sky_mat.shader = load("res://core/aero_sky_gradient.gdshader")
+	sky_mat.set_shader_parameter("u_srgb_pre", _srgb_pre)  # AC-0242
+	_sky_res.sky_material = sky_mat
+	env.sky = _sky_res
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.fog_enabled = true
 	env.fog_mode = Environment.FOG_MODE_DEPTH
@@ -86,6 +97,10 @@ func _ready() -> void:
 	var time_env := OS.get_environment("AWECRAFT_TIME")
 	if time_env != "":
 		Game.time_of_day = fmod(time_env.to_float(), 1.0)
+	# AC-0235: harness seed for the cloud drift clock (drift A/B shots).
+	var ct0 := OS.get_environment("AWECRAFT_CLOUD_T0")
+	if ct0 != "":
+		_cloud_time = ct0.to_float()
 	var anim_phase_env := OS.get_environment("AWECRAFT_ANIM_PHASE")
 	if anim_phase_env != "":
 		for bid in Data.fluid_anim_mats:
@@ -1953,22 +1968,22 @@ func _build_walk_pad(sp: Vector3, radius: int) -> float:
 func _setup_aero() -> void:
 	if AeroLib.grade_on():
 		AeroLib.apply_grade(env)
-	if AeroLib.sky_on():
-		var sm := ShaderMaterial.new()
-		sm.shader = load("res://core/aero_sky.gdshader")
-		sm.set_shader_parameter("cam_pos", Vector3.ZERO)
-		sm.set_shader_parameter("u_srgb_pre", _srgb_pre)
-		aero_sky_mat = sm
-		var sph := SphereMesh.new()
-		sph.radius = AeroLib.SKY_RADIUS
-		sph.height = AeroLib.SKY_RADIUS * 2.0
-		sph.rings = 24
-		sph.flip_faces = true
-		aero_sky = MeshInstance3D.new()
-		aero_sky.name = "AeroSky"
-		aero_sky.mesh = sph
-		aero_sky.material_override = sm
-		add_child(aero_sky)
+	# AC-0235: the procedural cloud layer (a flat quad at CLOUD_H;
+	# the pattern is world-anchored in the shader, so following the
+	# player's XZ does not smear it).
+	if AeroLib.clouds_on():
+		var cm := ShaderMaterial.new()
+		cm.shader = load("res://core/cloud_layer.gdshader")
+		cm.set_shader_parameter("u_srgb_pre", _srgb_pre)
+		cloud_mat = cm
+		var q := QuadMesh.new()
+		q.size = Vector2(4096.0, 4096.0)
+		cloud_layer = MeshInstance3D.new()
+		cloud_layer.name = "CloudLayer"
+		cloud_layer.mesh = q
+		cloud_layer.material_override = cm
+		cloud_layer.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
+		add_child(cloud_layer)
 	if AeroLib.wash_on():
 		aero_wash_mesh = QuadMesh.new()
 		var wm := ShaderMaterial.new()
@@ -2011,11 +2026,15 @@ func _process(delta: float) -> void:
 			_stats_acc = 0.0
 			_refresh_stats()
 	_update_sky()
-	if aero and aero_sky != null:
+	# AC-0235: cloud layer follows the player's XZ; the drift
+	# clock advances per frame (clamped like the day clock).
+	if cloud_layer != null:
+		if player != null:
+			cloud_layer.position = Vector3(player.position.x, AeroLib.CLOUD_H, player.position.z)
+		_cloud_time += minf(delta, 0.05)
+	if aero:
 		var ac := _aero_camera()
 		if ac != null:
-			aero_sky.global_position = ac.global_position
-			aero_sky_mat.set_shader_parameter("cam_pos", ac.global_position)
 			if aero_wash != null:
 				aero_wash.visible = true
 				var gt := ac.global_transform
@@ -2170,10 +2189,18 @@ func _update_sky() -> void:
 	env.ambient_light_color = AeroLib.AMBIENT_TINT if aero else Color.WHITE
 	env.ambient_light_energy = DayNight.ambient_energy(t) * (AeroLib.AMBIENT_BOOST if aero else 1.0)
 	env.fog_light_color = sky
-	if aero and aero_sky_mat != null:
+	# AC-0235: the sky-pass gradient + sun (same AeroLib uniforms as the
+	# old dome; the cloud_* keys belong to the cloud layer now).
+	if sky_mat != null:
 		var u := AeroLib.sky_uniforms(t)
 		for k in u.keys():
-			aero_sky_mat.set_shader_parameter(k, u[k])
+			if k != "cloud_color" and k != "cloud_amount":
+				sky_mat.set_shader_parameter(k, u[k])
+	if cloud_mat != null:
+		var u2 := AeroLib.sky_uniforms(t)
+		cloud_mat.set_shader_parameter("u_cloud_time", _cloud_time)
+		cloud_mat.set_shader_parameter("u_coverage", float(u2["cloud_amount"]))
+		cloud_mat.set_shader_parameter("u_cloud_tint", Color(u2["cloud_color"]))
 
 
 func _update_fog() -> void:
