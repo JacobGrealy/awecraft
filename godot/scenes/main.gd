@@ -715,12 +715,12 @@ func _continue_slot(slot: int) -> void:
 		target = Vector3(float(pos[0]), float(pos[1]), float(pos[2]))
 	else:
 		target = world.spawn_point()
-	world.recenter(target.x, target.z, true)
+	world.recenter(target.x, target.z, true, target.y)
 	await _await_core_3x3(target, 3000)
 	player = _spawn_player()
 	_restore_player(ps if height_ok else {})
 	if Game.world != null:
-		world.recenter(player.position.x, player.position.z)
+		world.recenter(player.position.x, player.position.z, true, player.position.y)  # AC-0234
 	Game.time_of_day = float(data.get("time", 0.0))
 	Game.start()
 	_apply_aw_query()
@@ -1395,6 +1395,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "r16":
 			await _r16_test(spawn)
 			return
+		if logic == "loduv":
+			await _loduv_test()
+			return
 		if logic == "dithersettings":
 			await _dithersettings_test()
 			return
@@ -1407,12 +1410,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		if logic == "bandmap":
 			await _bandmap_test(spawn)
 			return
-		if logic == "lodband":
-			await _lodband_test(spawn)
-			return
-		if logic == "lodswap":
-			await _lodswap_test(spawn)
-			return
+		# AC-0231: the lodband/lodswap arms (AC-0181 coarse-LOD fidelity +
+		# swap hysteresis) are GONE with band 2 — the far LOD is now the
+		# separate low-res placeholder (verified in the r16 arm's "lod" block).
 		if logic == "edgeretain":
 			await _edgeretain_test(spawn)
 			return
@@ -5840,16 +5840,14 @@ func _meshprobe_test(spawn: Vector3) -> void:
 		ctx_w["blk_strips"] = st["blk"]
 		ctx_w["blk_strips_b"] = st["blk_b"]
 		ctx_w["top"] = int(c.top)
-		if int(c.band) == 2:
-			ctx_w["coarse"] = true
-			ctx_w["uv_scale"] = 2
+		# AC-0231: the band-2 coarse ctx (coarse/uv_scale) is gone — full fidelity.
 		var ms_w: Dictionary
 		if not world._tm_ms_full.rects.is_empty():
 			ms_w = {"rects": world._tm_ms_full.rects.duplicate(), "h": float(world._tm_ms_full.get("h", 0.0))}
 		else:
 			ms_w = {"rects": {}}
 		var tt := Time.get_ticks_usec()
-		var gres: Dictionary = mc.build_accs(ChunkIO._slabs_deepcopy(c.data), ChunkIO._slabs_deepcopy(c.fl), cx, cz, nbs, ctx_w, ms_w, {}, 0, -1, 0, Lighting._att, Lighting._glow)
+		var gres: Dictionary = mc.build_accs(ChunkIO._slabs_deepcopy(c.data), ChunkIO._slabs_deepcopy(c.fl), cx, cz, nbs, ctx_w, ms_w, {}, 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())  # AC-0234: empty mask = pre-0234 behavior
 		gd_wall_us += Time.get_ticks_usec() - tt
 		if not cpp:
 			continue
@@ -5870,7 +5868,7 @@ func _meshprobe_test(spawn: Vector3) -> void:
 		var _cf = mc.slab_copy(c.fl)
 		nbs_cpp_us += Time.get_ticks_usec() - tcn1
 		tt = Time.get_ticks_usec()
-		var cres: Dictionary = mc.build_accs(_cd, _cf, cx, cz, cnbs, ctx_w, ms_w, {}, 0, -1, 0, Lighting._att, Lighting._glow)
+		var cres: Dictionary = mc.build_accs(_cd, _cf, cx, cz, cnbs, ctx_w, ms_w, {}, 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())  # AC-0234: empty mask = pre-0234 behavior
 		cpp_wall_us += Time.get_ticks_usec() - tt
 		gd_wms_sum += int(gres.get("wms", 0))
 		cpp_wms_sum += int(cres.get("wms", 0))
@@ -7002,7 +7000,7 @@ func _r16_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
 	world.render_radius = maxi(world.render_radius, 16)
 	var rr: int = world.render_radius
-	world.recenter(spawn.x, spawn.z, true)
+	world.recenter(spawn.x, spawn.z, true, spawn.y)  # AC-0234: seed the window Y
 	var pcx := int(floorf(spawn.x / 16.0))
 	var pcz := int(floorf(spawn.z / 16.0))
 	var passes0 := int(world.perf_cull_passes)
@@ -7058,6 +7056,19 @@ func _r16_test(spawn: Vector3) -> void:
 	const MOVING_FRAMES := 900
 	var static_ms: Array = []
 	var ds0 := _r16_dirty_snap()  # AC-0218: phase boundary (after build settle)
+	# AC-0231 rewrite: the far-LOD placeholder coverage at the moment the
+	# player first sees the terrain (the build is done, the camera settles)
+	# — EVERY far non-air slab (outside the render circle) must be covered
+	# at its Y (a fog box instance on data landing, or the per-slab 4x4x4
+	# low, or a high that already caught up).
+	var far0 := _r16_lod_far()
+	var inr0 := _r16_lod_inr()  # AC-0231: in-r pending set at first sight
+	var h0 := _r16_lod_slabcheck()  # AC-0231 rewrite: per-slab geometry + air checks
+	# AC-0231 fix3: the WAVE ORDER check — drive the WAVE 2 global slab
+	# wave to completion and verify the pick sequence is a GLOBAL bottom-up
+	# wave across all columns (si non-decreasing, the first layer spans
+	# several columns — not one whole column before the next).
+	var wave := _r16_wave_test()
 	var min_static_y := 1e30
 	var floor_frames := 0
 	for i in STATIC_FRAMES:
@@ -7109,6 +7120,31 @@ func _r16_test(spawn: Vector3) -> void:
 	# the edit shows immediately even while the streaming queue is busy.
 	var edit_probe := await _r16_edit_probe()
 	var spin_probe := await _r16_spin_probe()
+	# AC-0234: the vertical window phase (ascend 176 blocks, hold,
+	# descend — the band slides through the sky and the NEVER-BUILT
+	# interior below the surface band churns fog<->cap, while the built
+	# slabs stay built (keep-high for culling)). Runs BEFORE the
+	# catch-up window so its re-entered caps get their low/high swaps
+	# before the final samples.
+	var vwin := await _r16_vwin_phase(cam, cam.global_position)
+	# AC-0231 catch-up window: wait for the heavy pipeline to idle (the
+	# drain dispatches nothing + the TG pool drained — the same predicate
+	# as world._low_idle), then settle 450 frames while the low->high
+	# upgrades run (nearest cone first, then nearest rest). The delta of
+	# world.low_upgrades_n across the window is the catch-up evidence;
+	# the far composition re-sample shows lows turning into highs.
+	var qidle := 0
+	while qidle < 1800 and (int(world._drain_units_last) > 0 or not world.threadgen_inflight.is_empty()):
+		await get_tree().physics_frame
+		qidle += 1
+	var up0 := int(world.low_upgrades_n)
+	for i in 450:
+		await get_tree().physics_frame
+	var far1 := _r16_lod_far()
+	var inr1 := _r16_lod_inr()  # AC-0231: in-r pending set at the settle sample
+	var h1 := _r16_lod_slabcheck()  # AC-0231 rewrite: per-slab geometry + air checks
+	var air_test := _r16_air_chunk_test()  # AC-0231 rewrite: targeted air-chunk test
+	var catch_up := int(world.low_upgrades_n) - up0
 	var s := _r16_stats(static_ms)
 	var m := _r16_stats(moving_ms)
 	Debug.result({
@@ -7147,6 +7183,22 @@ func _r16_test(spawn: Vector3) -> void:
 			"cols": int(WorldGen.gen_cpp().skip_cols_total()),
 			"enq": int(world.perf_gen_skip_enq),
 		},
+		# AC-0237 phase 0: the C++ gen cost breakdown (us, cumulative over
+		# all TG worker threads) — field = the 7 coarse field builds,
+		# heights = the 256 per-column surface/biome, scan = the top-down
+		# density evaluation (the part the window would skip), fill = the
+		# per-cell emit incl. ore, veg = trees+flowers, pallet =
+		# palettize_slabs; cols_full/cols_skip split the column count.
+		"gen_timing": {
+			"field_ms": int(int(WorldGen.gen_cpp().gen_timing().get("field_us", 0)) / 1000.0),
+			"heights_ms": int(int(WorldGen.gen_cpp().gen_timing().get("heights_us", 0)) / 1000.0),
+			"scan_ms": int(int(WorldGen.gen_cpp().gen_timing().get("scan_us", 0)) / 1000.0),
+			"fill_ms": int(int(WorldGen.gen_cpp().gen_timing().get("fill_us", 0)) / 1000.0),
+			"veg_ms": int(int(WorldGen.gen_cpp().gen_timing().get("veg_us", 0)) / 1000.0),
+			"pallet_ms": int(int(WorldGen.gen_cpp().gen_timing().get("pallet_us", 0)) / 1000.0),
+			"cols_full": int(WorldGen.gen_cpp().gen_timing().get("cols_full", 0)),
+			"cols_skip": int(WorldGen.gen_cpp().gen_timing().get("cols_skip", 0)),
+		},
 		# AC-0232: the dither-fade toggle + the two distance sliders in
 		# force for this run (the Settings the Options menu drives; the
 		# env preloads win). fade_active = the far band is on (the dithered
@@ -7171,6 +7223,69 @@ func _r16_test(spawn: Vector3) -> void:
 		# AC-0233: the tiered two-queue streaming evidence — the fall-through
 		# check (static), the dirty-edit latency, the spin-180 reprioritize,
 		# and the rescore (waiting-parts rewrite) counters.
+		# AC-0234: the vertical window evidence. The kept set per TOWER =
+		# its own terrain span [wlo, whi] (min/max of that tower's + its
+		# 8 neighbors' column TOPS) + the player band (player slab +/- 4,
+		# always); a CULLED never-built slab renders its pre-baked 16^3
+		# BLACK cap (the deep interior / see-through hole fill); a built
+		# slab is NEVER capped (keep-high for culling). caps_ok = the
+		# cull is active (the deep interior below the local surface is
+		# black); churn_ok = the ascend/descend cull+uncap cycle ran
+		# (lows below the band floor drop to caps going up, re-entered
+		# caps swap back for low/high coming down — the re-queue: a
+		# re-entered cap on a non-built chunk re-issues its queue entry,
+		# because the low lane only sees entry-holding chunks); owed_ok
+		# = the owed-kept invariant at the final sample (no built chunk
+		# keeps a slab its last build never built — the superset
+		# re-queue's convergence guarantee, keep-high: nothing built is
+		# ever dropped); phase_ok = no UNCOVERED in-r slab at any of the
+		# four samples (the cap-aware contract: every non-air slab is
+		# high / low / fog / cap — no holes at any altitude, on the way
+		# down, or after the upgrades).
+		"vwin": {
+			"phase": vwin,
+			"caps_n": int(world.vwin_caps_n),
+			"cap_chunks_n": int(world.vwin_cap_chunks_n),
+			"culls_n": int(world.vwin_culls_n),
+			"uncaps_n": int(world.vwin_uncaps_n),
+			"caps_ok": int(world.vwin_caps_n) > 0,
+			# keep-high for culling: a built slab is never capped, so the
+			# churn = LOWs dropped when they leave the window (culls) +
+			# re-entered caps swapped for a low/high (uncaps) — the
+			# never-built deep interior only ever flows through caps.
+			"churn_ok": int(world.vwin_culls_n) > 0 and int(world.vwin_uncaps_n) > 0,
+			# owed_ok = the owed-kept invariant at the FINAL sample: no
+			# built chunk keeps a slab its last build (vwin_mask) never
+			# built (the superset re-queue converges: a slab the window
+			# re-enters on a BUILT chunk gets filled, keep-high). The
+			# rebuilds_n COUNT stays 0 in this arm on purpose: no build
+			# dispatches while a slab is culled (far chunks are data-only
+			# band 3, in-r chunks are pre-built) — the mechanism fires on
+			# mid-flight window moves and span growth, and the invariant
+			# above is what guarantees its result.
+			"owed_ok": _r16_vwin_owed_count(world) == 0,
+			"owed_n": _r16_vwin_owed_count(world),
+			"rebuilds_n": int(world.vwin_rebuilds_n),
+			# AC-0237: window-scoped generation — the mechanism fired
+			# (regens enqueued during the band slides) and the final
+			# sample is covered (every kept ungenerated slab is capped —
+			# no see-through holes; the owed count is pending work, not
+			# a defect, bounded by the in-flight regen cap).
+			"gen_ok": _r16_gen_cov_count(world) == 0,
+			"gen_cov_bad": _r16_gen_cov_count(world),
+			"gen_owed_n": _r16_gen_owed_count(world),
+			"gen_regens_n": int(world.vwin_regens_n),
+			"gen_range_n": _r16_range_gen_count(world),
+			"remesh_enq_n": int(world.vwin_remesh_enq_n),
+			"remesh_disp_n": int(world.vwin_remesh_disp_n),
+			"remesh_drop_n": int(world.vwin_remesh_drop_n),
+			"remesh_pool_n": int(world.vwin_remesh_pool_n),
+			"remesh_consumed_n": int(world.vwin_remesh_consumed_n),
+			"phase_ok": int(vwin.get("inr0", {}).get("inr_uncovered", 1)) == 0
+					and int(vwin.get("inr_hi", {}).get("inr_uncovered", 1)) == 0
+					and int(vwin.get("inr_hold", {}).get("inr_uncovered", 1)) == 0
+					and int(vwin.get("inr_back", {}).get("inr_uncovered", 1)) == 0,
+		},
 		"tier": {
 			"cone_dot": 0.5,
 			"rescore_events": int(world.perf_rescore_events),
@@ -7185,6 +7300,93 @@ func _r16_test(spawn: Vector3) -> void:
 			},
 			"edit": edit_probe,
 			"spin": spin_probe,
+		},
+		# AC-0231 rewrite + fix3: the far-LOD low-res placeholder evidence,
+		# PER SLAB — far_slabs = the NON-AIR slabs of the data chunks
+		# OUTSIDE the render circle at the sample instant (resident, face
+		# 0/1); far_fog/far_low/far_high = the per-slab composition (one
+		# pre-baked 16^3 fog box instance / per-slab 4x4x4 low / high). The
+		# three GLOBAL waves (all fog -> all low -> all high, across ALL
+		# columns): wave 1 = fog on every data landing (immediate_ok
+		# covers it — EVERY far non-air slab is covered at its Y at first
+		# sight, no empty pop at 4-50x); wave 2 = the global slab wave
+		# (wave.si_monotone_ok = the pick sequence is non-decreasing in si
+		# — all si=N slabs of every column before any si=N+1;
+		# wave.first_layer_columns >= 2 = the first layer interleaves
+		# several columns, never one whole column before the next;
+		# far1.far_low = all the low per slab out to render distance);
+		# wave 3 = the AC-0233 tiers (catch_up = the low->high upgrades
+		# across the idle settle window, far_high filling per the tiered
+		# order). The gates: height_ok = every fog instance is a unit box
+		# at its slab's Y + every low mesh is slab-local 0..16 at
+		# (0, si*16, 0); no_giant_ok = no non-fully-solid coarse grid
+		# meshed as a 16^3 giant box (multiple block faces stay);
+		# uv_repeat_ok = every low quad samples the RIGHT tile at the RIGHT
+		# span (strip quads: repeating 31px per world block from the strip
+		# origin — 4 repeats per 4-block quad, NOT stretched; plain-rect
+		# quads: ONE 32px tile from its origin — the high-mesh plain
+		# convention; the old bug applied the repeating span from a plain
+		# rect, walking into the block's atlas neighbors); air_ok = no air
+		# slab carries a placeholder; no_downgrade_ok = a high never turned
+		# back to a low (keep-high).
+		"lod": {
+			"far0": far0,
+			"far1": far1,
+			"slab0": h0,
+			"slab1": h1,
+			# AC-0231 in-r pre-low: the INSIDE-circle pending set (data
+			# landed, no high mesh) at first sight / mid-fly4 / settle.
+			# inr_ok = no uncovered in-r slab at either sample (every
+			# pending in-r slab is fog or low — no empty space inside r).
+			"inr0": inr0,
+			"inr1": inr1,
+			"inr4": f4.get("inr_mid", {}),
+			"inr_ok": int(inr0.get("inr_uncovered", 1)) == 0 and int(inr1.get("inr_uncovered", 1)) == 0,
+			# AC-0231 order gate: gate_holds_n = tier >= 2 high dispatches
+			# HELD while in-r lows were pending (the gate working — must be
+			# large during streaming). high_before_low_n = tier >= 2 highs
+			# that LANDED while not drained (measured at DISPATCH tier);
+			# _firstbuild = the NEW-COVERAGE subset (a first high build —
+			# only in-flight stragglers from legitimate open windows can
+			# land this way: <= TM pool depth per re-close); re-meshes of
+			# already-high chunks don't breach the ordering. gate_ok gates
+			# the first-build subset against 4 x pool depth.
+			"gate_holds_n": int(world.perf_high_gate_holds_n),
+			"high_before_low_n": int(world.perf_high_before_low_n),
+			"high_before_low_firstbuild_n": int(world.perf_high_before_low_firstbuild_n),
+			"gate_reclose_n": int(world.perf_gate_reclose_n),
+			"gate_ok": int(world.perf_high_before_low_firstbuild_n) <= 24,
+			"wave": wave,
+			"air_chunk_test": air_test,
+			"height_ok": bool(h0["height_ok"]) and bool(h1["height_ok"]),
+			"air_ok": bool(h0["air_ok"]) and bool(h1["air_ok"]) and bool(air_test["ok"]),
+			"no_giant_ok": bool(h0["no_giant_ok"]) and bool(h1["no_giant_ok"]),
+			"uv_repeat_ok": bool(h0["uv_repeat_ok"]) and bool(h1["uv_repeat_ok"]),
+			"wave_ok": bool(wave.get("ok", false)),
+			"immediate_ok": int(far0["far_slabs"]) == 0 or int(far0["far_visible"]) == int(far0["far_slabs"]),
+			"low_built_n": int(world.low_built_n),
+			"low_rebuilds_n": int(world.low_rebuilds_n),
+			"low_upgrades_n": int(world.low_upgrades_n),
+			"low_fog_boxes_n": int(world.low_fog_boxes_n),
+			# AC-0236 part 2: the low-lane threading evidence. low_emit_cpp =
+			# the C++ emits completed on the TM pool (the worker path);
+			# low_enqueue_n = dispatches; low_handoff_n = the main-thread
+			# attaches; low_drop_stale_n = dropped (data changed mid-flight
+			# / chunk gone — re-picked next frame); low_sync_fallbacks_n =
+			# the main-thread fallbacks (pool saturated — must be small in
+			# steady streaming). low_thread_ok = the threading path actually
+			# ran (emits > attaches is impossible; emits > 0 proves the
+			# pool lane carried real work, not just the sync fallback).
+			"low_emit_cpp": int(world.low_emit_cpp),
+			"low_enqueue_n": int(world.low_enqueue_n),
+			"low_handoff_n": int(world.low_handoff_n),
+			"low_drop_stale_n": int(world.low_drop_stale_n),
+			"low_sync_fallbacks_n": int(world.low_sync_fallbacks_n),
+			"low_thread_ok": int(world.low_emit_cpp) > 0,
+			"catch_up_frames": qidle,
+			"catch_up": catch_up,
+			"catch_up_ok": catch_up >= 1 or int(far1["far_high"]) > int(far0["far_high"]),
+			"no_downgrade_ok": int(world.low_downgrade_n) == 0,
 		},
 		# AC-0218: neighbor-dirty evidence — per-phase deltas of the world
 		# marking counters (ld_marks = the 3x3 light_dirty edit ring,
@@ -7312,6 +7514,978 @@ func _r16_dirty_delta(a: Dictionary, b: Dictionary) -> Dictionary:
 	return d
 
 
+# AC-0231 rewrite: the far-LOD placeholder composition at the sample
+# instant, counted PER SLAB — the data chunks OUTSIDE the render circle
+# (resident, face 0/1): every NON-AIR slab (c.data[si] != null) must be
+# covered by its high (mesh_built), its per-slab fog box (fog_slabs), or
+# its per-slab 4x4x4 low (low_slabs). far_visible = the covered-slab count
+# (the "all fog per non-air slab out to render distance" numerator).
+func _r16_lod_far() -> Dictionary:
+	var n := 0
+	var slabs := 0
+	var fog := 0
+	var low := 0
+	var high := 0
+	var cap := 0  # AC-0234: culled slabs covered by their black cap
+	var pcx := int(world.last_pcx)
+	var pcz := int(world.last_pcz)
+	var rr := int(world.render_radius)
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if int(c.face) > 1:
+			continue
+		var dx := int(c.cx) - pcx
+		var dz := int(c.cz) - pcz
+		if dx * dx + dz * dz <= rr * rr:
+			continue  # inside the render circle — that's the HIGH set
+		if c.data.is_empty():
+			continue  # no data yet — nothing to show (gen not landed)
+		n += 1
+		for si in range(c.data.size()):
+			if c.data[si] == null:
+				continue  # air slab — no placeholder needed
+			slabs += 1
+			if bool(c.mesh_built):
+				high += 1
+			elif c.has_low_si(si):
+				low += 1
+			elif c.has_fog_si(si):
+				fog += 1
+			elif c.has_cap_si(si):
+				cap += 1  # AC-0234: the black cap covers the culled slab
+	return {"far_n": n, "far_slabs": slabs, "far_fog": fog, "far_low": low, "far_high": high, "far_cap": cap, "far_visible": fog + low + high + cap}
+
+
+# AC-0231 in-r pre-low evidence: the INSIDE-circle PENDING set (data
+# landed, no high mesh yet). Every non-air slab of a pending chunk must
+# carry a placeholder — uncovered == 0 is the "no empty space inside r"
+# contract. inr4 (mid-fly) reports the low/fog split: the tier-ordered
+# in-r pass should have most pending slabs at LOW already (it outruns the
+# high completions), with only the just-landed chunks still at fog.
+func _r16_lod_inr() -> Dictionary:
+	var n := 0
+	var slabs := 0
+	var fog := 0
+	var low := 0
+	var cap := 0  # AC-0234: culled slabs covered by their black cap
+	var uncovered := 0
+	var pcx := int(world.last_pcx)
+	var pcz := int(world.last_pcz)
+	var rr := int(world.render_radius)
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if int(c.face) > 1:
+			continue
+		var dx := int(c.cx) - pcx
+		var dz := int(c.cz) - pcz
+		if dx * dx + dz * dz > rr * rr:
+			continue  # outside the circle — the far sampler owns it
+		if bool(c.mesh_built):
+			continue  # already high — no pending placeholder
+		if c.data.is_empty():
+			continue  # no data yet — nothing to show
+		n += 1
+		for si in range(c.data.size()):
+			if c.data[si] == null:
+				continue  # air slab — no placeholder needed
+			slabs += 1
+			if c.has_low_si(si):
+				low += 1
+			elif c.has_fog_si(si):
+				fog += 1
+			elif c.has_cap_si(si):
+				cap += 1  # AC-0234: a culled slab is COVERED by its black cap
+			else:
+				uncovered += 1
+	return {"inr_n": n, "inr_slabs": slabs, "inr_fog": fog, "inr_low": low, "inr_cap": cap, "inr_uncovered": uncovered}
+
+
+# AC-0231 rewrite: the PER-SLAB LOD geometry checks.
+# height_ok  = every fog instance is a unit-scale box at its slab's Y
+#              (origin (0, si*16, 0)) and every per-slab low mesh sits
+#              slab-local 0..16 at (0, si*16, 0) — the LOD is per slab at
+#              its Y, never the whole 384 column.
+# air_ok     = no air slab (data null) carries a fog or low instance.
+# no_giant_ok= a slab whose 4x4x4 coarse grid is NOT fully solid must not
+#              mesh as a 16x16x16 giant box (6 full-face quads at 16 span)
+#              — sparse slabs stay small quads with shape. quad_span
+#              reports the min/max quad counts of the non-box lows
+#              ("multiple block faces" evidence).
+# uv_repeat_ok = AC-0231 fix3: for EVERY low quad, the UVs sample the
+#              RIGHT tile at the RIGHT span. The quad's id is re-derived
+#              from the coarse grid + slab-local position (the emitting
+#              cell), the expected tile = the per-face merged-atlas strip
+#              when the block has one, else the original 32px atlas rect.
+#              STRIP quads: REPEATING UVs — the UV span in canvas px
+#              equals 31px x the quad's world span in blocks (4 repeats
+#              per 4-block quad, NOT stretched) + origin at strip_tl + 0.5
+#              + inside the 512x128 strip. PLAIN-rect quads (no strip:
+#              water/leaves/flowers/torch/lava/banana): exactly ONE tile —
+#              a 31px span, origin tl + 0.5, inside the 32px tile (the
+#              high mesh's mesh.cpp plain-branch convention) — a
+#              repeating span from a plain rect walks into the block's
+#              atlas neighbors (the "wrong texture mapping" the user
+#              reported). Tileless blocks: zero UVs (the high mesh writes
+#              (0,0) for them too — reported, not gated).
+func _r16_lod_slabcheck() -> Dictionary:
+	var pcx := int(world.last_pcx)
+	var pcz := int(world.last_pcz)
+	var rr := int(world.render_radius)
+	var sln: int = int(_ChunkScriptM.slab_n())
+	var hms: float = float(world._tm_ms_full.get("h", Data.ATLAS_PX))
+	var rects: Dictionary = world._tm_ms_full.get("rects", {})
+	var fog_n := 0
+	var fog_ok := true
+	var cap_n := 0
+	var cap_ok := true
+	var cap_null_fail := 0
+	var cap_count_fail := 0
+	var cap_mesh_fail := 0
+	var cap_mat_fail := 0
+	var cap_inv_fail := 0
+	var low_n := 0
+	var low_ok := true
+	var air_with_lod := 0
+	var nongiant_total := 0
+	var nongiant_ok := 0
+	var quad_min := 0
+	var quad_max := 0
+	var uv_quads := 0
+	var uv_ok := 0
+	var low_pos_fail := 0
+	var low_aabb_fail := 0
+	var low_null_fail := 0
+	var fog_null_fail := 0
+	var fog_count_fail := 0
+	var fog_mesh_fail := 0
+	var fog_aabb_fail := 0
+	var box_legal := 0
+	var box_bad := 0
+	var uv_zero_fail := 0
+	var uv_mismatch := 0
+	var uv_bad_max := 0.0
+	var uv_strip_n := 0
+	var uv_plain_n := 0
+	var uv_stale_slabs := 0
+	var uv_stale_quads := 0
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if int(c.face) > 1:
+			continue
+		var dx := int(c.cx) - pcx
+		var dz := int(c.cz) - pcz
+		if dx * dx + dz * dz <= rr * rr:
+			continue  # inside the render circle — the HIGH set
+		# air slabs must carry NO placeholder instance.
+		if c.data.is_empty():
+			if bool(c.has_fog()) or bool(c.has_low()) or bool(c.has_cap()):
+				air_with_lod += 1
+		else:
+			for si in range(c.data.size()):
+				if c.data[si] == null and (c.has_fog_si(si) or c.has_low_si(si) or c.has_cap_si(si)):
+					air_with_lod += 1
+		# FOG: one pre-baked 16^3 box instance per non-air slab at its Y.
+		# (This engine build's MultiMesh does not expose instance-transform
+		# readback under the dummy renderer, so the check is data-side: the
+		# instance COUNT must equal the fogged-slab count and the instance
+		# mesh must be the shared pre-baked 16^3 box — the per-slab Y
+		# placement is deterministic from fog_slabs in _fog_sync.)
+		if c.fog_instance != null:
+			var mm: MultiMesh = c.fog_instance.multimesh
+			if mm == null:
+				fog_ok = false
+				fog_null_fail += 1
+			else:
+				if int(mm.instance_count) != int(c.fog_slabs.size()):
+					fog_ok = false
+					fog_count_fail += 1
+				fog_n += int(mm.instance_count)
+				if mm.mesh != world._low_fog_mesh:
+					fog_ok = false
+					fog_mesh_fail += 1
+				elif world._low_fog_mesh != null:
+					var bb: AABB = world._low_fog_mesh.get_aabb()
+					if not (is_equal_approx(bb.size.x, 16.0) and is_equal_approx(bb.size.y, 16.0) \
+							and is_equal_approx(bb.size.z, 16.0) \
+							and is_equal_approx(bb.position.x, 0.0) and is_equal_approx(bb.position.y, 0.0) \
+							and is_equal_approx(bb.position.z, 0.0)):
+						fog_ok = false
+						fog_aabb_fail += 1
+		# AC-0234 CAP: the black 16^3 fill for CULLED non-air slabs — the
+		# SAME pre-baked box mesh as the fog (data-side count/mesh check,
+		# the same readback limitation) + the black material override +
+		# the P1 invariant PER SLAB: a capped slab is non-air and holds NO
+		# high instance and NO low (the cap owns the slab exclusively).
+		if c.cap_instance != null:
+			var cmm: MultiMesh = c.cap_instance.multimesh
+			if cmm == null:
+				cap_ok = false
+				cap_null_fail += 1
+			else:
+				if int(cmm.instance_count) != int(c.cap_slabs.size()):
+					cap_ok = false
+					cap_count_fail += 1
+				cap_n += int(cmm.instance_count)
+				if cmm.mesh != world._low_fog_mesh:
+					cap_ok = false
+					cap_mesh_fail += 1
+				elif c.cap_instance.material_override != world._vwin_cap_mat:
+					cap_ok = false
+					cap_mat_fail += 1
+		for jcap in range(int(c.cap_slabs.size())):
+			var sicap: int = int(c.cap_slabs[jcap])
+			if sicap >= c.data.size() or c.data[sicap] == null \
+					or (sicap < c.slabs.size() and c.slabs[sicap].mesh_instance != null) \
+					or c.has_low_si(sicap) or c.has_fog_si(sicap):
+				cap_ok = false
+				cap_inv_fail += 1
+		# LOW: a per-slab 4x4x4 mesh, slab-local 0..16, at (0, si*16, 0).
+		for j in range(int(c.low_slabs.size())):
+			var si2: int = int(c.low_slabs[j])
+			var mi: MeshInstance3D = c.low_instances[j] if j < c.low_instances.size() else null
+			if mi == null or mi.mesh == null:
+				low_ok = false
+				low_null_fail += 1
+				continue
+			low_n += 1
+			# AC-0231 fix3: STALE slab — its per-slab stamp is behind the
+			# chunk stamp (the data changed after the low was built: a new
+			# data landing, or the atlas swap that dropped + re-lowers the
+			# low). Its mesh is a TIME CAPSULE of the old data (the slab
+			# wave re-lowers it on the next pipeline activity), so the
+			# grid-vs-mesh checks below (giant block + UV mapping) only
+			# gate FRESH slabs — a capsule against the NEW grid is not a
+			# builder bug, it is the designed transient.
+			var slab_stale: bool = c.low_stamps.get(si2, []) != c.stamp()
+			if slab_stale:
+				uv_stale_slabs += 1
+			if not (is_equal_approx(mi.position.x, 0.0) and is_equal_approx(mi.position.z, 0.0) \
+					and is_equal_approx(mi.position.y, float(si2) * 16.0)):
+				low_ok = false
+				low_pos_fail += 1
+			var aabb: AABB = mi.mesh.get_aabb()
+			if aabb.size.y > 16.5 or aabb.position.x < -0.5 or aabb.position.y < -0.5 or aabb.position.z < -0.5 \
+					or aabb.position.x + aabb.size.x > 16.5 or aabb.position.y + aabb.size.y > 16.5 \
+					or aabb.position.z + aabb.size.z > 16.5:
+				low_ok = false
+				low_aabb_fail += 1
+			# NO GIANT BLOCK: the coarse grid (the world's own sampler).
+			# A 16^3 box mesh (6 full-face quads) is LEGAL only when all
+			# SIX face planes of the grid are fully solid (a hollow
+			# interior is invisible at coarse resolution — the box IS the
+			# correct coarse representation). A box over a grid with ANY
+			# air cell on a face plane = the giant-block bug.
+			var g: PackedByteArray = world._low_slab_grid(c, si2)
+			var grid_full := true
+			var solid_n := 0
+			for k in range(g.size()):
+				if int(g[k]) == 0:
+					grid_full = false
+				else:
+					solid_n += 1
+			var planes_all_solid := true
+			for k in range(g.size()):
+				var lx: int = k % 4
+				var lz: int = (k / 4) % 4
+				var ly: int = k / 16
+				if int(g[k]) == 0 and (lx == 0 or lx == 3 or lz == 0 or lz == 3 or ly == 0 or ly == 3):
+					planes_all_solid = false
+					break
+			var arrs: Array = mi.mesh.surface_get_arrays(0)  # this build: surface_get_arrays (no get_arrays_for_surface)
+			var quads := 0
+			if arrs[Mesh.ARRAY_INDEX].size() > 0:
+				quads = arrs[Mesh.ARRAY_INDEX].size() / 6
+			if not grid_full and not slab_stale:  # stale = time capsule (see above)
+				nongiant_total += 1
+				var is_box := quads == 6 and is_equal_approx(aabb.size.x, 16.0) \
+						and is_equal_approx(aabb.size.y, 16.0) and is_equal_approx(aabb.size.z, 16.0)
+				if is_box:
+					if planes_all_solid:
+						box_legal += 1  # hollow interior — the box is correct
+					else:
+						low_ok = false
+						box_bad += 1
+						if box_bad <= 3:
+							print("BOXBAD %d,%d slab=%d solid=%d quads=%d grid=%s" % [
+								int(c.cx), int(c.cz), si2, solid_n, quads, str(g)])
+				else:
+					nongiant_ok += 1
+					quad_min = quads if quad_min == 0 else mini(quad_min, quads)
+					quad_max = maxi(quad_max, quads)
+			# TEXTURE MAPPING (AC-0231 fix3): every quad's UVs must sample
+			# the RIGHT tile at the RIGHT span — see the header comment for
+			# the strip (repeating 31px/block) vs plain-rect (one 32px
+			# tile) expectations. The quad's id is re-derived from the
+			# coarse grid + the slab-local position (the quad sits on the
+			# +n side of cell (pu, pv, k)); the expected tile is the
+			# per-face merged-atlas strip when the block has one, else the
+			# original 32px atlas rect.
+			var v: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+			var uva: PackedVector2Array = arrs[Mesh.ARRAY_TEX_UV]
+			var idx: PackedInt32Array = arrs[Mesh.ARRAY_INDEX]
+			var nrm: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
+			for q in range(idx.size() / 6):
+				if slab_stale:
+					if q == 0:
+						uv_stale_quads += idx.size() / 6
+					continue  # time capsule — the fresh-slab gate only
+				var i0: int = int(idx[q * 6])
+				var n0: Vector3 = nrm[i0]
+				# the face's (u, v) position axes (the mesh.cpp convention),
+				# from the DOMINANT normal axis — this build stores tiny
+				# (~1e-5) garbage in the off-axis components, so exact-zero
+				# tests misclassify (a (0,0,1) face with y=1.5e-5 would read
+				# as a Y face and compare the wrong position span).
+				var ax0 := absf(n0.x)
+				var ax1 := absf(n0.y)
+				var ax2 := absf(n0.z)
+				var uax: int
+				var vax: int
+				var nax: int
+				if ax1 >= ax0 and ax1 >= ax2:
+					uax = 0
+					vax = 2
+					nax = 1
+				elif ax0 >= ax2:
+					uax = 2
+					vax = 1
+					nax = 0
+				else:
+					uax = 0
+					vax = 1
+					nax = 2
+				var umin := 1e30
+				var umax := -1e30
+				var vmin := 1e30
+				var vmax := -1e30
+				var uum := 1e30
+				var uux := -1e30
+				var uvm := 1e30
+				var uvx := -1e30
+				for t in range(4):
+					var iv: int = int(idx[q * 6 + t])
+					var pv2: Vector3 = v[iv]
+					var cu: float = pv2[uax]
+					var cv2: float = pv2[vax]
+					umin = minf(umin, cu)
+					umax = maxf(umax, cu)
+					vmin = minf(vmin, cv2)
+					vmax = maxf(vmax, cv2)
+					var tuv: Vector2 = uva[iv]
+					uum = minf(uum, tuv.x)
+					uux = maxf(uux, tuv.x)
+					uvm = minf(uvm, tuv.y)
+					uvx = maxf(uvx, tuv.y)
+				uv_quads += 1
+				# the emitting cell (pu, pv, k) from the slab-local
+				# position: the face plane is shared by all 4 corners; the
+				# quad min corner is (pu*4, pv*4) on the u/v axes.
+				var plane0: float = v[i0][nax]
+				var kcell := int(plane0 / 4.0) - (1 if n0[nax] > 0.0 else 0)
+				var pu2 := int(umin / 4.0)
+				var pv2 := int(vmin / 4.0)
+				var u_span_px: float = (uux - uum) * Data.ATLAS_PX
+				var v_span_px: float = (uvx - uvm) * hms
+				var idok := pu2 >= 0 and pu2 < 4 and pv2 >= 0 and pv2 < 4 and kcell >= 0 and kcell < 4
+				var idv := 0
+				var fi2 := 0
+				var face2 := "side"
+				var strip_r: Vector2i = Vector2i(-1, -1)
+				var plain_r: Vector2i = Vector2i(-1, -1)
+				if idok:
+					if nax == 1:
+						fi2 = 2 if n0.y > 0.0 else 3
+					elif nax == 0:
+						fi2 = 0 if n0.x < 0.0 else 1
+					else:
+						fi2 = 4 if n0.z < 0.0 else 5
+					# the grid layout is x + z*4 + y*16 — map the quad's
+					# (u, v, normal-axis) cells to (x, z, y) PER FACE
+					# (fi0/1: u=z,v=y,n=x; fi2/3: u=x,v=z,n=y; fi4/5:
+					# u=x,v=y,n=z) — a flat u + v*4 + k*16 index is only
+					# right for the Y faces and reads the wrong (often air)
+					# cell for the side faces.
+					var gx := kcell
+					var gz := pu2
+					var gy := pv2
+					if fi2 == 2 or fi2 == 3:
+						gx = pu2
+						gz = pv2
+						gy = kcell
+					elif fi2 == 4 or fi2 == 5:
+						gx = pu2
+						gz = kcell
+					idv = int(g[gx + gz * 4 + gy * 16])
+					if fi2 == 2:
+						face2 = "top"
+					elif fi2 == 3:
+						face2 = "bottom"
+					strip_r = rects.get("%d_%s" % [idv, face2], Vector2i(-1, -1))
+					plain_r = Data.block_rect(idv, face2)
+				var is_strip := idok and strip_r.x >= 0
+				var is_plain := idok and not is_strip and plain_r.x >= 0
+				var want_u: float
+				var want_v: float
+				var tl: Vector2i
+				var tile_w := 32.0
+				var tile_h := 32.0
+				if is_strip:
+					uv_strip_n += 1
+					want_u = (umax - umin) * 31.0
+					want_v = (vmax - vmin) * 31.0
+					tl = strip_r
+					tile_w = 512.0
+					tile_h = 128.0
+				elif is_plain:
+					uv_plain_n += 1
+					want_u = 31.0
+					want_v = 31.0
+					tl = plain_r
+				else:
+					# tileless block (no atlas rect) — the high mesh writes
+					# (0,0) for these too: the zero-UV expectation.
+					want_u = 0.0
+					want_v = 0.0
+					tl = Vector2i(0, 0)
+				var ok_span := absf(u_span_px - want_u) < 0.5 and absf(v_span_px - want_v) < 0.5
+				var ok_origin := false
+				var ok_tile := false
+				if idok:
+					ok_origin = absf(uum * Data.ATLAS_PX - (float(tl.x) + 0.5)) < 0.5 \
+							and absf(uvm * hms - (float(tl.y) + 0.5)) < 0.5
+					ok_tile = uum * Data.ATLAS_PX >= float(tl.x) - 0.01 \
+							and uux * Data.ATLAS_PX <= float(tl.x) + tile_w + 0.01 \
+							and uvm * hms >= float(tl.y) - 0.01 \
+							and uvx * hms <= float(tl.y) + tile_h + 0.01
+				if ok_span and ok_origin and ok_tile:
+					uv_ok += 1
+				elif u_span_px < 0.0001 and v_span_px < 0.0001:
+					uv_zero_fail += 1  # the quad has no tile at all (zero UVs)
+				else:
+					uv_mismatch += 1
+					uv_bad_max = maxf(uv_bad_max, maxf(absf(u_span_px - want_u), absf(v_span_px - want_v)))
+					if uv_mismatch <= 8:
+						# FORENSICS: the id implied by the mesh UV (reverse
+						# lookup of the origin in the CURRENT rect table) vs
+						# the id re-derived from the CURRENT grid, the
+						# direct cell read at the emitter's sample point,
+						# and the stamp state.
+						var uv_id := -1
+						var uv_face := "?"
+						var mx := int(roundf(uum * Data.ATLAS_PX - 0.5))
+						var my := int(roundf(uvm * hms - 0.5))
+						for rk in rects:
+							var rkv: Vector2i = rects[rk]
+							if int(rkv.x) == mx and int(rkv.y) == my:
+								var parts: PackedStringArray = rk.split("_")
+								if parts.size() == 2:
+									uv_id = int(parts[0])
+									uv_face = parts[1]
+								break
+						# the emitter's sample cell, per face convention:
+						# fi0/1 (u=z,v=y,n=x) / fi2/3 (u=x,v=z,n=y) /
+						# fi4/5 (u=x,v=y,n=z).
+						var sx_c := kcell
+						var sy_c := pv2
+						var sz_c := pu2
+						if fi2 == 2 or fi2 == 3:
+							sx_c = pu2
+							sy_c = kcell
+							sz_c = pv2
+						elif fi2 == 4 or fi2 == 5:
+							sx_c = pu2
+							sz_c = kcell
+						var cell_direct := -1
+						if idok and int(c.data.size()) > si2:
+							cell_direct = int(c.get_local(4 * sx_c + 2, si2 * 16 + 4 * sy_c + 2, 4 * sz_c + 2))
+						print("UVBAD %d,%d slab=%d derived_id=%d uv_id=%s/%s cell_direct=%d stamp=%s stored=%s posspan=[%.1f,%.1f] uvspan_px=[%.1f,%.1f] uum_px=%.2f uvm_px=%.2f want=[%.1f,%.1f]" % [
+							int(c.cx), int(c.cz), si2, idv, uv_id, uv_face, cell_direct,
+							str(c.stamp()), str(c.low_stamps.get(si2, [])),
+							umax - umin, vmax - vmin,
+							u_span_px, v_span_px, uum * Data.ATLAS_PX, uvm * hms, want_u, want_v])
+	return {
+		"fog_n": fog_n,
+		"low_n": low_n,
+		# AC-0234: the cap checks join height_ok (the fog/cap boxes are the
+		# same per-slab-at-its-Y placeholder family).
+		"cap_n": cap_n,
+		"height_ok": fog_ok and low_ok and cap_ok,
+		"cap_ok": cap_ok,
+		"cap_null_fail": cap_null_fail,
+		"cap_count_fail": cap_count_fail,
+		"cap_mesh_fail": cap_mesh_fail,
+		"cap_mat_fail": cap_mat_fail,
+		"cap_inv_fail": cap_inv_fail,
+		"low_pos_fail": low_pos_fail,
+		"low_aabb_fail": low_aabb_fail,
+		"low_null_fail": low_null_fail,
+		"fog_null_fail": fog_null_fail,
+		"fog_count_fail": fog_count_fail,
+		"fog_mesh_fail": fog_mesh_fail,
+		"fog_aabb_fail": fog_aabb_fail,
+		"air_with_lod": air_with_lod,
+		"air_ok": air_with_lod == 0,
+		"no_giant_ok": box_bad == 0,
+		"nongiant_total": nongiant_total,
+		"nongiant_ok": nongiant_ok,
+		"box_legal": box_legal,
+		"box_bad": box_bad,
+		"quad_span": [quad_min, quad_max],
+		"uv_quads": uv_quads,
+		"uv_ok": uv_ok,
+		"uv_strip_n": uv_strip_n,
+		"uv_plain_n": uv_plain_n,
+		"uv_stale_slabs": uv_stale_slabs,
+		"uv_stale_quads": uv_stale_quads,
+		"uv_zero_fail": uv_zero_fail,
+		"uv_mismatch": uv_mismatch,
+		"uv_bad_max": uv_bad_max,
+		# the gate (AC-0231 fix3): every TILED quad on a FRESH slab samples
+		# the RIGHT tile (strip = repeating 31px/block from the strip
+		# origin; plain rect = ONE 32px tile from its origin) — span +
+		# origin + in-tile. STALE slabs (the data changed after the low was
+		# built — a new landing or the atlas swap — and the slab wave owes
+		# them a re-lower) are time capsules: reported (uv_stale_slabs /
+		# uv_stale_quads), not gated. Zero-UV quads are tileless blocks (no
+		# atlas rect — the high mesh writes (0,0) for them too: mesh.cpp
+		# tl.x < 0 -> tu=tv=0) — reported, not gated.
+		"uv_repeat_ok": uv_quads > 0 and uv_mismatch == 0,
+		"low_max_h_built": float(world.low_max_h),
+	}
+
+
+# AC-0234: the window state snapshot (the harness evidence — the terrain
+# range [wlo, whi] = the min/max of the 3x3 neighborhood column tops, the
+# player band [blo, bhi] = the player slab +/- 4, and the version).
+func _vwin_state() -> Dictionary:
+	# AC-0234: the terrain span is PER TOWER now — report the player
+	# column's own 3x3 span (the global part of the window is just the
+	# band).
+	var sp: Array = world._vwin_span(world.last_pcx, world.last_pcz)
+	return {
+		"ver": int(world._vwin_ver),
+		"wlo": int(sp[0]),
+		"whi": int(sp[1]),
+		"has_range": int(sp[1]) >= 0,
+		"blo": int(world._vwin_blo),
+		"bhi": int(world._vwin_bhi),
+		"py": float(world._vwin_py),
+	}
+
+
+# AC-0234: the owed-kept invariant count at a sample instant — the number
+# of BUILT (window-masked) chunks that keep a non-air slab their last
+# build (vwin_mask) never built (the superset re-queue's convergence
+# guarantee: it must be 0 at rest — the re-queue fills exactly this set).
+func _r16_vwin_owed_count(world) -> int:
+	var owed := 0
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if int(c.face) > 1 or c.data.is_empty():
+			continue
+		# AC-0237: band 3 (the data-only collar) never renders — a window
+		# debt there is DEFERRED (the reband 3 -> 0/1 hook re-queues it
+		# the moment the chunk becomes visible again), so the invariant
+		# is measured over the meshable set only.
+		if int(c.band) == 3:
+			continue
+		if not bool(c.mesh_built) or bool(c.vwin_full):
+			continue
+		var km: PackedByteArray = world._vwin_col_kept(c)
+		var bm: PackedByteArray = c.vwin_mask
+		for si in range(km.size()):
+			if km[si] == 0:
+				continue
+			if si < c.data.size() and c.data[si] == null:
+				continue
+			if si >= bm.size() or bm[si] == 0:
+				owed += 1
+				break
+	return owed
+
+# AC-0237: the GEN invariants at a sample.
+# gen_owed: kept slabs a data-bearing chunk never generated (pending
+# re-entry work — a regen in flight or queued; bounded by the window).
+# gen_cov: a kept+ungenerated slab must hold a CAP (the void is covered —
+# the snap reads it as solid, so an uncovered one would be a see-through
+# hole in a cliff face).
+func _r16_gen_owed_count(world) -> int:
+	var owed := 0
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if int(c.face) > 1 or c.data.is_empty():
+			continue
+		var km: PackedByteArray = world._vwin_col_kept(c)
+		for si in range(km.size()):
+			if int(km[si]) != 0 and not c.has_gen_si(si):
+				owed += 1
+	return owed
+
+func _r16_gen_cov_count(world) -> int:
+	var bad := 0
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if int(c.face) > 1 or c.data.is_empty():
+			continue
+		if int(c.cx) == world.last_pcx and int(c.cz) == world.last_pcz:
+			continue  # tier 0 = the full build (its mid-regen window is covered by the neighbors' solid-snap)
+		var km: PackedByteArray = world._vwin_col_kept(c)
+		for si in range(km.size()):
+			if int(km[si]) == 0:
+				continue
+			if c.has_gen_si(si):
+				continue
+			if not c.has_cap_si(si):
+				bad += 1
+				break
+	return bad
+
+func _r16_range_gen_count(world) -> int:
+	var n := 0
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if c.gen_mask != 0xFFFFFF:
+			n += 1
+	return n
+
+# AC-0234: the VERTICAL window phase — ascend 176 blocks (11 slabs) in
+# 16-block steps (each step = one recenter WITH the new wy: the same
+# trigger the player's Y-slab crossing fires in play), hold at altitude,
+# descend, hold at the surface. The XZ center does NOT move (the span is
+# constant; the band slides through the sky), so the evidence here is:
+# the cap fill exists from data landing (the deep interior below the
+# lowest local column top is black: caps > 0, cap_chunks > 0), the
+# cull/uncap cycle actually ran (culls going up, the re-queued swap
+# coming down — uncaps), no UNCOVERED in-r slab at any sample (the
+# cap-aware contract: every non-air slab is high / low / fog / cap), and
+# the descent leaves the terrain covered (no holes when re-entering +
+# upgrading).
+func _r16_vwin_phase(cam: Camera3D, base: Vector3) -> Dictionary:
+	var out: Dictionary = {}
+	var x0 := base.x
+	var z0 := base.z
+	var y0 := base.y
+	var steps := 11
+	out["win0"] = _vwin_state()
+	out["caps0"] = int(world.vwin_caps_n)
+	out["cap_chunks0"] = int(world.vwin_cap_chunks_n)
+	out["culls0"] = int(world.vwin_culls_n)
+	out["uncaps0"] = int(world.vwin_uncaps_n)
+	out["rebuilds0"] = int(world.vwin_rebuilds_n)
+	out["inr0"] = _r16_lod_inr()
+	# ASCEND — one 16-block step = one Y-slab crossing = one full
+	# recenter carrying the new wy (the band follows the altitude).
+	for i in range(1, steps + 1):
+		var y := y0 + float(i) * 16.0
+		world.recenter(x0, z0, true, y)
+		cam.global_transform = Transform3D(Basis(), Vector3(x0, y + 1.8, z0))
+		for f in 8:
+			await get_tree().physics_frame
+	out["win_hi"] = _vwin_state()
+	out["caps_hi"] = int(world.vwin_caps_n)
+	out["inr_hi"] = _r16_lod_inr()
+	# HOLD at altitude (the band sits in the sky — the in-r set is
+	# stable; the caps under the terrain must not flicker or vanish).
+	for f in 120:
+		await get_tree().physics_frame
+	out["inr_hold"] = _r16_lod_inr()
+	# DESCEND — the band re-enters the terrain.
+	for i in range(steps, 0, -1):
+		var y := y0 + float(i) * 16.0
+		world.recenter(x0, z0, true, y)
+		cam.global_transform = Transform3D(Basis(), Vector3(x0, y + 1.8, z0))
+		for f in 8:
+			await get_tree().physics_frame
+	world.recenter(x0, z0, true, y0)
+	cam.global_transform = Transform3D(Basis(), Vector3(x0, y0 + 1.8, z0))
+	for f in 60:
+		await get_tree().physics_frame
+	out["win_back"] = _vwin_state()
+	out["caps_end"] = int(world.vwin_caps_n)
+	out["culls_end"] = int(world.vwin_culls_n)
+	out["uncaps_end"] = int(world.vwin_uncaps_n)
+	out["rebuilds_end"] = int(world.vwin_rebuilds_n)
+	out["inr_back"] = _r16_lod_inr()
+	return out
+
+
+# AC-0231 rewrite: targeted, NON-VACUOUS air-chunk test. The R16 terrain
+# has no natural air columns, so the air_ok count alone could be 0/0.
+# Here we take a REAL far chunk, clear its data to all-air (top = -1),
+# and verify the LOD path (the fog wave AND the per-slab low build)
+# creates NO placeholder for it — then restore.
+func _r16_air_chunk_test() -> Dictionary:
+	var pcx := int(world.last_pcx)
+	var pcz := int(world.last_pcz)
+	var rr := int(world.render_radius)
+	var c: Node3D = null
+	for key in world.chunks:
+		var cc: Node3D = world.chunks[key]
+		if int(cc.face) > 1:
+			continue
+		var dx := int(cc.cx) - pcx
+		var dz := int(cc.cz) - pcz
+		if dx * dx + dz * dz <= rr * rr:
+			continue
+		if cc.data.is_empty() or bool(cc.mesh_built):
+			continue
+		c = cc
+		break
+	if c == null:
+		return {"ran": false, "ok": false, "reason": "no far non-high chunk found"}
+	world._lod_free_all(c, false)  # clean slate (the live counts stay consistent)
+	var saved_data: Array = c.data
+	var saved_top: int = int(c.top)
+	var air: Array = []
+	for i in int(_ChunkScriptM.slab_n()):
+		air.append(null)
+	c.data = air
+	c.top = -1  # all-air column (the LOD must refuse it)
+	# the fog wave must NOT create a placeholder for an air column
+	world._low_fog_for(c)
+	var fog_created: bool = c.has_fog()
+	# the per-slab low build must NOT create a low for an air column
+	world._low_build(c)
+	var low_created: bool = bool(c.low_built) or int(c.low_instances.size()) > 0
+	c.data = saved_data
+	c.top = saved_top
+	return {
+		"ran": true,
+		"cx": int(c.cx),
+		"cz": int(c.cz),
+		"fog_created": fog_created,
+		"low_created": low_created,
+		"ok": (not fog_created) and (not low_created),
+	}
+
+
+# AC-0231 fix3: the WAVE ORDER check — drive the WAVE 2 global slab wave
+# SYNCHRONOUSLY (world._low_pick_slab + world._low_build_slab, no frames
+# between) and record the pick sequence. The wave is GLOBAL (all fog ->
+# all low -> all high, across ALL columns — not one whole column before
+# the next) only when:
+#   si_monotone_ok      : the sequence's slab indices are NON-DECREASING —
+#                         every si=N slab of every column lands before any
+#                         si=N+1 (the bottom-up wave across the whole
+#                         region; the per-column fill would interleave a
+#                         column's full slab range before its neighbor's
+#                         first slab);
+#   first_layer_columns >= 2 : the first wave layer (si == the minimum)
+#                         spans SEVERAL columns (interleaved across all
+#                         columns — a per-column wave touches exactly one).
+# The builds are real (they just accelerate the wave the game would run
+# over ~1000 frames at 60 fps) and leave the far fill in the state the
+# natural wave reaches; the terminal-fog slabs (sampled all-air) end the
+# sequence — the wave advanced past them by design.
+func _r16_wave_test() -> Dictionary:
+	var seq: Array = []
+	var cap := 4000
+	while seq.size() < cap:
+		var e: Dictionary = world._low_pick_slab()
+		if e.is_empty():
+			break
+		var c: Node3D = world.chunks.get(e["key"])
+		if c == null or c.data.is_empty() or bool(c.mesh_built):
+			world._low_slab_none_key = ""
+			break
+		world._low_build_slab(c, int(e["si"]))
+		seq.append([int(e["si"]), int(e["cx"]), int(e["cz"])])
+	if seq.is_empty():
+		# the WAVE 2 global wave already DRAINED (every far non-air slab
+		# already holds its low at sample time — the wave completed, which
+		# is exactly the requirement: all fog -> all low across all columns)
+		return {"ran": true, "ok": true, "builds": 0, "drained_at_sample": true,
+			"si_monotone_ok": true, "first_layer_columns": 0, "layers": {}}
+	var si_monotone := true
+	var prev := int(seq[0][0])
+	var min_si := prev
+	var first_layer_cols := {}
+	var layers: Dictionary = {}
+	for s in seq:
+		var si: int = int(s[0])
+		if si < prev:
+			si_monotone = false
+		prev = si
+		min_si = mini(min_si, si)
+		if si == min_si:
+			first_layer_cols["%d,%d" % [int(s[1]), int(s[2])]] = true
+		layers[si] = int(layers.get(si, 0)) + 1
+	var capped := seq.size() >= cap
+	var ok := si_monotone and int(first_layer_cols.size()) >= 2
+	return {
+		"ran": true,
+		"builds": seq.size(),
+		"capped": capped,
+		"si_monotone_ok": si_monotone,
+		"min_si": min_si,
+		"max_si": int(seq[seq.size() - 1][0]),
+		"layers": layers,
+		"first_layer_columns": first_layer_cols.size(),
+		"ok": ok,
+	}
+
+
+# AC-0231 fix3: the DIRECT texture-mapping check for the low-LOD emitter —
+# no world data needed: synthetic 4x4x4 grids through world._low_emit_slab.
+# Case LEAVES (id 7 — cutout, NO merged-atlas strip): one 4x4x4 coarse
+# cell of leaves, slab 0, every neighbor air -> 6 exposed 4x4 quads. The
+# UVs must sample exactly ONE 32px leaf tile — the high mesh's plain-rect
+# convention (mesh.cpp's plain branch: a 31px span, origin tl + 0.5,
+# inside the tile) — because the OLD bug applied the 124px REPEATING span
+# from the plain tile's origin, walking 3+ tiles past the leaf's own tile
+# into its atlas neighbors (the "wrong texture mapping" the user saw on
+# the far leaves/water). Case GRASS (id 1 — solid, HAS a strip): the FULL
+# slab solid -> 6 quads (top/bottom 16x16 blocks, sides 16x4); the UVs must
+# REPEAT at 31px per world block (496px across the 16-block u span, 124px
+# across the 4-block v span — inside the 512x128 strip), origin at the
+# strip top-left + 0.5: the texture repeats 4x across each 4-block quad,
+# NOT stretched.
+func _loduv_test() -> void:
+	for i in 60:
+		await get_tree().physics_frame
+	var rects: Dictionary = world._tm_ms_full.get("rects", {})
+	if rects.is_empty():
+		Debug.result({"mode": "loduv", "ok": false, "reason": "no merged-atlas strips (atlas missing?)"})
+		get_tree().quit()
+		return
+	var r_leaf: Dictionary = _loduv_check_slab(7, [[2, 2, 0]], rects, false)
+	var r_grass: Dictionary = _loduv_check_slab(1, null, rects, true)
+	Debug.result({
+		"mode": "loduv",
+		"atlas_px": Data.ATLAS_PX,
+		"ms_h": float(world._tm_ms_full.get("h", 0.0)),
+		"strips": rects.size(),
+		"leaf": r_leaf,
+		"grass": r_grass,
+		"ok": bool(r_leaf.get("ok", false)) and bool(r_grass.get("ok", false)),
+	})
+	get_tree().quit()
+
+# One synthetic slab through world._low_emit_slab: `cells` = the (x, z, y)
+# coarse cells of block id (null = the FULL 4x4x4 slab solid; untyped
+# because the null case IS the full slab);
+# strip_mode = the block has a merged-atlas strip (expect the repeating
+# 31px-per-block span); otherwise expect the single-tile (31px) span
+# inside the original 32px rect. Every quad must match: span + origin
+# (tl + 0.5) + inside the tile/strip canvas.
+func _loduv_check_slab(id: int, cells: Variant, rects: Dictionary, strip_mode: bool) -> Dictionary:
+	var ga := PackedByteArray()
+	ga.resize(64)
+	if cells == null:
+		for i in 64:
+			ga[i] = id
+	else:
+		for c3 in cells:
+			ga[int(c3[0]) + int(c3[1]) * 4 + int(c3[2]) * 16] = id
+	var grids: Array = []
+	grids.resize(int(_ChunkScriptM.slab_n()))
+	grids[0] = ga
+	var mesh = world._low_emit_slab(ga, grids, 0)
+	if mesh == null:
+		return {"ok": false, "quads": 0, "reason": "no mesh emitted"}
+	var hms: float = float(world._tm_ms_full.get("h", Data.ATLAS_PX))
+	var arrs: Array = mesh.surface_get_arrays(0)
+	var v: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+	var uva: PackedVector2Array = arrs[Mesh.ARRAY_TEX_UV]
+	var idx: PackedInt32Array = arrs[Mesh.ARRAY_INDEX]
+	var nrm: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
+	var quads := 0
+	var bad := 0
+	var max_span_u := 0.0
+	var max_span_v := 0.0
+	for q in range(idx.size() / 6):
+		var n0: Vector3 = nrm[int(idx[q * 6])]
+		var fi := 0
+		if absf(n0.y) >= absf(n0.x) and absf(n0.y) >= absf(n0.z):
+			fi = 2 if n0.y > 0 else 3
+		elif absf(n0.x) >= absf(n0.z):
+			fi = 0 if n0.x < 0 else 1
+		else:
+			fi = 4 if n0.z < 0 else 5
+		var face := "side"
+		if fi == 2:
+			face = "top"
+		elif fi == 3:
+			face = "bottom"
+		# the expected tile: the per-face merged-atlas strip when the block
+		# has one, else the block's original 32px atlas rect.
+		var strip_r: Vector2i = Vector2i(-1, -1)
+		if strip_mode:
+			strip_r = rects.get("%d_%s" % [id, face], Vector2i(-1, -1))
+		var is_strip := strip_r.x >= 0
+		var plain_r: Vector2i = Vector2i(-1, -1)
+		if not is_strip:
+			plain_r = Data.block_rect(id, face)
+		var tl: Vector2i = strip_r if is_strip else plain_r
+		quads += 1
+		var um := 1e30
+		var ux := -1e30
+		var vm := 1e30
+		var vx := -1e30
+		var zm := 1e30
+		var zx := -1e30
+		var umv := 1e30
+		var uxv := -1e30
+		var vmv := 1e30
+		var vxv := -1e30
+		for t in range(4):
+			var iv: int = int(idx[q * 6 + t])
+			var pv: Vector3 = v[iv]
+			um = minf(um, pv.x)
+			ux = maxf(ux, pv.x)
+			vm = minf(vm, pv.y)
+			vx = maxf(vx, pv.y)
+			zm = minf(zm, pv.z)
+			zx = maxf(zx, pv.z)
+			var uv: Vector2 = uva[iv]
+			umv = minf(umv, uv.x * Data.ATLAS_PX)
+			uxv = maxf(uxv, uv.x * Data.ATLAS_PX)
+			vmv = minf(vmv, uv.y * hms)
+			vxv = maxf(vxv, uv.y * hms)
+		max_span_u = maxf(max_span_u, uxv - umv)
+		max_span_v = maxf(max_span_v, vxv - vmv)
+		# the face's (u, v) POSITION axes (the emitter's per-face convention:
+		# fi 0/1: u=z, v=y; fi 2/3: u=x, v=z; fi 4/5: u=x, v=y) — the UV
+		# span must match the span along THAT axis, not always X/Y.
+		var pu_span: float
+		var pv_span: float
+		if fi == 0 or fi == 1:
+			pu_span = zx - zm
+			pv_span = vx - vm
+		elif fi == 2 or fi == 3:
+			pu_span = ux - um
+			pv_span = zx - zm
+		else:
+			pu_span = ux - um
+			pv_span = vx - vm
+		var want_u: float
+		var want_v: float
+		if is_strip:
+			want_u = pu_span * 31.0
+			want_v = pv_span * 31.0
+		else:
+			want_u = 31.0
+			want_v = 31.0
+		var ok_span := absf((uxv - umv) - want_u) < 0.5 and absf((vxv - vmv) - want_v) < 0.5
+		var ok_origin := absf(umv - (float(tl.x) + 0.5)) < 0.5 and absf(vmv - (float(tl.y) + 0.5)) < 0.5
+		var tile_w: float = 512.0 if is_strip else 32.0
+		var tile_h: float = 128.0 if is_strip else 32.0
+		var ok_tile := umv >= float(tl.x) - 0.01 and uxv <= float(tl.x) + tile_w + 0.01 \
+				and vmv >= float(tl.y) - 0.01 and vxv <= float(tl.y) + tile_h + 0.01
+		if not (ok_span and ok_origin and ok_tile):
+			bad += 1
+			if bad <= 6:
+				print("LODUVBAD id=%d fi=%d strip=%d tile=%s span_ok=%d origin_ok=%d tile_ok=%d uv_px_u=[%.1f,%.1f] uv_px_v=[%.1f,%.1f] want=[%.1f,%.1f]" % [
+					id, fi, int(is_strip), str(tl), int(ok_span), int(ok_origin), int(ok_tile),
+					umv, uxv, vmv, vxv, want_u, want_v])
+	return {
+		"quads": quads,
+		"bad": bad,
+		"max_span_px": [roundf(max_span_u * 10.0) / 10.0, roundf(max_span_v * 10.0) / 10.0],
+		"ok": quads > 0 and bad == 0,
+	}
+
+
 func _r16_stats(ms_list: Array) -> Dictionary:
 	var n := ms_list.size()
 	if n == 0:
@@ -7369,6 +8543,7 @@ func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 	var last_pcz := int(world.last_pcz)
 	var ho_max := 0
 	var ho_cap_max := 0  # AC-0229: the dynamic cap in force (peak, m/s-driven)
+	var inr_mid: Dictionary = {}  # AC-0231: the in-r pending set at phase mid
 	var ahead_while_moving := 0
 	var ahead_max_dist_m := 0.0
 	var rebuilds := 0
@@ -7393,6 +8568,8 @@ func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 			ever_built[key] = true
 	var i := 0
 	while i < n_frames:
+		if i == n_frames / 2 and inr_mid.is_empty():
+			inr_mid = _r16_lod_inr()  # AC-0231: mid-flight in-r lead evidence
 		player.position += dir * (speed * dt)
 		var fb := Time.get_ticks_msec()
 		await get_tree().physics_frame
@@ -7470,6 +8647,7 @@ func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 		"rebuilds": rebuilds,
 		"ho_max": ho_max,
 		"ho_cap_max": ho_cap_max,
+		"inr_mid": inr_mid,
 		"fps": _r16_stats(ms_list),
 	}
 
@@ -10638,7 +11816,7 @@ func _continue_probe() -> void:
 	var col_body_at_spawn: bool = sc != null and sc.has_any_slab_body()
 	_restore_player(ps)
 	if Game.world != null:
-		world.recenter(player.position.x, player.position.z)
+		world.recenter(player.position.x, player.position.z, true, player.position.y)  # AC-0234
 	Game.time_of_day = float(data.get("time", 0.0))
 	Game.start()
 	var load_spawn_ms := Time.get_ticks_msec() - t_c0
@@ -11696,6 +12874,10 @@ func _nofallback_test(spawn: Vector3) -> void:
 	var m0_io := int(ChunkIO.cpp_slab_decodes)
 	var m0_sets := int(ChunkIO.slab_cpp_sets)
 	var m0_gdset := int(ChunkIO.slab_gd_write_calls)
+	# AC-0236 part 1: the v4 SECTION codec counters (encode/decode go through
+	# C++ on the game path; the round-trip below must advance both).
+	var m0_enc := int(ChunkIO.cpp_encode_sections)
+	var m0_decs := int(ChunkIO.cpp_decode_sections)
 	var res := {
 		"ok": false,
 		"m0_mesh": m0_mesh,
@@ -11703,6 +12885,8 @@ func _nofallback_test(spawn: Vector3) -> void:
 		"m0_strips": m0_strips,
 		"m0_light": m0_light,
 		"m0_io": m0_io,
+		"chunkio_cpp_encode_sections": 0,
+		"chunkio_cpp_decode_sections": 0,
 		"mesh_cpp_builds": 0,
 		"gen_cpp_works": 0,
 		"strips_cpp_calls": 0,
@@ -11787,11 +12971,115 @@ func _nofallback_test(spawn: Vector3) -> void:
 		rt_ok = not rt.is_empty() and (rt.get("data", PackedByteArray()) as PackedByteArray) == d and (rt.get("fl", PackedByteArray()) as PackedByteArray) == f and int(ChunkIO.cpp_slab_decodes) > before
 		break
 	res["roundtrip_ok"] = rt_ok
+	# AC-0236 part 2: the C++ low_emit A/B — the worker-side emit must be
+	# BYTE-IDENTICAL to the GDScript _low_emit_slab (same float32 op order,
+	# -ffp-contract=off): vertices/normals/colors/uvs/indices + the aabb
+	# height, on real chunk slabs (the tile lookup is A/B'd too: the C++
+	# ms snapshot rects + plain atlas tables vs _low_tile_base).
+	var le_pairs := 0
+	var le_match := 0
+	var le_tried := 0
+	var mc: Variant = _ChunkScriptM.mesh_cpp()
+	for key in world.chunks:
+		if le_tried >= 4:
+			break
+		var c = world.chunks.get(key)
+		if c == null or c.data.is_empty():
+			continue
+		le_tried += 1
+		var sis: Array = c.low_slabs.duplicate()
+		sis.append_array(c.fog_slabs)
+		for si in sis:
+			var si2 := int(si)
+			if si2 < 0 or si2 >= c.data.size() or c.data[si2] == null:
+				continue
+			var grids: Array = []
+			grids.resize(c.data.size())
+			if c.data[si2] != null:
+				grids[si2] = world._low_slab_grid(c, si2)
+			if si2 > 0 and c.data[si2 - 1] != null:
+				grids[si2 - 1] = world._low_slab_grid(c, si2 - 1)
+			if si2 + 1 < c.data.size() and c.data[si2 + 1] != null:
+				grids[si2 + 1] = world._low_slab_grid(c, si2 + 1)
+			var g: PackedByteArray = grids[si2] if grids[si2] != null else world._low_slab_grid(c, si2)
+			if world._low_grid_empty(g):
+				continue
+			var m_gd: ArrayMesh = world._low_emit_slab(g, grids, si2)
+			var res_c: Dictionary = mc.low_emit(mc.slab_copy(c.data), si2, world._low_ms_snap_get())
+			le_pairs += 1
+			if bool(res_c.get("empty", false)):
+				if m_gd == null:
+					le_match += 1
+				continue
+			if m_gd == null:
+				continue
+			var sg: Array = m_gd.surface_get_arrays(0)
+			# EXACT: geometry + uvs + indices (the port's real contract).
+			# TOLERANT: normals (ArrayMesh re-normalizes on store: ~1.5e-5
+			# perturbation, probe-verified) + colors (ArrayMesh stores
+			# uint8-quantized: max 1/255 error, probe-verified) — both
+			# storage artifacts, not emit differences.
+			var ok_v: bool = (sg[Mesh.ARRAY_VERTEX] as PackedVector3Array) == res_c["v"]
+			var ok_u: bool = (sg[Mesh.ARRAY_TEX_UV] as PackedVector2Array) == res_c["u"]
+			var ok_i: bool = (sg[Mesh.ARRAY_INDEX] as PackedInt32Array) == res_c["i"]
+			var ok_h: bool = is_equal_approx(m_gd.get_aabb().size.y, float(res_c.get("mh", -1.0)))
+			var dnn2: PackedVector3Array = sg[Mesh.ARRAY_NORMAL] as PackedVector3Array
+			var nnn: PackedVector3Array = res_c["n"] as PackedVector3Array
+			var ok_n := dnn2.size() == nnn.size()
+			if ok_n:
+				for q in range(dnn2.size()):
+					var dna := dnn2[q] - nnn[q]
+					if absf(dna.x) > 1e-4 or absf(dna.y) > 1e-4 or absf(dna.z) > 1e-4:
+						ok_n = false
+						break
+			var dcc2: PackedColorArray = sg[Mesh.ARRAY_COLOR] as PackedColorArray
+			var ccc: PackedColorArray = res_c["c"] as PackedColorArray
+			var ok_c := dcc2.size() == ccc.size()
+			if ok_c:
+				for q in range(dcc2.size()):
+					if absf(dcc2[q].r - ccc[q].r) > 0.01 or absf(dcc2[q].g - ccc[q].g) > 0.01 or absf(dcc2[q].b - ccc[q].b) > 0.01 or absf(dcc2[q].a - ccc[q].a) > 0.01:
+						ok_c = false
+						break
+			if not (ok_v and ok_n and ok_c and ok_u and ok_i and ok_h):
+				# AC-0236 part 2 DEBUG: the first mismatch diagnostic (the
+				# A/B gate reports it in the arm result, not print-spam).
+				if res.get("low_emit_debug", "") == "":
+					var dnn: PackedVector3Array = sg[Mesh.ARRAY_NORMAL] as PackedVector3Array
+					var cnn: PackedColorArray = sg[Mesh.ARRAY_COLOR] as PackedColorArray
+					var du: PackedVector2Array = sg[Mesh.ARRAY_TEX_UV] as PackedVector2Array
+					var di: PackedInt32Array = sg[Mesh.ARRAY_INDEX] as PackedInt32Array
+					var fu := -1
+					var mnu := mini(du.size(), (res_c["u"] as PackedVector2Array).size())
+					for q in range(mnu):
+						if du[q] != (res_c["u"] as PackedVector2Array)[q]:
+							fu = q
+							break
+					var cux: PackedVector2Array = res_c["u"] as PackedVector2Array
+					var nux: PackedVector3Array = res_c["n"] as PackedVector3Array
+					var fn_ := -1
+					var mn := mini(dnn.size(), nux.size())
+					for q in range(mn):
+						if dnn[q] != nux[q]:
+							fn_ = q
+							break
+					var dv2: PackedVector3Array = sg[Mesh.ARRAY_VERTEX] as PackedVector3Array
+					var cv2: PackedVector3Array = res_c["v"] as PackedVector3Array
+					res["low_emit_debug"] = "chunk=" + key + " si=" + str(si2) + " v=" + str(ok_v) + " n=" + str(ok_n) + " c=" + str(ok_c) + " u=" + str(ok_u) + " i=" + str(ok_i) + " h=" + str(ok_h) + " fn=" + str(fn_) + " ng=" + ("none" if fn_ < 0 else str(dnn[fn_])) + " nr=" + ("none" if fn_ < 0 else str(nux[fn_])) + " vg=" + ("none" if fn_ < 0 else str(dv2[fn_])) + " vr=" + ("none" if fn_ < 0 else str(cv2[fn_]))
+					print("LOWEMIT_AB " + res["low_emit_debug"])
+			if ok_v and ok_n and ok_c and ok_u and ok_i and ok_h:
+				le_match += 1
+			break  # one slab per chunk is enough (the emit is slab-local)
+	res["low_emit_pairs"] = le_pairs
+	res["low_emit_match"] = le_match
 	res["mesh_cpp_builds"] = int(world.mesh_cpp_builds) - m0_mesh
 	res["gen_cpp_works"] = int(world.gen_cpp_works) - m0_gen
 	res["strips_cpp_calls"] = int(world.strips_cpp_calls) - m0_strips
 	res["light_cpp_pull_calls"] = int(Lighting.cpp_pull_calls) - m0_light
 	res["chunkio_cpp_slab_decodes"] = int(ChunkIO.cpp_slab_decodes) - m0_io
+	# AC-0236 part 1: the round-trip encode+decode must run through the C++
+	# section codec (2 sections each: data + fl).
+	res["chunkio_cpp_encode_sections"] = int(ChunkIO.cpp_encode_sections) - m0_enc
+	res["chunkio_cpp_decode_sections"] = int(ChunkIO.cpp_decode_sections) - m0_decs
 	res["gd_strips_calls"] = int(world.gd_strips_calls)
 	res["gd_light_pull_calls"] = int(Lighting.gd_pull_calls)
 	# AC-0214: the per-block write lane — the C++ slab_set counter must have
@@ -11799,7 +13087,7 @@ func _nofallback_test(spawn: Vector3) -> void:
 	# while the GDScript _slab_write_gd reference sentinel stays 0.
 	res["slab_cpp_sets"] = int(ChunkIO.slab_cpp_sets) - m0_sets
 	res["slab_gd_write_calls"] = int(ChunkIO.slab_gd_write_calls) - m0_gdset
-	res["ok"] = res["mesh_cpp_builds"] > 0 and res["gen_cpp_works"] > 0 and res["strips_cpp_calls"] > 0 and res["chunkio_cpp_slab_decodes"] > 0 and res["gd_strips_calls"] == 0 and res["gd_light_pull_calls"] == 0 and res["mesh_chunks"] >= 16 and torch_placed and torch_light > 5 and rt_ok and res["slab_cpp_sets"] > 0 and res["slab_gd_write_calls"] == 0
+	res["ok"] = res["mesh_cpp_builds"] > 0 and res["gen_cpp_works"] > 0 and res["strips_cpp_calls"] > 0 and res["chunkio_cpp_slab_decodes"] > 0 and res["chunkio_cpp_encode_sections"] >= 2 and res["chunkio_cpp_decode_sections"] >= 2 and res["gd_strips_calls"] == 0 and res["gd_light_pull_calls"] == 0 and res["mesh_chunks"] >= 16 and torch_placed and torch_light > 5 and rt_ok and res["slab_cpp_sets"] > 0 and res["slab_gd_write_calls"] == 0 and res["low_emit_pairs"] > 0 and res["low_emit_match"] == res["low_emit_pairs"]
 	res["wall_ms"] = Time.get_ticks_msec() - t0
 	Debug.result(res)
 	get_tree().quit()
@@ -12933,9 +14221,9 @@ func _bandmap_test(spawn: Vector3) -> void:
 	# arrives in seconds and truncated the trend to a few hundred frames.
 	# [14,0] (taxi 14, ~340 builds out) is dropped from the set: it couples
 	# the full-mesh evidence to the arm's total wall budget (the gate is NOT
-	# "drain the world in the arm"); [9,0]/[10,0] carry the band-2 (coarse
-	# after AC-0181) evidence; [12,0]/[13,0] pin the AC-0181 boundary
-	# (full at 12, coarse at 13).
+	# "drain the world in the arm"). AC-0231: band 2 (coarse) is GONE —
+	# every meshed band is full fidelity, so the sample set just pins the
+	# far-data + full-mesh trickle (b2 counts stay 0).
 	var samples := [[0, 0], [4, 0], [5, 0], [8, 0], [9, 0], [10, 0], [12, 0], [13, 0]]
 	var have := {}
 	var trickle := []
@@ -13036,368 +14324,6 @@ func _bandmap_test(spawn: Vector3) -> void:
 		"elapsed_ms": Time.get_ticks_msec() - t0,
 	})
 	get_tree().quit()
-
-
-# AC-0181 probe (AWECRAFT_LOGIC=lodband, harness-only, never runs in game):
-# walk radially +X from spawn (player chunk 0,3,6,9,12,13,14) at render 50.
-# At each step: recenter, settle the taxi <= 14 neighborhood (and wait out
-# any in-flight LOD transition), then classify EVERY meshed chunk's fidelity
-# from its built UV period (full 16^3 = 31 px per block; coarse uv_scale 2
-# = 15.5) and assert the AC-0182 dead-band contract: meshed + taxi <= 11
-# => FULL, meshed + taxi >= 14 => COARSE, taxi 12-13 = transition (either,
-# hysteresis dead band), band 3 never meshed, ahead-11 FULL / ahead-14
-# COARSE at every step, and the spawn chunk's fidelity history is full*
-# coarse* (no full->coarse->full pop).
-func _lodband_test(spawn: Vector3) -> void:
-	var t0 := Time.get_ticks_msec()
-	var R := 50
-	world.render_radius = R
-	var steps := [0, 3, 6, 9, 12, 13, 14]
-	var report := []
-	var violations := []
-	var spawn_hist := []
-	for st in steps:
-		world.recenter(spawn.x + float(st) * 16.0, spawn.z, true)
-		var pcx := int(world.last_pcx)
-		var pcz := int(world.last_pcz)
-		# wait for the recenter slice walk to finish first: until it does,
-		# built chunks still carry their PREVIOUS band + mesh (band
-		# reassignment lags the recenter by the full stream-set walk) —
-		# sampling then would report stale-band "violations" that are not
-		# real. After it, band-changed chunks are cleared + re-queued, so
-		# the settle below also waits for their re-mesh.
-		var rw := 0
-		while world._rec_pending and rw < 3600:
-			await get_tree().physics_frame
-			rw += 1
-		# settle: every chunk with taxi <= 14 around the player is built and
-		# has finished any in-flight LOD retain->swap (lod_pending clear).
-		var sw := 0
-		var max_sw := 9600 if st == 0 else 6000
-		while sw < max_sw:
-			var allb := true
-			for dx in range(-14, 15):
-				for dz in range(-14, 15):
-					if absi(dx) + absi(dz) > 14:
-						continue
-					var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
-					if c == null or not c.mesh_built or bool(c.lod_pending):
-						allb = false
-						break
-				if not allb:
-					break
-			if allb:
-				break
-			await get_tree().physics_frame
-			sw += 1
-		var full_ok := 0
-		var coarse_ok := 0
-		var trans := 0
-		var uncl := 0
-		var meshed := 0
-		for key in world.chunks:
-			var c: Node3D = world.chunks[key]
-			if int(c.face) > 1 or not c.mesh_built:
-				continue
-			if int(c.band) == 3:
-				violations.append("band3 meshed %s" % str(key))
-				continue
-			meshed += 1
-			var taxi := absi(int(c.cx) - pcx) + absi(int(c.cz) - pcz)
-			var f: int = _lod_fidelity(c)
-			if taxi <= 11:
-				if f == 1:
-					full_ok += 1
-				elif f == 2:
-					violations.append("full-zone coarse %s (taxi %d)" % [str(key), taxi])
-				else:
-					uncl += 1
-			elif taxi >= 14:
-				if f == 2:
-					coarse_ok += 1
-				elif f == 1:
-					violations.append("coarse-zone full %s (taxi %d)" % [str(key), taxi])
-				else:
-					uncl += 1
-			else:
-				trans += 1
-		var a11 = world.chunks.get("%d,%d" % [pcx + 11, pcz])
-		var a14 = world.chunks.get("%d,%d" % [pcx + 14, pcz])
-		var sk = world.chunks.get("0,0")
-		spawn_hist.append(_lod_fidelity(sk) if sk != null and sk.mesh_built else -1)
-		report.append({
-			"st": st, "pc": [pcx, pcz], "walk_frames": rw, "settle_frames": sw,
-			"meshed": meshed, "full_ok": full_ok, "coarse_ok": coarse_ok,
-			"transition": trans, "unclassified": uncl,
-			"ahead11": _lod_fidelity(a11) if a11 != null and a11.mesh_built else -1,
-			"ahead14": _lod_fidelity(a14) if a14 != null and a14.mesh_built else -1,
-		})
-	# monotonic landmark: the spawn chunk must go full* coarse* along the
-	# outward walk (a FULL after a COARSE = high->low->high pop).
-	var seen_c := false
-	var mono := true
-	for h in spawn_hist:
-		if h == 2:
-			seen_c = true
-		elif h == 1:
-			if seen_c:
-				mono = false
-		else:
-			mono = false
-	Debug.result({
-		"render_radius": R, "steps": steps, "report": report,
-		"spawn_hist": spawn_hist, "spawn_monotonic": mono,
-		"violations": violations, "ok": violations.size() == 0 and mono,
-		"elapsed_ms": Time.get_ticks_msec() - t0,
-	})
-	get_tree().quit()
-
-
-func _lodswap_test(spawn: Vector3) -> void:
-	var t0 := Time.get_ticks_msec()
-	var R := 15
-	world.render_radius = R
-	world.recenter(spawn.x, spawn.z, true)
-	var pcx0 := int(world.last_pcx)
-	var pcz0 := int(world.last_pcz)
-	var T = world.chunks.get("%d,%d" % [pcx0, pcz0])
-	if T == null:
-		Debug.result({"ok": false, "error": "spawn chunk missing"})
-		get_tree().quit()
-		return
-	var samples := []
-	var stt := {"ph": "boot"}
-	var wboot := 0
-	while wboot < 2400 and not T.mesh_built:
-		await get_tree().process_frame
-		_lodswap_snap(T, samples, stt, pcx0)
-		wboot += 1
-	if not T.mesh_built:
-		Debug.result({"ok": false, "error": "spawn chunk never built"})
-		get_tree().quit()
-		return
-	var first_built := samples.size()
-	for st in range(1, 14):
-		stt["ph"] = "out_%d" % st
-		_lodswap_walk(st)
-		for i in range(24):
-			await get_tree().process_frame
-			_lodswap_snap(T, samples, stt, pcx0)
-	stt["ph"] = "cross1"
-	var builds_c1 := int(T.lod_builds)
-	_lodswap_walk(14)
-	var w14 := 0
-	while w14 < 2400:
-		await get_tree().process_frame
-		_lodswap_snap(T, samples, stt, pcx0)
-		w14 += 1
-		if T.mesh_built and _lod_fidelity(T) == 2:
-			break
-	stt["ph"] = "jitter"
-	for j in range(12):
-		_lodswap_walk(13 if j % 2 == 0 else 14)
-		for i in range(10):
-			await get_tree().process_frame
-			_lodswap_snap(T, samples, stt, pcx0)
-	stt["ph"] = "back13"
-	_lodswap_walk(13)
-	for i in range(10):
-		await get_tree().process_frame
-		_lodswap_snap(T, samples, stt, pcx0)
-	stt["ph"] = "back12"
-	_lodswap_walk(12)
-	for i in range(10):
-		await get_tree().process_frame
-		_lodswap_snap(T, samples, stt, pcx0)
-	var swaps_c2 := int(T.lod_swaps_instant)
-	stt["ph"] = "back11"
-	var back_start_f := samples.size()
-	_lodswap_walk(11)
-	var w11 := 0
-	while w11 < 600:
-		await get_tree().process_frame
-		_lodswap_snap(T, samples, stt, pcx0)
-		w11 += 1
-		if T.mesh_built and _lod_fidelity(T) == 1:
-			break
-	var c2_swap_ms := float(T.lod_last_swap_ms)
-	stt["ph"] = "fwd12"
-	_lodswap_walk(12)
-	for i in range(10):
-		await get_tree().process_frame
-		_lodswap_snap(T, samples, stt, pcx0)
-	stt["ph"] = "fwd13"
-	_lodswap_walk(13)
-	for i in range(10):
-		await get_tree().process_frame
-		_lodswap_snap(T, samples, stt, pcx0)
-	var swaps_c3 := int(T.lod_swaps_instant)
-	stt["ph"] = "fwd14"
-	var fwd_start_f := samples.size()
-	_lodswap_walk(14)
-	var w14b := 0
-	while w14b < 600:
-		await get_tree().process_frame
-		_lodswap_snap(T, samples, stt, pcx0)
-		w14b += 1
-		if T.mesh_built and _lod_fidelity(T) == 2:
-			break
-
-	var holes := 0
-	for s in samples:
-		if int(s["f"]) >= first_built and not bool(s["mb"]):
-			holes += 1
-	var no_hole := holes == 0
-	var retain_window := false
-	for s in samples:
-		if str(s["ph"]) == "cross1" and bool(s["pend"]) and bool(s["mb"]) and int(s["fid"]) == 1:
-			retain_window = true
-			break
-	var c1_flips := 0
-	var c1_flip_f := -1
-	var c1_prev := -1
-	for s in samples:
-		if str(s["ph"]) != "cross1":
-			continue
-		var f1: int = int(s["fid"])
-		if c1_prev == 1 and f1 == 2:
-			c1_flips += 1
-			c1_flip_f = int(s["f"])
-		c1_prev = f1
-	var c1_atomic := c1_flips == 1
-	var in_flight := 0
-	for s in samples:
-		if str(s["ph"]) == "cross1" and int(s["f"]) >= c1_flip_f - 1:
-			break
-		if str(s["ph"]) == "cross1" and bool(s["pend"]) and bool(s["mb"]):
-			in_flight += 1
-	var j_band := -1
-	var j_fid := -1
-	var j_band_changes := 0
-	var j_fid_changes := 0
-	var j_frames := 0
-	var j_holes := 0
-	for s in samples:
-		if str(s["ph"]) != "jitter":
-			continue
-		j_frames += 1
-		var b2: int = int(s["band"])
-		var f2: int = int(s["fid"])
-		if not bool(s["mb"]):
-			j_holes += 1
-		if j_band < 0 or b2 != j_band:
-			if j_band >= 0:
-				j_band_changes += 1
-			j_band = b2
-		if j_fid < 0 or f2 != j_fid:
-			if j_fid >= 0:
-				j_fid_changes += 1
-			j_fid = f2
-	var flicker_ok := j_band_changes == 0 and j_fid_changes == 0 and j_holes == 0 and j_band == 2 and j_fid == 2
-	var c2_flips := 0
-	var c2_flip_f := -1
-	var c2_prev := -1
-	for s in samples:
-		if not str(s["ph"]).begins_with("back"):
-			continue
-		var f3: int = int(s["fid"])
-		if c2_prev == 2 and f3 == 1:
-			c2_flips += 1
-			c2_flip_f = int(s["f"])
-		c2_prev = f3
-	var c2_instant := int(T.lod_swaps_instant) - swaps_c2
-	var c2_lag := c2_flip_f - back_start_f if c2_flip_f >= 0 else 999999
-	var c2_ok := c2_flips == 1 and c2_instant >= 1 and c2_lag <= 8 and int(T.lod_builds) == 1
-	var c3_flips := 0
-	var c3_flip_f := -1
-	var c3_prev := -1
-	for s in samples:
-		if not str(s["ph"]).begins_with("fwd"):
-			continue
-		var f4: int = int(s["fid"])
-		if c3_prev == 1 and f4 == 2:
-			c3_flips += 1
-			c3_flip_f = int(s["f"])
-		c3_prev = f4
-	var c3_instant := int(T.lod_swaps_instant) - swaps_c3
-	var c3_lag := c3_flip_f - fwd_start_f if c3_flip_f >= 0 else 999999
-	var c3_ok := c3_flips == 1 and c3_instant >= 1 and c3_lag <= 8
-	var end_cache := int(T.alt_lod) == 0 and int(T.band) == 2 and bool(T.mesh_built)
-	var ok := no_hole and retain_window and c1_atomic and flicker_ok and c2_ok and c3_ok and end_cache
-	Debug.result({
-		"ok": ok, "radius": R, "T": [pcx0, pcz0],
-		"first_built": first_built, "sample_frames": samples.size(),
-		"no_hole": no_hole, "hole_frames": holes,
-		"retain_window": retain_window, "cross1_in_flight_frames": in_flight,
-		"cross1": {"fidelity_flips": c1_flips, "flip_frame": c1_flip_f, "atomic": c1_atomic, "builds": int(T.lod_builds) - builds_c1},
-		"flicker": {"frames": j_frames, "band_changes": j_band_changes, "fidelity_changes": j_fid_changes, "band_end": j_band, "fid_end": j_fid, "ok": flicker_ok},
-		"cross2": {"fidelity_flips": c2_flips, "flip_frame": c2_flip_f, "lag_frames": c2_lag, "instant_swaps": c2_instant, "swap_ms": c2_swap_ms, "ok": c2_ok},
-		"cross3": {"fidelity_flips": c3_flips, "flip_frame": c3_flip_f, "instant_swaps": c3_instant, "swap_ms": float(T.lod_last_swap_ms), "ok": c3_ok},
-		"lod_builds": int(T.lod_builds), "lod_swaps": int(T.lod_swaps), "lod_swaps_instant": int(T.lod_swaps_instant),
-		"alt_lod_end": int(T.alt_lod), "end_cache": end_cache,
-		"elapsed_ms": Time.get_ticks_msec() - t0,
-	})
-	get_tree().quit()
-
-
-func _lodswap_snap(T, samples: Array, stt: Dictionary, pcx0: int) -> void:
-	samples.append({
-		"ph": stt["ph"], "f": samples.size(), "pcx": int(world.last_pcx) - pcx0,
-		"mb": bool(T.mesh_built), "band": int(T.band),
-		"fid": _lod_fidelity(T) if T.mesh_built else -1,
-		"pend": bool(T.lod_pending),
-	})
-
-
-func _lodswap_walk(pcx: int) -> void:
-	world.recenter(float(pcx * 16 + 8), 8.0)
-
-
-# AC-0181 probe helper: classify a BUILT chunk's mesh fidelity from the UV
-# period of its main (opaque merged) mesh. Every merged quad spans WxH
-# blocks; its u-axis (strip) UV is 31/uv_scale px per block over ATLAS_PX,
-# so any u-axis edge of world length L gives ppb = |du| * ATLAS_PX / L:
-# 31 => full 16^3, 15.5 => coarse uv_scale 2. Returns 1 (full), 2 (coarse),
-# 0 (unclassified), -1 (no mesh data).
-func _lod_fidelity(c) -> int:
-	var cands := PackedFloat32Array()
-	for s in c.slabs:
-		if cands.size() >= 64:
-			break
-		var mi = s.mesh_instance
-		if mi == null or mi.mesh == null:
-			continue
-		var m: ArrayMesh = mi.mesh
-		for si in m.get_surface_count():
-			var a = m.surface_get_arrays(si)
-			var pos: PackedVector3Array = a[Mesh.ARRAY_VERTEX]
-			var uv: PackedVector2Array = a[Mesh.ARRAY_TEX_UV]
-			var idx: PackedInt32Array = a[Mesh.ARRAY_INDEX]
-			for qi in range(0, idx.size(), 6):
-				var p0 := idx[qi]
-				var p1 := idx[qi + 1]
-				var p2 := idx[qi + 2]
-				var p3 := idx[qi + 3]
-				for ep in [[p0, p1], [p1, p2], [p2, p3], [p3, p0]]:
-					var du: float = absf(uv[ep[0]].x - uv[ep[1]].x)
-					var dv: float = absf(uv[ep[0]].y - uv[ep[1]].y)
-					if du < 1e-6 or dv > 1e-6:
-						continue  # v-axis edge (ms_h-scaled) or flat uv
-					var L: float = (pos[ep[0]] - pos[ep[1]]).length()
-					if L < 0.99:
-						continue
-					cands.append(du * Data.ATLAS_PX / L)
-		if cands.size() >= 64:
-			break
-	if cands.is_empty():
-		return -1
-	cands.sort()
-	var med: float = cands[cands.size() / 2]
-	if absf(med - 31.0) < 1.0:
-		return 1
-	if absf(med - 15.5) < 1.0:
-		return 2
-	return 0
 
 
 func _er_built_count() -> int:
@@ -13598,7 +14524,6 @@ func _edgeretain_test(spawn: Vector3) -> void:
 		else:
 			e["mesh_id"] = _er_chunk_mesh_id(cc)
 			e["band"] = int(cc.band)
-			e["lod_builds"] = int(cc.lod_builds)
 			e["states"] = []
 			e["vis_min"] = -1
 			e["freed_at"] = -1

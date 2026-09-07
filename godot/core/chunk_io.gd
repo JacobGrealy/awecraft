@@ -7,6 +7,7 @@ extends RefCounted
 # derived from the array size and passed in).
 
 const VERSION := 4
+const V5_VERSION := 5  # AC-0237 v4 + the 24-bit generated mask (3 bytes after sub)
 const V3_VERSION := 3  # AC-0197 sparse slabs (decodable, never written)
 const V2_VERSION := 2  # AC-0156 dense+light (decodable, never written)
 const LEGACY_VERSION := 1
@@ -24,6 +25,13 @@ const S3 := 4096
 static var _io_cpp: Variant = null
 static var _io_cpp_done := false
 static var cpp_slab_decodes := 0
+# AC-0236 part 1: runtime C++ v4 SECTION codec counters. cpp_encode_sections
+# counts the C++ encode_section calls (encode_column -> _encode_head, 2 per
+# column: data + fl); cpp_decode_sections counts the C++ decode_section calls
+# (decode_column, 2 per v4 column). The nofallback arm asserts both advance
+# after its disk round-trip (the game path is C++-backed end to end).
+static var cpp_encode_sections := 0
+static var cpp_decode_sections := 0
 # AC-0214: runtime C++ slab-op counters. slab_cpp_sets counts the C++
 # single-cell writes (chunk.gd _slab_write -> ChunkIOPalette.slab_set — the
 # per-block edit op); the nofallback arm asserts it advances (the torch
@@ -75,14 +83,21 @@ static func clear_dir(slot: int) -> void:
 	da.list_dir_end()
 	DirAccess.remove_absolute(abs)
 
-static func encode_column(data: PackedByteArray, fl: PackedByteArray, seed: int, height: int, light: Dictionary = {}, top := -1) -> PackedByteArray:
+static func encode_column(data: PackedByteArray, fl: PackedByteArray, seed: int, height: int, light: Dictionary = {}, top := -1, gen_mask := 0xFFFFFF) -> PackedByteArray:
 	var sub := int(data.size()) / S3
 	# AC-0197: the v3 sparse slab layout. Slabs above top are all-air (the
 	# caller's column top); absent slabs are omitted entirely (~40% of the
 	# block/fl section at H=384). top < 0 = unknown -> scan the data.
 	if top < 0:
 		top = _column_top(data, sub)
-	var blob := _encode_head(VERSION, data, fl, seed, height, sub, top)
+	# AC-0237: a RANGE-GENERATED column (gen_mask != full — slabs the
+	# window never generated) is written as v5 (v4 + the 24-bit mask);
+	# a full column stays v4 (zero byte change for the legacy path).
+	# The mask rides on disk so a reload knows which absent slabs are
+	# UNGENERATED (solid-for-snap + capped + regen-owed) and which are
+	# true air (sky).
+	var ver := V5_VERSION if int(gen_mask) != 0xFFFFFF else VERSION
+	var blob := _encode_head(ver, data, fl, seed, height, sub, top, gen_mask)
 	var li := _encode_light(light, sub)
 	blob.append_array(_u32(li.size()))
 	blob.append_array(li)
@@ -93,7 +108,7 @@ static func encode_column_legacy(data: PackedByteArray, fl: PackedByteArray, see
 	var blob := _encode_head(LEGACY_VERSION, data, fl, seed, height, sub, -1)
 	return _encode_tail(blob)
 
-static func _encode_head(ver: int, data: PackedByteArray, fl: PackedByteArray, seed: int, height: int, sub: int, top: int) -> PackedByteArray:
+static func _encode_head(ver: int, data: PackedByteArray, fl: PackedByteArray, seed: int, height: int, sub: int, top: int, gen_mask := 0xFFFFFF) -> PackedByteArray:
 	var blob := PackedByteArray()
 	blob.append(M0)
 	blob.append(M1)
@@ -103,15 +118,28 @@ static func _encode_head(ver: int, data: PackedByteArray, fl: PackedByteArray, s
 	blob.append_array(_u32(seed))
 	blob.append_array(_u16(height))
 	blob.append_array(_u16(sub))
+	if ver == V5_VERSION:
+		# AC-0237: the 24-bit generated mask (3 bytes LE; bit si set iff
+		# slab si was generated — its ABSENT sections are ungenerated, not
+		# air). The sections follow at +3.
+		blob.append((int(gen_mask) & 0xFF))
+		blob.append(((int(gen_mask) >> 8) & 0xFF))
+		blob.append(((int(gen_mask) >> 16) & 0xFF))
 	# AC-0197: v3 = sparse slab sections (offset table of non-null slabs);
 	# AC-0203: v4 = sparse + PER-SLAB PALETTE (n, bits, palette, packed;
 	# n==1 omits the packed, n==0 = raw 8-bit slab for >16 unique ids);
 	# v1/v2 keep the dense _encode_array layout (back-compat).
-	if ver == VERSION:
-		var de := _encode_array_v4(data, sub, top)
+	if ver == VERSION or ver == V5_VERSION:
+		# AC-0236 part 1: the v4 section encode is C++ (ChunkIOPalette
+		# .encode_section, byte-identical to the removed-hot-path GDScript
+		# _encode_array_v4 — the chunkiocpp arm still A/Bs it against the
+		# kept reference). No GDScript encode on the game path.
+		var de: PackedByteArray = io_cpp().encode_section(data, sub, top)
+		cpp_encode_sections += 1
 		blob.append_array(_u32(de.size()))
 		blob.append_array(de)
-		var fe := _encode_array_v4(fl, sub, top)
+		var fe: PackedByteArray = io_cpp().encode_section(fl, sub, top)
+		cpp_encode_sections += 1
 		blob.append_array(_u32(fe.size()))
 		blob.append_array(fe)
 	elif ver == V3_VERSION:
@@ -177,7 +205,7 @@ static func decode_column(file_bytes: PackedByteArray, seed: int, height: int) -
 	if blob[0] != M0 or blob[1] != M1 or blob[2] != M2 or blob[3] != M3:
 		return fail
 	var ver := int(blob[4])
-	if ver != LEGACY_VERSION and ver != V2_VERSION and ver != V3_VERSION and ver != VERSION:
+	if ver != LEGACY_VERSION and ver != V2_VERSION and ver != V3_VERSION and ver != VERSION and ver != V5_VERSION:
 		return fail
 	if _u32r(blob, 5) != int(seed):
 		return fail
@@ -187,8 +215,19 @@ static func decode_column(file_bytes: PackedByteArray, seed: int, height: int) -
 	var sub := _u16r(blob, 11)
 	if sub != h / S:
 		return fail
-	var de_size := _u32r(blob, 13)
-	var de_at := 17
+	# AC-0237: v5 carries the 24-bit generated mask at bytes 13-15 (3
+	# bytes LE, right after sub — the sections shift to de_at=20). The
+	# absent slabs it clears are UNGENERATED (solid-for-snap, capped,
+	# regen-owed), not air. v1-v4 = the full column.
+	var gen_mask := 0xFFFFFF
+	var hde := 13  # the de_size offset (de_at = hde + 4)
+	if ver == V5_VERSION:
+		if blob.size() < 21:
+			return fail
+		gen_mask = int(blob[13]) | (int(blob[14]) << 8) | (int(blob[15]) << 16)
+		hde = 16
+	var de_size := _u32r(blob, hde)
+	var de_at := hde + 4
 	var fe_sz_at := de_at + de_size
 	if fe_sz_at + 4 > blob.size():
 		return fail
@@ -209,8 +248,45 @@ static func decode_column(file_bytes: PackedByteArray, seed: int, height: int) -
 		var li := blob.slice(fe_at + fe_size + 4, fe_at + fe_size + 4 + li_size)
 		light = _decode_light(li, sub)
 		md5_at = fe_at + fe_size + 4 + li_size
-	var dr = _decode_array_v4(blob, de_at, sub) if ver == VERSION else (_decode_array_sparse(blob, de_at, sub) if ver == V3_VERSION else _decode_array(blob, de_at, sub))
-	var fr = _decode_array_v4(blob, fe_at, sub) if ver == VERSION else (_decode_array_sparse(blob, fe_at, sub) if ver == V3_VERSION else _decode_array(blob, fe_at, sub))
+	# AC-0236 part 1: the v4 section decode is C++ (ChunkIOPalette
+	# .decode_section, byte-identical to the GDScript _decode_array_v4 - the
+	# chunkiocpp arm still A/Bs them; the GDScript twin is kept ONLY as that
+	# reference, not on the game path). v1-v3 keep the legacy GDScript
+	# readers (decodable, never written).
+	if ver == VERSION or ver == V5_VERSION:
+		var dr: Dictionary = io_cpp().decode_section(blob, de_at, sub)
+		var fr: Dictionary = io_cpp().decode_section(blob, fe_at, sub)
+		cpp_decode_sections += 2
+		if int(dr["off"]) != fe_sz_at:
+			return fail
+		if int(fr["off"]) != fe_at + fe_size:
+			return fail
+		if int(dr["arr"].size()) != int(height) * S * S:
+			return fail
+		var h2 := HashingContext.new()
+		h2.start(HashingContext.HASH_MD5)
+		h2.update(blob.slice(0, md5_at))
+		if h2.finish() != blob.slice(md5_at, md5_at + 16):
+			return fail
+		var res := {"data": dr["arr"], "fl": fr["arr"], "gen_mask": gen_mask}
+		# AC-0203 recenter fix: the v4 disk handoff lands the slab array
+		# directly (the wire form IS the slab form) - the main thread skips
+		# the flat expansion + re-palettize (~35 ms/col). The flat arrays
+		# stay in res for the chunkio arm and probes. AC-0208: the slab
+		# decode is the C++ ChunkIOPalette (no fallback).
+		var ds: Dictionary = io_cpp().decode_slabs(blob, de_at, sub)
+		var fs: Dictionary = io_cpp().decode_slabs(blob, fe_at, sub)
+		cpp_slab_decodes += 2
+		if int(ds["off"]) != fe_sz_at or int(fs["off"]) != fe_at + fe_size:
+			return fail
+		res["d_slabs"] = ds["slabs"]
+		res["f_slabs"] = fs["slabs"]
+		if not light.is_empty():
+			res["light"] = light
+		return res
+	# the v1-v3 legacy readers (the v4 path returned above - AC-0236 part 1):
+	var dr = _decode_array_sparse(blob, de_at, sub) if ver == V3_VERSION else _decode_array(blob, de_at, sub)
+	var fr = _decode_array_sparse(blob, fe_at, sub) if ver == V3_VERSION else _decode_array(blob, de_at, sub)
 	if int(dr["off"]) != fe_sz_at:
 		return fail
 	if int(fr["off"]) != fe_at + fe_size:
@@ -223,20 +299,6 @@ static func decode_column(file_bytes: PackedByteArray, seed: int, height: int) -
 	if int(dr["arr"].size()) != int(height) * S * S:
 		return fail
 	var res := {"data": dr["arr"], "fl": fr["arr"]}
-	if ver == VERSION:
-		# AC-0203 recenter fix: the v4 disk handoff lands the slab array
-		# directly (the wire form IS the slab form) — the main thread skips
-		# the flat expansion + re-palettize (~35 ms/col). The flat arrays
-		# stay in res for the v1-v3 path, the chunkio arm, and probes.
-		# AC-0208: the slab decode is the C++ ChunkIOPalette (the GDScript
-		# _decode_slabs_v4 was removed — no fallback).
-		var ds: Dictionary = io_cpp().decode_slabs(blob, de_at, sub)
-		var fs: Dictionary = io_cpp().decode_slabs(blob, fe_at, sub)
-		cpp_slab_decodes += 2
-		if int(ds["off"]) != fe_sz_at or int(fs["off"]) != fe_at + fe_size:
-			return fail
-		res["d_slabs"] = ds["slabs"]
-		res["f_slabs"] = fs["slabs"]
 	if not light.is_empty():
 		res["light"] = light
 	return res

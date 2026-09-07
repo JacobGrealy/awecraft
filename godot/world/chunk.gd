@@ -55,23 +55,142 @@ func update_top() -> void:
 var candidate := false
 var cand_since := 0
 # AC-0152: 0 = full 16x16x16 (ticks + collide), 1 = full mesh, no
-# tick/collide (same builder path as band 0), 2 = coarse 32-scale merged
-# (uv_scale 2 — the rest of the render circle), 3 = collar/ring data-only
-# (never meshed). AC-0160: the band-2 heightmap impostor was removed
-# (user decision 2026-08-30) — band 2 uses the normal build path.
-# AC-0181: band 1/2 fidelity swapped — 0-12 full, 13+ coarse uniform.
+# tick/collide (same builder path as band 0), 3 = collar/ring data-only
+# (never meshed — its data feeds the 8-neighbor gate). AC-0160: the band-2
+# heightmap impostor was removed (user decision 2026-08-30); AC-0231: band 2
+# (the coarse 32-scale / uv_scale LOD) is GONE too — every meshed band is
+# full-fidelity, and the far LOD is the SEPARATE per-slab low-res
+# placeholder below (a placeholder, not a band: it never touches the
+# slab/mesh path).
 var band := 0
-var lod_pending := false
-var alt_lod := -1
-var alt_slabs: Array = []
-# AC-0203: stamp [data_gen, fl_gen] captured at store/swap time replaces the
-# alt_data/alt_fl full-column duplicates (192 KB per cached chunk).
-var alt_stamp: Array = []
-var alt_atlas: Texture2D = null
-var lod_builds := 0
-var lod_swaps := 0
-var lod_swaps_instant := 0
-var lod_last_swap_ms := 0.0
+# AC-0231 rewrite: the far-LOD low-res placeholder state, PER SLAB
+# (SEPARATE from the high slabs): fog_instance = ONE MultiMeshInstance3D
+# holding a MultiMesh of SEPARATE instances of the pre-baked 16x16x16 fog-colored
+# box — one instance per NON-AIR slab, placed at the slab's Y (the slab
+# BOTTOM: si*16, so the box spans si*16..si*16+16) — the immediate
+# placeholder on data landing (no merged column mesh; air slabs get none).
+# low_instances/low_slabs = the per-slab cheap 4x4x4-sampled greedy
+# textured meshes (64 coarse cells of 4x4x4 blocks, air cells skipped,
+# AC-0231 fix3 UVs: merged-atlas-strip blocks use REPEATING UVs 4x per
+# 4-block quad, strip-less blocks (leaves/water/...) sample ONE 32px tile)
+# — one instance per slab, positioned at (0, si*16, 0) with slab-local
+# 0..16 geometry — which REPLACE the fog at that slab's Y. low_built/
+# low_stamps = the textured-low state, PER SLAB (si -> the chunk stamp
+# when THAT slab's low was last built) — a low slab is stale (pending
+# rebuild from edited data) when its stamp != c.stamp(); per-slab is what
+# the AC-0231 fix3 global slab wave needs (a partially-lowered chunk must
+# NOT mark its finished slabs stale while the other slabs are still
+# fogged — a single chunk-level stamp re-picked the built slabs forever).
+# low_failed = the AC-0231 fix3 WAVE 2
+# terminal-fog marks: si -> the data_gen at which the slab SAMPLED all-air
+# (the fog box was restored as the honest placeholder) — the slab is not
+# re-picked by the global slab wave until the data changes (an edit bumps
+# data_gen, which re-qualifies it); without the mark the wave would
+# re-pick + re-fail the same slab forever and never advance past it. The
+# HIGH replaces fog and low per slab (the mesh handoff frees them);
+# keep-high: a meshed chunk is never downgraded (the placeholders are only
+# for never-built slabs — low_downgrade_n stays 0).
+var fog_instance: MultiMeshInstance3D = null
+var fog_slabs: Array = []        # sorted slab indices currently holding a fog box
+var low_instances: Array = []    # MeshInstance3D per low slab (sorted, parallel to low_slabs)
+var low_slabs: Array = []        # slab indices holding a per-slab textured low
+var low_built := false
+var low_stamps: Dictionary = {}  # AC-0231 fix3: si -> stamp when that low slab was built
+var low_failed: Dictionary = {}  # AC-0231 fix3: si -> data_gen of the all-air sample
+# AC-0234: the vertical-window CAP state, PER SLAB (the dark fill for
+# CULLED non-air slabs — a slab outside this TOWER's kept window: below
+# the tower's 3x3 terrain span, and out of the player band). cap_instance
+# = ONE MultiMeshInstance3D holding instances of the SAME pre-baked
+# 16x16x16 box as the fog (world._low_fog_mesh) in a BLACK material —
+# one instance per culled NEVER-BUILT slab at its Y. KEEP-HIGH APPLIES
+# TO CULLING: a slab with a built high mesh is never capped (a built
+# slab stays built), so the cap covers never-built slabs only. The cap
+# is a PLACEHOLDER: it stays until a low or the high SWAPS it (the slab
+# re-enters the window), never before. vwin_ver = the world band version
+# at this column's last high apply (an evidence stamp — a mismatch never
+# re-meshes a built column; the window only moves placeholders).
+# vwin_full = the last high apply covered EVERY slab (an empty dispatch
+# mask — tier 0); a window-masked column under the player owes the full
+# build (world._vwin_apply re-queues it — the fall-through contract).
+var cap_instance: MultiMeshInstance3D = null
+var cap_slabs: Array = []         # sorted slab indices currently holding a black cap
+# AC-0237 phase 1a: 24-bit MIRROR masks of the three sorted slab sets —
+# O(1) membership for the hot per-frame paths (the low pick's 3-way
+# per-slab test, the vwin sync, the fog/low/cap ensure guards) without
+# the sorted Array's linear has(). The ARRAYS stay the source of truth
+# (insert order drives the MultiMesh rewrite loops); every mutation goes
+# through the ensure/drop functions, which sync their mask here. Bit si
+# = 1 iff slab si holds a placeholder of that kind.
+var fog_mask := 0
+var low_mask := 0
+var cap_mask := 0
+var vwin_ver := 0
+var vwin_full := true
+# AC-0237 (window-scoped generation): the GENERATED state. gen_keep =
+# the slab keep mask the last generation ran with (EMPTY = the FULL
+# column was generated — legacy); gen_mask = its 24-bit mirror (bit si
+# set iff slab si was generated — a slab with NO section in data[] is
+# ungenerated, NOT air: the snap reads it as solid via snap_rings'
+# genkeep, the window caps it while culled, and the re-entry path
+# regenerates it (bit-exact — gen is a pure f(world coords, seed))).
+var gen_keep: PackedByteArray = PackedByteArray()
+var gen_mask := 0xFFFFFF
+func has_gen_si(si: int) -> bool:
+	return (gen_mask >> si) & 1 != 0
+# the KEEP MASK the last full high build used (EMPTY = tier-0/full build,
+# every slab). The window's owed-kept check (world._vwin_apply) compares
+# it against the CURRENT window: a kept slab the mask never built is
+# owed (the build was dispatched while the slab was culled — the band
+# slid back over it since) and re-queues a SUPERSET build (kept + built
+# — keep-high: nothing built is ever dropped).
+var vwin_mask: PackedByteArray = PackedByteArray()
+
+func has_cap() -> bool:
+	return cap_slabs.size() > 0
+
+func has_fog() -> bool:
+	return fog_slabs.size() > 0
+
+func has_low() -> bool:
+	return bool(low_built) and low_instances.size() > 0
+
+# AC-0237 phase 1a: O(1) per-slab membership (the mirror masks — see
+# fog_mask). The no-arg has_cap/has_fog/has_low above keep their meaning
+# (the chunk holds ANY of that placeholder kind).
+func has_fog_si(si: int) -> bool:
+	return (fog_mask >> si) & 1 != 0
+
+func has_low_si(si: int) -> bool:
+	return (low_mask >> si) & 1 != 0
+
+func has_cap_si(si: int) -> bool:
+	return (cap_mask >> si) & 1 != 0
+
+func drop_low() -> void:
+	if fog_instance != null:
+		fog_instance.queue_free()
+		fog_instance = null
+	for mi in low_instances:
+		if mi != null:
+			mi.queue_free()
+	fog_slabs = []
+	low_instances = []
+	low_slabs = []
+	low_built = false
+	low_stamps = {}
+	low_failed = {}
+	fog_mask = 0
+	low_mask = 0
+
+func drop_cap() -> void:
+	# AC-0234: free the cap MultiMesh + clear the slab list (evict / the
+	# high replaces the culled placeholders).
+	if cap_instance != null:
+		cap_instance.queue_free()
+		cap_instance = null
+	cap_slabs = []
+	cap_mask = 0
+
 # AC-0108: vertical 16x16x16 slabs, each owning its own mesh/fluid/flora
 # instances + collision body; data/fl stay column-wide. AC-0091: the slab
 # COUNT is (Data.HEIGHT + 15) / 16 = 24 at H=384 (was 5 at H=80) — computed
@@ -938,112 +1057,6 @@ func drop_slab_bodies() -> void:
 		s.col_dirty = true
 
 
-func capture_lod() -> Array:
-	var out: Array = []
-	for s in slabs:
-		var row: Array = [null, null, null]
-		if s.mesh_instance != null:
-			row[0] = s.mesh_instance.mesh
-		if s.fluid_instance != null:
-			row[1] = s.fluid_instance.mesh
-		if s.flora_instance != null:
-			row[2] = s.flora_instance.mesh
-		out.append(row)
-	return out
-
-
-func lod_cache_valid(kind: int) -> bool:
-	if alt_lod != kind or alt_slabs.is_empty():
-		return false
-	if alt_atlas != Data.atlas_tex:
-		return false
-	if alt_stamp != stamp():
-		return false
-	return true
-
-
-func clear_lod_cache() -> void:
-	alt_lod = -1
-	alt_slabs = []
-	alt_stamp = []
-	alt_atlas = null
-
-
-func store_lod_cache(cap: Array, kind: int, in_ring: bool) -> void:
-	lod_pending = false
-	lod_builds += 1
-	if not in_ring or cap.size() != slabs.size():
-		clear_lod_cache()
-		return
-	alt_slabs = cap
-	alt_lod = kind
-	alt_stamp = stamp()
-	alt_atlas = Data.atlas_tex
-
-
-func _set_slab_lod(s: Slab, row: Array) -> void:
-	if row[0] != null:
-		if s.mesh_instance == null:
-			var mi := MeshInstance3D.new()
-			mi.mesh = row[0]
-			add_child(mi)
-			s.mesh_instance = mi
-		else:
-			s.mesh_instance.mesh = row[0]
-	elif s.mesh_instance != null:
-		s.mesh_instance.queue_free()
-		s.mesh_instance = null
-	if row[1] != null:
-		if s.fluid_instance == null:
-			var fi := MeshInstance3D.new()
-			fi.mesh = row[1]
-			add_child(fi)
-			s.fluid_instance = fi
-		else:
-			s.fluid_instance.mesh = row[1]
-	elif s.fluid_instance != null:
-		s.fluid_instance.queue_free()
-		s.fluid_instance = null
-	if row[2] != null:
-		if s.flora_instance == null:
-			var fa := MeshInstance3D.new()
-			fa.mesh = row[2]
-			add_child(fa)
-			s.flora_instance = fa
-		else:
-			s.flora_instance.mesh = row[2]
-	elif s.flora_instance != null:
-		s.flora_instance.queue_free()
-		s.flora_instance = null
-
-
-func swap_to_cached(in_ring: bool) -> void:
-	var t0 := Time.get_ticks_usec()
-	var demote: Array = []
-	for s in slabs:
-		var row: Array = [null, null, null]
-		if s.mesh_instance != null:
-			row[0] = s.mesh_instance.mesh
-		if s.fluid_instance != null:
-			row[1] = s.fluid_instance.mesh
-		if s.flora_instance != null:
-			row[2] = s.flora_instance.mesh
-		demote.append(row)
-	for si in range(slabs.size()):
-		_set_slab_lod(slabs[si], alt_slabs[si])
-	if in_ring:
-		alt_slabs = demote
-		alt_lod = 1 - alt_lod
-		alt_stamp = stamp()
-		alt_atlas = Data.atlas_tex
-	else:
-		clear_lod_cache()
-	mesh_built = true
-	lod_swaps += 1
-	lod_swaps_instant += 1
-	lod_last_swap_ms = (Time.get_ticks_usec() - t0) / 1000.0
-
-
 func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax: Acc, ms, full_solid: bool) -> void:
 	var sidx := PackedInt32Array([-1, -1, -1, -1])
 	var mesh := ArrayMesh.new()
@@ -1185,7 +1198,16 @@ func _surface(arr: Acc) -> Array:
 	return a
 
 
-func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
+func build_mesh(get_world_block: Callable, eff: Dictionary = {}, mask: PackedByteArray = PackedByteArray()) -> void:
+	# AC-0234: mask = the vertical-window keep mask (24 bytes; empty =
+	# build every slab — the sync fallbacks pass it for the same window the
+	# worker lane uses; a TIER 0 column gets an EMPTY mask = full build,
+	# the fall-through contract). The mask is stamped on the column
+	# (vwin_mask / vwin_full) — the window's owed-kept check compares it
+	# against the CURRENT window (a kept slab this build never built is
+	# owed and re-queues the superset build).
+	vwin_full = mask.is_empty()
+	vwin_mask = mask
 	# AC-0211: the sync lane runs the SAME C++ pipeline as the workers
 	# (light -> compact nbs rings -> AweMesh.build_accs -> apply_accs);
 	# inputs are read live (this is the MAIN thread and the C++ call is
@@ -1223,15 +1245,14 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 	for s2 in [[-1, 0], [1, 0], [0, -1], [0, 1]]:
 		var nc = Game.world.chunks.get(Game.world._key(cx + int(s2[0]), cz + int(s2[1])))
 		if nc != null and nc.data.size() > 0:
-			nbs["%d,%d" % [int(s2[0]), int(s2[1])]] = mc.snap_rings(nc.data, nc.fl, int(s2[0]), int(s2[1]))
+			nbs["%d,%d" % [int(s2[0]), int(s2[1])]] = mc.snap_rings(nc.data, nc.fl, int(s2[0]), int(s2[1]), nc.gen_keep)  # AC-0237: ungenerated slabs read as solid
 	var ctx_w: Dictionary = make_ctx()
 	ctx_w["eff_strips"] = st["eff"]
 	ctx_w["blk_strips"] = st["blk"]
 	ctx_w["blk_strips_b"] = st["blk_b"]
 	ctx_w["top"] = int(top)
-	if int(band) == 2:
-		ctx_w["coarse"] = true
-		ctx_w["uv_scale"] = 2
+	# AC-0231: the band-2 coarse ctx (coarse/uv_scale) is gone — every meshed
+	# band is full-fidelity (the far LOD is the separate low placeholder).
 	var ms_full: Dictionary
 	if OS.get_environment("AWECRAFT_MERGE") == "0":
 		ms_full = {"tex": null, "rects": {}}
@@ -1242,7 +1263,7 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}) -> void:
 		ms_w = {"rects": ms_full.rects.duplicate(), "h": float(ms_full.get("h", 0.0))}
 	else:
 		ms_w = {"rects": {}}
-	var res: Dictionary = mc.build_accs(data, fl, cx, cz, nbs, ctx_w, ms_w, light, 0, -1, 0, Lighting._att, Lighting._glow)
+	var res: Dictionary = mc.build_accs(data, fl, cx, cz, nbs, ctx_w, ms_w, light, 0, -1, 0, Lighting._att, Lighting._glow, mask)
 	apply_accs(res, ms_full)
 
 

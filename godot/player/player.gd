@@ -31,6 +31,7 @@ var _yaw := 0.0
 var _pitch := 0.0
 var _chunk_x := 0
 var _chunk_z := 0
+var _chunk_y := 0  # AC-0234: the tracked 16-block Y slab (a crossing re-centers)
 var _debug_layer: CanvasLayer = null
 var _debug_label: Label = null
 var inv: Array = []
@@ -111,6 +112,7 @@ func _ready() -> void:
 		position = Game.world.spawn_point()
 		_chunk_x = int(floorf(position.x / 16.0))
 		_chunk_z = int(floorf(position.z / 16.0))
+		_chunk_y = int(floorf(position.y / 16.0))  # AC-0234
 	_init_inv()
 	_build_highlight()
 	_build_held()
@@ -1159,13 +1161,19 @@ func _recenter() -> void:
 	# AC-0213: camera-only moves never requeue — recenter (and with it the
 	# ahead-ring queue rebuild) fires ONLY on a positional chunk change;
 	# look changes touch nothing here.
+	# AC-0234: a 16-block Y crossing ALSO re-centers (a FULL recenter —
+	# the user-confirmed trigger: same walk + tiered rewrite as an X/Z
+	# cross) so the vertical window's player band moves with the
+	# altitude; the wy arg carries the Y to the window recompute.
 	var pcx := int(floorf(position.x / 16.0))
 	var pcz := int(floorf(position.z / 16.0))
-	if pcx != _chunk_x or pcz != _chunk_z:
+	var pcy := int(floorf(position.y / 16.0))
+	if pcx != _chunk_x or pcz != _chunk_z or pcy != _chunk_y:
 		_chunk_x = pcx
 		_chunk_z = pcz
+		_chunk_y = pcy
 		if Game.world != null:
-			Game.world.recenter(position.x, position.z)
+			Game.world.recenter(position.x, position.z, true, position.y)
 
 
 func _apply_rotation() -> void:

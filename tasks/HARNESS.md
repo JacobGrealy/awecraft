@@ -70,9 +70,12 @@ before any mode; without it, harness envs force radius 4.
 same `_settings_test` inside the battery (see its table row).
 
 ### Not in table (deliberately excluded)
-- `logic == ""` (main.gd:102) — incidental comparison in the headless-idle check, not a
-  mode branch. Grep count is therefore 39 lines = 38 modes + 1 incidental; table
-  coverage = 37/37 = 100%.
+- `logic == ""` (main.gd:116) — incidental comparison in the headless-idle check, not a
+  mode branch. (AC-0231 removed the `lodband` + `lodswap` mode branches — band-2
+  coarse-LOD is gone with the band; the far-LOD gates now live in the `r16` arm's
+  `lod` RESULT block. The `logic ==` grep count includes the battery re-dispatch
+  branches, so it is not a flat mode count.) Table coverage of the remaining mode
+  rows = 100%.
 - `AWECRAFT_PROBE`/`AWECRAFT_BCELL` (main.gd:586–758) — not `logic` branches; debug
   print hooks (`PROBE ocean_cells=…`, `MAP`/`BIO` rows, `SEED` scan, `BCELL`) that run
   under any logic dispatch before the mode body and quit early.

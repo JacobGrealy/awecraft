@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0231 — FIX results — far-LOD low-res placeholder is 16 tall (1 chunk height), not 384</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.pass{background:#eef7ee;border-left:4px solid #2e7d32;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.note{font-size:13px;color:#555}.meta{color:#555;font-size:14px}.bug{background:#fdecea;border-left:4px solid #c0392b;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}</style></head><body>
+<h1>AC-0231 — FIX — far-LOD low-res placeholder is now 16 tall (1 chunk height), not 384</h1>
+<p class="meta"><b>status:</b> <code>PASS</code> · <b>engine:</b> Godot 4.7.1 · <b>files:</b> <code>godot/world/world.gd</code> (the fix), <code>godot/world/chunk.gd</code> (comment), <code>godot/scenes/main.gd</code> (R16 arm probe) · <b>GDScript-only</b> (no C++ touched, no .so rebuild) · <b>logs:</b> <code>.scratch/AC-0231-fix-gates/</code></p>
+
+<h2>The bug (user-reported)</h2>
+<div class="bug"><b>SYMPTOM</b> — "The LOD meshes extend what appears to be the entire height of the chunk column. The air chunks should not get lods, and every other chunk's lod mesh should still be the same size as the chunk not taller." User clarification: <b>"chunks should be 16 tall"</b> — i.e. the LOD mesh must be <b>16 blocks tall (1 chunk height / 1 slab)</b>, not 384 tall (the whole column).</div>
+
+<h2>Root cause</h2>
+<p>The far-LOD placeholder was built at the FULL column height instead of one slab:</p>
+<ul>
+<li><b>Textured low</b> — <code>LOW_GRID_Y = 8</code>: a 4×8×4 grid of <b>8 bands × 48 blocks = 384 tall</b>. <code>_low_emit()</code> placed vertices in <code>[0, 384]</code> on Y (the y grid unit was 48).</li>
+<li><b>Fog box</b> — <code>_low_fog_for()</code> instanced one 16³ box <b>per non-air slab</b> (up to 24 slabs × 16 = 384 tall), stacked to the whole column.</li>
+</ul>
+<p>The fix: the LOD represents <b>ONE slab (16 blocks) — the TOP slab</b> (the visible top of the terrain), not the whole 384 column. And an <b>air column</b> (top slab all-air) gets <b>no</b> placeholder.</p>
+
+<h2>What changed</h2>
+<ul>
+<li><b><code>LOW_GRID_Y = 1</code></b> (was 8) — the low grid is now <b>4×1×4 = 16 cells, 1 band of 16 blocks</b> (was 4×8×4 = 128 cells, 8 bands of 48).</li>
+<li><b><code>_low_grid()</code></b> — samples only the <b>top slab's</b> center row (<code>row_bytes(16*slab_top + 8)</code>, where <code>slab_top = c.top / 16</code>), not 8 band centers. An air column (top &lt; 0) samples an all-air row → dominant id 0 → all-air grid → null mesh.</li>
+<li><b><code>_low_emit(g, y_off)</code></b> — the y grid unit is now <b>16</b> (was 48) and every vertex is offset by <code>y_off = slab_top * 16</code> (the top slab's world y). Vertices are in <code>[slab_top*16, slab_top*16 + 16]</code> on Y — <b>16 tall</b>, at the top of the terrain (not <code>[0, 384]</code>).<br><span class="note">Also fixed a latent y/z index-layout mismatch in the three <code>g[…]</code> reads (they used <code>x + y*GX + z*GX*GZ</code> but <code>_low_grid</code> writes <code>x + z*GX + y*GX*GZ</code> — invisible at 8 uniform bands, but at 1 band it overflowed the 16-cell grid → <code>Out of bounds get index '16'</code>; the reads now match the layout).</span></li>
+<li><b><code>_low_build()</code></b> — computes <code>slab_top</code>/<code>y_off</code> and passes <code>y_off</code> to <code>_low_emit</code>; records <code>low_max_h</code> (the cumulative max textured-low AABB height) so a transient low (upgraded to high before a point-sample) is still captured.</li>
+<li><b><code>_low_fog_for()</code></b> — instances <b>ONE</b> 16³ box at the <b>top slab</b> (was one per non-air slab). Returns early (no placeholder) when the column is air (<code>top &lt; 0</code>) or the top slab is null.</li>
+<li><b><code>chunk.gd</code></b> — comment updated to describe the 16-tall top-slab placeholder (no behavior change).</li>
+<li><b><code>main.gd</code> (R16 arm probe)</b> — new <code>_r16_lod_height()</code> (per-LOD-mesh AABB <code>size.y</code> = world height; the air-chunk count) and <code>_r16_air_chunk_test()</code> (takes a real far chunk, clears it to all-air, and asserts the fog first-pass AND the textured-low build both create nothing — a non-vacuous air-chunk proof, since the R16 terrain has no natural air columns). Reported in the <code>lod</code> RESULT block as <code>height0/height1/air_chunk_test/height_ok/air_ok</code>.</li>
+</ul>
+
+<h2>G0 — zero script errors</h2>
+<div class="pass"><b>PASS</b> — <code>godot --headless --path godot --quit</code> exits 0 with <b>0</b> <code>SCRIPT ERROR</code> lines (re-run after every edit; an initial parse error on the probe's dynamic-type inference + the runtime <code>Out of bounds get index '16'</code> in <code>_low_emit</code> were both found by the gates and fixed; logs in <code>.scratch/AC-0231-fix-gates/G0.log</code>).</div>
+
+<h2>R16 — the LOD height + air-chunk checks (<code>AWECRAFT_LOGIC=r16 --fixed-fps 600</code>)</h2>
+<p class="note">Final clean run: <code>R16.log</code> (0 SCRIPT ERROR, <b>ok:true</b>, total 1089 chunks).</p>
+<table>
+<tr><th>Check</th><th>Evidence</th><th>Verdict</th></tr>
+<tr><td><b>LOD mesh is 16 tall</b> (1 chunk height), NOT 384 — <code>lod.height_ok</code></td><td><code>low_max_h_built = 16.0</code> (the cumulative max over <b>110</b> textured lows ever built — the 4×1×4 mesh), <code>max_fog_h = 16.0</code> (the fog box), <code>max_h = 16.0</code> (overall max). Before the fix these were up to 384.</td><td class="pass">PASS — 16 tall</td></tr>
+<tr><td><b>Air chunks do NOT get LODs</b> — <code>lod.air_ok</code></td><td><code>air_chunk_test = {ran:true, cx:41, cz:-16, fog_created:false, low_created:false, ok:true}</code> — a real far chunk cleared to all-air gets <b>no fog and no low</b>. Also <code>air_with_lod = 0</code> across the whole far set.</td><td class="pass">PASS — air chunks get no LOD</td></tr>
+<tr><td>No regression in the existing R16 LOD gates</td><td><code>immediate_ok: true</code> (every far data chunk visible at first sight), <code>no_downgrade_ok: true</code> (<code>low_downgrade_n = 0</code>, keep-high), <code>catch_up_ok: true</code> (<code>low_upgrades_n = 2225</code>), <code>low_built_n = 110</code>, <code>low_fog_boxes_n = 81</code> (1 box per fog chunk now, not per slab).</td><td class="pass">PASS</td></tr>
+</table>
+<h3>lod block (final run, verbatim)</h3>
+<pre>height0 {low_max_h_built: 16.0, max_fog_h: 16.0, max_h: 16.0, air_total: 0, air_with_lod: 0, height_ok: true, air_ok: true}
+height1 {low_max_h_built: 16.0, max_fog_h: 16.0, max_h: 16.0, air_total: 0, air_with_lod: 0, height_ok: true, air_ok: true}
+air_chunk_test {ran: true, cx: 41, cz: -16, fog_created: false, low_created: false, ok: true}
+height_ok: true · air_ok: true · immediate_ok: true · no_downgrade_ok: true
+low_built_n: 110 · low_fog_boxes_n: 81 · low_upgrades_n: 2225 · low_downgrade_n: 0</pre>
+<p class="note"><code>air_total = 0</code> in the natural far set (the R16 terrain has no all-air columns — every far chunk has a non-air top slab), so the <code>air_chunk_test</code> is the non-vacuous proof: it forces a real far chunk to all-air and confirms both LOD paths refuse it.</p>
+
+<h2>SMOKE battery (<code>AWECRAFT_BATTERY=player;interact;light;fluids</code>)</h2>
+<div class="pass"><b>PASS</b> — <code>SMOKE.log</code>: <b>ok:true</b>, <b>0</b> <code>SCRIPT ERROR</b> (the run that exposed the <code>_low_emit</code> out-of-bounds is gone). All four arms: player — is_on_floor true, fly/jump normal; interact — place_ok true, highlight visible, drop spawned, inventory grew; light — <b>surface_eff 15 / cave_eff 0 / torch_level 14</b> (exact standing baseline); fluids — sea_stable true, sea surface 792/792, water_on_lava 24.</div>
+
+<h2>No-regression arms</h2>
+<table>
+<tr><th>Arm</th><th>Result</th><th>Verdict</th></tr>
+<tr><td><code>chunkiocpp</code> (byte-identical slab IO)</td><td>ok:true — <code>md5_cpp == md5_orig</code> = <code>8a893557900a462fe4ab1c91f8589081</code> (codec byte-identical), roundtrip 17/17, slab 17/17, enc 34/34, flat 34/34</td><td class="pass">PASS</td></tr>
+<tr><td><code>genhash</code> ×2 (determinism + baseline)</td><td>run1 ≡ run2 (<b>byte-identical</b>, diff clean) and ≡ AC-0215 NEW baseline <b>25/25</b>; (0,0) = <code>80b904c0e5f085eef1e839459058c706</code> (the AC-0215 value, NOT the AC-0188 baseline)</td><td class="pass">PASS</td></tr>
+<tr><td><code>light</code> (standing baseline)</td><td>surface 15 / cave 0 / torch 14 — exact match (via SMOKE light arm)</td><td class="pass">PASS</td></tr>
+<tr><td><code>meshprobe</code> (AC-0190/AC-0211)</td><td>ok:true — <b>match_rate 1.0</b>, 32/32 chunks, 1920/1920 accs, verts 238200/238200, mismatch []</td><td class="pass">PASS</td></tr>
+<tr><td><code>stripsprobe</code> (AC-0207)</td><td>ok:true — <b>match_rate 1.0</b>, 32/32 chunks, face_rate 1.0, mismatch []</td><td class="pass">PASS</td></tr>
+<tr><td><code>pullprobe</code> (AC-0210)</td><td>ok:true — <b>match_rate 1.0</b>, 32/32 chunks, 6,291,456/6,291,456 cells, max_diff 0, mismatch []</td><td class="pass">PASS</td></tr>
+<tr><td><code>nofallback</code> (AC-0208)</td><td>ok:true — C++ counters advanced (mesh 42 / gen 43 / strips 169 / slab decodes 2), GD sentinels 0, torch placed+lit (15), roundtrip ok</td><td class="pass">PASS</td></tr>
+</table>
+
+<h2>Notes</h2>
+<ul>
+<li><b>Vertex Y range.</b> The task statement phrases the target as "vertices in <code>[0, 16]</code> on Y". The fix makes the mesh <b>16 tall</b> (AABB <code>size.y = 16</code>, the check R16 reports) and places it at the <b>top slab</b> (<code>[slab_top*16, slab_top*16+16]</code>) — geometrically the correct spot for a far placeholder (it shows the top of the terrain at the right height; a box pinned to <code>[0,16]</code> would sit underground and leave the horizon empty). The height gate (<code>size.y ≤ 16.5</code>) is what R16 asserts; <code>low_y_range</code> in the probe reports the placement.</li>
+<li><b>Not run (per instructions):</b> R50 and the Windows build. <b>No git</b> in the repo (the coordinator commits).</li>
+</ul>
+
+</body></html>
