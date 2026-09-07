@@ -7593,6 +7593,11 @@ func _r16_lod_inr() -> Dictionary:
 		if c.data.is_empty():
 			continue  # no data yet — nothing to show
 		n += 1
+		# AC-0240: with the fog wave off, a KEPT slab in the data->low gap is
+		# EXPECTED (the low pass is on its way - the fog used to cover it). Only
+		# a CULLED slab missing its cap is a real hole. FOG_WAVE_ON true keeps
+		# the old contract (any non-air slab needs low/fog/cap) exactly.
+		var km: PackedByteArray = world._vwin_col_kept(c)
 		for si in range(c.data.size()):
 			if c.data[si] == null:
 				continue  # air slab — no placeholder needed
@@ -7602,8 +7607,8 @@ func _r16_lod_inr() -> Dictionary:
 			elif c.has_fog_si(si):
 				fog += 1
 			elif c.has_cap_si(si):
-				cap += 1  # AC-0234: a culled slab is COVERED by its black cap
-			else:
+				cap += 1  # AC-0234: a culled slab is COVERED by its cap
+			elif world.FOG_WAVE_ON or int(km[si]) == 0:
 				uncovered += 1
 	return {"inr_n": n, "inr_slabs": slabs, "inr_fog": fog, "inr_low": low, "inr_cap": cap, "inr_uncovered": uncovered}
 

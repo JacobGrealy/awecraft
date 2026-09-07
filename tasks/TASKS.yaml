@@ -5,6 +5,7 @@ meta:
 queue:
 - AC-0238
 - AC-0239
+- AC-0240
 - AC-0235
 - AC-0175
 - AC-0140
@@ -7990,3 +7991,71 @@ intake:
       outranks the players own surround; add a simulation-distance tier ahead of the cone. The sim_dist
       Options slider already exists (default 4, currently drives fluid_tick_radius + band0_r only) - this task
       extends it to the streaming tier priority. Queue position: after AC-0238 (window-masked-light).'
+- id: AC-0240
+  title: fog-wave-disable
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-07T09:45
+  updated_at: 2026-09-07T09:45
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want the sky-blue loading boxes (the fog placeholders) gone -
+    the world should show no placeholder at all between a far chunk landing data and its textured
+    low-res mesh appearing, and the deep-interior caps (the same fog color) stay. The disable must
+    be restorable (flip one const) and must cost nothing while off.
+
+    2) Technical Details: world.gd const FOG_WAVE_ON := false (next to the AC-0234 window consts).
+    The fog wave is the immediate per-slab 16x16x16 unshaded box on data landing (WAVE 1,
+    _low_fog_for; the 3.5ms paced WAVE 2 is the LOW lane and is NOT touched). FOUR ensure sites get
+    the flag (drops stay ungated - they no-op via has_fog_si when off and keep convergence if the
+    flag ever flips back in-session): (1) _low_fog_for kept-slab branch (the CULLED-slab cap
+    ensure in the same loop is NOT fog - it stays); (2) _vwin_sync kept+data+no-low+no-cap branch;
+    (3) _low_build_slab all-air-sampled-but-has-blocks branch (the terminal c.low_failed mark STAYS
+    - it is wave-advance logic, not fog); (4) the C++ low handoff all-air branch (same). CRITICAL
+    CARVE-OUTS in _low_fog_for: _vwin_neighbor_sync (the data-landing span re-sync) and the in-r
+    order-gate invalidation (_low_inr_invalidate) are NOT fog work - they run regardless of the
+    flag. Zero-cost-when-off contract: no fog MultiMesh nodes are ever created (no scene-tree,
+    culling, or draw-call cost), the shared _low_fog_mesh + _low_fog_mat STAY (the caps reuse them
+    per the 2026-09-07 fog-color rule). Harness (main.gd _r16_lod_inr): with the fog off, a KEPT
+    in-r slab in the data->low gap is expected (the low pass is on its way) - inr_uncovered now
+    counts only a CULLED slab missing its cap (km computed once per chunk); with FOG_WAVE_ON true
+    the old contract (any non-air slab needs low/fog/cap) is preserved exactly. GATES: syntax 0
+    parse errors; SMOKE battery ok:true; R16 (seed 44) all gates green with fog counters 0
+    (inr_fog 0, far_fog 0, low_fog_boxes_n 0) - the phase gate must hold with the re-pointed
+    uncovered contract. LADDER CONSEQUENCE: fog -> low -> high becomes [nothing] -> low -> high;
+    far chunks show a gap (invisible terrain) until the low lands - this is phase 0 of the
+    satellite far-LOD (future ticket) which takes the fog slot as the immediate placeholder.'
+  comments:
+  - id: 1
+    created_at: '2026-09-07T09:45:00.000000'
+    updated_at: null
+    text: '[agent] Filed per user 2026-09-07 (get rid of the fog chunks, restorable, zero cost when
+      off). Implementation same session; closeout evidence lands in comment 2.'
+  - id: 2
+    created_at: '2026-09-07T10:20:00.000000'
+    updated_at: null
+    text: '[impl] DONE + VERIFIED 2026-09-07 (coordinator commits). const FOG_WAVE_ON := false +
+      the 4 flagged ensure sites as specced, drops left ungated (no-op via has_fog_si, convergence
+      if the flag flips back in-session), _vwin_neighbor_sync + _low_inr_invalidate carve-outs kept.
+      REGRESSION CAUGHT BY THE FIRST R16 (and masked by the gate re-point): the fog set was the
+      ENTRY TICKET into the low lane - _low_pending_sis/_low_pending_si derive the pending set from
+      the fog/cap/low placeholder sets, so with the fog gone a kept data slab entered no set and was
+      invisible to the low lane (R16: low=0 everywhere, culls 641->0, build_ms 70s->30s - the order
+      gate never closed because nothing was ever pending). FIX: a VIRTUAL pending set under
+      FOG_WAVE_ON == false in both picks - a kept data slab with no placeholder, no low, and no
+      terminal mark is pending directly (bounded 24-slab scan; the WAVE-2 pick stays allocation-free
+      - first pending = min of the three-set winner and the virtual first; the flag-on path is
+      byte-identical). FINAL R16 (seed 44) all green: ok, built_all, owed 0, gen_cov 0, caps_ok,
+      phase_ok, churn_ok (culls 642), fog counters 0 in every sample, build_ms 77339 (the gate
+      closing again = the designed lows-before-highs order), 0 script errors. SMOKE ok:true. Ladder
+      is now [nothing] -> low -> high (caps unchanged); this is phase 0 of the satellite far-LOD,
+      which takes the fog slot as the immediate placeholder. KNOWN FOLLOW-UP (user-flagged, not yet
+      a ticket): the low lane shares the TM high-priority pool with high builds - a dedicated low
+      thread (the AC-0187 edit-remesh precedent) would remove the pool-contention starvation mode;
+      its urgency rises with fog off since the low is now the first visible representation.'

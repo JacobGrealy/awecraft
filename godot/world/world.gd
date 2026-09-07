@@ -683,6 +683,16 @@ var _low_ms_snap_dirty := true
 # cost); the gate covers fog/cap, low, high, greedy only.
 # TIER 0 (the player's own column) is NEVER culled: full build, no
 # placeholder — the fall-through contract.
+# AC-0240 (user 2026-09-07): the FOG WAVE (the immediate per-slab sky-blue
+# placeholder box on data landing, WAVE 1) is DISABLED - a far chunk shows NO
+# placeholder between data landing and its textured low (WAVE 2, untouched);
+# the deep-interior caps (same fog color) stay. Flip to true to restore. Zero
+# cost when off: no fog MultiMesh nodes are ever created (no scene-tree/culling/
+# draw cost), the 4 ensure sites early-out on this flag, the drop sites no-op
+# via has_fog_si. The shared _low_fog_mesh/_low_fog_mat STAY (the caps reuse
+# them). CAVEAT: _vwin_neighbor_sync + _low_inr_invalidate at the top of
+# _low_fog_for are NOT fog work - they run regardless of this flag.
+const FOG_WAVE_ON := false
 const VWIN_BAND := 4
 var _vwin_ver := 0            # band version (dispatch stamp; bump = band change)
 var _vwin_blo := 0            # band lo (player slab - VWIN_BAND)
@@ -1145,8 +1155,8 @@ func _vwin_sync(c: Node3D) -> bool:
 				_cap_drop_slab(c, si2)  # defensive: a low + cap never coexist
 		elif c.has_cap_si(si2):
 			pend = true  # kept cap = re-entered: the caller re-queues the swap
-		elif not c.has_fog_si(si2):
-			_fog_ensure_slab(c, si2)
+		elif FOG_WAVE_ON and not c.has_fog_si(si2):
+			_fog_ensure_slab(c, si2)  # AC-0240: flag off = no placeholder in the low gap
 	return pend
 
 # AC-0234: add slab si to the CAP set (the shared MultiMesh instance is
@@ -1273,7 +1283,9 @@ func _low_fog_for(c: Node3D) -> void:
 		if c.data[si2] == null or c.has_low_si(si2):
 			continue
 		if si2 < km.size() and km[si2] == 1:
-			if not c.has_fog_si(si2):
+			# AC-0240: fog off - a kept slab shows NOTHING until its low
+			# lands (the culled branch below still caps from frame one).
+			if FOG_WAVE_ON and not c.has_fog_si(si2):
 				_fog_ensure_slab(c, si2)
 		elif not c.has_cap_si(si2):
 			# AC-0234: culled on landing — the black cap from the FIRST
@@ -1686,6 +1698,19 @@ func _low_pending_sis(c: Node3D) -> Array:
 			# — PER-SLAB staleness: the finished slabs of a partially-
 			# lowered chunk stay fresh while its other slabs are fogged.
 			out.append(si)
+	if not FOG_WAVE_ON:
+		# AC-0240: the fog set was the entry ticket into this walk - a kept
+		# slab got its fog on landing, the fog made it pending, the low swapped
+		# it. With the fog wave off a kept data slab that holds NO placeholder
+		# and no low is the pending source directly (bounded 24-slab scan; the
+		# flag-on path above is untouched).
+		for si in range(c.data.size()):
+			var si2 := int(si)
+			if c.data[si2] != null and si2 < km.size() and km[si2] == 1 \
+					and not c.has_low_si(si2) and not c.has_cap_si(si2) \
+					and int(c.low_failed.get(si2, -1)) != int(c.data_gen):
+				out.append(si2)
+		out.sort()
 	return out
 
 # AC-0231 fix3: the FIRST pending slab (the WAVE 2 pick — allocation-free,
@@ -1700,7 +1725,8 @@ func _low_pending_si(c: Node3D) -> int:
 	var f := 0
 	var p := 0
 	var l := 0
-	while f < c.fog_slabs.size() or p < c.cap_slabs.size() or l < c.low_slabs.size():
+	var w := -1  # AC-0240: the first pending (three-set walk, then the virtual set)
+	while w < 0 and (f < c.fog_slabs.size() or p < c.cap_slabs.size() or l < c.low_slabs.size()):
 		var fs := int(c.fog_slabs[f]) if f < c.fog_slabs.size() else 1 << 30
 		var ps := int(c.cap_slabs[p]) if p < c.cap_slabs.size() else 1 << 30
 		var ls := int(c.low_slabs[l]) if l < c.low_slabs.size() else 1 << 30
@@ -1720,11 +1746,27 @@ func _low_pending_si(c: Node3D) -> int:
 		if is_ph:
 			# FOG or CAP: terminal mark + the AC-0234 kept filter.
 			if int(c.low_failed.get(si, -1)) != int(c.data_gen) and si < km.size() and km[si] == 1:
-				return si
+				w = si
+				break
 			continue
 		if c.low_stamps.get(si, []) != c.stamp():
-			return si  # a stale LOW slab (edited after the low)
-	return -1
+			w = si  # a stale LOW slab (edited after the low)
+			break
+	# AC-0240: the fog wave off - the fog set was the pending entry ticket
+	# for kept data slabs. With it gone, a kept slab with data and NO
+	# placeholder/low is pending directly; the FIRST pending is the min of
+	# the three-set winner and the virtual set's first (bounded scan,
+	# allocation-free; the flag-on path behaves exactly as before).
+	if not FOG_WAVE_ON:
+		for si in range(c.data.size()):
+			var si2 := int(si)
+			if c.data[si2] != null and si2 < km.size() and km[si2] == 1 \
+					and not c.has_low_si(si2) and not c.has_cap_si(si2) \
+					and int(c.low_failed.get(si2, -1)) != int(c.data_gen):
+				if w < 0 or si2 < w:
+					w = si2
+				break
+	return w
 
 # AC-0231 fix3: true when ANY low slab of the chunk is stale (built before
 # the current chunk stamp). The WAVE 3 upgrade pick uses it — a chunk is
@@ -1779,8 +1821,9 @@ func _low_build_slab(c: Node3D, si: int) -> void:
 			_cap_drop_slab(c, si)
 		else:
 			# kept (the top-of-function check) — the fog is the honest
-			# placeholder for an all-air-SAMPLED slab.
-			if not c.has_fog_si(si):
+			# placeholder for an all-air-SAMPLED slab (AC-0240: flag-gated; the
+			# TERMINAL mark below stays - it is wave-advance logic, not fog).
+			if FOG_WAVE_ON and not c.has_fog_si(si):
 				_fog_ensure_slab(c, si)
 			c.low_failed[si] = c.data_gen
 	else:
@@ -1902,7 +1945,8 @@ func _low_handoff(e: Dictionary, res) -> void:
 			_fog_drop_slab(c, si)
 			_cap_drop_slab(c, si)
 		else:
-			if not c.has_fog_si(si):
+			# AC-0240: flag-gated (the terminal mark stays - wave advance).
+			if FOG_WAVE_ON and not c.has_fog_si(si):
 				_fog_ensure_slab(c, si)
 			c.low_failed[si] = c.data_gen
 	else:
