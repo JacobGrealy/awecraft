@@ -4,6 +4,7 @@ meta:
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
 - AC-0238
+- AC-0239
 - AC-0235
 - AC-0175
 - AC-0140
@@ -7634,6 +7635,30 @@ intake:
     text: '[coordinator] CLOSED 2026-09-07 per user direction (v2 evidence in comment id 3; the uncommitted files go out with
       the closeout commit). Successors: AC-0237 window-scoped-generation (gen side) + AC-0238 window-masked-light (light side)
       extend the window past the mesh.'
+
+  - id: 5
+    created_at: '2026-09-07T09:10:00.000000'
+    updated_at: null
+    text: '[user-rule-change + impl 2026-09-07] Two user rule changes landed on the AC-0234 window
+      (both committed in the 2026-09-07 closeout batch):
+      (1) CAP COLOR: caps reuse the FOG material + mesh (_low_fog_mat, light sky-blue, UNSHADED) -
+      the black _vwin_cap_mat was deleted. User: caps should go to the fog color, not black.
+      (2) OPEN-TOP BAND: the player band changed from [pys-4, pys+4] to [pys-4, TOP OF WORLD] -
+      the full column ABOVE the players Y is always kept (rendered normally, never culled/capped);
+      only 4 slabs BELOW the player bound the deep interior. Root cause fixed: the +-4 band culled
+      the sky slabs above the terrain in far columns, and the ungenerated-slab branch capped them -
+      rows of placeholder boxes in the sky above the player (user: filling should go down not up;
+      all up should render normally). Implementation: _vwin_recompute now sets bhi = top slab, so
+      every existing band comparison (col_kept, keep_for incl GEN_BAND_PAD, sync) picks up the rule
+      with no other change; the cap logic is untouched (nothing above the player is ever culled).
+      R16 evidence (seed 44, deterministic): owed 0, gen_cov 0, caps_ok, phase_ok, built_all, build_ms
+      74529 -> 69682 (-6.5%), and the +-4 band churn the rule was meant to remove collapsed: uncaps
+      1322 -> 0, re-entry regens 24077 -> 28, rebuilds 24805 -> 224 (the uncap cycle was mostly the
+      sky caps being created/released as the player Y moved). The R16 churn_ok gate was re-pointed
+      to (culls_n > 0 AND vwin_regens_n > 0) - the old uncap requirement measured the removed sky-cap
+      churn; re-entry liveness is now proven by the span-driven re-entry regens + caps_ok P1. NOTE
+      (user 2026-09-07): this optimizes for flight/above-ground; cave interiors may need a different
+      algorithm later.'
 - id: AC-0235
   title: remove-skybox-add-procedural-clouds-shader
   source: user
@@ -7913,4 +7938,55 @@ intake:
     updated_at: null
     text: '[agent] Filed per the user 2026-09-06 (add it). Supersedes the v1 AC-0234 decision that light stays full-column
       — the mask makes the light pass honor the same window the mesh honors. Waiting on AC-0237 (sequential: shared .so +
-      world.gd overlap, and its slab-mask refactor lands first).'
+      world.gd overlap, and its slab-mask refactor lands.'
+- id: AC-0239
+  title: simulation-distance-streaming-tier
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-07T08:40
+  updated_at: 2026-09-07T08:40
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want the world around me - in every direction, not just in front
+    of my view - to be filled out to my simulation distance before the world far ahead of my view, so turning
+    around, walking sideways, or changing direction never shows me loading terrain right next to me. The
+    simulation distance is the existing Options slider (default 4); it already bounds the fluid sim and the
+    collision band, and should bound the build priority too.
+
+    2) Technical Details: CURRENT (world.gd _tier_of): 4-tier lexicographic (tier, taxi) streaming priority
+    - 0 under, 1 ring 1 (the 8 immediate neighbors ONLY), 2 the FOV cone (dot > TIER_CONE_DOT 0.5, reaching
+    the render edge), 3 the rest by distance. THE GAP: past the 8 neighbors the forward cone outranks the
+    players own surround - chunks 2+ behind/beside are tier 3 - so a turn or a sideways walk shows load-in
+    right next to the player (the original AC-0231 spec said tier 1 = ring1-8; AC-0233 narrowed it to ring 1).
+    Settings.sim_dist ALREADY EXISTS (default 4, clamped <= render_dist at load, the Options sim_slider is
+    live-wired to Settings.apply_sim_distance, which today sets fluid_tick_radius and band0_r only). CHANGE:
+    _tier_of becomes 5 tiers - 0 under; 1 = SIM RADIUS (Chebyshev distance <= sim_dist, matching the
+    band0_r square semantics, absorbs the old ring-1 tier); 2 cone; 3 rest. The lexicographic (tier, taxi)
+    _tier_score (10000 scale) and the debounced re-stamp machinery (RESCORE_PER_FRAME, _tier_stamp, the
+    _pool_key cache) stay; add sim_dist to _pool_key so a slider change invalidates the cached picks, and
+    have apply_sim_distance call the worlds rescore kick (mirror apply_render_distance). AC-0231 ORDER GATE
+    AUDIT: the high-dispatch gate fires on tier >= 2 - after the renumber that is the SAME set (old 2,3 =
+    new 2,3; the sim tier absorbs part of the old tier 3), so the gate sites should need no change - verify.
+    The in-r pre-low pass inherits the new order for free (the surround gets its lows first - intended).
+    GATES: (1) R16 spin arm - after a 180 deg turn the sim circle (default 4) must fill before the new-facing
+    cone catches up; (2) R16 fly50 - the ahead pre-warm must NOT regress (ahead-while counts within the
+    prior run envelope - the default-4 sim circle is ~41 chunks of the R16 queue, small); (3) SMOKE battery
+    ok:true; (4) genhash 25/25 A==B (tiering does not touch the gen masks - trivially green); (5) settings
+    arm - sim slider default 4, persists, clamps to render_dist, a live slider change re-stamps the tiers
+    (rescore event counter moves). TRADE-OFF (user 2026-09-07): a larger sim radius delays the forward
+    pre-warm during flight; default 4 keeps flight behavior ~unchanged and the slider is the user knob that
+    trades ahead-fill for surround-fill.'
+  comments:
+  - id: 1
+    created_at: '2026-09-07T08:40:00.000000'
+    updated_at: null
+    text: '[agent] Filed per the 2026-09-07 design discussion (user): past the 8 neighbors the forward cone
+      outranks the players own surround; add a simulation-distance tier ahead of the cone. The sim_dist
+      Options slider already exists (default 4, currently drives fluid_tick_radius + band0_r only) - this task
+      extends it to the streaming tier priority. Queue position: after AC-0238 (window-masked-light).'

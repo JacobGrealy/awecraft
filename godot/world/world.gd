@@ -655,9 +655,10 @@ var _low_ms_snap_dirty := true
 #                   peak textured, never black); a flat tower keeps just
 #                   its surface slab; a canyon-floor tower reaches down
 #                   to the floor and up to the rim (its neighbors' tops).
-#   [B_LO, B_HI]  — the player band: the player's Y slab +/- VWIN_BAND
-#                   (4), ALWAYS, at any altitude. High flight keeps a
-#                   thin visible band instead of the full 384.
+#   [B_LO, TOP]   — the player band: 4 slabs BELOW the player's Y slab
+#                   (VWIN_BAND) plus the ENTIRE column ABOVE it (user
+#                   2026-09-07: full column above the player, rendered
+#                   normally - the sky is never culled or capped).
 # KEPT is therefore a per-column 24-byte mask computed on demand (never
 # one global interval) — it is passed to C++ build_accs as its keep mask
 # (a masked slab is built exactly like an all-air slab).
@@ -685,9 +686,8 @@ var _low_ms_snap_dirty := true
 const VWIN_BAND := 4
 var _vwin_ver := 0            # band version (dispatch stamp; bump = band change)
 var _vwin_blo := 0            # band lo (player slab - VWIN_BAND)
-var _vwin_bhi := 0            # band hi (player slab + VWIN_BAND)
+var _vwin_bhi := 0            # band hi (TOP slab - the band is open above the player, user 2026-09-07)
 var _vwin_py := 0.0           # last known player Y (recenter wy arg)
-var _vwin_cap_mat: StandardMaterial3D = null
 # counters (harness evidence):
 var vwin_caps_n := 0          # live cap boxes across the streaming set
 var vwin_cap_chunks_n := 0    # chunks holding >= 1 cap
@@ -773,8 +773,8 @@ func _vwin_col_kept(c: Node3D) -> PackedByteArray:
 # enqueue — the chunk may not exist yet; _vwin_span is already
 # coord-based). The 3x3 tower span UNION the player band WIDENED by
 # GEN_BAND_PAD slabs: the gen band is deliberately WIDER than the window
-# band (±4) so the window can slide GEN_BAND_PAD slabs in either
-# direction before any re-entry regen is owed (the re-entry churn is
+# band (4 below; above is already full) so the window can slide
+# GEN_BAND_PAD slabs before any re-entry regen is owed (the re-entry churn is
 # the expensive part — a regen is ~1/8 the column and forces neighbor
 # re-meshes; a wider gen band trades a few always-generated slabs for
 # ~4x fewer regens). The BUILD/cap keep (_vwin_col_kept) stays at the
@@ -827,7 +827,10 @@ func _vwin_recompute(wy: float) -> void:
 	var sn := ChunkScript.slab_n()
 	var pys := clampi(int(floorf(_vwin_py / 16.0)), 0, sn - 1)
 	var blo := maxi(0, pys - VWIN_BAND)
-	var bhi := mini(sn - 1, pys + VWIN_BAND)
+	var bhi := sn - 1  # user 2026-09-07: the band is OPEN at the top - the full column above the
+	# player's Y is always kept (rendered normally, never culled/capped); only the
+	# 4 slabs BELOW the player bound the deep interior. Flight/above-ground
+	# optimization - cave interiors may need a different algorithm later.
 	if blo == _vwin_blo and bhi == _vwin_bhi:
 		return  # band unchanged
 	_vwin_blo = blo
@@ -1164,7 +1167,7 @@ func _cap_ensure_slab(c: Node3D, si: int) -> void:
 		mm.transform_format = MultiMesh.TRANSFORM_3D
 		var mi := MultiMeshInstance3D.new()
 		mi.multimesh = mm
-		mi.material_override = _vwin_cap_mat
+		mi.material_override = _low_fog_mat  # user 2026-09-07: caps wear the FOG color (the shared fog material), not black
 		c.add_child(mi)
 		c.cap_instance = mi
 	_cap_sync(c)
@@ -1223,15 +1226,9 @@ func _low_fog_bake() -> void:
 		ai.append(j + 2)
 	_low_fog_mesh = ArrayMesh.new()
 	_low_fog_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _low_surface(av, ai))
-	# AC-0234: the cap material — the SAME box mesh in solid black (the
-	# culled interior's dark fill). Unshaded: the cap is a VOID FILL, not
-	# terrain — no lighting, no fog color; the world fog still tints it
-	# toward the sky color at the render edge (the same blend the fog
-	# boxes get), so a distant cap merges into the horizon like a fog box.
-	_vwin_cap_mat = StandardMaterial3D.new()
-	_vwin_cap_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_vwin_cap_mat.cull_mode = BaseMaterial3D.CULL_BACK
-	_vwin_cap_mat.albedo_color = Color(0.0, 0.0, 0.0)
+	# AC-0234 (user 2026-09-07): the CAPS reuse the FOG material + box mesh
+	# directly (the solid-black cap material is gone) — a capped slab reads
+	# as a fog box at every distance, void-fill, no lighting.
 
 # AC-0231 rewrite: FOG WAVE — the immediate placeholder for a far column
 # that just landed data. ONE pre-baked 16x16x16 fog box INSTANCE per

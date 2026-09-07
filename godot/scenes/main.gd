@@ -7253,7 +7253,15 @@ func _r16_test(spawn: Vector3) -> void:
 			# churn = LOWs dropped when they leave the window (culls) +
 			# re-entered caps swapped for a low/high (uncaps) — the
 			# never-built deep interior only ever flows through caps.
-			"churn_ok": int(world.vwin_culls_n) > 0 and int(world.vwin_uncaps_n) > 0,
+			# user 2026-09-07 open-top band: the sky is NEVER culled (full column
+				# above the player), so the ascend/descend uncap cycle this gate used to
+				# measure was mostly the SKY CAPS being created and released as the
+				# player's Y moved - exactly the churn the rule removed (R16 baseline
+				# 1322 uncaps / 24077 regens -> 0 / 28). Re-entry liveness is now
+				# proven by the span-driven re-entry regens (gen_regens_n > 0) plus
+				# caps_ok P1 (no capped slab ever holds data - the cap->low/high swap
+				# fires on every re-entry regen landing).
+				"churn_ok": int(world.vwin_culls_n) > 0 and int(world.vwin_regens_n) > 0,
 			# owed_ok = the owed-kept invariant at the FINAL sample: no
 			# built chunk keeps a slab its last build (vwin_mask) never
 			# built (the superset re-queue converges: a slab the window
@@ -7713,7 +7721,8 @@ func _r16_lod_slabcheck() -> Dictionary:
 						fog_aabb_fail += 1
 		# AC-0234 CAP: the black 16^3 fill for CULLED non-air slabs — the
 		# SAME pre-baked box mesh as the fog (data-side count/mesh check,
-		# the same readback limitation) + the black material override +
+		# the same readback limitation) + the FOG material override (user 2026-09-07:
+		# caps wear the fog color, the black cap material was removed) +
 		# the P1 invariant PER SLAB: a capped slab is non-air and holds NO
 		# high instance and NO low (the cap owns the slab exclusively).
 		if c.cap_instance != null:
@@ -7729,7 +7738,7 @@ func _r16_lod_slabcheck() -> Dictionary:
 				if cmm.mesh != world._low_fog_mesh:
 					cap_ok = false
 					cap_mesh_fail += 1
-				elif c.cap_instance.material_override != world._vwin_cap_mat:
+				elif c.cap_instance.material_override != world._low_fog_mat:
 					cap_ok = false
 					cap_mat_fail += 1
 		for jcap in range(int(c.cap_slabs.size())):
