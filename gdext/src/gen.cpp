@@ -98,6 +98,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -408,26 +409,70 @@ static inline double dens_at(int H, int y, double cave, bool pad) {
 static std::atomic<long long> g_skip_chunks_total{0};
 static std::atomic<long long> g_skip_cols_total{0};
 
+// AC-0237 phase 0: the gen cost BREAKDOWN (us, process-wide, all TG
+// threads) — fields (the 7 coarse field builds) / heights (the 256
+// per-column surface + biome) / scan (the top-down density evaluation —
+// the part the window would skip) / fill (the per-cell emit incl. ore) /
+// veg (trees + flowers) / pallet (palettize_slabs). Read via
+// AweGen.gen_timing().
+static std::atomic<long long> g_t_field_us{0};
+static std::atomic<long long> g_t_heights_us{0};
+static std::atomic<long long> g_t_scan_us{0};
+static std::atomic<long long> g_t_fill_us{0};
+static std::atomic<long long> g_t_veg_us{0};
+static std::atomic<long long> g_t_pallet_us{0};
+static std::atomic<long long> g_t_cols_full{0};
+static std::atomic<long long> g_t_cols_skip{0};
+
+static inline long long now_us() {
+	return (long long)std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 // ---------------------------------------------------------------------------
 // Column generation.
 // ---------------------------------------------------------------------------
 
 // skip != 0: the AC-0216 lazy path (offscreen interior band) — the 150-pt
 // density evaluation is skipped free (see the file header).
+//
+// AC-0237 (window-scoped generation): p_keep = the 24-byte SLAB KEEP
+// MASK (slab si generated iff p_keep[si] != 0; nullptr = the FULL column,
+// bit-identical to the pre-AC-0237 output — the genhash A==B gate relies
+// on it). A mask can be DISJOINT (the window's kept set = the tower's
+// terrain span UNION the player band — two intervals while the player
+// flies high); only the kept slabs get density-scanned + filled, every
+// other slab stays ALL ZERO in the flat array, so palettize_slabs turns
+// it into a NULL slab (the v4 codec's per-slab section is simply ABSENT —
+// no format change). The caller (world.gd) stamps the chunk with the
+// generated slabs (gen_mask): an absent slab is NOT air — the dispatch
+// prep synthesizes it as a SOLID slab for the neighbor snap (the face
+// hides behind the window's cap box) and the window's re-entry path
+// regenerates it on demand (this function is a pure deterministic
+// f(world coords, seed) — a regenerated slab is bit-exact, no
+// cross-slab state exists). The surface slab is always kept (the span
+// contains the tower's top), so the effective surface + veg always land.
 static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int sea,
-		int skip = 0) {
+		int skip = 0, const uint8_t *p_keep = nullptr) {
 	int bx = cx * 16;
 	int bz = cz * 16;
 	int nsl = hmax / 16;
+	auto slab_kept = [&](int sl) -> bool {
+		return p_keep == nullptr || sl < nsl || p_keep[sl] != 0;
+	};
 	double ystep = (double)hmax / GY_CELLS;
 
 	if (skip) {
 		g_skip_chunks_total.fetch_add(1, std::memory_order_relaxed);
 		g_skip_cols_total.fetch_add(256, std::memory_order_relaxed);
+		g_t_cols_skip.fetch_add(1, std::memory_order_relaxed);
+	} else {
+		g_t_cols_full.fetch_add(1, std::memory_order_relaxed);
 	}
 
 	// Coarse fields (441 lattice points each = 4x8x4 cells + 1-cell margin,
 	// 2-octave AweNoise.fbm3 per lattice point).
+	long long t_field = now_us();
 	Field f_cave{}, f_ore1, f_ore2, f_ore3;
 	if (!skip)
 		build_field(f_cave, bx, bz, ystep, seed + 301, 16.0, 10.0, 16.0, 0.0, 0.0, 0.0);
@@ -440,6 +485,8 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	build_field(f_sc, bx, bz, ystep, seed, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0);
 	build_field(f_sh, bx, bz, ystep, seed + 7, 70.0, SURF_YSCALE, 70.0, 333.0, 0.0, 333.0);
 	build_field(f_sr, bx, bz, ystep, seed + 13, 300.0, SURF_YSCALE, 300.0, 500.0, 0.0, 500.0);
+	g_t_field_us.fetch_add(now_us() - t_field, std::memory_order_relaxed);
+	long long t_ht = now_us();
 
 	std::vector<int> heights(256);
 	std::vector<int> heff(256);
@@ -466,6 +513,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			bcode[idx] = bc;
 		}
 	}
+	g_t_heights_us.fetch_add(now_us() - t_ht, std::memory_order_relaxed);
 
 	std::vector<uint8_t> flat((size_t)hmax * 256, 0);
 
@@ -498,6 +546,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 
 			int he;
 			std::vector<uint8_t> solidf;
+			long long t_scan = now_us();
 			if (skip) {
 				// AC-0216: the 150-pt density evaluation is skipped free —
 				// solid exactly 0..H (the heightmap surface), no caves, no
@@ -510,12 +559,17 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				// effective surface (topmost d > 0). Above H + R + 1 the field is
 				// air for sure (the ramp clamps -1, |CAVE_AMP*(cave-0.5)| < 1),
 				// so the scan starts there; everything above stays the flag 0.
+				// AC-0237: bounded to the generated slabs — solidf of an
+				// ungenerated slab is never read (the fill loop never
+				// emits there).
 				solidf.resize((size_t)hmax, 0);
 				he = -1;
 				int top = H + 11;
 				if (top > hmax - 1)
 					top = hmax - 1;
 				for (int y = top; y >= 1; y--) {
+					if (!slab_kept(y >> 4))
+						continue; // AC-0237: ungenerated slab — skip
 					double cave = tril(f_cave, gx, (double)y / ystep, gz);
 					bool s = dens_at(H, y, cave, pad) > 0.0;
 					solidf[y] = s ? 1 : 0;
@@ -525,9 +579,18 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				if (he < 0)
 					he = 0; // a fully-caved column: the bedrock is the "surface"
 			}
+			g_t_scan_us.fetch_add(now_us() - t_scan, std::memory_order_relaxed);
 			heff[idx] = he;
+			long long t_fill = now_us();
 
-			for (int y = 0; y < hmax; y++) {
+			// AC-0237: the emit loop is bounded to the generated slabs —
+			// every ungenerated cell stays the flat-array 0 (the null-slab
+			// / absent-section encoding). The bedrock special case
+			// (y == 0) only applies when slab 0 is generated.
+			for (int ysi = 0; ysi < nsl; ysi++) {
+				if (!slab_kept(ysi))
+					continue;
+				for (int y = ysi * 16; y < ysi * 16 + 16 && y < hmax; y++) {
 				uint8_t cell = 0;
 				if (y == 0) {
 					cell = B_BEDROCK;
@@ -554,11 +617,14 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 						cell = stone_ore(x, y, z, gx, gz);
 					}
 				}
-				flat[(size_t)(y << 8) | base] = cell;
+					flat[(size_t)(y << 8) | base] = cell;
+				}
 			}
+			g_t_fill_us.fetch_add(now_us() - t_fill, std::memory_order_relaxed);
 		}
 	}
 
+	long long t_veg = now_us();
 	// Trees: 20x20 neighborhood (old loop: bx-2 .. bx+17), same hash logic,
 	// base = the effective surface (inside) / computed from the one density
 	// field (2-ring margin).
@@ -636,10 +702,11 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				continue;
 			int tth = 4 + (int)(hash2i(tx, tz, seed + 66) * 3.0);
 			for (int dy = 1; dy <= tth; dy++) {
-				// _putc (log): only empty cells, inside the chunk.
+				// _putc (log): only empty cells, inside the chunk, and
+				// (AC-0237) inside the generated slab range.
 				int wx = tx, wz = tz, wy = hcol + dy;
 				int ax = wx - bx, az = wz - bz;
-				if (ax >= 0 && ax < 16 && az >= 0 && az < 16 && wy >= 1 && wy < hmax) {
+				if (ax >= 0 && ax < 16 && az >= 0 && az < 16 && wy >= 1 && wy < hmax && slab_kept(wy >> 4)) {
 					int i = (wy << 8) | (az << 4) | ax;
 					if (flat[i] == 0)
 						flat[i] = B_LOG;
@@ -659,7 +726,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 						int wy = hcol + ly;
 						int ax = tx + dx - bx;
 						int az = tz + dz - bz;
-						if (ax >= 0 && ax < 16 && az >= 0 && az < 16 && wy >= 1 && wy < hmax) {
+						if (ax >= 0 && ax < 16 && az >= 0 && az < 16 && wy >= 1 && wy < hmax && slab_kept(wy >> 4)) {
 							int i = (wy << 8) | (az << 4) | ax;
 							if (flat[i] == 0)
 								flat[i] = B_LEAVES;
@@ -677,12 +744,18 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			int fh = heff[idx];
 			if (fh > sea && fh < hmax - 2) {
 				int idxf = (fh << 8) | (lz << 4) | lx;
+				// AC-0237: the flower cell (fh + 1) must be in a
+				// generated slab (the grass check alone cannot guard
+				// the slab above).
+				if (!slab_kept((fh + 1) >> 4))
+					continue;
 				if (flat[idxf] == B_GRASS && hash2i(bx + lx, bz + lz, seed + 777) < 0.02) {
 					flat[idxf + 256] = hash2i(bx + lx, bz + lz, seed + 778) < 0.5 ? B_ROSE : B_DANDELION;
 				}
 			}
 		}
 	}
+	g_t_veg_us.fetch_add(now_us() - t_veg, std::memory_order_relaxed);
 	(void)nsl;
 	return flat;
 }
@@ -723,6 +796,7 @@ static PackedByteArray bitpack(const uint8_t *vals, int n, int bits) {
 }
 
 static Array palettize_slabs(const std::vector<uint8_t> &flat, int hmax) {
+	long long t_pallet = now_us();
 	int nsl = hmax / 16;
 	Array out;
 	out.resize(nsl);
@@ -790,6 +864,7 @@ static Array palettize_slabs(const std::vector<uint8_t> &flat, int hmax) {
 			out[si] = d;
 		}
 	}
+	g_t_pallet_us.fetch_add(now_us() - t_pallet, std::memory_order_relaxed);
 	return out;
 }
 
@@ -813,12 +888,38 @@ public:
 		// AC-0216: the optional 6th arg `skip` (default 0 = the pre-AC-0216
 		// full density field, bit-for-bit) — the lazy offscreen-interior
 		// skip (see the file header).
-		ClassDB::bind_method(D_METHOD("generate_flat", "cx", "cz", "s", "h", "sea", "skip"), &AweGen::generate_flat, DEFVAL(0));
-		ClassDB::bind_method(D_METHOD("generate_slabs", "cx", "cz", "s", "h", "sea", "skip"), &AweGen::generate_slabs, DEFVAL(0));
-		ClassDB::bind_method(D_METHOD("generate_resl", "cx", "cz", "s", "h", "sea", "skip"), &AweGen::generate_resl, DEFVAL(0));
+		ClassDB::bind_method(D_METHOD("generate_flat", "cx", "cz", "s", "h", "sea", "skip", "keep"), &AweGen::generate_flat, DEFVAL(0), DEFVAL(PackedByteArray()));
+		ClassDB::bind_method(D_METHOD("generate_slabs", "cx", "cz", "s", "h", "sea", "skip", "keep"), &AweGen::generate_slabs, DEFVAL(0), DEFVAL(PackedByteArray()));
+		ClassDB::bind_method(D_METHOD("generate_resl", "cx", "cz", "s", "h", "sea", "skip", "keep"), &AweGen::generate_resl, DEFVAL(0), DEFVAL(PackedByteArray()));
 		ClassDB::bind_method(D_METHOD("skip_chunks_total"), &AweGen::skip_chunks_total);
 		ClassDB::bind_method(D_METHOD("skip_cols_total"), &AweGen::skip_cols_total);
 		ClassDB::bind_method(D_METHOD("reset_skip_stats"), &AweGen::reset_skip_stats);
+		ClassDB::bind_method(D_METHOD("gen_timing"), &AweGen::gen_timing);
+		ClassDB::bind_method(D_METHOD("reset_gen_timing"), &AweGen::reset_gen_timing);
+	}
+
+	Dictionary gen_timing() const {
+		Dictionary d;
+		d["field_us"] = (int64_t)g_t_field_us.load(std::memory_order_relaxed);
+		d["heights_us"] = (int64_t)g_t_heights_us.load(std::memory_order_relaxed);
+		d["scan_us"] = (int64_t)g_t_scan_us.load(std::memory_order_relaxed);
+		d["fill_us"] = (int64_t)g_t_fill_us.load(std::memory_order_relaxed);
+		d["veg_us"] = (int64_t)g_t_veg_us.load(std::memory_order_relaxed);
+		d["pallet_us"] = (int64_t)g_t_pallet_us.load(std::memory_order_relaxed);
+		d["cols_full"] = (int64_t)g_t_cols_full.load(std::memory_order_relaxed);
+		d["cols_skip"] = (int64_t)g_t_cols_skip.load(std::memory_order_relaxed);
+		return d;
+	}
+
+	void reset_gen_timing() {
+		g_t_field_us.store(0, std::memory_order_relaxed);
+		g_t_heights_us.store(0, std::memory_order_relaxed);
+		g_t_scan_us.store(0, std::memory_order_relaxed);
+		g_t_fill_us.store(0, std::memory_order_relaxed);
+		g_t_veg_us.store(0, std::memory_order_relaxed);
+		g_t_pallet_us.store(0, std::memory_order_relaxed);
+		g_t_cols_full.store(0, std::memory_order_relaxed);
+		g_t_cols_skip.store(0, std::memory_order_relaxed);
 	}
 
 	// Noise probe surface (bit-exact AweNoise port).
@@ -850,8 +951,12 @@ public:
 
 	// AC-0216: p_skip != 0 = the lazy offscreen-interior path (the 150-pt
 	// density evaluation skipped free — see the file header). Default 0.
-	PackedByteArray generate_flat(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip) const {
-		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip);
+	// AC-0237: p_keep = the 24-byte slab keep mask (slab si generated iff
+	// p_keep[si] != 0); an EMPTY array = the full column, bit-identical
+	// to the pre-AC-0237 output (the genhash A==B gate relies on it).
+	PackedByteArray generate_flat(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip, PackedByteArray p_keep) const {
+		const uint8_t *keep = p_keep.size() > 0 ? (const uint8_t *)p_keep.ptr() : nullptr;
+		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip, keep);
 		PackedByteArray out;
 		out.resize((int)f.size());
 		if (!f.empty())
@@ -859,15 +964,17 @@ public:
 		return out;
 	}
 
-	Array generate_slabs(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip) const {
-		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip);
+	Array generate_slabs(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip, PackedByteArray p_keep) const {
+		const uint8_t *keep = p_keep.size() > 0 ? (const uint8_t *)p_keep.ptr() : nullptr;
+		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip, keep);
 		return awegen::palettize_slabs(f, p_h);
 	}
 
 	// [data_slabs, fl_slabs] — the exact threadgen resl shape (fl = all null;
 	// gen produces no fluid).
-	Array generate_resl(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip) const {
-		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip);
+	Array generate_resl(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip, PackedByteArray p_keep) const {
+		const uint8_t *keep = p_keep.size() > 0 ? (const uint8_t *)p_keep.ptr() : nullptr;
+		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip, keep);
 		Array resl;
 		resl.append(awegen::palettize_slabs(f, p_h));
 		Array fl;

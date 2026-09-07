@@ -21,6 +21,7 @@
 namespace awecommon {
 
 constexpr int S3 = 4096; // slab cells (16x16)
+constexpr int B_STONE = 3; // block id (== awegen::B_STONE in gen.cpp)
 
 // Extract the `bits`-wide value at cell `pos` from a packed bitstream
 // (MSB-first, identical to chunk_io.gd _slab_getbits / the codec's

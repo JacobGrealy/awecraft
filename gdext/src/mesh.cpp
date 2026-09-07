@@ -1394,30 +1394,380 @@ static inline int64_t now_msec() {
 	return (int64_t)Time::get_singleton()->get_ticks_msec();
 }
 
+// ---------------------------------------------------------------------------
+// AC-0236 part 2: the low placeholder EMIT — the worker-side port of
+// world.gd _low_slab_grid x3 + _low_neighbor_id + _low_emit_slab (the
+// textured low's 4x4x4 grid + greedy mesh). The node ATTACH stays on the
+// main thread (Godot SceneTree — world.gd _low_place_slab via the
+// _low_handoff branch). Worker-safe: reads only the value-copied slab
+// array + the immutable ms snapshot (the same AC-0082 pattern as
+// build_accs).
+//
+// Grid: 4x4x4 coarse cells per slab (a cell = 4x4x4 blocks), ONE sample
+// per cell at its center (local (4sx+2, 4sy+2, 4sz+2)); layout
+// x + z*4 + y*16. Emit: per face, the (pu,pv) line is scanned FROM THE
+// VIEWING SIDE (the side the face normal points at) inward and keeps the
+// FIRST solid cell — its face shows only when the neighbor (the grid, the
+// slab above/below across the coarse boundary, or air off the column) has
+// a DIFFERENT id; merge key = id*16+(k+1) (same id AND same outermost
+// plane only — mesh.cpp's emit_ro_merged plane discipline); greedy W
+// along u, H = 1 (a v span above 4 blocks would sample outside the
+// 4-row merged strip); STRIP quads tile 31px per WORLD BLOCK, PLAIN
+// quads sample exactly ONE 32px tile (31px span, the plain branch);
+// vertices are SLAB-LOCAL 0..16; color = (1.0, 0.0, sh, 1.0).
+//
+// ms: {rects: {"id_face": Vector2i} (the merged-atlas STRIP rects, from
+// _tm_ms_full.rects), plain: {str(id): {face: [x,y,w,h]}} (the ORIGINAL
+// atlas = Data.atlas_rects — the no-strip fallback _low_tile_base reads),
+// h: the merged canvas height, atlas_px: the original atlas width}.
+// Returns {empty: true} when the slab samples all-air, else
+// {v, n, c, u, i, mh} (mh = the mesh AABB height, the low_max_h feed).
+// ---------------------------------------------------------------------------
+
+static Dictionary low_emit_impl(const Array &p_slabs, int si, const Dictionary &ms) {
+	Dictionary res;
+	const int G = 4; // LOW_GRID
+	const float CELL = 4.0f; // LOW_CELL_BLOCKS
+
+	// --- the tile tables (the _low_tile_base port: strip first, then the
+	// original-atlas plain rect; neither = no tile (UV zero, has_tl false))
+	Vector2i strip[256][3];
+	Vector2i plain[256][3];
+	bool strip_ok[256][3];
+	bool plain_ok[256][3];
+	for (int id = 0; id < 256; id++) {
+		for (int f = 0; f < 3; f++) {
+			strip[id][f] = Vector2i(-1, -1);
+			plain[id][f] = Vector2i(-1, -1);
+			strip_ok[id][f] = false;
+			plain_ok[id][f] = false;
+		}
+	}
+	static const char *fnames[3] = {"side", "top", "bottom"};
+	Dictionary rects = ms.get("rects", Dictionary());
+	if (!rects.is_empty()) {
+		Array keys = rects.keys();
+		for (int k = 0; k < (int)keys.size(); k++) {
+			String ks = keys[k];
+			int id = 0;
+			int f = 0;
+			if (!parse_rect_key(ks, id, f) || id < 0 || id > 255)
+				continue;
+			Vector2i r = (Vector2i)rects.get(ks, Vector2i(-1, -1));
+			if (r.x >= 0) {
+				strip[id][f] = r;
+				strip_ok[id][f] = true;
+			}
+		}
+	}
+	Dictionary pl = ms.get("plain", Dictionary());
+	if (!pl.is_empty()) {
+		Array pkeys = pl.keys();
+		for (int k = 0; k < (int)pkeys.size(); k++) {
+			String ks = pkeys[k];
+			int id = (int)ks.to_int();
+			if (id < 0 || id > 255)
+				continue;
+			Dictionary e = pl.get(ks, Dictionary());
+			for (int f = 0; f < 3; f++) {
+				Array r = (Array)e.get(fnames[f], Array());
+				if (r.size() == 4) {
+					int x = (int)(int64_t)(float)r[0];
+					int y = (int)(int64_t)(float)r[1];
+					if (x >= 0) {
+						plain[id][f] = Vector2i(x, y);
+						plain_ok[id][f] = true;
+					}
+				}
+			}
+		}
+	}
+	float atlas_px = (float)ms.get("atlas_px", 1024.0f);
+	float hms = (float)ms.get("h", atlas_px);
+
+	// --- the three 4x4x4 grids (si-1 / si / si+1; the slab-boundary
+	// culling reads across them) — slab_views decodes the paletted slabs
+	// in C++ (null slab = empty view = air).
+	int nsl = (int)p_slabs.size();
+	std::vector<std::vector<uint8_t>> views;
+	awecommon::slab_views(p_slabs, views);
+	uint8_t grids[3][G * G * G];
+	int gsi[3] = {si - 1, si, si + 1};
+	bool ghave[3] = {false, false, false};
+	for (int t = 0; t < 3; t++) {
+		memset(grids[t], 0, sizeof(grids[t]));
+		int s = gsi[t];
+		if (s < 0 || s >= nsl || (int)views[s].size() != awecommon::S3)
+			continue;
+		const uint8_t *v = views[s].data();
+		for (int sy = 0; sy < G; sy++) {
+			for (int sz = 0; sz < G; sz++) {
+				for (int sx = 0; sx < G; sx++) {
+					grids[t][sy * G * G + sz * G + sx] = v[(4 * sy + 2) * 256 + (4 * sz + 2) * 16 + (4 * sx + 2)];
+				}
+			}
+		}
+		ghave[t] = true;
+	}
+	bool any = false;
+	for (int i = 0; i < G * G * G; i++) {
+		if (grids[1][i] != 0) {
+			any = true;
+			break;
+		}
+	}
+	if (!any) {
+		res["empty"] = true;
+		return res;
+	}
+	// the _low_neighbor_id port: in-grid -> the grid; across the slab
+	// boundary -> the neighbor slab's grid edge row; off the column -> air.
+	auto neighbor_id = [&](int ix, int iy, int iz, int nax, const int n[3]) -> int {
+		if (nax == 0) {
+			int nx = ix + n[0];
+			if (nx < 0 || nx >= G)
+				return 0;
+			return grids[1][nx + iz * G + iy * G * G];
+		}
+		if (nax == 2) {
+			int nz = iz + n[2];
+			if (nz < 0 || nz >= G)
+				return 0;
+			return grids[1][ix + nz * G + iy * G * G];
+		}
+		int ny = iy + n[1];
+		if (ny < 0 || ny >= G) {
+			int gsi2 = si + n[1];
+			int t2 = gsi2 == si + 1 ? 2 : 0;
+			if (gsi2 < 0 || gsi2 >= nsl || !ghave[t2])
+				return 0;
+			int gyb = n[1] > 0 ? 0 : G - 1;
+			return grids[t2][ix + iz * G + gyb * G * G];
+		}
+		return grids[1][ix + iz * G + ny * G * G];
+	};
+
+	// --- the 6-face shell scan + greedy merge (the _low_emit_slab port;
+	// the face tables FN/FSH/FCV are VoxelMath.FACES verbatim above).
+	const int UA[6] = {2, 2, 0, 0, 0, 0};
+	const int VA[6] = {1, 1, 2, 2, 1, 1};
+	std::vector<float> av;
+	std::vector<float> an;
+	std::vector<float> ac;
+	std::vector<float> au;
+	std::vector<int32_t> ai;
+	float y_min = 1e9f;
+	float y_max = -1e9f;
+	av.reserve(6 * 4 * 4 * 4 * 3);
+	an.reserve(6 * 4 * 4 * 4 * 3);
+	ac.reserve(6 * 4 * 4 * 4 * 4);
+	au.reserve(6 * 4 * 4 * 4 * 2);
+	ai.reserve(6 * 4 * 4 * 4 * 6);
+	for (int fi = 0; fi < 6; fi++) {
+		int nax = FN[fi][0] != 0 ? 0 : (FN[fi][1] != 0 ? 1 : 2);
+		int ua = UA[fi];
+		int va = VA[fi];
+		int ns = nax == 0 ? FN[fi][0] : (nax == 1 ? FN[fi][1] : FN[fi][2]);
+		int m[G][G];
+		int kmap[G][G];
+		for (int pv = 0; pv < G; pv++) {
+			for (int pu = 0; pu < G; pu++) {
+				int cc[3] = {0, 0, 0};
+				cc[ua] = pu;
+				cc[va] = pv;
+				int idv = -1;
+				int kk = 0;
+				int k = ns > 0 ? G - 1 : 0;
+				while (kk < G) {
+					cc[nax] = k;
+					int idx = cc[0] + cc[2] * G + cc[1] * G * G;
+					int idc = grids[1][idx];
+					if (idc != 0) {
+						if (neighbor_id(cc[0], cc[1], cc[2], nax, FN[fi]) != idc)
+							idv = idc;
+						break;
+					}
+					k += ns > 0 ? -1 : 1;
+					kk += 1;
+				}
+				m[pv][pu] = idv >= 0 ? idv * 16 + (k + 1) : -1;
+				kmap[pv][pu] = k;
+			}
+		}
+		for (int pv = 0; pv < G; pv++) {
+			int pu = 0;
+			while (pu < G) {
+				int key2 = m[pv][pu];
+				if (key2 < 0) {
+					pu += 1;
+					continue;
+				}
+				int idv2 = key2 / 16;
+				int W = 1;
+				while (pu + W < G && m[pv][pu + W] == key2)
+					W += 1;
+				int H = 1; // the v span cap is ONE coarse cell (4 blocks)
+				int cc0[3] = {0, 0, 0};
+				cc0[ua] = pu;
+				cc0[va] = pv;
+				cc0[nax] = kmap[pv][pu];
+				float wx = cc0[0] * CELL;
+				float wy = cc0[1] * CELL;
+				float wz = cc0[2] * CELL;
+				if (nax == 0)
+					wx += FN[fi][0] > 0 ? CELL : 0.0f;
+				else if (nax == 1)
+					wy += FN[fi][1] > 0 ? CELL : 0.0f;
+				else
+					wz += FN[fi][2] > 0 ? CELL : 0.0f;
+				int fidx = fi == 2 ? 1 : (fi == 3 ? 2 : 0);
+				Vector2i tl(-1, -1);
+				bool is_strip = false;
+				if (strip_ok[idv2][fidx]) {
+					tl = strip[idv2][fidx];
+					is_strip = true;
+				} else if (plain_ok[idv2][fidx]) {
+					tl = plain[idv2][fidx];
+				}
+				bool has_tl = tl.x >= 0;
+				float su = is_strip ? (float)W * CELL * 31.0f : 31.0f;
+				float sv = is_strip ? (float)H * CELL * 31.0f : 31.0f;
+				float sh = FSH[fi];
+				int cb = (int)av.size() / 3;
+				for (int j = 0; j < 4; j++) {
+					float cvx = FCV[fi][j][0];
+					float cvy = FCV[fi][j][1];
+					float cvz = FCV[fi][j][2];
+					float px = wx;
+					float py = wy;
+					float pz = wz;
+					float uu;
+					float vv;
+					if (fi == 0 || fi == 1) { // u = z (W cells), v = y (H cells)
+						py = wy + cvy * (float)H * CELL;
+						pz = wz + cvz * (float)W * CELL;
+						uu = 0.5f + cvz * su;
+						vv = 0.5f + (1.0f - cvy) * sv;
+					} else if (fi == 2 || fi == 3) { // u = x (W cells), v = z (H cells)
+						px = wx + cvx * (float)W * CELL;
+						pz = wz + cvz * (float)H * CELL;
+						uu = 0.5f + cvx * su;
+						vv = 0.5f + cvz * sv;
+					} else { // fi 4/5: u = x (W cells), v = y (H cells)
+						px = wx + cvx * (float)W * CELL;
+						py = wy + cvy * (float)H * CELL;
+						uu = 0.5f + cvx * su;
+						vv = 0.5f + (1.0f - cvy) * sv;
+					}
+					av.push_back(px);
+					av.push_back(py);
+					av.push_back(pz);
+					if (py < y_min)
+						y_min = py;
+					if (py > y_max)
+						y_max = py;
+					an.push_back((float)FN[fi][0]);
+					an.push_back((float)FN[fi][1]);
+					an.push_back((float)FN[fi][2]);
+					ac.push_back(1.0f);
+					ac.push_back(0.0f);
+					ac.push_back(sh);
+					ac.push_back(1.0f);
+					if (has_tl) {
+						au.push_back(((float)tl.x + uu) / atlas_px);
+						au.push_back(((float)tl.y + vv) / hms);
+					} else {
+						au.push_back(0.0f);
+						au.push_back(0.0f);
+					}
+				}
+				ai.push_back(cb);
+				ai.push_back(cb + 2);
+				ai.push_back(cb + 1);
+				ai.push_back(cb);
+				ai.push_back(cb + 3);
+				ai.push_back(cb + 2);
+				for (int v2 = pv; v2 < pv + H; v2++) {
+					for (int u2 = pu; u2 < pu + W; u2++)
+						m[v2][u2] = -1;
+				}
+				pu += W;
+			}
+		}
+	}
+	if (av.empty()) {
+		res["empty"] = true;
+		return res;
+	}
+	PackedVector3Array pv3;
+	pv3.resize((int)av.size() / 3);
+	for (int i = 0; i < (int)av.size() / 3; i++)
+		pv3[i] = Vector3(av[i * 3], av[i * 3 + 1], av[i * 3 + 2]);
+	PackedVector3Array pn3;
+	pn3.resize((int)an.size() / 3);
+	for (int i = 0; i < (int)an.size() / 3; i++)
+		pn3[i] = Vector3(an[i * 3], an[i * 3 + 1], an[i * 3 + 2]);
+	PackedColorArray pcol;
+	pcol.resize((int)ac.size() / 4);
+	for (int i = 0; i < (int)ac.size() / 4; i++)
+		pcol[i] = Color(ac[i * 4], ac[i * 4 + 1], ac[i * 4 + 2], ac[i * 4 + 3]);
+	PackedVector2Array puv;
+	puv.resize((int)au.size() / 2);
+	for (int i = 0; i < (int)au.size() / 2; i++)
+		puv[i] = Vector2(au[i * 2], au[i * 2 + 1]);
+	PackedInt32Array pidx;
+	pidx.resize((int)ai.size());
+	for (int i = 0; i < (int)ai.size(); i++)
+		pidx[i] = ai[i];
+	res["v"] = pv3;
+	res["n"] = pn3;
+	res["c"] = pcol;
+	res["u"] = puv;
+	res["i"] = pidx;
+	res["mh"] = y_max - y_min;
+	return res;
+}
+
 // The registered class.
 class AweMesh : public RefCounted {
 	GDCLASS(AweMesh, RefCounted)
 
 public:
 	static void _bind_methods() {
-		ClassDB::bind_method(D_METHOD("build_accs", "data", "fl", "cx", "cz", "nbs", "ctx", "ms", "eff", "si0", "si1", "d_off", "att", "glow"), &AweMesh::build_accs);
+		// AC-0234: "mask" = the vertical-window keep mask (24 bytes;
+		// empty = build every slab — the pre-AC-0234 behavior).
+		ClassDB::bind_method(D_METHOD("build_accs", "data", "fl", "cx", "cz", "nbs", "ctx", "ms", "eff", "si0", "si1", "d_off", "att", "glow", "mask"), &AweMesh::build_accs);
 		// AC-0211: the surrounding-step ports (dispatch snapshot + sync
 		// snap + stale-check rows) — same class, same .so.
-		ClassDB::bind_method(D_METHOD("snap_rings", "d", "f", "dx", "dz"), &AweMesh::snap_rings);
+		ClassDB::bind_method(D_METHOD("snap_rings", "d", "f", "dx", "dz", "genkeep"), &AweMesh::snap_rings, DEFVAL(PackedByteArray()));
 		ClassDB::bind_method(D_METHOD("slab_copy", "slabs"), &AweMesh::slab_copy);
 		ClassDB::bind_method(D_METHOD("sync_snap", "own_d", "own_f", "rings", "h"), &AweMesh::sync_snap);
 		ClassDB::bind_method(D_METHOD("rows_eq", "a", "b", "y_lo", "y_hi"), &AweMesh::rows_eq);
+		ClassDB::bind_method(D_METHOD("slab_boundary_air", "d", "lo", "hi"), &AweMesh::slab_boundary_air);
+		// AC-0236 part 2: the low placeholder emit (the worker-side
+		// 4x4x4 grid + greedy mesh; the node attach stays main-thread).
+		ClassDB::bind_method(D_METHOD("low_emit", "slabs", "si", "ms"), &AweMesh::low_emit);
+	}
+
+	// AC-0236 part 2: slabs = the value-copied slab array (null | {n,b,p,i,
+	// nz}), si = the target slab, ms = the merge-atlas snapshot (+ the
+	// plain original-atlas rects + atlas_px). See low_emit_impl above for
+	// the full contract.
+	Dictionary low_emit(const Array &p_slabs, int p_si, const Dictionary &p_ms) {
+		return low_emit_impl(p_slabs, p_si, p_ms);
 	}
 
 	// Lossless port of ChunkScript.build_accs (chunk.gd:1683). data/fl =
 	// the 24-slab paletted arrays (decoded HERE — the AC-0203 follow-on);
+	// p_mask = the AC-0234 vertical-window keep mask (24 bytes, one per
+	// slab; EMPTY = no gating, byte-identical to the pre-AC-0234 call);
 	// nbs = the 4 edge neighbors {d, f} (keys -1,0/1,0/0,-1/0,1); ctx = the make_ctx snapshot +
 	// dispatch additions (strips/top/coarse/uv_scale); ms = the
 	// merge-atlas snapshot; eff = the light dict (empty = recompute
 	// through the shared C++ pull kernel); att/glow = the pre-warmed
 	// Lighting._att/_glow tables. Returns the SAME shape as the GDScript:
 	// {slabs, light, light_recomputed, wms, si0, si1, nq, ns, phet, ph}.
-	Dictionary build_accs(const Array &data, const Array &fl, int cx, int cz, const Dictionary &nbs, const Dictionary &ctx, const Dictionary &ms, const Dictionary &eff, int p_si0, int p_si1, int p_d_off, const PackedByteArray &p_att, const PackedByteArray &p_glow) {
+	Dictionary build_accs(const Array &data, const Array &fl, int cx, int cz, const Dictionary &nbs, const Dictionary &ctx, const Dictionary &ms, const Dictionary &eff, int p_si0, int p_si1, int p_d_off, const PackedByteArray &p_att, const PackedByteArray &p_glow, const PackedByteArray &p_mask) {
 		(void)p_d_off; // retained for signature stability (AC-0203)
 		int64_t t0 = now_msec();
 		int64_t ph_light = 0;
@@ -1571,12 +1921,23 @@ public:
 		std::vector<XRec> rq;
 		std::vector<FluidRec> rf_w, rf_l;
 		std::vector<int> c_ns(slab_n, 0);
+		// AC-0234 vertical window: the keep mask (24 bytes, one per slab;
+		// empty = build every slab, the pre-AC-0234 behavior). A masked-out
+		// slab is counted + skipped EXACTLY like an all-air slab: its cells
+		// render as the pre-baked black cap box on the GDScript side, and
+		// its RAW data still feeds the snap (built above, before this scan)
+		// so the faces of built neighbors against it cull correctly (they
+		// hide behind the opaque box, no z-fighting).
+		const uint8_t *vmask = p_mask.ptr();
+		const int vmsz = (int)p_mask.size();
 		for (int si = si0; si <= si1; si++) {
 			const std::vector<uint8_t> &dslab = dviews[si];
 			int lo = si * 16;
 			int c_hi = std::min(16, y_hi - lo);
-			if (dslab.empty()) {
+			if ((vmsz > si && vmask[si] == 0) || dslab.empty()) {
 				// All-air slab: every cell is id 0 (stab 0) — count + skip.
+				// (A window-masked slab takes the same path — row[6]
+				// (full-solid) and the emits see it as empty.)
 				c_ns[si] += c_hi * 256;
 				continue;
 			}
@@ -1739,11 +2100,26 @@ public:
 	// neighbor's paletted slab arrays; dx/dz = the edge offset
 	// (-1,0)/(1,0)/(0,-1)/(0,1). Returns {"d": PackedByteArray(slabs*256),
 	// "f": ...} with layout slab*256 + y_in*16 + t.
-	Dictionary snap_rings(const Array &d, const Array &f, int dx, int dz) {
+	// AC-0237: p_genkeep = the NEIGHBOR's 24-byte generated mask (slab si
+	// generated iff p_genkeep[si] != 0; EMPTY = every slab generated —
+	// the pre-AC-0237 behavior). A slab the neighbor NEVER generated has
+	// no section; for face culling it must read as SOLID (stone), not
+	// air — the boundary face hides behind the window's cap box (the
+	// same outcome as a real solid slab; no z-fight). The re-entry regen
+	// (world.gd) + the neighbor re-mesh on data landing keep it honest:
+	// when the slab is generated, its real data replaces the stone.
+	Dictionary snap_rings(const Array &d, const Array &f, int dx, int dz, PackedByteArray p_genkeep) {
 		std::vector<uint8_t> rd((size_t)d.size() * 256, 0);
 		std::vector<uint8_t> rf((size_t)f.size() * 256, 0);
 		for (int k = 0; k < (int)d.size(); k++)
 			ring_slice(d[k], k * 256, dx, dz, rd);
+		if (p_genkeep.size() > 0) {
+			const uint8_t *gk = p_genkeep.ptr();
+			for (int k = 0; k < (int)d.size() && k < (int)p_genkeep.size(); k++) {
+				if (d[k].get_type() != Variant::DICTIONARY && gk[k] == 0)
+					std::fill(rd.begin() + (size_t)k * 256, rd.begin() + (size_t)(k + 1) * 256, (uint8_t)awecommon::B_STONE);
+			}
+		}
 		for (int k = 0; k < (int)f.size(); k++)
 			ring_slice(f[k], k * 256, dx, dz, rf);
 		Dictionary out;
@@ -1811,6 +2187,32 @@ public:
 				return false;
 		}
 		return true;
+	}
+
+	// AC-0237: does any EDGE-boundary cell (the four shared faces: x=0/15,
+	// z=0/15) of slabs lo..hi decode to AIR (0)? The REGEN-neighbor
+	// re-mesh gate: a neighbor built against a stone-snap of the
+	// ungenerated slab owes a rebuild only when the REAL boundary has
+	// air (a face to emit); an all-non-air boundary keeps the stone-snap
+	// culling correct (face-vs-face -- the id is irrelevant to culling).
+	// A null slab in the range is all-air (returns true).
+	bool slab_boundary_air(const Array &d, int lo, int hi) {
+		int nsl = (int)d.size();
+		if (lo < 0)
+			lo = 0;
+		if (hi >= nsl)
+			hi = nsl - 1;
+		uint8_t row[256];
+		for (int s = lo; s <= hi; s++) {
+			for (int y_in = 0; y_in < 16; y_in++) {
+				slab_row(d[s], y_in, row);
+				for (int t = 0; t < 16; t++) {
+					if (row[t] == 0 || row[240 + t] == 0 || row[t * 16] == 0 || row[t * 16 + 15] == 0)
+						return true;
+				}
+			}
+		}
+		return false;
 	}
 };
 
