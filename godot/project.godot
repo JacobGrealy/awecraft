@@ -74,6 +74,11 @@ ui_pause={
 # Windows-only). GPU features for the satellite far-LOD, clustered lighting
 # for the torch setup, big-scene draw-call scaling.
 renderer/rendering_method="forward_plus"
+# AC-0241 follow-up: the old gl_compatibility pipeline was LDR + Linear
+# tone map; Forward+ defaults to HDR + ACES, which reads washed out on the
+# hand-tuned unshaded chunk shaders (colors were chosen by eye under
+# Linear). Restore the Linear response; ACES/AgX are an art choice later.
+rendering/tones_mapper/tones_mapper=0
 occlusion_culling/use_occlusion_culling=true
 occlusion_culling/camera/cull_3d=true
 occlusion_culling/camera/cull_2d=true
