@@ -11,6 +11,7 @@ uniform sampler2D tex : filter_nearest;
 uniform vec3 u_player_pos = vec3(0.0, 0.0, 0.0);
 uniform float u_player_light = 0.0;
 uniform float u_player_radius = 5.0;
+uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
 varying vec3 v_world_pos;
 
 
@@ -24,5 +25,6 @@ void fragment() {
 	float pr = clamp(u_player_light - distance(v_world_pos, u_player_pos), 0.0, u_player_radius);
 	L = max(L, 0.12 + 0.88 * pr / 15.0);
 	ALBEDO = t.rgb * COLOR.b * L;
+	ALBEDO = mix(ALBEDO, pow(ALBEDO, vec3(2.2)), u_srgb_pre); // AC-0242
 	ALPHA = 0.62 * t.a;
 }

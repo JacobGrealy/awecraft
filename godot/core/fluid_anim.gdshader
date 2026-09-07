@@ -11,6 +11,7 @@ uniform float anim_frames : hint_range(1.0, 64.0) = 1.0;
 uniform float frame_time : hint_range(0.01, 5.0) = 0.3;
 uniform float phase = 0.0;
 uniform float alpha_scale : hint_range(0.0, 1.0) = 0.62;
+uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
 
 const float TILE_F = 1.0 / 32.0;
 
@@ -21,5 +22,6 @@ void fragment() {
 	uv.y += float(frame) * TILE_F;
 	vec4 tex = texture(atlas, uv);
 	ALBEDO = tex.rgb * COLOR.rgb;
+	ALBEDO = mix(ALBEDO, pow(ALBEDO, vec3(2.2)), u_srgb_pre); // AC-0242
 	ALPHA = alpha_scale * tex.a;
 }

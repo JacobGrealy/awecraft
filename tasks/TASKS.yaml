@@ -1,11 +1,10 @@
 meta:
-  updated_at: 2026-09-07T06:42
+  updated_at: 2026-09-07T14:49
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0241
-- AC-0238
 - AC-0239
+- AC-0087
 - AC-0235
 - AC-0175
 - AC-0140
@@ -17,9 +16,7 @@ queue:
 - AC-0173
 - AC-0199
 - AC-0204
-- AC-0230
 - AC-0191
-- AC-0087
 - AC-0186
 - AC-0174
 - AC-0228
@@ -7356,11 +7353,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-09-05T09:07
-  updated_at: 2026-09-05T09:07
-  completed_at: null
+  updated_at: 2026-09-07T14:34
+  completed_at: 2026-09-07T14:34
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player flying, I want the sky sphere to stay centered on me so I never fly through it and see
@@ -7388,7 +7385,7 @@ intake:
   labels: []
   created_at: 2026-09-05T13:25
   updated_at: 2026-09-04T18:30
-  completed_at: 2026-09-07T08:05:00.000000
+  completed_at: 2026-09-07 08:05:00
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want distant far columns to show a low-res textured placeholder so far terrain is visible
@@ -7636,30 +7633,24 @@ intake:
     text: '[coordinator] CLOSED 2026-09-07 per user direction (v2 evidence in comment id 3; the uncommitted files go out with
       the closeout commit). Successors: AC-0237 window-scoped-generation (gen side) + AC-0238 window-masked-light (light side)
       extend the window past the mesh.'
-
   - id: 5
     created_at: '2026-09-07T09:10:00.000000'
     updated_at: null
-    text: '[user-rule-change + impl 2026-09-07] Two user rule changes landed on the AC-0234 window
-      (both committed in the 2026-09-07 closeout batch):
-      (1) CAP COLOR: caps reuse the FOG material + mesh (_low_fog_mat, light sky-blue, UNSHADED) -
-      the black _vwin_cap_mat was deleted. User: caps should go to the fog color, not black.
-      (2) OPEN-TOP BAND: the player band changed from [pys-4, pys+4] to [pys-4, TOP OF WORLD] -
-      the full column ABOVE the players Y is always kept (rendered normally, never culled/capped);
-      only 4 slabs BELOW the player bound the deep interior. Root cause fixed: the +-4 band culled
-      the sky slabs above the terrain in far columns, and the ungenerated-slab branch capped them -
-      rows of placeholder boxes in the sky above the player (user: filling should go down not up;
-      all up should render normally). Implementation: _vwin_recompute now sets bhi = top slab, so
-      every existing band comparison (col_kept, keep_for incl GEN_BAND_PAD, sync) picks up the rule
-      with no other change; the cap logic is untouched (nothing above the player is ever culled).
-      R16 evidence (seed 44, deterministic): owed 0, gen_cov 0, caps_ok, phase_ok, built_all, build_ms
-      74529 -> 69682 (-6.5%), and the +-4 band churn the rule was meant to remove collapsed: uncaps
-      1322 -> 0, re-entry regens 24077 -> 28, rebuilds 24805 -> 224 (the uncap cycle was mostly the
-      sky caps being created/released as the player Y moved). The R16 churn_ok gate was re-pointed
-      to (culls_n > 0 AND vwin_regens_n > 0) - the old uncap requirement measured the removed sky-cap
-      churn; re-entry liveness is now proven by the span-driven re-entry regens + caps_ok P1. NOTE
-      (user 2026-09-07): this optimizes for flight/above-ground; cave interiors may need a different
-      algorithm later.'
+    text: '[user-rule-change + impl 2026-09-07] Two user rule changes landed on the AC-0234 window (both committed in the
+      2026-09-07 closeout batch): (1) CAP COLOR: caps reuse the FOG material + mesh (_low_fog_mat, light sky-blue, UNSHADED)
+      - the black _vwin_cap_mat was deleted. User: caps should go to the fog color, not black. (2) OPEN-TOP BAND: the player
+      band changed from [pys-4, pys+4] to [pys-4, TOP OF WORLD] - the full column ABOVE the players Y is always kept (rendered
+      normally, never culled/capped); only 4 slabs BELOW the player bound the deep interior. Root cause fixed: the +-4 band
+      culled the sky slabs above the terrain in far columns, and the ungenerated-slab branch capped them - rows of placeholder
+      boxes in the sky above the player (user: filling should go down not up; all up should render normally). Implementation:
+      _vwin_recompute now sets bhi = top slab, so every existing band comparison (col_kept, keep_for incl GEN_BAND_PAD, sync)
+      picks up the rule with no other change; the cap logic is untouched (nothing above the player is ever culled). R16 evidence
+      (seed 44, deterministic): owed 0, gen_cov 0, caps_ok, phase_ok, built_all, build_ms 74529 -> 69682 (-6.5%), and the
+      +-4 band churn the rule was meant to remove collapsed: uncaps 1322 -> 0, re-entry regens 24077 -> 28, rebuilds 24805
+      -> 224 (the uncap cycle was mostly the sky caps being created/released as the player Y moved). The R16 churn_ok gate
+      was re-pointed to (culls_n > 0 AND vwin_regens_n > 0) - the old uncap requirement measured the removed sky-cap churn;
+      re-entry liveness is now proven by the span-driven re-entry regens + caps_ok P1. NOTE (user 2026-09-07): this optimizes
+      for flight/above-ground; cave interiors may need a different algorithm later.'
 - id: AC-0235
   title: remove-skybox-add-procedural-clouds-shader
   source: user
@@ -7765,7 +7756,7 @@ intake:
   labels: []
   created_at: 2026-09-06T23:15
   updated_at: 2026-09-06T23:15
-  completed_at: 2026-09-07T08:05:00.000000
+  completed_at: 2026-09-07 08:05:00
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want the world to fill in faster, especially while flying high or descending into deep
@@ -7849,43 +7840,39 @@ intake:
   - id: 3
     created_at: '2026-09-07T07:55:00.000000'
     updated_at: null
-    text: '[agent] CLOSEOUT - all phases complete, all gates green. (1b) OWED-BUILD LEAK - the full mechanism set,
-      all in godot/world/world.gd: (1) the four drain scan sites accept vwin_remesh entries of mesh_built chunks (the
-      plain scans skip built chunks); (2) remesh entries are exempt from the AC-0231 tier>=2 order gate at the drain
-      pick (a re-mesh of an already-high chunk is not new coverage - same contract as the firstbuild evidence);
-      (3) remesh entries are exempt from the AC-0222 queue-depth-cap eviction (the cap evicts the farthest-oldest
-      builds = exactly the far remesh debts); (4) the recenter merge preserves vwin_remesh entries: the
-      _rec_merge_old_step WANT branch keeps them in the rebuilt queue and the _rec_merge_ring_step finalize stale-drop
-      keeps them too (the main leak - the entries were wiped on every recenter and nothing re-queued them); (5)
-      re-entry rechecks: the recenter candidate re-entry and the _reband 3->0/1 hook re-queue _vwin_owed +
-      _vwin_gen_owed (a debt accrued while the chunk was out of the set would otherwise be untracked); (6) the
-      _drop_queued exemption - the build handoff no longer deletes the debt entry the same handoff just re-queued;
-      (7) the dedicated remesh debt lane: the vwin_debt_keys set (add on enqueue, erase on consume/merge-drop/
-      candidate-strip) + _pick_vwin_debt (nearest ready remesh entry) + up to 2 nearest-ready remesh dispatches per
-      frame at the top of the drain legacy loop, bypassing the PICK_POOL_CAP=512 starvation (a band step re-queues
-      the whole circle of debt in one burst; the score-order sweep starves entries past the cap). Design note: band-3
-      chunks are excluded from the owed gate count (deferred debt, healed by the reband hook). (2) PHASE 2 PACING:
-      documented no-op. The measured headroom is real (the threadmesh pool idles >90 percent: build_ms 74.5 s across
-      6 workers over a 235 s R16 run), but the tested lever - DRAIN_UNITS_FRAME_CAP 4 -> 6 - broke the owed
-      convergence (owed_n 0 -> 4, owed_ok false) with no fill gain (build_ms -1.4 percent, static p95 31 -> 30 ms,
-      moving 5 ms unchanged), so it was reverted and the pacing constants stay as-is. (3) HANG ROOT-CAUSE (the
-      post-cleanup freeze of every streaming arm, 4-line logs): a temporary line-deletion patch had swallowed the
-      stale-drop tail of the finalize while loop in _rec_merge_ring_step (the arrf.remove_at(i) + continue for stale
-      entries and the i += 1 advance for fresh ones), so the recenter merge finalize spun forever on the first
-      non-remesh entry and the main thread froze before any frame could drain; the loop is restored (stale-drop +
-      remesh-keep + i advance) and this was the only code-level cause of the hang (the p1bt-era file hung identically
-      once reconstructed). (4) GATE SWEEP (clean tree, zero temp probes): syntax 0 parse errors; player arm RESULT
-      ok; SMOKE battery ok:true (player/interact/light/fluids, 158 s); meshprobe 1926/1926 ok:true; genhash 25/25,
-      A==B, (0,0)=80b904c0e5f085eef1e839459058c706 (the AC-0215 baseline); continue arm edits_ok/pos_ok/saved_ok
-      true; v5 selftest ok (disjoint-mask roundtrip, v4 passthrough, fail-closed). R16 final (seed 44, 235.8 s):
-      ok:true, owed_n 0 owed_ok:true, gen_owed_n 0, gen_cov_bad 0, gen_range_n 915/934 resident range-generated,
-      caps_ok/churn_ok/gen_ok/phase_ok true, built_all true, drop_fps_static_vs_moving 0, static p95 31 ms, moving
-      5 ms, build_ms 74529; remesh lifecycle enq 2578 / disp 1270 / consumed 2534 / drop 0. (5) TEMP INSTRUMENTATION:
-      all removed (the OWED* lifecycle prints, the _owprobe flag, the file tracer, the recenter/stage probes, the
-      watchdog); the remesh_* counters, vwin_debt_keys, _pick_vwin_debt, the debt lane, the _drop_queued exemption
-      and the six leak mechanisms are PERMANENT. STATUS: implementation + verification complete; UNCOMMITTED
-      (coordinator commits with the AC-0231/0234/0236 work). NEXT: AC-0238 (window-masked-light, filed, waits on this
-      task).'
+    text: '[agent] CLOSEOUT - all phases complete, all gates green. (1b) OWED-BUILD LEAK - the full mechanism set, all in
+      godot/world/world.gd: (1) the four drain scan sites accept vwin_remesh entries of mesh_built chunks (the plain scans
+      skip built chunks); (2) remesh entries are exempt from the AC-0231 tier>=2 order gate at the drain pick (a re-mesh of
+      an already-high chunk is not new coverage - same contract as the firstbuild evidence); (3) remesh entries are exempt
+      from the AC-0222 queue-depth-cap eviction (the cap evicts the farthest-oldest builds = exactly the far remesh debts);
+      (4) the recenter merge preserves vwin_remesh entries: the _rec_merge_old_step WANT branch keeps them in the rebuilt
+      queue and the _rec_merge_ring_step finalize stale-drop keeps them too (the main leak - the entries were wiped on every
+      recenter and nothing re-queued them); (5) re-entry rechecks: the recenter candidate re-entry and the _reband 3->0/1
+      hook re-queue _vwin_owed + _vwin_gen_owed (a debt accrued while the chunk was out of the set would otherwise be untracked);
+      (6) the _drop_queued exemption - the build handoff no longer deletes the debt entry the same handoff just re-queued;
+      (7) the dedicated remesh debt lane: the vwin_debt_keys set (add on enqueue, erase on consume/merge-drop/ candidate-strip)
+      + _pick_vwin_debt (nearest ready remesh entry) + up to 2 nearest-ready remesh dispatches per frame at the top of the
+      drain legacy loop, bypassing the PICK_POOL_CAP=512 starvation (a band step re-queues the whole circle of debt in one
+      burst; the score-order sweep starves entries past the cap). Design note: band-3 chunks are excluded from the owed gate
+      count (deferred debt, healed by the reband hook). (2) PHASE 2 PACING: documented no-op. The measured headroom is real
+      (the threadmesh pool idles >90 percent: build_ms 74.5 s across 6 workers over a 235 s R16 run), but the tested lever
+      - DRAIN_UNITS_FRAME_CAP 4 -> 6 - broke the owed convergence (owed_n 0 -> 4, owed_ok false) with no fill gain (build_ms
+      -1.4 percent, static p95 31 -> 30 ms, moving 5 ms unchanged), so it was reverted and the pacing constants stay as-is.
+      (3) HANG ROOT-CAUSE (the post-cleanup freeze of every streaming arm, 4-line logs): a temporary line-deletion patch had
+      swallowed the stale-drop tail of the finalize while loop in _rec_merge_ring_step (the arrf.remove_at(i) + continue for
+      stale entries and the i += 1 advance for fresh ones), so the recenter merge finalize spun forever on the first non-remesh
+      entry and the main thread froze before any frame could drain; the loop is restored (stale-drop + remesh-keep + i advance)
+      and this was the only code-level cause of the hang (the p1bt-era file hung identically once reconstructed). (4) GATE
+      SWEEP (clean tree, zero temp probes): syntax 0 parse errors; player arm RESULT ok; SMOKE battery ok:true (player/interact/light/fluids,
+      158 s); meshprobe 1926/1926 ok:true; genhash 25/25, A==B, (0,0)=80b904c0e5f085eef1e839459058c706 (the AC-0215 baseline);
+      continue arm edits_ok/pos_ok/saved_ok true; v5 selftest ok (disjoint-mask roundtrip, v4 passthrough, fail-closed). R16
+      final (seed 44, 235.8 s): ok:true, owed_n 0 owed_ok:true, gen_owed_n 0, gen_cov_bad 0, gen_range_n 915/934 resident
+      range-generated, caps_ok/churn_ok/gen_ok/phase_ok true, built_all true, drop_fps_static_vs_moving 0, static p95 31 ms,
+      moving 5 ms, build_ms 74529; remesh lifecycle enq 2578 / disp 1270 / consumed 2534 / drop 0. (5) TEMP INSTRUMENTATION:
+      all removed (the OWED* lifecycle prints, the _owprobe flag, the file tracer, the recenter/stage probes, the watchdog);
+      the remesh_* counters, vwin_debt_keys, _pick_vwin_debt, the debt lane, the _drop_queued exemption and the six leak mechanisms
+      are PERMANENT. STATUS: implementation + verification complete; UNCOMMITTED (coordinator commits with the AC-0231/0234/0236
+      work). NEXT: AC-0238 (window-masked-light, filed, waits on this task).'
 - id: AC-0238
   title: window-masked-light
   source: user
@@ -7954,43 +7941,38 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: '1) User Story: As a player I want the world around me - in every direction, not just in front
-    of my view - to be filled out to my simulation distance before the world far ahead of my view, so turning
-    around, walking sideways, or changing direction never shows me loading terrain right next to me. The
-    simulation distance is the existing Options slider (default 4); it already bounds the fluid sim and the
-    collision band, and should bound the build priority too.
+  notes: '1) User Story: As a player I want the world around me - in every direction, not just in front of my view - to be
+    filled out to my simulation distance before the world far ahead of my view, so turning around, walking sideways, or changing
+    direction never shows me loading terrain right next to me. The simulation distance is the existing Options slider (default
+    4); it already bounds the fluid sim and the collision band, and should bound the build priority too.
 
-    2) Technical Details: CURRENT (world.gd _tier_of): 4-tier lexicographic (tier, taxi) streaming priority
-    - 0 under, 1 ring 1 (the 8 immediate neighbors ONLY), 2 the FOV cone (dot > TIER_CONE_DOT 0.5, reaching
-    the render edge), 3 the rest by distance. THE GAP: past the 8 neighbors the forward cone outranks the
-    players own surround - chunks 2+ behind/beside are tier 3 - so a turn or a sideways walk shows load-in
-    right next to the player (the original AC-0231 spec said tier 1 = ring1-8; AC-0233 narrowed it to ring 1).
-    Settings.sim_dist ALREADY EXISTS (default 4, clamped <= render_dist at load, the Options sim_slider is
-    live-wired to Settings.apply_sim_distance, which today sets fluid_tick_radius and band0_r only). CHANGE:
-    _tier_of becomes 5 tiers - 0 under; 1 = SIM RADIUS (Chebyshev distance <= sim_dist, matching the
-    band0_r square semantics, absorbs the old ring-1 tier); 2 cone; 3 rest. The lexicographic (tier, taxi)
-    _tier_score (10000 scale) and the debounced re-stamp machinery (RESCORE_PER_FRAME, _tier_stamp, the
-    _pool_key cache) stay; add sim_dist to _pool_key so a slider change invalidates the cached picks, and
-    have apply_sim_distance call the worlds rescore kick (mirror apply_render_distance). AC-0231 ORDER GATE
-    AUDIT: the high-dispatch gate fires on tier >= 2 - after the renumber that is the SAME set (old 2,3 =
-    new 2,3; the sim tier absorbs part of the old tier 3), so the gate sites should need no change - verify.
-    The in-r pre-low pass inherits the new order for free (the surround gets its lows first - intended).
-    GATES: (1) R16 spin arm - after a 180 deg turn the sim circle (default 4) must fill before the new-facing
-    cone catches up; (2) R16 fly50 - the ahead pre-warm must NOT regress (ahead-while counts within the
-    prior run envelope - the default-4 sim circle is ~41 chunks of the R16 queue, small); (3) SMOKE battery
-    ok:true; (4) genhash 25/25 A==B (tiering does not touch the gen masks - trivially green); (5) settings
-    arm - sim slider default 4, persists, clamps to render_dist, a live slider change re-stamps the tiers
-    (rescore event counter moves). TRADE-OFF (user 2026-09-07): a larger sim radius delays the forward
-    pre-warm during flight; default 4 keeps flight behavior ~unchanged and the slider is the user knob that
-    trades ahead-fill for surround-fill.'
+    2) Technical Details: CURRENT (world.gd _tier_of): 4-tier lexicographic (tier, taxi) streaming priority - 0 under, 1 ring
+    1 (the 8 immediate neighbors ONLY), 2 the FOV cone (dot > TIER_CONE_DOT 0.5, reaching the render edge), 3 the rest by
+    distance. THE GAP: past the 8 neighbors the forward cone outranks the players own surround - chunks 2+ behind/beside are
+    tier 3 - so a turn or a sideways walk shows load-in right next to the player (the original AC-0231 spec said tier 1 =
+    ring1-8; AC-0233 narrowed it to ring 1). Settings.sim_dist ALREADY EXISTS (default 4, clamped <= render_dist at load,
+    the Options sim_slider is live-wired to Settings.apply_sim_distance, which today sets fluid_tick_radius and band0_r only).
+    CHANGE: _tier_of becomes 5 tiers - 0 under; 1 = SIM RADIUS (Chebyshev distance <= sim_dist, matching the band0_r square
+    semantics, absorbs the old ring-1 tier); 2 cone; 3 rest. The lexicographic (tier, taxi) _tier_score (10000 scale) and
+    the debounced re-stamp machinery (RESCORE_PER_FRAME, _tier_stamp, the _pool_key cache) stay; add sim_dist to _pool_key
+    so a slider change invalidates the cached picks, and have apply_sim_distance call the worlds rescore kick (mirror apply_render_distance).
+    AC-0231 ORDER GATE AUDIT: the high-dispatch gate fires on tier >= 2 - after the renumber that is the SAME set (old 2,3
+    = new 2,3; the sim tier absorbs part of the old tier 3), so the gate sites should need no change - verify. The in-r pre-low
+    pass inherits the new order for free (the surround gets its lows first - intended). GATES: (1) R16 spin arm - after a
+    180 deg turn the sim circle (default 4) must fill before the new-facing cone catches up; (2) R16 fly50 - the ahead pre-warm
+    must NOT regress (ahead-while counts within the prior run envelope - the default-4 sim circle is ~41 chunks of the R16
+    queue, small); (3) SMOKE battery ok:true; (4) genhash 25/25 A==B (tiering does not touch the gen masks - trivially green);
+    (5) settings arm - sim slider default 4, persists, clamps to render_dist, a live slider change re-stamps the tiers (rescore
+    event counter moves). TRADE-OFF (user 2026-09-07): a larger sim radius delays the forward pre-warm during flight; default
+    4 keeps flight behavior ~unchanged and the slider is the user knob that trades ahead-fill for surround-fill.'
   comments:
   - id: 1
     created_at: '2026-09-07T08:40:00.000000'
     updated_at: null
-    text: '[agent] Filed per the 2026-09-07 design discussion (user): past the 8 neighbors the forward cone
-      outranks the players own surround; add a simulation-distance tier ahead of the cone. The sim_dist
-      Options slider already exists (default 4, currently drives fluid_tick_radius + band0_r only) - this task
-      extends it to the streaming tier priority. Queue position: after AC-0238 (window-masked-light).'
+    text: '[agent] Filed per the 2026-09-07 design discussion (user): past the 8 neighbors the forward cone outranks the players
+      own surround; add a simulation-distance tier ahead of the cone. The sim_dist Options slider already exists (default
+      4, currently drives fluid_tick_radius + band0_r only) - this task extends it to the streaming tier priority. Queue position:
+      after AC-0238 (window-masked-light).'
 - id: AC-0240
   title: fog-wave-disable
   source: user
@@ -8002,62 +7984,52 @@ intake:
   labels: []
   created_at: 2026-09-07T09:45
   updated_at: 2026-09-07T10:30
-  completed_at: 2026-09-07T10:30:00.000000
+  completed_at: 2026-09-07 10:30:00
   waiting_on: null
   parent_id: null
-  notes: '1) User Story: As a player I want the sky-blue loading boxes (the fog placeholders) gone -
-    the world should show no placeholder at all between a far chunk landing data and its textured
-    low-res mesh appearing, and the deep-interior caps (the same fog color) stay. The disable must
-    be restorable (flip one const) and must cost nothing while off.
+  notes: '1) User Story: As a player I want the sky-blue loading boxes (the fog placeholders) gone - the world should show
+    no placeholder at all between a far chunk landing data and its textured low-res mesh appearing, and the deep-interior
+    caps (the same fog color) stay. The disable must be restorable (flip one const) and must cost nothing while off.
 
-    2) Technical Details: world.gd const FOG_WAVE_ON := false (next to the AC-0234 window consts).
-    The fog wave is the immediate per-slab 16x16x16 unshaded box on data landing (WAVE 1,
-    _low_fog_for; the 3.5ms paced WAVE 2 is the LOW lane and is NOT touched). FOUR ensure sites get
-    the flag (drops stay ungated - they no-op via has_fog_si when off and keep convergence if the
-    flag ever flips back in-session): (1) _low_fog_for kept-slab branch (the CULLED-slab cap
-    ensure in the same loop is NOT fog - it stays); (2) _vwin_sync kept+data+no-low+no-cap branch;
-    (3) _low_build_slab all-air-sampled-but-has-blocks branch (the terminal c.low_failed mark STAYS
-    - it is wave-advance logic, not fog); (4) the C++ low handoff all-air branch (same). CRITICAL
-    CARVE-OUTS in _low_fog_for: _vwin_neighbor_sync (the data-landing span re-sync) and the in-r
-    order-gate invalidation (_low_inr_invalidate) are NOT fog work - they run regardless of the
-    flag. Zero-cost-when-off contract: no fog MultiMesh nodes are ever created (no scene-tree,
-    culling, or draw-call cost), the shared _low_fog_mesh + _low_fog_mat STAY (the caps reuse them
-    per the 2026-09-07 fog-color rule). Harness (main.gd _r16_lod_inr): with the fog off, a KEPT
-    in-r slab in the data->low gap is expected (the low pass is on its way) - inr_uncovered now
-    counts only a CULLED slab missing its cap (km computed once per chunk); with FOG_WAVE_ON true
-    the old contract (any non-air slab needs low/fog/cap) is preserved exactly. GATES: syntax 0
-    parse errors; SMOKE battery ok:true; R16 (seed 44) all gates green with fog counters 0
-    (inr_fog 0, far_fog 0, low_fog_boxes_n 0) - the phase gate must hold with the re-pointed
-    uncovered contract. LADDER CONSEQUENCE: fog -> low -> high becomes [nothing] -> low -> high;
-    far chunks show a gap (invisible terrain) until the low lands - this is phase 0 of the
-    satellite far-LOD (future ticket) which takes the fog slot as the immediate placeholder.'
+    2) Technical Details: world.gd const FOG_WAVE_ON := false (next to the AC-0234 window consts). The fog wave is the immediate
+    per-slab 16x16x16 unshaded box on data landing (WAVE 1, _low_fog_for; the 3.5ms paced WAVE 2 is the LOW lane and is NOT
+    touched). FOUR ensure sites get the flag (drops stay ungated - they no-op via has_fog_si when off and keep convergence
+    if the flag ever flips back in-session): (1) _low_fog_for kept-slab branch (the CULLED-slab cap ensure in the same loop
+    is NOT fog - it stays); (2) _vwin_sync kept+data+no-low+no-cap branch; (3) _low_build_slab all-air-sampled-but-has-blocks
+    branch (the terminal c.low_failed mark STAYS - it is wave-advance logic, not fog); (4) the C++ low handoff all-air branch
+    (same). CRITICAL CARVE-OUTS in _low_fog_for: _vwin_neighbor_sync (the data-landing span re-sync) and the in-r order-gate
+    invalidation (_low_inr_invalidate) are NOT fog work - they run regardless of the flag. Zero-cost-when-off contract: no
+    fog MultiMesh nodes are ever created (no scene-tree, culling, or draw-call cost), the shared _low_fog_mesh + _low_fog_mat
+    STAY (the caps reuse them per the 2026-09-07 fog-color rule). Harness (main.gd _r16_lod_inr): with the fog off, a KEPT
+    in-r slab in the data->low gap is expected (the low pass is on its way) - inr_uncovered now counts only a CULLED slab
+    missing its cap (km computed once per chunk); with FOG_WAVE_ON true the old contract (any non-air slab needs low/fog/cap)
+    is preserved exactly. GATES: syntax 0 parse errors; SMOKE battery ok:true; R16 (seed 44) all gates green with fog counters
+    0 (inr_fog 0, far_fog 0, low_fog_boxes_n 0) - the phase gate must hold with the re-pointed uncovered contract. LADDER
+    CONSEQUENCE: fog -> low -> high becomes [nothing] -> low -> high; far chunks show a gap (invisible terrain) until the
+    low lands - this is phase 0 of the satellite far-LOD (future ticket) which takes the fog slot as the immediate placeholder.'
   comments:
   - id: 1
     created_at: '2026-09-07T09:45:00.000000'
     updated_at: null
-    text: '[agent] Filed per user 2026-09-07 (get rid of the fog chunks, restorable, zero cost when
-      off). Implementation same session; closeout evidence lands in comment 2.'
+    text: '[agent] Filed per user 2026-09-07 (get rid of the fog chunks, restorable, zero cost when off). Implementation same
+      session; closeout evidence lands in comment 2.'
   - id: 2
     created_at: '2026-09-07T10:20:00.000000'
     updated_at: null
-    text: '[impl] DONE + VERIFIED 2026-09-07 (coordinator commits). const FOG_WAVE_ON := false +
-      the 4 flagged ensure sites as specced, drops left ungated (no-op via has_fog_si, convergence
-      if the flag flips back in-session), _vwin_neighbor_sync + _low_inr_invalidate carve-outs kept.
-      REGRESSION CAUGHT BY THE FIRST R16 (and masked by the gate re-point): the fog set was the
-      ENTRY TICKET into the low lane - _low_pending_sis/_low_pending_si derive the pending set from
-      the fog/cap/low placeholder sets, so with the fog gone a kept data slab entered no set and was
-      invisible to the low lane (R16: low=0 everywhere, culls 641->0, build_ms 70s->30s - the order
-      gate never closed because nothing was ever pending). FIX: a VIRTUAL pending set under
-      FOG_WAVE_ON == false in both picks - a kept data slab with no placeholder, no low, and no
-      terminal mark is pending directly (bounded 24-slab scan; the WAVE-2 pick stays allocation-free
-      - first pending = min of the three-set winner and the virtual first; the flag-on path is
-      byte-identical). FINAL R16 (seed 44) all green: ok, built_all, owed 0, gen_cov 0, caps_ok,
-      phase_ok, churn_ok (culls 642), fog counters 0 in every sample, build_ms 77339 (the gate
-      closing again = the designed lows-before-highs order), 0 script errors. SMOKE ok:true. Ladder
-      is now [nothing] -> low -> high (caps unchanged); this is phase 0 of the satellite far-LOD,
-      which takes the fog slot as the immediate placeholder. KNOWN FOLLOW-UP (user-flagged, not yet
-      a ticket): the low lane shares the TM high-priority pool with high builds - a dedicated low
-      thread (the AC-0187 edit-remesh precedent) would remove the pool-contention starvation mode;
+    text: '[impl] DONE + VERIFIED 2026-09-07 (coordinator commits). const FOG_WAVE_ON := false + the 4 flagged ensure sites
+      as specced, drops left ungated (no-op via has_fog_si, convergence if the flag flips back in-session), _vwin_neighbor_sync
+      + _low_inr_invalidate carve-outs kept. REGRESSION CAUGHT BY THE FIRST R16 (and masked by the gate re-point): the fog
+      set was the ENTRY TICKET into the low lane - _low_pending_sis/_low_pending_si derive the pending set from the fog/cap/low
+      placeholder sets, so with the fog gone a kept data slab entered no set and was invisible to the low lane (R16: low=0
+      everywhere, culls 641->0, build_ms 70s->30s - the order gate never closed because nothing was ever pending). FIX: a
+      VIRTUAL pending set under FOG_WAVE_ON == false in both picks - a kept data slab with no placeholder, no low, and no
+      terminal mark is pending directly (bounded 24-slab scan; the WAVE-2 pick stays allocation-free - first pending = min
+      of the three-set winner and the virtual first; the flag-on path is byte-identical). FINAL R16 (seed 44) all green: ok,
+      built_all, owed 0, gen_cov 0, caps_ok, phase_ok, churn_ok (culls 642), fog counters 0 in every sample, build_ms 77339
+      (the gate closing again = the designed lows-before-highs order), 0 script errors. SMOKE ok:true. Ladder is now [nothing]
+      -> low -> high (caps unchanged); this is phase 0 of the satellite far-LOD, which takes the fog slot as the immediate
+      placeholder. KNOWN FOLLOW-UP (user-flagged, not yet a ticket): the low lane shares the TM high-priority pool with high
+      builds - a dedicated low thread (the AC-0187 edit-remesh precedent) would remove the pool-contention starvation mode;
       its urgency rises with fog off since the low is now the first visible representation.'
 - id: AC-0241
   title: forward-plus-migration-drop-dither
@@ -8066,71 +8038,106 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-07T10:50
-  updated_at: 2026-09-07T10:50
-  completed_at: null
+  updated_at: 2026-09-07T13:45
+  completed_at: 2026-09-07 13:45:00
   waiting_on: null
   parent_id: null
-  notes: '1) User Story: As a player I want the game to use the modern high-performance renderer
-    (Forward+) so big render distances scale like Minecraft Bedrock does on PC (device defaults up
-    to 96 chunks, smooth at 40+), with GPU features available for the upcoming satellite far-LOD
-    (compute shaders). The dithered distant fade is dropped (user 2026-09-07: drop dithering) -
-    the fog pull-in stays.
+  notes: '1) User Story: As a player I want the game to use the modern high-performance renderer (Forward+) so big render
+    distances scale like Minecraft Bedrock does on PC (device defaults up to 96 chunks, smooth at 40+), with GPU features
+    available for the upcoming satellite far-LOD (compute shaders). The dithered distant fade is dropped (user 2026-09-07:
+    drop dithering) - the fog pull-in stays.
 
-    2) Technical Details: We are Windows-only (AC-0124) - gl_compatibility was web-migration
-    legacy; Forward+ wants ~DX11 feature level (every 2026 Windows machine). PART A - DITHER DROP:
-    (1) the 4 chunk shaders (chunk_lit_opaque/cutout/fluid/flower.gdshader): remove the
-    u_dither_start/u_dither_end uniforms, the DITHER44 constant, and the fragment discard block
-    (KEEP v_world_pos/u_player_pos - the player-light term uses them); (2) main.gd: the per-frame
-    dither uniform push (~2160-2195 - keep the non-dither pushes in that loop), the settings-arm
-    dither tests (~910-943, fix the ok expression), the R16 dither evidence (~7209-7213), the
-    dither env/arm (~7418-7440); (3) daynight.gd: dither_start()/dither_end() statics (keep the
-    fog parts); (4) menu.gd + menu.tscn: the DitherCheck checkbox + dithstart slider + callbacks
-    + the OPTSYNC log field (the FOG start slider STAYS - it is separate); (5) settings.gd: the
-    dithering_enabled + dithering_start_pct keys + load-clamp branches (old saves may carry them -
-    the loader ignores unknown keys). PART B - FORWARD+: project.godot renderer/rendering_method =
-    forward_plus (+ drop the .mobile override - no mobile export); verify the render pipeline:
-    custom chunk shaders are renderer-agnostic (manual lighting, FRAGCOORD works), WorldEnvironment
-    fog behavior, the unshaded placeholder materials, the aero sky/star shaders; check
-    project.godot rendering settings for compatibility-era values that should change (tonemap/AA).
-    GATES: syntax 0 parse errors; SMOKE battery ok:true; R16 (seed 44) all green (the dither
-    evidence keys are gone - the arm must not read them); meshprobe 1926; settings arm green with
-    the dither tests removed. VISUAL: the user is the render oracle (headless cannot see Forward+)
-    - build_windows.sh after the commit, user verifies the Windows exe (fog edge, lighting,
-    placeholder colors, no shader warnings). WHY FIRST: the satellite far-LOD (three-distance
-    streaming, next ticket) is built ONCE on this stack - GPU-native satellite (compute pass over
-    the per-chunk top grids, CPU patches edits only) instead of a CPU-bake-first re-do. AC-0238
-    (window-masked-light) stays queued - it cuts the CPU-side compute Forward+ does not fix.'
+    2) Technical Details: We are Windows-only (AC-0124) - gl_compatibility was web-migration legacy; Forward+ wants ~DX11
+    feature level (every 2026 Windows machine). PART A - DITHER DROP: (1) the 4 chunk shaders (chunk_lit_opaque/cutout/fluid/flower.gdshader):
+    remove the u_dither_start/u_dither_end uniforms, the DITHER44 constant, and the fragment discard block (KEEP v_world_pos/u_player_pos
+    - the player-light term uses them); (2) main.gd: the per-frame dither uniform push (~2160-2195 - keep the non-dither pushes
+    in that loop), the settings-arm dither tests (~910-943, fix the ok expression), the R16 dither evidence (~7209-7213),
+    the dither env/arm (~7418-7440); (3) daynight.gd: dither_start()/dither_end() statics (keep the fog parts); (4) menu.gd
+    + menu.tscn: the DitherCheck checkbox + dithstart slider + callbacks + the OPTSYNC log field (the FOG start slider STAYS
+    - it is separate); (5) settings.gd: the dithering_enabled + dithering_start_pct keys + load-clamp branches (old saves
+    may carry them - the loader ignores unknown keys). PART B - FORWARD+: project.godot renderer/rendering_method = forward_plus
+    (+ drop the .mobile override - no mobile export); verify the render pipeline: custom chunk shaders are renderer-agnostic
+    (manual lighting, FRAGCOORD works), WorldEnvironment fog behavior, the unshaded placeholder materials, the aero sky/star
+    shaders; check project.godot rendering settings for compatibility-era values that should change (tonemap/AA). GATES: syntax
+    0 parse errors; SMOKE battery ok:true; R16 (seed 44) all green (the dither evidence keys are gone - the arm must not read
+    them); meshprobe 1926; settings arm green with the dither tests removed. VISUAL: the user is the render oracle (headless
+    cannot see Forward+) - build_windows.sh after the commit, user verifies the Windows exe (fog edge, lighting, placeholder
+    colors, no shader warnings). WHY FIRST: the satellite far-LOD (three-distance streaming, next ticket) is built ONCE on
+    this stack - GPU-native satellite (compute pass over the per-chunk top grids, CPU patches edits only) instead of a CPU-bake-first
+    re-do. AC-0238 (window-masked-light) stays queued - it cuts the CPU-side compute Forward+ does not fix.'
   comments:
   - id: 1
     created_at: '2026-09-07T10:50:00.000000'
     updated_at: null
-    text: '[agent] Filed per user 2026-09-07 (drop dithering + forward migration). The Bedrock
-      reference: PC render distance 4-96 chunks, smooth at 40+ on ordinary hardware (Microsoft docs
-      + player reports) - big distance + real LOD + modern API, no low-end compromise renderer.'
+    text: '[agent] Filed per user 2026-09-07 (drop dithering + forward migration). The Bedrock reference: PC render distance
+      4-96 chunks, smooth at 40+ on ordinary hardware (Microsoft docs + player reports) - big distance + real LOD + modern
+      API, no low-end compromise renderer.'
   - id: 2
     created_at: '2026-09-07T11:15:00.000000'
     updated_at: null
-    text: '[impl] DONE + VERIFIED 2026-09-07 (coordinator commits; PENDING user visual verify on
-      Windows - headless cannot see Forward+). PART A dither drop: all 5 shaders clean (4 chunk
-      shaders keep u_player_pos/v_world_pos for the player-light term; the fluid shader lost them
-      entirely - the dither was its only use - and its per-frame push loop is gone); main.gd: the
-      per-frame push keeps only u_player_pos/light/radius, the settings arm tests the FOG slider
-      round-trip + clamp only, the R16 evidence block is now "fog" (fog_far/pop_face_worst/
-      fog_hides_pop), the AWECRAFT_DITHER* env hooks are gone (AWECRAFT_FOG_PCT stays), and the
-      dithersettings arm became the fogsettings arm (slider -> env.fog_depth_end live within a
-      frame); daynight.gd dither_start/end removed (fog_far stays); settings.gd keys + clamps
-      removed (the loader reads only known keys - a user cfg carrying the old keys loads fine,
-      stale keys ignored); menu.gd + menu.tscn checkbox/slider/callbacks/OPTSYNC removed. PART B:
-      project.godot rendering_method = forward_plus (+ .mobile override dropped - no mobile
-      export); ARCHITECTURE.md + AGENTS.md render notes updated (Forward+ = Vulkan on Linux, so
-      the xvfb render arm needs a Vulkan device like lavapipe; the user s Windows build is the
-      render oracle). Gates (all headless-logic): syntax 0 errors (banner verified); SMOKE
-      battery EXIT=0 (one retry - the crash was the documented AC-0206 .so flake in C++
-      generate_args, renderer-irrelevant); settings arm ok:true (fog default 87, set 60
-      reloaded, clamp lo 0); R16 (seed 44) ALL GREEN - ok, built_all, owed 0, gen_cov 0, caps_ok,
-      phase_ok, churn_ok (culls 643), gen_ok, fog block fog_far 236.64 <= pop face 256
-      (fog_hides_pop true), build_ms 78836 (no logic-side delta - the dither cost was GPU
-      fragments), 0 script errors, 0 crashes.'
+    text: '[impl] DONE + VERIFIED 2026-09-07 (coordinator commits; PENDING user visual verify on Windows - headless cannot
+      see Forward+). PART A dither drop: all 5 shaders clean (4 chunk shaders keep u_player_pos/v_world_pos for the player-light
+      term; the fluid shader lost them entirely - the dither was its only use - and its per-frame push loop is gone); main.gd:
+      the per-frame push keeps only u_player_pos/light/radius, the settings arm tests the FOG slider round-trip + clamp only,
+      the R16 evidence block is now "fog" (fog_far/pop_face_worst/ fog_hides_pop), the AWECRAFT_DITHER* env hooks are gone
+      (AWECRAFT_FOG_PCT stays), and the dithersettings arm became the fogsettings arm (slider -> env.fog_depth_end live within
+      a frame); daynight.gd dither_start/end removed (fog_far stays); settings.gd keys + clamps removed (the loader reads
+      only known keys - a user cfg carrying the old keys loads fine, stale keys ignored); menu.gd + menu.tscn checkbox/slider/callbacks/OPTSYNC
+      removed. PART B: project.godot rendering_method = forward_plus (+ .mobile override dropped - no mobile export); ARCHITECTURE.md
+      + AGENTS.md render notes updated (Forward+ = Vulkan on Linux, so the xvfb render arm needs a Vulkan device like lavapipe;
+      the user s Windows build is the render oracle). Gates (all headless-logic): syntax 0 errors (banner verified); SMOKE
+      battery EXIT=0 (one retry - the crash was the documented AC-0206 .so flake in C++ generate_args, renderer-irrelevant);
+      settings arm ok:true (fog default 87, set 60 reloaded, clamp lo 0); R16 (seed 44) ALL GREEN - ok, built_all, owed 0,
+      gen_cov 0, caps_ok, phase_ok, churn_ok (culls 643), gen_ok, fog block fog_far 236.64 <= pop face 256 (fog_hides_pop
+      true), build_ms 78836 (no logic-side delta - the dither cost was GPU fragments), 0 script errors, 0 crashes.'
+- id: AC-0242
+  title: forward-plus-srgb-display-match
+  status: done
+  waiting_on: null
+  created_at: 2026-09-07T14:05
+  updated_at: 2026-09-07T16:10
+  completed_at: 2026-09-07T16:10:00.000000
+  notes: |
+    1) User Story
+    After the Forward+ migration (AC-0241) the whole world looked washed
+    out versus the old gl_compatibility build. The player should see the
+    same deep, punchy look on Forward+ as before the migration.
+    2) Technical Details
+    Root cause (measured, self-rendered A/B under lavapipe/llvmpipe with
+    AWECRAFT_TIME_FREEZE + frozen seed/radius): the gl_compatibility LDR
+    path displays unshaded material output WITHOUT a final sRGB encode
+    (atlas grass bytes 120-134 show as ~50 under compat, ~130 under
+    Forward+; compat frame == sRGB-decode of the Forward+ frame, RMSE
+    ~7/ch). Forward+ encodes correctly, so every unshaded 3D surface
+    rendered one sRGB curve brighter than the old build - the washout.
+    Fix: AeroLib.srgb_pre() returns 1.0 under forward_plus, 0.0 under
+    gl_compatibility; each unshaded shader pre-decodes its final color
+    (ALBEDO = mix(ALBEDO, pow(ALBEDO, vec3(2.2)), u_srgb_pre)) so the
+    pipeline encode round-trips to the old display. Patched: chunk_lit
+    _opaque/_cutout/_fluid/_flower, fluid_anim, aero_sky, aero_wash
+    (the additive wash in the linear HDR buffer was lifting darks an
+    extra 40-80 levels in the blue channel - it needs the same decode).
+    The u_srgb_pre uniform rides the existing per-frame chunk push in
+    _update_sky plus one-time sets (fluid_anim_mats, aero sky/wash).
+    Harness: AWECRAFT_TIME_FREEZE env added (snapshot runs 3000+ frames
+    and the day clock drifted a quarter cycle frame-dependently between
+    software renderers, confounding every A/B before the freeze).
+    Verify: frozen A/B pairs (seed 44, radius 2, time 0.25, 960x540,
+    grade off AND on): bare mean |ref-fwd| 4.25/channel (pre-fix ~60),
+    graded 2.56; all regions within 3-9. SMOKE battery green
+    (player/interact/light/fluids, light arm torch 14/far 0-9/surface
+    15/cave 0 = baseline). PENDING: user visual confirm on Windows GPU
+    (exe rebuilt).
+  comments:
+  - id: 1
+    author: agent
+    text: >
+      DONE + VERIFIED (self-render A/B). Washout root cause = compat
+      missing final sRGB encode vs Forward+ correct encode; fixed with
+      renderer-conditional pre-decode in the 7 unshaded shaders +
+      uniform push. Frames: .scratch/ab5_fwd.png (bare, mean diff 4.25)
+      and .scratch/ab6_fwd.png (graded, mean diff 2.56) vs ab3_ref/ab6_ref.
+      SMOKE green. Awaiting user visual confirm on the rebuilt exe.

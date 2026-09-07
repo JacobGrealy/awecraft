@@ -13,6 +13,7 @@ uniform float cloud_amount : hint_range(0.0, 1.0) = 0.55;
 uniform vec3 haze_color : source_color = vec3(0.7294, 0.9137, 0.9804);
 uniform float haze_amount : hint_range(0.0, 1.0) = 0.35;
 uniform vec3 cam_pos = vec3(0.0, 0.0, 0.0);
+uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
 
 varying vec3 wpos;
 
@@ -76,4 +77,5 @@ void fragment() {
 		col = mix(col, cc, cl);
 	}
 	ALBEDO = col;
+	ALBEDO = mix(ALBEDO, pow(ALBEDO, vec3(2.2)), u_srgb_pre); // AC-0242
 }

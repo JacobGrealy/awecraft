@@ -68,6 +68,17 @@ static func _envf(key: String, d: float) -> float:
 	var v := OS.get_environment(key)
 	return d if v == "" else v.to_float()
 
+# AC-0242: the gl_compatibility LDR path displays unshaded material output
+# WITHOUT a final sRGB encode (measured: the compat frame is the sRGB-decoded
+# image of the Forward+ frame; atlas grass bytes 120-134 show as ~50 under
+# compat, ~130 under Forward+). Forward+ therefore renders the same material
+# one sRGB curve brighter than the old build - the "washed out" report.
+# srgb_pre() = 1.0 makes Forward+ shaders pre-decode their final unshaded
+# color (pow 2.2) so the pipeline encode round-trips to the old display;
+# 0.0 on compatibility keeps it the identity.
+static func srgb_pre() -> float:
+	return 1.0 if RenderingServer.get_current_rendering_method() != "gl_compatibility" else 0.0
+
 
 static func glow_strength() -> float:
 	return _envf("AWECRAFT_GRADE_GLOW", GLOW_STRENGTH)

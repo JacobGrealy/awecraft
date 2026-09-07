@@ -17,6 +17,8 @@ var entities: Node
 var sun: DirectionalLight3D
 var world_env: WorldEnvironment
 var env: Environment
+# AC-0242: 1.0 under forward_plus, 0.0 under gl_compatibility (AeroLib.srgb_pre()).
+var _srgb_pre: float = 0.0
 var inventory_ui: CanvasLayer
 var menu_ui: Menu
 var stats_overlay: CanvasLayer
@@ -60,6 +62,12 @@ func _ready() -> void:
 		env.fog_enabled = false
 	world_env.environment = env
 	add_child(world_env)
+	# AC-0242: cache the renderer fix value once (renderer is final by _ready)
+	# and apply it to the shared water/lava materials; the per-chunk
+	# materials ride the per-frame push in _update_sky.
+	_srgb_pre = AeroLib.srgb_pre()
+	for bid in Data.fluid_anim_mats:
+		Data.fluid_anim_mats[bid].set_shader_parameter("u_srgb_pre", _srgb_pre)
 	aero = AeroLib.enabled()
 	if aero:
 		_setup_aero()
@@ -1940,6 +1948,7 @@ func _setup_aero() -> void:
 		var sm := ShaderMaterial.new()
 		sm.shader = load("res://core/aero_sky.gdshader")
 		sm.set_shader_parameter("cam_pos", Vector3.ZERO)
+		sm.set_shader_parameter("u_srgb_pre", _srgb_pre)
 		aero_sky_mat = sm
 		var sph := SphereMesh.new()
 		sph.radius = AeroLib.SKY_RADIUS
@@ -1958,6 +1967,7 @@ func _setup_aero() -> void:
 		wm.set_shader_parameter("wash_color", AeroLib.WASH_COLOR)
 		wm.set_shader_parameter("wash_amount", AeroLib.WASH_AMOUNT)
 		wm.set_shader_parameter("top_glow", AeroLib.WASH_TOP_GLOW)
+		wm.set_shader_parameter("u_srgb_pre", _srgb_pre)
 		aero_wash = MeshInstance3D.new()
 		aero_wash.name = "AeroWash"
 		aero_wash.mesh = aero_wash_mesh
@@ -1980,7 +1990,12 @@ var _last_mode := ""
 
 
 func _process(delta: float) -> void:
-	Game.time_of_day = fmod(Game.time_of_day + minf(delta, 0.05) / DayNight.DAY_LEN, 1.0)
+	# AC-0241 follow-up: freeze the clock for A/B render shots - the snapshot
+	# runs 3000+ frames and the day drifts a quarter cycle (frame-dependent
+	# on software renderers), which changes u_day and tints every unshaded
+	# frame differently between runs.
+	if OS.get_environment("AWECRAFT_TIME_FREEZE") != "1":
+		Game.time_of_day = fmod(Game.time_of_day + minf(delta, 0.05) / DayNight.DAY_LEN, 1.0)
 	if stats_overlay != null:
 		_stats_acc += delta
 		if _stats_acc >= 0.25:
@@ -2136,6 +2151,7 @@ func _update_sky() -> void:
 			cm.set_shader_parameter("u_player_pos", ppos)
 			cm.set_shader_parameter("u_player_light", plvl)
 			cm.set_shader_parameter("u_player_radius", prad)
+			cm.set_shader_parameter("u_srgb_pre", _srgb_pre)
 
 	sun.light_color = AeroLib.SUN_TINT if aero else Color.WHITE
 	sun.light_energy = DayNight.sun_energy(t) * (AeroLib.SUN_BOOST if aero else 1.0)
