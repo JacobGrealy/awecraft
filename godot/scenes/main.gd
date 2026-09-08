@@ -1502,6 +1502,11 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			await _meshprobe_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "occl":
+			world.collision_enabled = false
+			await _occl111_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "stripsprobe":
 			world.collision_enabled = false
 			await _stripsprobe_test(spawn)
@@ -6158,6 +6163,152 @@ func _pullprobe_test(spawn: Vector3) -> void:
 # must match, then the FIRST 4*q verts (v/n/c/u) and 6*q indices. Field
 # names (verts_gd/verts_cpp, gres/cres) keep the AC-0190 schema; both
 # sides are C++ now.
+# AC-0111: transparent-blocks-dont-occlude-neighbors. Synthetic columns run
+# through the REAL C++ build_accs (the spawn chunk's dispatch inputs - the
+# world is not modified). The cutout acc (rk) is NOT greedy-merged, so its
+# q is the exact raw face count; the opaque acc IS merged (a 2x2x2 cube
+# reads 6 quads, not 24) - stone counts are exact only for single cells.
+#   A: 3x3x3 leaf cube (id 7, cutout) in an air column - fancy-style
+#      culling: all 162 faces emit (leaf-to-leaf interior included; a
+#      cutout block never occludes its same-id neighbor).
+#   B: the leaf cube wrapped in a 5x5x5 stone box - leaf faces toward the
+#      stone are culled (the solid occludes): exactly 108 leaf-leaf faces
+#      remain; the stone acc must stay non-empty (its faces toward the
+#      cutout neighbor emit - merge-quantized, not exact-gated).
+#   C: a lone stone in air - all 6 faces emit (baseline).
+#   E: one stone + one adjacent leaf, isolated - the stone face toward
+#      the leaf emits (6) while the leaf face toward the stone is culled
+#      (5): the transparent block does not occlude the solid, and the
+#      solid still occludes the transparent.
+func _occl111_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var H := int(Data.HEIGHT)
+	var SLABN := H / 16
+	world.render_radius = 1
+	world.recenter(spawn.x, spawn.z, true)
+	# Wait for the spawn chunk to generate + build (its dispatch inputs -
+	# ctx, strips, the four diagonal nbs - are the probe's ground truth).
+	var waited := 0
+	var c0: Node3D = null
+	while c0 == null and waited < 3600:
+		c0 = world.chunks.get("0,0")
+		if c0 != null and c0.data.is_empty():
+			c0 = null
+		elif c0 != null and not c0.mesh_built:
+			c0 = null
+		waited += 1
+		await get_tree().physics_frame
+	var out: Dictionary = {"spawn_waited": waited}
+	if c0 == null:
+		out["ok"] = false
+		Debug.result(out)
+		return
+	var mc: Variant = _ChunkScriptM.mesh_cpp()
+	var nbs: Dictionary = {}
+	var nb_ok := true
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			if (dx == 0) == (dz == 0):
+				continue
+			var nc = world.chunks.get(world._key(dx, dz))
+			if nc == null or nc.data.is_empty():
+				nb_ok = false
+				break
+			nbs["%d,%d" % [dx, dz]] = {"d": ChunkIO._slabs_deepcopy(nc.data), "f": ChunkIO._slabs_deepcopy(nc.fl)}
+	if not nb_ok:
+		out["ok"] = false
+		out["note"] = "diagonal neighbors not ready"
+		Debug.result(out)
+		return
+	var st: Dictionary = world._strips_for(0, 0)
+	var ctx_w: Dictionary = world._tm_ctx.duplicate()
+	ctx_w["eff_strips"] = st["eff"]
+	ctx_w["blk_strips"] = st["blk"]
+	ctx_w["blk_strips_b"] = st["blk_b"]
+	ctx_w["top"] = int(c0.top)
+	var ms_w: Dictionary
+	if not world._tm_ms_full.rects.is_empty():
+		ms_w = {"rects": world._tm_ms_full.rects.duplicate(), "h": float(world._tm_ms_full.get("h", 0.0))}
+	else:
+		ms_w = {"rects": {}}
+	var LEAF := 7
+	var STONE := 1
+	var a := PackedByteArray()
+	a.resize(H * 256)
+	var x := 6
+	while x <= 8:
+		var z := 6
+		while z <= 8:
+			var y := 10
+			while y <= 12:
+				a[(y << 8) | (z << 4) | x] = LEAF
+				y += 1
+			z += 1
+		x += 1
+	var b := PackedByteArray()
+	b.resize(H * 256)
+	var x2 := 5
+	while x2 <= 9:
+		var z2 := 5
+		while z2 <= 9:
+			var y2 := 9
+			while y2 <= 13:
+				var is_leaf: bool = x2 >= 6 and x2 <= 8 and y2 >= 10 and y2 <= 12 and z2 >= 6 and z2 <= 8
+				b[(y2 << 8) | (z2 << 4) | x2] = LEAF if is_leaf else STONE
+				y2 += 1
+			z2 += 1
+		x2 += 1
+	var ccol := PackedByteArray()
+	ccol.resize(H * 256)
+	ccol[(11 << 8) | (7 << 4) | 7] = STONE
+	var res_c = mc.build_accs(ChunkIO.palettize_flat(ccol, SLABN), ChunkIO.empty_slabs(SLABN), 0, 0, nbs, ctx_w, ms_w, {}, 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())
+# E: one stone + one adjacent leaf, both isolated in air (single quads -
+	# no greedy merge): the stone face toward the leaf MUST emit (a cutout
+	# neighbor does not occlude) -> 6; the leaf face toward the stone is
+	# culled (the solid occludes) -> 5.
+	var ecol := PackedByteArray()
+	ecol.resize(H * 256)
+	ecol[(11 << 8) | (7 << 4) | 7] = STONE
+	ecol[(11 << 8) | (8 << 4) | 7] = LEAF
+	var res_e = mc.build_accs(ChunkIO.palettize_flat(ecol, SLABN), ChunkIO.empty_slabs(SLABN), 0, 0, nbs, ctx_w, ms_w, {}, 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())
+	var res_a = mc.build_accs(ChunkIO.palettize_flat(a, SLABN), ChunkIO.empty_slabs(SLABN), 0, 0, nbs, ctx_w, ms_w, {}, 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())
+	var res_b = mc.build_accs(ChunkIO.palettize_flat(b, SLABN), ChunkIO.empty_slabs(SLABN), 0, 0, nbs, ctx_w, ms_w, {}, 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())
+	# row = [ao, ac, af_w, af_l, ak, ax, full_solid] - the cutout acc is 4,
+	# the opaque acc is 0.
+	var leaf_faces_a := 0
+	var stone_faces_a := 0
+	for row in res_a["slabs"]:
+		leaf_faces_a += int((row[4] as Dictionary).get("q", 0))
+		stone_faces_a += int((row[0] as Dictionary).get("q", 0))
+	var leaf_faces_b := 0
+	var stone_faces_b := 0
+	for row in res_b["slabs"]:
+		leaf_faces_b += int((row[4] as Dictionary).get("q", 0))
+		stone_faces_b += int((row[0] as Dictionary).get("q", 0))
+	var stone_faces_c := 0
+	for row in res_c["slabs"]:
+		stone_faces_c += int((row[0] as Dictionary).get("q", 0))
+	var stone_faces_e := 0
+	var leaf_faces_e := 0
+	for row in res_e["slabs"]:
+		stone_faces_e += int((row[0] as Dictionary).get("q", 0))
+		leaf_faces_e += int((row[4] as Dictionary).get("q", 0))
+	out["stone_faces_c"] = stone_faces_c
+	out["stone_faces_e"] = stone_faces_e
+	out["leaf_faces_e"] = leaf_faces_e
+	var ok_a: bool = leaf_faces_a == 162 and stone_faces_a == 0
+	var ok_b: bool = leaf_faces_b == 108 and stone_faces_b > 0
+	var ok_c: bool = stone_faces_c == 6
+	var ok_e: bool = stone_faces_e == 6 and leaf_faces_e == 5
+	var wall := Time.get_ticks_msec() - t0
+	out["leaf_faces_a"] = leaf_faces_a
+	out["stone_faces_a"] = stone_faces_a
+	out["leaf_faces_b"] = leaf_faces_b
+	out["stone_faces_b"] = stone_faces_b
+	out["wall_ms"] = wall
+	out["ok"] = ok_a and ok_b and ok_c and ok_e and wall <= 90000
+	Debug.result(out)
+
 func _meshprobe_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
 	var NENV := OS.get_environment("AWECRAFT_MESHPROBE_N")

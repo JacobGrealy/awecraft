@@ -3621,15 +3621,29 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: '1) User Story: As a player I want transparent objects to not hide what is behind them — if a
-    block is transparent I should see through it.
-
-
-    2) Technical Details: Blocks with transparency (leaves, flora cross, glass/water if added) must not
-    occlude faces behind them. Current chunk.gd _face_mask / _faces skips face if neighbor stab[nb]>0
-    (solid). Fix: treat transparent via Data.block(id).transparent / cutout as non-occluding so leaf interior
-    inside leaf cluster still emits. Verify leaf crown interior visible, no missing faces, no extra draw
-    when surrounded by solid stone.'
+  notes: "1) User Story: As a player I want transparent objects to not hide what is behind them — if a\
+    \ block is transparent I should see through it.\n\n2) Technical Details: Blocks with transparency\
+    \ (leaves, flora cross, glass/water if added) must not occlude faces behind them. Current chunk.gd\
+    \ _face_mask / _faces skips face if neighbor stab[nb]>0 (solid). Fix: treat transparent via Data.block(id).transparent\
+    \ / cutout as non-occluding so leaf interior inside leaf cluster still emits. Verify leaf crown interior\
+    \ visible, no missing faces, no extra draw when surrounded by solid stone.\n\n3) Implementation (agent,\
+    \ 2026-09-08): DONE, all gates green.\n- gdext/src/mesh.cpp s_faces: the same-id cull now applies\
+    \ to OPAQUE\n  blocks only - a cutout (ktab) or cross (xtab) block never occludes its\n  same-id neighbor,\
+    \ so a leaf cluster emits its interior faces\n  (Minecraft fancy-graphics style). The solid-neighbor\
+    \ cull is unchanged\n  (a solid still occludes every face, transparent or not), and the stone\n  side\
+    \ already emitted faces toward cutout neighbors (the stab test),\n  which stays. No GDScript changes\
+    \ - all meshing is the C++ AweMesh\n  pipeline.\n- New test arm AWECRAFT_LOGIC=occl (godot/scenes/main.gd\n\
+    \  _occl111_test): synthetic columns through the REAL build_accs with the\n  spawn chunk dispatch\
+    \ inputs (world untouched). The cutout acc is not\n  greedy-merged (exact raw face counts); the opaque\
+    \ acc is merged (a\n  2x2x2 cube reads 6 quads) so stone counts are exact-gated only for\n  single\
+    \ cells. Gates: A = 3x3x3 leaf cube in air -> all 162 faces emit;\n  B = leaf cube in a 5x5x5 stone\
+    \ box -> exactly 108 leaf-leaf faces\n  (stone-facing culled) + the stone acc non-empty (faces toward\
+    \ the\n  cutout emit); C = lone stone -> 6; E = stone + adjacent isolated leaf\n  -> stone 6 (its\
+    \ leaf-facing face emits) / leaf 5 (its stone-facing face\n  culled).\n- Verified: occl arm ok (162/108/6/6-5),\
+    \ meshprobe ok (1908/1908 accs,\n  32/32 chunks, the dispatch invariant holds under the new cull),\
+    \ SMOKE\n  battery ok:true, 0 Parse Errors, .so rebuilt + staged.\n- User impact: tree crowns now\
+    \ show their interior through the leaf\n  holes (volumetric look, no flat shell); no new faces toward\
+    \ solid\n  blocks, no change to solid-only scenes. EXE rebuilt after this\n  commit."
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549843'

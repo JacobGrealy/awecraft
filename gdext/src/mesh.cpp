@@ -911,8 +911,11 @@ static void bake_box(const Dictionary &light, const StripSet &eff_strips, int h,
 // Face record collection (chunk.gd:1184/1206/732/1172).
 // ---------------------------------------------------------------------------
 
-// _s_faces: the 6-face exposure test (skip same-id + solid neighbors).
-static void s_faces(std::vector<FRec> &recs, const uint8_t *stab, int lx, int y, int lz, int id, const std::vector<uint8_t> &snap, int h) {
+// _s_faces: the 6-face exposure test (skip solid neighbors; same-id is
+// culled for OPAQUE blocks only - AC-0111: cutout/cross blocks stay
+// see-through, so a leaf's faces toward its leaf neighbors are emitted
+// and a cluster interior is visible through the cutout holes).
+static void s_faces(std::vector<FRec> &recs, const uint8_t *stab, int lx, int y, int lz, int id, const std::vector<uint8_t> &snap, int h, const uint8_t *ktab, const uint8_t *xtab) {
 	int sxi = (lz + 1) * SNAP_W + (lx + 1);
 	for (int fi = 0; fi < 6; fi++) {
 		int ny = y + FN[fi][1];
@@ -922,7 +925,7 @@ static void s_faces(std::vector<FRec> &recs, const uint8_t *stab, int lx, int y,
 		} else {
 			nb = snap[(size_t)ny * SNAP_ROW + sxi + FN[fi][2] * SNAP_W + FN[fi][0]];
 		}
-		if (nb == id)
+		if (nb == id && ktab[id] == 0 && xtab[id] == 0)
 			continue;
 		if (stab[nb] > 0)
 			continue;
@@ -1981,16 +1984,16 @@ public:
 						}
 						if (C.xtab[id] > 0) {
 							if (!C.coarse && C.ttab[id] > 0)
-								s_faces(rc_o, C.stab, lx, y, lz, id, snap, h);
+								s_faces(rc_o, C.stab, lx, y, lz, id, snap, h, C.ktab, C.xtab);
 							else if (!C.coarse)
 								rq.push_back(XRec{lx, y, lz, id});
 						} else if (C.ktab[id] > 0) {
 							if (C.coarse)
-								s_faces(ro, C.stab, lx, y, lz, id, snap, h);
+								s_faces(ro, C.stab, lx, y, lz, id, snap, h, C.ktab, C.xtab);
 							else
-								s_faces(rk, C.stab, lx, y, lz, id, snap, h);
+								s_faces(rk, C.stab, lx, y, lz, id, snap, h, C.ktab, C.xtab);
 						} else {
-							s_faces(ro, C.stab, lx, y, lz, id, snap, h);
+							s_faces(ro, C.stab, lx, y, lz, id, snap, h, C.ktab, C.xtab);
 						}
 					}
 				}
