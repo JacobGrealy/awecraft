@@ -8,7 +8,7 @@ render_mode unshaded, cull_disabled, fog_disabled;
 // scrolls by u_wind * u_cloud_time (main.gd advances u_cloud_time each
 // frame). Fog is disabled so the layer stays crisp at the horizon (the
 // dome clouds were fog_disabled too).
-uniform vec2 u_wind = vec2(6.0, 2.0);  // blocks per second of drift
+uniform vec2 u_wind = vec2(0.7, 0.25);  // blocks per second of drift (MC-like; 6.0 read as too fast on user retest)
 uniform float u_cloud_time = 0.0;
 uniform float u_coverage : hint_range(0.0, 1.0) = 0.5;
 uniform vec3 u_cloud_tint : source_color = vec3(1.0);
@@ -55,11 +55,17 @@ float fbm2(vec2 p) {
 }
 
 void fragment() {
-	// world-anchored sampling (parallax) + wind scroll
-	vec2 p = v_wxz * (1.0 / 26.0) + u_wind * u_cloud_time;
-	float n = fbm2(p * 1.3) * 0.65 + fbm2(p * 3.1 + vec2(13.7, 7.3)) * 0.35;
-	float lo = mix(0.68, 0.38, u_coverage);
-	float cl = smoothstep(lo, lo + 0.22, n);
+	// world-anchored sampling (parallax) + wind scroll.
+	// AC-0235 retest 2: the user wanted FEWER, BIGGER, more
+	// volumetric clouds - base frequency dropped 26 -> 64, the
+	// detail octave pulled in (3.1 -> 2.2), the coverage
+	// window narrowed (fewer clouds), the alpha ramp widened
+	// and re-sharpened (soft edges, opaque cores = billowy).
+	vec2 p = v_wxz * (1.0 / 64.0) + u_wind * u_cloud_time;
+	float n = fbm2(p * 1.3) * 0.75 + fbm2(p * 2.2 + vec2(13.7, 7.3)) * 0.25;
+	float lo = mix(0.74, 0.44, u_coverage);
+	float cl = smoothstep(lo, lo + 0.30, n);
+	cl = smoothstep(0.0, 0.55, cl) * cl;
 	// fade the layer boundary so the quad edge never reads as a wall
 	vec2 e = abs(v_uv - 0.5) * 2.0;
 	float edge = 1.0 - smoothstep(0.86, 1.0, max(e.x, e.y));

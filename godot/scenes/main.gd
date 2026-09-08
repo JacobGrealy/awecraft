@@ -56,8 +56,13 @@ func _ready() -> void:
 
 	world_env = WorldEnvironment.new()
 	env = Environment.new()
+	# AC-0242: cache the renderer fix value once (renderer is final by _ready).
+	_srgb_pre = AeroLib.srgb_pre()
 	# AC-0235: the sky gradient + sun moved from the AeroSky dome
 	# (a flipped sphere) into the engine SKY PASS - no geometry.
+	# NOTE: the sky shader carries render_mode disable_fog - with env fog
+	# enabled the engine fog path otherwise paints the flat fog color over
+	# the whole sky background (the AC-0235 'no sun / flat sky' bug).
 	env.background_mode = Environment.BG_SKY
 	var _sky_res := Sky.new()
 	_sky_res.radiance_size = Sky.RADIANCE_SIZE_32  # IBL is unused in this game - smallest cubemap
@@ -73,10 +78,8 @@ func _ready() -> void:
 		env.fog_enabled = false
 	world_env.environment = env
 	add_child(world_env)
-	# AC-0242: cache the renderer fix value once (renderer is final by _ready)
-	# and apply it to the shared water/lava materials; the per-chunk
-	# materials ride the per-frame push in _update_sky.
-	_srgb_pre = AeroLib.srgb_pre()
+	# AC-0242: apply the renderer fix to the shared water/lava materials; the
+	# per-chunk materials ride the per-frame push in _update_sky.
 	for bid in Data.fluid_anim_mats:
 		Data.fluid_anim_mats[bid].set_shader_parameter("u_srgb_pre", _srgb_pre)
 	aero = AeroLib.enabled()
@@ -1977,7 +1980,7 @@ func _setup_aero() -> void:
 		cm.set_shader_parameter("u_srgb_pre", _srgb_pre)
 		cloud_mat = cm
 		var q := QuadMesh.new()
-		q.size = Vector2(4096.0, 4096.0)
+		q.size = Vector2(6144.0, 6144.0)  # reaches the camera far plane (4096) down to ~5 deg elevation
 		cloud_layer = MeshInstance3D.new()
 		cloud_layer.name = "CloudLayer"
 		cloud_layer.mesh = q
@@ -2200,7 +2203,9 @@ func _update_sky() -> void:
 		var u2 := AeroLib.sky_uniforms(t)
 		cloud_mat.set_shader_parameter("u_cloud_time", _cloud_time)
 		cloud_mat.set_shader_parameter("u_coverage", float(u2["cloud_amount"]))
-		cloud_mat.set_shader_parameter("u_cloud_tint", Color(u2["cloud_color"]))
+		# AC-0235 retest 2: clouds go dark at night (MC-style).
+		var cday := DayNight.day(t)
+		cloud_mat.set_shader_parameter("u_cloud_tint", Color8(46, 50, 66).lerp(Color(u2["cloud_color"]), cday))
 
 
 func _update_fog() -> void:

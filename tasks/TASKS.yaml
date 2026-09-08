@@ -7755,6 +7755,47 @@ intake:
       band pixels. SMOKE battery ok (player/interact/light/fluids at
       baseline), settings arm ok. Windows exe rebuilt with the fix.
 
+  - id: 3
+    author: agent
+    text: >
+      FOLLO-UP + VERIFIED (2026-09-07, after two user retest rounds).
+      Round 1 (user, real GPU): clouds too close to the ground and drifting
+      far too fast, and still no sun. Round 2 (user, look direction):
+      fewer clouds but bigger and more volumetric, and clouds should be
+      dark at night. All landed: CLOUD_H 160 to 400 (the layer now sits
+      ~260 above the highest surface tops, distant like MC Bedrock), the
+      quad enlarged 4096 to 6144 so the layer reaches the camera far plane
+      (4096) down to ~5 degrees elevation, wind 6.0 to 0.7 blocks per
+      second (drift check: a 60 s cloud-time offset now changes 13.7% of
+      the sky band pixels vs 48%+ for the old speed - clearly moving,
+      gently drifting), the cloud pattern re-tuned for the requested look
+      (base scale /64 instead of /26 for ~2.5x bigger features, second
+      octave 3.1 to 2.2, coverage window 0.74/0.44 for fewer clouds,
+      wider re-sharpened alpha ramp for soft edges with opaque billowy
+      cores), and the cloud tint now lerps white to dark blue-gray
+      (Color8(46,50,66)) with the DayNight day factor so night clouds go
+      dark like MC. THE REAL NO-SUN BUG (root-caused this span): with env
+      fog ENABLED (always, for the terrain depth fade) the engine fog path
+      replaced the custom-sky background with the flat fog color - the
+      sky pass never reached the screen, so the sun (painted by the sky
+      shader) and the pushed day palette were invisible every frame, no
+      matter what (shader-default changes, runtime pushes, process mode
+      all looked frozen because the fog color painted over all of it).
+      The cloud quad was immune because it carries its own fog_disabled
+      render mode. Fix: render_mode disable_fog on aero_sky_gradient.gdsky
+      (the engine keeps terrain fog; only the sky pass is exempt).
+      Also fixed: the sky material srgb pre-decode was pushed before
+      _srgb_pre was computed (always 0.0 under Forward+) - the compute
+      now precedes the push. VERIFY (xvfb Forward+/lavapipe, RADIUS 2,
+      SEED 44, fog ON, frozen clock): sun-aimed t=0.35 shot shows the sun
+      disc with a white-hot core (255,255,243) and halo against the pushed
+      day gradient; noon t=0.5 shows the full day palette with sparse
+      big soft clouds; night t=0.0 reads near-black with stars - measured
+      identical to the old dome-era night frames (12-13,17 range), so no
+      regression; drift pair above. SMOKE battery ok (player 2.82 /
+      jump 138.43 baseline), settings arm ok, genhash clean. Windows exe
+      rebuilt with all of it.
+
 - id: AC-0236
   title: chunk-io-encode-decode-to-cpp
   source: user

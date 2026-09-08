@@ -2,8 +2,10 @@ class_name Aero
 extends RefCounted
 
 # AC-0235: the sky dome is gone (sky pass now); the cloud layer
-# plane hovers at this height, MC-style (surface tops ~128-145).
-const CLOUD_H := 160.0
+# plane hovers at this height (surface tops ~128-145; 400 puts the
+# layer ~260 above the ground - distant, MC-like; 160 read as
+# clouds hovering over the field, user retest 19:40).
+const CLOUD_H := 400.0
 
 const GLOW_ENABLED := true
 const GLOW_STRENGTH := 0.35

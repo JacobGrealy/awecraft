@@ -1,4 +1,9 @@
 shader_type sky;
+// AC-0235 follow-up: with env fog ENABLED the engine fog path replaces
+// the custom-sky background with the flat fog color (the sky never showed
+// - the 'no sun / flat sky' bug). disable_fog keeps the sky pass pure;
+// the cloud quad and terrain keep their own fog handling.
+render_mode disable_fog;
 // AC-0235: the AeroSky dome (aero_sky.gdshader, a flipped sphere at
 // SKY_RADIUS) is gone - the DayNight gradient + sun now render in the
 // engine SKY PASS (fullscreen, no geometry). The fragment math is copied
