@@ -30,6 +30,7 @@ const ARMOR_SLOTS := ["head", "chest", "legs", "boots"]
 @onready var camera: Camera3D = $Camera3D
 
 var flying := false
+var _last_jump_t := -1  # AC-0243: double-tap fly toggle (Bedrock jump-double-tap)
 var _yaw := 0.0
 var _pitch := 0.0
 var _chunk_x := 0
@@ -158,6 +159,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			_lmb_down = lmb.pressed
 	if Game.mode != "play":
 		return
+	# AC-0243: double-tap the jump action (Space / A / Cross) within
+	# 0.3 s toggles fly (Bedrock parity). The second tap toggles
+	# instead of jumping; holding it after the toggle climbs.
+	if event.is_action_pressed("jump") and ui_mode == "" and not dead:
+		var now := Time.get_ticks_msec()
+		if OS.get_environment("AWECRAFT_PADTRACE") == "1":
+			print("JUMPTAP now=%d last=%d delta=%d flying=%s dead=%s" % [now, _last_jump_t, now - _last_jump_t if _last_jump_t >= 0 else -1, flying, dead])
+		if _last_jump_t >= 0 and now - _last_jump_t < 300:
+			flying = not flying
+			Game.message("Flying" if flying else "Landed")
+			_last_jump_t = -1
+			return
+		_last_jump_t = now
 	if event is InputEventMouseButton:
 		if ui_mode != "":
 			return
@@ -212,6 +226,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	# stores its value (applied per frame in _process); the buttons below.
 	if event is InputEventJoypadMotion:
 		var jm: InputEventJoypadMotion = event
+		if OS.get_environment("AWECRAFT_PADTRACE") == "1" and (jm.axis == JOY_AXIS_TRIGGER_LEFT or jm.axis == JOY_AXIS_TRIGGER_RIGHT):
+			print("AXISTRACE axis=%d val=%.2f mode=%s ui=%s lt_down=%s mining=%s" % [jm.axis, jm.axis_value, Game.mode, ui_mode, _pad_lt_down, _mining])
 		if jm.device == 0 and Game.mode == "play" and ui_mode == "":
 			if jm.axis == JOY_AXIS_RIGHT_X:
 				_pad_look.x = jm.axis_value
@@ -225,7 +241,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					if not _pad_mining:
 						_pad_mining = true
 						start_mine()
-				elif _pad_mining:
+				elif jm.axis_value < 0.35 and _pad_mining:  # AC-0243: hysteresis (0.5 press / 0.35 release) - a jittering trigger must not release mid-hold
 					_pad_mining = false
 					if _mining:
 						release_mine()
@@ -237,12 +253,16 @@ func _unhandled_input(event: InputEvent) -> void:
 					_pad_lt_down = false
 	if event is InputEventJoypadButton:
 		var jb: InputEventJoypadButton = event
+		if OS.get_environment("AWECRAFT_PADTRACE") == "1":
+			print("PADTRACE btn=%d pressed=%s mode=%s ui=%s sel=%d flying=%s" % [jb.button_index, jb.pressed, Game.mode, ui_mode, sel, flying])
 		if jb.device != 0:
 			return
 		if jb.pressed:
 			# Y/Triangle toggles the inventory (the craft grid lives in it;
 			# X/Square = crafting opens the same screen - the 3x3 grid is
 			# used via a placed crafting table, as in MC).
+			if OS.get_environment("AWECRAFT_PADTRACE") == "1":
+				print("PADTRACE  branch inv_or_craft inv=%s craft=%s" % [str(event.is_action_pressed("pad_inventory")).to_lower(), str(event.is_action_pressed("pad_craft")).to_lower()])
 			if event.is_action_pressed("pad_inventory") or event.is_action_pressed("pad_craft"):
 				if ui_mode == "":
 					open_inventory("inv")
@@ -259,10 +279,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			# (6) pause. A/Cross = jump rides the jump action; B/Circle =
 			# sneak has no crouch in this game (no-op). RT/L2 = attack/use are
 			# the analog triggers, handled in the motion branch above.
+			if OS.get_environment("AWECRAFT_PADTRACE") == "1":
+				print("PADTRACE  branch hotbar prev=%s next=%s" % [str(event.is_action_pressed("pad_hotbar_prev")).to_lower(), str(event.is_action_pressed("pad_hotbar_next")).to_lower()])
 			if event.is_action_pressed("pad_hotbar_prev"):
 				sel = clampi(sel - 1, 0, 8)
 			elif event.is_action_pressed("pad_hotbar_next"):
 				sel = clampi(sel + 1, 0, 8)
+				if OS.get_environment("AWECRAFT_PADTRACE") == "1":
+					print("PADTRACE  sel now %d" % sel)
 			elif event.is_action_pressed("pad_pause"):
 				if not dead:
 					Game.pause()
@@ -333,9 +357,9 @@ func _physics_process_impl(dt: float) -> void:
 	if flying:
 		var vy := 0.0
 		if Input.is_action_pressed("jump"):
-			vy += 1.0
-		if sprint:
-			vy -= 1.0
+			vy += 1.0  # A held = up (AC-0243: the double-tap hold climbs)
+		if sprint or Input.is_action_pressed("pad_cancel"):
+			vy -= 1.0  # SHIFT or B (pad_cancel) = down (AC-0243)
 		velocity.y = lerpf(velocity.y, vy * WALK * float(int(Settings.values.get("flight_speed", 4))) * FLY_VS, minf(1.0, 10.0 * dt))
 	elif in_water:
 		velocity.y = lerpf(velocity.y, -3.5, minf(1.0, 4.0 * dt))
@@ -1019,6 +1043,8 @@ func aim_hit() -> Dictionary:
 
 
 func start_mine() -> void:
+	if _mining:
+		return  # AC-0243: a re-press while mining (trigger jitter) must not reset progress
 	var mob := aim_mob()
 	if mob != null:
 		attack_mob(mob)
@@ -1072,24 +1098,39 @@ func release_mine() -> void:
 
 
 func use_selected() -> void:
+	var _ut := OS.get_environment("AWECRAFT_PADTRACE") == "1"
+	if _ut:
+		print("USETRACE in sel=%s item=%s" % [str(sel), str(inv_selected())])
 	if Game.mode != "play" or Game.world == null:
+		if _ut:
+			print("USETRACE reject: mode/world")
 		return
 	var hit := aim_hit()
 	if hit.hit and int(hit.id) == TABLE_ID:
+		if _ut:
+			print("USETRACE table")
 		open_inventory("table")
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		return
 	var item: Dictionary = inv_selected()
 	var sid := int(item["id"])
 	if sid == 0 or int(item["n"]) <= 0:
+		if _ut:
+			print("USETRACE reject: no item sid=%s" % str(sid))
 		return
 	var info = Data.items.get(sid)
 	if info != null and info.has("food"):
+		if _ut:
+			print("USETRACE eating")
 		eat_selected(info)
 		return
 	if info != null and info.has("bucket"):
+		if _ut:
+			print("USETRACE bucket")
 		use_bucket(info)
 		return
+	if _ut:
+		print("USETRACE -> place_item hit=%s" % str(hit))
 	place_item(item)
 
 
@@ -1115,18 +1156,31 @@ func place() -> void:
 
 
 func place_item(item: Dictionary) -> void:
+	var _pt := OS.get_environment("AWECRAFT_PADTRACE") == "1"
+	if _pt:
+		print("PLACETRACE in id=%s sel=%s" % [str(item), str(inv_selected())])
 	if int(item["id"]) == 0:
 		return
 	if Data.block(int(item["id"])) == null:
+		if _pt:
+			print("PLACETRACE reject: Data.block null")
 		return
 	var hit := aim_hit()
 	if not hit.hit:
+		if _pt:
+			print("PLACETRACE reject: no hit")
 		return
 	var target: Vector3i = hit.cell + hit.normal
 	if Game.world.get_block(target.x, target.y, target.z) != 0:
+		if _pt:
+			print("PLACETRACE reject: target not air %s" % str(Game.world.get_block(target.x, target.y, target.z)))
 		return
 	if _box_intersects_player(target):
+		if _pt:
+			print("PLACETRACE reject: box intersects player pos=%s target=%s" % [str(position), str(target)])
 		return
+	if _pt:
+		print("PLACETRACE PLACING at %s" % str(target))
 	Game.world.set_block(target.x, target.y, target.z, int(item["id"]))
 	inv_consume_selected()
 	Audio.play("place")

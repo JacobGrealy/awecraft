@@ -28,8 +28,7 @@ var _stats_acc := 0.0
 var aero := false
 var _batt := false
 var sky_mat: ShaderMaterial  # AC-0235: the sky-pass gradient (replaces the AeroSky dome)
-var cloud_layer: MeshInstance3D  # AC-0235: the procedural cloud quad
-var cloud_mat: ShaderMaterial
+var cloud_layers: Array = []  # AC-0235 retest 5: [{node, mat, h}] - 3 layers, varying height/size/speed
 var _cloud_time := 0.0  # AC-0235: cloud drift clock (advanced per frame)
 var aero_wash: MeshInstance3D
 var aero_wash_mesh: QuadMesh
@@ -430,6 +429,8 @@ func _create_game_nodes() -> void:
 	world = WorldRes.instantiate()
 	world.name = "World"
 	add_child(world)
+	if OS.get_environment("AWECRAFT_NO_WORLD_VIS") == "1":
+		world.visible = false
 	if OS.get_environment("AWECRAFT_NO_COLLISION") == "1":
 		world.collision_enabled = false
 	var rad := OS.get_environment("AWECRAFT_RADIUS")
@@ -458,6 +459,7 @@ func _create_game_nodes() -> void:
 	_star_mat = ShaderMaterial.new()
 	_star_mat.shader = load("res://core/star.gdshader")
 	_star_mat.set_shader_parameter("u_opacity", 1.0)
+	_star_mat.set_shader_parameter("u_srgb_pre", _srgb_pre)  # AC-0242
 	_star_node = MeshInstance3D.new()
 	_star_node.name = "Stars"
 	_star_node.mesh = _build_star_mesh()
@@ -516,17 +518,42 @@ func _build_star_mesh() -> ArrayMesh:
 	var st := [42]
 	var v := PackedVector3Array()
 	var u := PackedVector2Array()
+	var uv2a := PackedVector2Array()
 	var idx := PackedInt32Array()
+	var sr: float = float(OS.get_environment("AWECRAFT_STAR_R").to_float()) if OS.get_environment("AWECRAFT_STAR_R") != "" else 320.0  # AC-0235 star debug: harness radius override
 	for i in 500:
 		var u1: float = _vl_mb_next(st)
 		var u2: float = _vl_mb_next(st)
 		var phi: float = acos(2.0 * u1 - 1.0)
 		var theta: float = u2 * TAU
-		var p := Vector3(320.0 * sin(phi) * sin(theta), 320.0 * cos(phi), 320.0 * sin(phi) * cos(theta))
+		var p := Vector3(sr * sin(phi) * sin(theta), sr * cos(phi), sr * sin(phi) * cos(theta))
+		# AC-0235 retest 5: per-star variation (user: the stars were all
+		# too bright and uniform). brightness = mostly dim, a few bright
+		# (pow 2.2); hue = mostly white with blue-white / warm / red
+		# minorities (real stellar classes); size in the color alpha
+		# (mostly small, a few big, pow 3.0) - the shader reads all
+		# three from VERTEX_COLOR and picks the shape from a stable
+		# hash of the star center.
+		# AC-0235 retest 5 cont: the 4.7 spatial shader exposes NO
+		# VERTEX_COLOR builtin, so the per-star data rides UV2: x = size
+		# factor, y = hue_class * 20 + brightness_q (b15, 0-15, dim-heavy
+		# pow 2.2 baked here). The shader unpacks both.
+		var b15: float = floor(pow(_vl_mb_next(st), 2.2) * 15.0)
+		var hu: float = _vl_mb_next(st)
+		var hue_c: float = 0.0  # 0 white, 1 blue-white, 2 warm, 3 red-orange
+		if hu > 0.95:
+			hue_c = 3.0
+		elif hu > 0.85:
+			hue_c = 2.0
+		elif hu > 0.70:
+			hue_c = 1.0
+		var sz: float = 0.9 + 1.6 * pow(_vl_mb_next(st), 2.5)  # retest 6: at r=320, ~1.2-2 world units = 1.5-3 screen pixels
+		var uv2v := Vector2(sz, hue_c * 20.0 + b15)
 		var base := v.size()
 		for cv in [Vector2(0.0, 0.0), Vector2(1.0, 0.0), Vector2(1.0, 1.0), Vector2(0.0, 1.0)]:
 			v.append(p)
 			u.append(cv)
+			uv2a.append(uv2v)
 		idx.append(base)
 		idx.append(base + 1)
 		idx.append(base + 2)
@@ -537,9 +564,18 @@ func _build_star_mesh() -> ArrayMesh:
 	arrs.resize(Mesh.ARRAY_MAX)
 	arrs[Mesh.ARRAY_VERTEX] = v
 	arrs[Mesh.ARRAY_TEX_UV] = u
+	arrs[Mesh.ARRAY_TEX_UV2] = uv2a
 	arrs[Mesh.ARRAY_INDEX] = idx
 	var m := ArrayMesh.new()
 	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrs)
+	# AC-0235 star fix: 4.7 ArrayMesh does NOT compute the AABB from
+	# add_surface_from_arrays (it stays zero), and the degenerate AABB
+	# made the MeshInstance3D flakily culled - the field never drew at
+	# the 320-unit radius on the harness renderer. Set the shell
+	# bounds explicitly (the node tracks the camera, so the box always
+	# contains the eye and intersects every frustum).
+	var ar: float = sr + 3.0
+	m.set_custom_aabb(AABB(Vector3(-ar, -ar, -ar), Vector3(ar * 2.0, ar * 2.0, ar * 2.0)))
 	return m
 
 
@@ -1971,22 +2007,33 @@ func _build_walk_pad(sp: Vector3, radius: int) -> float:
 func _setup_aero() -> void:
 	if AeroLib.grade_on():
 		AeroLib.apply_grade(env)
-	# AC-0235: the procedural cloud layer (a flat quad at CLOUD_H;
-	# the pattern is world-anchored in the shader, so following the
-	# player's XZ does not smear it).
+	# AC-0235: the procedural cloud deck. AC-0235 retest 5: THREE
+	# layers with varying height, feature size and drift speed
+	# (user: vary height/size/speed) - the pattern is world-anchored
+	# in the shader, so following the player's XZ does not smear it.
+	# h = layer altitude, scale = feature size in blocks, cov =
+	# coverage multiplier (lower layers are thinner, faster).
 	if AeroLib.clouds_on():
-		var cm := ShaderMaterial.new()
-		cm.shader = load("res://core/cloud_layer.gdshader")
-		cm.set_shader_parameter("u_srgb_pre", _srgb_pre)
-		cloud_mat = cm
-		var q := QuadMesh.new()
-		q.size = Vector2(6144.0, 6144.0)  # reaches the camera far plane (4096) down to ~5 deg elevation
-		cloud_layer = MeshInstance3D.new()
-		cloud_layer.name = "CloudLayer"
-		cloud_layer.mesh = q
-		cloud_layer.material_override = cm
-		cloud_layer.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
-		add_child(cloud_layer)
+		var CL := [
+			{"h": AeroLib.CLOUD_H, "size": 6144.0, "scale": 256.0, "wind": Vector2(0.005, 0.002), "cov": 1.00},
+			{"h": 330.0, "size": 5120.0, "scale": 160.0, "wind": Vector2(0.012, 0.005), "cov": 0.75},
+			{"h": 275.0, "size": 4096.0, "scale": 110.0, "wind": Vector2(0.025, 0.010), "cov": 0.55},
+		]
+		for cl in CL:
+			var cm := ShaderMaterial.new()
+			cm.shader = load("res://core/cloud_layer.gdshader")
+			cm.set_shader_parameter("u_srgb_pre", _srgb_pre)
+			cm.set_shader_parameter("u_wind", cl["wind"])
+			cm.set_shader_parameter("u_scale", 1.0 / float(cl["scale"]))
+			var q := QuadMesh.new()
+			q.size = Vector2(cl["size"], cl["size"])  # reaches the camera far plane (4096) down to ~5 deg elevation
+			var ln := MeshInstance3D.new()
+			ln.name = "CloudLayer"
+			ln.mesh = q
+			ln.material_override = cm
+			ln.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
+			add_child(ln)
+			cloud_layers.append({"node": ln, "mat": cm, "h": cl["h"], "cov": cl["cov"]})
 	if AeroLib.wash_on():
 		aero_wash_mesh = QuadMesh.new()
 		var wm := ShaderMaterial.new()
@@ -2031,9 +2078,9 @@ func _process(delta: float) -> void:
 	_update_sky()
 	# AC-0235: cloud layer follows the player's XZ; the drift
 	# clock advances per frame (clamped like the day clock).
-	if cloud_layer != null:
+	for cl in cloud_layers:
 		if player != null:
-			cloud_layer.position = Vector3(player.position.x, AeroLib.CLOUD_H, player.position.z)
+			cl["node"].position = Vector3(player.position.x, float(cl["h"]), player.position.z)
 		_cloud_time += minf(delta, 0.05)
 	if aero:
 		var ac := _aero_camera()
@@ -2199,13 +2246,15 @@ func _update_sky() -> void:
 		for k in u.keys():
 			if k != "cloud_color" and k != "cloud_amount":
 				sky_mat.set_shader_parameter(k, u[k])
-	if cloud_mat != null:
+	if not cloud_layers.is_empty():
 		var u2 := AeroLib.sky_uniforms(t)
-		cloud_mat.set_shader_parameter("u_cloud_time", _cloud_time)
-		cloud_mat.set_shader_parameter("u_coverage", float(u2["cloud_amount"]))
 		# AC-0235 retest 2: clouds go dark at night (MC-style).
 		var cday := DayNight.day(t)
-		cloud_mat.set_shader_parameter("u_cloud_tint", Color8(46, 50, 66).lerp(Color(u2["cloud_color"]), cday))
+		var ctint := Color8(46, 50, 66).lerp(Color(u2["cloud_color"]), cday)
+		for cl in cloud_layers:
+			cl["mat"].set_shader_parameter("u_cloud_time", _cloud_time)
+			cl["mat"].set_shader_parameter("u_coverage", float(u2["cloud_amount"]) * float(cl["cov"]))
+			cl["mat"].set_shader_parameter("u_cloud_tint", ctint)
 
 
 func _update_fog() -> void:
@@ -2339,6 +2388,25 @@ func _pad_btn(idx: int, pressed: bool) -> InputEventJoypadButton:
 	b.pressed = pressed
 	return b
 
+func _pad_axis(axis: int, value: float) -> InputEventJoypadMotion:
+	var m := InputEventJoypadMotion.new()
+	m.device = 0
+	m.axis = axis
+	m.axis_value = value
+	return m
+
+# AC-0243: poll a state predicate until it holds (wall-clock timeout).
+# Input.parse_input_event events flush on a later frame under slow
+# xvfb frames, so fixed 1-3 frame awaits race the handlers; every
+# assertion in this arm now waits for the STATE, not a frame count.
+func _await_state(pred: Callable, timeout_ms: int = 2500) -> bool:
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < timeout_ms:
+		if pred.call():
+			return true
+		await get_tree().physics_frame
+	return bool(pred.call())
+
 
 func _gamepad_test(spawn: Vector3) -> void:
 	var p = Game.player
@@ -2400,11 +2468,38 @@ func _gamepad_test(spawn: Vector3) -> void:
 			break
 	trg.axis_value = 0.0
 	Input.parse_input_event(trg)
-	for i in 20:
-		await get_tree().physics_frame
-		if not p.is_mining():
-			break
+	await _await_state(func() -> bool: return not p.is_mining())
 	var attack_ok: bool = mined and not p.is_mining()
+	# 3b) AC-0243: holding RT must MINE CONTINUOUSLY (no re-press), and
+	#     trigger jitter around the old 0.5 release threshold must not
+	#     drop the hold (hysteresis 0.5/0.35 + start_mine idempotent).
+	var hold_mine_ok := false
+	var jitter_ok := true
+	var aim3 := _find_aim_spot()
+	if not aim3.is_empty():
+		var t3: Vector3i = aim3["cell"]
+		world.set_block(t3.x, t3.y, t3.z, 2)  # deterministic soft dirt
+		Debug.fly(true)
+		Debug.teleport(float(t3.x) + 0.5, float(t3.y) + 3.0, float(t3.z) + 0.5)
+		p.look(0.0, -p.PITCH_LIMIT)
+		for i in 4:
+			await get_tree().physics_frame
+		Input.parse_input_event(_pad_axis(JOY_AXIS_TRIGGER_RIGHT, 1.0))
+		var hm0 := Time.get_ticks_msec()
+		while world.get_block(t3.x, t3.y, t3.z) != 0 and Time.get_ticks_msec() - hm0 < 6000:
+			await get_tree().physics_frame
+			var ph := int((Time.get_ticks_msec() - hm0) / 16.0)
+			if ph % 8 == 4:
+				Input.parse_input_event(_pad_axis(JOY_AXIS_TRIGGER_RIGHT, 0.45))
+			elif ph % 8 == 0:
+				Input.parse_input_event(_pad_axis(JOY_AXIS_TRIGGER_RIGHT, 0.55))
+			if Time.get_ticks_msec() - hm0 > 200 and not p.is_mining():
+				jitter_ok = false
+		Input.parse_input_event(_pad_axis(JOY_AXIS_TRIGGER_RIGHT, 0.0))
+		await _await_state(func() -> bool: return not p.is_mining())
+		hold_mine_ok = world.get_block(t3.x, t3.y, t3.z) == 0
+		world.set_block(t3.x, t3.y, t3.z, 2)  # restore so item 4 sees the original geometry
+		Debug.fly(false)
 	# 4) LT/L2 use/place - the interact arm's place recipe, driven by the pad.
 	var aim := _find_aim_spot()
 	var place_cell := Vector3i.ZERO
@@ -2426,31 +2521,30 @@ func _gamepad_test(spawn: Vector3) -> void:
 		var hit2: Dictionary = p.aim_hit()
 		if hit2.hit:
 			place_cell = hit2.cell + hit2.normal
-		var ltg := InputEventJoypadMotion.new()
-		ltg.device = 0
-		ltg.axis = JOY_AXIS_TRIGGER_LEFT
-		ltg.axis_value = 1.0
-		Input.parse_input_event(ltg)
+			# AC-0243: FRESH event objects per parse (the engine reads the
+		# event's CURRENT values at flush time - reusing one object for
+		# press+release within one process frame loses the 1.0 press
+		# entirely, which is what had the LT place dead since the arm
+		# moved to slow xvfb frames).
+		Input.parse_input_event(_pad_axis(JOY_AXIS_TRIGGER_LEFT, 1.0))
 		await get_tree().physics_frame
-		ltg.axis_value = 0.0
-		Input.parse_input_event(ltg)
+		Input.parse_input_event(_pad_axis(JOY_AXIS_TRIGGER_LEFT, 0.0))
 		for i in 3:
 			await get_tree().physics_frame
 		if place_cell != Vector3i.ZERO:
+			await _await_state(func() -> bool: return world.get_block(place_cell.x, place_cell.y, place_cell.z) == 2)
 			after_place = world.get_block(place_cell.x, place_cell.y, place_cell.z)
 	Debug.fly(false)
 	var use_ok: bool = after_place == 2
 	# 5) LB/RB hotbar cycling.
 	var sel0: int = p.sel
 	Input.parse_input_event(_pad_btn(10, true))  # RB (10 in 4.7)
-	await get_tree().physics_frame
+	await _await_state(func() -> bool: return p.sel == (sel0 + 1) % 9)
 	Input.parse_input_event(_pad_btn(10, false))
-	await get_tree().physics_frame
 	var sel1: int = p.sel
 	Input.parse_input_event(_pad_btn(9, true))  # LB (9 in 4.7)
-	await get_tree().physics_frame
+	await _await_state(func() -> bool: return p.sel == sel0)
 	Input.parse_input_event(_pad_btn(9, false))
-	await get_tree().physics_frame
 	var sel2: int = p.sel
 	var hotbar_ok: bool = sel1 == clampi(sel0 + 1, 0, 8) and sel2 == clampi(sel0 - 1, 0, 8)
 	# 6) Right stick look (value events applied per frame by the player).
@@ -2471,25 +2565,113 @@ func _gamepad_test(spawn: Vector3) -> void:
 	# 7) Y inventory, X toggles it (crafting screen = the inventory here),
 	#    B closes it.
 	Input.parse_input_event(_pad_btn(3, true))
-	await get_tree().physics_frame
+	var inv_open: bool = await _await_state(func() -> bool: return String(p.ui_mode) == "inv")
 	Input.parse_input_event(_pad_btn(3, false))
-	await get_tree().physics_frame
-	var inv_open: bool = String(p.ui_mode) == "inv"
 	Input.parse_input_event(_pad_btn(2, true))
-	await get_tree().physics_frame
+	var inv_toggle_ok: bool = await _await_state(func() -> bool: return String(p.ui_mode) == "")
 	Input.parse_input_event(_pad_btn(2, false))
-	await get_tree().physics_frame
-	var inv_toggle_ok: bool = String(p.ui_mode) == ""
 	Input.parse_input_event(_pad_btn(3, true))
-	await get_tree().physics_frame
+	await _await_state(func() -> bool: return String(p.ui_mode) == "inv")
 	Input.parse_input_event(_pad_btn(3, false))
-	await get_tree().physics_frame
 	Input.parse_input_event(_pad_btn(1, true))
-	await get_tree().physics_frame
+	var b_cancel_inv_ok: bool = await _await_state(func() -> bool: return String(p.ui_mode) == "")
 	Input.parse_input_event(_pad_btn(1, false))
+	# 7b) AC-0243: double-tap A within 0.3 s toggles fly (Bedrock);
+	#     the second tap toggles (no jump); holding A climbs, B
+	#     (pad_cancel) descends; double-tap again lands. NOTE: no
+	#     Debug.fly here - it calls player.set_fly and would stump the
+	#     very flag under test. Tap spacing and holds use WALL-CLOCK
+	#     timers, not frame counts: the 300 ms double-tap window is
+	#     wall-clock and under slow xvfb frames a 6-frame gap can
+	#     exceed it (first run: taps 150 ms apart in spec, >300 ms in
+	#     wall time -> no toggle). The +50 open-sky teleport keeps the
+	#     player airborne for the whole test, and the climb/descend
+	#     asserts check VELOCITY too so a ground bounce can never fake
+	#     them.
+	var fly_toggle_ok := false
+	var fly_climb_ok := false
+	var fly_descend_ok := false
+	var fly_land_ok := false
+	p.flying = false
+	Debug.teleport(p.position.x, p.position.y + 50.0, p.position.z)  # open sky
 	for i in 4:
 		await get_tree().physics_frame
-	var b_cancel_inv_ok: bool = String(p.ui_mode) == ""
+	Input.parse_input_event(_pad_btn(0, true))   # tap 1 -> normal jump
+	Input.parse_input_event(_pad_btn(0, false))
+	var ht0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - ht0 < 100:
+		await get_tree().physics_frame
+	# AC-0243: tap 2 with RE-PUSH. Under slow xvfb frames a single
+	# flush can stall 800 ms+, blowing the 300 ms window once; each
+	# re-push (fresh press+release pair) becomes a new tap-1 and the
+	# next one toggles, so the toggle lands no matter how the frames
+	# stall. The latch (saw_fly) stops the re-push at first sight.
+	Input.parse_input_event(_pad_btn(0, true))   # tap 2 within 300 ms -> toggle fly
+	var saw_fly := false
+	var t2 := Time.get_ticks_msec()
+	var lp2 := Time.get_ticks_msec()
+	while not saw_fly and Time.get_ticks_msec() - t2 < 2500:
+		await get_tree().physics_frame
+		if p.flying:
+			saw_fly = true
+		elif Time.get_ticks_msec() - lp2 > 60:
+			Input.parse_input_event(_pad_btn(0, false))
+			Input.parse_input_event(_pad_btn(0, true))
+			lp2 = Time.get_ticks_msec()
+	fly_toggle_ok = saw_fly
+	if saw_fly:
+		var fy1: float = p.position.y
+		var hc0 := Time.get_ticks_msec()
+		while Time.get_ticks_msec() - hc0 < 700:  # hold A -> climb
+			await get_tree().physics_frame
+		var fy2: float = p.position.y
+		var vy2: float = p.velocity.y
+		Input.parse_input_event(_pad_btn(0, false))
+		for i in 2:
+			await get_tree().physics_frame
+		fly_climb_ok = fy2 > fy1 + 0.5 and vy2 > 0.5
+		var fy3: float = p.position.y
+		Input.parse_input_event(_pad_btn(1, true))   # hold B -> descend
+		var hc1 := Time.get_ticks_msec()
+		while Time.get_ticks_msec() - hc1 < 900:
+			await get_tree().physics_frame
+		var fy4: float = p.position.y
+		var vy4: float = p.velocity.y
+		Input.parse_input_event(_pad_btn(1, false))
+		for i in 2:
+			await get_tree().physics_frame
+		fly_descend_ok = fy4 < fy3 - 0.5 and vy4 < -0.5
+		Input.parse_input_event(_pad_btn(0, true))   # land tap 1
+		Input.parse_input_event(_pad_btn(0, false))
+		var hc2 := Time.get_ticks_msec()
+		while Time.get_ticks_msec() - hc2 < 100:
+			await get_tree().physics_frame
+		Input.parse_input_event(_pad_btn(0, true))   # land tap 2 -> land (re-push stall-proof)
+		var t3 := Time.get_ticks_msec()
+		var lp3 := Time.get_ticks_msec()
+		while p.flying and Time.get_ticks_msec() - t3 < 2500:
+			await get_tree().physics_frame
+			if Time.get_ticks_msec() - lp3 > 60:
+				Input.parse_input_event(_pad_btn(0, false))
+				Input.parse_input_event(_pad_btn(0, true))
+				lp3 = Time.get_ticks_msec()
+		Input.parse_input_event(_pad_btn(0, false))
+		fly_land_ok = not p.flying
+	else:
+		# the toggle never landed (stall beat the re-push window) - skip
+		# the climb/descend/land phase; the safe return below still runs.
+		Input.parse_input_event(_pad_btn(0, false))
+# AC-0243: return the player to the spawn ground - the +50 test
+# altitude is lethal fall damage on landing (the dead player then
+# skips the pad_pause branch and the menu test degenerates), and
+# fall_start must be reset or the altitude reads as a 50-unit fall.
+	p.fall_start = -1.0
+	var fsp: Vector3 = world.spawn_point()
+	Debug.teleport(fsp.x, fsp.y + 0.5, fsp.z)
+	p.velocity = Vector3.ZERO
+	for i in 3:
+		await get_tree().physics_frame
+
 	# 8) START pause -> the pause menu; the D-pad moves the native GUI
 	#    focus; A (pad_accept) activates the focused button.
 	if menu_ui == null:
@@ -2497,11 +2679,9 @@ func _gamepad_test(spawn: Vector3) -> void:
 	for i in 6:
 		await get_tree().process_frame
 	Input.parse_input_event(_pad_btn(6, true))  # START (6 in 4.7)
-	await get_tree().physics_frame
+	var paused: bool = await _await_state(func() -> bool: return Game.mode != "play")
 	Input.parse_input_event(_pad_btn(6, false))
-	for i in 8:
-		await get_tree().physics_frame
-	var paused: bool = Game.mode != "play"
+	await get_tree().create_timer(0.1).timeout
 	var menu_state := String(menu_ui._state) if menu_ui != null else "null"
 	var f0 := get_viewport().gui_get_focus_owner()
 	var focus_resume: bool = f0 != null and f0.name == "ResumeButton"
@@ -2515,11 +2695,11 @@ func _gamepad_test(spawn: Vector3) -> void:
 	var nav_ok: bool = f1 != null and f1 != f0
 	var before_state := Game.mode + "|" + String(menu_ui._state) if menu_ui != null else Game.mode
 	Input.parse_input_event(_pad_btn(0, true))
-	for i in 12:
-		await get_tree().physics_frame
+	await _await_state(func() -> bool:
+		var as2: String = Game.mode + "|" + String(menu_ui._state) if menu_ui != null else Game.mode
+		return as2 != before_state)
 	Input.parse_input_event(_pad_btn(0, false))
-	for i in 4:
-		await get_tree().physics_frame
+	await get_tree().create_timer(0.1).timeout
 	var after_state := Game.mode + "|" + String(menu_ui._state) if menu_ui != null else Game.mode
 	var accept_ok: bool = after_state != before_state
 	Debug.result({
@@ -2541,6 +2721,12 @@ func _gamepad_test(spawn: Vector3) -> void:
 		"inv_open": inv_open,
 		"inv_toggle_ok": inv_toggle_ok,
 		"b_cancel_inv_ok": b_cancel_inv_ok,
+		"hold_mine_ok": hold_mine_ok,
+		"jitter_ok": jitter_ok,
+		"fly_toggle_ok": fly_toggle_ok,
+		"fly_climb_ok": fly_climb_ok,
+		"fly_descend_ok": fly_descend_ok,
+		"fly_land_ok": fly_land_ok,
 		"paused": paused,
 		"menu_state": menu_state,
 		"focus_resume": focus_resume,
@@ -2548,8 +2734,10 @@ func _gamepad_test(spawn: Vector3) -> void:
 		"focus_after_nav": f1.name if f1 != null else "null",
 		"accept_ok": accept_ok,
 		"ok": jump_has_pad and move_has_pad and stick_move_ok and jump_ok and attack_ok \
-			and use_ok and hotbar_ok and stick_look_ok and inv_open and inv_toggle_ok \
-			and b_cancel_inv_ok and paused and focus_resume and nav_ok and accept_ok,
+			and hold_mine_ok and jitter_ok and fly_toggle_ok and fly_climb_ok \
+			and fly_descend_ok and fly_land_ok and use_ok and hotbar_ok and stick_look_ok \
+			and inv_open and inv_toggle_ok and b_cancel_inv_ok and paused and focus_resume \
+			and nav_ok and accept_ok,
 	})
 	get_tree().quit()
 
