@@ -13140,12 +13140,49 @@ func _chunkio_hash(diamond: Array) -> Dictionary:
 		out["%d,%d" % [dc[0], dc[1]]] = hx
 	return out
 
-func _chunkio_file_count(diamond: Array, slot: int) -> int:
+# AC-0175: count the diamond's saved columns as REGION ENTRIES (the region
+# head is read once per file, not per column).
+func _chunkio_saved_count(diamond: Array, slot: int) -> int:
 	var n := 0
+	var heads := {}
 	for dc in diamond:
-		if FileAccess.file_exists(ChunkIO.path_for(slot, 1 if dc[0] < 0 else 0, dc[0], dc[1])):
-			n += 1
+		var cell := ChunkIO.region_cell(slot, int(dc[0]), int(dc[1]))
+		var path: String = cell["path"]
+		if not heads.has(path):
+			heads[path] = PackedByteArray()
+			if FileAccess.file_exists(path):
+				var f := FileAccess.open(path, FileAccess.READ)
+				if f != null:
+					heads[path] = f.get_buffer(ChunkIO.REGION_HEAD_SIZE)
+					f.close()
+		var t := ChunkIO.region_table(heads[path])
+		if not t.is_empty():
+			var i := int(cell["idx"])
+			if int(t["offsets"][i]) > 0 and int(t["sizes"][i]) > 0:
+				n += 1
 	return n
+
+# AC-0175: the number of r.*.bin region files in a slot dir.
+func _chunkio_region_files(slot: int) -> int:
+	var names := _chunkio_region_file_names(slot)
+	return names.size()
+
+func _chunkio_region_file_names(slot: int) -> Array:
+	var out: Array = []
+	var abs := ProjectSettings.globalize_path(ChunkIO.dir_for(slot))
+	if not DirAccess.dir_exists_absolute(abs):
+		return out
+	var da := DirAccess.open(abs)
+	if da == null:
+		return out
+	da.list_dir_begin()
+	var fn := da.get_next()
+	while fn != "":
+		if not da.current_is_dir() and fn.begins_with("r.") and fn.ends_with(".bin") and not fn.ends_with(".compact"):
+			out.append(fn)
+		fn = da.get_next()
+	da.list_dir_end()
+	return out
 
 # AC-0155 probe: full-column save round-trip in one process. Fresh r=4 41-set
 # generated (first visit) -> hash -> recenter far (evict, files written) ->
@@ -13176,10 +13213,16 @@ func _chunkio_test(spawn: Vector3) -> void:
 		await get_tree().physics_frame
 	world.recenter(1000.0, 1000.0, true)
 	var files_waited := 0
-	while files_waited < 2400 and _chunkio_file_count(diamond, SLOT) < diamond_n:
+	while files_waited < 2400 and _chunkio_saved_count(diamond, SLOT) < diamond_n:
 		await get_tree().physics_frame
 		files_waited += 1
-	var files_exist := _chunkio_file_count(diamond, SLOT)
+	var files_exist := _chunkio_saved_count(diamond, SLOT)  # AC-0175: region entries
+	# AC-0175: the spawn diamond (cols -4..4) sits entirely in region (0,0).
+	# (The far-recenter world at (1000,1000) saves its own ~4 regions in
+	# parallel - the directory count is timing-dependent, so gate on the
+	# spawn region file itself, not the directory total.)
+	var spawn_region_ok: bool = FileAccess.file_exists(ChunkIO.region_for(SLOT, 0, 0))
+	var region_files_b := _chunkio_region_files(SLOT)
 	# Phase C: revisit r=4 -> 41 read from disk.
 	world.render_radius = 4
 	world.recenter(spawn.x, spawn.z, true)
@@ -13218,13 +13261,69 @@ func _chunkio_test(spawn: Vector3) -> void:
 			d50_disk += 1
 		elif o == "gen":
 			d50_gen += 1
+	# Phase E (AC-0175): region fan-out. The r=50 diamond (|cx|+|cz| <= 62,
+	# the 7845-column set) spans the 4x4 region grid minus its four corners
+	# = 12 regions (the task estimated ~8). Wipe the dir, save ONE real
+	# generated column per region through the true main-thread commit path,
+	# then recenter far (the live spawn-set columns evict into the SAME 12
+	# regions - the negative-column half lands in region -1) and count.
+	ChunkIO.clear_dir(SLOT)
+	var r50_cols := []
+	for rx in range(-2, 2):
+		for rz in range(-2, 2):
+			# the origin-near corner of the region (region centers of the
+			# edge regions sit at |cx|+|cz| = 64 - OUTSIDE the diamond even
+			# though the region itself holds diamond columns)
+			var ccx := rx * 32 if rx >= 0 else rx * 32 + 31
+			var ccz := rz * 32 if rz >= 0 else rz * 32 + 31
+			if absi(ccx) + absi(ccz) <= 62:
+				r50_cols.append([ccx, ccz])
+	var fl_zero := PackedByteArray()
+	fl_zero.resize(Data.HEIGHT / 16 * 4096)
+	for cc in r50_cols:
+		var flat: PackedByteArray = WorldGen.generate(int(cc[0]), int(cc[1]), int(Game.world_seed))
+		var blob := ChunkIO.encode_column(flat, fl_zero, int(Game.world_seed), int(Data.HEIGHT), {}, -1, 0xFFFFFF)
+		world._io_write_commit({
+			"slot": SLOT,
+			"cx": int(cc[0]),
+			"cz": int(cc[1]),
+			"data": ChunkIO.empty_slabs(Data.HEIGHT / 16),
+			"fl": ChunkIO.empty_slabs(Data.HEIGHT / 16),
+			"light": {},
+			"gen_mask": 0xFFFFFF,
+			"seed": int(Game.world_seed),
+			"height": int(Data.HEIGHT),
+			"blob": blob,
+		})
+	var region_files_after_fanout := _chunkio_region_files(SLOT)
+	var regions_expected := {}
+	for dx in range(-62, 63):
+		for dz in range(-62, 63):
+			if absi(dx) + absi(dz) <= 62:
+				regions_expected[ChunkIO.region_for(SLOT, int(ChunkIO._fd(dx, 32)), int(ChunkIO._fd(dz, 32)))] = true
+	var expected_regions: int = regions_expected.size()
+	world.recenter(1000.0, 1000.0, true)
+	var drain_waited := 0
+	while drain_waited < 1200 and (not world._save_queue.is_empty() or not world._io_write_inflight.is_empty() or not world._io_compact_inflight.is_empty()):
+		await get_tree().physics_frame
+		drain_waited += 1
+	var drained: bool = world._save_queue.is_empty() and world._io_write_inflight.is_empty() and world._io_compact_inflight.is_empty()
+	var region_files_r50 := _chunkio_region_files(SLOT)
+	var region_ok: bool = drained and region_files_r50 == expected_regions and expected_regions >= 8 and expected_regions <= 16
 	var wall := Time.get_ticks_msec() - t0
-	var ok := files_exist == diamond_n and byte_identical == diamond_n and origin_disk == diamond_n and origin_gen == 0 and d50_disk == diamond_n and d50_gen == 0 and wall <= 60000
+	var ok: bool = files_exist == diamond_n and byte_identical == diamond_n and origin_disk == diamond_n and origin_gen == 0 and d50_disk == diamond_n and d50_gen == 0 and spawn_region_ok and region_ok and wall <= 180000
 	Debug.result({
 		"ok": ok,
 		"wall_ms": wall,
 		"diamond": diamond_n,
 		"files_exist": files_exist,
+		"region_files_b": region_files_b,
+		"drained": drained,
+		"drain_waited": drain_waited,
+		"region_files_r50": region_files_r50,
+		"region_files_after_fanout": region_files_after_fanout,
+		"region_names": _chunkio_region_file_names(SLOT),
+		"expected_regions": expected_regions,
 		"byte_identical": byte_identical,
 		"origin_disk": origin_disk,
 		"origin_gen": origin_gen,
@@ -14178,21 +14277,19 @@ func _lightcache_test(spawn: Vector3) -> void:
 	while iw < 900 and not world._io_write_inflight.is_empty():
 		await get_tree().physics_frame
 		iw += 1
-	var path := ChunkIO.path_for(SLOT, 0, 0, 0)
-	var file_ok := FileAccess.file_exists(path)
+	# AC-0175: the column now lives in its 32x32 region file.
+	var disk_bytes := ChunkIO.read_column_bytes(SLOT, 0, 0)
+	var file_ok := not disk_bytes.is_empty()
 	var disk_light_ok := false
 	var disk_mask_ok := false
 	if file_ok:
-		var f := FileAccess.open(path, FileAccess.READ)
-		if f != null:
-			var bytes := f.get_buffer(f.get_length())
-			f.close()
-			var dec = ChunkIO.decode_column(bytes, int(Game.world_seed), int(Data.HEIGHT))
-			if typeof(dec) == TYPE_DICTIONARY and not (dec as Dictionary).is_empty():
-				var dl: Dictionary = (dec as Dictionary).get("light", {})
-				disk_light_ok = PackedByteArray(dl.get("arr", PackedByteArray())) == saved_arr and bool(dl.get("blk_src", false)) == blk_src0
-				disk_mask_ok = PackedByteArray(dl.get("mask", PackedByteArray())) == saved_mask
+		var dec = ChunkIO.decode_column(disk_bytes, int(Game.world_seed), int(Data.HEIGHT))
+		if typeof(dec) == TYPE_DICTIONARY and not (dec as Dictionary).is_empty():
+			var dl: Dictionary = (dec as Dictionary).get("light", {})
+			disk_light_ok = PackedByteArray(dl.get("arr", PackedByteArray())) == saved_arr and bool(dl.get("blk_src", false)) == blk_src0
+			disk_mask_ok = PackedByteArray(dl.get("mask", PackedByteArray())) == saved_mask
 	var n1 = await _lightcache_revisit(key)
+	var n1_origin: String = str(world.chunk_origin.get("0,0", "none"))
 	await _lightcache_cache_fresh(key, 900)
 	var built1 := n1 != null and bool(n1.mesh_built)
 	var recompute_count := int(n1.light_recomputes) if built1 else -1
@@ -14205,14 +14302,23 @@ func _lightcache_test(spawn: Vector3) -> void:
 	var legacy_v1_recomputes := false
 	if built1:
 		var leg := ChunkIO.encode_column_legacy(n1.flat_data(), n1.flat_fl(), int(Game.world_seed), int(Data.HEIGHT))
-		var f2 = FileAccess.open(path, FileAccess.WRITE)
+		# AC-0175: the legacy v1 back-compat check writes the OLD per-column
+		# shape directly - the region-first load must fall back to it. The
+		# region file is removed first: it would otherwise shadow the legacy
+		# file (region entries win) and no recompute would happen.
+		var rpath: String = ChunkIO.region_cell(SLOT, 0, 0)["path"]
+		if FileAccess.file_exists(rpath):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(rpath))
+		var lpath := ChunkIO.path_for(SLOT, 0, 0, 0)
+		var f2 = FileAccess.open(lpath, FileAccess.WRITE)
 		if f2 != null:
 			f2.store_buffer(leg)
 			f2.close()
 		var n2 = await _lightcache_revisit(key)
 		legacy_v1_recomputes = n2 != null and bool(n2.mesh_built) and int(n2.light_recomputes) >= 1 and bool(not (n2.last_eff as Dictionary).is_empty())
 	Save.clear(SLOT)
-	var wiped := not FileAccess.file_exists(path)
+	# AC-0175: clear_dir wipes the region file (and any legacy file) alike.
+	var wiped := not FileAccess.file_exists(ChunkIO.region_cell(SLOT, 0, 0)["path"])
 	var n3 = await _lightcache_revisit(key)
 	var clear_wipes_light := wiped and n3 != null and bool(n3.mesh_built) and int(n3.light_recomputes) >= 1 and bool(not (n3.last_eff as Dictionary).is_empty())
 	var wall := Time.get_ticks_msec() - t0
@@ -14223,6 +14329,7 @@ func _lightcache_test(spawn: Vector3) -> void:
 		"light_saved_nonzero": light_saved_nonzero,
 		"restored_no_recompute": restored_no_recompute,
 		"recompute_count": recompute_count,
+		"n1_origin": n1_origin,
 		"restored_matches_saved": restored_matches_saved,
 		"legacy_v1_recomputes": legacy_v1_recomputes,
 		"clear_wipes_light": clear_wipes_light,

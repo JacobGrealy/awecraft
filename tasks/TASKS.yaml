@@ -5806,15 +5806,41 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: AC-0164
-  notes: '1) User Story: As a player I want my world saved as a few big region files instead of 7845 tiny
-    files so saving and loading is faster and does not clutter my save folder.
-
-
-    2) Technical Details: Replace per-column files at core/chunk_io.gd:23 user://chunkdir_<slot>/<face>_<cx>_<cz>.bin
-    (7845 files at R=50) with region format 32x32 cols per file r.<rx>.<rz>.bin plus offset table, keeping
-    AWCC v1 blobs (core/chunk_io.gd:48 encode 26ms / 75 decode 20ms) intact. Incremental writes via AC-0164
-    threading. Verify region files count ~8 at R=50, load still disk-first at world.gd:2709, gen_count
-    0 on revisit.'
+  notes: "1) User Story: As a player I want my world saved as a few big region files instead of 7845 tiny\
+    \ files so saving and loading is faster and does not clutter my save folder.\n\n2) Technical Details:\
+    \ Replace per-column files at core/chunk_io.gd:23 user://chunkdir_<slot>/<face>_<cx>_<cz>.bin (7845\
+    \ files at R=50) with region format 32x32 cols per file r.<rx>.<rz>.bin plus offset table, keeping\
+    \ AWCC v1 blobs (core/chunk_io.gd:48 encode 26ms / 75 decode 20ms) intact. Incremental writes via\
+    \ AC-0164 threading. Verify region files count ~8 at R=50, load still disk-first at world.gd:2709,\
+    \ gen_count 0 on revisit.\n\n3) Implementation (agent, 2026-09-08): DONE, all gates green.\n- core/chunk_io.gd:\
+    \ new region layer. File r.<rx>.<rz>.bin per 32x32-column\n  region: \"AWCR\" magic + u32 version(1)\
+    \ + u32 entry count(1024) + 1024 x\n  {u32 offset, u32 size} table (8192 B) + the column blobs - the\
+    \ EXISTING\n  AWCC v1 encode_column bytes, unmodified. Helpers: region_cell (floor-div\n  for negative\
+    \ coords), region_new, region_table, region_extract,\n  region_compact, read_column_bytes (region-first:\
+    \ 8 KB table read + one\n  blob seek; legacy per-column file as read-only fallback),\n  saved_column_exists.\n\
+    - world.gd: AC-0164 threading kept - the worker still encodes off-main, but\n  the REGION FILE commit\
+    \ runs on the main thread in _io_write_commit\n  (shared file, serialized): table entry updated in\
+    \ place, blob overwrites\n  its slot when it fits or appends at the end (FileAccess.seek - 4.7 has\
+    \ no\n  position() and seek returns void). Commits capped at 4/frame in io_poll\n  (a load-flush drains\
+    \ 16 saves/frame). Compaction: when garbage > 4 MB AND\n  live < half the file, a worker re-packs\
+    \ the region to <path>.compact and\n  io_poll atomically renames it; saves for a compacting region\
+    \ re-queue; a\n  30 s stale guard unwedges a dead worker. Drain/idle checks include the\n  compaction\
+    \ list.\n- Saves no longer write the per-column shape; legacy files remain readable\n  so an existing\
+    \ save keeps loading (each column migrates to its region on\n  its next save). clear_dir wipes both\
+    \ shapes.\n- Test arms: the chunkio arm now counts region ENTRIES (not files), asserts\n  the spawn\
+    \ diamond sits in ONE region file, and Phase E wipes the dir,\n  saves one real generated column per\
+    \ region of the r=50 diamond through\n  the true commit path, recenters far (live columns evict into\
+    \ the same\n  regions) and asserts the region-file count equals the distinct-region\n  count of the\
+    \ full 7845-column diamond. The lightcache arm reads the\n  column back through read_column_bytes\
+    \ and removes the region file before\n  its legacy-v1 back-compat write (the region entry would otherwise\
+    \ shadow\n  the legacy file).\n- Verified: chunkio arm ok (41-entry region round-trip byte-identical,\n\
+    \  origin disk 41 / gen 0, r50 revisit disk 41 / gen 0, region fan-out = 12\n  files = exactly the\
+    \ distinct regions the r=50 diamond spans - the task\n  estimated ~8; the 7845-column diamond (radius\
+    \ 62) spans the 4x4 region\n  grid minus its four corners = 12); lightcache arm ok (light persists\n\
+    \  through the region, legacy v1 fallback loads + recomputes, clear wipes);\n  compaction probe ok\
+    \ (50 blobs + 6 MB garbage -> compacted file, all\n  entries byte-identical, absent entries stay absent);\
+    \ SMOKE battery\n  ok:true; 0 Parse Errors.\n- User impact: ~7845 tiny files at R=50 become ~12 region\
+    \ files; save/load\n  no longer churn thousands of inodes. EXE rebuilt after this commit."
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549754'

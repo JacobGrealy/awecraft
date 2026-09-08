@@ -304,6 +304,12 @@ var _io_fails := 0
 var _io_write_n := 0
 var _io_main_read_ms := 0.0
 var _io_main_write_ms := 0.0
+# AC-0175: region compaction state. _io_compacting maps region path ->
+# start ms; saves for a compacting region re-queue until the worker's tmp
+# file is renamed into place (one main-thread rename per compaction).
+var _io_compacting: Dictionary = {}
+var _io_compact_inflight: Array = []
+var _io_compact_n := 0
 var fluid_tick_samples: Array = []
 var fluid_dirty := {}
 var fluid_sim_enabled := true
@@ -2885,7 +2891,7 @@ func _exit_tree() -> void:
 	_shutting_down = true
 	if threadgen_pool != null:
 		var waited := 0
-		while waited < 20000 and (not threadgen_inflight.is_empty() or not threadmesh_inflight.is_empty() or not _io_read_inflight.is_empty() or not _io_write_inflight.is_empty()):
+		while waited < 20000 and (not threadgen_inflight.is_empty() or not threadmesh_inflight.is_empty() or not _io_read_inflight.is_empty() or not _io_write_inflight.is_empty() or not _io_compact_inflight.is_empty()):  # AC-0175: compaction settles too
 			threadgen_poll()
 			threadmesh_poll()
 			io_poll()
@@ -3149,7 +3155,7 @@ func _process(_delta: float) -> void:
 		_rec_start_walk(last_pcx, last_pcz)
 	# threadmesh_inflight keeps this running while mesh tasks are in flight
 	# even when every bookkeeping list is drained (else the poll never runs).
-	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty() and threadmesh_inflight.is_empty() and _io_read_inflight.is_empty() and _io_write_inflight.is_empty() and not _rec_pending and _bl_want.is_empty() and _col_pending.is_empty() and dirty_queue.is_empty():
+	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty() and threadmesh_inflight.is_empty() and _io_read_inflight.is_empty() and _io_write_inflight.is_empty() and _io_compact_inflight.is_empty() and not _rec_pending and _bl_want.is_empty() and _col_pending.is_empty() and dirty_queue.is_empty():
 		return
 	var was_active := flush_active
 	var added := false
@@ -7244,14 +7250,11 @@ func _chunk_face(cx: int) -> int:
 func _try_disk_load(c: Node3D, cx: int, cz: int) -> bool:
 	if Save.active_slot < 0:
 		return false
-	var path := ChunkIO.path_for(Save.active_slot, _chunk_face(cx), cx, cz)
-	if not FileAccess.file_exists(path):
+	# AC-0175: region-first (table + one blob seek), legacy per-column file
+	# fallback - read_column_bytes is the shared worker-safe helper.
+	var bytes := ChunkIO.read_column_bytes(int(Save.active_slot), cx, cz)
+	if bytes.is_empty():
 		return false
-	var f := FileAccess.open(path, FileAccess.READ)
-	if f == null:
-		return false
-	var bytes := f.get_buffer(f.get_length())
-	f.close()
 	var t0 := Time.get_ticks_usec()
 	var res = ChunkIO.decode_column(bytes, int(Game.world_seed), int(Data.HEIGHT))
 	disk_read_ms += (Time.get_ticks_usec() - t0) / 1000.0
@@ -7401,7 +7404,9 @@ func _io_write_enqueue(e: Dictionary) -> void:
 	ChunkIO.ensure_dir(slot)
 	var entry := {
 		"key": key,
-		"path": ChunkIO.path_for(slot, int(e["face"]), cx, cz),
+		"slot": slot,
+		"cx": cx,
+		"cz": cz,
 		"data": e["data"],
 		"fl": e["fl"],
 		"light": e.get("light", {}),
@@ -7434,13 +7439,12 @@ func _io_write_worker() -> void:
 	# AC-0214: the expansion is C++ (ChunkIOPalette.slabs_flat; the worker
 	# io_cpp() instantiate is the established pattern — _io_read_worker's
 	# decode_column already runs it here).
+	# AC-0175: the worker encodes only; the REGION FILE commit (table update
+	# + blob write) runs on the main thread in _io_write_commit because the
+	# region file is shared by many columns and must be mutated serially.
 	var io: Variant = ChunkIO.io_cpp()
 	var blob := ChunkIO.encode_column(io.slabs_flat(entry["data"]), io.slabs_flat(entry["fl"]), int(entry["seed"]), int(entry["height"]), entry.get("light", {}), -1, int(entry.get("gen_mask", 0xFFFFFF)))  # AC-0237: v5 when range-generated
-	var f = FileAccess.open(String(entry["path"]), FileAccess.WRITE)
-	if f == null:
-		return
-	f.store_buffer(blob)
-	f.close()
+	entry["blob"] = blob
 
 func _io_read_enqueue(cx: int, cz: int, key: String, apply_edits: bool) -> bool:
 	# AC-0164: true = the column is covered by a worker read (file exists,
@@ -7453,14 +7457,14 @@ func _io_read_enqueue(cx: int, cz: int, key: String, apply_edits: bool) -> bool:
 		return true
 	var t0 := Time.get_ticks_usec()
 	var slot := int(Save.active_slot)
-	var path := ChunkIO.path_for(slot, _chunk_face(cx), cx, cz)
-	if not FileAccess.file_exists(path):
+	# AC-0175: region entry OR legacy file (the helper covers both).
+	if not ChunkIO.saved_column_exists(slot, cx, cz):
 		return false
 	var entry := {
 		"key": key,
+		"slot": slot,
 		"cx": cx,
 		"cz": cz,
-		"path": path,
 		"seed": int(Game.world_seed),
 		"height": int(Data.HEIGHT),
 		"apply_edits": apply_edits,
@@ -7489,18 +7493,144 @@ func _io_read_worker() -> void:
 		return
 	var t0 := Time.get_ticks_usec()
 	var res := {}
-	var f = FileAccess.open(String(entry["path"]), FileAccess.READ)
-	if f != null:
-		var bytes := f.get_buffer(f.get_length())
-		f.close()
+	# AC-0175: region-first blob read (shared with the main-thread disk-first
+	# load); legacy per-column fallback inside. A torn read (a main-thread
+	# commit racing the region file) fails the MD5 in decode_column ->
+	# fail-closed generation + edits re-apply.
+	var bytes := ChunkIO.read_column_bytes(int(entry["slot"]), int(entry["cx"]), int(entry["cz"]))
+	if not bytes.is_empty():
 		var r = ChunkIO.decode_column(bytes, int(entry["seed"]), int(entry["height"]))
 		if typeof(r) == TYPE_DICTIONARY and not (r as Dictionary).is_empty():
 			res = r
 	entry["result"] = res
 	entry["ms"] = (Time.get_ticks_usec() - t0) / 1000.0
 
+# AC-0175: main-thread region commit (called from io_poll when the worker's
+# encode lands). The region file is shared by 1024 columns, so every file
+# mutation is serialized here: table entry updated in place, the blob
+# overwrites its slot when it fits or appends at the end otherwise. A
+# compacting region defers the save (re-queued) until the rename lands.
+func _io_write_commit(e: Dictionary) -> void:
+	var slot := int(e["slot"])
+	var cx := int(e["cx"])
+	var cz := int(e["cz"])
+	var blob: PackedByteArray = e.get("blob", PackedByteArray())
+	if blob.is_empty():
+		return
+	var cell := ChunkIO.region_cell(slot, cx, cz)
+	var path: String = cell["path"]
+	if _io_compacting.has(path):
+		# The region is mid-compaction: re-queue (the entry still owns the
+		# snapshot; _io_write_enqueue re-adds the dedup key).
+		_save_queue.append({
+			"slot": slot,
+			"cx": cx,
+			"cz": cz,
+			"data": e["data"],
+			"fl": e["fl"],
+			"light": e.get("light", {}),
+			"gen_mask": int(e.get("gen_mask", 0xFFFFFF)),
+		})
+		return
+	ChunkIO.ensure_dir(slot)
+	if not FileAccess.file_exists(path):
+		var nf := FileAccess.open(path, FileAccess.WRITE)
+		if nf == null:
+			return
+		nf.store_buffer(ChunkIO.region_new())
+		nf.close()
+	var f := FileAccess.open(path, FileAccess.READ_WRITE)
+	if f == null:
+		return
+	var head := f.get_buffer(ChunkIO.REGION_HEAD_SIZE)
+	var t := ChunkIO.region_table(head)
+	if t.is_empty():
+		f.close()
+		push_warning("AC-0175: corrupt region %s - the column save is dropped (fail closed)" % path)
+		return
+	var i := int(cell["idx"])
+	var off := int(t["offsets"][i])
+	var sz := int(t["sizes"][i])
+	var fsize: int = f.get_length()
+	var appended := false
+	if off > 0 and blob.size() <= sz:
+		# Overwrite the slot in place (a smaller blob leaves an unreferenced
+		# tail - garbage for the next compaction).
+		f.seek(off)
+		f.store_buffer(blob)
+	else:
+		appended = true
+		off = fsize
+		f.seek(fsize)
+		f.store_buffer(blob)
+	# The 8-byte table entry (offset + size, LE).
+	var ent := PackedByteArray()
+	ent.resize(8)
+	ent[0] = off & 255
+	ent[1] = (off >> 8) & 255
+	ent[2] = (off >> 16) & 255
+	ent[3] = (off >> 24) & 255
+	ent[4] = blob.size() & 255
+	ent[5] = (blob.size() >> 8) & 255
+	ent[6] = (blob.size() >> 16) & 255
+	ent[7] = (blob.size() >> 24) & 255
+	f.seek(12 + i * 8)
+	f.store_buffer(ent)
+	# Used bytes after this commit (this entry now contributes blob.size()).
+	var used := 0
+	for k in range(ChunkIO.REGION_ENTRIES):
+		if k == i:
+			used += blob.size()
+		elif int(t["offsets"][k]) > 0:
+			used += int(t["sizes"][k])
+	f.close()
+	var new_size: int = fsize + (blob.size() if appended else 0)
+	# Compaction threshold: garbage past 4 MB AND less than half the file is
+	# live -> rebuild (worker) + atomic rename.
+	if new_size - ChunkIO.REGION_HEAD_SIZE - used > 4194304 and used * 2 < new_size - ChunkIO.REGION_HEAD_SIZE:
+		_io_compact_enqueue(slot, int(cell["rx"]), int(cell["rz"]))
+
+# AC-0175: enqueue a full-region compaction on the io pool. The worker
+# re-packs the file to <path>.compact; io_poll renames it into place.
+func _io_compact_enqueue(slot: int, rx: int, rz: int) -> void:
+	var path := ChunkIO.region_for(slot, rx, rz)
+	if _io_compacting.has(path):
+		return
+	_io_compacting[path] = Time.get_ticks_msec()
+	var entry := {"path": path}
+	var tid = io_pool.add_task(_io_compact_worker, false)
+	entry["tid"] = tid
+	_io_slots[tid] = entry
+	_io_compact_inflight.append(entry)
+	_io_compact_n += 1
+
+func _io_compact_worker() -> void:
+	var tid = io_pool.get_caller_task_id()
+	var entry = _io_slots.get(tid)
+	var ns := 0
+	while entry == null and ns < 200:
+		OS.delay_msec(1)
+		entry = _io_slots.get(tid)
+		ns += 1
+	if entry == null:
+		return
+	var path: String = entry["path"]
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return
+	var bytes := f.get_buffer(f.get_length())
+	f.close()
+	var compact := ChunkIO.region_compact(bytes)
+	if compact.is_empty():
+		return
+	var tf := FileAccess.open(path + ".compact", FileAccess.WRITE)
+	if tf == null:
+		return
+	tf.store_buffer(compact)
+	tf.close()
+
 func io_poll() -> void:
-	if _io_read_inflight.is_empty() and _io_write_inflight.is_empty():
+	if _io_read_inflight.is_empty() and _io_write_inflight.is_empty() and _io_compact_inflight.is_empty():
 		return
 	var i := 0
 	while i < _io_read_inflight.size():
@@ -7513,12 +7643,47 @@ func io_poll() -> void:
 			continue
 		i += 1
 	i = 0
+	var committed := 0
 	while i < _io_write_inflight.size():
 		var w: Dictionary = _io_write_inflight[i]
 		if io_pool.is_task_completed(int(w["tid"])):
+			# AC-0175: region commits touch a shared file on the main
+			# thread - cap them per frame (a load-flush drains 16 saves a
+			# frame; the rest wait one frame, their encode is done).
+			if committed >= 4:
+				i += 1
+				continue
+			committed += 1
 			_io_write_inflight.remove_at(i)
 			_io_slots.erase(int(w["tid"]))
 			_io_write_keys.erase(w["key"])
+			_io_write_commit(w)
+			continue
+		i += 1
+	# AC-0175: compaction completion -> atomic rename + re-queue is free
+	# (deferred saves retry on the next drain).
+	i = 0
+	while i < _io_compact_inflight.size():
+		var c: Dictionary = _io_compact_inflight[i]
+		var path: String = c["path"]
+		if io_pool.is_task_completed(int(c["tid"])):
+			_io_compact_inflight.remove_at(i)
+			_io_slots.erase(int(c["tid"]))
+			var abs_new := ProjectSettings.globalize_path(path + ".compact")
+			var abs_old := ProjectSettings.globalize_path(path)
+			# Worker produced no tmp (open/compact failure) -> the original
+			# file is untouched; just clear the marker.
+			if FileAccess.file_exists(abs_new):
+				DirAccess.rename_absolute(abs_new, abs_old)
+			_io_compacting.erase(path)
+			continue
+		# Stale guard: a worker that never lands (crash) must not wedge the
+		# region's saves forever.
+		if Time.get_ticks_msec() - int(_io_compacting.get(path, 0)) > 30000:
+			_io_compact_inflight.remove_at(i)
+			_io_slots.erase(int(c["tid"]))
+			_io_compacting.erase(path)
+			push_warning("AC-0175: region compaction for %s did not land in 30 s - stale" % path)
 			continue
 		i += 1
 

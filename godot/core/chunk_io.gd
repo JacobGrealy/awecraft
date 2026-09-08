@@ -83,6 +83,177 @@ static func clear_dir(slot: int) -> void:
 	da.list_dir_end()
 	DirAccess.remove_absolute(abs)
 
+# AC-0175: region file format (Java .mca lineage). The 7845 per-column files
+# at R=50 become a few 32x32-column region files. Layout:
+#   "AWCR" | u32 version(1) | u32 entry count (1024)
+#   1024 x { u32 offset (0 = absent), u32 blob size }   (8192 B table)
+#   column blobs (the EXISTING AWCC v1 encode_column bytes, unmodified)
+# placed at their offsets. A column save either overwrites its slot in
+# place (new blob <= old size) or appends at the end and re-points the
+# entry; the orphaned slot becomes garbage reclaimed by a full-region
+# compaction (worker-built, tmp + atomic rename) once the file bloats.
+# The per-column path_for files remain READABLE (legacy fallback on load)
+# but are never written again - a saved world migrates to regions over
+# time and clear_dir wipes both shapes.
+const REGION := 32
+const REGION_ENTRIES := 1024
+const RRM0 := 0x41  # "A"
+const RRM1 := 0x57  # "W"
+const RRM2 := 0x43  # "C"
+const RRM3 := 0x52  # "R"
+const REGION_VERSION := 1
+const REGION_HEAD_SIZE := 12 + REGION_ENTRIES * 8
+
+static func _fd(v: int, m: int) -> int:
+	var q := int(v) / int(m)
+	if int(v) < 0 and q * int(m) != int(v):
+		q -= 1
+	return q
+
+static func region_for(slot: int, rx: int, rz: int) -> String:
+	return "%s/r.%d.%d.bin" % [dir_for(int(slot)), int(rx), int(rz)]
+
+# The region file + intra-region index for a column: idx = lx*32 + lz with
+# lx/lz in [0,31) (floor-divide so negative coordinates land correctly).
+static func region_cell(slot: int, cx: int, cz: int) -> Dictionary:
+	var rx := _fd(int(cx), REGION)
+	var rz := _fd(int(cz), REGION)
+	var lx := int(cx) - rx * REGION
+	var lz := int(cz) - rz * REGION
+	return {
+		"path": region_for(int(slot), rx, rz),
+		"rx": rx,
+		"rz": rz,
+		"idx": lx * REGION + lz,
+	}
+
+# A fresh (empty) region file: magic + version + count + zeroed table.
+static func region_new() -> PackedByteArray:
+	var out := PackedByteArray()
+	out.append(RRM0)
+	out.append(RRM1)
+	out.append(RRM2)
+	out.append(RRM3)
+	out.append_array(_u32(REGION_VERSION))
+	out.append_array(_u32(REGION_ENTRIES))
+	out.resize(REGION_HEAD_SIZE)
+	return out
+
+# Parse the header + offset table from the leading REGION_HEAD_SIZE bytes.
+# {} on any violation (wrong magic/version/count, truncated head).
+static func region_table(bytes: PackedByteArray) -> Dictionary:
+	if bytes.size() < REGION_HEAD_SIZE:
+		return {}
+	if bytes[0] != RRM0 or bytes[1] != RRM1 or bytes[2] != RRM2 or bytes[3] != RRM3:
+		return {}
+	if _u32r(bytes, 4) != REGION_VERSION:
+		return {}
+	if _u32r(bytes, 8) != REGION_ENTRIES:
+		return {}
+	var offsets := []
+	offsets.resize(REGION_ENTRIES)
+	var sizes := []
+	sizes.resize(REGION_ENTRIES)
+	for i in range(REGION_ENTRIES):
+		var o := 12 + i * 8
+		offsets[i] = _u32r(bytes, o)
+		sizes[i] = _u32r(bytes, o + 4)
+	return {"offsets": offsets, "sizes": sizes}
+
+# The column's AWCC v1 blob from a region's bytes, empty PackedByteArray =
+# absent (or a torn entry - the caller fails closed either way).
+static func region_extract(bytes: PackedByteArray, idx: int) -> PackedByteArray:
+	var t := region_table(bytes)
+	if t.is_empty():
+		return PackedByteArray()
+	var i := int(idx)
+	if i < 0 or i >= REGION_ENTRIES:
+		return PackedByteArray()
+	var off := int(t["offsets"][i])
+	var sz := int(t["sizes"][i])
+	if off == 0 or sz == 0:
+		return PackedByteArray()
+	if off + sz > bytes.size():
+		return PackedByteArray()
+	return bytes.slice(off, off + sz)
+
+# Re-pack a region compactly (header + table + blobs back-to-back from the
+# head; absent and torn entries dropped). Empty result = unparseable input.
+# Runs on a worker (the AC-0175 compaction lane).
+static func region_compact(bytes: PackedByteArray) -> PackedByteArray:
+	var t := region_table(bytes)
+	if t.is_empty():
+		return PackedByteArray()
+	var out := region_new()
+	var off := REGION_HEAD_SIZE
+	for i in range(REGION_ENTRIES):
+		var o := int(t["offsets"][i])
+		var s := int(t["sizes"][i])
+		if o == 0 or s == 0:
+			continue
+		if o + s > bytes.size():
+			continue
+		out[12 + i * 8] = off & 255
+		out[13 + i * 8] = (off >> 8) & 255
+		out[14 + i * 8] = (off >> 16) & 255
+		out[15 + i * 8] = (off >> 24) & 255
+		out[16 + i * 8] = s & 255
+		out[17 + i * 8] = (s >> 8) & 255
+		out[18 + i * 8] = (s >> 16) & 255
+		out[19 + i * 8] = (s >> 24) & 255
+		out.append_array(bytes.slice(o, o + s))
+		off += s
+	return out
+
+# Read a saved column's AWCC v1 blob bytes: region-first (table lookup +
+# one blob seek, ~23 KB of reads) with the legacy per-column file as a
+# read-only fallback. Empty = not saved. Pure static + worker-safe (the
+# AC-0164 read worker and the main-thread disk-first load share it).
+static func read_column_bytes(slot: int, cx: int, cz: int) -> PackedByteArray:
+	var cell := region_cell(int(slot), int(cx), int(cz))
+	var path: String = cell["path"]
+	if FileAccess.file_exists(path):
+		var f := FileAccess.open(path, FileAccess.READ)
+		if f != null:
+			var head := f.get_buffer(REGION_HEAD_SIZE)
+			var t := region_table(head)
+			if not t.is_empty():
+				var i := int(cell["idx"])
+				var off := int(t["offsets"][i])
+				var sz := int(t["sizes"][i])
+				if off > 0 and sz > 0:
+					f.seek(off)  # FileAccess.seek is void-return in 4.7
+					var b := f.get_buffer(sz)
+					if b.size() == sz:
+						f.close()
+						return b
+			f.close()
+	var lpath := path_for(int(slot), 1 if int(cx) < 0 else 0, int(cx), int(cz))
+	if FileAccess.file_exists(lpath):
+		var f2 := FileAccess.open(lpath, FileAccess.READ)
+		if f2 != null:
+			var b2 := f2.get_buffer(f2.get_length())
+			f2.close()
+			if not b2.is_empty():
+				return b2
+	return PackedByteArray()
+
+# True iff the column is saved (region entry present or legacy file).
+static func saved_column_exists(slot: int, cx: int, cz: int) -> bool:
+	var cell := region_cell(int(slot), int(cx), int(cz))
+	var path: String = cell["path"]
+	if FileAccess.file_exists(path):
+		var f := FileAccess.open(path, FileAccess.READ)
+		if f != null:
+			var head := f.get_buffer(REGION_HEAD_SIZE)
+			var t := region_table(head)
+			f.close()
+			if not t.is_empty():
+				var i := int(cell["idx"])
+				if int(t["offsets"][i]) > 0 and int(t["sizes"][i]) > 0:
+					return true
+	return FileAccess.file_exists(path_for(int(slot), 1 if int(cx) < 0 else 0, int(cx), int(cz)))
+
 static func encode_column(data: PackedByteArray, fl: PackedByteArray, seed: int, height: int, light: Dictionary = {}, top := -1, gen_mask := 0xFFFFFF) -> PackedByteArray:
 	var sub := int(data.size()) / S3
 	# AC-0197: the v3 sparse slab layout. Slabs above top are all-air (the
