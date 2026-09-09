@@ -223,14 +223,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 			else:
 				close_inventory()
-		elif kc == int(KEY_V):
-			Debug.seed_inv()
-		elif kc == int(KEY_H):
-			start_swing()
-		elif kc == int(KEY_J):
-			hold_swing(0.5)
-		elif kc == int(KEY_K):
-			clear_swing()
+		# AC-0122: the old V/H/J/K debug keys moved into the console as the
+		# seedinv / swing / holdswing / clearswing commands (no more accidental
+		# triggers during play); P keeps pause until AC-0185 moves it to Esc.
 		elif kc == int(KEY_P) or event.is_action_pressed("ui_pause"):
 			if ui_mode == "" and not dead:
 				Game.pause()

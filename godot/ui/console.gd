@@ -12,7 +12,10 @@ const COMMANDS := {
 	"setblock": "setblock <x> <y> <z> <id> - set a block",
 	"block": "block <x> <y> <z> - read a block",
 	"spawn": "spawn <mob> [x y z] - spawn a mob (default: at the player)",
-	"seedinv": "seedinv - fill the hotbar with seeds",
+	"seedinv": "seedinv - reset the inventory (old V key)",
+	"swing": "swing - one swing with the selected item (old H key)",
+	"holdswing": "holdswing [frac] - hold a swing, frac of an arm (old J key)",
+	"clearswing": "clearswing - stop the swing, reset the hand (old K key)",
 	"help": "help - list commands",
 	"quit": "quit - exit the game",
 }
@@ -167,6 +170,25 @@ func dispatch(s: String) -> void:
 		"seedinv":
 			Debug.seed_inv()
 			add_log("inventory seeded")
+		"swing":
+			if Game.player == null:
+				add_log("no player")
+				return
+			Game.player.start_swing()
+			add_log("swing")
+		"holdswing":
+			if Game.player == null:
+				add_log("no player")
+				return
+			var hfrac := 0.5 if p.size() < 1 else clampf(float(p[0]), 0.0, 1.0)
+			Game.player.hold_swing(hfrac)
+			add_log("holding swing at %.2f" % hfrac)
+		"clearswing":
+			if Game.player == null:
+				add_log("no player")
+				return
+			Game.player.clear_swing()
+			add_log("swing cleared")
 		"quit":
 			add_log("[quitting...]")
 			get_tree().quit()

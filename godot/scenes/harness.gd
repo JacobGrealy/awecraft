@@ -15844,6 +15844,19 @@ func _c_key(kc: int, uni: int, hold: bool = false) -> void:
 		Input.parse_input_event(r)
 
 
+func _c_type(word: String) -> void:
+	for i in word.length():
+		var ch: int = word[i].unicode_at(0)
+		var up: int = word[i].to_upper().unicode_at(0)
+		_c_key(up, ch)
+		await get_tree().physics_frame
+
+
+func _c_submit() -> void:
+	_c_key(KEY_ENTER, 13)
+	await get_tree().physics_frame
+
+
 func _console_test(spawn: Vector3) -> void:
 	var c = Game.console
 	var res: Dictionary = {}
@@ -15862,11 +15875,8 @@ func _console_test(spawn: Vector3) -> void:
 	res["mouse_visible"] = Input.mouse_mode == Input.MOUSE_MODE_VISIBLE
 	# 2) type "give 126 5" + Enter through real key events.
 	var pre: int = main._count_item(player, 126)
-	for pair in [[KEY_G, 103], [KEY_I, 105], [KEY_V, 118], [KEY_E, 101],
-			[KEY_SPACE, 32], [KEY_1, 49], [KEY_2, 50], [KEY_6, 54],
-			[KEY_SPACE, 32], [KEY_5, 53], [KEY_ENTER, 13]]:
-		_c_key(int(pair[0]), int(pair[1]))
-		await get_tree().physics_frame
+	await _c_type("give 126 5")
+	await _c_submit()
 	var got := false
 	for i in 300:
 		await get_tree().physics_frame
@@ -15887,11 +15897,21 @@ func _console_test(spawn: Vector3) -> void:
 	# event to settle before it accepts the next command).
 	for i in 3:
 		await get_tree().physics_frame
-	for pair2 in [[KEY_T, 116], [KEY_I, 105], [KEY_M, 109], [KEY_E, 101],
-			[KEY_SPACE, 32], [KEY_0, 48], [KEY_PERIOD, 46], [KEY_6, 54], [KEY_ENTER, 13]]:
-		_c_key(int(pair2[0]), int(pair2[1]))
-		await get_tree().physics_frame
+	await _c_type("time 0.6")
+	await _c_submit()
 	res["time_cmd"] = absf(float(Game.time_of_day) - 0.6) < 0.02
+	# 4b) AC-0122: the former V/H/J/K keys are console commands now.
+	await _c_type("swing")
+	await _c_submit()
+	res["cmd_swing"] = bool(player._swing_active)
+	await _c_type("holdswing 0.7")
+	await _c_submit()
+	res["cmd_holdswing"] = bool(player._swing_held) \
+		and absf(float(player._swing_frac) - 0.7) < 0.01
+	await _c_type("clearswing")
+	await _c_submit()
+	res["cmd_clearswing"] = not bool(player._swing_active) \
+		and not bool(player._swing_held)
 	# 5) holding W while open must NOT move the player (the gate). The press
 	# is held (no release) so the polled action really is armed.
 	_c_key(KEY_W, 119, true)
@@ -15914,6 +15934,16 @@ func _console_test(spawn: Vector3) -> void:
 	# left the game in a playable state).
 	res["mouse_recaptured"] = Input.mouse_mode == Input.MOUSE_MODE_CAPTURED \
 		or DisplayServer.get_name() == "headless"
+	# 7) AC-0122: the old V/H/J/K keys must be dead outside the console
+	# (H would have started a swing, J held one, V wiped the inventory).
+	var inv_before: int = main._count_item(player, 126)
+	for kc in [int(KEY_H), int(KEY_J), int(KEY_V), int(KEY_K)]:
+		_c_key(kc, kc - 32)
+		await get_tree().physics_frame
+	await get_tree().physics_frame
+	res["keys_dead"] = not bool(player._swing_active) \
+		and not bool(player._swing_held) \
+		and main._count_item(player, 126) == inv_before
 	var p0 := player.position
 	var moved := false
 	for i in 300:
@@ -15925,6 +15955,8 @@ func _console_test(spawn: Vector3) -> void:
 	res["moves_after"] = moved
 	res["ok"] = opened and res["input_focused"] and res["mouse_visible"] and got \
 		and res["log_grew"] and res["log_scrolled"] and res["time_cmd"] \
-		and res["typing_no_move"] and closed and res["mouse_recaptured"] and moved
+		and res["cmd_swing"] and res["cmd_holdswing"] and res["cmd_clearswing"] \
+		and res["typing_no_move"] and closed and res["mouse_recaptured"] \
+		and res["keys_dead"] and moved
 	Debug.result(res)
 	get_tree().quit()
