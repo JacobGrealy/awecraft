@@ -4639,6 +4639,26 @@ func _dirty_add(key: String, y: int) -> void:
 			_low_inr_invalidate()
 
 
+# AC-0199: _dirty_add + jump the entry to the FRONT of the dirty queue.
+# A boundary edit (local x/z in [0,1] or [14,15]) changes the NEIGHBOR's
+# 18-wide snap ring (SNAP_W = 16 + 1 per side): the neighbor's face
+# toward this column is stale until it re-meshes, and the light wave
+# that would cover it paces at ~500 ms - the see-through hole. The
+# extend of AC-0187's front priority: the neighbor dispatches next
+# frame, ahead of every queued streaming entry. Its build reads the
+# edited chunk's snap_rings from DATA (already updated by set_block),
+# so it is correct independent of the edited chunk's mesh handoff.
+func _dirty_front(key: String, y: int) -> void:
+	_dirty_add(key, y)
+	for i in range(dirty_queue.size()):
+		if dirty_queue[i]["key"] == key:
+			if i > 0:
+				var e = dirty_queue[i]
+				dirty_queue.remove_at(i)
+				dirty_queue.push_front(e)
+			return
+
+
 func _dirty_entry(key: String):
 	for e in dirty_queue:
 		if e["key"] == key:
@@ -7363,6 +7383,19 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 	c.mark_edit_slabs(y)
 	_edit_stale_eff[_key(cx, cz)] = _eff_cache.get(_key(cx, cz))
 	_dirty_add(_key(cx, cz), y)  # AC-0233: edited chunk -> dirtyQueue (drains first, 1/frame)
+	# AC-0199: a boundary edit (lx/lz in [0,1] or [14,15] - the SNAP_W 18
+	# ring reaches 1 cell past the chunk edge, 2 deep for the merge margin)
+	# also dirties the E/W/N/S neighbor, jumped to the queue front.
+	var elx := x & 15
+	var elz := z & 15
+	if elx <= 1:
+		_dirty_front(_key(cx - 1, cz), y)
+	elif elx >= 14:
+		_dirty_front(_key(cx + 1, cz), y)
+	if elz <= 1:
+		_dirty_front(_key(cx, cz - 1), y)
+	elif elz >= 14:
+		_dirty_front(_key(cx, cz + 1), y)
 	_eff_cache_evict(_key(cx, cz))
 	_mark_light_around(cx, cz)
 	if _fluid_near(x, y, z):

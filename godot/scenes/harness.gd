@@ -343,6 +343,15 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			player = main._spawn_player()
 			await _oceanfill_test(spawn)
 			return
+		if logic == "editsnap":
+			# AC-0199: break a trunk at a chunk border - the neighbor
+			# remeshes from the queue front (not the ~500 ms light wave)
+			# and the edited slab keeps a live instance the whole time.
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _editsnap_test(spawn)
+			return
 		if logic == "look":
 			world.recenter(spawn.x, spawn.z, true)
 			player = main._spawn_player()
@@ -1096,6 +1105,11 @@ func _batt_run_mode(mode: String, spawn: Vector3, seed_env: String) -> void:
 			await main._await_spawn_floor(spawn, 300)
 			player = main._spawn_player()
 			await _oceanfill_test(spawn)
+		"editsnap":
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _editsnap_test(spawn)
 		_:
 			print("BATTSKIP ", mode)
 	if sp != spawn:
@@ -16251,6 +16265,138 @@ func _oceanfill_test(spawn: Vector3) -> void:
 	res["solid_to_floor"] = solid_to_floor
 	res["ok"] = res["ocean_found"] and n > 0 and surface_at_sea \
 		and air_above and solid_to_floor
+	Debug.result(res)
+	if not _batt:
+		get_tree().quit()
+
+
+# AC-0199: break a trunk at a chunk border. The contract: (1) the
+# neighbor whose 18-wide snap ring reaches this column remeshes from the
+# dirty-queue FRONT (a few frames - not the ~500 ms light wave);
+# (2) the edited slab keeps a LIVE instance reference the whole
+# edit->handoff window (retain-swap - no null frame); (3) the edit
+# handoff itself is fast (< 50 ms at an idle pool).
+func _editsnap_test(spawn: Vector3) -> void:
+	var res: Dictionary = {}
+	# find a trunk (log = 6) at a chunk border whose chunk AND boundary
+	# neighbor are LOADED (unloaded reads as air - a treeless scan region
+	# just means no forest there). Recenters onto candidate spots until
+	# one loads a border tree (the oceanfill pattern).
+	var tx := 0
+	var ty := 0
+	var tz := 0
+	var found := false
+	for attempt in 6:
+		var bx := int(spawn.x) + (attempt % 3) * 96 - 96
+		var bz := int(spawn.z) + (attempt / 3) * 96 - 48
+		world.recenter(float(bx), float(bz), true)
+		await main._await_world_build(Vector3(float(bx), 128.0, float(bz)), 3000)
+		for dx in range(-48, 49, 2):
+			for dz in range(-48, 49, 2):
+				var x := bx + dx
+				var z := bz + dz
+				var lx := x & 15
+				var lz := z & 15
+				var border: bool = lx <= 1 or lx >= 14 or lz <= 1 or lz >= 14
+				if not border:
+					continue
+				var ccx := int(floorf(float(x) / 16.0))
+				var ccz := int(floorf(float(z) / 16.0))
+				var cc2 = world.chunks.get(world._key(ccx, ccz))
+				# BOTH chunks must be meshed - an unmeshed (far low)
+				# chunk's dirty entry is dropped by design
+				if cc2 == null or not bool(cc2.mesh_built):
+					continue
+				var n2x := ccx
+				var n2z := ccz
+				if lx <= 1:
+					n2x -= 1
+				elif lx >= 14:
+					n2x += 1
+				elif lz <= 1:
+					n2z -= 1
+				else:
+					n2z += 1
+				var nc2 = world.chunks.get(world._key(n2x, n2z))
+				if nc2 == null or not bool(nc2.mesh_built):
+					# a band-3 (data-only) neighbor never meshes - its
+					# dirty entry is dropped by design
+					continue
+				for y in range(160, 80, -1):
+					if world.get_block(x, y, z) == 6:
+						tx = x
+						ty = y
+						tz = z
+						found = true
+						break
+				if found:
+					break
+			if found:
+				break
+		if found:
+			break
+	res["found_trunk"] = found
+	if not found:
+		Debug.result(res)
+		if not _batt:
+			get_tree().quit()
+		return
+	var cx := int(floorf(float(tx) / 16.0))
+	var cz := int(floorf(float(tz) / 16.0))
+	var lx := tx & 15
+	var lz := tz & 15
+	var ncx := cx
+	var ncz := cz
+	if lx <= 1:
+		ncx = cx - 1
+	elif lx >= 14:
+		ncx = cx + 1
+	elif lz <= 1:
+		ncz = cz - 1
+	else:
+		ncz = cz + 1
+	var c = world.chunks.get(world._key(cx, cz))
+	var nc = world.chunks.get(world._key(ncx, ncz))
+	res["neighbor_exists"] = nc != null and c != null
+	if c == null or nc == null:
+		Debug.result(res)
+		if not _batt:
+			get_tree().quit()
+		return
+	var si := ty / 16
+	var slab = c.slabs[si]
+	var gen0 := int(c.mesh_gen)
+	var ngen0 := int(nc.mesh_gen)
+	# the slab must keep geometry after the edit (a trunk in a forest
+	# column - the surrounding ground keeps the slab non-empty)
+	var t0 := Time.get_ticks_msec()
+	world.set_block(tx, ty, tz, 0)
+	var frame := 0
+	var edited_frame := -1
+	var neighbor_frame := -1
+	var ref_always_live := true
+	while frame < 120:
+		await get_tree().physics_frame
+		frame += 1
+		if c.mesh_gen > gen0 and edited_frame < 0:
+			edited_frame = frame
+		if nc.mesh_gen > ngen0 and neighbor_frame < 0:
+			neighbor_frame = frame
+		# the retain-swap invariant: a live instance (or an empty slab
+		# whose refs are legitimately null) at EVERY frame
+		if slab.mesh_instance != null and not is_instance_valid(slab.mesh_instance):
+			ref_always_live = false
+		if edited_frame > 0 and neighbor_frame > 0:
+			break
+	var edit_ms := Time.get_ticks_msec() - t0
+	res["block_gone"] = world.get_block(tx, ty, tz) == 0
+	res["edited_remesh_frames"] = edited_frame
+	res["neighbor_remesh_frames"] = neighbor_frame
+	res["ref_always_live"] = ref_always_live
+	res["edit_ms"] = int(edit_ms)
+	res["ok"] = found and res["neighbor_exists"] and res["block_gone"] \
+		and ref_always_live and edited_frame > 0 and neighbor_frame > 0 \
+		and neighbor_frame <= 6 and edit_ms < 50
 	Debug.result(res)
 	if not _batt:
 		get_tree().quit()

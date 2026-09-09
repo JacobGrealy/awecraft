@@ -1064,11 +1064,16 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ao))
 		mesh.surface_set_material(0, _get_mat("opaque", ms.tex))
 		sidx[0] = 0
+	# AC-0199: the covered refs ALWAYS reflect the new build (null when the
+	# Acc is empty) - the retain-swap in apply_accs / apply_edit_accs
+	# frees the old instances the moment the new refs are in place.
 	if mesh.get_surface_count() > 0:
 		var mi := MeshInstance3D.new()
 		mi.mesh = mesh
 		add_child(mi)
 		s.mesh_instance = mi
+	else:
+		s.mesh_instance = null
 	if ac.q > 0 or af_w.q > 0 or af_l.q > 0:
 		if ac.q > 0:
 			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ac))
@@ -1086,6 +1091,8 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 		fi.mesh = mesh
 		add_child(fi)
 		s.fluid_instance = fi
+	else:
+		s.fluid_instance = null
 	if ak.q > 0 or ax.q > 0:
 		var fsidx := PackedInt32Array([-1, -1])
 		var fm := ArrayMesh.new()
@@ -1102,6 +1109,8 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 		add_child(fi2)
 		s.flora_instance = fi2
 		s.fsidx = fsidx
+	else:
+		s.flora_instance = null
 	if full_solid and _occl_enabled():
 		var oc := OccluderInstance3D.new()
 		var box := BoxOccluder3D.new()
@@ -1110,6 +1119,8 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 		oc.position = Vector3(8.0, float(s.y0) + 8.0, 8.0)
 		add_child(oc)
 		s.occluder = oc
+	else:
+		s.occluder = null
 	s.sidx = sidx
 	s.built = true
 
@@ -1208,6 +1219,9 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}, mask: PackedByt
 	# owed and re-queues the superset build).
 	vwin_full = mask.is_empty()
 	vwin_mask = mask
+	# AC-0199: the old instances are NOT freed before the build anymore -
+	# apply_accs keeps them alive until the new refs are assembled and
+	# frees them atomically afterwards (retain-swap).
 	# AC-0211: the sync lane runs the SAME C++ pipeline as the workers
 	# (light -> compact nbs rings -> AweMesh.build_accs -> apply_accs);
 	# inputs are read live (this is the MAIN thread and the C++ call is
@@ -1217,20 +1231,13 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}, mask: PackedByt
 	# and _build_snap were removed (the C++ extension is required). An empty
 	# data column (degenerate pre-data dispatch) = clear + built flag, no
 	# geometry.
-	for s in slabs:
-		if s.mesh_instance != null:
-			s.mesh_instance.queue_free()
-			s.mesh_instance = null
-		if s.fluid_instance != null:
-			s.fluid_instance.queue_free()
-			s.fluid_instance = null
-		if s.flora_instance != null:
-			s.flora_instance.queue_free()
-			s.flora_instance = null
-		if s.occluder != null:
-			s.occluder.queue_free()
-			s.occluder = null
 	if data.is_empty():
+		# degenerate pre-data dispatch: no build - drop the old refs
+		for s in slabs:
+			s.mesh_instance = null
+			s.fluid_instance = null
+			s.flora_instance = null
+			s.occluder = null
 		mesh_built = true
 		mesh_gen += 1
 		_post_build_collision()
@@ -1284,54 +1291,64 @@ static func _eff_store(light: Dictionary) -> Dictionary:
 # build_accs (worker) instead of the inline pipeline, ms is the current
 # merge-atlas dict (tex consumed here only — workers never see the Texture2D).
 func apply_accs(res: Dictionary, ms: Dictionary) -> void:
+	# AC-0199: retain-swap - keep the old MeshInstance/occluder alive
+	# until the new refs are assembled, then free the old atomically.
+	# (The old order freed before the assembly; a deferred/failed assembly
+	# then left a frame with no mesh - the trunk blink / see-through.)
+	var fsi0 := int(res.get("si0", 0))
+	var fsi1 := int(res.get("si1", slab_n() - 1))
+	var old_insts: Array = []
 	for s in slabs:
 		if s.mesh_instance != null:
-			s.mesh_instance.queue_free()
-			s.mesh_instance = null
+			old_insts.append(s.mesh_instance)
 		if s.fluid_instance != null:
-			s.fluid_instance.queue_free()
-			s.fluid_instance = null
+			old_insts.append(s.fluid_instance)
 		if s.flora_instance != null:
-			s.flora_instance.queue_free()
-			s.flora_instance = null
+			old_insts.append(s.flora_instance)
 		if s.occluder != null:
-			s.occluder.queue_free()
-			s.occluder = null
+			old_insts.append(s.occluder)
 	last_eff = _eff_store(res.light)
 	last_blk_ring = res.light.get("ring", PackedInt32Array())
 	if bool(res.get("light_recomputed", false)):
 		light_recomputes += 1
 	# AC-0197: res.slabs is PARTIAL (si0..si1 only). A full build now stops
-	# at the top slab, so slabs above si1 were freed in the loop above and
-	# stay empty (air) — exactly what the null rows carried before.
-	var fsi0 := int(res.get("si0", 0))
-	var fsi1 := int(res.get("si1", slab_n() - 1))
+	# at the top slab - slabs outside the range are air now (their refs
+	# were collected above and are dropped below).
 	for si in range(fsi0, fsi1 + 1):
 		var row: Array = res.slabs[si - fsi0]
 		_assemble_slab(slabs[si], _acc_from_dict(row[0]), _acc_from_dict(row[1]), _acc_from_dict(row[2]), _acc_from_dict(row[3]), _acc_from_dict(row[4]), _acc_from_dict(row[5]), ms, bool(row[6]))
+	for si in range(slab_n()):
+		if si < fsi0 or si > fsi1:
+			var s2 = slabs[si]
+			s2.mesh_instance = null
+			s2.fluid_instance = null
+			s2.flora_instance = null
+			s2.occluder = null
+	for o2 in old_insts:
+		if is_instance_valid(o2):
+			o2.queue_free()
 	mesh_built = true
 	mesh_gen += 1
 	_post_build_collision()
 
 
 func apply_edit_accs(res: Dictionary, ms: Dictionary) -> void:
+	# AC-0199: retain-swap (scoped) - the covered slabs keep their old
+	# instances until the new refs are assembled, then the old are freed.
 	var pms := {"tex": null, "rects": {}, "h": 0.0}
 	var si0 := int(res.get("si0", 0))
 	var si1 := int(res.get("si1", slab_n() - 1))
+	var old_insts: Array = []
 	for si in range(si0, si1 + 1):
 		var s = slabs[si]
 		if s.mesh_instance != null:
-			s.mesh_instance.queue_free()
-			s.mesh_instance = null
+			old_insts.append(s.mesh_instance)
 		if s.fluid_instance != null:
-			s.fluid_instance.queue_free()
-			s.fluid_instance = null
+			old_insts.append(s.fluid_instance)
 		if s.flora_instance != null:
-			s.flora_instance.queue_free()
-			s.flora_instance = null
+			old_insts.append(s.flora_instance)
 		if s.occluder != null:
-			s.occluder.queue_free()
-			s.occluder = null
+			old_insts.append(s.occluder)
 	last_eff = _eff_store(res.light)
 	last_blk_ring = res.light.get("ring", PackedInt32Array())
 	if bool(res.get("light_recomputed", false)):
@@ -1339,6 +1356,9 @@ func apply_edit_accs(res: Dictionary, ms: Dictionary) -> void:
 	for i in range(si1 - si0 + 1):
 		var row: Array = res.slabs[i]
 		_assemble_slab(slabs[si0 + i], _acc_from_dict(row[0]), _acc_from_dict(row[1]), _acc_from_dict(row[2]), _acc_from_dict(row[3]), _acc_from_dict(row[4]), _acc_from_dict(row[5]), pms, bool(row[6]))
+	for o2 in old_insts:
+		if is_instance_valid(o2):
+			o2.queue_free()
 	mesh_built = true
 	mesh_gen += 1
 	_post_build_collision()
