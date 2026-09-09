@@ -335,6 +335,14 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			player = main._spawn_player()
 			await _dnlight_test(spawn)
 			return
+		if logic == "oceanfill":
+			# AC-0092: ocean columns are water from the surface to the
+			# floor (no 1-thick sheet, no air below the surface).
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _oceanfill_test(spawn)
+			return
 		if logic == "look":
 			world.recenter(spawn.x, spawn.z, true)
 			player = main._spawn_player()
@@ -1083,6 +1091,11 @@ func _batt_run_mode(mode: String, spawn: Vector3, seed_env: String) -> void:
 			await main._await_spawn_floor(spawn, 300)
 			player = main._spawn_player()
 			await _dnlight_test(spawn)
+		"oceanfill":
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _oceanfill_test(spawn)
 		_:
 			print("BATTSKIP ", mode)
 	if sp != spawn:
@@ -16126,6 +16139,75 @@ func _walk_children(node: Node) -> Array:
 # BUILT at midnight stores the same light values as the noon build;
 # (4) slab materials are the shared cached ShaderMaterials, so LOD
 # swaps (same material) keep the transition.
+# AC-0092: the ocean fill. gen.cpp fills y in (he, sea] with water
+# when the terrain surface he < sea - a full column from the surface to
+# sea level, not a 1-thick sheet. The arm finds a real ocean (wide
+# seed-space scan of the pure terrain_height), recenters onto it, then
+# walks each sample column down from sea level: the surface block is
+# water at SEA, the block above the surface is air, and the walk down
+# hits solid terrain before it ever hits air (no fall-through).
+func _oceanfill_test(spawn: Vector3) -> void:
+	var res: Dictionary = {}
+	# find real ocean columns from the DATA (the GDScript terrain_height
+	# does not track the C++ density-field gen - do not use it). A data
+	# scan only sees loaded chunks (unloaded = air), so recenter onto a
+	# few candidate spots until a water surface at sea level shows up.
+	var ocean_cols: Array = []
+	var cx := 0
+	var cz := 0
+	for attempt in 8:
+		cx = int(spawn.x / 64.0) * 64 + (attempt % 4) * 96 - 96
+		cz = int(spawn.z / 64.0) * 64 + (attempt / 4) * 96 - 48
+		world.recenter(float(cx), float(cz), true)
+		await main._await_world_build(Vector3(float(cx), 128.0, float(cz)), 3000)
+		for dx in range(-40, 41, 8):
+			for dz in range(-40, 41, 8):
+				var x := cx + dx
+				var z := cz + dz
+				if world.get_block(x, Data.SEA, z) == WorldGen.B_WATER:
+					ocean_cols.append(Vector2i(x, z))
+		if ocean_cols.size() >= 6:
+			break
+	res["ocean_found"] = ocean_cols.size() > 0
+	if not res["ocean_found"]:
+		Debug.result(res)
+		if not _batt:
+			get_tree().quit()
+		return
+	var n := 0
+	var surface_at_sea := true
+	var air_above := true
+	var solid_to_floor := true
+	for o2 in ocean_cols:
+		var x: int = o2.x
+		var z: int = o2.y
+		# the surface is water AT sea level (the scan already proved the
+		# first; re-assert for every checked column)
+		if world.get_block(x, Data.SEA, z) != WorldGen.B_WATER:
+			surface_at_sea = false
+		# and air above it
+		if world.get_block(x, Data.SEA + 1, z) != 0:
+			air_above = false
+		# walk down: water until solid - never air (no fall-through)
+		var y := Data.SEA
+		while y >= 1 and world.get_block(x, y, z) == WorldGen.B_WATER:
+			y -= 1
+		if world.get_block(x, y, z) == 0:
+			solid_to_floor = false
+		n += 1
+		if n >= 24:
+			break
+	res["n_checked"] = n
+	res["surface_at_sea"] = surface_at_sea
+	res["air_above"] = air_above
+	res["solid_to_floor"] = solid_to_floor
+	res["ok"] = res["ocean_found"] and n > 0 and surface_at_sea \
+		and air_above and solid_to_floor
+	Debug.result(res)
+	if not _batt:
+		get_tree().quit()
+
+
 func _dnlight_test(spawn: Vector3) -> void:
 	var res: Dictionary = {}
 	# noon build
