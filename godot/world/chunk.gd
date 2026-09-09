@@ -1098,20 +1098,30 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 	else:
 		s.mesh_instance = null
 	if ac.q > 0 or af_w.q > 0 or af_l.q > 0:
+		# AC-0245 (2026-09-09 user report: "moving shadows" underwater):
+		# the fluid surfaces used to share the opaque mesh, so the water
+		# sheet cast into the shadow map (this build has no material-level
+		# cast control - only per-instance). Fluids now get their own
+		# mesh on a cast_shadow-OFF instance: water stops casting the
+		# swimming shadow blobs, and the double draw of every fluid
+		# surface (both instances drew the shared mesh) goes away too.
+		var fmesh := ArrayMesh.new()
 		if ac.q > 0:
-			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ac))
-			mesh.surface_set_material(mesh.get_surface_count() - 1, _get_mat("fluid"))
-			sidx[1] = mesh.get_surface_count() - 1
+			fmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ac))
+			fmesh.surface_set_material(fmesh.get_surface_count() - 1, _get_mat("fluid"))
+			sidx[1] = fmesh.get_surface_count() - 1
 		if af_w.q > 0:
-			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(af_w))
-			mesh.surface_set_material(mesh.get_surface_count() - 1, _fluid_anim_material(5))
-			sidx[2] = mesh.get_surface_count() - 1
+			fmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(af_w))
+			fmesh.surface_set_material(fmesh.get_surface_count() - 1, _fluid_anim_material(5))
+			sidx[2] = fmesh.get_surface_count() - 1
 		if af_l.q > 0:
-			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(af_l))
-			mesh.surface_set_material(mesh.get_surface_count() - 1, _fluid_anim_material(24))
-			sidx[3] = mesh.get_surface_count() - 1
+			fmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(af_l))
+			fmesh.surface_set_material(fmesh.get_surface_count() - 1, _fluid_anim_material(24))
+			sidx[3] = fmesh.get_surface_count() - 1
 		var fi := MeshInstance3D.new()
-		fi.mesh = mesh
+		fi.mesh = fmesh
+		# (0 = off; this build strips the GeometryInstance3D enum constants)
+		fi.cast_shadow = 0
 		add_child(fi)
 		s.fluid_instance = fi
 	else:
@@ -1199,6 +1209,7 @@ static func _flower_material() -> StandardMaterial3D:  # AC-0120: static (pure)
 
 static func _fluid_material() -> StandardMaterial3D:  # AC-0120: static (pure)
 	var m := StandardMaterial3D.new()
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED  # AC-0245: boundary faces from all sides
 	m.vertex_color_use_as_albedo = true
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	m.albedo_color = Color(1, 1, 1, 0.62)

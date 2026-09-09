@@ -16461,6 +16461,7 @@ func _underwater_test(spawn: Vector3) -> void:
 		if found:
 			break
 	res["found_ocean"] = found
+	res["ocean"] = [ox, oz]
 	if not found:
 		Debug.result(res)
 		if not _batt:

@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode cull_back;
+render_mode cull_disabled;
 
 // Web-faithful fluid animation (index.html updateAtlasAnims):
 // stacked-frame texture flip, 300 ms/frame (web default frametime),
@@ -24,9 +24,10 @@ void vertex() {
 }
 
 void fragment() {
-	// AC-0036: same underwater near-cull as chunk_lit_fluid (the animated
-	// water/lava faces must not clip the head either).
-	if (u_underwater > 0.5 && distance(v_world_pos, u_cam_pos) < 1.9) {
+	// AC-0036 (+AC-0245): same underwater near-cull as chunk_lit_fluid
+	// (~1.2 blocks - only the face inside the head; the surface above stays
+	// visible so the boundary is readable from underwater).
+	if (u_underwater > 0.5 && distance(v_world_pos, u_cam_pos) < 1.2) {
 		discard;
 	}
 	vec2 uv = UV;

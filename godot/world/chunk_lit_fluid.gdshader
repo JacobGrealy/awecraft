@@ -4,7 +4,7 @@
 // current 0.62 alpha (StandardMaterial3D albedo alpha 0.62 in
 // _fluid_material) so the look is preserved.
 shader_type spatial;
-render_mode unshaded, cull_back;
+render_mode unshaded, cull_disabled;
 
 uniform float u_day : hint_range(0.0, 1.0) = 1.0;
 uniform sampler2D tex : filter_nearest;
@@ -22,10 +22,11 @@ void vertex() {
 }
 
 void fragment() {
-	// AC-0036: underwater near-cull - while the eye is in water, hide the
-	// water faces around the head (the Bedrock "blue cube" look: no water
-	// surface inside ~1.9 blocks of the camera).
-	if (u_underwater > 0.5 && distance(v_world_pos, u_cam_pos) < 1.9) {
+	// AC-0036 (+AC-0245): underwater near-cull - while the eye is in water,
+	// hide only the water face actually around the head (~1.2 blocks); the
+	// surface a short distance above/below stays visible so the boundary is
+	// readable from underwater.
+	if (u_underwater > 0.5 && distance(v_world_pos, u_cam_pos) < 1.2) {
 		discard;
 	}
 	vec4 t = texture(tex, UV);

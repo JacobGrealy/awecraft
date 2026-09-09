@@ -8006,10 +8006,8 @@ func mesh_info() -> Array:
 		var fslot_tot := [0, 0, 0, 0]
 		var aabb = null
 		var faabb = null
-		var has_fluid := false
-		for s in c.slabs:
-			if s.fluid_instance != null and s.fluid_instance.mesh != null:
-				has_fluid = true
+		# AC-0245: post mesh-split - the opaque slot lives on the opaque
+		# mesh instance, the fluid slots (1..3) on the fluid mesh instance.
 		for s in c.slabs:
 			var mi = s.mesh_instance
 			if mi and mi.mesh:
@@ -8017,23 +8015,15 @@ func mesh_info() -> Array:
 				var ab = m.get_aabb()
 				aabb = ab if aabb == null else aabb.merge(ab)
 				var sidx: PackedInt32Array = s.sidx
-				for si in range(sidx.size()):
-					if sidx[si] >= 0:
-						var arrs = m.surface_get_arrays(sidx[si])
-						slot_tot[si] += (arrs[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
-				if has_fluid:
-					var fab = m.get_aabb()
-					faabb = fab if faabb == null else faabb.merge(fab)
-					for si in range(sidx.size()):
-						if sidx[si] >= 0:
-							var farrs = m.surface_get_arrays(sidx[si])
-							fslot_tot[si] += (farrs[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
-			elif has_fluid and s.fluid_instance != null and s.fluid_instance.mesh != null:
+				if sidx[0] >= 0:
+					var arrs = m.surface_get_arrays(sidx[0])
+					slot_tot[0] += (arrs[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+			if s.fluid_instance != null and s.fluid_instance.mesh != null:
 				var fm: ArrayMesh = s.fluid_instance.mesh
 				var fab = fm.get_aabb()
 				faabb = fab if faabb == null else faabb.merge(fab)
 				var fsi: PackedInt32Array = s.sidx
-				for si in range(fsi.size()):
+				for si in range(1, fsi.size()):
 					if fsi[si] >= 0:
 						var farrs = fm.surface_get_arrays(fsi[si])
 						fslot_tot[si] += (farrs[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
