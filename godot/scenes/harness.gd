@@ -1,8 +1,3 @@
-# AC-0140: the test harness - every AWECRAFT_LOGIC/AWECRAFT_BATTERY arm and
-# its helpers, extracted VERBATIM from main.gd (no logic edits; coordinator
-# calls go through main, member reads/writes through the pass-throughs
-# below). The scene adds this as a child; run() carries the former
-# _run_game dispatch cascade, run_battery() the former _ready battery entry.
 extends Node
 
 class_name Harness
@@ -310,6 +305,13 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await main._await_spawn_floor(spawn, 300)
 			player = main._spawn_player()
 			await _console_test(spawn)
+			return
+		if logic == "bugreport":
+			# AC-0172: one-click bug capture (F8 + console bugreport).
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _bugreport_test(spawn)
 			return
 		if logic == "look":
 			world.recenter(spawn.x, spawn.z, true)
@@ -1039,6 +1041,11 @@ func _batt_run_mode(mode: String, spawn: Vector3, seed_env: String) -> void:
 			await _buckets_test_body()
 		"genhash":
 			_genhash_print(seed_env)
+		"bugreport":
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _bugreport_test(spawn)
 		_:
 			print("BATTSKIP ", mode)
 	if sp != spawn:
@@ -15855,6 +15862,138 @@ func _c_type(word: String) -> void:
 func _c_submit() -> void:
 	_c_key(KEY_ENTER, 13)
 	await get_tree().physics_frame
+
+
+
+# AC-0172: the one-click bug capture. F8 (console closed) and the console
+# command bugreport must both produce a zip in user://bugs with the same
+# entries; the zip must hold a real PNG screenshot and a report with the
+# seed / chunk origin, plus the session log when debug logging is on.
+func _bugreport_test(spawn: Vector3) -> void:
+	var res: Dictionary = {}
+	var seed := str(Settings.values.get("seed", "?"))
+	# seed the session log so the capture has a log to bundle
+	Settings.set_value("debug_logging", true)
+	Debug.log("bugreport arm marker")
+	# 1) F8 with the console CLOSED (the capture is async - one frame for
+	# the render target on a real display, immediate in headless)
+	_c_key(KEY_F8, 0)
+	var z1 := ""
+	for i in 300:
+		await get_tree().physics_frame
+		z1 = _newest_bug_zip()
+		if z1 != "":
+			break
+	res["f8_zip"] = z1 != "" and FileAccess.file_exists(z1)
+	var d1 := _read_zip(z1)
+	res["f8_entries"] = _zip_names(d1).has("report.txt") \
+		and _zip_names(d1).has("screenshot.png") \
+		and _zip_names(d1).has("session.log")
+	res["f8_report"] = _zip_entry_text(d1, "report.txt").find("seed " + seed) >= 0 \
+		and _zip_entry_text(d1, "report.txt").find("chunk_origin") >= 0
+	res["f8_png"] = _zip_entry(d1, "screenshot.png").size() > 8 \
+		and _zip_entry(d1, "screenshot.png")[0] == 0x89 \
+		and _zip_entry(d1, "screenshot.png")[1] == 0x50
+	res["f8_log"] = _zip_entry_text(d1, "session.log").find("bugreport arm marker") >= 0
+	# 2) the console command
+	_c_key(KEY_QUOTELEFT, 96)
+	var opened := false
+	for i in 200:
+		await get_tree().physics_frame
+		if Game.console_open:
+			opened = true
+			break
+	res["opened"] = opened
+	await get_tree().physics_frame  # the deferred grab_focus lands here
+	res["focused"] = Game.console.input_line.has_focus()
+	await _c_type("bugreport")
+	await _c_submit()
+	var z2 := ""
+	for i in 300:
+		await get_tree().physics_frame
+		z2 = _newest_bug_zip()
+		if z2 != "" and z2 != z1:
+			break
+	_c_key(KEY_QUOTELEFT, 96)
+	for i in 20:
+		await get_tree().physics_frame
+	res["console_zip"] = z2 != "" and z2 != z1
+	var d2 := _read_zip(z2)
+	# key sets, not dicts - the per-entry offset/size values legitimately
+	# differ between the two captures
+	res["same_shape"] = z2 != "" \
+		and _zip_names(d1).keys() == _zip_names(d2).keys()
+	res["console_log_line"] = Game.console != null \
+		and Game.console.log_view.get_parsed_text().find("bugreport: capture") >= 0
+	# 3) cleanup
+	res["cleanup"] = _clean_bugs()
+	res["ok"] = res["f8_zip"] and res["f8_entries"] and res["f8_report"] \
+		and res["f8_png"] and res["f8_log"] and opened and res["focused"] \
+		and res["console_zip"] and res["same_shape"] \
+		and res["console_log_line"] and res["cleanup"]
+	Debug.result(res)
+	if not _batt:
+		get_tree().quit()
+
+
+func _newest_bug_zip() -> String:
+	var found := ""
+	var da := DirAccess.open("user://bugs")
+	if da == null:
+		return ""
+	da.list_dir_begin()
+	var f := da.get_next()
+	while f != "":
+		if f.begins_with("awecraft_bug_") and f.ends_with(".zip"):
+			if f > found:
+				found = f
+		f = da.get_next()
+	da.list_dir_end()
+	return "user://bugs/" + found
+
+
+func _read_zip(path: String) -> PackedByteArray:
+	if path == "":
+		return PackedByteArray()
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return PackedByteArray()
+	var data := f.get_buffer(f.get_length())
+	f.close()
+	return data
+
+
+func _zip_names(data: PackedByteArray) -> Dictionary:
+	return ZipMini.list(data)
+
+
+func _zip_entry(data: PackedByteArray, name: String) -> PackedByteArray:
+	return ZipMini.get_entry(data, name)
+
+
+func _zip_entry_text(data: PackedByteArray, name: String) -> String:
+	return ZipMini.get_entry(data, name).get_string_from_utf8()
+
+
+func _clean_bugs() -> bool:
+	var ok := true
+	var da := DirAccess.open("user://bugs")
+	if da == null:
+		return true
+	da.list_dir_begin()
+	var f := da.get_next()
+	while f != "":
+		if f.begins_with("awecraft_bug_") and f.ends_with(".zip"):
+			ok = ok and DirAccess.remove_absolute("user://bugs/" + f) == OK
+		f = da.get_next()
+	da.list_dir_end()
+	Settings.set_value("debug_logging", false)
+	return ok
+# AC-0140: the test harness - every AWECRAFT_LOGIC/AWECRAFT_BATTERY arm and
+# its helpers, extracted VERBATIM from main.gd (no logic edits; coordinator
+# calls go through main, member reads/writes through the pass-throughs
+# below). The scene adds this as a child; run() carries the former
+# _run_game dispatch cascade, run_battery() the former _ready battery entry.
 
 
 func _console_test(spawn: Vector3) -> void:

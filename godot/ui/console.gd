@@ -17,6 +17,7 @@ const COMMANDS := {
 	"holdswing": "holdswing [frac] - hold a swing, frac of an arm (old J key)",
 	"clearswing": "clearswing - stop the swing, reset the hand (old K key)",
 	"log": "log [on|off] - debug output into this console (Options toggle)",
+	"bugreport": "dump seed/pos/screenshot/session log to a zip in user://bugs",
 	"help": "help - list commands",
 	"quit": "quit - exit the game",
 }
@@ -194,6 +195,9 @@ func dispatch(s: String) -> void:
 			var on := p.size() < 1 or str(p[0]) == "on" or str(p[0]) == "1"
 			Settings.set_value("debug_logging", on)
 			add_log("debug logging %s" % ("on" if on else "off"))
+		"bugreport":
+			Debug.bug_report()
+			add_log("bugreport: capture started (zip in user://bugs)")
 		"quit":
 			add_log("[quitting...]")
 			get_tree().quit()

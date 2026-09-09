@@ -226,6 +226,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		# AC-0122: the old V/H/J/K debug keys moved into the console as the
 		# seedinv / swing / holdswing / clearswing commands (no more accidental
 		# triggers during play); P keeps pause until AC-0185 moves it to Esc.
+		# AC-0172: F8 = one-click bug capture (zip in user://bugs).
+		elif kc == int(KEY_F8):
+			Debug.bug_report()
 		elif kc == int(KEY_P) or event.is_action_pressed("ui_pause"):
 			if ui_mode == "" and not dead:
 				Game.pause()

@@ -250,6 +250,94 @@ func _tee_console(msg: String, tag: String) -> void:
 	session_log_line("[%s] %s" % [tag, msg])
 
 
+# AC-0172: one-click bug capture - F8 in play or the console command
+# bugreport. Builds user://bugs/awecraft_bug_<stamp>.zip with the
+# report (seed / player pos / chunk origin / band / settings / stats /
+# console tail), a viewport screenshot, and the session log when
+# debug logging is on. Async (one frame for the render target); the F8
+# handler and the console dispatch can call it fire-and-forget; the
+# report announces itself via a message.
+func bug_report() -> void:
+	# headless never emits frame_post_draw (no rendering) - the viewport
+	# image below is then a placeholder instead of a real frame.
+	if DisplayServer.get_name() != "headless":
+		await RenderingServer.frame_post_draw
+	var t := Time.get_datetime_dict_from_system()
+	var stamp := "%04d%02d%02d_%02d%02d%02d" % [
+		int(t.year), int(t.month), int(t.day),
+		int(t.hour), int(t.minute), int(t.second)]
+	DirAccess.make_dir_recursive_absolute("user://bugs")
+	var zip_path := "user://bugs/awecraft_bug_%s.zip" % stamp
+	# a second capture in the same second gets a numbered name
+	var n2 := 2
+	while FileAccess.file_exists(zip_path):
+		zip_path = "user://bugs/awecraft_bug_%s_%d.zip" % [stamp, n2]
+		n2 += 1
+	var lines: Array = []
+	lines.append("AweCraft bug report - %s" % Time.get_datetime_string_from_system())
+	lines.append("godot %s  build %s" % [
+		Engine.get_version_info().string, Build.ID])
+	lines.append("seed %s" % Settings.values.get("seed", "?"))
+	lines.append("mode %s  time_of_day %.3f" % [
+		Game.mode, Game.time_of_day])
+	if Game.player != null:
+		var p: Vector3 = Game.player.position
+		lines.append("player %s" % p)
+		lines.append("chunk_origin (%d, 0, %d)" % [
+			int(floor(p.x / 16.0)), int(floor(p.z / 16.0))])
+		lines.append("flying %s  dead %s" % [
+			Game.player.flying, Game.player.dead])
+	lines.append("band sim_dist=%s render_dist=%s" % [
+		Settings.values.get("sim_dist"), Settings.values.get("render_dist")])
+	lines.append("debug_logging %s  debug_stats %s" % [
+		bool(Settings.values.get("debug_logging", false)),
+		bool(Settings.values.get("debug_stats", false))])
+	lines.append("stats fps=%d ram_proc=%.1fMB vram=%.0fMB" % [
+		int(Performance.get_monitor(Performance.TIME_FPS)),
+		float(OS.get_static_memory_usage()) / 1048576.0,
+		float(Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED)) / 1048576.0])
+	for k in Settings.values:
+		lines.append("setting %s = %s" % [k, Settings.values[k]])
+	if Game.console != null:
+		lines.append("--- console log ---")
+		var ct: String = Game.console.log_view.get_parsed_text()
+		for ln in ct.split("\n"):
+			if ln.strip_edges() != "":
+				lines.append("console| %s" % ln)
+	if Game.console != null and bool(Settings.values.get("debug_logging", false)):
+		lines.append("--- debug output (session log) ---")
+		if session_log_file != "" and FileAccess.file_exists(session_log_file):
+			var sf := FileAccess.open(session_log_file, FileAccess.READ)
+			if sf != null:
+				var sdata: String = sf.get_as_text()
+				sf.close()
+				for ln in sdata.split("\n"):
+					if ln.strip_edges() != "":
+						lines.append("log| %s" % ln)
+	var entries: Array = []
+	entries.append(["report.txt",
+		("\n".join(lines) + "\n").to_utf8_buffer()])
+	# screenshot - may be a frame or two stale, fine for a bug report.
+	# A null/empty image (headless has no render target) becomes a
+	# small placeholder so the bundle always has a screenshot entry.
+	var image := get_tree().root.get_viewport().get_texture().get_image()
+	if image == null or image.get_width() <= 0:
+		image = Image.create_empty(8, 8, false, Image.FORMAT_RGBA8)
+		image.fill(Color(0.5, 0.5, 0.5))
+	entries.append(["screenshot.png", image.save_png_to_buffer()])
+	if session_log_file != "" and FileAccess.file_exists(session_log_file):
+		var sf2 := FileAccess.open(session_log_file, FileAccess.READ)
+		if sf2 != null:
+			entries.append(["session.log", sf2.get_buffer(sf2.get_length())])
+			sf2.close()
+	if not ZipMini.make_zip(entries, zip_path):
+		push_error("bug report: zip write failed")
+		Game.message("Bug report FAILED")
+		return
+	print("[dbg] bug report -> %s" % zip_path)
+	Game.message("Bug report saved")
+
+
 # AC-0171: per-run session log - a NEW user://logs/awecraft_<stamp>.log
 # each launch, pruned to the 5 newest (the 6th run deletes the oldest).
 # The file is created lazily on the first line after the toggle is on.
