@@ -27,6 +27,9 @@ const DEFAULTS := {
 	"debug_stats": false,
 	# AC-0170: tee Debug.log/Debug.error output into the in-game console.
 	"debug_logging": false,
+	"overlay_band": false,
+	"overlay_light": false,
+	"overlay_collision": false,
 	"flight_speed": 4,
 	# AC-0225: streaming chunk-mesh handoff burst per frame (the AC-0224
 	# drain cap); 3 = the shipped AC-0224 default, so the default is a
@@ -84,6 +87,12 @@ func _clamp(k: String, v) -> void:
 		"debug_stats":
 			values[k] = bool(v)
 		"debug_logging":
+			values[k] = bool(v)
+		"overlay_band":
+			values[k] = bool(v)
+		"overlay_light":
+			values[k] = bool(v)
+		"overlay_collision":
 			values[k] = bool(v)
 		"flight_speed":
 			values[k] = clampi(int(v), 1, 50)

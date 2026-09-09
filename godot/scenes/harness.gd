@@ -320,6 +320,13 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			player = main._spawn_player()
 			await _crash_test(spawn)
 			return
+		if logic == "overlays":
+			# AC-0174: dev overlay toggles (band / light / collision).
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _overlays_test(spawn)
+			return
 		if logic == "look":
 			world.recenter(spawn.x, spawn.z, true)
 			player = main._spawn_player()
@@ -1058,6 +1065,11 @@ func _batt_run_mode(mode: String, spawn: Vector3, seed_env: String) -> void:
 			await main._await_spawn_floor(spawn, 300)
 			player = main._spawn_player()
 			await _crash_test(spawn)
+		"overlays":
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _overlays_test(spawn)
 		_:
 			print("BATTSKIP ", mode)
 	if sp != spawn:
@@ -16089,6 +16101,99 @@ func _walk_children(node: Node) -> Array:
 			out.append(c)
 			stack.append(c)
 	return out
+
+
+func _overlays_test(spawn: Vector3) -> void:
+	var res: Dictionary = {}
+	var keys := ["overlay_band", "overlay_light", "overlay_collision"]
+	# 1) persistence: set_value auto-saves, load_settings reads it back
+	for k in keys:
+		Settings.set_value(k, true)
+	var loaded := Settings.load_settings()
+	var persist := true
+	for k in keys:
+		persist = persist and bool(loaded.get(k, false))
+		Settings.set_value(k, false)
+	res["persist"] = persist
+	for i in 10:
+		await get_tree().physics_frame
+	res["off_gone"] = world._overlay_node == null or (
+		world._overlay_band_mi == null or world._overlay_band_mi.mesh == null) \
+		and (world._overlay_light_mi == null or world._overlay_light_mi.mesh == null) \
+		and (world._overlay_col_mi == null or world._overlay_col_mi.mesh == null)
+	# 2) all three on at once -> three meshes with geometry
+	for k in keys:
+		Settings.set_value(k, true)
+	for i in 120:
+		await get_tree().physics_frame
+		if world._overlay_node != null and world._overlay_band_mi != null \
+			and world._overlay_band_mi.mesh != null \
+			and world._overlay_light_mi.mesh != null \
+			and world._overlay_col_mi.mesh != null:
+			break
+	res["all_on"] = world._overlay_node != null \
+		and world._overlay_band_mi.mesh != null \
+		and world._overlay_light_mi.mesh != null \
+		and world._overlay_col_mi.mesh != null
+	res["band_surf"] = world._overlay_band_mi != null \
+		and world._overlay_band_mi.mesh != null \
+		and world._overlay_band_mi.mesh.get_surface_count() > 0
+	res["light_surf"] = world._overlay_light_mi != null \
+		and world._overlay_light_mi.mesh != null \
+		and world._overlay_light_mi.mesh.get_surface_count() > 0
+	# 3) independence: turning one off drops only its mesh
+	Settings.set_value("overlay_band", false)
+	for i in 10:
+		await get_tree().physics_frame
+	res["band_off"] = world._overlay_band_mi.mesh == null
+	res["light_still"] = world._overlay_light_mi.mesh != null
+	res["col_still"] = world._overlay_col_mi.mesh != null
+	# 4) all off -> nothing left
+	for k in keys:
+		Settings.set_value(k, false)
+	for i in 10:
+		await get_tree().physics_frame
+	res["all_off"] = world._overlay_band_mi.mesh == null \
+		and world._overlay_light_mi.mesh == null \
+		and world._overlay_col_mi.mesh == null
+	# 5) the Options checkboxes drive the same settings (instantiate the
+	# menu scene directly - the arm path never boots it)
+	var mscene: PackedScene = load("res://scenes/menu.tscn")
+	var mnode: Node = mscene.instantiate()
+	add_child(mnode)
+	await get_tree().process_frame
+	var pairs := [
+		["OverlayBandCheck", "overlay_band"],
+		["OverlayLightCheck", "overlay_light"],
+		["OverlayCollisionCheck", "overlay_collision"]]
+	var menu_ok := true
+	for pr in pairs:
+		var cb: CheckBox = mnode.get_node_or_null(
+			"Layer/OptionsBox/Center/VBox/" + str(pr[0]))
+		if cb == null:
+			menu_ok = false
+			break
+		cb.button_pressed = true
+		if not bool(Settings.values.get(str(pr[1]), false)):
+			menu_ok = false
+		cb.button_pressed = false
+		if bool(Settings.values.get(str(pr[1]), false)):
+			menu_ok = false
+	res["menu_checks"] = menu_ok
+	mnode.queue_free()
+	for i in 5:
+		await get_tree().physics_frame
+	res["cleanup"] = world._overlay_node == null or (
+		world._overlay_band_mi == null or world._overlay_band_mi.mesh == null) \
+		and (world._overlay_light_mi == null or world._overlay_light_mi.mesh == null) \
+		and (world._overlay_col_mi == null or world._overlay_col_mi.mesh == null)
+	res["ok"] = res["persist"] and res["off_gone"] and res["all_on"] \
+		and res["band_surf"] and res["light_surf"] and res["band_off"] \
+		and res["light_still"] and res["col_still"] and res["all_off"] \
+		and res["menu_checks"] and res["cleanup"]
+	Debug.result(res)
+	if not _batt:
+		get_tree().quit()
 
 
 func _list_log_files() -> Array:

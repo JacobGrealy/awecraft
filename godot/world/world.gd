@@ -3108,6 +3108,192 @@ var _tm_concur_peak := 0
 func _physics_process_impl(_d: float) -> void:
 	if not threadmesh_inflight.is_empty():
 		threadmesh_poll()
+	_overlay_tick(_d)
+
+
+# AC-0174: dev overlay gizmos - three independent Options toggles
+# (overlay_band / overlay_light / overlay_collision), each drawing into
+# its own ImmediateMesh. Rebuilds are throttled to chunk-movement + a
+# 0.5 s timer; when every toggle is off the meshes are freed entirely,
+# so the idle cost is three bool reads and an array compare.
+var _overlay_node: Node3D = null
+var _overlay_band_mi: MeshInstance3D = null
+var _overlay_light_mi: MeshInstance3D = null
+var _overlay_col_mi: MeshInstance3D = null
+var _overlay_state: Array = [false, false, false]
+var _overlay_chunk := Vector2i(-9999, -9999)
+var _overlay_acc := 0.0
+
+
+func _overlay_tick(d: float) -> void:
+	var s0 := bool(Settings.values.get("overlay_band", false))
+	var s1 := bool(Settings.values.get("overlay_light", false))
+	var s2 := bool(Settings.values.get("overlay_collision", false))
+	var st: Array = [s0, s1, s2]
+	if st != _overlay_state:
+		_overlay_state = st
+		_overlay_ensure_node()
+		_overlay_set_mesh(_overlay_band_mi, s0)
+		_overlay_set_mesh(_overlay_light_mi, s1)
+		_overlay_set_mesh(_overlay_col_mi, s2)
+		_overlay_chunk = Vector2i(-9999, -9999)
+		return
+	if not (s0 or s1 or s2) or Game.player == null:
+		return
+	_overlay_acc += d
+	var p: Vector3 = Game.player.position
+	var c := Vector2i(int(floor(p.x / 16.0)), int(floor(p.z / 16.0)))
+	if c != _overlay_chunk or _overlay_acc >= 0.5:
+		_overlay_acc = 0.0
+		_overlay_chunk = c
+		_overlay_rebuild(s0, s1, s2)
+
+
+func _overlay_ensure_node() -> void:
+	if _overlay_node != null:
+		return
+	_overlay_node = Node3D.new()
+	_overlay_node.name = "OverlayGizmos"
+	add_child(_overlay_node)
+	for nm in ["OverlayBand", "OverlayLight", "OverlayCollision"]:
+		var mi := MeshInstance3D.new()
+		mi.name = nm
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_overlay_node.add_child(mi)
+	_overlay_band_mi = _overlay_node.get_node("OverlayBand")
+	_overlay_light_mi = _overlay_node.get_node("OverlayLight")
+	_overlay_col_mi = _overlay_node.get_node("OverlayCollision")
+
+
+# 4.7: meshes are RefCounted - drop the reference, never .free().
+func _overlay_set_mesh(mi: MeshInstance3D, on: bool) -> void:
+	if mi == null:
+		return
+	if not on and mi.mesh != null:
+		mi.mesh = null
+
+
+func _overlay_rebuild(s0: bool, s1: bool, s2: bool) -> void:
+	if s0:
+		_overlay_draw_band(_overlay_band_mi)
+	if s1:
+		_overlay_draw_light(_overlay_light_mi)
+	if s2:
+		_overlay_draw_collision(_overlay_col_mi)
+
+
+# 4.7: no ImmediateMesh.clear() - each rebuild allocates a fresh mesh.
+func _overlay_draw_band(mi: MeshInstance3D) -> void:
+	var m := ImmediateMesh.new()
+	var p: Vector3 = Game.player.position
+	var y := floorf(p.y) + 0.05
+	var cx := int(floor(p.x / 16.0)) * 16
+	var cz := int(floor(p.z / 16.0)) * 16
+	var rr := render_radius * 16
+	var sr := int(Settings.values.get("sim_dist", 4)) * 16
+	m.surface_begin(Mesh.PRIMITIVE_LINES)
+	m.surface_set_color(Color(1, 1, 1, 0.35))
+	var i := -rr
+	while i <= rr:
+		m.surface_add_vertex(Vector3(cx + float(i), y, cz - float(rr)))
+		m.surface_add_vertex(Vector3(cx + float(i), y, cz + float(rr)))
+		m.surface_add_vertex(Vector3(cx - float(rr), y, cz + float(i)))
+		m.surface_add_vertex(Vector3(cx + float(rr), y, cz + float(i)))
+		i += 16
+	_overlay_rect(m, float(cx), y, float(cz), float(sr), Color(1.0, 0.6, 0.1, 0.9))
+	_overlay_rect(m, float(cx), y, float(cz), float(rr), Color(0.2, 1.0, 0.3, 0.9))
+	m.surface_end()
+	mi.mesh = m
+
+
+func _overlay_rect(m: ImmediateMesh, cx: float, y: float, cz: float, r: float, col: Color) -> void:
+	var v := [
+		Vector3(cx - r, y, cz - r), Vector3(cx + r, y, cz - r),
+		Vector3(cx + r, y, cz + r), Vector3(cx - r, y, cz + r)]
+	m.surface_set_color(col)
+	for i in 4:
+		m.surface_add_vertex(v[i])
+		m.surface_add_vertex(v[(i + 1) % 4])
+
+
+func _overlay_draw_light(mi: MeshInstance3D) -> void:
+	var m := ImmediateMesh.new()
+	var p: Vector3 = Game.player.position
+	var c := Vector3i(int(floor(p.x)), int(floor(p.y)), int(floor(p.z)))
+	var r := 12
+	var mn := Vector3i(c.x - r, maxi(c.y - r, 0), c.z - r)
+	var mx := Vector3i(c.x + r, c.y + r, c.z + r)
+	var res: Dictionary = Lighting.compute_light_split(
+		{"min": mn, "max": mx}, self, _lightflat)
+	var eff: Dictionary = res.eff
+	m.surface_begin(Mesh.PRIMITIVE_LINES)
+	for bc in eff:
+		var lvl: int = eff[bc]
+		if lvl <= 0:
+			continue
+		# skip half the blocks - the overlay is a rough map, not exact
+		if (bc.x + bc.y + bc.z) % 2 != 0:
+			continue
+		var t := float(lvl) / 15.0
+		m.surface_set_color(Color(0.8, 0.1, 0.05).lerp(Color(1.0, 0.95, 0.3), t))
+		m.surface_add_vertex(Vector3(float(bc.x) + 0.02, float(bc.y), float(bc.z) + 0.02))
+		m.surface_add_vertex(Vector3(float(bc.x) + 0.02, float(bc.y) + 0.15 + t * 1.2, float(bc.z) + 0.02))
+	m.surface_end()
+	mi.mesh = m
+
+
+func _overlay_draw_collision(mi: MeshInstance3D) -> void:
+	var m := ImmediateMesh.new()
+	var p: Vector3 = Game.player.position
+	var pc := Vector2i(int(floor(p.x / 16.0)), int(floor(p.z / 16.0)))
+	m.surface_begin(Mesh.PRIMITIVE_LINES)
+	m.surface_set_color(Color(1.0, 0.15, 0.15, 0.9))
+	for key in chunks:
+		var ch: Node3D = chunks[key]
+		var cc := Vector2i(int(ch.position.x / 16.0), int(ch.position.z / 16.0))
+		if absi(cc.x - pc.x) > 1 or absi(cc.y - pc.y) > 1:
+			continue
+		for s in ch.slabs:
+			if s.collision_body == null:
+				continue
+			for col in s.collision_body.get_children():
+				if not (col is CollisionShape3D) or col.shape == null:
+					continue
+				_overlay_aabb_lines(m, col.global_transform * _overlay_shape_aabb(col.shape))
+	m.surface_end()
+	mi.mesh = m
+
+
+# 4.7: ConcavePolygonShape3D has no get_aabb() (and this build's AABB
+# has no absorb/expand) - fold the faces by hand.
+func _overlay_shape_aabb(shape: Shape3D) -> AABB:
+	if shape is ConcavePolygonShape3D:
+		var mn := Vector3(INF, INF, INF)
+		var mx := Vector3(-INF, -INF, -INF)
+		for v in (shape as ConcavePolygonShape3D).get_faces():
+			mn = mn.min(v)
+			mx = mx.max(v)
+		if mn.x > mx.x:
+			return AABB()
+		return AABB(mn, mx - mn)
+	return shape.get_aabb()
+
+
+func _overlay_aabb_lines(m: ImmediateMesh, ab: AABB) -> void:
+	var c := [
+		Vector3(ab.position.x, ab.position.y, ab.position.z),
+		Vector3(ab.end.x, ab.position.y, ab.position.z),
+		Vector3(ab.end.x, ab.position.y, ab.end.z),
+		Vector3(ab.position.x, ab.position.y, ab.end.z),
+		Vector3(ab.position.x, ab.end.y, ab.position.z),
+		Vector3(ab.end.x, ab.end.y, ab.position.z),
+		Vector3(ab.end.x, ab.end.y, ab.end.z),
+		Vector3(ab.position.x, ab.end.y, ab.end.z)]
+	var e := [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7],
+		[7, 4], [0, 4], [1, 5], [2, 6], [3, 7]]
+	for i in e:
+		m.surface_add_vertex(c[i[0]])
+		m.surface_add_vertex(c[i[1]])
 
 
 func _process(_delta: float) -> void:

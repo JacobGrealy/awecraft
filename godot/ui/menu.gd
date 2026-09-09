@@ -37,6 +37,9 @@ var res_option: OptionButton
 var full_check: CheckBox
 var hunger_check: CheckBox
 var debuglog_check: CheckBox
+var overlay_band_check: CheckBox
+var overlay_light_check: CheckBox
+var overlay_collision_check: CheckBox
 var debug_check: CheckBox
 # AC-0232 (dither dropped in AC-0241): the fog start-distance slider
 # (percent of the render edge, (render_dist + 1) * 16 blocks).
@@ -131,6 +134,31 @@ func _ready() -> void:
 	opt_vbox.add_child(debuglog_check)
 	if hi + 1 < opt_vbox.get_child_count():
 		opt_vbox.move_child(debuglog_check, hi + 2)
+	# AC-0174: dev overlay toggles - independent, all can be on at once.
+	overlay_band_check = CheckBox.new()
+	overlay_band_check.name = "OverlayBandCheck"
+	overlay_band_check.text = "Show band overlay (render/sim bands)"
+	overlay_band_check.add_theme_font_size_override("font_size", 15)
+	overlay_band_check.toggled.connect(_on_overlay_band_toggled)
+	opt_vbox.add_child(overlay_band_check)
+	if hi + 2 < opt_vbox.get_child_count():
+		opt_vbox.move_child(overlay_band_check, hi + 3)
+	overlay_light_check = CheckBox.new()
+	overlay_light_check.name = "OverlayLightCheck"
+	overlay_light_check.text = "Show light-level overlay"
+	overlay_light_check.add_theme_font_size_override("font_size", 15)
+	overlay_light_check.toggled.connect(_on_overlay_light_toggled)
+	opt_vbox.add_child(overlay_light_check)
+	if hi + 3 < opt_vbox.get_child_count():
+		opt_vbox.move_child(overlay_light_check, hi + 4)
+	overlay_collision_check = CheckBox.new()
+	overlay_collision_check.name = "OverlayCollisionCheck"
+	overlay_collision_check.text = "Show collision overlay"
+	overlay_collision_check.add_theme_font_size_override("font_size", 15)
+	overlay_collision_check.toggled.connect(_on_overlay_collision_toggled)
+	opt_vbox.add_child(overlay_collision_check)
+	if hi + 4 < opt_vbox.get_child_count():
+		opt_vbox.move_child(overlay_collision_check, hi + 5)
 	file_dialog = get_node("Layer/PackDialog")
 	slot_labels = []
 	slot_conts = []
@@ -205,7 +233,7 @@ func open_options(source: String) -> void:
 	_sync_controls()
 	_apply_state()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	print("OPTSYNC from=%s render=%d sim=%d vol=%d res=%s full=%s hunger=%s stats=%s logdbg=%s chunk=%d fogpct=%d" % [
+	print("OPTSYNC from=%s render=%d sim=%d vol=%d res=%s full=%s hunger=%s stats=%s logdbg=%s chunk=%d fogpct=%d ovband=%s ovlight=%s ovcol=%s" % [
 		source,
 		int(Settings.values["render_dist"]),
 		int(Settings.values["sim_dist"]),
@@ -217,6 +245,9 @@ func open_options(source: String) -> void:
 		bool(Settings.values.get("debug_logging", false)),
 		int(Settings.values.get("chunks_per_frame", 3)),
 		int(Settings.values.get("fog_start_pct", 87)),
+		bool(Settings.values.get("overlay_band", false)),
+		bool(Settings.values.get("overlay_light", false)),
+		bool(Settings.values.get("overlay_collision", false)),
 	])
 
 
@@ -367,6 +398,9 @@ func _sync_controls() -> void:
 	hunger_check.button_pressed = bool(Settings.values["hunger_enabled"])
 	debug_check.button_pressed = bool(Settings.values["debug_stats"])
 	debuglog_check.button_pressed = bool(Settings.values.get("debug_logging", false))
+	overlay_band_check.button_pressed = bool(Settings.values.get("overlay_band", false))
+	overlay_light_check.button_pressed = bool(Settings.values.get("overlay_light", false))
+	overlay_collision_check.button_pressed = bool(Settings.values.get("overlay_collision", false))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_val.text = str(int(fogstart_slider.value)) + "%"
 	_syncing = false
@@ -465,3 +499,21 @@ func _on_debug_log_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("debug_logging", on)
+
+
+func _on_overlay_band_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("overlay_band", on)
+
+
+func _on_overlay_light_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("overlay_light", on)
+
+
+func _on_overlay_collision_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("overlay_collision", on)
