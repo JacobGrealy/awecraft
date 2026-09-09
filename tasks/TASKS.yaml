@@ -8951,7 +8951,37 @@ in) or a side block is broken (spreads into the trench). Verify: ok:true
     derived math. Verify: syntax 0; meshprobe + R16 re-baselined (fluid
     surfaces no longer double counted); editslab MINFO variants byte-identical;
     battery ok incl. underwater + fluids; xvfb render (no shadow blobs
-    underwater); EXE rebuilt + :8080 byte-match (product code).'
+    underwater); EXE rebuilt + :8080 byte-match (product code). 5) Implementation follow-up 2
+    (agent, 2026-09-09, user: "the water shadows still persist" after re-fetching; "issue
+    happens when camera is above water too"; "only showing on terrain covered with water";
+    "maybe that next to air check is not happening"): DONE - commit ca41d3c, :8080 build
+    AweCraft[20260909-1856 ca41d3c] (title-screen tag, AC-0249). The moving shadows persisted
+    after the section 4 mesh split. Probe-confirmed root cause: NO shadow map exists
+    (main.gd sun.shadow_enabled = false) - the section 4 shadow-map theory was a red
+    herring (the mesh split is harmless but was not the cause). The real cause is
+    z-fighting: cull_disabled (section 3) renders the water BACK faces exactly on the opaque
+    underwater terrain (lake floor, cliffs), so the depth buffer flips the winner per block
+    as the camera moves - a camera-motion-dependent blocky mottle on water-covered
+    terrain, from above AND below the water. Fix (two parts): (a) C++ gdext/src/mesh.cpp
+    emit_fluid - skip fluid faces toward solid neighbors (the same stab[nb] > 0 rule opaque
+    blocks use in s_faces): the "next to air" check the user hypothesized - water emits
+    faces only toward air/transparent (surface vs air, seen through leaves/glass), never
+    toward the opaque floor/cliffs; (b) godot/core/fluid_anim.gdshader - cull_disabled
+    reverted to cull_back (the root cause: back faces z-fighting the terrain); cull_back
+    keeps the surface readable from above and the side faces from the water side.
+    Trade-off: the underside of the water surface (seen from directly underwater) is no
+    longer drawn (that back face was the z-fight source); the AC-0036 near-cull + blue
+    underwater tint keep the underwater view clean. If the user wants the surface readable
+    from below, revisit with per-face cull or a depth bias. Probe evidence (xvfb seed 44,
+    subagent image compares): hiding all fluid removed the mottle (water related, not
+    terrain); the cull_back probe removed it (cull_disabled is the cause); a two-angle
+    compare proved the mottle is view-dependent (z-fight, not texture); final before/after
+    - mottle GONE, floor clean, water normal. USER CONFIRMED 2026-09-09: "I got the tagged
+    release and it is fixed". Gates: meshprobe ok:true match_rate 1.0 verts 321080;
+    genhash (0,0) 80b904c0... held; battery 15/15 across two runs (run 1: 10 modes ok:true
+    then the pre-existing AC-0246 native flake at the dnlight-to-oceanfill transition;
+    run 2: the remaining 5 modes all ok:true; 0 SCRIPT/SHADER ERROR); EXE rebuilt + :8080
+    byte-match (zip + exe sha256 identical).'
 - id: AC-0246
   title: gen-handoff-slab-use-after-free
   source: agent
@@ -8978,3 +9008,44 @@ in) or a side block is broken (spreads into the trench). Verify: ok:true
     strand - fixed for drops, not for slab pointer lifetime), AC-0206 (the old .so crash sites included slab_cell). Investigate
     slab handoff lifetime in gdext (who frees the old slab, when; is the swap atomic for readers) and add a regression arm
     that hammers recenter + get_block during heavy gen.'
+- id: AC-0249
+  title: title-screen-build-stamp
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - godot
+  created_at: 2026-09-09T18:40
+  updated_at: 2026-09-09T18:56
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: After repeated "I re-downloaded and the bug is still
+    there" episodes (the :8080 exe silently lagging the working tree), I want
+    to see at a glance which build I am actually running. (User request
+    2026-09-09: "Can we add a build date stamp into the title screen?")
+
+
+    2) Technical Details: The title screen already had a version label
+    (menu.gd version_label, scene node Layer/MainBox/Center/VBox/Version,
+    text "AweCraft[" + Build.ID + "]"), but core/build_id.gd Build.ID was the
+    constant "dev" in every artifact, so no two builds could be told apart.
+    build_windows.sh now rewrites that const to "<stamp> <git-short-sha>"
+    (stamp = the same YYYYMMDD-HHMM used for the exported filenames) right
+    before exporting and restores the file on exit (EXIT trap git checkout),
+    so the working tree keeps reading "dev". Shipped builds display e.g.
+    AweCraft[20260909-1856 ca41d3c] under the title on the title screen (and
+    in the crash dialog via debug.gd); dev / local-tree runs show
+    AweCraft[dev]. Files: godot/core/build_id.gd (documented const),
+    build_windows.sh (stamp block + EXIT trap). 3) Implementation (agent,
+    2026-09-09): DONE - commit ca41d3c. Verify: AWECRAFT_MENU_SHOT
+    title-screen render (subagent) shows the label under the title on the
+    main menu ("AweCraft[dev]" on tree runs); the build-script sed pattern
+    verified on a file copy; first stamped build AweCraft[20260909-1856
+    ca41d3c] built + :8080 byte-matched (zip + exe sha256 identical). User
+    confirmed seeing the tag on a build they ran ("I got the tagged release
+    and it is fixed"). Status stays open per house convention until the user
+    closes the loop on a fetched build.'
