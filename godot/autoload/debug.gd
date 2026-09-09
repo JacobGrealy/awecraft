@@ -230,6 +230,26 @@ func mobs_list():
 				})
 	return out
 
+# AC-0170: debug logging that tees into the in-game console when the
+# Options "debug_logging" toggle is on (off = stdout / push_error only).
+func log(msg) -> void:
+	print("[dbg] ", msg)
+	_tee_console(str(msg), "log")
+
+
+func error(msg) -> void:
+	push_error(str(msg))
+	_tee_console(str(msg), "error")
+
+
+func _tee_console(msg: String, tag: String) -> void:
+	if not bool(Settings.values.get("debug_logging", false)):
+		return
+	if Game.console == null:
+		return
+	Game.console.add_log("[%s] %s" % [tag, msg])
+
+
 func set_time(t) -> void:
 	Game.time_of_day = t
 

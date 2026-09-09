@@ -15944,6 +15944,34 @@ func _console_test(spawn: Vector3) -> void:
 	res["keys_dead"] = not bool(player._swing_active) \
 		and not bool(player._swing_held) \
 		and main._count_item(player, 126) == inv_before
+	# 8) AC-0170: the Options debug-logging toggle tees Debug.log into the
+	# console, only when on, and persists across a reload.
+	Settings.set_value("debug_logging", true)
+	Debug.log("hello console")
+	res["log_tee_on"] = c.log_view.get_parsed_text().find("hello console") >= 0
+	Settings.load_settings()  # fresh read from disk (set_value already saved)
+	res["log_persist"] = bool(Settings.values["debug_logging"])
+	Settings.set_value("debug_logging", false)
+	Debug.log("bye console")
+	res["log_tee_off"] = c.log_view.get_parsed_text().find("bye console") < 0
+	# the console command drives the same toggle
+	c.dispatch("log on")
+	res["log_cmd"] = bool(Settings.values["debug_logging"])
+	# and the Options checkbox (menu UI) the other way - the arm path never
+	# boots the menu, so instantiate the scene directly (its _ready builds
+	# the checkbox). Two presses so a signal fires regardless of state.
+	var mscene: PackedScene = load("res://scenes/menu.tscn")
+	var mnode: Node = mscene.instantiate()
+	add_child(mnode)
+	await get_tree().process_frame
+	var dlog: CheckBox = mnode.get_node_or_null("Layer/OptionsBox/Center/VBox/DebugLogCheck")
+	if dlog == null:
+		res["log_menu"] = false
+	else:
+		dlog.button_pressed = true
+		dlog.button_pressed = false
+		res["log_menu"] = not bool(Settings.values["debug_logging"])
+	mnode.queue_free()
 	var p0 := player.position
 	var moved := false
 	for i in 300:
@@ -15957,6 +15985,7 @@ func _console_test(spawn: Vector3) -> void:
 		and res["log_grew"] and res["log_scrolled"] and res["time_cmd"] \
 		and res["cmd_swing"] and res["cmd_holdswing"] and res["cmd_clearswing"] \
 		and res["typing_no_move"] and closed and res["mouse_recaptured"] \
-		and res["keys_dead"] and moved
+		and res["keys_dead"] and res["log_tee_on"] and res["log_persist"] \
+		and res["log_tee_off"] and res["log_cmd"] and res["log_menu"] and moved
 	Debug.result(res)
 	get_tree().quit()

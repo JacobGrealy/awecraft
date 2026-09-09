@@ -16,6 +16,7 @@ const COMMANDS := {
 	"swing": "swing - one swing with the selected item (old H key)",
 	"holdswing": "holdswing [frac] - hold a swing, frac of an arm (old J key)",
 	"clearswing": "clearswing - stop the swing, reset the hand (old K key)",
+	"log": "log [on|off] - debug output into this console (Options toggle)",
 	"help": "help - list commands",
 	"quit": "quit - exit the game",
 }
@@ -189,6 +190,10 @@ func dispatch(s: String) -> void:
 				return
 			Game.player.clear_swing()
 			add_log("swing cleared")
+		"log":
+			var on := p.size() < 1 or str(p[0]) == "on" or str(p[0]) == "1"
+			Settings.set_value("debug_logging", on)
+			add_log("debug logging %s" % ("on" if on else "off"))
 		"quit":
 			add_log("[quitting...]")
 			get_tree().quit()

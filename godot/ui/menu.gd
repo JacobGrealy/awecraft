@@ -36,6 +36,7 @@ var chunk_val: Label
 var res_option: OptionButton
 var full_check: CheckBox
 var hunger_check: CheckBox
+var debuglog_check: CheckBox
 var debug_check: CheckBox
 # AC-0232 (dither dropped in AC-0241): the fog start-distance slider
 # (percent of the render edge, (render_dist + 1) * 16 blocks).
@@ -121,6 +122,15 @@ func _ready() -> void:
 			hi = i
 	if hi >= 0:
 		opt_vbox.move_child(debug_check, hi + 1)
+	# AC-0170: debug logging toggle (same code-created pattern as above).
+	debuglog_check = CheckBox.new()
+	debuglog_check.name = "DebugLogCheck"
+	debuglog_check.text = "Log debug output to the in-game console"
+	debuglog_check.add_theme_font_size_override("font_size", 15)
+	debuglog_check.toggled.connect(_on_debug_log_toggled)
+	opt_vbox.add_child(debuglog_check)
+	if hi + 1 < opt_vbox.get_child_count():
+		opt_vbox.move_child(debuglog_check, hi + 2)
 	file_dialog = get_node("Layer/PackDialog")
 	slot_labels = []
 	slot_conts = []
@@ -195,7 +205,7 @@ func open_options(source: String) -> void:
 	_sync_controls()
 	_apply_state()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	print("OPTSYNC from=%s render=%d sim=%d vol=%d res=%s full=%s hunger=%s stats=%s chunk=%d fogpct=%d" % [
+	print("OPTSYNC from=%s render=%d sim=%d vol=%d res=%s full=%s hunger=%s stats=%s logdbg=%s chunk=%d fogpct=%d" % [
 		source,
 		int(Settings.values["render_dist"]),
 		int(Settings.values["sim_dist"]),
@@ -204,6 +214,7 @@ func open_options(source: String) -> void:
 		bool(Settings.values["fullscreen"]),
 		bool(Settings.values["hunger_enabled"]),
 		bool(Settings.values["debug_stats"]),
+		bool(Settings.values.get("debug_logging", false)),
 		int(Settings.values.get("chunks_per_frame", 3)),
 		int(Settings.values.get("fog_start_pct", 87)),
 	])
@@ -355,6 +366,7 @@ func _sync_controls() -> void:
 	full_check.button_pressed = bool(Settings.values["fullscreen"])
 	hunger_check.button_pressed = bool(Settings.values["hunger_enabled"])
 	debug_check.button_pressed = bool(Settings.values["debug_stats"])
+	debuglog_check.button_pressed = bool(Settings.values.get("debug_logging", false))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_val.text = str(int(fogstart_slider.value)) + "%"
 	_syncing = false
@@ -447,3 +459,9 @@ func _on_debug_stats_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("debug_stats", on)
+
+
+func _on_debug_log_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("debug_logging", on)
