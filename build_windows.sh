@@ -123,6 +123,20 @@ check_exe() {
 
 # ------------------------------------------------------------------ 1. release
 
+# ------------------------------------------------------------------ build stamp
+# AC-0248: bake the build stamp into the title screen (Build.ID in
+# godot/core/build_id.gd) so a shipped exe always shows the stamp of the
+# artifact actually running - the "am I on the latest build?" check. The
+# const is rewritten here and restored on exit (trap) so the working tree
+# keeps reading "dev".
+BI_FILE="$PROJECT/godot/core/build_id.gd"
+BI_GIT="$(git -C "$PROJECT" rev-parse --short HEAD 2>/dev/null || echo nogit)"
+if [ -f "$BI_FILE" ]; then
+	trap 'git -C "$PROJECT" checkout -- "$BI_FILE" 2>/dev/null || true' EXIT
+	sed -i "s|^const ID := \".*\"|const ID := \"$STAMP $BI_GIT\"|" "$BI_FILE"
+	echo "  title-screen stamp: AweCraft[$STAMP $BI_GIT]"
+fi
+
 echo "=== AweCraft Windows export (stamp $STAMP) ==="
 echo "[1/2] export release      -> exports/windows/AweCraft-$STAMP.exe  (preset \"Windows\")"
 "$GODOT" --headless --path godot --export-release "Windows" \

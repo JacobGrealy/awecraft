@@ -1,5 +1,13 @@
 shader_type spatial;
-render_mode cull_disabled;
+render_mode cull_back;
+// AC-0245 follow-up (2026-09-09 user bug "moving shadows" on water-covered
+// terrain): cull_back, NOT cull_disabled. The "water boundary from both
+// sides" request (cull_disabled) made the water's BACK faces render on top
+// of the opaque underwater terrain and z-fight - a camera-motion-dependent
+// blocky "shadow" mottle on the lake floor, from above OR below the water.
+// cull_back keeps the water surface readable from above and the side faces
+// from the water side, without the back-face z-fight. (The mesh-side
+// companion: emit_fluid no longer emits fluid faces toward solid neighbors.)
 
 // Web-faithful fluid animation (index.html updateAtlasAnims):
 // stacked-frame texture flip, 300 ms/frame (web default frametime),

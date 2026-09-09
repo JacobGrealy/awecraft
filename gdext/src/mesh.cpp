@@ -1267,7 +1267,16 @@ static void emit_fluid(const std::vector<FluidRec> &recs, std::vector<Acc> &accs
 		int above = 0;
 		if (y + 1 < h)
 			above = snap[(size_t)(y + 1) * SNAP_ROW + rowl];
-		if (above != id) {
+		// AC-0245 follow-up (2026-09-09): emit a fluid face toward a neighbor
+		// only when that neighbor does NOT already render an opaque face there
+		// (stab>0 = solid occluder, same rule as s_faces for opaque blocks).
+		// The AC-0245 cull_disabled made both sides of every fluid face
+		// visible, so the faces against solid neighbors (the lake floor,
+		// underwater cliffs) render exactly on top of the opaque terrain and
+		// z-fight (camera-motion-dependent "moving shadows" on water-covered
+		// terrain). Faces toward air/transparent neighbors are kept, so the
+		// water surface + edges stay visible from every side.
+		if (above != id && ctx.stab[above] == 0) {
 			float top_h = std::min(hgt, (id == 5) ? 0.875f : 0.95f);
 			Color c = has_tex ? mul_cc(Color(0.95f, 0.95f, 0.95f, 1.0f), tint_t) : mul_cf(ctx.ct[id], 0.95f);
 			const float *uvs = s_uvc(uvc, ctx, id, 2, 1);
@@ -1277,6 +1286,8 @@ static void emit_fluid(const std::vector<FluidRec> &recs, std::vector<Acc> &accs
 		for (int fi : {0, 1, 4, 5}) {
 			const int n[3] = {FN[fi][0], FN[fi][1], FN[fi][2]};
 			int nb = snap[(size_t)y * SNAP_ROW + rowl + n[2] * SNAP_W + n[0]];
+			if (ctx.stab[nb] > 0)
+				continue; // AC-0245 follow-up: solid neighbor has its own face
 			float hn = 0.0f;
 			if (nb == id)
 				hn = (float)snap_fl[(size_t)y * SNAP_ROW + rowl + n[2] * SNAP_W + n[0]] / 8.0f;
@@ -1293,7 +1304,7 @@ static void emit_fluid(const std::vector<FluidRec> &recs, std::vector<Acc> &accs
 		int below = 0;
 		if (y > 0)
 			below = snap[(size_t)(y - 1) * SNAP_ROW + rowl];
-		if (y > 0 && below != id) {
+		if (y > 0 && below != id && ctx.stab[below] == 0) {
 			Color c = has_tex ? mul_cc(Color(0.6f, 0.6f, 0.6f, 1.0f), tint_b) : mul_cf(ctx.cb[id], 0.6f);
 			const float *uvs = s_uvc(uvc, ctx, id, 3, 2);
 			static const int N_BOT[3] = {0, -1, 0};
