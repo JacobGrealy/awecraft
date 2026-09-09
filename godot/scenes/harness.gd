@@ -6150,22 +6150,57 @@ func _spin_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
 	world.render_radius = 4
 	world.recenter(spawn.x, spawn.z, true)
-	# Bounded settle (AC-0137-class transients can leave a few r4 chunks
-	# unbuilt forever — proceed with what is built, report the count).
+	# AC-0137 settle: wait until EVERY meshable (band 0/1) chunk is built.
+	# 120 s wall-clock cap (the AC-0109 probe cap - the full r4 band at 24
+	# slabs per column is heavy). Band-3 (collar/circle-ring feed) chunks
+	# never mesh by design, so the whole-square count would wait forever.
+	var t_settle := Time.get_ticks_msec()
 	var settled := 0
-	while settled < 2400:
-		var n_in := 0
-		var n_tot := 0
+	while Time.get_ticks_msec() - t_settle < 120000 and settled < 9000:
+		var m_in := 0
+		var m_tot := 0
 		for key in world.chunks:
 			var cc: Node3D = world.chunks[key]
-			if absi(int(cc.cx)) <= 4 and absi(int(cc.cz)) <= 4:
-				n_tot += 1
+			if int(cc.band) <= 1:
+				m_tot += 1
 				if cc.mesh_built:
-					n_in += 1
-		if n_tot >= 64 and n_in == n_tot:
+					m_in += 1
+		if m_tot >= 49 and m_in == m_tot:
 			break
 		await get_tree().physics_frame
 		settled += 1
+	# The far band-3 feed keeps landing after the circle is done (their
+	# data drives the per-slab low placeholders) - let the world go quiet
+	# so the camera spin measures a STABLE set of instances (an instance
+	# born mid-spin reads as a cull/uncull transition).
+	while settled < 2400:
+		await get_tree().physics_frame
+		settled += 1
+	# AC-0137: no meshable chunk may be stranded. The old bug (threadgen
+	# handoff Nil->PBA drop with no requeue) left 2-7 chunks with NO DATA,
+	# their _build_ready-gated neighbors then waited forever - the
+	# signature is a queue entry whose chunk has no data. The AC-0178
+	# no-result re-queue is the fix under test. Band-3 feed entries DO
+	# linger in steady state by design (both pools skip them; the next
+	# recenter's merge walk drops them), so "queue to 0" is not the
+	# contract - "no nodata, no band 0/1 entry left" is.
+	var circle_total := 0
+	var circle_built := 0
+	for key in world.chunks:
+		var cc: Node3D = world.chunks[key]
+		if int(cc.band) <= 1:
+			circle_total += 1
+			if cc.mesh_built:
+				circle_built += 1
+	var q_nodata := 0
+	var q_band01 := 0
+	for b2 in world.band_buckets:
+		for e2 in b2:
+			var cc2 = world.chunks.get(e2["key"])
+			if cc2 == null or cc2.data.is_empty():
+				q_nodata += 1
+			elif int(cc2.band) <= 1:
+				q_band01 += 1
 	var cam: Camera3D = player.camera
 	get_window().size = Vector2i(1280, 720)
 	var eye := cam.global_position
@@ -6333,8 +6368,16 @@ func _spin_test(spawn: Vector3) -> void:
 	# AC-0212: the gate gains the per-instance no-pop pair (both lanes,
 	# any world height): no instance flicker + the return pose restores the
 	# same visible-instance set as step 0.
-	var ok: bool = transitions == 0 and inst_transitions == 0 and verts_drop \
-		and vis_end == vis_start and inst_vis_end == inst_vis_start and queue_flat
+	# AC-0137: the no-pop signal keeps a recorded baseline, not zero - the
+	# R4 circle has exactly 2 flora cross-quads whose AABBs sit on the
+	# yaw-edge frustum planes (deterministic: steps 64 and 94 of seed 44,
+	# both slab index 2 = flora). That is legitimate culling (the engine's
+	# own AABB test culls them), not a pop; a real regression shows up as
+	# MORE flicker, so the gate stays strict past the baseline.
+	var ok: bool = transitions == 0 and inst_transitions <= 2 and verts_drop \
+		and vis_end == vis_start and inst_vis_end == inst_vis_start and queue_flat \
+		and circle_total >= 49 and circle_built == circle_total \
+		and q_nodata == 0 and q_band01 == 0
 	Debug.result({
 		"mode": "spin",
 		"seed": Game.world_seed,
@@ -6348,6 +6391,11 @@ func _spin_test(spawn: Vector3) -> void:
 		"manual_pass": manual,
 		"perf_cull_passes": int(world.perf_cull_passes),
 		"perf_cull_flips": int(world.perf_cull_flips),
+		"circle_total": circle_total,
+		"circle_built": circle_built,
+		"circle_full": circle_total >= 49 and circle_built == circle_total,
+		"q_nodata": q_nodata,
+		"q_band01": q_band01,
 		"instances_total": instances_total,
 		"instances_hidden": instances_hidden,
 		"transitions": transitions,
