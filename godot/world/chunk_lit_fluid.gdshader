@@ -12,6 +12,8 @@ uniform vec3 u_player_pos = vec3(0.0, 0.0, 0.0);
 uniform float u_player_light = 0.0;
 uniform float u_player_radius = 5.0;
 uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
+uniform float u_underwater : hint_range(0.0, 1.0) = 0.0;
+uniform vec3 u_cam_pos = vec3(0.0);
 varying vec3 v_world_pos;
 
 
@@ -20,6 +22,12 @@ void vertex() {
 }
 
 void fragment() {
+	// AC-0036: underwater near-cull - while the eye is in water, hide the
+	// water faces around the head (the Bedrock "blue cube" look: no water
+	// surface inside ~1.9 blocks of the camera).
+	if (u_underwater > 0.5 && distance(v_world_pos, u_cam_pos) < 1.9) {
+		discard;
+	}
 	vec4 t = texture(tex, UV);
 	float L = 0.20 + 0.80 * max(u_day * COLOR.r, COLOR.g);
 	float pr = clamp(u_player_light - distance(v_world_pos, u_player_pos), 0.0, u_player_radius);

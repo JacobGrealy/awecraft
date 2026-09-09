@@ -31,6 +31,8 @@ var _srgb_pre: float = 0.0
 var inventory_ui: CanvasLayer
 var menu_ui: Menu
 var stats_overlay: CanvasLayer
+var _underwater_overlay: CanvasLayer  # AC-0036
+var _underwater_tint: ColorRect       # AC-0036
 var _stats_log_t := -1000000.0
 var _stats_prev_t := -1
 var _stats_prev_proc := 0.0
@@ -231,6 +233,24 @@ func _create_game_nodes() -> void:
 	sl.text = "FPS: -  CPU: -\nRAM: -\nVRAM: -"
 	stats_overlay.add_child(sl)
 	add_child(stats_overlay)
+	# AC-0036: the underwater tint - the classic MC submerged overlay
+	# (0x2B6AB2 blue at ~50% alpha, full screen). Shown while the eye is
+	# in water; the water faces around the head are hidden by the fluid
+	# shaders' u_underwater near-cull (see chunk.gd set_underwater).
+	if _underwater_overlay != null:
+		_underwater_overlay.queue_free()
+	_underwater_overlay = CanvasLayer.new()
+	_underwater_overlay.name = "UnderwaterOverlay"
+	_underwater_overlay.layer = 10
+	var uw := ColorRect.new()
+	uw.name = "Tint"
+	uw.color = Color(0.169, 0.416, 0.702, 0.5)  # 0x2B6AB2 @ 50%
+	uw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	uw.set_anchors_preset(Control.PRESET_FULL_RECT)
+	uw.visible = false
+	_underwater_overlay.add_child(uw)
+	add_child(_underwater_overlay)
+	_underwater_tint = uw
 	_stats_prev_t = -1
 	_stats_prev_proc = 0.0
 	_stats_acc = 0.0
@@ -1058,6 +1078,27 @@ func _update_sky() -> void:
 			cm.set_shader_parameter("u_player_light", plvl)
 			cm.set_shader_parameter("u_player_radius", prad)
 			cm.set_shader_parameter("u_srgb_pre", _srgb_pre)
+	# AC-0036: underwater state = the eye block is water (pushed on
+	# change). Drives the tint overlay + the fluid shaders' near-cull
+	# (u_cam_pos rides this per-frame push - an explicit uniform because
+	# the headless dummy renderer rejects the CAMERA_POSITION builtin).
+	var uwe := false
+	var epos := Vector3.ZERO
+	if player != null and world != null:
+		var cam: Camera3D = player.get_node_or_null("Camera3D")
+		if cam != null:
+			epos = cam.global_position
+			uwe = world.get_block(int(floorf(epos.x)), int(floorf(epos.y)), int(floorf(epos.z))) == WorldGen.B_WATER
+	var fcm = _ChunkScriptM._mat_cache.get("fluid")
+	if fcm is ShaderMaterial:
+		fcm.set_shader_parameter("u_cam_pos", epos)
+	for bid in Data.fluid_anim_mats:
+		var am2 = Data.fluid_anim_mats[bid]
+		if am2 is ShaderMaterial:
+			am2.set_shader_parameter("u_cam_pos", epos)
+	_ChunkScriptM.set_underwater(uwe)
+	if _underwater_tint != null:
+		_underwater_tint.visible = uwe
 
 	sun.light_color = AeroLib.SUN_TINT if aero else Color.WHITE
 	sun.light_energy = DayNight.sun_energy(t) * (AeroLib.SUN_BOOST if aero else 1.0)

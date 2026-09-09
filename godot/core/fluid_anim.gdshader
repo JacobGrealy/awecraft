@@ -12,11 +12,23 @@ uniform float frame_time : hint_range(0.01, 5.0) = 0.3;
 uniform float phase = 0.0;
 uniform float alpha_scale : hint_range(0.0, 1.0) = 0.62;
 uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
+uniform float u_underwater : hint_range(0.0, 1.0) = 0.0;
+uniform vec3 u_cam_pos = vec3(0.0);
+varying vec3 v_world_pos;
 
 const float TILE_F = 1.0 / 32.0;
 
 
+void vertex() {
+	v_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+
 void fragment() {
+	// AC-0036: same underwater near-cull as chunk_lit_fluid (the animated
+	// water/lava faces must not clip the head either).
+	if (u_underwater > 0.5 && distance(v_world_pos, u_cam_pos) < 1.9) {
+		discard;
+	}
 	vec2 uv = UV;
 	int frame = int(mod(floor((TIME + phase) / frame_time), anim_frames));
 	uv.y += float(frame) * TILE_F;

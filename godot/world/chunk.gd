@@ -283,6 +283,29 @@ static func set_day_factor(d: float) -> void:
 			m.set_shader_parameter("u_day", d)
 
 
+# AC-0036: u_underwater = 1 while the camera eye is inside a water cell.
+# Both fluid shaders near-cull (discard) water fragments within ~1.9
+# blocks of the eye (the Bedrock "blue cube" look - no water faces around
+# the head). Pushed on change only by main._update_sky: the lit "fluid"
+# kind in _mat_cache + the two animated water/lava mats in
+# Data.fluid_anim_mats. The legacy no-atlas path (StandardMaterial3D
+# fluid) has no shader and is skipped.
+static var _underwater_now := false
+static func set_underwater(b: bool) -> void:
+	if _underwater_now == b:
+		return
+	_underwater_now = b
+	var v := 1.0 if b else 0.0
+	for k in _mat_cache:
+		var m = _mat_cache[k]
+		if m is ShaderMaterial:
+			m.set_shader_parameter("u_underwater", v)
+	for bid in Data.fluid_anim_mats:
+		var am = Data.fluid_anim_mats[bid]
+		if am is ShaderMaterial:
+			am.set_shader_parameter("u_underwater", v)
+
+
 # AC-0128: the lit (unshaded) materials sample the atlas through RUNTIME
 # ImageTextures — Godot 4.7.1 has no per-texture runtime filter override
 # (set_filter does not exist; only BaseMaterial3D.texture_filter + the import

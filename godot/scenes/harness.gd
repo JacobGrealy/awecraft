@@ -352,6 +352,14 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			player = main._spawn_player()
 			await _editsnap_test(spawn)
 			return
+		if logic == "underwater":
+			# AC-0036: eye in an ocean column - the tint shows and the
+			# fluid shaders get the u_underwater near-cull.
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _underwater_test(spawn)
+			return
 		if logic == "look":
 			world.recenter(spawn.x, spawn.z, true)
 			player = main._spawn_player()
@@ -1110,6 +1118,11 @@ func _batt_run_mode(mode: String, spawn: Vector3, seed_env: String) -> void:
 			await main._await_spawn_floor(spawn, 300)
 			player = main._spawn_player()
 			await _editsnap_test(spawn)
+		"underwater":
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _underwater_test(spawn)
 		_:
 			print("BATTSKIP ", mode)
 	if sp != spawn:
@@ -16400,6 +16413,96 @@ func _editsnap_test(spawn: Vector3) -> void:
 	Debug.result(res)
 	if not _batt:
 		get_tree().quit()
+
+
+# AC-0036: teleport the eye into an ocean column and assert the state:
+# eye block is water, the tint overlay is visible, and u_underwater is
+# pushed to the fluid ShaderMaterials (lit kind + the animated water/
+# lava mats - the same flag gates the shaders' near-cull that hides the
+# water faces around the head). Teleport above the surface and assert
+# the reverse.
+func _underwater_test(spawn: Vector3) -> void:
+	var res: Dictionary = {}
+	# find an ocean column (surface water at SEA) - the oceanfill pattern
+	var ox := 0
+	var oz := 0
+	var found := false
+	for attempt in 8:
+		var bx := int(spawn.x) + (attempt % 3) * 96 - 96
+		var bz := int(spawn.z) + (attempt / 3) * 96 - 48
+		world.recenter(float(bx), float(bz), true)
+		await main._await_world_build(Vector3(float(bx), 128.0, float(bz)), 3000)
+		for dx in range(-32, 33, 4):
+			for dz in range(-32, 33, 4):
+				# a 3-DEEP water column - a 1-block sheet is shallow
+				# coastal water where the eye would sit in the terrain
+				if world.get_block(bx + dx, Data.SEA, bz + dz) == WorldGen.B_WATER \
+						and world.get_block(bx + dx, Data.SEA - 1, bz + dz) == WorldGen.B_WATER \
+						and world.get_block(bx + dx, Data.SEA - 2, bz + dz) == WorldGen.B_WATER:
+					ox = bx + dx
+					oz = bz + dz
+					found = true
+					break
+			if found:
+				break
+		if found:
+			break
+	res["found_ocean"] = found
+	if not found:
+		Debug.result(res)
+		if not _batt:
+			get_tree().quit()
+		return
+	var cam: Camera3D = player.get_node_or_null("Camera3D")
+	res["has_camera"] = cam != null
+	if cam == null:
+		Debug.result(res)
+		if not _batt:
+			get_tree().quit()
+		return
+	# eye underwater: the water column runs surface-to-floor, so the eye
+	# a couple of blocks below the surface is in water. Only a few frames
+	# of settle - the per-frame eye check (main._update_sky) is the push,
+	# and a long settle would let the fall leave the water.
+	player.position = Vector3(float(ox), float(Data.SEA) - 3.0, float(oz))
+	await _uw_settle(4)
+	var e1: Vector3 = cam.global_position
+	res["eye_underwater"] = world.get_block(int(floorf(e1.x)), int(floorf(e1.y)), int(floorf(e1.z))) == WorldGen.B_WATER
+	res["tint_underwater"] = main._underwater_tint != null and bool(main._underwater_tint.visible)
+	res["uw_lit"] = _uw_uniform() > 0.5
+	# above the surface
+	player.position = Vector3(float(ox), float(Data.SEA) + 2.4, float(oz))
+	await _uw_settle(4)
+	res["tint_above"] = main._underwater_tint != null and bool(main._underwater_tint.visible)
+	res["uw_above"] = _uw_uniform() < 0.5
+	res["ok"] = found and res["eye_underwater"] and res["tint_underwater"] \
+		and res["uw_lit"] and (not res["tint_above"]) and res["uw_above"]
+	Debug.result(res)
+	if not _batt:
+		get_tree().quit()
+
+
+func _uw_settle(n: int) -> void:
+	for i in n:
+		await get_tree().physics_frame
+
+
+func _uw_uniform() -> float:
+	# read u_underwater back from a live fluid ShaderMaterial (the lit
+	# "fluid" kind first, then the animated water/lava mats)
+	var ms: Variant = main._ChunkScriptM
+	var m = ms._mat_cache.get("fluid")
+	if m != null and m is ShaderMaterial:
+		var pv = m.get_shader_parameter("u_underwater")
+		if pv is float:
+			return pv
+	for bid in Data.fluid_anim_mats:
+		var am = Data.fluid_anim_mats[bid]
+		if am is ShaderMaterial:
+			var pv = am.get_shader_parameter("u_underwater")
+			if pv is float:
+				return pv
+	return -1.0
 
 
 func _dnlight_test(spawn: Vector3) -> void:
