@@ -245,9 +245,85 @@ func error(msg) -> void:
 func _tee_console(msg: String, tag: String) -> void:
 	if not bool(Settings.values.get("debug_logging", false)):
 		return
-	if Game.console == null:
+	if Game.console != null:
+		Game.console.add_log("[%s] %s" % [tag, msg])
+	session_log_line("[%s] %s" % [tag, msg])
+
+
+# AC-0171: per-run session log - a NEW user://logs/awecraft_<stamp>.log
+# each launch, pruned to the 5 newest (the 6th run deletes the oldest).
+# The file is created lazily on the first line after the toggle is on.
+# the file is opened per line and closed again - a long-lived handle
+# buffers its writes and a second reader (the test, or the user) would
+# see an empty file until process exit. (This 4.7 build has no
+# FileAccess.APPEND flag, and READ_WRITE fails on a file that does not
+# exist yet - so: WRITE to create, READ_WRITE + seek_end to append.)
+var session_log_file := ""
+
+
+func session_log_line(s: String) -> void:
+	if not bool(Settings.values.get("debug_logging", false)):
 		return
-	Game.console.add_log("[%s] %s" % [tag, msg])
+	if session_log_file == "":
+		_session_log_start()
+		if session_log_file == "":
+			return
+	var mode := FileAccess.READ_WRITE
+	if not FileAccess.file_exists(session_log_file):
+		mode = FileAccess.WRITE
+	var f := FileAccess.open(session_log_file, mode)
+	if f == null:
+		return
+	f.seek_end(0)
+	f.store_line(Time.get_time_string_from_system() + " " + s)
+	f.close()
+
+
+func _session_log_start() -> void:
+	var err := DirAccess.make_dir_recursive_absolute("user://logs")
+	if err != OK and err != ERR_ALREADY_EXISTS:
+		return
+	var t := Time.get_datetime_dict_from_system()
+	var stamp := "%04d%02d%02d_%02d%02d%02d" % [
+		int(t.year), int(t.month), int(t.day),
+		int(t.hour), int(t.minute), int(t.second)]
+	session_log_file = "user://logs/awecraft_%s.log" % stamp
+	# a same-second relaunch must not truncate the previous run's file
+	while FileAccess.file_exists(session_log_file):
+		var t2 := Time.get_datetime_dict_from_system()
+		stamp = "%04d%02d%02d_%02d%02d%02d" % [
+			int(t2.year), int(t2.month), int(t2.day),
+			int(t2.hour), int(t2.minute), int(t2.second)]
+		session_log_file = "user://logs/awecraft_%s.log" % stamp
+	# create it now (WRITE) so the prune below counts it: 6 files in ->
+	# the oldest one out -> 5 kept.
+	var f0 := FileAccess.open(session_log_file, FileAccess.WRITE)
+	if f0 != null:
+		f0.close()
+	_session_prune()
+
+
+# keep only the 5 newest awecraft_*.log (names sort chronologically)
+func _session_prune() -> void:
+	var files: Array = []
+	var da := DirAccess.open("user://logs")
+	if da == null:
+		return
+	da.list_dir_begin()
+	var f := da.get_next()
+	while f != "":
+		if f.begins_with("awecraft_") and f.ends_with(".log") and not da.current_is_dir():
+			files.append(f)
+		f = da.get_next()
+	da.list_dir_end()
+	files.sort()
+	while files.size() > 5:
+		var old: String = files.pop_front()
+		DirAccess.remove_absolute("user://logs/" + old)
+
+
+func session_log_path() -> String:
+	return session_log_file
 
 
 func set_time(t) -> void:

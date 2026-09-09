@@ -31,6 +31,7 @@ var _srgb_pre: float = 0.0
 var inventory_ui: CanvasLayer
 var menu_ui: Menu
 var stats_overlay: CanvasLayer
+var _stats_log_t := -1000000.0
 var _stats_prev_t := -1
 var _stats_prev_proc := 0.0
 var _stats_acc := 0.0
@@ -989,6 +990,13 @@ func _refresh_stats() -> void:
 	(label as Label).text = _stats_text(cpu_pct)
 	_stats_prev_t = now
 	_stats_prev_proc = proc_s
+	# AC-0171: the stats overlay feeds the session log (2 s cadence) when
+	# debug logging is on.
+	if bool(Settings.values.get("debug_logging", false)) \
+			and now - _stats_log_t >= 2000:
+		_stats_log_t = now
+		var st := _stats_text(cpu_pct).replace("\n", " | ")
+		Debug.session_log_line("[stats] " + st)
 
 func _stats_text(cpu_pct: float) -> String:
 	var fps := int(Performance.get_monitor(Performance.TIME_FPS))

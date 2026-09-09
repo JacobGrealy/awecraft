@@ -15944,6 +15944,15 @@ func _console_test(spawn: Vector3) -> void:
 	res["keys_dead"] = not bool(player._swing_active) \
 		and not bool(player._swing_held) \
 		and main._count_item(player, 126) == inv_before
+	# AC-0171: five old fake run files - the real file created when the
+	# toggle below comes on is the 6th, so the prune must drop the oldest.
+	DirAccess.make_dir_recursive_absolute("user://logs")
+	for i in 5:
+		var fn: String = "awecraft_2020010%d_00000%d.log" % [i, i]
+		var ff := FileAccess.open("user://logs/" + fn, FileAccess.WRITE)
+		if ff != null:
+			ff.store_line("fake")
+			ff.close()
 	# 8) AC-0170: the Options debug-logging toggle tees Debug.log into the
 	# console, only when on, and persists across a reload.
 	Settings.set_value("debug_logging", true)
@@ -15972,6 +15981,43 @@ func _console_test(spawn: Vector3) -> void:
 		dlog.button_pressed = false
 		res["log_menu"] = not bool(Settings.values["debug_logging"])
 	mnode.queue_free()
+	# 9) AC-0171: per-run session log file - the run file exists and holds
+	# the console line; the stats hook appends FPS/RAM lines; prune keeps
+	# exactly 5 files (the oldest fake is gone). Release the held W first
+	# - the wait below would otherwise walk the player off something. The
+	# checkbox test above ended with the toggle OFF, so flip it back on
+	# for the stats wait.
+	_c_key(KEY_W, 119)
+	Settings.set_value("debug_logging", true)
+	var sfile: String = Debug.session_log_path()
+	res["log_file"] = sfile != "" and FileAccess.file_exists(sfile)
+	for i in 400:
+		await get_tree().physics_frame
+	var sdata := ""
+	if sfile != "":
+		var sf := FileAccess.open(sfile, FileAccess.READ)
+		if sf != null:
+			sdata = sf.get_as_text()
+			sf.close()
+	res["log_console_line"] = sdata.find("hello console") >= 0
+	res["log_stats_line"] = sdata.find("[stats] FPS") >= 0
+	var left: Array = []
+	var da := DirAccess.open("user://logs")
+	if da != null:
+		da.list_dir_begin()
+		var fn2 := da.get_next()
+		while fn2 != "":
+			if fn2.begins_with("awecraft_") and fn2.ends_with(".log"):
+				left.append(fn2)
+			fn2 = da.get_next()
+		da.list_dir_end()
+	res["log_pruned"] = left.size() == 5 \
+		and not left.has("awecraft_20200100_000000.log")
+	for fn3 in left:
+		DirAccess.remove_absolute("user://logs/" + fn3)
+	Settings.set_value("debug_logging", false)
+	# re-hold W for the post-close movement check
+	_c_key(KEY_W, 119, true)
 	var p0 := player.position
 	var moved := false
 	for i in 300:
@@ -15986,6 +16032,8 @@ func _console_test(spawn: Vector3) -> void:
 		and res["cmd_swing"] and res["cmd_holdswing"] and res["cmd_clearswing"] \
 		and res["typing_no_move"] and closed and res["mouse_recaptured"] \
 		and res["keys_dead"] and res["log_tee_on"] and res["log_persist"] \
-		and res["log_tee_off"] and res["log_cmd"] and res["log_menu"] and moved
+		and res["log_tee_off"] and res["log_cmd"] and res["log_menu"] \
+		and res["log_file"] and res["log_console_line"] \
+		and res["log_stats_line"] and res["log_pruned"] and moved
 	Debug.result(res)
 	get_tree().quit()
