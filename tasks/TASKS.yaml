@@ -1020,7 +1020,69 @@ intake:
     2) Technical Details: Keep as is for now (no 30s transition). Underwater view:
     hide water cells around eye (no face inside camera) + underwater visual effect
     overlay tint (research web approach first). fog/water fog deferred. Verify no
-    water face at eye, blue tint present, research note kept.'
+    water face at eye, blue tint present, research note kept.
+
+
+    3) Implementation (agent, 2026-09-09): DONE - commit 399d1fe. Two
+
+    parts, both gated on a single per-frame eye check (main._update_sky:
+
+    the camera eye block is B_WATER). (1) Near-cull (shaders):
+
+    chunk_lit_fluid + core/fluid_anim (the animated water/lava faces)
+
+    discard water fragments within 1.9 blocks of the eye while submerged
+
+    - the Bedrock blue-cube look (the wiki: BE arranges the underwater
+
+    texture into a cube around the player; Java uses the flat 0x2B6AB2
+
+    overlay). The camera position rides an explicit u_cam_pos uniform in
+
+    the existing per-frame push - an explicit uniform because the
+
+    headless dummy renderer REJECTS the CAMERA_POSITION builtin (the
+
+    first attempt produced SHADER ERRORs in every headless log and a
+
+    console-arm time_cmd flake in one run - rerun green, unrelated).
+
+    (2) Tint (main.gd): a full-screen ColorRect (0x2B6AB2 at 50% alpha,
+
+    CanvasLayer 10, mouse-filter ignore) shown while the eye is in water.
+
+    chunk.gd set_underwater pushes u_underwater on change to the lit
+
+    fluid kind + Data.fluid_anim_mats (legacy no-atlas StandardMaterial3D
+
+    fluids have no shader and are skipped - the no-atlas behavior is
+
+    untouched). No swim physics, no fog (deferred per the task). New
+
+    harness arm underwater (AWECRAFT_LOGIC=underwater + battery mode):
+
+    recenters onto candidate spots until it finds a 3-DEEP water column
+
+    - GOTCHA: surface water at SEA is often only 1 block deep (shallow
+
+    coastal water; the eye would land in the terrain below, and the
+
+    CharacterBody depenetrates it), teleports the player so the eye sits
+
+    in the column, asserts eye block is water + tint visible + u_underwater
+
+    read back > 0.5 from a live fluid ShaderMaterial, then teleports above
+
+    the surface and asserts the reverse. Verify (all green): syntax 0
+
+    Parse Errors; underwater arm ok:true; meshprobe ok; R16 ok; SMOKE
+
+    battery ok incl. underwater (14 modes, 0 script errors, 0 shader
+
+    errors); genhash (0,0) = 80b904c0... (AC-0215 baseline held);
+
+    console/gamepad/quitmenu ok. EXE rebuilt + :8080 byte-match VERIFIED (399d1fe,
+    stamp 20260909-0744, md5 c63bd82734fba6acb37fd2eb59fe05a6 served == local).'
   comments:
   - id: 1
     created_at: 2026-08-18 19:30T12:00
@@ -7515,9 +7577,8 @@ intake:
 
     errors); genhash (0,0) = 80b904c0... (AC-0215 baseline held);
 
-    console/gamepad/quitmenu ok. EXE rebuilt + :8080 byte-match in the
-
-    closeout follow-up.'
+    console/gamepad/quitmenu ok. EXE rebuilt + :8080 byte-match VERIFIED (399d1fe,
+    stamp 20260909-0744, md5 c63bd82734fba6acb37fd2eb59fe05a6 served == local).'
   comments:
   - id: 1
     created_at: 2026-09-02T15:27
