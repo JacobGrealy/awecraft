@@ -313,6 +313,13 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			player = main._spawn_player()
 			await _bugreport_test(spawn)
 			return
+		if logic == "crash":
+			# AC-0173: crash/error capture (file + modal + console toast).
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _crash_test(spawn)
+			return
 		if logic == "look":
 			world.recenter(spawn.x, spawn.z, true)
 			player = main._spawn_player()
@@ -1046,6 +1053,11 @@ func _batt_run_mode(mode: String, spawn: Vector3, seed_env: String) -> void:
 			await main._await_spawn_floor(spawn, 300)
 			player = main._spawn_player()
 			await _bugreport_test(spawn)
+		"crash":
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _crash_test(spawn)
 		_:
 			print("BATTSKIP ", mode)
 	if sp != spawn:
@@ -15995,6 +16007,103 @@ func _clean_bugs() -> bool:
 # below). The scene adds this as a child; run() carries the former
 # _run_game dispatch cascade, run_battery() the former _ready battery entry.
 
+
+
+# AC-0173: the crash/error capture. Debug.error must write a crash file
+# (pruned family), raise the modal (message + Exit Game button, frozen
+# game behind it), and toast the console when it is open. The arm ends
+# by clicking Exit Game (the process quit IS the clean-exit check - the
+# RESULT line above is what the gate reads). In battery mode the dialog
+# is dismissed instead so the battery can continue.
+func _crash_test(spawn: Vector3) -> void:
+	var res: Dictionary = {}
+	var before := _list_log_files()
+	# open the console first so the toast lands in a visible overlay
+	_c_key(KEY_QUOTELEFT, 96)
+	var opened := false
+	for i in 200:
+		await get_tree().physics_frame
+		if Game.console_open:
+			opened = true
+			break
+	res["opened"] = opened
+	await get_tree().physics_frame
+	# trigger through the central error path
+	Debug.error("crash arm marker")
+	for i in 5:
+		await get_tree().physics_frame
+	var dlg: CanvasLayer = Debug._crash_dialog
+	res["dialog"] = dlg != null
+	var body_text := ""
+	var exit_btn: Button = null
+	if dlg != null:
+		# 4.7 find_children returns empty here - traverse by hand
+		for n in _walk_children(dlg):
+			if n is Label and body_text == "" and str(n.text).find("crash arm marker") >= 0:
+				body_text = str(n.text)
+			if n is Button and str(n.text) == "Exit Game":
+				exit_btn = n
+	res["dialog_text"] = body_text.find("crash arm marker") >= 0
+	res["exit_btn"] = exit_btn != null
+	res["toast"] = Game.console != null \
+		and Game.console.log_view.get_parsed_text().find("[crash] crash arm marker") >= 0
+	res["frozen"] = Game.mode == "crash"
+	var after := _list_log_files()
+	var newfiles: Array = []
+	for f in after:
+		if not before.has(f):
+			newfiles.append(f)
+	res["file_new"] = newfiles.size() >= 1
+	var ftext := ""
+	if newfiles.size() >= 1:
+		var f := FileAccess.open("user://logs/" + newfiles[0], FileAccess.READ)
+		if f != null:
+			ftext = f.get_as_text()
+			f.close()
+	res["file_stack"] = ftext.find("--- stack ---") >= 0
+	res["file_state"] = ftext.find("chunk_origin") >= 0 and ftext.find("seed ") >= 0
+	# cleanup: drop the capture file (a session log, if any, prunes itself)
+	for f2 in newfiles:
+		DirAccess.remove_absolute("user://logs/" + f2)
+	res["cleanup"] = true
+	res["ok"] = opened and res["dialog"] and res["dialog_text"] \
+		and res["exit_btn"] and res["toast"] and res["frozen"] \
+		and res["file_new"] and res["file_stack"] and res["file_state"] \
+		and res["cleanup"]
+	Debug.result(res)
+	if _batt:
+		Debug._close_crash_dialog()
+		return
+	# exit through the button
+	if exit_btn != null:
+		exit_btn.pressed.emit()
+	get_tree().quit()
+
+
+func _walk_children(node: Node) -> Array:
+	var out: Array = []
+	var stack: Array = [node]
+	while stack.size() > 0:
+		var n = stack.pop_back()
+		for c in n.get_children():
+			out.append(c)
+			stack.append(c)
+	return out
+
+
+func _list_log_files() -> Array:
+	var out: Array = []
+	var da := DirAccess.open("user://logs")
+	if da == null:
+		return out
+	da.list_dir_begin()
+	var f := da.get_next()
+	while f != "":
+		if f.begins_with("awecraft_") and f.ends_with(".log"):
+			out.append(f)
+		f = da.get_next()
+	da.list_dir_end()
+	return out
 
 func _console_test(spawn: Vector3) -> void:
 	var c = Game.console

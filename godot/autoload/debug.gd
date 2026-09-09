@@ -240,6 +240,14 @@ func log(msg) -> void:
 func error(msg) -> void:
 	push_error(str(msg))
 	_tee_console(str(msg), "error")
+	# AC-0173: central crash capture - file (pruned with the session logs)
+	# + modal dialog + a console toast when the overlay is open.
+	var path := crash_capture(str(msg))
+	if Game.console != null:
+		Game.console.add_log("[crash] %s" % str(msg))
+		if path != "":
+			Game.console.add_log("[crash] saved to %s" % path)
+	_show_crash_dialog(str(msg), path)
 
 
 func _tee_console(msg: String, tag: String) -> void:
@@ -437,3 +445,128 @@ func swing_read() -> Dictionary:
 	if p.held_fist != null:
 		fist = p.held_fist.visible
 	return {"active": true, "frac": p.swing_frac(), "fist": fist}
+
+
+# AC-0173: crash/error capture. One awecraft_<stamp>.log per error in the
+# same user://logs family as the AC-0171 session logs (prune keeps 5 -
+# a crash file counts), plus a modal dialog with an Exit Game button and
+# a console toast.
+var _crash_dialog: CanvasLayer
+
+
+func crash_capture(msg: String) -> String:
+	DirAccess.make_dir_recursive_absolute("user://logs")
+	var t := Time.get_datetime_dict_from_system()
+	var stamp := "%04d%02d%02d_%02d%02d%02d" % [
+		int(t.year), int(t.month), int(t.day),
+		int(t.hour), int(t.minute), int(t.second)]
+	var path := "user://logs/awecraft_%s.log" % stamp
+	var n2 := 2
+	while FileAccess.file_exists(path):
+		path = "user://logs/awecraft_%s_%d.log" % [stamp, n2]
+		n2 += 1
+	var lines: Array = []
+	lines.append("AweCraft crash capture - %s" % Time.get_datetime_string_from_system())
+	lines.append("godot %s  build %s" % [
+		Engine.get_version_info().string, Build.ID])
+	lines.append("ERROR: %s" % msg)
+	lines.append("--- stack ---")
+	# 4.7: get_stack() returns an Array of {source, function, line} dicts
+	# (not a preformatted string like in 4.2-era docs).
+	for fr in get_stack():
+		lines.append("%s:%d in %s()" % [
+			str(fr.get("source", "?")), int(fr.get("line", 0)),
+			str(fr.get("function", "?"))])
+	lines.append("--- state ---")
+	lines.append("seed %s  mode %s  time_of_day %.3f" % [
+		Settings.values.get("seed", "?"), Game.mode, Game.time_of_day])
+	if Game.player != null:
+		var p: Vector3 = Game.player.position
+		lines.append("player %s" % p)
+		lines.append("chunk_origin (%d, 0, %d)" % [
+			int(floor(p.x / 16.0)), int(floor(p.z / 16.0))])
+	lines.append("band sim_dist=%s render_dist=%s" % [
+		Settings.values.get("sim_dist"), Settings.values.get("render_dist")])
+	lines.append("stats fps=%d ram_proc=%.1fMB vram=%.0fMB" % [
+		int(Performance.get_monitor(Performance.TIME_FPS)),
+		float(OS.get_static_memory_usage()) / 1048576.0,
+		float(Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED)) / 1048576.0])
+	if Game.console != null:
+		lines.append("--- console (tail) ---")
+		var ct: Array = Game.console.log_view.get_parsed_text().split("\n")
+		for ln in ct:
+			if ln.strip_edges() != "":
+				lines.append("console| %s" % ln)
+	if session_log_file != "" and FileAccess.file_exists(session_log_file):
+		lines.append("--- session log (tail) ---")
+		var sf := FileAccess.open(session_log_file, FileAccess.READ)
+		if sf != null:
+			var sdata: Array = sf.get_as_text().split("\n")
+			sf.close()
+			var tail: Array = sdata.slice(maxi(0, sdata.size() - 40))
+			for ln in tail:
+				if ln.strip_edges() != "":
+					lines.append("log| %s" % ln)
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		push_error("crash capture: file write failed")
+		return ""
+	f.store_string("\n".join(lines) + "\n")
+	f.close()
+	_session_prune()
+	# the game is frozen behind the dialog while it is up
+	Game.mode = "crash"
+	print("[crash] %s -> %s" % [msg, path])
+	return path
+
+
+func _show_crash_dialog(msg: String, path: String) -> void:
+	if _crash_dialog != null:
+		return  # one at a time
+	var layer := CanvasLayer.new()
+	layer.layer = 40
+	get_tree().root.add_child(layer)
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.6)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	layer.add_child(dim)
+	var panel := PanelContainer.new()
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+	panel.custom_minimum_size = Vector2(560, 0)
+	layer.add_child(panel)
+	var vb := VBoxContainer.new()
+	panel.add_child(vb)
+	var title := Label.new()
+	title.text = "AweCraft hit an error"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(title)
+	var body := Label.new()
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.text = msg
+	if path != "":
+		body.text += "\n\nDetails saved to:\n" + path
+	vb.add_child(body)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	vb.add_child(row)
+	var dismiss := Button.new()
+	dismiss.text = "Dismiss"
+	dismiss.pressed.connect(_close_crash_dialog)
+	row.add_child(dismiss)
+	var exit_b := Button.new()
+	exit_b.text = "Exit Game"
+	exit_b.name = "ExitGameButton"
+	exit_b.pressed.connect(func() -> void: get_tree().quit())
+	row.add_child(exit_b)
+	_crash_dialog = layer
+
+
+func _close_crash_dialog() -> void:
+	if _crash_dialog != null:
+		_crash_dialog.queue_free()
+		_crash_dialog = null
+	if Game.mode == "crash":
+		Game.mode = "play"
