@@ -12,6 +12,7 @@ var on_new_world: Callable
 var on_resume: Callable
 var on_quit_to_menu: Callable
 var on_continue: Callable
+var on_range: Callable
 var slot_labels: Array = []
 var slot_conts: Array = []
 var slot_clears: Array = []
@@ -283,6 +284,14 @@ func continue_clicked(slot: int) -> void:
 	_apply_state()
 	if on_continue.is_valid():
 		await on_continue.call(slot)
+
+
+# AC-0191: enter the isolated combat/movement range (no world, no saves)
+func range_clicked() -> void:
+	_state = "ingame"
+	_apply_state()
+	if on_range.is_valid():
+		await on_range.call()
 
 
 func _clear_slot(slot: int) -> void:

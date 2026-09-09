@@ -90,7 +90,7 @@ var items := {
 	139: {"name": "Bucket", "icon": Color(0.204, 0.204, 0.227), "stack": 1, "bucket": 0},
 	140: {"name": "Water Bucket", "icon": Color(0.157, 0.431, 0.863), "stack": 1, "bucket": 5},
 	141: {"name": "Lava Bucket", "icon": Color(0.976, 0.431, 0.118), "stack": 1, "bucket": 24},
-	142: {"name": "Bow", "icon": Color(0.55, 0.4, 0.25), "stack": 1, "dmg": 1},
+	142: {"name": "Bow", "icon": Color(0.55, 0.4, 0.25), "stack": 1, "dmg": 1, "tool": "bow"},
 	143: {"name": "Arrow", "icon": Color(0.55, 0.4, 0.25), "stack": 64},
 	144: {"name": "Bone", "icon": Color(0.93, 0.93, 0.88), "stack": 64},
 	145: {"name": "String", "icon": Color(0.85, 0.82, 0.75), "stack": 64},

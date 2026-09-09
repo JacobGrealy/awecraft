@@ -47,6 +47,8 @@ var dead := false
 var air := 10.0
 var lava_t := 0.0
 var drown_t := 0.0
+var in_water_now := false   # AC-0191: test-readable fluid state (range arm)
+var in_lava_now := false    # AC-0191
 var fall_start := -1.0
 var _regen_t := 0.0
 var _starve_t := 0.0
@@ -337,6 +339,8 @@ func _physics_process_impl(dt: float) -> void:
 		_debug_label.visible = not _debug_label.visible
 	var in_water := _block_at(position.x, position.y + 0.5, position.z) == 5
 	var in_lava := _block_at(position.x, position.y + 0.5, position.z) == 24
+	in_water_now = in_water
+	in_lava_now = in_lava
 	var swim_up := in_water or _block_at(position.x, position.y, position.z) == 5
 	var ix := 0.0
 	var iz := 0.0
@@ -1068,6 +1072,11 @@ func aim_hit() -> Dictionary:
 func start_mine() -> void:
 	if _mining:
 		return  # AC-0243: a re-press while mining (trigger jitter) must not reset progress
+	var held = Data.items.get(int(inv_selected()["id"]))
+	if held != null and str(held.get("tool", "")) == "bow":
+		_fire_bow()
+		start_swing()
+		return
 	var mob := aim_mob()
 	if mob != null:
 		attack_mob(mob)
@@ -1077,6 +1086,36 @@ func start_mine() -> void:
 	_mining = true
 	_mine_id = -1
 	_mine_prog = 0.0
+
+
+# AC-0191: placeholder bow - a hitscan (no projectile, no arrow
+# consumption) over the same Game.entities scan the sword uses, at a 60 m
+# bow range. The procedural gun picker is a follow-up once the weapon
+# system exists.
+func _fire_bow() -> void:
+	var held = Data.items.get(int(inv_selected()["id"]))
+	var dmg := 1.0
+	if held != null and float(held.get("dmg", 0)) > 0.0:
+		dmg = float(held["dmg"])
+	if Game.entities == null:
+		return
+	var o := camera.global_position
+	var d := aim_dir()
+	var best: Node3D = null
+	var bt := 60.0
+	for c in Game.entities.get_children():
+		if not (c is Node3D) or not c.has_method("center"):
+			continue
+		var cc: Vector3 = c.center()
+		var t := (cc - o).dot(d)
+		if t < 0.0 or t > bt:
+			continue
+		if (o + d * t - cc).length() < 0.8 and t < bt:
+			bt = t
+			best = c
+	if best != null and best.has_method("hurt"):
+		best.hurt(dmg, position)
+		Audio.play("hit")
 
 
 func aim_mob() -> Node3D:

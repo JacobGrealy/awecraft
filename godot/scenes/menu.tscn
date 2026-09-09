@@ -191,6 +191,13 @@ theme_override_font_sizes/font_size = 17
 custom_minimum_size = Vector2(0, 40)
 text = "Load Texture Pack (.mcpack / .zip)"
 
+[node name="RangeButton" type="Button" parent="Layer/MainBox/Center/VBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 17
+custom_minimum_size = Vector2(0, 40)
+text = "Test Range"
+
 [node name="MainStatus" type="Label" parent="Layer/MainBox/Center/VBox"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.75, 0.75, 0.78, 1)
@@ -518,6 +525,7 @@ text = "Back"
 [connection signal="pressed" from="Layer/MainBox/Center/VBox/OptionsButton" to="." method="open_options" binds=["main"]]
 [connection signal="pressed" from="Layer/MainBox/Center/VBox/ExitButton" to="." method="_on_exit_pressed"]
 [connection signal="pressed" from="Layer/MainBox/Center/VBox/PackButton" to="." method="_open_pack_dialog"]
+[connection signal="pressed" from="Layer/MainBox/Center/VBox/RangeButton" to="." method="range_clicked"]
 [connection signal="pressed" from="Layer/MainBox/Center/VBox/SlotRow0/ContinueButton" to="." method="continue_clicked" binds=[0]]
 [connection signal="pressed" from="Layer/MainBox/Center/VBox/SlotRow0/ClearButton" to="." method="_clear_slot" binds=[0]]
 [connection signal="pressed" from="Layer/MainBox/Center/VBox/SlotRow1/ContinueButton" to="." method="continue_clicked" binds=[1]]

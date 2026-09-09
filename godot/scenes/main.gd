@@ -5,6 +5,7 @@ extends Node3D
 class_name Main
 
 const WorldRes = preload("res://world/world.tscn")
+const RangeRes = preload("res://scenes/test_range.tscn")  # AC-0191
 const PlayerRes = preload("res://player/player.tscn")
 const InventoryScript = preload("res://ui/inventory.gd")
 const AtlasScript = preload("res://core/atlas.gd")
@@ -169,21 +170,28 @@ func _ready() -> void:
 
 var _batt_drop_freeze := false
 
-func _create_game_nodes() -> void:
-	world = WorldRes.instantiate()
-	world.name = "World"
-	add_child(world)
-	if OS.get_environment("AWECRAFT_NO_WORLD_VIS") == "1":
-		world.visible = false
-	if OS.get_environment("AWECRAFT_NO_COLLISION") == "1":
-		world.collision_enabled = false
-	var rad := OS.get_environment("AWECRAFT_RADIUS")
-	if rad != "":
-		world.render_radius = rad.to_int()
+func _create_game_nodes(range_mode: bool = false) -> void:
+	if range_mode:
+		# AC-0191: the isolated range - no ChunkWorld, no worldgen, no
+		# streaming, no render radius (RangeWorld._ready sets Game.world)
+		world = RangeRes.instantiate()
+		world.name = "World"
+		add_child(world)
 	else:
-		Settings.apply_world()
-		if _harness_env_set():
-			world.render_radius = 4
+		world = WorldRes.instantiate()
+		world.name = "World"
+		add_child(world)
+		if OS.get_environment("AWECRAFT_NO_WORLD_VIS") == "1":
+			world.visible = false
+		if OS.get_environment("AWECRAFT_NO_COLLISION") == "1":
+			world.collision_enabled = false
+		var rad := OS.get_environment("AWECRAFT_RADIUS")
+		if rad != "":
+			world.render_radius = rad.to_int()
+		else:
+			Settings.apply_world()
+			if _harness_env_set():
+				world.render_radius = 4
 
 	drops = Node.new()
 	drops.name = "Drops"
@@ -393,6 +401,7 @@ func _make_menu() -> Menu:
 	menu_ui.on_resume = Callable(self, "_menu_resume")
 	menu_ui.on_quit_to_menu = Callable(self, "quit_to_menu")
 	menu_ui.on_continue = Callable(self, "_menu_continue")
+	menu_ui.on_range = Callable(self, "_menu_range")
 	add_child(menu_ui)
 	return menu_ui
 
@@ -541,6 +550,25 @@ func start_game(seed: int) -> void:
 	Game.start()
 	_apply_aw_query()
 
+# AC-0191: enter the isolated combat/movement range from the main menu or
+# the harness (AWECRAFT_LOGIC=range). No Game.new_world (no worldgen), no
+# Save.save_now anywhere on this path, and Save.active_slot is forced to
+# -1 so the in-game autosave/quit save stay inert.
+func start_range() -> void:
+	_free_game_nodes()
+	Save.active_slot = -1
+	_create_game_nodes(true)
+	world.attach_entities(Game.entities)  # AC-0191: targets join the aim scan
+	var spawn: Vector3 = world.spawn_point()
+	player = _spawn_player()
+	Game.start()
+	await get_tree().process_frame
+
+
+func _menu_range() -> void:
+	await start_range()
+
+
 func _apply_aw_query() -> void:
 	var spec := ""
 	for a in OS.get_cmdline_user_args():
@@ -607,6 +635,17 @@ func _free_game_nodes() -> void:
 	Game.hotbar = null
 
 func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: String) -> void:
+	if logic == "range":
+		# AC-0191: the range boots without a ChunkWorld (and without the
+		# settings preload below writing anything user-visible)
+		if _harness_env_set():
+			OS.set_environment("AWECRAFT_IGNORE_SETTINGS", "1")
+			Settings.load_settings()
+			OS.set_environment("AWECRAFT_IGNORE_SETTINGS", "")
+		await start_range()
+		var rspawn: Vector3 = world.spawn_point()
+		await harness.run(seed_env, logic, cam, snapshot_path, rspawn)
+		return
 	Game.new_world(44 if seed_env == "" else seed_env.to_int())
 	if logic == "settings":
 		harness._settings_test()

@@ -287,6 +287,11 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 
 	if logic != "":
 		world.fluid_sim_enabled = false
+		if logic == "range":
+			# AC-0191: the range booted in place of the world (main.start_range)
+			player = main.player
+			await _range_test(spawn)
+			return
 		if logic == "player":
 			world.recenter(spawn.x, spawn.z, true)
 			await main._await_spawn_floor(spawn, 300)
@@ -1136,6 +1141,22 @@ func _batt_run_mode(mode: String, spawn: Vector3, seed_env: String) -> void:
 			await main._await_spawn_floor(spawn, 300)
 			player = main._spawn_player()
 			await _fluidflow_test(spawn)
+		"range":
+			# AC-0191: swap the real world for the isolated range (must run
+			# LAST). The battery double-creates worlds per mode (a leaked
+			# real world keeps streaming; once its terrain collision is
+			# built it can overlap the range spawn and stick the player in
+			# a concave shape) - free every real ChunkWorld before booting.
+			var leaked: Array = []
+			for c in main.get_children():
+				if c.get_script() != null and str(c.get_script().resource_path).contains("world/world.gd"):
+					leaked.append(c)
+			for c in leaked:
+				c.free()
+			await main.start_range()
+			var rspawn: Vector3 = world.spawn_point()
+			player = main.player
+			await _range_test(rspawn)
 		_:
 			print("BATTSKIP ", mode)
 	if sp != spawn:
@@ -16648,6 +16669,112 @@ func _fluidflow_test(spawn: Vector3) -> void:
 
 
 func _ff_settle(n: int) -> void:
+	for i in n:
+		await get_tree().physics_frame
+
+
+# AC-0191: the isolated combat/movement range - real player.gd against a
+# greybox arena (no ChunkWorld/worldgen). Validates movement, sword swing,
+# the placeholder bow hitscan at 50 m, swim, drown, lava damage, save
+# isolation (no awecraft_save* writes) and console availability.
+func _range_test(spawn: Vector3) -> void:
+	var res: Dictionary = {}
+	# an earlier battery mode may leave the console open (the player gates
+	# ALL input on it) and a focused line edit / crash dialog swallowing
+	# key events - the arm must be self-contained
+	Game.console_open = false
+	if Debug._crash_dialog != null:
+		Debug._close_crash_dialog()
+	get_viewport().gui_release_focus()
+	var p = player
+	res["is_range"] = bool(Game.world.get("is_range"))
+	# targets: the 10/25/50 m hitables must sit in Game.entities
+	var t10: Node3D = null
+	var t25: Node3D = null
+	var t50: Node3D = null
+	if Game.entities != null:
+		for c in Game.entities.get_children():
+			if c.has_method("range_target_dist"):
+				var d := int(c.range_target_dist())
+				if d == 10:
+					t10 = c
+				elif d == 25:
+					t25 = c
+				elif d == 50:
+					t50 = c
+	res["targets"] = int(t10 != null) + int(t25 != null) + int(t50 != null)
+	# movement: face +z (yaw PI) and hold W
+	p.look(PI, 0.0)
+	var p0: float = p.position.z
+	var ev := InputEventKey.new()
+	ev.physical_keycode = KEY_W
+	ev.pressed = true
+	Input.parse_input_event(ev)
+	await _rr_settle(45)
+	ev.pressed = false
+	Input.parse_input_event(ev)
+	var moved: float = p.position.z - p0
+	res["moved"] = moved
+	res["movement_ok"] = moved > 1.0
+	# aim line: feet on the floor at z=4.5 (eye ~1.62), targets on +z
+	p.position = Vector3(0.5, 0.0, 4.5)
+	p.look(PI, -atan2(0.62, 5.5))
+	await _rr_settle(10)
+	# sword: wooden sword (123, dmg 3) hits the 10 m target
+	Debug.give_item(123, 1)
+	p.sel = main._slot_of(p, 123)
+	p.start_mine()
+	await _rr_settle(10)
+	res["sword_hit"] = int(t10.hits) if t10 != null else -1
+	res["sword_ok"] = t10 != null and t10.hits == 1
+	# bow (142, placeholder hitscan at 60 m): clear the near targets, the
+	# shot must land on the 50 m one
+	if t10 != null:
+		t10.queue_free()
+	if t25 != null:
+		t25.queue_free()
+	await _rr_settle(5)
+	Debug.give_item(142, 1)
+	p.sel = main._slot_of(p, 142)
+	p.look(PI, -atan2(0.62, 45.5))
+	p.start_mine()
+	await _rr_settle(10)
+	res["bow_hit50"] = int(t50.hits) if t50 != null else -1
+	res["bow_ok"] = t50 != null and t50.hits == 1
+	# swim: feet just under the pit surface
+	var hp_swim: float = p.hp
+	p.position = Vector3(0.5, -1.5, -30.5)
+	await _rr_settle(40)
+	res["in_water"] = bool(p.in_water_now)
+	res["swim_vy"] = absf(p.velocity.y)
+	res["swim_ok"] = p.in_water_now and absf(p.velocity.y) < 5.0
+	# drown: head at pit bottom, air pre-drained - first damage after ~2 s
+	p.air = 0.0
+	p.position = Vector3(0.5, -2.9, -30.5)
+	var hp_drown: float = p.hp
+	await _rr_settle(150)
+	res["drown_dmg"] = hp_drown - p.hp
+	res["drown_ok"] = p.in_water_now and (hp_drown - p.hp) >= 2.0
+	# lava: the trench (x in [-2,2), z in [10,50), surface one below the floor)
+	p.position = Vector3(0.5, -1.9, 30.5)
+	var hp_lava: float = p.hp
+	await _rr_settle(60)
+	res["in_lava"] = bool(p.in_lava_now)
+	res["lava_dmg"] = hp_lava - p.hp
+	res["lava_ok"] = p.in_lava_now and (hp_lava - p.hp) >= 4.0
+	# save isolation + console
+	res["active_slot"] = int(Save.active_slot)
+	res["console"] = Game.console != null
+	res["ok"] = res["is_range"] and res["targets"] == 3 and res["movement_ok"] \
+		and res["sword_ok"] and res["bow_ok"] and res["swim_ok"] \
+		and res["drown_ok"] and res["lava_ok"] \
+		and res["active_slot"] == -1 and res["console"]
+	Debug.result(res)
+	if not _batt:
+		get_tree().quit()
+
+
+func _rr_settle(n: int) -> void:
 	for i in n:
 		await get_tree().physics_frame
 
