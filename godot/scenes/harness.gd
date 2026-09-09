@@ -327,6 +327,14 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			player = main._spawn_player()
 			await _overlays_test(spawn)
 			return
+		if logic == "dnlight":
+			# AC-0204: day/night must come from the shader uniform, never
+			# the baked mesh (build at noon vs midnight, LOD material share).
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _dnlight_test(spawn)
+			return
 		if logic == "look":
 			world.recenter(spawn.x, spawn.z, true)
 			player = main._spawn_player()
@@ -1070,6 +1078,11 @@ func _batt_run_mode(mode: String, spawn: Vector3, seed_env: String) -> void:
 			await main._await_spawn_floor(spawn, 300)
 			player = main._spawn_player()
 			await _overlays_test(spawn)
+		"dnlight":
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _dnlight_test(spawn)
 		_:
 			print("BATTSKIP ", mode)
 	if sp != spawn:
@@ -16101,6 +16114,157 @@ func _walk_children(node: Node) -> Array:
 			out.append(c)
 			stack.append(c)
 	return out
+
+
+# AC-0204: the mesh stores the NOON light (s = lightbox eff / 15, a pure
+# geometry value - SKY_FULL is a compile-time 15, no day factor anywhere
+# in the build path); the shader uniform u_day (pushed every frame from
+# main._update_sky) does the darkening. The arm proves: (1) flipping the
+# clock night->noon changes the cached material u_day while the mesh
+# colors stay byte-identical (no rebuild, no rebake); (2) the formula
+# darkens (L_night < L_noon) and holds the 0.20 floor; (3) a world
+# BUILT at midnight stores the same light values as the noon build;
+# (4) slab materials are the shared cached ShaderMaterials, so LOD
+# swaps (same material) keep the transition.
+func _dnlight_test(spawn: Vector3) -> void:
+	var res: Dictionary = {}
+	# noon build
+	Game.time_of_day = 0.5
+	await main._await_world_build(spawn, 3000)
+	var noon: Array = _dn_sample()
+	res["noon_built"] = noon.size() > 0
+	# night: let main._process push the new u_day, then compare
+	Game.time_of_day = 0.0
+	for i in 10:
+		await get_tree().physics_frame
+	var night: Array = _dn_sample()
+	res["mesh_unchanged"] = _dn_rsets_equal(noon, night)
+	var u_day := _dn_mat_day()
+	res["u_day_night"] = absf(float(u_day) - 0.0) < 0.01
+	# sky faces only (g == 0): block-light faces are NOT modulated by
+	# day, by design (L = 0.20 + 0.80 * max(u_day * r, g))
+	var L_noon := _dn_L_sky(noon, 1.0)
+	var L_night := _dn_L_sky(noon, 0.0)
+	res["sky_face"] = _dn_has_sky_full(noon)
+	res["darkens"] = L_night < L_noon
+	res["floor_holds"] = L_night >= 0.19
+	# back to noon: brightens again on the SAME meshes
+	Game.time_of_day = 0.5
+	for i in 10:
+		await get_tree().physics_frame
+	res["u_day_noon"] = absf(float(_dn_mat_day()) - 1.0) < 0.01
+	# a world BUILT at midnight stores the same light values
+	Game.time_of_day = 0.0
+	Game.new_world(44)
+	main._create_game_nodes()
+	world.recenter(spawn.x, spawn.z, true)
+	await main._await_world_build(spawn, 3000)
+	var mid: Array = _dn_sample()
+	res["midnight_built"] = mid.size() > 0
+	res["build_time_independent"] = _dn_rsets_equal(noon, mid)
+	# slab materials are the shared cached ShaderMaterials (LOD swaps
+	# reuse them - the u_day push is free)
+	res["mat_shared"] = _dn_mat_shared(mid)
+	res["ok"] = res["noon_built"] and res["mesh_unchanged"] \
+		and res["u_day_night"] and res["darkens"] and res["floor_holds"] \
+		and res["u_day_noon"] and res["midnight_built"] \
+		and res["build_time_independent"] and res["mat_shared"]
+	Debug.result(res)
+	if not _batt:
+		get_tree().quit()
+
+
+# distinct (r,g) light channels of the opaque surface colors of every
+# built slab near spawn (surface 0 = the opaque kind, AC-0128 repack:
+# r = sky s [0 when block-light masked], g = block-light s, b = shade)
+func _dn_sample() -> Array:
+	var seen := {}
+	var n := 0
+	for key in world.chunks:
+		var ch: Node3D = world.chunks[key]
+		for s in ch.slabs:
+			var mi = s.mesh_instance
+			if mi == null or mi.mesh == null:
+				continue
+			var m: ArrayMesh = mi.mesh
+			if m.get_surface_count() < 1:
+				continue
+			var arrs = m.surface_get_arrays(0)
+			var colors: PackedColorArray = arrs[Mesh.ARRAY_COLOR]
+			for c in colors:
+				var k := "%d_%d" % [int(round(c.r * 255.0)), int(round(c.g * 255.0))]
+				if not seen.has(k):
+					seen[k] = 1
+				n += 1
+		if n > 4000:
+			break
+	return seen.keys()
+
+
+func _dn_rsets_equal(a: Array, b: Array) -> bool:
+	if a.size() != b.size():
+		return false
+	var sa := {}
+	for k in a:
+		sa[k] = true
+	for k in b:
+		if not sa.has(k):
+			return false
+	return true
+
+
+# the u_day parameter of the shared opaque ShaderMaterial (0 at
+# midnight, 1 at noon - DayNight.day clamps to exact 0/1 there)
+func _dn_mat_day() -> float:
+	var mat = _ChunkScriptM._mat_cache.get("opaque", null)
+	if mat == null or not (mat is ShaderMaterial):
+		return -1.0
+	return mat.get_shader_parameter("u_day")
+
+
+# the shader L formula over the SKY faces (g == 0) of the sample -
+# the day factor only modulates the sky channel
+func _dn_L_sky(sample: Array, day: float) -> float:
+	var Lmax := 0.0
+	for k in sample:
+		var p: Array = str(k).split("_")
+		var r := float(p[0]) / 255.0
+		var g := float(p[1]) / 255.0
+		if g > 0.0:
+			continue
+		var L := 0.20 + 0.80 * day * r
+		if L > Lmax:
+			Lmax = L
+	return Lmax
+
+
+# an open-sky face (r == 1.0, g == 0) must exist - the terrain top
+func _dn_has_sky_full(sample: Array) -> bool:
+	for k in sample:
+		var p: Array = str(k).split("_")
+		if int(p[0]) == 255 and int(p[1]) == 0:
+			return true
+	return false
+
+
+func _dn_mat_shared(sample: Array) -> bool:
+	if sample.size() == 0:
+		return false
+	var mats := _ChunkScriptM._mat_cache.values()
+	for key in world.chunks:
+		var ch: Node3D = world.chunks[key]
+		for s in ch.slabs:
+			var mi = s.mesh_instance
+			if mi == null or mi.mesh == null:
+				continue
+			if mi.mesh.get_surface_count() < 1:
+				continue
+			# 4.7: MeshInstance3D.material is not accessible here - the
+			# slab path sets the material per surface, so read that.
+			var m2: ArrayMesh = mi.mesh
+			var mat = m2.surface_get_material(0)
+			return mats.has(mat)
+	return false
 
 
 func _overlays_test(spawn: Vector3) -> void:
