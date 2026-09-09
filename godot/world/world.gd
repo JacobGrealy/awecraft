@@ -7400,7 +7400,34 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 	_mark_light_around(cx, cz)
 	if _fluid_near(x, y, z):
 		_fluid_write = true
+		# AC-0244 (2026-09-09 user bug): natural (worldgen) water is fl=0 -
+		# stationary by the AC-0203 sparse-scan design, and _fluid_write
+		# alone does not help because the scan is gated on the per-chunk
+		# fluid_wet set, which natural water never enters. Breaking a block
+		# next to/under a lake must wake the water: give every adjacent
+		# fl=0 fluid cell an active level so the scan (fl!=0 cells only)
+		# can move it into the dig. The rest of the lake stays fl=0
+		# (zero scan work); only the edge cells an edit touches activate.
+		_wake_fluid_around(x, y, z)
 	_record_edit(cx, cz, fi, id, c.fl_at(fi))
+
+
+func _wake_fluid_around(x: int, y: int, z: int) -> void:
+	for d in [[0, 1, 0], [0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]:
+		var nx: int = x + int(d[0])
+		var ny: int = y + int(d[1])
+		var nz: int = z + int(d[2])
+		if ny < 0 or ny >= Data.HEIGHT:
+			continue
+		var ncx: int = int(floorf(float(nx) / 16.0))
+		var ncz: int = int(floorf(float(nz) / 16.0))
+		var nc: Node3D = chunks.get(_key(ncx, ncz))
+		if nc == null or nc.data.is_empty():
+			continue
+		var nfi: int = (ny << 8) | ((nz & 15) << 4) | (nx & 15)
+		if is_fluid_id(nc.get_at(nfi)) and nc.fl_at(nfi) == 0:
+			nc.set_fl_at(nfi, 7)
+			fluid_wet[_key(ncx, ncz)] = true
 
 func _mark_light_around(cx: int, cz: int) -> void:
 	for dx in range(-LIGHT_NEIGHBOR, LIGHT_NEIGHBOR + 1):
@@ -8318,7 +8345,14 @@ func tick_fluids() -> void:
 							var ry: int = cell >> 8
 							var row: int = y << 8
 							var i: int = row | (cell & 255)
-							var b: int = _data_at_slab(c, si, cell & 255, dviews)
+							# user bug 2026-09-09 (flow regression): the per-slab cell
+							# index is (ly<<8)|(lz<<4)|lx - the FULL 12-bit value.
+							# The AC-0203 rewrite masked it to a byte (cell & 255),
+							# which read the ly=0 row of every slab: above-slab water
+							# saw deep stone, failed is_fluid_id, and its fl level was
+							# zeroed every tick (the water could never move). The
+							# below-chain (below_pos) had the same masked input.
+							var b: int = _data_at_slab(c, si, cell, dviews)
 							if not is_fluid_id(b):
 								c.set_fl_at(i, 0)
 							else:
@@ -8330,7 +8364,7 @@ func tick_fluids() -> void:
 								var x := wx0 + lx
 								var z := wz0 + lz
 								var below_si: int = si if ry > 0 else si - 1
-								var below_pos: int = (cell & 255) - 256 if ry > 0 else (cell & 255) | (15 << 8)
+								var below_pos: int = cell - 256 if ry > 0 else (cell & 255) | (15 << 8)
 								var below: int = _data_at_slab(c, below_si, below_pos, dviews)
 								var br: int = below_pos >> 8
 								var bb_si: int = below_si if br > 0 else below_si - 1

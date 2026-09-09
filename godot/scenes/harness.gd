@@ -360,6 +360,14 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			player = main._spawn_player()
 			await _underwater_test(spawn)
 			return
+		if logic == "fluidflow":
+			# user bug 2026-09-09: breaking a block next to / under water
+			# must make the water move (fall + spread).
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _fluidflow_test(spawn)
+			return
 		if logic == "look":
 			world.recenter(spawn.x, spawn.z, true)
 			player = main._spawn_player()
@@ -1123,6 +1131,11 @@ func _batt_run_mode(mode: String, spawn: Vector3, seed_env: String) -> void:
 			await main._await_spawn_floor(spawn, 300)
 			player = main._spawn_player()
 			await _underwater_test(spawn)
+		"fluidflow":
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _fluidflow_test(spawn)
 		_:
 			print("BATTSKIP ", mode)
 	if sp != spawn:
@@ -16503,6 +16516,139 @@ func _uw_uniform() -> float:
 			if pv is float:
 				return pv
 	return -1.0
+
+
+# User bug (2026-09-09): breaking a block under / beside water must make
+# the water move. Two deterministic cases on flat terrain near the spawn:
+# (1) FALL - a water source resting on a block falls through when that
+# block is broken (the sim must wake on the edit and move the cell down);
+# (2) SPREAD - a water source dropped in the air settles on the ground and
+# spreads sideways into the air at lower levels.
+func _fluidflow_test(spawn: Vector3) -> void:
+	var res: Dictionary = {}
+	# harness.run disables the fluid sim for every arm (determinism) -
+	# this arm tests the sim itself
+	world.fluid_sim_enabled = true
+	# find a spot: a solid column top with two air cells above
+	var fx := 0
+	var fy := 0
+	var fz := 0
+	var found := false
+	for dx in range(-24, 25, 2):
+		for dz in range(-24, 25, 2):
+			var x := int(spawn.x) + dx
+			var z := int(spawn.z) + dz
+			for y in range(130, 90, -1):
+				var b: int = world.get_block(x, y, z)
+				if b != 0 and b != 5 and world.get_block(x, y + 1, z) == 0 \
+						and world.get_block(x, y + 2, z) == 0:
+					fx = x
+					fy = y
+					fz = z
+					found = true
+					break
+			if found:
+				break
+		if found:
+			break
+	res["found_spot"] = found
+	if not found:
+		Debug.result(res)
+		if not _batt:
+			get_tree().quit()
+		return
+	# (1) FALL: a source in a stone-lined box on one support - no sideways
+	# spread, nothing to refill the cell after the support is broken, so the
+	# only legal move is straight down through the hole.
+	Debug.set_block(fx + 1, fy + 1, fz, 3)
+	Debug.set_block(fx - 1, fy + 1, fz, 3)
+	Debug.set_block(fx, fy + 1, fz + 1, 3)
+	Debug.set_block(fx, fy + 1, fz - 1, 3)
+	Debug.set_fluid(fx, fy + 1, fz, 5, 8)
+	await _ff_settle(60)
+	var rested: bool = world.get_block(fx, fy + 1, fz) == 5 and world.fluid_level(fx, fy + 1, fz) == 8
+	Debug.set_block(fx, fy, fz, 0)
+	await _ff_settle(120)
+	var fell: bool = world.get_block(fx, fy, fz) == 5 and world.fluid_level(fx, fy, fz) == 8
+	var source_gone: bool = world.get_block(fx, fy + 1, fz) == 0
+	var wall_kept: bool = world.get_block(fx + 1, fy + 1, fz) == 3 \
+		and world.get_block(fx - 1, fy + 1, fz) == 3
+	res["fall_rested"] = rested
+	res["fall_moved"] = fell and source_gone and wall_kept
+	# (2) SPREAD: a source on a 5x5 stone platform in a stone-lined pit -
+	# terrain-independent: the only legal moves are the four ring-1 cells.
+	for sdx in range(-2, 3):
+		for sdz in range(-2, 3):
+			Debug.set_block(fx + 8 + sdx, fy + 1, fz + sdz, 3)
+	for sdx in range(-2, 3):
+		for sdz in range(-2, 3):
+			if maxi(absi(sdx), absi(sdz)) == 2:
+				Debug.set_block(fx + 8 + sdx, fy + 2, fz + sdz, 3)
+	Debug.set_fluid(fx + 8, fy + 2, fz, 5, 8)
+	await _ff_settle(240)
+	var settled: bool = world.get_block(fx + 8, fy + 2, fz) == 5 \
+		and world.fluid_level(fx + 8, fy + 2, fz) == 8
+	var n1e: bool = world.get_block(fx + 9, fy + 2, fz) == 5
+	var n1w: bool = world.get_block(fx + 7, fy + 2, fz) == 5
+	var n1n: bool = world.get_block(fx + 8, fy + 2, fz + 1) == 5
+	var n1s: bool = world.get_block(fx + 8, fy + 2, fz - 1) == 5
+	var wall_kept2: bool = world.get_block(fx + 10, fy + 2, fz) == 3 \
+		and world.get_block(fx + 6, fy + 2, fz) == 3
+	res["spread_settled"] = settled
+	res["spread_n1"] = int(n1e) + int(n1w) + int(n1n) + int(n1s)
+	res["spread_wall"] = wall_kept2
+	# (3) NATURAL: a worldgen-style pool - block 5 written through
+	# set_local with NO fl data (the worldgen path), on a stone platform.
+	# It must stay stationary until an edit wakes it, then flow into the
+	# dig (the user bug: breaking next to/under water does nothing).
+	var px := fx + 16
+	for sdx in range(-2, 3):
+		for sdz in range(-2, 3):
+			Debug.set_block(px + sdx, fy + 1, fz + sdz, 3)
+	for sdx in range(-2, 3):
+		for sdz in range(-2, 3):
+			if maxi(absi(sdx), absi(sdz)) == 2:
+				Debug.set_block(px + sdx, fy + 2, fz + sdz, 3)
+	for sdx in range(-1, 2):
+		for sdz in range(-1, 2):
+			var wx2: int = px + sdx
+			var wz2: int = fz + sdz
+			var wcx: int = int(floorf(float(wx2) / 16.0))
+			var wcz: int = int(floorf(float(wz2) / 16.0))
+			var wc: Node3D = world.chunks.get(world._key(wcx, wcz))
+			if wc != null:
+				wc.set_local(wx2 & 15, fy + 2, wz2 & 15, 5)
+				wc.mark_edit_slabs(fy + 2)
+	var pcx0: int = int(floorf(float(px) / 16.0))
+	var pcz0: int = int(floorf(float(fz) / 16.0))
+	var wc0: Node3D = world.chunks.get(world._key(pcx0, pcz0))
+	var nfi0: int = ((fy + 2) << 8) | ((fz & 15) << 4) | (px & 15)
+	var nat_natural: bool = wc0 != null and wc0.fl_at(nfi0) == 0
+	await _ff_settle(60)
+	var nat_stayed: bool = world.get_block(px, fy + 2, fz) == 5 and wc0.fl_at(nfi0) == 0
+	# 3a: break the support under the middle - the water must fall in
+	Debug.set_block(px, fy + 1, fz, 0)
+	await _ff_settle(120)
+	var nat_fall: bool = world.get_block(px, fy + 1, fz) == 5
+	# 3b: break the east wall next to the pool edge - the water must spread
+	Debug.set_block(px + 2, fy + 2, fz, 0)
+	await _ff_settle(120)
+	var nat_spread: bool = world.get_block(px + 2, fy + 2, fz) == 5
+	res["nat_natural"] = nat_natural
+	res["nat_stayed"] = nat_stayed
+	res["nat_fall"] = nat_fall
+	res["nat_spread"] = nat_spread
+	res["ok"] = found and rested and res["fall_moved"] and settled \
+		and res["spread_n1"] == 4 and res["spread_wall"] \
+		and nat_natural and nat_stayed and nat_fall and nat_spread
+	Debug.result(res)
+	if not _batt:
+		get_tree().quit()
+
+
+func _ff_settle(n: int) -> void:
+	for i in n:
+		await get_tree().physics_frame
 
 
 func _dnlight_test(spawn: Vector3) -> void:
