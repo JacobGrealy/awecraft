@@ -4722,20 +4722,42 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-29T09:29
-  updated_at: 2026-08-31T17:21
+  updated_at: 2026-09-08T18:05
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: '1) User Story: As a developer I want the test harness out of main.gd so the coordinator code
-    is readable and small.
-
-
-    2) Technical Details: main.gd is 8939 lines / 179 funcs — mixes coordinator (Game.mode, World/Player
-    lifecycle, sky/fog), full AWECRAFT_LOGIC harness (battery + 30+ probe funcs: player, interact, light,
-    fluids, craft, survival, held, tool, perf, boundary, etc.), and menu wiring. Extract harness/test
-    battery into autoload/debug.gd or harness/ folder (e.g. harness/battery.gd + harness/probes/*.gd),
-    leave main.gd as thin coordinator (~400 lines). No behavior change, just move code and clean imports.
-    Verify battery green, no behavior change.'
+  notes: "1) User Story: As a developer I want the test harness out of main.gd so the coordinator code\
+    \ is readable and small.\n\n2) Technical Details: main.gd is 8939 lines / 179 funcs — mixes coordinator\
+    \ (Game.mode, World/Player lifecycle, sky/fog), full AWECRAFT_LOGIC harness (battery + 30+ probe funcs:\
+    \ player, interact, light, fluids, craft, survival, held, tool, perf, boundary, etc.), and menu wiring.\
+    \ Extract harness/test battery into autoload/debug.gd or harness/ folder (e.g. harness/battery.gd\
+    \ + harness/probes/*.gd), leave main.gd as thin coordinator (~400 lines). No behavior change, just\
+    \ move code and clean imports. Verify battery green, no behavior change.\n\n3) Implementation (agent,\
+    \ 2026-09-08): DONE, all gates green - harness extracted VERBATIM.\n- godot/scenes/harness.gd (NEW,\
+    \ ~15.8k lines, class_name Harness, extends Node):\n  every AWECRAFT_LOGIC/AWECRAFT_BATTERY arm +\
+    \ helper (258 funcs) moved byte-for-byte\n  (verified by diff after stripping the main. prefix). The\
+    \ former _run_game dispatch\n  cascade (AWECRAFT_PROBE block + if logic == ... arms + shared tail)\
+    \ is now run();\n  the former _ready battery entry is run_battery(). Coordinator calls go through\n\
+    \  main.<fn>; the 23 member reads/writes go through typed get/set pass-through\n  properties so player\
+    \ = x assignments land on the main scene. Shared waiters +\n  snapshot fixtures + slot/fluidfall/breakable\
+    \ helpers + the _occl_* cave tools +\n  _StubWorld inner class stayed where both sides need them (main.gd);\
+    \ _ChunkScriptM\n  + AeroLib consts exist on both sides (duplicate preload, same script).\n- godot/scenes/main.gd:\
+    \ 17456 -> 1690 lines, 298 -> 54 funcs. class_name Main; the\n  harness is a child node created in\
+    \ _ready (HarnessScript preload const, NOT a\n  class_name reference - the mutual class_name reference\
+    \ failed to parse:\n  Could not parse global class). _run_game is now: new_world + settings arm +\n\
+    \  harness env block + _create_game_nodes + spawn + await harness.run(...).\n- Parser gotchas hit\
+    \ (for anyone extending this): GDScript property setters must\n  take an UNTYPED parameter (set(v),\
+    \ not set(v: Node3D)); var x := main.fn()\n  needs the main var TYPED (var main: Main) or inference\
+    \ fails; top-level class\n  blocks are column-0 and must be parsed as their own block.\n- Verify (all\
+    \ green, values match the pre-extraction runs): syntax 0 Parse Errors;\n  SMOKE battery ok:true (settings;player;interact;light;fluids;buckets;genhash,\n\
+    \  GENHASH prints bit-identical to the AC-0111 run); arms occl ok (162/0/108/25/6/\n  6-5 exact),\
+    \ meshprobe ok (1908/1908 accs, match_rate 1.0), chunkio ok (12\n  regions), lightcache ok, r16 ok\
+    \ (built_all), save_test ok, quitmenu ok (needs\n  AWECRAFT_STDERR_FILE=<log> or script_errors_seen\
+    \ defaults true), gamepad ok.\n- Note: the ~400-lines main.gd target in the task is stale (the file\
+    \ was 8939\n  lines when filed, 17456 when worked); the coordinator is now 1690 lines.\n  Single-file\
+    \ harness.gd instead of a harness/ folder: keeps the move a pure\n  verbatim relocation (one file\
+    \ to audit) - splitting further is a follow-up\n  cosmetic ticket if wanted. EXE rebuilt after this\
+    \ commit."
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549799'
