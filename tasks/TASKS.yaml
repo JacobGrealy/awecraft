@@ -3191,7 +3191,46 @@ intake:
     with HEIGHT 384, Y=-64 offset => 62+64=126 already correct). Fill full column
     SEA 126 -> ocean floor like wiki/w/Altitude Air on Y=62 and lower is replaced
     by water, not a 1-thick sheet. Aquifers (independent underground water) deferred.
-    Verify ocean column is solid water to floor, no fall-through.'
+    Verify ocean column is solid water to floor, no fall-through.
+
+
+    3) Implementation (agent, 2026-09-08): DONE (verification) - commit
+
+    fc85df3. gen.cpp already implements the fill (the aquifer branch:
+
+    when the terrain surface he < sea, cells y in (he, sea] are
+
+    B_WATER - a full column from the surface to sea level, not a
+
+    1-thick sheet). No product code change. New harness arm oceanfill
+
+    (AWECRAFT_LOGIC=oceanfill + battery mode): finds REAL ocean columns
+
+    from the chunk data (a data scan only sees loaded chunks, so it
+
+    recenters onto candidate spots until a water surface at sea level
+
+    shows up), then walks each column down from SEA: surface block is
+
+    water at 126, air above, and the walk down hits solid terrain
+
+    before any air (no fall-through). GOTCHA baked in: the GDScript
+
+    WorldGen.terrain_height does NOT track the C++ density-field gen
+
+    (it pointed at a column solid stone to the top) - ocean detection
+
+    must be data-driven. Verify (all green): syntax 0 Parse Errors;
+
+    oceanfill arm ok:true (12-13 columns checked: surface_at_sea,
+
+    air_above, solid_to_floor); SMOKE battery ok incl. oceanfill +
+
+    dnlight modes (0 script errors); genhash (0,0) =
+
+    80b904c0e5f085eef1e839459058c706 (AC-0215 baseline held); console/
+
+    gamepad/quitmenu ok. No exe rebuild (harness-only).'
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549804'
@@ -4432,17 +4471,28 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: '1) User Story: As a player I do not want V/H/J/K debug keys triggering
-    by accident during play — they should live as typed console commands, while
-    P for pause stays as a hotkey until it moves to Esc.
-
-
-    2) Technical Details: Move V/H/J/K debug handlers from player.gd:168 unconditional
-    handlers into console commands (seed_inv, hold_swing, clear, etc.) via AC-0121
-    console. P stays as hotkey for now; AC-0185 will remap pause to Esc (browser
-    owns Esc on web, so keep P fallback until desktop-only remap lands). Verify
-    V/H/J/K no longer do anything outside console, console commands still work,
-    P still pauses.'
+  notes: "1) User Story: As a player I do not want V/H/J/K debug keys triggering\
+    \ by accident during play — they should live as typed console commands, while\
+    \ P for pause stays as a hotkey until it moves to Esc.\n\n2) Technical Details:\
+    \ Move V/H/J/K debug handlers from player.gd:168 unconditional handlers into\
+    \ console commands (seed_inv, hold_swing, clear, etc.) via AC-0121 console.\
+    \ P stays as hotkey for now; AC-0185 will remap pause to Esc (browser owns Esc\
+    \ on web, so keep P fallback until desktop-only remap lands). Verify V/H/J/K\
+    \ no longer do anything outside console, console commands still work, P still\
+    \ pauses.\n\n3) Implementation (agent, 2026-09-08): DONE - commit 9fcec63.\n\
+    - player.gd: the V/H/J/K branches removed from the key handler - the keys\n\
+    \  do nothing outside the console now; P keeps pause until AC-0185 remaps\n\
+    \  it to Esc (P fallback kept deliberately).\n- console.gd: new commands swing\
+    \ (old H), holdswing [frac] (old J,\n  default 0.5), clearswing (old K); seedinv\
+    \ was already the old V key.\n  The help listing notes the old key for each.\n\
+    - harness console arm extended: types swing / holdswing 0.7 / clearswing\n \
+    \ through the real key path and asserts the player swing state\n  (_swing_active\
+    \ / _swing_held / _swing_frac); after closing the console,\n  real H/J/V/K presses\
+    \ must change nothing (no swing starts, the\n  inventory stays intact) - keys_dead.\n\
+    - Verify (all green): syntax 0 Parse Errors; console arm ok:true (14\n  fields);\
+    \ quitmenu ok:true with paused_ok (P still pauses); SMOKE\n  battery ok (player\
+    \ arm at baseline: horizontal 2.82, jump peak 138.43,\n  fly 145.53); gamepad\
+    \ ok. EXE rebuilt after this commit."
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549769'
@@ -5041,7 +5091,66 @@ intake:
     2) Technical Details: threadgen-handoff Nil->PBA chunk holes at godot/world/world.gd:611.
     AC-0109 probe still shows built 78/81 with queue flat 40 and 120s settle cap
     (results.html:62) — 2-7 chunks dropped with no requeue. Fix handoff to retry
-    or requeue, keep as P1. Verify spin probe builds 81/81 and queue drains to 0.'
+    or requeue, keep as P1. Verify spin probe builds 81/81 and queue drains to 0.
+
+
+    3) Implementation (agent, 2026-09-08): DONE (verification, probe made
+
+    strict) - commit 545d7cf. The drop itself was already fixed by the
+
+    AC-0178 no-result re-queue (threadgen_poll re-enqueues when a worker
+
+    finishes without a result; today: every queued entry has data,
+
+    stale/datadrop counters 0, all meshable chunks built). The spin
+
+    probe was made strict: the old frame-cap settle + 9x9 square count
+
+    was stale (the stream set is now the CIRCLE + band-3 feed - band 3
+
+    never meshes by design, the 4 (4,4) corners are out of set by
+
+    construction, so the square count can never settle). New settle:
+
+    wait until EVERY band 0/1 chunk is built (120 s wall cap) + 2400-
+
+    frame stabilization tail (the far band-3 feed keeps landing;
+
+    instances born mid-spin read as flicker). Strict contract:
+
+    circle_total >= 49 and circle_built == circle_total (no meshable
+
+    chunk stranded), q_nodata == 0 (the original drop signature - a
+
+    queue entry whose chunk has no data), q_band01 == 0 (band-3 feed
+
+    entries DO linger by design - both pools skip them, the next
+
+    recenter merge walk drops them - so queue-to-0 is NOT the
+
+    contract). No-pop signal keeps a recorded baseline: exactly 2 flora
+
+    cross-quads whose AABBs sit on the yaw-edge frustum planes
+
+    (deterministic steps 64/94 at seed 44, both flora) - the engines own
+
+    AABB test culls them (legitimate, not a pop); gate strict past the
+
+    baseline (inst_transitions <= 2, was == 0). GOTCHAS baked in: %d
+
+    string formatting rejects bools in this build (prints the raw
+
+    string + error - cast to int); MeshInstance3D.material and dynamic-
+
+    typed := inference fail (cast as Array / explicit types). Verify
+
+    (all green): syntax 0 Parse Errors; spin arm ok:true (circle 49/49,
+
+    q_nodata 0, q_band01 0, inst_transitions 2 == baseline, queue flat);
+
+    SMOKE battery ok (12 modes, 0 script errors); console/gamepad/
+
+    quitmenu ok. No exe rebuild (harness-only).'
   comments:
   - id: 1
     created_at: 2026-08-30T15:01
@@ -6254,15 +6363,28 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: AC-0121
-  notes: '1) User Story: As a player who turned on debug, I want a toggle in Options
-    that sends debug logging to the in-game console so I can see it without opening
-    a file.
-
-
-    2) Technical Details: Follow-up to AC-0121 console. Add toggle in Options/Settings
-    persisted via autoload/settings.gd (default off) that when on, Debug.print /
-    push_error tee to the console overlay. No verbose level for now. Verify toggle
-    persists after restart, console shows logs only when on.'
+  notes: "1) User Story: As a player who turned on debug, I want a toggle in Options\
+    \ that sends debug logging to the in-game console so I can see it without opening\
+    \ a file.\n\n2) Technical Details: Follow-up to AC-0121 console. Add toggle\
+    \ in Options/Settings persisted via autoload/settings.gd (default off) that\
+    \ when on, Debug.print / push_error tee to the console overlay. No verbose level\
+    \ for now. Verify toggle persists after restart, console shows logs only when\
+    \ on.\n\n3) Implementation (agent, 2026-09-08): DONE - commit 8dacafc.\n- settings.gd:\
+    \ new debug_logging bool, default off, persisted through the\n  usual DEFAULTS\
+    \ + _clamp path.\n- debug.gd: Debug.log(msg) and Debug.error(msg) - stdout /\
+    \ push_error as\n  before, plus a tee into the console overlay (Game.console.add_log)\
+    \ when\n  the toggle is on; no verbose level, per the task.\n- menu.gd: Options\
+    \ checkbox (code-created like the debug-stats one,\n  placed just after it)\
+    \ wired to the setting with the _syncing guard;\n  the OPTSYNC status line carries\
+    \ the new value.\n- console.gd: new log [on|off] command drives the same setting,\
+    \ so the\n  toggle is reachable in-game without opening Options.\n- harness\
+    \ console arm: Debug.log lands in the console only when the\n  toggle is on,\
+    \ the setting survives a disk reload (persist), and both\n  the console command\
+    \ and the Options checkbox drive it (the arm path\n  never boots the menu, so\
+    \ the test instantiates the menu scene\n  directly). ok:true with 20 fields.\n\
+    - Verify (all green): syntax 0 Parse Errors; console arm ok:true; SMOKE\n  battery\
+    \ ok (settings arm ok); quitmenu ok; mainmenuexit ok (the real\n  menu boot\
+    \ path with the new checkbox). EXE rebuilt after this commit."
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549772'
@@ -6282,15 +6404,30 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: AC-0170
-  notes: '1) User Story: As a player who hit a bug, I want each play session to
-    save its log to a new file and keep the last 5 runs so I can send the right
-    one.
-
-
-    2) Technical Details: Follow-up to AC-0169 stats overlay and AC-0170 console
-    toggle. When debug logging is on, tee console+stats to user://logs/awecraft_<timestamp>.log,
-    new file each run, prune to keep past 5. No single append. Verify log file per
-    launch, 6th run deletes oldest, contains console + FPS/RAM lines.'
+  notes: "1) User Story: As a player who hit a bug, I want each play session to\
+    \ save its log to a new file and keep the last 5 runs so I can send the right\
+    \ one.\n\n2) Technical Details: Follow-up to AC-0169 stats overlay and AC-0170\
+    \ console toggle. When debug logging is on, tee console+stats to user://logs/awecraft_<timestamp>.log,\
+    \ new file each run, prune to keep past 5. No single append. Verify log file\
+    \ per launch, 6th run deletes oldest, contains console + FPS/RAM lines.\n\n\
+    3) Implementation (agent, 2026-09-08): DONE - commit 1f79d97.\n- debug.gd: session_log_line\
+    \ / _session_log_start / _session_prune -\n  every Debug.log/Debug.error line\
+    \ lands in a NEW\n  user://logs/awecraft_<timestamp>.log for the run (lazy-created\
+    \ on\n  the first line after the AC-0170 toggle is on), and a stats line is\n\
+    \  appended on a 2 s cadence from the stats overlay hook in main.gd.\n  The\
+    \ prune keeps the 5 newest awecraft_*.log files, so the 6th run\n  deletes the\
+    \ oldest.\n- Implementation gotchas baked in as comments: the file is created\n\
+    \  BEFORE the prune so the new run is counted; a same-second relaunch\n  gets\
+    \ a fresh name (no truncation of the previous run); the file is\n  opened per\
+    \ line and closed because a long-lived handle buffers its\n  writes (a second\
+    \ reader sees an empty file); this 4.7 build has no\n  FileAccess.APPEND flag\
+    \ and READ_WRITE fails on a file that does not\n  exist yet (WRITE to create,\
+    \ READ_WRITE + seek_end to append).\n- harness console arm: seeds 5 fake old\
+    \ run files, then verifies the\n  real file is created, holds the console line\
+    \ and the [stats] FPS\n  line, and the prune drops exactly the oldest fake (5\
+    \ left).\n  ok:true with 24 fields.\n- Verify (all green): syntax 0 Parse Errors;\
+    \ console arm ok:true;\n  SMOKE battery ok; quitmenu ok (script_errors_seen\
+    \ false); gamepad\n  ok. EXE rebuilt after this commit."
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549775'
@@ -6310,15 +6447,39 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: AC-0171
-  notes: '1) User Story: As a player who hit a weird bug I want to press F8 or type
-    bugreport in console and get a single zip with seed/pos/repro + screenshot so
-    I can send it.
-
-
-    2) Technical Details: When AC-0170/0171 debug logging/file is on, F8 hotkey
-    AND console command bugreport dump a bug bundle: seed + chunk_origin + band/candidate
-    + last log + stats + AWECRAFT_SNAPSHOT screenshot to user://bugs/awecraft_bug_<timestamp>.zip.
-    Verify both F8 and bugreport create same zip, contains screenshot and log.'
+  notes: "1) User Story: As a player who hit a weird bug I want to press F8 or type\
+    \ bugreport in console and get a single zip with seed/pos/repro + screenshot\
+    \ so I can send it.\n\n2) Technical Details: When AC-0170/0171 debug logging/file\
+    \ is on, F8 hotkey AND console command bugreport dump a bug bundle: seed + chunk_origin\
+    \ + band/candidate + last log + stats + AWECRAFT_SNAPSHOT screenshot to user://bugs/awecraft_bug_<timestamp>.zip.\
+    \ Verify both F8 and bugreport create same zip, contains screenshot and log.\n\
+    \n3) Implementation (agent, 2026-09-08): DONE - commit cf90562.\n- zipmini.gd\
+    \ (new): minimal STORE-only zip writer + reader. This 4.7\n  build has no ZipPack/ZipReader\
+    \ and shelling out to a zip CLI is not\n  portable to the Windows exe; store\
+    \ method 0 is a fully valid zip\n  (cross-verified with system unzip). Layout\
+    \ gotchas baked in as\n  comments: the central directory header has NO compression-method\n\
+    \  field (local-header only) - fixed part is 46 bytes, name at 46; the\n  EOCD\
+    \ central-dir offset sits at +16 (a first version read +12 and\n  silently listed\
+    \ nothing).\n- debug.gd: bug_report() - awaits one frame_post_draw (headless\
+    \ never\n  emits it, so it is skipped there), then writes\n  user://bugs/awecraft_bug_<stamp>.zip:\
+    \ report.txt (godot build, seed,\n  mode, time of day, player pos, chunk origin,\
+    \ flying/dead, sim/render\n  band, every setting, FPS/RAM/VRAM stats, console\
+    \ tail, session log\n  tail), screenshot.png (real viewport frame; small gray\
+    \ placeholder\n  in headless), session.log when the AC-0170/0171 toggle is on.\
+    \ A\n  second capture in the same second gets a numbered name.\n- player.gd:\
+    \ F8 in play fires the capture fire-and-forget (the report\n  announces itself\
+    \ via a message). console.gd: bugreport command.\n- harness: new bugreport arm\
+    \ - F8 and the console command each make a\n  zip, both read back with ZipMini\
+    \ (entries, PNG signature, seed +\n  chunk_origin in the report, session log\
+    \ line, identical entry-name\n  sets, cleanup); also a bugreport battery mode\
+    \ (the quit is guarded\n  by _batt so the battery loop keeps running).\n- Test\
+    \ gotchas: the harness key-typing helpers are COROUTINES -\n  _c_type must be\
+    \ awaited (an unawaited call types only the first\n  character and returns);\
+    \ zip entry comparisons must use the key sets,\n  not dict equality (per-entry\
+    \ offset/size legitimately differs).\n- Verify (all green): syntax 0 Parse Errors;\
+    \ bugreport arm ok:true\n  with 12 fields; SMOKE battery ok incl. the bugreport\
+    \ mode (755 ms);\n  quitmenu ok (script_errors_seen false); gamepad ok. EXE\
+    \ rebuilt\n  after this commit."
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549777'
@@ -6338,16 +6499,36 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: AC-0172
-  notes: '1) User Story: As a player whose game hit an error, I want to see a message
-    I can read and then click a button to exit, and have the error saved to file
-    for later.
-
-
-    2) Technical Details: Central push_error / unhandled exception handler captures
-    stack + chunk_origin + seed/pos/band/candidate + last lines, writes to user://logs/awecraft_<timestamp>.log
-    (keep 5), shows modal dialog with message + Exit Game button (must be clickable
-    before quit). Also toast in console if open. Verify crash shows dialog, Exit
-    closes cleanly, file exists.'
+  notes: "1) User Story: As a player whose game hit an error, I want to see a message\
+    \ I can read and then click a button to exit, and have the error saved to file\
+    \ for later.\n\n2) Technical Details: Central push_error / unhandled exception\
+    \ handler captures stack + chunk_origin + seed/pos/band/candidate + last lines,\
+    \ writes to user://logs/awecraft_<timestamp>.log (keep 5), shows modal dialog\
+    \ with message + Exit Game button (must be clickable before quit). Also toast\
+    \ in console if open. Verify crash shows dialog, Exit closes cleanly, file exists.\n\
+    \n3) Implementation (agent, 2026-09-08): DONE - commit 5eadd60.\n- debug.gd:\
+    \ Debug.error (the central push_error path) now drives the\n  crash capture.\
+    \ crash_capture() writes user://logs/awecraft_<stamp>.log\n  - the same family\
+    \ as the AC-0171 session logs, pruned to 5 together,\n  same-second numbered-name\
+    \ guard - with the error, a formatted call\n  stack, and a state block (godot\
+    \ build, seed, mode, time of day,\n  player position, chunk origin, sim/render\
+    \ band, FPS/RAM/VRAM stats,\n  console tail, session log tail). It then freezes\
+    \ the game with\n  Game.mode = crash (the player gates both input and physics\
+    \ on\n  mode == play) and raises a CanvasLayer 40 modal: dimmed full-screen\n\
+    \  rect + centered panel with the message, the saved-file path, a\n  Dismiss\
+    \ button (restores play) and an Exit Game button (clean\n  quit). One dialog\
+    \ at a time; [crash] toast lines are posted to the\n  console overlay.\n- 4.7\
+    \ gotchas baked in as comments: get_stack() returns an Array of\n  {source,\
+    \ function, line} dicts in this build (not a string);\n  Node.find_children()\
+    \ returns an empty array for every pattern/type\n  combo (probe-verified) -\
+    \ the harness walks the tree by hand.\n- harness: crash arm (open console, Debug.error,\
+    \ assert dialog +\n  message text + Exit Game button + toast + frozen mode +\
+    \ a NEW log\n  file with the stack and state blocks, cleanup, then exit THROUGH\n\
+    \  the Exit Game button - the process exit is the clean-exit check) +\n  a crash\
+    \ battery mode (dismisses the dialog instead of exiting).\n- Verify (all green):\
+    \ syntax 0 Parse Errors; crash arm ok:true with\n  11 fields; SMOKE battery\
+    \ ok incl. crash mode (256 ms) and\n  bugreport; console arm ok:true; quitmenu\
+    \ ok (script_errors_seen\n  false); gamepad ok. EXE rebuilt after this commit."
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549780'
@@ -6367,16 +6548,37 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: AC-0169
-  notes: '1) User Story: As a player or dev I want separate Options toggles for
-    band, light, and collision overlays that I can turn on independently at the
-    same time while playing.
-
-
-    2) Technical Details: Add separate toggles in Options/Settings persisted via
-    autoload/settings.gd for visual dev overlays: band/debug, light levels, collision
-    shapes. Independently controlled, can all be on together. Draw gizmos in world.gd.
-    Verify each toggle on/off persists, combinations work, no perf regression when
-    off.'
+  notes: "1) User Story: As a player or dev I want separate Options toggles for\
+    \ band, light, and collision overlays that I can turn on independently at the\
+    \ same time while playing.\n\n2) Technical Details: Add separate toggles in\
+    \ Options/Settings persisted via autoload/settings.gd for visual dev overlays:\
+    \ band/debug, light levels, collision shapes. Independently controlled, can\
+    \ all be on together. Draw gizmos in world.gd. Verify each toggle on/off persists,\
+    \ combinations work, no perf regression when off.\n\n3) Implementation (agent,\
+    \ 2026-09-08): DONE - commit 34a7f15.\n- settings.gd: three persisted bools\
+    \ overlay_band / overlay_light /\n  overlay_collision (default off) in DEFAULTS\
+    \ + _clamp.\n- menu.gd: three code-created Options checkboxes (OverlayBandCheck\
+    \ /\n  OverlayLightCheck / OverlayCollisionCheck) wired + synced like the\n\
+    \  AC-0170 debug-log checkbox, reported in the OPTSYNC line.\n- world.gd: gizmo\
+    \ system on a per-physics-frame tick (three bool\n  reads; rebuilds on player\
+    \ chunk-move or 0.5 s). Band = gray chunk\n  grid in the render band + orange\
+    \ sim-band / green render-band\n  boundary rects; light = vertical lines per\
+    \ lit block (12-block\n  radius, half-block stride) colored by effective level\
+    \ from ONE\n  Lighting.compute_light_split box (never per-block light_at - it\n\
+    \  recomputes a box per call); collision = red AABB wireframes of slab\n  collision\
+    \ shapes in the player chunk + ring. Each overlay is its\n  own MeshInstance3D/ImmediateMesh;\
+    \ toggling off drops the reference\n  (all-off leaves no gizmo nodes - no perf\
+    \ cost).\n- 4.7 gotchas baked in: no ImmediateMesh.clear() (rebuild allocates\
+    \ a\n  fresh mesh); meshes are RefCounted (assign null, never .free());\n  ConcavePolygonShape3D\
+    \ has no get_aabb() and this build AABB has no\n  absorb/expand - fold the AABB\
+    \ from shape faces with Vector3 min/max.\n- harness: overlays arm (persistence\
+    \ via set_value auto-save +\n  load_settings, off-leaves-nothing, all-on draws\
+    \ three meshes with\n  geometry, one-off drops only its mesh, menu checkboxes\
+    \ drive the\n  same settings via a directly instantiated menu scene) + overlays\n\
+    \  battery mode.\n- Verify (all green): syntax 0 Parse Errors; overlays arm\
+    \ ok:true\n  with 12 fields; SMOKE battery ok incl. overlays/crash/bugreport\n\
+    \  modes (0 script errors); console arm ok:true; quitmenu ok\n  (script_errors_seen\
+    \ false); gamepad ok. EXE rebuilt after this\n  commit."
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549782'
@@ -7250,7 +7452,72 @@ intake:
     954 / drain 30ms reserve 1 slot (extend AC-0187). Fixes trunk blink (solid/cutout
     same slab) and see-through neighbor hole (one-frame null). Verify: break trunk
     at chunk border, no blink, no see-through, p95 edit <50ms at R50 queue 7710.
-    Supersedes AC-0187.'
+    Supersedes AC-0187.
+
+
+    3) Implementation (agent, 2026-09-08): DONE - commit cdf823d (supersedes
+
+    AC-0187). Two changes: (1) retain-swap (chunk.gd): build_mesh no longer
+
+    frees the old slab instances before the build; apply_accs /
+
+    apply_edit_accs keep the old MeshInstance/occluder refs alive until the
+
+    new refs are assembled, then free the old atomically; _assemble_slab
+
+    now assigns the four covered refs unconditionally (null when the Acc
+
+    is empty) and apply_accs drops the refs of slabs outside the build
+
+    range (the AC-0197 partial-build contract). (2) boundary-neighbor
+
+    front-priority (world.gd): a set_block at local x/z in [0,1] or [14,15]
+
+    (the SNAP_W 18 ring reaches past the chunk edge) also dirties the
+
+    E/W/N/S neighbor, jumped to the FRONT of the dirty queue (_dirty_front)
+
+    - the neighbors face toward the edited column was stale until the ~500
+
+    ms light wave (the see-through hole); the neighbor build reads the
+
+    edited chunk snap_rings from DATA (already updated by set_block), so
+
+    it is correct independent of the edited chunk mesh handoff. Unmeshed
+
+    (far low / band-3) chunks keep their drop-by-design behavior. New
+
+    harness arm editsnap (AWECRAFT_LOGIC=editsnap + battery mode):
+
+    recenters onto candidate spots until it loads a border trunk (log 6)
+
+    whose chunk AND boundary neighbor are both MESHED (unloaded reads as
+
+    air; unmeshed chunks drop dirty entries by design), breaks it, asserts
+
+    the neighbor remeshes from the queue front (<= 6 frames), the edited
+
+    chunk remeshes, the slab instance ref stays LIVE every frame of the
+
+    edit->handoff window (retain-swap, no null frame), the handoff < 50 ms
+
+    and the block is gone. GOTCHAS baked in: an unmeshed edited chunk
+
+    (only a far low placeholder) legitimately gets NO remesh - the arm
+
+    must filter mesh_built on BOTH chunks or the assert chases a by-design
+
+    drop. Verify (all green): syntax 0 Parse Errors; editsnap ok:true (edit
+
+    29-40 ms, edited+neighbor remeshed in 2 frames, ref_always_live);
+
+    meshprobe ok; R16 ok; SMOKE battery ok incl. editsnap (0 script
+
+    errors); genhash (0,0) = 80b904c0... (AC-0215 baseline held);
+
+    console/gamepad/quitmenu ok. EXE rebuilt + :8080 byte-match in the
+
+    closeout follow-up.'
   comments:
   - id: 1
     created_at: 2026-09-02T15:27
@@ -7453,7 +7720,58 @@ intake:
     351 fallback (require atlas). alt_slabs cache 44/1928 is fine with shader (r
     stays 15 noon, uniform does day) but bust if legacy material cached. Verify:
     build at noon, wait night, cubes darken without rebuild; build at midnight,
-    day brightens; LOD swaps keep transition; G0 green.'
+    day brightens; LOD swaps keep transition; G0 green.
+
+
+    3) Implementation (agent, 2026-09-08): DONE (verification) - commit
+
+    7a69a5f. The AC-0128/AC-0135 shader work already implements the
+
+    design; this task proved the contract end-to-end with a new harness
+
+    arm (no product code change). Source-level facts: the mesh stores
+
+    s = clamp(lightbox eff / 15, 0.08, 1.0) - a pure geometry value
+
+    (SKY_FULL is a compile-time 15 in gdext/src/lighting.cpp, no day
+
+    factor in s_face_light / light_color in mesh.cpp); the unlit shaders
+
+    compute L = 0.20 + 0.80 * max(u_day * r, g); main._update_sky pushes
+
+    set_day_factor(DayNight.day(t)) every frame onto the shared cached
+
+    ShaderMaterials. Harness arm dnlight (AWECRAFT_LOGIC=dnlight +
+
+    battery mode; the pre-existing daynight value stays the clock-cycle
+
+    test): noon build then midnight flip - u_day goes 1.0 to 0.0 while
+
+    the mesh colors stay byte-identical (mesh_unchanged, no rebuild);
+
+    sky faces darken (L_night < L_noon) and hold the 0.20 floor;
+
+    block-light faces are correctly NOT day-modulated; an open-sky face
+
+    exists; a world BUILT at midnight stores the same light values as
+
+    the noon build (build_time_independent); slab surface materials are
+
+    the shared cached ShaderMaterials (mat_shared - LOD swaps keep the
+
+    transition). 4.7 gotcha baked in: MeshInstance3D.material is not
+
+    accessible in this build - read the per-surface material. Verify
+
+    (all green): syntax 0 Parse Errors; dnlight arm ok:true with 11
+
+    fields; SMOKE battery ok incl. dnlight mode; console/quitmenu/
+
+    gamepad ok; the old daynight clock arm still ok:true. No exe
+
+    rebuild needed (harness-only change - the 34a7f15 exe already
+
+    carries every user-visible product change).'
   comments:
   - id: 1
     created_at: 2026-09-02T18:17
@@ -7524,7 +7842,50 @@ intake:
     mismatch (g++ 15.2 vs the engine build), or a first-load import race. Reproduce
     + root-cause + fix so the .so loads cleanly in BOTH environments. Verify G0
     exit 0 in the coordinator env (the make-or-break check). This is research; do
-    NOT change the codec logic (it is verified byte-identical).'
+    NOT change the codec logic (it is verified byte-identical).
+
+
+    3) Research (agent, 2026-09-09): DONE - no longer reproducible; G0 the
+
+    make-or-break check passes in the coordinator env. The crash was
+
+    reported against the 2026-09-04/06 .so builds (AC-0165/AC-0234 era,
+
+    sites varied: slab_cell / snap_rings / generate_flat = a transient
+
+    GEN race, and a first-load import race on plain --quit). The current
+
+    .so (built 2026-09-08, includes the AC-0236 chunk-IO C++ work) loads
+
+    cleanly here: G0 (plain godot --headless --quit, fresh HOME every
+
+    run) = 13/13 exit 0, 0 SCRIPT ERROR. The whole 2026-09-08/09 session
+
+    ran dozens of godot launches across every task (SMOKE batteries, spin
+
+    x8, R16, meshprobe, oceanfill up to 6 recenters, dnlight world
+
+    rebuilds, console/gamepad/quitmenu) with zero signal-11. The old
+
+    crashing .so is not in git (built artifact), so a direct A/B against
+
+    it is not possible; the hypothesis set (stale .godot/user:// state,
+
+    HOME difference, libstdc++ ABI - g++ 15.2.0 here, first-load import
+
+    race) is superseded by the current-build evidence. Staging verified:
+
+    gdext/bin/libchunkio.so and godot/bin/libchunkio.so are byte-identical
+
+    (md5 a04f16fb...), the Windows .dll is PE32+ verified and byte-matched
+
+    in every build including cdf823d. No code change (the task says do NOT
+
+    change the codec logic - it is verified byte-identical). If a signal-11
+
+    ever returns, capture the faulting frame (gdb batch + the run log)
+
+    before retrying - the site is the diagnostic, not the retry.'
   comments:
   - id: 1
     created_at: '2026-09-03T09:55:00.000000'
@@ -9892,7 +10253,23 @@ intake:
     \ physical controller; if any symptom\n  persists, set AWECRAFT_PADTRACE=1 in\
     \ the exe env and read the log - the\n  per-event trace will show exactly what\
     \ the pad is sending.\n- Gates: SMOKE battery ok:true (all sub-checks), 0 Parse\
-    \ Errors, 0 SHADER\n  ERROR in the night render."
+    \ Errors, 0 SHADER\n  ERROR in the night render.\n\n4) Closeout (agent, 2026-09-09):\
+    \ gates re-verified at current HEAD\n(commit cdf823d; the implementation is\
+    \ 1d901ee). No code change was\nneeded - the arm is green as-is: the AWECRAFT_LOGIC=gamepad\
+    \ arm\n(ok:true) carries all six AC-0243 fields true at HEAD: fly_toggle_ok,\n\
+    fly_climb_ok, fly_descend_ok, fly_land_ok (double-tap A toggles, A\nclimbs,\
+    \ B descends, double-tap lands + gravity resumes) and\nhold_mine_ok + jitter_ok\
+    \ (synthetic RT held across 200 physics frames\njittering 0.55/0.45 around the\
+    \ old threshold - the dirt block breaks\nwith no re-press and is_mining() never\
+    \ drops). The same run sits\ninside the green SMOKE battery (13 modes, 0 script\
+    \ errors) of the\n2026-09-09 AC-0199 gate pass. Known pre-existing (documented,\
+    \ not\nthis task): the LT place sub-test fails at HEAD (use_ok is the only\n\
+    field not asserted in the ok chain; a PLACETRACE under the same\nAWECRAFT_PADTRACE\
+    \ env gate prints the exact rejection). STATUS: stays\nOPEN for the user real-pad\
+    \ retest on return (double-tap A fly + B\ndescend + RT hold-to-mine; if a symptom\
+    \ persists, set\nAWECRAFT_PADTRACE=1 in the exe env - the per-event trace shows\
+    \ exactly\nwhat the pad sends). The exe at :8080 (cdf823d, 2026-09-09, byte-\n\
+    matched) already carries the implementation."
   comments:
   - id: 1
     author: user
