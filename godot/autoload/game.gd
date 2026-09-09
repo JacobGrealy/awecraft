@@ -40,6 +40,10 @@ var player = null
 var drops = null
 var entities = null
 var hotbar = null
+# AC-0121: in-game debug console - console_open gates player input while the
+# overlay is up; console = the main scene's CanvasLayer (null in the menu).
+var console_open := false
+var console = null
 
 
 func new_world(seed) -> void:

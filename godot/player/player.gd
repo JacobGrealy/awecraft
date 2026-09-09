@@ -132,7 +132,7 @@ func _ready() -> void:
 func _process(dt: float) -> void:
 	# AC-0087: right-stick look - the stick sends VALUE events (not deltas),
 	# so the stored value is applied once per frame.
-	if Game.mode == "play" and ui_mode == "" and _pad_look != Vector2.ZERO:
+	if Game.mode == "play" and ui_mode == "" and not Game.console_open and _pad_look != Vector2.ZERO:
 		_yaw -= _pad_look.x * PAD_LOOK_SPEED * dt
 		_pitch = clampf(_pitch - _pad_look.y * PAD_LOOK_SPEED * dt, -PITCH_LIMIT, PITCH_LIMIT)
 		_apply_rotation()
@@ -149,15 +149,34 @@ func _process(dt: float) -> void:
 	vm_refresh(false)
 
 
+func _input(event: InputEvent) -> void:
+	# AC-0121: backtick/tilde (or F3) toggles the debug console. This runs in
+	# the _input stage - BEFORE the focused LineEdit would swallow the key -
+	# so the toggle works with the console open (closing) and closed
+	# (opening); marking the event handled keeps a stray backtick out of the
+	# command line.
+	if event is InputEventKey and event.pressed and not event.echo:
+		var kc: int = int(event.physical_keycode)
+		if kc == int(KEY_QUOTELEFT) or kc == int(KEY_F3):
+			if Game.console != null and Game.mode == "play":
+				Game.console.toggle()
+			get_viewport().set_input_as_handled()
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and (Input.mouse_mode == Input.MOUSE_MODE_CAPTURED or _dragging):
 		var mm: InputEventMouseMotion = event
 		apply_look(mm)
 	if event is InputEventMouseButton:
 		var lmb: InputEventMouseButton = event
-		if lmb.button_index == MOUSE_BUTTON_LEFT:
+		if lmb.button_index == MOUSE_BUTTON_LEFT and not Game.console_open:
 			_lmb_down = lmb.pressed
 	if Game.mode != "play":
+		return
+	# AC-0121: console open - the keyboard keys are swallowed by the focused
+	# TextEdit (GUI stage), but mouse clicks outside the panel and pad
+	# buttons still arrive here; game actions must not fire.
+	if Game.console_open:
 		return
 	# AC-0243: double-tap the jump action (Space / A / Cross) within
 	# 0.3 s toggles fly (Bedrock parity). The second tap toggles
@@ -305,31 +324,37 @@ func _physics_process_impl(dt: float) -> void:
 		return
 	if dead:
 		return
-	if Input.is_action_just_pressed("fly"):
+	# AC-0121: while the debug console is open, ignore every polled game
+	# action - typing "w"/space/shift must not steer, jump, sprint or toggle
+	# flight. Physics (gravity, falls, swimming buoyancy) keeps running.
+	var cg := Game.console_open
+	if cg:
+		_lmb_down = false
+	if not cg and Input.is_action_just_pressed("fly"):
 		flying = not flying
 		Game.message("Flying" if flying else "Landed")
-	if Input.is_action_just_pressed("time"):
+	if not cg and Input.is_action_just_pressed("time"):
 		_cycle_time()
-	if Input.is_action_just_pressed("debug"):
+	if not cg and Input.is_action_just_pressed("debug"):
 		_debug_label.visible = not _debug_label.visible
 	var in_water := _block_at(position.x, position.y + 0.5, position.z) == 5
 	var in_lava := _block_at(position.x, position.y + 0.5, position.z) == 24
 	var swim_up := in_water or _block_at(position.x, position.y, position.z) == 5
 	var ix := 0.0
 	var iz := 0.0
-	if Input.is_action_pressed("move_forward"):
+	if not cg and Input.is_action_pressed("move_forward"):
 		iz += 1.0
-	if Input.is_action_pressed("move_back"):
+	if not cg and Input.is_action_pressed("move_back"):
 		iz -= 1.0
-	if Input.is_action_pressed("move_left"):
+	if not cg and Input.is_action_pressed("move_left"):
 		ix -= 1.0
-	if Input.is_action_pressed("move_right"):
+	if not cg and Input.is_action_pressed("move_right"):
 		ix += 1.0
 	var ln := Vector2(ix, iz).length()
 	if ln > 0.0:
 		ix /= ln
 		iz /= ln
-	var sprint := Input.is_key_pressed(KEY_SHIFT)
+	var sprint := not cg and Input.is_key_pressed(KEY_SHIFT)
 	var speed: float
 	if flying:
 		speed = WALK * float(int(Settings.values.get("flight_speed", 4)))
@@ -356,24 +381,24 @@ func _physics_process_impl(dt: float) -> void:
 	velocity.z = lerpf(velocity.z, tz, minf(1.0, k * dt))
 	if flying:
 		var vy := 0.0
-		if Input.is_action_pressed("jump"):
+		if not cg and Input.is_action_pressed("jump"):
 			vy += 1.0  # A held = up (AC-0243: the double-tap hold climbs)
-		if sprint or Input.is_action_pressed("pad_cancel"):
+		if (sprint or (not cg and Input.is_action_pressed("pad_cancel"))):
 			vy -= 1.0  # SHIFT or B (pad_cancel) = down (AC-0243)
 		velocity.y = lerpf(velocity.y, vy * WALK * float(int(Settings.values.get("flight_speed", 4))) * FLY_VS, minf(1.0, 10.0 * dt))
 	elif in_water:
 		velocity.y = lerpf(velocity.y, -3.5, minf(1.0, 4.0 * dt))
-		if Input.is_action_pressed("jump"):
+		if not cg and Input.is_action_pressed("jump"):
 			velocity.y = lerpf(velocity.y, 4.5, minf(1.0, 8.0 * dt))
 	elif in_lava:
 		velocity.y = lerpf(velocity.y, -0.7, minf(1.0, 3.0 * dt))
-		if Input.is_action_pressed("jump"):
+		if not cg and Input.is_action_pressed("jump"):
 			velocity.y = lerpf(velocity.y, 1.4, minf(1.0, 6.0 * dt))
-	elif swim_up and Input.is_action_pressed("jump"):
+	elif swim_up and (not cg and Input.is_action_pressed("jump")):
 		velocity.y = lerpf(velocity.y, 4.5, minf(1.0, 8.0 * dt))
 	else:
 		velocity.y -= GRAV * dt
-		if Input.is_action_pressed("jump") and is_on_floor():
+		if not cg and Input.is_action_pressed("jump") and is_on_floor():
 			velocity.y = JUMP
 			fall_start = -1.0
 	var was_ground := is_on_floor()
@@ -413,7 +438,7 @@ func _physics_process_impl(dt: float) -> void:
 		drown_t = 0.0
 	var hungry := bool(Settings.values["hunger_enabled"])
 	if hungry:
-		if not flying and is_on_floor() and Input.is_key_pressed(KEY_SHIFT):
+		if not flying and is_on_floor() and not cg and Input.is_key_pressed(KEY_SHIFT):
 			hunger = maxf(0.0, hunger - dt * 0.06)
 	else:
 		hunger = 20.0

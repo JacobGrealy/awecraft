@@ -304,6 +304,13 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			player = main._spawn_player()
 			await _gamepad_test(spawn)
 			return
+		if logic == "console":
+			# AC-0121: the in-game debug console (backtick/F3 toggle).
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _console_test(spawn)
+			return
 		if logic == "look":
 			world.recenter(spawn.x, spawn.z, true)
 			player = main._spawn_player()
@@ -15811,3 +15818,113 @@ func _occlude_test(spawn: Vector3) -> void:
 	get_tree().quit()
 
 
+
+
+# AC-0121: the in-game debug console - backtick toggle, a typed command that
+# executes, log growth + auto-scroll, and player input restored on close.
+# Injected keys need two things the headless DisplayServer never provides:
+# the unicode codepoint (a bare InputEventKey types nothing) and a matching
+# release event (a pressed-without-release key wedges the LineEdit after the
+# first ENTER - subsequent presses are ignored until a release clears it).
+func _c_key(kc: int, uni: int, hold: bool = false) -> void:
+	var k := InputEventKey.new()
+	k.physical_keycode = kc
+	k.keycode = kc
+	k.unicode = uni
+	k.pressed = true
+	Input.parse_input_event(k)
+	if not hold:
+		# a NEW event object - parse_input_event queues the object itself, so
+		# mutating k afterwards would rewrite the still-queued press.
+		var r := InputEventKey.new()
+		r.physical_keycode = kc
+		r.keycode = kc
+		r.unicode = uni
+		r.pressed = false
+		Input.parse_input_event(r)
+
+
+func _console_test(spawn: Vector3) -> void:
+	var c = Game.console
+	var res: Dictionary = {}
+	# 1) open with ONE real backtick key event (a re-parsed press would
+	# toggle it closed again).
+	_c_key(KEY_QUOTELEFT, 96)
+	var opened := false
+	for i in 200:
+		await get_tree().physics_frame
+		if Game.console_open:
+			opened = true
+			break
+	res["opened"] = opened
+	await get_tree().physics_frame  # the deferred grab_focus lands here
+	res["input_focused"] = c != null and c.input_line.has_focus()
+	res["mouse_visible"] = Input.mouse_mode == Input.MOUSE_MODE_VISIBLE
+	# 2) type "give 126 5" + Enter through real key events.
+	var pre: int = main._count_item(player, 126)
+	for pair in [[KEY_G, 103], [KEY_I, 105], [KEY_V, 118], [KEY_E, 101],
+			[KEY_SPACE, 32], [KEY_1, 49], [KEY_2, 50], [KEY_6, 54],
+			[KEY_SPACE, 32], [KEY_5, 53], [KEY_ENTER, 13]]:
+		_c_key(int(pair[0]), int(pair[1]))
+		await get_tree().physics_frame
+	var got := false
+	for i in 300:
+		await get_tree().physics_frame
+		if main._count_item(player, 126) >= pre + 5:
+			got = true
+			break
+	res["give_ok"] = got
+	# 3) a burst of commands must grow and scroll the log.
+	var l0: int = c.log_lines() if c != null else 0
+	for i in 60:
+		c.dispatch("time %.2f" % (0.25 + float(i) * 0.001))
+	var l1: int = c.log_lines() if c != null else 0
+	res["log_grew"] = l1 - l0 >= 60
+	res["log_scrolled"] = c.log_scrolled() if c != null else false
+	res["lines"] = [l0, l1]
+	# 4) a second typed command through the edit path (time 0.6). Give the
+	# edit a few frames after the first ENTER (the LineEdit needs the release
+	# event to settle before it accepts the next command).
+	for i in 3:
+		await get_tree().physics_frame
+	for pair2 in [[KEY_T, 116], [KEY_I, 105], [KEY_M, 109], [KEY_E, 101],
+			[KEY_SPACE, 32], [KEY_0, 48], [KEY_PERIOD, 46], [KEY_6, 54], [KEY_ENTER, 13]]:
+		_c_key(int(pair2[0]), int(pair2[1]))
+		await get_tree().physics_frame
+	res["time_cmd"] = absf(float(Game.time_of_day) - 0.6) < 0.02
+	# 5) holding W while open must NOT move the player (the gate). The press
+	# is held (no release) so the polled action really is armed.
+	_c_key(KEY_W, 119, true)
+	var q0 := player.position
+	for i in 90:
+		await get_tree().physics_frame
+	res["typing_no_move"] = player.position.distance_to(q0) < 0.25
+	# 6) close: one backtick, mouse recaptured, W moves the player again.
+	_c_key(KEY_QUOTELEFT, 96)
+	var closed := false
+	for i in 200:
+		await get_tree().physics_frame
+		if not Game.console_open:
+			closed = true
+			break
+	res["closed"] = closed
+	await get_tree().physics_frame
+	# headless cannot capture a mouse that does not exist - the CAPTURED
+	# assignment is a no-op there, so accept it (still asserts the console
+	# left the game in a playable state).
+	res["mouse_recaptured"] = Input.mouse_mode == Input.MOUSE_MODE_CAPTURED \
+		or DisplayServer.get_name() == "headless"
+	var p0 := player.position
+	var moved := false
+	for i in 300:
+		await get_tree().physics_frame
+		if player.position.distance_to(p0) > 0.5:
+			moved = true
+			break
+	_c_key(KEY_W, 119)  # release the held W
+	res["moves_after"] = moved
+	res["ok"] = opened and res["input_focused"] and res["mouse_visible"] and got \
+		and res["log_grew"] and res["log_scrolled"] and res["time_cmd"] \
+		and res["typing_no_move"] and closed and res["mouse_recaptured"] and moved
+	Debug.result(res)
+	get_tree().quit()

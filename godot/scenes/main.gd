@@ -14,8 +14,10 @@ const AeroLib = preload("res://core/aero.gd")
 const ChunkIO = preload("res://core/chunk_io.gd")  # AC-0155
 const _ChunkScriptM = preload("res://world/chunk.gd")  # AC-0120 (snapshot material cache)
 const HarnessScript = preload("res://scenes/harness.gd")
+const ConsoleScript = preload("res://ui/console.gd")  # AC-0121
 
 var harness: HarnessScript
+var console: CanvasLayer  # AC-0121
 var world: Node3D
 var camera: Camera3D
 var player: Node3D
@@ -192,6 +194,13 @@ func _create_game_nodes() -> void:
 	inventory_ui.name = "Inventory"
 	add_child(inventory_ui)
 	Game.hotbar = inventory_ui
+	# AC-0121: the debug console overlay (backtick/F3 toggle).
+	if console != null:
+		console.queue_free()
+	console = ConsoleScript.new()
+	console.name = "Console"
+	add_child(console)
+	Game.console = console
 	if _star_node != null:
 		_star_node.queue_free()
 		_star_node = null
