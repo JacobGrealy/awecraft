@@ -1085,6 +1085,7 @@ func drop_slab_bodies() -> void:
 
 
 func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax: Acc, ms, full_solid: bool) -> void:
+	var _wpt := Time.get_ticks_usec()  # AC-0251 MESHATTACH sub-stage (per-slab instance create/set_mesh/add_child)
 	var sidx := PackedInt32Array([-1, -1, -1, -1])
 	var mesh := ArrayMesh.new()
 	if ao.q > 0:
@@ -1172,6 +1173,8 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 		s.occluder = null
 	s.sidx = sidx
 	s.built = true
+	if Game.world != null:  # AC-0251: attribute to the world's pipeline ring
+		Game.world._wprof_meshattach(Time.get_ticks_usec() - _wpt)
 
 
 func _post_build_collision() -> void:

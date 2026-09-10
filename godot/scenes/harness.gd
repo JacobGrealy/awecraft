@@ -609,6 +609,12 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		if logic == "r16":
 			await _r16_test(spawn)
 			return
+		# AC-0251: the world-pipeline stage-timing evidence arm
+		# (AWECRAFT_LOGIC=wprof). STANDALONE like nightlot — it is NOT in
+		# the standard battery list.
+		if logic == "wprof":
+			await _wprof_test(spawn)
+			return
 		if logic == "loduv":
 			await _loduv_test()
 			return
@@ -8231,6 +8237,213 @@ func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 		"inr_mid": inr_mid,
 		"fps": _r16_stats(ms_list),
 	}
+
+
+# AC-0251: the world-pipeline stage-timing evidence arm
+# (AWECRAFT_LOGIC=wprof, standalone — NOT in the standard battery list,
+# like nightlot). INSTRUMENT-ONLY evidence for the AC-0250 follow-up
+# diagnosis: spawn + settle (the r16 arm's settle pattern — the r16 square
+# fully meshed, 30-frame settle, spawn, 30-frame settle), then a SUSTAINED
+# 4x flight via the _fly_phase teleport-drive (it drives player.position
+# directly, so world._recenter fires for real), run in 3 continuous
+# segments (6+6+5 s) with a ring read after each: at the 60 fps flight
+# pace one 180-frame ring window = the previous ~3 s of flight, and the
+# busiest of the three windows (max frame avg) is the steady-state
+# per-stage table (a single end-of-flight read can land in a gap between
+# handoff batches; Godot 4 forbids the parallel monitor coroutine that
+# would otherwise sample during the flight).
+# Gates (an evidence arm — NO performance gates): the arm completes; every
+# major stage (DRAIN, LOW, HANDOFF, MISC) has frames > 0; the partition
+# reconciliation holds (|sum(stage avg) + misc avg - frame avg| <= 10% of
+# frame avg — checked on the UNROUNDED ring data: MISC is the exact frame
+# remainder, so this detects bracket overlap/over-count; the 1-decimal
+# display values are also reported for the literal formula); 0 script
+# errors (via AWECRAFT_STDERR_FILE when set — the gate runner greps the
+# run output separately as the backstop).
+
+# AC-0251: copy one live stat dict — the profiler's dicts are mutated in
+# place on every refresh, so a reference held across a later read would
+# silently become the LATER window's stats.
+func _wprof_snap_stage(s: Dictionary) -> Dictionary:
+	var d := {}
+	for k in s:
+		d[k] = s[k]
+	return d
+
+# AC-0251: snapshot the WHOLE profiler — every stage dict, the frame row,
+# the occupancy, and the raw reconciliation of THIS ring window (deep
+# copied: the live dicts are mutated in place on the next refresh). The
+# flight is run in segments and this is called after each one, so the
+# RESULT carries one full per-stage table per 3-second ring window; the
+# busiest window (max frame avg) is the steady-state headline.
+func _wprof_ring_read() -> Dictionary:
+	var p: Dictionary = world.profiler
+	var d := {
+		"stages": {},
+		"frame": _wprof_snap_stage(p.get("frame", {})),
+		"occupancy": _wprof_snap_stage(p.get("occupancy", {})),
+		"misc_neg_max_us": int(p.get("misc_neg_max_us", 0)),
+		"recon_raw_pct": world._wprof_recon_raw_pct(),
+	}
+	for nm in ["DRAIN", "LOW", "HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "MISC"]:
+		d["stages"][nm] = _wprof_snap_stage(p.get(nm, {}))
+	return d
+
+# AC-0251: merge two _fly_phase segment results into one flight result
+# (the segmented flight is continuous — _fly_phase advances from the
+# current position, it never resets x/z): counts sum, peaks max, fps is
+# kept per segment.
+func _wprof_fly_merge(a: Dictionary, b: Dictionary) -> Dictionary:
+	return {
+		"n": int(a["n"]) + int(b["n"]),
+		"speed_mps": int(a["speed_mps"]),
+		"queue_max": maxi(int(a["queue_max"]), int(b["queue_max"])),
+		"build_depth_max": maxi(int(a["build_depth_max"]), int(b["build_depth_max"])),
+		"rec_n": int(a["rec_n"]) + int(b["rec_n"]),
+		"ahead_while_moving": int(a["ahead_while_moving"]) + int(b["ahead_while_moving"]),
+		"ahead_max_dist_m": maxi(int(a["ahead_max_dist_m"]), int(b["ahead_max_dist_m"])),
+		"under_gap_ms": int(a["under_gap_ms"]) + int(b["under_gap_ms"]),
+		"under_gap_max_ms": maxi(int(a["under_gap_max_ms"]), int(b["under_gap_max_ms"])),
+		"ahead_first_frame": int(a["ahead_first_frame"]) if int(a["ahead_first_frame"]) >= 0 else int(b["ahead_first_frame"]),
+		"nonahead_first_frame": int(a["nonahead_first_frame"]) if int(a["nonahead_first_frame"]) >= 0 else int(b["nonahead_first_frame"]),
+		"lost_chunks": int(a["lost_chunks"]) + int(b["lost_chunks"]),
+		"rebuilds": int(a["rebuilds"]) + int(b["rebuilds"]),
+		"ho_max": maxi(int(a["ho_max"]), int(b["ho_max"])),
+		"ho_cap_max": maxi(int(a["ho_cap_max"]), int(b["ho_cap_max"])),
+		"inr_mid": b.get("inr_mid", {}),
+		# fps is set by the arm as {seg1, seg2, seg3} after the merges.
+		"fps": {},
+	}
+
+func _wprof_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	world.render_radius = maxi(world.render_radius, 16)
+	var rr: int = world.render_radius
+	world.recenter(spawn.x, spawn.z, true, spawn.y)
+	var pcx := int(floorf(spawn.x / 16.0))
+	var pcz := int(floorf(spawn.z / 16.0))
+	# The r16 settle: every band<=2 chunk in the r16 square meshed (25-min
+	# wall cap: on a stall the arm proceeds with the partial build).
+	var max_frames := 400000
+	var frames := 0
+	while frames < max_frames and Time.get_ticks_msec() - t0 < 1500000:
+		await get_tree().physics_frame
+		frames += 1
+		if frames % 30 == 0:
+			var built_all := true
+			for key in world.chunks:
+				var c: Node3D = world.chunks[key]
+				if int(c.band) > 2:
+					continue
+				if absi(c.cx - pcx) <= rr and absi(c.cz - pcz) <= rr:
+					if not c.mesh_built:
+						built_all = false
+						break
+			if built_all:
+				break
+	# Let the last handoffs land before measuring.
+	for i in 30:
+		await get_tree().physics_frame
+	player = main._spawn_player()
+	for i in 30:
+		await get_tree().physics_frame
+	# Measurement condition: the IN-GAME frame pace. Headless has no vsync,
+	# so left alone World._process runs at ~3 kHz: (a) the 180-frame ring
+	# then holds only ~60 ms — SHORTER THAN THE WORKER ROUND-TRIP, so an
+	# end-of-flight read lands in a gap between handoff batches (occupancy
+	# 0, sub-stages 0 — measured), and (b) the per-frame budgets (1
+	# dispatch/frame, the handoff cap/frame, the low attach/frame) fire 50x
+	# per wall second — not the in-game condition being diagnosed. Pacing
+	# the main loop to 60 fps for the flight makes every ring sample a true
+	# 16.7 ms game frame (the ticket's "the window holds the last ~3 s"
+	# premise) and the frame/fps row measures the actual main-thread-
+	# limited rate. Engine setting is saved and restored.
+	var fps_prev := Engine.max_fps
+	Engine.max_fps = 60
+	# SUSTAINED 4x flight, run in 3 CONTINUOUS segments (6+6+5 s — the
+	# _fly_phase helper advances from the current position, never resets
+	# x/z, so this is the same flight as one 17 s call). The profiler ring
+	# is read AFTER EACH SEGMENT: at the 60 fps pace one 180-frame ring
+	# window = the previous ~3 s of flight, and Godot 4 forbids parallel
+	# coroutines, so segmented reads are how this arm captures the
+	# steady state (a single end-of-flight read can land in a gap between
+	# handoff batches). The busiest window (max frame avg) is the
+	# headline table; all three windows are reported in "windows".
+	var dir := Vector3(1, 0, 0)
+	var fly_a: Dictionary = await _fly_phase(4.0, 6.0, dir)
+	var w1: Dictionary = _wprof_ring_read()
+	var fly_b: Dictionary = await _fly_phase(4.0, 6.0, dir)
+	var w2: Dictionary = _wprof_ring_read()
+	var fly_c: Dictionary = await _fly_phase(4.0, 5.0, dir)
+	var w3: Dictionary = _wprof_ring_read()
+	Engine.max_fps = fps_prev
+	var windows: Dictionary = {"seg1_end": w1, "seg2_end": w2, "seg3_end": w3}
+	var win_names := ["seg1_end", "seg2_end", "seg3_end"]
+	var headline := "seg1_end"
+	var best := -1.0
+	for wn in win_names:
+		var fa := float((windows[wn] as Dictionary).get("frame", {}).get("avg", 0.0))
+		if fa > best:
+			best = fa
+			headline = wn
+	var hw: Dictionary = windows[headline]
+	var stages: Dictionary = (hw as Dictionary).get("stages", {})
+	var frame: Dictionary = (hw as Dictionary).get("frame", {})
+	var occ_snap: Dictionary = (hw as Dictionary).get("occupancy", {})
+	var part_sum := 0.0
+	for nm in ["DRAIN", "LOW", "HANDOFF", "IO", "RECENTER", "MISC"]:
+		part_sum += float((stages.get(nm, {}) as Dictionary).get("avg", 0.0))
+	var frame_avg := float(frame.get("avg", 0.0))
+	var recon_display_pct := absf(part_sum - frame_avg) / maxf(frame_avg, 0.001) * 100.0
+	var recon_raw_pct: float = float(hw.get("recon_raw_pct", 0.0))
+	var neg_max: int = int(hw.get("misc_neg_max_us", 0))
+	var fly: Dictionary = _wprof_fly_merge(_wprof_fly_merge(fly_a, fly_b), fly_c)
+	fly["fps"] = {"seg1": fly_a.get("fps", {}), "seg2": fly_b.get("fps", {}), "seg3": fly_c.get("fps", {})}
+	var script_errors := false
+	var sef := OS.get_environment("AWECRAFT_STDERR_FILE")
+	if sef != "":
+		var cnt: Array = []
+		OS.execute("grep", ["-c", "SCRIPT ERROR:", sef], cnt)
+		script_errors = cnt.size() > 0 and int(cnt[0]) > 0
+	# Tail settle AFTER the read — let the in-flight tasks land before the
+	# tree frees (clean shutdown; the ring sample above is already taken).
+	for i in 30:
+		await get_tree().physics_frame
+	var res: Dictionary = {
+		"mode": "wprof",
+		"ok": true,
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+		"build_frames": frames,
+		"headline_window": headline,
+		"stages": stages,
+		"frame": frame,
+		"partition": ["DRAIN", "LOW", "HANDOFF", "IO", "RECENTER", "MISC"],
+		"substages": ["FACELIGHT", "RESCORE", "MESHATTACH"],
+		"recon_raw_pct": recon_raw_pct,
+		"recon_display_pct": int(roundf(recon_display_pct * 10.0)) / 10.0,
+		"misc_neg_max_us": neg_max,
+		"occupancy": occ_snap,
+		"fly": fly,
+		"windows": windows,
+	}
+	for nm in ["DRAIN", "LOW", "HANDOFF", "MISC"]:
+		if int((stages.get(nm, {}) as Dictionary).get("frames", 0)) <= 0:
+			res["ok"] = false
+			res["err"] = "stage %s has frames=0" % nm
+	if frame_avg < 1.0:
+		res["ok"] = false
+		res["err"] = "headline window frame avg %.1f ms — flight did not load the main thread (vacuous evidence)" % frame_avg
+	if recon_raw_pct > 10.0:
+		res["ok"] = false
+		res["err"] = "partition reconciliation off by %.1f%%" % recon_raw_pct
+	if neg_max > 0:
+		res["ok"] = false
+		res["err"] = "stage brackets exceeded the frame total by %d usec" % neg_max
+	if script_errors:
+		res["ok"] = false
+		res["err"] = "SCRIPT ERROR lines in the stderr file"
+	Debug.result(res)
+	get_tree().quit()
 
 
 # AC-0233: the dirty-edit latency probe. Quiet the remesh queues (so the

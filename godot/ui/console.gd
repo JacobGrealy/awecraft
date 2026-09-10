@@ -25,6 +25,8 @@ const COMMANDS := {
 var panel: Panel
 var log_view: RichTextLabel
 var input_line: LineEdit
+var prof_label: Label  # AC-0251: the WORLD-PIPELINE stage table
+var _prof_acc := 0.0  # AC-0251: the ~500 ms refresh accumulator
 
 func _ready() -> void:
 	layer = 30
@@ -39,7 +41,7 @@ func _ready() -> void:
 	log_view.offset_left = 8.0
 	log_view.offset_top = 8.0
 	log_view.offset_right = -8.0
-	log_view.offset_bottom = -40.0
+	log_view.offset_bottom = -206.0  # AC-0251: room for the stage table below
 	log_view.scroll_active = true
 	log_view.scroll_following = true
 	# plain text - command output may contain brackets (bbcode would eat them)
@@ -62,6 +64,20 @@ func _ready() -> void:
 	input_line.placeholder_text = "type a command - 'help' lists them"
 	input_line.text_submitted.connect(_on_submit)
 	panel.add_child(input_line)
+	# AC-0251: the WORLD-PIPELINE stage table — one row per stage (p50/p95/
+	# max/avg ms + active frames), the FRAME row (with the approx fps) and
+	# the in-flight occupancy. Refreshed ~every 500 ms; the strings are
+	# formatted ONLY on that refresh tick (the per-frame cost is one bool
+	# read while the console is closed, one float add while open).
+	prof_label = Label.new()
+	prof_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	prof_label.offset_left = 8.0
+	prof_label.offset_top = -202.0
+	prof_label.offset_right = -8.0
+	prof_label.offset_bottom = -40.0
+	prof_label.add_theme_font_size_override("font_size", 12)
+	prof_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.5, 1.0))
+	panel.add_child(prof_label)
 	add_log("[console ready]")
 
 func _process(_dt: float) -> void:
@@ -69,6 +85,38 @@ func _process(_dt: float) -> void:
 	# whenever the game is no longer running (covers every menu path).
 	if visible and Game.mode == "menu":
 		close_console()
+	# AC-0251: refresh the world-pipeline table ~every 500 ms (only while
+	# the overlay is open — formatting strings on the fly is what this
+	# avoids at 60 fps).
+	if visible:
+		_prof_acc += _dt
+		if _prof_acc >= 0.5:
+			_prof_acc = 0.0
+			_prof_refresh()
+
+func _prof_refresh() -> void:
+	var w = Game.world  # untyped on purpose: the profiler is a dynamic member
+	if w == null:
+		prof_label.text = ""
+		return
+	var p: Dictionary = w.profiler
+	var occ: Dictionary = p.get("occupancy", {})
+	var s: Dictionary
+	var lines := "WORLD-PIPELINE ms  [p50 p95 max avg | frames]   in-flight: TG %d / TM %d / low %d" % [
+		int(occ.get("tg", 0)), int(occ.get("tm", 0)), int(occ.get("low", 0))]
+	for nm in ["DRAIN", "LOW", "HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "MISC"]:
+		s = p.get(nm, {})
+		var indent := "  " if ["FACELIGHT", "RESCORE", "MESHATTACH"].has(nm) else ""
+		lines += "\n%s%-10s %6.1f %6.1f %7.1f %6.1f   %4d" % [
+			indent, nm,
+			float(s.get("p50", 0.0)), float(s.get("p95", 0.0)), float(s.get("max", 0.0)),
+			float(s.get("avg", 0.0)), int(s.get("frames", 0))]
+	s = p.get("frame", {})
+	lines += "\n%-10s %6.1f %6.1f %7.1f %6.1f   fps~%d" % [
+		"FRAME",
+		float(s.get("p50", 0.0)), float(s.get("p95", 0.0)), float(s.get("max", 0.0)),
+		float(s.get("avg", 0.0)), int(roundf(1000.0 / maxf(float(s.get("avg", 0.0)), 0.001)))]
+	prof_label.text = lines
 
 func toggle() -> void:
 	if visible:

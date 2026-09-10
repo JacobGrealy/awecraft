@@ -469,7 +469,9 @@ func _rescore_kick() -> void:
 	perf_rescore_events += 1
 
 func _rescore_step() -> void:
+	var _wpt := Time.get_ticks_usec()  # AC-0251 RESCORE sub-stage
 	if not _rescore_due:
+		_wprof_add(WP_RESCORE, Time.get_ticks_usec() - _wpt)
 		return
 	var t0 := Time.get_ticks_usec()
 	var n := 0
@@ -484,10 +486,12 @@ func _rescore_step() -> void:
 			if n >= RESCORE_PER_FRAME:
 				perf_rescore_stamps += n
 				perf_rescore_ms += (Time.get_ticks_usec() - t0) / 1000.0
+				_wprof_add(WP_RESCORE, Time.get_ticks_usec() - _wpt)
 				return
 	perf_rescore_stamps += n
 	_rescore_due = false
 	perf_rescore_ms += (Time.get_ticks_usec() - t0) / 1000.0
+	_wprof_add(WP_RESCORE, Time.get_ticks_usec() - _wpt)
 
 # --- AC-0231 rewrite (fix3): the far-LOD low-res placeholder (the AC-0233
 # consumer). A SEPARATE lane: it never touches the ThreadGen pool4 /
@@ -1174,7 +1178,9 @@ func _vwin_sync(c: Node3D) -> bool:
 # created on first use — the SAME pre-baked 16x16x16 box mesh as the fog,
 # in the black cap material).
 func _cap_ensure_slab(c: Node3D, si: int) -> void:
+	var _wpt := Time.get_ticks_usec()  # AC-0251 MESHATTACH sub-stage (per-chunk cap node attach)
 	if c.has_cap_si(si):
+		_wprof_add(WP_MESHATTACH, Time.get_ticks_usec() - _wpt)
 		return
 	var had: bool = c.cap_slabs.size() > 0
 	var i := 0
@@ -1195,6 +1201,7 @@ func _cap_ensure_slab(c: Node3D, si: int) -> void:
 	vwin_caps_n += 1
 	if not had:
 		vwin_cap_chunks_n += 1
+	_wprof_add(WP_MESHATTACH, Time.get_ticks_usec() - _wpt)
 
 func _cap_drop_slab(c: Node3D, si: int) -> void:
 	var i: int = c.cap_slabs.find(si)
@@ -1308,7 +1315,9 @@ func _low_fog_for(c: Node3D) -> void:
 # instance is created on first use). The live fog count is per SLAB
 # INSTANCE (low_fog_boxes_n) + per chunk (low_fog_chunks_n).
 func _fog_ensure_slab(c: Node3D, si: int) -> void:
+	var _wpt := Time.get_ticks_usec()  # AC-0251 MESHATTACH sub-stage (per-chunk fog node attach)
 	if c.has_fog_si(si):
+		_wprof_add(WP_MESHATTACH, Time.get_ticks_usec() - _wpt)
 		return
 	var had: bool = c.fog_slabs.size() > 0
 	var i := 0
@@ -1329,6 +1338,7 @@ func _fog_ensure_slab(c: Node3D, si: int) -> void:
 	low_fog_boxes_n += 1
 	if not had:
 		low_fog_chunks_n += 1
+	_wprof_add(WP_MESHATTACH, Time.get_ticks_usec() - _wpt)
 
 # AC-0231 rewrite: drop the fog instance for slab si (a low or the high
 # replaces it at its Y).
@@ -2035,6 +2045,7 @@ func _low_drop_slab(c: Node3D, si: int) -> void:
 # AC-0231 rewrite: place/replace the per-slab low instance (slab-local
 # 0..16 geometry at (0, si*16, 0), sorted by slab index).
 func _low_place_slab(c: Node3D, si: int, mesh: ArrayMesh) -> void:
+	var _wpt := Time.get_ticks_usec()  # AC-0251 MESHATTACH sub-stage
 	var i := 0
 	while i < c.low_slabs.size() and int(c.low_slabs[i]) < si:
 		i += 1
@@ -2052,6 +2063,7 @@ func _low_place_slab(c: Node3D, si: int, mesh: ArrayMesh) -> void:
 		c.low_slabs.insert(i, si)
 		c.low_instances.insert(i, mi)
 		c.low_mask |= (1 << si)  # AC-0237 1a: mirror mask sync
+	_wprof_add(WP_MESHATTACH, Time.get_ticks_usec() - _wpt)
 
 # AC-0231 fix3: the atlas TEXTURE SWAP re-merges the strip table
 # (_tm_ms_full) — the merged-atlas strip POSITIONS move (a different
@@ -2714,6 +2726,7 @@ func _bd_log(cx: int, cz: int) -> void:
 func _ready() -> void:
 	timing = OS.get_environment("AWECRAFT_TIMING") == "1"
 	_picklog = OS.get_environment("AWECRAFT_PICKLOG") == "1"  # AC-0217
+	_wprof_init()  # AC-0251: pre-allocate the per-stage pipeline timing ring
 	var nenv := OS.get_environment("AWECRAFT_THREADGEN_N")
 	# AC-0079 v3 C3: default threadgen = mini(cores, 6). The r4 cold wall is the
 	# 36-chunk crossing-1 core fill: 36 x ~220 ms of gen paced by the pool size
@@ -3275,8 +3288,219 @@ func _overlay_aabb_lines(m: ImmediateMesh, ab: AABB) -> void:
 		m.surface_add_vertex(c[i[1]])
 
 
+# --- AC-0251: per-stage ms attribution of the world pipeline (instrument-ONLY) ---
+# The user flies 4x and fps tanks to ~20; AC-0250 removed the priority cone
+# and the low-LOD sync fallback, so the remaining main-thread load lives
+# elsewhere in this pipeline. This block times the per-frame stages so the
+# cost is readable live (the AC-0244 console overlay) and headless
+# (AWECRAFT_LOGIC=wprof). MAIN-THREAD-ONLY and PRE-ALLOCATED: a ring of
+# WP_RING per-frame rows (one int slot per stage, in usec), zeroed in place
+# each frame — NO per-frame allocation, NO new locks, NO string formatting
+# on the hot path (the read side refreshes only when `profiler` is read,
+# and the stat dicts are mutated in place, never rebuilt). It measures; it
+# changes NO scheduling, pacing, ordering, or allocation behavior (the
+# schedule-transparency proof: the r16 arm's gates must hold unchanged).
+#
+# TOP-LEVEL partition (DISJOINT; the five stages below + MISC reconcile
+# against the frame total measured around World._process itself):
+#   DRAIN    = _drain_build_queue (the drain pass + the dispatch/attach work
+#              it does this frame — the 30-50 ms class per-dispatch strip/
+#              nbs work)
+#   LOW      = _low_step (the _low_poll attaches + the in-r lane + the far
+#              slab wave)
+#   HANDOFF  = threadgen_poll + threadmesh_poll (the worker-result handoff /
+#              attach passes: the TM _tm_slots attach + the TG handoff)
+#   IO       = io_poll (the _io_write_commit region blob commits + the
+#              disk-read apply handoffs)
+#   RECENTER = _recenter_slice (the recenter/rebuild queue walk(s))
+#   MISC     = frame total - the five above (everything else in
+#              World._process: the 20 Hz tick, the save-queue drain, the
+#              loading/banana ticks, the atlas-identity sync, the cull pass,
+#              the light_pending flush dispatch loop, the fluid dispatches,
+#              the tex refresh, the idle early-return frames)
+#
+# SUB-STAGES (SUBSETS — they accumulate where the work happens, which can be
+# several top stages and even outside _process (the _physics_process poll,
+# the recenter() inline polls, the sync flush dispatches); attribution
+# detail, never part of the partition reconciliation):
+#   FACELIGHT  = _eff_landed (the face-block light cascade: the face-cache
+#                refresh + the E2 neighbor re-enqueue — the ~1.2 s-class
+#                main-thread face-cache refresh on handoff; ISOLATED because
+#                it is separable from the rest of the handoff)
+#   RESCORE    = _rescore_step (runs only via the drain — a DRAIN subset)
+#   MESHATTACH = the per-slab / per-chunk MeshInstance3D create + set_mesh +
+#                add_child attach work (chunk.gd _assemble_slab — the
+#                apply_accs / apply_edit_accs / sync build_mesh paths — plus
+#                the low-slab, fog, and cap placeholder attaches; the
+#                AC-0247 suspect; ISOLATED at the node-assembly unit)
+#
+# Occupancy (in-flight task counts, refreshed on read): threadgen_inflight,
+# threadmesh_inflight, _low_tasks.
+const WP_DRAIN := 0
+const WP_LOW := 1
+const WP_HANDOFF := 2
+const WP_FACELIGHT := 3
+const WP_IO := 4
+const WP_RECENTER := 5
+const WP_RESCORE := 6
+const WP_MESHATTACH := 7
+const WP_MISC := 8
+const WP_FRAME := 9
+const WP_STAGES := 10
+const WP_RING := 180
+
+var _wp_rows: Array = []    # WP_RING rows, each an Array of WP_STAGES ints (usec)
+var _wp_head := 0
+var _wp_filled := 0
+var _wp_cur: Array = []    # the accumulating row (a reference into _wp_rows)
+var _wp_in := false          # true only DURING World._process (sub-stage gate)
+var _wp_dirty := true
+var _wp_neg_max := 0         # max usec by which the stage sum EXCEEDED the
+                             # frame total in a committed row (0 = the
+                             # brackets never overlap / over-count)
+var _wp_live: Dictionary = {}  # the stable profiler dict (mutated in place)
+var _wp_stat: Array = []       # per-stage stat dicts (the _wp_live values)
+var _wp_names: Array = []
+var _wp_scratch: PackedInt32Array = PackedInt32Array()
+
+var profiler: Dictionary:
+	get:
+		_wprof_refresh()
+		return _wp_live
+
+func _wprof_init() -> void:
+	_wp_rows.clear()
+	for i in range(WP_RING):
+		var r: Array = []
+		for j in range(WP_STAGES):
+			r.append(0)
+		_wp_rows.append(r)
+	_wp_head = 0
+	_wp_filled = 0
+	_wp_cur = []
+	_wp_in = false
+	_wp_dirty = true
+	_wp_neg_max = 0
+	_wp_stat.clear()
+	for j in range(WP_STAGES):
+		var d: Dictionary = {}
+		d["p50"] = 0.0
+		d["p95"] = 0.0
+		d["max"] = 0.0
+		d["avg"] = 0.0
+		d["frames"] = 0
+		_wp_stat.append(d)
+	_wp_names = ["DRAIN", "LOW", "HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "MISC", "frame"]
+	_wp_live = {}
+	for j in range(WP_STAGES):
+		_wp_live[_wp_names[j]] = _wp_stat[j]
+	_wp_live["partition"] = ["DRAIN", "LOW", "HANDOFF", "IO", "RECENTER", "MISC"]
+	_wp_live["substages"] = ["FACELIGHT", "RESCORE", "MESHATTACH"]
+	_wp_live["occupancy"] = {"tg": 0, "tm": 0, "low": 0}
+	_wp_live["misc_neg_max_us"] = 0
+	_wp_scratch.resize(WP_RING)
+
+# Begin the current frame's row (zeroed in place — no allocation).
+func _wprof_begin_frame() -> void:
+	if _wp_rows.is_empty():
+		_wprof_init()
+	_wp_cur = _wp_rows[_wp_head]
+	for j in range(WP_STAGES):
+		_wp_cur[j] = 0
+	_wp_in = true
+
+# Accumulate `us` usec into the current frame's stage. No-op outside
+# World._process (the _physics_process / recenter() polls are outside the
+# measured frame window — the top-level brackets only ever run in _process,
+# so the partition stays exact).
+func _wprof_add(stage: int, us: int) -> void:
+	if _wp_in and us > 0:
+		_wp_cur[stage] += us
+
+# chunk.gd convenience (avoids a dynamic constant lookup across scripts).
+func _wprof_meshattach(us: int) -> void:
+	_wprof_add(WP_MESHATTACH, us)
+
+# Commit the frame row: MISC = frame total - the five disjoint top stages
+# (exact by construction; a negative MISC would mean the stage brackets
+# overlap or exceed the frame — tracked in _wp_neg_max).
+func _wprof_end_frame(f0_usec: int) -> void:
+	if not _wp_in:
+		return
+	_wp_in = false
+	var f1 := Time.get_ticks_usec()
+	var part := int(_wp_cur[WP_DRAIN]) + int(_wp_cur[WP_LOW]) + int(_wp_cur[WP_HANDOFF]) \
+			+ int(_wp_cur[WP_IO]) + int(_wp_cur[WP_RECENTER])
+	var misc := f1 - f0_usec - part
+	if misc < 0:
+		_wp_neg_max = maxi(_wp_neg_max, -misc)
+	_wp_cur[WP_MISC] = maxi(0, misc)
+	_wp_cur[WP_FRAME] = f1 - f0_usec
+	_wp_dirty = true
+	_wp_head = (_wp_head + 1) % WP_RING
+	_wp_filled = mini(_wp_filled + 1, WP_RING)
+
+# Recompute the rolling-window stats (p50/p95/max/avg ms at 1 decimal +
+# active-frame count per stage, over the last WP_RING frames). Runs only on
+# read — the hot path never formats or allocates for it.
+func _wprof_refresh() -> void:
+	if _wp_rows.is_empty() or not _wp_dirty:
+		return
+	var n := _wp_filled
+	for j in range(WP_STAGES):
+		_wp_scratch.resize(n)  # the window grows across refreshes — size first
+		var total := 0
+		var active := 0
+		for i in range(n):
+			var v := int(_wp_rows[(_wp_head - n + i + WP_RING) % WP_RING][j])
+			_wp_scratch[i] = v
+			total += v
+			if v > 0:
+				active += 1
+		var st: Dictionary = _wp_stat[j]
+		if n == 0:
+			st["p50"] = 0.0
+			st["p95"] = 0.0
+			st["max"] = 0.0
+			st["avg"] = 0.0
+			st["frames"] = 0
+		else:
+			_wp_scratch.sort()
+			st["p50"] = roundf(float(_wp_scratch[int(ceilf(0.5 * float(n))) - 1]) / 100.0) / 10.0
+			st["p95"] = roundf(float(_wp_scratch[int(ceilf(0.95 * float(n))) - 1]) / 100.0) / 10.0
+			st["max"] = roundf(float(_wp_scratch[n - 1]) / 100.0) / 10.0
+			st["avg"] = roundf(float(total) / float(n) / 100.0) / 10.0
+			st["frames"] = active
+	var occ: Dictionary = _wp_live["occupancy"]
+	occ["tg"] = threadgen_inflight.size()
+	occ["tm"] = threadmesh_inflight.size()
+	occ["low"] = _low_tasks.size()
+	_wp_live["misc_neg_max_us"] = _wp_neg_max
+	_wp_dirty = false
+
+# The unrounded partition reconciliation over the current window:
+# |sum(top-stage avg) + misc avg - frame avg| / frame avg (raw usec — the
+# 1-decimal display rounding is not what the wprof arm gates on).
+func _wprof_recon_raw_pct() -> float:
+	if _wp_filled == 0:
+		return 0.0
+	var n := _wp_filled
+	var s_part := 0
+	var s_frame := 0
+	for i in range(n):
+		var r: Array = _wp_rows[(_wp_head - n + i + WP_RING) % WP_RING]
+		s_part += int(r[WP_DRAIN]) + int(r[WP_LOW]) + int(r[WP_HANDOFF]) \
+				+ int(r[WP_IO]) + int(r[WP_RECENTER]) + int(r[WP_MISC])
+		s_frame += int(r[WP_FRAME])
+	if s_frame <= 0:
+		return 0.0
+	var avg_part := float(s_part) / float(n)
+	var avg_frame := float(s_frame) / float(n)
+	return absf(avg_part - avg_frame) / maxf(avg_frame, 1.0) * 100.0
+
 func _process(_delta: float) -> void:
 	var pf0 := Time.get_ticks_usec()
+	_wprof_begin_frame()  # AC-0251: the frame sample commits at _wprof_end_frame(pf0)
 	_game_tick_accumulate(_delta)  # AC-0158: 20 Hz game tick (simulation clock)
 	_drain_save_queue()  # AC-0155: amortized full-column writes (1-2/frame)
 	# AC-0178: BEFORE the idle early-return — the completion state IS the
@@ -3322,6 +3546,7 @@ func _process(_delta: float) -> void:
 	# threadmesh_inflight keeps this running while mesh tasks are in flight
 	# even when every bookkeeping list is drained (else the poll never runs).
 	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty() and threadmesh_inflight.is_empty() and _io_read_inflight.is_empty() and _io_write_inflight.is_empty() and _io_compact_inflight.is_empty() and not _rec_pending and _bl_want.is_empty() and _col_pending.is_empty() and dirty_queue.is_empty():
+		_wprof_end_frame(pf0)  # AC-0251: idle frame (all stages 0, MISC = total)
 		return
 	var was_active := flush_active
 	var added := false
@@ -3428,18 +3653,29 @@ func _process(_delta: float) -> void:
 		else:
 			fluid_dirty[_key(int(cc.cx), int(cc.cz))] = true
 	var fp2 := Time.get_ticks_usec()
+	var _wpt := Time.get_ticks_usec()  # AC-0251 HANDOFF stage bracket
 	threadgen_poll()
 	var fp3 := Time.get_ticks_usec()
 	threadmesh_poll()
+	_wprof_add(WP_HANDOFF, Time.get_ticks_usec() - _wpt)
+	_wpt = Time.get_ticks_usec()  # AC-0251 IO stage bracket
 	io_poll()  # AC-0164: land finished column I/O tasks
+	_wprof_add(WP_IO, Time.get_ticks_usec() - _wpt)
 	var fp4 := Time.get_ticks_usec()
+	_wpt = Time.get_ticks_usec()  # AC-0251 RECENTER stage bracket
 	_recenter_slice()
+	_wprof_add(WP_RECENTER, Time.get_ticks_usec() - _wpt)
 	var fp5 := Time.get_ticks_usec()
+	_wpt = Time.get_ticks_usec()  # AC-0251 DRAIN stage bracket
 	_drain_build_queue()
+	_wprof_add(WP_DRAIN, Time.get_ticks_usec() - _wpt)
 	var fp6 := Time.get_ticks_usec()
+	_wpt = Time.get_ticks_usec()  # AC-0251 LOW stage bracket
 	_low_step()  # AC-0231: the far-LOD low path (a separate lane)
+	_wprof_add(WP_LOW, Time.get_ticks_usec() - _wpt)
 	_drain_tex_refresh()
 	var pf2 := Time.get_ticks_usec()
+	_wprof_end_frame(pf0)  # AC-0251: commit the frame sample (MISC = the remainder)
 	if _frameprobe and (pf2 - pf0) > 50000:
 		print("FSEC total=%.0f book=%.0f light=%.0f fluid=%.0f tgpoll=%.0f tmpoll=%.0f rec=%.0f build=%.0f tex=%.0f t=%d" % [
 			(float(pf2 - pf0) / 1000.0), (float(pf1 - pf0) / 1000.0), (float(fp1 - fp0) / 1000.0), (float(fp2 - fp1) / 1000.0),
@@ -6322,10 +6558,13 @@ func _ngens_for(cx: int, cz: int) -> Array:
 # neighbor's import is unchanged and its re-light a provable no-op; eff only
 # ever increases, so no staleness can be masked).
 func _eff_landed(c: Node3D, old_eff: Dictionary, new_eff: Dictionary) -> void:
+	var _wpt := Time.get_ticks_usec()  # AC-0251 FACELIGHT sub-stage
 	if new_eff.is_empty():
+		_wprof_add(WP_FACELIGHT, Time.get_ticks_usec() - _wpt)
 		return
 	var changed: bool = old_eff.is_empty() or old_eff.get("arr", PackedByteArray()) != new_eff.get("arr", PackedByteArray())
 	if not changed:
+		_wprof_add(WP_FACELIGHT, Time.get_ticks_usec() - _wpt)
 		return
 	c.eff_gen += 1
 	# AC-0134 run-2 (fix-6): refresh the face-boundary cache for EVERY
@@ -6344,6 +6583,7 @@ func _eff_landed(c: Node3D, old_eff: Dictionary, new_eff: Dictionary) -> void:
 	# still skips byte-identical sides (perf), and AWECRAFT_E2=off still
 	# kills the whole wave (diagnostic kill switch).
 	if OS.get_environment("AWECRAFT_E2") == "off":
+		_wprof_add(WP_FACELIGHT, Time.get_ticks_usec() - _wpt)
 		return
 	var cx := int(c.cx)
 	var cz := int(c.cz)
@@ -6403,6 +6643,7 @@ func _eff_landed(c: Node3D, old_eff: Dictionary, new_eff: Dictionary) -> void:
 			light_pending_set[nkey] = true
 			perf_e2_marks += 1
 	flush_active = true
+	_wprof_add(WP_FACELIGHT, Time.get_ticks_usec() - _wpt)
 
 
 # side 0=E (our lx 14,15) 1=W (lx 0,1) 2=S (lz 14,15) 3=N (lz 0,1); arrays
