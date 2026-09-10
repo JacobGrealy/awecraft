@@ -615,6 +615,13 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		if logic == "wprof":
 			await _wprof_test(spawn)
 			return
+		# AC-0252: the med/low AVERAGE-COLOR LADDER arm (AWECRAFT_LOGIC=
+		# ladder). STANDALONE — verifies the 8x8x8 MED / 4x4x4 LOW band
+		# split in the far ring, the configurable low-start boundary, and
+		# the full-volume air rule.
+		if logic == "ladder":
+			await _ladder_test(spawn)
+			return
 		if logic == "loduv":
 			await _loduv_test()
 			return
@@ -5548,8 +5555,86 @@ func _meshprobe_test(spawn: Vector3) -> void:
 	var match_rate: float = float(match_chunks) / float(n_samples) if n_samples > 0 else 0.0
 	# AC-0211: the surrounding-step gates are part of ok (C++ lane).
 	var ac0211_ok: bool = (not cpp) or (n_samples > 0 and compact_ok == n_samples and slabcopy_ok == n_samples and rowsok == n_samples)
+	# AC-0252: the C++ low_emit_avg A/B — the med/low AVERAGE-COLOR emit
+	# (grid 8 = MED / 4 = LOW) must match the GDScript twin _avg_emit_slab on
+	# real slabs: EXACT vertices + indices, tolerant normals (ArrayMesh
+	# re-normalization) + colors (uint8-quantized), NO UV array (the avg
+	# surface is vertex-color-only — the noise shader owns it), mh equal.
+	var ae_pairs := 0
+	var ae_match := 0
+	var ae_tried := 0
+	var ae_dbg_done := false
+	for key in world.chunks:
+		if ae_tried >= 4:
+			break
+		var c = world.chunks.get(key)
+		if c == null or c.data.is_empty():
+			continue
+		ae_tried += 1
+		var aesi := 0
+		while aesi < c.data.size() and c.data[aesi] == null:
+			aesi += 1
+		if aesi >= c.data.size():
+			continue
+		var fcc: PackedFloat32Array = world._lod_fcc_get()
+		for G2 in [8, 4]:
+			var grids2: Array = []
+			grids2.resize(c.data.size())
+			if c.data[aesi] != null:
+				grids2[aesi] = world._avg_slab_grid(c, aesi, G2)
+			if aesi > 0 and c.data[aesi - 1] != null:
+				grids2[aesi - 1] = world._avg_slab_grid(c, aesi - 1, G2)
+			if aesi + 1 < c.data.size() and c.data[aesi + 1] != null:
+				grids2[aesi + 1] = world._avg_slab_grid(c, aesi + 1, G2)
+			var g2: Dictionary = grids2[aesi] if grids2[aesi] != null else world._avg_slab_grid(c, aesi, G2)
+			var m_gd2: ArrayMesh = world._avg_emit_slab(g2, grids2, aesi, G2)
+			var res_c2: Dictionary = mc.low_emit_avg(mc.slab_copy(c.data), aesi, G2, fcc)
+			ae_pairs += 1
+			if bool(res_c2.get("empty", false)):
+				if m_gd2 == null:
+					ae_match += 1
+				continue
+			if m_gd2 == null:
+				continue
+			var sg2: Array = m_gd2.surface_get_arrays(0)
+			var okv2: bool = (sg2[Mesh.ARRAY_VERTEX] as PackedVector3Array) == res_c2["v"]
+			var oki2: bool = (sg2[Mesh.ARRAY_INDEX] as PackedInt32Array) == res_c2["i"]
+			var okh2: bool = is_equal_approx(m_gd2.get_aabb().size.y, float(res_c2.get("mh", -1.0)))
+			var oku2: bool = (sg2[Mesh.ARRAY_TEX_UV] == null) or ((sg2[Mesh.ARRAY_TEX_UV] as PackedVector2Array).is_empty())
+			var dnn3: PackedVector3Array = sg2[Mesh.ARRAY_NORMAL] as PackedVector3Array
+			var nnn3: PackedVector3Array = res_c2["n"] as PackedVector3Array
+			var okn3: bool = dnn3.size() == nnn3.size()
+			if okn3:
+				for q3 in range(dnn3.size()):
+					var dna3 := dnn3[q3] - nnn3[q3]
+					if absf(dna3.x) > 1e-4 or absf(dna3.y) > 1e-4 or absf(dna3.z) > 1e-4:
+						okn3 = false
+						break
+			var dcc3: PackedColorArray = sg2[Mesh.ARRAY_COLOR] as PackedColorArray
+			var ccc3: PackedColorArray = res_c2["c"] as PackedColorArray
+			var okc3: bool = dcc3.size() == ccc3.size()
+			if okc3:
+				for q3 in range(dcc3.size()):
+					if absf(dcc3[q3].r - ccc3[q3].r) > 0.01 or absf(dcc3[q3].g - ccc3[q3].g) > 0.01 or absf(dcc3[q3].b - ccc3[q3].b) > 0.01 or absf(dcc3[q3].a - ccc3[q3].a) > 0.01:
+						okc3 = false
+						break
+			if okv2 and okn3 and okc3 and oku2 and oki2 and okh2:
+				ae_match += 1
+			elif not ae_dbg_done:
+				ae_dbg_done = true
+				var gi2: PackedInt32Array = sg2[Mesh.ARRAY_INDEX] as PackedInt32Array
+				var ci2: PackedInt32Array = res_c2["i"] as PackedInt32Array
+				var gstr := ""
+				var cstr := ""
+				var firstdiff := -1
+				for qd in range(mini(24, gi2.size())):
+					gstr += str(gi2[qd]) + " "
+					cstr += str(ci2[qd]) + " "
+					if gi2[qd] != ci2[qd] and firstdiff < 0:
+						firstdiff = qd
+				print("AVGEMIT_AB chunk=" + str(key) + " si=" + str(aesi) + " G=" + str(G2) + " i=" + str(oki2) + " firstdiff=" + str(firstdiff) + " gd=" + gstr + "|| cpp=" + cstr)
 	Debug.result({
-		"ok": cpp and n_samples >= 8 and match_rate >= 1.0 and verts_gd == verts_cpp and verts_gd > 0 and ac0211_ok,
+		"ok": cpp and n_samples >= 8 and match_rate >= 1.0 and verts_gd == verts_cpp and verts_gd > 0 and ac0211_ok and ae_pairs >= 2 and ae_match == ae_pairs,
 		"ac0211_ok": ac0211_ok,
 		"compact_ok": compact_ok,
 		"slabcopy_ok": slabcopy_ok,
@@ -5562,6 +5647,8 @@ func _meshprobe_test(spawn: Vector3) -> void:
 		"match_chunks": match_chunks,
 		"match_rate": match_rate,
 		"accs_compared": accs_compared,
+		"avg_emit_pairs": ae_pairs,
+		"avg_emit_match": ae_match,
 		"q_match": q_match,
 		"v_match": v_match,
 		"n_match": n_match,
@@ -7212,6 +7299,38 @@ func _r16_lod_inr() -> Dictionary:
 #              atlas neighbors (the "wrong texture mapping" the user
 #              reported). Tileless blocks: zero UVs (the high mesh writes
 #              (0,0) for them too — reported, not gated).
+# AC-0252: true iff the surface is a CLEAN 16^3 box — exactly 6 quads, each
+# spanning the FULL 16x16 face in its two position axes. The aabb test alone
+# is too loose: a face with a 1-cell air gap still leaves the aabb at 16 (the
+# opposite full face fixes it) — that is correct terrain, not a giant block.
+func _r16_true_box(arrs: Array) -> bool:
+	var v_arr: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX] as PackedVector3Array
+	var idx_arr: PackedInt32Array = arrs[Mesh.ARRAY_INDEX] as PackedInt32Array
+	var n_arr: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL] as PackedVector3Array
+	if v_arr.size() == 0 or idx_arr.size() / 6 != 6:
+		return false
+	for q in range(6):
+		var n0: Vector3 = n_arr[int(idx_arr[q * 6])]
+		var axes: Array
+		if absf(n0.y) >= absf(n0.x) and absf(n0.y) >= absf(n0.z):
+			axes = [0, 2]
+		elif absf(n0.x) >= absf(n0.z):
+			axes = [2, 1]
+		else:
+			axes = [0, 1]
+		for ax in axes:
+			var mn := 1e30
+			var mx := -1e30
+			for t in range(4):
+				var p: Vector3 = v_arr[int(idx_arr[q * 6 + t])]
+				var cv: float = p[ax]
+				mn = minf(mn, cv)
+				mx = maxf(mx, cv)
+			if not is_equal_approx(mx - mn, 16.0):
+				return false
+	return true
+
+
 func _r16_lod_slabcheck() -> Dictionary:
 	var pcx := int(world.last_pcx)
 	var pcz := int(world.last_pcz)
@@ -7342,7 +7461,11 @@ func _r16_lod_slabcheck() -> Dictionary:
 			# grid-vs-mesh checks below (giant block + UV mapping) only
 			# gate FRESH slabs — a capsule against the NEW grid is not a
 			# builder bug, it is the designed transient.
-			var slab_stale: bool = c.low_stamps.get(si2, []) != c.stamp()
+			# AC-0252: a slab is also stale when its stored band TIER differs
+			# from the live tier (the low-start boundary moved since the
+			# build) — its mesh is a time capsule of the old resolution.
+			var slab_stale: bool = c.low_stamps.get(si2, []) != c.stamp() \
+					or c.low_tiers.get(si2, -1) != int(world._lod_tier_of(dx, dz))
 			if slab_stale:
 				uv_stale_slabs += 1
 			if not (is_equal_approx(mi.position.x, 0.0) and is_equal_approx(mi.position.z, 0.0) \
@@ -7355,13 +7478,18 @@ func _r16_lod_slabcheck() -> Dictionary:
 					or aabb.position.z + aabb.size.z > 16.5:
 				low_ok = false
 				low_aabb_fail += 1
-			# NO GIANT BLOCK: the coarse grid (the world's own sampler).
-			# A 16^3 box mesh (6 full-face quads) is LEGAL only when all
-			# SIX face planes of the grid are fully solid (a hollow
-			# interior is invisible at coarse resolution — the box IS the
-			# correct coarse representation). A box over a grid with ANY
-			# air cell on a face plane = the giant-block bug.
-			var g: PackedByteArray = world._low_slab_grid(c, si2)
+			# AC-0252 NO GIANT BLOCK: the tier's AVERAGE-COLOR solid grid
+			# (the world's own sampler — _avg_slab_grid at the slab's band
+			# tier: G = 8 MED / 4 LOW). A 16^3 box mesh (6 full-face quads)
+			# is LEGAL only when all SIX face planes of the grid are fully
+			# solid (a hollow interior is invisible at coarse resolution —
+			# the box IS the correct coarse representation). A box over a
+			# grid with ANY air cell on a face plane = the giant-block bug.
+			var tierv: int = int(c.low_tiers.get(si2, 2))
+			var G: int = 8 if tierv == 1 else 4
+			var gg := int(G)
+			var avg_g: Dictionary = world._avg_slab_grid(c, si2, G)
+			var g: PackedByteArray = avg_g["solid"]
 			var grid_full := true
 			var solid_n := 0
 			for k in range(g.size()):
@@ -7371,10 +7499,10 @@ func _r16_lod_slabcheck() -> Dictionary:
 					solid_n += 1
 			var planes_all_solid := true
 			for k in range(g.size()):
-				var lx: int = k % 4
-				var lz: int = (k / 4) % 4
-				var ly: int = k / 16
-				if int(g[k]) == 0 and (lx == 0 or lx == 3 or lz == 0 or lz == 3 or ly == 0 or ly == 3):
+				var lx: int = k % gg
+				var lz: int = (k / gg) % gg
+				var ly: int = k / (gg * gg)
+				if int(g[k]) == 0 and (lx == 0 or lx == gg - 1 or lz == 0 or lz == gg - 1 or ly == 0 or ly == gg - 1):
 					planes_all_solid = false
 					break
 			var arrs: Array = mi.mesh.surface_get_arrays(0)  # this build: surface_get_arrays (no get_arrays_for_surface)
@@ -7383,8 +7511,12 @@ func _r16_lod_slabcheck() -> Dictionary:
 				quads = arrs[Mesh.ARRAY_INDEX].size() / 6
 			if not grid_full and not slab_stale:  # stale = time capsule (see above)
 				nongiant_total += 1
-				var is_box := quads == 6 and is_equal_approx(aabb.size.x, 16.0) \
-						and is_equal_approx(aabb.size.y, 16.0) and is_equal_approx(aabb.size.z, 16.0)
+				# AC-0252: a TRUE giant box is 6 quads each spanning the FULL
+				# 16x16 face. The aabb test alone is too loose: two faces with
+				# a 1-cell air gap still leave the aabb at 16 (the opposite
+				# full faces fix it) — that is CORRECT terrain, not a giant
+				# block. Per-quad full-face span is the real test.
+				var is_box := quads == 6 and _r16_true_box(arrs)
 				if is_box:
 					if planes_all_solid:
 						box_legal += 1  # hollow interior — the box is correct
@@ -7398,30 +7530,36 @@ func _r16_lod_slabcheck() -> Dictionary:
 					nongiant_ok += 1
 					quad_min = quads if quad_min == 0 else mini(quad_min, quads)
 					quad_max = maxi(quad_max, quads)
-			# TEXTURE MAPPING (AC-0231 fix3): every quad's UVs must sample
-			# the RIGHT tile at the RIGHT span — see the header comment for
-			# the strip (repeating 31px/block) vs plain-rect (one 32px
-			# tile) expectations. The quad's id is re-derived from the
-			# coarse grid + the slab-local position (the quad sits on the
-			# +n side of cell (pu, pv, k)); the expected tile is the
-			# per-face merged-atlas strip when the block has one, else the
-			# original 32px atlas rect.
+			# AC-0252 COLOR MAPPING (the avg-LOD texture-mapping contract):
+			# the placeholder slabs are AVERAGE-COLOR (vertex color, NO UVs
+			# — the noise shader material owns the surface). Every quad on a
+			# FRESH slab: (1) the mesh carries NO UV array, (2) the quad's
+			# VERTEX COLOR equals the cached per-face average of its
+			# EMITTING origin cell (re-derived from the tier's avg grid +
+			# the slab-local position, the per-face (u,v,k)->(x,z,y)
+			# convention the emitter uses). STALE slabs (data or band tier
+			# changed after the build) are time capsules: reported, not
+			# gated.
 			var v: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
-			var uva: PackedVector2Array = arrs[Mesh.ARRAY_TEX_UV]
 			var idx: PackedInt32Array = arrs[Mesh.ARRAY_INDEX]
 			var nrm: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
+			var colarr: PackedColorArray = arrs[Mesh.ARRAY_COLOR]
+			var uv_arr: Variant = arrs[Mesh.ARRAY_TEX_UV]
+			var has_uv := (uv_arr != null) and ((uv_arr as PackedVector2Array).size() > 0)
+			if has_uv:
+				uv_mismatch += 1  # the avg LOD must be UV-free
+			var avg_cols: PackedFloat32Array = avg_g["cols"]
 			for q in range(idx.size() / 6):
 				if slab_stale:
 					if q == 0:
 						uv_stale_quads += idx.size() / 6
 					continue  # time capsule — the fresh-slab gate only
+				uv_quads += 1
 				var i0: int = int(idx[q * 6])
 				var n0: Vector3 = nrm[i0]
-				# the face's (u, v) position axes (the mesh.cpp convention),
-				# from the DOMINANT normal axis — this build stores tiny
-				# (~1e-5) garbage in the off-axis components, so exact-zero
-				# tests misclassify (a (0,0,1) face with y=1.5e-5 would read
-				# as a Y face and compare the wrong position span).
+				# the face's (u, v) position axes, from the DOMINANT normal
+				# axis (the mesh.cpp convention; tiny ~1e-5 garbage in the
+				# off-axis components would misclassify exact-zero tests).
 				var ax0 := absf(n0.x)
 				var ax1 := absf(n0.y)
 				var ax2 := absf(n0.z)
@@ -7444,151 +7582,68 @@ func _r16_lod_slabcheck() -> Dictionary:
 				var umax := -1e30
 				var vmin := 1e30
 				var vmax := -1e30
-				var uum := 1e30
-				var uux := -1e30
-				var uvm := 1e30
-				var uvx := -1e30
 				for t in range(4):
 					var iv: int = int(idx[q * 6 + t])
 					var pv2: Vector3 = v[iv]
-					var cu: float = pv2[uax]
-					var cv2: float = pv2[vax]
-					umin = minf(umin, cu)
-					umax = maxf(umax, cu)
-					vmin = minf(vmin, cv2)
-					vmax = maxf(vmax, cv2)
-					var tuv: Vector2 = uva[iv]
-					uum = minf(uum, tuv.x)
-					uux = maxf(uux, tuv.x)
-					uvm = minf(uvm, tuv.y)
-					uvx = maxf(uvx, tuv.y)
-				uv_quads += 1
+					umin = minf(umin, pv2[uax])
+					umax = maxf(umax, pv2[uax])
+					vmin = minf(vmin, pv2[vax])
+					vmax = maxf(vmax, pv2[vax])
 				# the emitting cell (pu, pv, k) from the slab-local
-				# position: the face plane is shared by all 4 corners; the
-				# quad min corner is (pu*4, pv*4) on the u/v axes.
+				# position (cell size = 16/G in world units; the face plane
+				# is shared by all 4 corners, the quad min corner is (pu,
+				# pv) in cells; a +n face plane sits at (k+1) cells).
+				var cellsz: float = 16.0 / float(gg)
 				var plane0: float = v[i0][nax]
-				var kcell := int(plane0 / 4.0) - (1 if n0[nax] > 0.0 else 0)
-				var pu2 := int(umin / 4.0)
-				var pv2 := int(vmin / 4.0)
-				var u_span_px: float = (uux - uum) * Data.ATLAS_PX
-				var v_span_px: float = (uvx - uvm) * hms
-				var idok := pu2 >= 0 and pu2 < 4 and pv2 >= 0 and pv2 < 4 and kcell >= 0 and kcell < 4
-				var idv := 0
+				var kcell := int(plane0 / cellsz) - (1 if n0[nax] > 0.0 else 0)
+				var pu2 := int(umin / cellsz)
+				var pv2c := int(vmin / cellsz)
+				# the face index from the dominant normal axis.
 				var fi2 := 0
-				var face2 := "side"
-				var strip_r: Vector2i = Vector2i(-1, -1)
-				var plain_r: Vector2i = Vector2i(-1, -1)
+				if nax == 1:
+					fi2 = 2 if n0.y > 0.0 else 3
+				elif nax == 0:
+					fi2 = 0 if n0.x < 0.0 else 1
+				else:
+					fi2 = 4 if n0.z < 0.0 else 5
+				var idok := pu2 >= 0 and pu2 < gg and pv2c >= 0 and pv2c < gg and kcell >= 0 and kcell < gg
 				if idok:
-					if nax == 1:
-						fi2 = 2 if n0.y > 0.0 else 3
-					elif nax == 0:
-						fi2 = 0 if n0.x < 0.0 else 1
-					else:
-						fi2 = 4 if n0.z < 0.0 else 5
-					# the grid layout is x + z*4 + y*16 — map the quad's
-					# (u, v, normal-axis) cells to (x, z, y) PER FACE
-					# (fi0/1: u=z,v=y,n=x; fi2/3: u=x,v=z,n=y; fi4/5:
-					# u=x,v=y,n=z) — a flat u + v*4 + k*16 index is only
-					# right for the Y faces and reads the wrong (often air)
-					# cell for the side faces.
+					# the emitting origin cell (u, v, k) -> (x, z, y) PER
+					# FACE (fi0/1: u=z,v=y,n=x; fi2/3: u=x,v=z,n=y; fi4/5:
+					# u=x,v=y,n=z) — the same convention the emitter uses;
+					# the grid layout is x + z*G + y*G^2.
 					var gx := kcell
-					var gz := pu2
-					var gy := pv2
-					if fi2 == 2 or fi2 == 3:
+					var gy := kcell
+					var gz := kcell
+					if fi2 == 0 or fi2 == 1:
+						gz = pu2
+						gy = pv2c
+						gx = kcell
+					elif fi2 == 2 or fi2 == 3:
 						gx = pu2
-						gz = pv2
+						gz = pv2c
 						gy = kcell
-					elif fi2 == 4 or fi2 == 5:
+					else:
 						gx = pu2
+						gy = pv2c
 						gz = kcell
-					idv = int(g[gx + gz * 4 + gy * 16])
-					if fi2 == 2:
-						face2 = "top"
-					elif fi2 == 3:
-						face2 = "bottom"
-					strip_r = rects.get("%d_%s" % [idv, face2], Vector2i(-1, -1))
-					plain_r = Data.block_rect(idv, face2)
-				var is_strip := idok and strip_r.x >= 0
-				var is_plain := idok and not is_strip and plain_r.x >= 0
-				var want_u: float
-				var want_v: float
-				var tl: Vector2i
-				var tile_w := 32.0
-				var tile_h := 32.0
-				if is_strip:
-					uv_strip_n += 1
-					want_u = (umax - umin) * 31.0
-					want_v = (vmax - vmin) * 31.0
-					tl = strip_r
-					tile_w = 512.0
-					tile_h = 128.0
-				elif is_plain:
-					uv_plain_n += 1
-					want_u = 31.0
-					want_v = 31.0
-					tl = plain_r
+					var oidx: int = gx + gz * gg + gy * gg * gg
+					var er: float = avg_cols[oidx * 18 + fi2 * 3 + 0]
+					var eg: float = avg_cols[oidx * 18 + fi2 * 3 + 1]
+					var eb: float = avg_cols[oidx * 18 + fi2 * 3 + 2]
+					for t in range(4):
+						var iv2: int = int(idx[q * 6 + t])
+						var vc: Color = colarr[iv2]
+						if absf(vc.r - er) > 0.01 or absf(vc.g - eg) > 0.01 \
+								or absf(vc.b - eb) > 0.01 or absf(vc.a - 1.0) > 0.01:
+							uv_mismatch += 1
+							if uv_mismatch <= 8:
+								print("AVGCOLORBAD %d,%d slab=%d G=%d fi=%d cell=(%d,%d,%d) got=(%.3f,%.3f,%.3f) want=(%.3f,%.3f,%.3f)" % [
+									int(c.cx), int(c.cz), si2, gg, fi2, gx, gy, gz,
+									vc.r, vc.g, vc.b, er, eg, eb])
+							break
 				else:
-					# tileless block (no atlas rect) — the high mesh writes
-					# (0,0) for these too: the zero-UV expectation.
-					want_u = 0.0
-					want_v = 0.0
-					tl = Vector2i(0, 0)
-				var ok_span := absf(u_span_px - want_u) < 0.5 and absf(v_span_px - want_v) < 0.5
-				var ok_origin := false
-				var ok_tile := false
-				if idok:
-					ok_origin = absf(uum * Data.ATLAS_PX - (float(tl.x) + 0.5)) < 0.5 \
-							and absf(uvm * hms - (float(tl.y) + 0.5)) < 0.5
-					ok_tile = uum * Data.ATLAS_PX >= float(tl.x) - 0.01 \
-							and uux * Data.ATLAS_PX <= float(tl.x) + tile_w + 0.01 \
-							and uvm * hms >= float(tl.y) - 0.01 \
-							and uvx * hms <= float(tl.y) + tile_h + 0.01
-				if ok_span and ok_origin and ok_tile:
-					uv_ok += 1
-				elif u_span_px < 0.0001 and v_span_px < 0.0001:
-					uv_zero_fail += 1  # the quad has no tile at all (zero UVs)
-				else:
-					uv_mismatch += 1
-					uv_bad_max = maxf(uv_bad_max, maxf(absf(u_span_px - want_u), absf(v_span_px - want_v)))
-					if uv_mismatch <= 8:
-						# FORENSICS: the id implied by the mesh UV (reverse
-						# lookup of the origin in the CURRENT rect table) vs
-						# the id re-derived from the CURRENT grid, the
-						# direct cell read at the emitter's sample point,
-						# and the stamp state.
-						var uv_id := -1
-						var uv_face := "?"
-						var mx := int(roundf(uum * Data.ATLAS_PX - 0.5))
-						var my := int(roundf(uvm * hms - 0.5))
-						for rk in rects:
-							var rkv: Vector2i = rects[rk]
-							if int(rkv.x) == mx and int(rkv.y) == my:
-								var parts: PackedStringArray = rk.split("_")
-								if parts.size() == 2:
-									uv_id = int(parts[0])
-									uv_face = parts[1]
-								break
-						# the emitter's sample cell, per face convention:
-						# fi0/1 (u=z,v=y,n=x) / fi2/3 (u=x,v=z,n=y) /
-						# fi4/5 (u=x,v=y,n=z).
-						var sx_c := kcell
-						var sy_c := pv2
-						var sz_c := pu2
-						if fi2 == 2 or fi2 == 3:
-							sx_c = pu2
-							sy_c = kcell
-							sz_c = pv2
-						elif fi2 == 4 or fi2 == 5:
-							sx_c = pu2
-							sz_c = kcell
-						var cell_direct := -1
-						if idok and int(c.data.size()) > si2:
-							cell_direct = int(c.get_local(4 * sx_c + 2, si2 * 16 + 4 * sy_c + 2, 4 * sz_c + 2))
-						print("UVBAD %d,%d slab=%d derived_id=%d uv_id=%s/%s cell_direct=%d stamp=%s stored=%s posspan=[%.1f,%.1f] uvspan_px=[%.1f,%.1f] uum_px=%.2f uvm_px=%.2f want=[%.1f,%.1f]" % [
-							int(c.cx), int(c.cz), si2, idv, uv_id, uv_face, cell_direct,
-							str(c.stamp()), str(c.low_stamps.get(si2, [])),
-							umax - umin, vmax - vmin,
-							u_span_px, v_span_px, uum * Data.ATLAS_PX, uvm * hms, want_u, want_v])
+					uv_mismatch += 1  # the emitting cell fell outside the grid
 	return {
 		"fog_n": fog_n,
 		"low_n": low_n,
@@ -7638,6 +7693,331 @@ func _r16_lod_slabcheck() -> Dictionary:
 		"uv_repeat_ok": uv_quads > 0 and uv_mismatch == 0,
 		"low_max_h_built": float(world.low_max_h),
 	}
+
+
+# AC-0252: the med/low AVERAGE-COLOR LADDER arm (AWECRAFT_LOGIC=ladder).
+# A small world (render radius 8) whose data-only FAR RING (the 1-chunk band
+# just outside the Euclidean circle, taxi span ~[R+1, R*1.42]) holds the
+# placeholder slabs. The low-start boundary splits the ring:
+#   MED (8x8x8, cell 2) = taxi < low_start;  LOW (4x4x4, cell 4) = taxi >= low_start.
+# Evidence:
+#   (a) a NEAR ring slab (small taxi) is tier 1 with the MED mesh signature
+#       (no UV, vertex color in [0,1], every quad edge a multiple of 2 blocks);
+#   (b) a FARTHER ring slab is tier 2 with the LOW signature (edges mult of 4);
+#   (c) the boundary RESPECTS the configurable low-start — raising it moves
+#       ring slabs from LOW to MED (their tier flips after the re-lower);
+#   (d) the AIR RULE — a sample is solid iff NOT more than half its volume is
+#       air (synthetic rows: 5/8 air -> air, 4/8 -> solid; 33/64 -> air,
+#       32/64 -> solid) + in-world air slabs carry no low mesh.
+func _ladder_test(spawn: Vector3) -> void:
+	var res := {
+		"ok": false,
+		"R": 8,
+		"low_start0": 10,
+		"low_start1": 12,
+		"low_start_eff0": 0,
+		"low_start_eff1": 0,
+		"ring_slabs": 0,
+		"med_slabs": 0,
+		"low_slabs": 0,
+		"med_taxis": [],
+		"low_taxis": [],
+		"med_mesh_ok": 0,
+		"med_mesh_total": 0,
+		"low_mesh_ok": 0,
+		"low_mesh_total": 0,
+		"boundary_flip_n": 0,
+		"boundary_flip_ok": false,
+		"air_synth_ok": false,
+		"air_synth": {},
+		"air_inworld_ok": false,
+		"air_inworld_checked": 0,
+		"air_inworld_bad": 0,
+		"lod_fcc_build_ms": 0.0,
+		"emit_cpp_med_ms": 0.0,
+		"emit_cpp_low_ms": 0.0,
+		"emit_cpp_textured_ms": 0.0,
+	}
+	var R := 8
+	world.fluid_sim_enabled = false
+	world.render_radius = R
+	# (a/b) initial boundary: MED = taxi < 10 (ring taxi 9), LOW = taxi >= 10.
+	Settings.values["low_start"] = 10
+	world.apply_low_start()
+	res["low_start_eff0"] = int(world.low_start_r)
+	world.recenter(spawn.x, spawn.z, true)
+	# Phase 1: let the circle build (data lands first, then the high meshes).
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 150000:
+		await get_tree().physics_frame
+		if _ladder_circle_built(R):
+			break
+	# Phase 2: let the low wave drain the far ring (wall-clock paced).
+	t0 = Time.get_ticks_msec()
+	var stable := 0
+	while Time.get_ticks_msec() - t0 < 150000:
+		await get_tree().physics_frame
+		if _ladder_no_pending_ring(R):
+			stable += 1
+			if stable >= 30:
+				break
+		else:
+			stable = 0
+	var pcx := int(world.last_pcx)
+	var pcz := int(world.last_pcz)
+	# ---- sample the ring: tier + mesh signature per low slab.
+	var first_med: Node3D = null
+	var first_med_si := -1
+	var first_low: Node3D = null
+	var first_low_si := -1
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		var dx := int(c.cx) - pcx
+		var dz := int(c.cz) - pcz
+		if dx * dx + dz * dz <= R * R:
+			continue
+		if not _ladder_is_ring(dx, dz):
+			continue
+		for j in range(int(c.low_slabs.size())):
+			var si := int(c.low_slabs[j])
+			var tier := int(c.low_tiers.get(si, -1))
+			var taxi := absi(dx) + absi(dz)
+			var mi: MeshInstance3D = c.low_instances[j] if j < c.low_instances.size() else null
+			res["ring_slabs"] += 1
+			if tier == 1:
+				res["med_slabs"] += 1
+				(res["med_taxis"] as Array).append(taxi)
+				res["med_mesh_total"] += 1
+				if _ladder_mesh_ok(mi, 8):
+					res["med_mesh_ok"] += 1
+				if first_med == null:
+					first_med = c
+					first_med_si = si
+			elif tier == 2:
+				res["low_slabs"] += 1
+				(res["low_taxis"] as Array).append(taxi)
+				res["low_mesh_total"] += 1
+				if _ladder_mesh_ok(mi, 4):
+					res["low_mesh_ok"] += 1
+				if first_low == null:
+					first_low = c
+					first_low_si = si
+	# C++ emit cost sample (the real worker path) on the first MED + LOW slab.
+	var mc: Variant = _ChunkScriptM.mesh_cpp()
+	if first_med != null and first_med_si >= 0:
+		var ta := Time.get_ticks_usec()
+		mc.low_emit_avg(mc.slab_copy(first_med.data), first_med_si, 8, world._lod_fcc_get())
+		res["emit_cpp_med_ms"] = (Time.get_ticks_usec() - ta) / 1000.0
+	if first_low != null and first_low_si >= 0:
+		var tb := Time.get_ticks_usec()
+		mc.low_emit_avg(mc.slab_copy(first_low.data), first_low_si, 4, world._lod_fcc_get())
+		res["emit_cpp_low_ms"] = (Time.get_ticks_usec() - tb) / 1000.0
+		var tc := Time.get_ticks_usec()
+		mc.low_emit(mc.slab_copy(first_low.data), first_low_si, world._low_ms_snap_get())
+		res["emit_cpp_textured_ms"] = (Time.get_ticks_usec() - tc) / 1000.0
+	res["lod_fcc_build_ms"] = float(world.lod_fcc_build_ms)
+	# (a) a NEAR ring slab is MED (8x8x8); (b) a FARTHER one is LOW (4x4x4).
+	var ab_ok: bool = res["med_slabs"] >= 1 and res["low_slabs"] >= 1 \
+			and res["med_mesh_ok"] == res["med_mesh_total"] and res["med_mesh_total"] > 0 \
+			and res["low_mesh_ok"] == res["low_mesh_total"] and res["low_mesh_total"] > 0
+	# (c) the boundary respects the configurable low-start: raise it 10 -> 12
+	# and the ring slabs at taxi 10/11 flip LOW -> MED after the re-lower.
+	var pre_tiers: Dictionary = {}
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		for s in c.low_slabs:
+			pre_tiers[key + ":" + str(int(s))] = int(c.low_tiers.get(int(s), -1))
+	Settings.values["low_start"] = 12
+	world.apply_low_start()
+	res["low_start_eff1"] = int(world.low_start_r)
+	t0 = Time.get_ticks_msec()
+	stable = 0
+	while Time.get_ticks_msec() - t0 < 150000:
+		await get_tree().physics_frame
+		if _ladder_no_pending_ring(R):
+			stable += 1
+			if stable >= 30:
+				break
+		else:
+			stable = 0
+	# Re-sample: count slabs that were LOW (tier 2) before and are MED (tier
+	# 1) now — the boundary moved outward across them.
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		var dx := int(c.cx) - pcx
+		var dz := int(c.cz) - pcz
+		if dx * dx + dz * dz <= R * R or not _ladder_is_ring(dx, dz):
+			continue
+		for s in c.low_slabs:
+			var k: String = key + ":" + str(int(s))
+			if pre_tiers.has(k) and int(pre_tiers[k]) == 2 and int(c.low_tiers.get(int(s), -1)) == 1:
+				res["boundary_flip_n"] += 1
+	res["boundary_flip_ok"] = res["boundary_flip_n"] >= 1
+	# (d) the AIR RULE — synthetic full-volume samples through the world's own
+	# _avg_grid_from_rows (the C++ twin's op order).
+	var med5: PackedByteArray = world._avg_grid_from_rows(_ladder_rows(2, 3), 8)["solid"]
+	var med4: PackedByteArray = world._avg_grid_from_rows(_ladder_rows(2, 4), 8)["solid"]
+	var low33: PackedByteArray = world._avg_grid_from_rows(_ladder_rows(4, 31), 4)["solid"]
+	var low32: PackedByteArray = world._avg_grid_from_rows(_ladder_rows(4, 32), 4)["solid"]
+	res["air_synth"] = {
+		"med_5of8_air": int(med5[0]),
+		"med_4of8_solid": int(med4[0]),
+		"low_33of64_air": int(low33[0]),
+		"low_32of64_solid": int(low32[0]),
+	}
+	res["air_synth_ok"] = int(med5[0]) == 0 and int(med4[0]) == 1 \
+			and int(low33[0]) == 0 and int(low32[0]) == 1
+	# In-world: an air slab (its avg grid fully air) carries NO low mesh.
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		var dx := int(c.cx) - pcx
+		var dz := int(c.cz) - pcz
+		if dx * dx + dz * dz <= R * R or not _ladder_is_ring(dx, dz):
+			continue
+		if c.data.is_empty():
+			continue
+		for si in range(c.data.size()):
+			if c.data[si] == null:
+				continue
+			var tier := int(c.low_tiers.get(si, 2))
+			var g: Dictionary = world._avg_slab_grid(c, si, 8 if tier == 1 else 4)
+			if _ladder_not_empty(g["solid"]):
+				continue
+			res["air_inworld_checked"] += 1
+			if c.has_low_si(si):
+				res["air_inworld_bad"] += 1
+	res["air_inworld_ok"] = res["air_inworld_bad"] == 0
+	res["ok"] = ab_ok and res["boundary_flip_ok"] and res["air_synth_ok"] and res["air_inworld_ok"]
+	Debug.result(res)
+	get_tree().quit()
+
+
+# AC-0252: true when the render circle is (largely) built — a proxy for the
+# ring data having landed (data precedes the high build).
+func _ladder_circle_built(R: int) -> bool:
+	var pcx := int(world.last_pcx)
+	var pcz := int(world.last_pcz)
+	var total := 0
+	var built := 0
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		var dx := int(c.cx) - pcx
+		var dz := int(c.cz) - pcz
+		if dx * dx + dz * dz > R * R:
+			continue
+		if int(c.band) > 2:
+			continue
+		total += 1
+		if c.mesh_built:
+			built += 1
+	return total > 0 and built >= total * 0.9
+
+
+# AC-0252: is this chunk in the data-only far ring (band 3)?
+func _ladder_is_ring(dx: int, dz: int) -> bool:
+	return int(world.band_of(dx, dz)) == 3
+
+
+# AC-0252: the MED/LOW mesh signature — vertex-color, NO UVs, every quad
+# edge a multiple of the tier's cell size (2 for MED, 4 for LOW).
+func _ladder_mesh_ok(mi: MeshInstance3D, G: int) -> bool:
+	if mi == null or mi.mesh == null:
+		return false
+	var arrs: Array = mi.mesh.surface_get_arrays(0)
+	var v: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+	var idx: PackedInt32Array = arrs[Mesh.ARRAY_INDEX]
+	var colarr: PackedColorArray = arrs[Mesh.ARRAY_COLOR]
+	var nrm: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
+	var uv_arr: Variant = arrs[Mesh.ARRAY_TEX_UV]
+	if uv_arr != null and (uv_arr as PackedVector2Array).size() > 0:
+		return false  # the avg LOD must be UV-free
+	if v.size() == 0 or colarr.size() != v.size():
+		return false
+	for i in range(colarr.size()):
+		if colarr[i].r < -0.01 or colarr[i].r > 1.01 or colarr[i].g < -0.01 \
+				or colarr[i].g > 1.01 or colarr[i].b < -0.01 or colarr[i].b > 1.01:
+			return false
+	var cellsz := 16.0 / float(G)
+	for q in range(idx.size() / 6):
+		var n0: Vector3 = nrm[int(idx[q * 6])]
+		var ax0 := absf(n0.x)
+		var ax1 := absf(n0.y)
+		var ax2 := absf(n0.z)
+		var axes: Array
+		if ax1 >= ax0 and ax1 >= ax2:
+			axes = [0, 2]
+		elif ax0 >= ax2:
+			axes = [2, 1]
+		else:
+			axes = [0, 1]
+		for ax in axes:
+			var mn := 1e30
+			var mx := -1e30
+			for t in range(4):
+				var p: Vector3 = v[int(idx[q * 6 + t])]
+				var cv: float = p[ax]
+				mn = minf(mn, cv)
+				mx = maxf(mx, cv)
+			var sp := mx - mn
+			if sp < 0.0001:
+				continue
+			var k := roundf(sp / cellsz)
+			if absf(sp - k * cellsz) > 0.01:
+				return false  # a quad edge that is not a whole number of cells
+	return true
+
+
+# AC-0252: no PENDING low slab in the far ring (the wave has drained it).
+func _ladder_no_pending_ring(R: int) -> bool:
+	var pcx := int(world.last_pcx)
+	var pcz := int(world.last_pcz)
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		var dx := int(c.cx) - pcx
+		var dz := int(c.cz) - pcz
+		if dx * dx + dz * dz <= R * R or not _ladder_is_ring(dx, dz):
+			continue
+		if c.data.is_empty():
+			continue
+		for si in range(c.data.size()):
+			if c.data[si] == null:
+				continue
+			if c.has_low_si(si):
+				continue
+			if int(c.low_failed.get(si, -1)) == int(c.data_gen):
+				continue  # terminal all-air (the fog holds)
+			return false
+	return true
+
+
+# AC-0252: a 16-row synthetic slab with n_solid non-air blocks in sample
+# (0,0,0) (cell x cell x cell blocks) — the rest air. Feeds the air-rule
+# synthetic test through the world's own grid builder.
+func _ladder_rows(cell: int, n_solid: int) -> Array:
+	var rows: Array = []
+	rows.resize(16)
+	for y in range(16):
+		var r := PackedByteArray()
+		r.resize(256)
+		rows[y] = r
+	var placed := 0
+	for y in range(cell):
+		for z in range(cell):
+			for x in range(cell):
+				if placed < n_solid:
+					rows[y][z * 16 + x] = 1
+					placed += 1
+	return rows
+
+
+# AC-0252: NOT _avg_grid_empty (the harness-local complement — avoids
+# calling the world's private on every slab in the hot loop).
+func _ladder_not_empty(solid: PackedByteArray) -> bool:
+	for i in range(solid.size()):
+		if int(solid[i]) != 0:
+			return true
+	return false
+
 
 
 # AC-0234: the window state snapshot (the harness evidence — the terrain
@@ -7845,9 +8225,11 @@ func _r16_air_chunk_test() -> Dictionary:
 	}
 
 
-# AC-0231 fix3: the WAVE ORDER check — drive the WAVE 2 global slab wave
-# SYNCHRONOUSLY (world._low_pick_slab + world._low_build_slab, no frames
-# between) and record the pick sequence. The wave is GLOBAL (all fog ->
+# AC-0231 fix3 (+ AC-0252 offload): the WAVE ORDER check — drive the WAVE 2
+# global slab wave through the REAL dispatch path (world._low_pick_slab +
+# world._low_dispatch_slab, no game frames between; the worker handoff is
+# pumped with the same world._low_poll the game loop runs) and record the
+# pick sequence. The wave is GLOBAL (all fog ->
 # all low -> all high, across ALL columns — not one whole column before
 # the next) only when:
 #   si_monotone_ok      : the sequence's slab indices are NON-DECREASING —
@@ -7859,14 +8241,22 @@ func _r16_air_chunk_test() -> Dictionary:
 #   first_layer_columns >= 2 : the first wave layer (si == the minimum)
 #                         spans SEVERAL columns (interleaved across all
 #                         columns — a per-column wave touches exactly one).
-# The builds are real (they just accelerate the wave the game would run
-# over ~1000 frames at 60 fps) and leave the far fill in the state the
-# natural wave reaches; the terminal-fog slabs (sampled all-air) end the
-# sequence — the wave advanced past them by design.
+# The dispatches + attaches are real (they just accelerate the wave the
+# game would run over ~1000 frames at 60 fps: the grid sample + emit run
+# on the TM workers, the attach + bookkeeping land in the normal
+# _low_handoff) and leave the far fill in the state the natural wave
+# reaches. A picked slab that is already in flight (dedupe verdict 0) or
+# pool-saturated (verdict 2) is pumped to its handoff before the next
+# recorded pick, so each recorded slab is attached before the next is
+# dispatched — the same pending-set walk the old synchronous build
+# produced. The terminal-fog slabs (sampled all-air) end the sequence —
+# the wave advanced past them by design.
 func _r16_wave_test() -> Dictionary:
 	var seq: Array = []
 	var cap := 4000
-	while seq.size() < cap:
+	var guard := 0  # spin safety (a wedged pool must never hang the arm)
+	while seq.size() < cap and guard < 200000:
+		guard += 1
 		var e: Dictionary = world._low_pick_slab()
 		if e.is_empty():
 			break
@@ -7874,8 +8264,23 @@ func _r16_wave_test() -> Dictionary:
 		if c == null or c.data.is_empty() or bool(c.mesh_built):
 			world._low_slab_none_key = ""
 			break
-		world._low_build_slab(c, int(e["si"]))
-		seq.append([int(e["si"]), int(e["cx"]), int(e["cz"])])
+		var d: int = world._low_dispatch_slab(c, int(e["si"]))
+		if d == 1:
+			seq.append([int(e["si"]), int(c.cx), int(c.cz)])
+		elif d < 0:
+			# the -1 verdict (a NULL slab — no grid, no emit): the air
+			# bookkeeping runs inline (scene/state work, no generation).
+			world._low_air_slab(c, int(e["si"]))
+			seq.append([int(e["si"]), int(c.cx), int(c.cz)])
+		else:
+			# d == 0 (the slab is in flight) or d == 2 (pool saturated):
+			# the slab leaves the pending set at its handoff — pump the
+			# NORMAL handoff until it lands, then re-pick.
+			var pguard := 0
+			while not world._low_tasks.is_empty() and pguard < 5000:
+				OS.delay_msec(1)
+				world._low_poll(16.7)
+				pguard += 1
 	if seq.is_empty():
 		# the WAVE 2 global wave already DRAINED (every far non-air slab
 		# already holds its low at sample time — the wave completed, which
@@ -12760,6 +13165,80 @@ func _nofallback_test(spawn: Vector3) -> void:
 			break  # one slab per chunk is enough (the emit is slab-local)
 	res["low_emit_pairs"] = le_pairs
 	res["low_emit_match"] = le_match
+	# AC-0252: the C++ low_emit_avg A/B — the med/low AVERAGE-COLOR emit
+	# (grid 8 = MED / 4 = LOW) must match the GDScript twin _avg_emit_slab
+	# on real slabs: EXACT vertices + indices, tolerant normals (the
+	# ArrayMesh re-normalization storage artifact) + colors (uint8-quantized
+	# storage), NO UV array on either side (the avg surface is vertex-
+	# color-only — the noise shader owns it), mh equal.
+	var ae_pairs := 0
+	var ae_match := 0
+	var ae_tried := 0
+	for key in world.chunks:
+		if ae_tried >= 4:
+			break
+		var c = world.chunks.get(key)
+		if c == null or c.data.is_empty():
+			continue
+		ae_tried += 1
+		var aesi := 0
+		while aesi < c.data.size() and c.data[aesi] == null:
+			aesi += 1
+		if aesi >= c.data.size():
+			continue
+		var fcc: PackedFloat32Array = world._lod_fcc_get()
+		for G2 in [8, 4]:
+			var grids2: Array = []
+			grids2.resize(c.data.size())
+			if c.data[aesi] != null:
+				grids2[aesi] = world._avg_slab_grid(c, aesi, G2)
+			if aesi > 0 and c.data[aesi - 1] != null:
+				grids2[aesi - 1] = world._avg_slab_grid(c, aesi - 1, G2)
+			if aesi + 1 < c.data.size() and c.data[aesi + 1] != null:
+				grids2[aesi + 1] = world._avg_slab_grid(c, aesi + 1, G2)
+			var g2: Dictionary = grids2[aesi] if grids2[aesi] != null else world._avg_slab_grid(c, aesi, G2)
+			var m_gd2: ArrayMesh = world._avg_emit_slab(g2, grids2, aesi, G2)
+			var res_c2: Dictionary = mc.low_emit_avg(mc.slab_copy(c.data), aesi, G2, fcc)
+			ae_pairs += 1
+			if bool(res_c2.get("empty", false)):
+				if m_gd2 == null:
+					ae_match += 1
+				continue
+			if m_gd2 == null:
+				continue
+			var sg2: Array = m_gd2.surface_get_arrays(0)
+			var okv2: bool = (sg2[Mesh.ARRAY_VERTEX] as PackedVector3Array) == res_c2["v"]
+			var oki2: bool = (sg2[Mesh.ARRAY_INDEX] as PackedInt32Array) == res_c2["i"]
+			var okh2: bool = is_equal_approx(m_gd2.get_aabb().size.y, float(res_c2.get("mh", -1.0)))
+			# NO UVs: the GD surface must not carry a UV array (the avg
+			# contract — the noise shader material owns the surface).
+			var oku2: bool = (sg2[Mesh.ARRAY_TEX_UV] == null) or ((sg2[Mesh.ARRAY_TEX_UV] as PackedVector2Array).is_empty())
+			var dnn3: PackedVector3Array = sg2[Mesh.ARRAY_NORMAL] as PackedVector3Array
+			var nnn3: PackedVector3Array = res_c2["n"] as PackedVector3Array
+			var okn3 := dnn3.size() == nnn3.size()
+			if okn3:
+				for q3 in range(dnn3.size()):
+					var dna3 := dnn3[q3] - nnn3[q3]
+					if absf(dna3.x) > 1e-4 or absf(dna3.y) > 1e-4 or absf(dna3.z) > 1e-4:
+						okn3 = false
+						break
+			var dcc3: PackedColorArray = sg2[Mesh.ARRAY_COLOR] as PackedColorArray
+			var ccc3: PackedColorArray = res_c2["c"] as PackedColorArray
+			var okc3 := dcc3.size() == ccc3.size()
+			if okc3:
+				for q3 in range(dcc3.size()):
+					if absf(dcc3[q3].r - ccc3[q3].r) > 0.01 or absf(dcc3[q3].g - ccc3[q3].g) > 0.01 or absf(dcc3[q3].b - ccc3[q3].b) > 0.01 or absf(dcc3[q3].a - ccc3[q3].a) > 0.01:
+						okc3 = false
+						break
+			if not (okv2 and okn3 and okc3 and oku2 and oki2 and okh2):
+				if res.get("avg_emit_debug", "") == "":
+					res["avg_emit_debug"] = "chunk=" + key + " si=" + str(aesi) + " G=" + str(G2) + " v=" + str(okv2) + " n=" + str(okn3) + " c=" + str(okc3) + " u=" + str(oku2) + " i=" + str(oki2) + " h=" + str(okh2)
+					print("AVGEMIT_AB " + res["avg_emit_debug"])
+			if okv2 and okn3 and okc3 and oku2 and oki2 and okh2:
+				ae_match += 1
+		break  # one chunk x both grids is enough (the emit is slab-local)
+	res["avg_emit_pairs"] = ae_pairs
+	res["avg_emit_match"] = ae_match
 	res["mesh_cpp_builds"] = int(world.mesh_cpp_builds) - m0_mesh
 	res["gen_cpp_works"] = int(world.gen_cpp_works) - m0_gen
 	res["strips_cpp_calls"] = int(world.strips_cpp_calls) - m0_strips
@@ -12776,7 +13255,7 @@ func _nofallback_test(spawn: Vector3) -> void:
 	# while the GDScript _slab_write_gd reference sentinel stays 0.
 	res["slab_cpp_sets"] = int(ChunkIO.slab_cpp_sets) - m0_sets
 	res["slab_gd_write_calls"] = int(ChunkIO.slab_gd_write_calls) - m0_gdset
-	res["ok"] = res["mesh_cpp_builds"] > 0 and res["gen_cpp_works"] > 0 and res["strips_cpp_calls"] > 0 and res["chunkio_cpp_slab_decodes"] > 0 and res["chunkio_cpp_encode_sections"] >= 2 and res["chunkio_cpp_decode_sections"] >= 2 and res["gd_strips_calls"] == 0 and res["gd_light_pull_calls"] == 0 and res["mesh_chunks"] >= 16 and torch_placed and torch_light > 5 and rt_ok and res["slab_cpp_sets"] > 0 and res["slab_gd_write_calls"] == 0 and res["low_emit_pairs"] > 0 and res["low_emit_match"] == res["low_emit_pairs"]
+	res["ok"] = res["mesh_cpp_builds"] > 0 and res["gen_cpp_works"] > 0 and res["strips_cpp_calls"] > 0 and res["chunkio_cpp_slab_decodes"] > 0 and res["chunkio_cpp_encode_sections"] >= 2 and res["chunkio_cpp_decode_sections"] >= 2 and res["gd_strips_calls"] == 0 and res["gd_light_pull_calls"] == 0 and res["mesh_chunks"] >= 16 and torch_placed and torch_light > 5 and rt_ok and res["slab_cpp_sets"] > 0 and res["slab_gd_write_calls"] == 0 and res["low_emit_pairs"] > 0 and res["low_emit_match"] == res["low_emit_pairs"] and res["avg_emit_pairs"] >= 2 and res["avg_emit_match"] == res["avg_emit_pairs"]
 	res["wall_ms"] = Time.get_ticks_msec() - t0
 	Debug.result(res)
 	get_tree().quit()

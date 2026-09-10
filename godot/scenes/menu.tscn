@@ -467,6 +467,31 @@ theme_override_font_sizes/font_size = 15
 custom_minimum_size = Vector2(44, 0)
 horizontal_alignment = 2
 
+[node name="LowStartRow" type="HBoxContainer" parent="Layer/OptionsBox/Center/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="RowLabel" type="Label" parent="Layer/OptionsBox/Center/VBox/LowStartRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+custom_minimum_size = Vector2(170, 0)
+text = "Low LOD start"
+
+[node name="LowStartSlider" type="HSlider" parent="Layer/OptionsBox/Center/VBox/LowStartRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 24)
+min_value = 51.0
+max_value = 71.0
+step = 1.0
+value = 58.0
+
+[node name="LowStartVal" type="Label" parent="Layer/OptionsBox/Center/VBox/LowStartRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+custom_minimum_size = Vector2(44, 0)
+horizontal_alignment = 2
+
 [node name="ResRow" type="HBoxContainer" parent="Layer/OptionsBox/Center/VBox"]
 layout_mode = 2
 theme_override_constants/separation = 10
@@ -541,6 +566,7 @@ text = "Back"
 [connection signal="value_changed" from="Layer/OptionsBox/Center/VBox/FlightRow/FlightSlider" to="." method="_on_flight_changed"]
 [connection signal="value_changed" from="Layer/OptionsBox/Center/VBox/ChunkRow/ChunkSlider" to="." method="_on_chunk_changed"]
 [connection signal="value_changed" from="Layer/OptionsBox/Center/VBox/FogStartRow/FogStartSlider" to="." method="_on_fogstart_changed"]
+[connection signal="value_changed" from="Layer/OptionsBox/Center/VBox/LowStartRow/LowStartSlider" to="." method="_on_lowstart_changed"]
 [connection signal="item_selected" from="Layer/OptionsBox/Center/VBox/ResRow/ResOption" to="." method="_on_res_selected"]
 [connection signal="toggled" from="Layer/OptionsBox/Center/VBox/FullscreenCheck" to="." method="_on_full_toggled"]
 [connection signal="toggled" from="Layer/OptionsBox/Center/VBox/HungerCheck" to="." method="_on_hunger_toggled"]

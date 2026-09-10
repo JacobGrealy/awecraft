@@ -517,12 +517,17 @@ func _rescore_step() -> void:
 # frontier; (2b) the far global SLAB wave — OUTSIDE the circle, the
 # SMALLEST slab index FIRST across all columns (all si=0 slabs first,
 # then all si=1, ... — ties by rank), never one whole column before the
-# next. Each slab gets the per-slab textured
-# low at 4x4x4 across that 16x16x16 slab — 64 coarse cells of 4x4x4 blocks
-# (versus 4096 at full), the cells' EDITED data (after gen) sampled so
-# player edits show, AIR cells skipped (a sparse tree slab stays as small
-# quads with shape, NOT one 16x16x16 giant block), the 2D greedy merge of
-# same-type neighbors, on the MAIN thread. TEXTURE MAPPING (fix3): blocks
+# next. Each pending slab gets its band-tier AVERAGE-COLOR placeholder
+# (AC-0252: MED 8x8x8 inside the low-start boundary, LOW 4x4x4 outside
+# it) — and the grid sample + emit of it run on the TM WORKER POOL (the
+# C++ low_emit_avg on a value-copied slab column: ZERO generation on the
+# main thread). The main thread only dispatches (a ~20 KB slab copy +
+# task enqueue) and, when the result lands, does the scene-tree attach +
+# the per-slab bookkeeping (the _low_handoff); a slab whose DATA is null
+# has nothing to emit — its air bookkeeping runs inline (_low_air_slab).
+# The TEXTURED 4x4x4 emit (64 coarse cells of 4x4x4 blocks, the 2D
+# greedy merge of same-type neighbors) stays in the tree, DORMANT with
+# the band split (the A/B reference). TEXTURE MAPPING (fix3): blocks
 # WITH a merged-atlas strip (solid, non-cutout) use REPEATING UVs — 31px
 # per world block, the texture repeats 4x across each 4-block quad (the
 # qwrite_merged convention — NOT stretched, and the 512x128 strip always
@@ -547,6 +552,15 @@ func _rescore_step() -> void:
 # never-built slabs. low_downgrade_n must stay 0.
 const LOW_GRID := 4          # coarse cells per axis (4x4x4 = 64 cells/slab)
 const LOW_CELL_BLOCKS := 4   # world blocks per coarse cell (4*4 = 16 = 1 slab)
+# AC-0252: the MED tier — 8x8x8 samples per 16x16x16 slab; each sample is a
+# 2x2x2 = 8 real-block volume (the user's "each cube is 4 of the actual
+# cubes" reads as 2 blocks per axis = 8 cells — see the AC-0252 report).
+# Both avg tiers read the FULL sample volume (the whole 4096-block slab) —
+# a sample is AIR when MORE THAN HALF its volume is air (>=5 of 8 for med,
+# >=33 of 64 for low) and its per-face color = the average of the cached
+# per-block-face colors over its NON-AIR blocks (vertex colors, no UVs).
+const MED_GRID := 8
+const MED_CELL_BLOCKS := 2
 # the textured-low pass builds ONE candidate per frame (the rescan after
 # a build is the cost; 1/frame keeps ahead of the data landings, which
 # arrive at the TG rate — the far fill is data-limited, not build-limited).
@@ -609,6 +623,13 @@ const LOW_POLL_BUDGET_MS := 4.0    # AC-0236 part 2: the per-frame wall-clock ca
                                    # low HANDOFFS (the attach cost, ~0.2 ms each)
                                    # whole circle+ring fits; a capped scan leaves the
                                    # gate CLOSED rather than proving drained)
+# AC-0252: the med/low band split. The MED (8x8x8) tier owns the placeholder
+# region; the LOW (4x4x4) tier renders ONLY from the configurable low-start
+# distance (taxi chunks — the sim_dist metric) out to the render edge.
+# low_start_r = the effective boundary (recomputed by apply_low_start; the
+# floor is band0_r — the tier-1 sim "high circle" — so the low band can
+# never start inside the sim diamond).
+var low_start_r := 42
 var _low_fog_mat: StandardMaterial3D = null
 var _low_fog_mesh: ArrayMesh = null  # pre-baked 16x16x16 box (shared by every MultiMesh)
 var _low_fog_color := Color(0.55, 0.68, 0.85)
@@ -1552,6 +1573,409 @@ func _low_surface(v: PackedVector3Array, i: PackedInt32Array, n: PackedVector3Ar
 		a[Mesh.ARRAY_TEX_UV] = u
 	return a
 
+# =====================================================================
+# AC-0252 — the med/low AVERAGE-COLOR tiers (8x8x8 med / 4x4x4 low)
+# =====================================================================
+# Both tiers read the FULL volume of every sample (the whole 16x16x16 slab:
+# 16 row_bytes rows, 4096 ids) instead of the old one-point-per-cell sample.
+# A sample is AIR when MORE THAN HALF its volume is air (>=5 of 8 for med,
+# >=33 of 64 for low); its per-face color = the average of the CACHED
+# per-block-face average colors over the sample's NON-AIR blocks. The emit
+# is the same 6-face outermost-shell scan + greedy merge as the textured
+# low, but the merge key is the QUANTIZED FACE COLOR + the outermost plane
+# (a color has no block id) and the vertex color IS that face color
+# (no UVs — the noise shader, res://core/lod_avg.gdshader, breaks up the
+# flat faces). C++ twin: gdext/src/mesh.cpp low_emit_avg (the TM pool
+# path — the ONLY emit the game runs). TEST-ONLY (AC-0252 offload): this
+# GDScript twin is referenced ONLY by the harness (the meshprobe A/B
+# equivalence check + the ladder air-rule arm) — the game path (world.gd
+# runtime / chunk.gd) never calls it: the main-thread lanes do dispatch
+# + the _low_handoff attach/bookkeeping, never the grid sample or emit.
+
+var _lod_fcc: PackedFloat32Array = PackedFloat32Array()  # 256 ids x 6 dirs x 3 (linear)
+var _lod_fcc_dirty := true
+var lod_fcc_build_ms := 0.0   # the one-time face-color cache build cost (AC-0252 report)
+var lod_fcc_tiles := 0        # (id, dir) tiles averaged (evidence)
+var _lod_avg_material: ShaderMaterial = null
+var _lod_day_last := Color(-1.0, -1.0, -1.0)  # AC-0252: the "day" uniform's last value (skip the per-frame set when unchanged)
+
+# AC-0252: the (block id x 6 face direction) AVERAGE COLOR cache — built
+# ONCE per atlas on the main thread (the atlas swap marks it dirty; the
+# C++ workers get a value copy in the dispatch entry, the same immutable-
+# snapshot pattern as _low_ms_snap_get). Direction map = the mesh face
+# table: 0/1/4/5 (±X/±Z) -> the "side" rect, 2 (+Y) -> "top", 3 (-Y) ->
+# "bottom". Colors are AVERAGED in sRGB (the stored pixel space — the
+# perceptually-right "average texture color") and converted to LINEAR
+# once (the vertex color is consumed linear by the spatial shader).
+func _lod_fcc_get() -> PackedFloat32Array:
+	if _lod_fcc_dirty or _lod_fcc.is_empty():
+		_lod_fcc_dirty = false
+		var a := PackedFloat32Array()
+		a.resize(256 * 18)
+		var img: Image = null
+		if Data.atlas_tex != null:
+			img = Data.atlas_tex.get_image()
+		if img != null and not Data.atlas_rects.is_empty():
+			var t0 := Time.get_ticks_usec()
+			var nw := int(img.get_width())
+			var nh := int(img.get_height())
+			for bk in Data.atlas_rects:
+				var id := int(bk)
+				if id < 0 or id > 255:
+					continue
+				var faces: Dictionary = Data.atlas_rects[bk]
+				for d in range(6):
+					var fname := "side"
+					if d == 2:
+						fname = "top"
+					elif d == 3:
+						fname = "bottom"
+					var fr = faces.get(fname, null)
+					if not (fr is Array) or (fr as Array).size() < 4:
+						continue
+					var frr: Array = fr
+					var x0 := int(frr[0])
+					var y0 := int(frr[1])
+					var w := int(frr[2])
+					var h := int(frr[3])
+					if w <= 0 or h <= 0:
+						continue
+					var sr := 0.0
+					var sg := 0.0
+					var sb := 0.0
+					var np := 0
+					for py in range(h):
+						var y := y0 + py
+						if y < 0 or y >= nh:
+							continue
+						for px in range(w):
+							var x := x0 + px
+							if x < 0 or x >= nw:
+								continue
+							var pc: Color = img.get_pixel(x, y)
+							sr += pc.r
+							sg += pc.g
+							sb += pc.b
+							np += 1
+					if np > 0:
+						var lc := Color(sr / float(np), sg / float(np), sb / float(np)).srgb_to_linear()
+						a[id * 18 + d * 3 + 0] = lc.r
+						a[id * 18 + d * 3 + 1] = lc.g
+						a[id * 18 + d * 3 + 2] = lc.b
+						lod_fcc_tiles += 1
+			lod_fcc_build_ms = (Time.get_ticks_usec() - t0) / 1000.0
+		_lod_fcc = a
+	return _lod_fcc
+
+# AC-0252: the med/low avg-color instance material — the NOISE SHADER
+# (static per-fragment hash of the fragment world position, ~6% amplitude,
+# stable under camera motion — no flicker). ONLY the med/low avg-color
+# instances wear it; the high path / fog / cap materials are untouched.
+# The "day" uniform tracks the same sky_display color the fog box uses
+# (the placeholders darkened at night before AC-0252 — the avg LODs keep
+# that; it defaults to white so a fresh material is never black).
+func _lod_avg_mat() -> ShaderMaterial:
+	if _lod_avg_material == null:
+		var sh := load("res://core/lod_avg.gdshader")
+		_lod_avg_material = ShaderMaterial.new()
+		_lod_avg_material.shader = sh
+		_lod_avg_material.set_shader_parameter("day", Color(1.0, 1.0, 1.0))
+	return _lod_avg_material
+
+# AC-0252: the MED/LOW band split (the tier of a placeholder chunk at
+# (dx, dz) from the player column): 1 = MED (8x8x8), 2 = LOW (4x4x4).
+# Taxi metric — the same distance family as band0_r (sim_dist).
+func _lod_tier_of(dx: int, dz: int) -> int:
+	if absi(dx) + absi(dz) >= low_start_r:
+		return 2
+	return 1
+
+# AC-0252: the user setting (Settings "low_start", taxi chunks) takes
+# effect. The med/low split lives in the data-only FAR RING — the 1-chunk
+# band just outside the Euclidean render circle, whose TAXI span is
+# [render_radius + 1, ~render_radius*sqrt(2)] (the diagonal chunks are
+# ~R*1.41 in taxi). The effective boundary is clamped to that ring: ABOVE
+# the high circle (the low band can never start inside the circle — the
+# circle is the full-fidelity high region) and at/below the render edge
+# (the ring's outer taxi). MED (8x8x8) owns taxi < low_start_r, LOW (4x4x4)
+# owns taxi >= low_start_r (both in the ring, plus the in-r pending slabs,
+# which are always taxi < render_radius < low_start_r, so always MED). A
+# boundary move re-stales every live low slab whose tier changed (the
+# pending walks compare c.low_tiers against the LIVE tier), so invalidate
+# the cached none-verdicts + the in-r drain proof (taken under the OLD
+# boundary) and re-stamp the queue.
+func apply_low_start() -> void:
+	var lo := render_radius + 1
+	var hi := int(floorf(1.42 * float(render_radius))) + 1
+	low_start_r = clampi(int(Settings.values.get("low_start", lo)), lo, hi)
+	_low_none_key = ""
+	_low_slab_none_key = ""
+	_low_inr_invalidate()
+	_rescore_kick()
+
+# AC-0252: the core average-color grid over 16 full 256-byte slab ROWS
+# (rows[local_y], local_y 0..15 — the chunk slab at si, edited data).
+# G = 8 (med, 2x2x2 samples) or 4 (low, 4x4x4 samples). Returns
+# {solid: PackedByteArray(G^3), cols: PackedFloat32Array(G^3 x 18)} — a
+# sample is solid iff NOT more than half its (16/G)^3 volume is air; its
+# 18 floats = the 6 face-direction average colors (linear, see _lod_fcc_get).
+# The per-block accumulation order (py, pz, px loops) is the C++ twin's
+# float32 op order (mesh.cpp low_emit_avg — the equivalence contract).
+func _avg_grid_from_rows(rows: Array, G: int) -> Dictionary:
+	var solid := PackedByteArray()
+	solid.resize(G * G * G)
+	var cols := PackedFloat32Array()
+	cols.resize(G * G * G * 18)
+	var cell := int(16.0 / float(G))
+	var tot := cell * cell * cell
+	var fcc := _lod_fcc_get()
+	for cy in range(G):
+		for cz in range(G):
+			for cx in range(G):
+				var air := 0
+				var acc := PackedFloat32Array()
+				acc.resize(18)
+				var cnt := 0
+				for py in range(cell):
+					var row: PackedByteArray = rows[cy * cell + py]
+					var zr := (cz * cell) * 16
+					var xo := cx * cell
+					for pz in range(cell):
+						var base: int = zr + pz * 16 + xo
+						for px in range(cell):
+							var bid: int = row[base + px]
+							if bid == 0:
+								air += 1
+								continue
+							cnt += 1
+							var fo: int = bid * 18
+							for d in range(18):
+								acc[d] += fcc[fo + d]
+				var idx := cy * G * G + cz * G + cx
+				if air * 2 > tot or cnt == 0:
+					solid[idx] = 0
+				else:
+					solid[idx] = 1
+					var inv := 1.0 / float(cnt)
+					var co: int = idx * 18
+					for d in range(18):
+						cols[co + d] = acc[d] * inv
+	return {"solid": solid, "cols": cols}
+
+# AC-0252: the per-slab average-color grid (the chunk read wrapper: 16
+# row_bytes rows of the edited slab; null slab = the all-air grid).
+func _avg_slab_grid(c: Node3D, si: int, G: int) -> Dictionary:
+	if c.data.is_empty() or si < 0 or si >= c.data.size() or c.data[si] == null:
+		# null slab = the all-air grid (a zero-filled row set).
+		var zr := PackedByteArray()
+		zr.resize(256)
+		var rows: Array = []
+		rows.resize(16)
+		for y in range(16):
+			rows[y] = zr
+		return _avg_grid_from_rows(rows, G)
+	var rows: Array = []
+	rows.resize(16)
+	var y0 := si * 16
+	for y in range(16):
+		rows[y] = c.row_bytes(y0 + y)
+	return _avg_grid_from_rows(rows, G)
+
+# AC-0252: all-air test for an average-color grid's solid mask.
+func _avg_grid_empty(solid: PackedByteArray) -> bool:
+	for i in range(solid.size()):
+		if int(solid[i]) != 0:
+			return false
+	return true
+
+# AC-0252: the solidity-neighbor of coarse cell cc along the face normal —
+# inside the grid -> the grid; across the slab above/below -> the NEIGHBOR
+# SLAB's solid mask (a solid neighbor culls — the avg tiers have no block
+# id, so "same id" collapses to "solid"); off the column -> air (0).
+func _avg_neighbor_solid(g: Dictionary, grids: Array, si: int, cc: Array, n: Vector3i, nax: int, G: int) -> int:
+	var ix := int(cc[0])
+	var iy := int(cc[1])
+	var iz := int(cc[2])
+	var s: PackedByteArray = g["solid"]
+	if nax == 0:
+		var nx := ix + n.x
+		if nx < 0 or nx >= G:
+			return 0
+		return int(s[nx + iz * G + iy * G * G])
+	if nax == 2:
+		var nz := iz + n.z
+		if nz < 0 or nz >= G:
+			return 0
+		return int(s[ix + nz * G + iy * G * G])
+	var ny := iy + n.y
+	if ny < 0 or ny >= G:
+		var gsi := si + n.y
+		if gsi < 0 or gsi >= grids.size():
+			return 0
+		var ng = grids[gsi]
+		if ng == null:
+			return 0
+		var ng2: PackedByteArray = ng["solid"]
+		var gyb := 0 if n.y > 0 else G - 1
+		return int(ng2[ix + iz * G + gyb * G * G])
+	return int(s[ix + iz * G + ny * G * G])
+
+# AC-0252: the GD TWIN of the C++ low_emit_avg (the worker-side emit the
+# TM pool runs for BOTH the in-r lane and the far wave — TEST-ONLY now:
+# the game lanes dispatch the C++ emit and never call this twin; it serves
+# the harness equivalence check only; same float32 op order).
+# g = {solid, cols} for the target slab; grids = the column array (si-1/
+# si/si+1 filled, the slab-boundary culling reads their solid masks);
+# G = MED_GRID (8) or LOW_GRID (4). Returns null when nothing emits (every
+# sample air / every exposed face cullled), else the vertex-color ArrayMesh
+# (NO UVs — the noise shader material owns the surface). Vertices are
+# SLAB-LOCAL 0..16 (the instance sits at (0, si*16, 0), like the low).
+func _avg_emit_slab(g: Dictionary, grids: Array, si: int, G: int) -> ArrayMesh:
+	var s: PackedByteArray = g["solid"]
+	var cols: PackedFloat32Array = g["cols"]
+	var cell := float(16.0) / float(G)
+	var av := PackedVector3Array()
+	var an := PackedVector3Array()
+	var ac := PackedColorArray()
+	var ai := PackedInt32Array()
+	# per face: the (u, v) axes (0=x, 1=y, 2=z) — the mesh.cpp convention:
+	# fi0/1 (±X): u=z, v=y; fi2/3 (±Y): u=x, v=z; fi4/5 (±Z): u=x, v=y.
+	var u_ax: Array = [2, 2, 0, 0, 0, 0]
+	var v_ax: Array = [1, 1, 2, 2, 1, 1]
+	for fi in range(6):
+		var n: Vector3i = VoxelMath.FACES[fi].n
+		var nax := 0
+		if n.x != 0:
+			nax = 0
+		elif n.y != 0:
+			nax = 1
+		else:
+			nax = 2
+		var ua := int(u_ax[fi])
+		var va := int(v_ax[fi])
+		var ns: int = n.x if nax == 0 else (n.y if nax == 1 else n.z)
+		# the face-eligibility map m[pv][pu] = the merge key (the
+		# QUANTIZED face color x16 + the outermost plane k+1) or -1. The
+		# scan walks the normal axis FROM THE VIEWING SIDE INWARD and keeps
+		# the FIRST solid sample whose neighbor (the grid, the slab
+		# above/below via the solid masks, or air off the column) is AIR —
+		# the outermost shell; sandwiched samples never emit. The quantized
+		# color (31 levels/channel) is the merge key's identity (there is
+		# no block id to merge on): same color + same plane merges.
+		var m: Array = []
+		var kmap: Array = []
+		for pv in range(G):
+			var mrow: Array = []
+			var krow: Array = []
+			for pu in range(G):
+				var cc := [0, 0, 0]
+				cc[ua] = pu
+				cc[va] = pv
+				var keyv := -1
+				var kk := 0
+				var k: int = G - 1 if ns > 0 else 0
+				while kk < G:
+					cc[nax] = k
+					var idx: int = int(cc[0]) + int(cc[2]) * G + int(cc[1]) * G * G
+					if int(s[idx]) != 0:
+						if _avg_neighbor_solid(g, grids, si, cc, n, nax, G) == 0:
+							var cr: float = cols[idx * 18 + fi * 3 + 0]
+							var cg: float = cols[idx * 18 + fi * 3 + 1]
+							var cb: float = cols[idx * 18 + fi * 3 + 2]
+							var q := int(cr * 31.0) * 1024 + int(cg * 31.0) * 32 + int(cb * 31.0)
+							keyv = q * 16 + (k + 1)
+						break
+					k += -1 if ns > 0 else 1
+					kk += 1
+				mrow.append(keyv)
+				krow.append(k)
+			m.append(mrow)
+			kmap.append(krow)
+		# the greedy merge over the plane: W along u, H along v (same key
+		# in the strip below — the v-merge is legal: the quad is one color,
+		# coplanar, the merged cells are adjacent).
+		for pv in range(G):
+			var pu := 0
+			while pu < G:
+				var key2: int = int(m[pv][pu])
+				if key2 < 0:
+					pu += 1
+					continue
+				var W := 1
+				while pu + W < G and int(m[pv][pu + W]) == key2:
+					W += 1
+				var H := 1
+				while pv + H < G:
+					var okh := true
+					for u2 in range(W):
+						if int(m[pv + H][pu + u2]) != key2:
+							okh = false
+							break
+					if not okh:
+						break
+					H += 1
+				# the emitting cell of the quad origin + its slab-local
+				# world origin (a grid cell is (16/G) blocks).
+				var cc0 := [0, 0, 0]
+				cc0[ua] = pu
+				cc0[va] = pv
+				cc0[nax] = int(kmap[pv][pu])
+				var wx := float(cc0[0]) * cell
+				var wy := float(cc0[1]) * cell
+				var wz := float(cc0[2]) * cell
+				if nax == 0:
+					wx += cell if n.x > 0 else 0.0
+				elif nax == 1:
+					wy += cell if n.y > 0 else 0.0
+				else:
+					wz += cell if n.z > 0 else 0.0
+				# the quad color = the ORIGIN cell's face color (every
+				# merged cell shares the quantized key — the sub-quantized
+				# difference is invisible and keeps the twins byte-stable).
+				var oidx: int = int(cc0[0]) + int(cc0[2]) * G + int(cc0[1]) * G * G
+				var qcr: float = cols[oidx * 18 + fi * 3 + 0]
+				var qcg: float = cols[oidx * 18 + fi * 3 + 1]
+				var qcb: float = cols[oidx * 18 + fi * 3 + 2]
+				# AC-0252: av is a PackedVector3Array, so av.size() is the
+				# VERTEX count already (the C++ twin's flat-float av needs the
+				# /3; this twin must not). The quad's first vertex index.
+				var cb0 := av.size()
+				var corners: Array = VoxelMath.FACES[fi].c
+				for j in range(4):
+					var cvx: float = float((corners[j] as Vector3).x)
+					var cvy: float = float((corners[j] as Vector3).y)
+					var cvz: float = float((corners[j] as Vector3).z)
+					var px := wx
+					var py := wy
+					var pz := wz
+					if fi == 0 or fi == 1:  # u = z (W cells), v = y (H cells)
+						py = wy + cvy * float(H) * cell
+						pz = wz + cvz * float(W) * cell
+					elif fi == 2 or fi == 3:  # u = x (W cells), v = z (H cells)
+						px = wx + cvx * float(W) * cell
+						pz = wz + cvz * float(H) * cell
+					else:  # fi 4/5: u = x (W cells), v = y (H cells)
+						px = wx + cvx * float(W) * cell
+						py = wy + cvy * float(H) * cell
+					av.append(Vector3(px, py, pz))
+					an.append(n)
+					ac.append(Color(qcr, qcg, qcb, 1.0))
+				ai.append(cb0)
+				ai.append(cb0 + 2)
+				ai.append(cb0 + 1)
+				ai.append(cb0)
+				ai.append(cb0 + 3)
+				ai.append(cb0 + 2)
+				for v2 in range(pv, pv + H):
+					for u2 in range(pu, pu + W):
+						m[v2][u2] = -1
+				pu += W
+	if av.is_empty():
+		return null
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _low_surface(av, ai, an, ac))
+	return mesh
+
 # AC-0231 rewrite: per-slab 4x4x4 sampling of the (EDITED) slab data — the
 # low grid (64 cells of 4x4x4 blocks, layout x + z*4 + y*16). ONE sample per
 # coarse cell, at the center of its 4x4x4 block span (local
@@ -1825,12 +2249,14 @@ func _low_emit_slab(g: PackedByteArray, grids: Array, si: int) -> ArrayMesh:
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _low_surface(av, ai, an, ac, au))
 	return mesh
 
-# AC-0231 fix3: build the per-slab textured lows for a chunk — the FULL
-# COLUMN pass (the R16 air-chunk test still uses it): every PENDING slab
+# AC-0231 fix3: build the per-slab lows for a chunk — the FULL COLUMN
+# pass (harness-only drive — the R16 air-chunk test uses it; the live
+# WAVE 2 lanes dispatch slab-by-slab themselves): every PENDING slab
 # (the fogged-not-low slabs + — when the chunk is stale, edited after the
 # low — every low slab to rebuild from the edited data), ascending si.
-# The per-slab core is _low_build_slab (the WAVE 2 global slab wave calls
-# it one slab at a time). A slab's low REPLACES its fog at the slab's Y.
+# The per-slab core is _low_build_slab — the worker dispatch + the
+# null-slab air bookkeeping (NO main-thread generation). A slab's low
+# REPLACES its fog at the slab's Y.
 func _low_build(c: Node3D) -> void:
 	if _low_fog_mesh == null:
 		return
@@ -1859,6 +2285,7 @@ func _low_build(c: Node3D) -> void:
 func _low_pending_sis(c: Node3D) -> Array:
 	var out: Array = []
 	var km := _vwin_col_kept(c)  # AC-0234: this tower's kept mask (per pick)
+	var tier := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)  # AC-0252: the live band tier
 	var f := 0
 	var p := 0
 	var l := 0
@@ -1887,8 +2314,11 @@ func _low_pending_sis(c: Node3D) -> Array:
 			# kept fog is always kept — the check is the cap's).
 			if int(c.low_failed.get(si, -1)) != int(c.data_gen) and si < km.size() and km[si] == 1:
 				out.append(si)
-		elif c.low_stamps.get(si, []) != c.stamp():
+		elif c.low_stamps.get(si, []) != c.stamp() \
+				or c.low_tiers.get(si, -1) != tier:
 			# a LOW slab older than the chunk stamp (edited after the low)
+			# or built at a DIFFERENT band tier (AC-0252: the low-start
+			# boundary moved since the build — re-lower at the live tier)
 			# — PER-SLAB staleness: the finished slabs of a partially-
 			# lowered chunk stay fresh while its other slabs are fogged.
 			out.append(si)
@@ -1916,6 +2346,7 @@ func _low_pending_sis(c: Node3D) -> Array:
 # caps hold — see _low_pending_sis).
 func _low_pending_si(c: Node3D) -> int:
 	var km := _vwin_col_kept(c)  # AC-0234: this tower's kept mask (per pick)
+	var tier := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)  # AC-0252: the live band tier
 	var f := 0
 	var p := 0
 	var l := 0
@@ -1943,8 +2374,9 @@ func _low_pending_si(c: Node3D) -> int:
 				w = si
 				break
 			continue
-		if c.low_stamps.get(si, []) != c.stamp():
-			w = si  # a stale LOW slab (edited after the low)
+		if c.low_stamps.get(si, []) != c.stamp() \
+				or c.low_tiers.get(si, -1) != tier:
+			w = si  # a stale LOW slab (edited after the low / tier moved)
 			break
 	# AC-0240: the fog wave off - the fog set was the pending entry ticket
 	# for kept data slabs. With it gone, a kept slab with data and NO
@@ -1970,73 +2402,60 @@ func _low_pending_si(c: Node3D) -> int:
 func _low_any_stale(c: Node3D) -> bool:
 	if not bool(c.low_built):
 		return false
+	var tier := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)  # AC-0252: the live band tier
 	for si in c.low_slabs:
-		if c.low_stamps.get(int(si), []) != c.stamp():
+		if c.low_stamps.get(int(si), []) != c.stamp() \
+				or c.low_tiers.get(int(si), -1) != tier:
 			return true
 	return false
 
-# AC-0231 fix3: the WAVE 2 core — build ONE slab's textured low (which
-# REPLACES its fog at the slab's Y), on the MAIN thread (never the TG/TM
-# pools). A slab that samples all-air keeps/gets its fog back when the
-# slab still has blocks (the honest placeholder, marked in c.low_failed so
-# the wave advances past it); a slab whose data went NULL shows nothing
-# (its stale fog + any low are dropped). A successful build re-stamps THAT
-# slab (per-slab: the other slabs of the chunk keep their own state).
+# AC-0231 fix3 / AC-0252 (+ worker offload): the WAVE 2 per-slab entry —
+# ZERO slab generation on the main thread. The band-tier AVERAGE-COLOR
+# grid sample + emit (MED 8x8x8 inside the configurable low-start
+# distance, LOW 4x4x4 outside it — _lod_tier_of) run on the TM WORKER
+# POOL (the C++ low_emit_avg, the _low_dispatch_slab path); the attach +
+# every bit of the per-slab bookkeeping (the fog swap, the cap swap, the
+# per-slab stamp WITH THE TIER, the all-air terminal mark, the counters)
+# land in the _low_handoff on the main thread — the scene-tree work that
+# has to stay there. The TEXTURED 4x4x4 emit (_low_emit_slab) stays in
+# the tree, dormant. The ONLY thing that runs inline is a slab whose DATA
+# IS NULL (the dispatch's -1 verdict — an empty column slab has no grid
+# to sample and no emit to run): the air bookkeeping via _low_air_slab
+# (a slab whose data went NULL shows nothing — its stale fog + any low
+# are dropped). A slab that has blocks but SAMPLES all-air is a real
+# emit (a worker task): its fog restore + the terminal low_failed mark
+# land in the _low_handoff.
 func _low_build_slab(c: Node3D, si: int) -> void:
 	if c.data.is_empty() or si < 0 or si >= c.data.size():
 		return
-	if int(_vwin_col_kept(c)[si]) == 0:
+	if c.data[si] == null:
+		_low_air_slab(c, si)
+		return
+	# Verdicts: 1 = a worker owns the grid sample + emit (the
+	# _low_handoff attaches it when it lands), 0 = a task is already in
+	# flight for this (key, si) (dedupe — nothing to do), 2 = the pool
+	# queue is saturated (the slab stays PENDING — the lane re-picks it
+	# next frame). No main-thread generation on any of them.
+	_low_dispatch_slab(c, si)
+
+# AC-0252 offload: the NULL-SLAB bookkeeping — the dispatch's -1 verdict
+# (an empty column slab: no grid to sample, no emit to run — there is
+# nothing to dispatch). This is the air half of what the old sync
+# _low_build_slab did for a null slab, WITHOUT the (wasted) grid sample
+# of the slab's neighbors: drop the low if it holds one, erase its
+# per-slab stamp, and — with no data — drop its fog + cap. A slab whose
+# window culled it never touches its placeholders (the cap holds — the
+# same keep rule the sync build had at the top of the function).
+func _low_air_slab(c: Node3D, si: int) -> void:
+	if si < 0 or si >= c.data.size() or c.data[si] != null:
+		return
+	var km := _vwin_col_kept(c)
+	if si >= km.size() or int(km[si]) == 0:
 		return  # AC-0234: this tower's window culled the slab — the cap holds
-	var was_low: bool = c.has_low_si(si)
-	# grids: the target + the slab above/below (the slab-boundary culling
-	# reads them — a same-type slab boundary culls).
-	var grids: Array = []
-	grids.resize(c.data.size())
-	if c.data[si] != null:
-		grids[si] = _low_slab_grid(c, si)
-	if si > 0 and c.data[si - 1] != null:
-		grids[si - 1] = _low_slab_grid(c, si - 1)
-	if si + 1 < c.data.size() and c.data[si + 1] != null:
-		grids[si + 1] = _low_slab_grid(c, si + 1)
-	var g: PackedByteArray = grids[si] if grids[si] != null else _low_slab_grid(c, si)
-	var mesh: ArrayMesh = null
-	if not _low_grid_empty(g):
-		mesh = _low_emit_slab(g, grids, si)
-	if mesh == null:
-		# all-air (an air slab, or one mined out at the sample points):
-		# drop any low + any STALE fog (a fogged slab whose data went
-		# null); restore the fog only when the slab still has blocks — and
-		# mark the TERMINAL fog (the WAVE 2 pick skips this si until the
-		# data changes, so the global wave never stalls re-failing it).
-		_low_drop_slab(c, si)
-		c.low_stamps.erase(si)  # not low anymore (fog again, or air)
-		if c.data[si] == null:
-			_fog_drop_slab(c, si)
-			_cap_drop_slab(c, si)
-		else:
-			# kept (the top-of-function check) — the fog is the honest
-			# placeholder for an all-air-SAMPLED slab (AC-0240: flag-gated; the
-			# TERMINAL mark below stays - it is wave-advance logic, not fog).
-			if FOG_WAVE_ON and not c.has_fog_si(si):
-				_fog_ensure_slab(c, si)
-			c.low_failed[si] = c.data_gen
-	else:
-		low_max_h = maxf(low_max_h, mesh.get_aabb().size.y)
-		_low_place_slab(c, si, mesh)
-		_fog_drop_slab(c, si)
-		if c.has_cap_si(si):
-			_cap_drop_slab(c, si)  # AC-0234: the low SWAPS the cap
-			vwin_uncaps_n += 1
-		c.low_built = true
-		c.low_failed.erase(si)
-		# PER-SLAB stamp: this slab's low is now fresh (a chunk-level stamp
-		# here would keep the other fogged slabs' finished neighbors stale
-		# and the wave would re-pick the built slabs forever).
-		c.low_stamps[si] = c.stamp()
-		if was_low:
-			low_rebuilds_n += 1
-		else:
-			low_built_n += 1
+	_low_drop_slab(c, si)
+	c.low_stamps.erase(si)  # not low anymore (no data — air)
+	_fog_drop_slab(c, si)
+	_cap_drop_slab(c, si)
 
 # AC-0236 part 2: the merge-atlas SNAPSHOT for the low emit workers (the
 # C++ low_emit tile tables: the STRIP rects from _tm_ms_full.rects + the
@@ -2058,15 +2477,19 @@ func _low_ms_snap_get() -> Dictionary:
 			}
 	return _low_ms_snap
 
-# AC-0236 part 2 / AC-0250: dispatch ONE slab's low EMIT to the TM pool
-# (the C++ AweMesh.low_emit on a value-copied slab column — the AC-0082
-# handoff pattern). Returns 1 = a worker owns it (the _low_handoff
-# attaches), 0 = a task is ALREADY in flight for this (key, si) (dedupe —
-# the caller does nothing), 2 = the pool queue hit LOW_TASK_CAP (capped —
-# a no-op: the slab stays PENDING and the in-r pass or the far wave
-# re-picks it next frame; AC-0250 removed the main-thread sync fallback),
-# -1 = the slab is null (no emit needed, only the air bookkeeping — the
-# caller builds via _low_build_slab).
+# AC-0236 part 2 / AC-0250 / AC-0252: dispatch ONE slab's low EMIT to the
+# TM pool (the C++ AweMesh.low_emit_avg on a value-copied slab column —
+# the AC-0082 handoff pattern). The entry carries the dispatch-time BAND
+# TIER (the C++ emit's grid: 8 = MED, 4 = LOW) + the face-color cache
+# (value copy — the immutable snapshot, replaced wholesale per atlas).
+# Returns 1 = a worker owns it (the _low_handoff attaches), 0 = a task is
+# ALREADY in flight for this (key, si) (dedupe — the caller does nothing),
+# 2 = the pool queue hit LOW_TASK_CAP (capped — a no-op: the slab stays
+# PENDING and the in-r pass or the far wave re-picks it next frame;
+# AC-0250 removed the main-thread sync fallback), -1 = the slab is null
+# (no emit possible — the caller does the air bookkeeping via
+# _low_air_slab; the grid sample + emit of every other slab run on the
+# workers, never the main thread).
 func _low_dispatch_slab(c: Node3D, si: int) -> int:
 	if threadmesh_pool == null or si < 0 or si >= c.data.size() or c.data[si] == null:
 		return -1
@@ -2077,9 +2500,13 @@ func _low_dispatch_slab(c: Node3D, si: int) -> int:
 	if _low_task_keys.has(lkey):
 		return 0
 	var mc: Variant = ChunkScript.mesh_cpp()
+	# AC-0252: the band tier at dispatch (the handoff DROPS the result when
+	# the live tier moved since — the slab re-picks at the new tier).
+	var tier := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)
 	var entry := {
 		"low": true, "key": key, "cx": int(c.cx), "cz": int(c.cz),
 		"inst": c.get_instance_id(), "colgen": int(c.col_gen), "si": si,
+		"tier": tier,  # AC-0252: 1 = MED (grid 8), 2 = LOW (grid 4)
 		"slabs": mc.slab_copy(c.data),  # the full column (~20 KB; the C++ emit reads si-1/si/si+1)
 		# AC-0247: the slab BUFFER of this value copy stays on C++ alloc —
 		# slab_copy allocates the "i"/"p" buffers internally (no C++
@@ -2089,6 +2516,7 @@ func _low_dispatch_slab(c: Node3D, si: int) -> int:
 		# Lifetime was proven (the entry is the last consumer — the poll
 		# returns the buffers at handoff); the keep-on-alloc is perf-driven.
 		"ms": _low_ms_snap_get(),
+		"fcc": _lod_fcc_get(),  # AC-0252: the face-color cache (256x18 floats)
 		"stamp": c.stamp(),
 		"t_submit": Time.get_ticks_usec(),
 	}
@@ -2131,6 +2559,13 @@ func _low_handoff(e: Dictionary, res) -> void:
 	if si < 0 or si >= c.data.size():
 		low_drop_stale_n += 1
 		return
+	# AC-0252: the low-start boundary moved while the task was in flight —
+	# the mesh was emitted at the DISPATCH tier; attach nothing (the slab
+	# is still PENDING against its live tier, so the lane re-picks it and
+	# re-lowers it at the new resolution next frame).
+	if _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz) != int(e.get("tier", 1)):
+		low_drop_stale_n += 1
+		return
 	if int(_vwin_col_kept(c)[si]) == 0:
 		# AC-0234: this tower's window culled the slab WHILE THE TASK
 		# WAS IN FLIGHT — drop the result; the cap holds (the next
@@ -2154,8 +2589,11 @@ func _low_handoff(e: Dictionary, res) -> void:
 				_fog_ensure_slab(c, si)
 			c.low_failed[si] = c.data_gen
 	else:
+		# AC-0252: the avg-color surface (vertex color, NO UVs — the noise
+		# shader material owns the surface; the textured low's "u" array is
+		# gone from the active path).
 		var mesh := ArrayMesh.new()
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _low_surface(res["v"], res["i"], res["n"], res["c"], res["u"]))
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _low_surface(res["v"], res["i"], res["n"], res["c"]))
 		low_max_h = maxf(low_max_h, float(res.get("mh", 0.0)))
 		_low_place_slab(c, si, mesh)
 		_fog_drop_slab(c, si)
@@ -2168,6 +2606,7 @@ func _low_handoff(e: Dictionary, res) -> void:
 		# would keep the other fogged slabs' finished neighbors stale and
 		# the wave would re-pick the built slabs forever).
 		c.low_stamps[si] = c.stamp()
+		c.low_tiers[si] = int(e.get("tier", 1))  # AC-0252: the band tier stamp
 		if was_low:
 			low_rebuilds_n += 1
 		else:
@@ -2233,7 +2672,10 @@ func _low_place_slab(c: Node3D, si: int, mesh: ArrayMesh) -> void:
 		i += 1
 	var mi := _mi_checkout()  # AC-0247: pool (per-slab ArrayMesh from the C++ low_emit handoff)
 	mi.mesh = mesh
-	mi.material_override = ChunkScript._get_mat("opaque", _tm_ms_full.get("tex", null))
+	# AC-0252: the placeholder slabs are AVERAGE-COLOR (vertex color, no
+	# UVs) — they wear the noise shader material, not the textured-low
+	# opaque material (the textured emit is dormant with the band split).
+	mi.material_override = _lod_avg_mat()
 	mi.position = Vector3(0.0, float(si * 16), 0.0)
 	c.add_child(mi)
 	if i < c.low_slabs.size() and int(c.low_slabs[i]) == si:
@@ -2262,6 +2704,9 @@ func _low_reset_all() -> void:
 	# after a table re-merge the cached origins are the OLD strip
 	# positions, so the cache must go with the tables.
 	_low_tl.clear()
+	# AC-0252: the face-color cache averages the NEW atlas pixels — the
+	# cached colors are the OLD pack's averages until rebuilt.
+	_lod_fcc_dirty = true
 	for key in chunks:
 		var c: Node3D = chunks[key]
 		if int(c.face) > 1 or c.low_slabs.is_empty():
@@ -2576,17 +3021,19 @@ func _low_inr_step(dt_ms: float) -> void:
 			continue
 		var it_progress := 0
 		for si in sis:
-			# AC-0236 part 2 / AC-0250: the emit rides the TM pool (the
-			# C++ low_emit on a worker); the -1 verdict (null slab ONLY —
-			# the sync main-thread fallback is gone) takes the air
-			# bookkeeping via _low_build_slab. The 0 verdict (dedupe — a
-			# task is already in flight) and the 2 verdict (pool saturated
-			# — the slab stays PENDING, re-picked next frame) are no-ops;
-			# a capped slab is NOT in flight, so it does not count as
+			# AC-0236 part 2 / AC-0250 / AC-0252 offload: the grid sample
+			# + emit ride the TM pool (the C++ low_emit_avg on a worker —
+			# ZERO generation on the main thread); the -1 verdict (null
+			# slab ONLY — the sync main-thread build is gone) takes the
+			# air bookkeeping via _low_air_slab (scene/state work — no
+			# sampling, no emit). The 0 verdict (dedupe — a task is
+			# already in flight) and the 2 verdict (pool saturated — the
+			# slab stays PENDING, re-picked next frame) are no-ops; a
+			# capped slab is NOT in flight, so it does not count as
 			# progress (the in-flight result attaches via _low_poll).
 			var d := _low_dispatch_slab(c, int(si))
 			if d < 0:
-				_low_build_slab(c, int(si))
+				_low_air_slab(c, int(si))
 			if d != 0 and d != 2:
 				it_progress += 1
 		# AC-0236 part 2: every pending slab of the picked chunk is ALREADY
@@ -2620,6 +3067,15 @@ func _low_step() -> void:
 	_slab_wave_last_t = now_t
 	# the fog color tracks the sky (the same color env.fog_light_color gets).
 	_low_fog_mat.albedo_color = DayNight.sky_display(Game.time_of_day)
+	# AC-0252: the med/low avg-color LODs track the same sky color (the
+	# placeholders darkened at night before the split — the avg LODs keep
+	# that; the uniform is read by the noise shader's "day" factor). The sky
+	# color changes slowly, so the per-frame set is skipped when unchanged
+	# (set_shader_parameter touches the material — keep it out of the hot
+	# main-thread LOW stage).
+	if _lod_avg_material != null and not _lod_day_last.is_equal_approx(_low_fog_mat.albedo_color):
+		_lod_day_last = _low_fog_mat.albedo_color
+		_lod_avg_material.set_shader_parameter("day", _lod_day_last)
 	if loading_active or _spawn_fast:
 		# AC-0231 order gate: the in-r pass was paused — on resume the
 		# drained verdict is stale (fog may have landed meanwhile).
@@ -2674,13 +3130,15 @@ func _low_step() -> void:
 			# the pick went stale (a handoff/recenter raced) — rescan.
 			_low_slab_none_key = ""
 			break
-		# AC-0236 part 2 / AC-0250: the emit rides the TM pool (the -1
-		# verdict — null slab only — takes the air bookkeeping; the 0
+		# AC-0236 part 2 / AC-0250 / AC-0252 offload: the grid sample +
+		# emit ride the TM pool (ZERO generation on the main thread); the
+		# -1 verdict (null slab only) takes the air bookkeeping via
+		# _low_air_slab (scene/state work — no sampling, no emit); the 0
 		# dedupe verdict and the 2 saturated verdict just consume the pace
 		# tick — the slab stays PENDING, the in-flight result attaches via
-		# _low_poll, and the wave re-picks when it lands / next frame).
+		# _low_poll, and the wave re-picks when it lands / next frame.
 		if _low_dispatch_slab(c2, int(e2["si"])) < 0:
-			_low_build_slab(c2, int(e2["si"]))
+			_low_air_slab(c2, int(e2["si"]))
 		_low_slab_none_key = ""  # a slab left the pending set — re-pick
 		_slab_wave_acc_ms -= LOW_WAVE_PACE_MS
 		wave_n += 1
@@ -2909,6 +3367,9 @@ func _ready() -> void:
 	timing = OS.get_environment("AWECRAFT_TIMING") == "1"
 	_picklog = OS.get_environment("AWECRAFT_PICKLOG") == "1"  # AC-0217
 	_wprof_init()  # AC-0251: pre-allocate the per-stage pipeline timing ring
+	# AC-0252: seed the med/low band boundary from the user setting (the
+	# later Settings.apply_world re-applies it against the live radii).
+	apply_low_start()
 	var nenv := OS.get_environment("AWECRAFT_THREADGEN_N")
 	# AC-0079 v3 C3: default threadgen = mini(cores, 6). The r4 cold wall is the
 	# 36-chunk crossing-1 core fill: 36 x ~220 ms of gen paced by the pool size
@@ -3497,7 +3958,9 @@ func _overlay_aabb_lines(m: ImmediateMesh, ab: AABB) -> void:
 #              it does this frame — the 30-50 ms class per-dispatch strip/
 #              nbs work)
 #   LOW      = _low_step (the _low_poll attaches + the in-r lane + the far
-#              slab wave)
+#              slab wave — the dispatch + handoff attach + bookkeeping
+#              only; since the AC-0252 offload the grid sample + emit run
+#              on the TM workers, never here)
 #   HANDOFF  = threadgen_poll + threadmesh_poll (the worker-result handoff /
 #              attach passes: the TM _tm_slots attach + the TG handoff)
 #   IO       = io_poll (the _io_write_commit region blob commits + the
@@ -4545,13 +5008,17 @@ func _tm_worker_run(skey: int) -> void:
 		return
 	entry["t_run"] = Time.get_ticks_usec()
 	if bool(entry.get("low", false)):
-		# AC-0236 part 2: the low-lane emit — the C++ AweMesh.low_emit on
-		# the value-copied slab column (the 4x4x4 grid sample + the greedy
-		# mesh; reads only this entry + the immutable ms snapshot). The
-		# node attach stays on the main thread (the _low_handoff branch in
-		# threadmesh_handoff — Godot SceneTree).
+		# AC-0236 part 2 / AC-0252: the low-lane emit — the C++
+		# AweMesh.low_emit_avg on the value-copied slab column (the
+		# band-tier AVERAGE-COLOR grid: 8 = MED 8x8x8 / 4 = LOW 4x4x4, the
+		# full-volume air rule + the per-face average color from the fcc
+		# cache; reads only this entry). The node attach stays on the main
+		# thread (the _low_handoff branch in threadmesh_handoff — Godot
+		# SceneTree). The TEXTURED low_emit (the dormant 4x4x4 path) keeps
+		# its binding but is no longer called by the lanes.
 		var mcl: Variant = ChunkScript.mesh_cpp()
-		entry["result"] = mcl.low_emit(entry["slabs"], int(entry["si"]), entry["ms"])
+		var grid := 8 if int(entry.get("tier", 1)) == 1 else 4
+		entry["result"] = mcl.low_emit_avg(entry["slabs"], int(entry["si"]), grid, entry["fcc"])
 		low_emit_cpp += 1
 		return
 	# AC-0152/AC-0160: all bands (0/1/2) flow through the normal build_accs

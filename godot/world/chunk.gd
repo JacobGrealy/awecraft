@@ -104,6 +104,11 @@ var low_slabs: Array = []        # slab indices holding a per-slab textured low
 var low_built := false
 var low_stamps: Dictionary = {}  # AC-0231 fix3: si -> stamp when that low slab was built
 var low_failed: Dictionary = {}  # AC-0231 fix3: si -> data_gen of the all-air sample
+# AC-0252: si -> the band tier (1 = MED 8x8x8, 2 = LOW 4x4x4) the low slab
+# was BUILT at. A slab whose stored tier differs from the live band tier
+# (world._lod_tier_of at the chunk's live distance) is PENDING — a
+# low-start boundary move re-lowers the tier-changed slabs.
+var low_tiers: Dictionary = {}
 # AC-0234: the vertical-window CAP state, PER SLAB (the dark fill for
 # CULLED non-air slabs — a slab outside this TOWER's kept window: below
 # the tower's 3x3 terrain span, and out of the player band). cap_instance
@@ -185,6 +190,7 @@ func drop_low() -> void:
 	low_slabs = []
 	low_built = false
 	low_stamps = {}
+	low_tiers = {}  # AC-0252: the tier stamps die with the low set
 	low_failed = {}
 	fog_mask = 0
 	low_mask = 0
@@ -1572,6 +1578,7 @@ func _pool_reset() -> void:
 	low_slabs = []
 	low_built = false
 	low_stamps = {}
+	low_tiers = {}  # AC-0252: the tier stamps die with the low set
 	low_failed = {}
 	cap_instance = null
 	cap_slabs = []

@@ -46,6 +46,11 @@ var debug_check: CheckBox
 # (percent of the render edge, (render_dist + 1) * 16 blocks).
 var fogstart_slider: HSlider
 var fogstart_val: Label
+# AC-0252: the med/low band split slider — the distance (taxi chunks)
+# where the 4x4x4 LOW avg-color band starts (the 8x8x8 MED tier owns
+# everything closer; the low band runs out to the render edge).
+var lowstart_slider: HSlider
+var lowstart_val: Label
 var file_dialog: FileDialog
 var _options_from := "main"
 var _focus_last: Control = null  # AC-0087: gamepad focus highlight
@@ -113,6 +118,8 @@ func _ready() -> void:
 	hunger_check = get_node("Layer/OptionsBox/Center/VBox/HungerCheck")
 	fogstart_slider = get_node("Layer/OptionsBox/Center/VBox/FogStartRow/FogStartSlider")
 	fogstart_val = get_node("Layer/OptionsBox/Center/VBox/FogStartRow/FogStartVal")
+	lowstart_slider = get_node("Layer/OptionsBox/Center/VBox/LowStartRow/LowStartSlider")
+	lowstart_val = get_node("Layer/OptionsBox/Center/VBox/LowStartRow/LowStartVal")
 	var opt_vbox := get_node("Layer/OptionsBox/Center/VBox")
 	debug_check = CheckBox.new()
 	debug_check.name = "DebugStatsCheck"
@@ -412,6 +419,9 @@ func _sync_controls() -> void:
 	overlay_collision_check.button_pressed = bool(Settings.values.get("overlay_collision", false))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_val.text = str(int(fogstart_slider.value)) + "%"
+	# AC-0252: the low-start slider spans the data-only far ring just
+	# outside the render circle (taxi [render_dist + 1, ~render_dist*1.42]).
+	_sync_lowstart_range()
 	_syncing = false
 
 
@@ -425,8 +435,25 @@ func _on_render_changed(v: float) -> void:
 	sim_slider.value = float(int(Settings.values["sim_dist"]))
 	_syncing = false
 	sim_val.text = str(int(sim_slider.value))
+	# AC-0252: the low-start slider's range tracks the render distance
+	# (the band lives in the far ring just outside the circle).
+	_sync_lowstart_range()
 	Settings.apply_render_distance()
 	Settings.apply_sim_distance()
+
+
+# AC-0252: set the low-start slider's min/max to the far ring's taxi span
+# (just outside the render circle) and re-clamp its value.
+func _sync_lowstart_range() -> void:
+	var lr := int(Settings.values["render_dist"])
+	var lo := lr + 1
+	var hi := int(float(lr) * 1.42) + 1
+	_syncing = true
+	lowstart_slider.min_value = float(lo)
+	lowstart_slider.max_value = float(hi)
+	lowstart_slider.value = float(clampi(int(Settings.values["low_start"]), lo, hi))
+	_syncing = false
+	lowstart_val.text = str(int(lowstart_slider.value))
 
 
 func _on_sim_changed(v: float) -> void:
@@ -473,6 +500,27 @@ func _on_fogstart_changed(v: float) -> void:
 		return
 	fogstart_val.text = str(int(v)) + "%"
 	Settings.set_value("fog_start_pct", int(v))
+
+
+# AC-0252: the med/low band split — the 4x4x4 LOW band's start distance
+# (taxi chunks; the sim_dist slider pattern: set + apply, live update).
+# The world clamps it into the far ring [render_dist + 1, ~render_dist*1.42]
+# (just outside the render circle); the slider range mirrors that.
+func _on_lowstart_changed(v: float) -> void:
+	if _syncing:
+		return
+	var r := int(Settings.values["render_dist"])
+	var lo := r + 1
+	var hi := int(float(r) * 1.42) + 1
+	var s := clampi(int(v), lo, hi)
+	_syncing = true
+	lowstart_slider.min_value = float(lo)
+	lowstart_slider.max_value = float(hi)
+	lowstart_slider.value = float(s)
+	_syncing = false
+	lowstart_val.text = str(s)
+	Settings.set_value("low_start", s)
+	Settings.apply_low_start()
 
 
 func _on_res_selected(i: int) -> void:

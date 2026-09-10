@@ -1742,6 +1742,306 @@ static Dictionary low_emit_impl(const Array &p_slabs, int si, const Dictionary &
 	return res;
 }
 
+// ---------------------------------------------------------------------------
+// AC-0252: the med/low AVERAGE-COLOR emit — the worker-side port of
+// world.gd _avg_slab_grid + _avg_emit_slab (the 8x8x8 MED / 4x4x4 LOW
+// tiers). Each slab's FULL 16x16x16 volume is read (4096 ids per slab,
+// via the slab views — the whole 16/G block volume of every sample, not
+// the old one-point sample): a sample is AIR when MORE THAN HALF its
+// volume is air (>=5 of 8 for med, >=33 of 64 for low) and its per-face
+// color = the average of the CACHED per-block-face colors (fcc, 256 ids x
+// 6 directions x rgb, LINEAR floats — built once per atlas on the main
+// thread) over the sample's NON-AIR blocks.
+//
+// Emit: the same 6-face outermost-shell scan + greedy merge as
+// low_emit_impl, but the merge key = the QUANTIZED face color (31 levels
+// per channel: (r*1024 + g*32 + b)) x 16 + (plane k + 1) — there is no
+// block id to merge on; a face shows only when the neighbor (grid / slab
+// above-below via the solid masks / air off the column) is AIR; the v
+// span merges same-key strips (one-color quads, coplanar). Vertices are
+// SLAB-LOCAL 0..16; the vertex color IS the face color (NO UVs — the
+// noise shader material owns the surface).
+//
+// p_grid = MED_GRID (8) or LOW_GRID (4); p_fcc = the face-color cache
+// (value copy in the dispatch entry; the worker-safe immutable snapshot,
+// the same AC-0082 pattern as the ms snapshot). The per-block accumulation
+// order (cy/cz/cx cells, then py/pz/px) mirrors the GDScript twin's
+// float32 op order exactly (-ffp-contract=off: no FMA folding), so the
+// outputs are byte-identical (the meshprobe avg_emit A/B).
+// Returns {empty: true} when nothing emits, else {v, n, c, i, mh}.
+// ---------------------------------------------------------------------------
+
+static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, const PackedFloat32Array &p_fcc) {
+	Dictionary res;
+	const int G = (p_grid == 4) ? 4 : 8;
+	const int CELLB = 16 / G;
+	const float CELL = (float)CELLB;
+	const int TOT = CELLB * CELLB * CELLB;
+	const float *fcc = p_fcc.ptr();
+	bool fcc_ok = p_fcc.size() >= 256 * 18;
+
+	// --- the three average-color grids (si-1 / si / si+1; the
+	// slab-boundary culling reads the neighbor SOLID masks).
+	uint8_t grids_solid[3][512];
+	float grids_cols[3][512 * 18];
+	bool ghave[3] = {false, false, false};
+	int nsl = (int)p_slabs.size();
+	std::vector<std::vector<uint8_t>> views;
+	awecommon::slab_views(p_slabs, views);
+	int gsi[3] = {si - 1, si, si + 1};
+	for (int t = 0; t < 3; t++) {
+		memset(grids_solid[t], 0, sizeof(grids_solid[t]));
+		memset(grids_cols[t], 0, sizeof(grids_cols[t]) / sizeof(float));
+		int s = gsi[t];
+		if (s < 0 || s >= nsl || (int)views[s].size() != awecommon::S3)
+			continue;
+		const uint8_t *v = views[s].data();
+		for (int cy = 0; cy < G; cy++) {
+			for (int cz = 0; cz < G; cz++) {
+				for (int cx = 0; cx < G; cx++) {
+					int air = 0;
+					int cnt = 0;
+					float acc[18] = {0.0f};
+					for (int py = 0; py < CELLB; py++) {
+						const uint8_t *row = v + (cy * CELLB + py) * 256;
+						for (int pz = 0; pz < CELLB; pz++) {
+							int base = (cz * CELLB + pz) * 16 + cx * CELLB;
+							for (int px = 0; px < CELLB; px++) {
+								int bid = row[base + px];
+								if (bid == 0) {
+									air++;
+									continue;
+								}
+								cnt++;
+								if (fcc_ok && bid < 256) {
+									const float *fc = fcc + bid * 18;
+									for (int d = 0; d < 18; d++)
+										acc[d] += fc[d];
+								}
+							}
+						}
+					}
+					int idx = cy * G * G + cz * G + cx;
+					if (air * 2 > TOT || cnt == 0) {
+						grids_solid[t][idx] = 0;
+					} else {
+						grids_solid[t][idx] = 1;
+						float inv = 1.0f / (float)cnt;
+						for (int d = 0; d < 18; d++)
+							grids_cols[t][idx * 18 + d] = acc[d] * inv;
+					}
+				}
+			}
+		}
+		ghave[t] = true;
+	}
+	bool any = false;
+	for (int i = 0; i < G * G * G; i++) {
+		if (grids_solid[1][i] != 0) {
+			any = true;
+			break;
+		}
+	}
+	if (!any) {
+		res["empty"] = true;
+		return res;
+	}
+	// the _avg_neighbor_solid port: in-grid -> the solid mask; across the
+	// slab boundary -> the neighbor slab's solid edge row; off the
+	// column -> air. (A SOLID neighbor culls — the avg tiers have no block
+	// id, so the textured emit's "different id" collapses to "air".)
+	auto neighbor_solid = [&](int ix, int iy, int iz, int nax, const int n[3]) -> int {
+		if (!ghave[1])
+			return 0;
+		if (nax == 0) {
+			int nx = ix + n[0];
+			if (nx < 0 || nx >= G)
+				return 0;
+			return grids_solid[1][nx + iz * G + iy * G * G];
+		}
+		if (nax == 2) {
+			int nz = iz + n[2];
+			if (nz < 0 || nz >= G)
+				return 0;
+			return grids_solid[1][ix + nz * G + iy * G * G];
+		}
+		int ny = iy + n[1];
+		if (ny < 0 || ny >= G) {
+			int gsi2 = si + n[1];
+			int t2 = gsi2 == si + 1 ? 2 : 0;
+			if (gsi2 < 0 || gsi2 >= nsl || !ghave[t2])
+				return 0;
+			int gyb = n[1] > 0 ? 0 : G - 1;
+			return grids_solid[t2][ix + iz * G + gyb * G * G];
+		}
+		return grids_solid[1][ix + iz * G + ny * G * G];
+	};
+
+	// --- the 6-face shell scan + greedy merge (the _avg_emit_slab port).
+	std::vector<float> av;
+	std::vector<float> an;
+	std::vector<float> ac;
+	std::vector<int32_t> ai;
+	float y_min = 1e30f;
+	float y_max = -1e30f;
+	static const int UA[6] = {2, 2, 0, 0, 0, 0};
+	static const int VA[6] = {1, 1, 2, 2, 1, 1};
+	for (int fi = 0; fi < 6; fi++) {
+		const int *n = FN[fi];
+		int nax = n[0] != 0 ? 0 : (n[1] != 0 ? 1 : 2);
+		int ua = UA[fi];
+		int va = VA[fi];
+		int ns = nax == 0 ? n[0] : (nax == 1 ? n[1] : n[2]);
+		// m[pv][pu] = the merge key (quantized color x16 + plane k+1)
+		// or -1; kmap = the outermost plane k.
+		int m[8][8];
+		int kmap[8][8];
+		for (int pv = 0; pv < G; pv++) {
+			for (int pu = 0; pu < G; pu++) {
+				int cc[3] = {0, 0, 0};
+				cc[ua] = pu;
+				cc[va] = pv;
+				int keyv = -1;
+				int kk = 0;
+				int k = ns > 0 ? G - 1 : 0;
+				while (kk < G) {
+					cc[nax] = k;
+					int idx = cc[0] + cc[2] * G + cc[1] * G * G;
+					if (grids_solid[1][idx] != 0) {
+						if (neighbor_solid(cc[0], cc[1], cc[2], nax, n) == 0) {
+							float cr = grids_cols[1][idx * 18 + fi * 3 + 0];
+							float cg = grids_cols[1][idx * 18 + fi * 3 + 1];
+							float cb = grids_cols[1][idx * 18 + fi * 3 + 2];
+							int q = (int)(cr * 31.0f) * 1024 + (int)(cg * 31.0f) * 32 + (int)(cb * 31.0f);
+							keyv = q * 16 + (k + 1);
+						}
+						break;
+					}
+					k += ns > 0 ? -1 : 1;
+					kk++;
+				}
+				m[pv][pu] = keyv;
+				kmap[pv][pu] = k;
+			}
+		}
+		for (int pv = 0; pv < G; pv++) {
+			int pu = 0;
+			while (pu < G) {
+				int key2 = m[pv][pu];
+				if (key2 < 0) {
+					pu++;
+					continue;
+				}
+				int W = 1;
+				while (pu + W < G && m[pv][pu + W] == key2)
+					W++;
+				int H = 1;
+				while (pv + H < G) {
+					bool okh = true;
+					for (int u2 = 0; u2 < W; u2++) {
+						if (m[pv + H][pu + u2] != key2) {
+							okh = false;
+							break;
+						}
+					}
+					if (!okh)
+						break;
+					H++;
+				}
+				int cc0[3] = {0, 0, 0};
+				cc0[ua] = pu;
+				cc0[va] = pv;
+				cc0[nax] = kmap[pv][pu];
+				float wx = cc0[0] * CELL;
+				float wy = cc0[1] * CELL;
+				float wz = cc0[2] * CELL;
+				if (nax == 0)
+					wx += n[0] > 0 ? CELL : 0.0f;
+				else if (nax == 1)
+					wy += n[1] > 0 ? CELL : 0.0f;
+				else
+					wz += n[2] > 0 ? CELL : 0.0f;
+				// the quad color = the ORIGIN cell's face color (every
+				// merged cell shares the quantized key).
+				int oidx = cc0[0] + cc0[2] * G + cc0[1] * G * G;
+				float qcr = grids_cols[1][oidx * 18 + fi * 3 + 0];
+				float qcg = grids_cols[1][oidx * 18 + fi * 3 + 1];
+				float qcb = grids_cols[1][oidx * 18 + fi * 3 + 2];
+				int cb0 = (int)av.size() / 3;
+				for (int j = 0; j < 4; j++) {
+					float cvx = FCV[fi][j][0];
+					float cvy = FCV[fi][j][1];
+					float cvz = FCV[fi][j][2];
+					float px = wx;
+					float py = wy;
+					float pz = wz;
+					if (fi == 0 || fi == 1) { // u = z (W cells), v = y (H cells)
+						py = wy + cvy * (float)H * CELL;
+						pz = wz + cvz * (float)W * CELL;
+					} else if (fi == 2 || fi == 3) { // u = x (W cells), v = z (H cells)
+						px = wx + cvx * (float)W * CELL;
+						pz = wz + cvz * (float)H * CELL;
+					} else { // fi 4/5: u = x (W cells), v = y (H cells)
+						px = wx + cvx * (float)W * CELL;
+						py = wy + cvy * (float)H * CELL;
+					}
+					av.push_back(px);
+					av.push_back(py);
+					av.push_back(pz);
+					if (py < y_min)
+						y_min = py;
+					if (py > y_max)
+						y_max = py;
+					an.push_back((float)n[0]);
+					an.push_back((float)n[1]);
+					an.push_back((float)n[2]);
+					ac.push_back(qcr);
+					ac.push_back(qcg);
+					ac.push_back(qcb);
+					ac.push_back(1.0f);
+				}
+				ai.push_back(cb0);
+				ai.push_back(cb0 + 2);
+				ai.push_back(cb0 + 1);
+				ai.push_back(cb0);
+				ai.push_back(cb0 + 3);
+				ai.push_back(cb0 + 2);
+				for (int v2 = pv; v2 < pv + H; v2++) {
+					for (int u2 = pu; u2 < pu + W; u2++)
+						m[v2][u2] = -1;
+				}
+				pu += W;
+			}
+		}
+	}
+	if (av.empty()) {
+		res["empty"] = true;
+		return res;
+	}
+	PackedVector3Array pv3;
+	pv3.resize((int)av.size() / 3);
+	for (int i = 0; i < (int)av.size() / 3; i++)
+		pv3[i] = Vector3(av[i * 3], av[i * 3 + 1], av[i * 3 + 2]);
+	PackedVector3Array pn3;
+	pn3.resize((int)an.size() / 3);
+	for (int i = 0; i < (int)an.size() / 3; i++)
+		pn3[i] = Vector3(an[i * 3], an[i * 3 + 1], an[i * 3 + 2]);
+	PackedColorArray pcol;
+	pcol.resize((int)ac.size() / 4);
+	for (int i = 0; i < (int)ac.size() / 4; i++)
+		pcol[i] = Color(ac[i * 4], ac[i * 4 + 1], ac[i * 4 + 2], ac[i * 4 + 3]);
+	PackedInt32Array pidx;
+	pidx.resize((int)ai.size());
+	for (int i = 0; i < (int)ai.size(); i++)
+		pidx[i] = ai[i];
+	res["v"] = pv3;
+	res["n"] = pn3;
+	res["c"] = pcol;
+	res["i"] = pidx;
+	res["mh"] = y_max - y_min;
+	return res;
+}
+
 // The registered class.
 class AweMesh : public RefCounted {
 	GDCLASS(AweMesh, RefCounted)
@@ -1760,7 +2060,10 @@ public:
 		ClassDB::bind_method(D_METHOD("slab_boundary_air", "d", "lo", "hi"), &AweMesh::slab_boundary_air);
 		// AC-0236 part 2: the low placeholder emit (the worker-side
 		// 4x4x4 grid + greedy mesh; the node attach stays main-thread).
+		// AC-0252: the med/low AVERAGE-COLOR emit (grid 8 = MED / 4 = LOW,
+		// fcc = the face-color cache) — the active lane's emit.
 		ClassDB::bind_method(D_METHOD("low_emit", "slabs", "si", "ms"), &AweMesh::low_emit);
+		ClassDB::bind_method(D_METHOD("low_emit_avg", "slabs", "si", "grid", "fcc"), &AweMesh::low_emit_avg);
 	}
 
 	// AC-0236 part 2: slabs = the value-copied slab array (null | {n,b,p,i,
@@ -1769,6 +2072,14 @@ public:
 	// the full contract.
 	Dictionary low_emit(const Array &p_slabs, int p_si, const Dictionary &p_ms) {
 		return low_emit_impl(p_slabs, p_si, p_ms);
+	}
+
+	// AC-0252: the med/low average-color emit (see low_emit_avg_impl for
+	// the full contract). grid = MED_GRID (8) or LOW_GRID (4); fcc = the
+	// (block id x 6 face direction) average-color cache (256 x 18 LINEAR
+	// floats, the value copy in the dispatch entry).
+	Dictionary low_emit_avg(const Array &p_slabs, int p_si, int p_grid, const PackedFloat32Array &p_fcc) {
+		return low_emit_avg_impl(p_slabs, p_si, p_grid, p_fcc);
 	}
 
 	// Lossless port of ChunkScript.build_accs (chunk.gd:1683). data/fl =
