@@ -1,9 +1,9 @@
 meta:
-  updated_at: 2026-09-10T04:42
+  updated_at: 2026-09-10T07:30
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0250
+- AC-0251
 - AC-0247
 - AC-0248
 - AC-0243
@@ -9132,3 +9132,72 @@ intake:
     ~20 while flying) - the cone + sync fallback were not the whole cause;
     the next ticket (filed before AC-0247) instruments the world pipeline
     for per-stage ms attribution.'
+- id: AC-0251
+  title: instrument-world-pipeline-timings
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - godot
+  created_at: 2026-09-10T07:30
+  updated_at: 2026-09-10T07:30
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: I fly at 4x speed and the fps tanks to ~20. I
+    thought that after AC-0250 (which removed the priority cone and the
+    low-LOD main-thread sync fallback) the drops would go away and I would
+    only see more pop-in; the fps still tanks, which should not happen if
+    the pipeline is properly multithreaded and spreads the main-thread work
+    over multiple frames. I want a per-stage breakdown of where the
+    main-thread time in the world generation/streaming pipeline goes (drain
+    dispatch, gen handoff, mesh build/attach, the face-block light cascade,
+    low-lane attach, fog, IO commit, recenter/rebuild, per-chunk
+    mesh-instance attach, rescore) so I can see which stage eats the frame
+    and fix it with data, not guesses. I want to read it live (in-game
+    overlay while flying) AND as a repeatable headless flight dump at the
+    repro speed (4x).
+
+
+    2) Technical Details: CORE (godot/world/world.gd) - a per-stage timing
+    struct, MAIN-THREAD-ONLY, pre-allocated (ring buffer, no per-frame
+    allocation, no new locks on the hot path): wrap each main-thread stage
+    of the world pipeline in Time.get_ticks_usec() pairs: the drain pass
+    (_drain_build_queue), _low_step (attach + in-r lane + slab wave), the
+    worker-result handoffs/attaches (TG + TM, including the face-block
+    light cascade / face-cache refresh - isolate the cascade if separable),
+    the IO commits (_io_write_commit + disk-read handoffs), the
+    recenter/rebuild queue walk, the rescore step, the per-chunk
+    mesh-instance create/attach (the AC-0247 suspect - isolate if
+    separable), plus a MISC catch-all so the stage sum + misc reconciles
+    against the frame total. Aggregation: a rolling window (~3 s / ~180
+    frames) per stage: p50/p95/max/avg + frame count; expose as
+    world.profiler (stage -> stats) plus the frame total. OVERLAY
+    (godot/ui/console.gd, the AC-0244 debug overlay) - a compact stage
+    table (name, p50, p95, max, ms/frame) plus frame ms/fps and the
+    TG/TM/low in-flight occupancy; refresh ~every 500 ms. HARNESS
+    (godot/scenes/harness.gd) - a NEW AWECRAFT_LOGIC=wprof arm: spawn +
+    settle, then a sustained 4x flight (the _fly_phase teleport-drive
+    pattern from the r16 arm; 15-20 s), read world.profiler at the end
+    (steady state: sample the window after the first ~5 s to skip
+    settling); the RESULT JSON carries the per-stage stats + fps/frame ms
+    + the occupancy; gates: the arm completes, every major stage has
+    non-zero samples, 0 errors (an evidence arm - no performance gates).
+    Add the arm to the arm table. NON-GOALS - instrument-ONLY ticket: NO
+    behavior/scheduling/pacing change to the pipeline; NO stage fixes (the
+    fix tickets follow the data); NO C++ (gdext/ untouched). GATES:
+    genhash (0,0) 80b904c0e5f085eef1e839459058c706 exact; meshprobe ok:true
+    verts 321080 unchanged; the r16 arm ok:true UNCHANGED (the
+    instrumentation must be schedule-transparent - its existing gates,
+    incl. the spin invariance, must hold); the wprof arm ok:true with
+    plausible evidence (the 4x flight frame ms consistent with the fps
+    proxy; the stage sum + misc ~ the frame total); battery genhash+range
+    ok:true; 0 script/shader errors. KNOWN SUSPECTS (hypotheses to
+    confirm/refute - from code comments, NOT conclusions): the face-block
+    light cascade on handoff (~1.2 s class), the per-dispatch strip/nbs
+    work (30-50 ms class), the per-slab MeshInstance3D create/attach, the
+    in-r low budget (up to 8 ms/frame), the blob IO commit, the burst
+    handoff.'
