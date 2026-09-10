@@ -9385,4 +9385,62 @@ intake:
     satellite far-LOD is OUT OF SCOPE (on hold); the existing textured
     low emit STAYS in the tree (it goes dormant when the band is
     reassigned - do not delete it); no changes to the fog/cap semantics
-    beyond the band reassignment.'
+    beyond the band reassignment.
+
+
+    3) Implementation (agent, 2026-09-10): DONE - commit d7b8585. A new
+    8x8x8 MED avg-color tier renders where the 4x4x4 textured low used
+    to (the data-only far ring + the in-r pending), and the 4x4x4 LOW
+    avg-color tier starts at the NEW configurable low_start distance
+    (default 58 = render_dist + 8, measured in taxi, clamped to the far
+    ring [R+1, ~R*1.42]; a Low LOD start slider in menu.gd on the
+    sim_dist pattern, live set + apply via Settings.apply_low_start).
+    BOTH tiers: vertex colors, NO UVs, per face direction the average of
+    the cached per-block-face average colors of the non-air blocks in
+    the volume; AIR RULE (more than half the volume air: >=5 of 8 med,
+    >=33 of 64 low -> not emitted); the STATIC per-fragment noise shader
+    (new godot/core/lod_avg.gdshader: ALBEDO = COLOR.rgb * day.rgb *
+    (1 + (hash-0.5)*0.12) - a +/-6% jitter, hash of floor(world_pos *
+    scale), no flicker; the day uniform tracks the sky and is set only
+    when it changes). FACE-COLOR CACHE: 256 blocks x 6 directions, built
+    once when loading into a world from the atlas rects (data.gd +
+    atlas.gd), measured ~22 ms one-time, sRGB-averaged then
+    srgb_to_linear so GPU output matches the texture appearance. EMIT =
+    the C++ low_emit_avg(slabs, si, grid, fcc) (gdext/src/mesh.cpp,
+    grid 8|4) on the TM worker pool + a GD TWIN that is TEST-ONLY
+    (referenced only by the harness: the meshprobe avg A/B pair 8/8,
+    the r16 slab check, the ladder air-rule arm). The existing TEXTURED
+    low emit stays untouched (dormant). FULL OFFLOAD (user directive
+    2026-09-10: offload everything possible to other threads):
+    _low_build_slab is now dispatch-only - null slab -> _low_air_slab
+    (bookkeeping only: the vwin keep check, drop low/fog/cap, erase the
+    stamp - the old wasted neighbor grid-sampling on main is gone),
+    data slab -> _low_dispatch_slab (copy + enqueue; the worker runs
+    mcl.low_emit_avg; the handoff attaches). ZERO slab generation (grid
+    sample or emit) on the main thread; the residual low-lane
+    main-thread work is the pick/dispatch/handoff-attach machinery,
+    which must stay (scene tree). C++ rebuilt (scons -O2) + the .so and
+    both Windows DLLs re-staged (the build script re-stages the final
+    dll into the export). GATES (agent ran; the coordinator diff-
+    audited: zero game-path references to the twin, every lane
+    dispatch/air based): genhash (0,0) 80b904c0... exact; meshprobe
+    ok:true match 1908/32 + the avg A/B pair 8/8; r16 ok:true the falsy
+    set exactly {air_ok, height_ok, immediate_ok} + spin invariant +
+    low_thread 11310 emits / 11313 handoffs / 0 stale drops; the ladder
+    arm ok:true (122 MED slabs all taxi 9 mesh ok 122/122; 602 LOW slabs
+    taxi 10-13 mesh ok 602/602; the boundary low_start 10->12 flipped 62
+    slabs; the air rule synthetic 5/8->air 4/8->solid 33/64->air
+    32/64->solid + in-world 11 air slabs 0 with a mesh); wprof ok:true
+    LOW stage avg 2.9 / p95 7.9 / max 10.3 (flat vs 3.10 pre-offload-
+    fix; the residual is the pick/dispatch/attach machinery), frame avg
+    4.3; battery genhash+range ok:true; 0 script/shader errors. COSTS:
+    the C++ emit is MED 0.185 ms/slab, LOW 0.087 ms/slab vs 0.144 for
+    the textured low (the avg low is ~40% cheaper - no UVs).
+    INTERPRETATIONS (user to judge in the in-game look test): the MED
+    sample = 2x2x2 = 8 real blocks (the users 4 cubes read as 2 per
+    axis); low_start is a taxi distance in the far ring; the per-face
+    average drops the old per-face shade factor; solid-solid interfaces
+    are culled (the avg has no block id, so cross-material boundaries
+    over-cull - fine at far LOD). SHIPPED as AweCraft[20260910-1915
+    d7b8585] (:8080 byte-matched, zip 2d185bb3...; the fresh libchunkio
+    dll is in the export).'
