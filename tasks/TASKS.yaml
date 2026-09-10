@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-10T07:30
+  updated_at: 2026-09-10T13:30
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0251
-- AC-0247
+- AC-0252
 - AC-0248
 - AC-0243
 - AC-0185
@@ -50,7 +49,62 @@ intake:
     instead of alloc+copy each time, return on handoff/free. Also pool the column objects themselves (the per-column Node
     holding c.data + slab meshes) — reset and recycle instead of instance/free per column when streaming in/out at r+2.
 
-    Verify via profiler: allocations down, Process time flat while flying far forward; no leak when column freed.'
+    Verify via profiler: allocations down, Process time flat while flying far forward; no leak when column freed.
+
+
+    3) Implementation (agent, 2026-09-10): DONE - commit 0e6c227. Code
+    (+408/-49, world.gd + chunk.gd; NO C++): THREE POOLS per World
+    (prewarm small, grow-on-demand): (a) MeshInstance3D pool (_mi_pool,
+    prewarm 32) - the high-slab/fluid/flora attaches (chunk.gd
+    _assemble_slab family) + the low-slab attach (_low_place_slab);
+    checkin on every drop/replace/free; checkout resets to fresh-instance
+    defaults (mesh=null, material_override=null, cast_shadow=1,
+    visible=true, identity) so a recycled fluid/culled instance never
+    pollutes an opaque checkout; checkin drops the mesh REFERENCE only
+    (the per-slab ArrayMesh frees by refcount exactly as today). (b)
+    MultiMesh pool (_mm_pool, prewarm 8 [mmi,mm] pairs) - the fog + cap
+    placeholders (per-chunk MultiMeshInstance3D over the ONE shared
+    pre-baked box mesh + shared material); checkin zeroes instance_count
+    but KEEPS the capacity buffer (the per-instance realloc is what
+    pooling removes); the shared mesh is never freed. (c) COLUMN OBJECT
+    pool (_col_pool, prewarm 16) - on the r+2 recenter evict + the face
+    FIFO free, the column is RESET IN PLACE (_pool_reset: every declared
+    state field - data/fl/gens/top, mesh+collision+light, candidate/band
+    hysteresis, fog/low/cap instance lists+masks, the vwin state, the
+    gen_keep/mask, the 24 Slab objects reset in place (all 10 fields
+    each), and the perf arrays re-sized to slab_n() - the subagent
+    caught a real OOB there during r16) and returned to the pool; on
+    spawn, checkout + identity re-set. DESIGN ADDITION: col_gen
+    (chunk.gd) - a logical identity token bumped on every checkout:
+    Godot 4 instance_id is FIXED per object, so a pooled reuse would
+    blind every inst-based staleness check (reachable at 215 m/s
+    flight); captured at ALL dispatch sites (TM, edit, low, all 5
+    threadgen_enqueue call sites incl. the null-result retry) and
+    checked at ALL handoffs (threadmesh_handoff, threadgen_handoff,
+    _low_handoff) - a mismatch drops the stale result (safe). SLAB
+    RAW-ARRAY POOL: honest partial, kept on alloc: (i) the TM slab_copy
+    is C++-side (AweMesh.slab_copy) - pooling it would need a C++ change
+    and the measured GD copy cost is higher than the C++ copy
+    (perf-driven keep); (ii) the save-queue copy lifetime spans the
+    compaction-defer re-queue (the longest slab-buffer lifetime in the
+    tree) - payoff too small. VERIFY (the subagent ran the gates; the
+    coordinator AUDITED the diff this cycle per the users 2026-09-10
+    process note (do not re-run what the subagent already ran): the
+    reset field enumeration matches every declared column state, the
+    col_gen guards sit at every handoff): genhash (0,0) 80b904c0...
+    exact; meshprobe ok:true match_rate 1.0 verts 321080; r16 ok:true
+    with the falsy set identical (air/height/immediate pre-existing) +
+    spin invariant + low_sync gate + the leak A/B HEAD-vs-POST
+    272=272 (no new leaks; the coordinator cross-checked the POST 272 in
+    an independent spot run); wprof ok:true - MESHATTACH avg 0.1
+    (87/180 frames, max 4.0), frame avg 4.4 flat vs the pre-change 4.2;
+    battery genhash+interact+editsnap+range ok:true; 0 script/shader
+    errors. STILL ALLOCATES: the per-slab ArrayMesh vertex/index data
+    (the C++ build_accs/low_emit output - mesh-DATA pooling needs the
+    C++ emit side), the collision StaticBody3D + ConcavePolygonShape3D,
+    the OccluderInstance3D, the snap_rings nbs snapshots. SHIPPED as
+    AweCraft[20260910-1328 0e6c227] (:8080 byte-matched, zip
+    9eaa52bb...).'
 - id: AC-0248
   title: prewarm-pools-for-streaming
   status: open
@@ -9248,3 +9302,87 @@ intake:
     zip 62b4dd88... exe 797c0929...). NEXT: the user flies this build at
     4x, opens the overlay (backtick/F3) and reads the WORLD-PIPELINE
     table; the fix ticket(s) follow the data.'
+- id: AC-0252
+  title: medium-lod-avg-color-ladder
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - godot
+  created_at: 2026-09-10T13:30
+  updated_at: 2026-09-10T13:30
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: When I fly far I want a two-tier distance LOD: a
+    NEW medium tier at 8x8x8 that takes the place of the current low
+    band, with the low band (4x4x4) starting further out, and the band
+    distances configurable. The low and medium tiers should NOT use the
+    textures at all - instead each cube is the AVERAGE COLOR of all the
+    textures that make up the area it covers (in 8x8x8 each cube
+    averages the 2x2x2 = 8 real blocks in its volume). If more than half
+    of the blocks in a cubes volume are air, the cube should be treated
+    as air (not rendered). And the material should add slight random
+    noise to the color/brightness so the faces are not uniform.
+
+
+    2) Technical Details: LADDER - the far zone currently renders the
+    4x4x4 TEXTURED low (in-r lane: world.gd _low_build_slab ->
+    _low_slab_grid + _low_emit_slab (the GD twin); the far slab wave:
+    the C++ mcl.low_emit at world.gd:4554; constants LOW_GRID=4 /
+    LOW_CELL_BLOCKS=4 at world.gd:~548). NEW: a MED tier at 8x8x8 (each
+    sample averages 2x2x2 = 8 real blocks) renders WHERE the 4x4x4 low
+    currently renders (the near far-band); the 4x4x4 LOW moves to the
+    farther band (from the new configurable start distance out to the
+    existing render edge); the fog + cap behavior is otherwise
+    unchanged. BOTH TIERS UNTEXTURED AVERAGE-COLOR: per sample cube, per
+    FACE DIRECTION: the average of the cached per-block-face average
+    colors of the NON-AIR blocks in the sample volume (vertex colors, no
+    UVs, no texture sampling); AIR RULE: more than half the volume air
+    (>=5 of 8 for med, >=33 of 64 for low) -> the sample is air (not
+    emitted). FACE-COLOR CACHE - a per-block-face average color array
+    (block id x 6 directions) built ONCE when loading into a world:
+    average each blocks atlas face texture (the atlas rects live in
+    godot/autoload/data.gd + godot/core/atlas.gd, Data.ATLAS_PX) and
+    store the mean Color per (block, face). The emit reuses the lows
+    6-face shell scan + greedy merge structure (mesh.cpp:~1564 + the GD
+    twin). EMIT - implement as a C++ + GD TWIN (house pattern, like the
+    current low): one emit parameterized by the grid resolution (8/4) +
+    the avg-color mode, C++ for the far slab wave (TM pool, no main-
+    thread build cost) and the GD twin for the in-r lane; verify the
+    C++/GD equivalence (extend the meshprobe-style check or a new
+    harness check). C++ build: read the gdext/SConstruct header comment
+    for the exact scons command; rebuild + re-stage the .so to
+    godot/bin + exports/windows. BAND DISTANCES - CONFIGURABLE: a new
+    user setting for the low-band start distance (the medium band =
+    from where the low currently starts out to the low start; the low
+    band = from the low start to the existing render edge) - follow the
+    sim_dist slider pattern in godot/ui/menu.gd:~383-443 (Settings.
+    values + the apply function + the slider); the default is a sensible
+    split of the current low band; the existing render-radius slider
+    (maxb) is unchanged. NOISE SHADER - a new material/shader for the
+    med/low avg-color instances: a slight per-fragment brightness/color
+    jitter from a hash of the fragment world position (STATIC under
+    camera motion - no flicker; small amplitude, ~5-8%), so the flat
+    faces are not uniform; it applies ONLY to the med/low avg-color
+    instances (the high path is untouched). VERIFY - genhash (0,0)
+    80b904c0e5f085eef1e839459058c706 exact; meshprobe ok:true (the high
+    build is unchanged - the C++/GD equivalence fields 1908/32,
+    match_rate 1.0); r16 ok:true with the falsy set identical
+    ({air_ok,height_ok,immediate_ok} pre-existing) + the spin
+    invariance + the low_sync gate; the harness LADDER arm (extend the
+    r16 lod block or a new standalone arm): evidence that the near
+    far-band slabs render MED (8x8x8 sample count + vertex colors + no
+    UVs) and the far band renders LOW (4x4x4), the band boundary
+    respects the configurable, and the air rule holds (an air-heavy
+    region emits no samples); wprof ok:true with the LOW stage
+    flat-or-better (the avg-color emit should be cheaper than the
+    textured low); battery genhash+range ok:true; 0 script/shader
+    errors. NON-GOALS - no change to the high path or its shaders; the
+    satellite far-LOD is OUT OF SCOPE (on hold); the existing textured
+    low emit STAYS in the tree (it goes dormant when the band is
+    reassigned - do not delete it); no changes to the fog/cap semantics
+    beyond the band reassignment.'
