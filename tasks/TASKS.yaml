@@ -1,8 +1,11 @@
 meta:
-  updated_at: 2026-09-09T14:00
+  updated_at: 2026-09-10T04:42
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
+- AC-0250
+- AC-0247
+- AC-0248
 - AC-0243
 - AC-0185
 - AC-0097
@@ -957,12 +960,12 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels:
   - godot
   created_at: 2026-08-18T12:00
-  updated_at: 2026-08-31T16:57
-  completed_at: null
+  updated_at: 2026-09-10T04:39
+  completed_at: 2026-09-10T04:39
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player going underwater I want water around my eyes hidden and a simple blue tint so I can see.
@@ -2864,11 +2867,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-23T23:20
-  updated_at: 2026-08-31T16:45
-  completed_at: null
+  updated_at: 2026-09-10T04:39
+  completed_at: 2026-09-10T04:39
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player swimming over ocean I do not want one layer of water then empty air that drops me to
@@ -5649,11 +5652,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-31T12:21
-  updated_at: 2026-08-31T16:36
-  completed_at: null
+  updated_at: 2026-09-10T04:42
+  completed_at: 2026-09-10T04:42
   waiting_on: null
   parent_id: AC-0171
   notes: "1) User Story: As a player who hit a weird bug I want to press F8 or type bugreport in console and get a single\
@@ -6288,7 +6291,26 @@ intake:
     \ emits RESULT ok:true. Saves isolated (no awecraft_save_*.json write). Console available in range (AC-0121 debug console,\
     \ same InputMap) for spawning enemies/weapons via commands. Launch: Main Menu → Test Range button.\n   Depends: AC-0140\
     \ harness extraction (register in harness/ not main.gd). Verify: G0 zero SCRIPT ERROR + AWECRAFT_LOGIC=range ok:true +\
-    \ 1 render (xvfb, gl_compatibility) no worldgen chunks. 3) Implementation (agent, 2026-09-09): DONE - commit 57bfc38. New scene godot/scenes/test_range.tscn + godot/world/test_range.gd (class_name RangeWorld, Node3D): flat greybox range (floor slabs with a 12x12 water pit 3 deep at x[-6,6)xz[-36,-24) and a 4-wide lava trench at x[-2,2)xz[10,50), boundary walls, three 1x2x1 RangeTarget StaticBodies at 10/25/50 m on +z) - NO ChunkWorld/worldgen. RangeWorld implements the minimal world interface player.gd pokes at (get_block over the sparse pit/trench cells, spawn_point, recenter/set_block/set_fluid/spawn_drop no-ops, light_at stub, render_radius) and sets Game.world in _ready, so the REAL player.gd runs unmodified (water/lava/drown/mining paths). godot/world/range_target.gd: hitable cube (center()/hurt()/range_target_dist()) attached to Game.entities via attach_entities (Godot 4.7 add_child does NOT reparent - explicit remove_child first). Bow: data.gd item 142 gets \"tool\": \"bow\"; player.gd start_mine fires _fire_bow() (placeholder hitscan at 60 m over the same Game.entities scan as the sword - no projectile/arrow consumption) and the new in_water_now/in_lava_now flags feed the arm. main.gd: start_range() (frees game nodes, Save.active_slot = -1 so autosave/quit-save stay inert, _create_game_nodes(range_mode) boots RangeRes instead of WorldRes, spawns the player, Game.start) + _run_game branch for logic == \"range\" (no Game.new_world, no Save.save_now anywhere) + Main Menu \"Test Range\" button (menu.tscn RangeButton after PackButton - gamepad nav indices unchanged, menu.gd on_range/range_clicked). Harness: AWECRAFT_LOGIC=range arm + battery mode range (LAST - it swaps the world): asserts is_range, 3 targets, W-walk, wooden-sword hit on the 10 m target, bow hitscan landing on the 50 m target after the near targets are freed, swim (in_water_now + bounded vy), drown (air=0, head at pit bottom, first 2.0 damage after ~2 s), lava (4.0 tick damage), Save.active_slot == -1, console present. Verify: ok:true; syntax 0; SMOKE battery ok (15 modes, 0 SCRIPT ERROR, 0 SHADER ERROR); genhash baseline held; console/gamepad/quitmenu green; xvfb render (no worldgen chunks). DebugInventory (infinite/allow_build=false) NOT built - the console give command covers item testing; noted as a follow-up if wanted. EXE rebuilt + :8080 byte-match.  CONTINUITY 00H (new checkpoint) draft:"
+    \ 1 render (xvfb, gl_compatibility) no worldgen chunks. 3) Implementation (agent, 2026-09-09): DONE - commit 57bfc38.\
+    \ New scene godot/scenes/test_range.tscn + godot/world/test_range.gd (class_name RangeWorld, Node3D): flat greybox range\
+    \ (floor slabs with a 12x12 water pit 3 deep at x[-6,6)xz[-36,-24) and a 4-wide lava trench at x[-2,2)xz[10,50), boundary\
+    \ walls, three 1x2x1 RangeTarget StaticBodies at 10/25/50 m on +z) - NO ChunkWorld/worldgen. RangeWorld implements the\
+    \ minimal world interface player.gd pokes at (get_block over the sparse pit/trench cells, spawn_point, recenter/set_block/set_fluid/spawn_drop\
+    \ no-ops, light_at stub, render_radius) and sets Game.world in _ready, so the REAL player.gd runs unmodified (water/lava/drown/mining\
+    \ paths). godot/world/range_target.gd: hitable cube (center()/hurt()/range_target_dist()) attached to Game.entities via\
+    \ attach_entities (Godot 4.7 add_child does NOT reparent - explicit remove_child first). Bow: data.gd item 142 gets \"\
+    tool\": \"bow\"; player.gd start_mine fires _fire_bow() (placeholder hitscan at 60 m over the same Game.entities scan\
+    \ as the sword - no projectile/arrow consumption) and the new in_water_now/in_lava_now flags feed the arm. main.gd: start_range()\
+    \ (frees game nodes, Save.active_slot = -1 so autosave/quit-save stay inert, _create_game_nodes(range_mode) boots RangeRes\
+    \ instead of WorldRes, spawns the player, Game.start) + _run_game branch for logic == \"range\" (no Game.new_world, no\
+    \ Save.save_now anywhere) + Main Menu \"Test Range\" button (menu.tscn RangeButton after PackButton - gamepad nav indices\
+    \ unchanged, menu.gd on_range/range_clicked). Harness: AWECRAFT_LOGIC=range arm + battery mode range (LAST - it swaps\
+    \ the world): asserts is_range, 3 targets, W-walk, wooden-sword hit on the 10 m target, bow hitscan landing on the 50\
+    \ m target after the near targets are freed, swim (in_water_now + bounded vy), drown (air=0, head at pit bottom, first\
+    \ 2.0 damage after ~2 s), lava (4.0 tick damage), Save.active_slot == -1, console present. Verify: ok:true; syntax 0;\
+    \ SMOKE battery ok (15 modes, 0 SCRIPT ERROR, 0 SHADER ERROR); genhash baseline held; console/gamepad/quitmenu green;\
+    \ xvfb render (no worldgen chunks). DebugInventory (infinite/allow_build=false) NOT built - the console give command covers\
+    \ item testing; noted as a follow-up if wanted. EXE rebuilt + :8080 byte-match.  CONTINUITY 00H (new checkpoint) draft:"
   comments: []
 - id: AC-0192
   title: 'test-fluid: isolated fluid tray'
@@ -8874,30 +8896,21 @@ intake:
     fall case + stone-pit spread case; verified ok:true (fall_moved, spread_n1=4, wall kept).
 
 
-    3) Implementation (agent, 2026-09-09): DONE - commit 276229b. Root cause: the
-AC-0203 sparse fluid scan passed (cell & 255) as the per-slab pos to
-_data_at_slab; the per-slab index is (ly<<8)|(lz<<4)|lx (12-bit), so every
-above-slab water cell read the ly=0 row of its slab (deep stone), failed
-is_fluid_id, and its fl level was zeroed every tick - placed/bucket water
-could never move. Fix in world.gd tick_fluids: the data read uses the full
-cell value and below_pos = cell - 256 (the neighbor reads already used
-cell & 3840 and were correct). New harness arm AWECRAFT_LOGIC=fluidflow
-(battery mode fluidflow): terrain-independent stone-box fall case (source in
-a stone-lined box on one support - the only legal move is down through the
-broken support; asserts fall + source cleared + walls intact) and a
-stone-pit spread case (source on a 5x5 platform - asserts the 4 ring-1
-neighbors fill and the walls stay). Second layer (user report 2026-09-09:
-"it was broken in lake" - natural water): worldgen water is stationary by
-AC-0203 design (block 5 with fl=0, never in the fluid_wet set the scan is
-gated on, and the set_block wake only reset the global counter), so breaking
-next to a lake did nothing. Fix: world.gd _wake_fluid_around(x,y,z) - on a
-set_block near a fluid, the 6 neighbors that are fluid-id with fl==0 get
-set_fl_at(7) + their chunk marked in fluid_wet (the rest of the lake stays
-fl=0, zero scan work). New fluidflow CASE 3 (natural pool written via
-set_local with NO fl): stays put until the support block is broken (falls
-in) or a side block is broken (spreads into the trench). Verify: ok:true
-(nat_natural, nat_stayed, nat_fall, nat_spread); syntax 0; SMOKE battery ok
-(15 modes incl. fluidflow + range, 0 SCRIPT ERROR); genhash baseline held.'
+    3) Implementation (agent, 2026-09-09): DONE - commit 276229b. Root cause: the AC-0203 sparse fluid scan passed (cell &
+    255) as the per-slab pos to _data_at_slab; the per-slab index is (ly<<8)|(lz<<4)|lx (12-bit), so every above-slab water
+    cell read the ly=0 row of its slab (deep stone), failed is_fluid_id, and its fl level was zeroed every tick - placed/bucket
+    water could never move. Fix in world.gd tick_fluids: the data read uses the full cell value and below_pos = cell - 256
+    (the neighbor reads already used cell & 3840 and were correct). New harness arm AWECRAFT_LOGIC=fluidflow (battery mode
+    fluidflow): terrain-independent stone-box fall case (source in a stone-lined box on one support - the only legal move
+    is down through the broken support; asserts fall + source cleared + walls intact) and a stone-pit spread case (source
+    on a 5x5 platform - asserts the 4 ring-1 neighbors fill and the walls stay). Second layer (user report 2026-09-09: "it
+    was broken in lake" - natural water): worldgen water is stationary by AC-0203 design (block 5 with fl=0, never in the
+    fluid_wet set the scan is gated on, and the set_block wake only reset the global counter), so breaking next to a lake
+    did nothing. Fix: world.gd _wake_fluid_around(x,y,z) - on a set_block near a fluid, the 6 neighbors that are fluid-id
+    with fl==0 get set_fl_at(7) + their chunk marked in fluid_wet (the rest of the lake stays fl=0, zero scan work). New fluidflow
+    CASE 3 (natural pool written via set_local with NO fl): stays put until the support block is broken (falls in) or a side
+    block is broken (spreads into the trench). Verify: ok:true (nat_natural, nat_stayed, nat_fall, nat_spread); syntax 0;
+    SMOKE battery ok (15 modes incl. fluidflow + range, 0 SCRIPT ERROR); genhash baseline held.'
 - id: AC-0245
   title: water-boundary-faces
   source: user
@@ -8920,103 +8933,69 @@ in) or a side block is broken (spreads into the trench). Verify: ok:true
     2) Technical Details: Fluid materials render cull_back today, so faces pointing away from the camera are invisible. Set
     cull_disabled on chunk_lit_fluid.gdshader, fluid_anim.gdshader and the legacy StandardMaterial3D fluid material. Also
     shrink the AC-0036 underwater near-cull from 1.9 to ~1.2 blocks so the surface stays visible a short distance above the
-    eye (only the face actually inside the head is hidden). 3) Implementation (agent, 2026-09-09): DONE - commit a8c9839. cull_disabled on
-    chunk_lit_fluid.gdshader + core/fluid_anim.gdshader + the legacy
-    StandardMaterial3D fluid material (chunk.gd _fluid_material) - water/lava
-    boundary faces now render from every side (top face readable from
-    underwater, side faces through/behind). The AC-0036 underwater near-cull
-    shrunk 1.9 -> 1.2 blocks in both shaders: only the face actually inside the
-    head is hidden, the surface a short distance above the eye stays visible.
-    GOTCHA: GLSL comments are // not # (a # on the render_mode line = SHADER
-    ERROR Tokenizer in every run).
-    4) Implementation follow-up (agent, 2026-09-09, user report: "weird z
-    fighting / shadows flashing nonstop anywhere under water", screenshot at
-    tasks/AC-0245/water-flicker-issue-screenshot.png): DONE - commit a8c9839. The
-    "moving shadows" (only when the eye is underwater, shape-changed while the
-    camera moves, stopped when it stopped) were the water sheet casting into
-    the shadow map: the fluid surfaces shared the opaque ArrayMesh, so every
-    water surface rode the opaque mesh instance and cast. The shadow-map
-    footprint follows the camera, so the water shadow over the underwater
-    floor kept re-shaping. Fix: the fluid surfaces now build into their own
-    ArrayMesh on the fluid_instance (chunk.gd _assemble_slab) with
-    cast_shadow = 0, and MINFO (world.gd) was restructured to match (opaque
-    slot from the opaque mesh, fluid slots 1..3 from the fluid mesh). Bonus:
-    this removes the double draw of every fluid surface (both instances drew
-    the shared mesh). A back-face-static animation experiment was tried and
-    REVERTED at the user request (the 300 ms surface flip is fine). GOTCHA:
-    this engine build strips engine enum constants (GeometryInstance3D.
-    CAST_SHADOW_OFF and BaseMaterial3D.SHADOW_DISABLED do not parse; the
-    disable_shadow_cast render mode does not exist; FACE_FORWARD /
-    FRONT_NORMAL are unavailable in fragment shaders) - use int assignment /
-    derived math. Verify: syntax 0; meshprobe + R16 re-baselined (fluid
-    surfaces no longer double counted); editslab MINFO variants byte-identical;
-    battery ok incl. underwater + fluids; xvfb render (no shadow blobs
-    underwater); EXE rebuilt + :8080 byte-match (product code). 5) Implementation follow-up 2
-    (agent, 2026-09-09, user: "the water shadows still persist" after re-fetching; "issue
-    happens when camera is above water too"; "only showing on terrain covered with water";
-    "maybe that next to air check is not happening"): DONE - commit ca41d3c, :8080 build
-    AweCraft[20260909-1856 ca41d3c] (title-screen tag, AC-0249). The moving shadows persisted
-    after the section 4 mesh split. Probe-confirmed root cause: NO shadow map exists
-    (main.gd sun.shadow_enabled = false) - the section 4 shadow-map theory was a red
-    herring (the mesh split is harmless but was not the cause). The real cause is
-    z-fighting: cull_disabled (section 3) renders the water BACK faces exactly on the opaque
-    underwater terrain (lake floor, cliffs), so the depth buffer flips the winner per block
-    as the camera moves - a camera-motion-dependent blocky mottle on water-covered
-    terrain, from above AND below the water. Fix (two parts): (a) C++ gdext/src/mesh.cpp
-    emit_fluid - skip fluid faces toward solid neighbors (the same stab[nb] > 0 rule opaque
-    blocks use in s_faces): the "next to air" check the user hypothesized - water emits
-    faces only toward air/transparent (surface vs air, seen through leaves/glass), never
-    toward the opaque floor/cliffs; (b) godot/core/fluid_anim.gdshader - cull_disabled
-    reverted to cull_back (the root cause: back faces z-fighting the terrain); cull_back
-    keeps the surface readable from above and the side faces from the water side.
-    Trade-off: the underside of the water surface (seen from directly underwater) is no
-    longer drawn (that back face was the z-fight source); the AC-0036 near-cull + blue
-    underwater tint keep the underwater view clean. If the user wants the surface readable
-    from below, revisit with per-face cull or a depth bias. Probe evidence (xvfb seed 44,
-    subagent image compares): hiding all fluid removed the mottle (water related, not
-    terrain); the cull_back probe removed it (cull_disabled is the cause); a two-angle
-    compare proved the mottle is view-dependent (z-fight, not texture); final before/after
-    - mottle GONE, floor clean, water normal. USER CONFIRMED 2026-09-09: "I got the tagged
-    release and it is fixed". Gates: meshprobe ok:true match_rate 1.0 verts 321080;
-    genhash (0,0) 80b904c0... held; battery 15/15 across two runs (run 1: 10 modes ok:true
-    then the pre-existing AC-0246 native flake at the dnlight-to-oceanfill transition;
-    run 2: the remaining 5 modes all ok:true; 0 SCRIPT/SHADER ERROR); EXE rebuilt + :8080
-    byte-match (zip + exe sha256 identical). 6) Implementation follow-up 3
-    (agent, 2026-09-09, user rejected the section 5 trade-off: "removing the option to
-    see the water surface from underwater is not an option, you just replaced one bug
-    with another"; "not only the top from the bottom but any boundary where the water is
-    against air"; "show/hide outside / inside faces based on camera position"): DONE -
-    commit 9d8d691, :8080 build AweCraft[20260909-2141 9d8d691]. The section 5 cull_back
-    fix traded the mottle for a water surface invisible from below - not acceptable. New
-    design (user-specified): two-pass camera-side culling - each water/lava boundary
-    face is drawn by exactly one of two passes, the pass whose side the camera is on, so
-    every water-air boundary (the surface from above AND from below, each shore/side
-    face from the air side AND the water side) stays two-sided with no coincident
-    fragments. CRITICAL FINDING (probe series, xvfb seed 44, byte-identical frames): the
-    engine render_mode cull options are UNRELIABLE in this build - both cull_back and
-    cull_front render extra sides (the inward pass behaved like cull_disabled); the
-    mottle was the surface sheet front+back drawn by two draw calls with a per-pixel
-    depth tie (the water-vs-terrain coincidence theory was wrong - the mottle region is
-    a flat 126.875 sheet over an undulating floor). Fix: explicit per-fragment
-    camera-side selection - both passes render_mode cull_disabled + the geometric face
-    normal from screen-space derivatives (cross(dFdx(world), dFdy(world))) vs the
-    direction to the camera (u_cam_pos): fluid_anim.gdshader (OUTWARD) discards the
-    inside-side fragment, new core/fluid_anim_bf.gdshader (INWARD) discards the
-    outside-side fragment - the exact complement, each boundary face rasterizes once
-    per frame. Wiring: two surfaces per animated fluid category on the fluid instance
-    (chunk.gd _assemble_slab, same arrays); data.gd fluid_anim_bf_mats (mirrored
-    _fluid_anim_mat + apply_atlas re-point); main.gd u_srgb_pre (startup) + u_cam_pos
-    (per frame) and chunk.gd set_underwater u_underwater pushed to both material sets.
-    AC-0036 near-cull kept in both passes (the surface above the head in 1-block pools
-    stays hidden by design; deep water 2+ blocks shows the surface from below). Gates:
-    genhash (0,0) 80b904c0... held; meshprobe ok:true match_rate 1.0 verts 321080
-    (unchanged - GD-side doubling does not touch the C++ accs); 0 SCRIPT/SHADER ERROR;
-    xvfb subagent verifies: the mottle camera above - mottle + ghosting GONE, even
-    tint, crisp shoreline; underwater at (0,124,88) (8-block-deep water) looking up -
-    the surface underside visible as a smooth clean blue sheet with the scene readable
-    through it; shoreline underwater render - surface clean, waterline readable. USER
-    APPROVED 2026-09-09: "it looks fine to me, ship it". EXE rebuilt + :8080 byte-match
-    (zip 8de2f557... + exe e367f287... identical to served).'
+    eye (only the face actually inside the head is hidden). 3) Implementation (agent, 2026-09-09): DONE - commit a8c9839.
+    cull_disabled on chunk_lit_fluid.gdshader + core/fluid_anim.gdshader + the legacy StandardMaterial3D fluid material (chunk.gd
+    _fluid_material) - water/lava boundary faces now render from every side (top face readable from underwater, side faces
+    through/behind). The AC-0036 underwater near-cull shrunk 1.9 -> 1.2 blocks in both shaders: only the face actually inside
+    the head is hidden, the surface a short distance above the eye stays visible. GOTCHA: GLSL comments are // not # (a #
+    on the render_mode line = SHADER ERROR Tokenizer in every run). 4) Implementation follow-up (agent, 2026-09-09, user report:
+    "weird z fighting / shadows flashing nonstop anywhere under water", screenshot at tasks/AC-0245/water-flicker-issue-screenshot.png):
+    DONE - commit a8c9839. The "moving shadows" (only when the eye is underwater, shape-changed while the camera moves, stopped
+    when it stopped) were the water sheet casting into the shadow map: the fluid surfaces shared the opaque ArrayMesh, so
+    every water surface rode the opaque mesh instance and cast. The shadow-map footprint follows the camera, so the water
+    shadow over the underwater floor kept re-shaping. Fix: the fluid surfaces now build into their own ArrayMesh on the fluid_instance
+    (chunk.gd _assemble_slab) with cast_shadow = 0, and MINFO (world.gd) was restructured to match (opaque slot from the opaque
+    mesh, fluid slots 1..3 from the fluid mesh). Bonus: this removes the double draw of every fluid surface (both instances
+    drew the shared mesh). A back-face-static animation experiment was tried and REVERTED at the user request (the 300 ms
+    surface flip is fine). GOTCHA: this engine build strips engine enum constants (GeometryInstance3D. CAST_SHADOW_OFF and
+    BaseMaterial3D.SHADOW_DISABLED do not parse; the disable_shadow_cast render mode does not exist; FACE_FORWARD / FRONT_NORMAL
+    are unavailable in fragment shaders) - use int assignment / derived math. Verify: syntax 0; meshprobe + R16 re-baselined
+    (fluid surfaces no longer double counted); editslab MINFO variants byte-identical; battery ok incl. underwater + fluids;
+    xvfb render (no shadow blobs underwater); EXE rebuilt + :8080 byte-match (product code). 5) Implementation follow-up 2
+    (agent, 2026-09-09, user: "the water shadows still persist" after re-fetching; "issue happens when camera is above water
+    too"; "only showing on terrain covered with water"; "maybe that next to air check is not happening"): DONE - commit ca41d3c,
+    :8080 build AweCraft[20260909-1856 ca41d3c] (title-screen tag, AC-0249). The moving shadows persisted after the section
+    4 mesh split. Probe-confirmed root cause: NO shadow map exists (main.gd sun.shadow_enabled = false) - the section 4 shadow-map
+    theory was a red herring (the mesh split is harmless but was not the cause). The real cause is z-fighting: cull_disabled
+    (section 3) renders the water BACK faces exactly on the opaque underwater terrain (lake floor, cliffs), so the depth buffer
+    flips the winner per block as the camera moves - a camera-motion-dependent blocky mottle on water-covered terrain, from
+    above AND below the water. Fix (two parts): (a) C++ gdext/src/mesh.cpp emit_fluid - skip fluid faces toward solid neighbors
+    (the same stab[nb] > 0 rule opaque blocks use in s_faces): the "next to air" check the user hypothesized - water emits
+    faces only toward air/transparent (surface vs air, seen through leaves/glass), never toward the opaque floor/cliffs; (b)
+    godot/core/fluid_anim.gdshader - cull_disabled reverted to cull_back (the root cause: back faces z-fighting the terrain);
+    cull_back keeps the surface readable from above and the side faces from the water side. Trade-off: the underside of the
+    water surface (seen from directly underwater) is no longer drawn (that back face was the z-fight source); the AC-0036
+    near-cull + blue underwater tint keep the underwater view clean. If the user wants the surface readable from below, revisit
+    with per-face cull or a depth bias. Probe evidence (xvfb seed 44, subagent image compares): hiding all fluid removed the
+    mottle (water related, not terrain); the cull_back probe removed it (cull_disabled is the cause); a two-angle compare
+    proved the mottle is view-dependent (z-fight, not texture); final before/after - mottle GONE, floor clean, water normal.
+    USER CONFIRMED 2026-09-09: "I got the tagged release and it is fixed". Gates: meshprobe ok:true match_rate 1.0 verts 321080;
+    genhash (0,0) 80b904c0... held; battery 15/15 across two runs (run 1: 10 modes ok:true then the pre-existing AC-0246 native
+    flake at the dnlight-to-oceanfill transition; run 2: the remaining 5 modes all ok:true; 0 SCRIPT/SHADER ERROR); EXE rebuilt
+    + :8080 byte-match (zip + exe sha256 identical). 6) Implementation follow-up 3 (agent, 2026-09-09, user rejected the section
+    5 trade-off: "removing the option to see the water surface from underwater is not an option, you just replaced one bug
+    with another"; "not only the top from the bottom but any boundary where the water is against air"; "show/hide outside
+    / inside faces based on camera position"): DONE - commit 9d8d691, :8080 build AweCraft[20260909-2141 9d8d691]. The section
+    5 cull_back fix traded the mottle for a water surface invisible from below - not acceptable. New design (user-specified):
+    two-pass camera-side culling - each water/lava boundary face is drawn by exactly one of two passes, the pass whose side
+    the camera is on, so every water-air boundary (the surface from above AND from below, each shore/side face from the air
+    side AND the water side) stays two-sided with no coincident fragments. CRITICAL FINDING (probe series, xvfb seed 44, byte-identical
+    frames): the engine render_mode cull options are UNRELIABLE in this build - both cull_back and cull_front render extra
+    sides (the inward pass behaved like cull_disabled); the mottle was the surface sheet front+back drawn by two draw calls
+    with a per-pixel depth tie (the water-vs-terrain coincidence theory was wrong - the mottle region is a flat 126.875 sheet
+    over an undulating floor). Fix: explicit per-fragment camera-side selection - both passes render_mode cull_disabled +
+    the geometric face normal from screen-space derivatives (cross(dFdx(world), dFdy(world))) vs the direction to the camera
+    (u_cam_pos): fluid_anim.gdshader (OUTWARD) discards the inside-side fragment, new core/fluid_anim_bf.gdshader (INWARD)
+    discards the outside-side fragment - the exact complement, each boundary face rasterizes once per frame. Wiring: two surfaces
+    per animated fluid category on the fluid instance (chunk.gd _assemble_slab, same arrays); data.gd fluid_anim_bf_mats (mirrored
+    _fluid_anim_mat + apply_atlas re-point); main.gd u_srgb_pre (startup) + u_cam_pos (per frame) and chunk.gd set_underwater
+    u_underwater pushed to both material sets. AC-0036 near-cull kept in both passes (the surface above the head in 1-block
+    pools stays hidden by design; deep water 2+ blocks shows the surface from below). Gates: genhash (0,0) 80b904c0... held;
+    meshprobe ok:true match_rate 1.0 verts 321080 (unchanged - GD-side doubling does not touch the C++ accs); 0 SCRIPT/SHADER
+    ERROR; xvfb subagent verifies: the mottle camera above - mottle + ghosting GONE, even tint, crisp shoreline; underwater
+    at (0,124,88) (8-block-deep water) looking up - the surface underside visible as a smooth clean blue sheet with the scene
+    readable through it; shoreline underwater render - surface clean, waterline readable. USER APPROVED 2026-09-09: "it looks
+    fine to me, ship it". EXE rebuilt + :8080 byte-match (zip 8de2f557... + exe e367f287... identical to served).'
 - id: AC-0246
   title: gen-handoff-slab-use-after-free
   source: agent
@@ -9058,32 +9037,22 @@ in) or a side block is broken (spreads into the trench). Verify: ok:true
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: '1) User Story: After repeated "I re-downloaded and the bug is still
-    there" episodes (the :8080 exe silently lagging the working tree), I want
-    to see at a glance which build I am actually running. (User request
-    2026-09-09: "Can we add a build date stamp into the title screen?")
+  notes: '1) User Story: After repeated "I re-downloaded and the bug is still there" episodes (the :8080 exe silently lagging
+    the working tree), I want to see at a glance which build I am actually running. (User request 2026-09-09: "Can we add
+    a build date stamp into the title screen?")
 
 
-    2) Technical Details: The title screen already had a version label
-    (menu.gd version_label, scene node Layer/MainBox/Center/VBox/Version,
-    text "AweCraft[" + Build.ID + "]"), but core/build_id.gd Build.ID was the
-    constant "dev" in every artifact, so no two builds could be told apart.
-    build_windows.sh now rewrites that const to "<stamp> <git-short-sha>"
-    (stamp = the same YYYYMMDD-HHMM used for the exported filenames) right
-    before exporting and restores the file on exit (EXIT trap git checkout),
-    so the working tree keeps reading "dev". Shipped builds display e.g.
-    AweCraft[20260909-1856 ca41d3c] under the title on the title screen (and
-    in the crash dialog via debug.gd); dev / local-tree runs show
-    AweCraft[dev]. Files: godot/core/build_id.gd (documented const),
-    build_windows.sh (stamp block + EXIT trap). 3) Implementation (agent,
-    2026-09-09): DONE - commit ca41d3c. Verify: AWECRAFT_MENU_SHOT
-    title-screen render (subagent) shows the label under the title on the
-    main menu ("AweCraft[dev]" on tree runs); the build-script sed pattern
-    verified on a file copy; first stamped build AweCraft[20260909-1856
-    ca41d3c] built + :8080 byte-matched (zip + exe sha256 identical). User
-    confirmed seeing the tag on a build they ran ("I got the tagged release
-    and it is fixed"). Status stays open per house convention until the user
-    closes the loop on a fetched build.'
+    2) Technical Details: The title screen already had a version label (menu.gd version_label, scene node Layer/MainBox/Center/VBox/Version,
+    text "AweCraft[" + Build.ID + "]"), but core/build_id.gd Build.ID was the constant "dev" in every artifact, so no two
+    builds could be told apart. build_windows.sh now rewrites that const to "<stamp> <git-short-sha>" (stamp = the same YYYYMMDD-HHMM
+    used for the exported filenames) right before exporting and restores the file on exit (EXIT trap git checkout), so the
+    working tree keeps reading "dev". Shipped builds display e.g. AweCraft[20260909-1856 ca41d3c] under the title on the title
+    screen (and in the crash dialog via debug.gd); dev / local-tree runs show AweCraft[dev]. Files: godot/core/build_id.gd
+    (documented const), build_windows.sh (stamp block + EXIT trap). 3) Implementation (agent, 2026-09-09): DONE - commit ca41d3c.
+    Verify: AWECRAFT_MENU_SHOT title-screen render (subagent) shows the label under the title on the main menu ("AweCraft[dev]"
+    on tree runs); the build-script sed pattern verified on a file copy; first stamped build AweCraft[20260909-1856 ca41d3c]
+    built + :8080 byte-matched (zip + exe sha256 identical). User confirmed seeing the tag on a build they ran ("I got the
+    tagged release and it is fixed"). Status stays open per house convention until the user closes the loop on a fetched build.'
 - id: AC-0250
   title: remove-priority-cone-and-low-sync-fallback
   source: user
@@ -9099,53 +9068,67 @@ in) or a side block is broken (spreads into the trench). Verify: ok:true
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: '1) User Story: The chunk loader currently biases loading toward
-    where the player looks (the "priority cone"), and when the low-LOD worker
-    pool is full it stalls the game thread to build a low-detail chunk on the
-    fly. Both are legacy crutches of the fog->low->high era: the cone exists
-    so the area ahead fills first, which the upcoming satellite far-LOD
-    replaces outright (the far zone fills instantly from the terrain-top
-    height grid), and the main-thread fallback is a leftover from before the
-    low pass was threaded. I want both removed so the loader orders chunks
-    purely by proximity (under the feet, then the sim radius, then everything
-    else by distance), the game thread never stalls on a low build, and the
-    whole look-tracking rescore machinery (yaw-snap refresh, amortized queue
-    re-stamps, the spin tests) disappears. (User request 2026-09-10: "I think
-    we need to remove the priority cone. We should also remove the fall back
-    where low lod is constructed on the main thread.")
+  notes: '1) User Story: The chunk loader currently biases loading toward where the player looks (the "priority cone"), and
+    when the low-LOD worker pool is full it stalls the game thread to build a low-detail chunk on the fly. Both are legacy
+    crutches of the fog->low->high era: the cone exists so the area ahead fills first, which the upcoming satellite far-LOD
+    replaces outright (the far zone fills instantly from the terrain-top height grid), and the main-thread fallback is a leftover
+    from before the low pass was threaded. I want both removed so the loader orders chunks purely by proximity (under the
+    feet, then the sim radius, then everything else by distance), the game thread never stalls on a low build, and the whole
+    look-tracking rescore machinery (yaw-snap refresh, amortized queue re-stamps, the spin tests) disappears. (User request
+    2026-09-10: "I think we need to remove the priority cone. We should also remove the fall back where low lod is constructed
+    on the main thread.")
 
 
-    2) Technical Details: CONE REMOVAL (godot/world/world.gd, the AC-0233 /
-    AC-0239 4-tier system) - tiers collapse 0/1/2/3 into 0 (under you), 1 (sim
-    radius, Chebyshev <= band0_r), 2 (rest, taxi-ordered |dx|+|dz|). Remove:
-    TIER_CONE_DOT (~382); the dot branch in _tier_of (~435); the look
-    components of _pool_key (~415); _look_dir + _refresh_look_dir (~5044) and
-    its drain call site (~5427); the look-snap _rescore_kick (~5059). KEEP the
-    re-stamp amortization and the kicks for the sim slider (~2819), the
-    recenter rebuild (~6879) and the column cross (~7312) - a slider move is
-    now the only rare event that needs re-stamps. _low_pick (~2131): drop the
-    f20 (ahead early-exit) / f21 (cone-behind) logic - order becomes ring1
-    (f1) then rest by taxi rank. Order gate: "tier >= 2" becomes "outside the
-    sim radius" (expression unchanged, semantics documented). Harness
-    (godot/scenes/harness.gd): re-scope the AC-0233 spin-180 reprioritize
-    probe (~8310-8465) into the removal regression - after a 180 deg look
-    flip the queue tier set must be INVARIANT (look no longer affects order
-    at all); the still-valid AC-0233 gates (tier-0 fall-through ~6666,
-    dirty-edit immediate ~6704) stay. FALLBACK REMOVAL (world.gd, AC-0236
-    part 2) - _low_dispatch_slab (~1890): remove the LOW_TASK_CAP -> sync
-    branch (~1893-1895); a capped dispatch becomes a NO-OP with a new return
-    value (2): the slab stays PENDING and the in-r pass or the far wave
-    re-picks it next frame (the existing stale-drop semantics - no re-queue
-    logic). -1 now means null slab ONLY (caller does air bookkeeping, not a
-    build). Call sites ~2412 (_low_inr_step) and ~2506 (_low_step slab wave):
-    the capped verdict must not call _low_build_slab and must not count as
-    in-r progress. low_sync_fallbacks_n (~652, already harness-read) stays and
-    must now read 0 forever - that is the regression gate. GATES: genhash
-    (0,0) baseline 80b904c0e5f085eef1e839459058c706 stays green (pure
-    scheduler change, no world-gen change); meshprobe unaffected (no C++
-    change); battery at least genhash + range (the long-flight queue stress);
-    TASKS.yaml YAML round-trip after the edit. RELATION TO THE SATELLITE
-    FAR-LOD: this ticket leaves the low path (in-r lane, far slab wave)
-    alive; the satellite ticket later gates it off behind the revert const
-    and takes the far zone with the top-grid heightfield. The satellite
-    design forks (trigger, detail radius) are untouched by this ticket.'
+    2) Technical Details: CONE REMOVAL (godot/world/world.gd, the AC-0233 / AC-0239 4-tier system) - tiers collapse 0/1/2/3
+    into 0 (under you), 1 (sim radius, Chebyshev <= band0_r), 2 (rest, taxi-ordered |dx|+|dz|). Remove: TIER_CONE_DOT (~382);
+    the dot branch in _tier_of (~435); the look components of _pool_key (~415); _look_dir + _refresh_look_dir (~5044) and
+    its drain call site (~5427); the look-snap _rescore_kick (~5059). KEEP the re-stamp amortization and the kicks for the
+    sim slider (~2819), the recenter rebuild (~6879) and the column cross (~7312) - a slider move is now the only rare event
+    that needs re-stamps. _low_pick (~2131): drop the f20 (ahead early-exit) / f21 (cone-behind) logic - order becomes ring1
+    (f1) then rest by taxi rank. Order gate: "tier >= 2" becomes "outside the sim radius" (expression unchanged, semantics
+    documented). Harness (godot/scenes/harness.gd): re-scope the AC-0233 spin-180 reprioritize probe (~8310-8465) into the
+    removal regression - after a 180 deg look flip the queue tier set must be INVARIANT (look no longer affects order at all);
+    the still-valid AC-0233 gates (tier-0 fall-through ~6666, dirty-edit immediate ~6704) stay. FALLBACK REMOVAL (world.gd,
+    AC-0236 part 2) - _low_dispatch_slab (~1890): remove the LOW_TASK_CAP -> sync branch (~1893-1895); a capped dispatch becomes
+    a NO-OP with a new return value (2): the slab stays PENDING and the in-r pass or the far wave re-picks it next frame (the
+    existing stale-drop semantics - no re-queue logic). -1 now means null slab ONLY (caller does air bookkeeping, not a build).
+    Call sites ~2412 (_low_inr_step) and ~2506 (_low_step slab wave): the capped verdict must not call _low_build_slab and
+    must not count as in-r progress. low_sync_fallbacks_n (~652, already harness-read) stays and must now read 0 forever -
+    that is the regression gate. GATES: genhash (0,0) baseline 80b904c0e5f085eef1e839459058c706 stays green (pure scheduler
+    change, no world-gen change); meshprobe unaffected (no C++ change); battery at least genhash + range (the long-flight
+    queue stress); TASKS.yaml YAML round-trip after the edit. RELATION TO THE SATELLITE FAR-LOD: this ticket leaves the low
+    path (in-r lane, far slab wave) alive; the satellite ticket later gates it off behind the revert const and takes the far
+    zone with the top-grid heightfield. The satellite design forks (trigger, detail radius) are untouched by this ticket.
+
+
+    3) Implementation (agent, 2026-09-10): DONE - commit 973930d. Code:
+    world.gd tier collapse 4 -> 3 (TIER_CONE_DOT + _look_dir + _look_yaw +
+    PICK_LOOK_REFRESH_DEG + _refresh_look_dir + the look-snap rescore kick +
+    the _pool_key look components all removed; tiers are now 0 under / 1 sim
+    radius / 2 rest by taxi, look-independent); _low_pick f20/f21
+    ahead-behind logic gone (ring1 then rest by taxi rank);
+    _low_dispatch_slab LOW_TASK_CAP branch now returns verdict 2 (capped
+    no-op: the slab stays PENDING and is re-picked next frame) instead of
+    the sync main-thread build; -1 means null slab only;
+    low_sync_fallbacks_n is now an always-zero regression gate. Harness: the
+    AC-0233 spin-180 probe re-scoped into the LOOK-INVARIANCE regression
+    (the live tier of every entry queued in both snapshots must survive a
+    180 deg flip untouched); low_sync_zero_ok gate field added; the nightlot
+    probe lost its world._look_dir assignment (the variable no longer
+    exists) with the order-divergence comment updated to queue timing.
+    VERIFY (coordinator, independent runs): genhash (0,0) 80b904c0... exact;
+    meshprobe ok:true verts 321080 UNCHANGED (no C++ change); r16 arm ok:true
+    with the new spin evidence (invariant=true, common_n=658, t2common=642,
+    flip_frames=0); A/B vs HEAD proved no new lod sub-field falses
+    (air_ok/height_ok/immediate_ok are false in BOTH runs - pre-existing
+    since the AC-0240 fog-wave change, not a regression); battery
+    genhash+range ok:true; 0 script/shader errors across all runs. SHIPPED
+    as AweCraft[20260910-0645 973930d] (:8080 byte-matched; the user also
+    built the same tree). KNOWN: the nightlot arm (AWECRAFT_LOGIC=nightlot)
+    fails at HEAD independently of this ticket (A/B: identical ok:False,
+    baked_diffs=15, the same 15 diff cells) - pre-existing era breakage,
+    tracked separately. FOLLOW-UP: the user is flying this build and the
+    expected frame-drop relief did NOT fully materialize (fps still tanks to
+    ~20 while flying) - the cone + sync fallback were not the whole cause;
+    the next ticket (filed before AC-0247) instruments the world pipeline
+    for per-stage ms attribution.'
