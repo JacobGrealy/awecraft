@@ -9084,3 +9084,68 @@ in) or a side block is broken (spreads into the trench). Verify: ok:true
     confirmed seeing the tag on a build they ran ("I got the tagged release
     and it is fixed"). Status stays open per house convention until the user
     closes the loop on a fetched build.'
+- id: AC-0250
+  title: remove-priority-cone-and-low-sync-fallback
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - godot
+  created_at: 2026-09-10T06:45
+  updated_at: 2026-09-10T06:45
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The chunk loader currently biases loading toward
+    where the player looks (the "priority cone"), and when the low-LOD worker
+    pool is full it stalls the game thread to build a low-detail chunk on the
+    fly. Both are legacy crutches of the fog->low->high era: the cone exists
+    so the area ahead fills first, which the upcoming satellite far-LOD
+    replaces outright (the far zone fills instantly from the terrain-top
+    height grid), and the main-thread fallback is a leftover from before the
+    low pass was threaded. I want both removed so the loader orders chunks
+    purely by proximity (under the feet, then the sim radius, then everything
+    else by distance), the game thread never stalls on a low build, and the
+    whole look-tracking rescore machinery (yaw-snap refresh, amortized queue
+    re-stamps, the spin tests) disappears. (User request 2026-09-10: "I think
+    we need to remove the priority cone. We should also remove the fall back
+    where low lod is constructed on the main thread.")
+
+
+    2) Technical Details: CONE REMOVAL (godot/world/world.gd, the AC-0233 /
+    AC-0239 4-tier system) - tiers collapse 0/1/2/3 into 0 (under you), 1 (sim
+    radius, Chebyshev <= band0_r), 2 (rest, taxi-ordered |dx|+|dz|). Remove:
+    TIER_CONE_DOT (~382); the dot branch in _tier_of (~435); the look
+    components of _pool_key (~415); _look_dir + _refresh_look_dir (~5044) and
+    its drain call site (~5427); the look-snap _rescore_kick (~5059). KEEP the
+    re-stamp amortization and the kicks for the sim slider (~2819), the
+    recenter rebuild (~6879) and the column cross (~7312) - a slider move is
+    now the only rare event that needs re-stamps. _low_pick (~2131): drop the
+    f20 (ahead early-exit) / f21 (cone-behind) logic - order becomes ring1
+    (f1) then rest by taxi rank. Order gate: "tier >= 2" becomes "outside the
+    sim radius" (expression unchanged, semantics documented). Harness
+    (godot/scenes/harness.gd): re-scope the AC-0233 spin-180 reprioritize
+    probe (~8310-8465) into the removal regression - after a 180 deg look
+    flip the queue tier set must be INVARIANT (look no longer affects order
+    at all); the still-valid AC-0233 gates (tier-0 fall-through ~6666,
+    dirty-edit immediate ~6704) stay. FALLBACK REMOVAL (world.gd, AC-0236
+    part 2) - _low_dispatch_slab (~1890): remove the LOW_TASK_CAP -> sync
+    branch (~1893-1895); a capped dispatch becomes a NO-OP with a new return
+    value (2): the slab stays PENDING and the in-r pass or the far wave
+    re-picks it next frame (the existing stale-drop semantics - no re-queue
+    logic). -1 now means null slab ONLY (caller does air bookkeeping, not a
+    build). Call sites ~2412 (_low_inr_step) and ~2506 (_low_step slab wave):
+    the capped verdict must not call _low_build_slab and must not count as
+    in-r progress. low_sync_fallbacks_n (~652, already harness-read) stays and
+    must now read 0 forever - that is the regression gate. GATES: genhash
+    (0,0) baseline 80b904c0e5f085eef1e839459058c706 stays green (pure
+    scheduler change, no world-gen change); meshprobe unaffected (no C++
+    change); battery at least genhash + range (the long-flight queue stress);
+    TASKS.yaml YAML round-trip after the edit. RELATION TO THE SATELLITE
+    FAR-LOD: this ticket leaves the low path (in-r lane, far slab wave)
+    alive; the satellite ticket later gates it off behind the revert const
+    and takes the far zone with the top-grid heightfield. The satellite
+    design forks (trigger, detail radius) are untouched by this ticket.'
