@@ -8981,7 +8981,42 @@ in) or a side block is broken (spreads into the trench). Verify: ok:true
     genhash (0,0) 80b904c0... held; battery 15/15 across two runs (run 1: 10 modes ok:true
     then the pre-existing AC-0246 native flake at the dnlight-to-oceanfill transition;
     run 2: the remaining 5 modes all ok:true; 0 SCRIPT/SHADER ERROR); EXE rebuilt + :8080
-    byte-match (zip + exe sha256 identical).'
+    byte-match (zip + exe sha256 identical). 6) Implementation follow-up 3
+    (agent, 2026-09-09, user rejected the section 5 trade-off: "removing the option to
+    see the water surface from underwater is not an option, you just replaced one bug
+    with another"; "not only the top from the bottom but any boundary where the water is
+    against air"; "show/hide outside / inside faces based on camera position"): DONE -
+    commit 9d8d691, :8080 build AweCraft[20260909-2141 9d8d691]. The section 5 cull_back
+    fix traded the mottle for a water surface invisible from below - not acceptable. New
+    design (user-specified): two-pass camera-side culling - each water/lava boundary
+    face is drawn by exactly one of two passes, the pass whose side the camera is on, so
+    every water-air boundary (the surface from above AND from below, each shore/side
+    face from the air side AND the water side) stays two-sided with no coincident
+    fragments. CRITICAL FINDING (probe series, xvfb seed 44, byte-identical frames): the
+    engine render_mode cull options are UNRELIABLE in this build - both cull_back and
+    cull_front render extra sides (the inward pass behaved like cull_disabled); the
+    mottle was the surface sheet front+back drawn by two draw calls with a per-pixel
+    depth tie (the water-vs-terrain coincidence theory was wrong - the mottle region is
+    a flat 126.875 sheet over an undulating floor). Fix: explicit per-fragment
+    camera-side selection - both passes render_mode cull_disabled + the geometric face
+    normal from screen-space derivatives (cross(dFdx(world), dFdy(world))) vs the
+    direction to the camera (u_cam_pos): fluid_anim.gdshader (OUTWARD) discards the
+    inside-side fragment, new core/fluid_anim_bf.gdshader (INWARD) discards the
+    outside-side fragment - the exact complement, each boundary face rasterizes once
+    per frame. Wiring: two surfaces per animated fluid category on the fluid instance
+    (chunk.gd _assemble_slab, same arrays); data.gd fluid_anim_bf_mats (mirrored
+    _fluid_anim_mat + apply_atlas re-point); main.gd u_srgb_pre (startup) + u_cam_pos
+    (per frame) and chunk.gd set_underwater u_underwater pushed to both material sets.
+    AC-0036 near-cull kept in both passes (the surface above the head in 1-block pools
+    stays hidden by design; deep water 2+ blocks shows the surface from below). Gates:
+    genhash (0,0) 80b904c0... held; meshprobe ok:true match_rate 1.0 verts 321080
+    (unchanged - GD-side doubling does not touch the C++ accs); 0 SCRIPT/SHADER ERROR;
+    xvfb subagent verifies: the mottle camera above - mottle + ghosting GONE, even
+    tint, crisp shoreline; underwater at (0,124,88) (8-block-deep water) looking up -
+    the surface underside visible as a smooth clean blue sheet with the scene readable
+    through it; shoreline underwater render - surface clean, waterline readable. USER
+    APPROVED 2026-09-09: "it looks fine to me, ship it". EXE rebuilt + :8080 byte-match
+    (zip 8de2f557... + exe e367f287... identical to served).'
 - id: AC-0246
   title: gen-handoff-slab-use-after-free
   source: agent
