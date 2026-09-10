@@ -6717,9 +6717,10 @@ func _r16_test(spawn: Vector3) -> void:
 	# AC-0231 catch-up window: wait for the heavy pipeline to idle (the
 	# drain dispatches nothing + the TG pool drained — the same predicate
 	# as world._low_idle), then settle 450 frames while the low->high
-	# upgrades run (nearest cone first, then nearest rest). The delta of
-	# world.low_upgrades_n across the window is the catch-up evidence;
-	# the far composition re-sample shows lows turning into highs.
+	# upgrades run (nearest sim-radius entry first, then the rest by
+	# taxi). The delta of world.low_upgrades_n across the window is the
+	# catch-up evidence; the far composition re-sample shows lows turning
+	# into highs.
 	var qidle := 0
 	while qidle < 1800 and (int(world._drain_units_last) > 0 or not world.threadgen_inflight.is_empty()):
 		await get_tree().physics_frame
@@ -6802,9 +6803,10 @@ func _r16_test(spawn: Vector3) -> void:
 		"fly_cap": int(world.circle_count()),
 		"fly4": f4,
 		"fly50": f50,
-		# AC-0233: the tiered two-queue streaming evidence — the fall-through
-		# check (static), the dirty-edit latency, the spin-180 reprioritize,
-		# and the rescore (waiting-parts rewrite) counters.
+		# AC-0233/AC-0250: the tiered two-queue streaming evidence — the
+		# fall-through check (static), the dirty-edit latency, the
+		# spin-180 look-invariance regression, and the rescore
+		# (waiting-parts rewrite) counters.
 		# AC-0234: the vertical window evidence. The kept set per TOWER =
 		# its own terrain span [wlo, whi] (min/max of that tower's + its
 		# 8 neighbors' column TOPS) + the player band (player slab +/- 4,
@@ -6877,7 +6879,11 @@ func _r16_test(spawn: Vector3) -> void:
 					and int(vwin.get("inr_back", {}).get("inr_uncovered", 1)) == 0,
 		},
 		"tier": {
-			"cone_dot": 0.5,
+			# AC-0250: the AC-0233 look bias is removed — 3 tiers (0 under,
+			# 1 the sim radius, 2 the rest, taxi-ordered and
+			# look-independent); the spin probe below proves the tier set
+			# is invariant under a 180 deg look flip.
+			"tiers": 3,
 			"rescore_events": int(world.perf_rescore_events),
 			"rescore_stamps": int(world.perf_rescore_stamps),
 			"rescore_ms": roundf(world.perf_rescore_ms * 10.0) / 10.0,
@@ -6958,20 +6964,22 @@ func _r16_test(spawn: Vector3) -> void:
 			"low_rebuilds_n": int(world.low_rebuilds_n),
 			"low_upgrades_n": int(world.low_upgrades_n),
 			"low_fog_boxes_n": int(world.low_fog_boxes_n),
-			# AC-0236 part 2: the low-lane threading evidence. low_emit_cpp =
-			# the C++ emits completed on the TM pool (the worker path);
-			# low_enqueue_n = dispatches; low_handoff_n = the main-thread
-			# attaches; low_drop_stale_n = dropped (data changed mid-flight
-			# / chunk gone — re-picked next frame); low_sync_fallbacks_n =
-			# the main-thread fallbacks (pool saturated — must be small in
-			# steady streaming). low_thread_ok = the threading path actually
-			# ran (emits > attaches is impossible; emits > 0 proves the
-			# pool lane carried real work, not just the sync fallback).
+			# AC-0236 part 2 / AC-0250: the low-lane threading evidence.
+			# low_emit_cpp = the C++ emits completed on the TM pool (the
+			# worker path); low_enqueue_n = dispatches; low_handoff_n = the
+			# main-thread attaches; low_drop_stale_n = dropped (data changed
+			# mid-flight / chunk gone — re-picked next frame);
+			# low_sync_fallbacks_n = the AC-0250 regression gate — the
+			# main-thread sync fallback is REMOVED (a saturated pool leaves
+			# the slab PENDING instead), so it must equal 0. low_thread_ok
+			# = the threading path actually ran (emits > 0 proves the pool
+			# lane carried real work, not just the sync fallback).
 			"low_emit_cpp": int(world.low_emit_cpp),
 			"low_enqueue_n": int(world.low_enqueue_n),
 			"low_handoff_n": int(world.low_handoff_n),
 			"low_drop_stale_n": int(world.low_drop_stale_n),
 			"low_sync_fallbacks_n": int(world.low_sync_fallbacks_n),
+			"low_sync_zero_ok": int(world.low_sync_fallbacks_n) == 0,
 			"low_thread_ok": int(world.low_emit_cpp) > 0,
 			"catch_up_frames": qidle,
 			"catch_up": catch_up,
@@ -8078,8 +8086,8 @@ func _r16_stats(ms_list: Array) -> Dictionary:
 # AC-0222: fly the player forward at WALK*mult for `seconds`, teleport-style
 # (the arm drives position directly; the player's own _recenter fires the
 # world recenter on every chunk change, so the queue sees real movement).
-# The yaw is set along the flight dir so the drain's AC-0233 tier-2 FOV
-# cone points at the forward edge. Returns per-phase evidence:
+# The yaw is set along the flight dir (probe convention — AC-0250: the
+# look no longer affects the tier order at all). Returns per-phase evidence:
 #  - fps_*           : frame ms while flying (fixed-fps 600 -> true CPU fps)
 #  - queue_max       : max total queued depth (world.queue_size)
 #  - build_depth_max : max queued BUILD entries (data_only=false) — must
@@ -8102,7 +8110,8 @@ func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 	var n_frames := int(seconds * 600.0)
 	var speed := 4.3 * float(mult)  # player.WALK * flight_speed multiplier
 	var dt := 1.0 / 600.0
-	# Yaw so _look_dir = dir: _look_dir = (-sin(yaw), -cos(yaw)); dir=+x -> yaw=-PI/2.
+	# Yaw along the flight dir (probe convention — the look no longer
+	# affects the tier order since AC-0250): dir=+x -> yaw=-PI/2.
 	var ang := atan2(-dir.x, -dir.z)
 	player.look(ang, 0.0)
 	player.flying = true
@@ -8307,11 +8316,14 @@ func _r16_edit_probe() -> Dictionary:
 	}
 
 
-# AC-0233: the spin-180 reprioritize probe. Quiet the remesh queues, snap
-# the yaw 180 deg, then count the FIRST-BUILD streaming dispatches that land
-# while the new cone is in force: they must follow the NEW look direction
-# (the tier-2 cone reordered immediately — the drain's look refresh fires in
-# the same frame the yaw moves, and the pick re-scores on that turn).
+# AC-0250 (re-scoped from the AC-0233 spin-180 reprioritize probe): the
+# LOOK-INVARIANCE regression. Quiet the remesh queues, create live
+# streaming work with the 50x flight preamble, snap the yaw 180 deg, then
+# prove the queue tier set is INVARIANT: the look no longer affects the
+# order at all, so the live tier of every entry queued in BOTH snapshots
+# must survive the flip untouched (tier 2 = the rest, taxi-ordered and
+# look-independent). The post-flip dispatch window stays as supporting
+# evidence only.
 func _r16_spin_probe() -> Dictionary:
 	var sq := 0
 	while sq < 3600 and not (world.light_pending.is_empty() and world.light_dirty.is_empty() and world.threadmesh_inflight.is_empty()):
@@ -8322,38 +8334,31 @@ func _r16_spin_probe() -> Dictionary:
 		var cc: Node3D = world.chunks[key]
 		if cc.mesh_built:
 			pre_built[key] = true
-	# AC-0233: preamble — create LIVE streaming work by a short 50x
+	# AC-0250: preamble — create LIVE streaming work by a short 50x
 	# mini-flight in +x (the flight direction). The tier fill + walk chain
 	# keep the circle ~filled around the player, so a stationary probe
-	# faces an idle queue ("re-prioritize" would be unmeasurable); moving
-	# instead keeps the frontier live: the fresh +x edge is tier 2 (the
-	# cone) while the player still faces +x and gets pre-fed — AFTER the
-	# 180 spin the player faces -x, the same pending set re-orders with
-	# the -x side (trail z-rows) strictly ahead (lexicographic tier: every
-	# tier-2 entry before every tier-3 entry), and the window's dispatches
-	# must follow the NEW facing (new_ahead > old_ahead).
+	# faces an idle queue (the tier set would be empty and the regression
+	# unmeasurable); moving instead keeps the frontier live: the queue
+	# holds a full tier-2 "rest" set when the flip lands.
 	var mf: Dictionary = await _fly_phase(50.0, 0.7, Vector3(1, 0, 0))
-	# AC-0233 gate (spec: "Rewrite waiting parts on ... yaw snap" + "spin 180
-	# immediately reprioritizes"): the GATE is the tier-set FLIP, measured
-	# on the queue stamps — deterministic, and independent of how much
-	# pending work happens to sit in the (narrow) cone wedges (the flight
-	# fill eats the facing cone first by design, so an aggregate
-	# new_ahead>old_ahead dispatch count is flaky: the +x cone wedge was
-	# mostly built by spin time). Pre-spin: the tier-2 set is the +x cone;
-	# post-spin it must be the -x cone — every former cone entry demoted
-	# (a 180 flip moves every cone entry out of the cone), and the flip
-	# must land within 300 frames (0.5 s) of the look change (the look
-	# gate kicks a rescore; the amortized pass re-stamps the whole queue
-	# in one frame). The 8 s window's dispatch counts stay as supporting
-	# evidence (and the flip precedes the window, so any window dispatch
-	# already follows the new facing).
-	var t2pre := {}
+	# AC-0250 gate (the removal regression): the GATE is the tier-set
+	# INVARIANCE, measured on the LIVE tiers — deterministic, and
+	# independent of how much pending work happens to be streaming. The
+	# queue MEMBERSHIP itself still churns (data landings add entries,
+	# dispatches consume them), so the gate compares the live tier of
+	# every entry present in BOTH snapshots, not raw set equality: the
+	# 180 deg look flip must leave every queued entry's tier untouched
+	# (the look no longer orders the queue at all).
+	var pre_tier := {}
 	for bb in world.band_buckets:
 		for e in bb:
 			var ddx: int = int(e["cx"]) - world.last_pcx
 			var ddz: int = int(e["cz"]) - world.last_pcz
-			if world._tier_of(ddx, ddz) == 2:
-				t2pre[str(e["key"])] = true
+			pre_tier[str(e["key"])] = int(world._tier_of(ddx, ddz))
+	var t2pre_n := 0
+	for tv in pre_tier.values():
+		if int(tv) == 2:
+			t2pre_n += 1
 	var total0: int = world.build_dispatch_total
 	var log0: int = world.build_dispatch_log.size()
 	var pos_trace: Array = [Vector2(roundf(player.position.x), roundf(player.position.z))]
@@ -8361,13 +8366,14 @@ func _r16_spin_probe() -> Dictionary:
 	var look_old := Vector2(-sin(yaw0), -cos(yaw0))
 	player.look(yaw0 + PI, 0.0)
 	var look_new := Vector2(-sin(float(player.get_yaw())), -cos(float(player.get_yaw())))
-	# Flip poll: wait until every waiting entry is re-stamped at the
-	# post-spin rescore version (the drain refreshes the look on its first
-	# unit after the spin, kicks the rescore, and re-stamps the whole
-	# queue within the same amortized pass).
+	# Settle poll: wait until every waiting entry is stamped at the
+	# current rescore version (the flight's leftover column-cross rescore
+	# finishes before the post-flip read; new entries are stamped at
+	# enqueue with the current version, so the state converges). AC-0250:
+	# there is no look kick to wait for anymore — the flip itself never
+	# re-stamps anything.
 	var flip_frames := -1
-	var t2post := {}
-	var post_bad := 0
+	var post_tier := {}
 	for ff in range(300):
 		await get_tree().physics_frame
 		var v: int = world._rescore_ver
@@ -8380,16 +8386,28 @@ func _r16_spin_probe() -> Dictionary:
 			if not done:
 				break
 		if done:
-			for bb in world.band_buckets:
-				for e in bb:
-					var ddx: int = int(e["cx"]) - world.last_pcx
-					var ddz: int = int(e["cz"]) - world.last_pcz
-					if world._tier_of(ddx, ddz) == 2:
-						t2post[str(e["key"])] = true
-						if look_new.x * float(ddx) + look_new.y * float(ddz) <= 0.0:
-							post_bad += 1
 			flip_frames = ff
 			break
+	for bb in world.band_buckets:
+		for e in bb:
+			var ddx: int = int(e["cx"]) - world.last_pcx
+			var ddz: int = int(e["cz"]) - world.last_pcz
+			post_tier[str(e["key"])] = int(world._tier_of(ddx, ddz))
+	var t2post_n := 0
+	var common_n := 0
+	var t2common := 0
+	var invariant := true
+	for k in pre_tier:
+		if not post_tier.has(k):
+			continue
+		common_n += 1
+		if int(pre_tier[k]) != int(post_tier[k]):
+			invariant = false
+		elif int(pre_tier[k]) == 2:
+			t2common += 1
+	for tv in post_tier.values():
+		if int(tv) == 2:
+			t2post_n += 1
 	var pool_dbg := {"data_neg": 0, "data_pos": 0, "build_neg": 0, "build_pos": 0}
 	for e in world._collect_pool(false, false, -1):
 		var ddx: int = int(e["cx"]) - world.last_pcx
@@ -8438,10 +8456,6 @@ func _r16_spin_probe() -> Dictionary:
 			new_ahead += 1
 		elif look_old.x * tx + look_old.y * tz > 0.0:
 			old_ahead += 1
-	var overlap := 0
-	for k in t2pre:
-		if t2post.has(k):
-			overlap += 1
 	return {
 		"frames": sp,
 		"n_dispatches": n_dispatches,
@@ -8454,22 +8468,27 @@ func _r16_spin_probe() -> Dictionary:
 		"old_ahead": old_ahead,
 		"pos_trace": pos_trace,
 		"quiet_frames": sq,
-		# AC-0233: the mini-flight preamble's own ahead-fill (the spin
-		# window only covers the post-spin dispatches; the preamble is the
+		# AC-0250: the mini-flight preamble's own ahead-fill (the spin
+		# window only covers the post-flip dispatches; the preamble is the
 		# live-work source and is reported here for context).
 		"pre_ahead_while": int(mf.get("ahead_while_moving", 0)),
 		"pre_lost": int(mf.get("lost_chunks", 0)),
 		"pool_dbg": pool_dbg,
-		# AC-0233: the tier-set flip (the gate) — the pre-spin cone set,
-		# the post-spin cone set, how fast the re-stamp landed, and that
-		# no former cone entry survived the 180 flip.
-		"t2pre_n": int(t2pre.size()),
-		"t2post_n": int(t2post.size()),
+		# AC-0250: the look-invariance regression (the gate) — the live
+		# tier of every entry queued in both snapshots must survive the
+		# 180 deg flip untouched (the look no longer orders the queue):
+		# t2pre_n / t2post_n = the tier-2 ("rest") set sizes at each
+		# snapshot, t2common = the tier-2 entries present in BOTH,
+		# common_n = the entries present in both, invariant = the tier
+		# comparison over them, flip_frames = frames until the stamp
+		# state settled after the flip.
+		"t2pre_n": t2pre_n,
+		"t2post_n": t2post_n,
+		"common_n": common_n,
+		"t2common": t2common,
 		"flip_frames": flip_frames,
-		"flip_overlap": overlap,
-		"flip_post_bad": post_bad,
-		"ok": int(t2pre.size()) >= 8 and flip_frames >= 0 and overlap == 0 \
-				and post_bad == 0,
+		"invariant": invariant,
+		"ok": invariant and common_n >= 8 and t2common >= 8,
 	}
 
 
@@ -9513,13 +9532,13 @@ func _nightlot_test(spawn: Vector3) -> void:
 		per_chunk_diff[key] = hit
 	print("NLDBG cache_hits=%d/%d" % [n_cache, censusA.size()])
 	# The re-roll needs a DIFFERENT build order than the initial load: with an
-	# identical order (no player -> _look_dir pinned (1,0), px=pz=0) the drain
-	# is fully deterministic and re-entry re-derives the same eff (diffs would
-	# be 0 by construction). A real walk-back turns around: face back toward
-	# spawn (west) so the score-driven pick order reverses along x.
-	# _refresh_look_dir() (world.gd:702) early-returns when Game.player == null,
-	# so the probe-set direction holds.
-	world._look_dir = Vector2(-1.0, 0.0)
+	# identical order the drain is fully deterministic and re-entry re-derives
+	# the same eff (diffs would be 0 by construction). AC-0250 removed the
+	# look from the tier order (the old probe reversed it via
+	# world._look_dir), so the order now differs by QUEUE TIMING: the return
+	# is a fresh rebuild after two far hops (no spawn-fast burst — the
+	# recenter walk re-queues the circle from the away state), so the pick
+	# sequence diverges from the initial spawn load.
 	world.recenter(spawn.x, spawn.z, true)
 	await _nl_settle_around(0, 0, 60000)
 	var censusB := _nl_census_all()

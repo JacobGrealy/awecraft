@@ -353,19 +353,20 @@ var _drain_win_acc := 0  # AC-0231 fps-tuning: WALL-CLOCK ms since last growth
 # DRAIN_UNIT_PACE_MS const) — the chunk build pace is frame-rate independent.
 var _drain_last_t := 0       # wall ms of the previous drain frame (dt sample)
 var _drain_acc_ms := 0.0     # unit-pace accumulator (wall ms banked)
-# AC-0217 + AC-0233: the pool/score debounce. The drain's scored picks
-# (build / forward-lead / data) re-ran _collect_pool (up to PICK_POOL_CAP
-# entries) + scoring every frame even when the player stands still and the
-# world is idle. A pick is a pure function of (queue membership +
-# eligibility, look dir, maxb, _spawn_fast, the recenter center, the
-# in-flight depths) — AC-0233: the 4-tier order depends only on the column
-# + look dir, so px/pz left the key and moving within a column no longer
-# rescans. _pool_ver bumps at every mutation of that state (every
+# AC-0217 + AC-0233/AC-0250: the pool/score debounce. The drain's scored
+# picks (build / forward-lead / data) re-ran _collect_pool (up to
+# PICK_POOL_CAP entries) + scoring every frame even when the player stands
+# still and the world is idle. A pick is a pure function of (queue
+# membership + eligibility, maxb, _spawn_fast, the recenter center, the
+# sim radius, the in-flight depths) — AC-0233/AC-0250: the 3-tier order
+# depends only on the column + sim radius (the look no longer matters at
+# all), so px/pz left the key and moving or turning within a column no
+# longer rescans. _pool_ver bumps at every mutation of that state (every
 # band_buckets mutation site — the same lockstep list as the AC-0222
 # _build_q_n counter — plus the data-landing choke points); when the
 # quantized key and the version are unchanged, the last pool/score result is
 # served and the rescan + rescore is skipped entirely. A column cross, a
-# ~10 deg turn, a yaw snap, or a pool change changes the key -> a fresh scan
+# sim-radius change, or a pool change changes the key -> a fresh scan
 # (the debounced rewrite of the waiting parts). The candidate re-validation
 # on a hit is the safety net: a stale cached candidate re-scans instead of
 # being served.
@@ -376,10 +377,6 @@ var _pool_b: Array = []    # [key, e, c, s, pe] last build-pass pick
 var _pool_fb: Array = []   # [key, e, c, s, pe] last forward-lead pick
 var _pool_data: Array = [] # [key, e, null, s, pe] last data-pass pick
 
-# AC-0233: the 4-tier priority cone — dot of the horizontal direction to
-# the chunk with the look direction > TIER_CONE_DOT = inside the FOV cone
-# (tier 2); anything else is tier 3 (the rest).
-const TIER_CONE_DOT := 0.5
 # AC-0233: the amortized queue-rewrite slice — entries re-stamped per drain
 # step (a full R50 7845-entry queue re-stamps in ~4 frames; R16 in one).
 const RESCORE_PER_FRAME := 2048
@@ -404,49 +401,45 @@ func _pool_touch() -> void:
 	_pool_ver += 1
 
 func _pool_key(maxb: int) -> String:
-	# AC-0233: the tiered pick is a pure function of (pool state + look dir
-	# + drain window + spawn-fast + recenter center) — moving WITHIN a
-	# column does not change the tier order, so px/pz left the key. The
-	# look only moves in ~10 deg snaps (the _look_dir refresh gate), so a
-	# key hit means no rescan: the waiting parts are rewritten only on a
-	# column cross (pcx/pcz), a ~10 deg turn, a yaw snap, or a pool change.
-	return "%d_%d_%d_%d_%d_%d_%d_%d" % [
+	# AC-0233/AC-0250: the tiered pick is a pure function of (pool state +
+	# drain window + spawn-fast + recenter center + sim radius) — the look
+	# no longer affects the order at all (AC-0250 removed the look bias),
+	# so moving OR turning within a column does not change the tier order
+	# and px/pz left the key. A key hit means no rescan: the waiting parts
+	# are rewritten only on a column cross (pcx/pcz), a sim-radius change,
+	# or a pool change.
+	return "%d_%d_%d_%d_%d_%d" % [
 		_pool_ver,
-		int(roundf(_look_dir.x * 100.0)), int(roundf(_look_dir.y * 100.0)),
 		maxb, 1 if _spawn_fast else 0,
 		last_pcx, last_pcz,
 		band0_r,  # AC-0239: the sim radius is the tier-1 boundary
 	]
 
-# AC-0233 4-tier priority of a waiting entry (dx,dz = offset from the
+# AC-0233 3-tier priority of a waiting entry (dx,dz = offset from the
 # player's column); AC-0239: tier 1 is the SIMULATION RADIUS (Chebyshev
 # <= band0_r = the sim_dist slider, the same square the collision band 0
 # and the fluid sim use) instead of the 8 ring-1 neighbors - the whole
-# surround fills before the cone, so a turn / sideways walk never shows
-# load-in next to the player. 0 = under (built first), 1 = sim radius,
-# 2 = the FOV cone (taxi-ordered, outside the sim circle), 3 = the rest.
+# surround fills before the far field, so a sideways walk never shows
+# load-in next to the player; AC-0250 removed the look-direction bias:
+# 0 = under (built first), 1 = sim radius, 2 = everything else (ordered
+# by taxi distance, look-independent).
 func _tier_of(dx: int, dz: int) -> int:
 	if dx == 0 and dz == 0:
 		return 0
 	if maxi(absi(dx), absi(dz)) <= band0_r:
 		return 1
-	var tx := float(dx) * 16.0
-	var tz := float(dz) * 16.0
-	var dot := _look_dir.x * tx + _look_dir.y * tz
-	if dot > 0.0 and dot * dot > TIER_CONE_DOT * TIER_CONE_DOT * (tx * tx + tz * tz):
-		return 2
-	return 3
+	return 2
 
 func _tier_score(e: Dictionary) -> float:
 	var dx := int(e["cx"]) - last_pcx
 	var dz := int(e["cz"]) - last_pcz
-	# AC-0233 LEXICOGRAPHIC (tier, taxi); AC-0239 tier order: 0 under, 1 sim
-	# radius, 2 cone, 3 rest. A STRICT primary order: every tier-N
-	# entry sorts before every tier-(N+1) entry, and taxi breaks ties WITHIN
-	# a tier (max render-radius taxi at R50 is ~110, so 10000 leaves room).
-	# The earlier tier + taxi*0.1 blend let a near tier-3 outrank a far
-	# tier-2, which blurred the tier boundary — a 180 spin must re-order
-	# the whole cone set ahead of the whole rest set, not interleave it.
+	# AC-0233 LEXICOGRAPHIC (tier, taxi); AC-0239/AC-0250 tier order:
+	# 0 under, 1 sim radius, 2 the rest (taxi-ordered, look-independent).
+	# A STRICT primary order: every tier-N entry sorts before every
+	# tier-(N+1) entry, and taxi (|dx|+|dz|) breaks ties WITHIN a tier
+	# (max render-radius taxi at R50 is ~110, so 10000 leaves room). The
+	# earlier tier + taxi*0.1 blend let a far-tier entry outrank a
+	# near-tier one, which blurred the tier boundary.
 	return float(_tier_of(dx, dz)) * 10000.0 + float(absi(dx) + absi(dz))
 
 # AC-0233: stamp a waiting entry with its current tier + taxi rank (the
@@ -459,9 +452,9 @@ func _tier_stamp(e: Dictionary) -> void:
 	e["rank"] = absi(dx) + absi(dz)
 	e["_rv"] = _rescore_ver
 
-# AC-0233: rewrite all waiting parts — the queue is speculative and
-# rewritable; a ~10 deg turn / yaw snap or a recenter column cross kicks
-# the pass (amortized, RESCORE_PER_FRAME stamps per drain step). The
+# AC-0233/AC-0250: rewrite all waiting parts — the queue is speculative
+# and rewritable; a recenter column cross or a sim-radius change kicks the
+# pass (amortized, RESCORE_PER_FRAME stamps per drain step). The
 # rewrite only re-stamps queued entries — it NEVER touches the ThreadGen
 # pool4 / ThreadMesh pool6 in-flight work.
 # AC-0239: the sim radius (band0_r) is part of the tier order - a slider
@@ -539,7 +532,7 @@ func _rescore_step() -> void:
 # replaces it).
 # WAVE 3 — HIGH (AC-0233 tiers): dirty edited first (1/frame), then
 # streaming (rewriting on debounced move) in tier order 0 (under you,
-# already high) -> ring 1 (8) -> FOV cone (by distance) -> rest (by
+# already high) -> sim radius (by taxi distance) -> the rest (by taxi
 # distance); separate tiered picks for gen vs mesh. For each non-air slab
 # that has low/fog, the full high at 16x16x16 full greedy (ThreadGen pool
 # 4 / ThreadMesh pool 6) REPLACES low and fog per slab at its Y when
@@ -591,8 +584,8 @@ const LOW_INR_BUDGET_MAX_MS := 8.0
 # AC-0231 high/low order gate: while ANY in-r chunk still has a pending
 # low (fog not yet lowered / a stale low to rebuild), the tier >= 2 HIGH
 # dispatch is HELD (the drain's build pass and the WAVE 3 catch-up both
-# check the _low_inr_drained flag) — only the 3x3 under the player (tier
-# 0 + ring 1 = "priority 0") keeps building high. The freed budget is
+# check the _low_inr_drained flag) — only the tier 0 + 1 chunks (under the
+# player + the sim radius) keep building high. The freed budget is
 # REDIRECTED to the in-r low pass (the BUSY budget below: the gate is not
 # "high waits" — it is "that time goes to the low, so the low goes
 # faster"). The flag flips to drained only after the pending set stayed
@@ -603,9 +596,11 @@ const LOW_INR_BUSY_FRAC := 0.5     # budget share while the gate is closed (low 
 const LOW_INR_BUSY_MAX_MS := 12.0
 const LOW_INR_STABLE_MS := 200.0   # continuous-drain window before the gate opens
 const LOW_INR_SCAN_CAP := 16384    # the in-r scan visits up to this many entries (r50's
-const LOW_TASK_CAP := 64           # AC-0236 part 2: max in-flight low EMIT tasks
-                                   # (64 x ~20 KB slab copies = ~1.3 MB; a saturated
-                                   # pool falls back to the sync main-thread build)
+const LOW_TASK_CAP := 64           # AC-0236 part 2 / AC-0250: max in-flight low EMIT
+                                   # tasks (64 x ~20 KB slab copies = ~1.3 MB; a
+                                   # saturated pool leaves the slab PENDING — the
+                                   # in-r pass or the far wave re-picks it next frame;
+                                   # AC-0250 removed the sync main-thread fallback)
 const LOW_POLL_BUDGET_MS := 4.0    # AC-0236 part 2: the per-frame wall-clock cap on
                                    # low HANDOFFS (the attach cost, ~0.2 ms each)
                                    # whole circle+ring fits; a capped scan leaves the
@@ -642,9 +637,9 @@ var low_max_h := 0.0
 # low_drop_stale_n = dropped results (data changed mid-flight / chunk
 # gone — the slab is still PENDING in the chunk state, so the in-r pass
 # or the far wave re-picks it next frame — no re-queue logic needed);
-# low_sync_fallbacks_n = dispatches that fell back to the MAIN-thread
-# build (the pool queue hit LOW_TASK_CAP — the pre-part-2 behavior, so
-# the worst case never regresses).
+# low_sync_fallbacks_n = ALWAYS 0 since AC-0250 (the main-thread sync
+# fallback is gone — a saturated pool leaves the slab PENDING instead);
+# the variable survives as a regression gate: any increment is a bug.
 var low_enqueue_n := 0
 var low_emit_cpp := 0
 var low_handoff_n := 0
@@ -1880,19 +1875,20 @@ func _low_ms_snap_get() -> Dictionary:
 			}
 	return _low_ms_snap
 
-# AC-0236 part 2: dispatch ONE slab's low EMIT to the TM pool (the C++
-# AweMesh.low_emit on a value-copied slab column — the AC-0082 handoff
-# pattern). Returns 1 = a worker owns it (the _low_handoff attaches),
-# 0 = a task is ALREADY in flight for this (key, si) (dedupe — the
-# caller does nothing), -1 = the caller builds SYNC (the slab is null —
-# no emit needed, only the air bookkeeping — or the pool queue hit
-# LOW_TASK_CAP, the sync build is the pre-part-2 fallback).
+# AC-0236 part 2 / AC-0250: dispatch ONE slab's low EMIT to the TM pool
+# (the C++ AweMesh.low_emit on a value-copied slab column — the AC-0082
+# handoff pattern). Returns 1 = a worker owns it (the _low_handoff
+# attaches), 0 = a task is ALREADY in flight for this (key, si) (dedupe —
+# the caller does nothing), 2 = the pool queue hit LOW_TASK_CAP (capped —
+# a no-op: the slab stays PENDING and the in-r pass or the far wave
+# re-picks it next frame; AC-0250 removed the main-thread sync fallback),
+# -1 = the slab is null (no emit needed, only the air bookkeeping — the
+# caller builds via _low_build_slab).
 func _low_dispatch_slab(c: Node3D, si: int) -> int:
 	if threadmesh_pool == null or si < 0 or si >= c.data.size() or c.data[si] == null:
 		return -1
 	if _low_tasks.size() >= LOW_TASK_CAP:
-		low_sync_fallbacks_n += 1
-		return -1
+		return 2
 	var key := _key(int(c.cx), int(c.cz))
 	var lkey: String = key + ":" + str(si)
 	if _low_task_keys.has(lkey):
@@ -2116,28 +2112,25 @@ func _lod_free_all(c: Node3D, as_upgrade: bool) -> void:
 		c.drop_cap()
 	c.drop_low()
 
-# AC-0231 fix3: the WAVE 3 idle-catch-up pick — scan the waiting streaming
-# queue (band_buckets, in rank order) for the first LOW-HOLDING entry with
-# no high. Order: tier 2 (FOV cone) AHEAD first (early exit — it beats
-# everything), then tier 1 (ring1 8, nearest first — the rank-ordered scan
-# finds it), then cone-behind, then the rest (tier 3) by the AC-0233
-# e["rank"] taxi stamp. TIER 0 (under the player) is never a candidate —
-# it goes straight to high (fall/step-through never). (The WAVE 2 low pick
-# is now slab-level and global — _low_pick_slab.) The no-candidate verdict
-# is cached against (pool_ver, pcx, pcz): a candidate can only APPEAR on a
-# pool-state change (data landing / handoff / recenter — all _pool_touch)
-# or a dirty edit (_dirty_add invalidates the key), so a matching key means
-# a fresh scan finds nothing.
+# AC-0231 fix3 / AC-0250: the WAVE 3 idle-catch-up pick — scan the waiting
+# streaming queue (band_buckets, in rank order) for the first LOW-HOLDING
+# entry with no high. Order: tier 1 (sim radius, nearest first — the
+# rank-ordered scan finds it) first, then the rest (tier 2) by the AC-0233
+# e["rank"] taxi stamp (look-independent). TIER 0 (under the player) is
+# never a candidate — it goes straight to high (fall/step-through never).
+# (The WAVE 2 low pick is now slab-level and global — _low_pick_slab.) The
+# no-candidate verdict is cached against (pool_ver, pcx, pcz): a candidate
+# can only APPEAR on a pool-state change (data landing / handoff /
+# recenter — all _pool_touch) or a dirty edit (_dirty_add invalidates the
+# key), so a matching key means a fresh scan finds nothing.
 func _low_pick(want_low: bool) -> Dictionary:
 	var nk := "%d|%d,%d|%d" % [_pool_ver, last_pcx, last_pcz, 1 if want_low else 0]
 	if nk == _low_none_key:
 		return {}
 	var f1: Dictionary = {}
-	var f20: Dictionary = {}
-	var f21: Dictionary = {}
-	var f3: Dictionary = {}
+	var f2: Dictionary = {}
 	var capped := false
-	var stop := false
+	var stop := false  # the scan-cap early exit (beats the outer loop too)
 	var visited := 0
 	for b in range(band_buckets.size()):
 		if stop:
@@ -2157,7 +2150,7 @@ func _low_pick(want_low: bool) -> Dictionary:
 			# the LIVE tier is the safety guard — tier 0 must NEVER be a
 			# placeholder (high only: fall/step-through under the player);
 			# mid-rescore/recenter the stamp can be stale, so the live tier
-			# also classifies ring1.
+			# also classifies the sim radius.
 			var live := _tier_of(dx, dz)
 			if live == 0:
 				continue
@@ -2181,30 +2174,15 @@ func _low_pick(want_low: bool) -> Dictionary:
 					continue
 				if not c.has_fog() and not bool(c.low_built):
 					continue  # nothing fogged to replace
-			var tier := int(e.get("tier", live))
 			if live == 1:
 				if f1.is_empty():
 					f1 = e
-			elif tier == 2 or live == 2:
-				var ahead := 0
-				if (_look_dir.x * float(dx) + _look_dir.y * float(dz)) <= 0.0:
-					ahead = 1
-				if ahead == 0:
-					f20 = e
-					stop = true  # beats everything — early exit
-					break
-				if f21.is_empty():
-					f21 = e
 			else:
-				if f3.is_empty():
-					f3 = e
-	var best: Dictionary = f20
+				if f2.is_empty():
+					f2 = e
+	var best: Dictionary = f1
 	if best.is_empty():
-		best = f1
-	if best.is_empty():
-		best = f21
-	if best.is_empty():
-		best = f3
+		best = f2
 	# cache the "none" verdict only for a FULL scan (a capped scan may have
 	# left a candidate past the cap).
 	if best.is_empty() and not capped:
@@ -2404,15 +2382,18 @@ func _low_inr_step(dt_ms: float) -> void:
 			continue
 		var it_progress := 0
 		for si in sis:
-			# AC-0236 part 2: the emit rides the TM pool (the C++
-			# low_emit on a worker); only the -1 verdict (null slab / pool
-			# saturated) falls back to the sync main-thread build. The 0
-			# verdict (dedupe — a task is already in flight) is a no-op:
-			# the in-flight result attaches via _low_poll.
+			# AC-0236 part 2 / AC-0250: the emit rides the TM pool (the
+			# C++ low_emit on a worker); the -1 verdict (null slab ONLY —
+			# the sync main-thread fallback is gone) takes the air
+			# bookkeeping via _low_build_slab. The 0 verdict (dedupe — a
+			# task is already in flight) and the 2 verdict (pool saturated
+			# — the slab stays PENDING, re-picked next frame) are no-ops;
+			# a capped slab is NOT in flight, so it does not count as
+			# progress (the in-flight result attaches via _low_poll).
 			var d := _low_dispatch_slab(c, int(si))
 			if d < 0:
 				_low_build_slab(c, int(si))
-			if d != 0:
+			if d != 0 and d != 2:
 				it_progress += 1
 		# AC-0236 part 2: every pending slab of the picked chunk is ALREADY
 		# in flight (all dedupe) — re-picking it would spin the budget on
@@ -2452,8 +2433,8 @@ func _low_step() -> void:
 		return
 	if _low_idle():
 		# WAVE 3 catch-up: dispatch the best low-holding entry to high
-		# through the normal TM path (nearest cone first, then ring1,
-		# cone-behind, rest) — one dispatch/frame. (NOT a return: WAVE 2
+		# through the normal TM path (nearest sim-radius entry first, then
+		# the rest by taxi) — one dispatch/frame. (NOT a return: WAVE 2
 		# below must drain to completion even while the heavy pipeline is
 		# idle — an atlas swap's re-lower must not wait for the player to
 		# move, and the wave model is all-fog -> all-low -> all-high.)
@@ -2499,10 +2480,11 @@ func _low_step() -> void:
 			# the pick went stale (a handoff/recenter raced) — rescan.
 			_low_slab_none_key = ""
 			break
-		# AC-0236 part 2: the emit rides the TM pool (the -1 verdict falls
-		# back to the sync build; the 0 dedupe verdict just consumes the
-		# pace tick — the in-flight result attaches via _low_poll and the
-		# pick advances when it lands).
+		# AC-0236 part 2 / AC-0250: the emit rides the TM pool (the -1
+		# verdict — null slab only — takes the air bookkeeping; the 0
+		# dedupe verdict and the 2 saturated verdict just consume the pace
+		# tick — the slab stays PENDING, the in-flight result attaches via
+		# _low_poll, and the wave re-picks when it lands / next frame).
 		if _low_dispatch_slab(c2, int(e2["si"])) < 0:
 			_low_build_slab(c2, int(e2["si"]))
 		_low_slab_none_key = ""  # a slab left the pending set — re-pick
@@ -2714,10 +2696,7 @@ var perf_light_batch_calls := 0
 var perf_light_batch_chunks := 0
 var perf_light_cache_hits := 0
 var light_saved_restores := 0
-var _look_yaw := 0.0
-var _look_dir := Vector2(1, 0)
 const PICK_POOL_CAP := 512
-const PICK_LOOK_REFRESH_DEG := 10.0
 # AC-0079 v3 pick-order probe: a bounded log of every mesh-build DISPATCH
 # (any _mesh_dispatch that actually dispatches — sync fallbacks included,
 # dedup re-picks excluded). The boundary harness reads it to count, per
@@ -3332,8 +3311,9 @@ func _process(_delta: float) -> void:
 	# recenter stream is quiet (no recenter for AHEAD_RING_DEBOUNCE_MS)
 	# and the walk center is not the resting center, run one final rebuild
 	# at the resting center: the circle re-queues, the tiered feed refills
-	# it (look-cone first), and the render circle fills in around the
-	# stopped player. Walking is unaffected: each walk anchors the center
+	# it (under first, then the sim radius, then the rest by taxi), and
+	# the render circle fills in around the stopped player. Walking is
+	# unaffected: each walk anchors the center
 	# to the player (cover 0), so the settle never fires.
 	if not _rec_pending and not _spawn_fast and _last_recenter_ms > 0 \
 			and Time.get_ticks_msec() - _last_recenter_ms > AHEAD_RING_DEBOUNCE_MS \
@@ -5041,26 +5021,9 @@ func _build_unit(c: Node3D, cx: int, cz: int) -> bool:
 	perf_build_ms += dt
 	return not covered
 
-func _refresh_look_dir() -> void:
-	var p = Game.player
-	if p == null:
-		return
-	var dy := fposmod(float(p._yaw) - _look_yaw, TAU)
-	if dy > PI:
-		dy = TAU - dy
-	if dy * 180.0 / PI < PICK_LOOK_REFRESH_DEG:
-		return
-	# AC-0079 fix: match player.gd aim_dir() = Basis.from_euler(pitch,yaw,0)*(0,0,-1)
-	# = (-sin(yaw), -cos(yaw)) in (x,z). Old (cos,sin) pointed sideways at yaw=-PI/2.
-	var d := Vector2(-sin(float(p._yaw)), -cos(float(p._yaw)))
-	var l := d.length()
-	_look_dir = d / l if l > 1e-6 else Vector2(1, 0)
-	_look_yaw = float(p._yaw)
-	_rescore_kick()  # AC-0233: ~10 deg turn / yaw snap — rewrite waiting parts
-
-# AC-0233: _entry_score (the continuous d + look-ahead score) is replaced by
-# the 4-tier priority (_tier_of/_tier_score) — under (0), ring1 8 (1), the
-# FOV cone by taxi (2), the rest by distance (3).
+# AC-0233/AC-0250: _entry_score (the continuous d + look-ahead score) is
+# replaced by the 3-tier priority (_tier_of/_tier_score) — under (0), the
+# sim radius (1), the rest by taxi distance (2, look-independent).
 
 func _collect_pool(build: bool, include_fb := false, maxb := -1) -> Array:
 	# AC-0079 round 3: the pick is score-driven (spec: generate the LOWEST score
@@ -5111,9 +5074,10 @@ func _collect_pool(build: bool, include_fb := false, maxb := -1) -> Array:
 # --- AC-0217: the cached scored picks (the pool/score debounce) ------------
 # _pick_build_cached: the MESH candidate pick (the ThreadMesh pool6 feed):
 # pool scan + re-validate + _build_ready (gen + light flat ready — the
-# 8-neighbor gate) + the AC-0233 4-tier score, cached against the AC-0217
-# key (AC-0233: column + look only — the tier order is invariant to
-# in-column moves). On a hit the cached candidate is re-validated (c == null
+# 8-neighbor gate) + the AC-0233/AC-0250 3-tier score, cached against the
+# AC-0217 key (AC-0233/AC-0250: column + sim radius only — the tier order
+# is invariant to in-column moves and to turns). On a hit the cached
+# candidate is re-validated (c == null
 # / data / mesh_built / _build_ready); a stale candidate re-scans instead of
 # being served. A cached EMPTY pick is trusted: a membership or readiness
 # change always bumps _pool_ver, so a matching key means a fresh scan would
@@ -5159,7 +5123,8 @@ func _pick_build_cached(maxb: int, include_fb: bool) -> Dictionary:
 	return {"e": best_e, "c": best_c, "s": best_s, "pool_empty": bp.is_empty()}
 
 # _pick_data_cached: the GEN candidate pick (the ThreadGen pool4 feed):
-# no-data pool scan + the in-flight dedup gates + the AC-0233 4-tier score.
+# no-data pool scan + the in-flight dedup gates + the AC-0233/AC-0250
+# 3-tier score.
 # SEPARATE tiered pick from _pick_build_cached — gen runs its own tiered
 # order over the no-data set; the mesh pick only sees gen + light flat
 # ready entries. Cached against the AC-0217 key PLUS the in-flight depths.
@@ -5424,10 +5389,11 @@ func _drain_build_queue() -> void:
 				budget -= 1
 				u += 1
 				remesh_lane += 1
-		_refresh_look_dir()
-		# AC-0217: the scored pick is cached against (queue version + pos +
-		# yaw + maxb + spawn-fast + center) — an idle frame with an unchanged
-		# world serves the last pool/score and skips the rescan + rescore.
+		# AC-0217/AC-0233/AC-0250: the scored pick is cached against (queue
+		# version + maxb + spawn-fast + center + sim radius) — since the
+		# look left the key (AC-0250), it is a pure function of the pool
+		# state: an idle frame with an unchanged world serves the last
+		# pool/score and skips the rescan + rescore.
 		var bpick := _pick_build_cached(maxb, false)
 		var best_e: Dictionary = bpick["e"]
 		var best_c: Node3D = bpick["c"]
@@ -5447,11 +5413,11 @@ func _drain_build_queue() -> void:
 				best_c = fpick["c"]
 				best_from_fb = true
 		if best_c != null:
-			# AC-0231 order gate: high OUTSIDE the 3x3 (tier >= 2) waits
-			# until the in-r lows drain (the fog -> low wave stays fully
-			# ahead; only the under + ring1 high flows while low is
-			# pending). The entry stays queued — it dispatches when the
-			# gate opens; the unit goes to the data pass below (data
+			# AC-0231 order gate: high OUTSIDE the sim radius (tier >= 2)
+			# waits until the in-r lows drain (the fog -> low wave stays
+			# fully ahead; only the under + sim-radius high flows while
+			# low is pending). The entry stays queued — it dispatches when
+			# the gate opens; the unit goes to the data pass below (data
 			# keeps landing so the low pass has work to do).
 			var dxg := int(best_e["cx"]) - last_pcx
 			var dzg := int(best_e["cz"]) - last_pcz
@@ -5482,7 +5448,8 @@ func _drain_build_queue() -> void:
 			# after all nearer-band data drains and _build_ready stalls the forward
 			# mesh. Pool = _collect_pool(false) (band scan from the dq cursor,
 			# capped at PICK_POOL_CAP, same as before); each candidate is scored
-			# with the AC-0233 4-tier priority (_tier_score) and the lowest wins.
+			# with the AC-0233/AC-0250 3-tier priority (_tier_score) and the
+			# lowest wins.
 			# Per-consumption FIFO cursor bookkeeping (dq_b/dq_i advance past the
 			# consumed entry) is kept so entries are never re-picked and queue_size
 			# stays exact.
