@@ -9200,4 +9200,51 @@ intake:
     light cascade on handoff (~1.2 s class), the per-dispatch strip/nbs
     work (30-50 ms class), the per-slab MeshInstance3D create/attach, the
     in-r low budget (up to 8 ms/frame), the blob IO commit, the burst
-    handoff.'
+    handoff.
+
+
+    3) Implementation (agent, 2026-09-10): DONE - commit fdee3a1. Code
+    (instrument-only, +506/-1, zero behavior/scheduling change): world.gd -
+    a per-stage timing ring before _process (180 frames x 10 stages,
+    pre-allocated, main-thread-only, no hot-path allocation or locks): the
+    TOP-LEVEL DISJOINT partition DRAIN (_drain_build_queue) / LOW
+    (_low_step) / HANDOFF (threadgen_poll + threadmesh_poll) / IO
+    (io_poll) / RECENTER (_recenter_slice) + MISC = the exact frame
+    remainder (reconciliation 0% by construction, a negative-MISC guard
+    misc_neg_max_us); sub-stages (attribution detail, not in the
+    partition): FACELIGHT (_eff_landed face-block cascade - ISOLATED),
+    RESCORE (_rescore_step - a DRAIN subset), MESHATTACH (the per-slab
+    instance attach: _low_place_slab / _fog_ensure_slab / _cap_ensure_slab
+    + chunk.gd _assemble_slab - the AC-0247 suspect - ISOLATED); exposed
+    via the world.profiler getter (rolling p50/p95/max/avg + active frames
+    per stage + the tg/tm/low occupancy; stats recomputed on read only).
+    chunk.gd - the _assemble_slab attach timing into the world ring.
+    console.gd - the live WORLD-PIPELINE table in the AC-0244 debug
+    overlay (backtick/F3): 9 stage rows (sub-stages indented) + the FRAME
+    row (p95 ms + approx fps) + the occupancy, refreshed ~every 500 ms
+    while open. harness.gd - the NEW standalone AWECRAFT_LOGIC=wprof arm
+    (NOT in the battery): r16-style settle + a 17 s sustained 4x flight in
+    3 segments (Engine.max_fps=60 pacing so headless gets true 16.7 ms
+    frames; the ring is read after each segment) - RESULT JSON with the
+    per-stage tables + reconciliation + the flight evidence; gates:
+    completes, the major stages have non-zero frames, the frame avg is
+    non-vacuous, recon <= 10%, no negative MISC, 0 errors. VERIFY
+    (coordinator, independent runs): genhash (0,0) 80b904c0... exact;
+    meshprobe ok:true verts 321080 in BOTH of 2 runs; r16 ok:true with the
+    falsy-leaf set IDENTICAL to HEAD (only the pre-existing
+    air/height/immediate) and the spin invariance holding - the
+    schedule-transparency proof; wprof ok:true reproducing the subagents
+    headline; battery genhash+range ok:true; 0 script/shader errors.
+    HEADLINE DATA (4x flight, busiest 3 s window, server CPU): frame avg
+    4.2 / p50 3.7 / p95 10.5 / max ~25 ms; LOW (the low-res slab lane) is
+    the dominant main-thread stage (avg 2.8 / p95 7.6 / max 10.0);
+    HANDOFF is spiky (avg 0.2, max 12.0); MESHATTACH is cheap (max ~0.9,
+    active 86/180 frames) - the AC-0247 pooling suspect is NOT the biggest
+    cost on this machine; FACELIGHT is rare (2 frames) but the most
+    expensive isolated event (max ~5.7). CAVEAT: this is the server CPU
+    (fast) at 60 fps pacing; the users 20 fps Windows profile needs the
+    LIVE overlay reading (their machine) before the fix tickets are
+    filed. SHIPPED as AweCraft[20260910-1004 fdee3a1] (:8080 byte-matched;
+    zip 62b4dd88... exe 797c0929...). NEXT: the user flies this build at
+    4x, opens the overlay (backtick/F3) and reads the WORLD-PIPELINE
+    table; the fix ticket(s) follow the data.'
