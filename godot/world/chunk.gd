@@ -11,6 +11,13 @@ const XQ_B := [Vector3(0.5, 0, 0), Vector3(0.5, 0, 1), Vector3(0.5, 1, 1), Vecto
 var cx := 0
 var cz := 0
 var face := 0
+# AC-0247: the column POOL's logical generation — bumped on every checkout
+# (pooled node reuse) by world.gd's _make_chunk_node/_ensure_face_chunk.
+# The node's instance_id is fixed per object, so a reused node keeps its
+# id; every dispatch captures col_gen alongside the instance_id and every
+# handoff drops a mismatch — the identity token that a freed-and-respawned
+# (same pooled) column presents as NEW to in-flight tasks.
+var col_gen := 0
 # AC-0203: per-slab palette representation (MC 1.18 style). 24 slabs of
 # 16x16x16; each is null (all air) or a ChunkIO slab dict {n,b,p,i,nz}:
 # n==1 uniform, n==2..16 paletted (packed bit indices), n==0 raw 8-bit
@@ -168,11 +175,11 @@ func has_cap_si(si: int) -> bool:
 
 func drop_low() -> void:
 	if fog_instance != null:
-		fog_instance.queue_free()
+		_pool_free_mm(fog_instance)
 		fog_instance = null
 	for mi in low_instances:
 		if mi != null:
-			mi.queue_free()
+			_pool_free_mi(mi)
 	fog_slabs = []
 	low_instances = []
 	low_slabs = []
@@ -186,10 +193,50 @@ func drop_cap() -> void:
 	# AC-0234: free the cap MultiMesh + clear the slab list (evict / the
 	# high replaces the culled placeholders).
 	if cap_instance != null:
-		cap_instance.queue_free()
+		_pool_free_mm(cap_instance)
 		cap_instance = null
 	cap_slabs = []
 	cap_mask = 0
+
+# AC-0247: route an instance free through the world pools (the world owns
+# the pools — per World, per the ticket). The fallback free is the
+# pre-AC-0247 behavior for the world-less standalone chunk contexts.
+func _pool_free_mi(mi: MeshInstance3D) -> void:
+	if mi == null or not is_instance_valid(mi):
+		return
+	if Game.world != null and Game.world.has_method("_mi_checkin"):
+		Game.world._mi_checkin(mi)
+	else:
+		mi.queue_free()
+
+
+func _pool_free_mm(mmi: Node) -> void:
+	if mmi == null or not is_instance_valid(mmi):
+		return
+	if Game.world != null and Game.world.has_method("_mm_checkin"):
+		Game.world._mm_checkin(mmi)
+	else:
+		mmi.queue_free()
+
+
+# AC-0247: the old-instance free for the re-mesh paths (apply_accs /
+# apply_edit_accs): the MeshInstance3D slab instances go to the pool;
+# anything else (the OccluderInstance3D) keeps the legacy free (out of
+# scope — it is not a MeshInstance3D and never exists in headless).
+func _pool_free_inst(o2) -> void:
+	if o2 is MeshInstance3D:
+		_pool_free_mi(o2)
+	else:
+		o2.queue_free()
+
+
+# AC-0247: the per-slab MeshInstance3D checkout (the world pool resets
+# mesh/transform/material/visibility/cast_shadow; the caller sets the
+# per-use values right after — identical to the fresh-node path).
+func _pool_mi_new() -> MeshInstance3D:
+	if Game.world != null and Game.world.has_method("_mi_checkout"):
+		return Game.world._mi_checkout()
+	return MeshInstance3D.new()
 
 # AC-0108: vertical 16x16x16 slabs, each owning its own mesh/fluid/flora
 # instances + collision body; data/fl stay column-wide. AC-0091: the slab
@@ -1096,7 +1143,7 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 	# Acc is empty) - the retain-swap in apply_accs / apply_edit_accs
 	# frees the old instances the moment the new refs are in place.
 	if mesh.get_surface_count() > 0:
-		var mi := MeshInstance3D.new()
+		var mi := _pool_mi_new()  # AC-0247: pool (per-slab ArrayMesh stays alloc — data pooling is out of scope)
 		mi.mesh = mesh
 		add_child(mi)
 		s.mesh_instance = mi
@@ -1135,7 +1182,7 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 			sidx[3] = fmesh.get_surface_count() - 1
 			fmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, sl)
 			fmesh.surface_set_material(fmesh.get_surface_count() - 1, _fluid_anim_bf_material(24))
-		var fi := MeshInstance3D.new()
+		var fi := _pool_mi_new()  # AC-0247: pool (the checkout reset makes the cast_shadow below a per-use value, as on a fresh node)
 		fi.mesh = fmesh
 		# (0 = off; this build strips the GeometryInstance3D enum constants)
 		fi.cast_shadow = 0
@@ -1154,7 +1201,7 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 			fm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ax))
 			fm.surface_set_material(fm.get_surface_count() - 1, _get_mat("flower"))
 			fsidx[1] = fm.get_surface_count() - 1
-		var fi2 := MeshInstance3D.new()
+		var fi2 := _pool_mi_new()  # AC-0247: pool
 		fi2.mesh = fm
 		add_child(fi2)
 		s.flora_instance = fi2
@@ -1388,7 +1435,7 @@ func apply_accs(res: Dictionary, ms: Dictionary) -> void:
 			s2.occluder = null
 	for o2 in old_insts:
 		if is_instance_valid(o2):
-			o2.queue_free()
+			_pool_free_inst(o2)  # AC-0247: the MeshInstance3D slab instances go to the pool (the occluder keeps the legacy free)
 	mesh_built = true
 	mesh_gen += 1
 	_post_build_collision()
@@ -1420,7 +1467,7 @@ func apply_edit_accs(res: Dictionary, ms: Dictionary) -> void:
 		_assemble_slab(slabs[si0 + i], _acc_from_dict(row[0]), _acc_from_dict(row[1]), _acc_from_dict(row[2]), _acc_from_dict(row[3]), _acc_from_dict(row[4]), _acc_from_dict(row[5]), pms, bool(row[6]))
 	for o2 in old_insts:
 		if is_instance_valid(o2):
-			o2.queue_free()
+			_pool_free_inst(o2)  # AC-0247: the MeshInstance3D slab instances go to the pool (the occluder keeps the legacy free)
 	mesh_built = true
 	mesh_gen += 1
 	_post_build_collision()
@@ -1466,3 +1513,100 @@ func _build_slab_collision(s: Slab) -> void:
 	if si < slabs.size():
 		perf_slab_body_builds[si] += 1
 		perf_slab_body_ms[si] += float(Time.get_ticks_msec() - tb)
+
+
+# AC-0247: the column POOL reset — called by world._col_checkin before the
+# node returns to the pool. It restores EVERY state field the column owns
+# to its fresh (just-created) value, enumerated from the script's instance
+# declarations above (missing one is the stale-state bug: chunk B
+# inheriting chunk A's data). The Slab objects survive (init_slabs keeps
+# them — no per-spawn allocation); their per-use fields are reset in
+# place to the init_slabs fresh state. The placeholder/instance NODES
+# themselves are NOT touched here — world._col_checkin already returned
+# them to the world pools (fog/low/cap via _lod_free_all, the high slab
+# instances via the child walk).
+#
+# col_gen is deliberately NOT reset: it is the logical-identity token the
+# task handoffs validate against (see the field comment) and must stay
+# MONOTONIC across checkouts of this node — a reset would let an
+# in-flight task of the previous life match the new one.
+#
+# The node's transform is reset to identity; the checkout sets the
+# position (the "cx,cz" key lives in the world's chunks map, set by the
+# checkout). The instance_id is fixed per object — it is NOT identity
+# for a pooled column (col_gen is).
+func _pool_reset() -> void:
+	# identity (the checkout re-sets cx/cz/face/position + the map key)
+	cx = 0
+	cz = 0
+	face = 0
+	position = Vector3.ZERO
+	# data (the slab cell arrays — the 4096-cell buffers — drop here;
+	# the live slab buffers are C++-owned, freed by refcount as today)
+	data = []
+	fl = []
+	data_gen = 0
+	fl_gen = 0
+	eff_gen = 0
+	top = -1
+	# mesh state
+	mesh_built = false
+	mesh_gen = 0
+	last_eff = {}
+	last_blk_ring = PackedInt32Array()
+	# collision
+	collision_enabled = true
+	col_immediate = true
+	last_collision_build_ms = 0
+	# light
+	saved_light = {}
+	light_recomputes = 0
+	# streaming hysteresis
+	candidate = false
+	cand_since = 0
+	band = 0
+	# placeholders (the nodes were already returned to the world pools)
+	fog_instance = null
+	fog_slabs = []
+	low_instances = []
+	low_slabs = []
+	low_built = false
+	low_stamps = {}
+	low_failed = {}
+	cap_instance = null
+	cap_slabs = []
+	fog_mask = 0
+	low_mask = 0
+	cap_mask = 0
+	# vertical window
+	vwin_ver = 0
+	vwin_full = true
+	vwin_mask = PackedByteArray()
+	# generation
+	gen_keep = PackedByteArray()
+	gen_mask = 0xFFFFFF
+	# slab objects (survive; per-use fields reset in place — the
+	# init_slabs fresh state)
+	for i in range(slabs.size()):
+		var s: Slab = slabs[i]
+		s.y0 = i * 16
+		s.built = false
+		s.mesh_instance = null
+		s.fluid_instance = null
+		s.flora_instance = null
+		s.collision_body = null
+		s.occluder = null
+		s.col_dirty = true
+		s.sidx = PackedInt32Array()
+		s.fsidx = PackedInt32Array()
+	# perf counters (fresh = zeroed SIZE slab_n()). MUST be sized here —
+	# init_slabs early-returns on a pooled column (the slabs survive), so
+	# it would NOT resize them; an empty array makes _build_slab_collision's
+	# perf_slab_body_builds[si] out-of-bounds (observed in r16: OOB index
+	# on a size-0 array).
+	var pib := PackedInt32Array()
+	pib.resize(slab_n())
+	var pfb := PackedFloat32Array()
+	pfb.resize(slab_n())
+	perf_slab_body_builds = pib
+	perf_slab_body_ms = pfb

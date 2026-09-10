@@ -942,7 +942,7 @@ func _vwin_tier0() -> void:
 		# build must WAIT for the full regen (a never-generated slab must
 		# not be built as air); the regen's handoff re-queues the build.
 		# Dedup-safe across the per-recenter calls (in-flight key).
-		threadgen_enqueue(int(c.cx), int(c.cz), _key(int(c.cx), int(c.cz)), c.get_instance_id(), PackedByteArray(), true)
+		threadgen_enqueue(int(c.cx), int(c.cz), _key(int(c.cx), int(c.cz)), c.get_instance_id(), PackedByteArray(), true, int(c.col_gen))
 		vwin_regens_n += 1
 	elif bool(c.mesh_built) and not bool(c.vwin_full):
 		_enqueue_build(int(c.cx), int(c.cz), true)
@@ -1009,7 +1009,7 @@ func _vwin_gen_owed(c: Node3D) -> void:
 	var ts: int = int(c.top)
 	if ts >= 0:
 		rm[ts / 16] = 1
-	threadgen_enqueue(int(c.cx), int(c.cz), _key(int(c.cx), int(c.cz)), c.get_instance_id(), rm, true)
+	threadgen_enqueue(int(c.cx), int(c.cz), _key(int(c.cx), int(c.cz)), c.get_instance_id(), rm, true, int(c.col_gen))
 	vwin_regens_n += 1
 
 # AC-0237: data Landed.
@@ -1189,14 +1189,12 @@ func _cap_ensure_slab(c: Node3D, si: int) -> void:
 	c.cap_slabs.insert(i, si)
 	c.cap_mask |= (1 << si)  # AC-0237 1a: mirror mask sync
 	if c.cap_instance == null:
-		var mm := MultiMesh.new()
-		mm.mesh = _low_fog_mesh
-		mm.transform_format = MultiMesh.TRANSFORM_3D
-		var mi := MultiMeshInstance3D.new()
-		mi.multimesh = mm
-		mi.material_override = _low_fog_mat  # user 2026-09-07: caps wear the FOG color (the shared fog material), not black
-		c.add_child(mi)
-		c.cap_instance = mi
+		# AC-0247: the shared MultiMesh holder comes from the pool
+		# (user 2026-09-07: caps wear the FOG color — the shared fog
+		# material, not black — same as the fresh path).
+		var pair := _mm_checkout()
+		c.add_child(pair[0])
+		c.cap_instance = pair[0]
 	_cap_sync(c)
 	vwin_caps_n += 1
 	if not had:
@@ -1212,7 +1210,7 @@ func _cap_drop_slab(c: Node3D, si: int) -> void:
 	vwin_caps_n -= 1
 	if c.cap_slabs.is_empty():
 		if c.cap_instance != null:
-			c.cap_instance.queue_free()
+			_mm_checkin(c.cap_instance)  # AC-0247: pool (the shared box mesh is never freed)
 			c.cap_instance = null
 		vwin_cap_chunks_n -= 1
 	else:
@@ -1257,6 +1255,183 @@ func _low_fog_bake() -> void:
 	# AC-0234 (user 2026-09-07): the CAPS reuse the FOG material + box mesh
 	# directly (the solid-black cap material is gone) — a capped slab reads
 	# as a fog box at every distance, void-fill, no lighting.
+
+# ============================================================================
+# AC-0247: slab pools (per World) — the mesh-instance / MultiMesh / column
+# / slab-buffer recycling. Memory-lifetime change ONLY: attach order,
+# transforms, meshes, materials, visibility, sorting, stamps, and the
+# streaming in/out timing are identical; the per-slab create/free churn
+# (the waves sweeping out) is replaced by checkout/checkin. Prewarmed
+# SMALL here (a few dozen entries, _pool_prewarm at ready); grow-on-demand
+# handles the rest. The big prewarm (AC-0248) is deliberately NOT here.
+# ============================================================================
+const POOL_MI_PREWARM := 32      # MeshInstance3D: high (mesh/fluid/flora) + low slabs
+const POOL_MM_PREWARM := 8       # [MultiMeshInstance3D, MultiMesh]: fog + cap
+const POOL_COL_PREWARM := 16     # column nodes (chunk.gd script instances)
+
+var _mi_pool: Array = []     # pooled MeshInstance3D (high + low slab instances)
+var _mm_pool: Array = []     # pooled [MultiMeshInstance3D, MultiMesh] (fog + cap)
+var _col_pool: Array = []    # pooled column nodes (detached, fresh state)
+
+# AC-0247 slab-buffer note: the 4096-cell slab cell buffers (the "i"/"p"
+# PackedByteArrays) are KEPT ON ALLOC. The dispatch value-copies
+# (mc.slab_copy at the TM/edit/low sites) allocate them INSIDE the C++
+# slab_copy (no C++ changes allowed), the slab materialization
+# (slab_set / palettize_flat) and the gen handoff (generate_resl) are
+# C++-side too, and the only GDScript alternative — a per-byte copy into
+# pooled buffers — measured 98 us/4096 B (a ~230 us/col copy) vs the
+# C++ slab_copy's ~9 us/col: a net CPU regression that fights the
+# "main stays smooth" goal. The lifetime WAS proven (the dispatch entry
+# is the last consumer; a return-at-handoff is race-free) — this is a
+# perf-driven keep-on-alloc, see the AC-0247 report.
+
+
+func _pool_prewarm() -> void:
+	for i in range(POOL_MI_PREWARM):
+		_mi_pool.append(MeshInstance3D.new())
+	for i in range(POOL_MM_PREWARM):
+		var mm := MultiMesh.new()
+		mm.mesh = _low_fog_mesh
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		var mmi := MultiMeshInstance3D.new()
+		mmi.multimesh = mm
+		mmi.material_override = _low_fog_mat
+		_mm_pool.append([mmi, mm])
+	for i in range(POOL_COL_PREWARM):
+		_col_pool.append(ChunkScript.new())
+
+
+func _mi_checkout() -> MeshInstance3D:
+	var mi: MeshInstance3D = null
+	while not _mi_pool.is_empty():
+		var m = _mi_pool.pop_back()
+		if is_instance_valid(m):
+			mi = m
+			break
+	if mi == null:
+		mi = MeshInstance3D.new()
+	# Reset to the fresh-instance defaults; the per-use values (mesh,
+	# position, material_override, cast_shadow) are set by the caller right
+	# after, exactly as on a fresh node. A pooled instance may carry a
+	# previous life's fluid cast_shadow=0 / material_override / slab Y.
+	mi.mesh = null
+	mi.material_override = null
+	mi.cast_shadow = 1
+	mi.visible = true
+	mi.transform = Transform3D.IDENTITY
+	return mi
+
+
+func _mi_checkin(mi: MeshInstance3D) -> void:
+	if mi == null or not is_instance_valid(mi):
+		return
+	# Drop the mesh REFERENCE only — the per-slab ArrayMesh data frees by
+	# refcount (mesh-DATA pooling is out of scope for AC-0247; it would
+	# need the C++ emit side). The shared pre-baked fog box never rides a
+	# MeshInstance3D (fog/cap are MultiMesh entries), so nothing shared
+	# can be freed by this.
+	mi.mesh = null
+	if mi.get_parent() != null:
+		mi.get_parent().remove_child(mi)
+	_mi_pool.append(mi)
+
+
+func _mm_checkout() -> Array:
+	# [MultiMeshInstance3D, MultiMesh] — the fog/cap placeholder holder
+	# (ONE per chunk; the MultiMesh holds the per-slab box instances).
+	while not _mm_pool.is_empty():
+		var pair = _mm_pool.pop_back()
+		if is_instance_valid(pair[0]):
+			var mmi: MultiMeshInstance3D = pair[0]
+			var mm: MultiMesh = pair[1]
+			mmi.visible = true
+			mmi.transform = Transform3D.IDENTITY
+			mmi.material_override = _low_fog_mat  # fog AND cap wear it
+			mm.mesh = _low_fog_mesh  # shared pre-baked box — never freed
+			mm.instance_count = 0
+			return pair
+	var mm := MultiMesh.new()
+	mm.mesh = _low_fog_mesh
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	mmi.material_override = _low_fog_mat
+	return [mmi, mm]
+
+
+func _mm_checkin(mmi: Node3D) -> void:
+	if mmi == null or not is_instance_valid(mmi):
+		return
+	var mm: MultiMesh = mmi.multimesh
+	if mm != null:
+		# Zero the live instances; the pooled MultiMesh keeps its
+		# capacity buffer (the per-instance realloc that pooling removes).
+		# The shared mesh reference stays put (never freed).
+		mm.instance_count = 0
+	if mmi.get_parent() != null:
+		mmi.get_parent().remove_child(mmi)
+	_mm_pool.append([mmi, mm])
+
+
+func _column_checkout() -> Node3D:
+	# The pooled column arrives in fresh state (_pool_reset ran at
+	# checkin). The caller sets the identity (cx/cz/face/position + the
+	# "cx,cz" key + band/collision_enabled + init_slabs + the col_gen
+	# bump) exactly as on a fresh ChunkScript.new(). The instance_id is
+	# fixed per object — the logical identity a task must validate against
+	# is col_gen (bumped by every checkout).
+	while not _col_pool.is_empty():
+		var c = _col_pool.pop_back()
+		if is_instance_valid(c):
+			return c
+	return ChunkScript.new()
+
+
+func _col_checkin(c: Node3D) -> void:
+	# The streaming-out (r+2) / face-FIFO free path. The placeholders
+	# (fog/low/cap) were already returned to the MultiMesh pool by
+	# _lod_free_all before this runs; here the remaining child kinds are
+	# handled: the HIGH slab MeshInstance3Ds (mesh/fluid/flora) go to the
+	# MeshInstance3D pool, the out-of-scope nodes (the StaticBody3D
+	# collision bodies + the OccluderInstance3D) keep the legacy free.
+	# Walking the children (not just the Slab refs) also sweeps any
+	# untracked instance left by the build_mesh data-empty degenerate
+	# path (it nulls the Slab refs without freeing the nodes — a
+	# pre-existing quirk the pool must not carry into its next life).
+	for ch in c.get_children():
+		if ch is MeshInstance3D:
+			_mi_checkin(ch)
+		elif ch is StaticBody3D:
+			ch.queue_free()
+		elif ch is OccluderInstance3D:
+			ch.queue_free()
+	if c.get_parent() != null:
+		c.get_parent().remove_child(c)
+	c._pool_reset()
+	_col_pool.append(c)
+
+
+# AC-0247: the pool teardown (world._exit_tree, LAST — the exit drain may
+# have checked instances back in via handoffs). Pooled nodes are detached
+# orphans by the pool invariant (checkin removes them from the tree
+# first), so immediate free() is safe and the prewarm entries do not
+# leak at exit. The MM pool's MultiMesh entries are refcounted — dropping
+# the MMI releases them.
+func _pool_free_all() -> void:
+	for mi in _mi_pool:
+		if mi != null and is_instance_valid(mi):
+			mi.free()
+	_mi_pool = []
+	for pair in _mm_pool:
+		var mmi = pair[0]
+		if mmi != null and is_instance_valid(mmi):
+			mmi.free()
+	_mm_pool = []
+	for c in _col_pool:
+		if c != null and is_instance_valid(c):
+			c.free()
+	_col_pool = []
+
 
 # AC-0231 rewrite: FOG WAVE — the immediate placeholder for a far column
 # that just landed data. ONE pre-baked 16x16x16 fog box INSTANCE per
@@ -1326,14 +1501,12 @@ func _fog_ensure_slab(c: Node3D, si: int) -> void:
 	c.fog_slabs.insert(i, si)
 	c.fog_mask |= (1 << si)  # AC-0237 1a: mirror mask sync
 	if c.fog_instance == null:
-		var mm := MultiMesh.new()
-		mm.mesh = _low_fog_mesh
-		mm.transform_format = MultiMesh.TRANSFORM_3D
-		var mi := MultiMeshInstance3D.new()
-		mi.multimesh = mm  # this build: the property is "multimesh" (no underscore)
-		mi.material_override = _low_fog_mat
-		c.add_child(mi)
-		c.fog_instance = mi
+		# AC-0247: the shared MultiMesh holder comes from the pool
+		# (this build: the property is "multimesh" — no underscore; the
+		# _mm_checkout reset sets mesh/material/transform/visibility).
+		var pair := _mm_checkout()
+		c.add_child(pair[0])
+		c.fog_instance = pair[0]
 	_fog_sync(c)
 	low_fog_boxes_n += 1
 	if not had:
@@ -1350,7 +1523,7 @@ func _fog_drop_slab(c: Node3D, si: int) -> void:
 	c.fog_mask &= ~(1 << si)  # AC-0237 1a: mirror mask sync
 	low_fog_boxes_n -= 1
 	if c.fog_slabs.is_empty():
-		c.fog_instance.queue_free()
+		_mm_checkin(c.fog_instance)  # AC-0247: pool (the shared box mesh is never freed)
 		c.fog_instance = null
 		low_fog_chunks_n -= 1
 	else:
@@ -1906,8 +2079,15 @@ func _low_dispatch_slab(c: Node3D, si: int) -> int:
 	var mc: Variant = ChunkScript.mesh_cpp()
 	var entry := {
 		"low": true, "key": key, "cx": int(c.cx), "cz": int(c.cz),
-		"inst": c.get_instance_id(), "si": si,
+		"inst": c.get_instance_id(), "colgen": int(c.col_gen), "si": si,
 		"slabs": mc.slab_copy(c.data),  # the full column (~20 KB; the C++ emit reads si-1/si/si+1)
+		# AC-0247: the slab BUFFER of this value copy stays on C++ alloc —
+		# slab_copy allocates the "i"/"p" buffers internally (no C++
+		# changes allowed), and a GDScript pooled copy measured ~230 us/col
+		# (per-byte loop, 98 us/4096 B) vs the C++ copy's ~9 us/col — a
+		# net CPU regression that would fight the "main stays smooth" goal.
+		# Lifetime was proven (the entry is the last consumer — the poll
+		# returns the buffers at handoff); the keep-on-alloc is perf-driven.
 		"ms": _low_ms_snap_get(),
 		"stamp": c.stamp(),
 		"t_submit": Time.get_ticks_usec(),
@@ -1940,7 +2120,9 @@ func _low_handoff(e: Dictionary, res) -> void:
 	var si := int(e["si"])
 	_low_task_keys.erase(key + ":" + str(si))
 	var c = chunks.get(key)
-	if c == null or int(c.get_instance_id()) != int(e["inst"]):
+	# AC-0247: + col_gen — a pooled column REUSE keeps its instance_id, so
+	# the inst check alone cannot see a freed-and-respawned column.
+	if c == null or int(c.get_instance_id()) != int(e["inst"]) or int(c.col_gen) != int(e.get("colgen", -1)):
 		low_drop_stale_n += 1
 		return
 	if res == null or int(c.data_gen) != int(e["stamp"][0]) or int(c.fl_gen) != int(e["stamp"][1]):
@@ -2034,7 +2216,7 @@ func _low_drop_slab(c: Node3D, si: int) -> void:
 		return
 	var mi: MeshInstance3D = c.low_instances[i]
 	if mi != null:
-		mi.queue_free()
+		_mi_checkin(mi)  # AC-0247: pool (the per-slab ArrayMesh data frees by refcount)
 	c.low_slabs.remove_at(i)
 	c.low_instances.remove_at(i)
 	c.low_mask &= ~(1 << si)  # AC-0237 1a: mirror mask sync
@@ -2049,7 +2231,7 @@ func _low_place_slab(c: Node3D, si: int, mesh: ArrayMesh) -> void:
 	var i := 0
 	while i < c.low_slabs.size() and int(c.low_slabs[i]) < si:
 		i += 1
-	var mi := MeshInstance3D.new()
+	var mi := _mi_checkout()  # AC-0247: pool (per-slab ArrayMesh from the C++ low_emit handoff)
 	mi.mesh = mesh
 	mi.material_override = ChunkScript._get_mat("opaque", _tm_ms_full.get("tex", null))
 	mi.position = Vector3(0.0, float(si * 16), 0.0)
@@ -2057,7 +2239,7 @@ func _low_place_slab(c: Node3D, si: int, mesh: ArrayMesh) -> void:
 	if i < c.low_slabs.size() and int(c.low_slabs[i]) == si:
 		var old: MeshInstance3D = c.low_instances[i]
 		if old != null:
-			old.queue_free()
+			_mi_checkin(old)  # AC-0247: pool (the replacement attach above is identical)
 		c.low_instances[i] = mi
 	else:
 		c.low_slabs.insert(i, si)
@@ -2787,6 +2969,7 @@ func _ready() -> void:
 	_low_ms_snap_dirty = true  # AC-0236 part 2: the low emit snapshot is stale (new atlas)
 	_tm_ctx_atlas = Data.atlas_tex  # AC-0160: stamp for the _process staleness guard
 	_low_fog_bake()  # AC-0231: the far-LOD fog-box template + material
+	_pool_prewarm()  # AC-0247: the SMALL pool prewarm (a few dozen entries — grow-on-demand handles the rest; the big prewarm is AC-0248)
 	threadmesh = true
 	_tm_debug = OS.get_environment("AWECRAFT_TMDEBUG") == "1"
 	print("THREADMESH on threadmesh=true pool=%d" % threadmesh_max)
@@ -2921,6 +3104,13 @@ func _exit_tree() -> void:
 	if threadmesh_edit_pool != null:
 		threadmesh_edit_pool.stop()
 		threadmesh_edit_pool = null
+	# AC-0247: the pool teardown — LAST (the drain above may have checked
+	# instances back into the pools via handoffs). The pooled nodes are
+	# detached orphans (the pool's invariant: checkin removes them from
+	# the tree first), so immediate free() is safe and the prewarm entries
+	# do not leak at exit. The MultiMesh pool's MultiMesh entries are
+	# refcounted — dropping the MMI releases them.
+	_pool_free_all()
 
 # AC-0158: fixed-step 20 Hz game tick on the real frame delta (Bedrock
 # Realms simulation clock; replaces the 5 Hz fluid Timer). A stalled frame
@@ -3997,7 +4187,7 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	# gen runs the C++ generator (WorldGen.generate = AweGen.generate_flat);
 	# the GDScript gen fallback was removed — there is no non-C++ gen path.
 	if threadgen and (cx != 0 or cz != 0):
-		threadgen_enqueue(cx, cz, _key(cx, cz), c.get_instance_id())
+		threadgen_enqueue(cx, cz, _key(cx, cz), c.get_instance_id(), PackedByteArray(), false, int(c.col_gen))
 		if timing:
 			print("GENCHUNK %d,%d gen_ms=0 thread=1 t=%d" % [cx, cz, Time.get_ticks_msec()])
 		return 0
@@ -4056,7 +4246,7 @@ func _gen_skip_flag(cx: int, cz: int) -> int:
 	return 0
 
 
-func threadgen_enqueue(cx: int, cz: int, key: String, inst: int, keep_override: PackedByteArray = PackedByteArray(), regen: bool = false) -> void:
+func threadgen_enqueue(cx: int, cz: int, key: String, inst: int, keep_override: PackedByteArray = PackedByteArray(), regen: bool = false, colgen: int = -1) -> void:
 	if _tg_inflight_keys.has(key):
 		_tg_dedup += 1
 		return
@@ -4081,7 +4271,7 @@ func threadgen_enqueue(cx: int, cz: int, key: String, inst: int, keep_override: 
 		gkeep = keep_override
 	elif not regen and _tier_of(cx - last_pcx, cz - last_pcz) != 0:
 		gkeep = _vwin_keep_for(cx, cz)
-	var entry := {"key": key, "cx": cx, "cz": cz, "inst": inst, "args": [cx, cz, Game.world_seed, Data.HEIGHT, Data.SEA, skipf, gkeep], "tenq": Time.get_ticks_msec(), "regen": regen}
+	var entry := {"key": key, "cx": cx, "cz": cz, "inst": inst, "colgen": colgen, "args": [cx, cz, Game.world_seed, Data.HEIGHT, Data.SEA, skipf, gkeep], "tenq": Time.get_ticks_msec(), "regen": regen}
 	# AC-0203 recenter fix: the data pass now runs HIGH priority.
 	# AC-0160 pinned it LOW to "pace at 3-wide" (the belief that 4.x low
 	# priority = half the threads, 3 of 6). Godot 4.7.1's WorkerThreadPool
@@ -4237,7 +4427,12 @@ func threadgen_poll() -> void:
 					continue
 				if _tg_debug:
 					print("TGEN RETRY %d,%d (no result)" % [int(e["cx"]), int(e["cz"])])
-				threadgen_enqueue(int(e["cx"]), int(e["cz"]), e["key"], int(e["inst"]))
+				# AC-0247: the retry captures the live chunk's col_gen (the
+				# chunk may have been evicted+respawned since the dispatch —
+				# a pooled reuse keeps the instance_id, so col_gen is the
+				# identity token the handoff validates).
+				var rc: Node3D = chunks.get(e["key"])
+				threadgen_enqueue(int(e["cx"]), int(e["cz"]), e["key"], int(e["inst"]), PackedByteArray(), false, int(rc.col_gen) if rc != null else -1)
 				continue
 			threadgen_handoff(e, res)
 			continue
@@ -4256,7 +4451,9 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 			print("TGEN STALE %d,%d (chunk gone)" % [int(e["cx"]), int(e["cz"])])
 		return
 	var expected_inst: int = int(e["inst"])
-	if expected_inst >= 0 and int(c.get_instance_id()) != expected_inst:
+	# AC-0247: + col_gen — a pooled column REUSE keeps its instance_id, so
+	# the inst check alone cannot see a freed-and-respawned column.
+	if expected_inst >= 0 and (int(c.get_instance_id()) != expected_inst or int(c.col_gen) != int(e.get("colgen", -1))):
 		_tg_stale += 1
 		if _tg_debug:
 			print("TGEN STALE %d,%d (inst mismatch %d != %d)" % [int(e["cx"]), int(e["cz"]), expected_inst, int(c.get_instance_id())])
@@ -4614,7 +4811,9 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		if _tm_debug:
 			print("TMESH STALE %d,%d (chunk gone)" % [int(e["cx"]), int(e["cz"])])
 		return
-	if int(c.get_instance_id()) != int(e["inst"]):
+	# AC-0247: + col_gen — a pooled column REUSE keeps its instance_id, so
+	# the inst check alone cannot see a freed-and-respawned column.
+	if int(c.get_instance_id()) != int(e["inst"]) or int(c.col_gen) != int(e.get("colgen", -1)):
 		_tm_stale += 1
 		if bool(e.get("vwin_remesh", false)):
 			vwin_remesh_drop_n += 1
@@ -4985,8 +5184,14 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 	ctx_w["blk_strips_b"] = strips["blk_b"]
 	# AC-0231: the band-2 coarse ctx (coarse/uv_scale) is gone — full fidelity.
 	# AC-0211: own-column value-copy via C++ (AC-0208: the only lane).
+	# AC-0247: the slab BUFFERS of these copies stay on C++ alloc — slab_copy
+	# allocates the "i"/"p" buffers internally (no C++ changes allowed) and
+	# a GDScript pooled copy measured ~230 us/col (per-byte loop, 98
+	# us/4096 B) vs the C++ copy's ~9 us/col — a net CPU regression. The
+	# lifetime was proven (entry = last consumer, return-at-handoff); the
+	# keep-on-alloc is perf-driven (see the report).
 	var entry := {
-		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(),
+		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(), "colgen": int(c.col_gen),
 		"data": mc.slab_copy(c.data),  # AC-0208: C++-only value copy (the GDScript _slabs_deepcopy fallback is gone)
 		"fl": mc.slab_copy(c.fl),
 		"stamp": c.stamp(),
@@ -5158,9 +5363,11 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 	# band builds full fidelity (the far LOD is the separate low placeholder).
 	# AC-0211: the own-column value-copy goes through C++ (AC-0208: the
 	# only lane — the worker + the handoff stale check consume the same
-	# paletted shape).
+	# paletted shape). AC-0247: the slab BUFFERS stay on C++ alloc (slab_copy
+	# is C++; a GDScript pooled copy measured ~230 us/col vs ~9 us/col —
+	# perf-driven keep-on-alloc; lifetime was proven, see the report).
 	var entry := {
-		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(),
+		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(), "colgen": int(c.col_gen),
 		"data": mc.slab_copy(c.data),  # AC-0208: C++-only value copy (the GDScript _slabs_deepcopy fallback is gone)
 		"fl": mc.slab_copy(c.fl),
 		"stamp": c.stamp(),
@@ -6840,7 +7047,8 @@ func _key(cx: int, cz: int) -> String:
 	return s
 
 func _make_chunk_node(cx: int, cz: int) -> Node3D:
-	var c: Node3D = ChunkScript.new()
+	var c: Node3D = _column_checkout()  # AC-0247: pooled column (fresh state) or a fresh node
+	c.col_gen += 1  # AC-0247: the logical identity bump (instance_id is fixed per object)
 	c.cx = cx
 	c.cz = cz
 	c.position = Vector3(cx * 16, 0, cz * 16)
@@ -7039,8 +7247,11 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 		_bl_want.erase(key)
 		_col_pending_set.erase(key)
 		_col_pending.erase(key)
-		_lod_free_all(c, false)  # AC-0231: the freed placeholders leave the live counts
 		if _cblog:
+			# AC-0247: the scan runs BEFORE the pool checkins (the children
+			# are still attached) — it counts the same nodes as the legacy
+			# post-queue_free scan (a queue_free'd child stays in the tree
+			# until the frame's deferred flush).
 			var _nf := 0
 			var _ms := 0
 			var _surfs := 0
@@ -7052,8 +7263,9 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 						_surfs += (_m as ArrayMesh).get_surface_count()
 			_nf += 1
 			print("FREECH %d,%d n=%d surfs=%d" % [int(c.cx), int(c.cz), _nf, _surfs])
+		_lod_free_all(c, false)  # AC-0247: the placeholders return to the MultiMesh pool (leave the live counts)
 		if not _nofree:
-			c.queue_free()
+			_col_checkin(c)  # AC-0247: the column node is reset + pooled (the legacy c.queue_free() is gone)
 	_rp_free_ms += (Time.get_ticks_usec() - tf1) / 1000.0
 	threadgen_poll()
 	threadmesh_poll()
@@ -8157,7 +8369,7 @@ func _io_read_handoff(e: Dictionary) -> void:
 	var ok := typeof(res) == TYPE_DICTIONARY and not (res as Dictionary).is_empty()
 	if not ok:
 		_io_fails += 1
-		threadgen_enqueue(int(e["cx"]), int(e["cz"]), key, int(c.get_instance_id()))
+		threadgen_enqueue(int(e["cx"]), int(e["cz"]), key, int(c.get_instance_id()), PackedByteArray(), false, int(c.col_gen))
 		return
 	_land_column(c, res)  # AC-0203 recenter fix: v4 slabs direct, v1-v3 flat
 	c.saved_light = _saved_light_from_res(res.get("light", {}), int(e["cx"]), int(e["cz"]))
@@ -8743,7 +8955,8 @@ func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 	var c: Node3D = chunks.get(key)
 	if c != null:
 		return c
-	c = ChunkScript.new()
+	c = _column_checkout()  # AC-0247: pooled column (fresh state) or a fresh node
+	c.col_gen += 1  # AC-0247: the logical identity bump (instance_id is fixed per object)
 	c.face = face
 	c.cx = ccx
 	c.cz = ccz
@@ -8765,7 +8978,9 @@ func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 		if chunks.has(old):
 			var oc: Node3D = chunks[old]
 			chunks.erase(old)
-			oc.queue_free()
+			_lod_free_all(oc, false)  # AC-0247: placeholders to the pool (a no-op — face chunks are data-only)
+			if not _nofree:
+				_col_checkin(oc)  # AC-0247: the column node is reset + pooled (the legacy oc.queue_free() is gone)
 	return c
 
 # Storage-level block access, any face. Face 0 (colx,colz) = flat 1m world
