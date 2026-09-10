@@ -304,6 +304,10 @@ static func set_underwater(b: bool) -> void:
 		var am = Data.fluid_anim_mats[bid]
 		if am is ShaderMaterial:
 			am.set_shader_parameter("u_underwater", v)
+	for bid in Data.fluid_anim_bf_mats:  # AC-0245 follow-up 3: the inward pass too
+		var am2 = Data.fluid_anim_bf_mats[bid]
+		if am2 is ShaderMaterial:
+			am2.set_shader_parameter("u_underwater", v)
 
 
 # AC-0128: the lit (unshaded) materials sample the atlas through RUNTIME
@@ -1098,26 +1102,38 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 	else:
 		s.mesh_instance = null
 	if ac.q > 0 or af_w.q > 0 or af_l.q > 0:
-		# AC-0245 (2026-09-09 user report: "moving shadows" underwater):
-		# the fluid surfaces used to share the opaque mesh, so the water
-		# sheet cast into the shadow map (this build has no material-level
-		# cast control - only per-instance). Fluids now get their own
-		# mesh on a cast_shadow-OFF instance: water stops casting the
-		# swimming shadow blobs, and the double draw of every fluid
-		# surface (both instances drew the shared mesh) goes away too.
+		# AC-0245 (2026-09-09 user report: "moving shadows" on
+		# water-covered terrain): the fluids have their own mesh on a
+		# cast_shadow-OFF instance (this build has no material-level cast
+		# control - only per-instance). AC-0245 follow-up 3 (user: the
+		# water must stay two-sided - "show/hide outside / inside faces
+		# based on camera position"): each animated fluid category gets
+		# TWO surfaces - the OUTWARD pass (cull_back) and the INWARD pass
+		# (cull_front). The GPU back-face cull is per-triangle and
+		# camera-relative, so exactly one pass draws each boundary face
+		# per frame (the side the camera is on): the surface stays
+		# visible from underwater, the shore edges from both sides, and
+		# no two water fragments ever coincide (the cull_disabled
+		# z-fight cannot return).
 		var fmesh := ArrayMesh.new()
 		if ac.q > 0:
 			fmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(ac))
 			fmesh.surface_set_material(fmesh.get_surface_count() - 1, _get_mat("fluid"))
 			sidx[1] = fmesh.get_surface_count() - 1
 		if af_w.q > 0:
-			fmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(af_w))
+			var sw := _surface(af_w)
+			fmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, sw)
 			fmesh.surface_set_material(fmesh.get_surface_count() - 1, _fluid_anim_material(5))
 			sidx[2] = fmesh.get_surface_count() - 1
+			fmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, sw)
+			fmesh.surface_set_material(fmesh.get_surface_count() - 1, _fluid_anim_bf_material(5))
 		if af_l.q > 0:
-			fmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _surface(af_l))
+			var sl := _surface(af_l)
+			fmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, sl)
 			fmesh.surface_set_material(fmesh.get_surface_count() - 1, _fluid_anim_material(24))
 			sidx[3] = fmesh.get_surface_count() - 1
+			fmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, sl)
+			fmesh.surface_set_material(fmesh.get_surface_count() - 1, _fluid_anim_bf_material(24))
 		var fi := MeshInstance3D.new()
 		fi.mesh = fmesh
 		# (0 = off; this build strips the GeometryInstance3D enum constants)
@@ -1222,6 +1238,15 @@ static func _fluid_material() -> StandardMaterial3D:  # AC-0120: static (pure)
 
 func _fluid_anim_material(id: int) -> Material:
 	var m = Data.fluid_anim_mats.get(id)
+	if m != null:
+		return m
+	return _fluid_material()
+
+
+# AC-0245 follow-up 3: the INWARD pass (cull_front) material for the
+# two-pass camera-side fluid culling.
+func _fluid_anim_bf_material(id: int) -> Material:
+	var m = Data.fluid_anim_bf_mats.get(id)
 	if m != null:
 		return m
 	return _fluid_material()

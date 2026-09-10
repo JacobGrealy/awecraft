@@ -97,6 +97,8 @@ func _ready() -> void:
 	# per-chunk materials ride the per-frame push in _update_sky.
 	for bid in Data.fluid_anim_mats:
 		Data.fluid_anim_mats[bid].set_shader_parameter("u_srgb_pre", _srgb_pre)
+	for bid in Data.fluid_anim_bf_mats:  # AC-0245 follow-up 3: the inward pass
+		Data.fluid_anim_bf_mats[bid].set_shader_parameter("u_srgb_pre", _srgb_pre)
 	aero = AeroLib.enabled()
 	if aero:
 		_setup_aero()
@@ -1135,6 +1137,10 @@ func _update_sky() -> void:
 		var am2 = Data.fluid_anim_mats[bid]
 		if am2 is ShaderMaterial:
 			am2.set_shader_parameter("u_cam_pos", epos)
+	for bid in Data.fluid_anim_bf_mats:  # AC-0245 follow-up 3: the inward pass
+		var am3 = Data.fluid_anim_bf_mats[bid]
+		if am3 is ShaderMaterial:
+			am3.set_shader_parameter("u_cam_pos", epos)
 	_ChunkScriptM.set_underwater(uwe)
 	if _underwater_tint != null:
 		_underwater_tint.visible = uwe

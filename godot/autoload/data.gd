@@ -35,6 +35,10 @@ var atlas_rects := {}
 var item_atlas_tex: Texture2D = null
 var item_atlas_rects := {}
 var fluid_anim_mats := {}
+# AC-0245 follow-up 3: the INWARD (cull_front) pass of the two-pass
+# camera-side fluid culling (see core/fluid_anim_bf.gdshader) - same ids,
+# same uniforms as fluid_anim_mats.
+var fluid_anim_bf_mats := {}
 const ATLAS_PX := 1024.0
 const TILE_PX := 32
 
@@ -274,22 +278,37 @@ func apply_atlas(image: Image, rects: Dictionary) -> void:
 	for bid in fluid_anim_mats:
 		fluid_anim_mats[bid].set_shader_parameter("atlas", atlas_tex)
 		fluid_anim_mats[bid].set_shader_parameter("anim_frames", float(block_anim_frames(bid)))
+	for bid in fluid_anim_bf_mats:
+		fluid_anim_bf_mats[bid].set_shader_parameter("atlas", atlas_tex)
+		fluid_anim_bf_mats[bid].set_shader_parameter("anim_frames", float(block_anim_frames(bid)))
+
+
+func _fluid_anim_mat(bid: int, sh: Shader) -> ShaderMaterial:
+	var sm := ShaderMaterial.new()
+	sm.shader = sh
+	sm.set_shader_parameter("atlas", atlas_tex)
+	sm.set_shader_parameter("anim_frames", float(block_anim_frames(bid)))
+	sm.set_shader_parameter("frame_time", 0.3)
+	sm.set_shader_parameter("phase", 0.0)
+	sm.set_shader_parameter("alpha_scale", 0.62)
+	return sm
 
 
 func _make_fluid_anim_mats() -> void:
 	for bid in [5, 24]:
-		var sm := ShaderMaterial.new()
-		var sh = load("res://core/fluid_anim.gdshader")
-		if sh == null:
-			sm.queue_free()
+		# AC-0245 follow-up 3 (user: water must stay two-sided): two passes
+		# per fluid id - OUTWARD (cull_back) and INWARD (cull_front). The
+		# GPU back-face cull is per-triangle and camera-relative, so
+		# exactly one pass draws each boundary face per frame (the side
+		# the camera is on) - two-sided water with no coincident
+		# fragments, no cull_disabled z-fight.
+		var sh_f = load("res://core/fluid_anim.gdshader")
+		if sh_f == null:
 			continue
-		sm.shader = sh
-		sm.set_shader_parameter("atlas", atlas_tex)
-		sm.set_shader_parameter("anim_frames", float(block_anim_frames(bid)))
-		sm.set_shader_parameter("frame_time", 0.3)
-		sm.set_shader_parameter("phase", 0.0)
-		sm.set_shader_parameter("alpha_scale", 0.62)
-		fluid_anim_mats[bid] = sm
+		fluid_anim_mats[bid] = _fluid_anim_mat(bid, sh_f)
+		var sh_b = load("res://core/fluid_anim_bf.gdshader")
+		if sh_b != null:
+			fluid_anim_bf_mats[bid] = _fluid_anim_mat(bid, sh_b)
 
 
 func block_anim_frames(id: int) -> int:

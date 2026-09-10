@@ -2,22 +2,20 @@ shader_type spatial;
 render_mode cull_disabled;
 // AC-0245 follow-up 3 (2026-09-09, user: "removing the option to see the
 // water surface from underwater is not an option" + "show/hide outside /
-// inside faces based on camera position"): the OUTWARD pass of the
+// inside faces based on camera position"): the INWARD pass of the
 // two-pass camera-side fluid culling. The engine's render_mode cull
 // options are UNRELIABLE in this build (both cull_back and cull_front
 // render extra sides - probe-confirmed 2026-09-09: byte-identical frames
 // with and without the "culled" side), so the camera-side selection is
 // done EXPLICITLY in the fragment: the geometric face normal (screen-space
-// derivatives of the world position) is computed per fragment and
-// compared with the direction to the camera - only the fragment on the
-// camera's OUTSIDE (air) side of the boundary survives; the INWARD pass
-// (fluid_anim_bf.gdshader) keeps exactly the complementary set. Every
-// water-air boundary (the surface seen from underwater, the shore edges
-// from either side) is two-sided, and each boundary face is rasterized by
-// exactly ONE pass per frame - no coincident fragments, so the
-// cull_disabled z-fight ("moving shadows" mottle on water-covered
-// terrain) cannot return. (Mesh-side companion, follow-up 2: emit_fluid
-// no longer emits fluid faces toward solid neighbors.)
+// derivatives of the world position) is compared with the direction to
+// the camera and only the fragment on the camera's INSIDE (water) side of
+// the boundary survives - the exact complement of the OUTWARD pass
+// (fluid_anim.gdshader). Every water-air boundary (the surface seen from
+// underwater, the shore edges from either side) is two-sided, and each
+// boundary face is rasterized by exactly ONE pass per frame - no
+// coincident fragments, so the cull_disabled z-fight ("moving shadows"
+// mottle on water-covered terrain) cannot return.
 
 // Web-faithful fluid animation (index.html updateAtlasAnims):
 // stacked-frame texture flip, 300 ms/frame (web default frametime),
@@ -49,14 +47,12 @@ void fragment() {
 	if (u_underwater > 0.5 && distance(v_world_pos, u_cam_pos) < 1.2) {
 		discard;
 	}
-	// AC-0245 follow-up 3: EXPLICIT camera-side cull (OUTWARD pass) - the
-	// engine's render_mode cull is unreliable in this build, so select the
-	// camera's outside (air) side of each boundary face per fragment:
-	// derivative face normal vs direction to the camera. The INWARD pass
-	// (fluid_anim_bf.gdshader) keeps exactly the complementary set, so
-	// each boundary face is drawn by exactly one pass per frame.
+	// AC-0245 follow-up 3: EXPLICIT camera-side cull (INWARD pass) - the
+	// complement of the OUTWARD pass: keep only the fragment on the
+	// camera's inside (water) side of the boundary face.
 	vec3 fw = normalize(cross(dFdx(v_world_pos), dFdy(v_world_pos)));
-	if (dot(fw, normalize(u_cam_pos - v_world_pos)) < 0.0) {
+	vec3 vd = normalize(u_cam_pos - v_world_pos);
+	if (dot(fw, vd) > 0.0) {
 		discard;
 	}
 	vec2 uv = UV;
