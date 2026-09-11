@@ -6736,6 +6736,7 @@ func _r16_test(spawn: Vector3) -> void:
 	const MOVING_FRAMES := 900
 	var static_ms: Array = []
 	var ds0 := _r16_dirty_snap()  # AC-0218: phase boundary (after build settle)
+	var p0 := _pool_snap()  # AC-0248: pool grows at build-settle (the initial burst)
 	# AC-0231 rewrite: the far-LOD placeholder coverage at the moment the
 	# player first sees the terrain (the build is done, the camera settles)
 	# — EVERY far non-air slab (outside the render circle) must be covered
@@ -6790,8 +6791,10 @@ func _r16_test(spawn: Vector3) -> void:
 	# bound (build entries <= circle count), and no lost meshes (no pop).
 	var f4: Dictionary = await _fly_phase(4.0, 8.0, Vector3(1, 0, 0))
 	var ds4 := _r16_dirty_snap()  # AC-0218
+	var p4 := _pool_snap()  # AC-0248: pool grows at the fly4 boundary
 	var f50: Dictionary = await _fly_phase(50.0, 2.0, Vector3(1, 0, 0))
 	var ds5 := _r16_dirty_snap()  # AC-0218
+	var p5 := _pool_snap()  # AC-0248: pool grows at the fly50 boundary
 	for i in 30:
 		await get_tree().physics_frame
 	# AC-0233: dirty edits immediate (#4 gate) — mine a surface cell of a
@@ -6828,6 +6831,16 @@ func _r16_test(spawn: Vector3) -> void:
 	var catch_up := int(world.low_upgrades_n) - up0
 	var s := _r16_stats(static_ms)
 	var m := _r16_stats(moving_ms)
+	# AC-0248: pool evidence at arm end (grows + prewarm ms + pool sizes +
+	# the live MI load of the circle).
+	var pend := _pool_snap()
+	var pends: Dictionary = world.pool_sizes()
+	var live := _pool_live_stats()
+	var fly4d := _pool_grow_delta(p0, p4)
+	var fly50d := _pool_grow_delta(p4, p5)
+	var steady_total := 0
+	for k in ["mi", "mm", "col"]:
+		steady_total += int(fly4d[k]) + int(fly50d[k])
 	Debug.result({
 		"mode": "r16",
 		"seed": Game.world_seed,
@@ -7091,6 +7104,34 @@ func _r16_test(spawn: Vector3) -> void:
 			"fly4": _r16_dirty_delta(ds3, ds4),
 			"fly50": _r16_dirty_delta(ds4, ds5),
 		},
+		# AC-0248: the pool PREWARM + GROW evidence (the ticket's ask).
+		# prewarm_ms = the one-time cost (ready prewarm at the default
+		# radius + the R16 top-up at the arm's first recenter). ring_cols
+		# / target = the sizing inputs at the arm's radius (ring = the
+		# columns entering the circle per 1-chunk recenter pass; target =
+		# ~2 rings of columns + their slab MI demand + their fog+cap MM
+		# pairs). burst_grows = the on-demand growth across the INITIAL
+		# circle fill (the whole ~797-column circle, far past the 2-ring
+		# prewarm — it grows the pools once, by design); fly4_grows /
+		# fly50_grows = the growth DURING the sustained fly-forwards —
+		# the steady-state contract: ~0 (the r+2 evict check-in feeds the
+		# ring check-out, so steady state recycles); steady_zero_ok = the
+		# flight phases are allocation-free. sizes_end = the pool depths
+		# at arm end; live = the actual MI load of the circle at the
+		# final sample (avg_mi_per_col checks the sizing constant).
+		"pool": {
+			"prewarm_ms": roundf(world.perf_pool_prewarm_ms * 10.0) / 10.0,
+			"ring_cols": int(world._pool_ring_cols(rr)),
+			"target": _pool_targets_for_dict(world._pool_targets_for(rr)),
+			"burst_grows": p0,
+			"fly4_grows": fly4d,
+			"fly50_grows": fly50d,
+			"steady_grows_total": steady_total,
+			"steady_zero_ok": steady_total == 0,
+			"end_grows": pend,
+			"sizes_end": pends,
+			"live": live,
+		},
 		"elapsed_ms": Time.get_ticks_msec() - t0,
 	})
 	get_tree().quit()
@@ -7179,6 +7220,61 @@ func _r16_dirty_delta(a: Dictionary, b: Dictionary) -> Dictionary:
 	d["light_pending"] = int(b["light_pending"])  # depth at phase end (not a delta)
 	d["light_dirty"] = int(b["light_dirty"])
 	return d
+
+
+# AC-0248: world._pool_targets_for's [mi, mm, col] as a JSON dict.
+func _pool_targets_for_dict(t: Array) -> Dictionary:
+	return {"mi": int(t[0]), "mm": int(t[1]), "col": int(t[2])}
+
+
+# AC-0248: the pool GROW COUNTERS (on-demand checkouts past the prewarm)
+# at a phase boundary — the delta across a phase is that phase's growth.
+func _pool_snap() -> Dictionary:
+	return {
+		"mi": int(world.perf_pool_mi_grows_n),
+		"mm": int(world.perf_pool_mm_grows_n),
+		"col": int(world.perf_pool_col_grows_n),
+	}
+
+
+func _pool_grow_delta(a: Dictionary, b: Dictionary) -> Dictionary:
+	return {
+		"mi": int(b["mi"]) - int(a["mi"]),
+		"mm": int(b["mm"]) - int(a["mm"]),
+		"col": int(b["col"]) - int(a["col"]),
+	}
+
+
+# AC-0248: the LIVE MI load of the render circle at a sample instant
+# (read-only scan): the MeshInstance3Ds the circle columns actually hold
+# (per-slab mesh/fluid/flora + the per-slab low) — the empirical
+# "actual slabs/column" the prewarm sizing constant is checked against.
+func _pool_live_stats() -> Dictionary:
+	var cols := 0
+	var mi := 0
+	var rr2 := int(world.render_radius) * int(world.render_radius)
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if int(c.face) > 1 or c.data.is_empty():
+			continue
+		var dx := int(c.cx) - int(world.last_pcx)
+		var dz := int(c.cz) - int(world.last_pcz)
+		if dx * dx + dz * dz > rr2:
+			continue
+		cols += 1
+		for s in c.slabs:
+			if s.mesh_instance != null:
+				mi += 1
+			if s.fluid_instance != null:
+				mi += 1
+			if s.flora_instance != null:
+				mi += 1
+		mi += int(c.low_instances.size())
+	return {
+		"cols": cols,
+		"mi": mi,
+		"avg_mi_per_col": roundf(float(mi) / maxf(float(cols), 1.0) * 100.0) / 100.0,
+	}
 
 
 # AC-0231 rewrite: the far-LOD placeholder composition at the sample

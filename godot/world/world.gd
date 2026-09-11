@@ -1282,17 +1282,45 @@ func _low_fog_bake() -> void:
 # / slab-buffer recycling. Memory-lifetime change ONLY: attach order,
 # transforms, meshes, materials, visibility, sorting, stamps, and the
 # streaming in/out timing are identical; the per-slab create/free churn
-# (the waves sweeping out) is replaced by checkout/checkin. Prewarmed
-# SMALL here (a few dozen entries, _pool_prewarm at ready); grow-on-demand
-# handles the rest. The big prewarm (AC-0248) is deliberately NOT here.
+# (the waves sweeping out) is replaced by checkout/checkin.
+# AC-0248: prewarmed to the STREAMING DEMAND, not a fixed small count —
+# _pool_prewarm at ready (the default render radius) + _pool_top_up on the
+# recenter that follows any render-radius change (the spawn recenter, the
+# Options slider, the harness arms). Sizing = ~2 recenter RINGS of columns
+# at the current render radius (the AC-0239 ring system: one ring = the
+# columns that ENTER the circle when the center moves one chunk = 2R,
+# _pool_ring_cols) + their slab demand in the MI pool (slabs-per-column x
+# columns) + their fog+cap MM pairs. Memory-warming ONLY: nothing visible
+# differs; grow-on-demand stays the safety net past the prewarm.
 # ============================================================================
-const POOL_MI_PREWARM := 32      # MeshInstance3D: high (mesh/fluid/flora) + low slabs
-const POOL_MM_PREWARM := 8       # [MultiMeshInstance3D, MultiMesh]: fog + cap
-const POOL_COL_PREWARM := 16     # column nodes (chunk.gd script instances)
+const POOL_PREWARM_RINGS := 2   # AC-0248: ~1-2 rings of columns (the ticket)
+const POOL_MM_PER_COL := 2      # AC-0248: fog + cap (one MultiMesh each per column)
+# AC-0248: the floor sizes — a tiny-radius run (or a radius whose ring
+# target is smaller) still keeps the AC-0247 warm minimum.
+const POOL_MI_MIN := 32
+const POOL_MM_MIN := 8
+const POOL_COL_MIN := 16
 
 var _mi_pool: Array = []     # pooled MeshInstance3D (high + low slab instances)
 var _mm_pool: Array = []     # pooled [MultiMeshInstance3D, MultiMesh] (fog + cap)
 var _col_pool: Array = []    # pooled column nodes (detached, fresh state)
+# AC-0248: the POOL GROW COUNTERS — on-demand (fresh-allocation) checkouts,
+# i.e. the checkouts the prewarm did not cover. This is the ticket's
+# evidence: with the prewarm in place a sustained fly-forward shows ~0
+# grows after the initial burst (steady state recycles — the r+2 evict
+# check-in feeds the ring check-out); pre-AC-0248 the first burst grew
+# everything.
+var perf_pool_mi_grows_n := 0
+var perf_pool_mm_grows_n := 0
+var perf_pool_col_grows_n := 0
+# AC-0248: the one-time prewarm cost (ready + every top-up, ms).
+var perf_pool_prewarm_ms := 0.0
+# AC-0248: the cached targets + the radius they were computed for — the
+# recenter top-up check is three int compares in the steady state.
+var _pool_target_r := -1
+var _pool_target_mi := 0
+var _pool_target_mm := 0
+var _pool_target_col := 0
 
 # AC-0247 slab-buffer note: the 4096-cell slab cell buffers (the "i"/"p"
 # PackedByteArrays) are KEPT ON ALLOC. The dispatch value-copies
@@ -1307,10 +1335,67 @@ var _col_pool: Array = []    # pooled column nodes (detached, fresh state)
 # perf-driven keep-on-alloc, see the AC-0247 report.
 
 
-func _pool_prewarm() -> void:
-	for i in range(POOL_MI_PREWARM):
+# AC-0248: the columns that ENTER the render circle when the center moves
+# one chunk (the recenter RING of the AC-0239 ring system): the lattice
+# points inside the shifted circle (dx-1, dz) that the old circle did not
+# hold. Closed-form-exact by count (no fudge factor): exactly 2R — the
+# leading edge of the circle (8 at R4, 32 at R16, 100 at R50; circle_count
+# itself is ~797 at R16 / ~7845 at R50).
+func _pool_ring_cols(r: int) -> int:
+	var n := 0
+	for dx in range(-r, r + 1):
+		for dz in range(-r, r + 1):
+			var nx := dx - 1
+			if nx * nx + dz * dz > r * r:
+				continue
+			if dx * dx + dz * dz > r * r:
+				n += 1
+	return n
+
+
+# AC-0248: the MI instances one column of the home world carries in
+# steady state — the slabs that hold a MeshInstance3D: everything BELOW
+# the sea ((SEA+15)/16 = 8 slabs at SEA 126) + the surface slab (+1) +
+# the fluid/flora headroom (+1). The vertical window (AC-0234) keeps
+# [pys-4, top] UNION the tower's 3x3 terrain span; at the sea-level
+# surface band only the terrain slabs at/below the player carry a high or
+# low instance (the kept slabs above it are air). ~10 at the current
+# Data.SEA — the "actual slabs/column" of the streaming ring.
+func _pool_mi_per_col() -> int:
+	return (Data.SEA + 15) / 16 + 2
+
+
+# AC-0248: the (mi, mm, col) pool targets for a render radius — POOL_
+# PREWARM_RINGS recenter rings of columns + their slab demand (MI) +
+# their fog+cap MM pairs, floored by the AC-0247 minimums.
+func _pool_targets_for(r: int) -> Array:
+	var cols := maxi(POOL_PREWARM_RINGS * _pool_ring_cols(r), POOL_COL_MIN)
+	return [
+		maxi(cols * _pool_mi_per_col(), POOL_MI_MIN),
+		maxi(cols * POOL_MM_PER_COL, POOL_MM_MIN),
+		cols,
+	]
+
+
+# AC-0248: grow the pools (NEVER shrink — the pools may already be past
+# the target from streaming growth) up to the target for the CURRENT
+# render radius. Called from _pool_prewarm (ready) and from recenter
+# (the radius may have moved: the spawn recenter, the Options slider,
+# the harness arms — all of them change render_radius and recenter).
+func _pool_top_up() -> void:
+	if _pool_target_r != render_radius:
+		var t := _pool_targets_for(render_radius)
+		_pool_target_mi = int(t[0])
+		_pool_target_mm = int(t[1])
+		_pool_target_col = int(t[2])
+		_pool_target_r = render_radius
+	if _mi_pool.size() >= _pool_target_mi and _mm_pool.size() >= _pool_target_mm \
+			and _col_pool.size() >= _pool_target_col:
+		return
+	var t0 := Time.get_ticks_usec()
+	while _mi_pool.size() < _pool_target_mi:
 		_mi_pool.append(MeshInstance3D.new())
-	for i in range(POOL_MM_PREWARM):
+	while _mm_pool.size() < _pool_target_mm:
 		var mm := MultiMesh.new()
 		mm.mesh = _low_fog_mesh
 		mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -1318,8 +1403,29 @@ func _pool_prewarm() -> void:
 		mmi.multimesh = mm
 		mmi.material_override = _low_fog_mat
 		_mm_pool.append([mmi, mm])
-	for i in range(POOL_COL_PREWARM):
+	while _col_pool.size() < _pool_target_col:
 		_col_pool.append(ChunkScript.new())
+	perf_pool_prewarm_ms += (Time.get_ticks_usec() - t0) / 1000.0
+	# AC-0248: env-gated verification hook (AWECRAFT_POOL_DEBUG=1) — the
+	# one-time prewarm cost at any radius (the r16 arm reports the R16
+	# number in its RESULT; this prints the live one for interactive /
+	# R50 runs).
+	if OS.get_environment("AWECRAFT_POOL_DEBUG") == "1":
+		print("POOLTOPUP r=%d mi=%d mm=%d col=%d total_ms=%.1f" % [render_radius, _mi_pool.size(), _mm_pool.size(), _col_pool.size(), perf_pool_prewarm_ms])
+
+
+# AC-0247 (the small fixed prewarm) -> AC-0248 (ring-sized): prewarm on
+# World ready — the world starts at the default render radius and the
+# first recenter tops up to the live radius (a new-world boot applies
+# Settings.render_dist AFTER ready, then the spawn recenter runs).
+func _pool_prewarm() -> void:
+	_pool_top_up()
+
+
+func pool_sizes() -> Dictionary:
+	# AC-0248: the harness-readable pool depths (the "pool sizes at end"
+	# of the r16 arm's pool evidence).
+	return {"mi": _mi_pool.size(), "mm": _mm_pool.size(), "col": _col_pool.size()}
 
 
 func _mi_checkout() -> MeshInstance3D:
@@ -1331,6 +1437,7 @@ func _mi_checkout() -> MeshInstance3D:
 			break
 	if mi == null:
 		mi = MeshInstance3D.new()
+		perf_pool_mi_grows_n += 1  # AC-0248: on-demand growth past the prewarm
 	# Reset to the fresh-instance defaults; the per-use values (mesh,
 	# position, material_override, cast_shadow) are set by the caller right
 	# after, exactly as on a fresh node. A pooled instance may carry a
@@ -1377,6 +1484,7 @@ func _mm_checkout() -> Array:
 	var mmi := MultiMeshInstance3D.new()
 	mmi.multimesh = mm
 	mmi.material_override = _low_fog_mat
+	perf_pool_mm_grows_n += 1  # AC-0248: on-demand growth past the prewarm
 	return [mmi, mm]
 
 
@@ -1405,7 +1513,9 @@ func _column_checkout() -> Node3D:
 		var c = _col_pool.pop_back()
 		if is_instance_valid(c):
 			return c
-	return ChunkScript.new()
+	var c := ChunkScript.new()
+	perf_pool_col_grows_n += 1  # AC-0248: on-demand growth past the prewarm
+	return c
 
 
 func _col_checkin(c: Node3D) -> void:
@@ -3430,7 +3540,7 @@ func _ready() -> void:
 	_low_ms_snap_dirty = true  # AC-0236 part 2: the low emit snapshot is stale (new atlas)
 	_tm_ctx_atlas = Data.atlas_tex  # AC-0160: stamp for the _process staleness guard
 	_low_fog_bake()  # AC-0231: the far-LOD fog-box template + material
-	_pool_prewarm()  # AC-0247: the SMALL pool prewarm (a few dozen entries — grow-on-demand handles the rest; the big prewarm is AC-0248)
+	_pool_prewarm()  # AC-0247/AC-0248: the ring-sized pool prewarm (the recenter that follows a radius change tops up — _pool_top_up)
 	threadmesh = true
 	_tm_debug = OS.get_environment("AWECRAFT_TMDEBUG") == "1"
 	print("THREADMESH on threadmesh=true pool=%d" % threadmesh_max)
@@ -7612,6 +7722,12 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	# transition sync runs on EVERY recenter (the player's column moved).
 	_vwin_recompute(wy)
 	_vwin_tier0()
+	# AC-0248: TOP-UP the pools to the ring target of the CURRENT render
+	# radius (a no-op in the steady state — three int compares). Every
+	# radius change ends in a recenter (Settings.apply_render_distance /
+	# apply_world at boot / the harness arms), so the burst that follows a
+	# slider move finds its ring of columns/MIs/MM pairs already warm.
+	_pool_top_up()
 	var pcx := last_pcx
 	var pcz := last_pcz
 	# AC-0213: small-move pacing — mark the move now; the drain paces at the
