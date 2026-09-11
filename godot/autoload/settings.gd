@@ -48,7 +48,20 @@ const DEFAULTS := {
 	# world.apply_low_start clamps it into the far ring [render_dist + 1,
 	# ~render_dist * sqrt(2)] (the ring's taxi span).
 	"low_start": 58,
+	# AC-0257 (Developer submenu): the tier-0 Chebyshev radius around the
+	# player column — columns this close go FULL COLUMN straight to high
+	# (default 0 = the player column only, the existing behavior).
+	"tier0_radius": 0,
+	# AC-0257: worker-thread in-flight caps. 0 = auto (scale to all
+	# available cores, never past — gen/mesh split 40/60); >0 = the
+	# explicit cap for that lane.
+	"worker_gen_threads": 0,
+	"worker_mesh_threads": 0,
 }
+
+# AC-0257 (Developer submenu) slider ranges.
+const TIER0_RADIUS_MAX := 8
+const WORKER_THREADS_MAX := 16
 
 var values: Dictionary = {}
 
@@ -124,6 +137,13 @@ func _clamp(k: String, v) -> void:
 		# AC-0232 (dither dropped in AC-0241): the fog percent slider.
 		"fog_start_pct":
 			values[k] = clampi(int(v), PCT_MIN, PCT_MAX)
+		# AC-0257 (Developer submenu).
+		"tier0_radius":
+			values[k] = clampi(int(v), 0, TIER0_RADIUS_MAX)
+		"worker_gen_threads":
+			values[k] = clampi(int(v), 0, WORKER_THREADS_MAX)
+		"worker_mesh_threads":
+			values[k] = clampi(int(v), 0, WORKER_THREADS_MAX)
 		"seed":
 			values[k] = int(v)
 		"resolution":
@@ -215,3 +235,18 @@ func apply_low_start() -> void:
 	if Game.world != null:
 		if Game.world.has_method("apply_low_start"):
 			Game.world.apply_low_start()
+
+
+# AC-0257 (Developer submenu): the tier-0 radius changed — the world re-stamps
+# the queue's tier-0 set (the has_method guard keeps the _StubWorld arm clean).
+func apply_tier0_radius() -> void:
+	if Game.world != null and Game.world.has_method("note_tier0_radius"):
+		Game.world.note_tier0_radius()
+
+
+# AC-0257 (Developer submenu): the worker-thread caps changed — the world
+# updates its in-flight caps live (no pool restart; the caps are software
+# limits on the shared engine pool).
+func apply_worker_threads() -> void:
+	if Game.world != null and Game.world.has_method("note_worker_threads"):
+		Game.world.note_worker_threads()

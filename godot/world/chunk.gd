@@ -109,56 +109,41 @@ var low_failed: Dictionary = {}  # AC-0231 fix3: si -> data_gen of the all-air s
 # (world._lod_tier_of at the chunk's live distance) is PENDING — a
 # low-start boundary move re-lowers the tier-changed slabs.
 var low_tiers: Dictionary = {}
-# AC-0234: the vertical-window CAP state, PER SLAB (the dark fill for
-# CULLED non-air slabs — a slab outside this TOWER's kept window: below
-# the tower's 3x3 terrain span, and out of the player band). cap_instance
-# = ONE MultiMeshInstance3D holding instances of the SAME pre-baked
-# 16x16x16 box as the fog (world._low_fog_mesh) in a BLACK material —
-# one instance per culled NEVER-BUILT slab at its Y. KEEP-HIGH APPLIES
-# TO CULLING: a slab with a built high mesh is never capped (a built
-# slab stays built), so the cap covers never-built slabs only. The cap
-# is a PLACEHOLDER: it stays until a low or the high SWAPS it (the slab
-# re-enters the window), never before. vwin_ver = the world band version
-# at this column's last high apply (an evidence stamp — a mismatch never
-# re-meshes a built column; the window only moves placeholders).
-# vwin_full = the last high apply covered EVERY slab (an empty dispatch
-# mask — tier 0); a window-masked column under the player owes the full
-# build (world._vwin_apply re-queues it — the fall-through contract).
-var cap_instance: MultiMeshInstance3D = null
-var cap_slabs: Array = []         # sorted slab indices currently holding a black cap
-# AC-0237 phase 1a: 24-bit MIRROR masks of the three sorted slab sets —
-# O(1) membership for the hot per-frame paths (the low pick's 3-way
-# per-slab test, the vwin sync, the fog/low/cap ensure guards) without
-# the sorted Array's linear has(). The ARRAYS stay the source of truth
-# (insert order drives the MultiMesh rewrite loops); every mutation goes
-# through the ensure/drop functions, which sync their mask here. Bit si
-# = 1 iff slab si holds a placeholder of that kind.
+# AC-0257 (stale-LOD cache-and-keep, absorbs AC-0256): si -> the FINISHED
+# emit of the slab's LAST NON-VISIBLE tier — {tier, dgen, fgen, v, i, n,
+# c, mh} (the raw emit arrays; the ArrayMesh is rebuilt on attach). A
+# low-start boundary move keeps the displaced mesh here instead of
+# dropping it: flipping back is an ATTACH (no worker round-trip), and the
+# slab stays pending against the live tier meanwhile (the lane re-emits
+# it). ONE entry per slab (the last finished non-visible tier — the
+# med<->low oscillation the boundary move is). Stale when the data
+# changed since the emit (dgen/fgen mismatch at dispatch); freed with the
+# low set (drop_low) — i.e. at column eviction (r+2).
+var low_cache: Dictionary = {}
+# AC-0257: the AC-0234 vertical-window cap state (cap_instance / cap_slabs
+# / cap_mask) and the window stamps (vwin_ver / vwin_full / vwin_mask) are
+# GONE — no culled slabs, no black caps; every slab in the horizontal
+# radius is wanted at its band LOD.
+# AC-0237 phase 1a: 24-bit MIRROR masks of the two sorted placeholder slab
+# sets — O(1) membership for the hot per-frame paths (the low pick's 2-way
+# per-slab test, the fog/low ensure guards) without the sorted Array's
+# linear has(). The ARRAYS stay the source of truth (insert order drives
+# the MultiMesh rewrite loops); every mutation goes through the
+# ensure/drop functions, which sync their mask here. Bit si = 1 iff slab
+# si holds a placeholder of that kind.
 var fog_mask := 0
 var low_mask := 0
-var cap_mask := 0
-var vwin_ver := 0
-var vwin_full := true
-# AC-0237 (window-scoped generation): the GENERATED state. gen_keep =
-# the slab keep mask the last generation ran with (EMPTY = the FULL
-# column was generated — legacy); gen_mask = its 24-bit mirror (bit si
-# set iff slab si was generated — a slab with NO section in data[] is
-# ungenerated, NOT air: the snap reads it as solid via snap_rings'
-# genkeep, the window caps it while culled, and the re-entry path
-# regenerates it (bit-exact — gen is a pure f(world coords, seed))).
+# AC-0237 (window-scoped generation, legacy): the GENERATED state.
+# gen_keep = the slab keep mask the last generation ran with (EMPTY = the
+# FULL column was generated); gen_mask = its 24-bit mirror (bit si set iff
+# slab si was generated — a slab with NO section in data[] is ungenerated,
+# NOT air: the snap reads it as solid via snap_rings' genkeep). AC-0257:
+# new generations are ALWAYS the full column; a partial mask can only come
+# from an old AC-0237 save (the load path full-regens those columns).
 var gen_keep: PackedByteArray = PackedByteArray()
 var gen_mask := 0xFFFFFF
 func has_gen_si(si: int) -> bool:
 	return (gen_mask >> si) & 1 != 0
-# the KEEP MASK the last full high build used (EMPTY = tier-0/full build,
-# every slab). The window's owed-kept check (world._vwin_apply) compares
-# it against the CURRENT window: a kept slab the mask never built is
-# owed (the build was dispatched while the slab was culled — the band
-# slid back over it since) and re-queues a SUPERSET build (kept + built
-# — keep-high: nothing built is ever dropped).
-var vwin_mask: PackedByteArray = PackedByteArray()
-
-func has_cap() -> bool:
-	return cap_slabs.size() > 0
 
 func has_fog() -> bool:
 	return fog_slabs.size() > 0
@@ -167,16 +152,13 @@ func has_low() -> bool:
 	return bool(low_built) and low_instances.size() > 0
 
 # AC-0237 phase 1a: O(1) per-slab membership (the mirror masks — see
-# fog_mask). The no-arg has_cap/has_fog/has_low above keep their meaning
-# (the chunk holds ANY of that placeholder kind).
+# fog_mask). The no-arg has_fog/has_low above keep their meaning (the
+# chunk holds ANY of that placeholder kind).
 func has_fog_si(si: int) -> bool:
 	return (fog_mask >> si) & 1 != 0
 
 func has_low_si(si: int) -> bool:
 	return (low_mask >> si) & 1 != 0
-
-func has_cap_si(si: int) -> bool:
-	return (cap_mask >> si) & 1 != 0
 
 func drop_low() -> void:
 	if fog_instance != null:
@@ -192,17 +174,9 @@ func drop_low() -> void:
 	low_stamps = {}
 	low_tiers = {}  # AC-0252: the tier stamps die with the low set
 	low_failed = {}
+	low_cache = {}  # AC-0257: the stale-LOD cache dies with the low set
 	fog_mask = 0
 	low_mask = 0
-
-func drop_cap() -> void:
-	# AC-0234: free the cap MultiMesh + clear the slab list (evict / the
-	# high replaces the culled placeholders).
-	if cap_instance != null:
-		_pool_free_mm(cap_instance)
-		cap_instance = null
-	cap_slabs = []
-	cap_mask = 0
 
 # AC-0247: route an instance free through the world pools (the world owns
 # the pools — per World, per the ticket). The fallback free is the
@@ -1325,15 +1299,9 @@ func _surface(arr: Acc) -> Array:
 
 
 func build_mesh(get_world_block: Callable, eff: Dictionary = {}, mask: PackedByteArray = PackedByteArray()) -> void:
-	# AC-0234: mask = the vertical-window keep mask (24 bytes; empty =
-	# build every slab — the sync fallbacks pass it for the same window the
-	# worker lane uses; a TIER 0 column gets an EMPTY mask = full build,
-	# the fall-through contract). The mask is stamped on the column
-	# (vwin_mask / vwin_full) — the window's owed-kept check compares it
-	# against the CURRENT window (a kept slab this build never built is
-	# owed and re-queues the superset build).
-	vwin_full = mask.is_empty()
-	vwin_mask = mask
+	# AC-0257: the AC-0234 vertical-window mask + column stamps are gone —
+	# the mask is always EMPTY (build every slab); the C++ pipeline keeps
+	# the parameter for the (now always-empty) keep-mask contract.
 	# AC-0199: the old instances are NOT freed before the build anymore -
 	# apply_accs keeps them alive until the new refs are assembled and
 	# frees them atomically afterwards (retain-swap).
@@ -1529,7 +1497,7 @@ func _build_slab_collision(s: Slab) -> void:
 # them — no per-spawn allocation); their per-use fields are reset in
 # place to the init_slabs fresh state. The placeholder/instance NODES
 # themselves are NOT touched here — world._col_checkin already returned
-# them to the world pools (fog/low/cap via _lod_free_all, the high slab
+# them to the world pools (fog/low via _lod_free_all, the high slab
 # instances via the child walk).
 #
 # col_gen is deliberately NOT reset: it is the logical-identity token the
@@ -1580,15 +1548,9 @@ func _pool_reset() -> void:
 	low_stamps = {}
 	low_tiers = {}  # AC-0252: the tier stamps die with the low set
 	low_failed = {}
-	cap_instance = null
-	cap_slabs = []
+	low_cache = {}  # AC-0257: the stale-LOD cache dies with the low set
 	fog_mask = 0
 	low_mask = 0
-	cap_mask = 0
-	# vertical window
-	vwin_ver = 0
-	vwin_full = true
-	vwin_mask = PackedByteArray()
 	# generation
 	gen_keep = PackedByteArray()
 	gen_mask = 0xFFFFFF

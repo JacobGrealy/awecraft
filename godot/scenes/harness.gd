@@ -6900,10 +6900,19 @@ func _r16_test(spawn: Vector3) -> void:
 	var far0 := _r16_lod_far()
 	var inr0 := _r16_lod_inr()  # AC-0231: in-r pending set at first sight
 	var h0 := _r16_lod_slabcheck()  # AC-0231 rewrite: per-slab geometry + air checks
-	# AC-0231 fix3: the WAVE ORDER check — drive the WAVE 2 global slab
-	# wave to completion and verify the pick sequence is a GLOBAL bottom-up
-	# wave across all columns (si non-decreasing, the first layer spans
-	# several columns — not one whole column before the next).
+	# AC-0231 fix3 (+ AC-0257 bake order): the WAVE ORDER check — drive
+	# the WAVE 2 global slab wave to completion and verify the pick
+	# sequence is a GLOBAL LAYERED wave across all columns (layer rank
+	# non-decreasing around the player's slab, the first layer spans
+	# several columns — not one whole column before the next). The
+	# player Y basis is set from the game player (falling to the floor at
+	# this sample — the same slab the in-game slab-crossing recenter
+	# carries); without it last_wy stays 0 (the bottom slab) and the
+	# whole wave reads as "layer 0".
+	if Game.player != null:
+		world.last_wy = Game.player.position.y
+	elif cam != null:
+		world.last_wy = cam.global_position.y
 	var wave := _r16_wave_test()
 	var min_static_y := 1e30
 	var floor_frames := 0
@@ -6958,13 +6967,14 @@ func _r16_test(spawn: Vector3) -> void:
 	# the edit shows immediately even while the streaming queue is busy.
 	var edit_probe := await _r16_edit_probe()
 	var spin_probe := await _r16_spin_probe()
-	# AC-0234: the vertical window phase (ascend 176 blocks, hold,
-	# descend — the band slides through the sky and the NEVER-BUILT
-	# interior below the surface band churns fog<->cap, while the built
-	# slabs stay built (keep-high for culling)). Runs BEFORE the
-	# catch-up window so its re-entered caps get their low/high swaps
-	# before the final samples.
-	var vwin := await _r16_vwin_phase(cam, cam.global_position)
+	# AC-0257: the vertical streaming phase (ascend 176 blocks, hold,
+	# descend — each 16-block step is a recenter carrying the new wy).
+	# With the vwin caps gone, the altitude change leaves a PENDING set
+	# at the new altitude (expected — the queue is on its way); the gate
+	# is that nothing is lost (holes == 0) and the set DRAINS (settled).
+	# Runs BEFORE the catch-up window so the drain settles before the
+	# final samples.
+	var stream := await _r16_stream_phase(cam, cam.global_position)
 	# AC-0231 catch-up window: wait for the heavy pipeline to idle (the
 	# drain dispatches nothing + the TG pool drained — the same predicate
 	# as world._low_idle), then settle 450 frames while the low->high
@@ -7068,76 +7078,30 @@ func _r16_test(spawn: Vector3) -> void:
 		# fall-through check (static), the dirty-edit latency, the
 		# spin-180 look-invariance regression, and the rescore
 		# (waiting-parts rewrite) counters.
-		# AC-0234: the vertical window evidence. The kept set per TOWER =
-		# its own terrain span [wlo, whi] (min/max of that tower's + its
-		# 8 neighbors' column TOPS) + the player band (player slab +/- 4,
-		# always); a CULLED never-built slab renders its pre-baked 16^3
-		# BLACK cap (the deep interior / see-through hole fill); a built
-		# slab is NEVER capped (keep-high for culling). caps_ok = the
-		# cull is active (the deep interior below the local surface is
-		# black); churn_ok = the ascend/descend cull+uncap cycle ran
-		# (lows below the band floor drop to caps going up, re-entered
-		# caps swap back for low/high coming down — the re-queue: a
-		# re-entered cap on a non-built chunk re-issues its queue entry,
-		# because the low lane only sees entry-holding chunks); owed_ok
-		# = the owed-kept invariant at the final sample (no built chunk
-		# keeps a slab its last build never built — the superset
-		# re-queue's convergence guarantee, keep-high: nothing built is
-		# ever dropped); phase_ok = no UNCOVERED in-r slab at any of the
-		# four samples (the cap-aware contract: every non-air slab is
-		# high / low / fog / cap — no holes at any altitude, on the way
-		# down, or after the upgrades).
-		"vwin": {
-			"phase": vwin,
-			"caps_n": int(world.vwin_caps_n),
-			"cap_chunks_n": int(world.vwin_cap_chunks_n),
-			"culls_n": int(world.vwin_culls_n),
-			"uncaps_n": int(world.vwin_uncaps_n),
-			"caps_ok": int(world.vwin_caps_n) > 0,
-			# keep-high for culling: a built slab is never capped, so the
-			# churn = LOWs dropped when they leave the window (culls) +
-			# re-entered caps swapped for a low/high (uncaps) — the
-			# never-built deep interior only ever flows through caps.
-			# user 2026-09-07 open-top band: the sky is NEVER culled (full column
-				# above the player), so the ascend/descend uncap cycle this gate used to
-				# measure was mostly the SKY CAPS being created and released as the
-				# player's Y moved - exactly the churn the rule removed (R16 baseline
-				# 1322 uncaps / 24077 regens -> 0 / 28). Re-entry liveness is now
-				# proven by the span-driven re-entry regens (gen_regens_n > 0) plus
-				# caps_ok P1 (no capped slab ever holds data - the cap->low/high swap
-				# fires on every re-entry regen landing).
-				"churn_ok": int(world.vwin_culls_n) > 0 and int(world.vwin_regens_n) > 0,
-			# owed_ok = the owed-kept invariant at the FINAL sample: no
-			# built chunk keeps a slab its last build (vwin_mask) never
-			# built (the superset re-queue converges: a slab the window
-			# re-enters on a BUILT chunk gets filled, keep-high). The
-			# rebuilds_n COUNT stays 0 in this arm on purpose: no build
-			# dispatches while a slab is culled (far chunks are data-only
-			# band 3, in-r chunks are pre-built) — the mechanism fires on
-			# mid-flight window moves and span growth, and the invariant
-			# above is what guarantees its result.
-			"owed_ok": _r16_vwin_owed_count(world) == 0,
-			"owed_n": _r16_vwin_owed_count(world),
-			"rebuilds_n": int(world.vwin_rebuilds_n),
-			# AC-0237: window-scoped generation — the mechanism fired
-			# (regens enqueued during the band slides) and the final
-			# sample is covered (every kept ungenerated slab is capped —
-			# no see-through holes; the owed count is pending work, not
-			# a defect, bounded by the in-flight regen cap).
-			"gen_ok": _r16_gen_cov_count(world) == 0,
-			"gen_cov_bad": _r16_gen_cov_count(world),
-			"gen_owed_n": _r16_gen_owed_count(world),
-			"gen_regens_n": int(world.vwin_regens_n),
-			"gen_range_n": _r16_range_gen_count(world),
-			"remesh_enq_n": int(world.vwin_remesh_enq_n),
-			"remesh_disp_n": int(world.vwin_remesh_disp_n),
-			"remesh_drop_n": int(world.vwin_remesh_drop_n),
-			"remesh_pool_n": int(world.vwin_remesh_pool_n),
-			"remesh_consumed_n": int(world.vwin_remesh_consumed_n),
-			"phase_ok": int(vwin.get("inr0", {}).get("inr_uncovered", 1)) == 0
-					and int(vwin.get("inr_hi", {}).get("inr_uncovered", 1)) == 0
-					and int(vwin.get("inr_hold", {}).get("inr_uncovered", 1)) == 0
-					and int(vwin.get("inr_back", {}).get("inr_uncovered", 1)) == 0,
+		# AC-0257: the cap-less streaming evidence (the AC-0234 vwin
+		# section is gone — no black caps, no kept masks, no owed-
+		# superset; every slab in the radius is wanted at its band LOD).
+		# The vertical phase ascends/descends 176 blocks in 16-block
+		# recenter steps; at each sample an in-r non-air slab is covered
+		# (high/low/fog), PENDING (queued — the expected in-flight state
+		# with no placeholders), or a HOLE (neither meshed nor queued —
+		# lost work, must stay 0). settled_ok = after the descend the
+		# in-r pending set DRAINS to full coverage (the queue serves
+		# every wanted slab).
+		"stream": {
+			"phase": stream,
+			"pending_hi": int(stream.get("inr_hi", {}).get("inr_pending", 0)),
+			"pending_hold": int(stream.get("inr_hold", {}).get("inr_pending", 0)),
+			"pending_back": int(stream.get("inr_back", {}).get("inr_pending", 0)),
+			"settle_frames": int(stream.get("settle_frames", 0)),
+			"holes_ok": int(stream.get("inr0", {}).get("inr_holes", 1)) == 0
+					and int(stream.get("inr_hi", {}).get("inr_holes", 1)) == 0
+					and int(stream.get("inr_hold", {}).get("inr_holes", 1)) == 0
+					and int(stream.get("inr_back", {}).get("inr_holes", 1)) == 0
+					and int(stream.get("inr_settled", {}).get("inr_holes", 1)) == 0,
+			"settled_ok": int(stream.get("inr_settled", {}).get("inr_pending", 1)) == 0
+					and int(stream.get("inr_settled", {}).get("inr_holes", 1)) == 0
+					and int(stream.get("settle_frames", 1)) < 900,
 		},
 		"tier": {
 			# AC-0250: the AC-0233 look bias is removed — 3 tiers (0 under,
@@ -7166,10 +7130,11 @@ func _r16_test(spawn: Vector3) -> void:
 		# three GLOBAL waves (all fog -> all low -> all high, across ALL
 		# columns): wave 1 = fog on every data landing (immediate_ok
 		# covers it — EVERY far non-air slab is covered at its Y at first
-		# sight, no empty pop at 4-50x); wave 2 = the global slab wave
-		# (wave.si_monotone_ok = the pick sequence is non-decreasing in si
-		# — all si=N slabs of every column before any si=N+1;
-		# wave.first_layer_columns >= 2 = the first layer interleaves
+		# sight, no empty pop at 4-50x); wave 2 = the global slab wave —
+		# AC-0257: LAYERED (wave.layer_monotone_ok = the pick sequence's
+		# layer ranks are non-decreasing — all slabs of layer r of every
+		# column before any of layer r+1, r = distance from the player's
+		# slab; wave.first_layer_columns >= 2 = the first layer interleaves
 		# several columns, never one whole column before the next;
 		# far1.far_low = all the low per slab out to render distance);
 		# wave 3 = the AC-0233 tiers (catch_up = the low->high upgrades
@@ -7193,12 +7158,13 @@ func _r16_test(spawn: Vector3) -> void:
 			"slab1": h1,
 			# AC-0231 in-r pre-low: the INSIDE-circle pending set (data
 			# landed, no high mesh) at first sight / mid-fly4 / settle.
-			# inr_ok = no uncovered in-r slab at either sample (every
-			# pending in-r slab is fog or low — no empty space inside r).
+			# AC-0257 (cap-less): inr_ok = no HOLE in-r slab at either
+			# sample — a slab is covered (low/fog) or PENDING (queued);
+			# pending while streaming is the expected in-flight state.
 			"inr0": inr0,
 			"inr1": inr1,
 			"inr4": f4.get("inr_mid", {}),
-			"inr_ok": int(inr0.get("inr_uncovered", 1)) == 0 and int(inr1.get("inr_uncovered", 1)) == 0,
+			"inr_ok": int(inr0.get("inr_holes", 1)) == 0 and int(inr1.get("inr_holes", 1)) == 0,
 			# AC-0231 order gate: gate_holds_n = tier >= 2 high dispatches
 			# HELD while in-r lows were pending (the gate working — must be
 			# large during streaming). high_before_low_n = tier >= 2 highs
@@ -7220,7 +7186,10 @@ func _r16_test(spawn: Vector3) -> void:
 			"no_giant_ok": bool(h0["no_giant_ok"]) and bool(h1["no_giant_ok"]),
 			"uv_repeat_ok": bool(h0["uv_repeat_ok"]) and bool(h1["uv_repeat_ok"]),
 			"wave_ok": bool(wave.get("ok", false)),
-			"immediate_ok": int(far0["far_slabs"]) == 0 or int(far0["far_visible"]) == int(far0["far_slabs"]),
+			# AC-0257 (cap-less): no HOLE at first sight — the uncovered
+			# far slabs are PENDING (queued for the low lane), which is the
+			# expected state without the old instant black-cap fill.
+			"immediate_ok": int(far0["far_slabs"]) == 0 or int(far0["far_holes"]) == 0,
 			"low_built_n": int(world.low_built_n),
 			"low_rebuilds_n": int(world.low_rebuilds_n),
 			"low_upgrades_n": int(world.low_upgrades_n),
@@ -7242,6 +7211,15 @@ func _r16_test(spawn: Vector3) -> void:
 			"low_sync_fallbacks_n": int(world.low_sync_fallbacks_n),
 			"low_sync_zero_ok": int(world.low_sync_fallbacks_n) == 0,
 			"low_thread_ok": int(world.low_emit_cpp) > 0,
+			# AC-0257 (stale-LOD, absorbs AC-0256): the cache-and-keep
+			# evidence — low_skip_stale_n = pre-start early-outs (the tier
+			# moved while the task queued, no emit); low_cache_kept_n =
+			# finished meshes cached at a tier-mismatch handoff (the visible
+			# mesh stayed); low_cache_hit_n = flip-back attaches served from
+			# the cache (no worker round-trip).
+			"low_skip_stale_n": int(world.low_skip_stale_n),
+			"low_cache_kept_n": int(world.low_cache_kept_n),
+			"low_cache_hit_n": int(world.low_cache_hit_n),
 			"catch_up_frames": qidle,
 			"catch_up": catch_up,
 			"catch_up_ok": catch_up >= 1 or int(far1["far_high"]) > int(far0["far_high"]),
@@ -7439,12 +7417,17 @@ func _pool_live_stats() -> Dictionary:
 # its per-slab 4x4x4 low (low_slabs). far_visible = the covered-slab count
 # (the "all fog per non-air slab out to render distance" numerator).
 func _r16_lod_far() -> Dictionary:
+	# AC-0257: the cap-less contract — a far non-air slab is HIGH / LOW /
+	# FOG (covered), PENDING (the chunk holds a queue entry — the low lane
+	# is on its way; expected in flight), or a HOLE (neither meshed nor
+	# queued — lost work, must stay 0).
 	var n := 0
 	var slabs := 0
 	var fog := 0
 	var low := 0
 	var high := 0
-	var cap := 0  # AC-0234: culled slabs covered by their black cap
+	var pending := 0
+	var holes := 0
 	var pcx := int(world.last_pcx)
 	var pcz := int(world.last_pcz)
 	var rr := int(world.render_radius)
@@ -7469,9 +7452,11 @@ func _r16_lod_far() -> Dictionary:
 				low += 1
 			elif c.has_fog_si(si):
 				fog += 1
-			elif c.has_cap_si(si):
-				cap += 1  # AC-0234: the black cap covers the culled slab
-	return {"far_n": n, "far_slabs": slabs, "far_fog": fog, "far_low": low, "far_high": high, "far_cap": cap, "far_visible": fog + low + high + cap}
+			elif world.queued_keys.has(key):
+				pending += 1  # AC-0257: queued — the low lane will build it
+			else:
+				holes += 1
+	return {"far_n": n, "far_slabs": slabs, "far_fog": fog, "far_low": low, "far_high": high, "far_pending": pending, "far_holes": holes, "far_visible": fog + low + high}
 
 
 # AC-0231 in-r pre-low evidence: the INSIDE-circle PENDING set (data
@@ -7481,12 +7466,17 @@ func _r16_lod_far() -> Dictionary:
 # in-r pass should have most pending slabs at LOW already (it outruns the
 # high completions), with only the just-landed chunks still at fog.
 func _r16_lod_inr() -> Dictionary:
+	# AC-0257: the cap-less contract — an in-r non-air slab of a not-yet-high
+	# chunk is LOW / FOG (covered), PENDING (the chunk holds a queue entry —
+	# the build is on its way; the expected in-flight state with no
+	# placeholders), or a HOLE (neither meshed nor queued — lost work, must
+	# stay 0).
 	var n := 0
 	var slabs := 0
 	var fog := 0
 	var low := 0
-	var cap := 0  # AC-0234: culled slabs covered by their black cap
-	var uncovered := 0
+	var pending := 0
+	var holes := 0
 	var pcx := int(world.last_pcx)
 	var pcz := int(world.last_pcz)
 	var rr := int(world.render_radius)
@@ -7503,11 +7493,6 @@ func _r16_lod_inr() -> Dictionary:
 		if c.data.is_empty():
 			continue  # no data yet — nothing to show
 		n += 1
-		# AC-0240: with the fog wave off, a KEPT slab in the data->low gap is
-		# EXPECTED (the low pass is on its way - the fog used to cover it). Only
-		# a CULLED slab missing its cap is a real hole. FOG_WAVE_ON true keeps
-		# the old contract (any non-air slab needs low/fog/cap) exactly.
-		var km: PackedByteArray = world._vwin_col_kept(c)
 		for si in range(c.data.size()):
 			if c.data[si] == null:
 				continue  # air slab — no placeholder needed
@@ -7516,11 +7501,11 @@ func _r16_lod_inr() -> Dictionary:
 				low += 1
 			elif c.has_fog_si(si):
 				fog += 1
-			elif c.has_cap_si(si):
-				cap += 1  # AC-0234: a culled slab is COVERED by its cap
-			elif world.FOG_WAVE_ON or int(km[si]) == 0:
-				uncovered += 1
-	return {"inr_n": n, "inr_slabs": slabs, "inr_fog": fog, "inr_low": low, "inr_cap": cap, "inr_uncovered": uncovered}
+			elif world.queued_keys.has(key):
+				pending += 1  # AC-0257: queued — the low/high lane will build it
+			else:
+				holes += 1
+	return {"inr_n": n, "inr_slabs": slabs, "inr_fog": fog, "inr_low": low, "inr_pending": pending, "inr_holes": holes}
 
 
 # AC-0231 rewrite: the PER-SLAB LOD geometry checks.
@@ -7591,13 +7576,6 @@ func _r16_lod_slabcheck() -> Dictionary:
 	var rects: Dictionary = world._tm_ms_full.get("rects", {})
 	var fog_n := 0
 	var fog_ok := true
-	var cap_n := 0
-	var cap_ok := true
-	var cap_null_fail := 0
-	var cap_count_fail := 0
-	var cap_mesh_fail := 0
-	var cap_mat_fail := 0
-	var cap_inv_fail := 0
 	var low_n := 0
 	var low_ok := true
 	var air_with_lod := 0
@@ -7633,11 +7611,11 @@ func _r16_lod_slabcheck() -> Dictionary:
 			continue  # inside the render circle — the HIGH set
 		# air slabs must carry NO placeholder instance.
 		if c.data.is_empty():
-			if bool(c.has_fog()) or bool(c.has_low()) or bool(c.has_cap()):
+			if bool(c.has_fog()) or bool(c.has_low()):
 				air_with_lod += 1
 		else:
 			for si in range(c.data.size()):
-				if c.data[si] == null and (c.has_fog_si(si) or c.has_low_si(si) or c.has_cap_si(si)):
+				if c.data[si] == null and (c.has_fog_si(si) or c.has_low_si(si)):
 					air_with_lod += 1
 		# FOG: one pre-baked 16^3 box instance per non-air slab at its Y.
 		# (This engine build's MultiMesh does not expose instance-transform
@@ -7666,35 +7644,7 @@ func _r16_lod_slabcheck() -> Dictionary:
 							and is_equal_approx(bb.position.z, 0.0)):
 						fog_ok = false
 						fog_aabb_fail += 1
-		# AC-0234 CAP: the black 16^3 fill for CULLED non-air slabs — the
-		# SAME pre-baked box mesh as the fog (data-side count/mesh check,
-		# the same readback limitation) + the FOG material override (user 2026-09-07:
-		# caps wear the fog color, the black cap material was removed) +
-		# the P1 invariant PER SLAB: a capped slab is non-air and holds NO
-		# high instance and NO low (the cap owns the slab exclusively).
-		if c.cap_instance != null:
-			var cmm: MultiMesh = c.cap_instance.multimesh
-			if cmm == null:
-				cap_ok = false
-				cap_null_fail += 1
-			else:
-				if int(cmm.instance_count) != int(c.cap_slabs.size()):
-					cap_ok = false
-					cap_count_fail += 1
-				cap_n += int(cmm.instance_count)
-				if cmm.mesh != world._low_fog_mesh:
-					cap_ok = false
-					cap_mesh_fail += 1
-				elif c.cap_instance.material_override != world._low_fog_mat:
-					cap_ok = false
-					cap_mat_fail += 1
-		for jcap in range(int(c.cap_slabs.size())):
-			var sicap: int = int(c.cap_slabs[jcap])
-			if sicap >= c.data.size() or c.data[sicap] == null \
-					or (sicap < c.slabs.size() and c.slabs[sicap].mesh_instance != null) \
-					or c.has_low_si(sicap) or c.has_fog_si(sicap):
-				cap_ok = false
-				cap_inv_fail += 1
+		# AC-0257: the AC-0234 black-cap checks are gone (no caps).
 		# LOW: a per-slab 4x4x4 mesh, slab-local 0..16, at (0, si*16, 0).
 		for j in range(int(c.low_slabs.size())):
 			var si2: int = int(c.low_slabs[j])
@@ -7898,16 +7848,7 @@ func _r16_lod_slabcheck() -> Dictionary:
 	return {
 		"fog_n": fog_n,
 		"low_n": low_n,
-		# AC-0234: the cap checks join height_ok (the fog/cap boxes are the
-		# same per-slab-at-its-Y placeholder family).
-		"cap_n": cap_n,
-		"height_ok": fog_ok and low_ok and cap_ok,
-		"cap_ok": cap_ok,
-		"cap_null_fail": cap_null_fail,
-		"cap_count_fail": cap_count_fail,
-		"cap_mesh_fail": cap_mesh_fail,
-		"cap_mat_fail": cap_mat_fail,
-		"cap_inv_fail": cap_inv_fail,
+		"height_ok": fog_ok and low_ok,
 		"low_pos_fail": low_pos_fail,
 		"low_aabb_fail": low_aabb_fail,
 		"low_null_fail": low_null_fail,
@@ -8138,7 +8079,24 @@ func _ladder_test(spawn: Vector3) -> void:
 			if c.has_low_si(si):
 				res["air_inworld_bad"] += 1
 	res["air_inworld_ok"] = res["air_inworld_bad"] == 0
-	res["ok"] = ab_ok and res["boundary_flip_ok"] and res["air_synth_ok"] and res["air_inworld_ok"]
+	# (e) AC-0257: the tier-0 SET (Chebyshev ball, Settings "tier0_radius")
+	# goes straight to high — the predicate the fog/pick lanes consult to
+	# skip placeholders — + the Y-LAYER rank encoding (0 = the player's
+	# slab, 1 = y-1, 2 = y+1, 3 = y-2, 4 = y+2: the bake order).
+	Settings.values["tier0_radius"] = 2
+	world.note_tier0_radius()
+	var pys: int = world._player_slab()
+	res["tier0_ok"] = world.tier0_r == 2 \
+			and world._is_tier0_col(0, 0) and world._is_tier0_col(2, -2) \
+			and world._is_tier0_col(-2, 1) \
+			and not world._is_tier0_col(3, 0) and not world._is_tier0_col(1, 3) \
+			and world._layer_rank_of(pys) == 0 \
+			and world._layer_rank_of(pys - 1) == 1 and world._layer_rank_of(pys + 1) == 2 \
+			and world._layer_rank_of(pys - 2) == 3 and world._layer_rank_of(pys + 2) == 4
+	# restore (the arm's world dies with the process — cosmetic)
+	Settings.values["tier0_radius"] = 0
+	world.note_tier0_radius()
+	res["ok"] = ab_ok and res["boundary_flip_ok"] and res["air_synth_ok"] and res["air_inworld_ok"] and res["tier0_ok"]
 	Debug.result(res)
 	get_tree().quit()
 
@@ -8260,9 +8218,6 @@ func _ladder_rows(cell: int, n_solid: int) -> Array:
 					placed += 1
 	return rows
 
-
-# AC-0252: NOT _avg_grid_empty (the harness-local complement — avoids
-# calling the world's private on every slab in the hot loop).
 func _ladder_not_empty(solid: PackedByteArray) -> bool:
 	for i in range(solid.size()):
 		if int(solid[i]) != 0:
@@ -8270,143 +8225,37 @@ func _ladder_not_empty(solid: PackedByteArray) -> bool:
 	return false
 
 
-
-# AC-0234: the window state snapshot (the harness evidence — the terrain
-# range [wlo, whi] = the min/max of the 3x3 neighborhood column tops, the
-# player band [blo, bhi] = the player slab +/- 4, and the version).
-func _vwin_state() -> Dictionary:
-	# AC-0234: the terrain span is PER TOWER now — report the player
-	# column's own 3x3 span (the global part of the window is just the
-	# band).
-	var sp: Array = world._vwin_span(world.last_pcx, world.last_pcz)
-	return {
-		"ver": int(world._vwin_ver),
-		"wlo": int(sp[0]),
-		"whi": int(sp[1]),
-		"has_range": int(sp[1]) >= 0,
-		"blo": int(world._vwin_blo),
-		"bhi": int(world._vwin_bhi),
-		"py": float(world._vwin_py),
-	}
-
-
-# AC-0234: the owed-kept invariant count at a sample instant — the number
-# of BUILT (window-masked) chunks that keep a non-air slab their last
-# build (vwin_mask) never built (the superset re-queue's convergence
-# guarantee: it must be 0 at rest — the re-queue fills exactly this set).
-func _r16_vwin_owed_count(world) -> int:
-	var owed := 0
-	for key in world.chunks:
-		var c: Node3D = world.chunks[key]
-		if int(c.face) > 1 or c.data.is_empty():
-			continue
-		# AC-0237: band 3 (the data-only collar) never renders — a window
-		# debt there is DEFERRED (the reband 3 -> 0/1 hook re-queues it
-		# the moment the chunk becomes visible again), so the invariant
-		# is measured over the meshable set only.
-		if int(c.band) == 3:
-			continue
-		if not bool(c.mesh_built) or bool(c.vwin_full):
-			continue
-		var km: PackedByteArray = world._vwin_col_kept(c)
-		var bm: PackedByteArray = c.vwin_mask
-		for si in range(km.size()):
-			if km[si] == 0:
-				continue
-			if si < c.data.size() and c.data[si] == null:
-				continue
-			if si >= bm.size() or bm[si] == 0:
-				owed += 1
-				break
-	return owed
-
-# AC-0237: the GEN invariants at a sample.
-# gen_owed: kept slabs a data-bearing chunk never generated (pending
-# re-entry work — a regen in flight or queued; bounded by the window).
-# gen_cov: a kept+ungenerated slab must hold a CAP (the void is covered —
-# the snap reads it as solid, so an uncovered one would be a see-through
-# hole in a cliff face).
-func _r16_gen_owed_count(world) -> int:
-	var owed := 0
-	for key in world.chunks:
-		var c: Node3D = world.chunks[key]
-		if int(c.face) > 1 or c.data.is_empty():
-			continue
-		var km: PackedByteArray = world._vwin_col_kept(c)
-		for si in range(km.size()):
-			if int(km[si]) != 0 and not c.has_gen_si(si):
-				owed += 1
-	return owed
-
-func _r16_gen_cov_count(world) -> int:
-	var bad := 0
-	for key in world.chunks:
-		var c: Node3D = world.chunks[key]
-		if int(c.face) > 1 or c.data.is_empty():
-			continue
-		if int(c.cx) == world.last_pcx and int(c.cz) == world.last_pcz:
-			continue  # tier 0 = the full build (its mid-regen window is covered by the neighbors' solid-snap)
-		var km: PackedByteArray = world._vwin_col_kept(c)
-		for si in range(km.size()):
-			if int(km[si]) == 0:
-				continue
-			if c.has_gen_si(si):
-				continue
-			if not c.has_cap_si(si):
-				bad += 1
-				break
-	return bad
-
-func _r16_range_gen_count(world) -> int:
-	var n := 0
-	for key in world.chunks:
-		var c: Node3D = world.chunks[key]
-		if c.gen_mask != 0xFFFFFF:
-			n += 1
-	return n
-
-# AC-0234: the VERTICAL window phase — ascend 176 blocks (11 slabs) in
-# 16-block steps (each step = one recenter WITH the new wy: the same
-# trigger the player's Y-slab crossing fires in play), hold at altitude,
-# descend, hold at the surface. The XZ center does NOT move (the span is
-# constant; the band slides through the sky), so the evidence here is:
-# the cap fill exists from data landing (the deep interior below the
-# lowest local column top is black: caps > 0, cap_chunks > 0), the
-# cull/uncap cycle actually ran (culls going up, the re-queued swap
-# coming down — uncaps), no UNCOVERED in-r slab at any sample (the
-# cap-aware contract: every non-air slab is high / low / fog / cap), and
-# the descent leaves the terrain covered (no holes when re-entering +
-# upgrading).
-func _r16_vwin_phase(cam: Camera3D, base: Vector3) -> Dictionary:
+func _r16_stream_phase(cam: Camera3D, base: Vector3) -> Dictionary:
+	# AC-0257: the AC-0234 vertical-window phase, re-based for the
+	# cap-less model. The same ascend/descend flight (each 16-block step
+	# = one recenter carrying the new wy — the player's Y-slab crossing
+	# trigger) now exercises the PENDING set at each altitude: with no
+	# caps, a slab whose build is queued is PENDING (expected in
+	# flight); a slab with neither a mesh nor a queue entry is a HOLE
+	# (lost work — the gate). The phase ends by draining the in-r
+	# pending (bounded) and sampling the settled state: the terrain at
+	# the surface must end fully covered.
 	var out: Dictionary = {}
 	var x0 := base.x
 	var z0 := base.z
 	var y0 := base.y
 	var steps := 11
-	out["win0"] = _vwin_state()
-	out["caps0"] = int(world.vwin_caps_n)
-	out["cap_chunks0"] = int(world.vwin_cap_chunks_n)
-	out["culls0"] = int(world.vwin_culls_n)
-	out["uncaps0"] = int(world.vwin_uncaps_n)
-	out["rebuilds0"] = int(world.vwin_rebuilds_n)
 	out["inr0"] = _r16_lod_inr()
 	# ASCEND — one 16-block step = one Y-slab crossing = one full
-	# recenter carrying the new wy (the band follows the altitude).
+	# recenter carrying the new wy.
 	for i in range(1, steps + 1):
 		var y := y0 + float(i) * 16.0
 		world.recenter(x0, z0, true, y)
 		cam.global_transform = Transform3D(Basis(), Vector3(x0, y + 1.8, z0))
 		for f in 8:
 			await get_tree().physics_frame
-	out["win_hi"] = _vwin_state()
-	out["caps_hi"] = int(world.vwin_caps_n)
 	out["inr_hi"] = _r16_lod_inr()
-	# HOLD at altitude (the band sits in the sky — the in-r set is
-	# stable; the caps under the terrain must not flicker or vanish).
+	# HOLD at altitude (the in-r pending set is stable — the queue is
+	# working through it).
 	for f in 120:
 		await get_tree().physics_frame
 	out["inr_hold"] = _r16_lod_inr()
-	# DESCEND — the band re-enters the terrain.
+	# DESCEND — the recenter returns to the surface band.
 	for i in range(steps, 0, -1):
 		var y := y0 + float(i) * 16.0
 		world.recenter(x0, z0, true, y)
@@ -8417,14 +8266,19 @@ func _r16_vwin_phase(cam: Camera3D, base: Vector3) -> Dictionary:
 	cam.global_transform = Transform3D(Basis(), Vector3(x0, y0 + 1.8, z0))
 	for f in 60:
 		await get_tree().physics_frame
-	out["win_back"] = _vwin_state()
-	out["caps_end"] = int(world.vwin_caps_n)
-	out["culls_end"] = int(world.vwin_culls_n)
-	out["uncaps_end"] = int(world.vwin_uncaps_n)
-	out["rebuilds_end"] = int(world.vwin_rebuilds_n)
 	out["inr_back"] = _r16_lod_inr()
+	# SETTLE: drain the in-r pending (bounded spin — a wedged queue must
+	# never hang the arm).
+	var guard := 0
+	while guard < 900:
+		var fin: Dictionary = _r16_lod_inr()
+		if int(fin.get("inr_holes", 1)) == 0 and int(fin.get("inr_pending", 1)) == 0:
+			break
+		await get_tree().physics_frame
+		guard += 1
+	out["inr_settled"] = _r16_lod_inr()
+	out["settle_frames"] = guard
 	return out
-
 
 # AC-0231 rewrite: targeted, NON-VACUOUS air-chunk test. The R16 terrain
 # has no natural air columns, so the air_ok count alone could be 0/0.
@@ -8476,20 +8330,21 @@ func _r16_air_chunk_test() -> Dictionary:
 	}
 
 
-# AC-0231 fix3 (+ AC-0252 offload): the WAVE ORDER check — drive the WAVE 2
-# global slab wave through the REAL dispatch path (world._low_pick_slab +
-# world._low_dispatch_slab, no game frames between; the worker handoff is
-# pumped with the same world._low_poll the game loop runs) and record the
-# pick sequence. The wave is GLOBAL (all fog ->
-# all low -> all high, across ALL columns — not one whole column before
-# the next) only when:
-#   si_monotone_ok      : the sequence's slab indices are NON-DECREASING —
-#                         every si=N slab of every column lands before any
-#                         si=N+1 (the bottom-up wave across the whole
-#                         region; the per-column fill would interleave a
+# AC-0231 fix3 (+ AC-0252 offload, + AC-0257 bake order): the WAVE ORDER
+# check — drive the WAVE 2 global slab wave through the REAL dispatch
+# path (world._low_pick_slab + world._low_dispatch_slab, no game frames
+# between; the worker handoff is pumped with the same world._low_poll the
+# game loop runs) and record the pick sequence. The wave is GLOBAL (all
+# fog -> all low -> all high, across ALL columns — not one whole column
+# before the next) and LAYERED (AC-0257: the slabs nearest the player's
+# Y first) only when:
+#   layer_monotone_ok   : the sequence's LAYER RANKS are NON-DECREASING —
+#                         every rank=r slab of every column lands before
+#                         any rank=r+1 (the layered wave across the whole
+#                         region; a per-column fill would interleave a
 #                         column's full slab range before its neighbor's
 #                         first slab);
-#   first_layer_columns >= 2 : the first wave layer (si == the minimum)
+#   first_layer_columns >= 2 : the first wave layer (rank == the minimum)
 #                         spans SEVERAL columns (interleaved across all
 #                         columns — a per-column wave touches exactly one).
 # The dispatches + attaches are real (they just accelerate the wave the
@@ -8537,28 +8392,33 @@ func _r16_wave_test() -> Dictionary:
 		# already holds its low at sample time — the wave completed, which
 		# is exactly the requirement: all fog -> all low across all columns)
 		return {"ran": true, "ok": true, "builds": 0, "drained_at_sample": true,
-			"si_monotone_ok": true, "first_layer_columns": 0, "layers": {}}
-	var si_monotone := true
-	var prev := int(seq[0][0])
-	var min_si := prev
+			"layer_monotone_ok": true, "first_layer_columns": 0, "layers": {}}
+	# AC-0257: the player slab is constant across the test (no recenter) —
+	# the rank of each picked slab is stable for the whole sequence.
+	var layer_monotone := true
+	var prev_l := int(world._layer_rank_of(int(seq[0][0])))
+	var min_l := prev_l
+	var min_si := int(seq[0][0])
 	var first_layer_cols := {}
 	var layers: Dictionary = {}
 	for s in seq:
 		var si: int = int(s[0])
-		if si < prev:
-			si_monotone = false
-		prev = si
+		var l := int(world._layer_rank_of(si))
+		if l < prev_l:
+			layer_monotone = false
+		prev_l = l
+		min_l = mini(min_l, l)
 		min_si = mini(min_si, si)
-		if si == min_si:
+		if l == min_l:
 			first_layer_cols["%d,%d" % [int(s[1]), int(s[2])]] = true
-		layers[si] = int(layers.get(si, 0)) + 1
+		layers[l] = int(layers.get(l, 0)) + 1
 	var capped := seq.size() >= cap
-	var ok := si_monotone and int(first_layer_cols.size()) >= 2
+	var ok := layer_monotone and int(first_layer_cols.size()) >= 2
 	return {
 		"ran": true,
 		"builds": seq.size(),
 		"capped": capped,
-		"si_monotone_ok": si_monotone,
+		"layer_monotone_ok": layer_monotone,
 		"min_si": min_si,
 		"max_si": int(seq[seq.size() - 1][0]),
 		"layers": layers,

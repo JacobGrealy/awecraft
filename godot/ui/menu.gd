@@ -51,6 +51,16 @@ var fogstart_val: Label
 # everything closer; the low band runs out to the render edge).
 var lowstart_slider: HSlider
 var lowstart_val: Label
+# AC-0257: the Developer submenu (tier-0 radius + the worker-thread caps;
+# the per-frame instance cap row moves here from the main list).
+var dev_check: CheckBox
+var dev_vbox: VBoxContainer
+var tier0_slider: HSlider
+var tier0_val: Label
+var gen_slider: HSlider
+var gen_val: Label
+var mesh_slider: HSlider
+var mesh_val: Label
 var file_dialog: FileDialog
 var _options_from := "main"
 var _focus_last: Control = null  # AC-0087: gamepad focus highlight
@@ -167,6 +177,57 @@ func _ready() -> void:
 	opt_vbox.add_child(overlay_collision_check)
 	if hi + 4 < opt_vbox.get_child_count():
 		opt_vbox.move_child(overlay_collision_check, hi + 5)
+	# AC-0257: the options list scrolls when it outgrows the window (the
+	# Developer rows made it too tall for small screens). A plain
+	# ScrollContainer in the OptionsBox (full rect) - the old CenterContainer
+	# parent would shrink a scroll child to its minimum size.
+	var opt_box := get_node("Layer/OptionsBox")
+	var opt_center := get_node("Layer/OptionsBox/Center")
+	var opt_scroll := ScrollContainer.new()
+	opt_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	opt_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	opt_box.add_child(opt_scroll)
+	opt_center.remove_child(opt_vbox)
+	opt_scroll.add_child(opt_vbox)
+	opt_vbox.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	# AC-0257: the Developer submenu - a checkbox that reveals the perf-knob
+	# rows. The scene's ChunkRow (the per-frame instance cap) moves in as the
+	# first row: the tscn ChunkSlider->_on_chunk_changed connection survives
+	# the reparent (connections hold object refs, not node paths).
+	dev_check = CheckBox.new()
+	dev_check.name = "DeveloperCheck"
+	dev_check.text = "Developer settings"
+	dev_check.add_theme_font_size_override("font_size", 15)
+	dev_check.toggled.connect(_on_dev_toggled)
+	opt_vbox.add_child(dev_check)
+	dev_vbox = VBoxContainer.new()
+	dev_vbox.name = "DevVBox"
+	dev_vbox.visible = false
+	dev_vbox.add_theme_constant_override("separation", 6)
+	opt_vbox.add_child(dev_vbox)
+	# seat the toggle+panel right before the Pack button.
+	var pb_idx := opt_vbox.get_child_count() - 1
+	for i in opt_vbox.get_child_count():
+		if opt_vbox.get_child(i) == get_node("Layer/OptionsBox/Center/VBox/PackButton"):
+			pb_idx = i
+			break
+	opt_vbox.move_child(dev_check, pb_idx)
+	opt_vbox.move_child(dev_vbox, pb_idx + 1)
+	var chunk_row := get_node("Layer/OptionsBox/Center/VBox/ChunkRow")
+	opt_vbox.remove_child(chunk_row)
+	dev_vbox.add_child(chunk_row)
+	var t0r := _mk_dev_slider_row(dev_vbox, "Tier0Row", "Tier-0 radius (full-high columns)", 0.0, float(Settings.TIER0_RADIUS_MAX))
+	tier0_slider = t0r[0]
+	tier0_val = t0r[1]
+	var genr := _mk_dev_slider_row(dev_vbox, "GenThreadsRow", "Worker threads gen (0 = auto)", 0.0, float(Settings.WORKER_THREADS_MAX))
+	gen_slider = genr[0]
+	gen_val = genr[1]
+	var meshr := _mk_dev_slider_row(dev_vbox, "MeshThreadsRow", "Worker threads mesh (0 = auto)", 0.0, float(Settings.WORKER_THREADS_MAX))
+	mesh_slider = meshr[0]
+	mesh_val = meshr[1]
+	tier0_slider.value_changed.connect(_on_tier0_changed)
+	gen_slider.value_changed.connect(_on_gen_threads_changed)
+	mesh_slider.value_changed.connect(_on_mesh_threads_changed)
 	file_dialog = get_node("Layer/PackDialog")
 	slot_labels = []
 	slot_conts = []
@@ -383,6 +444,33 @@ func _on_pack_file_selected(path: String) -> void:
 	st.text = "Texture pack applied: %d blocks, %d tiles, %d items" % [int(r.get("blocks", 0)), int(r.get("tiles", 0)), int(r.get("item_count", 0))]
 
 
+# AC-0257: one code-built slider row for the Developer submenu (the tscn
+# row pattern). Returns [slider, val_label].
+func _mk_dev_slider_row(parent: Control, row_name: String, label_text: String, minv: float, maxv: float) -> Array:
+	var row := HBoxContainer.new()
+	row.name = row_name
+	row.add_theme_constant_override("separation", 10)
+	var lab := Label.new()
+	lab.text = label_text
+	lab.add_theme_font_size_override("font_size", 15)
+	lab.custom_minimum_size = Vector2(250, 0)
+	var sl := HSlider.new()
+	sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sl.custom_minimum_size = Vector2(0, 24)
+	sl.min_value = minv
+	sl.max_value = maxv
+	sl.step = 1.0
+	var val := Label.new()
+	val.add_theme_font_size_override("font_size", 15)
+	val.custom_minimum_size = Vector2(44, 0)
+	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	row.add_child(lab)
+	row.add_child(sl)
+	row.add_child(val)
+	parent.add_child(row)
+	return [sl, val]
+
+
 func _sync_controls() -> void:
 	_syncing = true
 	render_slider.value = float(int(Settings.values["render_dist"]))
@@ -422,6 +510,13 @@ func _sync_controls() -> void:
 	# AC-0252: the low-start slider spans the data-only far ring just
 	# outside the render circle (taxi [render_dist + 1, ~render_dist*1.42]).
 	_sync_lowstart_range()
+	# AC-0257: the Developer submenu rows.
+	tier0_slider.value = float(int(Settings.values.get("tier0_radius", 0)))
+	tier0_val.text = str(int(tier0_slider.value))
+	gen_slider.value = float(int(Settings.values.get("worker_gen_threads", 0)))
+	gen_val.text = "auto" if int(gen_slider.value) == 0 else str(int(gen_slider.value))
+	mesh_slider.value = float(int(Settings.values.get("worker_mesh_threads", 0)))
+	mesh_val.text = "auto" if int(mesh_slider.value) == 0 else str(int(mesh_slider.value))
 	_syncing = false
 
 
@@ -493,6 +588,35 @@ func _on_chunk_changed(v: float) -> void:
 		return
 	chunk_val.text = str(int(v))
 	Settings.set_value("chunks_per_frame", int(v))
+
+
+# AC-0257 (Developer submenu).
+func _on_dev_toggled(on: bool) -> void:
+	dev_vbox.visible = on
+
+
+func _on_tier0_changed(v: float) -> void:
+	if _syncing:
+		return
+	tier0_val.text = str(int(v))
+	Settings.set_value("tier0_radius", int(v))
+	Settings.apply_tier0_radius()
+
+
+func _on_gen_threads_changed(v: float) -> void:
+	if _syncing:
+		return
+	gen_val.text = "auto" if int(v) == 0 else str(int(v))
+	Settings.set_value("worker_gen_threads", int(v))
+	Settings.apply_worker_threads()
+
+
+func _on_mesh_threads_changed(v: float) -> void:
+	if _syncing:
+		return
+	mesh_val.text = "auto" if int(v) == 0 else str(int(v))
+	Settings.set_value("worker_mesh_threads", int(v))
+	Settings.apply_worker_threads()
 
 
 func _on_fogstart_changed(v: float) -> void:

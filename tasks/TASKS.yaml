@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-09-11T13:01
+  updated_at: 2026-09-11T17:53
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0258
 - AC-0112
 - AC-0113
 - AC-0098
@@ -138,26 +139,136 @@ intake:
 - id: AC-0257
   title: layered-sweep-streaming-with-baked-queue
   priority: 2
-  status: open
-  notes: '1) User Story: As a player moving on ground or flying I want terrain to appear as horizontal
-    layers spreading from my height, closest first at the right detail, so flying feels immediate and
-    close gameplay stays solid without paying for unseen depth.
-
-
-    2) Technical Details: Outcome-focused with ready queue detail: Per recenter, orchestrator scores all
-    pending slabs by layered sweep from player Y with hysteresis, plus taxi distance within layer, plus
-    LOD by horizontal distance band, and bakes a single ordered list spread over frames if needed to avoid
-    a recenter spike — tier 0 configurable radius (defaults to 0 = just the slab you are on, full column
-    straight to high) then sim high, then medium, then low. Edit queue stays separate top priority, checked
-    before the baked list, invalidating only that slab''s bitset and cached LODs. Gen on 4 threads and
-    mesh on 6 threads drain the baked list as fast as possible, doing a cheap early-out check before starting
-    each slab if its wanted LOD changed while queued, and after finishing if LOD changed mid-build they
-    keep the finished mesh cached per slab until whole column freed at r+2 so flipping back is just visibility.
-    Workers never instance nodes directly — they push finished mesh data to a separate thread-safe ready-to-instance
-    queue. Main each frame polls that ready queue and instances a capped number of MeshInstances so Process
-    stays flat, while workers keep draining the baked list without waiting. Include tier0_radius setting.
-    Verify via profiler and visual: workers stay fed, Process flat while flying, correct LOD per distance
-    appears in layered shells without stale builds.'
+  status: done
+  updated_at: 2026-09-11T17:53
+  completed_at: 2026-09-11T17:53
+  notes: "1) User Story: As a player moving on ground or flying I want terrain to appear as horizontal\
+    \ layers spreading from my height, closest first at the right detail, so flying feels immediate and\
+    \ close gameplay stays solid without paying for unseen depth.\n\n2) Technical Details: Outcome-focused\
+    \ with ready queue detail: Per recenter, orchestrator scores all pending slabs by layered sweep from\
+    \ player Y with hysteresis, plus taxi distance within layer, plus LOD by horizontal distance band,\
+    \ and bakes a single ordered list spread over frames if needed to avoid a recenter spike — tier 0\
+    \ configurable radius (defaults to 0 = just the slab you are on, full column straight to high) then\
+    \ sim high, then medium, then low. Edit queue stays separate top priority, checked before the baked\
+    \ list, invalidating only that slab's bitset and cached LODs. Gen on 4 threads and mesh on 6 threads\
+    \ drain the baked list as fast as possible, doing a cheap early-out check before starting each slab\
+    \ if its wanted LOD changed while queued, and after finishing if LOD changed mid-build they keep the\
+    \ finished mesh cached per slab until whole column freed at r+2 so flipping back is just visibility.\
+    \ Workers never instance nodes directly — they push finished mesh data to a separate thread-safe ready-to-instance\
+    \ queue. Main each frame polls that ready queue and instances a capped number of MeshInstances so\
+    \ Process stays flat, while workers keep draining the baked list without waiting. Include tier0_radius\
+    \ setting. Verify via profiler and visual: workers stay fed, Process flat while flying, correct LOD\
+    \ per distance appears in layered shells without stale builds.\n\n3) Agreed design (2026-09-11, coordinator\
+    \ + user, planning session):\n- Layers: horizontal 16-block Y-bands of slabs, each spanning the FULL\
+    \ render\n  radius. Layer order from the player's band: y, y-1, y+1, y-2, y+2, ...\n  (down first,\
+    \ alternating). No special-casing for standing on the ground\n  (fast enough to not matter).\n- Score\
+    \ per recenter = (layer rank, taxicab distance in slab cells from the\n  player's slab, then LOD by\
+    \ horizontal distance band). NO separate\n  high->medium->low phases: tier 0 starts as high, and within\
+    \ a layer high\n  simply goes ahead of medium by taxicab distance. The ladder's existing\n  horizontal\
+    \ bands (high <= R, MED R..low-start, LOW low-start..far edge)\n  choose each slab's LOD.\n- Tier\
+    \ 0: tier0_radius setting (default 0 = the XZ column you stand on);\n  tier-0 slabs go full column\
+    \ straight to high.\n- Hysteresis: retention-only (a built slab stays cached/visible until its\n \
+    \ column frees at r+2); scoring is recomputed fresh each recenter, no\n  per-slab priority state.\
+    \ Revisit later if it flaps.\n- Stale work: cheap early-out BEFORE starting a slab if the wanted LOD\n\
+    \  changed while queued. After finishing, if the LOD changed mid-build, KEEP\n  the last correct mesh\
+    \ visible (no holes) and cache the finished mesh per\n  slab; flipping back is visibility only. AC-0256\
+    \ (early-out-stale-lod-builds)\n  is worked as part of this ticket and closed superseded at closeout.\n\
+    - Threads: total worker threads scale to ALL available cores but never past\n  them (oversubscription\
+    \ makes work slow -> stale). Gen/mesh split ~40/60,\n  both configurable (on this 6-core box: gen\
+    \ 2 / mesh 4).\n- Ready queue: workers push finished mesh data to a thread-safe\n  ready-to-instance\
+    \ queue, never instance nodes. Main polls each frame and\n  instances a FIXED, configurable cap of\
+    \ MeshInstances (covers attach AND\n  detach/checkin); workers keep draining the bake without waiting.\n\
+    - Edits: separate top-priority queue checked before the baked list. An edit\n  rebuilds the slab AND\
+    \ its boundary neighbors, with the NEIGHBORS REBUILT\n  FIRST (prevents seeing holes at the boundary).\n\
+    - Phasing: ONE SHOT (no staged rollout).\n- Gates: extend wprof (workers stay fed), r16 fly-forward\
+    \ (Process flat),\n  ladder arm (correct LOD per band); NO new pixel-classifying fly arm (user\n \
+    \ passed on it); the user's in-game look test is the final visual gate.\n\n- UI (user 2026-09-11):\
+    \ the new configurables live in a NEW \"Developer\"\n  submenu under Options (keeps the normal options\
+    \ clean) - not env-only:\n  tier0_radius (default 0), worker gen threads (0 = auto = scale to all\n\
+    \  cores, not past), worker mesh threads (0 = auto). The per-frame instance\n  cap REUSES the existing\
+    \ \"Chunk meshes per frame\" setting (chunks_per_frame\n  - the same per-frame scene-handoff burst\
+    \ concept). The Options/Developer\n  screen contents go in a ScrollContainer so the list scrolls when\
+    \ it\n  overflows the window height (menu.gd OptionsBox is currently a plain\n  VBox - wrap it).\n\
+    \n3b) Design revisions (same session, user decisions):\n- THE VWIN MACHINERY GOES AWAY (AC-0234):\
+    \ no black caps, no keep/retention\n  masks, no owed-superset / debt lane, no GEN band padding, no\
+    \ tier-0 vwin\n  exemption. Pending slabs render as NOTHING (no placeholder). The r16 arm's\n  vwin\
+    \ section (caps_ok/churn_ok/owed_ok, harness ~7090-7133) is rewritten;\n  gate baselines shift (r16\
+    \ falsy set, wprof stages, possibly meshprobe).\n- Wanted set = OPTION (a): the FULL COLUMN within\
+    \ the horizontal radius\n  (every unbuilt slab, bedrock to sky, at its band LOD). No vertical limit;\n\
+    \  deep layers simply sit at the bottom of the bake order. Built slabs live\n  until the existing\
+    \ horizontal r+2 column eviction (no vertical retention\n  state).\n- IMPLEMENTATION = OPTION A: keep\
+    \ the recenter WALK (WANT/STUB/MERGE +\n  debounce + coverage/escalate + atomic finalize) as the collector,\n\
+    \  untouched. Change only: (1) finalize writes a (layer-rank, taxi) BUCKET\n  GRID keyed by the column's\
+    \ best pending slab (per-column lazy entries;\n  re-keyed as slabs complete - full per-slab expansion\
+    \ ~40-50k entries at\n  R50 is the fallback only if re-key churn is hot), (2) the drain pops the\n\
+    \  grid in (layer, taxi) order - layer 0 near->far, then y-1, then y+1, ... -\n  replacing the windowed\
+    \ bucket scan + (tier, taxi) _tier_score/rescore,\n  (3) gen stays per-column, triggered when a popped\
+    \ column has no data.\n  One-shot delivery; the tree stays gate-green between internal phases; a\n\
+    \  full walk rewrite is explicitly deferred (\"later if we need to\").\n- Confirmed: threads = threadgen_max\
+    \ + threadmesh_max sum to the core count\n  (6 here -> gen 2 / mesh 4), 40/60 split, 0 = auto, Developer\
+    \ submenu;\n  stale-LOD = CACHE AND KEEP (per-slab per-tier mesh cache, last\n  tier-matching mesh\
+    \ stays visible, flip-back = attach only, freed at r+2);\n  the \"Chunk meshes per frame\" slider\
+    \ MOVES into the Developer submenu and\n  the cap also bounds per-frame detach/checkin.\n\n4) Implementation\
+    \ plan (option A, internal phase order - one-shot delivery):\n- P0 settings+UI: settings.gd defaults/clamps/apply\
+    \ for tier0_radius (0..8,\n  default 0), worker_gen_threads, worker_mesh_threads (0 = auto); menu.gd\n\
+    \  \"Developer\" submenu under Options (code-built pattern like the debug\n  checkboxes), ChunkRow\
+    \ slider moved there, OptionsBox contents in a\n  ScrollContainer.\n- P1 thread scaling: world.gd\
+    \ _ready - auto = cores split 40/60 (min 1 each);\n  precedence settings (>0) > env (AWECRAFT_THREADGEN_N/THREADMESH_N)\
+    \ > auto;\n  apply = live update of the in-flight caps (no pool restart needed - the\n  caps are software\
+    \ limits on the shared engine pool).\n- P2 vwin removal (big delete, BEFORE the bake so the bake has\
+    \ clean\n  semantics): _vwin_* functions, cap ensure/drop sites + cap struct fields\n  (chunk.gd),\
+    \ owed/debt lane, GEN band padding (gen was already full-column\n  - revert the scoping), _vwin_tier0\
+    \ (replaced by tier0_radius), re-entry\n  rechecks, vwin counters; _low_handoff vwin-cull drop removed.\
+    \ Gate-green\n  checkpoint: genhash, meshprobe (verify baseline), r16 (new section), wprof.\n- P3\
+    \ the bake: walk MERGE finalizes into the (layer-rank, taxi) grid\n  (rank 0 = player band, 1 = y-1,\
+    \ 2 = y+1, 3 = y-2, ...); drain pops\n  (layer, taxi) order with the existing budget + TG/TM depth\
+    \ caps; _tier_score\n  / windowed scan / rescore pass deleted (debounced small-move path keeps a\n\
+    \  cheap re-stamp/re-key); tier0_radius columns (Chebyshev) force high LOD\n  (_lod_tier_of override)\
+    \ and full-column high.\n- P4 stale-LOD cache-and-keep (absorbs AC-0256): per-slab per-tier mesh\n\
+    \  cache; PRE-START early-out (wanted tier != queued tier -> skip, do not\n  start); handoff tier-change\
+    \ -> store finished mesh in cache, keep the\n  visible last tier-matching mesh, queue rebuild at wanted\
+    \ tier; flip-back =\n  attach from cache; all caches freed at r+2 column eviction.\n- P5 instance\
+    \ cap: threadmesh_poll cap (chunks_per_frame) extended to bound\n  per-frame detach/checkin as well\
+    \ as attach - one configurable number.\n- P6 gates: wprof (workers stay fed - TG/TM inflight sampling\
+    \ during fly +\n  bake/re-key stage timings), r16 (fly-forward: Process frame p95 flat,\n  layered-arrival\
+    \ evidence, no stale-visible counter), ladder arm (LOD per\n  band + tier0 center override), genhash\
+    \ (gen untouched - must stay exact),\n  meshprobe (verify cap-removal baseline). Full battery + build\
+    \ for an L\n  change per the gates-scale rule.\n- P7 closeout: ./build_windows.sh + :8080 byte-match;\
+    \ user in-game look test\n  (layered arrival while flying, edits leave no boundary holes, deep shafts\n\
+    \  see-through-then-fill); close AC-0257, close AC-0256 SUPERSEDED,\n  CONTINUITY, commit+push.\n\n\
+    5) Result (2026-09-11, one-shot, option A, coordinator-implemented):\n- P0 settings+UI: Settings \"\
+    tier0_radius\" (0-8 Chebyshev, default 0), \"worker_gen_threads\"/\"worker_mesh_threads\" (0 = auto,\
+    \ live apply); Options > Developer submenu (checkbox-revealed): Chunk meshes/frame slider moved in\
+    \ + tier-0 radius + gen/mesh thread sliders.\n- P1 thread scaling: 0 = auto = core count split gen/mesh\
+    \ 2/4 on the 6-core box (min 1 each); >0 = explicit caps (software limits on the shared engine pool,\
+    \ live).\n- P2 vwin removal: ALL of AC-0234's machinery gone - per-tower kept slabs, the 16 black\
+    \ caps (cap_instance/cap_mask/drop_cap), the owed-superset rebuilds + debt lane, the scoped re-entry\
+    \ regens, the GEN band padding; disk-load is a full-regen enqueue again. Pending slabs render as NOTHING\
+    \ (no caps, no black boxes). r16 rewritten to the pending/holes contract (covered = fog or low, pending\
+    \ = in the queue, hole = neither).\n- P3 the bake: recenter carries the player Y (last_wy, set on\
+    \ slab crossings - player.gd + main.gd); bake score (layer rank, taxi) replaces (tier, taxi) at every\
+    \ pick site: rank 0 = the player's slab, 1 = y-1, 2 = y+1, 3 = y-2, ... (Y-layers = 16-block slabs;\
+    \ each layer spans the full render radius, taxi within). tier0_radius columns (Chebyshev ball) are\
+    \ skipped by the fog/low lanes + the in-r pass = full column straight to high; note_tier0_radius re-stamps\
+    \ on a setting change.\n- P4 stale-LOD cache-and-keep (absorbs AC-0256): PRE-START early-out in the\
+    \ TM worker (wanted tier != queued tier -> no emit); handoff tier-mismatch -> the finished mesh goes\
+    \ to the per-slab cache (chunk.low_cache {tier,dgen,fgen,v,i,n,c,mh}), the currently visible mesh\
+    \ STAYS (last tier-matching, no holes), the slab stays pending against the live tier and re-emits\
+    \ there; flip-back = attach from cache (no worker round-trip), honored only against unchanged data\
+    \ (dgen/fgen guard); all-air at a stale tier is NOT terminal (the air rule is per grid resolution);\
+    \ caches die with the low set (drop_low = r+2 eviction).\n- P5 instance cap: the recenter column-free\
+    \ batch is bounded at stream_ho_cap/frame (the \"Chunk meshes per frame\" value - one configurable\
+    \ number bounds attach AND detach/checkin); over-cap frees are deferred (identity-guarded inst+col_gen,\
+    \ the AC-0247 pattern - a re-occupied key must not be freed) and drained from _process at the same\
+    \ cap.\n- Gates (full battery, L change): genhash EXACT 80b904c0e5f085eef1e839459058c706; meshprobe\
+    \ match_rate 1.0 (32/32, C++ vs GD twin); r16 ok:true (stream ascend/descend holes_ok + settled_ok,\
+    \ inr/immediate/gate/low_thread/height/air/uv_repeat ok, wave layer_monotone_ok, spin invariant, 0\
+    \ holes); ladder ok:true (med/low band mesh signatures 122/122 + 602/602, boundary flip, air rule,\
+    \ tier0 predicate + layer-rank encoding); battery player;interact;light;fluids;buckets ok:true; wprof\
+    \ ok:true (frame avg 3.6 ms p95 6.3 flat, fly-forward ahead band held, lost_chunks 0, gen queue deep\
+    \ - workers fed, partition recon 0%).\n- Remaining user gate: the in-game look test (layered arrival\
+    \ while flying, edits leave no boundary holes, deep shafts see-through-then-fill, low-start boundary\
+    \ moves swap med/low without holes) - the ticket's final visual gate."
   area: perf
   effort: L
   depends_on:
@@ -167,7 +278,9 @@ intake:
 - id: AC-0256
   title: early-out-stale-lod-builds
   priority: 2
-  status: open
+  status: cancelled
+  updated_at: 2026-09-11T17:53
+  completed_at: 2026-09-11T17:53
   notes: '1) User Story: As a player flying fast I want the game to stop building LODs I no longer need
     so it can spend time on what I can actually see, without hitching.
 
@@ -175,7 +288,14 @@ intake:
     2) Technical Details: Light. Outcome: before any slab mesh build (low/medium/high) early-out if that
     slab no longer wants that LOD at its current distance/height, and re-queue it for the correct LOD
     instead. Far movement should not waste time on stale high builds; correct LOD still appears, just
-    without the wasted work.'
+    without the wasted work.
+
+
+    SUPERSEDED by AC-0257 (closed 2026-09-11, done + shipped with it): the stale-LOD early-out shipped
+    as AC-0257 phase P4 - the pre-start early-out in the mesh worker (wanted tier moved -> no emit started)
+    + the cache-and-keep (finished meshes cached per slab, the last tier-matching mesh stays visible,
+    flip-back attaches from the cache). The scope was absorbed into AC-0257; this ticket is never implemented
+    on its own.'
   area: perf
   effort: S
   depends_on: []
@@ -6112,11 +6232,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-31T12:20
-  updated_at: 2026-08-31T16:32
-  completed_at: null
+  updated_at: 2026-09-11T14:44
+  completed_at: 2026-09-11T14:44
   waiting_on: null
   parent_id: AC-0170
   notes: "1) User Story: As a player who hit a bug, I want each play session to save its log to a new\
@@ -6195,11 +6315,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-31T12:23
-  updated_at: 2026-08-31T16:36
-  completed_at: null
+  updated_at: 2026-09-11T14:43
+  completed_at: 2026-09-11T14:43
   waiting_on: null
   parent_id: AC-0172
   notes: "1) User Story: As a player whose game hit an error, I want to see a message I can read and then\
@@ -6238,11 +6358,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-31T12:25
-  updated_at: 2026-08-31T16:36
-  completed_at: null
+  updated_at: 2026-09-11T14:43
+  completed_at: 2026-09-11T14:43
   waiting_on: null
   parent_id: AC-0169
   notes: "1) User Story: As a player or dev I want separate Options toggles for band, light, and collision\
@@ -6574,11 +6694,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-31T16:30
-  updated_at: 2026-09-11T09:28
-  completed_at: null
+  updated_at: 2026-09-11T14:45
+  completed_at: 2026-09-11T14:45
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want to press Esc to pause/open the menu like most games, so I
@@ -9555,9 +9675,10 @@ intake:
       '
 - id: AC-0243
   title: controller-double-tap-a-fly-mode
-  status: open
+  status: done
   created_at: 2026-09-07T18:30
-  updated_at: 2026-09-07T18:30
+  updated_at: 2026-09-11T14:41
+  completed_at: 2026-09-11T14:41
   notes: "1) User Story: As a player with a controller I want to double-tap the A\nbutton (the Bedrock\
     \ jump-double-tap) to toggle fly mode on and off, and\nwhile flying I want A to raise me and B to\
     \ lower me, so I can fly like in\nMinecraft Bedrock.\n\n2) Technical Details (user request, 2026-09-07):\n\
@@ -10135,12 +10256,12 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels:
   - tooling
   created_at: 2026-09-10T21:15
-  updated_at: 2026-09-10T22:46
-  completed_at: null
+  updated_at: 2026-09-11T14:43
+  completed_at: 2026-09-11T14:43
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a developer and as the agents working this repo I want a single stable API
@@ -10234,3 +10355,18 @@ intake:
 
     '
   comments: []
+- id: AC-0258
+  title: lods-treat-clutter-as-air
+  priority: 3
+  status: open
+  notes: '1) User Story: As a player far away I want tiny clutter like flowers and grass to disappear
+    in low/medium LODs so distant terrain stays cheap and clean, only showing full detail up close.
+
+
+    2) Technical Details: godot/world/world.gd + chunk.gd + gdext/src/mesh.cpp. On low at 4x4x4 and medium
+    (and optionally high far) treat clutter blocks (flowers, tall grass, etc.) as air when building the
+    bitset/mesh — skip them in the greedy walk. Keep them in c.data per slab at its Y, only cull visually
+    in LODs. Verify far terrain has no flower speckling, close high still shows them; no extra alloc.'
+  area: art
+  effort: S
+  depends_on: []
