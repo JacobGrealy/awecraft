@@ -227,16 +227,18 @@ func _unhandled_input(event: InputEvent) -> void:
 				close_inventory()
 		# AC-0122: the old V/H/J/K debug keys moved into the console as the
 		# seedinv / swing / holdswing / clearswing commands (no more accidental
-		# triggers during play); P keeps pause until AC-0185 moves it to Esc.
+		# triggers during play).
 		# AC-0172: F8 = one-click bug capture (zip in user://bugs).
 		elif kc == int(KEY_F8):
 			Debug.bug_report()
+		# AC-0185: ui_pause now carries P + Esc (project.godot). Esc must be
+		# checked BEFORE the ui_pause branch - with ui_mode open it must
+		# close the UI (below) and never fall into the pause branch.
+		elif kc == int(KEY_ESCAPE) and ui_mode != "":
+			close_inventory()
 		elif kc == int(KEY_P) or event.is_action_pressed("ui_pause"):
 			if ui_mode == "" and not dead:
 				Game.pause()
-		elif kc == int(KEY_ESCAPE):
-			if ui_mode != "":
-				close_inventory()
 		elif ui_mode == "" and kc >= int(KEY_1) and kc <= int(KEY_9):
 			sel = int(kc - int(KEY_1))
 

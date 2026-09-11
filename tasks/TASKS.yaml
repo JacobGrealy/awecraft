@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-11T07:51
+  updated_at: 2026-09-11T09:28
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0185
 - AC-0097
 - AC-0112
 - AC-0113
@@ -136,6 +135,21 @@ intake:
     0 script/shader errors. SHIPPED as AweCraft[20260911-0749 09ec238] (:8080 byte-matched 64c4e98d...).'
   area: perf
   effort: M
+  depends_on: []
+- id: AC-0256
+  title: early-out-stale-lod-builds
+  priority: 2
+  status: open
+  notes: '1) User Story: As a player flying fast I want the game to stop building LODs I no longer need
+    so it can spend time on what I can actually see, without hitching.
+
+
+    2) Technical Details: Light. Outcome: before any slab mesh build (low/medium/high) early-out if that
+    slab no longer wants that LOD at its current distance/height, and re-queue it for the correct LOD
+    instead. Far movement should not waste time on stale high builds; correct LOD still appears, just
+    without the wasted work.'
+  area: perf
+  effort: S
   depends_on: []
 - id: AC-0248
   title: prewarm-pools-for-streaming
@@ -6512,7 +6526,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-31T16:30
-  updated_at: 2026-08-31T16:30
+  updated_at: 2026-09-11T09:28
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -6521,7 +6535,35 @@ intake:
     main.gd menu handling because browser owns Esc. Remap to Esc for desktop Windows build (exports/windows/AweCraft.exe),
     keep P as fallback until Esc reliably captures (browser canvas focus). Update input_map (ui_cancel
     / pause), test Options menu still reachable, handle web vs desktop feature tag. Verify Esc pauses
-    in desktop, P still works until removed.'
+    in desktop, P still works until removed.
+
+
+    3) Implementation (2026-09-11): DONE. GDScript-only, surgical (player.gd +10/-2, project.godot +3,
+    harness.gd +123): project.godot input_map ui_pause now carries BOTH P (physical 80) and Esc (physical
+    4194305) - bound directly with no feature tag because the project is Windows-only since AC-0124 (the
+    subagent verified no web export is built), so the ticket''s "browser owns Esc" concern is moot for
+    shipped builds; P stays as the secondary toggle per the ticket. player.gd _unhandled_input: the old
+    KEY_ESCAPE branch (close inventory only) was MOVED ABOVE the pause branch and narrowed to "Esc while
+    a UI mode is open closes that UI" - so Esc can never both close a menu and toggle pause in the same
+    press; the pause branch is now "P or ui_pause action" (which includes Esc) when no UI mode is open
+    and not dead. Net behavior: Esc from play opens the pause menu (Game.pause + the pause box appears
+    on the next mode-transition frame, so one press cannot open-and-close); Esc from the pause menu resumes;
+    P still toggles both ways; with a submenu (e.g. Options) open, Esc backs out ONE level (the menu layer
+    owns that close path) - documented in the harness arm header. HARNESS: new "pausemenu" logic arm (standalone
+    + in the battery table) synthesizes keys through a fresh InputEventKey per send (the AC-0243 re-parse
+    lesson) and polls state via _await_state: pre-state (console closed, menu layer in "ingame"), Esc
+    opens (mode pause + pause box visible + focus lands on ResumeButton), Esc closes, P opens, P closes,
+    ArrowDown navigates to the Options button (the built-in ui_down - proving Options is keyboard-reachable)
+    and pressing it shows the Options screen, Esc backs out one level to the pause menu, Esc resumes.
+    GATE (proportionate to the change - an input-map change cannot touch meshing/world/profiling, so no
+    genhash/meshprobe/wprof/r16/battery): the pausemenu arm run headless = ok:true with ALL ten sub-assertions
+    true (pre_ok, esc_open, focus_resume, esc_close, p_open, p_close, nav_ok, options_shown, back_to_pause,
+    resumed), exit 0, 0 script/shader errors. SHIPPED as AweCraft[20260911-0926 c7ac331] (:8080 byte-matched
+    d72014a9...). NOTE FOR THE LOG: during this ticket an xhigh subagent run was cancelled by the user
+    after it started a full 13-mode SMOKE battery for this trivial change (disproportionate - the battery
+    instruction was the coordinator prompt, not the subagent); the code it left in the tree was then coordinator-audited
+    and gated with the single pausemenu arm instead. Process fix: gates and subagent effort scale with
+    the change size.'
   comments: []
 - id: AC-0186
   title: loading-screen-continue-saved-world

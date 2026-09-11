@@ -304,6 +304,13 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			player = main._spawn_player()
 			await _gamepad_test(spawn)
 			return
+		if logic == "pausemenu":
+			# AC-0185: Esc/P pause-menu toggle + Options reachability.
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _pausemenu_test()
+			return
 		if logic == "console":
 			# AC-0121: the in-game debug console (backtick/F3 toggle).
 			world.recenter(spawn.x, spawn.z, true)
@@ -1095,6 +1102,12 @@ func _batt_run_mode(mode: String, spawn: Vector3, seed_env: String) -> void:
 			await main._await_spawn_floor(spawn, 300)
 			player = main._spawn_player()
 			await _player_logic_test_body()
+		"pausemenu":
+			# AC-0185: Esc/P pause toggle + Options reachability (in-battery).
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _pausemenu_test_body()
 		"interact":
 			world.recenter(spawn.x, spawn.z, true)
 			player = main._spawn_player()
@@ -1522,6 +1535,17 @@ func _pad_axis(axis: int, value: float) -> InputEventJoypadMotion:
 	m.axis_value = value
 	return m
 
+# AC-0185: synthetic key through the Input API - a FRESH event object per
+# parse (AC-0243 lesson: a re-parsed object is read with its CURRENT
+# values, so a press+release on one object within one frame gap loses
+# the press).
+func _key_ev(k: int, pressed: bool) -> void:
+	var ke := InputEventKey.new()
+	ke.physical_keycode = k
+	ke.keycode = k
+	ke.pressed = pressed
+	Input.parse_input_event(ke)
+
 # AC-0243: poll a state predicate until it holds (wall-clock timeout).
 # Input.parse_input_event events flush on a later frame under slow
 # xvfb frames, so fixed 1-3 frame awaits race the handlers; every
@@ -1867,6 +1891,105 @@ func _gamepad_test(spawn: Vector3) -> void:
 			and nav_ok and accept_ok,
 	})
 	get_tree().quit()
+
+
+# AC-0185: Esc opens the pause menu from play and closes it again; P stays
+# the secondary toggle; Esc over the Options screen backs out ONE level
+# (Options -> pause menu -> resume) - the menu's _unhandled_input owns the
+# close side, the player's ui_pause branch owns the open side, and the
+# pause box only appears on the NEXT process frame (main.gd's mode
+# transition), so one key press can never open and close in the same
+# flush. Keys are synthesized (fresh event per send, AC-0243) and every
+# assertion polls STATE via _await_state (input flushes on a later frame).
+func _pausemenu_test() -> void:
+	await _pausemenu_test_body()
+	get_tree().quit()
+
+
+func _pausemenu_test_body() -> void:
+	var p = Game.player
+	for i in 10:
+		await get_tree().physics_frame
+	if menu_ui == null:
+		main._make_menu()
+	# mimic the Play click: the menu layer exists but is hidden in play
+	menu_ui._state = "ingame"
+	menu_ui._apply_state()
+	# the crash arm's battery path ends with the console OPEN (Debug.
+	# _close_crash_dialog re-opens it) - an open console gates every key
+	# branch in player.gd, so establish the clean pre-state first. The
+	# battery re-creates the console node per mode, so the flag can be
+	# stale (node not visible) - reset it directly in that case.
+	if Game.console_open:
+		if Game.console != null and Game.console.visible:
+			Game.console.close_console()
+		else:
+			Game.console_open = false
+		for i in 4:
+			await get_tree().physics_frame
+	for i in 6:
+		await get_tree().process_frame
+	var pre_ok: bool = Game.mode == "play" and String(p.ui_mode) == "" \
+		and not Game.console_open and menu_ui._state == "ingame"
+	# (a) Esc from play -> pause + the pause menu shows.
+	_key_ev(KEY_ESCAPE, true)
+	var esc_paused: bool = await _await_state(func() -> bool: return Game.mode == "pause")
+	_key_ev(KEY_ESCAPE, false)
+	var esc_menu: bool = await _await_state(func() -> bool: return menu_ui._state == "pause")
+	var esc_open: bool = esc_paused and esc_menu and menu_ui.pause_box.visible
+	var f0 := get_viewport().gui_get_focus_owner()
+	var focus_resume: bool = f0 != null and f0.name == "ResumeButton"
+	# (b) Esc again -> back to play.
+	_key_ev(KEY_ESCAPE, true)
+	var esc_close: bool = await _await_state(func() -> bool: return Game.mode == "play" and menu_ui._state == "ingame")
+	_key_ev(KEY_ESCAPE, false)
+	# (c) P still toggles: open...
+	_key_ev(KEY_P, true)
+	var p_open: bool = await _await_state(func() -> bool: return Game.mode == "pause" and menu_ui._state == "pause")
+	_key_ev(KEY_P, false)
+	# ...and close.
+	_key_ev(KEY_P, true)
+	var p_close: bool = await _await_state(func() -> bool: return Game.mode == "play" and menu_ui._state == "ingame")
+	_key_ev(KEY_P, false)
+	# (d) Esc -> pause menu -> Options is reachable: navigate with the
+	# built-in ui_down (ArrowDown) to the Options button, then press it -
+	# the same code path the menu button uses.
+	_key_ev(KEY_ESCAPE, true)
+	await _await_state(func() -> bool: return Game.mode == "pause" and menu_ui._state == "pause")
+	_key_ev(KEY_ESCAPE, false)
+	var opt_btn: Button = menu_ui.pause_box.get_node("Center/VBox/OptionsButton")
+	_key_ev(KEY_DOWN, true)
+	var nav_ok: bool = await _await_state(func() -> bool:
+		var f := get_viewport().gui_get_focus_owner()
+		return f != null and f == opt_btn)
+	_key_ev(KEY_DOWN, false)
+	var options_shown: bool = false
+	if nav_ok:
+		opt_btn.pressed.emit()
+		options_shown = await _await_state(func() -> bool: return menu_ui._state == "opt_pause" and menu_ui.options_box.visible)
+	# back out: Esc from Options goes ONE level back to the pause menu...
+	_key_ev(KEY_ESCAPE, true)
+	var back_pause: bool = await _await_state(func() -> bool: return Game.mode == "pause" and menu_ui._state == "pause")
+	_key_ev(KEY_ESCAPE, false)
+	# ...and Esc from the pause menu resumes.
+	_key_ev(KEY_ESCAPE, true)
+	var resumed: bool = await _await_state(func() -> bool: return Game.mode == "play" and menu_ui._state == "ingame")
+	_key_ev(KEY_ESCAPE, false)
+	Debug.result({
+		"mode": "pausemenu",
+		"pre_ok": pre_ok,
+		"esc_open": esc_open,
+		"focus_resume": focus_resume,
+		"esc_close": esc_close,
+		"p_open": p_open,
+		"p_close": p_close,
+		"nav_ok": nav_ok,
+		"options_shown": options_shown,
+		"back_to_pause": back_pause,
+		"resumed": resumed,
+		"ok": pre_ok and esc_open and focus_resume and esc_close and p_open and p_close \
+			and nav_ok and options_shown and back_pause and resumed,
+	})
 
 
 func _look_test() -> void:
