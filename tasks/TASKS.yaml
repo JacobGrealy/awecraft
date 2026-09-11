@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-10T22:46
+  updated_at: 2026-09-11T07:51
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0253
 - AC-0185
 - AC-0097
 - AC-0112
@@ -92,6 +91,7 @@ intake:
   title: per-slab-air-bitset-for-mesh
   priority: 2
   status: open
+  updated_at: 2026-09-11T07:51
   notes: '1) User Story: As a player I want meshing to skip air checks fast so low at 4x4x4 and high at
     16x16x16 build quicker while flying.
 
@@ -100,7 +100,40 @@ intake:
     fill of 4096 per 16x16x16 slab, build 512-byte bitset (1 bit per block solid/air) and store alongside
     c.data[si]. Greedy walk checks bitset first for air/solid (fast path), only palette-decodes on emit.
     Enables instant all-air/all-solid early outs and neighbor checks if gen ahead. Verify via profiler:
-    mesh ms per slab down vs baseline, no extra alloc spike.'
+    mesh ms per slab down vs baseline, no extra alloc spike.
+
+
+    3) Implementation (agent, 2026-09-10/11): DONE. The slab entry gains an optional "bs" field: a 512-byte
+    PackedByteArray, bit k (byte k>>3, bit k&7, LSB-first) set iff cell k (flat (y<<8)|(z<<4)|x) is non-air;
+    nz already equals the solid count, so bs is its per-cell form; a missing/short bs takes the full pre-AC-0253
+    decode path everywhere (graceful). It is built in the SAME nz scan that already counts solids (no
+    second pass) in both gen.cpp palettize_slabs and chunk_io.cpp palettize_flat, rides the entry as a
+    plain dict field through every value copy (slab_copy/slab_set do true byte copies; slab_set flips
+    the edited cell bit), and decode_slabs is deliberately untouched, so disk-loaded slabs have no bs
+    until re-palettize/edit (the fallback path covers them - a later ticket can build bs at load). WHAT
+    IT BUYS (measured, 13 interleaved meshprobe A/B runs vs the pre-ticket .so): the low avg emit is -13
+    to -20% (130 -> 103-113.5 us/slab: pass 1 is a solid-bit COUNT per sample - the >half-air reject with
+    zero decode; pass 2 palette-decodes only the kept samples in identical float order, so the A/B pair
+    stays 8/8; neighbor slabs contribute solid mask only), all-air slabs early-out instantly (nz == 0),
+    and the neighbor ring decodes bs-first. The HIGH walk initially got the bitset-first face tests too
+    - and MEASURED 10% SLOWER (0.330 -> 0.3635 ms/slab; faces phase 0.281 -> 0.456 ms/build): the terrain
+    is ~75% solid, so the extra bit test on the SOLID path (the common case) taxed more than the saved
+    id load on the air path (25%). Per the users decision (2026-09-11) the high-walk bit tests (s_faces
+    / s_is_interior) were REVERTED to byte-identical pre-AC-0253 code and the now-dead snap_sol solid
+    mirror deleted entirely (grep-verified zero references); the high walk is back at 0.318 ms/slab (inside
+    the old 0.311-0.343 range, below the old median) while the low-emit win stays. ALLOCS: steady +512
+    B per slab entry (~24 KB/chunk), value-copied with zero GDScript per-byte work; wprof MISC flat 0.9
+    -> 0.9-1.0 (no alloc spike). GATES (agent ran; coordinator diff-audited the bs build + AvgSrc + the
+    revert diff - s_faces/s_is_interior confirmed byte-identical to HEAD, zero snap_sol refs; staged .so/.dll
+    md5-verified): genhash exact (0,0) 80b904c0... and 25/25 lines byte-identical old vs new; meshprobe
+    ok 1908/32 + A/B 8/8 + verts_gd == verts_cpp; r16 ok (falsy set exactly the pre-existing trio; note:
+    the faster low band shifted the r16 build/flight interleaving - queue_max 136->1, catch_up 0->678
+    - and the known player-fall flake then tripped a PRE-EXISTING latent GDScript bug, filed as AC-0255;
+    4 timing-sensitive statistical sub-gates went false in that run but are not part of the arm ok expression
+    - watch item); wprof ok, recon 0.0, all 9 stages flat; battery genhash+range ok (note: the first battery
+    run was invalid - shell quotes leaked into AWECRAFT_BATTERY and both arms BATTSKIPped for a vacuous
+    ok; the clean-env re-run is the evidence - a one-line strip() hardening in _run_battery is suggested);
+    0 script/shader errors. SHIPPED as AweCraft[20260911-0749 09ec238] (:8080 byte-matched 64c4e98d...).'
   area: perf
   effort: M
   depends_on: []
@@ -10076,3 +10109,35 @@ intake:
     SHIPPED as AweCraft[20260910-2244 b031e11] (:8080 byte-matched 598de192...; the game is unchanged
     - a tooling ticket, the build keeps the serve contract honest). FROM NOW ON every task-list mutation
     - including the AC-0254 queue removal - goes through this CLI per the AGENTS.md line.'
+- id: AC-0255
+  title: light-box-negative-height
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels:
+  - bug
+  created_at: 2026-09-11T07:50
+  updated_at: 2026-09-11T07:50
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want no engine errors when I am deep underground, so the game does
+    not spam the log (and the harness does not get flaky light-box assertions) when the player is below
+    y=0.
+
+
+    2) Technical Details: FOUND during AC-0253 verification (the r16 player-fall flake landed the player
+    at y=-12 in 2/2 runs, exposing it): godot/world/world.gd light_at() clips its light box to y<0 when
+    the player is at y <= -8, so compute_light_split receives h <= 0 and calls PackedByteArray.resize(sz*h)
+    with a non-positive size -> 225 engine p_size<0 errors per r16 run (0 in the pre-flake runs). The
+    fix is a max(..., 1) clamp on the box height before the resize (lighting.gd:127-131 area - the compute_light_split
+    call site / the h computation). Pure GDScript, no C++ on the path. VERIFY: an r16 run with the known
+    player-fall flake forced (or a targeted harness check teleporting the player below y=0) shows 0 p_size<0
+    engine errors; the normal r16/meshprobe/wprof gates stay green. NON-GOALS: no rework of the light-box
+    math, no other files.
+
+    '
+  comments: []

@@ -21,7 +21,34 @@
 namespace awecommon {
 
 constexpr int S3 = 4096; // slab cells (16x16)
+constexpr int S3B = 512; // slab solid-bitset bytes (4096 bits, 1 bit/cell)
 constexpr int B_STONE = 3; // block id (== awegen::B_STONE in gen.cpp)
+
+// AC-0253: the per-slab SOLID/AIR BITSET. Bit k (byte k>>3, bit k&7,
+// LSB-first) is set iff cell k (the slab-local flat (y<<8)|(z<<4)|x) is
+// NON-AIR (id != 0). It rides as the OPTIONAL slab entry field "bs" (a
+// 512-byte PackedByteArray), built once where all 4096 block ids are in
+// hand (the palettize points) and carried with the slab entry value
+// copies. Consumers test a bit instead of palette-decoding: the air
+// fast path, the instant all-air/all-solid counts (== nz), the
+// low-emit half-air sample test (a bit count), and the cross-slab
+// face-cull masks (the neighbor's bitset when gen is ahead). A missing
+// or short "bs" means "derive from the decode" (the pre-AC-0253 path).
+inline bool slab_bit(const uint8_t *bs, int pos) {
+	return (bs[pos >> 3] >> (pos & 7)) & 1;
+}
+inline void slab_bit_set(uint8_t *bs, int pos) {
+	bs[pos >> 3] |= (uint8_t)(1u << (pos & 7));
+}
+inline void slab_bit_clear(uint8_t *bs, int pos) {
+	bs[pos >> 3] &= (uint8_t)~(1u << (pos & 7));
+}
+inline int slab_bit_count(const uint8_t *bs) {
+	int c = 0;
+	for (int k = 0; k < S3B; k++)
+		c += __builtin_popcount((unsigned)bs[k]);
+	return c;
+}
 
 // Extract the `bits`-wide value at cell `pos` from a packed bitstream
 // (MSB-first, identical to chunk_io.gd _slab_getbits / the codec's
@@ -36,6 +63,11 @@ std::vector<uint8_t> slab_unpack(const uint8_t *i, int isize, int bits, const ui
 // uniform fill; n==0 = raw copy; else palette unpack). out has exactly
 // p_data.size() entries.
 void slab_views(const godot::Array &p_data, std::vector<std::vector<uint8_t>> &out);
+
+// One slab view (the slab_views per-entry body) — for the on-demand
+// decode of a SINGLE slab (the AC-0253 bitset fast path decodes only the
+// slabs that lack a "bs" field; null/missing slab = empty view).
+void slab_view_one(const godot::Variant &v, std::vector<uint8_t> &out);
 
 // std::vector<uint8_t> -> PackedByteArray (the common output conversion).
 godot::PackedByteArray pba_from(const std::vector<uint8_t> &v);

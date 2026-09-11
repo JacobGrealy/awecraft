@@ -70,29 +70,32 @@ std::vector<uint8_t> slab_unpack(const uint8_t *i, int isize, int bits, const ui
 	return out;
 }
 
+void slab_view_one(const godot::Variant &v, std::vector<uint8_t> &out) {
+	out.clear();
+	if (v.get_type() != godot::Variant::DICTIONARY)
+		return;
+	godot::Dictionary d = v;
+	int n = d.get("n", 0);
+	if (n == 1) {
+		godot::PackedByteArray p = d.get("p", godot::PackedByteArray());
+		uint8_t val = p.size() > 0 ? p[0] : 0;
+		out.assign(S3, val);
+	} else if (n == 0) {
+		godot::PackedByteArray i = d.get("i", godot::PackedByteArray());
+		if (i.size() > 0)
+			out.assign(i.ptr(), i.ptr() + i.size());
+	} else {
+		godot::PackedByteArray p = d.get("p", godot::PackedByteArray());
+		godot::PackedByteArray i = d.get("i", godot::PackedByteArray());
+		int b = d.get("b", 0);
+		out = slab_unpack(i.ptr(), (int)i.size(), b, p.ptr());
+	}
+}
+
 void slab_views(const godot::Array &p_data, std::vector<std::vector<uint8_t>> &out) {
 	out.assign(p_data.size(), std::vector<uint8_t>());
-	for (int k = 0; k < (int)out.size(); k++) {
-		godot::Variant v = p_data[k];
-		if (v.get_type() != godot::Variant::DICTIONARY)
-			continue;
-		godot::Dictionary d = v;
-		int n = d.get("n", 0);
-		if (n == 1) {
-			godot::PackedByteArray p = d.get("p", godot::PackedByteArray());
-			uint8_t val = p.size() > 0 ? p[0] : 0;
-			out[k].assign(S3, val);
-		} else if (n == 0) {
-			godot::PackedByteArray i = d.get("i", godot::PackedByteArray());
-			if (i.size() > 0)
-				out[k].assign(i.ptr(), i.ptr() + i.size());
-		} else {
-			godot::PackedByteArray p = d.get("p", godot::PackedByteArray());
-			godot::PackedByteArray i = d.get("i", godot::PackedByteArray());
-			int b = d.get("b", 0);
-			out[k] = slab_unpack(i.ptr(), (int)i.size(), b, p.ptr());
-		}
-	}
+	for (int k = 0; k < (int)out.size(); k++)
+		slab_view_one(p_data[k], out[k]);
 }
 
 godot::PackedByteArray pba_from(const std::vector<uint8_t> &v) {

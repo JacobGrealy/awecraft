@@ -664,14 +664,21 @@ public:
 				seen[i] = -1;
 			order.clear();
 			int nz = 0;
+			// AC-0253: the solid/air bitset (1 bit/cell) — built in the
+			// SAME nz scan and riding the slab entry as the optional "bs"
+			// field (the meshing fast path; the gen-side palettize_slabs
+			// builds the identical field).
+			std::vector<uint8_t> bs(S3 / 8, 0);
 			for (int i = 0; i < S3; i++) {
 				uint8_t v = p_arr[base + i];
 				if (seen[v] < 0) {
 					seen[v] = (int)order.size();
 					order.push_back(v);
 				}
-				if (v != 0)
+				if (v != 0) {
 					nz++;
+					bs[i >> 3] |= (uint8_t)(1u << (i & 7));
+				}
 			}
 			if (nz == 0)
 				continue; // stays null
@@ -685,6 +692,7 @@ public:
 				sd["p"] = pba_from(pv);
 				sd["i"] = PackedByteArray();
 				sd["nz"] = nz;
+				sd["bs"] = pba_from(bs);
 			} else if (nn <= 16) {
 				std::vector<uint8_t> p(order);
 				std::sort(p.begin(), p.end());
@@ -700,6 +708,7 @@ public:
 				sd["p"] = pba_from(p);
 				sd["i"] = pba_from(bitpack(vals.data(), S3, bits));
 				sd["nz"] = nz;
+				sd["bs"] = pba_from(bs);
 			} else {
 				std::vector<uint8_t> raw(p_arr.ptr() + base, p_arr.ptr() + base + S3);
 				sd["n"] = 0;
@@ -707,6 +716,7 @@ public:
 				sd["p"] = PackedByteArray();
 				sd["i"] = pba_from(raw);
 				sd["nz"] = nz;
+				sd["bs"] = pba_from(bs);
 			}
 			out[si] = sd;
 		}
@@ -756,6 +766,25 @@ public:
 		if (cur == p_val)
 			return;
 		int n = d.get("n", 0);
+		// AC-0253: when the entry carries the solid/air bitset, flip THIS
+		// cell's bit and ride it with the published dict (the entry stays
+		// self-consistent after edits; entries without "bs" stay without).
+		bool has_bs = false;
+		std::vector<uint8_t> bs512(S3 / 8, 0);
+		{
+			Variant vbs = d.get("bs", Variant());
+			if (vbs.get_type() == Variant::PACKED_BYTE_ARRAY) {
+				PackedByteArray bs = vbs;
+				if (bs.size() == S3 / 8) {
+					has_bs = true;
+					std::memcpy(bs512.data(), bs.ptr(), S3 / 8);
+					if (p_val != 0)
+						bs512[p_pos >> 3] |= (uint8_t)(1u << (p_pos & 7));
+					else
+						bs512[p_pos >> 3] &= (uint8_t)~(1u << (p_pos & 7));
+				}
+			}
+		}
 		// raw slab: i holds 4096 raw value bytes
 		if (n == 0) {
 			PackedByteArray ri = d.get("i", PackedByteArray());
@@ -779,6 +808,8 @@ public:
 				nd["p"] = PackedByteArray();
 				nd["i"] = pba_from(rv);
 				nd["nz"] = rz;
+				if (has_bs)
+					nd["bs"] = pba_from(bs512);
 				slabs[p_si] = nd;
 			}
 			return;
@@ -824,6 +855,8 @@ public:
 					nd["p"] = pba_from(np);
 					nd["i"] = pba_from(idx2);
 					nd["nz"] = nz2;
+					if (has_bs)
+						nd["bs"] = pba_from(bs512);
 					slabs[p_si] = nd;
 				}
 				return;
@@ -845,6 +878,8 @@ public:
 					nd["p"] = PackedByteArray();
 					nd["i"] = pba_from(raw);
 					nd["nz"] = nz3;
+					if (has_bs)
+						nd["bs"] = pba_from(bs512);
 					slabs[p_si] = nd;
 				}
 				return;
@@ -885,6 +920,8 @@ public:
 			nd["p"] = pba_from(pv);
 			nd["i"] = pba_from(ibytes);
 			nd["nz"] = nz4;
+			if (has_bs)
+				nd["bs"] = pba_from(bs512);
 			slabs[p_si] = nd;
 		}
 	}
@@ -1008,6 +1045,15 @@ public:
 			o["p"] = cp;
 			o["i"] = ci;
 			o["nz"] = (int)d.get("nz", 0);
+			// AC-0253: the solid/air bitset rides the value copy (a true
+			// byte copy — COW isolation, the same contract as p/i).
+			PackedByteArray sb = d.get("bs", PackedByteArray());
+			if (sb.size() == S3 / 8) {
+				PackedByteArray cb;
+				cb.resize(sb.size());
+				std::memcpy(cb.ptrw(), sb.ptr(), sb.size());
+				o["bs"] = cb;
+			}
 			out[k] = o;
 		}
 		return out;

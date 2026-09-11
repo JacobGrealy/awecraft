@@ -657,6 +657,36 @@ static void ring_slice(const Variant &v, int base, int dx, int dz, std::vector<u
 			out[base + j] = val;
 		return;
 	}
+	// AC-0253: the neighbor slab's solid/air bitset (gen ahead) — the ring
+	// cells become a BIT TEST first: air cells stay 0 without the palette
+	// decode, solid cells decode as before. The output ring is byte-
+	// identical to the full decode (the meshprobe compact arm gates it).
+	{
+		PackedByteArray bsarr = d.get("bs", PackedByteArray());
+		if (bsarr.size() == awecommon::S3B) {
+			const uint8_t *bs = bsarr.ptr();
+			PackedByteArray ib0 = d.get("i", PackedByteArray());
+			const uint8_t *i0 = ib0.ptr();
+			int isz0 = (int)ib0.size();
+			PackedByteArray pb0 = d.get("p", PackedByteArray());
+			const uint8_t *p0 = pb0.ptr();
+			int b0 = (int)d.get("b", 0);
+			for (int y_in = 0; y_in < 16; y_in++) {
+				int fi = y_in * 256;
+				for (int t = 0; t < 16; t++) {
+					int x = (dx != 0) ? fx : t;
+					int z = (dz != 0) ? fz : t;
+					int pos = fi + z * 16 + x;
+					if (!awecommon::slab_bit(bs, pos)) {
+						out[base + y_in * 16 + t] = 0;
+						continue;
+					}
+					out[base + y_in * 16 + t] = (n == 0) ? i0[pos] : p0[awecommon::slab_getbits(i0, isz0, b0, pos)];
+				}
+			}
+			return;
+		}
+	}
 	PackedByteArray ib = d.get("i", PackedByteArray());
 	if (n == 0) {
 		for (int y_in = 0; y_in < 16; y_in++) {
@@ -725,25 +755,77 @@ static PackedByteArray pba_deep(const PackedByteArray &src) {
 	return o;
 }
 
-static void build_snap_data(std::vector<uint8_t> &snap, std::vector<uint8_t> &snap_fl, const std::vector<std::vector<uint8_t>> &dviews, const std::vector<std::vector<uint8_t>> &fviews, const Nv &nv, int h, int y_lo, int y_hi) {
+// AC-0253: per-slab source for the build_accs walk. The HIGH walk needs
+// every cell id (the snap stores them) — so the flat view is always
+// materialized (exactly the pre-AC-0253 slab_views decode, same cost in
+// the same untimed spot). The bitset ("bs") contributes where the id is
+// NOT needed: the nz count (the instant all-air early out). The
+// bitset-FIRST decode lives in the low emit (low_emit_avg) and the
+// neighbor ring (snap_rings), where the ids of the air cells are never
+// materialized at all.
+struct SlabSrc {
+	bool valid = false; // the entry is a dict
+	bool empty = true;  // null/missing slab (all air)
+	const uint8_t *flat = nullptr;
+	int fsize = 0;
+	int nz = 0; // the entry's non-air count (== the "bs" bit count)
+	inline bool solid(int pos) const {
+		return flat != nullptr && pos < fsize && flat[pos] != 0;
+	}
+	inline uint8_t cell(int pos) const {
+		return solid(pos) ? flat[pos] : 0;
+	}
+};
+
+// One slab array -> SlabSrc row (null slab = empty; every present slab
+// materializes its flat view in `flat_store` — the pre-AC-0253 decode).
+static void parse_slab_srcs(const Array &arr, std::vector<SlabSrc> &srcs, std::vector<std::vector<uint8_t>> &flat_store) {
+	srcs.resize(arr.size());
+	flat_store.resize(arr.size());
+	for (int k = 0; k < (int)arr.size(); k++) {
+		Variant v = arr[k];
+		if (v.get_type() != Variant::DICTIONARY)
+			continue; // null slab: stays empty/air
+		Dictionary d = v;
+		SlabSrc &s = srcs[k];
+		s.valid = true;
+		s.empty = false;
+		s.nz = (int)d.get("nz", 0);
+		awecommon::slab_view_one(v, flat_store[k]);
+		s.flat = flat_store[k].data();
+		s.fsize = (int)flat_store[k].size();
+		if (s.fsize != awecommon::S3)
+			s.empty = true;
+	}
+}
+
+static void build_snap_data(std::vector<uint8_t> &snap, std::vector<uint8_t> &snap_fl, const std::vector<std::vector<uint8_t>> &dviews, const std::vector<std::vector<uint8_t>> &fviews, const std::vector<SlabSrc> *dsrc, const std::vector<SlabSrc> *fsrc, const Nv &nv, int h, int y_lo, int y_hi) {
 	if (y_hi < 0)
 		y_hi = h - 1;
-	// Own 16x16 (snap ring offset +1).
+	// Own 16x16 (snap ring offset +1). The own-cell read is a DIRECT
+	// view load (exactly the pre-AC-0253 cost — the view is always S3
+	// bytes or empty).
 	for (int y = y_lo; y <= y_hi; y++) {
 		size_t si = (size_t)y * SNAP_ROW;
-		const std::vector<uint8_t> &dslab = dviews[y >> 4];
-		const std::vector<uint8_t> &fslab = fviews[y >> 4];
+		const SlabSrc *ds = dsrc ? &(*dsrc)[y >> 4] : nullptr;
+		const SlabSrc *fs = fsrc ? &(*fsrc)[y >> 4] : nullptr;
+		const uint8_t *dp = (ds && !ds->empty) ? ds->flat : nullptr;
+		const uint8_t *fp = (fs && !fs->empty) ? fs->flat : nullptr;
+		const std::vector<uint8_t> *dview = dp ? nullptr : &dviews[y >> 4];
+		const std::vector<uint8_t> *fview = fp ? nullptr : &fviews[y >> 4];
 		int drow = (y & 15) << 8;
 		for (int lz = 0; lz < SIZE; lz++) {
 			int szi = (int)si + (lz + 1) * SNAP_W;
 			int r0 = drow + (lz << 4);
 			for (int lx = 0; lx < SIZE; lx++) {
-				int dv = dslab.empty() ? 0 : (int)dslab[r0 + lx];
-				snap[(size_t)szi + lx + 1] = (uint8_t)dv;
-				int fv = fslab.empty() ? 0 : (int)fslab[r0 + lx];
+				int ci = r0 + lx;
+				int dv = dp ? (int)dp[ci] : (dview->empty() ? 0 : (int)(*dview)[ci]);
+				size_t sxy = (size_t)szi + lx + 1;
+				snap[sxy] = (uint8_t)dv;
+				int fv = fp ? (int)fp[ci] : (fview->empty() ? 0 : (int)(*fview)[ci]);
 				if (fv == 0 && (dv == 5 || dv == 24))
 					fv = 8;
-				snap_fl[(size_t)szi + lx + 1] = (uint8_t)fv;
+				snap_fl[sxy] = (uint8_t)fv;
 			}
 		}
 	}
@@ -1782,37 +1864,103 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 
 	// --- the three average-color grids (si-1 / si / si+1; the
 	// slab-boundary culling reads the neighbor SOLID masks).
+	// AC-0253: the solid/air test is the slab's "bs" BITSET first — the
+	// >half-air sample test is a bit COUNT (no decode), the palette
+	// decode runs only for the non-air cells of the samples that EMIT
+	// (the own slab's colors; the neighbor slabs' colors were never
+	// read — only their solid masks). A slab without "bs" takes the
+	// pre-AC-0253 decode (slab_view_one, on demand).
+	struct AvgSrc {
+		bool ok = false;
+		const uint8_t *bs = nullptr;
+		std::vector<uint8_t> flat; // fallback decode storage
+		int n = 0, b = 0, psz = 0, isz = 0;
+		const uint8_t *p = nullptr;
+		const uint8_t *ib = nullptr;
+		inline bool solid(int pos) const {
+			if (bs != nullptr)
+				return awecommon::slab_bit(bs, pos);
+			return pos < (int)flat.size() && flat[pos] != 0;
+		}
+		inline uint8_t cell(int pos) const { // the non-air decode
+			if (bs != nullptr) {
+				if (n == 1)
+					return psz > 0 ? p[0] : 0;
+				if (n == 0)
+					return pos < isz ? ib[pos] : 0;
+				int idx = awecommon::slab_getbits(ib, isz, b, pos);
+				return idx < psz ? p[idx] : 0;
+			}
+			return pos < (int)flat.size() ? flat[pos] : 0;
+		}
+	};
+	AvgSrc asrc[3];
 	uint8_t grids_solid[3][512];
 	float grids_cols[3][512 * 18];
 	bool ghave[3] = {false, false, false};
 	int nsl = (int)p_slabs.size();
-	std::vector<std::vector<uint8_t>> views;
-	awecommon::slab_views(p_slabs, views);
 	int gsi[3] = {si - 1, si, si + 1};
 	for (int t = 0; t < 3; t++) {
 		memset(grids_solid[t], 0, sizeof(grids_solid[t]));
 		memset(grids_cols[t], 0, sizeof(grids_cols[t]) / sizeof(float));
 		int s = gsi[t];
-		if (s < 0 || s >= nsl || (int)views[s].size() != awecommon::S3)
+		if (s < 0 || s >= nsl)
 			continue;
-		const uint8_t *v = views[s].data();
+		Variant v = p_slabs[s];
+		if (v.get_type() != Variant::DICTIONARY)
+			continue;
+		Dictionary d = v;
+		PackedByteArray bsarr = d.get("bs", PackedByteArray());
+		if (bsarr.size() == awecommon::S3B) {
+			AvgSrc &a = asrc[t];
+			a.bs = bsarr.ptr();
+			a.n = (int)d.get("n", 0);
+			a.b = (int)d.get("b", 0);
+			PackedByteArray pb = d.get("p", PackedByteArray());
+			a.p = pb.ptr();
+			a.psz = (int)pb.size();
+			PackedByteArray ib = d.get("i", PackedByteArray());
+			a.ib = ib.ptr();
+			a.isz = (int)ib.size();
+		} else {
+			awecommon::slab_view_one(v, asrc[t].flat);
+		}
+		asrc[t].ok = true;
+		const AvgSrc &a = asrc[t];
 		for (int cy = 0; cy < G; cy++) {
 			for (int cz = 0; cz < G; cz++) {
 				for (int cx = 0; cx < G; cx++) {
-					int air = 0;
+					// the >half-air test: a bit count (the solid count),
+					// the decode-free fast path.
+					int pc = 0;
+					for (int py = 0; py < CELLB; py++) {
+						int r0 = (cy * CELLB + py) * 256;
+						for (int pz = 0; pz < CELLB; pz++) {
+							int base = r0 + (cz * CELLB + pz) * 16 + cx * CELLB;
+							for (int px = 0; px < CELLB; px++)
+								pc += a.solid(base + px);
+						}
+					}
+					int idx = cy * G * G + cz * G + cx;
+					if (pc == 0 || (TOT - pc) * 2 > TOT) {
+						grids_solid[t][idx] = 0;
+						continue;
+					}
+					grids_solid[t][idx] = 1;
+					if (t != 1)
+						continue; // neighbor: the solid mask is all it feeds
 					int cnt = 0;
 					float acc[18] = {0.0f};
 					for (int py = 0; py < CELLB; py++) {
-						const uint8_t *row = v + (cy * CELLB + py) * 256;
+						int r0 = (cy * CELLB + py) * 256;
 						for (int pz = 0; pz < CELLB; pz++) {
-							int base = (cz * CELLB + pz) * 16 + cx * CELLB;
+							int base = r0 + (cz * CELLB + pz) * 16 + cx * CELLB;
 							for (int px = 0; px < CELLB; px++) {
-								int bid = row[base + px];
-								if (bid == 0) {
-									air++;
+								int pos = base + px;
+								if (!a.solid(pos))
 									continue;
-								}
 								cnt++;
+								int bid = a.cell(pos);
 								if (fcc_ok && bid < 256) {
 									const float *fc = fcc + bid * 18;
 									for (int d = 0; d < 18; d++)
@@ -1821,15 +1969,9 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 							}
 						}
 					}
-					int idx = cy * G * G + cz * G + cx;
-					if (air * 2 > TOT || cnt == 0) {
-						grids_solid[t][idx] = 0;
-					} else {
-						grids_solid[t][idx] = 1;
-						float inv = 1.0f / (float)cnt;
-						for (int d = 0; d < 18; d++)
-							grids_cols[t][idx * 18 + d] = acc[d] * inv;
-					}
+					float inv = 1.0f / (float)cnt;
+					for (int d = 0; d < 18; d++)
+						grids_cols[t][idx * 18 + d] = acc[d] * inv;
 				}
 			}
 		}
@@ -2123,10 +2265,16 @@ public:
 		if (topv >= 0 && si1 == topv / 16)
 			y_hi = std::min(y_hi, topv + 1);
 
-		// Slab views — the paletted decode happens HERE (C++ int lookups).
-		std::vector<std::vector<uint8_t>> dviews, fviews;
-		awecommon::slab_views(data, dviews);
-		awecommon::slab_views(fl, fviews);
+		// Slab sources — AC-0253: every present slab materializes its
+		// flat view HERE (exactly the pre-AC-0253 decode, same C++ int
+		// lookups); the "bs" bitset's contribution is the nz field (the
+		// instant all-air early out below).
+		std::vector<SlabSrc> dsrc, fsrc;
+		std::vector<std::vector<uint8_t>> dflat, fflat;
+		parse_slab_srcs(data, dsrc, dflat);
+		parse_slab_srcs(fl, fsrc, fflat);
+		dsrc.resize(slab_n);
+		fsrc.resize(slab_n);
 		Nv nv;
 		parse_nbs(nbs, nv);
 
@@ -2167,7 +2315,7 @@ public:
 		bake_box(light, C.eff_strips, h, b_lo, b_hi, barr, bmn);
 		std::vector<uint8_t> snap((size_t)SNAP_ROW * h, 0);
 		std::vector<uint8_t> snap_fl((size_t)SNAP_ROW * h, 0);
-		build_snap_data(snap, snap_fl, dviews, fviews, nv, h, b_lo, b_hi);
+		build_snap_data(snap, snap_fl, dflat, fflat, &dsrc, &fsrc, nv, h, b_lo, b_hi);
 		ph_box = now_msec() - tb;
 
 		bool has_tex = C.has_tex;
@@ -2194,14 +2342,16 @@ public:
 			sgrid.assign((size_t)(yb1 - yb0 + 1) * GW * GW, 0);
 			for (int y = yb0; y <= yb1; y++) {
 				int grow = (y - yb0) * GW * GW;
-				const std::vector<uint8_t> &dslab = dviews[y >> 4];
+				const SlabSrc &ds = dsrc[y >> 4];
 				int drowg = (y & 15) << 8;
 				for (int lz = -1; lz < 17; lz++) {
 					int base = grow + (lz + 1) * GW;
 					for (int lx = -1; lx < 17; lx++) {
 						int id2;
 						if (y >= y_lo && y < y_hi && lx < 16 && lz < 16) {
-							id2 = dslab.empty() ? 0 : (int)dslab[drowg + (lz << 4) + lx];
+							// AC-0253: the own cell via the slab source
+							// (the flat view load — the pre-AC-0253 cost).
+							id2 = ds.cell(drowg + (lz << 4) + lx);
 						} else {
 							id2 = snap[(size_t)y * SNAP_ROW + (lz + 1) * 18 + (lx + 1)];
 						}
@@ -2256,23 +2406,28 @@ public:
 		const uint8_t *vmask = p_mask.ptr();
 		const int vmsz = (int)p_mask.size();
 		for (int si = si0; si <= si1; si++) {
-			const std::vector<uint8_t> &dslab = dviews[si];
+			const SlabSrc &src = dsrc[si];
 			int lo = si * 16;
 			int c_hi = std::min(16, y_hi - lo);
-			if ((vmsz > si && vmask[si] == 0) || dslab.empty()) {
+			if ((vmsz > si && vmask[si] == 0) || src.empty || src.nz == 0) {
 				// All-air slab: every cell is id 0 (stab 0) — count + skip.
-				// (A window-masked slab takes the same path — row[6]
-				// (full-solid) and the emits see it as empty.)
+				// AC-0253: nz == 0 (== the bitset count) is the instant
+				// all-air early-out; a present-but-empty entry takes the
+				// same path. (A window-masked slab takes the same path —
+				// row[6] (full-solid) and the emits see it as empty.)
 				c_ns[si] += c_hi * 256;
 				continue;
 			}
+			const uint8_t *dflat = src.flat; // non-null: empty early-out above
 			for (int cy = 0; cy < c_hi; cy++) {
 				int y = lo + cy;
 				int r0 = cy << 8;
 				for (int lz = 0; lz < SIZE; lz++) {
 					int drow = r0 + (lz << 4);
 					for (int lx = 0; lx < SIZE; lx++) {
-						int id = dslab[drow + lx];
+						// The id is needed for routing/culling — the flat
+						// view load (exactly the pre-AC-0253 cost).
+						int id = dflat[drow + lx];
 						if (C.stab[id] == 0)
 							c_ns[si] += 1;
 						if (id == 0)
@@ -2414,6 +2569,13 @@ public:
 			o["p"] = pba_deep(d.get("p", PackedByteArray()));
 			o["i"] = pba_deep(d.get("i", PackedByteArray()));
 			o["nz"] = (int64_t)(int)d.get("nz", 0);
+			// AC-0253: the solid/air bitset rides the dispatch value copy
+			// (the worker's build_accs / low_emit_avg read it as the air/
+			// solid fast path; entries without "bs" take the decode
+			// fallback, exactly as before).
+			PackedByteArray sbs = d.get("bs", PackedByteArray());
+			if (sbs.size() == awecommon::S3B)
+				o["bs"] = pba_deep(sbs);
 			out[k] = o;
 		}
 		return out;
@@ -2485,7 +2647,7 @@ public:
 		}
 		std::vector<uint8_t> snap((size_t)SNAP_ROW * h, 0);
 		std::vector<uint8_t> snap_fl((size_t)SNAP_ROW * h, 0);
-		build_snap_data(snap, snap_fl, dviews, fviews, nv, h, 0, h - 1);
+		build_snap_data(snap, snap_fl, dviews, fviews, nullptr, nullptr, nv, h, 0, h - 1);
 		Dictionary out;
 		out["snap"] = awecommon::pba_from(snap);
 		out["snap_fl"] = awecommon::pba_from(snap_fl);

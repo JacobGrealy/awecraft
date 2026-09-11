@@ -104,6 +104,8 @@
 #include <cstring>
 #include <vector>
 
+#include "awe_common.h"
+
 using namespace godot;
 
 namespace awegen {
@@ -807,14 +809,20 @@ static Array palettize_slabs(const std::vector<uint8_t> &flat, int hmax) {
 			seen[i] = -1;
 		std::vector<uint8_t> order;
 		int nz = 0;
+		// AC-0253: the solid/air bitset (1 bit/cell) — built in the SAME
+		// nz scan (all 4096 ids are in hand here) and rides the slab entry
+		// as the optional "bs" field (the meshing fast path).
+		std::vector<uint8_t> bs(awecommon::S3B, 0);
 		for (int i = 0; i < 4096; i++) {
 			uint8_t v = flat[base + i];
 			if (seen[v] < 0) {
 				seen[v] = (int)order.size();
 				order.push_back(v);
 			}
-			if (v != 0)
+			if (v != 0) {
 				nz++;
+				awecommon::slab_bit_set(bs.data(), i);
+			}
 		}
 		int nn = (int)order.size();
 		if (nz == 0) {
@@ -829,6 +837,7 @@ static Array palettize_slabs(const std::vector<uint8_t> &flat, int hmax) {
 			d["p"] = p;
 			d["i"] = PackedByteArray();
 			d["nz"] = nz;
+			d["bs"] = awecommon::pba_from(bs);
 			out[si] = d;
 		} else if (nn <= 16) {
 			std::vector<uint8_t> pvals = order;
@@ -850,6 +859,7 @@ static Array palettize_slabs(const std::vector<uint8_t> &flat, int hmax) {
 			d["p"] = p;
 			d["i"] = bitpack(vals.data(), 4096, bits);
 			d["nz"] = nz;
+			d["bs"] = awecommon::pba_from(bs);
 			out[si] = d;
 		} else {
 			Dictionary d;
@@ -861,6 +871,7 @@ static Array palettize_slabs(const std::vector<uint8_t> &flat, int hmax) {
 			std::memcpy(iarr.ptrw(), flat.data() + base, 4096);
 			d["i"] = iarr;
 			d["nz"] = nz;
+			d["bs"] = awecommon::pba_from(bs);
 			out[si] = d;
 		}
 	}

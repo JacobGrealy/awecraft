@@ -5355,6 +5355,15 @@ func _meshprobe_test(spawn: Vector3) -> void:
 	var cpp_wall_us := 0
 	var gd_wms_sum := 0
 	var cpp_wms_sum := 0
+	# AC-0253: the ms/slab evidence (the ticket's verify) — the per-build
+	# phase sums + the low_emit_avg wall (the worker's slab emit).
+	var cpp_slab_total := 0
+	var cpp_ph_light_ms := 0
+	var cpp_ph_box_ms := 0
+	var cpp_ph_emit_ms := 0
+	var cpp_ph_faces_ms := 0
+	var avg_cpp_us := 0
+	var avg_gd_us := 0
 	var skipped := 0
 	var mismatch: Array = []
 	# AC-0211: the surrounding-step checks (full-nbs vs compact-ring build —
@@ -5441,6 +5450,13 @@ func _meshprobe_test(spawn: Vector3) -> void:
 		var chunk_ok: bool = true
 		var gs: Array = gres["slabs"]
 		var cs: Array = cres["slabs"]
+		cpp_slab_total += int(cs.size())
+		var phc: Array = cres.get("ph", [])
+		if phc.size() >= 4:
+			cpp_ph_light_ms += int(phc[0])
+			cpp_ph_box_ms += int(phc[1])
+			cpp_ph_emit_ms += int(phc[2])
+			cpp_ph_faces_ms += int(phc[3])
 		if int(gs.size()) != int(cs.size()):
 			chunk_ok = false
 			if mismatch.size() < 12:
@@ -5578,6 +5594,10 @@ func _meshprobe_test(spawn: Vector3) -> void:
 			continue
 		var fcc: PackedFloat32Array = world._lod_fcc_get()
 		for G2 in [8, 4]:
+			# AC-0253: the per-emit wall (the ticket's low ms/slab) — the
+			# GD twin = the grid sample + emit; the C++ = slab_copy +
+			# low_emit_avg (the worker's real inputs).
+			var tag0 := Time.get_ticks_usec()
 			var grids2: Array = []
 			grids2.resize(c.data.size())
 			if c.data[aesi] != null:
@@ -5588,7 +5608,10 @@ func _meshprobe_test(spawn: Vector3) -> void:
 				grids2[aesi + 1] = world._avg_slab_grid(c, aesi + 1, G2)
 			var g2: Dictionary = grids2[aesi] if grids2[aesi] != null else world._avg_slab_grid(c, aesi, G2)
 			var m_gd2: ArrayMesh = world._avg_emit_slab(g2, grids2, aesi, G2)
+			avg_gd_us += Time.get_ticks_usec() - tag0
+			var tav0 := Time.get_ticks_usec()
 			var res_c2: Dictionary = mc.low_emit_avg(mc.slab_copy(c.data), aesi, G2, fcc)
+			avg_cpp_us += Time.get_ticks_usec() - tav0
 			ae_pairs += 1
 			if bool(res_c2.get("empty", false)):
 				if m_gd2 == null:
@@ -5665,6 +5688,15 @@ func _meshprobe_test(spawn: Vector3) -> void:
 		"cpp_wms_avg": round(float(cpp_wms_sum) / float(maxi(n_samples, 1)) * 1000.0) / 1000.0,
 		"gd_wall_ms": round(gd_wall_us / 1000.0 * 1000.0) / 1000.0,
 		"cpp_wall_ms": round(cpp_wall_us / 1000.0 * 1000.0) / 1000.0,
+		# AC-0253: the ticket's verify — ms/slab (high walk: wms per built
+		# slab + the phase split) and the low avg emit wall per slab.
+		"cpp_ms_per_slab": round(float(cpp_wms_sum) / float(maxi(cpp_slab_total, 1)) * 1000.0) / 1000.0,
+		"cpp_ph_light_ms_avg": round(float(cpp_ph_light_ms) / float(maxi(n_samples, 1)) * 1000.0) / 1000.0,
+		"cpp_ph_box_ms_avg": round(float(cpp_ph_box_ms) / float(maxi(n_samples, 1)) * 1000.0) / 1000.0,
+		"cpp_ph_emit_ms_avg": round(float(cpp_ph_emit_ms) / float(maxi(n_samples, 1)) * 1000.0) / 1000.0,
+		"cpp_ph_faces_ms_avg": round(float(cpp_ph_faces_ms) / float(maxi(n_samples, 1)) * 1000.0) / 1000.0,
+		"avg_emit_cpp_us": roundi(float(avg_cpp_us) / float(maxi(ae_pairs, 1))),
+		"avg_emit_gd_us": roundi(float(avg_gd_us) / float(maxi(ae_pairs, 1))),
 		"mismatch": mismatch,
 		"wall_ms": Time.get_ticks_msec() - t0,
 	})
