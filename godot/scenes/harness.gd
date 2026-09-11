@@ -8059,6 +8059,80 @@ func _ladder_test(spawn: Vector3) -> void:
 	}
 	res["air_synth_ok"] = int(med5[0]) == 0 and int(med4[0]) == 1 \
 			and int(low33[0]) == 0 and int(low32[0]) == 1
+	# (e) AC-0258: CLUTTER-AS-AIR at the avg LOD tiers — the tiny cross
+	# flora (rose 18, dandelion 19) counts as AIR in the low/med avg emit:
+	# the speckle color is excluded from the avg and an all-clutter sample
+	# emits nothing. Evidence: the GD twin (this arm's air-rule source) on
+	# synthetic rows + the REAL C++ emit on synthetic slabs (all-rose ->
+	# empty; half dirt / half rose -> not empty and every vertex color ==
+	# the PURE DIRT avg). The HIGH textured path is untouched (the xquad
+	# flora stays close-up).
+	var rose_rows: Array = []
+	var mixed_rows: Array = []
+	for y in range(16):
+		var rr := PackedByteArray()
+		rr.resize(256)
+		rr.fill(18)
+		rose_rows.append(rr)
+		var mr := PackedByteArray()
+		mr.resize(256)
+		mr.fill(2 if y < 8 else 18)
+		mixed_rows.append(mr)
+	var gar: Dictionary = world._avg_grid_from_rows(rose_rows, 8)
+	var gar_air := true
+	for i in int(gar["solid"].size()):
+		if int(gar["solid"][i]) != 0:
+			gar_air = false
+	var gm: Dictionary = world._avg_grid_from_rows(mixed_rows, 8)
+	var gdirt: PackedFloat32Array = world._lod_fcc_get()
+	var gm_ok := true
+	for cy in range(8):
+		for cz in range(8):
+			for cx in range(8):
+				var idx := cy * 64 + cz * 8 + cx
+				if cy < 4:
+					# dirt half: solid at the PURE DIRT avg (no rose in it)
+					if int(gm["solid"][idx]) != 1 \
+							or absf(float(gm["cols"][idx * 18 + 0]) - float(gdirt[36])) > 0.001 \
+							or absf(float(gm["cols"][idx * 18 + 1]) - float(gdirt[37])) > 0.001 \
+							or absf(float(gm["cols"][idx * 18 + 2]) - float(gdirt[38])) > 0.001:
+						gm_ok = false
+				else:
+					# rose half: all clutter = air
+					if int(gm["solid"][idx]) != 0:
+						gm_ok = false
+	var rose_bs := PackedByteArray()
+	rose_bs.resize(512)
+	rose_bs.fill(255)
+	var rose_slab := {"n": 1, "b": 0, "p": PackedByteArray([18]), "i": PackedByteArray(), "nz": 4096, "nc": 4096, "bs": rose_bs}
+	var rose_res: Dictionary = mc.low_emit_avg([null, rose_slab, null], 1, 8, world._lod_fcc_get())
+	var cpp_rose_air: bool = bool(rose_res.get("empty", false))
+	var mix_i := PackedByteArray()
+	mix_i.resize(4096)
+	for i2 in range(4096):
+		mix_i[i2] = 2 if i2 < 2048 else 18
+	var mix_slab := {"n": 0, "b": 8, "p": PackedByteArray(), "i": mix_i, "nz": 4096, "nc": 2048, "bs": rose_bs}
+	var mix_res: Dictionary = mc.low_emit_avg([null, mix_slab, null], 1, 8, world._lod_fcc_get())
+	var cpp_mix_ok := not bool(mix_res.get("empty", false))
+	if cpp_mix_ok and mix_res.has("c"):
+		# every vertex color must be the DIRT avg of ITS face (the fcc is
+		# per-face, 6x3): a rose-contaminated cell would shift one of the
+		# face triples out of the dirt set.
+		var dirt_faces: Array = []
+		for fi2 in range(6):
+			dirt_faces.append([float(gdirt[36 + fi2 * 3 + 0]), float(gdirt[36 + fi2 * 3 + 1]), float(gdirt[36 + fi2 * 3 + 2])])
+		var cc: PackedColorArray = mix_res["c"]
+		for i3 in cc.size():
+			var okc := false
+			for tf in dirt_faces:
+				if absf(cc[i3].r - float(tf[0])) <= 0.001 and absf(cc[i3].g - float(tf[1])) <= 0.001 and absf(cc[i3].b - float(tf[2])) <= 0.001:
+					okc = true
+					break
+			if not okc:
+				cpp_mix_ok = false
+				break
+	res["clutter_ok"] = gar_air and gm_ok and cpp_rose_air and cpp_mix_ok
+	res["clutter_dbg"] = [gar_air, gm_ok, cpp_rose_air, cpp_mix_ok]
 	# In-world: an air slab (its avg grid fully air) carries NO low mesh.
 	for key in world.chunks:
 		var c: Node3D = world.chunks[key]
@@ -8096,7 +8170,7 @@ func _ladder_test(spawn: Vector3) -> void:
 	# restore (the arm's world dies with the process — cosmetic)
 	Settings.values["tier0_radius"] = 0
 	world.note_tier0_radius()
-	res["ok"] = ab_ok and res["boundary_flip_ok"] and res["air_synth_ok"] and res["air_inworld_ok"] and res["tier0_ok"]
+	res["ok"] = ab_ok and res["boundary_flip_ok"] and res["air_synth_ok"] and res["air_inworld_ok"] and res["tier0_ok"] and res["clutter_ok"]
 	Debug.result(res)
 	get_tree().quit()
 

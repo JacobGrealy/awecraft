@@ -812,6 +812,9 @@ static Array palettize_slabs(const std::vector<uint8_t> &flat, int hmax) {
 		// AC-0253: the solid/air bitset (1 bit/cell) — built in the SAME
 		// nz scan (all 4096 ids are in hand here) and rides the slab entry
 		// as the optional "bs" field (the meshing fast path).
+		// AC-0258: + the clutter count "nc" (same scan) — the avg-LOD
+		// clutter-as-air rule, identical to chunk_io's palettize_flat.
+		int nc = 0;
 		std::vector<uint8_t> bs(awecommon::S3B, 0);
 		for (int i = 0; i < 4096; i++) {
 			uint8_t v = flat[base + i];
@@ -822,6 +825,8 @@ static Array palettize_slabs(const std::vector<uint8_t> &flat, int hmax) {
 			if (v != 0) {
 				nz++;
 				awecommon::slab_bit_set(bs.data(), i);
+				if (awecommon::is_clutter_block(v))
+					nc++;
 			}
 		}
 		int nn = (int)order.size();
@@ -837,6 +842,7 @@ static Array palettize_slabs(const std::vector<uint8_t> &flat, int hmax) {
 			d["p"] = p;
 			d["i"] = PackedByteArray();
 			d["nz"] = nz;
+			d["nc"] = nc;
 			d["bs"] = awecommon::pba_from(bs);
 			out[si] = d;
 		} else if (nn <= 16) {
@@ -859,6 +865,7 @@ static Array palettize_slabs(const std::vector<uint8_t> &flat, int hmax) {
 			d["p"] = p;
 			d["i"] = bitpack(vals.data(), 4096, bits);
 			d["nz"] = nz;
+			d["nc"] = nc;
 			d["bs"] = awecommon::pba_from(bs);
 			out[si] = d;
 		} else {
@@ -871,6 +878,7 @@ static Array palettize_slabs(const std::vector<uint8_t> &flat, int hmax) {
 			std::memcpy(iarr.ptrw(), flat.data() + base, 4096);
 			d["i"] = iarr;
 			d["nz"] = nz;
+			d["nc"] = nc;
 			d["bs"] = awecommon::pba_from(bs);
 			out[si] = d;
 		}

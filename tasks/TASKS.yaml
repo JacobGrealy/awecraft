@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-11T17:53
+  updated_at: 2026-09-11T19:04
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0258
 - AC-0112
 - AC-0113
 - AC-0098
@@ -10358,7 +10357,9 @@ intake:
 - id: AC-0258
   title: lods-treat-clutter-as-air
   priority: 3
-  status: open
+  status: done
+  updated_at: 2026-09-11T19:04
+  completed_at: 2026-09-11T19:04
   notes: '1) User Story: As a player far away I want tiny clutter like flowers and grass to disappear
     in low/medium LODs so distant terrain stays cheap and clean, only showing full detail up close.
 
@@ -10366,7 +10367,72 @@ intake:
     2) Technical Details: godot/world/world.gd + chunk.gd + gdext/src/mesh.cpp. On low at 4x4x4 and medium
     (and optionally high far) treat clutter blocks (flowers, tall grass, etc.) as air when building the
     bitset/mesh — skip them in the greedy walk. Keep them in c.data per slab at its Y, only cull visually
-    in LODs. Verify far terrain has no flower speckling, close high still shows them; no extra alloc.'
+    in LODs. Verify far terrain has no flower speckling, close high still shows them; no extra alloc.
+
+
+    ## AC-0258 closed (lods-treat-clutter-as-air) — implemented + gated
+
+
+    Clutter blocks (rose 18, dandelion 19 — the only flora terrain gen places) now count as AIR when building
+    the avg-color LOD grids (low 4x4x4 / med 8x8x8): the speckle color is excluded from the avg and an
+    all-clutter sample emits nothing. High (close-up) is untouched — the xquad cross path still renders
+    them.
+
+
+    ### Mechanism (design: derived slab field, zero disk-format change, zero extra alloc)
+
+    - New derived slab field `nc` = clutter-cell count, built in the SAME scan as `nz`/`bs` (never on
+    the wire — the disk Slab struct is {n,b,nz,p,i}, unchanged; a missing `nc` = pre-change behavior,
+    same convention as `bs`).
+
+    - Encoders maintain it: chunk_io.cpp `palettize_flat` (every data landing, incl. load), gen.cpp `palettize_slabs`,
+    chunk_io.cpp `slab_set` (the AC-0214 single-cell write — ±1 delta per id change in all 4 branches,
+    mirroring the `bs` "has → maintain, missing → stay missing" pattern), `slab_copy` (worker value copies
+    ride it).
+
+    - mesh.cpp `low_emit_avg_impl`: `nc == 0` → the pre-AC-0258 path byte-for-byte (one int check, zero
+    cost on the common clutter-free slab); `nc > 0` → the cell recount decodes the sample with clutter
+    excluded from count AND color; a sample whose solid cells are ALL clutter is air. The decode cost
+    lands only on flower slabs (the very slabs that speckled); the t==1 color pass already decodes, t=0/2
+    neighbor masks only pay when THAT slab has clutter.
+
+    - Clutter table: `awecommon::is_clutter_block` (awe_common.h, rose/dandelion ids) + the GD twin `world._clutter_block`
+    for the harness parity arm. GD `_avg_grid_from_rows` (harness-only twin) applies the same rule.
+
+    - GD twins in chunk_io.gd / chunk.gd intentionally lag (the `bs` precedent — A/B arms compare n/b/nz/p/i
+    only).
+
+    - "Optionally high far": deferred (out of scope for an S effort — high far is the textured xquad path
+    by design).
+
+
+    ### Gates (all green, .scratch/ac0258_gates.log + ac0258_build.log)
+
+    - genhash (0,0) 80b904c0e5f085eef1e839459058c706 — EXACT (gen untouched).
+
+    - slabops ok (17/17 cols), slabwrite ok (3/3 cols).
+
+    - ladder ok — NEW clutter evidence: GD twin all-rose rows → all-air grid; half-dirt/half-rose → solid
+    at the pure-dirt avg; real C++ emit on a synthetic all-rose slab → empty; on a synthetic half-dirt/half-rose
+    slab → 6 quads, every vertex color a dirt face triple (no rose in the avg). Existing: flip 67, med/low
+    122/602, air_inworld, tier0.
+
+    - meshprobe match_rate 1.0 (32/32, verts 321824 == baseline — high path byte-identical).
+
+    - r16 ok — holes_ok, inr_holes 0, far_holes 0, air_ok, fog/low contracts hold (flower slabs now air-in-avg
+    never become holes: a fully-clutter slab is empty at BOTH avg tiers — monotonic sampling).
+
+    - battery ok (player 2639 / interact 2115 / light 846 / fluids 3497 / buckets 415 ms).
+
+    - wprof ok — frame avg 3.9 / p95 6.7 ms, lost_chunks 0, recon 0%.
+
+    - ./build_windows.sh → fresh export; :8080 byte-match per closeout.
+
+
+    Files: gdext/src/awe_common.h (+is_clutter_block), gdext/src/chunk_io.cpp (nc in palettize_flat/slab_set/slab_copy
+    + include), gdext/src/gen.cpp (nc in palettize_slabs), gdext/src/mesh.cpp (nc-aware recount in low_emit_avg_impl),
+    godot/world/world.gd (_clutter_block + _avg_grid_from_rows), godot/scenes/harness.gd (ladder clutter
+    evidence + clutter_ok in the ok gate).'
   area: art
   effort: S
   depends_on: []

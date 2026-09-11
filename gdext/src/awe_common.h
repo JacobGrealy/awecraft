@@ -50,6 +50,20 @@ inline int slab_bit_count(const uint8_t *bs) {
 	return c;
 }
 
+// AC-0258: CLUTTER blocks — the tiny cross-quad flora the terrain gen
+// places (B_ROSE 18, B_DANDELION 19 in gen.cpp). At the average-color LOD
+// tiers (low 4x4x4 / med 8x8x8) clutter cells count as AIR: the speckle
+// color is excluded from the avg and an all-clutter sample emits nothing.
+// The HIGH textured emit keeps them (the xquad path — close-up detail is
+// the point). The slab entries ride the derived count "nc" (clutter
+// cells, built in the same palettize scan as "nz"/"bs"); the emit applies
+// the rule only when nc > 0 (the common slab is clutter-free = zero cost).
+constexpr int B_ROSE = 18;
+constexpr int B_DANDELION = 19;
+inline bool is_clutter_block(int id) {
+	return id == B_ROSE || id == B_DANDELION;
+}
+
 // Extract the `bits`-wide value at cell `pos` from a packed bitstream
 // (MSB-first, identical to chunk_io.gd _slab_getbits / the codec's
 // bitunpack).

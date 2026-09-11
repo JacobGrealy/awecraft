@@ -23,6 +23,8 @@
 #include <cstring>
 #include <vector>
 
+#include "awe_common.h" // AC-0258: awecommon::is_clutter_block (the "nc" field)
+
 using namespace godot;
 
 // AC-0188: the gen module (src/gen.cpp) shares this library — one
@@ -668,6 +670,10 @@ public:
 			// SAME nz scan and riding the slab entry as the optional "bs"
 			// field (the meshing fast path; the gen-side palettize_slabs
 			// builds the identical field).
+			// AC-0258: + the clutter count "nc" (clutter cells, the same
+			// scan) — the avg-LOD emit treats clutter as air only when
+			// nc > 0; derived like "bs" (never on the wire).
+			int nc = 0;
 			std::vector<uint8_t> bs(S3 / 8, 0);
 			for (int i = 0; i < S3; i++) {
 				uint8_t v = p_arr[base + i];
@@ -678,6 +684,8 @@ public:
 				if (v != 0) {
 					nz++;
 					bs[i >> 3] |= (uint8_t)(1u << (i & 7));
+					if (awecommon::is_clutter_block(v))
+						nc++;
 				}
 			}
 			if (nz == 0)
@@ -692,6 +700,7 @@ public:
 				sd["p"] = pba_from(pv);
 				sd["i"] = PackedByteArray();
 				sd["nz"] = nz;
+				sd["nc"] = nc;
 				sd["bs"] = pba_from(bs);
 			} else if (nn <= 16) {
 				std::vector<uint8_t> p(order);
@@ -708,6 +717,7 @@ public:
 				sd["p"] = pba_from(p);
 				sd["i"] = pba_from(bitpack(vals.data(), S3, bits));
 				sd["nz"] = nz;
+				sd["nc"] = nc;
 				sd["bs"] = pba_from(bs);
 			} else {
 				std::vector<uint8_t> raw(p_arr.ptr() + base, p_arr.ptr() + base + S3);
@@ -716,6 +726,7 @@ public:
 				sd["p"] = PackedByteArray();
 				sd["i"] = pba_from(raw);
 				sd["nz"] = nz;
+				sd["nc"] = nc;
 				sd["bs"] = pba_from(bs);
 			}
 			out[si] = sd;
@@ -785,6 +796,11 @@ public:
 				}
 			}
 		}
+		// AC-0258: the clutter count — ride it with the published dict the
+		// same way "bs" does (entries without "nc" stay without; the one-
+		// cell delta mirrors the nz recount in every branch).
+		bool has_nc = d.has("nc");
+		int nc0 = has_nc ? (int)d.get("nc", 0) : 0;
 		// raw slab: i holds 4096 raw value bytes
 		if (n == 0) {
 			PackedByteArray ri = d.get("i", PackedByteArray());
@@ -799,6 +815,12 @@ public:
 				rz--;
 			if (p_val != 0)
 				rz++;
+			if (has_nc) {
+				if (awecommon::is_clutter_block(cur))
+					nc0--;
+				if (awecommon::is_clutter_block(p_val))
+					nc0++;
+			}
 			if (rz == 0)
 				slabs[p_si] = Variant();
 			else {
@@ -808,6 +830,8 @@ public:
 				nd["p"] = PackedByteArray();
 				nd["i"] = pba_from(rv);
 				nd["nz"] = rz;
+				if (has_nc)
+					nd["nc"] = nc0;
 				if (has_bs)
 					nd["bs"] = pba_from(bs512);
 				slabs[p_si] = nd;
@@ -846,6 +870,11 @@ public:
 					nz2 = S3 - 1;
 				if (p_val != 0)
 					nz2 += 1;
+				int nc2 = 0;
+				if (awecommon::is_clutter_block(v0))
+					nc2 = S3 - 1;
+				if (awecommon::is_clutter_block(p_val))
+					nc2 += 1;
 				if (nz2 == 0)
 					slabs[p_si] = Variant();
 				else {
@@ -855,6 +884,8 @@ public:
 					nd["p"] = pba_from(np);
 					nd["i"] = pba_from(idx2);
 					nd["nz"] = nz2;
+					if (has_nc)
+						nd["nc"] = nc2;
 					if (has_bs)
 						nd["bs"] = pba_from(bs512);
 					slabs[p_si] = nd;
@@ -865,9 +896,13 @@ public:
 				std::vector<uint8_t> raw = slab_flat_of(d);
 				raw[p_pos] = (uint8_t)p_val;
 				int nz3 = 0;
+				int nc3 = 0;
 				for (int i = 0; i < S3; i++) {
-					if (raw[i] != 0)
+					if (raw[i] != 0) {
 						nz3++;
+						if (awecommon::is_clutter_block(raw[i]))
+							nc3++;
+					}
 				}
 				if (nz3 == 0)
 					slabs[p_si] = Variant();
@@ -878,6 +913,8 @@ public:
 					nd["p"] = PackedByteArray();
 					nd["i"] = pba_from(raw);
 					nd["nz"] = nz3;
+					if (has_nc)
+						nd["nc"] = nc3;
 					if (has_bs)
 						nd["bs"] = pba_from(bs512);
 					slabs[p_si] = nd;
@@ -911,6 +948,12 @@ public:
 			nz4--;
 		if (p_val != 0)
 			nz4++;
+		if (has_nc) {
+			if (awecommon::is_clutter_block(cur))
+				nc0--;
+			if (awecommon::is_clutter_block(p_val))
+				nc0++;
+		}
 		if (nz4 == 0)
 			slabs[p_si] = Variant();
 		else {
@@ -920,6 +963,8 @@ public:
 			nd["p"] = pba_from(pv);
 			nd["i"] = pba_from(ibytes);
 			nd["nz"] = nz4;
+			if (has_nc)
+				nd["nc"] = nc0;
 			if (has_bs)
 				nd["bs"] = pba_from(bs512);
 			slabs[p_si] = nd;
@@ -1045,6 +1090,8 @@ public:
 			o["p"] = cp;
 			o["i"] = ci;
 			o["nz"] = (int)d.get("nz", 0);
+			if (d.has("nc"))
+				o["nc"] = (int)d.get("nc", 0);  // AC-0258: the clutter count rides the copy
 			// AC-0253: the solid/air bitset rides the value copy (a true
 			// byte copy — COW isolation, the same contract as p/i).
 			PackedByteArray sb = d.get("bs", PackedByteArray());

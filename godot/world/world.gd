@@ -1357,6 +1357,15 @@ func apply_low_start() -> void:
 # 18 floats = the 6 face-direction average colors (linear, see _lod_fcc_get).
 # The per-block accumulation order (py, pz, px loops) is the C++ twin's
 # float32 op order (mesh.cpp low_emit_avg — the equivalence contract).
+# AC-0258: the clutter blocks (the C++ awecommon::is_clutter_block twin —
+# rose 18, dandelion 19): the tiny cross-quad flora. At the average-color
+# LOD tiers they count as AIR (the speckle color is excluded from the avg;
+# an all-clutter sample emits nothing). The live path is the C++
+# low_emit_avg (the "nc" slab field); this GD twin (harness-only — the
+# ladder arm's air-rule evidence) mirrors the same rule.
+func _clutter_block(bid: int) -> bool:
+	return bid == 18 or bid == 19
+
 func _avg_grid_from_rows(rows: Array, G: int) -> Dictionary:
 	var solid := PackedByteArray()
 	solid.resize(G * G * G)
@@ -1380,7 +1389,8 @@ func _avg_grid_from_rows(rows: Array, G: int) -> Dictionary:
 						var base: int = zr + pz * 16 + xo
 						for px in range(cell):
 							var bid: int = row[base + px]
-							if bid == 0:
+							# AC-0258: clutter counts as air at the avg tiers.
+							if bid == 0 or _clutter_block(bid):
 								air += 1
 								continue
 							cnt += 1

@@ -1927,6 +1927,11 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 		}
 		asrc[t].ok = true;
 		const AvgSrc &a = asrc[t];
+		// AC-0258: the clutter count (derived slab field, like "bs") —
+		// when > 0 the solid cells can include clutter (flora), which the
+		// avg tiers treat as AIR; the cell recount below excludes it.
+		// Missing "nc" (pre-AC-0258 slab) = the clutter-free fast path.
+		int nc = (int)d.get("nc", 0);
 		for (int cy = 0; cy < G; cy++) {
 			for (int cz = 0; cz < G; cz++) {
 				for (int cx = 0; cx < G; cx++) {
@@ -1946,9 +1951,46 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 						grids_solid[t][idx] = 0;
 						continue;
 					}
-					grids_solid[t][idx] = 1;
-					if (t != 1)
-						continue; // neighbor: the solid mask is all it feeds
+					if (nc == 0) {
+						// the clutter-free slab (the common slab): the
+						// pre-AC-0258 path, untouched.
+						grids_solid[t][idx] = 1;
+						if (t != 1)
+							continue; // neighbor: the solid mask is all it feeds
+						int cnt = 0;
+						float acc[18] = {0.0f};
+						for (int py = 0; py < CELLB; py++) {
+							int r0 = (cy * CELLB + py) * 256;
+							for (int pz = 0; pz < CELLB; pz++) {
+								int base = r0 + (cz * CELLB + pz) * 16 + cx * CELLB;
+								for (int px = 0; px < CELLB; px++) {
+									int pos = base + px;
+									if (!a.solid(pos))
+										continue;
+									cnt++;
+									int bid = a.cell(pos);
+									if (fcc_ok && bid < 256) {
+										const float *fc = fcc + bid * 18;
+										for (int d = 0; d < 18; d++)
+											acc[d] += fc[d];
+									}
+								}
+							}
+						}
+						float inv = 1.0f / (float)cnt;
+						for (int d = 0; d < 18; d++)
+							grids_cols[t][idx * 18 + d] = acc[d] * inv;
+						continue;
+					}
+					// AC-0258: the clutter slab — a solid cell can be
+					// CLUTTER (flora), which counts as AIR at the avg
+					// tiers: recount from the decode with the clutter
+					// excluded (from both the count and the color); a cell
+					// whose solid cells are ALL clutter is air. (The
+					// decode cost lands only on slabs that hold flowers —
+					// the very slabs that speckled before; the t==1 color
+					// pass already decodes, the t=0/2 masks are the rare
+					// extra pass and only when that slab has clutter too.)
 					int cnt = 0;
 					float acc[18] = {0.0f};
 					for (int py = 0; py < CELLB; py++) {
@@ -1959,9 +2001,11 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 								int pos = base + px;
 								if (!a.solid(pos))
 									continue;
-								cnt++;
 								int bid = a.cell(pos);
-								if (fcc_ok && bid < 256) {
+								if (awecommon::is_clutter_block(bid))
+									continue;
+								cnt++;
+								if (t == 1 && fcc_ok && bid < 256) {
 									const float *fc = fcc + bid * 18;
 									for (int d = 0; d < 18; d++)
 										acc[d] += fc[d];
@@ -1969,9 +2013,16 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 							}
 						}
 					}
-					float inv = 1.0f / (float)cnt;
-					for (int d = 0; d < 18; d++)
-						grids_cols[t][idx * 18 + d] = acc[d] * inv;
+					if (cnt == 0 || (TOT - cnt) * 2 > TOT) {
+						grids_solid[t][idx] = 0;
+						continue;
+					}
+					grids_solid[t][idx] = 1;
+					if (t == 1) {
+						float inv = 1.0f / (float)cnt;
+						for (int d = 0; d < 18; d++)
+							grids_cols[t][idx * 18 + d] = acc[d] * inv;
+					}
 				}
 			}
 		}
