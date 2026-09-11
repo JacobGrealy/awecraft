@@ -1,11 +1,10 @@
 meta:
-  updated_at: 2026-09-10T13:30
+  updated_at: 2026-09-10T21:03
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html + screenshots
 queue:
-- AC-0252
-- AC-0248
-- AC-0243
+- AC-0254
+- AC-0253
 - AC-0185
 - AC-0097
 - AC-0112
@@ -52,59 +51,49 @@ intake:
     Verify via profiler: allocations down, Process time flat while flying far forward; no leak when column freed.
 
 
-    3) Implementation (agent, 2026-09-10): DONE - commit 0e6c227. Code
-    (+408/-49, world.gd + chunk.gd; NO C++): THREE POOLS per World
-    (prewarm small, grow-on-demand): (a) MeshInstance3D pool (_mi_pool,
-    prewarm 32) - the high-slab/fluid/flora attaches (chunk.gd
-    _assemble_slab family) + the low-slab attach (_low_place_slab);
-    checkin on every drop/replace/free; checkout resets to fresh-instance
-    defaults (mesh=null, material_override=null, cast_shadow=1,
-    visible=true, identity) so a recycled fluid/culled instance never
-    pollutes an opaque checkout; checkin drops the mesh REFERENCE only
-    (the per-slab ArrayMesh frees by refcount exactly as today). (b)
-    MultiMesh pool (_mm_pool, prewarm 8 [mmi,mm] pairs) - the fog + cap
-    placeholders (per-chunk MultiMeshInstance3D over the ONE shared
-    pre-baked box mesh + shared material); checkin zeroes instance_count
-    but KEEPS the capacity buffer (the per-instance realloc is what
-    pooling removes); the shared mesh is never freed. (c) COLUMN OBJECT
-    pool (_col_pool, prewarm 16) - on the r+2 recenter evict + the face
-    FIFO free, the column is RESET IN PLACE (_pool_reset: every declared
-    state field - data/fl/gens/top, mesh+collision+light, candidate/band
-    hysteresis, fog/low/cap instance lists+masks, the vwin state, the
-    gen_keep/mask, the 24 Slab objects reset in place (all 10 fields
-    each), and the perf arrays re-sized to slab_n() - the subagent
-    caught a real OOB there during r16) and returned to the pool; on
-    spawn, checkout + identity re-set. DESIGN ADDITION: col_gen
-    (chunk.gd) - a logical identity token bumped on every checkout:
-    Godot 4 instance_id is FIXED per object, so a pooled reuse would
-    blind every inst-based staleness check (reachable at 215 m/s
-    flight); captured at ALL dispatch sites (TM, edit, low, all 5
-    threadgen_enqueue call sites incl. the null-result retry) and
-    checked at ALL handoffs (threadmesh_handoff, threadgen_handoff,
-    _low_handoff) - a mismatch drops the stale result (safe). SLAB
-    RAW-ARRAY POOL: honest partial, kept on alloc: (i) the TM slab_copy
-    is C++-side (AweMesh.slab_copy) - pooling it would need a C++ change
-    and the measured GD copy cost is higher than the C++ copy
-    (perf-driven keep); (ii) the save-queue copy lifetime spans the
-    compaction-defer re-queue (the longest slab-buffer lifetime in the
-    tree) - payoff too small. VERIFY (the subagent ran the gates; the
-    coordinator AUDITED the diff this cycle per the users 2026-09-10
-    process note (do not re-run what the subagent already ran): the
-    reset field enumeration matches every declared column state, the
-    col_gen guards sit at every handoff): genhash (0,0) 80b904c0...
-    exact; meshprobe ok:true match_rate 1.0 verts 321080; r16 ok:true
-    with the falsy set identical (air/height/immediate pre-existing) +
-    spin invariant + low_sync gate + the leak A/B HEAD-vs-POST
-    272=272 (no new leaks; the coordinator cross-checked the POST 272 in
-    an independent spot run); wprof ok:true - MESHATTACH avg 0.1
-    (87/180 frames, max 4.0), frame avg 4.4 flat vs the pre-change 4.2;
-    battery genhash+interact+editsnap+range ok:true; 0 script/shader
-    errors. STILL ALLOCATES: the per-slab ArrayMesh vertex/index data
-    (the C++ build_accs/low_emit output - mesh-DATA pooling needs the
-    C++ emit side), the collision StaticBody3D + ConcavePolygonShape3D,
-    the OccluderInstance3D, the snap_rings nbs snapshots. SHIPPED as
-    AweCraft[20260910-1328 0e6c227] (:8080 byte-matched, zip
-    9eaa52bb...).'
+    3) Implementation (agent, 2026-09-10): DONE - commit 0e6c227. Code (+408/-49, world.gd + chunk.gd; NO C++): THREE POOLS
+    per World (prewarm small, grow-on-demand): (a) MeshInstance3D pool (_mi_pool, prewarm 32) - the high-slab/fluid/flora
+    attaches (chunk.gd _assemble_slab family) + the low-slab attach (_low_place_slab); checkin on every drop/replace/free;
+    checkout resets to fresh-instance defaults (mesh=null, material_override=null, cast_shadow=1, visible=true, identity)
+    so a recycled fluid/culled instance never pollutes an opaque checkout; checkin drops the mesh REFERENCE only (the per-slab
+    ArrayMesh frees by refcount exactly as today). (b) MultiMesh pool (_mm_pool, prewarm 8 [mmi,mm] pairs) - the fog + cap
+    placeholders (per-chunk MultiMeshInstance3D over the ONE shared pre-baked box mesh + shared material); checkin zeroes
+    instance_count but KEEPS the capacity buffer (the per-instance realloc is what pooling removes); the shared mesh is never
+    freed. (c) COLUMN OBJECT pool (_col_pool, prewarm 16) - on the r+2 recenter evict + the face FIFO free, the column is
+    RESET IN PLACE (_pool_reset: every declared state field - data/fl/gens/top, mesh+collision+light, candidate/band hysteresis,
+    fog/low/cap instance lists+masks, the vwin state, the gen_keep/mask, the 24 Slab objects reset in place (all 10 fields
+    each), and the perf arrays re-sized to slab_n() - the subagent caught a real OOB there during r16) and returned to the
+    pool; on spawn, checkout + identity re-set. DESIGN ADDITION: col_gen (chunk.gd) - a logical identity token bumped on every
+    checkout: Godot 4 instance_id is FIXED per object, so a pooled reuse would blind every inst-based staleness check (reachable
+    at 215 m/s flight); captured at ALL dispatch sites (TM, edit, low, all 5 threadgen_enqueue call sites incl. the null-result
+    retry) and checked at ALL handoffs (threadmesh_handoff, threadgen_handoff, _low_handoff) - a mismatch drops the stale
+    result (safe). SLAB RAW-ARRAY POOL: honest partial, kept on alloc: (i) the TM slab_copy is C++-side (AweMesh.slab_copy)
+    - pooling it would need a C++ change and the measured GD copy cost is higher than the C++ copy (perf-driven keep); (ii)
+    the save-queue copy lifetime spans the compaction-defer re-queue (the longest slab-buffer lifetime in the tree) - payoff
+    too small. VERIFY (the subagent ran the gates; the coordinator AUDITED the diff this cycle per the users 2026-09-10 process
+    note (do not re-run what the subagent already ran): the reset field enumeration matches every declared column state, the
+    col_gen guards sit at every handoff): genhash (0,0) 80b904c0... exact; meshprobe ok:true match_rate 1.0 verts 321080;
+    r16 ok:true with the falsy set identical (air/height/immediate pre-existing) + spin invariant + low_sync gate + the leak
+    A/B HEAD-vs-POST 272=272 (no new leaks; the coordinator cross-checked the POST 272 in an independent spot run); wprof
+    ok:true - MESHATTACH avg 0.1 (87/180 frames, max 4.0), frame avg 4.4 flat vs the pre-change 4.2; battery genhash+interact+editsnap+range
+    ok:true; 0 script/shader errors. STILL ALLOCATES: the per-slab ArrayMesh vertex/index data (the C++ build_accs/low_emit
+    output - mesh-DATA pooling needs the C++ emit side), the collision StaticBody3D + ConcavePolygonShape3D, the OccluderInstance3D,
+    the snap_rings nbs snapshots. SHIPPED as AweCraft[20260910-1328 0e6c227] (:8080 byte-matched, zip 9eaa52bb...).'
+- id: AC-0253
+  title: per-slab-air-bitset-for-mesh
+  status: open
+  priority: 2
+  area: perf
+  effort: M
+  depends_on: []
+  notes: '1) User Story: As a player I want meshing to skip air checks fast so low at 4x4x4 and high at 16x16x16 build quicker
+    while flying.
+
+
+    2) Technical Details: godot/world/generator.gd + world.gd + chunk.gd + gdext/src/mesh.cpp. On gen fill of 4096 per 16x16x16
+    slab, build 512-byte bitset (1 bit per block solid/air) and store alongside c.data[si]. Greedy walk checks bitset first
+    for air/solid (fast path), only palette-decodes on emit. Enables instant all-air/all-solid early outs and neighbor checks
+    if gen ahead. Verify via profiler: mesh ms per slab down vs baseline, no extra alloc spike.'
 - id: AC-0248
   title: prewarm-pools-for-streaming
   status: open
@@ -118,7 +107,9 @@ intake:
 
     2) Technical Details: Depends on AC-0247 pools. On World ready, preallocate mesh instances, 4096 slab arrays, and column
     shells for ~ring (e.g., 9-16 columns * avg slabs). Keep grow-on-demand. Verify no extra alloc spike on first fly-forward
-    in profiler.'
+    in profiler.
+
+3) Implementation (agent, 2026-09-10): DONE - commit e2e4b0c. Code (+224/-12, world.gd + harness.gd; no C++): the pools now prewarm to the STREAMING DEMAND instead of the small fixed counts: the recenter ring is provably exactly 2R columns (the lattice points with (dx-1)^2+dz^2 <= R^2 that were outside dx^2+dz^2 <= R^2 - verified 8@R4, 32@R16, 100@R50, matching the circle_count comments), so _pool_targets_for(R) prewarms 2 rings of COLUMNS (max(2*ring(R), 16) - 64 at R16, 200 at R50), their MI demand (slabs-per-column from the code: everything below the sea + the surface slab + fluid/flora headroom = 10 -> 640 at R16, 2000 at R50), and their fog+cap MM pairs (2 per column -> 128 at R16, 400 at R50); the AC-0247 minimums stay as floors. Runs in World._ready + a TOP-UP in recenter() (a cached target keyed on render_radius makes the steady state three int compares) - the top-up is required because every radius change (the slider, the boot apply_world, the harness arms) applies the radius AFTER _ready and ends in a recenter. One-time cost measured via perf_pool_prewarm_ms: 0.8 ms at R4 ready, 3.7 ms at R16, 6.7 ms cumulative worst case at R50 (incl. a 2.1 ms refill after the burst drained the pool - the depth self-heals). POOL GROW COUNTERS (perf_pool_mi/mm/col_grows_n) + the r16 pool evidence block (_pool_snap at build-settle / fly4 / fly50 boundaries): the initial burst grows the pools ONCE by design (col 868, mi 5498, mm 804 - the first burst fills the WHOLE 797-column circle, far past the 2-ring prewarm, which is exactly what the ticket scopes), and the sustained fly-forwards show EXACTLY 0 growths (fly4 8 s @ 4x, fly50 2 s @ 215 m/s; steady_zero_ok true) - steady state fully recycles (the r+2 evict check-ins feed the ring check-outs); end sizes mi 2686 / mm 167 / col 99 against 797 live columns (4.33 live MI/col once highs replace lows). SLAB RAW-ARRAY POOL: still out of scope (the AC-0247 reasons: the slab_copy allocates inside the C++; the GD per-byte copy measured 98 us/4096 B vs ~9 us C++ - a net CPU regression). VERIFY (agent ran; the coordinator audited the diff): genhash (0,0) 80b904c0... exact; meshprobe ok:true 1908/32 + the avg A/B pair 8/8; r16 ok:true the falsy set exactly the pre-existing trio + spin invariant + low_sync gate + the pool evidence above; wprof ok:true flat (LOW avg 3.0 / p95 8.2, frame avg 4.6 - within headless noise); battery genhash+range ok:true; 0 script/shader errors. SHIPPED as AweCraft[20260910-2057 e2e4b0c] (:8080 byte-matched, zip d74b9d1b...).'
 - id: AC-0001
   title: m1-scaffold
   source: agent
@@ -6571,11 +6562,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-02T15:27
-  updated_at: 2026-09-03T08:45
-  completed_at: null
+  updated_at: 2026-09-10T21:03
+  completed_at: 2026-09-10T21:03
   waiting_on: AC-0190
   parent_id: null
   notes: '1) User Story: As a player breaking a block I want no blink or see-through neighbor — trunks/ground keep old mesh
@@ -6812,11 +6803,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-02T18:17
-  updated_at: 2026-09-03T08:45
-  completed_at: null
+  updated_at: 2026-09-10T21:03
+  completed_at: 2026-09-10T21:03
   waiting_on: AC-0199
   parent_id: null
   notes: '1) User Story: As a player I want blocks to darken at night and brighten at day regardless of when the chunk was
@@ -8882,7 +8873,7 @@ intake:
     AWECRAFT_PADTRACE env gate prints the exact rejection). STATUS: stays\nOPEN for the user real-pad retest on return (double-tap\
     \ A fly + B\ndescend + RT hold-to-mine; if a symptom persists, set\nAWECRAFT_PADTRACE=1 in the exe env - the per-event\
     \ trace shows exactly\nwhat the pad sends). The exe at :8080 (cdf823d, 2026-09-09, byte-\nmatched) already carries the\
-    \ implementation."
+    \ implementation.\n\nQUEUE RECORD (2026-09-10): reached as queue head during the overnight run - USER-GATED, awaiting the users pad retest on the 2026-09-09 build; recorded + skipped per the work order (moved on to AC-0185 without touching the ticket). Re-queue when the retest lands."
   comments:
   - id: 1
     author: user
@@ -9155,37 +9146,23 @@ intake:
     zone with the top-grid heightfield. The satellite design forks (trigger, detail radius) are untouched by this ticket.
 
 
-    3) Implementation (agent, 2026-09-10): DONE - commit 973930d. Code:
-    world.gd tier collapse 4 -> 3 (TIER_CONE_DOT + _look_dir + _look_yaw +
-    PICK_LOOK_REFRESH_DEG + _refresh_look_dir + the look-snap rescore kick +
-    the _pool_key look components all removed; tiers are now 0 under / 1 sim
-    radius / 2 rest by taxi, look-independent); _low_pick f20/f21
-    ahead-behind logic gone (ring1 then rest by taxi rank);
-    _low_dispatch_slab LOW_TASK_CAP branch now returns verdict 2 (capped
-    no-op: the slab stays PENDING and is re-picked next frame) instead of
-    the sync main-thread build; -1 means null slab only;
-    low_sync_fallbacks_n is now an always-zero regression gate. Harness: the
-    AC-0233 spin-180 probe re-scoped into the LOOK-INVARIANCE regression
-    (the live tier of every entry queued in both snapshots must survive a
-    180 deg flip untouched); low_sync_zero_ok gate field added; the nightlot
-    probe lost its world._look_dir assignment (the variable no longer
-    exists) with the order-divergence comment updated to queue timing.
-    VERIFY (coordinator, independent runs): genhash (0,0) 80b904c0... exact;
-    meshprobe ok:true verts 321080 UNCHANGED (no C++ change); r16 arm ok:true
-    with the new spin evidence (invariant=true, common_n=658, t2common=642,
-    flip_frames=0); A/B vs HEAD proved no new lod sub-field falses
-    (air_ok/height_ok/immediate_ok are false in BOTH runs - pre-existing
-    since the AC-0240 fog-wave change, not a regression); battery
-    genhash+range ok:true; 0 script/shader errors across all runs. SHIPPED
-    as AweCraft[20260910-0645 973930d] (:8080 byte-matched; the user also
-    built the same tree). KNOWN: the nightlot arm (AWECRAFT_LOGIC=nightlot)
-    fails at HEAD independently of this ticket (A/B: identical ok:False,
-    baked_diffs=15, the same 15 diff cells) - pre-existing era breakage,
-    tracked separately. FOLLOW-UP: the user is flying this build and the
-    expected frame-drop relief did NOT fully materialize (fps still tanks to
-    ~20 while flying) - the cone + sync fallback were not the whole cause;
-    the next ticket (filed before AC-0247) instruments the world pipeline
-    for per-stage ms attribution.'
+    3) Implementation (agent, 2026-09-10): DONE - commit 973930d. Code: world.gd tier collapse 4 -> 3 (TIER_CONE_DOT + _look_dir
+    + _look_yaw + PICK_LOOK_REFRESH_DEG + _refresh_look_dir + the look-snap rescore kick + the _pool_key look components all
+    removed; tiers are now 0 under / 1 sim radius / 2 rest by taxi, look-independent); _low_pick f20/f21 ahead-behind logic
+    gone (ring1 then rest by taxi rank); _low_dispatch_slab LOW_TASK_CAP branch now returns verdict 2 (capped no-op: the slab
+    stays PENDING and is re-picked next frame) instead of the sync main-thread build; -1 means null slab only; low_sync_fallbacks_n
+    is now an always-zero regression gate. Harness: the AC-0233 spin-180 probe re-scoped into the LOOK-INVARIANCE regression
+    (the live tier of every entry queued in both snapshots must survive a 180 deg flip untouched); low_sync_zero_ok gate field
+    added; the nightlot probe lost its world._look_dir assignment (the variable no longer exists) with the order-divergence
+    comment updated to queue timing. VERIFY (coordinator, independent runs): genhash (0,0) 80b904c0... exact; meshprobe ok:true
+    verts 321080 UNCHANGED (no C++ change); r16 arm ok:true with the new spin evidence (invariant=true, common_n=658, t2common=642,
+    flip_frames=0); A/B vs HEAD proved no new lod sub-field falses (air_ok/height_ok/immediate_ok are false in BOTH runs -
+    pre-existing since the AC-0240 fog-wave change, not a regression); battery genhash+range ok:true; 0 script/shader errors
+    across all runs. SHIPPED as AweCraft[20260910-0645 973930d] (:8080 byte-matched; the user also built the same tree). KNOWN:
+    the nightlot arm (AWECRAFT_LOGIC=nightlot) fails at HEAD independently of this ticket (A/B: identical ok:False, baked_diffs=15,
+    the same 15 diff cells) - pre-existing era breakage, tracked separately. FOLLOW-UP: the user is flying this build and
+    the expected frame-drop relief did NOT fully materialize (fps still tanks to ~20 while flying) - the cone + sync fallback
+    were not the whole cause; the next ticket (filed before AC-0247) instruments the world pipeline for per-stage ms attribution.'
 - id: AC-0251
   title: instrument-world-pipeline-timings
   source: user
@@ -9201,107 +9178,63 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: '1) User Story: I fly at 4x speed and the fps tanks to ~20. I
-    thought that after AC-0250 (which removed the priority cone and the
-    low-LOD main-thread sync fallback) the drops would go away and I would
-    only see more pop-in; the fps still tanks, which should not happen if
-    the pipeline is properly multithreaded and spreads the main-thread work
-    over multiple frames. I want a per-stage breakdown of where the
-    main-thread time in the world generation/streaming pipeline goes (drain
-    dispatch, gen handoff, mesh build/attach, the face-block light cascade,
-    low-lane attach, fog, IO commit, recenter/rebuild, per-chunk
-    mesh-instance attach, rescore) so I can see which stage eats the frame
-    and fix it with data, not guesses. I want to read it live (in-game
-    overlay while flying) AND as a repeatable headless flight dump at the
-    repro speed (4x).
+  notes: '1) User Story: I fly at 4x speed and the fps tanks to ~20. I thought that after AC-0250 (which removed the priority
+    cone and the low-LOD main-thread sync fallback) the drops would go away and I would only see more pop-in; the fps still
+    tanks, which should not happen if the pipeline is properly multithreaded and spreads the main-thread work over multiple
+    frames. I want a per-stage breakdown of where the main-thread time in the world generation/streaming pipeline goes (drain
+    dispatch, gen handoff, mesh build/attach, the face-block light cascade, low-lane attach, fog, IO commit, recenter/rebuild,
+    per-chunk mesh-instance attach, rescore) so I can see which stage eats the frame and fix it with data, not guesses. I
+    want to read it live (in-game overlay while flying) AND as a repeatable headless flight dump at the repro speed (4x).
 
 
-    2) Technical Details: CORE (godot/world/world.gd) - a per-stage timing
-    struct, MAIN-THREAD-ONLY, pre-allocated (ring buffer, no per-frame
-    allocation, no new locks on the hot path): wrap each main-thread stage
-    of the world pipeline in Time.get_ticks_usec() pairs: the drain pass
-    (_drain_build_queue), _low_step (attach + in-r lane + slab wave), the
-    worker-result handoffs/attaches (TG + TM, including the face-block
-    light cascade / face-cache refresh - isolate the cascade if separable),
-    the IO commits (_io_write_commit + disk-read handoffs), the
-    recenter/rebuild queue walk, the rescore step, the per-chunk
-    mesh-instance create/attach (the AC-0247 suspect - isolate if
-    separable), plus a MISC catch-all so the stage sum + misc reconciles
-    against the frame total. Aggregation: a rolling window (~3 s / ~180
-    frames) per stage: p50/p95/max/avg + frame count; expose as
-    world.profiler (stage -> stats) plus the frame total. OVERLAY
-    (godot/ui/console.gd, the AC-0244 debug overlay) - a compact stage
-    table (name, p50, p95, max, ms/frame) plus frame ms/fps and the
-    TG/TM/low in-flight occupancy; refresh ~every 500 ms. HARNESS
-    (godot/scenes/harness.gd) - a NEW AWECRAFT_LOGIC=wprof arm: spawn +
-    settle, then a sustained 4x flight (the _fly_phase teleport-drive
-    pattern from the r16 arm; 15-20 s), read world.profiler at the end
-    (steady state: sample the window after the first ~5 s to skip
-    settling); the RESULT JSON carries the per-stage stats + fps/frame ms
-    + the occupancy; gates: the arm completes, every major stage has
-    non-zero samples, 0 errors (an evidence arm - no performance gates).
-    Add the arm to the arm table. NON-GOALS - instrument-ONLY ticket: NO
-    behavior/scheduling/pacing change to the pipeline; NO stage fixes (the
-    fix tickets follow the data); NO C++ (gdext/ untouched). GATES:
-    genhash (0,0) 80b904c0e5f085eef1e839459058c706 exact; meshprobe ok:true
-    verts 321080 unchanged; the r16 arm ok:true UNCHANGED (the
-    instrumentation must be schedule-transparent - its existing gates,
-    incl. the spin invariance, must hold); the wprof arm ok:true with
-    plausible evidence (the 4x flight frame ms consistent with the fps
-    proxy; the stage sum + misc ~ the frame total); battery genhash+range
-    ok:true; 0 script/shader errors. KNOWN SUSPECTS (hypotheses to
-    confirm/refute - from code comments, NOT conclusions): the face-block
-    light cascade on handoff (~1.2 s class), the per-dispatch strip/nbs
-    work (30-50 ms class), the per-slab MeshInstance3D create/attach, the
-    in-r low budget (up to 8 ms/frame), the blob IO commit, the burst
-    handoff.
+    2) Technical Details: CORE (godot/world/world.gd) - a per-stage timing struct, MAIN-THREAD-ONLY, pre-allocated (ring buffer,
+    no per-frame allocation, no new locks on the hot path): wrap each main-thread stage of the world pipeline in Time.get_ticks_usec()
+    pairs: the drain pass (_drain_build_queue), _low_step (attach + in-r lane + slab wave), the worker-result handoffs/attaches
+    (TG + TM, including the face-block light cascade / face-cache refresh - isolate the cascade if separable), the IO commits
+    (_io_write_commit + disk-read handoffs), the recenter/rebuild queue walk, the rescore step, the per-chunk mesh-instance
+    create/attach (the AC-0247 suspect - isolate if separable), plus a MISC catch-all so the stage sum + misc reconciles against
+    the frame total. Aggregation: a rolling window (~3 s / ~180 frames) per stage: p50/p95/max/avg + frame count; expose as
+    world.profiler (stage -> stats) plus the frame total. OVERLAY (godot/ui/console.gd, the AC-0244 debug overlay) - a compact
+    stage table (name, p50, p95, max, ms/frame) plus frame ms/fps and the TG/TM/low in-flight occupancy; refresh ~every 500
+    ms. HARNESS (godot/scenes/harness.gd) - a NEW AWECRAFT_LOGIC=wprof arm: spawn + settle, then a sustained 4x flight (the
+    _fly_phase teleport-drive pattern from the r16 arm; 15-20 s), read world.profiler at the end (steady state: sample the
+    window after the first ~5 s to skip settling); the RESULT JSON carries the per-stage stats + fps/frame ms + the occupancy;
+    gates: the arm completes, every major stage has non-zero samples, 0 errors (an evidence arm - no performance gates). Add
+    the arm to the arm table. NON-GOALS - instrument-ONLY ticket: NO behavior/scheduling/pacing change to the pipeline; NO
+    stage fixes (the fix tickets follow the data); NO C++ (gdext/ untouched). GATES: genhash (0,0) 80b904c0e5f085eef1e839459058c706
+    exact; meshprobe ok:true verts 321080 unchanged; the r16 arm ok:true UNCHANGED (the instrumentation must be schedule-transparent
+    - its existing gates, incl. the spin invariance, must hold); the wprof arm ok:true with plausible evidence (the 4x flight
+    frame ms consistent with the fps proxy; the stage sum + misc ~ the frame total); battery genhash+range ok:true; 0 script/shader
+    errors. KNOWN SUSPECTS (hypotheses to confirm/refute - from code comments, NOT conclusions): the face-block light cascade
+    on handoff (~1.2 s class), the per-dispatch strip/nbs work (30-50 ms class), the per-slab MeshInstance3D create/attach,
+    the in-r low budget (up to 8 ms/frame), the blob IO commit, the burst handoff.
 
 
-    3) Implementation (agent, 2026-09-10): DONE - commit fdee3a1. Code
-    (instrument-only, +506/-1, zero behavior/scheduling change): world.gd -
-    a per-stage timing ring before _process (180 frames x 10 stages,
-    pre-allocated, main-thread-only, no hot-path allocation or locks): the
-    TOP-LEVEL DISJOINT partition DRAIN (_drain_build_queue) / LOW
-    (_low_step) / HANDOFF (threadgen_poll + threadmesh_poll) / IO
-    (io_poll) / RECENTER (_recenter_slice) + MISC = the exact frame
-    remainder (reconciliation 0% by construction, a negative-MISC guard
-    misc_neg_max_us); sub-stages (attribution detail, not in the
-    partition): FACELIGHT (_eff_landed face-block cascade - ISOLATED),
-    RESCORE (_rescore_step - a DRAIN subset), MESHATTACH (the per-slab
-    instance attach: _low_place_slab / _fog_ensure_slab / _cap_ensure_slab
-    + chunk.gd _assemble_slab - the AC-0247 suspect - ISOLATED); exposed
-    via the world.profiler getter (rolling p50/p95/max/avg + active frames
-    per stage + the tg/tm/low occupancy; stats recomputed on read only).
-    chunk.gd - the _assemble_slab attach timing into the world ring.
-    console.gd - the live WORLD-PIPELINE table in the AC-0244 debug
-    overlay (backtick/F3): 9 stage rows (sub-stages indented) + the FRAME
-    row (p95 ms + approx fps) + the occupancy, refreshed ~every 500 ms
-    while open. harness.gd - the NEW standalone AWECRAFT_LOGIC=wprof arm
-    (NOT in the battery): r16-style settle + a 17 s sustained 4x flight in
-    3 segments (Engine.max_fps=60 pacing so headless gets true 16.7 ms
-    frames; the ring is read after each segment) - RESULT JSON with the
-    per-stage tables + reconciliation + the flight evidence; gates:
-    completes, the major stages have non-zero frames, the frame avg is
-    non-vacuous, recon <= 10%, no negative MISC, 0 errors. VERIFY
-    (coordinator, independent runs): genhash (0,0) 80b904c0... exact;
-    meshprobe ok:true verts 321080 in BOTH of 2 runs; r16 ok:true with the
-    falsy-leaf set IDENTICAL to HEAD (only the pre-existing
-    air/height/immediate) and the spin invariance holding - the
-    schedule-transparency proof; wprof ok:true reproducing the subagents
-    headline; battery genhash+range ok:true; 0 script/shader errors.
-    HEADLINE DATA (4x flight, busiest 3 s window, server CPU): frame avg
-    4.2 / p50 3.7 / p95 10.5 / max ~25 ms; LOW (the low-res slab lane) is
-    the dominant main-thread stage (avg 2.8 / p95 7.6 / max 10.0);
-    HANDOFF is spiky (avg 0.2, max 12.0); MESHATTACH is cheap (max ~0.9,
-    active 86/180 frames) - the AC-0247 pooling suspect is NOT the biggest
-    cost on this machine; FACELIGHT is rare (2 frames) but the most
-    expensive isolated event (max ~5.7). CAVEAT: this is the server CPU
-    (fast) at 60 fps pacing; the users 20 fps Windows profile needs the
-    LIVE overlay reading (their machine) before the fix tickets are
-    filed. SHIPPED as AweCraft[20260910-1004 fdee3a1] (:8080 byte-matched;
-    zip 62b4dd88... exe 797c0929...). NEXT: the user flies this build at
-    4x, opens the overlay (backtick/F3) and reads the WORLD-PIPELINE
-    table; the fix ticket(s) follow the data.'
+    3) Implementation (agent, 2026-09-10): DONE - commit fdee3a1. Code (instrument-only, +506/-1, zero behavior/scheduling
+    change): world.gd - a per-stage timing ring before _process (180 frames x 10 stages, pre-allocated, main-thread-only,
+    no hot-path allocation or locks): the TOP-LEVEL DISJOINT partition DRAIN (_drain_build_queue) / LOW (_low_step) / HANDOFF
+    (threadgen_poll + threadmesh_poll) / IO (io_poll) / RECENTER (_recenter_slice) + MISC = the exact frame remainder (reconciliation
+    0% by construction, a negative-MISC guard misc_neg_max_us); sub-stages (attribution detail, not in the partition): FACELIGHT
+    (_eff_landed face-block cascade - ISOLATED), RESCORE (_rescore_step - a DRAIN subset), MESHATTACH (the per-slab instance
+    attach: _low_place_slab / _fog_ensure_slab / _cap_ensure_slab + chunk.gd _assemble_slab - the AC-0247 suspect - ISOLATED);
+    exposed via the world.profiler getter (rolling p50/p95/max/avg + active frames per stage + the tg/tm/low occupancy; stats
+    recomputed on read only). chunk.gd - the _assemble_slab attach timing into the world ring. console.gd - the live WORLD-PIPELINE
+    table in the AC-0244 debug overlay (backtick/F3): 9 stage rows (sub-stages indented) + the FRAME row (p95 ms + approx
+    fps) + the occupancy, refreshed ~every 500 ms while open. harness.gd - the NEW standalone AWECRAFT_LOGIC=wprof arm (NOT
+    in the battery): r16-style settle + a 17 s sustained 4x flight in 3 segments (Engine.max_fps=60 pacing so headless gets
+    true 16.7 ms frames; the ring is read after each segment) - RESULT JSON with the per-stage tables + reconciliation + the
+    flight evidence; gates: completes, the major stages have non-zero frames, the frame avg is non-vacuous, recon <= 10%,
+    no negative MISC, 0 errors. VERIFY (coordinator, independent runs): genhash (0,0) 80b904c0... exact; meshprobe ok:true
+    verts 321080 in BOTH of 2 runs; r16 ok:true with the falsy-leaf set IDENTICAL to HEAD (only the pre-existing air/height/immediate)
+    and the spin invariance holding - the schedule-transparency proof; wprof ok:true reproducing the subagents headline; battery
+    genhash+range ok:true; 0 script/shader errors. HEADLINE DATA (4x flight, busiest 3 s window, server CPU): frame avg 4.2
+    / p50 3.7 / p95 10.5 / max ~25 ms; LOW (the low-res slab lane) is the dominant main-thread stage (avg 2.8 / p95 7.6 /
+    max 10.0); HANDOFF is spiky (avg 0.2, max 12.0); MESHATTACH is cheap (max ~0.9, active 86/180 frames) - the AC-0247 pooling
+    suspect is NOT the biggest cost on this machine; FACELIGHT is rare (2 frames) but the most expensive isolated event (max
+    ~5.7). CAVEAT: this is the server CPU (fast) at 60 fps pacing; the users 20 fps Windows profile needs the LIVE overlay
+    reading (their machine) before the fix tickets are filed. SHIPPED as AweCraft[20260910-1004 fdee3a1] (:8080 byte-matched;
+    zip 62b4dd88... exe 797c0929...). NEXT: the user flies this build at 4x, opens the overlay (backtick/F3) and reads the
+    WORLD-PIPELINE table; the fix ticket(s) follow the data.'
 - id: AC-0252
   title: medium-lod-avg-color-ladder
   source: user
@@ -9317,130 +9250,93 @@ intake:
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: '1) User Story: When I fly far I want a two-tier distance LOD: a
-    NEW medium tier at 8x8x8 that takes the place of the current low
-    band, with the low band (4x4x4) starting further out, and the band
-    distances configurable. The low and medium tiers should NOT use the
-    textures at all - instead each cube is the AVERAGE COLOR of all the
-    textures that make up the area it covers (in 8x8x8 each cube
-    averages the 2x2x2 = 8 real blocks in its volume). If more than half
-    of the blocks in a cubes volume are air, the cube should be treated
-    as air (not rendered). And the material should add slight random
-    noise to the color/brightness so the faces are not uniform.
+  notes: '1) User Story: When I fly far I want a two-tier distance LOD: a NEW medium tier at 8x8x8 that takes the place of
+    the current low band, with the low band (4x4x4) starting further out, and the band distances configurable. The low and
+    medium tiers should NOT use the textures at all - instead each cube is the AVERAGE COLOR of all the textures that make
+    up the area it covers (in 8x8x8 each cube averages the 2x2x2 = 8 real blocks in its volume). If more than half of the
+    blocks in a cubes volume are air, the cube should be treated as air (not rendered). And the material should add slight
+    random noise to the color/brightness so the faces are not uniform.
 
 
-    2) Technical Details: LADDER - the far zone currently renders the
-    4x4x4 TEXTURED low (in-r lane: world.gd _low_build_slab ->
-    _low_slab_grid + _low_emit_slab (the GD twin); the far slab wave:
-    the C++ mcl.low_emit at world.gd:4554; constants LOW_GRID=4 /
-    LOW_CELL_BLOCKS=4 at world.gd:~548). NEW: a MED tier at 8x8x8 (each
-    sample averages 2x2x2 = 8 real blocks) renders WHERE the 4x4x4 low
-    currently renders (the near far-band); the 4x4x4 LOW moves to the
-    farther band (from the new configurable start distance out to the
-    existing render edge); the fog + cap behavior is otherwise
-    unchanged. BOTH TIERS UNTEXTURED AVERAGE-COLOR: per sample cube, per
-    FACE DIRECTION: the average of the cached per-block-face average
-    colors of the NON-AIR blocks in the sample volume (vertex colors, no
-    UVs, no texture sampling); AIR RULE: more than half the volume air
-    (>=5 of 8 for med, >=33 of 64 for low) -> the sample is air (not
-    emitted). FACE-COLOR CACHE - a per-block-face average color array
-    (block id x 6 directions) built ONCE when loading into a world:
-    average each blocks atlas face texture (the atlas rects live in
-    godot/autoload/data.gd + godot/core/atlas.gd, Data.ATLAS_PX) and
-    store the mean Color per (block, face). The emit reuses the lows
-    6-face shell scan + greedy merge structure (mesh.cpp:~1564 + the GD
-    twin). EMIT - implement as a C++ + GD TWIN (house pattern, like the
-    current low): one emit parameterized by the grid resolution (8/4) +
-    the avg-color mode, C++ for the far slab wave (TM pool, no main-
-    thread build cost) and the GD twin for the in-r lane; verify the
-    C++/GD equivalence (extend the meshprobe-style check or a new
-    harness check). C++ build: read the gdext/SConstruct header comment
-    for the exact scons command; rebuild + re-stage the .so to
-    godot/bin + exports/windows. BAND DISTANCES - CONFIGURABLE: a new
-    user setting for the low-band start distance (the medium band =
-    from where the low currently starts out to the low start; the low
-    band = from the low start to the existing render edge) - follow the
-    sim_dist slider pattern in godot/ui/menu.gd:~383-443 (Settings.
-    values + the apply function + the slider); the default is a sensible
-    split of the current low band; the existing render-radius slider
-    (maxb) is unchanged. NOISE SHADER - a new material/shader for the
-    med/low avg-color instances: a slight per-fragment brightness/color
-    jitter from a hash of the fragment world position (STATIC under
-    camera motion - no flicker; small amplitude, ~5-8%), so the flat
-    faces are not uniform; it applies ONLY to the med/low avg-color
-    instances (the high path is untouched). VERIFY - genhash (0,0)
-    80b904c0e5f085eef1e839459058c706 exact; meshprobe ok:true (the high
-    build is unchanged - the C++/GD equivalence fields 1908/32,
-    match_rate 1.0); r16 ok:true with the falsy set identical
-    ({air_ok,height_ok,immediate_ok} pre-existing) + the spin
-    invariance + the low_sync gate; the harness LADDER arm (extend the
-    r16 lod block or a new standalone arm): evidence that the near
-    far-band slabs render MED (8x8x8 sample count + vertex colors + no
-    UVs) and the far band renders LOW (4x4x4), the band boundary
-    respects the configurable, and the air rule holds (an air-heavy
-    region emits no samples); wprof ok:true with the LOW stage
-    flat-or-better (the avg-color emit should be cheaper than the
-    textured low); battery genhash+range ok:true; 0 script/shader
-    errors. NON-GOALS - no change to the high path or its shaders; the
-    satellite far-LOD is OUT OF SCOPE (on hold); the existing textured
-    low emit STAYS in the tree (it goes dormant when the band is
-    reassigned - do not delete it); no changes to the fog/cap semantics
-    beyond the band reassignment.
+    2) Technical Details: LADDER - the far zone currently renders the 4x4x4 TEXTURED low (in-r lane: world.gd _low_build_slab
+    -> _low_slab_grid + _low_emit_slab (the GD twin); the far slab wave: the C++ mcl.low_emit at world.gd:4554; constants
+    LOW_GRID=4 / LOW_CELL_BLOCKS=4 at world.gd:~548). NEW: a MED tier at 8x8x8 (each sample averages 2x2x2 = 8 real blocks)
+    renders WHERE the 4x4x4 low currently renders (the near far-band); the 4x4x4 LOW moves to the farther band (from the new
+    configurable start distance out to the existing render edge); the fog + cap behavior is otherwise unchanged. BOTH TIERS
+    UNTEXTURED AVERAGE-COLOR: per sample cube, per FACE DIRECTION: the average of the cached per-block-face average colors
+    of the NON-AIR blocks in the sample volume (vertex colors, no UVs, no texture sampling); AIR RULE: more than half the
+    volume air (>=5 of 8 for med, >=33 of 64 for low) -> the sample is air (not emitted). FACE-COLOR CACHE - a per-block-face
+    average color array (block id x 6 directions) built ONCE when loading into a world: average each blocks atlas face texture
+    (the atlas rects live in godot/autoload/data.gd + godot/core/atlas.gd, Data.ATLAS_PX) and store the mean Color per (block,
+    face). The emit reuses the lows 6-face shell scan + greedy merge structure (mesh.cpp:~1564 + the GD twin). EMIT - implement
+    as a C++ + GD TWIN (house pattern, like the current low): one emit parameterized by the grid resolution (8/4) + the avg-color
+    mode, C++ for the far slab wave (TM pool, no main- thread build cost) and the GD twin for the in-r lane; verify the C++/GD
+    equivalence (extend the meshprobe-style check or a new harness check). C++ build: read the gdext/SConstruct header comment
+    for the exact scons command; rebuild + re-stage the .so to godot/bin + exports/windows. BAND DISTANCES - CONFIGURABLE:
+    a new user setting for the low-band start distance (the medium band = from where the low currently starts out to the low
+    start; the low band = from the low start to the existing render edge) - follow the sim_dist slider pattern in godot/ui/menu.gd:~383-443
+    (Settings. values + the apply function + the slider); the default is a sensible split of the current low band; the existing
+    render-radius slider (maxb) is unchanged. NOISE SHADER - a new material/shader for the med/low avg-color instances: a
+    slight per-fragment brightness/color jitter from a hash of the fragment world position (STATIC under camera motion - no
+    flicker; small amplitude, ~5-8%), so the flat faces are not uniform; it applies ONLY to the med/low avg-color instances
+    (the high path is untouched). VERIFY - genhash (0,0) 80b904c0e5f085eef1e839459058c706 exact; meshprobe ok:true (the high
+    build is unchanged - the C++/GD equivalence fields 1908/32, match_rate 1.0); r16 ok:true with the falsy set identical
+    ({air_ok,height_ok,immediate_ok} pre-existing) + the spin invariance + the low_sync gate; the harness LADDER arm (extend
+    the r16 lod block or a new standalone arm): evidence that the near far-band slabs render MED (8x8x8 sample count + vertex
+    colors + no UVs) and the far band renders LOW (4x4x4), the band boundary respects the configurable, and the air rule holds
+    (an air-heavy region emits no samples); wprof ok:true with the LOW stage flat-or-better (the avg-color emit should be
+    cheaper than the textured low); battery genhash+range ok:true; 0 script/shader errors. NON-GOALS - no change to the high
+    path or its shaders; the satellite far-LOD is OUT OF SCOPE (on hold); the existing textured low emit STAYS in the tree
+    (it goes dormant when the band is reassigned - do not delete it); no changes to the fog/cap semantics beyond the band
+    reassignment.
 
 
-    3) Implementation (agent, 2026-09-10): DONE - commit d7b8585. A new
-    8x8x8 MED avg-color tier renders where the 4x4x4 textured low used
-    to (the data-only far ring + the in-r pending), and the 4x4x4 LOW
-    avg-color tier starts at the NEW configurable low_start distance
-    (default 58 = render_dist + 8, measured in taxi, clamped to the far
-    ring [R+1, ~R*1.42]; a Low LOD start slider in menu.gd on the
-    sim_dist pattern, live set + apply via Settings.apply_low_start).
-    BOTH tiers: vertex colors, NO UVs, per face direction the average of
-    the cached per-block-face average colors of the non-air blocks in
-    the volume; AIR RULE (more than half the volume air: >=5 of 8 med,
-    >=33 of 64 low -> not emitted); the STATIC per-fragment noise shader
-    (new godot/core/lod_avg.gdshader: ALBEDO = COLOR.rgb * day.rgb *
-    (1 + (hash-0.5)*0.12) - a +/-6% jitter, hash of floor(world_pos *
-    scale), no flicker; the day uniform tracks the sky and is set only
-    when it changes). FACE-COLOR CACHE: 256 blocks x 6 directions, built
-    once when loading into a world from the atlas rects (data.gd +
-    atlas.gd), measured ~22 ms one-time, sRGB-averaged then
-    srgb_to_linear so GPU output matches the texture appearance. EMIT =
-    the C++ low_emit_avg(slabs, si, grid, fcc) (gdext/src/mesh.cpp,
-    grid 8|4) on the TM worker pool + a GD TWIN that is TEST-ONLY
-    (referenced only by the harness: the meshprobe avg A/B pair 8/8,
-    the r16 slab check, the ladder air-rule arm). The existing TEXTURED
-    low emit stays untouched (dormant). FULL OFFLOAD (user directive
-    2026-09-10: offload everything possible to other threads):
-    _low_build_slab is now dispatch-only - null slab -> _low_air_slab
-    (bookkeeping only: the vwin keep check, drop low/fog/cap, erase the
-    stamp - the old wasted neighbor grid-sampling on main is gone),
-    data slab -> _low_dispatch_slab (copy + enqueue; the worker runs
-    mcl.low_emit_avg; the handoff attaches). ZERO slab generation (grid
-    sample or emit) on the main thread; the residual low-lane
-    main-thread work is the pick/dispatch/handoff-attach machinery,
-    which must stay (scene tree). C++ rebuilt (scons -O2) + the .so and
-    both Windows DLLs re-staged (the build script re-stages the final
-    dll into the export). GATES (agent ran; the coordinator diff-
-    audited: zero game-path references to the twin, every lane
-    dispatch/air based): genhash (0,0) 80b904c0... exact; meshprobe
-    ok:true match 1908/32 + the avg A/B pair 8/8; r16 ok:true the falsy
-    set exactly {air_ok, height_ok, immediate_ok} + spin invariant +
-    low_thread 11310 emits / 11313 handoffs / 0 stale drops; the ladder
-    arm ok:true (122 MED slabs all taxi 9 mesh ok 122/122; 602 LOW slabs
-    taxi 10-13 mesh ok 602/602; the boundary low_start 10->12 flipped 62
-    slabs; the air rule synthetic 5/8->air 4/8->solid 33/64->air
-    32/64->solid + in-world 11 air slabs 0 with a mesh); wprof ok:true
-    LOW stage avg 2.9 / p95 7.9 / max 10.3 (flat vs 3.10 pre-offload-
-    fix; the residual is the pick/dispatch/attach machinery), frame avg
-    4.3; battery genhash+range ok:true; 0 script/shader errors. COSTS:
-    the C++ emit is MED 0.185 ms/slab, LOW 0.087 ms/slab vs 0.144 for
-    the textured low (the avg low is ~40% cheaper - no UVs).
-    INTERPRETATIONS (user to judge in the in-game look test): the MED
-    sample = 2x2x2 = 8 real blocks (the users 4 cubes read as 2 per
-    axis); low_start is a taxi distance in the far ring; the per-face
-    average drops the old per-face shade factor; solid-solid interfaces
-    are culled (the avg has no block id, so cross-material boundaries
-    over-cull - fine at far LOD). SHIPPED as AweCraft[20260910-1915
-    d7b8585] (:8080 byte-matched, zip 2d185bb3...; the fresh libchunkio
-    dll is in the export).'
+    3) Implementation (agent, 2026-09-10): DONE - commit d7b8585. A new 8x8x8 MED avg-color tier renders where the 4x4x4 textured
+    low used to (the data-only far ring + the in-r pending), and the 4x4x4 LOW avg-color tier starts at the NEW configurable
+    low_start distance (default 58 = render_dist + 8, measured in taxi, clamped to the far ring [R+1, ~R*1.42]; a Low LOD
+    start slider in menu.gd on the sim_dist pattern, live set + apply via Settings.apply_low_start). BOTH tiers: vertex colors,
+    NO UVs, per face direction the average of the cached per-block-face average colors of the non-air blocks in the volume;
+    AIR RULE (more than half the volume air: >=5 of 8 med, >=33 of 64 low -> not emitted); the STATIC per-fragment noise shader
+    (new godot/core/lod_avg.gdshader: ALBEDO = COLOR.rgb * day.rgb * (1 + (hash-0.5)*0.12) - a +/-6% jitter, hash of floor(world_pos
+    * scale), no flicker; the day uniform tracks the sky and is set only when it changes). FACE-COLOR CACHE: 256 blocks x
+    6 directions, built once when loading into a world from the atlas rects (data.gd + atlas.gd), measured ~22 ms one-time,
+    sRGB-averaged then srgb_to_linear so GPU output matches the texture appearance. EMIT = the C++ low_emit_avg(slabs, si,
+    grid, fcc) (gdext/src/mesh.cpp, grid 8|4) on the TM worker pool + a GD TWIN that is TEST-ONLY (referenced only by the
+    harness: the meshprobe avg A/B pair 8/8, the r16 slab check, the ladder air-rule arm). The existing TEXTURED low emit
+    stays untouched (dormant). FULL OFFLOAD (user directive 2026-09-10: offload everything possible to other threads): _low_build_slab
+    is now dispatch-only - null slab -> _low_air_slab (bookkeeping only: the vwin keep check, drop low/fog/cap, erase the
+    stamp - the old wasted neighbor grid-sampling on main is gone), data slab -> _low_dispatch_slab (copy + enqueue; the worker
+    runs mcl.low_emit_avg; the handoff attaches). ZERO slab generation (grid sample or emit) on the main thread; the residual
+    low-lane main-thread work is the pick/dispatch/handoff-attach machinery, which must stay (scene tree). C++ rebuilt (scons
+    -O2) + the .so and both Windows DLLs re-staged (the build script re-stages the final dll into the export). GATES (agent
+    ran; the coordinator diff- audited: zero game-path references to the twin, every lane dispatch/air based): genhash (0,0)
+    80b904c0... exact; meshprobe ok:true match 1908/32 + the avg A/B pair 8/8; r16 ok:true the falsy set exactly {air_ok,
+    height_ok, immediate_ok} + spin invariant + low_thread 11310 emits / 11313 handoffs / 0 stale drops; the ladder arm ok:true
+    (122 MED slabs all taxi 9 mesh ok 122/122; 602 LOW slabs taxi 10-13 mesh ok 602/602; the boundary low_start 10->12 flipped
+    62 slabs; the air rule synthetic 5/8->air 4/8->solid 33/64->air 32/64->solid + in-world 11 air slabs 0 with a mesh); wprof
+    ok:true LOW stage avg 2.9 / p95 7.9 / max 10.3 (flat vs 3.10 pre-offload- fix; the residual is the pick/dispatch/attach
+    machinery), frame avg 4.3; battery genhash+range ok:true; 0 script/shader errors. COSTS: the C++ emit is MED 0.185 ms/slab,
+    LOW 0.087 ms/slab vs 0.144 for the textured low (the avg low is ~40% cheaper - no UVs). INTERPRETATIONS (user to judge
+    in the in-game look test): the MED sample = 2x2x2 = 8 real blocks (the users 4 cubes read as 2 per axis); low_start is
+    a taxi distance in the far ring; the per-face average drops the old per-face shade factor; solid-solid interfaces are
+    culled (the avg has no block id, so cross-material boundaries over-cull - fine at far LOD). SHIPPED as AweCraft[20260910-1915
+    d7b8585] (:8080 byte-matched, zip 2d185bb3...; the fresh libchunkio dll is in the export).'
+- id: AC-0254
+  title: task-list-api
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - tooling
+  created_at: 2026-09-10T21:15
+  updated_at: 2026-09-10T21:15
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a developer and as the agents working this repo I want a single stable API for interacting with the task list so concurrent agents and editors stop clobbering, re-wrapping, and silently losing entries in tasks/TASKS.yaml (the 2026-09-10 clobber saga: a coordinator revert erased a user-filed ticket, two agents and an editor rewrote the file with different YAML wrappings, and the other-chat agent lost three tickets and had to recreate them).
+
+
+    2) Technical Details: Make tasks/scripts/tasks.py (currently read-only: next/list) the SINGLE WRITER API for tasks/TASKS.yaml. Subcommands: add (a new intake entry: id auto = next free AC-NNNN, title, source, priority, status, labels, notes from a file or stdin), queue (add --at head|after <id>|end / remove <id> / list), note (append text to an entrys notes), set (status/priority), show <id>, and the existing next/list. WRITER DISCIPLINE (the point of the ticket): (a) an exclusive file lock (fcntl.flock on a tasks/.tasks.lock sidecar) held across the entire read-modify-write; (b) atomic write (temp file in the same directory + os.replace); (c) a deterministic canonical dump (yaml safe_dump, sort_keys=False, width 100, allow_unicode=True, entry key order preserved: id, title, source, projects, assignee, priority, status, labels, created_at, updated_at, completed_at, waiting_on, parent_id, notes) so the file is SELF-CONSISTENT - any API write leaves unchanged entries byte-identical (idempotent); (d) a POST-WRITE validation: safe_load the result and assert the intended change applied and EVERY other entry is data-identical pre/post (abort + restore the original file on any mismatch). SCHEMA PRESERVATION: the other-chat agent uses a RICHER schema (a per-entry comments: list of {id, author, text}; pyyaml double-quote style) - the API must round-trip ALL fields, not just the house-schema ones. FIRST WRITE: a one-time normalization of the whole file to the canonical style is acceptable (from then on every writer uses the API, so it stays stable). DOC: add one line to the TASK format section of AGENTS.md: all agents MUST mutate the task list only via python3 tasks/scripts/tasks.py <cmd>; raw edits to tasks/TASKS.yaml are forbidden. VERIFY (no godot gates - no game code change): (1) a no-op write leaves the file byte-identical (idempotence); (2) add + note-append + queue-move round-trip all entries on a throwaway copy; (3) a concurrent writer is blocked by the lock (two processes: the second waits or fails clean, never a partial file); (4) all 254 current entries are data-identical pre/post the first normalization write; (5) tasks.py next still works with the right queue head. House-process formality: ./build_windows.sh + :8080 byte-match (the game is unchanged - the build keeps the serve contract honest). NON-GOALS: no server/daemon (CLI only), no schema migration (unknown fields are preserved as data), no other files beyond the AGENTS.md line, no game code, no C++.'
