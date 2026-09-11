@@ -12620,22 +12620,40 @@ func _toolpose_test() -> void:
 
 
 func _force_viewmodel_depth_on(p) -> void:
+	# AC-0097: force the pre-fix depth state on the viewmodel materials (the
+	# "before" side of the A/B). It must mutate the ORIGINAL material in
+	# place - reassigning material_override to a fresh resource is NOT
+	# reflected in the rendered output in this build (verified with a
+	# green-tint debug: the box kept rendering the old material).
 	if p.held_box != null and p.held_box.material_override is StandardMaterial3D:
-		(p.held_box.material_override as StandardMaterial3D).depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+		var bm := p.held_box.material_override as StandardMaterial3D
+		bm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+		bm.no_depth_test = false
 	if p.held_fist != null and p.held_fist.material_override is StandardMaterial3D:
-		(p.held_fist.material_override as StandardMaterial3D).depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+		var fm := p.held_fist.material_override as StandardMaterial3D
+		fm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+		fm.no_depth_test = false
 	if p.held_tool != null:
 		for c in p.held_tool.get_children():
 			if c is MeshInstance3D and (c as MeshInstance3D).material_override is StandardMaterial3D:
-				((c as MeshInstance3D).material_override as StandardMaterial3D).depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+				var tm := (c as MeshInstance3D).material_override as StandardMaterial3D
+				tm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+				tm.no_depth_test = false
 	if p.held_sprite != null:
-		p.held_sprite.no_depth_test = false
+		# AC-0097: the effective test is on the MATERIAL (the Sprite3D node
+		# property is a no-op in this build - see player.gd _vm_sprite_mat).
+		if p.held_sprite.material_override is StandardMaterial3D:
+			(p.held_sprite.material_override as StandardMaterial3D).no_depth_test = false
 
 
-var _is_stone := func(c: Color) -> bool: return absf(c.r - c.g) < 14 and absf(c.g - c.b) < 14 and c.r > 24 and c.r < 120
+# AC-0097: the Color predicates are 0-1 floats. The arm's original 0-255
+# thresholds (c.r > 24) can NEVER hold on a normalized Color, so the pixel
+# assertions were vacuous (always 0 / 100%) from AC-0067 until now.
+var _is_stone := func(c: Color) -> bool: return absf(c.r - c.g) < 14.0 / 255.0 and absf(c.g - c.b) < 14.0 / 255.0 and c.r > 24.0 / 255.0 and c.r < 120.0 / 255.0
 
 
-var _is_cyan := func(c: Color) -> bool: return c.b > 150 and c.g > 150 and c.r < 110 and c.b > c.r + 80
+# AC-0097: 0-1 scale, same note as _is_stone.
+var _is_cyan := func(c: Color) -> bool: return c.b > 150.0 / 255.0 and c.g > 150.0 / 255.0 and c.r < 110.0 / 255.0 and c.b > c.r + 80.0 / 255.0
 
 
 func _wallshot_region_count(path: String, pred: Callable, x0: int, x1: int, y0: int, y1: int) -> int:
@@ -12648,6 +12666,19 @@ func _wallshot_region_count(path: String, pred: Callable, x0: int, x1: int, y0: 
 	return n
 
 
+# AC-0097: the held-item-still-occluded A/B. A stone wall (8 wide x 4 tall)
+# stands 0.4 m in front of the player so the hand (0.7 m ahead of the eye,
+# i.e. 0.3 m BEHIND the wall face) pokes through it - the user's scenario.
+# The 1/3-scale held box (0.33 m extent, origin-anchored mesh) is then fully
+# behind the face: with the pre-fix depth state (AWECRAFT_WALL_BEFORE=1) it
+# must be occluded; with the fix (no_depth_test on the material) the whole
+# box, and the diamond sprite in the item shot, render on top of the wall.
+#   block_vm_nonstone: viewmodel-region pixels that are not the wall stone
+#     (the held box; a constant hotbar-frame sliver is in both runs).
+#   item_vm_cyan: the diamond sprite's teal pixels in the same region.
+# Sanity: block_frame_stone is ~90%+ of the frame in both runs (the wall
+# rendered). The region also catches the wall's own bright texture cells
+# (~1k px) - the A/B DELTA is the assertion.
 func _wallshot_test() -> void:
 	var p = Game.player
 	var spawn: Vector3 = world.spawn_point()
@@ -12657,19 +12688,23 @@ func _wallshot_test() -> void:
 	var ey := int(floorf(feet_y + p.EYE))
 	world.collision_enabled = false
 	Debug.fly(true)
-	for wx in range(sx - 1, sx + 2):
+	# The wall must COVER the viewmodel screen region (x 820-1240, the right
+	# of center - the MC viewmodel offset) or the held item never overlaps
+	# the wall and the A/B cannot discriminate.
+	for wx in range(sx - 2, sx + 6):
 		for wy in range(ey - 1, ey + 2):
 			world.set_block(wx, wy, sz - 1, 3)
-	for i in 40:
-		await get_tree().physics_frame
+	# Meshing is worker-async - await the wall slab's build like every other
+	# render arm (a fixed frame wait is not enough).
+	await main._await_world_build(Vector3(float(sx) + 0.5, feet_y, float(sz) + 0.4), 3000)
 	var before := OS.get_environment("AWECRAFT_WALL_BEFORE") == "1"
 	var shots := OS.get_environment("AWECRAFT_WALL_SHOTS")
 	var outdir := ProjectSettings.globalize_path("res://..") + "/tasks/AC-0067/"
-	var res: Dictionary = {"before": before, "shots": shots, "wall_face_z": float(sz) - 1.0, "eye_to_wall_face": 0.5, "hand_to_wall_face": 0.3, "block": false, "item": false}
+	var res: Dictionary = {"before": before, "shots": shots, "wall_face_z": float(sz), "eye_to_wall_face": 0.4, "hand_to_wall_face": -0.3, "block": false, "item": false}
 	var vmx0 := 820
 	var vmx1 := 1240
 	var vmy0 := 430
-	var vmy1 := 700
+	var vmy1 := 720
 	if shots == "" or shots.find("block") >= 0:
 		Debug.give_item(1, 1)
 		p.sel = main._slot_of(p, 1)
@@ -12677,7 +12712,7 @@ func _wallshot_test() -> void:
 			await get_tree().physics_frame
 		if before:
 			_force_viewmodel_depth_on(p)
-		p.position = Vector3(sx + 0.5, feet_y, float(sz) + 0.5)
+		p.position = Vector3(sx + 0.5, feet_y, float(sz) + 0.4)
 		p.look(0.0, 0.0)
 		for i in 8:
 			await get_tree().physics_frame
@@ -12688,7 +12723,8 @@ func _wallshot_test() -> void:
 		res["block_vm_nonstone"] = _wallshot_region_count(bpath, func(c: Color) -> bool: return not _is_stone.call(c), vmx0, vmx1, vmy0, vmy1)
 		var bm = p.held_box.material_override if p.held_box != null else null
 		res["block_box_vis"] = p.held_box != null and p.held_box.visible
-		res["block_depth_on"] = bm is StandardMaterial3D and (bm as StandardMaterial3D).depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+		# "forced" = the depth TEST is on (no_depth_test false).
+		res["block_depth_on"] = bm is StandardMaterial3D and not (bm as StandardMaterial3D).no_depth_test
 	if shots == "" or shots.find("item") >= 0:
 		Debug.give_item(107, 1)
 		p.sel = main._slot_of(p, 107)
@@ -12696,7 +12732,13 @@ func _wallshot_test() -> void:
 			await get_tree().physics_frame
 		if before:
 			_force_viewmodel_depth_on(p)
-		p.position = Vector3(sx + 0.5, feet_y, float(sz) + 0.5)
+		# AC-0097: at 0.33 scale the sprite's center (at the hand) sits below
+		# the frame bottom - lift it 0.45 m in hand space for this shot. It
+		# stays 0.3 m behind the wall face, so the A/B discrimination is
+		# unchanged (occluded vs on-top).
+		if p.held_sprite != null:
+			p.held_sprite.position = Vector3(0.0, 0.45, 0.0)
+		p.position = Vector3(sx + 0.5, feet_y, float(sz) + 0.4)
 		p.look(0.0, 0.0)
 		for i in 8:
 			await get_tree().physics_frame
@@ -12707,6 +12749,7 @@ func _wallshot_test() -> void:
 		res["item_sprite_vis"] = p.held_sprite != null and p.held_sprite.visible
 	Debug.result(res)
 	get_tree().quit()
+
 
 
 func _fpv_test() -> void:

@@ -80,7 +80,8 @@ var _tool_mats := {}
 var _held_key := ""
 const HAND_BASE_POS := Vector3(0.45, -0.62, -0.7)
 const TOOL_TARGET_DIAG := {"pick": 1.224, "axe": 1.10, "shovel": 1.10, "sword": 0.796}
-const HELD_ITEM_SCALE := 0.70
+# AC-0097 (user 2026-09-11): held block is 0.33 scale (was 0.70).
+const HELD_ITEM_SCALE := 0.33
 const HANDLE_C := Color(0.47, 0.33, 0.18)
 const SWORD_HANDLE_C := Color(0.52, 0.36, 0.22)
 const SWING_DURATION := 0.2
@@ -513,13 +514,17 @@ func _build_held() -> void:
 	held_box.mesh = mesh
 	var hbmat := StandardMaterial3D.new()
 	hbmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	# AC-0097: depth_draw_mode only stops the depth WRITE; no_depth_test is
+	# what skips the depth TEST (AC-0067 set only the former, so the viewmodel
+	# was still occluded by the world).
+	hbmat.no_depth_test = true
 	held_box.material_override = hbmat
 	held_box.scale = Vector3.ONE * HELD_ITEM_SCALE
 	held_box.position = Vector3.ZERO
 	held_box.visible = false
 	hand_root.add_child(held_box)
 	held_sprite = Sprite3D.new()
-	held_sprite.scale = Vector3(0.70, 0.70, 0.70)
+	held_sprite.scale = Vector3.ONE * HELD_ITEM_SCALE  # AC-0097: matches the held block (0.33)
 	held_sprite.billboard = 1
 	held_sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	held_sprite.no_depth_test = true
@@ -533,6 +538,7 @@ func _build_held() -> void:
 	fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	fmat.albedo_color = Color(0.87, 0.73, 0.57)
 	fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	fmat.no_depth_test = true # AC-0097: see the hbmat note above
 	held_fist.material_override = fmat
 	_vm_mats.append([fmat, fmat.albedo_color])
 	held_fist.position = Vector3(0.0, -0.05, 0.0)
@@ -581,7 +587,19 @@ func _update_held(id: int, n: int) -> void:
 		if _vm_sprite_mat == null:
 			_vm_sprite_mat = StandardMaterial3D.new()
 			_vm_sprite_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			# AC-0097: the Sprite3D node's no_depth_test does NOT stop the
+			# depth test in this build (wallshot arm: the diamond sprite was
+			# fully occluded by the wall while the box/fist materials with
+			# material-level no_depth_test rendered on top) - the test has
+			# to be disabled on the MATERIAL, same as the box/fist/tool.
+			# DEPTH_DRAW_DISABLED stops the depth WRITE (AC-0067).
+			_vm_sprite_mat.no_depth_test = true
+			_vm_sprite_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 			_vm_mats.append([_vm_sprite_mat, Color.WHITE])
+		# AC-0097: a material_override DISCARDS the Sprite3D's internal
+		# texture binding (the held diamond rendered as a flat WHITE quad -
+		# wallshot arm). The override material must carry the tile itself.
+		_vm_sprite_mat.albedo_texture = held_sprite.texture
 		held_sprite.material_override = _vm_sprite_mat
 		held_sprite.visible = true
 
@@ -850,6 +868,7 @@ func _voxel_mat(color: Color) -> StandardMaterial3D:
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.albedo_color = color
 	m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	m.no_depth_test = true # AC-0097: tool voxels always on top (see _build_held)
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_tool_mats[k] = m
 	return m

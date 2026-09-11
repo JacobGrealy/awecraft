@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-11T09:28
+  updated_at: 2026-09-11T13:01
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0097
 - AC-0112
 - AC-0113
 - AC-0098
@@ -136,6 +135,35 @@ intake:
   area: perf
   effort: M
   depends_on: []
+- id: AC-0257
+  title: layered-sweep-streaming-with-baked-queue
+  priority: 2
+  status: open
+  notes: '1) User Story: As a player moving on ground or flying I want terrain to appear as horizontal
+    layers spreading from my height, closest first at the right detail, so flying feels immediate and
+    close gameplay stays solid without paying for unseen depth.
+
+
+    2) Technical Details: Outcome-focused with ready queue detail: Per recenter, orchestrator scores all
+    pending slabs by layered sweep from player Y with hysteresis, plus taxi distance within layer, plus
+    LOD by horizontal distance band, and bakes a single ordered list spread over frames if needed to avoid
+    a recenter spike — tier 0 configurable radius (defaults to 0 = just the slab you are on, full column
+    straight to high) then sim high, then medium, then low. Edit queue stays separate top priority, checked
+    before the baked list, invalidating only that slab''s bitset and cached LODs. Gen on 4 threads and
+    mesh on 6 threads drain the baked list as fast as possible, doing a cheap early-out check before starting
+    each slab if its wanted LOD changed while queued, and after finishing if LOD changed mid-build they
+    keep the finished mesh cached per slab until whole column freed at r+2 so flipping back is just visibility.
+    Workers never instance nodes directly — they push finished mesh data to a separate thread-safe ready-to-instance
+    queue. Main each frame polls that ready queue and instances a capped number of MeshInstances so Process
+    stays flat, while workers keep draining the baked list without waiting. Include tier0_radius setting.
+    Verify via profiler and visual: workers stay fed, Process flat while flying, correct LOD per distance
+    appears in layered shells without stale builds.'
+  area: perf
+  effort: L
+  depends_on:
+  - AC-0247
+  - AC-0253
+  - AC-0256
 - id: AC-0256
   title: early-out-stale-lod-builds
   priority: 2
@@ -3312,19 +3340,42 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-23T23:41
-  updated_at: 2026-08-31T17:23
+  updated_at: 2026-09-11T13:01
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: '1) User Story: As a player I want the held item/hand to always render on top of the world (Minecraft-style)
-    so the block in my hand is never hidden behind the ground.
-
-
-    2) Technical Details: BUG regression of AC-0067 viewmodel-always-on-top (user 2026-08-23). Held item/hand/block
-    still occluded by environment blocks instead of always-on-top. Re-investigate godot/player/player.gd
-    viewmodel nodes (held_box, held_sprite, held_fist, voxel tools via core/held_mesh.gd) actually have
-    no_depth_test / depth-disable. Was marked done with depth-disabled but user reports never worked in
-    web+windows. Verify render shows held always on top.'
+  notes: "1) User Story: As a player I want the held item/hand to always render on top of the world (Minecraft-style)\
+    \ so the block in my hand is never hidden behind the ground.\n\n2) Technical Details: BUG regression\
+    \ of AC-0067 viewmodel-always-on-top (user 2026-08-23). Held item/hand/block still occluded by environment\
+    \ blocks instead of always-on-top. Re-investigate godot/player/player.gd viewmodel nodes (held_box,\
+    \ held_sprite, held_fist, voxel tools via core/held_mesh.gd) actually have no_depth_test / depth-disable.\
+    \ Was marked done with depth-disabled but user reports never worked in web+windows. Verify render\
+    \ shows held always on top.\n\n3) Closeout (2026-09-11, coordinator, implemented directly while the\
+    \ user collaborated):\n- Fix: no_depth_test = true on all viewmodel materials. AC-0067 had set only\n\
+    \  depth_draw_mode = DEPTH_DRAW_DISABLED, which stops the depth WRITE (and moves\n  the viewmodel\
+    \ to the transparent pass) but the depth TEST still ran, so the\n  held item was occluded whenever\
+    \ it poked behind terrain:\n  * godot/player/player.gd: hbmat (held box), fmat (fist), tool voxel\
+    \ material.\n  * godot/core/held_mesh.gd _base_mat(): source of the box/cross kind materials.\n  *\
+    \ Sprite3D: the node's no_depth_test is a no-op in this build - the test had\n    to be disabled on\
+    \ the MATERIAL (_vm_sprite_mat, also DEPTH_DRAW_DISABLED).\n  * Bonus bug found by the arm: the sprite's\
+    \ material_override DISCARDS the\n    Sprite3D's internal texture binding, so the held item sprite\
+    \ rendered as a\n    flat WHITE quad; _vm_sprite_mat now carries the tile (albedo_texture).\n- HELD_ITEM_SCALE\
+    \ 0.70 -> 0.33 (held block AND item sprite) per user request.\n- Verification (wallshot harness arm,\
+    \ xvfb/lavapipe, A/B with the pre-fix depth\n  state forced in place on the original materials; the\
+    \ viewmodel hand is 0.3 m\n  BEHIND the wall face, the user's occlusion scenario):\n  * Block: before\
+    \ block_vm_nonstone 68 (box fully occluded; ~68px = hotbar\n    frame sliver) vs after 16493 (whole\
+    \ box on top of the wall).\n  * Item: before item_vm_cyan 0 (sprite occluded) vs after 191 (diamond\
+    \ on top).\n  * Sanity: the wall stone fills ~91% of the frame in both runs.\n- Arm repairs (its assertions\
+    \ were vacuous since AC-0067):\n  1) _is_stone/_is_cyan compared 0-1 float Colors against 0-255 thresholds\n\
+    \     (c.r > 24 can never hold) -> /255 scale.\n  2) The \"0.5 m from the wall\" label was wrong -\
+    \ the player stood 1.5 m out and\n     the viewmodel was never behind the wall; now the face is 0.4\
+    \ m ahead of the\n     eye and the hand 0.3 m behind the face.\n  3) Meshing is worker-async: the\
+    \ arm awaits main._await_world_build (the fixed\n     40-frame wait no longer guaranteed the wall\
+    \ slab).\n  4) The forced pre-fix state must mutate the ORIGINAL material in place -\n     reassigning\
+    \ material_override to a fresh resource is not reflected in the\n     rendered output in this build\
+    \ (green-tint debug).\n  Evidence: .scratch/ac0097/ (4 PNGs + results.txt).\n- Built AweCraft-20260911-1254\
+    \ (exe sha256 1f331b1b..., byte-identical on :8080).\n  The user's own in-game test of a build containing\
+    \ the depth fix reported the\n  held item looks fine.\nDONE"
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549807'

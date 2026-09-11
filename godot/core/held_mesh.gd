@@ -70,6 +70,7 @@ static func cross_material() -> Material:
 static func _base_mat() -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	m.no_depth_test = true # AC-0097: held block always on top (AC-0067 only stopped the depth WRITE)
 	m.vertex_color_use_as_albedo = true
 	if Data.atlas_tex != null:
 		m.albedo_texture = Data.atlas_tex
