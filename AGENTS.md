@@ -25,6 +25,7 @@ Standing process → `godot/COORDINATOR.md` (trust builder light gates, coordina
 
 ## Task format
 When filing a task, `notes` must have two sections: `1) User Story` (high-level plain language what the change should accomplish for the player) + `2) Technical Details` (files/lines/AC refs, verify steps).
+All agents MUST mutate the task list only via `python3 tasks/scripts/tasks.py <cmd>`; raw edits to tasks/TASKS.yaml are forbidden (it is the single-writer API file).
 
 ## Task status
 Run `python3 tasks/scripts/tasks.py next` — `godot/CONTINUITY.md` §6 is authoritative. Report running servers with both `localhost` and LAN addresses.

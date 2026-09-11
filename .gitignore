@@ -11,3 +11,5 @@ gdext/.sconsign.dblite
 gdext/src/*.os
 gdext/bin/
 godot/bin/
+# task registry lock sidecar (created by tasks/scripts/tasks.py writers, AC-0254)
+tasks/.tasks.lock
