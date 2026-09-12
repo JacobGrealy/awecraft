@@ -1286,6 +1286,18 @@ func _settings_test() -> void:
 	Settings.set_value("render_dist", 5)
 	Settings.set_value("sim_dist", 9)
 	var sim_raise_ok := int(Settings.values["sim_dist"]) == 5
+	# AC-0263: the "mid LOD distance" (medium_start) — band (sim, render].
+	# Here: sim 5 / render 5 -> the band is empty (lo=hi=5+... the clamp
+	# resolves to render 5), so set sim back to 4 first for a sane band.
+	Settings.set_value("sim_dist", 4)
+	Settings.set_value("render_dist", 50)
+	var ms_def_ok := int(Settings.values["medium_start"]) == 8
+	Settings.set_value("medium_start", 4)  # at sim 4 the band floor is 5
+	var ms_clamp_lo_ok := int(Settings.values["medium_start"]) == 5
+	Settings.set_value("medium_start", 999)  # past render 50 -> clamps to 50
+	var ms_clamp_hi_ok := int(Settings.values["medium_start"]) == 50
+	Settings.set_value("medium_start", 30)  # back mid-band
+	var ms_set_ok := int(Settings.values["medium_start"]) == 30
 	var cfi := ConfigFile.new()
 	cfi.set_value("settings", "render_dist", 10)
 	cfi.set_value("settings", "sim_dist", 20)
@@ -1352,6 +1364,8 @@ func _settings_test() -> void:
 		"defaults": {"render": 50, "sim": 4, "ok": defaults_ok},  # AC-0152 default is 4 (the 1 literal was pre-AC-0152)
 		"range": {"min": 4, "max": 96, "min_ok": min_ok, "max_ok": max_ok},
 		"sim_clamp": {"set_ok": sim_set_ok, "render_lower_8to4": sim_lower_ok, "sim_raise_9at5": sim_raise_ok},
+		# AC-0263: the mid LOD distance (medium_start) default + band clamp.
+		"ms_clamp": {"default_8": ms_def_ok, "floor_sim5": ms_clamp_lo_ok, "ceil_render": ms_clamp_hi_ok, "set_mid": ms_set_ok},
 		"load_clamp": {"saved": [10, 20], "after_load": [10, 10], "ok": load_clamp_ok},
 		"apply": {"world": [10, 160], "dist": [7, 48], "ok": apply_world_ok and apply_dist_ok},
 		"volume_ok": volume_ok,
@@ -1359,7 +1373,7 @@ func _settings_test() -> void:
 		"chunks": {"default_3": chunks_default_ok, "set7_reloaded": chunks_saved_ok, "clamp_hi_100": chunks_hi_ok, "clamp_lo_1": chunks_lo_ok},
 		# AC-0232 (dither dropped in AC-0241): the fog slider round-trip + clamp.
 		"fog": {"default_87": fog_default_ok, "set60_reloaded": fog_saved_ok, "clamp_lo_0": fog_lo_ok},
-		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok,
+		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok,
 	})
 
 
@@ -6866,21 +6880,32 @@ func _r16_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
 	world.render_radius = maxi(world.render_radius, 16)
 	var rr: int = world.render_radius
-	# AC-0261: keep the zone logic sane at this radius — the Settings
-	# default (27, the midpoint for the default sim 4 / render 50) is
-	# past R=16 and would clamp to a degenerate band. Zones here:
-	# HIGH [0,4), MED [4,10), LOW [10,16), DATA-ONLY >= 16.
+	# AC-0261 (AC-0263): keep the zone logic sane at this radius — the
+	# Settings default (27, the midpoint for the default sim 4 / render
+	# 50) is past R=16 and would clamp to a degenerate band. Zones here:
+	# HIGH [0,4) (per-slab), MED [4,10), LOW [10,16), DATA-ONLY >= 16.
+	# AC-0263: medium_start must stay > sim_dist (the medium band's floor
+	# is sim+1), so the arm's historic [0,4) high band pins sim at 2 and
+	# medium_start at 4 explicitly.
+	Settings.values["sim_dist"] = 2
+	Settings.values["medium_start"] = 4
+	Settings.clamp_medium_start()
 	Settings.values["low_start"] = 10
-	world.apply_low_start()
+	Settings.apply_sim_distance()
+	Settings.apply_medium_start()
+	Settings.apply_low_start()
 	world.recenter(spawn.x, spawn.z, true, spawn.y)  # AC-0234: seed the window Y
 	var pcx := int(floorf(spawn.x / 16.0))
 	var pcz := int(floorf(spawn.z / 16.0))
 	var passes0 := int(world.perf_cull_passes)
 	var flips0 := int(world.perf_cull_flips)
 	var build_t0 := Time.get_ticks_msec()
-	# AC-0261 16-radius build: the HIGH band (taxi < band0_r) fully high +
-	# the visible band [band0_r, rr) drained by the disc-ordered slab wave
-	# (the band's avg LOD is FINAL there — nothing past rr ever meshes).
+	# AC-0261 (AC-0263) 16-radius build: the HIGH band (taxi <
+	# medium_start_r) fully high — PER-SLAB (every slab <= top lands, the
+	# (layer, taxi) order; mesh_built flips when the probe owes nothing)
+	# + the visible band [medium_start_r, rr) drained by the disc-ordered
+	# slab wave (the band's avg LOD is FINAL there — nothing past rr ever
+	# meshes).
 	# 25-min wall cap: on a stall the arm proceeds (reported, not fatal).
 	var frames := 0
 	var max_frames := 400000
@@ -6903,8 +6928,9 @@ func _r16_test(spawn: Vector3) -> void:
 				var taxi := absi(int(c.cx) - pcx) + absi(int(c.cz) - pcz)
 				if taxi >= rr:
 					continue
-				if taxi < int(world.band0_r):
-					# the high band: a full high mesh is owed
+				if taxi < int(world.medium_start_r):
+					# the high band: a full high mesh is owed (AC-0263:
+					# per-slab — mesh_built means every slab <= top landed)
 					total_sq += 1
 					if c.mesh_built:
 						built_n += 1
@@ -7051,6 +7077,17 @@ func _r16_test(spawn: Vector3) -> void:
 		"radius": rr,
 		"low_start_eff": int(world.low_start_r),
 		"band0_eff": int(world.band0_r),
+		# AC-0263: the high/med boundary (the per-slab high band's edge)
+		# + the per-slab / full first-build dispatch evidence + the
+		# section-first order contract (the tier-0 section completed
+		# before the wave's first low attach).
+		"medium_start_eff": int(world.medium_start_r),
+		"hslab_n": int(world._tm_hslab_n),
+		"full_firstbuild_n": int(world._tm_full_firstbuild_n),
+		"section_done_frame": int(world._hslab_section_done_frame),
+		"low_first_frame": int(world._low_first_attach_frame),
+		"section_first_ok": int(world._hslab_section_done_frame) >= 0 \
+				and int(world._low_first_attach_frame) >= int(world._hslab_section_done_frame),
 		# AC-0225: the handoff cap in force for this run (the
 		# "chunks_per_frame" setting / AWECRAFT_TM_HO preload).
 		"ho_cap": int(world.stream_ho_cap),
@@ -7524,10 +7561,11 @@ func _r16_lod_far() -> Dictionary:
 # high completions), with only the just-landed chunks still at fog.
 func _r16_lod_inr() -> Dictionary:
 	# AC-0261: the cap-less contract — an in-edge non-air slab of a
-	# not-yet-meshed chunk is LOW (the visible band [band0_r, rr), covered
-	# by the slab wave), PENDING (the chunk holds a queue entry — the
-	# expected in-flight state; the HIGH band [0, band0_r) has NO
-	# placeholders at all — pending renders nothing until the high build),
+	# not-yet-meshed chunk is LOW (the visible band [medium_start_r, rr),
+	# covered by the slab wave), PENDING (the chunk holds a queue entry —
+	# the expected in-flight state; the HIGH band [0, medium_start_r) has
+	# NO placeholders at all — pending renders nothing until the high
+	# per-slab builds land),
 	# or a HOLE (neither meshed nor queued — lost work, must stay 0).
 	var n := 0
 	var slabs := 0
@@ -8001,11 +8039,12 @@ func _r16_lod_slabcheck() -> Dictionary:
 
 
 # AC-0261: the med/low AVERAGE-COLOR LADDER arm (AWECRAFT_LOGIC=ladder).
-# A small world (render radius 8, sim/high band0_r = 4, taxi metric —
-# "render distance is the max value for everything that is rendered").
-# The VISIBLE BAND [band0_r, render_radius) holds the placeholder slabs:
-#   HIGH [0, 4) = the build lane (full meshes, no placeholder);
-#   MED (8x8x8, cell 2) = [band0_r, low_start);  LOW (4x4x4, cell 4) =
+# A small world (render radius 8, sim 2 / high medium_start_r = 4, taxi
+# metric — "render distance is the max value for everything that is
+# rendered"). The VISIBLE BAND [medium_start_r, render_radius) holds the
+# placeholder slabs:
+#   HIGH [0, 4) = the build lane (PER-SLAB full meshes, no placeholder);
+#   MED (8x8x8, cell 2) = [medium_start_r, low_start);  LOW (4x4x4, cell 4) =
 #   [low_start, render_radius);  taxi >= render_radius = DATA-ONLY (no mesh).
 # Evidence:
 #   (a) a NEAR band slab (small taxi) is tier 1 with the MED mesh signature
@@ -8049,16 +8088,24 @@ func _ladder_test(spawn: Vector3) -> void:
 	var R := 8
 	world.fluid_sim_enabled = false
 	world.render_radius = R
-	# AC-0261: deterministic high band (independent of the saved sim_dist).
-	world.band0_r = 4
+	# AC-0261 (AC-0263): deterministic zones (independent of the saved
+	# settings) — HIGH [0,4) PER-SLAB, MED [4,6), LOW [6,8), DATA-ONLY >= 8.
+	# medium_start must stay > sim_dist, so the arm pins sim 2 + medium
+	# start 4 explicitly (the sim square shrinks to 2 — the ladder's mesh
+	# assertions don't depend on it).
+	Settings.values["sim_dist"] = 2
+	Settings.values["medium_start"] = 4
+	Settings.clamp_medium_start()
+	Settings.apply_sim_distance()
+	Settings.apply_medium_start()
 	# (a/b) initial boundary: MED = [4, 6) (band taxi 4-5), LOW = [6, 8)
 	# (band taxi 6-7); taxi >= 8 = data-only.
 	Settings.values["low_start"] = 6
-	world.apply_low_start()
+	Settings.apply_low_start()
 	res["low_start_eff0"] = int(world.low_start_r)
 	world.recenter(spawn.x, spawn.z, true)
 	# Phase 1: let the HIGH band build (data lands first, then the high
-	# meshes — only taxi < band0_r ever gets a high mesh).
+	# meshes — only taxi < medium_start_r ever gets a high mesh, per-slab).
 	var t0 := Time.get_ticks_msec()
 	while Time.get_ticks_msec() - t0 < 150000:
 		await get_tree().physics_frame
@@ -8293,8 +8340,9 @@ func _ladder_test(spawn: Vector3) -> void:
 	get_tree().quit()
 
 
-# AC-0261: true when the HIGH band (taxi < band0_r) is (largely) built —
-# only the high band ever gets a high mesh; the visible band is slab-wave.
+# AC-0261 (AC-0263): true when the HIGH band (taxi < medium_start_r) is
+# (largely) built — only the high band ever gets a high mesh (per-slab:
+# mesh_built = every slab <= top landed); the visible band is slab-wave.
 func _ladder_band_built() -> bool:
 	var pcx := int(world.last_pcx)
 	var pcz := int(world.last_pcz)
@@ -8304,7 +8352,7 @@ func _ladder_band_built() -> bool:
 		var c: Node3D = world.chunks[key]
 		var dx := int(c.cx) - pcx
 		var dz := int(c.cz) - pcz
-		if absi(dx) + absi(dz) >= int(world.band0_r):
+		if absi(dx) + absi(dz) >= int(world.medium_start_r):
 			continue
 		if int(c.band) > 2:
 			continue
@@ -8314,11 +8362,12 @@ func _ladder_band_built() -> bool:
 	return total > 0 and built >= total * 0.9
 
 
-# AC-0261: is this chunk in the visible band [band0_r, render_radius) —
-# the only region that holds MED/LOW placeholder slabs?
+# AC-0261 (AC-0263): is this chunk in the visible band
+# [medium_start_r, render_radius) — the only region that holds MED/LOW
+# placeholder slabs?
 func _ladder_in_band(dx: int, dz: int) -> bool:
 	var taxi := absi(dx) + absi(dz)
-	return taxi >= int(world.band0_r) and taxi < int(world.render_radius)
+	return taxi >= int(world.medium_start_r) and taxi < int(world.render_radius)
 
 
 # AC-0252: the MED/LOW mesh signature — vertex-color, NO UVs, every quad
@@ -9048,9 +9097,11 @@ func _wprof_test(spawn: Vector3) -> void:
 	world.recenter(spawn.x, spawn.z, true, spawn.y)
 	var pcx := int(floorf(spawn.x / 16.0))
 	var pcz := int(floorf(spawn.z / 16.0))
-	# AC-0261 r16 settle: the HIGH band (taxi < band0_r) fully meshed +
-	# the visible band [band0_r, rr) drained by the slab wave (25-min wall
-	# cap: on a stall the arm proceeds with the partial build).
+	# AC-0261 (AC-0263) r16 settle: the HIGH band (taxi < medium_start_r)
+	# fully meshed — per-slab (mesh_built = every slab <= top landed) —
+	# + the visible band [medium_start_r, rr) drained by the slab wave
+	# (25-min wall cap: on a stall the arm proceeds with the partial
+	# build).
 	if prof_r == "":
 		Settings.values["low_start"] = 10
 	world.apply_low_start()
@@ -9086,7 +9137,7 @@ func _wprof_test(spawn: Vector3) -> void:
 				var taxi := absi(int(c.cx) - pcx) + absi(int(c.cz) - pcz)
 				if taxi >= rr:
 					continue
-				if taxi < int(world.band0_r) and not c.mesh_built:
+				if taxi < int(world.medium_start_r) and not c.mesh_built:
 					built_all = false
 					break
 			if built_all and world.band_drained():
@@ -14425,8 +14476,9 @@ func _tick_md5(arr: PackedByteArray) -> String:
 
 func _load_test(spawn: Vector3) -> void:
 	# AC-0178: first-load wall probe at R=50 (AC-0261 semantics): t0 = the
-	# recenter that starts streaming; done = the HIGH band (taxi < band0_r)
-	# fully meshed + the visible band [band0_r, R) drained by the slab wave
+	# recenter that starts streaming; done = the HIGH band
+	# (taxi < medium_start_r, per-slab) fully meshed + the visible band
+	# [medium_start_r, R) drained by the slab wave
 	# (its avg LOD is FINAL there) + both worker pools drained.
 	# AWECRAFT_LOADBYPASS=0 runs the SAME arm under the legacy spread drain
 	# (start_loading no-ops) — the A/B baseline. Counts are the real

@@ -48,9 +48,19 @@ const DEFAULTS := {
 	# clamp_low_start_to_render re-defaults out-of-band stored values to
 	# the band midpoint.
 	"low_start": 27,
+	# AC-0263: where the MED LOD begins (taxi chunks) — the HIGH band's
+	# outer edge. HIGH = [0, medium_start) now (per-slab builds, tier-0
+	# ball = the full column); MED (8x8x8) = [medium_start, low_start);
+	# LOW (4x4x4) = [low_start, render_dist]. MUST be > sim_dist (the sim
+	# distance no longer controls world generation — it only gates mob /
+	# fluid updates); clamp_medium_start enforces the band (sim, render].
+	# Default 8 = high detail clearly past the default sim 4 (~3.5x the
+	# old high-band chunk count).
+	"medium_start": 8,
 	# AC-0257 (Developer submenu): the tier-0 Chebyshev radius around the
-	# player column — columns this close go FULL COLUMN straight to high
-	# (default 0 = the player column only, the existing behavior).
+	# player column — columns this close get the tier-0 SECTION: their
+	# full columns build (slab-by-slab from the player's Y, fanning
+	# down/up) and the section completes before any other LOD starts.
 	"tier0_radius": 0,
 	# AC-0257: worker-thread in-flight caps. 0 = auto (scale to all
 	# available cores, never past — gen/mesh split 40/60); >0 = the
@@ -85,6 +95,7 @@ func load_settings() -> Dictionary:
 		if cf.has_section_key("settings", k):
 			_clamp(k, cf.get_value("settings", k))
 	clamp_sim_to_render()
+	clamp_medium_start()
 	clamp_low_start_to_render()
 	return values
 
@@ -94,13 +105,27 @@ func clamp_sim_to_render() -> void:
 		values["sim_dist"] = int(values["render_dist"])
 
 
-# AC-0261: low_start lives inside the visible band [sim, render] — MED =
-# [sim, low_start), LOW = [low_start, render]; nothing renders past the
-# render distance. A stored value outside the band (the old far-ring
-# default 58) re-defaults to the band MIDPOINT (clamping to the edge
-# would silently cancel the LOW band).
+# AC-0263: medium_start lives in the band (sim, render] — it MUST be
+# strictly above the sim distance (high visuals extend past the sim
+# distance, which no longer controls world generation) and can't outrun
+# the render edge. A stored value outside the band (or a degenerate
+# sim >= render world) re-defaults to 8 re-clamped into the band.
+func clamp_medium_start() -> void:
+	var lo := mini(int(values["sim_dist"]) + 1, int(values["render_dist"]))
+	var hi := int(values["render_dist"])
+	var ms := int(values["medium_start"])
+	if ms < lo or ms > hi:
+		values["medium_start"] = clampi(8, lo, hi)
+
+
+# AC-0261 (AC-0263): low_start lives inside the visible band [medium,
+# render] — MED = [medium_start, low_start), LOW = [low_start, render];
+# nothing renders past the render distance (the MED floor moved from the
+# sim distance to medium_start in AC-0263). A stored value outside the
+# band re-defaults to the band MIDPOINT (clamping to the edge would
+# silently cancel the LOW band).
 func clamp_low_start_to_render() -> void:
-	var lo := mini(int(values["sim_dist"]), int(values["render_dist"]))
+	var lo := mini(int(values["medium_start"]), int(values["render_dist"]))
 	var hi := int(values["render_dist"])
 	var ls := int(values["low_start"])
 	if ls < lo or ls > hi:
@@ -115,6 +140,10 @@ func _clamp(k: String, v) -> void:
 			values[k] = clampi(int(v), SIM_MIN, RENDER_MAX)
 		# AC-0252: the med/low band split distance (taxi chunks).
 		"low_start":
+			values[k] = clampi(int(v), 2, RENDER_MAX)
+		# AC-0263: the high/med band split distance (taxi chunks); the
+		# (sim, render] band clamp runs in clamp_medium_start.
+		"medium_start":
 			values[k] = clampi(int(v), 2, RENDER_MAX)
 		"volume":
 			values[k] = roundi(clampf(float(v), 0.0, 100.0))
@@ -158,6 +187,7 @@ func _clamp(k: String, v) -> void:
 func set_value(k: String, v) -> void:
 	_clamp(k, v)
 	clamp_sim_to_render()
+	clamp_medium_start()  # AC-0263: the sim/render change moves its band
 	clamp_low_start_to_render()
 	save()
 
@@ -199,8 +229,13 @@ func apply_world() -> void:
 		# AC-0239: the sim radius is the streaming tier-1 boundary - re-stamp.
 		if Game.world.has_method("note_sim_distance"):
 			Game.world.note_sim_distance()
+		# AC-0263: the sim distance is no longer a world-gen boundary —
+		# the medium_start band (sim, render] moved, so re-clamp + re-stamp
+		# the high/med edge, then the low-start floor.
+		clamp_medium_start()
+		apply_medium_start()
 		# AC-0252: the band boundary follows the radii (the low-start
-		# clamp depends on band0_r / render_radius).
+		# clamp depends on medium_start / render_radius).
 		if Game.world.has_method("apply_low_start"):
 			Game.world.apply_low_start()
 
@@ -212,6 +247,10 @@ func apply_render_distance() -> void:
 		if Game.player != null:
 			Game.world.recenter(Game.player.position.x, Game.player.position.z)
 		Game.world.note_render_distance(prev)  # AC-0178: Options render_distance trigger
+		# AC-0263: the render edge moved — re-clamp the medium_start band
+		# and re-stamp the high/med edge, then the low-start floor.
+		clamp_medium_start()
+		apply_medium_start()
 		# AC-0252: the band boundary re-clamps against the new render edge.
 		if Game.world.has_method("apply_low_start"):
 			Game.world.apply_low_start()
@@ -225,7 +264,12 @@ func apply_sim_distance() -> void:
 		# the tier order (the has_method guard keeps the _StubWorld arm clean).
 		if Game.world.has_method("note_sim_distance"):
 			Game.world.note_sim_distance()
-		# AC-0252: the low-start floor is the sim radius - re-clamp the band.
+		# AC-0263: the sim distance left world generation — it only moves
+		# the medium_start band's FLOOR (must stay > sim), so re-clamp +
+		# re-stamp the high/med edge when the floor changed.
+		clamp_medium_start()
+		apply_medium_start()
+		# AC-0252: the low-start floor is the medium_start now - re-clamp.
 		if Game.world.has_method("apply_low_start"):
 			Game.world.apply_low_start()
 
@@ -237,6 +281,16 @@ func apply_low_start() -> void:
 	if Game.world != null:
 		if Game.world.has_method("apply_low_start"):
 			Game.world.apply_low_start()
+
+
+# AC-0263: the "mid LOD distance" (medium_start) changed — the HIGH band's
+# outer edge. The world reads it live (medium_start_r) and re-stamps the
+# queue's tier/band stamps (the has_method guard keeps the _StubWorld arm
+# clean). Runs after clamp_medium_start, so the value is always in band.
+func apply_medium_start() -> void:
+	if Game.world != null:
+		if Game.world.has_method("note_medium_start"):
+			Game.world.note_medium_start()
 
 
 # AC-0257 (Developer submenu): the tier-0 radius changed — the world re-stamps

@@ -470,6 +470,31 @@ theme_override_font_sizes/font_size = 15
 custom_minimum_size = Vector2(44, 0)
 horizontal_alignment = 2
 
+[node name="MidStartRow" type="HBoxContainer" parent="Layer/OptionsBox/Center/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="RowLabel" type="Label" parent="Layer/OptionsBox/Center/VBox/MidStartRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+custom_minimum_size = Vector2(170, 0)
+text = "Mid LOD start"
+
+[node name="MidStartSlider" type="HSlider" parent="Layer/OptionsBox/Center/VBox/MidStartRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 24)
+min_value = 5.0
+max_value = 50.0
+step = 1.0
+value = 8.0
+
+[node name="MidStartVal" type="Label" parent="Layer/OptionsBox/Center/VBox/MidStartRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+custom_minimum_size = Vector2(44, 0)
+horizontal_alignment = 2
+
 [node name="LowStartRow" type="HBoxContainer" parent="Layer/OptionsBox/Center/VBox"]
 layout_mode = 2
 theme_override_constants/separation = 10
@@ -569,6 +594,7 @@ text = "Back"
 [connection signal="value_changed" from="Layer/OptionsBox/Center/VBox/FlightRow/FlightSlider" to="." method="_on_flight_changed"]
 [connection signal="value_changed" from="Layer/OptionsBox/Center/VBox/ChunkRow/ChunkSlider" to="." method="_on_chunk_changed"]
 [connection signal="value_changed" from="Layer/OptionsBox/Center/VBox/FogStartRow/FogStartSlider" to="." method="_on_fogstart_changed"]
+[connection signal="value_changed" from="Layer/OptionsBox/Center/VBox/MidStartRow/MidStartSlider" to="." method="_on_midstart_changed"]
 [connection signal="value_changed" from="Layer/OptionsBox/Center/VBox/LowStartRow/LowStartSlider" to="." method="_on_lowstart_changed"]
 [connection signal="item_selected" from="Layer/OptionsBox/Center/VBox/ResRow/ResOption" to="." method="_on_res_selected"]
 [connection signal="toggled" from="Layer/OptionsBox/Center/VBox/FullscreenCheck" to="." method="_on_full_toggled"]

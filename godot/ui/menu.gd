@@ -51,6 +51,13 @@ var fogstart_val: Label
 # everything closer; the low band runs out to the render edge).
 var lowstart_slider: HSlider
 var lowstart_val: Label
+# AC-0263: the "mid LOD distance" slider — the distance (taxi chunks)
+# where the MED avg-color band BEGINS, i.e. the HIGH band's outer edge.
+# The high band [0, medium_start) builds full-res per-slab (the tier-0
+# ball's columns first); the value must stay > the sim distance (which
+# no longer controls world generation).
+var midstart_slider: HSlider
+var midstart_val: Label
 # AC-0260: the "Developer" TAB of the options panel (tier-0 radius + the
 # worker-thread caps; the per-frame instance cap row moves here from the
 # Settings page). No checkbox: it is a TabContainer page.
@@ -133,6 +140,8 @@ func _ready() -> void:
 	fogstart_val = get_node("Layer/OptionsBox/Center/VBox/FogStartRow/FogStartVal")
 	lowstart_slider = get_node("Layer/OptionsBox/Center/VBox/LowStartRow/LowStartSlider")
 	lowstart_val = get_node("Layer/OptionsBox/Center/VBox/LowStartRow/LowStartVal")
+	midstart_slider = get_node("Layer/OptionsBox/Center/VBox/MidStartRow/MidStartSlider")
+	midstart_val = get_node("Layer/OptionsBox/Center/VBox/MidStartRow/MidStartVal")
 	var opt_vbox := get_node("Layer/OptionsBox/Center/VBox")
 	debug_check = CheckBox.new()
 	debug_check.name = "DebugStatsCheck"
@@ -533,18 +542,27 @@ func _on_render_changed(v: float) -> void:
 	Settings.apply_sim_distance()
 
 
-# AC-0261: the low-start slider spans the visible LOD band [sim, render]:
-# MED = [sim, low_start), LOW = [low_start, render]; nothing renders past
-# the render distance. Re-clamp the value into the band.
+# AC-0261 (AC-0263): the band sliders span the visible LOD bands —
+# HIGH = [0, medium_start), MED = [medium_start, low_start), LOW =
+# [low_start, render]; nothing renders past the render distance. The
+# mid-start band is (sim, render] (high extends past the sim distance,
+# which no longer controls world generation); the low-start band is
+# [medium_start, render]. Re-clamp the values into the bands.
 func _sync_lowstart_range() -> void:
 	var lr := int(Settings.values["render_dist"])
-	var lo := mini(int(Settings.values["sim_dist"]), lr)
+	var mlo := mini(int(Settings.values["sim_dist"]) + 1, lr)
+	var mhi := lr
+	var lo := mini(int(Settings.values["medium_start"]), lr)
 	var hi := lr
 	_syncing = true
+	midstart_slider.min_value = float(mlo)
+	midstart_slider.max_value = float(mhi)
+	midstart_slider.value = float(clampi(int(Settings.values["medium_start"]), mlo, mhi))
 	lowstart_slider.min_value = float(lo)
 	lowstart_slider.max_value = float(hi)
 	lowstart_slider.value = float(clampi(int(Settings.values["low_start"]), lo, hi))
 	_syncing = false
+	midstart_val.text = str(int(midstart_slider.value))
 	lowstart_val.text = str(int(lowstart_slider.value))
 
 
@@ -560,7 +578,10 @@ func _on_sim_changed(v: float) -> void:
 	sim_val.text = str(s)
 	Settings.set_value("sim_dist", s)
 	Settings.apply_sim_distance()
-	# AC-0261: the low-start band starts at the sim distance.
+	# AC-0263: the sim change moves the mid-start band floor (must stay
+	# > sim) — re-clamp + re-stamp via the apply, then sync both sliders.
+	Settings.clamp_medium_start()
+	Settings.apply_medium_start()
 	_sync_lowstart_range()
 
 
@@ -627,10 +648,27 @@ func _on_fogstart_changed(v: float) -> void:
 # _sync_lowstart_range, so the drag value is already in band (the clampi
 # is belt-and-braces) — no slider-range rewrite here (the old far-ring
 # rewrite is what made the value jump out of band on every click).
+# AC-0263: the "mid LOD distance" — the HIGH band's outer edge (taxi
+# chunks). Band (sim, render]: high visuals extend past the sim distance
+# (which only gates mob/fluid updates now). set_value re-clamps both the
+# mid-start band and the low-start floor; the world re-stamps the queue.
+func _on_midstart_changed(v: float) -> void:
+	if _syncing:
+		return
+	var lo := mini(int(Settings.values["sim_dist"]) + 1, int(Settings.values["render_dist"]))
+	var hi := int(Settings.values["render_dist"])
+	var s := clampi(int(v), lo, hi)
+	midstart_val.text = str(s)
+	Settings.set_value("medium_start", s)
+	Settings.apply_medium_start()
+	# the low-start floor moved with the mid-start — re-sync its range.
+	_sync_lowstart_range()
+
+
 func _on_lowstart_changed(v: float) -> void:
 	if _syncing:
 		return
-	var lo := mini(int(Settings.values["sim_dist"]), int(Settings.values["render_dist"]))
+	var lo := mini(int(Settings.values["medium_start"]), int(Settings.values["render_dist"]))
 	var hi := int(Settings.values["render_dist"])
 	var s := clampi(int(v), lo, hi)
 	lowstart_val.text = str(s)

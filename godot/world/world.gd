@@ -172,6 +172,15 @@ var fluid_tick_radius := 14
 # placeholder (see the AC-0231 block below: per-slab fog boxes on landing
 # + the per-slab 4x4x4 textured low with repeating UVs).
 var band0_r := 4
+# AC-0263: the HIGH band's outer edge (taxi chunks) — where the MED LOD
+# begins. HIGH = [0, medium_start_r) builds full-res per-slab (the tier-0
+# ball's columns first, in the dedicated section); the avg-LOD wave owns
+# [medium_start_r, render_radius). This is the world-gen boundary that
+# band0_r used to be: band0_r (the sim distance) no longer controls world
+# generation — it only gates mob/fluid simulation (collision band 0, the
+# data tier-1 priority square, mob spawn). Settings "medium_start"
+# (must be > sim distance); harness override AWECRAFT_MEDIUM_START.
+var medium_start_r := 8
 var band1_r := 96
 var collision_enabled := true
 var chunks := {}
@@ -539,6 +548,90 @@ func _entry_best_pending_cached(c: Node3D) -> int:
 	_low_probe_cache[key] = {"si": si, "f": f}
 	return si
 
+# AC-0263: the per-slab HIGH pending probe — the full-res build lane's
+# "what does this column still owe". A slab is pending-high while it
+# holds data (data[si] != null — ungenerated null slabs are not work yet),
+# it sits at or below the top slab (above the top is all air and never
+# meshed), and its completion stamp does not match the current data_gen
+# (a data landing — gen or edit — re-pends the slab). Same fan walk as
+# the low probe: the player's Y slab first, then down/up — the (layer,
+# taxi) bake order's layer. -1 = the column owes nothing (high-complete;
+# an all-air column's probe is -1 too, so mesh_built can flip).
+func _hslab_best_pending(c: Node3D) -> int:
+	if c == null or c.data.is_empty() or int(c.top) < 0:
+		return -1
+	var pys := _player_slab()
+	var lim: int = mini(int(c.top) >> 4, c.data.size() - 1)
+	for r in range(c.data.size() * 2):
+		var dy: int
+		if r == 0:
+			dy = 0
+		elif r % 2 == 1:
+			dy = -(r + 1) / 2
+		else:
+			dy = r / 2
+		var si := pys + dy
+		if si < 0 or si > lim:
+			continue
+		if c.data[si] == null:
+			continue
+		if int(c.high_stamps.get(si, -1)) == int(c.data_gen):
+			continue  # done at this data
+		return si
+	return -1
+
+# AC-0262/AC-0263: the high probe's per-chunk cache — the same fingerprint
+# shape as the low probe's ([data_gen, fl_gen, player-Y slab, live tier]);
+# a hit is 4 int compares + one single-slab stamp re-check. A cached si
+# stays valid until it LANDS (re-check fails -> rescan finds the next) or
+# the fingerprint moves (a data landing bumps data_gen); a cached -1
+# stays valid until the fingerprint moves (completions remove pendingness,
+# they never add a closer pending slab). Landing sites call
+# _hslab_probe_invalidate defensively (the re-check already covers them).
+var _hslab_probe_cache: Dictionary = {}
+
+func _hslab_probe_invalidate(c: Node3D) -> void:
+	_hslab_probe_cache.erase(_key(int(c.cx), int(c.cz)))
+
+func _hslab_best_pending_cached(c: Node3D) -> int:
+	var key := _key(int(c.cx), int(c.cz))
+	var f: Array = [int(c.data_gen), int(c.fl_gen), _player_slab(),
+		_lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)]
+	var ck = _hslab_probe_cache.get(key, null)
+	if ck != null:
+		var cf: Array = ck["f"]
+		if cf[0] == f[0] and cf[1] == f[1] and cf[2] == f[2] and cf[3] == f[3]:
+			var si0: int = int(ck["si"])
+			if si0 < 0:
+				return -1
+			if si0 < c.data.size() and c.data[si0] != null \
+					and int(c.high_stamps.get(si0, -1)) != int(c.data_gen):
+				return si0  # still pending -> still the best (see above)
+		_hslab_probe_cache.erase(key)
+	if _hslab_probe_cache.size() > 8000:
+		_hslab_probe_cache.clear()  # eviction safety (bounded working set)
+	var si := _hslab_best_pending(c)
+	_hslab_probe_cache[key] = {"si": si, "f": f}
+	return si
+
+# AC-0263: the TIER-0 SECTION gate — true when every tier-0 column (the
+# Chebyshev ball around the player column) owes no high slab: the section
+# is complete and the wave (med/low) may start. A no-DATA tier-0 column
+# is NOT drained — its build starts the moment its data lands, and the
+# section (not the wave) owns it (the wave waits the ~500 ms the data
+# lane needs; the startup burst makes this a no-op at spawn). The ball is
+# tiny (tier0_radius 0 = 1 column, the max 8 = 289) and the per-chunk
+# probe cache keeps the live walk near-free.
+func _tier0_section_drained() -> bool:
+	for dx in range(-tier0_r, tier0_r + 1):
+		for dz in range(-tier0_r, tier0_r + 1):
+			var c = chunks.get(_key(last_pcx + dx, last_pcz + dz))
+			if c == null or c.data.is_empty():
+				return false
+			if _hslab_best_pending_cached(c) >= 0:
+				return false
+	return true
+
 # AC-0257: the (layer, taxi) BAKE SCORE — the order the drain picks and
 # the low lanes walk: the Y-layer of the entry's best pending slab first
 # (a no-data/gen entry is layer 0 — the player's slab is the first the
@@ -550,11 +643,24 @@ func _grid_score(e: Dictionary) -> float:
 	var dz := int(e["cz"]) - last_pcz
 	var layer := 0
 	var c = chunks.get(e["key"])
+	# AC-0263: the pending probe is per-lane — the HIGH band (the per-slab
+	# full-res builds: taxi < medium_start_r, plus the tier-0 ball, which
+	# outruns the edge in its corners) probes the HIGH completion stamps;
+	# the wave band [medium_start_r, render_radius) probes the low/fog
+	# state (the AC-0262 cached probe).
+	var in_high := c != null and (absi(dx) + absi(dz) < medium_start_r or _is_tier0_col(dx, dz))
 	if c != null and not c.data.is_empty():
-		var si := _entry_best_pending_cached(c)  # AC-0262: probe cache
+		var si: int = _hslab_best_pending_cached(c) if in_high else _entry_best_pending_cached(c)
 		if si >= 0:
 			layer = _layer_rank_of(si)
-	return float(layer) * 10000.0 + float(absi(dx) + absi(dz))
+	var s := float(layer) * 10000.0 + float(absi(dx) + absi(dz))
+	# AC-0263: the TIER-0 SECTION — the ball's slabs build in their own
+	# phase (fanned from the player's Y), fully complete, before ANY ring
+	# slab (high or wave) starts: the prefix puts every tier-0 slab below
+	# every non-tier-0 slab at equal (layer, taxi).
+	if _is_tier0_col(dx, dz):
+		s -= 1e10
+	return s
 
 # AC-0257: the AC-0233 _tier_score ((sim-tier, taxi) pick order) is gone —
 # replaced by _grid_score (the (layer, taxi) bake order). _tier_of / the
@@ -580,6 +686,18 @@ func _tier_stamp(e: Dictionary) -> void:
 # move re-stamps the queue (Settings.apply_sim_distance / apply_world
 # call this; mirrors the apply_render_distance kick path).
 func note_sim_distance() -> void:
+	_rescore_kick()
+
+# AC-0263: the "mid LOD distance" (Settings "medium_start") changed — the
+# HIGH band's outer edge moved. Entries crossing the edge change their
+# band tier, so re-stamp the queue's stamps and invalidate the wave's
+# cached none-verdicts (the live tier is recomputed at probe time, so the
+# boundary itself needs no stamp — the kick covers the ordering).
+func note_medium_start() -> void:
+	medium_start_r = maxi(0, int(Settings.values.get("medium_start", 8)))
+	_low_none_key = ""
+	_low_slab_none_key = ""
+	_low_inr_invalidate()
 	_rescore_kick()
 
 func _rescore_kick() -> void:
@@ -1361,16 +1479,19 @@ func _lod_avg_mat() -> ShaderMaterial:
 		_lod_avg_material.set_shader_parameter("day", Color(1.0, 1.0, 1.0))
 	return _lod_avg_material
 
-# AC-0261: the LOD zone of a chunk at (dx, dz) from the player column,
-# taxi metric (the render edge is taxi too — "render distance is the max
-# value for everything that is rendered"): 0 = HIGH band [0, band0_r) —
-# the build lane owns it (pending renders NOTHING, no placeholder of any
-# kind); 1 = MED (8x8x8) [band0_r, low_start_r); 2 = LOW (4x4x4)
-# [low_start_r, render_radius); 3 = DATA-ONLY [render_radius, ring edge)
-# — nothing renders past the render distance.
+# AC-0261 (AC-0263): the LOD zone of a chunk at (dx, dz) from the player
+# column, taxi metric (the render edge is taxi too — "render distance is
+# the max value for everything that is rendered"): 0 = HIGH band
+# [0, medium_start_r) — the build lane owns it (pending renders NOTHING,
+# no placeholder of any kind); 1 = MED (8x8x8) [medium_start_r,
+# low_start_r); 2 = LOW (4x4x4) [low_start_r, render_radius); 3 =
+# DATA-ONLY [render_radius, ring edge) — nothing renders past the render
+# distance. AC-0263: the high band's edge is the "mid LOD distance"
+# (medium_start_r) — band0_r (the sim distance) no longer controls world
+# generation (mobs/fluids only).
 func _lod_tier_of(dx: int, dz: int) -> int:
 	var taxi := absi(dx) + absi(dz)
-	if taxi < band0_r:
+	if taxi < medium_start_r:
 		return 0
 	if taxi < low_start_r:
 		return 1
@@ -1402,16 +1523,17 @@ func note_tier0_radius() -> void:
 
 # AC-0261: the user setting (Settings "low_start", taxi chunks) takes
 # effect. The med/low split lives INSIDE the render distance: MED (8x8x8)
-# owns [band0_r, low_start_r), LOW (4x4x4) owns [low_start_r, render_radius);
-# the high band [0, band0_r) is full-fidelity (the build lane) and nothing
-# renders past the render distance. The effective boundary is clamped to
-# [band0_r, render_radius] — between the simulation distance and the
-# render distance, never outside either. A boundary move re-stales every
+# owns [medium_start_r, low_start_r), LOW (4x4x4) owns [low_start_r,
+# render_radius); the high band [0, medium_start_r) is full-fidelity per-
+# slab (the build lane) and nothing renders past the render distance.
+# The effective boundary is clamped to [medium_start_r, render_radius]
+# (AC-0263: the floor moved from the sim distance to the mid LOD
+# distance, which the settings clamp keeps above the sim distance). A boundary move re-stales every
 # live low slab whose tier changed (the pending walks compare c.low_tiers
 # against the LIVE tier), so invalidate the cached none-verdicts and
 # re-stamp the queue.
 func apply_low_start() -> void:
-	var lo := band0_r
+	var lo := medium_start_r
 	var hi := render_radius
 	if lo > hi:
 		lo = hi
@@ -2301,6 +2423,8 @@ func _low_handoff(e: Dictionary, res) -> void:
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _low_surface(res["v"], res["i"], res["n"], res["c"]))
 		low_max_h = maxf(low_max_h, float(res.get("mh", 0.0)))
 		_low_place_slab(c, si, mesh)
+		if _low_first_attach_frame < 0:
+			_low_first_attach_frame = Time.get_ticks_msec()  # AC-0263: section-first evidence
 		_fog_drop_slab(c, si)
 		c.low_built = true
 		c.low_failed.erase(si)
@@ -2495,7 +2619,7 @@ func _low_pick(want_low: bool) -> Dictionary:
 			# catch-up's whole job is a low-holding column ENTERING the high
 			# band (the player approached it). The visible band [band0_r,
 			# render_radius) keeps its avg LOD as the final LOD.
-			if absi(dx) + absi(dz) >= band0_r:
+			if absi(dx) + absi(dz) >= medium_start_r:
 				continue
 			var c = chunks.get(e["key"])
 			if c == null or c.data.is_empty() or bool(c.mesh_built):
@@ -2635,7 +2759,7 @@ func _low_scan_slabs(n: int) -> Array:
 			# — the high band below it is the build lane's (pending renders
 			# nothing), and past the (taxi) render distance nothing renders.
 			var taxi := absi(dx) + absi(dz)
-			if taxi < band0_r or taxi >= render_radius:
+			if taxi < medium_start_r or taxi >= render_radius:
 				continue
 			var c = chunks.get(e["key"])
 			if c == null or c.data.is_empty() or bool(c.mesh_built):
@@ -2827,7 +2951,16 @@ func _low_step() -> void:
 			var dzu := int(e["cz"]) - last_pcz
 			if _tier_of(dxu, dzu) >= 2 and not _low_inr_drained:
 				break  # AC-0231 order gate: the far high waits for the in-r lows
-			if _build_unit(c, int(e["cx"]), int(e["cz"])):
+			# AC-0263: the upgrade is PER-SLAB — dispatch the column's best
+			# pending high slab (the entry stays queued for the rest; the
+			# full-column dispatch is gone).
+			var sih := _hslab_best_pending_cached(c)
+			if sih < 0:
+				# high-complete (a landing raced the pick) — the candidate
+				# is stale; force a rescan next frame.
+				_low_none_key = ""
+				continue
+			if _build_unit_hslab(c, int(e["cx"]), int(e["cz"]), sih):
 				break  # deferred (the TM pool is full) — retry next frame
 	# AC-0236 part 2: attach the completed low emits FIRST (a ready
 	# placeholder lands this frame — the emit started the moment the data
@@ -2859,7 +2992,18 @@ func _low_step() -> void:
 	# full O(band) scans — the R30 storm's 126-213 ms/frame LOW_PICK),
 	# then dispatch the k-ordered candidates the pace allows.
 	var _wpt3 := Time.get_ticks_usec()  # AC-0262: the batched scan
-	var wave_cands: Array = _low_scan_slabs(LOW_WAVE_FRAME_CAP)
+	# AC-0263: the TIER-0 SECTION is its own phase — the wave (med/low)
+	# does not START until the section's high builds are complete (the
+	# section builds through the drain, which the score prefix keeps ahead
+	# of the rings). ONE-SHOT: once the wave has landed its first attach,
+	# the gate stays open — a recenter's new tier-0 column then builds
+	# through the drain without stalling the wave (a re-gate at every
+	# crossing would hitch it). The check rides the per-chunk probe cache
+	# (the ball is 1 column by default; max 289).
+	var wave_cands: Array = []
+	if _wave_gate_open or _tier0_section_drained():
+		_wave_gate_open = true
+		wave_cands = _low_scan_slabs(LOW_WAVE_FRAME_CAP)
 	_wprof_add(WP_LOW_PICK, Time.get_ticks_usec() - _wpt3)
 	var _wpt4 := Time.get_ticks_usec()  # AC-0262: dispatch-only (disjoint)
 	var wave_n := 0
@@ -3074,12 +3218,34 @@ var _spawn_fast := true
 # bookkeeping; the apply pass decrements exactly once per slot). > 0 while
 # the 5x5 is in flight — the drain holds all startup builds until it hits 0.
 var _startup_gen_pending_n := 0
+# AC-0263: burst wall-clock start (the dead-slot self-heal window).
+var _startup_gen_started_ms := 0
 var _tm_enq := 0
 var _tm_dedup := 0
 var _tm_capdrop := 0
 var _tm_stale := 0
 var _tm_datadrop := 0
 var _tm_handoff := 0
+# AC-0263: the per-slab lane's evidence counters (the r16 arm reads them).
+# _tm_hslab_n = per-slab full-res landings; _tm_full_firstbuild_n = the
+# legacy full-column path's FIRST builds (a chunk meshed for the first
+# time by apply_accs — re-meshes by the light/fluid/tex lanes don't
+# count). In the per-slab world the high band is hslab-built, so the
+# full first-builds should stay near zero (a light-flush race at boot is
+# the only expected source).
+var _tm_hslab_n := 0
+var _tm_full_firstbuild_n := 0
+# AC-0263: the section-first order contract evidence (wall ms): the
+# INITIAL tier-0 section's high completion (first tier-0 column to
+# complete high after boot — a moving recenter's new section column does
+# NOT reset it), and the FIRST textured-low attach (the wave's first
+# landing). The contract: low_first >= section_done (the wave waits for
+# the tier-0 section to drain — a ONE-SHOT gate: once the wave has
+# started, a recenter's new tier-0 column builds through the drain
+# without stalling the wave, or every chunk crossing would hitch it).
+var _hslab_section_done_frame := -1
+var _low_first_attach_frame := -1
+var _wave_gate_open := false
 # AC-0219: per-frame streaming handoff counter. threadmesh_poll can run up
 # to twice per process frame (_physics_process_impl + _process, plus the
 # recenter call), so the cap is keyed on the process frame, not the call.
@@ -3147,6 +3313,16 @@ func _ready() -> void:
 	# AC-0257: the in-flight caps scale to all available cores, never past
 	# (see _apply_worker_thread_caps).
 	_apply_worker_thread_caps()
+	# AC-0263: PRE-SEED the C++ singletons on the MAIN thread, before any
+	# pool task runs. Both are lazy-instantiated (the done-flag is set
+	# BEFORE the instance assignment), so parallel first-time worker calls
+	# race: a loser reads a nil and its task dies. Pre-AC-0263 the
+	# recenter's main-thread sync gen happened to call gen_cpp first
+	# (hiding it); AC-0263 dropped the sync gen, the burst workers became
+	# the first callers, and the race killed burst elements (the dead
+	# slot then held the startup build-hold forever — a spawn deadlock).
+	WorldGen.gen_cpp()
+	ChunkScript.mesh_cpp()
 	threadgen_pool = Engine.get_singleton("WorkerThreadPool")
 	threadgen = true
 	io_pool = threadgen_pool  # AC-0164: column I/O shares the threadgen pool
@@ -3192,6 +3368,13 @@ func _ready() -> void:
 	if b0e != "":
 		band0_r = maxi(0, b0e.to_int())
 		_rescore_kick()  # AC-0239: band0_r is the tier-1 boundary
+	# AC-0263: the mid-LOD boundary (the HIGH band's outer edge) — the
+	# world-gen boundary that band0_r used to be (band0_r is the sim
+	# distance now; mobs/fluids only).
+	var mse := OS.get_environment("AWECRAFT_MEDIUM_START")
+	if mse != "":
+		medium_start_r = maxi(0, mse.to_int())
+		_rescore_kick()
 	var b1e := OS.get_environment("AWECRAFT_BAND1")
 	if b1e != "":
 		band1_r = maxi(0, b1e.to_int())
@@ -4173,25 +4356,26 @@ func circle_count() -> int:
 				n += 1
 	return n
 
-# AC-0261: the loading target is the HIGH band (taxi < band0_r) — the only
-# region that ever gets a full mesh. The visible band [band0_r,
-# render_radius) fills in via the disc-ordered slab wave while the player
-# plays (the normal streaming experience); waiting for it would stall the
-# load on work the streaming loop already owns.
+# AC-0261 (AC-0263): the loading target is the HIGH band (taxi <
+# medium_start_r) — the only region that ever gets a full mesh. The
+# visible band [medium_start_r, render_radius) fills in via the
+# disc-ordered slab wave while the player plays (the normal streaming
+# experience); waiting for it would stall the load on work the streaming
+# loop already owns.
 func _high_band_count() -> int:
 	var n := 0
-	for dx in range(-band0_r, band0_r):
-		for dz in range(-band0_r, band0_r):
-			if absi(dx) + absi(dz) < band0_r:
+	for dx in range(-medium_start_r, medium_start_r):
+		for dz in range(-medium_start_r, medium_start_r):
+			if absi(dx) + absi(dz) < medium_start_r:
 				n += 1
 	return n
 
 
 func _high_band_meshed() -> int:
 	var n := 0
-	for dx in range(-band0_r, band0_r):
-		for dz in range(-band0_r, band0_r):
-			if absi(dx) + absi(dz) >= band0_r:
+	for dx in range(-medium_start_r, medium_start_r):
+		for dz in range(-medium_start_r, medium_start_r):
+			if absi(dx) + absi(dz) >= medium_start_r:
 				continue
 			var c = chunks.get(_key(last_pcx + dx, last_pcz + dz))
 			if c != null and c.mesh_built:
@@ -4206,7 +4390,7 @@ func band_drained() -> bool:
 	for key in chunks:
 		var c: Node3D = chunks[key]
 		var taxi := absi(int(c.cx) - last_pcx) + absi(int(c.cz) - last_pcz)
-		if taxi < band0_r or taxi >= render_radius:
+		if taxi < medium_start_r or taxi >= render_radius:
 			continue
 		if c.data.is_empty() or bool(c.mesh_built):
 			continue
@@ -4387,30 +4571,22 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	var tg := Time.get_ticks_msec()
 	_gen_last_disk = false
 	if c.data.is_empty():
-		if cx == 0 and cz == 0:
-			# AC-0155/AC-0164: the spawn column keeps the synchronous
-			# disk-first read (spawn contract: immediate ground under the
-			# player; one column, once per boot).
-			if _try_disk_load(c, cx, cz):
-				_gen_last_disk = true
-				_apply_edits_to_chunk(c)
-				return 0
-		elif _io_read_enqueue(cx, cz, _key(cx, cz), true):
+		# AC-0263: the (0,0) sync disk-read exemption is GONE — the spawn
+		# column takes the same disk-first OFF-MAIN-THREAD path as every
+		# other column (the startup burst carries the spawn anti-fall).
+		if _io_read_enqueue(cx, cz, _key(cx, cz), true):
 			# AC-0164: disk-first off the main thread — file read + decode
 			# on a worker; the data lands in _io_read_handoff (edits
 			# applied there, provenance marked when it LANDS).
 			return 0
-	# AC-0152: sync gen is now ONLY the spawn chunk (0,0) — the documented
-	# spawn contract (AC-0082: "the player needs immediate ground data").
-	# The old axis exclusion (cx==0 OR cz==0 sync) was pre-AC-0082 Phase-1
-	# legacy with no recorded rationale; at render 50 it is 200 axis chunks
-	# x ~125 ms of main-thread gen that paced the drain and made the
-	# spawn-3x3 ~1 s target unreachable (measured 11.7 s). All other chunks
-	# threadgen through the identical handoff (data/init_fl/edits, stale-drop,
-	# dedup — proven at r50 in AC-0082 G4: gen_ms −98%). AC-0208: the sync
-	# gen runs the C++ generator (WorldGen.generate = AweGen.generate_flat);
-	# the GDScript gen fallback was removed — there is no non-C++ gen path.
-	if threadgen and (cx != 0 or cz != 0):
+	# AC-0152 (AC-0263): sync gen is GONE entirely — every column (the
+	# spawn chunk included) threadgens through the identical handoff
+	# (data/init_fl/edits, stale-drop, dedup). AC-0082's spawn contract is
+	# now the startup burst (recenter's 5x5 group task, which AC-0263
+	# extended to carry the center). The sync tail below survives only for
+	# the threadgen-less fallback (threadgen false = the pre-pool dev path
+	# that no shipped build uses).
+	if threadgen:
 		threadgen_enqueue(cx, cz, _key(cx, cz), c.get_instance_id(), false, int(c.col_gen))
 		if timing:
 			print("GENCHUNK %d,%d gen_ms=0 thread=1 t=%d" % [cx, cz, Time.get_ticks_msec()])
@@ -4592,6 +4768,39 @@ func _startup_gen_apply() -> void:
 	# chunk the worker generated.
 	if _startup_gen_slots.is_empty():
 		return
+	# AC-0263: DEAD-SLOT SELF-HEAL — a burst element whose worker died
+	# (a worker exception: the gen_cpp lazy-init race pre-fix, anything
+	# else) never lands, and its pending_n count then holds the startup
+	# build-hold FOREVER (the drain can't run the data pass that would
+	# regenerate the chunk — a spawn deadlock, measured at r16: 0/25
+	# high band for 14 min on 2 dead elements). The burst's worst case is
+	# ~1.3 s (24 x ~165 ms / 3-wide); long past that, every still-dead
+	# slot is resolved: the pending count drops, the hold lifts, and the
+	# chunk's data lane (threadgen — fully queue-driven since AC-0263)
+	# regenerates it.
+	if _startup_gen_started_ms > 0 \
+			and _startup_gen_pending_n > 0 \
+			and Time.get_ticks_msec() - _startup_gen_started_ms > 5000:
+		for i in _startup_gen_slots.size():
+			if _startup_gen_pending_n <= 0:
+				break
+			# had_data elements were never counted (the worker no-ops
+			# them by design) — their null slots are not dead.
+			if i >= _startup_gen_elems.size() or bool(_startup_gen_elems[i][3]):
+				continue
+			var dd = _startup_gen_slots[i]
+			if dd == null or not (dd is Array):
+				_startup_gen_slots[i] = null
+				_startup_gen_pending_n = maxi(0, _startup_gen_pending_n - 1)
+				# Feed the dead chunk's data NOW (the data pass itself is
+				# gated behind _spawn_fast, which stays set until the 3x3
+				# is meshed — which needs THIS data; a second deadlock).
+				# _gen_unit is the full lane (disk-first read, else
+				# threadgen) minus the caller's pacing.
+				var he: Array = _startup_gen_elems[i]
+				var hc = chunks.get(_key(int(he[1]), int(he[2])))
+				if hc != null and hc.data.is_empty():
+					_gen_unit(hc, int(he[1]), int(he[2]))
 	for i in _startup_gen_slots.size():
 		var d = _startup_gen_slots[i]
 		if d == null or not (d is Array) or int(d.size()) != 2:
@@ -5109,10 +5318,59 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			_editprobe_ns = res.get("ns", [])
 			_editprobe_phet = res.get("phet", [])
 			_editprobe_prime_flag = false
+	if bool(e.get("hslab", false)):
+		# AC-0263: a per-slab FULL-RES landing (the tier-0 section / the
+		# high-band rings). The scoped stale check (rows_eq on the
+		# dispatch window) and the band check above already ran. Scoped
+		# retain-swap attach (the edit lane's machinery, mark_complete=false
+		# — a slab landing does NOT complete the column), the slab's
+		# placeholder (fog/low) drops, the completion stamp lands (empty
+		# all-air builds stamped too — done, not pending), and the probe
+		# flips mesh_built when the column owes nothing.
+		var si_h: int = int(e["si0"])
+		var ta_h := Time.get_ticks_msec()
+		var old_eff_h = c.last_eff
+		c.apply_edit_accs(res, _tm_ms_full, false)
+		c.high_stamps[si_h] = int(c.data_gen)
+		_low_drop_slab(c, si_h)
+		_fog_drop_slab(c, si_h)
+		_hslab_probe_invalidate(c)
+		if not bool(c.mesh_built) and _hslab_best_pending(c) < 0:
+			c.mesh_built = true
+			# high-complete: the column's placeholders are all gone now
+			# (each landing dropped its own) — nothing to free in bulk.
+		c.saved_light = {}
+		perf_build_ms += Time.get_ticks_msec() - ta_h
+		perf_build_worker_ms += int(res.get("wms", 0))
+		perf_build_worker_ms_list.append(int(res.get("wms", 0)))
+		_count_collision_build(c)
+		_stage_check(c, key)
+		_eff_landed(c, old_eff_h, res.get("light", {}))
+		if bool(e.get("eff_trust", false)):
+			_eff_cache_put(key, c, res.get("light", {}), e.get("ngen", null))
+		_tm_handoff += 1
+		_tm_hslab_n += 1  # AC-0263: the per-slab lane's landing count
+		# AC-0263: section evidence — the INITIAL section's completion (the
+		# first tier-0 column to finish high; a later recenter's new
+		# section column does not move the milestone).
+		if _hslab_section_done_frame < 0 \
+				and _is_tier0_col(int(e["cx"]) - last_pcx, int(e["cz"]) - last_pcz):
+			_hslab_section_done_frame = Time.get_ticks_msec()
+		# AC-0263: NO _drop_queued — the entry STAYS queued (the column's
+		# remaining slabs are still pending) and is re-picked next frame;
+		# the pick removes it the frame the probe finds nothing left.
+		if timing or _tm_debug:
+			print("BUILDCHUNK_H %d,%d slab=%d build_ms=%d t=%d" % [int(e["cx"]), int(e["cz"]), si_h, int(res.get("wms", 0)), Time.get_ticks_msec()])
+		return
 	if bool(e.get("edit", false)):
 		var ta2 := Time.get_ticks_msec()
 		var old_eff2 = c.last_eff
 		c.apply_edit_accs(res, _tm_ms_full)
+		# AC-0263: an edit's scoped remesh is a HIGH landing — stamp the
+		# covered slabs done at the NEW data_gen (the edit window includes
+		# the boundary slabs, so the probe won't re-owe them).
+		for si_e in range(int(res.get("si0", 0)), int(res.get("si1", 0)) + 1):
+			c.high_stamps[si_e] = int(c.data_gen)
 		c.saved_light = {}
 		perf_build_ms += Time.get_ticks_msec() - ta2
 		perf_build_worker_ms += int(res.get("wms", 0))
@@ -5144,7 +5402,14 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			perf_high_before_low_firstbuild_n += 1
 	var ta := Time.get_ticks_msec()
 	var old_eff = c.last_eff
+	if not bool(c.mesh_built):
+		_tm_full_firstbuild_n += 1  # AC-0263: first-build evidence
 	c.apply_accs(res, _tm_ms_full)
+	# AC-0263: a full-column landing stamps every slab at/below the top
+	# done (the per-slab probe's completion record for the legacy path).
+	for si_f in range(mini(int(c.top) >> 4, int(c.data.size() - 1)) + 1):
+		c.high_stamps[si_f] = int(c.data_gen)
+	_hslab_probe_invalidate(c)
 	c.saved_light = {}
 	# AC-0231 rewrite: the high REPLACES the per-slab placeholders (the
 	# fog boxes + the 4x4x4 textured lows) at every slab's Y. Keep-high
@@ -5432,31 +5697,18 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 	# other call sites keep the default (false = legacy sync).
 	c.col_immediate = _col_immediate_for(cx, cz)
 	var key := _key(cx, cz)
-	# AC-0152/AC-0160: band 2 has no special path anymore — the impostor
-	# dispatch was removed; it builds a full mesh through the same
-	# nbs/eff/worker pipeline as band 0/1.
-	# AC-0160 run 2: the spawn chunk (0,0) now BUILDS through the workers
-	# like every other chunk — the gate's model is "5x5 data + 9 worker
-	# builds", and the (0,0) sync BUILD was the startup serializer: a
-	# 650 ms main-thread mesh + ~600 ms face-block-light cascade (~1.3 s
-	# block) that froze the drain and idled the pool. The spawn contract
-	# that stays is the SYNC GEN one (AC-0082: "the player needs immediate
-	# ground DATA" — recenter() sync-gens (0,0) before the first drain
-	# frame). The data-empty sync below still covers the degenerate case
-	# (a dispatch reaching (0,0) before its data — impossible in the
-	# normal flow: the recenter burst owns it).
+	# AC-0152/AC-0160 (AC-0263): band 2 has no special path anymore — the
+	# impostor dispatch was removed; it builds a full mesh through the same
+	# nbs/eff/worker pipeline as band 0/1. AC-0263: the SYNC FALLBACKS ARE
+	# GONE (fully queue-driven — no main-thread builds ever): no-data,
+	# missing-neighbor and cap-drop all DEFER (return false); the callers
+	# keep the queue entry and retry when the data/neighbors land or a
+	# worker slot frees. (The spawn contract that motivated the legacy
+	# fallbacks is now the startup burst, which AC-0263 extended to carry
+	# the center column.)
 	if c.data.is_empty():
-		if defer_on_cap:
-			perf_edit_syncs += 1
-		var old_eff = c.last_eff
-		c.build_mesh(get_block, eff)  # AC-0257: full column (no window mask)
-		_low_drop_sync(c)  # AC-0231: the sync high replaces the placeholder
-		c.saved_light = {}
-		_eff_landed(c, old_eff, c.last_eff)
-		_count_collision_build(c)
-		_stage_check(c, key)
-		_bd_log(cx, cz)
-		return true
+		perf_edit_syncs += 1
+		return false  # AC-0263: the data lane owns it (the sync gen is gone)
 	var nbs: Dictionary = {}
 	var mc: Variant = ChunkScript.mesh_cpp()
 	for dx in range(-1, 2):
@@ -5465,28 +5717,13 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 				continue
 			var nc = chunks.get(_key(cx + dx, cz + dz))
 			if nc == null or nc.data.is_empty():
-				# AC-0160 spawn fast path: while the spawn 3x3 is pending, a
-				# missing neighbor must NOT force the sync fallback (the
-				# on-demand gen is 100-500 ms of main-thread build that paced
-				# the drain to ~1 unit/frame — 10s for the 3x3). Defer: the
-				# caller's retry path re-queues; threadgen delivers the
-				# missing data within ~500 ms. The drain itself never hits
-				# this (its _build_ready startup gate already requires all 8
-				# neighbors), so no queue entry is consumed by a defer.
-				if _startup_pending():
-					return false
-				# Workers can't on-demand-generate; the sync _build_snap can.
-				if defer_on_cap:
-					perf_edit_syncs += 1
-				var old_eff = c.last_eff
-				c.build_mesh(get_block, eff)  # AC-0257: full column (no window mask)
-				_low_drop_sync(c)  # AC-0231: the sync high replaces the placeholder
-				c.saved_light = {}
-				_eff_landed(c, old_eff, c.last_eff)
-				_count_collision_build(c)
-				_stage_check(c, key)
-				_bd_log(cx, cz)
-				return true
+				# AC-0160 (AC-0263): a missing neighbor DEFERS (the caller's
+				# retry re-queues; threadgen delivers the missing data within
+				# ~500 ms). The legacy sync fallback (100-500 ms of main-
+				# thread build) is GONE — there is no on-demand sync gen for
+				# workers to fall back on, so the defer is the only path.
+				perf_edit_syncs += 1
+				return false
 			# AC-0211: C++ compact snap ring (256 B/slab, the boundary
 			# slice only) — replaces the per-neighbor _slabs_deepcopy of
 			# all 24 slabs; the C++ build_accs consumes it directly and
@@ -5515,21 +5752,12 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 		_tm_capdrop += 1
 		if _tm_debug:
 			print("TMESH CAPDROP %d,%d inflight=%d" % [cx, cz, threadmesh_inflight.size()])
-		if defer_on_cap:
-			# AC-0126: the edit path never syncs on a cap drop — the flush
-			# re-queues the chunk (FIFO, chunk-key deduped) and retries next
-			# frame when a worker slot frees.
-			perf_edit_defers += 1
-			return false
-		var old_eff = c.last_eff
-		c.build_mesh(get_block, eff)  # AC-0257: full column (no window mask)
-		_low_drop_sync(c)  # AC-0231: the sync high replaces the placeholder
-		c.saved_light = {}
-		_eff_landed(c, old_eff, c.last_eff)
-		_count_collision_build(c)
-		_stage_check(c, key)
-		_bd_log(cx, cz)
-		return true
+		# AC-0263: the cap-drop sync fallback is GONE — a full pool DEFERS
+		# (return false); the caller keeps the queue entry and retries when
+		# a worker slot frees. (defer_on_cap's legacy sync branch never ran
+		# any more than the others: all call sites now defer.)
+		perf_edit_defers += 1
+		return false
 	var ms_w: Dictionary
 	if not _tm_ms_full.rects.is_empty():
 		ms_w = {"rects": _tm_ms_full.rects.duplicate(), "h": float(_tm_ms_full.get("h", 0.0))}
@@ -5599,6 +5827,87 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 		print("TMESH ENQ %d,%d inflight=%d" % [cx, cz, threadmesh_inflight.size()])
 	return true
 
+# AC-0263: the per-slab HIGH dispatch — the full-res build of ONE slab
+# (si0=si1=si) through the normal worker pool. Same inputs as the edit
+# lane's scoped entry (the C++ compact nbs ring + the own-column value
+# copy + the row-scoped stale window around the slab); the worker's
+# build_accs already scopes on si0/si1 (the edit lane proved the path —
+# no C++ change). The sync fallbacks are GONE (fully queue-driven): a
+# no-data column or a missing neighbor DEFERS (return false) — the data
+# lane delivers the work and the queue re-picks (the entry stays queued;
+# the in-flight dedup paces one slab in flight per column). true = a
+# worker task owns the slab; false = deferred (the caller keeps the entry
+# and ends the frame, as with a cap drop).
+func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary) -> bool:
+	var key := _key(cx, cz)
+	c.col_immediate = _col_immediate_for(cx, cz)
+	if c.data.is_empty():
+		return false  # AC-0263: the data lane owns it (the sync gen is gone)
+	if _tm_inflight_keys.has(key):
+		_tm_dedup += 1
+		return false
+	var tm_cap := threadmesh_max
+	if _startup_pending() and tm_cap < 9:
+		tm_cap = 9
+	tm_cap = maxi(1, tm_cap - (2 if not dirty_queue.is_empty() else 1))
+	if threadmesh_inflight.size() >= tm_cap:
+		_tm_capdrop += 1
+		if _tm_debug:
+			print("TMESH HSLABCAPDROP %d,%d slab=%d inflight=%d" % [cx, cz, si, threadmesh_inflight.size()])
+		return false
+	var nbs: Dictionary = {}
+	var mc: Variant = ChunkScript.mesh_cpp()
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			if (dx == 0) == (dz == 0):
+				continue
+			var nc = chunks.get(_key(cx + dx, cz + dz))
+			if nc == null or nc.data.is_empty():
+				return false  # AC-0263: defer — the neighbor lands, the entry retries
+			nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep)  # AC-0237: ungenerated slabs read as solid
+	var y_lo := si * 16
+	var y_hi := (si + 1) * 16 - 1
+	var d_lo := maxi(0, y_lo - 1)
+	var d_hi := mini(Data.HEIGHT - 1, y_hi + 1)
+	var ms_w: Dictionary
+	if not _tm_ms_full.rects.is_empty():
+		ms_w = {"rects": _tm_ms_full.rects.duplicate(), "h": float(_tm_ms_full.get("h", 0.0))}
+	else:
+		ms_w = {"rects": {}}
+	var strips = _strips_for_scoped(cx, cz, y_lo, y_hi)
+	var ctx_w: Dictionary = _tm_ctx.duplicate()
+	ctx_w["eff_strips"] = strips["eff"]
+	ctx_w["blk_strips"] = strips["blk"]
+	ctx_w["blk_strips_b"] = strips["blk_b"]
+	var entry := {
+		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(), "colgen": int(c.col_gen),
+		"data": mc.slab_copy(c.data),  # AC-0208: C++-only value copy (the worker + the handoff stale check share the shape)
+		"fl": mc.slab_copy(c.fl),
+		"stamp": c.stamp(),
+		"band": int(c.band),
+		"nbs": nbs, "eff": eff, "eff_trust": true,
+		"ctx": ctx_w, "ms": ms_w, "ngen": _ngens_for(cx, cz),
+		"tier": _tier_of(cx - last_pcx, cz - last_pcz),
+		"hslab": true, "si0": si, "si1": si,
+		"scoped_snap": true, "d_off": d_lo, "d_hi": d_hi,
+		"t_submit": Time.get_ticks_usec(),
+	}
+	var skey := _tm_next_slot
+	_tm_next_slot += 1
+	var tid = threadmesh_pool.add_task(_tm_worker_run.bind(skey), true)
+	entry["tid"] = tid
+	entry["skey"] = skey
+	_tm_slots_mutex.lock()
+	_tm_slots[skey] = entry
+	_tm_slots_mutex.unlock()
+	_tm_inflight_keys[key] = tid
+	threadmesh_inflight.append(entry)
+	_tm_enq += 1
+	_bd_log(cx, cz)
+	if _tm_debug:
+		print("TMESH HSLAB %d,%d slab=%d inflight=%d" % [cx, cz, si, threadmesh_inflight.size()])
+	return true
+
 func _build_unit(c: Node3D, cx: int, cz: int) -> bool:
 	# Returns true when DEFERRED (worker slots full / task already in flight
 	# for this key — the caller keeps the queue entry and ends the frame);
@@ -5638,6 +5947,30 @@ func _build_unit(c: Node3D, cx: int, cz: int) -> bool:
 			print("BUILDCHUNK %d,%d gen_ms=0 build_ms=%d t=%d" % [cx, cz, dt, Time.get_ticks_msec()])
 		else:
 			print("BUILDDEFER %d,%d t=%d" % [cx, cz, Time.get_ticks_msec()])
+	perf_build_ms += dt
+	return not covered
+
+# AC-0263: the per-slab high variant of _build_unit — dispatches ONE slab
+# (the (layer, taxi) rings' build unit) through the worker pool. Same
+# contained-light handling as _build_unit (cached eff when it matches,
+# otherwise the worker self-lights through the byte-identical contained
+# kernel); returns true when DEFERRED (data/neighbor missing, in-flight
+# dedup, or the TM cap — the caller keeps the queue entry and ends the
+# frame), false when a worker task owns the slab.
+func _build_unit_hslab(c: Node3D, cx: int, cz: int, si: int) -> bool:
+	var tb := Time.get_ticks_msec()
+	var eff := _eff_for(c, cx, cz)
+	if eff.is_empty() and not c.saved_light.is_empty():
+		eff = c.saved_light
+		light_saved_restores += 1
+	var covered := _mesh_dispatch_hslab(c, cx, cz, si, eff)
+	var dt := Time.get_ticks_msec() - tb
+	last_build_us = dt * 1000
+	if timing:
+		if covered:
+			print("BUILDCHUNK_H %d,%d slab=%d build_ms=%d t=%d" % [cx, cz, si, dt, Time.get_ticks_msec()])
+		else:
+			print("BUILDDEFER_H %d,%d slab=%d t=%d" % [cx, cz, si, Time.get_ticks_msec()])
 	perf_build_ms += dt
 	return not covered
 
@@ -5694,7 +6027,7 @@ func _collect_pool(build: bool, include_fb := false, maxb := -1, high_only := fa
 					# Pre-filter the drain's pool to the high band only.
 					var dxh := int(e["cx"]) - last_pcx
 					var dzh := int(e["cz"]) - last_pcz
-					if absi(dxh) + absi(dzh) >= band0_r and not _is_tier0_col(dxh, dzh):
+					if absi(dxh) + absi(dzh) >= medium_start_r and not _is_tier0_col(dxh, dzh):
 						continue
 				out.append(e)
 			else:
@@ -5934,15 +6267,15 @@ func _drain_build_queue() -> void:
 			var ls := 1e30
 			for e in lb:
 				var c = chunks.get(e["key"])
-				# AC-0257: keep-high — a meshed column is skipped.
+				# AC-0257 (AC-0263): keep-high — a meshed column is skipped.
 				if c == null or c.data.is_empty() or c.mesh_built:
 					continue
-				# AC-0261: the load's high builds are the HIGH band only —
-				# the visible band [band0_r, render_radius) is slab-wave
-				# owned (its avg LOD is final there).
+				# AC-0261 (AC-0263): the load's high builds are the HIGH band
+				# only — the visible band [medium_start_r, render_radius) is
+				# slab-wave owned (its avg LOD is final there).
 				var dxl := int(e["cx"]) - last_pcx
 				var dzl := int(e["cz"]) - last_pcz
-				if absi(dxl) + absi(dzl) >= band0_r and not _is_tier0_col(dxl, dzl):
+				if absi(dxl) + absi(dzl) >= medium_start_r and not _is_tier0_col(dxl, dzl):
 					continue
 				if not _build_ready(int(e["cx"]), int(e["cz"])):
 					continue
@@ -5953,9 +6286,15 @@ func _drain_build_queue() -> void:
 					lc = c
 			if lc == null:
 				break
-			if _build_unit(lc, int(le["cx"]), int(le["cz"])):
-				break  # TM depth reached — phase 2 feeds the TG pool now
-			_remove_entry(le)
+			# AC-0263: per-slab — a high-complete winner (a landing raced the
+			# pick) frees its entry and the loop re-picks; otherwise the best
+			# slab is dispatched and the entry STAYS queued for the rest.
+			var sih := _hslab_best_pending_cached(lc)
+			if sih < 0:
+				_remove_entry(le)
+				continue
+			if _build_unit_hslab(lc, int(le["cx"]), int(le["cz"]), sih):
+				break  # deferred (TM depth) — phase 2 feeds the TG pool now
 			units += 1
 		# Phase 2: nearest no-data entry -> TG pool (disk read first).
 		while threadgen_inflight.size() < threadgen_max:
@@ -6033,35 +6372,44 @@ func _drain_build_queue() -> void:
 				best_c = fpick["c"]
 				best_from_fb = true
 		if best_c != null:
-			# AC-0261: the main build lane is the HIGH band only (taxi <
-			# band0_r, or the tier-0 set). An out-of-band top pick blocks
-			# the high dispatch for the frame (the unit falls to the data
-			# pass below); the entry stays queued and is re-picked whenever
-			# an in-band entry goes ready (in-band entries always out-score
-			# it on taxi). The visible band [band0_r, render_radius) is the
-			# slab wave's (its avg LOD is final there); the WAVE 3 catch-up
-			# upgrades a low-holding column when it ENTERS the high band.
+			# AC-0261 (AC-0263): the main build lane is the HIGH band only
+			# (taxi < medium_start_r, or the tier-0 set — the section's
+			# slabs outrank the rings via the score prefix). An out-of-band
+			# top pick blocks the high dispatch for the frame (the unit
+			# falls to the data pass below); the entry stays queued and is
+			# re-picked whenever an in-band entry goes ready (in-band
+			# entries always out-score it on taxi). The visible band
+			# [medium_start_r, render_radius) is the slab wave's (its avg
+			# LOD is final there); the WAVE 3 catch-up upgrades a
+			# low-holding column when it ENTERS the high band (per-slab).
 			var dxg := int(best_e["cx"]) - last_pcx
 			var dzg := int(best_e["cz"]) - last_pcz
-			if absi(dxg) + absi(dzg) >= band0_r and not _is_tier0_col(dxg, dzg):
+			if absi(dxg) + absi(dzg) >= medium_start_r and not _is_tier0_col(dxg, dzg):
 				best_c = null
 				perf_high_gate_holds_n += 1
 		if best_c != null:
-			var deferred := _build_unit(best_c, int(best_e["cx"]), int(best_e["cz"]))
-			if not deferred and _picklog:
-				print("PICK %s %d,%d s=%.6f t=%d" % ["fb" if best_from_fb else "b", int(best_e["cx"]), int(best_e["cz"]), best_s, Time.get_ticks_msec()])
-			if deferred:
-				# AC-0160 run 2: worker slots full (or a task already in
-				# flight for this key) — the entry stays queued (NOT removed)
-				# and the frame ends; the next frame re-dispatches when a slot
-				# frees. The drain NEVER takes the sync fallback: the 8-
-				# neighbor gate above guarantees the nbs snapshot, and
-				# defer_on_cap turns the cap drop into this defer instead of
-				# a 270-1235 ms main-thread build (the measured spawn
-				# serializer).
-				break
-			_remove_entry(best_e)
-			u = 1
+			# AC-0263: the build unit is ONE SLAB (the (layer, taxi) ring
+			# order; the tier-0 section's slabs first — the score prefix).
+			# A high-complete column (the probe owes nothing — a landing
+			# raced the pick) frees its queue entry; a pending column
+			# dispatches its best slab and STAYS queued (re-picked next
+			# frame; the in-flight dedup paces one slab per column).
+			var sih := _hslab_best_pending_cached(best_c)
+			if sih < 0:
+				_remove_entry(best_e)
+			else:
+				var deferred := _build_unit_hslab(best_c, int(best_e["cx"]), int(best_e["cz"]), sih)
+				if not deferred and _picklog:
+					print("PICK %s %d,%d slab=%d s=%.6f t=%d" % ["fb" if best_from_fb else "b", int(best_e["cx"]), int(best_e["cz"]), sih, best_s, Time.get_ticks_msec()])
+				if deferred:
+					# AC-0160 run 2 / AC-0263: worker slots full (or a task
+					# already in flight for this key, or data/neighbors not
+					# ready) — the entry stays queued (NOT removed) and the
+					# frame ends; the next frame re-dispatches when a slot
+					# frees / the data lands. The drain NEVER takes a sync
+					# fallback (AC-0263: there is no sync build left).
+					break
+				u = 1
 		if u == 0 and (gen_budget_ms < 0 or gen_used_ms < gen_budget_ms):
 			# AC-0079 round 3: scored DATA pick. The spec requires the lowest-score
 			# no-data entry (not FIFO), else forward leading-edge data only arrives
@@ -7229,13 +7577,11 @@ func _make_chunk_node(cx: int, cz: int) -> Node3D:
 	return c
 
 func create_chunk(cx: int, cz: int, mesh_now: bool) -> Node3D:
-	perf_create_sync_gen += 1
+	# AC-0263: node creation only — the sync materialize/build are GONE
+	# (fully queue-driven: the drain's data lane feeds the column, the
+	# build lanes mesh it). mesh_now is a no-op kept for the signature
+	# (no caller passed true).
 	var c: Node3D = _make_chunk_node(cx, cz)
-	_materialize_chunk_data(c, cx, cz)  # AC-0155: disk-first, else sync gen
-	_apply_edits_to_chunk(c)
-	if mesh_now:
-		c.build_mesh(get_block, {})  # AC-0257: full column (no window mask)
-		_low_drop_sync(c)  # AC-0231: the sync high replaces the placeholder
 	return c
 
 func stub_chunk(cx: int, cz: int) -> Node3D:
@@ -7472,23 +7818,11 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	threadgen_poll()
 	threadmesh_poll()
 	io_poll()  # AC-0164
-	if not mesh_now:
-		# AC-0152: sync-fill the whole stream set (circle ∪ collar ∪ ring;
-		# the ring reaches one chunk past the circle edge).
-		var half := maxi(rr + 1, b1_eff() + 1)
-		var make: Array[Dictionary] = []
-		for dx in range(-half, half + 1):
-			for dz in range(-half, half + 1):
-				if not in_stream_set(dx, dz):
-					continue
-				var cx := pcx + dx
-				var cz := pcz + dz
-				if not chunks.has(_key(cx, cz)):
-					make.append({"cx": cx, "cz": cz, "d": absi(dx) + absi(dz)})
-		make.sort_custom(func(a, b): return a.d < b.d)
-		for e in make:
-			create_chunk(e.cx, e.cz, false)
-		return
+	# AC-0263: the mesh_now=false SYNC-FILL is GONE (every shipped caller
+	# passes true; a dead branch that sync-materialized the whole stream
+	# set — hundreds of columns of main-thread disk read/gen — would have
+	# been the largest remaining sync path). Stream-set coverage is owned
+	# by the recenter walk + the drain (queue-driven).
 	var tr1 := Time.get_ticks_usec()
 	if _debounced:
 		# AC-0213: no queue rebuild — the prior rebuild (in flight or
@@ -7578,8 +7912,10 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 		_startup_gen_slots = []
 		for pdx in range(-2, 3):
 			for pdz in range(-2, 3):
-				if pdx == 0 and pdz == 0:
-					continue
+				# AC-0263: the CENTER is in the burst (25 cells) — the
+				# recenter's sync gen of (0,0) is GONE (fully queue-driven:
+				# no main-thread generation ever). The startup burst is the
+				# spawn anti-fall contract (kept).
 				var bwx := pcx + pdx
 				var bwz := pcz + pdz
 				# AC-0040: in_stream_set is CENTER-RELATIVE (dx,dz = offset
@@ -7616,6 +7952,7 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 				_burst_need += 1
 		_startup_gen_pending_n = _burst_need
 		if _burst_need > 0:
+			_startup_gen_started_ms = Time.get_ticks_msec()  # AC-0263: self-heal window
 			# HIGH priority + 3-wide: measured on this Godot build, a LOW
 			# priority GROUP task runs its elements strictly serially on ONE
 			# thread (24 x 120 ms = 2.9 s) even with tasks_needed=3 — so the
@@ -7636,16 +7973,8 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 		# pending count bookkeeping for its own chunks; this recenter
 		# adds nothing to the pool (the data pass covers the new edge).
 		_startup_gen_pending_n = 0
-	# (0,0) keeps its sync gen (the spawn contract: immediate ground under
-	# the player) — done here in recenter so it exists before the first
-	# drain frame; the group burst and the drain data path both skip it.
-	var c0 = chunks.get(_key(pcx, pcz))
-	if c0 != null and c0.data.is_empty():
-		var sg0 := Time.get_ticks_usec()
-		_materialize_chunk_data(c0, pcx, pcz)  # AC-0155: disk-first, else sync gen
-		_apply_edits_to_chunk(c0)
-		if timing:
-			print("GENCHUNK %d,%d gen_ms=%d t=%d" % [pcx, pcz, (Time.get_ticks_usec() - sg0) / 1000, Time.get_ticks_msec()])
+	# AC-0263: the (0,0) sync gen is GONE — fully queue-driven (the startup
+	# burst now carries the center; the drain data path feeds the rest).
 	if _recprobe:
 		print("RECPROBE r=%d total_ms=%.1f free_ms=%.1f rebuild_ms=%.1f new_n=%d queue=%d chunks=%d drain_stubs_ms=%.1f drain_stubs_n=%d" % [
 			render_radius,
@@ -8152,29 +8481,7 @@ func _saved_light_from_res(light: Dictionary, cx: int, cz: int) -> Dictionary:
 		"blk_src": bool(light.get("blk_src", false)),
 	}
 
-func _materialize_chunk_data(c: Node3D, cx: int, cz: int) -> int:
-	if c.data.is_empty() and _io_read_keys.has(_key(cx, cz)):
-		# AC-0164: a worker read is in flight for this column — the data is
-		# on its way; never sync-load or sync-gen on top of it.
-		return 0
-	if c.data.is_empty() and _try_disk_load(c, cx, cz):
-		return 0
-	if c.data.is_empty():
-		var tg := Time.get_ticks_msec()
-		# AC-0040: the banana-tree pass (shore dirt edge only) — see the
-		# sync-gen landing above (WorldGen.generate stays untouched).
-		var gdata: PackedByteArray = WorldGen.generate(cx, cz, Game.world_seed)
-		var gres: Dictionary = WorldGen.apply_banana_trees(gdata, cx, cz, Game.world_seed, Data.HEIGHT)
-		c.data_landed(gdata, PackedByteArray())
-		_pool_touch()  # AC-0217: sync data landed on a queued entry
-		_banana_register(cx, cz, gres["fruits"])
-		gen_count += 1
-		_low_fog_for(c)  # AC-0231: the immediate fog-box first pass (far only)
-		var dg := Time.get_ticks_msec() - tg
-		gen_ms_total += dg
-		chunk_origin[_key(cx, cz)] = "gen"
-		return dg
-	return 0
+
 
 func _queue_chunk_save(c: Node3D) -> void:
 	if Save.active_slot < 0 or c.data.is_empty():
@@ -8566,18 +8873,12 @@ func surface_top(x: int, z: int) -> int:
 				return y
 	return 0
 
-# AC-0119: the one legitimate boot-time sync gen, made explicit (port rule:
-# the spawn chunk is generated synchronously at boot, NOT on read). Idempotent.
-func _ensure_spawn_chunk() -> void:
-	var scx := int(floorf(float(WorldGen.SPAWN_X) / 16.0))
-	var scz := int(floorf(float(WorldGen.SPAWN_Z) / 16.0))
-	var c = chunks.get(_key(scx, scz))
-	if c == null or c.data.is_empty():
-		create_chunk(scx, scz, false)
-
+# AC-0119 (AC-0263): the boot-time sync gen of the spawn chunk is GONE —
+# the surface top is the ANALYTIC heightmap (the spawn plateau is flat at
+# SPAWN_H by design: terrain_height == surface top there), and the startup
+# burst delivers the ground data (collision) before the player lands.
 func spawn_point() -> Vector3:
-	_ensure_spawn_chunk()
-	var top := surface_top(WorldGen.SPAWN_X, WorldGen.SPAWN_Z)
+	var top := WorldGen.terrain_height(WorldGen.SPAWN_X, WorldGen.SPAWN_Z, Game.world_seed)
 	return Vector3(WorldGen.SPAWN_X + 0.5, float(top) + 1.0, WorldGen.SPAWN_Z + 0.5)
 
 # AC-0213: flat-column cache for light_at (key -> [data_gen, PackedByteArray]).

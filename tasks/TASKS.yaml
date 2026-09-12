@@ -1,17 +1,25 @@
 meta:
-  updated_at: 2026-09-12T08:56
+  updated_at: 2026-09-12T14:48
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0262
+- AC-0264
+- AC-0272
+- AC-0270
+- AC-0269
+- AC-0266
+- AC-0268
+- AC-0267
+- AC-0265
+- AC-0271
+- AC-0093
+- AC-0038
+- AC-0039
+- AC-0159
 - AC-0112
 - AC-0113
 - AC-0098
-- AC-0093
-- AC-0159
-- AC-0038
-- AC-0039
 - AC-0088
 - AC-0089
 - AC-0205
@@ -31,6 +39,140 @@ queue:
 - AC-0259
 - AC-0263
 intake:
+- id: AC-0272
+  title: hide-mouse-on-controller-input
+  priority: 2
+  status: open
+  notes: '1) User Story: As a player using a controller I want the mouse cursor hidden as soon as I press
+    any controller button including sticks/triggers, so it doesn''t distract.
+
+
+    2) Technical Details: godot/input + UI. Detect any Joypad button/motion/trigger event, hide cursor
+    (Input.set_mouse_mode hidden), show again on mouse move/click. Verify pressing any button, stick,
+    or trigger hides cursor, mouse brings it back.'
+  area: input
+  effort: S
+  depends_on: []
+- id: AC-0271
+  title: craftable-wood-doors-open-close
+  priority: 2
+  status: open
+  notes: '1) User Story: As a player I want to craft doors from wood planks and open/close them like in
+    Minecraft.
+
+
+    2) Technical Details: godot/world/data + recipes + world.gd + player.gd. Add door block (2-high),
+    recipe 6 planks -> 3 doors, placement checks 2-high air, hinge handling, open/close toggle on interact
+    (and redstone later). Save state open/closed. Verify craft, place, open/close with correct collision.'
+  area: gameplay
+  effort: M
+  depends_on: []
+- id: AC-0270
+  title: leaf-blocks-collision-and-decay
+  priority: 2
+  status: open
+  notes: '1) User Story: As a player leaves should be solid (can''t walk/fall through) and naturally decay
+    like Minecraft when no log within 6 blocks via leaf path, while player-placed leaves never decay;
+    decay timer ticks only in sim distance but persists when back in sim so value must be saved.
+
+
+    2) Technical Details: godot/world/data + chunk + world.gd + save. Leaves collision solid. Decay: BFS
+    from leaves through leaves to find log within 6; only natural leaves decay, player-placed (via shears/Silk
+    Touch) flagged persistent (save flag). On log removal, start random timer per leaf group, tick only
+    in sim distance, persist timer value with chunk (like block entity), re-evaluate on load and when
+    back in sim. Verify no walk-through, natural decay over time, player-placed never decays, timer survives
+    sim distance exit/enter and save/load.'
+  area: gameplay
+  effort: M
+  depends_on: []
+- id: AC-0269
+  title: respawn-controller-auto-select
+  priority: 2
+  status: open
+  notes: '1) User Story: As a player using a controller after dying I want the respawn button auto-selected
+    so pressing A respawns without needing mouse.
+
+
+    2) Technical Details: godot/scenes/*.tscn + player.gd death UI. On death screen show, set respawn
+    button as focused/selected via grab_focus, map controller A (Joypad Button 0) to respawn action. Keep
+    mouse click. Verify controller can respawn directly.'
+  area: ui
+  effort: S
+  depends_on: []
+- id: AC-0268
+  title: crafting-menu-controller-support
+  priority: 2
+  status: open
+  notes: '1) User Story: As a player using a controller I want to use the crafting menu fully with the
+    controller, not just mouse.
+
+
+    2) Technical Details: godot/scenes/menu.tscn + crafting UI + player.gd input. Add controller navigation:
+    D-pad/stick to move focus between craft grid, output, inventory slots, shoulder buttons for quick
+    move, A to pick/place, B to close. Keep mouse unchanged. Verify full craft flow with controller alone.'
+  area: ui
+  effort: M
+  depends_on: []
+- id: AC-0267
+  title: controller-b-toggle-crouch
+  priority: 2
+  status: open
+  notes: '1) User Story: As a player I want pressing B on controller to toggle crouch — lowered camera
+    and hitbox, slower walk like reverse sprint, and edge guard so I can''t walk off a block onto air
+    while crouched but can still move.
+
+
+    2) Technical Details: godot/player/player.gd + input map + collision shape. B toggles crouch state,
+    lerp camera height and shrink hitbox while crouched, scale speed down ~0.3x like reverse sprint. Edge
+    guard: before applying move, check block below forward edge — if air and crouched, clamp movement
+    so player stops at edge but can still step back. Verify toggle, height/hitbox, speed, and no fall
+    off flat surface while crouched.'
+  area: player
+  effort: M
+  depends_on: []
+- id: AC-0266
+  title: hold-right-trigger-continuous-swing
+  priority: 2
+  status: open
+  notes: '1) User Story: As a player holding right trigger I want the item swing animation to keep looping
+    until I release, not just play once.
+
+
+    2) Technical Details: godot/player/player.gd + animation. Change right trigger (gamepad) from single
+    press to held repeat — while button held, loop swing animation and hit trace each cycle. Keep mouse
+    left-click behavior consistent. Verify holding trigger continuously swings, releasing stops.'
+  area: input
+  effort: S
+  depends_on: []
+- id: AC-0265
+  title: break-block-light-flash
+  priority: 2
+  status: open
+  notes: '1) User Story: As a player breaking a block I don''t want a flash of light where the block was.
+
+
+    2) Technical Details: godot/world/world.gd + chunk.gd + lighting.gd. Investigate break path light
+    recalc / mesh rebuild causing temporary bright face or sky light leak for one frame. Fix so broken
+    slab re-meshes with correct light without flash. Verify breaking blocks at various heights/times leaves
+    no bright pop.'
+  area: art
+  effort: S
+  depends_on: []
+- id: AC-0264
+  title: controller-left-stick-click-sprint-flying
+  priority: 2
+  status: open
+  notes: '1) User Story: As a player using a controller I want clicking the left analog stick to sprint
+    both on ground and while flying, with flying sprint scaling by the same ratio as ground sprint.
+
+
+    2) Technical Details: godot/player/player.gd + input map. Map left stick click (Joypad Button L3)
+    to sprint toggle/hold. Ground: WALK 4.3 -> SPRINT 5.6 ratio ~1.30. Flying: apply same 1.30 ratio on
+    top of flight_speed * WALK * FLY_VS. Keep keyboard sprint unchanged. Verify with controller on ground
+    and in flight, no double trigger.'
+  area: input
+  effort: S
+  depends_on: []
 - id: AC-0247
   title: pool-meshinstances-for-slabs
   priority: 2
@@ -10507,13 +10649,13 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels:
   - ui
   - menu
   created_at: 2026-09-11T20:38
-  updated_at: 2026-09-12T04:09
-  completed_at: null
+  updated_at: 2026-09-12T11:35
+  completed_at: 2026-09-12T11:35
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -10710,13 +10852,13 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels:
   - perf
   - low-lane
   created_at: 2026-09-12T04:09
-  updated_at: 2026-09-12T05:21
-  completed_at: null
+  updated_at: 2026-09-12T09:02
+  completed_at: 2026-09-12T09:02
   waiting_on: null
   parent_id: null
   notes: "1) User Story\nWhile the world is generating (standing still after spawn, render distance 30),\
@@ -10770,10 +10912,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-09-12T08:53
-  updated_at: 2026-09-12T08:56
+  updated_at: 2026-09-12T14:48
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -10835,5 +10977,89 @@ intake:
     \ LOD\n   starts.\n3. RINGS (high / medium / low): (layer, taxi) rings — complete the entire Y\n \
     \  (a full horizontal layer) across ALL LOD bands before moving down or up.\n   This is exactly the\
     \ current (layer, taxi) bake order — keep it; the\n   change is only that tier 0 becomes a dedicated\
-    \ preceding section and the\n   band boundaries become tier0_r / medium_start."
+    \ preceding section and the\n   band boundaries become tier0_r / medium_start.\n\n### Confirmed decisions\
+    \ (user, 2026-09-12)\n- SYNC GEN DROPPED: the per-recenter cold-column sync data gen (AC-0082 contract)\
+    \ is REMOVED — fully queue/worker-driven, no main-thread generation ever mid-game. The game-START\
+    \ 5x5 spawn burst is KEPT (spawn protection). Cold-column tradeoff accepted: brief fall-through (~100\
+    \ ms) until the async gen lands (teleport/fast flight only).\n- DEFAULT medium_start = 8 (high band\
+    \ taxi<8 by default vs sim 4; ~3.5x high-band chunk count; MED band [8, low_start)).\n- UI: the \"\
+    mid LOD distance\" slider goes in the Settings menu (next to the existing \"Low LOD start\" slider).\n\
+    \n## AC-0263 implementation log (stages C–E, 2026-09-12)\n\n### Per-slab high build (stage C) — implemented,\
+    \ no C++ change\n- chunk.gd: `high_stamps: Dictionary` (si -> data_gen on landing, INCLUDING empty/all-air\n\
+    \  slabs); reset at the pooled-node full reset. `apply_edit_accs(res, ms, mark_complete := true)`\n\
+    \  — the hslab lane attaches with mark_complete=false (a slab landing does not complete the\n  column;\
+    \ the handoff runs the completion check).\n- world.gd: `_hslab_best_pending(c)` — a slab is high-pending\
+    \ while `si <= top>>4`,\n  `data[si] != null`, stamp != data_gen; same fan walk as the low probe (player-Y\
+    \ slab first,\n  down/up) = the (layer, taxi) order's layer. Probe cache `_hslab_probe_cache` mirrors\
+    \ the\n  AC-0262 low cache (fingerprint [data_gen, fl_gen, player_slab, tier] + single-slab\n  re-check).\
+    \ `_mesh_dispatch_hslab(c, cx, cz, si, eff)` — the edit lane's scoped entry with\n  si0=si1=si, row\
+    \ window [si*16-1, si*16+16], full slab copy, MAIN threadmesh pool, NO sync\n  fallbacks (data/neighbor\
+    \ missing or cap -> defer). Handoff hslab branch: scoped stale\n  (rows_eq) + band check (shared)\
+    \ -> scoped retain-swap -> per-slab `_low_drop_slab` +\n  `_fog_drop_slab` -> `high_stamps[si] = data_gen`\
+    \ -> completion check flips `mesh_built`\n  when the probe owes nothing -> eff cache; the entry STAYS\
+    \ queued (no _drop_queued) — the\n  pick removes it when the probe finds nothing left. Edit handoff\
+    \ stamps high_stamps for\n  si0..si1 (the edit window includes the boundary slabs); the legacy full\
+    \ handoff stamps\n  0..top (and counts `_tm_full_firstbuild_n` first-builds).\n- `_grid_score`: per-lane\
+    \ probe (high band [0, medium_start_r) + tier-0 ball -> high probe;\n  wave band -> low probe) + tier-0\
+    \ section prefix (score -= 1e10) so every tier-0 slab\n  outranks every ring slab while the section\
+    \ owes work.\n- Drain rewired per-slab: steady pass + load phase dispatch `_build_unit_hslab` (mirrors\n\
+    \  _build_unit's contained-light handling); a high-complete winner frees its entry, a pending\n  one\
+    \ stays queued (one slab in flight per chunk = the natural pace). WAVE 3 upgrade is\n  per-slab too.\
+    \ The full-column `_build_unit`/`_mesh_dispatch_impl` survive only as the\n  legacy re-mesh lane (light\
+    \ flush / fluid / tex refresh).\n\n### Tier-0 section (stage D)\n- `_tier0_section_drained()` — the\
+    \ Chebyshev ball has no pending high slab (probe-cached;\n  a no-DATA tier-0 column is not drained\
+    \ — its build starts the moment data lands).\n- Wave gate: WAVE 2b dispatches only when the section\
+    \ is drained — ONE-SHOT: once the wave\n  lands its first attach the gate stays open (a recenter's\
+    \ new section column then builds\n  through the drain without stalling the wave, or every chunk crossing\
+    \ would hitch it).\n  Evidence counters for r16: `_hslab_section_done_frame` (initial section completion),\n\
+    \  `_low_first_attach_frame` (wave's first textured-low attach), `section_first_ok` =\n  low_first\
+    \ >= section_done.\n\n### Sync paths dropped (stage E) — fully queue-driven\n- recenter: the (0,0)\
+    \ sync gen block removed; the startup burst now INCLUDES the center\n  (25 cells — the spawn anti-fall\
+    \ contract is the burst, kept).\n- `_gen_unit`: the (0,0) sync disk-read exemption removed (the spawn\
+    \ column takes the same\n  disk-first worker path as every column); the sync-gen tail survives only\
+    \ for the\n  threadgen-less dev fallback.\n- `_mesh_dispatch_impl`: all three sync fallbacks (no-data,\
+    \ missing-neighbor, cap-drop)\n  are now defers (return false); the fluid-lane caller re-queues on\
+    \ defer.\n- `create_chunk(mesh_now)`: node creation only (the sync materialize/build were dead —\n\
+    \  every caller passed false / never true). `_materialize_chunk_data` deleted (no callers).\n- recenter's\
+    \ `mesh_now=false` sync-fill branch deleted (dead — every caller passes true).\n- `spawn_point()`:\
+    \ analytic heightmap (`WorldGen.terrain_height` — the spawn plateau is flat\n  at SPAWN_H by design)\
+    \ instead of the sync-materialized chunk's surface_top.\n- ROOT CAUSE FOUND (r16 0/25 stall, 14 min):\
+    \ `WorldGen.gen_cpp()`'s lazy init is\n  thread-unsafe (the done-flag is set BEFORE the instance assignment)\
+    \ — AC-0263's removal\n  of the main-thread sync gen made the burst workers the first callers and\
+    \ the 3-wide\n  parallelism raced it: a loser worker read a nil, its element died, the dead slot held\n\
+    \  `_startup_gen_pending_n` > 0 forever and the startup build-hold deadlocked the spawn\n  (the data\
+    \ pass that could have regenerated the chunk is gated behind _spawn_fast, which\n  needs the 3x3 meshed,\
+    \ which needs the data — a second deadlock). FIXES: (1) both C++\n  singletons (gen_cpp, mesh_cpp)\
+    \ are pre-seeded on the main thread at ready, before any\n  pool task; (2) dead-slot self-heal in\
+    \ `_startup_gen_apply` — 5 s past burst start, every\n  still-dead non-had_data slot is resolved (pending\
+    \ count drops, hold lifts) and its chunk\n  is fed through `_gen_unit` NOW (the data lane minus the\
+    \ _spawn_fast gate).\n\n### Harness (stage F)\n- r16 arm: explicit zones (sim 2 / medium_start 4 /\
+    \ low_start 10 / R 16 — the\n  medium_start > sim_dist constraint pins sim 2 for the historic [0,4)\
+    \ high band); the\n  build-wait counts mesh_built (per-slab-complete) at taxi < medium_start_r; new\
+    \ evidence:\n  medium_start_eff, hslab_n, full_firstbuild_n, section_first_ok.\n- ladder arm: sim\
+    \ 2 / medium_start 4 / low_start 6 / R 8; band helpers on medium_start_r.\n- wprof settle: the high-band\
+    \ boundary is medium_start_r.\n- settings arm: medium_start default 8 + band clamp (floor sim+1, ceil\
+    \ render) assertions.\n\n### Gates (status at write time)\n- boot: 0 SCRIPT ERRORs after every stage.\n\
+    - ladder: GREEN (ok:true, tier0_ok, 353/353 MED + 507/507 LOW, boundary flip, air rule).\n- r16 run\
+    \ a (pre one-shot-gate): ok:true, built 25/25, hslab_n 2790, full_firstbuild_n 0,\n  fcc 21059145/144/1,\
+    \ wave drained-at-sample, inr_ok, stream settled — section_first_ok\n  false (moving-target evidence\
+    \ bug, fixed by the one-shot gate).\n- r16 run b (one-shot gate, PRE root-cause fix): DEADLOCKED at\
+    \ 0/25 (the gen_cpp race —\n  see above). run c (with both fixes): pending.\n- battery / meshprobe\
+    \ / wprof: pending (genhash must stay 80b904c0e5f085eef1e839459058c706 —\n  no C++ change, it should).\n\
+    \n### AC-0263 gates (final, all GREEN)\n- boot (after every stage): 0 SCRIPT ERROR / 0 Parse Error.\n\
+    - r16 (run c, post-fix): ok:true — built 25/25 (per-slab), build_ms 18356 (AC-0262: 16858),\n  hslab_n\
+    \ 2795 / full_firstbuild_n 0 (the legacy full-column path did zero first builds),\n  section_first_ok\
+    \ true (initial tier-0 section done t=1922ms < wave first attach t=2743ms),\n  zones medium_start_eff\
+    \ 4 / band0_eff (sim) 2 / low_start_eff 10, wave drained-at-sample,\n  inr_ok, stream settled_ok,\
+    \ holes 0 (air_back/edge are terminal/edge classes),\n  fcc 21059145 / 144 tiles / 1 rebuild (unchanged),\
+    \ uv 119271 quads / 0 mismatches.\n  Runs a/b notes: a = ok pre one-shot-gate (section evidence was\
+    \ a moving target — fixed);\n  b = the 14-min 0/25 deadlock (gen_cpp race — see implementation log).\n\
+    - ladder: ok:true, tier0_ok true, MED 353/353 + LOW 507/507 signatures, boundary flip ok\n  (low_start\
+    \ 6->7 moves band slabs MED->LOW), air synth + in-world air rule ok.\n- meshprobe: ac0211_ok:true\
+    \ (1920/1920 accs, C++/GD twins match, compact ok).\n- battery: ok:true (pausemenu + genhash); the\
+    \ 25-cell GENHASH grid is BYTE-IDENTICAL to\n  the AC-0262 log (80b904c0e5f085eef1e839459058c706 at\
+    \ (0,0) — no C++ change held).\n- wprof: ok:true — frame avg 12.0 / p95 17.3 / max 19.5 (AC-0262 headline\
+    \ 37.6/51.0 —\n  per-slab pacing smooths the storm), DRAIN avg 8.0, LOW_PICK 2.2 (the section gate\
+    \ rides\n  in it, near-free), LOW_WAVE 0.3, HANDOFF 0.7, all partition stages present, lost_chunks\
+    \ 0."
   comments: []

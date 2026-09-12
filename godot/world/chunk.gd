@@ -104,6 +104,13 @@ var low_slabs: Array = []        # slab indices holding a per-slab textured low
 var low_built := false
 var low_stamps: Dictionary = {}  # AC-0231 fix3: si -> stamp when that low slab was built
 var low_failed: Dictionary = {}  # AC-0231 fix3: si -> data_gen of the all-air sample
+# AC-0263: si -> data_gen when that slab's full-res (high) mesh LANDED —
+# empty slabs (all-air builds) are stamped too (they are DONE, not
+# pending; mesh_instance stays null for them). A slab is high-pending
+# while si <= top>>4, data[si] != null, and its stamp != data_gen. The
+# high build is per-slab (the tier-0 section + the high-band rings);
+# mesh_built flips true when the probe finds nothing pending.
+var high_stamps: Dictionary = {}
 # AC-0252: si -> the band tier (1 = MED 8x8x8, 2 = LOW 4x4x4) the low slab
 # was BUILT at. A slab whose stored tier differs from the live band tier
 # (world._lod_tier_of at the chunk's live distance) is PENDING — a
@@ -1415,9 +1422,12 @@ func apply_accs(res: Dictionary, ms: Dictionary) -> void:
 	_post_build_collision()
 
 
-func apply_edit_accs(res: Dictionary, ms: Dictionary) -> void:
+func apply_edit_accs(res: Dictionary, ms: Dictionary, mark_complete := true) -> void:
 	# AC-0199: retain-swap (scoped) - the covered slabs keep their old
 	# instances until the new refs are assembled, then the old are freed.
+	# AC-0263: mark_complete=false for the per-slab high lane (a scoped
+	# landing does NOT complete the column — the completion check runs in
+	# the world handoff against the high_stamps probe).
 	var pms := {"tex": null, "rects": {}, "h": 0.0}
 	var si0 := int(res.get("si0", 0))
 	var si1 := int(res.get("si1", slab_n() - 1))
@@ -1442,7 +1452,8 @@ func apply_edit_accs(res: Dictionary, ms: Dictionary) -> void:
 	for o2 in old_insts:
 		if is_instance_valid(o2):
 			_pool_free_inst(o2)  # AC-0247: the MeshInstance3D slab instances go to the pool (the occluder keeps the legacy free)
-	mesh_built = true
+	if mark_complete:
+		mesh_built = true
 	mesh_gen += 1
 	_post_build_collision()
 
@@ -1526,6 +1537,7 @@ func _pool_reset() -> void:
 	# mesh state
 	mesh_built = false
 	mesh_gen = 0
+	high_stamps = {}  # AC-0263: the per-slab high completion stamps
 	last_eff = {}
 	last_blk_ring = PackedInt32Array()
 	# collision
