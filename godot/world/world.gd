@@ -688,13 +688,13 @@ const LOW_POLL_BUDGET_MS := 4.0    # AC-0236 part 2: the per-frame wall-clock ca
                                    # low HANDOFFS (the attach cost, ~0.2 ms each)
                                    # whole circle+ring fits; a capped scan leaves the
                                    # gate CLOSED rather than proving drained)
-# AC-0252: the med/low band split. The MED (8x8x8) tier owns the placeholder
-# region; the LOW (4x4x4) tier renders ONLY from the configurable low-start
-# distance (taxi chunks — the sim_dist metric) out to the render edge.
-# low_start_r = the effective boundary (recomputed by apply_low_start; the
-# floor is band0_r — the tier-1 sim "high circle" — so the low band can
-# never start inside the sim diamond).
-var low_start_r := 42
+# AC-0261: the med/low band split. The visible LOD zones (taxi): HIGH
+# [0, band0_r) (the build lane), MED (8x8x8) [band0_r, low_start_r), LOW
+# (4x4x4) [low_start_r, render_radius); nothing renders past the (taxi)
+# render distance. low_start_r = the effective boundary (recomputed by
+# apply_low_start; clamped to [band0_r, render_radius] — between the
+# simulation distance and the render distance).
+var low_start_r := 27
 var _low_fog_mat: StandardMaterial3D = null
 var _low_fog_mesh: ArrayMesh = null  # pre-baked 16x16x16 box (shared by every MultiMesh)
 var _low_fog_color := Color(0.55, 0.68, 0.85)
@@ -1105,12 +1105,10 @@ func _low_fog_for(c: Node3D) -> void:
 	var dz := int(c.cz) - last_pcz
 	if _is_tier0_col(dx, dz):
 		return  # AC-0257: the tier-0 set goes straight to high — never a placeholder
-	# AC-0231 order gate: ANY in-r data landing can create in-r pending — a
-	# new fog slab, or a STALE LOW needing rebuild (the low_built early
-	# return below skips the fogging loop, so the gate must close BEFORE
-	# it). The tier >= 2 high dispatch waits again (far landings don't
-	# touch the gate).
-	if dx * dx + dz * dz <= render_radius * render_radius:
+	# AC-0261: the in-r order-gate invalidation below is a no-op (the
+	# AC-0231 in-r placeholder lane is dead — _low_inr_invalidate keeps
+	# the gate open unconditionally); the taxi test stays for parity.
+	if absi(dx) + absi(dz) <= render_radius:
 		_low_inr_invalidate()
 	if int(c.face) > 1 or bool(c.mesh_built) or bool(c.low_built):
 		return
@@ -1210,6 +1208,8 @@ var _lod_fcc: PackedFloat32Array = PackedFloat32Array()  # 256 ids x 6 dirs x 3 
 var _lod_fcc_dirty := true
 var lod_fcc_build_ms := 0.0   # the one-time face-color cache build cost (AC-0252 report)
 var lod_fcc_tiles := 0        # (id, dir) tiles averaged (evidence)
+var lod_fcc_rebuilds := 0     # AC-0261: every rebuild (a zero-atlas first
+                              # build is sticky — this must stay 1)
 var _lod_avg_material: ShaderMaterial = null
 var _lod_day_last := Color(-1.0, -1.0, -1.0)  # AC-0252: the "day" uniform's last value (skip the per-frame set when unchanged)
 
@@ -1222,8 +1222,17 @@ var _lod_day_last := Color(-1.0, -1.0, -1.0)  # AC-0252: the "day" uniform's las
 # perceptually-right "average texture color") and converted to LINEAR
 # once (the vertex color is consumed linear by the spatial shader).
 func _lod_fcc_get() -> PackedFloat32Array:
-	if _lod_fcc_dirty or _lod_fcc.is_empty():
+	# AC-0261 follow-up: the ALL-ZERO first build (a call before the atlas
+	# image is ready) must not stick — retry once the atlas appears. The
+	# tiles counter is cumulative, so this clause can only ever fire for
+	# the very first (tile-less) build; a successful build makes it a
+	# permanent no-op.
+	if _lod_fcc_dirty or _lod_fcc.is_empty() \
+			or (lod_fcc_tiles == 0 and Data.atlas_tex != null and not Data.atlas_rects.is_empty()):
 		_lod_fcc_dirty = false
+		lod_fcc_rebuilds += 1
+		print("FCCREBUILD n=%d tex=%s rects=%d tiles_so_far=%d" % [
+			lod_fcc_rebuilds, str(Data.atlas_tex != null), Data.atlas_rects.size(), lod_fcc_tiles])
 		var a := PackedFloat32Array()
 		a.resize(256 * 18)
 		var img: Image = null
@@ -1296,13 +1305,22 @@ func _lod_avg_mat() -> ShaderMaterial:
 		_lod_avg_material.set_shader_parameter("day", Color(1.0, 1.0, 1.0))
 	return _lod_avg_material
 
-# AC-0252: the MED/LOW band split (the tier of a placeholder chunk at
-# (dx, dz) from the player column): 1 = MED (8x8x8), 2 = LOW (4x4x4).
-# Taxi metric — the same distance family as band0_r (sim_dist).
+# AC-0261: the LOD zone of a chunk at (dx, dz) from the player column,
+# taxi metric (the render edge is taxi too — "render distance is the max
+# value for everything that is rendered"): 0 = HIGH band [0, band0_r) —
+# the build lane owns it (pending renders NOTHING, no placeholder of any
+# kind); 1 = MED (8x8x8) [band0_r, low_start_r); 2 = LOW (4x4x4)
+# [low_start_r, render_radius); 3 = DATA-ONLY [render_radius, ring edge)
+# — nothing renders past the render distance.
 func _lod_tier_of(dx: int, dz: int) -> int:
-	if absi(dx) + absi(dz) >= low_start_r:
+	var taxi := absi(dx) + absi(dz)
+	if taxi < band0_r:
+		return 0
+	if taxi < low_start_r:
+		return 1
+	if taxi < render_radius:
 		return 2
-	return 1
+	return 3
 
 # AC-0257: the TIER-0 SET — the Chebyshev ball around the player column
 # (Settings "tier0_radius") that goes STRAIGHT TO HIGH: no fog, no low,
@@ -1326,24 +1344,29 @@ func note_tier0_radius() -> void:
 	_low_inr_invalidate()
 	_rescore_kick()
 
-# AC-0252: the user setting (Settings "low_start", taxi chunks) takes
-# effect. The med/low split lives in the data-only FAR RING — the 1-chunk
-# band just outside the Euclidean render circle, whose TAXI span is
-# [render_radius + 1, ~render_radius*sqrt(2)] (the diagonal chunks are
-# ~R*1.41 in taxi). The effective boundary is clamped to that ring: ABOVE
-# the high circle (the low band can never start inside the circle — the
-# circle is the full-fidelity high region) and at/below the render edge
-# (the ring's outer taxi). MED (8x8x8) owns taxi < low_start_r, LOW (4x4x4)
-# owns taxi >= low_start_r (both in the ring, plus the in-r pending slabs,
-# which are always taxi < render_radius < low_start_r, so always MED). A
-# boundary move re-stales every live low slab whose tier changed (the
-# pending walks compare c.low_tiers against the LIVE tier), so invalidate
-# the cached none-verdicts + the in-r drain proof (taken under the OLD
-# boundary) and re-stamp the queue.
+# AC-0261: the user setting (Settings "low_start", taxi chunks) takes
+# effect. The med/low split lives INSIDE the render distance: MED (8x8x8)
+# owns [band0_r, low_start_r), LOW (4x4x4) owns [low_start_r, render_radius);
+# the high band [0, band0_r) is full-fidelity (the build lane) and nothing
+# renders past the render distance. The effective boundary is clamped to
+# [band0_r, render_radius] — between the simulation distance and the
+# render distance, never outside either. A boundary move re-stales every
+# live low slab whose tier changed (the pending walks compare c.low_tiers
+# against the LIVE tier), so invalidate the cached none-verdicts and
+# re-stamp the queue.
 func apply_low_start() -> void:
-	var lo := render_radius + 1
-	var hi := int(floorf(1.42 * float(render_radius))) + 1
-	low_start_r = clampi(int(Settings.values.get("low_start", lo)), lo, hi)
+	var lo := band0_r
+	var hi := render_radius
+	if lo > hi:
+		lo = hi
+	# AC-0261: an out-of-band value re-defaults to the MIDPOINT (the
+	# settings clamp's rule, mirrored here — an edge clamp would silently
+	# cancel the LOW band when the value sits past render, e.g. a harness
+	# that sets render_radius directly without the settings clamp chain).
+	var ls := int(Settings.values.get("low_start", int((lo + hi) / 2)))
+	if ls < lo or ls > hi:
+		ls = int((lo + hi) / 2)
+	low_start_r = ls
 	_low_none_key = ""
 	_low_slab_none_key = ""
 	_low_inr_invalidate()
@@ -2406,15 +2429,26 @@ func _low_pick(want_low: bool) -> Dictionary:
 			# step-through under the player).
 			if _is_tier0_col(dx, dz):
 				continue
+			# AC-0261: only HIGH-band columns are upgrade candidates — the
+			# catch-up's whole job is a low-holding column ENTERING the high
+			# band (the player approached it). The visible band [band0_r,
+			# render_radius) keeps its avg LOD as the final LOD.
+			if absi(dx) + absi(dz) >= band0_r:
+				continue
 			var c = chunks.get(e["key"])
 			if c == null or c.data.is_empty() or bool(c.mesh_built):
 				continue
-			# PER-SLAB staleness (AC-0231 fix3): the WAVE 3 upgrade
-			# dispatches only for chunks whose LOW slabs are ALL fresh
-			# (edited data must be re-lowered before the high replaces it).
+			# PER-SLAB staleness (AC-0231 fix3): the WAVE 2 pick dispatches
+			# only for chunks whose LOW slabs are ALL fresh.
 			var stale := _low_any_stale(c)
 			if want_low:
-				if not (bool(c.low_built) and not stale):
+				# AC-0261: the stale-low gate is gone — every candidate is
+				# a HIGH-band column (the band gate above) whose low was
+				# built at a FARTHER tier (that is why it is stale at the
+				# live tier 0). The high build REPLACES every placeholder
+				# (the handoff frees them) and reads the current data, so
+				# the low's tier stamp is irrelevant.
+				if not bool(c.low_built):
 					continue
 				# the idle upgrade must not force a sync fallback — a
 				# missing neighbor would stall the main thread 300-1200 ms;
@@ -2522,8 +2556,12 @@ func _low_pick_slab() -> Dictionary:
 			var dz := int(e["cz"]) - last_pcz
 			if _is_tier0_col(dx, dz):
 				continue  # AC-0257: the tier-0 set is high only (never a placeholder)
-			if dx * dx + dz * dz <= render_radius * render_radius:
-				continue  # in-r: the tier-ordered in-r pre-low pass owns the circle
+			# AC-0261: the wave covers the visible band [band0_r, render_radius)
+			# — the high band below it is the build lane's (pending renders
+			# nothing), and past the (taxi) render distance nothing renders.
+			var taxi := absi(dx) + absi(dz)
+			if taxi < band0_r or taxi >= render_radius:
+				continue
 			var c = chunks.get(e["key"])
 			if c == null or c.data.is_empty() or bool(c.mesh_built):
 				continue
@@ -2547,14 +2585,12 @@ func _low_pick_slab() -> Dictionary:
 		return {}
 	return {"key": best["key"], "cx": best["cx"], "cz": best["cz"], "si": best_si}
 
-# AC-0231: an in-r pending chunk may now exist (an in-r data landing just
-# fogged slabs, an in-r edit made a low stale, or a recenter moved a
-# fog-only chunk into the circle) — the order gate closes and the stability
-# window restarts.
+# AC-0261: the in-r pre-low lane is DEAD (the per-column MED placeholder
+# pass) — pending slabs in the high band render NOTHING and the visible
+# band [band0_r, render_radius) is lowered per slab by the disc-ordered
+# wave. The order gate can never close again.
 func _low_inr_invalidate() -> void:
-	if _low_inr_drained:
-		perf_gate_reclose_n += 1  # a fresh in-r pending appeared after a drain
-	_low_inr_drained = false
+	_low_inr_drained = true
 	_low_inr_drain_since = 0
 
 # AC-0231 in-r pre-low pick: the lowest-scoring INSIDE-circle pending chunk
@@ -2617,46 +2653,10 @@ func _low_inr_pick() -> Dictionary:
 # tier >= 2 high dispatch is held, and its frame share goes to the low. A
 # partial chunk resumes next frame (its slabs stay pending).
 func _low_inr_step(dt_ms: float) -> void:
-	var frac := LOW_INR_BUDGET_FRAC
-	var max_ms := LOW_INR_BUDGET_MAX_MS
-	if not _low_inr_drained:
-		frac = LOW_INR_BUSY_FRAC
-		max_ms = LOW_INR_BUSY_MAX_MS
-	var budget_ms := clampf(dt_ms * frac, LOW_INR_BUDGET_MIN_MS, max_ms)
-	var t0 := Time.get_ticks_usec()
-	while (Time.get_ticks_usec() - t0) / 1000.0 < budget_ms:
-		var e: Dictionary = _low_inr_pick()
-		if e.is_empty():
-			return
-		var c = chunks.get(e["key"])
-		if c == null or c.data.is_empty() or bool(c.mesh_built) or int(c.face) > 1:
-			continue
-		var sis: Array = _low_pending_sis(c)
-		if sis.is_empty():
-			continue
-		var it_progress := 0
-		for si in sis:
-			# AC-0236 part 2 / AC-0250 / AC-0252 offload: the grid sample
-			# + emit ride the TM pool (the C++ low_emit_avg on a worker —
-			# ZERO generation on the main thread); the -1 verdict (null
-			# slab ONLY — the sync main-thread build is gone) takes the
-			# air bookkeeping via _low_air_slab (scene/state work — no
-			# sampling, no emit). The 0 verdict (dedupe — a task is
-			# already in flight) and the 2 verdict (pool saturated — the
-			# slab stays PENDING, re-picked next frame) are no-ops; a
-			# capped slab is NOT in flight, so it does not count as
-			# progress (the in-flight result attaches via _low_poll).
-			var d := _low_dispatch_slab(c, int(si))
-			if d < 0:
-				_low_air_slab(c, int(si))
-			if d != 0 and d != 2:
-				it_progress += 1
-		# AC-0236 part 2: every pending slab of the picked chunk is ALREADY
-		# in flight (all dedupe) — re-picking it would spin the budget on
-		# no work; the in-flight results attach this/next frame and the
-		# pass resumes then.
-		if it_progress == 0:
-			return
+	# AC-0261: dead lane — no more per-column MED placeholders (pending
+	# slabs render nothing inside the high band; the slab wave owns the
+	# visible band per slab). The gate stays open.
+	_low_inr_drained = true
 
 # AC-0231 fix3: the per-frame far-LOD lane (a separate lane — never the
 # TG/TM pools). The three waves are GLOBAL across all columns (never
@@ -2726,10 +2726,12 @@ func _low_step() -> void:
 	# WAVE 2a: the in-r pre-low — tier-ordered, budget = a fraction of the
 	# frame wall time (LOW_INR_BUDGET_FRAC, clamped).
 	_low_inr_step(dt_ms)
-	# WAVE 2b: the far global slab wave — OUTSIDE the circle, wall-clock
-	# paced (LOW_WAVE_PACE_MS per slab), the smallest si first, ties by
-	# rank across all columns (the per-column sequential fill is gone:
-	# every column's si=N slabs land before any si=N+1). The acc is
+	# WAVE 2b: the global slab wave — the visible band [band0_r,
+	# render_radius) (AC-0261: the high band below it is build-lane only,
+	# nothing renders past the taxi render edge), wall-clock paced
+	# (LOW_WAVE_PACE_MS per slab), the (layer, taxi) disc order across all
+	# columns (the per-column sequential fill is gone: every column's
+	# player-Y slab lands before any column's next layer). The acc is
 	# clamped to one frame cap's worth (a stall never catches up in a
 	# burst). No-candidate verdicts are cached (zero cost between
 	# landings/edits — a drained wave is a couple of dict ops).
@@ -3446,24 +3448,19 @@ func _overlay_draw_band(mi: MeshInstance3D) -> void:
 	var rr := render_radius * 16
 	var sr := int(Settings.values.get("sim_dist", 4)) * 16
 	m.surface_begin(Mesh.PRIMITIVE_LINES)
-	m.surface_set_color(Color(1, 1, 1, 0.35))
-	var i := -rr
-	while i <= rr:
-		m.surface_add_vertex(Vector3(cx + float(i), y, cz - float(rr)))
-		m.surface_add_vertex(Vector3(cx + float(i), y, cz + float(rr)))
-		m.surface_add_vertex(Vector3(cx - float(rr), y, cz + float(i)))
-		m.surface_add_vertex(Vector3(cx + float(rr), y, cz + float(i)))
-		i += 16
-	_overlay_rect(m, float(cx), y, float(cz), float(sr), Color(1.0, 0.6, 0.1, 0.9))
-	_overlay_rect(m, float(cx), y, float(cz), float(rr), Color(0.2, 1.0, 0.3, 0.9))
+	# AC-0261: the render/sim regions are TAXI diamonds (|dx|+|dz| <= r),
+	# not axis-aligned squares.
+	_overlay_diamond(m, float(cx), y, float(cz), float(sr), Color(1.0, 0.6, 0.1, 0.9))
+	_overlay_diamond(m, float(cx), y, float(cz), float(rr), Color(0.2, 1.0, 0.3, 0.9))
 	m.surface_end()
 	mi.mesh = m
 
 
-func _overlay_rect(m: ImmediateMesh, cx: float, y: float, cz: float, r: float, col: Color) -> void:
+# AC-0261: a taxi-diamond outline (its vertices sit on the X/Z axes).
+func _overlay_diamond(m: ImmediateMesh, cx: float, y: float, cz: float, r: float, col: Color) -> void:
 	var v := [
-		Vector3(cx - r, y, cz - r), Vector3(cx + r, y, cz - r),
-		Vector3(cx + r, y, cz + r), Vector3(cx - r, y, cz + r)]
+		Vector3(cx, y, cz - r), Vector3(cx + r, y, cz),
+		Vector3(cx, y, cz + r), Vector3(cx - r, y, cz)]
 	m.surface_set_color(col)
 	for i in 4:
 		m.surface_add_vertex(v[i])
@@ -3994,13 +3991,14 @@ func _drain_tex_refresh() -> void:
 
 # Entry. No-op when AWECRAFT_LOADBYPASS=0 (the legacy spread drain). Raises
 # the in-flight caps + drain budgets (each site checks loading_active) and
-# shows the screen. Target = the render circle's column count (band 3 is
-# data-only, never meshed — it is excluded by construction).
+# shows the screen. Target = the HIGH band's column count (AC-0261: the
+# only region that gets a full mesh — the visible band is slab-wave
+# owned, band 3 is data-only).
 func start_loading(title: String) -> void:
 	if not loading_bypass:
 		return
 	loading_active = true
-	_loading_target = circle_count()
+	_loading_target = _high_band_count()
 	_loading_radius = render_radius
 	# AC-0178: saturate the 6-thread pool — TG keeps its low-priority 3-thread
 	# share (gen feeds the mesh builds, which take the 6 high-priority
@@ -4040,21 +4038,49 @@ func circle_count() -> int:
 				n += 1
 	return n
 
-# Meshed columns of the current render circle (progress evidence from the
-# chunk nodes themselves — no shadow counters to drift).
-func meshed_in_circle() -> int:
+# AC-0261: the loading target is the HIGH band (taxi < band0_r) — the only
+# region that ever gets a full mesh. The visible band [band0_r,
+# render_radius) fills in via the disc-ordered slab wave while the player
+# plays (the normal streaming experience); waiting for it would stall the
+# load on work the streaming loop already owns.
+func _high_band_count() -> int:
 	var n := 0
-	for dx in range(-render_radius, render_radius + 1):
-		for dz in range(-render_radius, render_radius + 1):
-			if not in_render_circle(dx, dz):
+	for dx in range(-band0_r, band0_r):
+		for dz in range(-band0_r, band0_r):
+			if absi(dx) + absi(dz) < band0_r:
+				n += 1
+	return n
+
+
+func _high_band_meshed() -> int:
+	var n := 0
+	for dx in range(-band0_r, band0_r):
+		for dz in range(-band0_r, band0_r):
+			if absi(dx) + absi(dz) >= band0_r:
 				continue
 			var c = chunks.get(_key(last_pcx + dx, last_pcz + dz))
 			if c != null and c.mesh_built:
 				n += 1
 	return n
 
+
+# AC-0261: true when no slab of the visible band [band0_r, render_radius)
+# is still owed to the slab wave (every data slab holds its low or is
+# all-air). The drain-wait predicate (loading arms / harness).
+func band_drained() -> bool:
+	for key in chunks:
+		var c: Node3D = chunks[key]
+		var taxi := absi(int(c.cx) - last_pcx) + absi(int(c.cz) - last_pcz)
+		if taxi < band0_r or taxi >= render_radius:
+			continue
+		if c.data.is_empty() or bool(c.mesh_built):
+			continue
+		if _entry_best_pending(c) >= 0:
+			return false
+	return true
+
 # Per-frame: refresh the UI from the real provenance counters, then test the
-# completion predicate — circle fully meshed and both worker pools drained.
+# completion predicate — high band fully meshed and both worker pools drained.
 func _loading_tick() -> void:
 	if not loading_active:
 		return
@@ -4062,8 +4088,8 @@ func _loading_tick() -> void:
 	# target instead of stalling on the stale one.
 	if render_radius != _loading_radius:
 		_loading_radius = render_radius
-		_loading_target = circle_count()
-	var m := meshed_in_circle()
+		_loading_target = _high_band_count()
+	var m := _high_band_meshed()
 	if _loading_screen != null:
 		_loading_screen.update_progress(m, _loading_target, disk_reads, gen_count)
 	if m >= _loading_target and threadmesh_inflight.is_empty() and threadgen_inflight.is_empty():
@@ -4093,18 +4119,21 @@ func b1_eff() -> int:
 	return mini(band1_r, render_radius)
 
 
+# AC-0261: the render region is a TAXI square (|dx|+|dz| <= R) — "render
+# distance is the max value for everything that is rendered" (the user
+# specified the taxi metric for the edge, same family as the sim band).
 func in_render_circle(dx: int, dz: int) -> bool:
-	return dx * dx + dz * dz <= render_radius * render_radius
+	return absi(dx) + absi(dz) <= render_radius
 
 
-# AC-0152 ring: outside the render circle but touching it within the
-# 8-neighborhood. Band-2 edge chunks build against their 4-axis neighbors,
-# which sit OUTSIDE the circle at large R (the diamond collar is far inside
-# the circle) — without this ring their data never arrives and ~400 boundary
-# chunks strand the queue. Data-only, band 3, never meshed.
-# The min squared distance over the 8-neighborhood is the SUM of the per-axis
-# mins (axis 0 stays 0, axis |a| drops to (|a|-1)^2) — closed form, no loop:
-# the ring walk runs this per box cell, so the 9-test loop was ~3x the walk.
+# AC-0152 ring (AC-0261: around the taxi square): outside the render
+# region but touching it within the 8-neighborhood. Edge chunks build
+# against their 4-axis neighbors, which sit OUTSIDE the region at large R
+# — without this ring their data never arrives and boundary chunks strand
+# the queue. Data-only, band 3, never meshed.
+# The min taxi distance over the 8-neighborhood is the SUM of the per-axis
+# mins (axis |a| drops to |a|-1) — L1 separates per axis, closed form, no
+# loop: the ring walk runs this per box cell.
 func in_circle_ring(dx: int, dz: int) -> bool:
 	if in_render_circle(dx, dz):
 		return false
@@ -4112,13 +4141,13 @@ func in_circle_ring(dx: int, dz: int) -> bool:
 	var az := absi(dz)
 	var gx := ax - 1 if ax > 0 else 0
 	var gz := az - 1 if az > 0 else 0
-	return gx * gx + gz * gz <= render_radius * render_radius
+	return gx + gz <= render_radius
 
 
 func in_stream_set(dx: int, dz: int) -> bool:
-	# circle(R) ∪ diamond(b1_eff + 1) ∪ circle ring: the extra sets are band
-	# 3 (data-only) — the collar covers band 0/1 edge neighbors at small R,
-	# the ring covers band 2 edge neighbors at large R.
+	# taxisquare(R) ∪ diamond(b1_eff + 1) ∪ taxi ring: the extra sets are
+	# band 3 (data-only) — the collar covers band 0/1 edge neighbors at
+	# small R, the ring covers band 2 edge neighbors at large R.
 	return in_render_circle(dx, dz) or absi(dx) + absi(dz) <= b1_eff() + 1 or in_circle_ring(dx, dz)
 
 
@@ -5075,7 +5104,7 @@ func _dirty_add(key: String, y: int) -> void:
 	if cc != null:
 		var ddx := int(cc.cx) - last_pcx
 		var ddz := int(cc.cz) - last_pcz
-		if ddx * ddx + ddz * ddz <= render_radius * render_radius:
+		if absi(ddx) + absi(ddz) <= render_radius:  # AC-0261: taxi edge (the gate is a no-op)
 			_low_inr_invalidate()
 
 
@@ -5753,6 +5782,13 @@ func _drain_build_queue() -> void:
 				# AC-0257: keep-high — a meshed column is skipped.
 				if c == null or c.data.is_empty() or c.mesh_built:
 					continue
+				# AC-0261: the load's high builds are the HIGH band only —
+				# the visible band [band0_r, render_radius) is slab-wave
+				# owned (its avg LOD is final there).
+				var dxl := int(e["cx"]) - last_pcx
+				var dzl := int(e["cz"]) - last_pcz
+				if absi(dxl) + absi(dzl) >= band0_r and not _is_tier0_col(dxl, dzl):
+					continue
 				if not _build_ready(int(e["cx"]), int(e["cz"])):
 					continue
 				var s := _grid_score(e)  # AC-0257: the bake order (layer, taxi)
@@ -5840,15 +5876,17 @@ func _drain_build_queue() -> void:
 				best_c = fpick["c"]
 				best_from_fb = true
 		if best_c != null:
-			# AC-0231 order gate: high OUTSIDE the sim radius (tier >= 2)
-			# waits until the in-r lows drain (the fog -> low wave stays
-			# fully ahead; only the under + sim-radius high flows while
-			# low is pending). The entry stays queued — it dispatches when
-			# the gate opens; the unit goes to the data pass below (data
-			# keeps landing so the low pass has work to do).
+			# AC-0261: the main build lane is the HIGH band only (taxi <
+			# band0_r, or the tier-0 set). An out-of-band top pick blocks
+			# the high dispatch for the frame (the unit falls to the data
+			# pass below); the entry stays queued and is re-picked whenever
+			# an in-band entry goes ready (in-band entries always out-score
+			# it on taxi). The visible band [band0_r, render_radius) is the
+			# slab wave's (its avg LOD is final there); the WAVE 3 catch-up
+			# upgrades a low-holding column when it ENTERS the high band.
 			var dxg := int(best_e["cx"]) - last_pcx
 			var dzg := int(best_e["cz"]) - last_pcz
-			if _tier_of(dxg, dzg) >= 2 and not _low_inr_drained:
+			if absi(dxg) + absi(dzg) >= band0_r and not _is_tier0_col(dxg, dzg):
 				best_c = null
 				perf_high_gate_holds_n += 1
 		if best_c != null:

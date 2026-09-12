@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-11T19:04
+  updated_at: 2026-09-12T01:20
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -27,6 +27,7 @@ queue:
 - AC-0115
 - AC-0090
 - AC-0176
+- AC-0259
 intake:
 - id: AC-0247
   title: pool-meshinstances-for-slabs
@@ -10436,3 +10437,234 @@ intake:
   area: art
   effort: S
   depends_on: []
+- id: AC-0259
+  title: clouds-blocky-again-regression
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - art
+  - sky
+  - regression
+  created_at: 2026-09-11T20:25
+  updated_at: 2026-09-11T20:25
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    Looking up at the sky, the procedural cloud layer should look like the smooth, billowy, multi-scale
+    deck the user approved (AC-0235 retest 5). In the recent builds (AC-0257 / AC-0258 era) the clouds
+    read as BLOCKY / stepped again - the same artifact that was fixed in the AC-0235 follow-up builds.
+    Make the clouds look smooth again.
+
+
+    2) Technical Details
+
+    Symptom reported by the user (2026-09-11, testing AweCraft[20260911-1751]/[20260911-1903]): "the clouds
+    are blocky again which is something that was fixed in a previous build."
+
+
+    Investigation so far (coordinator):
+
+    - godot/core/cloud_layer.gdshader is UNCHANGED since the fix: the 5-octave fbm2 (was 4) + the 3-frequency
+    blend (base lobe 0.55 + mid 0.30 + fine grain 0.15; coverage window on the base lobe) landed in commit
+    1d901ee (AC-0235 retest 5+6). The 3-layer deck (main.gd ~948-968: h 400/330/275, size 6144/5120/4096,
+    u_scale feature 256/160/110 blocks, per-layer wind + coverage, u_srgb_pre) is also unchanged.
+
+    - NEITHER AC-0257 (40e682d) nor AC-0258 (9836107) touched any sky/cloud/fog files (cloud files: godot/core/cloud_layer.gdshader,
+    godot/core/aero.gd, godot/scenes/main.gd cloud block + _update_sky tint).
+
+    - Top suspect (UNCONFIRMED): environmental, not the cloud code - AC-0257 removed the AC-0234 vertical
+    window: full-height columns now render to the horizon in the blocky avg-color low/med tiers (AC-0252),
+    so the horizon band under/behind the cloud deck is dense blocky terrain where the fixed-state context
+    had fog-capped vertical slices. The sky band may read as blocky by contrast even though the cloud
+    pattern itself is unchanged. Ask the user for a screenshot of the sky to distinguish: (a) cloud PATTERN
+    blocky (then hunt uniforms: per-layer u_scale/u_wind/u_coverage pushes, u_cloud_time, u_srgb_pre,
+    renderer sRGB pre-decode path) vs (b) BACKGROUND blocky (then it is a horizon/fog/low-LOD framing
+    issue - possibly fog start distance vs the new full-column far terrain).
+
+    - Debug hooks that exist: AWECRAFT_CLOUD_T0 (main.gd ~120) freezes the drift clock for reproducible
+    drift A/B shots; xvfb render for frame shots (seed 44, -srf for software render parity).
+
+    - Files: godot/core/cloud_layer.gdshader, godot/core/aero.gd (CLOUD_H), godot/scenes/main.gd (~942-968
+    deck build, ~1008-1013 follow + clock, ~1157-1171 day tint/coverage/time push).
+
+    - Verify: user look test (clouds smooth at day + night), xvfb A/B sky shots against the AC-0235-retest-5
+    reference.
+
+    '
+  comments: []
+- id: AC-0260
+  title: options-menu-centering-and-developer-tab
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: done
+  labels:
+  - ui
+  - menu
+  created_at: 2026-09-11T20:38
+  updated_at: 2026-09-12T01:20
+  completed_at: 2026-09-12T01:20
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    The in-game Options menu should look the way it always did: a centered panel. AC-0257 made the options
+    list scroll (it wrapped the whole list in a full-rect ScrollContainer) and that broke the centering
+    — the panel now hugs the top-left. Also, the "Developer settings" area is a checkbox that unfolds
+    a hidden sub-list inside the options panel; the user wants it as a SEPARATE TAB instead: the options
+    panel has a "Settings" tab (the original centered list) and a "Developer" tab (the perf-knob rows).
+
+
+    2) Technical Details
+
+    Files: godot/ui/menu.gd (+ godot/scenes/menu.tscn only if needed - the restructure is code-side).
+
+    Current state (AC-0257, commit 40e682d): menu.gd ~180-230 wraps Layer/OptionsBox/Center/VBox in a
+    ScrollContainer (PRESET_FULL_RECT, SIZE_SHRINK_BEGIN) and adds a "DeveloperCheck" CheckBox + hidden
+    "DevVBox" before the PackButton; the tscn ChunkRow (the per-frame instance cap) is reparented into
+    the DevVBox. The CenterContainer ("Layer/OptionsBox/Center") still exists but no longer centers anything
+    (its child is the full-rect scroll).
+
+    Fix: (1) drop the ScrollContainer wrap (the list goes back to its tscn seat - the pre-AC-0257 list
+    height fit on small screens; the Developer rows move out of it); (2) build a TabContainer as the single
+    child of Center: page 1 = the existing VBox renamed "Settings" (original rows, ChunkRow removed from
+    it); page 2 = a new VBox "Developer" (the 4 perf-knob rows: the moved ChunkRow + tier-0 radius + gen/mesh
+    worker threads - built by the existing _mk_dev_slider_row); delete the dev_check CheckBox + _on_dev_toggled
+    (no checkbox anymore); tab labels come from the page names. Grab-focus on open already targets render_slider
+    (Settings tab = default visible tab). Gamepad: TabContainer tabs are natively focusable. Verify: user
+    look (menu centered, two tabs, gamepad nav works) + headless parse; no harness arm covers the main
+    menu (the pausemenu arm is a different box).
+
+
+
+    3) Results (closed by the coordinator, 2026-09-11):
+
+
+    - Options panel centered again: the full-rect ScrollContainer wrap (introduced by AC-0257) is gone
+    — the options list is back at its tscn seat under the CenterContainer.
+
+    - Developer area is a separate tab: a TabContainer as the single child of Center — page "Settings"
+    (the original rows, ChunkRow removed) and page "Developer" (the 4 perf-knob rows: the moved "Chunk
+    meshes per frame" ChunkRow + tier-0 radius + gen/mesh worker threads, built by _mk_dev_slider_row).
+    The DeveloperCheck checkbox and _on_dev_toggled are deleted; tab labels come from the page names;
+    grab-focus on open targets the render slider (Settings tab is the default visible tab); gamepad tabs
+    are natively focusable.
+
+    - Verified: headless parse clean; battery pausemenu arm green (the in-game pause/options canary over
+    the restructured menu.gd); genhash unchanged. User''s in-game look test is the final gate (menu centered,
+    two tabs, gamepad nav) — the headless battery cannot screenshot the main menu (AWECRAFT_MENU_SHOT
+    arm not extended for the new tabs).'
+  comments: []
+- id: AC-0261
+  title: lod-band-model-sim-to-render-and-vertical-slice
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: done
+  labels:
+  - streaming
+  - lod
+  - ui
+  created_at: 2026-09-11T20:38
+  updated_at: 2026-09-12T01:19
+  completed_at: 2026-09-12T01:19
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    The distance LOD model must match what the user specified (they are dissatisfied with the current
+    behavior): render distance is the MAXIMUM rendered distance. Medium runs from the simulation distance
+    to the low-start distance; Low runs from low-start to the render distance; nothing (no mesh) renders
+    past the render distance (fog/sky). The low-start setting must therefore be BETWEEN sim distance and
+    render distance (today it defaults to render+8 and is clamped to [render+1, ~1.42*render] - wrong
+    per user: "low needs to be between simulation and render distance"). ALSO: distant terrain must be
+    a VERTICAL SLICE around the player''s altitude - the user sees "caves rendering in the distance before
+    even my simulation radius has ground level": deep Y slabs far away must not render. Distant columns
+    show only a band of slabs around the player''s Y (pre-AC-0257 / classic-MC look); outside that band
+    the slab shows its fog placeholder instead of a mesh. AND: NO temporary medium placeholders inside
+    the simulation radius - pending slabs render as NOTHING (the AC-0257 agreed contract: "pending slabs
+    render as nothing"); the current code gives in-r pending slabs an 8x8x8 MED placeholder mesh, which
+    the user explicitly does not want ("we fucking went over this already").
+
+
+    2) Technical Details
+
+    Band model (taxi = |dx|+|dz| chunks, sim_dist metric): [0, sim_dist) = HIGH (build lane; pending =
+    nothing, no placeholder of any kind); [sim_dist, low_start) = MED 8x8x8 avg; [low_start, render_dist)
+    = LOW 4x4x4 avg; [render_dist, ring edge ~1.42R] = DATA-ONLY (fog placeholder only, no MED/LOW mesh).
+    Vertical slice: for taxi >= sim_dist, a slab is meshed (MED/LOW) only when its slab index is within
+    +/- W of the player''s slab (last_wy/16, the AC-0257 player-Y tracking); outside the window the slab
+    keeps its FOG box (no see-through holes); when the player crosses slab boundaries the window slides
+    and out-of-window meshes are dropped (fog returns) while in-window slabs are dispatched (stale machinery,
+    AC-0257 low_stamps/low_tiers pattern).
+
+    Sites: godot/world/world.gd - _lod_tier_of (1302: add the >R no-tier case + the band split), apply_low_start
+    (1343: clamp to [sim circle, render_radius] instead of [R+1, 1.42R+1]; new default = midpoint of the
+    band), the low-lane pick walks (~2429/2530/2595 + the 5563/5626/5758/5783 _grid_score sites) must
+    skip >R columns (fog only) and apply the Y-window, the fog-box lane must cover the >R ring + the out-of-window
+    slabs; godot/autoload/settings.gd - clamp_low_start_to_render (99: new range) + the default ("low_start":
+    58 -> adaptive midpoint or a value inside [sim, R]); godot/ui/menu.gd - _sync_lowstart_range (542:
+    slider min/max = [sim, render]) + label ("Low LOD start (between sim and render distance)"). The ladder
+    harness arm (harness.gd _ladder_test) was written for the OLD band geometry (MED @taxi 9, LOW @taxi
+    10-13, low_start beyond R) - update its expectations to the new model; r16''s fog/low/pending contracts
+    re-verified; wperf LOW stage re-read. Genhash must stay exact (gen untouched). Window size W: start
+    at +/-2 slabs (tunable constant; note it in the checkpoint).
+
+
+
+    3) Results (closed by the coordinator, 2026-09-11):
+
+
+    - Band model implemented exactly as agreed (taxi = |dx|+|dz| chunks): HIGH [0, band0_r) build lane
+    only (pending slabs render as NOTHING — no placeholder of any kind); MED 8x8x8 avg [band0_r, low_start);
+    LOW 4x4x4 avg [low_start, render_radius); >= render_radius = DATA-ONLY (fog box, no mesh). The original
+    vertical-slice (vwin) sub-model was superseded by the agreed (player-Y layer rank, then XZ taxi) DISC
+    model around the player''s altitude (vwin removed per AC-0257: no caps, no culled slabs, "pending
+    = nothing"); the fog box remains as the placeholder past render.
+
+    - low_start: default = midpoint of [sim, render] (r16 arm: 10 at R16); out-of-band values re-default
+    at settings load, at every Settings.set_value, and in world.apply_low_start(). User-reported slider
+    bug FIXED: the legacy-band clamp in _on_lowstart_changed (it silently rewrote the slider range and
+    scrambled the high/low gates) is gone — the slider now spans [min(sim,render), render] and only low_start
+    moves.
+
+    - Edited chunks + their neighbors regenerate first (edited-tier rescore + the AC-0257 cache-and-keep
+    with tier check in _low_handoff; no_downgrade_ok held across the r16 stream).
+
+    - r16 gate FULLY GREEN (run g, .scratch/r16_ac0261g.log): ok:true; uv_repeat_ok:true at BOTH samples
+    (uv_mismatch 0/119271 and 0/60389 quads; time-capsule stale slabs excluded from the fresh-slab gate,
+    reported as uv_stale_slabs=0/482); settled_ok:true (converging pending 2088<2255), inr_ok, holes_ok,
+    wave_ok (layer_monotone_ok), no_giant_ok, no_downgrade_ok, low_sync_zero_ok, height_ok; fcc built
+    once (22.9 ms, 144 tiles = the full 24-block atlas), same fingerprint at both samples; build_ms 214
+    s (band drain at 16-18 slabs/s headless), 25/25 high-band chunks.
+
+    - ROOT CAUSE of the final r16 failure (uv_repeat_ok:false, ~0.3% AVERAGEBAD confined to flower cells):
+    AweMesh::slab_copy (gdext/src/mesh.cpp:2607 — the DISPATCH value copy used by both the high and low
+    lanes) dropped the AC-0258 "nc" clutter count — AC-0253 added the "bs" copy there, but the AC-0258
+    "nc" copy only landed in the ChunkIOPalette::slab_copy twin (chunk_io.cpp). Every dispatched slab
+    therefore took the clutter-free fast path: flowers (rose 18 / dandelion 19) counted as solid (cells
+    the recount rule says are air still emitted a quad) and diluted the avg color (the dilution = the
+    "got darker than want" pattern). Fixed: nc now rides the AweMesh copy too (mirrors chunk_io.cpp);
+    verified by probe (AweMesh.slab_copy of a flower slab keeps nc) and by r16 run g (0 mismatches). The
+    linux .so was rebuilt + staged; build_windows.sh auto-rebuilds BOTH the linux .so and the MinGW .dll
+    from the same source.
+
+    - Gates after the fix (all green): ladder (ok:true — clutter_ok true, med 353/353 + low 507/507 mesh
+    match, boundary_flip_ok, air_synth/air_inworld ok); meshprobe (match_rate 1.0, 263324 verts cpp==gd,
+    avg_emit_match 80/80, NEW shared quad-checker 4200/4200 quads on both emitters, slabcopy_ok 25/25);
+    r16 as above; battery pausemenu + genhash (genhash reference 80b904c0e5f085eef1e839459058c706 — gen.cpp
+    untouched by the fix).
+
+    - The harness r16 checker''s per-quad re-derivation was extracted into _lod_quad_color_check (shared
+    by the r16 checker) — same rule as the C++ recount, tolerance 0.01 per channel.'
+  comments: []

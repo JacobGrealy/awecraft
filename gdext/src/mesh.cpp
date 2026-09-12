@@ -2627,6 +2627,13 @@ public:
 			PackedByteArray sbs = d.get("bs", PackedByteArray());
 			if (sbs.size() == awecommon::S3B)
 				o["bs"] = pba_deep(sbs);
+			// AC-0258 (the AC-0261 fix): the clutter count "nc" rides the
+			// dispatch value copy too — without it EVERY dispatch slab
+			// took the clutter-free fast path and flowers (18/19) counted
+			// as solid + tinted the avg colors (the r16 AVERAGEBAD).
+			// Mirrors ChunkIOPalette.slab_copy in chunk_io.cpp.
+			if (d.has("nc"))
+				o["nc"] = (int64_t)(int)d.get("nc", 0);
 			out[k] = o;
 		}
 		return out;

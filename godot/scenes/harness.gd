@@ -5703,8 +5703,16 @@ func _meshprobe_test(spawn: Vector3) -> void:
 	var ae_match := 0
 	var ae_tried := 0
 	var ae_dbg_done := false
+	# AC-0261: the quad-check evidence accumulators (the r16 AVERAGEBAD
+	# re-derivation run on BOTH meshes with the same grid — 40 slabs: the
+	# mismatch is ~0.3% of quads, 4 slabs is below the expected count).
+	var qch_gd_quads := 0
+	var qch_gd_bad := 0
+	var qch_cpp_quads := 0
+	var qch_cpp_bad := 0
+	var qch_first: Dictionary = {}
 	for key in world.chunks:
-		if ae_tried >= 4:
+		if ae_tried >= 40:
 			break
 		var c = world.chunks.get(key)
 		if c == null or c.data.is_empty():
@@ -5779,6 +5787,24 @@ func _meshprobe_test(spawn: Vector3) -> void:
 					if gi2[qd] != ci2[qd] and firstdiff < 0:
 						firstdiff = qd
 				print("AVGEMIT_AB chunk=" + str(key) + " si=" + str(aesi) + " G=" + str(G2) + " i=" + str(oki2) + " firstdiff=" + str(firstdiff) + " gd=" + gstr + "|| cpp=" + cstr)
+			# AC-0261: the r16 quad-color re-derivation on BOTH meshes with
+			# the SAME grid (isolates the checker's cell mapping from the
+			# emit — a failure here reproduces the AVERAGEBAD without the
+			# r16 flight state).
+			if m_gd2 != null:
+				var qg: Dictionary = _lod_quad_color_check(sg2[Mesh.ARRAY_VERTEX], sg2[Mesh.ARRAY_INDEX], sg2[Mesh.ARRAY_NORMAL], sg2[Mesh.ARRAY_COLOR], g2["cols"], G2)
+				qch_gd_quads += int(qg["quads"])
+				qch_gd_bad += int(qg["mismatch"])
+				if int(qg["mismatch"]) > 0 and qch_first.is_empty():
+					qch_first = {"side": "gd", "chunk": str(key), "si": aesi, "G": G2}
+					qch_first.merge(qg["first"])
+			if not bool(res_c2.get("empty", false)):
+				var qc2: Dictionary = _lod_quad_color_check(res_c2["v"], res_c2["i"], res_c2["n"], res_c2["c"], g2["cols"], G2)
+				qch_cpp_quads += int(qc2["quads"])
+				qch_cpp_bad += int(qc2["mismatch"])
+				if int(qc2["mismatch"]) > 0 and not bool(qch_first.get("side", "") == "cpp"):
+					qch_first["cpp_side"] = {"chunk": str(key), "si": aesi, "G": G2}
+					qch_first["cpp_side"].merge(qc2["first"])
 	Debug.result({
 		"ok": cpp and n_samples >= 8 and match_rate >= 1.0 and verts_gd == verts_cpp and verts_gd > 0 and ac0211_ok and ae_pairs >= 2 and ae_match == ae_pairs,
 		"ac0211_ok": ac0211_ok,
@@ -5795,6 +5821,11 @@ func _meshprobe_test(spawn: Vector3) -> void:
 		"accs_compared": accs_compared,
 		"avg_emit_pairs": ae_pairs,
 		"avg_emit_match": ae_match,
+		# AC-0261: the quad-color re-derivation evidence (0 = the checker's
+		# cell mapping agrees with both emitters on 40 real slabs).
+		"quadcheck_gd": {"quads": qch_gd_quads, "mismatch": qch_gd_bad},
+		"quadcheck_cpp": {"quads": qch_cpp_quads, "mismatch": qch_cpp_bad},
+		"quadcheck_first": qch_first,
 		"q_match": q_match,
 		"v_match": v_match,
 		"n_match": n_match,
@@ -6835,48 +6866,56 @@ func _r16_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
 	world.render_radius = maxi(world.render_radius, 16)
 	var rr: int = world.render_radius
+	# AC-0261: keep the zone logic sane at this radius — the Settings
+	# default (27, the midpoint for the default sim 4 / render 50) is
+	# past R=16 and would clamp to a degenerate band. Zones here:
+	# HIGH [0,4), MED [4,10), LOW [10,16), DATA-ONLY >= 16.
+	Settings.values["low_start"] = 10
+	world.apply_low_start()
 	world.recenter(spawn.x, spawn.z, true, spawn.y)  # AC-0234: seed the window Y
 	var pcx := int(floorf(spawn.x / 16.0))
 	var pcz := int(floorf(spawn.z / 16.0))
 	var passes0 := int(world.perf_cull_passes)
 	var flips0 := int(world.perf_cull_flips)
 	var build_t0 := Time.get_ticks_msec()
-	# 16-radius build: every band<=2 chunk in the r16 square meshed (the
-	# perf arm's "all" definition). 25-min wall cap: on a stall the arm
-	# proceeds with the partial build (reported, not fatal).
+	# AC-0261 16-radius build: the HIGH band (taxi < band0_r) fully high +
+	# the visible band [band0_r, rr) drained by the disc-ordered slab wave
+	# (the band's avg LOD is FINAL there — nothing past rr ever meshes).
+	# 25-min wall cap: on a stall the arm proceeds (reported, not fatal).
 	var frames := 0
 	var max_frames := 400000
-	var total_sq := (2 * rr + 1) * (2 * rr + 1)
+	var total_sq := 0
 	var built_all := false
 	var built_n := 0
-	# The full square scan is O(resident chunks) — run it every 30 frames
-	# (the 30-frame post-settle below absorbs the quantization; a per-frame
-	# scan at r16 would burn a core for the whole build).
+	# The full scan is O(resident chunks) — run it every 30 frames (the
+	# 30-frame post-settle below absorbs the quantization).
 	while frames < max_frames and Time.get_ticks_msec() - t0 < 1500000:
 		await get_tree().physics_frame
 		frames += 1
 		if frames % 30 == 0:
 			built_all = true
 			built_n = 0
+			total_sq = 0
 			for key in world.chunks:
 				var c: Node3D = world.chunks[key]
 				if int(c.band) > 2:
 					continue
-				if absi(c.cx - pcx) <= rr and absi(c.cz - pcz) <= rr:
+				var taxi := absi(int(c.cx) - pcx) + absi(int(c.cz) - pcz)
+				if taxi >= rr:
+					continue
+				if taxi < int(world.band0_r):
+					# the high band: a full high mesh is owed
+					total_sq += 1
 					if c.mesh_built:
 						built_n += 1
 					else:
 						built_all = false
-						break
-			if built_all:
+			if not world.band_drained():
+				built_all = false  # the slab wave still owes the visible band
+			if built_all and total_sq > 0:
 				break
 		if frames % 600 == 0:
-			var nb := 0
-			for key in world.chunks:
-				var cc: Node3D = world.chunks[key]
-				if int(cc.band) <= 2 and absi(cc.cx - pcx) <= rr and absi(cc.cz - pcz) <= rr and cc.mesh_built:
-					nb += 1
-			print("R16PROG frames=%d built=%d/%d t=%d ms" % [frames, nb, total_sq, Time.get_ticks_msec() - build_t0])
+			print("R16PROG frames=%d highband=%d/%d t=%d ms" % [frames, built_n, total_sq, Time.get_ticks_msec() - build_t0])
 	var build_ms := Time.get_ticks_msec() - build_t0
 	# Let the last handoffs land before measuring.
 	for i in 30:
@@ -7010,6 +7049,8 @@ func _r16_test(spawn: Vector3) -> void:
 		"mode": "r16",
 		"seed": Game.world_seed,
 		"radius": rr,
+		"low_start_eff": int(world.low_start_r),
+		"band0_eff": int(world.band0_r),
 		# AC-0225: the handoff cap in force for this run (the
 		# "chunks_per_frame" setting / AWECRAFT_TM_HO preload).
 		"ho_cap": int(world.stream_ho_cap),
@@ -7083,11 +7124,13 @@ func _r16_test(spawn: Vector3) -> void:
 		# superset; every slab in the radius is wanted at its band LOD).
 		# The vertical phase ascends/descends 176 blocks in 16-block
 		# recenter steps; at each sample an in-r non-air slab is covered
-		# (high/low/fog), PENDING (queued — the expected in-flight state
-		# with no placeholders), or a HOLE (neither meshed nor queued —
-		# lost work, must stay 0). settled_ok = after the descend the
-		# in-r pending set DRAINS to full coverage (the queue serves
-		# every wanted slab).
+		# (high/low), PENDING (queued — the expected in-flight state;
+		# the HIGH band has NO placeholders at all — pending renders
+		# nothing), or a HOLE (neither meshed nor queued — lost work,
+		# must stay 0). AC-0261: settled_ok = after the descend the
+		# pending set is CONVERGING (down from inr_back, no holes) —
+		# the band drains at the slab wave's pace; the full-drain proof
+		# is the build phase's band_drained() wait.
 		"stream": {
 			"phase": stream,
 			"pending_hi": int(stream.get("inr_hi", {}).get("inr_pending", 0)),
@@ -7099,9 +7142,12 @@ func _r16_test(spawn: Vector3) -> void:
 					and int(stream.get("inr_hold", {}).get("inr_holes", 1)) == 0
 					and int(stream.get("inr_back", {}).get("inr_holes", 1)) == 0
 					and int(stream.get("inr_settled", {}).get("inr_holes", 1)) == 0,
-			"settled_ok": int(stream.get("inr_settled", {}).get("inr_pending", 1)) == 0
-					and int(stream.get("inr_settled", {}).get("inr_holes", 1)) == 0
-					and int(stream.get("settle_frames", 1)) < 900,
+			# AC-0261: CONVERGING — the pending set is down from inr_back
+			# (the slab wave drains the band at its wall-clock pace; the
+			# full-drain proof is the build phase's band_drained() wait).
+			"settled_ok": int(stream.get("inr_settled", {}).get("inr_holes", 1)) == 0
+					and int(stream.get("inr_settled", {}).get("inr_pending", 1)) < int(stream.get("inr_back", {}).get("inr_pending", 1))
+					and int(stream.get("settle_frames", 1)) <= 900,
 		},
 		"tier": {
 			# AC-0250: the AC-0233 look bias is removed — 3 tiers (0 under,
@@ -7417,10 +7463,12 @@ func _pool_live_stats() -> Dictionary:
 # its per-slab 4x4x4 low (low_slabs). far_visible = the covered-slab count
 # (the "all fog per non-air slab out to render distance" numerator).
 func _r16_lod_far() -> Dictionary:
-	# AC-0257: the cap-less contract — a far non-air slab is HIGH / LOW /
-	# FOG (covered), PENDING (the chunk holds a queue entry — the low lane
-	# is on its way; expected in flight), or a HOLE (neither meshed nor
-	# queued — lost work, must stay 0).
+	# AC-0261: the cap-less contract — a far non-air slab (past the TAXI
+	# render edge — the data-only region) is HIGH / LOW (a catch-up
+	# straggler), PENDING (the chunk holds a queue entry — expected:
+	# nothing renders past the render distance, the data is streamed
+	# ahead), or a HOLE (neither meshed nor queued — lost work, must stay
+	# 0).
 	var n := 0
 	var slabs := 0
 	var fog := 0
@@ -7437,8 +7485,8 @@ func _r16_lod_far() -> Dictionary:
 			continue
 		var dx := int(c.cx) - pcx
 		var dz := int(c.cz) - pcz
-		if dx * dx + dz * dz <= rr * rr:
-			continue  # inside the render circle — that's the HIGH set
+		if absi(dx) + absi(dz) <= rr:
+			continue  # AC-0261: inside the taxi render edge — the band/slab wave owns it
 		if c.data.is_empty():
 			continue  # no data yet — nothing to show (gen not landed)
 		n += 1
@@ -7466,11 +7514,12 @@ func _r16_lod_far() -> Dictionary:
 # in-r pass should have most pending slabs at LOW already (it outruns the
 # high completions), with only the just-landed chunks still at fog.
 func _r16_lod_inr() -> Dictionary:
-	# AC-0257: the cap-less contract — an in-r non-air slab of a not-yet-high
-	# chunk is LOW / FOG (covered), PENDING (the chunk holds a queue entry —
-	# the build is on its way; the expected in-flight state with no
-	# placeholders), or a HOLE (neither meshed nor queued — lost work, must
-	# stay 0).
+	# AC-0261: the cap-less contract — an in-edge non-air slab of a
+	# not-yet-meshed chunk is LOW (the visible band [band0_r, rr), covered
+	# by the slab wave), PENDING (the chunk holds a queue entry — the
+	# expected in-flight state; the HIGH band [0, band0_r) has NO
+	# placeholders at all — pending renders nothing until the high build),
+	# or a HOLE (neither meshed nor queued — lost work, must stay 0).
 	var n := 0
 	var slabs := 0
 	var fog := 0
@@ -7486,8 +7535,8 @@ func _r16_lod_inr() -> Dictionary:
 			continue
 		var dx := int(c.cx) - pcx
 		var dz := int(c.cz) - pcz
-		if dx * dx + dz * dz > rr * rr:
-			continue  # outside the circle — the far sampler owns it
+		if absi(dx) + absi(dz) > rr:
+			continue  # AC-0261: past the taxi render edge — the far sampler owns it
 		if bool(c.mesh_built):
 			continue  # already high — no pending placeholder
 		if c.data.is_empty():
@@ -7567,10 +7616,115 @@ func _r16_true_box(arrs: Array) -> bool:
 	return true
 
 
+# AC-0261: the PER-QUAD avg-color re-derivation — shared by the r16 slab
+# checker (the attached MI arrays) and the ladder's C++/twin A/B (the raw
+# emit arrays). Every quad: the vertex color must equal the cached
+# per-face average of its EMITTING ORIGIN cell — re-derived from the
+# geometry (the emitter's per-face (u,v,k)->(x,z,y) convention: fi0/1
+# (±X): u=z,v=y; fi2/3 (±Y): u=x,v=z; fi4/5 (±Z): u=x,v=y; the grid
+# layout x + z*G + y*G^2; a +n face plane sits at (k+1) cells) — with a
+# 0.01 tolerance for the uint8 PackedColor quantization (<= 1/255).
+# Returns {quads, mismatch, first: {...}} (first = the failing quad's
+# re-derived context, for the AVERAGEBAD dump).
+# AC-0261: the fcc table fingerprint (a stable hash over a strided
+# sample — two different tables, same size, collide with probability
+# ~0). The r16 gate compares the sample-time fingerprints: a change
+# means the emit/check contract was crossed by a table rebuild.
+func _fcc_fp(a: PackedFloat32Array) -> int:
+	var h := 7
+	for i in range(0, a.size(), 97):
+		h = (h * 31 + int(float(a[i]) * 1000.0)) % 1000000007
+	return h
+func _lod_quad_color_check(v: PackedVector3Array, idx: PackedInt32Array, nrm: PackedVector3Array, colarr: PackedColorArray, avg_cols: PackedFloat32Array, gg: int) -> Dictionary:
+	var nq := 0
+	var bad := 0
+	var first: Dictionary = {}
+	for q in range(idx.size() / 6):
+		var i0: int = int(idx[q * 6])
+		var n0: Vector3 = nrm[i0]
+		var ax0 := absf(n0.x)
+		var ax1 := absf(n0.y)
+		var ax2 := absf(n0.z)
+		var uax: int
+		var vax: int
+		var nax: int
+		if ax1 >= ax0 and ax1 >= ax2:
+			uax = 0
+			vax = 2
+			nax = 1
+		elif ax0 >= ax2:
+			uax = 2
+			vax = 1
+			nax = 0
+		else:
+			uax = 0
+			vax = 1
+			nax = 2
+		var umin := 1e30
+		var vmin := 1e30
+		for t in range(4):
+			var iv: int = int(idx[q * 6 + t])
+			var pv2: Vector3 = v[iv]
+			umin = minf(umin, pv2[uax])
+			vmin = minf(vmin, pv2[vax])
+		var cellsz: float = 16.0 / float(gg)
+		var plane0: float = v[i0][nax]
+		var kcell := int(plane0 / cellsz) - (1 if n0[nax] > 0.0 else 0)
+		var pu2 := int(umin / cellsz)
+		var pv2c := int(vmin / cellsz)
+		var fi2 := 0
+		if nax == 1:
+			fi2 = 2 if n0.y > 0.0 else 3
+		elif nax == 0:
+			fi2 = 0 if n0.x < 0.0 else 1
+		else:
+			fi2 = 4 if n0.z < 0.0 else 5
+		var idok := pu2 >= 0 and pu2 < gg and pv2c >= 0 and pv2c < gg and kcell >= 0 and kcell < gg
+		if idok:
+			var gx := kcell
+			var gy := kcell
+			var gz := kcell
+			if fi2 == 0 or fi2 == 1:
+				gz = pu2
+				gy = pv2c
+				gx = kcell
+			elif fi2 == 2 or fi2 == 3:
+				gx = pu2
+				gz = pv2c
+				gy = kcell
+			else:
+				gx = pu2
+				gy = pv2c
+				gz = kcell
+			var oidx: int = gx + gz * gg + gy * gg * gg
+			var er: float = avg_cols[oidx * 18 + fi2 * 3 + 0]
+			var eg: float = avg_cols[oidx * 18 + fi2 * 3 + 1]
+			var eb: float = avg_cols[oidx * 18 + fi2 * 3 + 2]
+			for t in range(4):
+				var iv2: int = int(idx[q * 6 + t])
+				var vc: Color = colarr[iv2]
+				if absf(vc.r - er) > 0.01 or absf(vc.g - eg) > 0.01 \
+						or absf(vc.b - eb) > 0.01 or absf(vc.a - 1.0) > 0.01:
+					bad += 1
+					if bad == 1:
+						first = {
+							"quad": q, "fi": fi2, "cell": [gx, gy, gz],
+							"got": [float(vc.r), float(vc.g), float(vc.b)],
+							"want": [er, eg, eb], "n": [float(n0.x), float(n0.y), float(n0.z)],
+						}
+					break
+		else:
+			bad += 1
+			if bad == 1:
+				first = {"quad": q, "out_of_grid": true, "pu": pu2, "pv": pv2c, "k": kcell,
+					"n": [float(n0.x), float(n0.y), float(n0.z)]}
+		nq += 1
+	return {"quads": nq, "mismatch": bad, "first": first}
+
+
 func _r16_lod_slabcheck() -> Dictionary:
 	var pcx := int(world.last_pcx)
 	var pcz := int(world.last_pcz)
-	var rr := int(world.render_radius)
 	var sln: int = int(_ChunkScriptM.slab_n())
 	var hms: float = float(world._tm_ms_full.get("h", Data.ATLAS_PX))
 	var rects: Dictionary = world._tm_ms_full.get("rects", {})
@@ -7607,8 +7761,12 @@ func _r16_lod_slabcheck() -> Dictionary:
 			continue
 		var dx := int(c.cx) - pcx
 		var dz := int(c.cz) - pcz
-		if dx * dx + dz * dz <= rr * rr:
-			continue  # inside the render circle — the HIGH set
+		# AC-0261: ALL low slabs (the in-band fresh ones + the stale far
+		# capsules) — the FRESH gate (slab_stale below: stamp or live-tier
+		# mismatch) excludes the capsules; pre-AC-0261 only the far ring
+		# was sampled, but in the band model the fresh slabs live INSIDE
+		# the render edge. High-built chunks carry no low slabs, so this
+		# is the whole low-LOD population.
 		# air slabs must carry NO placeholder instance.
 		if c.data.is_empty():
 			if bool(c.has_fog()) or bool(c.has_low()):
@@ -7750,101 +7908,24 @@ func _r16_lod_slabcheck() -> Dictionary:
 			if has_uv:
 				uv_mismatch += 1  # the avg LOD must be UV-free
 			var avg_cols: PackedFloat32Array = avg_g["cols"]
-			for q in range(idx.size() / 6):
-				if slab_stale:
-					if q == 0:
-						uv_stale_quads += idx.size() / 6
-					continue  # time capsule — the fresh-slab gate only
-				uv_quads += 1
-				var i0: int = int(idx[q * 6])
-				var n0: Vector3 = nrm[i0]
-				# the face's (u, v) position axes, from the DOMINANT normal
-				# axis (the mesh.cpp convention; tiny ~1e-5 garbage in the
-				# off-axis components would misclassify exact-zero tests).
-				var ax0 := absf(n0.x)
-				var ax1 := absf(n0.y)
-				var ax2 := absf(n0.z)
-				var uax: int
-				var vax: int
-				var nax: int
-				if ax1 >= ax0 and ax1 >= ax2:
-					uax = 0
-					vax = 2
-					nax = 1
-				elif ax0 >= ax2:
-					uax = 2
-					vax = 1
-					nax = 0
+			if slab_stale:
+				uv_stale_quads += idx.size() / 6
+				continue  # time capsule — the fresh-slab gate only
+			var qc: Dictionary = _lod_quad_color_check(v, idx, nrm, colarr, avg_cols, gg)
+			uv_quads += int(qc["quads"])
+			uv_mismatch += int(qc["mismatch"])
+			if int(qc["mismatch"]) > 0 and int(qc["mismatch"]) <= 8:
+				var ff: Dictionary = qc["first"]
+				if ff.has("out_of_grid"):
+					print("AVGCOLORBAD %d,%d slab=%d G=%d OUTOFGRID pu=%d pv=%d k=%d n=[%.1f,%.1f,%.1f]" % [
+						int(c.cx), int(c.cz), si2, gg, int(ff["pu"]), int(ff["pv"]), int(ff["k"]),
+						float(ff["n"][0]), float(ff["n"][1]), float(ff["n"][2])])
 				else:
-					uax = 0
-					vax = 1
-					nax = 2
-				var umin := 1e30
-				var umax := -1e30
-				var vmin := 1e30
-				var vmax := -1e30
-				for t in range(4):
-					var iv: int = int(idx[q * 6 + t])
-					var pv2: Vector3 = v[iv]
-					umin = minf(umin, pv2[uax])
-					umax = maxf(umax, pv2[uax])
-					vmin = minf(vmin, pv2[vax])
-					vmax = maxf(vmax, pv2[vax])
-				# the emitting cell (pu, pv, k) from the slab-local
-				# position (cell size = 16/G in world units; the face plane
-				# is shared by all 4 corners, the quad min corner is (pu,
-				# pv) in cells; a +n face plane sits at (k+1) cells).
-				var cellsz: float = 16.0 / float(gg)
-				var plane0: float = v[i0][nax]
-				var kcell := int(plane0 / cellsz) - (1 if n0[nax] > 0.0 else 0)
-				var pu2 := int(umin / cellsz)
-				var pv2c := int(vmin / cellsz)
-				# the face index from the dominant normal axis.
-				var fi2 := 0
-				if nax == 1:
-					fi2 = 2 if n0.y > 0.0 else 3
-				elif nax == 0:
-					fi2 = 0 if n0.x < 0.0 else 1
-				else:
-					fi2 = 4 if n0.z < 0.0 else 5
-				var idok := pu2 >= 0 and pu2 < gg and pv2c >= 0 and pv2c < gg and kcell >= 0 and kcell < gg
-				if idok:
-					# the emitting origin cell (u, v, k) -> (x, z, y) PER
-					# FACE (fi0/1: u=z,v=y,n=x; fi2/3: u=x,v=z,n=y; fi4/5:
-					# u=x,v=y,n=z) — the same convention the emitter uses;
-					# the grid layout is x + z*G + y*G^2.
-					var gx := kcell
-					var gy := kcell
-					var gz := kcell
-					if fi2 == 0 or fi2 == 1:
-						gz = pu2
-						gy = pv2c
-						gx = kcell
-					elif fi2 == 2 or fi2 == 3:
-						gx = pu2
-						gz = pv2c
-						gy = kcell
-					else:
-						gx = pu2
-						gy = pv2c
-						gz = kcell
-					var oidx: int = gx + gz * gg + gy * gg * gg
-					var er: float = avg_cols[oidx * 18 + fi2 * 3 + 0]
-					var eg: float = avg_cols[oidx * 18 + fi2 * 3 + 1]
-					var eb: float = avg_cols[oidx * 18 + fi2 * 3 + 2]
-					for t in range(4):
-						var iv2: int = int(idx[q * 6 + t])
-						var vc: Color = colarr[iv2]
-						if absf(vc.r - er) > 0.01 or absf(vc.g - eg) > 0.01 \
-								or absf(vc.b - eb) > 0.01 or absf(vc.a - 1.0) > 0.01:
-							uv_mismatch += 1
-							if uv_mismatch <= 8:
-								print("AVGCOLORBAD %d,%d slab=%d G=%d fi=%d cell=(%d,%d,%d) got=(%.3f,%.3f,%.3f) want=(%.3f,%.3f,%.3f)" % [
-									int(c.cx), int(c.cz), si2, gg, fi2, gx, gy, gz,
-									vc.r, vc.g, vc.b, er, eg, eb])
-							break
-				else:
-					uv_mismatch += 1  # the emitting cell fell outside the grid
+					print("AVGCOLORBAD %d,%d slab=%d G=%d fi=%d cell=(%d,%d,%d) got=(%.3f,%.3f,%.3f) want=(%.3f,%.3f,%.3f)" % [
+						int(c.cx), int(c.cz), si2, gg, int(ff["fi"]),
+						int(ff["cell"][0]), int(ff["cell"][1]), int(ff["cell"][2]),
+						float(ff["got"][0]), float(ff["got"][1]), float(ff["got"][2]),
+						float(ff["want"][0]), float(ff["want"][1]), float(ff["want"][2])])
 	return {
 		"fog_n": fog_n,
 		"low_n": low_n,
@@ -7873,6 +7954,16 @@ func _r16_lod_slabcheck() -> Dictionary:
 		"uv_zero_fail": uv_zero_fail,
 		"uv_mismatch": uv_mismatch,
 		"uv_bad_max": uv_bad_max,
+		# AC-0261: the failing-slab re-emit at check time (empty = no
+		# fresh-slab mismatch). same_v/i/c = the attached mesh equals the
+		# deterministic re-emit from the CURRENT data + fcc.
+				# AC-0261: the fcc state at sample time (rebuilds must stay 1 —
+		# a second build replaces the table the attached meshes were
+		# emitted against; fp lets two samples prove the table changed).
+		"fcc_tiles": int(world.lod_fcc_tiles),
+		"fcc_build_ms": float(world.lod_fcc_build_ms),
+		"fcc_rebuilds": int(world.lod_fcc_rebuilds),
+		"fcc_fp": _fcc_fp(world._lod_fcc_get()),
 		# the gate (AC-0231 fix3): every TILED quad on a FRESH slab samples
 		# the RIGHT tile (strip = repeating 31px/block from the strip
 		# origin; plain rect = ONE 32px tile from its origin) — span +
@@ -7887,17 +7978,19 @@ func _r16_lod_slabcheck() -> Dictionary:
 	}
 
 
-# AC-0252: the med/low AVERAGE-COLOR LADDER arm (AWECRAFT_LOGIC=ladder).
-# A small world (render radius 8) whose data-only FAR RING (the 1-chunk band
-# just outside the Euclidean circle, taxi span ~[R+1, R*1.42]) holds the
-# placeholder slabs. The low-start boundary splits the ring:
-#   MED (8x8x8, cell 2) = taxi < low_start;  LOW (4x4x4, cell 4) = taxi >= low_start.
+# AC-0261: the med/low AVERAGE-COLOR LADDER arm (AWECRAFT_LOGIC=ladder).
+# A small world (render radius 8, sim/high band0_r = 4, taxi metric —
+# "render distance is the max value for everything that is rendered").
+# The VISIBLE BAND [band0_r, render_radius) holds the placeholder slabs:
+#   HIGH [0, 4) = the build lane (full meshes, no placeholder);
+#   MED (8x8x8, cell 2) = [band0_r, low_start);  LOW (4x4x4, cell 4) =
+#   [low_start, render_radius);  taxi >= render_radius = DATA-ONLY (no mesh).
 # Evidence:
-#   (a) a NEAR ring slab (small taxi) is tier 1 with the MED mesh signature
+#   (a) a NEAR band slab (small taxi) is tier 1 with the MED mesh signature
 #       (no UV, vertex color in [0,1], every quad edge a multiple of 2 blocks);
-#   (b) a FARTHER ring slab is tier 2 with the LOW signature (edges mult of 4);
+#   (b) a FARTHER band slab is tier 2 with the LOW signature (edges mult of 4);
 #   (c) the boundary RESPECTS the configurable low-start — raising it moves
-#       ring slabs from LOW to MED (their tier flips after the re-lower);
+#       band slabs from LOW to MED (their tier flips after the re-lower);
 #   (d) the AIR RULE — a sample is solid iff NOT more than half its volume is
 #       air (synthetic rows: 5/8 air -> air, 4/8 -> solid; 33/64 -> air,
 #       32/64 -> solid) + in-world air slabs carry no low mesh.
@@ -7905,11 +7998,12 @@ func _ladder_test(spawn: Vector3) -> void:
 	var res := {
 		"ok": false,
 		"R": 8,
-		"low_start0": 10,
-		"low_start1": 12,
+		"band0": 4,
+		"low_start0": 6,
+		"low_start1": 7,
 		"low_start_eff0": 0,
 		"low_start_eff1": 0,
-		"ring_slabs": 0,
+		"band_slabs": 0,
 		"med_slabs": 0,
 		"low_slabs": 0,
 		"med_taxis": [],
@@ -7933,23 +8027,27 @@ func _ladder_test(spawn: Vector3) -> void:
 	var R := 8
 	world.fluid_sim_enabled = false
 	world.render_radius = R
-	# (a/b) initial boundary: MED = taxi < 10 (ring taxi 9), LOW = taxi >= 10.
-	Settings.values["low_start"] = 10
+	# AC-0261: deterministic high band (independent of the saved sim_dist).
+	world.band0_r = 4
+	# (a/b) initial boundary: MED = [4, 6) (band taxi 4-5), LOW = [6, 8)
+	# (band taxi 6-7); taxi >= 8 = data-only.
+	Settings.values["low_start"] = 6
 	world.apply_low_start()
 	res["low_start_eff0"] = int(world.low_start_r)
 	world.recenter(spawn.x, spawn.z, true)
-	# Phase 1: let the circle build (data lands first, then the high meshes).
+	# Phase 1: let the HIGH band build (data lands first, then the high
+	# meshes — only taxi < band0_r ever gets a high mesh).
 	var t0 := Time.get_ticks_msec()
 	while Time.get_ticks_msec() - t0 < 150000:
 		await get_tree().physics_frame
-		if _ladder_circle_built(R):
+		if _ladder_band_built():
 			break
-	# Phase 2: let the low wave drain the far ring (wall-clock paced).
+	# Phase 2: let the slab wave drain the visible band (wall-clock paced).
 	t0 = Time.get_ticks_msec()
 	var stable := 0
 	while Time.get_ticks_msec() - t0 < 150000:
 		await get_tree().physics_frame
-		if _ladder_no_pending_ring(R):
+		if _ladder_band_drained(R):
 			stable += 1
 			if stable >= 30:
 				break
@@ -7957,7 +8055,7 @@ func _ladder_test(spawn: Vector3) -> void:
 			stable = 0
 	var pcx := int(world.last_pcx)
 	var pcz := int(world.last_pcz)
-	# ---- sample the ring: tier + mesh signature per low slab.
+	# ---- sample the visible band: tier + mesh signature per low slab.
 	var first_med: Node3D = null
 	var first_med_si := -1
 	var first_low: Node3D = null
@@ -7966,16 +8064,14 @@ func _ladder_test(spawn: Vector3) -> void:
 		var c: Node3D = world.chunks[key]
 		var dx := int(c.cx) - pcx
 		var dz := int(c.cz) - pcz
-		if dx * dx + dz * dz <= R * R:
-			continue
-		if not _ladder_is_ring(dx, dz):
+		if not _ladder_in_band(dx, dz):
 			continue
 		for j in range(int(c.low_slabs.size())):
 			var si := int(c.low_slabs[j])
 			var tier := int(c.low_tiers.get(si, -1))
 			var taxi := absi(dx) + absi(dz)
 			var mi: MeshInstance3D = c.low_instances[j] if j < c.low_instances.size() else null
-			res["ring_slabs"] += 1
+			res["band_slabs"] += 1
 			if tier == 1:
 				res["med_slabs"] += 1
 				(res["med_taxis"] as Array).append(taxi)
@@ -8008,25 +8104,25 @@ func _ladder_test(spawn: Vector3) -> void:
 		mc.low_emit(mc.slab_copy(first_low.data), first_low_si, world._low_ms_snap_get())
 		res["emit_cpp_textured_ms"] = (Time.get_ticks_usec() - tc) / 1000.0
 	res["lod_fcc_build_ms"] = float(world.lod_fcc_build_ms)
-	# (a) a NEAR ring slab is MED (8x8x8); (b) a FARTHER one is LOW (4x4x4).
+	# (a) a NEAR band slab is MED (8x8x8); (b) a FARTHER one is LOW (4x4x4).
 	var ab_ok: bool = res["med_slabs"] >= 1 and res["low_slabs"] >= 1 \
 			and res["med_mesh_ok"] == res["med_mesh_total"] and res["med_mesh_total"] > 0 \
 			and res["low_mesh_ok"] == res["low_mesh_total"] and res["low_mesh_total"] > 0
-	# (c) the boundary respects the configurable low-start: raise it 10 -> 12
-	# and the ring slabs at taxi 10/11 flip LOW -> MED after the re-lower.
+	# (c) the boundary respects the configurable low-start: raise it 6 -> 7
+	# and the band slabs at taxi 6 flip LOW -> MED after the re-lower.
 	var pre_tiers: Dictionary = {}
 	for key in world.chunks:
 		var c: Node3D = world.chunks[key]
 		for s in c.low_slabs:
 			pre_tiers[key + ":" + str(int(s))] = int(c.low_tiers.get(int(s), -1))
-	Settings.values["low_start"] = 12
+	Settings.values["low_start"] = 7
 	world.apply_low_start()
 	res["low_start_eff1"] = int(world.low_start_r)
 	t0 = Time.get_ticks_msec()
 	stable = 0
 	while Time.get_ticks_msec() - t0 < 150000:
 		await get_tree().physics_frame
-		if _ladder_no_pending_ring(R):
+		if _ladder_band_drained(R):
 			stable += 1
 			if stable >= 30:
 				break
@@ -8038,7 +8134,7 @@ func _ladder_test(spawn: Vector3) -> void:
 		var c: Node3D = world.chunks[key]
 		var dx := int(c.cx) - pcx
 		var dz := int(c.cz) - pcz
-		if dx * dx + dz * dz <= R * R or not _ladder_is_ring(dx, dz):
+		if not _ladder_in_band(dx, dz):
 			continue
 		for s in c.low_slabs:
 			var k: String = key + ":" + str(int(s))
@@ -8138,7 +8234,7 @@ func _ladder_test(spawn: Vector3) -> void:
 		var c: Node3D = world.chunks[key]
 		var dx := int(c.cx) - pcx
 		var dz := int(c.cz) - pcz
-		if dx * dx + dz * dz <= R * R or not _ladder_is_ring(dx, dz):
+		if not _ladder_in_band(dx, dz):
 			continue
 		if c.data.is_empty():
 			continue
@@ -8175,9 +8271,9 @@ func _ladder_test(spawn: Vector3) -> void:
 	get_tree().quit()
 
 
-# AC-0252: true when the render circle is (largely) built — a proxy for the
-# ring data having landed (data precedes the high build).
-func _ladder_circle_built(R: int) -> bool:
+# AC-0261: true when the HIGH band (taxi < band0_r) is (largely) built —
+# only the high band ever gets a high mesh; the visible band is slab-wave.
+func _ladder_band_built() -> bool:
 	var pcx := int(world.last_pcx)
 	var pcz := int(world.last_pcz)
 	var total := 0
@@ -8186,7 +8282,7 @@ func _ladder_circle_built(R: int) -> bool:
 		var c: Node3D = world.chunks[key]
 		var dx := int(c.cx) - pcx
 		var dz := int(c.cz) - pcz
-		if dx * dx + dz * dz > R * R:
+		if absi(dx) + absi(dz) >= int(world.band0_r):
 			continue
 		if int(c.band) > 2:
 			continue
@@ -8196,9 +8292,11 @@ func _ladder_circle_built(R: int) -> bool:
 	return total > 0 and built >= total * 0.9
 
 
-# AC-0252: is this chunk in the data-only far ring (band 3)?
-func _ladder_is_ring(dx: int, dz: int) -> bool:
-	return int(world.band_of(dx, dz)) == 3
+# AC-0261: is this chunk in the visible band [band0_r, render_radius) —
+# the only region that holds MED/LOW placeholder slabs?
+func _ladder_in_band(dx: int, dz: int) -> bool:
+	var taxi := absi(dx) + absi(dz)
+	return taxi >= int(world.band0_r) and taxi < int(world.render_radius)
 
 
 # AC-0252: the MED/LOW mesh signature — vertex-color, NO UVs, every quad
@@ -8251,14 +8349,14 @@ func _ladder_mesh_ok(mi: MeshInstance3D, G: int) -> bool:
 
 
 # AC-0252: no PENDING low slab in the far ring (the wave has drained it).
-func _ladder_no_pending_ring(R: int) -> bool:
+func _ladder_band_drained(R: int) -> bool:
 	var pcx := int(world.last_pcx)
 	var pcz := int(world.last_pcz)
 	for key in world.chunks:
 		var c: Node3D = world.chunks[key]
 		var dx := int(c.cx) - pcx
 		var dz := int(c.cz) - pcz
-		if dx * dx + dz * dz <= R * R or not _ladder_is_ring(dx, dz):
+		if not _ladder_in_band(dx, dz):
 			continue
 		if c.data.is_empty():
 			continue
@@ -8268,7 +8366,7 @@ func _ladder_no_pending_ring(R: int) -> bool:
 			if c.has_low_si(si):
 				continue
 			if int(c.low_failed.get(si, -1)) == int(c.data_gen):
-				continue  # terminal all-air (the fog holds)
+				continue  # terminal all-air
 			return false
 	return true
 
@@ -8341,13 +8439,14 @@ func _r16_stream_phase(cam: Camera3D, base: Vector3) -> Dictionary:
 	for f in 60:
 		await get_tree().physics_frame
 	out["inr_back"] = _r16_lod_inr()
-	# SETTLE: drain the in-r pending (bounded spin — a wedged queue must
-	# never hang the arm).
+	# SETTLE (AC-0261): the band drains at the slab wave's pace — minutes,
+	# not seconds (the FULL-drain proof is the build phase's
+	# band_drained() wait). The contract here: after the Y-moves the
+	# pending set is strictly CONVERGING (down from inr_back, no holes) —
+	# the wave is working it (bounded spin — a wedged queue must never
+	# hang the arm).
 	var guard := 0
 	while guard < 900:
-		var fin: Dictionary = _r16_lod_inr()
-		if int(fin.get("inr_holes", 1)) == 0 and int(fin.get("inr_pending", 1)) == 0:
-			break
 		await get_tree().physics_frame
 		guard += 1
 	out["inr_settled"] = _r16_lod_inr()
@@ -8370,8 +8469,8 @@ func _r16_air_chunk_test() -> Dictionary:
 			continue
 		var dx := int(cc.cx) - pcx
 		var dz := int(cc.cz) - pcz
-		if dx * dx + dz * dz <= rr * rr:
-			continue
+		if absi(dx) + absi(dz) <= rr:
+			continue  # AC-0261: the taxi render edge
 		if cc.data.is_empty() or bool(cc.mesh_built):
 			continue
 		c = cc
@@ -8912,8 +9011,11 @@ func _wprof_test(spawn: Vector3) -> void:
 	world.recenter(spawn.x, spawn.z, true, spawn.y)
 	var pcx := int(floorf(spawn.x / 16.0))
 	var pcz := int(floorf(spawn.z / 16.0))
-	# The r16 settle: every band<=2 chunk in the r16 square meshed (25-min
-	# wall cap: on a stall the arm proceeds with the partial build).
+	# AC-0261 r16 settle: the HIGH band (taxi < band0_r) fully meshed +
+	# the visible band [band0_r, rr) drained by the slab wave (25-min wall
+	# cap: on a stall the arm proceeds with the partial build).
+	Settings.values["low_start"] = 10
+	world.apply_low_start()
 	var max_frames := 400000
 	var frames := 0
 	while frames < max_frames and Time.get_ticks_msec() - t0 < 1500000:
@@ -8925,11 +9027,13 @@ func _wprof_test(spawn: Vector3) -> void:
 				var c: Node3D = world.chunks[key]
 				if int(c.band) > 2:
 					continue
-				if absi(c.cx - pcx) <= rr and absi(c.cz - pcz) <= rr:
-					if not c.mesh_built:
-						built_all = false
-						break
-			if built_all:
+				var taxi := absi(int(c.cx) - pcx) + absi(int(c.cz) - pcz)
+				if taxi >= rr:
+					continue
+				if taxi < int(world.band0_r) and not c.mesh_built:
+					built_all = false
+					break
+			if built_all and world.band_drained():
 				break
 	# Let the last handoffs land before measuring.
 	for i in 30:
@@ -14256,8 +14360,10 @@ func _tick_md5(arr: PackedByteArray) -> String:
 	return hx
 
 func _load_test(spawn: Vector3) -> void:
-	# AC-0178: first-load wall probe at R=50. t0 = the recenter that starts
-	# streaming; done = render circle fully meshed + both worker pools drained.
+	# AC-0178: first-load wall probe at R=50 (AC-0261 semantics): t0 = the
+	# recenter that starts streaming; done = the HIGH band (taxi < band0_r)
+	# fully meshed + the visible band [band0_r, R) drained by the slab wave
+	# (its avg LOD is FINAL there) + both worker pools drained.
 	# AWECRAFT_LOADBYPASS=0 runs the SAME arm under the legacy spread drain
 	# (start_loading no-ops) — the A/B baseline. Counts are the real
 	# provenance counters (disk_reads / gen_count / mesh_built).
@@ -14268,7 +14374,7 @@ func _load_test(spawn: Vector3) -> void:
 	world.recenter(spawn.x, spawn.z, true)
 	if lb:
 		world.start_loading("AC-0178 load probe")
-	var target: int = world.circle_count()
+	var target: int = world._high_band_count()
 	var t0 := Time.get_ticks_msec()
 	var spawn3x3_ms := -1
 	var screen_hidden_ms := -1
@@ -14281,17 +14387,18 @@ func _load_test(spawn: Vector3) -> void:
 			screen_up = bool(world._loading_screen.visible)
 		if lb and not world.loading_active and screen_hidden_ms < 0:
 			screen_hidden_ms = Time.get_ticks_msec() - t0
-		# Completion = the _loading_tick predicate itself: circle fully meshed
-		# AND both worker pools drained (stop_loading has run, screen hidden).
-		if world.meshed_in_circle() >= target and world.threadmesh_inflight.is_empty() and world.threadgen_inflight.is_empty():
+		# Completion = the _loading_tick predicate (high band meshed + pools
+		# drained) + the visible band drained by the slab wave.
+		if world._high_band_meshed() >= target \
+				and world.threadmesh_inflight.is_empty() and world.threadgen_inflight.is_empty() \
+				and world.band_drained():
 			break
-		# AC-0178: 60-min in-arm cap — the bypass arm finishes the circle in
-		# ~25-30 min (the screen hides once the pools drain); the spread
-		# baseline (AWECRAFT_LOADBYPASS=0) needs ~50 min, so 60 covers both.
+		# 60-min in-arm cap (AC-0261: the high-band load is seconds; the cap
+		# bounds the band drain + the legacy bypass baseline).
 		if Time.get_ticks_msec() - t0 > 3600000:
 			break
 	var wall := Time.get_ticks_msec() - t0
-	var meshed: int = world.meshed_in_circle()
+	var meshed: int = world._high_band_meshed()
 	Debug.result({
 		"ok": meshed >= target,
 		"bypass": lb,

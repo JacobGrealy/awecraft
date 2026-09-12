@@ -51,10 +51,10 @@ var fogstart_val: Label
 # everything closer; the low band runs out to the render edge).
 var lowstart_slider: HSlider
 var lowstart_val: Label
-# AC-0257: the Developer submenu (tier-0 radius + the worker-thread caps;
-# the per-frame instance cap row moves here from the main list).
-var dev_check: CheckBox
-var dev_vbox: VBoxContainer
+# AC-0260: the "Developer" TAB of the options panel (tier-0 radius + the
+# worker-thread caps; the per-frame instance cap row moves here from the
+# Settings page). No checkbox: it is a TabContainer page.
+var dev_page: VBoxContainer
 var tier0_slider: HSlider
 var tier0_val: Label
 var gen_slider: HSlider
@@ -177,57 +177,41 @@ func _ready() -> void:
 	opt_vbox.add_child(overlay_collision_check)
 	if hi + 4 < opt_vbox.get_child_count():
 		opt_vbox.move_child(overlay_collision_check, hi + 5)
-	# AC-0257: the options list scrolls when it outgrows the window (the
-	# Developer rows made it too tall for small screens). A plain
-	# ScrollContainer in the OptionsBox (full rect) - the old CenterContainer
-	# parent would shrink a scroll child to its minimum size.
-	var opt_box := get_node("Layer/OptionsBox")
+	# AC-0260: the options panel is TABBED. The "Settings" page is the
+	# original list restored to its tscn seat (centered again by the
+	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
+	# broke the centering is gone, and the Developer rows no longer make
+	# it too tall: they live on their own tab). The "Developer" page
+	# holds the perf-knob rows. The scene's ChunkRow (the per-frame
+	# instance cap) moves to the Developer page: the tscn
+	# ChunkSlider->_on_chunk_changed connection survives the reparent
+	# (connections hold object refs, not node paths).
 	var opt_center := get_node("Layer/OptionsBox/Center")
-	var opt_scroll := ScrollContainer.new()
-	opt_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
-	opt_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	opt_box.add_child(opt_scroll)
-	opt_center.remove_child(opt_vbox)
-	opt_scroll.add_child(opt_vbox)
-	opt_vbox.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	# AC-0257: the Developer submenu - a checkbox that reveals the perf-knob
-	# rows. The scene's ChunkRow (the per-frame instance cap) moves in as the
-	# first row: the tscn ChunkSlider->_on_chunk_changed connection survives
-	# the reparent (connections hold object refs, not node paths).
-	dev_check = CheckBox.new()
-	dev_check.name = "DeveloperCheck"
-	dev_check.text = "Developer settings"
-	dev_check.add_theme_font_size_override("font_size", 15)
-	dev_check.toggled.connect(_on_dev_toggled)
-	opt_vbox.add_child(dev_check)
-	dev_vbox = VBoxContainer.new()
-	dev_vbox.name = "DevVBox"
-	dev_vbox.visible = false
-	dev_vbox.add_theme_constant_override("separation", 6)
-	opt_vbox.add_child(dev_vbox)
-	# seat the toggle+panel right before the Pack button.
-	var pb_idx := opt_vbox.get_child_count() - 1
-	for i in opt_vbox.get_child_count():
-		if opt_vbox.get_child(i) == get_node("Layer/OptionsBox/Center/VBox/PackButton"):
-			pb_idx = i
-			break
-	opt_vbox.move_child(dev_check, pb_idx)
-	opt_vbox.move_child(dev_vbox, pb_idx + 1)
 	var chunk_row := get_node("Layer/OptionsBox/Center/VBox/ChunkRow")
+	var opt_tabs := TabContainer.new()
+	opt_tabs.name = "OptTabs"
+	opt_tabs.add_theme_font_size_override("font_size", 15)
+	opt_center.add_child(opt_tabs)
+	opt_vbox.name = "Settings"
+	opt_tabs.add_child(opt_vbox)  # reparent out of its tscn seat into the tab
+	dev_page = VBoxContainer.new()
+	dev_page.name = "Developer"
+	dev_page.add_theme_constant_override("separation", 6)
 	opt_vbox.remove_child(chunk_row)
-	dev_vbox.add_child(chunk_row)
-	var t0r := _mk_dev_slider_row(dev_vbox, "Tier0Row", "Tier-0 radius (full-high columns)", 0.0, float(Settings.TIER0_RADIUS_MAX))
+	dev_page.add_child(chunk_row)
+	var t0r := _mk_dev_slider_row(dev_page, "Tier0Row", "Tier-0 radius (full-high columns)", 0.0, float(Settings.TIER0_RADIUS_MAX))
 	tier0_slider = t0r[0]
 	tier0_val = t0r[1]
-	var genr := _mk_dev_slider_row(dev_vbox, "GenThreadsRow", "Worker threads gen (0 = auto)", 0.0, float(Settings.WORKER_THREADS_MAX))
+	var genr := _mk_dev_slider_row(dev_page, "GenThreadsRow", "Worker threads gen (0 = auto)", 0.0, float(Settings.WORKER_THREADS_MAX))
 	gen_slider = genr[0]
 	gen_val = genr[1]
-	var meshr := _mk_dev_slider_row(dev_vbox, "MeshThreadsRow", "Worker threads mesh (0 = auto)", 0.0, float(Settings.WORKER_THREADS_MAX))
+	var meshr := _mk_dev_slider_row(dev_page, "MeshThreadsRow", "Worker threads mesh (0 = auto)", 0.0, float(Settings.WORKER_THREADS_MAX))
 	mesh_slider = meshr[0]
 	mesh_val = meshr[1]
 	tier0_slider.value_changed.connect(_on_tier0_changed)
 	gen_slider.value_changed.connect(_on_gen_threads_changed)
 	mesh_slider.value_changed.connect(_on_mesh_threads_changed)
+	opt_tabs.add_child(dev_page)
 	file_dialog = get_node("Layer/PackDialog")
 	slot_labels = []
 	slot_conts = []
@@ -507,8 +491,7 @@ func _sync_controls() -> void:
 	overlay_collision_check.button_pressed = bool(Settings.values.get("overlay_collision", false))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_val.text = str(int(fogstart_slider.value)) + "%"
-	# AC-0252: the low-start slider spans the data-only far ring just
-	# outside the render circle (taxi [render_dist + 1, ~render_dist*1.42]).
+	# AC-0261: the low-start slider spans the visible band [sim, render].
 	_sync_lowstart_range()
 	# AC-0257: the Developer submenu rows.
 	tier0_slider.value = float(int(Settings.values.get("tier0_radius", 0)))
@@ -530,19 +513,19 @@ func _on_render_changed(v: float) -> void:
 	sim_slider.value = float(int(Settings.values["sim_dist"]))
 	_syncing = false
 	sim_val.text = str(int(sim_slider.value))
-	# AC-0252: the low-start slider's range tracks the render distance
-	# (the band lives in the far ring just outside the circle).
+	# AC-0261: the low-start slider's range tracks the [sim, render] band.
 	_sync_lowstart_range()
 	Settings.apply_render_distance()
 	Settings.apply_sim_distance()
 
 
-# AC-0252: set the low-start slider's min/max to the far ring's taxi span
-# (just outside the render circle) and re-clamp its value.
+# AC-0261: the low-start slider spans the visible LOD band [sim, render]:
+# MED = [sim, low_start), LOW = [low_start, render]; nothing renders past
+# the render distance. Re-clamp the value into the band.
 func _sync_lowstart_range() -> void:
 	var lr := int(Settings.values["render_dist"])
-	var lo := lr + 1
-	var hi := int(float(lr) * 1.42) + 1
+	var lo := mini(int(Settings.values["sim_dist"]), lr)
+	var hi := lr
 	_syncing = true
 	lowstart_slider.min_value = float(lo)
 	lowstart_slider.max_value = float(hi)
@@ -563,6 +546,8 @@ func _on_sim_changed(v: float) -> void:
 	sim_val.text = str(s)
 	Settings.set_value("sim_dist", s)
 	Settings.apply_sim_distance()
+	# AC-0261: the low-start band starts at the sim distance.
+	_sync_lowstart_range()
 
 
 func _on_volume_changed(v: float) -> void:
@@ -588,11 +573,6 @@ func _on_chunk_changed(v: float) -> void:
 		return
 	chunk_val.text = str(int(v))
 	Settings.set_value("chunks_per_frame", int(v))
-
-
-# AC-0257 (Developer submenu).
-func _on_dev_toggled(on: bool) -> void:
-	dev_vbox.visible = on
 
 
 func _on_tier0_changed(v: float) -> void:
@@ -626,22 +606,19 @@ func _on_fogstart_changed(v: float) -> void:
 	Settings.set_value("fog_start_pct", int(v))
 
 
-# AC-0252: the med/low band split — the 4x4x4 LOW band's start distance
+# AC-0261: the med/low band split — the 4x4x4 LOW band's start distance
 # (taxi chunks; the sim_dist slider pattern: set + apply, live update).
-# The world clamps it into the far ring [render_dist + 1, ~render_dist*1.42]
-# (just outside the render circle); the slider range mirrors that.
+# The value lives in the VISIBLE band [sim, render] (MED = [sim, low_start),
+# LOW = [low_start, render]); the slider range is set by
+# _sync_lowstart_range, so the drag value is already in band (the clampi
+# is belt-and-braces) — no slider-range rewrite here (the old far-ring
+# rewrite is what made the value jump out of band on every click).
 func _on_lowstart_changed(v: float) -> void:
 	if _syncing:
 		return
-	var r := int(Settings.values["render_dist"])
-	var lo := r + 1
-	var hi := int(float(r) * 1.42) + 1
+	var lo := mini(int(Settings.values["sim_dist"]), int(Settings.values["render_dist"]))
+	var hi := int(Settings.values["render_dist"])
 	var s := clampi(int(v), lo, hi)
-	_syncing = true
-	lowstart_slider.min_value = float(lo)
-	lowstart_slider.max_value = float(hi)
-	lowstart_slider.value = float(s)
-	_syncing = false
 	lowstart_val.text = str(s)
 	Settings.set_value("low_start", s)
 	Settings.apply_low_start()

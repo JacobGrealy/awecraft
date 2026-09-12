@@ -40,14 +40,14 @@ const DEFAULTS := {
 	# the render edge (R+1)*16), kept at/under 0.875 so the full-fog
 	# boundary stays ahead of the worst-case pop-in face at every R >= 7.
 	"fog_start_pct": 87,
-	# AC-0252: the med/low band split — the 4x4x4 LOW (avg-color) band
-	# STARTS at this distance (taxi chunks, the sim_dist metric) and runs
-	# out to the render edge; the 8x8x8 MED tier owns everything closer
-	# (within the data-only far ring). Default = render_dist + 8 (58 for
-	# the default render_dist 50) — 8 chunks beyond the high circle.
-	# world.apply_low_start clamps it into the far ring [render_dist + 1,
-	# ~render_dist * sqrt(2)] (the ring's taxi span).
-	"low_start": 58,
+	# AC-0261: the med/low band split (taxi chunks). The visible LOD
+	# zones: HIGH = [0, sim_dist), MED (8x8x8) = [sim_dist, low_start),
+	# LOW (4x4x4) = [low_start, render_dist); NOTHING renders past the
+	# render distance (data-only ahead of it). Default = the midpoint of
+	# the [sim, render] band for the default sim 4 / render 50.
+	# clamp_low_start_to_render re-defaults out-of-band stored values to
+	# the band midpoint.
+	"low_start": 27,
 	# AC-0257 (Developer submenu): the tier-0 Chebyshev radius around the
 	# player column — columns this close go FULL COLUMN straight to high
 	# (default 0 = the player column only, the existing behavior).
@@ -94,15 +94,17 @@ func clamp_sim_to_render() -> void:
 		values["sim_dist"] = int(values["render_dist"])
 
 
-# AC-0252: the low-start distance can never exceed the render radius (the
-# low band lives inside the streamed region).
+# AC-0261: low_start lives inside the visible band [sim, render] — MED =
+# [sim, low_start), LOW = [low_start, render]; nothing renders past the
+# render distance. A stored value outside the band (the old far-ring
+# default 58) re-defaults to the band MIDPOINT (clamping to the edge
+# would silently cancel the LOW band).
 func clamp_low_start_to_render() -> void:
-	# AC-0252: the low-start lives in the data-only far ring just outside
-	# the render circle — taxi span [render_dist + 1, ~render_dist*sqrt(2)].
-	var lo := int(values["render_dist"]) + 1
-	var hi := int(float(values["render_dist"]) * 1.42) + 1
-	if int(values["low_start"]) < lo or int(values["low_start"]) > hi:
-		values["low_start"] = clampi(int(values["low_start"]), lo, hi)
+	var lo := mini(int(values["sim_dist"]), int(values["render_dist"]))
+	var hi := int(values["render_dist"])
+	var ls := int(values["low_start"])
+	if ls < lo or ls > hi:
+		values["low_start"] = int((lo + hi) / 2)
 
 
 func _clamp(k: String, v) -> void:
