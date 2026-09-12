@@ -308,7 +308,10 @@ mouse_filter = 2
 
 [node name="VBox" type="VBoxContainer" parent="Layer/OptionsBox/Center"]
 layout_mode = 2
-theme_override_constants/separation = 12
+# AC-0260 fix: the page sits inside the options TabContainer (30px tab bar
+# on top) — 12px separation pushed the content past 720px tall and the
+# centered container clipped the tab bar off the top of the screen.
+theme_override_constants/separation = 6
 alignment = 1
 custom_minimum_size = Vector2(560, 0)
 

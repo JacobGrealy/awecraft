@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-09-12T01:20
+  updated_at: 2026-09-12T08:56
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0262
 - AC-0112
 - AC-0113
 - AC-0098
@@ -28,6 +29,7 @@ queue:
 - AC-0090
 - AC-0176
 - AC-0259
+- AC-0263
 intake:
 - id: AC-0247
   title: pool-meshinstances-for-slabs
@@ -10505,13 +10507,13 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: done
+  status: in-progress
   labels:
   - ui
   - menu
   created_at: 2026-09-11T20:38
-  updated_at: 2026-09-12T01:20
-  completed_at: 2026-09-12T01:20
+  updated_at: 2026-09-12T04:09
+  completed_at: null
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -10561,7 +10563,39 @@ intake:
     - Verified: headless parse clean; battery pausemenu arm green (the in-game pause/options canary over
     the restructured menu.gd); genhash unchanged. User''s in-game look test is the final gate (menu centered,
     two tabs, gamepad nav) — the headless battery cannot screenshot the main menu (AWECRAFT_MENU_SHOT
-    arm not extended for the new tabs).'
+    arm not extended for the new tabs).
+
+
+
+    4) AC-0260 follow-up fixes (user report: "menu still not rendering with tabs, it''s messed up" + "worker-thread
+    sliders bugged, can''t set back to auto, want to type a number"):
+
+    - ROOT CAUSE (broken tabs): menu.gd _ready did opt_tabs.add_child(opt_vbox) WITHOUT first removing
+    opt_vbox from its tscn parent (opt_center). The add_child is a logged non-fatal runtime error, so
+    _ready continued — but the Settings page never entered the TabContainer: the tab held only the Developer
+    page, the single-tab rule hides the tab bar entirely, and the orphaned Settings list rendered in its
+    tscn seat overlapping the (only-tab) Developer page — the "messed up" menu. The user''s slider complaints
+    were the same overlap (the dev rows sat on top of the settings list).
+
+    - FIX: opt_center.remove_child(opt_vbox) before the reparent. Verified via rendered screenshots (xvfb
+    + forward_plus): both tabs render; the Settings page and the Developer tab each lay out correctly.
+
+    - SpinBoxes (user ask: typeable): the three Developer perf knobs (tier-0 radius, worker gen threads,
+    worker mesh threads) are now SpinBoxes (min 0, max cap, step 1; 0 = auto shown in the value label)
+    instead of HSliders — click the field and type a number; the old _mk_dev_slider_row is _mk_dev_spin_row.
+    Change handlers unchanged (SpinBox.value_changed emits float like HSlider).
+
+    - 720p fit: with the 30px tab bar added, the options content (787px) exceeded the 720px test viewport
+    and the centered container clipped the tab bar off the top of the screen. The settings page VBox separation
+    12 -> 6 (menu.tscn) brings the content under 720px. Verified: tab bar + full panel (down to the Back
+    button) visible at 1280x720.
+
+    - harness: the AWECRAFT_MENU_SHOT arm now waits 40 frames (the container chain settles over 2-3 layout
+    passes; 6 frames snapped the collapsed pre-settle state) and supports AWECRAFT_MENU_VIEW=developer
+    (switches to the Developer tab for the shot).
+
+    - Screenshot evidence: .scratch/menushot_set2.png (Settings tab, tabs visible), .scratch/menushot_dev2.png
+    (Developer tab with SpinBoxes).'
   comments: []
 - id: AC-0261
   title: lod-band-model-sim-to-render-and-vertical-slice
@@ -10667,4 +10701,139 @@ intake:
 
     - The harness r16 checker''s per-quad re-derivation was extracted into _lod_quad_color_check (shared
     by the r16 checker) — same rule as the C++ recount, tolerance 0.01 per channel.'
+  comments: []
+- id: AC-0262
+  title: 'Generation-phase main-thread cost: instrument LOW sub-parts, profile the standing storm at R30,
+    fix the heavy path'
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: in-progress
+  labels:
+  - perf
+  - low-lane
+  created_at: 2026-09-12T04:09
+  updated_at: 2026-09-12T05:21
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story\nWhile the world is generating (standing still after spawn, render distance 30),\
+    \ the game drops to ~12 fps and the in-game stats show up to 100 ms in the \"low\" stage. The user\
+    \ cannot tell where the main thread is spending that time, so the goal is to break the generation-phase\
+    \ main-thread work into timed sub-parts, publish the breakdown (where exactly the time goes), and\
+    \ fix the dominant heavy path so generation feels smooth.\n\n2) Technical Details\n- Symptom: user\
+    \ reports 12 fps standing still during chunk generation at R30 (their setting; previously default\
+    \ 50); in-game stats show up to 100 ms of \"low\".\n- Context: the avg-LOD low lane (med/low placeholder\
+    \ slabs) runs dispatch + attach inside the main-thread LOW stage (world.gd _low_step). Prior headless\
+    \ wprof (R50, flight windows only, 3 kHz build phase) showed LOW avg ~33 ms; the build/storm phase\
+    \ was never sampled at the in-game frame pace.\n- Instrumentation (this task):\n  - world.gd: four\
+    \ new wprof sub-stages under LOW: LOW_POLL (the attach poll incl. mesh create), LOW_INR (dead in-r\
+    \ wave since AC-0261, kept to confirm zero), LOW_WAVE (the global slab-wave dispatch loop, residual\
+    \ = dispatch + air bookkeeping), LOW_PICK (the per-slab candidate scan inside the loop). WP_STAGES\
+    \ 10 -> 14; substages list extended; partition math untouched (sub-stages sum into LOW, never the\
+    \ 5-stage partition).\n  - harness.gd wprof arm: (a) AWECRAFT_RADIUS=R env profiles a real in-game\
+    \ condition (render distance set, low_start re-derives to the [sim,R] midpoint default exactly like\
+    \ the game); unset keeps the historic low_start=10 test zone; (b) the BUILD phase is now paced at\
+    \ Engine.max_fps=60 (previously only the flight was paced — the build ran at ~3 kHz process frames,\
+    \ a non-game condition where per-frame budgets fire ~50x/s and the ring holds ~60 ms); (c) a new \"\
+    build_end\" window (ring read at build completion, before the idle settle) joins the flight windows\
+    \ as a headline candidate.\n- Primary suspect (pre-profile, from code reading): _low_pick_slab() does\
+    \ a capped full-band scan (LOW_SCAN_CAP 2048 entries, each with chunks.get + data checks + _entry_best_pending)\
+    \ ONCE PER DISPATCHED SLAB (up to LOW_WAVE_FRAME_CAP 8/frame) — O(16k entry visits/frame) during the\
+    \ storm; second suspect: per-slab attach (ArrayMesh import + MeshInstance3D) cost on a real GPU renderer\
+    \ (near-free headless).\n- Repro command: AWECRAFT_LOGIC=wprof AWECRAFT_RADIUS=30 (headless; log .scratch/wprof_ac0262_r30.log).\n\
+    - Verify: boot clean; the run's build_end window must show a per-frame partition that reconciles (recon\
+    \ < 10%) with the LOW sub-stages breaking down the storm cost; fix (if a heavy path is found) re-verified\
+    \ with r16 + ladder + wprof.\n\n\n\n--- overnight diag (goal-159e71cb) ---\nBASELINE (R30, headless\
+    \ 60fps-pace, .scratch/wprof_ac0262_r30.log):\nLOW stage 126-213 ms/frame during the standing storm\
+    \ = the user's ~100ms/12fps.\nBreakdown (build_end window, 180 frames): LOW avg 213.3 | LOW_PICK 211.5\n\
+    (99%) | LOW_WAVE dispatch 0.2 | LOW_POLL 0.1 | LOW_INR 0.0 | DRAIN 0.1.\nseg1/2/3 flight tails: 178/149/126\
+    \ ms LOW, all = LOW_PICK.\nROOT CAUSE: the slab-wave loop picked up to 8 slabs/frame, EACH pick re-scanning\n\
+    the band (<=2048 capped visits x ~13us: dict reads + taxi checks +\n_entry_best_pending 32-probe).\
+    \ 8 x 2048 x 13us ~ 120-210 ms/frame at R30.\nFIX (world.gd): (1) _low_scan_slabs(n) — ONE batched\
+    \ scan per frame: per-rank\ncandidate lists (taxi order = k order, bucket index = taxi), early stop\
+    \ when n\nrank-0 candidates exist (rank 0 = k=taxi < 10000 <= any other rank's k),\nnone-key cache\
+    \ unchanged semantics; (2) _entry_best_pending_cached — per-chunk\nprobe cache keyed [data_gen, fl_gen,\
+    \ player_slab, live_tier] (a hit is 4 int\ncompares + one single-slab re-check; a -1 stays valid:\
+    \ completions remove\npendingness, only data landings add it -> data_gen bump); invalidation wired\
+    \ at\nevery low/fog state mutation (_low_drop_slab/_low_place_slab/fog ensure+drop/\nlow_failed write+erase/drop_low\
+    \ site/_low_reset_all). Bake order unchanged\n((layer rank, taxi) lexicographic — k = rank*10000 +\
+    \ taxi, taxi < 10000).\nAlso: wprof sub-stages now DISJOINT (LOW = POLL + INR + PICK + WAVE-dispatch\n\
+    + gaps) and render in the in-game console under LOW (console.gd)."
+  comments: []
+- id: AC-0263
+  title: Tier-0 disk-order high band + medium_start boundary (sim distance leaves world-gen)
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-12T08:53
+  updated_at: 2026-09-12T08:56
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "# AC follow-up: tier-0 disk order + medium_start boundary\n\n## 1) User Story\nAs a player,\
+    \ I want the full-fidelity \"full column\" treatment to apply only to\nthe small tier-0 ball around\
+    \ me (my tier0_radius setting — currently 0 = the\ncolumn under me), and I want everything beyond\
+    \ it out to a new \"medium start\"\ndistance to be high-detail but built slab-by-slab in disks (the\
+    \ same (layer,\ntaxi) order the other LOD bands use) instead of whole columns. I also want\nhigh visuals\
+    \ to reach FURTHER than my simulation distance, because simulation\ndistance now only gates gameplay\
+    \ updates (mobs, fluids) — it no longer controls\nworld generation.\n\n## 2) Technical Details\n\n\
+    ### Confirmed band layout (center outward), agreed with user 2026-09-12\n1. `[0, tier0_radius]` (Chebyshev\
+    \ ball, `_is_tier0_col`) — FULL COLUMN:\n   all slabs bottom-to-top as one unit (today's full-column\
+    \ build).\n2. `[tier0_radius, medium_start)` — HIGH DETAIL per-slab: every slab gets its\n   full-res\
+    \ mesh, dispatched slab-by-slab in the agreed (layer, taxi) disk\n   order (all slabs eventually —\
+    \ user-confirmed; deep slabs come last, like\n   the wave band). NOT whole columns.\n3. `[medium_start,\
+    \ render]` — medium/low LOD wave (unchanged mechanics).\n\n### New setting\n- `medium_start` (world-gen\
+    \ boundary where medium begins = high band's outer\n  edge). Must be > simulation distance (validate/clamp\
+    \ in Settings).\n- Simulation distance no longer controls world generation at all — its only\n  remaining\
+    \ purpose is gating how far mobs/fluid simulation update.\n- `band0_r` currently plays the high→wave\
+    \ boundary role (it IS the sim\n  distance today). World-gen uses of it must move to the new `medium_start`\n\
+    \  value (e.g. `medium_start_r`); sim-distance keeps its gameplay role only.\n\n### Queue-aware tier-0\
+    \ membership\n- Tier-0 membership must be re-stamped on recenter (like `_tier_stamp` does\n  for tier/rank):\
+    \ a column that MOVES OUT of the tier-0 ball drops its\n  full-column work (re-enters the per-slab\
+    \ disk-order path) — \"if it moves\n  out of full column range we don't generate the rest\". A column\
+    \ moving IN\n  gets the full-column treatment.\n\n### Current-state facts (for the implementer)\n\
+    - Today there is NO functional difference between \"full column\" and the high\n  band: the drain\
+    \ (`_drain_build_queue` → `_build_unit` → `_mesh_dispatch`)\n  builds a complete column for every\
+    \ chunk inside the sim distance.\n  `tier0_radius` only gates the wave skip (`_low_fog_for` / wave\
+    \ scan sites)\n  and lets high builds extend past the sim boundary — so with tier0_radius=0\n  the\
+    \ whole sim distance gets full columns (the user-visible bug).\n- The (layer, taxi) score = `_grid_score`\
+    \ = `_layer_rank_of(best_si)*10000 +\n  taxi`; `_layer_rank_of` = distance of the slab from the player's\
+    \ Y-slab.\n  AC-0262's batched wave scan (`_low_scan_slabs`) already produces per-rank\n  (layer,\
+    \ taxi) candidate lists — the high band can reuse the same ordering.\n- Per-slab full-res emit machinery\
+    \ exists: the edit lane does slab-scoped\n  `build_accs(..., si0, si1, d_off, ...)` and `c.apply_edit_accs`\
+    \ (retained\n  swap, per-slab instances in `slabs[si].mesh_instance`). A streaming\n  per-slab high\
+    \ build would mirror `_low_dispatch_slab` + the edit-lane\n  scoped emit/attach, with the nbs ring\
+    \ snapshot (C++ reads si-1/si/si+1).\n- AC-0234's vertical-window mask (`entry[\"mask\"]`, VWINBREAK\
+    \ handoff check)\n  was removed by AC-0257; the user explicitly does NOT want a window-mask\n  mechanism\
+    \ — disk order only. The vestigial VWINBREAK check and flush masks\n  can be revisited as part of\
+    \ this.\n- AC-0262 just landed (batched wave scan + probe cache + high_only drain\n  pool): the drain's\
+    \ steady pass now picks high-band-only entries and the\n  wave keeps up — do not regress either when\
+    \ reworking the band boundaries.\n  The (layer, taxi) order is AGREED — keep it.\n\n### Verify\n-\
+    \ Harness: extend an arm to set tier0_radius (e.g. 0 and 2) + medium_start\n  and assert: (a) no full-column\
+    \ (all-slabs) build is dispatched for a column\n  outside the tier-0 ball; (b) per-slab high builds\
+    \ arrive in (layer, taxi)\n  order; (c) a recenter that moves a column out of tier-0 drops its pending\n\
+    \  full-column work; (d) the wave band starts at medium_start; (e) r16\n  contract (holes 0, settle\
+    \ drained) still holds at the new boundaries.\n- Gates: r16, ladder, meshprobe, battery/genhash unchanged\n\
+    \  (80b904c0e5f085eef1e839459058c706 — no C++ changes expected).\n\n\n### Design refinement (user,\
+    \ 2026-09-12, in-progress)\n**One queue, everything on worker threads.**\n- Everything (tier 0, high,\
+    \ medium, low) is built through the SAME queue\n  system (the band_buckets drain/wave dispatch paths)\
+    \ — only the ORDER\n  differs. No main-thread sync builds: tier 0 must build on worker threads\n \
+    \ too. The user still sees main-thread spikes crossing chunk boundaries —\n  the recenter sync paths\
+    \ (spawn-chunk (0,0) sync gen before the first drain\n  frame, the legacy sync BUILD contract in `_mesh_dispatch_impl`,\
+    \ the\n  recenter slice work) must move into the queue/workers so a boundary cross\n  is just queue\
+    \ bookkeeping.\n\n**Build order (priority sections):**\n1. CHANGED slabs + their dirty neighbors (edits\
+    \ first — the edit lane is\n   already prioritized; keep it ahead of everything).\n2. TIER-0 SECTION\
+    \ (its own phase): the tier-0 columns, each column built\n   starting at the player's Y slab and fanning\
+    \ down AND up (the LOD disk\n   fan). The section fully completes ALL tier-0 columns before any other\
+    \ LOD\n   starts.\n3. RINGS (high / medium / low): (layer, taxi) rings — complete the entire Y\n \
+    \  (a full horizontal layer) across ALL LOD bands before moving down or up.\n   This is exactly the\
+    \ current (layer, taxi) bake order — keep it; the\n   change is only that tier 0 becomes a dedicated\
+    \ preceding section and the\n   band boundaries become tier0_r / medium_start."
   comments: []

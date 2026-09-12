@@ -485,6 +485,60 @@ func _entry_best_pending(c: Node3D) -> int:
 		return si
 	return -1
 
+# AC-0262: single-slab pendingness (the probe's inner check for ONE si) —
+# factored out so the probe cache can re-validate a cached si cheaply
+# (~5 dict lookups) instead of re-running the 32-probe sweep.
+func _low_slab_pending_at(c: Node3D, si: int, tier: int) -> bool:
+	if si < 0 or si >= c.data.size() or c.data[si] == null:
+		return false
+	if c.has_low_si(si):
+		# a LOW slab is pending only when stale (edited after the low,
+		# or built at a different band tier).
+		return not (c.low_stamps.get(si, []) == c.stamp() and c.low_tiers.get(si, -1) == tier)
+	elif FOG_WAVE_ON:
+		# fog on: pending = fogged and not terminal-marked.
+		return c.has_fog_si(si) and int(c.low_failed.get(si, -1)) != int(c.data_gen)
+	else:
+		# terminal-fog mark (sampled all-air at this data_gen).
+		return int(c.low_failed.get(si, -1)) != int(c.data_gen)
+
+# AC-0262: per-chunk cache of the _entry_best_pending result (the wprof
+# storm hunt: the 32-probe sweep is ~13 us/visit and dominated the slab
+# wave's per-pick scan — 126-213 ms/frame of LOW_PICK at R30). The result
+# only changes when one of the four fingerprint parts changes (slab data
+# via [data_gen, fl_gen], the player's Y slab the probe is relative to,
+# the live band tier) or the cached slab itself completes — so a hit is
+# 4 int compares + one cheap single-slab re-check, and a -1 verdict stays
+# valid until the fingerprint moves (completions remove pendingness, they
+# never add a closer pending slab; only a data landing adds slabs, and
+# that bumps data_gen). Low/fog state changes that do NOT bump the
+# fingerprint (an attach, a drop, an air mark, a fog flip) must erase the
+# entry — every such site calls _low_probe_invalidate.
+var _low_probe_cache: Dictionary = {}
+
+func _low_probe_invalidate(c: Node3D) -> void:
+	_low_probe_cache.erase(_key(int(c.cx), int(c.cz)))
+
+func _entry_best_pending_cached(c: Node3D) -> int:
+	var key := _key(int(c.cx), int(c.cz))
+	var f: Array = [int(c.data_gen), int(c.fl_gen), _player_slab(),
+		_lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)]
+	var ck = _low_probe_cache.get(key, null)
+	if ck != null:
+		var cf: Array = ck["f"]
+		if cf[0] == f[0] and cf[1] == f[1] and cf[2] == f[2] and cf[3] == f[3]:
+			var si0: int = int(ck["si"])
+			if si0 < 0:
+				return -1
+			if _low_slab_pending_at(c, si0, int(f[3])):
+				return si0  # still pending -> still the best (see above)
+		_low_probe_cache.erase(key)
+	if _low_probe_cache.size() > 8000:
+		_low_probe_cache.clear()  # eviction safety (bounded working set)
+	var si := _entry_best_pending(c)
+	_low_probe_cache[key] = {"si": si, "f": f}
+	return si
+
 # AC-0257: the (layer, taxi) BAKE SCORE — the order the drain picks and
 # the low lanes walk: the Y-layer of the entry's best pending slab first
 # (a no-data/gen entry is layer 0 — the player's slab is the first the
@@ -497,7 +551,7 @@ func _grid_score(e: Dictionary) -> float:
 	var layer := 0
 	var c = chunks.get(e["key"])
 	if c != null and not c.data.is_empty():
-		var si := _entry_best_pending(c)
+		var si := _entry_best_pending_cached(c)  # AC-0262: probe cache
 		if si >= 0:
 			layer = _layer_rank_of(si)
 	return float(layer) * 10000.0 + float(absi(dx) + absi(dz))
@@ -1133,6 +1187,7 @@ func _fog_ensure_slab(c: Node3D, si: int) -> void:
 		i += 1
 	c.fog_slabs.insert(i, si)
 	c.fog_mask |= (1 << si)  # AC-0237 1a: mirror mask sync
+	_low_probe_invalidate(c)  # AC-0262: fog state feeds the probe (FOG_WAVE_ON)
 	if c.fog_instance == null:
 		# AC-0247: the shared MultiMesh holder comes from the pool
 		# (this build: the property is "multimesh" — no underscore; the
@@ -1154,6 +1209,7 @@ func _fog_drop_slab(c: Node3D, si: int) -> void:
 		return
 	c.fog_slabs.remove_at(i)
 	c.fog_mask &= ~(1 << si)  # AC-0237 1a: mirror mask sync
+	_low_probe_invalidate(c)  # AC-0262: fog state feeds the probe (FOG_WAVE_ON)
 	low_fog_boxes_n -= 1
 	if c.fog_slabs.is_empty():
 		_mm_checkin(c.fog_instance)  # AC-0247: pool (the shared box mesh is never freed)
@@ -2236,6 +2292,7 @@ func _low_handoff(e: Dictionary, res) -> void:
 			if FOG_WAVE_ON and not c.has_fog_si(si):
 				_fog_ensure_slab(c, si)
 			c.low_failed[si] = c.data_gen
+			_low_probe_invalidate(c)  # AC-0262: terminal mark -> not pending
 	else:
 		# AC-0252: the avg-color surface (vertex color, NO UVs — the noise
 		# shader material owns the surface; the textured low's "u" array is
@@ -2247,6 +2304,7 @@ func _low_handoff(e: Dictionary, res) -> void:
 		_fog_drop_slab(c, si)
 		c.low_built = true
 		c.low_failed.erase(si)
+		_low_probe_invalidate(c)  # AC-0262: the un-mark re-pends the slab
 		# PER-SLAB stamp (the _low_build_slab comment: a chunk-level stamp
 		# would keep the other fogged slabs' finished neighbors stale and
 		# the wave would re-pick the built slabs forever).
@@ -2311,6 +2369,7 @@ func _low_drop_slab(c: Node3D, si: int) -> void:
 	if c.low_slabs.is_empty():
 		c.low_built = false
 		c.low_stamps = {}
+	_low_probe_invalidate(c)  # AC-0262: a drop re-pends the slab
 
 # AC-0231 rewrite: place/replace the per-slab low instance (slab-local
 # 0..16 geometry at (0, si*16, 0), sorted by slab index).
@@ -2336,6 +2395,7 @@ func _low_place_slab(c: Node3D, si: int, mesh: ArrayMesh) -> void:
 		c.low_slabs.insert(i, si)
 		c.low_instances.insert(i, mi)
 		c.low_mask |= (1 << si)  # AC-0237 1a: mirror mask sync
+	_low_probe_invalidate(c)  # AC-0262: an attach completes the slab
 	_wprof_add(WP_MESHATTACH, Time.get_ticks_usec() - _wpt)
 
 # AC-0231 fix3: the atlas TEXTURE SWAP re-merges the strip table
@@ -2353,6 +2413,7 @@ func _low_reset_all() -> void:
 	# after a table re-merge the cached origins are the OLD strip
 	# positions, so the cache must go with the tables.
 	_low_tl.clear()
+	_low_probe_cache.clear()  # AC-0262: every slab re-pends on a re-lower
 	# AC-0252: the face-color cache averages the NEW atlas pixels — the
 	# cached colors are the OLD pack's averages until rebuilt.
 	_lod_fcc_dirty = true
@@ -2385,6 +2446,7 @@ func _lod_free_all(c: Node3D, as_upgrade: bool) -> void:
 		low_fog_boxes_n -= int(c.fog_slabs.size())
 		low_fog_chunks_n -= 1
 	c.drop_low()
+	_low_probe_invalidate(c)  # AC-0262: drop_low re-pends the slabs
 
 # AC-0231 fix3 / AC-0250: the WAVE 3 idle-catch-up pick — scan the waiting
 # streaming queue (band_buckets, in rank order) for the first LOW-HOLDING
@@ -2392,7 +2454,7 @@ func _lod_free_all(c: Node3D, as_upgrade: bool) -> void:
 # rank-ordered scan finds it) first, then the rest (tier 2) by the AC-0233
 # e["rank"] taxi stamp (look-independent). TIER 0 (under the player) is
 # never a candidate — it goes straight to high (fall/step-through never).
-# (The WAVE 2 low pick is now slab-level and global — _low_pick_slab.) The
+# (The WAVE 2 low pick is now slab-level and global — _low_scan_slabs.) The
 # no-candidate verdict is cached against (pool_ver, pcx, pcz): a candidate
 # can only APPEAR on a pool-state change (data landing / handoff /
 # recenter — all _pool_touch) or a dirty edit (_dirty_add invalidates the
@@ -2530,18 +2592,31 @@ var _slab_wave_acc_ms := 0.0  # the far slab wave's wall-clock accumulator
 var _low_inr_drained := false
 var _low_inr_drain_since := 0  # wall ms the drain was first observed (0 = unknown)
 
-func _low_pick_slab() -> Dictionary:
+# AC-0262: ONE candidate scan per frame, batched for the wave loop (was:
+# up to LOW_WAVE_FRAME_CAP full O(band) scans per frame — 8 x ~2000 visits
+# x ~13 us = the 126-213 ms/frame LOW_PICK of the R30 standing storm, the
+# whole LOW stage; wprof baseline .scratch/wprof_ac0262_r30.log).
+#
+# The bake order is unchanged — (layer rank, taxi): the pending slab
+# nearest the player's Y builds first, taxi breaking layer ties (k =
+# rank*10000 + taxi, taxi < 10000 always, so the order is lexicographic).
+# The scan walks the band buckets in ASCENDING taxi (bucket index = taxi,
+# see _enqueue_build), so within a layer rank the first seen candidate is
+# that rank's best (smallest taxi). It collects, per rank, the first
+# candidates in taxi order (each list capped at n — a rank's (n+1)th
+# candidate can never make the best n) and stops early when the frame's
+# needs are met: n rank-0 candidates (rank 0 is the best CLASS — nothing
+# smaller exists, so unscanned entries cannot displace any of them). Any
+# other stop condition would be unsafe — an unscanned rank-0 (or a
+# smaller-rank) candidate can always exist past the scan point — so the
+# mid-storm case (the band at a uniform depth > 0, no rank-0 pending)
+# takes the full capped scan, made cheap by _entry_best_pending_cached
+# (~2 us/visit instead of ~13 us).
+func _low_scan_slabs(n: int) -> Array:
 	var nk := "%d|%d,%d|slab" % [_pool_ver, last_pcx, last_pcz]
 	if nk == _low_slab_none_key:
-		return {}
-	# AC-0257: the bake order — the AC-0231 bottom-up si sweep (all si=0
-	# slabs, then si=1, ...) is replaced by the (layer, taxi) grid order:
-	# the pending slab nearest the player's Y builds first, taxi breaking
-	# layer ties. The per-entry candidate is its BEST PENDING SLAB (the
-	# entry's first slab in layer order).
-	var best: Dictionary = {}
-	var best_si := -1
-	var best_k := 1e30
+		return []
+	var per_rank: Dictionary = {}  # rank -> Array of candidates (taxi order)
 	var capped := false
 	var visited := 0
 	for b in range(band_buckets.size()):
@@ -2565,25 +2640,53 @@ func _low_pick_slab() -> Dictionary:
 			var c = chunks.get(e["key"])
 			if c == null or c.data.is_empty() or bool(c.mesh_built):
 				continue
-			var si := _entry_best_pending(c)
+			var si := _entry_best_pending_cached(c)  # AC-0262: probe cache
 			if si < 0:
 				continue
-			var k := float(_layer_rank_of(si)) * 10000.0 + float(absi(dx) + absi(dz))
-			if k < best_k:
-				best_k = k
-				best_si = si
-				best = e
+			var lr := _layer_rank_of(si)
+			if not per_rank.has(lr):
+				per_rank[lr] = []
+			var list: Array = per_rank[lr]
+			if list.size() < n:
+				list.append({"key": e["key"], "cx": e["cx"], "cz": e["cz"], "si": si})
+			# AC-0262 early stop: the frame is satisfied by rank 0 alone —
+			# rank 0 has k = taxi and every other rank has k >= 10000 > any
+			# rank-0 k, so n rank-0 candidates in taxi order ARE the global
+			# best n and the rest of the band cannot displace them. (The
+			# outer loop re-checks after this inner break and stops.)
+			if lr == 0 and per_rank[0].size() >= n:
+				break
 		if capped:
 			break
+		var r0 = per_rank.get(0, null)
+		if r0 != null and r0.size() >= n:
+			break
+	# assemble in k order: rank 0 (taxi order), then ranks ascending
+	var out: Array = []
+	if per_rank.has(0):
+		for cand in per_rank[0]:
+			out.append(cand)
+			if out.size() >= n:
+				break
+	if out.size() < n:
+		var ranks := per_rank.keys()
+		ranks.sort()
+		for r in ranks:
+			if r == 0:
+				continue
+			for cand in per_rank[r]:
+				out.append(cand)
+				if out.size() >= n:
+					break
+			if out.size() >= n:
+				break
 	# cache the "none" verdict only for a FULL scan (a capped scan may have
 	# left a candidate past the cap).
-	if best.is_empty() and not capped:
+	if out.is_empty() and not capped:
 		_low_slab_none_key = nk
 	else:
 		_low_slab_none_key = ""
-	if best.is_empty():
-		return {}
-	return {"key": best["key"], "cx": best["cx"], "cz": best["cz"], "si": best_si}
+	return out
 
 # AC-0261: the in-r pre-low lane is DEAD (the per-column MED placeholder
 # pass) — pending slabs in the high band render NOTHING and the visible
@@ -2628,7 +2731,7 @@ func _low_inr_pick() -> Dictionary:
 				continue
 			if int(c.face) > 1 or not (c.has_fog() or bool(c.low_built)):
 				continue
-			if _entry_best_pending(c) < 0:
+			if _entry_best_pending_cached(c) < 0:  # AC-0262: probe cache
 				continue  # no pending slab (all terminal-fog / fresh lows)
 			var s := _grid_score(e)  # AC-0257: the bake order (layer, taxi)
 			if s < best_s:
@@ -2682,15 +2785,22 @@ func _low_step() -> void:
 	_slab_wave_last_t = now_t
 	# the fog color tracks the sky (the same color env.fog_light_color gets).
 	_low_fog_mat.albedo_color = DayNight.sky_display(Game.time_of_day)
-	# AC-0252: the med/low avg-color LODs track the same sky color (the
-	# placeholders darkened at night before the split — the avg LODs keep
-	# that; the uniform is read by the noise shader's "day" factor). The sky
-	# color changes slowly, so the per-frame set is skipped when unchanged
-	# (set_shader_parameter touches the material — keep it out of the hot
-	# main-thread LOW stage).
-	if _lod_avg_material != null and not _lod_day_last.is_equal_approx(_low_fog_mat.albedo_color):
-		_lod_day_last = _low_fog_mat.albedo_color
-		_lod_avg_material.set_shader_parameter("day", _lod_day_last)
+	# AC-0252 (the AC-0261 follow-up): the med/low avg-color LODs track the
+	# sky's BRIGHTNESS — a GRAY derived from the sky color's average — not
+	# the sky's hue. AC-0252 originally passed the sky color itself; the
+	# midday sky-blue (0.53,0.81,0.92) multiplied into every albedo pulled
+	# bright warm surfaces toward cyan (midday sand -> mint green). The
+	# night darkening is preserved (night sky avg ~= 0.07, same as before).
+	# The sky color changes slowly, so the per-frame set is skipped when
+	# unchanged (set_shader_parameter touches the material — keep it out of
+	# the hot main-thread LOW stage).
+	if _lod_avg_material != null:
+		var sdc := _low_fog_mat.albedo_color
+		var dl := (sdc.r + sdc.g + sdc.b) / 3.0
+		var day_c := Color(dl, dl, dl)
+		if not _lod_day_last.is_equal_approx(day_c):
+			_lod_day_last = day_c
+			_lod_avg_material.set_shader_parameter("day", day_c)
 	if loading_active or _spawn_fast:
 		# AC-0231 order gate: the in-r pass was paused — on resume the
 		# drained verdict is stale (fog may have landed meanwhile).
@@ -2722,10 +2832,19 @@ func _low_step() -> void:
 	# AC-0236 part 2: attach the completed low emits FIRST (a ready
 	# placeholder lands this frame — the emit started the moment the data
 	# landed, not when the main-thread pass got to it), then dispatch.
+	# AC-0262: sub-stage brackets — the LOW stage is split for the perf
+	# hunt: POLL (the attach poll, incl. mesh create), INR (dead since
+	# AC-0261 — stays bracketed to confirm zero), WAVE (the dispatch loop,
+	# residual = dispatch+air), PICK (the candidate scan per dispatch).
+	var _wpt2 := Time.get_ticks_usec()
 	_low_poll(dt_ms)
+	_wprof_add(WP_LOW_POLL, Time.get_ticks_usec() - _wpt2)
+	_wpt2 = Time.get_ticks_usec()
 	# WAVE 2a: the in-r pre-low — tier-ordered, budget = a fraction of the
 	# frame wall time (LOW_INR_BUDGET_FRAC, clamped).
 	_low_inr_step(dt_ms)
+	_wprof_add(WP_LOW_INR, Time.get_ticks_usec() - _wpt2)
+	_wpt2 = Time.get_ticks_usec()
 	# WAVE 2b: the global slab wave — the visible band [band0_r,
 	# render_radius) (AC-0261: the high band below it is build-lane only,
 	# nothing renders past the taxi render edge), wall-clock paced
@@ -2736,15 +2855,21 @@ func _low_step() -> void:
 	# burst). No-candidate verdicts are cached (zero cost between
 	# landings/edits — a drained wave is a couple of dict ops).
 	_slab_wave_acc_ms = minf(_slab_wave_acc_ms + dt_ms, float(LOW_WAVE_FRAME_CAP) * LOW_WAVE_PACE_MS)
+	# AC-0262: ONE batched scan per frame (was: up to LOW_WAVE_FRAME_CAP
+	# full O(band) scans — the R30 storm's 126-213 ms/frame LOW_PICK),
+	# then dispatch the k-ordered candidates the pace allows.
+	var _wpt3 := Time.get_ticks_usec()  # AC-0262: the batched scan
+	var wave_cands: Array = _low_scan_slabs(LOW_WAVE_FRAME_CAP)
+	_wprof_add(WP_LOW_PICK, Time.get_ticks_usec() - _wpt3)
+	var _wpt4 := Time.get_ticks_usec()  # AC-0262: dispatch-only (disjoint)
 	var wave_n := 0
-	while _slab_wave_acc_ms >= LOW_WAVE_PACE_MS and wave_n < LOW_WAVE_FRAME_CAP:
-		var e2: Dictionary = _low_pick_slab()
-		if e2.is_empty():
-			_slab_wave_acc_ms = 0.0
+	for e2 in wave_cands:
+		if _slab_wave_acc_ms < LOW_WAVE_PACE_MS:
 			break
 		var c2 = chunks.get(e2["key"])
 		if c2 == null or c2.data.is_empty() or bool(c2.mesh_built):
-			# the pick went stale (a handoff/recenter raced) — rescan.
+			# the candidate went stale (a handoff/recenter raced) —
+			# rescan next frame.
 			_low_slab_none_key = ""
 			break
 		# AC-0236 part 2 / AC-0250 / AC-0252 offload: the grid sample +
@@ -2753,12 +2878,13 @@ func _low_step() -> void:
 		# _low_air_slab (scene/state work — no sampling, no emit); the 0
 		# dedupe verdict and the 2 saturated verdict just consume the pace
 		# tick — the slab stays PENDING, the in-flight result attaches via
-		# _low_poll, and the wave re-picks when it lands / next frame.
+		# _low_poll, and the wave re-scans when it lands / next frame.
 		if _low_dispatch_slab(c2, int(e2["si"])) < 0:
 			_low_air_slab(c2, int(e2["si"]))
-		_low_slab_none_key = ""  # a slab left the pending set — re-pick
+		_low_slab_none_key = ""  # a slab left the pending set — rescan
 		_slab_wave_acc_ms -= LOW_WAVE_PACE_MS
 		wave_n += 1
+	_wprof_add(WP_LOW_WAVE, Time.get_ticks_usec() - _wpt4)  # AC-0262
 
 # AC-0109 cull-pass scratch (world-level only — no per-chunk state, no
 # per-frame allocations growing with chunk count; all fixed-size, filled
@@ -3607,7 +3733,15 @@ const WP_RESCORE := 6
 const WP_MESHATTACH := 7
 const WP_MISC := 8
 const WP_FRAME := 9
-const WP_STAGES := 10
+# AC-0262: the LOW stage's sub-parts (sub-stages — they sum to <= LOW,
+# never into the 5-stage partition): the low-lane attach poll, the (now
+# dead) in-r wave, the global slab-wave dispatch loop, and the per-slab
+# candidate scan inside it.
+const WP_LOW_POLL := 10
+const WP_LOW_INR := 11
+const WP_LOW_WAVE := 12
+const WP_LOW_PICK := 13
+const WP_STAGES := 14
 const WP_RING := 180
 
 var _wp_rows: Array = []    # WP_RING rows, each an Array of WP_STAGES ints (usec)
@@ -3651,12 +3785,13 @@ func _wprof_init() -> void:
 		d["avg"] = 0.0
 		d["frames"] = 0
 		_wp_stat.append(d)
-	_wp_names = ["DRAIN", "LOW", "HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "MISC", "frame"]
+	_wp_names = ["DRAIN", "LOW", "HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "MISC", "frame",
+		"LOW_POLL", "LOW_INR", "LOW_WAVE", "LOW_PICK"]
 	_wp_live = {}
 	for j in range(WP_STAGES):
 		_wp_live[_wp_names[j]] = _wp_stat[j]
 	_wp_live["partition"] = ["DRAIN", "LOW", "HANDOFF", "IO", "RECENTER", "MISC"]
-	_wp_live["substages"] = ["FACELIGHT", "RESCORE", "MESHATTACH"]
+	_wp_live["substages"] = ["FACELIGHT", "RESCORE", "MESHATTACH", "LOW_POLL", "LOW_INR", "LOW_WAVE", "LOW_PICK"]
 	_wp_live["occupancy"] = {"tg": 0, "tm": 0, "low": 0}
 	_wp_live["misc_neg_max_us"] = 0
 	_wp_scratch.resize(WP_RING)
@@ -4075,7 +4210,7 @@ func band_drained() -> bool:
 			continue
 		if c.data.is_empty() or bool(c.mesh_built):
 			continue
-		if _entry_best_pending(c) >= 0:
+		if _entry_best_pending_cached(c) >= 0:  # AC-0262: probe cache
 			return false
 	return true
 
@@ -5510,7 +5645,7 @@ func _build_unit(c: Node3D, cx: int, cz: int) -> bool:
 # replaced by the 3-tier priority (_tier_of/_tier_score) — under (0), the
 # sim radius (1), the rest by taxi distance (2, look-independent).
 
-func _collect_pool(build: bool, include_fb := false, maxb := -1) -> Array:
+func _collect_pool(build: bool, include_fb := false, maxb := -1, high_only := false) -> Array:
 	# AC-0079 round 3: the pick is score-driven (spec: generate the LOWEST score
 	# among no-data entries), so the pool must not be clipped by the sticky FIFO
 	# cursors — a stale dq_b/mq_b (entries consumed out of band order, cursor
@@ -5545,6 +5680,22 @@ func _collect_pool(build: bool, include_fb := false, maxb := -1) -> Array:
 				# AC-0257: keep-high — a meshed column is skipped.
 				if c == null or c.data.is_empty() or c.mesh_built:
 					continue
+				if high_only:
+					# AC-0262: the visible band's build entries are the slab
+					# wave's work list, not the drain's. The per-pick high
+					# gate below the caller would null the top pick every
+					# frame (the wave keeps up — its entries always out-score
+					# the high band's deep slabs on the (layer, taxi) order),
+					# and the deep-slab high band (a high layer rank) starved
+					# behind them forever: a recentered center chunk with
+					# deep pending slabs stayed unmeshed indefinitely
+					# (measured: r16 settle frozen on 6 slabs of the new
+					# taxi-0 chunk while the drain dispatched 0 units).
+					# Pre-filter the drain's pool to the high band only.
+					var dxh := int(e["cx"]) - last_pcx
+					var dzh := int(e["cz"]) - last_pcz
+					if absi(dxh) + absi(dzh) >= band0_r and not _is_tier0_col(dxh, dzh):
+						continue
 				out.append(e)
 			else:
 				if c == null or not c.data.is_empty():
@@ -5563,8 +5714,12 @@ func _collect_pool(build: bool, include_fb := false, maxb := -1) -> Array:
 # being served. A cached EMPTY pick is trusted: a membership or readiness
 # change always bumps _pool_ver, so a matching key means a fresh scan would
 # find nothing either.
-func _pick_build_cached(maxb: int, include_fb: bool) -> Dictionary:
-	var ck := _pool_key(maxb)
+func _pick_build_cached(maxb: int, include_fb: bool, high_only := false) -> Dictionary:
+	# AC-0262: high_only gets a suffixed key — the filter changes the pool
+	# contents for the same (pool state, window, center) tuple, and the
+	# drain's steady pass (high_only) must not serve a load-phase verdict
+	# (unfiltered) or vice versa.
+	var ck := _pool_key(maxb) + ("_h" if high_only else "")
 	var slot: Array = _pool_b if not include_fb else _pool_fb
 	if slot.size() == 5 and slot[0] == ck:
 		var e: Dictionary = slot[1]
@@ -5578,7 +5733,7 @@ func _pick_build_cached(maxb: int, include_fb: bool) -> Dictionary:
 			perf_pool_hits += 1
 			return {"e": e, "c": c, "s": slot[3], "pool_empty": slot[4]}
 	perf_pool_misses += 1
-	var bp: Array = _collect_pool(true, include_fb, maxb)
+	var bp: Array = _collect_pool(true, include_fb, maxb, high_only)
 	var best_e: Dictionary = {}
 	var best_c: Node3D = null
 	var best_s := 1e30
@@ -5857,7 +6012,9 @@ func _drain_build_queue() -> void:
 		# look left the key (AC-0250), it is a pure function of the pool
 		# state: an idle frame with an unchanged world serves the last
 		# pool/score and skips the rescan + rescore.
-		var bpick := _pick_build_cached(maxb, false)
+		# AC-0262: the steady pass is high-band-only (see _collect_pool's
+		# high_only note) — the wave's entries no longer hold the top pick.
+		var bpick := _pick_build_cached(maxb, false, true)
 		var best_e: Dictionary = bpick["e"]
 		var best_c: Node3D = bpick["c"]
 		var best_s: float = bpick["s"]

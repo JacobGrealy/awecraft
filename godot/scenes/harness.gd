@@ -7133,6 +7133,9 @@ func _r16_test(spawn: Vector3) -> void:
 		# is the build phase's band_drained() wait.
 		"stream": {
 			"phase": stream,
+			"air_back": int(stream.get("inr_back", {}).get("inr_air", 0)),  # AC-0262
+			"air_settled": int(stream.get("inr_settled", {}).get("inr_air", 0)),  # AC-0262
+			"edge_settled": int(stream.get("inr_settled", {}).get("inr_edge", 0)),  # AC-0262
 			"pending_hi": int(stream.get("inr_hi", {}).get("inr_pending", 0)),
 			"pending_hold": int(stream.get("inr_hold", {}).get("inr_pending", 0)),
 			"pending_back": int(stream.get("inr_back", {}).get("inr_pending", 0)),
@@ -7145,8 +7148,14 @@ func _r16_test(spawn: Vector3) -> void:
 			# AC-0261: CONVERGING — the pending set is down from inr_back
 			# (the slab wave drains the band at its wall-clock pace; the
 			# full-drain proof is the build phase's band_drained() wait).
+			# AC-0262: already-drained is also ok — the AC-0262 pick fix
+			# drains the band DURING the build (12x faster), so by the
+			# flight the real pending is 0 and stays 0 (terminal all-air
+			# slabs no longer count as pending — see inr_air).
 			"settled_ok": int(stream.get("inr_settled", {}).get("inr_holes", 1)) == 0
-					and int(stream.get("inr_settled", {}).get("inr_pending", 1)) < int(stream.get("inr_back", {}).get("inr_pending", 1))
+					and int(stream.get("inr_settled", {}).get("inr_pending", 1)) <= int(stream.get("inr_back", {}).get("inr_pending", 1))
+					and (int(stream.get("inr_settled", {}).get("inr_pending", 1)) == 0
+						or int(stream.get("inr_settled", {}).get("inr_pending", 1)) < int(stream.get("inr_back", {}).get("inr_pending", 1)))
 					and int(stream.get("settle_frames", 1)) <= 900,
 		},
 		"tier": {
@@ -7524,6 +7533,11 @@ func _r16_lod_inr() -> Dictionary:
 	var slabs := 0
 	var fog := 0
 	var low := 0
+	var air := 0  # AC-0262: terminal (all-air) slabs — see the count below
+	var edge := 0  # AC-0262: the boundary ring (taxi == rr) — the data-only
+	               # zone (>= render): NO lane builds a low there, so it is
+	               # not pending work and not a hole (the far sampler starts
+	               # at taxi > rr, so this ring is ours to classify).
 	var pending := 0
 	var holes := 0
 	var pcx := int(world.last_pcx)
@@ -7535,13 +7549,15 @@ func _r16_lod_inr() -> Dictionary:
 			continue
 		var dx := int(c.cx) - pcx
 		var dz := int(c.cz) - pcz
-		if absi(dx) + absi(dz) > rr:
+		var taxi := absi(dx) + absi(dz)
+		if taxi > rr:
 			continue  # AC-0261: past the taxi render edge — the far sampler owns it
 		if bool(c.mesh_built):
 			continue  # already high — no pending placeholder
 		if c.data.is_empty():
 			continue  # no data yet — nothing to show
 		n += 1
+		var is_edge: bool = taxi == rr  # AC-0262: boundary ring = data-only zone
 		for si in range(c.data.size()):
 			if c.data[si] == null:
 				continue  # air slab — no placeholder needed
@@ -7550,11 +7566,17 @@ func _r16_lod_inr() -> Dictionary:
 				low += 1
 			elif c.has_fog_si(si):
 				fog += 1
+			elif int(c.low_failed.get(si, -1)) == int(c.data_gen):
+				air += 1  # AC-0262: terminal mark (sampled all-air at this
+				         # data_gen — the wave advanced past it by design;
+				         # it is NOT pending work and NOT a hole)
+			elif is_edge:
+				edge += 1  # AC-0262: data-only zone (>= render) — see above
 			elif world.queued_keys.has(key):
 				pending += 1  # AC-0257: queued — the low/high lane will build it
 			else:
 				holes += 1
-	return {"inr_n": n, "inr_slabs": slabs, "inr_fog": fog, "inr_low": low, "inr_pending": pending, "inr_holes": holes}
+	return {"inr_n": n, "inr_slabs": slabs, "inr_fog": fog, "inr_low": low, "inr_air": air, "inr_edge": edge, "inr_pending": pending, "inr_holes": holes}
 
 
 # AC-0231 rewrite: the PER-SLAB LOD geometry checks.
@@ -8536,7 +8558,11 @@ func _r16_wave_test() -> Dictionary:
 	var guard := 0  # spin safety (a wedged pool must never hang the arm)
 	while seq.size() < cap and guard < 200000:
 		guard += 1
-		var e: Dictionary = world._low_pick_slab()
+		# AC-0262: _low_pick_slab was replaced by the batched
+		# _low_scan_slabs(n) — n=1 is the identical single-best-pick
+		# (rank-0 early stop, else the lowest rank's smallest taxi).
+		var _sc: Array = world._low_scan_slabs(1)
+		var e: Dictionary = {} if _sc.is_empty() else _sc[0]
 		if e.is_empty():
 			break
 		var c: Node3D = world.chunks.get(e["key"])
@@ -8974,7 +9000,10 @@ func _wprof_ring_read() -> Dictionary:
 		"misc_neg_max_us": int(p.get("misc_neg_max_us", 0)),
 		"recon_raw_pct": world._wprof_recon_raw_pct(),
 	}
-	for nm in ["DRAIN", "LOW", "HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "MISC"]:
+	# AC-0262: the LOW sub-stages join the read (sub-part breakdown of the
+	# low lane for the perf hunt).
+	for nm in ["DRAIN", "LOW", "HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "MISC",
+			"LOW_POLL", "LOW_INR", "LOW_WAVE", "LOW_PICK"]:
 		d["stages"][nm] = _wprof_snap_stage(p.get(nm, {}))
 	return d
 
@@ -9006,6 +9035,14 @@ func _wprof_fly_merge(a: Dictionary, b: Dictionary) -> Dictionary:
 
 func _wprof_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
+	# AC-0262: profile a real in-game condition — AWECRAFT_RADIUS=R sets the
+	# render distance and lets low_start re-derive to its [sim, R] midpoint
+	# default (exactly what the game does). Unset keeps the arm's historic
+	# R>=16 + low_start=10 test-zone behavior.
+	var prof_r := OS.get_environment("AWECRAFT_RADIUS")
+	if prof_r != "":
+		Settings.set_value("render_dist", prof_r.to_int())
+		Settings.apply_render_distance()
 	world.render_radius = maxi(world.render_radius, 16)
 	var rr: int = world.render_radius
 	world.recenter(spawn.x, spawn.z, true, spawn.y)
@@ -9014,14 +9051,33 @@ func _wprof_test(spawn: Vector3) -> void:
 	# AC-0261 r16 settle: the HIGH band (taxi < band0_r) fully meshed +
 	# the visible band [band0_r, rr) drained by the slab wave (25-min wall
 	# cap: on a stall the arm proceeds with the partial build).
-	Settings.values["low_start"] = 10
+	if prof_r == "":
+		Settings.values["low_start"] = 10
 	world.apply_low_start()
+	# AC-0262: pace the BUILD phase at the in-game frame rate. The
+	# flight-only cap below left the build at ~3 kHz process frames (no
+	# vsync headless) — a condition that does not exist in game: per-frame
+	# budgets fire ~50x/s and the ring holds ~60 ms. The in-game standing
+	# condition (the user's 12 fps storm) needs 16.7 ms frames here too.
+	var fps_prev := Engine.max_fps
+	Engine.max_fps = 60
 	var max_frames := 400000
 	var frames := 0
+	# AC-0262: the mid-storm peak window — the build storm's heaviest 3 s
+	# is usually mid-drain, not at the end (the build_end window holds the
+	# tail, where most band columns are already lowered). Sample the ring
+	# at the check cadence (0.5 s) and keep the worst window by frame avg.
+	var storm_win: Dictionary = {}
+	var storm_best := -1.0
 	while frames < max_frames and Time.get_ticks_msec() - t0 < 1500000:
 		await get_tree().physics_frame
 		frames += 1
 		if frames % 30 == 0:
+			var w: Dictionary = _wprof_ring_read()
+			var fa: float = float(w.get("frame", {}).get("avg", 0.0))
+			if fa > storm_best:
+				storm_best = fa
+				storm_win = w
 			var built_all := true
 			for key in world.chunks:
 				var c: Node3D = world.chunks[key]
@@ -9035,7 +9091,13 @@ func _wprof_test(spawn: Vector3) -> void:
 					break
 			if built_all and world.band_drained():
 				break
-	# Let the last handoffs land before measuring.
+	# AC-0262: the BUILD-END window — the ring at the moment the standing
+	# build completes (the last ~3 s of the storm at the 60 fps pace).
+	# This is the user's "standing still while generation happens" sample;
+	# it is a headline candidate alongside the flight windows. Read BEFORE
+	# the idle settle so the window holds storm frames, not settle frames.
+	var build_win: Dictionary = _wprof_ring_read()
+	# Let the last handoffs land before the flight phase.
 	for i in 30:
 		await get_tree().physics_frame
 	player = main._spawn_player()
@@ -9051,9 +9113,8 @@ func _wprof_test(spawn: Vector3) -> void:
 	# the main loop to 60 fps for the flight makes every ring sample a true
 	# 16.7 ms game frame (the ticket's "the window holds the last ~3 s"
 	# premise) and the frame/fps row measures the actual main-thread-
-	# limited rate. Engine setting is saved and restored.
-	var fps_prev := Engine.max_fps
-	Engine.max_fps = 60
+	# limited rate (Engine.max_fps was already set to 60 for the build
+	# phase above — AC-0262 — and fps_prev is restored after seg3).
 	# SUSTAINED 4x flight, run in 3 CONTINUOUS segments (6+6+5 s — the
 	# _fly_phase helper advances from the current position, never resets
 	# x/z, so this is the same flight as one 17 s call). The profiler ring
@@ -9071,8 +9132,11 @@ func _wprof_test(spawn: Vector3) -> void:
 	var fly_c: Dictionary = await _fly_phase(4.0, 5.0, dir)
 	var w3: Dictionary = _wprof_ring_read()
 	Engine.max_fps = fps_prev
-	var windows: Dictionary = {"seg1_end": w1, "seg2_end": w2, "seg3_end": w3}
-	var win_names := ["seg1_end", "seg2_end", "seg3_end"]
+	# AC-0262: the standing-storm windows (storm_peak = the heaviest 3 s
+	# mid-build; build_end = the storm tail) join the flight windows as
+	# headline candidates.
+	var windows: Dictionary = {"storm_peak": storm_win, "build_end": build_win, "seg1_end": w1, "seg2_end": w2, "seg3_end": w3}
+	var win_names := ["storm_peak", "build_end", "seg1_end", "seg2_end", "seg3_end"]
 	var headline := "seg1_end"
 	var best := -1.0
 	for wn in win_names:
@@ -9112,7 +9176,7 @@ func _wprof_test(spawn: Vector3) -> void:
 		"stages": stages,
 		"frame": frame,
 		"partition": ["DRAIN", "LOW", "HANDOFF", "IO", "RECENTER", "MISC"],
-		"substages": ["FACELIGHT", "RESCORE", "MESHATTACH"],
+		"substages": ["FACELIGHT", "RESCORE", "MESHATTACH", "LOW_POLL", "LOW_INR", "LOW_WAVE", "LOW_PICK"],
 		"recon_raw_pct": recon_raw_pct,
 		"recon_display_pct": int(roundf(recon_display_pct * 10.0)) / 10.0,
 		"misc_neg_max_us": neg_max,

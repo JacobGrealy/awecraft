@@ -133,7 +133,13 @@ func _ready() -> void:
 		var menu := _make_menu()
 		if OS.get_environment("AWECRAFT_MENU_VIEW") == "options":
 			menu.open_options("main")
-		for i in 6:
+		elif OS.get_environment("AWECRAFT_MENU_VIEW") == "developer":
+			menu.open_options("main")
+			menu.get_node("Layer/OptionsBox/Center/OptTabs").current_tab = 1
+		# AC-0260 fix: the options panel's container chain (CenterContainer
+		# -> TabContainer -> pages) settles over 2-3 layout passes — 6 frames
+		# snapped the pre-settle (collapsed) layout. Wait longer.
+		for i in 40:
 			await get_tree().process_frame
 		await Debug.snap(menu_shot)
 		Debug.result({"menu": true, "mode": Game.mode, "build": Build.ID, "values": Settings.values})

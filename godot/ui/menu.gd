@@ -55,11 +55,14 @@ var lowstart_val: Label
 # worker-thread caps; the per-frame instance cap row moves here from the
 # Settings page). No checkbox: it is a TabContainer page.
 var dev_page: VBoxContainer
-var tier0_slider: HSlider
+# AC-0260 fix: the perf knobs are SpinBoxes (typeable — the user wanted to
+# enter a number, not fight a slider; the HSlider rows also misbehaved in
+# the broken tab layout).
+var tier0_spin: SpinBox
 var tier0_val: Label
-var gen_slider: HSlider
+var gen_spin: SpinBox
 var gen_val: Label
-var mesh_slider: HSlider
+var mesh_spin: SpinBox
 var mesh_val: Label
 var file_dialog: FileDialog
 var _options_from := "main"
@@ -193,24 +196,30 @@ func _ready() -> void:
 	opt_tabs.add_theme_font_size_override("font_size", 15)
 	opt_center.add_child(opt_tabs)
 	opt_vbox.name = "Settings"
-	opt_tabs.add_child(opt_vbox)  # reparent out of its tscn seat into the tab
+	# AC-0260 fix (the broken-tabs bug): opt_vbox is still seated in its
+	# tscn parent (opt_center) — add_child into the tab WITHOUT removing it
+	# first is a runtime error (logged, non-fatal) that silently left the
+	# Settings page out of the TabContainer. Remove from the old parent
+	# first, then reparent.
+	opt_center.remove_child(opt_vbox)
+	opt_tabs.add_child(opt_vbox)
 	dev_page = VBoxContainer.new()
 	dev_page.name = "Developer"
 	dev_page.add_theme_constant_override("separation", 6)
 	opt_vbox.remove_child(chunk_row)
 	dev_page.add_child(chunk_row)
-	var t0r := _mk_dev_slider_row(dev_page, "Tier0Row", "Tier-0 radius (full-high columns)", 0.0, float(Settings.TIER0_RADIUS_MAX))
-	tier0_slider = t0r[0]
+	var t0r := _mk_dev_spin_row(dev_page, "Tier0Row", "Tier-0 radius (full-high columns)", 0.0, float(Settings.TIER0_RADIUS_MAX))
+	tier0_spin = t0r[0]
 	tier0_val = t0r[1]
-	var genr := _mk_dev_slider_row(dev_page, "GenThreadsRow", "Worker threads gen (0 = auto)", 0.0, float(Settings.WORKER_THREADS_MAX))
-	gen_slider = genr[0]
+	var genr := _mk_dev_spin_row(dev_page, "GenThreadsRow", "Worker threads gen (0 = auto)", 0.0, float(Settings.WORKER_THREADS_MAX))
+	gen_spin = genr[0]
 	gen_val = genr[1]
-	var meshr := _mk_dev_slider_row(dev_page, "MeshThreadsRow", "Worker threads mesh (0 = auto)", 0.0, float(Settings.WORKER_THREADS_MAX))
-	mesh_slider = meshr[0]
+	var meshr := _mk_dev_spin_row(dev_page, "MeshThreadsRow", "Worker threads mesh (0 = auto)", 0.0, float(Settings.WORKER_THREADS_MAX))
+	mesh_spin = meshr[0]
 	mesh_val = meshr[1]
-	tier0_slider.value_changed.connect(_on_tier0_changed)
-	gen_slider.value_changed.connect(_on_gen_threads_changed)
-	mesh_slider.value_changed.connect(_on_mesh_threads_changed)
+	tier0_spin.value_changed.connect(_on_tier0_changed)
+	gen_spin.value_changed.connect(_on_gen_threads_changed)
+	mesh_spin.value_changed.connect(_on_mesh_threads_changed)
 	opt_tabs.add_child(dev_page)
 	file_dialog = get_node("Layer/PackDialog")
 	slot_labels = []
@@ -430,7 +439,12 @@ func _on_pack_file_selected(path: String) -> void:
 
 # AC-0257: one code-built slider row for the Developer submenu (the tscn
 # row pattern). Returns [slider, val_label].
-func _mk_dev_slider_row(parent: Control, row_name: String, label_text: String, minv: float, maxv: float) -> Array:
+# AC-0260 fix: the Developer-page perf-knob row — a SpinBox (TYPEABLE:
+# click the field and type a number, or use the arrows; min/max clamp on
+# commit). The earlier HSlider rows were replaced after the user could not
+# drive them (the broken tab layout squashed the rows, and 0/auto was not
+# reliably reachable by dragging).
+func _mk_dev_spin_row(parent: Control, row_name: String, label_text: String, minv: float, maxv: float) -> Array:
 	var row := HBoxContainer.new()
 	row.name = row_name
 	row.add_theme_constant_override("separation", 10)
@@ -438,21 +452,21 @@ func _mk_dev_slider_row(parent: Control, row_name: String, label_text: String, m
 	lab.text = label_text
 	lab.add_theme_font_size_override("font_size", 15)
 	lab.custom_minimum_size = Vector2(250, 0)
-	var sl := HSlider.new()
-	sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sl.custom_minimum_size = Vector2(0, 24)
-	sl.min_value = minv
-	sl.max_value = maxv
-	sl.step = 1.0
+	var sp := SpinBox.new()
+	sp.custom_minimum_size = Vector2(90, 0)
+	sp.min_value = minv
+	sp.max_value = maxv
+	sp.step = 1.0
+	sp.value = minv
 	var val := Label.new()
 	val.add_theme_font_size_override("font_size", 15)
 	val.custom_minimum_size = Vector2(44, 0)
 	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	row.add_child(lab)
-	row.add_child(sl)
+	row.add_child(sp)
 	row.add_child(val)
 	parent.add_child(row)
-	return [sl, val]
+	return [sp, val]
 
 
 func _sync_controls() -> void:
@@ -493,13 +507,13 @@ func _sync_controls() -> void:
 	fogstart_val.text = str(int(fogstart_slider.value)) + "%"
 	# AC-0261: the low-start slider spans the visible band [sim, render].
 	_sync_lowstart_range()
-	# AC-0257: the Developer submenu rows.
-	tier0_slider.value = float(int(Settings.values.get("tier0_radius", 0)))
-	tier0_val.text = str(int(tier0_slider.value))
-	gen_slider.value = float(int(Settings.values.get("worker_gen_threads", 0)))
-	gen_val.text = "auto" if int(gen_slider.value) == 0 else str(int(gen_slider.value))
-	mesh_slider.value = float(int(Settings.values.get("worker_mesh_threads", 0)))
-	mesh_val.text = "auto" if int(mesh_slider.value) == 0 else str(int(mesh_slider.value))
+	# AC-0257: the Developer tab rows (AC-0260 fix: SpinBoxes).
+	tier0_spin.value = float(int(Settings.values.get("tier0_radius", 0)))
+	tier0_val.text = str(int(tier0_spin.value))
+	gen_spin.value = float(int(Settings.values.get("worker_gen_threads", 0)))
+	gen_val.text = "auto" if int(gen_spin.value) == 0 else str(int(gen_spin.value))
+	mesh_spin.value = float(int(Settings.values.get("worker_mesh_threads", 0)))
+	mesh_val.text = "auto" if int(mesh_spin.value) == 0 else str(int(mesh_spin.value))
 	_syncing = false
 
 

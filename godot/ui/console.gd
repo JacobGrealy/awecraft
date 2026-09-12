@@ -104,9 +104,14 @@ func _prof_refresh() -> void:
 	var s: Dictionary
 	var lines := "WORLD-PIPELINE ms  [p50 p95 max avg | frames]   in-flight: TG %d / TM %d / low %d" % [
 		int(occ.get("tg", 0)), int(occ.get("tm", 0)), int(occ.get("low", 0))]
-	for nm in ["DRAIN", "LOW", "HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "MISC"]:
+	# AC-0262: the LOW sub-part breakdown (LOW_POLL / LOW_INR / LOW_WAVE /
+	# LOW_PICK) joins the live table — indented under LOW, so the in-game
+	# storm can be read sub-part by sub-part.
+	for nm in ["DRAIN", "LOW", "LOW_POLL", "LOW_INR", "LOW_WAVE", "LOW_PICK",
+			"HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "MISC"]:
 		s = p.get(nm, {})
-		var indent := "  " if ["FACELIGHT", "RESCORE", "MESHATTACH"].has(nm) else ""
+		var indent := "  " if ["FACELIGHT", "RESCORE", "MESHATTACH",
+				"LOW_POLL", "LOW_INR", "LOW_WAVE", "LOW_PICK"].has(nm) else ""
 		lines += "\n%s%-10s %6.1f %6.1f %7.1f %6.1f   %4d" % [
 			indent, nm,
 			float(s.get("p50", 0.0)), float(s.get("p95", 0.0)), float(s.get("max", 0.0)),
