@@ -100,6 +100,14 @@ pad_cancel={
 "deadzone": 0.5,
 "events": [Object(InputEventJoypadButton,"resource_local_to_scene":false,"resource_name":"","device":0,"button_index":1,"pressure":0.0,"pressed":false)]
 }
+; AC-0264: L3 (left stick click) = sprint (hold). Ground: the SPRINT speed
+; (WALK 4.3 -> SPRINT 5.6, ratio ~1.30). Flight: the same SPRINT/WALK ratio
+; scales the flight speed (it is NOT a down key - in-flight down stays on
+; B / pad_cancel and keyboard Shift, so L3 never double-triggers).
+pad_sprint={
+"deadzone": 0.5,
+"events": [Object(InputEventJoypadButton,"resource_local_to_scene":false,"resource_name":"","device":0,"button_index":7,"pressure":0.0,"pressed":false)]
+}
 
 [rendering]
 

@@ -1207,6 +1207,16 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 		s.occluder = null
 	s.sidx = sidx
 	s.built = true
+	# AC-0263 (AC-0264 gate hunt): the (re)assembled slab re-dirties its
+	# collision. The body is derived from THIS slab's mesh, and the
+	# per-slab high lane lands slabs one at a time: a chunk's first build
+	# used to clear col_dirty on every mesh-less slab (the "no mesh now"
+	# early-out), and the slabs that landed later then NEVER got bodies
+	# (the dirty flag was already consumed) — a permanent floor/collision
+	# hole under the spawn plateau. A mesh attach always re-requests the
+	# body; a later mesh-less re-assembly re-clears it in
+	# _post_build_collision as before.
+	s.col_dirty = true
 	if Game.world != null:  # AC-0251: attribute to the world's pipeline ring
 		Game.world._wprof_meshattach(Time.get_ticks_usec() - _wpt)
 

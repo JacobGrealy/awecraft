@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-12T14:48
+  updated_at: 2026-09-12T16:46
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -37,7 +37,6 @@ queue:
 - AC-0090
 - AC-0176
 - AC-0259
-- AC-0263
 intake:
 - id: AC-0272
   title: hide-mouse-on-controller-input
@@ -162,14 +161,51 @@ intake:
   title: controller-left-stick-click-sprint-flying
   priority: 2
   status: open
-  notes: '1) User Story: As a player using a controller I want clicking the left analog stick to sprint
-    both on ground and while flying, with flying sprint scaling by the same ratio as ground sprint.
-
-
-    2) Technical Details: godot/player/player.gd + input map. Map left stick click (Joypad Button L3)
-    to sprint toggle/hold. Ground: WALK 4.3 -> SPRINT 5.6 ratio ~1.30. Flying: apply same 1.30 ratio on
-    top of flight_speed * WALK * FLY_VS. Keep keyboard sprint unchanged. Verify with controller on ground
-    and in flight, no double trigger.'
+  updated_at: 2026-09-12T16:46
+  notes: "1) User Story: As a player using a controller I want clicking the left analog stick to sprint\
+    \ both on ground and while flying, with flying sprint scaling by the same ratio as ground sprint.\n\
+    \n2) Technical Details: godot/player/player.gd + input map. Map left stick click (Joypad Button L3)\
+    \ to sprint toggle/hold. Ground: WALK 4.3 -> SPRINT 5.6 ratio ~1.30. Flying: apply same 1.30 ratio\
+    \ on top of flight_speed * WALK * FLY_VS. Keep keyboard sprint unchanged. Verify with controller on\
+    \ ground and in flight, no double trigger.\n\n## AC-0264 implementation log (2026-09-12)\n\n### L3\
+    \ sprint (the ask)\n- project.godot: new action `pad_sprint` = joypad button **7** (Godot 4.x enum:\n\
+    \  LEFT_STICK / L3 — NOT 13, that is DPAD_LEFT; the first draft bound 13 and the\n  gamepad arm caught\
+    \ it).\n- player.gd: `sprint_kbd` (Shift, unchanged) OR `sprint_pad` = `pad_sprint`.\n  Ground: SPRINT\
+    \ 5.6 (ratio 1.30 over WALK 4.3). Flight: horizontal speed\n  `WALK * flight_speed * (SPRINT/WALK)`\
+    \ AND the vertical base `WALK *\n  flight_speed * FLY_VS * (SPRINT/WALK)` — the same 1.30 ratio the\
+    \ user asked\n  for, on both components. L3 is NOT the in-flight down key (that stays\n  Shift / B-pad_cancel)\
+    \ — the down-key check uses `sprint_kbd` only, so L3\n  never double-triggers (sprint + descend).\n\
+    - Harness `_gamepad_test` (AWECRAFT_LOGIC=gamepad): section 1b (ground) —\n  InputMap wiring check\
+    \ (button 7 on pad_sprint) + walk-then-L3 velocity\n  ratio in (1.2, 1.45); measured 1.28 (5.55 m/s\
+    \ mid-converge, read at frame\n  12 — the forward path ends at a deterministic mob at z~1.3, a LATE\
+    \ read\n  sees the stopped player). Section 7c (flight, after the A-double-tap\n  toggle) — L3 scales\
+    \ forward fly speed 17.2 -> 22.4 (1.302) and the\n  A-hold climb SURVIVES the L3 phase (vy > 5.0:\
+    \ a L3-as-down-key bug would\n  cancel the climb to ~0; the re-push deterministically leaves A held,\
+    \ so\n  the climb is a valid reference). Teleport-back to the arm-start position\n  after 1b (the\
+    \ ~9.5 m run leaves the spawn plateau's d<=6 flat zone; the\n  old forward position used to sink the\
+    \ jump test).\n\n### Spawn fall-through (found while gating, fixed in the same delivery)\n- The player\
+    \ arm reported the spawn floor gone (is_on_floor false, falling\n  to y~-1) — present on the AC-0263\
+    \ commit b891d80 (verified by stashing\n  AC-0264 and re-running), so it is an AC-0263 regression\
+    \ the per-slate\n  first-build path exposed, not an AC-0264 change.\n- ROOT CAUSE (traced with a temporary\
+    \ per-slab collision trace on (0,0)):\n  the first build of a fresh chunk runs _post_build_collision\
+    \ over ALL 24\n  dirty slabs; every mesh-less slab early-returns in _build_slab_collision\n  (no mesh\
+    \ yet) and the col_immediate branch cleared col_dirty ANYWAY.\n  The per-slab high lane (AC-0263)\
+    \ then landed each slab individually —\n  but its col_dirty had already been consumed, so the (re)assembly\
+    \ never\n  requested a body: slabs with a visible mesh but NO collision body,\n  forever — a permanent\
+    \ floor hole under the spawn plateau (the slab-4\n  probe showed m=true b=false d=false).\n- FIX (chunk.gd):\
+    \ `_assemble_slab` sets `s.col_dirty = true` when a slab is\n  (re)assembled — a mesh attach always\
+    \ re-requests the body (built\n  immediately for the col_immediate 3x3, via the _col_pending staged\
+    \ drain\n  otherwise — the hslab handoff already feeds _stage_check). Mesh-less\n  re-assemblies re-clear\
+    \ in _post_build_collision as before, so no\n  permanent dirty state.\n- Evidence: player arm is_on_floor\
+    \ true / jump_peak_y 138.43 / after_fly_y\n  145.53; gamepad arm ok:true end-to-end (jump 138.43,\
+    \ fly climb/descend/\n  land all from the solid floor).\n\n### Gates (all green, post-cleanup)\n-\
+    \ boot: 0 SCRIPT ERROR.\n- player: ok (floor, jump, fly).\n- gamepad: ok:true — ground_sprint_ok (ratio\
+    \ 1.28), fly_sprint_ok (17.2 ->\n  22.4, climb survives), plus the whole pre-existing pad suite\n\
+    \  (stick move/jump, RT mine + jitter hysteresis, LT place, hotbar, look,\n  inventory, double-tap\
+    \ fly, pause menu).\n- AC-0263 re-verification (the col_dirty fix touches the collision path):\n \
+    \ r16 ok:true (25/25, section_first_ok, fcc 21059145/144/1, uv 0 mismatch),\n  ladder ok:true (tier0_ok),\
+    \ battery ok (GENHASH 0 0 = 80b904c0e5f085eef1e839459058c706\n  exact), meshprobe ac0211_ok / match_rate\
+    \ 1.0, wprof ok (lost_chunks 0)."
   area: input
   effort: S
   depends_on: []
@@ -10912,11 +10948,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-09-12T08:53
-  updated_at: 2026-09-12T14:48
-  completed_at: null
+  updated_at: 2026-09-12T14:50
+  completed_at: 2026-09-12T14:50
   waiting_on: null
   parent_id: null
   notes: "# AC follow-up: tier-0 disk order + medium_start boundary\n\n## 1) User Story\nAs a player,\

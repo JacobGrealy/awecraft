@@ -1492,6 +1492,18 @@ func _player_logic_test_body() -> void:
 			break
 		await get_tree().physics_frame
 	var on_floor: bool = p.is_on_floor()
+	# AC-0264 TEMP PROBE: slab collision state under the player at the
+	# point the floor is reported gone (the spawn fall-through hunt).
+	var pcx := int(floorf(p.position.x / 16.0))
+	var pcz := int(floorf(p.position.z / 16.0))
+	var pc: Node3D = world.chunks.get(world._key(pcx, pcz))
+	if pc != null:
+		var ps := int(floorf(p.position.y) / 16)
+		var line := "PROBE t=%d pos=%s on_floor=%s chunk=%d,%d band=%d cben=%s colimm=%s mesh_built=%s slabs:" % [Time.get_ticks_msec(), str(p.position), str(on_floor), pcx, pcz, int(pc.band), str(pc.collision_enabled), str(pc.col_immediate), str(pc.mesh_built)]
+		for si in range(maxi(0, ps - 1), mini(24, ps + 2)):
+			var s = pc.slabs[si]
+			line += " [si=%d m=%s b=%s d=%s]" % [si, str(s.mesh_instance != null), str(s.collision_body != null), str(s.col_dirty)]
+		print(line)
 	var peak: float = p.position.y
 	Input.action_press("jump")
 	for i in 240:
@@ -1601,6 +1613,48 @@ func _gamepad_test(spawn: Vector3) -> void:
 		await get_tree().physics_frame
 	var horizontal_moved: float = Vector2(p.position.x, p.position.z).distance_to(Vector2(start.x, start.z))
 	var stick_move_ok: bool = move_has_pad and horizontal_moved > 0.5
+	# 1b) AC-0264: L3 (left stick click) = sprint (hold) — GROUND: the
+	#     speed goes WALK 4.3 -> SPRINT 5.6 (ratio ~1.30), and the
+	#     InputMap carries the joypad event (device-agnostic).
+	var sprint_has_l3 := false
+	for e in InputMap.action_get_events("pad_sprint"):
+		if e is InputEventJoypadButton and e.button_index == 7:
+			sprint_has_l3 = true
+	# Both stretches stay on the flat spawn plateau (d <= 6 from spawn):
+	# the walk covers ~2.9 m, the L3 sprint ~2.2 m (converged: 1 -
+	# exp(-k*dt) ~ 0.99 at k=12 over 24 frames).
+	Input.action_press("move_forward")
+	for i in 40:
+		await get_tree().physics_frame
+	var walk_speed: float = Vector2(p.velocity.x, p.velocity.z).length()
+	# Measure at frame 12 (still converging: ~5.5 m/s at k=12 over 12
+	# frames — the walk speed would read ~4.3 and the ratio band
+	# (1.2, 1.45) separates them). The press itself runs 24 frames, but
+	# the forward path can end at a mob/obstacle (deterministic spawn
+	# at z ~ 1.3 in the seed-40 plateau), so the LATE read sees the
+	# stopped player.
+	Input.parse_input_event(_pad_btn(7, true))  # L3 down (4.x: 7 = LEFT_STICK)
+	var sprint_speed := 0.0
+	for i in 24:
+		await get_tree().physics_frame
+		if i == 11:
+			sprint_speed = Vector2(p.velocity.x, p.velocity.z).length()
+	Input.parse_input_event(_pad_btn(7, false))
+	Input.action_release("move_forward")
+	for i in 8:
+		await get_tree().physics_frame
+	var sprint_ratio: float = sprint_speed / maxf(walk_speed, 0.01)
+	var ground_sprint_ok: bool = sprint_has_l3 and sprint_ratio > 1.2 and sprint_ratio < 1.45
+	# Restore the arm-start position: the ~9.5 m forward run can end over
+	# lower terrain / water (the terrain is NOT flat beyond the spawn
+	# plateau), which used to sink the following jump test. The velocity
+	# reads above happened DURING the run (converged lerps), so the
+	# measurement is already taken.
+	Debug.teleport(start.x, start.y, start.z)
+	p.velocity = Vector3.ZERO
+	p.fall_start = -1.0
+	for i in 6:
+		await get_tree().physics_frame
 	# 2) A/Cross jump (the pad button on the jump action).
 	for i in 80:
 		if p.is_on_floor():
@@ -1757,6 +1811,8 @@ func _gamepad_test(spawn: Vector3) -> void:
 	var fly_climb_ok := false
 	var fly_descend_ok := false
 	var fly_land_ok := false
+	var fly_sprint_ok := false  # AC-0264 (the fly section sets it; a failed
+	                             # toggle skip leaves it false)
 	p.flying = false
 	Debug.teleport(p.position.x, p.position.y + 50.0, p.position.z)  # open sky
 	for i in 4:
@@ -1785,6 +1841,41 @@ func _gamepad_test(spawn: Vector3) -> void:
 			lp2 = Time.get_ticks_msec()
 	fly_toggle_ok = saw_fly
 	if saw_fly:
+		# 7c) AC-0264: L3 in FLIGHT — the same 1.30 ratio scales the
+		#     flight speed (forward held: ~1.3x the fly speed) and L3 is
+		#     NOT the down key: no A/B held, so altitude must hold (no
+		#     descend) while L3 is pressed. A double trigger (L3 also
+		#     descending) would sink the player here.
+		# NOTE: the toggle re-push can leave A (jump) held — do NOT
+		# release it here: a later re-press can land inside the 300 ms
+		# double-tap window and TOGGLE FLY OFF (the climb phase died
+		# that way). The L3 phase keeps the A-hold (climb +1): the
+		# double-trigger check is directional — with B released, a L3-as-
+		# down-key would drive vy toward -fly_vs (the floor of the
+		# (vy_l3 > -0.5) band), and the position floor (dy > -0.5) catches
+		# it regardless of the A-hold climb.
+		Input.action_press("move_forward")
+		for i in 50:
+			await get_tree().physics_frame
+		var fly_base: float = Vector2(p.velocity.x, p.velocity.z).length()
+		var fy_l3a: float = p.position.y
+		Input.parse_input_event(_pad_btn(7, true))  # L3 down (4.x: 7 = LEFT_STICK)
+		for i in 50:
+			await get_tree().physics_frame
+		var fly_sprint_v: float = Vector2(p.velocity.x, p.velocity.z).length()
+		var fy_l3b: float = p.position.y
+		var vy_l3: float = p.velocity.y
+		Input.parse_input_event(_pad_btn(7, false))
+		Input.action_release("move_forward")
+		for i in 8:
+			await get_tree().physics_frame
+		# A is deterministically HELD when saw_fly lands (every re-push
+		# ends on a press, and a no-re-push toggle is a bare press): the
+		# climb must SURVIVE the L3 phase — a L3-as-down-key bug drives
+		# vy to (up - down) * fly_vs = 0, cancelling the climb.
+		fly_sprint_ok = sprint_has_l3 and fly_base > 1.0 \
+			and fly_sprint_v > fly_base * 1.2 and fly_sprint_v < fly_base * 1.45 \
+			and vy_l3 > 5.0 and (fy_l3b - fy_l3a) > 1.0
 		var fy1: float = p.position.y
 		var hc0 := Time.get_ticks_msec()
 		while Time.get_ticks_msec() - hc0 < 700:  # hold A -> climb
@@ -1888,6 +1979,9 @@ func _gamepad_test(spawn: Vector3) -> void:
 		"b_cancel_inv_ok": b_cancel_inv_ok,
 		"hold_mine_ok": hold_mine_ok,
 		"jitter_ok": jitter_ok,
+		"ground_sprint_ok": ground_sprint_ok,
+		"sprint_ratio": roundf(sprint_ratio * 100.0) / 100.0,
+		"fly_sprint_ok": fly_sprint_ok,
 		"fly_toggle_ok": fly_toggle_ok,
 		"fly_climb_ok": fly_climb_ok,
 		"fly_descend_ok": fly_descend_ok,
@@ -1899,7 +1993,8 @@ func _gamepad_test(spawn: Vector3) -> void:
 		"focus_after_nav": f1.name if f1 != null else "null",
 		"accept_ok": accept_ok,
 		"ok": jump_has_pad and move_has_pad and stick_move_ok and jump_ok and attack_ok \
-			and hold_mine_ok and jitter_ok and fly_toggle_ok and fly_climb_ok \
+			and ground_sprint_ok and hold_mine_ok and jitter_ok and fly_sprint_ok \
+			and fly_toggle_ok and fly_climb_ok \
 			and fly_descend_ok and fly_land_ok and use_ok and hotbar_ok and stick_look_ok \
 			and inv_open and inv_toggle_ok and b_cancel_inv_ok and paused and focus_resume \
 			and nav_ok and accept_ok,

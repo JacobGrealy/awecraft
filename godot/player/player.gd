@@ -359,10 +359,19 @@ func _physics_process_impl(dt: float) -> void:
 	if ln > 0.0:
 		ix /= ln
 		iz /= ln
-	var sprint := not cg and Input.is_key_pressed(KEY_SHIFT)
+	# AC-0264: sprint = keyboard Shift (unchanged) OR L3 (pad_sprint).
+	# In flight, L3 scales the flight speed by the ground ratio
+	# (SPRINT/WALK ~1.30) and does NOT also act as the down key (that
+	# stays Shift / B-pad_cancel — a double trigger the task forbids).
+	var sprint_kbd := not cg and Input.is_key_pressed(KEY_SHIFT)
+	var sprint_pad := not cg and Input.is_action_pressed("pad_sprint")
+	var sprint := sprint_kbd or sprint_pad
+	var fly_sprint := sprint_pad
 	var speed: float
 	if flying:
 		speed = WALK * float(int(Settings.values.get("flight_speed", 4)))
+		if fly_sprint:
+			speed *= SPRINT / WALK
 	elif swim_up:
 		speed = SWIM
 	elif in_lava:
@@ -388,9 +397,15 @@ func _physics_process_impl(dt: float) -> void:
 		var vy := 0.0
 		if not cg and Input.is_action_pressed("jump"):
 			vy += 1.0  # A held = up (AC-0243: the double-tap hold climbs)
-		if (sprint or (not cg and Input.is_action_pressed("pad_cancel"))):
+		# AC-0264: down stays SHIFT / B (pad_cancel). L3 (sprint_pad) is a
+		# SPEED key in flight, not a down key — using `sprint` here would
+		# make L3 double-trigger (descend AND speed up).
+		if (sprint_kbd or (not cg and Input.is_action_pressed("pad_cancel"))):
 			vy -= 1.0  # SHIFT or B (pad_cancel) = down (AC-0243)
-		velocity.y = lerpf(velocity.y, vy * WALK * float(int(Settings.values.get("flight_speed", 4))) * FLY_VS, minf(1.0, 10.0 * dt))
+		var fly_vs := WALK * float(int(Settings.values.get("flight_speed", 4))) * FLY_VS
+		if fly_sprint:
+			fly_vs *= SPRINT / WALK
+		velocity.y = lerpf(velocity.y, vy * fly_vs, minf(1.0, 10.0 * dt))
 	elif in_water:
 		velocity.y = lerpf(velocity.y, -3.5, minf(1.0, 4.0 * dt))
 		if not cg and Input.is_action_pressed("jump"):
