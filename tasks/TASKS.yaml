@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-12T16:46
+  updated_at: 2026-09-12T17:29
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0264
 - AC-0272
 - AC-0270
 - AC-0269
@@ -42,13 +41,28 @@ intake:
   title: hide-mouse-on-controller-input
   priority: 2
   status: open
-  notes: '1) User Story: As a player using a controller I want the mouse cursor hidden as soon as I press
-    any controller button including sticks/triggers, so it doesn''t distract.
-
-
-    2) Technical Details: godot/input + UI. Detect any Joypad button/motion/trigger event, hide cursor
-    (Input.set_mouse_mode hidden), show again on mouse move/click. Verify pressing any button, stick,
-    or trigger hides cursor, mouse brings it back.'
+  updated_at: 2026-09-12T17:29
+  notes: "1) User Story: As a player using a controller I want the mouse cursor hidden as soon as I press\
+    \ any controller button including sticks/triggers, so it doesn't distract.\n\n2) Technical Details:\
+    \ godot/input + UI. Detect any Joypad button/motion/trigger event, hide cursor (Input.set_mouse_mode\
+    \ hidden), show again on mouse move/click. Verify pressing any button, stick, or trigger hides cursor,\
+    \ mouse brings it back.\n\n## AC-0272 implementation log (2026-09-12)\n\n### Cursor hide on controller\
+    \ input (the ask)\n- player.gd `_unhandled_input`: any joypad BUTTON press or stick/trigger\n  MOTION\
+    \ (axis_value above 0.05 so idle wobble can't flap it) hides a\n  visible cursor; mouse MOTION while\
+    \ hidden re-shows it, and a mouse\n  CLICK re-captures through the existing branch. The conditions\
+    \ and the\n  mouse-look read now use the mirrored state (see below) instead of the\n  engine property.\n\
+    - The engine mouse-mode setter is a NO-OP under --headless\n  (DisplayServerHeadless stores nothing\
+    \ — verified in isolation: the mode\n  reads 0 through every set), so the gate can't assert Input.mouse_mode.\n\
+    \  AC-0272 therefore centralizes cursor transitions in\n  `Game.set_cursor(m)` / `Game.cursor_state`\
+    \ (game.gd): the player's\n  pad-hide / mouse-show / click-capture paths AND the menu, console and\n\
+    \  pause transitions all route through it, so the mirror can't go stale.\n  The harness gamepad arm\
+    \ (section 7d) asserts the mirror: A-press hides,\n  stick motion hides, mouse motion re-shows, mouse\
+    \ click re-captures.\n\n### Gates (all green)\n- gamepad arm ok:true (7d mouse_hide_ok true + the\
+    \ whole pad suite).\n- player arm ok (floor/jump/fly — the click-capture read now goes through\n \
+    \ the mirror; identical semantics on a real display).\n- battery ok (pause menu — menu.gd routed through\
+    \ set_cursor — and\n  GENHASH 0 0 = 80b904c0e5f085eef1e839459058c706 exact).\n- boot 0 SCRIPT ERROR.\
+    \ r16/ladder/wprof/meshprobe: world/chunk code\n  byte-identical to the green AC-0264 re-verification,\
+    \ no re-run needed.\n- Shipped AweCraft[20260912-1728] at :8080 (b22bd05b...)."
   area: input
   effort: S
   depends_on: []
@@ -160,8 +174,9 @@ intake:
 - id: AC-0264
   title: controller-left-stick-click-sprint-flying
   priority: 2
-  status: open
-  updated_at: 2026-09-12T16:46
+  status: done
+  updated_at: 2026-09-12T16:47
+  completed_at: 2026-09-12T16:47
   notes: "1) User Story: As a player using a controller I want clicking the left analog stick to sprint\
     \ both on ground and while flying, with flying sprint scaling by the same ratio as ground sprint.\n\
     \n2) Technical Details: godot/player/player.gd + input map. Map left stick click (Joypad Button L3)\

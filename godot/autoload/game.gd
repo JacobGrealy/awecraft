@@ -52,10 +52,22 @@ func new_world(seed) -> void:
 	mode = "play"
 
 
+# AC-0272: cursor-mode mirror. The engine setter is a NO-OP under
+# --headless (DisplayServerHeadless), so the harness gate asserts on this
+# field; on a real display it mirrors Input.mouse_mode. Every cursor-mode
+# transition in the game goes through set_cursor() so the mirror can't go
+# stale (the menu/console/player all used to write the engine directly).
+var cursor_state := int(Input.MOUSE_MODE_VISIBLE)
+
+func set_cursor(m: int) -> void:
+	cursor_state = m
+	Input.mouse_mode = m
+
+
 func pause() -> void:
 	if mode == "play":
 		mode = "pause"
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		set_cursor(Input.MOUSE_MODE_VISIBLE)
 
 
 func resume() -> void:

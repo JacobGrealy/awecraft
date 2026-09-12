@@ -167,13 +167,27 @@ func _input(event: InputEvent) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseMotion and (Input.mouse_mode == Input.MOUSE_MODE_CAPTURED or _dragging):
+	if event is InputEventMouseMotion and (Game.cursor_state == int(Input.MOUSE_MODE_CAPTURED) or _dragging):
 		var mm: InputEventMouseMotion = event
 		apply_look(mm)
 	if event is InputEventMouseButton:
 		var lmb: InputEventMouseButton = event
 		if lmb.button_index == MOUSE_BUTTON_LEFT and not Game.console_open:
 			_lmb_down = lmb.pressed
+	# AC-0272: any controller input hides a visible cursor — a pad button
+	# press or a stick/trigger deflection (above the noise floor, so idle
+	# stick wobble can't flap it). The mouse brings it back: motion while
+	# hidden re-shows it, a click re-captures through the existing branch
+	# below. Works in every mode (the cursor is global; the menu keeps its
+	# native GUI focus, so a hidden cursor there is fine).
+	elif event is InputEventJoypadButton and event.pressed \
+			and Game.cursor_state != int(Input.MOUSE_MODE_CAPTURED):
+		Game.set_cursor(Input.MOUSE_MODE_HIDDEN)
+	elif event is InputEventJoypadMotion and Game.cursor_state != int(Input.MOUSE_MODE_CAPTURED):
+		if absf(event.axis_value) > 0.05:
+			Game.set_cursor(Input.MOUSE_MODE_HIDDEN)
+	elif event is InputEventMouseMotion and Game.cursor_state == int(Input.MOUSE_MODE_HIDDEN):
+		Game.set_cursor(Input.MOUSE_MODE_VISIBLE)
 	if Game.mode != "play":
 		return
 	# AC-0121: console open - the keyboard keys are swallowed by the focused
@@ -198,9 +212,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		if ui_mode != "":
 			return
 		var mb: InputEventMouseButton = event
-		var was_captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+		var was_captured := Game.cursor_state == int(Input.MOUSE_MODE_CAPTURED)
 		if mb.pressed and not was_captured:
-			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+			Game.set_cursor(Input.MOUSE_MODE_CAPTURED)
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
 				if was_captured:
@@ -223,7 +237,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if kc == int(KEY_E):
 			if ui_mode == "":
 				open_inventory("inv")
-				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+				Game.set_cursor(Input.MOUSE_MODE_VISIBLE)
 			else:
 				close_inventory()
 		# AC-0122: the old V/H/J/K debug keys moved into the console as the
@@ -288,7 +302,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.is_action_pressed("pad_inventory") or event.is_action_pressed("pad_craft"):
 				if ui_mode == "":
 					open_inventory("inv")
-					Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+					Game.set_cursor(Input.MOUSE_MODE_VISIBLE)
 				else:
 					close_inventory()
 				return
@@ -1208,7 +1222,7 @@ func use_selected() -> void:
 		if _ut:
 			print("USETRACE table")
 		open_inventory("table")
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		Game.set_cursor(Input.MOUSE_MODE_VISIBLE)
 		return
 	var item: Dictionary = inv_selected()
 	var sid := int(item["id"])
@@ -1457,7 +1471,7 @@ func set_fly(enabled: bool) -> void:
 
 func start() -> void:
 	camera.current = true
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	Game.set_cursor(Input.MOUSE_MODE_CAPTURED)
 
 
 func _stack_max(id: int) -> int:
@@ -1559,7 +1573,7 @@ func damage_player(n: float, src: String) -> void:
 		_return_table_grid()
 		if held != {}:
 			_return_held_to_inv()
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		Game.set_cursor(Input.MOUSE_MODE_VISIBLE)
 
 
 func _return_held_to_inv() -> void:
@@ -1615,7 +1629,7 @@ func open_inventory(mode: String) -> void:
 	ui_mode = mode
 	release_mine()
 	recompute_craft()
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	Game.set_cursor(Input.MOUSE_MODE_VISIBLE)
 
 
 func close_inventory() -> void:

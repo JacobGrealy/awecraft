@@ -135,7 +135,7 @@ func open_console() -> void:
 	visible = true
 	Game.console_open = true
 	if Game.mode == "play":
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		Game.set_cursor(Input.MOUSE_MODE_VISIBLE)
 	add_log("[console open]")
 	call_deferred("_focus_input")
 
@@ -151,7 +151,7 @@ func close_console() -> void:
 	if input_line.has_focus():
 		input_line.release_focus()
 	if Game.mode == "play":
-		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		Game.set_cursor(Input.MOUSE_MODE_CAPTURED)
 
 func add_log(s: String) -> void:
 	log_view.append_text(s + "\n")

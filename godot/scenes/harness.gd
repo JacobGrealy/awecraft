@@ -1928,6 +1928,42 @@ func _gamepad_test(spawn: Vector3) -> void:
 	for i in 3:
 		await get_tree().physics_frame
 
+	# 7d) AC-0272: any controller input hides a visible cursor; the mouse
+	#     brings it back (motion re-shows, a click re-captures).
+	var mouse_hide_ok := false
+	Game.set_cursor(Input.MOUSE_MODE_VISIBLE)
+	for i in 2:
+		await get_tree().physics_frame
+	Input.parse_input_event(_pad_btn(0, true))   # A press -> hide
+	var hide_btn_ok: bool = await _await_state(func() -> bool: return Game.cursor_state == int(Input.MOUSE_MODE_HIDDEN))
+	Input.parse_input_event(_pad_btn(0, false))
+	Game.set_cursor(Input.MOUSE_MODE_VISIBLE)
+	for i in 2:
+		await get_tree().physics_frame
+	var sm := InputEventJoypadMotion.new()
+	sm.device = 0
+	sm.axis = JOY_AXIS_LEFT_Y
+	sm.axis_value = 0.4
+	Input.parse_input_event(sm)
+	var hide_stick_ok: bool = await _await_state(func() -> bool: return Game.cursor_state == int(Input.MOUSE_MODE_HIDDEN))
+	sm.axis_value = 0.0
+	Input.parse_input_event(sm)
+	# mouse motion while hidden -> visible again
+	var mm := InputEventMouseMotion.new()
+	mm.position = Vector2(400.0, 300.0)
+	mm.relative = Vector2(2.0, 0.0)
+	Input.parse_input_event(mm)
+	var mouse_show_ok: bool = await _await_state(func() -> bool: return Game.cursor_state == int(Input.MOUSE_MODE_VISIBLE))
+	# a mouse click re-captures (the existing branch)
+	var mcb := InputEventMouseButton.new()
+	mcb.button_index = MOUSE_BUTTON_LEFT
+	mcb.pressed = true
+	Input.parse_input_event(mcb)
+	var recapture_ok: bool = await _await_state(func() -> bool: return Game.cursor_state == int(Input.MOUSE_MODE_CAPTURED))
+	mcb.pressed = false
+	Input.parse_input_event(mcb)
+	mouse_hide_ok = hide_btn_ok and hide_stick_ok and mouse_show_ok and recapture_ok
+
 	# 8) START pause -> the pause menu; the D-pad moves the native GUI
 	#    focus; A (pad_accept) activates the focused button.
 	if menu_ui == null:
@@ -1982,6 +2018,7 @@ func _gamepad_test(spawn: Vector3) -> void:
 		"ground_sprint_ok": ground_sprint_ok,
 		"sprint_ratio": roundf(sprint_ratio * 100.0) / 100.0,
 		"fly_sprint_ok": fly_sprint_ok,
+		"mouse_hide_ok": mouse_hide_ok,
 		"fly_toggle_ok": fly_toggle_ok,
 		"fly_climb_ok": fly_climb_ok,
 		"fly_descend_ok": fly_descend_ok,
@@ -1994,7 +2031,7 @@ func _gamepad_test(spawn: Vector3) -> void:
 		"accept_ok": accept_ok,
 		"ok": jump_has_pad and move_has_pad and stick_move_ok and jump_ok and attack_ok \
 			and ground_sprint_ok and hold_mine_ok and jitter_ok and fly_sprint_ok \
-			and fly_toggle_ok and fly_climb_ok \
+			and mouse_hide_ok and fly_toggle_ok and fly_climb_ok \
 			and fly_descend_ok and fly_land_ok and use_ok and hotbar_ok and stick_look_ok \
 			and inv_open and inv_toggle_ok and b_cancel_inv_ok and paused and focus_resume \
 			and nav_ok and accept_ok,

@@ -287,7 +287,7 @@ func _unhandled_input(event) -> void:
 func show_main() -> void:
 	_state = "main"
 	_apply_state()
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	Game.set_cursor(Input.MOUSE_MODE_VISIBLE)
 	refresh_slots()
 
 
@@ -295,7 +295,7 @@ func show_pause() -> void:
 	_state = "pause"
 	_sync_controls()
 	_apply_state()
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	Game.set_cursor(Input.MOUSE_MODE_VISIBLE)
 
 
 func open_options(source: String) -> void:
@@ -303,7 +303,7 @@ func open_options(source: String) -> void:
 	_state = "opt_main" if source == "main" else "opt_pause"
 	_sync_controls()
 	_apply_state()
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	Game.set_cursor(Input.MOUSE_MODE_VISIBLE)
 	print("OPTSYNC from=%s render=%d sim=%d vol=%d res=%s full=%s hunger=%s stats=%s logdbg=%s chunk=%d fogpct=%d ovband=%s ovlight=%s ovcol=%s" % [
 		source,
 		int(Settings.values["render_dist"]),
