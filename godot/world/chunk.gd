@@ -172,6 +172,35 @@ func has_fog_si(si: int) -> bool:
 func has_low_si(si: int) -> bool:
 	return (low_mask >> si) & 1 != 0
 
+# AC-0275: free EVERY high-res slab instance (mesh/fluid/flora/occluder;
+# the collision bodies stay - collision is LOD-independent). The band-exit
+# demote call (user decision A: a column that leaves the high band on a
+# recenter is regenerated at the new band's tier - the slab wave re-owns
+# the slabs). Returns the instance count freed.
+func demote_high() -> int:
+	var n := 0
+	var old_insts: Array = []
+	for s in slabs:
+		if s.mesh_instance != null:
+			old_insts.append(s.mesh_instance)
+		if s.fluid_instance != null:
+			old_insts.append(s.fluid_instance)
+		if s.flora_instance != null:
+			old_insts.append(s.flora_instance)
+		if s.occluder != null:
+			old_insts.append(s.occluder)
+	for s in slabs:
+		s.mesh_instance = null
+		s.fluid_instance = null
+		s.flora_instance = null
+		s.occluder = null
+		n += 1
+	for o2 in old_insts:
+		if is_instance_valid(o2):
+			_pool_free_inst(o2)
+	return n
+
+
 func drop_low() -> void:
 	if fog_instance != null:
 		_pool_free_mm(fog_instance)

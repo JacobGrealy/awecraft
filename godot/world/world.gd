@@ -20,9 +20,28 @@ const LOAD_DRAIN_UNITS := 1000000
 # the polls (the handoffs) keep running — an unbounded block starved the
 # worker pools between dispatch waves (measured: 2.6 s frames, ~80% pool idle).
 const LOAD_DRAIN_BUDGET_MS := 300
+# AC-0274: the per-frame dispatch cap for the loading window's build pass
+# (the re-collect per skip keeps the order adaptive but costs a 2100-entry
+# pool scan; capping the dispatches bounds the frame at ~60-100 ms so the
+# poll/handoff (LOAD_TM_HANDOFF/frame) and the recenter queue walk run).
+const LOAD_HSLAB_UNITS_PER_FRAME := 16
+# AC-0274: the loading-window handoff TIME budget (replaces the fixed
+# LOAD_TM_HANDOFF=6 count, which was sized for the first-wave face-block
+# refresh (~70 ms/landing) but throttled steady-state landings (2-5 ms
+# each) to 6/frame: at ~10 fps that is 64/s and a 900-slab load takes
+# ~14 s of pure handoff waiting). Land handoffs until this budget is used;
+# the first wave naturally lands 1-2/frame (the cost is the gate), the
+# steady state lands dozens.
+const LOAD_HO_BUDGET_MS := 100
 # TG in-flight cap while loading (low-priority share = 3 of 6 pool threads;
 # 24 deep = ~8 waves of queue, the pool never sees an empty queue).
-const LOAD_TG_CAP := 24
+# AC-0274: was 24 - a 24-deep gen queue on the shared 6-core
+# WorkerThreadPool starved the 2 ms mesh tasks behind it (measured:
+# mesh landings capped at ~43/s while gen held 24 in flight; the
+# load's mesh phase froze for ~15 s). 8 keeps the gen wavefront ~1-2
+# rings ahead of the mesh (the nbs gate defers until the diagonals
+# land) while the mesh tasks get their pool share.
+const LOAD_TG_CAP := 8
 # TM in-flight cap while loading: 64 = ~11 waves of 6-thread work — the pool
 # stays saturated across the main thread's poll/dispatch cadence.
 const LOAD_TM_CAP := 64
@@ -660,6 +679,16 @@ func _grid_score(e: Dictionary) -> float:
 	# every non-tier-0 slab at equal (layer, taxi).
 	if _is_tier0_col(dx, dz):
 		s -= 1e10
+	# AC-0274: the LOAD TARGET (tier-0 + sim band) outranks the rest of
+	# the high band while the window is open. Without this the (layer,
+	# taxi) bake order fans layer 0 of ALL 113 high-band columns before
+	# the DEEP slabs of the inner target columns - the window's own
+	# target sat at 36% for ~15 s while the far rings' shallow layers
+	# built (measured: 900 slabs at 43/s, the target's last slab ~21 s
+	# in). -5e9 sits below the tier-0 prefix (-1e10) and above every
+	# (layer, taxi) value (max ~120k).
+	if loading_active and _loading_target_col(dx, dz):
+		s -= 5e9
 	return s
 
 # AC-0257: the AC-0233 _tier_score ((sim-tier, taxi) pick order) is gone —
@@ -1298,6 +1327,11 @@ func _fog_ensure_slab(c: Node3D, si: int) -> void:
 	var _wpt := Time.get_ticks_usec()  # AC-0251 MESHATTACH sub-stage (per-chunk fog node attach)
 	if c.has_fog_si(si):
 		_wprof_add(WP_MESHATTACH, Time.get_ticks_usec() - _wpt)
+		return
+	# AC-0275: the double-LOD guard - a fog veil over a high mesh is the
+	# user's "washed-out (day) / stuck-in-night" chunks. Never attach.
+	if c.slabs[si].mesh_instance != null:
+		low_on_high_n += 1
 		return
 	var had: bool = c.fog_slabs.size() > 0
 	var i := 0
@@ -2498,6 +2532,22 @@ func _low_drop_slab(c: Node3D, si: int) -> void:
 # AC-0231 rewrite: place/replace the per-slab low instance (slab-local
 # 0..16 geometry at (0, si*16, 0), sorted by slab index).
 func _low_place_slab(c: Node3D, si: int, mesh: ArrayMesh) -> void:
+	# AC-0275: the double-LOD guard - the slab already holds a HIGH mesh;
+	# attach nothing (a low box / fog veil over a high mesh is the user's
+	# "washed-out / stuck-in-night" chunks). Mark the slab low-terminal
+	# (stamp, NO instance) so the wave probe stops owing it.
+	if c.slabs[si].mesh_instance != null:
+		low_on_high_n += 1
+		if mesh != null:
+			mesh.free()
+		_fog_drop_slab(c, si)  # the veil goes with the refused box
+		# terminal mark: "no low owed at this data_gen" (an edit bumps the
+		# gen and re-opens the slab).
+		c.low_failed[si] = int(c.data_gen)
+		c.low_stamps[si] = c.stamp()
+		c.low_tiers[si] = int(c.data.size())  # no-tier stamp (the high owns it)
+		_low_probe_invalidate(c)
+		return
 	var _wpt := Time.get_ticks_usec()  # AC-0251 MESHATTACH sub-stage
 	var i := 0
 	while i < c.low_slabs.size() and int(c.low_slabs[i]) < si:
@@ -3184,6 +3234,45 @@ var loading_active := false
 var _shutting_down := false
 var _load_done_once := false
 var _loading_target := 0
+# AC-0274: the per-second LOADER timeline (env AWECRAFT_LOADLOG=1) - the
+# stall repro's evidence: progress %, both pool depths, io/gen counts.
+# print() is piped-buffered - run under stdbuf -oL.
+var _loadlog_on := OS.get_environment("AWECRAFT_LOADLOG") == "1"
+# AC-0275: the double-LOD GUARD counter - low/fog attach attempts on a slab
+# that ALREADY holds a high mesh. The high landing drops its slab's low/fog
+# (the designed direction); the low/fog side now REFUSES (the slab stays
+# high; the slab is marked low-terminal with NO instance so the wave probe
+# stops owing it). The user's "washed-out / stuck-in-night" chunks were
+# exactly this state: the sky-colored fog box veiling the high mesh (day =
+# washed, night = dark).
+var low_on_high_n := 0
+# AC-0275: the demote evidence - columns regenerated at their new band
+# tier on a recenter (the user's decision A).
+var demoted_cols_n := 0
+# AC-0275: high builds that landed after their column left the high band
+# (freed, never attached).
+var hslab_stragglers_n := 0
+# AC-0274: the stall forensics (the per-second LOADLOG line reports these).
+var hslab_defer_nbs := 0
+var hslab_defer_dedup := 0
+var hslab_stale_key_n := 0
+# AC-0274: the last hslab-dispatch deferral reason (0 = dispatched, 1 =
+# per-column dedup, 2 = TM pool full, 3 = diagonal neighbor ungenerated,
+# 4 = no data). The drain's skip-and-continue policy reads it: a
+# per-column deferral must not end the pass (only a full pool does).
+var _hslab_last_defer := 0
+# AC-0274: per-100ms drain window (the stall forensics, frame resolution).
+var _loadwin_ms := 0
+var _loadwin_disp := 0
+var _loadwin_dedup := 0
+var _loadwin_nopick := 0
+var _loadwin_maxinf := 0
+var _load_wms_sum := 0
+var _load_wms_n := 0
+var hslab_defer_cap := 0
+var load_phase1_ready_fail := 0
+var _loadlog_t0 := 0
+var _loadlog_next_ms := 0
 var _loading_radius := 0
 var _loading_screen = null
 var _tg_max_norm := 3
@@ -4331,7 +4420,12 @@ func start_loading(title: String) -> void:
 	if not loading_bypass:
 		return
 	loading_active = true
-	_loading_target = _high_band_count()
+	_loading_target = _loading_band_count()
+
+	if _loadlog_on:
+		print("LOADLOGPOOL cores=%d tg=%d tm=%d" % [OS.get_processor_count(), threadgen_max, threadmesh_max])
+		_load_wms_sum = 0
+		_load_wms_n = 0
 	_loading_radius = render_radius
 	# AC-0178: saturate the 6-thread pool — TG keeps its low-priority 3-thread
 	# share (gen feeds the mesh builds, which take the 6 high-priority
@@ -4398,6 +4492,42 @@ func _high_band_meshed() -> int:
 	return n
 
 
+# AC-0274 (user decision B): the LOAD WINDOW's target is the TIER-0 SECTION
+# (the Chebyshev ball, tier0_r) + the SIMULATION band (taxi < sim_dist),
+# not the whole high band. "Load tier 0 + simulation distance and then
+# load the rest normally" - the rest of the render circle keeps building
+# behind the closed window (the pools stay saturated until the high band
+# itself drains - the window just stops WAITING for it).
+func _loading_target_col(dx: int, dz: int) -> bool:
+	var cheb := absi(dx) if absi(dx) > absi(dz) else absi(dz)
+	if cheb <= tier0_r:
+		return true
+	return absi(dx) + absi(dz) < mini(band0_r, medium_start_r)
+
+
+func _loading_band_count() -> int:
+	var n := 0
+	var r := maxi(tier0_r, mini(band0_r, medium_start_r))
+	for dx in range(-r, r + 1):
+		for dz in range(-r, r + 1):
+			if _loading_target_col(dx, dz):
+				n += 1
+	return n
+
+
+func _loading_band_meshed() -> int:
+	var n := 0
+	var r := maxi(tier0_r, mini(band0_r, medium_start_r))
+	for dx in range(-r, r + 1):
+		for dz in range(-r, r + 1):
+			if not _loading_target_col(dx, dz):
+				continue
+			var c = chunks.get(_key(last_pcx + dx, last_pcz + dz))
+			if c != null and c.mesh_built:
+				n += 1
+	return n
+
+
 # AC-0261: true when no slab of the visible band [band0_r, render_radius)
 # is still owed to the slab wave (every data slab holds its low or is
 # all-air). The drain-wait predicate (loading arms / harness).
@@ -4422,11 +4552,28 @@ func _loading_tick() -> void:
 	# target instead of stalling on the stale one.
 	if render_radius != _loading_radius:
 		_loading_radius = render_radius
-		_loading_target = _high_band_count()
-	var m := _high_band_meshed()
+		_loading_target = _loading_band_count()
+	var m := _loading_band_meshed()
+	if _loadlog_on:
+		if _loadlog_t0 == 0:
+			_loadlog_t0 = Time.get_ticks_msec()
+		if Time.get_ticks_msec() >= _loadlog_next_ms:
+			_loadlog_next_ms = Time.get_ticks_msec() + 1000
+			print("LOADLOG t=%d pct=%.1f meshed=%d/%d tm=%d tg=%d io=%d gen=%d q=%d dnbs=%d ddedup=%d dstale=%d dcap=%d rfail=%d keys=%d wms_avg=%.0f wms_n=%d" % [
+				Time.get_ticks_msec() - _loadlog_t0,
+				100.0 * float(m) / maxf(1.0, float(_loading_target)),
+				m, _loading_target, threadmesh_inflight.size(), threadgen_inflight.size(), disk_reads, gen_count, queue_size, hslab_defer_nbs, hslab_defer_dedup, hslab_stale_key_n, _tm_capdrop, load_phase1_ready_fail, _tm_inflight_keys.size(), float(_load_wms_sum) / maxf(1.0, float(_load_wms_n)), _load_wms_n])
 	if _loading_screen != null:
 		_loading_screen.update_progress(m, _loading_target, disk_reads, gen_count)
-	if m >= _loading_target and threadmesh_inflight.is_empty() and threadgen_inflight.is_empty():
+	# AC-0274 (user decision B): the window closes the moment the LOAD
+	# TARGET (tier-0 + sim band) is meshed - the pools keep running:
+	# "load tier 0 + simulation distance and then load the rest normally."
+	# Waiting for the pools to drain here would never fire (phase 2 keeps
+	# the TG pool warm for the rest of the circle, and phase 1 keeps
+	# dispatching the outer band - the whole point of the early close).
+	# stop_loading() drops the caps back to steady state, so the rest
+	# streams at the normal trickle pace.
+	if m >= _loading_target:
 		stop_loading()
 
 func _convert_data_to_build(key: String) -> void:
@@ -5110,6 +5257,9 @@ func threadmesh_poll() -> void:
 	# dispatch-staggered).
 	var hb_max := LOAD_TM_HANDOFF if loading_active else 64
 	var streaming := not loading_active and not _shutting_down
+	# AC-0274: the loading handoff is time-budgeted (see LOAD_HO_BUDGET_MS).
+	var _ho_t0 := Time.get_ticks_usec()
+	var _ho_n := 0
 	if streaming:
 		var pf := Engine.get_process_frames()
 		if pf != _stream_ho_frame:
@@ -5230,6 +5380,12 @@ func threadmesh_poll() -> void:
 			hb_n += 1
 			if streaming and not bool(e.get("epool", false)):
 				_stream_ho_n += 1
+			if loading_active:
+				_ho_n += 1
+				# AC-0274: time-budgeted handoffs (the fixed count throttled
+				# the steady state to 6/frame at ~10 fps).
+				if Time.get_ticks_usec() - _ho_t0 > LOAD_HO_BUDGET_MS * 1000 or _ho_n >= 64:
+					break
 			continue
 		i += 1
 	if timing and hb_n > 0:
@@ -5346,6 +5502,20 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		# all-air builds stamped too — done, not pending), and the probe
 		# flips mesh_built when the column owes nothing.
 		var si_h: int = int(e["si0"])
+		# AC-0275 (user decision A): a STRAGGLER - the column left the
+		# high band while this build was in flight. Do not attach the
+		# high (the wave owns the column at its new tier now); free the
+		# worker's result, keep the light (it is still valid for the
+		# neighbors' strips), and let the low probe re-own the slab.
+		var taxi_now := absi(int(c.cx) - last_pcx) + absi(int(c.cz) - last_pcz)
+		if taxi_now >= medium_start_r:
+			_eff_landed(c, c.last_eff, res.get("light", {}))
+			_hslab_probe_invalidate(c)
+			_low_probe_invalidate(c)
+			hslab_stragglers_n += 1
+			if timing or _tm_debug:
+				print("HSLABSTRAG %d,%d slab=%d taxi=%d" % [int(c.cx), int(c.cz), si_h, taxi_now])
+			return
 		var ta_h := Time.get_ticks_msec()
 		var old_eff_h = c.last_eff
 		c.apply_edit_accs(res, _tm_ms_full, false)
@@ -5359,8 +5529,12 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			# (each landing dropped its own) — nothing to free in bulk.
 		c.saved_light = {}
 		perf_build_ms += Time.get_ticks_msec() - ta_h
-		perf_build_worker_ms += int(res.get("wms", 0))
-		perf_build_worker_ms_list.append(int(res.get("wms", 0)))
+		var _wms_h: int = int(res.get("wms", 0))
+		perf_build_worker_ms += _wms_h
+		perf_build_worker_ms_list.append(_wms_h)
+		if loading_active:
+			_load_wms_sum += _wms_h
+			_load_wms_n += 1
 		_count_collision_build(c)
 		_stage_check(c, key)
 		_eff_landed(c, old_eff_h, res.get("light", {}))
@@ -5860,9 +6034,12 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary)
 	var key := _key(cx, cz)
 	c.col_immediate = _col_immediate_for(cx, cz)
 	if c.data.is_empty():
+		_hslab_last_defer = 4
 		return false  # AC-0263: the data lane owns it (the sync gen is gone)
 	if _tm_inflight_keys.has(key):
 		_tm_dedup += 1
+		hslab_defer_dedup += 1
+		_hslab_last_defer = 1
 		return false
 	var tm_cap := threadmesh_max
 	if _startup_pending() and tm_cap < 9:
@@ -5870,6 +6047,8 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary)
 	tm_cap = maxi(1, tm_cap - (2 if not dirty_queue.is_empty() else 1))
 	if threadmesh_inflight.size() >= tm_cap:
 		_tm_capdrop += 1
+		hslab_defer_cap += 1
+		_hslab_last_defer = 2
 		if _tm_debug:
 			print("TMESH HSLABCAPDROP %d,%d slab=%d inflight=%d" % [cx, cz, si, threadmesh_inflight.size()])
 		return false
@@ -5881,6 +6060,8 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary)
 				continue
 			var nc = chunks.get(_key(cx + dx, cz + dz))
 			if nc == null or nc.data.is_empty():
+				hslab_defer_nbs += 1
+				_hslab_last_defer = 3
 				return false  # AC-0263: defer — the neighbor lands, the entry retries
 			nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep)  # AC-0237: ungenerated slabs read as solid
 	var y_lo := si * 16
@@ -5921,6 +6102,7 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary)
 	_tm_inflight_keys[key] = tid
 	threadmesh_inflight.append(entry)
 	_tm_enq += 1
+	_hslab_last_defer = 0
 	_bd_log(cx, cz)
 	if _tm_debug:
 		print("TMESH HSLAB %d,%d slab=%d inflight=%d" % [cx, cz, si, threadmesh_inflight.size()])
@@ -6270,8 +6452,28 @@ func _drain_build_queue() -> void:
 	# DEPTHS keep both pools saturated in between. Steady state: this block
 	# never runs; the loop below is the unchanged legacy path.
 	if loading_active:
+		var _lw_now := Time.get_ticks_msec()
+		if _loadwin_ms == 0 or _lw_now - _loadwin_ms >= 100:
+			if _loadwin_ms > 0 and _loadlog_on:
+				print("LOADWIN t=%d disp=%d skip=%d nopick=%d maxinf=%d tm=%d tg=%d" % [
+					_lw_now - _loadlog_t0, _loadwin_disp, _loadwin_dedup, _loadwin_nopick, _loadwin_maxinf, threadmesh_inflight.size(), threadgen_inflight.size()])
+			_loadwin_ms = _lw_now
+			_loadwin_disp = 0
+			_loadwin_dedup = 0
+			_loadwin_nopick = 0
+			_loadwin_maxinf = 0
 		var lp_t0 := Time.get_ticks_usec()
+		# AC-0274: the per-column defer set persists for the WHOLE frame
+		# loop (not per pass): a pass that dispatches column A and then
+		# finds B's slab already in flight must skip B on its NEXT pass -
+		# a fresh set per pass re-picked the same in-flight column and
+		# spun the 300 ms frame budget with zero progress (self-starvation:
+		# the poll/handoff and the recenter queue walk never ran).
+		var _lw_skip: Dictionary = {}
+		var _lw_disp_n := 0  # AC-0274: per-frame dispatch cap (frame bound)
 		while Time.get_ticks_usec() - lp_t0 < LOAD_DRAIN_BUDGET_MS * 1000:
+			if _lw_disp_n >= LOAD_HSLAB_UNITS_PER_FRAME:
+				break
 			# Phase 1: nearest build-ready entry -> worker build. The
 			# per-iteration re-pick (fresh _collect_pool + re-score) keeps the
 			# dispatch order adaptive: as chunks land mid-frame their scores
@@ -6285,6 +6487,8 @@ func _drain_build_queue() -> void:
 			var ls := 1e30
 			for e in lb:
 				var c = chunks.get(e["key"])
+				if _lw_skip.has(e["key"]):
+					continue  # AC-0274: deferred earlier this frame (dedup/nbs)
 				# AC-0257 (AC-0263): keep-high — a meshed column is skipped.
 				if c == null or c.data.is_empty() or c.mesh_built:
 					continue
@@ -6296,6 +6500,7 @@ func _drain_build_queue() -> void:
 				if absi(dxl) + absi(dzl) >= medium_start_r and not _is_tier0_col(dxl, dzl):
 					continue
 				if not _build_ready(int(e["cx"]), int(e["cz"])):
+					load_phase1_ready_fail += 1
 					continue
 				var s := _grid_score(e)  # AC-0257: the bake order (layer, taxi)
 				if s < ls:
@@ -6303,6 +6508,7 @@ func _drain_build_queue() -> void:
 					le = e
 					lc = c
 			if lc == null:
+				_loadwin_nopick += 1
 				break
 			# AC-0263: per-slab — a high-complete winner (a landing raced the
 			# pick) frees its entry and the loop re-picks; otherwise the best
@@ -6311,8 +6517,22 @@ func _drain_build_queue() -> void:
 			if sih < 0:
 				_remove_entry(le)
 				continue
-			if _build_unit_hslab(lc, int(le["cx"]), int(le["cz"]), sih):
-				break  # deferred (TM depth) — phase 2 feeds the TG pool now
+			var _lw_deferred := _build_unit_hslab(lc, int(le["cx"]), int(le["cz"]), sih)
+			_loadwin_maxinf = maxi(_loadwin_maxinf, threadmesh_inflight.size())
+			if _lw_deferred:
+				if _hslab_last_defer == 2:
+					break  # TM pool full — phase 2 feeds the TG pool now
+				# AC-0274: a PER-COLUMN defer (a slab of this column is
+				# already in flight / a neighbor is ungenerated) must not end
+				# the pass — the deterministic re-pick would loop on the same
+				# best column forever (the one-column-at-a-time load stall:
+				# ~200 ms worker time x 8 slabs x 113 columns, serial). Skip
+				# the column for this pass and try the next-best.
+				_lw_skip[_key(int(le["cx"]), int(le["cz"]))] = true
+				_loadwin_dedup += 1
+				continue
+			_loadwin_disp += 1
+			_lw_disp_n += 1
 			units += 1
 		# Phase 2: nearest no-data entry -> TG pool (disk read first).
 		while threadgen_inflight.size() < threadgen_max:
@@ -7723,7 +7943,45 @@ func _drain_deferred_free() -> void:
 		_free_chunk_key(String(fe["key"]))
 		n += 1
 
+# AC-0275 (user decision A): a column that crossed OUT of the high band on
+# a recenter is regenerated at its new band's tier. The partial (or full)
+# high is freed, the data slabs are stamped high-complete at the current
+# data (the high probe stops owing them), and the slab wave re-owns the
+# slabs (the low probe owes them at the new tier). mesh_built goes back to
+# false: for an out-of-band column, "complete" = the low probe drains.
+func _demote_high_band_exit(c: Node3D, key: String) -> void:
+	var freed: int = int(c.demote_high())
+	if freed <= 0:
+		return
+	for si in range(c.data.size()):
+		if c.data[si] != null:
+			c.high_stamps[si] = int(c.data_gen)
+			# the double-LOD guard's terminal mark (low_failed = data_gen,
+			# no instance) would read as "no low owed" once the high is
+			# gone - an invisible slab. Re-open the obligation so the
+			# wave claims the slab at the new tier (a genuine all-air mark
+			# costs one re-sample, which re-marks it).
+			c.low_failed.erase(si)
+			# the placeholder: the freed slab has no high anymore and the
+			# wave hasn't lowered it yet - the fog box covers the gap
+			# (the wave drops it on the low attach). Without this the
+			# demote ring shows see-through holes for the wave's fill
+			# time (measured 1500+ slabs at r16 after a band jump).
+			if not (c.low_mask & (1 << si)) and not (c.fog_mask & (1 << si)):
+				_fog_ensure_slab(c, si)
+	c.mesh_built = false
+	_hslab_probe_invalidate(c)
+	_low_probe_invalidate(c)
+	demoted_cols_n += 1
+	if timing or _tm_debug:
+		print("DEMOBAND %s freed=%d" % [key, freed])
+
+
 func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
+	# AC-0275: the PRE-move center (the band-exit demote compares each
+	# column's old and new taxi).
+	var opcx := last_pcx
+	var opcz := last_pcz
 	last_pcx = int(floorf(wx / 16.0))
 	last_pcz = int(floorf(wz / 16.0))
 	# AC-0257: the AC-0234 vertical window recompute/tier-0 sync are gone —
@@ -7796,6 +8054,13 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 				c.candidate = false
 				c.cand_since = 0
 				_stage_check(c, key)
+			# AC-0275 (user decision A): the column just LEFT the high band
+			# on this recenter - demote it to the new band's tier (the
+			# wave re-owns the slabs; the double-LOD stragglers die).
+			if not c.data.is_empty() \
+					and (absi(int(c.cx) - opcx) + absi(int(c.cz) - opcz)) < medium_start_r \
+					and (absi(dx) + absi(dz)) >= medium_start_r:
+				_demote_high_band_exit(c, key)
 		else:
 			if not c.candidate:
 				if _enter_candidate(key, c):

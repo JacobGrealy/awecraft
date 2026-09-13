@@ -1,17 +1,19 @@
 meta:
-  updated_at: 2026-09-12T21:15
+  updated_at: 2026-09-12T21:53
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0277
 - AC-0270
+- AC-0278
+- AC-0277
 - AC-0269
-- AC-0266
-- AC-0268
-- AC-0267
 - AC-0265
+- AC-0268
+- AC-0266
 - AC-0271
+- AC-0267
+- AC-0264
 - AC-0093
 - AC-0038
 - AC-0039
@@ -37,6 +39,22 @@ queue:
 - AC-0176
 - AC-0259
 intake:
+- id: AC-0278
+  title: remove-candidate-flag-single-orchestrator-check
+  priority: 2
+  status: open
+  notes: '1) User Story: As a player I want chunks at r+1 held as data-only and at r+2 freed without a
+    sticky candidate flag, so meshes don''t get stuck and show correctly when flying over them.
+
+
+    2) Technical Details: Remove c.candidate boolean. Orchestrator on recenter does single distance check:
+    inside r -> queue for gen/mesh, at r+1 -> keep data-only hidden, at r+2 -> free. Remove scattered
+    candidate checks from picks and fog/low/high gates (replace with distance/band checks). Single source
+    of truth fixes stuck-mesh bug where candidate out of sync kept mesh from generating even at tier 0.'
+  area: perf
+  effort: M
+  depends_on:
+  - AC-0257
 - id: AC-0277
   title: predictive-recenter-ahead-target
   priority: 2
@@ -57,8 +75,8 @@ intake:
   title: hide-mouse-on-controller-input
   priority: 2
   status: done
-  updated_at: 2026-09-12T17:30
-  completed_at: 2026-09-12T17:30
+  updated_at: 2026-09-12T21:23
+  completed_at: 2026-09-12T21:23
   notes: "1) User Story: As a player using a controller I want the mouse cursor hidden as soon as I press\
     \ any controller button including sticks/triggers, so it doesn't distract.\n\n2) Technical Details:\
     \ godot/input + UI. Detect any Joypad button/motion/trigger event, hide cursor (Input.set_mouse_mode\
@@ -100,8 +118,9 @@ intake:
 - id: AC-0270
   title: leaf-blocks-collision-and-decay
   priority: 2
-  status: open
-  updated_at: 2026-09-12T21:15
+  status: done
+  updated_at: 2026-09-12T21:16
+  completed_at: 2026-09-12T21:16
   notes: '1) User Story: As a player leaves should be solid (can''t walk/fall through) and naturally decay
     like Minecraft when no log within 6 blocks via leaf path, while player-placed leaves never decay;
     decay timer ticks only in sim distance but persists when back in sim so value must be saved.
@@ -11387,11 +11406,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-12T21:06
-  updated_at: 2026-09-12T21:06
-  completed_at: null
+  updated_at: 2026-09-12T21:53
+  completed_at: 2026-09-12T21:53
   waiting_on: null
   parent_id: null
   notes: '## 1) User Story
@@ -11422,5 +11441,17 @@ intake:
     while still moving forward; assert speed drops to WALK on stop and on reverse; assert fov > base while
     sprinting and fov == base after stop), gamepad arm (L3 tap latch), boot 0.
 
-    '
+
+
+    ## Shipped (2026-09-12)
+
+    Commit c212bec. Gates: boot 0; player ok (sprint_ok: walk 4.3 / latched 5.6 with no key held / FOV
+    82.5 mid-sprint, 75.0 after stop, 82.4 in flight / re-walk 4.3 after clear / backwards clears); gamepad
+    ok (l3_latch_ok: L3 tap while walking, release, sprint persists at 5.6, cleared on stop; mouse_hide_ok
+    incl. AC-0272 click-while-hidden); battery ok, GENHASH 0 0 = 80b904c0e5f085eef1e839459058c706 EXACT.
+    Build AweCraft-20260912-2151: :8080/AweCraft.zip sha256 246d7556367d85a2f936d802e3b474e8fb4e1ae41a05f3d09a327dba047c9316
+    byte-identical (script also serves :8082 fallback; 8080/8081 held by the standing serve). Harness
+    note: the seed-44 spawn area is dotted with deterministic trees (trunk blocks at (8,137,1) and (2,137,5))
+    - the player/gamepad sprint tests compass-scan for a clear walk line and turn around for the re-walk
+    leg.'
   comments: []

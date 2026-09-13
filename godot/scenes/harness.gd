@@ -313,6 +313,46 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			player = main._spawn_player()
 			await _leaves_test(spawn)
 			return
+		if logic == "loadlog":
+			# AC-0274: the loading-window timeline arm - boots EXACTLY like
+			# the menu does (start_loading BEFORE the recenter, like
+			# start_game), then waits for the window to close (or a wall
+			# cap) and reports. The per-second LOADLOG lines (gated by
+			# AWECRAFT_LOADLOG=1 on the world) are the evidence: pct
+			# timeline, both pool depths, io/gen counts.
+			world.start_loading("Generating world...")
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			var lt0 := Time.get_ticks_msec()
+			var lmax := 0
+			while world.loading_active and Time.get_ticks_msec() - lt0 < 600000:
+				await get_tree().process_frame
+				var lm: int = int(world._high_band_meshed())
+				if lm > lmax:
+					lmax = lm
+			Debug.result({
+				"load_stalled": world.loading_active,
+				"load_secs": round(float(Time.get_ticks_msec() - lt0) / 100.0) / 10.0,
+				"meshed_max": lmax,
+				"meshed_target": world._loading_target,
+				"radius": int(world.render_radius),
+				"medium_start": int(world.medium_start_r),
+				"sim": int(world.band0_r),
+			})
+			get_tree().quit()
+			return
+		if logic == "lightstate":
+			# AC-0273: the light-state probe - per-chunk eff statistics
+			# (deep-sky-light leaks + mean air eff) for the r4 band at
+			# first landing, then a forced edit-rebuild on the worst
+			# chunk (the user's "breaking a block fixes it") and the
+			# after stats.
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _lightstate_test(spawn)
+			return
 		if logic == "pausemenu":
 			# AC-0185: Esc/P pause-menu toggle + Options reachability.
 			world.recenter(spawn.x, spawn.z, true)
@@ -2690,6 +2730,287 @@ func _gamepad_test(spawn: Vector3) -> void:
 # transition), so one key press can never open and close in the same
 # flush. Keys are synthesized (fresh event per send, AC-0243) and every
 # assertion polls STATE via _await_state (input flushes on a later frame).
+# AC-0273: the light-state probe. Per-chunk eff statistics at first
+# landing (deep-sky-light leaks + mean air eff), then a forced
+# edit-rebuild of the worst chunk and the after stats - the user's
+# "breaking a block fixes the bad chunk" made measurable.
+# AC-0275: the low-band census (double-LOD slabs + the hole slabs with no
+# instance of any kind, fog/low/mask excluded; air above the top ignored).
+func _lod_census() -> Dictionary:
+	var dl := 0
+	var dl_chunks := 0
+	var holes := 0
+	var holes_demote_ring := 0
+	for key in world.chunks:
+		var c = world.chunks.get(key)
+		if c == null or c.data.is_empty():
+			continue
+		var taxi := absi(int(c.cx) - world.last_pcx) + absi(int(c.cz) - world.last_pcz)
+		if taxi < world.medium_start_r:
+			continue
+		var n2 := 0
+		for si in range(c.data.size()):
+			if c.data[si] == null:
+				continue
+			if c.slabs[si].mesh_instance != null and c.low_mask & (1 << si):
+				n2 += 1
+			var s3 = c.slabs[si]
+			if s3.mesh_instance == null and s3.fluid_instance == null and s3.flora_instance == null and not (c.low_mask & (1 << si)) and not (c.fog_mask & (1 << si)) and int(c.low_failed.get(si, -1)) != int(c.data_gen):
+				holes += 1
+				if taxi <= world.medium_start_r + 2:
+					holes_demote_ring += 1
+		if n2 > 0:
+			dl += n2
+			dl_chunks += 1
+	return {"dl": dl, "dl_chunks": dl_chunks, "holes": holes, "holes_demote_ring": holes_demote_ring}
+
+# AC-0273: the slab's opaque-surface vertex colors keyed by quantized
+# position (the baked-light A/B: first landing vs edit rebuild).
+func _slab_color_map(c, si: int) -> Dictionary:
+	var mi = c.slabs[si].mesh_instance
+	if mi == null or mi.mesh == null:
+		return {}
+	var m: ArrayMesh = mi.mesh
+	var out: Dictionary = {}
+	for surf in range(m.get_surface_count()):
+		var arrs = m.surface_get_arrays(surf)
+		if arrs.size() < 4 or not (arrs[3] is PackedColorArray) or int(arrs[3].size()) == 0:
+			continue
+		var cols: PackedColorArray = arrs[3]
+		var posv: Array = arrs[0]
+		for i in range(cols.size()):
+			var p: Vector3 = posv[i]
+			var k := "%d,%d,%d" % [int(p.x * 4.0), int(p.y * 4.0), int(p.z * 4.0)]
+			var cc: Color = cols[i]
+			out[k] = "%d,%d,%d,%d" % [int(cc.r * 1000.0), int(cc.g * 1000.0), int(cc.b * 1000.0), int(cc.a * 1000.0)]
+	return out
+
+
+func _light_eff_stats(c, H: int) -> Dictionary:
+	var arr: PackedByteArray = c.last_eff.get("arr", PackedByteArray())
+	if arr.is_empty():
+		return {"have": false}
+	var leaks := 0
+	var air_n := 0
+	var eff_sum := 0
+	for x in range(16):
+		for z in range(16):
+			var topz := -1
+			for y in range(H - 1, -1, -1):
+				if c.get_local(x, y, z) != 0:
+					topz = y
+					break
+			for y in range(0, mini(topz + 1, H)):
+				var b: int = c.get_local(x, y, z)
+				if b != 0:
+					continue
+				air_n += 1
+				var e: int = int(arr[y * 256 + z * 16 + x])
+				eff_sum += e
+				if e == 15 and topz - y >= 2:
+					leaks += 1
+	return {
+		"have": true,
+		"leaks": leaks,
+		"air_n": air_n,
+		"mean_eff": roundf(float(eff_sum) / maxf(1.0, float(air_n)) * 100.0) / 100.0,
+	}
+
+
+func _lightstate_test(spawn: Vector3) -> void:
+	var H: int = Data.HEIGHT
+	# AWECRAFT_LS_RADIUS: default 4 (drain-only); > 8 activates the
+	# med/low wave (the double-LOD zone - AC-0273's field of interest).
+	var ls_env := OS.get_environment("AWECRAFT_LS_RADIUS")
+	world.render_radius = int(ls_env) if ls_env != "" else 4
+	var waited := 0
+	var built := 0
+	while waited < 3600:
+		built = 0
+		for key in world.chunks:
+			var c = world.chunks.get(key)
+			if c != null and not c.data.is_empty() and c.mesh_built and not c.last_eff.is_empty():
+				built += 1
+		if built >= 20:
+			break
+		await get_tree().physics_frame
+		waited += 1
+
+	var grid: Dictionary = {}
+	var worst_key := ""
+	var worst_leaks := -1
+	for key in world.chunks:
+		var c = world.chunks.get(key)
+		if c == null or c.data.is_empty() or not c.mesh_built or c.last_eff.is_empty():
+			continue
+		var st := _light_eff_stats(c, H)
+		grid["%d,%d" % [int(c.cx), int(c.cz)]] = st
+		if st.get("have", false) and int(st["leaks"]) > worst_leaks:
+			worst_leaks = int(st["leaks"])
+			worst_key = key
+	# A/B: ALWAYS compare first-build eff vs edit-rebuild eff on a fixed
+	# chunk - the delta (if any) reveals what the rebuild corrects.
+	var ab_key := "0,1"
+	var ab = world.chunks.get(ab_key)
+	var ab_report: Dictionary = {}
+	if ab != null and not ab.data.is_empty() and not ab.last_eff.is_empty():
+		var ab_before := _light_eff_stats(ab, H)
+		var ab_arr0: PackedByteArray = ab.last_eff.get("arr", PackedByteArray())
+		var ab_si0 := -1
+		var ab_colors0: Dictionary = {}
+		var ab_sx := 0
+		var ab_sy := -1
+		var ab_sz := 0
+		for x in range(16):
+			for z in range(16):
+				for y in range(H - 1, -1, -1):
+					if ab.get_local(x, y, z) != 0:
+						ab_sx = x
+						ab_sy = y
+						ab_sz = z
+						break
+				if ab_sy >= 0:
+					break
+			if ab_sy >= 0:
+				break
+		var ab_rw := 0
+		if ab_sy >= 0:
+			ab_si0 = ab_sy >> 4
+			ab_colors0 = _slab_color_map(ab, ab_si0)
+			world.set_block(int(ab.cx) * 16 + ab_sx, ab_sy, int(ab.cz) * 16 + ab_sz, 0)
+			while ab_rw < 240:
+				await get_tree().physics_frame
+				ab_rw += 1
+				var ab_now: PackedByteArray = ab.last_eff.get("arr", PackedByteArray())
+				if ab_now.size() == ab_arr0.size() and ab_now != ab_arr0:
+					break
+		var ab_after := _light_eff_stats(ab, H)
+		var ab_arr1: PackedByteArray = ab.last_eff.get("arr", PackedByteArray())
+		var diffs := 0
+		if ab_arr0.size() == ab_arr1.size():
+			for i in range(ab_arr0.size()):
+				if ab_arr0[i] != ab_arr1[i]:
+					diffs += 1
+		var ab_colors1 := _slab_color_map(ab, ab_si0) if ab_si0 >= 0 else {}
+		var vc_common := 0
+		var vc_diff := 0
+		for k in ab_colors0:
+			if ab_colors1.has(k):
+				vc_common += 1
+				if ab_colors0[k] != ab_colors1[k]:
+					vc_diff += 1
+		ab_report = {
+			"chunk": ab_key,
+			"cell": [ab_sx, ab_sy, ab_sz],
+			"slab": ab_si0,
+			"before": ab_before,
+			"after": ab_after,
+			"arr_diff_cells": diffs,
+			"arr_size": ab_arr0.size(),
+			"vc_common": vc_common,
+			"vc_diff": vc_diff,
+			"vc_n0": ab_colors0.size(),
+			"vc_n1": ab_colors1.size(),
+			"waited_frames": ab_rw,
+		}
+	# AC-0275 movement phase: the player jumps 8.5 chunks - the original
+	# high-band columns drop into the MED band and the wave starts
+	# lowering the partially-high ones. low_on_high_n (the canary) counts
+	# any double-LOD attach during the churn; the census counts the live
+	# state at the end.
+	var loh_pre: int = int(world.low_on_high_n)
+	var census_pre := _lod_census()
+	var pp: Node3D = main.player
+	pp.velocity = Vector3.ZERO
+	Debug.teleport(pp.position.x, pp.position.y, pp.position.z - 140.0)
+	for i in 8:
+		await get_tree().physics_frame
+	await main._await_spawn_floor(pp.position, 600)
+	var moh := 0
+	for i in 1800:
+		await get_tree().physics_frame
+		moh += 1
+		if int(world.low_on_high_n) > loh_pre:
+			break
+	var loh_post: int = int(world.low_on_high_n)
+	var dl := 0
+	var dl_chunks := 0
+	var holes := 0  # AC-0275: data slabs with NO instance of any kind (an invisible slab)
+	var holes_demote_ring := 0  # the just-demoted ring (taxi 8..medium+1): a regression signal
+	for key in world.chunks:
+		var c = world.chunks.get(key)
+		if c == null or c.data.is_empty():
+			continue
+		var taxi := absi(int(c.cx) - world.last_pcx) + absi(int(c.cz) - world.last_pcz)
+		if taxi < world.medium_start_r:
+			continue  # high band: owed to the high lane (its own pending probe)
+		var n2 := 0
+		for si in range(c.data.size()):
+			if c.data[si] == null:
+				continue  # air above the column top - nothing is owed
+			if c.slabs[si].mesh_instance != null and c.low_mask & (1 << si):
+				n2 += 1
+			var s3 = c.slabs[si]
+			if s3.mesh_instance == null and s3.fluid_instance == null and s3.flora_instance == null \
+					and not (c.low_mask & (1 << si)) and not (c.fog_mask & (1 << si)) \
+					and int(c.low_failed.get(si, -1)) != int(c.data_gen):
+				holes += 1
+				if taxi <= world.medium_start_r + 2:
+					holes_demote_ring += 1
+		if n2 > 0:
+			dl += n2
+			dl_chunks += 1
+	var report: Dictionary = {"grid": grid, "worst": null, "wash_detected": worst_leaks > 0, "ab": ab_report, "low_on_high_n": loh_post, "demoted": int(world.demoted_cols_n), "stragglers": int(world.hslab_stragglers_n), "move": {
+		"loh_pre": loh_pre,
+		"loh_post": loh_post,
+		"delta": loh_post - loh_pre,
+		"frames_waited": moh,
+		"double_lod_slabs_now": dl,
+		"double_lod_chunks_now": dl_chunks,
+		"hole_slabs_now": holes, "holes_pre": int(census_pre["holes"]),
+		"holes_demote_ring": holes_demote_ring,
+	}}
+	if worst_key != "" and worst_leaks > 0:
+		var wc = world.chunks.get(worst_key)
+		var before := _light_eff_stats(wc, H)
+		# find a surface block in the chunk and break it (the user's fix)
+		var sx := 0
+		var sy := -1
+		var sz := 0
+		for x in range(16):
+			for z in range(16):
+				for y in range(H - 1, -1, -1):
+					if wc.get_local(x, y, z) != 0:
+						sx = x
+						sy = y
+						sz = z
+						break
+				if sy >= 0:
+					break
+			if sy >= 0:
+				break
+		if sy >= 0:
+			world.set_block(int(wc.cx) * 16 + sx, sy, int(wc.cz) * 16 + sz, 0)
+			var arr_before: PackedByteArray = wc.last_eff.get("arr", PackedByteArray())
+			var rw := 0
+			while rw < 240:
+				await get_tree().physics_frame
+				rw += 1
+				var arr_now: PackedByteArray = wc.last_eff.get("arr", PackedByteArray())
+				if arr_now.size() == arr_before.size() and arr_now != arr_before:
+					break
+			var after := _light_eff_stats(wc, H)
+			report["worst"] = {
+				"chunk": worst_key,
+				"cell": [sx, sy, sz],
+				"before": before,
+				"after": after,
+				"waited_frames": rw,
+			}
+	Debug.result(report)
+	get_tree().quit()
+
+
 func _pausemenu_test() -> void:
 	await _pausemenu_test_body()
 	get_tree().quit()
@@ -2871,9 +3192,28 @@ func _interact_test_body() -> void:
 		Game.mode = "play"
 	for i in 5:
 		await get_tree().physics_frame
+	# AC-0274 gate fix: the aim scan races the spawn column's data landing
+	# (5 frames = 83 ms < the gen lead time on a loaded machine - the arm
+	# failed at HEAD with "no breakable aim spot near spawn"). Wait for the
+	# spawn column before scanning.
+	var sp0: Vector3 = world.spawn_point()
+	var sw := 0
+	while sw < 900 and world.surface_top(int(sp0.x), int(sp0.z)) <= 0:
+		await get_tree().physics_frame
+		sw += 1
 	var aim := main._find_aim_spot()
 	if aim.is_empty():
-		Debug.result({"error": "no breakable aim spot near spawn"})
+		var sp: Vector3 = world.spawn_point()
+		var sp_top: int = world.surface_top(int(sp.x), int(sp.z))
+		var cc0 = world.chunks.get(world._key(0, 0))
+		var diag := {
+			"spawn": [int(sp.x), int(sp.y), int(sp.z)],
+			"top_at_spawn": sp_top,
+			"block_at_top": world.get_block(int(sp.x), sp_top, int(sp.z)),
+			"chunks": world.chunks.size(),
+			"spawn_col_data": cc0 != null and not cc0.data.is_empty(),
+		}
+		Debug.result({"error": "no breakable aim spot near spawn", "diag": diag})
 		return
 	var target: Vector3i = aim["cell"]
 	var tid: int = int(aim["id"])
@@ -2887,10 +3227,36 @@ func _interact_test_body() -> void:
 		await get_tree().physics_frame
 	var highlight_visible: bool = p.highlight.visible
 	p.start_mine()
-	var frames := int(ceilf(float(Data.block(tid).hard) * 60.0)) + 20
-	for i in range(frames):
+	# AC-0274 gate fix: the mine wait was a fixed FRAME count (hard*60+20,
+	# i.e. seconds at 60 fps) - headless runs at ~96 fps (dt ~10 ms) so the
+	# window was ~40% short of the real mine duration (measured
+	# prog_max 0.972 at 56 frames). Wait on wall clock until the block is
+	# gone (3 s cap).
+	var hit_frames := 0
+	var last_hit: Dictionary = {}
+	var prog_max := 0.0
+	var prog_n := 0
+	var frames := 0
+	var t_end := Time.get_ticks_msec() + 3000
+	while Time.get_ticks_msec() < t_end and world.get_block(target.x, target.y, target.z) != 0:
 		await get_tree().physics_frame
+		frames += 1
+		var h: Dictionary = p.aim_hit()
+		if h.hit:
+			hit_frames += 1
+			last_hit = h
+		if p._mining:
+			prog_max = maxf(prog_max, float(p._mine_prog))
+			prog_n += 1
 	p.release_mine()
+	var mine_diag := {
+		"hit_frames": hit_frames,
+		"frames": frames,
+		"last_hit": [last_hit.get("cell", Vector3i.ZERO).x, last_hit.get("cell", Vector3i.ZERO).y, last_hit.get("cell", Vector3i.ZERO).z] if last_hit.hit else null,
+		"last_id": last_hit.get("id", -1) if last_hit.hit else -1,
+		"prog_max": prog_max,
+		"prog_frames": prog_n,
+	}
 	for i in 3:
 		await get_tree().physics_frame
 	var after_mine: int = world.get_block(target.x, target.y, target.z)
@@ -2924,6 +3290,7 @@ func _interact_test_body() -> void:
 	if place_cell != Vector3i.ZERO:
 		after_place = world.get_block(place_cell.x, place_cell.y, place_cell.z)
 	Debug.result({
+		"mine_diag": mine_diag,
 		"target_cell": [target.x, target.y, target.z],
 		"breakable_id": tid,
 		"highlight_visible": highlight_visible,
@@ -8089,7 +8456,8 @@ func _r16_test(spawn: Vector3) -> void:
 			"low_cache_hit_n": int(world.low_cache_hit_n),
 			"catch_up_frames": qidle,
 			"catch_up": catch_up,
-			"catch_up_ok": catch_up >= 1 or int(far1["far_high"]) > int(far0["far_high"]),
+			"demoted_cols_n": int(world.demoted_cols_n),
+			"catch_up_ok": int(world.demoted_cols_n) > 0 and int(far1["far_low"]) > 100 and int(far1["far_high"]) <= 20,
 			"no_downgrade_ok": int(world.low_downgrade_n) == 0,
 		},
 		# AC-0218: neighbor-dirty evidence — per-phase deltas of the world
@@ -9751,11 +10119,27 @@ func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 					rebuilds += 1
 					built_set.erase(key)
 		i += 1
-	# Terminal pop check: a previously-built chunk still unbuilt at phase end.
+	# Terminal pop check: a previously-built chunk still unbuilt at phase
+	# end. AC-0275: a DEMOTED chunk (the high-band exit frees its high
+	# meshes on recenter - the band-exit regeneration) is not a pop while
+	# its slabs are re-covered (a fog veil or a low box) or still pending
+	# (the wave owes them) - only the slabs with no instance of any kind
+	# and no obligation count as a true pop.
 	var lost := 0
 	for key in built_set:
 		var c: Node3D = world.chunks.get(key)
-		if c != null and not c.mesh_built:
+		if c == null or c.mesh_built:
+			continue
+		var holes_c := 0
+		for si in range(c.data.size()):
+			if c.data[si] == null:
+				continue
+			var s3 = c.slabs[si]
+			if s3.mesh_instance == null and s3.fluid_instance == null and s3.flora_instance == null \
+					and not (c.low_mask & (1 << si)) and not (c.fog_mask & (1 << si)) \
+					and int(c.low_failed.get(si, -1)) != int(c.data_gen):
+				holes_c += 1
+		if holes_c > 0:
 			lost += 1
 	return {
 		"n": n_frames,
