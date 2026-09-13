@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-13T09:57
+  updated_at: 2026-09-13T10:33
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0267
 - AC-0264
 - AC-0093
 - AC-0038
@@ -653,7 +652,9 @@ intake:
 - id: AC-0267
   title: controller-b-toggle-crouch
   priority: 2
-  status: open
+  status: done
+  updated_at: 2026-09-13T10:33
+  completed_at: 2026-09-13T10:33
   notes: '1) User Story: As a player I want pressing B on controller to toggle crouch — lowered camera
     and hitbox, slower walk like reverse sprint, and edge guard so I can''t walk off a block onto air
     while crouched but can still move.
@@ -663,7 +664,58 @@ intake:
     lerp camera height and shrink hitbox while crouched, scale speed down ~0.3x like reverse sprint. Edge
     guard: before applying move, check block below forward edge — if air and crouched, clamp movement
     so player stops at edge but can still step back. Verify toggle, height/hitbox, speed, and no fall
-    off flat surface while crouched.'
+    off flat surface while crouched.
+
+
+    Closed 20260913 overnight (round 3, after AC-0271). B/Circle toggles
+
+    crouch in ground play. Eye (Camera3D) lerps 1.62->1.1; the head-in-water
+
+    + VM-light eye checks now read camera.position.y LIVE (not the EYE
+
+    const); the capsule shrinks 1.8->1.2 with the shape node at height/2
+
+    (feet stay at the origin); ground speed = WALK*0.3 (wins over latched
+
+    sprint; flight/swim-up exempt). EDGE GUARD: crouched + on floor, probe
+
+    0.45 ahead of the center along the INTENDED direction at foot level
+
+    (floor(position.y - 0.1)); if air, strip the velocity''s component along
+
+    that direction - on the VELOCITY (not the lerp target) or the player
+
+    drifts ~10 cm into the void over the 0.1 s convergence and falls; back/
+
+    lateral components survive. B keeps its flight meaning (AC-0264: held
+
+    down key in flight - the toggle branch is `not flying and not dead`;
+
+    toggling flight and respawning un-crouch). Arm AWECRAFT_LOGIC=crouch
+
+    (6/6): toggle, eye+capsule shrink, speed ratio (read mid-convergence -
+
+    same k for both so the ratio is exact at any sample time), guard stop
+
+    on a real plateau edge, back-up, uncrouched walk-off. _find_flat_edge
+
+    MUST require the -x (back) side FLAT: the first edge found had a
+
+    1-block step-up behind - the back-up check then stopped on REAL physics
+
+    (a step-up wall), not the guard (arm scenario bug, not a product bug).
+
+    Also note: crouch blocking a 1-block step-down on any side is
+
+    MC-correct behavior (that''s what crouch is for). GATES: boot 0 err;
+
+    crouch 6/6; gamepad ok (B flight-down + menu close unchanged); battery
+
+    all + GENHASH 80b904c0e5f085eef1e839459058c706 EXACT. No C++/world code.
+
+    Shipped AweCraft[20260913-1031] at :8080 (zip sha 9b797225...
+
+    byte-matched).'
   area: player
   effort: M
   depends_on: []
