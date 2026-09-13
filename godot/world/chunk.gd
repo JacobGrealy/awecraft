@@ -61,10 +61,11 @@ func update_top() -> void:
 	# palette index ops over the slab store, no GDScript _slab_flat
 	# expansion + per-cell Variant loop). -1 on an empty column, as before.
 	top = -1 if data.is_empty() else int(ChunkIO.io_cpp().slabs_top(data))
-# AC-0080 two-stage hysteresis: candidate = at Chebyshev r+1 with expensive
-# parts killed (mesh/collision), data+edits kept; cand_since = count of
-# recenter events spent at >= r+2 (free at >= 2).
-var candidate := false
+# AC-0278: the sticky `candidate` boolean is GONE - candidacy is derived
+# from distance at the single recenter orchestrator (in-set / one-ring /
+# two-ring), no stored flag to drift out of sync. cand_since = count of
+# consecutive recenter events spent two rings out (free at >= 2) - the
+# hysteresis counter stays (it is distance-derived state, not a flag).
 var cand_since := 0
 # AC-0152: 0 = full 16x16x16 (ticks + collide), 1 = full mesh, no
 # tick/collide (same builder path as band 0), 3 = collar/ring data-only
@@ -1611,8 +1612,7 @@ func _pool_reset() -> void:
 	# light
 	saved_light = {}
 	light_recomputes = 0
-	# streaming hysteresis
-	candidate = false
+	# streaming hysteresis (AC-0278: the candidate flag is gone)
 	cand_since = 0
 	band = 0
 	# placeholders (the nodes were already returned to the world pools)

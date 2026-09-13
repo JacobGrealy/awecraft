@@ -1291,8 +1291,9 @@ func _pool_free_all() -> void:
 # cheap. Runs on every data landing for a queued column with no mesh,
 # before low starts. TIER 0 (the column under the player) skips the wave
 # straight to high — never fall through. CANDIDATES (the r+1 far band)
-# are the wave's primary target — the c.candidate flag must NOT exclude
-# a column from fog/low (AC-0231 fix: the far band was empty-then-high).
+# are the wave's primary target — the out-of-set (one-ring) state must
+# NOT exclude a column from fog/low (AC-0231 fix: the far band was
+# empty-then-high; AC-0278: that exclusion is now a distance fact).
 # A slab already low/high never re-fogs.
 func _low_fog_for(c: Node3D) -> void:
 	# AC-0257: the vwin window is gone (no caps, no culled slabs) — every
@@ -7839,7 +7840,8 @@ func _enter_candidate(key: String, c: Node3D) -> bool:
 	# instantly (no re-queue, no re-mesh, no collision gap). True free
 	# stays at r+2 after the 2-recenter
 	# hysteresis in recenter(); the retained mesh dies with the node.
-	c.candidate = true
+	# AC-0278: no flag to set - the out-of-set distance IS the candidacy;
+	# this is the one-time entry work for a chunk that just left the set.
 	c.cand_since = 0
 	# AC-0231: the old LOD cache clear (lod_pending/clear_lod_cache) is gone
 	# with band 2 — the retained mesh is full fidelity (keep-high).
@@ -8049,11 +8051,28 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 			continue
 		var dx := int(c.cx) - pcx
 		var dz := int(c.cz) - pcz
+		var odx := int(c.cx) - opcx
+		var odz := int(c.cz) - opcz
 		if in_stream_set(dx, dz):
-			if c.candidate:
-				c.candidate = false
+			# AC-0278: re-entry is a distance fact (out of set w.r.t. the
+			# previous center, in now) - no flag to clear.
+			if not in_stream_set(odx, odz):
 				c.cand_since = 0
 				_stage_check(c, key)
+			# AC-0278 (the stuck-mesh fix): the single-source re-queue.
+			# A high-band chunk that holds data, has no high mesh, and has
+			# NO build entry gets one. Previously this only happened in
+			# the WANT walk - which DEBOUNCED recenters skip (AC-0213) -
+			# so a build entry stripped when the chunk candidated on exit
+			# could strand: in set, data, never meshed again (the report:
+			# "candidate out of sync kept mesh from generating even at
+			# tier 0" while flying back over it). Harmless over-queue:
+			# _enqueue_build dedupes, and the drain's high_only pool gate
+			# only dispatches entries whose chunk is in the high band.
+			var htx := absi(int(c.cx) - pcx) + absi(int(c.cz) - pcz)
+			if not c.data.is_empty() and not c.mesh_built and htx < medium_start_r \
+					and queued_keys.get(key) != "build":
+				_enqueue_build(int(c.cx), int(c.cz))
 			# AC-0275 (user decision A): the column just LEFT the high band
 			# on this recenter - demote it to the new band's tier (the
 			# wave re-owns the slabs; the double-LOD stragglers die).
@@ -8062,7 +8081,11 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 					and (absi(dx) + absi(dz)) >= medium_start_r:
 				_demote_high_band_exit(c, key)
 		else:
-			if not c.candidate:
+			# AC-0278: "just exited" is a distance fact (in set w.r.t. the
+			# previous center, out now) - the one-time entry work (clear
+			# pending sets, strip the build entry) runs exactly once per
+			# exit, same as the old flag transition.
+			if in_stream_set(odx, odz):
 				if _enter_candidate(key, c):
 					cand_builds.append(key)
 			# Free once TWO rings clear the set after 2 recenter events;

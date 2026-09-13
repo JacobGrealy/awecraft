@@ -701,6 +701,9 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		if logic == "edgeretain":
 			await _edgeretain_test(spawn)
 			return
+		if logic == "candflag":
+			await _candflag_test(spawn)
+			return
 		if logic == "editfront":
 			await _editfront_test(spawn)
 			return
@@ -15755,7 +15758,7 @@ func _bandmap_test(spawn: Vector3) -> void:
 			var k0: String = "%d,%d" % [int(c.cx), int(c.cz)]
 			var mb: bool = bool(c.mesh_built)
 			if prev_b0.get(k0, false) and not mb:
-				print("B0LOST %s f3x3=%d data_empty=%s cand=%s queued=%s" % [k0, waited, str(c.data.is_empty()), str(c.candidate), str(world.queued_keys.has(k0))])
+				print("B0LOST %s f3x3=%d data_empty=%s cand=%s queued=%s" % [k0, waited, str(c.data.is_empty()), str(not world.in_stream_set(int(c.cx) - world.last_pcx, int(c.cz) - world.last_pcz)), str(world.queued_keys.has(k0))])
 			prev_b0[k0] = mb
 		var allb := true
 		for dx in range(-1, 2):
@@ -15787,7 +15790,7 @@ func _bandmap_test(spawn: Vector3) -> void:
 			var k0: String = "%d,%d" % [int(c.cx), int(c.cz)]
 			var mb: bool = bool(c.mesh_built)
 			if prev_b0.get(k0, false) and not mb:
-				print("B0LOST %s fswap=%d data_empty=%s cand=%s queued=%s" % [k0, swap_waited, str(c.data.is_empty()), str(c.candidate), str(world.queued_keys.has(k0))])
+				print("B0LOST %s fswap=%d data_empty=%s cand=%s queued=%s" % [k0, swap_waited, str(c.data.is_empty()), str(not world.in_stream_set(int(c.cx) - world.last_pcx, int(c.cz) - world.last_pcz)), str(world.queued_keys.has(k0))])
 			prev_b0[k0] = mb
 		await get_tree().physics_frame
 		swap_waited += 1
@@ -15816,7 +15819,7 @@ func _bandmap_test(spawn: Vector3) -> void:
 			var k0: String = "%d,%d" % [int(c.cx), int(c.cz)]
 			var mb: bool = bool(c.mesh_built)
 			if prev_b0.get(k0, false) and not mb:
-				print("B0LOST %s f=%d data_empty=%s cand=%s queued=%s" % [k0, sample_waited, str(c.data.is_empty()), str(c.candidate), str(world.queued_keys.has(k0))])
+				print("B0LOST %s f=%d data_empty=%s cand=%s queued=%s" % [k0, sample_waited, str(c.data.is_empty()), str(not world.in_stream_set(int(c.cx) - world.last_pcx, int(c.cz) - world.last_pcz)), str(world.queued_keys.has(k0))])
 			prev_b0[k0] = mb
 		if sample_waited % 15 == 0:
 			var bn := 0
@@ -15870,7 +15873,7 @@ func _bandmap_test(spawn: Vector3) -> void:
 		if (b == 0 or b == 1) and not c.mesh_built:
 			var info: Dictionary = {
 				"key": key, "data_empty": c.data.is_empty(),
-				"queued": world.queued_keys.has(key), "cand": c.candidate,
+				"queued": world.queued_keys.has(key), "cand": not world.in_stream_set(int(c.cx) - world.last_pcx, int(c.cz) - world.last_pcz),
 			}
 			if b == 0:
 				unbuilt0.append(info)
@@ -16013,7 +16016,7 @@ func _er_sample(st: Dictionary, ph: String, pcx: int, pcz: int, back_phase: bool
 			continue
 		var dx2 := int(c2.cx) - pcx
 		var dz2 := int(c2.cz) - pcz
-		if not world.in_stream_set(dx2, dz2) and bool(c2.candidate) and not c2.mesh_built:
+		if not world.in_stream_set(dx2, dz2) and not c2.mesh_built:
 			st["killed"] += 1
 	if int(rc["one_retained"]) > int(st["one_ret_max"]):
 		st["one_ret_max"] = int(rc["one_retained"])
@@ -16046,6 +16049,200 @@ func _er_sample(st: Dictionary, ph: String, pcx: int, pcz: int, back_phase: bool
 		row["states"][e["k"]] = str(e["states"][-1])
 	st["samples"].append(row)
 	st["n"] = int(st["n"]) + 1
+
+
+# AC-0278 probe: the candidate flag is GONE - candidacy is a distance fact
+# and the recenter walk re-queues stranded high-band builds. The stuck the
+# flag state caused: a high-band chunk's build entry is stripped when it
+# candidated on exit; on a sustained flight the return crossings are
+# DEBOUNCED recenters (AC-0213/AC-0233 skip the WANT walk within 1 s /
+# 1-chunk / cover 4, forcing a full walk only every ~5 chunks), so a chunk
+# re-entering the HIGH band on a debounced crossing and the player then
+# LANDING left it with data, no mesh, no build entry, and no recenter left
+# to WANT it - a persistent hole in the high band. Repro (R=16, flying):
+#   T = high-band chunk on the +x axis (data, unbuilt, build queued); the
+#   probe then STRIPS T's entry (_strip_candidate_builds - the same work
+#   the exit walk does for a meshed chunk) to stand up the stranded state;
+#   U = BUILT chunk on the +x axis, closer to the core than T;
+#   fly -14 (away from both): T -> taxi 19-21 = candidate; U -> taxi 18-19
+#   = candidate, mesh RETAINED (hide-not-kill);
+#   fly back in 14 one-chunk crossings (full walk at moves 1/6/11): U frees
+#   after 2 two-out events; T re-enters the HIGH band (taxi 7) on move 12 =
+#   DEBOUNCED; the player lands (no further recenters).
+#   T must mesh (the walk's single-source re-queue on the debounced
+#   re-entry; the old code waits for a full walk that never comes).
+func _candflag_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	world.render_radius = 16
+	world.recenter(spawn.x, spawn.z, true, spawn.y)
+	player = main._spawn_player()
+	var p = Game.player
+	var pcx0 := int(world.last_pcx)
+	var pcz0 := int(world.last_pcz)
+	var wb := 0
+	while wb < 60000:
+		var allb := true
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				var c = world.chunks.get("%d,%d" % [pcx0 + dx, pcz0 + dz])
+				if c == null or not c.mesh_built:
+					allb = false
+					break
+			if not allb:
+				break
+		if allb:
+			break
+		await get_tree().process_frame
+		wb += 1
+	if wb >= 60000:
+		Debug.result({"ok": false, "error": "core never built", "waited": wb})
+		get_tree().quit()
+		return
+	# T: high-band (+x axis, taxi 5-7) in the natural streaming state (data,
+	# no mesh, build entry queued). U: BUILT (+x axis, closer than T).
+	var tk := ""
+	var tcx := 0
+	var wT := 0
+	while wT < 120000 and tk == "":
+		for dx in range(7, 4, -1):
+			var key := "%d,%d" % [pcx0 + dx, pcz0]
+			var c = world.chunks.get(key)
+			if c == null or c.data.is_empty() or c.mesh_built:
+				continue
+			if world.queued_keys.get(key) == "build":
+				tk = key
+				tcx = pcx0 + dx
+				break
+		if tk == "":
+			await get_tree().process_frame
+			wT += 1
+	if tk == "":
+		Debug.result({"ok": false, "error": "no streaming T (data, unbuilt, queued) on the +x axis"})
+		get_tree().quit()
+		return
+	var uk := ""
+	var ucx := 0
+	var wU0 := 0
+	while wU0 < 120000 and uk == "":
+		# udx 4 only: after the -14 flight U must sit OUTSIDE the stream
+		# set (taxi >= 18) to be a genuine retain (hide-not-kill) case -
+		# udx 2-3 land in the set and get the AC-0275 band-exit demote
+		# (mesh freed by design, not a retain).
+		var udx := 4
+		if pcx0 + udx < tcx:
+			var key := "%d,%d" % [pcx0 + udx, pcz0]
+			var c = world.chunks.get(key)
+			if c != null and c.mesh_built:
+				uk = key
+				ucx = pcx0 + udx
+		if uk == "":
+			await get_tree().process_frame
+			wU0 += 1
+		if uk == "":
+			await get_tree().process_frame
+			wU0 += 1
+	if uk == "":
+		Debug.result({"ok": false, "error": "no built U closer than T on the +x axis"})
+		get_tree().quit()
+		return
+	# Fly mode at a clear altitude across the whole flight line (terrain
+	# max + 8) so the one-chunk steps actually land where set.
+	var max_h := -1
+	for bx in range(int(pcx0 - 15) * 16, int(pcx0 + 2) * 16 + 16, 16):
+		var h := WorldGen.terrain_height(bx, int(pcz0) * 16 + 8, Game.world_seed)
+		max_h = maxi(max_h, h)
+	var fly_y := float(maxi(max_h, 0)) + 8.0
+	p.set_fly(true)
+	p.velocity = Vector3.ZERO
+	# Stand up the stranded state: T has data, no mesh, and its build entry
+	# is STRIPPED - exactly what the exit walk left it in when it
+	# candidated (the strip the walk does for any newly candidate chunk).
+	world._strip_candidate_builds([tk])
+	# one-chunk fly step: teleport + 8 physics frames (the recenter fires)
+	# + await any pending recenter walk (debounced recenters have none).
+	var fly_step := func(px: int) -> void:
+		p.position = Vector3(float(px) * 16.0 + 8.0, fly_y, float(pcz0) * 16.0 + 8.0)
+		p.velocity = Vector3.ZERO
+		for i in range(8):
+			await get_tree().physics_frame
+		var ww := 0
+		while ww < 1200 and world._rec_pending:
+			await get_tree().process_frame
+			ww += 1
+	# --- PHASE 1: fly -16 (away from T/U). T -> taxi d+16 (21-23): out of
+	# the stream set = candidate. U -> taxi 20: two-out (cand_since 1),
+	# mesh RETAINED (hide-not-kill). ---
+	await get_tree().create_timer(1.2).timeout
+	await fly_step.call(pcx0 - 16)
+	var t1 := {
+		"present": world.chunks.has(tk),
+		"in_stream_set": world.in_stream_set(tcx - int(world.last_pcx), 0),
+		"queued": str(world.queued_keys.get(tk, "")),
+		"center": int(world.last_pcx),
+	}
+	var u1 := {
+		"present": world.chunks.has(uk),
+		"in_stream_set": world.in_stream_set(ucx - int(world.last_pcx), 0),
+		"mesh_kept": world.chunks.has(uk) and bool(world.chunks[uk].mesh_built),
+	}
+	if not t1["present"] or t1["in_stream_set"]:
+		Debug.result({"ok": false, "error": "phase1: T must be an out-of-set candidate", "t": t1, "u": u1})
+		get_tree().quit()
+		return
+	if not u1["present"] or not u1["mesh_kept"]:
+		Debug.result({"ok": false, "error": "phase1: U must be retained with its mesh (hide-not-kill)", "t": t1, "u": u1})
+		get_tree().quit()
+		return
+	# --- PHASE 2: fly back in 14 one-chunk crossings (m = 1..14, px =
+	# -15 .. -2). Full walks at m=5/10 (cover 5 forces a rebuild); the
+	# rest are debounced. T's taxi = d+16-m: 21-23 -> 6-8; T re-enters the
+	# HIGH band (taxi 7) at m = d+13 = 13 (debounced, cover 3). U frees
+	# after its 2nd two-out event (m=1: taxi 19). ---
+	var u_freed_seen := false
+	var t_reentry := {}
+	for m in range(14):
+		if m > 0:
+			await get_tree().create_timer(0.3).timeout
+		await fly_step.call(pcx0 - 16 + (m + 1))
+		if not world.chunks.has(uk):
+			u_freed_seen = true
+		var ttaxi := absi(tcx - int(world.last_pcx))
+		if ttaxi < 8 and world.in_stream_set(tcx - int(world.last_pcx), 0) and t_reentry.is_empty():
+			t_reentry = {"move": m + 1, "taxi": ttaxi, "queued": str(world.queued_keys.get(tk, ""))}
+	if t_reentry.is_empty():
+		Debug.result({"ok": false, "error": "phase2: T never re-entered the high band", "u_freed": u_freed_seen})
+		get_tree().quit()
+		return
+	# --- PHASE 3: the player is at px=-2 - stationary, the recenter chain
+	# is OVER. The old code re-queues T only on the next recenter (none
+	# while standing) - T stays a hole. The walk's single-source re-queue
+	# already handed T a build entry on the debounced re-entry (move 13).
+	# T must mesh from the standing drain. ---
+	var wT2 := 0
+	while wT2 < 120000 and not (world.chunks.has(tk) and world.chunks[tk].mesh_built):
+		await get_tree().process_frame
+		wT2 += 1
+	var t_built: bool = world.chunks.has(tk) and bool(world.chunks[tk].mesh_built)
+	# --- PHASE 4: U's regeneration. U was freed (data saved to disk);
+	# force a FULL walk (1 chunk, after the 1.2 s debounce window, cover 5
+	# from the last walked center) so the walk re-stubs U and WANT-queues
+	# its build; the data loads from disk and U must come back meshed. ---
+	await get_tree().create_timer(1.2).timeout
+	await fly_step.call(pcx0 - 1)
+	var wU := 0
+	while wU < 180000 and not (world.chunks.has(uk) and world.chunks[uk].mesh_built):
+		await get_tree().process_frame
+		wU += 1
+	var u_back: bool = world.chunks.has(uk) and bool(world.chunks[uk].mesh_built)
+	var t_final: bool = world.chunks.has(tk) and bool(world.chunks[tk].mesh_built)
+	var ok := t_built and u_freed_seen and u_back and t_final
+	Debug.result({
+		"ok": ok,
+		"t": {"key": tk, "phase1": t1, "reentry": t_reentry, "built": t_built, "mesh_wait_frames": wT2, "final": t_final},
+		"u": {"key": uk, "phase1": u1, "freed_seen": u_freed_seen, "regenerated": u_back, "regen_wait_frames": wU},
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+	})
+	get_tree().quit()
 
 
 func _edgeretain_test(spawn: Vector3) -> void:
