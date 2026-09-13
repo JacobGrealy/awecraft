@@ -1,19 +1,20 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene format=3 uid="uid://njpqscckrjmi"]
 
-[ext_resource type="Script" path="res://player/player.gd" id="1_player"]
+[ext_resource type="Script" uid="uid://qqos6r5leb61" path="res://player/player.gd" id="1_player"]
+[ext_resource type="CameraAttributesPractical" uid="uid://rk8uhis3xqm8" path="res://camera_attributes/main-camera-attributes.tres" id="2_rkbax"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_p1"]
 radius = 0.3
 height = 1.8
 
-[node name="Player" type="CharacterBody3D"]
+[node name="Player" type="CharacterBody3D" unique_id=1872891044]
 script = ExtResource("1_player")
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=639085842]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
 shape = SubResource("CapsuleShape3D_p1")
 
-[node name="Camera3D" type="Camera3D" parent="."]
+[node name="Camera3D" type="Camera3D" parent="." unique_id=708125620]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.62, 0)
-fov = 75.0
+attributes = ExtResource("2_rkbax")
 current = true

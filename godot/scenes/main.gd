@@ -1803,4 +1803,3 @@ func _cave_snapshot_finish(cam: String, snapshot_path: String, spawn: Vector3) -
 	await Debug.snap(snapshot_path)
 	Debug.result({"mode": "cave", "cam": cam, "ok": true, "seed": [wx0, wy0, wz0], "torch": [torch_pos.x, torch_pos.y, torch_pos.z], "w": int(get_viewport().size.x), "h": int(get_viewport().size.y)})
 	get_tree().quit()
-
