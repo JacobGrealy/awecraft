@@ -26,7 +26,31 @@ func _ready() -> void:
 		print("(rebuild with the gdext SConstruct / build_windows.sh).")
 		print("==============================================================")
 		get_tree().quit()
+	_register_pad_nav()
 
+
+# AC-0268: the analog stick drives the native GUI navigation (ui_left /
+# ui_right / ui_up / ui_down). Godot's built-in default ui_* actions carry
+# the D-pad but not the stick - the Bedrock controller navigates menus
+# with the stick - so the stick events are registered here (the InputMap
+# is runtime-mutable; project.godot stays clean). In gameplay no control
+# has focus, so the extra action state is inert.
+var _pad_nav_added := false
+func _register_pad_nav() -> void:
+	if _pad_nav_added:
+		return
+	_pad_nav_added = true
+	var nav := {
+		"ui_left": [0, -1.0], "ui_right": [0, 1.0],
+		"ui_up": [1, -1.0], "ui_down": [1, 1.0],
+	}
+	for act in nav:
+		var ev := InputEventJoypadMotion.new()
+		ev.device = 0
+		ev.axis = int(nav[act][0])
+		ev.axis_value = float(nav[act][1])
+		if not InputMap.action_get_events(act).has(ev):
+			InputMap.action_add_event(act, ev)
 
 var mode := "menu"
 var dimension := "overworld"

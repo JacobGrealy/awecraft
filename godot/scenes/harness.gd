@@ -304,6 +304,14 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			player = main._spawn_player()
 			await _gamepad_test(spawn)
 			return
+		if logic == "craftpad":
+			# AC-0268: the controller-only crafting flow (Y open, D-pad/
+			# stick nav, A pick/place, LB quick-move, B close).
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _craftpad_test(spawn)
+			return
 		if logic == "leaves":
 			# AC-0270: leaf collision + decay (AWECRAFT_LEAFDECAY_MS shortens
 			# the decay window deterministically; AWECRAFT_LEAVES_SLOT for the
@@ -2233,6 +2241,174 @@ func _air_next_to(cell: Vector3i, logs: Array) -> Vector3i:
 		if world.get_block(t.x, t.y, t.z) == 0:
 			return t
 	return cell + Vector3i(0, 1, 0)
+
+# AC-0268 helpers: map the focused Control to its inventory slot index
+# (-1 when the focus is not a slot) and pad-press a button with a few
+# frames of settle (the AC-0243 lesson - poll state, not frames).
+func _craft_focus_slot(inv_ui) -> int:
+	var owner = get_viewport().gui_get_focus_owner()
+	if owner == null:
+		return -1
+	return inv_ui._slots.find(owner)
+
+func _craft_pad_tap(inv_ui, idx: int) -> void:
+	Input.parse_input_event(_pad_btn(idx, true))
+	for i in 6:
+		await get_tree().physics_frame
+	Input.parse_input_event(_pad_btn(idx, false))
+	for i in 4:
+		await get_tree().physics_frame
+
+# Greedy navigation to a target slot: each step presses the D-pad
+# direction (4.7: up 11, down 12, left 13, right 14) that reduces the
+# distance to the target's rect; native navigation is "nearest in the
+# direction", so the focus is re-checked after every press (an overshoot
+# is corrected by the next press). The panel layout is fixed, so a green
+# path stays green; the cap bounds a regression to a clean failure.
+func _craft_nav_to(inv_ui, want_si: int, max_steps: int = 80) -> int:
+	for i in max_steps:
+		var si := _craft_focus_slot(inv_ui)
+		if si == want_si:
+			return si
+		if si < 0:
+			return -1
+		var a: Rect2 = (inv_ui._slots[si] as Control).get_global_rect()
+		var b: Rect2 = (inv_ui._slots[want_si] as Control).get_global_rect()
+		# Row-band first, then column: a plain "dominant axis" greedy
+		# oscillates (pressing right along the bottom storage row bounces
+		# at the right edge forever, never pressing up). When the focus is
+		# in the target's row band (tops within one slot height) correct
+		# the horizontal offset; otherwise correct the vertical one. The
+		# nearest-in-direction move (inventory._pad_nav) is monotonic
+		# within a row, so this converges on the fixed panel layout.
+		var same_row := absf(a.position.y - b.position.y) < b.size.y
+		var btn := 14 if same_row and b.position.x > a.position.x else (13 if same_row and b.position.x < a.position.x else (12 if b.position.y > a.position.y else 11))
+		await _craft_pad_tap(inv_ui, btn)
+	return _craft_focus_slot(inv_ui)
+
+func _craft_inv_count(p, id: int, off: int, cnt: int) -> int:
+	var n := 0
+	for i in cnt:
+		var sl: Dictionary = p._inv_get(i + off)
+		if int(sl.get("id", 0)) == id:
+			n += int(sl.get("n", 0))
+	return n
+
+# AC-0268: full craft flow with the controller ALONE: Y opens the
+# inventory (auto-selecting the first craft cell), the stick and D-pad
+# walk the focus, A picks/places, LB quick-moves (shift-click), B closes.
+# The mouse path is untouched code (the battery interact arm keeps
+# verifying it). Seeded with exactly ONE oak log (id 6): the recipe
+# {6:1} -> {8:4 n:4} matches the grid exactly (an extra cell breaks the
+# shapeless match), and A = left-click moves WHOLE stacks - so a 1-stack
+# is the A-only path from a full stack of 5 (Debug.seed_inv).
+func _craftpad_test(spawn: Vector3) -> void:
+	var p = Game.player
+	for i in 10:
+		await get_tree().physics_frame
+	var inv_ui = main.inventory_ui
+	for i in p.inv.size():
+		p.inv[i] = {"id": 0, "n": 0}
+	for i in p.craft_grid.size():
+		p.craft_grid[i] = {"id": 0, "n": 0}
+	p.held = {}
+	p.inv[9] = {"id": 6, "n": 1}
+	# a 4-plank stack in storage[1] too: the quick-move step needs an
+	# item in a FOCUSABLE slot (the panel hides the hotbar strip, and
+	# inv_add fills the hotbar first, so the collected planks would land
+	# in the un-focusable hotbar). LB on storage[1] = the storage->hotbar
+	# shift-click.
+	p.inv[10] = {"id": 8, "n": 4}
+	p.recompute_craft()
+	# 1) Y (pad_inventory, button 3) opens the inventory.
+	await _craft_pad_tap(inv_ui, 3)
+	var open_ok: bool = await _await_state(func() -> bool: return String(p.ui_mode) == "inv", 3000)
+	await get_tree().process_frame
+	# 2) auto-select: the focus is on the first craft cell (slot 9).
+	var focus_si := _craft_focus_slot(inv_ui)
+	var auto_sel_ok: bool = focus_si == 9
+	# 3) the stick drives navigation too (Game._ready registers the stick
+	#    on ui_*; the inventory's _pad_nav walks the slots): a
+	#    down-stick motion from craft[0] moves the focus.
+	var stick_ok := false
+	if focus_si == 9:
+		var mdown := _pad_axis(1, 1.0)
+		Input.parse_input_event(mdown)
+		for i in 6:
+			await get_tree().physics_frame
+		mdown.axis_value = 0.0
+		Input.parse_input_event(mdown)
+		for i in 4:
+			await get_tree().physics_frame
+		stick_ok = _craft_focus_slot(inv_ui) != 9
+	# 4) navigate to storage[0] (si 23: 9 hotbar-strip + 9 craft + 1
+	#    output + 4 armor = 23) - the seeded log sits there (player inv
+	#    index = _indices[si] + 9).
+	var log_si := await _craft_nav_to(inv_ui, 23)
+	var nav_log_ok: bool = log_si == 23 and String(inv_ui._areas[23]) == "storage"
+	# 5) A picks the log up (left-click = whole stack).
+	await _craft_pad_tap(inv_ui, 0)
+	var pick_ok: bool = await _await_state(func() -> bool:
+		return int(p.held.get("id", 0)) == 6 and int(p.held.get("n", 0)) == 1 \
+			and int(p._inv_get(int(inv_ui._indices[log_si]) + 9).get("id", 0)) == 0, 3000)
+	# 6) navigate to craft cell 0 (si 9), A places the log.
+	var craft_si := await _craft_nav_to(inv_ui, 9)
+	var nav_craft_ok: bool = craft_si == 9
+	await _craft_pad_tap(inv_ui, 0)
+	var place_ok: bool = await _await_state(func() -> bool:
+		return int(p.craft_grid[0].get("id", 0)) == 6 and p.held == {}, 3000)
+	# 7) the recipe {6:1} -> {8:4} recomputes on the grid click.
+	var out_ok: bool = await _await_state(func() -> bool:
+		return int(p.craft_out.get("id", 0)) == 8 and int(p.craft_out.get("n", 0)) == 4, 3000)
+	# 8) navigate to the output slot (si 18), A collects the 4 planks
+	#    (they merge onto the seeded stack - the count goes +4).
+	var out_si := await _craft_nav_to(inv_ui, 18)
+	var nav_out_ok: bool = out_si == 18
+	var planks_before := _craft_inv_count(p, 8, 0, 36)
+	await _craft_pad_tap(inv_ui, 0)
+	var collect_ok: bool = await _await_state(func() -> bool:
+		return p.craft_out == {} and _craft_inv_count(p, 8, 0, 36) == planks_before + 4, 3000)
+	# 9) LB on the planks stack in storage[1] (si 24) quick-moves it to
+	#    the hotbar (the shift-click path: storage -> inv[0..8]; it
+	#    merges onto the 4 planks the collect already put there).
+	var planks_si := await _craft_nav_to(inv_ui, 24)
+	var nav_planks_ok: bool = planks_si == 24 \
+		and int(p._inv_get(int(inv_ui._indices[24]) + 9).get("id", 0)) == 8
+	var total_before := _craft_inv_count(p, 8, 0, 36)
+	await _craft_pad_tap(inv_ui, 9)
+	# after the quick-move: the storage stack is empty, the hotbar holds
+	# the ENTIRE total (it merged onto the collect's stack), total kept.
+	var quick_ok: bool = await _await_state(func() -> bool:
+		return int(p._inv_get(int(inv_ui._indices[24]) + 9).get("id", 0)) == 0 \
+			and _craft_inv_count(p, 8, 0, 9) == total_before \
+			and _craft_inv_count(p, 8, 0, 36) == total_before, 3000)
+	# 10) B (pad_cancel, button 1) closes the inventory.
+	await _craft_pad_tap(inv_ui, 1)
+	var close_ok: bool = await _await_state(func() -> bool: return String(p.ui_mode) == "", 3000)
+	var focus_released_ok: bool = _craft_focus_slot(inv_ui) == -1
+	Debug.result({
+		"mode": "craftpad",
+		"open_ok": open_ok,
+		"auto_sel_ok": auto_sel_ok,
+		"stick_nav_ok": stick_ok,
+		"nav_log_ok": nav_log_ok,
+		"pick_ok": pick_ok,
+		"nav_craft_ok": nav_craft_ok,
+		"place_ok": place_ok,
+		"out_ok": out_ok,
+		"nav_out_ok": nav_out_ok,
+		"collect_ok": collect_ok,
+		"nav_planks_ok": nav_planks_ok,
+		"quick_ok": quick_ok,
+		"close_ok": close_ok,
+		"focus_released_ok": focus_released_ok,
+		"ok": open_ok and auto_sel_ok and stick_ok and nav_log_ok and pick_ok \
+			and nav_craft_ok and place_ok and out_ok and nav_out_ok \
+			and collect_ok and nav_planks_ok and quick_ok and close_ok \
+			and focus_released_ok,
+	})
+	get_tree().quit()
+
 
 func _gamepad_test(spawn: Vector3) -> void:
 	var p = Game.player

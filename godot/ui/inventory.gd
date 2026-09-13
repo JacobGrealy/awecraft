@@ -80,6 +80,17 @@ class SlotCtl extends Control:
 	var cb: Callable
 	var rel_pos := Vector2.ZERO
 
+	func _ready() -> void:
+		# AC-0268: focusable - the controller's D-pad/stick walks the GUI
+		# focus between slots (native navigation), A picks/places, LB/RB
+		# quick-move. The mouse path below is untouched.
+		focus_mode = Control.FOCUS_ALL
+
+	func _notification(what: int) -> void:
+		# AC-0268: the focus border is focus-driven - redraw on change.
+		if what == NOTIFICATION_FOCUS_ENTER or what == NOTIFICATION_FOCUS_EXIT:
+			queue_redraw()
+
 	func _draw() -> void:
 		var s := size
 		var be := 3.0
@@ -99,8 +110,31 @@ class SlotCtl extends Control:
 			draw_rect(r, fill)
 		if selected:
 			draw_rect(Rect2(Vector2.ZERO, s), SEL_BORDER, false, 3.0)
+		# AC-0268: the controller-selected (focused) slot - amber border,
+		# same convention as the death-screen respawn button.
+		if has_focus():
+			draw_rect(Rect2(Vector2(1.0, 1.0), s - Vector2(2.0, 2.0)), Color(1.0, 0.87, 0.35, 1.0), false, 3.0)
 
 	func _gui_input(event: InputEvent) -> void:
+		# AC-0268: controller input on the FOCUSED slot. A = left-click
+		# (pick/place, the existing _route_click/button-0 path), LB/RB =
+		# shift-click quick-move (the button-0/shift path - a no-op on the
+		# craft grid, which is deliberate). B (close) is the player's
+		# (InputMap polling) and the D-pad is the native GUI navigation -
+		# both are ignored here. Presses only: the mouse RELEASE half of a
+		# click is the held-item drop, which needs the cursor position - a
+		# pad user never drags.
+		if event is InputEventJoypadButton and cb.is_valid():
+			var jb: InputEventJoypadButton = event
+			if not jb.pressed:
+				return
+			if jb.button_index == JOY_BUTTON_A:
+				cb.call(0, false, true)
+				get_viewport().set_input_as_handled()
+			elif jb.button_index == JOY_BUTTON_LEFT_SHOULDER or jb.button_index == JOY_BUTTON_RIGHT_SHOULDER:
+				cb.call(0, true, true)
+				get_viewport().set_input_as_handled()
+			return
 		if event is InputEventMouseButton and cb.is_valid():
 			var mb: InputEventMouseButton = event
 			if mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
@@ -964,9 +998,65 @@ func _update_survival(p, dt: float) -> void:
 		_dead_btn.release_focus()
 
 
+# AC-0268: manual D-pad/stick navigation between slots. Godot's native
+# GUI focus navigation does not walk controls inside a CanvasLayer (the
+# inventory is the HUD CanvasLayer - verified: two real Buttons on this
+# layer never receive the D-pad focus walk), so the "nearest visible
+# slot in the direction" math is done here, polled from _process on the
+# ui_* actions. Game._ready registers the STICK on ui_* (the built-in
+# defaults already carry the D-pad), so D-pad and stick both drive this.
+# A / LB / R B on the focused slot are the SlotCtl's _gui_input; B
+# (close) is the player's InputMap polling.
+func _pad_nav() -> void:
+	var p = Game.player
+	if p == null or String(p.ui_mode) == "":
+		return
+	var owner = get_viewport().gui_get_focus_owner()
+	if owner == null or not _slots.has(owner):
+		return
+	var si := _slots.find(owner)
+	var a: Rect2 = (owner as Control).get_global_rect()
+	var want := -1
+	var best := INF
+	for i in _slots.size():
+		if i == si:
+			continue
+		var c: Control = _slots[i]
+		if not c.visible:
+			continue
+		var r: Rect2 = c.get_global_rect()
+		var dx := r.position.x - a.position.x
+		var dy := r.position.y - a.position.y
+		var sc := INF
+		# one direction per frame; the priority order is fixed (a stick +
+		# D-pad combo resolves deterministically)
+		# the gap ALONG the travel direction is cheap; the CROSS-AXIS
+		# offset is penalized x4 (a slot barely right but two rows down
+		# must not beat the same-row neighbor far to the right - the
+		# first craftpad run went 20 -> 24 (down-right) for exactly this
+		# reason).
+		if Input.is_action_just_pressed("ui_down"):
+			if r.position.y >= a.end.y - 2.0:
+				sc = (r.position.y - a.end.y) + absf(dx) * 4.0
+		elif Input.is_action_just_pressed("ui_up"):
+			if r.end.y <= a.position.y + 2.0:
+				sc = (a.position.y - r.end.y) + absf(dx) * 4.0
+		elif Input.is_action_just_pressed("ui_right"):
+			if r.position.x >= a.end.x - 2.0:
+				sc = (r.position.x - a.end.x) + absf(dy) * 4.0
+		elif Input.is_action_just_pressed("ui_left"):
+			if r.end.x <= a.position.x + 2.0:
+				sc = (a.position.x - r.end.x) + absf(dy) * 4.0
+		if sc < best:
+			best = sc
+			want = i
+	if want >= 0:
+		(_slots[want] as Control).grab_focus()
+
 func _process(dt: float) -> void:
 	if _strip == null:
 		return
+	_pad_nav()
 	var vs: Vector2 = get_viewport().get_visible_rect().size
 	var sw := 9 * SLOT + 8 * HOT_IN + 10.0
 	var sh := SLOT + 10.0
@@ -978,6 +1068,7 @@ func _process(dt: float) -> void:
 	_strip.visible = not show
 	_strip.position = Vector2(sx, sy)
 	_strip.size = Vector2(sw, sh)
+	var was_open := _panel.visible
 	_panel.visible = show
 	var ttxt := "Crafting" if is_table else "Inventory"
 	if _title.text != ttxt:
@@ -996,6 +1087,22 @@ func _process(dt: float) -> void:
 	for i in 9:
 		(_slots[i] as Control).visible = not show
 		(_slots[i] as Control).position = Vector2(sx + 5.0 + i * (SLOT + HOT_IN), sy + 5.0)
+	if show and not was_open:
+		# AC-0268: auto-select the first craft cell on open (slot 9 - 0-8
+		# are the HUD hotbar strip, hidden while the panel is up) so a
+		# controller player starts navigating from the crafting grid and
+		# A can immediately pick/place. AFTER the visibility loop above:
+		# on the opening frame the slots are still hidden until it runs,
+		# and grab_focus on a hidden slot would not take.
+		var first: SlotCtl = _slots[9]
+		if first.visible:
+			first.grab_focus()
+	elif not show and was_open:
+		# AC-0268: release a lingering slot focus when the panel closes so
+		# it never activates on a hidden slot.
+		var owner = get_viewport().gui_get_focus_owner()
+		if owner != null and _slots.has(owner):
+			owner.release_focus()
 	var px := (vs.x - float(PANEL_W)) * 0.5
 	var py := (vs.y - float(PANEL_H)) * 0.5
 	_panel.position = Vector2(px, py)
