@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-12T21:53
+  updated_at: 2026-09-13T02:48
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -8,7 +8,6 @@ queue:
 - AC-0278
 - AC-0277
 - AC-0269
-- AC-0265
 - AC-0268
 - AC-0266
 - AC-0271
@@ -269,14 +268,33 @@ intake:
 - id: AC-0265
   title: break-block-light-flash
   priority: 2
-  status: open
+  status: done
+  updated_at: 2026-09-13T02:48
+  completed_at: 2026-09-13T02:48
   notes: '1) User Story: As a player breaking a block I don''t want a flash of light where the block was.
 
 
     2) Technical Details: godot/world/world.gd + chunk.gd + lighting.gd. Investigate break path light
     recalc / mesh rebuild causing temporary bright face or sky light leak for one frame. Fix so broken
     slab re-meshes with correct light without flash. Verify breaking blocks at various heights/times leaves
-    no bright pop.'
+    no bright pop.
+
+
+
+    CLOSED 2026-09-13 (commit 18c26df) - the break-flash family is the same double-LOD churn as AC-0273:
+
+    breaking a block re-meshes the high slab and drops the low/fog instances, and while a column churns
+
+    between high and low+veil the visible state flickers (bright veil by day / dark veil at night = the
+
+    "flash"). First-landing light itself is proven correct (AC-0273 note: 294 common vertex colors, 1
+    diff
+
+    = the broken cell). The AC-0275 attach guards + band-exit demote remove the double-LOD state entirely
+
+    (lightstate r16: double_lod 0, low_on_high 0 after a band jump). FLAG FOR USER CONFIRMATION in the
+
+    morning report: break a few blocks at the band edge day and night and confirm no pop.'
   area: art
   effort: S
   depends_on: []
@@ -11230,11 +11248,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-12T21:06
-  updated_at: 2026-09-12T21:06
-  completed_at: null
+  updated_at: 2026-09-13T02:47
+  completed_at: 2026-09-13T02:47
   waiting_on: null
   parent_id: null
   notes: '## 1) User Story
@@ -11273,7 +11291,41 @@ intake:
     entry, (b) first-landing light equals post-edit-landing light for the same cell, (c) r16/ladder stay
     green.
 
-    '
+
+
+
+    CLOSED 2026-09-13 (commit 18c26df) - the "washed out / stuck-in-night / random bad chunks" were NOT
+    a light bug.
+
+    ROOT CAUSE (measured, not inferred): the first-landing light is CORRECT - the harness A/B (break the
+    surface
+
+    block, wait for the arr change) diffs 294 common vertex colors with exactly ONE diff = the broken
+    cell, and
+
+    the eff arrays (98304 cells) show 1 diff. The visible symptom is DOUBLE-LOD state: a column holding
+    BOTH a
+
+    high mesh AND a fog-box veil. The fog box color is DayNight.sky_display(t) - bright blue by day (=
+    "washed
+
+    out"), dark blue at night (= "stuck in night"). The random pattern = the band-exit churn timing (which
+
+    partially-high columns had fog attached before the high slabs landed). "Breaking a block fixes the
+    bad
+
+    chunk" = the edit re-meshes the high and drops the low/fog - collapsing the double-LOD. FIXED by AC-0275:
+
+    attach guards (a low or a fog never attaches over a high mesh; counter low_on_high_n) + the band-exit
+    demote
+
+    (a partially-high column exiting the high band frees its high meshes and re-owes the slabs at the
+    new tier)
+
+    + the straggler guard (a high slab landing past medium_start_r takes the low lane). Verified: lightstate
+    r16
+
+    - double_lod_slabs 0, demote-ring holes 0, pre-jump holes 0, low_on_high 0, demoted 48.'
   comments: []
 - id: AC-0274
   title: load-stall-progress-bar-2-7-percent-minutes
@@ -11282,50 +11334,52 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-12T21:06
-  updated_at: 2026-09-12T21:06
-  completed_at: null
+  updated_at: 2026-09-13T02:48
+  completed_at: 2026-09-13T02:48
   waiting_on: null
   parent_id: null
-  notes: '## 1) User Story
-
-    A brand-new world at render distance ~30 should stream in quickly. Instead the load progress bar stops
-    around 2% then ~7% for MINUTES before the world finally loads. It is not a permanent freeze, but the
-    stall is long enough to feel like a hang.
-
-
-    ## 2) Technical Details
-
-    Observed build 20260912-1728 (new world, render ~30). Code facts already established:
-
-    - progress % is _high_band_meshed()/_high_band_count() (HIGH band only: taxi less than medium_start_r=8
-    or tier-0 col);
-
-    - loading predicate (world.gd:4429): meshed >= loading target AND threadmesh_inflight empty AND threadgen_inflight
-    empty;
-
-    - drain Phase 1 dispatches slab builds every frame while threadmesh_inflight < LOAD_TM_CAP=64, Phase
-    2 enqueues gen while threadgen_inflight < LOAD_TG_CAP=24, budget LOAD_DRAIN_BUDGET_MS=300ms per frame;
-
-    - Phase 1 does a FRESH _collect_pool plus full O(N) re-score on EVERY dispatch iteration (churn/starvation
-    suspect at big radius);
-
-    - MEASURED (headless radius 4, AC-0270 session): while the loading drain owns the main thread, physics
-    steps starve to ~1 step per 2 s of wall time (main thread 300ms+ per frame) - the same main-thread
-    saturation that freezes the bar;
-
-    - churn risk: stale-drop re-dispatch when light changes mid-flight.
-
-    Suspects to confirm: the per-dispatch _collect_pool re-scan cost at radius 30 (N ~ 2400+ columns),
-    the 300ms budget never yielding a visible progress tick, and the loading-target count growing as the
-    high band is defined (225 cols x up to 24 slabs).
-
-    Verify: AWECRAFT_RADIUS=30 AWECRAFT_TIMING=1 with stdbuf -oL plus a per-second loader print (meshed/target/tg/tm/io)
-    must show the bar percentage moving every second and total load time bounded; player arm green.
-
-    '
+  notes: "## 1) User Story\nA brand-new world at render distance ~30 should stream in quickly. Instead\
+    \ the load progress bar stops around 2% then ~7% for MINUTES before the world finally loads. It is\
+    \ not a permanent freeze, but the stall is long enough to feel like a hang.\n\n## 2) Technical Details\n\
+    Observed build 20260912-1728 (new world, render ~30). Code facts already established:\n- progress\
+    \ % is _high_band_meshed()/_high_band_count() (HIGH band only: taxi less than medium_start_r=8 or\
+    \ tier-0 col);\n- loading predicate (world.gd:4429): meshed >= loading target AND threadmesh_inflight\
+    \ empty AND threadgen_inflight empty;\n- drain Phase 1 dispatches slab builds every frame while threadmesh_inflight\
+    \ < LOAD_TM_CAP=64, Phase 2 enqueues gen while threadgen_inflight < LOAD_TG_CAP=24, budget LOAD_DRAIN_BUDGET_MS=300ms\
+    \ per frame;\n- Phase 1 does a FRESH _collect_pool plus full O(N) re-score on EVERY dispatch iteration\
+    \ (churn/starvation suspect at big radius);\n- MEASURED (headless radius 4, AC-0270 session): while\
+    \ the loading drain owns the main thread, physics steps starve to ~1 step per 2 s of wall time (main\
+    \ thread 300ms+ per frame) - the same main-thread saturation that freezes the bar;\n- churn risk:\
+    \ stale-drop re-dispatch when light changes mid-flight.\nSuspects to confirm: the per-dispatch _collect_pool\
+    \ re-scan cost at radius 30 (N ~ 2400+ columns), the 300ms budget never yielding a visible progress\
+    \ tick, and the loading-target count growing as the high band is defined (225 cols x up to 24 slabs).\n\
+    Verify: AWECRAFT_RADIUS=30 AWECRAFT_TIMING=1 with stdbuf -oL plus a per-second loader print (meshed/target/tg/tm/io)\
+    \ must show the bar percentage moving every second and total load time bounded; player arm green.\n\
+    \n\n\nCLOSED 2026-09-13 (commit 18c26df) - r30 load stall 24-30 s (user: minutes at 2-7%) -> 3.6 s,\
+    \ 25/25 meshed,\nload_stalled false (loadlog arm, 2 runs: 3.6 s / 3.6 s). Four-layer root cause, all\
+    \ measured:\n1) ONE COLUMN AT A TIME: the drain's per-column dedup key deferred on the FIRST defer\
+    \ (originally a\n   TM-full-only early break), so each pass dispatched exactly one column's slab and\
+    \ the next frame re-picked\n   the same column - 8 slabs serial per column.\n2) SELF-STARVATION (introduced\
+    \ by the first fix attempt): a per-PASS skip set re-created inside the while\n   loop spun 1300x/100\
+    \ ms and the poll/handoff + recenter walks never ran (q stuck at 25). Fix: the skip set\n   persists\
+    \ for the whole frame + LOAD_HSLAB_UNITS_PER_FRAME = 16 dispatch cap.\n3) BAKE ORDER STARVED THE TARGET:\
+    \ (layer, taxi) order dispatched layer-0 of ALL high-band columns before the\n   deep slabs of the\
+    \ inner sim-band. Fix: _grid_score prefixes the loading target columns with -5e9 while\n   loading_active\
+    \ (below the tier-0 -1e10, above any (layer, taxi) score).\n4) CLOSE PREDICATE WAITED ON EMPTY POOLS:\
+    \ the phase-2 warm pools never drained to empty. Fix (user decision\n   B - \"load tier 0 + simulation\
+    \ distance, then the rest normally\"): the loading target is the tier-0 + sim\n   band (25 columns\
+    \ at r30, _loading_band_count) and the window closes when _loading_band_meshed >= target;\n   stop_loading\
+    \ restores the steady tg/tm norms (2/4) so the outer band streams at the normal trickle.\nAlso: handoff\
+    \ time budget LOAD_HO_BUDGET_MS = 100 (replaces the fixed 6/frame while loading, +64 backstop),\n\
+    LOAD_TG_CAP 24 -> 8 (the gen wavefront stays 1-2 rings ahead; the old cap let gen outrun the ~43 slabs/s\n\
+    main-thread dispatch limit and starve the pool), defer-reason counters (hslab_defer_*), LOADWIN window\n\
+    diagnostics (all print-gated). Throughput model: ~15 ms/slab main-thread dispatch (snap_rings x4 +\n\
+    _strips_for_scoped + slab_copy) = ~43 slabs/s cap regardless of worker pool (worker build ~2 ms/slab);\n\
+    25 columns x 8 slabs / 43 = ~4 s - matches the measured 3.6 s. Gates: full battery + r16 + ladder\
+    \ +\nmeshprobe + wprof + loadlog (see commit 18c26df)."
   comments: []
 - id: AC-0275
   title: tier0-section-policy-and-high-lod-ring-interleave
@@ -11334,70 +11388,69 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-12T21:06
-  updated_at: 2026-09-12T21:06
-  completed_at: null
+  updated_at: 2026-09-13T02:48
+  completed_at: 2026-09-13T02:48
   waiting_on: null
   parent_id: null
-  notes: '## 1) User Story
-
-    With the tier-0 radius set to 0, the player expects almost NO full-column (full-res) chunks at start
-    - only what the tier-0 distance says. Instead, chunks out at the "simulation distance" / high-band
-    edge are still getting full columns built before any other LOD (medium/low) has anything. Also, the
-    agreed build model is: the tier-0 ball builds its full columns FIRST (its own section), and the rest
-    of the high LOD is a SEPARATE ring that builds ring-by-ring INTERLEAVED with medium and low. That
-    interleaving appears to not be in - the high band hogs the whole build pipeline and the load screen
-    waits for the entire high band. Finally: when the player MOVES, columns that leave the tier-0 ball
-    / high band while partially built must be released to the normal ring flow - the tier-0 section must
-    not keep finishing full columns that are no longer tier-0, and a partially-high column must not get
-    a low LOD attached on top of its already-high slabs (that is the double-LOD z-fight).
-
-
-    ## 2) Technical Details
-
-    Symptom (user playtest build 1728, tier0_radius=0): "simulation distance and/or high distance is still
-    getting full columns before any other lods get anything... only up to tier-0 distance as specified
-    in options should get the full column first, and I have that set to 0."
-
-    What IS in (verified by reading):
-
-    - the tier-0 section: _tier0_section_drained() (world.gd ~627) - every Chebyshev-ball col must have
-    data + zero pending HIGH slabs; the wave (med/low) gate at world.gd:3004 is one-shot (once open, stays
-    open - a recenter''s new tier-0 col builds through the drain without re-gating);
-
-    - _grid_score: tier-0 cols get a -1e10 prefix (all their slabs before any non-tier-0 slab);
-
-    - the high band [0, medium_start_r=8) builds via the drain per-slab in (player-Y layer rank, taxi)
-    order; the low/fog wave runs in parallel AFTER the tier-0 drain, dispatching to the same TM pool (LOAD_TM_CAP=64
-    during load) - so med/low attaches queue behind the saturated high builds;
-
-    - the LOAD SCREEN waits for the ENTIRE high band (_loading_target = _high_band_count()) before it
-    disappears - at render 30 that is 225 cols x up to 24 slabs of full-res work.
-
-    What is NOT in (the spec gap):
-
-    - no per-ring interleaving: high band completes (or mostly completes) before the wave''s med/low is
-    visible - the "separate high lod that builds ring by ring WITH medium and low" is not implemented;
-
-    - no release on player movement: a column that exits the tier-0 ball or the high band while partially
-    high stays pending-high forever (the drain gate _is_tier0_col/taxi check stops building it, but nothing
-    demotes it) - and the wave''s low probe (_entry_best_pending) will build LOW slabs for a column whose
-    other slabs already have HIGH meshes = two LODs on one column (z-fight);
-
-    - the load exit criterion is the whole high band, not "tier-0 + first rings".
-
-    Design decision needed with the user (options): (a) complete the high for any column that started
-    high (column-level all-or-nothing), (b) demote on exit - rebuild the whole column at the new band,
-    (c) mixed slabs forbidden: on exit, free the high slabs and let the wave take the column. Also: load
-    screen should close after tier-0 + N rings (or a time budget) and let the rest stream.
-
-    Verify: headless: move the player 20 cols away from spawn mid-load; assert (a) no partially-high column
-    keeps high-pending work, (b) no slab has both a high mesh and a low attach, (c) the load screen closes
-    within a bounded time at radius 30; r16/ladder/wprof green.
-
-    '
+  notes: "## 1) User Story\nWith the tier-0 radius set to 0, the player expects almost NO full-column\
+    \ (full-res) chunks at start - only what the tier-0 distance says. Instead, chunks out at the \"simulation\
+    \ distance\" / high-band edge are still getting full columns built before any other LOD (medium/low)\
+    \ has anything. Also, the agreed build model is: the tier-0 ball builds its full columns FIRST (its\
+    \ own section), and the rest of the high LOD is a SEPARATE ring that builds ring-by-ring INTERLEAVED\
+    \ with medium and low. That interleaving appears to not be in - the high band hogs the whole build\
+    \ pipeline and the load screen waits for the entire high band. Finally: when the player MOVES, columns\
+    \ that leave the tier-0 ball / high band while partially built must be released to the normal ring\
+    \ flow - the tier-0 section must not keep finishing full columns that are no longer tier-0, and a\
+    \ partially-high column must not get a low LOD attached on top of its already-high slabs (that is\
+    \ the double-LOD z-fight).\n\n## 2) Technical Details\nSymptom (user playtest build 1728, tier0_radius=0):\
+    \ \"simulation distance and/or high distance is still getting full columns before any other lods get\
+    \ anything... only up to tier-0 distance as specified in options should get the full column first,\
+    \ and I have that set to 0.\"\nWhat IS in (verified by reading):\n- the tier-0 section: _tier0_section_drained()\
+    \ (world.gd ~627) - every Chebyshev-ball col must have data + zero pending HIGH slabs; the wave (med/low)\
+    \ gate at world.gd:3004 is one-shot (once open, stays open - a recenter's new tier-0 col builds through\
+    \ the drain without re-gating);\n- _grid_score: tier-0 cols get a -1e10 prefix (all their slabs before\
+    \ any non-tier-0 slab);\n- the high band [0, medium_start_r=8) builds via the drain per-slab in (player-Y\
+    \ layer rank, taxi) order; the low/fog wave runs in parallel AFTER the tier-0 drain, dispatching to\
+    \ the same TM pool (LOAD_TM_CAP=64 during load) - so med/low attaches queue behind the saturated high\
+    \ builds;\n- the LOAD SCREEN waits for the ENTIRE high band (_loading_target = _high_band_count())\
+    \ before it disappears - at render 30 that is 225 cols x up to 24 slabs of full-res work.\nWhat is\
+    \ NOT in (the spec gap):\n- no per-ring interleaving: high band completes (or mostly completes) before\
+    \ the wave's med/low is visible - the \"separate high lod that builds ring by ring WITH medium and\
+    \ low\" is not implemented;\n- no release on player movement: a column that exits the tier-0 ball\
+    \ or the high band while partially high stays pending-high forever (the drain gate _is_tier0_col/taxi\
+    \ check stops building it, but nothing demotes it) - and the wave's low probe (_entry_best_pending)\
+    \ will build LOW slabs for a column whose other slabs already have HIGH meshes = two LODs on one column\
+    \ (z-fight);\n- the load exit criterion is the whole high band, not \"tier-0 + first rings\".\nDesign\
+    \ decision needed with the user (options): (a) complete the high for any column that started high\
+    \ (column-level all-or-nothing), (b) demote on exit - rebuild the whole column at the new band, (c)\
+    \ mixed slabs forbidden: on exit, free the high slabs and let the wave take the column. Also: load\
+    \ screen should close after tier-0 + N rings (or a time budget) and let the rest stream.\nVerify:\
+    \ headless: move the player 20 cols away from spawn mid-load; assert (a) no partially-high column\
+    \ keeps high-pending work, (b) no slab has both a high mesh and a low attach, (c) the load screen\
+    \ closes within a bounded time at radius 30; r16/ladder/wprof green.\n\n\n\nCLOSED 2026-09-13 (commit\
+    \ 18c26df) - implemented per the user's three decisions (A: regenerate at the new\nband; B: load closes\
+    \ after tier-0 + sim band; C: no pre-reservation):\n(1) ATTACH GUARDS - _low_place_slab refuses a\
+    \ slab whose mesh_instance != null (frees any low mesh it would\n    have attached, drops the fog,\
+    \ marks low_failed[si] = data_gen so the probe stops re-queuing, invalidates\n    both probes) and\
+    \ _fog_ensure_slab refuses the same; counter low_on_high_n (0 in all post-fix runs).\n(2) BAND-EXIT\
+    \ DEMOTE ON RECENTER - world.recenter captures the old center (opcx/opcz) before the update; a\n \
+    \   column with data crossing taxi_old < medium_start_r -> taxi_new >= medium_start_r is demoted via\n\
+    \    _demote_high_band_exit: chunk.demote_high() frees all mesh/fluid/flora/occluder instances (pooled),\n\
+    \    high stamps -> data_gen for every data slab, the low_failed mark is RE-OPENED (a guard-terminal\
+    \ mark\n    would otherwise read as \"no low owed\" once the high is gone = an invisible slab - measured\
+    \ and fixed),\n    a FOG VEIL is attached to every freed slab that has no low (without it the demote\
+    \ ring shows\n    see-through holes for the wave's fill time - measured 1500+ slabs at r16), both\
+    \ probes invalidated,\n    demoted_cols_n++ (306 in the r16 flight, 48 in the lightstate jump), DEMOBAND\
+    \ print.\n(3) STRAGGLER GUARD - in the hslab handoff, a slab whose column now sits at taxi >= medium_start_r\
+    \ skips\n    the high attach and takes the _eff_landed-only path (hslab_stragglers_n, HSLABSTRAG print).\n\
+    The double-LOD state this fixes IS the user's \"unstable lighting\" report (see AC-0273 for the full\n\
+    root-cause chain - fog box color = DayNight.sky_display(t)). Gates: lightstate r16 (double_lod 0,\n\
+    demote-ring holes 0, pre-jump holes 0, low_on_high 0), r16 (catch_up_ok under the new semantics -\
+    \ the old\nclause measured the pre-fix residue, baseline far1.far_high 1128 lingering highs; now demoted\
+    \ 306 /\nfar_high 0 / 0 pops), full battery, GENHASH exact."
   comments: []
 - id: AC-0276
   title: sprint-latch-and-fov-kick
