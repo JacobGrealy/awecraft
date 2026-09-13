@@ -2543,6 +2543,22 @@ func _gamepad_test(spawn: Vector3) -> void:
 	Input.parse_input_event(trg)
 	await _await_state(func() -> bool: return not p.is_mining())
 	var attack_ok: bool = mined and not p.is_mining()
+	# 3c) AC-0266: holding RT LOOPS the swing animation (as a held LMB
+	#     does) - a one-shot swing would be inactive well before this
+	#     read; releasing stops it.
+	var trg2 := InputEventJoypadMotion.new()
+	trg2.device = 0
+	trg2.axis = JOY_AXIS_TRIGGER_RIGHT
+	trg2.axis_value = 1.0
+	Input.parse_input_event(trg2)
+	var rt_held_swing_ok := false
+	for i in 40:  # ~0.66 s = ~3.3 swing cycles
+		await get_tree().physics_frame
+		if i == 30:  # ~0.5 s in: a one-shot (0.2 s) would already be off
+			rt_held_swing_ok = p.swing_active()
+	trg2.axis_value = 0.0
+	Input.parse_input_event(trg2)
+	var rt_release_ok: bool = await _await_state(func() -> bool: return not p.swing_active(), 2000)
 	# 3b) AC-0243: holding RT must MINE CONTINUOUSLY (no re-press), and
 	#     trigger jitter around the old 0.5 release threshold must not
 	#     drop the hold (hysteresis 0.5/0.35 + start_mine idempotent).
@@ -2903,6 +2919,8 @@ func _gamepad_test(spawn: Vector3) -> void:
 		"jump_ok": jump_ok,
 		"jump_peak_y": roundf(peak * 100.0) / 100.0,
 		"attack_ok": attack_ok,
+		"rt_held_swing_ok": rt_held_swing_ok,
+		"rt_release_ok": rt_release_ok,
 		"use_ok": use_ok,
 		"place_cell": [place_cell.x, place_cell.y, place_cell.z],
 		"after_place_cell": after_place,
@@ -2937,6 +2955,7 @@ func _gamepad_test(spawn: Vector3) -> void:
 		"pad_respawn_hp": roundf(pad_respawn_hp * 10.0) / 10.0,
 		"mouse_respawn_ok": mouse_respawn_ok,
 		"ok": jump_has_pad and move_has_pad and stick_move_ok and jump_ok and attack_ok \
+			and rt_held_swing_ok and rt_release_ok \
 			and ground_sprint_ok and l3_latch_ok and hold_mine_ok and jitter_ok and fly_sprint_ok \
 			and mouse_hide_ok and fly_toggle_ok and fly_climb_ok \
 			and fly_descend_ok and fly_land_ok and use_ok and hotbar_ok and stick_look_ok \

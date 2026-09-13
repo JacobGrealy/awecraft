@@ -1060,8 +1060,12 @@ func swing_active() -> bool:
 
 
 func _update_swing_loop() -> void:
+	# AC-0266: a HELD right trigger loops the swing exactly like a held
+	# LMB (_pad_mining is the RT hold state, hysteresis 0.5/0.35) - the
+	# hit trace keeps running either way (mining ticks per frame in the
+	# _mining state; mob/bow hits are one-per-press, as with the mouse).
 	var want_loop := Game.mode == "play" and ui_mode == "" and not dead \
-		and _lmb_down and not _swing_held
+		and (_lmb_down or _pad_mining) and not _swing_held
 	if want_loop:
 		if not _swing_active:
 			_swing_active = true
