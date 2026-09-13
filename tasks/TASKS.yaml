@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-13T10:33
+  updated_at: 2026-09-13T10:38
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -863,7 +863,9 @@ intake:
 - id: AC-0247
   title: pool-meshinstances-for-slabs
   priority: 2
-  status: open
+  status: done
+  updated_at: 2026-09-13T10:35
+  completed_at: 2026-09-13T10:35
   notes: '1) User Story: As a player flying forward I want slab meshes to recycle without constant alloc/free
     so main stays smooth while waves sweep out.
 
@@ -913,15 +915,39 @@ intake:
     errors. STILL ALLOCATES: the per-slab ArrayMesh vertex/index data (the C++ build_accs/low_emit output
     - mesh-DATA pooling needs the C++ emit side), the collision StaticBody3D + ConcavePolygonShape3D,
     the OccluderInstance3D, the snap_rings nbs snapshots. SHIPPED as AweCraft[20260910-1328 0e6c227] (:8080
-    byte-matched, zip 9eaa52bb...).'
+    byte-matched, zip 9eaa52bb...).
+
+
+    Closed 20260913 overnight (round 3): the work was DONE and SHIPPED on
+
+    2026-09-10 (commit 0e6c227, AweCraft[20260910-1328], :8080 byte-matched)
+
+    but the registry entry was never flipped. No new code: the spec''s
+
+    section 3 carries the full implementation record (three per-World pools
+
+    - MeshInstance3D / MultiMesh / column objects, the col_gen identity
+
+    token for pooled-reuse staleness, slab raw-array pool honestly kept on
+
+    alloc) and the verification (genhash 80b904c0... exact, meshprobe
+
+    match_rate 1.0, r16 with identical falsy set + leak A/B 272=272, wprof
+
+    frame avg 4.4 flat vs 4.2, battery ok). Audit of the close: commit
+
+    0e6c227 is an ancestor of HEAD and _mi_pool/_mm_pool/_col_pool are in
+
+    the live tree (world.gd). Nothing to re-run.'
   area: perf
   effort: M
   depends_on: []
 - id: AC-0253
   title: per-slab-air-bitset-for-mesh
   priority: 2
-  status: open
-  updated_at: 2026-09-11T07:51
+  status: done
+  updated_at: 2026-09-13T10:37
+  completed_at: 2026-09-13T10:37
   notes: '1) User Story: As a player I want meshing to skip air checks fast so low at 4x4x4 and high at
     16x16x16 build quicker while flying.
 
@@ -963,7 +989,34 @@ intake:
     - watch item); wprof ok, recon 0.0, all 9 stages flat; battery genhash+range ok (note: the first battery
     run was invalid - shell quotes leaked into AWECRAFT_BATTERY and both arms BATTSKIPped for a vacuous
     ok; the clean-env re-run is the evidence - a one-line strip() hardening in _run_battery is suggested);
-    0 script/shader errors. SHIPPED as AweCraft[20260911-0749 09ec238] (:8080 byte-matched 64c4e98d...).'
+    0 script/shader errors. SHIPPED as AweCraft[20260911-0749 09ec238] (:8080 byte-matched 64c4e98d...).
+
+
+    Closed 20260913 overnight (round 3): the work was DONE and SHIPPED on
+
+    2026-09-11 (commit c7ac331, shipped in AweCraft[20260911-0749] whose HEAD
+
+    was 09ec238, :8080 byte-matched) but the registry entry was never
+
+    flipped. No new code: the spec''s section 3 carries the full record (the
+
+    512-byte "bs" solid/air bitset per slab built in the existing nz scan in
+
+    both palettize paths, graceful fallback for disk-loaded slabs, low avg
+
+    emit -13 to -20% with the A/B pair 8/8, instant all-air early-out, the
+
+    HIGH-walk bit tests REVERTED per user decision after measuring +10% on
+
+    ~75%-solid terrain, the AC-0255 latent-bug filing) and the verification
+
+    (genhash exact + 25/25 byte-identical, meshprobe 1908/32 + verts_gd ==
+
+    verts_cpp, r16 with the pre-existing falsy trio, wprof flat, battery
+
+    ok). Audit of the close: c7ac331 is an ancestor of HEAD; the bs code is
+
+    in the live mesh.cpp (11 refs). Nothing to re-run.'
   area: perf
   effort: M
   depends_on: []
@@ -1133,7 +1186,9 @@ intake:
 - id: AC-0248
   title: prewarm-pools-for-streaming
   priority: 3
-  status: open
+  status: done
+  updated_at: 2026-09-13T10:38
+  completed_at: 2026-09-13T10:38
   notes: '1) User Story: As a player starting or flying fast I want pools already warm so first streaming
     burst doesn''t hitch.
 
@@ -1166,7 +1221,36 @@ intake:
     1908/32 + the avg A/B pair 8/8; r16 ok:true the falsy set exactly the pre-existing trio + spin invariant
     + low_sync gate + the pool evidence above; wprof ok:true flat (LOW avg 3.0 / p95 8.2, frame avg 4.6
     - within headless noise); battery genhash+range ok:true; 0 script/shader errors. SHIPPED as AweCraft[20260910-2057
-    e2e4b0c] (:8080 byte-matched, zip d74b9d1b...).'
+    e2e4b0c] (:8080 byte-matched, zip d74b9d1b...).
+
+
+    Closed 20260913 overnight (round 3): the work was DONE and SHIPPED on
+
+    2026-09-10 (commit e2e4b0c, AweCraft[20260910-2057], :8080 byte-matched)
+
+    but the registry entry was never flipped. No new code: the spec''s
+
+    section 3 carries the full record (pools prewarm to the streaming
+
+    demand - 2R ring columns proven + 2 rings of columns/MI/MM targets,
+
+    World._ready + recenter top-up, one-time cost 0.8-6.7 ms by radius,
+
+    the initial burst grows the pools ONCE by design and the sustained
+
+    fly-forwards show EXACTLY 0 growths - steady state fully recycles;
+
+    slab raw-array pool stays out of scope per the AC-0247 C++/perf
+
+    reasons) and the verification (genhash exact, meshprobe + A/B 8/8, r16
+
+    with the pre-existing falsy trio + pool evidence, wprof flat, battery
+
+    ok). Audit of the close: e2e4b0c is an ancestor of HEAD;
+
+    _pool_targets_for/perf_pool_prewarm_ms are in the live world.gd.
+
+    Nothing to re-run.'
   area: perf
   effort: S
   depends_on:
