@@ -30,6 +30,13 @@ const ARMOR_SLOTS := ["head", "chest", "legs", "boots"]
 @onready var camera: Camera3D = $Camera3D
 
 var flying := false
+# AC-0276: LATCHED sprint (Minecraft-style, user request): a sprint that
+# was STARTED while moving forward keeps going after the key is released;
+# it ends when the player stops moving or moves backwards. Flight L3
+# stays a HELD speed key (no latch in flight). The camera FOV kicks up
+# 10% while effectively sprinting (lerped ~0.15 s) and reverts after.
+var sprint_latched := false
+var _base_fov := -1.0
 var _last_jump_t := -1  # AC-0243: double-tap fly toggle (Bedrock jump-double-tap)
 var _yaw := 0.0
 var _pitch := 0.0
@@ -389,6 +396,16 @@ func _physics_process_impl(dt: float) -> void:
 	var sprint_pad := not cg and Input.is_action_pressed("pad_sprint")
 	var sprint := sprint_kbd or sprint_pad
 	var fly_sprint := sprint_pad
+	# AC-0276: latch the sprint on a forward-moving start; release it on
+	# stop or backwards (ground only - flight L3 is a held speed key).
+	if flying:
+		sprint_latched = false
+	else:
+		if sprint and iz > 0.0:
+			sprint_latched = true
+		elif iz < 0.0 or ln == 0.0:
+			sprint_latched = false
+	var sprint_eff := sprint or sprint_latched
 	var speed: float
 	if flying:
 		speed = WALK * float(int(Settings.values.get("flight_speed", 4)))
@@ -398,7 +415,7 @@ func _physics_process_impl(dt: float) -> void:
 		speed = SWIM
 	elif in_lava:
 		speed = LAVA_SPEED
-	elif sprint:
+	elif sprint_eff:
 		speed = SPRINT
 	else:
 		speed = WALK
@@ -449,6 +466,14 @@ func _physics_process_impl(dt: float) -> void:
 	elif not was_ground and velocity.y < 0.0 and fall_start < 0.0:
 		fall_start = position.y
 	move_and_slide()
+	# AC-0276: the sprint FOV kick (+10% while effectively sprinting on
+	# the ground OR while flying - the air sprint cue, lerp ~0.15 s;
+	# reverts when the sprint ends / on landing).
+	if camera != null:
+		if _base_fov < 0.0:
+			_base_fov = camera.fov
+		var fov_t: float = _base_fov * 1.10 if (sprint_eff or flying) else _base_fov
+		camera.fov = lerpf(camera.fov, fov_t, minf(1.0, dt / 0.15))
 	if not flying and is_on_floor() and not was_ground and fall_start >= 0.0:
 		var fall := fall_start - position.y
 		if fall > 3.5:
@@ -1606,6 +1631,7 @@ func respawn() -> void:
 	lava_t = 0.0
 	drown_t = 0.0
 	fall_start = -1.0
+	sprint_latched = false
 	_regen_t = 0.0
 	_starve_t = 0.0
 	flying = false

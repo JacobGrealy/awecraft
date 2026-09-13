@@ -1498,6 +1498,93 @@ func _player_logic_test_body() -> void:
 		await get_tree().physics_frame
 	var after_fwd := Vector2(p.position.x, p.position.z)
 	var horizontal_moved := after_fwd.distance_to(Vector2(start.x, start.z))
+	# ---- AC-0276: sprint LATCH + FOV kick ----
+	# turn to walk -x: the deterministic spawn-area TREE (trunk block at
+	# (8,137,1), the canopy the leaves arm uses) sits on the -z walk line
+	# at z ~1 and would stop the velocity measurements.
+	# The spawn area is dotted with deterministic trees (trunk blocks);
+	# scan the 8 compass directions for the longest clear run and walk
+	# along it (forward maps to world (-sin(yaw), -cos(yaw))).
+	var yaw_t := 0.0
+	var best_len := -1.0
+	for a in range(8):
+		var ang := float(a) * PI / 4.0
+		var dx := -sin(ang)
+		var dz := -cos(ang)
+		var hit := 20.0
+		for r in range(1, 20):
+			var px := int(floorf(p.position.x + dx * float(r)))
+			var pz := int(floorf(p.position.z + dz * float(r)))
+			var blocked := false
+			for dy in range(0, 3):
+				if world.get_block(px, int(floorf(p.position.y)) + dy, pz) != 0:
+					blocked = true
+					hit = float(r)
+					break
+			if blocked:
+				break
+		if hit > best_len:
+			best_len = hit
+			yaw_t = ang
+	p.look(yaw_t, 0.0)
+	for i in 4:
+		await get_tree().physics_frame
+	# 1) walk (no sprint): velocity settles near WALK (4.3)
+	Input.action_press("move_forward")
+	for i in 50:
+		await get_tree().physics_frame
+	var walk_speed := Vector2(p.velocity.x, p.velocity.z).length()
+	# 2) tap Shift once while moving forward, then RELEASE it - the
+	#    sprint must LATCH (keep going at SPRINT ~5.6 with no key held)
+	var kev := InputEventKey.new()
+	kev.physical_keycode = KEY_SHIFT
+	kev.keycode = KEY_SHIFT
+	kev.pressed = true
+	Input.parse_input_event(kev)
+	for i in 10:
+		await get_tree().physics_frame
+	kev.pressed = false
+	Input.parse_input_event(kev)
+	var latched_on: bool = p.sprint_latched
+	for i in 50:
+		await get_tree().physics_frame
+	var latched_speed := Vector2(p.velocity.x, p.velocity.z).length()
+	var fov_sprint: float = float(p.camera.fov)
+	# 3) STOP moving - the latch must clear and the FOV must revert
+	Input.action_release("move_forward")
+	for i in 60:
+		await get_tree().physics_frame
+	var latch_cleared_on_stop: bool = not p.sprint_latched
+	var fov_base: float = float(p.camera.fov)
+	# 4) walk again - no held Shift, no latch: back to walk speed. Turn
+	# around first: the path already travelled is proven clear (the
+	# compass scan only clears the CENTRE line, the capsule can clip a
+	# block's corner on a fresh leg).
+	p.look(yaw_t + PI, 0.0)
+	for i in 4:
+		await get_tree().physics_frame
+	Input.action_press("move_forward")
+	for i in 50:
+		await get_tree().physics_frame
+	var relatched_speed := Vector2(p.velocity.x, p.velocity.z).length()
+	Input.action_release("move_forward")
+	# 5) latch again, then move BACKWARDS - backwards must clear the latch
+	for i in 8:
+		await get_tree().physics_frame
+	kev.pressed = true
+	Input.parse_input_event(kev)
+	for i in 12:
+		await get_tree().physics_frame
+	kev.pressed = false
+	Input.parse_input_event(kev)
+	Input.action_release("move_forward")
+	Input.action_press("move_back")
+	for i in 30:
+		await get_tree().physics_frame
+	var latch_cleared_on_back: bool = not p.sprint_latched
+	Input.action_release("move_back")
+	for i in 20:
+		await get_tree().physics_frame
 	for i in 60:
 		if p.is_on_floor():
 			break
@@ -1531,6 +1618,7 @@ func _player_logic_test_body() -> void:
 	for i in 40:
 		await get_tree().physics_frame
 	Input.action_release("jump")
+	var fov_fly: float = float(p.camera.fov)
 	var after_fly_y: float = p.position.y
 	Debug.fly(false)
 	var time_before := Game.time_of_day
@@ -1549,6 +1637,20 @@ func _player_logic_test_body() -> void:
 		"after_fly_y": roundf(after_fly_y * 100.0) / 100.0,
 		"time_before": time_before,
 		"time_after": time_after,
+		# AC-0276: sprint latch + FOV kick
+		"sprint_ok": (walk_speed < 5.0 and latched_on and latched_speed > 5.0
+			and fov_sprint > 78.0 and latch_cleared_on_stop
+			and absf(fov_base - 75.0) < 1.0 and relatched_speed < 5.0
+			and latch_cleared_on_back and fov_fly > 78.0),
+		"sprint_walk": roundf(walk_speed * 100.0) / 100.0,
+		"sprint_latched_on": latched_on,
+		"sprint_latched_speed": roundf(latched_speed * 100.0) / 100.0,
+		"sprint_fov_sprint": roundf(fov_sprint * 100.0) / 100.0,
+		"sprint_latch_stop": latch_cleared_on_stop,
+		"sprint_fov_base": roundf(fov_base * 100.0) / 100.0,
+		"sprint_rewalk": roundf(relatched_speed * 100.0) / 100.0,
+		"sprint_latch_back": latch_cleared_on_back,
+		"sprint_fov_fly": roundf(fov_fly * 100.0) / 100.0,
 	})
 
 
@@ -2146,6 +2248,35 @@ func _gamepad_test(spawn: Vector3) -> void:
 		await get_tree().physics_frame
 	var sprint_ratio: float = sprint_speed / maxf(walk_speed, 0.01)
 	var ground_sprint_ok: bool = sprint_has_l3 and sprint_ratio > 1.2 and sprint_ratio < 1.45
+	# 1c) AC-0276: L3 LATCH - back to the arm start (the 1b stretch can
+	# end against the deterministic spawn-area tree, and the inter-stretch
+	# stop clears a latch), then: tap L3 while moving forward, release
+	# L3, keep moving - the sprint must persist (latched) at SPRINT
+	# speed (peak read), and the latch must clear when the movement
+	# stops.
+	Debug.teleport(start.x, start.y, start.z)
+	p.velocity = Vector3.ZERO
+	for i in 8:
+		await get_tree().physics_frame
+	Input.action_press("move_forward")
+	for i in 8:
+		await get_tree().physics_frame
+	Input.parse_input_event(_pad_btn(7, true))
+	for i in 8:
+		await get_tree().physics_frame
+	var latched_on_pad: bool = p.sprint_latched
+	Input.parse_input_event(_pad_btn(7, false))
+	var latched_speed := 0.0
+	for i in 40:
+		await get_tree().physics_frame
+		var v2: float = Vector2(p.velocity.x, p.velocity.z).length()
+		if v2 > latched_speed:
+			latched_speed = v2
+	Input.action_release("move_forward")
+	for i in 40:
+		await get_tree().physics_frame
+	var latched_cleared: bool = not p.sprint_latched
+	var l3_latch_ok: bool = latched_on_pad and latched_speed > 5.0 and latched_cleared
 	# Restore the arm-start position: the ~9.5 m forward run can end over
 	# lower terrain / water (the terrain is NOT flat beyond the spawn
 	# plateau), which used to sink the following jump test. The velocity
@@ -2526,6 +2657,8 @@ func _gamepad_test(spawn: Vector3) -> void:
 		"hold_mine_ok": hold_mine_ok,
 		"jitter_ok": jitter_ok,
 		"ground_sprint_ok": ground_sprint_ok,
+		"l3_latch_ok": l3_latch_ok,
+		"l3_latched_speed": roundf(latched_speed * 100.0) / 100.0,
 		"sprint_ratio": roundf(sprint_ratio * 100.0) / 100.0,
 		"fly_sprint_ok": fly_sprint_ok,
 		"mouse_hide_ok": mouse_hide_ok,
@@ -2540,7 +2673,7 @@ func _gamepad_test(spawn: Vector3) -> void:
 		"focus_after_nav": f1.name if f1 != null else "null",
 		"accept_ok": accept_ok,
 		"ok": jump_has_pad and move_has_pad and stick_move_ok and jump_ok and attack_ok \
-			and ground_sprint_ok and hold_mine_ok and jitter_ok and fly_sprint_ok \
+			and ground_sprint_ok and l3_latch_ok and hold_mine_ok and jitter_ok and fly_sprint_ok \
 			and mouse_hide_ok and fly_toggle_ok and fly_climb_ok \
 			and fly_descend_ok and fly_land_ok and use_ok and hotbar_ok and stick_look_ok \
 			and inv_open and inv_toggle_ok and b_cancel_inv_ok and paused and focus_resume \
