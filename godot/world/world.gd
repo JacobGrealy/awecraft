@@ -3,6 +3,7 @@ extends Node3D
 const ChunkScript = preload("res://world/chunk.gd")
 const DropScript = preload("res://entities/drop.gd")
 const BananaScript = preload("res://entities/banana.gd")  # AC-0040 bouncy-banana
+const MobScript = preload("res://entities/mob.gd")  # AC-0037 mobs
 const ChunkIO = preload("res://core/chunk_io.gd")  # AC-0155
 const LoadingScreen = preload("res://ui/loading_screen.gd")  # AC-0178
 
@@ -3796,6 +3797,7 @@ func _physics_process_impl(_d: float) -> void:
 	if not threadmesh_inflight.is_empty():
 		threadmesh_poll()
 	_overlay_tick(_d)
+	_mob_tick(_d)
 
 
 # AC-0174: dev overlay gizmos - three independent Options toggles
@@ -9964,6 +9966,69 @@ func in_mob_spawn_diamond(dx: int, dz: int) -> bool:
 
 func in_mob_spawn_region(dx: int, dz: int) -> bool:
 	return in_mob_spawn_diamond(dx, dz) or in_mob_spawn_circle(dx * dx + dz * dz)
+
+
+# AC-0037: the day/night mob spawn/despawn tick (runs on the world
+# physics clock; ~one attempt per 0.5 s). Passive types spawn by day,
+# hostiles (incl. the spider) at night; anything past the despawn
+# radius is freed. The AC-0158 region contract (circle 24-44 around the
+# player) bounds the spawn attempts.
+var _mob_acc := 0.0
+var _mob_cap := 20
+const MOB_DESPAWN_R := 52.0
+
+func _mob_tick(d: float) -> void:
+	if Game.player == null or Game.mode != "play" or Game.entities == null:
+		return
+	var ppos: Vector3 = Game.player.position
+	# despawn first (keeps the population bounded at the region edge)
+	var alive := 0
+	for c in Game.entities.get_children():
+		if c is Node3D and c.has_method("center"):
+			if c.position.distance_to(ppos) > MOB_DESPAWN_R:
+				c.queue_free()
+				continue
+			alive += 1
+	if alive >= _mob_cap:
+		return
+	_mob_acc += d
+	if _mob_acc < 0.5:
+		return
+	_mob_acc = 0.0
+	var night: bool = DayNight.is_night(Game.time_of_day)
+	# the day/night spawn table (type, weight)
+	var table: Array = []
+	if night:
+		table = [["zombie", 24], ["skeleton", 18], ["spider", 16], ["pig", 6], ["chicken", 6], ["wolf", 4], ["bunny", 4]]
+	else:
+		table = [["pig", 18], ["sheep", 16], ["chicken", 14], ["cow", 12], ["wolf", 8], ["bunny", 8]]
+	var total := 0
+	for e in table:
+		total += int(e[1])
+	for att in range(3):
+		var ang := randf() * TAU
+		var dist := randf_range(float(MOB_SPAWN_CIRCLE_MIN), float(MOB_SPAWN_CIRCLE_MAX))
+		var sx := int(floorf(ppos.x + cos(ang) * dist))
+		var sz := int(floorf(ppos.z + sin(ang) * dist))
+		var sy: int = surface_top(sx, sz)
+		if sy <= 0:
+			continue
+		# open ground: sy is the topmost SOLID by definition, so only
+		# the cell above it matters - water/canany overhead rejects.
+		if get_block(sx, sy + 1, sz) != 0:
+			continue
+		var r := randi() % total
+		var pick := str(table[0][0])
+		for e in table:
+			r -= int(e[1])
+			if r < 0:
+				pick = str(e[0])
+				break
+		var m: Node3D = MobScript.new()
+		m.key = pick
+		Game.entities.add_child(m)
+		m.position = Vector3(float(sx) + 0.5, float(sy) + 1.02, float(sz) + 0.5)
+		return
 
 func _fluid_near(x: int, y: int, z: int) -> bool:
 	if is_fluid_id(get_block(x, y, z)) or fluid_level(x, y, z) > 0:

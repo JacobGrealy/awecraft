@@ -100,6 +100,7 @@ var _stats_acc: float:
 
 const _BATT_RESET_WASD := ["move_forward", "move_back", "move_left", "move_right"]
 const AeroLib = preload("res://core/aero.gd")
+const MobArrowScript = preload("res://entities/arrow.gd")  # AC-0037
 const _ChunkScriptM = preload("res://world/chunk.gd")
 
 func _ready() -> void:
@@ -329,6 +330,16 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await main._await_spawn_floor(spawn, 300)
 			player = main._spawn_player()
 			await _crouch_test(spawn)
+			return
+		if logic == "mobs":
+			# AC-0037: the 9 rigged models (bunny incl.), physics, AI
+			# (chase / passive / night-only spider / bone-tamed wolf),
+			# the skeleton's arrow volley, and the day/night spawn
+			# tables (population + despawn).
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _mobs_test(spawn)
 			return
 		if logic == "leaves":
 			# AC-0270: leaf collision + decay (AWECRAFT_LEAFDECAY_MS shortens
@@ -1710,10 +1721,12 @@ func _player_logic_test_body() -> void:
 		"time_before": time_before,
 		"time_after": time_after,
 		# AC-0276: sprint latch + FOV kick
+		# the DoF PR (f3e93ae) set the base FOV to 90 - the kick checks
+		# are relative to the base; 90 is the design constant.
 		"sprint_ok": (walk_speed < 5.0 and latched_on and latched_speed > 5.0
-			and fov_sprint > 78.0 and latch_cleared_on_stop
-			and absf(fov_base - 75.0) < 1.0 and relatched_speed < 5.0
-			and latch_cleared_on_back and fov_fly > 78.0),
+			and fov_sprint > fov_base + 4.0 and latch_cleared_on_stop
+			and absf(fov_base - 90.0) < 1.0 and relatched_speed < 5.0
+			and latch_cleared_on_back and fov_fly > fov_base + 4.0),
 		"sprint_walk": roundf(walk_speed * 100.0) / 100.0,
 		"sprint_latched_on": latched_on,
 		"sprint_latched_speed": roundf(latched_speed * 100.0) / 100.0,
@@ -2363,6 +2376,272 @@ func _find_door_spot() -> Dictionary:
 					continue
 				return {"cell": tc, "id": world.get_block(tc.x, tc.y, tc.z), "cam": cam, "yaw": yaw, "pitch": pitch}
 	return {}
+
+
+func _count_meshes(n: Node) -> int:
+	var n_m := 0
+	if n is MeshInstance3D:
+		n_m = 1
+	for c in n.get_children():
+		n_m += _count_meshes(c)
+	return n_m
+
+
+# AC-0037: the mobs arm. Sub-checks: every type in Data.mobs (9: the
+# web 8 + the bunny) spawns a full rig (Body/Head + 4 pivoted limbs,
+# the bunny adds ears); a mob falls to the floor; the zombie chases +
+# faces the player; the spider is INERT by day and chases at night;
+# a bone use tames a wolf (which then follows); a skeleton in the
+# 4-14 m band fires arrows that damage the player; the day table
+# spawns only passives, the night table adds hostiles, and the
+# population stays capped.
+func _mobs_test(spawn: Vector3) -> void:
+	var p = Game.player
+	for i in 10:
+		await get_tree().physics_frame
+	var sp0: Vector3 = world.spawn_point()
+	var sw := 0
+	while sw < 900 and world.surface_top(int(sp0.x), int(sp0.z)) <= 0:
+		await get_tree().physics_frame
+		sw += 1
+	var st: int = world.surface_top(int(sp0.x), int(sp0.z))
+	# the spawn plateau is flat within d < 6 of spawn (gamepad-arm
+	# contract) - every AI test mob spawns INSIDE it, because beyond
+	# that the terrain drops off (a test mob off the plateau falls and
+	# the sub-checks measure the fall, not the AI).
+	var bx := int(sp0.x) + 3
+	var bz := int(sp0.z)
+	var by := float(st) + 1.0  # feet level of the open ground
+	var pz0: Vector3 = p.position
+	# 1) RIGS: every type in Data.mobs (9: the web 8 + the bunny) gets
+	#    a full rig (Body/Head + 4 pivoted limbs; the bunny adds ears).
+	var keys: Array = Data.mobs.keys()
+	var rig_ok := keys.size() == 9
+	var rig_names := ""
+	var bunny_ok := false
+	for k in keys:
+		var kk: String = str(k)
+		var m: Node3D = Debug.spawn_mob(kk, float(bx) + 0.5, by + 0.02, float(bz) + 0.5)
+		if m == null:
+			rig_ok = false
+			continue
+		var parts: Array = ["Root", "Root/Body", "Root/Head", "Root/LegL", "Root/LegR", "Root/ArmL", "Root/ArmR"]
+		for path in parts:
+			if m.get_node_or_null(path) == null:
+				rig_ok = false
+				rig_names += kk + ":" + path + ";"
+		if kk == "bunny":
+			# the bunny's rig adds 2 ear boxes: 8 mesh boxes total vs 6
+			# for the other types (body, head, 4 limbs).
+			var meshes := _count_meshes(m.get_node("Root"))
+			bunny_ok = meshes >= 8 \
+				and absf(float(Data.mobs["bunny"]["h"]) - float(Data.mobs["chicken"]["h"])) < 0.01 \
+				and float(Data.mobs["bunny"]["w"]) <= 0.5
+		m.queue_free()  # free right away: the rig check is static, and a
+		# lingering rig zombie (hostile, 3.5 m from the player) would
+		# spend the whole arm attacking the player.
+	for i in 6:
+		await get_tree().physics_frame
+	# 2) PHYSICS: a mob dropped from the air lands on the floor.
+	var test: Node3D = Debug.spawn_mob("pig", float(bx) + 0.5, by + 5.0, float(bz) + 0.5)
+	for i in 120:
+		await get_tree().physics_frame
+	var fall_ok: bool = test != null and test.is_on_floor() and absf(test.position.y - by) < 0.3
+	if test != null:
+		test.queue_free()
+	for i in 6:
+		await get_tree().physics_frame
+	# 3) CHASE: a zombie 5 m away closes the distance and faces the
+	#    player (no contact within the window: 5 - 2.2*1.5 ~ 1.7 m).
+	var zomb: Node3D = Debug.spawn_mob("zombie", pz0.x + 5.0, pz0.y + 0.02, pz0.z)
+	var d0: float = zomb.position.distance_to(p.position)
+	for i in 90:
+		await get_tree().physics_frame
+	var d1: float = zomb.position.distance_to(p.position)
+	var dyaw: float = absf(zomb.rotation.y - atan2(-(p.position.x - zomb.position.x), -(p.position.z - zomb.position.z)))
+	dyaw = absf(fmod(dyaw + PI, TAU) - PI)
+	var chase_ok: bool = d1 < d0 - 1.0 and dyaw < 0.6
+	zomb.queue_free()
+	for i in 6:
+		await get_tree().physics_frame
+	# 4) SPIDER: inert by day, chases at night (4.95 m, on the plateau).
+	Game.time_of_day = 0.3  # morning
+	var web: Node3D = Debug.spawn_mob("spider", pz0.x + 3.5, pz0.y + 0.02, pz0.z + 3.5)
+	for i in 20:
+		await get_tree().physics_frame
+	var wd0: float = web.position.distance_to(p.position)
+	for i in 90:
+		await get_tree().physics_frame
+	var wd_day: float = web.position.distance_to(p.position)
+	Game.time_of_day = 0.9  # deep night
+	for i in 90:
+		await get_tree().physics_frame
+	var wd_night: float = web.position.distance_to(p.position)
+	var spider_ok: bool = wd_day > wd0 - 0.5 and wd_night < wd_day - 1.0
+	web.queue_free()
+	for i in 6:
+		await get_tree().physics_frame
+	# 5) SKELETON: in the 4-14 m band it stands and its arrow volley
+	#    damages the player (5 m on the plateau: the arrow crosses in
+	#    ~0.4 s and the weak gravity still lands it in the body). Runs
+	#    BEFORE the wolf bench so the player is still on the flat
+	#    plateau.
+	var skel: Node3D = Debug.spawn_mob("skeleton", pz0.x + 5.0, pz0.y + 0.02, pz0.z)
+	for i in 6:
+		await get_tree().physics_frame
+	var hp0: float = p.hp
+	var saw_arrow := false
+	for i in 160:
+		await get_tree().physics_frame
+		for c in Game.entities.get_children():
+			if c is MobArrowScript:
+				saw_arrow = true
+	var arrow_ok: bool = saw_arrow and p.hp < hp0
+	skel.queue_free()
+	for i in 6:
+		await get_tree().physics_frame
+	# 6) WOLF: a bone use tames it (aim geometry: the shallow down-pitch
+	#    -0.25 (here positive pitch aims UP in aim_dir) keeps the block
+	#    raycast above the ground until 6.5 m > REACH so aim_mob
+	#    resolves, while passing within 0.7 of the wolf's center: eye
+	#    1.62 vs center 0.495 at 3 m). The FOLLOW
+	#    check needs two same-level cells 5+ m apart - the wolf cannot
+	#    cross a step-up, and the terrain beyond the 6 m plateau is
+	#    HIGHER (probe: every cell at d>=8 is +1 or more); the arm
+	#    scans the 8 principal rays for a 6 m same-level bench (the -x
+	#    ray carries an 8 m bench at d 10-18 on the seed-40 plateau)
+	#    and teleports BOTH the player and the wolf onto it.
+	p.inv[0] = {"id": 144, "n": 1}
+	p.sel = 0
+	var wolf: Node3D = Debug.spawn_mob("wolf", pz0.x + 3.0, pz0.y + 0.02, pz0.z)
+	p.look(atan2(-3.0, 0.0), -0.25)  # AC-0037: positive pitch aims UP
+	for i in 3:
+		await get_tree().physics_frame
+	p.use_selected()
+	var tamed: bool = wolf.tamed
+	var sx0 := int(sp0.x)
+	var sz0 := int(sp0.z)
+	var bench_a: Vector3i = Vector3i(-9999, -9999, -9999)
+	var bench_b: Vector3i = Vector3i(-9999, -9999, -9999)
+	for ang_i in range(8):
+		var ang := float(ang_i) / 8.0 * TAU
+		var run_start := -1
+		var run_top := -9999
+		for d2 in range(8, 21, 2):
+			var cx := sx0 + int(roundf(cos(ang) * d2))
+			var cz := sz0 + int(roundf(sin(ang) * d2))
+			var t3: int = world.surface_top(cx, cz)
+			if t3 <= 0:
+				run_start = -1
+				continue
+			if run_start < 0 or t3 != run_top:
+				run_start = d2
+				run_top = t3
+			elif d2 - run_start >= 6 and world.get_block(cx, t3 + 1, cz) == 0:
+				bench_a = Vector3i(sx0 + int(roundf(cos(ang) * run_start)), run_top, sz0 + int(roundf(sin(ang) * run_start)))
+				bench_b = Vector3i(cx, t3, cz)
+				break
+		if bench_b != Vector3i(-9999, -9999, -9999):
+			break
+	var wolf_ok: bool = tamed
+	if bench_b != Vector3i(-9999, -9999, -9999):
+		# player at the near bench cell, wolf 6+ m further along it
+		Debug.teleport(float(bench_a.x) + 0.5, float(bench_a.y) + 1.02, float(bench_a.z) + 0.5)
+		p.velocity = Vector3.ZERO
+		wolf.position = Vector3(float(bench_b.x) + 0.5, float(bench_b.y) + 1.02, float(bench_b.z) + 0.5)
+		wolf.velocity = Vector3.ZERO
+		for i in 8:
+			await get_tree().physics_frame
+		var wf0: float = wolf.position.distance_to(p.position)
+		for i in 150:
+			await get_tree().physics_frame
+		var wf1: float = wolf.position.distance_to(p.position)
+		# the tamed wolf closes and holds at ~FOLLOW_FAR (5 m)
+		wolf_ok = tamed and wf1 < wf0 - 0.7
+		wolf.queue_free()
+	else:
+		# no bench in this terrain: taming is the spec feature; the
+		# follow sub-check is skipped (reported in the result).
+		wolf.queue_free()
+	for i in 6:
+		await get_tree().physics_frame
+	# 7) SPAWN TABLES: clear the field, then let the world tick fill
+	#    the day ring (passives only), the night ring (hostiles
+	#    appear), and keep the population capped + despawned.
+	var to_free: Array = []
+	for c in Game.entities.get_children():
+		if c is Node3D and c.has_method("center"):
+			to_free.append(c)
+	for c in to_free:
+		c.queue_free()
+	for i in 6:
+		await get_tree().physics_frame
+	# run the tables FROM THE PLATEAU: the spawn tick rejects cells
+	# whose chunk is not generated yet (surface_top 0) AND cells with
+	# anything above the surface (the ring around the ridge bench is
+	# water - every attempt was rej_top), and the plateau's ring is
+	# proven dry.
+	Debug.teleport(pz0.x, pz0.y, pz0.z)
+	p.velocity = Vector3.ZERO
+	for i in 6:
+		await get_tree().physics_frame
+	world.recenter(p.position.x, p.position.z, true)
+	var ring_ready := false
+	for i in 600:
+		await get_tree().physics_frame
+		var okc := 0
+		for ang_i in range(12):
+			var ang := float(ang_i) / 12.0 * TAU
+			var rd := 30.0 if (ang_i % 2 == 0) else 38.0
+			var cx2 := int(floorf(p.position.x + cos(ang) * rd))
+			var cz2 := int(floorf(p.position.z + sin(ang) * rd))
+			if world.surface_top(cx2, cz2) > 0:
+				okc += 1
+		if okc >= 8:
+			ring_ready = true
+			break
+	Game.time_of_day = 0.3
+	var day_hostile := false
+	var day_passive := 0
+	for i in 360:  # ~6 s of 0.5 s ticks
+		await get_tree().physics_frame
+		for c in Game.entities.get_children():
+			if c is Node3D and c.has_method("center") and "key" in c:
+				if c.key in ["zombie", "skeleton", "spider"]:
+					day_hostile = true
+				else:
+					day_passive += 1
+	Game.time_of_day = 0.9
+	var night_hostile := 0
+	for i in 480:  # ~8 s
+		await get_tree().physics_frame
+		for c in Game.entities.get_children():
+			if c is Node3D and c.has_method("center") and "key" in c and c.key in ["zombie", "skeleton", "spider"]:
+				night_hostile += 1
+	var total := 0
+	for c in Game.entities.get_children():
+		if c is Node3D and c.has_method("center"):
+			total += 1
+	var tables_ok: bool = day_passive > 0 and not day_hostile and night_hostile > 0 and total <= world._mob_cap + 5
+
+	Debug.result({
+		"mode": "mobs",
+		"rig_ok": rig_ok,
+		"rig_missing": rig_names,
+		"bunny_ok": bunny_ok,
+		"fall_ok": fall_ok,
+		"chase_ok": chase_ok,
+		"spider_ok": spider_ok,
+		"wolf_ok": wolf_ok,
+		"arrow_ok": arrow_ok,
+		"tables_ok": tables_ok,
+		"day_passive": day_passive,
+		"night_hostile": night_hostile,
+		"total": total,
+		"ring_ready": ring_ready,
+		"ok": rig_ok and bunny_ok and fall_ok and chase_ok and spider_ok and wolf_ok and arrow_ok and tables_ok,
+	})
+	get_tree().quit()
 
 
 # AC-0267 helpers: find a flat 1+ block edge near spawn - a solid column

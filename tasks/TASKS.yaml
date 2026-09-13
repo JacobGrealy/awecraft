@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-13T10:38
+  updated_at: 2026-09-13T14:00
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0264
 - AC-0093
 - AC-0038
 - AC-0039
@@ -24,7 +23,6 @@ queue:
 - AC-0141
 - AC-0142
 - AC-0195
-- AC-0037
 - AC-0115
 - AC-0090
 - AC-0176
@@ -2267,17 +2265,36 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels:
   - godot
   created_at: 2026-08-16T12:00
-  updated_at: 2026-08-19 08:15T12:00
-  completed_at: null
+  updated_at: 2026-09-13T14:00
+  completed_at: 2026-09-13T14:00
   waiting_on: null
   parent_id: null
   notes: 'Mobs: 9 UNIQUE models (web''s 8 + cute bunny, chicken-sized) with hip/shoulder-pivoted limbs,
     AI (hostile chase, chicken passive, wolf tame by bone, spider night-only), bow/arrows, day/night spawn
-    tables; orchestrator iterates each model PNG'
+    tables; orchestrator iterates each model PNG
+
+
+    SHIPPED 2026-09-13 (built on f3e93ae DoF). 9 box-rig mobs, Data.mobs per type (pig/sheep/chicken/cow/wolf/zombie/skeleton/spider
+    + the requested bunny - 0.5x0.6, same height as the chicken, pink ears; the godot port uses procedural
+    box rigs - no web-era PNG model pipeline). Rig: CharacterBody3D with BoxShape3D + Body/Head box meshes
+    + 4 hip/shoulder PIVOT nodes, limb meshes hang below their pivot and swing with the walk cycle. AI
+    (mob.gd): passives wander (2-4 s heading re-roll, 0.6x speed); wolf untamed flees within 6 m, tamed
+    follows and holds at ~5 m; zombie chases within 16 m and melees at 1.6 m on a 1 s cd via damage_player;
+    skeleton holds the 4-14 m band and volleys the new Arrow projectile (arrow.gd: weak gravity 2.0, 8
+    s lifetime, stops on the first solid cell, hits the player within 0.9 m) every 2.5 s; spider hostile
+    only at night (DayNight.is_night). Taming: bone (id 144) used on an untamed wolf (player.use_selected
+    aim_mob). Spawning: world._mob_tick - 24-44 m ring, day table passives only (pig/sheep/chicken/cow/wolf/bunny),
+    night adds zombie/skeleton/spider; despawn > 52 m, cap 20, 3 attempts per 0.5 s. Bug fixed in the
+    tick while verifying: the top-solid rejection was inverted (surface_top IS the topmost solid, so the
+    check rejected every attempt - the tick had never spawned anything). VERIFIED: AWECRAFT_LOGIC=mobs
+    arm 8/8 (rig, bunny geometry, fall, chase, spider day/night, wolf tame + follow on a same-level ridge
+    bench, skeleton arrow damage, spawn tables + cap, ring_ready); battery green incl. GENHASH 80b904c0e5f085eef1e839459058c706
+    exact; player-arm sprint FOV check updated for the new 90 base (DoF PR f3e93ae, kick checks now relative);
+    Windows build shipped, :8080 sha bb907a22fe8689c38cded5dc5b3556a887e7dd8b899ca5e1181d6f903cd1495f.'
   comments:
   - id: 1
     created_at: 2026-08-16 20:00T12:00

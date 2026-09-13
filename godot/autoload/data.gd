@@ -157,6 +157,9 @@ var mobs := {
 	"chicken": {"passive": true, "hp": 4, "w": 0.45, "h": 0.6, "speed": 1.7, "drops": [{"id": 146, "n": 1, "ch": 1.0}], "body": Color.html("f6f3ef"), "head": Color.html("f6f3ef")},
 	"wolf": {"passive": true, "hp": 8, "w": 0.6, "h": 0.9, "speed": 3.0, "drops": [{"id": 104, "n": 2, "ch": 0.8}], "body": Color.html("7c7970"), "head": Color.html("6b685f")},
 	"spider": {"passive": false, "hp": 16, "w": 1.3, "h": 0.95, "speed": 2.5, "dmg": 2, "drops": [{"id": 145, "n": 2, "ch": 0.8}], "body": Color.html("2b2620"), "head": Color.html("211d18")},
+	# AC-0037: the cute bunny (user ask) - chicken-sized, passive, drops
+	# a little leather. The rig adds the long ears (see entities/mob.gd).
+	"bunny": {"passive": true, "hp": 3, "w": 0.5, "h": 0.6, "speed": 2.2, "drops": [{"id": 104, "n": 1, "ch": 0.7}], "body": Color.html("f3e3d7"), "head": Color.html("f6ead9")},
 }
 var tiles := {}
 

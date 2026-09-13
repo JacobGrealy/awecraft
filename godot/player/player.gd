@@ -1378,6 +1378,15 @@ func use_selected() -> void:
 		if _ut:
 			print("USETRACE reject: no item sid=%s" % str(sid))
 		return
+	# AC-0037: use a BONE on a wolf = tame it (MC semantics: the tamed
+	# wolf follows and no longer flees).
+	if sid == 144:
+		var mob = aim_mob()
+		if mob != null and str(mob.key) == "wolf" and not mob.tamed:
+			mob.tamed = true
+			item["n"] = int(item["n"]) - 1
+			Game.message("Wolf tamed")
+			return
 	var info = Data.items.get(sid)
 	if info != null and info.has("food"):
 		if _ut:
