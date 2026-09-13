@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-13T06:37
+  updated_at: 2026-09-13T08:15
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0268
 - AC-0266
 - AC-0271
 - AC-0267
@@ -468,14 +467,121 @@ intake:
 - id: AC-0268
   title: crafting-menu-controller-support
   priority: 2
-  status: open
+  status: done
+  updated_at: 2026-09-13T08:15
+  completed_at: 2026-09-13T08:15
   notes: '1) User Story: As a player using a controller I want to use the crafting menu fully with the
     controller, not just mouse.
 
 
     2) Technical Details: godot/scenes/menu.tscn + crafting UI + player.gd input. Add controller navigation:
     D-pad/stick to move focus between craft grid, output, inventory slots, shoulder buttons for quick
-    move, A to pick/place, B to close. Keep mouse unchanged. Verify full craft flow with controller alone.'
+    move, A to pick/place, B to close. Keep mouse unchanged. Verify full craft flow with controller alone.
+
+
+    Closed 20260913 overnight (round 2, after AC-0269). Implemented per
+
+    spec - the crafting menu is fully controller-driven (mouse untouched):
+
+    (1) SlotCtl focus: FOCUS_ALL + _gui_input on the focused slot - A =
+
+    left-click (the existing _route_click button-0 path), LB/RB = shift-
+
+    click quick-move (the existing button-0/shift path; a no-op on the
+
+    craft grid by design), presses only (the mouse release half is the
+
+    held-item drop - needs the cursor - a pad user never drags); B close
+
+    stays the player''s InputMap polling; the focus draws an amber border
+
+    (redrawn on FOCUS_ENTER/EXIT). (2) THE KEY FINDING: Godot''s native GUI
+
+    focus navigation does NOT walk controls inside a CanvasLayer (the
+
+    inventory is the HUD CanvasLayer) - verified empirically with two real
+
+    Buttons added to the same layer: grab_focus works, D-pad focus walk
+
+    never does (the pause menu works because it is a plain scene-tree
+
+    Control). So the inventory implements its own navigation: _pad_nav
+
+    polled from _process on the ui_* actions, nearest VISIBLE slot in the
+
+    direction. SCORING PITFALL (caught by the arm): the gap along the
+
+    travel direction is cheap, the CROSS-AXIS offset is penalized x4 - the
+
+    first run went armor[1] -> storage[1] (barely right, rows down) instead
+
+    of the same-row craft cell because the weights were inverted. (3)
+
+    Game._ready registers the ANALOG STICK on ui_left/right/up/down (the
+
+    built-in defaults carry the D-pad only) - Bedrock-style stick menu
+
+    navigation; in gameplay no control has focus so the extra action state
+
+    is inert. (4) open transition grabs the first craft cell (slot 9) -
+
+    MUST run after the slot-visibility loop (the slots are still hidden on
+
+    the opening frame and grab_focus on a hidden slot does not take); close
+
+    transition releases a lingering slot focus.
+
+
+    Harness: AWECRAFT_LOGIC=craftpad - the full flow with the controller
+
+    alone (15 sub-checks): seed 1 oak log in storage[0] (the {6:1}->{8:4}
+
+    recipe matches the grid EXACTLY - an extra cell breaks the shapeless
+
+    match - and A = left-click moves WHOLE stacks, so a 1-stack is the
+
+    A-only path; Debug.seed_inv''s 5-stack would not craft) + a 4-plank
+
+    stack in storage[1] (inv_add fills the HOTBAR first via _inv_order,
+
+    and the hotbar strip is hidden while the panel is open - so the
+
+    quick-move needs a focusable storage stack). Flow: Y opens (auto-
+
+    select) -> stick moves focus -> D-pad to the log (A picks) -> craft
+
+    cell 0 (A places) -> recipe recomputes (A-independent, fires in the
+
+    grid click) -> A on the output collects -> LB on the storage planks
+
+    quick-moves to the hotbar (merge onto the collect''s stack; total kept)
+
+    -> B closes -> focus released. The arm''s nav helper is a greedy
+
+    row-band-first walk over the real slot rects (a plain dominant-axis
+
+    greedy oscillates at the row edge; the "row band = tops within one slot
+
+    height, then correct the column" rule converges on the fixed layout).
+
+
+    GATES: boot 0 err; craftpad ok (15/15); gamepad arm ok (no focus
+
+    regression from the new FOCUS_ALL slots - its menu nav is native
+
+    scene-tree, unaffected); battery all arms + GENHASH
+
+    80b904c0e5f085eef1e839459058c706 EXACT (mouse crafting untouched - the
+
+    interact arm verifies it). World streaming gates not re-run (no world
+
+    code in the diff). Shipped AweCraft[20260913-0813] at :8080 (zip sha
+
+    7261109f... byte-matched; the build''s duplicate 8082 daemon died with
+
+    its sandbox - the documented AC-0155 pattern, 8080 stays
+
+    authoritative).'
   area: ui
   effort: M
   depends_on: []
