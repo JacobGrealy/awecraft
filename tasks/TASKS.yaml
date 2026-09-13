@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-13T02:49
+  updated_at: 2026-09-13T04:23
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0278
 - AC-0277
 - AC-0269
 - AC-0268
@@ -40,7 +39,9 @@ intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
   priority: 2
-  status: open
+  status: done
+  updated_at: 2026-09-13T04:23
+  completed_at: 2026-09-13T04:23
   notes: '1) User Story: As a player I want chunks at r+1 held as data-only and at r+2 freed without a
     sticky candidate flag, so meshes don''t get stuck and show correctly when flying over them.
 
@@ -48,7 +49,75 @@ intake:
     2) Technical Details: Remove c.candidate boolean. Orchestrator on recenter does single distance check:
     inside r -> queue for gen/mesh, at r+1 -> keep data-only hidden, at r+2 -> free. Remove scattered
     candidate checks from picks and fog/low/high gates (replace with distance/band checks). Single source
-    of truth fixes stuck-mesh bug where candidate out of sync kept mesh from generating even at tier 0.'
+    of truth fixes stuck-mesh bug where candidate out of sync kept mesh from generating even at tier 0.
+
+
+    Closed 20260913 overnight (round 2). Implemented per spec: c.candidate
+
+    boolean removed (chunk.gd var + pool reset; world.gd _enter_candidate +
+
+    recenter walk). Candidacy is now a distance fact at the single recenter
+
+    walk: in-stream-set vs out, with just-exited / just-re-entered transitions
+
+    derived from the old center (opcx/opcz, already captured for AC-0275).
+
+    r+1 retain (hide-not-kill) and r+2 free-after-2-events hysteresis
+
+    (cand_since) are unchanged - verified by the new arm.
+
+
+    The spec''s "remove scattered candidate checks from picks and fog/low/high
+
+    gates": audit found those gates were ALREADY distance/band-based (the flag
+
+    was read only by the recenter walk + harness diagnostics); nothing to
+
+    replace there. The real stuck-mesh root cause: a build entry stripped when
+
+    a chunk candidated on exit was only re-queued in the WANT walk, which
+
+    DEBOUNCED recenters skip (AC-0213, <1s + 1-chunk + cover<=4) - on a
+
+    sustained flight the chunk re-enters the high band on a debounced
+
+    recenter, the player lands, and no recenter ever re-queued it (even at
+
+    tier 0). Fix: the recenter walk (runs on EVERY recenter incl. debounced)
+
+    now re-queues a high-band chunk with data + no mesh + no build entry
+
+    (idempotent; the drain''s high_only gate keeps over-queueing harmless).
+
+
+    New harness arm AWECRAFT_LOGIC=candflag reproduces it end-to-end (R=16,
+
+    flying): T = high-band chunk, build entry stripped (the stranded state),
+
+    flies -16 to candidate; U = built chunk -> taxi 20 candidate, mesh kept
+
+    (hide-not-kill), freed after 2 two-out events; 14 one-chunk return
+
+    crossings (full walks at m=5/10, the rest debounced); T re-enters the
+
+    HIGH band (taxi 7) on a debounced crossing and the player lands - T must
+
+    mesh from the standing drain. ok: T re-entry queued=build (the
+
+    single-source re-queue) + built in 15 frames; U retained/freed/regenerated.
+
+
+    Gates green: boot 0 err; candflag ok (11.8s); battery all arms + GENHASH
+
+    80b904c0e5f085eef1e839459058c706 EXACT; r16 ok (fly50 lost 0); loadlog r30
+
+    3.7s 25/25 no stall (baseline 3.6s); lightstate LS16 double_lod 0 / holes
+
+    pre 0 / demote-ring 0 / low_on_high 0 / demoted 47 / stragglers 1.
+
+    Shipped build AweCraft[20260913-0421] at :8080 (sha d7f2144e...).
+
+    Commit 45dd719.'
   area: perf
   effort: M
   depends_on:
