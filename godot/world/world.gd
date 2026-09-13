@@ -2534,22 +2534,16 @@ func _low_drop_slab(c: Node3D, si: int) -> void:
 # AC-0231 rewrite: place/replace the per-slab low instance (slab-local
 # 0..16 geometry at (0, si*16, 0), sorted by slab index).
 func _low_place_slab(c: Node3D, si: int, mesh: ArrayMesh) -> void:
-	# AC-0275: the double-LOD guard - the slab already holds a HIGH mesh;
-	# attach nothing (a low box / fog veil over a high mesh is the user's
-	# "washed-out / stuck-in-night" chunks). Mark the slab low-terminal
-	# (stamp, NO instance) so the wave probe stops owing it.
+	# AC-0263 spec (keep-all-LOD): the slab holds a stored HIGH - the low
+	# landing is the FLIP: attach the low, turn the high off. The high
+	# instances stay on the node (hidden) until the column recycles - the
+	# re-entry flip brings them back WITHOUT a rebuild. AC-0275's
+	# double-LOD refusal is gone: the flip is atomic (one visible tier at
+	# a time) and there is no fog to refuse against.
 	if c.slabs[si].mesh_instance != null:
-		low_on_high_n += 1
-		if mesh != null:
-			mesh.free()
-		_fog_drop_slab(c, si)  # the veil goes with the refused box
-		# terminal mark: "no low owed at this data_gen" (an edit bumps the
-		# gen and re-opens the slab).
-		c.low_failed[si] = int(c.data_gen)
-		c.low_stamps[si] = c.stamp()
-		c.low_tiers[si] = int(c.data.size())  # no-tier stamp (the high owns it)
-		_low_probe_invalidate(c)
-		return
+		c.high_slab_visible(si, false)
+		low_on_high_n += 1  # the flip count (high kept, low now active)
+		_fog_drop_slab(c, si)  # a veil (dormant wave) goes with the flip
 	var _wpt := Time.get_ticks_usec()  # AC-0251 MESHATTACH sub-stage
 	var i := 0
 	while i < c.low_slabs.size() and int(c.low_slabs[i]) < si:
@@ -2600,7 +2594,12 @@ func _low_reset_all() -> void:
 		for si in c.low_slabs.duplicate():
 			var si2 := int(si)
 			_low_drop_slab(c, si2)
-			if not c.data.is_empty() and si2 < c.data.size() and c.data[si2] != null:
+			# AC-0263 spec (2026-09-13, "remove the fog blocks"): the
+			# placeholder is the dormant wave only (FOG_WAVE_ON) - a swap
+			# gap shows the stored tier (or nothing until the wave
+			# re-lowers) instead of a fog box.
+			if FOG_WAVE_ON and not c.data.is_empty() and si2 < c.data.size() \
+					and c.data[si2] != null and not c.has_fog_si(si2):
 				_fog_ensure_slab(c, si2)
 		# c.low_stamps was already cleared by the last _low_drop_slab (the
 		# empty-low reset); c.low_failed stays — its marks are keyed by
@@ -2618,6 +2617,24 @@ func _low_reset_all() -> void:
 func _lod_free_all(c: Node3D, as_upgrade: bool) -> void:
 	if as_upgrade and (bool(c.low_built) or c.has_fog()):
 		low_upgrades_n += 1
+	if as_upgrade:
+		# AC-0263 spec (keep-all-LOD): the high takes over - the per-slab
+		# lows are STORED (visible=false), not freed: the band-exit
+		# flip-back renders them without a rebuild, and they pool out at
+		# column recycle. Their stamps/tiers/masks stay (the slabs remain
+		# low-complete - the low probe does not re-pend them). Only the
+		# fog (the dormant placeholder) drops.
+		if c.has_fog():
+			for si in c.fog_slabs.duplicate():
+				_fog_drop_slab(c, int(si))
+		for i in range(c.low_slabs.size()):
+			var mi2: MeshInstance3D = c.low_instances[i]
+			if mi2 != null:
+				mi2.visible = false
+		_low_probe_invalidate(c)  # conservative (visible state moved)
+		return
+	# the free path (chunk clear / candidate): everything returns to the
+	# pools, the low state clears (the column is gone).
 	if c.has_fog():
 		low_fog_boxes_n -= int(c.fog_slabs.size())
 		low_fog_chunks_n -= 1
@@ -2680,12 +2697,13 @@ func _low_pick(want_low: bool) -> Dictionary:
 			# only for chunks whose LOW slabs are ALL fresh.
 			var stale := _low_any_stale(c)
 			if want_low:
-				# AC-0261: the stale-low gate is gone — every candidate is
-				# a HIGH-band column (the band gate above) whose low was
-				# built at a FARTHER tier (that is why it is stale at the
-				# live tier 0). The high build REPLACES every placeholder
-				# (the handoff frees them) and reads the current data, so
-				# the low's tier stamp is irrelevant.
+				# AC-0261 + AC-0263 spec (keep-all-LOD): the stale-low gate is
+				# gone — every candidate is a HIGH-band column (the band
+				# gate above) whose low was built at a FARTHER tier (that
+				# is why it is stale at the live tier 0). The high build
+				# takes over every placeholder (the hslab landing HIDES
+				# the stored low - free flip-back on re-exit) and reads
+				# the current data, so the low's tier stamp is irrelevant.
 				if not bool(c.low_built):
 					continue
 				# the idle upgrade must not force a sync fallback — a
@@ -2814,8 +2832,14 @@ func _low_scan_slabs(n: int) -> Array:
 			if taxi < medium_start_r or taxi >= render_radius:
 				continue
 			var c = chunks.get(e["key"])
-			if c == null or c.data.is_empty() or bool(c.mesh_built):
+			if c == null or c.data.is_empty():
 				continue
+			# AC-0263 spec (keep-all-LOD): a MESHED column in the wave band
+			# is a DEMOTED column (its stored high stays until the flip) -
+			# its pending lows are owed HERE (the pending check below is
+			# the real filter: a fully flipped column owes nothing). A
+			# meshed HIGH-band column cannot reach this gate (the band
+			# check above).
 			var si := _entry_best_pending_cached(c)  # AC-0262: probe cache
 			if si < 0:
 				continue
@@ -3063,9 +3087,17 @@ func _low_step() -> void:
 		if _slab_wave_acc_ms < LOW_WAVE_PACE_MS:
 			break
 		var c2 = chunks.get(e2["key"])
-		if c2 == null or c2.data.is_empty() or bool(c2.mesh_built):
+		if c2 == null or c2.data.is_empty():
 			# the candidate went stale (a handoff/recenter raced) —
 			# rescan next frame.
+			_low_slab_none_key = ""
+			break
+		# AC-0263 spec (keep-all-LOD): a meshed WAVE-band column is a
+		# demoted column (the stored high waits for the flip) - its
+		# pending lows are still owed. Only a meshed HIGH-band column is
+		# stale (it owes no low at all).
+		if bool(c2.mesh_built) \
+				and absi(int(c2.cx) - last_pcx) + absi(int(c2.cz) - last_pcz) < medium_start_r:
 			_low_slab_none_key = ""
 			break
 		# AC-0236 part 2 / AC-0250 / AC-0252 offload: the grid sample +
@@ -4573,8 +4605,11 @@ func band_drained() -> bool:
 		var taxi := absi(int(c.cx) - last_pcx) + absi(int(c.cz) - last_pcz)
 		if taxi < medium_start_r or taxi >= render_radius:
 			continue
-		if c.data.is_empty() or bool(c.mesh_built):
+		if c.data.is_empty():
 			continue
+		# AC-0263 spec (keep-all-LOD): a meshed wave-band column is a
+		# demoted column - its pending lows still count as owed (the
+		# probe below decides; a fully flipped column owes nothing).
 		if _entry_best_pending_cached(c) >= 0:  # AC-0262: probe cache
 			return false
 	return true
@@ -5538,27 +5573,38 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		# all-air builds stamped too — done, not pending), and the probe
 		# flips mesh_built when the column owes nothing.
 		var si_h: int = int(e["si0"])
-		# AC-0275 (user decision A): a STRAGGLER - the column left the
-		# high band while this build was in flight. Do not attach the
-		# high (the wave owns the column at its new tier now); free the
-		# worker's result, keep the light (it is still valid for the
-		# neighbors' strips), and let the low probe re-own the slab.
+		# AC-0263 spec (keep-all-LOD): a STRAGGLER (the column left the
+		# high band while this build was in flight) is no longer an error
+		# - the high landing IS the slab's STORED high (the re-entry flip
+		# is a visibility toggle, never a rebuild). Attach it (the
+		# retain-swap) and set the active tier: in the high band the high
+		# is ON (any low is stored OFF); out of band a READY low stays ON
+		# and the high is stored OFF, or - no low yet - the high stays ON
+		# until the wave's low lands and flips it (the slab never shows
+		# two tiers or nothing).
 		var taxi_now := absi(int(c.cx) - last_pcx) + absi(int(c.cz) - last_pcz)
-		if taxi_now >= medium_start_r:
-			_eff_landed(c, c.last_eff, res.get("light", {}))
-			_hslab_probe_invalidate(c)
-			_low_probe_invalidate(c)
+		var straggler := taxi_now >= medium_start_r
+		if straggler:
 			hslab_stragglers_n += 1
-			if timing or _tm_debug:
-				print("HSLABSTRAG %d,%d slab=%d taxi=%d" % [int(c.cx), int(c.cz), si_h, taxi_now])
-			return
 		var ta_h := Time.get_ticks_msec()
 		var old_eff_h = c.last_eff
 		c.apply_edit_accs(res, _tm_ms_full, false)
 		c.high_stamps[si_h] = int(c.data_gen)
-		_low_drop_slab(c, si_h)
+		# AC-0263 spec: the slab's low is STORED, not dropped (the
+		# band-exit flip-back renders it without a rebuild); the fog
+		# (dormant) still drops with the placeholder state.
 		_fog_drop_slab(c, si_h)
+		if straggler and c.has_low_si(si_h):
+			c.low_slab_visible(si_h, true)
+			c.high_slab_visible(si_h, false)  # stored (flip-back on re-entry)
+		elif straggler:
+			c.high_slab_visible(si_h, true)   # active until the wave flips
+		else:
+			c.high_slab_visible(si_h, true)
+			if c.has_low_si(si_h):
+				c.low_slab_visible(si_h, false)  # stored (flip on demote)
 		_hslab_probe_invalidate(c)
+		_low_probe_invalidate(c)
 		if not bool(c.mesh_built) and _hslab_best_pending(c) < 0:
 			c.mesh_built = true
 			# high-complete: the column's placeholders are all gone now
@@ -7980,38 +8026,72 @@ func _drain_deferred_free() -> void:
 		_free_chunk_key(String(fe["key"]))
 		n += 1
 
-# AC-0275 (user decision A): a column that crossed OUT of the high band on
-# a recenter is regenerated at its new band's tier. The partial (or full)
-# high is freed, the data slabs are stamped high-complete at the current
-# data (the high probe stops owing them), and the slab wave re-owns the
-# slabs (the low probe owes them at the new tier). mesh_built goes back to
-# false: for an out-of-band column, "complete" = the low probe drains.
+# AC-0263 spec (keep-all-LOD, 2026-09-13): a column that crossed OUT of
+# the high band on a recenter keeps its stored high - nothing is freed,
+# no fog veil (the user's "fog cubes" were this path). Per slab: one that
+# already holds a READY low (a prior round-trip, fresh stamp + tier)
+# flips NOW (high off, low on - one visible tier at a time); the rest
+# keep SHOWING the high until the wave's low lands and _low_place_slab
+# flips them. mesh_built stays as-is: a complete high is STILL complete
+# (it is stored on the node) - the drain and the WAVE 3 catch-up must not
+# re-pick the column (the re-entry flip is visibility-only); a PARTIAL
+# high keeps mesh_built=false and the high lane rebuilds the missing
+# slabs on re-entry (the AC-0278 re-queue).
 func _demote_high_band_exit(c: Node3D, key: String) -> void:
-	var freed: int = int(c.demote_high())
-	if freed <= 0:
-		return
+	var tier := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)
+	var flipped := 0
+	var reopened := 0
 	for si in range(c.data.size()):
-		if c.data[si] != null:
-			c.high_stamps[si] = int(c.data_gen)
-			# the double-LOD guard's terminal mark (low_failed = data_gen,
-			# no instance) would read as "no low owed" once the high is
-			# gone - an invisible slab. Re-open the obligation so the
-			# wave claims the slab at the new tier (a genuine all-air mark
-			# costs one re-sample, which re-marks it).
+		if c.data[si] == null:
+			continue
+		if c.has_low_si(si) and not _low_slab_pending_at(c, si, tier):
+			# the ready stored low takes over - the atomic flip.
+			c.high_slab_visible(si, false)
+			c.low_slab_visible(si, true)
+			_fog_drop_slab(c, si)  # a veil (dormant wave) goes with the tier
+			flipped += 1
+		else:
+			# no ready low: the high keeps showing. Re-open the low
+			# obligation so the wave claims the slab at the new tier (the
+			# flip lands in _low_place_slab); a genuine all-air mark costs
+			# one re-sample, which re-marks it.
 			c.low_failed.erase(si)
-			# the placeholder: the freed slab has no high anymore and the
-			# wave hasn't lowered it yet - the fog box covers the gap
-			# (the wave drops it on the low attach). Without this the
-			# demote ring shows see-through holes for the wave's fill
-			# time (measured 1500+ slabs at r16 after a band jump).
-			if not (c.low_mask & (1 << si)) and not (c.fog_mask & (1 << si)):
-				_fog_ensure_slab(c, si)
-	c.mesh_built = false
+			reopened += 1
 	_hslab_probe_invalidate(c)
 	_low_probe_invalidate(c)
 	demoted_cols_n += 1
 	if timing or _tm_debug:
-		print("DEMOBAND %s freed=%d" % [key, freed])
+		print("DEMOBAND %s flipped=%d reopened=%d" % [key, flipped, reopened])
+
+
+# AC-0263 spec (keep-all-LOD): a column that crossed BACK into the high
+# band on a recenter flips its stored highs back on - a visibility
+# toggle, NEVER a rebuild (the instances were kept on the node). A slab
+# with no stored high, or a STALE one (data changed after the high
+# landed - high_stamps != data_gen), keeps its low active; the high probe
+# owes it and the high lane rebuilds it (the AC-0278 re-queue re-enters
+# such columns, and the landing flips per the hslab rule). mesh_built is
+# re-derived from the probe (a column that still owes slabs re-queues; a
+# fully stored one stays drained).
+func _reentry_flip_high(c: Node3D, key: String) -> void:
+	var flipped := 0
+	for si in range(c.data.size()):
+		if c.data[si] == null:
+			continue
+		if c.slabs[si].mesh_instance == null:
+			continue  # no stored high (the lane builds it if owed)
+		if int(c.high_stamps.get(si, -1)) != int(c.data_gen):
+			continue  # stale stored high (the lane rebuilds it)
+		c.high_slab_visible(si, true)
+		if c.has_low_si(si):
+			c.low_slab_visible(si, false)  # stored (flip on the next demote)
+		flipped += 1
+	if flipped > 0:
+		_low_probe_invalidate(c)
+	_hslab_probe_invalidate(c)
+	c.mesh_built = _hslab_best_pending(c) < 0
+	if timing or _tm_debug:
+		print("FLIPBACK %s flipped=%d mesh_built=%d" % [key, flipped, int(c.mesh_built)])
 
 
 func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
@@ -8134,13 +8214,20 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 			if not c.data.is_empty() and not c.mesh_built and htx < medium_start_r \
 					and queued_keys.get(key) != "build":
 				_enqueue_build(int(c.cx), int(c.cz))
-			# AC-0275 (user decision A): the column just LEFT the high band
-			# on this recenter - demote it to the new band's tier (the
-			# wave re-owns the slabs; the double-LOD stragglers die).
+			# AC-0263 spec (keep-all-LOD): the column just LEFT the high
+			# band on this recenter - keep its stored high, flip the ready
+			# lows, re-open the rest (the demote above - no free, no fog).
 			if not c.data.is_empty() \
 					and (absi(int(c.cx) - opcx) + absi(int(c.cz) - opcz)) < medium_start_r \
 					and (absi(dx) + absi(dz)) >= medium_start_r:
 				_demote_high_band_exit(c, key)
+			# AC-0263 spec (keep-all-LOD): the column just CAME BACK into
+			# the high band - flip its stored highs on (visibility only,
+			# no rebuild; the mirror of the demote above).
+			if not c.data.is_empty() \
+					and (absi(int(c.cx) - opcx) + absi(int(c.cz) - opcz)) >= medium_start_r \
+					and (absi(dx) + absi(dz)) < medium_start_r:
+				_reentry_flip_high(c, key)
 		else:
 			# AC-0278: "just exited" is a distance fact (in set w.r.t. the
 			# previous center, out now) - the one-time entry work (clear

@@ -3710,10 +3710,25 @@ func _lod_census() -> Dictionary:
 		for si in range(c.data.size()):
 			if c.data[si] == null:
 				continue
-			if c.slabs[si].mesh_instance != null and c.low_mask & (1 << si):
-				n2 += 1
+			# AC-0263 spec (keep-all-LOD): double-LOD = two tiers VISIBLE
+			# at once (the co-RENDERED bug - the double-LOD lighting
+			# artifact). Co-STORAGE (a hidden high + an active low) is the
+			# design, not a fault.
 			var s3 = c.slabs[si]
-			if s3.mesh_instance == null and s3.fluid_instance == null and s3.flora_instance == null and not (c.low_mask & (1 << si)) and not (c.fog_mask & (1 << si)) and int(c.low_failed.get(si, -1)) != int(c.data_gen):
+			if s3.mesh_instance != null and s3.mesh_instance.visible and (c.low_mask & (1 << si)):
+				var lia: int = c.low_slabs.find(si)
+				if lia >= 0:
+					var lma: MeshInstance3D = c.low_instances[lia]
+					if lma != null and lma.visible:
+						n2 += 1
+			# AC-0263 spec: a HIGH-COMPLETE slab (stamped at the current
+			# data) is DONE - its emit may be legitimately faceless (a
+			# buried slab with no exposed faces) and shows nothing by
+			# design. Not a hole.
+			if s3.mesh_instance == null and s3.fluid_instance == null and s3.flora_instance == null \
+					and not (c.low_mask & (1 << si)) and not (c.fog_mask & (1 << si)) \
+					and int(c.low_failed.get(si, -1)) != int(c.data_gen) \
+					and int(c.high_stamps.get(si, -1)) != int(c.data_gen):
 				holes += 1
 				if taxi <= world.medium_start_r + 2:
 					holes_demote_ring += 1
@@ -3891,42 +3906,39 @@ func _lightstate_test(spawn: Vector3) -> void:
 		if int(world.low_on_high_n) > loh_pre:
 			break
 	var loh_post: int = int(world.low_on_high_n)
-	var dl := 0
-	var dl_chunks := 0
-	var holes := 0  # AC-0275: data slabs with NO instance of any kind (an invisible slab)
-	var holes_demote_ring := 0  # the just-demoted ring (taxi 8..medium+1): a regression signal
-	for key in world.chunks:
-		var c = world.chunks.get(key)
-		if c == null or c.data.is_empty():
-			continue
-		var taxi := absi(int(c.cx) - world.last_pcx) + absi(int(c.cz) - world.last_pcz)
-		if taxi < world.medium_start_r:
-			continue  # high band: owed to the high lane (its own pending probe)
-		var n2 := 0
-		for si in range(c.data.size()):
-			if c.data[si] == null:
-				continue  # air above the column top - nothing is owed
-			if c.slabs[si].mesh_instance != null and c.low_mask & (1 << si):
-				n2 += 1
-			var s3 = c.slabs[si]
-			if s3.mesh_instance == null and s3.fluid_instance == null and s3.flora_instance == null \
-					and not (c.low_mask & (1 << si)) and not (c.fog_mask & (1 << si)) \
-					and int(c.low_failed.get(si, -1)) != int(c.data_gen):
-				holes += 1
-				if taxi <= world.medium_start_r + 2:
-					holes_demote_ring += 1
-		if n2 > 0:
-			dl += n2
-			dl_chunks += 1
+	# AC-0263 spec (keep-all-LOD): the demote-ring HOLE-FILL TRAJECTORY -
+	# the no-fog trade-off: a band jump leaves the not-yet-built slabs of
+	# partially-high demoted columns with no instance for the wave's fill
+	# time (the AC-0275 fog veil used to cover this window). Sample the
+	# census over ~5 s, then settle the gate metrics on the drained state
+	# (band_drained = the wave band owes nothing, the demoted columns'
+	# pending lows included).
+	var hole_traj: Array = []
+	var ring_traj: Array = []
+	for hp in 5:
+		var hs: Dictionary = _lod_census()
+		hole_traj.append(int(hs["holes"]))
+		ring_traj.append(int(hs["holes_demote_ring"]))
+		await get_tree().physics_frame
+		for _hf in 300:
+			await get_tree().physics_frame
+	var settle := 0
+	while settle < 2400 and not world.band_drained():
+		await get_tree().physics_frame
+		settle += 1
+	var census_post := _lod_census()
 	var report: Dictionary = {"grid": grid, "worst": null, "wash_detected": worst_leaks > 0, "ab": ab_report, "low_on_high_n": loh_post, "demoted": int(world.demoted_cols_n), "stragglers": int(world.hslab_stragglers_n), "move": {
 		"loh_pre": loh_pre,
 		"loh_post": loh_post,
 		"delta": loh_post - loh_pre,
 		"frames_waited": moh,
-		"double_lod_slabs_now": dl,
-		"double_lod_chunks_now": dl_chunks,
-		"hole_slabs_now": holes, "holes_pre": int(census_pre["holes"]),
-		"holes_demote_ring": holes_demote_ring,
+		"double_lod_slabs_now": int(census_post["dl"]),
+		"double_lod_chunks_now": int(census_post["dl_chunks"]),
+		"hole_slabs_now": int(census_post["holes"]), "holes_pre": int(census_pre["holes"]),
+		"holes_demote_ring": int(census_post["holes_demote_ring"]),
+		"hole_traj": hole_traj,
+		"ring_traj": ring_traj,
+		"settle_frames": settle,
 	}}
 	if worst_key != "" and worst_leaks > 0:
 		var wc = world.chunks.get(worst_key)
@@ -9415,7 +9427,12 @@ func _r16_test(spawn: Vector3) -> void:
 			"catch_up_frames": qidle,
 			"catch_up": catch_up,
 			"demoted_cols_n": int(world.demoted_cols_n),
-			"catch_up_ok": int(world.demoted_cols_n) > 0 and int(far1["far_low"]) > 100 and int(far1["far_high"]) <= 20,
+			# AC-0263 spec (keep-all-LOD): the demote fired, and every far
+			# slab is VISIBLE (its stored high or its active low - no
+			# holes, no lost work). The old far_high<=20 clause measured
+			# the pre-fix residue (demoted columns freed their high);
+			# stored highs out there are the design now.
+			"catch_up_ok": int(world.demoted_cols_n) > 0 and int(far1["far_visible"]) > 100 and int(far1["far_holes"]) == 0,
 			"no_downgrade_ok": int(world.low_downgrade_n) == 0,
 		},
 		# AC-0218: neighbor-dirty evidence — per-phase deltas of the world
@@ -9641,7 +9658,12 @@ func _r16_lod_far() -> Dictionary:
 			if c.data[si] == null:
 				continue  # air slab — no placeholder needed
 			slabs += 1
-			if bool(c.mesh_built):
+			# AC-0263 spec (keep-all-LOD): the ACTIVE tier counts - a
+			# stored-but-hidden high behind an active low is the flip's
+			# resting state (mesh_built alone no longer implies the high
+			# is what shows).
+			var s4 = c.slabs[si]
+			if s4.mesh_instance != null and s4.mesh_instance.visible:
 				high += 1
 			elif c.has_low_si(si):
 				low += 1

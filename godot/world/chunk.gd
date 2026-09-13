@@ -173,33 +173,35 @@ func has_fog_si(si: int) -> bool:
 func has_low_si(si: int) -> bool:
 	return (low_mask >> si) & 1 != 0
 
-# AC-0275: free EVERY high-res slab instance (mesh/fluid/flora/occluder;
-# the collision bodies stay - collision is LOD-independent). The band-exit
-# demote call (user decision A: a column that leaves the high band on a
-# recenter is regenerated at the new band's tier - the slab wave re-owns
-# the slabs). Returns the instance count freed.
-func demote_high() -> int:
-	var n := 0
-	var old_insts: Array = []
-	for s in slabs:
-		if s.mesh_instance != null:
-			old_insts.append(s.mesh_instance)
-		if s.fluid_instance != null:
-			old_insts.append(s.fluid_instance)
-		if s.flora_instance != null:
-			old_insts.append(s.flora_instance)
-		if s.occluder != null:
-			old_insts.append(s.occluder)
-	for s in slabs:
-		s.mesh_instance = null
-		s.fluid_instance = null
-		s.flora_instance = null
-		s.occluder = null
-		n += 1
-	for o2 in old_insts:
-		if is_instance_valid(o2):
-			_pool_free_inst(o2)
-	return n
+# AC-0263 spec (keep-all-LOD, 2026-09-13): the band-exit FREE is GONE.
+# Every tier a slab has ever generated stays on the node (the instances
+# are pooled back at column recycle only - world._col_checkin sweeps the
+# children); exactly ONE tier per slab is visible at a time, and the band
+# crossings are visibility FLIPS (high off / low on, same frame - no
+# co-rendered tiers, no fog, no regeneration). Rendering is cheap (the
+# user's GPU idles; generation is the cost) - hidden attached instances
+# are the stored tiers. The occluder + collision stay LOD-independent
+# (the terrain is solid whichever LOD shows).
+func high_slab_visible(si: int, on: bool) -> void:
+	if si < 0 or si >= slabs.size():
+		return
+	var s = slabs[si]
+	if s == null:
+		return
+	if s.mesh_instance != null:
+		s.mesh_instance.visible = on
+	if s.fluid_instance != null:
+		s.fluid_instance.visible = on
+	if s.flora_instance != null:
+		s.flora_instance.visible = on
+
+func low_slab_visible(si: int, on: bool) -> void:
+	var i: int = low_slabs.find(si)
+	if i < 0:
+		return
+	var mi: MeshInstance3D = low_instances[i]
+	if mi != null:
+		mi.visible = on
 
 
 func drop_low() -> void:
