@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-13T08:31
+  updated_at: 2026-09-13T09:57
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0271
 - AC-0267
 - AC-0264
 - AC-0093
@@ -255,14 +254,81 @@ intake:
 - id: AC-0271
   title: craftable-wood-doors-open-close
   priority: 2
-  status: open
+  status: done
+  updated_at: 2026-09-13T09:57
+  completed_at: 2026-09-13T09:57
   notes: '1) User Story: As a player I want to craft doors from wood planks and open/close them like in
     Minecraft.
 
 
     2) Technical Details: godot/world/data + recipes + world.gd + player.gd. Add door block (2-high),
     recipe 6 planks -> 3 doors, placement checks 2-high air, hinge handling, open/close toggle on interact
-    (and redstone later). Save state open/closed. Verify craft, place, open/close with correct collision.'
+    (and redstone later). Save state open/closed. Verify craft, place, open/close with correct collision.
+
+
+    Closed 20260913 overnight (round 3, after AC-0266). Wood doors end to
+
+    end. KEY DESIGN: state by ID VARIANT - the block grid is a pure id byte
+
+    (no per-cell state exists), so open/closed lives in four ids: 26/27
+
+    CLOSED (solid 2-high box - mesh + concave collision come free from the
+
+    solid path) and 29/31 OPEN (cross panels - walk-through, no collision,
+
+    passes light). The lighting tables derive cross/opaque from Data.blocks
+
+    automatically (lighting._tables: any cross block gets _att=1) and the
+
+    C++ mesh tables are built from Data.block(bi) for all 256 ids, so the
+
+    whole pipeline (mesh/lighting/collision/save/codec) picked the doors up
+
+    with ZERO C++ changes. All four ids drop the door item 26. Hinge side
+
+    deliberately NOT stored: the open panel is the symmetric cross-X (a
+
+    door panel reads correctly from every direction) - hinge handling = the
+
+    door is a PAIR (2-high air placement, toggle/break act on both halves,
+
+    pair re-validated against the grid on every touch so a half-torn pair
+
+    degrades to "not a door"). place_item: door lands on the aimed face,
+
+    both cells air + no player intersection. use_selected: the door branch
+
+    is BEFORE the no-item guard (bare hand toggles). Break: either half ->
+
+    whole pair clears, one drop. Atlas: tile painted at free (192,0) via
+
+    PIL + blocks_atlas.json; deliberately NOT in atlas.gd MAP - the pack''s
+
+    16x32 door textures would trip the stacked-frames animation heuristic
+
+    (re-imports skip ids already in the rects, so the painted tile
+
+    survives). Arm AWECRAFT_LOGIC=doors (8 sub-checks): table-mode craft
+
+    (the recompute reads table_grid NOT craft_grid - filled the wrong one
+
+    on the first run), placement from a verified 2-high-air aim spot
+
+    (_find_door_spot = _find_aim_spot + 2-air check), drop-onto-door
+
+    physics with Debug.fly(false) BEFORE the drop (fly mode FREEZES the
+
+    CharacterBody - a stuck-at-start-y drop is the symptom), bare-hand
+
+    open, walk-through drop, close, break + drop entity, reject with head
+
+    cell blocked. GATES: boot 0 err; doors 8/8; battery all + GENHASH
+
+    80b904c0e5f085eef1e839459058c706 EXACT (worldgen untouched); craftpad
+
+    ok (recipe list gains a recipe). No C++/gdext in the diff. Shipped
+
+    AweCraft[20260913-0955] at :8080 (zip sha 42358eb1... byte-matched).'
   area: gameplay
   effort: M
   depends_on: []
