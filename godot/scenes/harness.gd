@@ -704,6 +704,9 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		if logic == "candflag":
 			await _candflag_test(spawn)
 			return
+		if logic == "aheadtarget":
+			await _aheadtarget_test(spawn)
+			return
 		if logic == "editfront":
 			await _editfront_test(spawn)
 			return
@@ -16071,6 +16074,106 @@ func _er_sample(st: Dictionary, ph: String, pcx: int, pcz: int, back_phase: bool
 #   DEBOUNCED; the player lands (no further recenters).
 #   T must mesh (the walk's single-source re-queue on the debounced
 #   re-entry; the old code waits for a full walk that never comes).
+# AC-0277 probe: the predictive recenter target. Fast crossings (a
+# recenter within AHEAD_FAST_MS of the previous one) center the rebuild on
+# the chunk AHEAD of the player along the crossing direction (the queue
+# leads); slow crossings center on the current chunk (walk accuracy); and
+# a quiet crossing stream (AHEAD_FAST_MS without a new crossing) snaps the
+# target back to the chunk under the player.
+func _aheadtarget_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	world.render_radius = 16
+	world.recenter(spawn.x, spawn.z, true, spawn.y)
+	player = main._spawn_player()
+	var p = Game.player
+	var pcx0 := int(world.last_pcx)
+	var pcz0 := int(world.last_pcz)
+	var wb := 0
+	while wb < 60000:
+		var allb := true
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				var c = world.chunks.get("%d,%d" % [pcx0 + dx, pcz0 + dz])
+				if c == null or not c.mesh_built:
+					allb = false
+					break
+			if not allb:
+				break
+		if allb:
+			break
+		await get_tree().process_frame
+		wb += 1
+	if wb >= 60000:
+		Debug.result({"ok": false, "error": "core never built"})
+		get_tree().quit()
+		return
+	var max_h := -1
+	for bx in range(int(pcx0) * 16, int(pcx0 + 6) * 16 + 16, 16):
+		var h := WorldGen.terrain_height(bx, int(pcz0) * 16 + 8, Game.world_seed)
+		max_h = maxi(max_h, h)
+	var fly_y := float(maxi(max_h, 0)) + 8.0
+	p.set_fly(true)
+	p.velocity = Vector3.ZERO
+	var fly_step := func(px: int) -> void:
+		p.position = Vector3(float(px) * 16.0 + 8.0, fly_y, float(pcz0) * 16.0 + 8.0)
+		p.velocity = Vector3.ZERO
+		for i in range(8):
+			await get_tree().physics_frame
+		var ww := 0
+		while ww < 1200 and world._rec_pending:
+			await get_tree().process_frame
+			ww += 1
+	# --- FAST: 3 one-chunk crossings 0.3 s apart in +x. Move 1 is the
+	# arm's first crossing - no prior crossing to measure a rate against,
+	# so it takes the slow path (center on the current chunk). Moves 2-3
+	# crossed 0.3 s after the previous one: the center must LEAD the
+	# player chunk by 1 (ahead target active). ---
+	await get_tree().create_timer(1.2).timeout
+	var fast_ok := true
+	var fast_diag: Array = []
+	for m in range(3):
+		if m > 0:
+			await get_tree().create_timer(0.3).timeout
+		await fly_step.call(pcx0 + 1 + m)
+		var player_cx := int(p.position.x / 16.0)
+		var lead := int(world.last_pcx) - player_cx
+		var rec := {"move": m + 1, "ahead_active": bool(world._ahead_active), "lead": lead}
+		fast_diag.append(rec)
+		if m == 0:
+			if bool(world._ahead_active) or lead != 0:
+				fast_ok = false
+		elif not bool(world._ahead_active) or lead != 1 or int(world.last_pcz) != pcz0:
+			fast_ok = false
+	# --- SLOW: >AHEAD_FAST_MS quiet, then a 1-chunk crossing. The center
+	# must sit exactly on the current chunk (walk accuracy, no ahead). ---
+	await get_tree().create_timer(3.8).timeout
+	await fly_step.call(pcx0 + 4)
+	var player_cx := int(p.position.x / 16.0)
+	var slow := {"ahead_active": bool(world._ahead_active), "center_eq_player": int(world.last_pcx) == player_cx, "lead": int(world.last_pcx) - player_cx}
+	var slow_ok: bool = not bool(world._ahead_active) and int(world.last_pcx) == player_cx
+	# --- SNAP: fast again (2 crossings), then stop. After the quiet window
+	# the center must snap back to the chunk under the player. ---
+	await get_tree().create_timer(0.3).timeout
+	await fly_step.call(pcx0 + 5)
+	await get_tree().create_timer(0.3).timeout
+	await fly_step.call(pcx0 + 6)
+	var snapped := false
+	var ws := 0
+	while ws < 180000 and not snapped:
+		await get_tree().process_frame
+		ws += 1
+		snapped = not bool(world._ahead_active) and int(world.last_pcx) == int(p.position.x / 16.0)
+	var ok := fast_ok and slow_ok and snapped
+	Debug.result({
+		"ok": ok,
+		"fast": {"ok": fast_ok, "diags": fast_diag},
+		"slow": slow,
+		"snapped": snapped,
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+	})
+	get_tree().quit()
+
+
 func _candflag_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
 	world.render_radius = 16
@@ -16169,11 +16272,13 @@ func _candflag_test(spawn: Vector3) -> void:
 		while ww < 1200 and world._rec_pending:
 			await get_tree().process_frame
 			ww += 1
-	# --- PHASE 1: fly -16 (away from T/U). T -> taxi d+16 (21-23): out of
-	# the stream set = candidate. U -> taxi 20: two-out (cand_since 1),
-	# mesh RETAINED (hide-not-kill). ---
+	# --- PHASE 1: fly -17 (away from T/U). T -> taxi d+17 (22-24): out of
+	# the stream set = candidate. U -> taxi 21: two-out (cand_since 1),
+	# mesh RETAINED (hide-not-kill). (AC-0277: fast crossings center the
+	# rebuild AHEAD of the player - every return move below reads taxis 1
+	# lower, so the flight starts 1 chunk farther.) ---
 	await get_tree().create_timer(1.2).timeout
-	await fly_step.call(pcx0 - 16)
+	await fly_step.call(pcx0 - 17)
 	var t1 := {
 		"present": world.chunks.has(tk),
 		"in_stream_set": world.in_stream_set(tcx - int(world.last_pcx), 0),
@@ -16193,17 +16298,18 @@ func _candflag_test(spawn: Vector3) -> void:
 		Debug.result({"ok": false, "error": "phase1: U must be retained with its mesh (hide-not-kill)", "t": t1, "u": u1})
 		get_tree().quit()
 		return
-	# --- PHASE 2: fly back in 14 one-chunk crossings (m = 1..14, px =
-	# -15 .. -2). Full walks at m=5/10 (cover 5 forces a rebuild); the
-	# rest are debounced. T's taxi = d+16-m: 21-23 -> 6-8; T re-enters the
-	# HIGH band (taxi 7) at m = d+13 = 13 (debounced, cover 3). U frees
-	# after its 2nd two-out event (m=1: taxi 19). ---
+	# --- PHASE 2: fly back in 15 one-chunk crossings (m = 1..15, px =
+	# -16 .. -2). AC-0277: every fast crossing rebuilds from the AHEAD
+	# target (player + 1 in the crossing direction), so the walked center
+	# leads the player by 1 chunk. T's taxi (from the center) = d+17-m-1:
+	# 22-24 -> 5-7; T re-enters the HIGH band (taxi 7) at m = d+14 = 14.
+	# U frees after its 2nd two-out event (m=1: taxi 20 > 18). ---
 	var u_freed_seen := false
 	var t_reentry := {}
-	for m in range(14):
+	for m in range(15):
 		if m > 0:
 			await get_tree().create_timer(0.3).timeout
-		await fly_step.call(pcx0 - 16 + (m + 1))
+		await fly_step.call(pcx0 - 17 + (m + 1))
 		if not world.chunks.has(uk):
 			u_freed_seen = true
 		var ttaxi := absi(tcx - int(world.last_pcx))

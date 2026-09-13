@@ -3112,6 +3112,23 @@ var _last_recenter_pcx := 0    # center of the last recenter (debounce delta)
 var _last_recenter_pcz := 0
 const SMALL_MOVE_BUDGET_MS := 1500
 const AHEAD_RING_DEBOUNCE_MS := 1000
+# AC-0277: predictive recenter target (REPLACES the AC-0213 debounced
+# skip). A crossing within AHEAD_FAST_MS of the previous recenter is FAST
+# movement (sprint ~2.9 s/chunk is fast; walk ~3.7 s/chunk is not) - the
+# recenter then targets the chunk AHEAD_DIST in front of the player along
+# the crossing direction, so the baked queue leads where the player is
+# headed instead of trailing where the player was. Slow crossings center
+# on the current chunk. When the crossing stream is quiet for
+# AHEAD_FAST_MS, the _process snap-back recenters to the chunk under the
+# player.
+const AHEAD_FAST_MS := 3500
+const AHEAD_DIST := 1
+var _ahead_active := false      # the current center leads the player
+var _last_cross_ms := 0         # wall ms of the last PLAYER-chunk crossing
+var _rec_player_wx := 0.0       # raw player position at the last recenter
+var _rec_player_wz := 0.0
+var _rec_player_pcx := 0
+var _rec_player_pcz := 0
 var _rec_pending := false
 var _rec_pcx := 0
 var _rec_pcz := 0
@@ -4223,8 +4240,24 @@ func _process(_delta: float) -> void:
 	# the render circle fills in around the stopped player. Walking is
 	# unaffected: each walk anchors the center
 	# to the player (cover 0), so the settle never fires.
+	# AC-0277: the recenter target LED the player (fast movement). If the
+	# crossing stream has been quiet for AHEAD_FAST_MS without a new
+	# crossing, snap the target back to the chunk under the player. The
+	# snap is a SLOW recenter (dt >= AHEAD_FAST_MS) - it centers on the
+	# player chunk and starts (or parks onto) a fresh walk there, and the
+	# settle below then stands down (centers match).
+	if _ahead_active and _last_cross_ms > 0 \
+			and Time.get_ticks_msec() - _last_cross_ms >= AHEAD_FAST_MS \
+			and (last_pcx != _rec_player_pcx or last_pcz != _rec_player_pcz):
+		_ahead_active = false
+		recenter(_rec_player_wx, _rec_player_wz, true)
+	# AC-0277: stand down while the center still LEADS the player
+	# (_ahead_active) — the snap-back below (AHEAD_FAST_MS quiet) recenters
+	# to the player first; this settle must not lock the queue onto the
+	# stale ahead center in between.
 	if not _rec_pending and not _spawn_fast and _last_recenter_ms > 0 \
 			and Time.get_ticks_msec() - _last_recenter_ms > AHEAD_RING_DEBOUNCE_MS \
+			and not _ahead_active \
 			and (absi(last_pcx - _rec_center_pcx) + absi(last_pcz - _rec_center_pcz)) > 0:
 		_rec_start_walk(last_pcx, last_pcz)
 	# AC-0257 (instance cap): drain the DEFERRED column frees (the recenter
@@ -7984,8 +8017,33 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	# column's old and new taxi).
 	var opcx := last_pcx
 	var opcz := last_pcz
-	last_pcx = int(floorf(wx / 16.0))
-	last_pcz = int(floorf(wz / 16.0))
+	var pcx := int(floorf(wx / 16.0))
+	var pcz := int(floorf(wz / 16.0))
+	# AC-0277: the fast-crossing predicate (the old AC-0213 debounce
+	# predicate's successor) - measured between PLAYER chunks (the ahead
+	# targets are never stored in _last_recenter_pcx). The crossing delta
+	# is also the ahead DIRECTION.
+	var _cross := absi(pcx - _last_recenter_pcx) + absi(pcz - _last_recenter_pcz)
+	# AC-0277: the fast window is measured from the last PLAYER-CHUNK
+	# CROSSING (_last_cross_ms) - not _last_recenter_ms: the snap-back and
+	# Y-only recenters carry _cross = 0 and must not re-arm the window
+	# (a walk crossing 0.3 s after a snap would read "fast").
+	var _now2 := Time.get_ticks_msec()
+	var _fast := _last_cross_ms > 0 \
+			and (_now2 - _last_cross_ms) < AHEAD_FAST_MS \
+			and _cross > 0
+	if _fast:
+		last_pcx = pcx + signi(pcx - _last_recenter_pcx) * AHEAD_DIST
+		last_pcz = pcz + signi(pcz - _last_recenter_pcz) * AHEAD_DIST
+		_ahead_active = true
+	else:
+		last_pcx = pcx
+		last_pcz = pcz
+		_ahead_active = false
+	_rec_player_wx = wx
+	_rec_player_wz = wz
+	_rec_player_pcx = pcx
+	_rec_player_pcz = pcz
 	# AC-0257: the AC-0234 vertical window recompute/tier-0 sync are gone —
 	# the recenter walk (below) is the single collection point. The player
 	# Y (carried on slab crossings) is the layer-rank origin for the bake
@@ -7999,8 +8057,12 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	# apply_world at boot / the harness arms), so the burst that follows a
 	# slider move finds its ring of columns/MIs/MM pairs already warm.
 	_pool_top_up()
-	var pcx := last_pcx
-	var pcz := last_pcz
+	# AC-0277: pcx/pcz are the recenter CENTER (player chunk + the ahead
+	# offset when fast) — the walk, the pre-warm band math, the
+	# band/candidate/demote decisions below and the drain's pools all key
+	# off last_pcx/pcz (reassigned here from the player-chunk values above).
+	pcx = last_pcx
+	pcz = last_pcz
 	# AC-0213: small-move pacing — mark the move now; the drain paces at the
 	# trickle budget until the window expires (see _drain_build_queue).
 	var _now_ms := Time.get_ticks_msec()
@@ -8008,25 +8070,22 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	# AC-0231 order gate: the circle moved — a fog-only far chunk may have
 	# just become in-r pending (and a pending in-r chunk may have left).
 	_low_inr_invalidate()
-	# AC-0213: ahead-ring requeue debounce — a recenter one chunk past the
-	# previous center within AHEAD_RING_DEBOUNCE_MS re-queues the same ahead
-	# ring the prior rebuild just queued (tap-forward across boundaries);
-	# skip the full queue rebuild and let the in-flight/finalized walk stand.
-	# The next non-debounced recenter rebuilds from the new center.
-	# AC-0233: the debounce stands only while that standing rebuild still
-	# covers the new center (REBUILD_COVER_L1, L1 from the walked center).
-	# At high speed the player outruns the walked circle — past the limit
-	# the standing queue is all behind (evicting farthest-first) and the
-	# circle ahead has no entries at all, so the drain starves once the
-	# pre-warmed line is exhausted (R16 50x flight). Past the limit this
-	# recenter escalates to a full rebuild instead of debouncing.
-	var _cover := absi(pcx - _rec_center_pcx) + absi(pcz - _rec_center_pcz)
-	var _debounced := (_now_ms - _last_recenter_ms) < AHEAD_RING_DEBOUNCE_MS \
-		and (absi(pcx - _last_recenter_pcx) + absi(pcz - _last_recenter_pcz)) == 1 \
-		and _cover <= REBUILD_COVER_L1
+	# AC-0277: the debounced rebuild SKIP is GONE (see the AHEAD_FAST_MS
+	# comment at the state block + the ahead-target decision at the top of
+	# this function): fast crossings recenter to the chunk in front of the
+	# player and every crossing rebuilds (the walk is a single ~8 ms frame
+	# at r16; long R50 walks are protected by the in-flight park below),
+	# so the baked queue leads instead of the AC-0213/AC-0233 stale queue
+	# (up to REBUILD_COVER_L1 chunks behind, forced-refresh cadence).
 	_last_recenter_ms = _now_ms
-	_last_recenter_pcx = pcx
-	_last_recenter_pcz = pcz
+	if _cross > 0:
+		_last_cross_ms = _now_ms
+	# AC-0277: the fast predicate measures between PLAYER chunks (pcx here
+	# is the recenter CENTER - possibly the ahead target - and must not be
+	# stored: a 1-chunk crossing toward an ahead target already 1 chunk in
+	# front would read _cross = 0 and cancel the fast mode).
+	_last_recenter_pcx = _rec_player_pcx
+	_last_recenter_pcz = _rec_player_pcz
 	_rp_free_ms = 0.0
 	_rp_stub_ms = 0.0
 	_rp_stub_n = 0
@@ -8130,21 +8189,16 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	# been the largest remaining sync path). Stream-set coverage is owned
 	# by the recenter walk + the drain (queue-driven).
 	var tr1 := Time.get_ticks_usec()
-	if _debounced:
-		# AC-0213: no queue rebuild — the prior rebuild (in flight or
-		# finalized) already queued this ahead ring; the pre-warm below
-		# still enqueues the fresh 5x5 and the drain trickles the rest.
-		# AC-0233: a debounced column cross still REWRITES the waiting
-		# parts — re-stamp the queue's tier/rank at the new center (the
-		# pool key also changed via pcx/pcz, so the cached picks re-scan
-		# anyway; this is the cheap amortized restamp for AC-0231).
-		_rescore_kick()
-	elif _rec_pending and _cover > REBUILD_COVER_L1:
-		# AC-0233: outrun while a walk is in flight. Restarting the walk
-		# from the new center on every crossing would livelock (each
-		# restart discards the in-flight walk before it finalizes). Park
-		# the target instead; the merge finalize re-checks and chains the
-		# next walk if the player is still past coverage.
+	if _rec_pending:
+		# AC-0277 (supersedes the AC-0213 debounced skip and generalizes
+		# the AC-0233 cover-only park): never discard an in-flight walk.
+		# The center moved at most ~1 chunk since this walk started (fast
+		# mode's ahead offset) or this is a long R50-class walk — let it
+		# finish; its merge finalize chains the next walk from the current
+		# center if the player is still past coverage (REBUILD_COVER_L1),
+		# and the quiet-stream settle rebuilds at the resting center when
+		# movement stops. Restarting on every crossing would livelock
+		# long walks (each restart discards the in-flight walk).
 		_rec_escalate_pcx = pcx
 		_rec_escalate_pcz = pcz
 	else:
