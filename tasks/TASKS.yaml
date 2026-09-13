@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-13T05:19
+  updated_at: 2026-09-13T06:37
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0269
 - AC-0268
 - AC-0266
 - AC-0271
@@ -364,14 +363,105 @@ intake:
 - id: AC-0269
   title: respawn-controller-auto-select
   priority: 2
-  status: open
+  status: done
+  updated_at: 2026-09-13T06:37
+  completed_at: 2026-09-13T06:37
   notes: '1) User Story: As a player using a controller after dying I want the respawn button auto-selected
     so pressing A respawns without needing mouse.
 
 
     2) Technical Details: godot/scenes/*.tscn + player.gd death UI. On death screen show, set respawn
     button as focused/selected via grab_focus, map controller A (Joypad Button 0) to respawn action. Keep
-    mouse click. Verify controller can respawn directly.'
+    mouse click. Verify controller can respawn directly.
+
+
+    Closed 20260913 overnight (round 2, after AC-0277). Implemented per spec:
+
+    the death-screen Respawn button auto-selects for controller players.
+
+    Two product changes in godot/ui/inventory.gd: (1) the DeadBtn custom
+
+    Control (not a Button - Godot does not auto-activate plain Controls on
+
+    A) now has focus_mode = FOCUS_ALL, handles InputEventJoypadButton
+
+    JOY_BUTTON_A in _gui_input (calls the cb, marks handled), and draws an
+
+    amber border while focused (queue_redraw on FOCUS_ENTER/EXIT). (2)
+
+    _update_survival grabs the focus on the death-screen show transition
+
+    and releases it on the close transition (a stale focus must never
+
+    activate the button later). Mouse click path untouched.
+
+
+    Harness: the gamepad arm (AWECRAFT_LOGIC=gamepad) gained the
+
+    sub-check the spec asked for - die via damage_player(20), assert the
+
+    button holds focus, press A (synthetic InputEventJoypadButton through
+
+    Input.parse_input_event, the arm''s existing pad-sim mechanism) and poll
+
+    for p.dead == false (hp back to 20), then a SECOND death respawns from
+
+    a synthetic mouse click at the button''s get_global_rect().get_center()
+
+    (mouse path verified unchanged). The death sub-check runs BEFORE the
+
+    pause-menu section so it always sees a live game.
+
+
+    PRE-EXISTING ARM BUG FOUND + FIXED: the D-pad release in the
+
+    pause-menu nav test pressed button 12 (D-pad down) but released button
+
+    13 (D-pad up) - the sticky ui_down kept walking the GUI focus, so the
+
+    following A-accept landed on a different menu item run-to-run -
+
+    sometimes "Return to Menu", which runs _free_game_nodes() (frees the
+
+    inventory/player/world) and silently broke every later sub-check with
+
+    "null inventory" symptoms that look like the product. It now releases
+
+    12; navigation is deterministic (one D-pad down = OptionsButton).
+
+
+    LESSON (harness hygiene): when a late sub-check reports null game
+
+    nodes, first check for an earlier destructive sub-check (menu nav that
+
+    accepts Return-to-Menu) - not the product. A dead preload (a GDScript
+
+    parse error in a preloaded script, e.g. a bad identifier like `rect`
+
+    which is not a Control member in 4.x - it is get_rect()) makes
+
+    InventoryScript.new() throw "Nonexistent function ''new'' in base
+
+    ''GDScript''" at main.gd:212 while the rest of the game boots - the
+
+    inventory is null for the whole run.
+
+
+    Gates: boot 0 err; gamepad arm ok - all pre-existing sub-checks +
+
+    death_shown, death_focus_ok, pad_respawn_ok (hp 20 after A),
+
+    mouse_respawn_ok (synthetic click); battery all arms + GENHASH
+
+    80b904c0e5f085eef1e839459058c706 EXACT. World streaming gates not
+
+    re-run: the diff is inventory.gd + harness.gd only (no world code).
+
+    Shipped AweCraft[20260913-0635] at :8080 (zip sha 04cb1b26...
+
+    byte-matched; the build''s duplicate 8082 daemon died with its sandbox -
+
+    the documented AC-0155 pattern, 8080 stays authoritative).'
   area: ui
   effort: S
   depends_on: []
