@@ -1948,13 +1948,22 @@ func _gamepad_test(spawn: Vector3) -> void:
 	var hide_stick_ok: bool = await _await_state(func() -> bool: return Game.cursor_state == int(Input.MOUSE_MODE_HIDDEN))
 	sm.axis_value = 0.0
 	Input.parse_input_event(sm)
+	# a click while HIDDEN (AC-0272 follow-up: user request) only re-shows
+	# the cursor - it must NOT capture (the next, visible-mode click does).
+	var mcbh := InputEventMouseButton.new()
+	mcbh.button_index = MOUSE_BUTTON_LEFT
+	mcbh.pressed = true
+	Input.parse_input_event(mcbh)
+	var click_show_ok: bool = await _await_state(func() -> bool: return Game.cursor_state == int(Input.MOUSE_MODE_VISIBLE))
+	mcbh.pressed = false
+	Input.parse_input_event(mcbh)
 	# mouse motion while hidden -> visible again
 	var mm := InputEventMouseMotion.new()
 	mm.position = Vector2(400.0, 300.0)
 	mm.relative = Vector2(2.0, 0.0)
 	Input.parse_input_event(mm)
 	var mouse_show_ok: bool = await _await_state(func() -> bool: return Game.cursor_state == int(Input.MOUSE_MODE_VISIBLE))
-	# a mouse click re-captures (the existing branch)
+	# a mouse click while VISIBLE re-captures (the existing branch)
 	var mcb := InputEventMouseButton.new()
 	mcb.button_index = MOUSE_BUTTON_LEFT
 	mcb.pressed = true
@@ -1962,7 +1971,7 @@ func _gamepad_test(spawn: Vector3) -> void:
 	var recapture_ok: bool = await _await_state(func() -> bool: return Game.cursor_state == int(Input.MOUSE_MODE_CAPTURED))
 	mcb.pressed = false
 	Input.parse_input_event(mcb)
-	mouse_hide_ok = hide_btn_ok and hide_stick_ok and mouse_show_ok and recapture_ok
+	mouse_hide_ok = hide_btn_ok and hide_stick_ok and click_show_ok and mouse_show_ok and recapture_ok
 
 	# 8) START pause -> the pause menu; the D-pad moves the native GUI
 	#    focus; A (pad_accept) activates the focused button.

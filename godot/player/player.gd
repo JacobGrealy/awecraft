@@ -213,7 +213,15 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		var mb: InputEventMouseButton = event
 		var was_captured := Game.cursor_state == int(Input.MOUSE_MODE_CAPTURED)
-		if mb.pressed and not was_captured:
+		var is_wheel := mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN
+		if mb.pressed and not was_captured and not is_wheel:
+			if Game.cursor_state == int(Input.MOUSE_MODE_HIDDEN):
+				# AC-0272 (follow-up, user request): a click while the cursor
+				# is HIDDEN (controller play) only makes the cursor visible
+				# again - it does not capture (the next, visible-mode click
+				# captures as before) and does not start a drag.
+				Game.set_cursor(Input.MOUSE_MODE_VISIBLE)
+				return
 			Game.set_cursor(Input.MOUSE_MODE_CAPTURED)
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
