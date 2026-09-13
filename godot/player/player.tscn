@@ -1,13 +1,13 @@
 [gd_scene load_steps=3 format=3]
 
-[ext_resource type="Script" id="1_player"]
+[ext_resource type="Script" path="res://player/player.gd" id="1_player"]
 [ext_resource type="CameraAttributesPractical" path="res://camera_attributes/main-camera-attributes.tres" id="2_rkbax"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_p1"]
 radius = 0.3
 height = 1.8
 
-[node name="Player" type="CharacterBody3D" unique_id=1872891044]
+[node name="Player" type="CharacterBody3D"]
 script = ExtResource("1_player")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="."]
