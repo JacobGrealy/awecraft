@@ -1,0 +1,22 @@
+This folder must contain the Windows C++ extension DLL for the editor.
+
+Required file (tracked in git):
+  godot/bin/libchunkio.windows.template_release.x86_64.dll
+
+It is referenced by:
+  godot/res/libchunkio.gdextension  ->  res://bin/libchunkio.windows.template_release.x86_64.dll
+    (both windows.debug and windows.release point there)
+
+If you cloned without LFS/binaries or opened the wrong project folder,
+Godot will show:
+  AWECRAFT CANNOT START — the C++ extension is NOT loaded
+  Missing classes: ChunkIOPalette, AweGen, AweLighting, AweMesh, AweStrips
+  GDExtension dynamic library not found: 'res://res/libchunkio.gdextension'
+
+Fix:
+  1) Open the *godot/* folder as the Godot project (godot/project.godot), not the repo root.
+  2) Ensure this DLL exists here (git pull should restore it).
+  3) For exported builds (AweCraft.exe), the DLL is also copied next to the exe
+     as AweCraft.dll by build_windows.sh — do not rename it.
+
+Rebuild: ./build_windows.sh  (or scons in gdext/)

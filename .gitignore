@@ -10,6 +10,7 @@ nohup.out
 gdext/.sconsign.dblite
 gdext/src/*.os
 gdext/bin/
-godot/bin/
+godot/bin/*
+!godot/bin/put-dll-here.txt
 # task registry lock sidecar (created by tasks/scripts/tasks.py writers, AC-0254)
 tasks/.tasks.lock
