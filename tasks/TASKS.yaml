@@ -1,10 +1,10 @@
 meta:
-  updated_at: 2026-09-12T17:29
+  updated_at: 2026-09-12T21:15
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0272
+- AC-0277
 - AC-0270
 - AC-0269
 - AC-0266
@@ -37,11 +37,28 @@ queue:
 - AC-0176
 - AC-0259
 intake:
+- id: AC-0277
+  title: predictive-recenter-ahead-target
+  priority: 2
+  status: open
+  notes: '1) User Story: As a player moving quickly I want recenter to predict ahead so workers queue
+    where I''m headed, not where I was, without stale debounce.
+
+
+    2) Technical Details: Replace recenter debounce (AHEAD_RING_DEBOUNCE_MS, REBUILD_COVER_L1) with predictive
+    ahead target: if crossing chunks faster than threshold, recenter to chunk in front of player along
+    movement direction rather than current chunk, so baked queue is ahead. If slow, use current chunk.
+    Keep rebuild spread if needed. Verify fast sprint queues ahead correctly, slow walk still accurate.
+    Reset: if threshold time passes without crossing to next chunk, snap target back to chunk under player.'
+  area: perf
+  effort: S
+  depends_on: []
 - id: AC-0272
   title: hide-mouse-on-controller-input
   priority: 2
-  status: open
-  updated_at: 2026-09-12T17:29
+  status: done
+  updated_at: 2026-09-12T17:30
+  completed_at: 2026-09-12T17:30
   notes: "1) User Story: As a player using a controller I want the mouse cursor hidden as soon as I press\
     \ any controller button including sticks/triggers, so it doesn't distract.\n\n2) Technical Details:\
     \ godot/input + UI. Detect any Joypad button/motion/trigger event, hide cursor (Input.set_mouse_mode\
@@ -84,6 +101,7 @@ intake:
   title: leaf-blocks-collision-and-decay
   priority: 2
   status: open
+  updated_at: 2026-09-12T21:15
   notes: '1) User Story: As a player leaves should be solid (can''t walk/fall through) and naturally decay
     like Minecraft when no log within 6 blocks via leaf path, while player-placed leaves never decay;
     decay timer ticks only in sim distance but persists when back in sim so value must be saved.
@@ -94,7 +112,79 @@ intake:
     Touch) flagged persistent (save flag). On log removal, start random timer per leaf group, tick only
     in sim distance, persist timer value with chunk (like block entity), re-evaluate on load and when
     back in sim. Verify no walk-through, natural decay over time, player-placed never decays, timer survives
-    sim distance exit/enter and save/load.'
+    sim distance exit/enter and save/load.
+
+
+    ## AC-0270 closeout (2026-09-12)
+
+
+    Shipped: block 30 "Persistent Leaves" + leaf decay engine + leaf collision.
+
+
+    ### What landed
+
+    1. **Persistent leaves (block 30)** — data.gd: id 30 mirrors 7 (`solid:false, cutout:true`) + `"drop":
+    30`; `block_rect(30, face)` aliases to 7''s atlas cell so the C++ mesh path renders it identically
+    (oktab/ktab are GDScript-built; genhash untouched — no 30 in natural worldgen). Player `place_item`
+    maps 7 -> 30 on place (no shears yet, so every placed leaf is persistent).
+
+    2. **Leaves collision** — chunk.gd `_build_slab_collision` appends the flora cutout surface (`fsidx[0]
+    >= 0`) to the slab''s ConcavePolygonShape3D. Coordinate facts (measured): static body, mesh_instance
+    and flora_instance all sit at the chunk origin (0,0,0); mesh/flora vertices are in CHUNK space (x/z
+    0-16, y = world Y 0-383) — NO shift needed. Leaf slab body faces verified at the correct y range.
+
+    3. **Decay engine** (world.gd) — `set_block` captures the old id; removing a LOG runs `_leaf_decay_scan_around`
+    (R=6 L1 box, multi-source BFS from logs through {7,30,6} depth<=6 = alive; leaf with a leaf-neighbor
+    outside the box or in an unloaded chunk = UNKNOWN, no timer). Dead natural-7 leaves get a timer =
+    group base draw (randi_range min..max) +/-15% jitter; alive leaves cancel it. `_leaf_decay_tick` (20
+    Hz in `_game_tick`) runs on band-0 chunks only; fired timer -> `set_block(cell, 0)`. `AWECRAFT_LEAFDECAY_MS`
+    pins min=max (harness).
+
+    4. **Persistence** — chunk.gd `leaf_decay` (fi-string -> ms; string keys throughout after the int-key
+    "Invalid access" crash), cleared in `_pool_reset`; save.gd stores `world.leaf_decay_index()`; main.gd
+    `_continue_slot` restores into `world.pending_leaf_decay`; `_apply_pending_leaf_decay(c)` at all 4
+    materialize sites (gen, genhand, tg-handoff, disk); filters on current cell == 7; pending erased on
+    first apply.
+
+
+    ### Harness (leaves arm, 3 phases)
+
+    - full: (a) solid drop onto a natural leaf column top (waits for the async collision body, then drops
+    in PHYSICS FRAMES — wall-time windows expire while the loading drain starves physics to ~1 step /
+    2 s wall); (b) placed leaf 30; (c) orphan a whole tree (remove ALL logs within L1 12 — neighbor trees
+    sustain canopies, vanilla behavior) -> timers start, decay fires with AWECRAFT_LEAFDECAY_MS=1500;
+    (d) sim exit/entry: break logs, leave the band, return — no fires while away, timers resume.
+
+    - save: same orphaning, parks the player next to the tree (harness boots at radius 4 — the saved pose
+    must put the tree chunk in the phase-2 core 3x3), `Save.save_now(slot)` mid-timer, asserts the saved
+    index is non-empty.
+
+    - load: `main._continue_slot(slot)` (self-contained: frees nodes, new world, applies edits + pending_leaf_decay,
+    recenters to saved pose, 3x3, player) -> asserts timers restored AND fire.
+
+
+    ### Gates (all green, 2026-09-12)
+
+    boot 0 | leaves full {"decay_fired":true,"solid_ok":true,"persisted_ok":true,"sim_exit_ok":true,"timers_started":true,"ok":true}
+    | leaves save ok:true | leaves load ok:true (restored timer fired) | player ok | gamepad ok (mouse_hide_ok
+    incl. AC-0272 click-while-hidden) | battery ok, GENHASH 0 0 = 80b904c0e5f085eef1e839459058c706 EXACT
+    | r16 ok (flora-augmented collision bodies = new geometry) | ladder ok (tier0_ok) | meshprobe c_match
+    1920 | wprof p50 59 / p95 53.
+
+
+    ### Notes
+
+    - The solid-drop debug saga (wrong diagnosis chain, documented in the session): the collision was
+    correct from the start; the "fall-through" was the harness''s wall-time await expiring during main-thread
+    load-drain starvation. Fixed by waiting in physics frames. All COLDBG/LEAVESDBG instrumentation removed
+    (one env-gated LEAVES evidence print kept in the harness).
+
+    - `PhysicsShapeQueryParameters3D.create` does NOT parse in this 4.7.1 build (ray query `create` does)
+    — capsule sweeps in GDScript harnesses need the stepped-position or ray-grid approach.
+
+    - The `.local` HOME symlink from the old gate recipe now CRASHES godot at startup (segfault reading
+    ~/.local/share/godot state) — gates run with a bare fresh HOME (harness envs force radius 4 + defaults;
+    battery forces AWECRAFT_IGNORE_SETTINGS).'
   area: gameplay
   effort: M
   depends_on: []
@@ -11113,4 +11203,224 @@ intake:
     \ 37.6/51.0 —\n  per-slab pacing smooths the storm), DRAIN avg 8.0, LOW_PICK 2.2 (the section gate\
     \ rides\n  in it, near-free), LOW_WAVE 0.3, HANDOFF 0.7, all partition stages present, lost_chunks\
     \ 0."
+  comments: []
+- id: AC-0273
+  title: lod-first-landing-bad-state-double-lod-and-washed-light
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-12T21:06
+  updated_at: 2026-09-12T21:06
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    When chunks first appear they are sometimes broken in a way that re-breaking fixes them: two LODs
+    of the same chunk render at once and z-fight, and/or the chunk is washed-out super-bright. The user''s
+    key diagnostic (build 1728): breaking any block in an affected chunk makes the chunk correct, because
+    the edit-rebuild path produces good state. So the FIRST per-slab landing carries bad state (stale
+    placeholder LOD not cleared and/or light before convergence), while the rebuild path is correct.
+
+
+    ## 2) Technical Details
+
+    Symptoms (user playtest, build 20260912-1728, new world, render ~30):
+
+    - two LODs of the same region render simultaneously and z-fight;
+
+    - chunks spawn in super bright / washed out;
+
+    - breaking a block in the bad chunk fixes it (edit bumps data_gen, the slab re-pends, the rebuild
+    is clean).
+
+    Suspects (to confirm in the co-debug session):
+
+    - the per-slab landing in the high handoff (_assemble_slab) does not free the low/fog instance for
+    that slab (fog_instance is a per-chunk MultiMesh + low_instances per-slab arrays: chunk.gd:105-107;
+    attach site world.gd:2246 _low_attach_cached, low_instances swap ~2487-2520);
+
+    - the first build uses the light snapshot (eff/saved_light) before the E2 convergence pass, giving
+    washed-out brightness; a rebuild after an edit runs with converged light;
+
+    - the AC-0261 stale-LOD cache-and-keep counters (low_skip_stale_n) may keep a stale low slab marked
+    done while its mesh remains attached.
+
+    Verify: a headless repro must show (a) no slab with both a high mesh_instance and a low_instances
+    entry, (b) first-landing light equals post-edit-landing light for the same cell, (c) r16/ladder stay
+    green.
+
+    '
+  comments: []
+- id: AC-0274
+  title: load-stall-progress-bar-2-7-percent-minutes
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-12T21:06
+  updated_at: 2026-09-12T21:06
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    A brand-new world at render distance ~30 should stream in quickly. Instead the load progress bar stops
+    around 2% then ~7% for MINUTES before the world finally loads. It is not a permanent freeze, but the
+    stall is long enough to feel like a hang.
+
+
+    ## 2) Technical Details
+
+    Observed build 20260912-1728 (new world, render ~30). Code facts already established:
+
+    - progress % is _high_band_meshed()/_high_band_count() (HIGH band only: taxi less than medium_start_r=8
+    or tier-0 col);
+
+    - loading predicate (world.gd:4429): meshed >= loading target AND threadmesh_inflight empty AND threadgen_inflight
+    empty;
+
+    - drain Phase 1 dispatches slab builds every frame while threadmesh_inflight < LOAD_TM_CAP=64, Phase
+    2 enqueues gen while threadgen_inflight < LOAD_TG_CAP=24, budget LOAD_DRAIN_BUDGET_MS=300ms per frame;
+
+    - Phase 1 does a FRESH _collect_pool plus full O(N) re-score on EVERY dispatch iteration (churn/starvation
+    suspect at big radius);
+
+    - MEASURED (headless radius 4, AC-0270 session): while the loading drain owns the main thread, physics
+    steps starve to ~1 step per 2 s of wall time (main thread 300ms+ per frame) - the same main-thread
+    saturation that freezes the bar;
+
+    - churn risk: stale-drop re-dispatch when light changes mid-flight.
+
+    Suspects to confirm: the per-dispatch _collect_pool re-scan cost at radius 30 (N ~ 2400+ columns),
+    the 300ms budget never yielding a visible progress tick, and the loading-target count growing as the
+    high band is defined (225 cols x up to 24 slabs).
+
+    Verify: AWECRAFT_RADIUS=30 AWECRAFT_TIMING=1 with stdbuf -oL plus a per-second loader print (meshed/target/tg/tm/io)
+    must show the bar percentage moving every second and total load time bounded; player arm green.
+
+    '
+  comments: []
+- id: AC-0275
+  title: tier0-section-policy-and-high-lod-ring-interleave
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-12T21:06
+  updated_at: 2026-09-12T21:06
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    With the tier-0 radius set to 0, the player expects almost NO full-column (full-res) chunks at start
+    - only what the tier-0 distance says. Instead, chunks out at the "simulation distance" / high-band
+    edge are still getting full columns built before any other LOD (medium/low) has anything. Also, the
+    agreed build model is: the tier-0 ball builds its full columns FIRST (its own section), and the rest
+    of the high LOD is a SEPARATE ring that builds ring-by-ring INTERLEAVED with medium and low. That
+    interleaving appears to not be in - the high band hogs the whole build pipeline and the load screen
+    waits for the entire high band. Finally: when the player MOVES, columns that leave the tier-0 ball
+    / high band while partially built must be released to the normal ring flow - the tier-0 section must
+    not keep finishing full columns that are no longer tier-0, and a partially-high column must not get
+    a low LOD attached on top of its already-high slabs (that is the double-LOD z-fight).
+
+
+    ## 2) Technical Details
+
+    Symptom (user playtest build 1728, tier0_radius=0): "simulation distance and/or high distance is still
+    getting full columns before any other lods get anything... only up to tier-0 distance as specified
+    in options should get the full column first, and I have that set to 0."
+
+    What IS in (verified by reading):
+
+    - the tier-0 section: _tier0_section_drained() (world.gd ~627) - every Chebyshev-ball col must have
+    data + zero pending HIGH slabs; the wave (med/low) gate at world.gd:3004 is one-shot (once open, stays
+    open - a recenter''s new tier-0 col builds through the drain without re-gating);
+
+    - _grid_score: tier-0 cols get a -1e10 prefix (all their slabs before any non-tier-0 slab);
+
+    - the high band [0, medium_start_r=8) builds via the drain per-slab in (player-Y layer rank, taxi)
+    order; the low/fog wave runs in parallel AFTER the tier-0 drain, dispatching to the same TM pool (LOAD_TM_CAP=64
+    during load) - so med/low attaches queue behind the saturated high builds;
+
+    - the LOAD SCREEN waits for the ENTIRE high band (_loading_target = _high_band_count()) before it
+    disappears - at render 30 that is 225 cols x up to 24 slabs of full-res work.
+
+    What is NOT in (the spec gap):
+
+    - no per-ring interleaving: high band completes (or mostly completes) before the wave''s med/low is
+    visible - the "separate high lod that builds ring by ring WITH medium and low" is not implemented;
+
+    - no release on player movement: a column that exits the tier-0 ball or the high band while partially
+    high stays pending-high forever (the drain gate _is_tier0_col/taxi check stops building it, but nothing
+    demotes it) - and the wave''s low probe (_entry_best_pending) will build LOW slabs for a column whose
+    other slabs already have HIGH meshes = two LODs on one column (z-fight);
+
+    - the load exit criterion is the whole high band, not "tier-0 + first rings".
+
+    Design decision needed with the user (options): (a) complete the high for any column that started
+    high (column-level all-or-nothing), (b) demote on exit - rebuild the whole column at the new band,
+    (c) mixed slabs forbidden: on exit, free the high slabs and let the wave take the column. Also: load
+    screen should close after tier-0 + N rings (or a time budget) and let the rest stream.
+
+    Verify: headless: move the player 20 cols away from spawn mid-load; assert (a) no partially-high column
+    keeps high-pending work, (b) no slab has both a high mesh and a low attach, (c) the load screen closes
+    within a bounded time at radius 30; r16/ladder/wprof green.
+
+    '
+  comments: []
+- id: AC-0276
+  title: sprint-latch-and-fov-kick
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-12T21:06
+  updated_at: 2026-09-12T21:06
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    Sprint should feel like Minecraft: pressing Shift (or L3) once while moving forward LATCHES the sprint
+    - you do not have to keep holding the button. The sprint continues until you stop moving or move backwards.
+    While sprinting, the camera FOV should increase by 10% as a speed cue, and revert to normal when the
+    sprint stops.
+
+
+    ## 2) Technical Details
+
+    Current state (player.gd ~388-390): sprint is polled every frame (sprint_kbd = Shift held, sprint_pad
+    = pad_sprint held); speed = SPRINT only while held. Flight mode uses L3 as a speed multiplier (fly_sprint)
+    and A/SHIFT for vertical - the latch must NOT apply to flight L3 (it stays a held speed key there).
+
+    Changes:
+
+    1) Latch: add a sprint_latched flag - set when (sprint input AND moving forward, iz > 0) in ground
+    walk mode; clear when (no movement input, OR moving backwards iz < 0, OR dying/respawn). Effective
+    sprint speed = held OR latched.
+
+    2) FOV: while effectively sprinting (ground), the player camera fov = base_fov * 1.10, lerped over
+    ~0.15 s; when the sprint stops, lerp back to the base fov. Find the camera''s base fov constant (player
+    scene / player.gd) and apply in _process (or the physics process) so it tracks the latch state.
+
+    Gates: player arm (extend: tap Shift once mid-walk, release, assert speed stays SPRINT for N frames
+    while still moving forward; assert speed drops to WALK on stop and on reverse; assert fov > base while
+    sprinting and fov == base after stop), gamepad arm (L3 tap latch), boot 0.
+
+    '
   comments: []

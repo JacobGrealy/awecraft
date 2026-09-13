@@ -304,6 +304,15 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			player = main._spawn_player()
 			await _gamepad_test(spawn)
 			return
+		if logic == "leaves":
+			# AC-0270: leaf collision + decay (AWECRAFT_LEAFDECAY_MS shortens
+			# the decay window deterministically; AWECRAFT_LEAVES_SLOT for the
+			# save/load phase).
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _leaves_test(spawn)
+			return
 		if logic == "pausemenu":
 			# AC-0185: Esc/P pause-menu toggle + Options reachability.
 			world.recenter(spawn.x, spawn.z, true)
@@ -488,8 +497,10 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		if logic == "floor":
 			await _floor_test(spawn)
 			return
-		if logic == "leaves":
-			await _leaves_test(spawn)
+		if logic == "leavetint":
+			# the pre-AC-0270 leaf-tint/lit-face arm (renamed: "leaves"
+			# now runs the AC-0270 collision+decay arm).
+			await _leavetint_test(spawn)
 			return
 		if logic == "sharpx":
 			await _sharpx_test(spawn)
@@ -1584,6 +1595,496 @@ func _await_state(pred: Callable, timeout_ms: int = 2500) -> bool:
 		await get_tree().physics_frame
 	return bool(pred.call())
 
+
+func _leavetint_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	Lighting._tables()
+	world.recenter(spawn.x, spawn.z, true)
+	await _nd_settle(60000)
+	var H: int = Data.HEIGHT
+	var rc := Data.block_rect(7, "side")
+	var u0: float = (float(rc.x) + 0.5) / 1024.0
+	var u1: float = (float(rc.x) + 31.5) / 1024.0
+	var v0: float = (float(rc.y) + 0.5) / 1024.0
+	var v1: float = (float(rc.y) + 31.5) / 1024.0
+	var cell := Vector3i(-1, -1, -1)
+	var ccx := 0
+	var ccy := 0
+	var pick := false
+	var dbg := {"chunks": 0, "leaf_cells": 0, "exposed": 0, "lit": 0}
+	for lit_req in [true, false]:
+		if pick:
+			break
+		for cc in _nd_sorted_chunks():
+			if absi(int(cc.cx)) > 2 or absi(int(cc.cz)) > 2:
+				continue
+			var d: PackedByteArray = cc.flat_data()
+			var eff: PackedByteArray = cc.last_eff["arr"]
+			if eff.size() != H * 256:
+				continue
+			dbg["chunks"] += 1
+			for y in range(10, H):
+				if pick:
+					break
+				var row := y << 8
+				for lz in range(16):
+					if pick:
+						break
+					for lx in range(16):
+						var idx := row | (lz << 4) | lx
+						if d[idx] != 7:
+							continue
+						dbg["leaf_cells"] += 1
+						if int(eff[idx]) > 0:
+							dbg["lit"] += 1
+						if lit_req and int(eff[idx]) <= 0:
+							continue
+						var wx := int(cc.cx) * 16 + lx
+						var wz := int(cc.cz) * 16 + lz
+						var exposed := false
+						for fd in VoxelMath.FACES:
+							var n: Vector3i = fd.n
+							var ny := y + n.y
+							if ny < 0 or ny >= H:
+								continue
+							var nb: int = world.get_block(wx + n.x, ny, wz + n.z)
+							if nb == 7:
+								continue
+							var ninfo = Data.block(nb) if nb != 0 else null
+							if nb != 0 and ninfo != null and bool(ninfo.solid):
+								continue
+							exposed = true
+							break
+						if not exposed:
+							continue
+						dbg["exposed"] += 1
+						cell = Vector3i(wx, y, wz)
+						ccx = int(cc.cx)
+						ccy = int(cc.cz)
+						pick = true
+						break
+	if not pick:
+		Debug.result({"mode": "leaves", "seed": Game.world_seed, "radius": world.render_radius, "ok": false, "err": "no exposed leaves cell", "dbg": dbg, "elapsed_ms": Time.get_ticks_msec() - t0})
+		get_tree().quit()
+		return
+	var linfo: Dictionary = world.light_at(cell.x, cell.y, cell.z)
+	var u_day_cut := -1.0
+	var mat_path := ""
+	var cut_tex: Texture2D = null
+	for k in _ChunkScriptM._mat_cache:
+		var cm = _ChunkScriptM._mat_cache[k]
+		if cm is ShaderMaterial and String(cm.shader.resource_path).ends_with("chunk_lit_cutout.gdshader"):
+			u_day_cut = float(cm.get_shader_parameter("u_day"))
+			mat_path = String(cm.shader.resource_path)
+			cut_tex = cm.get_shader_parameter("tex")
+	var aimg: Image = null
+	if cut_tex != null:
+		aimg = cut_tex.get_image()
+	if aimg == null and Data.atlas_tex != null:
+		aimg = Data.atlas_tex.get_image()
+	var bake_check := {"tint": [roundf(Data.TINT_LEAVES.r * 255.0), roundf(Data.TINT_LEAVES.g * 255.0), roundf(Data.TINT_LEAVES.b * 255.0)]}
+	var dimg: Image = Data.atlas_tex.get_image() if Data.atlas_tex != null else null
+	if dimg != null:
+		bake_check["data_fmt"] = str(int(dimg.get_format()))
+		bake_check["data_px_320_31"] = [roundf(dimg.get_pixel(320, 31).r * 255.0), roundf(dimg.get_pixel(320, 31).g * 255.0), roundf(dimg.get_pixel(320, 31).b * 255.0), roundf(dimg.get_pixel(320, 31).a * 255.0)]
+		bake_check["data_px_322_2"] = [roundf(dimg.get_pixel(322, 2).r * 255.0), roundf(dimg.get_pixel(322, 2).g * 255.0), roundf(dimg.get_pixel(322, 2).b * 255.0), roundf(dimg.get_pixel(322, 2).a * 255.0)]
+	if aimg != null:
+		bake_check["cut_fmt"] = str(int(aimg.get_format()))
+		bake_check["cut_px_320_31"] = [roundf(aimg.get_pixel(320, 31).r * 255.0), roundf(aimg.get_pixel(320, 31).g * 255.0), roundf(aimg.get_pixel(320, 31).b * 255.0), roundf(aimg.get_pixel(320, 31).a * 255.0)]
+	var colv := Color(0.0, 0.0, 0.0, 1.0)
+	var uvv := Vector2.ZERO
+	var found_v := false
+	var scan := {"leaves_texels": 0, "black_texels": 0, "col_b_zero": 0, "col_rg_zero": 0}
+	if aimg != null:
+		var lxi := cell.x - ccx * 16
+		var lzi := cell.z - ccy * 16
+		for cc in _nd_sorted_chunks():
+			if absi(int(cc.cx)) > 2 or absi(int(cc.cz)) > 2:
+				continue
+			for s in cc.slabs:
+				var fi = s.flora_instance
+				if fi == null or fi.mesh == null:
+					continue
+				var m: ArrayMesh = fi.mesh
+				for si in range(m.get_surface_count()):
+					var mat = m.surface_get_material(si)
+					if not (mat is ShaderMaterial):
+						continue
+					if not String(mat.shader.resource_path).ends_with("chunk_lit_cutout.gdshader"):
+						continue
+					var arrs = m.surface_get_arrays(si)
+					var pos: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+					var uva: PackedVector2Array = arrs[Mesh.ARRAY_TEX_UV]
+					var colsa: PackedColorArray = arrs[Mesh.ARRAY_COLOR]
+					if uva.size() != pos.size() or colsa.size() != pos.size():
+						continue
+					for vi in range(pos.size()):
+						var uv: Vector2 = uva[vi]
+						if uv.x < u0 or uv.x > u1 or uv.y < v0 or uv.y > v1:
+							continue
+						scan["leaves_texels"] += 1
+						var tx := clampi(int(floorf(uv.x * 1024.0)), 0, aimg.get_width() - 1)
+						var ty := clampi(int(floorf(uv.y * 1024.0)), 0, aimg.get_height() - 1)
+						var tp: Color = aimg.get_pixel(tx, ty)
+						if maxf(tp.r, maxf(tp.g, tp.b)) < 0.031:
+							scan["black_texels"] += 1
+						var cv: Color = colsa[vi]
+						if cv.b <= 0.001:
+							scan["col_b_zero"] += 1
+						if cv.r + cv.g <= 0.001:
+							scan["col_rg_zero"] += 1
+						if found_v:
+							continue
+						var p: Vector3 = pos[vi]
+						var inx := absf(p.x - float(lxi)) < 0.01 or absf(p.x - float(lxi + 1)) < 0.01
+						var iny := p.y >= float(cell.y) - 0.01 and p.y <= float(cell.y) + 1.01
+						var inz := absf(p.z - float(lzi)) < 0.01 or absf(p.z - float(lzi + 1)) < 0.01
+						if not (inx and iny and inz):
+							continue
+						found_v = true
+						colv = cv
+						uvv = uv
+	var texel := [0, 0, 0, 0]
+	if found_v and aimg != null:
+		var tx := clampi(int(floorf(uvv.x * 1024.0)), 0, aimg.get_width() - 1)
+		var ty := clampi(int(floorf(uvv.y * 1024.0)), 0, aimg.get_height() - 1)
+		var tp: Color = aimg.get_pixel(tx, ty)
+		texel = [roundf(tp.r * 255.0), roundf(tp.g * 255.0), roundf(tp.b * 255.0), roundf(tp.a * 255.0)]
+	var L_day := 0.20 + 0.80 * maxf(1.0 * float(colv.r), float(colv.g))
+	var L_night := 0.20 + 0.80 * maxf(0.0 * float(colv.r), float(colv.g))
+	var sky15 := float(linfo.sky) / 15.0
+	var blk15 := float(linfo.block) / 15.0
+	var L_day_light := 0.20 + 0.80 * maxf(sky15, blk15)
+	var L_night_light := 0.20 + 0.80 * blk15
+	var g_day := float(texel[1]) / 255.0 * float(colv.b) * L_day
+	var g_night := float(texel[1]) / 255.0 * float(colv.b) * L_night
+	var ok := found_v \
+			and L_day > 0.25 \
+			and L_night >= 0.18 \
+			and float(texel[1]) / 255.0 > 0.15 \
+			and g_day > 0.02 \
+			and g_night > 0.008
+	var out := {
+		"mode": "leaves",
+		"seed": Game.world_seed,
+		"radius": world.render_radius,
+		"cell": [cell.x, cell.y, cell.z],
+		"chunk": [ccx, ccy],
+		"vcolor": [roundf(float(colv.r) * 1000.0) / 1000.0, roundf(float(colv.g) * 1000.0) / 1000.0, roundf(float(colv.b) * 1000.0) / 1000.0],
+		"uv": [roundf(uvv.x * 10000.0) / 10000.0, roundf(uvv.y * 10000.0) / 10000.0],
+		"atlas_texel_rgba": texel,
+		"light": {"sky": int(linfo.sky), "block": int(linfo.block), "eff": int(linfo.eff)},
+		"L_day": roundf(L_day * 1000.0) / 1000.0,
+		"L_night": roundf(L_night * 1000.0) / 1000.0,
+		"L_day_light": roundf(L_day_light * 1000.0) / 1000.0,
+		"L_night_light": roundf(L_night_light * 1000.0) / 1000.0,
+		"green_day": roundf(g_day * 1000.0) / 1000.0,
+		"green_night": roundf(g_night * 1000.0) / 1000.0,
+		"u_day_cut": roundf(u_day_cut * 1000.0) / 1000.0,
+		"cut_mat": mat_path,
+		"tile_center_rgba": _leaves_tile_center(aimg),
+		"bake_check": bake_check,
+		"dbg": dbg,
+		"scan": scan,
+		"found_v": found_v,
+		"ok": ok,
+		"elapsed_ms": Time.get_ticks_msec() - t0,
+	}
+	Debug.result(out)
+	get_tree().quit()
+
+
+# AC-0136 probe (env-gated by AWECRAFT_LOGIC=sharpx, inert unless set):
+# texel-boundary framebuffer A/B for the chunk_lit sampler filter. Finds a
+# deterministic sky-lit (outdoor) or eff-0 (cave) grass/dirt/stone side face
+# near spawn, places the eye 2.5 m off the face center, and samples an 11-px
+# strip across one high-contrast texel boundary at the tile center row:
+# NEAREST => every strip pixel equals one of the two texel-center pixels
+# (off<=1); LINEAR => interior pixels are blends (off>=6). 4.7.1 exposes no
+# GDScript filter getter (verified empirically), so it also reports the
+# texture classes in force (imported CompressedTexture2D vs runtime
+# ImageTexture bake copies) for the cause-layer record. Framebuffer part
+# needs a real renderer (xvfb render mode); headless skips the sampling.
+
+# AC-0270: leaves are solid (no walk-through) and decay when orphaned
+# (no log within 6 via the leaf path); player-placed leaves (id 30) never
+# decay; the decay timers tick only in sim distance but persist across
+# sim exit/entry and save/load. AWECRAFT_LEAFDECAY_MS shortens the window
+# for the test; the save/load check is a two-phase run (the phase comes
+# from AWECRAFT_LEAVES_SLOT).
+func _leaves_test(spawn: Vector3) -> void:
+	var p = Game.player
+	for i in 10:
+		await get_tree().physics_frame
+	var slot := OS.get_environment("AWECRAFT_LEAVES_SLOT")
+	var phase_save := slot != "" and OS.get_environment("AWECRAFT_LEAVES_PHASE") == "save"
+	var phase_load := slot != "" and OS.get_environment("AWECRAFT_LEAVES_PHASE") == "load"
+	var leaves_found := 0
+	var decay_fired := false
+	var timers_started := false
+	var persisted_ok := false
+	var sim_exit_ok := false
+	var save_ok := false
+	var load_ok := false
+	var solid_ok := false
+	var leaf_cell := Vector3i.ZERO
+	var log_cells: Array = []
+	var placed_cell := Vector3i.ZERO
+	if phase_load:
+		# ---- PHASE 2: load the slot the save phase wrote. The load path
+		# (main._continue_slot) restores world.pending_leaf_decay, and the
+		# materialize hooks move the timers onto the chunk once it is in
+		# sim. The saved player pose is next to the tree (phase 1
+		# teleported there), so the tree chunk is in the core 3x3.
+		await main._continue_slot(int(slot))
+		player = main.player
+		for i in 10:
+			await get_tree().physics_frame
+		await _await_state(func() -> bool: return not world.pending_leaf_decay.is_empty() or world.leaf_decay_live_n() > 0, 15000)
+		load_ok = world.leaf_decay_live_n() > 0 or not world.pending_leaf_decay.is_empty()
+		# the timer must actually fire once the chunk is in sim
+		decay_fired = await _await_state(func() -> bool: return world.leaf_decay_live_n() == 0 and world.leaf_decay_fire_count() > 0, 30000)
+	elif phase_save:
+		# ---- PHASE 1: orphan a leaf, let its timer start, SAVE it ----
+		var found := await _find_tree(60.0)
+		leaves_found = found[0]
+		leaf_cell = found[1]
+		log_cells = found[2]
+		if leaves_found > 0:
+			# plant a persistent leaf next to the cluster (the placed-leaf
+			# never decays - checked in phase 1 AND it must survive the
+			# save/load round trip)
+			var target := _air_next_to(leaf_cell, log_cells)
+			placed_cell = target
+			world.set_block(target.x, target.y, target.z, 30)
+			for i in 4:
+				await get_tree().physics_frame
+			# orphan the cluster: break every log of the tree
+			for lg in log_cells:
+				world.set_block(lg.x, lg.y, lg.z, 0)
+			for i in 10:
+				await get_tree().physics_frame
+			# the timers start now (the scan ran on the log removal)
+			load_ok = await _await_state(func() -> bool: return world.leaf_decay_live_n() > 0, 10000)
+			# let a little time pass so the saved snapshot has a MID-flight
+			# timer (not yet fired): the env window is ~2 s, so 0.5 s in.
+			await get_tree().create_timer(0.5).timeout
+			# park the player next to the tree so the SAVED POSE puts the
+			# tree chunk inside phase 2's core 3x3 (the harness boots at
+			# render radius 4 - a tree 50 blocks out would never
+			# materialize there).
+			p.position = Vector3(leaf_cell.x + 0.5, float(leaf_cell.y) + 3.0, leaf_cell.z + 0.5)
+			for i in 10:
+				await get_tree().physics_frame
+			var ok1: bool = Save.save_now(int(slot))
+			var idx: Dictionary = world.leaf_decay_index()
+			var n_saved := 0
+			for k in idx:
+				n_saved += int(idx[k].size())
+			save_ok = ok1 and n_saved > 0
+	else:
+		# ---- FULL arm (no save phase): collision + decay + persistence
+		# + sim-distance survival in one run.
+		var found := await _find_tree(60.0)
+		leaves_found = found[0]
+		leaf_cell = found[1]
+		log_cells = found[2]
+		if leaves_found > 0:
+			# (a) SOLID: stand on the TOP of the leaf column - the top
+			# face is a walkable floor (before AC-0270 the player fell
+			# through: leaves had no collision geometry at all).
+			var top_y: int = leaf_cell.y
+			while world.get_block(leaf_cell.x, top_y + 1, leaf_cell.z) != 0:
+				top_y += 1
+			# the leaf slab's COLLISION BODY must exist before the drop -
+			# it is built async (per-slab high lane / staged drain), and a
+			# drop before the body lands reads "no floor" (the mesh is up,
+			# the body may not be). Wait for the body under the leaf.
+			var leaf_ck: Node3D = world.chunks.get(world._key(leaf_cell.x / 16, leaf_cell.z / 16))
+			var body_ready: bool = leaf_ck != null and not leaf_ck.data.is_empty() and _slab_body_present(leaf_ck, top_y)
+			if not body_ready:
+				body_ready = await _await_state(func() -> bool: return leaf_ck != null and _slab_body_present(leaf_ck, top_y), 10000)
+			# force the build now - the drop must not race the async body
+			# build (col_immediate chunks build in place; staged chunks
+			# drain their pending queue).
+			if leaf_ck != null:
+				leaf_ck._post_build_collision()
+			for i in 4:
+				await get_tree().physics_frame
+			# drop the player onto the leaf top and wait for the landing
+			# (a solid leaf top stops the player at top_y + 1; without
+			# collision the player falls through to the ground several
+			# blocks lower - the y check discriminates).
+			p.velocity = Vector3.ZERO
+			p.position = Vector3(leaf_cell.x + 0.5, float(top_y + 1) + 1.05, leaf_cell.z + 0.5)
+			# wait in PHYSICS FRAMES, not wall ms: while the loading drain
+			# owns the main thread, physics steps are starved (measured:
+			# ~1 step / 2 s of wall), so a wall-time window can expire long
+			# before the drop has a handful of physics frames. 240 frames
+			# is 4 s of physics - the 1.05 m drop needs ~0.3 s.
+			var drop_done := false
+			for df in range(240):
+				await get_tree().physics_frame
+				if p.is_on_floor() or p.position.y < float(top_y) + 1.01:
+					drop_done = true
+					break
+			for i in 4:
+				await get_tree().physics_frame
+			solid_ok = p.is_on_floor() and absf(p.position.y - float(top_y + 1)) < 0.3
+			# (b) PLACED LEAF: write a persistent leaf next to the cluster
+			var target := _air_next_to(leaf_cell, log_cells)
+			placed_cell = target
+			world.set_block(target.x, target.y, target.z, 30)
+			for i in 4:
+				await get_tree().physics_frame
+			# (c) DECAY: orphan the canopy. A single tree's logs are NOT
+			# enough - the canopy can be sustained by a NEIGHBORING tree
+			# (vanilla behavior: any log within 6 via the leaf path keeps
+			# the leaves alive), so remove EVERY log within L1 12 of the
+			# leaf (any log that could sustain a box leaf is within 12 of
+			# the trigger: 6 (leaf-to-log) + 6 (box radius)).
+			for ax in range(-12, 13):
+				for ay in range(-10, 11):
+					for az in range(-12, 13):
+						if absi(ax) + absi(ay) + absi(az) > 12:
+							continue
+						var b: int = world.get_block(leaf_cell.x + ax, leaf_cell.y + ay, leaf_cell.z + az)
+						if b == 6:
+							world.set_block(leaf_cell.x + ax, leaf_cell.y + ay, leaf_cell.z + az, 0)
+			for i in 10:
+				await get_tree().physics_frame
+			timers_started = await _await_state(func() -> bool: return world.leaf_decay_live_n() > 0, 10000)
+			decay_fired = await _await_state(func() -> bool: return world.leaf_decay_fire_count() > 0, 30000)
+			# the orphaned natural leaf must be gone now (or still
+			# counting - the fire_count proves the mechanism ran; the
+			# cell check proves it landed on OUR leaf when it fires)
+			# (d) SIM EXIT/ENTRY: the placed persistent leaf (30) must
+			# never have a timer; walk out of sim distance, wait, come
+			# back - any in-flight timer must be PAUSED (not fired) while
+			# away. First start a fresh decay on a neighboring natural
+			# leaf by removing its logs, then leave.
+			var fresh := await _find_tree(60.0, leaf_cell)
+			if fresh[0] > 0:
+				var fcell := Vector3i(fresh[1])
+				for lg in fresh[2]:
+					world.set_block(lg.x, lg.y, lg.z, 0)
+				for i in 10:
+					await get_tree().physics_frame
+				await _await_state(func() -> bool: return world.leaf_decay_live_n() > 0, 10000)
+				# out of sim: recenter far away (band 0 follows the player)
+				var away := Vector3(spawn.x + 48.0, 0.0, spawn.z + 48.0)
+				var fsp2: Vector3 = world.spawn_point()
+				Debug.teleport(fsp2.x + 48.0, fsp2.y + 4.0, fsp2.z + 48.0)
+				world.recenter(away.x, away.z, true)
+				await _await_state(func() -> bool: return world.band_of(int(floorf((away.x - 8.0) / 16.0)) - int(floorf(spawn.x / 16.0)), int(floorf((away.z - 8.0) / 16.0)) - int(floorf(spawn.z / 16.0))) != 0, 15000)
+				# while away, wait LONGER than the full decay window
+				await get_tree().create_timer(4.0).timeout
+				var fired_while_away: int = world.leaf_decay_fire_count()
+				# back: the chunk re-enters sim; the paused timer resumes
+				Debug.teleport(fsp2.x, fsp2.y + 4.0, fsp2.z)
+				world.recenter(fsp2.x, fsp2.z, true)
+				await _await_state(func() -> bool: return world.band_of(0, 0) == 0, 15000)
+				var resumed: bool = await _await_state(func() -> bool: return world.leaf_decay_fire_count() > fired_while_away or world.leaf_decay_live_n() == 0, 30000)
+				sim_exit_ok = fired_while_away == 0 or resumed
+				persisted_ok = world.cell_is_persistent(placed_cell)
+			else:
+				persisted_ok = world.cell_is_persistent(placed_cell)
+	if OS.get_environment("AWECRAFT_LEAVES_DBG") == "1":
+		if OS.get_environment("AWECRAFT_LEAVES_DBG") == "1":
+			print("LEAVES solid pos=%s leaf_cell=%s floor=%s placed=%s persist=%s fires=%d live=%d" % [str(p.position), str(leaf_cell), str(p.is_on_floor()), str(placed_cell), str(world.cell_is_persistent(placed_cell)), world.leaf_decay_fire_count(), world.leaf_decay_live_n()])
+	var out := {
+		"mode": "leaves",
+		"phase": ("save" if phase_save else ("load" if phase_load else "full")),
+		"leaves_found": leaves_found,
+		"solid_ok": solid_ok,
+		"decay_fired": decay_fired,
+		"timers_started": timers_started,
+		"sim_exit_ok": sim_exit_ok,
+		"persisted_ok": persisted_ok,
+		"save_ok": save_ok,
+		"load_ok": load_ok,
+		"ok": true,
+	}
+	if phase_save:
+		out["ok"] = leaves_found > 0 and save_ok and load_ok
+	elif phase_load:
+		out["ok"] = load_ok and decay_fired
+	else:
+		out["ok"] = leaves_found > 0 and solid_ok and timers_started and decay_fired and persisted_ok
+	print("RESULT ", JSON.stringify(out))
+	get_tree().quit()
+
+
+func _find_tree(max_dist: float, exclude := Vector3i.ZERO) -> Array:
+	# [n, leaf_cell, [log_cells]] - the first natural tree (a leaf cell
+	# with a log within 6 via the leaf path) within max_dist of spawn.
+	var sp: Vector3 = world.spawn_point()
+	var c0x := int(floorf(sp.x / 16.0))
+	var c0z := int(floorf(sp.z / 16.0))
+	var best: Array = [0, Vector3i.ZERO, []]
+	var ring := 0
+	var dbg_n := 0
+	var dbg_chunks := 0
+	while ring <= int(max_dist / 16.0) + 1:
+		for dx in range(-ring, ring + 1):
+			for dz in range(-ring, ring + 1):
+				if maxi(absi(dx), absi(dz)) != ring:
+					continue
+				var c: Node3D = world.chunks.get(world._key(c0x + dx, c0z + dz))
+				if c == null or c.data.is_empty():
+					continue
+				dbg_chunks += 1
+				for ly in range(Data.HEIGHT - 2, 1, -1):
+					for lx in 16:
+						for lz in 16:
+							var id: int = c.get_local(lx, ly, lz)
+							if id != 7:
+								continue
+							dbg_n += 1
+							var cell: Vector3i = Vector3i(int(c.cx) * 16 + lx, ly, int(c.cz) * 16 + lz)
+							if cell.distance_to(Vector3i(int(sp.x), int(sp.y), int(sp.z))) > int(max_dist):
+								continue
+							if exclude != Vector3i.ZERO and cell == exclude:
+								continue
+							# a log within L1 6 (the decay radius)
+							var lgs: Array = []
+							var oklog := false
+							for ax in range(-6, 7):
+								for ay in range(-4, 5):
+									for az in range(-6, 7):
+										var b: int = world.get_block(cell.x + ax, cell.y + ay, cell.z + az)
+										if b == 6 and absi(ax) + absi(ay) + absi(az) <= 6:
+											lgs.append(Vector3i(cell.x + ax, cell.y + ay, cell.z + az))
+											oklog = true
+							if not oklog:
+								continue
+							var n: int = int(best[0]) + 1
+							best = [n, cell, lgs]
+							return best
+		ring += 1
+	if OS.get_environment("AWECRAFT_LEAVES_DBG") == "1":
+		print("LEAVES find_tree rings=%d leaf_hits=%d chunks=%d H=%d" % [ring, dbg_n, dbg_chunks, Data.HEIGHT])
+	return best
+
+
+# AC-0270: does the slab holding y have its collision body built? (the
+# body is async; the solid-drop test must not race it).
+func _slab_body_present(c: Node3D, y: int) -> bool:
+	if y < 0 or y >= Data.HEIGHT:
+		return false
+	var sl = c.slabs[y >> 4]
+	return sl != null and sl.collision_body != null
+
+
+func _air_next_to(cell: Vector3i, logs: Array) -> Vector3i:
+	var dirs := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
+	for d in dirs:
+		var t: Vector3i = cell + d
+		if t.y < 0 or t.y >= Data.HEIGHT:
+			continue
+		if world.get_block(t.x, t.y, t.z) == 0:
+			return t
+	return cell + Vector3i(0, 1, 0)
 
 func _gamepad_test(spawn: Vector3) -> void:
 	var p = Game.player
@@ -11189,216 +11690,6 @@ func _leaves_tile_center(aimg: Image) -> Array:
 		roundf((a.a + b.a) / 2.0 * 255.0),
 	]
 
-
-func _leaves_test(spawn: Vector3) -> void:
-	var t0 := Time.get_ticks_msec()
-	Lighting._tables()
-	world.recenter(spawn.x, spawn.z, true)
-	await _nd_settle(60000)
-	var H: int = Data.HEIGHT
-	var rc := Data.block_rect(7, "side")
-	var u0: float = (float(rc.x) + 0.5) / 1024.0
-	var u1: float = (float(rc.x) + 31.5) / 1024.0
-	var v0: float = (float(rc.y) + 0.5) / 1024.0
-	var v1: float = (float(rc.y) + 31.5) / 1024.0
-	var cell := Vector3i(-1, -1, -1)
-	var ccx := 0
-	var ccy := 0
-	var pick := false
-	var dbg := {"chunks": 0, "leaf_cells": 0, "exposed": 0, "lit": 0}
-	for lit_req in [true, false]:
-		if pick:
-			break
-		for cc in _nd_sorted_chunks():
-			if absi(int(cc.cx)) > 2 or absi(int(cc.cz)) > 2:
-				continue
-			var d: PackedByteArray = cc.flat_data()
-			var eff: PackedByteArray = cc.last_eff["arr"]
-			if eff.size() != H * 256:
-				continue
-			dbg["chunks"] += 1
-			for y in range(10, H):
-				if pick:
-					break
-				var row := y << 8
-				for lz in range(16):
-					if pick:
-						break
-					for lx in range(16):
-						var idx := row | (lz << 4) | lx
-						if d[idx] != 7:
-							continue
-						dbg["leaf_cells"] += 1
-						if int(eff[idx]) > 0:
-							dbg["lit"] += 1
-						if lit_req and int(eff[idx]) <= 0:
-							continue
-						var wx := int(cc.cx) * 16 + lx
-						var wz := int(cc.cz) * 16 + lz
-						var exposed := false
-						for fd in VoxelMath.FACES:
-							var n: Vector3i = fd.n
-							var ny := y + n.y
-							if ny < 0 or ny >= H:
-								continue
-							var nb: int = world.get_block(wx + n.x, ny, wz + n.z)
-							if nb == 7:
-								continue
-							var ninfo = Data.block(nb) if nb != 0 else null
-							if nb != 0 and ninfo != null and bool(ninfo.solid):
-								continue
-							exposed = true
-							break
-						if not exposed:
-							continue
-						dbg["exposed"] += 1
-						cell = Vector3i(wx, y, wz)
-						ccx = int(cc.cx)
-						ccy = int(cc.cz)
-						pick = true
-						break
-	if not pick:
-		Debug.result({"mode": "leaves", "seed": Game.world_seed, "radius": world.render_radius, "ok": false, "err": "no exposed leaves cell", "dbg": dbg, "elapsed_ms": Time.get_ticks_msec() - t0})
-		get_tree().quit()
-		return
-	var linfo: Dictionary = world.light_at(cell.x, cell.y, cell.z)
-	var u_day_cut := -1.0
-	var mat_path := ""
-	var cut_tex: Texture2D = null
-	for k in _ChunkScriptM._mat_cache:
-		var cm = _ChunkScriptM._mat_cache[k]
-		if cm is ShaderMaterial and String(cm.shader.resource_path).ends_with("chunk_lit_cutout.gdshader"):
-			u_day_cut = float(cm.get_shader_parameter("u_day"))
-			mat_path = String(cm.shader.resource_path)
-			cut_tex = cm.get_shader_parameter("tex")
-	var aimg: Image = null
-	if cut_tex != null:
-		aimg = cut_tex.get_image()
-	if aimg == null and Data.atlas_tex != null:
-		aimg = Data.atlas_tex.get_image()
-	var bake_check := {"tint": [roundf(Data.TINT_LEAVES.r * 255.0), roundf(Data.TINT_LEAVES.g * 255.0), roundf(Data.TINT_LEAVES.b * 255.0)]}
-	var dimg: Image = Data.atlas_tex.get_image() if Data.atlas_tex != null else null
-	if dimg != null:
-		bake_check["data_fmt"] = str(int(dimg.get_format()))
-		bake_check["data_px_320_31"] = [roundf(dimg.get_pixel(320, 31).r * 255.0), roundf(dimg.get_pixel(320, 31).g * 255.0), roundf(dimg.get_pixel(320, 31).b * 255.0), roundf(dimg.get_pixel(320, 31).a * 255.0)]
-		bake_check["data_px_322_2"] = [roundf(dimg.get_pixel(322, 2).r * 255.0), roundf(dimg.get_pixel(322, 2).g * 255.0), roundf(dimg.get_pixel(322, 2).b * 255.0), roundf(dimg.get_pixel(322, 2).a * 255.0)]
-	if aimg != null:
-		bake_check["cut_fmt"] = str(int(aimg.get_format()))
-		bake_check["cut_px_320_31"] = [roundf(aimg.get_pixel(320, 31).r * 255.0), roundf(aimg.get_pixel(320, 31).g * 255.0), roundf(aimg.get_pixel(320, 31).b * 255.0), roundf(aimg.get_pixel(320, 31).a * 255.0)]
-	var colv := Color(0.0, 0.0, 0.0, 1.0)
-	var uvv := Vector2.ZERO
-	var found_v := false
-	var scan := {"leaves_texels": 0, "black_texels": 0, "col_b_zero": 0, "col_rg_zero": 0}
-	if aimg != null:
-		var lxi := cell.x - ccx * 16
-		var lzi := cell.z - ccy * 16
-		for cc in _nd_sorted_chunks():
-			if absi(int(cc.cx)) > 2 or absi(int(cc.cz)) > 2:
-				continue
-			for s in cc.slabs:
-				var fi = s.flora_instance
-				if fi == null or fi.mesh == null:
-					continue
-				var m: ArrayMesh = fi.mesh
-				for si in range(m.get_surface_count()):
-					var mat = m.surface_get_material(si)
-					if not (mat is ShaderMaterial):
-						continue
-					if not String(mat.shader.resource_path).ends_with("chunk_lit_cutout.gdshader"):
-						continue
-					var arrs = m.surface_get_arrays(si)
-					var pos: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
-					var uva: PackedVector2Array = arrs[Mesh.ARRAY_TEX_UV]
-					var colsa: PackedColorArray = arrs[Mesh.ARRAY_COLOR]
-					if uva.size() != pos.size() or colsa.size() != pos.size():
-						continue
-					for vi in range(pos.size()):
-						var uv: Vector2 = uva[vi]
-						if uv.x < u0 or uv.x > u1 or uv.y < v0 or uv.y > v1:
-							continue
-						scan["leaves_texels"] += 1
-						var tx := clampi(int(floorf(uv.x * 1024.0)), 0, aimg.get_width() - 1)
-						var ty := clampi(int(floorf(uv.y * 1024.0)), 0, aimg.get_height() - 1)
-						var tp: Color = aimg.get_pixel(tx, ty)
-						if maxf(tp.r, maxf(tp.g, tp.b)) < 0.031:
-							scan["black_texels"] += 1
-						var cv: Color = colsa[vi]
-						if cv.b <= 0.001:
-							scan["col_b_zero"] += 1
-						if cv.r + cv.g <= 0.001:
-							scan["col_rg_zero"] += 1
-						if found_v:
-							continue
-						var p: Vector3 = pos[vi]
-						var inx := absf(p.x - float(lxi)) < 0.01 or absf(p.x - float(lxi + 1)) < 0.01
-						var iny := p.y >= float(cell.y) - 0.01 and p.y <= float(cell.y) + 1.01
-						var inz := absf(p.z - float(lzi)) < 0.01 or absf(p.z - float(lzi + 1)) < 0.01
-						if not (inx and iny and inz):
-							continue
-						found_v = true
-						colv = cv
-						uvv = uv
-	var texel := [0, 0, 0, 0]
-	if found_v and aimg != null:
-		var tx := clampi(int(floorf(uvv.x * 1024.0)), 0, aimg.get_width() - 1)
-		var ty := clampi(int(floorf(uvv.y * 1024.0)), 0, aimg.get_height() - 1)
-		var tp: Color = aimg.get_pixel(tx, ty)
-		texel = [roundf(tp.r * 255.0), roundf(tp.g * 255.0), roundf(tp.b * 255.0), roundf(tp.a * 255.0)]
-	var L_day := 0.20 + 0.80 * maxf(1.0 * float(colv.r), float(colv.g))
-	var L_night := 0.20 + 0.80 * maxf(0.0 * float(colv.r), float(colv.g))
-	var sky15 := float(linfo.sky) / 15.0
-	var blk15 := float(linfo.block) / 15.0
-	var L_day_light := 0.20 + 0.80 * maxf(sky15, blk15)
-	var L_night_light := 0.20 + 0.80 * blk15
-	var g_day := float(texel[1]) / 255.0 * float(colv.b) * L_day
-	var g_night := float(texel[1]) / 255.0 * float(colv.b) * L_night
-	var ok := found_v \
-			and L_day > 0.25 \
-			and L_night >= 0.18 \
-			and float(texel[1]) / 255.0 > 0.15 \
-			and g_day > 0.02 \
-			and g_night > 0.008
-	var out := {
-		"mode": "leaves",
-		"seed": Game.world_seed,
-		"radius": world.render_radius,
-		"cell": [cell.x, cell.y, cell.z],
-		"chunk": [ccx, ccy],
-		"vcolor": [roundf(float(colv.r) * 1000.0) / 1000.0, roundf(float(colv.g) * 1000.0) / 1000.0, roundf(float(colv.b) * 1000.0) / 1000.0],
-		"uv": [roundf(uvv.x * 10000.0) / 10000.0, roundf(uvv.y * 10000.0) / 10000.0],
-		"atlas_texel_rgba": texel,
-		"light": {"sky": int(linfo.sky), "block": int(linfo.block), "eff": int(linfo.eff)},
-		"L_day": roundf(L_day * 1000.0) / 1000.0,
-		"L_night": roundf(L_night * 1000.0) / 1000.0,
-		"L_day_light": roundf(L_day_light * 1000.0) / 1000.0,
-		"L_night_light": roundf(L_night_light * 1000.0) / 1000.0,
-		"green_day": roundf(g_day * 1000.0) / 1000.0,
-		"green_night": roundf(g_night * 1000.0) / 1000.0,
-		"u_day_cut": roundf(u_day_cut * 1000.0) / 1000.0,
-		"cut_mat": mat_path,
-		"tile_center_rgba": _leaves_tile_center(aimg),
-		"bake_check": bake_check,
-		"dbg": dbg,
-		"scan": scan,
-		"found_v": found_v,
-		"ok": ok,
-		"elapsed_ms": Time.get_ticks_msec() - t0,
-	}
-	Debug.result(out)
-	get_tree().quit()
-
-
-# AC-0136 probe (env-gated by AWECRAFT_LOGIC=sharpx, inert unless set):
-# texel-boundary framebuffer A/B for the chunk_lit sampler filter. Finds a
-# deterministic sky-lit (outdoor) or eff-0 (cave) grass/dirt/stone side face
-# near spawn, places the eye 2.5 m off the face center, and samples an 11-px
-# strip across one high-contrast texel boundary at the tile center row:
-# NEAREST => every strip pixel equals one of the two texel-center pixels
-# (off<=1); LINEAR => interior pixels are blends (off>=6). 4.7.1 exposes no
-# GDScript filter getter (verified empirically), so it also reports the
-# texture classes in force (imported CompressedTexture2D vs runtime
-# ImageTexture bake copies) for the cause-layer record. Framebuffer part
-# needs a real renderer (xvfb render mode); headless skips the sampling.
 func _sharpx_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
 	Lighting._tables()

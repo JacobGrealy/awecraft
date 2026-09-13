@@ -1301,7 +1301,14 @@ func place_item(item: Dictionary) -> void:
 		return
 	if _pt:
 		print("PLACETRACE PLACING at %s" % str(target))
-	Game.world.set_block(target.x, target.y, target.z, int(item["id"]))
+	# AC-0270: a placed leaf is a PERSISTENT leaf (id 30) - the
+	# shears/Silk-Touch equivalent (AweCraft has no shears yet, so every
+	# placed leaf carries the flag). Natural worldgen leaves (7) decay
+	# when orphaned; these never do.
+	var bid := int(item["id"])
+	if bid == 7:
+		bid = 30
+	Game.world.set_block(target.x, target.y, target.z, bid)
 	inv_consume_selected()
 	Audio.play("place")
 

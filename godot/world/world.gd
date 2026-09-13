@@ -3103,6 +3103,13 @@ var _rp_drain_stub_n := 0
 var fluid_sleep := true
 var tick_time := false
 var _fluid_write := false
+# AC-0270: leaf decay - pending (loaded from save, not yet on a chunk) and
+# the enabled flag (harness can shorten the timer window via env).
+var pending_leaf_decay := {}
+var leaf_decay_enabled := true
+var leaf_decay_min_ms := 2000
+var leaf_decay_max_ms := 12000
+var leaf_decay_debug := false
 var _fluid_stable := 0
 var _fluid_sig := ""
 var _fluidprobe := false
@@ -3302,6 +3309,12 @@ func _bd_log(cx: int, cz: int) -> void:
 		build_dispatch_log.pop_front()
 
 func _ready() -> void:
+	# AC-0270: the harness shortens the decay window deterministically.
+	var _ldms := OS.get_environment("AWECRAFT_LEAFDECAY_MS")
+	if _ldms != "":
+		leaf_decay_min_ms = maxi(1, int(_ldms))
+		leaf_decay_max_ms = maxi(1, int(_ldms))
+
 	timing = OS.get_environment("AWECRAFT_TIMING") == "1"
 	_picklog = OS.get_environment("AWECRAFT_PICKLOG") == "1"  # AC-0217
 	_wprof_init()  # AC-0251: pre-allocate the per-stage pipeline timing ring
@@ -3519,6 +3532,8 @@ func _game_tick() -> void:
 	_random_tick_pass(tick_index)
 	if fluid_sim_enabled:
 		tick_fluids()
+	if leaf_decay_enabled:
+		_leaf_decay_tick()
 	game_tick_samples.append((Time.get_ticks_usec() - t0) / 1000.0)
 
 # AC-0109: per-frame frustum cull. Column AABB early-out both directions,
@@ -4602,6 +4617,7 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	gen_count += 1
 	_low_fog_for(c)  # AC-0231: the immediate fog-box first pass (far only)
 	_apply_edits_to_chunk(c)
+	_apply_pending_leaf_decay(c)  # AC-0270: restore the saved timers
 	var dg := Time.get_ticks_msec() - tg
 	if timing:
 		print("GENCHUNK %d,%d gen_ms=%d t=%d" % [cx, cz, dg, Time.get_ticks_msec()])
@@ -4821,6 +4837,7 @@ func _startup_gen_apply() -> void:
 		chunk_origin[_key(int(e[1]), int(e[2]))] = "gen"  # AC-0155
 		_low_fog_for(c)  # AC-0231: the immediate fog-box first pass (far only)
 		_apply_edits_to_chunk(c)
+		_apply_pending_leaf_decay(c)  # AC-0270: restore the saved timers
 		if timing:
 			print("GENHAND %d,%d t=%d" % [int(e[1]), int(e[2]), Time.get_ticks_msec()])
 
@@ -4925,6 +4942,7 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 	gen_count += 1
 	chunk_origin[e["key"]] = "gen"  # AC-0155
 	_apply_edits_to_chunk(c)
+	_apply_pending_leaf_decay(c)  # AC-0270: restore the saved timers
 	_tg_handoff += 1
 	_pool_touch()  # AC-0217: queued entry's data landed (pool membership flipped)
 	_low_fog_for(c)  # AC-0231: the immediate fog-box first pass (far only)
@@ -8290,6 +8308,9 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 		return
 	var lx := x & 15
 	var lz := z & 15
+	# AC-0270: leaf decay is triggered by the BEFORE/AFTER ids - a log or
+	# leaf that changes can connect or disconnect the surrounding groups.
+	var old_id := int(c.get_local(lx, y, lz))
 	c.set_local(lx, y, lz, id)
 	if _fluidprobe:
 		_fp_writes += 1
@@ -8330,6 +8351,11 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 		# (zero scan work); only the edge cells an edit touches activate.
 		_wake_fluid_around(x, y, z)
 	_record_edit(cx, cz, fi, id, c.fl_at(fi))
+	# AC-0270: connectivity re-evaluation - a log removed (or a leaf that
+	# decayed away / was broken) can orphan the group; a log placed back
+	# reconnects it (the scan cancels the timers it can reach).
+	if (old_id == 6 or id == 6 or is_leaf_id(old_id) or is_leaf_id(id)) and old_id != id:
+		_leaf_decay_scan_around(x, y, z)
 
 
 func _wake_fluid_around(x: int, y: int, z: int) -> void:
@@ -8863,6 +8889,7 @@ func _io_read_handoff(e: Dictionary) -> void:
 	chunk_origin[key] = "disk"
 	if bool(e.get("apply_edits", false)):
 		_apply_edits_to_chunk(c)
+	_apply_pending_leaf_decay(c)  # AC-0270: restore the saved timers (disk columns too)
 
 func surface_top(x: int, z: int) -> int:
 	for y in range(Data.HEIGHT - 1, -1, -1):
@@ -9056,6 +9083,225 @@ func _banana_evict(key: String) -> void:
 	for k in dead:
 		_banana_fruits.erase(k)
 
+
+# ---------------------------------------------------------------- AC-0270:
+# leaf decay. Natural leaves (7) die when no oak log (6) is within 6
+# steps through the leaf path; player-placed leaves (30) never decay.
+# Triggers: a log/leaf change (set_block hook) re-runs the connectivity
+# scan around the cell; the 20 Hz game tick counts down the timers while
+# the chunk is in sim distance (band 0). The timer values ride the chunk
+# (like a block entity) and survive sim exit/entry and save/load.
+func is_log_id(id: int) -> bool:
+	return id == 6
+
+func is_leaf_id(id: int) -> bool:
+	return id == 7 or id == 30
+
+# Reads a cell WITHOUT creating chunk data (a BFS probe must not force
+# generation of the neighborhood). -1 = unknown (chunk unloaded).
+func _leaf_block_at(x: int, y: int, z: int) -> int:
+	if y < 0 or y >= Data.HEIGHT:
+		return 0
+	var c: Node3D = chunks.get(_key(int(floorf(float(x) / 16.0)), int(floorf(float(z) / 16.0))))
+	if c == null or c.data.is_empty():
+		return -1
+	return int(c.get_local(x & 15, y, z & 15))
+
+# Re-evaluates every natural leaf in the R=6 L1 box around (x,y,z):
+#  - a leaf is ALIVE when a log reaches it in <= 6 leaf-path steps
+#    (multi-source BFS from the logs inside the box, depth capped at 6);
+#  - a DEAD leaf (every leaf neighbor also in the box, no log found) gets
+#    a random timer when it has none - the "random timer per leaf group":
+#    one group draw + a small per-leaf jitter, so a disconnected cluster
+#    dies roughly together but not in perfect lockstep;
+#  - a leaf with a leaf neighbor OUTSIDE the box (or an unloaded chunk)
+#    is UNKNOWN (its connectivity may be preserved through the unscanned
+#    territory) and is left alone;
+#  - alive leaves have their timer CANCELLED (a log was planted back).
+func _leaf_decay_scan_around(x: int, y: int, z: int) -> void:
+	if not leaf_decay_enabled:
+		return
+	var R := 6
+	var box: Dictionary = {}
+	var leaves: Array = []
+	var logs: Array = []
+	var y0 := maxi(0, y - R)
+	var y1 := mini(Data.HEIGHT - 1, y + R)
+	var xx0: int = x - R
+	var xx1: int = x + R
+	var zz0: int = z - R
+	var zz1: int = z + R
+	var nb6 := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0), Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
+	for bx in range(xx0, xx1 + 1):
+		for bz in range(zz0, zz1 + 1):
+			for by in range(y0, y1 + 1):
+				var b := _leaf_block_at(bx, by, bz)
+				if b < 0:
+					continue  # unloaded neighbor - territory stays unknown
+				if is_log_id(b):
+					logs.append(Vector3i(bx, by, bz))
+				elif is_leaf_id(b):
+					leaves.append(Vector3i(bx, by, bz))
+					box["%d,%d,%d" % [bx, by, bz]] = true
+	if leaves.is_empty():
+		return
+	# multi-source BFS from the logs through {7,30,6}, depth <= 6.
+	var alive: Dictionary = {}
+	var frontier: Array = []
+	for lg in logs:
+		frontier.append([lg, 0])
+		alive["%d,%d,%d" % [lg.x, lg.y, lg.z]] = true
+	while not frontier.is_empty():
+		var nxt: Array = []
+		for e in frontier:
+			var pos: Vector3i = e[0]
+			var d: int = e[1]
+			if d >= 6:
+				continue
+			for nb in nb6:
+				var npos: Vector3i = pos + nb
+				var k := "%d,%d,%d" % [npos.x, npos.y, npos.z]
+				if alive.has(k):
+					continue
+				var b := _leaf_block_at(npos.x, npos.y, npos.z)
+				if b < 0:
+					continue  # unloaded - stop (that territory is unknown)
+				if is_leaf_id(b) or is_log_id(b):
+					alive[k] = true
+					nxt.append([npos, d + 1])
+		frontier = nxt
+	# one group draw for this scan (the leaves found dead share the base)
+	var base: int = randi_range(leaf_decay_min_ms, leaf_decay_max_ms)
+	var started := 0
+	var cancelled := 0
+	for lf in leaves:
+		var k := "%d,%d,%d" % [lf.x, lf.y, lf.z]
+		if alive.has(k):
+			# connected to a log: cancel any pending timer.
+			var ccx := int(floorf(float(lf.x) / 16.0))
+			var ccz := int(floorf(float(lf.z) / 16.0))
+			var cc: Node3D = chunks.get(_key(ccx, ccz))
+			if cc != null:
+				var fii: int = (lf.y << 8) | ((lf.z & 15) << 4) | (lf.x & 15)
+				if cc.leaf_decay.has(str(fii)):
+					cc.leaf_decay.erase(str(fii))
+					cancelled += 1
+			continue
+		# unknown? a leaf neighbor outside the box (or an unloaded chunk)
+		# means the path may continue there - no timer we can't judge.
+		var unknown := false
+		for nb in nb6:
+			var npos: Vector3i = lf + nb
+			var nk := "%d,%d,%d" % [npos.x, npos.y, npos.z]
+			var nb_b := _leaf_block_at(npos.x, npos.y, npos.z)
+			if nb_b < 0 or (is_leaf_id(nb_b) and not box.has(nk)):
+				unknown = true
+				break
+		if unknown:
+			continue
+		# dead: start a timer - natural leaves only (30 is persistent).
+		if _leaf_block_at(lf.x, lf.y, lf.z) != 7:
+			continue
+		var ccx := int(floorf(float(lf.x) / 16.0))
+		var ccz := int(floorf(float(lf.z) / 16.0))
+		var cc: Node3D = chunks.get(_key(ccx, ccz))
+		if cc == null:
+			continue
+		var fii: int = (lf.y << 8) | ((lf.z & 15) << 4) | (lf.x & 15)
+		if not cc.leaf_decay.has(str(fii)):
+			var jit: int = int(float(base) * 0.15)
+			cc.leaf_decay[str(fii)] = maxi(1, base + (randi() % (jit + 1)) - (jit / 2))
+			started += 1
+	if leaf_decay_debug:
+		print("LEAFDECAY scan t=%d at=%s leaves=%d logs=%d started=%d cancelled=%d" % [Time.get_ticks_msec(), str(Vector3i(x, y, z)), leaves.size(), logs.size(), started, cancelled])
+
+# The 20 Hz tick: count down every timer in the band-0 (sim) chunks; a
+# fired leaf becomes air through set_block (which records the edit - the
+# decay IS the persistence - and re-triggers the scan: the hole may
+# disconnect the leaves further out).
+func _leaf_decay_tick() -> void:
+	if not leaf_decay_enabled:
+		return
+	var ms := int(TICK_INTERVAL * 1000.0)
+	for key in chunks:
+		var c: Node3D = chunks[key]
+		if int(c.band) != 0 or c.data.is_empty():
+			continue
+		if c.leaf_decay.is_empty():
+			continue
+		var lfkeys: Array = c.leaf_decay.keys()
+		for kidx in lfkeys.size():
+			var fi = lfkeys[kidx]
+			var fii: int = int(fi)
+			if not c.leaf_decay.has(fi):
+				continue
+			var rem: int = int(c.leaf_decay[fi]) - ms
+			if rem <= 0:
+				c.leaf_decay.erase(fi)
+				var lx: int = fii & 15
+				var ly: int = fii >> 8
+				var lz: int = (fii >> 4) & 15
+				if int(c.get_local(lx, ly, lz)) != 7:
+					continue  # changed since (broken/placed over) - drop
+				var wx := int(c.cx) * 16 + lx
+				var wz := int(c.cz) * 16 + lz
+				leaf_decay_fires += 1
+				set_block(wx, ly, wz, 0)
+			else:
+				c.leaf_decay[fi] = rem
+
+# AC-0270: harness helpers - the live (chunk-resident) timer count and
+# the fire counter (a decayed leaf that actually hit the ground).
+var leaf_decay_fires := 0
+
+func leaf_decay_live_n() -> int:
+	var n := 0
+	for key in chunks:
+		var c: Node3D = chunks[key]
+		n += int(c.leaf_decay.size())
+	return n
+
+func leaf_decay_fire_count() -> int:
+	return leaf_decay_fires
+
+func cell_is_persistent(c: Vector3i) -> bool:
+	return get_block(c.x, c.y, c.z) == 30
+
+# The save view: "cx,cz" -> {fi: ms} for the chunks that have timers.
+func leaf_decay_index() -> Dictionary:
+	var out: Dictionary = {}
+	for key in chunks:
+		var c: Node3D = chunks[key]
+		if c.leaf_decay.is_empty():
+			continue
+		var cells: Dictionary = {}
+		for fkey in c.leaf_decay:
+			cells[str(fkey)] = int(c.leaf_decay[fkey])
+		out[_key(int(c.cx), int(c.cz))] = cells
+	return out
+
+# Merges a chunk's pending (saved) timers in when it materializes - a cell
+# the materialized data says is NOT a natural leaf is skipped (the edit
+# that changed it won over the saved timer).
+func _apply_pending_leaf_decay(c: Node3D) -> void:
+	var key := _key(int(c.cx), int(c.cz))
+	if not pending_leaf_decay.has(key):
+		return
+	var raw = pending_leaf_decay[key]
+	pending_leaf_decay.erase(key)
+	if typeof(raw) != TYPE_DICTIONARY or c.data.is_empty():
+		return
+	var n := 0
+	for fkey in raw:
+		var fii := int(fkey)
+		var y := fii >> 8
+		if y < 0 or y >= Data.HEIGHT:
+			continue
+		if int(c.get_local(fii & 15, y, (fii >> 4) & 15)) == 7:
+			c.leaf_decay[str(fii)] = maxi(1, int(raw[fkey]))
+			n += 1
+	if leaf_decay_debug:
+		print("LEAFDECAY restore chunk=%s n=%d" % [key, n])
 
 func is_fluid_id(id: int) -> bool:
 	return id == 5 or id == 24

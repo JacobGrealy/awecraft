@@ -507,6 +507,13 @@ func _continue_slot(slot: int) -> void:
 	_create_game_nodes()
 	if height_ok and planets_ok and edits_v2_ok:
 		world.edits = _conv_edits_v2(edits_raw)
+	# AC-0270: restore the in-flight leaf-decay timers (the chunk nodes
+	# that own them may not exist yet - world merges them in lazily when
+	# each chunk materializes, and re-runs the connectivity scan for logs
+	# the edits removed).
+	var leaf_decay_raw = data.get("leaf_decay", {})
+	if typeof(leaf_decay_raw) == TYPE_DICTIONARY:
+		world.pending_leaf_decay = leaf_decay_raw
 	var ps: Dictionary = data.get("player", {})
 	var pos: Array = ps.get("pos", [])
 	var target: Vector3

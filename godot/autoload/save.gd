@@ -84,6 +84,10 @@ func save_now(slot: int) -> bool:
 		# pair: face 0 = ccx >= 0 half, face 1 = ccx < 0 half; non-home faces
 		# are data-level in P1a and never record edits).
 		"edits": _edits_v2(w.edits),
+		# AC-0270: pending leaf-decay timers per chunk (fi -> ms). The
+		# decayed leaves themselves are edits; the in-flight timers are
+		# the block-entity-style state the task asks to persist.
+		"leaf_decay": w.leaf_decay_index(),
 		# AC-0143 M5 v2: planet list - P1a stores home only (id=0, R=4000
 		# exact, orbit=null until AC-0147); load clamps R to [2000, 8000].
 		"planets": [

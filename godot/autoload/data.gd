@@ -168,6 +168,11 @@ func _init() -> void:
 		5: {"name": "Water", "solid": false, "cross": true, "hard": 1e9, "light": 0, "color": {"top": C_WATER, "side": C_WATER, "bottom": C_WATER}},
 		6: {"name": "Oak Log", "solid": true, "cross": false, "hard": 1.0, "light": 0, "drop": 6, "color": {"top": Color(0.55, 0.42, 0.24), "side": Color(0.42, 0.3, 0.18), "bottom": Color(0.55, 0.42, 0.24)}},
 		7: {"name": "Leaves", "solid": false, "cross": false, "cutout": true, "hard": 0.2, "light": 0, "color": {"top": C_LEAVES, "side": C_LEAVES, "bottom": C_LEAVES}},
+		# AC-0270: player-placed leaves (the shears/Silk-Touch equivalent -
+		# there are no shears yet, so ANY placed leaf writes id 30). Same
+		# rendering as 7 (the block_rect alias below), but NEVER decays.
+		# "drop": 30 so breaking one gives it back.
+		30: {"name": "Persistent Leaves", "solid": false, "cross": false, "cutout": true, "hard": 0.2, "light": 0, "drop": 30, "color": {"top": C_LEAVES, "side": C_LEAVES, "bottom": C_LEAVES}},
 		8: {"name": "Planks", "solid": true, "cross": false, "hard": 1.0, "light": 0, "drop": 8, "color": {"top": Color(0.72, 0.56, 0.34), "side": Color(0.72, 0.56, 0.34), "bottom": Color(0.72, 0.56, 0.34)}},
 		9: {"name": "Cobblestone", "solid": true, "cross": false, "hard": 2.0, "light": 0, "drop": 9, "color": {"top": C_COBBLE, "side": C_COBBLE, "bottom": C_COBBLE}},
 		17: {"name": "Bricks", "solid": true, "cross": false, "hard": 2.0, "light": 0, "drop": 17, "color": {"top": Color(0.6, 0.3, 0.25), "side": Color(0.6, 0.3, 0.25), "bottom": Color(0.6, 0.3, 0.25)}},
@@ -319,6 +324,10 @@ func block_anim_frames(id: int) -> int:
 
 
 func block_rect(id: int, face: String) -> Vector2i:
+	# AC-0270: persistent leaves (30) render exactly like leaves (7) -
+	# they share the atlas cell; only the decay rule differs.
+	if id == 30:
+		id = 7
 	var e = atlas_rects.get(str(id))
 	if e == null:
 		return Vector2i(-1, -1)
@@ -379,6 +388,10 @@ func block_drops(_id: int, _is_pick: bool) -> Array:
 			return [{"id": 9, "n": 1, "ch": 1.0}] if _is_pick else []
 		7:
 			return [{"id": 108, "n": 1, "ch": 0.15}]
+		# AC-0270: persistent leaves drop themselves (the player placed
+		# them; they are reclaimable).
+		30:
+			return [{"id": 30, "n": 1, "ch": 1.0}]
 		14:
 			return [{"id": 106, "n": 1, "ch": 1.0}] if _is_pick else []
 		15:

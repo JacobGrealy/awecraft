@@ -49,6 +49,11 @@ var fl_gen := 0
 # RAISES it (mining the top settles back down on the next update_top);
 # gen/load/edit finalization rescan.
 var top := -1
+# AC-0270: leaf decay timers - fi -> remaining ms. Only natural leaves (7)
+# ever get an entry (player-placed 30 never decays). Ticks at the 20 Hz
+# game tick while the chunk is band 0 (sim distance); the value persists
+# across sim exit/entry and save/load (world.pending_leaf_decay -> here).
+var leaf_decay := {}
 
 
 func update_top() -> void:
@@ -1493,6 +1498,25 @@ func _build_slab_collision(s: Slab) -> void:
 	faces.resize(idx.size())
 	for i in range(idx.size()):
 		faces[i] = verts[idx[i]]
+	# AC-0270: leaves (and any cutout block) render in the FLORA mesh, not
+	# in the slab's opaque surface 0 - without this they have no collision
+	# and the player walks/falls through leaf clusters. fsidx[0] >= 0 marks
+	# the cutout surface (fsidx[1] is the cross/flower one - no collision,
+	# flowers stay walk-through).
+	if s.fsidx.size() > 0 and int(s.fsidx[0]) >= 0 \
+			and s.flora_instance != null and s.flora_instance.mesh != null:
+		var fam: ArrayMesh = s.flora_instance.mesh
+		if fam.get_surface_count() > int(s.fsidx[0]):
+			var fa := fam.surface_get_arrays(int(s.fsidx[0]))
+			var fv: PackedVector3Array = fa[Mesh.ARRAY_VERTEX]
+			var fi: PackedInt32Array = fa[Mesh.ARRAY_INDEX]
+			# the body and the flora MI both sit at the CHUNK origin (the
+			# vertices are in chunk/world space for cx/cz, chunk Y for y) -
+			# no shift.
+			var fbase: int = faces.size()
+			faces.resize(fbase + fi.size())
+			for i in range(fi.size()):
+				faces[fbase + i] = fv[fi[i]]
 	var shape := ConcavePolygonShape3D.new()
 	shape.set_faces(faces)
 	var body := StaticBody3D.new()
@@ -1544,6 +1568,7 @@ func _pool_reset() -> void:
 	fl_gen = 0
 	eff_gen = 0
 	top = -1
+	leaf_decay = {}  # AC-0270: the decay timers are per-column state
 	# mesh state
 	mesh_built = false
 	mesh_gen = 0
