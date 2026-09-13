@@ -1,6 +1,7 @@
 [gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://player/player.gd" id="1_player"]
+[ext_resource type="CameraAttributesPractical" path="res://camera_attributes/main-camera-attributes.tres" id="2_rkbax"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_p1"]
 radius = 0.3
@@ -15,5 +16,6 @@ shape = SubResource("CapsuleShape3D_p1")
 
 [node name="Camera3D" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.62, 0)
-fov = 75.0
+attributes = ExtResource("2_rkbax")
+fov = 90.0
 current = true
