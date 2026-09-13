@@ -36,10 +36,19 @@ const DOOR_LO := 26   # closed, bottom half (also the DOOR ITEM id)
 const DOOR_HI := 27   # closed, top half
 const DOOR_LO_OPEN := 29
 const DOOR_HI_OPEN := 31
+# AC-0267: crouch (B toggle). The eye lerps EYE -> CROUCH_EYE, the capsule
+# shrinks CAP_H -> CAP_H_CROUCH (feet stay at the origin), ground speed
+# scales by CROUCH_SPEED, and the edge guard keeps the feet on solid
+# ground (a crouched player cannot walk off a block).
+const CROUCH_EYE := 1.1
+const CAP_H := 1.8
+const CAP_H_CROUCH := 1.2
+const CROUCH_SPEED := 0.3
 const STORAGE_OFF := 9
 const ARMOR_SLOTS := ["head", "chest", "legs", "boots"]
 
 @onready var camera: Camera3D = $Camera3D
+@onready var col_shape: CollisionShape3D = $CollisionShape3D  # AC-0267
 
 var flying := false
 # AC-0276: LATCHED sprint (Minecraft-style, user request): a sprint that
@@ -117,6 +126,7 @@ var _swing_frac := 0.0
 var _swing_kind := SWING_ITEM
 var _swing_loop := false
 var _lmb_down := false
+var crouched := false  # AC-0267: B (pad_cancel) toggle, ground play
 var _mining := false
 var _pad_look := Vector2.ZERO  # AC-0087: right-stick value (applied per frame in _process)
 var _pad_mining := false  # AC-0087: RT hold-to-mine edge state
@@ -348,6 +358,13 @@ func _unhandled_input(event: InputEvent) -> void:
 				sel = clampi(sel - 1, 0, 8)
 			elif event.is_action_pressed("pad_hotbar_next"):
 				sel = clampi(sel + 1, 0, 8)
+			elif event.is_action_pressed("pad_cancel"):
+				# AC-0267: B/Circle toggles CROUCH in ground play (the old
+				# comment "B = sneak no-op" is retired). While flying, B
+				# stays the held down key (AC-0264) - no double trigger.
+				if not flying and not dead:
+					crouched = not crouched
+					Game.message("Crouching" if crouched else "Standing")
 				if OS.get_environment("AWECRAFT_PADTRACE") == "1":
 					print("PADTRACE  sel now %d" % sel)
 			elif event.is_action_pressed("pad_pause"):
@@ -376,6 +393,9 @@ func _physics_process_impl(dt: float) -> void:
 		_lmb_down = false
 	if not cg and Input.is_action_just_pressed("fly"):
 		flying = not flying
+		# AC-0267: B is the flight DOWN key while flying (AC-0264) - the
+		# crouch toggle must not live under it, so flight un-crouches.
+		crouched = false
 		Game.message("Flying" if flying else "Landed")
 	if not cg and Input.is_action_just_pressed("time"):
 		_cycle_time()
@@ -431,6 +451,11 @@ func _physics_process_impl(dt: float) -> void:
 		speed = SPRINT
 	else:
 		speed = WALK
+	# AC-0267: crouch is a ~0.3x speed (the "reverse sprint") - it wins
+	# over a latched sprint so holding shift into a crouch does not keep
+	# sprint speed. Flight/swim-up keep their own speeds.
+	if crouched and not flying and not swim_up:
+		speed = WALK * CROUCH_SPEED
 	var sin_y := sin(_yaw)
 	var cos_y := cos(_yaw)
 	var tx := (-sin_y * iz + cos_y * ix) * speed
@@ -472,6 +497,26 @@ func _physics_process_impl(dt: float) -> void:
 		if not cg and Input.is_action_pressed("jump") and is_on_floor():
 			velocity.y = JUMP
 			fall_start = -1.0
+	# AC-0267: EDGE GUARD - crouched on the ground: if the block under the
+	# forward edge (0.45 ahead of the center along the INTENDED direction,
+	# at foot level) is air, strip the velocity's component along that
+	# direction. The player stops at the edge (the clamp is on the velocity
+	# itself, not the target - no drift into the void); backing up and
+	# sliding along the edge keep their components.
+	if crouched and not flying and is_on_floor() and (absf(tx) > 0.001 or absf(tz) > 0.001):
+		var f := Vector2(tx, tz)
+		var fl := f.length()
+		if fl > 0.001:
+			f = f / fl
+			var by := int(floorf(position.y - 0.1))
+			var ex := position.x + f.x * 0.45
+			var ez := position.z + f.y * 0.45
+			var edge_open: bool = Game.world == null or Game.world.get_block(int(floorf(ex)), by, int(floorf(ez))) == 0
+			if edge_open:
+				var comp := Vector2(velocity.x, velocity.z).dot(f)
+				if comp > 0.0:
+					velocity.x -= f.x * comp
+					velocity.z -= f.y * comp
 	var was_ground := is_on_floor()
 	if flying:
 		fall_start = -1.0
@@ -486,6 +531,16 @@ func _physics_process_impl(dt: float) -> void:
 			_base_fov = camera.fov
 		var fov_t: float = _base_fov * 1.10 if (sprint_eff or flying) else _base_fov
 		camera.fov = lerpf(camera.fov, fov_t, minf(1.0, dt / 0.15))
+	# AC-0267: lerp the eye height (camera) and the capsule (feet stay at
+	# the origin - the shape node rides height/2). ~0.1 s both ways.
+	if camera != null:
+		camera.position.y = lerpf(camera.position.y, CROUCH_EYE if crouched else EYE, minf(1.0, 10.0 * dt))
+	if col_shape != null and col_shape.shape is CapsuleShape3D:
+		var cap_h_t: float = CAP_H_CROUCH if crouched else CAP_H
+		var cap: CapsuleShape3D = col_shape.shape
+		if absf(cap.height - cap_h_t) > 0.005:
+			cap.height = cap_h_t
+			col_shape.position.y = cap_h_t / 2.0
 	if not flying and is_on_floor() and not was_ground and fall_start >= 0.0:
 		var fall := fall_start - position.y
 		if fall > 3.5:
@@ -502,7 +557,7 @@ func _physics_process_impl(dt: float) -> void:
 			damage_player(4.0, "lava")
 	else:
 		lava_t = 0.0
-	var head_in_water := _block_at(position.x, position.y + EYE, position.z) == 5
+	var head_in_water := _block_at(position.x, position.y + (camera.position.y if camera != null else EYE), position.z) == 5
 	if head_in_water and not flying:
 		air = maxf(0.0, air - dt)
 		if air <= 0.0:
@@ -706,7 +761,7 @@ func vm_refresh(force: bool = false) -> void:
 	if _vm_mats.is_empty():
 		return
 	var day := DayNight.day(Game.time_of_day)
-	var eye := Vector3i(int(floorf(position.x)), int(floorf(position.y + EYE)), int(floorf(position.z)))
+	var eye := Vector3i(int(floorf(position.x)), int(floorf(position.y + (camera.position.y if camera != null else EYE))), int(floorf(position.z)))
 	var now := Time.get_ticks_msec()
 	if force or eye != _vm_eye_cell or now - _vm_light_ms >= 500:
 		var w = Game.world
@@ -1724,6 +1779,7 @@ func respawn() -> void:
 	drown_t = 0.0
 	fall_start = -1.0
 	sprint_latched = false
+	crouched = false
 	_regen_t = 0.0
 	_starve_t = 0.0
 	flying = false

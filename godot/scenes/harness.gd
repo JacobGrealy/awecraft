@@ -321,6 +321,15 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			player = main._spawn_player()
 			await _doors_test(spawn)
 			return
+		if logic == "crouch":
+			# AC-0267: B toggles crouch - lowered eye/hitbox, ~0.3x speed,
+			# edge guard (no walking off a block while crouched, still
+			# backs up).
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _crouch_test(spawn)
+			return
 		if logic == "leaves":
 			# AC-0270: leaf collision + decay (AWECRAFT_LEAFDECAY_MS shortens
 			# the decay window deterministically; AWECRAFT_LEAVES_SLOT for the
@@ -2354,6 +2363,197 @@ func _find_door_spot() -> Dictionary:
 					continue
 				return {"cell": tc, "id": world.get_block(tc.x, tc.y, tc.z), "cam": cam, "yaw": yaw, "pitch": pitch}
 	return {}
+
+
+# AC-0267 helpers: find a flat 1+ block edge near spawn - a solid column
+# whose +x neighbor is lower (surface_top drops). Returns the STAND cell
+# (top block of the high side, feet level = top_y + 1) facing +x.
+func _find_flat_edge() -> Dictionary:
+	var sp: Vector3 = world.spawn_point()
+	var sx := int(sp.x)
+	var sz := int(sp.z)
+	for r in range(4, 25, 2):
+		for dz in range(-r, r + 1, 2):
+			for dx in range(-r, r + 1, 2):
+				var t: int = world.surface_top(sx + dx, sz + dz)
+				if t <= 0:
+					continue
+				if world.get_block(sx + dx, t, sz + dz) == 0:
+					continue
+				if world.surface_top(sx + dx + 1, sz + dz) < t:
+					# the plateau EDGE: the +x neighbor drops, and the -x
+					# (back) side stays FLAT - a step-up behind would stop
+					# the back-up sub-check on real physics, not the guard.
+					if world.surface_top(sx + dx - 1, sz + dz) == t:
+						return {"cell": Vector3i(sx + dx, t, sz + dz), "top_y": t + 1}
+	return {}
+
+
+# AC-0267: the crouch arm - B toggle, eye + capsule shrink, ~0.3x speed,
+# and the edge guard (crouched forward at a block edge stops; uncrouched
+# walks off; crouched still backs up).
+func _crouch_test(spawn: Vector3) -> void:
+	var p = Game.player
+	for i in 10:
+		await get_tree().physics_frame
+	var sp0: Vector3 = world.spawn_point()
+	var sw := 0
+	while sw < 900 and world.surface_top(int(sp0.x), int(sp0.z)) <= 0:
+		await get_tree().physics_frame
+		sw += 1
+
+	# 1) TOGGLE: B (pad_cancel, 4.7 button 1) press on / press off.
+	var toggle_ok := false
+	var eye_uncrouch: float = p.camera.position.y
+	if absf(eye_uncrouch - p.EYE) > 0.05:
+		for i in 20:
+			await get_tree().physics_frame
+		eye_uncrouch = p.camera.position.y
+	Input.parse_input_event(_pad_btn(1, true))
+	for i in 3:
+		await get_tree().physics_frame
+	var c1: bool = p.crouched
+	Input.parse_input_event(_pad_btn(1, false))
+	for i in 3:
+		await get_tree().physics_frame
+	Input.parse_input_event(_pad_btn(1, true))
+	for i in 3:
+		await get_tree().physics_frame
+	var c2: bool = p.crouched
+	Input.parse_input_event(_pad_btn(1, false))
+	for i in 3:
+		await get_tree().physics_frame
+	toggle_ok = c1 and not c2
+	# back to the UNCROUCHED baseline (c2 false), wait for the lerp.
+	for i in 30:
+		await get_tree().physics_frame
+
+	# 2) HEIGHT / HITBOX: crouch -> the eye lerps down to ~CROUCH_EYE and
+	#    the capsule shrinks (feet stay at the origin: shape y = h/2).
+	Input.parse_input_event(_pad_btn(1, true))
+	for i in 3:
+		await get_tree().physics_frame
+	Input.parse_input_event(_pad_btn(1, false))
+	for i in 40:  # ~0.4 s of physics at ~96 fps: the 10/s lerp is settled
+		await get_tree().physics_frame
+	var eye_crouch: float = p.camera.position.y
+	var cap: CapsuleShape3D = p.col_shape.shape
+	var cap_ok: bool = p.crouched and absf(eye_crouch - p.CROUCH_EYE) < 0.08 \
+		and absf(cap.height - p.CAP_H_CROUCH) < 0.05 \
+		and absf(p.col_shape.position.y - p.CAP_H_CROUCH / 2.0) < 0.05 \
+		and eye_crouch < eye_uncrouch - 0.3
+
+	# 3) SPEED: the same forward stretch, crouched vs standing - both
+	#    read mid-convergence with the SAME k, so the ratio is the speed
+	#    ratio (~0.3) regardless of when the sample lands.
+	Input.action_press("move_forward")
+	var crouch_speed := 0.0
+	for i in 14:
+		await get_tree().physics_frame
+		if i == 12:
+			crouch_speed = Vector2(p.velocity.x, p.velocity.z).length()
+	Input.action_release("move_forward")
+	for i in 20:
+		await get_tree().physics_frame
+	# uncrouch
+	Input.parse_input_event(_pad_btn(1, true))
+	for i in 3:
+		await get_tree().physics_frame
+	Input.parse_input_event(_pad_btn(1, false))
+	for i in 30:
+		await get_tree().physics_frame
+	Input.action_press("move_forward")
+	var walk_speed := 0.0
+	for i in 14:
+		await get_tree().physics_frame
+		if i == 12:
+			walk_speed = Vector2(p.velocity.x, p.velocity.z).length()
+	Input.action_release("move_forward")
+	for i in 20:
+		await get_tree().physics_frame
+	var speed_ok: bool = walk_speed > 1.0 and crouch_speed < 0.45 * walk_speed and crouch_speed > 0.2 * walk_speed
+
+	# 4) EDGE GUARD: stand at a flat block edge facing +x.
+	var edge := _find_flat_edge()
+	if edge.is_empty():
+		Debug.result({"mode": "crouch", "error": "no flat edge within 24 blocks of spawn", "toggle_ok": toggle_ok, "cap_ok": cap_ok, "speed_ok": speed_ok})
+		get_tree().quit()
+		return
+	var ec: Vector3i = edge["cell"]
+	var top_y: int = int(edge["top_y"])
+	# face +x: yaw = atan2(-dir.x, -dir.z) with dir = (+1, 0, 0).
+	Debug.teleport(float(ec.x) + 0.5, float(top_y) + 0.02, float(ec.z) + 0.5)
+	p.velocity = Vector3.ZERO
+	p.look(atan2(-1.0, 0.0), 0.0)
+	for i in 6:
+		await get_tree().physics_frame
+	# 4a) CROUCHED forward: hold ~1 s - the player must STOP at the edge
+	#     (stay on the block: on floor, feet at top_y, no fall, no long
+	#     forward run).
+	var guard_ok := false
+	p.crouched = true
+	for i in 6:
+		await get_tree().physics_frame
+	Input.action_press("move_forward")
+	var stayed := true
+	var max_x := float(ec.x) + 0.5
+	for i in 90:
+		await get_tree().physics_frame
+		max_x = maxf(max_x, p.position.x)
+		if not p.is_on_floor() or p.position.y < float(top_y) - 0.3:
+			stayed = false
+	Input.action_release("move_forward")
+	for i in 4:
+		await get_tree().physics_frame
+	guard_ok = stayed and p.is_on_floor() and absf(p.position.y - float(top_y)) < 0.3 and max_x < float(ec.x) + 1.1
+	# 4b) CROUCHED still BACKS UP (the guard only strips the forward
+	#     component).
+	var back_ok := false
+	var x0: float = p.position.x
+	# 90 frames (~0.94 s): the lerp-converged crouch speed covers
+	# ~1.1 m (40 frames read ~0.43 m - the velocity is still ramping).
+	Input.action_press("move_back")
+	for i in 90:
+		await get_tree().physics_frame
+
+	Input.action_release("move_back")
+	for i in 4:
+		await get_tree().physics_frame
+	back_ok = p.is_on_floor() and x0 - p.position.x > 0.5
+	# 4c) UNCROUCHED forward from the edge: the player WALKS OFF (the
+	#     guard is crouch-only) - falls past the block top.
+	var walkoff_ok := false
+	p.crouched = false
+	for i in 10:
+		await get_tree().physics_frame
+	# re-place at the edge
+	Debug.teleport(float(ec.x) + 0.5, float(top_y) + 0.02, float(ec.z) + 0.5)
+	p.velocity = Vector3.ZERO
+	for i in 6:
+		await get_tree().physics_frame
+	Input.action_press("move_forward")
+	var fell := false
+	for i in 120:
+		await get_tree().physics_frame
+		if p.position.y < float(top_y) - 0.8:
+			fell = true
+			break
+	Input.action_release("move_forward")
+	for i in 4:
+		await get_tree().physics_frame
+	walkoff_ok = fell
+
+	Debug.result({
+		"mode": "crouch",
+		"toggle_ok": toggle_ok,
+		"cap_ok": cap_ok,
+		"speed_ok": speed_ok,
+		"guard_ok": guard_ok,
+		"back_ok": back_ok,
+		"walkoff_ok": walkoff_ok,
+		"ok": toggle_ok and cap_ok and speed_ok and guard_ok and back_ok and walkoff_ok,
+	})
+	get_tree().quit()
 
 
 func _doors_test(spawn: Vector3) -> void:
