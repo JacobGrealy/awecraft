@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-13T08:15
+  updated_at: 2026-09-13T08:31
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0266
 - AC-0271
 - AC-0267
 - AC-0264
@@ -605,14 +604,55 @@ intake:
 - id: AC-0266
   title: hold-right-trigger-continuous-swing
   priority: 2
-  status: open
+  status: done
+  updated_at: 2026-09-13T08:31
+  completed_at: 2026-09-13T08:31
   notes: '1) User Story: As a player holding right trigger I want the item swing animation to keep looping
     until I release, not just play once.
 
 
     2) Technical Details: godot/player/player.gd + animation. Change right trigger (gamepad) from single
     press to held repeat — while button held, loop swing animation and hit trace each cycle. Keep mouse
-    left-click behavior consistent. Verify holding trigger continuously swings, releasing stops.'
+    left-click behavior consistent. Verify holding trigger continuously swings, releasing stops.
+
+
+    Closed 20260913 overnight (round 3). One-line product change + arm
+
+    sub-check. A held RT (the _pad_mining hold state, hysteresis 0.5/0.35)
+
+    now feeds the _update_swing_loop predicate alongside _lmb_down, so the
+
+    swing animation loops for as long as the trigger is held - parity with
+
+    the held-LMB behavior the spec calls the consistency baseline. The hit
+
+    trace is untouched: mining progress already ticks per frame in the
+
+    _mining state (dt-based, independent of the swing animation), and
+
+    mob/bow hits remain one-per-press exactly as with the mouse (the spec''s
+
+    "keep mouse left-click behavior consistent" read: mouse unchanged, RT
+
+    matches it). Release drops _pad_mining -> want_loop false ->
+
+    clear_swing() stops the loop. Verified in the gamepad arm: RT pressed,
+
+    swing_active() read ~0.5 s into the hold (a one-shot 0.2 s swing would
+
+    be off by then - it must still be looping), release, poll for stop.
+
+    attack_ok / hold_mine_ok / jitter_ok (AC-0243 continuous-mine +
+
+    hysteresis) still pass. Gates: boot 0 err; gamepad ok (all sub-checks);
+
+    battery all + GENHASH 80b904c0e5f085eef1e839459058c706 EXACT (player.gd
+
+    + harness.gd only - no world code). Shipped AweCraft[20260913-0830] at
+
+    :8080 (zip sha c4f8d3fe... byte-matched; duplicate 8082 daemon died with
+
+    its sandbox - AC-0155 pattern, 8080 authoritative).'
   area: input
   effort: S
   depends_on: []
