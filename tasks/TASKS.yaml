@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-13T04:23
+  updated_at: 2026-09-13T05:19
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0277
 - AC-0269
 - AC-0268
 - AC-0266
@@ -125,7 +124,9 @@ intake:
 - id: AC-0277
   title: predictive-recenter-ahead-target
   priority: 2
-  status: open
+  status: done
+  updated_at: 2026-09-13T05:19
+  completed_at: 2026-09-13T05:19
   notes: '1) User Story: As a player moving quickly I want recenter to predict ahead so workers queue
     where I''m headed, not where I was, without stale debounce.
 
@@ -134,7 +135,93 @@ intake:
     ahead target: if crossing chunks faster than threshold, recenter to chunk in front of player along
     movement direction rather than current chunk, so baked queue is ahead. If slow, use current chunk.
     Keep rebuild spread if needed. Verify fast sprint queues ahead correctly, slow walk still accurate.
-    Reset: if threshold time passes without crossing to next chunk, snap target back to chunk under player.'
+    Reset: if threshold time passes without crossing to next chunk, snap target back to chunk under player.
+
+
+    Closed 20260913 overnight (round 2, after AC-0278). Implemented per spec:
+
+    the AC-0213/AC-0233 debounced rebuild skip is replaced with a predictive
+
+    ahead target. A recenter within AHEAD_FAST_MS (3.5 s) of the previous
+
+    player-chunk crossing = fast (sprint ~2.9 s/chunk; walk ~3.7 s = slow):
+
+    fast crossings recenter to the chunk AHEAD_DIST (1) in front of the
+
+    player along the crossing direction (the baked queue leads); slow
+
+    crossings center on the current chunk (walk accuracy). Quiet crossing
+
+    stream (AHEAD_FAST_MS without a crossing) -> _process snap-back recenter
+
+    to the chunk under the player.
+
+
+    Mechanics notes: (1) every crossing now rebuilds - the R16 walk is a
+
+    single ~8 ms frame (the AC-0233 comment), so no churn at normal radii;
+
+    the in-flight park generalizes AC-0233''s cover-only case to "never
+
+    discard an in-flight walk" (finalize chains from the current center if
+
+    still past REBUILD_COVER_L1; the quiet-stream settle rebuilds at the
+
+    resting center) - R50-class long walks cannot livelock on restart. (2)
+
+    The fast window is measured from the last PLAYER-chunk crossing
+
+    (_last_cross_ms), not _last_recenter_ms - the snap-back/Y-only recenters
+
+    carry _cross = 0 and must not re-arm the window (found + fixed via the
+
+    new arm: a walk crossing 0.3 s after a snap read "fast" pre-fix). (3)
+
+    The quiet-stream settle stands down while _ahead_active so it cannot
+
+    lock the queue onto the stale ahead center. (4) _last_recenter_pcx/pcz
+
+    must store the PLAYER chunk (not the ahead center) or consecutive 1-
+
+    chunk crossings toward the ahead target read _cross = 0 and cancel fast
+
+    mode (caught in review). (5) The load path is stationary (no crossings)
+
+    so it is structurally untouched - loadlog r30 = 3.8 s (baseline 3.6-3.7).
+
+
+    Verification (the arm the spec asked for): AWECRAFT_LOGIC=aheadtarget -
+
+    fast crossings 0.3 s apart center 1 chunk ahead (move 1 of the arm is
+
+    necessarily slow: no prior crossing to measure a rate against); a
+
+    crossing 3.8 s after the last sits exactly on the current chunk; after a
+
+    fast flight + quiet window the target snaps back to the chunk under the
+
+    player. ok: true. Composed with AC-0278: candflag re-run green (T
+
+    re-enters the high band on a fast crossing at move 14, queued=build,
+
+    meshed from the standing drain; U retained/freed/regenerated).
+
+
+    Gates (final tree): boot 0 err; aheadtarget ok; candflag ok; r16 ok
+
+    (fly50 lost 0, 25/25); battery all arms + GENHASH
+
+    80b904c0e5f085eef1e839459058c706 EXACT; loadlog r30 3.8 s 25/25 no stall;
+
+    lightstate LS16 (demoted 48, stragglers 1, double_lod 0, holes pre/ring 0,
+
+    low_on_high 0). Shipped AweCraft[20260913-0514] at :8080 (zip sha
+
+    a49d2185... byte-matched; the build''s duplicate 8082 daemon died with its
+
+    sandbox - the documented AC-0155 pattern, 8080 stays authoritative).
+
+    Commit 7c3f6a1 (impl + arm).'
   area: perf
   effort: S
   depends_on: []
