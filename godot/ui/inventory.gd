@@ -337,6 +337,11 @@ class FlashCtl extends Control:
 class DeadBtn extends Control:
 	var cb: Callable
 
+	func _ready() -> void:
+		# AC-0269: focusable - the death screen grabs it so a controller
+		# player can respawn with A (no mouse needed).
+		focus_mode = Control.FOCUS_ALL
+
 	func _draw() -> void:
 		var s := size
 		draw_rect(Rect2(Vector2.ZERO, s), Color(0.435, 0.435, 0.435, 1.0))
@@ -344,9 +349,25 @@ class DeadBtn extends Control:
 		draw_rect(Rect2(Vector2(0.0, s.y - 2.0), Vector2(s.x, 2.0)), Color(0.235, 0.235, 0.235, 1.0), true)
 		draw_rect(Rect2(Vector2.ZERO, Vector2(2.0, s.y)), Color(0.659, 0.659, 0.659, 1.0), true)
 		draw_rect(Rect2(Vector2(s.x - 2.0, 0.0), Vector2(2.0, s.y)), Color(0.235, 0.235, 0.235, 1.0), true)
+		# AC-0269: the selected (focused) state - the controller's A is on
+		# this button; make it visible.
+		if has_focus():
+			draw_rect(Rect2(Vector2(3.0, 3.0), s - Vector2(6.0, 6.0)), Color(1.0, 0.87, 0.35, 1.0), false, 3.0)
+
+	func _notification(what: int) -> void:
+		# AC-0269: redraw on focus changes (the border is focus-driven).
+		if what == NOTIFICATION_FOCUS_ENTER or what == NOTIFICATION_FOCUS_EXIT:
+			queue_redraw()
 
 	func _gui_input(event: InputEvent) -> void:
 		if cb.is_valid() and event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			cb.call()
+			get_viewport().set_input_as_handled()
+		# AC-0269: controller A (JOY_BUTTON_A = 0) activates the focused
+		# button - Godot does not auto-activate non-Button Controls, so a
+		# custom Control handles it here.
+		if cb.is_valid() and event is InputEventJoypadButton and event.pressed \
+				and event.button_index == JOY_BUTTON_A:
 			cb.call()
 			get_viewport().set_input_as_handled()
 
@@ -926,13 +947,21 @@ func _update_survival(p, dt: float) -> void:
 		_hunger_key = hk
 		_food.hunger = float(p.hunger)
 		_food.queue_redraw()
+	# AC-0269: auto-select the respawn button when the death screen shows
+	# (a controller player respawns with A - no mouse needed); release the
+	# focus when it closes so a stale focus never activates it later.
+	var was_dead := _dead_bg.visible
 	_dead_bg.visible = p.dead
 	if p.dead:
+		if not was_dead:
+			_dead_btn.grab_focus()
 		_dead_bg.size = vs
 		_dead_title.size = Vector2(vs.x, 40.0)
 		var bt := _dead_title.get_combined_minimum_size()
 		_dead_title.position = Vector2(0.0, (vs.y - bt.y - 40.0 - 14.0) * 0.5)
 		_dead_btn.position = Vector2((vs.x - 260.0) * 0.5, _dead_title.position.y + bt.y + 14.0)
+	elif was_dead:
+		_dead_btn.release_focus()
 
 
 func _process(dt: float) -> void:

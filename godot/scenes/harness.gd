@@ -2651,6 +2651,38 @@ func _gamepad_test(spawn: Vector3) -> void:
 	Input.parse_input_event(mcb)
 	mouse_hide_ok = hide_btn_ok and hide_stick_ok and click_show_ok and mouse_show_ok and recapture_ok
 
+	# AC-0269: death screen auto-selects the respawn button for a
+	# controller player. Die -> the button must hold focus; A (JOY_BUTTON_A)
+	# respawns (no mouse); a second death respawns from a synthetic MOUSE
+	# click on the button (the mouse path is unchanged).
+	var inv_ui = main.inventory_ui
+	var dead_shown := await _await_state(func() -> bool: return bool(inv_ui._dead_bg.visible) if inv_ui != null and p.dead else false, 1)
+	p.damage_player(20.0, "harness")
+	dead_shown = await _await_state(func() -> bool: return inv_ui != null and bool(inv_ui._dead_bg.visible), 3000)
+	var death_focus_ok: bool = inv_ui != null and bool(inv_ui._dead_btn.has_focus())
+	Input.parse_input_event(_pad_btn(0, true))
+	for i in range(4):
+		await get_tree().physics_frame
+	Input.parse_input_event(_pad_btn(0, false))
+	var pad_respawn_ok: bool = await _await_state(func() -> bool: return not bool(p.dead), 3000)
+	var pad_respawn_hp := float(p.hp) if not bool(p.dead) else 0.0
+	if pad_respawn_ok:
+		p.damage_player(20.0, "harness")
+		dead_shown = await _await_state(func() -> bool: return inv_ui != null and bool(inv_ui._dead_bg.visible), 3000)
+		var mb := InputEventMouseButton.new()
+		mb.button_index = MOUSE_BUTTON_LEFT
+		mb.pressed = true
+		mb.position = Vector2(30.0, 30.0)  # the button's local coords (center)
+		# deliver at the button's GLOBAL position via the Control's mouse
+		# handler path: push a mouse event at its global rect center
+		if inv_ui != null:
+			mb.position = inv_ui._dead_btn.get_global_rect().get_center()
+			Input.parse_input_event(mb)
+			for i in range(6):
+				await get_tree().physics_frame
+			mb.pressed = false
+			Input.parse_input_event(mb)
+	var mouse_respawn_ok: bool = await _await_state(func() -> bool: return not bool(p.dead), 3000)
 	# 8) START pause -> the pause menu; the D-pad moves the native GUI
 	#    focus; A (pad_accept) activates the focused button.
 	if menu_ui == null:
@@ -2667,7 +2699,12 @@ func _gamepad_test(spawn: Vector3) -> void:
 	Input.parse_input_event(_pad_btn(12, true))  # D-pad down (12 in 4.7)
 	for i in 8:
 		await get_tree().physics_frame
-	Input.parse_input_event(_pad_btn(13, false))
+	# AC-0269 arm hygiene: the release was _pad_btn(13) (a typo - it
+	# released D-pad UP, leaving DOWN pressed). The sticky ui_down kept
+	# walking the GUI focus, so the A-accept below landed on a different
+	# menu item run-to-run (sometimes Return-to-Menu - which frees every
+	# game node). Release the button that was pressed.
+	Input.parse_input_event(_pad_btn(12, false))
 	for i in 4:
 		await get_tree().physics_frame
 	var f1 := get_viewport().gui_get_focus_owner()
@@ -2718,12 +2755,18 @@ func _gamepad_test(spawn: Vector3) -> void:
 		"nav_ok": nav_ok,
 		"focus_after_nav": f1.name if f1 != null else "null",
 		"accept_ok": accept_ok,
+		"death_shown": bool(dead_shown),
+		"death_focus_ok": death_focus_ok,
+		"pad_respawn_ok": pad_respawn_ok,
+		"pad_respawn_hp": roundf(pad_respawn_hp * 10.0) / 10.0,
+		"mouse_respawn_ok": mouse_respawn_ok,
 		"ok": jump_has_pad and move_has_pad and stick_move_ok and jump_ok and attack_ok \
 			and ground_sprint_ok and l3_latch_ok and hold_mine_ok and jitter_ok and fly_sprint_ok \
 			and mouse_hide_ok and fly_toggle_ok and fly_climb_ok \
 			and fly_descend_ok and fly_land_ok and use_ok and hotbar_ok and stick_look_ok \
 			and inv_open and inv_toggle_ok and b_cancel_inv_ok and paused and focus_resume \
-			and nav_ok and accept_ok,
+			and nav_ok and accept_ok and dead_shown and death_focus_ok \
+			and pad_respawn_ok and mouse_respawn_ok,
 	})
 	get_tree().quit()
 
