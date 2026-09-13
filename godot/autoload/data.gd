@@ -108,6 +108,8 @@ var items := {
 var shapeless := [
 	{"in": {6: 1}, "grid": 2, "out": {"id": 8, "n": 4}},
 	{"in": {8: 4}, "grid": 2, "out": {"id": 20, "n": 1}},
+	# AC-0271: 6 planks -> 3 doors.
+	{"in": {8: 6}, "grid": 3, "out": {"id": 26, "n": 3}},
 	{"in": {8: 2}, "grid": 2, "out": {"id": 100, "n": 4}},
 	{"in": {9: 4}, "grid": 2, "out": {"id": 17, "n": 4}},
 	{"in": {105: 3, 100: 2}, "grid": 3, "out": {"id": 109, "n": 1}},
@@ -173,6 +175,20 @@ func _init() -> void:
 		# rendering as 7 (the block_rect alias below), but NEVER decays.
 		# "drop": 30 so breaking one gives it back.
 		30: {"name": "Persistent Leaves", "solid": false, "cross": false, "cutout": true, "hard": 0.2, "light": 0, "drop": 30, "color": {"top": C_LEAVES, "side": C_LEAVES, "bottom": C_LEAVES}},
+		# AC-0271: the wooden door, state by ID variant (the block grid is
+		# a pure id byte - there is no per-cell state, so open/closed lives
+		# in the id). 26/27 = CLOSED (solid 2-high box: mesh + collision
+		# come free from the solid path); 29/31 = OPEN (cross panels at the
+		# hinge - walk-through, no collision, passes light like every cross
+		# block). All four drop the DOOR ITEM (26) - breaking either half
+		# reclaims one door; the player.gd break path clears the PAIR. The
+		# open panel is rendered symmetric (the cross X reads as a door
+		# panel from every direction), so no per-door hinge side is stored
+		# (see the _door_pair comment in player.gd).
+		26: {"name": "Door", "solid": true, "cross": false, "hard": 1.0, "light": 0, "drop": 26, "color": {"top": Color(0.6, 0.46, 0.28), "side": Color(0.57, 0.43, 0.26), "bottom": Color(0.6, 0.46, 0.28)}},
+		27: {"name": "Door", "solid": true, "cross": false, "hard": 1.0, "light": 0, "drop": 26, "color": {"top": Color(0.6, 0.46, 0.28), "side": Color(0.57, 0.43, 0.26), "bottom": Color(0.6, 0.46, 0.28)}},
+		29: {"name": "Door", "solid": false, "cross": true, "hard": 1.0, "light": 0, "drop": 26, "color": {"top": Color(0.6, 0.46, 0.28), "side": Color(0.57, 0.43, 0.26), "bottom": Color(0.6, 0.46, 0.28)}},
+		31: {"name": "Door", "solid": false, "cross": true, "hard": 1.0, "light": 0, "drop": 26, "color": {"top": Color(0.6, 0.46, 0.28), "side": Color(0.57, 0.43, 0.26), "bottom": Color(0.6, 0.46, 0.28)}},
 		8: {"name": "Planks", "solid": true, "cross": false, "hard": 1.0, "light": 0, "drop": 8, "color": {"top": Color(0.72, 0.56, 0.34), "side": Color(0.72, 0.56, 0.34), "bottom": Color(0.72, 0.56, 0.34)}},
 		9: {"name": "Cobblestone", "solid": true, "cross": false, "hard": 2.0, "light": 0, "drop": 9, "color": {"top": C_COBBLE, "side": C_COBBLE, "bottom": C_COBBLE}},
 		17: {"name": "Bricks", "solid": true, "cross": false, "hard": 2.0, "light": 0, "drop": 17, "color": {"top": Color(0.6, 0.3, 0.25), "side": Color(0.6, 0.3, 0.25), "bottom": Color(0.6, 0.3, 0.25)}},

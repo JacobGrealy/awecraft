@@ -24,6 +24,18 @@ const ARMOR_SIZE := 4
 const CRAFT_GRID_SIZE := 9
 const EGRID_CELLS := 4
 const TABLE_ID := 20
+# AC-0271: door state by ID variant (the block grid is a pure id byte -
+# no per-cell state exists, so open/closed lives in the id pair).
+# The HINGE side is deliberately NOT stored: the open panel renders as
+# the symmetric cross-X (a door panel reads correctly from every
+# direction), so a stored hinge would be dead state. "Hinge handling"
+# here = the door is a PAIR (bottom half at y, top half at y+1):
+# placement demands 2-high air, toggling/breaking always acts on both
+# halves, and the pair is re-validated against the grid on every touch.
+const DOOR_LO := 26   # closed, bottom half (also the DOOR ITEM id)
+const DOOR_HI := 27   # closed, top half
+const DOOR_LO_OPEN := 29
+const DOOR_HI_OPEN := 31
 const STORAGE_OFF := 9
 const ARMOR_SLOTS := ["head", "chest", "legs", "boots"]
 
@@ -1205,6 +1217,43 @@ func _fire_bow() -> void:
 		Audio.play("hit")
 
 
+# AC-0271: resolve the door PAIR containing `cell`. Returns
+# {"ok": bool, "lo": Vector3i, "hi": Vector3i, "open": bool}; "ok" is
+# false when the cell is not a door half or the pair is inconsistent
+# (e.g. half torn out by a future editor tool) - callers must treat
+# "ok": false as "not a door".
+func _door_pair(cell: Vector3i) -> Dictionary:
+	var g = Game.world
+	var id = int(g.get_block(int(cell.x), int(cell.y), int(cell.z)))
+	var open: bool = id == DOOR_LO_OPEN or id == DOOR_HI_OPEN
+	if id != DOOR_LO and id != DOOR_HI and not open:
+		return {"ok": false, "lo": cell, "hi": cell, "open": false}
+	var lo := cell
+	if id == DOOR_HI or id == DOOR_HI_OPEN:
+		lo = cell - Vector3i(0, 1, 0)
+	var hi := lo + Vector3i(0, 1, 0)
+	if open:
+		return {"ok": g.get_block(lo.x, lo.y, lo.z) == DOOR_LO_OPEN \
+			and g.get_block(hi.x, hi.y, hi.z) == DOOR_HI_OPEN, "lo": lo, "hi": hi, "open": true}
+	return {"ok": g.get_block(lo.x, lo.y, lo.z) == DOOR_LO \
+		and g.get_block(hi.x, hi.y, hi.z) == DOOR_HI, "lo": lo, "hi": hi, "open": false}
+
+
+# AC-0271: toggle the door pair at `cell` (either half).
+func _toggle_door(cell: Vector3i) -> void:
+	var pr := _door_pair(cell)
+	if not bool(pr["ok"]):
+		return
+	var g = Game.world
+	if bool(pr["open"]):
+		g.set_block(int(pr["lo"].x), int(pr["lo"].y), int(pr["lo"].z), DOOR_LO)
+		g.set_block(int(pr["hi"].x), int(pr["hi"].y), int(pr["hi"].z), DOOR_HI)
+	else:
+		g.set_block(int(pr["lo"].x), int(pr["lo"].y), int(pr["lo"].z), DOOR_LO_OPEN)
+		g.set_block(int(pr["hi"].x), int(pr["hi"].y), int(pr["hi"].z), DOOR_HI_OPEN)
+	Audio.play("door")
+
+
 func aim_mob() -> Node3D:
 	if Game.entities == null:
 		return null
@@ -1260,6 +1309,13 @@ func use_selected() -> void:
 			print("USETRACE table")
 		open_inventory("table")
 		Game.set_cursor(Input.MOUSE_MODE_VISIBLE)
+		return
+	# AC-0271: interact with a door (either half, bare hand or holding
+	# anything) = toggle open/closed. Checked before the no-item guard so
+	# a bare hand works.
+	if int(hit.id) == DOOR_LO or int(hit.id) == DOOR_HI \
+			or int(hit.id) == DOOR_LO_OPEN or int(hit.id) == DOOR_HI_OPEN:
+		_toggle_door(hit.cell)
 		return
 	var item: Dictionary = inv_selected()
 	var sid := int(item["id"])
@@ -1337,6 +1393,26 @@ func place_item(item: Dictionary) -> void:
 	var bid := int(item["id"])
 	if bid == 7:
 		bid = 30
+	# AC-0271: a door is a PAIR - the bottom half on the target cell, the
+	# top half one above. Minecraft parity: placement lands ON the aimed
+	# block's face (target = hit cell + normal), so aiming at the ground
+	# puts the door's feet on the ground; both cells must be air (2-high
+	# air check) and neither may swallow the player.
+	if bid == DOOR_LO:
+		var above := target + Vector3i(0, 1, 0)
+		if Game.world.get_block(above.x, above.y, above.z) != 0:
+			if _pt:
+				print("PLACETRACE door reject: cell above not air %s" % str(above))
+			return
+		if _box_intersects_player(above):
+			if _pt:
+				print("PLACETRACE door reject: top cell intersects player")
+			return
+		Game.world.set_block(target.x, target.y, target.z, DOOR_LO)
+		Game.world.set_block(above.x, above.y, above.z, DOOR_HI)
+		inv_consume_selected()
+		Audio.play("place")
+		return
 	Game.world.set_block(target.x, target.y, target.z, bid)
 	inv_consume_selected()
 	Audio.play("place")
@@ -1411,7 +1487,19 @@ func _update_interaction(dt: float) -> void:
 		mult = float(held_item["speed"])
 	_mine_prog += dt * mult / maxf(0.15, float(info["hard"]))
 	if _mine_prog >= 1.0:
-		Game.world.set_block(_mine_cell.x, _mine_cell.y, _mine_cell.z, 0)
+		# AC-0271: breaking either half of a door reclaims the WHOLE
+		# door - clear both halves (the drop below is the single door
+		# item from the broken cell's drop field).
+		if int(_mine_id) == DOOR_LO or int(_mine_id) == DOOR_HI \
+				or int(_mine_id) == DOOR_LO_OPEN or int(_mine_id) == DOOR_HI_OPEN:
+			var pr := _door_pair(_mine_cell)
+			if pr["ok"]:
+				Game.world.set_block(int(pr["lo"].x), int(pr["lo"].y), int(pr["lo"].z), 0)
+				Game.world.set_block(int(pr["hi"].x), int(pr["hi"].y), int(pr["hi"].z), 0)
+			else:
+				Game.world.set_block(_mine_cell.x, _mine_cell.y, _mine_cell.z, 0)
+		else:
+			Game.world.set_block(_mine_cell.x, _mine_cell.y, _mine_cell.z, 0)
 		if bool(Settings.values["hunger_enabled"]):
 			hunger = maxf(0.0, hunger - 0.1)
 		var is_pick := held_item != null and str(held_item.get("tool", "")) == "pick"

@@ -312,6 +312,15 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			player = main._spawn_player()
 			await _craftpad_test(spawn)
 			return
+		if logic == "doors":
+			# AC-0271: craft 6 planks -> 3 doors, place (2-high air),
+			# open/close toggle (bare hand), collision both states, break
+			# reclaims the pair, placement rejection.
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _doors_test(spawn)
+			return
 		if logic == "leaves":
 			# AC-0270: leaf collision + decay (AWECRAFT_LEAFDECAY_MS shortens
 			# the decay window deterministically; AWECRAFT_LEAVES_SLOT for the
@@ -2302,6 +2311,232 @@ func _craft_inv_count(p, id: int, off: int, cnt: int) -> int:
 # {6:1} -> {8:4 n:4} matches the grid exactly (an extra cell breaks the
 # shapeless match), and A = left-click moves WHOLE stacks - so a 1-stack
 # is the A-only path from a full stack of 5 (Debug.seed_inv).
+# AC-0271: the door arm - craft, place (2-high air), open/close with
+# correct collision (closed = solid box you stand on; open = walk-
+# through cross panels), break reclaims the pair as one door item, and
+# placement into a 1-high gap is rejected.
+func _find_door_spot() -> Dictionary:
+	# like main._find_aim_spot, plus the 2-high air requirement: the
+	# breakable top block, the air cell above it (the door's feet), AND
+	# the air cell above that (the door's head).
+	var sp: Vector3 = world.spawn_point()
+	var sx := int(sp.x)
+	var sz := int(sp.z)
+	var candidates: Array[Vector3i] = []
+	var top: int = world.surface_top(sx, sz)
+	if main._breakable(world.get_block(sx, top, sz)):
+		candidates.append(Vector3i(sx, top, sz))
+	for dx in range(-8, 9, 2):
+		for dz in range(-8, 9, 2):
+			var t2: int = world.surface_top(sx + dx, sz + dz)
+			if main._breakable(world.get_block(sx + dx, t2, sz + dz)):
+				candidates.append(Vector3i(sx + dx, t2, sz + dz))
+	var dz_list := [2, 3, -2, -3, 4, -4, 5, -5]
+	for tc in candidates:
+		if tc.y + 2 >= Data.HEIGHT:
+			continue
+		if world.get_block(tc.x, tc.y + 1, tc.z) != 0 or world.get_block(tc.x, tc.y + 2, tc.z) != 0:
+			continue  # the door needs 2-high air
+		var tcenter := Vector3(float(tc.x) + 0.5, float(tc.y) + 0.5, float(tc.z) + 0.5)
+		for dz in dz_list:
+			for dh in range(0, 12):
+				var cam := Vector3(float(tc.x) + 0.5, float(tc.y) + 0.5 + float(dh), float(tc.z) + 0.5 + float(dz))
+				var dir := (tcenter - cam).normalized()
+				var hit = VoxelMath.raycast_blocks(cam, dir, 6.0, world.get_block)
+				if not hit.hit or hit.cell != tc:
+					continue
+				var feet := cam - Vector3(0.0, 1.62, 0.0)
+				if not main._clear_feet(feet):
+					continue
+				var yaw := atan2(-dir.x, -dir.z)
+				var pitch := asin(clampf(dir.y, -1.0, 1.0))
+				if absf(pitch) > 1.55:
+					continue
+				return {"cell": tc, "id": world.get_block(tc.x, tc.y, tc.z), "cam": cam, "yaw": yaw, "pitch": pitch}
+	return {}
+
+
+func _doors_test(spawn: Vector3) -> void:
+	var p = Game.player
+	for i in 10:
+		await get_tree().physics_frame
+	var sp0: Vector3 = world.spawn_point()
+	var sw := 0
+	while sw < 900 and world.surface_top(int(sp0.x), int(sp0.z)) <= 0:
+		await get_tree().physics_frame
+		sw += 1
+
+	# 1) CRAFT: 6 planks -> 3 doors (the grid-3 recipe - the matcher skips
+	#    grid-3 recipes on the 2x2 survival grid, so the table-mode match
+	#    is the proof). Data-level: the grid is filled directly and the
+	#    recompute is the same call the UI collect path ends in.
+	p._init_inv()
+	p.held = {}
+	# table mode's recompute reads table_grid (the 3x3) - craft_grid is
+	# the 2x2 survival grid, which the grid-3 recipe must NOT match.
+	p.table_grid.clear()
+	for i in 9:
+		p.table_grid.append({"id": 8, "n": 1} if i < 6 else {"id": 0, "n": 0})
+	var um_save: String = p.ui_mode
+	p.ui_mode = "table"
+	p.recompute_craft()
+	var craft_ok: bool = int(p.craft_out.get("id", 0)) == 26 and int(p.craft_out.get("n", 0)) == 3
+	p.ui_mode = um_save
+	# the 3 crafted doors go to a SELECTABLE hotbar slot (sel is 0..8).
+	p.table_grid.clear()
+	for i in 9:
+		p.table_grid.append({"id": 0, "n": 0})
+	p.craft_out = {}
+	p.inv[0] = {"id": 26, "n": 3}
+
+	# 2) find a placeable spot (2-high air + verified aim).
+	var spot := _find_door_spot()
+	if spot.is_empty():
+		Debug.result({"error": "no 2-high-air aim spot near spawn", "mode": "doors"})
+		return
+	var feet_cell: Vector3i = Vector3i(int(spot["cell"].x), int(spot["cell"].y) + 1, int(spot["cell"].z))
+	var head_cell: Vector3i = feet_cell + Vector3i(0, 1, 0)
+	Debug.fly(true)
+	Debug.teleport(float(spot["cam"].x), float(spot["cam"].y) - p.EYE, float(spot["cam"].z))
+	p.look(float(spot["yaw"]), float(spot["pitch"]))
+	for i in 4:
+		await get_tree().physics_frame
+
+	# 3) PLACE: use_selected (the RMB/RT path) with a door in hand.
+	p.sel = 0
+	p.held = {}
+	var doors_before: int = int(p.inv[0]["n"])
+	p.use_selected()
+	var place_ok: bool = world.get_block(feet_cell.x, feet_cell.y, feet_cell.z) == 26 \
+		and world.get_block(head_cell.x, head_cell.y, head_cell.z) == 27 \
+		and p.inv[0]["n"] == doors_before - 1
+	# empty the hand for the open step - the door toggle must work with
+	# a BARE hand (Minecraft parity; the guard ordering is the point).
+	p.inv[0] = {"id": 0, "n": 0}
+
+	# 4) COLLISION (closed): drop onto the door top - the solid box stops
+	#    the player at head.y + 1 (before this task a door was no block
+	#    at all; the check is the AC-0270 leaves pattern).
+	var ck: Node3D = world.chunks.get(world._key(int(floorf(float(feet_cell.x) / 16.0)), int(floorf(float(feet_cell.z) / 16.0))))
+	var body_ready: bool = ck != null and not ck.data.is_empty() and _slab_body_present(ck, head_cell.y)
+	if not body_ready:
+		body_ready = await _await_state(func() -> bool: return ck != null and not ck.data.is_empty() and _slab_body_present(ck, head_cell.y), 10000)
+	if ck != null:
+		ck._post_build_collision()
+	for i in 4:
+		await get_tree().physics_frame
+	Debug.fly(false)
+	p.velocity = Vector3.ZERO
+	p.position = Vector3(float(feet_cell.x) + 0.5, float(head_cell.y) + 2.05, float(feet_cell.z) + 0.5)
+	var landed_closed := false
+	for df in range(240):
+		await get_tree().physics_frame
+		if p.is_on_floor() and absf(p.position.y - float(head_cell.y + 1)) < 0.3:
+			landed_closed = true
+			break
+	for i in 4:
+		await get_tree().physics_frame
+	var solid_ok: bool = landed_closed
+
+	# 5) OPEN: bare hand (the hand is empty after the place) aimed at the
+	#    door - use_selected must toggle (the no-item guard must NOT skip
+	#    the door branch).
+	var open_ok: bool = false
+	if solid_ok:
+		# aim at the door head (the camera is at the old spot - re-aim at
+		# the head center from a clear side position).
+		var dc := Vector3(float(feet_cell.x) + 0.5, float(head_cell.y) + 0.5, float(feet_cell.z) + 0.5)
+		var cam2 := dc + Vector3(0.0, 0.5, 3.0)
+		var dir2 := (dc - cam2).normalized()
+		Debug.teleport(cam2.x, cam2.y - p.EYE, cam2.z)
+		p.look(atan2(-dir2.x, -dir2.z), asin(clampf(dir2.y, -1.0, 1.0)))
+		for i in 4:
+			await get_tree().physics_frame
+		p.held = {}
+		p.use_selected()
+		open_ok = world.get_block(feet_cell.x, feet_cell.y, feet_cell.z) == 29 \
+			and world.get_block(head_cell.x, head_cell.y, head_cell.z) == 31
+
+	# 6) COLLISION (open): the same drop now FALLS THROUGH to the ground
+	#    (feet at feet_cell.y = the surface top the door stands on).
+	var fell_through := false
+	if open_ok and ck != null:
+		ck._post_build_collision()
+		for i in 4:
+			await get_tree().physics_frame
+		p.velocity = Vector3.ZERO
+		p.position = Vector3(float(feet_cell.x) + 0.5, float(head_cell.y) + 2.05, float(feet_cell.z) + 0.5)
+		for df in range(240):
+			await get_tree().physics_frame
+			if p.is_on_floor() and absf(p.position.y - float(feet_cell.y)) < 0.3:
+				fell_through = true
+				break
+	for i in 4:
+		await get_tree().physics_frame
+	var open_walk_ok: bool = fell_through
+
+	# 7) CLOSE again, then BREAK: both halves clear and one door drop
+	#    entity spawns (the pair reclaims as a single item).
+	var close_ok: bool = false
+	if fell_through and ck != null:
+		var dc := Vector3(float(feet_cell.x) + 0.5, float(head_cell.y) + 0.5, float(feet_cell.z) + 0.5)
+		var cam3 := dc + Vector3(0.0, 0.5, 3.0)
+		var dir3 := (dc - cam3).normalized()
+		Debug.teleport(cam3.x, cam3.y - p.EYE, cam3.z)
+		p.look(atan2(-dir3.x, -dir3.z), asin(clampf(dir3.y, -1.0, 1.0)))
+		for i in 4:
+			await get_tree().physics_frame
+		p.use_selected()
+		close_ok = world.get_block(feet_cell.x, feet_cell.y, feet_cell.z) == 26 \
+			and world.get_block(head_cell.x, head_cell.y, head_cell.z) == 27
+	var break_ok: bool = false
+	if close_ok:
+		p.start_mine()
+		var t_end := Time.get_ticks_msec() + 3000
+		while Time.get_ticks_msec() < t_end and (world.get_block(feet_cell.x, feet_cell.y, feet_cell.z) != 0 or world.get_block(head_cell.x, head_cell.y, head_cell.z) != 0):
+			await get_tree().physics_frame
+		p.release_mine()
+		var drop_found := false
+		for d in Game.drops.get_children():
+			if int(d.id) == 26:
+				drop_found = true
+		break_ok = world.get_block(feet_cell.x, feet_cell.y, feet_cell.z) == 0 \
+			and world.get_block(head_cell.x, head_cell.y, head_cell.z) == 0 and drop_found
+
+	# 8) REJECT: with the cell ABOVE the target solid, placement must not
+	#    happen (2-high air is mandatory).
+	var reject_ok: bool = false
+	if break_ok:
+		world.set_block(head_cell.x, head_cell.y, head_cell.z, 3)
+		p.inv[0] = {"id": 26, "n": 1}
+		p.sel = 0
+		var dc := Vector3(float(spot["cell"].x) + 0.5, float(spot["cell"].y) + 0.5, float(spot["cell"].z) + 0.5)
+		Debug.teleport(spot["cam"].x, spot["cam"].y - p.EYE, spot["cam"].z)
+		p.look(float(spot["yaw"]), float(spot["pitch"]))
+		for i in 4:
+			await get_tree().physics_frame
+		p.use_selected()
+		for i in 4:
+			await get_tree().physics_frame
+		reject_ok = world.get_block(feet_cell.x, feet_cell.y, feet_cell.z) == 0 \
+			and p.inv[0]["n"] == 1
+		world.set_block(head_cell.x, head_cell.y, head_cell.z, 0)
+
+	Debug.result({
+		"mode": "doors",
+		"craft_ok": craft_ok,
+		"place_ok": place_ok,
+		"solid_ok": solid_ok,
+		"open_ok": open_ok,
+		"open_walk_ok": open_walk_ok,
+		"close_ok": close_ok,
+		"break_ok": break_ok,
+		"reject_ok": reject_ok,
+		"ok": craft_ok and place_ok and solid_ok and open_ok and open_walk_ok and close_ok and break_ok and reject_ok,
+	})
+	get_tree().quit()
+
+
 func _craftpad_test(spawn: Vector3) -> void:
 	var p = Game.player
 	for i in 10:
