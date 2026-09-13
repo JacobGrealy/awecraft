@@ -40,6 +40,7 @@ const DEFAULTS := {
 	# the render edge (R+1)*16), kept at/under 0.875 so the full-fog
 	# boundary stays ahead of the worst-case pop-in face at every R >= 7.
 	"fog_start_pct": 87,
+	"fog_enabled": true,
 	# AC-0261: the med/low band split (taxi chunks). The visible LOD
 	# zones: HIGH = [0, sim_dist), MED (8x8x8) = [sim_dist, low_start),
 	# LOW (4x4x4) = [low_start, render_dist); NOTHING renders past the
@@ -168,6 +169,8 @@ func _clamp(k: String, v) -> void:
 		# AC-0232 (dither dropped in AC-0241): the fog percent slider.
 		"fog_start_pct":
 			values[k] = clampi(int(v), PCT_MIN, PCT_MAX)
+		"fog_enabled":
+			values[k] = bool(v)
 		# AC-0257 (Developer submenu).
 		"tier0_radius":
 			values[k] = clampi(int(v), 0, TIER0_RADIUS_MAX)

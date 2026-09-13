@@ -46,6 +46,7 @@ var debug_check: CheckBox
 # (percent of the render edge, (render_dist + 1) * 16 blocks).
 var fogstart_slider: HSlider
 var fogstart_val: Label
+var fog_enabled_check: CheckBox
 # AC-0252: the med/low band split slider — the distance (taxi chunks)
 # where the 4x4x4 LOW avg-color band starts (the 8x8x8 MED tier owns
 # everything closer; the low band runs out to the render edge).
@@ -189,6 +190,14 @@ func _ready() -> void:
 	opt_vbox.add_child(overlay_collision_check)
 	if hi + 4 < opt_vbox.get_child_count():
 		opt_vbox.move_child(overlay_collision_check, hi + 5)
+	fog_enabled_check = CheckBox.new()
+	fog_enabled_check.name = "FogEnabledCheck"
+	fog_enabled_check.text = "Enable fog"
+	fog_enabled_check.add_theme_font_size_override("font_size", 15)
+	fog_enabled_check.toggled.connect(_on_fog_enabled_toggled)
+	opt_vbox.add_child(fog_enabled_check)
+	if hi + 5 < opt_vbox.get_child_count():
+		opt_vbox.move_child(fog_enabled_check, hi + 6)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -512,7 +521,10 @@ func _sync_controls() -> void:
 	overlay_band_check.button_pressed = bool(Settings.values.get("overlay_band", false))
 	overlay_light_check.button_pressed = bool(Settings.values.get("overlay_light", false))
 	overlay_collision_check.button_pressed = bool(Settings.values.get("overlay_collision", false))
+	fog_enabled_check.button_pressed = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
+	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
+	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
 	fogstart_val.text = str(int(fogstart_slider.value)) + "%"
 	# AC-0261: the low-start slider spans the visible band [sim, render].
 	_sync_lowstart_range()
@@ -727,3 +739,11 @@ func _on_overlay_collision_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("overlay_collision", on)
+
+
+func _on_fog_enabled_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("fog_enabled", on)
+	fogstart_slider.editable = on
+	fogstart_slider.modulate.a = 1.0 if on else 0.45

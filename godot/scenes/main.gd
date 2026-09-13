@@ -87,9 +87,11 @@ func _ready() -> void:
 	_sky_res.sky_material = sky_mat
 	env.sky = _sky_res
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.fog_enabled = true
+	env.fog_enabled = bool(Settings.values.get("fog_enabled", true))
 	env.fog_mode = Environment.FOG_MODE_DEPTH
 	if OS.get_environment("AWECRAFT_NO_FOG") == "1":
+		env.fog_enabled = false
+	if not bool(Settings.values.get("fog_enabled", true)):
 		env.fog_enabled = false
 	world_env.environment = env
 	add_child(world_env)
@@ -1184,6 +1186,10 @@ func _update_sky() -> void:
 			cl["mat"].set_shader_parameter("u_cloud_tint", ctint)
 
 func _update_fog() -> void:
+	if OS.get_environment("AWECRAFT_NO_FOG") == "1" or not bool(Settings.values.get("fog_enabled", true)):
+		env.fog_enabled = false
+		return
+	env.fog_enabled = true
 	var rr: int = world.render_radius
 	env.fog_depth_begin = DayNight.fog_near(rr)
 	# AC-0232: the full-fog boundary is now the "fog_start_pct" setting (a
