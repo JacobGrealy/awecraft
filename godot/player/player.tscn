@@ -1,4 +1,4 @@
-[gd_scene format=3 uid="uid://njpqscckrjmi"]
+[gd_scene format=3]
 
 [ext_resource type="Script" uid="uid://qqos6r5leb61" path="res://player/player.gd" id="1_player"]
 [ext_resource type="CameraAttributesPractical" uid="uid://rk8uhis3xqm8" path="res://camera_attributes/main-camera-attributes.tres" id="2_rkbax"]
