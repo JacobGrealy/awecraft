@@ -159,6 +159,9 @@ func _ready() -> void:
 	camera.current = true
 	_apply_rotation()
 	_update_debug_label()
+	# AC-0281: apply DOF settings to the live CameraAttributes
+	if camera != null and camera.get("attributes") != null:
+		Settings.apply_dof()
 
 
 func _process(dt: float) -> void:

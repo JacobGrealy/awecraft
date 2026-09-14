@@ -491,35 +491,35 @@ func _layer_rank_of(si: int) -> int:
 # FULL probe (windowed=false) stays the completion record (mesh_built and
 # the re-entry flip never count a windowed "nothing pending" as done).
 func _lod_player_moving() -> bool:
-	return Time.get_ticks_msec() - _last_cross_ms < AHEAD_FAST_MS
+	# AC-0263 spec (user 2026-09-14): "moving" = the player's position
+	# changed significantly (2+ blocks) within the last AHEAD_FAST_MS -
+	# "the ones we've already been at shouldn't keep building down until
+	# we stay somewhere long enough to get down to that disc". Position
+	# based (not the crossing cadence, which never fired at walk speed).
+	return _lod_move_ms > 0 and Time.get_ticks_msec() - _lod_move_ms < AHEAD_FAST_MS
 
-# AC-0263 spec (user rules 2+4, 2026-09-13): the Y-window applies PER COLUMN,
-# and only to PASSED columns - "the ones we've already been at shouldn't
-# keep building down". A column is passed when the AHEAD center leads the
-# player and the column sits BEHIND the player (farther from the center
-# than from the player). Ahead columns (between the player and the center)
-# and everything at rest (center on the player - no lead, or AHEAD_FAST_MS
-# quiet) keep the FULL probe. TIER-0 columns are never windowed: rule 2
-# ("start back at y=player y for highest priority chunks") outranks rule 4
-# for the section. Measured why the global window was wrong: at spawn the
-# load recenter sets no ahead lead, so the full probe builds the floor
-# immediately (the pys=-1 void chicken-and-egg is gone), and a flying
-# player's under-chunk (tier 0) keeps its full build while the passed
-# trail stops building down.
+# AC-0263 spec (user 2026-09-14): the Y-window is NOT coupled to the ahead
+# lead ("why does it matter if we are ahead") - while the player is MOVING
+# (position-based, see _lod_player_moving), EVERY non-tier-0 column builds
+# only its player-slab +/-1 window ("every time we recenter we should start
+# building out at our y again" - the recenter re-anchors the layer rank,
+# the deep layers wait out the move). TIER 0 (the section) is a SEPARATE
+# band and is never windowed: "tier 0 gets full column before everything
+# else gets anything" - full columns even while moving, ahead of every band
+# disc. The high/med/low bands each get only their disc, filled from the
+# player's Y. When the player has stayed still AHEAD_FAST_MS, the FULL
+# probe resumes and the queue reaches the deep disc on its own ("until we
+# stay somewhere long enough to get down to that disc").
 func _lod_windowed_for(c: Node3D) -> bool:
 	if c == null:
 		return false
 	if not _lod_player_moving():
 		return false
-	if not _ahead_active:
-		return false
 	var dx := int(c.cx) - last_pcx
 	var dz := int(c.cz) - last_pcz
 	if _is_tier0_col(dx, dz):
 		return false
-	var txi_c := absi(dx) + absi(dz)
-	var txi_p := absi(int(c.cx) - _rec_player_pcx) + absi(int(c.cz) - _rec_player_pcz)
-	return txi_c > txi_p
+	return true
 
 func _entry_best_pending(c: Node3D, windowed := false) -> int:
 	if c == null or c.data.is_empty():
@@ -743,8 +743,8 @@ func _grid_score(e: Dictionary) -> float:
 		var si: int = _hslab_best_pending_cached(c) if in_high else _entry_best_pending_cached(c)
 		if si >= 0:
 			layer = _layer_rank_of(si)
-		# AC-0263 spec (user rules 2+4, 2026-09-13): for a WINDOWED column
-		# (passed, ahead lead active - see _lod_windowed_for), a probe -1
+		# AC-0263 spec (user rules 2+4, 2026-09-14): for a WINDOWED column
+		# (player moving, non-tier-0 - see _lod_windowed_for), a probe -1
 		# only means "no pending slab inside the player-slab +/-1 window"
 		# — the deeper slabs are still owed. Scoring such an entry at layer
 		# 0 (a taxi-only score) puts it AHEAD of every window-visible
@@ -752,9 +752,9 @@ func _grid_score(e: Dictionary) -> float:
 		# cannot see — and the drain's "probe -1 frees the entry" rule
 		# would then strand the column. Score it as no candidate:
 		# window-visible columns win, and if none exists the frame falls to
-		# the data pass. Non-windowed columns (ahead, tier-0, at rest) keep
-		# the full probe: a -1 there is genuine completion and the old
-		# layer-0/free behavior stands.
+		# the data pass. Non-windowed columns (tier-0, or the player at
+		# rest) keep the full probe: a -1 there is genuine completion and
+		# the old layer-0/free behavior stands.
 		elif _lod_windowed_for(c):
 			return 1e30
 	var s := float(layer) * 10000.0 + float(absi(dx) + absi(dz))
@@ -3242,6 +3242,16 @@ const AHEAD_FAST_MS := 3500
 const AHEAD_DIST := 1
 var _ahead_active := false      # the current center leads the player
 var _last_cross_ms := 0         # wall ms of the last PLAYER-chunk crossing
+# AC-0263 spec (user 2026-09-14): the Y-window's MOVING state - position-
+# based, not crossing-cadence based. A significant move (2+ blocks from
+# the anchor) re-arms the AHEAD_FAST_MS quiet window; "stayed somewhere
+# long enough" = no significant move for AHEAD_FAST_MS. The old predicate
+# (a crossing within AHEAD_FAST_MS of the previous crossing) never fired
+# at walk speed - a chunk crossing takes ~3.7 s at 4.3 m/s, just past the
+# 3.5 s window - so the window never opened while walking and the trail
+# kept building full columns (measured complaint, 2026-09-14).
+var _lod_move_anchor := Vector2.ZERO
+var _lod_move_ms := 0
 var _rec_player_wx := 0.0       # raw player position at the last recenter
 var _rec_player_wz := 0.0
 var _rec_player_pcx := 0
@@ -5481,6 +5491,13 @@ func threadmesh_poll() -> void:
 						# (200 ms at 60 fps) and returns the cap to the
 						# still level ~250 ms after the player stops.
 						_dyn_speed = lerpf(_dyn_speed, inst, 0.3)
+				# AC-0263 spec (user 2026-09-14): significant-move anchor -
+				# every 2+ blocks of travel re-arms the quiet window (walk,
+				# sprint, fly, teleport all count - it is a position delta,
+				# so harness fly/teleport arms it exactly like real input).
+				if pnow.distance_to(_lod_move_anchor) >= 2.0:
+					_lod_move_anchor = pnow
+					_lod_move_ms = Time.get_ticks_msec()
 				_dyn_prev_pos = pnow
 				_dyn_prev_t = Time.get_ticks_usec()
 				_dyn_have_prev = true
@@ -5722,6 +5739,19 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		# is whole-settled (light_settled - a full flush landed) or (b)
 		# THIS slab's own per-slab flush re-mesh landed (flush_slabs - the
 		# partial-column flush; a flush landing sets it below).
+		# AC-0263 spec (user 2026-09-14, "meshes where the lighting is
+		# too bright"): a landing in an ALREADY-SETTLED chunk is NEW work
+		# (the window defers deep slabs until the player stays still) -
+		# its build-time light is the bright SELF-LIT bake computed
+		# against the light data of that moment (too bright if a neighbor
+		# changed since). Un-settle: the slab hides and the flush below
+		# re-arms (rule 3 - never show a slab whose lighting is not
+		# calculated); the flush re-meshes and settles again. Baseline
+		# burst-landed every slab before the settle flush, so this path
+		# never fired there.
+		var late_landing := not bool(e.get("settle", false)) and bool(c.light_settled)
+		if late_landing:
+			c.light_settled = false
 		if bool(e.get("settle", false)):
 			c.flush_slabs[si_h] = true
 			# AC-0263 spec: a FLUSH landing is the flush for its slab - it
@@ -5739,7 +5769,7 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 				c.light_settled = true
 			else:
 				light_dirty[key] = true
-		var show_h: bool = bool(c.light_settled) or bool(c.flush_slabs.has(si_h))
+		var show_h: bool = (bool(c.light_settled) or bool(c.flush_slabs.has(si_h))) and not late_landing
 		if straggler and c.has_low_si(si_h):
 			c.low_slab_visible(si_h, true)
 			c.high_slab_visible(si_h, false)  # stored (flip-back on re-entry)
@@ -5839,6 +5869,11 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 	# that doesn't have its lighting calculated." A flush landing settles
 	# (its re-meshed slabs show); a pre-flush attach (the bright
 	# self-lit bake) stays HIDDEN until the first flush.
+	# AC-0263 spec (user 2026-09-14): a full-column landing in an
+	# ALREADY-SETTLED chunk is new work too - un-settle so the hide +
+	# re-arm below run (the bright self-lit bake must not show).
+	if not bool(e.get("settle", false)) and bool(c.light_settled):
+		c.light_settled = false
 	if bool(e.get("settle", false)):
 		c.light_settled = true
 	elif not c.light_settled:

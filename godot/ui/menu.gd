@@ -78,6 +78,12 @@ var cruisealt_spin: SpinBox
 var cruisealt_val: Label
 var cruise_spin: SpinBox
 var cruise_val: Label
+# AC-0281: DOF developer controls
+var dof_enabled_check: CheckBox
+var dof_far_spin: SpinBox
+var dof_far_val: Label
+var dof_amount_spin: SpinBox
+var dof_amount_val: Label
 var file_dialog: FileDialog
 var _options_from := "main"
 var _focus_last: Control = null  # AC-0087: gamepad focus highlight
@@ -250,12 +256,29 @@ func _ready() -> void:
 	var cr := _mk_dev_spin_row(dev_page, "CruiseRow", "Cruising speed (x walk)", 1.0, 20.0)
 	cruise_spin = cr[0]
 	cruise_val = cr[1]
+	# AC-0281: DOF developer controls
+	dof_enabled_check = CheckBox.new()
+	dof_enabled_check.name = "DOFEnabledCheck"
+	dof_enabled_check.text = "DOF enabled"
+	dof_enabled_check.add_theme_font_size_override("font_size", 15)
+	dof_enabled_check.toggled.connect(_on_dof_enabled_toggled)
+	dev_page.add_child(dof_enabled_check)
+	var doff := _mk_dev_spin_row(dev_page, "DOFFarRow", "DOF far distance", 1.0, 400.0)
+	dof_far_spin = doff[0]
+	dof_far_val = doff[1]
+	dof_far_spin.step = 1.0
+	var dofa := _mk_dev_spin_row(dev_page, "DOFAmountRow", "DOF strength", 0.0, 1.0)
+	dof_amount_spin = dofa[0]
+	dof_amount_val = dofa[1]
+	dof_amount_spin.step = 0.01
 	tier0_spin.value_changed.connect(_on_tier0_changed)
 	gen_spin.value_changed.connect(_on_gen_threads_changed)
 	mesh_spin.value_changed.connect(_on_mesh_threads_changed)
 	subcruise_spin.value_changed.connect(_on_subcruise_changed)
 	cruisealt_spin.value_changed.connect(_on_cruisealt_changed)
 	cruise_spin.value_changed.connect(_on_cruise_changed)
+	dof_far_spin.value_changed.connect(_on_dof_far_changed)
+	dof_amount_spin.value_changed.connect(_on_dof_amount_changed)
 	opt_tabs.add_child(dev_page)
 	file_dialog = get_node("Layer/PackDialog")
 	slot_labels = []
@@ -559,6 +582,16 @@ func _sync_controls() -> void:
 	cruisealt_val.text = str(int(cruisealt_spin.value))
 	cruise_spin.value = float(int(Settings.values.get("cruising_speed", 6)))
 	cruise_val.text = str(int(cruise_spin.value)) + "x"
+	# AC-0281: DOF developer controls
+	dof_enabled_check.button_pressed = bool(Settings.values.get("dof_enabled", true))
+	dof_far_spin.value = float(Settings.values.get("dof_far_distance", 82.62))
+	dof_far_val.text = "%.1f" % float(dof_far_spin.value)
+	dof_amount_spin.value = float(Settings.values.get("dof_amount", 0.08))
+	dof_amount_val.text = "%.2f" % float(dof_amount_spin.value)
+	dof_far_spin.editable = bool(Settings.values.get("dof_enabled", true))
+	dof_far_spin.modulate.a = 1.0 if bool(Settings.values.get("dof_enabled", true)) else 0.45
+	dof_amount_spin.editable = bool(Settings.values.get("dof_enabled", true))
+	dof_amount_spin.modulate.a = 1.0 if bool(Settings.values.get("dof_enabled", true)) else 0.45
 	_syncing = false
 
 
@@ -689,6 +722,33 @@ func _on_cruise_changed(v: float) -> void:
 		return
 	cruise_val.text = str(int(v)) + "x"
 	Settings.set_value("cruising_speed", int(v))
+
+
+func _on_dof_enabled_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("dof_enabled", on)
+	dof_far_spin.editable = on
+	dof_far_spin.modulate.a = 1.0 if on else 0.45
+	dof_amount_spin.editable = on
+	dof_amount_spin.modulate.a = 1.0 if on else 0.45
+	Settings.apply_dof()
+
+
+func _on_dof_far_changed(v: float) -> void:
+	if _syncing:
+		return
+	dof_far_val.text = "%.1f" % float(v)
+	Settings.set_value("dof_far_distance", float(v))
+	Settings.apply_dof()
+
+
+func _on_dof_amount_changed(v: float) -> void:
+	if _syncing:
+		return
+	dof_amount_val.text = "%.2f" % float(v)
+	Settings.set_value("dof_amount", float(v))
+	Settings.apply_dof()
 
 
 func _on_fogstart_changed(v: float) -> void:

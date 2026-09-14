@@ -67,6 +67,10 @@ const DEFAULTS := {
 	"sub_cruising_speed": 2,
 	"cruising_altitude": 275,
 	"cruising_speed": 6,
+	# AC-0281: DOF (Developer submenu).
+	"dof_enabled": true,
+	"dof_far_distance": 82.62,
+	"dof_amount": 0.08,
 	# AC-0257: worker-thread in-flight caps. 0 = auto (scale to all
 	# available cores, never past — gen/mesh split 40/60); >0 = the
 	# explicit cap for that lane.
@@ -184,6 +188,12 @@ func _clamp(k: String, v) -> void:
 			values[k] = clampi(int(v), 0, 384)
 		"cruising_speed":
 			values[k] = clampi(int(v), 1, 20)
+		"dof_enabled":
+			values[k] = bool(v)
+		"dof_far_distance":
+			values[k] = clampf(float(v), 1.0, 400.0)
+		"dof_amount":
+			values[k] = clampf(float(v), 0.0, 1.0)
 		"worker_gen_threads":
 			values[k] = clampi(int(v), 0, WORKER_THREADS_MAX)
 		"worker_mesh_threads":
@@ -319,3 +329,22 @@ func apply_tier0_radius() -> void:
 func apply_worker_threads() -> void:
 	if Game.world != null and Game.world.has_method("note_worker_threads"):
 		Game.world.note_worker_threads()
+
+
+# AC-0281: DOF settings changed — push to the live CameraAttributes if
+# a player exists (the Camera3D's attributes resource).
+func apply_dof() -> void:
+	if Game.player != null:
+		var cam = Game.player.get_node_or_null("Camera3D")
+		if cam != null and cam.get("attributes") != null:
+			var attrs = cam.attributes
+			# Duplicate if shared so we don't permanently mutate the .tres on disk
+			# for other instances; duplicate is cheap and keeps live tuning isolated.
+			if attrs != null and attrs.resource_path != "":
+				# First use: duplicate the shared .tres so live edits stay in-memory
+				cam.attributes = attrs.duplicate()
+				attrs = cam.attributes
+			if attrs != null:
+				attrs.set("dof_blur_far_enabled", bool(values.get("dof_enabled", true)))
+				attrs.set("dof_blur_far_distance", float(values.get("dof_far_distance", 82.62)))
+				attrs.set("dof_blur_amount", float(values.get("dof_amount", 0.08)))
