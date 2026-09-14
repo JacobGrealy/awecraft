@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-09-14T09:47
+  updated_at: 2026-09-14T10:04
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0282
 - AC-0093
 - AC-0038
 - AC-0039
@@ -12175,4 +12176,80 @@ intake:
     duplicated resource. Verify toggling and slider updates camera in real time.
 
     '
+  comments: []
+- id: AC-0282
+  title: 'emergent recenter queue: no mode timer, fresh-edge priority (AC-0263 spec literal)'
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-14T10:04
+  updated_at: 2026-09-14T10:04
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "# Emergent recenter queue (AC-0263 4-rule spec, literal model)\n\n## 1) User Story\nAs a player,\
+    \ the world should build the way it already feels: discs (columns) fill\nslab-by-slab from my Y, and\
+    \ the deep terrain behind me does not keep building while\nI keep moving — it resumes and drains on\
+    \ its own when I stop. That behavior must\nEMERGE from how the work queue is recomputed at every recenter\
+    \ (new outer-edge work\nenters the queue and outranks already-owed deep work), not from any timer,\
+    \ moving\nflag, or mode switch. When I stop, I simply stop triggering recenters, and the\nqueue naturally\
+    \ gets to the deep discs.\n\n## 2) Technical Details\n### Binding spec (user, verbatim, 2026-09-14)\n\
+    - \"every time we move to a new chunk, we should recalculate the entire queue of work\"\n- \"start\
+    \ back at y=player y for highest priority chunks\"\n- \"we should not be showing a chunk that doesn't\
+    \ have it's lighting calculated\"\n- \"the ones we've already been at shouldn't keep building down\
+    \ until we stay\n  somewhere long enough to get down to that disc\"\n- \"why does it matter if we\
+    \ are ahead, what is so hard about redetermining what\n  columns should be built every recenter\"\n\
+    - \"tier 0 and high are separate bands, tier 0 gets full column before everything\n  else gets anything,\
+    \ high band only gets the disc same as low and medium\"\n- \"The 3.5 seconds ... is not something\
+    \ that needs to be enforced in code, that's\n  a description of approximately what should happen based\
+    \ on our constraints, it\n  in itself is not a constraint. So there should not be some kind of internal\n\
+    \  timer that changes what we do when we hit 3.5 seconds.\"\n- \"When you stop moving, you aren't\
+    \ triggering recenter anymore, so naturally all\n  the discs should be filling in one disc y at a\
+    \ time. ... it just doesn't get to\n  do that many discs because you trigger recenter and get new\
+    \ slabs that you need\n  to process on the outer edge of the discs near you, so it needs to process\
+    \ those\n  before it can start doing deeper discs again. This is just emergent based on how\n  we\
+    \ determine the queue every recenter.\"\n- \"we need to rescore all slabs every recenter, are we doing\
+    \ that? otherwise\n  further slabs are going to have the same priority as closer slabs\"\n\n### Current\
+    \ state (commit 83cfcfe — shipped, gated, user-tested OK in-game)\n- Score IS live per pick: _grid_score\
+    \ is a pure function of the live recenter\n  anchor (last_pcx/pcz) + live player slab + live probe\
+    \ — nothing cached on\n  entries, so the next pick after any recenter re-orders the whole queue.\n\
+    - ORDER GAP: the (layer, taxi) bake order is LAYER-MAJOR — a passed column's\n  deep slab (layer 1,\
+    \ taxi 9 -> 10009) outranks a fresh edge column's slab\n  (layer 2, taxi 50 -> 20050), so the deep\
+    \ fill makes visible progress in the\n  gaps between recenters (the \"whole columns behind me\" the\
+    \ user saw before\n  83cfcfe; 83cfcfe's window papered over it with the mode switch below).\n- 83cfcfe\
+    \ ADDED what the user now rejects: the moving-state window\n  (_lod_player_moving position delta re-arming\
+    \ a 3.5 s quiet window;\n  _lod_windowed_for; windowed probes hiding deep slabs; the 1e30 no-candidate\n\
+    \  score; the build-pass hold). REMOVE ALL of it in this ticket.\n\n### Planned direction (PLAN IN\
+    \ A FRESH SESSION before coding)\n1. Remove the window mechanism (moving state, probe windowing, 1e30,\
+    \ holds) —\n   every probe is the FULL probe again.\n2. Fresh-edge priority: entries that ENTER the\
+    \ queue at a recenter (the WANT\n   set — the new outer-edge columns) outrank carried entries (STUB)\
+    \ for ALL\n   their slabs (their full columns, fanned from the player's Y, complete before\n   carried\
+    \ deep work resumes). Mechanism: the recenter walk already separates\n   WANT (new) vs STUB (carried)\
+    \ — tag entries at finalize and add a score\n   prefix (below the tier-0 -1e10, above any (layer,\
+    \ taxi) value).\n3. KEEP: tier-0 prefix (-1e10), AC-0274 load-target prefix (-5e9), the\n   late-landing\
+    \ light fix (slab landing in an already-settled chunk un-settles,\n   hides, re-arms the flush — fixes\
+    \ the user's \"lighting too bright\" complaint).\n4. MEASURE (headless, real-time walk arm — player.flying=true\
+    \ + Y pin +\n   get_physics_process_delta_time; fixed-dt fly patterns are 10x too slow):\n   while\
+    \ moving: carried deep-slab dispatches ~0, fresh-edge dispatches >0,\n   tier-0 full column builds;\
+    \ at rest: fresh ring drains then the deep fan;\n   arrival scenario (16x flight to nowhere, stop):\
+    \ fill starts at the fresh\n   outer ring (\"outside in\" — user-confirmed as expected).\n\n### Open\
+    \ questions for the planning session\n- The ahead-lead snapback (AC-0277) itself re-centers when the\
+    \ player stops\n  after 3.5 s quiet — the user says stopping should stop recenters entirely.\n  Does\
+    \ the snapback go too? (It is the one remaining \"recenter I didn't\n  trigger\" in the model.)\n\
+    - Confirm the fresh prefix outranks ALL carried slabs (deep included), or only\n  carried slabs below\
+    \ some layer.\n- Confirm column-wise data prep stays (WorldGen.generate = whole 384-block\n  column;\
+    \ user asked \"the data is still prepared in columns isn't it?\" — yes,\n  and it is the cheap step;\
+    \ every MESH dispatch is per-slab, verified).\n\n### Key code (godot/world/world.gd)\n- _grid_score\
+    \ (~747), _layer_rank_of (~494)\n- _lod_player_moving / _lod_windowed_for (~494-540) — REMOVE\n- probes\
+    \ + caches: _entry_best_pending / _hslab_best_pending (+ _cached\n  variants, fingerprints drop the\
+    \ window bit)\n- recenter walk + finalize (WANT/STUB/MERGE phases, ~8290+) — where the fresh\n  tag\
+    \ gets set\n- drain passes: build pass (~6939), loadwin (~6813), data pass (~6991),\n  low-wave gate\
+    \ (~6809)\n- light late-landing fix (~5740 per-slab, ~5872 full-column) — KEEP\n\n### Gates/baselines\
+    \ (83cfcfe tree)\nlightstate R16: hole_slabs_now 1776 / demoted 48 / double_lod 0 /\nhole_traj [281,0,0,0,0];\
+    \ r16 ok=true far census 1282/199/100; ladder 126;\nmeshprobe 1.0; battery: 23/31 byte-identical to\
+    \ .scratch/percol_battery\n(7f1888d baseline) + 8 timing-jitter; wallshot pre-existing hang.\n"
   comments: []
