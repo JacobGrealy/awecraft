@@ -483,13 +483,53 @@ func _layer_rank_of(si: int) -> int:
 # Rank-ordered probe (0, -1, +1, -2, +2, ...) so the first pending hit is
 # the answer; bounded by the slab count, allocation-free (the pick runs
 # it per candidate per scan).
-func _entry_best_pending(c: Node3D) -> int:
+# AC-0263 spec (user 2026-09-13): while the player is crossing chunks the
+# probes only see slabs in the player's Y-window (|dy| <= 1 - the player's
+# slab + its two neighbors). The deep layers of passed-through columns stop
+# building ("shouldn't keep building down") until the player stays still
+# long enough (AHEAD_FAST_MS of quiet) for the queue to drain to them. The
+# FULL probe (windowed=false) stays the completion record (mesh_built and
+# the re-entry flip never count a windowed "nothing pending" as done).
+func _lod_player_moving() -> bool:
+	return Time.get_ticks_msec() - _last_cross_ms < AHEAD_FAST_MS
+
+# AC-0263 spec (user rules 2+4, 2026-09-13): the Y-window applies PER COLUMN,
+# and only to PASSED columns - "the ones we've already been at shouldn't
+# keep building down". A column is passed when the AHEAD center leads the
+# player and the column sits BEHIND the player (farther from the center
+# than from the player). Ahead columns (between the player and the center)
+# and everything at rest (center on the player - no lead, or AHEAD_FAST_MS
+# quiet) keep the FULL probe. TIER-0 columns are never windowed: rule 2
+# ("start back at y=player y for highest priority chunks") outranks rule 4
+# for the section. Measured why the global window was wrong: at spawn the
+# load recenter sets no ahead lead, so the full probe builds the floor
+# immediately (the pys=-1 void chicken-and-egg is gone), and a flying
+# player's under-chunk (tier 0) keeps its full build while the passed
+# trail stops building down.
+func _lod_windowed_for(c: Node3D) -> bool:
+	if c == null:
+		return false
+	if not _lod_player_moving():
+		return false
+	if not _ahead_active:
+		return false
+	var dx := int(c.cx) - last_pcx
+	var dz := int(c.cz) - last_pcz
+	if _is_tier0_col(dx, dz):
+		return false
+	var txi_c := absi(dx) + absi(dz)
+	var txi_p := absi(int(c.cx) - _rec_player_pcx) + absi(int(c.cz) - _rec_player_pcz)
+	return txi_c > txi_p
+
+func _entry_best_pending(c: Node3D, windowed := false) -> int:
 	if c == null or c.data.is_empty():
 		return -1
 	var pys := _player_slab()
 	var sn: int = c.data.size()
 	var tier := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)
 	for r in range(sn * 2):
+		if windowed and r > 2:
+			continue
 		var dy: int
 		if r == 0:
 			dy = 0
@@ -551,11 +591,12 @@ func _low_probe_invalidate(c: Node3D) -> void:
 func _entry_best_pending_cached(c: Node3D) -> int:
 	var key := _key(int(c.cx), int(c.cz))
 	var f: Array = [int(c.data_gen), int(c.fl_gen), _player_slab(),
-		_lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)]
+		_lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz),
+		_lod_windowed_for(c)]  # AC-0263 spec: the per-column Y-window bit
 	var ck = _low_probe_cache.get(key, null)
 	if ck != null:
 		var cf: Array = ck["f"]
-		if cf[0] == f[0] and cf[1] == f[1] and cf[2] == f[2] and cf[3] == f[3]:
+		if cf[0] == f[0] and cf[1] == f[1] and cf[2] == f[2] and cf[3] == f[3] and cf[4] == f[4]:
 			var si0: int = int(ck["si"])
 			if si0 < 0:
 				return -1
@@ -564,7 +605,17 @@ func _entry_best_pending_cached(c: Node3D) -> int:
 		_low_probe_cache.erase(key)
 	if _low_probe_cache.size() > 8000:
 		_low_probe_cache.clear()  # eviction safety (bounded working set)
-	var si := _entry_best_pending(c)
+	# AC-0263 spec (user rules 2+4): the probe must use the SAME predicate
+	# as the fingerprint (element 4 = _lod_windowed_for) - the cached
+	# result is only sound for the windowing it was computed with. The
+	# global _lod_player_moving() diverges from the per-column bit while
+	# moving WITHOUT an ahead lead (the snapback state): the probe was
+	# windowed but the fingerprint stored wbit=false, so a windowed -1
+	# ("nothing in the player-slab window") was served forever as a
+	# full-probe "column complete" verdict - the wave never re-picked the
+	# demote-ring slabs and the holes stayed open (measured: lightstate,
+	# 50 ring holes through the whole settle, cached=-1 fresh=6).
+	var si := _entry_best_pending(c, _lod_windowed_for(c))
 	_low_probe_cache[key] = {"si": si, "f": f}
 	return si
 
@@ -577,12 +628,14 @@ func _entry_best_pending_cached(c: Node3D) -> int:
 # the low probe: the player's Y slab first, then down/up — the (layer,
 # taxi) bake order's layer. -1 = the column owes nothing (high-complete;
 # an all-air column's probe is -1 too, so mesh_built can flip).
-func _hslab_best_pending(c: Node3D) -> int:
+func _hslab_best_pending(c: Node3D, windowed := false) -> int:
 	if c == null or c.data.is_empty() or int(c.top) < 0:
 		return -1
 	var pys := _player_slab()
 	var lim: int = mini(int(c.top) >> 4, c.data.size() - 1)
 	for r in range(c.data.size() * 2):
+		if windowed and r > 2:
+			continue
 		var dy: int
 		if r == 0:
 			dy = 0
@@ -616,11 +669,12 @@ func _hslab_probe_invalidate(c: Node3D) -> void:
 func _hslab_best_pending_cached(c: Node3D) -> int:
 	var key := _key(int(c.cx), int(c.cz))
 	var f: Array = [int(c.data_gen), int(c.fl_gen), _player_slab(),
-		_lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)]
+		_lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz),
+		_lod_windowed_for(c)]  # AC-0263 spec: the per-column Y-window bit
 	var ck = _hslab_probe_cache.get(key, null)
 	if ck != null:
 		var cf: Array = ck["f"]
-		if cf[0] == f[0] and cf[1] == f[1] and cf[2] == f[2] and cf[3] == f[3]:
+		if cf[0] == f[0] and cf[1] == f[1] and cf[2] == f[2] and cf[3] == f[3] and cf[4] == f[4]:
 			var si0: int = int(ck["si"])
 			if si0 < 0:
 				return -1
@@ -630,7 +684,23 @@ func _hslab_best_pending_cached(c: Node3D) -> int:
 		_hslab_probe_cache.erase(key)
 	if _hslab_probe_cache.size() > 8000:
 		_hslab_probe_cache.clear()  # eviction safety (bounded working set)
-	var si := _hslab_best_pending(c)
+	# AC-0263 spec (user rules 2+4, 2026-09-13): the PICK probe is
+	# windowed (|dy| <= 1 of the player slab) ONLY for PASSED columns
+	# while the ahead lead is active - "the ones we've already been at
+	# shouldn't keep building down until we stay somewhere long enough
+	# to get down to that disc". Ahead columns, tier-0 columns, and
+	# everything at rest (no lead, or AHEAD_FAST_MS quiet) keep the FULL
+	# probe. The window bit is per-column (fingerprint element 5), so a
+	# crossing that flips the bit for a column forces its rescan.
+	# Hardcoding windowed=true here was the spawn stall: a stationary
+	# player's pick probe never saw slabs beyond surface +/- 1, so the
+	# tier-0 column never finished, _spawn_fast latched, the low stage
+	# died and the demote-ring holes stayed open forever (measured,
+	# lightstate). A GLOBAL moving window (before this refinement)
+	# stranded the same way for spawn (no ahead lead at the load
+	# recenter), for tier-0 under a flying player (rule 2 outranks rule
+	# 4), and for ahead columns the spec still wants built.
+	var si := _hslab_best_pending(c, _lod_windowed_for(c))
 	_hslab_probe_cache[key] = {"si": si, "f": f}
 	return si
 
@@ -673,6 +743,20 @@ func _grid_score(e: Dictionary) -> float:
 		var si: int = _hslab_best_pending_cached(c) if in_high else _entry_best_pending_cached(c)
 		if si >= 0:
 			layer = _layer_rank_of(si)
+		# AC-0263 spec (user rules 2+4, 2026-09-13): for a WINDOWED column
+		# (passed, ahead lead active - see _lod_windowed_for), a probe -1
+		# only means "no pending slab inside the player-slab +/-1 window"
+		# — the deeper slabs are still owed. Scoring such an entry at layer
+		# 0 (a taxi-only score) puts it AHEAD of every window-visible
+		# column, so the pick lands on a column whose owed slabs the probe
+		# cannot see — and the drain's "probe -1 frees the entry" rule
+		# would then strand the column. Score it as no candidate:
+		# window-visible columns win, and if none exists the frame falls to
+		# the data pass. Non-windowed columns (ahead, tier-0, at rest) keep
+		# the full probe: a -1 there is genuine completion and the old
+		# layer-0/free behavior stands.
+		elif _lod_windowed_for(c):
+			return 1e30
 	var s := float(layer) * 10000.0 + float(absi(dx) + absi(dz))
 	# AC-0263: the TIER-0 SECTION — the ball's slabs build in their own
 	# phase (fanned from the player's Y), fully complete, before ANY ring
@@ -4308,7 +4392,10 @@ func _process(_delta: float) -> void:
 	var added := false
 	for key in light_dirty:
 		var c = chunks.get(key)
-		if c != null and c.mesh_built and not light_pending_set.has(key):
+		# AC-0263 spec: a PARTIAL column (some stamped slabs, the rest in
+		# the drain's Y-window) flushes too - per-slab, from the first
+		# stamped slab on. mesh_built stays the whole-column fast path.
+		if c != null and (c.mesh_built or not c.high_stamps.is_empty()) and not light_pending_set.has(key):
 			light_pending.append(key)
 			light_pending_set[key] = true
 			added = true
@@ -4328,7 +4415,14 @@ func _process(_delta: float) -> void:
 		_dirty_drain()  # AC-0233: dirtyQueue drains first (1/frame), before the streaming work
 	var pf1 := Time.get_ticks_usec()
 	var fp0 := pf1
-	if not light_pending.is_empty() and not _startup_pending() and edit_inflight_count == 0 \
+	# AC-0263 spec: the flush is NOT gated on _startup_pending - the old
+	# yield (AC-0160: hand the 2 mesh slots to the first spawn builds)
+	# predates the pool, and with the visibility gate a latched startup
+	# (one missing spawn slab) froze EVERY chunk's lighting forever:
+	# light_pending could never settle, so nothing could ever show. The
+	# shared TM cap below already paces flush vs build (a cap-drop re-queues
+	# the flush, it never sync-builds).
+	if not light_pending.is_empty() and edit_inflight_count == 0 \
 		and threadmesh_inflight.size() < threadmesh_max:
 		# AC-0219 pool-full guard: the 1/frame streaming handoff cap keeps
 		# the TM pool saturated during remesh waves (dispatches land as fast
@@ -4365,7 +4459,16 @@ func _process(_delta: float) -> void:
 			var key2: String = light_pending.pop_front()
 			light_pending_set.erase(key2)
 			var c2 = chunks.get(key2)
-			if c2 == null or not c2.mesh_built:
+			if c2 == null:
+				continue
+			if c2.high_stamps.is_empty():
+				# Nothing attached yet - the next slab landing re-marks
+				# (every landing of an unsettled chunk re-arms the flush).
+				light_pending.append(key2)
+				light_pending_set[key2] = true
+				spun += 1
+				if spun >= max_spin:
+					break
 				continue
 			if not _build_ready(int(c2.cx), int(c2.cz)):
 				light_pending.append(key2)
@@ -4375,7 +4478,27 @@ func _process(_delta: float) -> void:
 					break
 				continue
 			var tb := Time.get_ticks_msec()
-			var covered := _mesh_dispatch(c2, int(c2.cx), int(c2.cz), {}, true, true)
+			# AC-0263 spec: the flush IS the "lighting calculated" event.
+			# A whole column remeshes once and settles (every slab shows).
+			var covered := true
+			if c2.mesh_built:
+				covered = _mesh_dispatch(c2, int(c2.cx), int(c2.cz), {}, true, true, true)
+			else:
+				# A PARTIAL column (the player moved; the deep layers are
+				# still in the drain's Y-window) flushes PER-SLAB - only
+				# the stamped slabs re-mesh and show. A whole-chunk remesh
+				# here would build the deep layers while moving (the spec
+				# keeps those until the player stays still) and would burn
+				# one big worker task per passed column. The per-column
+				# in-flight dedup paces this to one slab/frame; the loop
+				# re-queues the column and completes the rest as each
+				# landing frees the key.
+				for si_f in c2.high_stamps.keys():
+					if c2.flush_slabs.has(int(si_f)):
+						continue  # this slab's flush already landed
+					if not _mesh_dispatch_hslab(c2, int(c2.cx), int(c2.cz), int(si_f), {}, true):
+						covered = false
+						break
 			var dt := Time.get_ticks_msec() - tb
 			if dt > perf_single_build_ms:
 				perf_single_build_ms = dt
@@ -5594,21 +5717,54 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		# band-exit flip-back renders it without a rebuild); the fog
 		# (dormant) still drops with the placeholder state.
 		_fog_drop_slab(c, si_h)
+		# AC-0263 spec: a pre-flush high attach stays HIDDEN (the slab's
+		# lighting is not calculated yet). A slab shows when (a) the chunk
+		# is whole-settled (light_settled - a full flush landed) or (b)
+		# THIS slab's own per-slab flush re-mesh landed (flush_slabs - the
+		# partial-column flush; a flush landing sets it below).
+		if bool(e.get("settle", false)):
+			c.flush_slabs[si_h] = true
+			# AC-0263 spec: a FLUSH landing is the flush for its slab - it
+			# must NOT re-arm its own flush (that loops forever: land ->
+			# mark -> flush -> land ...). It re-arms ONLY while stamped
+			# slabs still await their flush (scheduling the next one); when
+			# every stamped slab is flushed, the chunk settles (drain
+			# landings from then on show immediately - the light is done).
+			var allf := true
+			for si2 in c.high_stamps.keys():
+				if not c.flush_slabs.has(int(si2)):
+					allf = false
+					break
+			if allf:
+				c.light_settled = true
+			else:
+				light_dirty[key] = true
+		var show_h: bool = bool(c.light_settled) or bool(c.flush_slabs.has(si_h))
 		if straggler and c.has_low_si(si_h):
 			c.low_slab_visible(si_h, true)
 			c.high_slab_visible(si_h, false)  # stored (flip-back on re-entry)
 		elif straggler:
-			c.high_slab_visible(si_h, true)   # active until the wave flips
+			c.high_slab_visible(si_h, show_h)   # active until the wave flips
 		else:
-			c.high_slab_visible(si_h, true)
+			c.high_slab_visible(si_h, show_h)
 			if c.has_low_si(si_h):
 				c.low_slab_visible(si_h, false)  # stored (flip on demote)
 		_hslab_probe_invalidate(c)
 		_low_probe_invalidate(c)
-		if not bool(c.mesh_built) and _hslab_best_pending(c) < 0:
+		if not bool(c.mesh_built) and _hslab_best_pending(c, false) < 0:
 			c.mesh_built = true
 			# high-complete: the column's placeholders are all gone now
 			# (each landing dropped its own) — nothing to free in bulk.
+		# AC-0263 spec: the FIRST flush is the "lighting calculated" event.
+		# A not-yet-settled chunk re-marks itself light-dirty on EVERY
+		# landing (light_dirty is consumed each frame; the mark only
+		# survives into light_pending once mesh_built - so the LAST
+		# landing's mark is the one that arms the flush). The flush
+		# (gated on mesh_built + 8-neighbor readiness) re-meshes with the
+		# settled eff and settles it (the slabs show then).
+		if not bool(e.get("settle", false)) and not c.light_settled \
+				and not light_dirty.has(key):
+			light_dirty[key] = true  # drain landing arms the (first) flush
 		c.saved_light = {}
 		perf_build_ms += Time.get_ticks_msec() - ta_h
 		var _wms_h: int = int(res.get("wms", 0))
@@ -5679,6 +5835,16 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 	if not bool(c.mesh_built):
 		_tm_full_firstbuild_n += 1  # AC-0263: first-build evidence
 	c.apply_accs(res, _tm_ms_full)
+	# AC-0263 spec (user 2026-09-13): "we should not be showing a chunk
+	# that doesn't have its lighting calculated." A flush landing settles
+	# (its re-meshed slabs show); a pre-flush attach (the bright
+	# self-lit bake) stays HIDDEN until the first flush.
+	if bool(e.get("settle", false)):
+		c.light_settled = true
+	elif not c.light_settled:
+		c.hide_all_high()
+		if not light_dirty.has(key):
+			light_dirty[key] = true
 	# AC-0263: a full-column landing stamps every slab at/below the top
 	# done (the per-slab probe's completion record for the legacy path).
 	for si_f in range(mini(int(c.top) >> 4, int(c.data.size() - 1)) + 1):
@@ -5950,16 +6116,19 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 		print("TMESH EDIT %d,%d slabs=%d-%d inflight=%d" % [cx, cz, si0, si1, threadmesh_inflight.size()])
 	return true
 
-func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := true, defer_on_cap := false) -> bool:
+func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := true, defer_on_cap := false, settle := false) -> bool:
+	# AC-0263 spec (settle): the light-FLUSH dispatch (the chunk's lighting
+	# is calculated now) - the handoff marks the chunk light_settled and the
+	# re-meshed slabs show.
 	if not timing:
-		return _mesh_dispatch_impl(c, cx, cz, eff, eff_trust, defer_on_cap)
+		return _mesh_dispatch_impl(c, cx, cz, eff, eff_trust, defer_on_cap, settle)
 	var _t0 := Time.get_ticks_usec()
-	var _r: bool = _mesh_dispatch_impl(c, cx, cz, eff, eff_trust, defer_on_cap)
+	var _r: bool = _mesh_dispatch_impl(c, cx, cz, eff, eff_trust, defer_on_cap, settle)
 	print("DISPATCHMS %d,%d ms=%.1f t=%d" % [cx, cz, (Time.get_ticks_usec() - _t0) / 1000.0, Time.get_ticks_msec()])
 	return _r
 
 
-func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := true, defer_on_cap := false) -> bool:
+func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := true, defer_on_cap := false, settle := false) -> bool:
 	# true = covered (sync-built now, or an in-flight task will apply);
 	# false = deduped behind an in-flight task (caller may want to retry).
 	# Sync fallbacks (spawn chunk, no own data, missing neighbor, cap-drop)
@@ -6059,7 +6228,7 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 		"fl": mc.slab_copy(c.fl),
 		"stamp": c.stamp(),
 		"band": int(c.band),
-		"nbs": nbs, "eff": eff, "eff_trust": eff_trust,
+		"nbs": nbs, "eff": eff, "eff_trust": eff_trust, "settle": settle,
 		"ctx": ctx_w, "ms": ms_w, "ngen": _ngens_for(cx, cz),
 		# AC-0233: the dispatch wall time (the edit-lane entry carried it;
 		# the wave lane now does too) — the handoff's queue/worker split
@@ -6112,7 +6281,7 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 # the in-flight dedup paces one slab in flight per column). true = a
 # worker task owns the slab; false = deferred (the caller keeps the entry
 # and ends the frame, as with a cap drop).
-func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary) -> bool:
+func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary, settle := false) -> bool:
 	var key := _key(cx, cz)
 	c.col_immediate = _col_immediate_for(cx, cz)
 	if c.data.is_empty():
@@ -6166,7 +6335,7 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary)
 		"fl": mc.slab_copy(c.fl),
 		"stamp": c.stamp(),
 		"band": int(c.band),
-		"nbs": nbs, "eff": eff, "eff_trust": true,
+		"nbs": nbs, "eff": eff, "eff_trust": true, "settle": settle,
 		"ctx": ctx_w, "ms": ms_w, "ngen": _ngens_for(cx, cz),
 		"tier": _tier_of(cx - last_pcx, cz - last_pcz),
 		"hslab": true, "si0": si, "si1": si,
@@ -6597,8 +6766,15 @@ func _drain_build_queue() -> void:
 			# slab is dispatched and the entry STAYS queued for the rest.
 			var sih := _hslab_best_pending_cached(lc)
 			if sih < 0:
-				_remove_entry(le)
-				continue
+				# AC-0263 spec (user rules 2+4): a windowed -1 is not a
+				# completion - hold the entry (no remove; the -1 must never
+				# reach the dispatch below). The pick scored it lowest, so
+				# no window-visible candidate exists - end the pass (the
+				# entry re-picks next frame, when the window opens).
+				if not _lod_windowed_for(lc):
+					_remove_entry(le)
+					continue
+				break
 			var _lw_deferred := _build_unit_hslab(lc, int(le["cx"]), int(le["cz"]), sih)
 			_loadwin_maxinf = maxi(_loadwin_maxinf, threadmesh_inflight.size())
 			if _lw_deferred:
@@ -6716,7 +6892,17 @@ func _drain_build_queue() -> void:
 			# frame; the in-flight dedup paces one slab per column).
 			var sih := _hslab_best_pending_cached(best_c)
 			if sih < 0:
-				_remove_entry(best_e)
+				# AC-0263 spec (user rules 2+4, 2026-09-13): the probe -1 is
+				# only a genuine "column complete" when the probe was FULL
+				# (non-windowed). A WINDOWED -1 (a passed column while the ahead lead is active) proves nothing about
+				# the slabs outside the player-slab window — removing the
+				# entry on one strands the column (measured: the spawn 3x3 removed while the player sat
+				# at pys=-1 in the void; the floor never built; the re-queue hit
+				# the same windowed -1 again). Hold the entry: u stays 0, the
+				# data pass below still runs, and the entry re-picks when the
+				# window opens (the player stops or the lead drops).
+				if not _lod_windowed_for(best_c):
+					_remove_entry(best_e)
 			else:
 				var deferred := _build_unit_hslab(best_c, int(best_e["cx"]), int(best_e["cz"]), sih)
 				if not deferred and _picklog:
@@ -8082,14 +8268,17 @@ func _reentry_flip_high(c: Node3D, key: String) -> void:
 			continue  # no stored high (the lane builds it if owed)
 		if int(c.high_stamps.get(si, -1)) != int(c.data_gen):
 			continue  # stale stored high (the lane rebuilds it)
-		c.high_slab_visible(si, true)
+		# AC-0263 spec: a stored high that never saw its first flush stays
+		# hidden (the flush settles + shows it).
+		if bool(c.light_settled):
+			c.high_slab_visible(si, true)
 		if c.has_low_si(si):
 			c.low_slab_visible(si, false)  # stored (flip on the next demote)
 		flipped += 1
 	if flipped > 0:
 		_low_probe_invalidate(c)
 	_hslab_probe_invalidate(c)
-	c.mesh_built = _hslab_best_pending(c) < 0
+	c.mesh_built = _hslab_best_pending(c, false) < 0  # AC-0263 spec: FULL probe
 	if timing or _tm_debug:
 		print("FLIPBACK %s flipped=%d mesh_built=%d" % [key, flipped, int(c.mesh_built)])
 
@@ -8561,7 +8750,14 @@ func _rec_want_step() -> void:
 			if old == "data":
 				_convert_data_to_build(key)
 				old = queued_keys.get(key)
-	if old != "build" and (c == null or not c.mesh_built):
+	# AC-0263 spec (user 2026-09-13): the queue is RECOMPUTED, not merged -
+	# every in-set column that still owes build/data work gets a fresh
+	# entry, whether or not the OLD queue held one (the old entry is
+	# dropped at the MERGE_OLD stage; an old "build" flag - e.g. set by the
+	# AC-0278 re-queue that runs BEFORE this walk - must not suppress the
+	# re-queue, or the column strands: entry dropped, flag stale, WANT
+	# skipping = never built again).
+	if c == null or not c.mesh_built:
 		_rec_want[key] = {"cx": cx, "cz": cz, "d": absi(dx) + absi(dz)}
 		_rec_want_keys.append(key)
 
@@ -8610,6 +8806,17 @@ func _rec_merge_old_step() -> void:
 	if _rec_want.has(key):
 		queued_keys.erase(key)
 		return
+	# AC-0263 spec (user 2026-09-13): "every time we move to a new chunk we
+	# should recalculate the ENTIRE queue of work." WANT (above) re-queues
+	# EVERY owing column FRESH against the new center - that is the
+	# recompute (the stranded-entry class is dead: a debounced recenter
+	# skip can no longer strand a column, WANT re-queues it each crossing).
+	# Entries WANT does not re-queue (meshed columns) keep their entry
+	# RE-BUCKETED by the NEW taxi, so the queue stays consistent with the
+	# new center during the walk (the long b1_eff walk keeps the old
+	# buckets live until finalize - a dropped carry desynced flags/entries
+	# in that window and latched _spawn_fast on the spawn column's tail
+	# slab, killing the low stage: measured 172 s in the lightstate arm).
 	_rec_new_buckets[mini(absi(adxs) + absi(adzs), _rec_new_buckets.size() - 1)].append(e)
 
 func _rec_merge_want_step() -> void:
@@ -8669,6 +8876,15 @@ func _rec_merge_ring_step() -> void:
 		band_buckets = _rec_new_buckets
 		_pool_touch()  # AC-0217: the whole queue was re-bucketed
 		_rebuild_qb()  # AC-0160
+		# AC-0263 spec: the recompute DROPS the old entries (no carry), so
+		# their queued_keys flags would go stale (a stale "build" flag makes
+		# _enqueue_build's dedup no-op - exactly the old stranded-entry
+		# bug). Rebuild the flags from the LIVE queue: flag exists <=> entry
+		# exists.
+		queued_keys = {}
+		for b in range(band_buckets.size()):
+			for e2 in band_buckets[b]:
+				queued_keys[e2["key"]] = "data" if bool(e2["data_only"]) else "build"
 		_drain_win_b = b1_eff() + 2  # AC-0160: restart the drain window at the new center
 		_drain_win_acc = 0
 		dq_b = 0

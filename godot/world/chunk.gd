@@ -33,6 +33,16 @@ var last_collision_build_ms := 0
 var last_eff: Dictionary = {}
 var saved_light: Dictionary = {}
 var light_recomputes := 0
+# AC-0263 spec (user 2026-09-13): "we should not be showing a chunk that
+# doesn't have its lighting calculated." A chunk's HIGH slabs attach HIDDEN
+# until its first light flush (the re-mesh with the settled neighborhood
+# eff) lands; the flush handoff sets this and the re-meshed slabs show.
+var light_settled := false
+# AC-0263 spec: per-slab variant of light_settled - a PARTIAL column's
+# stamped slabs flush one at a time (the deep layers stay in the drain's
+# Y-window while the player moves); a slab shows the moment its own flush
+# re-mesh lands. A whole-chunk flush (light_settled) settles every slab.
+var flush_slabs: Dictionary = {}
 var last_blk_ring: PackedInt32Array = PackedInt32Array()
 # AC-0129: bumped when last_eff's byte array changes (world._eff_landed);
 # neighbors' eff-cache entries carry our gen at their dispatch (ngen) and
@@ -194,6 +204,13 @@ func high_slab_visible(si: int, on: bool) -> void:
 		s.fluid_instance.visible = on
 	if s.flora_instance != null:
 		s.flora_instance.visible = on
+
+# AC-0263 spec: hide every attached HIGH slab (the pre-flush gate — the
+# chunk's lighting is not calculated yet; the first light flush re-meshes
+# and shows it).
+func hide_all_high() -> void:
+	for si in range(slabs.size()):
+		high_slab_visible(si, false)
 
 func low_slab_visible(si: int, on: bool) -> void:
 	var i: int = low_slabs.find(si)
@@ -542,6 +559,8 @@ func get_local(lx: int, y: int, lz: int) -> int:
 func set_local(lx: int, y: int, lz: int, id: int) -> void:
 	_slab_write(data, y, lz, lx, id)
 	data_gen += 1
+	light_settled = false
+	flush_slabs = {}
 	if id != 0 and y > top:
 		top = y
 
@@ -623,6 +642,8 @@ func data_landed(d: PackedByteArray, f: PackedByteArray) -> void:
 	else:
 		fl = io.palettize_flat(f, slab_n())
 	data_gen += 1
+	light_settled = false
+	flush_slabs = {}
 	fl_gen += 1
 	update_top()
 
@@ -640,6 +661,8 @@ func slabs_landed(ds: Array, fs: Array) -> void:
 		data = ds
 		fl = fs
 	data_gen += 1
+	light_settled = false
+	flush_slabs = {}
 	fl_gen += 1
 	update_top()
 
@@ -655,6 +678,8 @@ func clear_data() -> void:
 	fl = nf
 	top = -1
 	data_gen += 1
+	light_settled = false
+	flush_slabs = {}
 	fl_gen += 1
 
 
@@ -1614,6 +1639,9 @@ func _pool_reset() -> void:
 	# light
 	saved_light = {}
 	light_recomputes = 0
+	light_settled = false  # AC-0263 spec: a reused column re-enters pre-flush
+	flush_slabs = {}
+
 	# streaming hysteresis (AC-0278: the candidate flag is gone)
 	cand_since = 0
 	band = 0
