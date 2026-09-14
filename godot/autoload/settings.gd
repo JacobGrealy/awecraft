@@ -63,6 +63,10 @@ const DEFAULTS := {
 	# full columns build (slab-by-slab from the player's Y, fanning
 	# down/up) and the section completes before any other LOD starts.
 	"tier0_radius": 0,
+	# AC-0280: altitude-based flight speed (Developer submenu).
+	"sub_cruising_speed": 2,
+	"cruising_altitude": 275,
+	"cruising_speed": 6,
 	# AC-0257: worker-thread in-flight caps. 0 = auto (scale to all
 	# available cores, never past — gen/mesh split 40/60); >0 = the
 	# explicit cap for that lane.
@@ -174,6 +178,12 @@ func _clamp(k: String, v) -> void:
 		# AC-0257 (Developer submenu).
 		"tier0_radius":
 			values[k] = clampi(int(v), 0, TIER0_RADIUS_MAX)
+		"sub_cruising_speed":
+			values[k] = clampi(int(v), 1, 20)
+		"cruising_altitude":
+			values[k] = clampi(int(v), 0, 384)
+		"cruising_speed":
+			values[k] = clampi(int(v), 1, 20)
 		"worker_gen_threads":
 			values[k] = clampi(int(v), 0, WORKER_THREADS_MAX)
 		"worker_mesh_threads":

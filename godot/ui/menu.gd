@@ -72,6 +72,12 @@ var gen_spin: SpinBox
 var gen_val: Label
 var mesh_spin: SpinBox
 var mesh_val: Label
+var subcruise_spin: SpinBox
+var subcruise_val: Label
+var cruisealt_spin: SpinBox
+var cruisealt_val: Label
+var cruise_spin: SpinBox
+var cruise_val: Label
 var file_dialog: FileDialog
 var _options_from := "main"
 var _focus_last: Control = null  # AC-0087: gamepad focus highlight
@@ -235,9 +241,21 @@ func _ready() -> void:
 	var meshr := _mk_dev_spin_row(dev_page, "MeshThreadsRow", "Worker threads mesh (0 = auto)", 0.0, float(Settings.WORKER_THREADS_MAX))
 	mesh_spin = meshr[0]
 	mesh_val = meshr[1]
+	var scr := _mk_dev_spin_row(dev_page, "SubCruiseRow", "Sub-cruising speed (x walk)", 1.0, 20.0)
+	subcruise_spin = scr[0]
+	subcruise_val = scr[1]
+	var car := _mk_dev_spin_row(dev_page, "CruiseAltRow", "Cruising altitude", 0.0, 384.0)
+	cruisealt_spin = car[0]
+	cruisealt_val = car[1]
+	var cr := _mk_dev_spin_row(dev_page, "CruiseRow", "Cruising speed (x walk)", 1.0, 20.0)
+	cruise_spin = cr[0]
+	cruise_val = cr[1]
 	tier0_spin.value_changed.connect(_on_tier0_changed)
 	gen_spin.value_changed.connect(_on_gen_threads_changed)
 	mesh_spin.value_changed.connect(_on_mesh_threads_changed)
+	subcruise_spin.value_changed.connect(_on_subcruise_changed)
+	cruisealt_spin.value_changed.connect(_on_cruisealt_changed)
+	cruise_spin.value_changed.connect(_on_cruise_changed)
 	opt_tabs.add_child(dev_page)
 	file_dialog = get_node("Layer/PackDialog")
 	slot_labels = []
@@ -535,6 +553,12 @@ func _sync_controls() -> void:
 	gen_val.text = "auto" if int(gen_spin.value) == 0 else str(int(gen_spin.value))
 	mesh_spin.value = float(int(Settings.values.get("worker_mesh_threads", 0)))
 	mesh_val.text = "auto" if int(mesh_spin.value) == 0 else str(int(mesh_spin.value))
+	subcruise_spin.value = float(int(Settings.values.get("sub_cruising_speed", 2)))
+	subcruise_val.text = str(int(subcruise_spin.value)) + "x"
+	cruisealt_spin.value = float(int(Settings.values.get("cruising_altitude", 275)))
+	cruisealt_val.text = str(int(cruisealt_spin.value))
+	cruise_spin.value = float(int(Settings.values.get("cruising_speed", 6)))
+	cruise_val.text = str(int(cruise_spin.value)) + "x"
 	_syncing = false
 
 
@@ -644,6 +668,27 @@ func _on_mesh_threads_changed(v: float) -> void:
 	mesh_val.text = "auto" if int(v) == 0 else str(int(v))
 	Settings.set_value("worker_mesh_threads", int(v))
 	Settings.apply_worker_threads()
+
+
+func _on_subcruise_changed(v: float) -> void:
+	if _syncing:
+		return
+	subcruise_val.text = str(int(v)) + "x"
+	Settings.set_value("sub_cruising_speed", int(v))
+
+
+func _on_cruisealt_changed(v: float) -> void:
+	if _syncing:
+		return
+	cruisealt_val.text = str(int(v))
+	Settings.set_value("cruising_altitude", int(v))
+
+
+func _on_cruise_changed(v: float) -> void:
+	if _syncing:
+		return
+	cruise_val.text = str(int(v)) + "x"
+	Settings.set_value("cruising_speed", int(v))
 
 
 func _on_fogstart_changed(v: float) -> void:

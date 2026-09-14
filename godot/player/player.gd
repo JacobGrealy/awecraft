@@ -440,7 +440,11 @@ func _physics_process_impl(dt: float) -> void:
 	var sprint_eff := sprint or sprint_latched
 	var speed: float
 	if flying:
-		speed = WALK * float(int(Settings.values.get("flight_speed", 4)))
+		# AC-0280: altitude-based flight speed — below cruising_altitude use
+		# sub_cruising_speed (default 2x WALK), at/above use cruising_speed (6x).
+		var cruise_alt := float(int(Settings.values.get("cruising_altitude", 275)))
+		var fly_mult := float(int(Settings.values.get("sub_cruising_speed", 2))) if position.y < cruise_alt else float(int(Settings.values.get("cruising_speed", 6)))
+		speed = WALK * fly_mult
 		if fly_sprint:
 			speed *= SPRINT / WALK
 	elif swim_up:
@@ -478,7 +482,9 @@ func _physics_process_impl(dt: float) -> void:
 		# make L3 double-trigger (descend AND speed up).
 		if (sprint_kbd or (not cg and Input.is_action_pressed("pad_cancel"))):
 			vy -= 1.0  # SHIFT or B (pad_cancel) = down (AC-0243)
-		var fly_vs := WALK * float(int(Settings.values.get("flight_speed", 4))) * FLY_VS
+		var cruise_alt_vs := float(int(Settings.values.get("cruising_altitude", 275)))
+		var fly_mult_vs := float(int(Settings.values.get("sub_cruising_speed", 2))) if position.y < cruise_alt_vs else float(int(Settings.values.get("cruising_speed", 6)))
+		var fly_vs := WALK * fly_mult_vs * FLY_VS
 		if fly_sprint:
 			fly_vs *= SPRINT / WALK
 		velocity.y = lerpf(velocity.y, vy * fly_vs, minf(1.0, 10.0 * dt))

@@ -13345,3 +13345,20 @@ intake:
     close LODs) not full 4096 slabs. Later planet: same as cube sphere far LOD (6
     faces). Verify beyond render shows satellite, inside shows real LODs, no chunk
     meshing cost far.'
+- id: AC-0280
+  title: altitude-based-flight-speed
+  status: open
+  priority: 2
+  area: player
+  effort: S
+  depends_on: []
+  notes: '1) User Story: As a player flying I want speed below cruising-altitude at
+    2x ground speed and at/above at 6x ground speed so low flight is controllable
+    and high cruising is fast.
+
+
+    2) Technical Details: New settings sub_cruising_speed (1-20x, default 2), cruising_altitude
+    (0-384, default ~275 lowest cloud), cruising_speed (1-20x, default 6) under Developer
+    menu. Player flight speed lerp/switch based on player Y vs cruising_altitude (below
+    = sub_cruising_speed * WALK, at/above = cruising_speed * WALK). Keep existing
+    flight_speed as legacy or combine. Save to awecraft.cfg.'
