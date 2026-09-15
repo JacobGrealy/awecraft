@@ -1,10 +1,13 @@
 meta:
-  updated_at: 2026-09-14T10:04
+  updated_at: 2026-09-14T23:49
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0282
+- AC-0283
+- AC-0284
+- AC-0286
+- AC-0287
 - AC-0093
 - AC-0038
 - AC-0039
@@ -12184,11 +12187,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-09-14T10:04
-  updated_at: 2026-09-14T10:04
-  completed_at: null
+  updated_at: 2026-09-14T10:19
+  completed_at: 2026-09-14T10:19
   waiting_on: null
   parent_id: null
   notes: "# Emergent recenter queue (AC-0263 4-rule spec, literal model)\n\n## 1) User Story\nAs a player,\
@@ -12252,4 +12255,133 @@ intake:
     \ (83cfcfe tree)\nlightstate R16: hole_slabs_now 1776 / demoted 48 / double_lod 0 /\nhole_traj [281,0,0,0,0];\
     \ r16 ok=true far census 1282/199/100; ladder 126;\nmeshprobe 1.0; battery: 23/31 byte-identical to\
     \ .scratch/percol_battery\n(7f1888d baseline) + 8 timing-jitter; wallshot pre-existing hang.\n"
+  comments: []
+- id: AC-0283
+  title: starlight-lighting-with-data-lods
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: in-progress
+  labels: []
+  created_at: 2026-09-14T12:08
+  updated_at: 2026-09-14T23:49
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player flying fast I want distant terrain to stay cheap but correct up close,
+    so inner ring has accurate lighting while far horizon uses fast heightmap sky and cheap data.
+
+
+    2) Technical Details: Replace AweLighting flood with Starlight-style single-queue propagator (one
+    queue for sky+block, two-phase removal, no neighbor light read, per-section nibble arrays attached
+    to slabs, stateless sections zero cost on load). Split data LODs: inner band (sim distance) = full
+    24-slab cave field + full light walk; outer bands = heightmap-only or 8-point air/solid sample for
+    rough sky + no block light, promoted to full on entering inner ring (single full flood per column).
+    Wire p_keep / heightmap cache so far gen stays cheap. Verify near light exact, far no flash on promotion,
+    flight no hitch.
+
+
+
+    Update 2026-09-14: Merged AC-0285 heightmap-sky-light (cancelled). Far band cheap light is part of
+    this ticket: heightmap sky (sky=15 above top per x,z, 0 at/below surface, no flood, no nibble alloc
+    for far, no block light).
+
+
+    Clarify: AC-0283 MUST implement Starlight-style light engine (not just heightmap). Close = full Starlight
+    flood per slab section; far = heightmap sky. This is the light rewrite ticket.'
+  comments: []
+- id: AC-0284
+  title: cheap-far-data-height-only
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-14T12:20
+  updated_at: 2026-09-14T12:20
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player flying, far columns should be super cheap to generate so sim disc
+    stays fed.
+
+
+    2) Technical Details: gen.cpp gen_flat when far band (taxi > sim) skips cave field (f_cave not built,
+    no scan top-down), just H surface + biome + top block emit. Returns heightmap-ready data (top per
+    x,z). Far slabs palettized but caves absent. Wire p_keep/skip to distance band. Verify far gen <0.05ms
+    vs full ~0.5ms, visual height correct.'
+  comments: []
+- id: AC-0285
+  title: heightmap-sky-light
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: cancelled
+  labels: []
+  created_at: 2026-09-14T12:20
+  updated_at: 2026-09-14T17:59
+  completed_at: 2026-09-14T17:59
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player, far terrain lighting should be instant and not run full flood, but
+    look okay from distance.
+
+
+    2) Technical Details: For far band (taxi > sim) skip AweLighting flood. Use heightmap sky: sky=15
+    above top per x,z, 0 at/below surface (top from cheap data H). No block light. Per-slab nibble arrays
+    not allocated for far; just height value. When promoted to sim, run full flood once. Verify no flash
+    on near approach, far renders with avg color + heightmap sky.'
+  comments: []
+- id: AC-0286
+  title: far-to-sim-promotion
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-14T12:21
+  updated_at: 2026-09-14T12:21
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As I fly, far cheap columns that become close should seamlessly upgrade to full
+    detail without pop or duplicate work.
+
+
+    2) Technical Details: Detect far column crossing into sim (taxi <= sim). Trigger full regen (cave
+    field + veg) + single Starlight flood, replace cheap data/light, invalidate probes, keep result. Ensure
+    only one promotion per column, cheap data not saved. Verify promotion cost ~1ms, no holes when flying
+    straight, far->near upgrade correct.'
+  comments: []
+- id: AC-0287
+  title: save-only-sim-distance
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-14T12:21
+  updated_at: 2026-09-14T12:21
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player my save should stay small — flying over vast areas shouldn''t bloat
+    the world.
+
+
+    2) Technical Details: Region save only writes columns where taxi <= sim OR chunk has edits (world.edits).
+    Far cheap columns (height-only, no caves) are never encoded; they stay ephemeral and regenerate on
+    load. Add save filter in chunk_io region write. On load, missing far columns regenerate cheap then
+    promote if needed. Verify save size stays flat while flying 10k blocks, edited far columns still persist
+    after promotion.'
   comments: []

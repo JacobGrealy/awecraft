@@ -41,6 +41,10 @@ using namespace godot;
 // AweStrips (the _strips_for/_side_blk_strip port + the _compute_face_blk
 // face compute with the C++ glow/solid_top palette probes) registers from
 // the same initializer (namespace awestrips, defined in strips.cpp).
+// AC-0283: the starlight module (src/starlight.cpp) joins the same library
+// — AweStarlight (the Starlight-style single-queue light engine: per-
+// section nibble arrays, one global queue, two-phase edits) registers from
+// the same initializer (namespace awestarlight, defined in starlight.cpp).
 namespace awegen {
 void register_classes();
 }
@@ -51,6 +55,9 @@ namespace awemesh {
 void register_classes();
 }
 namespace awestrips {
+void register_classes();
+}
+namespace awestarlight {
 void register_classes();
 }
 
@@ -1121,6 +1128,7 @@ void initialize_chunkio_module(ModuleInitializationLevel p_level) {
 	awelight::register_classes(); // AC-0189: AweLighting (pull kernel + flood)
 	awemesh::register_classes(); // AC-0190: AweMesh (build_accs + greedy emit)
 	awestrips::register_classes(); // AC-0207: AweStrips (strips + face compute)
+	awestarlight::register_classes(); // AC-0283: AweStarlight (single-queue light engine)
 }
 
 void uninitialize_chunkio_module(ModuleInitializationLevel p_level) {

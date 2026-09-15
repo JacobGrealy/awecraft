@@ -72,22 +72,10 @@ using awecommon::slab_views;
 constexpr int SKY_FULL = 15;
 
 // ---------------------------------------------------------------------------
-// The block tables (value copies of the pre-warmed Lighting._att/_glow).
-// b >= size = 0 (GDScript would index-error there; valid data never does).
+// The block tables — moved to awe_common.h (awelight::Tables, AC-0283) and
+// shared with starlight.cpp; value copies of the pre-warmed
+// Lighting._att/_glow, b >= size = 0.
 // ---------------------------------------------------------------------------
-
-struct Tables {
-	const uint8_t *att = nullptr;
-	const uint8_t *glow = nullptr;
-	int att_sz = 0;
-	int glow_sz = 0;
-	inline int a(int b) const {
-		return (b >= 0 && b < att_sz) ? att[b] : 0;
-	}
-	inline int g(int b) const {
-		return (b >= 0 && b < glow_sz) ? glow[b] : 0;
-	}
-};
 
 // ---------------------------------------------------------------------------
 // _flood_flat port (lighting.gd:519) — the bucket-16 BFS. Integer-only,

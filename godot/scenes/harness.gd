@@ -529,6 +529,14 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _pullprobe_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "starlighttest":
+			# AC-0283 P1: the starlight engine equivalence arm (C++
+			# AweStarlight vs the current pull kernel — the synthetic layout
+			# + the generated 7x7 region, every cell, edits included).
+			world.collision_enabled = false
+			await _starlight_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "banana":
 			# AC-0040: the banana-tree generation probe — the shore dirt
 			# edge rule (independent re-derivation from the data), the
@@ -7392,6 +7400,395 @@ func _pullprobe_test(spawn: Vector3) -> void:
 		"cpp_flood": cpp_flood,
 		"wall_ms": Time.get_ticks_msec() - t0,
 	})
+
+
+# AC-0283 P1: the starlight engine equivalence arm (the permanent P1 gate —
+# "near light exact"). AweStarlight (gdext/src/starlight.cpp) vs the current
+# engine (the AweLighting pull kernel), every cell:
+#   (1) SYNTHETIC — a hand-built single column (stone base, a cave with a
+#   torch, a lava pool, a glowstone ceiling, a sky shaft through an
+#   overhang): the reference is the current kernel's contained path
+#   (_chunk_light_into, in-out sky/blk — the exact per-column sky + block
+#   split); the engine runs a 3x3 region with AIR neighbor columns (the air
+#   carries no light, so the region fixed point IS the contained column
+#   light). Then on_edit — a wall across the shaft, the torch removed, the
+#   lava pool -> water — each compared against the current engine re-
+#   flooding the edited data.
+#   (2) WORLD — the 7x7 generated region around spawn (25 sample centers +
+#   a 1-column margin: the light range 14 < the margin 16 keeps the region
+#   fixed point exact). The reference = the current pull kernel iterated to
+#   the region fixed point (zero strips, then the previous round's boundary
+#   rings — the pull + E2 steady state, a pure function of the data). The
+#   engine = the 7x7 seed + step to quiescence; every cell of the 25 centers
+#   compared. Then a torch + a lava pool are placed in the scratch data
+#   (on_edit on the engine; the reference re-run) and the 25 centers
+#   re-compared.
+# Gate: mismatches 0 (any divergence is reported with coordinates + the
+# expected/actual values and the arm fails).
+func _starlight_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var H := int(Data.HEIGHT)
+	var io: Variant = ChunkIO.io_cpp()
+	Lighting._tables()
+	var cpp: bool = ClassDB.class_exists("AweStarlight")
+	var lc: Variant = null
+	if cpp:
+		lc = ClassDB.instantiate("AweStarlight")
+		lc.set_tables(Lighting._att, Lighting._glow)
+	var syn: Dictionary = {"ok": false, "cells": 0, "mismatches": 0, "first": {}, "base_ok": false, "edit_ok": false, "cur_us": 0, "sl_us": 0, "note": ""}
+	var wrld: Dictionary = {"ready": false, "base_ok": false, "edit_ok": false, "cells": 0, "mismatches": 0, "first": {}, "ref_rounds": -1, "edit_ref_rounds": -1, "cur_us": 0, "sl_us": 0, "note": ""}
+	if cpp:
+		syn = _starlight_synthetic(lc, H, io)
+		wrld["ready"] = await _starlight_wait_region(spawn)
+		if wrld["ready"]:
+			wrld = _starlight_world(lc, H, io, spawn)
+	var cur_us: int = int(syn.get("cur_us", 0)) + int(wrld.get("cur_us", 0))
+	var sl_us: int = int(syn.get("sl_us", 0)) + int(wrld.get("sl_us", 0))
+	var mismatches: int = int(syn.get("mismatches", 0)) + int(wrld.get("mismatches", 0))
+	var first: Dictionary = syn.get("first", {})
+	if first.is_empty():
+		first = wrld.get("first", {})
+	Debug.result({
+		"ok": cpp and bool(syn.get("ok", false)) and bool(wrld.get("ready", false)) and bool(wrld.get("base_ok", false)) and bool(wrld.get("edit_ok", false)),
+		"cpp": cpp,
+		"cells_compared": int(syn.get("cells", 0)) + int(wrld.get("cells", 0)),
+		"mismatches": mismatches,
+		"first_mismatch": first,
+		"synthetic_ok": bool(syn.get("ok", false)),
+		"edit_ok": bool(wrld.get("edit_ok", false)),
+		"timing_ms": {
+			"current": round(float(cur_us) / 1000.0 * 1000.0) / 1000.0,
+			"starlight": round(float(sl_us) / 1000.0 * 1000.0) / 1000.0,
+			"ratio": round(float(sl_us) / float(cur_us) * 1000.0) / 1000.0 if cur_us > 0 else -1.0,
+		},
+		"synthetic": syn,
+		"world": wrld,
+		"wall_ms": Time.get_ticks_msec() - t0,
+	})
+
+
+func _starlight_wait_region(spawn: Vector3) -> bool:
+	var cx0 := int(floorf(spawn.x / 16.0))
+	var cz0 := int(floorf(spawn.z / 16.0))
+	world.render_radius = 5
+	world.recenter(spawn.x, spawn.z, true)
+	var have := false
+	var waited := 0
+	while waited < 3600:
+		have = true
+		for dx in range(-3, 4):
+			for dz in range(-3, 4):
+				var c = world.chunks.get(world._key(cx0 + dx, cz0 + dz))
+				if c == null or c.data.is_empty():
+					have = false
+		if have:
+			break
+		await get_tree().physics_frame
+		waited += 1
+	return have
+
+
+func _starlight_synthetic(lc, H: int, io) -> Dictionary:
+	var STONE := 3
+	var AIR := 0
+	var WATER := 5
+	var LAVA := 24
+	var TORCH := 22
+	var GLOW := 23
+	var syn := PackedByteArray()
+	syn.resize(H * 256)
+	for y in range(11):
+		for i in range(256):
+			syn[(y << 8) | i] = STONE
+	for x in range(4, 12):
+		for z in range(4, 12):
+			for y in range(8, 11):
+				syn[(y << 8) | (z << 4) | x] = AIR
+	syn[(8 << 8) | (7 << 4) | 7] = TORCH
+	for x in range(2, 5):
+		for z in range(10, 13):
+			syn[(8 << 8) | (z << 4) | x] = LAVA
+			syn[(9 << 8) | (z << 4) | x] = LAVA
+	for x in range(9, 11):
+		for z in range(9, 11):
+			syn[(11 << 8) | (z << 4) | x] = GLOW
+	for x in range(2):
+		for z in range(2):
+			for y in range(11, 21):
+				syn[(y << 8) | (z << 4) | x] = STONE
+	for x in range(8):
+		for z in range(8):
+			syn[(21 << 8) | (z << 4) | x] = STONE
+	syn[(21 << 8) | (6 << 4) | 6] = AIR
+	var data: Array = io.palettize_flat(syn, 24)
+	var zero := PackedByteArray()
+	zero.resize(H * 256)
+	var sky_b := PackedByteArray()
+	sky_b.resize(H * 256)
+	var blk_b := PackedByteArray()
+	blk_b.resize(H * 256)
+	# the lambdas capture locals BY VALUE (Godot 4.7) — the accumulators are
+	# shared Array boxes
+	var cur_us_box := [0]
+	var sl_us_box := [0]
+	var ref_run := func(d: Array, sref: PackedByteArray, bref: PackedByteArray) -> PackedByteArray:
+		sref.fill(0)
+		bref.fill(0)
+		var tt := Time.get_ticks_usec()
+		var eff: PackedByteArray = Lighting._chunk_light_into(d, 0, 0, H, zero, sref, bref)
+		cur_us_box[0] += Time.get_ticks_usec() - tt
+		return eff
+	var eff_ref: PackedByteArray = ref_run.call(data, sky_b, blk_b)
+	var sl0 := Time.get_ticks_usec()
+	lc.reset()
+	var air := PackedByteArray()
+	air.resize(4096)
+	var seed_ok := true
+	for dx in range(-2, 3):
+		for dz in range(-2, 3):
+			for si in range(23, -1, -1):
+				if dx == 0 and dz == 0:
+					seed_ok = lc.seed_section(0, 0, si, syn.slice(si * 4096, si * 4096 + 4096), PackedByteArray())
+				else:
+					seed_ok = lc.seed_section(dx, dz, si, air, PackedByteArray())
+				if not seed_ok:
+					break
+	var steps := 0
+	while seed_ok and lc.pending_cells() > 0:
+		lc.step(2000000)
+		steps += 1
+		if steps > 500:
+			seed_ok = false
+	sl_us_box[0] += Time.get_ticks_usec() - sl0
+	var cmp := func(sref: PackedByteArray, bref: PackedByteArray, eref: PackedByteArray) -> Dictionary:
+		var c1: Dictionary = lc.compare_split(0, 0, sref, bref)
+		var c2: Dictionary = lc.compare_eff(0, 0, eref)
+		var m: int = int(c1.get("mismatches_sky", 0)) + int(c1.get("mismatches_blk", 0)) + int(c2.get("mismatches", 0))
+		var f: Dictionary = c1.get("first", {})
+		if f.is_empty():
+			f = c2.get("first", {})
+		return {"m": m, "f": f}
+	var r0: Dictionary = cmp.call(sky_b, blk_b, eff_ref)
+	var mismatches: int = int(r0["m"])
+	var first: Dictionary = r0["f"]
+	var base_ok: bool = seed_ok and mismatches == 0
+	var run_edit := func(edits: Array, d: Array, sref: PackedByteArray, bref: PackedByteArray, eref: PackedByteArray) -> Dictionary:
+		var t1 := Time.get_ticks_usec()
+		var ok_e := true
+		for e in edits:
+			ok_e = lc.on_edit(int(e[0]), int(e[1]), int(e[2]), int(e[3])) and ok_e
+		while ok_e and lc.pending_cells() > 0:
+			lc.step(2000000)
+		sl_us_box[0] += Time.get_ticks_usec() - t1
+		var r: Dictionary = cmp.call(sref, bref, eref)
+		r["ok_e"] = ok_e
+		return r
+	var edits_a: Array = []
+	for x in range(5, 8):
+		for z in range(5, 8):
+			syn[(15 << 8) | (z << 4) | x] = STONE
+			syn[(16 << 8) | (z << 4) | x] = STONE
+			edits_a.append([x, 15, z, STONE])
+			edits_a.append([x, 16, z, STONE])
+	var eff_a: PackedByteArray = ref_run.call(io.palettize_flat(syn, 24), sky_b, blk_b)
+	var ra: Dictionary = run_edit.call(edits_a, data, sky_b, blk_b, eff_a)
+	mismatches += int(ra["m"])
+	var a_ok: bool = bool(ra["ok_e"]) and int(ra["m"]) == 0
+	if first.is_empty():
+		first = ra["f"]
+	syn[(8 << 8) | (7 << 4) | 7] = AIR
+	var edits_b: Array = [[7, 8, 7, AIR]]
+	var eff_b: PackedByteArray = ref_run.call(io.palettize_flat(syn, 24), sky_b, blk_b)
+	var rb: Dictionary = run_edit.call(edits_b, data, sky_b, blk_b, eff_b)
+	mismatches += int(rb["m"])
+	var b_ok: bool = bool(rb["ok_e"]) and int(rb["m"]) == 0
+	if first.is_empty():
+		first = rb["f"]
+	var edits_c: Array = []
+	for x in range(2, 5):
+		for z in range(10, 13):
+			syn[(8 << 8) | (z << 4) | x] = WATER
+			syn[(9 << 8) | (z << 4) | x] = WATER
+			edits_c.append([x, 8, z, WATER])
+			edits_c.append([x, 9, z, WATER])
+	var eff_c: PackedByteArray = ref_run.call(io.palettize_flat(syn, 24), sky_b, blk_b)
+	var rc: Dictionary = run_edit.call(edits_c, data, sky_b, blk_b, eff_c)
+	mismatches += int(rc["m"])
+	var c_ok: bool = bool(rc["ok_e"]) and int(rc["m"]) == 0
+	if first.is_empty():
+		first = rc["f"]
+	return {
+		"ok": base_ok and a_ok and b_ok and c_ok,
+		"cells": 4 * H * 256,
+		"mismatches": mismatches,
+		"first": first,
+		"base_ok": base_ok,
+		"edit_ok": a_ok and b_ok and c_ok,
+		"cur_us": int(cur_us_box[0]),
+		"sl_us": int(sl_us_box[0]),
+		"note": "",
+	}
+
+
+func _starlight_world(lc, H: int, io, spawn: Vector3) -> Dictionary:
+	var out: Dictionary = {"ready": false, "base_ok": false, "edit_ok": false, "cells": 0, "mismatches": 0, "first": {}, "ref_rounds": -1, "edit_ref_rounds": -1, "cur_us": 0, "sl_us": 0, "note": ""}
+	var cx0 := int(floorf(spawn.x / 16.0))
+	var cz0 := int(floorf(spawn.z / 16.0))
+	var keys: Array = []
+	var flats := {}
+	var tops := {}
+	var slabs := {}
+	for dx in range(-3, 4):
+		for dz in range(-3, 4):
+			var k := "%d,%d" % [dx, dz]
+			var c = world.chunks.get(world._key(cx0 + dx, cz0 + dz))
+			if c == null or c.data.is_empty():
+				out["note"] = "region data not ready"
+				return out
+			var f: PackedByteArray = c.flat_data()
+			flats[k] = f
+			slabs[k] = io.palettize_flat(f, 24)
+			tops[k] = int(io.slabs_top(slabs[k]))
+			keys.append(k)
+	out["ready"] = true
+	# my strip side (dx, dz) -> the neighbor's ring side (ring: 0=E x=15,
+	# 1=W x=0, 2=z=15, 3=z=0 — the C++ pack in lighting.cpp)
+	var SD: Array = [[1, 0, 1], [-1, 0, 0], [0, 1, 3], [0, -1, 2]]
+	var ref_iter := func(slabs_d: Dictionary, tops_d: Dictionary) -> Dictionary:
+		var r_effs := {}
+		var r_rings := {}
+		var r_cur := 0
+		var r_rounds := 0
+		var changed := false
+		var first_round := true
+		while (changed or first_round) and r_rounds < 32:
+			changed = false
+			for k in keys:
+				var parts: Array = k.split(",")
+				var kdx: int = int(parts[0])
+				var kdz: int = int(parts[1])
+				var eff_strips: Array = []
+				for sd in SD:
+					var st := PackedByteArray()
+					st.resize(2 * 16 * H)
+					var nk := "%d,%d" % [kdx + int(sd[0]), kdz + int(sd[1])]
+					if not first_round and r_rings.has(nk):
+						var rg: PackedInt32Array = r_rings[nk]
+						for v in rg:
+							var vi: int = int(v)
+							if (vi >> 17) & 3 == int(sd[2]):
+								st[(vi >> 4) & 8191] = vi & 15
+					eff_strips.append(st)
+				var tt := Time.get_ticks_usec()
+				var rr: Dictionary = Lighting.compute_light_flat_chunk_pull(slabs_d[k], cx0 + kdx, cz0 + kdz, H, eff_strips, eff_strips, eff_strips, int(tops_d[k]))
+				if first_round:
+					r_cur += Time.get_ticks_usec() - tt
+				var arr: PackedByteArray = rr["arr"]
+				var ring: PackedInt32Array = rr["ring"]
+				if r_effs.has(k):
+					if arr != r_effs[k] or ring != r_rings[k]:
+						changed = true
+				else:
+					changed = true
+				r_effs[k] = arr
+				r_rings[k] = ring
+			r_rounds += 1
+			first_round = false
+		return {"effs": r_effs, "rings": r_rings, "cur_us": r_cur, "rounds": r_rounds, "converged": r_rounds < 32}
+	var ri: Dictionary = ref_iter.call(slabs, tops)
+	out["ref_rounds"] = int(ri.get("rounds", -1))
+	out["cur_us"] = int(ri.get("cur_us", 0))
+	var sl0 := Time.get_ticks_usec()
+	lc.reset()
+	var seed_ok := true
+	for k in keys:
+		var parts: Array = k.split(",")
+		var kdx: int = int(parts[0])
+		var kdz: int = int(parts[1])
+		var f: PackedByteArray = flats[k]
+		for si in range(23, -1, -1):
+			if not lc.seed_section(cx0 + kdx, cz0 + kdz, si, f.slice(si * 4096, si * 4096 + 4096), PackedByteArray()):
+				seed_ok = false
+				break
+		if not seed_ok:
+			break
+	var steps := 0
+	while seed_ok and lc.pending_cells() > 0:
+		lc.step(2000000)
+		steps += 1
+		if steps > 500:
+			seed_ok = false
+	out["sl_us"] = Time.get_ticks_usec() - sl0
+	var compare_centers := func(rid: Dictionary) -> Dictionary:
+		var m_tot := 0
+		var f_first: Dictionary = {}
+		var c_tot := 0
+		var list: Array = []
+		for dcx in range(-2, 3):
+			for dcz in range(-2, 3):
+				var ck := "%d,%d" % [dcx, dcz]
+				var ce: Dictionary = lc.compare_eff(cx0 + dcx, cz0 + dcz, rid["effs"][ck])
+				var m: int = int(ce.get("mismatches", 0))
+				m_tot += m
+				if m != 0 and f_first.is_empty():
+					f_first = ce.get("first", {})
+				if m != 0 and list.size() < 128:
+					var al: PackedInt32Array = lc.compare_eff_all(cx0 + dcx, cz0 + dcz, rid["effs"][ck], 128 - list.size())
+					for v in al:
+						var vi: int = int(v)
+						var si: int = (vi >> 20) & 31
+						var pp: int = (vi >> 8) & 4095
+						list.append("c%s: x%d y%d z%d s%d/r%d" % [ck, pp & 15, si * 16 + (pp >> 8), (pp >> 4) & 15, (vi >> 4) & 15, vi & 15])
+						if list.size() >= 128:
+							break
+				c_tot += H * 256
+		return {"m": m_tot, "f": f_first, "cells": c_tot, "list": list}
+	var rbase: Dictionary = compare_centers.call(ri)
+	out["cells"] = int(rbase["cells"])
+	out["mismatches"] = int(rbase["m"])
+	out["first"] = rbase["f"]
+	out["mismatch_list"] = rbase["list"]
+	var base_ok: bool = seed_ok and bool(ri.get("converged", false)) and int(rbase["m"]) == 0
+	out["base_ok"] = base_ok
+	if not bool(ri.get("converged", false)):
+		out["note"] = "reference did not converge in 32 rounds"
+	var f_t: PackedByteArray = flats["0,0"].duplicate()
+	var top_t: int = int(tops["0,0"])
+	f_t[((top_t + 1) << 8) | (8 << 4) | 8] = 22
+	var f_l: PackedByteArray = flats["1,1"].duplicate()
+	var top_l: int = int(tops["1,1"])
+	for lx in range(6, 9):
+		for lz in range(6, 9):
+			f_l[((top_l + 1) << 8) | (lz << 4) | lx] = 24
+			f_l[((top_l + 2) << 8) | (lz << 4) | lx] = 24
+	var slabs2: Dictionary = slabs.duplicate()
+	slabs2["0,0"] = io.palettize_flat(f_t, 24)
+	slabs2["1,1"] = io.palettize_flat(f_l, 24)
+	var tops2: Dictionary = tops.duplicate()
+	tops2["0,0"] = int(io.slabs_top(slabs2["0,0"]))
+	tops2["1,1"] = int(io.slabs_top(slabs2["1,1"]))
+	var ri2: Dictionary = ref_iter.call(slabs2, tops2)
+	out["edit_ref_rounds"] = int(ri2.get("rounds", -1))
+	out["cur_us"] = int(out["cur_us"]) + int(ri2.get("cur_us", 0))
+	var t1 := Time.get_ticks_usec()
+	var ok_e: bool = lc.on_edit(cx0 * 16 + 8, tops2["0,0"], cz0 * 16 + 8, 22)
+	for lx in range(6, 9):
+		for lz in range(6, 9):
+			ok_e = ok_e and lc.on_edit(cx0 * 16 + 16 + lx, tops2["1,1"] - 1, cz0 * 16 + 16 + lz, 24)
+			ok_e = ok_e and lc.on_edit(cx0 * 16 + 16 + lx, tops2["1,1"], cz0 * 16 + 16 + lz, 24)
+	while ok_e and lc.pending_cells() > 0:
+		lc.step(2000000)
+	out["sl_us"] = int(out["sl_us"]) + Time.get_ticks_usec() - t1
+	var redit: Dictionary = compare_centers.call(ri2)
+	out["cells"] = int(out["cells"]) + int(redit["cells"])
+	out["mismatches"] = int(out["mismatches"]) + int(redit["m"])
+	if int(redit["m"]) != 0 and out["first"].is_empty():
+		out["first"] = redit["f"]
+	for e2 in redit["list"]:
+		if out["mismatch_list"].size() < 128:
+			out["mismatch_list"].append("[edit] " + str(e2))
+	out["edit_ok"] = ok_e and bool(ri2.get("converged", false)) and int(redit["m"]) == 0
+	return out
 
 
 # AC-0190: the MESH losslessness probe (#1 gate for the C++ mesh port).

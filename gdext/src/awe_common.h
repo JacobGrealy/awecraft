@@ -90,6 +90,24 @@ godot::PackedByteArray pba_from(const std::vector<uint8_t> &v);
 
 namespace awelight {
 
+// AC-0283: the per-block LIGHT TABLES (attenuation + glow), shared by
+// lighting.cpp (the pull kernel) and starlight.cpp (the AweStarlight
+// engine) — one definition, same value-copy discipline: the values arrive
+// as copies of the pre-warmed Lighting._att/_glow (data.gd = the single
+// source of truth). b >= size = 0 (valid data never indexes past 48).
+struct Tables {
+	const uint8_t *att = nullptr;
+	const uint8_t *glow = nullptr;
+	int att_sz = 0;
+	int glow_sz = 0;
+	inline int a(int b) const {
+		return (b >= 0 && b < att_sz) ? att[b] : 0;
+	}
+	inline int g(int b) const {
+		return (b >= 0 && b < glow_sz) ? glow[b] : 0;
+	}
+};
+
 struct PullOut {
 	std::vector<uint8_t> eff; // sz*h
 	std::vector<uint8_t> mask; // sz*h
