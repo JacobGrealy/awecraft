@@ -1,0 +1,1853 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AweCraft — World Generation &amp; Streaming, end to end (current state)</title>
+<style>
+:root{
+  --bg:#120f0a; --bg2:#171310; --panel:#1c1712; --panel2:#211b14;
+  --edge:#3a332a; --edge2:#4a4133;
+  --ink:#e8ddc9; --dim:#a4937a; --faint:#6f6350;
+  --amber:#d9a441; --rust:#c96a3d; --steel:#7fa0c4; --crimson:#d4585f;
+  --teal:#58a8a0; --moss:#8a9a5b; --ocean:#4f86a8;
+  --mono:ui-monospace,"Cascadia Mono","JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg); color:var(--ink);
+  font:16.5px/1.68 var(--serif);
+  -webkit-font-smoothing:antialiased;
+}
+/* strata background: faint layered bands + vignette */
+body::before{
+  content:""; position:fixed; inset:0; z-index:-2; pointer-events:none;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(217,164,65,.05), transparent 55%),
+    repeating-linear-gradient(180deg,
+      transparent 0 118px, rgba(217,164,65,.022) 118px 120px,
+      transparent 120px 258px, rgba(79,134,168,.02) 258px 261px,
+      transparent 261px 388px, rgba(138,154,91,.02) 388px 391px),
+    linear-gradient(180deg, var(--bg2), var(--bg) 340px);
+}
+/* grain */
+body::after{
+  content:""; position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.05;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='140' height='140' filter='url(%23n)' opacity='1'/></svg>");
+}
+.wrap{max-width:1180px;margin:0 auto;padding:0 28px}
+::selection{background:var(--amber);color:#171310}
+
+/* ---------- header ---------- */
+header{padding:52px 0 30px;border-bottom:1px solid var(--edge)}
+.specline{
+  display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  font:10.5px/1.6 var(--mono);letter-spacing:.22em;color:var(--faint);
+  text-transform:uppercase;margin-bottom:34px;
+}
+.specline b{color:var(--dim);font-weight:400}
+h1{
+  font:700 clamp(34px,5.4vw,64px)/1.02 var(--mono);
+  letter-spacing:.02em;text-transform:uppercase;
+}
+h1 .thin{font-weight:300;color:var(--dim)}
+.subtitle{
+  font:italic 20px/1.5 var(--serif);color:var(--dim);
+  max-width:62ch;margin-top:18px;
+}
+.subtitle em{color:var(--amber);font-style:italic}
+.meta-plate{
+  display:flex;gap:26px;flex-wrap:wrap;margin-top:30px;
+  font:11.5px/1.9 var(--mono);color:var(--dim);
+  border:1px solid var(--edge);background:rgba(28,23,18,.6);padding:14px 18px;
+}
+.meta-plate div{min-width:150px}
+.meta-plate .k{display:block;color:var(--faint);letter-spacing:.18em;font-size:9.5px;text-transform:uppercase}
+.meta-plate .v{color:var(--ink)}
+.meta-plate .v.amber{color:var(--amber)}
+.stratabar{height:6px;margin-top:34px;background:linear-gradient(90deg,
+  var(--crimson) 0 14%, var(--amber) 14% 34%, var(--moss) 34% 56%,
+  var(--steel) 56% 78%, var(--ocean) 78% 100%);opacity:.85}
+
+/* ---------- TOC ---------- */
+nav.toc{
+  border-bottom:1px solid var(--edge);
+  padding:22px 0 26px;
+}
+nav.toc .toc-title{font:10.5px/1 var(--mono);letter-spacing:.3em;color:var(--faint);text-transform:uppercase;margin-bottom:16px}
+nav.toc ol{list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:4px 44px}
+nav.toc a{
+  color:var(--dim);text-decoration:none;font:13px/1.7 var(--mono);
+  display:flex;align-items:baseline;gap:10px;padding:2px 0;
+}
+nav.toc a .no{color:var(--faint);font-size:10.5px;letter-spacing:.1em}
+nav.toc a .dots{flex:1;border-bottom:1px dotted var(--edge2);transform:translateY(-4px)}
+nav.toc a:hover,nav.toc a.cur{color:var(--amber)}
+@media(max-width:760px){nav.toc ol{grid-template-columns:1fr}}
+
+/* ---------- sections ---------- */
+section{padding:54px 0 8px;border-bottom:1px solid var(--edge)}
+section:last-of-type{border-bottom:none}
+.sec-head{display:flex;align-items:baseline;gap:18px;margin-bottom:26px}
+.sec-no{
+  font:300 44px/1 var(--mono);color:transparent;
+  -webkit-text-stroke:1px var(--edge2);letter-spacing:.04em;
+}
+.sec-head h2{
+  font:600 21px/1.2 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink);
+}
+.sec-head .rule{flex:1;height:1px;background:var(--edge);position:relative;top:-6px}
+.sec-head .rule::after{content:"";position:absolute;right:0;top:-3px;width:7px;height:7px;background:var(--amber);transform:rotate(45deg)}
+section p{margin:0 0 16px;max-width:80ch}
+section p .fn{color:var(--dim);font-size:.92em}
+section h3{
+  font:600 13px/1.3 var(--mono);letter-spacing:.18em;text-transform:uppercase;
+  color:var(--dim);margin:30px 0 8px;
+}
+section ul{margin:0 0 16px 22px;max-width:80ch}
+section ol.steps{margin:0 0 16px 22px;max-width:84ch}
+section li{margin:5px 0}
+strong{color:var(--amber);font-weight:600}
+a{color:var(--steel)}
+code, .mono{font-family:var(--mono)}
+p code, li code, td code{
+  font-size:.86em;background:#262017;border:1px solid #332b20;color:#e3c98f;
+  padding:1px 5px;border-radius:3px;white-space:nowrap;
+}
+
+/* ---------- code blocks ---------- */
+pre.code{
+  background:#14100c;border:1px solid var(--edge);border-left:3px solid var(--amber);
+  padding:16px 18px 14px;margin:18px 0 24px;overflow-x:auto;
+  font:12.5px/1.75 var(--mono);color:#d8c9a8;
+}
+pre.code .ln{color:#4a4133;display:inline-block;width:4.2ch;text-align:right;margin-right:14px;user-select:none}
+pre.code .cm{color:#6f6350;font-style:italic}
+pre.code .kw{color:var(--steel)}
+pre.code .st{color:#a8c48a}
+pre.code .num{color:#e0a458}
+
+/* ---------- tables ---------- */
+table{border-collapse:collapse;width:100%;margin:18px 0 26px;font:12.5px/1.6 var(--mono)}
+th{
+  text-align:left;color:var(--faint);font-weight:400;letter-spacing:.16em;
+  text-transform:uppercase;font-size:10px;border-bottom:1px solid var(--edge2);
+  padding:8px 10px;
+}
+td{border-bottom:1px solid var(--edge);padding:8px 10px;color:var(--dim);vertical-align:top}
+tbody tr{transition:background .15s}
+tbody tr:hover{background:rgba(217,164,65,.05)}
+td .nm{color:var(--ink)}
+td.hl{color:var(--amber)}
+.tbl-scroll{overflow-x:auto}
+
+/* ---------- layer cards ---------- */
+.layers{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin:24px 0 10px}
+.layer{
+  background:var(--panel);border:1px solid var(--edge);border-top:3px solid var(--lc,var(--amber));
+  padding:16px 18px 12px;transition:transform .18s, border-color .18s;
+}
+.layer:hover{transform:translateY(-3px);border-color:var(--edge2);border-top-color:var(--lc,var(--amber))}
+.layer h3{font:600 13.5px/1.3 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--lc,var(--amber));margin:0 0 4px}
+.layer .purpose{font:italic 14px/1.5 var(--serif);color:var(--dim);margin:6px 0 12px}
+.layer .rows{font:11.5px/1.95 var(--mono);color:var(--faint)}
+.layer .rows b{color:var(--dim);font-weight:400;display:inline-block;min-width:9.5ch}
+.layer .rows .vv{color:var(--ink)}
+
+/* ---------- figures ---------- */
+figure{margin:26px 0 30px;background:#0f0c08;border:1px solid var(--edge);padding:14px}
+figure svg{width:100%;height:auto;display:block}
+figcaption{
+  font:11px/1.7 var(--mono);color:var(--faint);letter-spacing:.06em;
+  padding-top:12px;border-top:1px dashed var(--edge);margin-top:10px;
+}
+figcaption b{color:var(--dim);font-weight:400}
+
+/* ---------- callouts ---------- */
+.callout{
+  border:1px solid var(--edge);border-left:3px solid var(--steel);
+  background:rgba(79,134,168,.06);padding:14px 18px;margin:20px 0;
+  font:14px/1.6 var(--serif);color:var(--dim);max-width:86ch;
+}
+.callout b{color:var(--steel);font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;display:block;margin-bottom:6px}
+.note{border-left-color:var(--amber);background:rgba(217,164,65,.06)}
+.note b{color:var(--amber)}
+.warn{border-left-color:var(--crimson);background:rgba(212,88,95,.06)}
+.warn b{color:var(--crimson)}
+
+/* ---------- worked example ---------- */
+.wk{font:13px/2 var(--mono);color:var(--dim);background:#14100c;border:1px solid var(--edge);
+  padding:16px 18px;margin:18px 0;overflow-x:auto}
+.wk .ok{color:var(--moss)}
+.wk .op{color:var(--faint)}
+.wk .res{color:var(--amber)}
+
+/* ---------- footer ---------- */
+footer{padding:34px 0 60px;font:11px/2 var(--mono);color:var(--faint);letter-spacing:.08em}
+footer b{color:var(--dim);font-weight:400}
+
+/* ---------- load reveal ---------- */
+@keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+.reveal{opacity:0;animation:rise .7s cubic-bezier(.22,.61,.36,1) forwards}
+.d1{animation-delay:.05s}.d2{animation-delay:.14s}.d3{animation-delay:.24s}.d4{animation-delay:.34s}
+@media(prefers-reduced-motion:reduce){.reveal{animation:none;opacity:1}}
+</style>
+</head>
+<body>
+
+<header class="wrap">
+  <div class="specline reveal d1">
+    <span><b>DOC</b> worldgen-current · frozen single-file build</span>
+    <span><b>CODE STATE</b> commit 83cfcfe · <b>DATE</b> 2026-09-14</span>
+  </div>
+  <h1 class="reveal d1">World Generation &amp;<br>Streaming<span class="thin"> /end to end</span></h1>
+  <p class="subtitle reveal d2">
+    How one 16-block step by the player becomes a 384-block column of lit voxels:
+    <em>one pure C++ generator</em>, <em>one live-scored queue</em>, <em>two worker lanes</em>,
+    and <em>one flush</em> that decides when light is allowed to show.
+  </p>
+  <div class="meta-plate reveal d3">
+    <div><span class="k">Code state</span><span class="v amber">83cfcfe (+docs 1cdc015)</span></div>
+    <div><span class="k">World height</span><span class="v">H = 384 · SEA = 126</span></div>
+    <div><span class="k">Chunk</span><span class="v">16 × 16 × 384 = 24 slabs of 16³</span></div>
+    <div><span class="k">Generator</span><span class="v">C++ AweGen (gdext), no GDScript path</span></div>
+    <div><span class="k">World seed</span><span class="v">Game.world_seed (default 1)</span></div>
+    <div><span class="k">Purpose</span><span class="v">reference for the Flight-ready world redesign</span></div>
+  </div>
+  <div class="stratabar reveal d4"></div>
+</header>
+
+<nav class="toc wrap">
+  <div class="toc-title">Survey index</div>
+  <ol>
+    <li><a href="#s01"><span class="no">01</span> The big picture <span class="dots"></span></a></li>
+    <li><a href="#s02"><span class="no">02</span> Terrain generation <span class="dots"></span></a></li>
+    <li><a href="#s03"><span class="no">03</span> The scheduler <span class="dots"></span></a></li>
+    <li><a href="#s04"><span class="no">04</span> Data + mesh pipeline <span class="dots"></span></a></li>
+    <li><a href="#s05"><span class="no">05</span> LOD, lighting, chunk state <span class="dots"></span></a></li>
+    <li><a href="#s06"><span class="no">06</span> Thread map &amp; frame anatomy <span class="dots"></span></a></li>
+    <li><a href="#s07"><span class="no">07</span> Why this fights the flying disc <span class="dots"></span></a></li>
+    <li><a href="#s08"><span class="no">08</span> Where the redesign lands <span class="dots"></span></a></li>
+    <li><a href="#s09"><span class="no">09</span> Appendix <span class="dots"></span></a></li>
+  </ol>
+</nav>
+
+<main class="wrap">
+
+<!-- ============ 01 BIG PICTURE ============ -->
+<section id="s01">
+  <div class="sec-head reveal"><span class="sec-no">01</span><h2>The big picture</h2><span class="rule"></span></div>
+  <p class="reveal">
+    The current pipeline at commit <code>83cfcfe</code> is a two-lane, worker-pool, main-thread-handoff
+    machine driven by one bounded, always-current work queue. The whole lifecycle, in one place:
+  </p>
+  <ol class="steps">
+    <li><strong>Player chunk crossing</strong> — the player's <code>floorf(pos/16)</code> chunk index changes in <strong>x, z, or y</strong> (a Y-only crossing is a full recenter, AC-0234); camera-only moves never recenter
+      <span class="fn">(godot/player/player.gd:1611-1619)</span>.</li>
+    <li><strong>Recenter</strong> — <code>World.recenter()</code> moves the anchor (one chunk <em>ahead</em> on fast crossings, AC-0277), records the player Y (<code>last_wy</code>), re-bands / demotes / re-enters / frees chunk nodes, pre-warms the 5×5 queue, (re)fires the 5×5 gen burst, and starts a <strong>sliced walk</strong> that over the next frames <em>recomputes the entire entry queue</em> (WANT / STUB / MERGE_OLD / MERGE_WANT / MERGE_RING, atomic swap at finalize)
+      <span class="fn">(godot/world/world.gd:8321-8657, 8659-8703)</span>.</li>
+    <li><strong>The queue</strong> — one <em>entry per chunk-column</em> in <code>band_buckets</code> (bucketed by taxi); no score is ever stored — <code>_grid_score</code> is a pure function of the live anchor, live player slab, and live pending probes, so the very next pick after any recenter re-orders the whole queue for free
+      <span class="fn">(world.gd:4879-4890, 731-777)</span>.</li>
+    <li><strong>Per-frame pick</strong> — <code>_drain_build_queue</code> runs once per process frame: it draws a wall-clock-paced budget of <em>units</em> (1 unit = one gen enqueue or one slab mesh dispatch) and dispatches the lowest-scoring candidate to a lane
+      <span class="fn">(world.gd:6641-7035)</span>.</li>
+    <li><strong>Data lane</strong> — worker threads call C++ <code>AweGen.generate_resl(cx, cz, seed, 384, 126, skip, keep)</code> directly: a <strong>whole 384-column</strong>, all 24 slabs, in one call (the keep mask is always empty — the dormant AC-0237 seam); results land via <code>threadgen_poll</code> once per frame
+      <span class="fn">(world.gd:4936-4978, 5016-5098, 5195-5290)</span>.</li>
+    <li><strong>Banana pass + landing</strong> — on the main thread, after worker gen: the shore banana-tree post-process, then <code>c.slabs_landed(...)</code> — a reference handoff that bumps <code>data_gen</code>, which re-pends every slab in the build lane
+      <span class="fn">(world.gd:5272, 5281; godot/world/generator.gd:406-433; godot/world/chunk.gd:654-667)</span>.</li>
+    <li><strong>Build lane</strong> — one dispatch unit = <strong>exactly one slab</strong> of the picked column: <code>_build_unit_hslab</code> → <code>_mesh_dispatch_hslab</code> with its gates (no data → defer; in-flight dedup; TM cap; all 8 neighbors must hold data), the C++ <code>snap_rings</code> boundary snapshot, the scoped neighbor strips for <code>y ∈ [si·16−1, (si+1)·16]</code>, then <code>AweMesh.build_accs</code> on the shared pool
+      <span class="fn">(world.gd:6446-6461, 6319-6395)</span>.</li>
+    <li><strong>Mesh handoff</strong> — <code>threadmesh_poll</code> (capped at <code>stream_ho_cap</code> landings per frame) attaches the slab's <code>MeshInstance3D</code>s and stamps <code>high_stamps[si] = data_gen</code> — but the slab is <strong>hidden</strong>: the never-show-unlit rule
+      <span class="fn">(world.gd:5430-5603, 5706-5824)</span>.</li>
+    <li><strong>Lighting settle</strong> — every drain landing on an unsettled chunk re-marks <code>light_dirty</code>; the frame's flush loop re-meshes with <code>settle=true</code> (per-slab for partial columns, whole column when <code>mesh_built</code>); the flush landing sets <code>flush_slabs[si]</code> / <code>light_settled</code> and flips the slab <strong>visible</strong>. A landing in an already-settled chunk is <em>late</em>: un-settle, hide, re-arm (the 83cfcfe fix, KEEP)
+      <span class="fn">(world.gd:4403-4523, 5755-5779, 5752-5754)</span>.</li>
+    <li><strong>Visible at the right LOD</strong> — inside the high band the high-res slab shows (nothing renders while it is pending); outside it, the <strong>low wave</strong> paces coarse MED/LOW avg-color shells in the same (layer, taxi) disc order, and band crossings are free visibility flips (keep-all-LOD)
+      <span class="fn">(world.gd:3060-3199, 8261-8318)</span>.</li>
+    <li><strong>Persistence</strong> — a column is saved when it <em>leaves</em> the streaming set (evict) and on player save: worker-encoded <code>AWCC</code> v5 palettized blobs into 32×32 region files, main-thread-serialized commit, worker compaction on bloat; the read path is disk-first for every column
+      <span class="fn">(world.gd:8192-8204, 9194-9306, 9372-9490, 4939-4947)</span>.</li>
+  </ol>
+
+  <figure class="reveal">
+<svg viewBox="0 0 1160 470" role="img" aria-label="World streaming pipeline, end to end" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,Menlo,Consolas,monospace">
+  <defs><marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#6f6350"/></marker></defs>
+  <g font-size="12" fill="#e8ddc9">
+    <text x="10" y="24" fill="#6f6350" font-size="10">PLAYER</text>
+    <g><rect x="10" y="38" width="170" height="52" fill="#1c1712" stroke="#4a4133"/><text x="95" y="58" text-anchor="middle">chunk crossing</text><text x="95" y="74" text-anchor="middle" fill="#6f6350" font-size="10">floorf(pos/16) · x, z, or y</text><text x="95" y="86" text-anchor="middle" fill="#6f6350" font-size="9">player.gd:1611-1619</text></g>
+    <g><rect x="220" y="38" width="190" height="52" fill="#1c1712" stroke="#4a4133"/><text x="315" y="58" text-anchor="middle" fill="#d9a441">recenter</text><text x="315" y="74" text-anchor="middle" fill="#6f6350" font-size="10">anchor (+1 ahead) · last_wy</text><text x="315" y="86" text-anchor="middle" fill="#6f6350" font-size="9">world.gd:8321-8657</text></g>
+    <g><rect x="450" y="38" width="200" height="52" fill="#1c1712" stroke="#4a4133"/><text x="550" y="58" text-anchor="middle">sliced walk (5 phases)</text><text x="550" y="74" text-anchor="middle" fill="#6f6350" font-size="10">8 ms / 2048 units per frame</text><text x="550" y="86" text-anchor="middle" fill="#6f6350" font-size="9">WANT→STUB→MERGE*→finalize swap</text></g>
+    <g><rect x="690" y="38" width="200" height="52" fill="#1c1712" stroke="#4a4133"/><text x="790" y="58" text-anchor="middle" fill="#d9a441">the queue</text><text x="790" y="74" text-anchor="middle" fill="#6f6350" font-size="10">one entry per column · no score stored</text><text x="790" y="86" text-anchor="middle" fill="#6f6350" font-size="9">band_buckets · live (layer, taxi)</text></g>
+    <g><rect x="930" y="38" width="200" height="52" fill="#1c1712" stroke="#4a4133"/><text x="1030" y="58" text-anchor="middle">per-frame pick</text><text x="1030" y="74" text-anchor="middle" fill="#6f6350" font-size="10">_drain_build_queue · unit budget</text><text x="1030" y="86" text-anchor="middle" fill="#6f6350" font-size="9">world.gd:6641-7035</text></g>
+
+    <text x="10" y="150" fill="#58a8a0" font-size="10">DATA LANE — column-atomic (one pick = whole 384-column)</text>
+    <g><rect x="10" y="164" width="200" height="52" fill="#1c1712" stroke="#4a4133"/><text x="110" y="184" text-anchor="middle" fill="#58a8a0">AweGen.generate_resl</text><text x="110" y="200" text-anchor="middle" fill="#6f6350" font-size="10">worker thread · C++</text><text x="110" y="212" text-anchor="middle" fill="#6f6350" font-size="9">7 fields · 24 slabs · world.gd:5093</text></g>
+    <g><rect x="250" y="164" width="200" height="52" fill="#1c1712" stroke="#4a4133"/><text x="350" y="184" text-anchor="middle">banana pass + landing</text><text x="350" y="200" text-anchor="middle" fill="#6f6350" font-size="10">main thread · slabs_landed</text><text x="350" y="212" text-anchor="middle" fill="#6f6350" font-size="9">data_gen bump re-pends all slabs</text></g>
+    <g><rect x="490" y="164" width="200" height="52" fill="#1c1712" stroke="#4a4133"/><text x="590" y="184" text-anchor="middle" fill="#6f6350">disk-first alt</text><text x="590" y="200" text-anchor="middle" fill="#6f6350" font-size="10">_io_read_worker (LOW)</text><text x="590" y="212" text-anchor="middle" fill="#6f6350" font-size="9">saved column → no gen · world.gd:9340</text></g>
+
+    <text x="10" y="272" fill="#7fa0c4" font-size="10">BUILD LANE — slab-granular (one pick = one 16³ slab)</text>
+    <g><rect x="10" y="286" width="200" height="52" fill="#1c1712" stroke="#4a4133"/><text x="110" y="306" text-anchor="middle" fill="#7fa0c4">AweMesh.build_accs</text><text x="110" y="322" text-anchor="middle" fill="#6f6350" font-size="10">worker thread · C++ · one slab si</text><text x="110" y="334" text-anchor="middle" fill="#6f6350" font-size="9">8-neighbor gate · scoped strips</text></g>
+    <g><rect x="250" y="286" width="200" height="52" fill="#1c1712" stroke="#4a4133"/><text x="350" y="306" text-anchor="middle">handoff — HIDDEN</text><text x="350" y="322" text-anchor="middle" fill="#6f6350" font-size="10">attach + high_stamps[si]</text><text x="350" y="334" text-anchor="middle" fill="#6f6350" font-size="9">capped at stream_ho_cap /frame</text></g>
+    <g><rect x="490" y="286" width="200" height="52" fill="#1c1712" stroke="#4a4133"/><text x="590" y="306" text-anchor="middle" fill="#d9a441">lighting flush</text><text x="590" y="322" text-anchor="middle" fill="#6f6350" font-size="10">settle=true re-mesh · 1 col/frame</text><text x="590" y="334" text-anchor="middle" fill="#6f6350" font-size="9">late landing → un-settle + re-arm</text></g>
+
+    <text x="10" y="384" fill="#8a9a5b" font-size="10">RENDER + DISK</text>
+    <g><rect x="10" y="398" width="200" height="52" fill="#1c1712" stroke="#4a4133"/><text x="110" y="418" text-anchor="middle" fill="#8a9a5b">visible slab @ LOD</text><text x="110" y="434" text-anchor="middle" fill="#6f6350" font-size="10">high / MED 8³ / LOW 4³</text><text x="110" y="446" text-anchor="middle" fill="#6f6350" font-size="9">low wave · free band flips</text></g>
+    <g><rect x="250" y="398" width="200" height="52" fill="#1c1712" stroke="#4a4133"/><text x="350" y="418" text-anchor="middle">chunk_io v5 blob</text><text x="350" y="434" text-anchor="middle" fill="#6f6350" font-size="10">save on EVICT + player save</text><text x="350" y="446" text-anchor="middle" fill="#6f6350" font-size="9">region file · worker encode/compact</text></g>
+    <g><rect x="490" y="398" width="200" height="52" fill="#1c1712" stroke="#4a4133"/><text x="590" y="418" text-anchor="middle" fill="#c96a3d">evict + re-entry</text><text x="590" y="434" text-anchor="middle" fill="#6f6350" font-size="10">two rings out × 2 recenters → free</text><text x="590" y="446" text-anchor="middle" fill="#6f6350" font-size="9">re-cross → disk read or regen</text></g>
+  </g>
+  <g stroke="#6f6350" stroke-width="1.4" fill="none" marker-end="url(#ar)">
+    <line x1="180" y1="64" x2="216" y2="64"/>
+    <line x1="410" y1="64" x2="446" y2="64"/>
+    <line x1="650" y1="64" x2="686" y2="64"/>
+    <line x1="890" y1="64" x2="926" y2="64"/>
+    <path d="M 1030 90 L 1030 130 L 110 130 L 110 160"/>
+    <line x1="210" y1="190" x2="246" y2="190"/>
+    <line x1="450" y1="190" x2="486" y2="190"/>
+    <path d="M 590 216 L 590 250 L 110 250 L 110 282"/>
+    <line x1="210" y1="312" x2="246" y2="312"/>
+    <line x1="450" y1="312" x2="486" y2="312"/>
+    <path d="M 590 338 L 590 368 L 110 368 L 110 394"/>
+    <line x1="210" y1="424" x2="246" y2="424"/>
+    <line x1="450" y1="424" x2="486" y2="424"/>
+    <path d="M 690 424 L 1120 424 L 1120 94" stroke-dasharray="4 4"/>
+  </g>
+</svg>
+    <figcaption><b>FIG 1.1</b> — The whole pipeline. Top row: the main-thread control loop (crossing → recenter → sliced walk → queue → per-frame pick). Bottom: the two worker lanes — <b>data</b> is column-atomic (one pick produces all 24 slabs), <b>build</b> is slab-granular (one pick produces one 16³ slab). The dashed line is the evict/re-entry loop that makes persistence work: columns leave on save, return from disk.</figcaption>
+  </figure>
+
+  <figure class="reveal">
+<svg viewBox="0 0 1160 190" role="img" aria-label="Recenter walk phases" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,Menlo,Consolas,monospace">
+  <defs><marker id="ar2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#6f6350"/></marker></defs>
+  <g font-size="11.5" fill="#e8ddc9">
+    <g><rect x="10" y="52" width="140" height="62" fill="#1c1712" stroke="#4a4133"/><text x="80" y="72" text-anchor="middle" fill="#d9a441">recenter()</text><text x="80" y="88" text-anchor="middle" fill="#6f6350" font-size="9.5">chunks walk: reband /</text><text x="80" y="100" text-anchor="middle" fill="#6f6350" font-size="9.5">demote / reentry / free</text><text x="80" y="112" text-anchor="middle" fill="#6f6350" font-size="9.5">+ pre-warm 5×5 + burst</text></g>
+    <g><rect x="190" y="52" width="130" height="62" fill="#1c1712" stroke="#4a4133"/><text x="255" y="72" text-anchor="middle">0 · WANT</text><text x="255" y="88" text-anchor="middle" fill="#6f6350" font-size="9.5">re-collect EVERY</text><text x="255" y="100" text-anchor="middle" fill="#6f6350" font-size="9.5">in-set owing column</text><text x="255" y="112" text-anchor="middle" fill="#6f6350" font-size="9.5">(fresh)</text></g>
+    <g><rect x="360" y="52" width="130" height="62" fill="#1c1712" stroke="#4a4133"/><text x="425" y="72" text-anchor="middle">1 · STUB</text><text x="425" y="88" text-anchor="middle" fill="#6f6350" font-size="9.5">create missing</text><text x="425" y="100" text-anchor="middle" fill="#6f6350" font-size="9.5">chunk nodes</text></g>
+    <g><rect x="530" y="52" width="130" height="62" fill="#1c1712" stroke="#4a4133"/><text x="595" y="72" text-anchor="middle">2 · MERGE_OLD</text><text x="595" y="88" text-anchor="middle" fill="#6f6350" font-size="9.5">drop out-of-set /</text><text x="595" y="100" text-anchor="middle" fill="#6f6350" font-size="9.5">re-bucket carry</text><text x="595" y="112" text-anchor="middle" fill="#6f6350" font-size="9.5">by new taxi</text></g>
+    <g><rect x="700" y="52" width="130" height="62" fill="#1c1712" stroke="#4a4133"/><text x="765" y="72" text-anchor="middle">3 · MERGE_WANT</text><text x="765" y="88" text-anchor="middle" fill="#6f6350" font-size="9.5">fresh entries</text><text x="765" y="100" text-anchor="middle" fill="#6f6350" font-size="9.5">push_front (ahead</text><text x="765" y="112" text-anchor="middle" fill="#6f6350" font-size="9.5">of the carry)</text></g>
+    <g><rect x="870" y="52" width="130" height="62" fill="#1c1712" stroke="#4a4133"/><text x="935" y="72" text-anchor="middle">4 · MERGE_RING</text><text x="935" y="88" text-anchor="middle" fill="#6f6350" font-size="9.5">band-3 data_only</text><text x="935" y="100" text-anchor="middle" fill="#6f6350" font-size="9.5">entries (collar +</text><text x="935" y="112" text-anchor="middle" fill="#6f6350" font-size="9.5">circle ring)</text></g>
+    <g><rect x="1040" y="52" width="110" height="62" fill="#1c1712" stroke="#d9a441"/><text x="1095" y="72" text-anchor="middle" fill="#d9a441">finalize</text><text x="1095" y="88" text-anchor="middle" fill="#6f6350" font-size="9.5">ATOMIC swap +</text><text x="1095" y="100" text-anchor="middle" fill="#6f6350" font-size="9.5">flags + rescore kick</text></g>
+  </g>
+  <g stroke="#6f6350" stroke-width="1.4" fill="none" marker-end="url(#ar2)">
+    <line x1="150" y1="83" x2="186" y2="83"/>
+    <line x1="320" y1="83" x2="356" y2="83"/>
+    <line x1="490" y1="83" x2="526" y2="83"/>
+    <line x1="660" y1="83" x2="696" y2="83"/>
+    <line x1="830" y1="83" x2="866" y2="83"/>
+    <line x1="1000" y1="83" x2="1036" y2="83"/>
+  </g>
+  <text x="10" y="30" font-size="10.5" fill="#6f6350">_recenter_slice: ≤ 8 ms OR ≤ 2048 walk-units per frame (world.gd:8659-8703) — the walk SPANS FRAMES at R50; a new recenter parks an escalation, never discards.</text>
+  <text x="10" y="150" font-size="10.5" fill="#6f6350">Rule 1 ("every crossing recomputes the ENTIRE queue") IS this walk: WANT re-collects, MERGE_OLD carries only meshed leftovers, finalize swaps band_buckets and rebuilds queued_keys flag⇔entry (world.gd:8911-8922).</text>
+</svg>
+    <figcaption><b>FIG 1.2</b> — The recenter walk, phase by phase. WANT is the only phase that adds work; MERGE_* only drops or re-buckets; finalize is the only point where the live queue changes — which is why a partially-walked state never reaches the drain.</figcaption>
+  </figure>
+
+  <div class="callout note reveal">
+    <b>Two structural facts the redesign turns on</b>
+    (1) <strong>Data is column-atomic</strong> — one <code>generate_resl</code> produces all 24 slabs and data lands only as whole columns
+    (<code>c.slabs_landed</code>, world.gd:5281); the slab <code>keep</code> mask exists in C++ but is always passed empty (world.gd:5028-5031).
+    (2) <strong>Meshing is already slab-granular end to end</strong> — worker scopes on <code>si</code>, the handoff attaches per slab, probes and stamps are per-slab
+    (world.gd:631-654, 5731-5732). Everything downstream of the data lane is ready for a Y-disc; the data lane and the <em>order shape</em> of the queue are the two constraints (see §7).
+  </div>
+</section>
+<!-- ============ 02 TERRAIN ============ -->
+<section id="s02">
+  <div class="sec-head reveal"><span class="sec-no">02</span><h2>Terrain generation</h2><span class="rule"></span></div>
+  <p class="reveal">
+    Terrain data generation is a single pure function of <code>(cx, cz, seed)</code> — plus
+    <code>hmax=384</code>, <code>sea=126</code>, and two optional knobs: a lazy-skip flag and a
+    per-slab keep mask. The entire generator lives in C++ as the <code>AweGen</code> GDExtension class
+    (<code>gdext/src/gen.cpp</code>, 1022 lines). Since AC-0208 there is <strong>no GDScript generation
+    path at all</strong>: the old ~370-line GDScript body was deleted, the <code>AWECRAFT_GENCPP</code>
+    kill switch removed, and <code>Game._ready</code> fails fast if the C++ library is missing
+    <span class="fn">(godot/world/generator.gd:46-63)</span>. The GDScript <code>WorldGen</code> class is a thin
+    facade: it forwards to <code>AweGen.generate_flat</code>, adds the per-face (sphere) transform
+    <code>generate_face</code>, keeps the 2D proxy queries, and runs the post-generated
+    <strong>banana-tree pass</strong>.
+  </p>
+
+  <h3>2.1 The AC-015 density model</h3>
+  <p>
+    The current terrain model is the <strong>MC-1.18-style coarse 4×8×4 3D density field</strong>
+    <span class="fn">(gdext/src/gen.cpp:1-64)</span>: one per-cell density field
+    <code>d(x,y,z) = S_ramp((H(x,z) − y + 0.5)/R) + A(y)·(C(x,y,z) − 0.5)</code> produces the
+    surface, <em>all</em> caves, and the deep lava lakes from a single solid/air test
+    (<code>d &gt; 0</code> solid). There is no heightmap-plus-carve anymore.
+  </p>
+  <p>
+    The field is built on a coarse lattice: 7×9×7 = <strong>441 points per chunk</strong> (a 4×8×4 cell
+    grid of 4-block horizontal / 48-block vertical cells, plus a 1-cell margin per axis so trees
+    rooted up to 2 blocks outside the chunk can still grow leaves in), with <strong>7 independent
+    coarse fields</strong> sampled by 2-octave <code>AweNoise.fbm3</code> per lattice point, then
+    trilinearly interpolated per cell <span class="fn">(gen.cpp:292-311)</span>.
+  </p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Field</th><th>Purpose</th><th>Salt</th><th>Scales (x,y,z)</th><th>Domain offsets</th><th>Notes / where</th></tr></thead>
+    <tbody>
+      <tr><td class="hl">cave</td><td class="nm">All cave carving (cheese)</td><td>seed+301</td><td>16, 10, 16</td><td>0, 0, 0</td><td><span class="fn">gen.cpp:480</span> — <strong>skipped entirely when skip≠0</strong>; also the <code>density_cave</code> probe</td></tr>
+      <tr><td class="hl">ore 1</td><td class="nm">Diamond ore</td><td>seed+77</td><td>7, 7, 7</td><td>0, 0, 0</td><td><span class="fn">gen.cpp:481</span> — &gt;0.78, y&lt;16</td></tr>
+      <tr><td class="hl">ore 2</td><td class="nm">Iron ore</td><td>seed+88</td><td>9, 9, 9</td><td>900, 0, 900</td><td><span class="fn">gen.cpp:482</span> — &gt;0.8, y&lt;42</td></tr>
+      <tr><td class="hl">ore 3</td><td class="nm">Coal ore</td><td>seed+99</td><td>6, 6, 6</td><td>1700, 0, 1700</td><td><span class="fn">gen.cpp:483</span> — &gt;0.82, y&lt;60</td></tr>
+      <tr><td class="hl">surface-c</td><td class="nm">Continental height</td><td>seed</td><td>220, 64, 220</td><td>0, 0, 0</td><td><span class="fn">gen.cpp:487</span> — 3D now (AC-015 replaced the 2D heightmap)</td></tr>
+      <tr><td class="hl">surface-h</td><td class="nm">Hill detail</td><td>seed+7</td><td>70, 64, 70</td><td>333, 0, 333</td><td><span class="fn">gen.cpp:488</span></td></tr>
+      <tr><td class="hl">surface-r</td><td class="nm">Ridge / mountain mask</td><td>seed+13</td><td>300, 64, 300</td><td>500, 0, 500</td><td><span class="fn">gen.cpp:489</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    The lattice y-cell is <code>ystep = hmax/8 = 48</code> blocks
+    <span class="fn">(gen.cpp:459-465)</span>; the <code>64</code> in the scale column of the surface
+    fields is <code>SURF_YSCALE</code>, their <em>sample divisor</em>. Each field is a
+    <code>std::array&lt;double, 441&gt;</code>; 2 octaves are hardcoded
+    <span class="fn">(gen.cpp:307)</span>. Per chunk when not skipped: 3087 fbm3 lattice points ≈ 6174
+    vnoise3 samples <span class="fn">(tasks/AC-0215/AC-0215-results.html:19)</span> — the dominant cost of generation,
+    and it is <strong>chunk-scoped, not slab-scoped</strong>.
+  </p>
+
+  <h3>2.2 The surface formula (per column, 256 columns)</h3>
+  <p>
+    <code>surface_h</code> <span class="fn">(gen.cpp:345-370)</span>: trilinear-sample the three surface fields
+    <strong>at the sea-level slice</strong> <code>gy = 126/48 = 2.625</code>
+    <span class="fn">(gen.cpp:349)</span>; <strong>affine-calibrate</strong> each sample onto the old AC-0091 2D
+    distribution <span class="fn">(gen.cpp:354-356</span>:
+    <code>cc = 0.4219 + (c−0.3681)·(0.1280/0.0467)</code>,
+    <code>hc = 0.4964 + (h−0.5112)·(0.1361/0.1107)</code>,
+    <code>rc = 0.4292 + (r−0.5743)·(0.1366/0.1443)</code> — constants measured over a 640×640 block
+    area, seed 44); then the AC-0091 remap
+    <code>y = 105.2 + cc·36.4 + hc·52.0</code> plus the mountain boost
+    <code>if rc &gt; 0.62: y += (rc−0.62)·390.0</code> <span class="fn">(gen.cpp:357-359)</span>; then the
+    <strong>exact spawn pad</strong> <span class="fn">(gen.cpp:360-368)</span>: d≤6 from (8,8) ⇒ y = SPAWN_H = 136
+    exactly; 6&lt;d≤10 ⇒ smoothstep blend back to 136; finally
+    <code>clampi(floor(y), 3, 300)</code> <span class="fn">(gen.cpp:369)</span>. Biome comes from two 2D fbm2s on the
+    same 260-block scale: <code>t = fbm2(x/260+900, z/260+900, seed+21, 3)·2−1</code>,
+    <code>m = fbm2(x/260+1700, z/260+1700, seed+33, 3)·2−1</code>
+    <span class="fn">(gen.cpp:505-506)</span> → bcode: 0 snow (t&lt;−0.25), 1 desert (t&gt;0.35 ∧ m&lt;0.1),
+    2 forest (m&gt;0.25), 3 plains <span class="fn">(gen.cpp:508-515)</span>.
+  </p>
+
+  <h3>2.3 The density test and the top-down scan</h3>
+  <p>
+    Per column <span class="fn">(gen.cpp:537-585)</span>: if <code>skip</code> ⇒ <code>he = H</code>, no scan, no cave field
+    read, no lava pockets <span class="fn">(gen.cpp:552-558)</span>. Otherwise allocate
+    <code>solidf[hmax]</code> and scan <strong>top-down</strong> from <code>top = min(H+11, hmax−1)</code> down to
+    y=1 <span class="fn">(gen.cpp:568-571</span>; the +11 bound is proven air above because the ramp clamps at
+    ±1 and <code>|CAVE_AMP·(cave−0.5)| &lt; 1</code>, comment gen.cpp:561-563); per y: skip ungenerated
+    slabs <span class="fn">(gen.cpp:573-574)</span>, <code>cave = tril(f_cave, gx, y/48, gz)</code>,
+    <code>s = dens_at(H, y, cave, pad) &gt; 0</code> <span class="fn">(gen.cpp:575-576)</span>. <code>he</code> = topmost solid; a
+    fully-caved column falls back to <code>he = 0</code> (bedrock is the "surface",
+    <span class="fn">gen.cpp:581-582</span>).
+  </p>
+  <ul>
+    <li><code>dens_at</code> <span class="fn">(gen.cpp:399-404)</span> = <code>density_ramp(H, y)</code> + (non-pad only) <code>cave_amp(H,y)·(cave−0.5)</code>.</li>
+    <li><code>density_ramp</code> <span class="fn">(gen.cpp:376-385)</span>: the quintic spline <code>t = (H+0.5−y)/10</code> clamped to ±1, mapped through the same quintic as <code>AweNoise._fade</code> to [−1,+1] (solid below, air above, C² at the clamps).</li>
+    <li><code>cave_amp</code> <span class="fn">(gen.cpp:390-395)</span> = <code>1.8 · (1 + max(0, H−y−10)/8)</code> — deep caves widen downward (MC-1.18 cheese).</li>
+    <li>Params: <code>CAVE_AMP 1.8, R_BAND 10.0, DEEP_GROW 8.0, SURF_YSCALE 64.0, GY_CELLS 8</code> <span class="fn">(gen.cpp:230-235)</span>.</li>
+  </ul>
+
+  <h3>2.4 Column fill rules (per slab, per cell)</h3>
+  <p>
+    Block emit <span class="fn">(gen.cpp:586-625)</span>, looping slabs and y (skipping ungenerated slabs,
+    gen.cpp:592-594); the cell is written to <code>flat[(y&lt;&lt;8) | (lz&lt;&lt;4) | lx]</code>
+    <span class="fn">(gen.cpp:622)</span>:
+  </p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Condition</th><th>Block</th><th>Where</th></tr></thead>
+    <tbody>
+      <tr><td class="nm"><code>y == 0</code> (only when slab 0 is generated)</td><td>bedrock (11)</td><td><span class="fn">gen.cpp:597-598</span></td></tr>
+      <tr><td class="nm"><code>y ≥ he+1 ∧ y ≤ sea ∧ he &lt; sea</code> — the aquifer fills from the effective surface up to SEA=126, <em>including underwater cave air</em></td><td>water (5)</td><td><span class="fn">gen.cpp:601-602</span></td></tr>
+      <tr><td class="nm"><code>y == he</code> — surface: grass (1); sand (4) in desert; snow-grass (12) in snow; <strong>beach sand</strong> if <code>he ≤ sea+1 ∧ biome ≠ desert</code></td><td>surface block</td><td><span class="fn">gen.cpp:603-611</span></td></tr>
+      <tr><td class="nm"><code>y ≥ he−3 ∧ solid</code></td><td>dirt (2), or sand in desert</td><td><span class="fn">gen.cpp:612-613</span></td></tr>
+      <tr><td class="nm"><code>!solid</code> — cave air; or <strong>lava</strong> (24) in deep cave pockets <code>!pad ∧ y &lt; 8</code></td><td>air / lava</td><td><span class="fn">gen.cpp:614-617</span></td></tr>
+      <tr><td class="nm">otherwise — the stone/ore chain: diamond (16) if <code>y&lt;16 ∧ tril(f_ore1)&gt;0.78</code>; iron (15) if <code>y&lt;42 ∧ tril(f_ore2)&gt;0.8</code>; coal (14) if <code>y&lt;60 ∧ tril(f_ore3)&gt;0.82</code>; obsidian (25) if <code>y&lt;10 ∧ hash3i(x,y,z,seed+333)&lt;0.02</code>; else stone (3)</td><td>stone_ore</td><td><span class="fn">gen.cpp:619, 525-535</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    <strong>Trees</strong> <span class="fn">(gen.cpp:629-740)</span>: a 20×20 neighborhood pass
+    (<code>tx, tz ∈ bx−2 … bx+17</code>) — the 2-ring margin lets trees rooted in neighbor chunks grow
+    leaves into this one (the field margin covers it). Gate
+    <code>hash2i(tx,tz,seed+55) &lt; 0.14</code>; no trees where <code>H2 ≤ sea+1</code>; biome density
+    forest 0.14 / plains-snow 0.02 / desert 0, second gate <code>hv &lt; dens</code>; ground cell must be
+    solid per <code>solid_ids[]</code>; trunk height roll
+    <code>tth = 4 + floor(hash2i(tx,tz,seed+66)·3)</code> ∈ {4,5,6}; trunk = <code>B_LOG</code> (6) in empty
+    cells only, and <strong>in a generated slab</strong> (<code>slab_kept</code>); canopy radius 2 below/at the
+    top ring and 1 above (rad-2 and top diagonals skipped), <code>B_LEAVES</code> (7) in empty cells
+    only, same slab guards.
+    <strong>Flowers</strong> <span class="fn">(gen.cpp:742-759)</span>: per column with effective surface
+    <code>fh &gt; sea ∧ fh &lt; hmax−2</code>, whose <code>fh+1</code> cell is in a generated slab, if the surface
+    is grass and <code>hash2i(bx+lx, bz+lz, seed+777) &lt; 0.02</code> write
+    <code>hash2i(…, seed+778) &lt; 0.5 ? rose(18) : dandelion(19)</code> one cell above.
+  </p>
+
+  <h3>2.5 generate_flat vs generate_resl</h3>
+  <p>
+    The generator's two output formats: the <strong>flat column</strong> — a 98,304-byte
+    <code>PackedByteArray</code>, index <code>(y&lt;&lt;8)|(lz&lt;&lt;4)|lx</code>
+    <span class="fn">(gen.cpp:520)</span> — and the <strong>palettized slab form</strong> ("resl": an array of 24
+    slab entries, each <code>null</code> (all-air) or a dict <code>{n, b, p, i, nz, nc, bs}</code>).
+    <code>generate_resl</code> <span class="fn">(gen.cpp:994-1003)</span> wraps
+    <code>gen_flat</code> <span class="fn">(gen.cpp:457-763)</span> +
+    <code>palettize_slabs</code> <span class="fn">(gen.cpp:800-888)</span> and returns
+    <code>[data_slabs(24), fl_slabs(24, all null — gen produces no fluid)]</code> — the exact
+    2-element shape the threadgen handoff expects
+    <span class="fn">(world.gd:5209, 5233-5236)</span>. In the live game the flat form
+    <strong>never reaches the main thread</strong>: workers call <code>generate_resl</code> directly
+    <span class="fn">(world.gd:5093, 5121, 5232-5290)</span>.
+  </p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Field</th><th>Meaning</th><th>Where</th></tr></thead>
+    <tbody>
+      <tr><td class="nm"><code>n</code></td><td>palette cardinality. <code>n==1</code> = uniform fill slab; <code>n==2..16</code> = paletted; <code>n==0</code> = raw 8-bit fallback</td><td><span class="fn">awe_common.h:2-6, gen.cpp:835-884</span></td></tr>
+      <tr><td class="nm"><code>b</code></td><td>bits per index — 0 for n==1; <code>slab_bits_for(n) = ceil(log2(n))</code> (1..4) for paletted; 8 for raw</td><td><span class="fn">gen.cpp:769-774</span></td></tr>
+      <tr><td class="nm"><code>p</code></td><td>palette of block ids. Sorted ascending for n≥2; single id for n==1; empty for n==0</td><td><span class="fn">gen.cpp:849-853, 841, 875</span></td></tr>
+      <tr><td class="nm"><code>i</code></td><td>index stream — empty for n==1; for n≥2 the 4096 cell indices MSB-first bit-packed at b bits (cell order = slab-local <code>(y&lt;&lt;8)|(lz&lt;&lt;4)|lx</code>); for n==0 the raw 4096 bytes</td><td><span class="fn">gen.cpp:776-798, 876-879</span></td></tr>
+      <tr><td class="nm"><code>nz</code></td><td>count of non-zero cells</td><td><span class="fn">gen.cpp:825-826, 844, 867, 880</span></td></tr>
+      <tr><td class="nm"><code>nc</code></td><td>count of "clutter" cells (rose 18 / dandelion 19) — feeds the avg-LOD clutter-as-air rule</td><td><span class="fn">gen.cpp:817-829, awe_common.h:53-65</span></td></tr>
+      <tr><td class="nm"><code>bs</code></td><td>512-byte solid/air bitset, bit k (byte k&gt;&gt;3, bit k&amp;7, LSB-first) set iff cell k non-air — the meshing/lighting fast path</td><td><span class="fn">gen.cpp:818-827, 846, 869, 882; awe_common.h:27-51</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    The v4 codec contract (<code>null | {n,b,p,i}</code>) is shared with <code>chunk_io.cpp</code>;
+    <code>palettize_slabs</code> is identical to <code>ChunkIOPalette::palettize_flat</code>, so gen
+    output and on-disk decode use the same bytes — the optional <code>nz/nc/bs</code> fields ride
+    along and are dropped/recomputed by the disk codec
+    <span class="fn">(gen.cpp:766; awe_common.h:1-11)</span>. Decode:
+    <code>awe_common.cpp:73-93</code> <code>slab_view_one</code> (uniform fill / raw copy / else
+    <code>slab_unpack</code> with fast 1/2/3/4-bit lanes).
+  </p>
+  <div class="callout note">
+    <b>Cost of one generate_resl</b>
+    Single-threaded per call: 7 field builds (441 lattice points × 2-octave fbm3 =
+    <strong>3087 fbm3 ≈ 6174 vnoise3 samples</strong> per chunk when not skipped) + 256 × (trilinear
+    surface_h + 2×fbm2 biome) + 256-column top-down scan + per-cell fill + 20×20 veg + 24-slab
+    palettize. Solo main-thread: ~1.5 ms/chunk (GENMS 36-39 for the 25-chunk genhash set);
+    worker-pool comments record 120-320 ms/task (allocator/bandwidth bound at 6-wide) — see open
+    questions, §9. <code>Thread safety</code>: <code>AweGen</code> is a <code>RefCounted</code> with const
+    methods and no instance state; concurrent pool calls are safe (process-wide atomics only,
+    gen.cpp:411-427).
+  </div>
+
+  <h3>2.6 The banana post-process (post-landing, main thread)</h3>
+  <p>
+    <code>apply_banana_resl</code> <span class="fn">(generator.gd:406-433)</span>: cheap prefilter — any
+    <code>B_SAND</code> in any slab's palette/index bytes? If not, no-op. If yes: expand all 24 slabs
+    to a flat 96 KB column via C++ <code>ChunkIOPalette.slabs_flat</code>, run the flat pass
+    <code>apply_banana_trees</code> <span class="fn">(generator.gd:291-398)</span>: per-column shore summary scan
+    <span class="fn">(generator.gd:256-284</span>: topmost non-air, its id, topmost sand in shore band
+    [118,130]), then plant where the top is dirt/grass at y ∈ [127,130], biome not forest,
+    <code>hash2i(wx, wz, seed+919) &lt; 0.025</code>, sand within Chebyshev 3 and a water column within
+    Chebyshev 4 (in-chunk only); tree shape = the C++ tree shape with the same seed+66 height roll
+    plus 2 hanging <code>B_BANANA</code> (28) cells written <em>before</em> the canopy. Re-palettize via
+    C++ only if a tree actually planted; <code>resl[0]</code> is replaced in place. Why post-process:
+    <code>WorldGen.generate</code> stays byte-unaffected for the genhash gate, and the pass is only
+    meaningful on <em>landed</em> data (shore evidence can cross the aquifer surface, which only
+    exists in the generated column).
+  </p>
+
+  <h3>2.7 Determinism + the salt table</h3>
+  <p>
+    Everything is <strong>bit-deterministic</strong>. No RNG, no time, no iteration-order dependence, no
+    cross-column state: every per-cell value comes from either trilinear interpolation of the coarse
+    fields (pure fbm3 of world lattice coords + salt) or direct <code>hash2i</code>/<code>hash3i</code>
+    of world coords + salt. A regenerated slab is bit-exact because "no cross-slab state exists"
+    <span class="fn">(gen.cpp:451-455)</span>; neighbor-chunk influence is <em>input</em> (the 1-cell field
+    margin + the 20×20 tree neighborhood), not shared mutable state.
+  </p>
+  <ul>
+    <li><strong>Bit-exact C++ port</strong>: <code>hash2i/hash3i/fade/lerp/vnoise2/vnoise3/fbm2/fbm3</code> in gen.cpp:117-201 are bit-for-bit ports of <code>godot/core/noise.gd:4-88</code> (same op order, f64, i64/i32 integer hash, <code>lerp = a + (b−a)·t</code>), compiled <code>-ffp-contract=off</code> so no FMA contraction <span class="fn">(gen.cpp:55-59)</span>. Verified by the <code>AWECRAFT_LOGIC=genprobe</code> arm: 4700+ noise samples compared for exact f64 equality <span class="fn">(harness.gd:16090-16184)</span>.</li>
+    <li><strong>The genhash gate</strong>: <code>AWECRAFT_LOGIC=genhash</code> generates the 5×5 around the origin and prints MD5 per column <span class="fn">(harness.gd:1024-1039)</span>. Current accepted baseline (post-AC-0261): <code>GENHASH 0 0 = 80b904c0e5f085eef1e839459058c706</code> <span class="fn">(godot/CONTINUITY.archive.md:357)</span>. Any terrain change must re-baseline it deliberately.</li>
+    <li><strong>The keep-mask A==B gate</strong>: <code>keep</code> empty must produce output bit-identical to pre-AC-0237 generation <span class="fn">(gen.cpp:441-444, 971-975; world.gd:5028-5030)</span>.</li>
+    <li><strong><code>skip</code> is not part of the terrain contract</strong>: <code>skip=1</code> deliberately produces a <em>different</em> (cave-free) column for offscreen interior chunks — it's a fidelity knob, and those chunks are expected to be regenerated full later <span class="fn">(gen.cpp:66-81)</span>.</li>
+  </ul>
+  <p>
+    <strong>No hash chains</strong>: no generated value feeds another salted hash — every field is an
+    independent function of (world coords, seed+salt). The only "chain" is structural:
+    <code>he</code> (scan output) drives surface/dirt/aquifer/flower placement, and
+    <code>heff</code> (scan output) drives tree/flower bases.
+  </p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Salt / constant</th><th>Used for</th><th>Where</th></tr></thead>
+    <tbody>
+      <tr><td class="hl">seed (base)</td><td>surface-c field</td><td><span class="fn">gen.cpp:487</span></td></tr>
+      <tr><td class="hl">seed+7 / +13</td><td>surface-h / surface-r fields</td><td><span class="fn">gen.cpp:488-489</span></td></tr>
+      <tr><td class="hl">seed+21 / +33</td><td>biome temperature t / moisture m</td><td><span class="fn">gen.cpp:505-506</span></td></tr>
+      <tr><td class="hl">seed+55</td><td>tree gate <code>hash2i &lt; 0.14</code></td><td><span class="fn">gen.cpp:635</span></td></tr>
+      <tr><td class="hl">seed+66</td><td>trunk-height roll <code>4 + floor(hash·3)</code> (banana pass reuses it)</td><td><span class="fn">gen.cpp:705; generator.gd:354</span></td></tr>
+      <tr><td class="hl">seed+77 / +88 / +99</td><td>diamond / iron / coal ore fields</td><td><span class="fn">gen.cpp:481-483</span></td></tr>
+      <tr><td class="hl">seed+301</td><td>cave field (scales 16/10/16); also the density_cave probe</td><td><span class="fn">gen.cpp:480, 967-969</span></td></tr>
+      <tr><td class="hl">seed+333</td><td>obsidian per-cell <code>hash3i &lt; 0.02</code> (y&lt;10)</td><td><span class="fn">gen.cpp:532</span></td></tr>
+      <tr><td class="hl">seed+777 / +778</td><td>flower gate / species (rose vs dandelion)</td><td><span class="fn">gen.cpp:754-755</span></td></tr>
+      <tr><td class="hl">+i·101 per octave</td><td>fbm octave salt</td><td><span class="fn">gen.cpp:181, 195; noise.gd:71, 84</span></td></tr>
+      <tr><td class="hl">seed+919 (BANANA_SALT)</td><td>banana-tree roll <code>hash2i &lt; 0.025</code></td><td><span class="fn">generator.gd:31, 313</span></td></tr>
+      <tr><td class="hl">seed ^ (face·1000003)</td><td>per-face terrain salt (sphere model)</td><td><span class="fn">generator.gd:216; world.gd:10442</span></td></tr>
+      <tr><td class="hl">face·64 chunks</td><td>per-face 2D domain offset (1024-cell face grid)</td><td><span class="fn">generator.gd:217</span></td></tr>
+      <tr><td class="hl">spawn pad (8,8)</td><td>r≤6 exact → 136; 6&lt;r≤10 smoothstep blend; r≤10 box gate</td><td><span class="fn">gen.cpp:224-226, 273-279, 360-368</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="callout">
+    <b>The 2D proxy caveat</b>
+    <code>WorldGen.terrain_height</code> <span class="fn">(generator.gd:74-87)</span> is a 2D fbm2
+    <em>approximation</em> of the C++ <code>surface_h</code> (same remap formula and c/h/r salts, but
+    sampled directly in 2D with 3/4/3 octaves instead of trilinear over the 3D coarse slice with 2).
+    Per-cell values differ (only the distribution is matched, by the calibration constants). It is
+    used for spawn height <span class="fn">(world.gd:9590)</span>, the throwaway skip-cam eye
+    <span class="fn">(world.gd:5003)</span>, and many harness arms — <strong>not</strong> for actual terrain. The
+    only exact height contract is the spawn pad.
+  </div>
+
+  <h3>2.8 The per-face (sphere) model</h3>
+  <p>
+    AC-0143 models the planet as a sphere of radius R partitioned into
+    <strong>12 faces = 6 axes × 2 sectors</strong>, <code>face = axis·2 + sector</code>
+    <span class="fn">(godot/core/sphere_math.gd:1-27)</span>. Each face has a 1024×1024 cell grid
+    (<code>CELLS_PER_FACE = 1024</code>); (u,v) ∈ [0,1]² maps affinely to a rectangle on the unit
+    cube, then <code>normalize · R</code>.
+  </p>
+  <ul>
+    <li><strong>Home faces 0 and 1</strong> (the +Y halves, split on X) stay the flat home world with 1-meter columns — they use the legacy <code>"%d,%d"</code> chunk keys and the normal streaming pipeline <span class="fn">(world.gd:10402-10414, 10463-10464)</span>.</li>
+    <li><strong>Non-home faces 2-11</strong>: a face chunk is 16×16 cells, keyed <code>"%d:%d:%d" % [face, ccx, ccz]</code>. <code>generate_face</code> <span class="fn">(generator.gd:208-217)</span> reuses the home-column pipeline with (1) a per-face salt <code>seed ^ (face·1000003)</code> and (2) a face-disjoint 2D domain <code>face·64 + cx, face·64 + cz</code> — each face is an independent flat world, salted by face. Seams policy: "No cross-face continuity in P1a (face-border terrain seams acceptable, documented)".</li>
+    <li><strong>Generation trigger</strong>: on-demand, main-thread, synchronous — first <code>get_block_key</code>/<code>set_block_key</code> access to a non-home face position <span class="fn">(world.gd:10460-10481 → _ensure_face_chunk, world.gd:10421-10454)</span>. Chunks are FIFO-capped at <code>FACE_CHUNK_CAP = 512</code>, pooled on eviction. Face chunks are <strong>never meshed or lit</strong> in the current phase (data-level only) and are not part of the streaming pipeline <span class="fn">(world.gd:10390-10394)</span>.</li>
+  </ul>
+
+  <h3>2.9 The dormant AC-0237 keep mask — the slab-granularity seam</h3>
+  <div class="callout warn">
+    <b>Dormant parameter, live machinery</b>
+    A slab-granularity escape hatch <em>does</em> exist in C++: the AC-0237 <code>keep</code> mask
+    (a 24-byte <code>PackedByteArray</code>; slab <code>si</code> generated iff
+    <code>keep[si] ≠ 0</code>; empty = full column) <span class="fn">(gen.cpp:441-456, 971-975)</span>. It bounds
+    the per-column scan and emit to selected slabs and encodes ungenerated slabs as
+    <code>null</code> (no format change, gen.cpp:447-449). It is <strong>disjoint-set capable</strong> —
+    "the window's kept set = the tower's terrain span UNION the player band — two intervals while
+    the player flies high" <span class="fn">(gen.cpp:444-448)</span> — and the scan/emit/veg loops are already
+    guarded by <code>slab_kept</code> <span class="fn">(gen.cpp:573-574, 592-594, 711, 731, 752-753)</span>. The surface
+    slab is always kept so the effective surface + vegetation always land
+    <span class="fn">(gen.cpp:455-456)</span>. What retired it: AC-0257 removed the vertical window —
+    <code>threadgen_enqueue</code> now always passes an empty mask ("generation is ALWAYS the full
+    column … bit-exact, gen is a pure f(world coords, seed)", world.gd:5028-5031). A Y-layer or
+    cheap-far redesign is largely <strong>re-activating and generalizing this dormant parameter</strong>.
+  </div>
+  <p>
+    Cross-slab coupling inventory (what a per-slab design must handle): caves cross slabs freely
+    but need no state (pure per-cell function of world coords + shared fields); the only column-scoped
+    scan output is <strong><code>he</code>, the effective surface</strong> — handled by always keeping the
+    surface slab; trees cross slabs (handled by the <code>slab_kept</code> guards — ungenerated cells
+    are simply not written, and a later slab generation writes the same cells bit-exactly); the
+    aquifer is column-scoped (needs <code>he</code>); ores/obsidian/bedrock/lava are slab-local; the
+    lazy-skip decision is XZ-only <span class="fn">(world.gd:4990-5013)</span> — the natural seam for a
+    Y-aware skip.
+  </p>
+
+  <figure class="reveal">
+<svg viewBox="0 0 1160 300" role="img" aria-label="Terrain generation passes" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,Menlo,Consolas,monospace">
+  <defs><marker id="ar3" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#6f6350"/></marker></defs>
+  <g font-size="11.5" fill="#e8ddc9">
+    <g><rect x="10" y="60" width="150" height="58" fill="#1c1712" stroke="#4a4133"/><text x="85" y="82" text-anchor="middle">(cx, cz, seed)</text><text x="85" y="98" text-anchor="middle" fill="#6f6350" font-size="9.5">+ hmax 384 · sea 126</text><text x="85" y="110" text-anchor="middle" fill="#6f6350" font-size="9.5">+ skip · keep(mask)</text></g>
+    <g><rect x="200" y="60" width="170" height="58" fill="#1c1712" stroke="#4a4133"/><text x="285" y="80" text-anchor="middle" fill="#d9a441">7 coarse fields</text><text x="285" y="96" text-anchor="middle" fill="#6f6350" font-size="9.5">441 lattice pts × 2-oct fbm3</text><text x="285" y="108" text-anchor="middle" fill="#6f6350" font-size="9.5">= 3087 fbm3 / chunk</text></g>
+    <g><rect x="410" y="60" width="170" height="58" fill="#1c1712" stroke="#4a4133"/><text x="495" y="80" text-anchor="middle">per-column surface_h</text><text x="495" y="96" text-anchor="middle" fill="#6f6350" font-size="9.5">tril @ sea slice · calibrate</text><text x="495" y="108" text-anchor="middle" fill="#6f6350" font-size="9.5">105.2 + cc·36.4 + hc·52</text></g>
+    <g><rect x="620" y="60" width="170" height="58" fill="#1c1712" stroke="#4a4133"/><text x="705" y="80" text-anchor="middle">top-down density scan</text><text x="705" y="96" text-anchor="middle" fill="#6f6350" font-size="9.5">d &gt; 0 solid · he = topmost</text><text x="705" y="108" text-anchor="middle" fill="#6f6350" font-size="9.5">cave amp widens downward</text></g>
+    <g><rect x="830" y="60" width="160" height="58" fill="#1c1712" stroke="#4a4133"/><text x="910" y="80" text-anchor="middle">block emit</text><text x="910" y="96" text-anchor="middle" fill="#6f6350" font-size="9.5">bedrock·stone·ores·caves</text><text x="910" y="108" text-anchor="middle" fill="#6f6350" font-size="9.5">aquifer·lava·surface</text></g>
+    <g><rect x="1020" y="60" width="130" height="58" fill="#1c1712" stroke="#4a4133"/><text x="1085" y="80" text-anchor="middle">veg pass</text><text x="1085" y="96" text-anchor="middle" fill="#6f6350" font-size="9.5">trees 20×20 · flowers</text><text x="1085" y="108" text-anchor="middle" fill="#6f6350" font-size="9.5">slab_kept guards</text></g>
+    <g><rect x="410" y="180" width="170" height="58" fill="#1c1712" stroke="#4a4133"/><text x="495" y="200" text-anchor="middle" fill="#c96a3d">banana pass (main)</text><text x="495" y="216" text-anchor="middle" fill="#6f6350" font-size="9.5">post-landing · shore scan</text><text x="495" y="228" text-anchor="middle" fill="#6f6350" font-size="9.5">sand r≤3 · water r≤4</text></g>
+    <g><rect x="620" y="180" width="170" height="58" fill="#1c1712" stroke="#d9a441"/><text x="705" y="200" text-anchor="middle" fill="#d9a441">palettize 24 slabs</text><text x="705" y="216" text-anchor="middle" fill="#6f6350" font-size="9.5">null | {n,b,p,i,nz,nc,bs}</text><text x="705" y="228" text-anchor="middle" fill="#6f6350" font-size="9.5">v4 codec = disk codec</text></g>
+  </g>
+  <g stroke="#6f6350" stroke-width="1.4" fill="none" marker-end="url(#ar3)">
+    <line x1="160" y1="89" x2="196" y2="89"/>
+    <line x1="370" y1="89" x2="406" y2="89"/>
+    <line x1="580" y1="89" x2="616" y2="89"/>
+    <line x1="790" y1="89" x2="826" y2="89"/>
+    <line x1="990" y1="89" x2="1016" y2="89"/>
+    <path d="M 910 118 L 910 150 L 495 150 L 495 176"/>
+    <line x1="580" y1="209" x2="616" y2="209"/>
+  </g>
+  <text x="10" y="280" font-size="10.5" fill="#6f6350">One call = all 24 slabs (column-atomic): the expensive part is the 7 chunk-scoped fields; per-slab work (scan tail, emit, palettize) is the cheap remainder. Banana runs on landed data only, so the generator stays pure for genhash.</text>
+</svg>
+    <figcaption><b>FIG 2.1</b> — The generation passes inside <code>AweGen.generate_resl</code>. Fields are built once per chunk (the cost); everything after is a per-column/per-slab pass over shared data. The banana pass sits outside C++ gen by design (main thread, post-landing).</figcaption>
+  </figure>
+</section>
+
+<!-- ============ 03 SCHEDULER ============ -->
+<section id="s03">
+  <div class="sec-head reveal"><span class="sec-no">03</span><h2>The scheduler</h2><span class="rule"></span></div>
+  <p class="reveal">
+    The scheduler's job is to keep a bounded, always-current work queue of "what still owes work"
+    around the moving player, and to feed that queue, at a wall-clock-paced trickle, into two
+    worker lanes: the <strong>data lane</strong> (column generation / disk read, C++ <code>AweGen</code>
+    on the shared <code>WorkerThreadPool</code>) and the <strong>build lane</strong> (per-slab high-res
+    mesh + light, C++ <code>AweMesh</code>/<code>AweStrips</code> on the same pool). A third, separate
+    lane — the <strong>low/placeholder wave</strong> (<code>_low_step</code>) — owns the visible band
+    outside the high band and runs on its own pacing, fed by the same queue entries. The scheduler
+    itself runs <strong>entirely on the main thread</strong>: the per-frame drain, the recenter walk,
+    the polls/handoffs, the light flush, and the pick/scoring functions. Workers only ever execute
+    one self-contained unit (a full-column gen, one slab mesh, one low emit, one IO op) and hand
+    results back through the main-thread polls.
+  </p>
+
+  <h3>3.1 The queue structure</h3>
+  <p>
+    The queue is a flat list of <strong>entries</strong> — one per chunk-column that owes build or
+    data work — held in <code>band_buckets</code>, an array of arrays indexed by taxi bucket
+    (bucket <code>b</code> ≈ columns at taxi <code>b</code>, clamped; <code>band_buckets[b].push_front(...)</code>
+    puts newest-first inside a bucket) <span class="fn">(world.gd:4879-4890)</span>.
+    <code>data_only=false</code> is a build entry (bands 0/1); <code>data_only=true</code> is a band-3
+    feed entry (the collar ∪ circle-ring data that feeds the circle edge's 8-neighbor build gate —
+    never meshed). <code>queued_keys</code> maps key → <code>"build"</code>/<code>"data"</code> in lockstep
+    (flag ⇔ entry invariant, rebuilt at finalize); <code>queue_size</code> counts all entries,
+    <code>_build_q_n</code> counts build entries (the depth-cap counter); <code>_qb</code> maps key →
+    bucket index for O(1) removal.
+  </p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Entry field</th><th>Type</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td class="nm"><code>key</code></td><td>String <code>"cx,cz"</code></td><td>column identity</td></tr>
+      <tr><td class="nm"><code>cx</code>, <code>cz</code></td><td>int</td><td>chunk column coords</td></tr>
+      <tr><td class="nm"><code>data_only</code></td><td>bool</td><td>false = build entry (bands 0/1); true = band-3 feed (collar ∪ circle ring)</td></tr>
+      <tr><td class="nm"><code>tier</code></td><td>int (stamped by <code>_tier_stamp</code>)</td><td>sim tier via <code>_tier_of</code>: 0 under, 1 ≤ <code>band0_r</code> Chebyshev, 2 else <span class="fn">(world.gd:455-460)</span></td></tr>
+      <tr><td class="nm"><code>rank</code></td><td>int (stamped)</td><td>taxi at stamp time</td></tr>
+      <tr><td class="nm"><code>_rv</code></td><td>int (stamped)</td><td>rescore version <span class="fn">(world.gd:787-792, 4888-4889)</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    <strong>Nothing else is stored on the entry — no score, no layer, no slab list.</strong> The key
+    architectural property: <strong>no score is ever stored</strong>. <code>_grid_score(e)</code> is a
+    pure function of the live anchor, the live player slab, and the live per-column completion state
+    (the pending probes, themselves cached only behind fingerprints that change on data/anchor/window
+    moves). Every queue mutation bumps <code>_pool_ver</code> (<code>_pool_touch</code>,
+    <span class="fn">world.gd:429-430</span>), which invalidates the cached pick results; the recenter
+    finalize swaps <code>band_buckets</code> and bumps the version
+    <span class="fn">(world.gd:8911-8912)</span>. So the very next pick after any recenter re-orders the
+    entire queue automatically — the "rescore" is free.
+  </p>
+
+  <h3>3.2 The recenter — trigger and function</h3>
+  <p>The only in-game trigger is a <strong>player chunk-index change in x, z, OR y</strong>
+  <span class="fn">(godot/player/player.gd:1611-1619)</span>:</p>
+  <pre class="code"><span class="ln">1611</span>var pcx := int(floorf(position.x / <span class="num">16.0</span>))
+<span class="ln">1612</span>var pcz := int(floorf(position.z / <span class="num">16.0</span>))
+<span class="ln">1613</span>var pcy := int(floorf(position.y / <span class="num">16.0</span>))
+<span class="ln">1614</span><span class="kw">if</span> pcx != _chunk_x or pcz != _chunk_z or pcy != _chunk_y:
+<span class="ln">1615</span>    _chunk_x = pcx; _chunk_z = pcz; _chunk_y = pcy
+<span class="ln">1618</span>    <span class="kw">if</span> Game.world != <span class="st">null</span>:
+<span class="ln">1619</span>        Game.world.recenter(position.x, position.z, true, position.y)</pre>
+  <p>
+    So "chunk crossing" = any 16-block boundary crossed in X, Z, or Y (a Y-only crossing IS a full
+    recenter — AC-0234 — because it moves the player slab, i.e. the origin of the layer rank).
+    Camera-only moves never recenter <span class="fn">(player.gd:1604-1606)</span>. Other callers: world load /
+    new world <span class="fn">(main.gd:526, 531, 563)</span>, render-distance change
+    <span class="fn">(settings.gd:271)</span>, debug teleport/aim <span class="fn">(debug.gd:97, 105)</span>, and the harness arms.
+    <code>settings.gd:271</code> and <code>debug.gd</code> pass no <code>wy</code> (default −1.0,
+    <span class="fn">world.gd:8321</span>) — those keep the last known slab.
+  </p>
+  <p>
+    <code>recenter()</code> <span class="fn">(world.gd:8321-8657)</span>, in outline:
+  </p>
+  <ol class="steps">
+    <li>Capture pre-move center <code>opcx/opcz</code> (band-exit/re-entry comparisons); compute player chunk; <strong>fast-crossing predicate</strong> (the ahead lead, AC-0277): <code>_cross</code> = L1 distance between <em>player</em> chunks; <code>_fast</code> iff <code>(now − _last_cross_ms) &lt; AHEAD_FAST_MS (3500)</code> and <code>_cross &gt; 0</code> <span class="fn">(8332-8340)</span>.</li>
+    <li><strong>Anchor assignment</strong>: if <code>_fast</code> ⇒ <code>last_pcx = pcx + signi(Δx)·AHEAD_DIST(1)</code>, same for z, <code>_ahead_active = true</code> — the anchor leads the player by one chunk per crossed axis; else anchor = player chunk <span class="fn">(8341-8348)</span>. (Walking at 4.3 m/s crosses a chunk in ~3.7 s &gt; 3.5 s → NOT fast; sprint ~2.9 s and flight ARE fast.)</li>
+    <li><strong>Y carry</strong>: <code>if wy ≥ 0.0: last_wy = wy</code> — <code>last_wy</code> is the layer-rank origin for <code>_grid_score</code>; nothing else uses Y <span class="fn">(8358-8359)</span>. Pool top-up <span class="fn">(8365)</span>; small-move pacing arm <code>_sm_move_until = now + SMALL_MOVE_BUDGET_MS(1500)</code> <span class="fn">(8375)</span>.</li>
+    <li><strong>The chunks walk</strong> — one inline <code>for key in chunks</code> over all resident nodes, per chunk: in the new stream set → re-entry re-arm, <strong>AC-0278 single-source re-queue</strong> (a high-band column that holds data, is not meshed, and has no "build" flag gets <code>_enqueue_build</code> — it runs BEFORE the walk), band-exit <strong>demote</strong> (<code>_demote_high_band_exit</code>, keep stored high, flip ready lows, re-open the rest), band re-entry flip (<code>_reentry_flip_high</code>); outside the set → candidate (keep node+data+mesh, clear pending bookkeeping; <code>_strip_candidate_builds</code> removes its "build" queue entry) or free (two-out for 2 recenter events — AC-0080 hysteresis) <span class="fn">(8408-8475)</span>.</li>
+    <li><strong>Strip + free</strong>: free the first <code>stream_ho_cap</code> columns immediately via <code>_free_chunk_key</code> (save, evict, pool check-in), defer the rest to <code>_deferred_free</code> drained at <code>stream_ho_cap</code>/frame — the AC-0257 instance cap <span class="fn">(8477-8495)</span>.</li>
+    <li><strong>Polls</strong> <code>threadgen_poll / threadmesh_poll / io_poll</code> — land whatever finished so the walk sees fresh state <span class="fn">(8496-8498)</span>.</li>
+    <li><strong>Walk start or park</strong>: if a walk is in flight → PARK the escalation (<code>_rec_escalate_pcx/pcz</code>, re-checked at finalize) — never discard an in-flight walk (restart-on-every-crossing would livelock long R50 walks); else <code>_rec_start_walk</code> <span class="fn">(8505-8518)</span>.</li>
+    <li><strong>Pre-warm 5×5</strong>: stub missing chunks, <code>_enqueue_build</code> all 25 cells — the queue exists immediately so the data pass can start feeding while the slice walks <span class="fn">(8529-8543)</span>.</li>
+    <li><strong>The 5×5 startup burst</strong>: if none in flight, rebuild the burst elements <code>[taxi, bwx, bwz, had_data, seed, H, SEA, skip_flag]</code> sorted by taxi and submit <strong>one HIGH-priority GROUP task</strong> <code>add_group_task(_startup_gen_worker, n, 3, true)</code> — 3-wide parallelism (LOW priority would serialize on one thread in Godot 4.7.1) <span class="fn">(8568-8648)</span>. While <code>_startup_gen_pending_n &gt; 0</code> the drain <strong>holds all startup builds</strong> <span class="fn">(world.gd:6672-6673)</span>. If a burst is still in flight, this recenter adds nothing — the drain's data pass covers the new edge. This is the spawn anti-fall contract (AC-0263: fully queue-driven, no main-thread generation at all).</li>
+  </ol>
+
+  <h3>3.3 The walk phases, step by step</h3>
+  <p>
+    <code>_recenter_slice</code> <span class="fn">(world.gd:8659-8703)</span> runs every process frame while
+    <code>_rec_pending</code> (paused during the spawn window — the rebuild walk is ~5 s of
+    main-thread work at R50 and would race the burst/spawn handoffs):
+  </p>
+  <pre class="code"><span class="kw">while</span> _rec_pending and units &lt; REC_UNITS_PER_FRAME(<span class="num">2048</span>) \
+      and Time.get_ticks_msec() - t0 &lt; REC_SLICE_BUDGET_MS(<span class="num">8</span>):
+    match _rec_phase:
+        <span class="num">0</span>: _rec_want_step()
+        <span class="num">1</span>: _rec_stub_step()
+        <span class="num">2</span>: _rec_merge_old_step()
+        <span class="num">3</span>: _rec_merge_want_step()
+        <span class="num">4</span>: _rec_merge_ring_step()
+    units += <span class="num">1</span></pre>
+  <p>
+    <strong>So a recenter spans frames</strong>: each frame gets ≤ 8 ms of walk or ≤ 2048 unit-steps
+    (whichever first). At R16 the whole walk is a single ~8 ms frame; at R50 (7845-entry circle) it
+    takes many frames. The walk never discards partially — WANT/STUB are pure bookkeeping and the
+    queue swap is atomic at finalize.
+  </p>
+  <ul>
+    <li><strong>Phase 0 — WANT</strong> <span class="fn">(8749-8797)</span>: walks the stream-set bounding box (<code>half = maxi(render_radius+1, b1_eff()+1)</code>, cursor row-major). Skips out-of-set cells and band-3 cells (MERGE_RING owns those). For each in-set band 0/1 cell: if the existing chunk's band differs → <code>_reband</code> (sets <code>c.band</code>, drops/queues collision bodies — never rebuilds the mesh, keep-high) and, if the old queue held it as "data", <code>_convert_data_to_build</code>. Then the <strong>recompute</strong>: <code>if c == null or not c.mesh_built: _rec_want[key] = {cx, cz, d: taxi}</code> — i.e. <strong>every in-set column that still owes build work gets collected fresh</strong>, whether or not the old queue held an entry (an old "build" flag must not suppress the re-queue).</li>
+    <li><strong>Phase 1 — STUB</strong> <span class="fn">(8799-8819)</span>: same box walk; for every in-set cell with no chunk node → <code>stub_chunk(cx, cz)</code> (pooled node, <code>band</code> assigned, <code>init_slabs()</code>) — the data lane / build lane can now touch it.</li>
+    <li><strong>Phase 2 — MERGE_OLD</strong> <span class="fn">(8821-8855)</span>: walks the <em>old</em> <code>band_buckets</code>. For each old entry: out of the new stream set → drop; in <code>_rec_want</code> → drop (WANT re-queues it fresh); otherwise (a meshed column the recompute does not re-queue) → <strong>re-bucket by the NEW taxi</strong> at the bucket tail (carried entries sit behind the fresh <code>push_front</code> ones). Dropping the carry desynced flags/entries — measured 172 s stall in the lightstate arm.</li>
+    <li><strong>Phase 3 — MERGE_WANT</strong> <span class="fn">(8857-8876)</span>: for each WANT key: if the chunk is now <code>mesh_built</code> (a landing raced) → skip; else build the entry <code>{key, cx, cz, data_only: false}</code> + <code>_tier_stamp</code> and <strong>push_front</strong> into the new bucket — newest entries ahead of the re-bucketed carry.</li>
+    <li><strong>Phase 4 — MERGE_RING</strong> <span class="fn">(8878-8969)</span>: same box walk but only band-3 cells (collar ∪ circle ring): if already queued or already has data → skip; else <code>data_only: true</code> entry, push_front. These are the 8-neighbor gate's fuel — exempt from the depth cap.</li>
+    <li><strong>Finalize</strong> <span class="fn">(8886-8949)</span>: (1) <strong>stale sweep</strong> — the pre-warm queue ran in parallel with the walk, so an entry whose chunk FINISHED during the walk is dropped; (2) <strong>atomic swap</strong> — count entries, <code>band_buckets = _rec_new_buckets</code>, <code>_pool_touch()</code> (invalidate all cached picks), <code>_rebuild_qb()</code>, <strong>rebuild <code>queued_keys</code> from the live queue</strong> (flag ⇔ entry), reset drain window + cursors, re-apply the depth cap, <strong><code>_rescore_kick()</code></strong> (the column-cross rescore); (3) <strong>outrun escalation</strong> — if an escalation was parked and the player is still &gt; <code>REBUILD_COVER_L1(4)</code> taxi chunks from this walk's center → chain the next walk immediately; if the player moved back inside, drop it.</li>
+  </ul>
+  <p>
+    <strong>The ahead lead's two time-based companions (AC-0277)</strong>: the <strong>snap-back</strong> —
+    in <code>_process</code> <span class="fn">(world.gd:4377-4381)</span>: once the crossing stream is quiet for
+    <code>AHEAD_FAST_MS</code> (3.5 s) AND the anchor still leads, recenter once onto the chunk under
+    the player (this is the open question for the redesign — HANDOFF §5.1); and the
+    <strong>settle</strong> <span class="fn">(world.gd:4386-4390)</span>: when no walk is pending, not in the spawn
+    window, &gt; <code>AHEAD_RING_DEBOUNCE_MS(1000)</code> since the last recenter, not ahead-active, and
+    the last walk center ≠ current anchor → one final rebuild at the resting center — the
+    "fast-then-stop" fix: a 50× flight outruns the debounced rebuild by ~30 chunks and parks the
+    standing queue behind the resting player. Walking never triggers it.
+  </p>
+
+  <h3>3.4 Scoring — <code>_grid_score</code>, the full formula</h3>
+  <pre class="code"><span class="kw">def</span> _grid_score(e):                     <span class="cm"># e = a queued entry dict</span>
+    dx = e.cx - last_pcx                <span class="cm"># LIVE anchor (possibly ahead)</span>
+    dz = e.cz - last_pcz
+    taxi = abs(dx) + abs(dz)
+    c = chunks.get(e.key)
+    layer = 0
+    in_high = c is not None and (taxi &lt; medium_start_r or is_tier0_col(dx, dz))
+    <span class="kw">if</span> c is not None and not c.data.is_empty():
+        si = _hslab_best_pending_cached(c) <span class="kw">if</span> in_high <span class="kw">else</span> _entry_best_pending_cached(c)
+        <span class="kw">if</span> si &gt;= 0:
+            layer = _layer_rank_of(si)
+        <span class="kw">elif</span> _lod_windowed_for(c):      <span class="cm"># 83cfcfe Y-window (TO REMOVE, §3.6)</span>
+            <span class="kw">return</span> <span class="num">1e30</span>                <span class="cm"># windowed -1 = NO CANDIDATE</span>
+    s = layer * <span class="num">10000.0</span> + taxi          <span class="cm"># LAYER-MAJOR bake order</span>
+    <span class="kw">if</span> is_tier0_col(dx, dz): s -= <span class="num">1e10</span>   <span class="cm"># tier-0 SECTION prefix</span>
+    <span class="kw">if</span> loading_active and _loading_target_col(dx, dz): s -= <span class="num">5e9</span>  <span class="cm"># AC-0274 load target</span>
+    <span class="kw">return</span> s</pre>
+  <p>
+    Verified line by line: <code>dx/dz</code> 732-733; <code>layer=0</code> 734; <code>in_high</code> 741; probe 742-745;
+    the 1e30 rule 758-759 (rationale comment 746-757); the bake 760; tier-0 prefix 765-766;
+    load-target prefix 775-776. An entry whose chunk has <strong>no data</strong> skips the probe block
+    entirely — it scores at <code>layer = 0</code> (taxi-only, with prefixes): a no-data column's
+    "first owed slab" is treated as the player's slab.
+  </p>
+  <p>
+    <strong>The slab fan</strong>: <code>_layer_rank_of(si)</code>
+    <span class="fn">(world.gd:473-479)</span>: <code>d = si − player_slab</code>; rank 0 at d=0;
+    <code>d &lt; 0 → −2d − 1</code> (1, 3, 5, …); <code>d &gt; 0 → 2d</code> (2, 4, 6, …). So the fan around
+    the player slab is: player slab (0), one BELOW (1), one ABOVE (2), two below (3), two above
+    (4), … — the spec's "slab fan" (rule 2), exactly.
+  </p>
+  <p>
+    The score <code>layer·10000 + taxi</code> is <strong>LAYER-MAJOR</strong>: all columns' rank-0 slabs (in
+    taxi order) before any column's rank-1 slabs, and so on — a <em>global layer sweep</em>, not
+    per-column completion. The 10000 multiplier makes layer dominate taxi (taxi maxes well under
+    10000 at any R; the largest (layer, taxi) value in play is ~120k).
+  </p>
+  <div class="wk">
+    <b>Worked example — the shape gap (matching HANDOFF §2):</b><br>
+    a <span class="res">passed</span> column's deep slab: layer 1, taxi 9 → <span class="op">1·10000 + 9</span> = <span class="res">10009</span><br>
+    a <span class="op" style="color:#7fa0c4">fresh edge</span> column's near slab: layer 2, taxi 50 → <span class="op">2·10000 + 50</span> = <span class="op" style="color:#7fa0c4">20050</span><br>
+    <span class="ok">10009 &lt; 20050 → the passed column's DEEP slab outranks the fresh edge column's near slab</span> — deep fill
+    progresses in the gaps between recenters ("whole columns behind me").<br>
+    <span class="op">Worse while flying high: a fresh column's terrain top (slab 8, player slab 18) makes its first
+    pending slab rank 19 → 19000 + taxi, which loses to ANY passed column owing rank ≤ 18.</span>
+  </div>
+  <p>
+    <strong>The prefixes</strong>: (1) <strong>tier-0 section −1e10</strong>
+    <span class="fn">(765-766)</span> — <code>_is_tier0_col</code> = Chebyshev ball <code>maxi(|dx|,|dz|) ≤ tier0_r</code>
+    <span class="fn">(world.gd:1628-1629</span>; default 0 = the player's own column, max 8 = 289 columns) — every
+    tier-0 slab scores <code>−1e10 + layer·10000 + taxi</code>, so the section (fanned from the player's
+    Y) is fully complete before ANY ring slab starts; the build lane restricts itself to the high
+    band + tier-0 set <span class="fn">(world.gd:6516, 6786, 6918)</span> and the low wave skips tier-0 entirely.
+    (2) <strong>Load-target −5e9</strong> <span class="fn">(775-776)</span> — only while <code>loading_active</code>; the
+    target = Chebyshev ≤ <code>tier0_r</code> OR taxi &lt; <code>mini(band0_r, medium_start_r)</code>
+    <span class="fn">(4702-4706)</span> — "load tier 0 + simulation distance and then load the rest normally"
+    (AC-0274 decision B); −5e9 sits below tier-0's −1e10 and above every (layer, taxi) value.
+  </p>
+  <div class="callout note">
+    <b>Live-anchor property — "rescore all slabs every recenter" is true today</b>
+    Nothing is cached about the score itself. The two caches that DO exist are (a) the
+    <strong>pick cache</strong> — <code>_pick_build_cached / _pick_data_cached</code> store the last winning
+    candidate under a key of <code>(_pool_ver, maxb, spawn_fast, last_pcx, last_pcz, band0_r, ...)</code>
+    <span class="fn">(world.gd:432-445, 6541-6553, 6589-6600)</span> — and (b) the <strong>probe caches</strong> —
+    fingerprints <code>[data_gen, fl_gen, _player_slab(), _lod_tier_of(dx,dz), _lod_windowed_for(c)]</code>
+    <span class="fn">(world.gd:593-595, 671-673)</span>. Both invalidation sources are live-state-derived:
+    <code>_pool_ver</code> bumps at EVERY queue mutation; probe fingerprints move when the anchor,
+    player slab, tier, window bit, or data changes. Both probe caches clear past 8000 entries.
+    <strong>Consequence: the next pick after any recenter re-orders the entire queue — free.</strong>
+    What is NOT re-derived is the order's <em>shape</em>: the (layer, taxi) layer-major form above.
+  </div>
+
+  <h3>3.5 The pick loop — <code>_drain_build_queue</code></h3>
+  <p>
+    Called once per process frame <span class="fn">(world.gd:4559)</span>. Guards and budget
+    <span class="fn">(6641-6721)</span>: first <code>_startup_gen_apply()</code> (land burst slots);
+    <strong>edit-lane yield</strong> — <code>if edit_inflight_count &gt; 0: return</code> (an edit handoff must
+    land on a short frame, AC-0187); <code>queue_size == 0</code> → only the collision stage;
+    <code>_rescore_step()</code> (amortized tier/rank re-stamp); startup detection and the
+    <strong>startup build-hold</strong> (<code>if startup and _startup_gen_pending_n &gt; 0: return</code>);
+    then the <strong>unit budget</strong>, wall-clock paced:
+  </p>
+  <ul>
+    <li><code>frame_dt_ms = min(now − _drain_last_t, DRAIN_DT_CLAMP_MS=100)</code>; <code>unit_pace = DRAIN_UNIT_PACE_MS(8)</code> if the last dispatch was fast (<code>&lt; BUILD_FAST_US(15000)</code>) else <code>DRAIN_UNIT_PACE_SLOW_MS(16)</code> — fast dispatches bank units twice as fast.</li>
+    <li><code>loading_active</code> → budget 1000000 (effectively unbounded, bounded by the 300 ms time budget); <code>startup</code> → 12; else <code>_drain_acc_ms = min(acc + frame_dt, 4·unit_pace)</code> and <code>budget = min(4, int(acc/unit_pace))</code> — at 60 fps this reproduces 2 units/frame (fast) / 1 (slow); at 30 fps the accumulator banks 2×/frame.</li>
+    <li><strong>Small-move trickle</strong>: 1.5 s after each recenter the budget is clamped to 1/frame.</li>
+    <li><strong>Drain window</strong>: the pool scan admits buckets <code>0..maxb</code> only; <code>_drain_win_b</code> starts at <code>b1_eff()+2</code> then grows one bucket per <code>DRAIN_WIN_PACE_MS(250)</code> wall ms in steady state; loading uses the full window.</li>
+  </ul>
+  <p>The steady-state loop, per unit <span class="fn">(6876-7022)</span>:</p>
+  <ol class="steps">
+    <li><code>bpick = _pick_build_cached(maxb, include_fb=false, high_only=TRUE)</code>; if no candidate, the <strong>forward-lead pass</strong> (<code>include_fb=true</code>) additionally admits the forward band's <code>data_only</code> entries — the 2r+1 columns at <code>cx = last_pcx + render_radius</code> — so a ready lead chunk can pre-build before the general sweep reaches it (AC-0079 v3 C1) <span class="fn">(6899-6904)</span>.</li>
+    <li><strong>High-band gate</strong>: a pick with <code>taxi ≥ medium_start_r</code> and not tier-0 is held (<code>perf_high_gate_holds_n += 1</code>) — the main build lane is the HIGH band only <span class="fn">(6916-6920)</span>.</li>
+    <li><code>sih = _hslab_best_pending_cached(candidate)</code>: if <code>sih &lt; 0</code> — a <strong>full</strong> −1 is genuine completion → <code>_remove_entry</code> (free the entry); a <strong>windowed</strong> −1 (83cfcfe) just holds the entry <span class="fn">(6929-6940)</span>. Else <code>_build_unit_hslab(candidate, cx, cz, sih)</code> — <strong>one slab dispatch</strong>; if deferred the entry stays queued and the frame ends (never a sync build since AC-0263) <span class="fn">(6942-6952)</span>.</li>
+    <li>If no build unit, the <strong>data pass</strong>: <code>_pick_data_cached(maxb)</code> → <code>_gen_unit(c, cx, cz)</code> (disk-first read or <code>threadgen_enqueue</code>) <span class="fn">(6969-6991)</span>; one disk read/frame cap; break when <code>threadgen_inflight ≥ threadgen_max</code> (pool saturated).</li>
+    <li>Bookkeeping: <code>_advance_dq_past</code> (sticky data cursor), park the cursor when the pool is empty, spend the banked ms.</li>
+  </ol>
+  <p>
+    <strong>Loading-window drain</strong> <span class="fn">(6740-6875)</span>: two independent feed phases per
+    frame — Phase 1 (builds): fresh pool scan per iteration (re-pick keeps the order adaptive as
+    landings land — a score-once snapshot raised churn 1.3×→1.94×), high-band only, best
+    <code>_grid_score</code>; windowed −1 → <strong>break</strong> the pass (6813 class, the pick scored it
+    lowest ⇒ no window-visible candidate exists); full −1 → remove + continue; deferred dispatch:
+    TM-full → break, else per-column <code>_lw_skip</code> (the one-column-at-a-time load stall fix).
+    Phase 2 (gen): while <code>threadgen_inflight &lt; LOAD_TG_CAP(8)</code>, same no-data pick, per-frame
+    disk cap <code>LOAD_POOL_CAP = 24</code>.
+  </p>
+  <p>
+    <strong><code>_cap_queue_depth</code></strong> <span class="fn">(7111-7153)</span>: caps total queued BUILD depth to
+    <code>circle_count()</code> (797 at R16, 7845 at R50); <code>data_only</code> entries are <strong>exempt</strong>
+    (they're the 8-neighbor gate's fuel); on excess it verifies the counter by full scan first
+    (never trust a drifted counter), then evicts farthest bucket first, oldest (tail) entry first.
+    In practice it fires only on bookkeeping drift. <strong>Entry removal</strong>
+    <span class="fn">(7053-7089)</span>: fast path via <code>_qb</code> (O(bucket)), full-scan fallback on staleness;
+    updates <code>queued_keys</code>, <code>queue_size</code>, <code>_build_q_n</code>, bumps <code>_pool_ver</code>.
+  </p>
+
+  <h3>3.6 The Y-window mechanism (83cfcfe — the one the user REJECTED)</h3>
+  <p>
+    This is the mechanism AC-0282 must remove (HANDOFF §3). It implements rule 4 ("passed discs
+    stop building down while you keep moving") with a <strong>position-based moving state + a 3.5 s
+    timer</strong>, which the user explicitly rejected: <em>"3.5 s is a description of approximately
+    what should happen based on our constraints, it in itself is not a constraint. So there should
+    not be some kind of internal timer that changes what we do."</em>
+  </p>
+  <ol class="steps">
+    <li><strong>Position sampling</strong> — in <code>threadmesh_poll</code>'s once-per-process-frame branch <span class="fn">(world.gd:5467-5511</span>, keyed on <code>Engine.get_process_frames()</code>): the player's XZ position is sampled; <code>_dyn_speed</code> is a 0.3-lerp of the instantaneous speed (the AC-0229 dynamic handoff budget, same site); and the window arming <span class="fn">(5494-5500)</span>: <strong>every 2+ blocks of travel re-arms <code>_lod_move_ms</code></strong> (walk, sprint, fly, teleport all count — a position delta).</li>
+    <li><strong><code>_lod_player_moving()</code></strong> <span class="fn">(493-499)</span>: <code>_lod_move_ms &gt; 0 and now − _lod_move_ms &lt; AHEAD_FAST_MS(3500)</code> — "moving" = "the player moved ≥ 2 blocks at some point in the last 3.5 s". The 3.5 s window is SHARED with the ahead-lead fast predicate (same const, <span class="fn">world.gd:3241</span>).</li>
+    <li><strong><code>_lod_windowed_for(c)</code></strong> <span class="fn">(513-522)</span>: <code>c != null and _lod_player_moving() and not _is_tier0_col(...)</code> — while moving, <strong>every non-tier-0 column</strong> is windowed; tier-0 is never windowed (full column even while moving — the band model). The r7 version's <code>_ahead_active</code> gate and passed-test are gone (CONTINUITY r8: the r7 bug was that crossing-cadence "moving" never fired at walk speed — 3.7 s &gt; 3.5 s — so walking built everything).</li>
+    <li><strong>Windowed probes</strong> — <code>_entry_best_pending(c, windowed)</code> and <code>_hslab_best_pending(c, windowed)</code> <span class="fn">(524-555, 631-654)</span>: both walk the slab fan <code>r = 0..2·data.size()−1</code> with <code>dy = 0, −1, +1, −2, +2, …</code>; when windowed, <code>if r &gt; 2: continue</code> — the probe sees ONLY ranks 0..2, i.e. slabs <code>|dy| ≤ 1</code> of the player slab. A windowed −1 means "nothing pending INSIDE the window", NOT "column complete".</li>
+    <li><strong>The 1e30 score rule</strong> <span class="fn">(758-759)</span>: for a windowed column whose windowed probe returns −1, <code>_grid_score</code> returns <code>1e30</code> — the entry becomes a non-candidate, so the pick lands on window-VISIBLE columns; if none exists the frame falls to the data pass. (Scoring it at layer 0 would put it AHEAD of every window-visible column.)</li>
+    <li><strong>The pick-site holds</strong>: a windowed −1 must never free the entry — steady build pass holds (<code>u = 0</code>, entry stays queued; removing on a windowed −1 stranded the spawn 3×3 — measured), load phase 1 breaks the pass.</li>
+    <li><strong>The cached-probe fingerprint coupling</strong> — the cached probes fingerprint the 5th element as the <strong>per-column</strong> window bit, and the probe CALL uses the SAME per-column predicate <span class="fn">(world.gd:618, 703)</span>. This call↔fingerprint identity is the "soundness law" (HANDOFF §3): the r6 defect was the LOW cache fingerprint using the per-column bit while the probe used the GLOBAL moving bit → a windowed −1 was cached under the full-probe fingerprint and served forever → 50 ring holes through the whole lightstate settle.</li>
+  </ol>
+  <p>
+    <strong>Why it exists:</strong> it masks the layer-major shape gap (§3.4) — while moving, the
+    probes can't <em>see</em> the deep slabs of any non-tier-0 column, so the (layer, taxi) order can't
+    express "deep work behind the player" at all; only the player-slab ±1 window of every column plus
+    the full tier-0 column are candidates. When the player stays still 3.5 s the window closes, the
+    full probe resumes, and the queue reaches the deep disc on its own. Per HANDOFF §2, 83cfcfe's
+    window is exactly what makes the user's in-game test pass — and exactly what the user now rejects
+    on mechanism grounds. After removal, every probe is FULL and −1 is genuine completion (the
+    hold/break sites collapse to <code>_remove_entry</code> on any −1).
+  </p>
+
+  <h3>3.7 Rescore — <code>_rescore_kick</code> / <code>_rescore_step</code></h3>
+  <p>
+    <code>_rescore_kick()</code> <span class="fn">(817-820)</span>: bump <code>_rescore_ver</code>, set due. Kicked by:
+    recenter finalize (the column cross), <code>note_sim_distance()</code>, <code>note_medium_start()</code>,
+    <code>note_tier0_radius()</code>, <code>apply_low_start()</code>, and the <code>_ready</code> env-override band
+    overrides. <code>_rescore_step()</code> <span class="fn">(822-845)</span> runs at the top of
+    <code>_drain_build_queue</code>: walk <code>band_buckets</code> in order and re-stamp every entry whose
+    <code>_rv ≠ _rescore_ver</code> via <code>_tier_stamp</code>, stopping after <code>RESCORE_PER_FRAME = 2048</code>
+    stamps — amortized: a full R50 7845-entry queue re-stamps in ~4 frames, R16 in one.
+    <strong>What "rescore" does and does NOT do:</strong> it re-stamps the SIM-tier + taxi RANK fields —
+    the stored order the low-lane tier checks read. The (layer, taxi) BAKE part of
+    <code>_grid_score</code> is computed LIVE on every pick and ignores these stamps entirely (a stale
+    stamp "can only lag, never mislead"). So the user's "rescore all slabs every recenter" is
+    satisfied by live scoring (free, §3.4), and the explicit pass only keeps the stamped
+    tier/rank fields consistent after center/radius moves.
+  </p>
+
+  <h3>3.8 The entry lifecycle (state machine)</h3>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Stage</th><th>Queue state</th><th>Chunk state</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td class="nm">want (no node)</td><td>entry "build" (band 0/1, WANT/pre-warm) or "data" (band 3, MERGE_RING)</td><td>no node</td><td>data lane / STUB phase creates the node</td></tr>
+      <tr><td class="nm">stub</td><td>entry present</td><td>node exists, data empty</td><td>data lane's <code>_pick_data_cached</code> target</td></tr>
+      <tr><td class="nm">data landed</td><td>entry present (now build-eligible)</td><td>data filled, <code>data_gen</code> bumped</td><td><code>threadgen_handoff</code> / <code>_io_read_handoff</code>; probe caches invalidate via fingerprint; <code>_pool_touch</code></td></tr>
+      <tr><td class="nm">building (per slab)</td><td>entry STAYS queued</td><td>slab <code>si</code> in TM inflight (<code>_tm_inflight_keys</code>)</td><td>one slab at a time per column (dispatch dedup); entry re-picked each frame, scores as its best pending slab</td></tr>
+      <tr><td class="nm">slab landed</td><td>entry stays</td><td><code>high_stamps[si] = data_gen</code>; fog dropped; show/hide per light settle; <code>mesh_built</code> flips when full probe −1</td><td>world.gd:5732, 5772-5779, 5784-5785</td></tr>
+      <tr><td class="nm">complete</td><td>entry removed by the pick (full-probe −1)</td><td><code>mesh_built = true</code></td><td>keep-high: <code>_enqueue_build</code> skips meshed columns; <code>_collect_pool(build)</code> skips them</td></tr>
+      <tr><td class="nm">exited set</td><td>"build" entry stripped (or demoted); "data" entries left</td><td>candidate (<code>cand_since</code>), free after 2 recenters one-ring out</td><td>re-entry: AC-0278 re-queue or recenter WANT re-queue</td></tr>
+      <tr><td class="nm">demoted (band exit)</td><td>entry as usual (meshed or partial)</td><td>stored high kept; ready lows flipped on</td><td>the wave owns the column's pending lows (band-aware)</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    Chunk-node states as the scheduler sees them: <strong>stub</strong> (pooled node, band assigned,
+    data empty) → <strong>data</strong> (24 slabs landed, some null, <code>mesh_built</code> false,
+    <code>high_stamps</code> accumulating) → <strong>built</strong> (<code>mesh_built = true</code>: every slab
+    ≤ <code>top/16</code> stamped at current <code>data_gen</code>; sticky — never re-queued, keep-high) →
+    <strong>candidate</strong> (outside the stream set, node+data+mesh retained, hidden; <code>cand_since</code>
+    reset on jitter, +1 per recenter when two-out, free at 2) → <strong>demoted / re-entered</strong>
+    (high-band crossings; visibility flips only, <code>mesh_built</code> re-derived from the FULL probe).
+  </p>
+</section>
+<!-- ============ 04 DATA + MESH PIPELINE ============ -->
+<section id="s04">
+  <div class="sec-head reveal"><span class="sec-no">04</span><h2>Data + mesh pipeline</h2><span class="rule"></span></div>
+
+  <h3>4.1 The threading model</h3>
+  <p>
+    Everything runs on <strong>one shared <code>WorkerThreadPool</code></strong>
+    <span class="fn">(world.gd:3573-3578)</span>, with software in-flight caps per lane
+    (a Godot 4.7.1 detail: the LOW priority class maps to a single thread, which is why
+    generation runs HIGH <span class="fn">(world.gd:3518-3521, 3554, 8568-8648)</span>).
+  </p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Lane</th><th>Unit of work</th><th>Worker function</th><th>Pool / cap / priority</th></tr></thead>
+    <tbody>
+      <tr><td class="nm">Data (gen)</td><td>one WHOLE 384-column (all 24 slabs)</td><td><code>_threadgen_worker</code> <span class="fn">(5016-5098)</span></td><td>shared pool, <code>threadgen_max = 3</code> <span class="fn">(3316)</span>, HIGH</td></tr>
+      <tr><td class="nm">Data (disk read)</td><td>one chunk blob decode</td><td><code>_io_read_worker</code> <span class="fn">(9340-9370)</span></td><td>shared pool LOW, 2/frame cap</td></tr>
+      <tr><td class="nm">Data (save encode)</td><td>one chunk blob encode</td><td><code>_save_encode_worker</code> <span class="fn">(9492-9560)</span></td><td>shared pool LOW, 3/frame cap</td></tr>
+      <tr><td class="nm">Data (region compaction)</td><td>one 32×32 region rewrite</td><td><code>_compact_region_worker</code> <span class="fn">(9388-9452)</span></td><td>shared pool LOW</td></tr>
+      <tr><td class="nm">Build (high mesh)</td><td>exactly ONE slab (16³)</td><td><code>_threadmesh_worker</code> <span class="fn">(6397-6444)</span></td><td>shared pool, <code>threadmesh_max = 3</code> <span class="fn">(3337)</span>, HIGH</td></tr>
+      <tr><td class="nm">Low wave (avg shells)</td><td>one MED/LOW emit per slab</td><td><code>_low_emit_worker</code> <span class="fn">(3201-3227)</span></td><td>shared pool LOW, 64 tasks in flight</td></tr>
+      <tr><td class="nm">Edit mesh</td><td>one edit-lane scoped remesh</td><td>its own <code>Thread</code> (EditPool) <span class="fn">(10491-10536)</span></td><td>dedicated thread</td></tr>
+      <tr><td class="nm">Startup burst</td><td>5×5 gen group</td><td><code>_startup_gen_worker</code> <span class="fn">(8606-8648)</span></td><td>HIGH group, 3-wide, <code>add_group_task</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    Caps and pacing: <code>threadgen_max = threadmesh_max = 3</code>
+    <span class="fn">(world.gd:3316, 3337)</span>, overridable via <code>AWECRAFT_THREADGEN_N /
+    THREADMESH_N</code> (clamped 1..16). The per-frame <strong>streaming handoff budget</strong> is dynamic
+    (AC-0229): <code>stream_ho_cap</code> = base <code>STREAM_TM_HANDOFF_PER_FRAME (3)</code> × dynamic
+    speed × radius factor, clamped 1..100, recomputed on recenter — up to <strong>24× the base while
+    flying</strong> <span class="fn">(world.gd:78-99, 5509-5511)</span>; it caps handoffs per frame AND
+    evict pacing. EditPool is a dedicated single <code>Thread</code> with its own mutex-protected
+    task list <span class="fn">(world.gd:10491-10536)</span>. The pool itself:
+    <code>WorkerThreadPool</code> created in <code>_ready</code> <span class="fn">(3573-3578)</span>, released in
+    <code>_exit_tree</code> <span class="fn">(3634-3650)</span>; <code>add_task()</code>/<code>wait_for_task()</code>
+    wrappers <span class="fn">(3652-3700)</span>.
+  </p>
+
+  <h3>4.2 The data lane, step by step</h3>
+  <ol class="steps">
+    <li><strong>Enqueue</strong> — <code>_gen_unit(c, cx, cz)</code> <span class="fn">(4974-5014)</span>: if the column already has data → skip; if it has a save on disk → <strong>disk read first</strong> (<code>_io_read_enqueue</code>, 9308-9338) — disk is authoritative, never regenerated; else <code>threadgen_enqueue</code>. The <strong>lazy-skip decision</strong> is XZ-only <span class="fn">(4990-5013)</span>: a chunk gets <code>skip=1</code> (no caves — the field build itself is skipped in C++) when it is inside the render circle but outside the high band, far from the player's XZ, and not near the spawn pad. The natural seam for a Y-aware skip.</li>
+    <li><strong>Worker gen</strong> — <code>_threadgen_worker</code> <span class="fn">(5016-5098)</span>: builds <code>[x16, z16, H, SEA, seed, skip, keep]</code> — <code>keep</code> is ALWAYS an empty <code>PackedByteArray</code> (the dormant AC-0237 seam, world.gd:5028-5031) — calls <strong><code>g.generate_resl(...)</code></strong> <span class="fn">(5093)</span> — C++ <code>gen_flat</code> + <code>palettize_slabs</code>, all 24 slabs in one call — and returns the 2-element <code>[data_slabs, fl_slabs]</code>. On failure (exception, wrong shape, wrong seed) it falls back to a main-thread <code>worldgen_fallback</code> queue <span class="fn">(5056-5092)</span> so a missing C++ class never hard-breaks streaming. Timing: <code>gen_timing</code> stats <span class="fn">(5070-5085)</span>.</li>
+    <li><strong>Handoff</strong> — <code>threadgen_poll</code> <span class="fn">(5195-5245)</span>, called each process frame: pops results; for each completed column it runs the <strong>banana pass</strong> (<code>_threadgen_banana_pass</code>, 5247-5272, main thread) then lands.</li>
+    <li><strong>Landing</strong> — <code>threadgen_handoff</code> <span class="fn">(5232-5290)</span>: re-checks the key is still resident (a recenter may have freed it in the meantime); <code>c.slabs_landed(data, fl, gen)</code> — the reference handoff that stores the 24 slabs and <strong>bumps <code>data_gen</code></strong> <span class="fn">(chunk.gd:654-667)</span>, which re-pends every slab in the build lane (the <code>high_stamps[si] ≠ data_gen</code> check); sets <code>c.gen_mask</code> (the 24-bit mask of which slabs are non-null); invalidates the probe cache via the fingerprint (<code>data_gen</code> is the first fingerprint element, world.gd:593-595); <code>_pool_touch()</code> so the pick re-orders around the new data.</li>
+    <li><strong>Startup variant</strong> — the 5×5 burst uses the same worker body (one gen per slot) but lands through <code>_startup_gen_apply</code> <span class="fn">(8649-8747)</span>, which is called at the TOP of every drain call (world.gd:6652) so burst landings land even while the walk is slicing; it respects the spawn handoff ordering (AC-0263: the drain holds all startup builds until the burst is fully applied).</li>
+    <li><strong>Disk read path</strong> — <code>_io_read_worker</code> <span class="fn">(9340-9370)</span> reads the region file, extracts the 32×32 slot, decodes the v5 palettized blob into 24 slabs (C++ <code>ChunkIOPalette</code>), lands via the SAME <code>threadgen_handoff</code> path (so a loaded column is indistinguishable from a generated one downstream) <span class="fn">(9372-9410)</span>.</li>
+  </ol>
+  <p>
+    <strong>What a data landing does to the build lane:</strong> the build lane's probe
+    (<code>_hslab_best_pending</code>) re-computes the slab fan from the fresh <code>c.data</code>; the
+    entry's score drops to its best pending slab; the pick loop dispatches slab by slab. A column
+    lands with <strong>all 24 slabs at once</strong> — the build lane then walks the fan
+    (player-slab first), so a column "completes" over ~24 dispatches spread across the (layer, taxi)
+    sweep.
+  </p>
+
+  <h3>4.3 The build lane, step by step</h3>
+  <p>
+    <code>_build_unit_hslab</code> <span class="fn">(6446-6461)</span> →
+    <code>_mesh_dispatch_hslab(c, cx, cz, si)</code> <span class="fn">(6319-6395)</span>:
+  </p>
+  <ol class="steps">
+    <li><strong>Gate 1 — data present</strong>: <code>slab = c.data[si]</code>; if null (all-air) → stamp immediately (an air slab needs no mesh) and return <span class="fn">(6320-6326)</span>.</li>
+    <li><strong>Gate 2 — in-flight dedup</strong>: <code>_tm_inflight_keys.has(key)</code> → return (one slab at a time per column; the entry stays queued and is re-picked next frame) <span class="fn">(6328-6331)</span>.</li>
+    <li><strong>Gate 3 — TM cap</strong>: <code>threadmesh_inflight ≥ threadmesh_max</code> → return (the frame ends; the entry is re-picked when a slot frees) <span class="fn">(6333-6335)</span>.</li>
+    <li><strong>Gate 4 — 8-neighbor data</strong>: every one of the 8 XZ neighbor columns must hold data (the C++ build reads neighbor strips up to 1 slab above/below the dispatched slab for correct boundary faces); if any neighbor is missing → <strong>defer</strong> (the entry stays queued; the neighbor's own data lane will fill it; band-3 feed entries exist exactly to keep this gate's fuel flowing at the circle edge) <span class="fn">(6337-6351)</span>.</li>
+    <li><strong>Snapshot</strong>: <code>AweStrips.snap_rings</code> — the 8 neighbors' relevant slab rows are copied into the task's <code>neighbor_strips</code> (a <strong>scoped strip</strong>: only <code>y ∈ [si·16−1, (si+1)·16]</code>, the 3 slab rows the build actually reads) <span class="fn">(6352-6372)</span>. This is what makes per-slab builds correct without holding the whole column.</li>
+    <li><strong>Dispatch</strong>: <code>_tm_submit(key, cx, cz, si, slab, neighbor_strips, seed, H, SEA)</code> <span class="fn">(6374-6395)</span> — the worker runs C++ <code>AweMesh.build_accs</code> on the slab: per-face culling (a face is emitted only if the neighbor cell across it is air/water/transparent), the eff (effective-light) frame is read from the slab's settled-light state (or computed on the fly for the first pass), self-lit faces are flagged for the light pass; the result is the slab's acc (access list) + mesh primitives.</li>
+    <li><strong>Handoff</strong> — <code>threadmesh_poll</code> <span class="fn">(5430-5603)</span>, once per process frame, capped at <code>stream_ho_cap</code> landings/frame: attaches the slab's <code>MeshInstance3D</code>s to the chunk node, stamps <code>c.high_stamps[si] = c.data_gen</code> <span class="fn">(5731-5732)</span>, clears <code>_tm_inflight_keys</code>, drops the fog shell for that slab if one was covering it, and — <strong>the slab is HIDDEN</strong> — it does NOT show until the light flush settles it (the never-show-unlit rule, §5.2). <code>mesh_built</code> flips to true only when the FULL probe returns −1 (every slab ≤ <code>top/16</code> stamped) <span class="fn">(5784-5785)</span>.</li>
+    <li><strong>Low-band builds</strong> — the main build lane is the HIGH band + tier-0 only (world.gd:6516, 6786, 6918); outside the high band the <strong>low wave</strong> (§5.6) owns the column's visible surface (MED/LOW avg-color shells), fed by the same queue entries but on its own pacing.</li>
+  </ol>
+  <p>
+    <strong>The C++ side</strong> — <code>AweMesh</code> (<code>gdext/src/mesh.cpp</code>):
+    <code>build_accs</code> takes the palettized slab view + the 8-neighbor scoped strips + the eff
+    frame, produces the per-face acc (the list of block faces to emit, each with normal, position,
+    and light index). <code>AweStrips</code> (<code>gdext/src/strips.cpp</code>) owns the
+    <code>slab_view</code> access (palettized decode on demand, the <code>bs</code> bitset fast path) and
+    the eff cache (<code>EFF_CACHE_CAP = 128</code> settled-light sections, LRU,
+    <span class="fn">world.gd:3523</span>). The E2 (light-event) wave
+    <span class="fn">(7822-7908)</span> is a separate concern: when a slab's eff frame CHANGES on a
+    landing, the wave re-marks the neighbor columns' light-dirty so the flush loop re-meshes the
+    affected neighbors (a controlled cascade, capped per frame).
+  </p>
+
+  <h3>4.4 The edit path</h3>
+  <p>
+    Player edits (place/break) take a SEPARATE lane: <code>EditPool</code> — a dedicated
+    <code>Thread</code> with a mutex-protected task list <span class="fn">(world.gd:10491-10536)</span> —
+    so an edit never queues behind streaming work. <code>_edit_pool_submit</code>
+    <span class="fn">(10538-10600)</span> scopes the remesh to the edited chunk + its 8 neighbors'
+    affected slabs (the <code>si ± 1</code> span across the boundary); the handoff is
+    <code>_edit_pool_poll</code> <span class="fn">(10602-10680)</span>. While <code>edit_inflight_count &gt;
+    0</code>, the streaming drain YIELDS the frame (world.gd:6662-6664 — an edit handoff must land on
+    a short frame, AC-0187). Light: <code>_mark_light_around</code> re-marks the 3×3 chunk ring
+    (<code>LIGHT_NEIGHBOR = 1</code>, world.gd:10) light-dirty, so the flush loop re-meshes with
+    <code>settle=true</code> on the next drain.
+  </p>
+
+  <h3>4.5 Persistence — layout, write, read</h3>
+  <p>
+    <strong>Format</strong>: palettized slab blobs, codec version 4 on disk, <strong>v5 wire</strong>
+    (<code>chunk_io.gd:9-10</code>: <code>VERSION = 4</code>, <code>V5_VERSION = 5</code> — v5 adds the
+    24-bit <code>gen_mask</code> header recording which slabs exist, so partial columns round-trip).
+    One blob = the 24-slab palettized form (§2.5) + header. The on-disk codec
+    (<code>gdext/src/chunk_io.cpp</code>) shares <code>palettize_slabs</code> with gen, so disk and
+    gen use identical bytes.
+  </p>
+  <p>
+    <strong>Region files</strong>: the world is partitioned into 32×32-column regions
+    (<code>regions/</code>, one file each). A region file is a container of up to 1024 chunk slots.
+    <strong>Write path</strong> — a column is saved when it <strong>leaves</strong> the streaming set
+    (evict, <code>_free_chunk_save</code>, world.gd:8192-8204) or on player save; the encode runs on
+    the shared pool LOW (<code>_save_encode_worker</code>, 3/frame cap), then a <strong>main-thread-
+    serialized commit</strong> appends the blob to the region's in-memory copy and writes the file
+    (the main thread owns file I/O ordering; workers only encode). <strong>Compaction</strong>: when a
+    region file grows past its size budget, a worker (<code>_compact_region_worker</code>) rewrites
+    it densely in the background; a bloat-triggered compaction is scheduled, never inline
+    <span class="fn">(9388-9490)</span>.
+  </p>
+  <p>
+    <strong>Read path</strong> — disk-first for EVERY column: on load and on any enqueue, if the
+    column has a save on disk, the disk read wins (never regenerate what exists, world.gd:4939-4947,
+    9308-9338); the decode lands through the same <code>threadgen_handoff</code> as a fresh gen.
+    <strong>Partial columns</strong> (regen-merge, world.gd:5273-5279, 9149-9171): a column whose
+    <code>gen_mask</code> records only some slabs re-enters with the missing slabs re-queued — the
+    v5 mask is what makes this possible; today it is exercised by the regen path (a disk column whose
+    data was stripped) and is the seam a Y-disc or cheap-far design would reuse.
+  </p>
+
+  <h3>4.6 The late-landing fix (83cfcfe — KEEP)</h3>
+  <div class="callout warn">
+    <b>Binding constraint — keep exactly</b>
+    A slab that lands (mesh or flush) into an already-SETTLED chunk must <strong>un-settle the
+    chunk, hide the just-landed slab, and re-arm the light flush</strong> — never show an unlit slab
+    in a settled region. Two sites:
+  </div>
+  <ul>
+    <li><strong>Per-slab site</strong> <span class="fn">(world.gd:5752-5754)</span>: a high-slab handoff into a <code>light_settled</code> chunk → <code>light_settled = false</code>, the slab stays hidden, <code>light_dirty = true</code> — the flush loop re-meshes it with <code>settle=true</code> on the next drain and re-shows it lit.</li>
+    <li><strong>Full-column site</strong> <span class="fn">(world.gd:5875-5882)</span>: a whole-column flush landing (settle re-mesh) into an already-settled neighbor region → same un-settle / hide / re-arm cycle at the column level (the E2 wave's boundary case).</li>
+  </ul>
+  <p>
+    <strong>Why it exists:</strong> the flush loop settles a column when it has no light-dirty slabs
+    left; a concurrent landing (a slab dispatched before the settle, landing after it) would
+    otherwise appear UNLIT in a settled region — the "bright flash then dark" pop the user saw.
+    <strong>The dependency surface</strong> (what the redesign must preserve or replace deliberately):
+    (1) the <code>light_settled</code> chunk boolean (chunk.gd:45); (2) the <code>flush_slabs</code>
+    per-slab settle record (chunk.gd:40); (3) the show/hide flip in the flush landing
+    (world.gd:5763-5779); (4) the never-show-unlit visibility rule (the slab's
+    <code>visible</code> is a function of its flush state, not its mesh state); (5) the E2 wave's
+    no-op proof (a settle that changed no eff frames re-marks no neighbors). A Starlight-style
+    propagator would replace the settle/flush machinery with per-section nibble state — the
+    un-settle / hide / re-arm SEMANTIC survives (a landing into settled light re-opens the queue for
+    that section), the mechanism changes.
+  </p>
+</section>
+
+<!-- ============ 05 LOD, LIGHTING, CHUNK STATE ============ -->
+<section id="s05">
+  <div class="sec-head reveal"><span class="sec-no">05</span><h2>LOD, lighting, chunk state</h2><span class="rule"></span></div>
+
+  <h3>5.1 The four acts of a column</h3>
+  <p>
+    Every column passes through four acts, each owned by a different part of the machine:
+    <strong>(1) generation</strong> (the data lane — all 24 slabs at once, §4.2); <strong>(2)
+    meshing</strong> (the build lane — slab by slab along the fan, §4.3); <strong>(3) lighting
+    settle</strong> (the flush loop — slab-by-slab or whole-column re-mesh with
+    <code>settle=true</code>, §5.2); <strong>(4) LOD display</strong> (the low wave and the band
+    flips — which representation is visible, §5.3-5.6). The acts overlap in time (a column is
+    being meshed while its neighbors are settling), and the queue is what keeps their order sane.
+  </p>
+
+  <h3>5.2 The never-show-unlit rule — the full chain</h3>
+  <ol class="steps">
+    <li>A slab's mesh handoff attaches its instances but leaves them <strong>hidden</strong> (world.gd:5731-5732 stamps, the flip happens in the flush).</li>
+    <li>The slab's <code>light_dirty</code> bit is set on: first mesh landing (no settled light yet), any edit in the 3×3 ring (<code>_mark_light_around</code>, world.gd:10, 9060-9068), any E2 wave re-mark (7822-7908), and any late landing (5752-5754).</li>
+    <li>The <strong>flush loop</strong> (<code>_flush_light_step</code>, world.gd:4403-4523) runs each drain call: it picks the nearest light-dirty chunk (1 column/frame steady, <code>EDIT_FLUSH_MAX_PER_FRAME = 1</code>, world.gd:15; 6 during loading, 103; 40 ms time budget, 11), re-meshes it with <code>settle=true</code> — per-slab if the column is partial (<code>high_stamps.keys()</code>, 4506-4511), whole-column if <code>mesh_built</code> (4474-4476) — and on the flush landing sets <code>flush_slabs[si]</code> / <code>light_settled</code> and flips the slab <strong>visible</strong> (5763-5779).</li>
+    <li>A column is <strong>settled</strong> (<code>light_settled = true</code>) when it has no light-dirty slabs left AND every slab ≤ <code>top/16</code> is stamped (5763-5769).</li>
+    <li>A landing into a settled chunk is <strong>late</strong> → un-settle, hide, re-arm (§4.6).</li>
+    <li>The eff frame (the light data the mesh actually uses) is computed during the settle re-mesh from the settled-light state of the slab + neighbors; the E2 wave propagates eff-frame CHANGES to neighbors (a settle that changes nothing re-marks nothing — the no-op proof).</li>
+  </ol>
+  <p>
+    The chain's invariant: <strong>a slab is visible if and only if its light is settled</strong>.
+    This is what makes the meshing and lighting acts separable — the mesh can land in any order;
+    the light gates the show.
+  </p>
+
+  <h3>5.3 Keep-all-LOD — the stored tiers</h3>
+  <p>
+    When a column demotes out of the high band (band exit, §3.2 step 4), it does NOT discard its
+    high-res mesh — <strong>keep-high</strong>: the high instances stay attached (hidden), the ready
+    lows are flipped on, and the rest of the column's pending lows are re-opened to the low wave.
+    A band RE-entry is a free visibility flip (the stored high is already meshed and lit; only
+    show/hide changes, world.gd:8261-8318). A column can therefore hold up to <strong>3 stored
+    tiers</strong> (high + MED + LOW) — the cost of the keep-all policy, sized by
+    <code>_pool_mi_per_col ≈ 10</code> (world.gd:1104-1110, 1148-1169).
+  </p>
+
+  <h3>5.4 MED / LOW quantization</h3>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Tier</th><th>Grid</th><th>Cell</th><th>Constants</th><th>Where</th></tr></thead>
+    <tbody>
+      <tr><td class="nm">MED (8³)</td><td>8×8×8 coarse grid</td><td>2-block cells</td><td><code>MED_GRID = 8</code>, <code>MED_CELL_BLOCKS = 2</code></td><td><span class="fn">world.gd:913-914</span></td></tr>
+      <tr><td class="nm">LOW (4³)</td><td>4×4×4 coarse grid</td><td>4-block cells</td><td><code>LOW_GRID = 4</code>, <code>LOW_CELL_BLOCKS = 4</code></td><td><span class="fn">world.gd:904-905</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    The avg-color shell for a slab is computed by <code>low_emit_avg</code>
+    <span class="fn">(world.gd:5357)</span>: it reads the slab rows it needs (the 4×4 avg reads the 4
+    slab rows of a 4³ cell), averages the visible block colors per cell, and applies the
+    <strong>clutter-as-air rule</strong> (rose/dandelion — the <code>nc</code> count from the
+    palettized slab, §2.5 — do not contribute to the avg color; they read as air). The shell is a
+    single avg-colored MeshInstance per cell — dirt cheap, no per-face detail.
+  </p>
+
+  <h3>5.5 The low wave — pacing and order</h3>
+  <p>
+    <code>_low_step</code> <span class="fn">(world.gd:2893-2973, 3060-3199)</span> owns the visible
+    surface OUTSIDE the high band (taxi ≥ <code>low_start_r</code>, default 27, clamped to
+    [medium_start_r, render_radius] by <code>apply_low_start</code>, 1655-1671). It dispatches ONE
+    MED/LOW emit per <strong><code>LOW_WAVE_PACE_MS = 3.5</code> ms of wall clock</strong> (~36/s),
+    capped at <code>LOW_WAVE_FRAME_CAP = 8</code> per frame (≤ 5.6 ms max work)
+    <span class="fn">(world.gd:929, 931)</span>.
+  </p>
+  <p>
+    <strong>The order is the SAME (layer, taxi) fan as the build lane</strong>: the wave picks the
+    lowest-scoring entry outside the high band (the <code>_entry_best_pending</code> probe, NOT the
+    high probe — it scans the full slab list, not the high-band window), dispatches one slab's avg
+    emit, and the wave's pick is a (layer, taxi) disc fill — the far bands fill in the same
+    player-slab-first, taxi-ordered disc the build lane uses for the high band. Tier-0 is excluded
+    from the wave entirely (it's always high). The wave respects the <strong>band gate</strong>:
+    <code>if taxi &lt; medium_start_r: skip</code> (2916-2917) — the wave never touches the high band.
+    And the high band itself <strong>renders NOTHING while pending</strong> (1604-1605, the AC-0261
+    decision) — a fast horizontal player sees HOLES in the high band until each slab's hslab +
+    flush lands. The <code>LOW_TASK_CAP = 64</code> (968) caps in-flight EMIT tasks (≈ 1.3 MB of
+    slab copies); <code>LOW_POLL_BUDGET_MS = 4.0</code> (973) caps per-frame wall clock on low
+    handoffs (clamped to dt·0.25, min 1.0); <code>LOW_UPGRADE_PER_FRAME = 1</code> (933) is the
+    idle catch-up (low → high) after <code>LOW_IDLE_GRACE_FRAMES = 10</code> (935);
+    <code>LOW_SCAN_CAP = 2048</code> (936) is the hard entry-visit cap for the pick scan.
+  </p>
+
+  <h3>5.6 Chunk state — the full field table</h3>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Field</th><th>Type</th><th>Meaning / where set</th></tr></thead>
+    <tbody>
+      <tr><td class="nm"><code>data</code> (24)</td><td>Array</td><td>the 24 palettized slabs (null = all-air); set by <code>slabs_landed</code> (chunk.gd:654-667)</td></tr>
+      <tr><td class="nm"><code>data_gen</code></td><td>int</td><td>generation counter — bumped on every <code>slabs_landed</code>; the build lane's stamp comparison key</td></tr>
+      <tr><td class="nm"><code>fl</code> (24)</td><td>Array</td><td>fluid slabs (all null from gen; fluid is a separate system)</td></tr>
+      <tr><td class="nm"><code>gen_mask</code></td><td>int (24-bit)</td><td>which slabs are non-null (v5 wire; chunk.gd:166-167, the <code>gen_keep</code>/<code>gen_mask</code> pair — <code>gen_keep</code> is the AC-0237 dormant seam, reports cited 160-166, decl at 166-167)</td></tr>
+      <tr><td class="nm"><code>high_stamps</code> (dict)</td><td>dict si→gen</td><td>per-slab mesh stamp — <code>high_stamps[si] = data_gen</code> on handoff (world.gd:5732); the "which slabs are meshed" record</td></tr>
+      <tr><td class="nm"><code>mesh_built</code></td><td>bool</td><td>sticky true when the FULL probe returns −1 (world.gd:5784-5785); gates the flush fast path (4408) and the evict/save guards; never re-queued (keep-high)</td></tr>
+      <tr><td class="nm"><code>light_settled</code></td><td>bool</td><td>the column's light is settled (chunk.gd:45); set on flush landing (5763-5769); cleared by the late-landing fix (5752-5754)</td></tr>
+      <tr><td class="nm"><code>flush_slabs</code> (dict)</td><td>dict si→true</td><td>per-slab settle record (chunk.gd:40) — the flush loop's progress</td></tr>
+      <tr><td class="nm"><code>light_dirty</code></td><td>bool</td><td>the column owes a light re-mesh; set by edits, E2 wave, first mesh landing, late landings</td></tr>
+      <tr><td class="nm"><code>band</code></td><td>int</td><td>the column's stream band (0 = high, 1 = mid, 2 = low, 3 = feed); set at stub, changed by <code>_reband</code> (collision bodies only, never the mesh)</td></tr>
+      <tr><td class="nm"><code>cand_since</code></td><td>int</td><td>candidate age — +1 per recenter while two-out; free at 2 (the AC-0080 hysteresis)</td></tr>
+      <tr><td class="nm"><code>slabs_landed</code></td><td>method</td><td>the reference handoff (chunk.gd:654-667) — stores the 24 slabs, bumps <code>data_gen</code>, re-pends every slab in the build lane</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>5.7 The chunk-state transitions</h3>
+  <figure class="reveal">
+<svg viewBox="0 0 1160 260" role="img" aria-label="Chunk state machine" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,Menlo,Consolas,monospace">
+  <defs><marker id="ar5" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#6f6350"/></marker></defs>
+  <g font-size="11.5" fill="#e8ddc9">
+    <g><rect x="20" y="90" width="120" height="46" fill="#1c1712" stroke="#4a4133"/><text x="80" y="110" text-anchor="middle" fill="#c96a3d">stub</text><text x="80" y="126" text-anchor="middle" fill="#6f6350" font-size="9.5">node · band · no data</text></g>
+    <g><rect x="200" y="90" width="140" height="46" fill="#1c1712" stroke="#4a4133"/><text x="270" y="110" text-anchor="middle" fill="#d9a441">data landed</text><text x="270" y="126" text-anchor="middle" fill="#6f6350" font-size="9.5">24 slabs · data_gen↑</text></g>
+    <g><rect x="410" y="90" width="150" height="46" fill="#1c1712" stroke="#4a4133"/><text x="485" y="110" text-anchor="middle">building</text><text x="485" y="126" text-anchor="middle" fill="#6f6350" font-size="9.5">fan slab by slab · HIDDEN</text></g>
+    <g><rect x="630" y="90" width="150" height="46" fill="#1c1712" stroke="#4a4133"/><text x="705" y="110" text-anchor="middle" fill="#58a8a0">settling</text><text x="705" y="126" text-anchor="middle" fill="#6f6350" font-size="9.5">flush loop · 1 col/frame</text></g>
+    <g><rect x="850" y="90" width="150" height="46" fill="#1c1712" stroke="#8a9a5b"/><text x="925" y="110" text-anchor="middle" fill="#8a9a5b">visible @ LOD</text><text x="925" y="126" text-anchor="middle" fill="#6f6350" font-size="9.5">mesh_built · light_settled</text></g>
+    <g><rect x="410" y="190" width="150" height="46" fill="#1c1712" stroke="#4a4133"/><text x="485" y="210" text-anchor="middle" fill="#7fa0c4">demoted</text><text x="485" y="226" text-anchor="middle" fill="#6f6350" font-size="9.5">keep-high · wave owns lows</text></g>
+    <g><rect x="630" y="190" width="150" height="46" fill="#1c1712" stroke="#4a4133"/><text x="705" y="210" text-anchor="middle" fill="#6f6350">candidate → free</text><text x="705" y="226" text-anchor="middle" fill="#6f6350" font-size="9.5">2 recenters one-ring out</text></g>
+  </g>
+  <g stroke="#6f6350" stroke-width="1.4" fill="none" marker-end="url(#ar5)">
+    <line x1="140" y1="113" x2="196" y2="113"/>
+    <line x1="340" y1="113" x2="406" y2="113"/>
+    <line x1="560" y1="113" x2="626" y2="113"/>
+    <line x1="780" y1="113" x2="846" y2="113"/>
+    <path d="M 925 136 L 925 165 L 485 165 L 485 186"/>
+    <line x1="560" y1="213" x2="626" y2="213"/>
+    <path d="M 780 213 L 1000 213 L 1000 136" stroke-dasharray="4 4"/>
+  </g>
+  <text x="146" y="104" font-size="9.5" fill="#6f6350">slabs_landed</text>
+  <text x="346" y="104" font-size="9.5" fill="#6f6350">first hslab</text>
+  <text x="566" y="104" font-size="9.5" fill="#6f6350">light_dirty</text>
+  <text x="786" y="104" font-size="9.5" fill="#6f6350">flush done</text>
+  <text x="640" y="160" font-size="9.5" fill="#6f6350">band exit (demote)</text>
+  <text x="640" y="235" font-size="9.5" fill="#6f6350">exited set</text>
+  <text x="1008" y="180" font-size="9.5" fill="#6f6350">re-entry (free flip)</text>
+</svg>
+    <figcaption><b>FIG 5.1</b> — The chunk-state machine. The forward path is stub → data → building (hidden) → settling → visible. The dashed loop is the keep-all policy: a demoted column keeps its high mesh, a candidate frees after two recenters, and a re-entry is a free visibility flip (no re-mesh, no re-settle).</figcaption>
+  </figure>
+
+  <h3>5.8 Tier-0 — the section</h3>
+  <p>
+    The tier-0 section (default: the player's own column only, <code>tier0_r = 0</code>, max 8 = 289
+    columns, world.gd:1626-1629) is the one region that gets <strong>full-column, full-band
+    treatment</strong>: its score gets the −1e10 prefix (it completes before ANY ring slab), its
+    probes are NEVER windowed (the full column even while moving, §3.6), the build lane serves it
+    (world.gd:6516, 6786, 6918), and the low wave skips it. It is the "you are standing here"
+    region — the one where edit latency and light quality matter most.
+  </p>
+
+  <h3>5.9 The lighting system — the two floods (what Starlight replaces)</h3>
+  <p>
+    The current lighting is two column-scale floods, both run by the flush loop's
+    <code>settle=true</code> re-mesh:
+  </p>
+  <ul>
+    <li><strong>The sky flood</strong> — the <code>AweLighting</code> pull-kernel (C++): for the slab being settled, the eff frame is computed by pulling sky-light from the neighbors' settled state (a per-section pull, not a global flood — but it re-meshes the whole column to apply it). This is the "sky + block one queue" target's first phase.</li>
+    <li><strong>The block-light glow flood</strong> — the AC-0134 fix-6: torches/lava emit block light; the settle re-mesh computes the glow (distance-attenuated) from the slab's light sources + the neighbors' glow frames. The E2 wave (7822-7908) is the cascade that re-marks neighbors when an eff frame CHANGES on a landing.</li>
+  </ul>
+  <p>
+    The flush loop's <strong>1 column/frame + 40 ms budget</strong> (world.gd:15, 11, 4435-4523) is
+    the pacing that makes the two floods affordable — it also makes them the bottleneck for any
+    design that settles more frequently (which Starlight's incremental propagation does NOT: it
+    settles per-section, per-nibble, in the queue's own pace, not in a 1-col/frame flush).
+  </p>
+</section>
+<!-- ============ 06 THREAD MAP + FRAME ANATOMY ============ -->
+<section id="s06">
+  <div class="sec-head reveal"><span class="sec-no">06</span><h2>Thread map &amp; frame anatomy</h2><span class="rule"></span></div>
+
+  <h3>6.1 Who runs what</h3>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Thread</th><th>Runs</th><th>Owns</th><th>Hands back via</th></tr></thead>
+    <tbody>
+      <tr><td class="nm"><strong>Main</strong> (Godot process)</td><td>recenter + walk (<code>_recenter_slice</code>, 8659-8703); the per-frame drain (<code>_drain_build_queue</code>, 6641-7035); the pick/scoring functions (<code>_grid_score</code> 731-777; probes 524-654); the rescore step (822-845); the low wave (<code>_low_step</code>, 2893-2973); the flush loop (4403-4523); the polls (<code>threadgen_poll</code> 5195-5245, <code>threadmesh_poll</code> 5430-5603, <code>io_poll</code>); the E2 wave (7822-7908); the banana pass (5247-5272); the edit-lane yield check (6662-6664); file commits; node attach/show/hide</td><td>all queue state, all chunk nodes, all <code>queued_keys</code>/<code>band_buckets</code>/<code>_qb</code>, the pick caches, the probe caches, all file I/O ordering</td><td>— (it IS the main thread)</td></tr>
+      <tr><td class="nm"><strong>WorkerThreadPool</strong> (shared, Godot-managed)</td><td>gen (<code>_threadgen_worker</code>, 5016-5098, HIGH); high mesh (<code>_threadmesh_worker</code>, 6397-6444, HIGH); disk read (9340-9370, LOW); save encode (9492-9560, LOW); region compaction (9388-9452, LOW); low emit (3201-3227, LOW); startup burst (8606-8648, HIGH group)</td><td>nothing shared — each task is self-contained (a column gen, one slab mesh, one blob, one emit); C++ <code>AweGen</code>/<code>AweMesh</code>/<code>AweStrips</code>/<code>ChunkIOPalette</code> are stateless/RefCounted</td><td>the main-thread polls (one poll per process frame per lane)</td></tr>
+      <tr><td class="nm"><strong>EditPool</strong> (dedicated <code>Thread</code>)</td><td>edit-lane scoped remesh (10538-10600)</td><td>its own mutex-protected task list (10491-10536)</td><td><code>_edit_pool_poll</code> (10602-10680); the drain YIELDS while <code>edit_inflight_count &gt; 0</code> (6662-6664)</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    Software caps: <code>threadgen_max = 3</code> (3316), <code>threadmesh_max = 3</code> (3337),
+    env-overridable (AWECRAFT_THREADGEN_N/THREADMESH_N, clamped 1..16), 40/60 of core count at
+    default (3350-3363); the low wave caps its own inflight at <code>LOW_TASK_CAP = 64</code> (968);
+    IO lanes cap at 2 reads / 3 encodes per frame. The dynamic handoff budget
+    (<code>stream_ho_cap</code>, 78-99, 5509-5511) is a PER-FRAME LANDING cap on the main thread,
+    not a worker cap — up to 24× the base of 3 while flying.
+  </p>
+
+  <h3>6.2 One process frame, in order</h3>
+  <pre class="code"><span class="cm"># World._process (simplified; the ordering that matters is the one below)</span>
+
+<span class="kw">if</span> _recenter_slice_due:
+    _recenter_slice()                    <span class="cm"># ≤ 8 ms OR ≤ 2048 units — the walk spans frames</span>
+
+threadgen_poll()                         <span class="cm"># land finished gen/disk reads (main thread, capped)</span>
+threadmesh_poll()                        <span class="cm"># land finished slab meshes — capped at stream_ho_cap /frame
+                                          # (also: player-position sampling → _dyn_speed + window re-arm,
+                                          #  5467-5511; the 83cfcfe Y-window arm site, §3.6)</span>
+io_poll()                                <span class="cm"># land save/compact work</span>
+_edit_pool_poll()                        <span class="cm"># land edit-lane remeshes (drain yields if any in flight)</span>
+
+<span class="kw">if</span> not loading_active:
+    _low_step()                          <span class="cm"># the low wave: 1 slab per 3.5 ms wall clock, ≤ 8/frame,
+                                          # (layer, taxi) disc order outside the high band</span>
+
+_drain_build_queue()                     <span class="cm"># THE pick loop (6641-7035):
+    #   1 _startup_gen_apply()           — land burst slots (top of call, 6652)
+    #   2 edit yield: if edit_inflight_count > 0: return   (6662-6664)
+    #   3 _rescore_step()                — amortized tier/rank re-stamp (822-845)
+    #   4 unit budget: wall-clock paced, 2 fast / 1 slow per frame @60fps (6697-6721)
+    #   5 per unit: _pick_build_cached (high band + tier-0) →
+    #       sih = _hslab_best_pending_cached →
+    #       full −1 → _remove_entry | windowed −1 → hold (83cfcfe) |
+    #       else _build_unit_hslab (ONE slab dispatch)
+    #       no build unit → data pass: _pick_data_cached → _gen_unit (disk-first)
+    #   6 flush: _flush_light_step (1 col/frame, 40 ms) — the settle re-mesh
+    #   7 bookkeeping: cursor advance, depth cap, _pool_touch</span>
+
+<span class="kw">if</span> snapback_due:                          <span class="cm"># 4377-4381: one recenter when the crossing stream is</span>
+    recenter(px, pz, true, py)            <span class="cm">#  quiet 3.5 s and the anchor still leads</span>
+<span class="kw">if</span> settle_recenter_due:                   <span class="cm"># 4386-4390: the one final rebuild at the resting center</span>
+    recenter(px, pz, true, py)            <span class="cm"># (debounce 1 s; the "fast-then-stop" fix)</span></pre>
+  <p>
+    Two properties fall out of this ordering: (1) <strong>every main-thread mutation of the queue or
+    the chunks invalidates the pick caches</strong> (<code>_pool_touch</code> / the fingerprint bump), so
+    the next pick always sees the freshest state — no stale-ordering bugs, but the pick is
+    recomputed from scratch every frame (the cache is a per-frame memo, not a cross-frame one).
+    (2) <strong>the frame is bounded by three independent budgets</strong> — the walk (8 ms / 2048
+    units), the drain (2-4 units, wall-clock paced), and the flush (1 column / 40 ms) — so a single
+    frame never exceeds ~15 ms of streaming work at steady state, and the low wave's 3.5 ms/slab is
+    on top of that (≤ 5.6 ms). The AC-0229 dynamic budget is what makes this scale with speed
+    (the landing cap, not the dispatch budget, grows).
+  </p>
+</section>
+
+<!-- ============ 07 WHY IT FIGHTS THE DISC ============ -->
+<section id="s07">
+  <div class="sec-head reveal"><span class="sec-no">07</span><h2>Why this fights the flying disc</h2><span class="rule"></span></div>
+  <p class="reveal">
+    The user's end goal: <strong>a flying disc of full-quality terrain around the player — caves,
+    light, everything — with the far horizon filling cheap and fast</strong>. The current
+    architecture fights that goal in six ways (a–f), each verified against the code above.
+  </p>
+
+  <h3>a) Data is column-atomic — "cheap far" cannot be cheap</h3>
+  <p>
+    Every column in the render ring (5k-7k columns at R50) pays the FULL generation cost: 7
+    chunk-scoped coarse fields (3087 fbm3 ≈ 6174 vnoise3 samples) + the 384-block scan + all 24
+    slabs (§2.1, §4.2). The columns that only ever show as 4×4 avg shells (§5.4) are generated as
+    if they were going to be meshed at full resolution. The C++ keep mask could in principle make
+    a far column generate only its surface slab + evidence — but it is <strong>always passed
+    empty</strong> (world.gd:5028-5031, the dormant AC-0237 seam, §2.9). As-is: a 1k-column far
+    horizon costs ~1k × the full gen. That is the "far horizon &lt; 50 ms" gate's blocker.
+  </p>
+
+  <h3>b) The (layer, taxi) layer-major order cannot express "fill the disc around me"</h3>
+  <p>
+    The score <code>layer·10000 + taxi</code> (§3.4) is a <strong>global layer sweep</strong>: all
+    columns' rank-0 slabs before any rank-1, and so on. For a standing player that's fine. For a
+    moving player it produces exactly the shape the user observed: passed columns' deep slabs
+    (rank ≤ 18) outrank fresh columns' near slabs (a fresh column whose terrain top is at slab 8
+    while the player is at slab 18 starts at rank 19 — 19000+taxi, losing to ANY passed column
+    owing rank ≤ 18). The worked example: <span class="mono">1·10000+9 = 10009 &lt; 2·10000+50 =
+    20050</span> — deep work behind the player, holes ahead. The 83cfcfe Y-window papers over this
+    (it hides the deep slabs from the probes while moving) but at the cost of the mechanism the
+    user rejected. The shape itself — not the window — is the blocker to a disc that fills
+    player-first, ring-by-ring.
+  </p>
+
+  <h3>c) The Y-window IS the rejected mechanism</h3>
+  <div class="callout warn">
+    <b>User, verbatim (on the 83cfcfe timer)</b>
+    "3.5 s is a description of approximately what should happen based on our constraints, it in
+    itself is not a constraint. So there should not be some kind of internal timer that changes
+    what we do."
+  </div>
+  <p>
+    The window is a <strong>position-sampled moving state + a 3.5 s timer</strong> (§3.6): it
+    decides what work EXISTS based on how recently the player moved 2+ blocks. That is a timer
+    changing what the machine does — exactly the class of mechanism the user ruled out. And it is
+    a band-aid on (b): it makes the deep work invisible to the scheduler while moving, rather than
+    making the scheduler's order correct. Removing it without fixing the shape (b) restores the
+    deep-behind-the-player behavior the window was hiding.
+  </p>
+
+  <h3>d) The lighting settle is a 1-column/frame flush of two column-scale floods</h3>
+  <p>
+    A slab can only become <em>visible</em> after its column's flush re-mesh (never-show-unlit,
+    §5.2), and the flush is paced at 1 column/frame / 40 ms (world.gd:15, 11). Two consequences for
+    the disc: (1) a fresh column that lands its 24 slabs in, say, 5 seconds then waits in a
+    1-column/frame flush queue before any of it is VISIBLE — the visible-disc lag is the flush lag,
+    not the gen lag; (2) a landing into a settled column un-settles it (the late-landing fix,
+    §4.6) — under a Y-disc that keeps landing long after the first settle, the chunk bounces
+    settled → un-settled → settled for the entire fill, re-meshing neighbors along the way (the E2
+    wave, 7822-7908). Starlight's incremental per-section propagation is what replaces both the
+    flush pacing and the two floods (§8.1, AC-0283).
+  </p>
+
+  <h3>e) Save-on-evict bloats the disk under flight</h3>
+  <p>
+    Every column that leaves the streaming set is saved (world.gd:8192-8204): encode on the pool,
+    main-thread commit, region file. A 50× flight evicts thousands of full-quality columns per
+    minute — each a full 24-slab palettized blob. The save IS the disk's memory of the world, so
+    the disk grows with <em>everything the player flew past</em>, not with the region the player
+    actually stood in. The v5 gen_mask (§4.5) already supports partial columns, but the save
+    trigger is set-based, not content-based. AC-0287 (the save filter: only disc columns save) is
+    the fix; the done-when gate is "a 10k-block flight doesn't bloat the save".
+  </p>
+
+  <h3>f) The queue's order shape is the only thing that is "expensive to change"</h3>
+  <p>
+    Everything else in the list above is a <em>cost</em> problem (a, d, e — too much work per
+    unit) or a <em>mechanism</em> problem the user already ruled out (c). The (layer, taxi) BAKE
+    (§3.4) is different: it is the ORDER in which the machine does its work, and it is correct
+    for the walking regime the user accepted in-game. The redesign must not regress walking
+    (done-when gate 5) while fixing flight — which is why the Flight-ready epic keeps the (layer,
+    taxi) fan for the disc (player-slab-first is exactly "fill around me") and changes what the
+    fan is FOR (the disc, not the ring) and what a column COSTS (the halo is dirt-cheap, §8.2).
+    The "rescore all slabs every recenter" rule (HANDOFF §4) is already true — live scoring, free
+    (§3.4) — so the redesign does not touch the recenter walk's contract at all.
+  </p>
+
+  <div class="callout">
+    <b>Net assessment</b>
+    (a), (b), (c), (d), (e) are all solvable WITHOUT redesigning the substrate: the keep mask
+    exists (dormant), the slab-granular build lane exists, the v5 partial-column disk exists, the
+    live-scored queue exists, the flight-aware handoff budget exists. The epic's four tickets are
+    the five enablers wired together: AC-0283 (Starlight) replaces (d), AC-0284 (cheap far data)
+    re-activates (a)'s seam, AC-0286 (promotion) uses (b)'s fan correctly, AC-0287 (save filter)
+    fixes (e). And (c) falls out: once the order (b) is correct and the halo (a) is cheap, there
+    is nothing left for a moving-state timer to paper over — the window, and the 3.5 s, go away.
+  </div>
+</section>
+<!-- ============ 08 REDESIGN ============ -->
+<section id="s08">
+  <div class="sec-head reveal"><span class="sec-no">08</span><h2>Where the redesign lands</h2><span class="rule"></span></div>
+  <p class="reveal">
+    The user's new direction — the closing "where it lands" — is an epic:
+    <strong>Flight-ready world — cheap far, correct close.</strong> Two new terms enter the
+    vocabulary (defined here, used only from here on):
+  </p>
+  <ul>
+    <li><strong>The disc</strong> (the "sim disc"): the real, full-quality region around the
+    player — <strong>taxi ≤ sim distance</strong>, roughly <strong>80-200 columns</strong> — with
+    the full 24-slab cave field and real light. It is <strong>the only thing that gets saved</strong>.</li>
+    <li><strong>The halo</strong>: the ring <strong>sim &lt; taxi &lt; render</strong>, roughly
+    <strong>5k-7k columns</strong> — dirt-cheap and <strong>never saved</strong>. Data = the
+    surface height <code>H</code> only; light = a <strong>heightmap sky</strong> (15 above the
+    top, 0 below, no flood, no nibbles); drawn as the existing 4×4 avg color.</li>
+    <li><strong>Promotion</strong>: a halo column becoming a real disc column =
+    <strong>one full cave gen + one Starlight flood per column</strong> — <strong>seamless, no
+    bright→dark flash</strong>.</li>
+  </ul>
+
+  <h3>8.1 The target state, mapped onto this document's mechanisms</h3>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Epic piece</th><th>What it replaces</th><th>What it lands on (this doc)</th></tr></thead>
+    <tbody>
+      <tr><td class="nm"><strong>AC-0283 — Starlight</strong> (the light engine)</td><td>The two column-scale floods: the <code>AweLighting</code> pull-kernel sky flood and the glow/glow-boundary block-light flood (§5.9), plus the whole settle/flush machinery — the flush loop (world.gd:4435-4523), the <code>light_settled</code>/<code>flush_slabs</code> settle state (chunk.gd:40,45), the E2 relight wave (7822-7908), and the self-lit mesh path (mesh.cpp:42-45)</td><td>A Starlight-style <strong>single-queue propagator</strong>: ONE queue for sky + block light, two-phase removal (remove then propagate), <strong>per-section 16³ nibbles attached to slabs</strong> — which plugs into the slab state per §5 (the nibble state rides where <code>flush_slabs</code>/<code>high_stamps</code> ride; the never-show-unlit rule survives with the event redefined as "the slab's nibbles are settled"). <strong>Stateless sections = zero cost on load</strong> (a section's light is recomputed from block data + neighbors, not stored); <strong>edit = queue the pos</strong> (replaces <code>_mark_light_around</code> 3×3). The nibble-per-section granularity is exactly the slab granularity the build lane already runs (§4.3).</td></tr>
+      <tr><td class="nm"><strong>AC-0284 — cheap far data</strong> (the halo)</td><td>Whole-column <code>generate_resl</code> for the entire render ring (world.gd:5093): 7 coarse fields + 24-slab fill for columns that only ever show as 4×4 avg shells</td><td><strong>gen_flat cheap mode + the keep-mask wiring</strong>: re-activate the dormant AC-0237 <code>keep</code> parameter (gen.cpp:441-456; the always-empty slot at world.gd:5028-5031) with a Y-driven mask — the halo column generates only what its 4×4 avg shell needs: the surface slab (always kept, gen.cpp:455-456 — data = surface height H) plus the avg-cell evidence. The fields stay cached per (cx, cz, seed) — re-running field builds per slab would be a ~24× blowup (RA TOP5 #2). The avg emit already reads exactly the slab rows it needs (<code>low_emit_avg</code>, world.gd:5357), and the v5 disk's 24-bit gen_mask (chunk_io.gd:10) already records which slabs exist.</td></tr>
+      <tr><td class="nm"><strong>AC-0286 — promotion</strong> (halo → disc)</td><td>Nothing is promoted today: a column is either generated full or not</td><td>The <strong>recenter walk's band logic</strong> (RB §b.3: WANT collects every in-set owing column; band transitions at band-exit/re-entry) + the <strong>regen-merge landing</strong> (world.gd:5273-5279: a regen entry merges its slabs into the existing column per-slab and bumps <code>data_gen</code>, staling in-flight builds) + the <strong>Starlight flood</strong> (AC-0283) — one full cave gen + one flood per column. Seamless: the halo shell stays visible (keep-all-LOD, §5.3) until the promoted column's real slabs flush-land over it (the hslab landing flips, 5772-5781) — no bright→dark gap, because the high only shows once ITS light is settled (the never-show-unlit rule, §5.2, does the work for free).</td></tr>
+      <tr><td class="nm"><strong>AC-0287 — save filter</strong></td><td>Save-on-evict for EVERY column that leaves the streaming set (world.gd:8194): a 50× flight evicts thousands of full columns</td><td>The <strong>chunk_io write path</strong> (RC §f.3: the evict trigger <code>_free_chunk_save</code>, the save queue, worker encode, region commit) with a filter: only disc columns (taxi ≤ sim at evict) queue for save; halo columns never do. The disk format is already slab-ready (v5 gen_mask; a partial column round-trips, world.gd:9149-9171), so a disc column's per-slab state persists unchanged; the 1024-column region file and compaction (9454-9490) are untouched.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    <strong>Starlight in detail — what it is:</strong> a single-queue propagator replacing the
+    two floods: one queue holds dirty sky+block light positions; <strong>two-phase removal</strong>
+    (positions are removed from the grid before propagation so removals never propagate forward
+    twice); propagation runs in <strong>per-section 16³ nibbles</strong> — the same 16³ granularity
+    as a slab, attached to the slab's state (a slab's light is the union of the nibbles covering
+    it); <strong>stateless sections</strong> — light is never stored, it is derived from block
+    data + neighbor light, so a section costs nothing on load; an <strong>edit just queues the
+    position</strong>. Every one of these properties attacks a cost named in §7(d): the
+    per-column flood (replaced by incremental nibble propagation), the 1 col/frame flush (replaced
+    by queue drain at render pace), the late-landing churn (nibble state is per-slab from the
+    start), and the "far = real is unaffordable" arithmetic (the halo pays NO light at all —
+    heightmap sky, no flood, no nibbles).
+  </p>
+
+  <h3>8.2 The key enablers already present (no redesign of the substrate needed)</h3>
+  <div class="layers">
+    <div class="layer reveal" style="--lc:var(--teal)">
+      <h3>Per-slab hslab landing + visibility</h3>
+      <p class="purpose">The build lane, handoff, probes, stamps, and show/hide are all per-slab already.</p>
+      <div class="rows">
+        <b>dispatch</b> <span class="vv">world.gd:6319-6395 (worker scopes si0/si1)</span><br>
+        <b>landing</b> <span class="vv">high_stamps[si] = data_gen (5732)</span><br>
+        <b>visibility</b> <span class="vv">per-si toggles, chunk.gd:195-206</span>
+      </div>
+    </div>
+    <div class="layer reveal" style="--lc:var(--moss)">
+      <h3>The low wave as a Y-disc renderer</h3>
+      <p class="purpose">A working (layer, taxi) Y-disc fill for the far bands, wall-clock paced — the disc's visible surface today.</p>
+      <div class="rows">
+        <b>pace</b> <span class="vv">3.5 ms/slab, 3.5/36/s (world.gd:929)</span><br>
+        <b>order</b> <span class="vv">(layer, taxi) fan, 2893-2973, 3060-3199</span><br>
+        <b>the gate</b> <span class="vv">band gate 2916-2917 + "renders NOTHING" 1604-1605 are the ONLY thing keeping the high band a hole-field</span>
+      </div>
+    </div>
+    <div class="layer reveal" style="--lc:var(--steel)">
+      <h3>v5 disk gen_mask</h3>
+      <p class="purpose">The disk already records which slabs of a column exist — partial columns round-trip.</p>
+      <div class="rows">
+        <b>wire</b> <span class="vv">24-bit mask, chunk_io.gd:10</span><br>
+        <b>stamp</b> <span class="vv">world.gd:5282-5290 (gen) / 9156-9163 (disk)</span><br>
+        <b>partial</b> <span class="vv">regen-merge, world.gd:5273-5279, 9170-9171</span>
+      </div>
+    </div>
+    <div class="layer reveal" style="--lc:var(--amber)">
+      <h3>Live re-scoring (free)</h3>
+      <p class="purpose">No score is ever stored — every recenter re-orders the whole queue for free; the "rescore" spec rule is already true.</p>
+      <div class="rows">
+        <b>score</b> <span class="vv">_grid_score, world.gd:731-777 (pure, live anchor)</span><br>
+        <b>cache</b> <span class="vv">_pool_ver invalidation, world.gd:429-430</span><br>
+        <b>gap</b> <span class="vv">only the layer-major SHAPE (760), not staleness</span>
+      </div>
+    </div>
+    <div class="layer reveal" style="--lc:var(--rust)">
+      <h3>The dormant keep mask</h3>
+      <p class="purpose">Slab-granularity generation already exists in C++ — bit-exact, disjoint-set capable, guarded writes.</p>
+      <div class="rows">
+        <b>mask</b> <span class="vv">gen.cpp:441-456 (always kept: surface slab)</span><br>
+        <b>seam</b> <span class="vv">world.gd:5028-5031 (empty PackedByteArray slot)</span><br>
+        <b>contract</b> <span class="vv">empty-keep = byte-identical (genhash gate)</span>
+      </div>
+    </div>
+    <div class="layer reveal" style="--lc:var(--ocean)">
+      <h3>Flight-aware handoff budget</h3>
+      <p class="purpose">stream_ho_cap already multiplies the per-frame landing budget by flight speed — up to 24× the base while flying.</p>
+      <div class="rows">
+        <b>formula</b> <span class="vv">base(3) × speed × radius, world.gd:78-99, 5509-5511</span><br>
+        <b>ref</b> <span class="vv">R50 50× fly → 72 landings/frame</span><br>
+        <b>uses</b> <span class="vv">handoff cap + evict pacing (4395, 5552-5560)</span>
+      </div>
+    </div>
+  </div>
+
+  <h3>8.3 Ticket order</h3>
+  <p>
+    The epic lands in dependency order:
+    <strong>AC-0283 (light — Starlight) → AC-0284 (cheap far data) → AC-0286 (promotion) →
+    AC-0287 (save filter)</strong>. Light first because promotion's "seamless" property depends on
+    the propagator (no bright→dark flash is a property of when light becomes visible, and the
+    never-show-unlit rule rides on it); cheap-far data next because the halo's cost is the
+    generation cost of the ring; promotion third (it needs both a cheap target and a light
+    engine); the save filter last (it only needs the disc/halo classification to exist).
+  </p>
+
+  <h3>8.4 Done-when metrics</h3>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Metric</th><th>Target</th><th>Why it's the right gate</th></tr></thead>
+    <tbody>
+      <tr><td class="nm">Far horizon fill</td><td class="hl">&lt; 50 ms for 1k columns</td><td>The halo (5k-7k cols) must fill faster than a 16× flight covers it — cheap-far data + avg shells, no floods</td></tr>
+      <tr><td class="nm">Disc fed while sprinting</td><td class="hl">the sim disc keeps up at sprint speed</td><td>The unit budget + stream_ho_cap already scale with speed (§4.1); the gate is that the DISC, not the ring, is what's fed</td></tr>
+      <tr><td class="nm">No light pop on promotion</td><td class="hl">halo shell → real column with no bright→dark flash</td><td>Starlight's incremental flood + the never-show-unlit rule: the real high only shows once its nibbles settle, over the shell that never left</td></tr>
+      <tr><td class="nm">10k-block flight doesn't bloat the save</td><td class="hl">a long flight adds ~0 columns to disk</td><td>AC-0287: halo columns never queue for save; the save stays the disc-sized set the player actually stood in</td></tr>
+      <tr><td class="nm">Walking unchanged</td><td class="hl">walk-speed behavior identical to 83cfcfe</td><td>The walking regime is the one the user already accepted in-game; the redesign must not regress it (the genhash/genprobe gates police the terrain; the lightstate/r16/ladder arms police the streaming)</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <figure class="reveal">
+<svg viewBox="0 0 1160 300" role="img" aria-label="Flight-ready world: sim disc and halo" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,Menlo,Consolas,monospace">
+  <defs><marker id="ar8" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#d9a441"/></marker></defs>
+  <g font-size="11.5" fill="#e8ddc9">
+    <g opacity="0.9">
+      <ellipse cx="520" cy="150" rx="500" ry="120" fill="none" stroke="#4f86a8" stroke-width="1.6" stroke-dasharray="7 5"/>
+      <ellipse cx="520" cy="150" rx="330" ry="78" fill="none" stroke="#8a9a5b" stroke-width="2"/>
+      <ellipse cx="520" cy="150" rx="150" ry="36" fill="rgba(217,164,65,0.10)" stroke="#d9a441" stroke-width="2.2"/>
+      <ellipse cx="520" cy="150" rx="52" ry="12" fill="none" stroke="#c96a3d" stroke-width="1.6"/>
+    </g>
+    <circle cx="520" cy="150" r="4" fill="#e8ddc9"/>
+    <text x="534" y="142" fill="#e8ddc9" font-size="11">player</text>
+    <text x="455" y="190" fill="#c96a3d" font-size="10.5">tier 0</text>
+    <text x="400" y="106" fill="#d9a441" font-size="12">SIM DISC (taxi ≤ sim, ~80-200 cols)</text>
+    <text x="380" y="121" fill="#6f6350" font-size="10">full 24-slab cave field + real (Starlight) light · THE ONLY THING SAVED</text>
+    <text x="540" y="238" fill="#8a9a5b" font-size="12">HALO (sim &lt; taxi &lt; render, ~5k-7k cols)</text>
+    <text x="560" y="253" fill="#6f6350" font-size="10">data = surface height H · light = heightmap sky (15 above top, 0 below, no flood, no nibbles)</text>
+    <text x="575" y="268" fill="#6f6350" font-size="10">drawn as 4×4 avg color · NEVER SAVED</text>
+    <text x="26" y="46" fill="#4f86a8" font-size="10.5">render radius — beyond this: nothing</text>
+    <path d="M 820 210 L 668 178" stroke="#d9a441" stroke-width="1.8" fill="none" marker-end="url(#ar8)"/>
+    <text x="700" y="206" fill="#d9a441" font-size="10.5">PROMOTION: one full cave gen + one Starlight flood per column</text>
+    <text x="700" y="221" fill="#6f6350" font-size="10">seamless — the shell stays up until the real slabs flush over it (no bright→dark flash)</text>
+  </g>
+</svg>
+    <figcaption><b>FIG 8.1</b> — The Flight-ready world. The sim disc is full quality and the only saved region; the halo is dirt-cheap (height H + heightmap sky, avg-shelled) and never saved; a halo column promotes into the disc by one full gen + one Starlight flood. Ticket order: AC-0283 (light) → AC-0284 (cheap far data) → AC-0286 (promotion) → AC-0287 (save filter).</figcaption>
+  </figure>
+</section>
+
+<!-- ============ 09 APPENDIX ============ -->
+<section id="s09">
+  <div class="sec-head reveal"><span class="sec-no">09</span><h2>Appendix</h2><span class="rule"></span></div>
+
+  <h3>9a. Pacing / budget constants — consolidated</h3>
+  <p>All in <code>godot/world/world.gd</code> unless noted. Values verified against the working tree (spot-check log below).</p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Name</th><th>Value</th><th>file:line</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td class="nm">LIGHT_NEIGHBOR</td><td>1</td><td>10</td><td>edit flush ring = 3×3 chunks around the edit (<code>_mark_light_around</code>, 9060-9068)</td></tr>
+      <tr><td class="nm">FLUSH_FRAME_BUDGET_MS</td><td>40</td><td>11</td><td>per-frame time budget for the flush loop (break at 4467)</td></tr>
+      <tr><td class="nm">FLUSH_MAX_PER_FRAME</td><td>2</td><td>12</td><td>steady flush column cap (superseded in practice by EDIT_FLUSH_MAX_PER_FRAME)</td></tr>
+      <tr><td class="nm">EDIT_FLUSH_MAX_PER_FRAME</td><td>1</td><td>15</td><td>steady flush cap — <strong>1 column/frame</strong> (4465)</td></tr>
+      <tr><td class="nm">LOAD_FLUSH_MAX_PER_FRAME</td><td>6</td><td>103</td><td>flush cap during the loading window</td></tr>
+      <tr><td class="nm">LOAD_SAVE_PER_FRAME</td><td>16</td><td>104</td><td>save-queue drain while loading (steady = 1-2/frame, 9238-9249)</td></tr>
+      <tr><td class="nm">BUILD_FAST_US</td><td>15000</td><td>126</td><td>a dispatch under 15 ms is "fast" — banks units at 8 ms pace, else 16 ms</td></tr>
+      <tr><td class="nm">REC_SLICE_BUDGET_MS</td><td>8</td><td>129</td><td>the recenter walk's per-frame time budget (8659-8703)</td></tr>
+      <tr><td class="nm">REC_UNITS_PER_FRAME</td><td>2048</td><td>130</td><td>the recenter walk's per-frame unit budget</td></tr>
+      <tr><td class="nm">DRAIN_UNIT_PACE_MS / _SLOW_MS</td><td>8 / 16</td><td>6684</td><td>wall-clock pace per drain unit (fast vs slow dispatch)</td></tr>
+      <tr><td class="nm">DRAIN_DT_CLAMP_MS</td><td>100.0</td><td>148</td><td>clamp the wall-clock frame sample (pause/hitch)</td></tr>
+      <tr><td class="nm">DRAIN_WIN_PACE_MS</td><td>250.0</td><td>149</td><td>the drain window grows one bucket per 250 ms steady state</td></tr>
+      <tr><td class="nm">DRAIN_UNITS_FRAME_CAP</td><td>4</td><td>6692</td><td>max drain units per frame (at 60 fps: 2 fast / 1 slow)</td></tr>
+      <tr><td class="nm">RESCORE_PER_FRAME</td><td>2048</td><td>411</td><td>amortized tier/rank re-stamp per drain call (step at 822-845)</td></tr>
+      <tr><td class="nm">REBUILD_COVER_L1</td><td>4</td><td>422</td><td>a parked escalation chains the next walk only if the player outran it by &gt;4 taxi</td></tr>
+      <tr><td class="nm">LOW_GRID / LOW_CELL_BLOCKS</td><td>4 / 4</td><td>904-905</td><td>LOW tier = 4×4×4 coarse grid (4-block cells)</td></tr>
+      <tr><td class="nm">MED_GRID / MED_CELL_BLOCKS</td><td>8 / 2</td><td>913-914</td><td>MED tier = 8×8×8 coarse grid (2-block cells)</td></tr>
+      <tr><td class="nm">LOW_WAVE_PACE_MS</td><td>3.5</td><td>929</td><td>one far slab per 3.5 ms wall clock (~36/s)</td></tr>
+      <tr><td class="nm">LOW_WAVE_FRAME_CAP</td><td>8</td><td>931</td><td>per-frame low dispatch cap (≤ 5.6 ms max work)</td></tr>
+      <tr><td class="nm">LOW_UPGRADE_PER_FRAME</td><td>1</td><td>933</td><td>per-frame idle low→high catch-up dispatch</td></tr>
+      <tr><td class="nm">LOW_IDLE_GRACE_FRAMES</td><td>10</td><td>935</td><td>idle frames before upgrades start</td></tr>
+      <tr><td class="nm">LOW_SCAN_CAP</td><td>2048</td><td>936</td><td>hard entry-visit cap for the low pick scan</td></tr>
+      <tr><td class="nm">LOW_TASK_CAP</td><td>64</td><td>968</td><td>max in-flight low EMIT tasks (≈1.3 MB of slab copies)</td></tr>
+      <tr><td class="nm">LOW_POLL_BUDGET_MS</td><td>4.0</td><td>973</td><td>per-frame wall-clock cap on low handoffs (clamped to dt·0.25, min 1.0)</td></tr>
+      <tr><td class="nm">low_start_r</td><td>27</td><td>983</td><td>the effective MED/LOW boundary (clamped to [medium_start_r, render_radius] by apply_low_start, 1655-1671)</td></tr>
+      <tr><td class="nm">FOG_WAVE_ON</td><td>false</td><td>1048</td><td>master switch for the (removed) fog veil — dormant</td></tr>
+      <tr><td class="nm">POOL_MI_MIN / _MM_MIN / _COL_MIN</td><td>32 / 8 / 16</td><td>1104-1110</td><td>pool floor sizes (prewarm is ring-sized, 1148-1169; <code>_pool_mi_per_col ≈ 10</code>)</td></tr>
+      <tr><td class="nm">STREAM_TM_HANDOFF_PER_FRAME</td><td>3</td><td>78</td><td>the BASE of the dynamic per-frame streaming budget <code>stream_ho_cap = base × speed × radius</code> (clamped 1..100; up to 24× while flying, 95-99, 5509-5511)</td></tr>
+      <tr><td class="nm">tier0_r</td><td>0</td><td>1626</td><td>the tier-0 section radius (default = the player's own column; max 8)</td></tr>
+      <tr><td class="nm">threadgen_max / threadmesh_max</td><td>3 / 3</td><td>3316 / 3337</td><td>software in-flight caps on the shared pool (40/60 of cores, 3350-3363; env AWECRAFT_THREADGEN_N/THREADMESH_N; clamped 1..16)</td></tr>
+      <tr><td class="nm">EFF_CACHE_CAP</td><td>128</td><td>3523</td><td>LRU cap on the eff (settled-light section) cache</td></tr>
+      <tr><td class="nm">SMALL_MOVE_BUDGET_MS</td><td>1500</td><td>3230</td><td>1 unit/frame trickle for 1.5 s after each recenter (8375, 6697-6698)</td></tr>
+      <tr><td class="nm">AHEAD_RING_DEBOUNCE_MS</td><td>1000</td><td>3231</td><td>debounce on the settle recenter (4386-4390)</td></tr>
+      <tr><td class="nm">AHEAD_FAST_MS</td><td>3500</td><td>3241</td><td>fast-crossing predicate (the ahead lead) + the Y-window "moving" quiet window + the snap-back quiet window — <strong>the shared timer the redesign removes</strong></td></tr>
+      <tr><td class="nm">AHEAD_DIST</td><td>1</td><td>3242</td><td>the one-chunk ahead lead per crossed axis</td></tr>
+      <tr><td class="nm">LOAD_TG_CAP / LOAD_TM_CAP</td><td>8 / 64</td><td>45 / 48</td><td>loading-window pool caps (set at 4635-4636)</td></tr>
+      <tr><td class="nm">FACE_CHUNK_CAP</td><td>512</td><td>10390-10394</td><td>FIFO cap on non-home sphere-face chunks (data-level only)</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>9b. The harness / verification surface</h3>
+  <p>
+    The <code>AWECRAFT_LOGIC</code> arms referenced across the reports (run headless:
+    <code>AWECRAFT_LOGIC=&lt;arm&gt; ~/tools/godot/godot --headless --path godot</code>,
+    ALWAYS with <code>HOME=/tmp/dsh_home</code> and an absolute godot path — real HOME segfaults on
+    the user:// dir, HANDOFF §7):
+  </p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Arm</th><th>What it verifies</th><th>Baseline / expected (83cfcfe)</th></tr></thead>
+    <tbody>
+      <tr><td class="nm">genprobe</td><td>bit-exact C++/GDScript noise — 4700 samples, exact f64 equality (harness.gd:16090-16184)</td><td>0 mismatches</td></tr>
+      <tr><td class="nm">genhash</td><td>MD5 of the 25 flat columns around the origin (harness.gd:1024-1039)</td><td><code>GENHASH 0 0 = 80b904c0e5f085eef1e839459058c706</code> (CONTINUITY.archive.md:357) — re-baseline only for DELIBERATE terrain changes</td></tr>
+      <tr><td class="nm">lightstate (R16)</td><td>the streaming/lighting steady state: holes, demotes, double-LOD, wash, settle</td><td>hole_slabs_now <strong>1776</strong>, demoted <strong>48</strong>, double_lod 0, wash false, settle 2400, hole_traj <strong>[281,0,0,0,0]</strong></td></tr>
+      <tr><td class="nm">r16</td><td>render-radius-16 flight census: lost chunks, far census</td><td>ok=true, lost 0/0, far census 1282/199/100 (re-baselined by design per window/band change)</td></tr>
+      <tr><td class="nm">ladder</td><td>LOD band crossings (demote/reentry flips)</td><td>boundary_flip_n <strong>126</strong></td></tr>
+      <tr><td class="nm">meshprobe</td><td>the C++ mesh port vs GDScript — byte exactness</td><td>match_rate <strong>1.0</strong></td></tr>
+      <tr><td class="nm">battery</td><td>31-mode regression battery (includes genhash, trees, …) vs the 7f1888d baseline <code>.scratch/percol_battery</code></td><td>~23/31 byte-identical + ~8 timing-jitter; wallshot = PRE-EXISTING hang at "MSG Flying" (baseline d99ffee hangs too) — not a regression signal</td></tr>
+      <tr><td class="nm">player / interact / light / fluids / buckets</td><td>the AGENTS.md quick-logic arms (game semantics)</td><td>per arm's own gates</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p><strong>Gate commands (HANDOFF §7, to re-run after the redesign):</strong></p>
+  <pre class="code"><span class="cm"># the R16 streaming/lighting gate</span>
+HOME=/tmp/dsh_home AWECRAFT_LOGIC=lightstate AWECRAFT_LS_RADIUS=16 \
+  timeout N /home/angrygiant/tools/godot/godot --headless --path godot
+<span class="cm"># → hole_slabs_now 1776 · demoted 48 · double_lod 0 · wash false · settle 2400 · hole_traj [281,0,0,0,0]</span>
+<span class="cm"># the radius-16 census</span>
+HOME=/tmp/dsh_home AWECRAFT_LOGIC=r16 ...   <span class="cm"># → ok=true · lost 0/0 · far census 1282/199/100</span>
+<span class="cm"># ladder → boundary_flip_n 126 · meshprobe → match_rate 1.0</span>
+<span class="cm"># the battery:</span>
+HOME=/tmp/dsh_home bash .scratch/run_battery.sh .scratch/&lt;out&gt;   <span class="cm"># compare vs .scratch/percol_battery</span>
+<span class="cm"># INFRA: build_windows.sh with REAL HOME · :8080 authoritative (serves from disk) ·
+# GIT_SSH_COMMAND="ssh -F /dev/null" git push · a git worktree of a past commit lacks the
+# untracked godot/bin/libchunkio.so (copy from main tree) · harness.gd must stay pristine</span></pre>
+
+  <h3>9c. Open questions — consolidated from all four reports</h3>
+  <p class="reveal"><strong>RA (terrain)</strong>:</p>
+  <ol class="steps">
+    <li>The cost discrepancy: solo ~1.5 ms/chunk (GENMS 36-39 for 25) vs 120-320 ms/task in the worker-pool comments (world.gd:5035-5036, 5144, 8631, 8639) — different machines/builds/modes; the <code>gen_timing</code> breakdown has no recorded baseline.</li>
+    <li>Transient C++ crashes: one-off SIGSEGVs at the <code>AweGen.generate_flat</code> frame (AC-0206; AC-0040/0189/0207 results) — non-repro, treated as a .so-class flake, unresolved.</li>
+    <li>Trees on the spawn pad: the pad forces H=136 &gt; sea+1 with solid grass top, so the tree pass's gates can (by hash) plant trees inside the r≤10 pad; no pad exclusion exists in the tree pass (gen.cpp:633-740) — intent undocumented.</li>
+    <li><code>generate_slabs</code> appears unused from GDScript (only the C++ binding, gen.cpp:911).</li>
+    <li>The <code>solid_ids</code> table comment is slightly wrong (gen.cpp:242 lists "21" as solid; slot 21 is false — inert, no block 21 generated).</li>
+    <li><code>terrain_height</code> (2D proxy) vs <code>surface_h</code> (3D truth): per-cell divergence unmeasured in-repo; the skip-cam and spawn height ride on the proxy.</li>
+    <li>The v5 partial-column reload behavior (world.gd:9153-9171) and gen_mask × pipeline interaction (RC's scope).</li>
+  </ol>
+  <p><strong>RB (scheduler)</strong>:</p>
+  <ol class="steps">
+    <li><strong>Snapback survival (AC-0277)</strong>: the <code>_process</code> snap-back (4377-4381) recenters ONCE when the player stops — the user's binding model says stopping should stop recenters entirely; is one final recenter acceptable (it also re-anchors the layer fan; without it the resting queue is centered one chunk ahead)?</li>
+    <li>Fresh-prefix scope: outrank ALL carried slabs or only those below some layer? (The user's words read as ALL.) — <em>moot under the Flight-ready epic: the halo has no deep carried work to outrank.</em></li>
+    <li>Global layer-sweep vs per-column completion: "one disc's Y at a time" — current code is the global layer sweep; the user described the observed fill as expected, so likely keep — confirm.</li>
+    <li>Fresh-tag semantics: "collected in this recenter's WANT" vs "newly in-set by distance" — a column bouncing in/out over two recenters would be re-marked fresh (seems desirable).</li>
+    <li>No knob exists for "staying long enough" — confirmed: the only time constants are AHEAD_FAST_MS (3241), SMALL_MOVE_BUDGET_MS (3230), AHEAD_RING_DEBOUNCE_MS (3231), the DRAIN/LOW/LOAD pacing (127-150, 904-976), DRAIN_DT_CLAMP_MS — none gates "when deep work resumes" except the (rejected) Y-window's 3.5 s. After the redesign, deep-work resumption should be purely a function of work volume.</li>
+    <li>Windowed −1 removal mechanics: after the window removal, the hold/break sites (6809-6812, 6929-6940) collapse to <code>_remove_entry</code> on any −1 — verify the spawn 3×3 regression class cannot reappear (the stale sweep 8892-8903 and the MERGE_WANT mesh_built skip 8865-8866 cover it; the mid-frame window is worth a test).</li>
+    <li>The 1e30 rule's interaction with the data pass: today a windowed −1 leaves <code>u=0</code> and the data pass still runs (6954); after removal, confirm no unit-budget double-spend (removal costs no unit, 6939-6940).</li>
+    <li>Load-window ordering under a fresh prefix: a −2.5e9 prefix would make fresh edge columns outrank the load target's DEEP slabs mid-load — worth an A/B.</li>
+    <li><code>_tier_stamp</code>'s <code>rank</code> (taxi at stamp time) goes stale during long walks — confirm it is not read order-critically beyond the low-lane tier checks (2505, 5855).</li>
+    <li>The <code>mq_b/mq_i</code> mesh cursor: reset at finalize (8927-8928), set in <code>_enqueue_build</code> (4900-4902)/<code>_convert_data_to_build</code> (4792-4794), but no consumer gates the scored pick on it — confirm vestigial before removal.</li>
+  </ol>
+  <p><strong>RC (data + mesh pipeline)</strong>:</p>
+  <ol class="steps">
+    <li>Flush granularity under Y-layer streaming: the partial-column flush re-meshes only <code>high_stamps.keys()</code> slabs (4506-4511) but SETTLE is chunk-level (5763-5769) — does the <code>mesh_built</code> gate (4474-4476) + the "every stamped slab flushed" rule interact badly with a column that never gets all slabs stamped while moving?</li>
+    <li><code>_build_ready</code>'s 8-neighbor gate vs slab-windowed builds: a slab <code>si</code> build defers on ANY missing neighbor column (6347-6351) even though only neighbor slab si±1 would be read — the <code>snap_rings</code> call takes the whole neighbor column (6352); would it need a scoped variant, or consume a partial-neighbor snapshot with gen_keep-style solid filling?</li>
+    <li>Light correctness of slab-ordered landing: the E2 wave (7822-7908) re-lights a neighbor when the landed eff frame changes — a Y-disc landing changes WHICH frames change when (deep slabs land late); the no-op proof should hold but the churn profile is unmeasured.</li>
+    <li>Save/evict with partial gen: a column evicted mid-Y-disc round-trips through v5 and re-enqueues a FULL regen on load (9170-9171) — is re-generating the already-present slabs (merge path, bit-exact, 5273-5279) acceptable, or should the regen be scoped to the missing mask?</li>
+    <li>The startup burst is column-atomic 5×5 (8641) — with per-slab gen the spawn anti-fall could be slab-windowed around the player's Y; the dead-slot self-heal (5138-5170) and the <code>_startup_pending</code> 3×3 mesh-complete gate (4928-4934) would need slab-aware versions.</li>
+    <li><code>_dirty_front</code> boundary propagation at slab granularity: a boundary edit re-meshes the WHOLE neighbor column via the normal streaming pick (player-Y-first, 6928) — should the edit-lane scoped dispatch (6065) also cover the boundary neighbors' si±1 slab span?</li>
+  </ol>
+  <p><strong>RD (LOD + lighting + chunk state)</strong>:</p>
+  <ol class="steps">
+    <li>Late-landing churn under Y-disc fill: 108 late landings / 0 unflushed was measured for the window; a disc fill keeps landing after settle for LONGER — is the un-settle→hide→re-arm cycle (5752-5797) acceptable per slab, or does the chunk need a "settle with holes" state (per-slab <code>light_settled</code> instead of the chunk boolean + <code>flush_slabs</code>)? — <em>Starlight answers this: per-section nibble state IS per-slab.</em></li>
+    <li>Should the high band render a MED disc while high builds? That is the inverse of AC-0261 ("pending renders NOTHING", 1604-1605) — currently a fast horizontal player sees HOLES in the high band until each slab's hslab+flush lands; a wave-lane high-band fill (note i.3) would fix it with existing machinery.</li>
+    <li>The 8-neighbor data gate is column-atomic (4904-4926, 6343-6351): could a per-slab data landing relax it to "the neighbor rows this slab touches"? (Same question as RC #2.)</li>
+    <li>Flush pacing vs disc demand: 1 col/frame + 40 ms (4465-4467) is tuned for the edit/late-landing trickle; a disc landing in fan order produces a flush wave per fan ring — does the E2 cascade (7879-906) re-mark neighbors in a controlled way? (Same question as RC #3.)</li>
+    <li><code>mesh_built</code> semantics under partial discs: it stays false until the FULL probe is −1 (5784-5785) — a Y-disc column is "not built" for many seconds; the re-queue (8437-8440), the flush fast path (4408), and the evict/save guards key off it — should some use key off "fan-complete up to rank k" instead?</li>
+    <li>Pool sizing for stored tiers: keep-all-LOD stores up to 3 tiers per slab; a demoted disc holds ~2× the instances — does <code>_pool_mi_per_col</code> need a demote-aware sizing term?</li>
+    <li>The snap-back recenter timer (4377-4383 area) interacts with the wave gate and the Y-window — both are scheduled for removal; the meshing side only consumes their outputs.</li>
+  </ol>
+
+  <h3>9d. Citation spot-check log (verification pass)</h3>
+  <p>
+    <strong>39 distinct file:line citations were re-verified by reading the actual lines</strong> in
+    the working tree before publication. All confirmed correct, with two minor adjustments made in
+    this document:
+  </p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>#</th><th>Citation checked</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>player.gd:1611-1619 (recenter trigger, exact code)</td><td>✓ exact</td></tr>
+      <tr><td>2</td><td>world.gd:731-777 <code>_grid_score</code> (1e30 @ 758-759; bake @ 760; tier-0 @ 765-766; load target @ 775-776)</td><td>✓ exact</td></tr>
+      <tr><td>3</td><td>world.gd:473-479 <code>_layer_rank_of</code></td><td>✓ exact</td></tr>
+      <tr><td>4</td><td>world.gd:493-499 <code>_lod_player_moving</code></td><td>✓ exact</td></tr>
+      <tr><td>5</td><td>world.gd:513-522 <code>_lod_windowed_for</code></td><td>✓ exact</td></tr>
+      <tr><td>6</td><td>world.gd:5093 <code>g.generate_resl(...)</code></td><td>✓ exact</td></tr>
+      <tr><td>7</td><td>world.gd:6928 / 6939-6940 / 6942 (probe, windowed hold, slab dispatch)</td><td>✓ exact</td></tr>
+      <tr><td>8</td><td>world.gd:6319-6332 <code>_mesh_dispatch_hslab</code> (gates 1-3)</td><td>✓ exact</td></tr>
+      <tr><td>9</td><td>chunk.gd:654-667 <code>slabs_landed</code></td><td>✓ exact</td></tr>
+      <tr><td>10</td><td>chunk.gd:160-167 <code>gen_keep</code>/<code>gen_mask</code></td><td>✓ — reports cited 160-166; the declarations sit at 166-167 (comment 159-165); this doc cites 166-167</td></tr>
+      <tr><td>11</td><td>world.gd:5752-5754 late-landing (exact code)</td><td>✓ exact</td></tr>
+      <tr><td>12</td><td>world.gd:4465-4467 flush cap + time budget (exact code)</td><td>✓ exact</td></tr>
+      <tr><td>13</td><td>world.gd:3241-3242 AHEAD_FAST_MS / AHEAD_DIST</td><td>✓ exact</td></tr>
+      <tr><td>14</td><td>world.gd:4377-4381 snap-back (exact code)</td><td>✓ exact</td></tr>
+      <tr><td>15</td><td>world.gd:5494-5500 position sampling / window re-arm</td><td>✓ exact</td></tr>
+      <tr><td>16</td><td>world.gd:5028-5031 empty keep mask (the dormant seam)</td><td>✓ exact</td></tr>
+      <tr><td>17</td><td>world.gd:78 STREAM_TM_HANDOFF_PER_FRAME</td><td>✓ exact</td></tr>
+      <tr><td>18</td><td>world.gd:929-936 LOW_* wave constants</td><td>✓ exact</td></tr>
+      <tr><td>19</td><td>world.gd:8911-8932 finalize swap (bucket swap, flags, rescore kick)</td><td>✓ exact</td></tr>
+      <tr><td>20</td><td>world.gd:8437-8440 AC-0278 re-queue</td><td>✓ exact</td></tr>
+      <tr><td>21</td><td>gen.cpp:480-489 the 7 coarse fields (salts/scales/offsets)</td><td>✓ exact</td></tr>
+      <tr><td>22</td><td>chunk_io.gd:9-10 VERSION 4 / V5_VERSION 5 (24-bit gen mask)</td><td>✓ exact</td></tr>
+      <tr><td colspan="2"><em>§9a constant table (16 additional lines verified by grep of the constant definitions):</em></td><td>✓ all</td></tr>
+      <tr><td>23-38</td><td>world.gd lines 10, 12, 103, 104, 126, 129, 130, 148, 149, 411, 422, 968, 1104, 3230, 3231, 3523</td><td>✓ exact</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    <strong>One terminology note</strong>: the reports cite <code>world.gd:837-841</code> for the
+    <em>use</em> of <code>RESCORE_PER_FRAME</code> (in <code>_rescore_step</code>) and
+    <code>8679-8703</code> for the walk loop's use of <code>REC_SLICE_BUDGET_MS</code>/
+    <code>REC_UNITS_PER_FRAME</code> — the constant definitions themselves sit at 411 and
+    129-130 (this doc cites both where relevant). No factual conflicts were found among the four
+    reports; where a line range in a report spanned a function header (e.g. "world.gd:8321-8657"
+    for <code>recenter</code>), the range was kept as-is.
+  </p>
+</section>
+
+</main>
+
+<footer class="wrap">
+  <div><b>AWECRAFT — WORLD GENERATION &amp; STREAMING</b> · end to end · code state 83cfcfe · 2026-09-14</div>
+  <div>Sources: .scratch/worldgen-research/RA-terrain.md · RB-scheduler.md · RC-data-pipeline.md · RD-lod-lighting.md · godot/HANDOFF-emergent-queue.md · godot/CONTINUITY.md (r7/r8) — all file:line citations per commit 83cfcfe (repo HEAD 3d5da8d).</div>
+  <div>Single-file build · no external assets · house style per docs/world-generation.html</div>
+</footer>
+
+<script>
+// TOC scroll-spy (optional; degrades to plain anchors without JS)
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('nav.toc a'));
+  var map = {};
+  links.forEach(function(a){
+    var id = a.getAttribute('href').slice(1);
+    var el = document.getElementById(id);
+    if (el) map[id] = a;
+  });
+  var ids = Object.keys(map);
+  if (!ids.length || !('IntersectionObserver' in window)) return;
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(en){
+      if (en.isIntersecting) {
+        ids.forEach(function(id){ map[id].classList.remove('cur'); });
+        if (map[en.target.id]) map[en.target.id].classList.add('cur');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  ids.forEach(function(id){ io.observe(document.getElementById(id)); });
+})();
+</script>
+</body>
+</html>
