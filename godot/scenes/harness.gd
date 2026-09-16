@@ -6062,6 +6062,448 @@ func _bs_md5(d: PackedByteArray) -> String:
 	return hx
 
 
+func _bs_live_eff(sk: PackedByteArray, bl: PackedByteArray, p: int) -> int:
+	if sk.is_empty() or bl.is_empty():
+		return -1
+	var v1: int = (int(sk[p >> 1]) >> ((p & 1) << 2)) & 15
+	var v2: int = (int(bl[p >> 1]) >> ((p & 1) << 2)) & 15
+	return maxi(v1, v2)
+
+
+func _bs_cave_break_cell(cx0: int, cz0: int, H: int, boundary_only: bool) -> Array:
+	var c2: Array = []
+	for dcx in range(-2, 3):
+		for dcz in range(-2, 3):
+			var wcx := cx0 + dcx
+			var wcz := cz0 + dcz
+			var cc = world.chunks.get(world._key(wcx, wcz))
+			if cc == null or cc.data.is_empty():
+				continue
+			var f: PackedByteArray = cc.flat_data()
+			var air := PackedByteArray()
+			air.resize(H * 256)
+			var open15 := PackedByteArray()
+			open15.resize(H * 256)
+			for ix in range(16):
+				for iz in range(16):
+					var i0 := ix + iz * 16
+					var op := true
+					for y in range(H - 1, -1, -1):
+						var b: int = int(f[(y << 8) | i0])
+						air[(y << 8) | i0] = 1 if b == 0 else 0
+						if op and b == 0:
+							open15[(y << 8) | i0] = 1
+						elif b != 0:
+							op = false
+			var dist := {}
+			var q: Array = []
+			for p in range(H * 256):
+				if open15[p] != 0:
+					dist[p] = 0
+					q.append(p)
+			var qi := 0
+			while qi < q.size():
+				var p: int = q[qi]
+				qi += 1
+				var d: int = int(dist[p])
+				if d >= 14:
+					continue
+				var y: int = p >> 8
+				var iz: int = (p >> 4) & 15
+				var ix: int = p & 15
+				var nbs2: Array = []
+				if y + 1 < H:
+					nbs2.append((p & ~255) + 256)
+				if y > 0:
+					nbs2.append(p - 256)
+				if ix + 1 < 16:
+					nbs2.append(p + 1)
+				if ix > 0:
+					nbs2.append(p - 1)
+				if iz + 1 < 16:
+					nbs2.append(p + 16)
+				if iz > 0:
+					nbs2.append(p - 16)
+				for np in nbs2:
+					if air[np] != 0 and not dist.has(np):
+						dist[np] = d + 1
+						q.append(np)
+			for p in range(H * 256):
+				if air[p] != 0 and dist.has(p):
+					continue
+				var y: int = p >> 8
+				var iz: int = (p >> 4) & 15
+				var ix: int = p & 15
+				var cand: Array = []
+				var sb: Array = []
+				if y + 1 < H:
+					sb.append(p + 256)
+				if y > 0:
+					sb.append(p - 256)
+				if ix + 1 < 16:
+					sb.append(p + 1)
+				if ix > 0:
+					sb.append(p - 1)
+				if iz + 1 < 16:
+					sb.append(p + 16)
+				if iz > 0:
+					sb.append(p - 16)
+				for bp in sb:
+					if air[bp] != 0:
+						continue
+					var by: int = bp >> 8
+					var biz: int = (bp >> 4) & 15
+					var bix: int = bp & 15
+					var okb := false
+					var bb: Array = []
+					if by + 1 < H:
+						bb.append(bp + 256)
+					if by > 0:
+						bb.append(bp - 256)
+					if bix + 1 < 16:
+						bb.append(bp + 1)
+					if bix > 0:
+						bb.append(bp - 1)
+					if biz + 1 < 16:
+						bb.append(bp + 16)
+					if biz > 0:
+						bb.append(bp - 16)
+					for bbp in bb:
+						if dist.has(bbp) and int(dist[bbp]) <= 12:
+							okb = true
+							break
+					if boundary_only and not (bix == 0 or bix == 15 or biz == 0 or biz == 15):
+						continue
+					if okb:
+						cand.append(bp)
+				if cand.size() > 0:
+					var bp: int = cand[0]
+					c2 = [wcx * 16 + (bp & 15), bp >> 8, wcz * 16 + ((bp >> 4) & 15), 0,
+						wcx * 16 + (p & 15), p >> 8, wcz * 16 + ((p >> 4) & 15)]
+					break
+			if c2.size() > 0:
+				break
+		if c2.size() > 0:
+			break
+	return c2
+
+
+func _bs_surface_break_cell(wcx: int, wcz: int) -> Array:
+	for lz in range(16):
+		var wx := wcx * 16 + 15
+		var wz := wcz * 16 + lz
+		var wy: int = world.surface_top(wx, wz)
+		if main._breakable(world.get_block(wx, wy, wz)):
+			return [wx, wy, wz, 0]
+	for lx in range(16):
+		var wx := wcx * 16 + lx
+		var wz := wcz * 16 + 15
+		var wy: int = world.surface_top(wx, wz)
+		if main._breakable(world.get_block(wx, wy, wz)):
+			return [wx, wy, wz, 0]
+	return []
+
+
+func _bs_replay_bakes(evs: Array, si_e: int, H: int, pre_eff: Dictionary, fin_eng: Dictionary, fin_ref: Dictionary) -> Dictionary:
+	var ob_bakes := 0
+	var ob_cells := 0
+	var ref_cells := 0
+	var max_d := 0
+	var max_at := ""
+	var eq_pre := 0
+	var eq_15 := 0
+	var other := 0
+	var first_frame := -1
+	var last_frame := -1
+	var final_exact_frame := -1
+	var bakes := 0
+	var lver_drops := 0
+	var ob_detail: Array = []
+	var ob_cells_detail: Array = []
+	var live_15 := 0
+	var live_0 := 0
+	var live_mid := 0
+	var live_missing := 0
+	var sec_cache: Dictionary = {}
+	var NSDX: Array = [1, -1, 0, 0]
+	var NSDZ: Array = [0, 0, 1, -1]
+	var CDX: Array = [1, -1, 1, -1]
+	var CDZ: Array = [1, 1, -1, -1]
+	for ev in evs:
+		var fr: int = int(ev[0])
+		var evt: String = ev[1]
+		var pcx: int = int(ev[2])
+		var pcz: int = int(ev[3])
+		var info: Dictionary = ev[5]
+		if evt == "drop":
+			lver_drops += 1
+			continue
+		if evt != "land":
+			continue
+		var k: String = "%d,%d" % [pcx, pcz]
+		bakes += 1
+		var bake_over := 0
+		var eff_full: PackedByteArray = PackedByteArray()
+		var side: Array = []
+		var corner: Array = []
+		var y0 := 0
+		var y1 := 0
+		if bool((info.get("eff", {}) as Dictionary).get("star", false)):
+			var pl: Dictionary = info.get("eff", {})
+			eff_full = pl.get("eff", PackedByteArray())
+			side = pl.get("side", [])
+			corner = pl.get("corner", [])
+			y0 = int(pl.get("w_lo", 0))
+			y1 = int(pl.get("w_hi", 0))
+		elif bool(info.get("scoped", false)):
+			eff_full = (info.get("eff", {}) as Dictionary).get("arr", PackedByteArray())
+			y0 = int(info.get("y_lo", 0))
+			y1 = int(info.get("y_hi", 0))
+		else:
+			eff_full = (info.get("light", {}) as Dictionary).get("arr", PackedByteArray())
+			y0 = maxi(0, (si_e - 2) * 16)
+			y1 = mini(H - 1, (si_e + 2) * 16)
+		var farr: PackedByteArray = fin_eng.get(k, PackedByteArray())
+		var parr: PackedByteArray = pre_eff.get(k, PackedByteArray())
+		var rarr: PackedByteArray = fin_ref.get(k, PackedByteArray())
+		var has_ref: bool = not rarr.is_empty()
+		var ob_first_loc := ""
+		var kind: String = "hslab"
+		if bool(info.get("scoped", false)):
+			kind = "scoped"
+		elif not bool((info.get("eff", {}) as Dictionary).get("star", false)):
+			kind = "full"
+		if not eff_full.is_empty() and not farr.is_empty() and y1 >= y0:
+			for y in range(y0, y1 + 1):
+				var base: int = y << 8
+				for i in range(256):
+					var v: int = int(eff_full[base | i])
+					var f: int = int(farr[base | i])
+					if v > f:
+						bake_over += 1
+						ob_cells += 1
+						if ob_first_loc == "":
+							ob_first_loc = "%s x%d y%d z%d v=%d fin=%d" % [k, i & 15, y, (i >> 4) & 15, v, f]
+						var d: int = v - f
+						if d > max_d:
+							max_d = d
+							max_at = "%s x%d y%d z%d v=%d fin=%d" % [k, i & 15, y, (i >> 4) & 15, v, f]
+						if not parr.is_empty() and v == int(parr[base | i]):
+							eq_pre += 1
+						elif v == 15:
+							eq_15 += 1
+						else:
+							other += 1
+						if first_frame < 0:
+							first_frame = fr
+						last_frame = fr
+						if has_ref and v > int(rarr[base | i]):
+							ref_cells += 1
+						var sc: String = "%d,%d,%d" % [pcx, pcz, y >> 4]
+						if not sec_cache.has(sc):
+							sec_cache[sc] = [world.star.section_sky(pcx, pcz, y >> 4), world.star.section_block(pcx, pcz, y >> 4)]
+						var lv: int = _bs_live_eff((sec_cache[sc] as Array)[0] as PackedByteArray, (sec_cache[sc] as Array)[1] as PackedByteArray, ((y & 15) << 8) | i)
+						if lv < 0:
+							live_missing += 1
+						elif lv == 15:
+							live_15 += 1
+						elif lv == 0:
+							live_0 += 1
+						else:
+							live_mid += 1
+						if ob_cells_detail.size() < 32:
+							ob_cells_detail.append([k, i & 15, y, (i >> 4) & 15, v, f, int(rarr[base | i]) if has_ref else -1, int(parr[base | i]) if not parr.is_empty() else -1])
+		if side.size() == 4:
+			for sk2 in range(4):
+				var nk: String = "%d,%d" % [pcx + int(NSDX[sk2]), pcz + int(NSDZ[sk2])]
+				var nfarr: PackedByteArray = fin_eng.get(nk, PackedByteArray())
+				var nrarr: PackedByteArray = fin_ref.get(nk, PackedByteArray())
+				var npre: PackedByteArray = pre_eff.get(nk, PackedByteArray())
+				var st: PackedByteArray = side[sk2]
+				var has_nref: bool = not nrarr.is_empty()
+				for y in range(y0, y1 + 1):
+					var row: int = (y - y0) * 32
+					for t in range(16):
+						var cc0: int = 0
+						var cc1: int = 1
+						if int(NSDX[sk2]) > 0:
+							cc0 = 0
+							cc1 = 1
+						elif int(NSDX[sk2]) < 0:
+							cc0 = 15
+							cc1 = 14
+						if int(NSDZ[sk2]) > 0:
+							cc0 = 0
+							cc1 = 1
+						elif int(NSDZ[sk2]) < 0:
+							cc0 = 15
+							cc1 = 14
+						var nx: int = 0
+						var nz: int = 0
+						if int(NSDX[sk2]) != 0:
+							nx = cc0
+							nz = t
+						else:
+							nx = t
+							nz = cc0
+						var v: int = int(st[row + t])
+						var f: int = 0
+						if not nfarr.is_empty():
+							f = int(nfarr[(y << 8) | (nz << 4) | nx])
+						if v > f:
+							bake_over += 1
+							ob_cells += 1
+							if ob_first_loc == "":
+								ob_first_loc = "%s side%d x%d y%d z%d v=%d fin=%d" % [nk, sk2, nx, y, nz, v, f]
+							var d: int = v - f
+							if d > max_d:
+								max_d = d
+								max_at = "%s side%d x%d y%d z%d v=%d fin=%d" % [nk, sk2, nx, y, nz, v, f]
+							if not npre.is_empty() and v == int(npre[(y << 8) | (nz << 4) | nx]):
+								eq_pre += 1
+							elif v == 15:
+								eq_15 += 1
+							else:
+								other += 1
+							if first_frame < 0:
+								first_frame = fr
+							last_frame = fr
+							if has_nref and v > int(nrarr[(y << 8) | (nz << 4) | nx]):
+								ref_cells += 1
+							var sc: String = "%d,%d,%d" % [pcx + int(NSDX[sk2]), pcz + int(NSDZ[sk2]), y >> 4]
+							if not sec_cache.has(sc):
+								sec_cache[sc] = [world.star.section_sky(pcx + int(NSDX[sk2]), pcz + int(NSDZ[sk2]), y >> 4), world.star.section_block(pcx + int(NSDX[sk2]), pcz + int(NSDZ[sk2]), y >> 4)]
+							var lv: int = _bs_live_eff((sec_cache[sc] as Array)[0] as PackedByteArray, (sec_cache[sc] as Array)[1] as PackedByteArray, ((y & 15) << 8) | (nz << 4) | nx)
+							if lv < 0:
+								live_missing += 1
+							elif lv == 15:
+								live_15 += 1
+							elif lv == 0:
+								live_0 += 1
+							else:
+								live_mid += 1
+						var nx2: int = 0
+						var nz2: int = 0
+						if int(NSDX[sk2]) != 0:
+							nx2 = cc1
+							nz2 = t
+						else:
+							nx2 = t
+							nz2 = cc1
+						var v2: int = int(st[row + 16 + t])
+						var f2: int = 0
+						if not nfarr.is_empty():
+							f2 = int(nfarr[(y << 8) | (nz2 << 4) | nx2])
+						if v2 > f2:
+							bake_over += 1
+							ob_cells += 1
+							if ob_first_loc == "":
+								ob_first_loc = "%s side%d x%d y%d z%d v=%d fin=%d" % [nk, sk2, nx2, y, nz2, v2, f2]
+							var d2: int = v2 - f2
+							if d2 > max_d:
+								max_d = d2
+								max_at = "%s side%d x%d y%d z%d v=%d fin=%d" % [nk, sk2, nx2, y, nz2, v2, f2]
+							if not npre.is_empty() and v2 == int(npre[(y << 8) | (nz2 << 4) | nx2]):
+								eq_pre += 1
+							elif v2 == 15:
+								eq_15 += 1
+							else:
+								other += 1
+							if first_frame < 0:
+								first_frame = fr
+							last_frame = fr
+							if has_nref and v2 > int(nrarr[(y << 8) | (nz2 << 4) | nx2]):
+								ref_cells += 1
+							var sc: String = "%d,%d,%d" % [pcx + int(NSDX[sk2]), pcz + int(NSDZ[sk2]), y >> 4]
+							if not sec_cache.has(sc):
+								sec_cache[sc] = [world.star.section_sky(pcx + int(NSDX[sk2]), pcz + int(NSDZ[sk2]), y >> 4), world.star.section_block(pcx + int(NSDX[sk2]), pcz + int(NSDZ[sk2]), y >> 4)]
+							var lv: int = _bs_live_eff((sec_cache[sc] as Array)[0] as PackedByteArray, (sec_cache[sc] as Array)[1] as PackedByteArray, ((y & 15) << 8) | (nz2 << 4) | nx2)
+							if lv < 0:
+								live_missing += 1
+							elif lv == 15:
+								live_15 += 1
+							elif lv == 0:
+								live_0 += 1
+							else:
+								live_mid += 1
+		if corner.size() == 4:
+			for ck2 in range(4):
+				var nk: String = "%d,%d" % [pcx + int(CDX[ck2]), pcz + int(CDZ[ck2])]
+				var nfarr: PackedByteArray = fin_eng.get(nk, PackedByteArray())
+				var nrarr: PackedByteArray = fin_ref.get(nk, PackedByteArray())
+				var npre: PackedByteArray = pre_eff.get(nk, PackedByteArray())
+				var ct: PackedByteArray = corner[ck2]
+				var has_nref: bool = not nrarr.is_empty()
+				for y in range(y0, y1 + 1):
+					var row: int = (y - y0) * 4
+					for a in range(2):
+						for b in range(2):
+							var nx: int = 0
+							var nz: int = 0
+							if ck2 == 0:
+								nx = a
+								nz = b
+							elif ck2 == 1:
+								nx = 15 - a
+								nz = b
+							elif ck2 == 2:
+								nx = a
+								nz = 14 + b
+							else:
+								nx = 15 - a
+								nz = 14 + b
+							var v: int = int(ct[row + a * 2 + b])
+							var f: int = 0
+							if not nfarr.is_empty():
+								f = int(nfarr[(y << 8) | (nz << 4) | nx])
+							if v > f:
+								bake_over += 1
+								ob_cells += 1
+								if ob_first_loc == "":
+									ob_first_loc = "%s corner%d x%d y%d z%d v=%d fin=%d" % [nk, ck2, nx, y, nz, v, f]
+								var d: int = v - f
+								if d > max_d:
+									max_d = d
+									max_at = "%s corner%d x%d y%d z%d v=%d fin=%d" % [nk, ck2, nx, y, nz, v, f]
+								if not npre.is_empty() and v == int(npre[(y << 8) | (nz << 4) | nx]):
+									eq_pre += 1
+								elif v == 15:
+									eq_15 += 1
+								else:
+									other += 1
+								if first_frame < 0:
+									first_frame = fr
+								last_frame = fr
+								if has_nref and v > int(nrarr[(y << 8) | (nz << 4) | nx]):
+									ref_cells += 1
+								var sc: String = "%d,%d,%d" % [pcx + int(CDX[ck2]), pcz + int(CDZ[ck2]), y >> 4]
+								if not sec_cache.has(sc):
+									sec_cache[sc] = [world.star.section_sky(pcx + int(CDX[ck2]), pcz + int(CDZ[ck2]), y >> 4), world.star.section_block(pcx + int(CDX[ck2]), pcz + int(CDZ[ck2]), y >> 4)]
+								var lv: int = _bs_live_eff((sec_cache[sc] as Array)[0] as PackedByteArray, (sec_cache[sc] as Array)[1] as PackedByteArray, ((y & 15) << 8) | (nz << 4) | nx)
+								if lv < 0:
+									live_missing += 1
+								elif lv == 15:
+									live_15 += 1
+								elif lv == 0:
+									live_0 += 1
+								else:
+									live_mid += 1
+		if bake_over > 0:
+			ob_bakes += 1
+			ob_detail.append([fr, k, kind, bake_over, ob_first_loc])
+		else:
+			final_exact_frame = fr
+	return {
+		"bakes": bakes, "ob_bakes": ob_bakes, "ob_cells": ob_cells, "ref_cells": ref_cells,
+		"max_d": max_d, "max_at": max_at, "eq_pre": eq_pre, "eq_15": eq_15, "other": other,
+		"first_frame": first_frame, "last_frame": last_frame,
+		"final_exact_frame": final_exact_frame, "lver_drops": lver_drops,
+		"ob_detail": ob_detail, "live_15": live_15, "live_0": live_0,
+		"live_mid": live_mid, "live_missing": live_missing,
+		"ob_cells_detail": ob_cells_detail,
+	}
+
+
 func _editslab_test(spawn: Vector3) -> void:
 	world.recenter(spawn.x, spawn.z, true)
 	var pcx := int(floorf(spawn.x / 16.0))
@@ -7518,7 +7960,7 @@ func _brightslab_test(spawn: Vector3) -> void:
 			tops[k] = int(io.slabs_top(slabs[k]))
 			keys.append(k)
 	var SD: Array = [[1, 0, 1], [-1, 0, 0], [0, 1, 3], [0, -1, 2]]
-	var ref_iter := func(slabs_d: Dictionary, tops_d: Dictionary) -> Dictionary:
+	var ref_iter := func(slabs_d: Dictionary, tops_d: Dictionary, keys_d: Array) -> Dictionary:
 		var r_effs := {}
 		var r_rings := {}
 		var r_masks := {}
@@ -7529,7 +7971,7 @@ func _brightslab_test(spawn: Vector3) -> void:
 		var first_round := true
 		while (changed or first_round) and r_rounds < 32:
 			changed = false
-			for k in keys:
+			for k in keys_d:
 				var parts: Array = k.split(",")
 				var kdx: int = int(parts[0])
 				var kdz: int = int(parts[1])
@@ -7563,7 +8005,7 @@ func _brightslab_test(spawn: Vector3) -> void:
 			r_rounds += 1
 			first_round = false
 		return {"effs": r_effs, "rings": r_rings, "masks": r_masks, "srcs": r_srcs, "cur_us": r_cur, "rounds": r_rounds, "converged": r_rounds < 32}
-	var pre_ri: Dictionary = ref_iter.call(slabs, tops)
+	var pre_ri: Dictionary = ref_iter.call(slabs, tops, keys)
 	# AC-0283 P3: the INTERIOR real band (anchor taxi ≤ band0_r − 2 — the
 	# slab's 3x3 box fits inside the seeded band) must be EXACT; the
 	# boundary ring (taxi band0_r − 1 .. band0_r) under-lights against the
@@ -7599,120 +8041,10 @@ func _brightslab_test(spawn: Vector3) -> void:
 		Debug.result({"ok": false, "error": "no breakable surface cell near spawn"})
 		get_tree().quit()
 		return
-	var c2: Array = []
+	var c2: Array = _bs_cave_break_cell(cx0, cz0, H, false)
 	var c2_cell: Vector3i = Vector3i.ZERO
-	for dcx in range(-2, 3):
-		for dcz in range(-2, 3):
-			var wcx := cx0 + dcx
-			var wcz := cz0 + dcz
-			var cc = world.chunks.get(world._key(wcx, wcz))
-			if cc == null or cc.data.is_empty():
-				continue
-			var f: PackedByteArray = cc.flat_data()
-			var air := PackedByteArray()
-			air.resize(H * 256)
-			var open15 := PackedByteArray()
-			open15.resize(H * 256)
-			for ix in range(16):
-				for iz in range(16):
-					var i0 := ix + iz * 16
-					var op := true
-					for y in range(H - 1, -1, -1):
-						var b: int = int(f[(y << 8) | i0])
-						air[(y << 8) | i0] = 1 if b == 0 else 0
-						if op and b == 0:
-							open15[(y << 8) | i0] = 1
-						elif b != 0:
-							op = false
-			var dist := {}
-			var q: Array = []
-			for p in range(H * 256):
-				if open15[p] != 0:
-					dist[p] = 0
-					q.append(p)
-			var qi := 0
-			while qi < q.size():
-				var p: int = q[qi]
-				qi += 1
-				var d: int = int(dist[p])
-				if d >= 14:
-					continue
-				var y: int = p >> 8
-				var iz: int = (p >> 4) & 15
-				var ix: int = p & 15
-				var nbs2: Array = []
-				if y + 1 < H:
-					nbs2.append((p & ~255) + 256)
-				if y > 0:
-					nbs2.append(p - 256)
-				if ix + 1 < 16:
-					nbs2.append(p + 1)
-				if ix > 0:
-					nbs2.append(p - 1)
-				if iz + 1 < 16:
-					nbs2.append(p + 16)
-				if iz > 0:
-					nbs2.append(p - 16)
-				for np in nbs2:
-					if air[np] != 0 and not dist.has(np):
-						dist[np] = d + 1
-						q.append(np)
-			for p in range(H * 256):
-				if air[p] != 0 and dist.has(p):
-					continue
-				var y: int = p >> 8
-				var iz: int = (p >> 4) & 15
-				var ix: int = p & 15
-				var cand: Array = []
-				var sb: Array = []
-				if y + 1 < H:
-					sb.append(p + 256)
-				if y > 0:
-					sb.append(p - 256)
-				if ix + 1 < 16:
-					sb.append(p + 1)
-				if ix > 0:
-					sb.append(p - 1)
-				if iz + 1 < 16:
-					sb.append(p + 16)
-				if iz > 0:
-					sb.append(p - 16)
-				for bp in sb:
-					if air[bp] != 0:
-						continue
-					var by: int = bp >> 8
-					var biz: int = (bp >> 4) & 15
-					var bix: int = bp & 15
-					var okb := false
-					var bb: Array = []
-					if by + 1 < H:
-						bb.append(bp + 256)
-					if by > 0:
-						bb.append(bp - 256)
-					if bix + 1 < 16:
-						bb.append(bp + 1)
-					if bix > 0:
-						bb.append(bp - 1)
-					if biz + 1 < 16:
-						bb.append(bp + 16)
-					if biz > 0:
-						bb.append(bp - 16)
-					for bbp in bb:
-						if dist.has(bbp) and int(dist[bbp]) <= 12:
-							okb = true
-							break
-					if okb:
-						cand.append(bp)
-				if cand.size() > 0:
-					var bp: int = cand[0]
-					c2_cell = Vector3i(wcx * 16 + (bp & 15), bp >> 8, wcz * 16 + ((bp >> 4) & 15))
-					var pk: Vector3i = Vector3i(wcx * 16 + (p & 15), p >> 8, wcz * 16 + ((p >> 4) & 15))
-					c2 = [c2_cell.x, c2_cell.y, c2_cell.z, 0, pk.x, pk.y, pk.z]
-					break
-			if c2.size() > 0:
-				break
-		if c2.size() > 0:
-			break
+	if c2.size() > 0:
+		c2_cell = Vector3i(int(c2[0]), int(c2[1]), int(c2[2]))
 	if c2.is_empty():
 		c2 = [c1.x, c1.y - 1, c1.z, 0]
 		c2_cell = Vector3i(c2[0], c2[1], c2[2])
@@ -7721,21 +8053,36 @@ func _brightslab_test(spawn: Vector3) -> void:
 		c3 = [int(c2[4]), int(c2[5]), int(c2[6]), 22]
 	else:
 		c3 = [c1.x, c1.y, c1.z, 22]
+	var c4: Array = _bs_surface_break_cell(cx0, cz0)
+	var c6: Array = _bs_cave_break_cell(cx0, cz0, H, true)
 	var cases: Array = [
 		{"name": "C1_surface_break", "cells": [[c1.x, c1.y, c1.z, 0]]},
 		{"name": "C2_cave_break" if c2_cell != Vector3i.ZERO else "C2_dig2deep", "cells": [c2]},
 		{"name": "C3_torch_place", "cells": [c3]},
 	]
+	if c4.size() > 0:
+		cases.append({"name": "C4_boundary_break", "cells": [c4], "probe": true})
+	cases.append({"name": "C5_halo_boundary_break", "cells": [], "probe": true, "setup": "halo", "ref_range": 6})
+	if c6.size() > 0:
+		cases.append({"name": "C6_cave_boundary_break", "cells": [c6], "probe": true})
 	var results: Array = []
 	var case_no := 0
 	for case in cases:
 		case_no += 1
-		var r: Dictionary = await _brightslab_case(case, cx0, cz0, H, keys, ref_iter, pre_ri)
+		var r: Dictionary = await _brightslab_case(case, cx0, cz0, H, keys, ref_iter, pre_ri, spawn)
 		results.append(r)
 		print("RESULT %s engine_vs_ref=%d mesh_payload_mismatch=%d mesh_ref_mismatch=%d mesh_ab_mismatch=%d max_bright_delta=%.3f @%s" % [
 			str(case["name"]), int(r.get("eng_mism", -1)), int(r.get("mesh_pa_mism", -1)),
 			int(r.get("mesh_pb_mism", -1)), int(r.get("mesh_ab_mism", -1)),
 			float(r.get("max_delta", 0.0)), str(r.get("max_delta_at", ""))])
+		if bool(case.get("probe", false)):
+			print("RESULT %s TRANSIENT bakes=%d ob_bakes=%d ob_cells=%d ref_cells=%d ob_max_delta=%d ob_max_at=%s ob_eq_pre=%d ob_eq_15=%d ob_other=%d ob_first=%d ob_last=%d final_exact_frame=%d lver_drops=%d conv_frame=%d conv_ms=%.0f" % [
+				str(case["name"]), int(r.get("bakes", -1)), int(r.get("ob_bakes", -1)),
+				int(r.get("ob_cells", -1)), int(r.get("ref_cells", -1)), int(r.get("ob_max_delta", -1)),
+				str(r.get("ob_max_at", "")), int(r.get("ob_eq_pre", -1)), int(r.get("ob_eq_15", -1)),
+				int(r.get("ob_other", -1)), int(r.get("ob_first_frame", -1)), int(r.get("ob_last_frame", -1)),
+				int(r.get("final_exact_frame", -1)), int(r.get("lver_drops", -1)),
+				int(r.get("conv_frame", -1)), float(r.get("conv_frame", 0)) / 60.0 * 1000.0])
 	var cases_ok := true
 	for r in results:
 		cases_ok = cases_ok and bool(r.get("ok", false))
@@ -7750,9 +8097,54 @@ func _brightslab_test(spawn: Vector3) -> void:
 	})
 
 
-func _brightslab_case(case: Dictionary, cx0: int, cz0: int, H: int, keys: Array, ref_iter, pre_ri: Dictionary) -> Dictionary:
+var _bs_probe_buf: Array = []
+
+
+func _bs_probe_cb(ev: String, pcx: int, pcz: int, _psi: int, info: Dictionary) -> void:
+	_bs_probe_buf.append([ev, pcx, pcz, _psi, info])
+
+
+func _brightslab_case(case: Dictionary, cx0: int, cz0: int, H: int, keys: Array, ref_iter, pre_ri: Dictionary, spawn: Vector3) -> Dictionary:
 	var out: Dictionary = {"ok": false, "eng_mism": -1, "eng_first": {}, "eng_cells": 0, "mesh_pa_mism": -1, "mesh_pb_mism": -1, "max_delta": 0.0, "max_delta_at": "", "note": ""}
-	var cell: Array = case["cells"][0]
+	var cell: Array = []
+	if str(case.get("setup", "")) == "halo":
+		world.render_radius = 6
+		world.recenter(spawn.x, spawn.z, true)
+		var w5 := 0
+		while w5 < 3600:
+			await get_tree().physics_frame
+			w5 += 1
+			var h5 := true
+			for dx in range(-5, 6):
+				for dz in range(-5, 6):
+					if absi(dx) + absi(dz) > 6:
+						continue
+					var c = world.chunks.get(world._key(cx0 + dx, cz0 + dz))
+					if c == null or c.data.is_empty():
+						h5 = false
+			for dx in range(-5, 6):
+				for dz in range(-5, 6):
+					if absi(dx) + absi(dz) > 6:
+						continue
+					if world._is_real_col(dx, dz):
+						var c = world.chunks.get(world._key(cx0 + dx, cz0 + dz))
+						if c == null or c.data.is_empty() or not c.mesh_built:
+							h5 = false
+			if h5 and world.star_light_idle() and world.dirty_queue.is_empty() \
+					and world.threadmesh_inflight.is_empty() and world.star_remesh.is_empty():
+				break
+		if w5 >= 3600:
+			out["note"] = "halo setup not settled after %d frames" % w5
+			out["ok"] = false
+			return out
+		cell = _bs_surface_break_cell(cx0 + int(world.band0_r), cz0)
+	else:
+		cell = case["cells"][0]
+	if cell.is_empty():
+		out["note"] = "skipped: no cell found"
+		out["skipped"] = true
+		out["ok"] = true
+		return out
 	var ex: int = int(cell[0])
 	var ey: int = int(cell[1])
 	var ez: int = int(cell[2])
@@ -7772,24 +8164,83 @@ func _brightslab_case(case: Dictionary, cx0: int, cz0: int, H: int, keys: Array,
 			if sk.is_empty() or bl.is_empty():
 				continue
 			pre_eng.append({"k": "%d,%d" % [ddx, ddz], "sky": sk, "blk": bl})
+	var pre_eff_full: Dictionary = {}
+	var pb_keys: Dictionary = {}
+	var evs_all: Array = []
+	var fr_log: Array = []
+	var conv_frame := 0
+	if bool(case.get("probe", false)):
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				var pk: String = "%d,%d" % [ecx + dx, ecz + dz]
+				pb_keys[pk] = true
+				var dcd: Dictionary = world.star.column_light_dict(ecx + dx, ecz + dz)
+				if not dcd.is_empty():
+					pre_eff_full[pk] = dcd.get("arr", PackedByteArray())
 	var io: Variant = ChunkIO.io_cpp()
+	_bs_probe_buf.clear()
 	world.set_block(ex, ey, ez, new_id)
 	var w2 := 0
-	var q2 := 0
-	while w2 < 2400:
-		await get_tree().physics_frame
-		w2 += 1
-		if world.star_light_idle() and world.dirty_queue.is_empty() and world.threadmesh_inflight.is_empty() and world.star_remesh.is_empty():
-			q2 += 1
-			if q2 >= 5:
-				break
-		else:
-			q2 = 0
-	if q2 < 5:
-		out["note"] = "world not quiet after edit (waited %d frames)" % w2
+	if bool(case.get("probe", false)):
+		world.star_bake_probe = _bs_probe_cb
+		var fr := 0
+		var quiet := 0
+		while fr < 3600:
+			await get_tree().physics_frame
+			fr += 1
+			var st: Dictionary = world.star.stats()
+			fr_log.append([fr, int(world.star.light_ver()), int(st.get("edits", 0)), int(st.get("enqueued", 0)), int(st.get("stale_pops", 0)), int(st.get("cells_processed", 0)), int(st.get("pending", 0))])
+			var busy := false
+			if not _bs_probe_buf.is_empty():
+				for pe2 in _bs_probe_buf:
+					var pk2: String = "%d,%d" % [pe2[1], pe2[2]]
+					if pb_keys.has(pk2):
+						busy = true
+						evs_all.append([fr, pe2[0], pe2[1], pe2[2], pe2[3], pe2[4]])
+				_bs_probe_buf.clear()
+			for pk in pb_keys:
+				if world.star_remesh.has(pk):
+					busy = true
+			if int(world.star.pending_cells()) > 0:
+				busy = true
+			if not world.dirty_queue.is_empty():
+				busy = true
+			for it2 in world.threadmesh_inflight:
+				if pb_keys.has(str(it2.get("key", ""))):
+					busy = true
+					break
+			if busy:
+				quiet = 0
+			else:
+				quiet += 1
+				if quiet >= 3:
+					break
+		world.star_bake_probe = null
+		conv_frame = fr
+	else:
+		var q2 := 0
+		while w2 < 2400:
+			await get_tree().physics_frame
+			w2 += 1
+			if world.star_light_idle() and world.dirty_queue.is_empty() and world.threadmesh_inflight.is_empty() and world.star_remesh.is_empty():
+				q2 += 1
+				if q2 >= 5:
+					break
+			else:
+				q2 = 0
+		if q2 < 5:
+			out["note"] = "world not quiet after edit (waited %d frames)" % w2
 	var slabs2 := {}
 	var tops2 := {}
-	for k in keys:
+	var rk: Array = keys
+	if int(case.get("ref_range", 0)) > 0:
+		rk = []
+		for rdx in range(-int(case["ref_range"]), int(case["ref_range"]) + 1):
+			for rdz in range(-int(case["ref_range"]), int(case["ref_range"]) + 1):
+				if absi(rdx) + absi(rdz) > int(case["ref_range"]):
+					continue
+				rk.append("%d,%d" % [rdx, rdz])
+	for k in rk:
 		var c = world.chunks.get(world._key(cx0 + int(k.split(",")[0]), cz0 + int(k.split(",")[1])))
 		if c == null or c.data.is_empty():
 			out["note"] = "region data missing post-edit"
@@ -7797,7 +8248,7 @@ func _brightslab_case(case: Dictionary, cx0: int, cz0: int, H: int, keys: Array,
 		var f: PackedByteArray = c.flat_data()
 		slabs2[k] = io.palettize_flat(f, 24)
 		tops2[k] = int(io.slabs_top(slabs2[k]))
-	var ri: Dictionary = ref_iter.call(slabs2, tops2)
+	var ri: Dictionary = ref_iter.call(slabs2, tops2, rk)
 	out["ref_rounds"] = int(ri.get("rounds", -1))
 	out["ref_converged"] = bool(ri.get("converged", false))
 	# AC-0283 P3: inner (the compared column's box fits the seeded band)
@@ -7893,7 +8344,8 @@ func _brightslab_case(case: Dictionary, cx0: int, cz0: int, H: int, keys: Array,
 		var si2: int = si_e + dsi
 		if si2 >= 0 and si2 < 24:
 			checks.append([ecx, ecz, si2])
-	checks.append([ecx + 1, ecz, si_e])
+	if not world.star.section_sky(ecx + 1, ecz, si_e).is_empty():
+		checks.append([ecx + 1, ecz, si_e])
 	var mesh_pa_mism := 0
 	var mesh_pb_mism := 0
 	var mesh_qa_mism := 0
@@ -7943,6 +8395,39 @@ func _brightslab_case(case: Dictionary, cx0: int, cz0: int, H: int, keys: Array,
 	else:
 		out["ok"] = bool(ri.get("converged", false)) and eng_mism == 0 and f_mism == 0 \
 				and mesh_pa_mism == 0 and mesh_qa_mism == 0
+	if bool(case.get("probe", false)):
+		out["quiet_frames"] = conv_frame
+	if bool(case.get("probe", false)):
+		var fin_eng: Dictionary = {}
+		for fdx in range(-2, 3):
+			for fdz in range(-2, 3):
+				var fk: String = "%d,%d" % [ecx + fdx, ecz + fdz]
+				var dcd: Dictionary = world.star.column_light_dict(ecx + fdx, ecz + fdz)
+				if not dcd.is_empty():
+					fin_eng[fk] = dcd.get("arr", PackedByteArray())
+		var ob: Dictionary = _bs_replay_bakes(evs_all, si_e, H, pre_eff_full, fin_eng, ri["effs"])
+		out["bakes"] = int(ob["bakes"])
+		out["ob_bakes"] = int(ob["ob_bakes"])
+		out["ob_cells"] = int(ob["ob_cells"])
+		out["ref_cells"] = int(ob["ref_cells"])
+		out["ob_max_delta"] = int(ob["max_d"])
+		out["ob_max_at"] = str(ob["max_at"])
+		out["ob_eq_pre"] = int(ob["eq_pre"])
+		out["ob_eq_15"] = int(ob["eq_15"])
+		out["ob_other"] = int(ob["other"])
+		out["ob_first_frame"] = int(ob["first_frame"])
+		out["ob_last_frame"] = int(ob["last_frame"])
+		out["final_exact_frame"] = int(ob["final_exact_frame"])
+		out["lver_drops"] = int(ob["lver_drops"])
+		out["ob_detail"] = ob["ob_detail"]
+		out["ob_cells_detail"] = ob["ob_cells_detail"]
+		out["live_15"] = int(ob["live_15"])
+		out["live_0"] = int(ob["live_0"])
+		out["live_mid"] = int(ob["live_mid"])
+		out["live_missing"] = int(ob["live_missing"])
+		out["fr_log"] = fr_log
+		out["conv_frame"] = conv_frame
+		out["ok"] = bool(out.get("ok", false)) and int(ob["ob_bakes"]) == 0 and conv_frame <= 120
 	return out
 
 
@@ -8657,31 +9142,33 @@ func _brightslab_slab_cmp(mc, wcx: int, wcz: int, si: int, ri: Dictionary, cx0: 
 		e.resize(2 * 16 * H)
 		var nk := "%d,%d" % [wcx - cx0 + int(s2[0]), wcz - cz0 + int(s2[1])]
 		var narr: PackedByteArray = ri["effs"].get(nk, PackedByteArray())
-		var colsz := 16 * H
-		if int(s2[0]) != 0:
-			for cc2 in range(2):
-				var nx: int = cc2 if int(s2[0]) > 0 else 15 - cc2
-				for yy in range(y0, y1 + 1):
-					for tt in range(16):
-						e[cc2 * colsz + yy * 16 + tt] = narr[(yy << 8) | (tt << 4) | nx]
-		else:
-			for cc2 in range(2):
-				var nz: int = cc2 if int(s2[1]) > 0 else 15 - cc2
-				for yy in range(y0, y1 + 1):
-					for tt in range(16):
-						e[cc2 * colsz + yy * 16 + tt] = narr[(yy << 8) | (nz << 4) | tt]
+		if int(narr.size()) >= 16 * H:
+			var colsz := 16 * H
+			if int(s2[0]) != 0:
+				for cc2 in range(2):
+					var nx: int = cc2 if int(s2[0]) > 0 else 15 - cc2
+					for yy in range(y0, y1 + 1):
+						for tt in range(16):
+							e[cc2 * colsz + yy * 16 + tt] = narr[(yy << 8) | (tt << 4) | nx]
+			else:
+				for cc2 in range(2):
+					var nz: int = cc2 if int(s2[1]) > 0 else 15 - cc2
+					for yy in range(y0, y1 + 1):
+						for tt in range(16):
+							e[cc2 * colsz + yy * 16 + tt] = narr[(yy << 8) | (nz << 4) | tt]
 		effs.append(e)
 	for s2 in [[1, 1], [-1, 1], [1, -1], [-1, -1]]:
 		var e := PackedByteArray()
 		e.resize(4 * H)
 		var nk := "%d,%d" % [wcx - cx0 + int(s2[0]), wcz - cz0 + int(s2[1])]
 		var narr: PackedByteArray = ri["effs"].get(nk, PackedByteArray())
-		for a in range(2):
-			var nx: int = a if int(s2[0]) > 0 else 15 - a
-			for b in range(2):
-				var nz: int = b if int(s2[1]) > 0 else 15 - b
-				for yy in range(y0, y1 + 1):
-					e[(a * 2 + b) * H + yy] = narr[(yy << 8) | (nz << 4) | nx]
+		if int(narr.size()) >= 16 * H:
+			for a in range(2):
+				var nx: int = a if int(s2[0]) > 0 else 15 - a
+				for b in range(2):
+					var nz: int = b if int(s2[1]) > 0 else 15 - b
+					for yy in range(y0, y1 + 1):
+						e[(a * 2 + b) * H + yy] = narr[(yy << 8) | (nz << 4) | nx]
 		effs.append(e)
 	var ctxb: Dictionary = ctx0.duplicate()
 	ctxb["eff_strips"] = effs

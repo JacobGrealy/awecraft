@@ -262,6 +262,7 @@ var star_lver_drops := 0
 # heightmap sky now).
 var star_halo_promotes := 0
 var star_halo_evicts := 0
+var star_bake_probe: Variant = null
 const STAR_STEP_BUDGET_MS := 3.0
 const LOAD_STAR_STEP_BUDGET_MS := 30.0
 const STAR_REMESH_KEYS_PER_FRAME := 2
@@ -6092,6 +6093,8 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 				if _tm_debug:
 					print("TMESH LVERDROP %d,%d slab=%d" % [int(e["cx"]), int(e["cz"]), si_h])
 				_tm_retrigger(key, c, e)
+				if star_bake_probe != null:
+					star_bake_probe.call("drop", int(e["cx"]), int(e["cz"]), si_h, {"eff": e.get("eff", {})})
 				return
 		# AC-0263 spec (keep-all-LOD): a STRAGGLER (the column left the
 		# high band while this build was in flight) is no longer an error
@@ -6126,6 +6129,8 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		# change itself, before any stale build can dispatch.)
 		c.flush_slabs[si_h] = true
 		_star_update_light_settled(c)
+		if star_bake_probe != null:
+			star_bake_probe.call("land", int(e["cx"]), int(e["cz"]), si_h, {"eff": e.get("eff", {})})
 		var show_h: bool = bool(c.flush_slabs.has(si_h))
 		if straggler and c.has_low_si(si_h):
 			c.low_slab_visible(si_h, true)
@@ -6191,6 +6196,8 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 				c.high_stamps[si_r] = int(c.data_gen)
 				_star_remesh_add(key, si_r)
 			_star_update_light_settled(c)
+		if star_bake_probe != null:
+			star_bake_probe.call("land", int(e["cx"]), int(e["cz"]), int(res.get("si0", 0)), {"eff": e.get("eff", {}), "light": res.get("light", {}), "scoped": true, "y_lo": int(e.get("d_off", 0)), "y_hi": int(e.get("d_hi", 0))})
 		c.saved_light = {}
 		perf_build_ms += Time.get_ticks_msec() - ta2
 		perf_build_worker_ms += int(res.get("wms", 0))
@@ -6251,6 +6258,8 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		for si_f in range(mini(int(c.top) >> 4, int(c.data.size() - 1)) + 1):
 			_star_remesh_add(key, si_f)
 	_star_update_light_settled(c)
+	if star_bake_probe != null:
+		star_bake_probe.call("land", int(e["cx"]), int(e["cz"]), -1, {"light": res.get("light", {}), "edit_full": bool(e.get("edit_full", false))})
 	_hslab_probe_invalidate(c)
 	c.saved_light = {}
 	# AC-0231 rewrite: the high REPLACES the per-slab placeholders (the
@@ -6497,6 +6506,8 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 		"scoped_snap": true, "d_off": d_lo, "d_hi": d_hi,
 		"t_submit": Time.get_ticks_usec(),
 	}
+	if star_bake_probe != null:
+		star_bake_probe.call("disp", cx, cz, si0, {"eff": fast_eff, "strips": strips["eff"], "strips_blk": strips["blk"], "y_lo": d_lo, "y_hi": d_hi, "scoped": true})
 	var skey := _tm_next_slot
 	_tm_next_slot += 1
 	var tid := -1
@@ -6614,6 +6625,8 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 	var ctx_w: Dictionary = _tm_ctx.duplicate()
 	ctx_w["eff_strips"] = strips["eff"]
 	ctx_w["blk_strips"] = strips["blk"]
+	if edit_full and star != null:
+		ctx_w["blk_strips"] = strips["blk_b"]
 	ctx_w["blk_strips_b"] = strips["blk_b"]
 	ctx_w["top"] = int(c.top)  # AC-0197: full builds stop at the top slab
 	# AC-0231: the band-2 coarse ctx (coarse/uv_scale) is gone — every meshed
@@ -6746,6 +6759,8 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 		pl["lver"] = star.box_epochs(cx, cz, si - 1, si + 1)
 		eff = pl
 		strips = {"eff": [], "blk": [], "blk_b": []}
+		if star_bake_probe != null:
+			star_bake_probe.call("disp", cx, cz, si, {"pl": pl})
 	else:
 		strips = _strips_for_scoped(cx, cz, y_lo, y_hi)
 	var ctx_w: Dictionary = _tm_ctx.duplicate()
