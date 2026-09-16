@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-16T15:28
+  updated_at: 2026-09-16T17:32
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -8,7 +8,6 @@ queue:
 - AC-0297
 - AC-0284
 - AC-0300
-- AC-0301
 - AC-0286
 - AC-0287
 - AC-0293
@@ -13277,11 +13276,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-16T15:28
-  updated_at: 2026-09-16T15:28
-  completed_at: null
+  updated_at: 2026-09-16T17:32
+  completed_at: 2026-09-16T17:32
   waiting_on: null
   parent_id: null
   notes: "1) User Story: As the person filing tasks, I want every generated spec to carry correct, current\
@@ -13347,5 +13346,36 @@ intake:
     \ still passes; (iv) report the row count and byte size of the generated blocks before/after to prove\
     \ nothing was dropped.\n\nPREREQUISITES: none (no godot). Coordination note: spec_template.py is shared\
     \ tooling used to file every task - if another agent is generating specs concurrently, land this between\
-    \ tasks, not mid-generation.\n"
+    \ tasks, not mid-generation.\n\n\n\nCLOSEOUT (2026-09-16): SHIPPED. `tasks/harness_data.yaml` (NEW,\
+    \ 522 lines / 30.3 KB: schema 1, mode_columns, 45 modes -> entry/tests/result_fields/envs/wall/notes,\
+    \ value_columns, 16 standing values, battery modes/smoke/note) is now the single MACHINE source for\
+    \ the two tables in godot/HARNESS.md. The doc keeps all its prose and wraps §1/§3 in BEGIN/END GENERATED\
+    \ markers (generated blocks: 19,573 + 5,492 bytes; doc 277 lines / 40.3 KB). New `tasks/scripts/harness_doc.py\
+    \ --render|--check`. `spec_template.py` no longer parses markdown: `_harness_rows`, `_known_stable_rows()`\
+    \ (doc form) and `_parse_md_rows` are DELETED, replaced by `_harness_data/_harness_modes/_known_stable_rows(data)/_battery_modes/_value_columns`.\
+    \ The deliberate exception is kept and documented in-file: `_parse_gd_constants` still reads godot/autoload/data.gd\
+    \ + godot/world/generator.gd, because code IS a machine-readable artefact versioned with the behaviour\
+    \ it describes. `test_tasks.py` gained 7 checks (53 passed, 0 failed) including the doc<->data sync\
+    \ gate and a regression guard against the scraper coming back.\n\nMIGRATION PROOF (the risky part,\
+    \ done as specified): the one-shot extractor parsed the pre-migration tables into YAML, asserted round-trip\
+    \ equality on every cell, then the doc was re-rendered and diffed against the pre-migration copy.\
+    \ Result: 3 removed / 7 added lines, nothing else - 4 marker lines, plus 3 rows: (a) the `spin` row\
+    \ was authored with SIX cells instead of seven (its \"what it tests\" and \"key RESULT fields\" text\
+    \ were merged into one cell), so markdown rendered that row shifted AND the old scraper mis-split\
+    \ it - split at the natural boundary, the ONE content change; (b) `chunkio` and `nofallback` each\
+    \ lost a stray leading space before their first `|` (the only two rows indented by one space) - formatting\
+    \ normalization. The 16 standing-value rows are BYTE-IDENTICAL.\n\nVERIFIED: `harness_doc.py --check`\
+    \ exits 0 in sync; tampering with a doc cell -> exit 1 with a diff (restored); tampering with a YAML\
+    \ value -> exit 1 (restored); `test_tasks.py` 53/53; a regenerated spec for AC-0286 carries all 7\
+    \ battery modes with every result_fields/wall value matching the doc table (spec<->doc agreement 7\
+    \ ok / 0 bad).\n\nDELIBERATE BEHAVIOUR CHANGES in generated specs (now data-driven): the battery table\
+    \ includes `settings` (the doc's §3 has always listed settings as a battery mode; the old code used\
+    \ a hardcoded 6-mode list), the value-table header is taken from the data (was hardcoded \"fresh result\
+    \ (2026-08-24)\"), and two STALE fallback strings were removed - they still carried the pre-AC-0091\
+    \ numbers (sea 2730/2730, backed 1406/1406) and said \"HARNESS.md §3 not parsed\"; the fallback now\
+    \ states that the data file is the source and to establish values fresh.\n\nDOCS: AGENTS.md standing\
+    \ rule 3 now covers the GENERATED blocks (edit tasks/harness_data.yaml, then --render), and godot/HARNESS.md's\
+    \ header documents the markers + both commands.\n\nNO GODOT: pure tooling/docs - no arm, no heavy\
+    \ gate, no Windows build (and the game tree is still not bootable: another agent's AC-0284a WIP, see\
+    \ AC-0298). No game file touched."
   comments: []

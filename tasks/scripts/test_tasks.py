@@ -285,6 +285,37 @@ def main():
 
     check("live TASKS.yaml untouched", sha(LIVE_YAML) == live_sha_before)
 
+    # AC-0301: godot/HARNESS.md is a RENDERING of tasks/harness_data.yaml. The
+    # generated blocks must be in sync, and spec_template.py must not parse the
+    # doc's markdown (that coupling let a reformat silently weaken every spec).
+    print("\n-- harness data (AC-0301)")
+    scripts = Path(__file__).resolve().parent
+    p = subprocess.run([sys.executable, str(scripts / "harness_doc.py"), "--check"],
+                       capture_output=True, text=True, timeout=60)
+    check("harness_doc --check: doc in sync with data", p.returncode == 0,
+          (p.stdout + p.stderr)[:300])
+
+    hdata = load_yaml(TASKS_DIR / "harness_data.yaml")
+    modes = hdata.get("modes") or {}
+    check("harness data: has modes", len(modes) > 0, str(len(modes)))
+    ncols = len(hdata.get("mode_columns") or [])
+    check("harness data: mode columns == 7", ncols == 7, str(ncols))
+    bad = [m for m, f in modes.items()
+           if not (f or {}).get("result_fields") or not (f or {}).get("wall")]
+    check("harness data: every mode has result_fields + wall", not bad, str(bad[:5]))
+    bat = (hdata.get("battery") or {}).get("modes") or []
+    missing = [m for m in bat if m not in modes]
+    check("harness data: every battery mode exists", not missing, str(missing))
+    vcols = len(hdata.get("value_columns") or [])
+    check("harness data: value columns == 3", vcols == 3, str(vcols))
+
+    src = (scripts / "spec_template.py").read_text()
+    check("spec_template: no markdown scraping for HARNESS",
+          "_harness_rows" not in src and "_parse_md_rows" not in src
+          and "HARNESS.read_text" not in src and "HARNESS.exists" not in src
+          and "HARNESS = " not in src)
+    check("spec_template: reads the harness data file", "harness_data.yaml" in src)
+
     print("\n%d passed, %d failed" % (len(PASSED), len(FAILED)))
     if FAILED:
         print("FAILED:")

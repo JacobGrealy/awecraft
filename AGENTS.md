@@ -35,7 +35,9 @@ Subagents do all code and research. Standing process → `COORDINATOR.md`.
 2. **Mutate `tasks/TASKS.yaml` only via `python3 tasks/scripts/tasks.py <cmd>`.** Hand edits
    are forbidden — it is the single-writer API file.
 3. **Never hand-edit generated or build outputs**: `exports/`, `godot/bin/*`, `gdext/bin/`,
-   `.godot/`, `tasks/.tasks.lock`.
+   `.godot/`, `tasks/.tasks.lock` — and the `BEGIN/END GENERATED` blocks in
+   `godot/HARNESS.md` (edit `tasks/harness_data.yaml`, then
+   `python3 tasks/scripts/harness_doc.py --render`).
 4. **One godot process at a time**, every call prefixed with `HOME=/tmp/dsh_home` and an
    absolute engine path — see `godot/OPS.md` §2 for why (a wrong HOME segfaults the engine).
 5. **Every fact has exactly one home.** Placement test: the entry point and role process live

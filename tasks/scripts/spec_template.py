@@ -48,9 +48,14 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 TASKS_DIR = Path(__file__).resolve().parent.parent
 ENV_FILE = "AWECRAFT_TASKS_FILE"
+# Deliberate exception to the "never scrape docs" rule (AC-0301): these are CODE,
+# a machine-readable artefact versioned with the behaviour it describes, and the
+# spec's "Frozen refs" block is meant to carry exact constants with file:line.
 DATA_GD = REPO_ROOT / "godot" / "autoload" / "data.gd"
 GEN_GD = REPO_ROOT / "godot" / "world" / "generator.gd"
-HARNESS = REPO_ROOT / "godot" / "HARNESS.md"
+# The machine source for the mode table + known-stable values. The doc
+# (godot/HARNESS.md) is a RENDERING of this file - never parse the doc.
+HARNESS_DATA = REPO_ROOT / "tasks" / "harness_data.yaml"
 
 ID_RE = re.compile(r"^AC-(\d{4,})$")
 
@@ -115,71 +120,42 @@ def _parse_gd_constants(path):
     return out
 
 
-def _parse_md_rows(text):
-    """Return the data rows of the first markdown table (lists of cells)."""
-    rows = []
-    for line in text.splitlines():
-        s = line.strip()
-        if s.startswith("|"):
-            cells = [c.strip() for c in s.strip("|").split("|")]
-            if all(set(c) <= set("-: ") and c for c in cells):
-                continue  # separator row
-            rows.append(cells)
-    return rows
+def _harness_data():
+    """Load the harness machine data (AC-0301).
+
+    `tasks/harness_data.yaml` is the single source for the mode table and the
+    known-stable value table. Do NOT scrape godot/HARNESS.md: that doc is the
+    agent-facing reference, and coupling a script to its markdown layout means a
+    reformat silently weakens every generated spec (the reason the source moved).
+    """
+    if not HARNESS_DATA.exists():
+        raise SpecError("harness data not found: %s" % HARNESS_DATA)
+    with open(HARNESS_DATA) as fh:
+        return yaml.safe_load(fh) or {}
 
 
-def _harness_rows():
-    """Return (header, rows) for the §1 MODE TABLE.
-
-    The header row is the first table row whose first cell is exactly `mode`;
-    data rows follow until the first non-table line. Row cells are backticked
-    (e.g. `` `player` ``) and are stripped of backticks on the mode key only."""
-    if not HARNESS.exists():
-        return []
-    text = HARNESS.read_text()
-    lines = text.splitlines()
-    header = None
-    start = -1
-    for i, line in enumerate(lines):
-        s = line.strip()
-        if not s.startswith("|"):
-            continue
-        cells = [c.strip() for c in s.strip("|").split("|")]
-        if cells and cells[0].strip("`").lower() == "mode":
-            header = cells
-            start = i + 1
-            break
-    if header is None:
-        return []
-    rows = []
-    for line in lines[start:]:
-        s = line.strip()
-        if not s.startswith("|"):
-            break
-        cells = [c.strip() for c in s.strip("|").split("|")]
-        if all(set(c) <= set("-: ") and c for c in cells):
-            continue  # separator row
-        rows.append(cells)
-    return header, rows
+def _harness_modes(data):
+    """Return (columns, {mode: {field: text}}) for the mode table."""
+    cols = list(data.get("mode_columns") or [])
+    modes = {name: dict(fields or {}) for name, fields in (data.get("modes") or {}).items()}
+    return cols, modes
 
 
-def _known_stable_rows():
-    if not HARNESS.exists():
-        return []
-    text = HARNESS.read_text()
-    idx = text.find("Known-stable gate values")
-    if idx < 0:
-        return []
-    rows = []
-    for line in text[idx:].splitlines():
-        s = line.strip()
-        if s.startswith("|"):
-            cells = [c.strip() for c in s.strip("|").split("|")]
-            if all(set(c) <= set("-: ") and c for c in cells):
-                continue
-            rows.append(cells)
-    # drop the header row (first)
-    return rows[1:] if rows else []
+def _known_stable_rows(data):
+    """Return [[value, fresh result, established by], ...]."""
+    return [[v.get("value", ""), v.get("fresh", ""), v.get("established_by", "")]
+            for v in (data.get("standing_values") or [])]
+
+
+def _battery_modes(data):
+    """The battery mode list, authoritative from the data file (not the doc)."""
+    return list((data.get("battery") or {}).get("modes") or [])
+
+
+def _value_columns(data):
+    """Column labels for the known-stable value table."""
+    return list(data.get("value_columns") or [])
+
 
 
 def _const_table_row(name, val, lineno, relpath):
@@ -194,16 +170,11 @@ def _build_html(task, task_id, full=False):
     data_rel = "godot/autoload/data.gd"
     gen_rel = "godot/world/generator.gd"
 
-    harness = _harness_rows()
-    if harness:
-        header, all_rows = harness
-    else:
-        header, all_rows = None, []
-    hrows = {}
-    for r in all_rows:
-        if r:
-            hrows[(r[0]).strip("`").strip()] = r
-    known = _known_stable_rows()
+    hdata = _harness_data()
+    hcols, hrows = _harness_modes(hdata)
+    bat_modes = _battery_modes(hdata)
+    vcols = _value_columns(hdata)
+    known = _known_stable_rows(hdata)
 
     status = task.get("status", "?")
     title = task.get("title", "")
@@ -344,32 +315,27 @@ def _build_html(task, task_id, full=False):
     # ---- RESULT shapes (AUTO; slim = path pointer, --full = table) ----
     a('<h2>Expected RESULT shapes (default battery + genhash)</h2>')
     if full:
-        a('<div class="auto"><b>AUTO (rows pulled from godot/HARNESS.md §1 — do not '
-          'hand-edit)</b></div>')
-        if header and hrows:
+        a('<div class="auto"><b>AUTO (rows from tasks/harness_data.yaml, rendered into '
+          'godot/HARNESS.md §1 — do not hand-edit)</b></div>')
+        if hrows:
             a("<table><tr><th>mode</th><th>key RESULT fields</th><th>typical wall</th></tr>")
-            field_idx = header.index("key RESULT fields") if "key RESULT fields" in header else 3
-            wall_idx = (header.index("typical wall (2026-08-24)")
-                        if "typical wall (2026-08-24)" in header else 5)
-            for mode in BATTERY_MODES:
+            for mode in (bat_modes or BATTERY_MODES):
                 r = hrows.get(mode)
                 if not r:
                     continue
-                fields = r[field_idx] if len(r) > field_idx else ""
-                wall = r[wall_idx] if len(r) > wall_idx else ""
                 a("<tr><td><code>%s</code></td><td>%s</td><td>%s</td></tr>"
-                  % (mode, escape(fields), escape(wall)))
+                  % (mode, escape(r.get("result_fields", "")), escape(r.get("wall", ""))))
             a("</table>")
         else:
-            a("<p class='note'>HARNESS.md mode table not found — regenerate after godot/HARNESS.md exists.</p>")
+            a("<p class='note'>no modes in tasks/harness_data.yaml — regenerate after it is "
+              "restored (it is the machine source for the mode table).</p>")
     else:
         a('<div class="auto"><b>AUTO (paths only — the RESULT shapes live in '
           '<code>godot/HARNESS.md</code> §1; inline them with <code>--full</code>)</b></div>')
         a("<ul>")
-        a("<li>Battery arms: <code>player</code> / <code>interact</code> / "
-          "<code>light</code> / <code>fluids</code> / <code>buckets</code> / "
-          "<code>genhash</code> — key fields + ok-conditions per mode in "
-          "<code>godot/HARNESS.md</code> §1.</li>")
+        a("<li>Battery arms: %s — key fields + ok-conditions per mode in "
+          "<code>godot/HARNESS.md</code> §1.</li>"
+          % " / ".join("<code>%s</code>" % m for m in (bat_modes or BATTERY_MODES)))
         a("<li>Heavy modes: <code>boundary</code>, <code>recprobe</code>, "
           "<code>perf</code>, <code>minfo</code>, <code>pickorder</code> — §2.</li>")
         a("</ul>")
@@ -377,25 +343,25 @@ def _build_html(task, task_id, full=False):
     # ---- Known-stable values (AUTO; slim = path pointer, --full = table) ----
     a('<h2>Known-stable gate values</h2>')
     if full:
-        a('<div class="auto"><b>AUTO (from godot/HARNESS.md §3, else boilerplate — verify '
-          'fresh on any fluids/world-touching change)</b></div>')
+        a('<div class="auto"><b>AUTO (values from tasks/harness_data.yaml, rendered into '
+          'godot/HARNESS.md §3 — verify fresh on any fluids/world-touching change)</b></div>')
         if known:
-            a("<table><tr><th>value</th><th>fresh result (2026-08-24)</th><th>established by</th></tr>")
+            a("<table><tr>%s</tr>"
+              % "".join("<th>%s</th>" % escape(c) for c in vcols))
             for cells in known:
-                pad = cells + [""] * (3 - len(cells))
+                pad = cells + [""] * (len(vcols) - len(cells))
                 a("<tr><td>%s</td><td>%s</td><td>%s</td></tr>"
                   % (escape(pad[0]), escape(pad[1]), escape(pad[2])))
             a("</table>")
         else:
-            a('<p class="note">sea 2730/2730 · backed 1406/1406 · sea_stable true · '
-              "water_on_lava 25 / sideways 9 · drop_spawned/place_ok true · torch 14 · "
-              "genhash 25/25 — <b>verify fresh</b> (HARNESS.md §3 not parsed).</p>")
+            a('<p class="note">no standing values in <code>tasks/harness_data.yaml</code> '
+              "(it is the machine source for the anchor table) — <b>establish them "
+              "fresh</b> before gating.</p>")
     else:
         a('<div class="auto"><b>AUTO (paths only — the anchor table lives in '
-          '<code>godot/HARNESS.md</code> §3: sea 2730/2730 · backed 1406/1406 · '
-          'sea_stable true · water_on_lava 25 / sideways 9 · torch 14 · genhash '
-          '25/25; verify fresh on any fluids/world-touching change; inline with '
-          '<code>--full</code>)</b></div>')
+          '<code>godot/HARNESS.md</code> §3, generated from '
+          '<code>tasks/harness_data.yaml</code>; verify fresh on any '
+          'fluids/world-touching change; inline with <code>--full</code>)</b></div>')
 
     # ---- FILL sections ----
     for heading, hint, example in [
