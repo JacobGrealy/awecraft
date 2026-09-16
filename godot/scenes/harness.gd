@@ -537,6 +537,15 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _starlight_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "brightslab":
+			# AC-0283 P2: the bright-slab-on-edit regression arm (the edit
+			# lane must end on the settled star payload: engine == legacy
+			# reference, and the applied mesh == star-payload bake ==
+			# reference bake, at the affected slabs of three edit cases).
+			world.collision_enabled = false
+			await _brightslab_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "banana":
 			# AC-0040: the banana-tree generation probe — the shore dirt
 			# edge rule (independent re-derivation from the data), the
@@ -649,17 +658,26 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _water_test(spawn)
 			return
 		if logic == "fpv":
+			# AC-0283 P2: await the spawn floor BEFORE spawning (same
+			# pattern as the player/gamepad/doors arms) — the viewmodel
+			# light checks sample light_at(eye), which is only outdoor
+			# (sky 15) once the floor collision exists; without it the
+			# spawn player free-falls through the data (present since the
+			# startup burst) and reads cave-dark at the checks.
 			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
 			player = main._spawn_player()
 			await _fpv_test()
 			return
 		if logic == "held":
 			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
 			player = main._spawn_player()
 			await _held_test()
 			return
 		if logic == "toolres":
 			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
 			player = main._spawn_player()
 			await _toolres_test()
 			return
@@ -1014,9 +1032,8 @@ func _batt_reset_state(spawn: Vector3) -> void:
 	for ch in Game.drops.get_children():
 		ch.free()
 	world._banana_fruits.clear()  # AC-0040: the chunk data below is zeroed
-	world.light_dirty.clear()
-	world.light_pending.clear()
-	world.light_pending_set.clear()
+	world.star_owed.clear()
+	world.star_remesh.clear()
 	world.fluid_dirty.clear()
 	world.tex_refresh.clear()
 	world.fluid_sim_enabled = false
@@ -5403,7 +5420,7 @@ func _editperf_test(spawn: Vector3) -> void:
 	var t_edit := Time.get_ticks_msec()
 	world.set_block(cell.x, cell.y, cell.z, 0)
 	var w2 := 0
-	while w2 < 300 and not (world.light_dirty.is_empty() and world.light_pending.is_empty()):
+	while w2 < 300 and not (world.star_light_idle()):
 		await get_tree().physics_frame
 		w2 += 1
 	await get_tree().physics_frame
@@ -5411,7 +5428,7 @@ func _editperf_test(spawn: Vector3) -> void:
 		"cell": [cell.x, cell.y, cell.z],
 		"edited_id": edited_id,
 		"cell_after": world.get_block(cell.x, cell.y, cell.z),
-		"flush_done": world.light_dirty.is_empty() and world.light_pending.is_empty(),
+		"flush_done": world.star_light_idle(),
 		"flush_frames": world.perf_flush_frames,
 		"max_frame_build_ms": world.perf_max_frame_ms,
 		"single_build_ms": world.perf_single_build_ms,
@@ -5479,7 +5496,7 @@ func _editfront_test(spawn: Vector3) -> void:
 		return
 	var tq := 0
 	var pkey := "%d,%d" % [pcx, pcz]
-	while tq < 2400 and not (world.light_dirty.is_empty() and world.light_pending.is_empty() and not world._tm_inflight_keys.has(pkey)):
+	while tq < 2400 and not (world.star_light_idle() and not world._tm_inflight_keys.has(pkey)):
 		await get_tree().process_frame
 		tq += 1
 	var q_before := int(world.queue_size)
@@ -5487,7 +5504,7 @@ func _editfront_test(spawn: Vector3) -> void:
 	var full0 := int(world.perf_edit_front_full)
 	var br := await _editfront_case(T, cell, 0)
 	var tw := 0
-	while tw < 2400 and not (world.light_dirty.is_empty() and world.light_pending.is_empty() and not world._tm_inflight_keys.has(pkey)):
+	while tw < 2400 and not (world.star_light_idle() and not world._tm_inflight_keys.has(pkey)):
 		await get_tree().process_frame
 		tw += 1
 	var pl := await _editfront_case(T, cell, 2)
@@ -5607,7 +5624,7 @@ func _editmat_test(spawn: Vector3) -> void:
 					break
 			if not allm:
 				break
-		var idle: bool = world.light_dirty.is_empty() and world.light_pending.is_empty() and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
+		var idle: bool = world.star_light_idle() and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
 		if allm and idle:
 			quiet += 1
 		else:
@@ -5760,7 +5777,7 @@ func _editmat_shot(spawn: Vector3) -> void:
 					break
 			if not allm:
 				break
-		var idle: bool = world.light_dirty.is_empty() and world.light_pending.is_empty() and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
+		var idle: bool = world.star_light_idle() and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
 		if allm and idle:
 			quiet += 1
 		else:
@@ -5794,7 +5811,7 @@ func _editmat_shot(spawn: Vector3) -> void:
 	var st := 0
 	var squiet := 0
 	while st < 600:
-		var s_idle: bool = world.light_dirty.is_empty() and world.light_pending.is_empty() and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
+		var s_idle: bool = world.star_light_idle() and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
 		if s_idle:
 			squiet += 1
 		else:
@@ -5883,7 +5900,7 @@ func _breakspike_test(spawn: Vector3) -> void:
 			var cc: Node3D = world.chunks[key]
 			if absi(cc.cx) <= rr and absi(cc.cz) <= rr and cc.mesh_built:
 				n_in += 1
-		var queues_idle: bool = world.light_dirty.is_empty() and world.light_pending.is_empty() \
+		var queues_idle: bool = world.star_light_idle() \
 			and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
 		if n_in == (2 * rr + 1) * (2 * rr + 1) and queues_idle:
 			quiet += 1
@@ -5925,7 +5942,7 @@ func _breakspike_test(spawn: Vector3) -> void:
 				inkeys.append(te["key"])
 			print("BSF frame=%d ms=%d inflight=%s col_pending=%d light_pending=%d build_ms_delta=%.1f qsize=%d built7=%d" % [
 				frame_n + 1, fms, inkeys,
-				world._col_pending.size(), world.light_pending.size(),
+				world._col_pending.size(), world.star_light_pending_depth(),
 				float(world.perf_build_ms) - bs_bm, world.queue_size,
 				_bs_built_count(7)])
 			bs_bm = float(world.perf_build_ms)
@@ -5998,7 +6015,7 @@ func _breakspike_test(spawn: Vector3) -> void:
 			"edit_light_passes": world.perf_edit_light_passes,
 			"light_self_computes": world.perf_light_self_computes,
 		},
-		"flush_done": world.light_dirty.is_empty() and world.light_pending.is_empty(),
+		"flush_done": world.star_light_idle(),
 	})
 	get_tree().quit()
 
@@ -6013,7 +6030,7 @@ func _bs_built_count(ring: int) -> int:
 
 
 func _breakspike_settled(edit_keys: Array) -> bool:
-	if not (world.light_dirty.is_empty() and world.light_pending.is_empty()
+	if not (world.star_light_idle()
 			and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()):
 		return false
 	for key in edit_keys:
@@ -6094,7 +6111,7 @@ func _editslab_test(spawn: Vector3) -> void:
 
 func _editslab_flush(c: Node3D, y: int, t0: int, cell: Array) -> Dictionary:
 	var w2 := 0
-	while w2 < 300 and not (world.light_dirty.is_empty() and world.light_pending.is_empty()):
+	while w2 < 300 and not (world.star_light_idle()):
 		await get_tree().physics_frame
 		w2 += 1
 	await get_tree().physics_frame
@@ -6892,7 +6909,7 @@ func _stripsprobe_test(spawn: Vector3) -> void:
 		await get_tree().physics_frame
 		waited += 1
 	var lp_waited := 0
-	while not world.light_pending.is_empty() and lp_waited < 1800:
+	while not world.star_light_idle() and lp_waited < 1800:
 		await get_tree().physics_frame
 		lp_waited += 1
 	# Deterministic sample: ready chunks ordered by (cz, cx).
@@ -7078,7 +7095,7 @@ func _stripsprobe_test(spawn: Vector3) -> void:
 			if c != null and int(c.band) <= 2 and not c.mesh_built:
 				all_built = false
 				break
-		if all_built and world.light_pending.is_empty():
+		if all_built and world.star_light_idle():
 			break
 		await get_tree().physics_frame
 		settle_waited += 1
@@ -7425,6 +7442,675 @@ func _pullprobe_test(spawn: Vector3) -> void:
 #   re-compared.
 # Gate: mismatches 0 (any divergence is reported with coordinates + the
 # expected/actual values and the arm fails).
+# AC-0283 P2 (AWECRAFT_LOGIC=brightslab): the bright-slab-on-edit
+# regression arm (the P2 integration gate for the edit lanes). In a fully
+# settled 7x7 region each case (C1 surface break, C2 cave-wall break that
+# lets sky in sideways, C3 torch place) edits, drives engine + remesh lane
+# to a quiet world, then asserts three ways: (a) the engine's settled
+# light == (b) the legacy pull reference on the POST-EDIT data (converged
+# 7x7, 5x5 around the edit column + a focused 3x3x3-section decode), and
+# (c) the applied mesh == the same slab re-baked by the worker on (a)'s
+# star payload AND on (b)'s classic light dict (geometry exact; colors
+# within the ArrayMesh 8-bit step; A-vs-B strict - the payload and the
+# reference must bake identically). ok = all cases exact.
+func _brightslab_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var H := int(Data.HEIGHT)
+	var io: Variant = ChunkIO.io_cpp()
+	Lighting._tables()
+	world.fluid_sim_enabled = false
+	world.collision_enabled = false
+	world.render_radius = 5
+	world.recenter(spawn.x, spawn.z, true)
+	var cx0 := int(floorf(spawn.x / 16.0))
+	var cz0 := int(floorf(spawn.z / 16.0))
+	var waited := 0
+	var have := false
+	while waited < 7200:
+		have = true
+		for dx in range(-3, 4):
+			for dz in range(-3, 4):
+				var c = world.chunks.get(world._key(cx0 + dx, cz0 + dz))
+				if c == null or c.data.is_empty():
+					have = false
+		for dx in range(-2, 3):
+			for dz in range(-2, 3):
+				var c = world.chunks.get(world._key(cx0 + dx, cz0 + dz))
+				if c == null or c.data.is_empty() or not c.mesh_built:
+					have = false
+		if have and world.star_light_idle() and world.dirty_queue.is_empty() \
+				and world.threadmesh_inflight.is_empty() and world.star_remesh.is_empty():
+			break
+		await get_tree().physics_frame
+		waited += 1
+	if not have or not world.star_light_idle():
+		Debug.result({"ok": false, "error": "world not settled", "waited": waited})
+		get_tree().quit()
+		return
+	for i in range(10):
+		await get_tree().physics_frame
+	var keys: Array = []
+	var flats := {}
+	var slabs := {}
+	var tops := {}
+	for dx in range(-3, 4):
+		for dz in range(-3, 4):
+			var k := "%d,%d" % [dx, dz]
+			var c = world.chunks.get(world._key(cx0 + dx, cz0 + dz))
+			if c == null or c.data.is_empty():
+				Debug.result({"ok": false, "error": "region data not ready", "cell": [cx0 + dx, cz0 + dz]})
+				get_tree().quit()
+				return
+			var f: PackedByteArray = c.flat_data()
+			flats[k] = f
+			slabs[k] = io.palettize_flat(f, 24)
+			tops[k] = int(io.slabs_top(slabs[k]))
+			keys.append(k)
+	var SD: Array = [[1, 0, 1], [-1, 0, 0], [0, 1, 3], [0, -1, 2]]
+	var ref_iter := func(slabs_d: Dictionary, tops_d: Dictionary) -> Dictionary:
+		var r_effs := {}
+		var r_rings := {}
+		var r_masks := {}
+		var r_srcs := {}
+		var r_cur := 0
+		var r_rounds := 0
+		var changed := false
+		var first_round := true
+		while (changed or first_round) and r_rounds < 32:
+			changed = false
+			for k in keys:
+				var parts: Array = k.split(",")
+				var kdx: int = int(parts[0])
+				var kdz: int = int(parts[1])
+				var eff_strips: Array = []
+				for sd in SD:
+					var st := PackedByteArray()
+					st.resize(2 * 16 * H)
+					var nk := "%d,%d" % [kdx + int(sd[0]), kdz + int(sd[1])]
+					if not first_round and r_rings.has(nk):
+						var rg: PackedInt32Array = r_rings[nk]
+						for v in rg:
+							var vi: int = int(v)
+							if (vi >> 17) & 3 == int(sd[2]):
+								st[(vi >> 4) & 8191] = vi & 15
+					eff_strips.append(st)
+				var tt := Time.get_ticks_usec()
+				var rr: Dictionary = Lighting.compute_light_flat_chunk_pull(slabs_d[k], cx0 + kdx, cz0 + kdz, H, eff_strips, eff_strips, eff_strips, int(tops_d[k]))
+				if first_round:
+					r_cur += Time.get_ticks_usec() - tt
+				var arr: PackedByteArray = rr["arr"]
+				var ring: PackedInt32Array = rr["ring"]
+				if r_effs.has(k):
+					if arr != r_effs[k] or ring != r_rings[k]:
+						changed = true
+				else:
+					changed = true
+				r_effs[k] = arr
+				r_rings[k] = ring
+				r_masks[k] = rr["mask"]
+				r_srcs[k] = bool(rr.get("blk_src", false))
+			r_rounds += 1
+			first_round = false
+		return {"effs": r_effs, "rings": r_rings, "masks": r_masks, "srcs": r_srcs, "cur_us": r_cur, "rounds": r_rounds, "converged": r_rounds < 32}
+	var pre_ri: Dictionary = ref_iter.call(slabs, tops)
+	var pre_ce := 0
+	for dcx in range(-2, 3):
+		for dcz in range(-2, 3):
+			var ce: Dictionary = world.star.compare_eff(cx0 + dcx, cz0 + dcz, pre_ri["effs"]["%d,%d" % [dcx, dcz]])
+			pre_ce += int(ce.get("mismatches", 0))
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	var c1 := Vector3i(sx, world.surface_top(sx, sz), sz)
+	var c1_ok := main._breakable(world.get_block(c1.x, c1.y, c1.z))
+	if not c1_ok:
+		for dx in range(-8, 9, 2):
+			if c1_ok:
+				break
+			for dz in range(-8, 9, 2):
+				var t2: int = world.surface_top(sx + dx, sz + dz)
+				if main._breakable(world.get_block(sx + dx, t2, sz + dz)):
+					c1 = Vector3i(sx + dx, t2, sz + dz)
+					c1_ok = true
+					break
+	if not c1_ok:
+		Debug.result({"ok": false, "error": "no breakable surface cell near spawn"})
+		get_tree().quit()
+		return
+	var c2: Array = []
+	var c2_cell: Vector3i = Vector3i.ZERO
+	for dcx in range(-2, 3):
+		for dcz in range(-2, 3):
+			var wcx := cx0 + dcx
+			var wcz := cz0 + dcz
+			var cc = world.chunks.get(world._key(wcx, wcz))
+			if cc == null or cc.data.is_empty():
+				continue
+			var f: PackedByteArray = cc.flat_data()
+			var air := PackedByteArray()
+			air.resize(H * 256)
+			var open15 := PackedByteArray()
+			open15.resize(H * 256)
+			for ix in range(16):
+				for iz in range(16):
+					var i0 := ix + iz * 16
+					var op := true
+					for y in range(H - 1, -1, -1):
+						var b: int = int(f[(y << 8) | i0])
+						air[(y << 8) | i0] = 1 if b == 0 else 0
+						if op and b == 0:
+							open15[(y << 8) | i0] = 1
+						elif b != 0:
+							op = false
+			var dist := {}
+			var q: Array = []
+			for p in range(H * 256):
+				if open15[p] != 0:
+					dist[p] = 0
+					q.append(p)
+			var qi := 0
+			while qi < q.size():
+				var p: int = q[qi]
+				qi += 1
+				var d: int = int(dist[p])
+				if d >= 14:
+					continue
+				var y: int = p >> 8
+				var iz: int = (p >> 4) & 15
+				var ix: int = p & 15
+				var nbs2: Array = []
+				if y + 1 < H:
+					nbs2.append((p & ~255) + 256)
+				if y > 0:
+					nbs2.append(p - 256)
+				if ix + 1 < 16:
+					nbs2.append(p + 1)
+				if ix > 0:
+					nbs2.append(p - 1)
+				if iz + 1 < 16:
+					nbs2.append(p + 16)
+				if iz > 0:
+					nbs2.append(p - 16)
+				for np in nbs2:
+					if air[np] != 0 and not dist.has(np):
+						dist[np] = d + 1
+						q.append(np)
+			for p in range(H * 256):
+				if air[p] != 0 and dist.has(p):
+					continue
+				var y: int = p >> 8
+				var iz: int = (p >> 4) & 15
+				var ix: int = p & 15
+				var cand: Array = []
+				var sb: Array = []
+				if y + 1 < H:
+					sb.append(p + 256)
+				if y > 0:
+					sb.append(p - 256)
+				if ix + 1 < 16:
+					sb.append(p + 1)
+				if ix > 0:
+					sb.append(p - 1)
+				if iz + 1 < 16:
+					sb.append(p + 16)
+				if iz > 0:
+					sb.append(p - 16)
+				for bp in sb:
+					if air[bp] != 0:
+						continue
+					var by: int = bp >> 8
+					var biz: int = (bp >> 4) & 15
+					var bix: int = bp & 15
+					var okb := false
+					var bb: Array = []
+					if by + 1 < H:
+						bb.append(bp + 256)
+					if by > 0:
+						bb.append(bp - 256)
+					if bix + 1 < 16:
+						bb.append(bp + 1)
+					if bix > 0:
+						bb.append(bp - 1)
+					if biz + 1 < 16:
+						bb.append(bp + 16)
+					if biz > 0:
+						bb.append(bp - 16)
+					for bbp in bb:
+						if dist.has(bbp) and int(dist[bbp]) <= 12:
+							okb = true
+							break
+					if okb:
+						cand.append(bp)
+				if cand.size() > 0:
+					var bp: int = cand[0]
+					c2_cell = Vector3i(wcx * 16 + (bp & 15), bp >> 8, wcz * 16 + ((bp >> 4) & 15))
+					var pk: Vector3i = Vector3i(wcx * 16 + (p & 15), p >> 8, wcz * 16 + ((p >> 4) & 15))
+					c2 = [c2_cell.x, c2_cell.y, c2_cell.z, 0, pk.x, pk.y, pk.z]
+					break
+			if c2.size() > 0:
+				break
+		if c2.size() > 0:
+			break
+	if c2.is_empty():
+		c2 = [c1.x, c1.y - 1, c1.z, 0]
+		c2_cell = Vector3i(c2[0], c2[1], c2[2])
+	var c3: Array
+	if c2.size() >= 7 and world.get_block(int(c2[4]), int(c2[5]), int(c2[6])) == 0:
+		c3 = [int(c2[4]), int(c2[5]), int(c2[6]), 22]
+	else:
+		c3 = [c1.x, c1.y, c1.z, 22]
+	var cases: Array = [
+		{"name": "C1_surface_break", "cells": [[c1.x, c1.y, c1.z, 0]]},
+		{"name": "C2_cave_break" if c2_cell != Vector3i.ZERO else "C2_dig2deep", "cells": [c2]},
+		{"name": "C3_torch_place", "cells": [c3]},
+	]
+	var results: Array = []
+	var case_no := 0
+	for case in cases:
+		case_no += 1
+		var r: Dictionary = await _brightslab_case(case, cx0, cz0, H, keys, ref_iter, pre_ri)
+		results.append(r)
+		print("RESULT %s engine_vs_ref=%d mesh_payload_mismatch=%d mesh_ref_mismatch=%d mesh_ab_mismatch=%d max_bright_delta=%.3f @%s" % [
+			str(case["name"]), int(r.get("eng_mism", -1)), int(r.get("mesh_pa_mism", -1)),
+			int(r.get("mesh_pb_mism", -1)), int(r.get("mesh_ab_mism", -1)),
+			float(r.get("max_delta", 0.0)), str(r.get("max_delta_at", ""))])
+	Debug.result({
+		"ok": pre_ce == 0,
+		"pre_edit_engine_vs_ref_mismatches": pre_ce,
+		"pre_ref_rounds": int(pre_ri.get("rounds", -1)),
+		"pre_ref_converged": bool(pre_ri.get("converged", false)),
+		"cases": results,
+		"wall_ms": Time.get_ticks_msec() - t0,
+	})
+
+
+func _brightslab_case(case: Dictionary, cx0: int, cz0: int, H: int, keys: Array, ref_iter, pre_ri: Dictionary) -> Dictionary:
+	var out: Dictionary = {"ok": false, "eng_mism": -1, "eng_first": {}, "eng_cells": 0, "mesh_pa_mism": -1, "mesh_pb_mism": -1, "max_delta": 0.0, "max_delta_at": "", "note": ""}
+	var cell: Array = case["cells"][0]
+	var ex: int = int(cell[0])
+	var ey: int = int(cell[1])
+	var ez: int = int(cell[2])
+	var new_id: int = int(cell[3])
+	var ecx: int = int(floorf(float(ex) / 16.0))
+	var ecz: int = int(floorf(float(ez) / 16.0))
+	var si_e: int = ey >> 4
+	var rel_k := "%d,%d" % [ecx - cx0, ecz - cz0]
+	var pre_eng: Array = []
+	for ddx in range(-1, 2):
+		for ddz in range(-1, 2):
+			var sk: PackedByteArray = world.star.section_sky(ecx + ddx, ecz + ddz, si_e)
+			var bl: PackedByteArray = world.star.section_block(ecx + ddx, ecz + ddz, si_e)
+			pre_eng.append({"k": "%d,%d" % [ddx, ddz], "sky": sk, "blk": bl})
+	var io: Variant = ChunkIO.io_cpp()
+	world.set_block(ex, ey, ez, new_id)
+	var w2 := 0
+	var q2 := 0
+	while w2 < 2400:
+		await get_tree().physics_frame
+		w2 += 1
+		if world.star_light_idle() and world.dirty_queue.is_empty() and world.threadmesh_inflight.is_empty() and world.star_remesh.is_empty():
+			q2 += 1
+			if q2 >= 5:
+				break
+		else:
+			q2 = 0
+	if q2 < 5:
+		out["note"] = "world not quiet after edit (waited %d frames)" % w2
+	var slabs2 := {}
+	var tops2 := {}
+	for k in keys:
+		var c = world.chunks.get(world._key(cx0 + int(k.split(",")[0]), cz0 + int(k.split(",")[1])))
+		if c == null or c.data.is_empty():
+			out["note"] = "region data missing post-edit"
+			return out
+		var f: PackedByteArray = c.flat_data()
+		slabs2[k] = io.palettize_flat(f, 24)
+		tops2[k] = int(io.slabs_top(slabs2[k]))
+	var ri: Dictionary = ref_iter.call(slabs2, tops2)
+	out["ref_rounds"] = int(ri.get("rounds", -1))
+	out["ref_converged"] = bool(ri.get("converged", false))
+	var eng_mism := 0
+	var eng_cells := 0
+	var eng_first: Dictionary = {}
+	for dcx in range(-2, 3):
+		for dcz in range(-2, 3):
+			var ck := "%d,%d" % [ecx - cx0 + dcx, ecz - cz0 + dcz]
+			if not ri["effs"].has(ck):
+				continue
+			var ce: Dictionary = world.star.compare_eff(ecx + dcx, ecz + dcz, ri["effs"][ck])
+			var m: int = int(ce.get("mismatches", 0))
+			eng_mism += m
+			eng_cells += H * 256
+			if m != 0 and eng_first.is_empty():
+				eng_first = ce.get("first", {})
+	out["eng_mism"] = eng_mism
+	out["eng_cells"] = eng_cells
+	out["eng_first"] = eng_first
+	var nib := func(a: PackedByteArray, p: int) -> int:
+		return int(a[p >> 1]) >> ((p & 1) << 2) & 15
+	var max_delta := 0.0
+	var max_at := ""
+	var f_mism := 0
+	for ddx in range(-1, 2):
+		for ddz in range(-1, 2):
+			var ck := "%d,%d" % [ecx - cx0 + ddx, ecz - cz0 + ddz]
+			if not ri["effs"].has(ck):
+				continue
+			var rarr: PackedByteArray = ri["effs"][ck]
+			for si in range(maxi(0, si_e - 1), mini(23, si_e + 1) + 1):
+				var sk: PackedByteArray = world.star.section_sky(ecx + ddx, ecz + ddz, si)
+				var bl: PackedByteArray = world.star.section_block(ecx + ddx, ecz + ddz, si)
+				for p in range(4096):
+					var y: int = si * 16 + (p >> 8)
+					var z: int = (p >> 4) & 15
+					var x: int = p & 15
+					var e: int = maxi(nib.call(sk, p), nib.call(bl, p))
+					var r: int = int(rarr[(y << 8) | (z << 4) | x])
+					var dd: int = absi(e - r)
+					if dd > 0:
+						f_mism += 1
+					if float(dd) > max_delta:
+						max_delta = float(dd)
+						max_at = "%s x%d y%d z%d engine=%d ref=%d" % [ck, x, y, z, e, r]
+	out["focused_mism"] = f_mism
+	out["max_delta"] = max_delta
+	out["max_delta_at"] = max_at
+	out["payload_vs_pre"] = _brightslab_payload_delta(pre_eng, ecx, ecz, si_e)
+	var mc: Variant = _ChunkScriptM.mesh_cpp()
+	var ec = world.chunks.get(world._key(ecx, ecz))
+	var st: Dictionary = {}
+	if ec != null:
+		var hs: Dictionary = {}
+		for si in range(maxi(0, si_e - 2), mini(23, si_e + 2) + 1):
+			hs[si] = int(ec.high_stamps.get(si, -1))
+		st["top"] = int(ec.top)
+		st["data_gen"] = int(ec.data_gen)
+		st["mesh_built"] = bool(ec.mesh_built)
+		st["high_stamps"] = hs
+		st["flush"] = ec.flush_slabs.keys()
+		st["light_settled"] = bool(ec.light_settled)
+	out["chunk_state"] = st
+	var checks: Array = []
+	for dsi in range(-1, 2):
+		var si2: int = si_e + dsi
+		if si2 >= 0 and si2 < 24:
+			checks.append([ecx, ecz, si2])
+	checks.append([ecx + 1, ecz, si_e])
+	var mesh_pa_mism := 0
+	var mesh_pb_mism := 0
+	var mesh_qa_mism := 0
+	var mesh_ab_mism := 0
+	var mesh_max_c := 0.0
+	var mesh_max_c_at := ""
+	var slab_notes: Array = []
+	for chk in checks:
+		var wcx: int = int(chk[0])
+		var wcz: int = int(chk[1])
+		var si3: int = int(chk[2])
+		var m: Dictionary = _brightslab_slab_cmp(mc, wcx, wcz, si3, ri, cx0, cz0)
+		slab_notes.append(m)
+		if int(m.get("pa_mism", 0)) > 0:
+			mesh_pa_mism += int(m["pa_mism"])
+		if int(m.get("pb_mism", 0)) > 0:
+			mesh_pb_mism += int(m["pb_mism"])
+		if int(m.get("q_mism", 0)) > 0:
+			mesh_qa_mism += int(m["q_mism"])
+		var ab: Dictionary = m.get("ab", {})
+		if not ab.is_empty():
+			for fld in ["v", "n", "c", "u", "i", "q"]:
+				if not bool(ab[fld]):
+					mesh_ab_mism += 1
+					break
+		var mdc: float = float(m.get("max_c", 0.0))
+		if mdc > mesh_max_c:
+			mesh_max_c = mdc
+			mesh_max_c_at = str(m.get("max_c_at", ""))
+	out["mesh_pa_mism"] = mesh_pa_mism
+	out["mesh_pb_mism"] = mesh_pb_mism
+	out["mesh_q_mism"] = mesh_qa_mism
+	out["mesh_ab_mism"] = mesh_ab_mism
+	out["mesh_max_c_delta"] = mesh_max_c
+	out["mesh_max_c_at"] = mesh_max_c_at
+	out["slabs"] = slab_notes
+	out["quiet_frames"] = w2
+	out["ok"] = bool(ri.get("converged", false)) and eng_mism == 0 and f_mism == 0 \
+			and mesh_pa_mism == 0 and mesh_pb_mism == 0 and mesh_qa_mism == 0 and mesh_ab_mism == 0
+	return out
+
+
+func _brightslab_payload_delta(pre_eng: Array, ecx: int, ecz: int, si_e: int) -> int:
+	var pre_max := 0
+	var post_max := 0
+	for pe in pre_eng:
+		var sk: PackedByteArray = pe["sky"]
+		var bl: PackedByteArray = pe["blk"]
+		var k: String = pe["k"]
+		var ddx: int = int(k.split(",")[0])
+		var ddz: int = int(k.split(",")[1])
+		var post_sk: PackedByteArray = world.star.section_sky(ecx + ddx, ecz + ddz, si_e)
+		var post_bl: PackedByteArray = world.star.section_block(ecx + ddx, ecz + ddz, si_e)
+		for p in range(4096):
+			var a: int = maxi(int(sk[p >> 1]) >> ((p & 1) << 2) & 15, int(bl[p >> 1]) >> ((p & 1) << 2) & 15)
+			var b: int = maxi(int(post_sk[p >> 1]) >> ((p & 1) << 2) & 15, int(post_bl[p >> 1]) >> ((p & 1) << 2) & 15)
+			pre_max = maxi(pre_max, a)
+			post_max = maxi(post_max, b)
+	return (post_max << 8) | pre_max
+
+
+# The applied mesh went through Godot's ArrayMesh packed storage (normals
+# ~2^-16, colors 8-bit): compare with tolerances; the real light steps are
+# >= 1/15 = 0.067, far above the 0.0045 color tolerance. A-vs-B (both raw
+# C++ build_accs outputs) stays strict.
+func _bs_acc_cmp_loose(gm: Dictionary, rm: Dictionary) -> Dictionary:
+	var out: Dictionary = {"v": true, "n": true, "c": true, "u": true, "i": true, "q": int(gm.get("q", -1)) == int(rm.get("q", -1)), "dv": 0, "dn": 0, "dc": 0}
+	if not bool(out["q"]):
+		out["v"] = false
+		out["n"] = false
+		out["c"] = false
+		out["u"] = false
+		out["i"] = false
+		return out
+	var q: int = int(rm["q"])
+	var gv: PackedVector3Array = gm["v"]
+	var rv: PackedVector3Array = rm["v"]
+	var gn: PackedVector3Array = gm["n"]
+	var rn: PackedVector3Array = rm["n"]
+	var gc: PackedColorArray = gm["c"]
+	var rc: PackedColorArray = rm["c"]
+	var gu: PackedVector2Array = gm["u"]
+	var ru: PackedVector2Array = rm["u"]
+	var gi: PackedInt32Array = gm["i"]
+	var ri2: PackedInt32Array = rm["i"]
+	var nv := 0
+	var nn := 0
+	var nc := 0
+	for i2 in range(q * 4):
+		if (gv[i2] - rv[i2]).length() > 0.0005:
+			nv += 1
+		if (gn[i2] - rn[i2]).length() > 0.001:
+			nn += 1
+		var gcol: Color = gc[i2]
+		var rcol: Color = rc[i2]
+		if absf(gcol.r - rcol.r) > 0.0045 or absf(gcol.g - rcol.g) > 0.0045 or absf(gcol.b - rcol.b) > 0.0045:
+			nc += 1
+	for i2 in range(q * 2):
+		if absf(gu[i2].x - ru[i2].x) > 0.001 or absf(gu[i2].y - ru[i2].y) > 0.001:
+			out["u"] = false
+	if gi.size() != ri2.size() or int(gi.size()) != q * 6:
+		out["i"] = false
+	else:
+		for i2 in range(gi.size()):
+			if gi[i2] != ri2[i2]:
+				out["i"] = false
+				break
+	if nv > 0:
+		out["v"] = false
+	if nn > 0:
+		out["n"] = false
+	if nc > 0:
+		out["c"] = false
+	out["dv"] = nv
+	out["dn"] = nn
+	out["dc"] = nc
+	return out
+
+
+func _brightslab_slab_cmp(mc, wcx: int, wcz: int, si: int, ri: Dictionary, cx0: int, cz0: int) -> Dictionary:
+	var out: Dictionary = {"slab": "%d,%d:%d" % [wcx, wcz, si], "pa_mism": -1, "pb_mism": -1, "q_mism": -1, "max_c": 0.0, "max_c_at": "", "note": ""}
+	var c = world.chunks.get(world._key(wcx, wcz))
+	if c == null or c.data.is_empty():
+		out["note"] = "no chunk"
+		return out
+	var s = c.slabs[si]
+	var nbs: Dictionary = {}
+	var nb_ok := true
+	for ddx in range(-1, 2):
+		for ddz in range(-1, 2):
+			if (ddx == 0) == (ddz == 0):
+				continue
+			var ncc = world.chunks.get(world._key(wcx + ddx, wcz + ddz))
+			if ncc == null or ncc.data.is_empty():
+				nb_ok = false
+				break
+			nbs["%d,%d" % [ddx, ddz]] = mc.snap_rings(ncc.data, ncc.fl, ddx, ddz, ncc.gen_keep)
+	if not nb_ok:
+		out["note"] = "neighbor missing"
+		return out
+	var ctx0: Dictionary = world._tm_ctx.duplicate()
+	var ze: Array = []
+	for k2 in range(8):
+		ze.append(PackedByteArray())
+	ctx0["eff_strips"] = ze
+	ctx0["blk_strips"] = ze
+	ctx0["blk_strips_b"] = ze
+	ctx0["top"] = int(c.top)
+	var ms_w: Dictionary
+	if not world._tm_ms_full.rects.is_empty():
+		ms_w = {"rects": world._tm_ms_full.rects.duplicate(), "h": float(world._tm_ms_full.get("h", 0.0))}
+	else:
+		ms_w = {"rects": {}}
+	var H: int = int(Data.HEIGHT)
+	var pl: Dictionary = world.star.slab_light_payload(wcx, wcz, si, si)
+	if not bool(pl.get("ok", false)):
+		out["note"] = "payload not ok"
+		return out
+	pl["star"] = true
+	var data_c: Array = ChunkIO._slabs_deepcopy(c.data)
+	var fl_c: Array = ChunkIO._slabs_deepcopy(c.fl)
+	var ra: Dictionary = mc.build_accs(data_c, fl_c, wcx, wcz, nbs, ctx0, ms_w, pl, si, si, 0, Lighting._att, Lighting._glow, PackedByteArray())
+	var y0 := maxi(0, si * 16 - 2)
+	var y1 := mini(H - 1, (si + 1) * 16 + 1)
+	var effs: Array = []
+	for s2 in [[1, 0], [-1, 0], [0, 1], [0, -1]]:
+		var e := PackedByteArray()
+		e.resize(2 * 16 * H)
+		var nk := "%d,%d" % [wcx - cx0 + int(s2[0]), wcz - cz0 + int(s2[1])]
+		var narr: PackedByteArray = ri["effs"].get(nk, PackedByteArray())
+		var colsz := 16 * H
+		if int(s2[0]) != 0:
+			for cc2 in range(2):
+				var nx: int = cc2 if int(s2[0]) > 0 else 15 - cc2
+				for yy in range(y0, y1 + 1):
+					for tt in range(16):
+						e[cc2 * colsz + yy * 16 + tt] = narr[(yy << 8) | (tt << 4) | nx]
+		else:
+			for cc2 in range(2):
+				var nz: int = cc2 if int(s2[1]) > 0 else 15 - cc2
+				for yy in range(y0, y1 + 1):
+					for tt in range(16):
+						e[cc2 * colsz + yy * 16 + tt] = narr[(yy << 8) | (nz << 4) | tt]
+		effs.append(e)
+	for s2 in [[1, 1], [-1, 1], [1, -1], [-1, -1]]:
+		var e := PackedByteArray()
+		e.resize(4 * H)
+		var nk := "%d,%d" % [wcx - cx0 + int(s2[0]), wcz - cz0 + int(s2[1])]
+		var narr: PackedByteArray = ri["effs"].get(nk, PackedByteArray())
+		for a in range(2):
+			var nx: int = a if int(s2[0]) > 0 else 15 - a
+			for b in range(2):
+				var nz: int = b if int(s2[1]) > 0 else 15 - b
+				for yy in range(y0, y1 + 1):
+					e[(a * 2 + b) * H + yy] = narr[(yy << 8) | (nz << 4) | nx]
+		effs.append(e)
+	var ctxb: Dictionary = ctx0.duplicate()
+	ctxb["eff_strips"] = effs
+	var lk := "%d,%d" % [wcx - cx0, wcz - cz0]
+	var lb: Dictionary = {
+		"mn": Vector3i(wcx * 16, 0, wcz * 16), "w": 16, "d": 16,
+		"arr": ri["effs"].get(lk, PackedByteArray()), "mask": ri["masks"].get(lk, PackedByteArray()),
+		"ring": ri["rings"].get(lk, PackedInt32Array()), "blk_src": ri["srcs"].get(lk, false),
+	}
+	var rb: Dictionary = mc.build_accs(data_c, fl_c, wcx, wcz, nbs, ctxb, ms_w, lb, si, si, 0, Lighting._att, Lighting._glow, PackedByteArray())
+	var applied: Dictionary = {}
+	if s.mesh_instance != null and s.mesh_instance.mesh != null and int(s.mesh_instance.mesh.get_surface_count()) > 0:
+		var arrs: Array = s.mesh_instance.mesh.surface_get_arrays(0)
+		var ia: int = int((arrs[Mesh.ARRAY_INDEX] as PackedInt32Array).size())
+		if ia >= 6:
+			applied = {"q": ia / 6, "v": arrs[Mesh.ARRAY_VERTEX], "n": arrs[Mesh.ARRAY_NORMAL], "c": arrs[Mesh.ARRAY_COLOR], "u": arrs[Mesh.ARRAY_TEX_UV], "i": arrs[Mesh.ARRAY_INDEX]}
+	var ra_acc: Dictionary = ra["slabs"][0][0]
+	var rb_acc: Dictionary = rb["slabs"][0][0]
+	out["a_q"] = int(ra_acc["q"])
+	out["b_q"] = int(rb_acc["q"])
+	out["applied_q"] = int(applied.get("q", -1))
+	if int(applied.get("q", 0)) != int(ra_acc["q"]):
+		out["q_mism"] = 1
+	else:
+		out["q_mism"] = 0
+	if not applied.is_empty():
+		var pa: Dictionary = _bs_acc_cmp_loose(applied, ra_acc)
+		var pb: Dictionary = _bs_acc_cmp_loose(applied, rb_acc)
+		out["pa"] = pa
+		out["pb"] = pb
+		var psum: int = 0
+		for fld in ["v", "n", "c", "u", "i"]:
+			if not bool(pa[fld]):
+				psum += 1
+		out["pa_mism"] = psum
+		var psum2: int = 0
+		for fld in ["v", "n", "c", "u", "i"]:
+			if not bool(pb[fld]):
+				psum2 += 1
+		out["pb_mism"] = psum2
+		var ab: Dictionary = _acc_cmp(ra_acc, rb_acc)
+		out["ab"] = ab
+		var gc: PackedColorArray = applied["c"]
+		var bc: PackedColorArray = rb_acc["c"]
+		var ac: PackedColorArray = ra_acc["c"]
+		var nq: int = int(applied["q"])
+		var gv: PackedVector3Array = applied["v"]
+		var gn: PackedVector3Array = applied["n"]
+		var an: PackedVector3Array = ra_acc["n"]
+		var bn: PackedVector3Array = rb_acc["n"]
+		var details: Array = []
+		for qq in range(nq):
+			var cd_b: float = 0.0
+			var cd_a: float = 0.0
+			for jj in range(4):
+				var gcol: Color = gc[qq * 4 + jj]
+				var bcol: Color = bc[qq * 4 + jj]
+				var acol: Color = ac[qq * 4 + jj]
+				cd_b = maxf(cd_b, absf(gcol.r - bcol.r))
+				cd_b = maxf(cd_b, absf(gcol.g - bcol.g))
+				cd_b = maxf(cd_b, absf(gcol.b - bcol.b))
+				cd_a = maxf(cd_a, absf(gcol.r - acol.r))
+				cd_a = maxf(cd_a, absf(gcol.g - acol.g))
+				cd_a = maxf(cd_a, absf(gcol.b - acol.b))
+			if cd_b > float(out.get("max_c", 0.0)):
+				out["max_c"] = cd_b
+				var vc: Vector3 = (gv[qq * 4] + gv[qq * 4 + 1] + gv[qq * 4 + 2] + gv[qq * 4 + 3]) / 4.0
+				out["max_c_at"] = "%s quad=%d center=(%.2f,%.2f,%.2f) applied=(n=%s c=%s) A=(n=%s c=%s) B=(n=%s c=%s) cd_a=%.3f" % [
+					str(out.get("slab", "")), qq, vc.x, vc.y, vc.z,
+					str(gn[qq * 4]), str(gc[qq * 4]), str(an[qq * 4]), str(ac[qq * 4]),
+					str(bn[qq * 4]), str(bc[qq * 4]), cd_a]
+			if (cd_b > 0.02 or cd_a > 0.02) and details.size() < 8:
+				var vc2: Vector3 = (gv[qq * 4] + gv[qq * 4 + 1] + gv[qq * 4 + 2] + gv[qq * 4 + 3]) / 4.0
+				details.append("q%d c=(%.2f,%.2f,%.2f) n_ap=%s n_a=%s n_b=%s c_ap=%s c_a=%s c_b=%s da=%.3f db=%.3f" % [
+					qq, vc2.x, vc2.y, vc2.z, str(gn[qq * 4]), str(an[qq * 4]), str(bn[qq * 4]),
+					str(gc[qq * 4]), str(ac[qq * 4]), str(bc[qq * 4]), cd_a, cd_b])
+		if not details.is_empty():
+			out["details"] = details
+	return out
+
+
 func _starlight_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
 	var H := int(Data.HEIGHT)
@@ -8599,7 +9285,7 @@ func _la_settle(max_frames: int) -> int:
 			var cc: Node3D = world.chunks[key]
 			if absi(cc.cx) <= rr and absi(cc.cz) <= rr and cc.mesh_built:
 				n_in += 1
-		var queues_idle: bool = world.light_dirty.is_empty() and world.light_pending.is_empty() \
+		var queues_idle: bool = world.star_light_idle() \
 			and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
 		if n_in == (2 * rr + 1) * (2 * rr + 1) and queues_idle:
 			quiet += 1
@@ -9206,7 +9892,7 @@ func _spin_test(spawn: Vector3) -> void:
 		prev_vis = step_vis
 		prev_inst_vis = step_inst_vis
 		if OS.get_environment("AWECRAFT_SPINDBG") != "":
-			print("SPINDBG step=%d vis=%d verts=%d q=%d lp=%d tmi=%d ld=%d tr=%d flips=%s" % [step, vis_count, verts_vis, int(world.queue_size), int(world.light_pending.size()), int(world.threadmesh_inflight.size()), int(world.light_dirty.size()), int(world.tex_refresh.size()), flips])
+			print("SPINDBG step=%d vis=%d verts=%d q=%d lp=%d tmi=%d ld=%d tr=%d flips=%s" % [step, vis_count, verts_vis, int(world.queue_size), world.star_light_pending_depth(), int(world.threadmesh_inflight.size()), 0, int(world.tex_refresh.size()), flips])
 	# bottom look: pitch -90 (straight down), 3 frames for the cull pass
 	cam.global_transform = Transform3D(Basis(Vector3.RIGHT, -PI / 2.0), eye)
 	for i in 3:
@@ -9939,7 +10625,12 @@ func _fogsettings_readout() -> Dictionary:
 # AC-0218: per-phase neighbor-dirty snapshot (world counter deltas + queue
 # depth at the phase boundary). The "dirty count" evidence for the
 # border-compare change: which marking sites fire, in which phase.
+# AC-0283 P2: the light_pending / light_dirty flush queues are gone — the
+# remesh lane's depth (star_remesh slab count) is the equivalent queue.
 func _r16_dirty_snap() -> Dictionary:
+	var remesh_depth := 0
+	for k in world.star_remesh:
+		remesh_depth += int(world.star_remesh[k].size())
 	return {
 		"ld_marks": int(world.perf_lightdirty_marks),
 		"e2_marks": int(world.perf_e2_marks),
@@ -9948,8 +10639,8 @@ func _r16_dirty_snap() -> Dictionary:
 		"e2_side_changed": int(world.perf_e2_side_changed),
 		"e2_side_unchanged": int(world.perf_e2_side_unchanged),
 		"retrigger": int(world.perf_lightpend_retrigger),
-		"light_pending": int(world.light_pending.size()),
-		"light_dirty": int(world.light_dirty.size()),
+		"light_pending": remesh_depth,
+		"light_dirty": 0,
 	}
 
 
@@ -11588,7 +12279,7 @@ func _wprof_ring_read() -> Dictionary:
 	# AC-0262: the LOW sub-stages join the read (sub-part breakdown of the
 	# low lane for the perf hunt).
 	for nm in ["DRAIN", "LOW", "HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "MISC",
-			"LOW_POLL", "LOW_INR", "LOW_WAVE", "LOW_PICK"]:
+			"LOW_POLL", "LOW_INR", "LOW_WAVE", "LOW_PICK", "STAR"]:  # AC-0283 P2
 		d["stages"][nm] = _wprof_snap_stage(p.get(nm, {}))
 	return d
 
@@ -11799,7 +12490,7 @@ func _wprof_test(spawn: Vector3) -> void:
 # "edits show immediately" evidence.
 func _r16_edit_probe() -> Dictionary:
 	var eq := 0
-	while eq < 2400 and not (world.light_pending.is_empty() and world.light_dirty.is_empty() and world.threadmesh_inflight.is_empty()):
+	while eq < 2400 and not (world.star_light_idle() and world.threadmesh_inflight.is_empty()):
 		await get_tree().physics_frame
 		eq += 1
 	var ecand := {}
@@ -11884,7 +12575,7 @@ func _r16_edit_probe() -> Dictionary:
 # evidence only.
 func _r16_spin_probe() -> Dictionary:
 	var sq := 0
-	while sq < 3600 and not (world.light_pending.is_empty() and world.light_dirty.is_empty() and world.threadmesh_inflight.is_empty()):
+	while sq < 3600 and not (world.star_light_idle() and world.threadmesh_inflight.is_empty()):
 		await get_tree().physics_frame
 		sq += 1
 	var pre_built := {}
@@ -12061,7 +12752,7 @@ func _nd_settle(max_frames: int) -> int:
 			var cc: Node3D = world.chunks[key]
 			if absi(cc.cx) <= rr and absi(cc.cz) <= rr and cc.mesh_built:
 				n_in += 1
-		var queues_idle: bool = world.light_dirty.is_empty() and world.light_pending.is_empty() \
+		var queues_idle: bool = world.star_light_idle() \
 			and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
 		if n_in == (2 * rr + 1) * (2 * rr + 1) and queues_idle:
 			quiet += 1
@@ -12494,7 +13185,7 @@ func _nl_settle_around(pcx: int, pcz: int, max_frames: int) -> int:
 			var cc: Node3D = world.chunks[key]
 			if absi(int(cc.cx) - pcx) <= rr and absi(int(cc.cz) - pcz) <= rr and cc.mesh_built:
 				n_in += 1
-		idle = world.light_dirty.is_empty() and world.light_pending.is_empty() \
+		idle = world.star_light_idle() \
 			and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
 		if n_in == (2 * rr + 1) * (2 * rr + 1) and idle:
 			quiet += 1
@@ -15809,7 +16500,7 @@ func _nofallback_test(spawn: Vector3) -> void:
 	res["torch_placed"] = torch_placed
 	# Let the light wave settle (the worker remeshes the lit chunks).
 	var lp_waited := 0
-	while not world.light_pending.is_empty() and lp_waited < 1200:
+	while not world.star_light_idle() and lp_waited < 1200:
 		await get_tree().physics_frame
 		lp_waited += 1
 	await get_tree().physics_frame
@@ -16656,7 +17347,7 @@ func _lightcache_cache_fresh(key: String, max_frames: int) -> bool:
 		var c = world.chunks.get(key)
 		if c == null or c.data.is_empty():
 			continue
-		if world.light_pending_set.has(key) or world.light_dirty.has(key) or world.dirty_set.has(key):
+		if world.star_remesh.has(key) or (world.star != null and not world.star.column_settled(int(c.cx), int(c.cz))) or world.dirty_set.has(key):
 			continue
 		var cached = world._eff_cache.get(key)
 		if cached == null or int(c.data_gen) != int(cached.stamp[0]) or int(c.fl_gen) != int(cached.stamp[1]):

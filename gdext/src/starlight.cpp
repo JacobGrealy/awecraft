@@ -64,6 +64,23 @@
 // data (seed) — a section that is never seeded allocates nothing (the
 // "no nibble alloc for far" property P3 relies on).
 //
+// LANDING-ORDER HEALING (AC-0283 P2): columns land in streaming ORDER, not
+// all-at-once (P1's tests seeded a whole region first). When a section
+// SETTLES (its last queue entry pops — or it seeds with nothing to spread)
+// it re-injects its FINAL boundary light into its already-seeded neighbor
+// sections (settle_notify -> boundary_inject on each seeded neighbor).
+// boundary_inject is a MONOTONE MAX (relax only raises), so the re-inject
+// can never corrupt: it adds exactly the boundary light the neighbor
+// missed while this section was still relaxing, and it is a no-op when the
+// boundary is unchanged. A later-landing neighbor therefore heals the
+// already-settled ones (its settle re-injects into them; if it raised a
+// cell, the neighbor un-settles, re-settles, and re-notifies ITS neighbors
+// — the cascade walks the settle frontier to the region edge). The two
+// phases are exact against each other: the edit two-phase's affected set
+// (3x3 x/z x sections 0..si+1) provably contains every cell the change can
+// lower (block range 14 < 16; sky is a column pull), so the monotone max
+// outside the set only ever adds light a LANDING put there.
+//
 // WORKER SAFETY: same discipline as AweLighting — the tables arrive as
 // value copies (set_tables, the pre-warmed Lighting._att/_glow), no
 // autoloads.
@@ -164,8 +181,18 @@ public:
 		ClassDB::bind_method(D_METHOD("set_tables", "att", "glow"), &AweStarlight::set_tables);
 		ClassDB::bind_method(D_METHOD("reset"), &AweStarlight::reset);
 		ClassDB::bind_method(D_METHOD("seed_section", "cx", "cz", "si", "ids", "sky_above"), &AweStarlight::seed_section);
+		ClassDB::bind_method(D_METHOD("seed_column", "cx", "cz", "flat"), &AweStarlight::seed_column);
+		ClassDB::bind_method(D_METHOD("on_section_data", "cx", "cz", "si", "ids"), &AweStarlight::on_section_data);
 		ClassDB::bind_method(D_METHOD("step", "budget_us"), &AweStarlight::step);
 		ClassDB::bind_method(D_METHOD("on_edit", "wx", "wy", "wz", "new_id"), &AweStarlight::on_edit);
+		ClassDB::bind_method(D_METHOD("box_settled", "cx", "cz", "si0", "si1"), &AweStarlight::box_settled);
+		ClassDB::bind_method(D_METHOD("box_epochs", "cx", "cz", "si0", "si1"), &AweStarlight::box_epochs);
+		ClassDB::bind_method(D_METHOD("column_settled", "cx", "cz"), &AweStarlight::column_settled);
+		ClassDB::bind_method(D_METHOD("column_light_dict", "cx", "cz"), &AweStarlight::column_light_dict);
+		ClassDB::bind_method(D_METHOD("slab_light_payload", "cx", "cz", "si0", "si1"), &AweStarlight::slab_light_payload);
+		ClassDB::bind_method(D_METHOD("evict_column", "cx", "cz"), &AweStarlight::evict_column);
+		ClassDB::bind_method(D_METHOD("frame_diff", "old", "new", "dx", "dz", "y0", "y1"), &AweStarlight::frame_diff);
+		ClassDB::bind_method(D_METHOD("light_ver"), &AweStarlight::light_ver);
 		ClassDB::bind_method(D_METHOD("section_sky", "cx", "cz", "si"), &AweStarlight::section_sky);
 		ClassDB::bind_method(D_METHOD("section_block", "cx", "cz", "si"), &AweStarlight::section_block);
 		ClassDB::bind_method(D_METHOD("section_settled", "cx", "cz", "si"), &AweStarlight::section_settled);
@@ -198,6 +225,7 @@ public:
 		enqueued_n = 0;
 		stale_pops = 0;
 		edits_n = 0;
+		light_ver_n = 0;
 	}
 
 	bool seed_section(int p_cx, int p_cz, int p_si, const PackedByteArray &p_ids, const PackedByteArray &p_sky_above) {
@@ -207,6 +235,11 @@ public:
 			return false;
 		if (p_sky_above.size() != 0 && p_sky_above.size() != 256)
 			return false;
+		// validate BEFORE mutating: a failed seam must not leave a
+		// half-section (allocated, zero light, pending 0 = falsely settled)
+		uint8_t open_in[256];
+		if (!open_in_of(p_cx, p_cz, p_si, p_sky_above, open_in))
+			return false; // the section above must be seeded (contiguous column)
 		uint64_t key = sec_key(p_cx, p_cz, p_si);
 		auto it = secs.find(key);
 		if (it == secs.end()) {
@@ -228,14 +261,116 @@ public:
 		}
 		Sec &s = it->second;
 		std::memcpy(s.ids.data(), p_ids.ptr(), S3);
-		uint8_t open_in[256];
-		if (!open_in_of(p_cx, p_cz, p_si, p_sky_above, open_in))
-			return false; // the section above must be seeded (contiguous column)
 		scan_and_seed(s, open_in);
 		link_neighbors(s);
 		boundary_inject(s);
 		enqueue_seeds(s);
+		if (s.pending == 0)
+			settle_notify(s); // seeds with nothing to spread settle NOW
+		mutate();
 		return true;
+	}
+
+	// AC-0283 P2: seed ALL 24 sections top-down (si 23 -> 0) from the flat
+	// column ids (NSL*4096 bytes, the slabs_flat layout: section si at
+	// offset si*4096, cell (y<<8)|(z<<4)|x within the section). One call per
+	// NEW column landing: the seam is always satisfiable (si 23 = the
+	// full-open sky row; each lower section reads the just-seeded section
+	// above), so no partial-failure state is possible here.
+	void seed_column(int p_cx, int p_cz, const PackedByteArray &p_flat) {
+		if (p_flat.size() != NSL * S3)
+			return;
+		for (int si = NSL - 1; si >= 0; si--) {
+			PackedByteArray sids;
+			sids.resize(S3);
+			std::memcpy(sids.ptrw(), p_flat.ptr() + (size_t)si * S3, S3);
+			seed_section(p_cx, p_cz, si, sids, PackedByteArray());
+		}
+	}
+
+	// AC-0283 P2: re-land a section's DATA (a re-seed — a regen merge, an
+	// evict-reload with edits since save). DIFF vs the stored ids first:
+	// identical data is a NO-OP (the deterministic regen re-lands — nothing
+	// un-settles, no churn). A diff runs on_edit's EXACT two-phase (clear
+	// the 3x3 x/z box x sections 0..min(si+1,23) + epoch bump + ids write +
+	// boundary re-inject + top-down sky re-scan + glow re-seed) with the
+	// whole section's ids replaced. Unlike on_edit the x/z neighborhood need
+	// not be fully seeded: an unseeded face drops (the region-boundary
+	// semantics) and heals when that neighbor lands (the landing section's
+	// settle re-injects into the existing side — the landing-order healing,
+	// file header). Returns {"ok": bool, "changed": bool}.
+	Dictionary on_section_data(int p_cx, int p_cz, int p_si, const PackedByteArray &p_ids) {
+		Dictionary d;
+		d["ok"] = false;
+		d["changed"] = false;
+		if (p_si < 0 || p_si >= NSL || p_ids.size() != S3)
+			return d;
+		Sec *s0 = find_sec(p_cx, p_cz, p_si);
+		if (s0 == nullptr) {
+			// unseeded section: a plain seed (the live load path seeds whole
+			// columns top-down; this is the defensive single-section case)
+			bool ok = seed_section(p_cx, p_cz, p_si, p_ids, PackedByteArray());
+			d["ok"] = ok;
+			d["changed"] = ok;
+			return d;
+		}
+		if (std::memcmp(s0->ids.data(), p_ids.ptr(), S3) == 0) {
+			d["ok"] = true; // no data change — nothing un-settles
+			return d;
+		}
+		// the affected set (the on_edit set, anchored at the section): 3x3
+		// x/z neighborhood x sections 0..min(si+1, 23) — every cell the
+		// change can reach (block range 14 < 16 inside the box; the sky
+		// carry down the own column below the section) is inside it.
+		int hi = p_si + 1;
+		if (hi > NSL - 1)
+			hi = NSL - 1;
+		std::vector<uint64_t> keys;
+		std::set<uint64_t> kset;
+		for (int dx = -1; dx <= 1; dx++) {
+			for (int dz = -1; dz <= 1; dz++) {
+				for (int ssi = 0; ssi <= hi; ssi++) {
+					uint64_t k = sec_key(p_cx + dx, p_cz + dz, ssi);
+					if (kset.count(k) > 0)
+						continue;
+					kset.insert(k);
+					if (secs.find(k) != secs.end())
+						keys.push_back(k); // unseeded sections stay out (heal on landing)
+				}
+			}
+		}
+		// phase 1: darkness — clear the seeded part of the set
+		for (uint64_t k : keys) {
+			Sec &S = secs[k];
+			S.sky.assign(NIB, 0);
+			S.blk.assign(NIB, 0);
+			S.epoch++;
+		}
+		std::memcpy(s0->ids.data(), p_ids.ptr(), S3); // the ids ALWAYS update
+		// phase 1.5: boundary injection from the surviving outside light
+		for (uint64_t k : keys)
+			boundary_inject(secs[k]);
+		// phase 2: heal — top-down (the open carry flows down through the
+		// cleared sections), sky scan + glow re-seed + re-queue
+		std::sort(keys.begin(), keys.end(), [](uint64_t a, uint64_t b) {
+			return (int)(a & 31) > (int)(b & 31);
+		});
+		for (uint64_t k : keys) {
+			Sec &S = secs[k];
+			uint8_t open_in[256];
+			// the section above: seeded (a live column is seeded whole,
+			// top-down, atomically) or the world top
+			if (!open_in_of(S.cx, S.cz, S.si, PackedByteArray(), open_in))
+				continue;
+			scan_and_seed(S, open_in);
+			enqueue_seeds(S);
+			if (S.pending == 0)
+				settle_notify(S);
+		}
+		mutate();
+		d["ok"] = true;
+		d["changed"] = true;
+		return d;
 	}
 
 	int64_t step(int64_t p_budget_us) {
@@ -276,6 +411,12 @@ public:
 		int hi = si + 1;
 		if (hi > NSL - 1)
 			hi = NSL - 1;
+		// the affected set, restricted to the SEEDED sections: an unseeded
+		// face drops (the region-boundary semantics) and heals when that
+		// column lands — the landing section's settle re-injects into the
+		// existing side (AC-0283 P2, the landing-order healing; the old
+		// full-neighborhood requirement was a byproduct of the no-heal
+		// P1 engine).
 		std::vector<uint64_t> keys;
 		std::set<uint64_t> kset;
 		for (int dx = -1; dx <= 1; dx++) {
@@ -285,25 +426,9 @@ public:
 					if (kset.count(k) > 0)
 						continue;
 					kset.insert(k);
-					keys.push_back(k);
-					if (secs.find(k) == secs.end())
-						return false;
+					if (secs.find(k) != secs.end())
+						keys.push_back(k);
 				}
-			}
-		}
-		for (uint64_t k : keys) {
-			Sec &S = secs[k];
-			for (int d = 0; d < 6; d++) {
-				int nx = S.cx + DX[d];
-				int nz = S.cz + DZ[d];
-				int nsi = S.si + DY[d];
-				if (nsi < 0 || nsi >= NSL)
-					continue;
-				uint64_t nk = sec_key(nx, nz, nsi);
-				if (kset.count(nk) > 0)
-					continue;
-				if (secs.find(nk) == secs.end())
-					return false;
 			}
 		}
 		// phase 1: darkness — clear the set, expire its stale entries
@@ -323,16 +448,27 @@ public:
 		std::sort(keys.begin(), keys.end(), [](uint64_t a, uint64_t b) {
 			return (int)(a & 31) > (int)(b & 31);
 		});
+		bool failed = false;
 		for (uint64_t k : keys) {
 			Sec &S = secs[k];
 			uint8_t open_in[256];
-			if (!open_in_of(S.cx, S.cz, S.si, PackedByteArray(), open_in))
-				return false; // unseeded section above — the caller keeps columns contiguous
+			// the section above (same column — a live column is seeded
+			// whole, top-down, atomically) or the world top; a broken
+			// seam (a partially-seeded column, unreachable live) fails
+			// soft: the ids are already written, the caller re-seeds the
+			// whole column (seed_column) on a false return
+			if (!open_in_of(S.cx, S.cz, S.si, PackedByteArray(), open_in)) {
+				failed = true;
+				continue;
+			}
 			scan_and_seed(S, open_in);
 			enqueue_seeds(S);
+			if (S.pending == 0)
+				settle_notify(S);
 		}
+		mutate();
 		edits_n++;
-		return true;
+		return !failed;
 	}
 
 	PackedByteArray section_sky(int p_cx, int p_cz, int p_si) {
@@ -360,8 +496,323 @@ public:
 		return s != nullptr && s->pending == 0;
 	}
 
+	// AC-0283 P2: the E2 frame gate — the column's boundary frame on the
+	// neighbor direction (dx/dz, the neighbor's offset from THIS column)
+	// over rows [y0, y1] (a slab's bake-box window on the shared face):
+	// returns 0 = identical to the old arr, 1 = changed (the old arr
+	// matches in size — some frame cell differs), 2 = FIRST (the old arr
+	// is missing/mis-sized — the frame is non-zero: the margin was empty
+	// before). Frame layout (the legacy _frame_changed, world.gd): E (dx=1)
+	// = lx 14,15; W (dx=-1) = lx 0,1; S (dz=1) = lz 14,15; N (dz=-1) = lz
+	// 0,1; cell idx = (y<<8)|(lz<<4)|lx.
+	int frame_diff(const PackedByteArray &p_old, const PackedByteArray &p_new, int p_dx, int p_dz, int p_y0, int p_y1) {
+		const int h = NSL * 16;
+		if (p_new.size() != 256 * h)
+			return 0;
+		int c0, c1;
+		bool byz;
+		if (p_dx > 0) {
+			c0 = 14; c1 = 15; byz = false;
+		} else if (p_dx < 0) {
+			c0 = 0; c1 = 1; byz = false;
+		} else if (p_dz > 0) {
+			c0 = 14; c1 = 15; byz = true;
+		} else {
+			c0 = 0; c1 = 1; byz = true;
+		}
+		const uint8_t *no = (p_old.size() == p_new.size()) ? (const uint8_t *)p_old.ptr() : nullptr;
+		const uint8_t *nn = (const uint8_t *)p_new.ptr();
+		bool first_nonzero = false;
+		for (int y = p_y0; y <= p_y1; y++) {
+			size_t row = (size_t)y * 256;
+			for (int t = 0; t < 16; t++) {
+				size_t i0 = byz ? row + (size_t)c0 * 16 + t : row + (size_t)t * 16 + c0;
+				size_t i1 = byz ? row + (size_t)c1 * 16 + t : row + (size_t)t * 16 + c1;
+				if (nn[i0] > 0 || nn[i1] > 0)
+					first_nonzero = true;
+				if (no != nullptr && (no[i0] != nn[i0] || no[i1] != nn[i1]))
+					return 1;
+			}
+		}
+		if (no != nullptr)
+			return 0;
+		return first_nonzero ? 2 : 0;
+	}
+
+	// AC-0283 P2: drop a whole column's 24 sections (the chunk eviction —
+	// the live world evicts far columns; the engine must bound its memory
+	// to the live set). The nb[] links pointing AT the dropped sections are
+	// cleared first (bidirectional slots — link_neighbors filled both
+	// sides), so no neighbor dangles. In-flight queue entries for the
+	// dropped sections self-expire on pop (the find fails — the queue_n
+	// decrement there keeps the counter honest). The light the dropped
+	// column imported into its neighbors STAYS (the neighbors' light is a
+	// function of their own box data minus this column — when the column
+	// reloads it re-seeds and the settle re-inject re-raises the
+	// neighbor boundary cells the drop should have lowered... a reloaded
+	// column can only ADD light at the boundary (absent = 0), and a
+	// reloaded column with DIFFERENT data goes through on_section_data —
+	// which is a fresh seed (the section is gone) — the neighbor's stale
+	// boundary import is then healed by the next edit/re-seed wave; the
+	// live reload path (evict + load) lands a fresh column, which the
+	// streaming re-mesh (E2) covers: the neighbors' slabs re-mesh on the
+	// column's settle against the engine's current values.
+	void evict_column(int p_cx, int p_cz) {
+		for (int si = 0; si < NSL; si++) {
+			Sec *s = find_sec(p_cx, p_cz, si);
+			if (s == nullptr)
+				continue;
+			for (int d = 0; d < 6; d++) {
+				Sec *n = s->nb[d];
+				if (n != nullptr && n->nb[REV[d]] == s)
+					n->nb[REV[d]] = nullptr;
+			}
+			secs.erase(sec_key(p_cx, p_cz, si));
+		}
+	}
+
+	// AC-0283 P2: the 3x3 x/z x [si0..si1] section box (the light gate).
+	// Enumeration order (shared with box_epochs): ssi outer, then dx, then
+	// dz, each -1..1.
+	bool box_settled(int p_cx, int p_cz, int p_si0, int p_si1) {
+		int s0 = std::max(0, p_si0);
+		int s1 = std::min(NSL - 1, p_si1);
+		if (s0 > s1)
+			return false;
+		for (int ssi = s0; ssi <= s1; ssi++) {
+			for (int dx = -1; dx <= 1; dx++) {
+				for (int dz = -1; dz <= 1; dz++) {
+					if (!section_settled(p_cx + dx, p_cz + dz, ssi))
+						return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	// the box's section epochs in the box_settled enumeration order
+	// (unseeded sections = -1): a dispatch captures this, a landing
+	// re-checks it — any mutation inside the box (a neighbor seed, an
+	// edit, a re-seed) bumped an epoch and datadrops the in-flight build.
+	Array box_epochs(int p_cx, int p_cz, int p_si0, int p_si1) {
+		Array out;
+		int s0 = std::max(0, p_si0);
+		int s1 = std::min(NSL - 1, p_si1);
+		for (int ssi = s0; ssi <= s1; ssi++) {
+			for (int dx = -1; dx <= 1; dx++) {
+				for (int dz = -1; dz <= 1; dz++) {
+					Sec *s = find_sec(p_cx + dx, p_cz + dz, ssi);
+					out.append(s == nullptr ? (int64_t)-1 : (int64_t)s->epoch);
+				}
+			}
+		}
+		return out;
+	}
+
+	bool column_settled(int p_cx, int p_cz) {
+		for (int si = 0; si < NSL; si++)
+			if (!section_settled(p_cx, p_cz, si))
+				return false;
+		return true;
+	}
+
+	// the column's SETTLED light as the classic eff dict (the same shape
+	// the pull kernel's dictionary output has: mn/w/d/arr/mask/ring/
+	// blk_src) — feeds last_eff, the eff cache, the E2 frame compare and
+	// the save-light capture. Empty when any section is unseeded.
+	Dictionary column_light_dict(int p_cx, int p_cz) {
+		Dictionary d;
+		if (!column_seeded(p_cx, p_cz))
+			return d;
+		int h = NSL * 16;
+		std::vector<uint8_t> eff((size_t)256 * h, 0);
+		std::vector<uint8_t> blk((size_t)256 * h, 0);
+		bool has_glow = false;
+		for (int si = 0; si < NSL; si++) {
+			const Sec &s = *find_sec(p_cx, p_cz, si);
+			for (int p = 0; p < S3; p++) {
+				int y = si * 16 + (p >> 8);
+				size_t i = (size_t)y * 256 + (size_t)((p >> 4) & 15) * 16 + (p & 15);
+				int sk = nib_get(s.sky, p);
+				int bl = nib_get(s.blk, p);
+				eff[i] = (uint8_t)(sk > bl ? sk : bl);
+				blk[i] = (uint8_t)bl;
+				if (t.g(s.ids[p]) > 0)
+					has_glow = true;
+			}
+		}
+		bool blk_inj = column_blk_inj(p_cx, p_cz);
+		PackedByteArray mask;
+		mask.resize((size_t)256 * h);
+		PackedInt32Array ring;
+		if (has_glow || blk_inj) {
+			uint8_t *mp = mask.ptrw();
+			for (size_t i = 0; i < (size_t)256 * h; i++)
+				mp[i] = blk[i] > 0 ? 1 : 0;
+			// the AC-0091 19-bit pack (lighting.cpp 359-379, side order
+			// 0=E x=15, 1=W x=0, 2=N z=15, 3=S z=0)
+			for (int y = 0; y < h; y++) {
+				size_t row = (size_t)y * 256;
+				for (int t2 = 0; t2 < 16; t2++) {
+					int yy = y * 16 + t2;
+					int lv0 = blk[row | (t2 << 4) | 15];
+					if (lv0 > 0)
+						ring.append((0 << 17) | (yy << 4) | lv0);
+					int lv1 = blk[row | (t2 << 4)];
+					if (lv1 > 0)
+						ring.append((1 << 17) | (yy << 4) | lv1);
+					int lv2 = blk[row | (15 << 4) | t2];
+					if (lv2 > 0)
+						ring.append((2 << 17) | (yy << 4) | lv2);
+					int lv3 = blk[row | t2];
+					if (lv3 > 0)
+						ring.append((3 << 17) | (yy << 4) | lv3);
+				}
+			}
+		}
+		d["mn"] = Vector3i(p_cx * 16, 0, p_cz * 16);
+		d["w"] = (int64_t)16;
+		d["d"] = (int64_t)16;
+		d["arr"] = awecommon::pba_from(eff);
+		d["mask"] = mask;
+		d["ring"] = ring;
+		d["blk_src"] = has_glow;
+		return d;
+	}
+
+	// AC-0283 P2: the DISPATCH PAYLOAD — everything the worker's build_accs
+	// star path needs to bake slab window [si0..si1] without the pull
+	// kernel (the gate guarantees the box is settled at capture time):
+	//   eff    the own column's eff, full height (256*h) — the bake core +
+	//          the res.light arr the eff cache / neighbor strips / save
+	//          light read at full-height indices
+	//   blk    the own column's blk, full height — ONLY when
+	//          has_glow||blk_inj (the mask/ring source; empty otherwise,
+	//          the common sky-only column)
+	//   has_glow / blk_inj  the mask/ring gate (lighting.cpp 354-380)
+	//   w_lo/w_hi  the bake-box row window (si0*16-2 .. (si1+1)*16-1,
+	//          clamped — the 2-row overhang)
+	//   side[4]    the 4 axis neighbors' boundary rows, EFF only (the
+	//          margin bakes eff, exactly like the legacy eff_strips read
+	//          last_eff["arr"]), each rows x 32 bytes:
+	//          [inner 16, outer 16] per row (c=0 then c=1, t = the
+	//          in-plane coord); E: x=0/1, W: x=15/14, S: z=0/1, N: z=15/14
+	//   corner[4]  the 4 diagonal neighbors' 2x2 corner rows, EFF only,
+	//          each rows x 4 bytes in (a*2+b) order (a = x-depth,
+	//          b = z-depth — the bake_box corner layout); SE/SW/NE/NW
+	//          StripSet order. Unseeded neighbors read zero (the
+	//          missing-strip semantics).
+	Dictionary slab_light_payload(int p_cx, int p_cz, int p_si0, int p_si1) {
+		Dictionary d;
+		d["ok"] = false;
+		int s0 = std::max(0, p_si0);
+		int s1 = std::min(NSL - 1, p_si1);
+		if (s0 > s1 || !column_seeded(p_cx, p_cz))
+			return d;
+		int h = NSL * 16;
+		int y_lo = std::max(0, s0 * 16 - 2);
+		// AC-0283 P2 brightslab fix: the window must reach the bake box's
+		// TOP margin rows ((s1+1)*16, +1) - the per-slab bake box spans
+		// [s0*16-2, (s1+1)*16+1] and the worker zero-fills any strip row
+		// outside the payload (a missing top margin under-lights the
+		// max-probe of the slab's top-row faces by up to a few levels).
+		int y_hi = std::min(h - 1, (s1 + 1) * 16 + 1);
+		int rows = y_hi - y_lo + 1;
+		std::vector<uint8_t> eff((size_t)256 * h, 0);
+		std::vector<uint8_t> blk((size_t)256 * h, 0);
+		bool has_glow = false;
+		for (int si = 0; si < NSL; si++) {
+			const Sec &s = *find_sec(p_cx, p_cz, si);
+			for (int p = 0; p < S3; p++) {
+				int y = si * 16 + (p >> 8);
+				size_t i = (size_t)y * 256 + (size_t)((p >> 4) & 15) * 16 + (p & 15);
+				int sk = nib_get(s.sky, p);
+				int bl = nib_get(s.blk, p);
+				eff[i] = (uint8_t)(sk > bl ? sk : bl);
+				blk[i] = (uint8_t)bl;
+				if (t.g(s.ids[p]) > 0)
+					has_glow = true;
+			}
+		}
+		bool blk_inj = column_blk_inj(p_cx, p_cz);
+		d["eff"] = awecommon::pba_from(eff);
+		d["has_glow"] = (int64_t)(has_glow ? 1 : 0);
+		d["blk_inj"] = (int64_t)(blk_inj ? 1 : 0);
+		if (has_glow || blk_inj)
+			d["blk"] = awecommon::pba_from(blk);
+		d["w_lo"] = (int64_t)y_lo;
+		d["w_hi"] = (int64_t)y_hi;
+		const int NSDX[4] = {1, -1, 0, 0};
+		const int NSDZ[4] = {0, 0, 1, -1};
+		Array sides;
+		for (int k = 0; k < 4; k++) {
+			std::vector<uint8_t> prow((size_t)rows * 32, 0);
+			for (int y = y_lo; y <= y_hi; y++) {
+				int si = y >> 4;
+				int yl = y & 15;
+				uint8_t *rr = prow.data() + (size_t)(y - y_lo) * 32;
+				if (NSDX[k] != 0) {
+					for (int t = 0; t < 16; t++) {
+						rr[t] = (uint8_t)cell_eff(p_cx + NSDX[k], p_cz, si, (yl << 8) | (t << 4) | (NSDX[k] > 0 ? 0 : 15));
+						rr[16 + t] = (uint8_t)cell_eff(p_cx + NSDX[k], p_cz, si, (yl << 8) | (t << 4) | (NSDX[k] > 0 ? 1 : 14));
+					}
+				} else {
+					for (int t = 0; t < 16; t++) {
+						rr[t] = (uint8_t)cell_eff(p_cx, p_cz + NSDZ[k], si, (yl << 8) | ((NSDZ[k] > 0 ? 0 : 15) << 4) | t);
+						rr[16 + t] = (uint8_t)cell_eff(p_cx, p_cz + NSDZ[k], si, (yl << 8) | ((NSDZ[k] > 0 ? 1 : 14) << 4) | t);
+					}
+				}
+			}
+			sides.append(awecommon::pba_from(prow));
+		}
+		d["side"] = sides;
+		Array corners;
+		const int CDX[4] = {1, -1, 1, -1}; // SE, SW, NE, NW (the StripSet 4..7 order)
+		const int CDZ[4] = {1, 1, -1, -1};
+		for (int k = 0; k < 4; k++) {
+			std::vector<uint8_t> prow((size_t)rows * 4, 0);
+			for (int y = y_lo; y <= y_hi; y++) {
+				int si = y >> 4;
+				int yl = y & 15;
+				uint8_t *rr = prow.data() + (size_t)(y - y_lo) * 4;
+				for (int a = 0; a < 2; a++) {
+					for (int b = 0; b < 2; b++) {
+						int nx, nz;
+						if (k == 0) {
+							nx = a; // SE: local (a, b)
+							nz = b;
+						} else if (k == 1) {
+							nx = 15 - a; // SW: local (15-a, b)
+							nz = b;
+						} else if (k == 2) {
+							nx = a; // NE: local (a, 14+b)
+							nz = 14 + b;
+						} else {
+							nx = 15 - a; // NW: local (15-a, 14+b)
+							nz = 14 + b;
+						}
+						rr[a * 2 + b] = (uint8_t)cell_eff(p_cx + CDX[k], p_cz + CDZ[k], si, (yl << 8) | (nz << 4) | nx);
+					}
+				}
+			}
+			corners.append(awecommon::pba_from(prow));
+		}
+		d["corner"] = corners;
+		d["ok"] = true;
+		return d;
+	}
+
 	int64_t pending_cells() {
 		return queue_n;
+	}
+
+	// AC-0283 P2: the global light-state mutation counter (seed / re-seed /
+	// edit / every relaxation write) — a cheap "the engine moved" token
+	// for the wprof live dict + diagnostics (the per-box epochs are the
+	// landing staleness token; the eff cache rides the neighbor eff_gen
+	// tuple).
+	int64_t light_ver() {
+		return light_ver_n;
 	}
 
 	Dictionary stats() {
@@ -499,6 +950,73 @@ private:
 			return nullptr;
 		auto it = secs.find(sec_key(p_cx, p_cz, p_si));
 		return it == secs.end() ? nullptr : &it->second;
+	}
+
+	// AC-0283 P2: a neighbor cell's eff = max(sky, blk) (the display
+	// light) — 0 for an unseeded section (the missing-strip semantics).
+	int cell_eff(int p_cx, int p_cz, int p_si, int p_p) const {
+		if (p_si < 0 || p_si >= NSL)
+			return 0;
+		auto it = secs.find(sec_key(p_cx, p_cz, p_si));
+		if (it == secs.end())
+			return 0;
+		const Sec &s = it->second;
+		return std::max(nib_get(s.sky, p_p), nib_get(s.blk, p_p));
+	}
+
+	bool column_seeded(int p_cx, int p_cz) const {
+		for (int si = 0; si < NSL; si++) {
+			if (secs.find(sec_key(p_cx, p_cz, si)) == secs.end())
+				return false;
+		}
+		return true;
+	}
+
+	// an axis neighbor's shared-face cell carries block light (the pull
+	// kernel's blk_inject reads the c=0 face half, full height —
+	// lighting.cpp 348)
+	bool column_blk_inj(int p_cx, int p_cz) const {
+		const int NSDX[4] = {1, -1, 0, 0};
+		const int NSDZ[4] = {0, 0, 1, -1};
+		for (int si = 0; si < NSL; si++) {
+			for (int k = 0; k < 4; k++) {
+				auto it = secs.find(sec_key(p_cx + NSDX[k], p_cz + NSDZ[k], si));
+				if (it == secs.end())
+					continue;
+				const Sec &n = it->second;
+				for (int yl = 0; yl < 16; yl++) {
+					for (int t = 0; t < 16; t++) {
+						int p = (yl << 8) | ((NSDX[k] != 0) ? (t << 4) | (NSDX[k] > 0 ? 0 : 15) : ((NSDZ[k] > 0 ? 0 : 15) << 4) | t);
+						if (nib_get(n.blk, p) > 0)
+							return true;
+					}
+				}
+			}
+		}
+		return false;
+	}
+
+	// AC-0283 P2: the landing-order healing (file header) — the section
+	// has just SETTLED (its boundary light is final for the current
+	// neighborhood state); re-inject it into every already-seeded
+	// neighbor section (the monotone max — adds only what the neighbor
+	// missed while this section was still relaxing; a no-op otherwise).
+	void settle_notify(Sec &s) {
+		for (int d = 0; d < 6; d++) {
+			Sec *n = s.nb[d];
+			if (n == nullptr)
+				continue;
+			boundary_inject(*n);
+		}
+	}
+
+	// the eff-cache mutation counter (bumped on ANY light-state change —
+	// seed, re-seed, edit, and every relaxation write): the GDScript eff
+	// cache captures it at dispatch and misses while the engine state
+	// moves (a later-landing neighbor's settle re-inject invalidates the
+	// captured column without any per-column bookkeeping).
+	void mutate() {
+		light_ver_n++;
 	}
 
 	// the open carry IN at the top of the section: the sky_above row (the
@@ -702,6 +1220,7 @@ private:
 		std::vector<uint8_t> &arr = p_kind ? s->blk : s->sky;
 		if (p_lv > 0 && p_lv > nib_get(arr, p_p)) {
 			nib_set(arr, p_p, p_lv);
+			mutate(); // the light state moved (AC-0283 P2)
 			if (p_lv > 1) {
 				QEnt e;
 				e.key = s->key;
@@ -722,11 +1241,15 @@ private:
 	// raises nothing — the same work the legacy bucket walk does
 	void pop_entry(QEnt &e) {
 		auto it = secs.find(e.key);
-		if (it == secs.end())
-			return; // unreachable — sections are never removed
+		if (it == secs.end()) {
+			queue_n--; // the section was evicted (AC-0283 P2) mid-flight
+			return;
+		}
 		Sec &s = it->second;
 		s.pending--;
 		queue_n--;
+		if (s.pending == 0)
+			settle_notify(s); // the last entry drained — the section settles
 		if (e.epoch != s.epoch) {
 			stale_pops++;
 			return; // the section was cleared after this entry was queued
@@ -767,6 +1290,7 @@ private:
 	int64_t enqueued_n = 0;
 	int64_t stale_pops = 0;
 	int64_t edits_n = 0;
+	int64_t light_ver_n = 0;
 };
 
 void register_classes() {

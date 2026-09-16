@@ -559,8 +559,11 @@ func get_local(lx: int, y: int, lz: int) -> int:
 func set_local(lx: int, y: int, lz: int, id: int) -> void:
 	_slab_write(data, y, lz, lx, id)
 	data_gen += 1
+	# AC-0283 P2: the flush_slabs clear is the WORLD's (the star re-arm
+	# pops the affected slabs surgically — an edit does not un-settle the
+	# whole column). light_settled stays a conservative flag (the world
+	# re-derives it after the re-arm).
 	light_settled = false
-	flush_slabs = {}
 	if id != 0 and y > top:
 		top = y
 

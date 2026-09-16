@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-14T23:49
+  updated_at: 2026-09-15T13:35
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -8,6 +8,13 @@ queue:
 - AC-0284
 - AC-0286
 - AC-0287
+- AC-0294
+- AC-0288
+- AC-0289
+- AC-0290
+- AC-0291
+- AC-0292
+- AC-0293
 - AC-0093
 - AC-0038
 - AC-0039
@@ -12384,4 +12391,280 @@ intake:
     load. Add save filter in chunk_io region write. On load, missing far columns regenerate cheap then
     promote if needed. Verify save size stays flat while flying 10k blocks, edited far columns still persist
     after promotion.'
+  comments: []
+- id: AC-0288
+  title: cave-p0-tune-single-field-variety
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-15T08:17
+  updated_at: 2026-09-15T09:32
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player exploring underground, I want caves to feel less samey — current cheese-only caverns repeat
+    the same blobby shape at every depth, so even after AC-0215 the deep feels just fatter not more varied
+    — so tunneling variety is needed without changing the world height or breaking existing saves.
+
+
+    2) Technical Details
+
+    File refs: gdext/src/gen.cpp:230-234 (CAVE_AMP/R/DEEP_GROW), 301 (f_cave = fbm3 x/16 y/10 z/16 seed+301
+    2 oct), 390-404 (dens_at + S_ramp), 480; godot/core/noise.gd:39-88 (AweNoise); godot/autoload/data.gd:7
+    SEA 126.
+
+    Scope P0 from tasks/cave-compare/cave-compare.html §4: tune the SINGLE density field in place — no
+    new systems. Raise C octaves 2→3/4, jitter scales (16/10/16 -> sweep), tweak CAVE_AMP 1.8 / DEEP_GROW
+    8 / R 10, blend a second cave octave at ~0.3 weight. Keep H distribution byte-identical (surface_h
+    calibration at gen.cpp:333-370 must still match AC-0091, sea 126). Verify: headless 0 errors, full
+    battery (fluids sea-stable unchanged), genhash will change -> accept new baseline but two runs byte-identical,
+    render cross-section screenshots (y=20, y=80) before/after showing more varied pocket sizes. Do NOT
+    touch carvers/aquifers/pillars — ceiling of what one field can do. Gates: G1 0 script errors, G2 battery
+    green, G3 genprobe deterministic.
+
+
+
+    NOTE 2026-09-15 per user: old-world save compatibility NOT required — no need to preserve the pre-cave
+    genhash baseline. Any new cave shape (P0-P4) may break determinism hash and produce a new world; fresh
+    worlds only, seams with old saves are acceptable. Coordinator will NOT do the work directly — implementation
+    delegated to subagent; coordinator verifies gates (G1/G2/genprobe) and bumps the new baseline.'
+  comments: []
+- id: AC-0289
+  title: cave-p1-spaghetti-noodle-tunnels
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-15T08:17
+  updated_at: 2026-09-15T09:32
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want to follow long winding tunnels for hundreds of blocks — currently AweCraft only
+    has blobby cheese pockets that dead-end at walls, while Bedrock has spaghetti (wide tagliatelle) and
+    noodle (1-5-wide wormholes) tunnels that make caving feel like exploration rather than chamber-hopping.
+
+
+    2) Technical Details
+
+    File refs: gdext/src/gen.cpp:301 f_cave, 399-404 dens_at, 376-385 density_ramp, 457-626 gen_flat;
+    mcasset entrances.json (cave_entrance + spaghetti_3d_1/rarity wiring at 4 scales) and minecraft.wiki/w/Cave
+    §Noise caves (cheese/spaghetti/noodle + thickness control).
+
+    Scope P1 from tasks/cave-compare/cave-compare.html §4: add spaghetti/noodle as EDGE densities blended
+    into the one field. Add new fields f_spag / f_nood = fbm3 at ~1.0 / 0.75 xz scales with rarity selector
+    (like Bedrock spaghetti_3d_rarity), then tunnel air where |S| < thickness or max(|noise|-threshold)
+    wins. Blend into d before the he/solidf scan. Keep H distribution unchanged. Verify: G1 0 errors,
+    G2 battery green (sea-stable), new genhash baseline accepted (two runs identical), screenshots: (a)
+    spectator slice showing 80-112-block tunnel, (b) 1-5-wide noodle cross-section. Cost ~+40µs from 2
+    new fields. Do NOT add carvers/aquifers yet.
+
+
+
+    NOTE 2026-09-15 per user: old-world save compatibility NOT required — no need to preserve the pre-cave
+    genhash baseline. Any new cave shape (P0-P4) may break determinism hash and produce a new world; fresh
+    worlds only, seams with old saves are acceptable. Coordinator will NOT do the work directly — implementation
+    delegated to subagent; coordinator verifies gates (G1/G2/genprobe) and bumps the new baseline.'
+  comments: []
+- id: AC-0290
+  title: cave-p2-carvers-canyons
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-15T08:17
+  updated_at: 2026-09-15T09:32
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want the classic Minecraft gallery feel — flat-floored carver galleries, bubble-interrupted
+    trunks and steep ravine cliffs — which noise pockets alone never produce (they carve round blobs).
+    These are the pre-1.18 caves players still expect layered on top of noise caves.
+
+
+    2) Technical Details
+
+    File refs: gdext/src/gen.cpp:457-626 gen_flat post-fill stage; minecraft.wiki/w/Cave §Carver caves
+    (Overworld carvers Y -56..180, main room 1-14h Ø5-15, trunks 85-112 long, branches 2-7 horiz /1-7
+    vert, 1-in-4 main-room vs I/T, bubble jitter, flat floor; canyons = tall ravine).
+
+    Scope P2 from cave-compare §4: post-density worm pass after flat[] fill, before ore. Seed-driven ellipsoids
+    + Bezier trunks/branches with thickness-flicker/bubble interruptions, layered after density so they
+    intersect surface/features with cut-through policy (sand fall etc.). Y range -56..180, respect pad
+    columns. Verify: G1 0 errors, G2 battery, genhash baseline change accepted, screenshots: carver gallery
+    flat floor + bubble trunk + canyon cliff. Intersects surface entrances.
+
+
+
+    NOTE 2026-09-15 per user: old-world save compatibility NOT required — no need to preserve the pre-cave
+    genhash baseline. Any new cave shape (P0-P4) may break determinism hash and produce a new world; fresh
+    worlds only, seams with old saves are acceptable. Coordinator will NOT do the work directly — implementation
+    delegated to subagent; coordinator verifies gates (G1/G2/genprobe) and bumps the new baseline.'
+  comments: []
+- id: AC-0291
+  title: cave-p3-voronoi-aquifers
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-15T08:17
+  updated_at: 2026-09-15T09:32
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want perched mountain lakes and lava pools next to water behind stone rims — currently
+    every cave below SEA 126 is just flat-filled to 126, so no multi-level lakes, no waterfalls, no lava/water
+    neighbours. Bedrock''s Voronoi aquifers give each underground pocket its own water table.
+
+
+    2) Technical Details
+
+    File refs: gdext/src/gen.cpp:601-602 (current flat aquifer: he+1..sea = WATER, y<8 pocket = LAVA);
+    minecraft.wiki/w/Cave §Aquifer (16×12×16 cells offset 5,5,1, 4-nearest Voronoi, fluid_level_floodedness
+    thresholds -0.3/0.8 & -0.8/0.4, fluid_level_spread = center 20+spread*10 rounded ×3 at 16×40×16, barrier
+    pressure, lava |lava|>0.3 per 64×40×64 below -10 and always <-54, exclusion erosion<-0.225 & depth>0.9).
+
+    Scope P3 from cave-compare §4: replace flat fill with Voronoi local tables. Add fluid_level_floodedness/spread/barrier/lava
+    density fns, compute per-cell flood status, barrier pressure rims (≤5 lid, ≤23 floor), scheduled flowing
+    ticks at boundaries. Capped at preliminary surface. Verify: G1 0 errors, G2 battery, no global sea
+    regression at coasts, screenshots: mountain cave lake above sea + lava aquifer at -50 + water/lava
+    rim + waterfall. Biggest visual win, rewrites every underwater cave.
+
+
+
+    NOTE 2026-09-15 per user: old-world save compatibility NOT required — no need to preserve the pre-cave
+    genhash baseline. Any new cave shape (P0-P4) may break determinism hash and produce a new world; fresh
+    worlds only, seams with old saves are acceptable. Coordinator will NOT do the work directly — implementation
+    delegated to subagent; coordinator verifies gates (G1/G2/genprobe) and bumps the new baseline.'
+  comments: []
+- id: AC-0292
+  title: cave-p4-pillars-veins-cave-biomes
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-15T08:17
+  updated_at: 2026-09-15T09:32
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want big chambers to feel lived-in — stone pillars/speleothems inside cheese, large
+    ore veins as sparse blobs, and distinct cave biomes (dripstone/lush/deep-dark) instead of empty stone
+    halls with only speckled ores.
+
+
+    2) Technical Details
+
+    File refs: gdext/src/gen.cpp:525-535 stone_ore (coarse f_ore1/2/3 thin thresholds), 629-759 veg (trees/flowers
+    on he); minecraft.wiki/w/Cave §Noise pillar, §Cave biomes (Dripstone/Lush/Deep Dark + Surface rules:
+    bedrock -64..-59, deepslate <0); Data blocks.
+
+    Scope P4 from cave-compare §4: pillars from pillar-noise threshold inside cheese; big ore veins as
+    sparse density blobs (not just f_ore thresholds); 3-D biome field drives block/surface rules (deepslate
+    transition, dripstone pillars/clay pools/sculk). Extends blocks + surface-rule stage. Verify: G1 0
+    errors, G2 battery, screenshots: pillar-filled cheese hall + large ore vein + dripstone/lush sample.
+    Finishing touches — after P1-P3 or chambers stay empty. Depends on P1-P3.
+
+
+
+    NOTE 2026-09-15 per user: old-world save compatibility NOT required — no need to preserve the pre-cave
+    genhash baseline. Any new cave shape (P0-P4) may break determinism hash and produce a new world; fresh
+    worlds only, seams with old saves are acceptable. Coordinator will NOT do the work directly — implementation
+    delegated to subagent; coordinator verifies gates (G1/G2/genprobe) and bumps the new baseline.'
+  comments: []
+- id: AC-0293
+  title: retire-5x5-startup-burst
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-15T09:50
+  updated_at: 2026-09-15T09:50
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I don''t want a special-case 25-chunk startup burst — I want spawn and recenter to use
+    the same streaming path as everything else, so generation is simpler and cheaper, even if spawn takes
+    a fraction longer to fully fill. The 5×5 group dispatch feels like legacy complexity we can drop now
+    that sync spawn-column and per-frame caps exist.
+
+
+    2) Technical Details
+
+    File refs: godot/world/world.gd:3457 (5×5 startup burst state elems), 5284-5316 (burst worker group:
+    one element per chunk gen), 3480 (drain holds until burst_in_flight==0), 3731-3738 (Group object lifetime
+    wait_for_group_task_completion for PagedAllocator), 5124/5133 (spawn anti-fall carried by burst),
+    65 (STREAM_TM_HANDOFF_PER_FRAME=3 streaming cap), 5321 (dead-slot self-heal for burst workers); godot/scenes/harness.gd:6670
+    (recenter pre-warm 5×5 ring).
+
+    Scope: retire the 5×5 (=25 chunk) WorkerThreadPool group burst on spawn/recenter. Replace with either
+    (a) pure streaming (cap 3/frame) plus a minimal sync gen for the spawn column(s) to prevent fall-through,
+    or (b) a shrunk 3×3=9 burst if anti-fall needs more than one column. Remove burst state (elems/slots/burst_in_flight),
+    group dispatch + drain hold, and the Group consumption shim. Update recenter to enqueue via the normal
+    streaming queue. Verify: G1 0 script errors, full battery green, spawn still solid (no fall-through
+    harness), recenter pop-in measured before/after (expect +0.2-0.5s at new center), genprobe deterministic,
+    pool growth unchanged (AC-0248). Breaking change: new burst-less timing, acceptable per user 2026-09-15
+    (old worlds disposable). Coordinator delegates to subagent.
+
+    '
+  comments: []
+- id: AC-0294
+  title: chiseled-blocks-micro-voxels
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-15T13:21
+  updated_at: 2026-09-15T13:35
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want to chisel blocks into micro-voxels to make slopes, pillars
+    and details, so building isn''t just full cubes.
+
+
+    2) Technical Details: godot/world/chunk.gd + gdext/src/mesh.cpp + Data. Add chiseled block state (8x8x8
+    micro-voxels per block, stored as extra bytes per chiseled block). Chisel tool enters carve mode on
+    a block, edits micro-voxels, mesher builds micro-mesh instead of cube. Only stone/wood/bricks chiselable
+    to keep mining sane. Keep collision simple (single box). Verify performance and save size stay sane,
+    mesh for chiseled blocks looks correct.
+
+
+
+    Note 2026-09-15: Start single-material only (parent id). Store as paletted p=[id] + 64B bitset so
+    multi-material later is just palette growth (p=[stone,wood]) with no save migration.'
   comments: []

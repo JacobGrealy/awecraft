@@ -941,9 +941,12 @@ func _build_walk_pad(sp: Vector3, radius: int) -> float:
 			for y in range(h + 1, top + 3):
 				world.set_block(x, y, z, 4)
 			touched[world._key(int(floorf(float(x) / 16.0)), int(floorf(float(z) / 16.0)))] = true
-	world.light_dirty.clear()
-	world.light_pending.clear()
-	world.light_pending_set.clear()
+	# AC-0283 P2: the legacy light queues are gone — the pad's set_blocks
+	# already ran star.on_edit (the engine owns the re-light state); the
+	# owed/remesh clears are the same "skip the per-chunk re-light, the
+	# touched meshes rebuild directly below" reset.
+	world.star_owed.clear()
+	world.star_remesh.clear()
 	world.fluid_dirty.clear()
 	for key in touched:
 		var c = world.chunks.get(key)

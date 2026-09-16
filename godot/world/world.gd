@@ -146,6 +146,24 @@ const DRAIN_UNITS_FRAME_CAP := 4       # per-frame unit cap (hitch spike guard; 
                                        # gain (build_ms -1.4 percent, p95 flat); see TASKS AC-0237
                                        # comment id 3.
 const DRAIN_DT_CLAMP_MS := 100.0       # clamp the wall-clock frame sample (pause/hitch)
+# AC-0283 P3 (walkfix): the WALK-REGIME drain (the slab-unit startup 3x3
+# completion pass + the TG-empty data feed). The regime predicate is the
+# PLAYER-CHUNK CROSSING PERIOD (the AHEAD machinery's own cadence input):
+# a walk crosses ~3.2 s apart (16 blocks at 5 b/s), a flight ~0.8 s (20 b/s).
+# The flight's drain must stay at the legacy pace (its frame budget is
+# 17.5 ms; the slab-unit pass would add ~12 ms/frame of dispatch).
+const WALK_CROSS_PERIOD_MS := 2500.0
+# AC-0283 P3 (walkfix): the startup 3x3 pass's per-frame time cap (wall ms).
+# The legacy 1e9 (unbounded) existed for the FULL-COLUMN spawn dispatch
+# (30-50 ms of main-thread strip work each); the P2 slab dispatch is
+# ~1.5-2 ms, so 14 ms = ~6-9 slab dispatches per frame (the 3x3's 216
+# slabs finish in ~0.5 s, well inside the 3.2 s crossing cycle).
+const DRAIN_STARTUP_PASS_BUDGET_MS := 14.0
+# AC-0283 P3 (walkfix): the per-frame cap on skip-past-defer in the startup
+# 3x3 pass (a defer — dedup/nbs/box — skips the column for the frame and
+# tries the next; a frame of pure defers yields at this cap. The time cap
+# above is the primary bound; this is the safety net).
+const DRAIN_DEFER_MAX_PER_FRAME := 16
 const DRAIN_WIN_PACE_MS := 250.0       # window grows one bucket per 250 ms (was 15 frames
                                        # at the 60 fps reference = the same wall-clock rate)
 # AC-0109 margin (manual lane only, AC-0212). Meters — a slab is hidden only
@@ -206,10 +224,30 @@ var collision_enabled := true
 var chunks := {}
 var chunk_keys := {}
 var edits := {}
-var light_dirty := {}
-var light_pending: Array = []
-var light_pending_set := {}
-var flush_active := false
+# AC-0283 P2: the AweStarlight engine (gdext/src/starlight.cpp) live-light
+# state — replaces the per-column re-flood + the 1-column/frame flush wave
+# (light_dirty / light_pending / flush_active, removed here; P4 removes the
+# AweLighting worker itself).
+#   star         the engine (null in the fallback build — every star site
+#                degrades to the legacy AweLighting path)
+#   star_owed    key -> true: a column whose light gate (all 24 sections
+#                settled) has not been drained yet — the drain publishes
+#                last_eff (eff_gen bumps iff the eff changed) and re-arms
+#                the per-slab E2 wave (replacing the flush + _eff_landed)
+#   star_remesh  key -> {si: true}: slabs whose settled light changed
+#                (late landing / edit / E2) and need a re-bake — the
+#                remesh lane drains these paced; each re-bake lands as a
+#                settled (flush_slabs) attach
+var star: Variant = null
+var star_owed := {}
+var star_remesh := {}
+var _star_last_t := 0.0
+var star_late_landings := 0
+var star_lver_drops := 0
+const STAR_STEP_BUDGET_MS := 3.0
+const LOAD_STAR_STEP_BUDGET_MS := 30.0
+const STAR_REMESH_KEYS_PER_FRAME := 2
+const LOAD_STAR_REMESH_KEYS_PER_FRAME := 8
 var perf_flush_frames := 0
 var perf_max_frame_ms := 0
 var perf_single_build_ms := 0
@@ -3242,6 +3280,7 @@ const AHEAD_FAST_MS := 3500
 const AHEAD_DIST := 1
 var _ahead_active := false      # the current center leads the player
 var _last_cross_ms := 0         # wall ms of the last PLAYER-chunk crossing
+var _prev_cross_ms := 0         # AC-0283 P3 (walkfix): the crossing before that (the period)
 # AC-0263 spec (user 2026-09-14): the Y-window's MOVING state - position-
 # based, not crossing-cadence based. A significant move (2+ blocks from
 # the anchor) re-arms the AHEAD_FAST_MS quiet window; "stayed somewhere
@@ -3587,6 +3626,12 @@ func _ready() -> void:
 	# never dereferences Data/Game: tables, block-table snapshot, and the
 	# merge atlas (static cache keyed by atlas identity).
 	Lighting._tables()
+	# AC-0283 P2: the AweStarlight engine (gdext/src/starlight.cpp) — the
+	# single relaxation queue that replaces the per-column re-flood + flush
+	# wave. The tables are the pre-warmed Lighting att/glow (worker-safe
+	# value copies — the engine dereferences no autoloads).
+	star = AweStarlight.new()
+	star.set_tables(Lighting._att, Lighting._glow)
 	_tm_ctx = ChunkScript.make_ctx()
 	_tm_ms_full = ChunkScript._merge_atlas()
 	_low_ms_snap_dirty = true  # AC-0236 part 2: the low emit snapshot is stale (new atlas)
@@ -4174,7 +4219,11 @@ const WP_LOW_POLL := 10
 const WP_LOW_INR := 11
 const WP_LOW_WAVE := 12
 const WP_LOW_PICK := 13
-const WP_STAGES := 14
+# AC-0283 P2: the AweStarlight engine step (budgeted relaxation + the
+# settled-column drain). A DRAIN subset (bracketed inside the drain pass —
+# it sums to <= DRAIN, never into the 5-stage partition).
+const WP_STAR := 14
+const WP_STAGES := 15
 const WP_RING := 180
 
 var _wp_rows: Array = []    # WP_RING rows, each an Array of WP_STAGES ints (usec)
@@ -4219,13 +4268,13 @@ func _wprof_init() -> void:
 		d["frames"] = 0
 		_wp_stat.append(d)
 	_wp_names = ["DRAIN", "LOW", "HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "MISC", "frame",
-		"LOW_POLL", "LOW_INR", "LOW_WAVE", "LOW_PICK"]
+		"LOW_POLL", "LOW_INR", "LOW_WAVE", "LOW_PICK", "STAR"]
 	_wp_live = {}
 	for j in range(WP_STAGES):
 		_wp_live[_wp_names[j]] = _wp_stat[j]
 	_wp_live["partition"] = ["DRAIN", "LOW", "HANDOFF", "IO", "RECENTER", "MISC"]
-	_wp_live["substages"] = ["FACELIGHT", "RESCORE", "MESHATTACH", "LOW_POLL", "LOW_INR", "LOW_WAVE", "LOW_PICK"]
-	_wp_live["occupancy"] = {"tg": 0, "tm": 0, "low": 0}
+	_wp_live["substages"] = ["FACELIGHT", "RESCORE", "MESHATTACH", "LOW_POLL", "LOW_INR", "LOW_WAVE", "LOW_PICK", "STAR"]
+	_wp_live["occupancy"] = {"tg": 0, "tm": 0, "low": 0, "star": 0}
 	_wp_live["misc_neg_max_us"] = 0
 	_wp_scratch.resize(WP_RING)
 
@@ -4304,6 +4353,7 @@ func _wprof_refresh() -> void:
 	occ["tg"] = threadgen_inflight.size()
 	occ["tm"] = threadmesh_inflight.size()
 	occ["low"] = _low_tasks.size()
+	occ["star"] = 0 if star == null else int(star.pending_cells())
 	_wp_live["misc_neg_max_us"] = _wp_neg_max
 	_wp_dirty = false
 
@@ -4395,152 +4445,29 @@ func _process(_delta: float) -> void:
 	_drain_deferred_free()
 	# threadmesh_inflight keeps this running while mesh tasks are in flight
 	# even when every bookkeeping list is drained (else the poll never runs).
-	if light_dirty.is_empty() and fluid_dirty.is_empty() and queue_size == 0 and light_pending.is_empty() and tex_refresh.is_empty() and threadmesh_inflight.is_empty() and _io_read_inflight.is_empty() and _io_write_inflight.is_empty() and _io_compact_inflight.is_empty() and not _rec_pending and _bl_want.is_empty() and _col_pending.is_empty() and dirty_queue.is_empty() and _deferred_free.is_empty():
+	# AC-0283 P2: the engine's light work (the pending relaxation, the
+	# settled-column drain, the remesh lane) keeps the frame active the way
+	# the flush wave did.
+	var star_work := star != null \
+			and (not star_owed.is_empty() or not star_remesh.is_empty() or int(star.pending_cells()) > 0)
+	if (not star_work) and fluid_dirty.is_empty() and queue_size == 0 and tex_refresh.is_empty() and threadmesh_inflight.is_empty() and _io_read_inflight.is_empty() and _io_write_inflight.is_empty() and _io_compact_inflight.is_empty() and not _rec_pending and _bl_want.is_empty() and _col_pending.is_empty() and dirty_queue.is_empty() and _deferred_free.is_empty():
 		_wprof_end_frame(pf0)  # AC-0251: idle frame (all stages 0, MISC = total)
 		return
-	var was_active := flush_active
-	var added := false
-	for key in light_dirty:
-		var c = chunks.get(key)
-		# AC-0263 spec: a PARTIAL column (some stamped slabs, the rest in
-		# the drain's Y-window) flushes too - per-slab, from the first
-		# stamped slab on. mesh_built stays the whole-column fast path.
-		if c != null and (c.mesh_built or not c.high_stamps.is_empty()) and not light_pending_set.has(key):
-			light_pending.append(key)
-			light_pending_set[key] = true
-			added = true
-	light_dirty = {}
-	if added and not was_active:
-		flush_active = true
-		perf_flush_frames = 0
-		perf_max_frame_ms = 0
-		perf_single_build_ms = 0
-	var fluid_list: Array[Node3D] = []
+	# AC-0283 P2: the fluid re-mesh arms the per-slab remesh lane (the
+	# legacy full-column fluid re-mesh dispatch is retired — the lane paces
+	# it; the star gate keeps the bake final).
+	var fluid_marks: Array = []
 	for key in fluid_dirty:
 		var c = chunks.get(key)
-		if c != null and c.mesh_built and not light_pending_set.has(key):
-			fluid_list.append(c)
+		if c == null or (not c.mesh_built and c.high_stamps.is_empty()):
+			continue
+		fluid_marks.append([c, int(fluid_dirty[key][0]), int(fluid_dirty[key][1])])
 	fluid_dirty = {}
 	if not dirty_queue.is_empty():
 		_dirty_drain()  # AC-0233: dirtyQueue drains first (1/frame), before the streaming work
 	var pf1 := Time.get_ticks_usec()
 	var fp0 := pf1
-	# AC-0263 spec: the flush is NOT gated on _startup_pending - the old
-	# yield (AC-0160: hand the 2 mesh slots to the first spawn builds)
-	# predates the pool, and with the visibility gate a latched startup
-	# (one missing spawn slab) froze EVERY chunk's lighting forever:
-	# light_pending could never settle, so nothing could ever show. The
-	# shared TM cap below already paces flush vs build (a cap-drop re-queues
-	# the flush, it never sync-builds).
-	if not light_pending.is_empty() and edit_inflight_count == 0 \
-		and threadmesh_inflight.size() < threadmesh_max:
-		# AC-0219 pool-full guard: the 1/frame streaming handoff cap keeps
-		# the TM pool saturated during remesh waves (dispatches land as fast
-		# as slots free). While the pool is full, EVERY dispatch attempt in
-		# the section below would cap-drop + re-queue — 10-20 wasted entry
-		# builds (~2-5 ms each of nbs-ring/slab/strip work) per frame, a
-		# frame-time drain the pre-cap handoff bursts never produced (the
-		# pool emptied between bursts, so the spin was short). Yield the
-		# frame instead: entries stay queued (key-deduped, nothing lost) and
-		# the wave resumes the frame a slot frees. The rare sync-fallback
-		# dispatches (data-empty / missing-neighbor) defer at most one frame.
-		# AC-0126: edit (post-break) flush — staggered 1 remesh/frame on the
-		# AC-0107 worker path. eff = {} -> the worker self-lights its contained
-		# kernel (byte-identical to the sync margin-0 path). defer_on_cap=true
-		# -> a TM2 cap drop REQUEUES the chunk instead of sync build_mesh (the
-		# old 50-120 ms edge-break spike). The spawn/missing-diagonal sync
-		# contract paths inside _mesh_dispatch stay sync (unchanged).
-		# AC-0160 run 2: while the spawn 3x3 is still pending, the re-light
-		# flush YIELDS the 2 mesh-worker slots to the first builds — the E2
-		# wave ping-pongs between the landing spawn chunks (each landing
-		# re-enqueues its built neighbors) and held ~1 of the 2 slots,
-		# pushing spawn3x3 past the 2 s gate. Nothing is dropped: entries
-		# wait in light_pending (key-deduped) and drain at 1/frame after
-		# startup; final light values are unchanged, only the remesh timing.
-		var t0 := Time.get_ticks_msec()
-		var built := 0
-		var spun := 0
-		var max_spin := light_pending.size()
-		# AC-0178: loading window — no FLUSH_FRAME_BUDGET_MS / 1-per-frame cap.
-		var flush_cap := LOAD_FLUSH_MAX_PER_FRAME if loading_active else EDIT_FLUSH_MAX_PER_FRAME
-		while built < flush_cap and not light_pending.is_empty():
-			if built > 0 and not loading_active and Time.get_ticks_msec() - t0 > FLUSH_FRAME_BUDGET_MS:
-				break
-			var key2: String = light_pending.pop_front()
-			light_pending_set.erase(key2)
-			var c2 = chunks.get(key2)
-			if c2 == null:
-				continue
-			if c2.high_stamps.is_empty():
-				# Nothing attached yet - the next slab landing re-marks
-				# (every landing of an unsettled chunk re-arms the flush).
-				light_pending.append(key2)
-				light_pending_set[key2] = true
-				spun += 1
-				if spun >= max_spin:
-					break
-				continue
-			if not _build_ready(int(c2.cx), int(c2.cz)):
-				light_pending.append(key2)
-				light_pending_set[key2] = true
-				spun += 1
-				if spun >= max_spin:
-					break
-				continue
-			var tb := Time.get_ticks_msec()
-			# AC-0263 spec: the flush IS the "lighting calculated" event.
-			# A whole column remeshes once and settles (every slab shows).
-			var covered := true
-			if c2.mesh_built:
-				covered = _mesh_dispatch(c2, int(c2.cx), int(c2.cz), {}, true, true, true)
-			else:
-				# A PARTIAL column (the player moved; the deep layers are
-				# still in the drain's Y-window) flushes PER-SLAB - only
-				# the stamped slabs re-mesh and show. A whole-chunk remesh
-				# here would build the deep layers while moving (the spec
-				# keeps those until the player stays still) and would burn
-				# one big worker task per passed column. The per-column
-				# in-flight dedup paces this to one slab/frame; the loop
-				# re-queues the column and completes the rest as each
-				# landing frees the key.
-				for si_f in c2.high_stamps.keys():
-					if c2.flush_slabs.has(int(si_f)):
-						continue  # this slab's flush already landed
-					if not _mesh_dispatch_hslab(c2, int(c2.cx), int(c2.cz), int(si_f), {}, true):
-						covered = false
-						break
-			var dt := Time.get_ticks_msec() - tb
-			if dt > perf_single_build_ms:
-				perf_single_build_ms = dt
-			if not covered:
-				# Cap-drop defer or in-flight dedup: re-queue (back of the line,
-				# chunk-key deduped) — never a sync build_mesh.
-				light_pending.append(key2)
-				light_pending_set[key2] = true
-				spun += 1
-				if spun >= max_spin:
-					break
-				continue
-			built += 1
-		if built > 0:
-			perf_flush_frames += 1
-			var ft := Time.get_ticks_msec() - t0
-			if ft > perf_max_frame_ms:
-				perf_max_frame_ms = ft
-		if timing and not light_pending.is_empty():
-			print("LIGHTPEND pend=%d built=%d spun=%d ft=%.0f t=%d" % [light_pending.size(), built, spun, Time.get_ticks_msec() - t0, Time.get_ticks_msec()])
-	# AC-0187: the clear must run even when the section is skipped (a burst
-	# can drain to empty at section start); a stale-true flush_active
-	# suppresses the perf-counter reset of the next burst.
-	if light_pending.is_empty():
-		flush_active = false
 	var fp1 := Time.get_ticks_usec()
-	for c in fluid_list:
-		var cc: Node3D = c
-		if _build_ready(int(cc.cx), int(cc.cz)):
-			_mesh_dispatch(cc, int(cc.cx), int(cc.cz), cc.last_eff, false)
-		else:
-			fluid_dirty[_key(int(cc.cx), int(cc.cz))] = true
 	var fp2 := Time.get_ticks_usec()
 	var _wpt := Time.get_ticks_usec()  # AC-0251 HANDOFF stage bracket
 	threadgen_poll()
@@ -4556,6 +4483,23 @@ func _process(_delta: float) -> void:
 	_wprof_add(WP_RECENTER, Time.get_ticks_usec() - _wpt)
 	var fp5 := Time.get_ticks_usec()
 	_wpt = Time.get_ticks_usec()  # AC-0251 DRAIN stage bracket
+	# AC-0283 P2: the AweStarlight pass (a DRAIN subset — the WP_STAR
+	# substage): the budgeted relaxation step, the settled-column drain
+	# (last_eff publish + the per-slab E2 re-arm), the remesh lane, and the
+	# fluid re-mesh arming. It runs BEFORE _drain_build_queue so the drain
+	# dispatches see this frame's settle state.
+	if star != null:
+		var _wps := Time.get_ticks_usec()
+		_star_step()
+		_wprof_add(WP_STAR, Time.get_ticks_usec() - _wps)
+		_star_settled_drain()
+		_star_remesh_drain()
+		for fm in fluid_marks:
+			var cc: Node3D = fm[0]
+			var ckey := _key(int(cc.cx), int(cc.cz))
+			for si in range(int(fm[1]), int(fm[2]) + 1):
+				if int(cc.high_stamps.get(si, -1)) == int(cc.data_gen) and not bool(cc.flush_slabs.has(si)):
+					_star_remesh_add(ckey, si)
 	_drain_build_queue()
 	_wprof_add(WP_DRAIN, Time.get_ticks_usec() - _wpt)
 	var fp6 := Time.get_ticks_usec()
@@ -4570,9 +4514,288 @@ func _process(_delta: float) -> void:
 			(float(pf2 - pf0) / 1000.0), (float(pf1 - pf0) / 1000.0), (float(fp1 - fp0) / 1000.0), (float(fp2 - fp1) / 1000.0),
 			(float(fp3 - fp2) / 1000.0), (float(fp4 - fp3) / 1000.0), (float(fp5 - fp4) / 1000.0), (float(fp6 - fp5) / 1000.0), (float(pf2 - fp6) / 1000.0), Time.get_ticks_msec()])
 	_prof_ring.append([float(pf1 - pf0) / 1000.0, float(pf2 - pf1) / 1000.0,
-		threadmesh_inflight.size(), queue_size, light_pending.size()])
+		threadmesh_inflight.size(), queue_size, 0 if star == null else int(star.pending_cells())])
 	if _prof_ring.size() > 120:
 		_prof_ring.pop_front()
+
+# AC-0283 P2: the light-idle predicate — the legacy light_dirty +
+# light_pending emptiness the arm settle-waits used, expressed in the
+# engine's own state: the owed drain is empty (every settled column
+# published), the remesh lane is empty (no re-bake armed), and the
+# relaxation queue is empty (the light gate closed everywhere).
+func star_light_idle() -> bool:
+	if star == null:
+		return true
+	return star_owed.is_empty() and star_remesh.is_empty() and int(star.pending_cells()) == 0
+
+# The remesh lane's depth (the legacy light_pending.size() equivalent —
+# the armed re-bake slab count the arm debug lines reported).
+func star_light_pending_depth() -> int:
+	if star == null:
+		return 0
+	var n := 0
+	for k in star_remesh:
+		n += int(star_remesh[k].size())
+	return n
+
+# AC-0283 P2: the AweStarlight live-light pass (the replacement for the
+# per-column re-flood + the 1-column/frame flush wave).
+
+# The budgeted relaxation step (design: the DRAIN clamp discipline — the
+# wall-clock frame sample, clamped, sizes the budget; the steady state
+# costs ~3 ms/frame, the loading window gets 30 ms).
+func _star_step() -> void:
+	var now_ms := Time.get_ticks_msec()
+	var dt := minf(float(now_ms) - _star_last_t, DRAIN_DT_CLAMP_MS)
+	_star_last_t = float(now_ms)
+	if dt <= 0.0:
+		dt = 16.67
+	if int(star.pending_cells()) > 0:
+		var base_ms := LOAD_STAR_STEP_BUDGET_MS if loading_active else STAR_STEP_BUDGET_MS
+		var budget_us: int = int(float(base_ms) * (dt / 16.67) * 1000.0)
+		if budget_us < 1:
+			budget_us = 1
+		star.step(budget_us)
+
+# The settled-column drain: a column whose light gate (all 24 sections
+# settled) has not been drained publishes its settled light (last_eff),
+# bumps its eff_gen iff the eff actually changed (the face/eff cache dep),
+# and re-arms the per-slab E2 wave on its built neighbors (replacing the
+# flush + the _eff_landed landing cascade).
+func _star_settled_drain() -> void:
+	if star == null or star_owed.is_empty():
+		return
+	var done: Array = []
+	for key in star_owed:
+		var c = chunks.get(key)
+		if c == null:
+			done.append(key)
+			continue
+		var cx := int(c.cx)
+		var cz := int(c.cz)
+		if not star.column_settled(cx, cz):
+			continue
+		var new_eff: Dictionary = star.column_light_dict(cx, cz)
+		if new_eff.is_empty():
+			done.append(key)
+			continue
+		var old_arr: PackedByteArray = c.last_eff.get("arr", PackedByteArray())
+		var new_arr: PackedByteArray = new_eff.get("arr", PackedByteArray())
+		var changed: bool = old_arr.size() != new_arr.size() or old_arr != new_arr
+		c.last_eff = ChunkScript._eff_store(new_eff)
+		if changed:
+			c.eff_gen += 1
+			_star_e2_rearm(c, cx, cz, old_arr, new_arr)
+		done.append(key)
+	for key in done:
+		star_owed.erase(key)
+
+# The per-slab E2 wave (the legacy E2 re-targeted to light-relevant
+# change): a settled column's boundary frame on each built neighbor's
+# shared face is compared per stamped slab window (the 2-row overhang of
+# the slab's bake box) — a changed/nonzero frame re-arms that slab's
+# re-mesh (its margin bakes the neighbor's light). The frame compare is
+# C++ (star.frame_diff) — the churn bound: a zero-frame window is a
+# provable no-op (no re-arm, no work).
+func _star_e2_rearm(c: Node3D, cx: int, cz: int, old_arr: PackedByteArray, new_arr: PackedByteArray) -> void:
+	var first: bool = old_arr.is_empty()
+	var h := Data.HEIGHT
+	var offs: Array = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+	for o in offs:
+		var nkey := _key(cx + int(o[0]), cz + int(o[1]))
+		var nc = chunks.get(nkey)
+		if nc == null or not bool(nc.mesh_built):
+			continue
+		for si in nc.high_stamps.keys():
+			var y0 := maxi(0, int(si) * 16 - 2)
+			var y1 := mini(h - 1, int(si) * 16 + 17)
+			var v: int = star.frame_diff(old_arr, new_arr, int(o[0]), int(o[1]), y0, y1)
+			if v != 0:
+				if first:
+					perf_e2_first_marks += 1
+				else:
+					perf_e2_marks += 1
+				_star_remesh_add(nkey, int(si))
+
+# The remesh lane: star_remesh (key -> {si}) drains paced (one slab per
+# key per frame — the per-key in-flight dedup paces the rest; 2 keys/frame
+# steady, 8 in the loading window). A slab re-bakes from the engine's
+# CURRENT settled light (the dispatch's star payload) and its landing
+# re-sets the settled-bake mark (flush_slabs) — construction, not a
+# re-arm (no loop).
+func _star_remesh_drain() -> void:
+	if star == null or star_remesh.is_empty() or edit_inflight_count > 0:
+		return
+	var cap := LOAD_STAR_REMESH_KEYS_PER_FRAME if loading_active else STAR_REMESH_KEYS_PER_FRAME
+	var spent := 0
+	var built := 0
+	for key in star_remesh.keys():
+		if star_remesh[key].is_empty():
+			star_remesh.erase(key)  # every entry was erased (unstamped /
+			# re-settled since the arm) — drop the zombie key or it eats a
+			# cap slot forever and starves the real work
+			continue
+		if spent >= cap:
+			break
+		var c = chunks.get(key)
+		if c == null:
+			star_remesh.erase(key)
+			continue
+		spent += 1
+		var cx := int(c.cx)
+		var cz := int(c.cz)
+		var sis: Array = star_remesh[key].keys()
+		sis.sort()
+		for si in sis:
+			si = int(si)
+			if int(c.high_stamps.get(si, -1)) != int(c.data_gen):
+				star_remesh[key].erase(si)  # the build lane owns it (its landing re-bakes)
+				continue
+			if bool(c.flush_slabs.has(si)):
+				star_remesh[key].erase(si)  # re-settled since the arm (no-op)
+				continue
+			if _mesh_dispatch_hslab(c, cx, cz, si, {}, true):
+				star_remesh[key].erase(si)
+				built += 1
+				break  # one slab per key per frame
+			break  # deferred (gate / cap / dedup) — the entry retries next frame
+	if built > 0:
+		perf_flush_frames += 1
+
+# Arm a slab for the remesh lane (idempotent) + pop its settled-bake mark
+# (the current bake is no longer settled — the band re-entry hides it
+# until the re-bake lands; the slab itself keeps showing, the edit /
+# margin behavior).
+func _star_remesh_add(key: String, si: int) -> void:
+	if not star_remesh.has(key):
+		star_remesh[key] = {}
+	star_remesh[key][si] = true
+	var c = chunks.get(key)
+	if c != null:
+		c.flush_slabs.erase(si)
+
+# Seed a NEW column into the engine (the data landing): all 24 sections
+# top-down from the flat column data (the seam is always satisfiable),
+# then the column joins the owed drain (its light gate settles in a few
+# step frames).
+func _star_seed_column(c: Node3D) -> void:
+	if star == null:
+		return
+	var cx := int(c.cx)
+	var cz := int(c.cz)
+	var flat: PackedByteArray = ChunkIO.io_cpp().slabs_flat(c.data)
+	star.seed_column(cx, cz, flat)
+	star_owed[_key(cx, cz)] = true
+
+# Re-land CHANGED slabs of an existing column (a regen merge / an
+# evict-reload with edits since save): on_section_data per slab —
+# identical data is a no-op (the deterministic regen re-lands with ZERO
+# churn), a diff runs the two-phase re-seed (the engine un-settles the
+# affected box) and the late-landing contract applies (hide + un-settle +
+# re-arm).
+func _star_reseed_column(c: Node3D, sis: Array) -> void:
+	if star == null:
+		return
+	var cx := int(c.cx)
+	var cz := int(c.cz)
+	var io: Variant = ChunkIO.io_cpp()
+	var changed := false
+	var ok := true
+	for si in sis:
+		var sids: PackedByteArray = io.slab_flat(c.data[int(si)])
+		if sids.is_empty():
+			continue
+		var r: Dictionary = star.on_section_data(cx, cz, int(si), sids)
+		if bool(r.get("changed", false)):
+			changed = true
+		if not bool(r.get("ok", false)):
+			# the seam is not satisfiable (a partially-seeded column —
+			# unreachable live; the atomic whole-column re-seed heals it)
+			ok = false
+			changed = true
+			break
+	if not ok:
+		star.seed_column(cx, cz, io.slabs_flat(c.data))
+	star_owed[_key(cx, cz)] = true
+	if changed:
+		_star_late_invalidate(c, sis)
+
+# The late-landing contract (binding): data changed inside a settled
+# region. OWN column: the affected stamped slabs hide, lose their
+# settled-bake mark, and re-arm (the build lane re-owns them through
+# data_gen; they show again after the re-settled re-bake lands).
+# NEIGHBORS: no hide (the E2 margin behavior — the old margin was valid
+# when it was baked; the re-mesh picks up the new light) — only the
+# re-arm over the changed sections' block range.
+func _star_late_invalidate(c: Node3D, sis: Array) -> void:
+	var cx := int(c.cx)
+	var cz := int(c.cz)
+	var si_min := 99
+	var si_max := -1
+	for si in sis:
+		si_min = mini(si_min, int(si))
+		si_max = maxi(si_max, int(si))
+	if si_max < 0:
+		return
+	for si in range(0, mini(23, si_max + 1) + 1):
+		if int(c.high_stamps.get(si, -1)) == int(c.data_gen) and bool(c.flush_slabs.has(si)):
+			c.flush_slabs.erase(si)
+			c.high_slab_visible(si, false)
+			star_late_landings += 1
+			_star_remesh_add(_key(cx, cz), si)
+	_star_update_light_settled(c)
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			if dx == 0 and dz == 0:
+				continue
+			var nkey := _key(cx + dx, cz + dz)
+			var nc = chunks.get(nkey)
+			if nc == null or not bool(nc.mesh_built):
+				continue
+			for si in range(maxi(0, si_min - 1), mini(23, si_max + 1) + 1):
+				if int(nc.high_stamps.get(si, -1)) == int(nc.data_gen) and bool(nc.flush_slabs.has(si)):
+					nc.flush_slabs.erase(si)
+					_star_remesh_add(nkey, si)
+
+# The edit re-arm (set_block / set_fluid / the apply-edits wave): the
+# engine's on_edit already un-settled + re-healed the light (the 3x3 x/z
+# box x sections 0..si+1 two-phase, with the landing-order healing for
+# unseeded faces). Here the MESH side: the own column's affected slabs
+# (the sky carry below + the block range — the build lane re-owns them
+# through data_gen; pop the settled-bake mark so a band re-entry hides
+# them until the re-bake) and the 8 neighbors' slabs in the changed
+# sections' block range (remesh only — no hide, the E2 margin behavior).
+func _star_rearm_edit(c: Node3D, cx: int, cz: int, si: int) -> void:
+	if star == null:
+		return
+	var ckey := _key(cx, cz)
+	for si2 in range(0, mini(23, si + 1) + 1):
+		if int(c.high_stamps.get(si2, -1)) == int(c.data_gen) and bool(c.flush_slabs.has(si2)):
+			c.flush_slabs.erase(si2)
+			_star_remesh_add(ckey, si2)
+	_star_update_light_settled(c)
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			if dx == 0 and dz == 0:
+				continue
+			var nkey := _key(cx + dx, cz + dz)
+			var nc = chunks.get(nkey)
+			if nc == null or not bool(nc.mesh_built):
+				continue
+			for si2 in range(maxi(0, si - 1), mini(23, si + 1) + 1):
+				if int(nc.high_stamps.get(si2, -1)) == int(nc.data_gen) and bool(nc.flush_slabs.has(si2)):
+					nc.flush_slabs.erase(si2)
+					_star_remesh_add(nkey, si2)
+
+# The chunk-level settled flag (kept for the band re-entry + the save
+# guard fallbacks): all STAMPED slabs carry a settled-bake mark.
+func _star_update_light_settled(c: Node3D) -> void:
+	var all := true
+	for si in c.high_stamps.keys():
+		if not bool(c.flush_slabs.has(int(si))):
+			all = false
+			break
+	c.light_settled = all
 
 func refresh_textures() -> void:
 	tex_refresh = chunks.keys().duplicate()
@@ -4969,6 +5192,7 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	_low_fog_for(c)  # AC-0231: the immediate fog-box first pass (far only)
 	_apply_edits_to_chunk(c)
 	_apply_pending_leaf_decay(c)  # AC-0270: restore the saved timers
+	_star_seed_column(c)  # AC-0283 P2: the engine seed (post-edits data)
 	var dg := Time.get_ticks_msec() - tg
 	if timing:
 		print("GENCHUNK %d,%d gen_ms=%d t=%d" % [cx, cz, dg, Time.get_ticks_msec()])
@@ -5189,6 +5413,9 @@ func _startup_gen_apply() -> void:
 		_low_fog_for(c)  # AC-0231: the immediate fog-box first pass (far only)
 		_apply_edits_to_chunk(c)
 		_apply_pending_leaf_decay(c)  # AC-0270: restore the saved timers
+		_star_seed_column(c)  # AC-0283 P2: the burst lands data on the main
+		# thread (not via threadgen_handoff) — the engine seed belongs here,
+		# or the box gate blocks every build in the burst's 3x3 region.
 		if timing:
 			print("GENHAND %d,%d t=%d" % [int(e[1]), int(e[2]), Time.get_ticks_msec()])
 
@@ -5294,6 +5521,19 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 	chunk_origin[e["key"]] = "gen"  # AC-0155
 	_apply_edits_to_chunk(c)
 	_apply_pending_leaf_decay(c)  # AC-0270: restore the saved timers
+	# AC-0283 P2: seed the engine (AFTER the edits apply — the engine seeds
+	# the post-edit data): a new column seeds all 24 sections top-down; a
+	# regen merge re-seeds the replaced slabs by diff (identical data =
+	# no-op = zero churn — the deterministic regen guarantee).
+	if is_regen:
+		var dsr: Array = resl[0]
+		var rsis: Array = []
+		for si in range(c.data.size()):
+			if si < int(dsr.size()) and dsr[si] is Dictionary:
+				rsis.append(si)
+		_star_reseed_column(c, rsis)
+	else:
+		_star_seed_column(c)
 	_tg_handoff += 1
 	_pool_touch()  # AC-0217: queued entry's data landed (pool membership flipped)
 	_low_fog_for(c)  # AC-0231: the immediate fog-box first pass (far only)
@@ -5604,14 +5844,18 @@ func threadmesh_poll() -> void:
 
 func _tm_retrigger(key: String, c: Node3D, e: Dictionary) -> void:
 	# A dropped result can't be applied: rebuild from current state.
-	# Meshed chunks re-enter the light-flush queue (fresh bulk eff);
-	# not-yet-meshed chunks re-enter the build band queue.
+	# AC-0283 P2: a meshed chunk's stamped slabs re-enter the remesh lane
+	# (the re-bake re-captures the engine's current settled light); a
+	# not-yet-meshed chunk re-enters the build band queue.
+	if star != null and not bool(e.get("hslab", false)):
+		for si in c.high_stamps.keys():
+			_star_remesh_add(key, int(si))
+	elif star != null:
+		var si0: int = int(e.get("si0", -1))
+		if si0 >= 0:
+			_star_remesh_add(key, si0)
 	if bool(c.mesh_built):
-		if not light_pending_set.has(key):
-			light_pending.append(key)
-			light_pending_set[key] = true
-			perf_lightpend_retrigger += 1  # AC-0218: drop retrigger adds
-		flush_active = true
+		perf_lightpend_retrigger += 1  # AC-0218: drop retrigger adds (the remesh arm)
 	else:
 		_enqueue_build(int(e["cx"]), int(e["cz"]))
 
@@ -5713,6 +5957,20 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		# all-air builds stamped too — done, not pending), and the probe
 		# flips mesh_built when the column owes nothing.
 		var si_h: int = int(e["si0"])
+		# AC-0283 P2: the light staleness check — the dispatch captured the
+		# 27 section epochs of the 3x3x3 box; any engine mutation inside
+		# the box (a neighbor seed, an edit, a late-landing re-seed) bumped
+		# one: the in-flight bake would be stale light — datadrop and
+		# retrigger (the re-dispatch re-captures under the gate).
+		if star != null and e.has("lver"):
+			var box_now: Array = star.box_epochs(int(e["cx"]), int(e["cz"]), si_h - 1, si_h + 1)
+			if box_now != e["lver"]:
+				_tm_datadrop += 1
+				star_lver_drops += 1
+				if _tm_debug:
+					print("TMESH LVERDROP %d,%d slab=%d" % [int(e["cx"]), int(e["cz"]), si_h])
+				_tm_retrigger(key, c, e)
+				return
 		# AC-0263 spec (keep-all-LOD): a STRAGGLER (the column left the
 		# high band while this build was in flight) is no longer an error
 		# - the high landing IS the slab's STORED high (the re-entry flip
@@ -5727,49 +5985,23 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		if straggler:
 			hslab_stragglers_n += 1
 		var ta_h := Time.get_ticks_msec()
-		var old_eff_h = c.last_eff
 		c.apply_edit_accs(res, _tm_ms_full, false)
 		c.high_stamps[si_h] = int(c.data_gen)
 		# AC-0263 spec: the slab's low is STORED, not dropped (the
 		# band-exit flip-back renders it without a rebuild); the fog
 		# (dormant) still drops with the placeholder state.
 		_fog_drop_slab(c, si_h)
-		# AC-0263 spec: a pre-flush high attach stays HIDDEN (the slab's
-		# lighting is not calculated yet). A slab shows when (a) the chunk
-		# is whole-settled (light_settled - a full flush landed) or (b)
-		# THIS slab's own per-slab flush re-mesh landed (flush_slabs - the
-		# partial-column flush; a flush landing sets it below).
-		# AC-0263 spec (user 2026-09-14, "meshes where the lighting is
-		# too bright"): a landing in an ALREADY-SETTLED chunk is NEW work
-		# (the window defers deep slabs until the player stays still) -
-		# its build-time light is the bright SELF-LIT bake computed
-		# against the light data of that moment (too bright if a neighbor
-		# changed since). Un-settle: the slab hides and the flush below
-		# re-arms (rule 3 - never show a slab whose lighting is not
-		# calculated); the flush re-meshes and settles again. Baseline
-		# burst-landed every slab before the settle flush, so this path
-		# never fired there.
-		var late_landing := not bool(e.get("settle", false)) and bool(c.light_settled)
-		if late_landing:
-			c.light_settled = false
-		if bool(e.get("settle", false)):
-			c.flush_slabs[si_h] = true
-			# AC-0263 spec: a FLUSH landing is the flush for its slab - it
-			# must NOT re-arm its own flush (that loops forever: land ->
-			# mark -> flush -> land ...). It re-arms ONLY while stamped
-			# slabs still await their flush (scheduling the next one); when
-			# every stamped slab is flushed, the chunk settles (drain
-			# landings from then on show immediately - the light is done).
-			var allf := true
-			for si2 in c.high_stamps.keys():
-				if not c.flush_slabs.has(int(si2)):
-					allf = false
-					break
-			if allf:
-				c.light_settled = true
-			else:
-				light_dirty[key] = true
-		var show_h: bool = (bool(c.light_settled) or bool(c.flush_slabs.has(si_h))) and not late_landing
+		# AC-0283 P2: a landing IS the settled bake — the dispatch passed
+		# the box gate (the 3x3x3 light settled at capture) and the epochs
+		# verified above (no engine mutation since). Set the per-slab
+		# settled-bake mark (the show rule), re-derive the chunk flag, and
+		# show. There is no flush to arm: construction, not re-arm (no
+		# loop). (The legacy late_landing un-settle is GONE — the engine's
+		# on_section_data does the hide + un-settle + re-arm at the data
+		# change itself, before any stale build can dispatch.)
+		c.flush_slabs[si_h] = true
+		_star_update_light_settled(c)
+		var show_h: bool = bool(c.flush_slabs.has(si_h))
 		if straggler and c.has_low_si(si_h):
 			c.low_slab_visible(si_h, true)
 			c.high_slab_visible(si_h, false)  # stored (flip-back on re-entry)
@@ -5785,16 +6017,6 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			c.mesh_built = true
 			# high-complete: the column's placeholders are all gone now
 			# (each landing dropped its own) — nothing to free in bulk.
-		# AC-0263 spec: the FIRST flush is the "lighting calculated" event.
-		# A not-yet-settled chunk re-marks itself light-dirty on EVERY
-		# landing (light_dirty is consumed each frame; the mark only
-		# survives into light_pending once mesh_built - so the LAST
-		# landing's mark is the one that arms the flush). The flush
-		# (gated on mesh_built + 8-neighbor readiness) re-meshes with the
-		# settled eff and settles it (the slabs show then).
-		if not bool(e.get("settle", false)) and not c.light_settled \
-				and not light_dirty.has(key):
-			light_dirty[key] = true  # drain landing arms the (first) flush
 		c.saved_light = {}
 		perf_build_ms += Time.get_ticks_msec() - ta_h
 		var _wms_h: int = int(res.get("wms", 0))
@@ -5805,7 +6027,6 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			_load_wms_n += 1
 		_count_collision_build(c)
 		_stage_check(c, key)
-		_eff_landed(c, old_eff_h, res.get("light", {}))
 		if bool(e.get("eff_trust", false)):
 			_eff_cache_put(key, c, res.get("light", {}), e.get("ngen", null))
 		_tm_handoff += 1
@@ -5824,20 +6045,33 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		return
 	if bool(e.get("edit", false)):
 		var ta2 := Time.get_ticks_msec()
-		var old_eff2 = c.last_eff
 		c.apply_edit_accs(res, _tm_ms_full)
 		# AC-0263: an edit's scoped remesh is a HIGH landing — stamp the
 		# covered slabs done at the NEW data_gen (the edit window includes
 		# the boundary slabs, so the probe won't re-owe them).
 		for si_e in range(int(res.get("si0", 0)), int(res.get("si1", 0)) + 1):
 			c.high_stamps[si_e] = int(c.data_gen)
+		# AC-0283 P2 (brightslab fix): the legacy scoped bake above carries
+		# the PRE-EDIT eff snapshot - it is not the settled star light (the
+		# set_block re-arm fired BEFORE the data_gen bump, so its stamped
+		# condition never matched and the own column was never armed). Stamp
+		# the whole on_edit re-settle window (sections 0..si1+1) at the new
+		# data_gen and re-arm the star remesh lane: the drain re-bakes each
+		# slab with the settled payload (the dispatch gates on the 3x3x3 box
+		# settle, so the re-bake lands on the settled light; the slab keeps
+		# showing the legacy bake until then - the no-hide edit contract
+		# holds).
+		if star != null:
+			for si_r in range(0, mini(int(res.get("si1", 0)) + 2, 24)):
+				c.high_stamps[si_r] = int(c.data_gen)
+				_star_remesh_add(key, si_r)
+			_star_update_light_settled(c)
 		c.saved_light = {}
 		perf_build_ms += Time.get_ticks_msec() - ta2
 		perf_build_worker_ms += int(res.get("wms", 0))
 		perf_build_worker_ms_list.append(int(res.get("wms", 0)))
 		_count_collision_build(c)
 		_stage_check(c, key)
-		_eff_landed(c, old_eff2, res.get("light", {}))
 		if bool(e.get("eff_trust", false)):
 			_eff_cache_put(key, c, res.get("light", {}), e.get("ngen", null))
 		_tm_handoff += 1
@@ -5861,29 +6095,37 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			# already showed high) don't breach the ordering contract.
 			perf_high_before_low_firstbuild_n += 1
 	var ta := Time.get_ticks_msec()
-	var old_eff = c.last_eff
 	if not bool(c.mesh_built):
 		_tm_full_firstbuild_n += 1  # AC-0263: first-build evidence
 	c.apply_accs(res, _tm_ms_full)
-	# AC-0263 spec (user 2026-09-13): "we should not be showing a chunk
-	# that doesn't have its lighting calculated." A flush landing settles
-	# (its re-meshed slabs show); a pre-flush attach (the bright
-	# self-lit bake) stays HIDDEN until the first flush.
-	# AC-0263 spec (user 2026-09-14): a full-column landing in an
-	# ALREADY-SETTLED chunk is new work too - un-settle so the hide +
-	# re-arm below run (the bright self-lit bake must not show).
-	if not bool(e.get("settle", false)) and bool(c.light_settled):
-		c.light_settled = false
-	if bool(e.get("settle", false)):
-		c.light_settled = true
-	elif not c.light_settled:
-		c.hide_all_high()
-		if not light_dirty.has(key):
-			light_dirty[key] = true
 	# AC-0263: a full-column landing stamps every slab at/below the top
 	# done (the per-slab probe's completion record for the legacy path).
 	for si_f in range(mini(int(c.top) >> 4, int(c.data.size() - 1)) + 1):
 		c.high_stamps[si_f] = int(c.data_gen)
+	# AC-0283 P2: the full-column path (retired from the live drain — the
+	# tex-refresh + edit-fallback remain) bakes from the CACHED light
+	# (last_eff / the pull kernel — both star-derived), so its settle state
+	# is the engine's: settled -> the stamped slabs show; not settled ->
+	# hide + arm the remesh lane (the re-bake lands on the settled light).
+	# AC-0263 spec (user 2026-09-13) unchanged: a chunk whose lighting is
+	# not calculated never shows.
+	if star != null and star.column_settled(int(c.cx), int(c.cz)):
+		for si_f in range(mini(int(c.top) >> 4, int(c.data.size() - 1)) + 1):
+			c.flush_slabs[si_f] = true
+	elif star != null:
+		c.hide_all_high()
+		for si_f in range(mini(int(c.top) >> 4, int(c.data.size() - 1)) + 1):
+			c.flush_slabs.erase(si_f)  # the stale bake is not the settled light
+			_star_remesh_add(key, si_f)
+	# AC-0283 P2 (brightslab fix): a full-column landing from the edit
+	# fallback baked with the legacy self-light (the pull kernel on the
+	# post-edit data) - the settled branch above flushed that bake without
+	# re-arming. Re-arm the star remesh lane so every stamped slab re-bakes
+	# with the settled star payload (idempotent with the not-settled arm).
+	if star != null and bool(e.get("edit_full", false)) and star.column_settled(int(c.cx), int(c.cz)):
+		for si_f in range(mini(int(c.top) >> 4, int(c.data.size() - 1)) + 1):
+			_star_remesh_add(key, si_f)
+	_star_update_light_settled(c)
 	_hslab_probe_invalidate(c)
 	c.saved_light = {}
 	# AC-0231 rewrite: the high REPLACES the per-slab placeholders (the
@@ -5902,7 +6144,6 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 	var tc := Time.get_ticks_msec() if timing else 0
 	_stage_check(c, key)
 	var td := Time.get_ticks_msec() if timing else 0
-	_eff_landed(c, old_eff, res.get("light", {}))
 	if timing:
 		print("TMH_PART %d,%d apply=%d col=%d stage=%d eff=%d t=%d" % [int(e["cx"]), int(e["cz"]), tb - ta, tc - tb, td - tc, Time.get_ticks_msec() - td, Time.get_ticks_msec()])  # AC-0178 diag (timing-gated)
 	if bool(e.get("eff_trust", true)):
@@ -6034,7 +6275,7 @@ func _dirty_dispatch(key: String) -> void:
 		_edit_stale_eff.clear()
 	var cached = _edit_stale_eff.get(key)
 	if cached == null:
-		if not _mesh_dispatch(c, int(c.cx), int(c.cz), {}, true, true):
+		if not _mesh_dispatch(c, int(c.cx), int(c.cz), {}, true, true, false, true):
 			return
 		perf_edit_front_full += 1
 		_dirty_drop(key)
@@ -6151,19 +6392,19 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 		print("TMESH EDIT %d,%d slabs=%d-%d inflight=%d" % [cx, cz, si0, si1, threadmesh_inflight.size()])
 	return true
 
-func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := true, defer_on_cap := false, settle := false) -> bool:
+func _mesh_dispatch(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := true, defer_on_cap := false, settle := false, edit_full := false) -> bool:
 	# AC-0263 spec (settle): the light-FLUSH dispatch (the chunk's lighting
 	# is calculated now) - the handoff marks the chunk light_settled and the
 	# re-meshed slabs show.
 	if not timing:
-		return _mesh_dispatch_impl(c, cx, cz, eff, eff_trust, defer_on_cap, settle)
+		return _mesh_dispatch_impl(c, cx, cz, eff, eff_trust, defer_on_cap, settle, edit_full)
 	var _t0 := Time.get_ticks_usec()
-	var _r: bool = _mesh_dispatch_impl(c, cx, cz, eff, eff_trust, defer_on_cap, settle)
+	var _r: bool = _mesh_dispatch_impl(c, cx, cz, eff, eff_trust, defer_on_cap, settle, edit_full)
 	print("DISPATCHMS %d,%d ms=%.1f t=%d" % [cx, cz, (Time.get_ticks_usec() - _t0) / 1000.0, Time.get_ticks_msec()])
 	return _r
 
 
-func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := true, defer_on_cap := false, settle := false) -> bool:
+func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust := true, defer_on_cap := false, settle := false, edit_full := false) -> bool:
 	# true = covered (sync-built now, or an in-flight task will apply);
 	# false = deduped behind an in-flight task (caller may want to retry).
 	# Sync fallbacks (spawn chunk, no own data, missing neighbor, cap-drop)
@@ -6264,6 +6505,7 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 		"stamp": c.stamp(),
 		"band": int(c.band),
 		"nbs": nbs, "eff": eff, "eff_trust": eff_trust, "settle": settle,
+		"edit_full": bool(edit_full),  # AC-0283 P2 brightslab fix: the edit-fallback full bake
 		"ctx": ctx_w, "ms": ms_w, "ngen": _ngens_for(cx, cz),
 		# AC-0233: the dispatch wall time (the edit-lane entry carried it;
 		# the wave lane now does too) — the handoff's queue/worker split
@@ -6327,6 +6569,12 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 		hslab_defer_dedup += 1
 		_hslab_last_defer = 1
 		return false
+	# AC-0283 P2: the light gate — the 3x3x3 section box around the slab
+	# (the bake-box overhang) must be SETTLED in the engine: a slab never
+	# dispatches (and never shows) on lighting that is not calculated.
+	if star != null and not star.box_settled(cx, cz, si - 1, si + 1):
+		_hslab_last_defer = 5
+		return false
 	var tm_cap := threadmesh_max
 	if _startup_pending() and tm_cap < 9:
 		tm_cap = 9
@@ -6359,7 +6607,22 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 		ms_w = {"rects": _tm_ms_full.rects.duplicate(), "h": float(_tm_ms_full.get("h", 0.0))}
 	else:
 		ms_w = {"rects": {}}
-	var strips = _strips_for_scoped(cx, cz, y_lo, y_hi)
+	# AC-0283 P2: the star payload (the engine's SETTLED light for this
+	# slab's bake box, captured under the box gate) replaces the eff: the
+	# worker expands it into the classic light dict + the 8 margin strips
+	# (no pull kernel, no ctx strips — the gate made the bake final).
+	var strips: Dictionary
+	if star != null:
+		var pl: Dictionary = star.slab_light_payload(cx, cz, si, si)
+		if not bool(pl.get("ok", false)):
+			_hslab_last_defer = 6
+			return false
+		pl["star"] = true
+		pl["lver"] = star.box_epochs(cx, cz, si - 1, si + 1)
+		eff = pl
+		strips = {"eff": [], "blk": [], "blk_b": []}
+	else:
+		strips = _strips_for_scoped(cx, cz, y_lo, y_hi)
 	var ctx_w: Dictionary = _tm_ctx.duplicate()
 	ctx_w["eff_strips"] = strips["eff"]
 	ctx_w["blk_strips"] = strips["blk"]
@@ -6370,7 +6633,7 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 		"fl": mc.slab_copy(c.fl),
 		"stamp": c.stamp(),
 		"band": int(c.band),
-		"nbs": nbs, "eff": eff, "eff_trust": true, "settle": settle,
+		"nbs": nbs, "eff": eff, "eff_trust": true, "settle": settle or star != null,
 		"ctx": ctx_w, "ms": ms_w, "ngen": _ngens_for(cx, cz),
 		"tier": _tier_of(cx - last_pcx, cz - last_pcz),
 		"hslab": true, "si0": si, "si1": si,
@@ -6533,7 +6796,7 @@ func _collect_pool(build: bool, include_fb := false, maxb := -1, high_only := fa
 # being served. A cached EMPTY pick is trusted: a membership or readiness
 # change always bumps _pool_ver, so a matching key means a fresh scan would
 # find nothing either.
-func _pick_build_cached(maxb: int, include_fb: bool, high_only := false) -> Dictionary:
+func _pick_build_cached(maxb: int, include_fb: bool, high_only := false, skip: Dictionary = {}) -> Dictionary:
 	# AC-0262: high_only gets a suffixed key — the filter changes the pool
 	# contents for the same (pool state, window, center) tuple, and the
 	# drain's steady pass (high_only) must not serve a load-phase verdict
@@ -6546,7 +6809,8 @@ func _pick_build_cached(maxb: int, include_fb: bool, high_only := false) -> Dict
 			perf_pool_hits += 1
 			return {"e": e, "c": null, "s": slot[3], "pool_empty": slot[4]}
 		var c = chunks.get(e["key"])
-		if c != null and not c.data.is_empty() \
+		if not skip.has(e["key"]) \
+				and c != null and not c.data.is_empty() \
 				and not c.mesh_built \
 				and _build_ready(int(e["cx"]), int(e["cz"])):
 			perf_pool_hits += 1
@@ -6557,6 +6821,8 @@ func _pick_build_cached(maxb: int, include_fb: bool, high_only := false) -> Dict
 	var best_c: Node3D = null
 	var best_s := 1e30
 	for e in bp:
+		if skip.has(e["key"]):
+			continue
 		var c = chunks.get(e["key"])
 		# AC-0257: keep-high — a meshed column is skipped.
 		if c == null or c.data.is_empty() or c.mesh_built:
@@ -6696,6 +6962,13 @@ func _drain_build_queue() -> void:
 	# on top of the recenter slice work.
 	if budget > 1 and not startup and not loading_active and Time.get_ticks_msec() < _sm_move_until:
 		budget = 1
+	# AC-0283 P3 (walkfix): the walk regime (crossing period >= WALK_CROSS_PERIOD_MS;
+	# pre-first-crossing = spawn = walk behavior). Only there does the slab-unit
+	# startup 3x3 completion pass run (see below); the flight keeps the legacy
+	# break-on-defer pace (its frame budget cannot take the extra dispatch).
+	var slow_cross := _prev_cross_ms <= 0 \
+			or float(_last_cross_ms - _prev_cross_ms) >= WALK_CROSS_PERIOD_MS
+	var startup3x := startup and slow_cross
 	# AC-0160 run 2: the startup budget used to be 2x drain_budget_ms
 	# (60 ms) — but the spawn frame dispatches ALL nine 3x3 builds and each
 	# dispatch costs ~30-50 ms of main-thread strip/nbs work, so 60 ms cut
@@ -6704,6 +6977,12 @@ func _drain_build_queue() -> void:
 	# 12-unit budget is the real cap now; the time budget only bounds the
 	# trickle (post-startup) as before.
 	var budget_us := int(1e9 if startup else drain_budget_ms * 1000)
+	if startup3x:
+		# AC-0283 P3 (walkfix): the walk's slab dispatches are ~1.5-2 ms —
+		# the unbounded 1e9 let one frame run the whole 12-unit budget
+		# (~24 ms); the pass time-caps instead (the unit budget + defer cap
+		# are the secondary bounds).
+		budget_us = int(DRAIN_STARTUP_PASS_BUDGET_MS * 1000)
 	# AC-0160: windowed pool scan. The drain scans buckets 0.._drain_win_b
 	# only (spawn-fast covers the spawn ring at b1_eff+2); the trickle window
 	# grows one bucket per DRAIN_WIN_PACE_MS (wall clock — was 15 frames)
@@ -6873,6 +7152,63 @@ func _drain_build_queue() -> void:
 		_drain_units_last = units  # AC-0231
 		_col_drain_step()
 		return
+	# AC-0283 P3 (walkfix): the WALK-REGIME startup 3x3 completion pass. The
+	# Y-window (AC-0263) makes every non-tier-0 column build only its
+	# player-slab +/-1 window while the player moves; the legacy FULL-COLUMN
+	# dispatch unit baked the whole column whenever the window slab was
+	# pending, so the startup 3x3 (mesh_built = FULL probe) completed in
+	# ~9 column dispatches. The P2 slab unit broke that invariant: the 3x3's
+	# 8 windowed neighbors only ever bake their 3 window slabs, mesh_built
+	# never flips, _startup_pending stays true, _spawn_fast latches, the
+	# recenter walk never runs (no stubs) and the data feed dies — the sim
+	# disc plateaus at burst-only coverage (measured: 5 slabs/s, c3 frozen
+	# at 2-3, tg_inf 0 for 60 s). This pass restores the invariant directly:
+	# the 9 columns around the lead, probed with the FULL (non-windowed)
+	# probe, dispatched slab by slab until all 9 are mesh_built. It runs
+	# only in the walk regime (slow_cross) and only while startup (the 3x3
+	# still owes); a per-slab defer skips the column for the frame (a defer
+	# must not kill the pass — dedup/nbs/box defers are EXPECTED here); the
+	# TM-cap defer (2) stops the pass for the frame (the pool saturates and
+	# the landings free slots). Bounded by the shared unit budget + the
+	# DRAIN_STARTUP_PASS_BUDGET_MS time cap + the defer cap.
+	var _dq_skip: Dictionary = {}
+	var _dq_defers := 0
+	var x3_units := 0
+	if startup3x and budget > 0:
+		while budget > 0 and Time.get_ticks_usec() - t0 < budget_us \
+				and _dq_defers < DRAIN_DEFER_MAX_PER_FRAME:
+			var x3u := 0
+			for i3 in range(9):
+				if x3u > 0:
+					break
+				var k3 := _key(last_pcx + (i3 % 3) - 1, last_pcz + (i3 / 3) - 1)
+				if _dq_skip.has(k3):
+					continue
+				var c3 = chunks.get(k3)
+				if c3 == null or c3.data.is_empty() or c3.mesh_built:
+					continue
+				if not _build_ready(int(c3.cx), int(c3.cz)):
+					continue
+				var s3 := _hslab_best_pending(c3, false)
+				if s3 < 0:
+					continue
+				var def3 := _build_unit_hslab(c3, int(c3.cx), int(c3.cz), s3)
+				if def3:
+					_dq_skip[k3] = true
+					if _hslab_last_defer == 2:
+						_dq_defers = DRAIN_DEFER_MAX_PER_FRAME  # TM full: stop this frame
+					else:
+						_dq_defers += 1
+				else:
+					x3u = 1
+					_dq_skip[k3] = true
+			if x3u > 0:
+				budget -= 1
+				x3_units += 1
+			else:
+				break
+	if x3_units > 0:
+		units += x3_units  # the final perf block below accounts for it
 	while budget > 0:
 		if Time.get_ticks_usec() - t0 > budget_us:
 			break
@@ -6884,7 +7220,7 @@ func _drain_build_queue() -> void:
 		# pool/score and skips the rescan + rescore.
 		# AC-0262: the steady pass is high-band-only (see _collect_pool's
 		# high_only note) — the wave's entries no longer hold the top pick.
-		var bpick := _pick_build_cached(maxb, false, true)
+		var bpick := _pick_build_cached(maxb, false, true, _dq_skip)
 		var best_e: Dictionary = bpick["e"]
 		var best_c: Node3D = bpick["c"]
 		var best_s: float = bpick["s"]
@@ -6896,7 +7232,7 @@ func _drain_build_queue() -> void:
 			# _build_unit/_remove_entry). In-radius READY ALWAYS wins (this pass
 			# only runs when the first pass found nothing); the forward band is
 			# exactly 2r+1 entries, so the pass is bounded.
-			var fpick := _pick_build_cached(maxb, true)
+			var fpick := _pick_build_cached(maxb, true, false, _dq_skip)
 			if not (fpick["e"] as Dictionary).is_empty() and float(fpick["s"]) < best_s:
 				best_s = float(fpick["s"])
 				best_e = fpick["e"]
@@ -6951,7 +7287,20 @@ func _drain_build_queue() -> void:
 					# fallback (AC-0263: there is no sync build left).
 					break
 				u = 1
-		if u == 0 and (gen_budget_ms < 0 or gen_used_ms < gen_budget_ms):
+		# AC-0283 P3 (walkfix): in the walk regime the data pass ALSO runs on
+		# a build-dispatched iteration when the TG pool is fully DRAINED. The
+		# legacy unit (one full column = 24 slabs) drained the ready set in
+		# ~1 frame, so the frame flipped to data mode and the TG feed ran;
+		# at the slab unit the build lane is almost always owed (the tier-0
+		# full-column debt + the windowed window slabs) and the u==0 gate
+		# starved the forward feed to the burst train alone. Re-enqueuing on
+		# an empty TG pool keeps the 2-slot pipeline fed (~16-20 cols/s, more
+		# than the ~8 cols/s rim growth) and self-limits (the pool refills
+		# for the whole gen). The flight (fast crossings) keeps the u==0
+		# gate: its TG is already burst-fed and its 17.5 ms frame budget
+		# cannot take the extra enqueue work.
+		if (u == 0 or (slow_cross and threadgen_inflight.size() == 0)) \
+				and (gen_budget_ms < 0 or gen_used_ms < gen_budget_ms):
 			# AC-0079 round 3: scored DATA pick. The spec requires the lowest-score
 			# no-data entry (not FIFO), else forward leading-edge data only arrives
 			# after all nearer-band data drains and _build_ready stalls the forward
@@ -7819,176 +8168,11 @@ func _ngens_for(cx: int, cz: int) -> Array:
 # whose shared 2-deep boundary frame is byte-identical old->new, i.e. the
 # neighbor's import is unchanged and its re-light a provable no-op; eff only
 # ever increases, so no staleness can be masked).
-func _eff_landed(c: Node3D, old_eff: Dictionary, new_eff: Dictionary) -> void:
-	var _wpt := Time.get_ticks_usec()  # AC-0251 FACELIGHT sub-stage
-	if new_eff.is_empty():
-		_wprof_add(WP_FACELIGHT, Time.get_ticks_usec() - _wpt)
-		return
-	var changed: bool = old_eff.is_empty() or old_eff.get("arr", PackedByteArray()) != new_eff.get("arr", PackedByteArray())
-	if not changed:
-		_wprof_add(WP_FACELIGHT, Time.get_ticks_usec() - _wpt)
-		return
-	c.eff_gen += 1
-	# AC-0134 run-2 (fix-6): refresh the face-boundary cache for EVERY
-	# landed chunk — fix-5 gated this on blk_src, wrong for fix-6: a
-	# non-glow chunk's settled face is non-zero via imports, and this
-	# landing is the moment its neighborhood deps (neighbor eff_gens) can
-	# have changed. Stale entries are also rebuilt lazily at read time
-	# (_face_of). Skipped entirely for arr-unchanged landings (no gen bump).
-	var fk0 := _key(int(c.cx), int(c.cz))
-	var cur: Array = _face_blk.get(fk0, [])
-	if cur.size() != 3 or int(cur[0]) != int(c.data_gen) or not _face_deps_ok(c, cur[2]):
-		_face_blk[fk0] = [c.data_gen, _compute_face_blk(c), _face_deps(c)]
-	# fix-6: the E2 re-enqueue is NO LONGER gated on blk_src — a non-glow
-	# chunk is a RELAY: its settled face (and hence its neighbors' imports)
-	# changes when its own imported light lands. The per-side frame gate
-	# still skips byte-identical sides (perf), and AWECRAFT_E2=off still
-	# kills the whole wave (diagnostic kill switch).
-	if OS.get_environment("AWECRAFT_E2") == "off":
-		_wprof_add(WP_FACELIGHT, Time.get_ticks_usec() - _wpt)
-		return
-	var cx := int(c.cx)
-	var cz := int(c.cz)
-	var old_arr: PackedByteArray = old_eff.get("arr", PackedByteArray())
-	var new_arr: PackedByteArray = new_eff.get("arr", PackedByteArray())
-	# Per-side FRAME gate (perf, correctness-identical): a neighbor's strips
-	# read ONLY the 2-deep boundary frame on the shared side (side strips
-	# c=0/1 + corner strips), so if that frame is byte-identical old->new the
-	# neighbor's import is unchanged and its re-light is a provable no-op.
-	# This is what keeps the lava-ocean initial load from 2x-churning: a
-	# chunk-center lava pocket never reaches the boundary -> zero enqueues.
-	var ns := [[cx + 1, cz], [cx - 1, cz], [cx, cz + 1], [cx, cz - 1]]
-	# AC-0218: the BORDER COMPARE (cheap edge-value compare vs the full
-	# rebuild). A first landing (old_eff empty) is the "new column" case:
-	# every built neighbor read an EMPTY strip from each side while the
-	# column was missing (margin 0, no injection — _strips_for), so the
-	# before-state edge values are all zero. Compare them against the NEW
-	# edge values (_frame_nonzero — the 2-deep eff frame toward that side):
-	# only mark light-dirty (re-enqueue the neighbor for the full light
-	# rebuild + remesh) when the edge values DIFFER. A zero frame means the
-	# neighbor's import is byte-identical (the bake box pre-zeros the
-	# margin; the block face is subsumed — arr >= blk, the face row is
-	# inside the 2-deep frame — so cand = 0 - att <= 0 cannot inject) and
-	# its re-light is a PROVABLE NO-OP: the mark is skipped. Any nonzero
-	# edge value (an open-sky frame row, block light) differs from the
-	# before state and marks exactly as before. Steady-state landings
-	# (old_eff non-empty) keep the existing per-side frame gate — that gate
-	# IS the before/after border compare for re-lights (old frame vs new
-	# frame), unchanged.
-	var first_landing := old_eff.is_empty()
-	for side in range(4):
-		var side_changed: bool
-		if first_landing:
-			side_changed = _frame_nonzero(new_arr, side)
-		else:
-			side_changed = _frame_changed(old_arr, new_arr, side)
-		# AC-0218: the border-compare verdicts (R16 dirty-count evidence).
-		if first_landing:
-			if side_changed:
-				perf_e2_first_marks += 1
-			else:
-				perf_e2_first_skips += 1
-		else:
-			if side_changed:
-				perf_e2_side_changed += 1
-			else:
-				perf_e2_side_unchanged += 1
-		if not side_changed:
-			continue
-		var nkey := _key(int(ns[side][0]), int(ns[side][1]))
-		var nc = chunks.get(nkey)
-		if nc == null or nc.data.is_empty() or not nc.mesh_built:
-			continue
-		_eff_cache_evict(nkey)
-		if not light_pending_set.has(nkey):
-			light_pending.append(nkey)
-			light_pending_set[nkey] = true
-			perf_e2_marks += 1
-	flush_active = true
-	_wprof_add(WP_FACELIGHT, Time.get_ticks_usec() - _wpt)
-
-
-# side 0=E (our lx 14,15) 1=W (lx 0,1) 2=S (lz 14,15) 3=N (lz 0,1); arrays
-# are 16x16xh, idx = (y<<8) | (lz<<4) | lx.
-func _frame_changed(a: PackedByteArray, b: PackedByteArray, side: int) -> bool:
-	if a.size() != b.size():
-		return true
-	var h := a.size() / 256
-	for y in range(h):
-		var row := y << 8
-		if side == 0:
-			for lz in range(16):
-				var i := row | (lz << 4) | 14
-				if a[i] != b[i] or a[i | 1] != b[i | 1]:
-					return true
-		elif side == 1:
-			for lz in range(16):
-				var i := row | (lz << 4)
-				if a[i] != b[i] or a[i | 1] != b[i | 1]:
-					return true
-		elif side == 2:
-			for lx in range(16):
-				var i := row | (14 << 4) | lx
-				if a[i] != b[i] or a[i | 16] != b[i | 16]:
-					return true
-		else:
-			for lx in range(16):
-				var i := row | lx
-				if a[i] != b[i] or a[i | 240] != b[i | 240]:
-					return true
-	return false
-
-
-# AC-0218: the cheap border compare for a FIRST landing (the "new column"
-# case of _eff_landed). Returns true when the new column's 2-deep eff frame
-# toward `side` differs from the before-state — the EMPTY strip every built
-# neighbor read while the column was missing (margin 0, no injection —
-# _strips_for), i.e. ALL ZERO. Same cell set as _frame_changed (side strips
-# c=0/1). A zero frame is a PROVABLE NO-OP for the neighbor: the bake box
-# pre-zeros its margin (an all-zero strip writes zeros), and eff = max(sky,
-# blk) so a zero frame means zero block light on the border too — the face
-# row is inside the 2-deep frame (no separate face scan needed) and
-# cand = 0 - att <= 0 can never raise — so the neighbor's light and mesh are
-# byte-identical and its full re-light + remesh is skipped. Scans top-down:
-# the open-sky rows above the column top (eff 15 — rows above the column's
-# max non-air y are air open to the sky) exit after the first row on
-# surface chunks; only a fully dark enclosed frame scans to the bottom and
-# earns the skip it justifies. Later border changes are still caught: any
-# frame value rising 0->n requires a re-light, whose _eff_landed re-runs the
-# steady-state old-vs-new gate (eff only ever increases — no staleness).
-func _frame_nonzero(arr: PackedByteArray, side: int) -> bool:
-	var h := arr.size() / 256
-	if side == 0:
-		for y in range(h - 1, -1, -1):
-			var row := y << 8
-			for lz in range(16):
-				var i := row | (lz << 4) | 14
-				if arr[i] != 0 or arr[i | 1] != 0:
-					return true
-	elif side == 1:
-		for y in range(h - 1, -1, -1):
-			var row := y << 8
-			for lz in range(16):
-				var i := row | (lz << 4)
-				if arr[i] != 0 or arr[i | 1] != 0:
-					return true
-	elif side == 2:
-		for y in range(h - 1, -1, -1):
-			var row := y << 8
-			for lx in range(16):
-				var i := row | (14 << 4) | lx
-				if arr[i] != 0 or arr[i | 16] != 0:
-					return true
-	else:
-		for y in range(h - 1, -1, -1):
-			var row := y << 8
-			for lx in range(16):
-				var i := row | lx
-				if arr[i] != 0 or arr[i | 240] != 0:
-					return true
-	return false
-
-
+# AC-0283 P2: the landing E2 wave (_eff_landed + the _frame_changed /
+# _frame_nonzero side gates) is retired — the settled-column drain
+# (_star_settled_drain -> _star_e2_rearm) runs the same per-slab
+# frame gate against the engine (C++ star.frame_diff) on the SETTLED
+# light, and the face/eff caches ride the eff_gen deps (lazy).
 func _eff_cache_put(key: String, c: Node3D, eff: Dictionary, ngen = null) -> void:
 	if eff.is_empty():
 		return
@@ -8152,8 +8336,8 @@ func _enter_candidate(key: String, c: Node3D) -> bool:
 		# Pending mesh-bound work on an out-of-set chunk is stale; re-entry
 		# re-marks it dirty via the normal paths. The eff cache stays — data
 		# is kept, so the cached light is still valid on re-entry.
-		light_pending_set.erase(key)
-		light_pending.erase(key)
+		# (AC-0283 P2: the light-pending flush queue is gone — the remesh
+		# lane's entries self-expire at dispatch (the chunk check).)
 		fluid_dirty.erase(key)
 		tex_refresh.erase(key)
 		_col_pending_set.erase(key)
@@ -8193,10 +8377,14 @@ func _free_chunk_key(key: String) -> void:
 	var c: Node3D = chunks[key]
 	_queue_chunk_save(c)  # AC-0155: full column to disk on evict (stubs skipped)
 	_banana_evict(key)  # AC-0040: drop this chunk's hanging-fruit entries
+	# AC-0283 P2: the engine evicts with the chunk (bounded memory — the
+	# live set only; a reloaded column re-seeds at its data landing).
+	if star != null:
+		star.evict_column(int(c.cx), int(c.cz))
+	star_owed.erase(key)
+	star_remesh.erase(key)
 	chunks.erase(key)
 	queued_keys.erase(key)
-	light_pending_set.erase(key)
-	light_pending.erase(key)
 	fluid_dirty.erase(key)
 	tex_refresh.erase(key)
 	_eff_cache_evict(key)
@@ -8304,8 +8492,10 @@ func _reentry_flip_high(c: Node3D, key: String) -> void:
 		if int(c.high_stamps.get(si, -1)) != int(c.data_gen):
 			continue  # stale stored high (the lane rebuilds it)
 		# AC-0263 spec: a stored high that never saw its first flush stays
-		# hidden (the flush settles + shows it).
-		if bool(c.light_settled):
+		# hidden (the flush settles + shows it). AC-0283 P2: per-slab — the
+		# settled-bake mark (the engine gate made it final) decides, not the
+		# chunk-level flag.
+		if bool(c.flush_slabs.has(si)):
 			c.high_slab_visible(si, true)
 		if c.has_low_si(si):
 			c.low_slab_visible(si, false)  # stored (flip on the next demote)
@@ -8385,6 +8575,7 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	# (up to REBUILD_COVER_L1 chunks behind, forced-refresh cadence).
 	_last_recenter_ms = _now_ms
 	if _cross > 0:
+		_prev_cross_ms = _last_cross_ms
 		_last_cross_ms = _now_ms
 	# AC-0277: the fast predicate measures between PLAYER chunks (pcx here
 	# is the recenter CENTER - possibly the ahead target - and must not be
@@ -9021,6 +9212,14 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 		_dirty_front(_key(cx, cz + 1), y)
 	_eff_cache_evict(_key(cx, cz))
 	_mark_light_around(cx, cz)
+	# AC-0283 P2: the engine sees the edit (the two-phase re-seed — the
+	# landing-order healing covers an unseeded face) and the mesh side
+	# re-arms (the affected slabs re-bake on the settled light).
+	if star != null:
+		var _staredit: bool = star.on_edit(x, y, z, id)
+		if not bool(_staredit):
+			_star_seed_column(c)
+		_star_rearm_edit(c, cx, cz, y >> 4)
 	if _fluid_near(x, y, z):
 		_fluid_write = true
 		# AC-0244 (2026-09-09 user bug): natural (worldgen) water is fl=0 -
@@ -9058,19 +9257,53 @@ func _wake_fluid_around(x: int, y: int, z: int) -> void:
 			fluid_wet[_key(ncx, ncz)] = true
 
 func _mark_light_around(cx: int, cz: int) -> void:
+	# AC-0283 P2: repurposed — the legacy 3x3 light_dirty mark (the flush
+	# wave's trigger) is gone; the engine + the remesh lane own the
+	# re-light. This is the BULK version (the apply-edits wave — the
+	# per-cell sections are unknown): the own column's stamped slabs + the
+	# 3x3 neighbors' stamped slabs re-arm (the per-edit call sites use
+	# _star_rearm_edit with the section range).
+	if star == null:
+		return
+	var key := _key(cx, cz)
+	var c = chunks.get(key)
+	if c == null:
+		return
+	for si in range(24):
+		if int(c.high_stamps.get(si, -1)) == int(c.data_gen) and bool(c.flush_slabs.has(si)):
+			c.flush_slabs.erase(si)
+			_star_remesh_add(key, si)
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			if dx == 0 and dz == 0:
+				continue
+			var nkey := _key(cx + dx, cz + dz)
+			var nc = chunks.get(nkey)
+			if nc == null or not bool(nc.mesh_built):
+				continue
+			for si in range(24):
+				if int(nc.high_stamps.get(si, -1)) == int(nc.data_gen) and bool(nc.flush_slabs.has(si)):
+					nc.flush_slabs.erase(si)
+					_star_remesh_add(nkey, si)
+	_star_update_light_settled(c)
+
+func _mark_fluid_around(cx: int, cz: int, si := -1) -> void:
+	# AC-0283 P2: the mark carries the slab range (si = the fluid cell's
+	# slab, the boundary slab included; -1 = the whole column — the
+	# apply-edits wave). The remesh lane drains it per slab.
 	for dx in range(-LIGHT_NEIGHBOR, LIGHT_NEIGHBOR + 1):
 		for dz in range(-LIGHT_NEIGHBOR, LIGHT_NEIGHBOR + 1):
 			var k := _key(cx + dx, cz + dz)
-			# AC-0218: count only NEW marks (an already-dirty key is a no-op
-			# re-mark; the counter is the "dirty count" the R16 arm reports).
-			if not light_dirty.has(k):
-				light_dirty[k] = true
-				perf_lightdirty_marks += 1
-
-func _mark_fluid_around(cx: int, cz: int) -> void:
-	for dx in range(-LIGHT_NEIGHBOR, LIGHT_NEIGHBOR + 1):
-		for dz in range(-LIGHT_NEIGHBOR, LIGHT_NEIGHBOR + 1):
-			fluid_dirty[_key(cx + dx, cz + dz)] = true
+			var lo := 0
+			var hi := 23
+			if si >= 0:
+				lo = si
+				hi = mini(23, si + 1)
+			var old: Variant = fluid_dirty.get(k, null)
+			if old == null:
+				fluid_dirty[k] = [lo, hi]
+			else:
+				fluid_dirty[k] = [mini(int(old[0]), lo), maxi(int(old[1]), hi)]
 
 func _record_edit(cx: int, cz: int, fi: int, b: int, f: int) -> void:
 	var key := _key(cx, cz)
@@ -9219,10 +9452,17 @@ func _queue_chunk_save(c: Node3D) -> void:
 
 func _save_light_for(c: Node3D, key: String) -> Dictionary:
 	var out := {}
-	if light_pending_set.has(key) or light_dirty.has(key):
+	# AC-0283 P2: the guard is the engine's — save only a SETTLED light
+	# (the column's light gate closed) with no pending re-bake (the remesh
+	# lane would supersede it). The saved light is IGNORED on load (the
+	# engine recomputes from the data) — the disk writes stay until
+	# AC-0287.
+	if star != null and (star_remesh.has(key) or not star.column_settled(int(c.cx), int(c.cz))):
 		return out
 	var cached = _eff_cache.get(key)
 	if cached == null or int(c.data_gen) != int(cached.stamp[0]) or int(c.fl_gen) != int(cached.stamp[1]):
+		return out
+	if cached.get("ngen", null) != null and cached.get("ngen") != _ngens_for(int(c.cx), int(c.cz)):
 		return out
 	var full: Dictionary = cached.eff
 	var arr: PackedByteArray = full.get("arr", PackedByteArray())
@@ -9572,6 +9812,11 @@ func _io_read_handoff(e: Dictionary) -> void:
 	if bool(e.get("apply_edits", false)):
 		_apply_edits_to_chunk(c)
 	_apply_pending_leaf_decay(c)  # AC-0270: restore the saved timers (disk columns too)
+	# AC-0283 P2: seed ALL sections (post-edits data). The SAVED LIGHT in
+	# the column (c.saved_light) is IGNORED for builds — the engine
+	# recomputes from the data (the saved-light disk writes stay until
+	# AC-0287).
+	_star_seed_column(c)
 
 func surface_top(x: int, z: int) -> int:
 	for y in range(Data.HEIGHT - 1, -1, -1):
@@ -10028,7 +10273,15 @@ func set_fluid(x: int, y: int, z: int, id: int, lvl: int, create := false) -> vo
 	_fluid_write = true
 	if _fluidprobe:
 		_fp_writes += 1
-	_mark_fluid_around(cx, cz)
+	_mark_fluid_around(cx, cz, y >> 4)
+	# AC-0283 P2: fluids carry light (water att 3, lava glow 15) — a
+	# fluid write is a data edit for the engine (the id changed), same
+	# re-arm as set_block.
+	if star != null:
+		var _staredit: bool = star.on_edit(x, y, z, id)
+		if not bool(_staredit):
+			_star_seed_column(c)
+		_star_rearm_edit(c, cx, cz, y >> 4)
 	_record_edit(cx, cz, i, id, lvl)
 	if lvl > 0:
 		fluid_wet[_key(cx, cz)] = true

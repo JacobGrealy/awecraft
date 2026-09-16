@@ -2329,11 +2329,110 @@ public:
 		Nv nv;
 		parse_nbs(nbs, nv);
 
-		// Light: cached eff (has "mask") is consumed as-is; else recompute
-		// through the SHARED C++ pull kernel (byte-identical to the
-		// AweLighting class — lightprobe 100% exact).
+		// Light: three sources — (AC-0283 P2) the STAR payload (the
+		// AweStarlight engine's settled nibbles, captured at dispatch under
+		// the 3x3x3 box gate — expanded here on the worker into the classic
+		// light dict + the 8 margin strips: no pull kernel, no ctx strips,
+		// no recompute — the gate made the bake final); the cached eff
+		// (has "mask", consumed as-is); else recompute through the SHARED
+		// C++ pull kernel (byte-identical to the AweLighting class —
+		// lightprobe 100% exact; the meshprobe arm + the no-engine
+		// fallback ride this path).
 		Dictionary light = eff;
-		bool light_recomputed = light.is_empty() || (light.get("mask", Variant()).get_type() == Variant::NIL);
+		bool star = (bool)light.get("star", false);
+		std::vector<std::vector<uint8_t>> star_strips(8);
+		bool light_recomputed = !star && (light.is_empty() || (light.get("mask", Variant()).get_type() == Variant::NIL));
+		if (star) {
+			int64_t tl = now_msec();
+			PackedByteArray effc = light.get("eff", PackedByteArray());
+			PackedByteArray blkc = light.get("blk", PackedByteArray());
+			int has_glow = (int)light.get("has_glow", 0);
+			int blk_inj = (int)light.get("blk_inj", 0);
+			int w_lo = (int)light.get("w_lo", 0);
+			Array side = light.get("side", Array());
+			Array corner = light.get("corner", Array());
+			// the mask: (blk > 0) iff (has_glow || blk_inj), else all-zero
+			// (lighting.cpp 354-358) — full 256*h (mask_sample's contract)
+			bool has_blk = (has_glow || blk_inj) && blkc.size() == (int)(256 * (size_t)h);
+			PackedByteArray mask;
+			mask.resize((size_t)256 * h);
+			PackedInt32Array ring;
+			if (has_blk) {
+				const uint8_t *bp = blkc.ptr();
+				uint8_t *mp = mask.ptrw();
+				for (size_t i = 0; i < (size_t)256 * h; i++)
+					mp[i] = bp[i] > 0 ? 1 : 0;
+				// the AC-0091 19-bit pack (lighting.cpp 359-379: side
+				// 0=E x=15, 1=W x=0, 2=N z=15, 3=S z=0)
+				for (int y = 0; y < h; y++) {
+					size_t row = (size_t)y * 256;
+					for (int t2 = 0; t2 < 16; t2++) {
+						int yy = y * 16 + t2;
+						int lv0 = bp[row | (t2 << 4) | 15];
+						if (lv0 > 0)
+							ring.append((0 << 17) | (yy << 4) | lv0);
+						int lv1 = bp[row | (t2 << 4)];
+						if (lv1 > 0)
+							ring.append((1 << 17) | (yy << 4) | lv1);
+						int lv2 = bp[row | (15 << 4) | t2];
+						if (lv2 > 0)
+							ring.append((2 << 17) | (yy << 4) | lv2);
+						int lv3 = bp[row | t2];
+						if (lv3 > 0)
+							ring.append((3 << 17) | (yy << 4) | lv3);
+					}
+				}
+			}
+			Dictionary ld;
+			ld["mn"] = Vector3i(cx * SIZE, 0, cz * SIZE);
+			ld["w"] = (int64_t)16;
+			ld["d"] = (int64_t)16;
+			ld["arr"] = effc;
+			ld["blk_src"] = has_glow;
+			ld["mask"] = mask;
+			ld["ring"] = ring;
+			light = ld; // res["light"] = this (eff cache / last_eff / save shape)
+			// the 8 margin strips (the bake_box layout): zero-fill full
+			// height, fill the payload rows [w_lo, w_lo+rows) — side
+			// idx = c*16*h + y*16 + t (c=0 inner, c=1 outer), corner
+			// idx = (a*2+b)*h + y
+			for (int k = 0; k < 4; k++)
+				star_strips[k].assign((size_t)2 * 16 * h, 0);
+			for (int k = 4; k < 8; k++)
+				star_strips[k].assign((size_t)4 * h, 0);
+			for (int k = 0; k < 4 && k < (int)side.size(); k++) {
+				PackedByteArray sp = side[k];
+				int sprows = (int)sp.size() / 32;
+				for (int r = 0; r < sprows; r++) {
+					int y = w_lo + r;
+					if (y < 0 || y >= h)
+						continue;
+					const uint8_t *sr = sp.ptr() + (size_t)r * 32;
+					for (int t = 0; t < 16; t++) {
+						star_strips[k][(size_t)y * 16 + t] = sr[t];
+						star_strips[k][(size_t)16 * h + (size_t)y * 16 + t] = sr[16 + t];
+					}
+				}
+			}
+			for (int k = 0; k < 4 && k < (int)corner.size(); k++) {
+				PackedByteArray cp = corner[k];
+				int cprows = (int)cp.size() / 4;
+				for (int r = 0; r < cprows; r++) {
+					int y = w_lo + r;
+					if (y < 0 || y >= h)
+						continue;
+					const uint8_t *cr = cp.ptr() + (size_t)r * 4;
+					for (int m = 0; m < 4; m++)
+						star_strips[4 + k][(size_t)m * h + y] = cr[m];
+				}
+			}
+			C.eff_strips.n = 8;
+			for (int k = 0; k < 8; k++) {
+				C.eff_strips.ptr[k] = star_strips[k].data();
+				C.eff_strips.size[k] = (int)star_strips[k].size();
+			}
+			ph_light = now_msec() - tl;
+		}
 		if (light_recomputed) {
 			int64_t tl = now_msec();
 			// The kernel consumes the raw strip Arrays exactly like the
