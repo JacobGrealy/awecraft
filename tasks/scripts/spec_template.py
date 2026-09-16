@@ -7,7 +7,7 @@ Usage:
 Writes tasks/AC-NNNN/spec.html (or --out PATH) as a scaffold with two kinds of
 sections:
 
-  AUTO  — generated from TASKS.yaml and tasks/HARNESS.md. Labeled
+  AUTO  — generated from TASKS.yaml and godot/HARNESS.md. Labeled
            "AUTO (… do not hand-edit)".
 
 Slim vs full: the DEFAULT output is slim — the big AUTO tables (Data.* constants,
@@ -50,7 +50,7 @@ TASKS_DIR = Path(__file__).resolve().parent.parent
 ENV_FILE = "AWECRAFT_TASKS_FILE"
 DATA_GD = REPO_ROOT / "godot" / "autoload" / "data.gd"
 GEN_GD = REPO_ROOT / "godot" / "world" / "generator.gd"
-HARNESS = TASKS_DIR / "HARNESS.md"
+HARNESS = REPO_ROOT / "godot" / "HARNESS.md"
 
 ID_RE = re.compile(r"^AC-(\d{4,})$")
 
@@ -294,7 +294,7 @@ def _build_html(task, task_id, full=False):
 
     # ---- Builder gates (AUTO — what Run-2 runs in-session) ----
     a('<h2>Builder gates (Run-2, in-session)</h2>')
-    a('<div class="auto"><b>AUTO (tiered per tasks/HARNESS.md §3 — do not hand-edit)</b></div>')
+    a('<div class="auto"><b>AUTO (tiered per godot/HARNESS.md §3 — do not hand-edit)</b></div>')
     a('<div class="auto"><b>G0</b> — <code>env HOME=/tmp/dsh_home godot --headless '
       '--path godot --quit</code> exits 0 with <b>zero</b> <code>SCRIPT ERROR</code> '
       'lines.</div>')
@@ -305,7 +305,9 @@ def _build_html(task, task_id, full=False):
       '~30 s total. The task-specific probe mode (if this spec defines one, '
       'env-gated, headless ≤ 60 s) runs here too.</div>')
     a('<div class="auto"><b>RENDER</b> — ≤ 1 render at <code>AWECRAFT_RADIUS=1</code> '
-      '(xvfb, gl_compatibility), PNG under <code>tasks/AC-NNNN/</code>.</div>')
+      '(xvfb, gl_compatibility — a PROXY renderer that cannot show Forward+-only '
+      'features such as DOF; see <code>godot/HARNESS.md</code> §2), PNG under '
+      '<code>tasks/AC-NNNN/</code>.</div>')
     a('<div class="auto"><b>EXIT</b> — after G0+SMOKE(+probe)+≤1 render the builder '
       'writes results + continuity and EXITS. The heavy gates below are the '
       'coordinator&#39;s background job — the builder never runs them.</div>')
@@ -342,7 +344,7 @@ def _build_html(task, task_id, full=False):
     # ---- RESULT shapes (AUTO; slim = path pointer, --full = table) ----
     a('<h2>Expected RESULT shapes (default battery + genhash)</h2>')
     if full:
-        a('<div class="auto"><b>AUTO (rows pulled from tasks/HARNESS.md §1 — do not '
+        a('<div class="auto"><b>AUTO (rows pulled from godot/HARNESS.md §1 — do not '
           'hand-edit)</b></div>')
         if header and hrows:
             a("<table><tr><th>mode</th><th>key RESULT fields</th><th>typical wall</th></tr>")
@@ -359,15 +361,15 @@ def _build_html(task, task_id, full=False):
                   % (mode, escape(fields), escape(wall)))
             a("</table>")
         else:
-            a("<p class='note'>HARNESS.md mode table not found — regenerate after tasks/HARNESS.md exists.</p>")
+            a("<p class='note'>HARNESS.md mode table not found — regenerate after godot/HARNESS.md exists.</p>")
     else:
         a('<div class="auto"><b>AUTO (paths only — the RESULT shapes live in '
-          '<code>tasks/HARNESS.md</code> §1; inline them with <code>--full</code>)</b></div>')
+          '<code>godot/HARNESS.md</code> §1; inline them with <code>--full</code>)</b></div>')
         a("<ul>")
         a("<li>Battery arms: <code>player</code> / <code>interact</code> / "
           "<code>light</code> / <code>fluids</code> / <code>buckets</code> / "
           "<code>genhash</code> — key fields + ok-conditions per mode in "
-          "<code>tasks/HARNESS.md</code> §1.</li>")
+          "<code>godot/HARNESS.md</code> §1.</li>")
         a("<li>Heavy modes: <code>boundary</code>, <code>recprobe</code>, "
           "<code>perf</code>, <code>minfo</code>, <code>pickorder</code> — §2.</li>")
         a("</ul>")
@@ -375,7 +377,7 @@ def _build_html(task, task_id, full=False):
     # ---- Known-stable values (AUTO; slim = path pointer, --full = table) ----
     a('<h2>Known-stable gate values</h2>')
     if full:
-        a('<div class="auto"><b>AUTO (from tasks/HARNESS.md §3, else boilerplate — verify '
+        a('<div class="auto"><b>AUTO (from godot/HARNESS.md §3, else boilerplate — verify '
           'fresh on any fluids/world-touching change)</b></div>')
         if known:
             a("<table><tr><th>value</th><th>fresh result (2026-08-24)</th><th>established by</th></tr>")
@@ -390,7 +392,7 @@ def _build_html(task, task_id, full=False):
               "genhash 25/25 — <b>verify fresh</b> (HARNESS.md §3 not parsed).</p>")
     else:
         a('<div class="auto"><b>AUTO (paths only — the anchor table lives in '
-          '<code>tasks/HARNESS.md</code> §3: sea 2730/2730 · backed 1406/1406 · '
+          '<code>godot/HARNESS.md</code> §3: sea 2730/2730 · backed 1406/1406 · '
           'sea_stable true · water_on_lava 25 / sideways 9 · torch 14 · genhash '
           '25/25; verify fresh on any fluids/world-touching change; inline with '
           '<code>--full</code>)</b></div>')
