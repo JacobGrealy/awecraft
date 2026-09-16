@@ -712,6 +712,88 @@ def queue_move(data, task_id, to_index):
     return True
 
 
+def backlog_ids(data):
+    """Ids of backlog tasks: not done/cancelled and not in queue, in intake order."""
+    queue_set = set(data.get("queue") or [])
+    ids = []
+    for item in (data.get("intake") or []):
+        if not isinstance(item, dict):
+            continue
+        tid = item.get("id")
+        if not isinstance(tid, str) or not ID_RE.match(tid):
+            continue
+        if item.get("status") in ("done", "cancelled"):
+            continue
+        if tid in queue_set:
+            continue
+        ids.append(tid)
+    return ids
+
+
+def backlog_reorder(data, ordered_ids):
+    """Reorder backlog items within intake to match `ordered_ids`.
+
+    Backlog = tasks with status not in done/cancelled and id not in queue.
+    `ordered_ids` must be a permutation of the current backlog set; the
+    intake positions occupied by backlog entries are permuted to reflect the
+    new order, while queue/done entries stay in place. Returns True if changed.
+    """
+    cur = backlog_ids(data)
+    ordered = list(ordered_ids or [])
+    if set(ordered) != set(cur) or len(ordered) != len(cur):
+        raise TaskError("backlog reorder must be a permutation of the current backlog")
+    for tid in ordered:
+        if find_task(data, tid) is None:
+            raise NotFound("task %s not found" % tid)
+    if ordered == cur:
+        return False
+    intake = list(data.get("intake") or [])
+    queue_set = set(data.get("queue") or [])
+    # map backlog id -> item object (only the backlog-qualifying entry per id)
+    by_id = {}
+    for item in intake:
+        if not isinstance(item, dict):
+            continue
+        tid = item.get("id")
+        if tid not in set(cur):
+            continue
+        if item.get("status") in ("done", "cancelled"):
+            continue
+        if tid in queue_set:
+            continue
+        # first qualifying entry wins; duplicates with same id but not qualifying are ignored
+        if tid not in by_id:
+            by_id[tid] = item
+    indices = [i for i, item in enumerate(intake)
+               if isinstance(item, dict)
+               and item.get("id") in set(cur)
+               and item.get("status") not in ("done", "cancelled")
+               and item.get("id") not in queue_set]
+    for idx, tid in zip(indices, ordered):
+        intake[idx] = by_id[tid]
+    data["intake"] = intake
+    _bump_meta(data)
+    return True
+
+
+def backlog_move(data, task_id, to_index):
+    """Move `task_id` to `to_index` (0-based) inside the backlog order."""
+    cur = backlog_ids(data)
+    if task_id not in cur:
+        raise NotFound("task %s not in backlog" % task_id)
+    try:
+        to_index = int(to_index)
+    except (TypeError, ValueError):
+        raise TaskError("to_index must be an integer")
+    to_index = max(0, min(to_index, len(cur) - 1))
+    cur_idx = cur.index(task_id)
+    if cur_idx == to_index:
+        return False
+    cur.pop(cur_idx)
+    cur.insert(to_index, task_id)
+    return backlog_reorder(data, cur)
+
+
 def queue_top(data):
     """The next live item: first queue entry (queue now contains only live tasks)."""
     queue = data.get("queue") or []

@@ -27,6 +27,9 @@ Standing process → `godot/COORDINATOR.md` (trust builder light gates, coordina
 When filing a task, `notes` must have two sections: `1) User Story` (high-level plain language what the change should accomplish for the player) + `2) Technical Details` (files/lines/AC refs, verify steps).
 All agents MUST mutate the task list only via `python3 tasks/scripts/tasks.py <cmd>`; raw edits to tasks/TASKS.yaml are forbidden (it is the single-writer API file).
 
+## Task decomposition
+When a task is large and has clear boundaries, the coordinator splits it into smaller sub-tasks (named pieces in order, e.g. P1/P2/P3/P4 of a ticket) and works them one at a time — each piece is delegated to a single blocking subagent, gated, and committed before the next piece starts. Split whenever the boundaries are clear; do not force it on a task that is one coherent change.
+
 ## Task status
 Run `python3 tasks/scripts/tasks.py next` — `godot/CONTINUITY.md` §6 is authoritative. Report running servers with both `localhost` and LAN addresses.
 

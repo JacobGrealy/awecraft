@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-15T13:35
+  updated_at: 2026-09-16T08:17
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -8,13 +8,13 @@ queue:
 - AC-0284
 - AC-0286
 - AC-0287
-- AC-0294
+- AC-0293
 - AC-0288
 - AC-0289
 - AC-0290
 - AC-0291
 - AC-0292
-- AC-0293
+- AC-0294
 - AC-0093
 - AC-0038
 - AC-0039
@@ -4400,11 +4400,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-23T23:41
-  updated_at: 2026-09-11T13:01
-  completed_at: null
+  updated_at: 2026-09-16T08:15
+  completed_at: 2026-09-16T08:15
   waiting_on: null
   parent_id: null
   notes: "1) User Story: As a player I want the held item/hand to always render on top of the world (Minecraft-style)\
@@ -4967,11 +4967,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-24T10:59
-  updated_at: 2026-08-31T16:57
-  completed_at: null
+  updated_at: 2026-09-16T08:14
+  completed_at: 2026-09-16T08:14
   waiting_on: null
   parent_id: null
   notes: "1) User Story: As a player I want transparent objects to not hide what is behind them — if a\
@@ -5974,11 +5974,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-29T04:36
-  updated_at: 2026-08-31T16:45
-  completed_at: null
+  updated_at: 2026-09-16T08:14
+  completed_at: 2026-09-16T08:14
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I do not want random holes where a chunk never appears after generation.
@@ -6732,17 +6732,21 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-08-30T14:13
-  updated_at: 2026-08-30T14:13
-  completed_at: null
+  updated_at: 2026-09-16T08:13
+  completed_at: 2026-09-16T08:13
   waiting_on: AC-0152
   parent_id: null
   notes: 'Post-LOD shape upgrade: replace 2D h = 105.2 + c*36.4 + h*52 (+ridge) per x,z + y=5..h cave
     punch (nc1/nc2) with 3D density(x,y,z) >0 rock else air/water per y. Enables overhangs/floating islands,
     caves as shape not holes. Keep 384 high, AC-0152 bands still LOD. Depends AC-0152.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-09-16T08:13
+    updated_at: null
+    text: '[user] superseded by new task in cave series'
 - id: AC-0158
   title: 20hz-diamond-game-tick
   source: user
@@ -8528,11 +8532,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: cancelled
+  status: done
   labels: []
   created_at: 2026-09-03T09:55
-  updated_at: 2026-09-09T14:00
-  completed_at: 2026-09-09T14:00
+  updated_at: 2026-09-16T08:17
+  completed_at: 2026-09-16T08:16
   waiting_on: null
   parent_id: AC-0165
   notes: '1) User Story: As a developer I want the C++ .so (libchunkio.so) to load cleanly in every environment
@@ -10736,12 +10740,12 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels:
   - godot
   created_at: 2026-09-09T08:30
-  updated_at: 2026-09-09T08:30
-  completed_at: null
+  updated_at: 2026-09-16T08:14
+  completed_at: 2026-09-16T08:14
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player breaking a block next to or under water I want the water to move
@@ -10887,7 +10891,7 @@ intake:
   - godot
   - crash
   created_at: 2026-09-09T14:10
-  updated_at: 2026-09-09T14:10
+  updated_at: 2026-09-16T08:15
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -10903,6 +10907,15 @@ intake:
     included slab_cell). Investigate slab handoff lifetime in gdext (who frees the old slab, when; is
     the swap atomic for readers) and add a regression arm that hammers recenter + get_block during heavy
     gen.'
+  comments:
+  - id: 1
+    created_at: 2026-09-16T08:15
+    updated_at: null
+    text: '[agent] not sure if this is still as issue or not, lot of changes since this was filed'
+  - id: 2
+    created_at: 2026-09-16T08:15
+    updated_at: null
+    text: '[agent] not sure if this is still as issue or not, lot of changes since this was filed'
 - id: AC-0249
   title: title-screen-build-stamp
   source: user

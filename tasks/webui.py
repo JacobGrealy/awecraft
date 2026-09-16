@@ -244,6 +244,22 @@ class Handler(BaseHTTPRequestHandler):
         body["message"] = "Moved" if changed else "No change"
         self._send(200, "application/json", json.dumps(body))
 
+    def _api_backlog_reorder(self, form):
+        todos = tasks_lib.load_tasks(STATE["yaml_path"])
+        order = form.get("order", "")
+        ids = [x.strip() for x in order.split(",") if x.strip()]
+        changed = tasks_lib.backlog_reorder(todos, ids)
+        body = self._persist(todos)
+        body["message"] = "Reordered" if changed else "No change"
+        self._send(200, "application/json", json.dumps(body))
+
+    def _api_backlog_move(self, form):
+        todos = tasks_lib.load_tasks(STATE["yaml_path"])
+        changed = tasks_lib.backlog_move(todos, form.get("id", ""), form.get("to", "0"))
+        body = self._persist(todos)
+        body["message"] = "Moved" if changed else "No change"
+        self._send(200, "application/json", json.dumps(body))
+
     # ------------------------------------------------------------- helpers
     def _serve_static(self, rel):
         """Serve a file under the task folder store (real tasks/ dir)."""
