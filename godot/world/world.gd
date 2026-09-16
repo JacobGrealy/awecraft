@@ -5294,6 +5294,7 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	var gdata: PackedByteArray = WorldGen.generate(cx, cz, Game.world_seed)
 	var gres: Dictionary = WorldGen.apply_banana_trees(gdata, cx, cz, Game.world_seed, Data.HEIGHT)
 	c.data_landed(gdata, PackedByteArray())
+	c.no_caves = false
 	_pool_touch()  # AC-0217: sync data landed on a queued entry
 	_banana_register(cx, cz, gres["fruits"])
 	gen_count += 1
@@ -5324,7 +5325,18 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 # 0/1 always keep the full AC-0215 density field (caves exact where the
 # player can see them).
 func _gen_skip_flag(cx: int, cz: int) -> int:
-	var b := band_of(cx - last_pcx, cz - last_pcz)
+	var dx := cx - last_pcx
+	var dz := cz - last_pcz
+	# AC-0284a: the HALO band (the meshed far band — draw tier 2) is
+	# skip-generated: its 4x4 avg + heightmap sky draw never shows caves
+	# (the skip path keeps surface/ore/biome/top-block exact); the marker
+	# (no_caves) rides the column so a real-band landing schedules the
+	# full regen. Taxi-only rule (no frustum test — the halo IS the
+	# meshed far band). Tier-0 columns are REAL (full fidelity) — never
+	# skipped. The offscreen rule below is untouched.
+	if _lod_tier_of(dx, dz) == 2:
+		return 1
+	var b := band_of(dx, dz)
 	if b <= 1:
 		return 0
 	var cam := get_viewport().get_camera_3d()
@@ -5518,6 +5530,7 @@ func _startup_gen_apply() -> void:
 		# AC-0040: the banana-tree pass (e = [_, cx, cz, _, seed, h, sea, skip]).
 		var gres: Dictionary = WorldGen.apply_banana_resl(d, int(e[1]), int(e[2]), int(e[4]), Data.HEIGHT)
 		c.slabs_landed(d[0], d[1])
+		c.no_caves = int(e[7]) != 0
 		_pool_touch()  # AC-0217: burst data landed on a queued entry
 		_banana_register(int(e[1]), int(e[2]), gres["fruits"])
 		gen_count += 1
@@ -5615,9 +5628,17 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 	var gres: Dictionary = WorldGen.apply_banana_resl(resl, tcx, tcz, tseed, Data.HEIGHT)
 	if is_regen:
 		var ds: Array = resl[0]
-		for si in range(c.data.size()):
-			if si < int(ds.size()) and ds[si] is Dictionary:
-				c.data[si] = ds[si]
+		if ekeep.is_empty():
+			# AC-0284a: a FULL regen (the empty keep mask) replaces the
+			# column whole — the nulls above the top included. A per-slab
+			# merge would keep a no-caves column's solid top slabs when
+			# the full regen's surface (he < H, a cave-opened top) ends
+			# in a lower slab.
+			c.data = ds
+		else:
+			for si in range(c.data.size()):
+				if si < int(ds.size()) and ds[si] is Dictionary:
+					c.data[si] = ds[si]
 		c.update_top()  # the merged column's highest non-air (idempotent for a below-span regen)
 		c.data_gen += 1  # the stamp/staleness token (an in-flight build on the pre-regen snapshot goes stale)
 	else:
@@ -5632,6 +5653,7 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 				gm |= (1 << si2)
 	c.gen_keep = ekeep
 	c.gen_mask = gm
+	c.no_caves = int(e["args"][5]) != 0
 	_banana_register(tcx, tcz, gres["fruits"])
 	gen_count += 1
 	chunk_origin[e["key"]] = "gen"  # AC-0155
@@ -8796,6 +8818,18 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 					and _is_real_col(dx, dz):
 				_reentry_flip_high(c, key)
 				_star_halo_promote(c, key)
+				# AC-0284a: a NO-CAVES column promoted into the real band
+				# owes a FULL regen (the promotion's data side — skip data
+				# -> full data). It rides the same late-landing machinery
+				# as any other data change inside a settled region (the
+				# engine was just seeded from the current data above; the
+				# regen merge re-seeds the changed slabs by diff and the
+				# re-bake converges with no unlit slab). A mid-regen
+				# demote is harmless: the landing's real-band check skips
+				# the re-seed and the column keeps the full data (a later
+				# promotion seeds it directly).
+				if c.no_caves:
+					threadgen_enqueue(int(c.cx), int(c.cz), key, c.get_instance_id(), true, int(c.col_gen))
 				# AC-0283 P3: a stored high (a former REAL column that
 				# demoted) just flipped back on the OLD bake — arm every
 				# stamped slab for the remesh lane: it re-bakes on the
@@ -9555,12 +9589,21 @@ func _land_column(c: Node3D, res: Dictionary) -> void:
 	# solid-for-snap + capped + regen-owed, NOT air.
 	var gmask := int(res.get("gen_mask", 0xFFFFFF))
 	c.gen_mask = gmask
+	c.no_caves = bool(res.get("no_caves", false))
 	var gk := PackedByteArray()
 	if gmask != 0xFFFFFF:
 		gk.resize(int(c.data.size()))
 		for si in range(gk.size()):
 			gk[si] = 1 if ((gmask >> si) & 1) != 0 else 0
 	c.gen_keep = gk
+	# AC-0284a: a no-caves column in the REAL band (taxi ≤ band0_r at
+	# landing) owes a FULL regen — the player must never see a cave-less
+	# column up close. It lands through the late-landing machinery
+	# (hide + re-bake + engine re-seed; the AC-0283 P2 contract). A
+	# no-caves column in the halo band stays as-is (the halo draw never
+	# shows caves; the recenter crossing promotes it with a regen).
+	if c.no_caves and _is_real_col(int(c.cx) - last_pcx, int(c.cz) - last_pcz):
+		threadgen_enqueue(int(c.cx), int(c.cz), _key(int(c.cx), int(c.cz)), c.get_instance_id(), true, int(c.col_gen))
 	# AC-0257: an old AC-0237 save may hold a range-generated column (a
 	# partial gen_mask — slabs the old window never generated). The vwin
 	# owed-regen is gone: a plain full regen refills the missing slabs
@@ -9615,6 +9658,7 @@ func _queue_chunk_save(c: Node3D) -> void:
 		"fl": ChunkIO.io_cpp().slab_copy(c.fl),
 		"light": light,
 		"gen_mask": int(c.gen_mask),  # AC-0237: v5 — the generated mask rides on disk
+		"no_caves": bool(c.no_caves),  # AC-0284a: v6 flag — the no-caves marker rides on disk
 	})
 
 func _save_light_for(c: Node3D, key: String) -> Dictionary:
@@ -9677,6 +9721,7 @@ func _io_write_enqueue(e: Dictionary) -> void:
 		"fl": e["fl"],
 		"light": e.get("light", {}),
 		"gen_mask": int(e.get("gen_mask", 0xFFFFFF)),  # AC-0237
+		"no_caves": bool(e.get("no_caves", false)),  # AC-0284a
 		"seed": int(Game.world_seed),
 		"height": int(Data.HEIGHT),
 	}
@@ -9709,7 +9754,7 @@ func _io_write_worker() -> void:
 	# + blob write) runs on the main thread in _io_write_commit because the
 	# region file is shared by many columns and must be mutated serially.
 	var io: Variant = ChunkIO.io_cpp()
-	var blob := ChunkIO.encode_column(io.slabs_flat(entry["data"]), io.slabs_flat(entry["fl"]), int(entry["seed"]), int(entry["height"]), entry.get("light", {}), -1, int(entry.get("gen_mask", 0xFFFFFF)))  # AC-0237: v5 when range-generated
+	var blob := ChunkIO.encode_column(io.slabs_flat(entry["data"]), io.slabs_flat(entry["fl"]), int(entry["seed"]), int(entry["height"]), entry.get("light", {}), -1, int(entry.get("gen_mask", 0xFFFFFF)), bool(entry.get("no_caves", false)))  # AC-0237: v5 when range-generated; AC-0284a: v6 when no-caves
 	entry["blob"] = blob
 
 func _io_read_enqueue(cx: int, cz: int, key: String, apply_edits: bool) -> bool:
@@ -9796,6 +9841,7 @@ func _io_write_commit(e: Dictionary) -> void:
 			"fl": e["fl"],
 			"light": e.get("light", {}),
 			"gen_mask": int(e.get("gen_mask", 0xFFFFFF)),
+			"no_caves": bool(e.get("no_caves", false)),
 		})
 		return
 	ChunkIO.ensure_dir(slot)
@@ -10863,6 +10909,7 @@ func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 	var fdata: PackedByteArray = WorldGen.generate_face(face, ccx, ccz, Game.world_seed)
 	WorldGen.apply_banana_trees(fdata, face * 64 + ccx, face * 64 + ccz, Game.world_seed ^ (face * 1000003), Data.HEIGHT)
 	c.data_landed(fdata, PackedByteArray())
+	c.no_caves = false
 	chunks[key] = c
 	_face_order.append(key)
 	if _face_order.size() > FACE_CHUNK_CAP:

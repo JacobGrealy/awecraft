@@ -173,6 +173,12 @@ var low_mask := 0
 # from an old AC-0237 save (the load path full-regens those columns).
 var gen_keep: PackedByteArray = PackedByteArray()
 var gen_mask := 0xFFFFFF
+# AC-0284a: the NO-CAVES marker — the column was skip-generated (the
+# AC-0216 lazy path: solid exactly 0..H, no cave field — invisible in the
+# halo band, whose draw never shows caves). A no-caves column in the REAL
+# band owes a full regen. Rides the v6 column blob (ChunkIO). Stamped at
+# every gen/disk landing; cleared by any full landing.
+var no_caves := false
 func has_gen_si(si: int) -> bool:
 	return (gen_mask >> si) & 1 != 0
 
@@ -1676,6 +1682,7 @@ func _pool_reset() -> void:
 	# generation
 	gen_keep = PackedByteArray()
 	gen_mask = 0xFFFFFF
+	no_caves = false
 	# slab objects (survive; per-use fields reset in place — the
 	# init_slabs fresh state)
 	for i in range(slabs.size()):
