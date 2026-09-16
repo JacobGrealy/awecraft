@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-16T18:04
+  updated_at: 2026-09-16T18:38
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -12339,7 +12339,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-14T12:20
-  updated_at: 2026-09-14T12:20
+  updated_at: 2026-09-16T18:38
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -12351,7 +12351,35 @@ intake:
     no scan top-down), just H surface + biome + top block emit. Returns heightmap-ready data (top per
     x,z). Far slabs palettized but caves absent. Wire p_keep/skip to distance band. Verify far gen <0.05ms
     vs full ~0.5ms, visual height correct.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-09-16T18:38
+    updated_at: null
+    text: '[agent] 2026-09-16: SPLIT into two pieces. This entry as written describes BOTH; its queue
+      position now covers the REMAINDER only.
+
+      - AC-0284a: SHIPPED 727f27e (2026-09-16), GDScript-only. The HALO band (_lod_tier_of == 2, taxi
+      strictly inside (band0_r, render_radius)) is skip-generated at threadgen_enqueue time (_gen_skip_flag);
+      per-column no_caves marker stamped at every data landing, cleared by any full landing and by _pool_reset;
+      v6 save flag byte bit 0; a no-caves column landing from disk inside the real band schedules a full
+      regen through the P2 late-landing machinery; full regen now replaces the column whole (is_regen
+      merge bug found + fixed). genhash byte-identical on the full path; skip path 1.06 ms/col vs 1.73
+      full; p_keep measured 0 us saved and NOT wired; walk sim disc 100%, flight 44.1%, battery exact
+      P4 pattern. Evidence: .scratch/ac0284a/report.md.
+
+      - AC-0284b: IN FLIGHT, UNCOMMITTED in the working tree as of this comment. The real far representation,
+      replacing 284a''s interim slab-shaped skip: skip == 2 = FAR (h-only) - gen emits a 1024-byte payload
+      (256 H u16 LE + 256 biome + 256 top-block id) instead of solid 0..H slabs; v6 flag byte bit 1 (bit
+      0 stays the no-caves umbrella); sub = 0; the halo avg draw becomes the H-driven emitter (h_avg_emit_impl,
+      gdext/src/mesh.cpp); world.gd dispatches a far column''s null slabs to the payload. Touched so far:
+      gdext/src/gen.cpp, gdext/src/mesh.cpp, godot/core/chunk_io.gd, godot/world/chunk.gd, godot/world/world.gd
+      (~734 insertions).
+
+      - WHAT IS LEFT for this entry to be closeable: land AC-0284b and re-check the original VERIFY target
+      - the ticket text asks for far gen < 0.05 ms vs full ~0.5 ms, and AC-0284a''s measured 1.06 ms/col
+      is the interim slab skip, not that target. NOTE: AC-0284a is officially "uncommitted" in this ticket''s
+      own framing (it was landed under the other agent''s commit) - do not re-derive it. AC-0287 is the
+      completion of the format AC-0284b introduces; see its comment.'
 - id: AC-0285
   title: heightmap-sky-light
   source: user
@@ -12408,7 +12436,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-14T12:21
-  updated_at: 2026-09-14T12:21
+  updated_at: 2026-09-16T18:38
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -12421,7 +12449,27 @@ intake:
     load. Add save filter in chunk_io region write. On load, missing far columns regenerate cheap then
     promote if needed. Verify save size stays flat while flying 10k blocks, edited far columns still persist
     after promotion.'
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-09-16T18:38
+    updated_at: null
+    text: '[agent] 2026-09-16: STARTING CONDITION CHANGED by the AC-0284a/AC-0284b split - read AC-0284''s
+      comment first. This entry was filed 2026-09-14 with "Far cheap columns (height-only, no caves) are
+      never encoded; they stay ephemeral and regenerate on load". That is NOT the interim state any more:
+      AC-0284b writes a FAR column to disk as v6 flag bit 1 - a 1024-byte payload (256 H u16 LE + 256
+      biome + 256 top-block id), sub = 0, no slabs (godot/core/chunk_io.gd:268-331). The code comment
+      there names this ticket explicitly: "the ~1 KB that AC-0287''s save filter later drops entirely".
+      So the job is not "add a filter that never existed" but "drop the 1 KB far payload that the format
+      now writes, and define what a far column is on disk afterwards" (absent = regenerate cheap, which
+      is what this ticket already describes).
+
+      Three consequences to handle: (i) the far-payload encode/decode path must stay DECODABLE after it
+      stops being written, for columns written between AC-0284a and this ticket; (ii) is_far is currently
+      inferred as far_payload.size() == 1024 (chunk_io.gd:272 and :303) - removing the payload must not
+      make a far column indistinguishable from an empty one; (iii) godot/world/world.gd:218 still asserts
+      the halo band is "never saved", which AC-0284b has made false - fix that comment in this task (AGENTS.md
+      standing rule 1). Also: the filter keys off sim_dist (band0_r), which is the player-facing slider
+      - the same knob AC-0299 item (a) asks the user to confirm and AC-0295 defers slider applies on.'
 - id: AC-0288
   title: cave-p0-tune-single-field-variety
   source: user
@@ -13203,7 +13251,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-16T14:31
-  updated_at: 2026-09-16T14:31
+  updated_at: 2026-09-16T18:38
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -13270,7 +13318,22 @@ intake:
     on this box.
 
     '
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-09-16T18:38
+    updated_at: null
+    text: '[agent] 2026-09-16: the PREREQUISITES/BLOCKERS block in this entry is now HALF historical -
+      read it with the AC-0284a/AC-0284b split (AC-0284''s comment) in mind. RESOLVED: the uncommitted
+      AC-0284a WIP that left the tree unbootable (3 parse errors, harness.gd lines 1148/1175/1176, G0
+      printing 5 SCRIPT ERROR lines while exiting 0) landed as 727f27e on 2026-09-16; the main tree boots
+      now, so "do NOT start until the tree boots" is satisfied and the fresh-worktree warning still stands
+      (89 SCRIPT ERRORs without the one-time asset import). STILL LIVE: AC-0284b is in flight and uncommitted
+      in this same checkout (gdext/src/gen.cpp + mesh.cpp, godot/core/chunk_io.gd, godot/world/chunk.gd
+      + world.gd, ~734 insertions), so the tree can be mid-edit for exactly the same reason - check git
+      status, not just the boot, before starting. The SERIALIZATION paragraph is also stronger than the
+      note as written: both recipes here are software rasterizers (llvmpipe / lavapipe), so a run perturbs
+      any concurrent ms/col, walk %, sim-disc % or flight % measurement - take the AC-0302 godot lock
+      or run when no other agent is measuring.'
 - id: AC-0301
   title: harness-data-single-source
   source: user
