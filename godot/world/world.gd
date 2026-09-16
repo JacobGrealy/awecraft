@@ -231,10 +231,15 @@ var chunk_keys := {}
 var edits := {}
 # AC-0283 P2: the AweStarlight engine (gdext/src/starlight.cpp) live-light
 # state — replaces the per-column re-flood + the 1-column/frame flush wave
-# (light_dirty / light_pending / flush_active, removed here; P4 removes the
-# AweLighting worker itself).
+# (light_dirty / light_pending / flush_active, removed here).
+# AC-0283 P4: the AweLighting class is now TEST/REFERENCE only (the gold
+# reference the starlighttest/brightslab/halo arms check the engine
+# against); the worker's classic pull branch (a no-star/no-mask eff)
+# stays LIVE for the edit-fallback full bake + the tex-refresh rebuild
+# (last_eff carries no mask) + the star==null fallback — proven by the
+# dispatch trace, so it was kept, not removed.
 #   star         the engine (null in the fallback build — every star site
-#                degrades to the legacy AweLighting path)
+#                degrades to the legacy pull path)
 #   star_owed    key -> true: a column whose light gate (all 24 sections
 #                settled) has not been drained yet — the drain publishes
 #                last_eff (eff_gen bumps iff the eff changed) and re-arms
@@ -6789,7 +6794,8 @@ func _build_unit(c: Node3D, cx: int, cz: int) -> bool:
 	# thread — cached eff when it matches the chunk data (the cache is now fed
 	# by worker handoffs via _eff_cache_put), otherwise an empty eff and the
 	# worker self-lights its own fresh copy through the byte-identical
-	# contained kernel (ChunkScript.build_accs / Lighting.compute_light_flat_chunk).
+	# contained kernel (ChunkScript.build_accs / the C++ pull — AC-0283 P4:
+	# the AweLighting TEST/REFERENCE class's kernel).
 	var eff := _eff_for(c, cx, cz)
 	if eff.is_empty() and not c.saved_light.is_empty():
 		eff = c.saved_light
@@ -7889,6 +7895,9 @@ func _compute_face_blk(c: Node3D) -> Array:
 func _compute_face_blk_gd(c: Node3D, h: int, strips: Array) -> Array:
 	# AC-0134 fix-6 / AC-0203 GDScript compute (the AC-0207 fallback; the
 	# neighbor face `strips` [E,W,S,N] are passed in by _compute_face_blk).
+	# AC-0283 P4: REFERENCE/TEST ONLY — no game call site (the C++
+	# AweStrips.compute_face is always available; AC-0208 C++-ONLY), the
+	# harness stripsprobe arm calls it as the A/B reference.
 	# AC-0203 recenter fix: the no-glow column (the common terrain case)
 	# probes the inject on a ZERO column instead of expanding the 98 KB
 	# flat store: a zero cell attenuates by _att[0] = 1 (the minimum), so
@@ -8331,8 +8340,9 @@ func _eff_for(c: Node3D, cx: int, cz: int) -> Dictionary:
 # their fresh copies (ChunkScript.build_accs) and the handoff feeds the eff
 # cache below. _bl_want bookkeeping stays (recenter WANT fills it, release
 # erases it); its early-return check in _drain_build_queue stays behavior-
-# neutral. No light math changed (byte-identity: compute_light_flat_batch and
-# compute_light_flat_chunk both route through _chunk_light_into).
+# neutral. No light math changed (byte-identity: the deleted batch/chunk
+# entries both routed through _chunk_light_into — AC-0283 P4 removed them
+# as the last zero-caller GD entries).
 
 # --- AC-0077: staged collision bodies (P1.4) --------------------------------
 

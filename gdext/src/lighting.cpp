@@ -2,39 +2,65 @@
 // (godot/world/lighting.gd) — the build_accs hot path, on the AC-0165/AC-0188
 // pipeline (same .so/.dll, same chunkio_library_init entry symbol).
 //
-// LOSSLESS INARIANT: AweLighting.compute_chunk_pull produces the SAME light
-// values as Lighting.compute_light_flat_chunk_pull for the SAME input —
-// eff (sky|blk per cell), mask (blk-flood visited), ring (sparse boundary
-// block light), blk_src. Verified by AWECRAFT_LOGIC=lightprobe (C++ vs
-// GDScript at every cell of N built chunks; gate: 100% exact).
+// AC-0283 P4 RECLASSIFICATION (the legacy light paths audit — no code
+// removed here, the live consumers below were proven by dispatch trace):
+//  * The AweLighting class (compute_chunk_pull + flood_stats) is now
+//    TEST/REFERENCE ONLY. The game's live slab light is the AweStarlight
+//    engine's SETTLED payload (mesh.cpp build_accs star branch — the real
+//    band, taxi <= band0_r) + the heightmap sky (the halo, P3); nothing in
+//    the game's mesh stream consumes this class. It is the gold reference
+//    the starlighttest/brightslab/halo/lightprobe arms check the engine
+//    against, and the backend of the public
+//    Lighting.compute_light_flat_chunk_pull entry (the chunk.gd build_mesh
+//    test-arm path + the harness arms).
+//  * awelight::pull (the cross-module bridge below) is NO LONGER the
+//    game's slab-light path either. Its only callers are the classic
+//    build_accs branch (mesh.cpp light_recomputed — an empty/no-mask eff):
+//    the EDIT-FALLBACK FULL BAKE (world.gd _dirty_dispatch — a boundary
+//    edit re-bakes the neighbor from self-light), the TEX-REFRESH rebuild
+//    (world.gd _drain_tex_refresh — last_eff is the _eff_store shape, no
+//    mask), the star==null fallback build, and the harness arms that
+//    dispatch build_accs with an empty eff (meshprobe et al.). P4 proved
+//    every game dispatch site: the slab lane + remesh lane always carry
+//    the star payload, so this branch is the legacy transient (re-baked
+//    over by the remesh lane on the settled light), not the primary.
+//  * awelight::flood_flat / blk_inject (the strips.cpp bridge) are LIVE:
+//    AweStrips.compute_face (the face block light + the b-channel margin
+//    strips) runs through them.
+//  The class registration stays — the harness arms instantiate AweLighting.
+//
+// LOSSLESS INARIANT (now the REFERENCE invariant): AweLighting.compute_
+// chunk_pull produces the SAME light values as Lighting._pull_kernel_gd
+// (the preserved GDScript kernel) for the SAME input — eff (sky|blk per
+// cell), mask (blk-flood visited), ring (sparse boundary block light),
+// blk_src. Verified by AWECRAFT_LOGIC=starlighttest (AweStarlight vs this
+// reference at every cell of N chunks; gate: 0 mismatches over 5.3M cells)
+// and lightprobe (C++ vs GDScript; gate: 100% exact).
 //
 // Ported verbatim (integer-only kernel — no float, so no FP concerns, but
 // the -ffp-contract=off build flag is inherited):
-//   * compute_light_flat_chunk_pull (lighting.gd:320) — the AC-0197
+//   * compute_light_flat_chunk_pull (lighting.gd) — the AC-0197
 //     top-truncated column scan (per-slab flat views, open carried across
 //     slabs) + eff = max(sky, blk) + rows above top filled 15;
-//   * _flood_flat (lighting.gd:519) — the bucket-16 BFS flood (patt = att
+//   * _flood_flat (lighting.gd) — the bucket-16 BFS flood (patt = att
 //     per cell; seeds lv>1 with any lower neighbor; relax nl = lv - att[n],
 //     buckets walked 15..2, hact = active rows, rows beyond hact never
 //     seeded nor stepped into);
-//   * _chunk_blk_inject (lighting.gd:454) — the UN-gated boundary
+//   * _chunk_blk_inject (lighting.gd) — the UN-gated boundary
 //     injection, sides [E,W,N,S], cand = strip[y*16+t] - att[own boundary
 //     cell], raise when cand > eff;
 //   * the mask + ring re-derivation (AC-0128 RUN 3 / AC-0091 19-bit pack).
 //
 // WORKER SAFETY: no Data/Game autoloads. The block tables arrive as value
 // copies (att/glow PackedByteArrays = the pre-warmed Lighting._att/_glow,
-// warmed on the main thread before any worker starts — world.gd:455), and
-// the inputs are the chunk's slab array + the neighbor strips (main-thread
-// copies that ride the build entry). Slab views are materialized per call
-// (same decode as ChunkIOPalette.slab_flat / ChunkIO._slab_flat).
+// warmed on the main thread before any worker starts — world.gd _ready),
+// and the inputs are the chunk's slab array + the neighbor strips (main-
+// thread copies that ride the build entry). Slab views are materialized
+// per call (same decode as ChunkIOPalette.slab_flat / ChunkIO._slab_flat).
 //
 // FLOOD TIMING: every _flood_flat call is timed (usec) into a capped
 // histogram; flood_stats()/reset_flood_stats() expose n/total/p50/p95/max
 // (the lightprobe arm reports the GDScript vs C++ p95 — the speedup gate).
-//
-// Toggle: AWECRAFT_LIGHTCPP=0 forces the GDScript path (chunk.gd build_accs);
-// unset/1 = C++ whenever this library registered AweLighting.
 
 #include <gdextension_interface.h>
 

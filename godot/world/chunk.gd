@@ -1399,7 +1399,11 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}, mask: PackedByt
 	# (light -> compact nbs rings -> AweMesh.build_accs -> apply_accs);
 	# inputs are read live (this is the MAIN thread and the C++ call is
 	# synchronous — no value copies needed); a missing/empty neighbor reads
-	# as air. AC-0208: C++-ONLY — the AWECRAFT_MESHCPP kill switch, the
+	# as air. AC-0283 P4: this sync lane is the test-arm path (the main.gd
+	# _build_walk_pad walk-shot arm) — the game's builds are all C++ worker
+	# (the star payload, or the classic eff); the re-light above is the
+	# legacy pull through the C++ AweLighting entry (TEST/REFERENCE class).
+	# AC-0208: C++-ONLY — the AWECRAFT_MESHCPP kill switch, the
 	# GDScript flat-view/snap/scan/emit tail, the static GDScript build_accs
 	# and _build_snap were removed (the C++ extension is required). An empty
 	# data column (degenerate pre-data dispatch) = clear + built flag, no

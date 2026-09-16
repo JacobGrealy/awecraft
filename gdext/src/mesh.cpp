@@ -39,10 +39,15 @@
 // expansion). The paletted slabs ride the entry as value copies and are
 // never re-flattened in GDScript first.
 //
-// LIGHT: an empty/maskless eff recomputes light through the SAME C++ pull
-// kernel the AweLighting class uses (awelight::pull — same .so), so the
-// C++ mesh's light is byte-identical to the class path (lightprobe:
-// 100% exact). A cached eff (with "mask") is consumed as-is.
+// LIGHT (AC-0283 P4): the STAR payload (light["star"] — the AweStarlight
+// settled nibbles) is the game's slab light (the slab + remesh lanes always
+// carry it); a cached eff (with "mask") is consumed as-is (the eff-cache /
+// saved-light / edit-scoped fast paths); an empty/maskless eff recomputes
+// light through the SAME C++ pull kernel the AweLighting class uses
+// (awelight::pull — same .so, byte-identical to the class path, lightprobe
+// 100% exact). That last branch is the LEGACY path: live only for the
+// edit-fallback full bake + the tex-refresh rebuild (no-mask last_eff) +
+// the star==null fallback + the harness arms' empty-eff dispatches.
 //
 // WORKER SAFETY: no Data/Game autoloads — every table arrives as a value
 // copy in ctx/ms/nbs/eff (the same copies the GDScript worker consumes).
@@ -2350,11 +2355,13 @@ public:
 		// AweStarlight engine's settled nibbles, captured at dispatch under
 		// the 3x3x3 box gate — expanded here on the worker into the classic
 		// light dict + the 8 margin strips: no pull kernel, no ctx strips,
-		// no recompute — the gate made the bake final); the cached eff
-		// (has "mask", consumed as-is); else recompute through the SHARED
-		// C++ pull kernel (byte-identical to the AweLighting class —
-		// lightprobe 100% exact; the meshprobe arm + the no-engine
-		// fallback ride this path).
+		// no recompute — the gate made the bake final; THE GAME'S SLAB
+		// LIGHT — AC-0283 P4: the slab + remesh lanes always carry it); the
+		// cached eff (has "mask", consumed as-is); else recompute through
+		// the SHARED C++ pull kernel (byte-identical to the AweLighting
+		// class — lightprobe 100% exact). P4: that branch is the LEGACY
+		// path — the meshprobe arm + the no-engine fallback + the
+		// edit-fallback full bake + the tex-refresh rebuild ride it.
 		Dictionary light = eff;
 		bool star = (bool)light.get("star", false);
 		std::vector<std::vector<uint8_t>> star_strips(8);

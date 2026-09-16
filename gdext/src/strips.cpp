@@ -27,8 +27,9 @@
 //     the last_eff boundary gathers (2x16xh sides, 2x2xh corners).
 //   * _compute_face_blk (world.gd:2623) + _chunk_has_glow (world.gd:2602):
 //     the glow palette probe, the flat expansion, the glow seed, the
-//     bucket-16 flood + UN-gated boundary injection (the SAME C++ kernels
-//     the pull path runs — awelight::flood_flat/blk_inject, lighting.cpp —
+//     bucket-16 flood + UN-gated boundary injection (awelight::
+//     flood_flat/blk_inject, lighting.cpp — the LIVE flood-kernel consumer
+//     after AC-0283 P4 re-classified the pull path as legacy/reference —
 //     byte-identical by construction), the no-glow zero-column probe +
 //     real-column re-inject (AC-0203 recenter fix), the [E,W,S,N] face
 //     extract (2*16*h, c=0 = the inject half, c=1 zero).

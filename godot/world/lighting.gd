@@ -23,6 +23,23 @@ static var _att: PackedByteArray = PackedByteArray()
 # AC-0208: the C++ extension is REQUIRED — the AWECRAFT_LIGHTCPP kill switch
 # was removed; AweLighting is the only pull path (Game._ready fails fast if
 # the library is missing).
+#
+# AC-0283 P4 RECLASSIFICATION (the legacy light paths audit): the game's
+# live slab light is the AweStarlight engine's settled payload (real band)
+# + the heightmap sky (halo). This file's classification:
+#   * LIVE shared infrastructure: _tables/_att/_glow/_cross (the engine's
+#     value-copy tables via star.set_tables; the strip/face computes) and
+#     compute_light_split — the box flood behind world.light_at (the
+#     player's viewmodel light, player.gd vm_refresh) and the dev light
+#     overlay (_overlay_draw_light).
+#   * LIVE C++ dispatch entry: compute_light_flat_chunk_pull (routes to
+#     AweLighting.compute_chunk_pull — called by the chunk.gd build_mesh
+#     test-arm path + the harness arms).
+#   * REFERENCE/TEST ONLY: _pull_kernel_gd (the GDScript gold reference for
+#     the starlighttest/lightprobe arms — the engine is checked against
+#     it) and the world.gd GD strip/face kernels (_compute_face_blk_gd
+#     etc. — the stripsprobe A/B reference; the live face compute is the
+#     C++ AweStrips.compute_face).
 static var _light_cpp: Variant = null
 static var _light_cpp_done := false
 # AC-0208: no-fallback evidence (the nofallback arm asserts both: the C++
@@ -108,10 +125,6 @@ static func light_of(b: int) -> int:
 	if info == null:
 		return 0
 	return int(info.get("light", 0))
-
-
-static func compute_light(box: Dictionary, world) -> Dictionary:
-	return compute_light_split(box, world).eff
 
 
 static func compute_light_split(box: Dictionary, world, flat_cache = null) -> Dictionary:
@@ -215,96 +228,10 @@ static func compute_light_split(box: Dictionary, world, flat_cache = null) -> Di
 	return {"sky": sky_d, "block": blk_d, "eff": eff}
 
 
-static func compute_light_flat(box: Dictionary, world) -> Dictionary:
-	_tables()
-	var mn: Vector3i = box.min
-	var mx: Vector3i = box.max
-	var w := mx.x - mn.x + 1
-	var d := mx.z - mn.z + 1
-	var h := mx.y - mn.y + 1
-	# AC-0129: box exactly one chunk -> the pull kernel (self-light with fresh
-	# neighbor strips); the multi-chunk margin box keeps the old contained
-	# two-flood path unchanged (no caller passes it in practice).
-	if w == 16 and d == 16 and mn.y == 0 and h == Data.HEIGHT and mn.x % 16 == 0 and mn.z % 16 == 0:
-		var c = world.chunks.get(world._key(mn.x / 16, mn.z / 16))
-		if c != null and not c.data.is_empty():
-			var s = world._strips_for(mn.x / 16, mn.z / 16)
-			return compute_light_flat_chunk_pull(c.data, mn.x / 16, mn.z / 16, h, s["eff"], s["blk"], s["blk_b"])
-	var sz := w * d
-	var H: int = Data.HEIGHT
-	var ids := PackedByteArray()
-	ids.resize(sz * h)
-	var sky := PackedByteArray()
-	sky.resize(sz * h)
-	var blk := PackedByteArray()
-	blk.resize(sz * h)
-	var has_glow := false
-	# AC-0213: per-chunk flat cache (same fix as compute_light_split).
-	var cflat: Dictionary = {}
-	for ix in range(w):
-		var wx: int = mn.x + ix
-		var cxv := int(floorf(float(wx) / 16.0))
-		var lx := wx - cxv * 16
-		for iz in range(d):
-			var wz: int = mn.z + iz
-			var czv := int(floorf(float(wz) / 16.0))
-			var lz := wz - czv * 16
-			var ck: String = world._key(cxv, czv)
-			if not cflat.has(ck):
-				var c0 = world.chunks.get(ck)
-				cflat[ck] = c0.flat_data() if (c0 != null and not c0.data.is_empty()) else null
-			var i0 := ix + iz * w
-			var open := true
-			if cflat[ck] != null:
-				var nd: PackedByteArray = cflat[ck]
-				for y in range(H - 1, mn.y - 1, -1):
-					var b: int = nd[(y << 8) | (lz << 4) | lx]
-					if y > mx.y:
-						if open and _att[b] == 0:
-							open = false
-						continue
-					var i := (y - mn.y) * sz + i0
-					ids[i] = b
-					if open and _att[b] > 0:
-						sky[i] = SKY_FULL
-					var lv := _glow[b]
-					if lv > 0:
-						blk[i] = lv
-						has_glow = true
-					if open and _att[b] == 0:
-						open = false
-			else:
-				for y in range(H - 1, mn.y - 1, -1):
-					var b := 0  # AC-0119: missing/empty column = air (web world.block :882)
-					if y > mx.y:
-						if open and _att[b] == 0:
-							open = false
-						continue
-					var i := (y - mn.y) * sz + i0
-					ids[i] = b
-					if open and _att[b] > 0:
-						sky[i] = SKY_FULL
-					var lv := _glow[b]
-					if lv > 0:
-						blk[i] = lv
-						has_glow = true
-					if open and _att[b] == 0:
-						open = false
-	_flood_flat(sky, ids, w, h, d)
-	if has_glow:
-		_flood_flat(blk, ids, w, h, d)
-	var eff := PackedByteArray()
-	eff.resize(sz * h)
-	for i in range(eff.size()):
-		var s := sky[i]
-		var b2 := blk[i]
-		eff[i] = s if s >= b2 else b2
-	return {"mn": mn, "w": w, "d": d, "arr": eff}
-
-
 # AC-0077: AC-0107's single-chunk contained kernel (the exact
-# STANDALONE_MARGIN=0 specialization of compute_light_flat — the box
-# build_mesh passes): every column maps to the same chunk, so the sky-scan
+# STANDALONE_MARGIN=0 specialization of the box flood — AC-0283 P4: the
+# halo arm's A/B reference, the game's slab light is AweStarlight): every
+# column maps to the same chunk, so the sky-scan
 # reads ONLY the passed chunk data. _tables() is warmed on the main thread
 # (world._ready), so a worker call never touches Data. Buffers (ids/sky/blk,
 # sized 16x16*h with sky/blk zeroed by the caller) are reused across calls;
@@ -369,19 +296,6 @@ static func _chunk_light_into(data, cx: int, cz: int, h: int, ids: PackedByteArr
 	return eff
 
 
-static func compute_light_flat_chunk(data, cx: int, cz: int, h: int) -> Dictionary:
-	_tables()
-	var sz := 16 * 16
-	var ids := PackedByteArray()
-	ids.resize(sz * h)
-	var sky := PackedByteArray()
-	sky.resize(sz * h)
-	var blk := PackedByteArray()
-	blk.resize(sz * h)
-	var eff := _chunk_light_into(data, cx, cz, h, ids, sky, blk)
-	return {"mn": Vector3i(cx * 16, 0, cz * 16), "w": 16, "d": 16, "arr": eff}
-
-
 # AC-0129: single-chunk light with cross-boundary block-light PULL (Minecraft
 # semantics, user-directed — the web's own floodLight never lights a dark
 # chunk, index.html:974; deviation (iii)). Column scan IDENTICAL to
@@ -394,9 +308,12 @@ static func compute_light_flat_chunk(data, cx: int, cz: int, h: int) -> Dictiona
 # that side stays as its own flood left it. eff_strips rides along for the
 # caller's 20x20 bake box (unused here).
 #
-# AC-0210: THE PULL DISPATCH. This entry is what the runtime pull path runs
-# (build_mesh on chunk-border crossing — the light hitch — compute_light_flat,
-# the probes). AC-0208: C++-ONLY — the AWECRAFT_LIGHTCPP kill switch and the
+# AC-0210: THE PULL DISPATCH. AC-0283 P4: the legacy pull path — the
+# runtime callers left are the chunk.gd build_mesh test-arm path, the
+# harness arms, and (via the C++ worker's classic branch) the
+# edit-fallback full bake + the tex-refresh rebuild; the game's slab
+# light is the AweStarlight settled payload. AC-0208: C++-ONLY — the
+# AWECRAFT_LIGHTCPP kill switch and the
 # _pull_kernel_gd fallback line were removed; the entry always calls the C++
 # AweLighting.compute_chunk_pull (gdext/src/lighting.cpp, AC-0189 — the
 # bucket-16 flood + the UN-gated _chunk_blk_inject port). Inputs are value
@@ -416,9 +333,11 @@ static func compute_light_flat_chunk_pull(data, cx: int, cz: int, h: int, eff_st
 
 # AC-0210: the GDScript pull kernel — the AC-0129/AC-0197 body of
 # compute_light_flat_chunk_pull VERBATIM. AC-0208: the game never calls
-# this anymore (the C++ path is the only pull lane) — it SURVIVES SOLELY as
-# the pullprobe/lightprobe A/B reference (gd_pull_counts is a no-fallback
-# sentinel: any game-side call would trip the nofallback arm).
+# this anymore (the C++ path is the only pull lane). AC-0283 P4:
+# REFERENCE/TEST ONLY — the gold reference the starlighttest/lightprobe/
+# pullprobe arms check the engine and the C++ port against (gd_pull_calls
+# is a no-fallback sentinel: any game-side call would trip the
+# nofallback arm).
 static func _pull_kernel_gd(data, cx: int, cz: int, h: int, eff_strips: Array, blk_strips: Array, blk_strips_b: Array, top := -1, dviews: Variant = null) -> Dictionary:
 	gd_pull_calls += 1
 	# AC-0197: rows above the column's top (max non-air y) are ALL air — open
@@ -584,39 +503,6 @@ static func _chunk_blk_inject(eff: PackedByteArray, ids: PackedByteArray, h: int
 						eff[B] = cand
 						changed = true
 	return changed
-
-
-# AC-0077: batched per-chunk contained light — one call for N fresh data
-# copies, per-chunk eff byte-identical to compute_light_flat_chunk (same
-# kernel, same box, same data; the contained flood reads nothing outside its
-# 16x16xh box, so margin 0 is exact and no union flood is possible). ids/sky/
-# blk are preallocated once and reused; eff is fresh per item.
-# budget_us: stop after the first chunk once the elapsed compute time passes
-# it (the caller keeps the remaining items for a later drain call — they are
-# still in its want set). 0 = no budget.
-static func compute_light_flat_batch(items: Array, budget_us: int = 0) -> Array:
-	_tables()
-	var out: Array = []
-	if items.is_empty():
-		return out
-	var sz := 16 * 16
-	var ids := PackedByteArray()
-	ids.resize(sz * Data.HEIGHT)
-	var sky := PackedByteArray()
-	sky.resize(sz * Data.HEIGHT)
-	var blk := PackedByteArray()
-	blk.resize(sz * Data.HEIGHT)
-	var st0 := Time.get_ticks_usec()
-	for it in items:
-		if budget_us > 0 and not out.is_empty() and Time.get_ticks_usec() - st0 > budget_us:
-			break
-		var data = it["data"]
-		var h := Data.HEIGHT
-		sky.fill(0)
-		blk.fill(0)
-		var eff := _chunk_light_into(data, int(it["cx"]), int(it["cz"]), h, ids, sky, blk)
-		out.append({"mn": Vector3i(int(it["cx"]) * 16, 0, int(it["cz"]) * 16), "w": 16, "d": 16, "arr": eff})
-	return out
 
 
 static func _flood_flat(src: PackedByteArray, ids: PackedByteArray, w: int, h: int, d: int, hact := -1) -> void:
