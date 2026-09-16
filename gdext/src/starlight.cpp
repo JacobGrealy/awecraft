@@ -573,7 +573,14 @@ public:
 
 	// AC-0283 P2: the 3x3 x/z x [si0..si1] section box (the light gate).
 	// Enumeration order (shared with box_epochs): ssi outer, then dx, then
-	// dz, each -1..1.
+	// dz, each -1..1. AC-0283 P3: UNSEEDED sections settle as the zero
+	// region boundary — the halo band (taxi > sim_dist) never seeds, so a
+	// real-band slab at the band edge bakes its halo-side margins against
+	// zero (the slab_light_payload strip semantics for unseeded neighbors)
+	// and settles. A neighbor that later PROMOTES (seeds) re-injects its
+	// boundary light into the settled box, and the streaming re-mesh (E2)
+	// re-bakes the edge slabs then — the bake is never PERMANENTLY stale,
+	// only pending the promotion.
 	bool box_settled(int p_cx, int p_cz, int p_si0, int p_si1) {
 		int s0 = std::max(0, p_si0);
 		int s1 = std::min(NSL - 1, p_si1);
@@ -582,7 +589,8 @@ public:
 		for (int ssi = s0; ssi <= s1; ssi++) {
 			for (int dx = -1; dx <= 1; dx++) {
 				for (int dz = -1; dz <= 1; dz++) {
-					if (!section_settled(p_cx + dx, p_cz + dz, ssi))
+					Sec *s = find_sec(p_cx + dx, p_cz + dz, ssi);
+					if (s != nullptr && s->pending != 0)
 						return false;
 				}
 			}

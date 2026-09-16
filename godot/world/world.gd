@@ -209,15 +209,20 @@ var fluid_tick_radius := 14
 # band is full-fidelity and the far LOD is the separate per-slab low-res
 # placeholder (see the AC-0231 block below: per-slab fog boxes on landing
 # + the per-slab 4x4x4 textured low with repeating UVs).
+# AC-0283 P3: band0_r (the sim distance) is the world-gen boundary AGAIN
+# — the REAL band (taxi ≤ band0_r or the tier-0 set) is the only region
+# that seeds the starlight engine, floods light, and builds full-res
+# 1:1 (the tier-0 ball's columns first, in the dedicated section). The
+# HALO band (band0_r, render_radius) is the 4x4x4 avg draw with the
+# heightmap sky light (15 strictly above the terrain top, 0 at or below;
+# no block light, no engine, never saved). band0_r still gates mob/fluid
+# simulation (collision band 0, the data tier-1 priority square, mob
+# spawn). Settings "sim_dist".
 var band0_r := 4
-# AC-0263: the HIGH band's outer edge (taxi chunks) — where the MED LOD
-# begins. HIGH = [0, medium_start_r) builds full-res per-slab (the tier-0
-# ball's columns first, in the dedicated section); the avg-LOD wave owns
-# [medium_start_r, render_radius). This is the world-gen boundary that
-# band0_r used to be: band0_r (the sim distance) no longer controls world
-# generation — it only gates mob/fluid simulation (collision band 0, the
-# data tier-1 priority square, mob spawn). Settings "medium_start"
-# (must be > sim distance); harness override AWECRAFT_MEDIUM_START.
+# AC-0263 (AC-0283 P3): the MED/LOW split is RETIRED from the draw tier —
+# the halo band is all 4x4x4 + heightmap sky (see band0_r /
+# _lod_tier_of). The variable stays for the settings/harness compat
+# (harness arms still set it; it no longer selects a draw tier).
 var medium_start_r := 8
 var band1_r := 96
 var collision_enabled := true
@@ -244,6 +249,14 @@ var star_remesh := {}
 var _star_last_t := 0.0
 var star_late_landings := 0
 var star_lver_drops := 0
+# AC-0283 P3: the halo lifecycle at recenter (the engine holds the REAL
+# band only — taxi ≤ band0_r or the tier-0 set). A column crossing INTO
+# the real band (halo -> real) seeds the engine from its current data
+# (the promotion: one full flood per column); a crossing OUT (real ->
+# halo) evicts it (free the nibbles — its draw is the 4x4 avg +
+# heightmap sky now).
+var star_halo_promotes := 0
+var star_halo_evicts := 0
 const STAR_STEP_BUDGET_MS := 3.0
 const LOAD_STAR_STEP_BUDGET_MS := 30.0
 const STAR_REMESH_KEYS_PER_FRAME := 2
@@ -771,12 +784,12 @@ func _grid_score(e: Dictionary) -> float:
 	var dz := int(e["cz"]) - last_pcz
 	var layer := 0
 	var c = chunks.get(e["key"])
-	# AC-0263: the pending probe is per-lane — the HIGH band (the per-slab
-	# full-res builds: taxi < medium_start_r, plus the tier-0 ball, which
-	# outruns the edge in its corners) probes the HIGH completion stamps;
-	# the wave band [medium_start_r, render_radius) probes the low/fog
+	# AC-0263 (AC-0283 P3): the pending probe is per-lane — the REAL band
+	# (the per-slab full-res builds: taxi ≤ band0_r, plus the tier-0 ball,
+	# which outruns the edge in its corners) probes the HIGH completion
+	# stamps; the halo band (band0_r, render_radius) probes the low/fog
 	# state (the AC-0262 cached probe).
-	var in_high := c != null and (absi(dx) + absi(dz) < medium_start_r or _is_tier0_col(dx, dz))
+	var in_high := c != null and _is_real_col(dx, dz)
 	if c != null and not c.data.is_empty():
 		var si: int = _hslab_best_pending_cached(c) if in_high else _entry_best_pending_cached(c)
 		if si >= 0:
@@ -1012,12 +1025,10 @@ const LOW_POLL_BUDGET_MS := 4.0    # AC-0236 part 2: the per-frame wall-clock ca
                                    # low HANDOFFS (the attach cost, ~0.2 ms each)
                                    # whole circle+ring fits; a capped scan leaves the
                                    # gate CLOSED rather than proving drained)
-# AC-0261: the med/low band split. The visible LOD zones (taxi): HIGH
-# [0, band0_r) (the build lane), MED (8x8x8) [band0_r, low_start_r), LOW
-# (4x4x4) [low_start_r, render_radius); nothing renders past the (taxi)
-# render distance. low_start_r = the effective boundary (recomputed by
-# apply_low_start; clamped to [band0_r, render_radius] — between the
-# simulation distance and the render distance).
+# AC-0261 (AC-0283 P3): the med/low split is RETIRED from the draw tier —
+# the halo band (band0_r, render_radius) is all 4x4x4 + heightmap sky
+# (see _lod_tier_of). low_start_r stays for settings/harness compat
+# (recomputed by apply_low_start; it no longer selects a draw tier).
 var low_start_r := 27
 var _low_fog_mat: StandardMaterial3D = null
 var _low_fog_mesh: ArrayMesh = null  # pre-baked 16x16x16 box (shared by every MultiMesh)
@@ -1637,22 +1648,28 @@ func _lod_avg_mat() -> ShaderMaterial:
 		_lod_avg_material.set_shader_parameter("day", Color(1.0, 1.0, 1.0))
 	return _lod_avg_material
 
-# AC-0261 (AC-0263): the LOD zone of a chunk at (dx, dz) from the player
-# column, taxi metric (the render edge is taxi too — "render distance is
-# the max value for everything that is rendered"): 0 = HIGH band
-# [0, medium_start_r) — the build lane owns it (pending renders NOTHING,
-# no placeholder of any kind); 1 = MED (8x8x8) [medium_start_r,
-# low_start_r); 2 = LOW (4x4x4) [low_start_r, render_radius); 3 =
-# DATA-ONLY [render_radius, ring edge) — nothing renders past the render
-# distance. AC-0263: the high band's edge is the "mid LOD distance"
-# (medium_start_r) — band0_r (the sim distance) no longer controls world
-# generation (mobs/fluids only).
+# AC-0283 P3: the REAL band — taxi ≤ band0_r (or the tier-0 set): the
+# collision/fluid sim square, exactly P2 (the star seed on data landing,
+# the full 24-slab light walk, the 1:1 high build). The old MED/LOW split
+# (medium_start_r / low_start_r) is GONE from the draw tier: everything
+# outside the real band up to the render edge is the HALO — the 4x4x4
+# avg draw with the heightmap sky light, never seeded, never saved
+# (AC-0287).
+func _is_real_col(dx: int, dz: int) -> bool:
+	return absi(dx) + absi(dz) <= band0_r or _is_tier0_col(dx, dz)
+
+# AC-0261 (AC-0283 P3): the LOD zone of a chunk at (dx, dz) from the
+# recenter anchor, taxi metric (the render edge is taxi too — "render
+# distance is the max value for everything that is rendered"): 0 = the
+# REAL band [0, band0_r] — the build lane owns it (pending renders
+# NOTHING, no placeholder of any kind); 2 = the HALO (4x4x4 + heightmap
+# sky) (band0_r, render_radius); 3 = DATA-ONLY [render_radius, ring
+# edge) — nothing renders past the render distance. (Tier 1 is retired:
+# the halo is all 4x4.)
 func _lod_tier_of(dx: int, dz: int) -> int:
-	var taxi := absi(dx) + absi(dz)
-	if taxi < medium_start_r:
+	if _is_real_col(dx, dz):
 		return 0
-	if taxi < low_start_r:
-		return 1
+	var taxi := absi(dx) + absi(dz)
 	if taxi < render_radius:
 		return 2
 	return 3
@@ -2448,6 +2465,46 @@ func _low_ms_snap_get() -> Dictionary:
 # (no emit possible — the caller does the air bookkeeping via
 # _low_air_slab; the grid sample + emit of every other slab run on the
 # workers, never the main thread).
+
+# AC-0283 P3: the column's heightmap (256 bytes — H[lz*16+lx], the terrain
+# top y). The C++ heights pass (the three surface fields + the 256
+# surface_h reads; ~33us once per column), cached on the chunk. The halo
+# band's draw light is a function of H alone — no flood, no nibbles.
+func _halo_hmap_get(c: Node3D) -> PackedByteArray:
+	if c.hmap.is_empty():
+		c.hmap = WorldGen.gen_cpp().column_heights(int(c.cx), int(c.cz), Game.world_seed, int(Data.HEIGHT))
+	return c.hmap
+
+# AC-0283 P3: the per-slab halo SKY payload (64 bytes for the 4x4x4 grid,
+# cell order cy*16 + cz*4 + cx): a 4x4x4 cell is lit (15) iff it sits
+# STRICTLY above the terrain top over its whole 4x4 x/z footprint (the
+# quad rule — the max of H over the footprint, one compare per cell),
+# else 0. Computed at dispatch on the main thread (H is known the moment
+# the data lands — the halo dispatch needs no engine settle). The
+# worker's low_emit_avg writes each quad's origin-cell sky into the
+# vertex alpha (the lod_avg shader multiplies it into the brightness).
+func _halo_sky_for(c: Node3D, si: int) -> PackedByteArray:
+	var hm: PackedByteArray = _halo_hmap_get(c)
+	var fh := PackedByteArray()
+	fh.resize(16)
+	for gz in range(4):
+		for gx in range(4):
+			var m := 0
+			for lz in range(gz * 4, gz * 4 + 4):
+				var r0 := lz * 16
+				for lx in range(gx * 4, gx * 4 + 4):
+					if int(hm[r0 + lx]) > m:
+						m = int(hm[r0 + lx])
+			fh[gz * 4 + gx] = m
+	var y0 := si * 16
+	var out := PackedByteArray()
+	out.resize(64)
+	for cy in range(4):
+		for cz in range(4):
+			for cx in range(4):
+				out[cy * 16 + cz * 4 + cx] = 15 if y0 + cy * 4 > int(fh[cz * 4 + cx]) else 0
+	return out
+
 func _low_dispatch_slab(c: Node3D, si: int) -> int:
 	if threadmesh_pool == null or si < 0 or si >= c.data.size() or c.data[si] == null:
 		return -1
@@ -2478,7 +2535,11 @@ func _low_dispatch_slab(c: Node3D, si: int) -> int:
 	var entry := {
 		"low": true, "key": key, "cx": int(c.cx), "cz": int(c.cz),
 		"inst": c.get_instance_id(), "colgen": int(c.col_gen), "si": si,
-		"tier": tier,  # AC-0252: 1 = MED (grid 8), 2 = LOW (grid 4)
+		"tier": tier,  # AC-0252 (P3): 2 = the HALO (4x4x4 + heightmap sky)
+		# AC-0283 P3: the halo's per-cell sky light (the dispatch tier is
+		# the band — a promotion/demotion re-pick re-emits at the new
+		# tier; the real band never reaches this lane, empty payload).
+		"sky": _halo_sky_for(c, si) if tier == 2 else PackedByteArray(),
 		"slabs": mc.slab_copy(c.data),  # the full column (~20 KB; the C++ emit reads si-1/si/si+1)
 		# AC-0247: the slab BUFFER of this value copy stays on C++ alloc —
 		# slab_copy allocates the "i"/"p" buffers internally (no C++
@@ -2806,11 +2867,12 @@ func _low_pick(want_low: bool) -> Dictionary:
 			# step-through under the player).
 			if _is_tier0_col(dx, dz):
 				continue
-			# AC-0261: only HIGH-band columns are upgrade candidates — the
-			# catch-up's whole job is a low-holding column ENTERING the high
-			# band (the player approached it). The visible band [band0_r,
-			# render_radius) keeps its avg LOD as the final LOD.
-			if absi(dx) + absi(dz) >= medium_start_r:
+			# AC-0261 (AC-0283 P3): only REAL-band columns are upgrade
+			# candidates — the catch-up's whole job is a low-holding column
+			# ENTERING the real band (the player approached it). The halo
+			# band (band0_r, render_radius) keeps its avg LOD as the final
+			# LOD.
+			if not _is_real_col(dx, dz):
 				continue
 			var c = chunks.get(e["key"])
 			if c == null or c.data.is_empty() or bool(c.mesh_built):
@@ -2947,11 +3009,12 @@ func _low_scan_slabs(n: int) -> Array:
 			var dz := int(e["cz"]) - last_pcz
 			if _is_tier0_col(dx, dz):
 				continue  # AC-0257: the tier-0 set is high only (never a placeholder)
-			# AC-0261: the wave covers the visible band [band0_r, render_radius)
-			# — the high band below it is the build lane's (pending renders
-			# nothing), and past the (taxi) render distance nothing renders.
+			# AC-0261 (AC-0283 P3): the wave covers the HALO band (band0_r,
+			# render_radius) — the real band below it is the build lane's
+			# (pending renders nothing), and past the (taxi) render
+			# distance nothing renders.
 			var taxi := absi(dx) + absi(dz)
-			if taxi < medium_start_r or taxi >= render_radius:
+			if taxi <= band0_r or taxi >= render_radius:
 				continue
 			var c = chunks.get(e["key"])
 			if c == null or c.data.is_empty():
@@ -3214,12 +3277,12 @@ func _low_step() -> void:
 			# rescan next frame.
 			_low_slab_none_key = ""
 			break
-		# AC-0263 spec (keep-all-LOD): a meshed WAVE-band column is a
-		# demoted column (the stored high waits for the flip) - its
-		# pending lows are still owed. Only a meshed HIGH-band column is
-		# stale (it owes no low at all).
+		# AC-0263 spec (keep-all-LOD, AC-0283 P3): a meshed HALO-band
+		# column is a demoted column (the stored high waits for the flip)
+		# - its pending lows are still owed. Only a meshed REAL-band
+		# column is stale (it owes no low at all).
 		if bool(c2.mesh_built) \
-				and absi(int(c2.cx) - last_pcx) + absi(int(c2.cz) - last_pcz) < medium_start_r:
+				and _is_real_col(int(c2.cx) - last_pcx, int(c2.cz) - last_pcz):
 			_low_slab_none_key = ""
 			break
 		# AC-0236 part 2 / AC-0250 / AC-0252 offload: the grid sample +
@@ -4602,6 +4665,15 @@ func _star_e2_rearm(c: Node3D, cx: int, cz: int, old_arr: PackedByteArray, new_a
 	var h := Data.HEIGHT
 	var offs: Array = [[1, 0], [-1, 0], [0, 1], [0, -1]]
 	for o in offs:
+		# AC-0283 P3: never arm a HALO (unseeded) built neighbor — its
+		# payload can never capture (column_seeded false) and the arm
+		# would wedge the remesh lane forever (the stored high is DORMANT:
+		# the 4x4 avg owns the halo draw; a re-entry promotes the column
+		# and the remesh arm re-bakes its stored high on the new light).
+		var ndx := int(cx + int(o[0])) - last_pcx
+		var ndz := int(cz + int(o[1])) - last_pcz
+		if not _is_real_col(ndx, ndz):
+			continue
 		var nkey := _key(cx + int(o[0]), cz + int(o[1]))
 		var nc = chunks.get(nkey)
 		if nc == null or not bool(nc.mesh_built):
@@ -4627,7 +4699,6 @@ func _star_remesh_drain() -> void:
 	if star == null or star_remesh.is_empty() or edit_inflight_count > 0:
 		return
 	var cap := LOAD_STAR_REMESH_KEYS_PER_FRAME if loading_active else STAR_REMESH_KEYS_PER_FRAME
-	var spent := 0
 	var built := 0
 	for key in star_remesh.keys():
 		if star_remesh[key].is_empty():
@@ -4635,15 +4706,19 @@ func _star_remesh_drain() -> void:
 			# re-settled since the arm) — drop the zombie key or it eats a
 			# cap slot forever and starves the real work
 			continue
-		if spent >= cap:
-			break
 		var c = chunks.get(key)
 		if c == null:
 			star_remesh.erase(key)
 			continue
-		spent += 1
 		var cx := int(c.cx)
 		var cz := int(c.cz)
+		# AC-0283 P3: an UNSEEDED column's slabs can never dispatch (the
+		# payload gate needs the seed) — drop the key outright (a
+		# re-entry re-arms it on the promotion re-seed). Defensive: the
+		# E2 skip above already keeps these out.
+		if star != null and not _is_real_col(cx - last_pcx, cz - last_pcz):
+			star_remesh.erase(key)
+			continue
 		var sis: Array = star_remesh[key].keys()
 		sis.sort()
 		for si in sis:
@@ -4654,6 +4729,8 @@ func _star_remesh_drain() -> void:
 			if bool(c.flush_slabs.has(si)):
 				star_remesh[key].erase(si)  # re-settled since the arm (no-op)
 				continue
+			if built >= cap:
+				break  # the budget spent (a deferred key spent nothing — it retries, the healthy keys behind it keep their slots)
 			if _mesh_dispatch_hslab(c, cx, cz, si, {}, true):
 				star_remesh[key].erase(si)
 				built += 1
@@ -4719,6 +4796,34 @@ func _star_reseed_column(c: Node3D, sis: Array) -> void:
 	star_owed[_key(cx, cz)] = true
 	if changed:
 		_star_late_invalidate(c, sis)
+
+# AC-0283 P3: DEMOTE (real -> halo) at recenter — the engine evicts the
+# column (free the nibbles; the live set is the real band only) and the
+# queued owed/remesh entries go with it. The column's draw is the 4x4
+# avg + heightmap sky from here; a re-entry promotes it again (the
+# re-seed is the single full flood per column).
+func _star_halo_evict(c: Node3D, key: String) -> void:
+	if star == null:
+		return
+	star.evict_column(int(c.cx), int(c.cz))
+	star_owed.erase(key)
+	star_remesh.erase(key)
+	star_halo_evicts += 1
+
+# AC-0283 P3: PROMOTE (halo -> real) at recenter — seed the engine from
+# the column's current data (one full flood per column; the column then
+# settles through the normal owed drain and its owed slabs re-bake on
+# the settled light — no unlit frame, the halo mesh shows until the
+# settled high lands). A no-op when the column is already settled
+# (defensive: a demote always evicts, so a promote sees an unseeded
+# column; the guard keeps a re-crossing jitter from re-seeding).
+func _star_halo_promote(c: Node3D, key: String) -> void:
+	if star == null or c.data.is_empty():
+		return
+	if star.column_settled(int(c.cx), int(c.cz)):
+		return
+	_star_seed_column(c)
+	star_halo_promotes += 1
 
 # The late-landing contract (binding): data changed inside a settled
 # region. OWN column: the affected stamped slabs hide, lose their
@@ -4889,26 +4994,25 @@ func circle_count() -> int:
 				n += 1
 	return n
 
-# AC-0261 (AC-0263): the loading target is the HIGH band (taxi <
-# medium_start_r) — the only region that ever gets a full mesh. The
-# visible band [medium_start_r, render_radius) fills in via the
-# disc-ordered slab wave while the player plays (the normal streaming
-# experience); waiting for it would stall the load on work the streaming
-# loop already owns.
+# AC-0261 (AC-0263, AC-0283 P3): the loading target is the REAL band
+# (taxi ≤ band0_r) — the only region that ever gets a full mesh. The
+# halo band (band0_r, render_radius) fills in via the disc-ordered slab
+# wave while the player plays (the normal streaming experience); waiting
+# for it would stall the load on work the streaming loop already owns.
 func _high_band_count() -> int:
 	var n := 0
-	for dx in range(-medium_start_r, medium_start_r):
-		for dz in range(-medium_start_r, medium_start_r):
-			if absi(dx) + absi(dz) < medium_start_r:
+	for dx in range(-band0_r, band0_r + 1):
+		for dz in range(-band0_r, band0_r + 1):
+			if absi(dx) + absi(dz) <= band0_r:
 				n += 1
 	return n
 
 
 func _high_band_meshed() -> int:
 	var n := 0
-	for dx in range(-medium_start_r, medium_start_r):
-		for dz in range(-medium_start_r, medium_start_r):
-			if absi(dx) + absi(dz) >= medium_start_r:
+	for dx in range(-band0_r, band0_r + 1):
+		for dz in range(-band0_r, band0_r + 1):
+			if absi(dx) + absi(dz) > band0_r:
 				continue
 			var c = chunks.get(_key(last_pcx + dx, last_pcz + dz))
 			if c != null and c.mesh_built:
@@ -4923,15 +5027,12 @@ func _high_band_meshed() -> int:
 # behind the closed window (the pools stay saturated until the high band
 # itself drains - the window just stops WAITING for it).
 func _loading_target_col(dx: int, dz: int) -> bool:
-	var cheb := absi(dx) if absi(dx) > absi(dz) else absi(dz)
-	if cheb <= tier0_r:
-		return true
-	return absi(dx) + absi(dz) < mini(band0_r, medium_start_r)
+	return _is_real_col(dx, dz)
 
 
 func _loading_band_count() -> int:
 	var n := 0
-	var r := maxi(tier0_r, mini(band0_r, medium_start_r))
+	var r := maxi(tier0_r, band0_r)
 	for dx in range(-r, r + 1):
 		for dz in range(-r, r + 1):
 			if _loading_target_col(dx, dz):
@@ -4941,7 +5042,7 @@ func _loading_band_count() -> int:
 
 func _loading_band_meshed() -> int:
 	var n := 0
-	var r := maxi(tier0_r, mini(band0_r, medium_start_r))
+	var r := maxi(tier0_r, band0_r)
 	for dx in range(-r, r + 1):
 		for dz in range(-r, r + 1):
 			if not _loading_target_col(dx, dz):
@@ -4952,14 +5053,15 @@ func _loading_band_meshed() -> int:
 	return n
 
 
-# AC-0261: true when no slab of the visible band [band0_r, render_radius)
-# is still owed to the slab wave (every data slab holds its low or is
-# all-air). The drain-wait predicate (loading arms / harness).
+# AC-0261 (AC-0283 P3): true when no slab of the HALO band (band0_r,
+# render_radius) is still owed to the slab wave (every data slab holds
+# its low or is all-air). The drain-wait predicate (loading arms /
+# harness).
 func band_drained() -> bool:
 	for key in chunks:
 		var c: Node3D = chunks[key]
 		var taxi := absi(int(c.cx) - last_pcx) + absi(int(c.cz) - last_pcz)
-		if taxi < medium_start_r or taxi >= render_radius:
+		if taxi <= band0_r or taxi >= render_radius:
 			continue
 		if c.data.is_empty():
 			continue
@@ -5192,7 +5294,11 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	_low_fog_for(c)  # AC-0231: the immediate fog-box first pass (far only)
 	_apply_edits_to_chunk(c)
 	_apply_pending_leaf_decay(c)  # AC-0270: restore the saved timers
-	_star_seed_column(c)  # AC-0283 P2: the engine seed (post-edits data)
+	# AC-0283 P2 (P3): the engine seed (post-edits data) — REAL band only
+	# (the halo never seeds; a halo column that later promotes seeds at
+	# the recenter crossing with its current data).
+	if star != null and _is_real_col(int(c.cx) - last_pcx, int(c.cz) - last_pcz):
+		_star_seed_column(c)
 	var dg := Time.get_ticks_msec() - tg
 	if timing:
 		print("GENCHUNK %d,%d gen_ms=%d t=%d" % [cx, cz, dg, Time.get_ticks_msec()])
@@ -5413,9 +5519,13 @@ func _startup_gen_apply() -> void:
 		_low_fog_for(c)  # AC-0231: the immediate fog-box first pass (far only)
 		_apply_edits_to_chunk(c)
 		_apply_pending_leaf_decay(c)  # AC-0270: restore the saved timers
-		_star_seed_column(c)  # AC-0283 P2: the burst lands data on the main
-		# thread (not via threadgen_handoff) — the engine seed belongs here,
-		# or the box gate blocks every build in the burst's 3x3 region.
+		# AC-0283 P2 (P3): the burst lands data on the main thread (not via
+		# threadgen_handoff) — the engine seed belongs here, or the box gate
+		# blocks every build in the burst's 3x3 region. REAL band only (the
+		# halo never seeds — the unseeded-tolerant box gate settles the
+		# edge against the halo neighbors).
+		if _is_real_col(int(e[1]) - last_pcx, int(e[2]) - last_pcz):
+			_star_seed_column(c)
 		if timing:
 			print("GENHAND %d,%d t=%d" % [int(e[1]), int(e[2]), Time.get_ticks_msec()])
 
@@ -5521,19 +5631,23 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 	chunk_origin[e["key"]] = "gen"  # AC-0155
 	_apply_edits_to_chunk(c)
 	_apply_pending_leaf_decay(c)  # AC-0270: restore the saved timers
-	# AC-0283 P2: seed the engine (AFTER the edits apply — the engine seeds
-	# the post-edit data): a new column seeds all 24 sections top-down; a
-	# regen merge re-seeds the replaced slabs by diff (identical data =
-	# no-op = zero churn — the deterministic regen guarantee).
-	if is_regen:
-		var dsr: Array = resl[0]
-		var rsis: Array = []
-		for si in range(c.data.size()):
-			if si < int(dsr.size()) and dsr[si] is Dictionary:
-				rsis.append(si)
-		_star_reseed_column(c, rsis)
-	else:
-		_star_seed_column(c)
+	# AC-0283 P2 (P3): seed the engine (AFTER the edits apply — the engine
+	# seeds the post-edit data): a new column seeds all 24 sections
+	# top-down; a regen merge re-seeds the replaced slabs by diff
+	# (identical data = no-op = zero churn — the deterministic regen
+	# guarantee). REAL band only — the halo never seeds (the
+	# unseeded-tolerant box gate settles the edge against the halo
+	# neighbors; a promoting column seeds at the recenter crossing).
+	if _is_real_col(tcx - last_pcx, tcz - last_pcz):
+		if is_regen:
+			var dsr: Array = resl[0]
+			var rsis: Array = []
+			for si in range(c.data.size()):
+				if si < int(dsr.size()) and dsr[si] is Dictionary:
+					rsis.append(si)
+			_star_reseed_column(c, rsis)
+		else:
+			_star_seed_column(c)
 	_tg_handoff += 1
 	_pool_touch()  # AC-0217: queued entry's data landed (pool membership flipped)
 	_low_fog_for(c)  # AC-0231: the immediate fog-box first pass (far only)
@@ -5594,7 +5708,10 @@ func _tm_worker_run(skey: int) -> void:
 		# its binding but is no longer called by the lanes.
 		var mcl: Variant = ChunkScript.mesh_cpp()
 		var grid := 8 if int(entry.get("tier", 1)) == 1 else 4
-		entry["result"] = mcl.low_emit_avg(entry["slabs"], int(entry["si"]), grid, entry["fcc"])
+		# AC-0283 P3: the halo's per-cell heightmap sky (empty on the
+		# legacy real-band / battery path — the emit's all-bright default).
+		var sky: PackedByteArray = entry.get("sky", PackedByteArray())
+		entry["result"] = mcl.low_emit_avg(entry["slabs"], int(entry["si"]), grid, entry["fcc"], sky)
 		low_emit_cpp += 1
 		return
 	# AC-0152/AC-0160: all bands (0/1/2) flow through the normal build_accs
@@ -5981,7 +6098,10 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		# until the wave's low lands and flips it (the slab never shows
 		# two tiers or nothing).
 		var taxi_now := absi(int(c.cx) - last_pcx) + absi(int(c.cz) - last_pcz)
-		var straggler := taxi_now >= medium_start_r
+		# AC-0283 P3: the straggler test is the REAL-band exit (the column
+		# left the real band while this build was in flight) — the halo
+		# band's draw owns it now. taxi_now stays for the log line.
+		var straggler := taxi_now > band0_r and not _is_tier0_col(int(c.cx) - last_pcx, int(c.cz) - last_pcz)
 		if straggler:
 			hslab_stragglers_n += 1
 		var ta_h := Time.get_ticks_msec()
@@ -6773,10 +6893,12 @@ func _collect_pool(build: bool, include_fb := false, maxb := -1, high_only := fa
 					# deep pending slabs stayed unmeshed indefinitely
 					# (measured: r16 settle frozen on 6 slabs of the new
 					# taxi-0 chunk while the drain dispatched 0 units).
-					# Pre-filter the drain's pool to the high band only.
+					# Pre-filter the drain's pool to the REAL band only
+					# (AC-0283 P3: the halo band's work is the slab wave's,
+					# never the drain's).
 					var dxh := int(e["cx"]) - last_pcx
 					var dzh := int(e["cz"]) - last_pcz
-					if absi(dxh) + absi(dzh) >= medium_start_r and not _is_tier0_col(dxh, dzh):
+					if not _is_real_col(dxh, dzh):
 						continue
 				out.append(e)
 			else:
@@ -7057,12 +7179,12 @@ func _drain_build_queue() -> void:
 				# AC-0257 (AC-0263): keep-high — a meshed column is skipped.
 				if c == null or c.data.is_empty() or c.mesh_built:
 					continue
-				# AC-0261 (AC-0263): the load's high builds are the HIGH band
-				# only — the visible band [medium_start_r, render_radius) is
-				# slab-wave owned (its avg LOD is final there).
+				# AC-0261 (AC-0263, AC-0283 P3): the load's high builds are
+				# the REAL band only — the halo band (band0_r, render_radius)
+				# is slab-wave owned (its avg LOD is final there).
 				var dxl := int(e["cx"]) - last_pcx
 				var dzl := int(e["cz"]) - last_pcz
-				if absi(dxl) + absi(dzl) >= medium_start_r and not _is_tier0_col(dxl, dzl):
+				if not _is_real_col(dxl, dzl):
 					continue
 				if not _build_ready(int(e["cx"]), int(e["cz"])):
 					load_phase1_ready_fail += 1
@@ -7239,19 +7361,19 @@ func _drain_build_queue() -> void:
 				best_c = fpick["c"]
 				best_from_fb = true
 		if best_c != null:
-			# AC-0261 (AC-0263): the main build lane is the HIGH band only
-			# (taxi < medium_start_r, or the tier-0 set — the section's
-			# slabs outrank the rings via the score prefix). An out-of-band
-			# top pick blocks the high dispatch for the frame (the unit
-			# falls to the data pass below); the entry stays queued and is
-			# re-picked whenever an in-band entry goes ready (in-band
-			# entries always out-score it on taxi). The visible band
-			# [medium_start_r, render_radius) is the slab wave's (its avg
-			# LOD is final there); the WAVE 3 catch-up upgrades a
-			# low-holding column when it ENTERS the high band (per-slab).
+			# AC-0261 (AC-0263, AC-0283 P3): the main build lane is the
+			# REAL band only (taxi ≤ band0_r, or the tier-0 set — the
+			# section's slabs outrank the rings via the score prefix). An
+			# out-of-band top pick blocks the high dispatch for the frame
+			# (the unit falls to the data pass below); the entry stays queued
+			# and is re-picked whenever an in-band entry goes ready (in-band
+			# entries always out-score it on taxi). The halo band (band0_r,
+			# render_radius) is the slab wave's (its avg LOD is final there);
+			# the WAVE 3 catch-up upgrades a low-holding column when it ENTERS
+			# the real band (per-slab).
 			var dxg := int(best_e["cx"]) - last_pcx
 			var dzg := int(best_e["cz"]) - last_pcz
-			if absi(dxg) + absi(dzg) >= medium_start_r and not _is_tier0_col(dxg, dzg):
+			if not _is_real_col(dxg, dzg):
 				best_c = null
 				perf_high_gate_holds_n += 1
 		if best_c != null:
@@ -8615,34 +8737,51 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 			if not in_stream_set(odx, odz):
 				c.cand_since = 0
 				_stage_check(c, key)
-			# AC-0278 (the stuck-mesh fix): the single-source re-queue.
-			# A high-band chunk that holds data, has no high mesh, and has
-			# NO build entry gets one. Previously this only happened in
-			# the WANT walk - which DEBOUNCED recenters skip (AC-0213) -
+			# AC-0278 (the stuck-mesh fix, AC-0283 P3): the single-source
+			# re-queue - a REAL-band chunk that holds data, has no high mesh,
+			# and has NO build entry gets one. Previously this only happened
+			# in the WANT walk - which DEBOUNCED recenters skip (AC-0213) -
 			# so a build entry stripped when the chunk candidated on exit
 			# could strand: in set, data, never meshed again (the report:
 			# "candidate out of sync kept mesh from generating even at
 			# tier 0" while flying back over it). Harmless over-queue:
 			# _enqueue_build dedupes, and the drain's high_only pool gate
-			# only dispatches entries whose chunk is in the high band.
-			var htx := absi(int(c.cx) - pcx) + absi(int(c.cz) - pcz)
-			if not c.data.is_empty() and not c.mesh_built and htx < medium_start_r \
+			# only dispatches entries whose chunk is in the real band.
+			if not c.data.is_empty() and not c.mesh_built and _is_real_col(dx, dz) \
 					and queued_keys.get(key) != "build":
 				_enqueue_build(int(c.cx), int(c.cz))
-			# AC-0263 spec (keep-all-LOD): the column just LEFT the high
-			# band on this recenter - keep its stored high, flip the ready
-			# lows, re-open the rest (the demote above - no free, no fog).
+			# AC-0263 spec (keep-all-LOD, AC-0283 P3): the column just LEFT
+			# the REAL band on this recenter - the engine evicts (free the
+			# nibbles; a re-entry re-seeds from the current data) and the
+			# stored high keeps, the ready lows flip, the rest re-open (the
+			# demote above - no free, no fog).
 			if not c.data.is_empty() \
-					and (absi(int(c.cx) - opcx) + absi(int(c.cz) - opcz)) < medium_start_r \
-					and (absi(dx) + absi(dz)) >= medium_start_r:
+					and _is_real_col(odx, odz) \
+					and not _is_real_col(dx, dz):
+				_star_halo_evict(c, key)
 				_demote_high_band_exit(c, key)
-			# AC-0263 spec (keep-all-LOD): the column just CAME BACK into
-			# the high band - flip its stored highs on (visibility only,
-			# no rebuild; the mirror of the demote above).
+			# AC-0263 spec (keep-all-LOD, AC-0283 P3): the column just CAME
+			# BACK into the REAL band - the stored highs flip on (visibility
+			# only, no rebuild; the mirror of the demote above) and the
+			# engine (re-)seeds from the current data (the promotion: one
+			# full flood per column - its owed slabs re-bake on the settled
+			# light while the halo mesh shows, so no unlit frame).
 			if not c.data.is_empty() \
-					and (absi(int(c.cx) - opcx) + absi(int(c.cz) - opcz)) >= medium_start_r \
-					and (absi(dx) + absi(dz)) < medium_start_r:
+					and not _is_real_col(odx, odz) \
+					and _is_real_col(dx, dz):
 				_reentry_flip_high(c, key)
+				_star_halo_promote(c, key)
+				# AC-0283 P3: a stored high (a former REAL column that
+				# demoted) just flipped back on the OLD bake — arm every
+				# stamped slab for the remesh lane: it re-bakes on the
+				# column's NEW settled light (the promotion re-bake; the
+				# payload gate defers until the re-seed settles). The old
+				# bake keeps showing meanwhile (calculated light — the
+				# box gate's "never unlit" holds).
+				if bool(c.mesh_built):
+					for si_e in c.high_stamps.keys():
+						if int(c.high_stamps[si_e]) == int(c.data_gen):
+							_star_remesh_add(key, int(si_e))
 		else:
 			# AC-0278: "just exited" is a distance fact (in set w.r.t. the
 			# previous center, out now) - the one-time entry work (clear
@@ -9212,12 +9351,15 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 		_dirty_front(_key(cx, cz + 1), y)
 	_eff_cache_evict(_key(cx, cz))
 	_mark_light_around(cx, cz)
-	# AC-0283 P2: the engine sees the edit (the two-phase re-seed — the
-	# landing-order healing covers an unseeded face) and the mesh side
-	# re-arms (the affected slabs re-bake on the settled light).
+	# AC-0283 P2 (P3): the engine sees the edit (the two-phase re-seed —
+	# the landing-order healing covers an unseeded face) and the mesh side
+	# re-arms (the affected slabs re-bake on the settled light). REAL band
+	# only: an edit that lands on an unseeded halo column is not seeded
+	# here (the halo stays engine-free; a promotion re-seeds the column
+	# with its current data).
 	if star != null:
 		var _staredit: bool = star.on_edit(x, y, z, id)
-		if not bool(_staredit):
+		if not bool(_staredit) and _is_real_col(cx - last_pcx, cz - last_pcz):
 			_star_seed_column(c)
 		_star_rearm_edit(c, cx, cz, y >> 4)
 	if _fluid_near(x, y, z):
@@ -9812,11 +9954,13 @@ func _io_read_handoff(e: Dictionary) -> void:
 	if bool(e.get("apply_edits", false)):
 		_apply_edits_to_chunk(c)
 	_apply_pending_leaf_decay(c)  # AC-0270: restore the saved timers (disk columns too)
-	# AC-0283 P2: seed ALL sections (post-edits data). The SAVED LIGHT in
-	# the column (c.saved_light) is IGNORED for builds — the engine
+	# AC-0283 P2 (P3): seed ALL sections (post-edits data). The SAVED LIGHT
+	# in the column (c.saved_light) is IGNORED for builds — the engine
 	# recomputes from the data (the saved-light disk writes stay until
-	# AC-0287).
-	_star_seed_column(c)
+	# AC-0287). REAL band only — the halo never seeds (a promoting column
+	# seeds at the recenter crossing).
+	if _is_real_col(int(c.cx) - last_pcx, int(c.cz) - last_pcz):
+		_star_seed_column(c)
 
 func surface_top(x: int, z: int) -> int:
 	for y in range(Data.HEIGHT - 1, -1, -1):

@@ -762,6 +762,32 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	return flat;
 }
 
+// AC-0283 P3: the column's HEIGHTMAP — the 256 terrain-top heights
+// (heights[lz * 16 + lx], the surface_h of gen_flat's heights pass) as
+// bytes. The HALO band (taxi > sim_dist) never seeds or floods (AC-0283
+// P3): its draw light is the heightmap sky (15 strictly above the terrain
+// top per (x,z), 0 at or below), read from this at dispatch time on the
+// main thread. Only the three SURFACE fields are built (the cave/ore
+// fields are never read) — the heights pass of gen_flat, ~33us, with no
+// density scan, no fill, no palettize.
+static std::vector<uint8_t> column_heights(int cx, int cz, int64_t seed, int hmax) {
+	int bx = cx * 16;
+	int bz = cz * 16;
+	double ystep = (double)hmax / GY_CELLS;
+	Field f_sc, f_sh, f_sr;
+	build_field(f_sc, bx, bz, ystep, seed, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0);
+	build_field(f_sh, bx, bz, ystep, seed + 7, 70.0, SURF_YSCALE, 70.0, 333.0, 0.0, 333.0);
+	build_field(f_sr, bx, bz, ystep, seed + 13, 300.0, SURF_YSCALE, 300.0, 500.0, 0.0, 500.0);
+	std::vector<uint8_t> out(256);
+	for (int lz = 0; lz < 16; lz++) {
+		for (int lx = 0; lx < 16; lx++) {
+			int H = surface_h(bx + lx, bz + lz, f_sc, f_sh, f_sr, ystep, bx, bz);
+			out[(size_t)lz * 16 + lx] = (uint8_t)clampi(H, 0, hmax - 1);
+		}
+	}
+	return out;
+}
+
 // ---------------------------------------------------------------------------
 // Palettize (identical to ChunkIO.palettize_flat / chunk_io.cpp encode).
 // ---------------------------------------------------------------------------
@@ -910,6 +936,9 @@ public:
 		ClassDB::bind_method(D_METHOD("generate_flat", "cx", "cz", "s", "h", "sea", "skip", "keep"), &AweGen::generate_flat, DEFVAL(0), DEFVAL(PackedByteArray()));
 		ClassDB::bind_method(D_METHOD("generate_slabs", "cx", "cz", "s", "h", "sea", "skip", "keep"), &AweGen::generate_slabs, DEFVAL(0), DEFVAL(PackedByteArray()));
 		ClassDB::bind_method(D_METHOD("generate_resl", "cx", "cz", "s", "h", "sea", "skip", "keep"), &AweGen::generate_resl, DEFVAL(0), DEFVAL(PackedByteArray()));
+		// AC-0283 P3: the halo band's heightmap sky source (the heights
+		// pass only — see column_heights above).
+		ClassDB::bind_method(D_METHOD("column_heights", "cx", "cz", "s", "h"), &AweGen::column_heights);
 		ClassDB::bind_method(D_METHOD("skip_chunks_total"), &AweGen::skip_chunks_total);
 		ClassDB::bind_method(D_METHOD("skip_cols_total"), &AweGen::skip_cols_total);
 		ClassDB::bind_method(D_METHOD("reset_skip_stats"), &AweGen::reset_skip_stats);
@@ -1000,6 +1029,15 @@ public:
 		fl.resize(p_h / 16); // all null
 		resl.append(fl);
 		return resl;
+	}
+
+	// AC-0283 P3: the column's 256-byte heightmap (the halo sky source).
+	PackedByteArray column_heights(int p_cx, int p_cz, int p_s, int p_h) const {
+		std::vector<uint8_t> h = awegen::column_heights(p_cx, p_cz, p_s, p_h);
+		PackedByteArray out;
+		out.resize(256);
+		std::memcpy(out.ptrw(), h.data(), h.size());
+		return out;
 	}
 
 	// AC-0216: cumulative lazy-skip counters (process-wide, all threads).

@@ -1853,7 +1853,15 @@ static Dictionary low_emit_impl(const Array &p_slabs, int si, const Dictionary &
 // Returns {empty: true} when nothing emits, else {v, n, c, i, mh}.
 // ---------------------------------------------------------------------------
 
-static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, const PackedFloat32Array &p_fcc) {
+// AC-0283 P3: p_sky = the per-cell HEIGHTMAP sky light for the slab
+// (G*G*G bytes, 0..15 — 15 iff the whole 4x4x4 cell sits strictly above
+// the terrain top over its x/z footprint, else 0; the halo band's draw
+// light, computed at dispatch from the column heightmap). When present
+// (size matches), the QUAD's alpha = its origin cell's sky/15 and the
+// lod_avg shader multiplies it into the brightness — the far band is lit
+// by the heightmap, not the engine. Empty = the legacy all-bright emit
+// (the real band passes nothing — byte-identical output).
+static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky) {
 	Dictionary res;
 	const int G = (p_grid == 4) ? 4 : 8;
 	const int CELLB = 16 / G;
@@ -1861,6 +1869,8 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 	const int TOT = CELLB * CELLB * CELLB;
 	const float *fcc = p_fcc.ptr();
 	bool fcc_ok = p_fcc.size() >= 256 * 18;
+	const uint8_t *skyp = p_sky.ptr();
+	bool sky_ok = p_sky.size() == (int)(G * G * G);
 
 	// --- the three average-color grids (si-1 / si / si+1; the
 	// slab-boundary culling reads the neighbor SOLID masks).
@@ -2155,11 +2165,14 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 				else
 					wz += n[2] > 0 ? CELL : 0.0f;
 				// the quad color = the ORIGIN cell's face color (every
-				// merged cell shares the quantized key).
+				// merged cell shares the quantized key). AC-0283 P3: the
+				// quad's alpha = the ORIGIN cell's heightmap sky (the halo
+				// band's light; 1.0 when p_sky is absent).
 				int oidx = cc0[0] + cc0[2] * G + cc0[1] * G * G;
 				float qcr = grids_cols[1][oidx * 18 + fi * 3 + 0];
 				float qcg = grids_cols[1][oidx * 18 + fi * 3 + 1];
 				float qcb = grids_cols[1][oidx * 18 + fi * 3 + 2];
+				float qca = sky_ok ? (float)skyp[oidx] / 15.0f : 1.0f;
 				int cb0 = (int)av.size() / 3;
 				for (int j = 0; j < 4; j++) {
 					float cvx = FCV[fi][j][0];
@@ -2191,7 +2204,7 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 					ac.push_back(qcr);
 					ac.push_back(qcg);
 					ac.push_back(qcb);
-					ac.push_back(1.0f);
+					ac.push_back(qca);
 				}
 				ai.push_back(cb0);
 				ai.push_back(cb0 + 2);
@@ -2256,7 +2269,9 @@ public:
 		// AC-0252: the med/low AVERAGE-COLOR emit (grid 8 = MED / 4 = LOW,
 		// fcc = the face-color cache) — the active lane's emit.
 		ClassDB::bind_method(D_METHOD("low_emit", "slabs", "si", "ms"), &AweMesh::low_emit);
-		ClassDB::bind_method(D_METHOD("low_emit_avg", "slabs", "si", "grid", "fcc"), &AweMesh::low_emit_avg);
+		// AC-0283 P3: the optional 5th arg = the halo band's per-cell
+		// heightmap sky (empty = the legacy all-bright avg emit).
+		ClassDB::bind_method(D_METHOD("low_emit_avg", "slabs", "si", "grid", "fcc", "sky"), &AweMesh::low_emit_avg, DEFVAL(PackedByteArray()));
 	}
 
 	// AC-0236 part 2: slabs = the value-copied slab array (null | {n,b,p,i,
@@ -2270,9 +2285,11 @@ public:
 	// AC-0252: the med/low average-color emit (see low_emit_avg_impl for
 	// the full contract). grid = MED_GRID (8) or LOW_GRID (4); fcc = the
 	// (block id x 6 face direction) average-color cache (256 x 18 LINEAR
-	// floats, the value copy in the dispatch entry).
-	Dictionary low_emit_avg(const Array &p_slabs, int p_si, int p_grid, const PackedFloat32Array &p_fcc) {
-		return low_emit_avg_impl(p_slabs, p_si, p_grid, p_fcc);
+	// floats, the value copy in the dispatch entry). sky = the halo band's
+	// per-cell heightmap sky (AC-0283 P3; empty = the legacy all-bright
+	// emit — the real band and the battery arms pass nothing).
+	Dictionary low_emit_avg(const Array &p_slabs, int p_si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky) {
+		return low_emit_avg_impl(p_slabs, p_si, p_grid, p_fcc, p_sky);
 	}
 
 	// Lossless port of ChunkScript.build_accs (chunk.gd:1683). data/fl =

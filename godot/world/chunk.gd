@@ -143,6 +143,14 @@ var low_tiers: Dictionary = {}
 # changed since the emit (dgen/fgen mismatch at dispatch); freed with the
 # low set (drop_low) — i.e. at column eviction (r+2).
 var low_cache: Dictionary = {}
+# AC-0283 P3: the column's 256-byte HEIGHTMAP (H[lz*16+lx], the terrain
+# top y) — the halo band's sky-light source (15 strictly above, 0 at or
+# below). Computed once per column by world._halo_hmap_get (the C++
+# heights pass), cached here (static — the data never moves H; a data
+# edit re-emits through the dgen/fgen cache checks anyway). NEVER SAVED
+# (the halo draw is recomputed from the data at re-entry; AC-0287 owns
+# the save format).
+var hmap: PackedByteArray = PackedByteArray()
 # AC-0257: the AC-0234 vertical-window cap state (cap_instance / cap_slabs
 # / cap_mask) and the window stamps (vwin_ver / vwin_full / vwin_mask) are
 # GONE — no culled slabs, no black caps; every slab in the horizontal
@@ -1629,6 +1637,7 @@ func _pool_reset() -> void:
 	eff_gen = 0
 	top = -1
 	leaf_decay = {}  # AC-0270: the decay timers are per-column state
+	hmap = PackedByteArray()  # AC-0283 P3: the heightmap is per-column state
 	# mesh state
 	mesh_built = false
 	mesh_gen = 0

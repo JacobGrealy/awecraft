@@ -34,6 +34,13 @@ void fragment() {
 	vec3 cell = floor(v_world_pos * 0.6667);
 	float h = fract(sin(dot(cell, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
 	float jit = 1.0 + (h - 0.5) * 0.12; // +/-6% around the vertex color
-	ALBEDO = COLOR.rgb * day.rgb * jit;
-	ALPHA = COLOR.a;
+	// AC-0283 P3: the HALO band's light is the heightmap sky carried in
+	// COLOR.a (1.0 above the terrain top, 0.0 at/below — no block light).
+	// The real band (all-real worlds) still emits a=1.0, so lit==1.0 and
+	// the legacy brightness is byte-identical. A cave far band (a=0.0)
+	// renders at the 0.2 floor instead of full bright. ALPHA stays 1.0
+	// (the a channel is light, not transparency).
+	float lit = mix(0.2, 1.0, COLOR.a);
+	ALBEDO = COLOR.rgb * day.rgb * jit * lit;
+	ALPHA = 1.0;
 }
