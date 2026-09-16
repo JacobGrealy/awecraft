@@ -52,12 +52,14 @@ turn.
 You are the single subagent (xhigh) for AweCraft task AC-NNNN.
 
 READ FIRST, in order, BY PATH (do not paste their contents into your reply):
-1. godot/CONTINUITY.md          — state checkpoint, ops rules, task context
-2. godot/ARCHITECTURE.md        — architecture + subagent contract (mandatory)
-3. tasks/HARNESS.md             — every AWECRAFT_LOGIC mode, RESULT shapes,
+1. godot/CONTINUITY.md          — the TOP checkpoint only (state + resume steps)
+2. godot/ARCHITECTURE.md        — architecture + conventions (mandatory)
+3. godot/HARNESS.md             — every AWECRAFT_LOGIC mode, RESULT shapes,
                                    envs, smoke-tier protocol, run recipes
-4. tasks/AC-NNNN/spec.html      — this task's requirements + verify gates
-5. The AC-NNNN entry in tasks/TASKS.yaml (its notes), if the spec references it.
+4. godot/OPS.md                 — machine, sandbox, build/daemons/git rules
+                                   (read before ANY godot or git command)
+5. tasks/AC-NNNN/spec.html      — this task's requirements + verify gates
+6. The AC-NNNN entry in tasks/TASKS.yaml (its notes), if the spec references it.
 
 YOUR JOB — PLAN + IMPLEMENT in one turn.
 
@@ -71,7 +73,7 @@ YOUR JOB — PLAN + IMPLEMENT in one turn.
      1. Goal                 — 1 sentence: what AC-NNNN changes and why.
      2. Files to touch       — every godot/ path you expect to edit or read.
      3. Harness gates        — the AWECRAFT_LOGIC mode(s) that verify this task
-                                (the mode table in tasks/HARNESS.md is the ref).
+                                (the mode table in godot/HARNESS.md is the ref).
                                 For each: mode name + the ok:true condition.
 
 Then add any of the following ONLY if the task needs them (let your
@@ -99,13 +101,15 @@ and continue from its last entry.
 
 VERIFY (single: you own the gates, then exit):
   G0    one godot headless load: zero SCRIPT ERROR lines (hard gate — always).
-  SMOKE + PROBE + RENDER as needed (let your plan guide you; HARNESS.md §3
+  SMOKE + PROBE + RENDER as needed (let your plan guide you; godot/HARNESS.md §3
         is the ref). Typical: SMOKE = 2–4 dependency-mapped modes for the
         change area + genhash when world/* or data.gd is touched; PROBE = the
         task's probe mode from spec.html when defined (≤60s, headless).
   RENDER only when the change is visual (mesh/shader/held/UI):
         ≤1 render at AWECRAFT_RADIUS=1 into tasks/AC-NNNN/ (xvfb,
-        gl_compatibility) and save the PNG. Non-visual tasks skip the render.
+        gl_compatibility — a PROXY renderer: it cannot show Forward+-only
+        features such as DOF, so the shipped look is confirmed on the Windows
+        build, AC-0241) and save the PNG. Non-visual tasks skip the render.
   HEAVY boundary/perf/flake/r50 and full battery beyond SMOKE are the
         COORDINATOR's background gate job — you exit after your gates; do not
         run or wait for them.
@@ -117,11 +121,17 @@ results + continuity, name the follow-up, and EXIT (no option loop). A hard
 failure is still a bounce.
 
 One godot at a time (corrupts the .godot cache). All runs: one bash command,
-HOME set first, from repo root (recipes in HARNESS.md §4).
+HOME set first, from repo root (recipes in godot/HARNESS.md §4).
 
 DELIVER: a self-contained tasks/AC-NNNN/AC-NNNN-results.html for every
 task (G0 output + smoke RESULT JSON + deviations; include render PNG only
 when visual). Report <= 20 lines: files changed, RESULT values, gates green/red.
+
+ARCHITECTURE SYNC (standing rule, AGENTS.md #1): if your change alters the
+structure — an autoload, a component that moved/appeared/disappeared, a new
+subsystem or native layer, a data or save format, a convention — update
+godot/ARCHITECTURE.md in THIS task and say so in the report. A task that leaves
+that file wrong is not done.
 ```
 
 ---
@@ -136,7 +146,7 @@ Before launching, the coordinator checks `tasks/TASKS.yaml`:
 - BYPASS=yes → skip the xhigh single. Generate `tasks/AC-NNNN/spec.html` via
   `python3 tasks/scripts/spec_template.py AC-NNNN` (if not already present),
   then launch the **`subagent` tool (medium)** with a prompt that points at
-  `spec.html` + `HARNESS.md` only (same VERIFY/DELIVER as above, but no plan.html).
+  `spec.html` + `godot/HARNESS.md` only (same VERIFY/DELIVER as above, but no plan.html).
 - BYPASS=no → the single xhigh flow above (plan+implement in one turn).
 
 ---
@@ -155,7 +165,7 @@ Before launching, the coordinator checks `tasks/TASKS.yaml`:
   `./build_windows.sh` + 8080/5180 curls, logging to `.scratch/AC-NNNN-gates/gates.log`
   + `HEAVY_GATES_DONE` marker. Sliced set: **boundary r4 ×1** + **flake ×1** +
   genhash re-run + task probe, and **ONLY when scope touches `godot/world/*`|`lighting.gd`**
-  (HARNESS.md §3) — UI/tool tasks get SMOKE only; **r50 = nightly**. Commit/push N
+  (godot/HARNESS.md §3) — UI/tool tasks get SMOKE only; **r50 = nightly**. Commit/push N
   only after heavy pass (code+results+plan+build in one commit); heavy fail =
   honest-deviation+follow-up or bounce.
 - Templates keep doc references as paths (CONTINUITY.md, ARCHITECTURE.md,

@@ -1,98 +1,182 @@
-# AweCraft — Godot Port: architecture & subagent contract
+# AweCraft — architecture
 
-READ ALL OF THIS, then do ONLY your assigned task (from §8), then VERIFY + REPORT.
-This is the single source of truth for structure, conventions, and the headless test harness.
+What the game is made of, and the conventions that don't change per task. Every structural
+claim here was verified against the tree at **AC-0298** (2026-09-16); line counts and file
+lists drift, the *shape* is the contract.
 
-## 1. Ground rules
-- Project root: `/home/angrygiant/github_projects/AweCraft/godot/`
-- Language: **GDScript**, Godot **4.7** (engine at `~/tools/godot/godot`). Run with `--path AweCraft/godot`.
-- **No comments.** snake_case. 4-space indent. Type hints where trivial.
-- Godot `godot/` is the source of truth for behavior/data. Windows-native product (`exports/windows/`).
-- **1 subagent = 1 task.** Build on what earlier tasks already created. Do not build other tasks.
-- Every task ends with verification (render screenshot and/or headless logic assert) + a short report.
-- Surgical edits. No comments. Do not reformat unrelated files.
+**If a task changes the structure — a new autoload, a moved/renamed component, a new
+subsystem, a changed data or save format, a new native layer, a changed convention — it
+updates this file in the same task.** That rule is standing; see `AGENTS.md`.
 
-## 2. Autoloads (register in `project.godot`, exactly, in this order)
-1. `Game`   (`autoload/game.gd`)   — global state: mode (menu/play/pause), dimension (overworld/nether), world_seed, time_of_day (0..1). API: `Game.new_world(seed)`, `Game.start()`, `Game.message(t)`.
-2. `Data`   (`autoload/data.gd`)   — all ported tables + lookups + crafting match (API §5).
-3. `Audio`  (`autoload/audio.gd`)  — procedural synth (WS8). Stub early (no-op `Audio.play(name)` etc.).
-4. `Debug`  (`autoload/debug.gd`)  — headless test/verify hooks (API §6). CRITICAL.
+Detail lives elsewhere by design:
 
-## 3. Scene / node layout
+| Topic | Owner |
+|---|---|
+| test arms, battery, standing gate values, run recipes | `godot/HARNESS.md` |
+| machine, sandbox, daemons, build/serve | `godot/OPS.md` |
+| current state, resume steps | `godot/CONTINUITY.md` |
+| delegation, gates, closeout | `COORDINATOR.md`, `tasks/templates/two-phase.md` |
+| world generation & streaming internals | `docs/worldgen-current.html` |
+
+## 1. Shape
+
+- Godot project root is **`godot/`**; always run from the repo root with `--path godot`.
+  Engine `~/tools/godot/godot` = **4.7.1.stable.official.a13da4feb**.
+- **GDScript** for game logic; **C++ GDExtension** (`gdext/`) for the hot paths. §4.
+- The product is **Windows-only** (AC-0124). This Linux box is for development and headless
+  verification; the user playtests a stamped Windows build over the LAN.
+- Size at AC-0298: ~47.9k lines of GDScript in 34 files, ~7.8k lines of C++ in `gdext/src/`.
+  It is heavily concentrated — `scenes/harness.gd` (23.0k, the test arms) and
+  `world/world.gd` (11.0k, streaming/scheduling) are ~70% of the GDScript. Splitting those
+  monoliths is tracked as AC-0115.
+
+## 2. Autoloads
+
+Registered in `godot/project.godot`, **exactly in this order**, six of them:
+
+| # | Name | File | Owns |
+|---|---|---|---|
+| 1 | `Game` | `autoload/game.gd` | global state: `mode` (menu/play/pause/crash), `dimension`, `world_seed`, `time_of_day`, `planet_R`; the live `world`/`player`/`drops`/`entities`/`hotbar`/`console` handles; the native-extension presence check (`cpp_ext_ok`/`cpp_ext_missing`); `new_world()`/`start()`/`message()`; cursor mode |
+| 2 | `Data` | `autoload/data.gd` | all tables + lookups: world constants (`CHUNK` 16, `HEIGHT` 384, `SEA` 126), block/item/mob/recipe tables, atlas rects, colours, crafting match |
+| 3 | `Audio` | `autoload/audio.gd` | procedural synth (headless has no audio device — assertions check the trigger, never the sound) |
+| 4 | `Debug` | `autoload/debug.gd` | the headless test API (§6 of this file lists its shape), plus `error()`/crash capture with the modal dialog, session logs, `bug_report`, console tee |
+| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame) |
+| 6 | `Save` | `autoload/save.gd` | slot save/continue and the per-slot on-disk layout |
+
+Adding an autoload means editing `project.godot` **and this table** (and the order matters —
+`Data` and `Debug` are used by everything downstream).
+
+## 3. Scene tree — constructed at runtime
+
+`godot/scenes/main.tscn` contains a single `Main` (Node3D) with `main.gd`. Everything else
+is instantiated in code, so the scene files are shallow and the tree is not discoverable by
+opening a `.tscn`:
+
 ```
-Main (scenes/main.tscn + main.gd)                      # state machine: menu/play/pause/dim switch
-├─ World (world/world.tscn + world.gd)                 # ChunkManager (Node3D)
-│    └─ <chunk> (world/chunk.gd) ×N                     # Node3D + MeshInstance3D; block data + mesh + light bake + StaticBody
-├─ Player (player/player.tscn + player.gd)             # CharacterBody3D + child Camera3D (first-person)
-│    └─ interaction (player/interaction.gd)           # DDA select/mine/place/bucket/bow
-│    └─ combat    (player/combat.gd)                  # damagePlayer (armor DR), attackMob (bare-hand 1)
-├─ Entities (entities/manager.tscn + manager.gd)       # parents mobs + arrows
-│    ├─ Mob (entities/mob.gd)                          # base AI state/hp/drops
-│    │    └─ models/*.tscn (skeleton/chicken/wolf/spider/pig/cow/sheep/zombie) — UNIQUE models, hip-pivoted limbs
-│    └─ Arrow (entities/arrow.gd)                      # projectile (Area3D, vel+gravity, DDA vs blocks/mobs/player)
-└─ HUD (ui/hud.tscn + hud.gd)                          # hearts, food bar, hotbar, crosshair, msg
-     └─ Inventory (ui/inventory.tscn + inventory.gd)   # backpack 9x3 + craft grid + output + armor 4; tooltip + recipe autofill
-
-Pure logic (class_name scripts, static funcs, no node deps):
-  core/math.gd   — Vec3 helpers + `raycast_blocks(origin,dir,max,get_block_fn)` analytical voxel DDA (port web raycastVoxel) + face normals.
-  core/noise.gd  — value/perlin noise + fbm (port web fbm3 + terrain noise), seeded.
+Main                      scenes/main.tscn  →  scenes/main.gd
+                          state machine (menu/play/pause), sky + day/night + aero,
+                          HUD wiring, star node, stats overlay, snapshot/aim hooks
+├─ Harness                scenes/harness.gd   all AWECRAFT_LOGIC/AWECRAFT_BATTERY arms;
+│                                             inert during normal play (AC-0140)
+├─ DirectionalLight3D     "sun" — modulated by Game.time_of_day
+├─ WorldEnvironment
+├─ World                  world/world.tscn  →  world/world.gd
+│  │                      chunk manager: streaming bands, LOD tiers, scheduler/drain,
+│  │                      chunk pool, fluid ticking, edit flush, drops + mob spawning
+│  ├─ drops (Node)        entities/drop.gd instances
+│  └─ entities (Node)     entities/mob.gd, arrow.gd, banana.gd
+│     (scenes/test_range.tscn substitutes for World in the AC-0191 test range)
+├─ Player                 player/player.tscn  →  player/player.gd
+│                         CharacterBody3D + CollisionShape3D + Camera3D
+│                         (CameraAttributesPractical = camera_attributes/main-camera-attributes.tres)
+│                         movement, look, mine/place/bucket/bow, combat, inventory model,
+│                         held-item viewmodel, swing/bob
+├─ ui/inventory.gd        CanvasLayer — hotbar, backpack + crafting grid, armour,
+│                         hearts/food, crosshair, messages (Game.hotbar)
+├─ ui/console.gd          CanvasLayer — in-game console (AC-0121)
+└─ Menu                   scenes/menu.tscn  →  ui/menu.gd — main menu + options
 ```
 
-## 4. Key design decisions (match web look + perf; do NOT improvise differently)
-- **Collisions:** player & mobs are `CharacterBody3D`. Voxel collision = a `StaticBody3D` per chunk built from that chunk's solid blocks (box `CollisionShape3D`s), rebuilt on block edit.
-- **Raycast:** use `core/math.gd` analytical voxel DDA for select/mine/place/projectiles — NOT physics ray (faster, faithful).
-- **Meshing:** one chunk → one `ArrayMesh` via `SurfaceTool` from visible solid faces + level-aware fluid faces. Update on edit.
-- **Lighting (port web):** column sky light (open-to-sky) + block light BFS (torch=14, glowstone, lava). **Bake a light factor into each face's VERTS COLOR** (multiply albedo by light). One `DirectionalLight3D` "sun" modulates by `time_of_day`. Do not lean on Godot realtime GI.
-- **Fluids (port `tickFluids`):** per-cell flow level (source=8, flowing decays); water=5, lava=24; reactions water+lava→obsidian(25)/stone(9, sideways); buckets (scoop/place). Level-aware fluid mesh.
-- **Rendering method (AC-0241):** `forward_plus` (was gl_compatibility, web-era legacy). Forward+ is Vulkan-based on Linux, so the software-GL xvfb render path may not work here — visual verification is the user's Windows build (headless arms are renderer-agnostic).
-- **Dimensions (M11/WS6):** two World instances; per-dimension save; portal teleport 1:1.
+There is **no** `hud.gd`/`hud.tscn`, `player/interaction.gd`, `player/combat.gd`,
+`entities/manager.gd` or `entities/models/*.tscn`: those duties are consolidated inside
+`main.gd`, `player.gd`, `world.gd` and `ui/inventory.gd`. `world/chunk.gd` is the
+per-column/slab object; `core/*.gd` are pure-logic helpers with no node dependencies
+(`math.gd` DDA, `noise.gd`, `atlas.gd`, `chunk_io.gd`, `sphere_math.gd`, `held_mesh.gd`,
+`aero.gd`, `daynight.gd`, `build_id.gd`), plus the `.gdshader` files under `world/` and
+`core/`.
 
-## 5. `Data` autoload — port these tables from web (grep the web file; do NOT transcribe from memory)
-- `blocks`: id 1..28 → `{name, solid, cross, tile(top/side/bottom ids), hard(mine time), drop}` (port web `BLOCKS`).
-- `items`: auto from blocks + specials **100..147** — 100-110 misc (106 coal,107 diamond,109 iron sword,110 raw iron), 111-125 tools (`.tool/.tier/.dmg/.speed`), **126 flint&steel**, 127-138 armor (`.armor/.dr/.mat`), 139-141 buckets (`.bucket`), 142 bow, 143 arrow, 144 bone, 145 string, 146/147 raw/cooked chicken.
-- `recipes`: `shapeless` (ingredient-count key → `{id,n}`) + `shaped` (`{pattern[rows (MUST be 3 wide)], map(char→id), out}`); port web `SHAPELESS`/`SHAPED`.
-- `mobs`: existing 4 + skeleton/chicken/wolf/spider → `{hp,speed,hostile,night_only,drops[],model}` (port web `MOBS`).
-- `tiles`: icon atlas id map (port web `T`).
-- `World constants`: world height, sea level (30), spawn area, 4 biomes, ore fbm3 thresholds.
-- Lookups + crafting: `Data.block(id)`, `Data.item(id)`, `Data.match_shapeless(counts)`, `Data.match_shaped(rows)`.
+## 4. Native extension (`gdext/`)
 
-## 6. `Debug` autoload — headless test/verify harness (CRITICAL for every task)
-Provide (mirror web `__debug`):
-- `Debug.snap(path)` → `await RenderingServer.frame_post_draw`; `get_tree().root.get_viewport().get_texture().get_image().save_png(path)`.
-- `Debug.set_block(x,y,z,id)`, `Debug.block_at(x,y,z)`, `Debug.set_fluid(x,y,z,id,lvl)`, `Debug.fluid_at(x,y,z)`, `Debug.tick_fluids()`.
-- `Debug.give_item(id,n)`, `Debug.sel(index)`, `Debug.teleport(x,y,z)`, `Debug.aim_at(x,y,z)` (set pos + look).
-- `Debug.spawn_mob(key,x,y,z)`, `Debug.mobs_list()`, `Debug.player` (→ player node: pos/hp/hunger/armor[]/inv/state), `Debug.time`, `Debug.set_time(t)`, `Debug.fly(bool)`.
-- `Debug.result(dict)` → `JSON.stringify` to `user://debug_result.json` AND `print("RESULT ", ...)`.
-Task verify = drive these (via a throwaway test scene OR by editing Main to run a short scripted scenario), assert, `Debug.result`, `get_tree().quit()`. Read back the printed `RESULT` / the json.
+The hot paths are C++ (GDExtension), guarded at boot: if a class is missing, `Game`
+reports `C++ extension (gdext) not loaded — missing: …`, prints the CANNOT START banner and
+quits.
 
-## 7. VERIFY commands (PROVEN working on this box)
-```
-# LOGIC only (no GPU, no display):
-~/tools/godot/godot --headless --path AweCraft/godot
-# RENDER (AC-0241: Forward+ is Vulkan on Linux - needs a Vulkan device, e.g. lavapipe):
-xvfb-run -a ~/tools/godot/godot --path AweCraft/godot
-```
-- First run imports assets (prints steps) — normal.
-- `look_at` on a node not yet in the tree errors → call after `add_child` (or `look_at_from_position`).
-- **No audio device** here → Godot uses the **dummy** audio driver (WS8 can't be heard; assert the synth triggers the right playback, not by ear).
-- Save screenshots to `/tmp/opencode/<task>_<name>.png`. The orchestrator will VIEW the PNGs (esp. for M10 mob appearance).
+| Source | Role |
+|---|---|
+| `awe_common.{h,cpp}` | shared helpers/registration |
+| `gen.cpp` | terrain, biome, cave and ore generation (the density-field generator) |
+| `mesh.cpp` | chunk meshing (greedy/FACE-BLOCK path) |
+| `strips.cpp` | strip meshing lane |
+| `chunk_io.cpp` | column/slab blob encode+decode, region disk I/O |
+| `lighting.cpp` | **test-only reference**: the legacy `AweLighting` flood kernel (AC-0283 P4) |
+| `starlight.cpp` | the live light engine: single-queue sky+block propagation, per-section nibbles (`AweStarlight`) |
 
-## 8. Migration checklist (one subagent each, strictly in order)
-- [ ] **M1 Scaffold** — `project.godot` (5 autoloads, §2 order), folders, `Main.tscn`+`main.gd`, a minimal first-person scene (Camera3D) rendering ONE lit colored voxel block; `Debug` autoload with `snap`+`result` working. VERIFY: xvfb render → `Debug.snap` → a PNG the orchestrator can see (block visible, first-person).
-- [ ] **M2 Chunk world** — chunk data + deterministic generator (4 biomes, caves, ores, bedrock, sea, seeded) + SurfaceTool meshing (visible faces) + per-chunk StaticBody collision. VERIFY: render terrain (player view + from above) + headless `block_at` (grass top, sea water, bedrock floor).
-- [ ] **M3 Player** — `CharacterBody3D` move, gravity/jump, fly(F), first-person mouse look, time(G), F3 debug, world spawn. VERIFY: headless (pos changes on input, fly toggles, time changes) + player render.
-- [ ] **M4 Interaction** — DDA select highlight cube, long-press mine (`block.hard`), place (incl. buckets), drops on break, hotbar select. VERIFY: mine a block (→0, drop), place it back.
-- [ ] **M5 Lighting** — column sky light + block BFS + torches; bake to vertex color; sun by time_of_day. VERIFY: day vs night render + torch lights a cave.
-- [ ] **M6 Fluids** — flow levels, reactions, buckets, level-aware mesh, tick near player. VERIFY: dug cell refloods (lvl-7 spread, source stable); source water over lava→obsidian; water sideways vs lava→stone.
-- [ ] **M7 Inventory+Craft UI** — backpack 9x3 + hotbar + craft grid + output (shapeless+shaped) + armor 4 + **hover tooltip (name)** + **transparent empty slots** + **craftable-recipe autofill list**. VERIFY: craft log→planks→wooden pick (logic) + UI screenshot (transparent slots, hover tooltip visible).
-- [ ] **M8 Survival** — tool speed + gated drops (stone/ores need pick), armor DR, hunger (sprint/attack/mine drain, regen>18, starve), food bar, eat. VERIFY: drain/regen/starve logic; armor reduces damage; food bar width.
-- [ ] **M9 Combat + bare-hand punch** — `attackMob`; **empty hand deals 1 dmg**. VERIFY: punch mob empty-handed → −1 hp; with sword → weapon dmg.
-- [ ] **M10 Mobs** — base Mob + **8 UNIQUE, recognizable models** (skeleton w/bow, chicken w/comb, wolf quadruped, spider 8-leg, + 4 originals reworked) + **limbs pivoted at hip/shoulder** + AI (hostile chase, chicken passive, wolf tame by bone, spider night-only) + bow/arrow/projectiles + day/night spawn tables. VERIFY: orchestrator SEES a PNG of each mob (must read as its animal) + legs pivot at hip + skeleton shoots + wolf tames + spider night-hostile + arrow hits. (Expect model iteration.)
-- [ ] **M11 REMOVED (2026-08-18)** — user is redirecting the endgame in a new direction (spec TBD; see CONTINUITY.md §6).
-- [ ] **M12 WS7 Particles** — pooled particle system (color/velocity/gravity/life): block-break debris (block avg color), hit sparks, arrow-hit burst, pickup puff. VERIFY: breaking a block spawns debris (render).
-- [ ] **M13 WS8 Sound** — procedural synth (block break/place per category, footsteps, hit/eat/splash, arrow/bow, mob hurt, ambient day/night). VERIFY: headless assert each action triggers the correct `Audio.play`/buffer (no listening).
+Build and loading:
+- Built with SCons: `python3 -m SCons -C gdext platform=linux|windows target=template_release`
+  (both are run by `./build_windows.sh`) → `gdext/bin/libchunkio.{so,dll}`.
+- Loaded in-project via `godot/res/libchunkio.gdextension` (entry symbol
+  `chunkio_library_init`, `compatibility_minimum = 4.5`) pointing at `godot/bin/`.
+- The name is historical — it started as chunk I/O only and now covers gen, mesh, strips,
+  IO and lighting.
+- **`gdext/bin/` and `godot/bin/*` are git-ignored**: they are build outputs. A fresh
+  worktree or clone has no `.so`, and headless startup will fail to parse — copy it from the
+  main tree (see `godot/OPS.md`).
+- Proof that the C++ lanes actually carry the work (and that no GDScript reference kernel
+  silently took over) is the `nofallback` arm — `godot/HARNESS.md`.
 
-## 9. Report format (each subagent — concise, no code dumps)
-- Task id + files/symbols/autoloads added.
-- Verification: command run + the asserted values (printed `RESULT` / json) + screenshot paths.
-- Deviations / known limits.
+## 5. Data, assets, saves
+
+- **Tables live in `autoload/data.gd`** as GDScript dictionaries (blocks, items, recipes,
+  mobs, atlas rects). Splitting them into JSON is AC-0141/AC-0142 — still open, so do not
+  assume JSON.
+- **Textures**: `godot/assets/blocks_atlas.png` + `.json` and `items_atlas.png` + `.json`,
+  generated from the Faithful pack by the pack-import probe (`godot/probe_alpha.gd`, hook
+  `AWECRAFT_IMPORT_PACK`). The runtime can also load a user resource pack (`*.zip`/`*.mcpack`)
+  from the menu.
+- **Saves**: slot-based (`Save` autoload + `core/chunk_io.gd` + `gdext/chunk_io.cpp`), column
+  blob format **v6**, per-slot chunk directories under `user://` — which in this sandbox is
+  `/tmp/dsh_home/...`, so saves do not survive a reboot (see `godot/OPS.md`). The save-content
+  filter (write only the sim band or edited columns) is AC-0287.
+
+## 6. Stable design decisions
+
+Match these; do not improvise a different approach in a task.
+
+- **Collision**: player and mobs are `CharacterBody3D`; voxel collision is a per-chunk
+  `StaticBody3D` built from that chunk's solid blocks and rebuilt on edit.
+- **Raycasting**: the analytical voxel DDA in `core/math.gd` for select/mine/place and
+  projectiles — not physics rays (faster and deterministic).
+- **Meshing**: one `ArrayMesh` per slab/chunk via `SurfaceTool` (GDScript path) or the C++
+  greedy/strip lanes; level-aware fluid faces; rebuilt on edit.
+- **Lighting**: baked into each face's **vertex colour** (albedo × light) — no realtime GI.
+  Sky+block light come from the C++ `AweStarlight` single-queue engine inside the sim band;
+  beyond it a heightmap-sky halo (sky 15 strictly above the terrain top, 0 at/below, no
+  flood, no nibbles) keeps the far field cheap. One `DirectionalLight3D` sun is modulated by
+  `Game.time_of_day`; the mesh stores noon light and the shader uniform `u_day` does the
+  darkening (AC-0204 — no day factor anywhere in the build path).
+- **`gdext/lighting.cpp` (`AweLighting`) and the classic light pull are TEST-ONLY
+  references** (AC-0283 P4). They exist so arms can compare against the old kernel. Never
+  wire them into game code; AC-0297 removes the last live consumers.
+- **Fluids**: per-cell levels (`source = 8`, decaying flow), water/lava reactions, buckets,
+  level-aware meshing, ticking near the player.
+- **Rendering**: `forward_plus` (AC-0241) with the Linear tonemap restored (ACES reads
+  washed out on hand-tuned unshaded chunk shaders), occlusion culling on.
+- **Frustum culling**: engine-side (AC-0212). The manual per-camera-change pass was removed —
+  do not reintroduce a manual cull for chunks.
+- **Dimensions**: `Game.dimension` exists **but the nether/second dimension was never
+  built** — the variable has no consumers anywhere in the tree. Treat "two worlds,
+  per-dimension save, portals" as an unbuilt intention, not a feature.
+
+## 7. Conventions
+
+- GDScript: `snake_case`, 4-space indent, type hints where trivial.
+- **Comments are the documentation style.** Non-obvious blocks carry an `AC-NNNN`-tagged
+  rationale (why the constant, why the ordering, what was measured). The port-era "no
+  comments" rule is retired: an unexplained optimisation in this codebase is a liability.
+- Surgical edits. Do not reformat unrelated files; do not restructure a file you were not
+  asked to touch.
+- Every change is a ticket. `tasks/TASKS.yaml` is mutated **only** through
+  `python3 tasks/scripts/tasks.py` (§ `AGENTS.md`).
+- Verification is not optional: every task ends with the arms that prove it, and the values
+  are recorded (see `godot/HARNESS.md`).
+
+## 8. History
+
+- The original game was a web (Three.js) project; the Godot port's **M1–M13 checklist is
+  retired** and no longer describes anything. `M11` (endgame) was explicitly removed. Work
+  now flows as AC tickets.
+- Older port-era statements that are now wrong and were corrected at AC-0298: four autoloads
+  (now six); a hand-authored `hud`/`interaction`/`combat`/`manager` node layout (consolidated
+  into scripts); "no comments" (inverted); a four-command VERIFY block (now
+  `godot/HARNESS.md`); an implemented nether (never built).
+- Deep history lives in git and `godot/CONTINUITY.archive.md`.

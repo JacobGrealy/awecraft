@@ -1,4 +1,4 @@
-# AweCraft — headless test harness reference (tasks/HARNESS.md)
+# AweCraft — headless test harness reference (godot/HARNESS.md)
 
 Single reference for every `AWECRAFT_LOGIC` mode + render/shot env hooks, the
 `AWECRAFT_BATTERY` runner, known-stable gate values, and sandboxed run recipes.
@@ -90,9 +90,20 @@ All render hooks need the software-GL recipe (§4); typical timeout **300 000 ms
 (llvmpipe is slow; keep `AWECRAFT_RADIUS` 1–2). All are in the `HARNESS_ENVS` list
 (main.gd:273) which also forces radius 4 + default settings when set.
 
+**Renders here are a PROXY, not the product renderer (verified 2026-09-16, AC-0298).**
+The recipe forces `--rendering-method gl_compatibility` (software GL through llvmpipe, the
+only path proven on this box) while the game ships `forward_plus` (AC-0241). gl_compatibility
+provably **cannot** show Forward+-only features — the engine logs
+`Depth of field blur is only available when using the Forward+ or Mobile renderer` (DOF is a
+shipped developer setting, AC-0281) — and it differs in tonemap/clustered-lighting behaviour.
+Use a render as evidence about **geometry, layout and UI**, never about final colour, DOF or
+lighting feel; the authoritative look is the user's Windows build of the shipped renderer.
+The `forward_plus` A/B on this box is unproven (a Vulkan device via lavapipe is present but
+untested) — AC-0300.
+
 | env | what it does | required flags / notes |
 |---|---|---|
-| `AWECRAFT_SNAPSHOT=path.png` | boot world (menu-first unless `AWECRAFT_MENU_BOOT=1`), wait for build, snap viewport PNG | xvfb-run -a + `--rendering-method gl_compatibility`; sets `RESULT {"m4":"ok",w,h,cam}` |
+| `AWECRAFT_SNAPSHOT=path.png` | boot world (menu-first unless `AWECRAFT_MENU_BOOT=1`), wait for build, snap viewport PNG | xvfb-run -a + `--rendering-method gl_compatibility` (proxy renderer — see the note above §2); sets `RESULT {"m4":"ok",w,h,cam}` |
 | `AWECRAFT_SNAPSHOT2=path.png` | second snap in `AWECRAFT_CAM=shaft` (after fluid settle) | only with cam=shaft |
 | `AWECRAFT_CAM=top\|iso\|iso2\|sky\|eyeup\|sandpad\|shaft\|cave` | camera preset for snapshot runs (main.gd:1003–1083) | `sky`/`eyeup` look at sun; `shaft` drops a water column + double-snap; `cave` teleports into the first enclosed cave pocket + 3D torch array + 300-frame settle (AC-0110); default (empty) = first-person player spawn. **AC-0152/0160 finding:** the on-demand player spawn (main.gd:1310, `snapshot_path != "" and player == null`) makes the player camera current AFTER the named-camera block — `cam=top` snapshots silently come out first-person. For a true top-down band/LOD shot use `AWECRAFT_AIM="x,y,z,yaw,pitch"` (e.g. `8,240,8,0,-1.57` = 100 m above spawn, straight down) with the default cam |
 | `AWECRAFT_SIZE=W,H` | force window size (e.g. `1280,720`) before boot | no-size → `Settings.apply_window` |
@@ -200,7 +211,9 @@ timeout 300 env 'AWECRAFT_BATTERY=player;interact;light;fluids;genhash' $S --hea
 # full battery (pre-build gate, ~60–90 s):
 timeout 600 env 'AWECRAFT_BATTERY=player;interact;light;fluids;buckets;genhash' $S --headless --path godot
 
-# render (software GL under virtual X; R=1–2; timeout 300000 ms):
+# render (software GL under virtual X; R=1–2; timeout 300000 ms). NOTE: a PROXY
+# renderer — gl_compatibility cannot show Forward+-only features (DOF) and differs
+# in tonemap; the shipped renderer is forward_plus (AC-0241). See §2.
 xvfb-run -a env AWECRAFT_SNAPSHOT=/tmp/shot.png AWECRAFT_CAM=top AWECRAFT_RADIUS=2 $S --path godot --rendering-method gl_compatibility
 
 # env knobs that matter (any mode):

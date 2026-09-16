@@ -1,20 +1,24 @@
 meta:
-  updated_at: 2026-09-16T08:17
+  updated_at: 2026-09-16T14:32
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0283
+- AC-0297
 - AC-0284
+- AC-0300
 - AC-0286
 - AC-0287
 - AC-0293
+- AC-0299
 - AC-0288
 - AC-0289
 - AC-0290
 - AC-0291
 - AC-0292
 - AC-0294
+- AC-0296
 - AC-0093
 - AC-0038
 - AC-0039
@@ -37,7 +41,7 @@ queue:
 - AC-0115
 - AC-0090
 - AC-0176
-- AC-0259
+- AC-0295
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -11114,12 +11118,12 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels:
   - godot
   created_at: 2026-09-10T13:30
-  updated_at: 2026-09-10T13:30
-  completed_at: null
+  updated_at: 2026-09-16T09:40
+  completed_at: 2026-09-16T09:40
   waiting_on: null
   parent_id: null
   notes: '1) User Story: When I fly far I want a two-tier distance LOD: a NEW medium tier at 8x8x8 that
@@ -11400,14 +11404,14 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: cancelled
   labels:
   - art
   - sky
   - regression
   created_at: 2026-09-11T20:25
-  updated_at: 2026-09-11T20:25
-  completed_at: null
+  updated_at: 2026-09-16T09:39
+  completed_at: 2026-09-16T09:39
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -11453,7 +11457,11 @@ intake:
     reference.
 
     '
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-09-16T09:39
+    updated_at: null
+    text: '[user] this fixed itself at some point, closing'
 - id: AC-0260
   title: options-menu-centering-and-developer-tab
   source: user
@@ -12162,7 +12170,9 @@ intake:
 - id: AC-0280
   title: altitude-based-flight-speed
   priority: 2
-  status: open
+  status: done
+  updated_at: 2026-09-16T09:40
+  completed_at: 2026-09-16T09:40
   notes: '1) User Story: As a player flying I want speed below cruising-altitude at 2x ground speed and
     at/above at 6x ground speed so low flight is controllable and high cruising is fast.
 
@@ -12174,6 +12184,11 @@ intake:
   area: player
   effort: S
   depends_on: []
+  comments:
+  - id: 1
+    created_at: 2026-09-16T09:39
+    updated_at: null
+    text: '[user] this is done'
 - id: AC-0281
   title: dof-developer-settings
   source: user
@@ -12662,7 +12677,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-15T13:21
-  updated_at: 2026-09-15T13:35
+  updated_at: 2026-09-16T10:26
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -12679,5 +12694,578 @@ intake:
 
 
     Note 2026-09-15: Start single-material only (parent id). Store as paletted p=[id] + 64B bitset so
-    multi-material later is just palette growth (p=[stone,wood]) with no save migration.'
+    multi-material later is just palette growth (p=[stone,wood]) with no save migration.
+
+
+    Update 2026-09-16: For AC-0294 initial chiseling, chiseled blocks are EXCLUDED from main slab greedy
+    meshing (leave holes). This ticket (0296) will later add the separate 8x8x8 greedy per chiseled block.
+    So 0294 is just exclusion, 0296 is the micro greedy.
+
+
+    Update 2026-09-16b: Micro resolution changed to 16x16x16 per block (4096 micro-voxels, 512B bitset)
+    instead of 8x8x8. Single-material first still via palette p=[id].'
+  comments: []
+- id: AC-0295
+  title: chunks-not-unloaded-when-render-distance-decreased
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-16T09:37
+  updated_at: 2026-09-16T09:38
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player, when I lower the render distance slider while in-game, chunks outside
+    the new smaller radius should despawn and free, not stay orphaned.
+
+
+    2) Technical Details: godot/world/world.gd render distance change handling. Slider Settings.render_dist
+    -> world.render_radius vs recenter queue still holds old radius entries; on decrease, need to evict
+    queued/loaded chunks beyond new radius and drop their meshes/collision. Verify by loading at R50,
+    dropping to R10, check orphan count is 0 and memory drops.
+
+
+
+    Update 2026-09-16: Slider changes should be staged while menu is open and only applied (recenter +
+    chunk evict) when leaving/closing the Options menu, not on every value_changed release.
+
+
+    Update 2026-09-16b: Applies to ALL distance sliders (render_dist, sim_dist, medium_start, low_start)
+    — stage value while Options menu is open, defer apply_world / recenter / evict until menu close (not
+    per-drag).'
+  comments: []
+- id: AC-0296
+  title: chiseled-greedy-meshing-separated
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-16T10:03
+  updated_at: 2026-09-16T10:26
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player with chiseled blocks, I want chiseled detail to mesh efficiently
+    without slowing the whole chunk''s greedy pass.
+
+
+    2) Technical Details: When a slab contains chiseled blocks, mesher should first greedy mesh all non-chiseled
+    blocks in the 16^3 slab (skipping chiseled positions, leaving holes), then separately greedy mesh
+    each 8x8x8 chiseled block''s internal micro-voxels. Two draw calls per slab if needed. Keeps big walls
+    optimal and micro detail contained. Verify chiseled blocks render correctly and rebuild time stays
+    low vs full 128^3 greedy.
+
+
+
+    Update 2026-09-16b: Micro greedy is now 16x16x16 per chiseled block (was 8x8x8). Separate pass greedy
+    meshes 16^3 per chiseled block.'
+  comments: []
+- id: AC-0297
+  title: starlight-native dirtyfull - last live consumers of the classic pull
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-16T12:56
+  updated_at: 2026-09-16T12:56
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want every nearby-chunk light value to come from the one Starlight
+    engine (or the far heightmap sky), so no rebuild path can ever display wrong light for even a moment.
+    Follow-up to the chunk-border over-bright fix (bf93b9a): that fix made the legacy pull''s border bakes
+    numerically match the star model, but the deeper cleanup is to stop self-lighting with the legacy
+    kernel at all.
+
+    2) Technical Details: The classic pull kernel (gdext/src/lighting.cpp compute_pull) is re-classified
+    TEST/REFERENCE ONLY (P4) but has two live game consumers, both full-column self-light bakes: (a) the
+    edit-fallback DIRTYFULL (_dirty_dispatch, cached eff null for boundary-edit neighbors) and (b) the
+    tex-refresh rebuild (_drain_tex_refresh, c.last_eff). Make both star-native: capture the settled per-slab
+    star payloads (or the halo heightmap payload for halo columns) at dispatch instead of self-lighting.
+    For (a) verify redundancy first with the star_bake_probe evidence: the star remesh lane''s edit re-arm
+    may already re-bake the same slabs from the settled payload — if so, DELETE the DIRTYFULL dispatch
+    rather than feed it payloads. For (b) the dispatch captures per-slab payloads at dispatch (settled
+    by construction, epoch-checked at landing). Acceptance: full gate set (boot/starlighttest 0-mismatch/r16
+    lost 0/0/lightstate R16 canaries + rebased census/ladder/meshprobe 1.0/battery exact P4 pattern/brightslab
+    C1-C6/halo/0 script errors) + profgen walk (sim disc 100% held, frames <= ~20 ms) + flight (>= 40%).
+    After this the classic pull has zero live game consumers (AweLighting literally test/reference only).
+    Context: .scratch/ac0283-borderbright/report.md (root cause + probe contract), .scratch/ac0283-p4/report.md
+    (live-caller proof + star=false stop-rule finding).
+
+    '
+  comments: []
+- id: AC-0298
+  title: update-architecture-md-to-current-state
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: done
+  labels: []
+  created_at: 2026-09-16T13:59
+  updated_at: 2026-09-16T14:32
+  completed_at: 2026-09-16T14:32
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As the person driving this project I want godot/ARCHITECTURE.md to describe the
+    game that actually exists, so that a fresh agent (or me, after a context wipe) reads it and gets the
+    true structure, autoloads, native extension and verify commands instead of a web-port-era plan — no
+    more discovering the drift mid-task.
+
+
+    2) Technical Details: Docs-only task. Target file: godot/ARCHITECTURE.md (98 lines). It is the declared
+    "single source of truth for structure, conventions, and the headless test harness" (line 4) and it
+    is the mandated read-before-any-code-task doc in AGENTS.md — so every stale claim below is a live
+    trap. Correct it against the tree; change no code.
+
+
+    Known drift to fix (verify each, do not transcribe blindly):
+
+    (a) Section 2 (lines 15-20) declares FOUR autoloads in a fixed order (Game, Data, Audio, Debug). project.godot
+    [autoload] registers SIX: Game, Data, Audio, Debug, Settings (autoload/settings.gd), Save (autoload/save.gd).
+    Rewrite the list to the real order and document what Settings and Save own (developer settings; region-format
+    persistence).
+
+    (b) Section 3 scene/node layout (lines 21-39) describes files that no longer exist: player/interaction.gd
+    and player/combat.gd (player/ holds only player.gd + player.tscn — interaction and combat were folded
+    into player.gd), entities/manager.tscn + manager.gd (entities/ holds only arrow.gd, banana.gd, drop.gd,
+    mob.gd), entities/models/*.tscn (mob models are built in mob.gd), and ui/hud.tscn + hud.gd (ui/ holds
+    only console.gd, inventory.gd, loading_screen.gd, menu.gd — the HUD is constructed in scenes/main.gd).
+    Also undocumented: scenes/menu.tscn, scenes/test_range.tscn + world/test_range.gd + world/range_target.gd,
+    camera_attributes/main-camera-attributes.tres, and the eight world/core .gdshader files. The "pure
+    logic" note (lines 36-39) names only core/math.gd and core/noise.gd while core/ now also holds atlas.gd,
+    chunk_io.gd, sphere_math.gd, held_mesh.gd, aero.gd, daynight.gd, build_id.gd.
+
+    (c) The document never mentions the native extension at all (grep: no gdext / extension / C++ anywhere).
+    Add a section: gdext/ (C++ sources gen.cpp, mesh.cpp, strips.cpp, chunk_io.cpp, lighting.cpp, starlight.cpp,
+    awe_common.*; SConstruct build) loaded in-game via godot/res/libchunkio.gdextension -> godot/bin/libchunkio.so
+    (Linux) / libchunkio.windows.template_release.x86_64.dll (Windows), entry symbol chunkio_library_init,
+    and which layers of the pipeline are now C++ vs GDScript (block gen, greedy/strip meshing, chunk IO,
+    light engine).
+
+    (d) Section 6 Debug API (lines 60-66) lists ~12 hooks; autoload/debug.gd now exposes ~40 (log, error,
+    crash_capture + the modal crash dialog, session logs + pruning, bug_report, light_at, seed_inv, inv_click,
+    craft, eat, damage_player, dump_survival, inv_dump, armor_dump, swing/swing_clear/swing_read, spawn_mob,
+    mobs_list). Rewrite the API list from the file.
+
+    (e) Section 7 verify commands (lines 68-79) carry stale paths and a stale screenshot convention: `--path
+    AweCraft/godot` is wrong (the repo root IS the AweCraft checkout -> `--path godot`); the `/tmp/opencode/<task>_<name>.png`
+    convention is superseded by .scratch/<task>/ + tasks/<AC-NNNN>/ + screenshots/; missing HOME=/tmp/dsh_home
+    on godot calls and no pointer to the AWECRAFT_LOGIC arm set / battery / the heavy-stage gates that
+    now live in godot/COORDINATOR.md.
+
+    (f) Section 8 "Migration checklist" M1-M13 (lines 80-93) is a historical plan, not state: everything
+    shipped or was superseded (M11 is explicitly removed), and nothing reflects ~215 completed AC tickets
+    (native mesher/gen/IO, region-format saves, streaming bands + LOD + halo lighting, planets/space arc,
+    chiseled blocks, isolated test scenes, console, settings, resource packs). Either retire the checklist
+    into a short history note or replace it with "where work now happens" (tasks/TASKS.yaml via tasks/scripts/tasks.py;
+    per-task folders).
+
+    (g) Cross-doc pointers: AGENTS.md sends the reader to godot/CONTINUITY.md "section 00o only" and "section
+    6" for queue state; the current CONTINUITY.md is 9 lines of two checkpoints + archive with no section
+    6 and its top checkpoint is labelled 00Z (r11). Fix ARCHITECTURE.md''s own claims and either update
+    the AGENTS.md pointers or state plainly that the queue lives in `python3 tasks/scripts/tasks.py next`
+    / `queue list`.
+
+    (h) Keep the doc a structure/convention contract, not a world-gen essay: for streaming internals point
+    at docs/worldgen-current.html (and docs/world-generation.html) rather than duplicating them.
+
+
+    Verify:
+
+    1. Autoload list in the edited section matches `project.godot` [autoload] verbatim, in order.
+
+    2. Every path named in the scene/layout and native-extension sections exists in the tree (glob check
+    each one) and no named file is absent.
+
+    3. Commands in the verify section actually run: `HOME=/tmp/dsh_home ~/tools/godot/godot --headless
+    --path godot --quit` -> G0 0 errors; one arm smoke `AWECRAFT_LOGIC=player ...` -> ok:true.
+
+    4. Every cross-reference from AGENTS.md, COORDINATOR.md and tasks/templates/two-phase.md into ARCHITECTURE.md
+    resolves to a real section.
+
+    5. Report which claims were correct as-is vs corrected (the point of the ticket is the drift inventory).
+
+
+
+
+    SCOPE WIDENED (user, 2026-09-16): this ticket is now the doc-set repair, not ARCHITECTURE.md alone.
+    Deliverables are the items (a)-(h) above PLUS (1)-(10) below. Note: tasks.py has no rename path (`set`
+    takes only --status/--priority; `add --id` on an existing id errors with "task AC-0298 already exists",
+    probed on a copy), so the id and title stay as filed and the widened scope lives in these notes.
+
+
+    (1) Fix the dead routing pointers, each verified against the tree before changing it: AGENTS.md:6
+    (points at CONTINUITY.md "00o" - the top checkpoint is labelled 00Z r11, no 00o exists); AGENTS.md:34
+    + godot/COORDINATOR.md:32 + ARCHITECTURE.md:91 (point at CONTINUITY.md "section 6" - the file has
+    no section 6); AGENTS.md:24 (points at a CONTINUITY.md footer for game semantics - there is no footer;
+    "Minecraft wiki canonical" survives only in AGENTS.md itself and two task folders); AGENTS.md:20 (sends
+    commands/env hooks/build/daemons/machine/screenshots to CONTINUITY.md - that content is in tasks/HARNESS.md
+    sections 2 and 4); godot/COORDINATOR.md:30 (points at CONTINUITY.md "00p INFRA LESSON v3 + BUILD RECIPE"
+    - survives only in tasks/AC-0110/continuity.md, 3 lines); godot/COORDINATOR.md:18 and :22 (reference
+    "HARNESS section 3" with no path - the file is tasks/HARNESS.md, not godot/HARNESS.md).
+
+    (2) Put tasks/HARNESS.md into the read-first ritual in AGENTS.md. Today it is cited by path in tasks/templates/two-phase.md
+    and path-lessly in COORDINATOR.md, but AGENTS.md never names it - so the one doc holding the real
+    run recipes, env knobs, battery definition and standing gate values is absent from the entry ritual.
+
+    (3) Resolve the render-recipe contradiction by RUNNING both recipes once and recording the winner
+    in the surviving doc: tasks/HARNESS.md:204 forces `--rendering-method gl_compatibility` under xvfb;
+    ARCHITECTURE.md section 4 + section 7 (AC-0241) states forward_plus/Vulkan is the method and that
+    the software-GL xvfb path may not work; project.godot sets renderer/rendering_method="forward_plus".
+    Three sources, two answers - pick the verified one, delete the other.
+
+    (4) Add README.md at the repo root (absent today, verified). Contents: what AweCraft is (voxel Minecraft-like,
+    Godot 4.7.1, Windows-only product), the run line, the Windows build line, and a pointer to docs/INDEX.md.
+    Human-facing; it must not restate architecture.
+
+    (5) Add godot/OPS.md: machine and sandbox (HOME=/tmp/dsh_home, /tmp is per-call ephemeral), one-godot-at-a-time,
+    daemons and ports (:8080 build download, :5180 gate endpoint, :8443 note), the Windows build + serve
+    recipe, the GIT_SSH_COMMAND="ssh -F /dev/null" push workaround, render limits. Source material already
+    exists in tasks/HARNESS.md section 4 and godot/COORDINATOR.md sections 2-3: MOVE it, do not copy it
+    (duplication is the failure mode this ticket exists to fix).
+
+    (6) Add docs/INDEX.md: a topic -> file map for docs/*.html. Nothing in the repo links to those files
+    today (verified by grep), including docs/worldgen-current.html, which is the end-to-end streaming
+    atlas and therefore the design doc for the AC-0283/0284/0286/0287 epic in flight.
+
+    (7) Archive godot/HANDOFF-emergent-queue.md (141 lines, mode 600) beside godot/CONTINUITY.archive.md
+    - its ticket AC-0282 is cancelled.
+
+    (8) Close the rule-harvest hole that killed INFRA LESSON v3: add a closeout step (docs closeout in
+    godot/COORDINATOR.md) that promotes any durable rule out of tasks/<AC-NNNN>/continuity.md into godot/OPS.md
+    (machine/build/daemon rules) or the process docs (pipeline/delegation rules) before the task folder
+    is abandoned. A task folder must never be the only home of a standing rule. Do NOT create a LESSONS.md:
+    "lessons" is a drawer name, not a genre, and it would immediately overlap OPS.md; if a single process
+    file is later wanted, it is tasks/PROCESS.md and it must not duplicate OPS.md.
+
+    (9) Move godot/COORDINATOR.md -> tasks/COORDINATOR.md so the split is consistent and stated: godot/
+    = the game plus its runtime ops (ARCHITECTURE.md, OPS.md, CONTINUITY.md), tasks/ = the work system
+    (TASKS.yaml, HARNESS.md, COORDINATOR.md, templates/). Update every pointer, including tasks/templates/two-phase.md
+    and AGENTS.md.
+
+    (10) CONTINUITY.md format contract, written into the AGENTS.md maintenance section: compaction triggers
+    BY BYTES, not lines (the file is 9 lines / 8131 bytes and its checkpoints are single unwrapped 2-3
+    KB lines, so the current ">100 lines" rule has never fired); one monotonic checkpoint id (two checkpoints
+    are both labelled "00Z" today, while the archive''s own note references the older 00l/00m/00n/00o/00p
+    labels); and OPEN-for-user items must be promoted to a ticket before the next compaction.
+
+
+    SCOPE GUARD: docs and pointers only - no gameplay or engine code changes. Do not renumber, reword
+    or restyle AC ids. Do not hand-edit tasks/TASKS.yaml (tasks.py is the single writer). Do not restate
+    content in two docs; every fact gets exactly one home and the others link to it.
+
+
+    VERIFY ADDITIONS: (i) every pointer in AGENTS.md, tasks/COORDINATOR.md and godot/ARCHITECTURE.md resolves
+    to an existing file and an existing section (grep-checkable, report the list); (ii) README.md, godot/OPS.md
+    and docs/INDEX.md exist and OPS.md does not duplicate tasks/HARNESS.md section 4 (diff the command
+    blocks); (iii) the render recipe chosen in (3) actually produces a PNG on this box; (iv) the CONTINUITY.md
+    header states the byte-based compaction rule and the monotonic id scheme; (v) report the pointer-drift
+    inventory as the ticket''s primary deliverable - which claims were already correct vs corrected.
+
+
+
+    SCOPE AMENDED (user, 2026-09-16) - this supersedes item (9) and sharpens items (2) and (5) above.
+
+
+    LAYOUT DECISION (user): HARNESS.md and COORDINATOR.md must NOT live under tasks/. Consequences:
+
+    - tasks/ holds the work system ONLY: TASKS.yaml, scripts/, templates/, <AC-NNNN>/ ticket folders.
+    No prose reference docs. (tasks/HARNESS.md is currently the ONLY prose doc directly under tasks/ -
+    that is exactly the drift being fixed.)
+
+    - godot/HARNESS.md (MOVED from tasks/HARNESS.md): the headless arm/battery/gate reference documents
+    the godot harness, so it belongs with the game, beside ARCHITECTURE.md / OPS.md / CONTINUITY.md. Update
+    the file''s own H1 (it self-identifies as "headless test harness reference (tasks/HARNESS.md)") and
+    every reference: tasks/templates/two-phase.md lines 57, 74, 102, 120, 139, 158; godot/COORDINATOR.md
+    lines 18 and 22 (currently path-less "HARNESS section 3"); AGENTS.md (item 2 of this ticket - it must
+    enter the read-first ritual, now as godot/HARNESS.md).
+
+    - godot/COORDINATOR.md STAYS in godot/. Item (9) is WITHDRAWN - do not move it to tasks/.
+
+    - Rule to state in AGENTS.md: root = entry points (README.md, AGENTS.md); godot/ = the game plus everything
+    about running, verifying and working on it (ARCHITECTURE.md, HARNESS.md, OPS.md, COORDINATOR.md, CONTINUITY.md);
+    tasks/ = the ticket system and its tooling; docs/ = design essays + INDEX.md. Add a one-line placement
+    test so a new doc has exactly one obvious home.
+
+
+    ITEM (5) BOUNDARY, sharpened to avoid the duplication this ticket exists to kill:
+
+    - godot/HARNESS.md owns: the mode/arm table, the battery definition, standing gate values, the per-call
+    godot command recipes (including the "export HOME=/tmp/dsh_home" common prefix) and the env knobs.
+
+    - godot/OPS.md owns: machine and sandbox facts, the one-godot-at-a-time rule, daemons and ports (:8080/:5180/:8443),
+    the Windows build + serve recipe, the GIT_SSH_COMMAND push workaround, render limits.
+
+    - The per-call godot prefix stays in HARNESS section 4 ONLY (it is needed for every verify call);
+    OPS.md links to it instead of restating it. State this boundary in both files with a cross-link.
+
+
+
+    LAYOUT DECISION 2 (user, 2026-09-16) - supersedes BOTH the "godot/COORDINATOR.md STAYS in godot/"
+    clause in the previous amendment AND the withdrawn item (9).
+
+
+    COORDINATOR.md moves to the PROJECT ROOT: godot/COORDINATOR.md -> COORDINATOR.md. (Sequence of decisions,
+    for the record: (9) proposed tasks/COORDINATOR.md -> WITHDRAWN by the user -> then "stays in godot/"
+    -> now superseded: root.)
+
+
+    Rationale to record in the ticket''s report: COORDINATOR.md already writes EVERY path repo-root-relative
+    (godot/CONTINUITY.md, godot/ARCHITECTURE.md, tasks/TASKS.yaml, tasks/templates/two-phase.md, .scratch/<task>-gates/).
+    While the file sits in godot/, those paths are valid only because everything treats the repo root
+    as the base - at the root they are literally correct, so the move removes an implicit convention instead
+    of adding one. Root is also where AGENTS.md lives, and COORDINATOR.md is the standing process for
+    the same role AGENTS.md addresses.
+
+
+    Edit list:
+
+    (1) git mv godot/COORDINATOR.md COORDINATOR.md.
+
+    (2) AGENTS.md:17 - "Standing process -> godot/COORDINATOR.md" becomes "-> COORDINATOR.md". This is
+    the ONLY live pointer to the file in the repo (verified by grep: all other hits are this ticket''s
+    own notes text, prose mentions of "the coordinator" in tasks/scripts/spec_template.py, or unrelated
+    uses of the word).
+
+    (3) COORDINATOR.md:18 and :22 - the path-less "HARNESS section 3" / "HARNESS.md section 3" become
+    godot/HARNESS.md section 3 (this is item 2 of this ticket).
+
+    (4) COORDINATOR.md lines 30-33 - the "References" section is DELETED outright under the one-routing-index
+    rule (the route map lives in AGENTS.md only), but its UNIQUE content must first be preserved: "CONTINUITY.md
+    00p INFRA LESSON v3 + BUILD RECIPE" no longer exists in CONTINUITY.md and survives only in tasks/AC-0110/continuity.md,
+    so it is captured into godot/OPS.md per item 8 BEFORE the section is removed. Nothing may be deleted
+    until its content has a home.
+
+    (5) Sweep this ticket''s own notes and any other doc for the old path (godot/COORDINATOR.md) - the
+    notes are append-only, so the later amendments are the authority when they conflict.
+
+
+    Resulting placement rule, to be stated in AGENTS.md with a one-line placement test:
+
+    - root = the entry point and the role process: README.md, AGENTS.md, COORDINATOR.md
+
+    - godot/ = the game plus everything about running, verifying and working on it: source, ARCHITECTURE.md,
+    HARNESS.md, OPS.md, CONTINUITY.md (+ archive)
+
+    - tasks/ = the ticket system and its tooling: TASKS.yaml, scripts/, templates/, <AC-NNNN>/ - NO prose
+    docs
+
+    - docs/ = design essays + INDEX.md
+
+
+
+    CLOSEOUT (coordinator, 2026-09-16): SHIPPED as a docs-only task. No game file was modified (another
+    agent holds in-flight AC-0284a WIP in the same tree; the docs paths I touched are disjoint from godot/scenes/*,
+    godot/world/*, godot/core/*).
+
+
+    DELIVERED: root README.md (NEW); root COORDINATOR.md (MOVED from godot/, rewritten: builder light
+    stage / coordinator heavy stage / docs closeout incl. the ARCHITECTURE.md rule + rule harvest + 8080/5180
+    curls, 8443 removed as dead, chaining, and the godot-contention rule "never kill a godot you did not
+    start"); godot/OPS.md (NEW: machine, sandbox, daemons/ports, Windows build+serve, git, render limits,
+    rule-harvest provenance); godot/HARNESS.md (MOVED from tasks/, H1 + the render PROXY warning in section
+    2/4); godot/ARCHITECTURE.md (rewritten against the tree, incl. the NEW native-extension section 4);
+    AGENTS.md (rewritten as the single routing index + six standing rules); docs/INDEX.md (NEW); tasks/templates/two-phase.md
+    (reading list + all HARNESS paths + ARCHITECTURE SYNC in DELIVER + the render proxy caveat); godot/CONTINUITY.md
+    (checkpoint 12 added, ids now monotonic, r10 archived with its stale NEXT/OPEN blocks); godot/HANDOFF-emergent-queue.md
+    -> godot/HANDOFF-emergent-queue.archive.md (its AC-0282 is cancelled).
+
+
+    THE ARCHITECTURE.md STANDING RULE (user-directed, AGENTS.md rule 1): ARCHITECTURE.md must be updated
+    in the SAME task as any architectural change - new/removed autoload, moved/renamed component, new
+    subsystem or native layer, changed data or save format, changed convention. Enforced at closeout (COORDINATOR.md)
+    and in the builder contract (two-phase.md, ARCHITECTURE SYNC block).
+
+
+    VERIFIED (grep, this session): all 11 live docs exist; no live doc references a moved path (godot/COORDINATOR.md,
+    tasks/HARNESS.md, CONTINUITY section 6, 00o, 00p, the CONTINUITY "footer"); godot/OPS.md contains
+    ZERO godot command recipes (6 in HARNESS) so the duplication is gone; the archive now holds r10/r9/r8.
+
+
+    NOT RUN, AND WHY: no G0, no arm, no heavy gate, no ./build_windows.sh. The main tree does NOT boot
+    - uncommitted AC-0284a WIP in godot/scenes/harness.gd fails to parse (lines 1148, 1175, 1176: "Cannot
+    infer the type of ..." / Variant inference warning treated as error), which fails main.gd compilation
+    and takes the whole game down (G0 prints 5 SCRIPT ERROR lines and exits 0; that is why the G0 gate
+    counts errors, now documented in COORDINATOR.md). A clean-HEAD worktree was tried as a workaround
+    and failed for a second reason worth recording: a fresh worktree has no git-ignored .godot/ import
+    cache, so class_name registrations (WorldGen, VoxelMath) and the block/item atlas .ctex files are
+    absent - 89 SCRIPT ERRORs. The render A/B was therefore split out to AC-0300 rather than half-run,
+    and the render recipes are documented as a PROXY with the DOF evidence attached. Docs-only tasks cannot
+    be gated by the godot arms, so the pointer/duplication checks above are this task''s gates.
+
+
+    FOR THE WIP HOLDER: the 3 parse errors are type-inference failures on untyped values - `pc` (line
+    1148) and `match6` (line 1175) need an explicit type or a typed source, and line 1176 infers from
+    a Variant. Not fixed here: out of AC-0298 scope and the file is being actively worked by another agent.'
+  comments: []
+- id: AC-0299
+  title: lighting-open-design-decisions-review
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-16T14:21
+  updated_at: 2026-09-16T14:21
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As the player I want the four unresolved lighting/halo design questions answered
+    and written down where they cannot be lost, so the flight-ready world behaves the way I actually want
+    instead of on a derived guess that silently expires.
+
+
+    2) Technical Details: Review-and-decide ticket (no code). Read both copies of the item list - they
+    are not identical and the older one is sharper on two of the four: godot/CONTINUITY.md line 8 (the
+    r10 checkpoint trailing "OPEN (design doc, for the user)" block) and godot/CONTINUITY.archive.md line
+    7 (the r9 form, introduced as "OPEN ITEMS for the user (go into the final design doc)").
+
+
+    Why this needs its own ticket and this timing: the block rides on the PENULTIMATE checkpoint, and
+    the compaction rule keeps only the latest two - so the next compaction deletes it. It is already stale:
+    the same r10 block''s NEXT line still reads "next = AC-0283 P4" while the r11 checkpoint above it
+    records P4 shipped (e4f88da). The precedent for the fix is in r11 itself: the tex-refresh self-lighting
+    note is safe because it became AC-0297. Promote, do not park. This ticket is queued immediately after
+    AC-0293 because the lighting series (AC-0283 -> AC-0297 -> AC-0284 -> AC-0286 -> AC-0287 -> AC-0293)
+    must be closed before the answers are meaningful.
+
+
+    The four items to decide, quoted from the source:
+
+    (a) Real-disc radius: "sim_dist=4 is the knob, halo = everything beyond; the epic''s ''80-200 columns''
+    was loose" - r9 asks it directly: "sim_dist=4 disc vs the epic''s ''80-200 columns'' flight radius
+    - which radius is intended for the REAL disc (R50 disc ~ 7.8k cols)". Decide the radius of the full-detail
+    disc (the inner/outer boundary of the epic).
+
+    (b) Halo look: "the halo is LITERAL 4x4 avg beyond the sim square (the 8x8 med tier is gone as a draw
+    tier) - confirm that''s the intended look at 64-128 m". This is the item currently gating AC-0283''s
+    close (user in-game confirmation) - the review must include an actual look at 64-128 m, not a code
+    reading.
+
+    (c) Walk-fix regime gate: "the walk fix''s 2.5 s crossing-period regime gate" - r9 adds the constraint
+    to test it against: derived from crossing cadence, "not a new timer, but review against ''no internal
+    timer changes what we do''". Decide whether the derived constant stands as-is or moves.
+
+    (d) Y-window replacement: "the Y-window''s eventual replacement (fresh-edge priority) stays a scheduler
+    redesign item" - r9 records that the Y-window (83cfcfe, the user-rejected mechanism) was the trigger
+    of the latch chain, and that its replacement is a redesign item, not part of these tickets. Decide
+    whether it is accepted as deferred and where it is tracked.
+
+
+    Deliverable: a recorded decision for each of (a)-(d) - either a concrete answer/value, or an explicit
+    "stays open because X, tracked by AC-NNNN". Record it in the "final design doc" if it exists by then
+    (r11 says these items belong there), otherwise in docs/ beside the existing design essays - and make
+    it reachable from docs/INDEX.md (AC-0298). Pick one home; do not leave any of the four in the journal.
+
+
+    Required follow-through: any decision that implies a behaviour change is FILED as its own ticket rather
+    than applied here - e.g. (a) if it moves the sim radius or the halo band edges, (b) if it changes
+    the halo averaging, (c) if it moves the threshold constant, (d) the scheduler redesign item. This
+    ticket records decisions; it does not silently re-tune constants.
+
+
+    SCOPE GUARD: decisions and documentation only - no gameplay or engine code changes. This is a decision
+    task, so the user must be in the loop; it cannot be closed by an agent alone. Do not hand-edit tasks/TASKS.yaml
+    (tasks.py is the single writer).
+
+
+    VERIFY: (i) each of (a)-(d) has a recorded answer plus its reasoning, or an explicit deferred-with-owner;
+    (ii) CONTINUITY.md no longer carries an unpromoted OPEN-for-user block - its header points at this
+    ticket or the record; (iii) every decision that needs code has a follow-up ticket id in the record;
+    (iv) the record is discoverable from docs/INDEX.md or the design doc; (v) AC-0283 can be closed on
+    the strength of (b) alone, so state its outcome explicitly.
+
+    '
+  comments: []
+- id: AC-0300
+  title: render-recipe-forward-plus-vs-gl-compatibility
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-16T14:31
+  updated_at: 2026-09-16T14:31
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As the user, I want the screenshots I am shown to represent the game I actually
+    play, so that visual feedback is not wasted on an artefact of the dev-only renderer.
+
+
+    2) Technical Details: Split out of AC-0298 item 3 (the render-recipe contradiction), which could only
+    be resolved on paper because the tree did not boot.
+
+
+    The contradiction: the game ships **forward_plus** (`godot/project.godot` renderer/rendering_method,
+    AC-0241, with the Linear tonemap restored), but every render hook and the delegated render instruction
+    force **gl_compatibility** (`godot/HARNESS.md` section 2 note + section 4 recipe; `tasks/templates/two-phase.md`
+    RENDER line). AC-0298 verified in-run that the software-GL path logs `Depth of field blur is only
+    available when using the Forward+ or Mobile renderer` - so DOF, a shipped developer setting (AC-0281),
+    provably cannot appear in a render taken here, and tonemap/clustered-lighting behaviour differs too.
+    HARNESS section 2 now carries a PROXY warning as the interim state.
+
+
+    THE JOB - run both recipes once each on a BOOTABLE tree and record the verdict:
+
+    - A (current): HOME=/tmp/dsh_home; xvfb-run -a env AWECRAFT_SNAPSHOT=<out.png> AWECRAFT_RADIUS=1 /home/angrygiant/tools/godot/godot
+    --path godot --rendering-method gl_compatibility
+
+    - B (product): the same WITHOUT --rendering-method. A Vulkan device is available via lavapipe (/usr/share/vulkan/icd.d/lvp_icd.json
+    is installed and vulkaninfo exists); if the default device pick fails, force VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
+    and retry.
+
+    - Record for each: the driver/device line it prints, whether a PNG is produced and its byte size (a
+    <2 KB PNG is an empty/black frame), wall time, and any renderer-specific errors. Also toggle the Options
+    DOF developer setting under each and say whether it takes effect.
+
+    - Then state the WINNER in godot/HARNESS.md sections 2 and 4 and in the two-phase.md RENDER line:
+    either "forward_plus works on this box under lavapipe - make it the default render recipe and drop
+    the PROXY warning", or "gl_compatibility remains the only workable path - keep the PROXY warning and
+    record that Forward+ visual verification is Windows-build-only". Cite the AC-0300 evidence in both
+    files.
+
+
+    PREREQUISITES / BLOCKERS: do NOT start until the tree boots. At AC-0298 the main tree did not boot:
+    uncommitted AC-0284a work in godot/scenes/harness.gd had 3 parse errors (lines 1148, 1175, 1176 -
+    type inference on untyped values, "Warning treated as error") which fail main.gd compilation and take
+    the whole game down; G0 prints 5 SCRIPT ERROR lines while still exiting 0. A fresh `git worktree`
+    is NOT a shortcut: it has no `.godot/` import cache, so class_name registrations (WorldGen, VoxelMath)
+    and the atlas .ctex files are missing and 89 SCRIPT ERRORs appear - a full asset import is needed
+    first. Prefer the main tree once it boots.
+
+
+    SERIALIZATION: one godot at a time. Check `pgrep -af ''[g]odot''` before every call and wait if another
+    holder exists (a coordinator gate job''s HEAVY_GATES_DONE marker, or a parallel agent''s run). Never
+    kill a godot process you did not start.
+
+
+    SCOPE GUARD: this is a render-config investigation plus a doc update - no gameplay or engine code
+    changes. If the outcome argues for changing the project renderer itself, that is a SEPARATE ticket
+    (forward_plus is deliberate, AC-0241).
+
+
+    VERIFY: (i) both runs'' stdout captured under .scratch/AC-0300-gates/ with the device line + PNG byte
+    size for each, including the failed attempts (the failure mode is the finding); (ii) the chosen recipe
+    produces a non-trivial PNG; (iii) godot/HARNESS.md sections 2/4 and tasks/templates/two-phase.md state
+    the winner and cite AC-0300; (iv) the PROXY warning is only removed if forward_plus is actually proven
+    on this box.
+
+    '
   comments: []
