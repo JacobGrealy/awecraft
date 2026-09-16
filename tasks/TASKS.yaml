@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-16T14:32
+  updated_at: 2026-09-16T15:28
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -8,6 +8,7 @@ queue:
 - AC-0297
 - AC-0284
 - AC-0300
+- AC-0301
 - AC-0286
 - AC-0287
 - AC-0293
@@ -13268,4 +13269,83 @@ intake:
     on this box.
 
     '
+  comments: []
+- id: AC-0301
+  title: harness-data-single-source
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-16T15:28
+  updated_at: 2026-09-16T15:28
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: As the person filing tasks, I want every generated spec to carry correct, current\
+    \ gate information without a script depending on the layout of a documentation file, so that editing\
+    \ the docs for readability can never silently weaken the ticket that drives the work.\n\n2) Technical\
+    \ Details: Design principle (user, 2026-09-16): a .md file must not be simultaneously an agent-facing\
+    \ reference and a hard requirement for a script to run. Code you scrape is already a machine-readable\
+    \ artefact versioned with behaviour; prose you scrape is not - its formatting is a readability choice,\
+    \ and a readability choice must never be a load-bearing contract.\n\nTHE COUPLING TODAY: tasks/scripts/spec_template.py\
+    \ scrapes godot/HARNESS.md as data.\n- `_harness_rows()` (line 131) scans for a markdown table whose\
+    \ header cell is exactly `mode`, then reads rows until the first non-table line; strips backticks;\
+    \ skips the separator row.\n- `_known_stable_rows()` (line 166) does a literal `text.find(\"Known-stable\
+    \ gate values\")` and takes what follows.\n- `HARNESS = REPO_ROOT / \"godot\" / \"HARNESS.md\"` (line\
+    \ 53, repointed by AC-0298) is a hard file dependency: if it is missing, or the table is reformatted/reordered,\
+    \ or the section heading is reworded, the AUTO blocks silently degrade to \"mode table not found\"\
+    \ / \"paths only - inline with --full\" and the generated spec ships with weaker gates.\n- Evidence\
+    \ of use: 25 specs under tasks/*/spec.html carry the scraped block, so the feature earns its keep\
+    \ - do not simply delete it.\n- SIZE OF THE MACHINE-CONSUMED SURFACE (measured against the AC-0298\
+    \ revision): section 1 mode table = 64 rows / ~19.8 KB; section 3 known-stable block = ~6.6 KB; HARNESS.md\
+    \ total = 39.6 KB. So roughly two thirds of the doc is load-bearing prose, and a reformat of it breaks\
+    \ tooling.\n- This already bit once: AC-0298's move of tasks/HARNESS.md -> godot/HARNESS.md left the\
+    \ tool resolving the old path; it kept running and kept writing specs, just weaker ones, with no failure\
+    \ signal.\n\nTARGET DESIGN:\n1. New data file `tasks/harness_data.yaml` (pyyaml is already a tooling\
+    \ dependency; YAML block scalars handle the long prose cells). Schema, kept stable and documented\
+    \ in a comment header:\n   - `modes:` name -> {entry, tests, result_fields[], envs[], wall, battery\
+    \ (full|smoke|skip), notes}\n   - `standing_values:` key -> {value, note, ac}\n   - `battery:` {smoke:\
+    \ [modes], full: [modes], skip: [modes]}\n2. `godot/HARNESS.md` stays the agent-facing reference,\
+    \ but its machine-consumed blocks become GENERATED from that file, fenced by explicit markers:\n \
+    \  `<!-- BEGIN GENERATED: mode table (tasks/harness_data.yaml) -->` ... `<!-- END GENERATED -->`\n\
+    \   All the genuinely prose parts stay hand-written: the section intros, \"Not in table\", the known\
+    \ non-fatal log noise, the run recipes, the env knobs, the render proxy warning.\n3. New `tasks/scripts/harness_doc.py`\
+    \ with `--render` (rewrite the generated blocks) and `--check` (exit non-zero when doc and data disagree).\
+    \ `--check` is what makes drift impossible instead of merely unlikely.\n4. `spec_template.py` reads\
+    \ `harness_data.yaml` and PARSE NO MARKDOWN: delete `_harness_rows`/`_known_stable_rows`/`_parse_md_rows`\
+    \ usage for HARNESS (keep `_parse_gd_constants`, see exceptions). Keep the `--full` inlining behaviour\
+    \ and the AUTO block labels, but source them from the structured data.\n\nMIGRATION METHOD (lossless,\
+    \ this is the risky part):\n- Write a one-off extractor that parses the CURRENT table into the YAML,\
+    \ then regenerate the markdown and DIFF it against the pre-migration file. The rendered rows must\
+    \ be byte-identical to the current ones; any cell that cannot be represented keeps its original text\
+    \ in a multi-line YAML scalar. Do the same for section 3's values (extract the value assertions; the\
+    \ surrounding explanatory prose stays in the doc as prose).\n- Migrate in one commit that includes\
+    \ both the YAML and the regenerated doc, so the diff itself is the proof.\n\nACCEPTANCE:\n- grep proves\
+    \ `spec_template.py` no longer parses markdown for HARNESS (no table scan, no `text.find(\"Known-stable`).\n\
+    - `godot/HARNESS.md` renders byte-identically to its pre-migration content for the generated blocks\
+    \ (diff shown in the report).\n- `harness_doc.py --check` fails when the two disagree; a test asserts\
+    \ that.\n- ONE source of truth: the YAML is the only machine source; the doc block is labelled generated\
+    \ and hand-edits inside the markers are caught by `--check`.\n- Agent-facing readability is preserved\
+    \ - HARNESS.md must still read as the same reference (no content loss, no rows dropped).\n- Bonus\
+    \ check worth adding: validate mode coverage against the dispatch branches in `godot/scenes/main.gd`,\
+    \ so \"64 modes\" is verified rather than grep-counted.\n\nEXCEPTIONS (deliberate, out of scope):\
+    \ `_parse_gd_constants` scraping `godot/autoload/data.gd` and `godot/world/generator.gd` for constants\
+    \ STAYS. That is the legitimate case under the principle - the code is the machine-readable source\
+    \ of truth and is versioned with the behaviour it describes - and the spec's \"Frozen refs\" block\
+    \ is supposed to carry exact constants with file:line. Note it in the file header as an intentional\
+    \ exception so nobody \"fixes\" it later.\n\nSCOPE GUARD: tooling + doc structure only - no game code,\
+    \ and no change to which gates any task runs. Do not delete the AUTO inlining feature. No dual copy\
+    \ may remain: if a value lives in the YAML, the doc must not also hold an independent hand-written\
+    \ copy inside the generated markers.\n\nVERIFY (pure Python - needs NO godot slot, so it can run while\
+    \ another agent holds the game tree): (i) `python3 tasks/scripts/harness_doc.py --check` exits 0 on\
+    \ the migrated tree and non-zero after a deliberate one-cell edit to the doc; (ii) regenerate a spec\
+    \ for an existing task with `spec_template.py` and diff it against that task's committed spec.html\
+    \ - the AUTO blocks must be unchanged apart from the intended source change; (iii) `python3 tasks/scripts/test_tasks.py`\
+    \ still passes; (iv) report the row count and byte size of the generated blocks before/after to prove\
+    \ nothing was dropped.\n\nPREREQUISITES: none (no godot). Coordination note: spec_template.py is shared\
+    \ tooling used to file every task - if another agent is generating specs concurrently, land this between\
+    \ tasks, not mid-generation.\n"
   comments: []
