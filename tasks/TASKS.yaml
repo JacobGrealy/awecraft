@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-16T17:32
+  updated_at: 2026-09-16T18:04
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -7,6 +7,8 @@ queue:
 - AC-0283
 - AC-0297
 - AC-0284
+- AC-0302
+- AC-0303
 - AC-0300
 - AC-0286
 - AC-0287
@@ -13378,4 +13380,199 @@ intake:
     \ header documents the markers + both commands.\n\nNO GODOT: pure tooling/docs - no arm, no heavy\
     \ gate, no Windows build (and the game tree is still not bootable: another agent's AC-0284a WIP, see\
     \ AC-0298). No game file touched."
+  comments: []
+- id: AC-0302
+  title: parallel-work-isolation
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-16T18:04
+  updated_at: 2026-09-16T18:04
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As the person running more than one agent on this project, I want each agent''s
+    work and machine state separated, so that one agent''s half-finished edit cannot break another agent''s
+    verification, and two agents cannot silently overwrite each other''s saves, service ports or journal
+    entries.
+
+
+    2) Technical Details: Tier 1 of the parallel-work plan. All four items are tooling/process only -
+    no game code, no change to gate semantics. Evidence is from the 2026-09-16 session, where two agents
+    worked the same checkout concurrently (one on AC-0284a/b, one on the docs tickets).
+
+
+    (a) SHARED WORKING TREE - the costly one. An uncommitted AC-0284a WIP (413 lines across godot/scenes/harness.gd,
+    godot/world/chunk.gd, godot/world/world.gd, godot/core/chunk_io.gd) sat in the same checkout as unrelated
+    documentation work. Two consequences, both observed: commits had to be staged with explicit paths
+    (a `git add -A` would have swept another agent''s WIP into an unrelated commit), and the WIP''s three
+    parse errors (harness.gd lines 1148, 1175, 1176 - "Cannot infer the type of ..." plus a Variant-inference
+    warning treated as error) made the WHOLE TREE unbootable, so the other agent''s G0, render and smoke
+    verification could not run at all. One agent''s in-flight edit blocked the other''s gates.
+
+
+    DELIVERABLE 1 - WORKTREE PER AGENT. `git worktree add .worktrees/<agent> -b agent/<agent>`; add `.worktrees/`
+    to .gitignore. The per-worktree bootstrap is NOT optional and was measured: a fresh worktree has no
+    git-ignored `.godot/` import cache, so `class_name` registrations (WorldGen, VoxelMath) and the block/item
+    atlas `.ctex` files are absent and headless startup prints 89 SCRIPT ERRORs (also confirmed: the untracked
+    `godot/bin/libchunkio.so` must be copied in, as the AC-0282 handoff warned). Ship a script `tools/agent-workspace.sh
+    <agent> <ticket>` that: creates the worktree, does the one-time asset import in it, copies/links the
+    native lib, creates the per-agent HOME, and prints both paths. Document it in godot/OPS.md.
+
+
+    DELIVERABLE 2 - PER-AGENT SANDBOX HOME. Today every agent uses `HOME=/tmp/dsh_home`, i.e. ONE shared
+    `user://` containing the 3 save slots, settings.cfg, `debug_result.json`, and `chunkdir_0` (written
+    and cleared at arm start by the chunkio, save and quitmenu arms). Two agents running those arms concurrently
+    stomp each other. Change to `HOME=/tmp/dsh_home/<agent>` and update EVERY recipe: godot/OPS.md section
+    2, godot/HARNESS.md section 4 (the common prefix), tasks/templates/two-phase.md, and any generated
+    run hints in tasks/scripts/spec_template.py. Keep the two documented reasons for the sandbox in the
+    first place: the real HOME is read-only here and the engine segfaults (rc=134) on the first `user://`
+    write, and /tmp is per-call ephemeral.
+
+
+    DELIVERABLE 3 - ENFORCED GODOT LOCK. "One godot at a time" is currently prose (check `pgrep -af ''[g]odot''`
+    and wait; never kill one you did not start). Two independent reasons it must be mechanical: `.godot/`
+    cache corruption, and perf-gate comparability (AC-0284''s report measures ms/col, walk sim-disc %
+    and flight % on this machine - a concurrent run perturbs them). Ship `tools/godot-run [godot args...]`:
+    blocking `flock -w <timeout>` on `.scratch/godot.lock`, record the holder (agent + ticket + start
+    time) in a sidecar, run the engine, release, print who held it. Switch every recipe in HARNESS section
+    4 and the two-phase VERIFY section to the wrapper; document that a direct engine invocation bypasses
+    the lock.
+
+
+    DELIVERABLE 4 - ATOMIC TICKET CLAIM. `tasks.py next` is read-only and `set --status` is a separate
+    locked write, so two agents can both read the same head and both claim it (TOCTOU). Note what is ALREADY
+    safe and must not be rebuilt: tasks_lib.registry_lock() takes a blocking `fcntl.flock(LOCK_EX)` on
+    `tasks/.tasks.lock` and the CLI holds it across the entire read-modify-write, so concurrent mutation
+    cannot corrupt or lose updates (verified in tasks/scripts/tasks_lib.py). The gap is only the claim
+    transaction. Add `tasks.py claim [--id AC-NNNN]` that INSIDE that same lock: picks the head, skips
+    tickets whose `assignee` is another agent, and sets status `in-progress` + `assignee` in one atomic
+    step. Also make `next` report other agents'' claims ("AC-0284 claimed by <agent>") instead of silently
+    returning a ticket someone else holds. The `assignee` field already exists but is uniformly "opencode"
+    - never used for ownership. Update AGENTS.md + the task docs, and add a test to tasks/scripts/test_tasks.py:
+    two sequential claims return different tickets, and a claim skips another agent''s ticket.
+
+
+    SCOPE GUARD: do not create per-agent build daemons or ports (the single :8080 publisher and artifact
+    ownership are AC-0303), do not relax the one-godot rule, and do not change gate thresholds or standing
+    values.
+
+
+    PREREQUISITES: none. Only the one-time per-worktree asset import needs the godot slot - sequence it
+    behind the godot lock (AC-0302 deliverable 3) or behind whoever currently holds it.
+
+
+    VERIFY: (i) two worktrees each run G0 plus a fast arm (`player`) simultaneously with zero SCRIPT ERROR
+    - the proof is that each has its own `.godot` cache; (ii) HOME isolation proved with the `save` arm
+    run in both at once: each agent sees only its own slots; (iii) `godot-run` serializes - two concurrent
+    invocations both complete, the second waits, and the holder is recorded; (iv) a simulated two-process
+    claim race never hands the same ticket to both; (v) `python3 tasks/scripts/test_tasks.py` stays green
+    (53 checks today); (vi) godot/OPS.md section 2, godot/HARNESS.md section 4 and two-phase.md contain
+    no remaining bare `HOME=/tmp/dsh_home` recipe.
+
+    '
+  comments: []
+- id: AC-0303
+  title: gate-runner-and-build-ownership
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-16T18:04
+  updated_at: 2026-09-16T18:04
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As the person running parallel agents, I want one owner for the machine''s heavyweight
+    verification and for the published Windows build, so that performance numbers stay comparable and
+    a second agent''s build cannot delete or displace the build I am testing.
+
+
+    2) Technical Details: Tier 2 of the parallel-work plan. Depends on AC-0302 (per-agent worktrees, the
+    enforced godot lock, per-agent HOME). Evidence from the 2026-09-16 session with two concurrent agents.
+
+
+    (a) SHARED BUILD OUTPUT. `exports/windows/` is a single shared directory with the documented retention
+    rule (newest 3 stamped pairs, older pairs deleted after a successful build) plus the un-stamped `AweCraft.exe`/`AweCraft_debug_console.exe`
+    "serve contract" copies that :8080 publishes. With two builders, each build deletes the other agent''s
+    artifacts, and the `:8080` byte-match gate becomes ambiguous - "the latest file" is no longer attributable
+    to a specific ticket or sha. Need: per-agent output directories and a single publisher.
+
+    (b) SHARED NATIVE LIBRARY. `godot/bin/libchunkio.so` is a git-ignored build output that any gdext
+    rebuild mutates; a rebuild during another agent''s run silently changes what that run is testing.
+    Worse, the `nofallback` fail-fast arm RENAMES the live library (godot/HARNESS.md section 1, its own
+    row) to prove the missing-extension banner - that is a global mutation of shared state.
+
+    (c) LOAD-SENSITIVE BASELINES. The standing gate values (walk p95 band, gen ms/col, r50 drain trends,
+    flight/walk percentages) are measured on this machine and are load sensitive; two agents'' gate runs
+    confound each other, and AC-0284''s own report already flags measurement caveats (p_keep measured
+    0 us saved; skip path 1.06 ms/col vs 1.73 full). Accepting a number taken under unknown load silently
+    poisons the standing values.
+
+    (d) JOURNAL WRITE RACES. godot/CONTINUITY.md is one long line per checkpoint, rewritten whole by whoever
+    adds a checkpoint. This session produced two incidents: an insert script that dropped checkpoint r12
+    (repaired by commit 63223b5 "continuity: restore checkpoint 12 (dropped by the 13-insert script)")
+    and a second script that would have clobbered checkpoint r13 (caught only because the script asserted
+    the expected structure before writing). Whole-file rewrites of a shared journal also conflict catastrophically
+    in a line-based git merge.
+
+
+    DELIVERABLE 1 - GATE RUNNER (one process owns the heavy gates). Protocol: a request is a file `.scratch/gates/queue/<AC-NNNN>-<kind>.req`
+    where kind is one of boundary|perf|genhash|battery|build; a runner (scripts/gate-runner.sh or a managed
+    background job) processes the queue FIFO under the AC-0302 godot lock, writes `.scratch/<AC-NNNN>-gates/<kind>.log`
+    plus a `.done` marker and a one-line summary. Builders enqueue instead of calling heavy engine modes
+    directly (matching the existing builder-light / coordinator-heavy split in COORDINATOR.md). Deliverable
+    2 - LOAD ATTRIBUTION: every heavy result records machine-load context (uptime, concurrent agent count,
+    whether the lock was contended) and is tagged `noisy` when another agent was active; a noisy run may
+    inform but never re-baseline a standing value. Re-baselining stays a deliberate act.
+
+
+    DELIVERABLE 3 - BUILD/ARTIFACT OWNERSHIP. Stamped builds land in `exports/windows/<agent>/` and retention
+    only ever prunes the owning agent''s directory. ONE publisher updates the served un-stamped copies
+    under a lock; the `:8080` byte-match gate is keyed to a SPECIFIC stamp or git sha passed in (not "the
+    newest file"), so a gate can never validate the wrong build. Keep exactly one publisher and one port
+    - explicitly do NOT give each agent its own daemon: `http://192.168.0.224:8080/AweCraft.exe` is the
+    user''s download URL (godot/OPS.md section 4).
+
+
+    DELIVERABLE 4 - NATIVE LIB DISCIPLINE. Treat `godot/bin/libchunkio.so` as per-worktree state: built
+    or copied on demand, never a shared mutable file (AC-0302 bootstrap already copies it). Change the
+    `nofallback` arm so the fail-fast check uses a COPY (or an extension pointed at a copy) instead of
+    renaming the live library, so it can never break a concurrent run.
+
+
+    DELIVERABLE 5 - CONFLICT-FREE JOURNAL. Make godot/CONTINUITY.md a RENDERING: store one file per checkpoint
+    at `godot/continuity/<nn>-<rev>.md`, with a small generator producing the digest (identical in principle
+    to AC-0301 - machine/appended state lives in per-record files and the doc is a rendering of it; a
+    single rewritten journal line cannot be merged). Keep AGENTS.md''s rules as the digest''s rules: compact
+    by bytes (>2 checkpoints or top checkpoint >6 KB), monotonic ids, never reuse an id, promote OPEN-for-user
+    items to tickets before compaction. Provide `--check` in the same style as tasks/scripts/harness_doc.py
+    so drift is caught mechanically.
+
+
+    SCOPE GUARD: process/tooling plus the single `nofallback` arm tweak in godot/scenes/harness.gd - no
+    gameplay changes, and do not change existing gate thresholds, standing values or baselines as part
+    of this ticket (load attribution is reporting only).
+
+
+    PREREQUISITES: AC-0302 (the gate runner depends on the godot lock; per-agent HOME makes concurrent
+    gate runs meaningful).
+
+
+    VERIFY: (i) two agents enqueue gates and both results land with correct attribution, the contended
+    one tagged noisy; (ii) a build by agent A neither deletes nor overwrites agent B''s stamped artifacts,
+    and the published un-stamped copy is byte-identical to the requested stamp; (iii) the stamp-keyed
+    `:8080` gate passes for the requested build and fails for a different stamp; (iv) the journal generator
+    round-trips (generate then diff = no change) and its `--check` exits non-zero on a hand-edit; (v)
+    starting a second engine outside the runner is detected and the collision is logged rather than silently
+    corrupting the cache or the numbers; (vi) `nofallback` still passes with a concurrent run in flight.
+
+    '
   comments: []
