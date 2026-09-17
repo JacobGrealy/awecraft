@@ -1,10 +1,10 @@
 meta:
-  updated_at: 2026-09-17T18:52
+  updated_at: 2026-09-17T19:17
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0299
+- AC-0313
 - AC-0312
 - AC-0287
 - AC-0293
@@ -13338,11 +13338,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-16T14:21
-  updated_at: 2026-09-17T18:48
-  completed_at: null
+  updated_at: 2026-09-17T19:08
+  completed_at: 2026-09-17T19:08
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As the player I want the four unresolved lighting/halo design questions answered
@@ -13435,7 +13435,22 @@ intake:
     the fresh-edge-priority scheduler redesign (explained: the build queue scores (layer, taxi) layer-major,
     so passed deep slabs outrank fresh edge slabs - the flight''s 60-76% behind-the-player queue shape;
     the replacement is a score-shape change, no timer per the 83cfcfe rule; question: accept deferred
-    + tracking ticket). Design doc section 9 updated with the (a)/(b) records.'
+    + tracking ticket). Design doc section 9 updated with the (a)/(b) records.
+
+
+    ALL FOUR DECIDED BY THE USER 2026-09-17 (in chat): (a) sim_distance configurable, default 4 (no change).
+    (b) far-band draw tiers restored: sim(4)->medium_start(8) HIGH-LOD 16x16x16 textured cave-free chunks
+    (h-only data stands; slabs materialized at mesh time), medium_start(8)->low_start(27) 8x8 avg, low_start(27)->render(50)
+    4x4 avg - follow-through AC-0312 (queue). (c) the 3x3 startup pass is REMOVED from the code - no main-thread
+    blocking build pass after the player is active; the 9 spawn chunks are built by NORMAL streaming and
+    the load screen waits for them (user''s stated option B; the "at load but never again" option was
+    also acceptable) - follow-through AC-0313. (d) the build lane does FULL chunk columns INSIDE OUT (layer-major
+    score + the AC-0263 Y-window restriction go away; full columns eliminate the re-windowing rework;
+    the star engine''s settled state is already the full real band so light cost is unchanged) - follow-through
+    AC-0313 (c+d are one coherent change). VERIFY (v) explicit: AC-0283 was CLOSED (done) on the strength
+    of (b) - it is done in the registry (commits ef28ac1..bf93b9a), the halo look question (b) is now
+    answered and its follow-through is AC-0312. All four records are in docs/flight-world-epic.html section
+    9 (the ticket''s designated record home).'
   comments: []
 - id: AC-0300
   title: render-recipe-forward-plus-vs-gl-compatibility
@@ -14567,7 +14582,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-17T18:47
-  updated_at: 2026-09-17T18:47
+  updated_at: 2026-09-17T19:08
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -14622,4 +14637,120 @@ intake:
     is filed as its own ticket).
 
     '
+  comments: []
+- id: AC-0313
+  title: scheduler-full-columns-inside-out
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: in-progress
+  labels: []
+  created_at: 2026-09-17T19:07
+  updated_at: 2026-09-17T19:17
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As the player, when I stop flying (or spawn), the world should keep filling in
+    with the normal streaming machinery - no special "startup ring" pass that stalls the main thread,
+    no layer window that makes the world build down in bands. Instead: every chunk column is built FULL,
+    from the inside out (closest columns first, all 24 layers of each), and the loading screen simply
+    waits until the 9 chunks around spawn are built before handing me the world. The new starlight engine
+    + the cheap far data LODs make full columns fast enough.
+
+
+    2) Technical Details:
+
+    DECISION RECORD (AC-0299, user in chat 2026-09-17): (c) the 3x3 startup pass is removed from the code
+    - the acceptable forms were "at load but never again" or "normal streaming + the load screen waits
+    for the 9 chunks"; either way NO main-thread blocking build pass after the player is active (especially
+    not on flight-stop). (d) "change to doing full chunk columns inside out - the new lighting and data
+    lods should make this fast enough."
+
+    CHANGES:
+
+    1. Remove the Y-window build restriction (AC-0263): the windowed probe/dispatch rule (world.gd:565-579
+    spec comments; _lod_windowed_for usage at 675/753/783 feeding _hslab_best_pending(c, windowed)), the
+    _lod_player_moving + AHEAD_FAST_MS moving-state machinery (world.gd:3463 area), and the layer-rank
+    pick order. Every column in the real band (taxi <= band0_r) and the tier-0 anchor builds its FULL
+    24-slab column - the tier-0 exemption becomes the universal rule and the special case disappears.
+    WHY THIS IS FAST ENOUGH (the core argument, verify with the gates): the star engine''s settled state
+    is ALREADY the full real band (984 sections held at walk - the confinement is unchanged by this ticket;
+    light cost is unchanged, only the MESH fan grows); and full columns eliminate the re-windowing rework
+    entirely - under the Y-window, passed columns re-built their window as the player''s Y moved (the
+    flight''s 60-76% behind-the-player queue churn); a full column, once mesh_built, is COMPLETE and is
+    never re-dispatched.
+
+    2. Queue order inside-out: the build score shape (layer, taxi) layer-major (the AC-0233/AC-0250 _tier_score
+    / _layer_rank_of, world.gd:551/859) becomes radial: the innermost unbuilt column first (taxi-major,
+    fresh vs carried per the live recenter anchor - a pure function, no timer/mode per the 83cfcfe rule),
+    and within a column slabs dispatch in Y-distance order from the player slab (player slab first, then
+    +-1, +-2...). The fresh outer edge is data-fed as today (the h-only far band has NO slab fan - full
+    columns apply to the real band + post-AC-0312 band A only).
+
+    3. Remove the walkfix startup 3x3 pass (AC-0283 P3) and its regime: the pass at world.gd:7781+ (startup3x
+    / _dq_skip / _dq_defers), the constants WALK_CROSS_PERIOD_MS / DRAIN_STARTUP_PASS_BUDGET_MS / DRAIN_DEFER_MAX_PER_FRAME
+    (world.gd:149-162), _prev_cross_ms (3462), slow_cross (7591), and the TG-empty data-feed extension
+    (7916: `slow_cross and threadgen_inflight.size() == 0`) - the 7916 comment records exactly why it
+    existed (slab units starved the legacy u==0 data gate); full-column units restore that legacy behavior,
+    so remove the regime entirely once the subagent verifies NO other consumer (grep every site: slow_cross
+    / startup3x / WALK_CROSS_PERIOD_MS / _prev_cross_ms). Also the drain budget''s unbounded `1e9 if startup`
+    path (7598): after the startup state ends (9 chunks built at load) the drain is ALWAYS at drain_budget_ms
+    - no main-thread blocking pass ever again.
+
+    4. Load-screen gate (the user''s stated option B: "just do the normal streaming method but wait to
+    activate the player / remove the load screen until those 9 chunks are built"): the loading screen
+    (start_loading/stop_loading world.gd:5144+, the AC-0178 loading bypass + spawn3x3 metric) closes when
+    the 9 spawn chunks are mesh_built - built by the NORMAL streaming (drain + workers, full columns),
+    not by any special pass. The player activates only after; everything after is normal streaming. Keep
+    the spawn3x3 wall metric (it becomes the load->activation wall). The load-screen gate is a completion
+    condition, not a timer - verify against the no-timers rule.
+
+    5. Invariants (binding): never show an unlit slab; late-landing semantics unchanged; the walk feels
+    identical (frame budget + sim disc); the star=false dispatch branch stays for the test arms; no new
+    timers that change behavior.
+
+    GATES: G0 0 script errors; boundary r4 (walk p95 - the AC-0079-D2 33->63 trade-off class: on regression,
+    HONEST DEVIATION + named follow-up + exit, no option loop); profgen walk (sim disc 100%, frames within
+    budget, load->activation wall reported) + flight (sim disc >= 40%, frame budget - the inside-out order
+    should improve the fresh edge vs the RP baseline); genhash 25/25 byte-identical (gen untouched); starlighttest
+    0/5 308 416 (engine untouched); meshprobe 1.0; r16 / lightstate / ladder rebases with documented deltas;
+    battery vs .scratch/percol_battery (the dispatch shape changes - documented rebase, NO silent re-baseline);
+    0 script errors in every run.
+
+    PERFORMANCE HONESTY (report, do not distort work to hit): (i) 9-chunk load->activation wall (216 slabs;
+    TM lane measured ~100-120 slabs/s -> expect ~2-5 s), (ii) full real-band catch-up (41 cols x 24 =
+    984 slabs, ~8-10 s at walk), (iii) per-cross incremental. If the walk sim disc drops below 100% or
+    frames exceed budget: honest deviation + follow-up ticket, never a silent re-baseline.
+
+    DEFERRED: AC-0312 (far-band draw tiers - next in queue; its settled-world gates re-measure with the
+    new bands and its band-A materialized slabs flow through this ticket''s dispatch); AC-0287 save filter;
+    AC-0293 (5x5 startup burst retirement - the burst is a DATA pass at startup; this ticket changes the
+    load-screen completion condition only, the burst itself stays until AC-0293).
+
+    CONTEXT: decisions recorded on AC-0299 + docs/flight-world-epic.html section 9. The AC-0283 P3 report
+    (.scratch/ac0283-p3/report.md) carries the walkfix''s original rationale; the code comments at world.gd:7781
+    and :7916 explain both removed mechanisms.
+
+
+
+    CLAUSE 6 ADDED (user decision 2026-09-17, in chat): the TIER-0 set is DELETED - the real band is simply
+    "taxi <= sim (band0_r)". Remove: the tier0_radius setting (autoload/settings.gd:65 default 0, :183
+    clamp, :321 apply_tier0_radius hook, TIER0_RADIUS_MAX + any dev-menu row), world.gd tier0_r (1713)
+    + _is_tier0_col (1715) + note_tier0_radius, and EVERY consumer site - _is_real_col (1690: becomes
+    `taxi <= band0_r`), the placeholder/low-lane guards (598, 845, 1471, 2953, 3095, 3197), the maxi(tier0_r,
+    band0_r) sites (5231, 5241), and the straggler/build-entry exemptions (6483, 6539) - each becomes
+    the plain in-real-band test (which is what they already are at the default tier0_radius=0). Grep tier0
+    everywhere (incl. harness.gd + the settings UI/arm tests) so nothing is orphaned; a settings key that
+    no longer exists must not linger in a save/defaults table (check the save/defaults migration path
+    and the harness settings arm).
+
+    DOCUMENTED CONSEQUENCE (honest, do not hide it): the footing guarantee "the player''s 3x3 is never
+    a placeholder" is now implied by the band, and it holds for any sim >= 2 (every column of the 3x3
+    has taxi <= 2). At sim < 2 the 3x3''s diagonal columns (taxi 2) fall outside the real band and could
+    take a halo placeholder - sim 0/1 is not a shipped configuration (default 4) but the ticket must state
+    the floor: either document "sim >= 2 required" in ARCHITECTURE.md''s real-band rule, or keep a hard-coded
+    3x3 footing guard. Prefer documenting the floor; verify the harness/arm defaults (the arms force radius
+    4 unless AWECRAFT_RADIUS is set) and record which choice was taken.'
   comments: []

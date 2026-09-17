@@ -213,7 +213,7 @@ footer b{color:var(--dim);font-weight:400}
     <span class="meta-platediv"></span>
     <span><b>RESEARCH</b> <a href="worldgen-current.html">worldgen-current.html</a> + RP-profiling baseline</span>
     <span class="meta-platediv"></span>
-    <span><b>STATUS</b> (a)+(b) decided 2026-09-17 · AC-0312 filed · (c)+(d) explained, decision pending</span>
+    <span><b>STATUS</b> all five decisions made 2026-09-17 · follow-through: AC-0313 (queue head) + AC-0312 · AC-0287 next</span>
   </div>
 </header>
 
@@ -394,7 +394,7 @@ footer b{color:var(--dim);font-weight:400}
   </div>
   <p>Readings: the <strong>startup storm is gone</strong> (p95 324 → 45 ms — the DRAIN re-collect scan and the
   main-thread startup burst were the AC-0274 hitch, removed by P2's build-once-at-settle); flight frames dropped a
-  third (24 → 16.7 ms) with the tier-0 fan gone; late landings — the pop source — are zero everywhere; the walk is
+  third (24 → 16.7 ms) with the anchor-column rebuild-every-crossing gone; late landings — the pop source — are zero everywhere; the walk is
   the same world as before at a lower frame cost. The flight sim-disc line (≥ 40 % done-when) was held at 40.7 %
   through P3–P4 and now sits at a 42.8 % median with promotions as the norm (AC-0286).</p>
 </section>
@@ -426,15 +426,19 @@ footer b{color:var(--dim);font-weight:400}
     <tbody>
       <tr><td class="hl">(a) Real-disc radius</td><td><strong>decided 2026-09-17</strong></td><td class="nm"><strong>sim_distance stays configurable, default 4</strong> (as shipped) — the epic's "80–200 columns" was loose; no code change</td></tr>
       <tr><td class="hl">(b) Halo look</td><td><strong>decided 2026-09-17</strong></td><td class="nm">The far-band draw tiers are <strong>restored</strong> (P3's literal-4×4 consolidation is reversed as a draw tier; the h-only DATA of AC-0284b stands): sim radius (4) → medium start (8): <strong>high-LOD 16×16×16 textured chunks</strong>, cave-free, heightmap-only light (the cave-free slabs materialize from H+biome+top at mesh time — gen stays 92 µs/col, saves stay ~198 B); medium start (8) → low start (27): <strong>8×8 average</strong>; low start (27) → render distance (50): <strong>4×4 average</strong>. Knobs: sim=4 / medium_start=8 / low_start=27 / render=50. Follow-through filed: <strong>AC-0312 (far-band-draw-tiers)</strong>, queue pos 2 (before AC-0287)</td></tr>
-      <tr><td class="hl">(c) Walk-fix 2.5 s regime gate</td><td>explained, decision pending</td><td class="nm"><code>WALK_CROSS_PERIOD_MS = 2500</code> (world.gd:155, AC-0283 P3 walkfix): the slab-unit startup 3×3 completion pass (finishes the player's 3×3 chunk ring, ~1.5–2 ms per slab dispatch) runs only when the player-chunk <strong>crossing period ≥ 2.5 s</strong> — a walk crosses ~3.2 s apart (16 blocks at 5 b/s), a flight ~0.8 s (20 b/s) — so flight keeps the legacy drain pace (its 17.5 ms frame budget can't take the extra dispatch). It classifies walk vs flight from the crossing signal itself, not a timer. Question asked in chat: stands or moves</td></tr>
-      <tr><td class="hl">(d) Y-window replacement</td><td>explained, decision pending</td><td class="nm">The Y-window (AC-0263: only slabs within ±1 layer of the player slab mesh) ships and works — walk: 90 % of slabs inside the window. The deferred item is the build queue's <strong>score shape</strong>: (layer, taxi) layer-major lets passed deep slabs outrank fresh edge slabs — the RP measurement: the flight queue ran 60–76 % behind the player while the fresh edge starved (sim disc frozen at 34 % pre-epic). The 83cfcfe attempt addressed it with a timer-based mode switch — user-rejected ("there should not be some kind of internal timer that changes what we do"). <strong>Fresh-edge priority</strong> = re-shape the score so new outer-edge work outranks owed deep work, a pure function of the live recenter anchor (no timer, no mode). A core-scheduler redesign → its own gated ticket. Question asked in chat: accept as deferred + tracking ticket</td></tr>
+      <tr><td class="hl">(c) Walk-fix 2.5 s regime gate</td><td><strong>decided 2026-09-17 — remove</strong></td><td class="nm">User: "we shouldn't be doing this 3×3 chunk thing anywhere, remove it from the code" — sharpened: at <strong>load only, never again</strong>; never a main-thread blocking build pass after the player is active (explicitly not on flight-stop). Chosen form (the user's own option): the 9 spawn chunks are built by the <strong>normal streaming</strong> and the loading screen waits for them before the player activates. The removed mechanism was <code>WALK_CROSS_PERIOD_MS = 2500</code> (world.gd:155, AC-0283 P3 walkfix), which classified walk vs flight so the slab-unit 3×3 completion pass ran only in the walk regime — the pass, the constants, <code>_prev_cross_ms</code>, <code>slow_cross</code>, the TG-empty data-feed extension and the unbounded <code>1e9 if startup</code> drain budget all go. Follow-through: <strong>AC-0313</strong> (clauses 3 + 4)</td></tr>
+      <tr><td class="hl">(d) Y-window replacement</td><td><strong>decided 2026-09-17 — full columns inside-out</strong></td><td class="nm">User: "just change to doing full chunk columns inside out — the new lighting and data lods should make this fast enough." The AC-0263 <strong>Y-window</strong> restriction goes (every column builds its full 24-slab column; the tier-0 exemption becomes the universal rule) and the build score shape becomes <strong>radial</strong> (layer-major → taxi-major, inside-out, fresh-vs-carried against the live anchor — a pure function, no timer and no mode, per the 83cfcfe rule). Why it is fast enough: the star engine's settled state is <em>already</em> the full real band (984 sections at walk — light cost unchanged), and full columns eliminate the re-windowing rework behind the flight's 60–76 % behind-the-player churn (a full column, once <code>mesh_built</code>, is complete and is never re-dispatched). Follow-through: <strong>AC-0313</strong> (clauses 1 + 2)</td></tr>
+      <tr><td class="hl">(e) tier-0 radius</td><td><strong>decided 2026-09-17 — use sim distance</strong></td><td class="nm">The tier-0 set was a <strong>Chebyshev</strong> square around the player column (dev slider <code>tier0_radius</code>, default 0), separate from the taxi-metric bands: it carried the <em>footing</em> guarantee "the ground around the player is never a placeholder / always high" (world.gd:2953/3095/3197/1471), the generalization of the old scattered <code>dx==0&amp;&amp;dz==0</code> hard-codes (AC-0257). User: "let's just have it use the sim distance" — the predicate, the setting (settings.gd:65/183/321), <code>tier0_r</code>, <code>_is_tier0_col</code> and all ~9 consumer sites go; the real band is simply <code>taxi ≤ sim</code>. Documented floor: the footing guarantee then holds for <code>sim ≥ 2</code> (every column of the 3×3 has taxi ≤ 2); sim 0–1 is not a shipped configuration (default 4). Follow-through: <strong>AC-0313</strong> (clause 6)</td></tr>
     </tbody>
   </table>
   </div>
   <div class="callout note reveal">
-    <b>Where this stands</b> — (a) and (b) are decided and recorded above; the (b) follow-through is filed as
-    <strong>AC-0312 (far-band-draw-tiers)</strong> at queue pos 2. Next in the epic: AC-0287 save filter, then this doc
-    flips to final once (c) and (d) land. (c) and (d) are explained on the rows above and await the user's call.
+    <b>Where this stands</b> — all five decisions are made and recorded above (AC-0299 is closed). The two
+    follow-through tickets carry them: <strong>AC-0313 (scheduler-full-columns-inside-out)</strong> — clauses 1–2 are (d),
+    clauses 3–4 are (c), clause 6 is (e) — and <strong>AC-0312 (far-band-draw-tiers)</strong> which is (b). Then AC-0287 (save
+    filter) and this doc flips to final. Two look questions remain open for band A: whether to materialize <em>water</em>
+    where H &lt; sea (the far path renders oceans as flat solid sand today) and whether to materialize the <em>trees</em>
+    (<code>gen.cpp:544</code> already has the skip-mode veg as a pure function of H/biome/x/z/seed).
   </div>
 </section>
 
