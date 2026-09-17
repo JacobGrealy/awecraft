@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-17T18:39
+  updated_at: 2026-09-17T18:42
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -14328,7 +14328,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-17T18:37
-  updated_at: 2026-09-17T18:37
+  updated_at: 2026-09-17T18:42
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -14376,7 +14376,40 @@ intake:
 
 
     DEPENDS: the sphere-placement piece (interactive in-game threshold look). Owes ARCHITECTURE.md sync
-    (a new subsystem/tier).'
+    (a new subsystem/tier).
+
+
+    INNER EDGE CLARIFIED (user question, 2026-09-17): YES - the satellite tier''s inner edge is the RENDER
+    DISTANCE, because that is where the drawn world currently stops. Verified in the tree: autoload/settings.gd:45-46
+    "LOW (4x4x4) = [low_start, render_dist); NOTHING renders past the render distance (data-only ahead
+    of it)"; world/world.gd:1698 tier 3 = DATA-ONLY [render_radius, ring]; world/world.gd:1705 "if taxi
+    < render_radius". So beyond render_radius the satellite body is the ONLY representation of the planet
+    - there is nothing to cross-fade against out there.
+
+
+    THREE PRECISIONS:
+
+    (a) DERIVE IT, DO NOT HARD-CODE IT. The inner edge follows Settings render_dist -> world.render_radius
+    (default 50 chunks = 800 m) and must survive a render-distance change at runtime; there is a queued
+    bug in that neighbourhood (AC-0295). A constant 800 m breaks the moment the setting is 12 or 96.
+
+    (b) THE FADE IS PER-FRAGMENT BY VIEW DISTANCE, not one global alpha: the body''s own near region dissolves
+    under the drawn disc so there is no hard ring at the edge, and the coarse 4x4x4 band''s outer ring
+    fades into the body from the other side of the same edge.
+
+    (c) AT ALTITUDE THE REAL DISC FADES OUT ENTIRELY (down to sub-pixel) rather than sitting as a bright
+    detailed patch inside the body - the surviving half of AC-0042''s ">2000 m impostor only" window.
+
+
+    WHY THIS IS THE RIGHT EDGE, NOT JUST A CONVENIENT ONE: at eye height the true horizon is 114 m, so
+    the tier is invisible on the ground; from a 384 m tower the sightline is ~1753 m, well past the 800
+    m disc. The satellite tier is therefore exactly what lets the curved horizon and the distant limb
+    be SEEN, instead of the world ending in fog at the render edge.
+
+
+    LADDER AFTER AC-0299(b): sim (4 chunks - real slabs + AweStarlight) -> high-LOD textured far band
+    (cave-free slabs materialised from H+biome+top) out to the medium start -> 4x4x4 avg out to render_dist
+    -> satellite body beyond. The inner edge is still render_dist.'
   comments: []
 - id: AC-0311
   title: planet-sphere-domain-generation
