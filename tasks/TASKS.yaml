@@ -1,10 +1,11 @@
 meta:
-  updated_at: 2026-09-17T18:42
+  updated_at: 2026-09-17T18:49
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0299
+- AC-0312
 - AC-0287
 - AC-0293
 - AC-0288
@@ -13340,7 +13341,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-16T14:21
-  updated_at: 2026-09-17T12:16
+  updated_at: 2026-09-17T18:48
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -13418,7 +13419,23 @@ intake:
     (med 8x8 + low 4x4 tiers, or 4x4 only), (ii) the medium start distance numerically. Coordinator plan
     once answered: keep the h-only far DATA (cheap gen 92 us/col, ~198 B saves), materialize the cave-free
     slabs from H+biome+top at mesh time, mesh the near-far band full-LOD through the existing textured
-    lane; new ticket for the draw change (this ticket records the decision only).'
+    lane; new ticket for the draw change (this ticket records the decision only).
+
+
+    USER ANSWERS 2026-09-17 (in chat): (a) sim_distance stays CONFIGURABLE with default 4 - DECIDED, no
+    change (the epic''s "80-200 columns" confirmed as loose). (b) DECIDED - the far-band draw tiers are
+    RESTORED (P3''s literal-4x4 consolidation is reversed as a draw tier; the h-only DATA of AC-0284b
+    stands): sim radius (4) -> medium start (8): HIGH-LOD 16x16x16 TEXTURED chunks, cave-free, heightmap-only
+    light (slabs materialized from H+biome+top at mesh time); medium start (8) -> low start (27): 8x8
+    average; low start (27) -> render distance (50): 4x4 average. Knobs medium_start=8 / low_start=27
+    as the RP baseline. FOLLOW-THROUGH FILED: AC-0312 (far-band-draw-tiers), queue pos 2 (before AC-0287).
+    STILL OPEN: (c) the 2.5 s crossing-period regime gate (explained to the user in chat - it classifies
+    walk vs flight from the chunk-crossing cadence so the slab-unit startup 3x3 completion pass runs only
+    in the walk regime; derived from the crossing signal, not a timer; question: stands or moves), (d)
+    the fresh-edge-priority scheduler redesign (explained: the build queue scores (layer, taxi) layer-major,
+    so passed deep slabs outrank fresh edge slabs - the flight''s 60-76% behind-the-player queue shape;
+    the replacement is a score-shape change, no timer per the 83cfcfe rule; question: accept deferred
+    + tracking ticket). Design doc section 9 updated with the (a)/(b) records.'
   comments: []
 - id: AC-0300
   title: render-recipe-forward-plus-vs-gl-compatibility
@@ -14273,7 +14290,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-17T18:37
-  updated_at: 2026-09-17T18:37
+  updated_at: 2026-09-17T18:49
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -14316,7 +14333,59 @@ intake:
 
     GATES: walk across both ways with on_floor true; no void; no light seam; no Z-fight; an edit placed
     on the far side survives save/load; a render at a boundary. Owes ARCHITECTURE.md sync if the boundary/blend
-    convention is structural.'
+    convention is structural.
+
+
+    EDIT INTERACTION (user question 2026-09-17) - how the blend band behaves when the player removes or
+    adds blocks.
+
+
+    THE MODEL: the blend shapes what the GENERATOR produces; player changes are a separate overlay applied
+    on top of generated data. Verified in the tree: world.edits is a global dict edits["<key>"][fi] =
+    {"b": id, "f": fluid} (world/world.gd:231, _record_edit at :9992-9996); edits land in the live chunk
+    and are re-applied to freshly generated columns by _apply_edits_to_chunk (:9998-10016) - including
+    the AC-0284b far-column path, which schedules the full regen first and re-applies the edit on landing
+    (:10004-10010). That is the existing guarantee "an edit re-applies to newly generated terrain without
+    moving"; the band must not weaken it.
+
+
+    THE RULE THAT MAKES IT WORK: the blend may sample the neighbour face''s GENERATOR only, never the
+    neighbour''s LIVE BLOCK DATA. If it read live data, an edit on face A would shift face B''s generated
+    ground, and the result would depend on which columns happened to be resident (load order) - breaking
+    determinism, the far/promotion bit-exactness contract (ARCHITECTURE.md section 6) and save/load reproducibility.
+
+
+    OWNERSHIP STAYS 1:1. Face territories are radial wedges resolved by SphereMath.world_to_face, which
+    is purely positional and invariant along a column''s radial (normalize(pos) does not change as radius
+    changes), so every voxel has exactly one home and every edit has exactly one save key planet_id:face:ccx:ccz:local.
+    A build straddling a seam is split between the two faces'' stores with no duplication and no ambiguity
+    - which is exactly why the mesh and the light MUST read LIVE data across the seam (C3/C4), while the
+    terrain field (C1) must not.
+
+
+    DO NOT BLEND GEOMETRY. Lerping vertex positions or warping meshes in the band would put the visuals
+    out of step with collision and with the voxel DDA (core/math.gd). Blend field VALUES (height, cave
+    density) only.
+
+
+    ACCEPTANCE TESTS TO ADD (all first at the x=0 midline, then at a +/-3141 cube edge):
+
+    (1) DIG ACROSS THE SEAM - cut a 3-deep tunnel crossing the boundary, save, reload, force the columns
+    to evict and regenerate: identical block state, no hole opens, nothing shifts.
+
+    (2) BUILD ACROSS THE SEAM - raise a tower straddling the boundary: each face''s store carries its
+    share, no duplicate keys, collision solid across the seam, no gap.
+
+    (3) PROVE THE GENERATOR-ONLY RULE - break one block well inside the band on face A, then force face
+    B''s band columns to regenerate: face B''s terrain is UNCHANGED. This is the test that fails if the
+    blend ever starts reading live data.
+
+    (4) FLUIDS - pour water at the seam; it flows across the boundary and settles; after save/load and
+    a regeneration the levels match. (fluid_tick_radius = sim_dist * 16 = 64 m, autoload/settings.gd:248
+    - so at a seam the fluid sim is always in play.)
+
+    (5) ORDINARY FEEL - mine/place/step across the seam behaves exactly as inside a face: same aim, same
+    on_floor, no double placement.'
   comments: []
 - id: AC-0310
   title: planet-satellite-lod
@@ -14421,7 +14490,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-17T18:37
-  updated_at: 2026-09-17T18:37
+  updated_at: 2026-09-17T18:49
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -14462,5 +14531,79 @@ intake:
 
 
     DEPENDS: the cave series (AC-0288..AC-0292) complete - it rewrites gdext/src/gen.cpp, which this touches;
-    and the cross-face piece (to remove the band). Owes ARCHITECTURE.md sync (generation/sampling domain).'
+    and the cross-face piece (to remove the band). Owes ARCHITECTURE.md sync (generation/sampling domain).
+
+
+    CONSEQUENCE FOR PLAYER BUILDS (recorded from the AC-0309 edit-interaction question, 2026-09-17): deleting
+    the blend band CHANGES the terrain in that strip, so any player edits inside it are re-applied over
+    different ground - a build in the band could end up floating or buried. The strip is narrow (tens
+    of columns) and sits 3141 m from spawn, so this is acceptable under the same "fresh worlds only" precedent
+    the cave series uses (user 2026-09-15) - but state it in the ticket rather than discovering it, and
+    either accept it explicitly or migrate the affected edits.'
+  comments: []
+- id: AC-0312
+  title: far-band-draw-tiers
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-17T18:47
+  updated_at: 2026-09-17T18:47
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As the player flying over the world, I want the distant world to stay crisp instead
+    of turning into one blurry 4x4 average everywhere beyond the sim square. Per the AC-0299 (b) decision
+    (user, 2026-09-17): beyond the sim radius out to the medium start distance the world should be full
+    16x16x16 textured block chunks (no caves out there, sky-only light); from the medium start to the
+    low start it should be 8x8 average; from the low start to the render distance it should be 4x4 average.
+    Walking should be unchanged.
+
+
+    2) Technical Details:
+
+    DATA — NO CHANGE: far columns keep the h-only payload (H u16 + biome + top, v6 flag bit 1, ~198 B
+    on disk, AC-0284b). H stays bit-exact with the full path (the AC-0286 promotion consistency contract).
+    Gen stays ~92 us/col.
+
+    BAND A (sim < taxi <= medium_start, knob medium_start=8): materialize the cave-free slabs from H+biome+top
+    at FIRST MESH (the same fill the skip=1 path does, one-time ~0.7 ms/col on the mesh worker), then
+    draw full-LOD textured meshes through the existing high emit lane; light = heightmap sky (the engine
+    is never seeded in this band - the halo rule stands); AC-0286 promotion (far->sim full regen, retain-swap,
+    single flood) is UNCHANGED and must still pass (halo (c) promo block).
+
+    BAND B (medium_start < taxi <= low_start, low_start=27): 8x8 average from the h-only payload - a new
+    emit (h_med_emit) that generalizes h_avg_emit (4x4); it must be byte-identical to low_emit_avg on
+    the same skip-filled grid inputs (extend the farab gate with an 8x8 case; keep the 4x4 case at 984/984).
+
+    BAND C (low_start < taxi <= render radius): 4x4 average through the existing h_avg_emit (unchanged).
+
+    KNOBS: medium_start / low_start exist in settings (RP baseline: medium_start=8, low_start=27, render=50,
+    sim=4) - verify the current knob names and restore them for the DRAW tier (the P3 consolidation removed
+    them as draw tiers; the tier assignment in _lod_tier_of / band_of must use them again). sim_distance
+    stays configurable with default 4 (AC-0299 (a) - no change).
+
+    DEMOTION/PROMOTION: real->band-A demotion must replace full data with the h-only form + a high-LOD
+    mesh (P3 evicted; _low_relower_owed already re-lowers - verify the new tier); band-A->real = the existing
+    AC-0286 promotion path.
+
+    GATES: ladder (rebuilt for the 3-tier far shape - tier0 + 8x8 + 4x4 average colors byte-identical
+    across emit paths), halo (rebased: band A unseeded + high mesh vs the slab-emitter reference on the
+    same fill; bands B/C vs the h emits), farab (new 8x8 case), meshprobe 1.0, starlighttest 0/5 308 416,
+    r16 (rebase + document), lightstate R16 canaries (rebase + document), battery vs .scratch/percol_battery
+    (expect structural shifts in the draw-tier arms - rebase with a documented delta, no silent re-baseline),
+    profgen walk sim disc 100% / flight >= 40% with frames within budget, 0 script errors, genhash 25/25
+    byte-identical (gen unchanged).
+
+    DEFERRED (out of scope): the fresh-edge-priority scheduler redesign (AC-0299 (d), pending the user''s
+    decision); AC-0287 save filter (queue pos 3); AC-0293 startup-burst retirement.
+
+    CONTEXT: the AC-0299 (b) answer is recorded on that ticket + in docs/flight-world-epic.html section
+    9. This ticket is the follow-through AC-0299 requires (a decision that implies a behaviour change
+    is filed as its own ticket).
+
+    '
   comments: []
