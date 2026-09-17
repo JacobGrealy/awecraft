@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-17T00:58
+  updated_at: 2026-09-17T06:08
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0297
 - AC-0302
 - AC-0303
 - AC-0300
@@ -12830,11 +12829,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-16T12:56
-  updated_at: 2026-09-16T12:56
-  completed_at: null
+  updated_at: 2026-09-17T06:08
+  completed_at: 2026-09-17T06:08
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want every nearby-chunk light value to come from the one Starlight
@@ -12858,7 +12857,14 @@ intake:
     Context: .scratch/ac0283-borderbright/report.md (root cause + probe contract), .scratch/ac0283-p4/report.md
     (live-caller proof + star=false stop-rule finding).
 
-    '
+
+
+    CLOSED 2026-09-17 (3e0b50b). (a) DIRTYFULL: evidence = pull light byte-equal to settled star payload
+    0/98304, but edit-face slab uncovered by the lane (uncovered_delete [8]) -> FEED (settled per-slab
+    payloads captured at dispatch, epoch-checked at landing); C4 bakes 93->73. (b) tex-refresh star-native
+    (payload for real / h_avg_emit for halo); c.last_eff dropped from the path. Permanent texrefresh arm
+    + the Godot 4.7 ArrayMesh precision probe (normals 16-bit, colours 8-bit). 14/14 gates green; grep
+    proof: the classic pull has zero live game consumers. See .scratch/ac0297/report.md.'
   comments: []
 - id: AC-0298
   title: update-architecture-md-to-current-state
