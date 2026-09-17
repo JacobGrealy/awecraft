@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AweCraft — Flight-Ready World: the lighting &amp; far-band epic (design + measurements)</title>
+<style>
+:root{
+  --bg:#120f0a; --bg2:#171310; --panel:#1c1712; --panel2:#211b14;
+  --edge:#3a332a; --edge2:#4a4133;
+  --ink:#e8ddc9; --dim:#a4937a; --faint:#6f6350;
+  --amber:#d9a441; --rust:#c96a3d; --steel:#7fa0c4; --crimson:#d4585f;
+  --teal:#58a8a0; --moss:#8a9a5b; --ocean:#4f86a8;
+  --mono:ui-monospace,"Cascadia Mono","JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg); color:var(--ink);
+  font:16.5px/1.68 var(--serif);
+  -webkit-font-smoothing:antialiased;
+}
+/* strata background: faint layered bands + vignette */
+body::before{
+  content:""; position:fixed; inset:0; z-index:-2; pointer-events:none;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(217,164,65,.05), transparent 55%),
+    repeating-linear-gradient(180deg,
+      transparent 0 118px, rgba(217,164,65,.022) 118px 120px,
+      transparent 120px 258px, rgba(79,134,168,.02) 258px 261px,
+      transparent 261px 388px, rgba(138,154,91,.02) 388px 391px),
+    linear-gradient(180deg, var(--bg2), var(--bg) 340px);
+}
+/* grain */
+body::after{
+  content:""; position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.05;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='140' height='140' filter='url(%23n)' opacity='1'/></svg>");
+}
+.wrap{max-width:1180px;margin:0 auto;padding:0 28px}
+::selection{background:var(--amber);color:#171310}
+
+/* ---------- header ---------- */
+header{padding:52px 0 30px;border-bottom:1px solid var(--edge)}
+.specline{
+  display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  font:10.5px/1.6 var(--mono);letter-spacing:.22em;color:var(--faint);
+  text-transform:uppercase;margin-bottom:34px;
+}
+.specline b{color:var(--dim);font-weight:400}
+h1{
+  font:700 clamp(34px,5.4vw,64px)/1.02 var(--mono);
+  letter-spacing:.02em;text-transform:uppercase;
+}
+h1 .thin{font-weight:300;color:var(--dim)}
+.subtitle{
+  font:italic 20px/1.5 var(--serif);color:var(--dim);
+  max-width:62ch;margin-top:18px;
+}
+.subtitle em{color:var(--amber);font-style:italic}
+.meta-plate{
+  display:flex;gap:26px;flex-wrap:wrap;margin-top:30px;
+  font:11.5px/1.9 var(--mono);color:var(--dim);
+  border:1px solid var(--edge);background:rgba(28,23,18,.6);padding:14px 18px;
+}
+.meta-plate div{min-width:150px}
+.meta-plate .k{display:block;color:var(--faint);letter-spacing:.18em;font-size:9.5px;text-transform:uppercase}
+.meta-plate .v{color:var(--ink)}
+.meta-plate .v.amber{color:var(--amber)}
+.stratabar{height:6px;margin-top:34px;background:linear-gradient(90deg,
+  var(--crimson) 0 14%, var(--amber) 14% 34%, var(--moss) 34% 56%,
+  var(--steel) 56% 78%, var(--ocean) 78% 100%);opacity:.85}
+
+/* ---------- TOC ---------- */
+nav.toc{
+  border-bottom:1px solid var(--edge);
+  padding:22px 0 26px;
+}
+nav.toc .toc-title{font:10.5px/1 var(--mono);letter-spacing:.3em;color:var(--faint);text-transform:uppercase;margin-bottom:16px}
+nav.toc ol{list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:4px 44px}
+nav.toc a{
+  color:var(--dim);text-decoration:none;font:13px/1.7 var(--mono);
+  display:flex;align-items:baseline;gap:10px;padding:2px 0;
+}
+nav.toc a .no{color:var(--faint);font-size:10.5px;letter-spacing:.1em}
+nav.toc a .dots{flex:1;border-bottom:1px dotted var(--edge2);transform:translateY(-4px)}
+nav.toc a:hover,nav.toc a.cur{color:var(--amber)}
+@media(max-width:760px){nav.toc ol{grid-template-columns:1fr}}
+
+/* ---------- sections ---------- */
+section{padding:54px 0 8px;border-bottom:1px solid var(--edge)}
+section:last-of-type{border-bottom:none}
+.sec-head{display:flex;align-items:baseline;gap:18px;margin-bottom:26px}
+.sec-no{
+  font:300 44px/1 var(--mono);color:transparent;
+  -webkit-text-stroke:1px var(--edge2);letter-spacing:.04em;
+}
+.sec-head h2{
+  font:600 21px/1.2 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink);
+}
+.sec-head .rule{flex:1;height:1px;background:var(--edge);position:relative;top:-6px}
+.sec-head .rule::after{content:"";position:absolute;right:0;top:-3px;width:7px;height:7px;background:var(--amber);transform:rotate(45deg)}
+section p{margin:0 0 16px;max-width:80ch}
+section p .fn{color:var(--dim);font-size:.92em}
+section h3{
+  font:600 13px/1.3 var(--mono);letter-spacing:.18em;text-transform:uppercase;
+  color:var(--dim);margin:30px 0 8px;
+}
+section ul{margin:0 0 16px 22px;max-width:80ch}
+section ol.steps{margin:0 0 16px 22px;max-width:84ch}
+section li{margin:5px 0}
+strong{color:var(--amber);font-weight:600}
+a{color:var(--steel)}
+code, .mono{font-family:var(--mono)}
+p code, li code, td code{
+  font-size:.86em;background:#262017;border:1px solid #332b20;color:#e3c98f;
+  padding:1px 5px;border-radius:3px;white-space:nowrap;
+}
+
+/* ---------- code blocks ---------- */
+pre.code{
+  background:#14100c;border:1px solid var(--edge);border-left:3px solid var(--amber);
+  padding:16px 18px 14px;margin:18px 0 24px;overflow-x:auto;
+  font:12.5px/1.75 var(--mono);color:#d8c9a8;
+}
+pre.code .ln{color:#4a4133;display:inline-block;width:4.2ch;text-align:right;margin-right:14px;user-select:none}
+pre.code .cm{color:#6f6350;font-style:italic}
+pre.code .kw{color:var(--steel)}
+pre.code .st{color:#a8c48a}
+pre.code .num{color:#e0a458}
+
+/* ---------- tables ---------- */
+table{border-collapse:collapse;width:100%;margin:18px 0 26px;font:12.5px/1.6 var(--mono)}
+th{
+  text-align:left;color:var(--faint);font-weight:400;letter-spacing:.16em;
+  text-transform:uppercase;font-size:10px;border-bottom:1px solid var(--edge2);
+  padding:8px 10px;
+}
+td{border-bottom:1px solid var(--edge);padding:8px 10px;color:var(--dim);vertical-align:top}
+tbody tr{transition:background .15s}
+tbody tr:hover{background:rgba(217,164,65,.05)}
+td .nm{color:var(--ink)}
+td.hl{color:var(--amber)}
+.tbl-scroll{overflow-x:auto}
+
+/* ---------- layer cards ---------- */
+.layers{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin:24px 0 10px}
+.layer{
+  background:var(--panel);border:1px solid var(--edge);border-top:3px solid var(--lc,var(--amber));
+  padding:16px 18px 12px;transition:transform .18s, border-color .18s;
+}
+.layer:hover{transform:translateY(-3px);border-color:var(--edge2);border-top-color:var(--lc,var(--amber))}
+.layer h3{font:600 13.5px/1.3 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--lc,var(--amber));margin:0 0 4px}
+.layer .purpose{font:italic 14px/1.5 var(--serif);color:var(--dim);margin:6px 0 12px}
+.layer .rows{font:11.5px/1.95 var(--mono);color:var(--faint)}
+.layer .rows b{color:var(--dim);font-weight:400;display:inline-block;min-width:9.5ch}
+.layer .rows .vv{color:var(--ink)}
+
+/* ---------- figures ---------- */
+figure{margin:26px 0 30px;background:#0f0c08;border:1px solid var(--edge);padding:14px}
+figure svg{width:100%;height:auto;display:block}
+figcaption{
+  font:11px/1.7 var(--mono);color:var(--faint);letter-spacing:.06em;
+  padding-top:12px;border-top:1px dashed var(--edge);margin-top:10px;
+}
+figcaption b{color:var(--dim);font-weight:400}
+
+/* ---------- callouts ---------- */
+.callout{
+  border:1px solid var(--edge);border-left:3px solid var(--steel);
+  background:rgba(79,134,168,.06);padding:14px 18px;margin:20px 0;
+  font:14px/1.6 var(--serif);color:var(--dim);max-width:86ch;
+}
+.callout b{color:var(--steel);font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;display:block;margin-bottom:6px}
+.note{border-left-color:var(--amber);background:rgba(217,164,65,.06)}
+.note b{color:var(--amber)}
+.warn{border-left-color:var(--crimson);background:rgba(212,88,95,.06)}
+.warn b{color:var(--crimson)}
+
+/* ---------- worked example ---------- */
+.wk{font:13px/2 var(--mono);color:var(--dim);background:#14100c;border:1px solid var(--edge);
+  padding:16px 18px;margin:18px 0;overflow-x:auto}
+.wk .ok{color:var(--moss)}
+.wk .op{color:var(--faint)}
+.wk .res{color:var(--amber)}
+
+/* ---------- footer ---------- */
+footer{padding:34px 0 60px;font:11px/2 var(--mono);color:var(--faint);letter-spacing:.08em}
+footer b{color:var(--dim);font-weight:400}
+
+/* ---------- load reveal ---------- */
+@keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+.reveal{opacity:0;animation:rise .7s cubic-bezier(.22,.61,.36,1) forwards}
+.d1{animation-delay:.05s}.d2{animation-delay:.14s}.d3{animation-delay:.24s}.d4{animation-delay:.34s}
+@media(prefers-reduced-motion:reduce){.reveal{animation:none;opacity:1}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="specline">
+    <span>AWECRAFT — DESIGN ESSAY</span>
+    <span>LIGHTING <b>+</b> FAR-BAND EPIC</span>
+    <span>2026-09-17 · <b>i5-9400F 6-core · Godot 4.7.1</b></span>
+  </div>
+  <h1>Flight-Ready World <span class="thin">— the lighting &amp; far-band epic</span></h1>
+  <p class="subtitle">The epic made the world hold up <em>while flying</em>: one light engine that settles instead of
+  flushing, a far band that costs 2&nbsp;% of a column, a promotion that never pops, and a save that never bloats.
+  This doc records the decisions, the rejected alternatives, and the honest before/after numbers.</p>
+  <div class="meta-plate">
+    <span><b>TICKETS</b> AC-0283 · AC-0284a/b · AC-0297 · AC-0286 · AC-0287 (pending) · AC-0299 (user decisions)</span>
+    <span class="meta-platediv"></span>
+    <span><b>RESEARCH</b> <a href="worldgen-current.html">worldgen-current.html</a> + RP-profiling baseline</span>
+    <span class="meta-platediv"></span>
+    <span><b>STATUS</b> in flight — paused on the user's AC-0299 answers</span>
+  </div>
+</header>
+
+<nav class="stratabar">
+  <a href="#s1">The epic</a><a href="#s2">The baseline</a><a href="#s3">Decision I — the light engine</a>
+  <a href="#s4">Decision II — the cheap far band</a><a href="#s5">Decision III — promotion</a>
+  <a href="#s6">Decision IV — the save filter</a><a href="#s7">Before / after</a>
+  <a href="#s8">Done-when verdict</a><a href="#s9">Open decisions</a><a href="#s10">Ticket index</a>
+</nav>
+
+<section id="s1">
+  <div class="sec-head"><span class="sec-no">01</span><h2>The epic and its scenario</h2><span class="rule"></span></div>
+  <p>The scenario the epic is measured against: <strong>fly at 16× (≈&nbsp;69&nbsp;m/s) over terrain and watch the
+  world fill in</strong> — no holes, no light pops, no frame spikes, no save bloat, and walking unchanged.
+  The research pass first mapped the live pipeline end to end
+  (<a href="worldgen-current.html">worldgen-current.html</a>: bands, LOD tiers, the scheduler, the light) and then
+  profiled every world-gen phase for the canonical scenario (the RP-profiling baseline, §2). The profiling produced
+  the ticket set in epic order:</p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Ticket</th><th>Scope</th><th>Commits</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td class="hl">AC-0283</td><td>Starlight light engine + far heightmap light (P1–P5)</td><td class="nm">ef28ac1 · f16606d · b0ff477 · e4f88da · bf93b9a</td><td><strong>done</strong></td></tr>
+      <tr><td class="hl">AC-0284a</td><td>Far columns skip the cave field (no-caves gen)</td><td class="nm">727f27e</td><td><strong>done</strong></td></tr>
+      <tr><td class="hl">AC-0284b</td><td>Far columns store height-only data (v6 codec)</td><td class="nm">d9bb3e6</td><td><strong>done</strong></td></tr>
+      <tr><td class="hl">AC-0297</td><td>Classic pull → TEST-ONLY; star-native tex-refresh</td><td class="nm">3e0b50b</td><td><strong>done</strong></td></tr>
+      <tr><td class="hl">AC-0286</td><td>Far→sim promotion: seamless, single-flood, no-pop</td><td class="nm">c35bed3</td><td><strong>done</strong></td></tr>
+      <tr><td class="hl">AC-0287</td><td>Save filter: far columns stop being saved; 10k-flight no-bloat</td><td class="nm">—</td><td>pending (after AC-0299 answers)</td></tr>
+      <tr><td class="hl">AC-0299</td><td>User's four lighting/halo design decisions (recorded in this doc)</td><td class="nm">—</td><td><strong>awaiting the user</strong></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="callout note reveal">
+    <b>The one number the epic optimizes for</b> — the far horizon: <strong>filling 1&nbsp;000 far-band columns in
+    &lt; 50&nbsp;ms</strong> (single-threaded equivalent). Every ticket after AC-0283 exists to make that line
+    affordable. The honest verdict is in §8 — the heights-only pass met it; the full far column (the bit-exactness
+    floor) lands at 92&nbsp;ms.
+  </div>
+</section>
+
+<section id="s2">
+  <div class="sec-head"><span class="sec-no">02</span><h2>The baseline — where the time went (before)</h2><span class="rule"></span></div>
+  <p>Measured fresh (seeds 2001–2003, R50, this box; absolute ms are box-local — <strong>ratios and phase shares are
+  the transferable numbers</strong>; the user's machine is Windows). Raw logs and the analyzer live in
+  <code>.scratch/worldgen-research/</code> (untracked by design). The shape of the problems:</p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Phase (RP baseline)</th><th>Frame (end ring)</th><th>The story</th></tr></thead>
+    <tbody>
+      <tr><td class="hl">S1 startup (9.7 s load)</td><td class="nm">57.4 ms avg / 324 ms p95 (≈12 fps)</td><td>Main-thread DRAIN scan owned ~63 % of wall (16 dispatches/frame + re-collect over a growing 7.8k-entry pool) while all workers combined used &lt;16 %. 186 late landings. <strong>A scan problem, not a generation problem.</strong></td></tr>
+      <tr><td class="hl">S2 flight (10 s at 16×)</td><td class="nm">24.0 ms (≈41 fps)</td><td>100 % of build dispatches rebuilt the tier-0 anchor column's full 24-slab fan on every one of 51 crossings; 60–76 % of the ~5 100 queued entries sat behind the player; the sim disc (taxi ≤ 8) froze at <strong>34 % data</strong> for the whole flight; the recenter walk was permanently pending (crossings 4.3/s vs ~1 walk/s). 53 late landings.</td></tr>
+      <tr><td class="hl">S2 still (20 s deep drain)</td><td class="nm">12.5 ms</td><td>The disc fills 65→100 % in 3 s once the walk completes; the low wave (1 890 slabs) and 344 late landings do the tail.</td></tr>
+      <tr><td class="hl">S3 walk (30 s)</td><td class="nm">25.7 ms (≈17 fps at end)</td><td>10 recenter walks (one every 3.0 s) total 11.9 s of walk wall (~40 % of the phase); the sim disc stays 100 % (16.5 cols/s is inside supply); 394 late landings.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Per-column generation (C++ atomics, all phases agree to &lt;3 %): field 139&nbsp;µs · heights <strong>32&nbsp;µs
+  (1.7 %)</strong> · scan 736–825&nbsp;µs (45 %) · fill 583–601&nbsp;µs (32 %) · veg 15&nbsp;µs · pallet 206–217&nbsp;µs
+  → <strong>full column ≈ 1.73–1.83 ms</strong>. Worker occupancy TG 0.7–2.3 %, TM 3.1–13.4 % — the pools were
+  starved, not queued; the pacing (drain budget, per-frame caps, recenter walks, the load re-collect scan) was the
+  cost. That split — <em>main-thread pacing, not worker throughput</em> — is what shaped all five decisions.</p>
+  <div class="callout warn reveal">
+    <b>The flight's visible defect, quantified</b> — the sim disc beyond the 5×5 startup burst got <strong>no data at
+    all</strong> during the flight (34 %, frozen): the steady data pass was starved out by the burst re-fire
+    (215 landings, all burst-origin), and the "world filling in" the user sees is a 4×4 low wave over a data-poor
+    disc. AC-0284 (cheap far data) + AC-0286 (promotion) exist to feed that disc while moving.
+  </div>
+</section>
+
+<section id="s3">
+  <div class="sec-head"><span class="sec-no">03</span><h2>Decision I — one light engine that settles (AC-0283, P1–P5)</h2><span class="rule"></span></div>
+  <p><strong>Problem.</strong> The classic per-column light pull re-flooded on every landing; settled columns that
+  received new data were un-settled (HID) and flushed through a per-column/frame wave — the late-landing churn
+  (186 / 53 / 344 / 394 per phase in the baseline) and the flush-wave stage, and the cause of light popping on edits.</p>
+  <p><strong>Decision.</strong> A single-queue C++ engine, <code>AweStarlight</code> (<code>gdext/src/starlight.cpp</code>):
+  16 level deques, per-section light nibbles, the sky column-pull that never crosses a chunk x/z edge; light settles
+  into the engine and a slab's payload is <em>captured at dispatch</em> (epoch-checked at landing) instead of the mesh
+  lane re-pulling. Around it: <strong>build-once-at-settle</strong> (the 3×3×3 box builds when the engine settles,
+  not on every crossing), the remesh lane capped at 1 slab/key/frame (2 keys), the <strong>halo</strong> beyond the
+  sim band (4×4 avg + heightmap sky, engine never seeded), and the <code>star=false</code> dispatch branch kept for
+  the test arms. P4 re-classified <code>AweLighting</code> + the classic pull as <strong>TEST/REFERENCE</strong>
+  (zero live game consumers); P5 made the tex-refresh dispatch star-native (real = settled payload, halo =
+  <code>h_avg_emit</code> re-emit) and dropped <code>c.last_eff</code> from the path.</p>
+  <p><strong>Rejected alternatives.</strong> (i) Keep the classic pull and only cache payloads — the un-settle/flush
+  lifecycle is the churn, caching doesn't remove it. (ii) A GDScript engine — the per-cell fixed point is C++-speed
+  territory; the equivalence gate (below) compares against the C++ legacy kernel anyway. (iii) Incremental per-slab
+  re-seeding on far→full promotion — the whole-column top-down reseed is one operation and is the only seed order
+  that cannot carry a stale sky (see §5).</p>
+  <p><strong>Proof.</strong> <code>starlighttest</code>: engine ≡ legacy kernel, <strong>0 / 5&nbsp;308&nbsp;416
+  cells</strong> (synthetic column + 3 edits + settled live region), re-run at every closeout. Post-P4 profile:
+  late landings <strong>0</strong> in every phase, remesh flush down to 99 frames (flight) / 198 (walk), star work
+  confined to 984 sections on the walk (exact confinement), frame 16.7&nbsp;ms. P5's side finding, now a standing
+  arm: Godot 4.7's ArrayMesh round-trip stores normals at 16-bit (1/65536 jitter) and vertex colours at 8-bit —
+  vertices/indices/UVs byte-exact — so the tex-refresh arm compares at engine precision with a micro-probe every run.</p>
+</section>
+
+<section id="s4">
+  <div class="sec-head"><span class="sec-no">04</span><h2>Decision II — the far band costs 2 % of a column (AC-0284a/b)</h2><span class="rule"></span></div>
+  <p><strong>284a — no caves out there.</strong> The halo band never shows caves (its light is a heightmap sky), so
+  a far column doesn't need the cave field: <code>generate_resl</code> gained <code>skip</code> (0 full / 1 slab-skip
+  / 2 far h-only), and 284a shipped skip=1 (solid 0..H slabs, no cave carve) for the far band.</p>
+  <p><strong>284b — store nothing the mesh doesn't need.</strong> The 4×4 avg mesh is a function of (heightmap,
+  biome, top block) — so the far column stores exactly that and <em>no slabs at all</em>: payload
+  <code>[H u16×256][biome×256][top×256]</code> (1024 B raw, <strong>≈ 198 B compressed on disk</strong>, v6 flag bit 1;
+  bit 0 = no-caves from 284a; v1–v5 decode unchanged). The mesh is emitted by <code>AweMesh.h_avg_emit</code>, which
+  shares its emit core with the slab path and is <strong>byte-identical to it</strong> (farab gate: 984/984 slabs).
+  <code>H</code> is the heightmap (u16, no wrap) and stays <strong>bit-exact with the full path</strong> — that is the
+  promotion consistency contract, so the surface fields are never coarsened.</p>
+  <p><strong>Measured.</strong> Far column <strong>92 µs</strong> (surface fields 57 + heights 34 + top 1) vs full
+  <strong>1678 µs</strong> — <strong>≈ 18×</strong> per column; the heights-only pass (34 µs) meets the RP baseline's
+  32 µs line. The engine-seed contract fixed a real bug the arm exposed: a far column is <strong>never</strong>
+  seeded as all air, and a far→full promotion re-seeds the <strong>whole column top-down</strong> (the stale all-air
+  seam had been mis-carried sky 15 down through deep stone). A <code>_far_promo_owed</code> cap-drop retry (the
+  enqueue returns bool) makes promotion lossless under queue pressure.</p>
+  <div class="callout warn reveal">
+    <b>The honest gap on the &lt;50 ms/1k done-when.</b> The RP <em>heights-only</em> line (32 ms/1k) is met — but a
+    far column that must stay <em>bit-exact for promotion</em> also carries the 3 surface fields (57 µs, the
+    fbm physics floor — coarsening them would shift terrain on promotion) → <strong>92 ms/1k single-threaded, 2×
+    over the literal 50 ms</strong>. The win that actually matters: the far band is 1.7 % of what a full horizon
+    cost (1.83 s/1k) and 198 B of what a full column costs on disk. Documented, not hidden.
+  </div>
+</section>
+
+<section id="s5">
+  <div class="sec-head"><span class="sec-no">05</span><h2>Decision III — promotion that never pops (AC-0286)</h2><span class="rule"></span></div>
+  <p>The crossing itself was already detected (284a/b) and triggered a full regen; what was missing was the
+  <em>seamless</em> part — the late-landing path HIDEs slabs during a re-bake, which reads as a fog-flash / hole
+  while flying. The promotion contract, now in ARCHITECTURE.md:</p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Clause</th><th>Design</th><th>Evidence (halo (c) + flight profile)</th></tr></thead>
+    <tbody>
+      <tr><td class="hl">Detection</td><td>Three points: the recenter walk, an in-band disk load, and a <strong>far data landing already inside the real band</strong> (gen-queue lag past the crossing — the bug found: such a column was never owed and sat low-detail forever). All funnel into <code>_far_promo_owed</code>; cap-drop = retry, not loss.</td><td>181 landed promotions, <strong>enq == enq_final == 1 on every one</strong> (0 violations); demote + re-cross = new residency, also 1.</td></tr>
+      <tr><td class="hl">Retain-swap</td><td>The landing never hides/un-settles: the far low keeps showing, each slab flips high-on/low-off atomically behind the settled-payload gate. The old mesh's light (heightmap sky) is identical to the full path's sky for the surface — nothing is "wrong light", the caves are underground and invisible.</td><td><strong>0 hole-frames, 0 unlit frames</strong> in flight and walk; <code>star_late_landings_promo</code> = 0 (the hide path is never taken for promotions).</td></tr>
+      <tr><td class="hl">Single flood</td><td>The <code>was_far</code> branch re-seeds the <strong>whole column exactly once</strong> (top-down), one settle — never per-slab, never as air.</td><td><strong>seed-at-landing == 1</strong> on every landed promotion; deterministic halo (c) confirms.</td></tr>
+      <tr><td class="hl">Burst</td><td><code>_promo_build_step</code> (per frame, beside the owed step) dispatches the landing column's best pending slab through the <em>same</em> <code>_mesh_dispatch_hslab</code> — all gates unchanged — bypassing only the build-queue score, so the conversion doesn't wait behind the flight's multi-thousand-deep backlog.</td><td>Swap latency <strong>350–361 ms at rest (~22 frames)</strong>, 71–130 frames at flight cadence; final-state light vs converged reference: <strong>0 mismatches</strong>.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p><strong>Cost per promotion:</strong> full regen 2 ms (worker) + re-seed 2.6 ms + the swap above. The ticket's
+  "~1 ms" was written before the h-only measurement — the regen alone is a hard floor; the incremental cost of the
+  promotion on top of the gen is sub-ms main-thread.</p>
+</section>
+
+<section id="s6">
+  <div class="sec-head"><span class="sec-no">06</span><h2>Decision IV — what the save keeps (AC-0287 — pending)</h2><span class="rule"></span></div>
+  <p>The far band is now cheap in memory (198 B, no slabs) — the remaining waste is writing it to disk at all: a
+  far column is <em>re-derivable</em> (92 µs of gen, no edits possible out there). AC-0287: the save filter writes
+  only taxi ≤ sim or edited columns; the no-bloat proof is a 10 000-column flight whose save size must not grow with
+  the far band. The RP baseline's IO lane was empty (0 reads/0 writes in all scenarios), so AC-0287 brings its own
+  save-heavy scenario. It runs <strong>after</strong> the AC-0299 answers because the far band's data shape may
+  change with the user's halo-look decision (§9) — the filter must know what a far column will look like before it
+  decides what to drop.</p>
+</section>
+
+<section id="s7">
+  <div class="sec-head"><span class="sec-no">07</span><h2>Before / after — the canonical re-profile</h2><span class="rule"></span></div>
+  <p>Same arm, same seeds, R50, fluids off, 60 s windows (the baseline column is the pre-epic RP era at 83cfcfe;
+  P2–P4 are the AC-0283 stages; the AC-0286 re-run holds the P4 shape — flight sim-disc median 42.8 %, single-snapshot
+  jitter 39.3–44.1 %, frames 16.8/17.0 ms avg, walk 100 %):</p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>metric</th><th>baseline (83cfcfe)</th><th>P2</th><th>P3</th><th>P4 (+0286 holds)</th></tr></thead>
+    <tbody>
+      <tr><td class="hl">S1 startup frame avg / p95 / max (ms)</td><td class="nm">57.4 / 324.3 / 342</td><td>—</td><td>—</td><td class="nm"><strong>16.6 / 45 / 87</strong></td></tr>
+      <tr><td class="hl">S1 late landings</td><td class="nm">186 (19.2/s)</td><td>—</td><td>—</td><td class="nm"><strong>0</strong></td></tr>
+      <tr><td class="hl">S2 flight frame avg (ms)</td><td class="nm">24.0</td><td class="nm">16.97</td><td class="nm">16.83</td><td class="nm"><strong>16.72</strong></td></tr>
+      <tr><td class="hl">S2 flight sim disc (taxi ≤ 8)</td><td class="nm">34 % (frozen)</td><td class="nm">38.6 %</td><td class="nm">40.7 %</td><td class="nm"><strong>42.1 % → 42.8 % median</strong></td></tr>
+      <tr><td class="hl">S2 late landings</td><td class="nm">5.3/s</td><td class="nm">0</td><td class="nm">0</td><td class="nm"><strong>0</strong></td></tr>
+      <tr><td class="hl">S2 remesh flush (frames with bake)</td><td class="nm">legacy wave 9.2 cols/s</td><td class="nm">1029</td><td class="nm">902</td><td class="nm"><strong>99 (1.65/s)</strong></td></tr>
+      <tr><td class="hl">S3 walk frame avg (ms)</td><td class="nm">25.7</td><td class="nm">16.63</td><td class="nm">16.74</td><td class="nm"><strong>16.71</strong></td></tr>
+      <tr><td class="hl">S3 walk sim disc</td><td class="nm">100 %</td><td class="nm">40 %</td><td class="nm">100 %</td><td class="nm"><strong>100 %</strong></td></tr>
+      <tr><td class="hl">S3 late landings</td><td class="nm">13.1/s</td><td class="nm">0</td><td class="nm">0</td><td class="nm"><strong>0</strong></td></tr>
+      <tr><td class="hl">star sections held (walk)</td><td class="nm">— (no engine)</td><td class="nm">3 672</td><td class="nm">984</td><td class="nm"><strong>984 (exact confinement)</strong></td></tr>
+      <tr><td class="hl">main-thread payload capture (avg, ms)</td><td class="nm">—</td><td class="nm">0.42</td><td class="nm">0.423</td><td class="nm"><strong>0.414</strong></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Readings: the <strong>startup storm is gone</strong> (p95 324 → 45 ms — the DRAIN re-collect scan and the
+  main-thread startup burst were the AC-0274 hitch, removed by P2's build-once-at-settle); flight frames dropped a
+  third (24 → 16.7 ms) with the tier-0 fan gone; late landings — the pop source — are zero everywhere; the walk is
+  the same world as before at a lower frame cost. The flight sim-disc line (≥ 40 % done-when) was held at 40.7 %
+  through P3–P4 and now sits at a 42.8 % median with promotions as the norm (AC-0286).</p>
+</section>
+
+<section id="s8">
+  <div class="sec-head"><span class="sec-no">08</span><h2>Done-when verdict (the honest one)</h2><span class="rule"></span></div>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Epic done-when</th><th>Verdict</th><th>Number</th></tr></thead>
+    <tbody>
+      <tr><td class="hl">Far horizon &lt; 50 ms for 1 000 columns</td><td><strong>LITERALLY UNMET — documented</strong></td><td class="nm">92 ms single-threaded (57 µs surface fields = the bit-exactness floor + 34 µs heights + 1 µs top); the heights-only line (32 µs → 34 µs measured) IS met. Full-horizon cost fell 1.83 s → 92 ms (≈ 20×)</td></tr>
+      <tr><td class="hl">Flight sim disc ≥ 40 %</td><td><strong>MET</strong></td><td class="nm">median 42.8 % (single-snapshot jitter 39.3–44.1 %), was 34 % frozen</td></tr>
+      <tr><td class="hl">Walk feels identical</td><td><strong>MET</strong></td><td class="nm">sim disc 100 %, frames 16.7 ms avg (was 25.7), late landings 0, boundary r4 p95 22 ms (re-measured 2026-09-17)</td></tr>
+      <tr><td class="hl">No light pop on promotion</td><td><strong>MET (AC-0286)</strong></td><td class="nm">0 hole-frames, 0 unlit frames, retain-swap, single flood on all 181 sampled promotions</td></tr>
+      <tr><td class="hl">10k-flight save doesn't bloat</td><td><strong>PENDING (AC-0287)</strong></td><td class="nm">far columns are already 198 B; the filter + 10k test land with AC-0287</td></tr>
+      <tr><td class="hl">Every gate green after each ticket</td><td><strong>MET</strong></td><td class="nm">starlighttest 0/5.3M · genhash 25/25 · r16 lost 0/0 · lightstate canaries exact · ladder 966==966 · meshprobe 1.0 · battery 22 byte-identical / 8 timing-jitter / 0 structural · brightslab C1–C6 (C4 73 bakes) · halo a–d (b 192/192) · farab 984/984 · 0 script errors — re-run at every closeout</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section id="s9">
+  <div class="sec-head"><span class="sec-no">09</span><h2>Open design decisions (AC-0299 — recorded here)</h2><span class="rule"></span></div>
+  <p>AC-0299 is the user's decision ticket for the four open lighting/halo questions; per its deliverable, each
+  answer lands in <strong>this doc</strong> when it arrives. Status at 2026-09-17:</p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Item</th><th>Status</th><th>Record</th></tr></thead>
+    <tbody>
+      <tr><td class="hl">(a) Real-disc radius</td><td>open</td><td class="nm">sim_dist=4 as shipped (the epic's "80–200 columns" was loose); question asked in chat: confirm 4 or widen</td></tr>
+      <tr><td class="hl">(b) Halo look</td><td><strong>partially answered in chat 2026-09-17</strong></td><td class="nm">The user's direction: beyond the sim radius the band should be <strong>high-LOD 16×16×16 textured block chunks out to the medium start distance</strong> — with heightmap-only light and no 3D noise (caves) as built. This partially reverses P3's "literal 4×4 subsumes med/low" draw (the h-only DATA stays: cheap gen + 198 B saves; the cave-free slabs materialize from H+biome+top at mesh time, so gen stays at 92 µs/col). Follow-ups asked: what the band beyond the medium start draws (8×8/4×4 tiers vs 4×4 only), and the medium start distance numerically. A new ticket for the draw change is filed once the follow-ups land.</td></tr>
+      <tr><td class="hl">(c) Walk-fix 2.5 s regime gate</td><td>open</td><td class="nm">the constant is derived from the crossing cadence (not a new timer); question asked: stands as-is or moves</td></tr>
+      <tr><td class="hl">(d) Y-window replacement</td><td>open</td><td class="nm">fresh-edge priority stays a scheduler-redesign item; question asked: accept as deferred + tracking ticket</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="callout note reveal">
+    <b>After the answers</b> — (1) the high-LOD far-band draw ticket (new), (2) AC-0287 save filter, (3) this doc
+    gains the recorded decisions and flips to final. Nothing before (1) starts without the answers.
+  </div>
+</section>
+
+<section id="s10">
+  <div class="sec-head"><span class="sec-no">10</span><h2>Ticket index &amp; evidence</h2><span class="rule"></span></div>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>Ticket</th><th>Report</th><th>Key gates (final, all re-verified at closeout)</th></tr></thead>
+    <tbody>
+      <tr><td class="hl">AC-0283 P1–P5</td><td class="nm"><code>.scratch/ac0283-p1…p5/report.md</code></td><td class="nm">starlighttest 0/5 308 416 · brightslab C1–C6 (C4: 93 bakes @P2 → 73 @P5, 0 over-bright) · halo a–d · r16 lost 0/0 · battery 21/8/0 → 22/8/0 · 0 script errors</td></tr>
+      <tr><td class="hl">AC-0284a</td><td class="nm"><code>.scratch/ac0284a/report.md</code></td><td class="nm">no-caves gen (skip=1) · r16 rebase (cols_skip 1673→2143) · halo (a) boundary 103→0 · full-regen whole-column replacement (latent bug fixed)</td></tr>
+      <tr><td class="hl">AC-0284b</td><td class="nm"><code>.scratch/ac0284b/report.md</code></td><td class="nm">far 92 µs/col vs 1678 (≈18×) · farab 984/984 · codec 198 B v6 bit1 · stale-all-air-seam bug fixed · _far_promo_owed retry</td></tr>
+      <tr><td class="hl">AC-0297</td><td class="nm"><code>.scratch/ac0297/report.md</code></td><td class="nm">DIRTYFULL pull-vs-settled 0/98 304 → FEED not delete · C4 93→73 · texrefresh arm + ArrayMesh precision probe · classic pull zero live consumers</td></tr>
+      <tr><td class="hl">AC-0286</td><td class="nm"><code>.scratch/ac0286/report.md</code></td><td class="nm">181 promotions: enq==1, seed==1, 0 hole-frames, 0 unlit · cost 2 ms + 2.6 ms + 22-frame swap · flight disc median 42.8 % · 14/14 gates</td></tr>
+      <tr><td class="hl">AC-0287</td><td class="nm">—</td><td class="nm">pending: save filter + 10k-flight no-bloat test</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="fn">Machine: Intel i5-9400F (6C/6T, powersave ~4.0 GHz), 64 GB, Godot 4.7.1.stable headless — absolute
+  ms are box-local; ratios, shares and byte-identity are the transferable evidence. The user's test loop runs the
+  Windows builds served at <code>http://192.168.0.224:8080/</code> (latest at the time of writing:
+  <code>20260917-1210</code>, includes the no-pop promotion).</p>
+</section>
+
+<footer>
+  <div class="specline">
+    <span>AWECRAFT — FLIGHT-READY WORLD EPIC</span>
+    <span>DECISIONS RECORDED WHERE THEY CANNOT BE LOST</span>
+    <span><b>2026-09-17</b></span>
+  </div>
+</footer>
+
+</div>
+</body>
+</html>
