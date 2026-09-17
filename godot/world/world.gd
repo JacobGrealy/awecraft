@@ -263,10 +263,31 @@ var star_lver_drops := 0
 var star_halo_promotes := 0
 var star_halo_evicts := 0
 var star_bake_probe: Variant = null
+# AC-0286: promotion observability (harness-visible, the star_bake_probe
+# style — pure counters, zero behavior change). The flight profile's
+# acceptance: 1 engine re-seed + 1 accepted full-regen enqueue per
+# promoted column per residency. The per-KEY dicts are cumulative over
+# the node's life (a re-crossed column keeps its key) — the arms take
+# deltas around each crossing; the entries are erased at column free
+# (a freed-and-respawned column is a new residency, count restarts).
+var star_seed_count: Dictionary = {}  # key -> whole-column seed_column calls
+var star_seed_us: Dictionary = {}     # key -> cumulative us in seed_column
+var promo_enq_count: Dictionary = {}  # key -> accepted promotion full-regen enqueues
+var promo_land_count: Dictionary = {}  # key -> far->full (was_far) regen landings
+var promo_land_ms: Dictionary = {}     # key -> tick-ms of the last was_far landing
+# AC-0286: the late-landing ORIGIN split — star_late_landings stays the
+# total; the regen-merge landing (_star_reseed_column) is the only hide
+# caller and the promotion (was_far) never goes through it (it takes the
+# retain-swap branch — the probe proves the split).
+var star_late_landings_promo := 0
 const STAR_STEP_BUDGET_MS := 3.0
 const LOAD_STAR_STEP_BUDGET_MS := 30.0
 const STAR_REMESH_KEYS_PER_FRAME := 2
 const LOAD_STAR_REMESH_KEYS_PER_FRAME := 8
+# AC-0286: the promotion burst's per-frame column cap (one slab each).
+# Promotions are crossings (~1 per flight minute), so 3 covers any
+# realistic overlap without adding more than 3 extra dispatch units.
+const PROMO_BURST_COLS_PER_FRAME := 3
 var perf_flush_frames := 0
 var perf_max_frame_ms := 0
 var perf_single_build_ms := 0
@@ -3534,6 +3555,18 @@ var _tg_capdrop := 0
 # accepted and lands; a full landing (no_caves false) or the column
 # leaving the real band clears the entry.
 var _far_promo_owed: Dictionary = {}
+# AC-0286: the PROMOTION BURST — the keys of the columns whose far->full
+# regen just LANDED (was_far). Their 24-slab high conversion would queue
+# behind the streaming backlog (the R50 flight's q_build sits ~5000 deep
+# — the conversion would take minutes, the user flies through the
+# low-detail far mesh for seconds). The burst bypasses the lane's queue
+# score: _promo_build_step dispatches each marked column's best pending
+# slab every frame through the SAME _mesh_dispatch_hslab (the settled-
+# payload box gate, the TM inflight cap, the 1-slab/key dedup — all
+# reused, nothing new). The mark dies at mesh_built or column free (a
+# mid-conversion demote keeps the mark — the step is real-band gated,
+# the re-entry resumes the burst).
+var _promo_build: Dictionary = {}
 # AC-0284b: the LOW re-lower debt — a meshed column owes a low at its
 # live tier (stale after a data change — the promotion's full regen
 # bumps data_gen and its halo low goes stale — or no low at all after a
@@ -3618,6 +3651,10 @@ var hslab_stragglers_n := 0
 var hslab_defer_nbs := 0
 var hslab_defer_dedup := 0
 var hslab_stale_key_n := 0
+# AC-0286: the settled-payload gate deferrals (reason 5 — the 3x3x3 box
+# not settled). The promotion burst's stall forensics (a re-seeded /
+# evicted column's settle window is the burst's only legitimate pause).
+var hslab_defer_settle := 0
 # AC-0274: the last hslab-dispatch deferral reason (0 = dispatched, 1 =
 # per-column dedup, 2 = TM pool full, 3 = diagonal neighbor ungenerated,
 # 4 = no data). The drain's skip-and-continue policy reads it: a
@@ -4875,9 +4912,16 @@ func _star_seed_column(c: Node3D) -> void:
 		return
 	var cx := int(c.cx)
 	var cz := int(c.cz)
+	var key := _key(cx, cz)
 	var flat: PackedByteArray = ChunkIO.io_cpp().slabs_flat(c.data)
+	# AC-0286: the single-flood probe — count + cost every whole-column
+	# re-seed (the promotion's acceptance is exactly one per residency).
+	var _t0s := Time.get_ticks_usec()
 	star.seed_column(cx, cz, flat)
-	star_owed[_key(cx, cz)] = true
+	var _t1s := Time.get_ticks_usec()
+	star_seed_count[key] = int(star_seed_count.get(key, 0)) + 1
+	star_seed_us[key] = int(star_seed_us.get(key, 0)) + (_t1s - _t0s)
+	star_owed[key] = true
 
 # Re-land CHANGED slabs of an existing column (a regen merge / an
 # evict-reload with edits since save): on_section_data per slab —
@@ -4951,7 +4995,10 @@ func _star_halo_promote(c: Node3D, key: String) -> void:
 # NEIGHBORS: no hide (the E2 margin behavior — the old margin was valid
 # when it was baked; the re-mesh picks up the new light) — only the
 # re-arm over the changed sections' block range.
-func _star_late_invalidate(c: Node3D, sis: Array) -> void:
+# AC-0286: origin tags the counter split (the promotion's retain-swap
+# branch never HIDEs — "promo" must stay 0; the regen-merge landing is
+# the only live caller today, origin "regen").
+func _star_late_invalidate(c: Node3D, sis: Array, origin := "regen") -> void:
 	var cx := int(c.cx)
 	var cz := int(c.cz)
 	var si_min := 99
@@ -4966,6 +5013,8 @@ func _star_late_invalidate(c: Node3D, sis: Array) -> void:
 			c.flush_slabs.erase(si)
 			c.high_slab_visible(si, false)
 			star_late_landings += 1
+			if origin == "promo":
+				star_late_landings_promo += 1
 			_star_remesh_add(_key(cx, cz), si)
 	_star_update_light_settled(c)
 	for dx in range(-1, 2):
@@ -5878,7 +5927,23 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 				# (stone cells keep sky 15; the deep-pocket glow misses).
 				# Re-seed the whole column top-down: the seam is
 				# satisfiable (the null slabs above the top are air).
+				# AC-0286: the RETAIN-SWAP branch (the promotion never
+				# takes the late-landing HIDE path — no hide/un-settle of
+				# the existing slabs): the far low (the correctly-lit
+				# 4x4-avg mesh) keeps showing while the full-data slabs
+				# build, and each slab's landing flips it (high on, low
+				# off) atomically. The one whole-column re-seed above is
+				# the promotion's ONLY engine flood; the slabs' builds
+				# ride the settled-payload gate (the remesh lane's own
+				# box_settled capture — "never show an unlit slab" holds
+				# because the gate makes every bake final at dispatch).
 				_star_seed_column(c)
+				var _pk := _key(tcx, tcz)
+				promo_land_count[_pk] = int(promo_land_count.get(_pk, 0)) + 1
+				promo_land_ms[_pk] = Time.get_ticks_msec()
+				# AC-0286: arm the promotion burst (the conversion
+				# bypasses the lane's queue score — _promo_build_step).
+				_promo_build[_pk] = true
 			else:
 				_star_reseed_column(c, rsis)
 			# AC-0284b: a FAR column promoted into the real band looks
@@ -5900,6 +5965,17 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 			# it in flight) seeds NO air hole — the crossing's owed full
 			# regen lands behind it and seeds the column whole (was_far).
 			_star_seed_column(c)
+		elif c.far and c.no_caves:
+			# AC-0286: a FAR landing ALREADY inside the real band (the
+			# gen queue lagged the crossing — the recenter's crossing
+			# check found no data yet, the disk-load path is for saves).
+			# The crossing's owed never fired: OWE it here (the owed
+			# step's retry contract — one accepted full regen per
+			# residency; a mid-regen demote still lands the data and
+			# the re-entry seeds it). Without this the column would sit
+			# far in the sim band forever (the low-detail patch that
+			# never upgrades).
+			_far_promo_owed[key] = true
 	_tg_handoff += 1
 	_pool_touch()  # AC-0217: queued entry's data landed (pool membership flipped)
 	_low_fog_for(c)  # AC-0231: the immediate fog-box first pass (far only)
@@ -7055,6 +7131,7 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 	# dispatches (and never shows) on lighting that is not calculated.
 	if star != null and not star.box_settled(cx, cz, si - 1, si + 1):
 		_hslab_last_defer = 5
+		hslab_defer_settle += 1
 		return false
 	var tm_cap := threadmesh_max
 	if _startup_pending() and tm_cap < 9:
@@ -7406,13 +7483,54 @@ func _far_promo_owed_step() -> void:
 		if c == null or not c.no_caves or not _is_real_col(int(c.cx) - last_pcx, int(c.cz) - last_pcz):
 			_far_promo_owed.erase(key)
 			continue
-		threadgen_enqueue(int(c.cx), int(c.cz), key, c.get_instance_id(), true, int(c.col_gen))
+		# AC-0286: count the ACCEPTED enqueues (the retry contract —
+		# dedup/cap-drop are not enqueues; one promotion per residency
+		# must land exactly one). The landing clears no_caves, so a
+		# second accepted enqueue for the same residency is a bug the
+		# flight probe would catch (promo_enq_count > 1).
+		var _ok_e: bool = threadgen_enqueue(int(c.cx), int(c.cz), key, c.get_instance_id(), true, int(c.col_gen))
+		if _ok_e:
+			promo_enq_count[key] = int(promo_enq_count.get(key, 0)) + 1
 		# a dedup (a regen already in flight for this key) is fine — it
 		# lands and clears no_caves; a cap-drop retries next frame.
 
 
+func _promo_build_step() -> void:
+	# AC-0286: the promotion burst (the retain-swap's fast path). One
+	# best-pending slab per marked column per frame, dispatched through
+	# the SAME _mesh_dispatch_hslab the lane and the remesh lane use —
+	# the settled-payload box gate (a slab never dispatches on unsettled
+	# light), the TM inflight cap, and the 1-slab/key dedup all apply
+	# unchanged. What it bypasses is only the queue SCORE (the backlog
+	# order) — the promoted column's slabs convert in ~24 frames + the
+	# settle window instead of waiting out the ~5000-deep flight queue.
+	# Bounded: the mark dies at mesh_built, so at most a few columns are
+	# marked at once (promotions are crossings — ~1 per flight minute);
+	# PROMO_BURST_COLS_PER_FRAME caps the per-frame extra units.
+	if _promo_build.is_empty():
+		return
+	var n := 0
+	for key in _promo_build.keys():
+		if n >= PROMO_BURST_COLS_PER_FRAME:
+			break
+		n += 1
+		var c = chunks.get(key)
+		if c == null or bool(c.mesh_built):
+			_promo_build.erase(key)
+			continue
+		var dx := int(c.cx) - last_pcx
+		var dz := int(c.cz) - last_pcz
+		if not _is_real_col(dx, dz):
+			continue  # demoted — the mark waits (the re-entry resumes it)
+		var si := _hslab_best_pending(c, false)
+		if si < 0:
+			continue
+		_mesh_dispatch_hslab(c, int(c.cx), int(c.cz), si, {}, false)
+
+
 func _drain_build_queue() -> void:
 	_far_promo_owed_step()  # AC-0284b: the promotion's owed full regens
+	_promo_build_step()  # AC-0286: the promotion burst (post-landing)
 	_startup_gen_apply()
 	_drain_units_last = 0  # AC-0231: the low idle gate (units dispatched this frame)
 	if edit_inflight_count > 0:
@@ -8895,6 +9013,15 @@ func _free_chunk_key(key: String) -> void:
 		star.evict_column(int(c.cx), int(c.cz))
 	star_owed.erase(key)
 	star_remesh.erase(key)
+	# AC-0286: the promotion probe counters die with the column (a
+	# freed-and-reloaded column is a NEW residency — its counts restart).
+	star_seed_count.erase(key)
+	star_seed_us.erase(key)
+	promo_enq_count.erase(key)
+	promo_land_count.erase(key)
+	promo_land_ms.erase(key)
+	_far_promo_owed.erase(key)
+	_promo_build.erase(key)
 	chunks.erase(key)
 	queued_keys.erase(key)
 	fluid_dirty.erase(key)

@@ -9018,6 +9018,14 @@ func _halo_test(spawn: Vector3) -> void:
 		return
 	var proms0 := int(world.star_halo_promotes)
 	var t_prom := Time.get_ticks_msec()
+	# AC-0286: the promotion probe baselines (the crossing starts on the
+	# recenter below; the ledger deltas are the single-flood /
+	# one-promotion evidence for a DETERMINISTIC promotion — the flight
+	# arm's promotion count is timing-jitter dependent, this one is not).
+	var pkey: String = world._key(px, pz)
+	var penq0 := int(world.promo_enq_count.get(pkey, 0))
+	var pseed0 := int(world.star_seed_count.get(pkey, 0))
+	var pbuilt_ms := -1
 	# AC-0283 P3: the synthetic two-hop recenter sequence must NOT trip the
 	# AC-0277 fast/ahead path (a recenter within AHEAD_FAST_MS of the last
 	# player-chunk crossing anchors one chunk AHEAD of the player) — zero
@@ -9032,6 +9040,13 @@ func _halo_test(spawn: Vector3) -> void:
 		pw += 1
 		var pc = world.chunks.get(world._key(px, pz))
 		var q_mesh: bool = pc != null and not pc.data.is_empty() and pc.mesh_built
+		# AC-0286: the swap latency is measured against the FULL mesh —
+		# a far column structurally looks meshed (data = 24 nulls, not
+		# empty; no high_stamps), so q_mesh alone would stamp the swap
+		# before the promotion's full regen even lands.
+		var q_full: bool = pc != null and not bool(pc.far) and not pc.data.is_empty() and pc.mesh_built
+		if q_full and pbuilt_ms < 0:
+			pbuilt_ms = Time.get_ticks_msec()
 		var q_idle: bool = world.star_light_idle()
 		var q_inflight: bool = world.threadmesh_inflight.is_empty()
 		var q_remesh: bool = world.star_remesh.is_empty()
@@ -9100,12 +9115,30 @@ func _halo_test(spawn: Vector3) -> void:
 			pmism += m
 			if m != 0 and pfirst.is_empty():
 				pfirst = ce.get("first", {})
+	# AC-0286: the promotion ledger evidence for THIS promotion (the
+	# deterministic one). was_far = the column was far before the hop (a
+	# real promotion — the full regen + the single whole-column re-seed);
+	# a full-data column re-centers as a P3 re-entry (seed only, no regen).
+	var pc_end = world.chunks.get(pkey)
+	var was_far: bool = int(world.promo_land_count.get(pkey, 0)) > 0
 	out["c"] = {
 		"col": [px, pz], "promote_ms": prom_ms, "settle_frames": pw,
 		"settled": psettled, "seeded": pseeded, "mismatches": pmism, "first": pfirst,
 		"ref_rounds": int(pri.get("rounds", -1)), "ref_converged": bool(pri.get("converged", false)),
 		"promotes": int(world.star_halo_promotes) - proms0,
 		"unlit": unlit_p, "why": pwhy,
+		"promo": {
+			"was_far": was_far,
+			"far_now": bool(pc_end.far) if pc_end != null else null,
+			"enq": int(world.promo_enq_count.get(pkey, 0)) - penq0,
+			"seed": int(world.star_seed_count.get(pkey, 0)) - pseed0,
+			"seed_us": int(world.star_seed_us.get(pkey, 0)),
+			"land_count": int(world.promo_land_count.get(pkey, 0)),
+			"land_ms": int(world.promo_land_ms.get(pkey, 0)),
+			"recenter_ms": t_prom,
+			"built_ms": pbuilt_ms,
+			"swap_ms": pbuilt_ms - int(world.promo_land_ms.get(pkey, 0)) if pbuilt_ms >= 0 and int(world.promo_land_ms.get(pkey, 0)) > 0 else -1,
+		},
 		"ok": psettled and pseeded and pmism == 0 and unlit_p == 0 \
 				and int(world.star_halo_promotes) > proms0 \
 				and bool(pri.get("converged", false)),

@@ -159,11 +159,28 @@ Match these; do not improvise a different approach in a task.
   stored H *is* the heightmap — promotion must not shift terrain). The halo draw (4x4 avg +
   heightmap sky) never shows caves, so slab data is unnecessary; the 4x4 avg is emitted by
   `AweMesh.h_avg_emit`, byte-identical to the slab emitter on the same fill. A far column
-  entering the real band (recenter promotion or an in-band disk load) schedules a FULL regen
-  through the AC-0283 P2 late-landing machinery; the no-flash polish is AC-0286.
+  entering the real band schedules a FULL regen (AC-0283 P2 late-landing machinery).
+  AC-0286 completes the promotion contract: (1) **detection** — the crossing is owed from
+  THREE points: the recenter walk, an in-band disk load, and a FAR data landing already
+  inside the real band (gen-queue lag past the crossing); the owed step retries the enqueue
+  until it lands (cap-drop = retry, not loss) — exactly ONE accepted full regen per
+  residency (freed/reloaded or demoted+re-crossed = new residency); (2) **retain-swap** —
+  the landing never hides/un-settles the existing slabs: the far low keeps showing, each
+  full slab's landing atomically flips (high on / low off) behind the settled-payload gate,
+  so the column never holes (a slab is "owed" only once it has first shown a visible mesh)
+  and never shows unlit (the old bake is always the settled light); (3) **single flood** —
+  the was_far branch re-seeds the WHOLE column exactly once via `_star_seed_column` (a
+  mid-regen demote lands unseeded; the re-entry re-seeds via the AC-0283 P3 path, a
+  separate mechanism); (4) **burst** — `_promo_build` marks the landing column and
+  `_promo_build_step` (per frame, beside the owed step in `_drain_build_queue`) dispatches
+  its best pending slab through the SAME `_mesh_dispatch_hslab` (all gates unchanged),
+  bypassing only the queue score — the conversion takes ~24+ frames instead of the flight's
+  multi-thousand-deep build backlog. Permanent counters: `star_seed_count/us`,
+  `promo_enq_count`, `promo_land_count/ms`, `star_late_landings_promo` (expect 0 — the
+  retain-swap never HIDEs), `hslab_defer_settle`.
 - **`gdext/lighting.cpp` (`AweLighting`) and the classic light pull are TEST-ONLY
   references** (AC-0283 P4). They exist so arms can compare against the old kernel. Never
-  wire them into game code; AC-0297 removes the last live consumers.
+  wire them into game code; the last live consumers were removed by AC-0297.
 - **Fluids**: per-cell levels (`source = 8`, decaying flow), water/lava reactions, buckets,
   level-aware meshing, ticking near the player.
 - **Rendering**: `forward_plus` (AC-0241) with the Linear tonemap restored (ACES reads
