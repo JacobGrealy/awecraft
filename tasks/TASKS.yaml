@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-17T10:23
+  updated_at: 2026-09-17T12:10
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0286
 - AC-0299
 - AC-0287
 - AC-0293
@@ -12415,11 +12414,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-14T12:21
-  updated_at: 2026-09-14T12:21
-  completed_at: null
+  updated_at: 2026-09-17T12:10
+  completed_at: 2026-09-17T12:10
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As I fly, far cheap columns that become close should seamlessly upgrade to full
@@ -12429,7 +12428,11 @@ intake:
     2) Technical Details: Detect far column crossing into sim (taxi <= sim). Trigger full regen (cave
     field + veg) + single Starlight flood, replace cheap data/light, invalidate probes, keep result. Ensure
     only one promotion per column, cheap data not saved. Verify promotion cost ~1ms, no holes when flying
-    straight, far->near upgrade correct.'
+    straight, far->near upgrade correct.
+
+
+    CLOSED 2026-09-17. Gates 14/14 + coordinator canaries (genhash 25/25, brightslab 6/6 C4=73). .scratch/ac0286/report.md.
+    Windows build stamped after commit (see commit + continuity 16).'
   comments: []
 - id: AC-0287
   title: save-only-sim-distance
