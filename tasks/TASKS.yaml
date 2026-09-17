@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-17T18:49
+  updated_at: 2026-09-17T18:52
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -14290,7 +14290,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-17T18:37
-  updated_at: 2026-09-17T18:49
+  updated_at: 2026-09-17T18:52
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -14385,7 +14385,16 @@ intake:
     - so at a seam the fluid sim is always in play.)
 
     (5) ORDINARY FEEL - mine/place/step across the seam behaves exactly as inside a face: same aim, same
-    on_floor, no double placement.'
+    on_floor, no double placement.
+
+
+    NOTE (user, 2026-09-17): old-world compatibility is NOT a constraint on this ticket or on any planet
+    piece - "it''s fine for changes to break saved worlds at this point of development" (standing policy:
+    godot/ARCHITECTURE.md section 5, godot/world/AGENTS.md). The blend band therefore does not need to
+    preserve the terrain under existing saves; the acceptance tests in the edit-interaction note are about
+    live behaviour (dig/build/save/regenerate inside one session''s world), not about migrating old ones.
+    SAVE_VERSION must still be bumped when the format changes so an old world fails cleanly and starts
+    fresh.'
   comments: []
 - id: AC-0310
   title: planet-satellite-lod
@@ -14490,7 +14499,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-17T18:37
-  updated_at: 2026-09-17T18:49
+  updated_at: 2026-09-17T18:52
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -14539,7 +14548,14 @@ intake:
     different ground - a build in the band could end up floating or buried. The strip is narrow (tens
     of columns) and sits 3141 m from spawn, so this is acceptable under the same "fresh worlds only" precedent
     the cave series uses (user 2026-09-15) - but state it in the ticket rather than discovering it, and
-    either accept it explicitly or migrate the affected edits.'
+    either accept it explicitly or migrate the affected edits.
+
+
+    RESOLVED (user, 2026-09-17): "it''s fine for changes to break saved worlds at this point of development."
+    So the band''s removal breaks builds inside the strip BY DESIGN and owes NO migration - do not build
+    edit migration for it. What is still owed: bump SAVE_VERSION (or the column blob version) so an old
+    world is rejected cleanly with a log line and starts fresh, rather than half-loading. The standing
+    policy now lives in godot/ARCHITECTURE.md section 5 ("Save compatibility policy") and godot/world/AGENTS.md.'
   comments: []
 - id: AC-0312
   title: far-band-draw-tiers

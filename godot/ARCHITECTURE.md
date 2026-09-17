@@ -132,6 +132,12 @@ Build and loading:
   NO slabs, just a `[H u16×256][biome×256][top×256]` payload, ~198 B on disk); old v1–v5
   and bit-0-only v6 decode unchanged. The save-content filter (write only the sim band or
   edited columns) is AC-0287.
+- **Save compatibility policy**: **old worlds are disposable during development** (user, 2026-09-17).
+  A save-format or world-shape change may make existing worlds unusable and owes **no migration** —
+  but it must bump `SAVE_VERSION` so an old save is **rejected cleanly**: fail fast with a log line and
+  start a fresh world, never half-load. Migration work is therefore a deliberate choice, not a default.
+  This supersedes the earlier "keep older saves decoding" rule; AC-0288…AC-0292 and AC-0293 already
+  assumed it. Scope rule: the "Traps" list in `world/AGENTS.md`.
 
 ## 6. Stable design decisions
 
