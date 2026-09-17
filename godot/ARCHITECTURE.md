@@ -6,16 +6,17 @@ lists drift, the *shape* is the contract.
 
 **If a task changes the structure — a new autoload, a moved/renamed component, a new
 subsystem, a changed data or save format, a new native layer, a changed convention — it
-updates this file in the same task.** That rule is standing; see `AGENTS.md`.
+updates this file in the same task.** That rule is standing; see invariant 2 in `AGENTS.md`.
 
 Detail lives elsewhere by design:
 
 | Topic | Owner |
 |---|---|
+| scope rules for a directory (auto-loaded when you touch a file there) | that directory's `AGENTS.md` |
 | test arms, battery, standing gate values, run recipes | `godot/HARNESS.md` |
 | machine, sandbox, daemons, build/serve | `godot/OPS.md` |
 | current state, resume steps | `godot/CONTINUITY.md` |
-| delegation, gates, closeout | `COORDINATOR.md`, `tasks/templates/two-phase.md` |
+| delegation, gates, closeout | the project skills in `.dsh/skills/`, `COORDINATOR.md`, `tasks/templates/two-phase.md` |
 | world generation & streaming internals | `docs/worldgen-current.html` |
 
 ## 1. Shape
