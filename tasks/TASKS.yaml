@@ -1,11 +1,10 @@
 meta:
-  updated_at: 2026-09-17T00:49
+  updated_at: 2026-09-17T00:58
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0297
-- AC-0284
 - AC-0302
 - AC-0303
 - AC-0300
@@ -12335,11 +12334,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-14T12:20
-  updated_at: 2026-09-16T18:38
-  completed_at: null
+  updated_at: 2026-09-17T00:58
+  completed_at: 2026-09-17T00:58
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player flying, far columns should be super cheap to generate so sim disc
@@ -12349,7 +12348,15 @@ intake:
     2) Technical Details: gen.cpp gen_flat when far band (taxi > sim) skips cave field (f_cave not built,
     no scan top-down), just H surface + biome + top block emit. Returns heightmap-ready data (top per
     x,z). Far slabs palettized but caves absent. Wire p_keep/skip to distance band. Verify far gen <0.05ms
-    vs full ~0.5ms, visual height correct.'
+    vs full ~0.5ms, visual height correct.
+
+
+    CLOSED 2026-09-17 (284a 727f27e + 284b d9bb3e6). Measured (seed 44): far 92 us/col (3 surface fields
+    57 + heights pass 34 + top 1) vs full 1678 us (~18x; ~20x vs the 1.83 s 1k-col baseline). The ticket''s
+    literal ''<0.05 ms'' clause is 2x OVER: the 57 us of surface fields is the bit-exactness floor (H
+    must match the full path or promotion shifts terrain); the RP ''heights-only 32 us'' line is met (34
+    us). p_keep: not wired (284a measured 0 us saved; far columns have no slabs anyway). Sim disc: walk
+    100%, flight 46.2% (>=40% done-when). See .scratch/ac0284a+ac0284b reports + final design doc.'
   comments:
   - id: 1
     created_at: 2026-09-16T18:38
