@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-17T19:17
+  updated_at: 2026-09-17T19:20
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -14582,7 +14582,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-17T18:47
-  updated_at: 2026-09-17T19:08
+  updated_at: 2026-09-17T19:20
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -14636,7 +14636,51 @@ intake:
     9. This ticket is the follow-through AC-0299 requires (a decision that implies a behaviour change
     is filed as its own ticket).
 
-    '
+
+
+    BAND-A LOOK REQUIREMENTS (user decision 2026-09-17, in chat: "A needs water and trees"):
+
+    WATER in band A: materialize water from the payload - the fill mirrors the full path''s aquifer rule
+    (gdext/src/gen.cpp:42-43: water fills from the effective surface up to SEA (126) where the surface
+    is below sea): solid cells 0..H from (biome, top), then water id 5 from H+1..SEA where H < SEA; the
+    existing far top-block rule already yields sand at H <= sea+1 (gen.cpp:535). The band-A mesh must
+    render those cells as WATER (the renderer''s water material/translucency, still surface at sea level)
+    - not as solid sand as the avg bands do today. Bands B/C keep the current solid-fill avg look (no
+    water cells in an 8x8/4x4 avg - a water surface there is sub-cell).
+
+    TREES in band A: materialize the skip-mode veg (gdext/src/gen.cpp:544+ gen_veg_cells: the log trunk
+    + leaf blob writes that land INSIDE a column, 4 bytes/cell (id<<24)|(y<<8)|(z<<4)|x, first-writer-wins)
+    as a pure function of (H, biome, x, z, seed) - the payload already carries H + biome, so no extra
+    data is needed. Bands B/C stay bare (a tree is sub-cell at 8x8/4x4).
+
+    CONSISTENCY REQUIREMENTS (must be gates, not assumptions):
+
+    (1) BAND-A EDGE TREES: a tree rooted in a NEIGHBOR column reaches into this one (the 5x5 leaf footprint
+    / the 20x20 neighborhood in the gen_veg_cells contract), so the band-A mesh step needs the 4/8 NEIGHBOR
+    columns'' h-only payloads (H + biome) - the same neighbor requirement the real band''s high emit already
+    has for slabs. Gate case: a tree crossing a band-A boundary must be identical to the same tree built
+    from full data.
+
+    (2) PROMOTION MUST NOT POP TREES: when a band-A column promotes to real (AC-0286''s path), the full
+    gen (skip=0) rebuilds veg - the skip-mode veg is documented as using the SAME shared surface H2 with
+    NO cave term (gen.cpp:544-553), i.e. the tree cells are identical to the full veg, so the promotion
+    replaces the materialized tree with an identical one. Gate case: materialized-from-payload cells ==
+    full-gen cells for the overlapping column (byte-identical), so promotion is a no-op visually.
+
+    (3) WATER + TREES MUST NOT BREAK THE EXISTING A/B: the farab gate''s skip-filled-slab reference is
+    the AVG emit reference (bands B/C) - band A is a NEW full-LOD emit whose reference is the same fill
+    PLUS the water/tree materialization; extend farab (or add a companion case) so the band-A emit is
+    byte-identical to the reference fill+materialization built from slab data.
+
+    (4) FLOWERS/CLUTTER: the skip-mode veg lists TREE cells only (flowers are ''CLUTTER ... never flip
+    a 4x4x4 cell, so they are not listed''). At band A''s 64-128 m they may read as small dots; evaluate
+    whether the clutter is derivable from (H, biome, x, z, seed) - materialize it if the same function
+    covers it, otherwise document the delta explicitly in the report/ARCHITECTURE.md rather than silently
+    dropping it.
+
+    NOTE: AC-0313 (scheduler-full-columns-inside-out) lands FIRST - band A''s materialized slabs are dispatched
+    as full columns through the new inside-out order, so the band-A emit must be written against that
+    lane shape.'
   comments: []
 - id: AC-0313
   title: scheduler-full-columns-inside-out
@@ -14648,7 +14692,7 @@ intake:
   status: in-progress
   labels: []
   created_at: 2026-09-17T19:07
-  updated_at: 2026-09-17T19:17
+  updated_at: 2026-09-17T19:20
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -14752,5 +14796,11 @@ intake:
     take a halo placeholder - sim 0/1 is not a shipped configuration (default 4) but the ticket must state
     the floor: either document "sim >= 2 required" in ARCHITECTURE.md''s real-band rule, or keep a hard-coded
     3x3 footing guard. Prefer documenting the floor; verify the harness/arm defaults (the arms force radius
-    4 unless AWECRAFT_RADIUS is set) and record which choice was taken.'
+    4 unless AWECRAFT_RADIUS is set) and record which choice was taken.
+
+
+    QUEUE NOTE: AC-0312 (far-band-draw-tiers) is next after this ticket. Band A''s materialized slabs
+    (full-LOD cave-free fill) must be compatible with this ticket''s full-column inside-out dispatch -
+    do not add any per-band dispatch exemption for band A; a band-A column is a normal column whose slab
+    data comes from the payload materialization instead of a full gen.'
   comments: []
