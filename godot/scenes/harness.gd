@@ -567,6 +567,19 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _farab_test()
 			get_tree().quit()
 			return
+		if logic == "texrefresh":
+			# AC-0297 (b): the TEX-REFRESH star-native arm (the permanent
+			# gate for the atlas-swap rebuild): the real band rebuilds its
+			# HIGH slabs from the SETTLED STAR payload (never c.last_eff /
+			# the classic pull — byte-identity vs the payload re-build,
+			# both emit paths), and the halo ring re-emits its 4x4 avg
+			# lows from the NEW face-color cache (byte-identity vs the
+			# fresh h_avg_emit, and provably DIFFERENT from the old-fcc
+			# re-emit).
+			world.collision_enabled = false
+			await _texrefresh_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "banana":
 			# AC-0040: the banana-tree generation probe — the shore dirt
 			# edge rule (independent re-derivation from the data), the
@@ -6241,6 +6254,15 @@ func _bs_replay_bakes(evs: Array, si_e: int, H: int, pre_eff: Dictionary, fin_en
 	var NSDZ: Array = [0, 0, 1, -1]
 	var CDX: Array = [1, -1, 1, -1]
 	var CDZ: Array = [1, 1, -1, -1]
+	# AC-0297 (a) redundancy evidence: the edit-fallback FULL bakes (the
+	# classic-pull DIRTYFULL in the pre-change tree, the star-fed payload
+	# bake after) and the remesh-lane per-slab re-bakes, for the post-case
+	# coverage table: per full-bake column, the full light vs the engine's
+	# settled light (payload equality) + the lane's coverage of the slabs
+	# whose light changed (pre vs settled) + the edit slab (the face
+	# geometry). (i) = the full-baked slab count; (ii) = the lane re-bakes.
+	var df_cols: Dictionary = {}
+	var lane_slabs: Dictionary = {}
 	for ev in evs:
 		var fr: int = int(ev[0])
 		var evt: String = ev[1]
@@ -6285,6 +6307,15 @@ func _bs_replay_bakes(evs: Array, si_e: int, H: int, pre_eff: Dictionary, fin_en
 			kind = "scoped"
 		elif not bool((info.get("eff", {}) as Dictionary).get("star", false)):
 			kind = "full"
+		# AC-0297 (a): collect the edit-fallback full bakes + the lane
+		# re-bakes (the hslab land carries the slab in ev[4]; the FEED
+		# full bake is edit_full so it is NOT a lane bake).
+		if bool(info.get("edit_full", false)):
+			df_cols[k] = {"arr": eff_full, "frame": fr, "star": bool((info.get("eff", {}) as Dictionary).get("star", false))}
+		if kind == "hslab" and not bool(info.get("edit_full", false)):
+			if not lane_slabs.has(k):
+				lane_slabs[k] = {}
+			lane_slabs[k][int(ev[4])] = fr
 		if not eff_full.is_empty() and not farr.is_empty() and y1 >= y0:
 			for y in range(y0, y1 + 1):
 				var base: int = y << 8
@@ -6505,6 +6536,88 @@ func _bs_replay_bakes(evs: Array, si_e: int, H: int, pre_eff: Dictionary, fin_en
 			ob_detail.append([fr, k, kind, bake_over, ob_first_loc])
 		else:
 			final_exact_frame = fr
+	# AC-0297 (a): the coverage table. Per edit-fallback full-bake column:
+	# payload equality (the full light vs the engine's SETTLED light + the
+	# classic converged reference), the slabs whose light changed (pre vs
+	# settled) + the edit slab (the face geometry) = "needs", and the lane
+	# coverage: lane = every lane re-bake of the column; lane_before = the
+	# re-bakes that landed BEFORE the full bake (armed by _star_rearm_edit
+	# + the E2 wave — independent of the full landing's re-arm; this is the
+	# DELETE-scenario coverage, measured in the pre-change tree).
+	var red: Dictionary = {}
+	var red_df_slabs := 0
+	var red_lane_bakes := 0
+	for lk in lane_slabs:
+		red_lane_bakes += int((lane_slabs[lk] as Dictionary).size())
+	for dk in df_cols:
+		var dc: Dictionary = df_cols[dk]
+		var darr: PackedByteArray = dc["arr"]
+		var df_eq_fin := 0
+		var df_fin_n := 0
+		var df_eq_ref := 0
+		var df_ref_n := 0
+		if not darr.is_empty():
+			var f2: PackedByteArray = fin_eng.get(dk, PackedByteArray())
+			if not f2.is_empty() and f2.size() == darr.size():
+				for i in range(darr.size()):
+					if int(darr[i]) != int(f2[i]):
+						df_eq_fin += 1
+				df_fin_n = darr.size()
+			var r2: PackedByteArray = fin_ref.get(dk, PackedByteArray())
+			if not r2.is_empty() and r2.size() == darr.size():
+				for i in range(darr.size()):
+					if int(darr[i]) != int(r2[i]):
+						df_eq_ref += 1
+				df_ref_n = darr.size()
+		var kparts: PackedStringArray = dk.split(",")
+		var kc = world.chunks.get(world._key(int(kparts[0]), int(kparts[1])))
+		var top_slab := 0
+		if kc != null:
+			top_slab = maxi(0, int(kc.top) >> 4)
+		var changed: Array = []
+		var f3: PackedByteArray = fin_eng.get(dk, PackedByteArray())
+		var p3: PackedByteArray = pre_eff.get(dk, PackedByteArray())
+		if not f3.is_empty() and not p3.is_empty() and f3.size() == p3.size():
+			for si2 in range(top_slab + 1):
+				var y0s: int = si2 * 16
+				var y1s: int = mini(H - 1, y0s + 15)
+				var cm := 0
+				for y in range(y0s, y1s + 1):
+					var base3: int = y << 8
+					for i in range(256):
+						if int(f3[base3 | i]) != int(p3[base3 | i]):
+							cm += 1
+				if cm > 0:
+					changed.append([si2, cm])
+		var lane_s: Dictionary = lane_slabs.get(dk, {})
+		var lane_before: Dictionary = {}
+		for lsi2 in lane_s:
+			if int(lane_s[lsi2]) < int(dc["frame"]):
+				lane_before[lsi2] = true
+		var needs: Array = []
+		for csi in changed:
+			needs.append(int(csi[0]))
+		if not needs.has(si_e):
+			needs.append(si_e)
+		var uncovered: Array = []
+		for nsi in needs:
+			if not lane_s.has(nsi):
+				uncovered.append(nsi)
+		var uncovered_delete: Array = []
+		for nsi in needs:
+			if not lane_before.has(nsi):
+				uncovered_delete.append(nsi)
+		red_df_slabs += top_slab + 1
+		red[dk] = {
+			"star": bool(dc["star"]), "frame": int(dc["frame"]),
+			"slabs": top_slab + 1,
+			"df_eq_fin": df_eq_fin, "df_fin_n": df_fin_n,
+			"df_eq_ref": df_eq_ref, "df_ref_n": df_ref_n,
+			"changed": changed, "lane": (lane_s as Dictionary).keys(),
+			"lane_before": (lane_before as Dictionary).keys(),
+			"needs": needs, "uncovered": uncovered,
+			"uncovered_delete": uncovered_delete,
+		}
 	return {
 		"bakes": bakes, "ob_bakes": ob_bakes, "ob_cells": ob_cells, "ref_cells": ref_cells,
 		"max_d": max_d, "max_at": max_at, "eq_pre": eq_pre, "eq_15": eq_15, "other": other,
@@ -6513,6 +6626,7 @@ func _bs_replay_bakes(evs: Array, si_e: int, H: int, pre_eff: Dictionary, fin_en
 		"ob_detail": ob_detail, "live_15": live_15, "live_0": live_0,
 		"live_mid": live_mid, "live_missing": live_missing,
 		"ob_cells_detail": ob_cells_detail,
+		"red": red, "red_df_slabs": red_df_slabs, "red_lane_bakes": red_lane_bakes,
 	}
 
 
@@ -8437,6 +8551,9 @@ func _brightslab_case(case: Dictionary, cx0: int, cz0: int, H: int, keys: Array,
 		out["live_0"] = int(ob["live_0"])
 		out["live_mid"] = int(ob["live_mid"])
 		out["live_missing"] = int(ob["live_missing"])
+		out["red"] = ob["red"]
+		out["red_df_slabs"] = int(ob["red_df_slabs"])
+		out["red_lane_bakes"] = int(ob["red_lane_bakes"])
 		out["fr_log"] = fr_log
 		out["conv_frame"] = conv_frame
 		out["ok"] = bool(out.get("ok", false)) and int(ob["ob_bakes"]) == 0 and conv_frame <= 120
@@ -9240,6 +9357,26 @@ func _brightslab_slab_cmp(mc, wcx: int, wcz: int, si: int, ri: Dictionary, cx0: 
 		"ring": ri["rings"].get(lk, PackedInt32Array()), "blk_src": ri["srcs"].get(lk, false),
 	}
 	var rb: Dictionary = mc.build_accs(data_c, fl_c, wcx, wcz, nbs, ctxb, ms_w, lb, si, si, 0, Lighting._att, Lighting._glow, PackedByteArray())
+	# AC-0297: the FEED full bake (the edit-fallback) + the initial full
+	# build + the tex-refresh rebuild land a slab through the FULL-window
+	# build (si1=-1) — the greedy MERGED emit (emit_ro_merged), while the
+	# lane re-bake (A/B above) lands it through the per-slab build (the
+	# per-face emit). Same face set, same light — a different (lossless)
+	# quad decomposition. The applied mesh matches exactly one of the two
+	# per side: re-bake the full window too (A2 = the payload, B2 = the
+	# classic reference) and accept either.
+	var top_slab_a2 := maxi(0, int(c.top) >> 4)
+	var pl2: Dictionary = world.star.slab_light_payload(wcx, wcz, 0, top_slab_a2)
+	var ra2: Dictionary = {}
+	var ra2_acc: Dictionary = {}
+	if bool(pl2.get("ok", false)):
+		pl2["star"] = true
+		# si1 = -1: the true FULL build (was_full — the merged emit), the
+		# way the dispatch calls it (top-clamped inside).
+		ra2 = mc.build_accs(data_c, fl_c, wcx, wcz, nbs, ctx0, ms_w, pl2, 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())
+		ra2_acc = ra2["slabs"][si][0]
+	var rb2: Dictionary = mc.build_accs(data_c, fl_c, wcx, wcz, nbs, ctxb, ms_w, lb, 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())
+	var rb2_acc: Dictionary = rb2["slabs"][si][0]
 	var applied: Dictionary = {}
 	if s.mesh_instance != null and s.mesh_instance.mesh != null and int(s.mesh_instance.mesh.get_surface_count()) > 0:
 		var arrs: Array = s.mesh_instance.mesh.surface_get_arrays(0)
@@ -9249,37 +9386,61 @@ func _brightslab_slab_cmp(mc, wcx: int, wcz: int, si: int, ri: Dictionary, cx0: 
 	var ra_acc: Dictionary = ra["slabs"][0][0]
 	var rb_acc: Dictionary = rb["slabs"][0][0]
 	out["a_q"] = int(ra_acc["q"])
+	out["a2_q"] = int(ra2_acc.get("q", -1))
 	out["b_q"] = int(rb_acc["q"])
 	out["applied_q"] = int(applied.get("q", -1))
-	if int(applied.get("q", 0)) != int(ra_acc["q"]):
+	if not applied.is_empty() and int(applied.get("q", 0)) != int(ra_acc["q"]) and int(applied.get("q", 0)) != int(ra2_acc.get("q", -1)):
 		out["q_mism"] = 1
 	else:
 		out["q_mism"] = 0
 	if not applied.is_empty():
 		var pa: Dictionary = _bs_acc_cmp_loose(applied, ra_acc)
 		var pb: Dictionary = _bs_acc_cmp_loose(applied, rb_acc)
+		var pa2: Dictionary = _bs_acc_cmp_loose(applied, ra2_acc) if not ra2_acc.is_empty() else {}
 		out["pa"] = pa
 		out["pb"] = pb
+		out["pa2"] = pa2
 		var psum: int = 0
 		for fld in ["v", "n", "c", "u", "i"]:
 			if not bool(pa[fld]):
 				psum += 1
-		out["pa_mism"] = psum
+		var psum_a2: int = 0
+		if not pa2.is_empty():
+			for fld in ["v", "n", "c", "u", "i"]:
+				if not bool(pa2[fld]):
+					psum_a2 += 1
+		# the applied slab is settled-exact iff it matches the per-slab
+		# re-bake (the lane path) OR the full-window re-bake (the FEED /
+		# initial-build path) — same settled payload, same light.
+		out["pa_mism"] = mini(psum, psum_a2)
+		var pb2: Dictionary = _bs_acc_cmp_loose(applied, rb2_acc)
+		out["pb2"] = pb2
 		var psum2: int = 0
 		for fld in ["v", "n", "c", "u", "i"]:
 			if not bool(pb[fld]):
 				psum2 += 1
-		out["pb_mism"] = psum2
+		var psum2b: int = 0
+		for fld in ["v", "n", "c", "u", "i"]:
+			if not bool(pb2[fld]):
+				psum2b += 1
+		out["pb_mism"] = mini(psum2, psum2b)
 		var ab: Dictionary = _acc_cmp(ra_acc, rb_acc)
 		out["ab"] = ab
+		# the per-quad color detail: A/B for the per-face path, A2/B2 for
+		# the merged path (the applied quad count picks the matching one).
+		var a_acc: Dictionary = ra_acc
+		var b_acc: Dictionary = rb_acc
+		if int(applied.get("q", 0)) == int(ra2_acc.get("q", -1)):
+			a_acc = ra2_acc
+			b_acc = rb2_acc
 		var gc: PackedColorArray = applied["c"]
-		var bc: PackedColorArray = rb_acc["c"]
-		var ac: PackedColorArray = ra_acc["c"]
+		var bc: PackedColorArray = b_acc["c"]
+		var ac: PackedColorArray = a_acc["c"]
 		var nq: int = int(applied["q"])
 		var gv: PackedVector3Array = applied["v"]
 		var gn: PackedVector3Array = applied["n"]
-		var an: PackedVector3Array = ra_acc["n"]
-		var bn: PackedVector3Array = rb_acc["n"]
+		var an: PackedVector3Array = a_acc["n"]
+		var bn: PackedVector3Array = b_acc["n"]
 		var details: Array = []
 		for qq in range(nq):
 			var cd_b: float = 0.0
@@ -9308,6 +9469,490 @@ func _brightslab_slab_cmp(mc, wcx: int, wcz: int, si: int, ri: Dictionary, cx0: 
 					str(gc[qq * 4]), str(ac[qq * 4]), str(bc[qq * 4]), cd_a, cd_b])
 		if not details.is_empty():
 			out["details"] = details
+	return out
+
+
+# AC-0297 (b): the TEX-REFRESH star-native arm. See the dispatch entry
+# for the contract. The swap mutates ONE tile (grass top) of a duplicated
+# atlas image through the real pack path (Data.apply_atlas + the tint
+# re-bake) + world.refresh_textures(); then: (1) the face-color cache
+# changed (the fcc averages the new pixels); (2) the real column's HIGH
+# slabs are byte-identical to the settled STAR payload re-build (both
+# emit paths — the tex-refresh dispatch is the full build / merged emit;
+# the lane re-bake is the per-face emit) AND to their pre-swap mesh
+# (a pixel-only atlas change leaves the vertex data untouched); (3) the
+# halo column's re-lowered LOW slabs are byte-identical to a FRESH
+# h_avg_emit on the same worker inputs (the new fcc), and the surface
+# slab is provably DIFFERENT from its pre-swap capture (the swap flowed
+# through the fcc into the baked vertex colors).
+func _texrefresh_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var mc: Variant = _ChunkScriptM.mesh_cpp()
+	var out: Dictionary = {
+		"mode": "texrefresh", "ok": false, "seed": Game.world_seed,
+		"note": "", "fcc_delta": -1, "swap_tile": "", "real": {}, "halo": {},
+	}
+	# ---- setup: render radius 6 (the real band + the halo ring), settle.
+	world.render_radius = 6
+	world.recenter(spawn.x, spawn.z, true)
+	var pcx := int(floorf(spawn.x / 16.0))
+	var pcz := int(floorf(spawn.z / 16.0))
+	var settled0 := false
+	var quiet0 := 0
+	for w0 in range(12000):
+		await get_tree().physics_frame
+		var ready := true
+		for dx in range(-6, 7):
+			for dz in range(-6, 7):
+				if absi(dx) + absi(dz) > 6:
+					continue
+				var c = world.chunks.get(world._key(pcx + dx, pcz + dz))
+				if c == null or c.data.is_empty():
+					ready = false
+		if ready:
+			for dx in range(-6, 7):
+				for dz in range(-6, 7):
+					if absi(dx) + absi(dz) > 6:
+						continue
+					if world._is_real_col(dx, dz):
+						var c = world.chunks.get(world._key(pcx + dx, pcz + dz))
+						if c == null or c.data.is_empty() or not c.mesh_built:
+							ready = false
+		var idle: bool = ready and world.star_light_idle() and world.dirty_queue.is_empty() \
+				and world.threadmesh_inflight.is_empty() and world.star_remesh.is_empty() \
+				and world._low_tasks.is_empty()
+		if idle:
+			quiet0 += 1
+			if quiet0 >= 60:
+				settled0 = true
+				break
+		else:
+			quiet0 = 0
+	if not settled0:
+		out["note"] = "setup not settled"
+		Debug.result(out)
+		get_tree().quit()
+		return
+	# ---- the columns: the real band = the spawn column; the halo = a
+	# far (h-only) column at taxi 5-6 carrying grass (top id 1) so the
+	# 4x4 avg re-emit visibly rides the new face-color cache.
+	var rc: Node3D = world.chunks.get(world._key(pcx, pcz))
+	if rc == null or rc.data.is_empty() or not rc.mesh_built:
+		out["note"] = "spawn column not meshed"
+		Debug.result(out)
+		get_tree().quit()
+		return
+	var hc: Node3D = null
+	var hcx := 0
+	var hcz := 0
+	var hidx := -1
+	for taxi in [5, 6]:
+		var done := false
+		for dx in range(-taxi, taxi + 1):
+			if done:
+				break
+			for dz in range(-taxi, taxi + 1):
+				if done:
+					break
+				if absi(dx) + absi(dz) != taxi:
+					continue
+				var cc = world.chunks.get(world._key(pcx + dx, pcz + dz))
+				if cc == null or not bool(cc.far) or int(cc.far_top.size()) != 256:
+					continue
+				for lz in range(16):
+					if done:
+						break
+					for lx in range(16):
+						if int(cc.far_top[lz * 16 + lx]) == 1:
+							hc = cc
+							hcx = pcx + dx
+							hcz = pcz + dz
+							hidx = lz * 16 + lx
+							done = true
+		if done:
+			break
+	if hc == null:
+		out["note"] = "no grass-topped halo column in the ring"
+		Debug.result(out)
+		get_tree().quit()
+		return
+	out["halo_col"] = "%d,%d" % [hcx, hcz]
+	out["real_col"] = "%d,%d" % [pcx, pcz]
+	# ---- pre-swap capture: the face-color cache (the 4x4 avg source),
+	# the real column's high slabs, and the halo column's low slabs
+	# around its grass cell.
+	var fcc_old: PackedFloat32Array = world._lod_fcc_get().duplicate()
+	var real_top := maxi(0, int(rc.top) >> 4)
+	var real_pre: Array = []
+	for si in range(0, real_top + 1):
+		real_pre.append(_tex_cap_slab(rc.slabs[si].mesh_instance))
+	var hh_cell := int(hc.far_h[2 * hidx]) | (int(hc.far_h[2 * hidx + 1]) << 8)
+	var hsi_g := hh_cell >> 4
+	var halo_pre: Dictionary = {}
+	for si in range(maxi(0, hsi_g - 1), mini(int(hc.data.size()), hsi_g + 2)):
+		var li := int(hc.low_slabs.find(si))
+		if li >= 0:
+			halo_pre[si] = _tex_cap_slab(hc.low_instances[li])
+	if int(halo_pre.get(hsi_g, {}).get("q", -9)) == -9:
+		out["note"] = "halo surface slab has no low mesh"
+		Debug.result(out)
+		get_tree().quit()
+		return
+	# ---- the swap: invert the grass-top tile's pixels in a DUPLICATED
+	# atlas image, re-apply through the real pack path (the tint re-bake
+	# + the fluid materials), then the world refresh (the ctx + the merge
+	# atlas + the fcc dirty flag + the high drain + the full low re-lower).
+	var img: Image = Data.atlas_tex.get_image().duplicate()
+	var rt: Vector2i = Data.block_rect(1, "top")
+	if rt == Vector2i(-1, -1) or int(img.get_width()) < (rt.x + 1) * 16 or int(img.get_height()) < (rt.y + 1) * 16:
+		out["note"] = "grass-top tile not in the atlas"
+		Debug.result(out)
+		get_tree().quit()
+		return
+	out["swap_tile"] = "1/top @ %s" % str(rt)
+	for yy in range(16):
+		for xx in range(16):
+			var p: Color = img.get_pixel(rt.x * 16 + xx, rt.y * 16 + yy)
+			img.set_pixel(rt.x * 16 + xx, rt.y * 16 + yy, Color(1.0 - p.r, 1.0 - p.g, 1.0 - p.b, p.a))
+	Data.apply_atlas(img, Data.atlas_rects)
+	world.refresh_textures()
+	# ---- wait for the full settle (the high drain + the low re-lower
+	# wave at its normal pace + the light idle).
+	var settled2 := false
+	var quiet2 := 0
+	for w2 in range(12000):
+		await get_tree().physics_frame
+		var idle: bool = world.tex_refresh.is_empty() and world.star_light_idle() \
+				and world.dirty_queue.is_empty() and world.threadmesh_inflight.is_empty() \
+				and world.star_remesh.is_empty() and world._low_tasks.is_empty()
+		if idle:
+			quiet2 += 1
+			if quiet2 >= 60:
+				settled2 = true
+				break
+		else:
+			quiet2 = 0
+	if not settled2:
+		Debug.result(out.set("note", "post-swap not settled"))
+		get_tree().quit()
+		return
+	# ---- (0) ENGINE MICRO-TEST: does Godot's ArrayMesh round-trip the
+	# vertex arrays byte-exactly (add_surface_from_arrays ->
+	# surface_get_arrays)? The applied-mesh comparison is byte-exact, so
+	# any engine-side quantization shows here before it can be blamed on
+	# the world pipeline.
+	var probe: Dictionary = await _tex_engine_probe(mc, hc, hsi_g)
+	out["engine_probe"] = probe
+	# ---- (1) the face-color cache changed (the fcc averages the NEW
+	# atlas pixels).
+	var fcc_new: PackedFloat32Array = world._lod_fcc_get()
+	var fdiff := 0
+	for i in range(mini(int(fcc_old.size()), int(fcc_new.size()))):
+		if fcc_old[i] != fcc_new[i]:
+			fdiff += 1
+	out["fcc_delta"] = fdiff
+	# ---- (2) the real column: every high slab byte-identical to the
+	# settled STAR payload re-build (both emit paths) AND to its pre-swap
+	# mesh (a pixel-only atlas change leaves the vertex data untouched).
+	out["real"] = _texrefresh_real_cmp(mc, pcx, pcz, real_top, real_pre)
+	# ---- (3) the halo column: every re-lowered low slab byte-identical
+	# to the FRESH h_avg_emit on the same worker inputs (the new fcc);
+	# the surface slab is DIFFERENT from its pre-swap capture.
+	out["halo"] = _texrefresh_halo_cmp(mc, hc, hcx, hcz, hsi_g, halo_pre)
+	out["ok"] = int(out["fcc_delta"]) > 0 \
+			and bool(out["real"].get("ok", false)) \
+			and bool(out["halo"].get("ok", false))
+	out["elapsed_ms"] = Time.get_ticks_msec() - t0
+	Debug.result(out)
+	get_tree().quit()
+
+
+# AC-0297 (b): capture a slab's applied mesh arrays ({} = no mesh). The
+# high quads carry "q" (index count /6); the low triangle emit (no UVs)
+# carries q=-1 — the raw arrays are compared either way.
+func _tex_cap_slab(mi: MeshInstance3D) -> Dictionary:
+	if mi == null or mi.mesh == null or int(mi.mesh.get_surface_count()) == 0:
+		return {}
+	var arrs: Array = mi.mesh.surface_get_arrays(0)
+	var ia: PackedInt32Array = arrs[Mesh.ARRAY_INDEX] as PackedInt32Array
+	if int(ia.size()) < 3:
+		return {}
+	var q := -1
+	if int(ia.size()) % 6 == 0:
+		q = int(ia.size()) / 6
+	return {
+		"q": q,
+		"v": arrs[Mesh.ARRAY_VERTEX], "n": arrs[Mesh.ARRAY_NORMAL],
+		"c": arrs[Mesh.ARRAY_COLOR], "u": arrs[Mesh.ARRAY_TEX_UV],
+		"i": ia,
+	}
+
+
+# AC-0297 (b): engine round-trip probe — emit a halo slab, push its
+# arrays through a fresh ArrayMesh + MeshInstance3D (the same storage
+# path the low landings use), read them back, and compare byte-exact.
+# Any engine-side quantization (color / normal) shows here.
+func _tex_engine_probe(mc, hc: Node3D, si: int) -> Dictionary:
+	var g: Variant = WorldGen.gen_cpp()
+	var fcc: PackedFloat32Array = world._lod_fcc_get()
+	var ore := PackedByteArray()
+	if int(hc.far_hmax) > int(si) * 16 + 3 and int(si) <= 3:
+		ore = g.stone_ore_slab(int(hc.cx), int(hc.cz), int(Game.world_seed), int(Data.HEIGHT), int(si))
+	var veg: PackedByteArray = hc.far_veg
+	if veg.size() == 0:
+		veg = g.veg_cells(int(hc.cx), int(hc.cz), int(Game.world_seed), int(Data.HEIGHT), int(Data.SEA))
+	var sky: PackedByteArray = world._halo_sky_for(hc, si)
+	var em: Dictionary = mc.h_avg_emit(hc.far_h, hc.far_biome, hc.far_top, ore, veg, int(si), 4, fcc, sky, int(Data.SEA), int(Data.HEIGHT))
+	if bool(em.get("empty", false)) or int(em.get("v", PackedVector3Array()).size()) == 0:
+		return {"note": "empty emit"}
+	var a: Array = []
+	a.resize(Mesh.ARRAY_MAX)
+	a[Mesh.ARRAY_VERTEX] = em["v"]
+	a[Mesh.ARRAY_NORMAL] = em["n"]
+	a[Mesh.ARRAY_COLOR] = em["c"]
+	a[Mesh.ARRAY_INDEX] = em["i"]
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, a)
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	world.add_child(mi)
+	await get_tree().process_frame
+	var arrs: Array = mi.mesh.surface_get_arrays(0)
+	var out: Dictionary = {
+		"v": _tex_arrs_diff({"v": em["v"]}, {"v": arrs[Mesh.ARRAY_VERTEX]}, ["v"]),
+		"n": _tex_arrs_diff({"n": em["n"]}, {"n": arrs[Mesh.ARRAY_NORMAL]}, ["n"]),
+		"c": _tex_arrs_diff({"c": em["c"]}, {"c": arrs[Mesh.ARRAY_COLOR]}, ["c"]),
+		"i": _tex_arrs_diff({"i": em["i"]}, {"i": arrs[Mesh.ARRAY_INDEX]}, ["i"]),
+	}
+	var cv: Color = em["c"][0]
+	var cb: Color = arrs[Mesh.ARRAY_COLOR][0]
+	var nv: Vector3 = em["n"][0]
+	var nb: Vector3 = arrs[Mesh.ARRAY_NORMAL][0]
+	out["c0_raw"] = "%.9f" % cv.r
+	out["c0_back"] = "%.9f" % cb.r
+	out["n0_raw"] = "%.9f" % nv.z
+	out["n0_back"] = "%.9f" % nb.z
+	world.remove_child(mi)
+	mi.queue_free()
+	return out
+
+
+# AC-0297 (b): exact (byte-for-byte) equality of the listed array fields
+# between two captured mesh dicts (fields are the packed arrays only —
+# "q" is an int and is compared separately).
+func _tex_arrs_eq(a: Dictionary, b: Dictionary, fields: Array) -> bool:
+	return _tex_arrs_diff(a, b, fields) == ""
+
+
+# AC-0297 (b): "" when equal; otherwise "field:index" of the first
+# difference (size mismatch = field:len). Diagnostics for the detail
+# lines (not part of the ok verdict).
+func _tex_arrs_diff(a: Dictionary, b: Dictionary, fields: Array) -> String:
+	for fld in fields:
+		var ga: Variant = a.get(fld, null)
+		var gb: Variant = b.get(fld, null)
+		if ga == null or gb == null:
+			return fld + ":null"
+		if int(ga.size()) != int(gb.size()):
+			return fld + ":len " + str(int(ga.size())) + "!=" + str(int(gb.size()))
+		for i in range(int(ga.size())):
+			if ga[i] != gb[i]:
+				return fld + ":" + str(i)
+	return ""
+
+
+# AC-0297 (b): mesh-equality at the ENGINE's vertex-storage precision.
+# The texrefresh engine probe (fresh emit -> ArrayMesh ->
+# surface_get_arrays, no world code) showed Godot 4.7 round-trips
+# vertices / indices / UVs byte-exact, but stores NORMALS at 16-bit
+# (1/65536 scale) and VERTEX COLORS at 8-bit (1/255, truncated). Every
+# game mesh (high / low / fog) carries that precision — the arm's
+# contract is therefore: v / i byte-exact, u byte-exact when present,
+# n within 2/65536 per component, c within 1/255 per channel.
+const _TEX_N_TOL := 2.0 / 65536.0
+const _TEX_C_TOL := 1.0 / 255.0 + 0.00001
+
+
+func _tex_mesh_diff(a: Dictionary, b: Dictionary) -> String:
+	# "" when equal at the engine precision above; "field:index" at the
+	# first violation. Both dicts come from _tex_cap_slab (applied) or a
+	# fresh C++ emit — the low emits have no "u" (both absent = ok), the
+	# high carries u on both sides.
+	var dv: String = _tex_arrs_diff(a, b, ["v", "i"])
+	if dv != "":
+		return dv
+	var ua: Variant = a.get("u", null)
+	var ub: Variant = b.get("u", null)
+	if (ua == null) != (ub == null):
+		return "u:present"
+	var nu: int = 0
+	if ua != null:
+		if int(ua.size()) != int(ub.size()):
+			return "u:len " + str(int(ua.size())) + "!=" + str(int(ub.size()))
+		nu = int(ua.size())
+	for i in range(nu):
+		if ua[i] != ub[i]:
+			return "u:" + str(i)
+	var nv: int = int(a["v"].size())
+	for i in range(nv):
+		var na: Vector3 = a["n"][i]
+		var nb: Vector3 = b["n"][i]
+		if absf(na.x - nb.x) > _TEX_N_TOL or absf(na.y - nb.y) > _TEX_N_TOL \
+				or absf(na.z - nb.z) > _TEX_N_TOL:
+			return "n:" + str(i)
+		var ca: Color = a["c"][i]
+		var cb: Color = b["c"][i]
+		if absf(ca.r - cb.r) > _TEX_C_TOL or absf(ca.g - cb.g) > _TEX_C_TOL \
+				or absf(ca.b - cb.b) > _TEX_C_TOL or absf(ca.a - cb.a) > _TEX_C_TOL:
+			return "c:" + str(i)
+	return ""
+
+
+# AC-0297 (b): the real-column check — every high slab identical (at the
+# engine vertex-storage precision, _tex_mesh_diff) to the settled STAR
+# payload re-build (A2 = the full build / the merged emit — the
+# tex-refresh dispatch's own shape; A = the per-slab lane re-bake / the
+# per-face emit). The pre-swap mesh is recorded, not required: the
+# dispatch rebuilds as a FULL (merged-emit) build, so a column that sat
+# on a lane per-scope (per-face) build legitimately changes its lossless
+# quad decomposition (same surface, same lights) — that change is
+# counted (decomp_changed) and reported, it is not a failure.
+func _texrefresh_real_cmp(mc, wcx: int, wcz: int, top_slab: int, real_pre: Array) -> Dictionary:
+	var out: Dictionary = {"ok": false, "slabs": 0, "mism": 0, "decomp_changed": 0, "note": "", "detail": []}
+	var c = world.chunks.get(world._key(wcx, wcz))
+	if c == null or c.data.is_empty() or not c.mesh_built:
+		out["note"] = "real column not meshed"
+		return out
+	# the nbs / ctx / ms — exactly the full dispatch's inputs.
+	var nbs: Dictionary = {}
+	var nb_ok := true
+	for ddx in range(-1, 2):
+		for ddz in range(-1, 2):
+			if (ddx == 0) == (ddz == 0):
+				continue
+			var ncc = world.chunks.get(world._key(wcx + ddx, wcz + ddz))
+			if ncc == null or ncc.data.is_empty():
+				nb_ok = false
+				break
+			nbs["%d,%d" % [ddx, ddz]] = mc.snap_rings(ncc.data, ncc.fl, ddx, ddz, ncc.gen_keep, ncc.far_payload())
+	if not nb_ok:
+		out["note"] = "neighbor missing"
+		return out
+	var ctx0: Dictionary = world._tm_ctx.duplicate()
+	var ze: Array = []
+	for k2 in range(8):
+		ze.append(PackedByteArray())
+	ctx0["eff_strips"] = ze
+	ctx0["blk_strips"] = ze
+	ctx0["blk_strips_b"] = ze
+	ctx0["top"] = int(c.top)
+	var ms_w: Dictionary
+	if not world._tm_ms_full.rects.is_empty():
+		ms_w = {"rects": world._tm_ms_full.rects.duplicate(), "h": float(world._tm_ms_full.get("h", 0.0))}
+	else:
+		ms_w = {"rects": {}}
+	var pl_full: Dictionary = world.star.slab_light_payload(wcx, wcz, 0, top_slab)
+	if not bool(pl_full.get("ok", false)):
+		out["note"] = "payload not ok"
+		return out
+	pl_full["star"] = true
+	var data_c: Array = ChunkIO._slabs_deepcopy(c.data)
+	var fl_c: Array = ChunkIO._slabs_deepcopy(c.fl)
+	var ra_full: Dictionary = mc.build_accs(data_c, fl_c, wcx, wcz, nbs, ctx0, ms_w, pl_full, 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())
+	for si in range(0, top_slab + 1):
+		out["slabs"] = int(out["slabs"]) + 1
+		var applied: Dictionary = _tex_cap_slab(c.slabs[si].mesh_instance)
+		var a_full: Dictionary = ra_full["slabs"][si][0]
+		var pl_s: Dictionary = world.star.slab_light_payload(wcx, wcz, si, si)
+		var a_s: Dictionary = {}
+		if bool(pl_s.get("ok", false)):
+			pl_s["star"] = true
+			var ra_s: Dictionary = mc.build_accs(data_c, fl_c, wcx, wcz, nbs, ctx0, ms_w, pl_s, si, si, 0, Lighting._att, Lighting._glow, PackedByteArray())
+			a_s = ra_s["slabs"][0][0]
+		if applied.is_empty():
+			# all-air slab: no mesh IS the match for a 0-quad rebuild.
+			if int(a_full.get("q", -1)) == 0 and (a_s.is_empty() or int(a_s.get("q", -1)) == 0):
+				continue
+			out["mism"] = int(out["mism"]) + 1
+			out["detail"].append("slab %d: no mesh but the rebuild has quads (full_q=%s lane_q=%s)" % [
+				si, str(int(a_full.get("q", -1))), str(a_s.get("q", -1))])
+			continue
+		var d_full: String = _tex_mesh_diff(applied, a_full)
+		var eq_full: bool = int(applied.get("q", -9)) == int(a_full.get("q", -9)) and d_full == ""
+		var d_lane: String = ""
+		var eq_lane: bool = false
+		if not a_s.is_empty():
+			d_lane = _tex_mesh_diff(applied, a_s)
+			eq_lane = int(applied.get("q", -9)) == int(a_s.get("q", -9)) and d_lane == ""
+		if not (eq_full or eq_lane):
+			out["mism"] = int(out["mism"]) + 1
+			out["detail"].append("slab %d applied_q=%s full_q=%s lane_q=%s d_full=%s d_lane=%s" % [
+				si, str(applied.get("q", -1)), str(int(a_full.get("q", -1))), str(a_s.get("q", -1)),
+				d_full, d_lane if not a_s.is_empty() else "noa"])
+		var pre: Dictionary = real_pre[si] if si < real_pre.size() else {}
+		if not pre.is_empty():
+			var d_pre: String = _tex_mesh_diff(applied, pre)
+			if d_pre != "":
+				out["decomp_changed"] = int(out["decomp_changed"]) + 1
+				if int(out["decomp_changed"]) <= 4:
+					out["detail"].append("slab %d pre-swap differs (expected when the lane was per-face): %s" % [si, d_pre])
+	out["ok"] = int(out["mism"]) == 0
+	return out
+
+
+# AC-0297 (b): the halo-column check — every re-lowered low slab
+# identical (engine vertex-storage precision, _tex_mesh_diff) to the
+# FRESH h_avg_emit on the worker's own inputs (the new fcc); the
+# surface slab (the grass cell) shows a COLOR change vs its pre-swap
+# capture (the swap flowed through the fcc into the baked vertex
+# colors) with unchanged geometry.
+func _texrefresh_halo_cmp(mc, hc: Node3D, hcx: int, hcz: int, hsi_g: int, halo_pre: Dictionary) -> Dictionary:
+	var out: Dictionary = {"ok": false, "slabs": 0, "mism": 0, "changed": 0, "surface_changed": false, "note": "", "detail": []}
+	var g: Variant = WorldGen.gen_cpp()
+	var fcc: PackedFloat32Array = world._lod_fcc_get()
+	for si in range(0, int(hc.data.size())):
+		var li := int(hc.low_slabs.find(si))
+		if li < 0:
+			continue  # no low at this slab (all-air terminal / above top)
+		out["slabs"] = int(out["slabs"]) + 1
+		# the worker's own far-emit inputs (the AC-0284b branch of
+		# _tm_worker_run), on the live column state.
+		var ore := PackedByteArray()
+		if int(hc.far_hmax) > int(si) * 16 + 3 and int(si) <= 3:
+			ore = g.stone_ore_slab(int(hcx), int(hcz), int(Game.world_seed), int(Data.HEIGHT), int(si))
+		var veg: PackedByteArray = hc.far_veg
+		if veg.size() == 0:
+			veg = g.veg_cells(int(hcx), int(hcz), int(Game.world_seed), int(Data.HEIGHT), int(Data.SEA))
+		var sky: PackedByteArray = world._halo_sky_for(hc, si)
+		var em: Dictionary = mc.h_avg_emit(hc.far_h, hc.far_biome, hc.far_top, ore, veg, int(si), 4, fcc, sky, int(Data.SEA), int(Data.HEIGHT))
+		var applied: Dictionary = _tex_cap_slab(hc.low_instances[li])
+		var d: String
+		if bool(em.get("empty", false)):
+			d = "" if applied.is_empty() else "empty_emit"
+		elif applied.is_empty():
+			d = "no_low_mesh"
+		else:
+			d = _tex_mesh_diff(applied, em)
+		if d != "":
+			out["mism"] = int(out["mism"]) + 1
+			out["detail"].append("slab %d d=%s (applied v=%s, emit v=%s)" % [
+				si, d, str(int(applied.get("v", PackedVector3Array()).size())), str(int(em.get("v", PackedVector3Array()).size()))])
+		var pre: Dictionary = halo_pre.get(si, {})
+		if not pre.is_empty():
+			var d_pre: String = _tex_mesh_diff(applied, pre)
+			if d_pre != "":
+				out["changed"] = int(out["changed"]) + 1
+			if si == hsi_g:
+				# the grass slab must show the NEW fcc: a color change vs
+				# its pre-swap mesh (geometry/normal unchanged by a
+				# texture swap). "" = unchanged (failure); anything but a
+				# color diff = a geometry change (also a failure — the
+				# swap must not move the far surface).
+				out["surface_changed"] = d_pre.begins_with("c:")
+				if not out["surface_changed"]:
+					out["mism"] = int(out["mism"]) + 1
+					out["detail"].append("slab %d (the grass slab) pre-diff is '%s' (expected a color diff)" % [si, d_pre])
+	out["ok"] = int(out["slabs"]) > 0 and int(out["mism"]) == 0 and bool(out["surface_changed"])
 	return out
 
 

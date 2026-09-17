@@ -5051,11 +5051,39 @@ func _drain_tex_refresh() -> void:
 		if not _build_ready(int(c.cx), int(c.cz)):
 			tex_refresh.push_back(key)
 			continue
-		# false = a task for this chunk is still in flight (dispatch dedup):
-		# re-queue so the chunk is rebuilt once that task has landed.
-		if not _mesh_dispatch(c, int(c.cx), int(c.cz), c.last_eff, false):
+		# AC-0297: star-native tex refresh — the rebuild rides the SETTLED
+		# STAR payload (the remesh lane's own capture), not c.last_eff.
+		# false = waiting (in-flight dedup / the settle gate): re-queue so
+		# the chunk is rebuilt once that lands.
+		if not _tex_refresh_dispatch(c, int(c.cx), int(c.cz)):
 			tex_refresh.push_back(key)
 		done += 1
+
+
+# AC-0297: the tex-refresh rebuild, star-native. The texture swap changed
+# the TABLES (the worker ctx / the face-color cache / the merge atlas) —
+# the light did not (the engine owns it), so the rebuild is the column's
+# SETTLED star payload: the remesh lane's own capture (one full-column
+# window), epoch-checked at landing (the full-landing lver gate — a
+# concurrent edit datadrops the bake and the lane re-bakes with the
+# refreshed ctx). Unseeded (demoted / halo) columns DROP: the promotion
+# re-bake (the recenter's stamped-slab re-arm) re-bakes the stored high
+# from the settled payload on the refreshed ctx. The HALO side needs no
+# payload at all: the 4x4 avg emit (h_avg_emit) re-runs with the new face-
+# color cache through the low lane's re-lower (refresh_textures ->
+# _low_reset_all). The c.last_eff classic dispatch stays for the
+# star==null test arms only.
+func _tex_refresh_dispatch(c: Node3D, cx: int, cz: int) -> bool:
+	if star == null:
+		return _mesh_dispatch(c, cx, cz, c.last_eff, false)
+	if not star.box_settled(cx, cz, -1, 24):
+		return false  # an edit is still settling — the re-queue retries after
+	var pl: Dictionary = star.slab_light_payload(cx, cz, 0, maxi(0, int(c.top) >> 4))
+	if not bool(pl.get("ok", false)):
+		return true  # unseeded (demoted / halo) — the promotion re-bake owns it
+	pl["star"] = true
+	pl["lver"] = star.box_epochs(cx, cz, -1, 24)
+	return _mesh_dispatch(c, cx, cz, pl, true, true, false, false)
 
 # --- AC-0178: loading window (first spawn / render-distance change) --------
 
@@ -6319,6 +6347,24 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			_editprobe_ns = res.get("ns", [])
 			_editprobe_phet = res.get("phet", [])
 			_editprobe_prime_flag = false
+	# AC-0297: the FULL-column dispatch (the edit-fallback feed + the tex
+	# refresh) captured the 3x3x3 box epochs under the settle gate — the
+	# hslab branch's late-landing check for the full path: any engine
+	# mutation inside the box since dispatch (an edit, a re-seed, a
+	# neighbor seed) bumped an epoch — the in-flight bake is stale light,
+	# datadrop + retrigger (the retrigger re-arms the remesh lane, which
+	# re-bakes every stamped slab from the current settled payload).
+	if star != null and e.has("lver") and not bool(e.get("hslab", false)):
+		var box_now_f: Array = star.box_epochs(int(e["cx"]), int(e["cz"]), -1, 24)
+		if box_now_f != e["lver"]:
+			_tm_datadrop += 1
+			star_lver_drops += 1
+			if _tm_debug:
+				print("TMESH LVERDROP %d,%d (full)" % [int(e["cx"]), int(e["cz"])])
+			_tm_retrigger(key, c, e)
+			if star_bake_probe != null:
+				star_bake_probe.call("drop", int(e["cx"]), int(e["cz"]), -1, {"eff": e.get("eff", {})})
+			return
 	if bool(e.get("hslab", false)):
 		# AC-0263: a per-slab FULL-RES landing (the tier-0 section / the
 		# high-band rings). The scoped stale check (rows_eq on the
@@ -6483,13 +6529,16 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 	# done (the per-slab probe's completion record for the legacy path).
 	for si_f in range(mini(int(c.top) >> 4, int(c.data.size() - 1)) + 1):
 		c.high_stamps[si_f] = int(c.data_gen)
-	# AC-0283 P2: the full-column path (retired from the live drain — the
-	# tex-refresh + edit-fallback remain) bakes from the CACHED light
-	# (last_eff / the pull kernel — both star-derived), so its settle state
-	# is the engine's: settled -> the stamped slabs show; not settled ->
-	# hide + arm the remesh lane (the re-bake lands on the settled light).
 	# AC-0263 spec (user 2026-09-13) unchanged: a chunk whose lighting is
-	# not calculated never shows.
+	# not calculated never shows. AC-0297: the live full-column dispatches
+	# (the edit-fallback feed + the tex refresh) now carry the SETTLED star
+	# payload (the lver gate above re-checks the box epochs), so a settled
+	# landing IS the settled light — flush and show. The not-settled branch
+	# (an unseeded/demoted column, or the star==null test-arm path whose
+	# bake is not engine-gated) still hides + arms the remesh lane.
+	# AC-0283 P2's edit_full re-arm is GONE: the FEED bake is already the
+	# settled payload — re-arming every stamped slab after it would only
+	# double-bake (the lver drop / not-settled paths own the re-bake).
 	if star != null and star.column_settled(int(c.cx), int(c.cz)):
 		for si_f in range(mini(int(c.top) >> 4, int(c.data.size() - 1)) + 1):
 			c.flush_slabs[si_f] = true
@@ -6498,17 +6547,9 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		for si_f in range(mini(int(c.top) >> 4, int(c.data.size() - 1)) + 1):
 			c.flush_slabs.erase(si_f)  # the stale bake is not the settled light
 			_star_remesh_add(key, si_f)
-	# AC-0283 P2 (brightslab fix): a full-column landing from the edit
-	# fallback baked with the legacy self-light (the pull kernel on the
-	# post-edit data) - the settled branch above flushed that bake without
-	# re-arming. Re-arm the star remesh lane so every stamped slab re-bakes
-	# with the settled star payload (idempotent with the not-settled arm).
-	if star != null and bool(e.get("edit_full", false)) and star.column_settled(int(c.cx), int(c.cz)):
-		for si_f in range(mini(int(c.top) >> 4, int(c.data.size() - 1)) + 1):
-			_star_remesh_add(key, si_f)
 	_star_update_light_settled(c)
 	if star_bake_probe != null:
-		star_bake_probe.call("land", int(e["cx"]), int(e["cz"]), -1, {"light": res.get("light", {}), "edit_full": bool(e.get("edit_full", false))})
+		star_bake_probe.call("land", int(e["cx"]), int(e["cz"]), -1, {"eff": e.get("eff", {}), "light": res.get("light", {}), "edit_full": bool(e.get("edit_full", false))})
 	_hslab_probe_invalidate(c)
 	c.saved_light = {}
 	# AC-0231 rewrite: the high REPLACES the per-slab placeholders (the
@@ -6658,8 +6699,8 @@ func _dirty_dispatch(key: String) -> void:
 		_edit_stale_eff.clear()
 	var cached = _edit_stale_eff.get(key)
 	if cached == null:
-		if not _mesh_dispatch(c, int(c.cx), int(c.cz), {}, true, true, false, true):
-			return
+		if not _dirty_full_dispatch(c, int(c.cx), int(c.cz)):
+			return  # deferred (settle gate / pool cap) — retry next frame
 		perf_edit_front_full += 1
 		_dirty_drop(key)
 		return
@@ -6684,6 +6725,47 @@ func _dirty_drain() -> void:
 		_dirty_drop(key)
 		return
 	_dirty_dispatch(key)
+
+
+# AC-0297: the edit-fallback full bake, STAR-NATIVE. The engine is the
+# single light source for this dispatch: it captures the column's SETTLED
+# per-slab payload (the remesh lane's own capture — one full-column
+# window) and the 3x3x3 box epochs (the landing re-checks them — any
+# engine mutation inside the box since dispatch bumped an epoch and
+# datadrops the in-flight bake; the retrigger re-arms the remesh lane,
+# which re-bakes from the current settled payload). The classic-pull
+# self-light is GONE from the live path: the star==null fallback keeps
+# it for the test arms only (they drive the star=false world).
+# (a) evidence (.scratch/ac0297/report.md): for boundary edits the pull
+# light is byte-equal to the settled star payload (0/98304 cells), so
+# FEED loses no light fidelity — and the lane alone does NOT cover the
+# edit face's slab (uncovered_delete), so the dispatch stays a full bake
+# (the face update stays 1 frame after the settle, not lane-paced).
+func _dirty_full_dispatch(c: Node3D, cx: int, cz: int) -> bool:
+	if star == null:
+		return _mesh_dispatch(c, cx, cz, {}, true, true, false, true)
+	# The box gate (the remesh lane's own): the payload is final only
+	# when the column's full 3x3x3 box has settled — a not-yet-settled
+	# box defers (the entry retries next frame; the settle is 1-3 frames
+	# after an edit).
+	if not star.box_settled(cx, cz, -1, 24):
+		return false
+	var pl: Dictionary = star.slab_light_payload(cx, cz, 0, maxi(0, int(c.top) >> 4))
+	if not bool(pl.get("ok", false)):
+		# The column is not seeded (a demoted neighbor): no payload
+		# exists. Mirror the full landing's not-settled behavior — hide
+		# the dormant high + re-arm the stamped slabs (the promotion
+		# re-seed + remesh lane re-bakes them on the settled payload;
+		# until then the column shows nothing — the AC-0263 rule).
+		c.hide_all_high()
+		for si_f in range(mini(int(c.top) >> 4, int(c.data.size() - 1)) + 1):
+			c.flush_slabs.erase(si_f)
+			_star_remesh_add(_key(cx, cz), si_f)
+		_star_update_light_settled(c)
+		return true
+	pl["star"] = true
+	pl["lver"] = star.box_epochs(cx, cz, -1, 24)
+	return _mesh_dispatch(c, cx, cz, pl, true, true, false, true)
 
 
 func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_eff: Dictionary) -> bool:
@@ -6870,7 +6952,19 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 	# AC-0129: fresh strip copies ride on the entry (the worker self-lights
 	# through the pull kernel / bakes its 20x20 box from them); ngen = the
 	# 4 neighbor eff_gens at THIS dispatch (the cache-entry validation key).
-	var strips = _strips_for(cx, cz)
+	# AC-0297: a STAR payload eff IGNORES the ctx strips (the worker expands
+	# the payload's own side/corner strips — build_accs replaces C.eff_strips
+	# before the bake), so the main-thread strip build (the classic-pull
+	# margin kernel) is skipped for star dispatches. The star==null
+	# (test-arm) path still needs them.
+	var strips: Dictionary
+	if bool(eff.get("star", false)):
+		var ze: Array = []
+		for zk in range(8):
+			ze.append(PackedByteArray())
+		strips = {"eff": ze, "blk": ze, "blk_b": ze}
+	else:
+		strips = _strips_for(cx, cz)
 	var ctx_w: Dictionary = _tm_ctx.duplicate()
 	ctx_w["eff_strips"] = strips["eff"]
 	ctx_w["blk_strips"] = strips["blk"]
