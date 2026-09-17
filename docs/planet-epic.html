@@ -211,8 +211,8 @@ footer b{color:var(--dim);font-weight:400}
   <div class="meta-plate reveal d3">
     <div><span class="k">Status</span><span class="v amber">PLAN — not approved, no tickets created</span></div>
     <div><span class="k">Supersedes</span><span class="v">AC-0042 topology + LOD sections (see §03)</span></div>
-    <div><span class="k">Planet</span><span class="v">12 faces · R ≈ 5090 · 1 m blocks</span></div>
-    <div><span class="k">Home patch</span><span class="v">8000 × 8000 m = one cube face</span></div>
+    <div><span class="k">Planet</span><span class="v">12 faces · R = 4000 · ratio W/R = π/2 · 1 m blocks</span></div>
+    <div><span class="k">Home patch</span><span class="v">6283 × 6283 m = one cube face</span></div>
     <div><span class="k">Queue slot</span><span class="v">after the cave series (AC-0288…0292)</span></div>
     <div><span class="k">Hard gate</span><span class="v">curvature is placement — genhash stays 25/25</span></div>
   </div>
@@ -277,7 +277,7 @@ footer b{color:var(--dim);font-weight:400}
   <p class="reveal">
     The flagship acceptance test follows from the geometry: the planet's circumference is the same as one lap
     of the flat world's four-face circuit, so <strong>"walk around the planet and come back to spawn"</strong>
-    is a literal, checkable statement — about 32 km of ground, roughly two hours on foot and about twenty
+    is a literal, checkable statement — about 25 km of ground, roughly an hour and a half on foot and about sixteen
     minutes at cruise flight speed. That is the demo for story 1.
   </p>
 
@@ -317,19 +317,19 @@ footer b{color:var(--dim);font-weight:400}
   <figure class="reveal">
 <svg viewBox="0 0 1160 330" role="img" aria-label="The home patch is one cube face" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,Menlo,Consolas,monospace">
   <g font-size="12" fill="#e8ddc9">
-    <text x="10" y="20" fill="#6f6350" font-size="10">THE FLAT WORLD IS ONE CUBE FACE — an 8000 x 8000 m patch, folded onto the sphere's north cap</text>
+    <text x="10" y="20" fill="#6f6350" font-size="10">THE FLAT WORLD IS ONE CUBE FACE — a 6283 x 6283 m patch, folded onto the sphere's north cap</text>
     <rect x="30" y="46" width="380" height="240" fill="#1c1712" stroke="#4a4133"/>
     <line x1="220" y1="46" x2="220" y2="286" stroke="#d9a441" stroke-dasharray="5 4"/>
     <text x="228" y="62" fill="#d9a441" font-size="10">x=0 midline — faces 0 | 1, 1:1 today</text>
     <text x="120" y="180" fill="#a4937a" text-anchor="middle">FACE 0</text>
-    <text x="130" y="198" fill="#6f6350" font-size="10" text-anchor="middle">x = R·u · 4000 cols</text>
+    <text x="130" y="198" fill="#6f6350" font-size="10" text-anchor="middle">x = W·u · 3141 cols</text>
     <text x="316" y="180" fill="#a4937a" text-anchor="middle">FACE 1</text>
-    <text x="316" y="198" fill="#6f6350" font-size="10" text-anchor="middle">x = R·(u−1)</text>
+    <text x="316" y="198" fill="#6f6350" font-size="10" text-anchor="middle">x = W·(u−1)</text>
     <circle cx="220" cy="166" r="4" fill="#c96a3d"/>
     <text x="232" y="170" fill="#c96a3d" font-size="10">spawn / flat origin = the pole (0,1,0)</text>
-    <text x="30" y="44" fill="#6f6350" font-size="10">z = +4000</text>
-    <text x="30" y="304" fill="#6f6350" font-size="10">z = −4000</text>
-    <text x="16" y="170" fill="#6f6350" font-size="10" transform="rotate(-90 16 170)">x = ±4000</text>
+    <text x="30" y="44" fill="#6f6350" font-size="10">z = +3141</text>
+    <text x="30" y="304" fill="#6f6350" font-size="10">z = −3141</text>
+    <text x="16" y="170" fill="#6f6350" font-size="10" transform="rotate(-90 16 170)">x = ±3141</text>
     <text x="230" y="304" fill="#d4585f" font-size="10">cube edges → faces 2…11 — 2:1 today, 1:1 after the grid lock (§05)</text>
 
     <circle cx="900" cy="166" r="118" fill="none" stroke="#4a4133"/>
@@ -339,15 +339,15 @@ footer b{color:var(--dim);font-weight:400}
     <path d="M 1018 166 A 118 118 0 0 1 900 284" fill="none" stroke="#4a4133"/>
     <text x="900" y="120" fill="#d9a441" font-size="11" text-anchor="middle">the +Y cap</text>
     <text x="900" y="136" fill="#6f6350" font-size="10" text-anchor="middle">= the whole flat world</text>
-    <text x="900" y="176" fill="#a4937a" font-size="10" text-anchor="middle">R ≈ 5090</text>
-    <text x="900" y="192" fill="#6f6350" font-size="10" text-anchor="middle">circumference 32 km</text>
+    <text x="900" y="176" fill="#a4937a" font-size="10" text-anchor="middle">R = 4000</text>
+    <text x="900" y="192" fill="#6f6350" font-size="10" text-anchor="middle">circumference 25 km</text>
     <text x="900" y="316" fill="#6f6350" font-size="10" text-anchor="middle">faces 2…11 carry the rest of the planet — stubs today</text>
     <text x="1120" y="60" fill="#58a8a0" font-size="10" text-anchor="end">the fold is smooth on the sphere:</text>
     <text x="1120" y="76" fill="#6f6350" font-size="10" text-anchor="end">walking +x continues over the edge</text>
     <text x="1120" y="90" fill="#6f6350" font-size="10" text-anchor="end">and down the +X face — no cliff</text>
   </g>
 </svg>
-    <figcaption><b>FIG 2.1</b> — Why 12 faces: the live flat world is exactly the +Y cube face, split on the x=0 midline into faces 0 and 1. That midline is the planet's least dramatic seam (1:1, gated). Every other boundary is 4 km from spawn and is where cross-face movement begins.</figcaption>
+    <figcaption><b>FIG 2.1</b> — Why 12 faces: the live flat world is exactly the +Y cube face, split on the x=0 midline into faces 0 and 1. That midline is the planet's least dramatic seam (1:1, gated). Every other boundary is 3.1 km from spawn and is where cross-face movement begins.</figcaption>
   </figure>
 </section>
 
@@ -392,7 +392,7 @@ footer b{color:var(--dim);font-weight:400}
       <tr><td class="hl">D1</td><td><strong>Keep 12 faces.</strong></td><td>AC-0143's math, keying and arm are shipped and gated, and the split is what makes the live flat world <em>exactly one face</em> with an identity keying. The 2:1 edge ratio is a grid artifact, not a face-count artifact (§05), so redoing to 6 faces buys nothing and forfeits the genhash anchor.</td></tr>
       <tr><td class="hl">D2</td><td><strong>Grid lock: pin the face's flat width, set R from it, map position→cell by arc.</strong></td><td>Makes a flat metre a sphere metre with <em>no data change and no resample</em> (§05). This is the one decision that turns "0.72 m blocks with a 2× step at boundaries" into "1 m blocks, 1:1 boundaries".</td></tr>
       <tr><td class="hl">D3</td><td><strong>Rigid per-chunk placement</strong> (chunks meet exactly along shared edges; the surface is a gapless polyhedron of 16 m facets).</td><td>Physics and visuals stay identical, and meshing, greedy thresholds, lighting and collision keep working in flat local space. The true sphere is reserved for the satellite tier, where it is free.</td></tr>
-      <tr><td class="hl">D4</td><td><strong>Cross-face movement is first-class in this series</strong>, with six explicit continuity contracts (§07) — not an implied side effect of placement.</td><td>Without it the player reaches a 4 km boundary and stops being on a planet. It is also where AC-0228's face-switching requirement lives.</td></tr>
+      <tr><td class="hl">D4</td><td><strong>Cross-face movement is first-class in this series</strong>, with six explicit continuity contracts (§07) — not an implied side effect of placement.</td><td>Without it the player reaches the 3.1 km face edge and stops being on a planet. It is also where AC-0228's face-switching requirement lives.</td></tr>
       <tr><td class="hl">D5</td><td><strong>The look is a satellite LOD tier</strong> — a whole-body representation above an altitude threshold, fed by height-only far data.</td><td>Nothing draws a body today, the old impostor is gone by decision, and the far data already carries everything a body bake needs (H, biome, top block).</td></tr>
       <tr><td class="hl">D6</td><td><strong>Sphere-domain generation is the seam end-state</strong>, sequenced after the cave series rather than now.</td><td>It is the only thing that makes two faces agree at a boundary without stitching, but it re-baselines genhash and every standing value — so it is worth doing in the same window the cave series is already re-baselining, and after it, since both rewrite <code>gdext/src/gen.cpp</code>.</td></tr>
       <tr><td class="hl">D7</td><td><strong>Order the work: ground → movement → flight → look.</strong></td><td>Stories 2 and 3 have no meaning until story 1 is real; and the look depends on knowing what the ground does at the threshold.</td></tr>
@@ -406,80 +406,83 @@ footer b{color:var(--dim);font-weight:400}
   <div class="sec-head reveal"><span class="sec-no">05</span><h2>The grid lock</h2><span class="rule"></span></div>
 
   <p class="reveal">
-    This is the piece of reasoning that reshaped the plan, so it is worth stating in full. Two grids have to
-    agree on a cube-sphere: the <strong>data grid</strong> (integer columns, 1 m apart in flat coordinates) and
-    the <strong>surface</strong> (arc metres on the sphere). Today they do not, and the mismatch is systematic.
+    Two grids have to agree on a cube-sphere: the <strong>data grid</strong> (integer columns, 1 m apart in
+    flat coordinates) and the <strong>surface</strong> (arc metres on the sphere). Today they do not, and the
+    mismatch is one wrong ratio — not a wrong radius.
   </p>
 
   <p class="reveal">
-    The keying is <code>cx = R·u</code>, so the home face's flat patch is as wide as R — and the span of arc
-    that patch covers is a fixed fraction of R too. Column count and sphere area both scale as R², which makes
-    the density <em>scale-invariant</em>:
+    A lap of the flat world crosses four cube faces; the sphere's circumference is 2πR. Holding those equal is
+    exactly the statement "one flat metre is one metre of arc":
   </p>
 
-  <pre class="code">columns per sector face = R · 2R = 2R²
-face area on the sphere = 4πR² / 12 = 1.0472 R²
-→ 1.910 columns per m²  →  0.72 m of arc per block   — at any R</pre>
+  <pre class="code">lap of the flat world = 4 · W columns        (4 cube faces, W columns each)
+sphere circumference  = 2πR
+→ 1 flat metre = 1 m of arc   ⇔   W / R = π/2 = 1.5708
+
+shipped keying:  cx = R·u   →   W = 2R    (ratio 2.000)
+1.5708 / 2.000 = 0.785   →   0.72 m of arc per block (0.62–0.79 across the face)</pre>
 
   <p class="reveal">
-    Measured direction by direction on the home face (from <code>SphereMath.uv_to_world</code>, R = 4000):
-    <strong>0.79 m</strong> per column along the face's u-direction at mid-face, <strong>0.62 m</strong> at its
-    v-edges, <strong>0.73 m</strong> along v. So a flat metre currently shrinks to 0.62–0.79 m of arc,
-    unevenly, and the player is effectively 2.5 blocks tall instead of 1.8.
+    So the fix is a <strong>ratio</strong>, and <strong>R stays 4000</strong>: pin
+    <strong>W = πR/2 = 6283 columns per cube face</strong> (3141 per half). The shipped 8000 is simply the
+    keying tying the face's width to R — that tie <em>is</em> the defect. The same rule covers any planet:
+    <em>W = 1.5708·R</em>, so a bigger planet takes more columns per face. That scaling is why no single fixed
+    grid can give 1 m everywhere — a sphere is not developable.
   </p>
 
   <figure class="reveal">
-<svg viewBox="0 0 1160 250" role="img" aria-label="Grid lock: matching the flat world's lap to the sphere circumference" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,Menlo,Consolas,monospace">
+<svg viewBox="0 0 1160 250" role="img" aria-label="The grid lock is a ratio fix" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,Menlo,Consolas,monospace">
   <g font-size="12" fill="#e8ddc9">
-    <text x="10" y="20" fill="#6f6350" font-size="10">TODAY — width tied to R (W = 2R): the lap and the circumference cannot agree</text>
+    <text x="10" y="20" fill="#6f6350" font-size="10">TODAY — the keying ties the face width to the radius: W = 2R, so the ratio is wrong</text>
     <rect x="20" y="36" width="180" height="46" fill="#1c1712" stroke="#4a4133"/>
-    <text x="110" y="56" text-anchor="middle" fill="#d4585f">lap = 4W = 8R</text>
-    <text x="110" y="72" text-anchor="middle" fill="#6f6350" font-size="10">4 cube faces x 2R</text>
+    <text x="110" y="56" text-anchor="middle" fill="#d4585f">W / R = 2.000</text>
+    <text x="110" y="72" text-anchor="middle" fill="#6f6350" font-size="10">cx = R·u</text>
     <rect x="230" y="36" width="200" height="46" fill="#1c1712" stroke="#4a4133"/>
-    <text x="330" y="56" text-anchor="middle" fill="#7fa0c4">circumference = 2πR</text>
-    <text x="330" y="72" text-anchor="middle" fill="#6f6350" font-size="10">6.283R</text>
-    <text x="470" y="56" fill="#d4585f">8R ≠ 6.283R</text>
-    <text x="470" y="72" fill="#6f6350" font-size="10">the shortfall is exactly the 0.72 m compression</text>
+    <text x="330" y="56" text-anchor="middle" fill="#7fa0c4">needed: π/2 = 1.5708</text>
+    <text x="330" y="72" text-anchor="middle" fill="#6f6350" font-size="10">lap = 4W must equal 2πR</text>
+    <text x="470" y="56" fill="#d4585f">1.5708 / 2.000 = 0.785</text>
+    <text x="470" y="72" fill="#6f6350" font-size="10">which is exactly the 0.72 m compression</text>
 
-    <text x="10" y="128" fill="#6f6350" font-size="10">GRID LOCK — pin the flat width W, derive R from it</text>
+    <text x="10" y="128" fill="#6f6350" font-size="10">GRID LOCK — hold R, fix the ratio</text>
     <rect x="20" y="144" width="180" height="46" fill="#1c1712" stroke="#d9a441"/>
-    <text x="110" y="164" text-anchor="middle" fill="#d9a441">R = 4W / 2π</text>
-    <text x="110" y="180" text-anchor="middle" fill="#6f6350" font-size="10">= 0.6366 · W</text>
+    <text x="110" y="164" text-anchor="middle" fill="#d9a441">W / R = π/2</text>
+    <text x="110" y="180" text-anchor="middle" fill="#6f6350" font-size="10">W = 1.5708 · R</text>
     <rect x="230" y="144" width="200" height="46" fill="#1c1712" stroke="#d9a441"/>
-    <text x="330" y="164" text-anchor="middle" fill="#d9a441">W = 8000 m  →  R ≈ 5090</text>
+    <text x="330" y="164" text-anchor="middle" fill="#d9a441">R = 4000  →  W = 6283</text>
     <text x="330" y="180" text-anchor="middle" fill="#6f6350" font-size="10">1 flat metre = 1 m of arc</text>
-    <text x="470" y="164" fill="#8a9a5b">zero data change · genhash 25/25 · save keys unchanged</text>
-    <text x="470" y="180" fill="#6f6350" font-size="10">only the position↔cell mapping and the R constant move</text>
+    <text x="470" y="164" fill="#8a9a5b">no data change · genhash 25/25 · R and the save record unchanged</text>
+    <text x="470" y="180" fill="#6f6350" font-size="10">only the position↔cell ratio and mapping move</text>
 
-    <text x="10" y="228" fill="#6f6350" font-size="10">Side effects at R ≈ 5090: tilt 0.18°/chunk (was 0.23°) · horizon 128 m from eye height (was 114 m) · a 384 m tower's top is visible to ~1978 m · one lap = 32 km</text>
+    <text x="10" y="228" fill="#6f6350" font-size="10">Unchanged by this: R = 4000 · horizon 114 m · tilt 0.23°/chunk · tower-384 visible ~1753 m · circumference 25.1 km. Changed: a cube edge is 3141 m from spawn (was 4000), and the home patch is 6283 × 6283 m.</text>
   </g>
 </svg>
-    <figcaption><b>FIG 5.1</b> — The grid lock in one line: <em>one lap of the flat world must equal the sphere's circumference</em>. Everything else — block size, the boundary ratio, the horizon numbers — follows from that.</figcaption>
+    <figcaption><b>FIG 5.1</b> — The grid lock in one line: <em>one lap of the flat world must equal the sphere's circumference</em>, i.e. W/R = π/2. Holding R = 4000 and setting W = 6283 gets block size, boundary ratio and every horizon number right at once.</figcaption>
   </figure>
 
   <p class="reveal">Four concrete changes, and one thing that deliberately does <em>not</em> change:</p>
 
   <ol class="steps reveal">
-    <li><strong>Pin W.</strong> The flat world's cube-face width becomes a constant (8000 m / 8000 columns), no longer derived from R.</li>
-    <li><strong>Set R = 4W/2π ≈ 5090</strong> as the home planet's radius (a save field and a default; the existing clamp [2000,8000] already allows it). Other planets scale W by the same rule.</li>
-    <li><strong>Map by arc.</strong> <code>uv_to_world</code> / <code>world_to_face</code> / <code>key_for_sphere_pos</code>'s inverse become arc-based, with a 2D pre-warp so spacing is even across the face.</li>
-    <li><strong>Assert it.</strong> The <code>sphere</code> arm gains a spacing check: the on-sphere distance between adjacent columns, sampled at several positions. P1a never asserted this — it asserted gaplessness only.</li>
+    <li><strong>Pin the ratio.</strong> W/R = π/2 (= 1.5708), so W = 6283 columns per cube face at R = 4000; per planet, W = 1.5708·R.</li>
+    <li><strong>Hold R = 4000.</strong> <code>Game.planet_R</code>, the <code>planets[]</code> save record, the [2000,8000] clamp, the horizon (114 m), the chunk tilt (0.23°) and the 384 m tower sightline (~1753 m) are all untouched — there is no save migration for the radius.</li>
+    <li><strong>Map by arc.</strong> <code>uv_to_world</code> / <code>world_to_face</code> / <code>key_for_sphere_pos</code>'s inverse become arc-based (<code>u = x/W</code>), with a 2D pre-warp so spacing is even across the face.</li>
+    <li><strong>Assert it.</strong> The <code>sphere</code> arm gains the spacing check P1a never had: the on-sphere distance between adjacent columns, sampled at several positions. P1a asserted gaplessness only.</li>
   </ol>
 
   <div class="callout note reveal">
     <b>What does not change: the storage keys</b>
     On the home pair a column <em>is</em> its flat x/z, and it stays that way — the identity survives, so
     <code>genhash</code>, the save key format and every arm that reads the flat world are untouched. Only the
-    <em>position → cell</em> direction changes, plus the R constant.
+    <em>position → cell</em> ratio and direction change.
   </div>
 
   <p class="reveal">
-    Two honest caveats. First, a cube-sphere is not isometric: after pre-warping, spacing is exact along the
-    face midlines and a few percent off toward the corners (AC-0042 called this "2–5%"); that is the right
-    trade, because it is exact where the player plays. Second, the grid counts do not need to change at all —
-    a sector face is a 1×2 rectangle, and the shipped 4000 × 8000 column counts are already within a few
-    percent of the 1 : 1.86 proportion that makes cells square. This is why the "expensive" version of this
-    decision (resampling terrain onto arc-sized cells) is not needed.
+    Two honest caveats. First, a cube-sphere is not isometric: after pre-warping, spacing is 1.00 m along the
+    face midlines, ~0.92 m averaged over a face, and ~0.85 m toward the corners. AC-0042's "2–5%" was
+    optimistic; this spread is the irreducible part, and it is smallest where the player plays. Second, the
+    accepted consequence of holding R: the home pair's flat patch is now 6283 × 6283 m, so a cube edge is
+    <strong>3141 m from spawn</strong> rather than 4000 m. The planet is the same size — the flat net simply
+    wraps sooner — and that is precisely why cross-face movement is a first-class piece.
   </p>
 </section>
 
@@ -498,7 +501,7 @@ face area on the sphere = 4πR² / 12 = 1.0472 R²
   <table>
     <thead><tr><th>Property</th><th>Rigid facets (chosen)</th><th>Per-vertex warp (rejected for the ground)</th></tr></thead>
     <tbody>
-      <tr><td class="hl">Surface</td><td>Polyhedron of 16 m facets; adjacent facets differ by <strong>0.18°</strong> at R ≈ 5090</td><td>Smooth sphere; blocks become very slightly trapezoidal</td></tr>
+      <tr><td class="hl">Surface</td><td>Polyhedron of 16 m facets; adjacent facets differ by <strong>0.23°</strong> at R = 4000</td><td>Smooth sphere; blocks become very slightly trapezoidal</td></tr>
       <tr><td class="hl">Local space</td><td>Unchanged — meshing, greedy thresholds, light grid, collision all still operate on flat local coordinates</td><td>Mesh emit path changes (C++ <code>AweMesh</code>); visuals and rigid collision no longer coincide exactly unless mirrored</td></tr>
       <tr><td class="hl">Gates</td><td><code>genhash 25/25</code> by construction</td><td>Needs the warp mirrored anywhere geometry is assumed flat</td></tr>
       <tr><td class="hl">Where it is used</td><td>The whole playable surface</td><td>Only the satellite tier (§6.3), where a true sphere is free</td></tr>
@@ -509,15 +512,14 @@ face area on the sphere = 4πR² / 12 = 1.0472 R²
   <p class="reveal">
     One consequence exists in <em>every</em> option and should not be mistaken for a placement bug:
     <strong>columns diverge with height</strong>. Blocks are 1 m cubes stacked along each chunk's own normal,
-    so at +384 m the gap between adjacent columns is <code>H/R</code> per block — 7.5 cm at R ≈ 5090 (it was
-    9.6 cm at 4000). Digging shows the mirror: a 7.5 cm overlap, hidden because interior faces are culled.
+    so at +384 m the gap between adjacent columns is <code>H/R</code> per block — 9.6 cm per column at +384 m, R = 4000. Digging shows the mirror: a 7.5 cm overlap, hidden because interior faces are culled.
     This is exactly what AC-0042's hidden filler ("grout") and the corner seal are for.
   </p>
 
   <h3 style="margin:22px 0 10px">6.2 The horizon is the whole "looks round" promise on the ground</h3>
   <p class="reveal">
-    At R ≈ 5090 the ground horizon from eye height 1.62 m is <strong>128 m</strong>; a 384 m tower's top is
-    visible out to <strong>~1978 m</strong>. Curvature is visible in normal play without any new rendering
+    At R = 4000 the ground horizon from eye height 1.62 m is <strong>114 m</strong>; a 384 m tower's top is
+    visible out to <strong>~1753 m</strong>. Curvature is visible in normal play without any new rendering
     feature — provided the fog and the LOW tier are tuned to <em>not</em> hide it, which is one of the reasons
     the lighting review's real-disc question (AC-0299) matters to this epic.
   </p>
@@ -534,7 +536,7 @@ face area on the sphere = 4πR² / 12 = 1.0472 R²
       <tr><td class="hl">Source data</td><td>The far column payload the pipeline already produces: <code>[H u16×256][biome×256][top×256]</code> per chunk — height, biome and top block are everything a body texture needs (colour from the palette, shading from H).</td></tr>
       <tr><td class="hl">Bake</td><td>Per-face texture at satellite resolution (1024² per face = 12.6 M samples for the planet). At the standing far cost of ~92 µs per 256-column chunk that is roughly <strong>4.5 s</strong> of CPU, one-time per seed, at low priority; a full-resolution bake would be ~138 s and is not needed for a body view. <em>Estimate from standing values — the ticket measures it.</em></td></tr>
       <tr><td class="hl">Mesh</td><td>A true sphere (this is where per-vertex smoothness belongs). The limb is the sphere itself, so the silhouette is right by construction.</td></tr>
-      <tr><td class="hl">Threshold &amp; crossfade</td><td>Defined against the real ladder, not the old plan's 2000/500 m: the sim disc is 4 chunks (64 m) and real geometry ends at <code>render_dist</code> 50 chunks (800 m). The crossfade must also fade the halo/far tier or the body double-draws.</td></tr>
+      <tr><td class="hl">Threshold &amp; crossfade</td><td>Defined against the real ladder, not the old plan's 2000/500 m: the sim disc is 4 chunks (64 m) and real geometry ends at <code>render_dist</code> 50 chunks (800 m). The crossfade must also fade the halo/far tier or the body double-draws. Note the band immediately beyond the sim radius is itself being changed: AC-0299 (b), answered 2026-09-17, makes it draw HIGH-LOD textured chunks out to the medium start (cave-free slabs materialised from H + biome + top), which raises the ladder the satellite tier sits above.</td></tr>
       <tr><td class="hl">Reuse</td><td>Build it as a planet body keyed by <code>(planet_id, R, seed)</code>, not a one-off for the home world — that is the same object the solar-system work needs for other planets, so it pays twice.</td></tr>
       <tr><td class="hl">Atmosphere</td><td>Reuse the existing sky, cloud, aero and day/night shaders for the haze that hides the dissolve; do not invent a second atmosphere.</td></tr>
     </tbody>
@@ -600,8 +602,8 @@ face area on the sphere = 4πR² / 12 = 1.0472 R²
   <div class="callout note reveal">
     <b>A useful accident of the 12-face split</b>
     The home pair already contains a boundary — the x=0 midline — and it is 1:1 by construction and covered by
-    the existing arm. So the first cross-face test does not need 4 km of travel: it is in the middle of the
-    home world. The expensive boundaries (x, z = ±4000) are the ones that need C1's terrain policy.
+    the existing arm. So the first cross-face test does not need any travel at all: it is in the middle of the
+    home world. The expensive boundaries (x, z = ±3141) are the ones that need C1's terrain policy.
   </div>
 </section>
 
@@ -617,23 +619,25 @@ face area on the sphere = 4πR² / 12 = 1.0472 R²
   <table>
     <thead><tr><th>#</th><th>Piece</th><th>Content</th><th>Touches</th><th>Depends on</th></tr></thead>
     <tbody>
-      <tr><td class="hl">P1</td><td><strong>Grid lock</strong></td><td>Pin W; R = 0.6366·W ≈ 5090; arc-based <code>uv_to_world</code>/<code>world_to_face</code>/<code>key_for_sphere_pos</code> with the 2D pre-warp; extend the <code>sphere</code> arm with a spacing assertion.</td><td><code>core/sphere_math.gd</code>, <code>world/world.gd</code> (keying), <code>scenes/main.gd</code> (probe), <code>autoload/game.gd</code> (R), <code>autoload/save.gd</code> (R in the planet record)</td><td>nothing</td></tr>
+      <tr><td class="hl">P1</td><td><strong>Grid lock</strong></td><td>Pin the ratio W/R = π/2 (W = 6283 columns per cube face at R = 4000; <code>cx = R·u</code> is the defect, since it forces W = 2R = 8000); arc-based <code>uv_to_world</code>/<code>world_to_face</code>/<code>key_for_sphere_pos</code> with the 2D pre-warp; extend the <code>sphere</code> arm with a spacing assertion.</td><td><code>core/sphere_math.gd</code>, <code>world/world.gd</code> (keying), <code>scenes/main.gd</code> (probe)</td><td>nothing</td></tr>
       <tr><td class="hl">P2</td><td><strong>Sphere placement</strong></td><td>Rigid per-chunk placement of the home region: node transforms from the sphere math, neighbours meeting along shared edges, columns still built in flat local space.</td><td><code>world/world.gd</code> (column checkout / transform), <code>world/chunk.gd</code> (no change expected — local space stays local)</td><td>P1</td></tr>
       <tr><td class="hl">P3</td><td><strong>Flat-grid consumers</strong></td><td>Collision bodies, voxel DDA selection/mining/placement, camera up, spawn placement, recenter — the five things that assume Y-up and a flat grid.</td><td><code>player/player.gd</code>, <code>world/world.gd</code>, <code>core/math.gd</code>, <code>scenes/main.gd</code></td><td>P2</td></tr>
-      <tr><td class="hl">P4</td><td><strong>Cross-face movement</strong></td><td>The six contracts of §07, with the blend band as the interim terrain policy; first tests on the x=0 midline, then the ±4000 cube edges.</td><td><code>world/generator.gd</code> (blend band), <code>core/sphere_math.gd</code> (remap in anger), <code>world/world.gd</code> (routing, light seeding)</td><td>P2, P3</td></tr>
+      <tr><td class="hl">P4</td><td><strong>Cross-face movement</strong></td><td>The six contracts of §07, with the blend band as the interim terrain policy; first tests on the x=0 midline, then the ±3141 cube edges.</td><td><code>world/generator.gd</code> (blend band), <code>core/sphere_math.gd</code> (remap in anger), <code>world/world.gd</code> (routing, light seeding)</td><td>P2, P3</td></tr>
       <tr><td class="hl">P5</td><td><strong>Gravity &amp; flight</strong></td><td>Up-vector from position, tangent-plane movement, altitude blend to 6-DOF, landing re-orientation; reconcile with the existing fly mode and its altitude/speed settings; carry the DDA/camera/drop consumers.</td><td><code>player/player.gd</code>, <code>autoload/settings.gd</code> (fly knobs), <code>scenes/main.gd</code> (sky/space blend), drops and mobs (falling)</td><td>P3 (P4 for landing on other faces)</td></tr>
       <tr><td class="hl">P6</td><td><strong>Satellite tier</strong></td><td>The whole-body representation of §6.3: bake from H/biome/top, true-sphere mesh, threshold and crossfade against the halo/far tier, keyed by planet.</td><td>a new body module + scene, material/shader, bake path on the far lane</td><td>P2 (needs placed faces); the threshold needs an in-game look</td></tr>
-      <tr><td class="hl">P7</td><td><strong>Sphere-domain generation</strong> (the seam end-state)</td><td>Sample the surface and cave fields at sphere positions so two faces agree at a boundary by construction; delete the blend band; re-baseline genhash and every standing value in the same window as the cave series' re-baselines.</td><td><code>gdext/src/gen.cpp</code> (the sampling domain), <code>world/generator.gd</code>, <code>world/world.gd</code> (far/h-only lane and promotion keys)</td><td>the cave series complete; P4 (to remove the band)</td></tr>
+      <tr><td class="hl">P7</td><td><strong>Sphere-domain generation</strong> (the seam end-state)</td><td>Sample the surface and cave fields at sphere positions so two faces agree at a boundary by construction; delete the blend band; re-baseline genhash and every standing value as its own deliberate step.</td><td><code>gdext/src/gen.cpp</code> (the sampling domain), <code>world/generator.gd</code>, <code>world/world.gd</code> (far/h-only lane and promotion keys)</td><td>the cave series complete; P4 (to remove the band)</td></tr>
     </tbody>
   </table>
   </div>
 
   <div class="callout note reveal">
     <b>Sequencing note on P7</b>
-    P7 is last on purpose, but there is a deliberate alternative: run it <em>immediately after the cave series</em>
-    to share one standing-value re-baseline instead of paying for two. The cost is that it delays story 1 by a
-    C++ ticket and commits to a field design before the surface has been felt. This plan recommends P7 last;
-    it is approval question Q3.
+    <strong>USER DECISION 2026-09-17: P7 is last.</strong> The alternative — running it immediately after the
+    cave series to share one standing-value re-baseline — was considered and declined. The cave tickets were
+    deliberately <em>not</em> pre-constrained to sphere-ready fields, so P7 carries its own full
+    field-coordinate design work (carvers with world-space Y ranges, Voronoi aquifers, 3D cave biomes), not a
+    one-line switch. It was declined for exactly that reason: it is a redesign, and the redesign should follow
+    the shipped cave implementation rather than a spec.
   </div>
 </section>
 
@@ -651,7 +655,7 @@ face area on the sphere = 4πR² / 12 = 1.0472 R²
     <tbody>
       <tr>
         <td class="hl">T1</td>
-        <td><strong><code>planet-surface-design-lock</code></strong></td>
+        <td><strong>folded into AC-0144 — no separate ticket</strong></td>
         <td>decide + document <em>(optional — can instead be the rewrite's notes)</em></td>
         <td>Record D1–D8 from §04 as the arc's design of record — face count, grid-lock constants, placement strategy, R, boundary policy, satellite-tier intent — and sync the structural parts into <code>ARCHITECTURE.md</code>.</td>
         <td>nothing (can run now)</td>
@@ -659,15 +663,15 @@ face area on the sphere = 4πR² / 12 = 1.0472 R²
       </tr>
       <tr>
         <td class="hl">T2</td>
-        <td><strong><code>planet-p1a-grid-lock</code></strong></td>
+        <td><strong>AC-0306 · <code>planet-p1a-grid-lock</code></strong></td>
         <td>new (piece P1)</td>
-        <td>Pin W, set R ≈ 5090, make the position↔cell mapping arc-based with pre-warp, and add the spacing assertion the sphere arm never had.</td>
+        <td>Pin the ratio W/R = π/2 (W = 6283 columns per cube face at R = 4000), make the position↔cell mapping arc-based with pre-warp, and add the spacing assertion the sphere arm never had.</td>
         <td>T1</td>
-        <td><code>sphere</code> arm green <em>plus</em> new spacing assertions; <code>genhash 25/25</code> unchanged; save round-trip at the new R with the clamp intact; a render showing the horizon dip.</td>
+        <td><code>sphere</code> arm green <em>plus</em> new spacing assertions; <code>genhash 25/25</code> unchanged; save round-trip with R unchanged at 4000 and the clamp intact; a render showing the horizon dip.</td>
       </tr>
       <tr>
         <td class="hl">T3</td>
-        <td><strong><code>planet-p1a-sphere-placement</code></strong></td>
+        <td><strong>AC-0307 · <code>planet-p1a-sphere-placement</code></strong></td>
         <td>new (piece P2)</td>
         <td>Place the home region's chunks on the sphere by rigid rotation; keep everything local and flat underneath.</td>
         <td>T2</td>
@@ -675,7 +679,7 @@ face area on the sphere = 4πR² / 12 = 1.0472 R²
       </tr>
       <tr>
         <td class="hl">T4</td>
-        <td><strong><code>planet-p1a-sphere-consumers</code></strong></td>
+        <td><strong>AC-0308 · <code>planet-p1a-sphere-consumers</code></strong></td>
         <td>new (piece P3)</td>
         <td>Convert the five flat-grid consumers: collision bodies, voxel DDA, camera up, spawn, recenter.</td>
         <td>T3</td>
@@ -683,15 +687,15 @@ face area on the sphere = 4πR² / 12 = 1.0472 R²
       </tr>
       <tr>
         <td class="hl">T5</td>
-        <td><strong><code>planet-p1a-cross-face-movement</code></strong></td>
+        <td><strong>AC-0309 · <code>planet-p1a-cross-face-movement</code></strong></td>
         <td>new (piece P4)</td>
         <td>Make the six contracts of §07 real: walk and fly across in both directions with terrain, light, collision, routing and save all continuous.</td>
         <td>T4</td>
-        <td>Cross the x=0 midline and the ±4000 cube edges on foot with <code>on_floor</code> true; no void; no light seam; no Z-fight; edits on the far side survive save/load.</td>
+        <td>Cross the x=0 midline and the ±3141 cube edges on foot with <code>on_floor</code> true; no void; no light seam; no Z-fight; edits on the far side survive save/load.</td>
       </tr>
       <tr>
         <td class="hl">T6</td>
-        <td><strong><code>planet-p1b-gravity-flight</code></strong></td>
+        <td><strong>AC-0145 · <code>planet-p1b-gravity-flight</code></strong></td>
         <td>existing ticket, rewritten</td>
         <td>Radial up and gravity toward the centre, tangent-plane walking, altitude blend to 6-DOF, landing on any face; reconcile with the existing fly mode and settings.</td>
         <td>T4 (T5 for other faces)</td>
@@ -699,7 +703,7 @@ face area on the sphere = 4πR² / 12 = 1.0472 R²
       </tr>
       <tr>
         <td class="hl">T7</td>
-        <td><strong><code>planet-satellite-lod</code></strong></td>
+        <td><strong>AC-0310 · <code>planet-satellite-lod</code></strong></td>
         <td>new (piece P6; replaces the cancelled impostor ticket)</td>
         <td>The whole-body tier from §6.3 — bake from H/biome/top, true-sphere mesh, threshold and crossfade, reusable per planet.</td>
         <td>T3 (an in-game look sets the threshold)</td>
@@ -707,9 +711,9 @@ face area on the sphere = 4πR² / 12 = 1.0472 R²
       </tr>
       <tr>
         <td class="hl">T8</td>
-        <td><strong><code>planet-sphere-domain-generation</code></strong></td>
+        <td><strong>AC-0311 · <code>planet-sphere-domain-generation</code></strong></td>
         <td>new (piece P7)</td>
-        <td>Sample the surface and cave fields at sphere positions so a boundary is continuous by construction; delete the blend band; re-establish genhash and standing values once.</td>
+        <td>Sample the surface and cave fields at sphere positions so a boundary is continuous by construction; delete the blend band; re-establish genhash and the standing values once, deliberately.</td>
         <td>cave series complete; T5</td>
         <td>New genhash baseline, two runs byte-identical; boundary terrain continuity (zero mismatch at the edges); generation cost re-measured and standing values re-established deliberately; boundary r4 unchanged or better.</td>
       </tr>
@@ -732,16 +736,16 @@ face area on the sphere = 4πR² / 12 = 1.0472 R²
   </div>
 
   <h3 style="margin:26px 0 10px">Resulting queue shape</h3>
-  <pre class="code">lighting tail (AC-0286, AC-0299, AC-0287, AC-0293)      unchanged
-cave series   (AC-0288 … AC-0292)                        unchanged
-T1  planet-surface-design-lock          ← decision record; can also run now, in parallel
-T2  planet-p1a-grid-lock
-T3  planet-p1a-sphere-placement
-T4  planet-p1a-sphere-consumers
-T5  planet-p1a-cross-face-movement
-T6  planet-p1b-gravity-flight
-T7  planet-satellite-lod
-…   (T8  planet-sphere-domain-generation lands once the cave re-baselines are settled)</pre>
+  <pre class="code">lighting tail (AC-0299, AC-0287, AC-0293)      AC-0286 shipped 2026-09-17
+cave series   (AC-0288 … AC-0292)              unchanged — deliberately NOT pre-constrained
+AC-0306  planet-p1a-grid-lock                  W/R = π/2, arc mapping, spacing assertion
+AC-0307  planet-p1a-sphere-placement           rigid per-chunk placement of the home region
+AC-0308  planet-p1a-sphere-consumers           collision, DDA, camera, spawn, recenter
+AC-0309  planet-p1a-cross-face-movement        the six contracts + the blend band
+AC-0145  planet-p1b-gravity-flight             radial up, tangent movement, 6-DOF, landing
+AC-0310  planet-satellite-lod                  whole-body tier + crossfade
+AC-0311  planet-sphere-domain-generation       LAST — deletes the blend band, re-baselines genhash
+AC-0144  (parent, NOT queued)                  the ground story; closes when AC-0309 lands</pre>
 
   <p class="reveal">
     The cave series keeps its slot ahead of all of this: it rewrites <code>gen.cpp</code>, which P7 also touches,
@@ -759,7 +763,7 @@ T7  planet-satellite-lod
       <tr><td class="hl">Invariant</td><td><code>genhash 25/25</code>, byte-identical</td><td>Curvature is placement, not terrain. Every piece except P7 must leave it untouched; P7 is the only piece allowed to move it, and then deliberately.</td></tr>
       <tr><td class="hl">Geometry</td><td>The <code>sphere</code> arm, extended with per-column arc-spacing assertions</td><td>Block size is 1 m of arc within a few percent, sampled across a face — the assertion P1a never made.</td></tr>
       <tr><td class="hl">Behaviour</td><td>Boundary r4 walk p95 within the standing band; battery green (player, interact, light, fluids, craft, settings)</td><td>Streaming and scheduling still behave with the world rotated; nothing regressed in the flat pipelines.</td></tr>
-      <tr><td class="hl">Story 1</td><td>Walk the x=0 midline and the ±4000 cube edges both ways, <code>on_floor</code> true, no void, no light seam; then the flagship: <strong>circumnavigate and return to spawn</strong> (~32 km / ~2 h on foot, ~20 min at cruise flight).</td><td>The player is on a planet, not in a flat world with a curved skybox.</td></tr>
+      <tr><td class="hl">Story 1</td><td>Walk the x=0 midline and the ±3141 cube edges both ways, <code>on_floor</code> true, no void, no light seam; then the flagship: <strong>circumnavigate and return to spawn</strong> (~25 km / ~1.6 h on foot, ~16 min at cruise flight).</td><td>The player is on a planet, not in a flat world with a curved skybox.</td></tr>
       <tr><td class="hl">Story 2</td><td>Take off, reach space, land on several faces without fall-through; flight percentage arm at or above the standing reference; ground walk unchanged.</td><td>Gravity is radial and flight is continuous ground → air → space → ground.</td></tr>
       <tr><td class="hl">Story 3</td><td>Renders at surface, mid and orbit; the limb is round; no pop across the crossfade; no double-draw with the halo; bake time measured.</td><td>The planet reads as a body from space and dissolves into voxels on descent.</td></tr>
       <tr><td class="hl">Visual honesty</td><td>Renders carry the proxy caveat (software GL on this box, not <code>forward_plus</code>)</td><td>Render evidence is about geometry and layout; the shipped look is confirmed by the user on a Windows build.</td></tr>
@@ -785,7 +789,7 @@ T7  planet-satellite-lod
       <tr><td class="hl">R2</td><td><strong>Light does not cross a boundary.</strong> <code>AweStarlight</code> propagates within the sim band and the halo covers beyond; a face boundary is a new edge case for both.</td><td>Reuse the promotion/halo lifecycle (AC-0283 P3, AC-0286) rather than inventing a second mechanism; assert "never show unlit" at the boundary specifically.</td></tr>
       <tr><td class="hl">R3</td><td><strong>Double-draw at the satellite threshold.</strong> The halo/far tier and the body could both draw the same ground.</td><td>The crossfade consumes the tiers explicitly, and the gate looks for it rather than trusting the fade.</td></tr>
       <tr><td class="hl">R4</td><td><strong>P7's re-baseline lands at a bad moment</strong> (mid-cave-series), re-establishing standing values twice.</td><td>P7 is sequenced after the cave series; the "share one re-baseline" alternative is explicitly an approval choice (Q3).</td></tr>
-      <tr><td class="hl">R5</td><td><strong>Save compatibility.</strong> R moves 4000 → 5090 while saves carry R in the planet record.</td><td>R is a clamped save field and old worlds are already disposable by precedent (user, 2026-09-15); the ticket asserts load/round-trip at the new value rather than assuming it.</td></tr>
+      <tr><td class="hl">R5</td><td><strong>The flat patch per face shrinks.</strong> Fixing the ratio at R = 4000 means W = 6283, so a cube edge sits 3141 m from spawn instead of the 4000 m the old keying implied — boundaries arrive sooner than the epic's earlier numbers assumed.</td><td>Cross-face movement is a first-class piece (AC-0309) with its own contracts, and the first boundary tested is the x=0 midline, which is 1:1 by construction. R itself does not move, so nothing about saves, the clamp or the horizon numbers changes.</td></tr>
       <tr><td class="hl">R6</td><td><strong>The whole planet is mistaken for a persistent world.</strong> A planet at 1 m resolution is hundreds of millions of columns.</td><td>Only the sim band plus edits persist (AC-0287 makes far columns ephemeral by design). Nothing in this epic tries to save a planet.</td></tr>
       <tr><td class="hl">R7</td><td><strong>Plan-vs-code drift recurs</strong> — this document ages the same way AC-0042 did.</td><td>Each ticket owes its own <code>ARCHITECTURE.md</code> sync (standing invariant 2), and the §03 drift check is repeated at the epic's closeout rather than trusted.</td></tr>
     </tbody>
@@ -807,20 +811,36 @@ T7  planet-satellite-lod
 </section>
 
 <section id="s13">
-  <div class="sec-head reveal"><span class="sec-no">13</span><h2>Approval questions</h2><span class="rule"></span></div>
+  <div class="sec-head reveal"><span class="sec-no">13</span><h2>Decisions taken</h2><span class="rule"></span></div>
+
+  <p class="reveal">
+    The plan was approved on <strong>2026-09-17</strong> and the tickets were filed the same day. These are the
+    answers of record; the reasoning for each is in the section named.
+  </p>
 
   <div class="tbl-scroll">
   <table>
-    <thead><tr><th>#</th><th>Question</th><th>Recommendation</th></tr></thead>
+    <thead><tr><th>#</th><th>Question</th><th>Decision (2026-09-17)</th></tr></thead>
     <tbody>
-      <tr><td class="hl">Q1</td><td>Approve this epic and the ticket list in §09 as the shape of the planet series?</td><td>Yes — then ids are created/modified and the queue is set in that order.</td></tr>
-      <tr><td class="hl">Q2</td><td>Accept the grid lock's scale change: <strong>R 4000 → ≈5090</strong> so a flat metre is a sphere metre (1 m blocks), rather than keeping R = 4000 and living with 0.72 m blocks?</td><td><strong>Yes.</strong> It is one constant plus the mapping change, it needs no data resample, and it makes AC-0042's "a block is 1 m everywhere" true. Keeping 4000 is coherent too — but then every block, step and horizon number on the planet is 28% off the flat world's.</td></tr>
-      <tr><td class="hl">Q3</td><td>Seam strategy: <strong>blend band now, sphere-domain generation later (P7)</strong>, or run sphere-domain generation straight after the cave series to share one re-baseline?</td><td><strong>Blend now, P7 later.</strong> Story 1 ships sooner, P7 stays a deliberate re-baseline, and the cave series keeps an uncontended <code>gen.cpp</code> while it runs.</td></tr>
-      <tr><td class="hl">Q4</td><td>Satellite tier threshold — a first-pass number from geometry (the body takes over once the LOW field is a small patch), or an explicit in-game look before the ticket is written?</td><td><strong>In-game look first</strong>, as part of the T7 plan, because the threshold depends on how the 800 m LOW field and the halo read from altitude. The ticket states the method, not a guessed constant.</td></tr>
-      <tr><td class="hl">Q5</td><td>Keep T1 as its own decision ticket, or fold the decision record into the rewritten AC-0144 notes?</td><td><strong>Fold into AC-0144's notes</strong> unless the decisions should be independently reviewable — the arc's decisions have one natural home, and AC-0144 is their owner.</td></tr>
-      <tr><td class="hl">Q6</td><td>Cancel AC-0228 outright as superseded?</td><td><strong>Yes</strong> — with a pointer to the cross-face and flight tickets so the requirement is not lost.</td></tr>
+      <tr><td class="hl">Q1</td><td>Approve the epic and the ticket list?</td><td><strong>Approved.</strong> Tickets filed and queued as §09 shows.</td></tr>
+      <tr><td class="hl">Q2</td><td>Block size — move R, or fix the ratio?</td><td><strong>Hold R = 4000 and fix the ratio: W/R = π/2, so W = 6283 columns per cube face.</strong> This keeps every gated number (horizon 114 m, tilt 0.23°, clamp, save record) and still makes a flat metre a metre of arc. Consequence accepted: a cube edge is 3141 m from spawn instead of 4000 m, and the lap is 25.1 km. See §05.</td></tr>
+      <tr><td class="hl">Q3</td><td>Seam strategy — blend band now with sphere-domain generation later, or sphere-domain first?</td><td><strong>Blend band now; AC-0311 last.</strong> Explicitly declined the "share one re-baseline with the cave series" alternative (see §08).</td></tr>
+      <tr><td class="hl">Q4</td><td>Satellite tier threshold.</td><td><strong>An in-game look first</strong>, inside AC-0310's plan — the threshold depends on how the near-far band and the halo read from altitude, and AC-0299 (b) is changing that band.</td></tr>
+      <tr><td class="hl">Q5</td><td>Separate design-lock ticket, or fold the decisions into AC-0144?</td><td><strong>Folded</strong> — AC-0144's rewrite carries the D1–D8 record and points here for the reasoning.</td></tr>
+      <tr><td class="hl">Q6</td><td>Cancel AC-0228?</td><td><strong>Cancelled</strong> as superseded by AC-0309 + AC-0145, with a pointer so the requirement is not lost.</td></tr>
+      <tr><td class="hl">—</td><td>Sphere-ready field constraint on the cave tickets?</td><td><strong>Declined</strong> — the cave tickets (AC-0288…AC-0292) are left exactly as written. AC-0311 therefore carries its own field-coordinate design work, which is one of the reasons it is last.</td></tr>
     </tbody>
   </table>
+  </div>
+
+  <div class="callout note reveal">
+    <b>Filed on approval</b>
+    <code>AC-0306</code> grid lock · <code>AC-0307</code> sphere placement · <code>AC-0308</code> sphere
+    consumers · <code>AC-0309</code> cross-face movement · <code>AC-0310</code> satellite LOD ·
+    <code>AC-0311</code> sphere-domain generation (last).
+    <code>AC-0144</code> was rewritten as the parent of the ground story and removed from the queue (it closes
+    when AC-0309 lands); <code>AC-0145</code> was updated in place; <code>AC-0146</code> and
+    <code>AC-0228</code> were cancelled; <code>AC-0147</code> stays in the backlog.
   </div>
 
   <div class="callout warn reveal">

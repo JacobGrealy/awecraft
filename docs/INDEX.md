@@ -7,7 +7,7 @@ behind the current design.
 
 | Doc | Topic | Status |
 |---|---|---|
-| `planet-epic.html` | **Round planet epic (plan)** — grid lock (1 m blocks, R ≈ 5090), spherical placement, cross-face movement, radial-gravity flight, satellite LOD tier; ticket list with no ids | **plan — awaiting approval** (tracked) |
+| `planet-epic.html` | **Round planet epic (plan)** — grid lock (W/R = π/2 → 1 m blocks at R = 4000), spherical placement, cross-face movement, radial-gravity flight, satellite LOD tier | **approved 2026-09-17** · tickets AC-0306…AC-0311 (tracked) |
 | `flight-world-epic.html` | **Flight-ready world epic — lighting & far-band (design + measurements)** — the five decisions (starlight engine, no-caves + h-only far data, no-pop promotion, save filter pending), the RP before/after re-profile, the honest done-when verdict, and the open AC-0299 user decisions | **in flight — awaiting the AC-0299 answers** (tracked) |
 | `worldgen-current.html` | **World generation & streaming, end to end (current state)** — the atlas of the live pipeline: bands, LOD tiers, scheduler, light (the reference for the AC-0283/0284/0286/0287 epic) | tracked |
 | `world-generation.html` | World generation atlas — the earlier survey of terrain/cave/ore generation | tracked |

@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-17T12:16
+  updated_at: 2026-09-17T18:39
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -12,9 +12,13 @@ queue:
 - AC-0290
 - AC-0291
 - AC-0292
-- AC-0144
+- AC-0306
+- AC-0307
+- AC-0308
+- AC-0309
 - AC-0145
-- AC-0146
+- AC-0310
+- AC-0311
 - AC-0294
 - AC-0296
 - AC-0093
@@ -6334,7 +6338,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-29T12:09
-  updated_at: 2026-08-29T12:09
+  updated_at: 2026-09-17T18:39
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -6352,7 +6356,77 @@ intake:
     true, horizon 114m, 30-block tower visible ~604m.
 
 
-    Depends: AC-0143. Ref: plan §3 blanket + building-up + digging + corner diagrams.'
+    Depends: AC-0143. Ref: plan §3 blanket + building-up + digging + corner diagrams.
+
+
+    REWRITE (coordinator, 2026-09-17, user-approved) - this ticket is now the PARENT of the "round planet
+    ground" work, delivered by four pieces. Design of record: docs/planet-epic.html (D1-D8, the grid-lock
+    arithmetic in section 05, the six cross-face contracts in section 07).
+
+
+    WHY THE ORIGINAL TECHNICAL DETAILS ABOVE CANNOT BE WORKED AS WRITTEN (each verified against the tree
+    at git 738acf-era, 2026-09-17):
+
+    - "6 faces, 12 edges, 8 corners" - the shipped convention is 12 faces (6 axes x 2 sectors, face =
+    axis*2 + sector) with a 24-segment neighbour table and a documented 2:1 cell ratio across cube edges
+    (core/sphere_math.gd:1-27,94-212; the sphere arm''s standing value in tasks/harness_data.yaml).
+
+    - "chunk node basis rotated ..., no per-vertex warp" - there is no chunk rotation anywhere in the
+    tree: columns are placed flat at Vector3(ccx*16, 0, ccz*16) (world/world.gd:8923,11439) and uv_to_world
+    is normalize(cube)*R, which IS a per-vertex warp.
+
+    - "world/generator.gd: per-face heightmap h=R+fbm(u,v) with 4-texel edge blend ... Y-corner gap filled
+    with hidden filler tetra" - a different design shipped: non-home faces are independent flat worlds,
+    salted and domain-disjoint, with the policy recorded in the code as "No cross-face continuity in P1a
+    (face-border terrain seams acceptable)" (world/generator.gd:208-217), and they are data-level only
+    - never meshed or lit, FIFO cap 512, unreachable (world/world.gd:11396-11461). Generation is C++ AweGen
+    with no GDScript fallback (world/generator.gd:50-62).
+
+    - The gates ("5x5 slab on each Y no hole, walk 12 edges + 8 corners on_floor true, 30-block tower
+    visible ~604 m") were derived for a walkable 6-face world in which non-home faces are not even meshed.
+
+
+    DECISIONS (user-approved 2026-09-17; full reasoning in the epic doc section 04):
+
+    D1 keep 12 faces. D2 GRID LOCK: pin the cube face''s flat width W = 8000 columns and set R = 4W/2pi
+    = 0.6366*W = 5090, so one lap of the flat world equals the sphere circumference and a flat metre is
+    a metre of arc; per-planet W = 1.5708R (the grid scales with the radius - a single fixed grid cannot
+    give 1 m at every radius, since a sphere is not developable). D3 rigid per-chunk placement, neighbours
+    meeting along shared edges; no vertex warp on the ground (the true sphere is reserved for the satellite
+    tier). D4 cross-face movement is a first-class piece with six continuity contracts. D5 the round-planet
+    look is a new whole-body satellite tier. D6 sphere-domain generation is the seam end-state and lands
+    LAST (user decision 2026-09-17; the cave tickets are deliberately NOT pre-constrained, so that ticket
+    carries its own field-redesign design work). D7 order: ground -> movement -> flight -> look. D8 AC-0228
+    is superseded (its face switching is the cross-face piece, its centre gravity is AC-0145).
+
+
+    PIECES (each its own ticket, gated and committed before the next starts):
+
+    - AC-0306 planet-p1a-grid-lock (P1) - W/R constants, arc-based position->cell mapping with pre-warp,
+    the sphere arm''s missing arc-spacing assertion.
+
+    - AC-0307 planet-p1a-sphere-placement (P2) - rigid per-chunk placement of the home region.
+
+    - AC-0308 planet-p1a-sphere-consumers (P3) - collision bodies, voxel DDA, camera up, spawn, recenter.
+
+    - AC-0309 planet-p1a-cross-face-movement (P4) - the six contracts; blend band as the interim terrain
+    policy.
+
+
+    THIS TICKET CLOSES when AC-0309 lands. Its own gates are the pieces'' gates. Flagship acceptance for
+    the story: circumnavigate the planet and return to spawn (~32 km - about two hours on foot, ~20 minutes
+    at cruise flight). ARCHITECTURE.md sync is owed by the individual pieces, not here. The invariant
+    that must survive every piece: genhash 25/25 - curvature is placement, not terrain.
+
+
+    D2 CORRECTION (user, 2026-09-17): the grid lock is a RATIO fix, not a radius change. Hold R = 4000
+    (the gated value) and pin W = pi*R/2 = 6283 columns per cube face - the invariant being one lap of
+    the flat world = the sphere circumference, i.e. W/R = pi/2 = 1.5708 = "a flat metre is a metre of
+    arc". The shipped keying cx = R*u gives W = 2R and therefore the 0.785 factor (0.62-0.79 m blocks
+    across the face). Everything else in D1-D8 stands; the per-planet rule is W = 1.5708*R. Consequence
+    to accept: the home pair''s flat patch is 6283 x 6283 m, so a cube edge is 3141 m from spawn; the
+    planet''s circumference stays 25.1 km and its horizon/tilt numbers are unchanged. AC-0306 carries
+    the corrected constants.'
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549792'
@@ -6368,7 +6442,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-29T12:09
-  updated_at: 2026-08-31T16:57
+  updated_at: 2026-09-17T18:37
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -6380,7 +6454,42 @@ intake:
     WASD projected onto tangent/bitangent while on_floor, CharacterBody3D basis slerps to align local
     Y->up (0.23°/chunk at R=4000). scenes/main.gd: alt=|pos-C|-R drives blend: <~500m surface walk+step,
     >~2000m 6-DOF thrust/roll (interpolated between). Verify walk 12 edges + 8 corners on_floor true,
-    takeoff/landing seamless on any face.'
+    takeoff/landing seamless on any face.
+
+
+    UPDATE (coordinator, 2026-09-17, user-approved) - the gravity spec is right and unchanged; the flight
+    reality and the scope have moved. Design of record: docs/planet-epic.html (story 2, section 09 T6).
+
+
+    STILL CORRECT: up = normalize(pos - C) and gravity = -up*26 matches the live code''s constant exactly
+    (GRAV := 26.0 at player/player.gd:8, applied as a plain -Y at player/player.gd:505). player.gd contains
+    ZERO sphere references today, so the up-vector, the tangent-plane WASD projection and the capsule
+    basis slerp are all genuinely unbuilt - the plan''s shape stands.
+
+
+    STALE OR MISSING:
+
+    (a) FLIGHT ALREADY EXISTS. Double-tap jump / the fly action toggles it, with altitude-keyed speed
+    and its own settings: cruising_altitude 275, sub_cruising_speed, cruising_speed (autoload/settings.gd:67-68;
+    player/player.gd:446-449,479-493), A = climb. The ticket''s "<~500 m surface walk / >~2000 m 6-DOF
+    thrust+roll" blend must therefore explicitly REPLACE or RECONCILE those knobs - decide in the plan
+    which knobs survive as altitude bands on a sphere and which are retired, and say so in the results.
+    Do not assume a blank slate.
+
+    (b) THE FLAT-GRID CONSUMERS THE TICKET OMITS: camera up, the voxel DDA select/mine/place path, the
+    per-chunk collision bodies, spawn, and drops/mobs falling under -Y. 6-DOF flight above the atmosphere
+    is the most demanding user of all five.
+
+    (c) LANDING ON ANY FACE needs the cross-face piece (AC-0309) before it can be tested honestly; otherwise
+    this piece can only land on the home pair.
+
+    (d) GATES IN HARNESS TERMS: a flight measurement already exists (AC-0284''s report: walk sim-disc
+    100%, flight 40.7%). State this ticket''s gates against those arms rather than inventing new ones.
+
+
+    DEPENDS: AC-0308 (sphere consumers) for the ground, AC-0309 for other faces. OWES: ARCHITECTURE.md
+    sync if the altitude/flight model becomes structural; HARNESS.md standing values if a new arm or threshold
+    is added.'
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549794'
@@ -6393,11 +6502,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-08-29T12:09
-  updated_at: 2026-08-31T17:17
-  completed_at: null
+  updated_at: 2026-09-17T18:38
+  completed_at: 2026-09-17T18:38
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want the planet to look round from orbit and dissolve seamlessly
@@ -6409,7 +6518,31 @@ intake:
     once per seed (~1.5M samples), rendered 1-2m below real terrain (no Z-fight). LOD: >2000m impostor
     only, 2000->500m both + atmosphere haze (blue shift/desat) + dither alpha smoothstep(500,2000,alt),
     <500m chunks only. Fog = min(flat fog, horizon fog). Mip handles 25-50km speck; future add explicit
-    128/256 far LOD if speck needs saving. Verify no pop through haze, snapshot shows sphere at orbit.'
+    128/256 far LOD if speck needs saving. Verify no pop through haze, snapshot shows sphere at orbit.
+
+
+    CANCELLED (coordinator, 2026-09-17, user-approved) - refiled as AC-0310 planet-satellite-lod.
+
+
+    The premise of this ticket cannot be executed against the current tree:
+
+    - The flat heightmap impostor it was going to extend was REMOVED BY USER DECISION 2026-08-30 (world/chunk.gd:83;
+    world/world.gd:207,6077 - band 2 builds full meshes now), so "impostor" no longer names a live mechanism.
+
+    - Its bake source ("6x512^2 height+biome texture from the same fbm(u,v) as generator.gd chunks, once
+    per seed ~1.5M samples") no longer exists: generation is C++ AweGen with no GDScript path (world/generator.gd:50-62),
+    and the far tier is height-only DATA plus a 4x4 average emitter (AweMesh.h_avg_emit).
+
+    - Its altitude window (">2000 m impostor only / 2000->500 m both / <500 m chunks only") assumes nothing
+    else draws far, whereas the live ladder draws quantized meshes out to render_dist 50 chunks = 800
+    m, and AC-0299(b) (user answer 2026-09-17) is changing the near-far band to high-LOD textured chunks
+    out to the medium start.
+
+
+    WHAT SURVIVES: the user still wants the planet to look round from orbit and to dissolve into voxels
+    on descent. That is now AC-0310, built as a whole-body satellite tier from the [H u16x256][biome x256][top
+    x256] payload the far lane already produces, designed against the current ladder rather than the old
+    2000/500 m window. See docs/planet-epic.html section 6.3.'
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549797'
@@ -9521,11 +9654,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-09-04T21:11
-  updated_at: 2026-09-04T21:11
-  completed_at: null
+  updated_at: 2026-09-17T18:38
+  completed_at: 2026-09-17T18:38
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want the world to be a cube with six faces I can walk between,
@@ -9535,7 +9668,25 @@ intake:
     2) Technical Details: Create cube world with six faces, each face flat world streaming, switching
     between faces at edges, gravity vector toward cube center not just face down (angled at edges). Foundation
     before 12-face sphere. Verify: walk over edge switches face, gravity toward center everywhere, no
-    fall off.'
+    fall off.
+
+
+    CANCELLED (coordinator, 2026-09-17, user-approved) as SUPERSEDED - nothing in it is lost.
+
+
+    Its two requirements now live in explicit pieces of the round-planet series (docs/planet-epic.html):
+
+    - "walk between faces / face switching at edges" -> AC-0309 planet-p1a-cross-face-movement, which
+    owns the six continuity contracts at a boundary (terrain, grid, meshing, lighting, collision and routing,
+    save) and is tested first on the x=0 midline (already 1:1) and then on the x,z = +/-4000 cube edges.
+
+    - "gravity vector toward centre, not just face down" -> AC-0145 planet-p1b-gravity-flight (up = normalize(pos
+    - C), gravity -up*26).
+
+
+    Its framing ("cube world ... foundation before 12-face sphere") is moot: the 12-face convention is
+    kept by decision D1, because the shipped split is what makes the live flat world exactly one cube
+    face with an identity keying and a gated genhash anchor.'
   comments:
   - id: 1
     created_at: 2026-09-04T21:11
@@ -13933,4 +14084,350 @@ intake:
     the same insert pattern as ~/.dsh/plugins/subagent-reasoning.js. Two constraints if it is ever built:
     loading a plugin needs a DSH host restart, and a host restart KILLS in-flight subagents - so it must
     be timed when no session is mid-flight.'
+  comments: []
+- id: AC-0306
+  title: planet-p1a-grid-lock
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-17T18:37
+  updated_at: 2026-09-17T18:39
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want a block on the planet to be a real metre - the same size as
+    a block in the flat world - so the planet plays exactly like Minecraft does instead of being a subtly
+    shrunken version of it.
+
+
+    2) Technical Details: Piece P1 of 4 under the parent AC-0144. Full reasoning: docs/planet-epic.html
+    section 05 (the grid lock).
+
+
+    WHY: the shipped keying is cx = R*u (world/world.gd:11413-11425), so the cube face''s flat width is
+    tied to R and the density is scale-invariant - 2R^2 columns over 1.0472R^2 m^2 = 1.91 columns/m^2
+    = 0.72 m of arc per block (0.62-0.79 m across the face, computed from core/sphere_math.gd:44-60).
+    The player is effectively 2.5 blocks tall instead of 1.8, and the boundary ratio is 2:1.
+
+
+    THE FIX: pin the cube face''s flat width W as a constant (W = 8000 columns - the live flat patch is
+    faces 0+1 = x,z in [-4000,4000]) and set R = 4W/2pi = 0.6366*W = 5090, so one lap of the flat world
+    (4 faces x W) equals the sphere circumference 2piR and a flat metre is a metre of arc. Per-planet
+    rule to record: a planet of radius R takes W = 1.5708R columns per face (the grid scales with the
+    radius); a single fixed grid cannot give 1 m at every radius, because a sphere is not developable.
+    Residual cube-sphere distortion after pre-warp is a few percent (exact at the face midlines).
+
+
+    CHANGES: core/sphere_math.gd (arc-based uv_to_world / world_to_face + the 2D pre-warp that equalises
+    spacing); world/world.gd (key_for_sphere_pos inverse); autoload/game.gd (planet_R default); autoload/save.gd
+    (R in the planets[] record); scenes/main.gd (the AWECRAFT_LOGIC=sphere probe).
+
+
+    NO DATA CHANGE: on the home pair a column is its flat x/z and stays that way, so genhash, the save
+    edit keys and every flat-world arm are untouched. Only the position -> cell direction changes, plus
+    the R constant.
+
+
+    GATES: (1) the sphere arm green PLUS a new per-column arc-spacing assertion - sample several positions
+    across a face and assert ~1 m spacing within a few percent (P1a asserted gaplessness only, never uniformity);
+    (2) genhash 25/25 byte-identical; (3) save round-trip at R = 5090 with the [2000,8000] clamp intact;
+    (4) a render showing the horizon dip (renders are a software-GL proxy - godot/HARNESS.md section 2).
+
+
+    OWES: ARCHITECTURE.md sync (the coordinate convention, the W/R rule and the planet_R default are structural).
+
+
+    CONSTANT CORRECTION (user, 2026-09-17) - supersedes the W = 8000 / R = 5090 form above.
+
+
+    Hold R = 4000 and fix the RATIO instead. The invariant is "one lap of the flat world = the sphere''s
+    circumference": 4*W = 2*pi*R, i.e. W/R = pi/2 = 1.5708, i.e. one flat metre is one metre of arc. The
+    shipped keying cx = R*u gives W = 2R (ratio 2.000), and 1.5708/2.000 = 0.785 - which IS the 0.72 m
+    compression measured above.
+
+
+    SO: pin W = pi*R/2 = 6283 columns per cube face (3141 per half) at R = 4000. Per-planet rule unchanged
+    in form: W = 1.5708*R.
+
+
+    WHAT THIS CHANGES vs the 5090 form: planet_R, the planets[] save record, the [2000,8000] clamp, the
+    horizon (114 m at eye height), the chunk tilt (0.23 deg) and the 384 m tower sightline (~1753 m) are
+    ALL UNCHANGED - there is no save migration and no re-baseline for the radius. What does change: the
+    home pair''s flat patch is 6283 x 6283 m instead of 8000 x 8000 m, so a cube edge is 3141 m from spawn
+    instead of 4000 m, and the planet''s lap is 25.1 km instead of 32 km (the planet is the same size;
+    the flat net simply wraps sooner).
+
+
+    GATE EDIT: the save round-trip assertion is now "R unchanged at 4000 with the clamp intact", not "round-trip
+    at 5090". All other gates stand. Residual spacing after pre-warp: 1.00 m along the face midlines,
+    ~0.92 m average, ~0.85 m toward the corners (the cube-sphere''s irreducible spread; AC-0042''s "2-5%"
+    was optimistic).'
+  comments: []
+- id: AC-0307
+  title: planet-p1a-sphere-placement
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-17T18:37
+  updated_at: 2026-09-17T18:37
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want to stand on the ground of a round planet and see the horizon
+    dip and distant land sink, while everything under my feet still behaves exactly like flat Minecraft.
+
+
+    2) Technical Details: Piece P2 of 4 under the parent AC-0144. Depends on the grid-lock piece. Full
+    reasoning: docs/planet-epic.html sections 04 (D3) and 06.1.
+
+
+    APPROACH - rigid per-chunk placement: each column node''s transform comes from the sphere math so
+    that local +Y is the radial at that column''s own centre, and neighbours are rotated about their SHARED
+    EDGE so they meet exactly (AC-0042''s folded-net property: a folded cube is gapless where a flat net
+    is detached). Chunk geometry stays in flat local space, so world/chunk.gd should need no change -
+    the work is in world/world.gd (the column checkout/placement path at world.gd:8923 and world.gd:11439,
+    plus the pooled-transform reset at checkout).
+
+
+    DO NOT warp vertices onto the true sphere here: that is reserved for the satellite tier, where per-vertex
+    smoothness is free and physics is not involved. The ground stays a gapless polyhedron of 16 m facets
+    (0.18 deg apart at R = 5090) so physics and visuals coincide and the flat pipeline (meshing, greedy
+    thresholds, light grid, collision) keeps operating on flat local coordinates.
+
+
+    KNOWN PHYSICAL CONSEQUENCE, not a bug: columns diverge with height - H/R per block, i.e. 7.5 cm at
+    +384 m at R = 5090 (9.6 cm at 4000) - with the mirror overlap underground. AC-0042''s hidden filler
+    and interior-face culling cover both; no block-size change is allowed to hide it.
+
+
+    SCOPE GUARD: faces 2-11 stay data-level stubs (never meshed, FIFO cap 512); cross-face movement is
+    its own piece; the round-planet look is its own ticket.
+
+
+    GATES: genhash 25/25 (placement must not touch terrain); the sphere arm; boundary r4 walk p95 inside
+    the standing band; spawn solid with no fall-through; a render showing the dip. Owes ARCHITECTURE.md
+    sync if the placement convention is structural.'
+  comments: []
+- id: AC-0308
+  title: planet-p1a-sphere-consumers
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-17T18:37
+  updated_at: 2026-09-17T18:37
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want mining, placing, walking, spawning and looking to keep working
+    on a curved surface - no falling through the world, no blocks placed where I am not aiming, no camera
+    tilt, no spawn in the air.
+
+
+    2) Technical Details: Piece P3 of 4 under the parent AC-0144. Depends on the sphere-placement piece.
+    Full reasoning: docs/planet-epic.html section 08 (P3).
+
+
+    THE FIVE FLAT-GRID CONSUMERS (all assume Y-up and a flat (cx,cz) grid today):
+
+    (a) collision - the per-chunk StaticBody3D built from that chunk''s solid blocks, placed by the same
+    rotation as its column, tiled so there is no gap at a chunk seam;
+
+    (b) the voxel DDA select/mine/place path (core/math.gd) - decide explicitly between world-space rays
+    with a rotation applied, or rays in the chunk''s local frame; either way the answer must be stated
+    in the ticket''s results;
+
+    (c) camera up = the radial at the player''s position;
+
+    (d) spawn placement - upright, on the ground of the chosen face, never inside terrain;
+
+    (e) world.recenter - keeps the streaming band centred on the sphere after the transform change.
+
+
+    EXPLICITLY NOT HERE: drops and mobs falling under -Y belong with the flight piece unless they misbehave
+    in this piece''s tests; whole-planet persistence does not exist (only the sim band plus edits persist).
+
+
+    GATES: mine/place/step at several positions including high latitude and next to the x=0 midline; no
+    fall-through; boundary r4 walk p95 holds against the standing band; full battery green (player, interact,
+    light, fluids, craft, settings).'
+  comments: []
+- id: AC-0309
+  title: planet-p1a-cross-face-movement
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-17T18:37
+  updated_at: 2026-09-17T18:37
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want to walk or fly past the edge of the region I am in and keep
+    going onto the next part of the planet - no invisible wall, no hole, no cliff into the void, and no
+    dark seam in the ground.
+
+
+    2) Technical Details: Piece P4 of 4 under the parent AC-0144. Depends on the sphere-consumers piece.
+    Full reasoning: docs/planet-epic.html section 07 (six contracts C1-C6).
+
+
+    C1 TERRAIN - the far side must be ground. Faces 2-11 are independent salted flat patches and the code
+    records the policy "No cross-face continuity in P1a (face-border terrain seams acceptable)" (world/generator.gd:208-217).
+    INTERIM POLICY: a blend band of a few tens of columns near a boundary where the face field fades into
+    a position-based field. The end-state removal of the band is the sphere-domain-generation ticket,
+    which is deliberately LAST (the cave tickets were deliberately left unconstrained, so that ticket
+    carries its own field-redesign design work) - do NOT try to solve it here.
+
+    C2 GRID - solved by the grid-lock piece: 1:1 cell size on both sides, so a crossing is a key remap
+    via SphereMath.neighbor_key (already gated by the sphere arm).
+
+    C3 MESHING - greedy stays per-chunk; state the no-cross-face-merge rule so nothing assumes coplanarity.
+
+    C4 LIGHTING - when a boundary enters the sim band, the neighbouring face''s chunk must be seeded into
+    AweStarlight or a light seam appears. Reuse the halo promote/demote path (AC-0283 P3) and the promotion
+    contract (AC-0286); do not invent a second mechanism, and assert "never show unlit" at the boundary
+    specifically.
+
+    C5 COLLISION AND ROUTING - physics bodies tile across the boundary (no fall-through) and position
+    -> face -> chunk plus camera-up stay continuous.
+
+    C6 SAVE - nothing to build (edits are already keyed planet_id:face:ccx:ccz:local); add an explicit
+    round-trip assertion near a boundary so it stays true.
+
+
+    TEST ORDER: first the x=0 midline (already 1:1 by construction, and it is in the middle of the home
+    world - no 4 km of travel needed), then the x,z = +/-4000 cube edges.
+
+
+    GATES: walk across both ways with on_floor true; no void; no light seam; no Z-fight; an edit placed
+    on the far side survives save/load; a render at a boundary. Owes ARCHITECTURE.md sync if the boundary/blend
+    convention is structural.'
+  comments: []
+- id: AC-0310
+  title: planet-satellite-lod
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-17T18:37
+  updated_at: 2026-09-17T18:37
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I want the planet to look round from orbit - a whole-body view that
+    dissolves into real voxels as I descend, with no pop.
+
+
+    2) Technical Details: Replaces AC-0146 (cancelled): its premise cannot be executed - the flat heightmap
+    impostor it extended was removed by user decision 2026-08-30 (world/chunk.gd:83; world/world.gd:207,6077
+    - band 2 builds full meshes now), and its bake source ("the same fbm(u,v) as generator.gd chunks",
+    ~1.5M samples) no longer exists because generation is C++ AweGen with no GDScript path (world/generator.gd:50-62)
+    and the far tier is height-only data plus a 4x4 average (AweMesh.h_avg_emit). Full reasoning: docs/planet-epic.html
+    section 6.3.
+
+
+    WHAT EXISTS TODAY: sim disc 4 chunks (64 m), MED from 8, LOW 4x4x4 from 27 out to render_dist 50 chunks
+    (800 m), halo/far beyond that (H-only data, heightmap sky). Nothing draws a body.
+
+
+    DESIGN: a new whole-body tier above an altitude threshold. Source data = the far column payload the
+    pipeline already produces ([H u16x256][biome x256][top x256] per chunk): height for shading, biome/top
+    for colour. Bake per-face textures at satellite resolution - 1024^2 per face is ~12.6M samples, which
+    at the standing far figure of ~92 us per 256-column chunk is roughly 4.5 s of CPU, one-time per seed
+    at low priority (a full-resolution bake would be ~138 s and is not needed for a body view). MEASURE
+    the bake, do not assume these numbers. Mesh: a true sphere - the one place per-vertex smoothness belongs,
+    since physics is not involved and the limb then comes out right by construction.
+
+
+    THRESHOLD: not a guessed constant. The plan is an in-game look at how the 800 m LOW field and the
+    halo read from altitude, then set the threshold and the crossfade from that. The crossfade must consume
+    the halo/far tier as it fades chunks, or the body and the halo draw the same ground twice.
+
+
+    REUSE: build it keyed (planet_id, R, seed) rather than as a one-off for the home world - the solar-system
+    work needs the same object for other planets (AC-0147).
+
+
+    ATMOSPHERE: reuse the existing sky, cloud, aero and day/night shaders for the haze that hides the
+    dissolve; do not invent a second atmosphere.
+
+
+    GATES: renders at surface, mid and orbit with a round limb; no pop across the crossfade; no double-draw
+    with the halo (look for it, do not trust the fade); bake cost measured and recorded; renders carry
+    the software-GL proxy caveat (godot/HARNESS.md section 2).
+
+
+    DEPENDS: the sphere-placement piece (interactive in-game threshold look). Owes ARCHITECTURE.md sync
+    (a new subsystem/tier).'
+  comments: []
+- id: AC-0311
+  title: planet-sphere-domain-generation
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-17T18:37
+  updated_at: 2026-09-17T18:37
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player travelling around the planet I want the far side of a face boundary
+    to be the same world I was standing in - caves, ores and biomes flowing across it instead of stopping
+    at a seam.
+
+
+    2) Technical Details: The seam end-state (piece P7 of the epic; docs/planet-epic.html sections 07
+    C1 and 08 P7). QUEUED LAST BY USER DECISION 2026-09-17: nothing else depends on it, and the cave tickets
+    were deliberately left unconstrained, so this ticket owns its own field-coordinate design work.
+
+
+    CONTENT: make the surface, cave, ore and biome fields functions of a global coordinate pair - a face-independent
+    surface parametrisation (the direction vector, which is continuous everywhere on the sphere) plus
+    a radial depth so that cave layering stays vertical at every latitude - sample them per column in
+    the column''s local frame, then DELETE the blend band that the cross-face piece introduced.
+
+
+    FLAT-FRAME CONSTRUCTS THAT MUST BE RE-DERIVED (read the cave tickets'' SHIPPED implementation, not
+    their specs, since this ticket translates a known-good design): carvers are Bezier trunks with world-space
+    Y ranges (-56..180) (AC-0290); aquifers are a Voronoi cell grid in the flat frame (AC-0291); 3D cave
+    biomes plus surface rules and pillars/veins (AC-0292); the surface height fields and the cheese/ore
+    density fields are 3D fbm3 sampled on flat lattice points (gdext/src/gen.cpp).
+
+
+    COST: AC-0042 section 08 estimated +2-3x generation for sphere-domain sampling. Re-measure gen ms/col
+    and the far lane (~92 us per column-chunk) before and after; streaming throughput depends on both.
+
+
+    THIS IS THE ONLY PIECE IN THE EPIC ALLOWED TO MOVE GENHASH, and it may only do so deliberately.
+
+
+    GATES: a new genhash baseline, two runs byte-identical; boundary terrain continuity (a data-level
+    assertion that both faces'' columns agree at the shared edge, across all 24 boundary segments - testable
+    headlessly, before any placement work); generation cost re-measured and the standing values re-established
+    deliberately (godot/HARNESS.md section 3); boundary r4 unchanged or better.
+
+
+    DEPENDS: the cave series (AC-0288..AC-0292) complete - it rewrites gdext/src/gen.cpp, which this touches;
+    and the cross-face piece (to remove the band). Owes ARCHITECTURE.md sync (generation/sampling domain).'
   comments: []
