@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-17T10:08
+  updated_at: 2026-09-17T10:17
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -13817,4 +13817,105 @@ intake:
     (omits build_windows.sh, references/, screenshots/). Also worth adding: the doc gate this reorg otherwise
     lacks - every path referenced from an AGENTS.md/skill must exist, root file under a byte budget, one
     owner per rule.'
+  comments: []
+- id: AC-0305
+  title: serialize-local-subagents
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: done
+  labels: []
+  created_at: 2026-09-17T10:17
+  updated_at: 2026-09-17T10:17
+  completed_at: 2026-09-17T10:17
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As the person running the AweCraft coordinator, I want every agent to know that
+    the effort-routed subagents share one local model slot and can only run one at a time, so fresh agents
+    stop launching two in a single step and stalling on a slot that cannot serve them.
+
+
+    2) Technical Details: Docs-only. NOT the same effort as AC-0302/AC-0303 — those are the parallel-work
+    plan (tier 1/2) for multiple agents or sessions sharing one checkout (worktrees, per-agent HOME, godot
+    lock, build/gate ownership). This ticket is narrower and unrelated to shared machine state: it is
+    about the local inference slot behind the coordinator''s subagent tools.
+
+
+    THE RULE. The effort-routed subagent tools - subagent_xhigh, subagent_medium, subagent_low - are all
+    configured in ~/.dsh/cordis.patch.yml with provider homeserver1 and model Qwen3.8-27B-UD-Q4_K_XL,
+    i.e. the one local LM Studio box at http://192.168.0.224:1234/v1. They contend for a single slot,
+    so they must be launched one at a time, sequentially. subagent_fork is NOT in this set (it is the
+    in-process delegation path on the agent default model, and the reasoning plugin does not pin an effort
+    for it), so it is deliberately excluded from the rule. Evidence for the tool->effort mapping: ~/.dsh/plugins/subagent-reasoning.js
+    effortForTool() maps exactly these three names.
+
+
+    THE STALE TEXT THIS FIXES. Two live docs carried a vaguer version of the claim - "the local model
+    serves a single request at a time" - which a fresh agent reads as trivia rather than a launch constraint,
+    and neither named the tools or the slot:
+
+    - COORDINATOR.md Chaining ("never let two subagents run at once")
+
+    - .dsh/skills/awecraft-delegate/SKILL.md launch rules ("ONE subagent at a time")
+
+    Both now state the rule, name the three tools, name the shared slot, and say what to do instead: launch
+    the next one only after the previous returns.
+
+
+    PLACEMENT (the point of the ticket - every agent must receive it):
+
+    - Root AGENTS.md gains it as an invariant. That file is the only text auto-injected into every session,
+    including child agents, so it is the one channel that reliably reaches all of them.
+
+    - .dsh/skills/awecraft-delegate owns the mechanism and the launch procedure.
+
+    - COORDINATOR.md keeps a one-line pointer instead of restating it (standing rule 5).
+
+    Deliberately NOT added to tasks/templates/two-phase.md: that is the builder''s prompt and builders
+    do not launch builders.
+
+
+    VERIFY: grep shows no live doc still says "serves a single request"; the three touched files name
+    all three tool names; docs-only, so no godot, no arm, no build, no gate.
+
+
+    OUT OF SCOPE / FOLLOW-UP: mechanical enforcement. Prose is what fresh agents keep ignoring, so a guard
+    plugin (same insert pattern as ~/.dsh/plugins/subagent-reasoning.js, vetoing a second concurrent effort-routed
+    launch at tools/pre-execute) would enforce it for real. It needs a DSH host restart to load, and a
+    host restart KILLS in-flight subagents, so it must be timed when no other session is mid-flight.
+
+
+
+
+    CLOSED 2026-09-17. Docs-only; no godot, no arm, no gate, no build.
+
+
+    THE RULE, AS WRITTEN: the effort-routed subagent tools (subagent_xhigh, subagent_medium, subagent_low)
+    are all configured against one local model (homeserver1 / Qwen3.8-27B-UD-Q4_K_XL) and therefore share
+    a single slot - launch one, wait for it to return, then launch the next. A concurrent launch buys
+    nothing but contention. subagent_fork is explicitly out of the rule: it is the in-process delegation
+    path on the agent default model, and the reasoning plugin pins no effort for it.
+
+
+    PLACEMENT (deliverability was the point): root AGENTS.md invariant 7, because that file is the only
+    text auto-injected into every session, child agents included - it is the one channel that reliably
+    reaches every agent. .dsh/skills/awecraft-delegate owns the mechanism and the launch procedure (with
+    the tool->effort table and the fork exclusion). COORDINATOR.md carries a one-line pointer to invariant
+    7 instead of restating the rule, per standing rule 5. Deliberately NOT in tasks/templates/two-phase.md:
+    that is the builder prompt, and builders do not launch builders.
+
+
+    STALE TEXT REMOVED: both live docs previously said only that "the local model serves a single request
+    at a time" (COORDINATOR.md Chaining, awecraft-delegate launch rules) - a statement a fresh agent reads
+    as trivia rather than a launch constraint, naming neither the tools nor the slot. Verified by grep:
+    no live doc still carries that phrasing.
+
+
+    STANDING FOLLOW-UP (not started): mechanical enforcement. Prose is what fresh agents keep ignoring,
+    and a guard plugin could veto a second concurrent effort-routed launch at tools/pre-execute, using
+    the same insert pattern as ~/.dsh/plugins/subagent-reasoning.js. Two constraints if it is ever built:
+    loading a plugin needs a DSH host restart, and a host restart KILLS in-flight subagents - so it must
+    be timed when no session is mid-flight.'
   comments: []

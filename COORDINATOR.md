@@ -23,7 +23,8 @@ chaining.** Re-running a builder's light gates doubles cost for no extra informa
 
 The moment the heavy stage passes, chain: `tasks.py next` → launch **ONE** blocking subagent for it.
 The next builder is static reading for most of its life, so the previous closeout commit may land
-first — but **never** let two subagents run at once (the local model serves one request at a time).
+first — but never two local-LLM subagents at once: they share one model slot (invariant 7,
+`awecraft-delegate`).
 
 ## Routing
 

@@ -36,9 +36,14 @@ matches `build-scripts`.
 
 ## 3. Launch rules
 
-- **ONE subagent at a time** — the local model serves a single request, and DSH host restart kills
-  in-flight children. After one, inspect `tasks/AC-NNNN/continuity.md`, the ticket folder and
-  `.scratch/AC-NNNN/`, then relaunch with a resume pointer at the log's last entry.
+- **ONE local-LLM subagent at a time.** `subagent_xhigh`, `subagent_medium` and `subagent_low` are
+  all configured against the **same local model** (`homeserver1` / `Qwen3.8-27B-UD-Q4_K_XL`), so they
+  share a single slot: never put two subagent calls in one step, never start the next before the
+  previous returns, and expect nothing from a concurrent launch except contention. (`subagent_fork`
+  is not in that set — it is the in-process path on the agent default model.)
+- A **DSH host restart kills in-flight children**. After one, inspect `tasks/AC-NNNN/continuity.md`,
+  the ticket folder and `.scratch/AC-NNNN/`, then relaunch with a resume pointer at the log's last
+  entry.
 - The builder makes **no commits, no pushes and no `tasks/TASKS.yaml` edits** (read-only
   `git log/show/diff/status` is fine) — the coordinator owns git and the registry.
 - A ticket touching `godot/world/*` or the lighting path may run **at most ONE** boundary r4 A/B

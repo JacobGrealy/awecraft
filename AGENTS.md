@@ -35,6 +35,9 @@ Subagents do all code and research. Procedure lives in the project skills (`.dsh
    procedure.
 6. **Harvest durable rules at closeout** — into `godot/OPS.md` (machine, build, daemon) or the process
    skills. A standing rule never lives only in `tasks/AC-NNNN/continuity.md`, which is a journal.
+7. **Never run two local-LLM subagents at once.** `subagent_xhigh`, `subagent_medium` and
+   `subagent_low` all draw on the **same single local model slot**, so they cannot run in parallel:
+   launch one, wait for it to return, then launch the next. Procedure: `awecraft-delegate`.
 
 ## Where to go
 
