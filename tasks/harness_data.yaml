@@ -430,6 +430,86 @@ modes:
     wall: ~28 min ON / ≥45 min OFF (OFF does not finish)
     notes: |-
       **A/B gate: ON < OFF decisively** (ON completes 7845/7845 in ~27.6 min [gen/s 5.0]; OFF hits the 45-min cap at 7061/7845 [gen/s 3.0]). Loading paths are `loading_active`-gated — steady state keeps the legacy throttles (battery/chunkio/save/continue arms run with `loading_active=false`, values unchanged). Exit must be CLEAN: no `Pages in use … WorkerThreadPool GroupE`, no SCRIPT ERROR, no shutdown segfault (the group-consumption + `_exit_tree` poll-drain fixes)
+  starlighttest:
+    entry: '`_starlight_test` (AC-0283 P1)'
+    tests: |-
+      AweStarlight engine (gdext/src/starlight.cpp) vs the legacy AweLighting pull kernel, cell-by-cell: a hand-built single column (stone, torch-lit cave, lava pool, glowstone ceiling, sky shaft) + 3 edits (wall across the shaft, torch removed, lava→water) each vs the engine re-flood, plus the settled live region
+    result_fields: |-
+      `ok`, `mismatches` (0), `cells` (5,308,416), `synthetic_ok`/`edit_ok` (the synthetic column), `ready`/`base_ok`/`edit_ok` (the live region), `cur_us`/`sl_us` (kernel timings)
+    envs: '`AWECRAFT_LOGIC=starlighttest`'
+    wall: ~3–6 min
+    notes: |-
+      The P1 "near light exact" gate — the engine-equivalence proof; must stay 0 after any starlight.cpp or lane change. The legacy kernel (lighting.cpp) is the TEST-ONLY reference this arm compares against (AC-0283 P4)
+  brightslab:
+    entry: '`_brightslab_test` (AC-0283 P2, P5 star-native)'
+    tests: |-
+      Bright-slab-on-edit regression in a fully settled 7×7: C1 surface break, C2 cave-wall break letting sky in sideways, C3 torch place, C4 the 93→73 bake storm (the sanctioned FEED delta), C5 halo-boundary break, C6 probe — each edits, drives engine + remesh lane to a quiet world, then asserts three ways
+    result_fields: |-
+      per case: `name`, `engine_vs_ref` (0), `ref_vs_pull` (0), `mesh_vs_eng_bake` (0), `mesh_vs_pull_bake` (0), `max_bright_delta` (0.0); C4: `bakes` (73), `over_bright_max` (0), `lver_drops` (0); `ok` (all cases exact)
+    envs: '`AWECRAFT_LOGIC=brightslab`'
+    wall: ~2–3 min
+    notes: |-
+      The P2 edit-lane integration gate: settled star payload ≡ legacy pull reference on the POST-EDIT data, and the applied mesh ≡ the worker re-bake of BOTH payloads (geometry exact; colors within the ArrayMesh 8-bit step). C2/C5/C6 carry one documented under-lit ref quad each (the scoped-bake margin; the classic sky-carry v-channel is CORRECT there — do not "fix" it)
+  halo:
+    entry: '`_halo_test` (AC-0283 P3, AC-0286 promo block)'
+    tests: |-
+      Settled-world gate for the heightmap-sky far band + promotion/demotion lifecycle, render 6 (real taxi ≤ 4 + halo taxi 5; taxi ≥ 6 data-only): (a) every real column seeded+settled ≡ the legacy reference; (b) every halo column UNseeded and every applied 4×4 low mesh ≡ a fresh h_avg_emit on the arm-recomputed heightmap sky (15 strictly above the terrain top); (c) promotion of a known halo column — settled ≡ reference, single flood (seed-at-landing == 1), one enqueue per residency, retain-swap (0 promotion-originated hide late-landings); (d) demotion re-lowers the low
+    result_fields: |-
+      `a` {`seeded`, `settled`, `mismatches`, `boundary` (26 = the deep-corner under-lit-until-promotion class)}, `b` {192/192 byte-identical}, `c` {`seed` (1), `enq` (1), `land`, `late_landings_promo` (0)}, `d`; `ok`
+    envs: '`AWECRAFT_LOGIC=halo`'
+    wall: ~3–5 min
+    notes: |-
+      (a)'s 26 boundary mismatches are the documented under-lit-until-promotion class (the legacy reference sees far columns as holes; the arm fills them with the skip rule). The (c) promo block is the AC-0286 evidence (single flood + one promotion per residency + no hide)
+  lightstate:
+    entry: '`_lightstate_test` (AC-0273)'
+    tests: |-
+      Per-slab light-state canaries on an R16 moving camera: the slab's opaque-surface vertex colors keyed by quantized position (baked-light A/B — first landing vs edit rebuild), the double-LOD canary and the sky-wash census
+    result_fields: |-
+      `ok`, per-chunk `leaks`/`air_n`/`mean_eff`, `worst` {`chunk`,`cell`,`before`,`after`}, `double_lod` (0/0), `wash` (false), census deltas (documented timing)
+    envs: '`AWECRAFT_LOGIC=lightstate`'
+    wall: LONG — r16 class (~10–20 min, `--fixed-fps 600` convention)
+    notes: |-
+      The R16 canaries are EXACT across rebases (census deltas = documented timing, not drift): the AC-0283..0286 series keeps `double_lod` 0/0 and `wash` false
+  ladder:
+    entry: '`_ladder_test` (AC-0261, rebuilt at AC-0283 P3)'
+    tests: |-
+      Halo average-color ladder: small world (render 8, sim 2 — the real band taxi ≤ band0_r, taxi metric) — REAL [0, band0_r] = per-slab full meshes, the HALO band = 4×4×4 placeholder slabs; asserts the per-tier average colors are byte-identical across the emit paths + the boundary flip + the air checks
+    result_fields: |-
+      `ok`, `ab_ok` (avg-color A/B), `boundary_flip_ok`, `air_synth_ok`, `air_inworld_ok`, `tier0_ok`, `clutter_ok`, slab counts (966, of which 57 sky-mixed)
+    envs: '`AWECRAFT_LOGIC=ladder`'
+    wall: ~2–4 min
+    notes: |-
+      966==966 byte-identical across bands with only ms-timing deltas across rebases (the AC-0261 med/low ladder on the AC-0283 P3 halo band)
+  meshprobe:
+    entry: '`_meshprobe_test` (AC-0211)'
+    tests: |-
+      Mesh byte-identity probe: GDScript-side emit vs the C++ emit on the same inputs — full LOD + LOD quad-color checks (per-quad color from the normal/lighting model), vertex counts, atlas-rect coverage (the high mesh writes (0,0) for un-atlased LOD quads — reported, not gated)
+    result_fields: |-
+      `ok`, `match_rate` (1.0), `verts_gd`/`verts_cpp` (equal, >0), `n_samples` (≥8), `ae_pairs`/`ae_match` (atlas-edge pairs exact), `uv_repeat_ok`, `low_max_h_built`
+    envs: '`AWECRAFT_LOGIC=meshprobe`'
+    wall: ~1–2 min
+    notes: |-
+      1.0 invariant across the AC-0283..0286 series (mesh.cpp gained only `h_avg_emit`, which shares the emit core and is byte-identical to the slab emitter)
+  farab:
+    entry: '`_farab_test` (AC-0284b)'
+    tests: |-
+      FAR (h-only) column A/B battery: (a) skip-filled slabs (`generate_resl` skip=1 — the 284a shape, kept as the reference) through low_emit_avg vs (b) the far payload through `AweMesh.h_avg_emit` — identical grid inputs + fcc/sky must give byte-identical output; plus the v6 codec round-trip
+    result_fields: |-
+      `ok`, `cols` (984), `h_mismatch` (0), `slab_cmp` (984), `slab_mismatch` (0), `codec` {payload size ~198 B, round-trip exact}, `fcc_tiles`
+    envs: '`AWECRAFT_LOGIC=farab`'
+    wall: ~2–4 min
+    notes: |-
+      The AC-0284b invariant: the far H-only payload (H u16 + biome + top, v6 flag bit 1) emits byte-identical meshes — H is the heightmap and stays bit-exact with the full path so promotion never shifts terrain
+  texrefresh:
+    entry: '`_texrefresh_test` (AC-0297)'
+    tests: |-
+      Star-native tex-refresh: swap ONE atlas tile (grass top) through the real pack path (Data.apply_atlas + the tint re-bake) + world.refresh_textures(); then (1) the face-color cache changed, (2) the real column's HIGH slabs are byte-identical to the settled STAR payload re-build AND to their pre-swap mesh (a pixel-only atlas change leaves vertex data untouched), (3) the halo column's re-lowered LOW slabs are byte-identical to a FRESH h_avg_emit and the surface slab is provably different
+    result_fields: |-
+      `ok`, `slabs` (>0), `mism` (0), `surface_changed` (true), per-slab pre/post diffs
+    envs: '`AWECRAFT_LOGIC=texrefresh`'
+    wall: ~1–2 min
+    notes: |-
+      The AC-0297 gate: the tex-refresh dispatch is star-native (real = settled payload / halo = h_avg_emit). 7 slabs report "decomp_changed" (lossless per-face → merged quad decomposition — documented, not a failure)
 value_columns:
 - value
 - fresh result (2026-08-29, H=384)
@@ -478,6 +558,19 @@ standing_values:
   fresh: |-
     **25/25** `GENHASH` lines, 32-hex MD5 each, deterministic (2 runs byte-identical); all 25 hashes NEW vs H=80; → `.scratch/AC-0091-gates/genhash_new.txt`
   established_by: AC-0082 gate / AC-0091 values
+- value: starlighttest `mismatches`
+  fresh: '**0 / 5,308,416 cells** — AweStarlight ≡ the legacy pull kernel (synthetic column + 3 edits + settled live region)'
+  established_by: AC-0283 P1 (re-verified at every AC-0283..0286 closeout — the engine is exact)
+- value: brightslab C1–C6
+  fresh: |-
+    per case **`engine_vs_ref` 0 / `ref_vs_pull` 0 / mesh bakes exact / `max_bright_delta` 0.0**; C4 **bakes 73 / over-bright 0 / lver_drops 0** (the 93→73 FEED delta is the AC-0297 sanctioned change, not a regression); C2/C5/C6 each carry one documented under-lit ref quad (the scoped-bake margin)
+  established_by: AC-0283 P2 (93 bakes) → AC-0297 (73, star-native tex-refresh)
+- value: farab `slab_mismatch`
+  fresh: '**0 / 984** (984/984 byte-identical) — the far H-only payload (H u16 + biome + top, ~198 B on disk, v6 flag bit 1) emits byte-identical meshes through `AweMesh.h_avg_emit`'
+  established_by: AC-0284b (H stays bit-exact with the full path so promotion never shifts terrain)
+- value: halo (b) heightmap-sky re-emit
+  fresh: '**192/192** byte-identical — every applied 4×4 low mesh ≡ a fresh h_avg_emit on the arm-recomputed heightmap sky (15 strictly above the terrain top over the quad footprint); the 26 boundary cells of (a) are the documented under-lit-until-promotion class, not a failure'
+  established_by: AC-0284b (AC-0284a was 0 — the 26 = the legacy-reference far-hole class)
 - value: MINFO
   fresh: |-
     **AC-0152/0160 DRIFT:** r4 resident set is now 69 chunks (circle(4) ∪ diamond(5) ∪ 8-ring), so the 121/81/40 shape no longer reproduces (boundary `resident_final` 101 incl. candidates); occlude/cave arms wait on `chunks.size() >= 81` and hit the wait cap → their numbers drift. OUTSIDE the gate set — do not chase
@@ -485,9 +578,9 @@ standing_values:
     AC-0091 shape (`.scratch/AC-0091-gates/minfo_new.txt`) SUPERSEDED at r4 by AC-0152/0160
 - value: boundary r4 one-shot
   fresh: |-
-    `ok`/`remesh_ok`/`marker_ok` true, walk `p95_ms` **≈ 30–37** (AC-0178 one-shots: 37/30 — AC-0178's group-consumption fix un-sticks the recenter 5×5 burst prune [a leaked group had stuck the no-new-burst branch for the whole session], so later recenters now re-burst → work is front-loaded into the smaller burst and per-frame walk cost is smoothed: old "p50 0–1 with spikes to 73–89" → "p50 ~13, p95 30–37"), `p50` ~13, `max_ms` ~1.3–1.4 s, `built_final` ~50–52, `resident_final` ~101, `queue_size` ~54–56 — **band updated; prior ≈ 73–89 (AC-0155; re-verified 74/80 at AC-0158/0164), ≈ 54 (AC-0152/0160) and 267–401 / ~39.9k–47.6k VOID** (banded streaming: circle ∪ diamond ∪ ring set, spawn-fast drain; the walk path also healed by the never-sync drain fix). **RESOLVED (AC-0178):** the engine-level `ERROR: Invalid Task ID` at `is_task_completed` from `recenter` (world.gd) is GONE — the 5×5 burst is a GROUP task; the recenter prune now uses `is_group_task_completed` + `wait_for_group_task_completion` (the old code polled a group id with the regular-task API → the error + the prune never ran). Zero SCRIPT ERROR in all AC-0178 heavy runs. **Known non-fatal (follow-up still open):** one burst at the far crossing (`burst_max_ms` 18028/16837 at AC-0178; 33.3/40.1 s at AC-0158/0164; 37762/38671 at AC-0155) — non-blocking (run completes, queue drains); crossing-16 burst now ~17–18 s (was 33–40 s)
+    `ok`/`remesh_ok`/`marker_ok` true, walk `p95_ms` **≈ 22** (p50 ~14) — **re-measured 2026-09-17 at the AC-0286 closeout (20 crossings, walk_s 44.8): p95 22, p50 14, `max_ms` 128 (was ~1.3–1.4 s — first-frame work rebuilt by AC-0283 P2/P3), `built_final` 43 (was ~50–52), `resident_final` 93 (was ~101), `queue_size` 81 (was ~54–56), `staged_dropped` 707, one 9.2 s burst at a far crossing (the AC-0178 non-fatal class was 17–40 s)** — **supersedes** ≈ 30–37 (AC-0178: p50 ~13, p95 30–37 — the group-consumption fix un-stuck the recenter 5×5 burst prune, front-loading work into smaller bursts and smoothing per-frame walk cost), **which superseded** ≈ 73–89 (AC-0155; re-verified 74/80 at AC-0158/0164), ≈ 54 (AC-0152/0160) and 267–401 / ~39.9k–47.6k VOID (banded streaming: circle ∪ diamond ∪ ring set, spawn-fast drain). **RESOLVED (AC-0178):** the engine-level `ERROR: Invalid Task ID` at `is_task_completed` from `recenter` (world.gd) is GONE — the 5×5 burst is a GROUP task; the recenter prune uses `is_group_task_completed` + `wait_for_group_task_completion`. Zero SCRIPT ERROR in all runs since
   established_by: |-
-    AC-0178 (2026-09-01) supersedes AC-0155 (2026-08-31) supersedes AC-0152/0160 supersedes AC-0091/AC-0143
+    AC-0286 closeout (2026-09-17) supersedes AC-0178 (2026-09-01) supersedes AC-0155 (2026-08-31) supersedes AC-0152/0160 supersedes AC-0091/AC-0143
 - value: sphere probe (new arm `AWECRAFT_LOGIC=sphere`)
   fresh: |-
     `ok` true — keying round-trip **240/240** (`key_bad` 0, `key_home_ok` true), edge points **884/884 bitwise-identical** (`edge_max_d` 0.0), world↔face 300/300 (max_d 0.0), neighbor_key 240/240 (rt_max 1), corners 32 (min_dot 0.9999992), home spot-checks bedrock 11 / sea 5 @y0 / spawn top 136
