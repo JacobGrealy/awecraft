@@ -28,11 +28,11 @@ owes, and the traps that cost the most.
   references**: never wire them into game code. The live engine is `../../gdext/src/starlight.cpp`.
 - World constants (`CHUNK` 16, `HEIGHT` 384, `SEA` 126) live in `autoload/data.gd` and are scraped
   into generated specs; changing one moves standing gate values — re-establish them in the same task.
-- Saves are format-versioned (v6 today): bump the version, **reject old saves cleanly** — fail fast with a
-  log line and start a fresh world, never half-load — and document the format in `../ARCHITECTURE.md` §5.
-  **Old-world compatibility is NOT owed during development** (user, 2026-09-17): a save-format or
-  world-shape change may break existing worlds and owes no migration. The cave series (AC-0288…AC-0292)
-  and AC-0293 already assumed this.
+- Saves are format-versioned (v6 today): bump the version when the format changes so an old save is
+  **rejected cleanly** — fail fast with a log line and a fresh world, never half-load. The format and the
+  **compatibility policy** live in `../ARCHITECTURE.md` §5: **old worlds are disposable during
+  development** (user, 2026-09-17), so no migration is owed. The cave series (AC-0288…AC-0292) and
+  AC-0293 already assumed it.
 - The generator must stay deterministic per seed (default 44) **across the GDScript/C++ boundary** —
   the reason `-ffp-contract=off` is load-bearing in `../../gdext/SConstruct`. See `../../gdext/AGENTS.md`.
 
