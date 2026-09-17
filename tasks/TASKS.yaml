@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-17T12:10
+  updated_at: 2026-09-17T12:16
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -12417,7 +12417,7 @@ intake:
   status: done
   labels: []
   created_at: 2026-09-14T12:21
-  updated_at: 2026-09-17T12:10
+  updated_at: 2026-09-17T12:12
   completed_at: 2026-09-17T12:10
   waiting_on: null
   parent_id: null
@@ -12432,7 +12432,11 @@ intake:
 
 
     CLOSED 2026-09-17. Gates 14/14 + coordinator canaries (genhash 25/25, brightslab 6/6 C4=73). .scratch/ac0286/report.md.
-    Windows build stamped after commit (see commit + continuity 16).'
+    Windows build stamped after commit (see commit + continuity 16).
+
+
+    Build stamp: 20260917-1210 (http://localhost:8082/AweCraft-20260917-1210.zip / http://192.168.0.224:8082/AweCraft-20260917-1210.zip)
+    - includes the no-pop promotion; far band is still the P3 4x4 avg look (pending the AC-0299 (b) decision).'
   comments: []
 - id: AC-0287
   title: save-only-sim-distance
@@ -13185,7 +13189,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-16T14:21
-  updated_at: 2026-09-16T14:21
+  updated_at: 2026-09-17T12:16
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -13254,7 +13258,16 @@ intake:
     (iv) the record is discoverable from docs/INDEX.md or the design doc; (v) AC-0283 can be closed on
     the strength of (b) alone, so state its outcome explicitly.
 
-    '
+
+
+    USER ANSWER RECEIVED IN CHAT 2026-09-17 (item (b), partial - the full answer set is pending in chat):
+    the far band beyond the sim radius should draw HIGH-LOD 16x16x16 TEXTURED block chunks out to the
+    MEDIUM start distance (NOT the 4x4 avg that P3 shipped) - with heightmap-only lighting and no 3D noise
+    (caves) as already built. Follow-ups asked in chat: (i) what the band beyond the medium start draws
+    (med 8x8 + low 4x4 tiers, or 4x4 only), (ii) the medium start distance numerically. Coordinator plan
+    once answered: keep the h-only far DATA (cheap gen 92 us/col, ~198 B saves), materialize the cave-free
+    slabs from H+biome+top at mesh time, mesh the near-far band full-LOD through the existing textured
+    lane; new ticket for the draw change (this ticket records the decision only).'
   comments: []
 - id: AC-0300
   title: render-recipe-forward-plus-vs-gl-compatibility
