@@ -1,16 +1,13 @@
 meta:
-  updated_at: 2026-09-17T06:08
+  updated_at: 2026-09-17T09:51
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0302
-- AC-0303
-- AC-0300
 - AC-0286
+- AC-0299
 - AC-0287
 - AC-0293
-- AC-0299
 - AC-0288
 - AC-0289
 - AC-0290
@@ -13650,4 +13647,170 @@ intake:
     corrupting the cache or the numbers; (vi) `nofallback` still passes with a concurrent run in flight.
 
     '
+  comments: []
+- id: AC-0304
+  title: agent-docs-progressive-disclosure
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: done
+  labels: []
+  created_at: 2026-09-17T09:45
+  updated_at: 2026-09-17T09:51
+  completed_at: 2026-09-17T09:51
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As the person building AweCraft, I want the agent''s process docs to load like
+    a well-organized project rather than a reading list, so each session spends its context on the game
+    instead of re-reading process prose it does not need yet — fewer wrong turns on the standing traps
+    (rebuild the C++ .so, keep harness.gd pristine, run genhash when world/* is touched) and less drift
+    between docs that restate each other.
+
+
+    2) Technical Details: Docs + agent-instruction layout only. No godot run, no arm, no heavy gate, no
+    Windows build.
+
+
+    WHAT THE HARNESS ALREADY PROVIDES (verified in the DSH checkout, packages/context/agent-instructions
+    + packages/skill/skill-filesystem — not assumed): (a) baseline chain = $DSH_HOME/AGENTS.md + every
+    directory from project root (.git marker) down to cwd, loading AGENTS.md/CLAUDE.md then AGENTS.local.md/CLAUDE.local.md,
+    deduped per directory, appended once and durable; (b) touch-driven nested discovery — a successful
+    first-party read/write/edit whose parent chain crosses a new directory injects "Additional instructions
+    from: <dir>/AGENTS.md" on the next request (no prompt change); (c) a render byte budget that drops
+    WHOLE broader files before truncating the most-specific one (a fat root file is the first casualty);
+    (d) project skills at <root>/.dsh/skills/<name>/SKILL.md — name+description always cataloged, body
+    loaded only on demand, hot-reloaded. The repo used tier (a) only: exactly ONE AGENTS.md (root, 4312
+    B) and ZERO nested files, so tier (b) never fired and every directory-scoped rule (gdext rebuild/fail-fast,
+    harness.gd pristine, world/* genhash, data.gd tables) was reachable only by a manual fetch through
+    the root routing table. Caveat that shaped the design: nested discovery follows fs tool touches, NOT
+    bash/grep/glob — the root routing table and the skills remain the fallback for shell-driven agents.
+
+
+    P1 - INSTRUCTION LAYOUT (nested AGENTS.md). New files, each a rules-and-traps file that LINKS to godot/ARCHITECTURE.md
+    for structure instead of restating it: godot/AGENTS.md (engine/HOME/one-process, --path godot from
+    repo root, runtime-built tree, ARCHITECTURE-sync rule owner, never edit godot/bin), godot/world/AGENTS.md
+    (world/* or data.gd touch owes genhash 25/25 + boundary r4; HEIGHT 384/seed 44; save v6; far/h-only
+    + engine-seed contract; lighting.cpp test-only), godot/scenes/AGENTS.md (harness.gd 24,280 lines stays
+    pristine; add an arm = code branch + tasks/harness_data.yaml row + harness_doc.py --render; dispatch
+    order; G0 = zero SCRIPT ERROR lines, not rc=0), godot/autoload/AGENTS.md (6 autoloads, project.godot
+    order matters, Data/Debug upstream, adding one edits ARCHITECTURE §2), gdext/AGENTS.md (SCons linux+windows,
+    entry symbol/registration, .so is untracked so a fresh worktree cannot parse the extension, C++ is
+    REQUIRED/fail-fast, GDScript kernels probe-only, nofallback arm is the proof), tasks/AGENTS.md (tasks.py
+    is the single writer, no prose docs here, AC-NNNN folder format, continuity.md is an append-only journal),
+    tasks/scripts/AGENTS.md (harness_data.yaml is the machine source -> --render; test_tasks.py must stay
+    green; never scrape prose, AC-0301), docs/AGENTS.md (essays are not the source of truth; some intentionally
+    untracked; shipped design lands in ARCHITECTURE/OPS). Root AGENTS.md slimmed to always-on content
+    only — identity, role, the must-never-violate invariants, a scope routing table, the ticket pointer
+    — target <= 2.6 KB (was 4.3 KB of mixed always-on + closeout + filing procedure).
+
+
+    DEDUPLICATION (standing rule 5, one owner per fact): ARCHITECTURE-sync rule -> godot/AGENTS.md; harvest
+    rule + CONTINUITY compaction triggers + commit/push form -> awecraft-closeout skill; run recipes ->
+    godot/HARNESS.md (its declared boundary is unchanged) with the run/verify POLICY in the run-verify
+    skill; harness.gd pristine -> godot/scenes/AGENTS.md (godot/OPS.md §2 now links to it); rule-1 restatements
+    dropped from COORDINATOR.md and tasks/templates/two-phase.md. README.md''s "Where to look" table (a
+    duplicate of the root routing table) is dropped in favour of a pointer.
+
+
+    P2 - PROJECT SKILLS (.dsh/skills/): awecraft-delegate (effort routing, trivial fast-path, one-subagent-at-a-time,
+    fences, paste-the-template), awecraft-closeout (docs closeout, harvest, TASKS.yaml via tasks.py, CONTINUITY
+    checkpoint + compaction, promote OPEN items, explicit-path commit + push form), awecraft-heavy-gates
+    (background gate job, sliced set, HEAVY_GATES_DONE marker, godot contention, server reporting), awecraft-run-verify
+    (G0 semantics, smoke tier choice, standing values, render-proxy warning, one-godot-at-a-time), awecraft-file-ticket
+    (the two-section notes format, decomposition, tasks.py commands). COORDINATOR.md keeps its role: role
+    + principle + pointers, no procedure detail. tasks/templates/two-phase.md keeps the paste-ready SINGLE
+    TEMPLATE (the skill owns when/how to use it), with the effort-routing and heavy-gate-pipeline prose
+    removed to their new owners. Dead pointer fixed: the generated gates note in spec_template.py pointed
+    at an "AGENTS.md HEAVY-GATE PIPELINE" section that does not exist.
+
+
+    VERIFY: python3 tasks/scripts/harness_doc.py --check (in sync, exit 0); python3 tasks/scripts/test_tasks.py
+    (53/53 unchanged); a path-existence sweep over every repo path referenced by the new AGENTS.md files
+    and skills (dead-pointer class that AC-0298 had to repair); skill frontmatter parsed as YAML with
+    kebab-case names + descriptions; root AGENTS.md byte budget; no live doc references a moved/renamed
+    path (grep).
+
+
+    DEFERRED (candidates for follow-up tickets): P3 harness lookup — harness_doc.py --mode NAME/--task
+    AC-NNNN so an agent pulls one mode row instead of reading the 21.5 KB §1 table (45 modes, 16 standing
+    values, 7 battery modes in tasks/harness_data.yaml; a typical task uses 1-4), plus the matching HARNESS.md
+    re-cut. P4 hygiene — one scratch root (repo .scratch is 2.3 GB/2783 entries, godot/.scratch 36 MB;
+    the gate-log instruction does not disambiguate), .gitignore for AGENTS.local.md/CLAUDE.local.md, root
+    clutter (tracked stale plan.html, tracked 10 MB Faithful-32x-1.21.11.mcpack) and the README layout
+    table refresh. godot/ARCHITECTURE.md "Detail lives elsewhere" row sync — NOT done in this ticket because
+    that file carried another session''s uncommitted AC-0286 changes.
+
+
+
+
+    CLOSED 2026-09-17 (commit 3a4e028, pushed to master). P1 + P2 shipped as scoped by the user; P3/P4
+    stayed deferred.
+
+
+    DELIVERED
+
+    - 8 nested scope files: godot/AGENTS.md, godot/world/AGENTS.md, godot/scenes/AGENTS.md, godot/autoload/AGENTS.md,
+    gdext/AGENTS.md, tasks/AGENTS.md, tasks/scripts/AGENTS.md, docs/AGENTS.md.
+
+    - 5 project skills: .dsh/skills/{awecraft-delegate,awecraft-file-ticket,awecraft-run-verify,awecraft-heavy-gates,awecraft-closeout}/SKILL.md.
+
+    - Root AGENTS.md 4312 -> 3506 B with all procedure removed (invariants + scope routing + skill index
+    only). The 2.6 KB target in the ticket was not met: the invariants and the two routing tables cost
+    more than estimated, and the honest budget for the always-on file is ~3.5 KB. A doc-budget/links gate
+    (below) should own that number.
+
+    - Dedupe: architecture-sync rule had FOUR owners, now one (godot/AGENTS.md); harvest + CONTINUITY
+    compaction + commit/push form now owned by the closeout skill; README''s duplicate routing table dropped;
+    godot/OPS.md §2 restated the one-godot and harness.gd rules, now links.
+
+
+    MECHANISM PROVEN LIVE during the task (not assumed): writing godot/AGENTS.md injected "Additional
+    instructions from: godot/AGENTS.md" into the running session, editing it produced "Updated instructions
+    from: godot/AGENTS.md", and writing the first three skills replaced the session skill catalog mid-run
+    with the awecraft-* entries. Nested discovery is touch-driven on read/write/edit - bash/grep do NOT
+    trigger it, which is why the root routing table stays.
+
+
+    BUGS FOUND AND FIXED WHILE RE-CUTTING (both were live dead pointers)
+
+    - tasks/templates/two-phase.md named retired subagent tools: `subagent_plan` (xhigh) and `subagent`
+    (medium). Per ~/.dsh/plugins/subagent-reasoning.js the live names are subagent_xhigh / subagent_medium
+    / subagent_low, and subagent_fork is unpinned (falls back to subagentEffort=medium). The routing table
+    now carries the current names.
+
+    - tasks/scripts/spec_template.py generated notes pointed at an "AGENTS.md HEAVY-GATE PIPELINE" section
+    that does not exist; both that note and the heavy-gates header now point at the awecraft-heavy-gates
+    skill.
+
+
+    VERIFIED: python3 tasks/scripts/harness_doc.py --check -> in sync (exit 0); python3 tasks/scripts/test_tasks.py
+    -> 53 passed, 0 failed; path sweep over every repo path referenced by the new AGENTS.md files and
+    skills (the dead-pointer class AC-0298 had to repair); skill frontmatter parsed as YAML, kebab-case
+    names matching their directories. NO GODOT: docs and tooling only - no arm, no heavy gate, no build.
+
+
+    NOT TOUCHED (another session''s in-flight AC-0286 work, left dirty on purpose): godot/ARCHITECTURE.md,
+    godot/scenes/harness.gd, godot/world/world.gd. Consequence: the "Detail lives elsewhere" table in
+    ARCHITECTURE.md still lists COORDINATOR.md + two-phase.md for "delegation, gates, closeout" and does
+    not yet name the skills - a one-row sync that belongs to whoever next owns that file.
+
+
+    REGISTRY CAUTION: tasks/TASKS.yaml is intentionally NOT in commit 3a4e028. It already carried the
+    other session''s uncommitted queue reorder (AC-0302/AC-0303/AC-0300 removed from the front, AC-0299
+    moved up) before AC-0304 was filed, and the canonical dump interleaves meta.updated_at with the queue
+    hunk, so the two changes cannot be separated cleanly. Whoever commits TASKS.yaml next will therefore
+    carry this ticket''s intake entry along with their own queue edit.
+
+
+    DEFERRED, still open (P3/P4 candidates, no tickets filed yet): P3 harness lookup - harness_doc.py
+    --mode NAME / --task AC-NNNN so an agent pulls one mode row instead of reading the 21.5 KB section-1
+    table (45 modes / 16 values / 7 battery modes; a typical task runs 1-4), plus the matching godot/HARNESS.md
+    re-cut. P4 hygiene - one scratch root (repo .scratch 2.3 GB/2783 entries vs godot/.scratch legacy,
+    newest AC-0237; now documented in godot/AGENTS.md), .gitignore for AGENTS.local.md/CLAUDE.local.md,
+    root clutter (tracked stale plan.html, tracked 10 MB Faithful mcpack) and the README layout table
+    (omits build_windows.sh, references/, screenshots/). Also worth adding: the doc gate this reorg otherwise
+    lacks - every path referenced from an AGENTS.md/skill must exist, root file under a byte budget, one
+    owner per rule.'
   comments: []
