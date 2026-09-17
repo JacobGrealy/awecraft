@@ -17,19 +17,24 @@ the machine, the build, the daemons and git. Do not restate one in the other —
 - Native extension: `python3 -m SCons -C gdext platform=linux|windows target=template_release`
   — `./build_windows.sh` runs both for you (§4).
 
-## 2. Sandbox rules (every godot call)
+## 2. Sandbox rules (why a godot call looks the way it does)
 
-- **`export HOME=/tmp/dsh_home; mkdir -p $HOME` in the same bash command as the godot call.**
-  The real HOME is not writable here and the engine segfaults (rc=134) on the first write to
-  `user://` — a bare `--quit` with the real HOME crashes (AC-0108).
+**The rules for issuing a godot call — the `HOME` prefix, the absolute engine path, `--path godot`
+from the repo root, one process at a time — are owned by `godot/AGENTS.md`.** This section is the
+machine reason behind them.
+
+- **The real HOME is not writable here** and the engine segfaults (rc=134) on the first write to
+  `user://` — a bare `--quit` with the real HOME crashes (AC-0108). Hence `HOME=/tmp/dsh_home`.
 - `/tmp` is ephemeral per bash call, so `HOME=/tmp/dsh_home` means **saves do not persist
   between calls/reboots**. Durable output goes into `.scratch/`, which is git-ignored.
-- **One godot process at a time.** Two in parallel corrupt the `.godot/` cache.
+- **One godot process at a time** — two in parallel corrupt the `.godot/` cache. A parallel agent
+  may hold the slot: check before you launch, and never kill a process you did not start
+  (`godot/AGENTS.md`).
 - `./build_windows.sh` uses the **real** HOME (it needs the export templates) — do not run it
   under the sandbox HOME.
 - A `git worktree` of a past commit does **not** contain the untracked `godot/bin/libchunkio.so`
   (see §5) — copy it from the main tree or headless startup cannot parse the extension.
-- `godot/scenes/harness.gd` stays pristine: temporary measurement arms go in *and come out*.
+- `godot/scenes/harness.gd` stays pristine — rule and reason in `godot/scenes/AGENTS.md`.
 
 ## 3. Daemons and ports
 
@@ -86,7 +91,7 @@ The user downloads it at `http://192.168.0.224:8080/AweCraft.exe` (or `127.0.0.1
 
 The sandbox/push/git rules above used to be referenced as "CONTINUITY.md §00p INFRA LESSON v3 +
 BUILD RECIPE". Compaction dropped that section, and the rules survived only inside
-`tasks/AC-0110/continuity.md` and one handoff file. This file is their home now, and the
-closeout step in `COORDINATOR.md` enforces the harvest: **a durable rule discovered in a task
-is written here (machine/build/daemon) or into the process docs (pipeline/delegation) before
+`tasks/AC-0110/continuity.md` and one handoff file. This file is their home now, and the closeout
+step — the `awecraft-closeout` skill — enforces the harvest: **a durable rule discovered in a task
+is written here (machine/build/daemon) or into the process skills (pipeline/delegation) before
 the task folder is abandoned.**

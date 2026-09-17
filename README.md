@@ -10,16 +10,11 @@ in-game. Development and all automated verification happen on this Linux box, he
 
 ## Where to look
 
-| I want to… | Read |
-|---|---|
-| know the current state / resume work | `godot/CONTINUITY.md` (top checkpoint only) |
-| know what to work on next | `python3 tasks/scripts/tasks.py next` |
-| understand the code structure | `godot/ARCHITECTURE.md` |
-| run and verify anything | `godot/HARNESS.md` |
-| build/serve or fix a machine problem | `godot/OPS.md` |
-| know how work is delegated and gated | `COORDINATOR.md`, `tasks/templates/two-phase.md` |
-| read a design essay | `docs/INDEX.md` |
-| know where any doc lives | `AGENTS.md` |
+`AGENTS.md` is the map: it indexes every document, standing invariant and agent procedure. For a
+human, the short version is — current state and resume steps are the top checkpoint of
+`godot/CONTINUITY.md`, what to work on next is `python3 tasks/scripts/tasks.py next`, the code
+structure is `godot/ARCHITECTURE.md`, and running, verifying or building anything is
+`godot/HARNESS.md` plus `godot/OPS.md`.
 
 ## Run it (Linux dev box)
 
@@ -69,5 +64,7 @@ board is served on the LAN:
 python3 tasks/webui.py --daemon          # → http://192.168.0.224:5180/
 ```
 
-Changes to the project's structure must update `godot/ARCHITECTURE.md` in the same task —
-see the standing rules in `AGENTS.md`.
+Changes to the project's structure must update `godot/ARCHITECTURE.md` in the same task — see the
+invariants in `AGENTS.md`. How work is delegated, verified and closed out lives in the project
+skills under `.dsh/skills/` (start with `awecraft-delegate`), with the paste-ready subagent prompt
+in `tasks/templates/two-phase.md`.

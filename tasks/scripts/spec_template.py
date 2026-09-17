@@ -290,8 +290,9 @@ def _build_html(task, task_id, full=False):
 
     # ---- Coordinator heavy gates (AUTO — background bash/workflow, NOT the builder) ----
     a('<h2>Coordinator Heavy Gates (background bash/workflow, not builder, r50 nightly only)</h2>')
-    a('<div class="auto"><b>AUTO (HEAVY-GATE PIPELINE — the coordinator runs these as a '
-      'background job (no LLM slot) after Run-2 exits; the builder NEVER runs them; '
+    a('<div class="auto"><b>AUTO (the coordinator\'s heavy stage — the '
+      '<code>awecraft-heavy-gates</code> skill owns the protocol; the coordinator runs these as a '
+      'background job (no LLM slot) after the builder exits; the builder NEVER runs them; '
       'commit/push only after they pass — do not hand-edit)</b></div>')
     a("<ul>")
     a("<li><b>boundary r4 ×1</b> + <b>perf r4</b> — ONLY when scope touches "
@@ -308,9 +309,9 @@ def _build_html(task, task_id, full=False):
       "8080/5180 curls — every task.</li>")
     a("</ul>")
     a("<p class='note'>Log → <code>.scratch/AC-NNNN-gates/gates.log</code>; marker "
-      "<code>.scratch/AC-NNNN-gates/HEAVY_GATES_DONE</code>. Full protocol: "
-      "<code>AGENTS.md</code> HEAVY-GATE PIPELINE + "
-      "<code>tasks/templates/two-phase.md</code>.</p>")
+      "<code>.scratch/AC-NNNN-gates/HEAVY_GATES_DONE</code>. Full protocol: the "
+      "<code>awecraft-heavy-gates</code> skill (the prompt template itself is "
+      "<code>tasks/templates/two-phase.md</code>).</p>")
 
     # ---- RESULT shapes (AUTO; slim = path pointer, --full = table) ----
     a('<h2>Expected RESULT shapes (default battery + genhash)</h2>')

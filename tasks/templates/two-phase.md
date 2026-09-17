@@ -1,65 +1,29 @@
-# AC-0105 — single-phase subagent workflow (reusable coordinator templates)
+# Subagent delegation — the paste-ready builder prompt
 
-Process artifact for the DSH-coordinated AweCraft pipeline (local LLM, ONE
-subagent at a time, sequential). Replace every `AC-NNNN` with the real task id
-before pasting. Templates reference docs BY PATH only — never inline their
-content into a prompt.
+Replace every `AC-NNNN` with the real task id before pasting. Templates reference docs **BY PATH** —
+never inline their contents into a prompt.
 
-Workflow (single-phase, user 2026-08-28):
-
-    [trivial-bypass check: labels `trivial` | title match `build-scripts`]
-             ──yes──► Single (medium builder, spec.html only — no plan.html)
-            │no
-            ▼
-    Single (xhigh, plan+implement, via the `subagent_plan` tool)
-            ──► tasks/AC-NNNN/plan.html + code + tasks/AC-NNNN/continuity.md
-            ──► tasks/AC-NNNN/AC-NNNN-results.html + .scratch/AC-NNNN/ gate logs
-
-One DSH spin per task (no Run-1 → gate → Run-2 handoff). The plan is a lean
-artifact written in the same turn; xhigh decides how deep it needs to be.
-
----
-
-## EFFORT ROUTING — how the single is launched (user 2026-08-25, updated 2026-08-28)
-
-The `$DSH_HOME` plugin `subagent-reasoning` pins the child's reasoning effort
-**by the tool name used to launch it**:
-
-    subagent_plan          → xhigh   (single — plan+implement)
-    subagent               → medium  (trivial fast-path only)
-    subagent_implement     → medium  (same as `subagent`, if present)
-    anything else / no match → fallback: `subagentEffort` (currently `medium`)
-
-- **Non-trivial tasks → `subagent_plan` (xhigh, single).** The plan and the
-  code land in one turn; no second launch.
-- **Trivial tasks → `subagent` (medium, single)** with `spec.html` only.
-
-The mapping lives in `~/.dsh/cordis.patch.yml` +
-`~/.dsh/plugins/subagent-reasoning.js` (composed at DSH host start; a host
-restart KILLS in-flight subagents — after one, inspect
-`tasks/AC-NNNN/continuity.md` + task folder + `.scratch/AC-NNNN/` and relaunch
-with a resume pointing at the log's last entry).
-
----
-
-## SINGLE TEMPLATE — xhigh, plan+implement → plan.html + code
-
-Paste as the prompt to the **`subagent_plan` tool** (the plugin pins that tool
-to **xhigh**). Writes `tasks/AC-NNNN/plan.html` then implements it in the same
-turn.
+**Routing, effort pinning and the launch rules are owned by the `awecraft-delegate` skill. The heavy
+stage the coordinator runs afterwards is owned by `awecraft-heavy-gates`; the closeout by
+`awecraft-closeout`.** This file is only the prompt text.
 
 ```
-You are the single subagent (xhigh) for AweCraft task AC-NNNN.
+You are the single subagent for AweCraft task AC-NNNN.
 
 READ FIRST, in order, BY PATH (do not paste their contents into your reply):
 1. godot/CONTINUITY.md          — the TOP checkpoint only (state + resume steps)
 2. godot/ARCHITECTURE.md        — architecture + conventions (mandatory)
-3. godot/HARNESS.md             — every AWECRAFT_LOGIC mode, RESULT shapes,
-                                   envs, smoke-tier protocol, run recipes
-4. godot/OPS.md                 — machine, sandbox, build/daemons/git rules
-                                   (read before ANY godot or git command)
-5. tasks/AC-NNNN/spec.html      — this task's requirements + verify gates
+3. tasks/AC-NNNN/spec.html      — this task's requirements + verify gates
+4. godot/HARNESS.md             — RUN RECIPES §4 and gate semantics §5; the §1 mode
+                                  table is a LOOKUP: read only the rows for the modes
+                                  your task runs (use `--full` spec.html if you need
+                                  them inline). §3 holds the standing values.
+5. godot/OPS.md                 — machine, sandbox, build/daemons/git rules
+                                  (read before ANY godot or git command)
 6. The AC-NNNN entry in tasks/TASKS.yaml (its notes), if the spec references it.
+   Scope rules for the directories you touch (godot/AGENTS.md, godot/world/AGENTS.md,
+   godot/scenes/AGENTS.md, gdext/AGENTS.md, ...) load automatically when you read or
+   edit a file there — read the matching one BEFORE you edit.
 
 YOUR JOB — PLAN + IMPLEMENT in one turn.
 
@@ -76,8 +40,7 @@ YOUR JOB — PLAN + IMPLEMENT in one turn.
                                 (the mode table in godot/HARNESS.md is the ref).
                                 For each: mode name + the ok:true condition.
 
-Then add any of the following ONLY if the task needs them (let your
-xhigh reasoning decide — do not add boilerplate):
+Then add any of the following ONLY if the task needs them (do not add boilerplate):
 
      - Frozen refs          — EXACT world constants with file:line. Only when world/* touched.
      - Data.* ids           — Data.* / B_* ids with file:line. Only when ids change.
@@ -99,12 +62,13 @@ happened, current state, next step. Write it promptly (don't batch at the end).
 If the log already exists when you start, this run is a RESUME: read it FIRST
 and continue from its last entry.
 
-VERIFY (single: you own the gates, then exit):
+VERIFY (single: you own the LIGHT gates, then exit — policy: `awecraft-run-verify`):
   G0    one godot headless load: zero SCRIPT ERROR lines (hard gate — always).
-  SMOKE + PROBE + RENDER as needed (let your plan guide you; godot/HARNESS.md §3
-        is the ref). Typical: SMOKE = 2–4 dependency-mapped modes for the
-        change area + genhash when world/* or data.gd is touched; PROBE = the
-        task's probe mode from spec.html when defined (≤60s, headless).
+        rc=0 is NOT the gate: the engine exits 0 even when scripts fail to compile.
+  SMOKE + PROBE + RENDER as needed (godot/HARNESS.md §1 rows + §3 values are the ref).
+        Typical: SMOKE = 2–4 dependency-mapped modes for the change area + genhash
+        when world/* or data.gd is touched; PROBE = the task's probe mode from
+        spec.html when defined (≤60s, headless).
   RENDER only when the change is visual (mesh/shader/held/UI):
         ≤1 render at AWECRAFT_RADIUS=1 into tasks/AC-NNNN/ (xvfb,
         gl_compatibility — a PROXY renderer: it cannot show Forward+-only
@@ -121,15 +85,17 @@ results + continuity, name the follow-up, and EXIT (no option loop). A hard
 failure is still a bounce.
 
 One godot at a time (corrupts the .godot cache). All runs: one bash command,
-HOME set first, from repo root (recipes in godot/HARNESS.md §4).
+HOME set first, from repo root (recipes in godot/HARNESS.md §4). Before every
+godot call check `pgrep -af '[g]odot'` and wait if another agent or a
+coordinator gate job holds the slot — never kill a godot you did not start.
 
 DELIVER: a self-contained tasks/AC-NNNN/AC-NNNN-results.html for every
 task (G0 output + smoke RESULT JSON + deviations; include render PNG only
 when visual). Report <= 20 lines: files changed, RESULT values, gates green/red.
 
-ARCHITECTURE SYNC (standing rule, AGENTS.md #1): if your change alters the
-structure — an autoload, a component that moved/appeared/disappeared, a new
-subsystem or native layer, a data or save format, a convention — update
+ARCHITECTURE SYNC (invariant 2 in AGENTS.md, owned by godot/AGENTS.md): if your change
+alters the structure — an autoload, a component that moved/appeared/disappeared,
+a new subsystem or native layer, a data or save format, a convention — update
 godot/ARCHITECTURE.md in THIS task and say so in the report. A task that leaves
 that file wrong is not done.
 ```
@@ -138,37 +104,9 @@ that file wrong is not done.
 
 ## TRIVIAL FAST-PATH — medium, spec-only (no plan.html)
 
-Before launching, the coordinator checks `tasks/TASKS.yaml`:
+BYPASS when the ticket's labels contain `trivial`, or its title matches `build-scripts`.
 
-    BYPASS  if labels contain `trivial`
-        OR the title matches: `build-scripts` (covers AC-0100)
-
-- BYPASS=yes → skip the xhigh single. Generate `tasks/AC-NNNN/spec.html` via
-  `python3 tasks/scripts/spec_template.py AC-NNNN` (if not already present),
-  then launch the **`subagent` tool (medium)** with a prompt that points at
-  `spec.html` + `godot/HARNESS.md` only (same VERIFY/DELIVER as above, but no plan.html).
-- BYPASS=no → the single xhigh flow above (plan+implement in one turn).
-
----
-
-## Notes for the coordinator
-
-- Local LLM serves ONE request at a time: never launch two subagents concurrently.
-  The heavy-gate background job is NOT a subagent (no LLM slot) — it may overlap
-  the next task's single (which is static research for most of its life), but
-  the gate's godot step must not overlap the single's godot step: before EVERY
-  godot call the single checks `ps -eo pid,comm,args | grep -E '^\s*[0-9]+ (godot|Xvfb)'`
-  and the `HEAVY_GATES_DONE` marker and waits if a gate job holds godot.
-- **HEAVY-GATE PIPELINE (user 2026-08-26, sliced 2026-08-27):** the single's VERIFY
-  above is G0+SMOKE+PROBE+(≤1 render) only; the heavy gates run as a
-  **coordinator BACKGROUND bash job**: one script, godot SEQUENTIAL, then
-  `./build_windows.sh` + 8080/5180 curls, logging to `.scratch/AC-NNNN-gates/gates.log`
-  + `HEAVY_GATES_DONE` marker. Sliced set: **boundary r4 ×1** + **flake ×1** +
-  genhash re-run + task probe, and **ONLY when scope touches `godot/world/*`|`lighting.gd`**
-  (godot/HARNESS.md §3) — UI/tool tasks get SMOKE only; **r50 = nightly**. Commit/push N
-  only after heavy pass (code+results+plan+build in one commit); heavy fail =
-  honest-deviation+follow-up or bounce.
-- Templates keep doc references as paths (CONTINUITY.md, ARCHITECTURE.md,
-  HARNESS.md, spec.html, plan.html). Inlining their content bloats prompts and
-  drifts out of date. Report `plan.html` by path only — do NOT inline plan gates
-  verbatim.
+- BYPASS=yes → generate `tasks/AC-NNNN/spec.html` if it is missing
+  (`python3 tasks/scripts/spec_template.py AC-NNNN`), then launch the trivial builder with the same
+  template above minus step 1 (no `plan.html`).
+- BYPASS=no → the full plan+implement flow above.
