@@ -8,7 +8,17 @@ extends RefCounted
 
 const VERSION := 4
 const V5_VERSION := 5  # AC-0237 v4 + the 24-bit generated mask (3 bytes after sub)
-const V6_VERSION := 6  # AC-0284a v5 + 1 flag byte after the mask (bit 0 = no-caves skip-gen column)
+# AC-0284a: v5 + 1 flag byte after the mask (bit 0 = no-caves skip-gen
+# column). AC-0284b: bit 1 = the FAR (h-only) column — no slabs at all:
+# the 1024-byte far payload (256 H u16 LE + 256 biome + 256 top-block id)
+# REPLACES the slab section (sub = 0); the payload IS the column (the
+# halo draw reads H/biome/top; the heightmap sky reads H). A bit-0-ONLY
+# v6 column (the AC-0284a slab no-caves shape, written between 284a and
+# 284b) still decodes as the slab shape (back-compat); a bit-1 column is
+# h-only with empty slabs. The far column is no-caves by representation
+# (decode returns no_caves = true even if bit 0 were unset — the
+# real-band regen trigger keys on the umbrella).
+const V6_VERSION := 6
 const V3_VERSION := 3  # AC-0197 sparse slabs (decodable, never written)
 const V2_VERSION := 2  # AC-0156 dense+light (decodable, never written)
 const LEGACY_VERSION := 1
@@ -255,12 +265,16 @@ static func saved_column_exists(slot: int, cx: int, cz: int) -> bool:
 					return true
 	return FileAccess.file_exists(path_for(int(slot), 1 if int(cx) < 0 else 0, int(cx), int(cz)))
 
-static func encode_column(data: PackedByteArray, fl: PackedByteArray, seed: int, height: int, light: Dictionary = {}, top := -1, gen_mask := 0xFFFFFF, no_caves := false) -> PackedByteArray:
-	var sub := int(data.size()) / S3
+static func encode_column(data: PackedByteArray, fl: PackedByteArray, seed: int, height: int, light: Dictionary = {}, top := -1, gen_mask := 0xFFFFFF, no_caves := false, far_payload: PackedByteArray = PackedByteArray()) -> PackedByteArray:
+	# AC-0284b: a FAR (h-only) column (the 1024-byte far payload) holds
+	# NO slabs — sub = 0, the payload section replaces the slab section
+	# (the ~1 KB that AC-0287's save filter later drops entirely).
+	var is_far := far_payload.size() == 1024
+	var sub := 0 if is_far else int(data.size()) / S3
 	# AC-0197: the v3 sparse slab layout. Slabs above top are all-air (the
 	# caller's column top); absent slabs are omitted entirely (~40% of the
 	# block/fl section at H=384). top < 0 = unknown -> scan the data.
-	if top < 0:
+	if not is_far and top < 0:
 		top = _column_top(data, sub)
 	# AC-0237: a RANGE-GENERATED column (gen_mask != full — slabs the
 	# window never generated) is written as v5 (v4 + the 24-bit mask);
@@ -271,8 +285,10 @@ static func encode_column(data: PackedByteArray, fl: PackedByteArray, seed: int,
 	# AC-0284a: a NO-CAVES column (skip-generated — solid 0..H, no cave
 	# field) writes v6 (v5 layout + 1 flag byte) so a reload in the REAL
 	# band can schedule the full regen. Old saves (v1-v5) = full data.
-	var ver := V6_VERSION if bool(no_caves) else (V5_VERSION if int(gen_mask) != 0xFFFFFF else VERSION)
-	var blob := _encode_head(ver, data, fl, seed, height, sub, top, gen_mask, no_caves)
+	# AC-0284b: a FAR column writes v6 flag bit 1 (bit 0 = the no-caves
+	# umbrella, set too — a far column is cave-less by representation).
+	var ver := V6_VERSION if (is_far or bool(no_caves)) else (V5_VERSION if int(gen_mask) != 0xFFFFFF else VERSION)
+	var blob := _encode_head(ver, data, fl, seed, height, sub, top, gen_mask, no_caves, far_payload)
 	var li := _encode_light(light, sub)
 	blob.append_array(_u32(li.size()))
 	blob.append_array(li)
@@ -283,7 +299,8 @@ static func encode_column_legacy(data: PackedByteArray, fl: PackedByteArray, see
 	var blob := _encode_head(LEGACY_VERSION, data, fl, seed, height, sub, -1)
 	return _encode_tail(blob)
 
-static func _encode_head(ver: int, data: PackedByteArray, fl: PackedByteArray, seed: int, height: int, sub: int, top: int, gen_mask := 0xFFFFFF, no_caves := false) -> PackedByteArray:
+static func _encode_head(ver: int, data: PackedByteArray, fl: PackedByteArray, seed: int, height: int, sub: int, top: int, gen_mask := 0xFFFFFF, no_caves := false, far_payload: PackedByteArray = PackedByteArray()) -> PackedByteArray:
+	var is_far := far_payload.size() == 1024
 	var blob := PackedByteArray()
 	blob.append(M0)
 	blob.append(M1)
@@ -297,12 +314,21 @@ static func _encode_head(ver: int, data: PackedByteArray, fl: PackedByteArray, s
 		# AC-0237: the 24-bit generated mask (3 bytes LE; bit si set iff
 		# slab si was generated — its ABSENT sections are ungenerated, not
 		# air). AC-0284a: v6 appends the 1 flag byte (bit 0 = no-caves
-		# skip-gen column). The sections follow at +3 / +4.
+		# skip-gen column). The sections follow at +3 / +4. AC-0284b:
+		# bit 1 = the far (h-only) column (the payload below replaces the
+		# slab section; bit 0 is set on write too — the umbrella).
 		blob.append((int(gen_mask) & 0xFF))
 		blob.append(((int(gen_mask) >> 8) & 0xFF))
 		blob.append(((int(gen_mask) >> 16) & 0xFF))
 		if ver == V6_VERSION:
-			blob.append(1 if bool(no_caves) else 0)
+			blob.append((1 if bool(no_caves) else 0) | (2 if is_far else 0))
+		if is_far:
+			# AC-0284b: the far payload section (u32 size + 1024 bytes:
+			# 256 H u16 LE + 256 biome + 256 top-block id) IN PLACE OF the
+			# de/fe slab sections (sub = 0 — nothing to section).
+			blob.append_array(_u32(far_payload.size()))
+			blob.append_array(far_payload)
+			return blob
 	# AC-0197: v3 = sparse slab sections (offset table of non-null slabs);
 	# AC-0203: v4 = sparse + PER-SLAB PALETTE (n, bits, palette, packed;
 	# n==1 omits the packed, n==0 = raw 8-bit slab for >16 unique ids);
@@ -391,8 +417,6 @@ static func decode_column(file_bytes: PackedByteArray, seed: int, height: int) -
 	if h != int(height):
 		return fail
 	var sub := _u16r(blob, 11)
-	if sub != h / S:
-		return fail
 	# AC-0237: v5 carries the 24-bit generated mask at bytes 13-15 (3
 	# bytes LE, right after sub — the sections shift to de_at=20). The
 	# absent slabs it clears are UNGENERATED (solid-for-snap, capped,
@@ -401,6 +425,7 @@ static func decode_column(file_bytes: PackedByteArray, seed: int, height: int) -
 	# sections shift to de_at=21). v1-v5 = full data (no flag).
 	var gen_mask := 0xFFFFFF
 	var no_caves := false
+	var is_far := false  # AC-0284b: the far (h-only) shape (v6 bit 1)
 	var hde := 13  # the de_size offset (de_at = hde + 4)
 	if ver == V5_VERSION:
 		if blob.size() < 21:
@@ -411,30 +436,94 @@ static func decode_column(file_bytes: PackedByteArray, seed: int, height: int) -
 		if blob.size() < 22:
 			return fail
 		gen_mask = int(blob[13]) | (int(blob[14]) << 8) | (int(blob[15]) << 16)
-		no_caves = (int(blob[16]) & 1) != 0
+		var flag := int(blob[16])
+		no_caves = (flag & 1) != 0
+		is_far = (flag & 2) != 0
+		# AC-0284b: a far column is cave-less by REPRESENTATION (its
+		# slabs do not exist) — the umbrella is on even if bit 0 were
+		# unset (the real-band regen trigger keys on it).
+		if is_far:
+			no_caves = true
 		hde = 17
-	var de_size := _u32r(blob, hde)
-	var de_at := hde + 4
-	var fe_sz_at := de_at + de_size
-	if fe_sz_at + 4 > blob.size():
+	# AC-0284b: the far shape has sub = 0 (the payload replaces the slab
+	# section); every other shape needs the full column height.
+	if (is_far and sub != 0) or (not is_far and sub != h / S):
 		return fail
-	var fe_size := _u32r(blob, fe_sz_at)
-	var fe_at := fe_sz_at + 4
+	var de_size := 0
+	var de_at := 0
+	var fe_sz_at := 0
+	var fe_size := 0
+	var fe_at := 0
 	var light: Dictionary = {}
 	var md5_at := 0
-	if ver == LEGACY_VERSION:
-		md5_at = fe_at + fe_size
-		if md5_at + 16 != blob.size():
+	if is_far:
+		# AC-0284b: [u32 payload size][1024 payload][u32 li size][light]
+		# [md5] — there is no slab section at all.
+		if blob.size() < hde + 4:
 			return fail
+		de_size = _u32r(blob, hde)
+		if de_size != 1024:
+			return fail
+		de_at = hde + 4
+		var li_sz_at := de_at + de_size
+		if li_sz_at + 4 + 16 > blob.size():
+			return fail
+		var li_size := _u32r(blob, li_sz_at)
+		if li_sz_at + 4 + li_size + 16 != blob.size():
+			return fail
+		light = _decode_light(blob.slice(li_sz_at + 4, li_sz_at + 4 + li_size), sub)
+		md5_at = li_sz_at + 4 + li_size
 	else:
-		if fe_at + fe_size + 4 + 16 > blob.size():
+		de_size = _u32r(blob, hde)
+		de_at = hde + 4
+		fe_sz_at = de_at + de_size
+		if fe_sz_at + 4 > blob.size():
 			return fail
-		var li_size := _u32r(blob, fe_at + fe_size)
-		if fe_at + fe_size + 4 + li_size + 16 != blob.size():
+		fe_size = _u32r(blob, fe_sz_at)
+		fe_at = fe_sz_at + 4
+		if ver == LEGACY_VERSION:
+			md5_at = fe_at + fe_size
+			if md5_at + 16 != blob.size():
+				return fail
+		else:
+			if fe_at + fe_size + 4 + 16 > blob.size():
+				return fail
+			var li_size := _u32r(blob, fe_at + fe_size)
+			if fe_at + fe_size + 4 + li_size + 16 != blob.size():
+				return fail
+			var li := blob.slice(fe_at + fe_size + 4, fe_at + fe_size + 4 + li_size)
+			light = _decode_light(li, sub)
+			md5_at = fe_at + fe_size + 4 + li_size
+	# AC-0284b: the FAR (h-only) shape — the payload IS the column (no
+	# slab section to decode). res carries the far arrays + all-null slab
+	# arrays (the _land_column reference handoff shape) + the umbrella.
+	if is_far:
+		var h2 := HashingContext.new()
+		h2.start(HashingContext.HASH_MD5)
+		h2.update(blob.slice(0, md5_at))
+		if h2.finish() != blob.slice(md5_at, md5_at + 16):
 			return fail
-		var li := blob.slice(fe_at + fe_size + 4, fe_at + fe_size + 4 + li_size)
-		light = _decode_light(li, sub)
-		md5_at = fe_at + fe_size + 4 + li_size
+		var res := {
+			"data": PackedByteArray(),  # no flat arrays — the payload is the column
+			"fl": PackedByteArray(),
+			"gen_mask": 0xFFFFFF,
+			"no_caves": true,
+			"far": true,
+			"far_h": blob.slice(de_at, de_at + 512),
+			"far_biome": blob.slice(de_at + 512, de_at + 768),
+			"far_top": blob.slice(de_at + 768, de_at + 1024),
+		}
+		var ds: Array = []
+		for i in range(h / S):
+			ds.append(null)
+		var fs: Array = []
+		for i in range(h / S):
+			fs.append(null)
+		res["d_slabs"] = ds
+		res["f_slabs"] = fs
+		if not light.is_empty():
+			res["light"] = light
+		return res
 	# AC-0236 part 1: the v4 section decode is C++ (ChunkIOPalette
 	# .decode_section, byte-identical to the GDScript _decode_array_v4 - the
 	# chunkiocpp arm still A/Bs them; the GDScript twin is kept ONLY as that

@@ -94,8 +94,8 @@ quits.
 | Source | Role |
 |---|---|
 | `awe_common.{h,cpp}` | shared helpers/registration |
-| `gen.cpp` | terrain, biome, cave and ore generation (the density-field generator); `generate_resl`'s `skip` arg = the lazy-skip far path (AC-0216/AC-0284a: no cave field, no top-down scan, column solid 0..H — used for the offscreen interior collar and the halo band) |
-| `mesh.cpp` | chunk meshing (greedy/FACE-BLOCK path) |
+| `gen.cpp` | terrain, biome, cave and ore generation (the density-field generator); `generate_resl`'s `skip` arg: 0 = full / 1 = slab-skip (no cave field, solid 0..H — A/B reference only) / 2 = **far h-only** (AC-0284b: builds only the 3 surface fields + H/biome/top-block, NO slabs, ~92 µs/col vs ~1.7 ms full) |
+| `mesh.cpp` | chunk meshing (greedy/FACE-BLOCK path); the 4x4 avg far emitter `AweMesh.h_avg_emit` (byte-identical to the slab emitter on the same fill, shares `avg_grid_emit` with `low_emit_avg`) |
 | `strips.cpp` | strip meshing lane |
 | `chunk_io.cpp` | column/slab blob encode+decode, region disk I/O |
 | `lighting.cpp` | **test-only reference**: the legacy `AweLighting` flood kernel (AC-0283 P4) |
@@ -126,10 +126,11 @@ Build and loading:
 - **Saves**: slot-based (`Save` autoload + `core/chunk_io.gd` + `gdext/chunk_io.cpp`), column
   blob format **v6**, per-slot chunk directories under `user://` — which in this sandbox is
   `/tmp/dsh_home/...`, so saves do not survive a reboot (see `godot/OPS.md`). v6 = v5
-  (the 24-bit generated mask) + one flag byte in the MD5-hashed head (bit 0 = **no-caves**:
-  the column was skip-generated, solid 0..H, no cave field — AC-0284a); old v1–v5 saves
-  decode as full data. The save-content filter (write only the sim band or edited columns)
-  is AC-0287.
+  (the 24-bit generated mask) + one flag byte in the MD5-hashed head: **bit 0 = no-caves**
+  (AC-0284a, solid 0..H slab-skip) / **bit 1 = far h-only** (AC-0284b — the column stores
+  NO slabs, just a `[H u16×256][biome×256][top×256]` payload, ~198 B on disk); old v1–v5
+  and bit-0-only v6 decode unchanged. The save-content filter (write only the sim band or
+  edited columns) is AC-0287.
 
 ## 6. Stable design decisions
 
@@ -144,16 +145,21 @@ Match these; do not improvise a different approach in a task.
 - **Lighting**: baked into each face's **vertex colour** (albedo × light) — no realtime GI.
   Sky+block light come from the C++ `AweStarlight` single-queue engine inside the sim band;
   beyond it a heightmap-sky halo (sky 15 strictly above the terrain top, 0 at/below, no
-  flood, no nibbles) keeps the far field cheap. One `DirectionalLight3D` sun is modulated by
-  `Game.time_of_day`; the mesh stores noon light and the shader uniform `u_day` does the
-  darkening (AC-0204 — no day factor anywhere in the build path).
-- **Far data (the halo band, taxi > `band0_r`)**: columns are generated in the
-  lazy-skip mode (AC-0216/AC-0284a) — no cave field, no top-down scan, solid 0..H with the
-  surface/ore/biome/top-block exact — and carry the per-column `no_caves` marker (rides the
-  v6 save flag). The halo draw (4x4 avg + heightmap sky) never shows caves, so the data is
-  sufficient as-is. A no-caves column entering the real band (recenter promotion or a disk
-  load in-band) schedules a FULL regen, which lands through the AC-0283 P2 late-landing
-  machinery (re-seed + re-bake, no unlit slab); the no-flash polish is AC-0286.
+  flood, no nibbles) keeps the far field cheap. A far (h-only) column is **never seeded
+  into the engine as all air** (a stale all-air seam mis-carries sky across the promotion
+  re-seed); a far→full promotion re-seeds the WHOLE column top-down. One `DirectionalLight3D`
+  sun is modulated by `Game.time_of_day`; the mesh stores noon light and the shader uniform
+  `u_day` does the darkening (AC-0204 — no day factor anywhere in the build path).
+- **Far data (the halo band, taxi > `band0_r`, + the offscreen interior collar)**: columns
+  store **no slabs at all** — just a `[H u16×256][biome×256][top-block×256]` payload
+  (~1 KB, ~198 B on disk; AC-0284b). Gen builds only the 3 coarse SURFACE fields (the ones
+  H depends on) + the heights pass — ~92 µs/col vs ~1.7 ms full (≈18×); the heights pass
+  alone is ~34 µs (the RP "heights-only" line). H is bit-exact with the full path (the
+  stored H *is* the heightmap — promotion must not shift terrain). The halo draw (4x4 avg +
+  heightmap sky) never shows caves, so slab data is unnecessary; the 4x4 avg is emitted by
+  `AweMesh.h_avg_emit`, byte-identical to the slab emitter on the same fill. A far column
+  entering the real band (recenter promotion or an in-band disk load) schedules a FULL regen
+  through the AC-0283 P2 late-landing machinery; the no-flash polish is AC-0286.
 - **`gdext/lighting.cpp` (`AweLighting`) and the classic light pull are TEST-ONLY
   references** (AC-0283 P4). They exist so arms can compare against the old kernel. Never
   wire them into game code; AC-0297 removes the last live consumers.

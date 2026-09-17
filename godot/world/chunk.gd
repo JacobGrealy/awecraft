@@ -177,8 +177,57 @@ var gen_mask := 0xFFFFFF
 # AC-0216 lazy path: solid exactly 0..H, no cave field — invisible in the
 # halo band, whose draw never shows caves). A no-caves column in the REAL
 # band owes a full regen. Rides the v6 column blob (ChunkIO). Stamped at
-# every gen/disk landing; cleared by any full landing.
+# every gen/disk landing; cleared by any full landing. AC-0284b: UMBRELLA
+# flag — true for the h-only far columns too (they are cave-less by
+# representation); c.far tells them apart.
 var no_caves := false
+# AC-0284b: the FAR (h-only) column — NO slabs at all (data/fl are the
+# all-null arrays): the column IS the far payload. far_h = 256 H as u16 LE
+# (512 bytes; H > 255 possible — TERRAIN_H_MAX 300), far_biome = 256
+# bcode, far_top = 256 top-block ids (the bit-exact fill top row);
+# far_hmax = max H (the low dispatch's deep-cell guard — the ore
+# precompute is owed only while far_hmax > si*16 + 3). The stored H IS the
+# heightmap (bit-exact with the gen's — _halo_sky_for reads far_h, not
+# c.hmap, for a far column). Rides the v6 blob (flag bit 1; the payload
+# replaces the slab section, ~1 KB). A far column in the REAL band owes
+# the same full regen a no-caves column does (the umbrella flag); the
+# regen landing CLEARS the payload (a full landing replaces the column
+# whole).
+var far := false
+var far_h: PackedByteArray = PackedByteArray()
+var far_biome: PackedByteArray = PackedByteArray()
+var far_top: PackedByteArray = PackedByteArray()
+var far_hmax := 0
+# AC-0284b: the cached tree cells (4 bytes/cell — AweGen.veg_cells). NOT
+# on disk (recomputed lazily by the first low slab worker from the
+# payload's H — the trees are a pure f(H, biome, x, z, seed); the 20x20
+# veg neighborhood's margin cells need the surface fields, so the recompute
+# rebuilds them). The h-only halo's solid set includes the trees (the skip
+# slab's bs bitset does too) — empty here until the first emit.
+var far_veg: PackedByteArray = PackedByteArray()
+
+# AC-0284b: drop the far representation (a full landing replaces the
+# column whole — the slabs ARE the data again).
+func clear_far() -> void:
+	far = false
+	far_h = PackedByteArray()
+	far_biome = PackedByteArray()
+	far_top = PackedByteArray()
+	far_hmax = 0
+	far_veg = PackedByteArray()
+
+# AC-0284b: the 1024-byte far payload (H u16 LE + biome + top) as ONE
+# array — the snap_rings far argument (a far neighbor's ring is the
+# skip-fill edge row, synthesized in C++ from this) + the save queue's
+# codec section. Empty for a non-far column.
+func far_payload() -> PackedByteArray:
+	if not far:
+		return PackedByteArray()
+	var out := PackedByteArray()
+	out.append_array(far_h)
+	out.append_array(far_biome)
+	out.append_array(far_top)
+	return out
 func has_gen_si(si: int) -> bool:
 	return (gen_mask >> si) & 1 != 0
 
@@ -1435,7 +1484,7 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}, mask: PackedByt
 	for s2 in [[-1, 0], [1, 0], [0, -1], [0, 1]]:
 		var nc = Game.world.chunks.get(Game.world._key(cx + int(s2[0]), cz + int(s2[1])))
 		if nc != null and nc.data.size() > 0:
-			nbs["%d,%d" % [int(s2[0]), int(s2[1])]] = mc.snap_rings(nc.data, nc.fl, int(s2[0]), int(s2[1]), nc.gen_keep)  # AC-0237: ungenerated slabs read as solid
+			nbs["%d,%d" % [int(s2[0]), int(s2[1])]] = mc.snap_rings(nc.data, nc.fl, int(s2[0]), int(s2[1]), nc.gen_keep, nc.far_payload())  # AC-0237: ungenerated slabs read as solid; AC-0284b: a far neighbor's ring is the skip-fill edge row
 	var ctx_w: Dictionary = make_ctx()
 	ctx_w["eff_strips"] = st["eff"]
 	ctx_w["blk_strips"] = st["blk"]
@@ -1683,6 +1732,12 @@ func _pool_reset() -> void:
 	gen_keep = PackedByteArray()
 	gen_mask = 0xFFFFFF
 	no_caves = false
+	far = false  # AC-0284b: the far payload dies with the column
+	far_h = PackedByteArray()
+	far_biome = PackedByteArray()
+	far_top = PackedByteArray()
+	far_hmax = 0
+	far_veg = PackedByteArray()
 	# slab objects (survive; per-use fields reset in place — the
 	# init_slabs fresh state)
 	for i in range(slabs.size()):

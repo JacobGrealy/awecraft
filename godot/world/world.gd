@@ -595,7 +595,9 @@ func _entry_best_pending(c: Node3D, windowed := false) -> int:
 		else:
 			dy = r / 2
 		var si := pys + dy
-		if si < 0 or si >= sn or c.data[si] == null:
+		# AC-0284b: a far column's slabs are all null BY REPRESENTATION —
+		# every slab is still buildable (the emit reads the payload).
+		if si < 0 or si >= sn or (c.data[si] == null and not c.far):
 			continue
 		if c.has_low_si(si):
 			# a LOW slab is pending only when stale (edited after the low,
@@ -615,7 +617,7 @@ func _entry_best_pending(c: Node3D, windowed := false) -> int:
 # factored out so the probe cache can re-validate a cached si cheaply
 # (~5 dict lookups) instead of re-running the 32-probe sweep.
 func _low_slab_pending_at(c: Node3D, si: int, tier: int) -> bool:
-	if si < 0 or si >= c.data.size() or c.data[si] == null:
+	if si < 0 or si >= c.data.size() or (c.data[si] == null and not c.far):  # AC-0284b: a far column's null slabs are buildable (the payload is the data)
 		return false
 	if c.has_low_si(si):
 		# a LOW slab is pending only when stale (edited after the low,
@@ -1456,7 +1458,10 @@ func _low_fog_for(c: Node3D) -> void:
 		return
 	for si in range(c.data.size()):
 		var si2 := int(si)
-		if c.data[si2] == null or c.has_low_si(si2):
+		# AC-0284b: a far column's slabs are all null BY REPRESENTATION —
+		# they are NOT air: fog them (the fog wave makes them pending, the
+		# far emit replaces the fog).
+		if (c.data[si2] == null and not c.far) or c.has_low_si(si2):
 			continue
 		if FOG_WAVE_ON and not c.has_fog_si(si2):
 			_fog_ensure_slab(c, si2)
@@ -2392,7 +2397,9 @@ func _low_any_stale(c: Node3D) -> bool:
 func _low_build_slab(c: Node3D, si: int) -> void:
 	if c.data.is_empty() or si < 0 or si >= c.data.size():
 		return
-	if c.data[si] == null:
+	# AC-0284b: a far column's null slab is NOT air — it dispatches to the
+	# payload emit (only a real null slab takes the air bookkeeping).
+	if c.data[si] == null and not c.far:
 		_low_air_slab(c, si)
 		return
 	# Verdicts: 1 = a worker owns the grid sample + emit (the
@@ -2490,6 +2497,31 @@ func _halo_hmap_get(c: Node3D) -> PackedByteArray:
 # worker's low_emit_avg writes each quad's origin-cell sky into the
 # vertex alpha (the lod_avg shader multiplies it into the brightness).
 func _halo_sky_for(c: Node3D, si: int) -> PackedByteArray:
+	# AC-0284b: a far column's stored H (the u16 payload) IS the
+	# heightmap — no C++ heights pass and no u8 wrap above 255 (TERRAIN_H
+	# MAX is 300). The slab-shaped halo path below keeps the u8 cache.
+	if c.far:
+		var fh: Array = []
+		fh.resize(16)
+		for gz in range(4):
+			for gx in range(4):
+				var m := 0
+				for lz in range(gz * 4, gz * 4 + 4):
+					var r0 := lz * 32
+					for lx in range(gx * 4, gx * 4 + 4):
+						var o := r0 + lx * 2
+						var v := int(c.far_h[o]) | (int(c.far_h[o + 1]) << 8)
+						if v > m:
+							m = v
+				fh[gz * 4 + gx] = m
+		var y0f := si * 16
+		var outf := PackedByteArray()
+		outf.resize(64)
+		for cy in range(4):
+			for cz in range(4):
+				for cx in range(4):
+					outf[cy * 16 + cz * 4 + cx] = 15 if y0f + cy * 4 > int(fh[cz * 4 + cx]) else 0
+		return outf
 	var hm: PackedByteArray = _halo_hmap_get(c)
 	var fh := PackedByteArray()
 	fh.resize(16)
@@ -2512,7 +2544,8 @@ func _halo_sky_for(c: Node3D, si: int) -> PackedByteArray:
 	return out
 
 func _low_dispatch_slab(c: Node3D, si: int) -> int:
-	if threadmesh_pool == null or si < 0 or si >= c.data.size() or c.data[si] == null:
+	# AC-0284b: a far column's null slabs ARE the payload — dispatchable.
+	if threadmesh_pool == null or si < 0 or si >= c.data.size() or (c.data[si] == null and not c.far):
 		return -1
 	if _low_tasks.size() >= LOW_TASK_CAP:
 		return 2
@@ -2520,7 +2553,9 @@ func _low_dispatch_slab(c: Node3D, si: int) -> int:
 	var lkey: String = key + ":" + str(si)
 	if _low_task_keys.has(lkey):
 		return 0
-	var mc: Variant = ChunkScript.mesh_cpp()
+	# AC-0284b: a far column carries the payload instead of the slab copy
+	# (the emit reads no slabs — ~1 KB vs ~20 KB on the wire).
+	var mc: Variant = ChunkScript.mesh_cpp() if not c.far else null
 	# AC-0252: the band tier at dispatch (the handoff DROPS the result when
 	# the live tier moved since — the slab re-picks at the new tier).
 	var tier := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)
@@ -2546,7 +2581,18 @@ func _low_dispatch_slab(c: Node3D, si: int) -> int:
 		# the band — a promotion/demotion re-pick re-emits at the new
 		# tier; the real band never reaches this lane, empty payload).
 		"sky": _halo_sky_for(c, si) if tier == 2 else PackedByteArray(),
-		"slabs": mc.slab_copy(c.data),  # the full column (~20 KB; the C++ emit reads si-1/si/si+1)
+		"slabs": mc.slab_copy(c.data) if not c.far else PackedByteArray(),  # the full column (~20 KB; the C++ emit reads si-1/si/si+1) — a far column carries the payload below
+		# AC-0284b: the far payload (h u16 + biome + top) — null for every
+		# non-far dispatch. Packed arrays are COW value types: the worker
+		# reads a stable copy (the entry is the last consumer). far_hmax
+		# is the deep-cell guard (the ore precompute trigger).
+		"far": [c.far_h, c.far_biome, c.far_top] if c.far else null,
+		"far_hmax": int(c.far_hmax) if c.far else 0,
+		# AC-0284b: the cached tree-cell list (empty = not computed yet —
+		# the FIRST far slab worker computes it (veg_cells) and lands it
+		# back on the column via the entry (the handoff stamps c.far_veg;
+		# the later slabs of the column read the cache, no recompute).
+		"far_veg": c.far_veg if c.far else PackedByteArray(),
 		# AC-0247: the slab BUFFER of this value copy stays on C++ alloc —
 		# slab_copy allocates the "i"/"p" buffers internally (no C++
 		# changes allowed), and a GDScript pooled copy measured ~230 us/col
@@ -2598,6 +2644,14 @@ func _low_handoff(e: Dictionary, res) -> void:
 	if si < 0 or si >= c.data.size():
 		low_drop_stale_n += 1
 		return
+	# AC-0284b: the first far slab's worker computed the tree cells
+	# (veg_cells — lazy, worker-side); stamp them on the column so the
+	# column's later slabs read the cache at dispatch (a stale-tier drop
+	# still stamps — the tree set is tier-independent).
+	if c.far:
+		var vd: Variant = e.get("veg_done", null)
+		if c.far_veg.size() == 0 and vd is PackedByteArray and (vd as PackedByteArray).size() > 0:
+			c.far_veg = vd
 	# AC-0257 (stale-LOD, absorbs AC-0256): the low-start boundary moved
 	# while the task was in flight — the mesh was emitted at the DISPATCH
 	# tier. CACHE AND KEEP: the finished mesh goes to the per-slab cache
@@ -2632,7 +2686,11 @@ func _low_handoff(e: Dictionary, res) -> void:
 		# TERMINAL so the picks advance past it until the data changes).
 		_low_drop_slab(c, si)
 		c.low_stamps.erase(si)
-		if c.data[si] == null:
+		# AC-0284b: a far slab that sampled all-air (a slab above the
+		# column top) is TERMINAL-marked like a real slab — without the
+		# mark it would re-pick + re-emit forever (its null slab is not
+		# air to the picker).
+		if c.data[si] == null and not c.far:
 			_fog_drop_slab(c, si)
 		else:
 			# AC-0240: flag-gated (the terminal mark stays - wave advance).
@@ -3304,6 +3362,37 @@ func _low_step() -> void:
 		_slab_wave_acc_ms -= LOW_WAVE_PACE_MS
 		wave_n += 1
 	_wprof_add(WP_LOW_WAVE, Time.get_ticks_usec() - _wpt4)  # AC-0262
+	_low_relower_owed_step()  # AC-0284b: the meshed columns' re-lower debt
+
+
+# AC-0284b: drain the low re-lower debt (one owed column per frame — the
+# dispatch's per-key:si dedup + the worker pace keep it smooth). The
+# normal slab wave can only reach QUEUED entries; a demoted meshed column
+# has none (the recenter recompute skips meshed columns), so its stale /
+# missing lows would never re-lower and the demote flip never lands. The
+# re-landing attach does the flip (high off, low on — the demote
+# contract). Clearing: a fresh probe (all lows current at the live tier),
+# a far column (its low IS the payload emit — never stale by data_gen),
+# or a return to the real band (the high owns it again).
+func _low_relower_owed_step() -> void:
+	if _low_relower_owed.is_empty():
+		return
+	for key in _low_relower_owed.keys():
+		var rc = chunks.get(key)
+		if rc == null or rc.data.is_empty() or rc.far:
+			_low_relower_owed.erase(key)
+			continue
+		if _is_real_col(int(rc.cx) - last_pcx, int(rc.cz) - last_pcz):
+			_low_relower_owed.erase(key)
+			continue
+		var rsi := _entry_best_pending_cached(rc)
+		if rsi < 0:
+			_low_relower_owed.erase(key)  # the lows are current — done
+			continue
+		if _low_dispatch_slab(rc, rsi) < 0:
+			_low_air_slab(rc, rsi)
+		break  # one owed column per frame (the rest retry next frame)
+
 
 # AC-0109 cull-pass scratch (world-level only — no per-chunk state, no
 # per-frame allocations growing with chunk count; all fixed-size, filled
@@ -3436,6 +3525,26 @@ var _tg_debug := false
 var _tg_enq := 0
 var _tg_dedup := 0
 var _tg_capdrop := 0
+# AC-0284b: the promotion's FULL regen is owed, not one-shot — a bare
+# threadgen_enqueue at the recenter crossing can be cap-dropped (the pool
+# is full of the new forward band's data pass) and never retried, leaving
+# a far (no-caves) column far INSIDE the real band (the halo arm's (d)
+# caught it: the promoted column never regenerated). The drain retries
+# every frame (a fresh identity capture each try) until the regen is
+# accepted and lands; a full landing (no_caves false) or the column
+# leaving the real band clears the entry.
+var _far_promo_owed: Dictionary = {}
+# AC-0284b: the LOW re-lower debt — a meshed column owes a low at its
+# live tier (stale after a data change — the promotion's full regen
+# bumps data_gen and its halo low goes stale — or no low at all after a
+# first demote) but is INVISIBLE to the slab wave: the wave only scans
+# queued entries, and a meshed column gets no fresh entry on recenter
+# (the WANT/merge meshed skip). The low step drains the debt: one owed
+# column per frame, its best pending slab dispatched through the normal
+# low lane (the per-key:si dedup paces it; the re-landing attach flips
+# the tiers — the demote contract). A fresh probe, a far column, or a
+# return to the real band clears the entry.
+var _low_relower_owed: Dictionary = {}
 var _tg_handoff := 0
 var _tg_stale := 0
 var _tg_datadrop := 0
@@ -4824,7 +4933,11 @@ func _star_halo_evict(c: Node3D, key: String) -> void:
 # (defensive: a demote always evicts, so a promote sees an unseeded
 # column; the guard keeps a re-crossing jitter from re-seeding).
 func _star_halo_promote(c: Node3D, key: String) -> void:
-	if star == null or c.data.is_empty():
+	# AC-0284b: a FAR column holds no slabs — seeding its all-null data is a
+	# light hole, and the owed full regen's per-slab re-seed would scan its
+	# sky against the stale all-air seam left here (stone cells keep sky 15;
+	# the deep-pocket glow misses). The regen seeds the column whole instead.
+	if star == null or c.data.is_empty() or c.far:
 		return
 	if star.column_settled(int(c.cx), int(c.cz)):
 		return
@@ -5324,18 +5437,25 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 # the heightmap surface, no caves — no hidden caves built); visible bands
 # 0/1 always keep the full AC-0215 density field (caves exact where the
 # player can see them).
+# AC-0284b: the skip flag is now the FAR flag — 0 = full, 2 = FAR (h-only:
+# no slabs at all, just the far payload). The 284a value 1 (the slab-skip
+# fill) is no longer produced here: nothing enqueues it in-game — it
+# survives in the C++ as the farab A/B reference. Both rules below (the
+# halo band + the offscreen collar) produce far data: the offscreen collar
+# is never meshed, and its save payload shrinks ~100x (a later load in
+# the real band hits the same full-regen trigger as a halo column).
 func _gen_skip_flag(cx: int, cz: int) -> int:
 	var dx := cx - last_pcx
 	var dz := cz - last_pcz
-	# AC-0284a: the HALO band (the meshed far band — draw tier 2) is
-	# skip-generated: its 4x4 avg + heightmap sky draw never shows caves
-	# (the skip path keeps surface/ore/biome/top-block exact); the marker
+	# AC-0284a (AC-0284b: h-only): the HALO band (the meshed far band —
+	# draw tier 2) is far-generated: its 4x4 avg (the H-driven h_avg_emit)
+	# + heightmap sky draw never shows caves; the umbrella marker
 	# (no_caves) rides the column so a real-band landing schedules the
 	# full regen. Taxi-only rule (no frustum test — the halo IS the
 	# meshed far band). Tier-0 columns are REAL (full fidelity) — never
-	# skipped. The offscreen rule below is untouched.
+	# far. The offscreen rule below is untouched.
 	if _lod_tier_of(dx, dz) == 2:
-		return 1
+		return 2
 	var b := band_of(dx, dz)
 	if b <= 1:
 		return 0
@@ -5357,20 +5477,24 @@ func _gen_skip_flag(cx: int, cz: int) -> int:
 		var d: float = _cull_planes[i].distance_to(_cull_cen)
 		# Offscreen only if the WHOLE column is past the expanded plane.
 		if d + _cull_col_span[i] < -FRUSTUM_CULL_MARGIN:
-			return 1
+			return 2  # AC-0284b: the collar is never meshed — far data
 	return 0
 
 
-func threadgen_enqueue(cx: int, cz: int, key: String, inst: int, regen: bool = false, colgen: int = -1) -> void:
+# Returns true when the gen is actually enqueued (false = deduped or
+# cap-dropped — the caller of an OWED regen (the _far_promo_owed retry
+# below) uses that to know the retry is needed; the data pass callers
+# ignore it — their re-pick self-heals).
+func threadgen_enqueue(cx: int, cz: int, key: String, inst: int, regen: bool = false, colgen: int = -1) -> bool:
 	if _tg_inflight_keys.has(key):
 		_tg_dedup += 1
-		return
+		return false
 	if threadgen_inflight.size() >= threadgen_max:
 		_tg_capdrop += 1
 		if _tg_debug:
 			print("TGEN CAPDROP %d,%d inflight=%d" % [cx, cz, threadgen_inflight.size()])
-		return
-	var skipf := 0 if regen else _gen_skip_flag(cx, cz)  # AC-0216 (0 = full density)
+		return false
+	var skipf := 0 if regen else _gen_skip_flag(cx, cz)  # AC-0216/0284b (0 = full density, 2 = far h-only)
 	if skipf:
 		perf_gen_skip_enq += 1
 	# AC-0257: the vwin window is gone — generation is ALWAYS the full
@@ -5398,6 +5522,7 @@ func threadgen_enqueue(cx: int, cz: int, key: String, inst: int, regen: bool = f
 	_tg_enq += 1
 	if _tg_debug:
 		print("TGEN ENQ %d,%d inflight=%d" % [cx, cz, threadgen_inflight.size()])
+	return true
 
 func _threadgen_worker() -> void:
 	var tid = threadgen_pool.get_caller_task_id()
@@ -5518,7 +5643,10 @@ func _startup_gen_apply() -> void:
 					_gen_unit(hc, int(he[1]), int(he[2]))
 	for i in _startup_gen_slots.size():
 		var d = _startup_gen_slots[i]
-		if d == null or not (d is Array) or int(d.size()) != 2:
+		# AC-0284b: a far (h-only) result is a 3-elem resl (the payload
+		# rides [2]) — the burst's 5x5 is real-band in practice, but the
+		# handoff handles the shape either way.
+		if d == null or not (d is Array) or (int(d.size()) != 2 and int(d.size()) != 3):
 			continue
 		_startup_gen_slots[i] = null
 		_startup_gen_pending_n = maxi(0, _startup_gen_pending_n - 1)
@@ -5531,6 +5659,9 @@ func _startup_gen_apply() -> void:
 		var gres: Dictionary = WorldGen.apply_banana_resl(d, int(e[1]), int(e[2]), int(e[4]), Data.HEIGHT)
 		c.slabs_landed(d[0], d[1])
 		c.no_caves = int(e[7]) != 0
+		# AC-0284b: the far payload (or its absence — a full landing clears).
+		if not _gen_far_stamp(c, d):
+			c.clear_far()
 		_pool_touch()  # AC-0217: burst data landed on a queued entry
 		_banana_register(int(e[1]), int(e[2]), gres["fruits"])
 		gen_count += 1
@@ -5562,7 +5693,9 @@ func threadgen_poll() -> void:
 			_tg_slots.erase(tid)
 			_tg_slots_mutex.unlock()
 			var res = e.get("result", null)
-			if res == null or not (res is Array) or int(res.size()) != 2:
+			# AC-0284b: a far (h-only) result is a 3-elem resl (the payload
+			# rides [2]); the handoff consumes the shape.
+			if res == null or not (res is Array) or (int(res.size()) != 2 and int(res.size()) != 3):
 				# AC-0178: the worker finished without a result (slot-spin
 				# gave up) — re-enqueue the gen instead of a null handoff
 				# (SCRIPT ERROR + stranded column). Dedup-safe: the key was
@@ -5585,10 +5718,35 @@ func threadgen_poll() -> void:
 			continue
 		i += 1
 
+# AC-0284b: consume the FAR (h-only) landing — resl[2] = {h, bm, top}
+# (true iff it is one). Stamps the payload on the column (far_hmax = the
+# max H, the low dispatch's deep-cell guard for the ore precompute). The
+# caller stamps the umbrella (no_caves) from the skip flag — a far column
+# is cave-less by representation.
+func _gen_far_stamp(c: Node3D, resl: Array) -> bool:
+	if resl == null or int(resl.size()) < 3 or not (resl[2] is Dictionary):
+		return false
+	var fp: Dictionary = resl[2]
+	var fh: PackedByteArray = fp.get("h", PackedByteArray())
+	if fh.size() != 512:
+		return false
+	c.far = true
+	c.far_h = fh
+	c.far_biome = fp.get("bm", PackedByteArray())
+	c.far_top = fp.get("top", PackedByteArray())
+	var mh := 0
+	for i in range(0, 512, 2):
+		var v := int(fh[i]) | (int(fh[i + 1]) << 8)
+		if v > mh:
+			mh = v
+	c.far_hmax = mh
+	return true
+
 func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 	# AC-0203 recenter fix: resl = [data_slabs, fl_slabs] (worker-palettized
-	# — the flat column never lands on the main thread).
-	if resl == null or int(resl.size()) != 2 or not (resl[0] is Array):
+	# — the flat column never lands on the main thread). AC-0284b: a far
+	# (h-only) landing is [all-null slabs, all-null fl, far payload].
+	if resl == null or (int(resl.size()) != 2 and int(resl.size()) != 3) or not (resl[0] is Array):
 		return
 	var key: String = e["key"]
 	var c = chunks.get(key)
@@ -5626,6 +5784,9 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 	var tcz: int = int(e["cz"])
 	var tseed: int = int(e["args"][2])
 	var gres: Dictionary = WorldGen.apply_banana_resl(resl, tcx, tcz, tseed, Data.HEIGHT)
+	# AC-0284b: captured BEFORE the far stamp below — the far->full regen
+	# seeds the engine column WHOLE (see the re-seed branch).
+	var was_far: bool = is_regen and c.far
 	if is_regen:
 		var ds: Array = resl[0]
 		if ekeep.is_empty():
@@ -5654,6 +5815,13 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 	c.gen_keep = ekeep
 	c.gen_mask = gm
 	c.no_caves = int(e["args"][5]) != 0
+	# AC-0284b: the far (h-only) landing stamps the payload (no slabs at
+	# all — the resl[0] all-null array IS the column); ANY full landing
+	# clears it — the full regen replaces the column whole, the 284a
+	# no-caves-slab merge fix generalized (the payload goes with the
+	# slabs it replaced).
+	if not _gen_far_stamp(c, resl):
+		c.clear_far()
 	_banana_register(tcx, tcz, gres["fruits"])
 	gen_count += 1
 	chunk_origin[e["key"]] = "gen"  # AC-0155
@@ -5673,8 +5841,36 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 			for si in range(c.data.size()):
 				if si < int(dsr.size()) and dsr[si] is Dictionary:
 					rsis.append(si)
-			_star_reseed_column(c, rsis)
-		else:
+			if was_far:
+				# AC-0284b: the far->full regen replaces the column whole —
+				# the engine column is absent or a stale ALL-AIR seed (any
+				# pre-regen seed of the far column's null slabs is a light
+				# hole). A per-slab re-seed would scan each slab's sky
+				# against the stale all-air sections ABOVE the data slabs
+				# (stone cells keep sky 15; the deep-pocket glow misses).
+				# Re-seed the whole column top-down: the seam is
+				# satisfiable (the null slabs above the top are air).
+				_star_seed_column(c)
+			else:
+				_star_reseed_column(c, rsis)
+			# AC-0284b: a FAR column promoted into the real band looks
+			# mesh-COMPLETE to the high probe (top < 0 — no slabs), so the
+			# crossing's re-queue (mesh_built false) never fires and the
+			# owed full regen lands on a column nobody owes a high build:
+			# the probe goes pending (real slabs, no stamps at the new
+			# data_gen) and the stale mesh_built bool hides it (the
+			# AC-0278 re-queue fires only on a recenter crossing). Re-
+			# derive mesh_built from the probe and re-queue — the same
+			# contract as the crossing; the far low mesh shows meanwhile
+			# (no unlit frame).
+			c.mesh_built = _hslab_best_pending(c, false) < 0
+			_hslab_probe_invalidate(c)
+			if not c.mesh_built and queued_keys.get(key) != "build":
+				_enqueue_build(tcx, tcz)
+		elif not c.far:
+			# AC-0284b: a FAR landing in the real band (a recenter crossed
+			# it in flight) seeds NO air hole — the crossing's owed full
+			# regen lands behind it and seeds the column whole (was_far).
 			_star_seed_column(c)
 	_tg_handoff += 1
 	_pool_touch()  # AC-0217: queued entry's data landed (pool membership flipped)
@@ -5739,6 +5935,37 @@ func _tm_worker_run(skey: int) -> void:
 		# AC-0283 P3: the halo's per-cell heightmap sky (empty on the
 		# legacy real-band / battery path — the emit's all-bright default).
 		var sky: PackedByteArray = entry.get("sky", PackedByteArray())
+		# AC-0284b: a FAR column — the payload emit (byte-identical to
+		# low_emit_avg on the same column's skip-filled slabs; the deep
+		# cells' ore color comes from the stone_ore_slab precompute —
+		# owed only while the slab has deep cells, si <= 3 in the ore
+		# bands). Game.world_seed is a static int — the established
+		# worker-side read pattern.
+		# (the typed-Array-null assignment is a runtime error in 4.7 —
+		# the untyped get + guard; a non-far entry carries "far": null)
+		var frv: Variant = entry.get("far", null)
+		if frv != null:
+			var fr: Array = frv
+			var ore := PackedByteArray()
+			# the slab owes deep cells (y < H - 3) only while its top
+			# exceeds the ore band's reach — then (and only then) run the
+			# stone_ore precompute (3 fields + 4096 chain reads, ~0.3 ms).
+			if int(entry.get("far_hmax", 0)) > int(entry["si"]) * 16 + 3 and int(entry["si"]) <= 3:
+				ore = WorldGen.gen_cpp().stone_ore_slab(int(entry["cx"]), int(entry["cz"]), int(Game.world_seed), int(Data.HEIGHT), int(entry["si"]))
+			# AC-0284b: the tree cells (the skip slab's bs bitset includes
+			# the trees — the far grid must too, or the halo loses the
+			# tree blobs). LAZY: the first slab of the column computes
+			# (veg_cells — 3 surface fields + the veg pass, ~0.1 ms), the
+			# others read the column's cache; the handoff stamps the
+			# compute back on the column (concurrent first slabs may each
+			# compute — deterministic, same bytes).
+			var veg: PackedByteArray = entry.get("far_veg", PackedByteArray())
+			if veg.size() == 0:
+				veg = WorldGen.gen_cpp().veg_cells(int(entry["cx"]), int(entry["cz"]), int(Game.world_seed), int(Data.HEIGHT), int(Data.SEA))
+				entry["veg_done"] = veg
+			entry["result"] = mcl.h_avg_emit(fr[0], fr[1], fr[2], ore, veg, int(entry["si"]), grid, entry["fcc"], sky, int(Data.SEA), int(Data.HEIGHT))
+			low_emit_cpp += 1
+			return
 		entry["result"] = mcl.low_emit_avg(entry["slabs"], int(entry["si"]), grid, entry["fcc"], sky)
 		low_emit_cpp += 1
 		return
@@ -6493,7 +6720,7 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 			var nc = chunks.get(_key(cx + dx, cz + dz))
 			if nc == null or nc.data.is_empty():
 				return false
-			nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep)  # AC-0237: ungenerated slabs read as solid
+			nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep, nc.far_payload())  # AC-0237: ungenerated slabs read as solid; AC-0284b: a far neighbor's ring is the skip-fill edge row
 	var tn1 := Time.get_ticks_usec()
 	var ms_w: Dictionary
 	if not _tm_ms_full.rects.is_empty():
@@ -6607,7 +6834,7 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 			# the worker never sees live neighbor state (the ring is a
 			# main-thread value snapshot). AC-0208: C++-ONLY — the GDScript
 			# deep-copy nbs (the mc==null fallback) was removed.
-			nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep)  # AC-0237: ungenerated slabs read as solid
+			nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep, nc.far_payload())  # AC-0237: ungenerated slabs read as solid; AC-0284b: a far neighbor's ring is the skip-fill edge row
 	if _tm_inflight_keys.has(key):
 		_tm_dedup += 1
 		if _tm_debug:
@@ -6757,7 +6984,7 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 				hslab_defer_nbs += 1
 				_hslab_last_defer = 3
 				return false  # AC-0263: defer — the neighbor lands, the entry retries
-			nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep)  # AC-0237: ungenerated slabs read as solid
+			nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep, nc.far_payload())  # AC-0237: ungenerated slabs read as solid; AC-0284b: a far neighbor's ring is the skip-fill edge row
 	var y_lo := si * 16
 	var y_hi := (si + 1) * 16 - 1
 	var d_lo := maxi(0, y_lo - 1)
@@ -7069,7 +7296,29 @@ func _pick_data_cached(maxb: int) -> Dictionary:
 	_pool_data[4] = dp.is_empty()
 	return {"e": dp_e, "c": null, "s": dp_s, "pool_empty": dp.is_empty()}
 
+# AC-0284b: the promotion's owed full regens (the persistent retry).
+# A no-caves column that crossed into the real band owes a FULL regen;
+# the one-shot enqueue can cap-drop at the crossing, so the drain retries
+# every frame (fresh identity capture — a pooled reuse is seen through
+# the colgen) until it is accepted and lands. Clearing: a FULL landing
+# sets no_caves false (the far payload goes with the replaced column);
+# a column that left the real band again is far-owed (the halo draw is
+# the far representation) — the next crossing re-ows it.
+func _far_promo_owed_step() -> void:
+	if _far_promo_owed.is_empty():
+		return
+	for key in _far_promo_owed.keys():
+		var c = chunks.get(key)
+		if c == null or not c.no_caves or not _is_real_col(int(c.cx) - last_pcx, int(c.cz) - last_pcz):
+			_far_promo_owed.erase(key)
+			continue
+		threadgen_enqueue(int(c.cx), int(c.cz), key, c.get_instance_id(), true, int(c.col_gen))
+		# a dedup (a regen already in flight for this key) is fine — it
+		# lands and clears no_caves; a cap-drop retries next frame.
+
+
 func _drain_build_queue() -> void:
+	_far_promo_owed_step()  # AC-0284b: the promotion's owed full regens
 	_startup_gen_apply()
 	_drain_units_last = 0  # AC-0231: the low idle gate (units dispatched this frame)
 	if edit_inflight_count > 0:
@@ -8635,6 +8884,15 @@ func _demote_high_band_exit(c: Node3D, key: String) -> void:
 			# one re-sample, which re-marks it.
 			c.low_failed.erase(si)
 			reopened += 1
+	if reopened > 0:
+		# AC-0284b: a slab owes a re-lower (stale after the promotion's
+		# full regen bumped data_gen, or no low at all on a first demote)
+		# — but the column is meshed, so the recenter recompute gave it no
+		# queue entry and the slab wave (which only scans queued entries)
+		# can never reach it. Owe the re-lower: the low step dispatches
+		# the column's best pending slab through the normal lane and the
+		# re-landing attach flips the tiers.
+		_low_relower_owed[key] = true
 	_hslab_probe_invalidate(c)
 	_low_probe_invalidate(c)
 	demoted_cols_n += 1
@@ -8828,8 +9086,12 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 				# demote is harmless: the landing's real-band check skips
 				# the re-seed and the column keeps the full data (a later
 				# promotion seeds it directly).
+				# AC-0284b: OWE it (the drain's persistent retry) — a
+				# one-shot enqueue cap-drops at the crossing (the pool is
+				# full of the new forward band's data) and the column
+				# stays far in the real band forever.
 				if c.no_caves:
-					threadgen_enqueue(int(c.cx), int(c.cz), key, c.get_instance_id(), true, int(c.col_gen))
+					_far_promo_owed[key] = true
 				# AC-0283 P3: a stored high (a former REAL column that
 				# demoted) just flipped back on the OLD bake — arm every
 				# stamped slab for the remesh lane: it re-bakes on the
@@ -9518,6 +9780,13 @@ func _apply_edits_to_chunk(c: Node3D) -> bool:
 		return false
 	if c.data.is_empty():
 		return false
+	# AC-0284b: a far column holds NO slabs (all null) — the edit would
+	# land nowhere. Schedule the full regen (the no-caves umbrella); the
+	# landing re-applies the edit from the global edits dict (the handoff
+	# runs _apply_edits_to_chunk after the slab arrays are in).
+	if c.far:
+		threadgen_enqueue(int(c.cx), int(c.cz), _key(int(c.cx), int(c.cz)), c.get_instance_id(), true, int(c.col_gen))
+		return false
 	var cells: Dictionary = edits[key]
 	var changed := false
 	var fl_changed := false
@@ -9590,6 +9859,25 @@ func _land_column(c: Node3D, res: Dictionary) -> void:
 	var gmask := int(res.get("gen_mask", 0xFFFFFF))
 	c.gen_mask = gmask
 	c.no_caves = bool(res.get("no_caves", false))
+	# AC-0284b: a far (h-only) disk column (v6 bit 1) — the payload IS the
+	# column (the res slab arrays are the all-null handoff shape). The
+	# regen trigger below (the umbrella) already covers it: a far column
+	# in the real band schedules the full regen, which CLEARS the payload
+	# on landing.
+	if bool(res.get("far", false)):
+		var fh: PackedByteArray = res.get("far_h", PackedByteArray())
+		c.far = true
+		c.far_h = fh
+		c.far_biome = res.get("far_biome", PackedByteArray())
+		c.far_top = res.get("far_top", PackedByteArray())
+		var mh := 0
+		for i in range(0, int(fh.size()), 2):
+			var v := int(fh[i]) | (int(fh[i + 1]) << 8)
+			if v > mh:
+				mh = v
+		c.far_hmax = mh
+	else:
+		c.clear_far()
 	var gk := PackedByteArray()
 	if gmask != 0xFFFFFF:
 		gk.resize(int(c.data.size()))
@@ -9602,8 +9890,11 @@ func _land_column(c: Node3D, res: Dictionary) -> void:
 	# (hide + re-bake + engine re-seed; the AC-0283 P2 contract). A
 	# no-caves column in the halo band stays as-is (the halo draw never
 	# shows caves; the recenter crossing promotes it with a regen).
+	# AC-0284b: owed (the drain's persistent retry — a one-shot enqueue
+	# cap-drops when the pool is full and the column would stay
+	# cave-less in the real band).
 	if c.no_caves and _is_real_col(int(c.cx) - last_pcx, int(c.cz) - last_pcz):
-		threadgen_enqueue(int(c.cx), int(c.cz), _key(int(c.cx), int(c.cz)), c.get_instance_id(), true, int(c.col_gen))
+		_far_promo_owed[_key(int(c.cx), int(c.cz))] = true
 	# AC-0257: an old AC-0237 save may hold a range-generated column (a
 	# partial gen_mask — slabs the old window never generated). The vwin
 	# owed-regen is gone: a plain full regen refills the missing slabs
@@ -9659,6 +9950,12 @@ func _queue_chunk_save(c: Node3D) -> void:
 		"light": light,
 		"gen_mask": int(c.gen_mask),  # AC-0237: v5 — the generated mask rides on disk
 		"no_caves": bool(c.no_caves),  # AC-0284a: v6 flag — the no-caves marker rides on disk
+		# AC-0284b: the far (h-only) column's 1024-byte payload (H u16
+		# LE + biome + top) — the v6 bit-1 section replacing the slab
+		# section. Empty for every non-far column.
+		"far": c.far_h if c.far else PackedByteArray(),
+		"far_biome": c.far_biome if c.far else PackedByteArray(),
+		"far_top": c.far_top if c.far else PackedByteArray(),
 	})
 
 func _save_light_for(c: Node3D, key: String) -> Dictionary:
@@ -9722,6 +10019,11 @@ func _io_write_enqueue(e: Dictionary) -> void:
 		"light": e.get("light", {}),
 		"gen_mask": int(e.get("gen_mask", 0xFFFFFF)),  # AC-0237
 		"no_caves": bool(e.get("no_caves", false)),  # AC-0284a
+		# AC-0284b: the far payload (empty = the slab shape) — the worker
+		# assembles the 1024-byte section (H u16 + biome + top).
+		"far": e.get("far", PackedByteArray()),
+		"far_biome": e.get("far_biome", PackedByteArray()),
+		"far_top": e.get("far_top", PackedByteArray()),
 		"seed": int(Game.world_seed),
 		"height": int(Data.HEIGHT),
 	}
@@ -9754,7 +10056,17 @@ func _io_write_worker() -> void:
 	# + blob write) runs on the main thread in _io_write_commit because the
 	# region file is shared by many columns and must be mutated serially.
 	var io: Variant = ChunkIO.io_cpp()
-	var blob := ChunkIO.encode_column(io.slabs_flat(entry["data"]), io.slabs_flat(entry["fl"]), int(entry["seed"]), int(entry["height"]), entry.get("light", {}), -1, int(entry.get("gen_mask", 0xFFFFFF)), bool(entry.get("no_caves", false)))  # AC-0237: v5 when range-generated; AC-0284a: v6 when no-caves
+	# AC-0284b: a FAR column (the 512-byte far_h rides the entry) — the
+	# far payload section (H u16 LE + biome + top, 1024 bytes) replaces the
+	# slab section in the v6 bit-1 head; the slabs are all-null (nothing to
+	# flatten). ~1 KB on disk instead of ~20-100 KB.
+	var fhp: PackedByteArray = entry.get("far", PackedByteArray())
+	var fpay := PackedByteArray()
+	if fhp.size() == 512:
+		fpay.append_array(fhp)
+		fpay.append_array(entry.get("far_biome", PackedByteArray()))
+		fpay.append_array(entry.get("far_top", PackedByteArray()))
+	var blob := ChunkIO.encode_column(io.slabs_flat(entry["data"]) if fpay.is_empty() else PackedByteArray(), io.slabs_flat(entry["fl"]) if fpay.is_empty() else PackedByteArray(), int(entry["seed"]), int(entry["height"]), entry.get("light", {}), -1, int(entry.get("gen_mask", 0xFFFFFF)), bool(entry.get("no_caves", false)), fpay)  # AC-0237: v5 when range-generated; AC-0284a: v6 when no-caves; AC-0284b: v6 bit 1 when far
 	entry["blob"] = blob
 
 func _io_read_enqueue(cx: int, cz: int, key: String, apply_edits: bool) -> bool:
@@ -9842,6 +10154,9 @@ func _io_write_commit(e: Dictionary) -> void:
 			"light": e.get("light", {}),
 			"gen_mask": int(e.get("gen_mask", 0xFFFFFF)),
 			"no_caves": bool(e.get("no_caves", false)),
+			"far": e.get("far", PackedByteArray()),  # AC-0284b: the far payload rides the re-queue
+			"far_biome": e.get("far_biome", PackedByteArray()),
+			"far_top": e.get("far_top", PackedByteArray()),
 		})
 		return
 	ChunkIO.ensure_dir(slot)
@@ -10029,8 +10344,10 @@ func _io_read_handoff(e: Dictionary) -> void:
 	# in the column (c.saved_light) is IGNORED for builds — the engine
 	# recomputes from the data (the saved-light disk writes stay until
 	# AC-0287). REAL band only — the halo never seeds (a promoting column
-	# seeds at the recenter crossing).
-	if _is_real_col(int(c.cx) - last_pcx, int(c.cz) - last_pcz):
+	# seeds at the recenter crossing). AC-0284b: a FAR disk column seeds
+	# NO air hole — its owed full regen (the no-caves umbrella above)
+	# lands behind it and seeds the column whole (was_far).
+	if _is_real_col(int(c.cx) - last_pcx, int(c.cz) - last_pcz) and not c.far:
 		_star_seed_column(c)
 
 func surface_top(x: int, z: int) -> int:

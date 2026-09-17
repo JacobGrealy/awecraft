@@ -80,6 +80,18 @@
 // player can see them). Cumulative counters (skip_chunks_total /
 // skip_cols_total) let the harness report how many columns skipped.
 //
+// AC-0284b FAR (h-only) COLUMNS: skip == 2 (generate_resl) produces NO
+// slabs at all — only the 1024-byte FAR PAYLOAD (256 H as u16 LE + 256
+// biome + 256 top-block id; see gen_far). The H is bit-exact with the
+// full path's H (the shared col_heights_pass — the 3 surface fields at
+// the same lattice; the promotion-consistency contract). skip == 1 keeps
+// the AC-0216/AC-0284a SLAB-SKIP fill (solid 0..H slabs + palettize):
+// nothing enqueues it in-game after AC-0284b — it survives as the
+// A/B REFERENCE for the farab gate (h_avg_emit must be byte-identical to
+// low_emit_avg on the same column's skip-filled slabs). Cumulative
+// counters: g_t_cols_far / g_t_far_us (the far columns' end-to-end cost;
+// gen_timing).
+//
 // Shares the libchunkio library (one .so/.dll, entry chunkio_library_init
 // registers ChunkIOPalette + AweGen — see chunk_io.cpp).
 
@@ -425,6 +437,15 @@ static std::atomic<long long> g_t_veg_us{0};
 static std::atomic<long long> g_t_pallet_us{0};
 static std::atomic<long long> g_t_cols_full{0};
 static std::atomic<long long> g_t_cols_skip{0};
+// AC-0284b: the far (h-only) column counters — g_t_cols_far = the far
+// columns generated (skip == 2), g_t_far_us = their CUMULATIVE end-to-end
+// cost (the fields + the heights pass + the payload emit — no fill, no
+// veg, no palettize). Read via gen_timing() like the stage counters.
+static std::atomic<long long> g_t_cols_far{0};
+static std::atomic<long long> g_t_far_us{0};
+// AC-0284b: the far tree-cell precompute (veg_cells — the far emitter's
+// solid-set extension; the lazy worker-side cost, NOT in g_t_far_us).
+static std::atomic<long long> g_t_vegcells_us{0};
 
 static inline long long now_us() {
 	return (long long)std::chrono::duration_cast<std::chrono::microseconds>(
@@ -434,6 +455,237 @@ static inline long long now_us() {
 // ---------------------------------------------------------------------------
 // Column generation.
 // ---------------------------------------------------------------------------
+
+// AC-0284b: the shared 256-height pass — the heights (the surface_h of the
+// three coarse SURFACE fields), the biome bcode (the two direct fbm2
+// calls), and the padcol hash. Extracted VERBATIM from gen_flat's inline
+// loop (the full/skip paths call it with their already-built fields; the
+// far path calls it with its own). The H of EVERY path — full, skip and
+// far — is bit-exact by construction (same fields, same lattice, same
+// surface_h; the genhash canary + the farab H battery gate it).
+static void col_heights_pass(const Field &f_sc, const Field &f_sh, const Field &f_sr,
+		double ystep, int bx, int bz, int64_t seed,
+		std::vector<int> &heights, std::vector<int> &bcode, std::vector<char> &padcol) {
+	for (int lz = 0; lz < 16; lz++) {
+		for (int lx = 0; lx < 16; lx++) {
+			int idx = lz * 16 + lx;
+			int x = bx + lx;
+			int z = bz + lz;
+			heights[idx] = surface_h(x, z, f_sc, f_sh, f_sr, ystep, bx, bz);
+			padcol[idx] = is_pad(x, z) ? 1 : 0;
+			double t = fbm2((double)x / 260.0 + 900.0, (double)z / 260.0 + 900.0, seed + 21, 3) * 2.0 - 1.0;
+			double m = fbm2((double)x / 260.0 + 1700.0, (double)z / 260.0 + 1700.0, seed + 33, 3) * 2.0 - 1.0;
+			// bcode: 0 snow, 1 desert, 2 forest, 3 plains (biome_at order).
+			int bc = 3;
+			if (t < -0.25)
+				bc = 0;
+			else if (t > 0.35 && m < 0.1)
+				bc = 1;
+			else if (m > 0.25)
+				bc = 2;
+			bcode[idx] = bc;
+		}
+	}
+}
+
+// AC-0284b: the FAR (h-only) column — the skip arg value 2 (see the file
+// header). NO slabs, NO cave field, NO ore fields: only the 256 H (u16
+// LE), the 256 biome bcodes and the 256 TOP-BLOCK ids (the bit-exact
+// fill-loop top-row formula: the surface block from biome/H/pad, the same
+// cell the skip path fills at y == H — the halo's 4x4 avg emitter
+// (AweMesh.h_avg_emit) reconstructs the exact skip-fill surface from it).
+// The H is bit-exact with the full path's H (the shared col_heights_pass
+// above — the promotion-consistency contract: a promoted far column's
+// full regen keeps the same H, the halo terrain never shifts). The 1024-
+// byte payload is what the v6 codec (flag bit 1) stores in place of the
+// slab section (~1 KB on disk — AC-0287's save filter drops it entirely).
+static std::vector<uint8_t> gen_far(int cx, int cz, int64_t seed, int hmax, int sea) {
+	int bx = cx * 16;
+	int bz = cz * 16;
+	double ystep = (double)hmax / GY_CELLS;
+	long long t0 = now_us();
+	g_t_cols_far.fetch_add(1, std::memory_order_relaxed);
+	// Only the 3 SURFACE fields (the 2-octave 441-pt builds — the H's
+	// physics). The cave + ore fields are never read here.
+	long long t_field = now_us();
+	Field f_sc, f_sh, f_sr;
+	build_field(f_sc, bx, bz, ystep, seed, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0);
+	build_field(f_sh, bx, bz, ystep, seed + 7, 70.0, SURF_YSCALE, 70.0, 333.0, 0.0, 333.0);
+	build_field(f_sr, bx, bz, ystep, seed + 13, 300.0, SURF_YSCALE, 300.0, 500.0, 0.0, 500.0);
+	g_t_field_us.fetch_add(now_us() - t_field, std::memory_order_relaxed);
+	long long t_ht = now_us();
+	std::vector<int> heights(256);
+	std::vector<int> bcode(256);
+	std::vector<char> padcol(256, 0);
+	col_heights_pass(f_sc, f_sh, f_sr, ystep, bx, bz, seed, heights, bcode, padcol);
+	g_t_heights_us.fetch_add(now_us() - t_ht, std::memory_order_relaxed);
+	std::vector<uint8_t> out(1024, 0);
+	for (int i = 0; i < 256; i++) {
+		int H = heights[i];
+		out[2 * i] = (uint8_t)(H & 0xFF);
+		out[2 * i + 1] = (uint8_t)((H >> 8) & 0xFF);
+		out[512 + i] = (uint8_t)bcode[i];
+		// Top block — the fill loop's y == he row with he = H, verbatim
+		// (the skip fill writes exactly this at the surface).
+		uint8_t top = B_GRASS;
+		if (bcode[i] == 1)
+			top = B_SAND;
+		else if (bcode[i] == 0)
+			top = B_SNOW_GRASS;
+		if (H <= sea + 1 && bcode[i] != 1)
+			top = B_SAND;
+		out[768 + i] = top;
+	}
+	g_t_far_us.fetch_add(now_us() - t0, std::memory_order_relaxed);
+	return out;
+}
+
+// AC-0284b: the column's TREE cells — the veg pass's tree writes (the
+// log trunk + the leaf blob) that land INSIDE this column, in the veg
+// loop's write order, first-writer-wins (the flat[i] == 0 guard — a
+// later tree never overwrites an earlier tree's cell). 4 bytes/cell:
+// (id << 24) | (y << 8) | (z << 4) | x. The skip-mode veg is a pure
+// f(H, biome, x, z, seed): hcol = H2 (the shared surface — the neighbor
+// band is lazy too, no cave term), the in-column top check always
+// passes (H2 > sea + 1 gates the tree; the fill top at H2 is a solid
+// non-water block), and every tree cell lands in AIR (the skip fill is
+// solid exactly y <= max(H, sea) < H2 + 1) — so the flat[i] == 0 guard
+// is a no-op here. The flowers are CLUTTER (air in both the slab emit's
+// recount and the far emit) — they never flip a 4x4x4 cell, so they are
+// not listed. The 20x20 neighborhood: trees up to 2 cells OUTSIDE the
+// column reach into it (the 5x5 leaf footprint).
+static std::vector<uint8_t> gen_veg_cells(int cx, int cz, int64_t seed, int hmax, int sea) {
+	long long t0 = now_us();
+	int bx = cx * 16;
+	int bz = cz * 16;
+	double ystep = (double)hmax / GY_CELLS;
+	Field f_sc, f_sh, f_sr;
+	build_field(f_sc, bx, bz, ystep, seed, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0);
+	build_field(f_sh, bx, bz, ystep, seed + 7, 70.0, SURF_YSCALE, 70.0, 333.0, 0.0, 333.0);
+	build_field(f_sr, bx, bz, ystep, seed + 13, 300.0, SURF_YSCALE, 300.0, 500.0, 0.0, 500.0);
+	std::vector<int> heights(256);
+	std::vector<int> bcode(256);
+	std::vector<char> padcol(256, 0);
+	col_heights_pass(f_sc, f_sh, f_sr, ystep, bx, bz, seed, heights, bcode, padcol);
+	// seen: 0 = air, 1 = a tree cell (first-writer-wins, the veg loop's
+	// write order), -1 = FLOWER-OVERWRITTEN (see below). The flower
+	// pass runs AFTER the trees and writes rose/dandelion at
+	// (x, H + 1, z) UNCONDITIONALLY (no flat == 0 guard) when the top
+	// is grass — it can overwrite this column's own trunk-base cell OR
+	// a margin tree's leaf cell that landed at (x, H(x,z) + 1, z). A
+	// flower is CLUTTER (air in both the slab emit's recount and the
+	// far emit), so an overwritten cell drops out of the list.
+	std::vector<char> seen((size_t)hmax * 256, 0);
+	std::vector<int> cells;
+	std::vector<uint8_t> ids;
+	for (int tz = bz - 2; tz < bz + 18; tz++) {
+		for (int tx = bx - 2; tx < bx + 18; tx++) {
+			double hv = hash2i(tx, tz, seed + 55);
+			if (hv >= 0.14)
+				continue;
+			int glx = tx - bx;
+			int glz = tz - bz;
+			int H2;
+			if (glx >= 0 && glx < 16 && glz >= 0 && glz < 16)
+				H2 = heights[glz * 16 + glx];
+			else
+				H2 = surface_h(tx, tz, f_sc, f_sh, f_sr, ystep, bx, bz);
+			if (H2 <= sea + 1)
+				continue;
+			double tv = fbm2((double)tx / 260.0 + 900.0, (double)tz / 260.0 + 900.0, seed + 21, 3) * 2.0 - 1.0;
+			double mv = fbm2((double)tx / 260.0 + 1700.0, (double)tz / 260.0 + 1700.0, seed + 33, 3) * 2.0 - 1.0;
+			bool snow = tv < -0.25;
+			bool desert = tv > 0.35 && mv < 0.1;
+			bool forest = mv > 0.25;
+			double dens = 0.0;
+			if (forest)
+				dens = 0.14;
+			else if (snow || (!desert && !forest))
+				dens = 0.02; // plains or snow
+			if (hv >= dens)
+				continue;
+			int hcol = H2; // the lazy margin = the heightmap surface exactly
+			if (hcol < 1)
+				continue;
+			int tth = 4 + (int)(hash2i(tx, tz, seed + 66) * 3.0);
+			for (int dy = 1; dy <= tth; dy++) {
+				int wy = hcol + dy;
+				int ax = tx - bx;
+				int az = tz - bz;
+				if (ax >= 0 && ax < 16 && az >= 0 && az < 16 && wy >= 1 && wy < hmax) {
+					int k = (wy << 8) | (az << 4) | ax;
+					if (seen[k])
+						continue;
+					seen[k] = 1;
+					cells.push_back(k);
+					ids.push_back((uint8_t)B_LOG);
+				}
+			}
+			for (int ly = tth - 1; ly <= tth + 2; ly++) {
+				int rad = (ly >= tth + 1) ? 1 : 2;
+				for (int dx = -rad; dx <= rad; dx++) {
+					for (int dz = -rad; dz <= rad; dz++) {
+						bool sk = false;
+						if (rad == 2 && iabs(dx) == 2 && iabs(dz) == 2)
+							sk = true;
+						if (ly == tth + 2 && iabs(dx) == 1 && iabs(dz) == 1)
+							sk = true;
+						if (sk)
+							continue;
+						int wy = hcol + ly;
+						int ax = tx + dx - bx;
+						int az = tz + dz - bz;
+						if (ax >= 0 && ax < 16 && az >= 0 && az < 16 && wy >= 1 && wy < hmax) {
+							int k = (wy << 8) | (az << 4) | ax;
+							if (seen[k])
+								continue;
+							seen[k] = 1;
+							cells.push_back(k);
+							ids.push_back((uint8_t)B_LEAVES);
+						}
+					}
+				}
+			}
+		}
+	}
+	// The flower pass (after the trees — see the seen[] comment): the
+	// in-column grass tops with the hash gates hit grow a flower at
+	// (x, H + 1, z), overwriting whatever tree cell landed there.
+	for (int lz = 0; lz < 16; lz++) {
+		for (int lx = 0; lx < 16; lx++) {
+			int idx = lz * 16 + lx;
+			int fh = heights[idx];
+			if (fh > sea && fh < hmax - 2) {
+				uint8_t top = B_GRASS;
+				if (bcode[idx] == 1)
+					top = B_SAND;
+				else if (bcode[idx] == 0)
+					top = B_SNOW_GRASS;
+				if (fh <= sea + 1 && bcode[idx] != 1)
+					top = B_SAND;
+				if (top == B_GRASS && hash2i(bx + lx, bz + lz, seed + 777) < 0.02) {
+					int k = ((fh + 1) << 8) | (lz << 4) | lx;
+					seen[k] = -1; // the flower wins (unconditional write)
+				}
+			}
+		}
+	}
+	std::vector<uint8_t> out;
+	for (size_t i = 0; i < cells.size(); i++) {
+		if (seen[cells[i]] != 1)
+			continue; // flower-overwritten (clutter — air in both emits)
+		int wy = cells[i] >> 8;
+		int az = (cells[i] >> 4) & 0xF;
+		int ax = cells[i] & 0xF;
+		uint32_t c = ((uint32_t)ids[i] << 24) | ((uint32_t)wy << 8) | ((uint32_t)az << 4) | (uint32_t)ax;
+		out.push_back((uint8_t)(c & 0xFF));
+		out.push_back((uint8_t)((c >> 8) & 0xFF));
+		out.push_back((uint8_t)((c >> 16) & 0xFF));
+		out.push_back((uint8_t)((c >> 24) & 0xFF));
+	}
+	g_t_vegcells_us.fetch_add(now_us() - t0, std::memory_order_relaxed);
+	return out;
+}
 
 // skip != 0: the AC-0216 lazy path (offscreen interior band) — the 150-pt
 // density evaluation is skipped free (see the file header).
@@ -473,7 +725,9 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	}
 
 	// Coarse fields (441 lattice points each = 4x8x4 cells + 1-cell margin,
-	// 2-octave AweNoise.fbm3 per lattice point).
+	// 2-octave AweNoise.fbm3 per lattice point). AC-0215: the 3D SURFACE
+	// field (the AC-0091 2D heightmap's c/h/r, now 3D on the same coarse
+	// grid — replaces the heightmap).
 	long long t_field = now_us();
 	Field f_cave{}, f_ore1, f_ore2, f_ore3;
 	if (!skip)
@@ -481,8 +735,6 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	build_field(f_ore1, bx, bz, ystep, seed + 77, 7.0, 7.0, 7.0, 0.0, 0.0, 0.0);
 	build_field(f_ore2, bx, bz, ystep, seed + 88, 9.0, 9.0, 9.0, 900.0, 0.0, 900.0);
 	build_field(f_ore3, bx, bz, ystep, seed + 99, 6.0, 6.0, 6.0, 1700.0, 0.0, 1700.0);
-	// AC-0215: the 3D SURFACE field (the AC-0091 2D heightmap's c/h/r, now
-	// 3D on the same coarse grid — replaces the heightmap).
 	Field f_sc, f_sh, f_sr;
 	build_field(f_sc, bx, bz, ystep, seed, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0);
 	build_field(f_sh, bx, bz, ystep, seed + 7, 70.0, SURF_YSCALE, 70.0, 333.0, 0.0, 333.0);
@@ -494,27 +746,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	std::vector<int> heff(256);
 	std::vector<int> bcode(256);
 	std::vector<char> padcol(256, 0);
-
-	for (int lz = 0; lz < 16; lz++) {
-		for (int lx = 0; lx < 16; lx++) {
-			int idx = lz * 16 + lx;
-			int x = bx + lx;
-			int z = bz + lz;
-			heights[idx] = surface_h(x, z, f_sc, f_sh, f_sr, ystep, bx, bz);
-			padcol[idx] = is_pad(x, z) ? 1 : 0;
-			double t = fbm2((double)x / 260.0 + 900.0, (double)z / 260.0 + 900.0, seed + 21, 3) * 2.0 - 1.0;
-			double m = fbm2((double)x / 260.0 + 1700.0, (double)z / 260.0 + 1700.0, seed + 33, 3) * 2.0 - 1.0;
-			// bcode: 0 snow, 1 desert, 2 forest, 3 plains (biome_at order).
-			int bc = 3;
-			if (t < -0.25)
-				bc = 0;
-			else if (t > 0.35 && m < 0.1)
-				bc = 1;
-			else if (m > 0.25)
-				bc = 2;
-			bcode[idx] = bc;
-		}
-	}
+	col_heights_pass(f_sc, f_sh, f_sr, ystep, bx, bz, seed, heights, bcode, padcol);
 	g_t_heights_us.fetch_add(now_us() - t_ht, std::memory_order_relaxed);
 
 	std::vector<uint8_t> flat((size_t)hmax * 256, 0);
@@ -939,6 +1171,22 @@ public:
 		// AC-0283 P3: the halo band's heightmap sky source (the heights
 		// pass only — see column_heights above).
 		ClassDB::bind_method(D_METHOD("column_heights", "cx", "cz", "s", "h"), &AweGen::column_heights);
+		// AC-0284b: the far (h-only) column — the 1024-byte far payload
+		// (256 H u16 LE + 256 biome + 256 top-block id; see gen_far).
+		// generate_resl with skip == 2 returns it as resl[2] too.
+		ClassDB::bind_method(D_METHOD("generate_far", "cx", "cz", "s", "h", "sea"), &AweGen::generate_far);
+		// AC-0284b: the u16 LE heightmap (512 bytes — the legacy u8
+		// column_heights wraps above 255; the farab H battery compares
+		// the far payload against THIS).
+		ClassDB::bind_method(D_METHOD("column_heights16", "cx", "cz", "s", "h"), &AweGen::column_heights16);
+		// AC-0284b: the far emitter's DEEP-COLOR precompute — the exact
+		// stone_ore chain (the fill lambda) per slab cell (see the
+		// method). Pass it to AweMesh.h_avg_emit for the slabs with deep
+		// cells (si <= 3 — the ore bands end at y = 60).
+		ClassDB::bind_method(D_METHOD("stone_ore_slab", "cx", "cz", "s", "h", "si"), &AweGen::stone_ore_slab);
+		// AC-0284b: the column's tree cells (the far emitter's solid-set
+		// extension — see gen_veg_cells).
+		ClassDB::bind_method(D_METHOD("veg_cells", "cx", "cz", "s", "h", "sea"), &AweGen::veg_cells);
 		ClassDB::bind_method(D_METHOD("skip_chunks_total"), &AweGen::skip_chunks_total);
 		ClassDB::bind_method(D_METHOD("skip_cols_total"), &AweGen::skip_cols_total);
 		ClassDB::bind_method(D_METHOD("reset_skip_stats"), &AweGen::reset_skip_stats);
@@ -950,12 +1198,15 @@ public:
 		Dictionary d;
 		d["field_us"] = (int64_t)g_t_field_us.load(std::memory_order_relaxed);
 		d["heights_us"] = (int64_t)g_t_heights_us.load(std::memory_order_relaxed);
+		d["vegcells_us"] = (int64_t)g_t_vegcells_us.load(std::memory_order_relaxed);
 		d["scan_us"] = (int64_t)g_t_scan_us.load(std::memory_order_relaxed);
 		d["fill_us"] = (int64_t)g_t_fill_us.load(std::memory_order_relaxed);
 		d["veg_us"] = (int64_t)g_t_veg_us.load(std::memory_order_relaxed);
 		d["pallet_us"] = (int64_t)g_t_pallet_us.load(std::memory_order_relaxed);
 		d["cols_full"] = (int64_t)g_t_cols_full.load(std::memory_order_relaxed);
 		d["cols_skip"] = (int64_t)g_t_cols_skip.load(std::memory_order_relaxed);
+		d["cols_far"] = (int64_t)g_t_cols_far.load(std::memory_order_relaxed);
+		d["far_us"] = (int64_t)g_t_far_us.load(std::memory_order_relaxed);
 		return d;
 	}
 
@@ -968,6 +1219,8 @@ public:
 		g_t_pallet_us.store(0, std::memory_order_relaxed);
 		g_t_cols_full.store(0, std::memory_order_relaxed);
 		g_t_cols_skip.store(0, std::memory_order_relaxed);
+		g_t_cols_far.store(0, std::memory_order_relaxed);
+		g_t_far_us.store(0, std::memory_order_relaxed);
 	}
 
 	// Noise probe surface (bit-exact AweNoise port).
@@ -1019,8 +1272,36 @@ public:
 	}
 
 	// [data_slabs, fl_slabs] — the exact threadgen resl shape (fl = all null;
-	// gen produces no fluid).
+	// gen produces no fluid). AC-0284b: skip == 2 = the FAR (h-only)
+	// column — the slabs are ALL NULL and the 1024-byte far payload rides
+	// resl[2] as {h, bm, top} (the v6 codec's bit-1 section replaces the
+	// slab section on disk).
 	Array generate_resl(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip, PackedByteArray p_keep) const {
+		if (p_skip == 2) {
+			std::vector<uint8_t> pay = awegen::gen_far(p_cx, p_cz, p_s, p_h, p_sea);
+			Array resl;
+			Array ds;
+			ds.resize(p_h / 16); // all null — the far column holds no slabs
+			resl.append(ds);
+			Array fl;
+			fl.resize(p_h / 16); // all null
+			resl.append(fl);
+			Dictionary fp;
+			PackedByteArray ph;
+			ph.resize(512);
+			std::memcpy(ph.ptrw(), pay.data(), 512);
+			PackedByteArray pb;
+			pb.resize(256);
+			std::memcpy(pb.ptrw(), pay.data() + 512, 256);
+			PackedByteArray pt;
+			pt.resize(256);
+			std::memcpy(pt.ptrw(), pay.data() + 768, 256);
+			fp["h"] = ph;
+			fp["bm"] = pb;
+			fp["top"] = pt;
+			resl.append(fp);
+			return resl;
+		}
 		const uint8_t *keep = p_keep.size() > 0 ? (const uint8_t *)p_keep.ptr() : nullptr;
 		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip, keep);
 		Array resl;
@@ -1029,6 +1310,99 @@ public:
 		fl.resize(p_h / 16); // all null
 		resl.append(fl);
 		return resl;
+	}
+
+	// AC-0284b: the far (h-only) column's 1024-byte payload (256 H u16
+	// LE + 256 biome + 256 top-block id — see gen_far above).
+	PackedByteArray generate_far(int p_cx, int p_cz, int p_s, int p_h, int p_sea) const {
+		std::vector<uint8_t> f = awegen::gen_far(p_cx, p_cz, p_s, p_h, p_sea);
+		PackedByteArray out;
+		out.resize((int)f.size());
+		if (!f.empty())
+			std::memcpy(out.ptrw(), f.data(), f.size());
+		return out;
+	}
+
+	// AC-0284b: the column's 256 heights as u16 LE (512 bytes). The u8
+	// column_heights above wraps above 255 (TERRAIN_H_MAX = 300); this is
+	// the exact form the far payload stores.
+	PackedByteArray column_heights16(int p_cx, int p_cz, int p_s, int p_h) const {
+		int bx = p_cx * 16;
+		int bz = p_cz * 16;
+		double ystep = (double)p_h / GY_CELLS;
+		Field f_sc, f_sh, f_sr;
+		build_field(f_sc, bx, bz, ystep, p_s, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0);
+		build_field(f_sh, bx, bz, ystep, p_s + 7, 70.0, SURF_YSCALE, 70.0, 333.0, 0.0, 333.0);
+		build_field(f_sr, bx, bz, ystep, p_s + 13, 300.0, SURF_YSCALE, 300.0, 500.0, 0.0, 500.0);
+		PackedByteArray out;
+		out.resize(512);
+		for (int lz = 0; lz < 16; lz++) {
+			for (int lx = 0; lx < 16; lx++) {
+				int H = clampi(surface_h(bx + lx, bz + lz, f_sc, f_sh, f_sr, ystep, bx, bz), 0, p_h - 1);
+				int i = lz * 16 + lx;
+				out[2 * i] = (uint8_t)(H & 0xFF);
+				out[2 * i + 1] = (uint8_t)((H >> 8) & 0xFF);
+			}
+		}
+		return out;
+	}
+
+	// AC-0284b: the far emitter's deep-color precompute — the EXACT
+	// stone_ore chain (the fill lambda above, bit-for-bit) evaluated for
+	// every cell of slab si: 4096 block ids (slab-local pos =
+	// (y%16, lz, lx) — the same (y<<8)|(z<<4)|x layout as the slab). The
+	// ore bands end at y = 60 (coal), so rows past that (and slabs si > 3)
+	// are plain B_STONE without a field read. AweMesh.h_avg_emit colors
+	// its deep sub-cells (y < H - 3) from this — the skip-fill equivalence
+	// the farab A/B gate checks.
+	PackedByteArray stone_ore_slab(int p_cx, int p_cz, int p_s, int p_h, int p_si) const {
+		int bx = p_cx * 16;
+		int bz = p_cz * 16;
+		double ystep = (double)p_h / GY_CELLS;
+		Field f_ore1, f_ore2, f_ore3;
+		build_field(f_ore1, bx, bz, ystep, p_s + 77, 7.0, 7.0, 7.0, 0.0, 0.0, 0.0);
+		build_field(f_ore2, bx, bz, ystep, p_s + 88, 9.0, 9.0, 9.0, 900.0, 0.0, 900.0);
+		build_field(f_ore3, bx, bz, ystep, p_s + 99, 6.0, 6.0, 6.0, 1700.0, 0.0, 1700.0);
+		std::vector<uint8_t> out(4096, B_STONE);
+		for (int ly = 0; ly < 16; ly++) {
+			int wy = p_si * 16 + ly;
+			if (wy >= 60)
+				break; // past every ore band (the chain returns B_STONE)
+			for (int lz = 0; lz < 16; lz++) {
+				double gz = (double)lz / 4.0;
+				for (int lx = 0; lx < 16; lx++) {
+					int x = bx + lx;
+					int z = bz + lz;
+					double gx = (double)lx / 4.0;
+					int id = B_STONE;
+					if (wy < 16 && tril(f_ore1, gx, (double)wy / ystep, gz) > 0.78)
+						id = B_DIAMOND_ORE;
+					else if (wy < 42 && tril(f_ore2, gx, (double)wy / ystep, gz) > 0.8)
+						id = B_IRON_ORE;
+					else if (wy < 60 && tril(f_ore3, gx, (double)wy / ystep, gz) > 0.82)
+						id = B_COAL_ORE;
+					else if (wy < 10 && hash3i(x, wy, z, p_s + 333) < 0.02)
+						id = B_OBSIDIAN;
+					out[(ly << 8) | (lz << 4) | lx] = (uint8_t)id;
+				}
+			}
+		}
+		PackedByteArray pb;
+		pb.resize(4096);
+		std::memcpy(pb.ptrw(), out.data(), 4096);
+		return pb;
+	}
+
+	// AC-0284b: the column's TREE cells (see gen_veg_cells — the far
+	// emitter adds them to the H-driven solid set so the halo's tree
+	// blobs are byte-identical to the skip slab's emit).
+	PackedByteArray veg_cells(int p_cx, int p_cz, int p_s, int p_h, int p_sea) const {
+		std::vector<uint8_t> v = awegen::gen_veg_cells(p_cx, p_cz, p_s, p_h, p_sea);
+		PackedByteArray out;
+		out.resize((int)v.size());
+		if (!v.empty())
+			std::memcpy(out.ptrw(), v.data(), v.size());
+		return out;
 	}
 
 	// AC-0283 P3: the column's 256-byte heightmap (the halo sky source).

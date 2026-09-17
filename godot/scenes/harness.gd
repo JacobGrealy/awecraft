@@ -555,6 +555,18 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _halo_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "farab":
+			# AC-0284b: the FAR (h-only) column A/B battery (the permanent
+			# gate): (1) the far payload's H u16 is bit-exact with the
+			# heights pass (the promotion-consistency contract); (2)
+			# h_avg_emit is BYTE-IDENTICAL to low_emit_avg on the same
+			# column's skip-filled slabs, every slab, both the sky and the
+			# deep-ore color (the halo byte-identity gate); (3) the v6
+			# bit-1 codec round-trip (~1 KB) + the 284a bit-0 slab shape +
+			# the legacy v4 shape all decode. Pure C++ — no world build.
+			await _farab_test()
+			get_tree().quit()
+			return
 		if logic == "banana":
 			# AC-0040: the banana-tree generation probe — the shore dirt
 			# edge rule (independent re-derivation from the data), the
@@ -8596,6 +8608,14 @@ func _halo_test(spawn: Vector3) -> void:
 				get_tree().quit()
 				return
 			var f: PackedByteArray = c.flat_data()
+			if c.far:
+				# AC-0284b: a far column's stored payload IS the skip fill
+				# (solid 0..St + trees — the 984/984 farab proof); the
+				# legacy reference must see the FILL, not the null slabs
+				# (all air — a hole in the world that the engine's opaque
+				# far neighbor never is). skip=1 is the exact fill.
+				var fresl: Array = WorldGen.gen_cpp().generate_resl(int(c.cx), int(c.cz), int(Game.world_seed), H, int(Data.SEA), 1, PackedByteArray())
+				f = io.slabs_flat(fresl)
 			slabs[k] = io.palettize_flat(f, 24)
 			tops[k] = int(io.slabs_top(slabs[k]))
 			keys.append(k)
@@ -8728,11 +8748,24 @@ func _halo_test(spawn: Vector3) -> void:
 			b_cols += 1
 			if world.star.column_light_dict(cx0 + dx, cz0 + dz).is_empty():
 				b_unseeded += 1
-			var hm: PackedByteArray = c.hmap
-			if hm.is_empty():
-				hm = world._halo_hmap_get(c)
+			# AC-0284b: the far column's stored H (the u16 payload) IS the
+			# heightmap — the arm-recomputed sky reads far_h directly (no
+			# u8 wrap above 255); the slab-shaped column reads the u8
+			# hmap. Both feed the same footprint-max below (hsrc = 256
+			# ints).
+			var hsrc: Array = []
+			if c.far:
+				for i in range(256):
+					var o := i * 2
+					hsrc.append(int(c.far_h[o]) | (int(c.far_h[o + 1]) << 8))
+			else:
+				var hm: PackedByteArray = c.hmap
+				if hm.is_empty():
+					hm = world._halo_hmap_get(c)
+				for i in range(256):
+					hsrc.append(int(hm[i]))
 			for si in range(c.data.size()):
-				if c.data[si] == null or si > (int(c.top) >> 4):
+				if not c.far and (c.data[si] == null or si > (int(c.top) >> 4)):
 					continue
 				# the ARM-RECOMPUTED sky payload (independent of the
 				# world._halo_sky_for path — the cross-check).
@@ -8744,8 +8777,8 @@ func _halo_test(spawn: Vector3) -> void:
 						for lz in range(gz * 4, gz * 4 + 4):
 							var r0 := lz * 16
 							for lx in range(gx * 4, gx * 4 + 4):
-								if int(hm[r0 + lx]) > m2:
-									m2 = int(hm[r0 + lx])
+								if int(hsrc[r0 + lx]) > m2:
+									m2 = int(hsrc[r0 + lx])
 						fh[gz * 4 + gx] = m2
 				var exp := PackedByteArray()
 				exp.resize(64)
@@ -8805,7 +8838,21 @@ func _halo_test(spawn: Vector3) -> void:
 					"c": arrs[Mesh.ARRAY_COLOR], "u": arrs[Mesh.ARRAY_TEX_UV] if arrs[Mesh.ARRAY_TEX_UV] != null else PackedVector2Array(),
 					"i": arrs[Mesh.ARRAY_INDEX],
 				}
-				var fresh: Dictionary = mc.low_emit_avg(mc.slab_copy(c.data), si, 4, world._lod_fcc_get(), exp)
+				var fresh: Dictionary
+				if c.far:
+					# AC-0284b: the far column's fresh emit = the H-driven
+					# emitter on the payload (the applied mesh is this
+					# same emit — the worker's ore/veg precomputes
+					# reproduced; the sky is the arm's exp).
+					var ore2 := PackedByteArray()
+					if int(c.far_hmax) > si * 16 + 3 and si <= 3:
+						ore2 = WorldGen.gen_cpp().stone_ore_slab(int(c.cx), int(c.cz), int(Game.world_seed), int(Data.HEIGHT), si)
+					var veg2: PackedByteArray = c.far_veg
+					if veg2.size() == 0:
+						veg2 = WorldGen.gen_cpp().veg_cells(int(c.cx), int(c.cz), int(Game.world_seed), int(Data.HEIGHT), int(Data.SEA))
+					fresh = mc.h_avg_emit(c.far_h, c.far_biome, c.far_top, ore2, veg2, si, 4, world._lod_fcc_get(), exp, int(Data.SEA), int(Data.HEIGHT))
+				else:
+					fresh = mc.low_emit_avg(mc.slab_copy(c.data), si, 4, world._lod_fcc_get(), exp)
 				if bool(fresh.get("empty", false)):
 					if int(applied["q"]) != 0:
 						if b_fail.size() < 4:
@@ -8839,7 +8886,9 @@ func _halo_test(spawn: Vector3) -> void:
 			if absi(dx) + absi(dz) != 5:
 				continue
 			var c = world.chunks.get(world._key(cx0 + dx, cz0 + dz))
-			if c != null and not c.data.is_empty() and int(c.top) >= 16:
+			# AC-0284b: a far column's "top" is far_hmax (c.top is -1 —
+			# no slabs).
+			if c != null and not c.data.is_empty() and (int(c.top) >= 16 or (c.far and int(c.far_hmax) >= 16)):
 				px = cx0 + dx
 				pz = cz0 + dz
 				break
@@ -8959,7 +9008,19 @@ func _halo_test(spawn: Vector3) -> void:
 		await get_tree().physics_frame
 		dw += 1
 		var dc2 = world.chunks.get(world._key(px, pz))
-		var q_dl: bool = dc2 != null and not dc2.data.is_empty() and int(dc2.low_slabs.size()) > 0
+		# AC-0284b: the demote flip lands on the LOW RE-LANDING (the
+		# promoted column's halo low went stale at the full regen's
+		# data_gen bump — the wave re-lowers it and the attach flips the
+		# tiers), so wait for a VISIBLE low, not just a low attach.
+		var q_dl: bool = dc2 != null and not dc2.data.is_empty()
+		if q_dl:
+			var vis2 := false
+			for lia2 in range(int(dc2.low_slabs.size())):
+				var mi2: MeshInstance3D = dc2.low_instances[lia2]
+				if mi2 != null and mi2.visible:
+					vis2 = true
+					break
+			q_dl = vis2
 		if q_dl and world.star_light_idle() \
 				and world.threadmesh_inflight.is_empty() and world.star_remesh.is_empty():
 			dquiet += 1
@@ -9248,6 +9309,173 @@ func _brightslab_slab_cmp(mc, wcx: int, wcz: int, si: int, ri: Dictionary, cx0: 
 		if not details.is_empty():
 			out["details"] = details
 	return out
+
+
+# AC-0284b: the FAR (h-only) column A/B battery (the permanent gate). See
+# the dispatch for the contract. The A/B pair is (a) the skip-filled
+# slabs (generate_resl skip=1 — the 284a shape, kept as the reference)
+# through low_emit_avg, and (b) the far payload through h_avg_emit;
+# identical grid inputs (the shared tail) + identical fcc/sky must give
+# byte-identical output arrays.
+func _farab_test() -> void:
+	var t0 := Time.get_ticks_msec()
+	var H := int(Data.HEIGHT)
+	var sea := int(Data.SEA)
+	var seed := int(Game.world_seed)
+	var g: Variant = WorldGen.gen_cpp()
+	var mc: Variant = _ChunkScriptM.mesh_cpp()
+	var fcc: PackedFloat32Array = world._lod_fcc_get()
+	var out: Dictionary = {
+		"ok": false, "seed": seed, "fcc_tiles": int(world.lod_fcc_tiles),
+		"cols": 0, "h_mismatch": 0, "slab_cmp": 0, "slab_mismatch": 0,
+		"codec": {}, "note": "",
+	}
+	# The battery columns — spawn flats + a spread reaching the high
+	# terrain (the H > 255 u16 rows) + the shoreline (the aquifer water
+	# branch) + the forest (the tree/flower overwrite branches).
+	var cols: Array = [
+		[0, 0], [-1, 0], [2, -3], [5, 2], [-4, 4], [8, 1], [-8, -2], [3, 7],
+		[-2, -6], [7, -7], [-6, 3], [4, -5], [10, -4], [-10, 2], [0, 9],
+		[-1, 3], [1, -2], [-3, 2], [2, 6], [-5, -4], [6, 6], [-9, -5], [9, 3],
+		[-3, -9], [3, -9], [12, 0], [-12, -1], [0, -12], [5, 9], [-7, 7], [11, 5],
+		[-11, -7], [1, 4], [-1, -4], [6, -1], [-6, -1], [4, 11], [-4, 11],
+		[11, -2], [-13, 4], [2, 13],
+	]
+	# ---- (1) the far payload's H u16 LE == the heights pass (u16).
+	for cxy in cols:
+		var cx: int = int(cxy[0])
+		var cz: int = int(cxy[1])
+		var pay: PackedByteArray = g.generate_far(cx, cz, seed, H, sea)
+		if pay.size() != 1024:
+			out["note"] = "payload size %d" % pay.size()
+			Debug.result(out)
+			get_tree().quit()
+			return
+		if pay.slice(0, 512) != g.column_heights16(cx, cz, seed, H):
+			out["h_mismatch"] += 1
+		out["cols"] += 1
+	# ---- (2) the mesh A/B — h_avg_emit vs low_emit_avg on the
+	# skip-filled slabs, every slab, the sky from the payload's H.
+	for cxy in cols:
+		var cx: int = int(cxy[0])
+		var cz: int = int(cxy[1])
+		var pay: PackedByteArray = g.generate_far(cx, cz, seed, H, sea)
+		var veg: PackedByteArray = g.veg_cells(cx, cz, seed, H, sea)
+		var resl1: Array = g.generate_resl(cx, cz, seed, H, sea, 1, PackedByteArray())
+		for si in range(H / 16):
+			var sky: PackedByteArray = _farab_sky(pay, si)
+			var ore := PackedByteArray()
+			if si <= 3:
+				ore = g.stone_ore_slab(cx, cz, seed, H, si)
+			var a: Dictionary = mc.low_emit_avg(resl1[0], si, 4, fcc, sky)
+			var b: Dictionary = mc.h_avg_emit(pay.slice(0, 512), pay.slice(512, 768), pay.slice(768, 1024), ore, veg, si, 4, fcc, sky, sea, H)
+			out["slab_cmp"] += 1
+			if not _farab_emit_eq(a, b):
+				out["slab_mismatch"] += 1
+				var av: int = int(a.get("v", []).size()) if a.has("v") else -1
+				var bv: int = int(b.get("v", []).size()) if b.has("v") else -1
+				var dd := _farab_first_diff(a, b)
+				out["note"] += "c%d,%d s%d a_v=%d b_v=%d %s; " % [cx, cz, si, av, bv, str(dd)]
+	# ---- (3) the codec round-trips.
+	var pay0: PackedByteArray = g.generate_far(0, 0, seed, H, sea)
+	var blobf: PackedByteArray = ChunkIO.encode_column(PackedByteArray(), PackedByteArray(), seed, H, {}, -1, 0xFFFFFF, true, pay0)
+	var rdf: Dictionary = ChunkIO.decode_column(blobf, seed, H)
+	var dfs: Array = rdf.get("d_slabs", [])
+	var nulls := 0
+	for sl in dfs:
+		if sl == null:
+			nulls += 1
+	out["codec"] = {
+		"far_bytes": blobf.size(),
+		"far_ok": bool(rdf.get("far", false)) and bool(rdf.get("no_caves", false)) \
+			and rdf.get("far_h", PackedByteArray()) == pay0.slice(0, 512) \
+			and rdf.get("far_biome", PackedByteArray()) == pay0.slice(512, 768) \
+			and rdf.get("far_top", PackedByteArray()) == pay0.slice(768, 1024) \
+			and int(dfs.size()) == H / 16 and nulls == H / 16,
+	}
+	# (3b) the 284a bit-0 slab no-caves shape (the slabs ARE the data —
+	# the written shape between 284a and 284b must still decode).
+	var resl1b: Array = g.generate_resl(1, 2, seed, H, sea, 1, PackedByteArray())
+	var flatb: PackedByteArray = ChunkIO.io_cpp().slabs_flat(resl1b[0])
+	var flflatb: PackedByteArray = ChunkIO.io_cpp().slabs_flat(resl1b[1])
+	var blobb: PackedByteArray = ChunkIO.encode_column(flatb, flflatb, seed, H, {}, -1, 0xFFFFFF, true)
+	var rdb: Dictionary = ChunkIO.decode_column(blobb, seed, H)
+	out["codec"]["bit0_ok"] = bool(rdb.get("no_caves", false)) and not bool(rdb.get("far", false)) \
+		and rdb.get("data", PackedByteArray()) == flatb and blobb.size() > 0
+	# (3c) the legacy v4 full shape (no flags — unchanged on disk).
+	var resl0: Array = g.generate_resl(0, 1, seed, H, sea, 0, PackedByteArray())
+	var flat0: PackedByteArray = ChunkIO.io_cpp().slabs_flat(resl0[0])
+	var flflat0: PackedByteArray = ChunkIO.io_cpp().slabs_flat(resl0[1])
+	var blob0: PackedByteArray = ChunkIO.encode_column(flat0, flflat0, seed, H, {}, -1, 0xFFFFFF, false)
+	var rd0: Dictionary = ChunkIO.decode_column(blob0, seed, H)
+	out["codec"]["v4_ok"] = not bool(rd0.get("no_caves", false)) and not bool(rd0.get("far", false)) \
+		and rdb.size() > 0 and rd0.get("data", PackedByteArray()) == flat0
+	out["ms"] = Time.get_ticks_msec() - t0
+	out["ok"] = out["h_mismatch"] == 0 and out["slab_mismatch"] == 0 \
+		and bool(out["codec"].get("far_ok", false)) and bool(out["codec"].get("bit0_ok", false)) \
+		and bool(out["codec"].get("v4_ok", false)) and int(out["slab_cmp"]) == int(cols.size()) * (H / 16)
+	Debug.result(out)
+
+
+# AC-0284b: the far payload's halo sky (64 bytes — the 4x4x4 cell is lit
+# (15) iff it sits strictly above the terrain top over its 4x4 footprint;
+# the H u16 LE read — no u8 wrap). The SAME formula the game's
+# _halo_sky_for runs for a far column (the battery passes it to both
+# emits, so it only needs to be a valid sky — its correctness is the
+# halo arm's job).
+func _farab_sky(pay: PackedByteArray, si: int) -> PackedByteArray:
+	var fh: Array = []
+	fh.resize(16)
+	for gz in range(4):
+		for gx in range(4):
+			var m := 0
+			for lz in range(gz * 4, gz * 4 + 4):
+				var r0 := lz * 32
+				for lx in range(gx * 4, gx * 4 + 4):
+					var o := r0 + lx * 2
+					var v := int(pay[o]) | (int(pay[o + 1]) << 8)
+					if v > m:
+						m = v
+			fh[gz * 4 + gx] = m
+	var y0 := si * 16
+	var out := PackedByteArray()
+	out.resize(64)
+	for cy in range(4):
+		for cz in range(4):
+			for cx in range(4):
+				out[cy * 16 + cz * 4 + cx] = 15 if y0 + cy * 4 > int(fh[cz * 4 + cx]) else 0
+	return out
+
+# AC-0284b: the first (array, index) where two avg-emit results differ
+# (diagnostics only — the battery reports it on a mismatch).
+func _farab_first_diff(a: Dictionary, b: Dictionary) -> String:
+	for kk in ["v", "i", "n", "c"]:
+		var av: Array = a.get(kk, [])
+		var bv: Array = b.get(kk, [])
+		var n := mini(av.size(), bv.size())
+		for i in range(n):
+			if av[i] != bv[i]:
+				return "%s[%d]=%s!=%s (sz %d/%d)" % [kk, i, str(av[i]), str(bv[i]), av.size(), bv.size()]
+		if av.size() != bv.size():
+			return "%s size %d vs %d" % [kk, av.size(), bv.size()]
+	var ma: float = float(a.get("mh", -1.0))
+	var mb: float = float(b.get("mh", -1.0))
+	if absf(ma - mb) > 0.0001:
+		return "mh %.3f vs %.3f" % [ma, mb]
+	return "unknown"
+
+# AC-0284b: two avg-emit results are the SAME mesh (the byte-identity
+# contract — the v/n/c/i arrays + the mh value, or both empty).
+func _farab_emit_eq(a: Dictionary, b: Dictionary) -> bool:
+	var ae := bool(a.get("empty", false))
+	var be := bool(b.get("empty", false))
+	if ae != be:
+		return false
+	if ae:
+		return true
+	if a.get("v") != b.get("v") or a.get("i") != b.get("i") or a.get("n") != b.get("n") or a.get("c") != b.get("c"):
+		return false
+	return absf(float(a.get("mh", -1.0)) - float(b.get("mh", -1.0))) < 0.0001
 
 
 func _starlight_test(spawn: Vector3) -> void:
@@ -11459,7 +11687,11 @@ func _r16_test(spawn: Vector3) -> void:
 		# heights = the 256 per-column surface/biome, scan = the top-down
 		# density evaluation (the part the window would skip), fill = the
 		# per-cell emit incl. ore, veg = trees+flowers, pallet =
-		# palettize_slabs; cols_full/cols_skip split the column count.
+		# palettize_slabs; cols_full/cols_skip/cols_far split the column
+		# count. AC-0284b: cols_far = the h-only far columns (skip == 2 —
+		# the halo band + the offscreen collar; the 284a slab-skip path,
+		# skip == 1, is DEAD in the game (A/B reference only), so
+		# cols_skip/the skip census read 0 for a normal session).
 		"gen_timing": {
 			"field_ms": int(int(WorldGen.gen_cpp().gen_timing().get("field_us", 0)) / 1000.0),
 			"heights_ms": int(int(WorldGen.gen_cpp().gen_timing().get("heights_us", 0)) / 1000.0),
@@ -11469,6 +11701,7 @@ func _r16_test(spawn: Vector3) -> void:
 			"pallet_ms": int(int(WorldGen.gen_cpp().gen_timing().get("pallet_us", 0)) / 1000.0),
 			"cols_full": int(WorldGen.gen_cpp().gen_timing().get("cols_full", 0)),
 			"cols_skip": int(WorldGen.gen_cpp().gen_timing().get("cols_skip", 0)),
+			"cols_far": int(WorldGen.gen_cpp().gen_timing().get("cols_far", 0)),
 		},
 		# AC-0232 (dither dropped in AC-0241; the fog fade is the only
 		# distance fade): the fog start pct in force for this run; the env
@@ -12819,7 +13052,11 @@ func _ladder_band_drained(R: int) -> bool:
 		if c.data.is_empty():
 			continue
 		for si in range(c.data.size()):
-			if c.data[si] == null:
+			# AC-0284b: a far column's null slabs ARE the payload — they
+			# are pending work until lowed or terminal-marked (the old
+			# skip made the check vacuously true for far columns and the
+			# arm exited before the wave reached the surface slabs).
+			if c.data[si] == null and not c.far:
 				continue
 			if c.has_low_si(si):
 				continue

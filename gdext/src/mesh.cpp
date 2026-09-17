@@ -1866,6 +1866,12 @@ static Dictionary low_emit_impl(const Array &p_slabs, int si, const Dictionary &
 // lod_avg shader multiplies it into the brightness — the far band is lit
 // by the heightmap, not the engine. Empty = the legacy all-bright emit
 // (the real band passes nothing — byte-identical output).
+// AC-0284b: the SHARED avg-emit tail (defined below) — the slab and far
+// emitters both end here (the byte-identity rests on it).
+static Dictionary avg_grid_emit(int G, float CELL, int si, int nsl,
+		const uint8_t grids_solid[3][512], const float grids_cols[3][512 * 18],
+		const bool ghave[3], const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky);
+
 static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky) {
 	Dictionary res;
 	const int G = (p_grid == 4) ? 4 : 8;
@@ -1874,8 +1880,6 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 	const int TOT = CELLB * CELLB * CELLB;
 	const float *fcc = p_fcc.ptr();
 	bool fcc_ok = p_fcc.size() >= 256 * 18;
-	const uint8_t *skyp = p_sky.ptr();
-	bool sky_ok = p_sky.size() == (int)(G * G * G);
 
 	// --- the three average-color grids (si-1 / si / si+1; the
 	// slab-boundary culling reads the neighbor SOLID masks).
@@ -2043,6 +2047,26 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 		}
 		ghave[t] = true;
 	}
+	return avg_grid_emit(G, CELL, si, nsl, grids_solid, grids_cols, ghave, p_fcc, p_sky);
+}
+
+// ---------------------------------------------------------------------------
+// AC-0284b: the SHARED tail of the avg-tier emits — the >half-air "any"
+// check, the 6-face outermost-shell scan + greedy merge, and the vertex
+// assembly (the low_emit_avg_impl port). low_emit_avg_impl (the slab
+// grid) and h_avg_emit_impl (the far payload grid) both feed this — the
+// byte-identity of the two emits rests on the SHARED grid contract
+// (grids_solid: the >half-solid cell mask; grids_cols[1]: the per-face
+// average color) and this shared emit.
+// ---------------------------------------------------------------------------
+
+static Dictionary avg_grid_emit(int G, float CELL, int si, int nsl,
+		const uint8_t grids_solid[3][512], const float grids_cols[3][512 * 18],
+		const bool ghave[3], const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky) {
+	Dictionary res;
+	const float *fcc = p_fcc.ptr();
+	const uint8_t *skyp = p_sky.ptr();
+	bool sky_ok = p_sky.size() == (int)(G * G * G);
 	bool any = false;
 	for (int i = 0; i < G * G * G; i++) {
 		if (grids_solid[1][i] != 0) {
@@ -2253,6 +2277,191 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 	return res;
 }
 
+// ---------------------------------------------------------------------------
+// AC-0284b: the FAR (h-only) column's avg emit — the H-driven 4x4x4 halo
+// emitter. A far column holds NO slabs (the AC-0284b representation): the
+// grid is derived from the far payload (256 H u16 + 256 biome + 256
+// top-block id) + the deep-color precompute (AweGen.stone_ore_slab — the
+// exact stone_ore chain the fill loop uses, per slab cell):
+//
+//   * the skip fill is solid exactly 0..H (+ the aquifer H+1..sea when
+//     H < sea), so the per-(x,z) SOLID TOP is S = max(H, sea) and a cell's
+//     solid count = sum over its 16 (x,z) of clamp(S - y0 + 1, 0, CELLB)
+//     (the slab path's bit count over the same solid set — the clutter
+//     path's recount lands on the same set too: the skip column's trees
+//     sit strictly above the surface and count as air in both);
+//   * the per-face color = the average over the solid sub-cells' EXACT
+//     skip-fill block ids (bedrock / water / top block / dirt-sand /
+//     stone-ore) in the slab path's py/pz/px accumulation order (the
+//     float32 op order — the equivalence contract the farab gate checks:
+//     the emitted mesh is BYTE-IDENTICAL to low_emit_avg run on the same
+//     column's skip-filled slabs, same world, same seed).
+//
+// The emit tail (the >half-air scan + greedy merge + assembly) is the
+// SHARED avg_grid_emit above — the identity rests on the shared tail +
+// the exact grids.
+// ---------------------------------------------------------------------------
+
+// AC-0284b: the far emitter's block ids — == awegen::B_* in gen.cpp
+// (the data.gd contract; the awecommon.h B_STONE pattern).
+constexpr int FAR_B_DIRT = 2;
+constexpr int FAR_B_SAND = 4;
+constexpr int FAR_B_WATER = 5;
+constexpr int FAR_B_BEDROCK = 11;
+constexpr int FAR_B_SNOW_GRASS = 12;
+constexpr int FAR_B_STONE = 3;
+
+static Dictionary h_avg_emit_impl(const PackedByteArray &p_h, const PackedByteArray &p_bm,
+		const PackedByteArray &p_top, const PackedByteArray &p_ore, const PackedByteArray &p_veg,
+		int si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky, int p_sea, int p_hmax) {
+	Dictionary res;
+	if (p_h.size() != 512 || p_bm.size() != 256 || p_top.size() != 256) {
+		res["empty"] = true; // malformed payload — fail as all-air
+		return res;
+	}
+	const int G = (p_grid == 4) ? 4 : 8;
+	const int CELLB = 16 / G;
+	const float CELL = (float)CELLB;
+	const int TOT = CELLB * CELLB * CELLB;
+	bool fcc_ok = p_fcc.size() >= 256 * 18;
+	const uint8_t *ore = (p_ore.size() == awecommon::S3) ? p_ore.ptr() : nullptr;
+	const int nsl = p_hmax / 16;
+
+	// The payload: H (u16 LE) + S = the solid top INCLUDING the aquifer
+	// (the skip fill's water fills H+1..sea when H < sea — solid bs cells
+	// in the slab path too, so the counts + colors include it).
+	int Hh[256], St[256];
+	const uint8_t *hp = p_h.ptr();
+	for (int i = 0; i < 256; i++) {
+		int H = (int)hp[2 * i] | ((int)hp[2 * i + 1] << 8);
+		Hh[i] = H;
+		St[i] = (H > p_sea) ? H : p_sea;
+	}
+
+	// AC-0284b: the TREE cells (veg_cells — 4 bytes/cell:
+	// id<<24 | y<<8 | z<<4 | x). The skip slab's bs bitset INCLUDES the
+	// trees (log/leaves are not clutter — they count as solid in the
+	// slab emit's >half test AND color), so the far grid adds them too:
+	// a per-layer slab-local id table (0 = no tree). A tree cell is
+	// always AIR in the skip fill (y >= H + 1 > S), so it never
+	// conflicts with a fill cell — the tables are exclusive.
+	uint8_t tree_id[3][awecommon::S3];
+	memset(tree_id, 0, sizeof(tree_id));
+	{
+		int gsi0[3] = {si - 1, si, si + 1};
+		int vn = (p_veg.size() >= 4) ? (p_veg.size() / 4) : 0;
+		const uint8_t *vp = p_veg.ptr();
+		for (int k = 0; k < vn; k++) {
+			uint32_t c = (uint32_t)vp[k * 4] | ((uint32_t)vp[k * 4 + 1] << 8)
+				| ((uint32_t)vp[k * 4 + 2] << 16) | ((uint32_t)vp[k * 4 + 3] << 24);
+			int id = (int)(c >> 24);
+			int y = (int)((c >> 8) & 0xFFFF);
+			int z = (int)((c >> 4) & 0xF);
+			int x = (int)(c & 0xF);
+			int s = y >> 4;
+			for (int t = 0; t < 3; t++) {
+				if (gsi0[t] == s)
+					tree_id[t][((y - s * 16) << 8) | (z << 4) | x] = (uint8_t)id;
+			}
+		}
+	}
+
+	uint8_t grids_solid[3][512];
+	float grids_cols[3][512 * 18];
+	bool ghave[3] = {false, false, false};
+	int gsi[3] = {si - 1, si, si + 1};
+	for (int t = 0; t < 3; t++) {
+		memset(grids_solid[t], 0, sizeof(grids_solid[t]));
+		memset(grids_cols[t], 0, sizeof(grids_cols[t]));
+		int s = gsi[t];
+		if (s < 0 || s >= nsl)
+			continue;
+		int y0 = s * 16;
+		for (int cy = 0; cy < G; cy++) {
+			for (int cz = 0; cz < G; cz++) {
+				for (int cx = 0; cx < G; cx++) {
+					// Solid count — the skip fill is solid exactly
+					// y <= S over each (x,z), PLUS the tree cells
+					// (the slab path's bs bitset includes them).
+					int pc = 0;
+					for (int py = 0; py < CELLB; py++) {
+						int y = y0 + cy * CELLB + py;
+						for (int pz = 0; pz < CELLB; pz++) {
+							int lz = cz * CELLB + pz;
+							for (int px = 0; px < CELLB; px++) {
+								int idx = lz * 16 + (cx * CELLB + px);
+								int tid = tree_id[t][((y - y0) << 8) | (lz << 4) | (cx * CELLB + px)];
+								pc += ((y <= St[idx]) || tid != 0) ? 1 : 0;
+							}
+						}
+					}
+					int idxc = cy * G * G + cz * G + cx;
+					if (pc == 0 || (TOT - pc) * 2 > TOT) {
+						grids_solid[t][idxc] = 0;
+						continue;
+					}
+					grids_solid[t][idxc] = 1;
+					if (t != 1)
+						continue;
+					// The per-face average color — the EXACT skip-fill
+					// block id per solid sub-cell (the fill loop's chain,
+					// he = H, no lava: the water branch preempts it
+					// below H < sea) in the slab path's py/pz/px order.
+					int cnt = 0;
+					float acc[18] = {0.0f};
+					for (int py = 0; py < CELLB; py++) {
+						int y = y0 + cy * CELLB + py;
+						for (int pz = 0; pz < CELLB; pz++) {
+							int lz = cz * CELLB + pz;
+							for (int px = 0; px < CELLB; px++) {
+								int lx = cx * CELLB + px;
+								int idx = lz * 16 + lx;
+								int tid = tree_id[t][((y - y0) << 8) | (lz << 4) | lx];
+								if (!(y <= St[idx]) && tid == 0)
+									continue;
+								cnt++;
+								int bid;
+								if (tid != 0) {
+									// Tree cell — the veg id (log/leaves),
+									// the flat's value at the cell.
+									bid = tid;
+								} else {
+								int Hi = Hh[idx];
+								if (y == 0) {
+									bid = FAR_B_BEDROCK;
+								} else if (Hi < p_sea && y >= Hi + 1 && y <= p_sea) {
+									bid = FAR_B_WATER;
+								} else if (y == Hi) {
+									bid = p_top[idx];
+								} else if (y >= Hi - 3) {
+									bid = (p_bm[idx] == 1) ? FAR_B_SAND : FAR_B_DIRT;
+								} else if (ore != nullptr) {
+									// Deep (y < H - 3): the precomputed
+									// stone_ore chain (slab-local pos).
+									bid = ore[((y - y0) << 8) | (lz << 4) | lx];
+								} else {
+									bid = FAR_B_STONE;
+								}
+								}
+								if (fcc_ok && bid < 256) {
+									const float *fc = p_fcc.ptr() + bid * 18;
+									for (int d = 0; d < 18; d++)
+										acc[d] += fc[d];
+								}
+							}
+						}
+					}
+					float inv = 1.0f / (float)cnt;
+					for (int d = 0; d < 18; d++)
+						grids_cols[t][idxc * 18 + d] = acc[d] * inv;
+				}
+			}
+		}
+		ghave[t] = true;
+	}
+	return avg_grid_emit(G, CELL, si, nsl, grids_solid, grids_cols, ghave, p_fcc, p_sky);
+}
+
 // The registered class.
 class AweMesh : public RefCounted {
 	GDCLASS(AweMesh, RefCounted)
@@ -2264,7 +2473,10 @@ public:
 		ClassDB::bind_method(D_METHOD("build_accs", "data", "fl", "cx", "cz", "nbs", "ctx", "ms", "eff", "si0", "si1", "d_off", "att", "glow", "mask"), &AweMesh::build_accs);
 		// AC-0211: the surrounding-step ports (dispatch snapshot + sync
 		// snap + stale-check rows) — same class, same .so.
-		ClassDB::bind_method(D_METHOD("snap_rings", "d", "f", "dx", "dz", "genkeep"), &AweMesh::snap_rings, DEFVAL(PackedByteArray()));
+		// AC-0284b: far/sea = the neighbor's far payload (1024 bytes = the
+		// h-only shape — the ring is the skip-fill edge row) + the sea
+		// level (the aquifer top). Empty = the slab ring (legacy).
+		ClassDB::bind_method(D_METHOD("snap_rings", "d", "f", "dx", "dz", "genkeep", "far", "sea"), &AweMesh::snap_rings, DEFVAL(PackedByteArray()), DEFVAL(PackedByteArray()), DEFVAL(126));
 		ClassDB::bind_method(D_METHOD("slab_copy", "slabs"), &AweMesh::slab_copy);
 		ClassDB::bind_method(D_METHOD("sync_snap", "own_d", "own_f", "rings", "h"), &AweMesh::sync_snap);
 		ClassDB::bind_method(D_METHOD("rows_eq", "a", "b", "y_lo", "y_hi"), &AweMesh::rows_eq);
@@ -2277,6 +2489,15 @@ public:
 		// AC-0283 P3: the optional 5th arg = the halo band's per-cell
 		// heightmap sky (empty = the legacy all-bright avg emit).
 		ClassDB::bind_method(D_METHOD("low_emit_avg", "slabs", "si", "grid", "fcc", "sky"), &AweMesh::low_emit_avg, DEFVAL(PackedByteArray()));
+		// AC-0284b: the far (h-only) column's avg emit — the H-driven
+		// halo emitter (see h_avg_emit_impl for the full contract).
+		// h/bm/top = the far payload (512/256/256 bytes); ore = the
+		// AweGen.stone_ore_slab 4096-byte deep-color precompute (empty =
+		// pure stone — pass it for the slabs with deep cells, si <= 3);
+		// veg = the AweGen.veg_cells tree-cell list (4 bytes/cell; empty
+		// = no trees — the solid set + colors stay the skip fill);
+		// sea/hmax = the world constants (the aquifer + slab count).
+		ClassDB::bind_method(D_METHOD("h_avg_emit", "h", "bm", "top", "ore", "veg", "si", "grid", "fcc", "sky", "sea", "hmax"), &AweMesh::h_avg_emit);
 	}
 
 	// AC-0236 part 2: slabs = the value-copied slab array (null | {n,b,p,i,
@@ -2295,6 +2516,13 @@ public:
 	// emit — the real band and the battery arms pass nothing).
 	Dictionary low_emit_avg(const Array &p_slabs, int p_si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky) {
 		return low_emit_avg_impl(p_slabs, p_si, p_grid, p_fcc, p_sky);
+	}
+
+	// AC-0284b: the far (h-only) column's avg emit (see h_avg_emit_impl
+	// above). Returns the SAME shape as low_emit_avg ({empty} or
+	// {v,n,c,i,mh}) — the low lane attaches it unchanged.
+	Dictionary h_avg_emit(const PackedByteArray &p_h, const PackedByteArray &p_bm, const PackedByteArray &p_top, const PackedByteArray &p_ore, const PackedByteArray &p_veg, int p_si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky, int p_sea, int p_hmax) {
+		return h_avg_emit_impl(p_h, p_bm, p_top, p_ore, p_veg, p_si, p_grid, p_fcc, p_sky, p_sea, p_hmax);
 	}
 
 	// Lossless port of ChunkScript.build_accs (chunk.gd:1683). data/fl =
@@ -2776,9 +3004,50 @@ public:
 	// same outcome as a real solid slab; no z-fight). The re-entry regen
 	// (world.gd) + the neighbor re-mesh on data landing keep it honest:
 	// when the slab is generated, its real data replaces the stone.
-	Dictionary snap_rings(const Array &d, const Array &f, int dx, int dz, PackedByteArray p_genkeep) {
+	Dictionary snap_rings(const Array &d, const Array &f, int dx, int dz, PackedByteArray p_genkeep, PackedByteArray p_far, int p_sea) {
 		std::vector<uint8_t> rd((size_t)d.size() * 256, 0);
 		std::vector<uint8_t> rf((size_t)f.size() * 256, 0);
+		if (p_far.size() == 1024) {
+			// AC-0284b: a FAR (h-only) neighbor — synthesize the EXACT
+			// skip-fill edge row (solid 0..S = max(H, sea); the aquifer
+			// water H+1..sea; the fill top ids bedrock/water/top/
+			// dirt-sand/stone) so the boundary culling + fluid rings
+			// match the AC-0284a skip slab's rings bit-for-bit (the far
+			// column's slabs are all null — the ring would otherwise
+			// read all-air and the real band would over-draw its
+			// boundary wall against the halo, z-fighting the halo's own
+			// boundary quads).
+			const uint8_t *fp = p_far.ptr();
+			for (int k = 0; k < (int)d.size(); k++) {
+				int y0 = k * 16;
+				for (int y_in = 0; y_in < 16; y_in++) {
+					int y = y0 + y_in;
+					for (int t = 0; t < 16; t++) {
+						int lx = (dx != 0) ? (dx < 0 ? 15 : 0) : t;
+						int lz = (dz != 0) ? (dz < 0 ? 15 : 0) : t;
+						int idx = lz * 16 + lx;
+						int H = (int)fp[2 * idx] | ((int)fp[2 * idx + 1] << 8);
+						int id;
+						if (y == 0)
+							id = 11; // B_BEDROCK
+						else if (H < p_sea && y >= H + 1 && y <= p_sea)
+							id = 5; // B_WATER
+						else if (y == H)
+							id = (int)fp[768 + idx];
+						else if (y >= H - 3)
+							id = ((int)fp[512 + idx] == 1) ? 4 : 2; // B_SAND / B_DIRT
+						else
+							id = 3; // B_STONE (the ore chain is opaque+solid — same culling)
+						rd[(size_t)k * 256 + y_in * 16 + t] = (uint8_t)id;
+						rf[(size_t)k * 256 + y_in * 16 + t] = (uint8_t)((id == 5) ? 5 : 0);
+					}
+				}
+			}
+			Dictionary out;
+			out["d"] = awecommon::pba_from(rd);
+			out["f"] = awecommon::pba_from(rf);
+			return out;
+		}
 		for (int k = 0; k < (int)d.size(); k++)
 			ring_slice(d[k], k * 256, dx, dz, rd);
 		if (p_genkeep.size() > 0) {
