@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-18T14:29
+  updated_at: 2026-09-18T16:24
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0324
 - AC-0314
 - AC-0287
 - AC-0293
@@ -15125,7 +15124,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-17T22:10
-  updated_at: 2026-09-17T22:18
+  updated_at: 2026-09-18T16:24
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -15183,7 +15182,30 @@ intake:
     by taxi then by (x,z) order) and RECORD the chosen column + its height (a deterministic function is
     testable: same seed -> same spawn). The spawn cell must be built by the load gate before activation
     so the player never falls through. Report the chosen column''s surface H and the search radius in
-    the results page.'
+    the results page.
+
+
+    DEPENDENCY LANDED + REBASE EXPECTATION (coordinator, 2026-09-18, commit 39f1bee): AC-0324 (the deterministic
+    spawn search) is DONE and in the tree - world.spawn_point() runs once the load gate''s sim band is
+    data-ready and returns the first column in (taxi, cx, cz) order that is dry + gently sloped (max |dH|
+    <= 2 over 4 neighbours) + un-vegetated, with the T1 (first dry) and T2 (highest dry) determinism fallbacks;
+    the new `spawnsearch` arm gates the conditions, the per-seed determinism and the synthetic fallbacks.
+    WHILE THE PAD EXISTS every gate seed resolves to the pad centre (tier 0, col [0,0]) - that is exactly
+    the state this ticket ends: after the plateau is gone the search must resolve to a NATURAL column,
+    and this ticket must verify that on the spawnsearch arm for >=3 seeds (conditions satisfied + player
+    on solid ground + fallbacks deterministic if a seed has no candidate).
+
+    THE REBASES THIS ENTAILS (legitimate, but each must be re-baselined WITH evidence inside this task,
+    never quietly): (a) the genhash standing value - the 25 reference hashes in .scratch/percol_battery/genhash.log
+    encode the PAD, so byte-identity WILL fail by design once the plateau is removed; produce the new
+    reference, record the new values in tasks/harness_data.yaml + HARNESS.md section 3, and state plainly
+    in the results page that this is a deliberate terrain change, not a regression; (b) the basis arm
+    and the sphere probe (the pad''s flat columns were load-bearing for their assertions - this ticket''s
+    original notes name the exact lines); (c) the "player start" standing value rebases again to the searched
+    column''s position; (d) the ladder/halo/farab arms'' column counts were rebased at AC-0312/AC-0313
+    - re-measure them, do not assume they still hold. The C++ change means a rebuild of the native lane
+    (see godot/OPS.md) and the GDScript mirror at godot/world/generator.gd:40 must stay in lockstep with
+    gen.cpp:238/356-379.'
   comments: []
 - id: AC-0315
   title: gdscript-access-convention-and-harness-rule
@@ -15577,7 +15599,7 @@ intake:
   status: done
   labels: []
   created_at: 2026-09-18T11:24
-  updated_at: 2026-09-18T14:29
+  updated_at: 2026-09-18T16:23
   completed_at: 2026-09-18T14:29
   waiting_on: null
   parent_id: null
@@ -15614,7 +15636,9 @@ intake:
     \ has been memory-fragile on this box; the clause-4 gate itself was verified live at AC-0313). FLAG\
     \ FOR THE USER: this partially reverses AC-0313 clause 3 on measurement (the full-column unit frees\
     \ per column, not per slab, so u==0 alone starves the data pass) - stated in the commit, ARCHITECTURE.md's\
-    \ build-order bullet and AC-0313's notes."
+    \ build-order bullet and AC-0313's notes.\n\nLOAD ARM OUTCOME (coordinator): the R50 load arm aborted\
+    \ with SIGABRT after ~40 min with no diagnostic - the full-load wall stays unmeasured and the crash\
+    \ evidence is filed on the r16-segv-flake ticket (one hazard class, see there)."
   comments: []
 - id: AC-0323
   title: r16-segv-flake
@@ -15626,7 +15650,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-18T13:04
-  updated_at: 2026-09-18T13:04
+  updated_at: 2026-09-18T16:23
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -15662,7 +15686,19 @@ intake:
     CONTEXT: this is a spinoff from AC-0312''s report (its r16 row). It is deliberately OUT of AC-0322
     (the walk-residency fix) - one behaviour per ticket.
 
-    '
+
+
+    SECOND CRASH SIGNATURE (coordinator, 2026-09-18): the AC-0322 heavy stage''s R50 `load` arm (AWECRAFT_LOADLOG=1,
+    2400 s cap) ABORTED after ~40 min with SIGABRT (rc=134, core dumped) and NO diagnostic message in
+    the log (the last lines are the pre-existing `!is_inside_tree()` cull warnings; the LOADLOG timeline
+    stops at t=6944 ms with meshed 38/41, tm=0, tg=8, q=5500, rfail=6391). This is the THIRD failure of
+    that arm in this era: twice earlier the process vanished mid-run (the harness still reported the job
+    running; the box showed 47 GB used and the sandbox cannot see or manage host processes), and now a
+    clean SIGABRT. Combined with the r16 SIGSEGV flake this ticket was filed for, the working hypothesis
+    is ONE hazard class in the heavy-streaming path (drain/enqueue, detached-node cull, or the native
+    lane under long runs) rather than two unrelated ones - investigate both signatures together. The load
+    arm''s full R50 wall therefore remains UNMEASURED (the clause-4 gate itself was verified live at AC-0313
+    via the loader timeline: pct tracks the 41-col diamond and closes on it).'
   comments: []
 - id: AC-0324
   title: deterministic-spawn-search
@@ -15671,11 +15707,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-18T14:29
-  updated_at: 2026-09-18T14:29
-  completed_at: null
+  updated_at: 2026-09-18T16:23
+  completed_at: 2026-09-18T16:23
   waiting_on: null
   parent_id: null
   notes: "1) User Story: The world decides where I start, not a flat platform. The game finds the nearest\
@@ -15710,5 +15746,11 @@ intake:
     \ no water overlap), (d) the fallback fires when no candidate passes (construct or pick a seed that\
     \ exercises it). Prefer extending an existing probe (basis/sphere/player) if that keeps the task small;\
     \ otherwise add ONE probe mode and document it in HARNESS.md's mode table.\nSCOPE: ONE behaviour -\
-    \ the spawn search. No pad removal (AC-0314), no gen.cpp, no streaming changes.\n"
+    \ the spawn search. No pad removal (AC-0314), no gen.cpp, no streaming changes.\n\n\nCLOSED 2026-09-18\
+    \ (commit 39f1bee). Coordinator verification: spawnsearch ok:true (3 seeds x determinism, synthetic\
+    \ T1/T2/T0 fallbacks), player arm rc=0 with 0 SCRIPT ERROR, genhash 25/25 byte-identical. The pad\
+    \ still wins for all three gate seeds (tier 0, col [0,0]) - that is the expected state while AC-0314's\
+    \ plateau exists; the SEARCH is what had to land first, and AC-0314 must now verify that the search\
+    \ picks a NATURAL column once the pad is gone. New probe arm `spawnsearch` (documented in HARNESS.md's\
+    \ mode table). Render at R4 (justified deviation - R<4 cannot hold the sim diamond)."
   comments: []
