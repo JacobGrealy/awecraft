@@ -122,13 +122,13 @@ modes:
   settings:
     entry: '`_settings_test`'
     tests: |-
-      settings defaults 50/1, ranges 4–96, sim→render clamp, load clamp, apply, volume, hunger toggle (AC-0072)
+      settings defaults 50/4 (sim), ranges 4–96, sim→render clamp, load clamp, the AC-0313 sim floor (SIM_MIN 4: set 3 → 4, stored 2 → 4 on load), apply, volume, hunger toggle (AC-0072)
     result_fields: |-
-      `defaults`, `range`, `sim_clamp`, `load_clamp`, `apply`, `volume_ok`, `hunger` {saved_off, reloaded_off, back_on, default_true}, `ok`
+      `defaults`, `range`, `sim_clamp`, `load_clamp`, `apply` (dist rebase [7,64] at AC-0313), `sim_floor` {saved 2, after_load 4}, `volume_ok`, `hunger` {saved_off, reloaded_off, back_on, default_true}, `ok`
     envs: '`AWECRAFT_IGNORE_SETTINGS` (self-managed)'
     wall: ~5 s (not re-run 08-24; fast class)
     notes: |-
-      dispatched at main.gd:576 BEFORE game nodes (works standalone + in battery)
+      dispatched at main.gd:576 BEFORE game nodes (works standalone + in battery). AC-0313: SIM_MIN 1→4 (the tier-0 set went, the real band taxi ≤ sim is the footing guarantee) — the apply dist expectation rebased [7,48]→[7,64] (sim 3 → floor 4) and the new `sim_floor` field round-trips the floor through the load path
   fluids:
     entry: '`_fluids_test`'
     tests: |-
@@ -278,7 +278,8 @@ modes:
       `AWECRAFT_RADIUS` (r), `AWECRAFT_WALK`, `AWECRAFT_WALK_SPEED`, `AWECRAFT_TICKTIME`, `AWECRAFT_THREADGEN_N`/`TGDEBUG`, `AWECRAFT_RECPROBE`
     wall: |-
       r3 45 s, r4 46 s (measured 2026-08-24); r50 ≈1400 s wall (from 2026-08-24 10:34 log `.scratch/ac0079r3_battery/b_r50.log`)
-    notes: SLOW at r≥8 — 3000 s timeout; fluid sim enabled
+    notes: |-
+      SLOW at r≥8 — 3000 s timeout; fluid sim enabled. **Off-default walk speeds read RED for a budget reason, not a world bug** — `ok = crossings == walk_lines and marker_ok` and the walk line is a fixed length, so at `AWECRAFT_WALK_SPEED=8` the arm needs ~2× the wall and finishes fewer crossings than `walk_lines` (measured 2026-09-17 at AC-0313: 7 crossings, `ok:false`, while the same run's world values were clean — p50 14, p95 21, `marker_ok`/`remesh_ok` true). Judge off-default runs on the p50/p95/`*_final` fields, not on `ok`.
   atlas:
     entry: '`_atlas_test`'
     tests: spawn chunk mesh UV sanity
@@ -297,7 +298,7 @@ modes:
     wall: |-
       LONG — run `--fixed-fps 600` so ticks are uncapped and the frame-ms awaits measure true per-frame CPU (same convention as breakspike); ~3–8 min wall (r16 build, 25-min in-arm cap, proceeds on partial build)
     notes: |-
-      AC-0212 #1 gate: A/B `AWECRAFT_FRUSTUM=manual` vs default engine — no 5 fps drop in the moving phase (the removed manual pass re-evaluated every resident chunk on every camera change)
+      AC-0212 #1 gate: A/B `AWECRAFT_FRUSTUM=manual` vs default engine — no 5 fps drop in the moving phase (the removed manual pass re-evaluated every resident chunk on every camera change). AC-0313: the arm's sim pin moved 2 → 4 (the new SIM_MIN floor; 2 is no longer storable), medium_start 4 → 5 — the real band rebases [0,2] → [0,4] and the build/settle + section counts rebase (documented delta; the coordinator re-measures, the assertions read band0_r live)
   spin:
     entry: '`_spin_test` (AC-0109 G1; row added at AC-0212)'
     tests: |-
@@ -388,7 +389,7 @@ modes:
       `AWECRAFT_BAND0`/`AWECRAFT_BAND1` (world.gd band overrides)
     wall: ~60–120 s (no full r50 drain)
     notes: |-
-      counts are from the stubbed streaming set; `b1_unbuilt` non-empty is expected (trickle hasn't reached it); band-2 `quad_count` ≫ 1 = full mesh (impostor era value was exactly 1); full r50 drain is intrinsically ~15–25 min wall (H=384 build CPU) — the gate is the TREND (monotone queue, no strand), not completion in-arm
+      counts are from the stubbed streaming set; `b1_unbuilt` non-empty is expected (trickle hasn't reached it); band-2 `quad_count` ≫ 1 = full mesh (impostor era value was exactly 1); full r50 drain is intrinsically ~15–25 min wall (H=384 build CPU) — the gate is the TREND (monotone queue, no strand), not completion in-arm. The `spawn3x3_ms` here is the arm-side INNERMOST-9 (3x3) probe only — the LOAD GATE is the sim taxi diamond (the `load` arm's `simband_ms`; AC-0313 clause-4 correction)
   chunkio:
     entry: '`_chunkio_test`'
     tests: |-
@@ -424,12 +425,12 @@ modes:
     tests: |-
       AC-0178 loading-screen + bypass-throttle first-load probe: fresh world at R=50 (7845 cols), measures the full first-load wall with the loading-bypass ON vs the spread (bypass OFF) baseline
     result_fields: |-
-      `ok` (bypass ON completes), `bypass` (true/false), `cols` (7845), `disk`/`gen`/`meshed` (counters from provenance), `gen_per_s`/`mesh_per_s`, `wall_ms` (45-min in-arm cap), `loading_active_final`, `screen_up`, `spawn3x3_ms`, `tg_inflight`/`tm_inflight`, `queue_final` (band-3 data-only collar)
+      `ok` (bypass ON completes), `bypass` (true/false), `cols` (7845), `disk`/`gen`/`meshed` (counters from provenance), `gen_per_s`/`mesh_per_s`, `wall_ms` (45-min in-arm cap), `loading_active_final`, `screen_up`, `simband_ms` (the load-GATE wall: the SIM TAXI DIAMOND taxi <= band0_r fully meshed — 41 cols at sim 4; renamed from `spawn3x3_ms` at AC-0313 clause-4 correction), `tg_inflight`/`tm_inflight`, `queue_final` (band-3 data-only collar)
     envs: |-
       `AWECRAFT_SEED`, `AWECRAFT_LOADBYPASS` (1=on [default], 0=spread baseline), `AWECRAFT_RADIUS`
     wall: ~28 min ON / ≥45 min OFF (OFF does not finish)
     notes: |-
-      **A/B gate: ON < OFF decisively** (ON completes 7845/7845 in ~27.6 min [gen/s 5.0]; OFF hits the 45-min cap at 7061/7845 [gen/s 3.0]). Loading paths are `loading_active`-gated — steady state keeps the legacy throttles (battery/chunkio/save/continue arms run with `loading_active=false`, values unchanged). Exit must be CLEAN: no `Pages in use … WorkerThreadPool GroupE`, no SCRIPT ERROR, no shutdown segfault (the group-consumption + `_exit_tree` poll-drain fixes)
+      **A/B gate: ON < OFF decisively** (ON completes 7845/7845 in ~27.6 min [gen/s 5.0]; OFF hits the 45-min cap at 7061/7845 [gen/s 3.0]). Loading paths are `loading_active`-gated — steady state keeps the legacy throttles (battery/chunkio/save/continue arms run with `loading_active=false`, values unchanged). Exit must be CLEAN: no `Pages in use … WorkerThreadPool GroupE`, no SCRIPT ERROR, no shutdown segfault (the group-consumption + `_exit_tree` poll-drain fixes). AC-0313 clause-4 correction: the sub-metric `spawn3x3_ms` (measured off `world._startup_pending()`, the 3x3 spawn-BURST flag) is retargeted to the SIM DIAMOND load gate and renamed `simband_ms` — the burst flag stays for the AC-0293-deferred 5x5 burst machinery and is no longer the load gate
   starlighttest:
     entry: '`_starlight_test` (AC-0283 P1)'
     tests: |-
@@ -471,15 +472,15 @@ modes:
     notes: |-
       The R16 canaries are EXACT across rebases (census deltas = documented timing, not drift): the AC-0283..0286 series keeps `double_lod` 0/0 and `wash` false
   ladder:
-    entry: '`_ladder_test` (AC-0261, rebuilt at AC-0283 P3)'
+    entry: '`_ladder_test` (AC-0261, rebuilt at AC-0283 P3, rebased at AC-0313)'
     tests: |-
-      Halo average-color ladder: small world (render 8, sim 2 — the real band taxi ≤ band0_r, taxi metric) — REAL [0, band0_r] = per-slab full meshes, the HALO band = 4×4×4 placeholder slabs; asserts the per-tier average colors are byte-identical across the emit paths + the boundary flip + the air checks
+      Halo average-color ladder: small world (render 8, sim 4 — the AC-0313 SIM_MIN floor; the real band taxi ≤ band0_r, taxi metric) — REAL [0, band0_r] = per-slab full meshes, the HALO band = 4×4×4 placeholder slabs; asserts the per-tier average colors are byte-identical across the emit paths + the boundary flip + the air checks + the (e) Y-layer-rank encoding (the intra-column (taxi, layer) order)
     result_fields: |-
-      `ok`, `ab_ok` (avg-color A/B), `boundary_flip_ok`, `air_synth_ok`, `air_inworld_ok`, `tier0_ok`, `clutter_ok`, slab counts (966, of which 57 sky-mixed)
+      `ok`, `ab_ok` (avg-color A/B), `boundary_flip_ok`, `air_synth_ok`, `air_inworld_ok`, `layerrank_ok` (AC-0313: the tier-0 SET test `tier0_ok` is gone with the tier-0 set), `clutter_ok`, slab counts (**REBASED at AC-0313 (measured 2026-09-17): `band_slabs`/`low_slabs` 695, `sky_mixed_slabs` 44, `med_slabs` 0, `sky_bad_alpha` 0** — the real band grew from taxi ≤ 2 (13 cols) to taxi ≤ 4 (41 cols) so the HALO band shrank; `med_slabs` 0 records that the 8×8 med tier is still NOT a draw tier — AC-0312 restores it)
     envs: '`AWECRAFT_LOGIC=ladder`'
     wall: ~2–4 min
     notes: |-
-      966==966 byte-identical across bands with only ms-timing deltas across rebases (the AC-0261 med/low ladder on the AC-0283 P3 halo band)
+      the AC-0261 med/low ladder on the AC-0283 P3 halo band; AC-0313 rebased the slab counts (966/57 → 695/44, documented delta — the byte-identity across emit paths is the invariant, not the numbers)
   meshprobe:
     entry: '`_meshprobe_test` (AC-0211)'
     tests: |-
@@ -578,9 +579,9 @@ standing_values:
     AC-0091 shape (`.scratch/AC-0091-gates/minfo_new.txt`) SUPERSEDED at r4 by AC-0152/0160
 - value: boundary r4 one-shot
   fresh: |-
-    `ok`/`remesh_ok`/`marker_ok` true, walk `p95_ms` **≈ 22** (p50 ~14) — **re-measured 2026-09-17 at the AC-0286 closeout (20 crossings, walk_s 44.8): p95 22, p50 14, `max_ms` 128 (was ~1.3–1.4 s — first-frame work rebuilt by AC-0283 P2/P3), `built_final` 43 (was ~50–52), `resident_final` 93 (was ~101), `queue_size` 81 (was ~54–56), `staged_dropped` 707, one 9.2 s burst at a far crossing (the AC-0178 non-fatal class was 17–40 s)** — **supersedes** ≈ 30–37 (AC-0178: p50 ~13, p95 30–37 — the group-consumption fix un-stuck the recenter 5×5 burst prune, front-loading work into smaller bursts and smoothing per-frame walk cost), **which superseded** ≈ 73–89 (AC-0155; re-verified 74/80 at AC-0158/0164), ≈ 54 (AC-0152/0160) and 267–401 / ~39.9k–47.6k VOID (banded streaming: circle ∪ diamond ∪ ring set, spawn-fast drain). **RESOLVED (AC-0178):** the engine-level `ERROR: Invalid Task ID` at `is_task_completed` from `recenter` (world.gd) is GONE — the 5×5 burst is a GROUP task; the recenter prune uses `is_group_task_completed` + `wait_for_group_task_completion`. Zero SCRIPT ERROR in all runs since
+    `ok`/`remesh_ok`/`marker_ok` true, walk `p95_ms` **≈ 39** (p50 ~13) — **re-measured 2026-09-17 at the AC-0313 closeout (default walk speed 16 b/s, the same invocation as the AC-0286 row below): p95 39, p50 13, `max_ms` 357, `built_final` 61, `resident_final` 93, `in_radius_built_final` 56 of 73 present, `staged_dropped` 1518, one 8.8 s burst at a far crossing** — the inside-out FULL-COLUMN build order (AC-0313) raises the tail (p95 22 → 39, max 128 → 357) while building MORE of the inner radius (in-radius built 41 → 56, `built_final` 43 → 61); p50 is flat, so the steady walk is unchanged and the tail is the price of fewer/bigger dispatch units — an honest, user-directed trade-off (recorded in AC-0313's notes, not smoothed). **At `AWECRAFT_WALK_SPEED=8` the arm reads `ok:false` for a BUDGET reason (fewer crossings than `walk_lines`), while the same run's world values are clean (p50 14, p95 21, `marker_ok` true) — judged on the metric fields, never on `ok` off the default speed.** — **supersedes** ≈ 22 (AC-0286 closeout 2026-09-17: p95 22, p50 14, `max_ms` 128, `built_final` 43, `resident_final` 93, `queue_size` 81, `staged_dropped` 707, one 9.2 s burst — the AC-0283 P2/P3 streaming), **which superseded** ≈ 30–37 (AC-0178: p50 ~13, p95 30–37 — the group-consumption fix un-stuck the recenter 5×5 burst prune, front-loading work into smaller bursts and smoothing per-frame walk cost), **which superseded** ≈ 73–89 (AC-0155; re-verified 74/80 at AC-0158/0164), ≈ 54 (AC-0152/0160) and 267–401 / ~39.9k–47.6k VOID (banded streaming: circle ∪ diamond ∪ ring set, spawn-fast drain). **RESOLVED (AC-0178):** the engine-level `ERROR: Invalid Task ID` at `is_task_completed` from `recenter` (world.gd) is GONE — the 5×5 burst is a GROUP task; the recenter prune uses `is_group_task_completed` + `wait_for_group_task_completion`. Zero SCRIPT ERROR in all runs since
   established_by: |-
-    AC-0286 closeout (2026-09-17) supersedes AC-0178 (2026-09-01) supersedes AC-0155 (2026-08-31) supersedes AC-0152/0160 supersedes AC-0091/AC-0143
+    AC-0313 closeout (2026-09-17) supersedes AC-0286 closeout (2026-09-17) supersedes AC-0178 (2026-09-01) supersedes AC-0155 (2026-08-31) supersedes AC-0152/0160 supersedes AC-0091/AC-0143
 - value: sphere probe (new arm `AWECRAFT_LOGIC=sphere`)
   fresh: |-
     `ok` true — keying round-trip **240/240** (`key_bad` 0, `key_home_ok` true), edge points **884/884 bitwise-identical** (`edge_max_d` 0.0), world↔face 300/300 (max_d 0.0), neighbor_key 240/240 (rt_max 1), corners 32 (min_dot 0.9999992), home spot-checks bedrock 11 / sea 5 @y0 / spawn top 136

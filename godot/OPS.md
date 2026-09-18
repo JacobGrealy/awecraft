@@ -35,6 +35,11 @@ machine reason behind them.
 - A `git worktree` of a past commit does **not** contain the untracked `godot/bin/libchunkio.so`
   (see §5) — copy it from the main tree or headless startup cannot parse the extension.
 - `godot/scenes/harness.gd` stays pristine — rule and reason in `godot/scenes/AGENTS.md`.
+- **Long background work must be launched as a managed background job, not `nohup … &`** — the
+  sandbox runs every bash call under `bwrap … --die-with-parent`, so a `nohup`-detached child is
+  torn down the moment the tool call returns (a heavy gate script silently died after one arm,
+  AC-0313). The managed job (the tool's background mode) survives and can be collected; a script
+  that must outlive a call has to be started that way.
 
 ## 3. Daemons and ports
 

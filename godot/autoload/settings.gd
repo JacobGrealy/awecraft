@@ -4,7 +4,14 @@ const PATH := "user://awecraft.cfg"
 
 const RENDER_MIN := 4
 const RENDER_MAX := 96
-const SIM_MIN := 1
+# AC-0313: the sim distance FLOOR is 4 (was 1). With the tier-0 set gone,
+# the real band (taxi ≤ sim) is the footing guarantee: every column of the
+# player's 3x3 has taxi ≤ 2, so sim ≥ 4 (strictly above 2) keeps the player's
+# whole 3x3 inside the real band at every storable value — the load-screen
+# gate (the 9 spawn chunks) and the (taxi, layer) build order both assume
+# the 3x3 is real. A stored sim of 0/1/2/3 re-clamps to 4 on load (the
+# _clamp path below is the only write site).
+const SIM_MIN := 4
 # AC-0225: Options "Chunk meshes per frame" slider range — the per-frame
 # streaming handoff burst (the AC-0224 drain cap, world.gd stream_ho_cap).
 const CHUNKS_PER_FRAME_MIN := 1
@@ -58,11 +65,11 @@ const DEFAULTS := {
 	# Default 8 = high detail clearly past the default sim 4 (~3.5x the
 	# old high-band chunk count).
 	"medium_start": 8,
-	# AC-0257 (Developer submenu): the tier-0 Chebyshev radius around the
-	# player column — columns this close get the tier-0 SECTION: their
-	# full columns build (slab-by-slab from the player's Y, fanning
-	# down/up) and the section completes before any other LOD starts.
-	"tier0_radius": 0,
+	# AC-0313: the "tier0_radius" default (Developer submenu) is GONE —
+	# the tier-0 set was removed (the real band taxi ≤ sim is the footing
+	# guarantee). A stale key in an old cfg is simply never read: load
+	# settings only pulls keys in this table (the old worlds are
+	# disposable — no migration owed).
 	# AC-0280: altitude-based flight speed (Developer submenu).
 	"sub_cruising_speed": 2,
 	"cruising_altitude": 275,
@@ -78,8 +85,8 @@ const DEFAULTS := {
 	"worker_mesh_threads": 0,
 }
 
-# AC-0257 (Developer submenu) slider ranges.
-const TIER0_RADIUS_MAX := 8
+# AC-0257 (Developer submenu) slider ranges (AC-0313: the tier-0 radius
+# row — and TIER0_RADIUS_MAX — is gone with the tier-0 set).
 const WORKER_THREADS_MAX := 16
 
 var values: Dictionary = {}
@@ -179,9 +186,8 @@ func _clamp(k: String, v) -> void:
 			values[k] = clampi(int(v), PCT_MIN, PCT_MAX)
 		"fog_enabled":
 			values[k] = bool(v)
-		# AC-0257 (Developer submenu).
-		"tier0_radius":
-			values[k] = clampi(int(v), 0, TIER0_RADIUS_MAX)
+		# AC-0257 (Developer submenu). (AC-0313: the tier0_radius clamp
+		# branch is gone with the setting — a stale cfg key is never read.)
 		"sub_cruising_speed":
 			values[k] = clampi(int(v), 1, 20)
 		"cruising_altitude":
@@ -316,12 +322,8 @@ func apply_medium_start() -> void:
 			Game.world.note_medium_start()
 
 
-# AC-0257 (Developer submenu): the tier-0 radius changed — the world re-stamps
-# the queue's tier-0 set (the has_method guard keeps the _StubWorld arm clean).
-func apply_tier0_radius() -> void:
-	if Game.world != null and Game.world.has_method("note_tier0_radius"):
-		Game.world.note_tier0_radius()
-
+# AC-0313: apply_tier0_radius (the Developer-submenu tier-0 radius apply)
+# is GONE with the tier-0 set (world.note_tier0_radius no longer exists).
 
 # AC-0257 (Developer submenu): the worker-thread caps changed — the world
 # updates its in-flight caps live (no pool restart; the caps are software

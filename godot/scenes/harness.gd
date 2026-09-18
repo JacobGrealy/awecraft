@@ -1462,10 +1462,22 @@ func _settings_test() -> void:
 	Settings.apply_world()
 	var apply_world_ok := w.render_radius == 10 and w.fluid_tick_radius == 160 and w.band0_r == 10
 	Settings.set_value("render_dist", 7)
+	# AC-0313: sim below the new floor (3 < SIM_MIN 4) re-clamps to 4 —
+	# the old expected value (band0_r 3 / fluid 48) rebases to the floor
+	# (band0_r 4 / fluid 64).
 	Settings.set_value("sim_dist", 3)
 	Settings.apply_render_distance()
 	Settings.apply_sim_distance()
-	var apply_dist_ok := w.render_radius == 7 and w.fluid_tick_radius == 48 and w.band0_r == 3 and w.sim_kicks >= 1
+	var apply_dist_ok := w.render_radius == 7 and w.fluid_tick_radius == 64 and w.band0_r == 4 and w.sim_kicks >= 1
+	# AC-0313 (the addendum): the sim floor round-trips through the LOAD
+	# path — a stored sub-floor sim (2 here) re-clamps to 4 on load; it
+	# is not silently kept.
+	var cfl := ConfigFile.new()
+	cfl.set_value("settings", "render_dist", 7)
+	cfl.set_value("settings", "sim_dist", 2)
+	cfl.save(Settings.PATH)
+	Settings.load_settings()
+	var sim_floor_ok := int(Settings.values["sim_dist"]) == 4 and int(Settings.values["render_dist"]) == 7
 	Game.world = null
 	Settings.set_value("volume", 37)
 	Settings.load_settings()
@@ -1520,13 +1532,15 @@ func _settings_test() -> void:
 		# AC-0263: the mid LOD distance (medium_start) default + band clamp.
 		"ms_clamp": {"default_8": ms_def_ok, "floor_sim5": ms_clamp_lo_ok, "ceil_render": ms_clamp_hi_ok, "set_mid": ms_set_ok},
 		"load_clamp": {"saved": [10, 20], "after_load": [10, 10], "ok": load_clamp_ok},
-		"apply": {"world": [10, 160], "dist": [7, 48], "ok": apply_world_ok and apply_dist_ok},
+		"apply": {"world": [10, 160], "dist": [7, 64], "ok": apply_world_ok and apply_dist_ok},
+		# AC-0313: the sim floor (SIM_MIN 4) — set_value 3 -> 4, load 2 -> 4.
+		"sim_floor": {"saved": 2, "after_load": 4, "ok": sim_floor_ok},
 		"volume_ok": volume_ok,
 		"hunger": {"saved_off": hsaved, "reloaded_off": hunger_off_ok, "back_on": hunger_on_ok, "default_true": hunger_default_ok},
 		"chunks": {"default_3": chunks_default_ok, "set7_reloaded": chunks_saved_ok, "clamp_hi_100": chunks_hi_ok, "clamp_lo_1": chunks_lo_ok},
 		# AC-0232 (dither dropped in AC-0241): the fog slider round-trip + clamp.
 		"fog": {"default_87": fog_default_ok, "set60_reloaded": fog_saved_ok, "clamp_lo_0": fog_lo_ok},
-		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok,
+		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and sim_floor_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok,
 	})
 
 
@@ -9283,7 +9297,9 @@ func _halo_unlit_ledger() -> int:
 		if int(c.face) > 1 or c.data.is_empty():
 			continue
 		var taxi := absi(int(c.cx) - pcx) + absi(int(c.cz) - pcz)
-		if not (taxi <= int(world.band0_r) or world._is_tier0_col(int(c.cx) - pcx, int(c.cz) - pcz)):
+		# AC-0313: the tier-0 disjunct is gone — the real band is simply
+		# taxi ≤ band0_r (world._is_tier0_col no longer exists).
+		if not (taxi <= int(world.band0_r)):
 			continue
 		for si in range(c.data.size()):
 			if c.data[si] == null:
@@ -12120,14 +12136,17 @@ func _r16_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
 	world.render_radius = maxi(world.render_radius, 16)
 	var rr: int = world.render_radius
-	# AC-0261 (AC-0263, AC-0283 P3): the zones here are the REAL band
-	# [0, sim_dist] (per-slab full-res + the starlight engine) and the
-	# HALO (sim_dist, render) — 4x4x4 avg + heightmap sky (the med/low
+	# AC-0261 (AC-0263, AC-0283 P3, AC-0313): the zones here are the REAL
+	# band [0, sim_dist] (per-slab full-res + the starlight engine) and
+	# the HALO (sim_dist, render) — 4x4x4 avg + heightmap sky (the med/low
 	# split is retired; medium_start/low_start stay set for the settings
-	# clamp chain but no longer select a draw tier). sim at 2 pins the
-	# arm's historic [0,2] real band.
-	Settings.values["sim_dist"] = 2
-	Settings.values["medium_start"] = 4
+	# clamp chain but no longer select a draw tier). AC-0313: sim at 4 =
+	# the new Settings.SIM_MIN floor (the old pin of 2 is no longer
+	# storable) — the arm's real band rebases from [0,2] to [0,4]
+	# (documented delta: the band's slab/section counts move; the arm's
+	# assertions read band0_r live).
+	Settings.values["sim_dist"] = 4
+	Settings.values["medium_start"] = 5
 	Settings.clamp_medium_start()
 	Settings.values["low_start"] = 10
 	Settings.apply_sim_distance()
@@ -12139,10 +12158,11 @@ func _r16_test(spawn: Vector3) -> void:
 	var passes0 := int(world.perf_cull_passes)
 	var flips0 := int(world.perf_cull_flips)
 	var build_t0 := Time.get_ticks_msec()
-	# AC-0261 (AC-0263, AC-0283 P3) 16-radius build: the REAL band
-	# (taxi ≤ band0_r) fully high — PER-SLAB (every slab <= top lands, the
-	# (layer, taxi) order; mesh_built flips when the probe owes nothing)
-	# + the HALO band (band0_r, rr) drained by the disc-ordered slab wave
+	# AC-0261 (AC-0263, AC-0283 P3, AC-0313) 16-radius build: the REAL
+	# band (taxi ≤ band0_r) fully high — PER-SLAB (every slab <= top
+	# lands, the (taxi, layer) inside-out order; mesh_built flips when
+	# the probe owes nothing) + the HALO band (band0_r, rr) drained by
+	# the disc-ordered slab wave
 	# (the band's avg LOD is FINAL there — nothing past rr ever meshes).
 	# 25-min wall cap: on a stall the arm proceeds (reported, not fatal).
 	var frames := 0
@@ -12468,12 +12488,14 @@ func _r16_test(spawn: Vector3) -> void:
 		# columns): wave 1 = fog on every data landing (immediate_ok
 		# covers it — EVERY far non-air slab is covered at its Y at first
 		# sight, no empty pop at 4-50x); wave 2 = the global slab wave —
-		# AC-0257: LAYERED (wave.layer_monotone_ok = the pick sequence's
-		# layer ranks are non-decreasing — all slabs of layer r of every
-		# column before any of layer r+1, r = distance from the player's
-		# slab; wave.first_layer_columns >= 2 = the first layer interleaves
-		# several columns, never one whole column before the next;
-		# far1.far_low = all the low per slab out to render distance);
+		# AC-0257 (AC-0313): (taxi, layer) inside-out (wave.layer_monotone_ok
+		# = the pick sequence's (taxi, layer) keys are non-decreasing —
+		# the innermost ring first, and within a ring all slabs of layer r
+		# before any of layer r+1, r = distance from the player's slab;
+		# wave.first_layer_columns >= 2 = the first layer interleaves
+		# several columns of the innermost ring, never one whole column
+		# before the next; far1.far_low = all the low per slab out to
+		# render distance);
 		# wave 3 = the AC-0233 tiers (catch_up = the low->high upgrades
 		# across the idle settle window, far_high filling per the tiered
 		# order). The gates: height_ok = every fog instance is a unit box
@@ -13358,19 +13380,24 @@ func _ladder_test(spawn: Vector3) -> void:
 	var R := 8
 	world.fluid_sim_enabled = false
 	world.render_radius = R
-	# AC-0261 (AC-0263): deterministic zones (independent of the saved
-	# settings) — HIGH [0,4) PER-SLAB, MED [4,6), LOW [6,8), DATA-ONLY >= 8.
-	# medium_start must stay > sim_dist, so the arm pins sim 2 + medium
-	# start 4 explicitly (the sim square shrinks to 2 — the ladder's mesh
-	# assertions don't depend on it).
-	Settings.values["sim_dist"] = 2
-	Settings.values["medium_start"] = 4
+	# AC-0261 (AC-0263, AC-0313): deterministic zones (independent of the
+	# saved settings) — the REAL band PER-SLAB (taxi ≤ sim), the HALO band
+	# 4x4x4 + heightmap sky (the med/low split is retired — AC-0283 P3),
+	# DATA-ONLY past the render edge. medium_start must stay > sim_dist, so
+	# the arm pins sim + medium start explicitly. AC-0313: sim 4 = the new
+	# Settings.SIM_MIN floor (the old pin of 2 is no longer storable) —
+	# the arm's real band rebases from taxi ≤ 2 (13 columns) to taxi ≤ 4
+	# (41 columns): the slab counts in the RESULT rebase (documented
+	# delta; the helpers read band0_r live, the assertions don't pin the
+	# old numbers).
+	Settings.values["sim_dist"] = 4
+	Settings.values["medium_start"] = 5
 	Settings.clamp_medium_start()
 	Settings.apply_sim_distance()
 	Settings.apply_medium_start()
-	# AC-0283 P3: the med/low split is retired — every band slab (halo,
-	# taxi 3-7 with sim 2) is 4x4x4 + heightmap sky; the low_start setting
-	# stays set (harmless) so the (c) re-lower phase still runs.
+	# AC-0283 P3 (AC-0313): the med/low split is retired — every band slab
+	# (halo, taxi 5-7 with sim 4) is 4x4x4 + heightmap sky; the low_start
+	# setting stays set (harmless) so the (c) re-lower phase still runs.
 	Settings.values["low_start"] = 6
 	Settings.apply_low_start()
 	res["low_start_eff0"] = int(world.low_start_r)
@@ -13615,24 +13642,17 @@ func _ladder_test(spawn: Vector3) -> void:
 			if c.has_low_si(si):
 				res["air_inworld_bad"] += 1
 	res["air_inworld_ok"] = res["air_inworld_bad"] == 0
-	# (e) AC-0257: the tier-0 SET (Chebyshev ball, Settings "tier0_radius")
-	# goes straight to high — the predicate the fog/pick lanes consult to
-	# skip placeholders — + the Y-LAYER rank encoding (0 = the player's
-	# slab, 1 = y-1, 2 = y+1, 3 = y-2, 4 = y+2: the bake order).
-	Settings.values["tier0_radius"] = 2
-	world.note_tier0_radius()
+	# (e) AC-0257 (AC-0313): the Y-LAYER rank encoding (0 = the player's
+	# slab, 1 = y-1, 2 = y+1, 3 = y-2, 4 = y+2) — the intra-column slab
+	# order of the (taxi, layer) build order (world._layer_rank_of). The
+	# tier-0 SET test that lived here (tier0_radius / _is_tier0_col) is
+	# GONE with the tier-0 set — the real band (taxi ≤ sim, sim floor 4)
+	# is the footing guarantee now.
 	var pys: int = world._player_slab()
-	res["tier0_ok"] = world.tier0_r == 2 \
-			and world._is_tier0_col(0, 0) and world._is_tier0_col(2, -2) \
-			and world._is_tier0_col(-2, 1) \
-			and not world._is_tier0_col(3, 0) and not world._is_tier0_col(1, 3) \
-			and world._layer_rank_of(pys) == 0 \
+	res["layerrank_ok"] = world._layer_rank_of(pys) == 0 \
 			and world._layer_rank_of(pys - 1) == 1 and world._layer_rank_of(pys + 1) == 2 \
 			and world._layer_rank_of(pys - 2) == 3 and world._layer_rank_of(pys + 2) == 4
-	# restore (the arm's world dies with the process — cosmetic)
-	Settings.values["tier0_radius"] = 0
-	world.note_tier0_radius()
-	res["ok"] = ab_ok and res["boundary_flip_ok"] and res["air_synth_ok"] and res["air_inworld_ok"] and res["tier0_ok"] and res["clutter_ok"]
+	res["ok"] = ab_ok and res["boundary_flip_ok"] and res["air_synth_ok"] and res["air_inworld_ok"] and res["layerrank_ok"] and res["clutter_ok"]
 	Debug.result(res)
 	get_tree().quit()
 
@@ -13876,23 +13896,25 @@ func _r16_air_chunk_test() -> Dictionary:
 	}
 
 
-# AC-0231 fix3 (+ AC-0252 offload, + AC-0257 bake order): the WAVE ORDER
-# check — drive the WAVE 2 global slab wave through the REAL dispatch
-# path (world._low_pick_slab + world._low_dispatch_slab, no game frames
-# between; the worker handoff is pumped with the same world._low_poll the
-# game loop runs) and record the pick sequence. The wave is GLOBAL (all
+# AC-0231 fix3 (+ AC-0252 offload, + AC-0257 bake order, AC-0313): the
+# WAVE ORDER check — drive the WAVE 2 global slab wave through the REAL
+# dispatch path (world._low_pick_slab + world._low_dispatch_slab, no game
+# frames between; the worker handoff is pumped with the same world._low_poll
+# the game loop runs) and record the pick sequence. The wave is GLOBAL (all
 # fog -> all low -> all high, across ALL columns — not one whole column
-# before the next) and LAYERED (AC-0257: the slabs nearest the player's
-# Y first) only when:
-#   layer_monotone_ok   : the sequence's LAYER RANKS are NON-DECREASING —
-#                         every rank=r slab of every column lands before
-#                         any rank=r+1 (the layered wave across the whole
-#                         region; a per-column fill would interleave a
-#                         column's full slab range before its neighbor's
-#                         first slab);
-#   first_layer_columns >= 2 : the first wave layer (rank == the minimum)
-#                         spans SEVERAL columns (interleaved across all
-#                         columns — a per-column wave touches exactly one).
+# before the next). AC-0313: the order is (taxi, layer) inside-out — the
+# innermost wave ring first, and within a ring the slabs land layer by
+# layer ACROSS the ring's columns (equal-taxi columns interleave A0, B0,
+# A1, B1, ...). The contract:
+#   layer_monotone_ok   : the sequence's (taxi, layer) keys are
+#                         NON-DECREASING — every (t, r) slab lands before
+#                         any (t, r+1) slab, and a ring's slabs land before
+#                         any outer ring's (the AC-0257 layered-across-
+#                         columns property, now per ring);
+#   first_layer_columns >= 2 : the first wave layer ((taxi, layer) == the
+#                         minimum) spans SEVERAL columns of the innermost
+#                         ring (interleaved — a per-column wave touches
+#                         exactly one).
 # The dispatches + attaches are real (they just accelerate the wave the
 # game would run over ~1000 frames at 60 fps: the grid sample + emit run
 # on the TM workers, the attach + bookkeeping land in the normal
@@ -13943,25 +13965,30 @@ func _r16_wave_test() -> Dictionary:
 		# is exactly the requirement: all fog -> all low across all columns)
 		return {"ran": true, "ok": true, "builds": 0, "drained_at_sample": true,
 			"layer_monotone_ok": true, "first_layer_columns": 0, "layers": {}}
-	# AC-0257: the player slab is constant across the test (no recenter) —
-	# the rank of each picked slab is stable for the whole sequence.
+	# AC-0257 (AC-0313): the player slab is constant across the test (no
+	# recenter) — the rank of each picked slab is stable for the whole
+	# sequence. The (taxi, layer) key is a pure function of the pick (the
+	# wave band is taxi > band0_r, so the keys span ~5*100..15*100+47).
 	var layer_monotone := true
-	var prev_l := int(world._layer_rank_of(int(seq[0][0])))
-	var min_l := prev_l
-	var min_si := int(seq[0][0])
+	var prev_key := -1
+	var min_key := -1
+	var min_si := -1
 	var first_layer_cols := {}
 	var layers: Dictionary = {}
 	for s in seq:
 		var si: int = int(s[0])
 		var l := int(world._layer_rank_of(si))
-		if l < prev_l:
+		var t := absi(int(s[1]) - int(world.last_pcx)) + absi(int(s[2]) - int(world.last_pcz))
+		var key := t * 100 + l
+		if key < prev_key:
 			layer_monotone = false
-		prev_l = l
-		min_l = mini(min_l, l)
-		min_si = mini(min_si, si)
-		if l == min_l:
+		prev_key = key
+		if key < min_key:
+			min_key = key
+		if key == min_key:
+			min_si = mini(min_si, si)
 			first_layer_cols["%d,%d" % [int(s[1]), int(s[2])]] = true
-		layers[l] = int(layers.get(l, 0)) + 1
+		layers[key] = int(layers.get(key, 0)) + 1
 	var capped := seq.size() >= cap
 	var ok := layer_monotone and int(first_layer_cols.size()) >= 2
 	return {
@@ -19591,6 +19618,12 @@ func _load_test(spawn: Vector3) -> void:
 	# AWECRAFT_LOADBYPASS=0 runs the SAME arm under the legacy spread drain
 	# (start_loading no-ops) — the A/B baseline. Counts are the real
 	# provenance counters (disk_reads / gen_count / mesh_built).
+	# AC-0313 clause 4 as CORRECTED: `simband_ms` (renamed from
+	# `spawn3x3_ms`) = the t0 -> load-GATE wall, where the gate is now the
+	# SIM TAXI DIAMOND (taxi <= band0_r; world._loading_band_count) — the
+	# same set that closes the loading screen and that start_game awaits.
+	# The old 3x3 probe read world._startup_pending(), which is the SEPARATE
+	# spawn-burst flag (AC-0293-deferred machinery), no longer the gate.
 	var lb := OS.get_environment("AWECRAFT_LOADBYPASS") != "0"
 	world.collision_enabled = false
 	world.fluid_sim_enabled = false
@@ -19599,14 +19632,15 @@ func _load_test(spawn: Vector3) -> void:
 	if lb:
 		world.start_loading("AC-0178 load probe")
 	var target: int = world._high_band_count()
+	var gate: int = world._loading_band_count()
 	var t0 := Time.get_ticks_msec()
-	var spawn3x3_ms := -1
+	var simband_ms := -1
 	var screen_hidden_ms := -1
 	var screen_up := false
 	while true:
 		await get_tree().process_frame
-		if spawn3x3_ms < 0 and not world._startup_pending():
-			spawn3x3_ms = Time.get_ticks_msec() - t0
+		if simband_ms < 0 and world._loading_band_meshed() >= gate:
+			simband_ms = Time.get_ticks_msec() - t0
 		if lb and world.loading_active and not screen_up:
 			screen_up = bool(world._loading_screen.visible)
 		if lb and not world.loading_active and screen_hidden_ms < 0:
@@ -19633,7 +19667,7 @@ func _load_test(spawn: Vector3) -> void:
 		"meshed": meshed,
 		"disk": world.disk_reads,
 		"gen": world.gen_count,
-		"spawn3x3_ms": spawn3x3_ms,
+		"simband_ms": simband_ms,
 		"screen_hidden_ms": screen_hidden_ms,
 		"queue_final": world.queue_size,
 		"tg_inflight": world.threadgen_inflight.size(),

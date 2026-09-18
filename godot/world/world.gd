@@ -146,24 +146,12 @@ const DRAIN_UNITS_FRAME_CAP := 4       # per-frame unit cap (hitch spike guard; 
                                        # gain (build_ms -1.4 percent, p95 flat); see TASKS AC-0237
                                        # comment id 3.
 const DRAIN_DT_CLAMP_MS := 100.0       # clamp the wall-clock frame sample (pause/hitch)
-# AC-0283 P3 (walkfix): the WALK-REGIME drain (the slab-unit startup 3x3
-# completion pass + the TG-empty data feed). The regime predicate is the
-# PLAYER-CHUNK CROSSING PERIOD (the AHEAD machinery's own cadence input):
-# a walk crosses ~3.2 s apart (16 blocks at 5 b/s), a flight ~0.8 s (20 b/s).
-# The flight's drain must stay at the legacy pace (its frame budget is
-# 17.5 ms; the slab-unit pass would add ~12 ms/frame of dispatch).
-const WALK_CROSS_PERIOD_MS := 2500.0
-# AC-0283 P3 (walkfix): the startup 3x3 pass's per-frame time cap (wall ms).
-# The legacy 1e9 (unbounded) existed for the FULL-COLUMN spawn dispatch
-# (30-50 ms of main-thread strip work each); the P2 slab dispatch is
-# ~1.5-2 ms, so 14 ms = ~6-9 slab dispatches per frame (the 3x3's 216
-# slabs finish in ~0.5 s, well inside the 3.2 s crossing cycle).
-const DRAIN_STARTUP_PASS_BUDGET_MS := 14.0
-# AC-0283 P3 (walkfix): the per-frame cap on skip-past-defer in the startup
-# 3x3 pass (a defer — dedup/nbs/box — skips the column for the frame and
-# tries the next; a frame of pure defers yields at this cap. The time cap
-# above is the primary bound; this is the safety net).
-const DRAIN_DEFER_MAX_PER_FRAME := 16
+# AC-0313: the AC-0283 P3 walk-regime constants (WALK_CROSS_PERIOD_MS,
+# DRAIN_STARTUP_PASS_BUDGET_MS, DRAIN_DEFER_MAX_PER_FRAME) are GONE — the
+# startup 3x3 completion pass and its regime were removed: no main-thread
+# blocking build pass after the player is active. The drain is ALWAYS the
+# wall-clock paced unit budget + drain_budget_ms time cap (the loading
+# window keeps its own LOAD_* budgets; see _drain_build_queue).
 const DRAIN_WIN_PACE_MS := 250.0       # window grows one bucket per 250 ms (was 15 frames
                                        # at the 60 fps reference = the same wall-clock rate)
 # AC-0109 margin (manual lane only, AC-0212). Meters — a slab is hidden only
@@ -561,53 +549,19 @@ func _layer_rank_of(si: int) -> int:
 # Rank-ordered probe (0, -1, +1, -2, +2, ...) so the first pending hit is
 # the answer; bounded by the slab count, allocation-free (the pick runs
 # it per candidate per scan).
-# AC-0263 spec (user 2026-09-13): while the player is crossing chunks the
-# probes only see slabs in the player's Y-window (|dy| <= 1 - the player's
-# slab + its two neighbors). The deep layers of passed-through columns stop
-# building ("shouldn't keep building down") until the player stays still
-# long enough (AHEAD_FAST_MS of quiet) for the queue to drain to them. The
-# FULL probe (windowed=false) stays the completion record (mesh_built and
-# the re-entry flip never count a windowed "nothing pending" as done).
-func _lod_player_moving() -> bool:
-	# AC-0263 spec (user 2026-09-14): "moving" = the player's position
-	# changed significantly (2+ blocks) within the last AHEAD_FAST_MS -
-	# "the ones we've already been at shouldn't keep building down until
-	# we stay somewhere long enough to get down to that disc". Position
-	# based (not the crossing cadence, which never fired at walk speed).
-	return _lod_move_ms > 0 and Time.get_ticks_msec() - _lod_move_ms < AHEAD_FAST_MS
-
-# AC-0263 spec (user 2026-09-14): the Y-window is NOT coupled to the ahead
-# lead ("why does it matter if we are ahead") - while the player is MOVING
-# (position-based, see _lod_player_moving), EVERY non-tier-0 column builds
-# only its player-slab +/-1 window ("every time we recenter we should start
-# building out at our y again" - the recenter re-anchors the layer rank,
-# the deep layers wait out the move). TIER 0 (the section) is a SEPARATE
-# band and is never windowed: "tier 0 gets full column before everything
-# else gets anything" - full columns even while moving, ahead of every band
-# disc. The high/med/low bands each get only their disc, filled from the
-# player's Y. When the player has stayed still AHEAD_FAST_MS, the FULL
-# probe resumes and the queue reaches the deep disc on its own ("until we
-# stay somewhere long enough to get down to that disc").
-func _lod_windowed_for(c: Node3D) -> bool:
-	if c == null:
-		return false
-	if not _lod_player_moving():
-		return false
-	var dx := int(c.cx) - last_pcx
-	var dz := int(c.cz) - last_pcz
-	if _is_tier0_col(dx, dz):
-		return false
-	return true
-
-func _entry_best_pending(c: Node3D, windowed := false) -> int:
+# AC-0313: the AC-0263 Y-window (the windowed probe while the player
+# moved) is GONE — the probe is always FULL (every slab counts). A column
+# is built as a FULL 24-slab column (inside-out: taxi-major across
+# columns, this Y-distance order within one — see _grid_score), so there
+# is no window for passed columns to re-build and no windowed "nothing
+# pending" to miscount as completion.
+func _entry_best_pending(c: Node3D) -> int:
 	if c == null or c.data.is_empty():
 		return -1
 	var pys := _player_slab()
 	var sn: int = c.data.size()
 	var tier := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)
 	for r in range(sn * 2):
-		if windowed and r > 2:
-			continue
 		var dy: int
 		if r == 0:
 			dy = 0
@@ -670,13 +624,14 @@ func _low_probe_invalidate(c: Node3D) -> void:
 
 func _entry_best_pending_cached(c: Node3D) -> int:
 	var key := _key(int(c.cx), int(c.cz))
+	# AC-0313: the AC-0263 window bit (fingerprint element 5) is gone with
+	# the Y-window — the probe is always full, 4 fingerprint parts.
 	var f: Array = [int(c.data_gen), int(c.fl_gen), _player_slab(),
-		_lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz),
-		_lod_windowed_for(c)]  # AC-0263 spec: the per-column Y-window bit
+		_lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)]
 	var ck = _low_probe_cache.get(key, null)
 	if ck != null:
 		var cf: Array = ck["f"]
-		if cf[0] == f[0] and cf[1] == f[1] and cf[2] == f[2] and cf[3] == f[3] and cf[4] == f[4]:
+		if cf[0] == f[0] and cf[1] == f[1] and cf[2] == f[2] and cf[3] == f[3]:
 			var si0: int = int(ck["si"])
 			if si0 < 0:
 				return -1
@@ -685,17 +640,7 @@ func _entry_best_pending_cached(c: Node3D) -> int:
 		_low_probe_cache.erase(key)
 	if _low_probe_cache.size() > 8000:
 		_low_probe_cache.clear()  # eviction safety (bounded working set)
-	# AC-0263 spec (user rules 2+4): the probe must use the SAME predicate
-	# as the fingerprint (element 4 = _lod_windowed_for) - the cached
-	# result is only sound for the windowing it was computed with. The
-	# global _lod_player_moving() diverges from the per-column bit while
-	# moving WITHOUT an ahead lead (the snapback state): the probe was
-	# windowed but the fingerprint stored wbit=false, so a windowed -1
-	# ("nothing in the player-slab window") was served forever as a
-	# full-probe "column complete" verdict - the wave never re-picked the
-	# demote-ring slabs and the holes stayed open (measured: lightstate,
-	# 50 ring holes through the whole settle, cached=-1 fresh=6).
-	var si := _entry_best_pending(c, _lod_windowed_for(c))
+	var si := _entry_best_pending(c)
 	_low_probe_cache[key] = {"si": si, "f": f}
 	return si
 
@@ -708,14 +653,12 @@ func _entry_best_pending_cached(c: Node3D) -> int:
 # the low probe: the player's Y slab first, then down/up — the (layer,
 # taxi) bake order's layer. -1 = the column owes nothing (high-complete;
 # an all-air column's probe is -1 too, so mesh_built can flip).
-func _hslab_best_pending(c: Node3D, windowed := false) -> int:
+func _hslab_best_pending(c: Node3D) -> int:
 	if c == null or c.data.is_empty() or int(c.top) < 0:
 		return -1
 	var pys := _player_slab()
 	var lim: int = mini(int(c.top) >> 4, c.data.size() - 1)
 	for r in range(c.data.size() * 2):
-		if windowed and r > 2:
-			continue
 		var dy: int
 		if r == 0:
 			dy = 0
@@ -748,13 +691,14 @@ func _hslab_probe_invalidate(c: Node3D) -> void:
 
 func _hslab_best_pending_cached(c: Node3D) -> int:
 	var key := _key(int(c.cx), int(c.cz))
+	# AC-0313: the AC-0263 window bit (fingerprint element 5) is gone with
+	# the Y-window — the probe is always full, 4 fingerprint parts.
 	var f: Array = [int(c.data_gen), int(c.fl_gen), _player_slab(),
-		_lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz),
-		_lod_windowed_for(c)]  # AC-0263 spec: the per-column Y-window bit
+		_lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)]
 	var ck = _hslab_probe_cache.get(key, null)
 	if ck != null:
 		var cf: Array = ck["f"]
-		if cf[0] == f[0] and cf[1] == f[1] and cf[2] == f[2] and cf[3] == f[3] and cf[4] == f[4]:
+		if cf[0] == f[0] and cf[1] == f[1] and cf[2] == f[2] and cf[3] == f[3]:
 			var si0: int = int(ck["si"])
 			if si0 < 0:
 				return -1
@@ -764,102 +708,49 @@ func _hslab_best_pending_cached(c: Node3D) -> int:
 		_hslab_probe_cache.erase(key)
 	if _hslab_probe_cache.size() > 8000:
 		_hslab_probe_cache.clear()  # eviction safety (bounded working set)
-	# AC-0263 spec (user rules 2+4, 2026-09-13): the PICK probe is
-	# windowed (|dy| <= 1 of the player slab) ONLY for PASSED columns
-	# while the ahead lead is active - "the ones we've already been at
-	# shouldn't keep building down until we stay somewhere long enough
-	# to get down to that disc". Ahead columns, tier-0 columns, and
-	# everything at rest (no lead, or AHEAD_FAST_MS quiet) keep the FULL
-	# probe. The window bit is per-column (fingerprint element 5), so a
-	# crossing that flips the bit for a column forces its rescan.
-	# Hardcoding windowed=true here was the spawn stall: a stationary
-	# player's pick probe never saw slabs beyond surface +/- 1, so the
-	# tier-0 column never finished, _spawn_fast latched, the low stage
-	# died and the demote-ring holes stayed open forever (measured,
-	# lightstate). A GLOBAL moving window (before this refinement)
-	# stranded the same way for spawn (no ahead lead at the load
-	# recenter), for tier-0 under a flying player (rule 2 outranks rule
-	# 4), and for ahead columns the spec still wants built.
-	var si := _hslab_best_pending(c, _lod_windowed_for(c))
+	var si := _hslab_best_pending(c)
 	_hslab_probe_cache[key] = {"si": si, "f": f}
 	return si
 
-# AC-0263: the TIER-0 SECTION gate — true when every tier-0 column (the
-# Chebyshev ball around the player column) owes no high slab: the section
-# is complete and the wave (med/low) may start. A no-DATA tier-0 column
-# is NOT drained — its build starts the moment its data lands, and the
-# section (not the wave) owns it (the wave waits the ~500 ms the data
-# lane needs; the startup burst makes this a no-op at spawn). The ball is
-# tiny (tier0_radius 0 = 1 column, the max 8 = 289) and the per-chunk
-# probe cache keeps the live walk near-free.
-func _tier0_section_drained() -> bool:
-	for dx in range(-tier0_r, tier0_r + 1):
-		for dz in range(-tier0_r, tier0_r + 1):
-			var c = chunks.get(_key(last_pcx + dx, last_pcz + dz))
-			if c == null or c.data.is_empty():
-				return false
-			if _hslab_best_pending_cached(c) >= 0:
-				return false
-	return true
-
-# AC-0257: the (layer, taxi) BAKE SCORE — the order the drain picks and
-# the low lanes walk: the Y-layer of the entry's best pending slab first
-# (a no-data/gen entry is layer 0 — the player's slab is the first the
-# column owes), taxi (|dx|+|dz|) within the layer. The live layer is
-# derived from the chunk's pending state per pick (a completed slab moves
-# the best slab outward; there is no stamp to go stale).
+# AC-0257 (AC-0313): the BAKE SCORE — the order the drain picks and the
+# low lanes walk: INSIDE-OUT (the AC-0233/AC-0250 (layer, taxi) layer-
+# major order is gone — passed columns were re-fanned as the player's Y
+# moved and the deep layers of the inner rings waited behind the shallow
+# layers of the far rings). Now the COLUMNS are radial: the innermost
+# unbuilt column first (taxi-major — a pure function of the live recenter
+# anchor, no timer/mode), and WITHIN a column the slabs keep the Y-
+# distance order from the player's slab (player slab first, then ±1, ±2,
+# ... — _layer_rank_of, max 47 < 10000 so it breaks taxi ties only).
+# Every column in the real band is built FULL (24 slabs), so a built
+# column is complete and never re-dispatched — no window rework. The
+# load-target and tier-0 score prefixes are gone with the Y-window /
+# tier-0 set: the 9-chunk load target (Chebyshev ≤ 1) IS the innermost
+# taxi, and the real band (taxi ≤ band0_r) outranks the halo on taxi.
+# The live layer is derived from the chunk's pending state per pick (a
+# completed slab moves the best slab outward; there is no stamp to go
+# stale).
 func _grid_score(e: Dictionary) -> float:
 	var dx := int(e["cx"]) - last_pcx
 	var dz := int(e["cz"]) - last_pcz
 	var layer := 0
 	var c = chunks.get(e["key"])
 	# AC-0263 (AC-0283 P3): the pending probe is per-lane — the REAL band
-	# (the per-slab full-res builds: taxi ≤ band0_r, plus the tier-0 ball,
-	# which outruns the edge in its corners) probes the HIGH completion
-	# stamps; the halo band (band0_r, render_radius) probes the low/fog
-	# state (the AC-0262 cached probe).
+	# (the per-slab full-res builds: taxi ≤ band0_r) probes the HIGH
+	# completion stamps; the halo band (band0_r, render_radius) probes the
+	# low/fog state (the AC-0262 cached probe).
 	var in_high := c != null and _is_real_col(dx, dz)
 	if c != null and not c.data.is_empty():
 		var si: int = _hslab_best_pending_cached(c) if in_high else _entry_best_pending_cached(c)
 		if si >= 0:
 			layer = _layer_rank_of(si)
-		# AC-0263 spec (user rules 2+4, 2026-09-14): for a WINDOWED column
-		# (player moving, non-tier-0 - see _lod_windowed_for), a probe -1
-		# only means "no pending slab inside the player-slab +/-1 window"
-		# — the deeper slabs are still owed. Scoring such an entry at layer
-		# 0 (a taxi-only score) puts it AHEAD of every window-visible
-		# column, so the pick lands on a column whose owed slabs the probe
-		# cannot see — and the drain's "probe -1 frees the entry" rule
-		# would then strand the column. Score it as no candidate:
-		# window-visible columns win, and if none exists the frame falls to
-		# the data pass. Non-windowed columns (tier-0, or the player at
-		# rest) keep the full probe: a -1 there is genuine completion and
-		# the old layer-0/free behavior stands.
-		elif _lod_windowed_for(c):
-			return 1e30
-	var s := float(layer) * 10000.0 + float(absi(dx) + absi(dz))
-	# AC-0263: the TIER-0 SECTION — the ball's slabs build in their own
-	# phase (fanned from the player's Y), fully complete, before ANY ring
-	# slab (high or wave) starts: the prefix puts every tier-0 slab below
-	# every non-tier-0 slab at equal (layer, taxi).
-	if _is_tier0_col(dx, dz):
-		s -= 1e10
-	# AC-0274: the LOAD TARGET (tier-0 + sim band) outranks the rest of
-	# the high band while the window is open. Without this the (layer,
-	# taxi) bake order fans layer 0 of ALL 113 high-band columns before
-	# the DEEP slabs of the inner target columns - the window's own
-	# target sat at 36% for ~15 s while the far rings' shallow layers
-	# built (measured: 900 slabs at 43/s, the target's last slab ~21 s
-	# in). -5e9 sits below the tier-0 prefix (-1e10) and above every
-	# (layer, taxi) value (max ~120k).
-	if loading_active and _loading_target_col(dx, dz):
-		s -= 5e9
+	var s := float(absi(dx) + absi(dz)) * 10000.0 + float(layer)
 	return s
 
 # AC-0257: the AC-0233 _tier_score ((sim-tier, taxi) pick order) is gone —
-# replaced by _grid_score (the (layer, taxi) bake order). _tier_of / the
-# tier stamps survive: the tier-2 high order gate (build handoff) and the
-# low task's dispatch-tier check still classify by sim tier.
+# replaced by _grid_score (the AC-0313 (taxi, layer) inside-out order).
+# _tier_of / the tier stamps survive: the tier-2 high order gate (build
+# handoff) and the low task's dispatch-tier check still classify by sim
+# tier.
 
 # AC-0233: stamp a waiting entry with its current tier + taxi rank (the
 # stored tier order the AC-0231 low-LOD scan walks; the live pick computes
@@ -1468,8 +1359,6 @@ func _low_fog_for(c: Node3D) -> void:
 		return
 	var dx := int(c.cx) - last_pcx
 	var dz := int(c.cz) - last_pcz
-	if _is_tier0_col(dx, dz):
-		return  # AC-0257: the tier-0 set goes straight to high — never a placeholder
 	# AC-0261: the in-r order-gate invalidation below is a no-op (the
 	# AC-0231 in-r placeholder lane is dead — _low_inr_invalidate keeps
 	# the gate open unconditionally); the taxi test stays for parity.
@@ -1680,15 +1569,19 @@ func _lod_avg_mat() -> ShaderMaterial:
 		_lod_avg_material.set_shader_parameter("day", Color(1.0, 1.0, 1.0))
 	return _lod_avg_material
 
-# AC-0283 P3: the REAL band — taxi ≤ band0_r (or the tier-0 set): the
-# collision/fluid sim square, exactly P2 (the star seed on data landing,
-# the full 24-slab light walk, the 1:1 high build). The old MED/LOW split
-# (medium_start_r / low_start_r) is GONE from the draw tier: everything
-# outside the real band up to the render edge is the HALO — the 4x4x4
-# avg draw with the heightmap sky light, never seeded, never saved
-# (AC-0287).
+# AC-0283 P3 (AC-0313): the REAL band — taxi ≤ band0_r (the sim square):
+# the collision/fluid sim square, exactly P2 (the star seed on data
+# landing, the full 24-slab light walk, the 1:1 high build). The old
+# MED/LOW split (medium_start_r / low_start_r) is GONE from the draw tier:
+# everything outside the real band up to the render edge is the HALO —
+# the 4x4x4 avg draw with the heightmap sky light, never seeded, never
+# saved (AC-0287). AC-0313: the tier-0 disjunct is GONE too — the tier-0
+# set's job (the player's 3x3 never a placeholder) is now implied by the
+# band: sim has a floor of 4 (Settings.SIM_MIN), and every column of the
+# player's 3x3 has taxi ≤ 2, so the footing guarantee holds for any
+# storable sim.
 func _is_real_col(dx: int, dz: int) -> bool:
-	return absi(dx) + absi(dz) <= band0_r or _is_tier0_col(dx, dz)
+	return absi(dx) + absi(dz) <= band0_r
 
 # AC-0261 (AC-0283 P3): the LOD zone of a chunk at (dx, dz) from the
 # recenter anchor, taxi metric (the render edge is taxi too — "render
@@ -1706,27 +1599,10 @@ func _lod_tier_of(dx: int, dz: int) -> int:
 		return 2
 	return 3
 
-# AC-0257: the TIER-0 SET — the Chebyshev ball around the player column
-# (Settings "tier0_radius") that goes STRAIGHT TO HIGH: no fog, no low,
-# the build lane is the only path. radius 0 = the player's own column
-# (the old dx==0 && dz==0 checks).
-var tier0_r := 0
-
-func _is_tier0_col(dx: int, dz: int) -> bool:
-	return maxi(absi(dx), absi(dz)) <= tier0_r
-
-# AC-0257: the tier-0 radius slider changed (Settings.apply_tier0_radius) —
-# ENTERING columns lose their placeholders (the next fog/pick pass skips
-# them; the build lane upgrades them straight to high) and EXITING columns
-# keep their high (keep-high — nothing is ever downgraded). Invalidate the
-# cached pick verdicts + the in-r drain proof (both taken under the old
-# set) and re-stamp the queue.
-func note_tier0_radius() -> void:
-	tier0_r = clampi(int(Settings.values.get("tier0_radius", 0)), 0, int(Settings.TIER0_RADIUS_MAX))
-	_low_none_key = ""
-	_low_slab_none_key = ""
-	_low_inr_invalidate()
-	_rescore_kick()
+# AC-0313: the TIER-0 SET (tier0_r / _is_tier0_col / note_tier0_radius,
+# the "tier0_radius" setting) is GONE — the real band (taxi ≤ band0_r) is
+# the footing guarantee (see _is_real_col), and the build lane owns it
+# the same way the tier-0 set did.
 
 # AC-0261: the user setting (Settings "low_start", taxi chunks) takes
 # effect. The med/low split lives INSIDE the render distance: MED (8x8x8)
@@ -2924,9 +2800,9 @@ func _low_pick(want_low: bool) -> Dictionary:
 	var nk := "%d|%d,%d|%d" % [_pool_ver, last_pcx, last_pcz, 1 if want_low else 0]
 	if nk == _low_none_key:
 		return {}
-	# AC-0257: the bake order — the AC-0233 (sim-tier, taxi) f1/f2 pick is
-	# replaced by the (layer, taxi) grid score: the entry whose BEST PENDING
-	# SLAB is nearest the player's Y wins, taxi breaking layer ties.
+	# AC-0257 (AC-0313): the bake order — the AC-0233 (sim-tier, taxi) f1/f2
+	# pick is replaced by the (taxi, layer) grid score: the innermost entry
+	# wins, its best pending slab's Y-distance breaking taxi ties.
 	var best: Dictionary = {}
 	var best_s := 1e30
 	var capped := false
@@ -2947,16 +2823,12 @@ func _low_pick(want_low: bool) -> Dictionary:
 			var e: Dictionary = arr[i]
 			var dx := int(e["cx"]) - last_pcx
 			var dz := int(e["cz"]) - last_pcz
-			# AC-0257: the tier-0 set (Chebyshev ball around the player
-			# column) must NEVER be a placeholder (high only — fall /
-			# step-through under the player).
-			if _is_tier0_col(dx, dz):
-				continue
 			# AC-0261 (AC-0283 P3): only REAL-band columns are upgrade
 			# candidates — the catch-up's whole job is a low-holding column
 			# ENTERING the real band (the player approached it). The halo
 			# band (band0_r, render_radius) keeps its avg LOD as the final
-			# LOD.
+			# LOD. (AC-0257: the tier-0 set's never-a-placeholder guarantee
+			# is the real band itself since AC-0313.)
 			if not _is_real_col(dx, dz):
 				continue
 			var c = chunks.get(e["key"])
@@ -3092,12 +2964,11 @@ func _low_scan_slabs(n: int) -> Array:
 			var e: Dictionary = arr[i]
 			var dx := int(e["cx"]) - last_pcx
 			var dz := int(e["cz"]) - last_pcz
-			if _is_tier0_col(dx, dz):
-				continue  # AC-0257: the tier-0 set is high only (never a placeholder)
 			# AC-0261 (AC-0283 P3): the wave covers the HALO band (band0_r,
 			# render_radius) — the real band below it is the build lane's
-			# (pending renders nothing), and past the (taxi) render
-			# distance nothing renders.
+			# (pending renders nothing; the tier-0 set's never-a-placeholder
+			# guarantee is the band itself since AC-0313), and past the
+			# (taxi) render distance nothing renders.
 			var taxi := absi(dx) + absi(dz)
 			if taxi <= band0_r or taxi >= render_radius:
 				continue
@@ -3194,8 +3065,6 @@ func _low_inr_pick() -> Dictionary:
 			var dz := int(e["cz"]) - last_pcz
 			if dx * dx + dz * dz > r2:
 				continue  # in-r lane: circle only (the far slab wave owns the outside)
-			if _is_tier0_col(dx, dz):
-				continue  # AC-0257: the tier-0 set is high only (never a placeholder)
 			var c = chunks.get(e["key"])
 			if c == null or c.data.is_empty() or bool(c.mesh_built):
 				continue
@@ -3203,7 +3072,7 @@ func _low_inr_pick() -> Dictionary:
 				continue
 			if _entry_best_pending_cached(c) < 0:  # AC-0262: probe cache
 				continue  # no pending slab (all terminal-fog / fresh lows)
-			var s := _grid_score(e)  # AC-0257: the bake order (layer, taxi)
+			var s := _grid_score(e)  # AC-0313: the bake order (taxi, layer)
 			if s < best_s:
 				best_s = s
 				best = e
@@ -3327,9 +3196,9 @@ func _low_step() -> void:
 	# WAVE 2b: the global slab wave — the visible band [band0_r,
 	# render_radius) (AC-0261: the high band below it is build-lane only,
 	# nothing renders past the taxi render edge), wall-clock paced
-	# (LOW_WAVE_PACE_MS per slab), the (layer, taxi) disc order across all
-	# columns (the per-column sequential fill is gone: every column's
-	# player-Y slab lands before any column's next layer). The acc is
+	# (LOW_WAVE_PACE_MS per slab), the (taxi, layer) disc order across all
+	# columns (AC-0313: the innermost wave-band column first, its slabs in
+	# Y-distance order). The acc is
 	# clamped to one frame cap's worth (a stall never catches up in a
 	# burst). No-candidate verdicts are cached (zero cost between
 	# landings/edits — a drained wave is a couple of dict ops).
@@ -3338,18 +3207,13 @@ func _low_step() -> void:
 	# full O(band) scans — the R30 storm's 126-213 ms/frame LOW_PICK),
 	# then dispatch the k-ordered candidates the pace allows.
 	var _wpt3 := Time.get_ticks_usec()  # AC-0262: the batched scan
-	# AC-0263: the TIER-0 SECTION is its own phase — the wave (med/low)
-	# does not START until the section's high builds are complete (the
-	# section builds through the drain, which the score prefix keeps ahead
-	# of the rings). ONE-SHOT: once the wave has landed its first attach,
-	# the gate stays open — a recenter's new tier-0 column then builds
-	# through the drain without stalling the wave (a re-gate at every
-	# crossing would hitch it). The check rides the per-chunk probe cache
-	# (the ball is 1 column by default; max 289).
-	var wave_cands: Array = []
-	if _wave_gate_open or _tier0_section_drained():
-		_wave_gate_open = true
-		wave_cands = _low_scan_slabs(LOW_WAVE_FRAME_CAP)
+	# AC-0313: the AC-0263 tier-0 section gate is GONE (the tier-0 set is
+	# gone). The wave starts freely: the halo band (taxi > band0_r) sits
+	# behind the whole real band in the (taxi, layer) order, the drain
+	# runs first in the frame (4587 before 4591) and owns the TM pool's
+	# first pick, so the section (taxi 0) always builds ahead of the
+	# wave's halo work.
+	var wave_cands: Array = _low_scan_slabs(LOW_WAVE_FRAME_CAP)
 	_wprof_add(WP_LOW_PICK, Time.get_ticks_usec() - _wpt3)
 	var _wpt4 := Time.get_ticks_usec()  # AC-0262: dispatch-only (disjoint)
 	var wave_n := 0
@@ -3459,17 +3323,10 @@ const AHEAD_FAST_MS := 3500
 const AHEAD_DIST := 1
 var _ahead_active := false      # the current center leads the player
 var _last_cross_ms := 0         # wall ms of the last PLAYER-chunk crossing
-var _prev_cross_ms := 0         # AC-0283 P3 (walkfix): the crossing before that (the period)
-# AC-0263 spec (user 2026-09-14): the Y-window's MOVING state - position-
-# based, not crossing-cadence based. A significant move (2+ blocks from
-# the anchor) re-arms the AHEAD_FAST_MS quiet window; "stayed somewhere
-# long enough" = no significant move for AHEAD_FAST_MS. The old predicate
-# (a crossing within AHEAD_FAST_MS of the previous crossing) never fired
-# at walk speed - a chunk crossing takes ~3.7 s at 4.3 m/s, just past the
-# 3.5 s window - so the window never opened while walking and the trail
-# kept building full columns (measured complaint, 2026-09-14).
-var _lod_move_anchor := Vector2.ZERO
-var _lod_move_ms := 0
+# AC-0313: the AC-0283 P3 walk-regime state (_prev_cross_ms — the crossing
+# period) and the AC-0263 Y-window moving state (_lod_move_anchor /
+# _lod_move_ms) are GONE — the walk regime and the Y-window are removed
+# (see the drain and _grid_score).
 var _rec_player_wx := 0.0       # raw player position at the last recenter
 var _rec_player_wz := 0.0
 var _rec_player_pcx := 0
@@ -3730,17 +3587,16 @@ var _tm_handoff := 0
 # the only expected source).
 var _tm_hslab_n := 0
 var _tm_full_firstbuild_n := 0
-# AC-0263: the section-first order contract evidence (wall ms): the
-# INITIAL tier-0 section's high completion (first tier-0 column to
-# complete high after boot — a moving recenter's new section column does
-# NOT reset it), and the FIRST textured-low attach (the wave's first
-# landing). The contract: low_first >= section_done (the wave waits for
-# the tier-0 section to drain — a ONE-SHOT gate: once the wave has
-# started, a recenter's new tier-0 column builds through the drain
-# without stalling the wave, or every chunk crossing would hitch it).
+# AC-0263 (AC-0313): the section-first order contract evidence (wall ms):
+# the INITIAL ANCHOR COLUMN's (taxi 0 — the tier-0 set's default, now the
+# innermost column of the (taxi, layer) order) high completion (first
+# anchor-column slab to complete high after boot — a moving recenter's
+# new anchor column does NOT reset it), and the FIRST textured-low attach
+# (the wave's first landing). The contract: low_first >= section_done.
+# (The AC-0263 one-shot wave gate is gone with the tier-0 set — see the
+# wave scan in _low_step.)
 var _hslab_section_done_frame := -1
 var _low_first_attach_frame := -1
-var _wave_gate_open := false
 # AC-0219: per-frame streaming handoff counter. threadmesh_poll can run up
 # to twice per process frame (_physics_process_impl + _process, plus the
 # recenter call), so the cap is keyed on the process frame, not the call.
@@ -3809,8 +3665,8 @@ func _ready() -> void:
 	# AC-0252: seed the med/low band boundary from the user setting (the
 	# later Settings.apply_world re-applies it against the live radii).
 	apply_low_start()
-	# AC-0257: seed the tier-0 set from the user setting.
-	note_tier0_radius()
+	# AC-0313: the tier-0 set (note_tier0_radius) is GONE — the real band
+	# is taxi ≤ band0_r (the sim distance, applied via apply_world).
 	# AC-0257: the in-flight caps scale to all available cores, never past
 	# (see _apply_worker_thread_caps).
 	_apply_worker_thread_caps()
@@ -5138,9 +4994,10 @@ func _tex_refresh_dispatch(c: Node3D, cx: int, cz: int) -> bool:
 
 # Entry. No-op when AWECRAFT_LOADBYPASS=0 (the legacy spread drain). Raises
 # the in-flight caps + drain budgets (each site checks loading_active) and
-# shows the screen. Target = the HIGH band's column count (AC-0261: the
-# only region that gets a full mesh — the visible band is slab-wave
-# owned, band 3 is data-only).
+# shows the screen. Target = the SIM TAXI DIAMOND (AC-0313 clause 4 as
+# CORRECTED: every column with taxi(dx,dz) <= band0_r = sim — 41 columns at
+# sim 4; the user's "instead of 3x3 let's do sim taxi distance") — built
+# by normal streaming, the load-screen gate.
 func start_loading(title: String) -> void:
 	if not loading_bypass:
 		return
@@ -5216,21 +5073,28 @@ func _high_band_meshed() -> int:
 	return n
 
 
-# AC-0274 (user decision B): the LOAD WINDOW's target is the TIER-0 SECTION
-# (the Chebyshev ball, tier0_r) + the SIMULATION band (taxi < sim_dist),
-# not the whole high band. "Load tier 0 + simulation distance and then
-# load the rest normally" - the rest of the render circle keeps building
-# behind the closed window (the pools stay saturated until the high band
-# itself drains - the window just stops WAITING for it).
+# AC-0313 (user decision B, the load-screen gate; clause 4 as CORRECTED —
+# the user's "instead of 3x3 let's do sim taxi distance"): the LOAD
+# WINDOW's target is the SIM TAXI DIAMOND around the load anchor — every
+# column with taxi(dx,dz) <= band0_r (= sim), 41 columns at sim 4 — built
+# by the NORMAL streaming machinery (drain + workers, full columns
+# inside-out), not by any special pass. The window closes the moment those
+# 41 are mesh_built and the player activates only after (main.gd
+# start_game / _continue_slot await the same condition via
+# _await_sim_band) — the simband wall IS the load->activation wall.
+# Everything after is normal streaming (the pools keep running behind the
+# closed window). The first run's 3x3 target (and the original clause-4
+# "9 spawn chunks" text) predates the user's answer and is gone; the
+# 3x3 sits at taxi ≤ 2, the innermost, so it builds first by the
+# (taxi, layer) order anyway — the diamond is the real-band core.
 func _loading_target_col(dx: int, dz: int) -> bool:
-	return _is_real_col(dx, dz)
+	return absi(dx) + absi(dz) <= band0_r
 
 
 func _loading_band_count() -> int:
 	var n := 0
-	var r := maxi(tier0_r, band0_r)
-	for dx in range(-r, r + 1):
-		for dz in range(-r, r + 1):
+	for dx in range(-band0_r, band0_r + 1):
+		for dz in range(-band0_r, band0_r + 1):
 			if _loading_target_col(dx, dz):
 				n += 1
 	return n
@@ -5238,9 +5102,8 @@ func _loading_band_count() -> int:
 
 func _loading_band_meshed() -> int:
 	var n := 0
-	var r := maxi(tier0_r, band0_r)
-	for dx in range(-r, r + 1):
-		for dz in range(-r, r + 1):
+	for dx in range(-band0_r, band0_r + 1):
+		for dz in range(-band0_r, band0_r + 1):
 			if not _loading_target_col(dx, dz):
 				continue
 			var c = chunks.get(_key(last_pcx + dx, last_pcz + dz))
@@ -5290,10 +5153,12 @@ func _loading_tick() -> void:
 				m, _loading_target, threadmesh_inflight.size(), threadgen_inflight.size(), disk_reads, gen_count, queue_size, hslab_defer_nbs, hslab_defer_dedup, hslab_stale_key_n, _tm_capdrop, load_phase1_ready_fail, _tm_inflight_keys.size(), float(_load_wms_sum) / maxf(1.0, float(_load_wms_n)), _load_wms_n])
 	if _loading_screen != null:
 		_loading_screen.update_progress(m, _loading_target, disk_reads, gen_count)
-	# AC-0274 (user decision B): the window closes the moment the LOAD
-	# TARGET (tier-0 + sim band) is meshed - the pools keep running:
-	# "load tier 0 + simulation distance and then load the rest normally."
-	# Waiting for the pools to drain here would never fire (phase 2 keeps
+	# AC-0313 (user decision B; clause 4 as CORRECTED): the window closes
+	# the moment the LOAD TARGET (the SIM TAXI DIAMOND, taxi <= band0_r)
+	# is meshed - the pools keep running: the loading screen waits until
+	# the whole sim band around spawn is built and then it's normal
+	# streaming. Waiting for the pools to drain
+	# here would never fire (phase 2 keeps
 	# the TG pool warm for the rest of the circle, and phase 1 keeps
 	# dispatching the outer band - the whole point of the early close).
 	# stop_loading() drops the caps back to steady state, so the rest
@@ -5956,7 +5821,7 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 			# derive mesh_built from the probe and re-queue — the same
 			# contract as the crossing; the far low mesh shows meanwhile
 			# (no unlit frame).
-			c.mesh_built = _hslab_best_pending(c, false) < 0
+			c.mesh_built = _hslab_best_pending(c) < 0
 			_hslab_probe_invalidate(c)
 			if not c.mesh_built and queued_keys.get(key) != "build":
 				_enqueue_build(tcx, tcz)
@@ -6207,13 +6072,8 @@ func threadmesh_poll() -> void:
 						# (200 ms at 60 fps) and returns the cap to the
 						# still level ~250 ms after the player stops.
 						_dyn_speed = lerpf(_dyn_speed, inst, 0.3)
-				# AC-0263 spec (user 2026-09-14): significant-move anchor -
-				# every 2+ blocks of travel re-arms the quiet window (walk,
-				# sprint, fly, teleport all count - it is a position delta,
-				# so harness fly/teleport arms it exactly like real input).
-				if pnow.distance_to(_lod_move_anchor) >= 2.0:
-					_lod_move_anchor = pnow
-					_lod_move_ms = Time.get_ticks_msec()
+				# AC-0313: the AC-0263 significant-move anchor (the
+				# Y-window's moving state) is GONE with the Y-window.
 				_dyn_prev_pos = pnow
 				_dyn_prev_t = Time.get_ticks_usec()
 				_dyn_have_prev = true
@@ -6477,10 +6337,11 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		# until the wave's low lands and flips it (the slab never shows
 		# two tiers or nothing).
 		var taxi_now := absi(int(c.cx) - last_pcx) + absi(int(c.cz) - last_pcz)
-		# AC-0283 P3: the straggler test is the REAL-band exit (the column
-		# left the real band while this build was in flight) — the halo
-		# band's draw owns it now. taxi_now stays for the log line.
-		var straggler := taxi_now > band0_r and not _is_tier0_col(int(c.cx) - last_pcx, int(c.cz) - last_pcz)
+		# AC-0283 P3 (AC-0313): the straggler test is the REAL-band exit
+		# (the column left the real band while this build was in flight) —
+		# the halo band's draw owns it now (the tier-0 disjunct is gone
+		# with the tier-0 set). taxi_now stays for the log line.
+		var straggler := taxi_now > band0_r
 		if straggler:
 			hslab_stragglers_n += 1
 		var ta_h := Time.get_ticks_msec()
@@ -6514,7 +6375,7 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 				c.low_slab_visible(si_h, false)  # stored (flip on demote)
 		_hslab_probe_invalidate(c)
 		_low_probe_invalidate(c)
-		if not bool(c.mesh_built) and _hslab_best_pending(c, false) < 0:
+		if not bool(c.mesh_built) and _hslab_best_pending(c) < 0:
 			c.mesh_built = true
 			# high-complete: the column's placeholders are all gone now
 			# (each landing dropped its own) — nothing to free in bulk.
@@ -6532,11 +6393,13 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			_eff_cache_put(key, c, res.get("light", {}), e.get("ngen", null))
 		_tm_handoff += 1
 		_tm_hslab_n += 1  # AC-0263: the per-slab lane's landing count
-		# AC-0263: section evidence — the INITIAL section's completion (the
-		# first tier-0 column to finish high; a later recenter's new
-		# section column does not move the milestone).
+		# AC-0263 (AC-0313): section evidence — the INITIAL ANCHOR
+		# COLUMN's completion (the first slab of the taxi-0 column to
+		# finish high — the tier-0 set's default, now the innermost
+		# column of the (taxi, layer) order; a later recenter's new
+		# anchor column does not move the milestone).
 		if _hslab_section_done_frame < 0 \
-				and _is_tier0_col(int(e["cx"]) - last_pcx, int(e["cz"]) - last_pcz):
+				and int(e["cx"]) == last_pcx and int(e["cz"]) == last_pcz:
 			_hslab_section_done_frame = Time.get_ticks_msec()
 		# AC-0263: NO _drop_queued — the entry STAYS queued (the column's
 		# remaining slabs are still pending) and is re-picked next frame;
@@ -7260,8 +7123,9 @@ func _build_unit(c: Node3D, cx: int, cz: int) -> bool:
 	perf_build_ms += dt
 	return not covered
 
-# AC-0263: the per-slab high variant of _build_unit — dispatches ONE slab
-# (the (layer, taxi) rings' build unit) through the worker pool. Same
+# AC-0263 (AC-0313): the per-slab high variant of _build_unit — dispatches
+# ONE slab (the (taxi, layer) inside-out order's build unit) through the
+# worker pool. Same
 # contained-light handling as _build_unit (cached eff when it matches,
 # otherwise the worker self-lights through the byte-identical contained
 # kernel); returns true when DEFERRED (data/neighbor missing, in-flight
@@ -7324,19 +7188,19 @@ func _collect_pool(build: bool, include_fb := false, maxb := -1, high_only := fa
 				if c == null or c.data.is_empty() or c.mesh_built:
 					continue
 				if high_only:
-					# AC-0262: the visible band's build entries are the slab
-					# wave's work list, not the drain's. The per-pick high
-					# gate below the caller would null the top pick every
-					# frame (the wave keeps up — its entries always out-score
-					# the high band's deep slabs on the (layer, taxi) order),
-					# and the deep-slab high band (a high layer rank) starved
-					# behind them forever: a recentered center chunk with
-					# deep pending slabs stayed unmeshed indefinitely
-					# (measured: r16 settle frozen on 6 slabs of the new
-					# taxi-0 chunk while the drain dispatched 0 units).
-					# Pre-filter the drain's pool to the REAL band only
-					# (AC-0283 P3: the halo band's work is the slab wave's,
-					# never the drain's).
+					# AC-0262 (AC-0313): the visible band's build entries
+					# are the slab wave's work list, not the drain's. The
+					# per-pick high gate below the caller would null the
+					# top pick every frame (the wave keeps up — its halo-
+					# band entries always out-score the real band's entries
+					# on taxi), and the deep-slab high band (a high layer
+					# rank) starved behind them forever: a recentered center
+					# chunk with deep pending slabs stayed unmeshed
+					# indefinitely (measured: r16 settle frozen on 6 slabs
+					# of the new taxi-0 chunk while the drain dispatched 0
+					# units). Pre-filter the drain's pool to the REAL band
+					# only (AC-0283 P3: the halo band's work is the slab
+					# wave's, never the drain's).
 					var dxh := int(e["cx"]) - last_pcx
 					var dzh := int(e["cz"]) - last_pcz
 					if not _is_real_col(dxh, dzh):
@@ -7359,7 +7223,9 @@ func _collect_pool(build: bool, include_fb := false, maxb := -1, high_only := fa
 # being served. A cached EMPTY pick is trusted: a membership or readiness
 # change always bumps _pool_ver, so a matching key means a fresh scan would
 # find nothing either.
-func _pick_build_cached(maxb: int, include_fb: bool, high_only := false, skip: Dictionary = {}) -> Dictionary:
+# AC-0313: the `skip` parameter (the AC-0283 P3 startup 3x3 pass's
+# per-frame defer set) is GONE with that pass.
+func _pick_build_cached(maxb: int, include_fb: bool, high_only := false) -> Dictionary:
 	# AC-0262: high_only gets a suffixed key — the filter changes the pool
 	# contents for the same (pool state, window, center) tuple, and the
 	# drain's steady pass (high_only) must not serve a load-phase verdict
@@ -7372,8 +7238,7 @@ func _pick_build_cached(maxb: int, include_fb: bool, high_only := false, skip: D
 			perf_pool_hits += 1
 			return {"e": e, "c": null, "s": slot[3], "pool_empty": slot[4]}
 		var c = chunks.get(e["key"])
-		if not skip.has(e["key"]) \
-				and c != null and not c.data.is_empty() \
+		if c != null and not c.data.is_empty() \
 				and not c.mesh_built \
 				and _build_ready(int(e["cx"]), int(e["cz"])):
 			perf_pool_hits += 1
@@ -7384,15 +7249,13 @@ func _pick_build_cached(maxb: int, include_fb: bool, high_only := false, skip: D
 	var best_c: Node3D = null
 	var best_s := 1e30
 	for e in bp:
-		if skip.has(e["key"]):
-			continue
 		var c = chunks.get(e["key"])
 		# AC-0257: keep-high — a meshed column is skipped.
 		if c == null or c.data.is_empty() or c.mesh_built:
 			continue
 		if not _build_ready(int(e["cx"]), int(e["cz"])):
 			continue
-		var s := _grid_score(e)  # AC-0257: the bake order (layer, taxi)
+		var s := _grid_score(e)  # AC-0313: the bake order (taxi, layer)
 		if s < best_s:
 			best_s = s
 			best_e = e
@@ -7455,7 +7318,7 @@ func _pick_data_cached(maxb: int) -> Dictionary:
 		# forward edge of all data (boundary gate regression).
 		if _spawn_fast:
 			continue
-		var s := _grid_score(e)  # AC-0257: the bake order (layer, taxi)
+		var s := _grid_score(e)  # AC-0313: the bake order (taxi, layer)
 		if s < dp_s:
 			dp_s = s
 			dp_e = e
@@ -7522,7 +7385,7 @@ func _promo_build_step() -> void:
 		var dz := int(c.cz) - last_pcz
 		if not _is_real_col(dx, dz):
 			continue  # demoted — the mark waits (the re-entry resumes it)
-		var si := _hslab_best_pending(c, false)
+		var si := _hslab_best_pending(c)
 		if si < 0:
 			continue
 		_mesh_dispatch_hslab(c, int(c.cx), int(c.cz), si, {}, false)
@@ -7542,11 +7405,12 @@ func _drain_build_queue() -> void:
 		return
 	_rescore_step()  # AC-0233: the amortized waiting-parts rewrite (idle = 1 bool check)
 	var t0 := Time.get_ticks_usec()
-	# AC-0160 spawn-fast: while the spawn 3x3 is still pending, raise the
-	# per-frame unit budget (3 -> 12) and time budget (x2) so the spawn ring
-	# lands in ~1s; afterwards the bounded trickle budget (2/1) drains the
-	# rest of the set toward steady state. (Old 3-unit budget + O(queue) pool
-	# scans = 11.7s spawn and ~7.7k entries stranded at r50.)
+	# AC-0313: the AC-0160 spawn-fast unit budget (3 -> 12 while the spawn
+	# 3x3 is pending) is GONE with the walk regime — the drain is ALWAYS
+	# the wall-clock paced unit budget + drain_budget_ms time cap (normal
+	# streaming). startup = _startup_pending() stays for the burst hold,
+	# the tm_cap bumps and the _spawn_fast latch (the 5x5 startup burst is
+	# deferred to AC-0293).
 	var startup := _startup_pending()
 	# AC-0160 run 2: the spawn fast path ends the first frame the spawn 3x3
 	# is built — after that the data pass and the recenter slice run
@@ -7577,9 +7441,11 @@ func _drain_build_queue() -> void:
 	var budget := 0
 	if loading_active:
 		budget = LOAD_DRAIN_UNITS
-	elif startup:
-		budget = 12
 	else:
+		# AC-0313: ALWAYS the wall-clock paced trickle (the AC-0160 12-unit
+		# spawn/walk budget is gone — normal streaming fills the footing:
+		# 2 units/frame fast ≈ 120/s, a crossed 3x3 in ~1.8 s at walk,
+		# well inside the ~3.7 s chunk crossing).
 		_drain_acc_ms = minf(_drain_acc_ms + frame_dt_ms, float(DRAIN_UNITS_FRAME_CAP) * unit_pace)
 		budget = mini(DRAIN_UNITS_FRAME_CAP, int(_drain_acc_ms / unit_pace))
 	# AC-0213: small-move budget — right after a recenter the ahead ring was
@@ -7588,27 +7454,13 @@ func _drain_build_queue() -> void:
 	# on top of the recenter slice work.
 	if budget > 1 and not startup and not loading_active and Time.get_ticks_msec() < _sm_move_until:
 		budget = 1
-	# AC-0283 P3 (walkfix): the walk regime (crossing period >= WALK_CROSS_PERIOD_MS;
-	# pre-first-crossing = spawn = walk behavior). Only there does the slab-unit
-	# startup 3x3 completion pass run (see below); the flight keeps the legacy
-	# break-on-defer pace (its frame budget cannot take the extra dispatch).
-	var slow_cross := _prev_cross_ms <= 0 \
-			or float(_last_cross_ms - _prev_cross_ms) >= WALK_CROSS_PERIOD_MS
-	var startup3x := startup and slow_cross
-	# AC-0160 run 2: the startup budget used to be 2x drain_budget_ms
-	# (60 ms) — but the spawn frame dispatches ALL nine 3x3 builds and each
-	# dispatch costs ~30-50 ms of main-thread strip/nbs work, so 60 ms cut
-	# the frame off after ~2 dispatches and the tail re-dispatched on the
-	# first-landing frame (cascade-blocked) — measured 3x3: 4.5 s. The
-	# 12-unit budget is the real cap now; the time budget only bounds the
-	# trickle (post-startup) as before.
-	var budget_us := int(1e9 if startup else drain_budget_ms * 1000)
-	if startup3x:
-		# AC-0283 P3 (walkfix): the walk's slab dispatches are ~1.5-2 ms —
-		# the unbounded 1e9 let one frame run the whole 12-unit budget
-		# (~24 ms); the pass time-caps instead (the unit budget + defer cap
-		# are the secondary bounds).
-		budget_us = int(DRAIN_STARTUP_PASS_BUDGET_MS * 1000)
+	# AC-0313: the AC-0283 P3 walk regime (slow_cross / startup3x) and the
+	# unbounded `1e9 if startup` time budget are GONE — the drain is ALWAYS
+	# time-capped at drain_budget_ms (the loading window keeps its own
+	# LOAD_DRAIN_BUDGET_MS loop above; the 5x5 startup burst machinery stays
+	# — deferred to AC-0293). No main-thread blocking build pass after the
+	# player is active.
+	var budget_us := int(drain_budget_ms * 1000)
 	# AC-0160: windowed pool scan. The drain scans buckets 0.._drain_win_b
 	# only (spawn-fast covers the spawn ring at b1_eff+2); the trickle window
 	# grows one bucket per DRAIN_WIN_PACE_MS (wall clock — was 15 frames)
@@ -7693,7 +7545,7 @@ func _drain_build_queue() -> void:
 				if not _build_ready(int(e["cx"]), int(e["cz"])):
 					load_phase1_ready_fail += 1
 					continue
-				var s := _grid_score(e)  # AC-0257: the bake order (layer, taxi)
+				var s := _grid_score(e)  # AC-0313: the bake order (taxi, layer)
 				if s < ls:
 					ls = s
 					le = e
@@ -7706,15 +7558,11 @@ func _drain_build_queue() -> void:
 			# slab is dispatched and the entry STAYS queued for the rest.
 			var sih := _hslab_best_pending_cached(lc)
 			if sih < 0:
-				# AC-0263 spec (user rules 2+4): a windowed -1 is not a
-				# completion - hold the entry (no remove; the -1 must never
-				# reach the dispatch below). The pick scored it lowest, so
-				# no window-visible candidate exists - end the pass (the
-				# entry re-picks next frame, when the window opens).
-				if not _lod_windowed_for(lc):
-					_remove_entry(le)
-					continue
-				break
+				# AC-0263 (AC-0313): the probe is always FULL — a -1 IS
+				# completion; the entry is freed and the loop re-picks
+				# (the AC-0263 windowed -1 hold is gone with the Y-window).
+				_remove_entry(le)
+				continue
 			var _lw_deferred := _build_unit_hslab(lc, int(le["cx"]), int(le["cz"]), sih)
 			_loadwin_maxinf = maxi(_loadwin_maxinf, threadmesh_inflight.size())
 			if _lw_deferred:
@@ -7746,7 +7594,7 @@ func _drain_build_queue() -> void:
 					continue
 				if _spawn_fast:
 					continue
-				var s := _grid_score(e)  # AC-0257: the bake order (layer, taxi)
+				var s := _grid_score(e)  # AC-0313: the bake order (taxi, layer)
 				if s < ds:
 					ds = s
 					de = e
@@ -7778,63 +7626,14 @@ func _drain_build_queue() -> void:
 		_drain_units_last = units  # AC-0231
 		_col_drain_step()
 		return
-	# AC-0283 P3 (walkfix): the WALK-REGIME startup 3x3 completion pass. The
-	# Y-window (AC-0263) makes every non-tier-0 column build only its
-	# player-slab +/-1 window while the player moves; the legacy FULL-COLUMN
-	# dispatch unit baked the whole column whenever the window slab was
-	# pending, so the startup 3x3 (mesh_built = FULL probe) completed in
-	# ~9 column dispatches. The P2 slab unit broke that invariant: the 3x3's
-	# 8 windowed neighbors only ever bake their 3 window slabs, mesh_built
-	# never flips, _startup_pending stays true, _spawn_fast latches, the
-	# recenter walk never runs (no stubs) and the data feed dies — the sim
-	# disc plateaus at burst-only coverage (measured: 5 slabs/s, c3 frozen
-	# at 2-3, tg_inf 0 for 60 s). This pass restores the invariant directly:
-	# the 9 columns around the lead, probed with the FULL (non-windowed)
-	# probe, dispatched slab by slab until all 9 are mesh_built. It runs
-	# only in the walk regime (slow_cross) and only while startup (the 3x3
-	# still owes); a per-slab defer skips the column for the frame (a defer
-	# must not kill the pass — dedup/nbs/box defers are EXPECTED here); the
-	# TM-cap defer (2) stops the pass for the frame (the pool saturates and
-	# the landings free slots). Bounded by the shared unit budget + the
-	# DRAIN_STARTUP_PASS_BUDGET_MS time cap + the defer cap.
-	var _dq_skip: Dictionary = {}
-	var _dq_defers := 0
-	var x3_units := 0
-	if startup3x and budget > 0:
-		while budget > 0 and Time.get_ticks_usec() - t0 < budget_us \
-				and _dq_defers < DRAIN_DEFER_MAX_PER_FRAME:
-			var x3u := 0
-			for i3 in range(9):
-				if x3u > 0:
-					break
-				var k3 := _key(last_pcx + (i3 % 3) - 1, last_pcz + (i3 / 3) - 1)
-				if _dq_skip.has(k3):
-					continue
-				var c3 = chunks.get(k3)
-				if c3 == null or c3.data.is_empty() or c3.mesh_built:
-					continue
-				if not _build_ready(int(c3.cx), int(c3.cz)):
-					continue
-				var s3 := _hslab_best_pending(c3, false)
-				if s3 < 0:
-					continue
-				var def3 := _build_unit_hslab(c3, int(c3.cx), int(c3.cz), s3)
-				if def3:
-					_dq_skip[k3] = true
-					if _hslab_last_defer == 2:
-						_dq_defers = DRAIN_DEFER_MAX_PER_FRAME  # TM full: stop this frame
-					else:
-						_dq_defers += 1
-				else:
-					x3u = 1
-					_dq_skip[k3] = true
-			if x3u > 0:
-				budget -= 1
-				x3_units += 1
-			else:
-				break
-	if x3_units > 0:
-		units += x3_units  # the final perf block below accounts for it
+	# AC-0313: the AC-0283 P3 WALK-REGIME startup 3x3 completion pass is
+	# GONE — it existed because the Y-window (AC-0263) left the 3x3's
+	# windowed neighbors forever window-pending (mesh_built never flipped,
+	# _startup_pending latched, the data feed starved). With FULL columns
+	# (no window) every column completes and frees its entry, the trickle
+	# drain reaches the crossed 3x3 on its own, and no special pass is
+	# needed — and no main-thread blocking build pass runs after the
+	# player is active.
 	while budget > 0:
 		if Time.get_ticks_usec() - t0 > budget_us:
 			break
@@ -7846,7 +7645,7 @@ func _drain_build_queue() -> void:
 		# pool/score and skips the rescan + rescore.
 		# AC-0262: the steady pass is high-band-only (see _collect_pool's
 		# high_only note) — the wave's entries no longer hold the top pick.
-		var bpick := _pick_build_cached(maxb, false, true, _dq_skip)
+		var bpick := _pick_build_cached(maxb, false, true)
 		var best_e: Dictionary = bpick["e"]
 		var best_c: Node3D = bpick["c"]
 		var best_s: float = bpick["s"]
@@ -7858,48 +7657,44 @@ func _drain_build_queue() -> void:
 			# _build_unit/_remove_entry). In-radius READY ALWAYS wins (this pass
 			# only runs when the first pass found nothing); the forward band is
 			# exactly 2r+1 entries, so the pass is bounded.
-			var fpick := _pick_build_cached(maxb, true, false, _dq_skip)
+			var fpick := _pick_build_cached(maxb, true, false)
 			if not (fpick["e"] as Dictionary).is_empty() and float(fpick["s"]) < best_s:
 				best_s = float(fpick["s"])
 				best_e = fpick["e"]
 				best_c = fpick["c"]
 				best_from_fb = true
 		if best_c != null:
-			# AC-0261 (AC-0263, AC-0283 P3): the main build lane is the
-			# REAL band only (taxi ≤ band0_r, or the tier-0 set — the
-			# section's slabs outrank the rings via the score prefix). An
-			# out-of-band top pick blocks the high dispatch for the frame
-			# (the unit falls to the data pass below); the entry stays queued
-			# and is re-picked whenever an in-band entry goes ready (in-band
-			# entries always out-score it on taxi). The halo band (band0_r,
-			# render_radius) is the slab wave's (its avg LOD is final there);
-			# the WAVE 3 catch-up upgrades a low-holding column when it ENTERS
-			# the real band (per-slab).
+			# AC-0261 (AC-0263, AC-0283 P3, AC-0313): the main build lane is
+			# the REAL band only (taxi ≤ band0_r — the tier-0 set's score
+			# prefix is gone; inside-out, the innermost real-band column
+			# always out-scores the rest on taxi). An out-of-band top pick
+			# blocks the high dispatch for the frame (the unit falls to the
+			# data pass below); the entry stays queued and is re-picked
+			# whenever an in-band entry goes ready (in-band entries always
+			# out-score it on taxi). The halo band (band0_r, render_radius)
+			# is the slab wave's (its avg LOD is final there); the WAVE 3
+			# catch-up upgrades a low-holding column when it ENTERS the real
+			# band (per-slab).
 			var dxg := int(best_e["cx"]) - last_pcx
 			var dzg := int(best_e["cz"]) - last_pcz
 			if not _is_real_col(dxg, dzg):
 				best_c = null
 				perf_high_gate_holds_n += 1
 		if best_c != null:
-			# AC-0263: the build unit is ONE SLAB (the (layer, taxi) ring
-			# order; the tier-0 section's slabs first — the score prefix).
+			# AC-0263 (AC-0313): the build unit is ONE SLAB — within a
+			# column in Y-distance order from the player's slab (the (taxi,
+			# layer) order: the innermost column first, its slabs fanned).
 			# A high-complete column (the probe owes nothing — a landing
 			# raced the pick) frees its queue entry; a pending column
 			# dispatches its best slab and STAYS queued (re-picked next
 			# frame; the in-flight dedup paces one slab per column).
 			var sih := _hslab_best_pending_cached(best_c)
 			if sih < 0:
-				# AC-0263 spec (user rules 2+4, 2026-09-13): the probe -1 is
-				# only a genuine "column complete" when the probe was FULL
-				# (non-windowed). A WINDOWED -1 (a passed column while the ahead lead is active) proves nothing about
-				# the slabs outside the player-slab window — removing the
-				# entry on one strands the column (measured: the spawn 3x3 removed while the player sat
-				# at pys=-1 in the void; the floor never built; the re-queue hit
-				# the same windowed -1 again). Hold the entry: u stays 0, the
-				# data pass below still runs, and the entry re-picks when the
-				# window opens (the player stops or the lead drops).
-				if not _lod_windowed_for(best_c):
-					_remove_entry(best_e)
+				# AC-0263 (AC-0313): the probe is always FULL — a -1 IS a
+				# genuine "column complete"; the entry is freed and the
+				# frame ends or falls to the data pass (the AC-0263 windowed
+				# -1 hold is gone with the Y-window).
+				_remove_entry(best_e)
 			else:
 				var deferred := _build_unit_hslab(best_c, int(best_e["cx"]), int(best_e["cz"]), sih)
 				if not deferred and _picklog:
@@ -7913,19 +7708,14 @@ func _drain_build_queue() -> void:
 					# fallback (AC-0263: there is no sync build left).
 					break
 				u = 1
-		# AC-0283 P3 (walkfix): in the walk regime the data pass ALSO runs on
-		# a build-dispatched iteration when the TG pool is fully DRAINED. The
-		# legacy unit (one full column = 24 slabs) drained the ready set in
-		# ~1 frame, so the frame flipped to data mode and the TG feed ran;
-		# at the slab unit the build lane is almost always owed (the tier-0
-		# full-column debt + the windowed window slabs) and the u==0 gate
-		# starved the forward feed to the burst train alone. Re-enqueuing on
-		# an empty TG pool keeps the 2-slot pipeline fed (~16-20 cols/s, more
-		# than the ~8 cols/s rim growth) and self-limits (the pool refills
-		# for the whole gen). The flight (fast crossings) keeps the u==0
-		# gate: its TG is already burst-fed and its 17.5 ms frame budget
-		# cannot take the extra enqueue work.
-		if (u == 0 or (slow_cross and threadgen_inflight.size() == 0)) \
+		# AC-0313: the AC-0283 P3 walk-regime TG-empty data-feed extension
+		# is GONE — it existed because the slab unit + windowed debt kept
+		# the build lane almost always owed (u > 0 every frame), starving
+		# the legacy u==0 data gate to the burst train alone. With FULL
+		# columns (AC-0313) each column completes and frees its entry, so
+		# the legacy u==0 gate works as it did with the full-column unit:
+		# a frame that dispatches no build unit runs the data pass.
+		if u == 0 \
 				and (gen_budget_ms < 0 or gen_used_ms < gen_budget_ms):
 			# AC-0079 round 3: scored DATA pick. The spec requires the lowest-score
 			# no-data entry (not FIFO), else forward leading-edge data only arrives
@@ -9151,7 +8941,7 @@ func _reentry_flip_high(c: Node3D, key: String) -> void:
 	if flipped > 0:
 		_low_probe_invalidate(c)
 	_hslab_probe_invalidate(c)
-	c.mesh_built = _hslab_best_pending(c, false) < 0  # AC-0263 spec: FULL probe
+	c.mesh_built = _hslab_best_pending(c) < 0  # AC-0263 spec (AC-0313): FULL probe
 	if timing or _tm_debug:
 		print("FLIPBACK %s flipped=%d mesh_built=%d" % [key, flipped, int(c.mesh_built)])
 
@@ -9223,8 +9013,9 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	# (up to REBUILD_COVER_L1 chunks behind, forced-refresh cadence).
 	_last_recenter_ms = _now_ms
 	if _cross > 0:
-		_prev_cross_ms = _last_cross_ms
 		_last_cross_ms = _now_ms
+		# AC-0313: the AC-0283 P3 crossing-period bookkeeping
+		# (_prev_cross_ms) is GONE with the walk regime.
 	# AC-0277: the fast predicate measures between PLAYER chunks (pcx here
 	# is the recenter CENTER - possibly the ahead target - and must not be
 	# stored: a 1-chunk crossing toward an ahead target already 1 chunk in

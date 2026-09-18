@@ -524,7 +524,11 @@ func _continue_slot(slot: int) -> void:
 	else:
 		target = world.spawn_point()
 	world.recenter(target.x, target.z, true, target.y)
-	await _await_core_3x3(target, 3000)
+	# AC-0313 clause 4 as CORRECTED: the continue path waits for the SAME
+	# sim taxi diamond (taxi <= band0_r) that the fresh-spawn path waits
+	# for — the continue flow has no loading window, so this wait is the
+	# whole activation gate here.
+	await _await_sim_band(target, 3000)
 	player = _spawn_player()
 	_restore_player(ps if height_ok else {})
 	if Game.world != null:
@@ -562,7 +566,17 @@ func start_game(seed: int) -> void:
 	var spawn: Vector3 = world.spawn_point()
 	world.recenter(spawn.x, spawn.z, true)
 	world.start_loading("Generating world...")  # AC-0178: first-spawn loading window
-	await _await_spawn_floor(spawn, 300)
+	# AC-0313 (the load-screen gate; clause 4 as CORRECTED — "instead of
+	# 3x3 let's do sim taxi distance"): the player activates only after the
+	# SIM TAXI DIAMOND (taxi <= band0_r = sim; 41 columns at sim 4) is
+	# mesh_built by the NORMAL streaming machinery — the same condition
+	# that closes the loading screen (world._loading_target_col), so this
+	# wait IS the load->activation wall (the load arm's simband metric).
+	# The old single-column wait (_await_spawn_floor, 300 frames) is gone
+	# from this path (the helper stays — the harness arms use it). No
+	# special startup pass exists: the (taxi, layer) order builds the
+	# inner columns first anyway.
+	await _await_sim_band(spawn, 3000)
 	player = _spawn_player()
 	Game.start()
 	_apply_aw_query()
@@ -1544,6 +1558,43 @@ func _await_core_3x3(where: Vector3, max_frames: int) -> void:
 		await get_tree().physics_frame
 		waited += 1
 	print("CORE3X3 not fully built after %d frames" % max_frames)
+
+# AC-0313 clause 4 as CORRECTED (the user's "instead of 3x3 let's do sim
+# taxi distance"): the ACTIVATION wait — every column of the SIM TAXI
+# DIAMOND around `where` (taxi <= world.band0_r = sim; 41 columns at sim 4)
+# meshed with data. This is the SAME set that closes the loading screen
+# (world._loading_target_col / _loading_band_meshed), so both places agree
+# and the wait IS the load->activation wall (the load arm's simband metric).
+# max_frames (3000 at the call sites) is a hang guard, not a budget: the
+# measured wall on this box is ~2.1 s (R24 user config) / ~1.0 s (R4) vs
+# the 3000 physics frames (50 s at 60 fps) cap — ~24x headroom even before
+# a slow box's margin, so the cap cannot realistically fire (AC-0313 clause
+# 4 correction re-check: the diamond is 4.5x the 3x3's work but the 3x3
+# wall was ~3.2–4.0 s, the cap was sized for that, and the measured
+# diamond wall came in at ~2.1 s — the loading pools saturate the 6-thread
+# mesh lane). The warning print stays for the impossible case.
+func _await_sim_band(where: Vector3, max_frames: int) -> void:
+	var pcx := int(floorf(where.x / 16.0))
+	var pcz := int(floorf(where.z / 16.0))
+	var r: int = int(world.band0_r)  # world is untyped here — no := inference
+	var waited := 0
+	while waited < max_frames:
+		var allb := true
+		for dx in range(-r, r + 1):
+			for dz in range(-r, r + 1):
+				if absi(dx) + absi(dz) > r:
+					continue
+				var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
+				if c == null or c.data.is_empty() or not c.mesh_built:
+					allb = false
+					break
+			if not allb:
+				break
+		if allb:
+			return
+		await get_tree().physics_frame
+		waited += 1
+	print("SIMBAND not fully built after %d frames" % max_frames)
 
 func _occl_stab() -> PackedByteArray:
 	var stab := PackedByteArray()

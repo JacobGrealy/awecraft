@@ -65,9 +65,8 @@ var midstart_val: Label
 var dev_page: VBoxContainer
 # AC-0260 fix: the perf knobs are SpinBoxes (typeable — the user wanted to
 # enter a number, not fight a slider; the HSlider rows also misbehaved in
-# the broken tab layout).
-var tier0_spin: SpinBox
-var tier0_val: Label
+# the broken tab layout). (AC-0313: the tier-0 radius row is gone with the
+# tier-0 set — see the "Tier0Row" removal below.)
 var gen_spin: SpinBox
 var gen_val: Label
 var mesh_spin: SpinBox
@@ -238,9 +237,9 @@ func _ready() -> void:
 	dev_page.add_theme_constant_override("separation", 6)
 	opt_vbox.remove_child(chunk_row)
 	dev_page.add_child(chunk_row)
-	var t0r := _mk_dev_spin_row(dev_page, "Tier0Row", "Tier-0 radius (full-high columns)", 0.0, float(Settings.TIER0_RADIUS_MAX))
-	tier0_spin = t0r[0]
-	tier0_val = t0r[1]
+	# AC-0313: the "Tier0Row" Developer spinbox is GONE with the tier-0 set
+	# (the real band taxi ≤ sim is the footing guarantee; the sim floor is
+	# 4 in Settings.SIM_MIN).
 	var genr := _mk_dev_spin_row(dev_page, "GenThreadsRow", "Worker threads gen (0 = auto)", 0.0, float(Settings.WORKER_THREADS_MAX))
 	gen_spin = genr[0]
 	gen_val = genr[1]
@@ -271,7 +270,6 @@ func _ready() -> void:
 	dof_amount_spin = dofa[0]
 	dof_amount_val = dofa[1]
 	dof_amount_spin.step = 0.01
-	tier0_spin.value_changed.connect(_on_tier0_changed)
 	gen_spin.value_changed.connect(_on_gen_threads_changed)
 	mesh_spin.value_changed.connect(_on_mesh_threads_changed)
 	subcruise_spin.value_changed.connect(_on_subcruise_changed)
@@ -570,8 +568,7 @@ func _sync_controls() -> void:
 	# AC-0261: the low-start slider spans the visible band [sim, render].
 	_sync_lowstart_range()
 	# AC-0257: the Developer tab rows (AC-0260 fix: SpinBoxes).
-	tier0_spin.value = float(int(Settings.values.get("tier0_radius", 0)))
-	tier0_val.text = str(int(tier0_spin.value))
+	# (AC-0313: the tier0_spin/tier0_val refresh is gone with the row.)
 	gen_spin.value = float(int(Settings.values.get("worker_gen_threads", 0)))
 	gen_val.text = "auto" if int(gen_spin.value) == 0 else str(int(gen_spin.value))
 	mesh_spin.value = float(int(Settings.values.get("worker_mesh_threads", 0)))
@@ -677,14 +674,6 @@ func _on_chunk_changed(v: float) -> void:
 		return
 	chunk_val.text = str(int(v))
 	Settings.set_value("chunks_per_frame", int(v))
-
-
-func _on_tier0_changed(v: float) -> void:
-	if _syncing:
-		return
-	tier0_val.text = str(int(v))
-	Settings.set_value("tier0_radius", int(v))
-	Settings.apply_tier0_radius()
 
 
 func _on_gen_threads_changed(v: float) -> void:

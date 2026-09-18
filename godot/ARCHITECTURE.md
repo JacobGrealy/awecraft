@@ -184,6 +184,34 @@ Match these; do not improvise a different approach in a task.
   multi-thousand-deep build backlog. Permanent counters: `star_seed_count/us`,
   `promo_enq_count`, `promo_land_count/ms`, `star_late_landings_promo` (expect 0 — the
   retain-swap never HIDEs), `hslab_defer_settle`.
+- **Build order (AC-0313)**: every real-band column (taxi ≤ `band0_r` — the sim band) is
+  built as a **FULL 24-slab column, inside-out**: the bake score is `(taxi, layer)` —
+  across columns the innermost unbuilt column first (a pure function of the live
+  recenter anchor, no timer or mode), within a column the slabs go in Y-distance from
+  the player's slab (`_layer_rank_of`: 0 = player slab, then −1, +1, −2, +2, …). A built
+  column is complete and its queue entry is freed — there is no window rework.
+  `sim_dist` has a floor of **4** (`Settings.SIM_MIN`), so the player's 3x3 (taxi ≤ 2)
+  is always inside the real band: the band itself is the footing guarantee. The
+  AC-0263 Y-window (the player-slab ±1 windowed probe while moving), the AC-0283 P3
+  walk regime (the startup 3x3 completion pass, the TG-empty data-feed extension, the
+  `1e9 if startup` time budget, the 12-unit spawn budget) and the tier-0 set
+  (`tier0_r` / `_is_tier0_col` / the `tier0_radius` setting + Developer-menu row + the
+  wave-start gate) are all GONE: after the player is active the drain is ALWAYS the
+  wall-clock paced unit budget + the `drain_budget_ms` time cap — no main-thread
+  blocking build pass.
+- **Load screen (AC-0313, clause 4 as CORRECTED)**: the loading window closes the
+  moment the **SIM TAXI DIAMOND** around the load anchor — every column with
+  `taxi(dx,dz) <= band0_r` (= sim), 41 columns at sim 4 — is `mesh_built` by the
+  NORMAL streaming machinery, and `start_game` (fresh spawn) / `_continue_slot`
+  (continue — no loading window there) activate the player only after the SAME
+  condition (`_await_sim_band`, the diamond wait; `_await_core_3x3` survives as
+  the harness arms' settling helper) — the `simband` wall (the load arm's
+  `simband_ms`, renamed from `spawn3x3_ms`) IS the load→activation wall. The
+  original clause-4 text ("the 9 spawn chunks") predates the user's answer —
+  "instead of 3x3 let's do sim taxi distance" (recorded on AC-0312's notes by
+  mistake; the CLAUSE 4 CORRECTION note on AC-0313 is the requirement). There is
+  no special startup build pass (the 5x5 startup data *burst* is a separate
+  mechanism, deferred to AC-0293).
 - **`gdext/lighting.cpp` (`AweLighting`) and the classic light pull are TEST-ONLY
   references** (AC-0283 P4). They exist so arms can compare against the old kernel. Never
   wire them into game code; the last live consumers were removed by AC-0297.
