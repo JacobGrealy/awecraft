@@ -227,12 +227,18 @@ Match these; do not improvise a different approach in a task.
   `sim_dist` has a floor of **4** (`Settings.SIM_MIN`), so the player's 3x3 (taxi ≤ 2)
   is always inside the real band: the band itself is the footing guarantee. The
   AC-0263 Y-window (the player-slab ±1 windowed probe while moving), the AC-0283 P3
-  walk regime (the startup 3x3 completion pass, the TG-empty data-feed extension, the
+  walk regime (the startup 3x3 completion pass, the `slow_cross` cadence, the
   `1e9 if startup` time budget, the 12-unit spawn budget) and the tier-0 set
   (`tier0_r` / `_is_tier0_col` / the `tier0_radius` setting + Developer-menu row + the
   wave-start gate) are all GONE: after the player is active the drain is ALWAYS the
   wall-clock paced unit budget + the `drain_budget_ms` time cap — no main-thread
-  blocking build pass.
+  blocking build pass. The AC-0283 P3 **TG-empty data feed** was removed with that
+  regime and RESTORED by AC-0322 as a stateless part of the steady drain (the
+  data pass also runs on a build-dispatched iteration when the TG pool is fully
+  drained — the slab unit frees a queue entry only once per 24 slabs, so the
+  `u == 0` gate alone starved the TG pipeline to the column-completion rate and the
+  walk's taxi-8 sim disc plateaued at ~53%): the data supply is part of the
+  scheduler's contract, not a regime.
 - **Load screen (AC-0313, clause 4 as CORRECTED)**: the loading window closes the
   moment the **SIM TAXI DIAMOND** around the load anchor — every column with
   `taxi(dx,dz) <= band0_r` (= sim), 41 columns at sim 4 — is `mesh_built` by the

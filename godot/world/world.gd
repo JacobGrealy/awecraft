@@ -8060,14 +8060,25 @@ func _drain_build_queue() -> void:
 					# fallback (AC-0263: there is no sync build left).
 					break
 				u = 1
-		# AC-0313: the AC-0283 P3 walk-regime TG-empty data-feed extension
-		# is GONE — it existed because the slab unit + windowed debt kept
-		# the build lane almost always owed (u > 0 every frame), starving
-		# the legacy u==0 data gate to the burst train alone. With FULL
-		# columns (AC-0313) each column completes and frees its entry, so
-		# the legacy u==0 gate works as it did with the full-column unit:
-		# a frame that dispatches no build unit runs the data pass.
-		if u == 0 \
+		# AC-0322: the AC-0283 P3 TG-empty data feed is RESTORED. AC-0313
+		# removed it believing the FULL-column free-on-complete made the
+		# u==0 gate sufficient — but the build unit is ONE SLAB, so an
+		# entry frees once per 24 slabs and the high pool (real band +
+		# band A) is almost always owed while walking: u==1 every frame,
+		# the data pass runs at the column-completion rate (~5 cols/s),
+		# the 2-slot TG pipeline sits idle (tg_inf ~ 0) and the walk's
+		# taxi-8 sim disc plateaus at ~53-61% (AC-0312 profile + this
+		# ticket's before run). Re-enqueuing on a DRAINED TG pool keeps
+		# the pipeline fed (~16-20 cols/s, more than the ~5-8 cols/s rim
+		# growth) and self-limits: one enqueue per drained frame, the
+		# pool refills to threadgen_max, the break below ends the frame.
+		# The predicate is stateless (no slow_cross / no timer — the
+		# AC-0313 clause-5 rule), and the enqueue is a worker submit
+		# (µs main thread; the gen work was always going to run — only
+		# its innermost-first order is restored). On flight the recenter
+		# burst normally keeps the TG fed, so the drained-pool branch
+		# rarely fires there.
+		if (u == 0 or threadgen_inflight.size() == 0) \
 				and (gen_budget_ms < 0 or gen_used_ms < gen_budget_ms):
 			# AC-0079 round 3: scored DATA pick. The spec requires the lowest-score
 			# no-data entry (not FIFO), else forward leading-edge data only arrives
