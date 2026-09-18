@@ -10784,11 +10784,160 @@ func surface_top(x: int, z: int) -> int:
 				return y
 	return 0
 
+# AC-0324: the deterministic spawn search — the world decides where the
+# player starts (AC-0314's pad removal rides on this). The load gate
+# (main._await_sim_band) builds the SIM TAXI DIAMOND (taxi <= band0_r;
+# 41 columns at sim 4) before activation, so the search evaluates only
+# data the load gate guarantees — the footing is guaranteed.
+#
+# Per candidate column (cx, cz) — the centre cell x = cx*16+8, z = cz*16+8,
+# T = the topmost non-air cell of (x, z) (= the generator's effective
+# surface, the "terrain_height == surface top" contract), T_id its id:
+#   DRY      T_id != water and T >= SEA.
+#   SLOPED   max |T_nb - T| <= SPAWN_SLOPE_MAX_DH over the 4 CARDINAL
+#            neighbour CELLS (x±1, z), (x, z±1) (their topmost non-air
+#            cells; a canopy in a neighbour's cell counts — a conservative
+#            rejection beside a tree).
+#   UN-VEG   neither (x, T+1, z) (the feet cell) nor (x, T+2, z) (the head
+#            cell) is a tree/clutter id (log/leaves/rose/dandelion/banana
+#            — the gen veg + banana pass's writes).
+#
+# T0 = first column in (taxi, cx, cz) order passing all three, over the
+# INNER diamond taxi <= band0_r - 1 (every T0 candidate's 4 slope
+# neighbours are then inside the load-gate diamond — a boundary column's
+# outward neighbour data is timing-dependent and would make the search
+# non-deterministic). T1 = first DRY column in (taxi, cx, cz) order over
+# the full band (ignoring slope + veg) — the "no candidate passes"
+# fallback. T2 = highest-T column over the full band, (taxi, cx, cz)
+# tie-break — the last resort for a band-wide ocean (unreachable while
+# the pad exists: its centre cell is always dry at SPAWN_H).
+#
+# Deterministic: a pure function of (seed, band data) — no RNG. The result
+# is cached per world node and logged once (the SPAWNSEARCH line).
+const SPAWN_SLOPE_MAX_DH := 2
+
+var _spawn_search: Dictionary = {}
+
+func _spawn_search_ready() -> bool:
+	for taxi in range(band0_r + 1):
+		for dx in range(-taxi, taxi + 1):
+			var rem := taxi - absi(dx)
+			var dzs: Array = [rem] if rem == 0 else [-rem, rem]
+			for dz in dzs:
+				var c = chunks.get(_key(last_pcx + dx, last_pcz + dz))
+				if c == null or c.data.is_empty():
+					return false
+	return true
+
+# AC-0324: the search core — PURE (no node state, no RNG) over pre-gathered
+# candidate rows in (taxi, cx, cz) order. Each row:
+#   cx, cz, taxi, x, z — column + centre cell
+#   top, top_id — the centre cell's topmost non-air cell + its block id
+#   feet_id, head_id — the blocks at (x, top+1, z) / (x, top+2, z)
+#   nb — [top_w, top_e, top_s, top_n] of the 4 cardinal neighbour CELLS
+#        (-1 = not available; T0 rows always carry all 4 — the inner
+#        diamond guarantees them — outer rows carry -1 and are T0-
+#        ineligible via the "t0" flag, never via a skipped slope check)
+#   t0 — true for inner-diamond rows (taxi <= band0_r - 1)
+func _spawn_pick(rows: Array) -> Dictionary:
+	var veg := [WorldGen.B_LOG, WorldGen.B_LEAVES, WorldGen.B_ROSE, WorldGen.B_DANDELION, WorldGen.B_BANANA]
+	var t1: Dictionary = {}
+	var t2: Dictionary = {}
+	var t2_top := -1
+	for r in rows:
+		var top: int = int(r["top"])
+		var top_id: int = int(r["top_id"])
+		var dry: bool = top_id != WorldGen.B_WATER and top >= WorldGen.B_SEA
+		if t1.is_empty() and dry:
+			t1 = r
+		if top > t2_top:
+			t2 = r
+			t2_top = top
+		if dry and bool(r.get("t0", false)):
+			var ok_slope := true
+			var nb: Array = r["nb"]
+			for i in 4:
+				var nh: int = int(nb[i])
+				if nh >= 0 and absi(nh - top) > SPAWN_SLOPE_MAX_DH:
+					ok_slope = false
+					break
+			if ok_slope and int(r["feet_id"]) not in veg and int(r["head_id"]) not in veg:
+				return {"tier": 0, "row": r}
+	if not t1.is_empty():
+		return {"tier": 1, "row": t1}
+	return {"tier": 2, "row": t2}
+
+func _spawn_search_cell_top(x: int, z: int) -> int:
+	var y := Data.HEIGHT - 1
+	while y >= 0 and get_block(x, y, z) == 0:
+		y -= 1
+	return maxi(y, 0)
+
+# AC-0324: run (and cache) the deterministic spawn search. Empty until the
+# sim-band data guarantee holds; after activation the cache is final (a
+# fresh world has no edits).
+func spawn_search() -> Dictionary:
+	if not _spawn_search.is_empty():
+		return _spawn_search
+	if not _spawn_search_ready():
+		return _spawn_search
+	var r: int = band0_r
+	var rows: Array = []
+	for taxi in range(r + 1):
+		for dx in range(-taxi, taxi + 1):
+			var rem := taxi - absi(dx)
+			var dzs: Array = [rem] if rem == 0 else [-rem, rem]
+			for dz in dzs:
+				var cx2: int = last_pcx + dx
+				var cz2: int = last_pcz + dz
+				var x: int = cx2 * 16 + 8
+				var z: int = cz2 * 16 + 8
+				var top: int = _spawn_search_cell_top(x, z)
+				var row := {
+					"cx": cx2, "cz": cz2, "taxi": taxi, "x": x, "z": z,
+					"top": top, "top_id": get_block(x, top, z),
+					"feet_id": get_block(x, top + 1, z),
+					"head_id": get_block(x, top + 2, z),
+					"t0": taxi < r,
+				}
+				if taxi < r:
+					row["nb"] = [
+						_spawn_search_cell_top(x - 1, z),
+						_spawn_search_cell_top(x + 1, z),
+						_spawn_search_cell_top(x, z - 1),
+						_spawn_search_cell_top(x, z + 1),
+					]
+				else:
+					row["nb"] = [-1, -1, -1, -1]
+				rows.append(row)
+	var pick := _spawn_pick(rows)
+	var row: Dictionary = pick["row"]
+	_spawn_search = {
+		"tier": int(pick["tier"]),
+		"row": row,
+		"anchor": [last_pcx, last_pcz],
+		"sim": r,
+		"seed": Game.world_seed,
+	}
+	print("SPAWNSEARCH seed=%d anchor=[%d,%d] sim=%d col=[%d,%d] cell=[%d,%d] top=%d pos=[%.1f,%.1f,%.1f] tier=%d" % [
+		Game.world_seed, last_pcx, last_pcz, r,
+		int(row["cx"]), int(row["cz"]), int(row["x"]), int(row["z"]), int(row["top"]),
+		float(int(row["x"])) + 0.5, float(int(row["top"])) + 1.0, float(int(row["z"])) + 0.5,
+		int(pick["tier"])])
+	return _spawn_search
+
 # AC-0119 (AC-0263): the boot-time sync gen of the spawn chunk is GONE —
 # the surface top is the ANALYTIC heightmap (the spawn plateau is flat at
 # SPAWN_H by design: terrain_height == surface top there), and the startup
 # burst delivers the ground data (collision) before the player lands.
+# AC-0324: once the sim-band data is ready the searched column replaces
+# the analytic pad position (the pad itself stays in the gen until
+# AC-0314); pre-data callers keep the legacy (8, 8) anchor.
 func spawn_point() -> Vector3:
+	var s: Dictionary = spawn_search()
+	if not s.is_empty():
+		var row: Dictionary = s["row"]
+		return Vector3(float(int(row["x"])) + 0.5, float(int(row["top"])) + 1.0, float(int(row["z"])) + 0.5)
 	var top := WorldGen.terrain_height(WorldGen.SPAWN_X, WorldGen.SPAWN_Z, Game.world_seed)
 	return Vector3(WorldGen.SPAWN_X + 0.5, float(top) + 1.0, WorldGen.SPAWN_Z + 0.5)
 

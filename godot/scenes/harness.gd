@@ -295,9 +295,20 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			return
 		if logic == "player":
 			world.recenter(spawn.x, spawn.z, true)
-			await main._await_spawn_floor(spawn, 300)
+			# AC-0324: the spawn search needs the SIM BAND built (the load
+			# gate's set) — wait for it, not just the spawn column, so the
+			# player spawns at the searched column.
+			await main._await_sim_band(spawn, 3000)
 			player = main._spawn_player()
 			await _player_logic_test()
+			return
+		if logic == "spawnsearch":
+			# AC-0324: the deterministic spawn-search gate (spec.html) —
+			# fresh worlds per seed, the sim-band wait, the three
+			# conditions re-derived independently, determinism, footing,
+			# and the fallback tiers (real-band tier consistency +
+			# synthetic tables through the pure core).
+			await _spawnsearch_test()
 			return
 		if logic == "gamepad":
 			world.recenter(spawn.x, spawn.z, true)
@@ -1036,7 +1047,15 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		else:
 			print("ANIM_SHOT no water cell near spawn")
 	else:
-		await main._await_spawn_floor(spawn, 300)
+		# AC-0324: when the radius can hold the sim diamond (b0_eff >=
+		# band0_r) wait for the SIM BAND instead of the single spawn column —
+		# the spawn search is then ready and the shot shows the searched
+		# natural spawn. A radius that cannot hold the diamond keeps the
+		# single-column wait (the search is not ready; legacy pad spawn).
+		if world.b0_eff() >= int(world.band0_r):
+			await main._await_sim_band(spawn, 3000)
+		else:
+			await main._await_spawn_floor(spawn, 300)
 		player = main._spawn_player()
 		Game.start()
 
@@ -1044,7 +1063,12 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		# AC-0035: named-camera snapshot paths (top/iso/eyeup/...) skip the
 		# spawn above; G6-style shots need the player in-frame (viewmodel hand
 		# + player-light halo) so spawn on demand.
-		await main._await_spawn_floor(spawn, 300)
+		# AC-0324: same sim-band-vs-single-column choice as the default shot
+		# above.
+		if world.b0_eff() >= int(world.band0_r):
+			await main._await_sim_band(spawn, 3000)
+		else:
+			await main._await_spawn_floor(spawn, 300)
 		player = main._spawn_player()
 		Game.start()
 
@@ -1252,7 +1276,10 @@ func _batt_run_mode(mode: String, spawn: Vector3, seed_env: String) -> void:
 	match mode:
 		"player":
 			world.recenter(spawn.x, spawn.z, true)
-			await main._await_spawn_floor(spawn, 300)
+			# AC-0324: the spawn search needs the SIM BAND built (the load
+			# gate's set) — wait for it, not just the spawn column, so the
+			# player spawns at the searched column.
+			await main._await_sim_band(spawn, 3000)
 			player = main._spawn_player()
 			await _player_logic_test_body()
 		"pausemenu":
@@ -1810,6 +1837,274 @@ func _player_logic_test_body() -> void:
 		"sprint_latch_back": latch_cleared_on_back,
 		"sprint_fov_fly": roundf(fov_fly * 100.0) / 100.0,
 	})
+
+
+# AC-0324: the deterministic spawn-search gate (the ticket's PROBE).
+# For >=3 seeds (default 44,1,7; AWECRAFT_SPAWN_SEEDS="a,b,c" overrides),
+# each on a FRESH world: the load gate's sim-band wait, then the world's
+# spawn search — with the arm INDEPENDENTLY re-deriving, from the same
+# live band data:
+#   (a) the chosen column satisfies its tier's conditions — T0: dry +
+#       slope + un-vegetated (the 4 cardinal neighbour cells); T1: dry;
+#       T2: highest top. The tier itself is re-derived over the whole
+#       band (T1 only if no T0 candidate exists; T2 only if no dry
+#       column exists).
+#   (b) determinism — the same seed on a second fresh world picks the
+#       same column + top (the search is a pure function of (seed, band
+#       data) — no RNG).
+#   (c) the real player stands on solid ground at the searched spawn
+#       (is_on_floor, a solid cell under the feet, no water at the
+#       feet/body).
+#   (d) the fallback tiers fire when no candidate passes — the real-band
+#       tier consistency above + synthetic tables through the pure core
+#       (ChunkWorld._spawn_pick) that force T1 (inner diamond all wet,
+#       first full-band dry row vegged + steep) and T2 (whole band wet).
+# Every orphan world node is freed between seeds (the battery's
+# range-mode pattern) so the probe does not accumulate streaming worlds.
+func _spawnsearch_test() -> void:
+	var t0 := Time.get_ticks_msec()
+	var seeds_env := OS.get_environment("AWECRAFT_SPAWN_SEEDS")
+	var seeds: Array = [44, 1, 7]
+	if seeds_env != "":
+		seeds = []
+		for sv in seeds_env.split(","):
+			if sv.strip_edges() != "":
+				seeds.append(sv.strip_edges().to_int())
+	var per: Array = []
+	var ok := true
+	# the pure-core synthetic tables run FIRST — the seed loop frees every
+	# world (incl. the boot one) as it goes, and _spawn_pick needs a live
+	# world node to hang off (it is pure; the node is just a container).
+	var syn: Dictionary = _spawnsearch_synthetic()
+	ok = bool(syn["ok"])
+	for si in seeds.size():
+		var seed: int = int(seeds[si])
+		var r1: Dictionary = await _spawnsearch_one_seed(seed, true)
+		var r2: Dictionary = await _spawnsearch_one_seed(seed, false)
+		var det_same: bool = r1["col"] == r2["col"] and int(r1["top"]) == int(r2["top"])
+		ok = ok and bool(r1["cond_ok"]) and bool(r1["tier_ok"]) and bool(r1["ground_ok"]) and det_same
+		per.append({
+			"seed": seed,
+			"col": r1["col"],
+			"cell": r1["cell"],
+			"top": r1["top"],
+			"pos": r1["pos"],
+			"tier": r1["tier"],
+			"tier_ok": r1["tier_ok"],
+			"det_same": det_same,
+		})
+	Debug.result({
+		"ok": ok,
+		"per_seed": per,
+		"synthetic": syn,
+		"ms": Time.get_ticks_msec() - t0,
+	})
+	get_tree().quit()
+
+# AC-0324: free every world node still in Main's tree (the orphans the
+# battery's double _create_game_nodes leaks) — the probe must not
+# accumulate streaming worlds across its seeds.
+func _ss_free_orphans() -> void:
+	for c in main.get_children():
+		if c == main.world or c == main.player:
+			continue
+		var sc = c.get_script()
+		if sc != null and String(sc.resource_path).ends_with("world/world.gd"):
+			c.free()
+
+# AC-0324: one fresh world + the sim-band wait + the spawn search + the
+# independent re-verification (see _spawnsearch_test). full=false skips
+# the real-player footing check (the determinism run only needs the
+# column) to keep the wall inside the 60 s budget.
+func _spawnsearch_one_seed(seed: int, full: bool) -> Dictionary:
+	# the boot world (the _run_game one) or a leftover world is about to
+	# be orphaned by _create_game_nodes — free it now (the new world's
+	# _ready re-points Game.world).
+	if main.world != null:
+		main.world.free()
+		main.world = null
+	_ss_free_orphans()
+	Game.new_world(seed)
+	main._create_game_nodes()
+	world.fluid_sim_enabled = false
+	var anchor: Vector3 = world.spawn_point()  # pre-data: the legacy pad anchor
+	world.recenter(anchor.x, anchor.z, true)
+	await main._await_sim_band(anchor, 3000)
+	var s: Dictionary = world.spawn_search()
+	if s.is_empty():
+		main._free_game_nodes()
+		await get_tree().process_frame
+		_ss_free_orphans()
+		return {"col": null, "cell": null, "top": -1, "pos": null, "tier": -1,
+				"cond_ok": false, "tier_ok": false, "ground_ok": false,
+				"why": "search_not_ready"}
+	var row: Dictionary = s["row"]
+	var x: int = int(row["x"])
+	var z: int = int(row["z"])
+	var top: int = int(row["top"])
+	var tier: int = int(s["tier"])
+	var veg: Array = [WorldGen.B_LOG, WorldGen.B_LEAVES, WorldGen.B_ROSE, WorldGen.B_DANDELION, WorldGen.B_BANANA]
+	# (a) the three conditions at the chosen cell, re-derived here
+	var top_id: int = world.get_block(x, top, z)
+	var dry: bool = top_id != WorldGen.B_WATER and top >= Data.SEA
+	var top_matches: bool = _ss_cell_top(x, z) == top
+	var vegged: bool = veg.has(world.get_block(x, top + 1, z)) or veg.has(world.get_block(x, top + 2, z))
+	var slope_ok: bool = true
+	for nb2 in [[x - 1, z], [x + 1, z], [x, z - 1], [x, z + 1]]:
+		var nt: int = _ss_cell_top(int(nb2[0]), int(nb2[1]))
+		if nt >= 0 and absi(nt - top) > int(world.SPAWN_SLOPE_MAX_DH):
+			slope_ok = false
+	# (d) the tier over the real band, re-derived (same data the world
+	# gathered — the arm walks the band itself)
+	var band: Array = []
+	var br: int = int(world.band0_r)
+	for taxi2 in range(br + 1):
+		for dx2 in range(-taxi2, taxi2 + 1):
+			var rem2 := taxi2 - absi(dx2)
+			var dzs2: Array = [rem2] if rem2 == 0 else [-rem2, rem2]
+			for dz2 in dzs2:
+				var cx3: int = int(world.last_pcx) + dx2
+				var cz3: int = int(world.last_pcz) + dz2
+				var xx: int = cx3 * 16 + 8
+				var zz: int = cz3 * 16 + 8
+				var tt: int = _ss_cell_top(xx, zz)
+				band.append({"taxi": taxi2, "x": xx, "z": zz, "top": tt,
+						"top_id": world.get_block(xx, tt, zz)})
+	var t0_exists: bool = false
+	for c2 in band:
+		if int(c2["taxi"]) >= br:
+			continue
+		var cidry: bool = int(c2["top_id"]) != WorldGen.B_WATER and int(c2["top"]) >= Data.SEA
+		if not cidry:
+			continue
+		var cslope: bool = true
+		for nb3 in [[int(c2["x"]) - 1, int(c2["z"])], [int(c2["x"]) + 1, int(c2["z"])], [int(c2["x"]), int(c2["z"]) - 1], [int(c2["x"]), int(c2["z"]) + 1]]:
+			var ntt: int = _ss_cell_top(int(nb3[0]), int(nb3[1]))
+			if ntt >= 0 and absi(ntt - int(c2["top"])) > int(world.SPAWN_SLOPE_MAX_DH):
+				cslope = false
+				break
+		if cslope and not veg.has(world.get_block(int(c2["x"]), int(c2["top"]) + 1, int(c2["z"]))) \
+				and not veg.has(world.get_block(int(c2["x"]), int(c2["top"]) + 2, int(c2["z"]))):
+			t0_exists = true
+			break
+	var any_dry: bool = false
+	for c2 in band:
+		if int(c2["top_id"]) != WorldGen.B_WATER and int(c2["top"]) >= Data.SEA:
+			any_dry = true
+			break
+	var tier_expected: int = 0 if t0_exists else (1 if any_dry else 2)
+	var tier_ok: bool = tier == tier_expected
+	var cond_ok: bool = top_matches and (
+			(tier == 0 and dry and slope_ok and not vegged) or
+			(tier == 1 and dry) or
+			(tier == 2))
+	var ground_ok: bool = true
+	if full:
+		# (c) the real player stands on solid ground, in no water
+		player = main._spawn_player()
+		var p2: Node3D = player
+		for i in 40:
+			await get_tree().physics_frame
+		var on_floor: bool = p2.is_on_floor()
+		var fx: int = int(floorf(p2.position.x))
+		var fy: int = int(floorf(p2.position.y))
+		var fz: int = int(floorf(p2.position.z))
+		var below: int = world.get_block(fx, fy - 1, fz)
+		var bb = Data.block(below)
+		var below_solid: bool = bb != null and bool(bb.solid)
+		var in_water: bool = world.get_block(fx, fy, fz) == WorldGen.B_WATER \
+				or world.get_block(fx, fy + 1, fz) == WorldGen.B_WATER
+		ground_ok = on_floor and below_solid and not in_water
+	main._free_game_nodes()
+	await get_tree().process_frame
+	_ss_free_orphans()
+	return {
+		"col": [int(row["cx"]), int(row["cz"])],
+		"cell": [x, z],
+		"top": top,
+		"pos": [float(x) + 0.5, float(top) + 1.0, float(z) + 0.5],
+		"tier": tier,
+		"tier_ok": tier_ok,
+		"cond_ok": cond_ok,
+		"ground_ok": ground_ok,
+	}
+
+# AC-0324: the arm-side re-scan (topmost non-air cell) the re-derivation
+# uses — deliberately separate from the world's own scan.
+func _ss_cell_top(x: int, z: int) -> int:
+	var y := Data.HEIGHT - 1
+	while y >= 0 and world.get_block(x, y, z) == 0:
+		y -= 1
+	return maxi(y, 0)
+
+# AC-0324: synthetic tables for the fallback tiers — the pure core
+# (ChunkWorld._spawn_pick) over hand-built rows, no world involved. The
+# rows mirror the gather's shape and the (taxi, cx, cz) order of the
+# sim=4 band (anchor (0,0): 41 rows; the inner T0 diamond is taxi <= 3).
+func _ss_row(cx: int, cz: int, top: int, top_id: int, feet: int, head: int, nb: Array) -> Dictionary:
+	return {"cx": cx, "cz": cz, "taxi": absi(cx) + absi(cz), "x": cx * 16 + 8, "z": cz * 16 + 8,
+			"top": top, "top_id": top_id, "feet_id": feet, "head_id": head, "nb": nb,
+			"t0": absi(cx) + absi(cz) < 4}
+
+func _spawnsearch_synthetic() -> Dictionary:
+	var out: Array = []
+	var ok := true
+	# A: T1 — inner diamond all wet; the FIRST full-band dry row (the
+	# taxi-4 ring starts at (-4, 0)) is vegged + steep: T1 must take it
+	# anyway (dry only, (taxi, cx, cz) order — a T0-with-full-band or a
+	# T1 with the veg/slope checks would pick the later T0-quality dry
+	# row at (-3, 1) instead).
+	var rowsA: Array = []
+	for taxi in range(5):
+		for dx in range(-taxi, taxi + 1):
+			var rem := taxi - absi(dx)
+			var dzs: Array = [rem] if rem == 0 else [-rem, rem]
+			for dz in dzs:
+				if dx == -4 and dz == 0:
+					rowsA.append(_ss_row(-4, 0, 130, WorldGen.B_GRASS, WorldGen.B_LOG, 0, [100, 100, 100, 100]))
+				elif dx == -3 and dz == 1:
+					rowsA.append(_ss_row(-3, 1, 130, WorldGen.B_GRASS, 0, 0, [130, 130, 130, 130]))
+				else:
+					rowsA.append(_ss_row(dx, dz, 126, WorldGen.B_WATER, 0, 0, [126, 126, 126, 126]))
+	var pA: Dictionary = world._spawn_pick(rowsA)
+	var rA: Dictionary = pA["row"]
+	var a_ok: bool = int(pA["tier"]) == 1 and int(rA["cx"]) == -4 and int(rA["cz"]) == 0 and int(rA["top"]) == 130
+	ok = ok and a_ok
+	out.append({"t1": [int(rA["cx"]), int(rA["cz"]), int(rA["top"]), int(pA["tier"])]})
+	# B: T2 — the whole band wet: highest top, (taxi, cx, cz) tie-break
+	# (every top ties at sea -> the centre column).
+	var rowsB: Array = []
+	for taxi in range(5):
+		for dx in range(-taxi, taxi + 1):
+			var rem := taxi - absi(dx)
+			var dzs: Array = [rem] if rem == 0 else [-rem, rem]
+			for dz in dzs:
+				rowsB.append(_ss_row(dx, dz, 126, WorldGen.B_WATER, 0, 0, [126, 126, 126, 126]))
+	var pB: Dictionary = world._spawn_pick(rowsB)
+	var rB: Dictionary = pB["row"]
+	var b_ok: bool = int(pB["tier"]) == 2 and int(rB["cx"]) == 0 and int(rB["cz"]) == 0 and int(rB["top"]) == 126
+	ok = ok and b_ok
+	out.append({"t2": [int(rB["cx"]), int(rB["cz"]), int(rB["top"]), int(pB["tier"])]})
+	# C: T0 — the centre is dry, flat (one neighbour one step up),
+	# un-vegged; a later T0-quality column must lose to it on order.
+	var rowsC: Array = []
+	for taxi in range(5):
+		for dx in range(-taxi, taxi + 1):
+			var rem := taxi - absi(dx)
+			var dzs: Array = [rem] if rem == 0 else [-rem, rem]
+			for dz in dzs:
+				if dx == 0 and dz == 0:
+					rowsC.append(_ss_row(0, 0, 136, WorldGen.B_GRASS, 0, 0, [136, 135, 136, 137]))
+				elif dx == 1 and dz == 0:
+					rowsC.append(_ss_row(1, 0, 136, WorldGen.B_GRASS, 0, 0, [136, 136, 136, 136]))
+				else:
+					rowsC.append(_ss_row(dx, dz, 126, WorldGen.B_WATER, 0, 0, [126, 126, 126, 126]))
+	var pC: Dictionary = world._spawn_pick(rowsC)
+	var rC: Dictionary = pC["row"]
+	var c_ok: bool = int(pC["tier"]) == 0 and int(rC["cx"]) == 0 and int(rC["cz"]) == 0 and int(rC["top"]) == 136
+	ok = ok and c_ok
+	out.append({"t0": [int(rC["cx"]), int(rC["cz"]), int(rC["top"]), int(pC["tier"])]})
+	return {"ok": ok, "cases": out}
 
 
 # AC-0087: Bedrock gamepad core - the controller is SIMULATED through the

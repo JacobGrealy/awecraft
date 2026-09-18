@@ -17,8 +17,19 @@ modes:
     result_fields: |-
       `start`, `after_fwd`, `horizontal_moved`, `is_on_floor`, `jump_peak_y`, `after_fly_y`, `time_before`, `time_after`
     envs: —
-    wall: 3 s (standalone) / 2.7 s battery
-    notes: battery smoke mode
+    wall: 3 s (standalone) / ~11 s battery (AC-0324)
+    notes: |-
+      battery smoke mode; AC-0324: waits the SIM BAND (`_await_sim_band`) so the spawn search is ready — the player spawns at the searched column (the pad centre while the pad exists; AC-0314 pending)
+  spawnsearch:
+    entry: '`_spawnsearch_test` (AC-0324)'
+    tests: |-
+      deterministic spawn search: per fresh world + sim-band wait, the chosen column's tier conditions re-derived independently (dry / slope over the 4 neighbour cells / un-veg feet+head), determinism (same seed twice → same column), real-player footing (is_on_floor + solid under the feet + no water), fallback tier consistency on the real band + synthetic T1/T2 tables through the pure core (`ChunkWorld._spawn_pick`)
+    result_fields: |-
+      `ok`, `per_seed` (seed, col, cell, top, pos, tier, tier_ok, det_same), `synthetic` (cases t0/t1/t2 + ok), `ms`
+    envs: '`AWECRAFT_LOGIC=spawnsearch` (+ `AWECRAFT_SPAWN_SEEDS` override)'
+    wall: ~25 s (3 seeds × 2 + synthetic)
+    notes: |-
+      AC-0324 gate (spec.html PROBE), seeds 44,1,7; BATTSKIP (a world per seed — out of battery scope); the SPAWNSEARCH line (col + surface H) also lands in the game log
   look:
     entry: '`_look_test`'
     tests: |-
@@ -518,8 +529,8 @@ value_columns:
 standing_values:
 - value: player `start`
   fresh: |-
-    **[8.5, 137.0, 8.5]** (spawn pad top SPAWN_H=136 = MC Y 72); `jump_peak_y` 135.43, `after_fly_y` 136.78
-  established_by: AC-0091 (was [8.5,35,8.5] @ H=80)
+    **[8.5, 137.0, 8.5]** — the SEARCHED column (AC-0324): the deterministic spawn search (dry / gently-sloped / un-vegetated, (taxi,x,z) order) picks the pad centre while the pad exists (top SPAWN_H=136 = MC Y 72); the value moves to a natural column when AC-0314 removes the pad. `jump_peak_y` 138.43, `after_fly_y` 141.27 (re-measured 2026-09-18 — the recorded 135.43/136.78 had gone stale; the AC-0321 battery already reported the new pair)
+  established_by: AC-0091 (was [8.5,35,8.5] @ H=80) → AC-0324 (search + re-measure)
 - value: fluids `sea_surface_before`/`_final`
   fresh: |-
     **2756 / 2756** (count over `world.chunks.keys()` — r4 resident set changed 121→69 chunks at AC-0152/0160, so the absolute count moved; before==after = the invariant)

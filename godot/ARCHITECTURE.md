@@ -252,6 +252,24 @@ Match these; do not improvise a different approach in a task.
   mistake; the CLAUSE 4 CORRECTION note on AC-0313 is the requirement). There is
   no special startup build pass (the 5x5 startup data *burst* is a separate
   mechanism, deferred to AC-0293).
+- **Deterministic spawn search (AC-0324)**: the player's start column is NOT a
+  fixed constant — `World.spawn_point()` runs a no-RNG search once the
+  SIM-BAND data the load gate guarantees is built, and returns the searched
+  position (pre-data callers keep the legacy pad anchor). Per candidate
+  column (centre cell `x = cx*16+8`, `z = cz*16+8`, `T` = topmost non-air
+  cell): DRY (top id != water and T >= SEA), GENTLY SLOPED (max |ΔT| ≤ 2 over
+  the 4 cardinal neighbour cells), UN-VEGETATED (neither the feet cell
+  T+1 nor the head cell T+2 is log/leaves/rose/dandelion/banana). First
+  pass in (taxi, cx, cz) order over the INNER diamond taxi ≤ sim−1 (every
+  candidate's slope neighbours are then inside the guaranteed diamond — a
+  boundary column's outward neighbour is timing-dependent and would make the
+  search non-deterministic); fallbacks over the full band: T1 = first dry,
+  T2 = highest T ((taxi,cx,cz) tie-break). While the spawn pad exists (until
+  AC-0314) the pad centre wins T0, so the spawn position is unchanged; the
+  search is the pad-removal prerequisite (the player starts on natural
+  ground at the same spot every time for the same seed). The `spawnsearch`
+  arm re-derives all of it independently (HARNESS.md §1) and the
+  `SPAWNSEARCH` log line records the chosen column + surface H.
 - **`gdext/lighting.cpp` (`AweLighting`) and the classic light pull are TEST-ONLY
   references** (AC-0283 P4). They exist so arms can compare against the old kernel. Never
   wire them into game code; the last live consumers were removed by AC-0297.
