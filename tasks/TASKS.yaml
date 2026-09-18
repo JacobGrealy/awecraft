@@ -1,12 +1,10 @@
 meta:
-  updated_at: 2026-09-18T11:25
+  updated_at: 2026-09-18T14:29
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0312
-- AC-0321
-- AC-0322
+- AC-0324
 - AC-0314
 - AC-0287
 - AC-0293
@@ -14682,11 +14680,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-09-17T18:47
-  updated_at: 2026-09-18T00:12
-  completed_at: null
+  updated_at: 2026-09-18T14:29
+  completed_at: 2026-09-18T14:29
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As the player flying over the world, I want the distant world to stay crisp instead
@@ -14893,7 +14891,26 @@ intake:
     baseline was ~27.6 min, the load is data-supply-bound) - if that job''s number is available when you
     run your gates, include it; otherwise the coordinator folds it in at closeout. And note for your band-A
     work: band A''s slab materialization must flow through the NORMAL full-column lane (no per-band dispatch
-    exemption) - that is AC-0313''s clause-1 contract.'
+    exemption) - that is AC-0313''s clause-1 contract.
+
+
+    CLOSED 2026-09-18 as far-band-draw-tiers, after its two reds were fixed by their own tickets: (1)
+    AC-0321 - band A''s texturing (the mat landing''s scoped apply pinned the plain 1024-tall atlas under
+    merged-canvas 1888 UVs); (2) AC-0322 - the walk sim-disc residency (the data pass starved to the column-completion
+    rate by the u==0 gate; the stateless TG-empty feed restored it to 100%). Its third flagged item, the
+    r16 SIGSEGV flake, is its own ticket (r16-segv-flake). WHAT SHIPPED: three draw tiers off the same
+    h-only far data - band A (sim -> medium_start) full-LOD materialized (skip=1 fill: solid 0..H, water
+    H+1..SEA, skip-mode trees + the clutter class) meshed per column, bands B/C (medium_start -> low_start
+    -> render) 8x8/4x4 avg over the same fill with water-topped cells drawn as a separate surface wearing
+    the real translucent water material, clutter excluded from the B/C fill; every band edge reads the
+    live settings (nothing hard-codes 27/50). EVIDENCE: the builder''s arms (ladder 3-tier, halo rebased,
+    farab 1080/1080 at G=4 and G=8, meshprobe 1.0, starlighttest 0/5,308,416, lightstate, r16, profgen
+    s2/s3 frame contract held) + the coordinator''s AC-0322 heavy stage run on the same tree (all standing
+    values green). THE USER''S IN-GAME PASS is the remaining confirmation, on the build served at :8080
+    (stamp 20260918-1303). PROCESS NOTE (recorded in COORDINATOR.md as the sizing precedent): this ticket
+    was oversize for one builder turn - three tiers + materialization + a water exception + five arm rebases
+    + a profgen re-profile - and it came back with two unrelated reds; the remediation tickets were filed
+    small, one behaviour each.'
   comments: []
 - id: AC-0313
   title: scheduler-full-columns-inside-out
@@ -15503,11 +15520,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-18T11:24
-  updated_at: 2026-09-18T11:25
-  completed_at: null
+  updated_at: 2026-09-18T13:03
+  completed_at: 2026-09-18T13:03
   waiting_on: null
   parent_id: null
   notes: "1) User Story: As the player, the ground just past the simulation distance (the new crisp \"\
@@ -15543,7 +15560,12 @@ intake:
     \ screenshot moved to .scratch/AC-0321/user-report.jpg (it was dropped in the repo root as Screenshot-2026-09-18-064158.jpg;\
     \ .scratch is git-ignored so it is not committed - the coordinator cannot view images on this model,\
     \ so the CODE-level checks in the notes are the evidence path, with the user's in-game pass as the\
-    \ confirmation)."
+    \ confirmation).\n\nCLOSED 2026-09-18. Commit + coordinator verification of the ladder/band-A tex\
+    \ gate (ok:true, band_a_ms_h 1888, band_a_tex_q 5959, maxv 0.8975), genhash 25/25 byte-identical,\
+    \ 0 SCRIPT ERROR, boundary r4 one-shot p95 37 vs the 39 standing (no deviation). Fix = one line (the\
+    \ mat landing's apply). Root cause: the scoped apply's plain 1024-tall atlas material under merged-canvas\
+    \ (1888) UVs. Evidence chain in the builder's results page; the user's in-game pass is the remaining\
+    \ confirmation, and a Windows build with this fix is being produced for that test loop."
   comments: []
 - id: AC-0322
   title: walk-sim-disc-residency
@@ -15552,11 +15574,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-18T11:24
-  updated_at: 2026-09-18T11:24
-  completed_at: null
+  updated_at: 2026-09-18T14:29
+  completed_at: 2026-09-18T14:29
   waiting_on: null
   parent_id: null
   notes: "1) User Story: While I walk, the world around me should stay fully loaded. Since the far-band\
@@ -15578,5 +15600,115 @@ intake:
     \ (the standing values in godot/HARNESS.md section 3). Report the before/after in the results page.\n\
     SCOPE: ONE behavior - walk data residency. Do not change the tier geometry, the water exception or\
     \ the build order (AC-0313's inside-out full columns stays). The profgen arm is not in the tree: re-add\
-    \ it from `.scratch/ac0283-p2/profgen_arm_snippet.gd` (IN AND OUT, tree pristine after).\n"
+    \ it from `.scratch/ac0283-p2/profgen_arm_snippet.gd` (IN AND OUT, tree pristine after).\n\n\nSCOPE\
+    \ SPLIT (coordinator, 2026-09-18, per the COORDINATOR.md Sizing rule): the r16 SIGSEGV flake mentioned\
+    \ in this ticket's context is now its OWN ticket (r16-segv-flake) - do NOT investigate the crash here.\
+    \ This ticket is ONE behaviour: the walk (s3) sim-disc data residency. If you notice anything about\
+    \ the crash, record it as a one-line pointer to that ticket and move on.\n\nCLOSED 2026-09-18 (commit\
+    \ a85125d). One behaviour, one predicate; the AC-0283 P3 TG-empty data feed restored statelessly.\
+    \ Coordinator verification: the full standing set (genhash 25/25 byte-identical, ladder/halo/farab/meshprobe/r16\
+    \ ok, lightstate wash false, boundary r4 p50 13 / p95 38 vs the 13/39 standing, battery 21 byte-identical\
+    \ + no new deltas) plus the builder's own profgen before/after logs inspected directly (89/145 = 61.4%\
+    \ -> 145/145 = 100.0%, s2 flight 54.5%). HEAVY STAGE NOTE: the R50 load arm (with AWECRAFT_LOADLOG=1)\
+    \ was still running when this closed - its full-load wall is recorded separately when it lands (it\
+    \ has been memory-fragile on this box; the clause-4 gate itself was verified live at AC-0313). FLAG\
+    \ FOR THE USER: this partially reverses AC-0313 clause 3 on measurement (the full-column unit frees\
+    \ per column, not per slab, so u==0 alone starves the data pass) - stated in the commit, ARCHITECTURE.md's\
+    \ build-order bullet and AC-0313's notes."
+  comments: []
+- id: AC-0323
+  title: r16-segv-flake
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-18T13:04
+  updated_at: 2026-09-18T13:04
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The R16 heavy test arm crashed the game process once in five runs. A rare crash
+    is worse than a slow frame - it must be understood before the far-band work is called stable.
+
+
+    2) Technical Details:
+
+    EVIDENCE (AC-0312''s r16 rebase runs, 2026-09-18): one SIGSEGV in five runs of the R16 arm; the crash
+    is in the build-phase drain/enqueue path. `godot/world/world.gd` was IDENTICAL across all five runs,
+    so the crash is not attributable to the r16 rebase itself (nor to the tier change): it is a pre-existing
+    latent hazard that the arm''s longer/heavier runs expose. The same stack also emits a pre-existing
+    non-fatal warning class: `ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()`
+    from `at: get_global_transform (scene/3d/node_3d.cpp:649)`, backtrace `_cull_frustum_planes (world.gd)
+    <- _gen_skip_flag <- threadgen_enqueue <- _gen_unit <- _drain_build_queue <- _process` (272 occurrences
+    per run, present in ac0283-p4/AC-0232/AC-0236/AC-0237/AC-0270 logs too - do NOT "fix" it by suppressing
+    output).
+
+    SCOPE: reproduce and diagnose first. Run the R16 arm N times (>=5, `--fixed-fps 600` convention, AWECRAFT_RADIUS
+    forced >=16 by the arm) and capture the crash: the engine error/stack, rc, and whether the process
+    died during the LOAD phase (world nodes not yet in the tree) or in the steady drain. Then decide with
+    evidence: (a) if the crash is the detached-node cull path being reached from a worker dispatch, fix
+    it structurally (guard the skip-flag cull on tree membership / use the cached frustum state - the
+    cheap correct fix, no behaviour change); (b) if it is a C++ extension issue (the native lane), record
+    the exact lane + call and file the follow-up with the reproducer rather than guessing; (c) if it cannot
+    be reproduced in 10 runs, record that honestly with the logs and leave the arm''s known-flake note
+    in HARNESS.md''s r16 row.
+
+    GATE: the R16 arm run >=5 times with zero crashes and zero new SCRIPT ERROR (the `!is_inside_tree`
+    warning count must not increase), plus G0 clean; report the crash rate before/after.
+
+    CONTEXT: this is a spinoff from AC-0312''s report (its r16 row). It is deliberately OUT of AC-0322
+    (the walk-residency fix) - one behaviour per ticket.
+
+    '
+  comments: []
+- id: AC-0324
+  title: deterministic-spawn-search
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-18T14:29
+  updated_at: 2026-09-18T14:29
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: The world decides where I start, not a flat platform. The game finds the nearest\
+    \ natural spot that is dry, flat enough to stand on and not choked with vegetation, and puts me there\
+    \ - the same spot every time for the same world.\n\n2) Technical Details:\nUSER DECISION (recorded\
+    \ on AC-0314, 2026-09-17): \"do you want a deterministic small search for the nearest dry, gently-sloped,\
+    \ un-vegetated spot -> yes\" and \"can we get rid of the plateau the player spawns on too?\". This\
+    \ ticket is the SEARCH ONLY and it must land BEFORE AC-0314 (which removes the pad): without the search,\
+    \ removing the pad drops the player on an arbitrary slope, in water or inside a tree. Split per the\
+    \ COORDINATOR.md Sizing rule - one behaviour per ticket.\nWHERE: the spawn decision lives in the activation\
+    \ path (godot/scenes/main.gd, the fresh-spawn path, plus the world's spawn/start API). Today the spawn\
+    \ is a fixed constant - the standing value \"player start [8.5, 137, 8.5]\" (godot/HARNESS.md section\
+    \ 3) - because gen.cpp:238 (SPAWN_H=136) plus gen.cpp:356-379 flattens a pad (d<=6 flat, 6<d<=10 smoothstep),\
+    \ mirrored in GDScript at godot/world/generator.gd:40. Do NOT touch gen.cpp in this ticket.\nTHE SEARCH:\
+    \ evaluate candidate columns from their surface data (H + biome + top + the vegetation/clutter fill).\
+    \ Bounded honestly: the sim band (taxi <= sim; the sim>=4 floor gives 41 columns at sim 4) is exactly\
+    \ the set the load gate builds before activation, so the footing is guaranteed - if you can justify\
+    \ a larger radius (e.g. the data you actually have at that moment), state it in the plan and gate\
+    \ it.\n - DRY: the surface is not water (the column's top cell is not water and H >= SEA).\n - GENTLY\
+    \ SLOPED: a BOUNDED height delta over the neighbours - state the exact bound in the plan (e.g. max\
+    \ |dH| <= 2 over the 4-neighbours) and use it consistently in the gate.\n - UN-VEGETATED: no tree\
+    \ cells (log/leaves) and no clutter cell at the spawn cell or the cell above it.\n - DETERMINISTIC,\
+    \ NO RNG: order the candidates by (taxi, x, z) and take the first that passes - same seed must give\
+    \ the same spawn (that is the testable property). Log the chosen column + its surface H and expose\
+    \ both in the gate's RESULT.\n - FALLBACK: define the deterministic fallback for \"no candidate passes\"\
+    \ (e.g. the nearest dry column ignoring slope, else the highest-H dry column) and gate it too.\nACTIVATION:\
+    \ the player starts at the chosen column's centre, on its surface (surfaceH + 1). The standing value\
+    \ \"player start\" in godot/HARNESS.md section 3 REBASES from the fixed [8.5,137,8.5] to the searched\
+    \ column in this task (edit tasks/harness_data.yaml + harness_doc.py --render).\nGATE: a probe that\
+    \ for >=3 seeds asserts (a) the chosen column satisfies all three conditions, (b) determinism - the\
+    \ same seed run twice gives the same column, (c) the player actually stands on solid ground (no fall-through,\
+    \ no water overlap), (d) the fallback fires when no candidate passes (construct or pick a seed that\
+    \ exercises it). Prefer extending an existing probe (basis/sphere/player) if that keeps the task small;\
+    \ otherwise add ONE probe mode and document it in HARNESS.md's mode table.\nSCOPE: ONE behaviour -\
+    \ the spawn search. No pad removal (AC-0314), no gen.cpp, no streaming changes.\n"
   comments: []
