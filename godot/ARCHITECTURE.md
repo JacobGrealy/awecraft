@@ -207,7 +207,17 @@ Match these; do not improvise a different approach in a task.
   tier ≤ 1 / ≥ 4 (a band-A far column is never "pending" for the low lane, or
   `band_drained()` stalls). The unmaterialized band-A special case lives in the HIGH
   probe (`_hslab_best_pending`). Chunk fields: `far_mat` (fill slabs resident) +
-  `far_eff` (cached sky eff, dies with the data).
+  `far_eff` (cached sky eff, dies with the data). **Mesh-attach contract
+  (AC-0321)**: a FULL build (si1=-1, unscoped — the real-band full landing, the
+  tex-refresh, the band-A mat landing) emits its opaque UVs in the
+  merged-atlas canvas space (v / ms.h) and lands through `apply_accs` (the
+  opaque material samples the merged canvas `_tm_ms_full.tex`); a SCOPED build
+  (the per-slab hslab lane, the edit) emits per-face plain-atlas UVs and lands
+  through `apply_edit_accs` (the plain-atlas material). Crossing the two is a
+  UV-space/material mismatch (band A once rendered untextured exactly this
+  way, AC-0321); the ladder arm's band-A gate (landed surfaces u-exact vs a
+  fresh real-band emit + the material-canvas check) and the editmat arm
+  (plain material under plain UVs) are the permanent proofs.
 - **Build order (AC-0313)**: every real-band column (taxi ≤ `band0_r` — the sim band) is
   built as a **FULL 24-slab column, inside-out**: the bake score is `(taxi, layer)` —
   across columns the innermost unbuilt column first (a pure function of the live

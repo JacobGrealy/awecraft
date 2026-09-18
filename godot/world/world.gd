@@ -6467,7 +6467,23 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			var ms_m: int = int(e.get("mat_ms", 0))
 			band_a_mat_ms_sum += ms_m
 			band_a_mat_ms_n += 1
-			c.apply_edit_accs(res, _tm_ms_full, false)
+			# AC-0321: the mat build is a FULL column build (si0=0,
+			# si1=-1, empty mask — C++ scoped=false), so its opaque UVs
+			# are emitted in the MERGED-atlas canvas space (v / ms.h; the
+			# strip quads sit below the plain atlas height) — the attach
+			# must wear the merged-canvas material: the reference full
+			# apply (apply_accs passes _tm_ms_full.tex into
+			# _get_mat("opaque", …)) is the contract the real band's
+			# full landing uses. apply_edit_accs is the SCOPED build's
+			# apply (emit_faces plain-space UVs + the plain-atlas
+			# material — the editmat arm's contract): landing the mat
+			# through it pinned the opaque surface to the 1024-tall
+			# plain material under merged-canvas UVs — band A rendered
+			# untextured/wrong (the user's in-game report). apply_accs
+			# differs from apply_edit_accs(…, false) here only in the
+			# material + no-op slab-ref nulling (a mat column holds no
+			# old instances) + mesh_built (set again below).
+			c.apply_accs(res, _tm_ms_full)
 			var si1_m: int = int(res.get("si1", c.data.size() - 1))
 			for si_m in range(si1_m + 1):
 				c.high_stamps[si_m] = int(c.data_gen)

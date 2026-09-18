@@ -13784,6 +13784,135 @@ func _r16_lod_slabcheck() -> Dictionary:
 #       its volume is air (synthetic rows: 5/8 air -> air, 4/8 -> solid;
 #       33/64 -> air, 32/64 -> solid) + in-world air slabs carry no low mesh;
 #   (e) CLUTTER-AS-AIR (unchanged) + the Y-LAYER rank encoding (unchanged).
+# AC-0321 (ii): "" when the visible slab instance wears the TEXTURED HIGH
+# material (chunk_lit_opaque) sampling a canvas of exactly want_h px —
+# the canvas the mesh's UVs were emitted in (the merged-atlas canvas when
+# world._tm_ms_full.rects is non-empty, else the plain atlas). The
+# _lod_avg_mat() noise shader (the med/low placeholder material, no "tex"
+# parameter) is the explicit candidate-(a) failure.
+func _ladder_mat_tex_check(mi: MeshInstance3D, want_h: int) -> String:
+	var m = mi.mesh.surface_get_material(0) if mi.mesh != null else null
+	if m is ShaderMaterial:
+		var sh: Shader = m.shader
+		var shp := str(sh.resource_path) if sh != null else "null"
+		if shp == "res://core/lod_avg.gdshader":
+			return "tex_avgmat;"
+		if shp != "res://world/chunk_lit_opaque.gdshader":
+			return "tex_mat(%s);" % shp
+		var tex = m.get_shader_parameter("tex")
+		if tex == null or not (tex is Texture2D):
+			return "tex_null;"
+		var im: Image = (tex as Texture2D).get_image()
+		if im == null or int(im.get_height()) != want_h:
+			return "tex_h(%d!=%d);" % [int(im.get_height()) if im != null else -1, want_h]
+		return ""
+	if m is StandardMaterial3D:
+		# the Data.atlas_tex == null fallback (no-atlas world): the albedo
+		# canvas must still match the emitted UV space.
+		var at: Texture2D = (m as StandardMaterial3D).albedo_texture
+		if at == null or at.get_image() == null or int(at.get_image().get_height()) != want_h:
+			return "tex_stdmat;"
+		return ""
+	return "tex_mat_type"
+
+
+# AC-0321 (i)+(ii): the band-A texturing gate (the spec's permanent gate,
+# hosted by the ladder). The mat landing is a FULL-column build (si0=0,
+# si1=-1, empty mask — C++ scoped=false, emit_ro_merged): its opaque UVs
+# are emitted in the atlas-canvas space the dispatch carried (v / ms.h —
+# the merged canvas when _tm_ms_full.rects is non-empty), so (i) every
+# landed non-air slab's opaque surface must equal a FRESH real-band high
+# emit of the SAME slabs under the SAME dispatch inputs (engine precision,
+# _tex_mesh_diff — u byte-exact — with a real UV census), and (ii) the
+# visible MeshInstance must wear the textured high material sampling
+# EXACTLY that canvas (not the _lod_avg_mat() noise placeholder) and no
+# LOW placeholder of the column may be visible (the keep-all-LOD flip
+# hides it when the high lands).
+func _ladder_band_a_tex(mc, c: Node3D) -> Dictionary:
+	var out := {"ok": true, "why": "", "q": 0, "maxv": 0.0, "note": ""}
+	var effd = c.far_eff
+	if effd == null or not (effd is Dictionary) or not effd.has("light") or not effd.has("strips"):
+		out["ok"] = false
+		out["why"] = "tex_eff_missing;"
+		return out
+	var cx := int(c.cx)
+	var cz := int(c.cz)
+	# the reference emit: the mat dispatch's own inputs (world.gd
+	# _mesh_dispatch_hslab band-A branch) — the 8 diagonal snap_rings
+	# (far payload for far neighbors), _tm_ctx + the sky-eff strips, the
+	# merged ms table, the cached sky eff.
+	var nbs: Dictionary = {}
+	var nb_ok := true
+	for ddx in range(-1, 2):
+		for ddz in range(-1, 2):
+			if (ddx == 0) == (ddz == 0):
+				continue
+			var nc = world.chunks.get(world._key(cx + ddx, cz + ddz))
+			if nc == null or nc.data.is_empty():
+				nb_ok = false
+				break
+			nbs["%d,%d" % [ddx, ddz]] = mc.snap_rings(nc.data, nc.fl, ddx, ddz, nc.gen_keep, nc.far_payload())
+	if not nb_ok:
+		out["ok"] = false
+		out["why"] = "tex_nb_missing;"
+		return out
+	var ctx_ref: Dictionary = world._tm_ctx.duplicate()
+	ctx_ref["eff_strips"] = effd["strips"]
+	var ms_ref: Dictionary
+	if not world._tm_ms_full.rects.is_empty():
+		ms_ref = {"rects": world._tm_ms_full.rects.duplicate(), "h": float(world._tm_ms_full.get("h", 0.0))}
+	else:
+		ms_ref = {"rects": {}}
+	var r: Dictionary = mc.build_accs(c.data, c.fl, cx, cz, nbs, ctx_ref, ms_ref, effd["light"], 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())
+	var si0: int = int(r.get("si0", 0))
+	var si1: int = int(r.get("si1", 0))
+	var want_h := int(world._tm_ms_full.get("h", 0)) if not world._tm_ms_full.rects.is_empty() else (int(Data.atlas_tex.get_image().get_height()) if Data.atlas_tex != null and Data.atlas_tex.get_image() != null else 0)
+	for si in range(si0, si1 + 1):
+		var ref_slab: Dictionary = r["slabs"][si - si0][0]
+		var mi: MeshInstance3D = c.slabs[si].mesh_instance if si < c.slabs.size() else null
+		var applied: Dictionary = _tex_cap_slab(mi)
+		if int(ref_slab.get("q", 0)) == 0:
+			if not applied.is_empty():
+				out["ok"] = false
+				out["why"] += "tex_empty_slab%d;" % si
+			continue
+		if applied.is_empty():
+			out["ok"] = false
+			out["why"] += "tex_nomesh_slab%d;" % si
+			continue
+		var d: String = _tex_mesh_diff(applied, ref_slab)
+		if int(applied.get("q", -1)) != int(ref_slab.get("q", -1)) or d != "":
+			out["ok"] = false
+			out["why"] += "tex_emit_slab%d(%s);" % [si, d]
+			continue
+		var u: PackedVector2Array = applied.get("u", PackedVector2Array()) as PackedVector2Array
+		var nz := 0
+		for i in range(int(u.size())):
+			if u[i] != Vector2(0.0, 0.0):
+				nz += 1
+				if u[i].y > out["maxv"]:
+					out["maxv"] = u[i].y
+		if nz == 0:
+			out["ok"] = false
+			out["why"] += "tex_uv_zero_slab%d;" % si
+		out["q"] = int(out["q"]) + int(applied.get("q", 0))
+		if mi == null or not bool(mi.visible):
+			out["ok"] = false
+			out["why"] += "tex_hidden_slab%d;" % si
+			continue
+		var wm: String = _ladder_mat_tex_check(mi, want_h)
+		if wm != "":
+			out["ok"] = false
+			out["why"] += "tex_slab%d_%s" % [si, wm]
+	# no LOW placeholder of the column may be visible (candidate (a)).
+	for j in range(int(c.low_slabs.size())):
+		var lm: MeshInstance3D = c.low_instances[j] if j < c.low_instances.size() else null
+		if lm != null and bool(lm.visible):
+			out["ok"] = false
+			out["why"] += "tex_low_visible_%d;" % int(c.low_slabs[j])
+	return out
+
+
 func _ladder_test(spawn: Vector3) -> void:
 	var res := {
 		"ok": false,
@@ -13800,6 +13929,9 @@ func _ladder_test(spawn: Vector3) -> void:
 		"band_a_far_cols": 0,
 		"band_a_mat_cols": 0,
 		"band_a_eff_ok": 0,
+		"band_a_tex_q": 0,
+		"band_a_tex_maxv": 0.0,
+		"band_a_ms_h": 0,
 		"band_b_slabs": 0,
 		"band_b_mesh_ok": 0,
 		"band_c_slabs": 0,
@@ -13868,6 +14000,12 @@ func _ladder_test(spawn: Vector3) -> void:
 	var first_b_si := -1
 	var first_c: Node3D = null
 	var first_c_si := -1
+	# AC-0321: the band-A texturing gate's reference emit + the canvas
+	# height its UVs were emitted in (merged canvas when the merge atlas
+	# is on, else the plain atlas) — reported for the result line.
+	var mc_tex: Variant = _ChunkScriptM.mesh_cpp()
+	res["band_a_ms_h"] = int(world._tm_ms_full.get("h", 0)) if not world._tm_ms_full.rects.is_empty() \
+			else (int(Data.atlas_tex.get_image().get_height()) if Data.atlas_tex != null and Data.atlas_tex.get_image() != null else 0)
 	for key in world.chunks:
 		var c: Node3D = world.chunks[key]
 		var dx := int(c.cx) - pcx
@@ -13965,6 +14103,15 @@ func _ladder_test(spawn: Vector3) -> void:
 									break
 							if not eff_ok:
 								break
+			# AC-0321 (i)+(ii): the band-A texturing gate (the spec's
+			# permanent gate, the ladder host) — the landed opaque
+			# surfaces equal the fresh real-band emit for the same slabs
+			# (u byte-exact), the visible instances wear the textured
+			# high material in the emitted UV space (not _lod_avg_mat),
+			# no LOW placeholder is visible.
+			var texd: Dictionary = _ladder_band_a_tex(mc_tex, c)
+			res["band_a_tex_q"] = int(res.get("band_a_tex_q", 0)) + int(texd.get("q", 0))
+			res["band_a_tex_maxv"] = maxf(float(res.get("band_a_tex_maxv", 0.0)), float(texd.get("maxv", 0.0)))
 			var why := ""
 			if not far_ok:
 				why += "no_far;"
@@ -13976,6 +14123,8 @@ func _ladder_test(spawn: Vector3) -> void:
 				why += "no_mesh;"
 			if not eff_ok:
 				why += eff_why + ";"
+			if not bool(texd["ok"]):
+				why += texd["why"]
 			if why != "":
 				if int(res.get("band_a_fail_n", 0)) < 8:
 					res["band_a_fail"].append({"col": "%d,%d" % [int(c.cx), int(c.cz)], "why": why})
@@ -13986,7 +14135,7 @@ func _ladder_test(spawn: Vector3) -> void:
 				res["band_a_mat_cols"] += 1
 			if eff_ok:
 				res["band_a_eff_ok"] += 1
-			if far_ok and mat_ok and fill_ok and has_mesh and eff_ok:
+			if far_ok and mat_ok and fill_ok and has_mesh and eff_ok and bool(texd["ok"]):
 				res["band_a_ok"] += 1
 			continue
 		if tier == 2 or tier == 3:
