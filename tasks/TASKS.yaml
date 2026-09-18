@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-17T19:20
+  updated_at: 2026-09-17T20:06
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -12600,7 +12600,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-14T12:21
-  updated_at: 2026-09-16T18:38
+  updated_at: 2026-09-17T20:06
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -12612,7 +12612,20 @@ intake:
     Far cheap columns (height-only, no caves) are never encoded; they stay ephemeral and regenerate on
     load. Add save filter in chunk_io region write. On load, missing far columns regenerate cheap then
     promote if needed. Verify save size stays flat while flying 10k blocks, edited far columns still persist
-    after promotion.'
+    after promotion.
+
+
+    REVIEW 2026-09-17 (post AC-0299 decisions + AC-0312/AC-0313): the filter boundary is now EXACTLY `taxi
+    <= sim` with no exception - the tier-0 Chebyshev square is being deleted (AC-0313 clause 6), so there
+    is no "real column outside the sim diamond" case left for the save filter to special-case. The far
+    band''s shape is FINAL (h-only payload; the band-A/B/C water, trees and flowers are DERIVED at mesh
+    time from the payload + seed, nothing extra is stored), so this ticket needs no data-shape change
+    - only the filter + the 10k-flight no-bloat proof. sim_dist also gains a floor of 4 (AC-0313 clause
+    6 addendum). The parallel session''s 2026-09-17 policy applies to the format question: old worlds
+    are disposable during development, so a SAVE_VERSION bump with a clean reject is acceptable instead
+    of a migration (see ARCHITECTURE.md section 5 + world/AGENTS.md traps, commit 28ca0c4). Load path:
+    missing far columns regenerate cheap (92 us/col) and promote through AC-0286''s path if they land
+    inside sim.'
   comments:
   - id: 1
     created_at: 2026-09-16T18:38
@@ -12644,7 +12657,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-15T08:17
-  updated_at: 2026-09-15T09:32
+  updated_at: 2026-09-17T20:06
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -12675,7 +12688,21 @@ intake:
     NOTE 2026-09-15 per user: old-world save compatibility NOT required — no need to preserve the pre-cave
     genhash baseline. Any new cave shape (P0-P4) may break determinism hash and produce a new world; fresh
     worlds only, seams with old saves are acceptable. Coordinator will NOT do the work directly — implementation
-    delegated to subagent; coordinator verifies gates (G1/G2/genprobe) and bumps the new baseline.'
+    delegated to subagent; coordinator verifies gates (G1/G2/genprobe) and bumps the new baseline.
+
+
+    CONSISTENCY NOTE 2026-09-17 (post AC-0299/AC-0312/AC-0313): your change lives in BAND 0 ONLY. The
+    far band (taxi > sim: bands A/B/C) skips the cave field entirely (generate_resl skip=2, AC-0284b)
+    and never shows caves, so cave work does not change its look. Two standing contracts to preserve:
+    (i) H BIT-EXACTNESS - the far payload''s H must stay equal to the full path''s H (AC-0284b/AC-0286
+    promotion consistency), so do not move the SURFACE fields (f_sc/f_sh/f_sr) or SEA; AC-0288''s own
+    user story already requires not changing the world height. If your change forces a surface shift,
+    stop and coordinate - it invalidates the far-band data contract and the promotion no-shift gate. (ii)
+    The far band''s materialized fill (AC-0312) mirrors the full path''s surface rules, so a change to
+    how the surface/shore blocks are chosen must be reflected there. Finally, re-measure the real band''s
+    gen + mesh cost after your change: the load-screen gate (AC-0313 clause 4) waits for the simulated
+    diamond (taxi <= sim) and its wall is derived from that cost, and promotion cost (AC-0286) rides the
+    full gen.'
   comments: []
 - id: AC-0289
   title: cave-p1-spaghetti-noodle-tunnels
@@ -12687,7 +12714,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-15T08:17
-  updated_at: 2026-09-15T09:32
+  updated_at: 2026-09-17T20:06
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -12717,7 +12744,21 @@ intake:
     NOTE 2026-09-15 per user: old-world save compatibility NOT required — no need to preserve the pre-cave
     genhash baseline. Any new cave shape (P0-P4) may break determinism hash and produce a new world; fresh
     worlds only, seams with old saves are acceptable. Coordinator will NOT do the work directly — implementation
-    delegated to subagent; coordinator verifies gates (G1/G2/genprobe) and bumps the new baseline.'
+    delegated to subagent; coordinator verifies gates (G1/G2/genprobe) and bumps the new baseline.
+
+
+    CONSISTENCY NOTE 2026-09-17 (post AC-0299/AC-0312/AC-0313): your change lives in BAND 0 ONLY. The
+    far band (taxi > sim: bands A/B/C) skips the cave field entirely (generate_resl skip=2, AC-0284b)
+    and never shows caves, so cave work does not change its look. Two standing contracts to preserve:
+    (i) H BIT-EXACTNESS - the far payload''s H must stay equal to the full path''s H (AC-0284b/AC-0286
+    promotion consistency), so do not move the SURFACE fields (f_sc/f_sh/f_sr) or SEA; AC-0288''s own
+    user story already requires not changing the world height. If your change forces a surface shift,
+    stop and coordinate - it invalidates the far-band data contract and the promotion no-shift gate. (ii)
+    The far band''s materialized fill (AC-0312) mirrors the full path''s surface rules, so a change to
+    how the surface/shore blocks are chosen must be reflected there. Finally, re-measure the real band''s
+    gen + mesh cost after your change: the load-screen gate (AC-0313 clause 4) waits for the simulated
+    diamond (taxi <= sim) and its wall is derived from that cost, and promotion cost (AC-0286) rides the
+    full gen.'
   comments: []
 - id: AC-0290
   title: cave-p2-carvers-canyons
@@ -12729,7 +12770,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-15T08:17
-  updated_at: 2026-09-15T09:32
+  updated_at: 2026-09-17T20:06
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -12757,7 +12798,21 @@ intake:
     NOTE 2026-09-15 per user: old-world save compatibility NOT required — no need to preserve the pre-cave
     genhash baseline. Any new cave shape (P0-P4) may break determinism hash and produce a new world; fresh
     worlds only, seams with old saves are acceptable. Coordinator will NOT do the work directly — implementation
-    delegated to subagent; coordinator verifies gates (G1/G2/genprobe) and bumps the new baseline.'
+    delegated to subagent; coordinator verifies gates (G1/G2/genprobe) and bumps the new baseline.
+
+
+    CONSISTENCY NOTE 2026-09-17 (post AC-0299/AC-0312/AC-0313): your change lives in BAND 0 ONLY. The
+    far band (taxi > sim: bands A/B/C) skips the cave field entirely (generate_resl skip=2, AC-0284b)
+    and never shows caves, so cave work does not change its look. Two standing contracts to preserve:
+    (i) H BIT-EXACTNESS - the far payload''s H must stay equal to the full path''s H (AC-0284b/AC-0286
+    promotion consistency), so do not move the SURFACE fields (f_sc/f_sh/f_sr) or SEA; AC-0288''s own
+    user story already requires not changing the world height. If your change forces a surface shift,
+    stop and coordinate - it invalidates the far-band data contract and the promotion no-shift gate. (ii)
+    The far band''s materialized fill (AC-0312) mirrors the full path''s surface rules, so a change to
+    how the surface/shore blocks are chosen must be reflected there. Finally, re-measure the real band''s
+    gen + mesh cost after your change: the load-screen gate (AC-0313 clause 4) waits for the simulated
+    diamond (taxi <= sim) and its wall is derived from that cost, and promotion cost (AC-0286) rides the
+    full gen.'
   comments: []
 - id: AC-0291
   title: cave-p3-voronoi-aquifers
@@ -12769,7 +12824,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-15T08:17
-  updated_at: 2026-09-15T09:32
+  updated_at: 2026-09-17T20:06
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -12798,7 +12853,20 @@ intake:
     NOTE 2026-09-15 per user: old-world save compatibility NOT required — no need to preserve the pre-cave
     genhash baseline. Any new cave shape (P0-P4) may break determinism hash and produce a new world; fresh
     worlds only, seams with old saves are acceptable. Coordinator will NOT do the work directly — implementation
-    delegated to subagent; coordinator verifies gates (G1/G2/genprobe) and bumps the new baseline.'
+    delegated to subagent; coordinator verifies gates (G1/G2/genprobe) and bumps the new baseline.
+
+
+    CONSISTENCY NOTE 2026-09-17 (post AC-0299/AC-0312/AC-0313) - THIS ONE IS THE AQUIFER TICKET, so read
+    carefully: underground water tables (per-pocket water levels) are BAND 0 ONLY and invisible to the
+    far band (the far fill is cave-free). BUT the far band''s materialization rule (AC-0312) mirrors the
+    full path''s SURFACE aquifer rule - "water fills from the effective surface up to SEA (126) where
+    the surface is below sea" (gdext/src/gen.cpp:42-43) - and the far top-block/shore rule keys off H
+    <= sea+1 (gen.cpp:535). So: if your work changes how SURFACE water reaches sea level, or the shore/sand
+    rule, or SEA itself, the far fill (and its farab byte-identity gates + the band-A water look) must
+    be updated in the same change - coordinate or file it. If your aquifers are strictly underground (below
+    the surface layer), nothing else is owed. Also preserve H bit-exactness (the far payload''s H == the
+    full path''s H): do not move the surface fields, and re-measure the real band''s gen cost for the
+    load-screen gate (AC-0313 clause 4).'
   comments: []
 - id: AC-0292
   title: cave-p4-pillars-veins-cave-biomes
@@ -12810,7 +12878,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-15T08:17
-  updated_at: 2026-09-15T09:32
+  updated_at: 2026-09-17T20:06
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -12838,7 +12906,21 @@ intake:
     NOTE 2026-09-15 per user: old-world save compatibility NOT required — no need to preserve the pre-cave
     genhash baseline. Any new cave shape (P0-P4) may break determinism hash and produce a new world; fresh
     worlds only, seams with old saves are acceptable. Coordinator will NOT do the work directly — implementation
-    delegated to subagent; coordinator verifies gates (G1/G2/genprobe) and bumps the new baseline.'
+    delegated to subagent; coordinator verifies gates (G1/G2/genprobe) and bumps the new baseline.
+
+
+    CONSISTENCY NOTE 2026-09-17 (post AC-0299/AC-0312/AC-0313): your change lives in BAND 0 ONLY. The
+    far band (taxi > sim: bands A/B/C) skips the cave field entirely (generate_resl skip=2, AC-0284b)
+    and never shows caves, so cave work does not change its look. Two standing contracts to preserve:
+    (i) H BIT-EXACTNESS - the far payload''s H must stay equal to the full path''s H (AC-0284b/AC-0286
+    promotion consistency), so do not move the SURFACE fields (f_sc/f_sh/f_sr) or SEA; AC-0288''s own
+    user story already requires not changing the world height. If your change forces a surface shift,
+    stop and coordinate - it invalidates the far-band data contract and the promotion no-shift gate. (ii)
+    The far band''s materialized fill (AC-0312) mirrors the full path''s surface rules, so a change to
+    how the surface/shore blocks are chosen must be reflected there. Finally, re-measure the real band''s
+    gen + mesh cost after your change: the load-screen gate (AC-0313 clause 4) waits for the simulated
+    diamond (taxi <= sim) and its wall is derived from that cost, and promotion cost (AC-0286) rides the
+    full gen.'
   comments: []
 - id: AC-0293
   title: retire-5x5-startup-burst
@@ -12850,7 +12932,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-15T09:50
-  updated_at: 2026-09-15T09:50
+  updated_at: 2026-09-17T20:06
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -12879,7 +12961,21 @@ intake:
     pool growth unchanged (AC-0248). Breaking change: new burst-less timing, acceptable per user 2026-09-15
     (old worlds disposable). Coordinator delegates to subagent.
 
-    '
+
+
+    REVIEW 2026-09-17 (post AC-0299 (c) + AC-0313): RESCOPE - option (b) "a shrunk 3x3=9 burst" is now
+    OFF the table. The user''s (c) decision removes the 3x3 special machinery outright ("we shouldn''t
+    be doing this 3x3 chunk thing anywhere"; no main-thread blocking build pass after the player is active)
+    and AC-0313 clause 4 replaces it with: the load screen waits until the SIM TAXI DIAMOND (taxi <= sim,
+    41 columns at sim 4, 984 slabs) is built by NORMAL streaming, then the player activates. So anti-fall
+    must be carried by that gate, not by a burst (the ticket''s own file refs world.gd:5124/5133 "spawn
+    anti-fall carried by burst" become obsolete - verify against the new load gate and say so). Two more
+    checks before deleting the burst: (1) RP measured the 5x5 burst as the flight''s ONLY data source
+    (215 landings in 10 s, all burst-origin) because the old layer-major order starved the steady data
+    pass - AC-0313''s inside-out full-column order is expected to remove that dependence, so RE-MEASURE
+    whether the burst is still load-bearing for flight data before removing it; (2) the harness recenter
+    pre-warm 5x5 ring (harness.gd:6670) must be re-evaluated against the new inside-out order (the inner
+    ring should now build first naturally).'
   comments: []
 - id: AC-0294
   title: chiseled-blocks-micro-voxels
@@ -14582,7 +14678,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-17T18:47
-  updated_at: 2026-09-17T19:20
+  updated_at: 2026-09-17T19:49
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -14680,7 +14776,100 @@ intake:
 
     NOTE: AC-0313 (scheduler-full-columns-inside-out) lands FIRST - band A''s materialized slabs are dispatched
     as full columns through the new inside-out order, so the band-A emit must be written against that
-    lane shape.'
+    lane shape.
+
+
+    SUPERSEDES the "bands B/C stay bare" line above (user, 2026-09-17, in chat): "I think water and trees
+    need to be in A, B, and C." So the far FILL itself becomes the carrier - the materialized fill that
+    every far emit consumes is: solid 0..H from (biome, top) + water id 5 from H+1..SEA where H < SEA
+    (the full path''s aquifer rule) + the skip-mode veg tree cells (log + leaves, incl. the neighbor overhang
+    from the 20x20 neighborhood). Then: band A meshes that fill at FULL LOD (real water/tree geometry);
+    bands B (8x8x8 cells) and C (4x4x4 cells) run their avg emits over the SAME fill, so the averaged
+    cell colors include water (oceans read blue instead of today''s solid sand) and leaves/log (forested
+    regions read green). CONSEQUENCE: the farab A/B byte-identity gate''s reference fill must be rebuilt
+    on this same definition (skip fill + water + trees), else the gate compares against a fill nobody
+    uses any more. OPEN (asked in chat, pending the user''s answer): at B/C, is the AVERAGED representation
+    enough (ocean cells blue, forest cells green-tinted, no tree shape), or does the user want actual
+    per-block tree/water geometry at 8x8/4x4 distances (which would break the avg-LOD cost model)?
+
+
+    FAR-FILL CLASS CONTRACT (user, 2026-09-17, in chat: "trees should be separate from clutter like grass
+    / flowers"): keep the two classes SEPARATE in the far-band work, matching the existing code split
+    - TREES are the veg pass''s structural cells (log trunk + leaf blob, written as real blocks; gdext/src/gen.cpp:544
+    gen_veg_cells) and they ARE part of the materialized far fill (real geometry in band A, folded into
+    the 8x8/4x4 cell averages in bands B/C). CLUTTER is the decoration class `awecommon::is_clutter_block`
+    (gdext/src/awe_common.h:63 - currently id == B_ROSE || id == B_DANDELION) and it is NOT part of the
+    far fill: the avg-LOD emits already treat clutter as air (AC-0258, gdext/src/chunk_io.cpp:681 comment
+    + the nc count; consumed at gen.cpp:1086 and mesh.cpp:2024) - keep that semantic, so clutter stays
+    a near-band decoration. NOTE for the user: the clutter class is defined in exactly one place (awe_common.h:63)
+    - there is no tall-grass clutter block today, so "grass" as clutter would mean adding its id(s) there
+    (one place). OPEN (asked in chat, pending): does band A (64-128 m, full LOD) also materialize clutter
+    (it is deterministic and derivable, but it is many tiny cells - mesh cost), or does clutter stay near-band
+    only (recommended)?
+
+
+    WATER EXCEPTION IN BANDS B/C (user, 2026-09-17, in chat: "at B/C it would be nice if water could be
+    an exception and be the real water texture"): bands B (8x8x8 cells) and C (4x4x4 cells) keep their
+    averaged opaque mesh for terrain and trees, BUT a cell whose fill is water-topped (H < SEA and the
+    cell contains sea level) must NOT be rendered as an averaged opaque color cell - it emits its top
+    quad with the REAL water material/texture (the same water material band 0 and band A use, surface
+    at sea level), so the ocean reads as a real flat water plane out to the render distance instead of
+    a flat blue-grey average. IMPLEMENTATION SHAPE (for the builder to confirm): the avg emit detects
+    "surface cell is water" from the materialized fill and assigns the water atlas/material to that cell''s
+    top quad (same quad count as today; one extra material/surface on the avg mesh, or a per-quad material
+    split if the mesh format requires it). ASSUMPTION TO CONFIRM WITH THE USER: the far water uses the
+    real translucent water material (you see the averaged seabed cell beneath it, consistent with band
+    A / band 0); the alternative is an opaque water-textured quad that hides what is below - state which
+    was implemented. CONSEQUENCE: the ocean''s far look stops depending on the averaged water colour,
+    so the averaged water tint is only needed where the exception does not apply; the water plane is coarse
+    (8x8 / 4x4 m cells) but flat at sea level, so it must line up seam-free with band A''s full-LOD water
+    surface at the A/B boundary.
+
+
+    FLOWERS IN BAND A (user, 2026-09-17, in chat: "yes flowers in A"): band A (full LOD, 4-8 cols) ALSO
+    materializes the CLUTTER class (awecommon::is_clutter_block = B_ROSE || B_DANDELION, awe_common.h:63)
+    - the same deterministic placement the sim band uses (the veg/clutter pass; gen.cpp:1086 consumes
+    is_clutter_block), materialized from the payload''s (H, biome) + seed into the band-A slab data, so
+    the existing mesh path renders them exactly as band 0 does (no new rendering concept; the mesh already
+    special-cases is_clutter_block at mesh.cpp:2024). Consistency: the placement is deterministic, so
+    a band-A flower must match the full gen''s flower for the same cell - promotion stays a no-op visually
+    (same gate style as trees). COST: report the band-A mesh cost with clutter on (each flower is extra
+    quads; same cost class as the sim band''s mesh) - if it is material it goes in the results page as
+    an honest number, not hidden. BANDS B/C UNCHANGED: clutter is NOT in their fill and stays treated
+    as air (per the class contract above) - only water (the real-material exception) and trees (folded
+    into the cell average) reach them. NOTE: tall grass is still not a block in the game (is_clutter_block
+    is the two flowers); if grass tufts are added to that predicate later, band A picks them up automatically
+    through the same path.
+
+
+    USER ANSWERS 2026-09-17 (in chat), recorded:
+
+    (1) FAR WATER TRANSLUCENT - CONFIRMED: bands B/C water-topped cells use the real TRANSLUCENT water
+    material (you see the averaged seabed cell beneath), matching band 0 / band A. No opaque variant.
+
+    (2) BAND NUMBERS ARE CONFIGURABLE and the user''s working config is sim 4 / medium_start 8 / low_start
+    16 / render 24 (not the RP baseline''s 27/50). Therefore: NOTHING in this ticket or its gates may
+    hard-code 27 or 50 - every band edge reads the live settings; the gates must run at the user''s config
+    (sim4/medium8/low16/R24) as the primary case and keep an R50 case as the stress case (the RP/profgen
+    baseline). The 3-tier split must be exercised at both (ladder/halo arms are the natural place, and
+    the harness forces radius 4 unless AWECRAFT_RADIUS is set).
+
+    (3) LOAD GATE SET = THE SIM TAXI DIAMOND, not the 3x3 (user: "instead of 3x3 let''s do sim taxi distance"):
+    the loading screen waits until every column with taxi <= sim is fully built (at sim 4 that is the
+    41-column diamond, 41*24 = 984 slabs), then the player activates and everything else (bands A/B/C)
+    streams in normally. This is AC-0313 clause 4''s completion condition - note the honest cost consequence:
+    the load->activation wall grows ~4.5x versus the old 9-column gate (216 slabs); the TM lane''s measured
+    pace on this box (RP: ~118 slabs/s) implies roughly 8-10 s of meshing for 984 slabs, so AC-0313/AC-0312
+    must MEASURE and report the load wall at the user''s config rather than assume it, and the ticket
+    must state it plainly.
+
+    BAND-A EMIT SHAPE GUIDANCE (cost, for the builder to validate): at the user''s config band A is taxi
+    5..8 = 104 columns of FULL-LOD mesh (145-41); a naive per-slab dispatch fan would be 104*24 = 2496
+    extra slab tasks (~25-30 s of lane time at the measured pace on top of the sim diamond''s 984). RECOMMENDED:
+    emit band A as ONE worker task per COLUMN that produces the column''s slab meshes together (the h_avg_emit
+    shape - a per-column C++ emit from the h-only payload), keeping the per-slab storage shape so promotion/demotion
+    and the retain-swap path are unchanged, instead of 24 independent dispatch units per column. Report
+    the actual measured band-A emit cost either way.'
   comments: []
 - id: AC-0313
   title: scheduler-full-columns-inside-out
@@ -14692,7 +14881,7 @@ intake:
   status: in-progress
   labels: []
   created_at: 2026-09-17T19:07
-  updated_at: 2026-09-17T19:20
+  updated_at: 2026-09-17T19:56
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -14802,5 +14991,19 @@ intake:
     QUEUE NOTE: AC-0312 (far-band-draw-tiers) is next after this ticket. Band A''s materialized slabs
     (full-LOD cave-free fill) must be compatible with this ticket''s full-column inside-out dispatch -
     do not add any per-band dispatch exemption for band A; a band-A column is a normal column whose slab
-    data comes from the payload materialization instead of a full gen.'
+    data comes from the payload materialization instead of a full gen.
+
+
+    CLAUSE 6 ADDENDUM (user, 2026-09-17, in chat: "sim should have 4 as its minimum"): add a LOWER CLAMP
+    of 4 to sim_dist in autoload/settings.gd - today sim_dist is only clamped down when it exceeds render_dist
+    (settings.gd:113-114) and has no floor, so 0/1 are storable. With sim >= 4 the tier-0 deletion needs
+    NO hard-coded footing rule: every column of the player''s 3x3 (taxi <= 2) is inside the real band
+    (taxi <= sim) by construction, so the "the ground around the player is never a placeholder / always
+    high" guarantee holds unconditionally. Update the setting''s comment to state the floor and WHY (the
+    real band is the footing guarantee since the tier-0 square was removed), and keep the existing clamp
+    chain intact: medium_start in [sim+1, render] (re-defaults 8), low_start in [medium_start, render]
+    (re-defaults the band midpoint). VERIFY: grep the harness + arms for sim_dist / band0 assignments
+    and confirm none depends on a sim below 4 (the harness forces radius 4 unless AWECRAFT_RADIUS is set);
+    if one does, update it and document the rebase. Also confirm the settings arm / defaults table round-trips
+    the new floor (a stored sim of 0/1 must be re-clamped to 4 on load, not silently kept).'
   comments: []
