@@ -95,8 +95,8 @@ quits.
 | Source | Role |
 |---|---|
 | `awe_common.{h,cpp}` | shared helpers/registration |
-| `gen.cpp` | terrain, biome, cave and ore generation (the density-field generator); `generate_resl`'s `skip` arg: 0 = full / 1 = slab-skip (no cave field, solid 0..H — A/B reference only) / 2 = **far h-only** (AC-0284b: builds only the 3 surface fields + H/biome/top-block, NO slabs, ~92 µs/col vs ~1.7 ms full) |
-| `mesh.cpp` | chunk meshing (greedy/FACE-BLOCK path); the 4x4 avg far emitter `AweMesh.h_avg_emit` (byte-identical to the slab emitter on the same fill, shares `avg_grid_emit` with `low_emit_avg`) |
+| `gen.cpp` | terrain, biome, cave and ore generation (the density-field generator); `generate_resl`'s `skip` arg: 0 = full / 1 = **band-A materialization fill** (no cave field, solid 0..H + aquifer + surface top + veg — the drain's high lane runs it on each band-A column's first mesh, AC-0312) / 2 = **far h-only** (AC-0284b: builds only the 3 surface fields + H/biome/top-block, NO slabs, ~92 µs/col vs ~1.7 ms full) |
+| `mesh.cpp` | chunk meshing (greedy/FACE-BLOCK path); the avg far emitters `AweMesh.h_avg_emit` / `low_emit_avg` at a grid G (4 or 8 — AC-0312's band C / band B), byte-identical to the slab emitter on the same fill (shared `avg_grid_emit`), with the WATER EXCEPTION (a water-topped cell emits its top face with the translucent water material — `top_water` + atlas-rect params) and the `AweMesh.sky_eff` heightmap-sky light/strips builder (band A + the G-grid avg lanes) |
 | `strips.cpp` | strip meshing lane |
 | `chunk_io.cpp` | column/slab blob encode+decode, region disk I/O |
 | `lighting.cpp` | **test-only reference**: the legacy `AweLighting` flood kernel (AC-0283 P4) |
@@ -157,15 +157,25 @@ Match these; do not improvise a different approach in a task.
   re-seed); a far→full promotion re-seeds the WHOLE column top-down. One `DirectionalLight3D`
   sun is modulated by `Game.time_of_day`; the mesh stores noon light and the shader uniform
   `u_day` does the darkening (AC-0204 — no day factor anywhere in the build path).
-- **Far data (the halo band, taxi > `band0_r`, + the offscreen interior collar)**: columns
+- **Far data (the draw band, taxi > `band0_r`, + the offscreen interior collar)**: columns
   store **no slabs at all** — just a `[H u16×256][biome×256][top-block×256]` payload
-  (~1 KB, ~198 B on disk; AC-0284b). Gen builds only the 3 coarse SURFACE fields (the ones
-  H depends on) + the heights pass — ~92 µs/col vs ~1.7 ms full (≈18×); the heights pass
-  alone is ~34 µs (the RP "heights-only" line). H is bit-exact with the full path (the
-  stored H *is* the heightmap — promotion must not shift terrain). The halo draw (4x4 avg +
-  heightmap sky) never shows caves, so slab data is unnecessary; the 4x4 avg is emitted by
-  `AweMesh.h_avg_emit`, byte-identical to the slab emitter on the same fill. A far column
-  entering the real band schedules a FULL regen (AC-0283 P2 late-landing machinery).
+  (~1 KB, ~198 B on disk; AC-0284b; the v6 flag bit 1). Gen builds only the 3 coarse
+  SURFACE fields (the ones H depends on) + the heights pass — ~92 µs/col vs ~1.7 ms full
+  (≈18×); the heights pass alone is ~34 µs (the RP "heights-only" line). H is bit-exact
+  with the full path (the stored H *is* the heightmap — promotion must not shift terrain).
+  **AC-0312: the draw band is THREE tiers** (`_lod_tier_of`, the render-edge guard first —
+  a knob sitting past the render radius is data-only): **BAND A** (`sim` < taxi ≤
+  `medium_start`) — the far column MATERIALIZED to the full 16×16×16 no-cave fill: the
+  drain's high lane runs `generate_resl(skip=1)` + the full-column build under a cached
+  heightmap-sky eff (`AweMesh.sky_eff`, `chunk.far_eff`), water/trees/flowers included —
+  full-LOD draw, no engine light; **BAND B** (`medium_start` < taxi ≤ `low_start`) — 8×8
+  avg (`low_emit_avg` at G=8); **BAND C** (`low_start` < taxi < render) — 4×4 avg
+  (`h_avg_emit`); both avg tiers byte-identical to the slab emitter on the same skip-fill
+  grid, heightmap sky, and the WATER EXCEPTION (a water-topped cell emits its top face in
+  the translucent water material). Nothing in a draw tier ever shows caves. The
+  skip=1 slab-skip path is therefore LIVE again (the `cols_skip` gen census reads the
+  band-A count). A far column entering the real band schedules a FULL regen (AC-0283 P2
+  late-landing machinery).
   AC-0286 completes the promotion contract: (1) **detection** — the crossing is owed from
   THREE points: the recenter walk, an in-band disk load, and a FAR data landing already
   inside the real band (gen-queue lag past the crossing); the owed step retries the enqueue
@@ -184,6 +194,20 @@ Match these; do not improvise a different approach in a task.
   multi-thousand-deep build backlog. Permanent counters: `star_seed_count/us`,
   `promo_enq_count`, `promo_land_count/ms`, `star_late_landings_promo` (expect 0 — the
   retain-swap never HIDEs), `hslab_defer_settle`.
+- **Demotion + lane ownership (AC-0312)**: the keep-all-LOD DATA retention is RETIRED —
+  a column leaving the real band is swapped to the h-only far form (`generate_far`
+  payload, bit-exact no-cave H + `no_caves`) with `clear_data()`: **band A** keeps its
+  OLD high-LOD mesh resident + visible (no re-materialization owed — the build pick
+  skips meshed columns; the next promotion's full regen re-converges the delta),
+  **bands B/C** flip to the ready stored low (else the low obligation re-opens and
+  `_low_relower_owed` RE-LOWS the far column — the re-lower reaches far columns, the
+  low re-emitted at the current data_gen). Lane ownership is per-lane: the BUILD lane
+  owes the real band + band A (the drain's `high_only` pool admits tier ≤ 1), the WAVE
+  (low) lane owns bands 2/3 only — the low probe (`_entry_best_pending`) returns -1 for
+  tier ≤ 1 / ≥ 4 (a band-A far column is never "pending" for the low lane, or
+  `band_drained()` stalls). The unmaterialized band-A special case lives in the HIGH
+  probe (`_hslab_best_pending`). Chunk fields: `far_mat` (fill slabs resident) +
+  `far_eff` (cached sky eff, dies with the data).
 - **Build order (AC-0313)**: every real-band column (taxi ≤ `band0_r` — the sim band) is
   built as a **FULL 24-slab column, inside-out**: the bake score is `(taxi, layer)` —
   across columns the innermost unbuilt column first (a pure function of the live
@@ -231,6 +255,19 @@ Match these; do not improvise a different approach in a task.
 - **Comments are the documentation style.** Non-obvious blocks carry an `AC-NNNN`-tagged
   rationale (why the constant, why the ordering, what was measured). The port-era "no
   comments" rule is retired: an unexplained optimisation in this codebase is a liability.
+- **`_` means "not this module's interface".** GDScript has no access modifiers and the
+  engine enforces nothing, so this is a review rule: do not reach a `_`-prefixed member or
+  method on another object from another file. Two files needing it means the underscore is
+  wrong — and the fix is **never a rename**, which promotes a private field to public API
+  and freezes its name. Add the missing contract instead: a getter (and a setter only where
+  the caller is the authority) for internal data, returning a value or a copy, since a live
+  reference encapsulates nothing. Otherwise: a coarser operation on the owner when the
+  caller is doing the owner's work, injection when a child pulls its parent's services, a
+  move when a shared utility sits in the wrong home.
+- **The arms are the one exception.** `scenes/harness.gd` reaches into the system under
+  test deliberately — it is inert during normal play (§3) — so those accesses are part of
+  the proof, not a defect. Where the arms need state, prefer a declared introspection
+  surface.
 - Surgical edits. Do not reformat unrelated files; do not restructure a file you were not
   asked to touch.
 - Every change is a ticket. `tasks/TASKS.yaml` is mutated **only** through

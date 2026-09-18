@@ -2,9 +2,12 @@
 
 ## harness.gd (24,280 lines) — the arms
 
-- It holds **every** `AWECRAFT_LOGIC` arm and is **inert during normal play** (AC-0140). It stays
-  **pristine**: a temporary measurement arm goes in **and comes out** in the same task. Do not
-  restructure or reformat it, and never leave a probe behind.
+- It holds **every** `AWECRAFT_LOGIC` arm and is **inert during normal play** (AC-0140), and it
+  stays **out of `main.gd` and the world**: AC-0140 separated the arm suite from the coordinator,
+  and folding it back is a regression. **Pristine** means a temporary measurement arm goes in
+  **and comes out** in the same task — never leave a probe behind. Restructuring the arms is a
+  legitimate task in its own right, but never a side effect: they are the instrument every other
+  change is judged by, so a task that edits them cannot be judged by them.
 - **Adding or changing an arm means two files**: the branch in `harness.gd` **and** a row in
   `tasks/harness_data.yaml` (entry / tests / result_fields / envs / wall / notes), then
   `python3 tasks/scripts/harness_doc.py --render`. `--check` compares the doc against the data — it

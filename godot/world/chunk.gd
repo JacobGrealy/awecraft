@@ -205,6 +205,21 @@ var far_hmax := 0
 # rebuilds them). The h-only halo's solid set includes the trees (the skip
 # slab's bs bitset does too) — empty here until the first emit.
 var far_veg: PackedByteArray = PackedByteArray()
+# AC-0312: the BAND-A materialization mark — true while the fill slabs
+# are resident (the mat landing: the skip=1 fill generated worker-side +
+# the full-LOD mesh built under the sky eff). The far flag + payload are
+# KEPT (the save form stays ~198 B; the snap rings + the promotion
+# contract ride on the payload). A demote to band A (the keep-all-LOD
+# data retention is retired — _demote_to_far) resets it to false: the
+# slabs are freed, the mesh stays resident, and the mat probe owes the
+# re-materialization only if the mesh is ever freed (a recycle).
+var far_mat := false
+# AC-0312: the cached band-A sky eff (AweMesh.sky_eff on far_h — the
+# classic light dict + the 8 clamped-H strips, ~534 KB). NOT on disk
+# (recomputed from the payload on the next band-A dispatch after a full
+# landing / demote — clear_far resets it). Lives on the column (one
+# column = one cache — the dispatch + every retrigger read it).
+var far_eff: Dictionary = {}
 
 # AC-0284b: drop the far representation (a full landing replaces the
 # column whole — the slabs ARE the data again).
@@ -215,6 +230,8 @@ func clear_far() -> void:
 	far_top = PackedByteArray()
 	far_hmax = 0
 	far_veg = PackedByteArray()
+	far_mat = false
+	far_eff = {}
 
 # AC-0284b: the 1024-byte far payload (H u16 LE + biome + top) as ONE
 # array — the snap_rings far argument (a far neighbor's ring is the

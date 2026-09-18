@@ -207,10 +207,10 @@ var fluid_tick_radius := 14
 # simulation (collision band 0, the data tier-1 priority square, mob
 # spawn). Settings "sim_dist".
 var band0_r := 4
-# AC-0263 (AC-0283 P3): the MED/LOW split is RETIRED from the draw tier —
-# the halo band is all 4x4x4 + heightmap sky (see band0_r /
-# _lod_tier_of). The variable stays for the settings/harness compat
-# (harness arms still set it; it no longer selects a draw tier).
+# AC-0312: the BAND A/B boundary (taxi chunks) — the outer edge of the
+# full-LOD draw tier (see _lod_tier_of). Live-read by the tier model;
+# note_medium_start keeps it in sync with Settings (clamped above sim,
+# at or below render) and re-stamps the queue.
 var medium_start_r := 8
 var band1_r := 96
 var collision_enabled := true
@@ -561,6 +561,13 @@ func _entry_best_pending(c: Node3D) -> int:
 	var pys := _player_slab()
 	var sn: int = c.data.size()
 	var tier := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)
+	# AC-0312: the low lane OWNS the draw bands 2/3 only — the real band
+	# (the build lane) and band A (the materializing high lane) never owe
+	# a low, and past the render edge nothing renders: a pending report
+	# there would stall band_drained() (the probe's consumers used to
+	# skip those chunks themselves).
+	if tier <= 1 or tier >= 4:
+		return -1
 	for r in range(sn * 2):
 		var dy: int
 		if r == 0:
@@ -654,7 +661,18 @@ func _entry_best_pending_cached(c: Node3D) -> int:
 # taxi) bake order's layer. -1 = the column owes nothing (high-complete;
 # an all-air column's probe is -1 too, so mesh_built can flip).
 func _hslab_best_pending(c: Node3D) -> int:
-	if c == null or c.data.is_empty() or int(c.top) < 0:
+	if c == null or c.data.is_empty():
+		return -1
+	# AC-0312: an UNMATERIALIZED band-A far column is owed — its first
+	# slab dispatch is the materialization (the worker runs the skip=1
+	# fill and builds the slab on it). The fill lands the full column,
+	# so any slab answers; the player-slab clamp matches the bake order.
+	# (top is -1 while unmaterialized, so the early-out below would
+	# read "complete" — the special case precedes it.)
+	if c.far and not c.far_mat \
+			and _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz) == 1:
+		return clampi(_player_slab(), 0, c.data.size() - 1)
+	if int(c.top) < 0:
 		return -1
 	var pys := _player_slab()
 	var lim: int = mini(int(c.top) >> 4, c.data.size() - 1)
@@ -702,9 +720,15 @@ func _hslab_best_pending_cached(c: Node3D) -> int:
 			var si0: int = int(ck["si"])
 			if si0 < 0:
 				return -1
-			if si0 < c.data.size() and c.data[si0] != null \
-					and int(c.high_stamps.get(si0, -1)) != int(c.data_gen):
-				return si0  # still pending -> still the best (see above)
+			if si0 < c.data.size():
+				if c.data[si0] != null \
+						and int(c.high_stamps.get(si0, -1)) != int(c.data_gen):
+					return si0  # still pending -> still the best (see above)
+				# AC-0312: the unmaterialized band-A slab (null by
+				# representation) stays owed until the materialization
+				# lands (the fingerprint already pins tier + data_gen).
+				if c.far and not c.far_mat and int(f[3]) == 1:
+					return si0
 		_hslab_probe_cache.erase(key)
 	if _hslab_probe_cache.size() > 8000:
 		_hslab_probe_cache.clear()  # eviction safety (bounded working set)
@@ -1583,21 +1607,36 @@ func _lod_avg_mat() -> ShaderMaterial:
 func _is_real_col(dx: int, dz: int) -> bool:
 	return absi(dx) + absi(dz) <= band0_r
 
-# AC-0261 (AC-0283 P3): the LOD zone of a chunk at (dx, dz) from the
-# recenter anchor, taxi metric (the render edge is taxi too — "render
-# distance is the max value for everything that is rendered"): 0 = the
-# REAL band [0, band0_r] — the build lane owns it (pending renders
-# NOTHING, no placeholder of any kind); 2 = the HALO (4x4x4 + heightmap
-# sky) (band0_r, render_radius); 3 = DATA-ONLY [render_radius, ring
-# edge) — nothing renders past the render distance. (Tier 1 is retired:
-# the halo is all 4x4.)
+# AC-0261 (AC-0283 P3; AC-0312 restored): the LOD zone of a chunk at
+# (dx, dz) from the recenter anchor, taxi metric (the render edge is
+# taxi too — "render distance is the max value for everything that is
+# rendered"): 0 = the REAL band [0, band0_r] — the build lane owns it
+# (pending renders NOTHING, no placeholder of any kind); 1 = BAND A
+# (band0_r, medium_start_r] — the full-LOD draw tier (the cave-free
+# skip fill materialized at first mesh, heightmap-sky light, normal
+# high lane); 2 = BAND B (medium_start_r, low_start_r] — the 8x8 avg;
+# 3 = BAND C (low_start_r, render_radius) — the 4x4 avg; 4 = DATA-ONLY
+# [render_radius, ring edge) — nothing renders past the render
+# distance. AC-0312: medium_start / low_start are DRAW tier boundaries
+# again (live reads — nothing hardcodes 27/50); data is h-only for
+# every tier 1-3 column (the AC-0284b representation).
 func _lod_tier_of(dx: int, dz: int) -> int:
 	if _is_real_col(dx, dz):
 		return 0
 	var taxi := absi(dx) + absi(dz)
-	if taxi < render_radius:
-		return 2
-	return 3
+	# AC-0312: the draw tiers live INSIDE the render edge — the band
+	# knobs may sit past the render radius (a harness that forces
+	# render_radius directly, e.g. the R=4 battery: medium_start 8 >
+	# render 4). Past the edge there is nothing to draw: data-only,
+	# whatever the knobs say (the knobs are DRAW-tier boundaries, not
+	# data boundaries — the band_of streaming rule is untouched).
+	if taxi >= render_radius:
+		return 4
+	if taxi <= medium_start_r:
+		return 1  # AC-0312 band A (full LOD, materialized)
+	if taxi <= low_start_r:
+		return 2  # AC-0312 band B (8x8 avg)
+	return 3  # AC-0312 band C (4x4 avg)
 
 # AC-0313: the TIER-0 SET (tier0_r / _is_tier0_col / note_tier0_radius,
 # the "tier0_radius" setting) is GONE — the real band (taxi ≤ band0_r) is
@@ -2394,56 +2433,65 @@ func _halo_hmap_get(c: Node3D) -> PackedByteArray:
 # worker's low_emit_avg writes each quad's origin-cell sky into the
 # vertex alpha (the lod_avg shader multiplies it into the brightness).
 func _halo_sky_for(c: Node3D, si: int) -> PackedByteArray:
+	# AC-0312: G follows the live band tier — band B (tier 2) emits the
+	# 8x8 avg, so its per-cell sky is G=8 (512 B); band C (tier 3) keeps
+	# G=4 (64 B). The quad rule is unchanged: a grid cell is lit (15)
+	# iff its BOTTOM sits strictly above the max terrain top over its
+	# x/z footprint, else 0. (Band A / real / data-only — no avg sky.)
+	var G := 4
+	var t := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)
+	if t == 2:
+		G = 8
+	elif t != 3:
+		return PackedByteArray()
+	var CB := 16 / G
 	# AC-0284b: a far column's stored H (the u16 payload) IS the
 	# heightmap — no C++ heights pass and no u8 wrap above 255 (TERRAIN_H
 	# MAX is 300). The slab-shaped halo path below keeps the u8 cache.
+	var fh: Array = []
+	fh.resize(G * G)
 	if c.far:
-		var fh: Array = []
-		fh.resize(16)
-		for gz in range(4):
-			for gx in range(4):
+		for gz in range(G):
+			for gx in range(G):
 				var m := 0
-				for lz in range(gz * 4, gz * 4 + 4):
+				for lz in range(gz * CB, gz * CB + CB):
 					var r0 := lz * 32
-					for lx in range(gx * 4, gx * 4 + 4):
+					for lx in range(gx * CB, gx * CB + CB):
 						var o := r0 + lx * 2
 						var v := int(c.far_h[o]) | (int(c.far_h[o + 1]) << 8)
 						if v > m:
 							m = v
-				fh[gz * 4 + gx] = m
-		var y0f := si * 16
-		var outf := PackedByteArray()
-		outf.resize(64)
-		for cy in range(4):
-			for cz in range(4):
-				for cx in range(4):
-					outf[cy * 16 + cz * 4 + cx] = 15 if y0f + cy * 4 > int(fh[cz * 4 + cx]) else 0
-		return outf
-	var hm: PackedByteArray = _halo_hmap_get(c)
-	var fh := PackedByteArray()
-	fh.resize(16)
-	for gz in range(4):
-		for gx in range(4):
-			var m := 0
-			for lz in range(gz * 4, gz * 4 + 4):
-				var r0 := lz * 16
-				for lx in range(gx * 4, gx * 4 + 4):
-					if int(hm[r0 + lx]) > m:
-						m = int(hm[r0 + lx])
-			fh[gz * 4 + gx] = m
-	var y0 := si * 16
-	var out := PackedByteArray()
-	out.resize(64)
-	for cy in range(4):
-		for cz in range(4):
-			for cx in range(4):
-				out[cy * 16 + cz * 4 + cx] = 15 if y0 + cy * 4 > int(fh[cz * 4 + cx]) else 0
-	return out
+				fh[gz * G + gx] = m
+	else:
+		var hm: PackedByteArray = _halo_hmap_get(c)
+		for gz in range(G):
+			for gx in range(G):
+				var m := 0
+				for lz in range(gz * CB, gz * CB + CB):
+					var r0 := lz * 16
+					for lx in range(gx * CB, gx * CB + CB):
+						if int(hm[r0 + lx]) > m:
+							m = int(hm[r0 + lx])
+				fh[gz * G + gx] = m
+	var y0f := si * 16
+	var outf := PackedByteArray()
+	outf.resize(G * G * G)
+	for cy in range(G):
+		for cz in range(G):
+			for cx in range(G):
+				outf[cy * G * G + cz * G + cx] = 15 if y0f + cy * CB > int(fh[cz * G + cx]) else 0
+	return outf
 
 func _low_dispatch_slab(c: Node3D, si: int) -> int:
 	# AC-0284b: a far column's null slabs ARE the payload — dispatchable.
 	if threadmesh_pool == null or si < 0 or si >= c.data.size() or (c.data[si] == null and not c.far):
 		return -1
+	# AC-0312: band A (tier 1) is owned by the HIGH lane (the
+	# materialization + the per-slab high builds) — the low lane no-ops
+	# it (the wave scan skips tier 1; this guards the direct callers).
+	# 0 = handled (no air-slab bookkeeping for a non-air slab).
+	if _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz) == 1:
+		return 0
 	if _low_tasks.size() >= LOW_TASK_CAP:
 		return 2
 	var key := _key(int(c.cx), int(c.cz))
@@ -2473,11 +2521,14 @@ func _low_dispatch_slab(c: Node3D, si: int) -> int:
 	var entry := {
 		"low": true, "key": key, "cx": int(c.cx), "cz": int(c.cz),
 		"inst": c.get_instance_id(), "colgen": int(c.col_gen), "si": si,
-		"tier": tier,  # AC-0252 (P3): 2 = the HALO (4x4x4 + heightmap sky)
-		# AC-0283 P3: the halo's per-cell sky light (the dispatch tier is
-		# the band — a promotion/demotion re-pick re-emits at the new
-		# tier; the real band never reaches this lane, empty payload).
-		"sky": _halo_sky_for(c, si) if tier == 2 else PackedByteArray(),
+		"tier": tier,  # AC-0312: 2 = band B (8x8 avg), 3 = band C (4x4 avg)
+		# AC-0283 P3 (AC-0312: both avg bands): the per-cell heightmap
+		# sky light (the dispatch tier is the band — a
+		# promotion/demotion re-pick re-emits at the new tier; the real
+		# band never reaches this lane, empty payload). Band A (tier 1)
+		# never dispatches here (the high lane owns it — the wave skips
+		# tier 1, _low_dispatch_slab no-ops it).
+		"sky": _halo_sky_for(c, si) if tier >= 2 else PackedByteArray(),
 		"slabs": mc.slab_copy(c.data) if not c.far else PackedByteArray(),  # the full column (~20 KB; the C++ emit reads si-1/si/si+1) — a far column carries the payload below
 		# AC-0284b: the far payload (h u16 + biome + top) — null for every
 		# non-far dispatch. Packed arrays are COW value types: the worker
@@ -2601,6 +2652,20 @@ func _low_handoff(e: Dictionary, res) -> void:
 		# gone from the active path).
 		var mesh := ArrayMesh.new()
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _low_surface(res["v"], res["i"], res["n"], res["c"]))
+		# AC-0312: the WATER EXCEPTION — a water-topped cell's top face
+		# rides as extra surfaces with the real translucent water
+		# material (the two-pass camera-side cull, like the high path's
+		# fluid mesh): the C++ emit splits the water verts out of the
+		# avg surface (wv/wn/wc/wu/wi — the avg surface stays
+		# byte-identical, the farab A/B contract holds with the water
+		# face on both sides).
+		var wv: PackedVector3Array = res.get("wv", PackedVector3Array())
+		if wv.size() > 0:
+			var ws: Array = _low_surface(res["wv"], res["wi"], res["wn"], res["wc"], res["wu"])
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, ws)
+			mesh.surface_set_material(mesh.get_surface_count() - 1, c._fluid_anim_material(5))
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, ws)
+			mesh.surface_set_material(mesh.get_surface_count() - 1, c._fluid_anim_bf_material(5))
 		low_max_h = maxf(low_max_h, float(res.get("mh", 0.0)))
 		_low_place_slab(c, si, mesh)
 		if _low_first_attach_frame < 0:
@@ -2694,10 +2759,18 @@ func _low_place_slab(c: Node3D, si: int, mesh: ArrayMesh) -> void:
 		i += 1
 	var mi := _mi_checkout()  # AC-0247: pool (per-slab ArrayMesh from the C++ low_emit handoff)
 	mi.mesh = mesh
-	# AC-0252: the placeholder slabs are AVERAGE-COLOR (vertex color, no
-	# UVs) — they wear the noise shader material, not the textured-low
-	# opaque material (the textured emit is dormant with the band split).
-	mi.material_override = _lod_avg_mat()
+	if mesh.get_surface_count() > 1:
+		# AC-0312: a water surface rides with the slab — per-surface
+		# materials (a material_override would override the water's
+		# fluid material); surface 0 wears the avg noise material
+		# exactly as the override did.
+		mesh.surface_set_material(0, _lod_avg_mat())
+	else:
+		# AC-0252: the placeholder slabs are AVERAGE-COLOR (vertex color,
+		# no UVs) — they wear the noise shader material, not the
+		# textured-low opaque material (the textured emit is dormant
+		# with the band split).
+		mi.material_override = _lod_avg_mat()
 	mi.position = Vector3(0.0, float(si * 16), 0.0)
 	c.add_child(mi)
 	if i < c.low_slabs.size() and int(c.low_slabs[i]) == si:
@@ -2971,6 +3044,10 @@ func _low_scan_slabs(n: int) -> Array:
 			# (taxi) render distance nothing renders.
 			var taxi := absi(dx) + absi(dz)
 			if taxi <= band0_r or taxi >= render_radius:
+				continue
+			# AC-0312: band A (tier 1) is the HIGH lane's (materialization
+			# + per-slab high builds) — the low wave never dispatches it.
+			if _lod_tier_of(dx, dz) == 1:
 				continue
 			var c = chunks.get(e["key"])
 			if c == null or c.data.is_empty():
@@ -3256,18 +3333,28 @@ func _low_step() -> void:
 # has none (the recenter recompute skips meshed columns), so its stale /
 # missing lows would never re-lower and the demote flip never lands. The
 # re-landing attach does the flip (high off, low on — the demote
-# contract). Clearing: a fresh probe (all lows current at the live tier),
-# a far column (its low IS the payload emit — never stale by data_gen),
-# or a return to the real band (the high owns it again).
+# contract). AC-0312: the probe decides for EVERY representation — a
+# demoted far column re-lowers from its payload (its null slabs ARE the
+# data; the far emit is byte-identical to the slab emit on the same
+# grid). Clearing: the real band or band A (the high owns the draw),
+# or a fresh probe (all lows current at the live tier).
 func _low_relower_owed_step() -> void:
 	if _low_relower_owed.is_empty():
 		return
 	for key in _low_relower_owed.keys():
 		var rc = chunks.get(key)
-		if rc == null or rc.data.is_empty() or rc.far:
+		if rc == null or rc.data.is_empty():
 			_low_relower_owed.erase(key)
 			continue
-		if _is_real_col(int(rc.cx) - last_pcx, int(rc.cz) - last_pcz):
+		# AC-0312: the tier is the whole story (the old `rc.far`
+		# short-circuit is RETIRED — a DEMOTED far column re-lowers from
+		# the payload: its null slabs ARE the data, the far emit reads
+		# the payload; the probe is pending against the live tier until
+		# the re-lower lands). The real band and BAND A clear the debt
+		# (the high owns the draw; the wave skips band A — a low there
+		# would be the wrong tier).
+		var rc_tier := _lod_tier_of(int(rc.cx) - last_pcx, int(rc.cz) - last_pcz)
+		if rc_tier <= 1:
 			_low_relower_owed.erase(key)
 			continue
 		var rsi := _entry_best_pending_cached(rc)
@@ -3526,6 +3613,14 @@ var _loadwin_maxinf := 0
 var _load_wms_sum := 0
 var _load_wms_n := 0
 var hslab_defer_cap := 0
+# AC-0312: the band-A materialization forensics — mat dispatches (the
+# far column's first high dispatch), their worker-side ms (fill + full
+# column build), and the deferrals on a missing sky eff (should never
+# happen: the far payload is resident).
+var band_a_mat_dispatches := 0
+var band_a_mat_ms_sum := 0
+var band_a_mat_ms_n := 0
+var hslab_defer_sky := 0
 var load_phase1_ready_fail := 0
 var _loadlog_t0 := 0
 var _loadlog_next_ms := 0
@@ -5389,14 +5484,18 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 func _gen_skip_flag(cx: int, cz: int) -> int:
 	var dx := cx - last_pcx
 	var dz := cz - last_pcz
-	# AC-0284a (AC-0284b: h-only): the HALO band (the meshed far band —
-	# draw tier 2) is far-generated: its 4x4 avg (the H-driven h_avg_emit)
-	# + heightmap sky draw never shows caves; the umbrella marker
-	# (no_caves) rides the column so a real-band landing schedules the
-	# full regen. Taxi-only rule (no frustum test — the halo IS the
-	# meshed far band). Tier-0 columns are REAL (full fidelity) — never
-	# far. The offscreen rule below is untouched.
-	if _lod_tier_of(dx, dz) == 2:
+	# AC-0284a (AC-0284b: h-only; AC-0312 all draw tiers): EVERY
+	# draw band beyond the real band (tiers 1-3 — band A full-LOD,
+	# band B 8x8, band C 4x4) is far-generated: the h-only payload's
+	# draws (the materialized skip fill / the h_avg emits) never show
+	# caves; the umbrella marker (no_caves) rides the column so a
+	# real-band landing schedules the full regen. Taxi-only rule (no
+	# frustum test — the far representation IS the draw for these
+	# bands). Tier-0 columns are REAL (full fidelity) — never far.
+	# Tier 4 (data-only, past the render edge) falls through to the
+	# band_of / offscreen-collar rule below, untouched.
+	var _lt := _lod_tier_of(dx, dz)
+	if _lt > 0 and _lt < 4:
 		return 2
 	var b := band_of(dx, dz)
 	if b <= 1:
@@ -5900,10 +5999,28 @@ func _tm_worker_run(skey: int) -> void:
 		# SceneTree). The TEXTURED low_emit (the dormant 4x4x4 path) keeps
 		# its binding but is no longer called by the lanes.
 		var mcl: Variant = ChunkScript.mesh_cpp()
-		var grid := 8 if int(entry.get("tier", 1)) == 1 else 4
+		# AC-0312: band B (tier 2) is the 8x8 avg; band C (tier 3) the
+		# 4x4 (the tier values moved — the grid pick follows them).
+		var grid := 8 if int(entry.get("tier", 1)) == 2 else 4
 		# AC-0283 P3: the halo's per-cell heightmap sky (empty on the
 		# legacy real-band / battery path — the emit's all-bright default).
 		var sky: PackedByteArray = entry.get("sky", PackedByteArray())
+		# AC-0312: the water exception's rect — Data.atlas_rects["5"].top
+		# + the atlas pixel size, snapshotted in the entry's ms (the
+		# avg emit's water surface: the water-topped cell's top face
+		# wears the real translucent water material). -1 / 0.0 = no
+		# atlas (the surface is skipped — the no-atlas fallback). Both
+		# emits (the far h_avg + the slab low_avg) share the tail, so
+		# the farab A/B identity holds WITH the water surface.
+		var ms_w: Dictionary = entry.get("ms", {})
+		var plain_w = ms_w.get("plain", {})
+		var w5 = plain_w.get("5", {}) if plain_w is Dictionary else {}
+		if not (w5 is Dictionary):
+			w5 = {}
+		var wtop_r = w5.get("top", [])
+		var wtlx := int(wtop_r[0]) if wtop_r.size() == 2 else -1
+		var wtly := int(wtop_r[1]) if wtop_r.size() == 2 else -1
+		var wpx := float(ms_w.get("atlas_px", 0.0))
 		# AC-0284b: a FAR column — the payload emit (byte-identical to
 		# low_emit_avg on the same column's skip-filled slabs; the deep
 		# cells' ore color comes from the stone_ore_slab precompute —
@@ -5932,10 +6049,10 @@ func _tm_worker_run(skey: int) -> void:
 			if veg.size() == 0:
 				veg = WorldGen.gen_cpp().veg_cells(int(entry["cx"]), int(entry["cz"]), int(Game.world_seed), int(Data.HEIGHT), int(Data.SEA))
 				entry["veg_done"] = veg
-			entry["result"] = mcl.h_avg_emit(fr[0], fr[1], fr[2], ore, veg, int(entry["si"]), grid, entry["fcc"], sky, int(Data.SEA), int(Data.HEIGHT))
+			entry["result"] = mcl.h_avg_emit(fr[0], fr[1], fr[2], ore, veg, int(entry["si"]), grid, entry["fcc"], sky, int(Data.SEA), int(Data.HEIGHT), wtlx, wtly, wpx)
 			low_emit_cpp += 1
 			return
-		entry["result"] = mcl.low_emit_avg(entry["slabs"], int(entry["si"]), grid, entry["fcc"], sky)
+		entry["result"] = mcl.low_emit_avg(entry["slabs"], int(entry["si"]), grid, entry["fcc"], sky, wtlx, wtly, wpx)
 		low_emit_cpp += 1
 		return
 	# AC-0152/AC-0160: all bands (0/1/2) flow through the normal build_accs
@@ -5957,6 +6074,29 @@ func _tm_worker_run(skey: int) -> void:
 	# and the GDScript build_accs fallback were removed (the C++ extension
 	# is required).
 	var mc: Variant = ChunkScript.mesh_cpp()
+	# AC-0312: BAND A materialization — the mat entry (the far column's
+	# first high dispatch): materialize the column's slabs (the skip=1
+	# fill — the exact band-A contract: no caves, sky-only light, water
+	# + trees + flowers) and build the FULL column's mesh under the
+	# dispatch-time sky eff (the entry's eff + eff_strips — no star:
+	# band A is never seeded). The slabs ride back as mat_data (the
+	# handoff stamps the column — the far payload is kept). A failed
+	# generation (null / wrong shape) datadrops: the entry stays queued
+	# and retries (the retrigger re-enqueues it).
+	if bool(entry.get("mat", false)):
+		var mat_t0 := Time.get_ticks_usec()
+		var mg: Variant = WorldGen.gen_cpp()
+		var mresl: Array = mg.generate_resl(int(entry["cx"]), int(entry["cz"]), int(Game.world_seed), int(Data.HEIGHT), int(Data.SEA), 1, PackedByteArray())
+		if mresl == null or int(mresl.size()) != 2:
+			entry["result"] = null
+			return
+		WorldGen.apply_banana_resl(mresl, int(entry["cx"]), int(entry["cz"]), int(Game.world_seed), int(Data.HEIGHT))
+		entry["mat_data"] = mresl
+		var mat_res: Dictionary = mc.build_accs(mresl[0], mresl[1], int(entry["cx"]), int(entry["cz"]), entry["nbs"], entry["ctx"], entry["ms"], entry["eff"], 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())
+		entry["mat_ms"] = (Time.get_ticks_usec() - mat_t0) / 1000
+		mesh_cpp_builds += 1
+		entry["result"] = mat_res
+		return
 	# AC-0234: entry["mask"] = the vertical-window keep mask at dispatch
 	# (24 bytes; EMPTY = tier 0 / full build — byte-identical to the
 	# pre-AC-0234 call). Masked slabs are skipped like all-air slabs; the
@@ -6302,6 +6442,79 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 				star_bake_probe.call("drop", int(e["cx"]), int(e["cz"]), -1, {"eff": e.get("eff", {})})
 			return
 	if bool(e.get("hslab", false)):
+		# AC-0312: the BAND-A mat landing — the far column's first high
+		# dispatch materialized the column (the worker ran the skip=1
+		# fill + the full-column build under the sky eff). The DATA
+		# STAMP IS THIS LANDING (the column held no slabs at dispatch —
+		# the stale/band checks above passed against the null-slab
+		# stamps): land the slabs (the reference handoff — data_gen /
+		# fl_gen bump, top update), mark the column materialized (the
+		# far flag + payload are KEPT — the save form, the snap rings,
+		# and the promotion contract all ride on them), attach the
+		# full-column mesh, stamp + flush every built slab. The entry
+		# stays queued (the pick drops it the frame the probe finds
+		# nothing left).
+		if bool(e.get("mat", false)):
+			var md: Array = e.get("mat_data", [])
+			if md.size() != 2:
+				_tm_datadrop += 1
+				_tm_retrigger(key, c, e)
+				return
+			var ta_m := Time.get_ticks_msec()
+			c.slabs_landed(md[0], md[1])
+			c.far_mat = true
+			c.no_caves = true  # the skip fill is cave-less (the promotion owes the full regen)
+			var ms_m: int = int(e.get("mat_ms", 0))
+			band_a_mat_ms_sum += ms_m
+			band_a_mat_ms_n += 1
+			c.apply_edit_accs(res, _tm_ms_full, false)
+			var si1_m: int = int(res.get("si1", c.data.size() - 1))
+			for si_m in range(si1_m + 1):
+				c.high_stamps[si_m] = int(c.data_gen)
+				c.flush_slabs[si_m] = true
+				_fog_drop_slab(c, si_m)
+			_star_update_light_settled(c)
+			c.saved_light = {}
+			# high-complete in one shot (the full column landed; slabs
+			# above the top are air and never pending — the probe's lim).
+			c.mesh_built = true
+			_hslab_probe_invalidate(c)
+			_low_probe_invalidate(c)
+			# AC-0312: the ACTIVE tier is the LIVE tier — band A (and the
+			# real band) show the high (any low is stored OFF for the
+			# demote flip); a live demote to B/C while in flight shows
+			# the READY lows (the stored highs flip on re-entry) and
+			# re-opens the rest for the wave.
+			var tier_m := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)
+			if tier_m > 1:
+				hslab_stragglers_n += 1
+				for si_l in c.low_slabs:
+					var si_l2: int = int(si_l)
+					if not _low_slab_pending_at(c, si_l2, tier_m):
+						c.low_slab_visible(si_l2, true)
+						c.high_slab_visible(si_l2, false)
+						_fog_drop_slab(c, si_l2)
+				_low_relower_owed[key] = true
+			else:
+				for si_l in c.low_slabs:
+					c.low_slab_visible(int(si_l), false)  # stored (flip on demote)
+				for si_m2 in range(c.data.size()):
+					c.high_slab_visible(si_m2, bool(c.flush_slabs.has(si_m2)))
+			if bool(e.get("eff_trust", false)):
+				_eff_cache_put(key, c, res.get("light", {}), e.get("ngen", null))
+			_count_collision_build(c)
+			_stage_check(c, key)
+			perf_build_ms += Time.get_ticks_msec() - ta_m
+			perf_build_worker_ms += ms_m
+			perf_build_worker_ms_list.append(ms_m)
+			if loading_active:
+				_load_wms_sum += ms_m
+				_load_wms_n += 1
+			_tm_handoff += 1
+			_tm_hslab_n += 1
+			if timing or _tm_debug:
+				print("BUILDCHUNK_MAT %d,%d slabs=%d ms=%d t=%d" % [int(e["cx"]), int(e["cz"]), si1_m + 1, ms_m, Time.get_ticks_msec()])
+			return
 		# AC-0263: a per-slab FULL-RES landing (the tier-0 section / the
 		# high-band rings). The scoped stale check (rows_eq on the
 		# dispatch window) and the band check above already ran. Scoped
@@ -6337,11 +6550,14 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		# until the wave's low lands and flips it (the slab never shows
 		# two tiers or nothing).
 		var taxi_now := absi(int(c.cx) - last_pcx) + absi(int(c.cz) - last_pcz)
-		# AC-0283 P3 (AC-0313): the straggler test is the REAL-band exit
-		# (the column left the real band while this build was in flight) —
-		# the halo band's draw owns it now (the tier-0 disjunct is gone
-		# with the tier-0 set). taxi_now stays for the log line.
-		var straggler := taxi_now > band0_r
+		# AC-0283 P3 (AC-0313, AC-0312): the straggler test is the exit
+		# from the HIGH draw tiers (the column left REAL + BAND A while
+		# this build was in flight) — bands B/C own the draw now (the
+		# avg LOD). Band A is IN-band: the high stays showing (the
+		# full-LOD draw tier — AC-0312 restored the band, so the old
+		# real-band-exit test mis-classified every band-A landing).
+		# taxi_now stays for the log line.
+		var straggler := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz) > 1
 		if straggler:
 			hslab_stragglers_n += 1
 		var ta_h := Time.get_ticks_msec()
@@ -6978,6 +7194,29 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 # the in-flight dedup paces one slab in flight per column). true = a
 # worker task owns the slab; false = deferred (the caller keeps the entry
 # and ends the frame, as with a cap drop).
+# AC-0312: the band-A cached sky eff — the heightmap sky as the classic
+# light dict + the 8 clamped-H margin strips, computed ONCE per column
+# from its far_h (AweMesh.sky_eff, C++) and cached on the column
+# (c.far_eff — ~534 KB; it dies with the column, freed explicitly on a
+# full landing via clear_far). The band-A high dispatches (the
+# materialization + any retrigger) build under it: band A is never
+# seeded into the engine (sky-only light — no caves, no block light),
+# so the settled-payload gate never applies. {} = no payload (the
+# dispatch defers; a far column always has one).
+func _band_a_eff_for(c: Node3D) -> Dictionary:
+	if not c.far or c.far_h.size() != 512:
+		return {}
+	if not c.far_eff.is_empty():
+		return c.far_eff
+	var me: Variant = ChunkScript.mesh_cpp()
+	if me == null:
+		return {}
+	var r: Dictionary = me.sky_eff(int(c.cx), int(c.cz), c.far_h, int(Data.HEIGHT))
+	if r.has("err"):
+		return {}
+	c.far_eff = r
+	return r
+
 func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary, settle := false) -> bool:
 	var key := _key(cx, cz)
 	c.col_immediate = _col_immediate_for(cx, cz)
@@ -6989,6 +7228,89 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 		hslab_defer_dedup += 1
 		_hslab_last_defer = 1
 		return false
+	# AC-0312: BAND A — a far column in the full-LOD draw tier. Its high
+	# dispatch is the MATERIALIZATION (the "mat" entry): the worker runs
+	# the skip=1 fill (generate_resl — the exact band-A contract: no
+	# caves, sky-only light, water + trees + flowers) and builds the
+	# FULL column's mesh under the cached sky eff (AweMesh.sky_eff on
+	# the column's far_h — band A is never seeded into the engine, so
+	# the settled-payload gate and the star payload are bypassed). A
+	# mat-landed far column (far_mat — the retrigger path) takes the
+	# same sky-eff dispatch for its slab (an unseeded column's payload
+	# is never ok — defer-forever without this branch). The mat handoff
+	# stamps the slabs (the column's data IS the landing); the retrigger
+	# lands through the unchanged hslab path below.
+	var band_a := bool(c.far) \
+			and _lod_tier_of(int(cx) - last_pcx, int(cz) - last_pcz) == 1
+	if band_a:
+		var sea: Dictionary = _band_a_eff_for(c)
+		if sea.is_empty():
+			hslab_defer_sky += 1
+			_hslab_last_defer = 6
+			return false
+		var tm_cap_a := threadmesh_max
+		if _startup_pending() and tm_cap_a < 9:
+			tm_cap_a = 9
+		tm_cap_a = maxi(1, tm_cap_a - (2 if not dirty_queue.is_empty() else 1))
+		if threadmesh_inflight.size() >= tm_cap_a:
+			_tm_capdrop += 1
+			hslab_defer_cap += 1
+			_hslab_last_defer = 2
+			return false
+		var nbs_a: Dictionary = {}
+		var mc_a: Variant = ChunkScript.mesh_cpp()
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				if (dx == 0) == (dz == 0):
+					continue
+				var nc = chunks.get(_key(cx + dx, cz + dz))
+				if nc == null or nc.data.is_empty():
+					hslab_defer_nbs += 1
+					_hslab_last_defer = 3
+					return false  # the neighbor lands, the entry retries
+				nbs_a["%d,%d" % [dx, dz]] = mc_a.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep, nc.far_payload())
+		var is_mat := not bool(c.far_mat)
+		var ms_wa: Dictionary
+		if not _tm_ms_full.rects.is_empty():
+			ms_wa = {"rects": _tm_ms_full.rects.duplicate(), "h": float(_tm_ms_full.get("h", 0.0))}
+		else:
+			ms_wa = {"rects": {}}
+		var ctx_wa: Dictionary = _tm_ctx.duplicate()
+		ctx_wa["eff_strips"] = sea["strips"]
+		var entry_a := {
+			"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(), "colgen": int(c.col_gen),
+			"data": mc_a.slab_copy(c.data),  # all-null (a far column) — the mat build owns the data
+			"fl": mc_a.slab_copy(c.fl),
+			"stamp": c.stamp(),
+			"band": int(c.band),
+			"nbs": nbs_a, "eff": sea["light"], "eff_trust": true, "settle": false,
+			"ctx": ctx_wa, "ms": ms_wa, "ngen": _ngens_for(cx, cz),
+			"tier": _tier_of(int(cx) - last_pcx, int(cz) - last_pcz),
+			"hslab": true, "si0": 0 if is_mat else si, "si1": -1 if is_mat else si,
+			"mat": is_mat,
+			"scoped_snap": not is_mat,
+			"d_off": 0 if is_mat else maxi(0, si * 16 - 1),
+			"d_hi": Data.HEIGHT - 1 if is_mat else mini(Data.HEIGHT - 1, (si + 1) * 16),
+			"t_submit": Time.get_ticks_usec(),
+		}
+		var skey_a := _tm_next_slot
+		_tm_next_slot += 1
+		var tid_a = threadmesh_pool.add_task(_tm_worker_run.bind(skey_a), true)
+		entry_a["tid"] = tid_a
+		entry_a["skey"] = skey_a
+		_tm_slots_mutex.lock()
+		_tm_slots[skey_a] = entry_a
+		_tm_slots_mutex.unlock()
+		_tm_inflight_keys[key] = tid_a
+		threadmesh_inflight.append(entry_a)
+		_tm_enq += 1
+		if is_mat:
+			band_a_mat_dispatches += 1
+		_hslab_last_defer = 0
+		_bd_log(cx, cz)
+		if _tm_debug:
+			print("TMESH HSLAB %d,%d slab=%d mat=%d inflight=%d" % [cx, cz, si, is_mat, threadmesh_inflight.size()])
+		return true
 	# AC-0283 P2: the light gate — the 3x3x3 section box around the slab
 	# (the bake-box overhang) must be SETTLED in the engine: a slab never
 	# dispatches (and never shows) on lighting that is not calculated.
@@ -7201,9 +7523,16 @@ func _collect_pool(build: bool, include_fb := false, maxb := -1, high_only := fa
 					# units). Pre-filter the drain's pool to the REAL band
 					# only (AC-0283 P3: the halo band's work is the slab
 					# wave's, never the drain's).
+					# AC-0312: the drain's pool is the HIGH draw tiers —
+					# the REAL band (tier 0) + BAND A (tier 1, the
+					# full-LOD materialization lane — AC-0312 restored it
+					# to the drain). Bands B/C (2/3) are the slab wave's
+					# (their avg LOD is final there); data-only (4) is
+					# nothing (the old real-band-only filter starved the
+					# band-A mat dispatches — the drain is the lane).
 					var dxh := int(e["cx"]) - last_pcx
 					var dzh := int(e["cz"]) - last_pcz
-					if not _is_real_col(dxh, dzh):
+					if _lod_tier_of(dxh, dzh) > 1:
 						continue
 				out.append(e)
 			else:
@@ -7675,15 +8004,22 @@ func _drain_build_queue() -> void:
 			# is the slab wave's (its avg LOD is final there); the WAVE 3
 			# catch-up upgrades a low-holding column when it ENTERS the real
 			# band (per-slab).
+			# AC-0312: the gate is the HIGH draw tiers (the pool filter
+			# above admits them) — the REAL band + BAND A; an out-of-tier
+			# top pick (B/C/data-only) blocks the high dispatch for the
+			# frame as before (the unit falls to the data pass below).
 			var dxg := int(best_e["cx"]) - last_pcx
 			var dzg := int(best_e["cz"]) - last_pcz
-			if not _is_real_col(dxg, dzg):
+			if _lod_tier_of(dxg, dzg) > 1:
 				best_c = null
 				perf_high_gate_holds_n += 1
 		if best_c != null:
-			# AC-0263 (AC-0313): the build unit is ONE SLAB — within a
-			# column in Y-distance order from the player's slab (the (taxi,
-			# layer) order: the innermost column first, its slabs fanned).
+			# AC-0263 (AC-0313, AC-0312): the build unit is ONE SLAB —
+			# within a column in Y-distance order from the player's slab
+			# (the (taxi, layer) order: the innermost column first, its
+			# slabs fanned); a band-A far column's first slab is the
+			# materialization (the mat entry — the full column in one
+			# worker task).
 			# A high-complete column (the probe owes nothing — a landing
 			# raced the pick) frees its queue entry; a pending column
 			# dispatches its best slab and STAYS queued (re-picked next
@@ -8875,26 +9211,76 @@ func _drain_deferred_free() -> void:
 # re-pick the column (the re-entry flip is visibility-only); a PARTIAL
 # high keeps mesh_built=false and the high lane rebuilds the missing
 # slabs on re-entry (the AC-0278 re-queue).
+# AC-0312: the real -> band demotion's data side — the full (caved)
+# slabs are replaced with the h-only far form (generate_far: the
+# canonical no-cave H + biome + top, bit-exact with the full path's
+# surface H — the promotion contract). The resident high mesh stays
+# (band A shows it, B/C store it hidden). The no-caves umbrella makes
+# the promotion's full regen owed (AC-0286, unchanged). A generation
+# failure (no extension) leaves the column as-is (the demote is a
+# memory optimization, never a data loss — the slabs stay resident).
+func _demote_to_far(c: Node3D, key: String) -> void:
+	var g: Variant = WorldGen.gen_cpp()
+	if g == null:
+		return
+	var pay: PackedByteArray = g.generate_far(int(c.cx), int(c.cz), int(Game.world_seed), int(Data.HEIGHT), int(Data.SEA))
+	if pay.size() != 1024:
+		return
+	c.far_h = pay.slice(0, 512)
+	c.far_biome = pay.slice(512, 768)
+	c.far_top = pay.slice(768, 1024)
+	c.far = true
+	var hmax := 0
+	for i in range(256):
+		var hv := int(c.far_h[2 * i]) | (int(c.far_h[2 * i + 1]) << 8)
+		if hv > hmax:
+			hmax = hv
+	c.far_hmax = hmax
+	c.far_veg = PackedByteArray()
+	c.far_eff = {}  # the cached sky eff dies with the old data (recomputed on the next band-A dispatch)
+	c.far_mat = false
+	c.no_caves = true
+	# free the slabs (the stamp bump re-pends nothing visible — the probe
+	# reads the far representation; the mesh instances stay attached).
+	c.clear_data()
+	_hslab_probe_invalidate(c)
+	_low_probe_invalidate(c)
+
 func _demote_high_band_exit(c: Node3D, key: String) -> void:
 	var tier := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)
 	var flipped := 0
 	var reopened := 0
-	for si in range(c.data.size()):
-		if c.data[si] == null:
-			continue
-		if c.has_low_si(si) and not _low_slab_pending_at(c, si, tier):
-			# the ready stored low takes over - the atomic flip.
-			c.high_slab_visible(si, false)
-			c.low_slab_visible(si, true)
-			_fog_drop_slab(c, si)  # a veil (dormant wave) goes with the tier
-			flipped += 1
-		else:
-			# no ready low: the high keeps showing. Re-open the low
-			# obligation so the wave claims the slab at the new tier (the
-			# flip lands in _low_place_slab); a genuine all-air mark costs
-			# one re-sample, which re-marks it.
-			c.low_failed.erase(si)
-			reopened += 1
+	# AC-0312: the flip (the ready stored low takes over) is owed in BANDS
+	# B/C only — band A (tier 1) keeps showing the high (the full-LOD draw
+	# tier); a low flip there would show the wrong tier (the wave skips
+	# band A — the low is not even emitted for it).
+	if tier > 1:
+		for si in range(c.data.size()):
+			if c.has_low_si(si) and not _low_slab_pending_at(c, si, tier):
+				# the ready stored low takes over - the atomic flip.
+				c.high_slab_visible(si, false)
+				c.low_slab_visible(si, true)
+				_fog_drop_slab(c, si)  # a veil (dormant wave) goes with the tier
+				flipped += 1
+			else:
+				# no ready low: the high keeps showing. Re-open the low
+				# obligation so the wave claims the slab at the new tier
+				# (the flip lands in _low_place_slab); a genuine all-air
+				# mark costs one re-sample, which re-marks it.
+				c.low_failed.erase(si)
+				reopened += 1
+	# AC-0312: the keep-all-LOD DATA retention is RETIRED — a demoted
+	# column's FULL (caved) data is replaced with the h-only far form
+	# (generate_far: the canonical no-cave H + biome + top — bit-exact
+	# with the full path's surface H: the save form, the snap rings, the
+	# promotion contract). The resident HIGH mesh stays (a DATA swap,
+	# not a mesh free — band A shows it, B/C keep it stored hidden; the
+	# re-entry flip is a visibility toggle). A demoted band-A column is
+	# then the steady band-A state: h-only payload + materialized mesh,
+	# mesh_built (no re-materialization owed — the mesh is current; the
+	# promotion's full regen re-converges any cave-breakthrough delta).
+	if tier >= 1 and not c.far and not c.data.is_empty():
+		_demote_to_far(c, key)
 	if reopened > 0:
 		# AC-0284b: a slab owes a re-lower (stale after the promotion's
 		# full regen bumped data_gen, or no low at all on a first demote)

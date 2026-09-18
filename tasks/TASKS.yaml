@@ -1,10 +1,12 @@
 meta:
-  updated_at: 2026-09-18T00:12
+  updated_at: 2026-09-18T11:25
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0312
+- AC-0321
+- AC-0322
 - AC-0314
 - AC-0287
 - AC-0293
@@ -45,6 +47,11 @@ queue:
 - AC-0090
 - AC-0176
 - AC-0295
+- AC-0315
+- AC-0316
+- AC-0317
+- AC-0318
+- AC-0320
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -6336,11 +6343,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-08-29T12:09
-  updated_at: 2026-09-17T18:39
-  completed_at: null
+  updated_at: 2026-09-18T10:26
+  completed_at: 2026-09-18T10:26
   waiting_on: null
   parent_id: null
   notes: 'User story: As a player I want to walk on a sphere that looks round (horizon dips) but plays
@@ -14675,7 +14682,7 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-09-17T18:47
   updated_at: 2026-09-18T00:12
@@ -15160,4 +15167,416 @@ intake:
     testable: same seed -> same spawn). The spawn cell must be built by the load gate before activation
     so the player never falls through. Report the chosen column''s surface H and the search radius in
     the results page.'
+  comments: []
+- id: AC-0315
+  title: gdscript-access-convention-and-harness-rule
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-18T10:20
+  updated_at: 2026-09-18T10:20
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a developer (or an agent) reading the rules, I want them to mean what they
+    say — so I
+
+    don''t plan around a prohibition that does not exist, and I am not told to rename things I should
+    not.
+
+
+    2) Technical Details: DOCS ONLY, no code change. Two convention corrections, both from one access
+
+    audit: 860 cross-object `_`-prefixed accesses outside the declaring file (835 in `scenes/harness.gd`,
+
+    25 in subsystem/product code).
+
+
+    (A) `godot/ARCHITECTURE.md` §7 — new bullet pair recording the GDScript access convention. GDScript
+
+    has no access modifiers; `_` means "not this module''s interface" and is a review rule only. Two files
+
+    needing a `_` member means the underscore is wrong, and the fix is NEVER a rename (a rename promotes
+    a
+
+    private field to public API and freezes its name): add the missing contract — a getter (setter only
+
+    where the caller is the authority) returning a value or a copy, since a live reference encapsulates
+
+    nothing; or a coarser operation on the owner when the caller is doing the owner''s work; or injection
+
+    when a child pulls its parent''s services; or a move when a shared utility sits in the wrong home.
+    The
+
+    one exception is a test arm (inert during normal play, §3).
+
+
+    (B) `godot/scenes/AGENTS.md` — the harness bullet rewritten. "It stays pristine … do not restructure
+
+    or reformat it" read as an absolute ban on ever restructuring the arms (it killed a plan for a
+
+    declared arm-facing introspection API). The original intent is still visible in
+
+    `godot/HANDOFF-emergent-queue.archive.md:131` ("pristine (temp measurement arms in + out)"): pristine
+
+    was the temp-arm rule. The standing rule is that the arms stay OUT of `main.gd` and the world —
+
+    AC-0140''s separation must not be folded back. The bullet now says that, keeps the in-and-out rule,
+    and
+
+    supplies the reason the old wording lacked: the arms are the instrument every other change is judged
+
+    by, so a task that edits them cannot be judged by them. `godot/OPS.md:37` links here, unchanged.
+
+
+    Why the convention exists: `world.gd` is reached 1,931 times by `harness.gd` (92.7% of all real
+
+    `world.*` references outside the file) but only 153 times by all product code combined — the world''s
+
+    de-facto interface is a TEST interface. The 25 non-harness violations are four different diseases
+
+    (inverted visibility, view doing model work, dependency inversion via the `Game.world` global, leaked
+
+    fixtures/arms), each filed separately; none is fixed by a rename.
+
+
+    Gates: docs-only, no arm owed, G0 unaffected. Verified `ARCHITECTURE.md` has no BEGIN/END GENERATED
+
+    block, so no `harness_doc.py --render` step applies.
+
+
+    3) Implementation (agent, 2026-09-18): both edits applied in the working tree. NOT COMMITTED —
+
+    `godot/ARCHITECTURE.md` simultaneously carries AC-0312''s uncommitted §3/§4/§5 doc updates, so
+
+    committing it would sweep that session''s in-flight work into this ticket. Commit at or after AC-0312''s
+
+    closeout (`godot/scenes/AGENTS.md` could be committed alone).
+
+    '
+  comments: []
+- id: AC-0316
+  title: inventory-model-boundary
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-18T10:20
+  updated_at: 2026-09-18T10:20
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: As a player, my inventory should behave the same no matter which UI path touches\
+    \ it —\nitem counts must never desync between what the hotbar shows, what crafting consumes, and what\
+    \ the\nmodel believes.\n\n2) Technical Details: the player's inventory model has INVERTED VISIBILITY\
+    \ — the containers are public\nwhile the accessors over the same data are private, so the guard protects\
+    \ nothing:\n- `player/player.gd:69 inv`, `:71 armor`, `:84 held`, `:86 craft_grid`, `:89 table_grid`,\n\
+    \  `:90 craft_out` are plain public `var`s; `_inv_get` (`:1818`) / `_inv_set` (`:1824`) are private.\n\
+    - `_inv_get` returns the LIVE Dictionary (`:1820 return inv[i]` — Godot Dictionaries are reference\n\
+    \  types), and `ui/inventory.gd:792` mutates the player's slot in place\n  (`it[\"n\"] = int(it[\"\
+    n\"]) - t`) with no setter involved. Returning a copy instead would SILENTLY BREAK\n  item consumption\
+    \ everywhere except the `it[\"n\"] <= 0` fallback at `:794` — the current code depends\n  on the leak.\n\
+    - The view also owns model work: `inventory.gd:_have` (`:726`) scans all 36 slots to count an item,\n\
+    \  and `_take_from_inv` (`:783-797`) implements removal semantics. The model already owns\n  `inv_slot_click`\
+    \ (`:1976`), `inv_selected` (`:2061`) and `inv_consume_selected` (`:2067`) — what is\n  missing is\
+    \ exactly \"count\" and \"remove n\".\n- `main.gd` writes the same public containers directly: `:555\
+    \ p.inv[i]`, `:559 p.armor[i]`,\n  `:781 player.inv[i]`, `:794`, `:801-805 player.table_grid[…]`,\
+    \ `:810 player.held`.\n\nFix (per `ARCHITECTURE.md` §7 — add the missing contract, never a rename):\
+    \ make the containers\nprivate; add `inv_count(id) -> int` and `inv_remove(id, n) -> int` on the player;\
+    \ move the view's scan\nand removal loops onto those; once nothing needs to mutate a returned slot,\
+    \ `_inv_get` may return a\ncopy or a read-only view. Keep the model's existing operations as the interface.\n\
+    \nDELIBERATELY DEFERRED: the harness's 78 `p._inv_get` uses are sanctioned by §7 (test arm) and are\
+    \ NOT\ntouched — battery fixtures must keep working. Moving the `AWECRAFT_INV` fixture out of `main.gd`\
+    \ is a\nseparate ticket.\n\nGates: G0 = zero SCRIPT ERROR; battery mode-for-mode identical for `player`,\
+    \ `interact`, `craft`,\n`survival`, `held`; the inventory/crafting UI arms and the `AWECRAFT_INV=1`\
+    \ / `=table` shot hooks must\nstill populate identically.\n"
+  comments: []
+- id: AC-0317
+  title: harness-fixtures-out-of-main-gd
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-18T10:20
+  updated_at: 2026-09-18T10:20
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: As a developer, `main.gd` should be the coordinator — to learn how the tree is\
+    \ built I\nshould not have to read test fixtures, and a fixture should not be writing into the player's\
+    \ model\nfrom product code.\n\n2) Technical Details: AC-0140 left `main.gd` (1,815 lines) as the coordinator/tree\
+    \ builder, but test\ncode is still in it:\n- `main.gd:775-815` is the `AWECRAFT_INV` fixture: it clears\
+    \ `player.inv` (`:781`), fills slots\n  (`:794`, `:798`), writes `player.table_grid[0..7]` (`:801-805`)\
+    \ and sets `player.held` (`:810`).\n- `main.gd:157 await harness._mainmenuexit_test()` and `:682 harness._settings_test()`\
+    \ are two arms\n  dispatched OUTSIDE `harness.run(...)` — product code calling the harness's private\
+    \ test entry points\n  (2 of the 25 non-harness private reach-ins).\n\nFix: move the INV fixture into\
+    \ `harness.gd` (it is an arm fixture) and fold both dispatches into the\nharness's own dispatch/battery,\
+    \ leaving `main.gd` with only the env check that decides whether to call\nit. This removes most of\
+    \ the direct public-model writes from product code (see the inventory-model\nticket) along with the\
+    \ 2 private reach-ins.\n\nTRAPS (from `godot/scenes/AGENTS.md`): dispatch order is load order — the\
+    \ `settings` arm is\ndispatched before the game nodes exist so it runs standalone AND in the battery,\
+    \ and battery entries\nre-dispatch their `*_body` variants; an arm that quits the process must stay\
+    \ BATTSKIP-ed out of the\nbattery (see `mainmenuexit`). Any added/changed arm also needs its row in\
+    \ `tasks/harness_data.yaml`\nplus `python3 tasks/scripts/harness_doc.py --render` — an arm with no\
+    \ row is silent drift.\n\nGates: G0 = zero SCRIPT ERROR; battery mode-for-mode identical; re-run the\
+    \ `settings`, `mainmenuexit`\nand `AWECRAFT_INV` arms standalone and through the battery; `AWECRAFT_INV=1`\
+    \ / `=table` shots\nunchanged.\n"
+  comments: []
+- id: AC-0318
+  title: harness-out-of-windows-export
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-18T10:20
+  updated_at: 2026-09-18T10:20
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player, the build I download should not carry the 24,280-line test suite
+    — it is
+
+    dead weight in a 110 MB product.
+
+
+    2) Technical Details: the arms SHIP. `exports/windows/AweCraft.exe` contains the resource entry
+
+    `path="res://scenes/harness.gdc"` (harness.gd compiled into the product as binary tokens), and
+
+    `godot/export_presets.cfg` sets `export_filter="all_resources"` with an EMPTY `exclude_filter` on
+    both
+
+    presets (Windows, Windows console debug).
+
+
+    It cannot simply be excluded today: `main.gd:17` is
+
+    `const HarnessScript = preload("res://scenes/harness.gd")` — a CONST preload that fails at parse time
+
+    if the file is absent, so excluding the file breaks boot before any runtime guard can run.
+
+
+    Fix: replace the const preload with a guarded `load()` behind a feature tag (e.g. `OS.has_feature`)
+
+    so `scenes/harness.gd` can go in `exclude_filter`; the inert in-play path then costs one conditional
+
+    instead of a parse-time dependency. Measure the shipped exe/zip delta, and confirm the arms still
+    run
+
+    in a normal dev export — the arms are developed and gated in dev builds, never in the product.
+
+
+    Verification notes: the harness identifiers are NOT findable as plain strings in the shipped exe
+
+    (compiled `.gdc` tokens), so absence/size must be checked via the export log and the resource list,
+
+    not by grepping the binary.
+
+
+    Gates: `./build_windows.sh` (both presets); boot check on the excluded build (menu → new world →
+
+    play); the coordinator''s heavy gate set on the normal build. Standing caveat: this box renders through
+
+    software GL, so it can never verify the shipped `forward_plus` look.
+
+
+    TRAP: `godot/bin/` and `exports/` are build outputs — never hand-edited, never committed; report the
+
+    measurement only.
+
+    '
+  comments: []
+- id: AC-0319
+  title: world-child-service-injection
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-18T10:20
+  updated_at: 2026-09-18T10:20
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: As a developer, a chunk object should not have to find its manager through a\
+    \ global\nsingleton — when I change how the pool or the registry works I want to see the callers in\
+    \ front of me,\nnot discover them at runtime.\n\n2) Technical Details: dependency inversion — the\
+    \ child pulls its parent's services through the\n`Game.world` global. Real call sites (comments excluded):\n\
+    - `chunk.gd:329 Game.world._mi_checkin(mi)`, `:338 Game.world._mm_checkin(mmi)`,\n  `:359 Game.world._mi_checkout()`\n\
+    - `:1366 Game.world._wprof_meshattach(...)` (profiler hook)\n- `:1495 Game.world._strips_for(cx, cz)`\
+    \ (neighbour strips)\n- `:1502 Game.world.chunks.get(Game.world._key(...))` (registry + key interner)\n\
+    These are 6 of the 25 non-harness private reach-ins.\n\nThe fix pattern already exists in the same\
+    \ file: `chunk.gd:1463\nbuild_mesh(get_world_block: Callable, …)` injects a capability instead of\
+    \ reaching for it. Inject the\npool/profiler/strip/registry services at construction the same way.\n\
+    \nShared utilities in the wrong home (same audit):\n- `chunk.gd:1431/1440 _fluid_anim_material` /\
+    \ `_fluid_anim_bf_material` — used 4x inside chunk and\n  needed by `world.gd:2666/2668`; belongs\
+    \ with the other material builders in `core/` beside\n  `atlas.gd` and `held_mesh.gd`.\n- `world.gd:9036\
+    \ _key(cx, cz)` — not pure: it interns through `chunk_keys` (`:9037-9038`) and is\n  needed by `chunk.gd:1502`,\
+    \ `main.gd:957` and (test-only) `lighting.gd:159`. It belongs with the\n  registry (`chunks` / `chunk_keys`)\
+    \ — the hub 66 of ~70 functional clusters touch.\n\nPer `ARCHITECTURE.md` §7: add contracts and move\
+    \ utilities — do NOT rename. Preserve the existing\nmember names on `world.gd` via forwarding properties\
+    \ so `scenes/harness.gd` stays byte-identical: the\narms are the instrument, and a task that edits\
+    \ them cannot be judged by them.\n\nBLOCKS: AC-0312 currently holds `world.gd`, `chunk.gd`, `harness.gd`\
+    \ and `mesh.cpp` and is reworking\n`_lod_tier_of` / the three draw tiers — do not start until it lands.\n\
+    \nGates: genhash 25/25 byte-identical; farab 984/984; halo 192/192; battery mode-for-mode identical;\n\
+    boundary r4 re-measured (streaming/scheduling moved); G0 zero SCRIPT ERROR.\n"
+  comments: []
+- id: AC-0320
+  title: decouple-game-and-tasks-paths
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-18T10:25
+  updated_at: 2026-09-18T10:25
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: As a developer, the game and the ticket system should not reach into each other's\
+    \ folder by\na hardcoded path — an arm should not write its screenshots into a months-old ticket's\
+    \ directory, and a tool\nshould not require the game checkout to sit at one exact absolute path.\n\
+    \n2) Technical Details: two decouplings, both prerequisites for ever separating `tasks/` from the\
+    \ game repo.\nNo change to game behaviour.\n\n(A) HARNESS OUTPUT PATHS — three sites, all wrong today:\n\
+    - `harness.gd` `_wallshot_test()` (mode `wallshot`, dispatched at `:729-733`): `var outdir :=\n  ProjectSettings.globalize_path(\"\
+    res://..\") + \"/tasks/AC-0067/\"` — the arm writes `held_on_wall[_before].png`\n  and `held_item_on_wall[_before].png`\
+    \ into a SPECIFIC HISTORICAL TICKET's folder (AC-0067, months old).\n  Gated by `AWECRAFT_WALL_SHOTS`\
+    \ / `AWECRAFT_WALL_BEFORE`.\n- `harness.gd` `_trees_test()`: `\"/home/angrygiant/github_projects/AweCraft/.scratch/trees_expect_%d.json\"\
+    `\n  and `\"/home/angrygiant/github_projects/AweCraft/.scratch/genhash_before_trees.log\"` — HARDCODED\
+    \ ABSOLUTE\n  PATHS to this dev box's checkout. They break on any other machine, clone or worktree\
+    \ (`godot/OPS.md:11`\n  documents the machine path; `:35` documents the worktree flow, which is a\
+    \ supported way to work here).\n\nFix: one resolved output root used by all three — `AWECRAFT_SHOT_DIR`\
+    \ when set, else\n`ProjectSettings.globalize_path(\"res://..\") + \"/.scratch/\"` (repo root, independent\
+    \ of where the checkout\nlives; `.scratch/` is the sanctioned working-output dir and is git-ignored\
+    \ — `.gitignore:1`). Prefer routing\nthe saves through the EXISTING screenshot helper (`autoload/debug.gd:27\
+    \ image.save_png(path)`) rather than\nadding a fourth path convention; an arm needing a stable per-arm\
+    \ folder can pass one in.\n\n(B) MOVE `tasks/harness_data.yaml` -> `godot/harness_data.yaml` (41,968\
+    \ B).\nRationale: it is the MACHINE source for `godot/HARNESS.md` §1/§3 (AC-0301) and is edited in\
+    \ lockstep with arm\nchanges in `godot/scenes/harness.gd` — `godot/scenes/AGENTS.md:12` states that\
+    \ adding or changing an arm\nmeans two files. Today that one logical change spans BOTH trees (harness.gd\
+    \ + tasks/harness_data.yaml +\ngodot/HARNESS.md). Moving the data beside the doc it renders makes\
+    \ the change single-tree and removes the\ngame<->tasks path dependency in both directions.\n\nFiles\
+    \ that must follow the move:\n- `tasks/scripts/harness_doc.py:35-37` — the `REPO_ROOT` / `DATA` /\
+    \ `DOC` constants.\n- `tasks/scripts/spec_template.py:58` — `HARNESS_DATA`, plus the prose strings\
+    \ in generated spec HTML that\n  name the path (`:126`, `:319`, `:331`, `:347`, `:358`, `:364`).\n\
+    - `tasks/scripts/test_tasks.py:288-298` — the doc<->data sync check (`load_yaml(TASKS_DIR /\n  \"\
+    harness_data.yaml\")`).\n- `godot/scenes/AGENTS.md:12` (the arm-change rule) and `godot/HARNESS.md:14`\
+    \ (the GENERATED preamble —\n  prose, NOT inside the markers; the BEGIN/END blocks are never hand-edited,\
+    \ per AGENTS.md rule 3).\nDO NOT EDIT: `godot/CONTINUITY.md`, `godot/CONTINUITY.archive.md:3` and\
+    \ `tasks/AC-0313/continuity.md` also\nname that path, but they are journals recording what was true\
+    \ at the time. A repo-wide grep-and-replace\nwould corrupt history.\n\nTRAP (verify, do not assume):\
+    \ `godot/` is the Godot project root, so the moved file becomes part of `res://`\nand `export_filter=\"\
+    all_resources\"` may pack it into the shipped Windows build. 41 KB of internal ticketing\ndata must\
+    \ NOT ship (contrast `harness.gd`, which genuinely does today — AC-0318). Check the export log and\n\
+    the resource list, and add an `exclude_filter` entry if it lands in the exe.\n\nGates: `python3 tasks/scripts/harness_doc.py\
+    \ --check` in sync; `python3 tasks/scripts/test_tasks.py` all\ngreen (it already covers doc<->data\
+    \ sync, the data schema and battery-mode coverage); regenerate one spec\nHTML with `spec_template.py`\
+    \ and confirm the path prose; `AWECRAFT_LOGIC=wallshot` writes under `.scratch/`\nand no longer into\
+    \ `tasks/AC-0067/`; the `trees` arm writes to the resolved root; G0 = zero SCRIPT ERROR;\nbattery\
+    \ mode-for-mode identical — the arms' behaviour is untouched apart from where their artefacts land.\n\
+    \nBLOCKS: part (B) is tooling/docs only and can start now. Part (A) edits `scenes/harness.gd`, which\
+    \ AC-0312\ncurrently holds dirty — wait for AC-0312 to land. Line numbers above were read on 2026-09-18\
+    \ while harness.gd\nwas being edited concurrently, so re-locate sites by function name (`_wallshot_test`,\
+    \ `_trees_test`) rather\nthan by line.\n"
+  comments: []
+- id: AC-0321
+  title: band-a-texturing
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-18T11:24
+  updated_at: 2026-09-18T11:25
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: As the player, the ground just past the simulation distance (the new crisp \"\
+    band A\") is supposed to look like ordinary textured blocks. Instead it renders untextured / wrong\
+    \ - the user tested a build while AC-0312 was in progress and reported it (\"the high mesh lane outside\
+    \ of the sim lane was not getting textured correctly\"), with a screenshot: Screenshot-2026-09-18-064158.jpg\
+    \ in the repo root.\n\n2) Technical Details:\nSCOPE: ONE behavior - band A's (taxi in (sim, medium_start])\
+    \ mesh texturing. Do NOT re-tune the tiers, the water exception or the materialization geometry; the\
+    \ existing tier/identity gates must stay green.\nTHE PATH (AC-0312): a band-A column is dispatched\
+    \ as the \"mat\" slab entry (godot/world/world.gd:7243 `band_a := bool(c.far) and _lod_tier_of(...)\
+    \ == 1`), the worker runs the skip=1 materialization + `mc.build_accs(...)` (world.gd:6086 branch),\
+    \ and the landing attaches the full-column mesh + stamps/flushes the slabs and drops the fog/low mesh\
+    \ (`_fog_drop_slab`) at world.gd:6457. So the mesh SHOULD be the same textured high emit the real\
+    \ band produces for the same block ids.\nCANDIDATE CAUSES TO DISTINGUISH (leads, not conclusions -\
+    \ verify each with evidence):\n (a) the VISIBLE mesh for a band-A column is still the low/avg placeholder\
+    \ wearing `_lod_avg_mat()` (the noise shader, no atlas texture - world.gd:1588/2767/2773) - i.e. the\
+    \ mat landing's `_fog_drop_slab` calls do not cover every built slab, or the low mesh instance is\
+    \ re-shown by the keep-all-LOD flip (AC-0286) after the high mesh lands;\n (b) the landed high mesh's\
+    \ MeshInstance carries the WRONG material - compare what a band-A slab mesh wears against a real-band\
+    \ slab mesh (the real band's high meshes are textured via the atlas material);\n (c) the emitted ArrayMesh\
+    \ lacks real UVs - the avg-emit tail writes (0,0) for un-atlased quads (the meshprobe note records\
+    \ this), so if a band-A build were routed through an avg-style tail its UVs would be zeroed. Check\
+    \ the landed mesh's `Mesh.ARRAY_TEX_UV` for real atlas rects and compare them with the values the\
+    \ real-band emit produces for identical block ids.\nGATE TO ADD (permanent, small - reuse an existing\
+    \ arm, no new machinery): assert for a band-A column that (i) the emitted mesh's UV array carries\
+    \ real atlas coordinates equal to what the same block ids produce in the real band, and (ii) the visible\
+    \ MeshInstance for the column wears the textured high material, NOT `_lod_avg_mat()`. The ladder or\
+    \ farab arm is the natural host (both already build band-A/far columns); the existing render arm gives\
+    \ the band-boundary shot - note that the proxy renderer cannot show the translucent water blend, so\
+    \ say which check is the texturing proof.\nCONTEXT: the band-A owner (AC-0312) is IN PROGRESS and\
+    \ its work is committed as a labelled WIP - read its ticket notes for the tier contract. The user's\
+    \ test loop builds from master, so this fix is the priority one.\n\n\nEVIDENCE: the user's in-game\
+    \ screenshot moved to .scratch/AC-0321/user-report.jpg (it was dropped in the repo root as Screenshot-2026-09-18-064158.jpg;\
+    \ .scratch is git-ignored so it is not committed - the coordinator cannot view images on this model,\
+    \ so the CODE-level checks in the notes are the evidence path, with the user's in-game pass as the\
+    \ confirmation)."
+  comments: []
+- id: AC-0322
+  title: walk-sim-disc-residency
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-18T11:24
+  updated_at: 2026-09-18T11:24
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: While I walk, the world around me should stay fully loaded. Since the far-band\
+    \ work, about half of the nearby world is not data-resident while walking, so it pops in late.\n\n\
+    2) Technical Details:\nMEASURED (AC-0312's own profgen re-profile, s3 walk, seed 2003, the user's\
+    \ config sim4/medium8/low16/render24 + R50): the walk sim-disc data coverage fell from 100% (the AC-0283\
+    \ P4 / AC-0286 baseline) to 53.1%, while the frame contract held (s3 avg 16.84 ms vs P4 16.71; s2\
+    \ flight 16.97 vs 16.72) and the remesh flush collapsed (0/12 vs 99/198). So this is a data-residency\
+    \ regression, not a frame-time one.\nLEADS TO INVESTIGATE (measure before fixing):\n (1) the demote-ring\
+    \ / hole window: AC-0312's halo arm (d) demote path plus `_low_relower_owed` - the subagent's own\
+    \ note says the drop is \"consistent with the demote-ring hole window that fills on settle\", so the\
+    \ question is whether the walk's steady state ever closes it;\n (2) the walk data supply after AC-0313\
+    \ removed the walk-regime TG-empty data-feed extension (world.gd:7916 in the old tree): the RP baseline\
+    \ measured 16.5 cols/s at walk WITH that extension; measure the current walk data rate before assuming;\n\
+    \ (3) band A's materialization now competes for the same TG/TM lanes as the real band's data+builds\
+    \ at the same taxi distances (the tier boundary is sim4/medium8, so band A is immediately outside\
+    \ the sim band) - check whether it starves the inner data.\nGATE: profgen s3 (walk) sim-disc back\
+    \ to 100%, or an honest stated value with the measured cause; plus the boundary r4 walk p50/p95 unchanged\
+    \ (the standing values in godot/HARNESS.md section 3). Report the before/after in the results page.\n\
+    SCOPE: ONE behavior - walk data residency. Do not change the tier geometry, the water exception or\
+    \ the build order (AC-0313's inside-out full columns stays). The profgen arm is not in the tree: re-add\
+    \ it from `.scratch/ac0283-p2/profgen_arm_snippet.gd` (IN AND OUT, tree pristine after).\n"
   comments: []

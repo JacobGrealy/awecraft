@@ -113,6 +113,10 @@ constexpr int SIZE = 16;
 constexpr int SNAP_W = 18;
 constexpr int SNAP_ROW = 324; // 18 * 18
 constexpr float MIN_AMB = 0.08f;
+// AC-0312: the water block id (data.gd contract — B_WATER in gen.cpp;
+// the fluid ids 5/24 in the high path). The avg-emit water-surface
+// exception's "topmost non-air is water" test.
+constexpr int AW_B_WATER = 5;
 
 // ---------------------------------------------------------------------------
 // VoxelMath.FACES (godot/core/math.gd:3) — verbatim.
@@ -1868,11 +1872,19 @@ static Dictionary low_emit_impl(const Array &p_slabs, int si, const Dictionary &
 // (the real band passes nothing — byte-identical output).
 // AC-0284b: the SHARED avg-emit tail (defined below) — the slab and far
 // emitters both end here (the byte-identity rests on it).
+// AC-0312: top_water = the per-cell (G^3, t==1 grid) "topmost non-air
+// is water" flag (nullptr = the exception off); wtlx/wtly/w_atlas_px =
+// the water atlas top-rect origin + the atlas width in px (wtlx < 0 =
+// off) — the +Y faces of water-topped cells emit a SEPARATE water
+// surface (the real translucent water material's quad count, one 31-px
+// tile per G-block).
 static Dictionary avg_grid_emit(int G, float CELL, int si, int nsl,
 		const uint8_t grids_solid[3][512], const float grids_cols[3][512 * 18],
-		const bool ghave[3], const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky);
+		const bool ghave[3], const uint8_t *top_water,
+		const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky,
+		int wtlx, int wtly, float w_atlas_px);
 
-static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky) {
+static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky, int p_wtlx, int p_wtly, float p_w_atlas_px) {
 	Dictionary res;
 	const int G = (p_grid == 4) ? 4 : 8;
 	const int CELLB = 16 / G;
@@ -1880,6 +1892,10 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 	const int TOT = CELLB * CELLB * CELLB;
 	const float *fcc = p_fcc.ptr();
 	bool fcc_ok = p_fcc.size() >= 256 * 18;
+	// AC-0312: the per-cell water-surface flag (t==1 grid; the tail's
+	// +Y scan reads it). 512 = the 8^3 max.
+	uint8_t top_water[512];
+	memset(top_water, 0, sizeof(top_water));
 
 	// --- the three average-color grids (si-1 / si / si+1; the
 	// slab-boundary culling reads the neighbor SOLID masks).
@@ -1978,6 +1994,11 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 							continue; // neighbor: the solid mask is all it feeds
 						int cnt = 0;
 						float acc[18] = {0.0f};
+						// AC-0312: the water-surface flag — the cell's topmost
+						// non-air sub-cell is water (ALL of them at that top py —
+						// a land or tree cell alongside disqualifies).
+						int top_py = -1;
+						bool top_water_cell = true;
 						for (int py = 0; py < CELLB; py++) {
 							int r0 = (cy * CELLB + py) * 256;
 							for (int pz = 0; pz < CELLB; pz++) {
@@ -1988,6 +2009,12 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 										continue;
 									cnt++;
 									int bid = a.cell(pos);
+									if (py > top_py) {
+										top_py = py;
+										top_water_cell = (bid == AW_B_WATER);
+									} else if (py == top_py && bid != AW_B_WATER) {
+										top_water_cell = false;
+									}
 									if (fcc_ok && bid < 256) {
 										const float *fc = fcc + bid * 18;
 										for (int d = 0; d < 18; d++)
@@ -1999,6 +2026,8 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 						float inv = 1.0f / (float)cnt;
 						for (int d = 0; d < 18; d++)
 							grids_cols[t][idx * 18 + d] = acc[d] * inv;
+						if (top_py >= 0 && top_water_cell)
+							top_water[idx] = 1;
 						continue;
 					}
 					// AC-0258: the clutter slab — a solid cell can be
@@ -2012,6 +2041,8 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 					// extra pass and only when that slab has clutter too.)
 					int cnt = 0;
 					float acc[18] = {0.0f};
+					int top_py = -1;  // AC-0312: the water-surface flag (the cell's
+					bool top_water_cell = true;  // topmost non-air is water — clutter excluded)
 					for (int py = 0; py < CELLB; py++) {
 						int r0 = (cy * CELLB + py) * 256;
 						for (int pz = 0; pz < CELLB; pz++) {
@@ -2024,6 +2055,12 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 								if (awecommon::is_clutter_block(bid))
 									continue;
 								cnt++;
+								if (py > top_py) {
+									top_py = py;
+									top_water_cell = (bid == AW_B_WATER);
+								} else if (py == top_py && bid != AW_B_WATER) {
+									top_water_cell = false;
+								}
 								if (t == 1 && fcc_ok && bid < 256) {
 									const float *fc = fcc + bid * 18;
 									for (int d = 0; d < 18; d++)
@@ -2041,13 +2078,15 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 						float inv = 1.0f / (float)cnt;
 						for (int d = 0; d < 18; d++)
 							grids_cols[t][idx * 18 + d] = acc[d] * inv;
+						if (top_py >= 0 && top_water_cell)
+							top_water[idx] = 1;
 					}
 				}
 			}
 		}
 		ghave[t] = true;
 	}
-	return avg_grid_emit(G, CELL, si, nsl, grids_solid, grids_cols, ghave, p_fcc, p_sky);
+	return avg_grid_emit(G, CELL, si, nsl, grids_solid, grids_cols, ghave, top_water, p_fcc, p_sky, p_wtlx, p_wtly, p_w_atlas_px);
 }
 
 // ---------------------------------------------------------------------------
@@ -2062,7 +2101,9 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 
 static Dictionary avg_grid_emit(int G, float CELL, int si, int nsl,
 		const uint8_t grids_solid[3][512], const float grids_cols[3][512 * 18],
-		const bool ghave[3], const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky) {
+		const bool ghave[3], const uint8_t *top_water,
+		const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky,
+		int wtlx, int wtly, float w_atlas_px) {
 	Dictionary res;
 	const float *fcc = p_fcc.ptr();
 	const uint8_t *skyp = p_sky.ptr();
@@ -2114,6 +2155,20 @@ static Dictionary avg_grid_emit(int G, float CELL, int si, int nsl,
 	std::vector<float> an;
 	std::vector<float> ac;
 	std::vector<int32_t> ai;
+	// AC-0312: the WATER-EXCEPTION surface — the +Y faces of
+	// water-topped cells merge under WATER_KEY (a dedicated key
+	// outside the quantized color-key range) into a SEPARATE
+	// surface (the real translucent water material; one 31-px
+	// tile per G-block; the fluid_anim shader scrolls the anim
+	// frames). Same quad count as today's opaque top quads.
+	std::vector<float> wv;
+	std::vector<float> wn;
+	std::vector<float> wc;
+	std::vector<float> wu;
+	std::vector<int32_t> wi;
+	bool water_ok = top_water != nullptr && wtlx >= 0 && wtlx < 32768 \
+		&& wtly >= 0 && wtly < 32768 && w_atlas_px > 0.0f;
+	static const int WATER_KEY = 0x40000000;
 	float y_min = 1e30f;
 	float y_max = -1e30f;
 	static const int UA[6] = {2, 2, 0, 0, 0, 0};
@@ -2141,11 +2196,17 @@ static Dictionary avg_grid_emit(int G, float CELL, int si, int nsl,
 					int idx = cc[0] + cc[2] * G + cc[1] * G * G;
 					if (grids_solid[1][idx] != 0) {
 						if (neighbor_solid(cc[0], cc[1], cc[2], nax, n) == 0) {
+						// AC-0312: the +Y face of a water-topped cell is the
+						// water surface (the dedicated merge key).
+						if (fi == 2 && water_ok && top_water[idx] != 0) {
+							keyv = WATER_KEY;
+						} else {
 							float cr = grids_cols[1][idx * 18 + fi * 3 + 0];
 							float cg = grids_cols[1][idx * 18 + fi * 3 + 1];
 							float cb = grids_cols[1][idx * 18 + fi * 3 + 2];
 							int q = (int)(cr * 31.0f) * 1024 + (int)(cg * 31.0f) * 32 + (int)(cb * 31.0f);
 							keyv = q * 16 + (k + 1);
+						}
 						}
 						break;
 					}
@@ -2202,7 +2263,8 @@ static Dictionary avg_grid_emit(int G, float CELL, int si, int nsl,
 				float qcg = grids_cols[1][oidx * 18 + fi * 3 + 1];
 				float qcb = grids_cols[1][oidx * 18 + fi * 3 + 2];
 				float qca = sky_ok ? (float)skyp[oidx] / 15.0f : 1.0f;
-				int cb0 = (int)av.size() / 3;
+				bool is_water = (key2 == WATER_KEY);  // AC-0312
+				int cb0 = (int)(is_water ? wv.size() : av.size()) / 3;
 				for (int j = 0; j < 4; j++) {
 					float cvx = FCV[fi][j][0];
 					float cvy = FCV[fi][j][1];
@@ -2220,27 +2282,63 @@ static Dictionary avg_grid_emit(int G, float CELL, int si, int nsl,
 						px = wx + cvx * (float)W * CELL;
 						py = wy + cvy * (float)H * CELL;
 					}
-					av.push_back(px);
-					av.push_back(py);
-					av.push_back(pz);
-					if (py < y_min)
-						y_min = py;
-					if (py > y_max)
-						y_max = py;
-					an.push_back((float)n[0]);
-					an.push_back((float)n[1]);
-					an.push_back((float)n[2]);
-					ac.push_back(qcr);
-					ac.push_back(qcg);
-					ac.push_back(qcb);
-					ac.push_back(qca);
+					if (is_water) {
+						// AC-0312: the water surface vertex — the position,
+						// normal and (face-averaged) color as the opaque path;
+						// the UV = the water tile top-left + one 31-px tile per
+						// G-block (the corner's block indices — the high path's
+						// plain-branch convention; the fluid_anim shader scrolls
+						// the anim frames).
+						wv.push_back(px);
+						wv.push_back(py);
+						wv.push_back(pz);
+						if (py < y_min)
+							y_min = py;
+						if (py > y_max)
+							y_max = py;
+						wn.push_back((float)n[0]);
+						wn.push_back((float)n[1]);
+						wn.push_back((float)n[2]);
+						wc.push_back(qcr);
+						wc.push_back(qcg);
+						wc.push_back(qcb);
+						wc.push_back(qca);
+						int bxx = (int)((pu + cvx * W) * CELL);
+						int bzz = (int)((pv + cvz * H) * CELL);
+						wu.push_back((wtlx + 31 * bxx) / w_atlas_px);
+						wu.push_back((wtly + 31 * bzz) / w_atlas_px);
+					} else {
+						av.push_back(px);
+						av.push_back(py);
+						av.push_back(pz);
+						if (py < y_min)
+							y_min = py;
+						if (py > y_max)
+							y_max = py;
+						an.push_back((float)n[0]);
+						an.push_back((float)n[1]);
+						an.push_back((float)n[2]);
+						ac.push_back(qcr);
+						ac.push_back(qcg);
+						ac.push_back(qcb);
+						ac.push_back(qca);
+					}
 				}
-				ai.push_back(cb0);
-				ai.push_back(cb0 + 2);
-				ai.push_back(cb0 + 1);
-				ai.push_back(cb0);
-				ai.push_back(cb0 + 3);
-				ai.push_back(cb0 + 2);
+				if (is_water) {
+					wi.push_back(cb0);
+					wi.push_back(cb0 + 2);
+					wi.push_back(cb0 + 1);
+					wi.push_back(cb0);
+					wi.push_back(cb0 + 3);
+					wi.push_back(cb0 + 2);
+				} else {
+					ai.push_back(cb0);
+					ai.push_back(cb0 + 2);
+					ai.push_back(cb0 + 1);
+					ai.push_back(cb0);
+					ai.push_back(cb0 + 3);
+					ai.push_back(cb0 + 2);
+				}
 				for (int v2 = pv; v2 < pv + H; v2++) {
 					for (int u2 = pu; u2 < pu + W; u2++)
 						m[v2][u2] = -1;
@@ -2249,7 +2347,9 @@ static Dictionary avg_grid_emit(int G, float CELL, int si, int nsl,
 			}
 		}
 	}
-	if (av.empty()) {
+	// AC-0312: the emit is empty only when BOTH surfaces are —
+	// a slab of pure water column emits a water surface alone.
+	if (av.empty() && wv.empty()) {
 		res["empty"] = true;
 		return res;
 	}
@@ -2269,10 +2369,35 @@ static Dictionary avg_grid_emit(int G, float CELL, int si, int nsl,
 	pidx.resize((int)ai.size());
 	for (int i = 0; i < (int)ai.size(); i++)
 		pidx[i] = ai[i];
+	PackedVector3Array pwv3;
+	pwv3.resize((int)wv.size() / 3);
+	for (int i = 0; i < (int)wv.size() / 3; i++)
+		pwv3[i] = Vector3(wv[i * 3], wv[i * 3 + 1], wv[i * 3 + 2]);
+	PackedVector3Array pwn3;
+	pwn3.resize((int)wn.size() / 3);
+	for (int i = 0; i < (int)wn.size() / 3; i++)
+		pwn3[i] = Vector3(wn[i * 3], wn[i * 3 + 1], wn[i * 3 + 2]);
+	PackedColorArray pwcol;
+	pwcol.resize((int)wc.size() / 4);
+	for (int i = 0; i < (int)wc.size() / 4; i++)
+		pwcol[i] = Color(wc[i * 4], wc[i * 4 + 1], wc[i * 4 + 2], wc[i * 4 + 3]);
+	PackedVector2Array pwu2;
+	pwu2.resize((int)wu.size() / 2);
+	for (int i = 0; i < (int)wu.size() / 2; i++)
+		pwu2[i] = Vector2(wu[i * 2], wu[i * 2 + 1]);
+	PackedInt32Array pwidx;
+	pwidx.resize((int)wi.size());
+	for (int i = 0; i < (int)wi.size(); i++)
+		pwidx[i] = wi[i];
 	res["v"] = pv3;
 	res["n"] = pn3;
 	res["c"] = pcol;
 	res["i"] = pidx;
+	res["wv"] = pwv3;
+	res["wn"] = pwn3;
+	res["wc"] = pwcol;
+	res["wu"] = pwu2;
+	res["wi"] = pwidx;
 	res["mh"] = y_max - y_min;
 	return res;
 }
@@ -2313,7 +2438,8 @@ constexpr int FAR_B_STONE = 3;
 
 static Dictionary h_avg_emit_impl(const PackedByteArray &p_h, const PackedByteArray &p_bm,
 		const PackedByteArray &p_top, const PackedByteArray &p_ore, const PackedByteArray &p_veg,
-		int si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky, int p_sea, int p_hmax) {
+		int si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky, int p_sea, int p_hmax,
+		int p_wtlx, int p_wtly, float p_w_atlas_px) {
 	Dictionary res;
 	if (p_h.size() != 512 || p_bm.size() != 256 || p_top.size() != 256) {
 		res["empty"] = true; // malformed payload — fail as all-air
@@ -2368,6 +2494,9 @@ static Dictionary h_avg_emit_impl(const PackedByteArray &p_h, const PackedByteAr
 
 	uint8_t grids_solid[3][512];
 	float grids_cols[3][512 * 18];
+	// AC-0312: the per-cell water-surface flag (t==1 grid).
+	uint8_t top_water[512];
+	memset(top_water, 0, sizeof(top_water));
 	bool ghave[3] = {false, false, false};
 	int gsi[3] = {si - 1, si, si + 1};
 	for (int t = 0; t < 3; t++) {
@@ -2409,6 +2538,8 @@ static Dictionary h_avg_emit_impl(const PackedByteArray &p_h, const PackedByteAr
 					// below H < sea) in the slab path's py/pz/px order.
 					int cnt = 0;
 					float acc[18] = {0.0f};
+					int top_py = -1;  // AC-0312: the water-surface flag (the cell's
+					bool top_water_cell = true;  // topmost non-air is water)
 					for (int py = 0; py < CELLB; py++) {
 						int y = y0 + cy * CELLB + py;
 						for (int pz = 0; pz < CELLB; pz++) {
@@ -2443,6 +2574,14 @@ static Dictionary h_avg_emit_impl(const PackedByteArray &p_h, const PackedByteAr
 									bid = FAR_B_STONE;
 								}
 								}
+								// AC-0312: the per-bid top test (bid is the fill's block id —
+								// water only in the aquifer band H+1..sea; trees/land disqualify).
+								if (py > top_py) {
+									top_py = py;
+									top_water_cell = (bid == FAR_B_WATER);
+								} else if (py == top_py && bid != FAR_B_WATER) {
+									top_water_cell = false;
+								}
 								if (fcc_ok && bid < 256) {
 									const float *fc = p_fcc.ptr() + bid * 18;
 									for (int d = 0; d < 18; d++)
@@ -2454,12 +2593,14 @@ static Dictionary h_avg_emit_impl(const PackedByteArray &p_h, const PackedByteAr
 					float inv = 1.0f / (float)cnt;
 					for (int d = 0; d < 18; d++)
 						grids_cols[t][idxc * 18 + d] = acc[d] * inv;
+					if (top_py >= 0 && top_water_cell)
+						top_water[idxc] = 1;
 				}
 			}
 		}
 		ghave[t] = true;
 	}
-	return avg_grid_emit(G, CELL, si, nsl, grids_solid, grids_cols, ghave, p_fcc, p_sky);
+	return avg_grid_emit(G, CELL, si, nsl, grids_solid, grids_cols, ghave, top_water, p_fcc, p_sky, p_wtlx, p_wtly, p_w_atlas_px);
 }
 
 // The registered class.
@@ -2488,7 +2629,7 @@ public:
 		ClassDB::bind_method(D_METHOD("low_emit", "slabs", "si", "ms"), &AweMesh::low_emit);
 		// AC-0283 P3: the optional 5th arg = the halo band's per-cell
 		// heightmap sky (empty = the legacy all-bright avg emit).
-		ClassDB::bind_method(D_METHOD("low_emit_avg", "slabs", "si", "grid", "fcc", "sky"), &AweMesh::low_emit_avg, DEFVAL(PackedByteArray()));
+		ClassDB::bind_method(D_METHOD("low_emit_avg", "slabs", "si", "grid", "fcc", "sky", "wtlx", "wtly", "w_atlas_px"), &AweMesh::low_emit_avg, DEFVAL(PackedByteArray()), DEFVAL(-1), DEFVAL(-1), DEFVAL(0.0));
 		// AC-0284b: the far (h-only) column's avg emit — the H-driven
 		// halo emitter (see h_avg_emit_impl for the full contract).
 		// h/bm/top = the far payload (512/256/256 bytes); ore = the
@@ -2497,7 +2638,14 @@ public:
 		// veg = the AweGen.veg_cells tree-cell list (4 bytes/cell; empty
 		// = no trees — the solid set + colors stay the skip fill);
 		// sea/hmax = the world constants (the aquifer + slab count).
-		ClassDB::bind_method(D_METHOD("h_avg_emit", "h", "bm", "top", "ore", "veg", "si", "grid", "fcc", "sky", "sea", "hmax"), &AweMesh::h_avg_emit);
+		// AC-0312: the water-exception params (wtlx/wtly = the water
+		// tile's top-left rect in px, w_atlas_px = the atlas width in
+		// px; wtlx < 0 = the exception off — byte-identical to the
+		// pre-AC-0312 call).
+		ClassDB::bind_method(D_METHOD("h_avg_emit", "h", "bm", "top", "ore", "veg", "si", "grid", "fcc", "sky", "sea", "hmax", "wtlx", "wtly", "w_atlas_px"), &AweMesh::h_avg_emit, DEFVAL(-1), DEFVAL(-1), DEFVAL(0.0));
+		// AC-0312: the band-A synthetic cached eff (the heightmap sky as
+		// the classic light dict + the 8 clamped-H margin strips).
+		ClassDB::bind_method(D_METHOD("sky_eff", "cx", "cz", "h", "hgt"), &AweMesh::sky_eff);
 	}
 
 	// AC-0236 part 2: slabs = the value-copied slab array (null | {n,b,p,i,
@@ -2514,15 +2662,99 @@ public:
 	// floats, the value copy in the dispatch entry). sky = the halo band's
 	// per-cell heightmap sky (AC-0283 P3; empty = the legacy all-bright
 	// emit — the real band and the battery arms pass nothing).
-	Dictionary low_emit_avg(const Array &p_slabs, int p_si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky) {
-		return low_emit_avg_impl(p_slabs, p_si, p_grid, p_fcc, p_sky);
+	// AC-0312: wtlx/wtly/w_atlas_px = the water-exception params (the
+	// water tile's top-left px rect + the atlas width in px; wtlx < 0 =
+	// off — byte-identical to the pre-AC-0312 call).
+	Dictionary low_emit_avg(const Array &p_slabs, int p_si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky, int p_wtlx, int p_wtly, double p_w_atlas_px) {
+		return low_emit_avg_impl(p_slabs, p_si, p_grid, p_fcc, p_sky, p_wtlx, p_wtly, (float)p_w_atlas_px);
 	}
 
 	// AC-0284b: the far (h-only) column's avg emit (see h_avg_emit_impl
 	// above). Returns the SAME shape as low_emit_avg ({empty} or
 	// {v,n,c,i,mh}) — the low lane attaches it unchanged.
-	Dictionary h_avg_emit(const PackedByteArray &p_h, const PackedByteArray &p_bm, const PackedByteArray &p_top, const PackedByteArray &p_ore, const PackedByteArray &p_veg, int p_si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky, int p_sea, int p_hmax) {
-		return h_avg_emit_impl(p_h, p_bm, p_top, p_ore, p_veg, p_si, p_grid, p_fcc, p_sky, p_sea, p_hmax);
+	Dictionary h_avg_emit(const PackedByteArray &p_h, const PackedByteArray &p_bm, const PackedByteArray &p_top, const PackedByteArray &p_ore, const PackedByteArray &p_veg, int p_si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky, int p_sea, int p_hmax, int p_wtlx, int p_wtly, double p_w_atlas_px) {
+		return h_avg_emit_impl(p_h, p_bm, p_top, p_ore, p_veg, p_si, p_grid, p_fcc, p_sky, p_sea, p_hmax, p_wtlx, p_wtly, (float)p_w_atlas_px);
+	}
+
+	// AC-0312: the band-A synthetic cached eff — the heightmap sky as the
+	// classic light dict ({mn, w, d, arr, blk_src, mask, ring} — the
+	// "has mask" shape build_accs consumes AS-IS) + the 8 full-height
+	// margin strips in the bake_box layout (sides 2*16*h — idx
+	// y*16+t, inner c=0/outer c=1; corners 4*h — idx (a*2+b)*h+y). The
+	// rule: eff = 15 strictly above the column's terrain top H, 0 at or
+	// below; a margin column reads the sky through the column's own
+	// surface (its x/z clamped to the edge — the band-A "no caves,
+	// sky-only light" contract, the halo band's heightmap sky at 16x).
+	Dictionary sky_eff(int p_cx, int p_cz, const PackedByteArray &p_h, int p_hgt) {
+		Dictionary r;
+		if (p_h.size() != 512) {
+			r["err"] = "bad H";
+			return r;
+		}
+		int h = p_hgt;
+		int Hh[256];
+		const uint8_t *hp = p_h.ptr();
+		for (int i = 0; i < 256; i++)
+			Hh[i] = (int)hp[2 * i] | ((int)hp[2 * i + 1] << 8);
+		// arr: 256*h — eff(x, y, z) = 15 iff y > H[z*16+x]
+		PackedByteArray arr;
+		arr.resize((size_t)256 * h);
+		uint8_t *ap = arr.ptrw();
+		for (int y = 0; y < h; y++)
+			for (int z = 0; z < 16; z++)
+				for (int x = 0; x < 16; x++)
+					ap[(size_t)y * 256 + z * 16 + x] = (y > Hh[z * 16 + x]) ? 15 : 0;
+		PackedByteArray mask;
+		mask.resize((size_t)256 * h); // zeros — no block light
+		PackedInt32Array ring;       // empty
+		Dictionary ld;
+		ld["mn"] = Vector3i(p_cx * SIZE, 0, p_cz * SIZE);
+		ld["w"] = (int64_t)16;
+		ld["d"] = (int64_t)16;
+		ld["arr"] = arr;
+		ld["blk_src"] = false;
+		ld["mask"] = mask;
+		ld["ring"] = ring;
+		// the 8 margin strips (the bake_box layout) — each column's
+		// value clamped to the column edge it represents.
+		auto side = [&](int mode) {
+			// mode 0: E (x = 16..19 clamped to 15; t = z): Hh[t*16+15]
+			// mode 1: W (x = 1..0 clamped to 0; t = z): Hh[t*16+0]
+			// mode 2: S (z = 16..19 clamped to 15; t = x): Hh[15*16+t]
+			// mode 3: N (z = 1..0 clamped to 0; t = x): Hh[0*16+t]
+			PackedByteArray ss;
+			ss.resize((size_t)2 * 16 * h);
+			uint8_t *p = ss.ptrw();
+			for (int y = 0; y < h; y++)
+				for (int t = 0; t < 16; t++) {
+					int he = (mode < 2) ? Hh[t * 16 + (mode == 0 ? 15 : 0)] : Hh[(mode == 2 ? 15 : 0) * 16 + t];
+					uint8_t v = (y > he) ? 15 : 0;
+					p[(size_t)y * 16 + t] = v;
+					p[(size_t)16 * h + (size_t)y * 16 + t] = v;
+				}
+			return ss;
+		};
+		auto corner = [&](int xe, int ze) {
+			PackedByteArray cc;
+			cc.resize((size_t)4 * h);
+			uint8_t *p = cc.ptrw();
+			for (int y = 0; y < h; y++)
+				for (int m = 0; m < 4; m++)
+					p[(size_t)m * h + y] = (y > Hh[ze * 16 + xe]) ? 15 : 0;
+			return cc;
+		};
+		Array strips;
+		strips.append(side(0)); // E
+		strips.append(side(1)); // W
+		strips.append(side(2)); // S
+		strips.append(side(3)); // N
+		strips.append(corner(15, 15)); // SE (x=15, z=15)
+		strips.append(corner(0, 15));  // SW (x=0, z=15)
+		strips.append(corner(15, 0));  // NE (x=15, z=0)
+		strips.append(corner(0, 0));   // NW (x=0, z=0)
+		r["light"] = ld;
+		r["strips"] = strips;
+		return r;
 	}
 
 	// Lossless port of ChunkScript.build_accs (chunk.gd:1683). data/fl =
