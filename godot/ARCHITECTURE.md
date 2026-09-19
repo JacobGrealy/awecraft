@@ -210,6 +210,23 @@ Match these; do not improvise a different approach in a task.
   multi-thousand-deep build backlog. Permanent counters: `star_seed_count/us`,
   `promo_enq_count`, `promo_land_count/ms`, `star_late_landings_promo` (expect 0 — the
   retain-swap never HIDEs), `hslab_defer_settle`.
+- **Edits on far / data-less columns (AC-0325)**: the flat write path has **no silent
+  no-op**. `World.set_block` returns a bool and, when the target column holds no slabs
+  (`data` empty — a node-only chunk that can sit data-less indefinitely since AC-0263's
+  sync materialize), it performs a **record-only edit**: the cell diff `{b, f}` goes
+  into `world.edits` (the authoritative edit store) and nothing else (no slab/fluid/
+  light/queue machinery — there is no data to touch). `get_block` reads recorded edits
+  back on such columns (air everywhere else), so the write is visible immediately;
+  every data landing (threadgen / disk / sync) re-applies the diff via
+  `_apply_edits_to_chunk`, so the read can never disagree with what the same edit does
+  once the column is material. A far (h-only) column — 24 null slabs, `far` true —
+  already carries data, so `set_block` writes the cell into the slab array directly
+  AND records it; the far draw (payload-based) ignores the slab until promotion, and
+  the recorded edit is what schedules the owed full regen on a re-landing ("the edit's
+  own promotion regen"). Persistence: far columns are never encoded (the AC-0287 save
+  filter), so an edited far column survives only through the save's JSON edits diff +
+  the promotion re-apply — the `flysave` arm is the standing proof (edit → evict →
+  regenerate → read-back, far at edit time).
 - **Demotion + lane ownership (AC-0312)**: the keep-all-LOD DATA retention is RETIRED —
   a column leaving the real band is swapped to the h-only far form (`generate_far`
   payload, bit-exact no-cave H + `no_caves`) with `clear_data()`: **band A** keeps its

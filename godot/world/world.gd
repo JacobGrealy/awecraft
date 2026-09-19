@@ -9817,14 +9817,36 @@ func _rec_merge_ring_step() -> void:
 func get_block(x: int, y: int, z: int) -> int:
 	if y < 0 or y >= Data.HEIGHT:
 		return 0
-	var c := _chunk_data(int(floorf(float(x) / 16.0)), int(floorf(float(z) / 16.0)))
+	var cx := int(floorf(float(x) / 16.0))
+	var cz := int(floorf(float(z) / 16.0))
+	var c := _chunk_data(cx, cz)
 	if c == null or c.data.is_empty():
+		# AC-0325: a data-less column reads as air EXCEPT for recorded edits
+		# (set_block's record-only path) — the write is visible before any
+		# data lands; every data landing re-applies the same value
+		# (_apply_edits_to_chunk, idempotent), so the read can never
+		# disagree with what the edit does once the data is material.
+		var e: Variant = edits.get(_key(cx, cz), null)
+		if e != null:
+			var ed: Variant = (e as Dictionary).get((y << 8) | ((z & 15) << 4) | (x & 15), null)
+			if ed != null:
+				return int(ed.get("b", 0))
 		return 0
 	return c.get_local(x & 15, y, z & 15)
 
-func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
+# Returns true when the write is applied (data present) or recorded
+# (data-less column — the record-only path below), false on rejection
+# (y out of range). AC-0325: this write path has NO silent no-op — a
+# write to a column without slab data (a node-only chunk the pre-AC-0263
+# sync materialize used to fill) is recorded in the global edits dict,
+# which every data landing re-applies (_apply_edits_to_chunk) and which
+# the save's JSON edits diff persists — the same path an edited FAR
+# column persists on (AC-0287). get_block reads recorded edits back on
+# data-less columns, so the write is visible immediately and, once data
+# lands, matches what the same edit does in the real band.
+func set_block(x: int, y: int, z: int, id: int, create := true) -> bool:
 	if y < 0 or y >= Data.HEIGHT:
-		return
+		return false
 	var cx := int(floorf(float(x) / 16.0))
 	var cz := int(floorf(float(z) / 16.0))
 	var c: Node3D
@@ -9833,7 +9855,13 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 	else:
 		c = chunks.get(_key(cx, cz))
 	if c == null or c.data.is_empty():
-		return
+		# AC-0325: the record-only edit (above). No slab/fluid/light/queue
+		# machinery here — there is no data to touch; the re-apply on the
+		# landing data runs that path's semantics. The fluid level rides
+		# the record (f=7 for fluid ids, mirroring the data path).
+		var rfi := (y << 8) | ((z & 15) << 4) | (x & 15)
+		_record_edit(cx, cz, rfi, id, 7 if is_fluid_id(id) else 0)
+		return true
 	var lx := x & 15
 	var lz := z & 15
 	# AC-0270: leaf decay is triggered by the BEFORE/AFTER ids - a log or
@@ -9895,6 +9923,7 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> void:
 	# reconnects it (the scan cancels the timers it can reach).
 	if (old_id == 6 or id == 6 or is_leaf_id(old_id) or is_leaf_id(id)) and old_id != id:
 		_leaf_decay_scan_around(x, y, z)
+	return true
 
 
 func _wake_fluid_around(x: int, y: int, z: int) -> void:
@@ -11642,18 +11671,20 @@ func get_block_key(face: int, colx: int, colz: int, y: int) -> int:
 		return 0
 	return c.get_local(colx & 15, y, colz & 15)
 
-func set_block_key(face: int, colx: int, colz: int, y: int, id: int) -> void:
+func set_block_key(face: int, colx: int, colz: int, y: int, id: int) -> bool:
 	if y < 0 or y >= Data.HEIGHT:
-		return
+		return false
 	if face == 0 or face == 1:
-		set_block(colx, y, colz, id)
-		return
+		return set_block(colx, y, colz, id)
 	var c: Node3D = _ensure_face_chunk(face, colx, colz)
 	if c == null or c.data.is_empty():
-		return
+		# AC-0325: no silent no-op (a face chunk is generated on ensure,
+		# so this is unreachable — the honest return anyway).
+		return false
 	var fi: int = (y << 8) | ((colz & 15) << 4) | (colx & 15)
 	c.set_local(colx & 15, y, colz & 15, id)
 	c.set_fl_at(fi, 0)
+	return true
 
 
 # AC-0187: dedicated single-thread pool for the block-edit fast remesh.
