@@ -1,10 +1,10 @@
 meta:
-  updated_at: 2026-09-18T21:56
+  updated_at: 2026-09-18T23:34
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0323
+- AC-0329
 - AC-0287
 - AC-0293
 - AC-0325
@@ -52,6 +52,7 @@ queue:
 - AC-0320
 - AC-0326
 - AC-0327
+- AC-0328
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -15669,11 +15670,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-18T13:04
-  updated_at: 2026-09-18T21:55
-  completed_at: null
+  updated_at: 2026-09-18T23:34
+  completed_at: 2026-09-18T23:34
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The R16 heavy test arm crashed the game process once in five runs. A rare crash
@@ -15737,7 +15738,70 @@ intake:
     (b) the r16 arm (~5 min per run, 1 crash in the AC-0312 5-run set); (c) the R50 `load` arm (40 min,
     died 3 times in this era - twice silently, once SIGABRT). Note the empty backtrace: it points at a
     stack-corrupting or unwinder-hostile path (worker-thread init, the native lane, or the crash handler
-    running on a non-main thread) rather than an ordinary null deref - say which the evidence supports.'
+    running on a non-main thread) rather than an ordinary null deref - say which the evidence supports.
+
+
+    METHOD + BUDGET (coordinator, 2026-09-18, scoped as a bounded INVESTIGATION - the sizing rule applies
+    to this one too): LOCALIZE the crash and fix it only if the cause is clear and the fix is small; if
+    the rate defeats reproduction, narrowing it honestly and filing the precise follow-up is a legitimate,
+    expected outcome - do not thrash.
+
+    1. REPRODUCE, cheapest first: loop `AWECRAFT_LOGIC=lightstate AWECRAFT_LS_RADIUS=16` (~45 s/run; observed
+    1 crash in 6 runs) for up to ~15 runs, then `r16` (~5 min/run; 1 crash in the AC-0312 5-run set) if
+    lightstate stays clean. Budget: keep the whole reproduction phase under ~30 minutes of wall time.
+
+    2. CAPTURE A TRACE (this is the real prize - the crash handler''s own backtrace is EMPTY): `gdb` IS
+    INSTALLED (`/usr/bin/gdb`) but core dumps are OFF by default (`ulimit -c` = 0), so either `ulimit
+    -c unlimited` + analyze the core, or run the arm DIRECTLY under gdb (`HOME=/tmp/dsh_home gdb -batch
+    -ex run -ex ''thread apply all bt'' --args /home/angrygiant/tools/godot/godot --headless --path godot`
+    with the env set). The ENGINE binary is stripped, but the LOCALLY BUILT extension (godot/bin/libchunkio.so)
+    carries symbols - if the crash is in the native lane or the thread pools, gdb will name the frame.
+    A frame name (even just "extension" vs "engine" vs "libc") is the single most valuable output of this
+    ticket.
+
+    3. LOCALIZE BY CONFIGURATION (a strong, cheap discriminator): run the same reproducer loop with the
+    worker pools disabled/reduced (threadgen/threadmesh settings or their env switches - check the code
+    for the switch names) and with the native lane''s other paths. If the crash disappears with a pool
+    off, that pool owns it. Also watch RSS across the loop (log it per run): if the crash correlates with
+    memory growth or with the host''s pressure, say so - the box has ~63 GB with ~47 GB used by other
+    sessions, and two earlier load-arm deaths were consistent with external kills.
+
+    4. FIX OR NARROW: if the cause is clear and the fix is small and safe (e.g. a missing tree-membership/thread
+    guard on the cull path, a stale instance id, an uninitialised field), fix it and gate it with the
+    reproducer loop (>=10 clean runs) plus the standing arms. If it is not, write up exactly what was
+    eliminated, the hypothesis that remains, and file the follow-up with the reproducer + the trace attempt.
+
+    5. The `!is_inside_tree()` cull warnings (272/run, from `_gen_skip_flag` -> `_cull_frustum_planes`)
+    are a SEPARATE, pre-existing, non-fatal noise class - do NOT "fix" them by suppressing output, but
+    DO check whether the crash correlates with them (they fire on the same dispatch path).
+
+
+    CLOSED 2026-09-18: NOT REPRODUCED IN 43 RUNS (8 lightstate R16 plain + 15 under gdb + 5 r16 --fixed-fps
+    600 + 10 lane-config variants: zero handle_crash banners, zero SIGSEGV, zero SCRIPT ERROR; `!is_inside_tree`
+    counts exactly at the documented values, RSS flat, host held 20-45 GB free so the OOM class stayed
+    a non-observation). P(43 clean | the filing-era ~1/10 rate) ~ 1.6%, so the rate is host-state-dependent
+    or lower on this tree state.
+
+    THE NARROWING (independently CHECKED BY THE COORDINATOR, not taken on trust): the family predates
+    the far-band work by ~90 tickets. The same crash banner appears in .scratch/ac0231-r16-inrpass.log
+    (2026-09-06), .scratch/ac0236-bat-smoke.log (2026-09-06), .scratch/batt192.log (2026-09-09) and others,
+    and in every one of them the ONLY backtrace frame is libc.so.6(+0x45f60) = the rt_sigreturn syscall
+    stub - i.e. the fault lands ON the signal frame, which points at worker-thread signal/stack-frame
+    corruption rather than an ordinary null deref. The engine binary statically links Rust (rustc 1.94),
+    so the SIGABRT-with-no-diagnostic load-arm variant fits a Rust panic/abort in the pool path with the
+    message lost in piped logs. All three era occurrences land in the first dispatch wave (t <= 12 s /
+    meshed 38/41). ELIMINATED: small-stack overflow (all six WorkerThreads + the EditPool _run thread
+    carry ~8 MB stacks, /proc-sampled), OOM, the throwaway-camera cull path (never exercised in lightstate),
+    steady-state gen|mesh lane concurrency (both caps = 1 stayed clean). SURVIVING SUSPECTS: the uncapped
+    25-element burst group task, the EditPool raw thread, engine pool internals (incl. the Rust runtime),
+    scheduler-state interleaving. NO CODE CHANGE - nothing to commit for this ticket beyond the registry.
+
+    FOLLOW-UP FILED (the honest next step for a probabilistic bug): a long-run reproduction campaign under
+    the recorded harness .scratch/AC-0323-repro/loopB.sh (100+ runs, background job), fault-address-vs-stack/heap
+    triage on a captured core, and the R50 load arm once under gdb with raw stderr captured for a Rust
+    panic message. Also worth knowing for anyone reading the r16 HARNESS row: the row''s "KNOWN FLAKE:
+    one SIGSEGV in 5 runs ... not attributable to the AC-0312 rebase" is now explained by this ticket
+    - it is not a flake of that rebase at all, it is a ~90-ticket-old hazard.'
   comments: []
 - id: AC-0324
   title: deterministic-spawn-search
@@ -15916,4 +15980,89 @@ intake:
     set_block silent drop, mirror-vs-C++ sea divergence).
 
     '
+  comments: []
+- id: AC-0328
+  title: crash-repro-campaign
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-18T23:30
+  updated_at: 2026-09-18T23:30
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: The game has a rare crash (roughly one run in ten under heavy streaming load)\
+    \ that nobody has caught with a useful trace yet. This ticket is the dedicated hunt: run it enough\
+    \ times to catch one and identify the frame.\n\n2) Technical Details:\nWHY IT EXISTS: AC-0323 did\
+    \ the bounded investigation (43 runs on the 2026-09-18 tree, zero reproductions) and narrowed it:\
+    \ the crash family predates the far-band work by ~90 tickets (identical banner + the single frame\
+    \ libc.so.6(+0x45f60) = the rt_sigreturn stub, in .scratch/ac0231-r16-inrpass.log, .scratch/ac0236-bat-smoke.log,\
+    \ .scratch/batt192.log, ...), it lands in the FIRST DISPATCH WAVE (t <= 12 s / meshed 38/41), the\
+    \ engine statically links Rust (so the SIGABRT-no-message load-arm variant fits a Rust panic/abort\
+    \ in the pool path), and the surviving suspects are the uncapped 25-element burst group task, the\
+    \ EditPool raw thread, engine pool internals, and scheduler-state interleaving. Eliminated so far:\
+    \ small stacks, OOM, the throwaway-camera cull path, steady-state lane concurrency.\nWHAT THIS TICKET\
+    \ DOES (no code change expected unless a frame is captured and the cause is then clear):\n (a) run\
+    \ the recorded harness `.scratch/AC-0323-repro/loopB.sh` (and loopC/loopE) for 100+ iterations as\
+    \ a MANAGED BACKGROUND JOB (never nohup - see godot/OPS.md section 2), logging rc + whether handle_crash\
+    \ appeared per run, until a crash is captured;\n (b) on a capture, triage the fault address against\
+    \ the stack/heap maps (/proc/<pid>/maps at the time, a core with ulimit -c unlimited, or re-running\
+    \ that arm under gdb - gdb is installed; the engine is stripped but the locally built extension carries\
+    \ symbols);\n (c) run the R50 `load` arm ONCE under gdb with raw stderr captured, looking specifically\
+    \ for a Rust panic message (the SIGABRT variant);\n (d) if a frame is named, hand the coordinator\
+    \ the precise hypothesis + the smallest safe fix; if not, record the run counts and the rates honestly\
+    \ - a well-characterised \"1 in N on this host state\" is a valid outcome.\nCONTEXT: a mid-run crash\
+    \ silently invalidates a coordinator gate run (it did during AC-0314's heavy stage), and the same\
+    \ path could crash the shipped game, so this is worth a dedicated long run even though it is low-priority\
+    \ against feature work.\n"
+  comments: []
+- id: AC-0329
+  title: r16-subflag-lod-uv-reds
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-18T23:34
+  updated_at: 2026-09-18T23:34
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: The far band may be drawing the wrong or outdated level-of-detail - stale low-detail\
+    \ meshes kept alongside full-detail data, plus a few air slabs that still carry a mesh. If it is real,\
+    \ the player sees blurry or wrong far terrain; if it is not, the test arm's expectations are stale.\
+    \ Either way it must be settled with evidence.\n\n2) Technical Details:\nMEASURED BY THE COORDINATOR\
+    \ on the current tree (2026-09-18, the DOCUMENTED r16 recipe `AWECRAFT_LOGIC=r16 ... --fixed-fps 600`,\
+    \ run twice, both runs identical):\n  `lod.air_ok` FALSE (from slab1: `air_with_lod` 3 - three AIR\
+    \ slabs still carrying an LOD; slab0 was clean at 0)\n  `lod.uv_repeat_ok` FALSE (from slab1: `uv_mismatch`\
+    \ 262 of `uv_quads` 271, `uv_stale_quads` 10859/11218, `uv_stale_slabs` 2122/2116)\n  `lod.catch_up_ok`\
+    \ FALSE (`catch_up` 0, `catch_up_frames` 0)\n  `gen_timing` cols_skip 475/471, cols_far 2575, cols_full\
+    \ 580  (the AC-0312 HARNESS row records cols_skip 130 / cols_far 1647 / cols_full 642 with ALL sub-flags\
+    \ green and uv_mismatch 0)\nIt is PERSISTENT (2/2 runs), not the timing transient the AC-0312 row\
+    \ describes (\"a mid-series run showed a 379-quad uv_mismatch ... it did not reproduce in the final\
+    \ run\"), so this cannot be dismissed the same way. Every OTHER r16 sub-flag is green (gate_ok, inr_ok,\
+    \ wave_ok, height_ok, no_giant_ok, no_downgrade_ok, low_thread_ok, immediate_ok, low_sync_zero_ok,\
+    \ uv_repeat... no), and the arm's top-level `ok` is HARDCODED true, so the row's own note \"the sub-flags\
+    \ are the contract\" makes this a contract violation.\nFIRST QUESTION TO ANSWER WITH EVIDENCE: is\
+    \ this a real LOD/UV defect (a player-visible wrong far draw, or co-stored stale losses that the next\
+    \ update would have cleared), or is the ARM's expectation stale after the spawn/pad changes? The census\
+    \ shift (cols_skip 130 -> ~473) says the materialization population changed a lot with AC-0314's pad\
+    \ removal + AC-0324's spawn move, and `air_ok`/`uv_repeat_ok` both read the far/low co-storage accounting\
+    \ that AC-0286 introduced. Use the arms as the instruments: reproduce, then bisect by checking out\
+    \ the pre-AC-0314 commit's expectations vs the current ones (the AC-0312-era HARNESS row values are\
+    \ the reference), and prefer a data-level proof (which slabs, which band, which LOD tier, and what\
+    \ the emitted mesh actually contains) over a narrative.\nNOTE: the coordinator's earlier heavy stages\
+    \ ran r16 WITHOUT the documented `--fixed-fps 600` and only read the hardcoded `ok` field, so those\
+    \ runs do not count as verification of these sub-flags - this ticket's runs must use the documented\
+    \ recipe and read the sub-flags.\nSCOPE: one behaviour - the r16 sub-flag contract (air_ok / uv_repeat_ok\
+    \ / catch_up_ok + the stale-slab accounting). If a fix is needed it must not regress the byte-identity\
+    \ gates (farab 1080/1080, ladder band-A 20/20, genhash) or the boundary walk values.\nGATE: r16 with\
+    \ `--fixed-fps 600` reading ALL sub-flags green (or the arm expectation corrected with evidence and\
+    \ the row rebased), plus the standing arms for whatever area you touch.\n"
   comments: []
