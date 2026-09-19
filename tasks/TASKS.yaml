@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-19T12:11
+  updated_at: 2026-09-19T19:54
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -7,7 +7,7 @@ queue:
 - AC-0331
 - AC-0332
 - AC-0333
-- AC-0289
+- AC-0334
 - AC-0290
 - AC-0291
 - AC-0292
@@ -12744,11 +12744,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-15T08:17
-  updated_at: 2026-09-17T20:06
-  completed_at: null
+  updated_at: 2026-09-19T19:54
+  completed_at: 2026-09-19T19:54
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -12791,7 +12791,27 @@ intake:
     how the surface/shore blocks are chosen must be reflected there. Finally, re-measure the real band''s
     gen + mesh cost after your change: the load-screen gate (AC-0313 clause 4) waits for the simulated
     diamond (taxi <= sim) and its wall is derived from that cost, and promotion cost (AC-0286) rides the
-    full gen.'
+    full gen.
+
+
+    CLOSED 2026-09-19 (commit 3a1454c). Coordinator heavy stage on the AC-0289 tree (verified to be the
+    pre-floor binary: my r16 reads low_enqueue_n 48957, the post-floor value is 36057, and mesh.cpp/.so
+    changed hours later): genhash x2 byte-identical AND matching the builder''s new reference file; genprobe
+    ok; farab ok (slab_mismatch 0, h_mismatch 0, 1080 slabs - the independent H-unchanged corroboration);
+    ladder band_a_ok 20/20; meshprobe ok; starlighttest ok; lightstate wash false; save ok; boundary r4
+    p50 13 / p95 42 (p50 flat); spawnsearch ok with tops 141/147/206 and determinism true on all three
+    seeds; r16 with the documented --fixed-fps 600 recipe ALL sub-flags green and far_holes 0 (so the
+    AC-0333 double-draw red does NOT reproduce on this tree - recorded there as evidence). basis/sphere
+    keep only their known pre-existing reds (AC-0326 sea, AC-0327 bedrock) with key_bad 0.
+
+    ONE NEW RED, FILED NOT HIDDEN: the `halo` arm''s sub-check (c) - the band-A demote path''s per-cell
+    agreement - is RED (5 mismatches in column [5,0]; at (15,11,0) the engine holds block 1 where the
+    reference holds 0), with every sibling check green. It was green on the AC-0288 and AC-0293 trees
+    and went red with this ticket''s tunnel carve, and it persists unchanged on the AC-0331 tree. It is
+    filed as AC-0334 with a classification-first instruction (real staleness in the demote/promote path
+    vs a stale arm reference) and a cross-link to the other two generation-sensitive arms (AC-0333, AC-0330)
+    - the honest reading is that the suite has several expectations that a generation change can flip,
+    and each needs its classification settled on evidence rather than by re-baselining.'
   comments: []
 - id: AC-0290
   title: cave-p2-carvers-canyons
@@ -16191,10 +16211,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-09-19T10:47
-  updated_at: 2026-09-19T10:47
+  updated_at: 2026-09-19T14:39
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -16272,7 +16292,12 @@ intake:
     the removed plane coincides with the water surface the tier already emits as its own translucent surface
     above it, so the change is not visible from above; it is visible only when submerged in a far column.
 
-    '
+
+
+    TAKEN BY THE COORDINATOR SESSION (2026-09-19) on the user''s explicit instruction ("work 331-333 next").
+    If you are the session that filed this ticket, do not start it concurrently - the status is in-progress
+    here. The three tickets AC-0331/AC-0332/AC-0333 chain naturally (kernel floor -> the setting that
+    wires it -> the far_holes re-measure) and are being worked in that order.'
   comments: []
 - id: AC-0332
   title: far-tier-mesh-floor-setting
@@ -16424,4 +16449,61 @@ intake:
     rework has landed and whether it already changes or removes the reproducer. If it has, re-measure
     first (r16 with --fixed-fps 600) and only then decide whether anything is left to fix here. Do not
     edit their files or reorder their tickets.'
+  comments: []
+- id: AC-0334
+  title: halo-demote-content-mismatch
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-19T19:53
+  updated_at: 2026-09-19T19:53
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: After a column is demoted to the cheap far form and later promoted back, a handful
+    of its cells can hold the WRONG block (e.g. solid where the world says air). The player would see
+    a stray solid block hanging in a cave.
+
+
+    2) Technical Details:
+
+    MEASURED BY THE COORDINATOR, twice: the `halo` arm''s sub-check (c) - the band-A demote path''s per-cell
+    agreement against the light reference - is RED on the AC-0289 tree AND on the AC-0331 tree: `c: {col
+    [5,0], mismatches 5, ok false, first {x 15, y 11, z 0, current 1, starlight 0}, promotes 9, settled
+    true, unlit 0}`, while every sibling check is green (a: 41 cols / 0 mismatches / ref converged 5 rounds;
+    b: 821/821 slabs, 84 cols; b1: 20/20; d: col [5,0] evicted, far, h_only, high_visible, mesh_resident,
+    ok true; d2: ok true).
+
+    IT IS NEW: the same arm read `ok:true` on the AC-0288 tree (the cave P0 tune) and on the AC-0293 tree,
+    and it went red with AC-0289''s cave P1 tunnels - so the trigger arrived with the tunnel carve, exactly
+    as with AC-0333 (which the same tree flipped from `far_holes` 0 to 3). The AC-0331 builder''s run
+    shows the identical 5 mismatches, so it is stable, not a one-off.
+
+    WHAT TO SETTLE FIRST (the classification decides everything): is this a REAL staleness - a demoted-then-promoted
+    column keeping engine cells that no longer match the regenerated fill, i.e. a promoter that re-applies
+    stale data - or is it the arm''s REFERENCE that is stale (the check compares the engine against a
+    "starlight" reference; if that reference is captured before the tunnel carve is known, the arm is
+    wrong and the engine is right)? Answer it with data, not by picking the convenient side: dump the
+    engine cells at the mismatch coordinates, regenerate the same column from the seed, and compare all
+    three (engine / reference / true fill). The `first` payload already names a cell (x 15, y 11, z 0)
+    and the promote telemetry (`land_count` 1, `recenter_ms` 11273, `swap_ms` 222) narrows it to one demote/promote
+    cycle.
+
+    SCOPE: one behaviour - the demote/promote per-cell agreement. Do NOT re-tune the cave fields, do NOT
+    touch AC-0333''s double-draw census (related area, separate ticket) and do NOT re-baseline the arm
+    until the classification above is proven.
+
+    GATE: `halo` `ok:true` with (c) mismatches 0 and every sibling check still green, plus genhash/farab/ladder
+    byte-identity for whatever you touch (a generation change must not be needed to fix this).
+
+    CONTEXT: this is the third arm red this era that a generation change flipped (AC-0333 far_holes, AC-0330''s
+    terrain-dependent craft status, and this one) - if the classification comes out "the arm''s reference
+    is stale", say so plainly and make the arm deterministic instead of generation-sensitive (the AC-0314
+    hunger/survival fixture is the precedent for arm-side hardening).
+
+    '
   comments: []
