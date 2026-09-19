@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-19T06:35
+  updated_at: 2026-09-19T08:51
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0293
 - AC-0325
 - AC-0288
 - AC-0289
@@ -51,6 +50,7 @@ queue:
 - AC-0326
 - AC-0327
 - AC-0328
+- AC-0330
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -12944,11 +12944,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-15T09:50
-  updated_at: 2026-09-17T20:06
-  completed_at: null
+  updated_at: 2026-09-19T08:51
+  completed_at: 2026-09-19T08:51
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -12990,7 +12990,32 @@ intake:
     pass - AC-0313''s inside-out full-column order is expected to remove that dependence, so RE-MEASURE
     whether the burst is still load-bearing for flight data before removing it; (2) the harness recenter
     pre-warm 5x5 ring (harness.gd:6670) must be re-evaluated against the new inside-out order (the inner
-    ring should now build first naturally).'
+    ring should now build first naturally).
+
+
+    CLOSED 2026-09-19. Coordinator verification (full standing set): genhash x2 byte-identical to each
+    other AND to the AC-0314 reference (generation untouched by the retirement); genprobe ok; spawnsearch
+    ok with the real player standing on all three seeds (tops 141/148/200, det_same true, tier_ok true
+    - the anti-fall proof, now carried by the AC-0313 sim-diamond load gate rather than the burst); player
+    start [8.5,142.0,8.5]; boundary r4 p50 13 / p95 38 (the builder''s +4 ms did NOT reproduce - no walk
+    cost); ladder band_a_ok 20/20; farab 1080/1080 slab_mismatch 0; halo/meshprobe/starlighttest ok; lightstate
+    wash false; r16 with the documented --fixed-fps 600 recipe reads ALL sub-flags green.
+
+    LOAD ARM (the ticket''s own heavy gate): ran ONCE and ABORTED after ~15 min with the KNOWN crash class
+    (handle_crash signal 11, empty backtrace - AC-0323/AC-0328), NOT a regression from this change: the
+    same arm died the same way at AC-0322/AC-0313, before the burst was retired. What it DID prove before
+    dying is the point: the LOADLOG shows the loading window tracking the 41-column sim diamond to completion
+    under the normal streaming path (pct 61.0 at meshed 25/41 -> 92.7 at 38/41, tg pipeline fed) with
+    NO burst machinery left in the tree - the clause-4 gate is burst-independent. The R50 full-load wall
+    therefore stays unmeasured; that is a property of the crash class, not of this ticket.
+
+    BATTERY: 14 byte-identical, and three modes (buckets, craft, water) now differ in VALUE from AC-0287
+    while their pass/fail STATUS is unchanged from both AC-0287 and the archived baseline (craft/water/trees
+    are ok:false in the baseline itself). Read as a value-level startup-timing shift: retiring the burst
+    changes the order in which the world is ready, and those arms sample the ready world - the ticket''s
+    own note pre-accepted this ("breaking change: new burst-less timing"). The undeclared statuses are
+    filed as AC-0330 (battery arms whose ok is false-in-baseline or absent), so the suite''s trustworthiness
+    gets its own ticket instead of being buried here.'
   comments: []
 - id: AC-0294
   title: chiseled-blocks-micro-voxels
@@ -15998,7 +16023,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-18T23:30
-  updated_at: 2026-09-18T23:30
+  updated_at: 2026-09-19T08:51
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -16025,7 +16050,17 @@ intake:
     \ - a well-characterised \"1 in N on this host state\" is a valid outcome.\nCONTEXT: a mid-run crash\
     \ silently invalidates a coordinator gate run (it did during AC-0314's heavy stage), and the same\
     \ path could crash the shipped game, so this is worth a dedicated long run even though it is low-priority\
-    \ against feature work.\n"
+    \ against feature work.\n\n\nFOURTH OCCURRENCE + THE BEST REPRODUCER (coordinator, 2026-09-19): the\
+    \ AC-0293 heavy stage ran the R50 `load` arm ONCE (AWECRAFT_LOADLOG=1, 2700 s cap) and it ABORTED\
+    \ after ~15 min with the same `handle_crash: Program crashed with signal 11` banner and an empty backtrace.\
+    \ This makes the R50 load arm the RELIABLE reproducer in this era (3 of 3 attempts crashed: AC-0322\
+    \ twice [once silently, once SIGABRT] and now AC-0293) - unlike lightstate/r16, where the rate is\
+    \ ~1 in 10. USEFUL DETAIL FOR THE CAMPAIGN: in this run the LOADLOG reached t=6581 ms with meshed\
+    \ 38/41 (the loading window nearly closed) before the crash, and the earlier load-arm deaths also\
+    \ landed in that same window - so the crash correlates with the load/drain phase at R50, i.e. the\
+    \ first dispatch wave after the gate, not with steady-state play. START THE CAMPAIGN THERE: one gdb-wrapped\
+    \ R50 load run is the cheapest chance of catching a frame, with raw stderr captured for a Rust panic\
+    \ message; keep the lightstate/r16 loop as the long-tail arm of the campaign."
   comments: []
 - id: AC-0329
   title: r16-subflag-lod-uv-reds
@@ -16080,4 +16115,39 @@ intake:
     \ stages (AC-0322/AC-0314) ran it without the flag and read `ok`, so these reds went unseen for two\
     \ tickets. The 262-quad uv_mismatch the AC-0312 row called \"a timing transient\" was in fact this\
     \ stale checker meeting the new fresh-slab population."
+  comments: []
+- id: AC-0330
+  title: battery-arms-ok-status-debt
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-19T08:42
+  updated_at: 2026-09-19T08:42
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: A test gate that has been quietly failing for months is worse than no gate at\
+    \ all - it hides real regressions behind noise. Some battery arms are in exactly that state.\n\n2)\
+    \ Technical Details:\nFOUND BY THE COORDINATOR while comparing AC-0293's battery run: the battery\
+    \ compare script only diffs VALUES, so nobody notices pass/fail status. Checked against the ARCHIVED\
+    \ baseline (.scratch/percol_battery/<mode>.result):\n - THREE arms report `ok:false` in the BASELINE\
+    \ ITSELF and still do now: `craft`, `water`, `trees` (verified at AC-0293: identical status in the\
+    \ baseline, in AC-0287's run and in AC-0293's run).\n - FOUR arms emit NO `ok` key at all, so their\
+    \ pass/fail is undeclared: `atlas`, `buckets`, `player`, `interact` (they report values only).\nSo\
+    \ seven of the 31 battery modes are not usable as pass/fail gates today, and that has been true for\
+    \ a long time.\nSCOPE: for each of the seven, decide WITH EVIDENCE (per arm, not as a group) which\
+    \ of two outcomes it is:\n (a) the arm's expectation is stale or its scenario setup is broken -> fix\
+    \ it so it asserts again (the arm's own RESULT values + the standing values in godot/HARNESS.md section\
+    \ 3 are the reference), or\n (b) the arm is a VALUE-REPORTING arm by design -> say so explicitly,\
+    \ in its HARNESS.md section 1 row, so `ok`-less is a declared contract rather than an oversight.\n\
+    DO NOT simply flip `ok` to true, and do not delete arms. Where an arm's assertion is genuinely gone\
+    \ (e.g. `craft`'s F_aim/F_cell reads depend on the spawn surroundings, which moved at AC-0314), record\
+    \ what it can assert now.\nCONTEXT: this is housekeeping on the gate suite, not a game bug. It matters\
+    \ because the coordinator's heavy stage reads this battery for every ticket, and three silent failures\
+    \ make the whole run harder to trust. Sibling gate-integrity tickets already filed: AC-0326 (mirror-vs-C++\
+    \ sea divergence) and AC-0327 (basis bedrock race) - keep them separate.\n"
   comments: []
