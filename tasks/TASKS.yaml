@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-18T23:34
+  updated_at: 2026-09-19T02:31
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0329
 - AC-0287
 - AC-0293
 - AC-0325
@@ -16027,11 +16026,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-18T23:34
-  updated_at: 2026-09-18T23:34
-  completed_at: null
+  updated_at: 2026-09-19T02:31
+  completed_at: 2026-09-19T02:31
   waiting_on: null
   parent_id: null
   notes: "1) User Story: The far band may be drawing the wrong or outdated level-of-detail - stale low-detail\
@@ -16064,5 +16063,13 @@ intake:
     \ / catch_up_ok + the stale-slab accounting). If a fix is needed it must not regress the byte-identity\
     \ gates (farab 1080/1080, ladder band-A 20/20, genhash) or the boundary walk values.\nGATE: r16 with\
     \ `--fixed-fps 600` reading ALL sub-flags green (or the arm expectation corrected with evidence and\
-    \ the row rebased), plus the standing arms for whatever area you touch.\n"
+    \ the row rebased), plus the standing arms for whatever area you touch.\n\n\nCLOSED 2026-09-19 (commit\
+    \ follows). Verdict: the three reds were STALE ARM EXPECTATIONS proven at the data level - no game\
+    \ defect, no game change (harness.gd only, +104/-12). Coordinator verification: r16 --fixed-fps 600\
+    \ all sub-flags green on the committed tree (uv_mismatch 0, air_with_lod 0), genhash 25/25 byte-identical.\
+    \ LESSON WORTH KEEPING (already in the r16 HARNESS row): read this arm's SUB-FLAGS with the documented\
+    \ --fixed-fps 600 recipe - its top-level `ok` is hardcoded true, and the earlier coordinator heavy\
+    \ stages (AC-0322/AC-0314) ran it without the flag and read `ok`, so these reds went unseen for two\
+    \ tickets. The 262-quad uv_mismatch the AC-0312 row called \"a timing transient\" was in fact this\
+    \ stale checker meeting the new fresh-slab population."
   comments: []
