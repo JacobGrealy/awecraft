@@ -1,10 +1,12 @@
 meta:
-  updated_at: 2026-09-19T10:07
+  updated_at: 2026-09-19T12:11
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0288
+- AC-0331
+- AC-0332
+- AC-0333
 - AC-0289
 - AC-0290
 - AC-0291
@@ -12668,11 +12670,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-15T08:17
-  updated_at: 2026-09-17T20:06
-  completed_at: null
+  updated_at: 2026-09-19T12:11
+  completed_at: 2026-09-19T12:11
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -12716,7 +12718,24 @@ intake:
     how the surface/shore blocks are chosen must be reflected there. Finally, re-measure the real band''s
     gen + mesh cost after your change: the load-screen gate (AC-0313 clause 4) waits for the simulated
     diamond (taxi <= sim) and its wall is derived from that cost, and promotion cost (AC-0286) rides the
-    full gen.'
+    full gen.
+
+
+    CLOSED 2026-09-19. Coordinator verification: genhash x2 byte-identical against the NEW reference (all
+    25 hashes new by design, two runs identical); genprobe ok 4900/4900; farab ok with h_mismatch 0 /
+    slab_mismatch 0 (the independent H-unchanged corroboration of the ticket''s SHA-256 proof over 441
+    columns); ladder band_a_ok 20/20; halo/meshprobe/starlighttest/lightstate/save ok; boundary r4 p50
+    13 / p95 41 (p50 flat); the four cross-section renders read numerically by the coordinator (y=80 dense
+    bowl -> narrow winding passage) confirm the change is real and visible, not just a parameter diff;
+    battery 12 byte-identical with no new pass/fail regression (craft incidentally flips to ok:true -
+    recorded on AC-0330 as a terrain-dependent-status warning).
+
+    ONE RED FILED, NOT HIDDEN: r16 (--fixed-fps 600) reads catch_up_ok false with far1.far_holes 3 (three
+    double-drawn far columns), reproduced 3/3 and green one ticket earlier - filed as AC-0333 with the
+    reproducer, a bisect-first instruction and a cross-link to the parallel session''s AC-0331/AC-0332
+    (same gate/keep/free machinery). CAVE_AMP 2.0 was rejected on measured surface-safety margin (1.8*0.5268
+    < 1 vs 2.0*0.5268 > 1) - the variety comes from the octaves/scales/detail blend/DEEP_GROW instead.
+    The user''s in-game pass is the remaining judgement on whether the variety is what they want.'
   comments: []
 - id: AC-0289
   title: cave-p1-spaghetti-noodle-tunnels
@@ -16132,7 +16151,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-19T08:42
-  updated_at: 2026-09-19T08:42
+  updated_at: 2026-09-19T12:10
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -16155,5 +16174,254 @@ intake:
     \ what it can assert now.\nCONTEXT: this is housekeeping on the gate suite, not a game bug. It matters\
     \ because the coordinator's heavy stage reads this battery for every ticket, and three silent failures\
     \ make the whole run harder to trust. Sibling gate-integrity tickets already filed: AC-0326 (mirror-vs-C++\
-    \ sea divergence) and AC-0327 (basis bedrock race) - keep them separate.\n"
+    \ sea divergence) and AC-0327 (basis bedrock race) - keep them separate.\n\n\nSTATUS IS TERRAIN-DEPENDENT\
+    \ (coordinator, 2026-09-19, found while characterizing AC-0288's battery): the `craft` arm reports\
+    \ `ok:false` in the archived baseline, at AC-0287 and at AC-0293 - and `ok:TRUE` on the AC-0288 tree\
+    \ (the cave-field change), because its sampled aim cell moved (F_cell 20 vs 24) onto a valid target.\
+    \ So at least one of these arms' pass/fail is a function of the terrain it happens to sample, not\
+    \ of a fixed contract. When you work this ticket, treat that as part of the problem: an arm whose\
+    \ status flips with world generation cannot gate anything reliably. Fix the scenario so it is deterministic\
+    \ (build/choose its own target explicitly, the way AC-0314's hunger/survival arms now build a fixture)\
+    \ rather than inheriting whatever the seed's terrain provides."
+  comments: []
+- id: AC-0331
+  title: far-tier-mesh-floor-kernel
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-19T10:47
+  updated_at: 2026-09-19T10:47
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+
+    At render distance the world beyond the high-detail band is drawn as coarse averaged samples (bands
+    A/B/C: full-LOD materialized, 8x8 avg, 4x4 avg). Each of those columns is still processed by the mesher
+    slab by slab from bedrock up to its terrain top. Everything below sea level in that far field is solid
+    ground, so that sub-waterline work produces nothing that can be seen. I want the far draw tiers to
+    stop building below the waterline, so the far field costs less to build each time a column enters
+    or is re-lowered, with no visible change to the far world.
+
+
+    2) Technical Details
+
+
+    A mesh FLOOR applied to all three far draw tiers in the C++ average emitter and its call sites.
+
+
+    - gdext/src/mesh.cpp: add p_yfloor to the SHARED kernel avg_grid_emit (:1881 / :2102) - both low_emit_avg_impl
+    and h_avg_emit_impl reach it, so the "same fill through either emitter is byte-identical" contract
+    (the farab gate, harness.gd:10602) keeps holding by construction rather than by two edits staying
+    in sync. Gate the per-cell solid accumulation in the fill loop on y > p_yfloor, and bound the outer-plane
+    face scan to the post-floor cell range so the faces bounding the removed region are not emitted.
+
+    - Cap face at the floor is REQUIRED: without an opaque face at y_floor the world is see-through from
+    below.
+
+    - This ticket hard-codes the floor at Data.SEA (126). No setting, no env knob, no UI - those are a
+    separate follow-up ticket.
+
+    - Slab granularity: the floor is applied per cell. At the far tiers G is 4 or 8, so a 4-cell or 8-cell
+    slab cannot straddle y 126 and the cut is exact there; band A''s full-resolution path is per 16-cell
+    slab and DOES straddle, so the cell-level gate is load-bearing for that tier.
+
+    - GDScript twin: godot/world/world.gd:1815 _avg_emit_slab takes the same parameter, or the meshprobe
+    equivalence arm (C++ vs the GDScript reference) drifts.
+
+    - Band A full-resolution materialization (_mesh_dispatch_hslab''s mat branch, which runs generate_resl(skip=1)
+    plus the full-column build) applies the same floor; _band_a_eff_for / AweMesh.sky_eff must be floor-aware
+    so the heightmap-sky lighting and the cap agree.
+
+    - Dispatch pruning: godot/world/world.gd:2266 _low_pending_sis - drop slabs entirely below the floor
+    from the pending set so no worker task is dispatched for them at all.
+
+    - Caches: c.far_eff is cached per column and must not outlive a floor change (moot while the floor
+    is fixed; recorded so the follow-up does not miss it).
+
+    - Floor granularity is per column and independent of player state; this ticket reads no player position.
+
+
+    Gates (godot/HARNESS.md section 5; the floor is fixed in this task so the standing values are re-established
+    in-task with the supersedes chain):
+
+    - genhash 25/25 byte-identical - generation is untouched by this task, and the gate proves it.
+
+    - farab 984/984 byte-identical, h_mismatch 0 - the far payload stays bit-exact.
+
+    - halo (re-emit identity), ladder (per-band emit + band-A texture identity), meshprobe 1.0 (C++ vs
+    GDScript).
+
+    - r16 and boundary r4 for the far-field draw; battery for the standing set.
+
+    - No lighting change: the cap face carries the same heightmap sky the tier already uses.
+
+
+    Deliberately deferred to the follow-up ticket: exposing the floor as a setting (enable toggle + chunks-below-sea),
+    the Developer-tab row, the AWECRAFT_YFLOOR env preloads, and live re-floor when a session changes
+    the value. This task leaves the floor fixed at sea level.
+
+
+    Also recorded so a reviewer does not expect it here: the sub-waterline geometry in columns whose terrain
+    sits below the floor (deep ocean floor) is genuinely removed rather than merely unbuilt. At the waterline
+    the removed plane coincides with the water surface the tier already emits as its own translucent surface
+    above it, so the change is not visible from above; it is visible only when submerged in a far column.
+
+    '
+  comments: []
+- id: AC-0332
+  title: far-tier-mesh-floor-setting
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-19T10:47
+  updated_at: 2026-09-19T10:47
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+
+    The far draw tiers stop building below the waterline (previous ticket), but the depth is hard-coded.
+    I want to be able to switch that floor on and off and choose how far below sea level it sits, and
+    to iterate on the value from the Developer tab in a running session instead of relaunching each time.
+
+
+    2) Technical Details
+
+
+    Depends on the kernel ticket (the far-tier mesh floor): the C++ p_yfloor parameter in the shared avg_grid_emit,
+    the GDScript twin, the band-A/sky_eff path and the _low_pending_sis prune must already exist before
+    this task wires a value through them.
+
+
+    Setting (godot/autoload/settings.gd):
+
+    - DEFAULTS gains yfloor_enabled (bool, default true) and yfloor_chunks_below_sea (int, default 0).
+
+    - yfloor_chunks_below_sea is a plain 0..24 scale with NO sentinel: y_floor = Data.SEA - n*16, so 0
+    = the waterline (y 126) and larger values cut deeper. The on/off axis is the separate boolean, so
+    the scale never has to encode "disabled". Add YFLOOR_MAX := 24 next to the other range constants.
+
+    - A _clamp branch (clampi(v, 0, YFLOOR_MAX)) and an apply step in set_value alongside the existing
+    clamp chain.
+
+    - The floor derivation happens once, in godot/world/world.gd next to the other two Settings band reads:
+    y_floor = -1 when the toggle is off, else Data.SEA - n*16. The -1 is an INTERNAL sentinel produced
+    only by the toggle and never by the slider - nothing in the setting range can produce it.
+
+
+    Developer tab (godot/ui/menu.gd):
+
+    - A CheckBox plus a SpinBox row built with the existing _mk_dev_spin_row helper (:504), following
+    the dof_enabled_check + dof_far_distance precedent (:262-268) for the dependent-control wiring.
+
+    - SpinBox rather than HSlider is deliberate and follows the recorded AC-0260 fix: the Developer page''s
+    earlier HSlider rows were replaced because the tab layout squashed them and an exact small integer
+    such as 0 was not reliably reachable by dragging.
+
+    - _sync_controls refresh plus an _on_yfloor_changed handler.
+
+
+    Harness env preloads (the AWECRAFT_TM_HO / AWECRAFT_FOG_PCT pattern, world.gd:3814 and main.gd:690):
+    AWECRAFT_YFLOOR=<0..24> and AWECRAFT_YFLOOR_ENABLED=<0|1> written into Settings.values WITHOUT save(),
+    so the arms never clobber the user''s cfg.
+
+
+    Cache staleness on a value change: clear c.far_eff and re-open the band-A far_mat mark for the affected
+    columns; a column already materialized will not re-materialize for that residency otherwise.
+
+
+    Docs: the far-data bullet in godot/ARCHITECTURE.md section 6 (where the three draw tiers are already
+    described) gains the floor clause. Same task, per the architecture-sync rule.
+
+
+    Gates (godot/HARNESS.md section 5) - the kernel ticket''s set run TWICE:
+
+    - Floor OFF: farab 984/984 and the rest byte-identical to the pre-change run - the no-op proof that
+    the plumbing does not alter emission on its own.
+
+    - Floor ON at the shipped default: the gate set green and standing values re-established in-task with
+    the supersedes chain.
+
+    - genhash 25/25 held in both runs (generation untouched).
+
+    - Battery with AWECRAFT_YFLOOR set, to prove the env path does not write to the user''s cfg.
+
+
+    Deliberately deferred: live re-floor when the value or the toggle changes mid-session. Until that
+    exists the pair is a boot/dev knob - a change applies to newly built columns, and existing ones converge
+    as they demote and re-mesh. Turning the floor ON mid-session is the expensive direction (it invalidates
+    the far meshes of the whole far field at once); turning it OFF is the cheaper direction. The follow-up
+    designs both against measured churn.
+
+    '
+  comments: []
+- id: AC-0333
+  title: far-band-double-draw-holes
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-19T12:10
+  updated_at: 2026-09-19T12:11
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: A few far columns can be drawn TWICE (overdraw / z-fighting in the distance).
+    Every far column should draw exactly once.
+
+
+    2) Technical Details:
+
+    MEASURED BY THE COORDINATOR on the AC-0288 tree (the cave-field change), r16 with its DOCUMENTED recipe
+    `AWECRAFT_LOGIC=r16 ... --fixed-fps 600`, THREE consecutive runs, all identical: `lod.catch_up_ok`
+    FALSE, `lod.far1.far_holes` **3**, `lod.far1.far_capsule_n` 11, `lod.far0.far_holes` 0 (far1 = band
+    1). Every OTHER r16 sub-flag is green (`air_ok`, `uv_repeat_ok` true; `uv_mismatch` 0; `catch_up`/`catch_up_frames`
+    0; `demoted_cols_n` 437). AC-0329 defined a "hole" in this census as a DOUBLE DRAW (its fix moved
+    the census to the mesh level: resident slabs = stored highs + active lows + stale capsules, and `far_holes`
+    counts double draws), so this is 3 columns drawn twice, deterministically, not a transient.
+
+    IT WAS GREEN ONE TICKET EARLIER: the same arm and recipe read ALL sub-flags green on the AC-0293 tree
+    (far_holes 0), so the trigger arrived with AC-0288''s cave change - most plausibly because a cave
+    reaching the surface changes the far payload''s `top`/biome at those columns (the H field is provably
+    unchanged: AC-0288''s SHA-256 of `column_heights16` over 441 columns is byte-identical before/after,
+    and farab reads `h_mismatch` 0 / `slab_mismatch` 0). But the FINDING is the sensitivity: the far census/demote
+    accounting can produce double draws when the payload content shifts.
+
+    FIRST STEP (decides "caused by" vs "latent, exposed by"): reproduce as above, then confirm with the
+    AC-0288 diff stashed (or a HEAD~1 native rebuild) whether far_holes returns to 0 - that tells you
+    whether the cave change is the cause or merely the trigger, and the fix differs accordingly (a payload-shape
+    assumption in the census vs a race in the demote/promotion path).
+
+    GATE: r16 with `--fixed-fps 600` reading ALL sub-flags green with `far_holes` 0 in BOTH bands, plus
+    the byte-identity gates for whatever you touch (farab 1080/1080 with h_mismatch 0, ladder band_a_ok
+    20/20, genhash byte-identical to the AC-0288 reference) and no `air_capsule_n`/`far_capsule_n` growth.
+
+    CONTEXT: related but distinct from AC-0329 (which fixed the arm''s CHECKERS for the three reds it
+    found - this is a value the checker now correctly reports as a hole) and from AC-0330 (the battery
+    arms'' undeclared ok status). Keep them separate.
+
+
+
+    POSSIBLE OVERLAP (coordinator, 2026-09-19): the parallel session has AC-0331 (far-tier-mesh-floor-kernel)
+    and AC-0332 (far-tier-mesh-floor-setting) in flight at the queue head - they remove the `c.candidate`
+    boolean and centralise the recenter distance checks (inside r -> queue for gen/mesh; r+1 -> keep data-only
+    hidden; r+2 -> free) across the picks and the fog/low/high gates. That is the same machinery this
+    ticket''s `far_holes` double-draw census observes, so BEFORE working this one, check whether their
+    rework has landed and whether it already changes or removes the reproducer. If it has, re-measure
+    first (r16 with --fixed-fps 600) and only then decide whether anything is left to fix here. Do not
+    edit their files or reorder their tickets.'
   comments: []
