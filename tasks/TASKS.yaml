@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-19T08:51
+  updated_at: 2026-09-19T10:07
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0325
 - AC-0288
 - AC-0289
 - AC-0290
@@ -15896,11 +15895,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-18T19:08
-  updated_at: 2026-09-18T19:08
-  completed_at: null
+  updated_at: 2026-09-19T10:07
+  completed_at: 2026-09-19T10:07
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Editing a block far away (in the data-only far band) appears to work but the
@@ -15929,7 +15928,14 @@ intake:
     CONTEXT: surfaced by the AC-0314 closeout; the other two pre-existing reds it also bisected are separate
     tickets (mirror-vs-C++ sea divergence, basis bedrock_y0 race).
 
-    '
+
+
+    CLOSED 2026-09-19. Coordinator verification: sphere key_bad 38 -> 0 (the ticketed red), genhash 25/25
+    byte-identical, flysave/save/chunkio/interact/player green, boundary p50 flat. The residual sphere
+    ok:false is exclusively home_sea_ok, which is AC-0326 (mirror-vs-C++ ocean divergence) - this ticket''s
+    gate cannot go green until that one lands, and that is recorded rather than papered over. The fix''s
+    contract ("apply through the record/promotion path or fail loudly") is now an ARCHITECTURE.md convention
+    because it is what an edit on a far column MEANS.'
   comments: []
 - id: AC-0326
   title: mirror-vs-cpp-sea-divergence
