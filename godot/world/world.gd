@@ -203,9 +203,11 @@ var fluid_tick_radius := 14
 # 1:1 (the tier-0 ball's columns first, in the dedicated section). The
 # HALO band (band0_r, render_radius) is the 4x4x4 avg draw with the
 # heightmap sky light (15 strictly above the terrain top, 0 at or below;
-# no block light, no engine, never saved). band0_r still gates mob/fluid
-# simulation (collision band 0, the data tier-1 priority square, mob
-# spawn). Settings "sim_dist".
+# no block light, no engine, never saved — AC-0287: the save filter makes
+# this true again for the FAR (h-only) columns AC-0284b briefly persisted
+# as the v6 bit-1 payload; they are now ephemeral and regenerate on load).
+# band0_r still gates mob/fluid simulation (collision band 0, the data
+# tier-1 priority square, mob spawn). Settings "sim_dist".
 var band0_r := 4
 # AC-0312: the BAND A/B boundary (taxi chunks) — the outer edge of the
 # full-LOD draw tier (see _lod_tier_of). Live-read by the tier model;
@@ -397,6 +399,17 @@ var _io_wdedup := 0
 var _io_drops := 0
 var _io_fails := 0
 var _io_write_n := 0
+# AC-0287: the save-filter counters (the flysave arm's evidence).
+# _save_skip_n = evicts the filter declined (outside the sim diamond and
+# unedited, or far — the no-bloat proof); _save_far_n = evicts of a FAR
+# column (the never-encoded class — 0 in every filtered run, >0 only under
+# the AWECRAFT_SAVEALL=1 baseline A/B).
+var _save_skip_n := 0
+var _save_far_n := 0
+# AC-0287: the AWECRAFT_SAVEALL=1 A/B seam, read lazily (the harness envs
+# are exported by the launch command, never changed mid-run). 0 = the
+# filter (product), 1 = pre-AC-0287 save-all (the flysave baseline run).
+var _saveall_env := -1
 var _io_main_read_ms := 0.0
 var _io_main_write_ms := 0.0
 # AC-0175: region compaction state. _io_compacting maps region path ->
@@ -10350,13 +10363,47 @@ func _saved_light_from_res(light: Dictionary, cx: int, cz: int) -> Dictionary:
 
 
 
+# AC-0287: lazy read of the A/B seam (see _saveall_env). Returns 0 = the
+# save filter is ON (product), 1 = pre-AC-0287 save-all (test-only
+# baseline). Read once, cached for the process.
+func _save_filter_bypass() -> int:
+	if _saveall_env < 0:
+		_saveall_env = 1 if OS.get_environment("AWECRAFT_SAVEALL") == "1" else 0
+	return _saveall_env
+
 func _queue_chunk_save(c: Node3D) -> void:
 	if Save.active_slot < 0 or c.data.is_empty():
+		return
+	# AC-0287: the save filter — the region write persists a column ONLY if
+	# it is inside the SIM DIAMOND (taxi <= band0_r = sim, the spec's
+	# boundary EXACTLY — AC-0313 clause 6 deleted the tier-0 set, so there
+	# is no real-column-outside-sim case left to special-case) OR it
+	# carries EDITS (world.edits). Far (h-only) columns are NEVER encoded —
+	# the v6 bit-1 payload write is dead and its DECODE stays for
+	# pre-AC-0287 saves: absent on disk = regenerate on load (cheap far,
+	# ~92 us/col, bit-exact; the sim diamond re-gens full), and an EDITED
+	# far column persists through the JSON edits diff (Save.save_now) + the
+	# edit's own promotion regen (AC-0284b/AC-0286) — the edit is NOT in
+	# the far payload (no slabs), so writing it would add nothing. In
+	# natural flow an evicted column already sits two rings past the render
+	# edge (the r+2 free: taxi > sim + 2), so the practical effect: only
+	# edited columns persist, and the save size stays FLAT under flight
+	# (the flysave arm's proof). AWECRAFT_SAVEALL=1 = the pre-AC-0287
+	# baseline A/B (every evicted column saved — the flysave arm's
+	# comparison run; never set in product runs).
+	if _save_filter_bypass() == 0 and c.far:
+		_save_skip_n += 1
+		_save_far_n += 1
+		return
+	var key := _key(int(c.cx), int(c.cz))
+	if _save_filter_bypass() == 0 \
+			and not _is_real_col(int(c.cx) - last_pcx, int(c.cz) - last_pcz) \
+			and not edits.has(key):
+		_save_skip_n += 1
 		return
 	# AC-0164: the slot is captured AT ENQUEUE — the active slot can change
 	# mid-flight (continue / new game) and a write in flight must still land
 	# in the captured slot's dir, not the current one's.
-	var key := _key(int(c.cx), int(c.cz))
 	var light: Dictionary = _save_light_for(c, key)
 	_save_queue.append({
 		"slot": int(Save.active_slot),

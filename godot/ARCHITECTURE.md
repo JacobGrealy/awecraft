@@ -130,8 +130,22 @@ Build and loading:
   (the 24-bit generated mask) + one flag byte in the MD5-hashed head: **bit 0 = no-caves**
   (AC-0284a, solid 0..H slab-skip) / **bit 1 = far h-only** (AC-0284b — the column stores
   NO slabs, just a `[H u16×256][biome×256][top×256]` payload, ~198 B on disk); old v1–v5
-  and bit-0-only v6 decode unchanged. The save-content filter (write only the sim band or
-  edited columns) is AC-0287.
+  and bit-0-only v6 decode unchanged.
+  **Save-content filter (AC-0287, shipped)**: the region write (`World._queue_chunk_save`,
+  the one production save entry — the evict path) persists a column **only** if it is
+  inside the **SIM DIAMOND** (`taxi <= band0_r`, the boundary EXACTLY — no tier-0
+  exception, that set is gone) **or** it carries **edits** (`world.edits`); **far (h-only)
+  columns are NEVER encoded** — the bit-1 payload write is dead and its DECODE stays for
+  pre-AC-0287 saves. A column absent on disk regenerates on load (cheap far ~92 µs/col,
+  bit-exact; the sim diamond re-gens full), and an edited FAR column persists through the
+  JSON edits diff (`Save.save_now`) + the edit's own promotion regen (§6) — the edit is
+  not in the far payload (no slabs), so the diff is the authoritative edit store. In
+  natural flow an evicted column already sits two rings past the render edge, so in
+  practice only edited columns persist and the save size stays FLAT under flight (the
+  `flysave` arm is the proof: bytes per flown distance + edited-far persistence through
+  promotion, read back from disk). No `SAVE_VERSION` bump was owed: the on-disk format is
+  byte-compatible (decode untouched — only the write-side content policy changed), so the
+  clean-reject option below was not exercised.
 - **Save compatibility policy**: **old worlds are disposable during development** (user, 2026-09-17).
   A save-format or world-shape change may make existing worlds unusable and owes **no migration** —
   but it must bump `SAVE_VERSION` so an old save is **rejected cleanly**: fail fast with a log line and
@@ -159,7 +173,9 @@ Match these; do not improvise a different approach in a task.
   `u_day` does the darkening (AC-0204 — no day factor anywhere in the build path).
 - **Far data (the draw band, taxi > `band0_r`, + the offscreen interior collar)**: columns
   store **no slabs at all** — just a `[H u16×256][biome×256][top-block×256]` payload
-  (~1 KB, ~198 B on disk; AC-0284b; the v6 flag bit 1). Gen builds only the 3 coarse
+  (~1 KB, ~198 B on disk; AC-0284b; the v6 flag bit 1 — **write-dead since AC-0287**:
+  the save filter never encodes a far column; the bit-1 shape survives on disk only in
+  pre-AC-0287 saves and is decode-only). Gen builds only the 3 coarse
   SURFACE fields (the ones H depends on) + the heights pass — ~92 µs/col vs ~1.7 ms full
   (≈18×); the heights pass alone is ~34 µs (the RP "heights-only" line). H is bit-exact
   with the full path (the stored H *is* the heightmap — promotion must not shift terrain).

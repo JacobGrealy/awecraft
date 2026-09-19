@@ -827,6 +827,14 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		if logic == "chunkio":
 			await _chunkio_test(spawn)
 			return
+		if logic == "flysave":
+			# AC-0287: the sim band must be built before the flight (the
+			# spawn search + the edit targets need data); BATTSKIP.
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_sim_band(spawn, 3000)
+			player = main._spawn_player()
+			await _flysave_test(spawn)
+			return
 		if logic == "chunkiocpp":
 			await _chunkiocpp_test(spawn)
 			return
@@ -19450,10 +19458,13 @@ func _chunkio_region_file_names(slot: int) -> Array:
 	da.list_dir_end()
 	return out
 
-# AC-0155 probe: full-column save round-trip in one process. Fresh r=4 41-set
-# generated (first visit) -> hash -> recenter far (evict, files written) ->
-# recenter back (41 read from disk, byte-identical, GENMS 0) -> r=50 revisit
-# (saved chunks served from disk, no re-gen). Headless, wall <= 60 s.
+# AC-0155 probe (AC-0287 rework): full-column save round-trip in one process.
+# Fresh r=4 41-set generated (first visit) -> recenter far (evict — the
+# AC-0287 save filter persists NONE: unedited + two rings past the render
+# edge = the no-bloat contract) -> recenter back + edit all 41 (one planks
+# cell each) -> recenter far (the 41 evict and ARE saved — the edits clause)
+# -> r4 revisit (41 read from disk, byte-identical) -> r50 revisit (disk-
+# served) -> region fan-out (the machinery test, filter-bypassing). Headless.
 func _chunkio_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
 	var SLOT := 0
@@ -19473,23 +19484,85 @@ func _chunkio_test(spawn: Vector3) -> void:
 	var gen_a: int = world.gen_count
 	var disk_a: int = world.disk_reads
 	var hashes := _chunkio_hash(diamond)
-	# Phase B: recenter far twice -> the 41 evict -> files written.
+	# Phase B (AC-0287): recenter far twice -> the 41 evict. The save filter
+	# persists NONE of them: every one sits two rings past the render edge
+	# (taxi > sim + 2, outside the SIM DIAMOND) and none carries an edit —
+	# unedited columns never reach disk (the no-bloat contract; absent on
+	# disk = regenerate bit-exact on the next visit).
+	world.recenter(1000.0, 1000.0, true)
+	for i in 30:
+		await get_tree().physics_frame
+	world.recenter(1000.0, 1000.0, true)
+	var ev_waited := 0
+	while ev_waited < 2400 and (not world._save_queue.is_empty() or not world._io_write_inflight.is_empty()):
+		await get_tree().physics_frame
+		ev_waited += 1
+	for i in 30:
+		await get_tree().physics_frame  # let the (skipped) evicts settle
+	var unedited_saved: int = _chunkio_saved_count(diamond, SLOT)  # expect 0
+	# Phase B2 (AC-0287): recenter back + edit every diamond column (one
+	# planks cell each — id 8, never generated naturally). The 41 now carry
+	# edits -> the evict persists them (the EDITS clause, baked data
+	# included) — the only save path left in natural flow.
+	world.render_radius = 4
+	world.recenter(spawn.x, spawn.z, true)
+	await _chunkio_wait(diamond, 900)
+	# AC-0287: the data-present wait alone is NOT the settle — a recenter
+	# whose AHEAD offset leads the player (AC-0277) stubs the far-edge
+	# diamond columns at band 3, and they land as FAR (h-only) columns;
+	# the no-caves umbrella / the real-band re-entry promotion then owes
+	# them the full regen, and ANY full landing clears the far flag
+	# (threadgen_handoff). The save filter never encodes a far column, so
+	# the arm must wait for the promotion to land (all 41 full) before
+	# editing + evicting — in natural flow an evicted column is always
+	# long past this transition (two recenter events inside the band).
+	var full_waited := 0
+	while full_waited < 1800:
+		var full := true
+		for dc in diamond:
+			var cf = world.chunks.get("%d,%d" % [int(dc[0]), int(dc[1])])
+			if cf == null or bool(cf.far):
+				full = false
+				break
+		if full:
+			break
+		await get_tree().physics_frame
+		full_waited += 1
+	for dc in diamond:
+		var wx := int(dc[0]) * 16 + 8
+		var wz := int(dc[1]) * 16 + 8
+		world.set_block(wx, int(world.surface_top(wx, wz)), wz, 8)
+	for i in 30:
+		await get_tree().physics_frame
+	hashes = _chunkio_hash(diamond)  # post-edit reference for Phases C/D
 	world.recenter(1000.0, 1000.0, true)
 	for i in 30:
 		await get_tree().physics_frame
 	world.recenter(1000.0, 1000.0, true)
 	var files_waited := 0
-	while files_waited < 2400 and _chunkio_saved_count(diamond, SLOT) < diamond_n:
+	while files_waited < 3600 and _chunkio_saved_count(diamond, SLOT) < diamond_n:
 		await get_tree().physics_frame
 		files_waited += 1
-	var files_exist := _chunkio_saved_count(diamond, SLOT)  # AC-0175: region entries
-	# AC-0175: the spawn diamond (cols -4..4) sits entirely in region (0,0).
-	# (The far-recenter world at (1000,1000) saves its own ~4 regions in
-	# parallel - the directory count is timing-dependent, so gate on the
-	# spawn region file itself, not the directory total.)
-	var spawn_region_ok: bool = FileAccess.file_exists(ChunkIO.region_for(SLOT, 0, 0))
+	var files_exist := _chunkio_saved_count(diamond, SLOT)  # AC-0175: region entries — all 41 (edited)
 	var region_files_b := _chunkio_region_files(SLOT)
-	# Phase C: revisit r=4 -> 41 read from disk.
+	var still_in := 0
+	for dc in diamond:
+		if world.chunks.has("%d,%d" % [int(dc[0]), int(dc[1])]):
+			still_in += 1
+	var edits_missing := 0
+	for dc in diamond:
+		if not world.edits.has("%d,%d" % [int(dc[0]), int(dc[1])]):
+			edits_missing += 1
+	if files_exist < diamond_n:
+		for dc in diamond:
+			var k2 := "%d,%d" % [int(dc[0]), int(dc[1])]
+			if not ChunkIO.saved_column_exists(SLOT, int(dc[0]), int(dc[1])):
+				var c2 = world.chunks.get(k2)
+				print("AC0287MISS col=%s in_chunks=%s far=%s data_empty=%s cand=%s" % [
+					k2, int(c2 != null), int(bool(c2.far)) if c2 != null else -1,
+					int(c2.data.is_empty()) if c2 != null else -1,
+					int(c2.cand_since) if c2 != null else -1])
+	# Phase C: revisit r=4 -> 41 read from disk (edited data byte-identical).
 	world.render_radius = 4
 	world.recenter(spawn.x, spawn.z, true)
 	await _chunkio_wait(diamond, 900)
@@ -19577,11 +19650,21 @@ func _chunkio_test(spawn: Vector3) -> void:
 	var region_files_r50 := _chunkio_region_files(SLOT)
 	var region_ok: bool = drained and region_files_r50 == expected_regions and expected_regions >= 8 and expected_regions <= 16
 	var wall := Time.get_ticks_msec() - t0
-	var ok: bool = files_exist == diamond_n and byte_identical == diamond_n and origin_disk == diamond_n and origin_gen == 0 and d50_disk == diamond_n and d50_gen == 0 and spawn_region_ok and region_ok and wall <= 180000
+	# AC-0287: the contract is now unedited_saved == 0 (the no-bloat gate) +
+	# the edited-41 round-trip; spawn_region_ok is gone (the unedited evict
+	# writes no file by contract).
+	var ok: bool = unedited_saved == 0 and files_exist == diamond_n and byte_identical == diamond_n and origin_disk == diamond_n and origin_gen == 0 and d50_disk == diamond_n and d50_gen == 0 and region_ok and wall <= 180000
 	Debug.result({
 		"ok": ok,
 		"wall_ms": wall,
 		"diamond": diamond_n,
+		"unedited_saved": unedited_saved,
+		"still_in": still_in,
+		"edits_size": world.edits.size(),
+		"edits_missing": edits_missing,
+		"skip_n": world._save_skip_n,
+		"far_n": world._save_far_n,
+		"saveall": world._save_filter_bypass(),
 		"files_exist": files_exist,
 		"region_files_b": region_files_b,
 		"drained": drained,
@@ -19612,6 +19695,215 @@ func _chunkio_test(spawn: Vector3) -> void:
 		},
 	})
 	get_tree().quit()
+
+
+# AC-0287 probe (AWECRAFT_LOGIC=flysave): the save-filter no-bloat proof —
+# the ticket's core evidence, expressed as bytes, not prose. Fly
+# AWECRAFT_FLY_DIST blocks (default 2048; the 10k HEAVY invocation is
+# AWECRAFT_FLY_DIST=10240) at AWECRAFT_FLY_SPEED (default 32 b/s) and trace
+# the slot's region-file bytes at 4 intervals. With the filter the size
+# stays FLAT — in fact NOTHING is written: the unedited evicts are skipped
+# (outside the sim diamond) and the 3 edited columns are FAR (h-only —
+# the first three far-stamped taxi-5 halo-ring columns; a tier-4 column
+# is far-generated only outside the camera frustum), and a far column is
+# NEVER encoded, edited or not (the edit persists through the in-session
+# edits dict + the promotion regen; across sessions through the JSON
+# edits diff). The
+# edited cells are placed on the far heightmap (bit-exact surface H from
+# c.far_h), re-verified after the fly-back by re-loading the columns and
+# reading the block — they come back REGENERATED (chunk_origin "gen",
+# disk_origin 0), not from disk, which is the never-encoded contract.
+# AWECRAFT_SAVEALL=1 runs the pre-AC-0287 baseline (every evict saved):
+# the trace grows linearly with distance — judge the baseline on the
+# metric fields, not `ok`. BATTSKIP (a flight per run — out of battery
+# scope). Headless.
+func _flysave_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var SLOT := 0
+	Save.clear(SLOT)
+	Save.active_slot = SLOT
+	world.fluid_sim_enabled = false
+	var dist := 2048
+	var de := OS.get_environment("AWECRAFT_FLY_DIST")
+	if de != "":
+		dist = clampi(int(de.to_int()), 256, 65536)
+	var speed := 32.0
+	var se := OS.get_environment("AWECRAFT_FLY_SPEED")
+	if se != "":
+		speed = clampf(float(se.to_float()), 8.0, 256.0)
+	var r: int = int(world.render_radius)
+	var sim: int = int(world.band0_r)
+	var p = Game.player
+	# --- edit targets: three FAR (h-only) columns on the taxi-5 halo ring
+	# (the r4 draw band). A tier-4 (data-only) column is far-generated
+	# only when it is OUTSIDE the camera frustum — the onscreen collar is
+	# full-generated (world.gd _gen_skip_flag: tiers 1-3 are always far,
+	# tier 4 falls through to the band_of / offscreen-collar rule) — so
+	# the arm takes the first three far-stamped ring columns in order. A
+	# 75-degree frustum at this range cannot cover the whole 20-point
+	# ring, so three far columns always exist.
+	var scx := int(floorf(spawn.x / 16.0))
+	var scz := int(floorf(spawn.z / 16.0))
+	var ring: Array = []
+	for i in range(20):  # taxi-5 ring, clockwise from (+x): (5,0),(4,1),...
+		var rx := 5 - i if i <= 14 else i - 15
+		var rz: int
+		if i <= 4:
+			rz = i
+		elif i <= 14:
+			rz = 10 - i
+		else:
+			rz = i - 20
+		ring.append([scx + rx, scz + rz])
+	var edit_cols: Array = []
+	var ew := 0
+	while ew < 1800 and edit_cols.size() < 3:
+		for rc in ring:
+			if edit_cols.size() >= 3:
+				break
+			var c = world.chunks.get("%d,%d" % [rc[0], rc[1]])
+			if c != null and bool(c.far) and c.far_h.size() == 512:
+				edit_cols.append(rc)
+		if edit_cols.size() < 3:
+			await get_tree().physics_frame
+			ew += 1
+	var edits: Array = []
+	var far_at_edit := true
+	for ec in edit_cols:
+		var c = world.chunks.get("%d,%d" % [ec[0], ec[1]])
+		far_at_edit = far_at_edit and bool(c.far)
+		var wx := int(ec[0]) * 16 + 8
+		var wz := int(ec[1]) * 16 + 8
+		# The edit cell sits on the FAR HEIGHTMAP (c.far_h — the bit-exact
+		# surface H; a far column's slabs are all-null, so surface_top
+		# would read y=0). The promotion regen reproduces this exact H,
+		# so the re-applied edit lands on the regenerated surface.
+		var fi := 8 * 16 + 8  # centre cell (lx 8, lz 8)
+		var h := int(c.far_h[2 * fi]) | (int(c.far_h[2 * fi + 1]) << 8)
+		var ty := clampi(h, 1, Data.HEIGHT - 2)
+		world.set_block(wx, ty, wz, 8)  # id 8 planks — never generated naturally
+		edits.append({"col": "%d,%d" % [ec[0], ec[1]], "cell": [wx, ty, wz]})
+	for i in 30:
+		await get_tree().physics_frame
+	# --- the flight: manual position stepping (the boundary arm's pattern;
+	# the player's own chunk-change recenter drives the streaming).
+	var max_h := -1
+	for bx in range(int(spawn.x), int(spawn.x) + dist + 4, 4):
+		max_h = maxi(max_h, WorldGen.terrain_height(bx, int(spawn.z), Game.world_seed))
+	var fly_y := float(maxi(max_h, 0)) + 8.0
+	p.position = Vector3(spawn.x, fly_y, spawn.z)
+	p.velocity = Vector3.ZERO
+	p.set_fly(true)
+	p.look(-PI / 2.0, 0.0)
+	for i in 6:
+		await get_tree().physics_frame
+	var trace: Array = []
+	var bytes0: int = _flysave_dir_bytes(SLOT)
+	trace.append({"d": 0, "bytes": bytes0})
+	var mark_step := maxi(1, dist / 4)
+	var next_mark := mark_step
+	var flown := 0.0
+	var prev_t := Time.get_ticks_msec()
+	while flown < float(dist):
+		await get_tree().physics_frame
+		var now := Time.get_ticks_msec()
+		var dt := (now - prev_t) / 1000.0
+		prev_t = now
+		var step := minf(speed * dt, float(dist) - flown)
+		p.position.x += step
+		p.velocity = Vector3.ZERO
+		flown += step
+		if flown >= float(next_mark) or flown >= float(dist):
+			trace.append({"d": int(flown), "bytes": _flysave_dir_bytes(SLOT)})
+			next_mark += mark_step
+	# --- drain: the edited columns (evicted at the back of the flight)
+	# must be committed before the persistence checks.
+	var dw := 0
+	while dw < 2400 and (not world._save_queue.is_empty() or not world._io_write_inflight.is_empty()):
+		await get_tree().physics_frame
+		dw += 1
+	for i in 30:
+		await get_tree().physics_frame
+	var bytes_end: int = _flysave_dir_bytes(SLOT)
+	var edited_saved := 0
+	for e in edits:
+		var parts: PackedStringArray = String(e["col"]).split(",")
+		if ChunkIO.saved_column_exists(SLOT, int(parts[0]), int(parts[1])):
+			edited_saved += 1
+	# --- fly back and verify the edits (one teleport per column — the
+	# ring-picked columns need not share a single sim band). Each column
+	# is REGENERATED on arrival (never disk-resident) and the promotion
+	# regen re-applies the stored edit, so the cell reads 8.
+	var edit_ok := true
+	var disk_origin := 0
+	for e in edits:
+		var cell: Array = e["cell"]
+		var target := Vector3(float(int(cell[0]) + 0.5), fly_y, float(int(cell[2]) + 0.5))
+		p.position = target
+		p.velocity = Vector3.ZERO
+		await main._await_sim_band(target, 3000)
+		for i in 30:
+			await get_tree().physics_frame
+		if world.get_block(int(cell[0]), int(cell[1]), int(cell[2])) != 8:
+			edit_ok = false
+		if world.chunk_origin.get(String(e["col"])) == "disk":
+			disk_origin += 1
+	var mid: int = int(trace[trace.size() - 3]["bytes"])  # first point of the back half
+	var tail_delta: int = int(trace[trace.size() - 1]["bytes"]) - mid
+	var peak := bytes0
+	for tp in trace:
+		peak = maxi(peak, int(tp["bytes"]))
+	var total_delta: int = bytes_end - bytes0
+	var wall := Time.get_ticks_msec() - t0
+	# The flatness gate (the no-bloat proof): the back half of the flight
+	# adds nothing and the whole flight adds < 1 KB/block — with the filter
+	# the region dir stays EMPTY (total_delta ~ 0). The edited FAR columns
+	# are NEVER encoded (edited_saved == 0, the no-bloat proof for edits)
+	# yet persist in-session (edit_ok — the edits dict + the promotion
+	# regen re-apply them); they come back REGENERATED (disk_origin == 0),
+	# not from disk — the never-encoded contract, not a loss.
+	var ok: bool = far_at_edit and edit_ok and edited_saved == 0 \
+			and disk_origin == 0 and tail_delta <= 65536 \
+			and total_delta < int(dist) * 1024
+	Debug.result({
+		"ok": ok,
+		"wall_ms": wall,
+		"dist": dist,
+		"speed": speed,
+		"radius": r,
+		"sim": sim,
+		"saveall": world._save_filter_bypass(),
+		"trace": trace,
+		"bytes_start": bytes0,
+		"bytes_end": bytes_end,
+		"total_delta": total_delta,
+		"tail_delta": tail_delta,
+		"peak": peak,
+		"per_block": roundf(float(total_delta) / float(dist) * 1000.0) / 1000.0,
+		"edits": edits.size(),
+		"edited_saved": edited_saved,
+		"disk_origin": disk_origin,
+		"far_at_edit": far_at_edit,
+		"edit_ok": edit_ok,
+		"writes": world._io_write_n,
+		"skips": world._save_skip_n,
+		"far_writes": world._save_far_n,
+	})
+	get_tree().quit()
+
+
+# AC-0287: total bytes of the slot's r.*.bin region files (the flysave
+# arm's save-size trace; the JSON slot save is a separate fixed file).
+func _flysave_dir_bytes(slot: int) -> int:
+	var total := 0
+	for n in _chunkio_region_file_names(int(slot)):
+		var p: String = ChunkIO.dir_for(int(slot)) + "/" + n
+		if FileAccess.file_exists(p):
+			var f := FileAccess.open(p, FileAccess.READ)
+			if f != null:
+				total += int(f.get_length())
+				f.close()
+	return total
 
 
 # AC-0165 probe (AWECRAFT_LOGIC=chunkiocpp, harness-only, never runs in

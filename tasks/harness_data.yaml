@@ -404,13 +404,23 @@ modes:
   chunkio:
     entry: '`_chunkio_test`'
     tests: |-
-      AC-0155 full-column save round-trip in one process: fresh r=4 41-set → evict (files written) → r4 revisit (41 read from disk, byte-identical, GENMS 0) → r50 revisit (disk-served)
+      AC-0155 full-column save round-trip under the AC-0287 filter, one process: fresh r=4 41-set → evict (NONE saved — unedited + two rings past the render edge = the no-bloat contract) → recenter back + edit all 41 (one planks cell each) → evict (all 41 saved — the edits clause) → r4 revisit (41 read from disk, byte-identical) → r50 revisit (disk-served) → region fan-out (filter-bypassing machinery test)
     result_fields: |-
-      `ok`, `wall_ms` (≤60000), `diamond` (41), `files_exist` (41), `byte_identical` (41), `origin_disk` (41), `origin_gen` (0), `gen_delta_c` (global gen counter, not the 41-set), `disk_delta_c`, `phaseA` {gen 53–54, disk 0}, `r50` {disk 41, gen 0}, `disk_reads_total`, `disk_read_ms` (~21 ms/read), `gen_count_total`
+      `ok`, `wall_ms` (≤180000), `diamond` (41), `unedited_saved` (0 — the AC-0287 no-bloat gate), `files_exist` (41 — all edited), `still_in` (0), `edits_size` (41), `edits_missing` (0), `skip_n` (filter declines), `far_n` (far evicts), `saveall` (0), `byte_identical` (41), `origin_disk` (41), `origin_gen` (0), `r50` {disk 41, gen 0}, `region_files_b` (4), `region_files_r50` (12 = `expected_regions`), `disk_reads_total`, `disk_read_ms`, `gen_count_total`
     envs: '`AWECRAFT_SEED`'
-    wall: ~33 s
+    wall: '~15-20 s (AC-0287 rework — the Phase B2 settle wait: all 41 must be FULL (non-far) before the edit+evict; the AHEAD-offset band-3 stubs land far first and the promotion clears the flag)'
     notes: |-
-      uses slot 0's `user://chunkdir_0` (cleared at arm start); files only exist after the in-arm evict — first visit always gens; world counters `disk_reads`/`gen_count`/`chunk_origin` (world.gd) are the provenance evidence; AC-0164: I/O is threaded (encode/decode/FileAccess on the threadgen pool) — main-thread cost per save/read ≈ 0.05 ms, RESULT gains an `io` counter block (enq/dedup/fails/main ms)
+      AC-0287: the old Phase B expectation (the 41 unedited spawn-diamond columns saved on the far evict) is the contract this ticket deletes — the arm now asserts the inverse (`unedited_saved == 0`) and round-trips the EDITED 41 (the only save path left in natural flow). Uses slot 0's `user://chunkdir_0` (cleared at arm start); world counters `disk_reads`/`gen_count`/`chunk_origin` (world.gd) are the provenance evidence; AC-0164: I/O is threaded (encode/decode/FileAccess on the threadgen pool) — RESULT carries an `io` counter block (enq/dedup/fails/main ms)
+  flysave:
+    entry: '`_flysave_test` (AC-0287)'
+    tests: |-
+      the save-filter no-bloat proof (the ticket's core evidence, bytes not prose): fly AWECRAFT_FLY_DIST blocks (default 2048) at AWECRAFT_FLY_SPEED (default 32 b/s), trace the slot's region-file bytes at 4 intervals — FLAT under the filter (in fact EMPTY: the unedited evicts are skipped outside the sim diamond and the 3 edited columns are FAR — never encoded, edited or not); the edits sit on the first three far-stamped taxi-5 halo-ring columns (a tier-4 column is far-generated only OUTSIDE the camera frustum — the onscreen collar is full-generated, _gen_skip_flag) at the far heightmap's bit-exact surface H (far_at_edit), then fly back to each and verify the edits read back after REGENERATION (the in-session edits dict + the promotion regen re-apply them — the far column is never disk-resident, disk_origin 0)
+    result_fields: |-
+      `ok`, `wall_ms`, `dist`, `speed`, `radius`, `sim`, `saveall`, `trace` (5× {d, bytes} — the save size per flown distance), `bytes_start`, `bytes_end`, `total_delta`, `tail_delta` (back-half growth — 0 = flat), `peak`, `per_block`, `edits` (3), `edited_saved` (0 — far is never encoded), `disk_origin` (0 — the edits come back regenerated, not from disk), `far_at_edit`, `edit_ok`, `writes` (0), `skips` (unedited out-of-band evicts), `far_writes` (far evicts — informational, grows with distance)
+    envs: '`AWECRAFT_LOGIC=flysave` (+ `AWECRAFT_FLY_DIST` 256–65536, `AWECRAFT_FLY_SPEED` 8–256, `AWECRAFT_SAVEALL=1` = pre-AC-0287 baseline A/B)'
+    wall: ~16 s (dist 256) / ~40 s (dist 1024, measured AC-0287) / ~7 min (10240 heavy)
+    notes: |-
+      BATTSKIP (a flight per run). `ok` = far_at_edit + edit_ok + edited_saved 0 + disk_origin 0 + tail_delta ≤ 64 KB + total_delta < 1 KB/block. The 10k HEAVY invocation: `AWECRAFT_FLY_DIST=10240` (+ the `AWECRAFT_SAVEALL=1` twin for the baseline trace). Judge the baseline run on the metric fields, not `ok` (its linear growth trips the flatness gate by design — measured at D=1024: 428 KB written, ~418 B/block, edited_saved 3)
   nofallback:
     entry: '`_nofallback_test` (AC-0208)'
     tests: |-
