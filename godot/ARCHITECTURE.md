@@ -264,12 +264,16 @@ Match these; do not improvise a different approach in a task.
   candidate's slope neighbours are then inside the guaranteed diamond — a
   boundary column's outward neighbour is timing-dependent and would make the
   search non-deterministic); fallbacks over the full band: T1 = first dry,
-  T2 = highest T ((taxi,cx,cz) tie-break). While the spawn pad exists (until
-  AC-0314) the pad centre wins T0, so the spawn position is unchanged; the
-  search is the pad-removal prerequisite (the player starts on natural
-  ground at the same spot every time for the same seed). The `spawnsearch`
-  arm re-derives all of it independently (HARNESS.md §1) and the
-  `SPAWNSEARCH` log line records the chosen column + surface H.
+  T2 = highest T ((taxi,cx,cz) tie-break). AC-0314 removed the flat spawn
+  plateau (the `SPAWN_H=136` pad term is gone from the C++ `surface_h` AND
+  the GDScript mirror `terrain_height` — see the gen.cpp / generator.gd
+  header notes), so the search now places the player on a NATURAL column —
+  for seeds 44/1/7 that is the anchor column [8,8] itself (tier 0, tops
+  141/148/200); the pre-data fallback `spawn_point()` is the C++ analytic
+  `column_heights16` H at the anchor (the mirror is deliberately NOT used —
+  it is a coarse 2-D approximation, not the generator's heightmap). The
+  `spawnsearch` arm re-derives all of it independently (HARNESS.md §1) and
+  the `SPAWNSEARCH` log line records the chosen column + surface H.
 - **`gdext/lighting.cpp` (`AweLighting`) and the classic light pull are TEST-ONLY
   references** (AC-0283 P4). They exist so arms can compare against the old kernel. Never
   wire them into game code; the last live consumers were removed by AC-0297.

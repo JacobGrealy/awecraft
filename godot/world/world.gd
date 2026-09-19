@@ -10785,7 +10785,8 @@ func surface_top(x: int, z: int) -> int:
 	return 0
 
 # AC-0324: the deterministic spawn search — the world decides where the
-# player starts (AC-0314's pad removal rides on this). The load gate
+# player starts (AC-0314 removed the spawn pad this search rides on —
+# the picked column is NATURAL terrain). The load gate
 # (main._await_sim_band) builds the SIM TAXI DIAMOND (taxi <= band0_r;
 # 41 columns at sim 4) before activation, so the search evaluates only
 # data the load gate guarantees — the footing is guaranteed.
@@ -10809,8 +10810,8 @@ func surface_top(x: int, z: int) -> int:
 # non-deterministic). T1 = first DRY column in (taxi, cx, cz) order over
 # the full band (ignoring slope + veg) — the "no candidate passes"
 # fallback. T2 = highest-T column over the full band, (taxi, cx, cz)
-# tie-break — the last resort for a band-wide ocean (unreachable while
-# the pad exists: its centre cell is always dry at SPAWN_H).
+# tie-break — the last resort for a band-wide ocean (reachable now that
+# AC-0314 removed the pad that made the centre cell always dry).
 #
 # Deterministic: a pure function of (seed, band data) — no RNG. The result
 # is cached per world node and logged once (the SPAWNSEARCH line).
@@ -10927,18 +10928,25 @@ func spawn_search() -> Dictionary:
 	return _spawn_search
 
 # AC-0119 (AC-0263): the boot-time sync gen of the spawn chunk is GONE —
-# the surface top is the ANALYTIC heightmap (the spawn plateau is flat at
-# SPAWN_H by design: terrain_height == surface top there), and the startup
+# the pre-data surface top is the ANALYTIC heightmap, and the startup
 # burst delivers the ground data (collision) before the player lands.
-# AC-0324: once the sim-band data is ready the searched column replaces
-# the analytic pad position (the pad itself stays in the gen until
-# AC-0314); pre-data callers keep the legacy (8, 8) anchor.
+# AC-0324: once the sim-band data is ready the searched column (NATURAL
+# terrain) is the position. AC-0314: the spawn PAD is REMOVED from the gen
+# — the pre-data fallback is the anchor column's NATURAL surface: the C++
+# analytic H (AweGen.column_heights16 — the same function the far payload
+# stores and the farab battery gates; the GDScript terrain_height mirror
+# is a coarse 2-D approximation, NOT the C++ H), so spawn y = surface H +
+# 1 at the (SPAWN_X, SPAWN_Z) anchor and the pre-data position sits exactly
+# on the natural terrain the data will have.
 func spawn_point() -> Vector3:
 	var s: Dictionary = spawn_search()
 	if not s.is_empty():
 		var row: Dictionary = s["row"]
 		return Vector3(float(int(row["x"])) + 0.5, float(int(row["top"])) + 1.0, float(int(row["z"])) + 0.5)
-	var top := WorldGen.terrain_height(WorldGen.SPAWN_X, WorldGen.SPAWN_Z, Game.world_seed)
+	# pre-data: the anchor column's natural surface (C++ analytic H).
+	var ch: PackedByteArray = WorldGen.gen_cpp().column_heights16(0, 0, Game.world_seed, Data.HEIGHT)
+	var i8 := WorldGen.SPAWN_Z * 16 + WorldGen.SPAWN_X  # cell (8,8) within chunk (0,0)
+	var top := int(ch[2 * i8]) | (int(ch[2 * i8 + 1]) << 8)
 	return Vector3(WorldGen.SPAWN_X + 0.5, float(top) + 1.0, WorldGen.SPAWN_Z + 0.5)
 
 # AC-0213: flat-column cache for light_at (key -> [data_gen, PackedByteArray]).

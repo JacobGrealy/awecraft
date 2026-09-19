@@ -1927,7 +1927,7 @@ func _spawnsearch_one_seed(seed: int, full: bool) -> Dictionary:
 	Game.new_world(seed)
 	main._create_game_nodes()
 	world.fluid_sim_enabled = false
-	var anchor: Vector3 = world.spawn_point()  # pre-data: the legacy pad anchor
+	var anchor: Vector3 = world.spawn_point()  # pre-data: the natural analytic anchor (AC-0314: pad gone)
 	world.recenter(anchor.x, anchor.z, true)
 	await main._await_sim_band(anchor, 3000)
 	var s: Dictionary = world.spawn_search()
@@ -5398,47 +5398,58 @@ func _craft_test() -> void:
 	get_tree().quit()
 
 
+# AC-0314 (resume): explicit flat stand fixture for the survival + hunger
+# arms. The spawn pad (the flat disc these arms used to find) is gone and
+# natural terrain does not guarantee a flat 3x3 - a search that misses bails
+# the arm ("no flat ... spot near spawn"). The arms test hunger/survival
+# MECHANICS, not terrain, so each builds its own deterministic platform: a
+# 5x5 slab of stone (id 3) one above the highest natural top in the 9x9
+# window around spawn. The stand 3x3 and the hunger chicken (+2, +2) land on
+# the slab; the survival 4-cell -z line of sight is clear because the slab
+# top (reg_max + 1) is above every natural top in the window, so y = top+1
+# is air all along the DDA. P = reg_max + 1 makes every write an AIR write
+# (never inside terrain). The platform sits in the spawn chunk (col_immediate)
+# so its collision drains first; the caller awaits the settle frames before
+# any is_on_floor phase.
+func _flat_fixture(spawn: Vector3) -> Dictionary:
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	var reg_max := 0
+	for dx in range(-4, 5):
+		for dz in range(-4, 5):
+			reg_max = maxi(reg_max, world.surface_top(sx + dx, sz + dz))
+	var p_top: int = reg_max + 1
+	for dx in range(-2, 3):
+		for dz in range(-2, 3):
+			Debug.set_block(sx + dx, p_top, sz + dz, 3)
+	return {"px": sx, "pz": sz, "ctop": p_top}
+
+
 func _survival_test(spawn: Vector3) -> void:
 	var p = Game.player
 	for i in 60:
 		await get_tree().physics_frame
 	var r := {}
 	var ok := true
-	var sx := int(spawn.x)
-	var sz := int(spawn.z)
-	var ctop: int = world.surface_top(sx, sz)
-	var px := -1
-	var pz := -1
-	for dx in range(-8, 9, 2):
-		for dz in range(-8, 9, 2):
-			var tx := sx + dx
-			var tz := sz + dz
-			var flat := true
-			for fx in range(-1, 2):
-				for fz in range(-1, 2):
-					if world.surface_top(tx + fx, tz + fz) != ctop:
-						flat = false
-			if not flat:
-				continue
-			var clear := true
-			for k in range(1, 5):
-				if world.surface_top(tx, tz - k) > ctop:
-					clear = false
-			if not clear:
-				continue
-			px = tx
-			pz = tz
-			break
-		if px >= 0:
-			break
-	if px < 0:
-		Debug.result({"error": "no flat survival spot near spawn"})
-		get_tree().quit()
-		return
-	var sc := Vector3i(px, ctop + 1, pz - 4)
+	var fx := _flat_fixture(spawn)
+	var ctop: int = int(fx.ctop)
+	var px := int(fx.px)
+	var pz := int(fx.pz)
+	for i in 120:
+		await get_tree().physics_frame
+	# AC-0314 resume: the target sits at the stander's EYE level and the
+	# stander stands ON the slab (feet = ctop+1, the slab top face) - NOT
+	# below it. Placing the eye at ctop+1.5 (the old pad-era height) put the
+	# feet at ctop-0.12, embedding the capsule in the slab's top block and
+	# settling the player below the slab onto natural ground, so the aim hit
+	# the slab block (y=ctop) instead of the target (y=ctop+1). Standing on
+	# the slab (feet=ctop+1) puts the eye at ctop+1+EYE and the target at
+	# ctop+2 (centre ctop+2.5 ~ eye ctop+2.62), so the horizontal -z aim
+	# clears the slab and strikes the target.
+	var sc := Vector3i(px, ctop + 2, pz - 4)
 	Debug.set_block(sc.x, sc.y, sc.z, 3)
 	Debug.fly(true)
-	var eye := Vector3(float(px) + 0.5, float(ctop + 1) + 0.5, float(pz) + 0.5)
+	var eye := Vector3(float(px) + 0.5, float(ctop + 1) + p.EYE, float(pz) + 0.5)
 	Debug.aim_at(eye.x, eye.y, eye.z)
 	for i in 3:
 		await get_tree().physics_frame
@@ -5486,7 +5497,14 @@ func _survival_test(spawn: Vector3) -> void:
 		if drop_pick >= 0:
 			break
 		await get_tree().physics_frame
-	var tool_ratio := float(bare_ms) / float(pick_ms) if pick_ms > 0 else 0.0
+	# AC-0314 resume: the mine-speed ratio is measured in FRAMES, not wall
+	# ms. The ms ratio (bare_ms/pick_ms) is timing-sensitive - the per-frame
+	# cost of the bare and pick phases differs by a few ms and wanders the
+	# ratio (seen 2.15-2.27) around the deterministic frame ratio, flipping
+	# the absf(ratio-2.0)<0.25 assertion on borderline seeds (seed 7: 2.27).
+	# The frame ratio (frames-to-break, bare/pick) is the true mine-speed
+	# difference and is deterministic per block hardness.
+	var tool_ratio := float(bare_frames) / float(pick_frames) if (bare_frames > 0 and pick_frames > 0) else 0.0
 	ok = ok and bare_frames > 0 and pick_frames > 0
 	ok = ok and absf(tool_ratio - 2.0) < 0.25
 	ok = ok and drop_bare == 0
@@ -5631,39 +5649,14 @@ func _hunger_toggle_test(spawn: Vector3) -> void:
 	for i in 60:
 		await get_tree().physics_frame
 	var ok := true
-	var sx := int(spawn.x)
-	var sz := int(spawn.z)
-	var ctop: int = world.surface_top(sx, sz)
-	var px := -1
-	var pz := -1
-	for dx in range(-8, 9, 2):
-		for dz in range(-8, 9, 2):
-			var tx := sx + dx
-			var tz := sz + dz
-			var flat := true
-			for fx in range(-1, 2):
-				for fz in range(-1, 2):
-					if world.surface_top(tx + fx, tz + fz) != ctop:
-						flat = false
-			if not flat:
-				continue
-			var clear := true
-			for k in range(1, 5):
-				if world.surface_top(tx, tz - k) > ctop:
-					clear = false
-			if not clear:
-				continue
-			px = tx
-			pz = tz
-			break
-		if px >= 0:
-			break
-	if px < 0:
-		Debug.result({"error": "no flat hunger spot near spawn"})
-		get_tree().quit()
-		return
+	var fx := _flat_fixture(spawn)
+	var ctop: int = int(fx.ctop)
+	var px := int(fx.px)
+	var pz := int(fx.pz)
+	for i in 120:
+		await get_tree().physics_frame
 	Debug.teleport(float(px) + 0.5, float(ctop + 1) + 0.05, float(pz) + 0.5)
-	for i in 60:
+	for i in 200:
 		if p.is_on_floor():
 			break
 		await get_tree().physics_frame
@@ -23133,7 +23126,9 @@ func _sphere_test(spawn: Vector3) -> void:
 	out["nk_roundtrip_max"] = max_rt
 	out["corner_samples"] = n4
 	out["corner_min_dot"] = min_dot
-	# --- (4) home face (face 0) = AC-0091 flat world identity ---
+	# --- (4) home face (face 0) = the natural world identity ---
+	# AC-0314: the pad is REMOVED — the home column is a plain natural
+	# column (the "flat world identity" was the SPAWN_H plateau).
 	var bx := int(WorldGen.SPAWN_X)
 	var bz := int(WorldGen.SPAWN_Z)
 	# sea surface at Data.SEA in the nearest ocean column (basis-probe method).
@@ -23163,14 +23158,31 @@ func _sphere_test(spawn: Vector3) -> void:
 		world.recenter(float(bx), float(bz), false)
 		await main._await_core_3x3(Vector3(float(bx), 0.0, float(bz)), 3000)
 	# spawn column (spawn chunk sync-generated at boot, AC-0119).
+	# AC-0314 (pad removal): the home column's data top must equal the
+	# NATURAL analytic terrain — the topmost non-air cell of the
+	# deterministic C++ flat column (WorldGen.generate — the same source
+	# the genhash arm hashes); the analytic heightmap H (column_heights16)
+	# is reported alongside (top == H unless a surface cave opens at the
+	# home cell — both are the generator's own functions).
 	var bed: int = world.get_block(bx, 0, bz)
 	var top: int = world.surface_top(bx, bz)
 	var sb: int = world.get_block(bx, top, bz)
 	var sab: int = world.get_block(bx, top + 1, bz)
+	var gcol: PackedByteArray = WorldGen.generate(0, 0, Game.world_seed)
+	var gtop := -1
+	for yy in range(Data.HEIGHT - 1, -1, -1):
+		if gcol[(yy << 8) | (bz << 4) | bx] != 0:
+			gtop = yy
+			break
+	var ch: PackedByteArray = WorldGen.gen_cpp().column_heights16(0, 0, Game.world_seed, Data.HEIGHT)
+	var hi := bz * 16 + bx
+	var home_h := int(ch[2 * hi]) | (int(ch[2 * hi + 1]) << 8)
 	out["home_bedrock_y0"] = bed
 	out["home_spawn_top"] = top
+	out["home_spawn_flat_top"] = gtop
+	out["home_spawn_top_analytic"] = home_h
 	out["home_bedrock_ok"] = bed == WorldGen.B_BEDROCK
-	out["home_spawn_top_ok"] = top == WorldGen.SPAWN_H
+	out["home_spawn_top_ok"] = top == gtop
 	out["home_spawn_solid"] = bool(Data.block(sb).solid)
 	out["home_spawn_above_air"] = sab == 0
 	# --- (5) world keying (M3): (face,cx,cz) resolver + storage round-trip ---
@@ -23235,7 +23247,7 @@ func _sphere_test(spawn: Vector3) -> void:
 	# (face 0 = x >= 0 half, face 1 = x < 0 half); the face-center sphere
 	# position resolves to the flat origin.
 	var home5 := true
-	for yy5 in [0, 11, Data.SEA, WorldGen.SPAWN_H]:
+	for yy5 in [0, 11, Data.SEA, home_h]:
 		if world.get_block_key(0, 8, 8, yy5) != world.get_block(8, yy5, 8):
 			home5 = false
 		if world.get_block_key(1, -8, 8, yy5) != world.get_block(-8, yy5, 8):

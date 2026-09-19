@@ -35,9 +35,11 @@ const B_SEA := 126
 
 const SPAWN_X := 8
 const SPAWN_Z := 8
-# AC-0091: SPAWN_H 34 -> 136 = int(2.6 * 34 + 48) under the remap below
-# (spawn pad sits at MC Y=72, in the grassland band MC 62-100).
-const SPAWN_H := 136
+# AC-0314: the SPAWN_H pad constant is REMOVED with the spawn plateau —
+# terrain_height below is natural everywhere (the C++ surface_h is the
+# same: both were flat at 136 for d<=6, blended 6<d<=10). SPAWN_X/SPAWN_Z
+# stay: they are the deterministic spawn-search anchor (AC-0324), not a
+# height claim.
 # AC-0091: terrain ceiling. The remapped formula peaks ~346 before clamping;
 # clamp at 300 (MC Y=236) so mountains top out well below the sky limit 319.
 const TERRAIN_H_MAX := 300
@@ -78,12 +80,10 @@ static func terrain_height(x: int, z: int, seed: int) -> int:
 	var y := 105.2 + c * 36.4 + h * 52.0
 	if r > 0.62:
 		y += (r - 0.62) * 390.0
-	var d := Vector2(float(x) - float(SPAWN_X), float(z) - float(SPAWN_Z)).length()
-	if d <= 6.0:
-		y = float(SPAWN_H)
-	elif d <= 10.0:
-		var w := 1.0 - smoothstep(6.0, 10.0, d)
-		y = y * (1.0 - w) + float(SPAWN_H) * w
+	# AC-0314: the spawn pad term (d<=6 -> SPAWN_H flat, 6<d<=10 smoothstep
+	# blend) is REMOVED — the surface is natural everywhere, matching the
+	# C++ surface_h (the shared surface contract). The spawn position comes
+	# from the AC-0324 deterministic search on this natural terrain.
 	return clampi(int(floorf(y)), 3, TERRAIN_H_MAX)
 
 

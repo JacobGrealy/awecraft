@@ -33,9 +33,10 @@
 //            affine-calibrated per field onto the OLD 2D distribution (see
 //            surface_h — the calibration constants), keeping the AC-0091
 //            ocean/land/mountain balance (sea 126). H = 105.2 + cc*36.4 +
-//            hc*52 + (rc > 0.62 ? (rc-0.62)*390 : 0), clamp [3,300]; the
-//            SPAWN PAD stays EXACT (d<=6 -> 136, 6<d<=10 smoothstep blend —
-//            the spawn contract).
+//            hc*52 + (rc > 0.62 ? (rc-0.62)*390 : 0), clamp [3,300]. The
+//            SPAWN PAD (d<=6 -> 136 flat, 6<d<=10 smoothstep blend) was
+//            REMOVED at AC-0314 — the spawn plateau is gone; the player
+//            spawns on natural terrain via the AC-0324 deterministic search.
 //
 // SOLID where d > 0, AIR where d < 0. The surface, the caves, and the deep
 // lava lakes (deep cave pockets at y<8 fill LAVA instead of air) all come
@@ -45,8 +46,8 @@
 // Kept from AC-0188/AC-0091:
 //   * the coarse ORE fields + OLD bands/thresholds (diamond y<16 >0.78,
 //     iron y<42 >0.8, coal y<60 >0.82); obsidian keeps the exact old
-//     per-cell hash3i(x,y,z,seed+333) < 0.02 (now y 8..9, y<8 is the
-//     non-pad lava floor);
+//     per-cell hash3i(x,y,z,seed+333) < 0.02 (now y 8..9; the y<8 cave
+//     pockets are the lava floor);
 //   * the 2D biome texture field (t/m fbm2) for the surface block / dirt /
 //     snow / desert colors (biomes are a surface texture, not terrain);
 //   * trees + flowers: exact old hash logic, base = the effective surface
@@ -233,9 +234,6 @@ constexpr int B_DANDELION = 19;
 constexpr int B_LAVA = 24;
 constexpr int B_OBSIDIAN = 25;
 
-constexpr int SPAWN_X = 8;
-constexpr int SPAWN_Z = 8;
-constexpr int SPAWN_H = 136;
 constexpr int TERRAIN_H_MAX = 300;
 
 // AC-0215 one-density-field params (MC 1.18 style).
@@ -255,16 +253,6 @@ static bool solid_ids[256] = {
 	false, true, false, true, false, true, false,  // 22..27 (23,25)
 };
 
-static inline double smoothstep_gd(double e0, double e1, double x) {
-	// Godot smoothstep(edge0, edge1, x)
-	double t = (x - e0) / (e1 - e0);
-	if (t < 0.0)
-		t = 0.0;
-	else if (t > 1.0)
-		t = 1.0;
-	return t * t * (3.0 - 2.0 * t);
-}
-
 static inline int clampi(int v, int lo, int hi) {
 	if (v < lo)
 		return lo;
@@ -273,21 +261,8 @@ static inline int clampi(int v, int lo, int hi) {
 	return v;
 }
 
-static inline int64_t absi(int64_t v) {
-	return v < 0 ? -v : v;
-}
-
 static inline int iabs(int v) {
 	return v < 0 ? -v : v;
-}
-
-// Spawn-pad zone (box + circle, matches the old height2d pad condition).
-static inline bool is_pad(int x, int z) {
-	if (absi((int64_t)x - SPAWN_X) > 10 || absi((int64_t)z - SPAWN_Z) > 10)
-		return false;
-	double dx = (double)x - (double)SPAWN_X;
-	double dz = (double)z - (double)SPAWN_Z;
-	return std::sqrt(dx * dx + dz * dz) <= 10.0;
 }
 
 // ---------------------------------------------------------------------------
@@ -352,8 +327,10 @@ static inline double tril(const Field &f, double gx, double gy, double gz) {
 //   h: old mean 0.4964 std 0.1361  <-  new slice: mean 0.5112 std 0.1107
 //   r: old mean 0.4292 std 0.1366  <-  new slice: mean 0.5743 std 0.1443
 // so the H distribution (the ocean/land/mountain balance, sea 126) matches
-// the AC-0091 heightmap. The spawn pad stays EXACT (the spawn contract):
-// d<=6 -> SPAWN_H, 6<d<=10 smoothstep blend.
+// the AC-0091 heightmap. AC-0314: the spawn pad (d<=6 -> SPAWN_H=136 flat,
+// 6<d<=10 smoothstep blend) is REMOVED — the surface is natural everywhere;
+// the spawn position comes from the AC-0324 deterministic search on the
+// natural terrain.
 static inline int surface_h(int x, int z, const Field &f_sc, const Field &f_sh,
 		const Field &f_sr, double ystep, int bx, int bz) {
 	double gx = (double)(x - bx) / 4.0;
@@ -369,15 +346,6 @@ static inline int surface_h(int x, int z, const Field &f_sc, const Field &f_sh,
 	double y = 105.2 + cc * 36.4 + hc * 52.0;
 	if (rc > 0.62)
 		y += (rc - 0.62) * 390.0;
-	double dx = (double)x - (double)SPAWN_X;
-	double dz = (double)z - (double)SPAWN_Z;
-	double d = std::sqrt(dx * dx + dz * dz);
-	if (d <= 6.0) {
-		y = (double)SPAWN_H;
-	} else if (d <= 10.0) {
-		double w = 1.0 - smoothstep_gd(6.0, 10.0, d);
-		y = y * (1.0 - w) + (double)SPAWN_H * w;
-	}
 	return clampi((int)std::floor(y), 3, TERRAIN_H_MAX);
 }
 
@@ -406,13 +374,11 @@ static inline double cave_amp(int H, int y) {
 	return CAVE_AMP * (1.0 + d / DEEP_GROW);
 }
 
-// The ONE density field at a cell (solid where > 0, air where < 0). Pad
-// columns keep the exact flat surface (spawn contract: no cave term).
-static inline double dens_at(int H, int y, double cave, bool pad) {
-	double s = density_ramp((double)H, y);
-	if (pad)
-		return s;
-	return s + cave_amp(H, y) * (cave - 0.5);
+// The ONE density field at a cell (solid where > 0, air where < 0).
+// AC-0314: the pad flag is gone (no more pad columns with a cave-free
+// exact-flat surface) — the cave term applies everywhere.
+static inline double dens_at(int H, int y, double cave) {
+	return density_ramp((double)H, y) + cave_amp(H, y) * (cave - 0.5);
 }
 
 // ---------------------------------------------------------------------------
@@ -457,22 +423,22 @@ static inline long long now_us() {
 // ---------------------------------------------------------------------------
 
 // AC-0284b: the shared 256-height pass — the heights (the surface_h of the
-// three coarse SURFACE fields), the biome bcode (the two direct fbm2
-// calls), and the padcol hash. Extracted VERBATIM from gen_flat's inline
-// loop (the full/skip paths call it with their already-built fields; the
-// far path calls it with its own). The H of EVERY path — full, skip and
-// far — is bit-exact by construction (same fields, same lattice, same
-// surface_h; the genhash canary + the farab H battery gate it).
+// three coarse SURFACE fields) and the biome bcode (the two direct fbm2
+// calls). Extracted VERBATIM from gen_flat's inline loop (the full/skip
+// paths call it with their already-built fields; the far path calls it
+// with its own). The H of EVERY path — full, skip and far — is bit-exact
+// by construction (same fields, same lattice, same surface_h; the genhash
+// canary + the farab H battery gate it). AC-0314: the padcol output is
+// gone with the spawn pad.
 static void col_heights_pass(const Field &f_sc, const Field &f_sh, const Field &f_sr,
 		double ystep, int bx, int bz, int64_t seed,
-		std::vector<int> &heights, std::vector<int> &bcode, std::vector<char> &padcol) {
+		std::vector<int> &heights, std::vector<int> &bcode) {
 	for (int lz = 0; lz < 16; lz++) {
 		for (int lx = 0; lx < 16; lx++) {
 			int idx = lz * 16 + lx;
 			int x = bx + lx;
 			int z = bz + lz;
 			heights[idx] = surface_h(x, z, f_sc, f_sh, f_sr, ystep, bx, bz);
-			padcol[idx] = is_pad(x, z) ? 1 : 0;
 			double t = fbm2((double)x / 260.0 + 900.0, (double)z / 260.0 + 900.0, seed + 21, 3) * 2.0 - 1.0;
 			double m = fbm2((double)x / 260.0 + 1700.0, (double)z / 260.0 + 1700.0, seed + 33, 3) * 2.0 - 1.0;
 			// bcode: 0 snow, 1 desert, 2 forest, 3 plains (biome_at order).
@@ -491,7 +457,7 @@ static void col_heights_pass(const Field &f_sc, const Field &f_sh, const Field &
 // AC-0284b: the FAR (h-only) column — the skip arg value 2 (see the file
 // header). NO slabs, NO cave field, NO ore fields: only the 256 H (u16
 // LE), the 256 biome bcodes and the 256 TOP-BLOCK ids (the bit-exact
-// fill-loop top-row formula: the surface block from biome/H/pad, the same
+// fill-loop top-row formula: the surface block from biome/H, the same
 // cell the skip path fills at y == H — the halo's 4x4 avg emitter
 // (AweMesh.h_avg_emit) reconstructs the exact skip-fill surface from it).
 // The H is bit-exact with the full path's H (the shared col_heights_pass
@@ -516,8 +482,7 @@ static std::vector<uint8_t> gen_far(int cx, int cz, int64_t seed, int hmax, int 
 	long long t_ht = now_us();
 	std::vector<int> heights(256);
 	std::vector<int> bcode(256);
-	std::vector<char> padcol(256, 0);
-	col_heights_pass(f_sc, f_sh, f_sr, ystep, bx, bz, seed, heights, bcode, padcol);
+	col_heights_pass(f_sc, f_sh, f_sr, ystep, bx, bz, seed, heights, bcode);
 	g_t_heights_us.fetch_add(now_us() - t_ht, std::memory_order_relaxed);
 	std::vector<uint8_t> out(1024, 0);
 	for (int i = 0; i < 256; i++) {
@@ -565,8 +530,7 @@ static std::vector<uint8_t> gen_veg_cells(int cx, int cz, int64_t seed, int hmax
 	build_field(f_sr, bx, bz, ystep, seed + 13, 300.0, SURF_YSCALE, 300.0, 500.0, 0.0, 500.0);
 	std::vector<int> heights(256);
 	std::vector<int> bcode(256);
-	std::vector<char> padcol(256, 0);
-	col_heights_pass(f_sc, f_sh, f_sr, ystep, bx, bz, seed, heights, bcode, padcol);
+	col_heights_pass(f_sc, f_sh, f_sr, ystep, bx, bz, seed, heights, bcode);
 	// seen: 0 = air, 1 = a tree cell (first-writer-wins, the veg loop's
 	// write order), -1 = FLOWER-OVERWRITTEN (see below). The flower
 	// pass runs AFTER the trees and writes rose/dandelion at
@@ -745,8 +709,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	std::vector<int> heights(256);
 	std::vector<int> heff(256);
 	std::vector<int> bcode(256);
-	std::vector<char> padcol(256, 0);
-	col_heights_pass(f_sc, f_sh, f_sr, ystep, bx, bz, seed, heights, bcode, padcol);
+	col_heights_pass(f_sc, f_sh, f_sr, ystep, bx, bz, seed, heights, bcode);
 	g_t_heights_us.fetch_add(now_us() - t_ht, std::memory_order_relaxed);
 
 	std::vector<uint8_t> flat((size_t)hmax * 256, 0);
@@ -771,7 +734,6 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			int idx = lz * 16 + lx;
 			int H = heights[idx];
 			int bm = bcode[idx];
-			bool pad = padcol[idx] != 0;
 			int x = bx + lx;
 			int z = bz + lz;
 			double gx = (double)lx / 4.0;
@@ -805,7 +767,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 					if (!slab_kept(y >> 4))
 						continue; // AC-0237: ungenerated slab — skip
 					double cave = tril(f_cave, gx, (double)y / ystep, gz);
-					bool s = dens_at(H, y, cave, pad) > 0.0;
+					bool s = dens_at(H, y, cave) > 0.0;
 					solidf[y] = s ? 1 : 0;
 					if (s && he < 0)
 						he = y;
@@ -846,7 +808,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 					} else if (!solid) {
 						// Air (cave) — deep cave pockets at y<8 hold LAVA
 						// (the old deep-carve lava lakes, now from the field).
-						cell = (!pad && y < 8) ? B_LAVA : 0;
+						cell = (y < 8) ? B_LAVA : 0;
 					} else {
 						cell = stone_ore(x, y, z, gx, gz);
 					}
@@ -903,22 +865,14 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				hcol = 0;
 				double gx2 = (double)glx / 4.0;
 				double gz2 = (double)glz / 4.0;
-				bool pad2 = is_pad(tx, tz);
 				int top2 = H2 + 11;
 				if (top2 > hmax - 1)
 					top2 = hmax - 1;
 				for (int y = top2; y >= 1; y--) {
-					if (pad2) {
-						if (density_ramp((double)H2, y) > 0.0) {
-							hcol = y;
-							break;
-						}
-					} else {
-						double cave = tril(f_cave, gx2, (double)y / ystep, gz2);
-						if (dens_at(H2, y, cave, false) > 0.0) {
-							hcol = y;
-							break;
-						}
+					double cave = tril(f_cave, gx2, (double)y / ystep, gz2);
+					if (dens_at(H2, y, cave) > 0.0) {
+						hcol = y;
+						break;
 					}
 				}
 			}
