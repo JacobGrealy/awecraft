@@ -1,12 +1,13 @@
 meta:
-  updated_at: 2026-09-18T16:24
+  updated_at: 2026-09-18T21:56
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0314
+- AC-0323
 - AC-0287
 - AC-0293
+- AC-0325
 - AC-0288
 - AC-0289
 - AC-0290
@@ -49,6 +50,8 @@ queue:
 - AC-0317
 - AC-0318
 - AC-0320
+- AC-0326
+- AC-0327
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -15121,11 +15124,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-17T22:10
-  updated_at: 2026-09-18T16:24
-  completed_at: null
+  updated_at: 2026-09-18T21:56
+  completed_at: 2026-09-18T21:56
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As the player I want to spawn on the real terrain instead of a flat artificial
@@ -15205,7 +15208,26 @@ intake:
     column''s position; (d) the ladder/halo/farab arms'' column counts were rebased at AC-0312/AC-0313
     - re-measure them, do not assume they still hold. The C++ change means a rebuild of the native lane
     (see godot/OPS.md) and the GDScript mirror at godot/world/generator.gd:40 must stay in lockstep with
-    gen.cpp:238/356-379.'
+    gen.cpp:238/356-379.
+
+
+    CLOSED 2026-09-18 (commit 533ef8f). The pad is gone from gen.cpp + the GDScript mirror, the native
+    lane rebuilt/staged, the generation baselines re-baselined and INDEPENDENTLY VERIFIED by the coordinator
+    (my genhash run == the new reference; exactly 5 of 25 hashes differ from the pad-era reference, the
+    plus-shaped chunk footprint of the radius-10 disc - the builder''s first "10/15" was wrong and is
+    corrected in the results page + the standing value). The player now spawns on natural terrain via
+    AC-0324''s search (seed 44 -> top 141 -> start [8.5,142.0,8.5]; 1 -> 148; 7 -> 200). Coordinator heavy
+    stage: genhash x2 byte-identical, spawnsearch/tick/ladder/farab green, boundary r4 p50 13 / p95 40
+    (no walk trade-off), battery 17 byte-identical with the expected spawn-column shifts. The battery
+    exposed blast radius the builder had not run: hunger + survival needed a flat spot "near spawn" and
+    bailed - fixed in-task arm-side with an explicit 5x5 stone fixture (mechanics arms should not depend
+    on terrain shape), plus a 1-block-low survival aim and a frame-based tool_ratio; both verified green
+    by the coordinator. The atlas arm''s uv_max 0.9995 is explained as BENIGN (an Obsidian face at u~1.0
+    exposed by natural terrain; no packing change). Three pre-existing reds are filed as their own tickets
+    (AC-0325/0326/0327) and left red. A rare intermittent SIGSEGV hit the lightstate gate during the heavy
+    stage (8 follow-up runs clean) - recorded on AC-0323, which is now queued SECOND because a mid-run
+    crash silently invalidates a gate run. WINDOWS BUILD: owed and being produced after this closeout
+    (the served 20260918-1303 build predates the pad removal).'
   comments: []
 - id: AC-0315
   title: gdscript-access-convention-and-harness-rule
@@ -15650,7 +15672,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-18T13:04
-  updated_at: 2026-09-18T16:23
+  updated_at: 2026-09-18T21:55
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -15698,7 +15720,24 @@ intake:
     is ONE hazard class in the heavy-streaming path (drain/enqueue, detached-node cull, or the native
     lane under long runs) rather than two unrelated ones - investigate both signatures together. The load
     arm''s full R50 wall therefore remains UNMEASURED (the clause-4 gate itself was verified live at AC-0313
-    via the loader timeline: pct tracks the 41-col diamond and closes on it).'
+    via the loader timeline: pct tracks the 41-col diamond and closes on it).
+
+
+    THIRD OCCURRENCE + RATE EVIDENCE (coordinator, 2026-09-18 evening): the AC-0314 heavy stage''s `lightstate`
+    (R16) gate ABORTED after 12 s - Godot''s crash handler logged `handle_crash: Program crashed with
+    signal 11` with an EMPTY C++ backtrace and an EMPTY GDScript backtrace, then the process died rc=134
+    (the handler aborts after dumping). The log tail is the normal boot sequence (FCCREBUILD) - the crash
+    is very early, not a steady-drain crash. RATE: the arm was then run 8 more times on the same tree
+    (lightstate x5 + r16 x3, job bash-235) with ZERO crashes, so this is a RARE INTERMITTENT crash (order
+    1 in 10), not deterministic and not tied to the pad removal (it also predates it: the r16 flake at
+    AC-0312 and the load arm''s SIGABRT at AC-0322). IMPACT TO KEEP IN MIND: a crash in the middle of
+    a coordinator gate run silently invalidates that run''s evidence (it did here - the lightstate gate
+    had to be re-run), and the same path could crash the shipped game. REPRODUCERS, cheapest first: (a)
+    lightstate AWECRAFT_LS_RADIUS=16 in a repeated loop (fast, ~45 s per run, observed 1 crash / 6 runs);
+    (b) the r16 arm (~5 min per run, 1 crash in the AC-0312 5-run set); (c) the R50 `load` arm (40 min,
+    died 3 times in this era - twice silently, once SIGABRT). Note the empty backtrace: it points at a
+    stack-corrupting or unwinder-hostile path (worker-thread init, the native lane, or the crash handler
+    running on a non-main thread) rather than an ordinary null deref - say which the evidence supports.'
   comments: []
 - id: AC-0324
   title: deterministic-spawn-search
@@ -15753,4 +15792,128 @@ intake:
     \ plateau exists; the SEARCH is what had to land first, and AC-0314 must now verify that the search\
     \ picks a NATURAL column once the pad is gone. New probe arm `spawnsearch` (documented in HARNESS.md's\
     \ mode table). Render at R4 (justified deviation - R<4 cannot hold the sim diamond)."
+  comments: []
+- id: AC-0325
+  title: far-chunk-set-block-silent-drop
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-18T19:08
+  updated_at: 2026-09-18T19:08
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Editing a block far away (in the data-only far band) appears to work but the
+    edit is silently lost - the world does not change.
+
+
+    2) Technical Details:
+
+    FOUND by AC-0314''s rebase bisection on PRISTINE HEAD (log: .scratch/AC-0314-gates/sphere-HEAD-bisect.log,
+    ok:false): the `sphere` arm''s key check reports key_bad 38. The builder''s diagnosis is a far-chunk
+    `set_block` silent drop dating to AC-0263 (the far/data-only band''s edit path). This is PRE-EXISTING
+    (proven on HEAD with the pad-era build, spawn_top 136) and is filed as a follow-up, not an AC-0314
+    regression.
+
+    SCOPE: ONE behaviour - the far-band edit path. FIRST STEP: confirm the mechanism from the arm''s own
+    code + the key_bad 38 payload (which keys, which band, far vs materialized) before changing anything;
+    the arm is the reference for what "key" means. THEN make the behaviour honest and correct: an edit
+    to a far column must either apply through the payload/materialization path (so it survives promotion
+    and matches what the same edit does in the real band) or fail LOUDLY (an error/return value the caller
+    can see) - a silent no-op is the bug either way. Check the promotion contract (the far payload ->
+    materialized fill, AC-0312/AC-0286) and the save path (AC-0287''s filter) for interactions.
+
+    GATE: `sphere` arm key_bad 0 and ok:true (plus a probe asserting the far-band edit survives promotion,
+    if the arm cannot express that).
+
+    CONTEXT: surfaced by the AC-0314 closeout; the other two pre-existing reds it also bisected are separate
+    tickets (mirror-vs-C++ sea divergence, basis bedrock_y0 race).
+
+    '
+  comments: []
+- id: AC-0326
+  title: mirror-vs-cpp-sea-divergence
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-18T19:08
+  updated_at: 2026-09-18T19:08
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The game''s fallback world generator disagrees with the real one about the sea,
+    so in fallback mode the world is built differently than what the player sees from the native generator.
+
+
+    2) Technical Details:
+
+    FOUND by AC-0314''s rebase bisection on PRISTINE HEAD (logs: .scratch/AC-0314-gates/sphere-HEAD-bisect.log
+    and basis-HEAD-bisect.log, both ok:false): the GDScript generator MIRROR disagrees with the C++ data
+    on the sea check - `sphere` reports home_sea_ok false with home_sea_cell 3 / home_bedrock_y0 11, and
+    `basis` reports sea_ok false with sea_cell 3 / sea_above 3. The builder''s diagnosis is a mirror-vs-C++
+    divergence dating to AC-0215 (the mirror at godot/world/generator.gd is the GDScript fallback for
+    the native lane). PRE-EXISTING (proven on HEAD with the pad-era build, spawn_top 136), filed as a
+    follow-up rather than an AC-0314 regression.
+
+    SCOPE: ONE behaviour - the mirror''s agreement with the C++ generator. FIRST STEP: pin the exact divergence
+    (which fields, at which cells: the sea fill rule is solid 0..H + water H+1..SEA when H < SEA - gen.cpp''s
+    aquifer rule; the mirror must implement exactly that, including the surface/top and bedrock rules),
+    then either fix the mirror or, if the mirror is knowingly obsolete, say so explicitly and gate the
+    arm''s expectation instead (an arm that asserts against a stale mirror is worse than no arm).
+
+    GATE: `basis` ok:true with sea_ok true and `sphere` ok:true with home_sea_ok true (or the documented,
+    deliberate alternative above).
+
+    CONTEXT: surfaced by the AC-0314 closeout; the sibling pre-existing reds are separate tickets (far-chunk
+    set_block silent drop, basis bedrock_y0 race).
+
+    '
+  comments: []
+- id: AC-0327
+  title: basis-bedrock-y0-race
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-18T19:08
+  updated_at: 2026-09-18T19:08
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: A test gate fails on a fresh boot for a reason unrelated to the code under test,
+    so real regressions can hide behind it.
+
+
+    2) Technical Details:
+
+    FOUND by AC-0314''s rebase bisection on PRISTINE HEAD (log: .scratch/AC-0314-gates/basis-HEAD-bisect.log,
+    ok:false): `basis` reports bedrock_ok false with ocean_bedrock_y0 11 (and surface_eff/surface_sky
+    15, spawn_top_y 136 = the pad-era build, so the bisect is honest). The builder''s diagnosis is a boot-burst
+    READ RACE dating to AC-0263: the arm reads the world''s bedrock column before the startup burst has
+    finished writing it. PRE-EXISTING, filed as a follow-up rather than an AC-0314 regression.
+
+    SCOPE: ONE behaviour - the arm''s boot-time determinism. FIRST STEP: prove the race (run the arm N>=5
+    times at HEAD: if bedrock_y0 is sometimes 0 and sometimes 11 the race is confirmed; if it is always
+    11, the expectation itself is stale and the fix is to correct the arm''s expected value with evidence).
+    THEN either make the arm wait for the state it asserts (a settled/count gate, not a sleep) or fix
+    the underlying write ordering if the race is real in the GAME (not just the arm) - state which one
+    the evidence supports.
+
+    GATE: `basis` ok:true with bedrock_ok true, run >=5 times with no flake; plus G0 clean.
+
+    CONTEXT: surfaced by the AC-0314 closeout; the sibling pre-existing reds are separate tickets (far-chunk
+    set_block silent drop, mirror-vs-C++ sea divergence).
+
+    '
   comments: []
