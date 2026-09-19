@@ -13488,6 +13488,7 @@ func _r16_lod_far() -> Dictionary:
 	var high := 0
 	var pending := 0
 	var holes := 0
+	var far_capsule_n := 0  # AC-0329: resident-but-hidden LODs on h-only far cols (time capsules)
 	var pcx := int(world.last_pcx)
 	var pcz := int(world.last_pcz)
 	var rr := int(world.render_radius)
@@ -13502,6 +13503,55 @@ func _r16_lod_far() -> Dictionary:
 		if c.data.is_empty():
 			continue  # no data yet — nothing to show (gen not landed)
 		n += 1
+		# AC-0329: an H-ONLY far column (all-null data BY REPRESENTATION —
+		# the 3-tier far form, AC-0284b/AC-0312) is blind to the data-based
+		# count below: its far slabs exist as the keep-all-LOD RESIDENT LOD
+		# instances (the stored high / the active low the demote kept —
+		# "a DATA swap, not a mesh free"), and that resident population is
+		# what the AC-0263 contract ("every far slab is VISIBLE - its
+		# stored high or its active low - no holes, no lost work") is
+		# about. Measure it at the mesh level (the flip invariant: at most
+		# one visible tier per slab). Slabs with NO resident instance owe
+		# nothing past the edge (tier 4 = data-only by design — the lanes
+		# explicitly owe no mesh there, and a pre-build crossing's un-built
+		# slabs are re-queued on re-entry, the AC-0278 contract — not lost
+		# work). A resident-but-HIDDEN LOD is the keep-all-LOD time
+		# capsule (e.g. the stale stored low of a promotion cycle that
+		# exited the real band before its build settled — visible coverage
+		# was carried by the high until the edge; the re-entry re-owns
+		# every slab): reported (far_capsule_n), not gated. Only a DOUBLE
+		# DRAW (high and low both visible) breaks the flip invariant —
+		# that is the hole.
+		if bool(c.far):
+			var _allnull := true
+			for _si_a in range(c.data.size()):
+				if c.data[_si_a] != null:
+					_allnull = false
+					break
+			if _allnull:
+				for si in range(c.data.size()):
+					var s4 = c.slabs[si]
+					var has_high := s4 != null and s4.mesh_instance != null
+					var hv: bool = has_high and s4.mesh_instance.visible
+					var has_low: bool = c.has_low_si(si)
+					var lvi: int = int(c.low_slabs.find(si))
+					var lv: bool = has_low and (bool(c.low_instances[lvi].visible) if lvi >= 0 and lvi < c.low_instances.size() else false)
+					if hv and lv:
+						slabs += 1
+						holes += 1  # double draw - the flip invariant is broken
+					elif hv:
+						slabs += 1
+						high += 1
+					elif has_low:
+						slabs += 1
+						if lv:
+							low += 1
+						else:
+							far_capsule_n += 1  # stale stored low - time capsule
+					elif has_high:
+						slabs += 1
+						far_capsule_n += 1  # hidden stored high, no low - time capsule
+				continue
 		for si in range(c.data.size()):
 			if c.data[si] == null:
 				continue  # air slab — no placeholder needed
@@ -13521,7 +13571,7 @@ func _r16_lod_far() -> Dictionary:
 				pending += 1  # AC-0257: queued — the low lane will build it
 			else:
 				holes += 1
-	return {"far_n": n, "far_slabs": slabs, "far_fog": fog, "far_low": low, "far_high": high, "far_pending": pending, "far_holes": holes, "far_visible": fog + low + high}
+	return {"far_n": n, "far_slabs": slabs, "far_fog": fog, "far_low": low, "far_high": high, "far_pending": pending, "far_holes": holes, "far_visible": fog + low + high, "far_capsule_n": far_capsule_n}
 
 
 # AC-0231 in-r pre-low evidence: the INSIDE-circle PENDING set (data
@@ -13666,9 +13716,18 @@ func _fcc_fp(a: PackedFloat32Array) -> int:
 	for i in range(0, a.size(), 97):
 		h = (h * 31 + int(float(a[i]) * 1000.0)) % 1000000007
 	return h
-func _lod_quad_color_check(v: PackedVector3Array, idx: PackedInt32Array, nrm: PackedVector3Array, colarr: PackedColorArray, avg_cols: PackedFloat32Array, gg: int) -> Dictionary:
+# AC-0329: `sky` is the emit's per-cell heightmap sky (G^3 bytes, 15 lit /
+# 0 dark — AC-0283 P3). When present, the quad's VERTEX ALPHA is the
+# origin cell's sky/15 (the halo band light the avg LOD carries; mesh.cpp
+# avg_grid_emit qca = skyp[oidx]/15.0f) — the check gates the alpha
+# against THAT (the old flat 1.0 gate predates the sky-alpha design and
+# only ever fired once the 3-tier + AC-0322 world grew fresh non-far
+# slabs: the pre-AC-0322 runs color-checked an empty population).
+# Empty sky = the legacy all-bright emit (real band / band A) -> 1.0.
+func _lod_quad_color_check(v: PackedVector3Array, idx: PackedInt32Array, nrm: PackedVector3Array, colarr: PackedColorArray, avg_cols: PackedFloat32Array, gg: int, sky: PackedByteArray = PackedByteArray()) -> Dictionary:
 	var nq := 0
 	var bad := 0
+	var skyok: bool = sky.size() == gg * gg * gg
 	var first: Dictionary = {}
 	for q in range(idx.size() / 6):
 		var i0: int = int(idx[q * 6])
@@ -13731,18 +13790,20 @@ func _lod_quad_color_check(v: PackedVector3Array, idx: PackedInt32Array, nrm: Pa
 			var er: float = avg_cols[oidx * 18 + fi2 * 3 + 0]
 			var eg: float = avg_cols[oidx * 18 + fi2 * 3 + 1]
 			var eb: float = avg_cols[oidx * 18 + fi2 * 3 + 2]
+			var ea: float = float(sky[oidx]) / 15.0 if skyok else 1.0  # AC-0329
 			for t in range(4):
 				var iv2: int = int(idx[q * 6 + t])
 				var vc: Color = colarr[iv2]
 				if absf(vc.r - er) > 0.01 or absf(vc.g - eg) > 0.01 \
-						or absf(vc.b - eb) > 0.01 or absf(vc.a - 1.0) > 0.01:
+						or absf(vc.b - eb) > 0.01 or absf(vc.a - ea) > 0.01:
 					bad += 1
 					if bad == 1:
 						first = {
 							"quad": q, "fi": fi2, "cell": [gx, gy, gz],
 							"got": [float(vc.r), float(vc.g), float(vc.b)],
 							"got_a": float(vc.a),
-							"want": [er, eg, eb], "n": [float(n0.x), float(n0.y), float(n0.z)],
+							"want": [er, eg, eb], "want_a": ea,
+							"n": [float(n0.x), float(n0.y), float(n0.z)],
 						}
 					break
 		else:
@@ -13766,6 +13827,7 @@ func _r16_lod_slabcheck() -> Dictionary:
 	var low_ok := true
 	var far_low_n := 0  # AC-0312: the payload lows (the h-only form)
 	var air_with_lod := 0
+	var air_capsule_n := 0  # AC-0329: stale lows on air slabs (time capsules — reported, not gated)
 	var nongiant_total := 0
 	var nongiant_ok := 0
 	var quad_min := 0
@@ -13811,7 +13873,32 @@ func _r16_lod_slabcheck() -> Dictionary:
 					# form — the payload low is the designed state (the
 					# air rule is for null slabs inside a data column).
 					if not bool(c.far):
-						air_with_lod += 1
+						# AC-0329: keep-all-LOD time capsule — a STALE low
+						# (stamp or tier behind the current) on a slab that
+						# went all-air (a cave breakthrough at the
+						# promotion's full regen) is the designed transient:
+						# the old LOD shows (or is stored) until the lane
+						# re-owns the slab — the per-slab high landing
+						# re-shows the high + stores the low, or the wave's
+						# re-lower drops it through the air bookkeeping —
+						# and a demote re-lowers it from the no-cave
+						# payload. Same class as the uv time capsules:
+						# reported (air_capsule_n), not gated. Only a FOG or
+						# a FRESH low (attached at the current stamp+tier —
+						# the lane built it ON AIR, a real bookkeeping
+						# failure the handoff guards are meant to prevent)
+						# violates the rule.
+						var _ls: Array = []
+						var _lt: int = -1
+						if bool(c.has_low_si(si)):
+							_ls = c.low_stamps.get(si, [])
+							_lt = int(c.low_tiers.get(si, -1))
+						var _fresh: bool = bool(c.has_low_si(si)) and _ls == c.stamp() \
+								and _lt == int(world._lod_tier_of(dx, dz))
+						if bool(c.has_fog_si(si)) or _fresh:
+							air_with_lod += 1
+						else:
+							air_capsule_n += 1
 		# FOG: one pre-baked 16^3 box instance per non-air slab at its Y.
 		# (This engine build's MultiMesh does not expose instance-transform
 		# readback under the dummy renderer, so the check is data-side: the
@@ -13962,7 +14049,12 @@ func _r16_lod_slabcheck() -> Dictionary:
 			if slab_stale:
 				uv_stale_quads += idx.size() / 6
 				continue  # time capsule — the fresh-slab gate only
-			var qc: Dictionary = _lod_quad_color_check(v, idx, nrm, colarr, avg_cols, gg)
+			# AC-0329: pass the emit's per-cell heightmap sky (the
+			# alpha term's contract — AC-0283 P3: the quad's vertex
+			# alpha = the origin cell's sky/15, the halo band light;
+			# empty for the legacy all-bright tiers -> 1.0). The color
+			# term is unchanged: the origin cell's per-face average.
+			var qc: Dictionary = _lod_quad_color_check(v, idx, nrm, colarr, avg_cols, gg, world._halo_sky_for(c, si2))
 			uv_quads += int(qc["quads"])
 			uv_mismatch += int(qc["mismatch"])
 			if int(qc["mismatch"]) > 0 and int(qc["mismatch"]) <= 8:
@@ -13972,15 +14064,14 @@ func _r16_lod_slabcheck() -> Dictionary:
 						int(c.cx), int(c.cz), si2, gg, int(ff["pu"]), int(ff["pv"]), int(ff["k"]),
 						float(ff["n"][0]), float(ff["n"][1]), float(ff["n"][2])])
 				else:
-					# AC-0312: got_a is the alpha term (the check also
-					# gates vc.a == 1.0) — the capsule-slab residuals in
-					# the 3-tier world are sub-tolerance RGB + the alpha
-					# flag, readable here.
-					print("AVGCOLORBAD %d,%d slab=%d G=%d fi=%d cell=(%d,%d,%d) got=(%.4f,%.4f,%.4f a=%.4f) want=(%.4f,%.4f,%.4f)" % [
+					# AC-0329: got_a vs want_a is the alpha term (the
+					# origin cell's sky/15 — the AC-0283 P3 light);
+					# got/want is the color term.
+					print("AVGCOLORBAD %d,%d slab=%d G=%d fi=%d cell=(%d,%d,%d) got=(%.4f,%.4f,%.4f a=%.4f) want=(%.4f,%.4f,%.4f a=%.4f)" % [
 						int(c.cx), int(c.cz), si2, gg, int(ff["fi"]),
 						int(ff["cell"][0]), int(ff["cell"][1]), int(ff["cell"][2]),
 						float(ff["got"][0]), float(ff["got"][1]), float(ff["got"][2]), float(ff["got_a"]),
-						float(ff["want"][0]), float(ff["want"][1]), float(ff["want"][2])])
+						float(ff["want"][0]), float(ff["want"][1]), float(ff["want"][2]), float(ff.get("want_a", 1.0))])
 	return {
 		"fog_n": fog_n,
 		"low_n": low_n,
@@ -13995,6 +14086,7 @@ func _r16_lod_slabcheck() -> Dictionary:
 		"fog_aabb_fail": fog_aabb_fail,
 		"air_with_lod": air_with_lod,
 		"air_ok": air_with_lod == 0,
+		"air_capsule_n": air_capsule_n,  # AC-0329: stale low capsules on air slabs (reported, not gated)
 		"no_giant_ok": box_bad == 0,
 		"nongiant_total": nongiant_total,
 		"nongiant_ok": nongiant_ok,
