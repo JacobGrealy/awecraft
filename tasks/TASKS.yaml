@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-19T02:31
+  updated_at: 2026-09-19T06:35
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0287
 - AC-0293
 - AC-0325
 - AC-0288
@@ -12604,11 +12603,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-14T12:21
-  updated_at: 2026-09-17T20:06
-  completed_at: null
+  updated_at: 2026-09-19T06:35
+  completed_at: 2026-09-19T06:35
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player my save should stay small — flying over vast areas shouldn''t bloat
@@ -12632,7 +12631,16 @@ intake:
     are disposable during development, so a SAVE_VERSION bump with a clean reject is acceptable instead
     of a migration (see ARCHITECTURE.md section 5 + world/AGENTS.md traps, commit 28ca0c4). Load path:
     missing far columns regenerate cheap (92 us/col) and promote through AC-0286''s path if they land
-    inside sim.'
+    inside sim.
+
+
+    CLOSED 2026-09-19. Coordinator verification: the 10,240-block flight A/B (0 bytes with the filter
+    vs 4,149,708 bytes / 405 B per block without it), genhash 25/25 byte-identical, chunkio/save/ladder/farab/halo/meshprobe/starlight/lightstate
+    green, r16 all sub-flags green with the documented --fixed-fps 600 recipe, battery with no new deltas.
+    The far-edit persistence claim was checked at the code level (the whole edits dict goes into the save''s
+    JSON diff regardless of band; the load path re-applies it) - the region filter never needs a far payload
+    because there is nothing in one to write. D1 (boundary p95 42) did not reproduce: my run reads 13/37,
+    inside the standing band.'
   comments:
   - id: 1
     created_at: 2026-09-16T18:38
