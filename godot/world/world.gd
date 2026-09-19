@@ -465,7 +465,7 @@ var _drain_acc_ms := 0.0     # unit-pace accumulator (wall ms banked)
 # picks (build / forward-lead / data) re-ran _collect_pool (up to
 # PICK_POOL_CAP entries) + scoring every frame even when the player stands
 # still and the world is idle. A pick is a pure function of (queue
-# membership + eligibility, maxb, _spawn_fast, the recenter center, the
+# membership + eligibility, maxb, the recenter center, the
 # sim radius, the in-flight depths) — AC-0233/AC-0250: the 3-tier order
 # depends only on the column + sim radius (the look no longer matters at
 # all), so px/pz left the key and moving or turning within a column no
@@ -510,15 +510,15 @@ func _pool_touch() -> void:
 
 func _pool_key(maxb: int) -> String:
 	# AC-0233/AC-0250: the tiered pick is a pure function of (pool state +
-	# drain window + spawn-fast + recenter center + sim radius) — the look
-	# no longer affects the order at all (AC-0250 removed the look bias),
-	# so moving OR turning within a column does not change the tier order
-	# and px/pz left the key. A key hit means no rescan: the waiting parts
-	# are rewritten only on a column cross (pcx/pcz), a sim-radius change,
-	# or a pool change.
-	return "%d_%d_%d_%d_%d_%d" % [
+	# drain window + recenter center + sim radius) — the look no longer
+	# affects the order at all (AC-0250 removed the look bias), so moving OR
+	# turning within a column does not change the tier order and px/pz left
+	# the key. A key hit means no rescan: the waiting parts are rewritten
+	# only on a column cross (pcx/pcz), a sim-radius change, or a pool
+	# change. (AC-0293: the spawn-fast term left the key with the burst.)
+	return "%d_%d_%d_%d_%d" % [
 		_pool_ver,
-		maxb, 1 if _spawn_fast else 0,
+		maxb,
 		last_pcx, last_pcz,
 		band0_r,  # AC-0239: the sim radius is the tier-1 boundary
 	]
@@ -2958,8 +2958,10 @@ func _low_pick(want_low: bool) -> Dictionary:
 # AC-0231: the heavy pipeline is caught up — the drain dispatched nothing
 # this frame, the TG pool drained, no recenter in flight, past the grace.
 func _low_idle() -> bool:
+	# AC-0293: the spawn-fast term is gone with the burst (it was true only
+	# inside the loading window, where loading_active already gates).
 	var idle := _drain_units_last == 0 and threadgen_inflight.is_empty() \
-			and not loading_active and not _spawn_fast and not _rec_pending
+			and not loading_active and not _rec_pending
 	if idle:
 		_low_idle_frames += 1
 	else:
@@ -3230,7 +3232,9 @@ func _low_step() -> void:
 		if not _lod_day_last.is_equal_approx(day_c):
 			_lod_day_last = day_c
 			_lod_avg_material.set_shader_parameter("day", day_c)
-	if loading_active or _spawn_fast:
+	# AC-0293: the spawn-fast term is gone with the burst (loading_active
+	# already covers the spawn window).
+	if loading_active:
 		# AC-0231 order gate: the in-r pass was paused — on resume the
 		# drained verdict is stale (fog may have landed meanwhile).
 		_low_inr_invalidate()
@@ -3653,33 +3657,15 @@ var _tm_ms_full: Dictionary = {"tex": null, "rects": {}}
 # blackened every worker-built mesh emitted from it).
 var _tm_ctx_atlas: Texture2D = null
 var _tm_debug := false
-# AC-0160 run 2: 5x5 startup burst state. elems = [[cx, cz, had_data], ...]
-# (index = group-task element id); slots = per-element result storage
-# (worker i writes ONLY slots[i] — the AC-0082 own-slot handoff pattern).
-var _startup_gen_elems: Array = []
-var _startup_gen_slots: Array = []
-# AC-0160 run 2: in-flight burst group task ids. A recenter whose burst is
-# still running must NOT reset _startup_gen_elems/_startup_gen_slots: the
-# in-flight workers index those arrays (a reset races them — measured in
-# the boundary gate: "Invalid assignment of index '22'" crashes + a stale
-# worker could write chunk A's terrain into chunk B's slot). The guard
-# keeps the array stable until the group completes (see recenter()).
-var _startup_gen_group_tids: Array = []
-# AC-0160 run 2: the SPAWN fast path is one-shot. It gates the aggressive
-# parts (data pass off, recenter-slice pause) so the burst + 3x3 build run
-# unopposed at world start. It must NOT key on _startup_pending() (3x3
-# around the center not built): that flag is true for the ENTIRE walking
-# session (every recenter's forward 3x3 is unbuilt), which permanently
-# disabled the data pass + queue rebuild and emptied the world ahead of the
-# player (boundary gate regression: built_final=0, resident_final=0, 35 s
-# drain stall). Cleared on the first frame the spawn 3x3 is built.
-var _spawn_fast := true
-# AC-0160 run 2: count of real burst gens not yet applied (main-thread
-# bookkeeping; the apply pass decrements exactly once per slot). > 0 while
-# the 5x5 is in flight — the drain holds all startup builds until it hits 0.
-var _startup_gen_pending_n := 0
-# AC-0263: burst wall-clock start (the dead-slot self-heal window).
-var _startup_gen_started_ms := 0
+# AC-0293: the 5x5 startup burst (elems/slots/group-tids/pending-n state,
+# the group worker + apply pass, the drain hold and the one-shot _spawn_fast
+# latch that kept its window unopposed) is RETIRED — spawn and recenter ride
+# the SAME normal streaming path as everything else (the recenter pre-warm
+# enqueues the 5x5 through the normal build queue; the data pass feeds it).
+# Anti-fall is carried by the AC-0313 clause-4 load gate: the SIM TAXI
+# DIAMOND (taxi <= band0_r, 41 cols at sim 4) meshed by normal streaming
+# before the player activates (main.gd _await_sim_band), so no special pass
+# owes the player's footing.
 var _tm_enq := 0
 var _tm_dedup := 0
 var _tm_capdrop := 0
@@ -3926,18 +3912,10 @@ func _exit_tree() -> void:
 			io_poll()
 			OS.delay_msec(1)
 			waited += 1
-	# AC-0178: consume the 5x5 burst GROUP tasks. Godot frees a group's Group
-	# object only via wait_for_group_task_completion — the burst is otherwise
-	# never consumed (the drain holds builds until the burst lands, nothing
-	# waits on the group) and it leaks at exit: "Pages in use exist at exit
-	# in PagedAllocator: N16WorkerThreadPool5GroupE". A still-running burst
-	# finishes its remaining elements first (bounded: 24 x ~165 ms / 3-wide
-	# ~= 1.3 s worst case) — the pool is torn down right after, so the wait
-	# can't hang the exit any longer than the burst itself.
-	if threadgen_pool != null and not _startup_gen_group_tids.is_empty():
-		for _t in _startup_gen_group_tids:
-			threadgen_pool.wait_for_group_task_completion(int(_t))
-		_startup_gen_group_tids.clear()
+	# AC-0293: the 5x5 burst GROUP-task consumption is gone with the burst
+	# (it was the only add_group_task caller — the "Pages in use … GroupE"
+	# exit line dies with it); the generic poll drain above covers the
+	# remaining in-flight TM/TG/IO tasks.
 	threadgen_inflight.clear()
 	threadmesh_inflight.clear()
 	_tg_slots_mutex.lock()
@@ -4612,7 +4590,10 @@ func _process(_delta: float) -> void:
 	# (_ahead_active) — the snap-back below (AHEAD_FAST_MS quiet) recenters
 	# to the player first; this settle must not lock the queue onto the
 	# stale ahead center in between.
-	if not _rec_pending and not _spawn_fast and _last_recenter_ms > 0 \
+	# AC-0293: the spawn-fast term is gone with the burst — during the load
+	# window the center equals the player chunk (a fresh spawn/continue
+	# recenters to it), so the distance fact below is false anyway.
+	if not _rec_pending and _last_recenter_ms > 0 \
 			and Time.get_ticks_msec() - _last_recenter_ms > AHEAD_RING_DEBOUNCE_MS \
 			and not _ahead_active \
 			and (absi(last_pcx - _rec_center_pcx) + absi(last_pcz - _rec_center_pcz)) > 0:
@@ -5433,7 +5414,10 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	if c.data.is_empty():
 		# AC-0263: the (0,0) sync disk-read exemption is GONE — the spawn
 		# column takes the same disk-first OFF-MAIN-THREAD path as every
-		# other column (the startup burst carries the spawn anti-fall).
+		# other column. AC-0293: the startup burst that used to "carry the
+		# spawn anti-fall" is retired — the anti-fall is the AC-0313
+		# clause-4 load gate (the SIM TAXI DIAMOND meshed by normal
+		# streaming before the player activates).
 		if _io_read_enqueue(cx, cz, _key(cx, cz), true):
 			# AC-0164: disk-first off the main thread — file read + decode
 			# on a worker; the data lands in _io_read_handoff (edits
@@ -5441,11 +5425,11 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 			return 0
 	# AC-0152 (AC-0263): sync gen is GONE entirely — every column (the
 	# spawn chunk included) threadgens through the identical handoff
-	# (data/init_fl/edits, stale-drop, dedup). AC-0082's spawn contract is
-	# now the startup burst (recenter's 5x5 group task, which AC-0263
-	# extended to carry the center). The sync tail below survives only for
-	# the threadgen-less fallback (threadgen false = the pre-pool dev path
-	# that no shipped build uses).
+	# (data/init_fl/edits, stale-drop, dedup). AC-0082's spawn contract
+	# rides the normal data pass + the AC-0313 clause-4 load gate (AC-0293:
+	# the 5x5 startup burst that used to carry it is retired). The sync
+	# tail below survives only for the threadgen-less fallback (threadgen
+	# false = the pre-pool dev path that no shipped build uses).
 	if threadgen:
 		threadgen_enqueue(cx, cz, _key(cx, cz), c.get_instance_id(), false, int(c.col_gen))
 		if timing:
@@ -5624,114 +5608,10 @@ func _threadgen_worker() -> void:
 		_tg_concur -= 1
 	entry["result"] = resl
 
-func _startup_gen_worker(i: int) -> void:
-	# AC-0160 run 2: one group element = one 5x5 chunk gen. Writes ONLY its
-	# own slot (AC-0082 handoff pattern); the main thread applies it. The
-	# recenter side keeps the elems/slots arrays stable while a burst is in
-	# flight (_startup_gen_group_tids guard), so i is always a valid slot
-	# index — the bounds check is a belt against a pool regression.
-	if i >= _startup_gen_elems.size() or i >= _startup_gen_slots.size():
-		return
-	var e: Array = _startup_gen_elems[i]
-	if bool(e[3]):
-		return
-	var wbt := Time.get_ticks_usec()
-	# AC-0203 recenter fix: palettize on the worker — the main-thread burst
-	# handoff becomes a reference slab landing (the flat column never hits
-	# the main thread).
-	# AC-0188: C++ generation (same path as threadgen). AC-0208: C++-ONLY —
-	# the GDScript generate_args fallback was removed (the C++ extension is
-	# required).
-	var g: Variant = WorldGen.gen_cpp()
-	# AC-0216: e[7] = the offscreen-interior lazy-skip flag (0 = full
-	# density, computed on the main thread at burst-build time).
-	var resl: Array = g.generate_resl(int(e[1]), int(e[2]), int(e[4]), int(e[5]), int(e[6]), int(e[7]))
-	gen_cpp_works += 1
-	_startup_gen_slots[i] = resl
-	if timing:
-		print("GENBURSTW %d,%d wms=%d t=%d" % [int(e[1]), int(e[2]), (Time.get_ticks_usec() - wbt) / 1000, Time.get_ticks_msec()])
-
-func _startup_gen_apply() -> void:
-	# AC-0160 run 2: main-thread handoff for the burst results — the exact
-	# threadgen_handoff shape (data + init_fl + edits). Applies every ready
-	# slot each frame; the burst slots land spread over ~1.2 s, so the
-	# per-frame cost tracks the burst's own rate. Duplicates (a drain TG
-	# enqueue raced the group) are dropped on c.data already set. The slot
-	# array is stable while the burst is in flight (the recenter
-	# _startup_gen_group_tids guard), so a slot's elems[i] is always the
-	# chunk the worker generated.
-	if _startup_gen_slots.is_empty():
-		return
-	# AC-0263: DEAD-SLOT SELF-HEAL — a burst element whose worker died
-	# (a worker exception: the gen_cpp lazy-init race pre-fix, anything
-	# else) never lands, and its pending_n count then holds the startup
-	# build-hold FOREVER (the drain can't run the data pass that would
-	# regenerate the chunk — a spawn deadlock, measured at r16: 0/25
-	# high band for 14 min on 2 dead elements). The burst's worst case is
-	# ~1.3 s (24 x ~165 ms / 3-wide); long past that, every still-dead
-	# slot is resolved: the pending count drops, the hold lifts, and the
-	# chunk's data lane (threadgen — fully queue-driven since AC-0263)
-	# regenerates it.
-	if _startup_gen_started_ms > 0 \
-			and _startup_gen_pending_n > 0 \
-			and Time.get_ticks_msec() - _startup_gen_started_ms > 5000:
-		for i in _startup_gen_slots.size():
-			if _startup_gen_pending_n <= 0:
-				break
-			# had_data elements were never counted (the worker no-ops
-			# them by design) — their null slots are not dead.
-			if i >= _startup_gen_elems.size() or bool(_startup_gen_elems[i][3]):
-				continue
-			var dd = _startup_gen_slots[i]
-			if dd == null or not (dd is Array):
-				_startup_gen_slots[i] = null
-				_startup_gen_pending_n = maxi(0, _startup_gen_pending_n - 1)
-				# Feed the dead chunk's data NOW (the data pass itself is
-				# gated behind _spawn_fast, which stays set until the 3x3
-				# is meshed — which needs THIS data; a second deadlock).
-				# _gen_unit is the full lane (disk-first read, else
-				# threadgen) minus the caller's pacing.
-				var he: Array = _startup_gen_elems[i]
-				var hc = chunks.get(_key(int(he[1]), int(he[2])))
-				if hc != null and hc.data.is_empty():
-					_gen_unit(hc, int(he[1]), int(he[2]))
-	for i in _startup_gen_slots.size():
-		var d = _startup_gen_slots[i]
-		# AC-0284b: a far (h-only) result is a 3-elem resl (the payload
-		# rides [2]) — the burst's 5x5 is real-band in practice, but the
-		# handoff handles the shape either way.
-		if d == null or not (d is Array) or (int(d.size()) != 2 and int(d.size()) != 3):
-			continue
-		_startup_gen_slots[i] = null
-		_startup_gen_pending_n = maxi(0, _startup_gen_pending_n - 1)
-		var e: Array = _startup_gen_elems[i]
-		var c = chunks.get(_key(int(e[1]), int(e[2])))
-		if c == null or not c.data.is_empty():
-			continue
-		# AC-0203 recenter fix: worker-palettized slabs — reference landing.
-		# AC-0040: the banana-tree pass (e = [_, cx, cz, _, seed, h, sea, skip]).
-		var gres: Dictionary = WorldGen.apply_banana_resl(d, int(e[1]), int(e[2]), int(e[4]), Data.HEIGHT)
-		c.slabs_landed(d[0], d[1])
-		c.no_caves = int(e[7]) != 0
-		# AC-0284b: the far payload (or its absence — a full landing clears).
-		if not _gen_far_stamp(c, d):
-			c.clear_far()
-		_pool_touch()  # AC-0217: burst data landed on a queued entry
-		_banana_register(int(e[1]), int(e[2]), gres["fruits"])
-		gen_count += 1
-		chunk_origin[_key(int(e[1]), int(e[2]))] = "gen"  # AC-0155
-		_low_fog_for(c)  # AC-0231: the immediate fog-box first pass (far only)
-		_apply_edits_to_chunk(c)
-		_apply_pending_leaf_decay(c)  # AC-0270: restore the saved timers
-		# AC-0283 P2 (P3): the burst lands data on the main thread (not via
-		# threadgen_handoff) — the engine seed belongs here, or the box gate
-		# blocks every build in the burst's 3x3 region. REAL band only (the
-		# halo never seeds — the unseeded-tolerant box gate settles the
-		# edge against the halo neighbors).
-		if _is_real_col(int(e[1]) - last_pcx, int(e[2]) - last_pcz):
-			_star_seed_column(c)
-		if timing:
-			print("GENHAND %d,%d t=%d" % [int(e[1]), int(e[2]), Time.get_ticks_msec()])
+# AC-0293: the burst worker (_startup_gen_worker) and its main-thread apply
+# pass (_startup_gen_apply, incl. the dead-slot self-heal) are RETIRED —
+# the 5x5 group burst is gone; spawn/recenter data lands through the normal
+# threadgen handoff (threadgen_handoff) like every other column.
 
 func threadgen_poll() -> void:
 	if threadgen_inflight.is_empty():
@@ -7073,9 +6953,9 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 	# GONE (fully queue-driven — no main-thread builds ever): no-data,
 	# missing-neighbor and cap-drop all DEFER (return false); the callers
 	# keep the queue entry and retry when the data/neighbors land or a
-	# worker slot frees. (The spawn contract that motivated the legacy
-	# fallbacks is now the startup burst, which AC-0263 extended to carry
-	# the center column.)
+	# worker slot frees. AC-0293: the spawn contract that motivated the
+	# legacy fallbacks rides the normal data pass + the AC-0313 clause-4
+	# load gate (the 5x5 startup burst that carried it is retired).
 	if c.data.is_empty():
 		perf_edit_syncs += 1
 		return false  # AC-0263: the data lane owns it (the sync gen is gone)
@@ -7643,9 +7523,12 @@ func _pick_data_cached(maxb: int) -> Dictionary:
 			perf_pool_hits += 1
 			return {"e": e, "c": null, "s": _pool_data[3], "pool_empty": _pool_data[4]}
 		var c = chunks.get(e["key"])
+		# AC-0293: the spawn-fast skip is gone with the burst — the data
+		# pass is the spawn's data source (it used to wait for the 5x5
+		# group to own the spawn neighborhood; that is retired).
 		if c != null and c.data.is_empty() \
 				and not _tg_inflight_keys.has(e["key"]) \
-				and not _io_read_keys.has(e["key"]) and not _spawn_fast:
+				and not _io_read_keys.has(e["key"]):
 			perf_pool_hits += 1
 			return {"e": e, "c": c, "s": _pool_data[3], "pool_empty": _pool_data[4]}
 	perf_pool_misses += 1
@@ -7665,17 +7548,10 @@ func _pick_data_cached(maxb: int) -> Dictionary:
 		# never re-pick it for generation (same dedup rationale).
 		if _io_read_keys.has(e["key"]):
 			continue
-		# AC-0160 run 2: while the SPAWN fast path is active, the
-		# data pass enqueues NOTHING — the recenter 5x5 burst (a
-		# single high-priority group task) owns the 3x3's full
-		# 8-neighborhood, and far data behind the group would only
-		# steal threads from the spawn build window. The pass
-		# resumes the frame after the spawn 3x3 builds (_spawn_fast
-		# clears) — it must not wait on _startup_pending(), which is
-		# true for the whole walking session and would starve the
-		# forward edge of all data (boundary gate regression).
-		if _spawn_fast:
-			continue
+		# AC-0293: the spawn-fast no-enqueue is GONE with the burst —
+		# the data pass feeds the spawn neighborhood itself (the 5x5
+		# group that used to own it is retired); the (taxi, layer)
+		# score below still builds the innermost columns first.
 		var s := _grid_score(e)  # AC-0313: the bake order (taxi, layer)
 		if s < dp_s:
 			dp_s = s
@@ -7752,7 +7628,9 @@ func _promo_build_step() -> void:
 func _drain_build_queue() -> void:
 	_far_promo_owed_step()  # AC-0284b: the promotion's owed full regens
 	_promo_build_step()  # AC-0286: the promotion burst (post-landing)
-	_startup_gen_apply()
+	# AC-0293: the burst apply pass (_startup_gen_apply) is gone with the
+	# burst — spawn/recenter data lands through threadgen_handoff like
+	# every other column.
 	_drain_units_last = 0  # AC-0231: the low idle gate (units dispatched this frame)
 	if edit_inflight_count > 0:
 		return
@@ -7766,25 +7644,11 @@ func _drain_build_queue() -> void:
 	# AC-0313: the AC-0160 spawn-fast unit budget (3 -> 12 while the spawn
 	# 3x3 is pending) is GONE with the walk regime — the drain is ALWAYS
 	# the wall-clock paced unit budget + drain_budget_ms time cap (normal
-	# streaming). startup = _startup_pending() stays for the burst hold,
-	# the tm_cap bumps and the _spawn_fast latch (the 5x5 startup burst is
-	# deferred to AC-0293).
+	# streaming). startup = _startup_pending() stays for the 9-wide tm_cap
+	# bumps and the small-move/window-growth pacing (AC-0293: the burst
+	# hold + _spawn_fast latch that also keyed off it are gone with the
+	# 5x5 burst — spawn/recenter ride this same drain).
 	var startup := _startup_pending()
-	# AC-0160 run 2: the spawn fast path ends the first frame the spawn 3x3
-	# is built — after that the data pass and the recenter slice run
-	# normally (walking recenters must stream, see the _spawn_fast note).
-	if _spawn_fast and not startup:
-		_spawn_fast = false
-	# AC-0160 run 2: hold ALL startup builds until the 5x5 burst is fully
-	# applied (the apply already ran at the top of this frame). Dispatching
-	# (0,0) as soon as its d=1 gate passes (t+0.5 s) lands its handoff
-	# face-cache refresh on the main thread BEFORE the d=2 apply, which
-	# blocked the apply and staggered the other 8 3x3 gates — measured
-	# 3x3: 4.5 s. With the hold, all 9 gates pass on one frame at burst
-	# completion and all 9 dispatches go out together (the 9-wide startup
-	# TM cap below), landing in ~2.3 s.
-	if startup and _startup_gen_pending_n > 0:
-		return
 	# AC-0178: loading window — unbounded unit budget, LOAD_DRAIN_BUDGET_MS
 	# time budget. AC-0231 fps-tuning: the steady-state UNIT budget is
 	# WALL-CLOCK paced (the DRAIN_UNIT_PACE_MS accumulator — the chunk
@@ -7815,15 +7679,16 @@ func _drain_build_queue() -> void:
 	# AC-0313: the AC-0283 P3 walk regime (slow_cross / startup3x) and the
 	# unbounded `1e9 if startup` time budget are GONE — the drain is ALWAYS
 	# time-capped at drain_budget_ms (the loading window keeps its own
-	# LOAD_DRAIN_BUDGET_MS loop above; the 5x5 startup burst machinery stays
-	# — deferred to AC-0293). No main-thread blocking build pass after the
-	# player is active.
+	# LOAD_DRAIN_BUDGET_MS loop above). AC-0293: the 5x5 startup burst is
+	# retired — nothing special about spawn/recenter in this drain. No
+	# main-thread blocking build pass after the player is active.
 	var budget_us := int(drain_budget_ms * 1000)
 	# AC-0160: windowed pool scan. The drain scans buckets 0.._drain_win_b
-	# only (spawn-fast covers the spawn ring at b1_eff+2); the trickle window
-	# grows one bucket per DRAIN_WIN_PACE_MS (wall clock — was 15 frames)
-	# until it spans the whole queue, so the queue trends down continuously
-	# instead of stranding the far tail.
+	# only (initial b1_eff+2 — the spawn ring, reached by normal streaming
+	# now the spawn-fast window is gone, AC-0293); the trickle window grows
+	# one bucket per DRAIN_WIN_PACE_MS (wall clock — was 15 frames) until it
+	# spans the whole queue, so the queue trends down continuously instead
+	# of stranding the far tail.
 	if _drain_win_b < 0:
 		_drain_win_b = b1_eff() + 2
 	if not startup and not loading_active:
@@ -7950,8 +7815,8 @@ func _drain_build_queue() -> void:
 					continue
 				if _io_read_keys.has(e["key"]):
 					continue
-				if _spawn_fast:
-					continue
+				# AC-0293: the spawn-fast skip is gone with the burst — this
+				# full-throttle feed IS the spawn's data source now.
 				var s := _grid_score(e)  # AC-0313: the bake order (taxi, layer)
 				if s < ds:
 					ds = s
@@ -9606,15 +9471,19 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	else:
 		_rec_start_walk(pcx, pcz)
 	_rp_walk_ms += (Time.get_ticks_usec() - tr1) / 1000.0
-	# AC-0160 spawn fast path (the pre-warm): the queue normally only exists
-	# once the recenter slice's MERGE phase finishes (~2s of wall at r50:
-	# 8k stubs), and the drain idles the whole time. Queue the spawn 5x5
-	# (taxi <= 2 — exactly the 8-neighborhood the startup _build_ready gate
-	# needs) NOW so the threadgen data pass starts while the slice walks:
-	# the 3x3 data gen overlaps the stub walk instead of serializing behind
-	# it. The merge rebuild re-queues these keys (WANT) or moves the
-	# survivors; the handoff drop + finalization sweep (AC-0160) keep the
-	# consumed entries from stranding the queue.
+	# AC-0160 spawn pre-warm (AC-0293: the 5x5 burst it used to complement
+	# is retired — this NORMAL queue enqueue is now the only spawn/recenter
+	# data path): the queue normally only exists once the recenter slice's
+	# MERGE phase finishes (~2s of wall at r50: 8k stubs), and the drain
+	# idles the whole time. Queue the spawn 5x5 (taxi <= 2 — exactly the
+	# 8-neighborhood the startup _build_ready gate needs) NOW so the
+	# threadgen data pass starts while the slice walks: the 3x3 data gen
+	# overlaps the stub walk instead of serializing behind it. The merge
+	# rebuild re-queues these keys (WANT) or moves the survivors; the
+	# handoff drop + finalization sweep (AC-0160) keep the consumed entries
+	# from stranding the queue. Inside-out (taxi, layer) scoring (AC-0313)
+	# builds the inner ring first, so the pre-warm's own ordering already
+	# favors the footing the load gate waits on.
 	for pdx in range(-2, 3):
 		for pdz in range(-2, 3):
 			# AC-0040: in_stream_set takes a DELTA from the center (its
@@ -9630,113 +9499,13 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 			if not chunks.has(_key(wcx, wcz)):
 				stub_chunk(wcx, wcz)
 			_enqueue_build(wcx, wcz)
-	# AC-0160 run 2: the 5x5 startup burst. The drain's data pass paces one
-	# threadgen enqueue per frame, so the 5x5 (the 3x3's full 8-neighborhood)
-	# landed in 2.5-3.1 s and the spawn 3x3 in ~5 s. A single HIGH-priority
-	# GROUP task instead feeds all 24 non-center chunks to the pool at once
-	# (tasks_needed = 6 of 6 threads -> 4 sequential gens per thread): the
-	# 5x5 data lands in ~0.6-0.8 s and the 8 build gates pass together, so
-	# the 3x3 builds pipeline right behind it. Workers run only
-	# WorldGen.generate_args (the worker-safe core of _threadgen_worker)
-	# and store the result in their own slot; the main-thread apply pass
-	# (_startup_gen_apply) does the handoff (data + init_fl + edits) at a
-	# bounded 4/frame. (0,0) is excluded: the spawn contract keeps its sync
-	# gen in _gen_unit. A later recenter over already-generated terrain is a
-	# no-op (had_data snapshot). The drain's data path keeps the 5x5 scope
-	# as a fallback (TG enqueues race the group harmlessly: the apply pass
-	# and the handoff both drop duplicates).
-	# AC-0160 run 2: prune finished burst groups. A recenter whose group is
-	# STILL in flight must leave the elems/slots arrays untouched: the
-	# in-flight workers index those arrays (a reset races them — measured
-	# in the boundary gate: "Invalid assignment of index '22'" worker
-	# crashes, and a stale worker could write chunk A's terrain into chunk
-	# B's slot). In that case the in-flight burst lands data on its own
-	# chunks (still in the world — the player moved at most a couple of
-	# chunks), this recenter's new forward chunks get data from the drain's
-	# data pass, and pending_n = 0 keeps the drain hold from sticking.
-	var _grp_keep: Array = []
-	for _t in _startup_gen_group_tids:
-		if threadgen_pool.is_group_task_completed(int(_t)):
-			# AC-0178: a completed burst is CONSUMED here. The pool frees its
-			# Group object only via wait_for_group_task_completion — without
-			# it every burst leaks a Group ("Pages in use exist at exit in
-			# PagedAllocator: WorkerThreadPool::Group"). The old
-			# is_task_completed check was the wrong API for a group id: it
-			# printed "Invalid Task ID" and returned false, so nothing was
-			# ever pruned and the no-new-burst branch below stuck for the
-			# whole session.
-			threadgen_pool.wait_for_group_task_completion(int(_t))
-		else:
-			_grp_keep.append(_t)
-	_startup_gen_group_tids = _grp_keep
-	if _startup_gen_group_tids.is_empty():
-		_startup_gen_elems = []
-		_startup_gen_slots = []
-		for pdx in range(-2, 3):
-			for pdz in range(-2, 3):
-				# AC-0263: the CENTER is in the burst (25 cells) — the
-				# recenter's sync gen of (0,0) is GONE (fully queue-driven:
-				# no main-thread generation ever). The startup burst is the
-				# spawn anti-fall contract (kept).
-				var bwx := pcx + pdx
-				var bwz := pcz + pdz
-				# AC-0040: in_stream_set is CENTER-RELATIVE (dx,dz = offset
-				# from the recenter target). Passing the ABSOLUTE (bwx,bwz)
-				# filtered the 5x5 against the ORIGIN's stream set — at the
-				# spawn (pcx=pcz=0) delta==absolute so it worked; away from
-				# it the burst only kept the cells whose absolute position
-				# fell in the origin set (8 of 24 at (1,6)), so the new
-				# center's 8-neighborhood never got its data and the 3x3
-				# (and _spawn_fast) stalled. Every other call site (L3843,
-				# L3907, L4173, L4219, L4243) passes the explicit delta.
-				if not in_stream_set(pdx, pdz):
-					continue
-				var bc = chunks.get(_key(bwx, bwz))
-				# AC-0164: a saved 5x5 column is read by a WORKER (the old
-				# sync 24-column load was the ~500 ms recenter hitch). A
-				# successful enqueue (file exists, or a read is already in
-				# flight) marks the had_data snapshot true so the burst
-				# worker skips it; the read lands via io_poll and the
-				# pending key keeps gen from re-enqueueing the column.
-				var had_data: bool = bc != null and not bc.data.is_empty()
-				if bc != null and bc.data.is_empty():
-					had_data = _io_read_enqueue(bwx, bwz, _key(bwx, bwz), false)
-				# args snapshot in the element (worker never derefs Game/Data —
-				# the _threadgen_worker entry pattern). AC-0216: e[7] = the
-				# offscreen-interior lazy-skip flag (the 5x5 burst is band 0
-				# in practice — never skipped — but computed for uniformity).
-				_startup_gen_elems.append([absi(bwx - pcx) + absi(bwz - pcz), bwx, bwz, had_data, Game.world_seed, Data.HEIGHT, Data.SEA, _gen_skip_flag(bwx, bwz)])
-				_startup_gen_slots.append(null)
-		_startup_gen_elems.sort_custom(func(a, b): return int(a[0]) < int(b[0]) or (int(a[0]) == int(b[0]) and (int(a[1]) < int(b[1]) or (int(a[1]) == int(b[1]) and int(a[2]) < int(b[2])))))
-		var _burst_need := 0
-		for _be in _startup_gen_elems:
-			if not bool(_be[3]):
-				_burst_need += 1
-		_startup_gen_pending_n = _burst_need
-		if _burst_need > 0:
-			_startup_gen_started_ms = Time.get_ticks_msec()  # AC-0263: self-heal window
-			# HIGH priority + 3-wide: measured on this Godot build, a LOW
-			# priority GROUP task runs its elements strictly serially on ONE
-			# thread (24 x 120 ms = 2.9 s) even with tasks_needed=3 — so the
-			# burst must stay high priority (3-wide, ~165 ms/task, 24 chunks in
-			# ~1.3 s). The FIFO overlap problem a high-priority group would
-			# cause (TM builds queueing behind the 24 gen elements) is gone by
-			# construction: the drain hold below keeps ALL builds out of the
-			# pool until the burst is fully applied, so the group runs alone on
-			# 3 of the 6 threads and the 9 spawn builds start on the 6 free
-			# threads the frame after the burst lands. 3-wide keeps the gen wms
-			# near the solo floor (6-wide runs ~320 ms/task here — allocator/
-			# bandwidth bound). Elements are taxi-ordered (d=1 first).
-			_startup_gen_group_tids.append(threadgen_pool.add_group_task(_startup_gen_worker, _startup_gen_elems.size(), 3, true))
-			if timing:
-				print("GENBURST n=%d t=%d" % [_burst_need, Time.get_ticks_msec()])
-	else:
-		# A previous burst is still landing: its apply pass owns the
-		# pending count bookkeeping for its own chunks; this recenter
-		# adds nothing to the pool (the data pass covers the new edge).
-		_startup_gen_pending_n = 0
-	# AC-0263: the (0,0) sync gen is GONE — fully queue-driven (the startup
-	# burst now carries the center; the drain data path feeds the rest).
+	# AC-0293: the 5x5 startup burst (the high-priority group task, the
+	# elems/slots handoff, the group prune/consume) is RETIRED — the
+	# pre-warm enqueue above + the drain's normal data pass (AC-0322 feed)
+	# are the spawn/recenter data path; the (0,0) sync gen is GONE (fully
+	# queue-driven, AC-0263); the anti-fall is the AC-0313 clause-4 load
+	# gate (the SIM TAXI DIAMOND meshed by normal streaming before the
+	# player activates), so no group task owes the spawn its footing.
 	if _recprobe:
 		print("RECPROBE r=%d total_ms=%.1f free_ms=%.1f rebuild_ms=%.1f new_n=%d queue=%d chunks=%d drain_stubs_ms=%.1f drain_stubs_n=%d" % [
 			render_radius,
@@ -9748,23 +9517,10 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 func _recenter_slice() -> void:
 	if not _rec_pending:
 		return
-	# AC-0160 run 2: pause the slice for the SPAWN window only (_spawn_fast,
-	# cleared when the spawn 3x3 builds). The rebuild walk/stubs are ~5 s of
-	# main-thread work at r50; racing it against the burst inflates the gen
-	# wms, and racing it against the spawn handoffs starves them (the (0,0)
-	# handoff's face-cache refresh is ~1.2 s of main-thread work, and the
-	# other 8 handoffs then wait on slice frame gaps — measured 3x3
-	# 4.0-5.6 s with the slice running). Paused: the burst runs 3-wide at
-	# solo wms (~1.3 s) and the 9 spawn handoffs run on a free main thread
-	# right after the worker wave lands. The slice then takes its ~5 s and
-	# the queue swap lands a couple of seconds after the 3x3 (the bandmap
-	# arm waits for the swap before the trickle sample). Keying this on
-	# _startup_pending() instead broke walking: that flag stays true for
-	# every recenter (the forward 3x3 is unbuilt), the slice never rebuilt
-	# the queue, and the drain had nothing to stream (35 s stall, empty
-	# world ahead of the player — boundary gate regression).
-	if _spawn_fast:
-		return
+	# AC-0293: the SPAWN-window slice pause (the _spawn_fast gate) is gone
+	# with the burst it protected — the slice now runs concurrently with
+	# the normal data pass at spawn (the drain is wall-clock paced, so the
+	# slice's main-thread share is bounded by REC_SLICE_BUDGET_MS).
 	var t0 := Time.get_ticks_msec()
 	var units := 0
 	while _rec_pending and units < REC_UNITS_PER_FRAME and Time.get_ticks_msec() - t0 < REC_SLICE_BUDGET_MS:
@@ -9939,8 +9695,9 @@ func _rec_merge_old_step() -> void:
 	# RE-BUCKETED by the NEW taxi, so the queue stays consistent with the
 	# new center during the walk (the long b1_eff walk keeps the old
 	# buckets live until finalize - a dropped carry desynced flags/entries
-	# in that window and latched _spawn_fast on the spawn column's tail
-	# slab, killing the low stage: measured 172 s in the lightstate arm).
+	# in that window and latched the (since-retired, AC-0293) _spawn_fast
+	# on the spawn column's tail slab, killing the low stage: measured
+	# 172 s in the lightstate arm).
 	_rec_new_buckets[mini(absi(adxs) + absi(adzs), _rec_new_buckets.size() - 1)].append(e)
 
 func _rec_merge_want_step() -> void:
@@ -10975,8 +10732,11 @@ func spawn_search() -> Dictionary:
 	return _spawn_search
 
 # AC-0119 (AC-0263): the boot-time sync gen of the spawn chunk is GONE —
-# the pre-data surface top is the ANALYTIC heightmap, and the startup
-# burst delivers the ground data (collision) before the player lands.
+# the pre-data surface top is the ANALYTIC heightmap. AC-0293: the ground
+# data (collision) the player lands on is delivered by the NORMAL data
+# pass + the AC-0313 clause-4 load gate (the SIM TAXI DIAMOND fully meshed
+# before the player activates) — the 5x5 startup burst that used to carry
+# it is retired.
 # AC-0324: once the sim-band data is ready the searched column (NATURAL
 # terrain) is the position. AC-0314: the spawn PAD is REMOVED from the gen
 # — the pre-data fallback is the anchor column's NATURAL surface: the C++

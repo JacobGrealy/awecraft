@@ -266,8 +266,15 @@ Match these; do not improvise a different approach in a task.
   original clause-4 text ("the 9 spawn chunks") predates the user's answer —
   "instead of 3x3 let's do sim taxi distance" (recorded on AC-0312's notes by
   mistake; the CLAUSE 4 CORRECTION note on AC-0313 is the requirement). There is
-  no special startup build pass (the 5x5 startup data *burst* is a separate
-  mechanism, deferred to AC-0293).
+  no special startup build pass: AC-0293 retired the 5x5 startup data *burst*
+  (the high-priority GROUP task feeding the 24 non-center spawn columns, its
+  main-thread apply pass, the drain hold and the one-shot `_spawn_fast`
+  latch that kept its window unopposed) — spawn and recenter ride the SAME
+  normal streaming path as everything else (the recenter pre-warm enqueues
+  the 5x5 through the normal build queue; the (taxi, layer) inside-out order
+  builds the inner ring first), and the diamond gate above is the anti-fall:
+  the player activates only on fully meshed footing, so no mechanism the
+  player can see owes their ground.
 - **Deterministic spawn search (AC-0324)**: the player's start column is NOT a
   fixed constant — `World.spawn_point()` runs a no-RNG search once the
   SIM-BAND data the load gate guarantees is built, and returns the searched

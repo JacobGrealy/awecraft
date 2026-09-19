@@ -707,8 +707,9 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			# pattern as the player/gamepad/doors arms) — the viewmodel
 			# light checks sample light_at(eye), which is only outdoor
 			# (sky 15) once the floor collision exists; without it the
-			# spawn player free-falls through the data (present since the
-			# startup burst) and reads cave-dark at the checks.
+			# spawn player free-falls through the data (present once the
+			# normal data pass + load gate have landed it, AC-0293) and
+			# reads cave-dark at the checks.
 			world.recenter(spawn.x, spawn.z, true)
 			await main._await_spawn_floor(spawn, 300)
 			player = main._spawn_player()
@@ -7548,14 +7549,12 @@ func _banana3d_dump_state(tag: String) -> void:
 	for k in w.chunks:
 		var c: Node3D = w.chunks[k]
 		ck_list.append([k, c.data.is_empty(), c.mesh_built, int(c.band)])
-	var slots_ready := 0
-	for s in w._startup_gen_slots:
-		if s != null:
-			slots_ready += 1
-	print("B3DSTATE %s q=%d queued=%d spawn_fast=%s rec_pending=%s tg_infl=%d tm_infl=%d pending_n=%d elems=%d slots_ready=%d pool_build=%d pool_data=%d ready_00=%s ready_11=%s chunks=%d" % [
-		tag, w.queue_size, w.queued_keys.size(), w._spawn_fast, w._rec_pending,
+	# AC-0293: the burst-state fields (spawn_fast / pending_n / elems /
+	# slots_ready) left the dump with the 5x5 startup burst's removal.
+	print("B3DSTATE %s q=%d queued=%d rec_pending=%s tg_infl=%d tm_infl=%d startup_pending=%s pool_build=%d pool_data=%d ready_00=%s ready_11=%s chunks=%d" % [
+		tag, w.queue_size, w.queued_keys.size(), w._rec_pending,
 		w.threadgen_inflight.size(), w.threadmesh_inflight.size(),
-		w._startup_gen_pending_n, w._startup_gen_elems.size(), slots_ready,
+		w._startup_pending(),
 		w._collect_pool(true, false, -1).size(), w._collect_pool(false, false, -1).size(),
 		w._build_ready(0, 0), w._build_ready(1, 1), w.chunks.size()])
 	print("B3DCHUNKS %s %s" % [tag, str(ck_list)])
@@ -7578,17 +7577,18 @@ func _banana3d_test() -> void:
 		return
 	# Recenter the world onto the shore (seed 44's banana trees sit at
 	# chunks (1,5)/(1,6) -> world x 16..31, z 80..111; center (24,96)
-	# covers both with radius 4). A FAR recenter during the startup window
-	# is safe: the recenter's pre-warm queues the full 5x5 around the new
-	# center and the startup burst feeds its data (AC-0040 in_stream_set
-	# delta fix, §6 of the results), so the new center's 3x3 builds and
-	# _spawn_fast clears even while the queue-rebuild slice is still
-	# walking. The player stays put until the fruit chunk is built, then
-	# hops to the tree (inside the 10-block roll radius).
+	# covers both with radius 4). A FAR recenter is safe: the recenter's
+	# pre-warm queues the full 5x5 around the new center through the
+	# normal build queue and the drain's data pass feeds it (AC-0040
+	# in_stream_set delta fix, §6 of the results; AC-0293: the startup
+	# burst that used to feed it is retired), so the new center's 3x3
+	# builds even while the queue-rebuild slice is still walking. The
+	# player stays put until the fruit chunk is built, then hops to the
+	# tree (inside the 10-block roll radius).
 	Game.mode = "play"
 	world.recenter(24.0, 96.0, true)
-	# (a) wait for the hanging fruits to register: the burst-apply hook
-	# runs the banana pass on each landed 5x5 column (~2-4 s).
+	# (a) wait for the hanging fruits to register: the threadgen handoff
+	# runs the banana pass on each landed column (~2-4 s).
 	var r := 0
 	while world._banana_fruits.is_empty() and r < 3000:
 		await get_tree().physics_frame
@@ -7643,13 +7643,12 @@ func _banana3d_test() -> void:
 				"fruit": [fx, fy, fz],
 				"queue_size": world.queue_size,
 				"queued_keys": world.queued_keys.size(),
-				"startup_pending_n": world._startup_gen_pending_n,
 				"startup_pending": world._startup_pending(),
 				"tg_inflight": world.threadgen_inflight.size(),
 				"tm_inflight": world.threadmesh_inflight.size(),
 				"loading_active": world.loading_active,
 				"rec_pending": world._rec_pending,
-				"spawn_fast": world._spawn_fast,
+				# AC-0293: startup_pending_n / spawn_fast left with the burst.
 				"fruit_in_queue": world.queued_keys.has(fck),
 				"last_pcx": world.last_pcx,
 				"last_pcz": world.last_pcz,
@@ -21006,8 +21005,10 @@ func _load_test(spawn: Vector3) -> void:
 	# `spawn3x3_ms`) = the t0 -> load-GATE wall, where the gate is now the
 	# SIM TAXI DIAMOND (taxi <= band0_r; world._loading_band_count) — the
 	# same set that closes the loading screen and that start_game awaits.
-	# The old 3x3 probe read world._startup_pending(), which is the SEPARATE
-	# spawn-burst flag (AC-0293-deferred machinery), no longer the gate.
+	# The old 3x3 probe read world._startup_pending(), which is a SEPARATE
+	# steady-state flag (the forward-3x3 tm_cap pacing), never the gate.
+	# AC-0293: the 5x5 spawn burst that used to feed the load window is
+	# retired — the gate is meshed by normal streaming.
 	var lb := OS.get_environment("AWECRAFT_LOADBYPASS") != "0"
 	world.collision_enabled = false
 	world.fluid_sim_enabled = false
