@@ -546,6 +546,22 @@ var last_wy := 0.0
 func _player_slab() -> int:
 	return int(floorf(last_wy / 16.0))
 
+# AC-0331: the far-tier mesh FLOOR (world y). The sub-waterline geometry
+# of the THREE FAR DRAW TIERS (band A full-LOD materialization + bands
+# B/C avg) is REMOVED at the sea floor: the far ocean keeps its
+# translucent water surface at Data.SEA (the waterline voxel stays) +
+# the opaque cap face at the floor (no see-through from below — the
+# cap is the -Y face of the first kept cell / the floor row), and the
+# slabs entirely below it are never built or dispatched (the cost win:
+# 7 of 24 low-lane slabs + the band-A mat build starts at slab 7). The
+# REAL band (tier 0) NEVER floors — caves + sub-floor digging survive
+# there. Hard-coded at Data.SEA in this ticket (no setting, no env
+# knob, no UI); AC-0332 replaces this body with the setting read
+# (yfloor_enabled + yfloor_chunks_below_sea) — this function is the
+# single seam the follow-up owns.
+func _far_floor_y() -> int:
+	return int(Data.SEA)
+
 # AC-0257: the Y-LAYER rank of slab si — the bake order around the player's
 # slab: rank 0 = the player's slab, then y-1, y+1, y-2, y+2, ... (the
 # layers nearest the player's altitude build before the deep ones).
@@ -590,6 +606,13 @@ func _entry_best_pending(c: Node3D) -> int:
 		else:
 			dy = r / 2
 		var si := pys + dy
+		# AC-0331: the far-tier mesh floor — a far column's slabs
+		# ENTIRELY BELOW the floor are never built (the dispatch
+		# prunes them, _low_pending_sis) — they must read as NOT
+		# pending here, or the column never settles (this probe drives
+		# the pick + band_drained + the probe cache).
+		if c.far and si * 16 + 15 < _far_floor_y():
+			continue
 		# AC-0284b: a far column's slabs are all null BY REPRESENTATION —
 		# every slab is still buildable (the emit reads the payload).
 		if si < 0 or si >= sn or (c.data[si] == null and not c.far):
@@ -613,6 +636,11 @@ func _entry_best_pending(c: Node3D) -> int:
 # (~5 dict lookups) instead of re-running the 32-probe sweep.
 func _low_slab_pending_at(c: Node3D, si: int, tier: int) -> bool:
 	if si < 0 or si >= c.data.size() or (c.data[si] == null and not c.far):  # AC-0284b: a far column's null slabs are buildable (the payload is the data)
+		return false
+	# AC-0331: the far-tier mesh floor — slabs entirely below it are
+	# never built on a far column (the dispatch pruning) — not pending
+	# (the probe-cache re-validation + the demote flip path read this).
+	if c.far and si * 16 + 15 < _far_floor_y():
 		return false
 	if c.has_low_si(si):
 		# a LOW slab is pending only when stale (edited after the low,
@@ -1812,7 +1840,35 @@ func _avg_neighbor_solid(g: Dictionary, grids: Array, si: int, cc: Array, n: Vec
 # sample air / every exposed face cullled), else the vertex-color ArrayMesh
 # (NO UVs — the noise shader material owns the surface). Vertices are
 # SLAB-LOCAL 0..16 (the instance sits at (0, si*16, 0), like the low).
-func _avg_emit_slab(g: Dictionary, grids: Array, si: int, G: int) -> ArrayMesh:
+# AC-0331: yfloor = the far-tier mesh floor (the GD twin of the C++
+# shared-tail mask in avg_grid_emit — a grid cell is kept iff its
+# TOPMOST world y is > yfloor; the cell entirely below it is air, the
+# straddling cell is kept whole; -1 = off, the pre-floor emit).
+func _avg_emit_slab(g: Dictionary, grids: Array, si: int, G: int, yfloor := -1) -> ArrayMesh:
+	# AC-0331: the floor mask on LOCAL copies (the caller's grids are
+	# untouched — the arm samples with AND without the floor). The cell
+	# condition mirrors the C++ tail exactly (per-grid slab index; the
+	# same kept-whole/zeroed-below semantics).
+	if yfloor >= 0:
+		var cellb: int = 16 / G
+		var gm: Array = grids.duplicate()
+		for tsi in [si - 1, si, si + 1]:
+			if tsi < 0 or tsi >= gm.size():
+				continue
+			var gg = gm[tsi]
+			if gg == null:
+				continue
+			var src: PackedByteArray = gg["solid"]
+			var sm: PackedByteArray = src.duplicate()
+			var y0: int = tsi * 16
+			for cy in range(G):
+				if y0 + (cy + 1) * cellb - 1 > yfloor:
+					continue
+				for i in range(cy * G * G, (cy + 1) * G * G):
+					sm[i] = 0
+			gm[tsi] = {"solid": sm, "cols": gg["cols"]}
+		grids = gm
+		g = {"solid": gm[si]["solid"], "cols": g["cols"]}
 	var s: PackedByteArray = g["solid"]
 	var cols: PackedFloat32Array = g["cols"]
 	var cell := float(16.0) / float(G)
@@ -2266,6 +2322,13 @@ func _low_build(c: Node3D) -> void:
 func _low_pending_sis(c: Node3D) -> Array:
 	var out: Array = []
 	var tier := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)  # AC-0252: the live band tier
+	# AC-0331: the far-tier mesh floor — the spec's dispatch pruning:
+	# slabs entirely below the floor are dropped from the pending set
+	# for far columns so no worker task is ever dispatched for them
+	# (the cost win: 7 of 24 low-lane slabs per far column, on entry
+	# AND on every re-lower). -1 for non-far (the real band never
+	# floors — caves + sub-floor digging survive there).
+	var yfl := _far_floor_y() if c.far else -1
 	var f := 0
 	var l := 0
 	while f < c.fog_slabs.size() or l < c.low_slabs.size():
@@ -2280,6 +2343,8 @@ func _low_pending_sis(c: Node3D) -> Array:
 		else:
 			si = ls
 			l += 1
+		if yfl >= 0 and si * 16 + 15 < yfl:
+			continue  # AC-0331: below the far floor — never dispatched
 		if is_ph:
 			# FOG (in si order): pending while the data is fresh (a
 			# terminal mark — the slab SAMPLED all-air at this data_gen —
@@ -2302,6 +2367,8 @@ func _low_pending_sis(c: Node3D) -> Array:
 		# flag-on path above is untouched).
 		for si in range(c.data.size()):
 			var si2 := int(si)
+			if yfl >= 0 and si2 * 16 + 15 < yfl:
+				continue  # AC-0331: below the far floor — never dispatched
 			if c.data[si2] != null and not c.has_low_si(si2) \
 					and int(c.low_failed.get(si2, -1)) != int(c.data_gen):
 				out.append(si2)
@@ -2504,6 +2571,12 @@ func _low_dispatch_slab(c: Node3D, si: int) -> int:
 	# it (the wave scan skips tier 1; this guards the direct callers).
 	# 0 = handled (no air-slab bookkeeping for a non-air slab).
 	if _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz) == 1:
+		return 0
+	# AC-0331: the far-tier mesh floor — a far column's slabs entirely
+	# below it are never dispatched (the spec's dispatch pruning; the
+	# probes + _low_pending_sis already drop them — this guards the
+	# direct callers). 0 = handled (nothing to do).
+	if c.far and si * 16 + 15 < _far_floor_y():
 		return 0
 	if _low_tasks.size() >= LOW_TASK_CAP:
 		return 2
@@ -5942,10 +6015,16 @@ func _tm_worker_run(skey: int) -> void:
 			if veg.size() == 0:
 				veg = WorldGen.gen_cpp().veg_cells(int(entry["cx"]), int(entry["cz"]), int(Game.world_seed), int(Data.HEIGHT), int(Data.SEA))
 				entry["veg_done"] = veg
-			entry["result"] = mcl.h_avg_emit(fr[0], fr[1], fr[2], ore, veg, int(entry["si"]), grid, entry["fcc"], sky, int(Data.SEA), int(Data.HEIGHT), wtlx, wtly, wpx)
+			# AC-0331: the far-tier mesh floor — the low lane is the
+			# tier 2/3 far draw tiers only (the dispatch no-ops tier
+			# 1 and below), so the floor applies to BOTH emits (the far
+			# payload + the demoted-real data path — a demoted real
+			# column drawn in band B/C is a far draw tier too: same cap,
+			# same cost win, no visible change from above).
+			entry["result"] = mcl.h_avg_emit(fr[0], fr[1], fr[2], ore, veg, int(entry["si"]), grid, entry["fcc"], sky, int(Data.SEA), int(Data.HEIGHT), wtlx, wtly, wpx, _far_floor_y())
 			low_emit_cpp += 1
 			return
-		entry["result"] = mcl.low_emit_avg(entry["slabs"], int(entry["si"]), grid, entry["fcc"], sky, wtlx, wtly, wpx)
+		entry["result"] = mcl.low_emit_avg(entry["slabs"], int(entry["si"]), grid, entry["fcc"], sky, wtlx, wtly, wpx, _far_floor_y())
 		low_emit_cpp += 1
 		return
 	# AC-0152/AC-0160: all bands (0/1/2) flow through the normal build_accs
@@ -5985,7 +6064,16 @@ func _tm_worker_run(skey: int) -> void:
 			return
 		WorldGen.apply_banana_resl(mresl, int(entry["cx"]), int(entry["cz"]), int(Game.world_seed), int(Data.HEIGHT))
 		entry["mat_data"] = mresl
-		var mat_res: Dictionary = mc.build_accs(mresl[0], mresl[1], int(entry["cx"]), int(entry["cz"]), entry["nbs"], entry["ctx"], entry["ms"], entry["eff"], 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())
+		# AC-0331: the far-tier mesh floor — the band-A mat build starts
+		# at the FLOOR SLAB (126/16 = 7) and rows below the floor are
+		# zeroed in build_accs (the per-voxel gate: the band-A cell
+		# straddles the floor, so the slab range alone would mesh the
+		# sub-floor rows of slab 7). The mat DATA is still the full
+		# column (the fill identity — c.data lands complete; only the
+		# MESH floors). The real band never gets this (yfloor -1).
+		var yfl_m := int(entry.get("yfloor", -1))
+		var si0_m: int = int(yfl_m / 16) if yfl_m >= 0 else 0
+		var mat_res: Dictionary = mc.build_accs(mresl[0], mresl[1], int(entry["cx"]), int(entry["cz"]), entry["nbs"], entry["ctx"], entry["ms"], entry["eff"], si0_m, -1, 0, Lighting._att, Lighting._glow, PackedByteArray(), yfl_m)
 		entry["mat_ms"] = (Time.get_ticks_usec() - mat_t0) / 1000
 		mesh_cpp_builds += 1
 		entry["result"] = mat_res
@@ -5994,7 +6082,9 @@ func _tm_worker_run(skey: int) -> void:
 	# (24 bytes; EMPTY = tier 0 / full build — byte-identical to the
 	# pre-AC-0234 call). Masked slabs are skipped like all-air slabs; the
 	# black cap renders them on the main thread.
-	var res: Dictionary = mc.build_accs(entry["data"], entry["fl"], int(entry["cx"]), int(entry["cz"]), entry["nbs"], entry["ctx"], entry["ms"], entry["eff"], int(entry.get("si0", 0)), int(entry.get("si1", -1)), int(entry.get("d_off", 0)), Lighting._att, Lighting._glow, entry.get("mask", PackedByteArray()))
+	# AC-0331: the last arg = the far-tier mesh floor (-1 for every
+	# non-band-A entry — the real band never floors).
+	var res: Dictionary = mc.build_accs(entry["data"], entry["fl"], int(entry["cx"]), int(entry["cz"]), entry["nbs"], entry["ctx"], entry["ms"], entry["eff"], int(entry.get("si0", 0)), int(entry.get("si1", -1)), int(entry.get("d_off", 0)), Lighting._att, Lighting._glow, entry.get("mask", PackedByteArray()), int(entry.get("yfloor", -1)))
 	mesh_cpp_builds += 1
 	if timing:
 		_tm_concur -= 1
@@ -7113,6 +7203,15 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 # so the settled-payload gate never applies. {} = no payload (the
 # dispatch defers; a far column always has one).
 func _band_a_eff_for(c: Node3D) -> Dictionary:
+	# AC-0331: floor-awareness — sky_eff is FULL HEIGHT (arr = 256 x
+	# Data.HEIGHT, the margin strips full-height too), so the far-tier
+	# cap face at the floor (y = Data.SEA = 126) reads the same heightmap
+	# rule (15 above the column's H, 0 at/below) — the cap is lit on an
+	# ocean column and dark on a land one, no change owed. CACHE CAVEAT:
+	# c.far_eff must not outlive a floor CHANGE — while the floor is
+	# fixed (this ticket) it is stable by construction; AC-0332 (the
+	# setting) must invalidate c.far_eff (see the clear_far reset below
+	# at the full landing) whenever the floor value changes.
 	if not c.far or c.far_h.size() != 512:
 		return {}
 	if not c.far_eff.is_empty():
@@ -7200,6 +7299,13 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 			"scoped_snap": not is_mat,
 			"d_off": 0 if is_mat else maxi(0, si * 16 - 1),
 			"d_hi": Data.HEIGHT - 1 if is_mat else mini(Data.HEIGHT - 1, (si + 1) * 16),
+			# AC-0331: the far-tier mesh floor — band A is a far draw
+			# tier: the mat build starts at the floor slab (the worker
+			# clamps si0) + build_accs zeroes the sub-floor rows; the
+			# per-slab RETRIGGER carries it too (a remeshed slab of a
+			# mat-landed column matches the floored mat build — no
+			# sub-floor faces appear on a remesh).
+			"yfloor": _far_floor_y(),
 			"t_submit": Time.get_ticks_usec(),
 		}
 		var skey_a := _tm_next_slot

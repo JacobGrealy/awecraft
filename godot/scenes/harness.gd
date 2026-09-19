@@ -9318,9 +9318,12 @@ func _halo_test(spawn: Vector3) -> void:
 					var veg2: PackedByteArray = c.far_veg
 					if veg2.size() == 0:
 						veg2 = WorldGen.gen_cpp().veg_cells(int(c.cx), int(c.cz), int(Game.world_seed), int(Data.HEIGHT), int(Data.SEA))
-					fresh = mc.h_avg_emit(c.far_h, c.far_biome, c.far_top, ore2, veg2, si, G, world._lod_fcc_get(), exp, int(Data.SEA), int(Data.HEIGHT))
+					# AC-0331: the far-tier mesh floor — the applied low
+					# mesh is the floored worker emit (tier 2/3 = the far
+					# draw tiers), so the fresh reference floors too.
+					fresh = mc.h_avg_emit(c.far_h, c.far_biome, c.far_top, ore2, veg2, si, G, world._lod_fcc_get(), exp, int(Data.SEA), int(Data.HEIGHT), -1, -1, 0.0, int(Data.SEA))
 				else:
-					fresh = mc.low_emit_avg(mc.slab_copy(c.data), si, G, world._lod_fcc_get(), exp)
+					fresh = mc.low_emit_avg(mc.slab_copy(c.data), si, G, world._lod_fcc_get(), exp, -1, -1, 0.0, int(Data.SEA))
 				if bool(fresh.get("empty", false)):
 					if int(applied["q"]) != 0:
 						if b_fail.size() < 4:
@@ -10512,7 +10515,10 @@ func _texrefresh_halo_cmp(mc, hc: Node3D, hcx: int, hcz: int, hsi_g: int, halo_p
 		if veg.size() == 0:
 			veg = g.veg_cells(int(hcx), int(hcz), int(Game.world_seed), int(Data.HEIGHT), int(Data.SEA))
 		var sky: PackedByteArray = world._halo_sky_for(hc, si)
-		var em: Dictionary = mc.h_avg_emit(hc.far_h, hc.far_biome, hc.far_top, ore, veg, int(si), 4, fcc, sky, int(Data.SEA), int(Data.HEIGHT))
+		# AC-0331: the far-tier mesh floor — the applied low is the
+		# floored worker emit, so the fresh reference floors too (the
+		# slab-7 sub-floor cells would otherwise mismatch).
+		var em: Dictionary = mc.h_avg_emit(hc.far_h, hc.far_biome, hc.far_top, ore, veg, int(si), 4, fcc, sky, int(Data.SEA), int(Data.HEIGHT), -1, -1, 0.0, int(Data.SEA))
 		var applied: Dictionary = _tex_cap_slab(hc.low_instances[li])
 		var d: String
 		if bool(em.get("empty", false)):
@@ -10624,8 +10630,13 @@ func _farab_test() -> void:
 				var ore := PackedByteArray()
 				if si <= 3:
 					ore = g.stone_ore_slab(cx, cz, seed, H, si)
-				var a: Dictionary = mc.low_emit_avg(resl1[0], si, gridn, fcc, sky, wtlx, wtly, wpx)
-				var b: Dictionary = mc.h_avg_emit(pay.slice(0, 512), pay.slice(512, 768), pay.slice(768, 1024), ore, veg, si, gridn, fcc, sky, sea, H, wtlx, wtly, wpx)
+				# AC-0331: BOTH emits get the far-tier mesh floor (sea =
+				# Data.SEA = 126) — the shared-tail mask is the gate and
+				# the identity is the proof (the water-topped cell 126-127
+				# / 124-127 is kept whole, so the water census below must
+				# stay non-vacuous: the far ocean keeps its surface).
+				var a: Dictionary = mc.low_emit_avg(resl1[0], si, gridn, fcc, sky, wtlx, wtly, wpx, sea)
+				var b: Dictionary = mc.h_avg_emit(pay.slice(0, 512), pay.slice(512, 768), pay.slice(768, 1024), ore, veg, si, gridn, fcc, sky, sea, H, wtlx, wtly, wpx, sea)
 				var an_w: PackedVector3Array = a.get("wv", PackedVector3Array())
 				if an_w.size() > 0:
 					if is8:
@@ -11760,6 +11771,52 @@ func _meshprobe_test(spawn: Vector3) -> void:
 				if int(qc2["mismatch"]) > 0 and not bool(qch_first.get("side", "") == "cpp"):
 					qch_first["cpp_side"] = {"chunk": str(key), "si": aesi, "G": G2}
 					qch_first["cpp_side"].merge(qc2["first"])
+			# AC-0331: the FLOOR pair — the production semantics at the
+			# floor's own slab (7 = 126/16): BOTH emitters get the floor
+			# (the shared-tail cell mask: a cell is kept iff its
+			# topmost world y is > 126 — slab 7's G=8 cell 126-127 /
+			# G=4 cell 124-127 is the straddling kept-whole case, the
+			# sub-floor cells zeroed). Real columns only (a far
+			# column's data is the payload — the farab identity covers
+			# the far side of the same gate). The first pair above
+			# (yfloor -1) stays the no-op proof.
+			if c.data[7] != null:
+				var grids3: Array = []
+				grids3.resize(c.data.size())
+				grids3[7] = world._avg_slab_grid(c, 7, G2)
+				if c.data[6] != null:
+					grids3[6] = world._avg_slab_grid(c, 6, G2)
+				if c.data[8] != null:
+					grids3[8] = world._avg_slab_grid(c, 8, G2)
+				var g3: Dictionary = grids3[7]
+				var m_gd3: ArrayMesh = world._avg_emit_slab(g3, grids3, 7, G2, int(Data.SEA))
+				var res_c3: Dictionary = mc.low_emit_avg(mc.slab_copy(c.data), 7, G2, fcc, PackedByteArray(), -1, -1, 0.0, int(Data.SEA))
+				ae_pairs += 1
+				if bool(res_c3.get("empty", false)):
+					if m_gd3 == null:
+						ae_match += 1
+				elif m_gd3 != null:
+					var sg3: Array = m_gd3.surface_get_arrays(0)
+					var ok3: bool = (sg3[Mesh.ARRAY_VERTEX] as PackedVector3Array) == res_c3["v"] \
+							and (sg3[Mesh.ARRAY_INDEX] as PackedInt32Array) == res_c3["i"] \
+							and is_equal_approx(m_gd3.get_aabb().size.y, float(res_c3.get("mh", -1.0)))
+					var dnn3b: PackedVector3Array = sg3[Mesh.ARRAY_NORMAL] as PackedVector3Array
+					var nnn3b: PackedVector3Array = res_c3["n"] as PackedVector3Array
+					if ok3 and dnn3b.size() == nnn3b.size():
+						for qf3 in range(dnn3b.size()):
+							var df3 := dnn3b[qf3] - nnn3b[qf3]
+							if absf(df3.x) > 1e-4 or absf(df3.y) > 1e-4 or absf(df3.z) > 1e-4:
+								ok3 = false
+								break
+					var dcc3b: PackedColorArray = sg3[Mesh.ARRAY_COLOR] as PackedColorArray
+					var ccc3b: PackedColorArray = res_c3["c"] as PackedColorArray
+					if ok3 and dcc3b.size() == ccc3b.size():
+						for qf3 in range(dcc3b.size()):
+							if absf(dcc3b[qf3].r - ccc3b[qf3].r) > 0.01 or absf(dcc3b[qf3].g - ccc3b[qf3].g) > 0.01 or absf(dcc3b[qf3].b - ccc3b[qf3].b) > 0.01 or absf(dcc3b[qf3].a - ccc3b[qf3].a) > 0.01:
+								ok3 = false
+								break
+					if ok3:
+						ae_match += 1
 	Debug.result({
 		"ok": cpp and n_samples >= 8 and match_rate >= 1.0 and verts_gd == verts_cpp and verts_gd > 0 and ac0211_ok and ae_pairs >= 2 and ae_match == ae_pairs,
 		"ac0211_ok": ac0211_ok,
@@ -13562,6 +13619,17 @@ func _r16_lod_far() -> Dictionary:
 		for si in range(c.data.size()):
 			if c.data[si] == null:
 				continue  # air slab — no placeholder needed
+			# AC-0331: the far-tier mesh floor — a MATERIALIZED far
+			# column's data covers the full column (the fill identity),
+			# but the slabs entirely below the floor are never built
+			# (the mat build starts at the floor slab; the low lane
+			# prunes them) — they owe nothing past the edge, so they
+			# are exempt here (not holes). The all-null branch above
+			# needs no change: a below-floor slab has no resident
+			# instance and counts nowhere (the "owes nothing past the
+			# edge" contract).
+			if c.far and si * 16 + 15 < world._far_floor_y():
+				continue
 			slabs += 1
 			# AC-0263 spec (keep-all-LOD): the ACTIVE tier counts - a
 			# stored-but-hidden high behind an active low is the flip's
@@ -14250,7 +14318,13 @@ func _ladder_band_a_tex(mc, c: Node3D) -> Dictionary:
 		ms_ref = {"rects": world._tm_ms_full.rects.duplicate(), "h": float(world._tm_ms_full.get("h", 0.0))}
 	else:
 		ms_ref = {"rects": {}}
-	var r: Dictionary = mc.build_accs(c.data, c.fl, cx, cz, nbs, ctx_ref, ms_ref, effd["light"], 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())
+	# AC-0331: the far-tier mesh floor — the mat build floors (si0 =
+	# the floor slab 7, the sub-floor rows zeroed in build_accs), so
+	# the reference mirrors the dispatch's OWN inputs: the check loop
+	# below starts at the floor slab (the sub-floor slabs have no
+	# applied mesh — apply_accs nulls out-of-range refs).
+	var yfl_l := int(Data.SEA)
+	var r: Dictionary = mc.build_accs(c.data, c.fl, cx, cz, nbs, ctx_ref, ms_ref, effd["light"], int(yfl_l / 16), -1, 0, Lighting._att, Lighting._glow, PackedByteArray(), yfl_l)
 	var si0: int = int(r.get("si0", 0))
 	var si1: int = int(r.get("si1", 0))
 	var want_h := int(world._tm_ms_full.get("h", 0)) if not world._tm_ms_full.rects.is_empty() else (int(Data.atlas_tex.get_image().get_height()) if Data.atlas_tex != null and Data.atlas_tex.get_image() != null else 0)
@@ -14410,11 +14484,29 @@ func _ladder_test(spawn: Vector3) -> void:
 			for i in range(256):
 				var hv := int(c.far_h[2 * i]) | (int(c.far_h[2 * i + 1]) << 8)
 				hmax = maxi(hmax, hv)
+			# AC-0331: the floor — a deep-ocean band-A column (terrain
+			# top H < the floor slab's lo) now has NO OPAQUE mesh (the
+			# sub-floor rock is pruned with slabs 0..6) — its visible
+			# geometry is the WATER SURFACE as a FLUID instance (the
+			# water voxel at the floor row — build_accs routes id 5 to
+			# the fluid acc, never the opaque one). Count the fluid
+			# instances too, else the arm's "the column shows nothing"
+			# test false-negatives on exactly the floor's new class of
+			# column (the pre-floor pass rode on the pruned terrain).
 			var has_mesh := false
+			var fluid_only := false
 			for s in c.slabs:
 				if s != null and s.mesh_instance != null:
 					has_mesh = true
 					break
+			if not has_mesh:
+				for s in c.slabs:
+					if s != null and s.fluid_instance != null and int(s.fluid_instance.mesh.get_surface_count() if s.fluid_instance.mesh != null else 0) > 0:
+						has_mesh = true
+						fluid_only = true
+						break
+			if fluid_only:
+				res["band_a_fluid_only_cols"] = int(res.get("band_a_fluid_only_cols", 0)) + 1
 			# the payload heightmap (256 x u16 LE) — feeds the fill
 			# identity below + the eff rule.
 			var Hh: Array = []
@@ -14573,12 +14665,14 @@ func _ladder_test(spawn: Vector3) -> void:
 	if first_b != null and first_b_si >= 0:
 		var ta := Time.get_ticks_usec()
 		var vegb: PackedByteArray = WorldGen.gen_cpp().veg_cells(int(first_b.cx), int(first_b.cz), int(Game.world_seed), H, int(Data.SEA))
-		mc.h_avg_emit(first_b.far_h, first_b.far_biome, first_b.far_top, PackedByteArray(), vegb, first_b_si, 8, world._lod_fcc_get(), PackedByteArray(), int(Data.SEA), H)
+		# AC-0331: the floor arg (the worker's real call floors).
+		mc.h_avg_emit(first_b.far_h, first_b.far_biome, first_b.far_top, PackedByteArray(), vegb, first_b_si, 8, world._lod_fcc_get(), PackedByteArray(), int(Data.SEA), H, -1, -1, 0.0, int(Data.SEA))
 		res["emit_cpp_b_ms"] = (Time.get_ticks_usec() - ta) / 1000.0
 	if first_c != null and first_c_si >= 0:
 		var tb := Time.get_ticks_usec()
 		var vegc: PackedByteArray = WorldGen.gen_cpp().veg_cells(int(first_c.cx), int(first_c.cz), int(Game.world_seed), H, int(Data.SEA))
-		mc.h_avg_emit(first_c.far_h, first_c.far_biome, first_c.far_top, PackedByteArray(), vegc, first_c_si, 4, world._lod_fcc_get(), PackedByteArray(), int(Data.SEA), H)
+		# AC-0331: the floor arg (the worker's real call floors).
+		mc.h_avg_emit(first_c.far_h, first_c.far_biome, first_c.far_top, PackedByteArray(), vegc, first_c_si, 4, world._lod_fcc_get(), PackedByteArray(), int(Data.SEA), H, -1, -1, 0.0, int(Data.SEA))
 		res["emit_cpp_c_ms"] = (Time.get_ticks_usec() - tb) / 1000.0
 	res["lod_fcc_build_ms"] = float(world.lod_fcc_build_ms)
 	# (a)+(b) the zone assertions: band A fully materialized + eff-true;

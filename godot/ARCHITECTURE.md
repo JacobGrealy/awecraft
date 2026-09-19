@@ -96,7 +96,7 @@ quits.
 |---|---|
 | `awe_common.{h,cpp}` | shared helpers/registration |
 | `gen.cpp` | terrain, biome, cave and ore generation (the density-field generator); `generate_resl`'s `skip` arg: 0 = full / 1 = **band-A materialization fill** (no cave field, solid 0..H + aquifer + surface top + veg — the drain's high lane runs it on each band-A column's first mesh, AC-0312) / 2 = **far h-only** (AC-0284b: builds only the 3 surface fields + H/biome/top-block, NO slabs, ~92 µs/col vs ~1.7 ms full) |
-| `mesh.cpp` | chunk meshing (greedy/FACE-BLOCK path); the avg far emitters `AweMesh.h_avg_emit` / `low_emit_avg` at a grid G (4 or 8 — AC-0312's band C / band B), byte-identical to the slab emitter on the same fill (shared `avg_grid_emit`), with the WATER EXCEPTION (a water-topped cell emits its top face with the translucent water material — `top_water` + atlas-rect params) and the `AweMesh.sky_eff` heightmap-sky light/strips builder (band A + the G-grid avg lanes) |
+| `mesh.cpp` | chunk meshing (greedy/FACE-BLOCK path); the avg far emitters `AweMesh.h_avg_emit` / `low_emit_avg` at a grid G (4 or 8 — AC-0312's band C / band B), byte-identical to the slab emitter on the same fill (shared `avg_grid_emit`), with the WATER EXCEPTION (a water-topped cell emits its top face with the translucent water material — `top_water` + atlas-rect params) and the `AweMesh.sky_eff` heightmap-sky light/strips builder (band A + the G-grid avg lanes); the far-tier floor (AC-0331) as a `p_yfloor` param on all three (−1 = off): a post-fill mask in the shared `avg_grid_emit` tail (avg tiers) + the per-voxel row gate + si0 in `build_accs` (band A) — the fill loops and the float32 op order are untouched |
 | `strips.cpp` | strip meshing lane |
 | `chunk_io.cpp` | column/slab blob encode+decode, region disk I/O |
 | `lighting.cpp` | **test-only reference**: the legacy `AweLighting` flood kernel (AC-0283 P4) |
@@ -210,6 +210,34 @@ Match these; do not improvise a different approach in a task.
   multi-thousand-deep build backlog. Permanent counters: `star_seed_count/us`,
   `promo_enq_count`, `promo_land_count/ms`, `star_late_landings_promo` (expect 0 — the
   retain-swap never HIDEs), `hslab_defer_settle`.
+  **AC-0331 — the far-tier FLOOR** (`p_yfloor`, hard-coded at `Data.SEA` = 126 today;
+  the setting/knob is AC-0332's): the sub-waterline world of FAR columns is genuinely
+  REMOVED — the far draw tiers draw only the world above the floor, and nothing changes
+  from above (the water surface is bit-identical). Semantics (decided O3): a grid CELL
+  is kept iff its topmost world-y > floor, kept WHOLE (sub-floor content inside a kept
+  cell still counts in the solid test and the color); cells entirely below the floor are
+  zeroed. The floor NEVER applies to the real band (tier 0 — `yfloor` stays −1). Three
+  implementation points: (1) **avg tiers (bands B/C)** — the shared tail `avg_grid_emit`
+  applies a post-fill mask over its 3-slab grid window (rows whose cell top ≤ floor are
+  zeroed; at G=8 126 is a cell boundary, at G=4 the 124–127 cell is kept whole — the
+  documented 2-block coarse cap); the fill loops and the float32 op order are untouched,
+  so the byte-identity gate holds on the floor path (farab runs both emits at
+  `yfloor=Data.SEA`); (2) **band A** — a per-voxel row gate inside `build_accs` (dflat/
+  fflat rows below the floor zeroed per slab, in place) + the mat dispatch starts at the
+  floor slab (si0 = floor/16; slabs 0..6 never mesh, `apply_accs` nulls their refs); the
+  waterline row survives, so the water surface (the water-topped face in the translucent
+  water material) is emitted as usual, and the CAP is the natural −Y face of the first
+  kept voxel — no explicit cap code (for a water column that is the fluid's bottom face;
+  the deep-ocean class is then fluid-only: no opaque mesh at all — the ladder's
+  `band_a_fluid_only_cols`); (3) **the probes** — the far-column low-lane probes skip
+  slabs entirely below the floor (`si*16+15 < floor`) so pruned slabs never re-dispatch;
+  the mat handoff stamps 0..si1 unconditionally as before, so stamped-but-never-meshed
+  slabs read done to the visibility-flip bookkeeping. `chunk.far_eff` (the cached sky
+  eff) is floor-aware and stable while the floor is fixed — AC-0332 MUST invalidate it
+  on a floor change. Cost: the low-lane dispatch census drops ~25% (r16 `low_enqueue_n`
+  47847 → 36057) and the far slab censuses shrink accordingly (ladder band B 519 → 155,
+  band C 318 → 94). Honest caveat: submerged INSIDE a far column below the floor you see
+  the cap (water at 126 / the coarse 4×4 at 124), not the real ocean floor.
 - **The cave field (the single density field, AC-0215 / tuned at AC-0288 / P1 tunnels at
   AC-0289)**: caves are wherever the ONE density field reads solid→air,
   `d = S_ramp((H−y)/R) + A(y)·(C−0.5)` — the surface AND the caves come from the same

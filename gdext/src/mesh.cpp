@@ -1879,12 +1879,12 @@ static Dictionary low_emit_impl(const Array &p_slabs, int si, const Dictionary &
 // surface (the real translucent water material's quad count, one 31-px
 // tile per G-block).
 static Dictionary avg_grid_emit(int G, float CELL, int si, int nsl,
-		const uint8_t grids_solid[3][512], const float grids_cols[3][512 * 18],
-		const bool ghave[3], const uint8_t *top_water,
+		uint8_t grids_solid[3][512], const float grids_cols[3][512 * 18],
+		const bool ghave[3], uint8_t *top_water,
 		const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky,
-		int wtlx, int wtly, float w_atlas_px);
+		int wtlx, int wtly, float w_atlas_px, int p_yfloor);
 
-static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky, int p_wtlx, int p_wtly, float p_w_atlas_px) {
+static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky, int p_wtlx, int p_wtly, float p_w_atlas_px, int p_yfloor) {
 	Dictionary res;
 	const int G = (p_grid == 4) ? 4 : 8;
 	const int CELLB = 16 / G;
@@ -2086,7 +2086,7 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 		}
 		ghave[t] = true;
 	}
-	return avg_grid_emit(G, CELL, si, nsl, grids_solid, grids_cols, ghave, top_water, p_fcc, p_sky, p_wtlx, p_wtly, p_w_atlas_px);
+	return avg_grid_emit(G, CELL, si, nsl, grids_solid, grids_cols, ghave, top_water, p_fcc, p_sky, p_wtlx, p_wtly, p_w_atlas_px, p_yfloor);
 }
 
 // ---------------------------------------------------------------------------
@@ -2100,14 +2100,52 @@ static Dictionary low_emit_avg_impl(const Array &p_slabs, int si, int p_grid, co
 // ---------------------------------------------------------------------------
 
 static Dictionary avg_grid_emit(int G, float CELL, int si, int nsl,
-		const uint8_t grids_solid[3][512], const float grids_cols[3][512 * 18],
-		const bool ghave[3], const uint8_t *top_water,
+		uint8_t grids_solid[3][512], const float grids_cols[3][512 * 18],
+		const bool ghave[3], uint8_t *top_water,
 		const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky,
-		int wtlx, int wtly, float w_atlas_px) {
+		int wtlx, int wtly, float w_atlas_px, int p_yfloor) {
 	Dictionary res;
 	const float *fcc = p_fcc.ptr();
 	const uint8_t *skyp = p_sky.ptr();
 	bool sky_ok = p_sky.size() == (int)(G * G * G);
+	// AC-0331: the far-tier mesh FLOOR (the production callers pass
+	// Data.SEA = 126; p_yfloor < 0 = off, byte-identical to the
+	// pre-floor call). A grid CELL is KEPT iff its TOPMOST world y is
+	// > p_yfloor — a cell entirely below the floor is zeroed out of
+	// the solid masks (and the water-surface flag), a cell that
+	// STRADDLES the floor is kept WHOLE (its below-floor sub-cells
+	// already counted in the fill loop's >half-air solid test + color).
+	// The gate is this single post-fill mask in the SHARED tail — the
+	// fill loops above are untouched, so the two emitters' byte
+	// identity (the farab gate) and the float32 op order (the
+	// bit-exactness contract) hold by construction. The face scan
+	// below then reads the masked grids: it bounds itself to the
+	// post-floor cell range (no face bounds the removed region), and
+	// the bottommost kept cell's -Y face IS the opaque cap at the
+	// floor (world y 126 at G=8 — the cut lands on the cell
+	// boundary; at G=4 the containing cell spans 124-127, so the cap
+	// sits at 124 — the tier's own 4-block granularity).
+	if (p_yfloor >= 0) {
+		const int CELLB = 16 / G;
+		for (int t = 0; t < 3; t++) {
+			int s_t = si + (t - 1);
+			if (s_t < 0 || s_t >= nsl)
+				continue; // the grid is all-zero (absent slab)
+			int y0t = s_t * 16;
+			for (int cy = 0; cy < G; cy++) {
+				if (y0t + (cy + 1) * CELLB - 1 > p_yfloor)
+					continue; // the cell's top is above the floor
+				for (int i = 0; i < G * G; i++)
+					grids_solid[t][cy * G * G + i] = 0;
+			}
+		}
+		for (int cy = 0; cy < G; cy++) {
+			if (si * 16 + (cy + 1) * CELLB - 1 > p_yfloor)
+				continue;
+			for (int i = 0; i < G * G; i++)
+				top_water[cy * G * G + i] = 0;
+		}
+	}
 	bool any = false;
 	for (int i = 0; i < G * G * G; i++) {
 		if (grids_solid[1][i] != 0) {
@@ -2439,7 +2477,7 @@ constexpr int FAR_B_STONE = 3;
 static Dictionary h_avg_emit_impl(const PackedByteArray &p_h, const PackedByteArray &p_bm,
 		const PackedByteArray &p_top, const PackedByteArray &p_ore, const PackedByteArray &p_veg,
 		int si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky, int p_sea, int p_hmax,
-		int p_wtlx, int p_wtly, float p_w_atlas_px) {
+		int p_wtlx, int p_wtly, float p_w_atlas_px, int p_yfloor) {
 	Dictionary res;
 	if (p_h.size() != 512 || p_bm.size() != 256 || p_top.size() != 256) {
 		res["empty"] = true; // malformed payload — fail as all-air
@@ -2600,7 +2638,7 @@ static Dictionary h_avg_emit_impl(const PackedByteArray &p_h, const PackedByteAr
 		}
 		ghave[t] = true;
 	}
-	return avg_grid_emit(G, CELL, si, nsl, grids_solid, grids_cols, ghave, top_water, p_fcc, p_sky, p_wtlx, p_wtly, p_w_atlas_px);
+	return avg_grid_emit(G, CELL, si, nsl, grids_solid, grids_cols, ghave, top_water, p_fcc, p_sky, p_wtlx, p_wtly, p_w_atlas_px, p_yfloor);
 }
 
 // The registered class.
@@ -2611,7 +2649,9 @@ public:
 	static void _bind_methods() {
 		// AC-0234: "mask" = the vertical-window keep mask (24 bytes;
 		// empty = build every slab — the pre-AC-0234 behavior).
-		ClassDB::bind_method(D_METHOD("build_accs", "data", "fl", "cx", "cz", "nbs", "ctx", "ms", "eff", "si0", "si1", "d_off", "att", "glow", "mask"), &AweMesh::build_accs);
+		// AC-0331: yfloor (DEFVAL(-1) = off) — the far-tier mesh floor
+		// for the band-A materialization (see build_accs' row gate).
+		ClassDB::bind_method(D_METHOD("build_accs", "data", "fl", "cx", "cz", "nbs", "ctx", "ms", "eff", "si0", "si1", "d_off", "att", "glow", "mask", "yfloor"), &AweMesh::build_accs, DEFVAL(-1));
 		// AC-0211: the surrounding-step ports (dispatch snapshot + sync
 		// snap + stale-check rows) — same class, same .so.
 		// AC-0284b: far/sea = the neighbor's far payload (1024 bytes = the
@@ -2629,7 +2669,11 @@ public:
 		ClassDB::bind_method(D_METHOD("low_emit", "slabs", "si", "ms"), &AweMesh::low_emit);
 		// AC-0283 P3: the optional 5th arg = the halo band's per-cell
 		// heightmap sky (empty = the legacy all-bright avg emit).
-		ClassDB::bind_method(D_METHOD("low_emit_avg", "slabs", "si", "grid", "fcc", "sky", "wtlx", "wtly", "w_atlas_px"), &AweMesh::low_emit_avg, DEFVAL(PackedByteArray()), DEFVAL(-1), DEFVAL(-1), DEFVAL(0.0));
+		// AC-0331: yfloor = the far-tier mesh floor (world y; the
+		// production callers pass Data.SEA = 126; -1 = off, byte-identical
+		// to the pre-floor call — the grid cells entirely below it are
+		// air, the straddling cell is kept whole, see avg_grid_emit).
+		ClassDB::bind_method(D_METHOD("low_emit_avg", "slabs", "si", "grid", "fcc", "sky", "wtlx", "wtly", "w_atlas_px", "yfloor"), &AweMesh::low_emit_avg, DEFVAL(PackedByteArray()), DEFVAL(-1), DEFVAL(-1), DEFVAL(0.0), DEFVAL(-1));
 		// AC-0284b: the far (h-only) column's avg emit — the H-driven
 		// halo emitter (see h_avg_emit_impl for the full contract).
 		// h/bm/top = the far payload (512/256/256 bytes); ore = the
@@ -2642,7 +2686,10 @@ public:
 		// tile's top-left rect in px, w_atlas_px = the atlas width in
 		// px; wtlx < 0 = the exception off — byte-identical to the
 		// pre-AC-0312 call).
-		ClassDB::bind_method(D_METHOD("h_avg_emit", "h", "bm", "top", "ore", "veg", "si", "grid", "fcc", "sky", "sea", "hmax", "wtlx", "wtly", "w_atlas_px"), &AweMesh::h_avg_emit, DEFVAL(-1), DEFVAL(-1), DEFVAL(0.0));
+		// AC-0331: yfloor = the far-tier mesh floor (same contract as
+		// low_emit_avg's — the farab identity holds because both go
+		// through the same shared-tail mask).
+		ClassDB::bind_method(D_METHOD("h_avg_emit", "h", "bm", "top", "ore", "veg", "si", "grid", "fcc", "sky", "sea", "hmax", "wtlx", "wtly", "w_atlas_px", "yfloor"), &AweMesh::h_avg_emit, DEFVAL(-1), DEFVAL(-1), DEFVAL(0.0), DEFVAL(-1));
 		// AC-0312: the band-A synthetic cached eff (the heightmap sky as
 		// the classic light dict + the 8 clamped-H margin strips).
 		ClassDB::bind_method(D_METHOD("sky_eff", "cx", "cz", "h", "hgt"), &AweMesh::sky_eff);
@@ -2665,15 +2712,15 @@ public:
 	// AC-0312: wtlx/wtly/w_atlas_px = the water-exception params (the
 	// water tile's top-left px rect + the atlas width in px; wtlx < 0 =
 	// off — byte-identical to the pre-AC-0312 call).
-	Dictionary low_emit_avg(const Array &p_slabs, int p_si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky, int p_wtlx, int p_wtly, double p_w_atlas_px) {
-		return low_emit_avg_impl(p_slabs, p_si, p_grid, p_fcc, p_sky, p_wtlx, p_wtly, (float)p_w_atlas_px);
+	Dictionary low_emit_avg(const Array &p_slabs, int p_si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky, int p_wtlx, int p_wtly, double p_w_atlas_px, int p_yfloor) {
+		return low_emit_avg_impl(p_slabs, p_si, p_grid, p_fcc, p_sky, p_wtlx, p_wtly, (float)p_w_atlas_px, p_yfloor);
 	}
 
 	// AC-0284b: the far (h-only) column's avg emit (see h_avg_emit_impl
 	// above). Returns the SAME shape as low_emit_avg ({empty} or
 	// {v,n,c,i,mh}) — the low lane attaches it unchanged.
-	Dictionary h_avg_emit(const PackedByteArray &p_h, const PackedByteArray &p_bm, const PackedByteArray &p_top, const PackedByteArray &p_ore, const PackedByteArray &p_veg, int p_si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky, int p_sea, int p_hmax, int p_wtlx, int p_wtly, double p_w_atlas_px) {
-		return h_avg_emit_impl(p_h, p_bm, p_top, p_ore, p_veg, p_si, p_grid, p_fcc, p_sky, p_sea, p_hmax, p_wtlx, p_wtly, (float)p_w_atlas_px);
+	Dictionary h_avg_emit(const PackedByteArray &p_h, const PackedByteArray &p_bm, const PackedByteArray &p_top, const PackedByteArray &p_ore, const PackedByteArray &p_veg, int p_si, int p_grid, const PackedFloat32Array &p_fcc, const PackedByteArray &p_sky, int p_sea, int p_hmax, int p_wtlx, int p_wtly, double p_w_atlas_px, int p_yfloor) {
+		return h_avg_emit_impl(p_h, p_bm, p_top, p_ore, p_veg, p_si, p_grid, p_fcc, p_sky, p_sea, p_hmax, p_wtlx, p_wtly, (float)p_w_atlas_px, p_yfloor);
 	}
 
 	// AC-0312: the band-A synthetic cached eff — the heightmap sky as the
@@ -2685,6 +2732,12 @@ public:
 	// below; a margin column reads the sky through the column's own
 	// surface (its x/z clamped to the edge — the band-A "no caves,
 	// sky-only light" contract, the halo band's heightmap sky at 16x).
+	// AC-0331: FLOOR-AWARE BY CONSTRUCTION — the dict is FULL HEIGHT
+	// (arr = 256*h, h = Data.HEIGHT = 384; the strips 2*16*h / 4*h), so
+	// the AC-0331 cap face at the far-tier floor (y = Data.SEA = 126,
+	// the -Y face of the floor row) reads the SAME rule: lit 15 on an
+	// ocean column (H < 126 — the cap floats in light), dark 0 on a
+	// land column (H >= 126 — the cap is buried) — no change needed.
 	Dictionary sky_eff(int p_cx, int p_cz, const PackedByteArray &p_h, int p_hgt) {
 		Dictionary r;
 		if (p_h.size() != 512) {
@@ -2767,7 +2820,7 @@ public:
 	// through the shared C++ pull kernel); att/glow = the pre-warmed
 	// Lighting._att/_glow tables. Returns the SAME shape as the GDScript:
 	// {slabs, light, light_recomputed, wms, si0, si1, nq, ns, phet, ph}.
-	Dictionary build_accs(const Array &data, const Array &fl, int cx, int cz, const Dictionary &nbs, const Dictionary &ctx, const Dictionary &ms, const Dictionary &eff, int p_si0, int p_si1, int p_d_off, const PackedByteArray &p_att, const PackedByteArray &p_glow, const PackedByteArray &p_mask) {
+	Dictionary build_accs(const Array &data, const Array &fl, int cx, int cz, const Dictionary &nbs, const Dictionary &ctx, const Dictionary &ms, const Dictionary &eff, int p_si0, int p_si1, int p_d_off, const PackedByteArray &p_att, const PackedByteArray &p_glow, const PackedByteArray &p_mask, int p_yfloor) {
 		(void)p_d_off; // retained for signature stability (AC-0203)
 		int64_t t0 = now_msec();
 		int64_t ph_light = 0;
@@ -2808,6 +2861,30 @@ public:
 		parse_slab_srcs(fl, fsrc, fflat);
 		dsrc.resize(slab_n);
 		fsrc.resize(slab_n);
+		// AC-0331: the far-tier mesh FLOOR for the band-A
+		// materialization (p_yfloor < 0 = off — byte-identical to the
+		// pre-floor build; the real band never floors — caves and
+		// sub-floor digging survive there). The band-A grid cell is
+		// the whole 16-cell slab and DOES straddle the floor, so this
+		// tier gates per VOXEL: the slab rows entirely below the
+		// floor are air. The waterline row (y == p_yfloor, the
+		// aquifer top) STAYS — the band-A water surface (the
+		// translucent +Y face of the floor voxel) and the opaque cap
+		// (the -Y face of that same row, exactly at the floor) ride
+		// on it. The snap bake, the ro face walk and the neighbor
+		// culling all read the zeroed rows (id 0 = air); the stale
+		// nz counts over-count only (a fully-zeroed slab just scans
+		// as air and stamps empty — the all-air early-out is the
+		// only nz consumer and it fires on == 0).
+		if (p_yfloor >= 0) {
+			for (int si = 0; si < (int)dflat.size(); si++) {
+				int cut = std::clamp(p_yfloor - si * 16, 0, 16); // rows y < p_yfloor
+				if (cut > 0 && !dflat[si].empty())
+					memset(dflat[si].data(), 0, (size_t)cut * 256);
+				if (cut > 0 && !fflat[si].empty())
+					memset(fflat[si].data(), 0, (size_t)cut * 256);
+			}
+		}
 		Nv nv;
 		parse_nbs(nbs, nv);
 
