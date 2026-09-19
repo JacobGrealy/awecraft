@@ -210,21 +210,36 @@ Match these; do not improvise a different approach in a task.
   multi-thousand-deep build backlog. Permanent counters: `star_seed_count/us`,
   `promo_enq_count`, `promo_land_count/ms`, `star_late_landings_promo` (expect 0 — the
   retain-swap never HIDEs), `hslab_defer_settle`.
-- **The cave field (the single density field, AC-0215 / tuned at AC-0288)**: caves are
-  wherever the ONE density field reads solid→air, `d = S_ramp((H−y)/R) + A(y)·(C−0.5)` —
-  the surface AND the caves come from the same field, and the heightmap H (surface_h of
-  the 3 coarse SURFACE fields) is structurally independent of the cave field: cave tuning
-  MUST NOT touch f_sc/f_sh/f_sr or SEA (the far-band H bit-exactness + promotion contract).
-  AC-0288 established the P0 parameterisation (the cave-series baseline, AC-0288…0292):
-  **C = C1 + 0.30·(C2−0.5)** with C1 = `fbm3(x/14, y/10, z/14, seed+301, 3 oct)` (primary)
-  and C2 = `fbm3(x/8, y/10, z/8, seed+302, 2 oct)` (detail octave — centered before
-  blending so the field mean stays 0.5 and the surface-band budget is unchanged);
-  **CAVE_AMP 1.8** is the largest value that keeps the "air for sure above H+R+1" invariant
-  (measured margin 1.8·max(C−0.5) = 0.948 < 1 — a 2.0 bump would be 1.054 and break it);
-  **DEEP_GROW 6** (cave amplitude grows with depth — the deep fattens sooner); R_BAND 10.
-  The dense source function is `AweGen::density_cave`; the genprobe arm mirrors that exact
-  expression in GDScript (the lockstep contract — a parameter change updates both sides in
-  the same task).
+- **The cave field (the single density field, AC-0215 / tuned at AC-0288 / P1 tunnels at
+  AC-0289)**: caves are wherever the ONE density field reads solid→air,
+  `d = S_ramp((H−y)/R) + A(y)·(C−0.5)` — the surface AND the caves come from the same
+  field, and the heightmap H (surface_h of the 3 coarse SURFACE fields) is structurally
+  independent of the cave field: cave tuning MUST NOT touch f_sc/f_sh/f_sr or SEA (the
+  far-band H bit-exactness + promotion contract). AC-0288 established the P0 parameterisation
+  (the cave-series baseline, AC-0288…0292): **C = C1 + 0.30·(C2−0.5)** with
+  C1 = `fbm3(x/14, y/10, z/14, seed+301, 3 oct)` (primary) and C2 = `fbm3(x/8, y/10, z/8,
+  seed+302, 2 oct)` (detail octave — centered before blending so the field mean stays 0.5
+  and the surface-band budget is unchanged); **CAVE_AMP 1.8** is the largest value that keeps
+  the "air for sure above H+R+1" invariant (measured margin 1.8·max(C−0.5) = 0.948 < 1 — a
+  2.0 bump would be 1.054 and break it); **DEEP_GROW 6** (cave amplitude grows with depth —
+  the deep fattens sooner); R_BAND 10. AC-0289 (cave P1) added the **tunnel (edge-density)
+  structure** on top of the same one field: two more coarse fields —
+  **f_spag** = `fbm3(x/14, y/10, z/14, seed+303, 2 oct)` (spaghetti, the wide tagliatelle,
+  1.0× the primary xz scale) and **f_nood** = `fbm3(x/10.5, y/10, z/10.5, seed+304, 2 oct)`
+  (noodle, the 1–5-wide wormholes, 0.75× the primary xz scale) — plus the **rarity gate**
+  **f_gate** = `fbm3(x/56, y/10, z/56, seed+305, 2 oct)` (low-frequency 3D patchiness:
+  tunnels appear in patches, the AweCraft stand-in for Bedrock's spaghetti_3d_rarity). Tunnel
+  air wins over cheese solid where `|f_spag−0.5| < 0.16·w` or `|f_nood−0.5| < 0.08·w` with
+  `w = clamp01((f_gate−0.52)/0.06)` (the thickness scales with the gate weight — the tunnel
+  pinches out at the patch edge); the rule runs BEFORE the he/solidf scan's solid flag and
+  identically in the veg margin scan, so the tree base matches the full column. The tunnel
+  fields are built and read ONLY on the full path (skip==0) — the lazy skip fill and the far
+  h-only payload never read them, so the H / far / promotion contracts stay bit-exact by
+  construction (a tunnel breaking the surface only wobbles the EFFECTIVE surface, inside the
+  documented H±R band, like the cheese term). The dense source functions are
+  `AweGen::density_cave` (P0) and `AweGen::density_spag / density_nood / density_gate /
+  tunnel_air` (P1); the genprobe arm mirrors those exact expressions in GDScript (the
+  lockstep contract — a parameter change updates both sides in the same task).
 - **Edits on far / data-less columns (AC-0325)**: the flat write path has **no silent
   no-op**. `World.set_block` returns a bool and, when the target column holds no slabs
   (`data` empty — a node-only chunk that can sit data-less indefinitely since AC-0263's

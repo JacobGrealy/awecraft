@@ -20682,7 +20682,10 @@ func _slabops_test(spawn: Vector3) -> void:
 # fade, vnoise2/vnoise3, fbm2/fbm3 at deterministic random points (seeded
 # RNG — reproducible), plus the cave-density wiring (density_cave must equal
 # the exact coarse-field source function — AC-0288: the two-octave blend,
-# see the cave block below). Exact = f64 equality.
+# see the cave block below) and the tunnel-field wiring (density_spag /
+# density_nood / density_gate / tunnel_air — AC-0289: the three P1 dense
+# sources + the edge-density predicate, see the tunnel block below).
+# Exact = f64 equality.
 func _genprobe_test() -> void:
 	var res := {
 		"ok": false,
@@ -20698,6 +20701,7 @@ func _genprobe_test() -> void:
 		"hash3i": {"n": 0, "exact": 0},
 		"fade": {"n": 0, "exact": 0},
 		"cave": {"n": 0, "exact": 0},
+		"tunnel": {"n": 0, "exact": 0},
 	}
 	if not res["cpp_registered"]:
 		Debug.result(res)
@@ -20772,6 +20776,31 @@ func _genprobe_test() -> void:
 		var c1 := AweNoise.fbm3(x / 14.0, y / 10.0, z / 14.0, s + 301, 3)
 		var c2 := AweNoise.fbm3(x / 8.0, y / 10.0, z / 8.0, s + 302, 2)
 		cmp.call("cave", c1 + 0.3 * (c2 - 0.5), G.density_cave(x, y, z, s))
+	for i in 300:
+		# AC-0289: the tunnel-field wiring — the three dense sources + the
+		# edge-density predicate. Mirrors AweGen::density_spag / density_nood /
+		# density_gate / tunnel_air in gen.cpp exactly (the tunnel lockstep
+		# contract — the constants SPAG_XZ 14 / NOOD_XZ 10.5 / GATE_XZ 56,
+		# SPAG_TH 0.16 / NOOD_TH 0.08 / GATE_LO 0.52 / GATE_HI 0.58).
+		var x := rng.randf_range(-1024.0, 1024.0)
+		var y := rng.randf_range(0.0, 384.0)
+		var z := rng.randf_range(-1024.0, 1024.0)
+		var s := rng.randi_range(-200, 200)
+		var sp := AweNoise.fbm3(x / 14.0, y / 10.0, z / 14.0, s + 303, 2)
+		var nd := AweNoise.fbm3(x / 10.5, y / 10.0, z / 10.5, s + 304, 2)
+		var gt := AweNoise.fbm3(x / 56.0, y / 10.0, z / 56.0, s + 305, 2)
+		cmp.call("tunnel", sp, G.density_spag(x, y, z, s))
+		cmp.call("tunnel", nd, G.density_nood(x, y, z, s))
+		cmp.call("tunnel", gt, G.density_gate(x, y, z, s))
+		var wv := clampf((gt - 0.52) / (0.58 - 0.52), 0.0, 1.0)
+		var dsp := sp - 0.5
+		if dsp < 0.0:
+			dsp = -dsp
+		var dnd := nd - 0.5
+		if dnd < 0.0:
+			dnd = -dnd
+		var ta := (wv > 0.0) and (dsp < 0.16 * wv or dnd < 0.08 * wv)
+		cmp.call("tunnel", float(ta), float(G.tunnel_air(x, y, z, s)))
 	var tot := int(res["n"])
 	res["match_rate"] = float(int(res["exact"])) / float(tot) if tot > 0 else 0.0
 	res["ok"] = int(res["exact"]) == tot and tot > 0

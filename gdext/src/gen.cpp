@@ -22,6 +22,33 @@
 //            The old AC-0215 field was fbm3(gx/16, gy/10, gz/16, seed+301,
 //            2). The detail octave is CENTERED before blending, so the mean
 //            stays 0.5 and the surface-band budget is unchanged.
+//
+//   AC-0289 (cave P1, the SPAGHETTI/NOODLE TUNNELS — Bedrock-style EDGE
+//   densities blended into this one field, tasks/cave-compare §4 P1):
+//   three MORE coarse fields (same 7x9x7 lattice, 2 octaves each, built
+//   ONLY on the full path — the skip and far paths never read them, so the
+//   H / far / promotion contracts stay bit-exact by construction):
+//     f_spag = fbm3(gx/14,   gy/10, gz/14,   seed+303, 2)  (spaghetti —
+//              the wide tagliatelle; 1.0x the primary cave xz scale)
+//     f_nood = fbm3(gx/10.5, gy/10, gz/10.5, seed+304, 2)  (noodle — the
+//              1-5-wide wormholes; 0.75x the primary cave xz scale)
+//     f_gate = fbm3(gx/56,   gy/10, gz/56,   seed+305, 2)  (the RARITY
+//              SELECTOR — a low-frequency 3D patchiness: tunnels appear in
+//              patches, not world-wide; the AweCraft stand-in for Bedrock's
+//              spaghetti_3d_rarity, which picks the spaghetti scale per
+//              region)
+//   Tunnel air where the EDGE wins (the max(|noise|-threshold) test):
+//     |f_spag - 0.5| < SPAG_TH * w  or  |f_nood - 0.5| < NOOD_TH * w
+//   with w = clamp01((f_gate - GATE_LO)/(GATE_HI - GATE_LO)) — the
+//   thickness scales with the gate weight (the tunnel pinches out at the
+//   patch edge). The rule is applied BEFORE the he/solidf scan's solid
+//   flag (a tunnel carves air even where the cheese field says solid) and
+//   identically in the veg margin scan (the tree base matches the full
+//   column). The heightmap H (surface_h of the 3 SURFACE fields) is
+//   untouched — a tunnel breaking the surface only wobbles the EFFECTIVE
+//   surface (he), inside the documented H+/-R band, exactly like the
+//   cheese term already does. The H+R+1 scan-start "air for sure" margin
+//   is preserved (the tunnel only removes solidity).
 //   A(y) = 1.8 * (1 + max(0, H - y - R) / DEEP_GROW): the cave amplitude.
 //            1.8 in the surface band (the surface wobbles +/-~9 with the
 //            cave noise and caves break through it), growing with depth
@@ -258,6 +285,16 @@ constexpr double DEEP_GROW = 6.0; // cave-amplitude growth scale with depth.
 // AC-0288: the second (detail) cave octave's blend weight — C = C1 +
 // CAVE_W2 * (C2 - 0.5) (see the file header; genprobe mirrors it).
 constexpr double CAVE_W2 = 0.30;
+// AC-0289 (cave P1): the spaghetti/noodle tunnel fields — EDGE densities
+// (see the file header). The xz scales are the primary cave field's 14
+// times the family's relative scale (spaghetti 1.0x, noodle 0.75x).
+constexpr double SPAG_XZ = 14.0;  // the spaghetti xz scale (1.0x primary)
+constexpr double NOOD_XZ = 10.5;  // the noodle xz scale (0.75x primary)
+constexpr double GATE_XZ = 56.0;  // the rarity selector's patch scale
+constexpr double SPAG_TH = 0.16;  // the spaghetti half-thickness (|S-0.5|)
+constexpr double NOOD_TH = 0.08;  // the noodle half-thickness (1-5 wide)
+constexpr double GATE_LO = 0.52;  // the rarity gate window (the fbm3 mean
+constexpr double GATE_HI = 0.58;  // is 0.5 — tunnels patchy, not world-wide)
 constexpr double SURF_YSCALE = 64.0; // 3D surface-field y-scale (slow).
 constexpr int GY_CELLS = 8;        // 4x8x4 cells -> 8 y-cells of h/8.
 
@@ -400,6 +437,40 @@ static inline double cave_amp(int H, int y) {
 // expression on the GDScript side).
 static inline double cave_blend(double c1, double c2) {
 	return c1 + CAVE_W2 * (c2 - 0.5);
+}
+
+// AC-0289: the rarity gate weight — 0 outside the tunnel patches, 1 at
+// their core, linear in between (the patch edge). The production path
+// reads the coarse f_gate trilinearly; AweGen::tunnel_air is the dense
+// source of the same predicate (the genprobe lockstep).
+static inline double gate_weight(double g) {
+	double w = (g - GATE_LO) / (GATE_HI - GATE_LO);
+	if (w < 0.0)
+		return 0.0;
+	if (w > 1.0)
+		return 1.0;
+	return w;
+}
+
+// AC-0289: the TUNNEL air predicate — true where an edge density wins
+// over the cheese (a tunnel carves air even where dens_at says solid).
+// Called at every scan point of the full-path scan (before the solid
+// flag) and identically in the veg margin scan; the skip/far paths never
+// call it (no tunnel fields are built there — the H contract).
+static inline bool tunnel_air(const Field &f_spag, const Field &f_nood, const Field &f_gate,
+		double gx, double gy, double gz) {
+	double w = gate_weight(tril(f_gate, gx, gy, gz));
+	if (w <= 0.0)
+		return false;
+	double sp = tril(f_spag, gx, gy, gz) - 0.5;
+	if (sp < 0.0)
+		sp = -sp;
+	if (sp < SPAG_TH * w)
+		return true;
+	double nd = tril(f_nood, gx, gy, gz) - 0.5;
+	if (nd < 0.0)
+		nd = -nd;
+	return nd < NOOD_TH * w;
 }
 
 // The ONE density field at a cell (solid where > 0, air where < 0).
@@ -722,11 +793,18 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	// grid — replaces the heightmap).
 	long long t_field = now_us();
 	Field f_cave{}, f_cave2{}, f_ore1, f_ore2, f_ore3;
+	Field f_spag{}, f_nood{}, f_gate{};
 	if (!skip) {
 		// AC-0288: the cave field = the primary octave (3 oct, xz/14) +
 		// the detail octave (2 oct, xz/8) — see the file header + cave_blend.
 		build_field(f_cave, bx, bz, ystep, seed + 301, 14.0, 10.0, 14.0, 0.0, 0.0, 0.0, 3);
 		build_field(f_cave2, bx, bz, ystep, seed + 302, 8.0, 10.0, 8.0, 0.0, 0.0, 0.0);
+		// AC-0289: the P1 tunnel fields (see the file header) — FULL PATH
+		// only: skip != 0 keeps the H/far/promotion contracts bit-exact
+		// (the lazy fill and the far payload never read them).
+		build_field(f_spag, bx, bz, ystep, seed + 303, SPAG_XZ, 10.0, SPAG_XZ, 0.0, 0.0, 0.0);
+		build_field(f_nood, bx, bz, ystep, seed + 304, NOOD_XZ, 10.0, NOOD_XZ, 0.0, 0.0, 0.0);
+		build_field(f_gate, bx, bz, ystep, seed + 305, GATE_XZ, 10.0, GATE_XZ, 0.0, 0.0, 0.0);
 	}
 	build_field(f_ore1, bx, bz, ystep, seed + 77, 7.0, 7.0, 7.0, 0.0, 0.0, 0.0);
 	build_field(f_ore2, bx, bz, ystep, seed + 88, 9.0, 9.0, 9.0, 900.0, 0.0, 900.0);
@@ -804,7 +882,12 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 					double cave = cave_blend(
 							tril(f_cave, gx, (double)y / ystep, gz),
 							tril(f_cave2, gx, (double)y / ystep, gz));
-					bool s = dens_at(H, y, cave) > 0.0;
+					// AC-0289: the tunnel air wins over cheese solid — blended
+					// into d BEFORE the solid flag (the edge-density test). The
+					// tunnel only removes solidity, so the "air for sure"
+					// margin above H+R+1 holds as before.
+					bool s = dens_at(H, y, cave) > 0.0
+							&& !tunnel_air(f_spag, f_nood, f_gate, gx, (double)y / ystep, gz);
 					solidf[y] = s ? 1 : 0;
 					if (s && he < 0)
 						he = y;
@@ -910,7 +993,10 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 					double cave = cave_blend(
 							tril(f_cave, gx2, (double)y / ystep, gz2),
 							tril(f_cave2, gx2, (double)y / ystep, gz2));
-					if (dens_at(H2, y, cave) > 0.0) {
+					// AC-0289: the same tunnel rule as the in-column scan
+					// (the tree base must match the full column's surface).
+					if (dens_at(H2, y, cave) > 0.0
+							&& !tunnel_air(f_spag, f_nood, f_gate, gx2, (double)y / ystep, gz2)) {
 						hcol = y;
 						break;
 					}
@@ -1156,6 +1242,12 @@ public:
 		ClassDB::bind_method(D_METHOD("hash3i", "x", "y", "z", "s"), &AweGen::hash3i);
 		ClassDB::bind_method(D_METHOD("fade", "t"), &AweGen::fade);
 		ClassDB::bind_method(D_METHOD("density_cave", "x", "y", "z", "s"), &AweGen::density_cave);
+		// AC-0289: the tunnel field dense sources + predicate (the genprobe
+		// tunnel lockstep — see density_spag et al. above).
+		ClassDB::bind_method(D_METHOD("density_spag", "x", "y", "z", "s"), &AweGen::density_spag);
+		ClassDB::bind_method(D_METHOD("density_nood", "x", "y", "z", "s"), &AweGen::density_nood);
+		ClassDB::bind_method(D_METHOD("density_gate", "x", "y", "z", "s"), &AweGen::density_gate);
+		ClassDB::bind_method(D_METHOD("tunnel_air", "x", "y", "z", "s"), &AweGen::tunnel_air);
 		// AC-0216: the optional 6th arg `skip` (default 0 = the pre-AC-0216
 		// full density field, bit-for-bit) — the lazy offscreen-interior
 		// skip (see the file header).
@@ -1247,6 +1339,37 @@ public:
 		double c1 = awegen::fbm3(p_x / 14.0, p_y / 10.0, p_z / 14.0, p_s + 301, 3);
 		double c2 = awegen::fbm3(p_x / 8.0, p_y / 10.0, p_z / 8.0, p_s + 302, 2);
 		return c1 + CAVE_W2 * (c2 - 0.5);
+	}
+	// AC-0289: the tunnel field dense sources + the tunnel air predicate
+	// (world coordinates). The genprobe arm mirrors these exact expressions
+	// in GDScript (the tunnel lockstep contract). The production path
+	// samples the COARSE 4x8x4 fields trilinearly — the documented grid
+	// approximation of these dense sources (the same as every other field).
+	double density_spag(double p_x, double p_y, double p_z, int p_s) const {
+		return awegen::fbm3(p_x / SPAG_XZ, p_y / 10.0, p_z / SPAG_XZ, p_s + 303, 2);
+	}
+	double density_nood(double p_x, double p_y, double p_z, int p_s) const {
+		return awegen::fbm3(p_x / NOOD_XZ, p_y / 10.0, p_z / NOOD_XZ, p_s + 304, 2);
+	}
+	double density_gate(double p_x, double p_y, double p_z, int p_s) const {
+		return awegen::fbm3(p_x / GATE_XZ, p_y / 10.0, p_z / GATE_XZ, p_s + 305, 2);
+	}
+	double tunnel_air(double p_x, double p_y, double p_z, int p_s) const {
+		double w = awegen::gate_weight(
+				awegen::fbm3(p_x / GATE_XZ, p_y / 10.0, p_z / GATE_XZ, p_s + 305, 2));
+		if (w <= 0.0)
+			return 0.0;
+		double sp = awegen::fbm3(p_x / SPAG_XZ, p_y / 10.0, p_z / SPAG_XZ, p_s + 303, 2) - 0.5;
+		if (sp < 0.0)
+			sp = -sp;
+		if (sp < SPAG_TH * w)
+			return 1.0;
+		double nd = awegen::fbm3(p_x / NOOD_XZ, p_y / 10.0, p_z / NOOD_XZ, p_s + 304, 2) - 0.5;
+		if (nd < 0.0)
+			nd = -nd;
+		if (nd < NOOD_TH * w)
+			return 1.0;
+		return 0.0;
 	}
 
 	// AC-0216: p_skip != 0 = the lazy offscreen-interior path (the 150-pt
