@@ -210,6 +210,21 @@ Match these; do not improvise a different approach in a task.
   multi-thousand-deep build backlog. Permanent counters: `star_seed_count/us`,
   `promo_enq_count`, `promo_land_count/ms`, `star_late_landings_promo` (expect 0 — the
   retain-swap never HIDEs), `hslab_defer_settle`.
+- **The cave field (the single density field, AC-0215 / tuned at AC-0288)**: caves are
+  wherever the ONE density field reads solid→air, `d = S_ramp((H−y)/R) + A(y)·(C−0.5)` —
+  the surface AND the caves come from the same field, and the heightmap H (surface_h of
+  the 3 coarse SURFACE fields) is structurally independent of the cave field: cave tuning
+  MUST NOT touch f_sc/f_sh/f_sr or SEA (the far-band H bit-exactness + promotion contract).
+  AC-0288 established the P0 parameterisation (the cave-series baseline, AC-0288…0292):
+  **C = C1 + 0.30·(C2−0.5)** with C1 = `fbm3(x/14, y/10, z/14, seed+301, 3 oct)` (primary)
+  and C2 = `fbm3(x/8, y/10, z/8, seed+302, 2 oct)` (detail octave — centered before
+  blending so the field mean stays 0.5 and the surface-band budget is unchanged);
+  **CAVE_AMP 1.8** is the largest value that keeps the "air for sure above H+R+1" invariant
+  (measured margin 1.8·max(C−0.5) = 0.948 < 1 — a 2.0 bump would be 1.054 and break it);
+  **DEEP_GROW 6** (cave amplitude grows with depth — the deep fattens sooner); R_BAND 10.
+  The dense source function is `AweGen::density_cave`; the genprobe arm mirrors that exact
+  expression in GDScript (the lockstep contract — a parameter change updates both sides in
+  the same task).
 - **Edits on far / data-less columns (AC-0325)**: the flat write path has **no silent
   no-op**. `World.set_block` returns a bool and, when the target column holds no slabs
   (`data` empty — a node-only chunk that can sit data-less indefinitely since AC-0263's

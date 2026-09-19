@@ -11,17 +11,28 @@
 //   S_ramp = the quintic SPLINE SURFACE DENSITY (C2, the same polynomial as
 //            AweNoise._fade) clamped to +/-1: +1 (solid) below the surface,
 //            -1 (air) above, the zero crossing IS the surface. R = 10.
-//   C(x,y,z) = trilinear of the coarse 3D CAVE field (the AC-0188 field:
-//            fbm3(gx/16, gy/10, gz/16, seed+301, 2)) — the per-column cave
+//   C(x,y,z) = trilinear of the coarse 3D CAVE field — the per-column cave
 //            carve (old 1D _vnoise3col / the y<16 0.42 threshold carve) is
 //            GONE: caves are where the one field says d < 0, at ANY depth.
+//            AC-0288 (P0 tune, pocket-size variety from this ONE field):
+//            C = C1 + 0.30 * (C2 - 0.5) where
+//              C1 = fbm3(gx/14, gy/10, gz/14, seed+301, 3)  (primary, 3 oct)
+//              C2 = fbm3(gx/8,  gy/10, gz/8,  seed+302, 2)  (detail octave,
+//                   half the xz wavelength, blended at CAVE_W2 = 0.30)
+//            The old AC-0215 field was fbm3(gx/16, gy/10, gz/16, seed+301,
+//            2). The detail octave is CENTERED before blending, so the mean
+//            stays 0.5 and the surface-band budget is unchanged.
 //   A(y) = 1.8 * (1 + max(0, H - y - R) / DEEP_GROW): the cave amplitude.
 //            1.8 in the surface band (the surface wobbles +/-~9 with the
 //            cave noise and caves break through it), growing with depth
-//            (DEEP_GROW = 8) so the 3D caves widen into the deep — MC 1.18
-//            deepslate cheese: the deep zone is ~30-38% air, opening
-//            downward (the C field is tight — mean 0.506, std 0.105 — so
-//            the fast growth is what widens the pockets).
+//            (AC-0288: DEEP_GROW = 6, was 8 — the deep fattens sooner, and
+//            the detail octave's small pockets appear earlier down the
+//            column) so the 3D caves widen into the deep — MC 1.18 deepslate
+//            cheese: the deep zone is ~30-38% air, opening downward. AC-0288
+//            surface-safety margin (measured over 512x512x296, step 8):
+//            max(C-0.5) = 0.5268 for the blend, so 1.8 * 0.5268 = 0.948 < 1
+//            (a 2.0 amp would hit 1.054 and break the "air for sure above
+//            H + R + 1" invariant — the scan start).
 //   H(x,z) = the surface height derived from the coarse 3D SURFACE field —
 //            the AC-0091 2D heightmap (c/h/r fbm2) is REPLACED by the 3D
 //            fields on the same 4x8x4 grid, read at the sea-level slice
@@ -238,9 +249,15 @@ constexpr int TERRAIN_H_MAX = 300;
 
 // AC-0215 one-density-field params (MC 1.18 style).
 constexpr double CAVE_AMP = 1.8;   // |CAVE_AMP * (cave-0.5)| < 1 keeps the
-// ramp asymptotes solid/air (surface always in H +/- R).
+// ramp asymptotes solid/air (surface always in H +/- R). AC-0288: 1.8 is
+// the LARGEST safe value for the two-octave blend (measured max cave-0.5
+// 0.5268 → 1.8 * 0.5268 = 0.948 < 1; a 2.0 bump would be 1.054).
 constexpr double R_BAND = 10.0;    // spline surface half-width in y blocks.
-constexpr double DEEP_GROW = 8.0; // cave-amplitude growth scale with depth.
+constexpr double DEEP_GROW = 6.0; // cave-amplitude growth scale with depth.
+// AC-0288: was 8 — the deep fattens sooner with the new detail octave.
+// AC-0288: the second (detail) cave octave's blend weight — C = C1 +
+// CAVE_W2 * (C2 - 0.5) (see the file header; genprobe mirrors it).
+constexpr double CAVE_W2 = 0.30;
 constexpr double SURF_YSCALE = 64.0; // 3D surface-field y-scale (slow).
 constexpr int GY_CELLS = 8;        // 4x8x4 cells -> 8 y-cells of h/8.
 
@@ -282,8 +299,11 @@ static inline size_t grid_idx(int64_t ix, int64_t iy, int64_t iz) {
 	return (size_t)((ix + 1) * GYN + iy) * GZN + (iz + 1);
 }
 
+// oct: the fbm octave count per lattice point (default 2 — every pre-AC-0288
+// field; AC-0288's primary cave octave passes 3).
 static void build_field(Field &f, int bx, int bz, double ystep, int64_t seed,
-		double fx, double fy, double fz, double ox, double oy, double oz) {
+		double fx, double fy, double fz, double ox, double oy, double oz,
+		int oct = 2) {
 	for (int64_t ix = -1; ix <= 5; ix++) {
 		for (int64_t iy = 0; iy <= 8; iy++) {
 			for (int64_t iz = -1; iz <= 5; iz++) {
@@ -291,7 +311,7 @@ static void build_field(Field &f, int bx, int bz, double ystep, int64_t seed,
 						((double)(bx + ix * 4)) / fx + ox,
 						((double)(iy * (int)(ystep))) / fy + oy,
 						((double)(bz + iz * 4)) / fz + oz,
-						seed, 2);
+						seed, oct);
 			}
 		}
 	}
@@ -372,6 +392,14 @@ static inline double cave_amp(int H, int y) {
 	if (d < 0.0)
 		d = 0.0;
 	return CAVE_AMP * (1.0 + d / DEEP_GROW);
+}
+
+// AC-0288: the two-octave cave blend — the primary field plus the detail
+// octave centered and weighted CAVE_W2 (mean stays 0.5). The dense source
+// function is AweGen::density_cave (the genprobe arm mirrors this exact
+// expression on the GDScript side).
+static inline double cave_blend(double c1, double c2) {
+	return c1 + CAVE_W2 * (c2 - 0.5);
 }
 
 // The ONE density field at a cell (solid where > 0, air where < 0).
@@ -693,9 +721,13 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	// field (the AC-0091 2D heightmap's c/h/r, now 3D on the same coarse
 	// grid — replaces the heightmap).
 	long long t_field = now_us();
-	Field f_cave{}, f_ore1, f_ore2, f_ore3;
-	if (!skip)
-		build_field(f_cave, bx, bz, ystep, seed + 301, 16.0, 10.0, 16.0, 0.0, 0.0, 0.0);
+	Field f_cave{}, f_cave2{}, f_ore1, f_ore2, f_ore3;
+	if (!skip) {
+		// AC-0288: the cave field = the primary octave (3 oct, xz/14) +
+		// the detail octave (2 oct, xz/8) — see the file header + cave_blend.
+		build_field(f_cave, bx, bz, ystep, seed + 301, 14.0, 10.0, 14.0, 0.0, 0.0, 0.0, 3);
+		build_field(f_cave2, bx, bz, ystep, seed + 302, 8.0, 10.0, 8.0, 0.0, 0.0, 0.0);
+	}
 	build_field(f_ore1, bx, bz, ystep, seed + 77, 7.0, 7.0, 7.0, 0.0, 0.0, 0.0);
 	build_field(f_ore2, bx, bz, ystep, seed + 88, 9.0, 9.0, 9.0, 900.0, 0.0, 900.0);
 	build_field(f_ore3, bx, bz, ystep, seed + 99, 6.0, 6.0, 6.0, 1700.0, 0.0, 1700.0);
@@ -766,7 +798,12 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				for (int y = top; y >= 1; y--) {
 					if (!slab_kept(y >> 4))
 						continue; // AC-0237: ungenerated slab — skip
-					double cave = tril(f_cave, gx, (double)y / ystep, gz);
+					// AC-0288: the two-octave cave blend (primary + 0.30 *
+					// detail). The H+R+1 scan-start "air for sure" margin is
+					// preserved (CAVE_AMP * max(cave-0.5) = 0.948 < 1).
+					double cave = cave_blend(
+							tril(f_cave, gx, (double)y / ystep, gz),
+							tril(f_cave2, gx, (double)y / ystep, gz));
 					bool s = dens_at(H, y, cave) > 0.0;
 					solidf[y] = s ? 1 : 0;
 					if (s && he < 0)
@@ -869,7 +906,10 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				if (top2 > hmax - 1)
 					top2 = hmax - 1;
 				for (int y = top2; y >= 1; y--) {
-					double cave = tril(f_cave, gx2, (double)y / ystep, gz2);
+					// AC-0288: same two-octave blend as the in-column scan.
+					double cave = cave_blend(
+							tril(f_cave, gx2, (double)y / ystep, gz2),
+							tril(f_cave2, gx2, (double)y / ystep, gz2));
 					if (dens_at(H2, y, cave) > 0.0) {
 						hcol = y;
 						break;
@@ -1200,8 +1240,13 @@ public:
 		return awegen::fade(p_t);
 	}
 	// The cave-density noise at a point (the coarse field's source function).
+	// AC-0288: the two-octave blend (primary 3-oct xz/14 seed+301 + detail
+	// 2-oct xz/8 seed+302 at CAVE_W2) — the genprobe arm mirrors this exact
+	// expression in GDScript (the lockstep contract).
 	double density_cave(double p_x, double p_y, double p_z, int p_s) const {
-		return awegen::fbm3(p_x / 16.0, p_y / 10.0, p_z / 16.0, p_s + 301, 2);
+		double c1 = awegen::fbm3(p_x / 14.0, p_y / 10.0, p_z / 14.0, p_s + 301, 3);
+		double c2 = awegen::fbm3(p_x / 8.0, p_y / 10.0, p_z / 8.0, p_s + 302, 2);
+		return c1 + CAVE_W2 * (c2 - 0.5);
 	}
 
 	// AC-0216: p_skip != 0 = the lazy offscreen-interior path (the 150-pt

@@ -20681,7 +20681,8 @@ func _slabops_test(spawn: Vector3) -> void:
 # AweNoise — the #1 invariant of the native gen. Compares hash2i/hash3i,
 # fade, vnoise2/vnoise3, fbm2/fbm3 at deterministic random points (seeded
 # RNG — reproducible), plus the cave-density wiring (density_cave must equal
-# AweNoise.fbm3 at the exact coarse-field coords/salt). Exact = f64 equality.
+# the exact coarse-field source function — AC-0288: the two-octave blend,
+# see the cave block below). Exact = f64 equality.
 func _genprobe_test() -> void:
 	var res := {
 		"ok": false,
@@ -20761,11 +20762,16 @@ func _genprobe_test() -> void:
 		cmp.call("fade", AweNoise._fade(t), G.fade(t))
 	for i in 300:
 		# The cave-density wiring: exact coarse-field source function.
+		# AC-0288: the two-octave blend (primary 3-oct xz/14 seed+301 +
+		# detail 2-oct xz/8 seed+302 at 0.3) — mirrors AweGen::density_cave
+		# in gen.cpp exactly (the cave-field lockstep contract).
 		var x := rng.randf_range(-1024.0, 1024.0)
 		var y := rng.randf_range(0.0, 384.0)
 		var z := rng.randf_range(-1024.0, 1024.0)
 		var s := rng.randi_range(-200, 200)
-		cmp.call("cave", AweNoise.fbm3(x / 16.0, y / 10.0, z / 16.0, s + 301, 2), G.density_cave(x, y, z, s))
+		var c1 := AweNoise.fbm3(x / 14.0, y / 10.0, z / 14.0, s + 301, 3)
+		var c2 := AweNoise.fbm3(x / 8.0, y / 10.0, z / 8.0, s + 302, 2)
+		cmp.call("cave", c1 + 0.3 * (c2 - 0.5), G.density_cave(x, y, z, s))
 	var tot := int(res["n"])
 	res["match_rate"] = float(int(res["exact"])) / float(tot) if tot > 0 else 0.0
 	res["ok"] = int(res["exact"]) == tot and tot > 0
