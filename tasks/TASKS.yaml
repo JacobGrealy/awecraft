@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-19T22:04
+  updated_at: 2026-09-19T22:56
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -39,7 +39,6 @@ queue:
 - AC-0141
 - AC-0142
 - AC-0115
-- AC-0090
 - AC-0176
 - AC-0295
 - AC-0316
@@ -4168,11 +4167,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-23T23:13
-  updated_at: 2026-09-19T21:25
-  completed_at: null
+  updated_at: 2026-09-19T22:56
+  completed_at: 2026-09-19T22:56
   waiting_on: null
   parent_id: null
   notes: 'Build with Three.js and explore a new procedurally generated 3D character style: ragdoll-like
@@ -16580,10 +16579,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-09-19T21:05
-  updated_at: 2026-09-19T21:05
+  updated_at: 2026-09-19T22:05
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -16682,7 +16681,18 @@ intake:
     slab wave as two mechanisms. Rewrite it to describe one order with the ring deciding the work - same
     task, per the architecture-sync rule.
 
-    '
+
+
+    TAKEN BY THE COORDINATOR SESSION (2026-09-19) per the user''s instruction to work the queue in its
+    new order. If you are the session that filed it, do not start it concurrently - the status is in-progress
+    here. CONTEXT FROM THE NEIGHBOURING TICKETS: AC-0331 (the far-tier mesh floor, now committed and closed)
+    and AC-0332 (that floor as a setting, closed) landed immediately before this one, so the far tiers''
+    emission now has a floor at SEA by default - keep that in mind when you reason about what the far
+    rings do. AC-0333 (the far-band double-draw holes) is queued right behind this ticket and its notes
+    say this unification is expected to RECONCILE its reproducer, so treat `far_holes` 0 in both bands
+    as a first-class acceptance criterion here, not a nice-to-have. AC-0334 (a halo demote/promote content
+    mismatch that AC-0289''s tunnel carve introduced, 5 cells in column [5,0]) is a known PRE-EXISTING
+    red on this tree - do not chase it, just do not misread it as your regression.'
   comments: []
 - id: AC-0336
   title: remove-dead-lane-apparatus

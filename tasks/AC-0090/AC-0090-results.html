@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0090 — verification results</title>
+<style>
+  body { font: 15px/1.6 ui-sans-serif, system-ui, sans-serif; color:#12161c; background:#fbfcfd; margin:0; padding:32px 20px 80px; }
+  .wrap { max-width: 940px; margin:0 auto; }
+  h1 { font-size:26px; margin:0 0 4px; }
+  h2 { font-size:18px; margin:34px 0 8px; padding-bottom:5px; border-bottom:1px solid #dde3ea; }
+  h4 { font-size:14px; margin:18px 0 4px; }
+  .meta { color:#5a6673; font-size:13px; margin-bottom:20px; }
+  table { border-collapse:collapse; width:100%; margin:10px 0 6px; font-size:13.5px; }
+  th,td { border:1px solid #dde3ea; padding:6px 9px; text-align:left; vertical-align:top; }
+  th { background:#f1f4f8; }
+  td.n { text-align:right; font-variant-numeric: tabular-nums; }
+  code { background:#eef1f5; padding:1px 4px; border-radius:3px; font-size:12.5px; }
+  .tag { display:inline-block; font-size:11px; text-transform:uppercase; letter-spacing:.06em; padding:2px 7px; border-radius:999px; background:#e8edf3; color:#46536b; }
+  .tag.yes { background:#dff3e6; color:#1f6b41; }
+  .tag.no { background:#f6dede; color:#8d2f2f; }
+  .box { border-left:4px solid #e0a800; background:#fff6e6; padding:10px 14px; border-radius:0 6px 6px 0; margin:14px 0; }
+  .box.bad { border-color:#c0392b; background:#fdeeee; }
+  .ok { border-left:4px solid #2f9e5f; background:#eefaf1; padding:10px 14px; border-radius:0 6px 6px 0; margin:14px 0; }
+  a { color:#2456a8; }
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>AC-0090 — verification results</h1>
+<p class="meta">
+  Measured 2026-09-19T22:55:07 · <code>prototypes/ac-0090-ragdoll/tools/verify.py</code> and
+  <code>prototypes/ac-0090-ragdoll/tools/meshcheck.mjs</code><br>
+  Environment: <b>headless Chromium (Playwright 1.62) / WebGL2 SwiftShader (software rasteriser) — NOT a mobile GPU measurement</b>
+</p>
+
+<div class="ok">
+  <b>All gates pass.</b>
+  80 offline geometry checks, 0 failures · 7 browser gates, all pass.
+  Console errors: 0 · page errors: 0 · failed requests: 0.
+</div>
+
+<h2>Browser gates</h2>
+<table><tr><th>Gate</th><th>Result</th><th>What it checks</th></tr><tr><td><b>W0 — page loads</b></td><td><span class="tag yes">PASS</span></td><td>Zero console errors, zero page errors, zero failed requests, all five presets registered.</td></tr><tr><td><b>W0b — second load (no state leak)</b></td><td><span class="tag yes">PASS</span></td><td>A second load is still clean — no cross-load state.</td></tr><tr><td><b>W1 — every preset renders</b></td><td><span class="tag yes">PASS</span></td><td>A screenshot per preset, thresholded on distinct colours, non-background fraction and mean luma, so a blank or flat frame cannot pass.</td></tr><tr><td><b>W2 — seam machinery reaches pixels</b></td><td><span class="tag yes">PASS</span></td><td>The per-primitive arm and the blend-window arm both repaint the expected regions of a fixed frame.</td></tr><tr><td><b>W3 — every body plan animates</b></td><td><span class="tag yes">PASS</span></td><td>Six pose signatures per body plan, all distinct — the rig is moving, not just ticking.</td></tr><tr><td><b>W4 — controls change the frame</b></td><td><span class="tag yes">PASS</span></td><td>Each control is applied from a known base state and must BOTH take effect (state read back from the page) AND move pixels.</td></tr><tr><td><b>D2 — determinism</b></td><td><span class="tag yes">PASS</span></td><td>Same (preset, seed) twice gives an identical geometry digest; a different seed gives a different one.</td></tr></table>
+
+<h2>W1 — render evidence, one screenshot per preset</h2>
+<p class="meta">Full-size PNGs are beside this file in <code>tasks/AC-0090/</code>.</p>
+<table><tr><th>Preset</th><th>Distinct colours</th><th>Non-background</th><th>Mean luma</th><th>File</th></tr><tr><td>biped</td><td class="n">558</td><td class="n">0.1975</td><td class="n">34.35</td><td><code>AC-0090-biped.png</code></td></tr><tr><td>quadruped</td><td class="n">679</td><td class="n">0.1593</td><td class="n">30.2</td><td><code>AC-0090-quadruped.png</code></td></tr><tr><td>hexapod</td><td class="n">684</td><td class="n">0.1437</td><td class="n">26.64</td><td><code>AC-0090-hexapod.png</code></td></tr><tr><td>hopper</td><td class="n">618</td><td class="n">0.162</td><td class="n">29.61</td><td><code>AC-0090-hopper.png</code></td></tr><tr><td>flyer</td><td class="n">599</td><td class="n">0.118</td><td class="n">24.31</td><td><code>AC-0090-flyer.png</code></td></tr></table>
+
+<h2>W2 — the seam A/B</h2>
+<p>Framed on the biped's <code>elbow_l</code> from 1.4 units, pose frozen, outline off so the comparison is about the joint surface and not the silhouette.</p>
+<table>
+  <tr><th>Measurement</th><th>Value</th></tr>
+  <tr><td>hard vs smooth tier, toon on</td><td class="n">0.0166 of pixels</td></tr>
+  <tr><td>hard vs smooth tier, toon off</td><td class="n">0.0186 of pixels</td></tr>
+  <tr><td>blend-window debug view</td><td class="n">0.0021 of pixels</td></tr>
+  <tr><td>per-primitive (raw parts) view</td><td class="n">0.0447 of pixels</td></tr>
+  <tr><td>smooth vs flat normal, mean angle</td><td class="n">16.33°</td></tr>
+  <tr><td>smooth vs flat normal, p95</td><td class="n">26.88°</td></tr>
+</table>
+<div class="box">
+  <b>What this gate does and does not establish.</b> It proves the seam machinery reaches the pixels: the
+  per-primitive arm repaints <b>0.0447</b> of the frame and the
+  blend-window arm <b>0.0021</b>, both far above the ~0.0002
+  antialiasing floor. It does <b>not</b> rank the two tiers by how good they look — at any framing where the
+  whole creature is visible a limb joint is a few hundred pixels, and the toon ramp's band quantisation
+  collapses much of the remaining difference. Reading that as "smooth is better" would be reading a
+  threshold, not a measurement.
+</div>
+
+<h2>W3 — every body plan animates</h2>
+<table><tr><th>Preset</th><th>Distinct poses (6 samples)</th><th>Pose spread</th></tr><tr><td>biped</td><td class="n">6/6</td><td class="n">12.7</td></tr><tr><td>quadruped</td><td class="n">6/6</td><td class="n">8.5</td></tr><tr><td>hexapod</td><td class="n">6/6</td><td class="n">9.5</td></tr><tr><td>hopper</td><td class="n">6/6</td><td class="n">7.8</td></tr><tr><td>flyer</td><td class="n">6/6</td><td class="n">11.8</td></tr></table>
+
+<h2>W4 — interactive controls</h2>
+<p class="meta">Each control is applied from a known base state and must both <i>take effect</i> (state read back from the page) and <i>move pixels</i>.</p>
+<table><tr><th>Control</th><th>Pixels differing</th><th>Verdict</th><th>Applied state</th></tr><tr><td><code>toon_off</code></td><td class="n">0.0002</td><td><span class="tag">wired, no visual signal</span></td><td><code>{"toon": false}</code></td></tr><tr><td><code>bands_2</code></td><td class="n">0.033</td><td><span class="tag yes">changed</span></td><td><code>{"bands": 2}</code></td></tr><tr><td><code>wireframe</code></td><td class="n">0.192</td><td><span class="tag yes">changed</span></td><td><code>{"wire": true}</code></td></tr><tr><td><code>joints</code></td><td class="n">0.0372</td><td><span class="tag yes">changed</span></td><td><code>{"joints": true}</code></td></tr><tr><td><code>outline_off</code></td><td class="n">0.042</td><td><span class="tag yes">changed</span></td><td><code>{"outline": false}</code></td></tr><tr><td><code>per_primitive</code></td><td class="n">0.0474</td><td><span class="tag yes">changed</span></td><td><code>{"partDebug": true}</code></td></tr><tr><td><code>blend_windows</code></td><td class="n">0.032</td><td><span class="tag yes">changed</span></td><td><code>{"seamDebug": true}</code></td></tr><tr><td><code>camera</code></td><td class="n">—</td><td><span class="tag yes">changed</span></td><td><code>—</code></td></tr><tr><td><code>focus</code></td><td class="n">—</td><td><span class="tag yes">changed</span></td><td><code>—</code></td></tr><tr><td><code>speed</code></td><td class="n">—</td><td><span class="tag yes">changed</span></td><td><code>—</code></td></tr><tr><td><code>seed</code></td><td class="n">—</td><td><span class="tag yes">changed</span></td><td><code>—</code></td></tr></table>
+<div class="box">
+  <b>One control is wired but visually inert, and is recorded as such.</b>
+  <code>toon: false</code> swaps the quantised wrapped lambertian for the unquantised one; on most of the
+  surface the two differ by about one step of 255, so the toggle changes a documented
+  <b>0.0002</b> of pixels — the antialiasing
+  floor. It is proven to apply (the state reads back) and is excluded from the pixel requirement rather
+  than being tuned until it looked like a signal.
+</div>
+
+<h2>D2 — determinism</h2>
+<table>
+  <tr><th>Check</th><th>Result</th><th>Digest</th></tr>
+  <tr><td>Same preset + seed generated twice</td><td><span class="tag yes">PASS</span></td><td><code>['af8f0c95', '9c7e8763', '433bf31a', 'a7a3ee04', '4963af14']</code></td></tr>
+  <tr><td>A different seed</td><td><span class="tag yes">PASS</span></td><td><code>['6e8cd60b', '22ede82c', 'ac683826', 'f339d213', '37ccb468']</code></td></tr>
+</table>
+
+<h2>W5 — cost, with its environment attached</h2>
+<div class="box bad">
+  <b>headless Chromium (Playwright 1.62) / WebGL2 SwiftShader (software rasteriser) — NOT a mobile GPU measurement.</b>
+  The frame times below are what this page costs on a <i>software rasteriser</i>. They are <b>not</b> a mobile
+  GPU measurement and must not be quoted as one. The generation costs <i>are</i> real CPU costs and
+  characterise the implicit tier honestly.
+</div>
+<table>
+  <tr><th>Metric</th><th>Value</th></tr>
+  <tr><td>Draw calls, all five characters, smooth tier</td><td class="n">11</td></tr>
+  <tr><td>Triangles, all five characters</td><td class="n">64260</td></tr>
+  <tr><td>Shader programs</td><td class="n">11</td></tr>
+  <tr><td>Frame time p50 / p95 (software rasteriser)</td><td class="n">68.2 / 104.2 ms</td></tr>
+  <tr><td>Textures · screen-space passes</td><td class="n">0 · 0</td></tr>
+</table>
+<h4>Implicit tier bake, per character (resolution 42)</h4>
+<table><tr><th>Bake</th><th>Milliseconds</th><th>Vertices</th><th>Triangles</th></tr><tr><td>1</td><td class="n">210.5</td><td class="n">2082</td><td class="n">4164</td></tr><tr><td>2</td><td class="n">420.6</td><td class="n">3723</td><td class="n">7446</td></tr><tr><td>3</td><td class="n">724.9</td><td class="n">4133</td><td class="n">8272</td></tr><tr><td>4</td><td class="n">603.2</td><td class="n">6401</td><td class="n">12798</td></tr><tr><td>5</td><td class="n">392</td><td class="n">2718</td><td class="n">5454</td></tr></table>
+<p class="meta">
+  The implicit tier costs 210–725 ms of CPU per
+  character at this resolution, which is the real reason it is not the mobile default — the runtime is fine,
+  the first-frame hitch and the unpredictable triangle count are not.
+</p>
+
+<h2>Screenshots</h2>
+<p class="meta">
+  <code>AC-0090-overview.png</code> · <code>AC-0090-biped.png</code> · <code>AC-0090-quadruped.png</code> ·
+  <code>AC-0090-hexapod.png</code> · <code>AC-0090-hopper.png</code> · <code>AC-0090-flyer.png</code> ·
+  <code>AC-0090-seam-hard.png</code> · <code>AC-0090-seam-smooth.png</code> ·
+  <code>AC-0090-seam-windows.png</code> · <code>AC-0090-primitives.png</code> ·
+  <code>AC-0090-tier-remesh.png</code>
+</p>
+<p class="meta">
+  Design reasoning and the alternatives that were rejected:
+  <a href="../../docs/ragdoll-character-style.html">docs/ragdoll-character-style.html</a>.
+</p>
+
+</div></body></html>

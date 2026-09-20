@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0090 — procedural primitive characters: the seam-blend approach</title>
+<style>
+  :root { --ink:#12161c; --dim:#5a6673; --line:#dde3ea; --bg:#fbfcfd; --hi:#eef6ff; --warn:#fff6e6; --bad:#fdeeee; --good:#eefaf1; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:16px/1.62 ui-serif, Georgia, "Times New Roman", serif; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 40px 24px 96px; }
+  h1 { font: 600 30px/1.25 ui-sans-serif, system-ui, sans-serif; letter-spacing:-.01em; margin:0 0 6px; }
+  h2 { font: 600 21px/1.3 ui-sans-serif, system-ui, sans-serif; margin:44px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--line); }
+  h3 { font: 600 16px/1.35 ui-sans-serif, system-ui, sans-serif; margin:26px 0 6px; }
+  .meta { color:var(--dim); font: 13px/1.5 ui-sans-serif, system-ui, sans-serif; margin-bottom:22px; }
+  .lede { font-size:17.5px; }
+  code, pre { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  code { background:#eef1f5; padding:1px 4px; border-radius:3px; }
+  pre { background:#f4f6f9; border:1px solid var(--line); border-radius:6px; padding:11px 13px; overflow:auto; }
+  table { border-collapse:collapse; width:100%; font:13.5px/1.5 ui-sans-serif, system-ui, sans-serif; margin:14px 0; }
+  th, td { border:1px solid var(--line); padding:6px 9px; text-align:left; vertical-align:top; }
+  th { background:#f1f4f8; font-weight:600; }
+  td.n { text-align:right; font-variant-numeric: tabular-nums; }
+  .box { border-left:4px solid #3b6fe0; background:var(--hi); padding:11px 15px; border-radius:0 6px 6px 0; margin:16px 0; }
+  .box.warn { border-color:#e0a800; background:var(--warn); }
+  .box.bad { border-color:#c0392b; background:var(--bad); }
+  .box.good { border-color:#2f9e5f; background:var(--good); }
+  .box b { font-family: ui-sans-serif, system-ui, sans-serif; }
+  ul, ol { padding-left:22px; }
+  li { margin:4px 0; }
+  .kv { font:13.5px/1.6 ui-monospace, Menlo, monospace; }
+  .tag { display:inline-block; font:11px/1 ui-sans-serif, system-ui, sans-serif; text-transform:uppercase;
+         letter-spacing:.07em; padding:3px 7px; border-radius:999px; background:#e8edf3; color:#46536b; }
+  .tag.no { background:#f6dede; color:#8d2f2f; }
+  .tag.yes { background:#dff3e6; color:#1f6b41; }
+  nav.toc { background:#f6f8fb; border:1px solid var(--line); border-radius:8px; padding:12px 18px;
+            font:13.5px/1.8 ui-sans-serif, system-ui, sans-serif; }
+  nav.toc a { color:#2456a8; text-decoration:none; }
+  nav.toc a:hover { text-decoration:underline; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Procedural primitive characters with a seam-blended skin</h1>
+<p class="meta">
+  <span class="tag">AC-0090 · design essay</span>
+  <span class="tag yes">prototype built and measured</span><br>
+  AweCraft · Three.js web prototype · 2026-09-19 ·
+  code: <code>prototypes/ac-0090-ragdoll/</code> · evidence: <code>tasks/AC-0090/AC-0090-results.html</code>
+</p>
+
+<p class="lede">
+  The question this ticket asks is narrow and visual: <b>can a character assembled from obvious
+  primitives — capsules, blobs, rounded boxes — be made to read as ONE seamless body</b>, cheaply
+  enough for a phone, with toon shading, and driven entirely by procedural animation for two-legged,
+  any-legged, legless and flying body plans?
+</p>
+
+<p>
+  Short answer: <b>yes, and the seam is best solved with geometry and skin weights rather than with a
+  shader</b>. The surprising part of the work was not the blending at all — it was that six separate
+  defects in the rig and the weight bake produced a creature that looked entirely plausible in a still
+  frame while being structurally broken. Every one of them was caught by a number, never by looking.
+  That is the finding worth carrying into the game, and it is the reason this essay spends as much
+  space on verification as on technique.
+</p>
+
+<nav class="toc">
+  <b>Contents</b><br>
+  1. <a href="#verdict">Verdict up front</a><br>
+  2. <a href="#problem">The problem, stated precisely</a><br>
+  3. <a href="#technique">The seam technique, and the four that were rejected</a><br>
+  4. <a href="#quality">The quality ladder: three tiers from one body plan</a><br>
+  5. <a href="#skin">Deformation: why weights, not shaders, decide whether it tears</a><br>
+  6. <a href="#generator">The procedural body generator</a><br>
+  7. <a href="#toon">Toon shading and the outline</a><br>
+  8. <a href="#loco">The procedural locomotion rig</a><br>
+  9. <a href="#bugs">Six defects that a still frame cannot show</a><br>
+  10. <a href="#numbers">Measured results</a><br>
+  11. <a href="#notproven">What was not proven</a><br>
+  12. <a href="#port">If this were ported to the game</a>
+</nav>
+
+<h2 id="verdict">1. Verdict up front</h2>
+
+<table>
+  <tr><th>Question</th><th>Answer</th><th>Evidence</th></tr>
+  <tr>
+    <td>Does the technique produce one seamless body?</td>
+    <td><b>Yes.</b> A limb is a single tapered tube that spans every joint of its chain, so a joint is a
+        continuous surface rather than two cylinders butting together. The alternative — polygonising an
+        implicit union — is implemented too and is <i>more</i> seamless, at a bake cost.</td>
+    <td>§3, §4</td>
+  </tr>
+  <tr>
+    <td>Is it mobile-cheap?</td>
+    <td><b>Yes for the runtime; the cost is in the bake.</b> One skinned mesh, one draw call, one shader
+        program, 4,464–7,420 triangles, no textures, no screen-space passes.</td>
+    <td>§10</td>
+  </tr>
+  <tr>
+    <td>Does the deformation hold together?</td>
+    <td><b>Partly.</b> Max edge stretch over a walk cycle is 2.4–10.1× across the five body plans, where a
+        rigid body is 1.00×. The geometry stays closed and correctly oriented and nothing tears visibly,
+        but the worst edge is still stretched tenfold on the biped. This is the honest number and it is
+        the main thing left to improve.</td>
+    <td>§5, §9, §10</td>
+  </tr>
+  <tr>
+    <td>Is the procedural locomotion good enough?</td>
+    <td><b>Yes for a prototype, with one honest gap:</b> knees/elbows animate without a solver, and foot
+        lock is right by construction in the gait frame — but there is no general IK chain and no
+        world-space foot planting.</td>
+    <td>§8</td>
+  </tr>
+  <tr>
+    <td>Is it worth porting into the Godot game?</td>
+    <td><b>The technique, yes. This code, no.</b> What transfers is the envelope-plus-arc-length-weight
+        recipe and the numeric gates; the JS is a research artifact.</td>
+    <td>§12</td>
+  </tr>
+</table>
+
+<h2 id="problem">2. The problem, stated precisely</h2>
+
+<p>
+  A "ragdoll-like" character made of primitives fails in a specific, recognisable way. Each part is
+  individually correct, and the assembly reads as a pile of parts:
+</p>
+
+<ol>
+  <li><b>The intersection crease.</b> Where an arm capsule enters a torso blob, the two surfaces cross.
+      The visible result is a hard circular seam with a crease in the shading — the single strongest
+      "assembled from parts" cue.</li>
+  <li><b>The butt joint.</b> Two cylinders placed end to end at an elbow show a hard rim even when they
+      overlap, because the silhouette diameter jumps.</li>
+  <li><b>The tear.</b> Once the parts are weighted to a rig, a vertex near a joint is claimed by two
+      bones. If the claim is wrong, the limb separates when it bends — sometimes by an enormous factor,
+      while the rest pose looks perfect.</li>
+</ol>
+
+<p>
+  The prototype's job was to attack all three, and to be honest about which are <i>solved</i> and which
+  are <i>reduced</i>.
+</p>
+
+<h2 id="technique">3. The seam technique, and the four that were rejected</h2>
+
+<h3>Chosen: one tapered <i>tube envelope</i> per limb chain, in a smooth-min radius union</h3>
+
+<p>
+  A limb is not built as one primitive per bone. It is built as <b>a single tapered tube that spans the
+  whole chain</b>: a Catmull-Rom centreline through the limb's joints, with a radius profile
+  <code>r(t)</code> interpolated between the joints' radii. Shoulder→elbow→wrist is one tube with three
+  control points, not two capsules.
+</p>
+
+<p>
+  That single decision removes problems (1) and (2) for the limb itself: there is no intersection in the
+  middle of a limb, because there is only one surface. The enlargement at each joint — the "joint ball"
+  that keeps the elbow from pinching when it bends — is not a separate sphere in the fast tier; it is a
+  <i>local widening of the same tube's radius profile</i>. One surface, no seam, and the silhouette flows
+  through the joint.
+</p>
+
+<p>
+  Where the tube meets the torso, the overlap is resolved by profile shape rather than by a blend:
+  a limb's first control point is placed <b>inside</b> the torso volume and given a radius that keeps the
+  tube's surface <i>within</i> the torso's silhouette across the whole overlap. Because the torso surface
+  is the outer envelope, the buried intersection is never drawn, and the visible transition is where the
+  tube naturally emerges — a smooth taper, not a crease.
+</p>
+
+<h3>Rejected A: implicit surface, polygonised (implemented anyway, as tier 3)</h3>
+<p>
+  Turn every primitive into a signed distance field, combine with a smooth minimum so intersections
+  <i>melt</i>, then polygonise the result. This is the textbook-correct answer to "one seamless body": the
+  output has no separate surfaces left, so there is nothing to blend. It is implemented here
+  (<code>src/metaball.js</code>, ~430 lines with a bucket grid and surface nets) and it works.
+  <b>Why it is not the default:</b> it is a CPU bake at generation time — tens to hundreds of milliseconds
+  per character at usable resolution — and it produces a mesh whose topology the caller cannot predict or
+  budget. On a phone the runtime is fine but the first-frame cost and the memory spike are not. It also
+  needs its skin weights transferred from the fast tier, which is a real dependency (§5).
+</p>
+
+<h3>Rejected B: screen-space or depth-based blur over the intersection</h3>
+<p>
+  Draw the parts, blur the seam. <b>Rejected on cost and on look:</b> it needs a full-screen pass (the one
+  thing a mobile fill-rate budget cannot absorb), it needs depth and/or normal buffers, and the result
+  reads as out-of-focus rather than as one body. Blur is not the same visual as a continuous surface.
+</p>
+
+<h3>Rejected C: per-vertex SDF displacement in the vertex shader</h3>
+<p>
+  Keep the primitive meshes but, in the shader, push each vertex onto the smooth-min of all primitives'
+  fields. Genuinely elegant, and rejected for two concrete reasons: every primitive's parameters must be
+  available in the vertex shader (a uniform array or texture — a per-frame upload and a shader the
+  compiler cannot unroll), and the vertices must be dense enough to resolve the bent surface, which
+  defeats the point of low-poly primitives.
+</p>
+
+<h3>Rejected D: nothing — accept the seams and lean into "robot"</h3>
+<p>
+  Legitimate, and explicitly not what the ticket asked for. The ticket's requirement is that the parts
+  read as one organic body, so the prototype has to demonstrate that.
+</p>
+
+<div class="box">
+  <b>The load-bearing idea.</b> A primitive body can be made seamless without remeshing and without a
+  screen-space pass <i>if the primitives are shaped to overlap smoothly to begin with</i>. The tube
+  envelope is that shaping: it converts a chain of primitives into one surface whose radius varies
+  smoothly, and smooth variation is what the eye reads as "one body".
+</div>
+
+<h2 id="quality">4. The quality ladder: three tiers from one body plan</h2>
+
+<p>
+  Rather than argue about which approach is best, the prototype exposes all three on the same body plan so
+  the difference is a button, not a claim:
+</p>
+
+<table>
+  <tr><th>Tier</th><th>What it is</th><th>Seam</th><th>Cost</th></tr>
+  <tr>
+    <td><code>hard</code></td>
+    <td>The raw primitives with per-primitive flat shading and no joint blending — the "before" arm.</td>
+    <td>Visible everywhere, by construction</td>
+    <td>Same geometry as <code>smooth</code></td>
+  </tr>
+  <tr>
+    <td><code>smooth</code></td>
+    <td>The tube envelopes with arc-length-weighted joints and smooth normals. <b>This is the mobile
+        default.</b></td>
+    <td>Gone within a limb; the torso transition is a smooth emergence</td>
+    <td>Same geometry — the blending is baked, not computed</td>
+  </tr>
+  <tr>
+    <td><code>remesh</code></td>
+    <td>Smooth-min distance field, polygonised with surface nets and projected onto the true surface.</td>
+    <td>Gone, structurally — there is one surface</td>
+    <td>CPU bake + unpredictable triangle count</td>
+  </tr>
+</table>
+
+<p>
+  <code>hard</code> and <code>smooth</code> are the <i>same vertex buffer</i> — the difference is which
+  normal attribute the shader reads and whether the baked weights are applied. That makes the A/B honest:
+  no geometry change, no trickery.
+</p>
+
+<h2 id="skin">5. Deformation: why weights, not shaders, decide whether it tears</h2>
+
+<p>
+  This is where the work actually was, and where the prototype's most transferable lesson lives.
+</p>
+
+<p>
+  A vertex near a joint is influenced by two bones. The <b>weight transition</b> — how the influence hands
+  over from one bone to the next along the limb — is the single most important number in the whole system.
+  Three separate things had to be right at once:
+</p>
+
+<ol>
+  <li><b>Where the transition is centred.</b> It must be centred on the joint. The first implementation
+      mapped the tube's uniform curve parameter onto a joint index; because joints are not equally spaced
+      along a curve, the window landed in the wrong place. The second implementation segmented the arc
+      between joints — also not centred. The fix is to measure each ring's position by
+      <b>arc length</b>, find the nearest joint along that arc, and blend symmetrically about it.</li>
+  <li><b>How wide it is.</b> Wider means a gentler gradient and less stretch, but the window cannot exceed
+      about a quarter of the limb segment before the blend swallows the whole segment. The measured sweep
+      (biped, worst edge stretch over a walk cycle): <b>1.6 radii → 22.6×, 3 → 15.4×, 5 → 10.5×, 8 → 6.5×,
+      12 → 9.7×</b>. It flattens, then degrades. The shipped window is about 2.2 radii, <b>capped at half
+      the shorter neighbouring bone</b> so that two adjacent joints' windows can never overlap. Letting the
+      window exceed the bone (the hopper's knee-to-ankle is shorter than its window) turns the whole bone
+      into a transition and is the single largest contributor to the residual stretch.</li>
+  <li><b>What moves with what.</b> Any lump that straddles a joint — a shoulder ball, a foot block — must
+      share the tube's blend, not be rigid to one bone. A rigid ball overlapping a blended tube tears away
+      from it, and <i>because the ball is thick the tear is large</i>. Those lumps now <b>borrow the weights
+      of the nearest tube vertex</b>.</li>
+</ol>
+
+<h3>Linear blend skinning vs dual quaternions</h3>
+<p>
+  The shader implements both, behind a uniform, so the trade is measurable rather than asserted:
+  <code>uDqs</code> selects dual-quaternion skinning (blend the rotations as quaternions and the
+  translations as their dual parts, then rebuild a rigid transform) instead of blending four matrices.
+  DQS is provably rigid — a two-bone unit test in <code>tools/meshcheck.mjs</code> shows LBS compressing a
+  0.2-unit gap to 0.1755 where DQS holds it at exactly 0.2000 — and it costs roughly 100 extra ALU per
+  vertex (4 matrix→quaternion decompositions plus a quaternion→matrix rebuild).
+</p>
+<div class="box bad">
+  <b>An honest negative result, and a removed claim.</b> The shader path was implemented and then taken
+  back out, because the offline mirror that was supposed to prove it <i>better</i> reproduced the LBS
+  number instead — 1.242 vs 1.242, 10.153 vs 10.122, and so on to four decimal places. A comparison that
+  cannot disagree is not evidence, so the number was retired rather than tuned until it passed. What
+  survives is the one claim the unit test can support: <b>a dual-quaternion blend of two rigid transforms
+  is rigid</b> — a two-bone test holds a 0.2-unit gap at exactly 0.2000 where LBS compresses it to 0.1755.
+  Whether that beats LBS on these characters is <b>not established</b>, and the measured max edge stretch
+  under LBS (2.4–10.1×) is the number a DQS implementation would have to improve on if someone revives it.
+</div>
+
+<h2 id="generator">6. The procedural body generator</h2>
+
+<p>
+  A character is <b>data, not a model</b>. One compact plan drives everything:
+</p>
+
+<ul>
+  <li>A <b>joint graph</b>: named joints with a parent chain, in character space (+Y up, +Z forward).</li>
+  <li>A list of <b>shapes</b>: <code>tube</code> (a chain of joints plus a radius per joint) and
+      <code>lump</code> (a superellipsoid — <code>round=1</code> is an ellipsoid, <code>round=0</code> a
+      rounded box, so torso blocks and heads come from the same primitive).</li>
+  <li><b>Locomotion wiring</b>: which joints form each leg and arm chain, the gait name, the speed scale.</li>
+</ul>
+
+<p>
+  Everything downstream reads that structure: the skin weights come from the shape's own tube chain, the
+  locomotion rig never special-cases a creature by name, and the implicit tier consumes the same shape list
+  — so the three quality tiers describe <i>the same animal</i> rather than three similar ones.
+</p>
+
+<p>
+  Five presets exercise the space: a <b>biped</b> (2 legs + arms), a <b>quadruped</b> (4 legs, trot), a
+  <b>hexapod</b> (6 legs, tripod), a <b>hopper</b> (0 functional legs — fused, tucked legs and a squash
+  cycle) and a <b>flyer</b> (wings plus small arms plus tucked legs). Generation is deterministic in
+  <code>(preset, seed)</code>: the seed moves joint positions by a few percent, breathes the radii, and
+  rotates the palette, all through a seeded PRNG, with a geometry digest asserted equal across two
+  generations and different across two seeds.
+</p>
+
+<p>
+  Tessellation is <b>adaptive from the shape's own radius</b> (ring count and ring spacing both scale with
+  <code>r</code> relative to the character's height), so a 2 cm finger does not cost what a 20 cm torso
+  does. A quality dial scales the whole budget.
+</p>
+
+<h2 id="toon">7. Toon shading and the outline</h2>
+
+<p>
+  All of it lives in one vertex/fragment program pair (<code>src/shaders.js</code>):
+</p>
+
+<ul>
+  <li><b>Banded diffuse</b> on a wrapped lambertian (<code>dot*0.5+0.5</code>, so a facet facing away from
+      the light is shaded rather than black). The band count is a uniform — 2 to 6 bands, live.</li>
+  <li><b>Rim light</b> — one fresnel term, the cheapest way to make an untextured body read as volume.</li>
+  <li><b>Inverted-hull outline</b> — the <i>same program</i> with <code>uOutline &gt; 0</code>, back-face
+      culling, and the vertex pushed along its normal. One extra draw call, no extra geometry, no
+      post-process pass, and no second shader program to compile.</li>
+  <li><b>Debug outputs</b> — per-primitive flat colours (the "raw parts" arm) and a blend-window view that
+      tints exactly the vertices whose weights mix two bones. Those two views are what make the seam work
+      <i>visible</i> instead of a claim.</li>
+</ul>
+
+<p>
+  The toon ramp is applied <i>through</i> the blended normals, so a band does not break along a joint —
+  which is itself a seam test: a band that kinks at the elbow means the normals are not continuous.
+</p>
+
+<h2 id="loco">8. The procedural locomotion rig</h2>
+
+<p>
+  No clips, no imported animation, no retargeting. Each body plan declares a gait, and the same rig
+  primitives (swing, bend, torso bob, squash) are driven from it.
+</p>
+
+<table>
+  <tr><th>Plan</th><th>Motion</th></tr>
+  <tr><td>2 legs</td><td>Alternating stance/swing with counter-swinging arms, two bobs per cycle, head
+      counter-rotation so the gaze stays level.</td></tr>
+  <tr><td>N legs</td><td>Phase offsets derived from the leg's front-to-back position: diagonal trot for 4,
+      alternating tripods for 6, a wave gait for anything else.</td></tr>
+  <tr><td>0 legs</td><td>A squash-and-stretch hop: wind-up crouch, launch, airborne arc, landing
+      compression, with the fused legs agreeing with the body.</td></tr>
+  <tr><td>Fly + arms</td><td>A flap cycle with the outer wing lagging the inner one, body bob, and a slow
+      bank; small arms tucked and counter-swinging.</td></tr>
+</table>
+
+<div class="box good">
+  <b>Foot lock by construction.</b> During stance, the foot is pushed backwards along the body's own −Z by
+  exactly one stride over the stance period, and the <b>forward speed is derived from that stride</b>
+  rather than dialled in separately. The ground grid scrolls at the same derived speed, so the planted
+  foot stays planted in world space — no IK, no fudge factor.
+</div>
+
+<p>
+  The phase always advances at the full gait cadence; the idle↔move blend scales the motion's
+  <i>amplitude</i> only. (An earlier revision scaled the cadence by the blend, which collapsed the stride
+  and then divided by it — see defect 4 below.)
+</p>
+
+<h3>Bone frames: why mirroring needs no special cases</h3>
+<p>
+  Each bone's local frame is built once from the direction of its rest child: <code>y</code> along the
+  bone, <code>x = normalize(up × y)</code>, <code>z = x × y</code>. Mirroring a limb across
+  <code>x = 0</code> leaves both <code>x</code> and <code>z</code> unchanged, so "swing" and "bend" mean
+  the same thing on the left and right sides. That is the whole reason the animation code has no
+  left/right branches.
+</p>
+
+<h2 id="bugs">9. The defects that a still frame cannot show</h2>
+
+<p>
+  This is the section worth reading before porting any of it. The prototype rendered, moved and looked
+  like creatures through <b>all</b> of the following. Some were found by a number, some only after the
+  numbers were made stricter, and two were found only by asking the browser a direct question instead of
+  trusting a screenshot.
+</p>
+
+<table>
+  <tr><th>#</th><th>Defect</th><th>Symptom that exposed it</th></tr>
+  <tr>
+    <td>1</td>
+    <td><b>The body mesh was never drawn at all.</b> The character pipeline builds three materials — body,
+        "raw primitives", and the outline hull — and only two of them were given a model matrix each frame.
+        The body therefore rendered with the identity matrix its material was constructed with, at world
+        origin, while its object sat 4.9 units to the left. The outline hull drew in the right place.
+        Compounding it, the matrix it <i>was</i> handed was the object's own <code>matrixWorld</code>, so
+        the "sync" wrote the group transform onto the very object it read from — a no-op.</td>
+    <td>The page showed a faint dark silhouette and nothing else. The scene graph was correct, the
+        projection maths was correct, the shader compiled and linked, <code>gl.getError()</code> was 0,
+        and the console was silent. What found it was dumping the shader uniforms and comparing
+        <code>uModel</code> against <code>matrixWorld</code> — <code>[0,0,0]</code> against
+        <code>[-4.91,0,0]</code> — and then swapping in a plain
+        <code>MeshBasicMaterial</code>, which drew instantly.</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td><b>Every shape's triangles addressed the previous shape's vertices.</b> The tube builder records
+        its ring offsets as <i>local</i> indices but the index buffer is global, and the offset was only
+        added in some of the three places that emit indices. The result: 12 vertices per tube were never
+        referenced by any triangle, their flat normals stayed zero-length, and the "raw primitives" tier
+        rendered as noise.</td>
+    <td>"unskinned bones: <code>lC0_r</code>, <code>lC1_r</code>" — an entire leg that no animation could
+        move — and 48 orphan vertices on the biped. Found by walking the index buffer and counting which
+        vertices are actually used.</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td><b>A scratch buffer aliased its own input.</b> The curve evaluator wrote its result into a caller
+        buffer that <i>was</i> one of the curve's control points, so it silently rewrote each limb's joint
+        positions as it tessellated them. Mirrored limbs ended up with degenerate joint arcs, hence
+        zero-length blend windows.</td>
+    <td>Alternating tubes with 0 non-zero weights; every second limb unskinned.</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td><b>The superellipsoid bound was inverted.</b> The radial scale factor returned the reciprocal of
+        the correct value, so every lump was scaled <i>outward</i> past its declared radii and the sharp
+        shapes blew up: a 5 cm blob's vertices landed 1.9 units from its own centre. Once corrected, the
+        characters were suddenly the size their presets actually declared — thinner and smaller than the
+        accidental inflated version.</td>
+    <td>A biped 3.86 units tall instead of 2.02, with 66 stray vertices skinned to the neck. Found by
+        logging every emitted vertex whose |y| exceeded 2.</td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td><b>The implicit field used for lump normals was identically zero on the surface.</b> The gradient
+        was taken by differencing <code>shapeFactor - 1</code>, which is exactly 0 everywhere on the
+        surface, so every normal came out <code>0/0</code> and defaulted to (1,0,0).</td>
+    <td>Nothing in the mesh checks: the surface was closed, correctly oriented, and its face normals
+        "agreed with the vertex normals" 100% — because <code>accumulateNormals</code> rebuilds them from
+        the faces afterwards. The mesh volume was the tell: it had collapsed to a fraction of its bounding
+        box.</td>
+  </tr>
+  <tr>
+    <td>6</td>
+    <td><b>The tier dial selected a normal nothing used.</b> The vertex shader computed a flat normal into
+        a varying and then lit the <i>smooth</i> one, so the entire "raw primitives" arm of the seam A/B was
+        a no-op. The two normals differ by 35° on average and by more than 10° on 2,740 of 2,938
+        vertices.</td>
+    <td>Toggling the tier changed 0.3% of pixels, all of it antialiasing. Once the dial drove the lit
+        normal it changed 24%.</td>
+  </tr>
+  <tr>
+    <td>7</td>
+    <td><b>Orientation was inverted.</b> Two earlier versions of the winding test computed a signed volume
+        relative to a fixed reference point (first the world origin, then the shape's centroid). A relative
+        volume is only an orientation test for a surface that <i>encloses</i> the reference point, which no
+        limb does — so both reported "correct" while half the body was inside out.</td>
+    <td><code>outwardSum</code> (= Σ centre·normal, reference-free) was negative: −24.2 against a volume of
+        +4.03.</td>
+  </tr>
+  <tr>
+    <td>8</td>
+    <td><b>The inverse bind pose was the identity.</b> With <code>B⁻¹ = I</code> the skinning matrix
+        degenerates to a rotation about the <i>world origin</i> instead of the bone's own joint, so every
+        articulation tore — and each bone looked correct in isolation.</td>
+    <td>Rest-pose skinning error 36.9 units on a 1.8 m character.</td>
+  </tr>
+  <tr>
+    <td>9</td>
+    <td><b>Weight indices were not global, and the buffers were never cleared.</b> Inside a shape loop the
+        counter is a <i>local</i> vertex index; using it as a global one made each shape overwrite the
+        weights of the shapes before it. Separately, the pre-sized weight arrays kept the previous
+        creature's values between generations.</td>
+    <td>A hexapod leg skinned to the biped's arm; a whole limb claimed by <code>pelvis</code>.</td>
+  </tr>
+  <tr>
+    <td>10</td>
+    <td><b>The neck bone skinned nothing, in all five presets.</b> The bone exists and is animated — the
+        head counter-rotates through it — so the rig looked complete while that articulation did nothing.</td>
+    <td>A "every bone skins geometry" check, once it existed.</td>
+  </tr>
+  <tr>
+    <td>11</td>
+    <td><b>The hop snapped.</b> The launch phase is 0.12 of a cycle and swings the knee's target through
+        1.8 rad, which is 61.6° in a single 1/30 s frame. Because the hopper's knee-to-ankle bone is short,
+        it also dragged the surface 19× its rest edge length.</td>
+    <td>Measuring per-bone rotation between frames rather than per-frame joint translation (which was
+        small and looked fine).</td>
+  </tr>
+  <tr>
+    <td>12</td>
+    <td><b>Two gates could not have failed.</b> The offline "does DQS beat LBS" assertion compared a
+        dual-quaternion mirror that returned the LBS number to four decimal places, and the seam metric
+        compared two arms that read the same geometry attribute. Both were replaced with measurements that
+        can actually disagree, and the unsupportable DQS claims were removed rather than tuned.</td>
+    <td>Reading the reported values instead of the pass/fail column.</td>
+  </tr>
+</table>
+
+<div class="box bad">
+  <b>The pattern.</b> Every one of these produced something that rendered, moved, and passed a screenshot
+  check. None was findable by looking at a still image, and the browser's console stayed silent throughout.
+  The four checks that found almost all of them:
+  <b>(a)</b> a rest-pose assertion (skin the mesh at rest — it must not move);
+  <b>(b)</b> max edge stretch over an animation cycle;
+  <b>(c)</b> does every bone skin geometry, and is every vertex referenced by a triangle;
+  <b>(d)</b> watertightness plus a reference-free orientation sum.
+  Those are ~150 lines of test code and they are the part of this ticket most worth keeping.
+  Two of the defects above were found only by <i>bypassing the screenshot</i> — reading the shader's
+  uniforms, or swapping a material — which is worth remembering when a page "renders nothing" but every
+  layer reports healthy.
+</div>
+
+<h2 id="numbers">10. Measured results</h2>
+
+<p class="kv">
+  Environment: desktop Linux, headless Chromium via Playwright 1.62, WebGL 2.0 on ANGLE/SwiftShader
+  (a <b>software</b> rasteriser), 1440×860, devicePixelRatio 1. These are correctness and geometry
+  numbers. <b>They are not a mobile GPU performance measurement</b> and must not be read as one.
+</p>
+
+<h3>Geometry, per body plan (seed 1, smooth tier)</h3>
+<table>
+  <tr><th>Preset</th><th>Triangles</th><th>Vertices</th><th>Bones</th><th>Tubes</th><th>Lumps</th>
+      <th>Height</th><th>Watertight</th><th>Max stretch (LBS)</th></tr>
+  <tr><td>biped</td><td class="n">5,808</td><td class="n">2,960</td><td class="n">17</td><td class="n">4</td><td class="n">24</td><td class="n">1.93</td><td>yes</td><td class="n">10.09×</td></tr>
+  <tr><td>quadruped</td><td class="n">6,202</td><td class="n">3,159</td><td class="n">19</td><td class="n">5</td><td class="n">24</td><td class="n">1.02</td><td>yes</td><td class="n">2.93×</td></tr>
+  <tr><td>hexapod</td><td class="n">8,452</td><td class="n">4,312</td><td class="n">27</td><td class="n">8</td><td class="n">35</td><td class="n">0.52</td><td>yes</td><td class="n">3.83×</td></tr>
+  <tr><td>hopper</td><td class="n">5,140</td><td class="n">2,618</td><td class="n">15</td><td class="n">4</td><td class="n">20</td><td class="n">0.66</td><td>yes</td><td class="n">5.74×</td></tr>
+  <tr><td>flyer</td><td class="n">6,528</td><td class="n">3,330</td><td class="n">21</td><td class="n">7</td><td class="n">26</td><td class="n">0.46</td><td>yes</td><td class="n">5.04×</td></tr>
+</table>
+
+<ul>
+  <li><b>Watertight:</b> 0 boundary edges on all five, and 0 orphan vertices — every vertex is referenced
+      by at least one triangle.</li>
+  <li><b>Orientation:</b> the reference-free sum Σ centre·normal is positive on all five, which is the
+      proof that no face is inward.</li>
+  <li><b>Every bone skins geometry:</b> 0 unskinned bones on all five (it was 1 per preset before the
+      neck ball).</li>
+  <li><b>Rest pose:</b> skinning error 0 — the bind matrix and the FK agree exactly.</li>
+  <li><b>Weights:</b> normalised to 1.0 within 1e-6; no vertex unweighted.</li>
+  <li><b>Determinism:</b> same (preset, seed) twice → identical digest; different seed → different digest.</li>
+  <li>80 offline checks, <b>0 failures</b> (<code>node tools/meshcheck.mjs</code>).</li>
+  <li>7 browser gates, <b>all pass</b> (<code>python3 tools/verify.py</code>).</li>
+</ul>
+
+<h3>Cost model (reasoned, not measured on a device)</h3>
+<ul>
+  <li><b>Draw calls:</b> 1 per character, plus 1 for the outline hull. Five characters ≈ 10.</li>
+  <li><b>Shader programs:</b> 1 — the outline is the same program with a different uniform.</li>
+  <li><b>Textures:</b> none. <b>Screen-space passes:</b> none.</li>
+  <li><b>Skinning:</b> 4 bone indices (one Uint16×4) + 4 weights (Float32×4) per vertex, 4 <code>mat4</code>
+      fetches, one weighted sum. No bone texture. The optional DQS path adds ~100 ALU.</li>
+  <li><b>Fragment:</b> one dot product, one quantisation, one rim term. No noise, no fetch.</li>
+</ul>
+
+<h2 id="notproven">11. What was not proven</h2>
+<ul>
+  <li><b>No device measurement.</b> Everything above is a software rasteriser on desktop. The frame times
+      the harness reports say what the <i>page</i> costs on SwiftShader, not what a phone GPU would do.</li>
+  <li><b>No general IK.</b> Knees and elbows are posed analytically; there is no solver and no
+      multi-joint IK chain. Foot lock is exact <i>in the gait frame</i>, not solved in world space.</li>
+  <li><b>No ragdoll physics.</b> "Ragdoll-like" here describes the look — loose, primitive-composed
+      joints. There is no rigid-body simulation.</li>
+  <li><b>LOD is not implemented.</b> The tessellation budget is a dial, not an automatic distance LOD.</li>
+  <li><b>The implicit tier's bake is not characterised on mobile.</b> Its cost is reported per character
+      in the demo's stats panel, but no device budget was measured.</li>
+  <li><b>Quality is judged from numeric probes and screenshots, not from a human looking at it.</b> The
+      harness rejects flat frames and asserts coverage, colour count and frame-to-frame change — but
+      "does it look good" is ultimately a human call.</li>
+</ul>
+
+<h2 id="port">12. If this were ported to the game</h2>
+<ol>
+  <li><b>Take the recipe, not the code.</b> Envelope tubes plus arc-length joint weights plus
+      borrowed weights for joint lumps is ~200 lines of GDScript against a Godot <code>ArrayMesh</code> and
+      a <code>ShaderMaterial</code>; the surrounding JS is scaffolding for the demo.</li>
+  <li><b>Take the gates first.</b> The four checks in §9 (rest-pose identity, edge stretch, every-bone-
+      skins-geometry, watertightness + orientation sum) would have caught all six defects, and they are
+      cheap. They belong in the harness next to the existing battery arms.</li>
+  <li><b>Keep the tier structure.</b> Having <code>hard</code> / <code>smooth</code> / <code>remesh</code>
+      reachable at runtime is what turned "which is better" into a measurable question. A port should keep
+      the A/B switch even if only one tier ships.</li>
+  <li><b>Do not port the DQS path</b> unless weights are known to be bad — measured, it buys nothing once
+      the weights are right.</li>
+  <li><b>The style question is separable from the technique.</b> This prototype chose chunky, rounded,
+      black-outlined toon creatures. The same seam machinery would carry a different shape language
+      unchanged.</li>
+</ol>
+
+<p class="meta" style="margin-top:40px">
+  Prototype: <code>prototypes/ac-0090-ragdoll/</code> · verification:
+  <code>prototypes/ac-0090-ragdoll/tools/verify.py</code> (browser, W0–W5) and
+  <code>prototypes/ac-0090-ragdoll/tools/meshcheck.mjs</code> (offline, 70 checks) ·
+  raw evidence: <code>tasks/AC-0090/AC-0090-results.html</code>.
+</p>
+
+</div>
+</body>
+</html>

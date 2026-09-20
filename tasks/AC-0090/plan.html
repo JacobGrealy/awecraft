@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0090 — plan</title>
+<style>
+  body { font: 15px/1.6 ui-sans-serif, system-ui, sans-serif; color:#12161c; background:#fbfcfd;
+         margin:0; padding:32px 20px 80px; }
+  .wrap { max-width: 880px; margin:0 auto; }
+  h1 { font-size:25px; margin:0 0 4px; }
+  h2 { font-size:18px; margin:32px 0 8px; padding-bottom:5px; border-bottom:1px solid #dde3ea; }
+  .meta { color:#5a6673; font-size:13px; margin-bottom:20px; }
+  table { border-collapse:collapse; width:100%; margin:10px 0; font-size:13.5px; }
+  th,td { border:1px solid #dde3ea; padding:6px 9px; text-align:left; vertical-align:top; }
+  th { background:#f1f4f8; }
+  code { background:#eef1f5; padding:1px 4px; border-radius:3px; font-size:12.5px; }
+  .tag { display:inline-block; font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+         padding:2px 7px; border-radius:999px; background:#e8edf3; color:#46536b; }
+  .tag.yes { background:#dff3e6; color:#1f6b41; }
+  .tag.no { background:#f6dede; color:#8d2f2f; }
+  .box { border-left:4px solid #3b6fe0; background:#eef6ff; padding:10px 14px; border-radius:0 6px 6px 0; margin:14px 0; }
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>AC-0090 — plan</h1>
+<p class="meta">
+  <span class="tag yes">delivered</span>
+  Three.js web prototype, built and measured · results: <code>AC-0090-results.html</code> ·
+  design essay: <code>../../docs/ragdoll-character-style.html</code>
+</p>
+
+<h2>Goal</h2>
+<p>
+  Determine whether a character assembled from obvious primitive shapes can be made to read as
+  <b>one seamless body</b> by a custom, mobile-performant technique — toon shaded, and driven entirely by a
+  procedural locomotion rig that covers 2-legged, any-legged, no-legged (hopping) and flying body plans.
+</p>
+
+<h2>Approach</h2>
+<ol>
+  <li><b>Frame the problem before building.</b> Name the three failure modes a primitive body has —
+      intersection crease, butt joint, and joint tear — and the four candidate fixes (implicit remesh,
+      screen-space blur, vertex-shader SDF, accept the seams). Decide which one to build and why.
+      Result: the <i>tube envelope</i>, plus the implicit remesh kept as a second tier so the comparison is a
+      button rather than a claim.</li>
+  <li><b>Build the body generator first, not the renderer.</b> A plan is joints plus shapes plus locomotion
+      wiring; everything downstream reads that structure. Five presets exercise the body-plan space.</li>
+  <li><b>Bake the seam into the geometry and the weights, not the shader.</b> A limb is one tapered tube
+      spanning every joint of its chain, so a joint is one surface; the joint blend is baked into skin
+      weights, so it costs nothing at runtime.</li>
+  <li><b>Stand up numeric gates before trusting anything visual.</b> Watertightness, a reference-free
+      orientation sum, rest-pose identity, edge stretch under animation, "does every bone skin geometry",
+      and determinism. This turned out to be the whole game — see below.</li>
+  <li><b>Then the presentation and animation layers:</b> toon bands, rim, inverted-hull outline, and the
+      procedural gaits.</li>
+  <li><b>Verify in the browser through the same API a person uses.</b> No test-only code path; the harness
+      drives <code>window.__AC0090</code>.</li>
+</ol>
+
+<h2>What actually happened</h2>
+<div class="box">
+  <b>The plan's step 4 is the reason this ticket has a result at all.</b> The prototype rendered plausible
+  creatures through a dozen serious defects — an inverted winding fix, an identity bind pose, a
+  double-counted FK offset, three separate weight-indexing bugs, a scratch buffer that aliased its own
+  input, an inverted superellipsoid bound, and finally a body mesh that was <i>not being drawn at all</i>
+  because its model matrix was never assigned. Every one of them survived a screenshot. The gates found
+  most of them; the last one was found only by bypassing the screenshot and reading the shader's uniforms.
+  The writeup records all twelve in full.
+</div>
+
+<h2>Deliverables</h2>
+<table>
+  <tr><th>Artifact</th><th>State</th></tr>
+  <tr><td><code>prototypes/ac-0090-ragdoll/</code> — the prototype, offline, no build step</td><td>delivered</td></tr>
+  <tr><td><code>prototypes/ac-0090-ragdoll/tools/meshcheck.mjs</code> — 80 offline geometry checks</td><td>0 failures</td></tr>
+  <tr><td><code>prototypes/ac-0090-ragdoll/tools/verify.py</code> — 7 browser gates, W0–W5 + determinism</td><td>all pass</td></tr>
+  <tr><td><code>docs/ragdoll-character-style.html</code> — design essay</td><td>delivered</td></tr>
+  <tr><td><code>AC-0090-results.html</code> — measured evidence + screenshots</td><td>delivered</td></tr>
+  <tr><td>Cost model and what was <b>not</b> proven</td><td>in the essay, §10–§11</td></tr>
+</table>
+
+<h2>Explicitly out of scope</h2>
+<ul>
+  <li>Any Godot code. This is a web prototype; <code>godot/</code> was not touched.</li>
+  <li>Ragdoll <i>physics</i>. "Ragdoll-like" here describes the look — loose, primitive-composed joints.</li>
+  <li>Device performance measurement. The frame times in the results are from a software rasteriser and are
+      labelled as such.</li>
+  <li>A shipping-quality rig: there is no general IK solver, no LOD system and no automatic LOD.</li>
+</ul>
+
+</div></body></html>
