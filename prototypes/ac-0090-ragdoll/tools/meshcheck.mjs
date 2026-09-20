@@ -425,6 +425,66 @@ for (const name of PRESET_ORDER) {
   check(`${name}: no inverted faces after posing`, stretch.inverted === 0, stretch);
 }
 
+// ---------------- the seed must actually generate ------------------------
+//
+// The seed used to move every joint by 0.012-0.018 world units and every radius
+// by +-7%: across five seeds a biped's width/height ratio moved 0.8%, so every
+// seed looked identical apart from its palette, and NOTHING TESTED THAT. These
+// assertions are the fix for the blind spot, not just for the behaviour.
+{
+  const SEEDS = [1, 2, 3, 4, 5, 6, 7, 8];
+  const stats = (name) => SEEDS.map((seed) => {
+    const plan = buildPreset(name, seed);
+    const mesh = generate(plan, { budget: 1 });
+    const xs = [], ys = [], zs = [];
+    for (let v = 0; v < mesh.vertexCount; v++) {
+      xs.push(mesh.positions[v * 3]); ys.push(mesh.positions[v * 3 + 1]); zs.push(mesh.positions[v * 3 + 2]);
+    }
+    const w = Math.max(...xs) - Math.min(...xs);
+    const h = Math.max(...ys) - Math.min(...ys);
+    const headBone = plan.joints.find((j) => j.name === (plan.kin.head || 'head'));
+    const headShapes = headBone
+      ? plan.shapes.filter((sh) => sh.bones && sh.bones.includes(headBone.index) && sh.type !== 'tube')
+      : [];
+    const headR = headShapes.length ? Math.max(...headShapes.map((sh) => Math.max(...sh.radii))) : 0;
+    return {
+      seed,
+      palette: plan.palette,
+      wOverH: w / h,
+      headOverH: (2 * headR) / h,
+      legs: (plan.kin.legs || []).length,
+      tris: mesh.triangleCount,
+    };
+  });
+  const spread = (a) => (Math.max(...a) - Math.min(...a)) / (a.reduce((x, y) => x + y, 0) / a.length);
+
+  for (const name of ['biped', 'quadruped', 'hopper', 'flyer']) {
+    const st = stats(name);
+    const wSpread = spread(st.map((r) => r.wOverH));
+    const hSpread = spread(st.map((r) => r.headOverH));
+    const palettes = new Set(st.map((r) => r.palette)).size;
+    check(`${name}: seed varies the silhouette, not just the palette`, wSpread >= 0.02 && hSpread >= 0.10, {
+      widthOverHeightSpread: round4(wSpread),
+      headSizeSpread: round4(hSpread),
+      distinctPalettes: palettes,
+      ofSeeds: SEEDS.length,
+      minWidthOverHeight: 0.02, minHeadSizeSpread: 0.10,
+    });
+  }
+  {
+    const st = stats('hexapod');
+    const legCounts = new Set(st.map((r) => r.legs));
+    const triMin = Math.min(...st.map((r) => r.tris));
+    const triMax = Math.max(...st.map((r) => r.tris));
+    check('hexapod: seed varies the LEG COUNT (the "any-legged" claim)', legCounts.size >= 2, {
+      legCounts: [...legCounts].sort((a, b) => a - b),
+      trianglesRange: [triMin, triMax],
+      ofSeeds: SEEDS.length,
+    });
+  }
+}
+
+
 if (asJson) {
   console.log(JSON.stringify({ failed, results }, null, 2));
 } else {
@@ -442,7 +502,7 @@ if (asJson) {
     );
   }
   const bad = results.filter((r) => r.ok === false);
-  console.log(`\n${results.length - PRESET_ORDER.length} checks, ${bad.length} failed`);
+  console.log(`\n${results.length} checks, ${bad.length} failed`);
   for (const b of bad) console.log(`  FAIL ${b.name}: ${JSON.stringify(b.detail)}`);
 }
 

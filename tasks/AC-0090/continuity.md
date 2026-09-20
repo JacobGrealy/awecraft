@@ -111,3 +111,30 @@ The same rig offline gave 1.816.
 **Lesson for the journal:** numeric gates find subtle structural faults no eye would catch, and the eye
 finds catastrophic visual ones no number is asking about. Both are needed. A gate is only as good as its
 question.
+
+## Second addendum — the seed was a colour dial
+
+Asked why every seed looked the same apart from colour. Measured it: across five seeds a biped's
+width/height ratio moved from 0.3685 to 0.3714 — **0.8%**. The seed moved each joint by 0.012–0.018 absolute
+world units and each radius by ±7%. Those offsets were also scale-blind: ±0.018 is 0.9% of a 1.92-unit biped
+and 4.6% of a 0.39-unit flyer, so the same constant meant different things on different presets.
+
+`applySeed` is now a morphology generator. It varies, each axis independent and each expressed as a ratio:
+per-limb length and thickness (chains scaled about their root joint so a longer leg grows away from the hip
+rather than sliding off the body), head size, torso length, stance width, and — on the many-legged preset —
+**leg count, 4/6/8**. The gait needed no special-casing because `_setupGait` already derived its phases from
+`legs.length`: 4 legs get a trot, 6 a tripod, 8 a generic wave.
+
+Measured over eight seeds: width/height spread 4.8% (biped), 8.5% (quadruped), 7.0% (hopper), 8.6% (flyer);
+head size spans 36–46% of height; the many-legged preset ranges from a 6,828-triangle quadruped to an
+11,050-triangle octopod.
+
+**The real defect was the missing gate.** Nothing anywhere asserted that the seed produced variation, which
+is exactly why it could collapse to a colour dial unnoticed — the same failure mode as the DQS gate that
+could not fail and the W1 gate that measured a projection instead of pixels. Five new checks now assert it,
+and they were verified to FAIL (spread 0.0) with the variation disabled before being trusted.
+
+Also fixed while here: `meshcheck.mjs --json` skipped any check defined inside the summary `else` branch, so
+the machine-readable artifact silently omitted the seed gates until they were moved out; and the console
+reported `results.length - PRESET_ORDER.length` rather than the true count, so the harness, the essay and the
+results page disagreed (80 / 85 / 90). All three now say 90.

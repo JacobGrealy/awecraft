@@ -335,6 +335,36 @@
   does. A quality dial scales the whole budget.
 </p>
 
+
+<div class="box">
+  <b>The seed is a generator, not a colour dial.</b> An earlier revision of this prototype had the
+  seed move every joint by 0.012–0.018 world units and every radius by ±7%. Measured across five seeds,
+  a biped's width/height ratio moved from 0.3685 to 0.3714 — <b>0.8%</b> — so every seed produced the
+  same creature in a different palette. Fixed absolute offsets are also wrong in principle: ±0.018 is
+  0.9% of a 1.92-unit biped and 4.6% of a 0.39-unit flyer, so the same number meant different things.
+  <p style="margin:8px 0 0">
+  What reads as a different creature is <b>proportion</b>, so that is what the seed now varies, each
+  axis drawn independently and expressed as a ratio so it means the same thing at any scale:
+  </p>
+  <ul style="margin:8px 0 0">
+    <li><b>Limb length and thickness</b> — per limb, so a creature can come out long-legged and spindly
+        or short-legged and stout, and differently on each side of the body. Joint chains are scaled about
+        their root joint, so a longer leg grows away from the hip instead of sliding off the body.</li>
+    <li><b>Head size</b>, the single biggest silhouette cue on a chunky creature.</li>
+    <li><b>Torso length</b> along the spine, and a modest cross-section change.</li>
+    <li><b>Leg count</b> on the many-legged preset — 4, 6 or 8. The gait needs no special-casing for this
+        because <code>_setupGait</code> derives its phases from the leg count rather than assuming six:
+        4 legs get a trot, 6 a tripod, 8 a generic wave.</li>
+    <li><b>Stance width</b>, plus residual jitter now scaled to the creature's own height.</li>
+  </ul>
+  <p style="margin:8px 0 0">
+  Measured over eight seeds, width/height spread is 4.8% on the biped, 8.5% on the quadruped, 7.0% on the
+  hopper and 8.6% on the flyer; head size spans 36–46% of height; the many-legged preset ranges from a
+  6,828-triangle quadruped to an 11,050-triangle octopod. Five offline checks now assert this, because
+  <b>nothing tested it before</b> — the reason the seed could quietly collapse to a colour dial is that no
+  gate was asking whether it generated anything.
+  </p>
+</div>
 <h2 id="toon">7. Toon shading and the outline</h2>
 
 <p>
@@ -623,7 +653,7 @@
   <li><b>Rest pose:</b> skinning error 0 — the bind matrix and the FK agree exactly.</li>
   <li><b>Weights:</b> normalised to 1.0 within 1e-6; no vertex unweighted.</li>
   <li><b>Determinism:</b> same (preset, seed) twice → identical digest; different seed → different digest.</li>
-  <li>80 offline checks, <b>0 failures</b> (<code>node tools/meshcheck.mjs</code>).</li>
+  <li>90 offline checks, <b>0 failures</b> (<code>node tools/meshcheck.mjs</code>).</li>
   <li>7 browser gates, <b>all pass</b> (<code>python3 tools/verify.py</code>, exit 0).</li>
   <li><b>Verified by eye as well.</b> All five body plans were rendered at a known camera and inspected:
       the biped shows head, torso, two arms with hands and two legs with feet; the hexapod shows six legs
@@ -683,7 +713,7 @@
 <p class="meta" style="margin-top:40px">
   Prototype: <code>prototypes/ac-0090-ragdoll/</code> · verification:
   <code>prototypes/ac-0090-ragdoll/tools/verify.py</code> (browser, W0–W5) and
-  <code>prototypes/ac-0090-ragdoll/tools/meshcheck.mjs</code> (offline, 70 checks) ·
+  <code>prototypes/ac-0090-ragdoll/tools/meshcheck.mjs</code> (offline, 90 checks) ·
   raw evidence: <code>tasks/AC-0090/AC-0090-results.html</code>.
 </p>
 
