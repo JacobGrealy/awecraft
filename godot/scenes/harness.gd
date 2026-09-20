@@ -1913,6 +1913,10 @@ func _player_logic_test_body() -> void:
 		"sprint_rewalk": roundf(relatched_speed * 100.0) / 100.0,
 		"sprint_latch_back": latch_cleared_on_back,
 		"sprint_fov_fly": roundf(fov_fly * 100.0) / 100.0,
+		# AC-0340 fence tripwire (smoke tier): the player stands/walks/jumps
+		# near the spawn column (0,0) — a non-zero reading is a deferred
+		# body inside the immediate footprint.
+		"col_deferred_in_footprint": int(world.perf_col_deferred_in_footprint),
 	})
 
 
@@ -19347,6 +19351,30 @@ func _count_shapes(n: Node) -> int:
 	return c
 
 
+# AC-0340 fence scan (arm-side, the independent check): the immediate
+# footprint — the _col_immediate_for predicate: Chebyshev <= 1 of the
+# recenter anchor (world.last_pcx/last_pcz) + the (0,0) spawn column — must
+# never hold a MISSING slab body: a body missing under the player was a
+# shipped "player falls through" bug (chunk.gd:1355, the AC-0264 hunt).
+# Counts the footprint columns present and the meshed slabs without a body
+# (the direct fall-through state — a meshed slab with no body is owed one;
+# it does not trust the game's col_dirty bookkeeping).
+func _col_footprint_scan() -> Dictionary:
+	var cols := 0
+	var missing := 0
+	for key in world.chunks:
+		var cc: Node3D = world.chunks[key]
+		var ccx := int(cc.cx)
+		var ccz := int(cc.cz)
+		if not ((ccx == 0 and ccz == 0) or maxi(absi(ccx - world.last_pcx), absi(ccz - world.last_pcz)) <= 1):
+			continue
+		cols += 1
+		for s in cc.slabs:
+			if s.mesh_instance != null and s.collision_body == null:
+				missing += 1
+	return {"cols": cols, "missing": missing}
+
+
 func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> void:
 	var pcx := int(floorf(spawn.x / 16.0))
 	var pcz := int(floorf(spawn.z / 16.0))
@@ -19479,6 +19507,11 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> v
 		"reband_rearm_slabs": int(world.perf_reband_rearm_slabs),
 		"staged_drained": int(world.perf_staged_drained),
 		"staged_dropped": int(world.perf_staged_dropped),
+		# AC-0340: the per-frame collision budget census + the FENCE (must
+		# read 0 / 0 — no deferred body inside the immediate footprint).
+		"col_deferred": int(world.perf_col_deferred),
+		"col_deferred_in_footprint": int(world.perf_col_deferred_in_footprint),
+		"footprint": _col_footprint_scan(),
 		"read_sync_gen": int(world.perf_read_sync_gen),
 		"read_sync_gen_ms": world.perf_read_sync_gen_ms,
 		"create_sync_gen": int(world.perf_create_sync_gen),
@@ -22687,6 +22720,12 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		"reband_rearm_slabs": int(world.perf_reband_rearm_slabs),
 		"staged_drained": int(world.perf_staged_drained),
 		"staged_dropped": int(world.perf_staged_dropped),
+		# AC-0340: the per-frame collision budget census + the FENCE — the
+		# walk crosses the band edge and moves the footprint continuously,
+		# so this is the moving-footprint proof (must read 0 / 0).
+		"col_deferred": int(world.perf_col_deferred),
+		"col_deferred_in_footprint": int(world.perf_col_deferred_in_footprint),
+		"footprint": _col_footprint_scan(),
 		"read_sync_gen": int(world.perf_read_sync_gen),
 		"read_sync_gen_ms": world.perf_read_sync_gen_ms,
 		"create_sync_gen": int(world.perf_create_sync_gen),

@@ -15,11 +15,11 @@ modes:
     tests: |-
       WASD move, floor, jump peak, fly toggle, time ticks
     result_fields: |-
-      `start`, `after_fwd`, `horizontal_moved`, `is_on_floor`, `jump_peak_y`, `after_fly_y`, `time_before`, `time_after`
+      `start`, `after_fwd`, `horizontal_moved`, `is_on_floor`, `jump_peak_y`, `after_fly_y`, `time_before`, `time_after`, `col_deferred_in_footprint` (AC-0340 fence tripwire — 0)
     envs: —
     wall: 3 s (standalone) / ~11 s battery (AC-0324)
     notes: |-
-      battery smoke mode; AC-0324: waits the SIM BAND (`_await_sim_band`) so the spawn search is ready — the player spawns at the searched column (the pad centre while the pad exists; AC-0314 pending)
+      battery smoke mode; AC-0324: waits the SIM BAND (`_await_sim_band`) so the spawn search is ready — the player spawns at the searched column (the pad centre while the pad exists; AC-0314 pending). **AC-0340: `col_deferred_in_footprint` (the collision-budget fence tripwire — the player arm stands/walks/jumps near the spawn column (0,0) and must read 0).** STALE-VALUE FINDING (2026-09-20, AC-0340 before-run, deterministic on HEAD 5be1c78): the post-cave-terrain spawn area (AC-0288/0289 re-carved it AFTER the values below were last re-measured 2026-09-18) now has a cave opening on the arm's compass scan line — the player walks in and falls to the cave floor (`jump_peak_y` 110.33 vs the recorded 142.43, `sprint_ok` false, `is_on_floor` false at the probe; the AC-0264 PROBE line shows every slab under the fallen position WITH a body — a genuine air hole, not a missing body). The arm carries no `ok` field so the battery `ok` is unaffected; the recorded start/jump values are STALE pending re-measure (arm-side staleness, follow-up)
   spawnsearch:
     entry: '`_spawnsearch_test` (AC-0324)'
     tests: |-
@@ -273,24 +273,25 @@ modes:
     tests: |-
       full-radius build/drain/first-draw/frame percentiles + memory
     result_fields: |-
-      `chunks`, `render_radius`, `fog_near`/`fog_far`/`fog_edge`/`fog_ok`, `total_chunks`, `all_meshed`, `collision_shapes`, `collision_ms_total`, `collision_n`, `collision_max_ms`, `collision_slabs`, `collision_slab_ms`, `collision_slab_max_ms`, `collision_slab_hist` (ms bins lt1/1_2/2_5/5_10/10_25/gte25), `reband_exit`, `reband_entry`, `reband_rearm_slabs`, `staged_drained`, `staged_dropped`, `total_ms`, `frames`, `recenter_ms`, `max_frame_ms`, `build_units`, `drain_frames`, `max_drain_ms`, `gen_ms`, `build_ms`, `first_draw_ms`, `p50_ms`, `p95_ms`, `frame_max_ms`, `mem_before_bytes`, `mem_after_bytes`, `drain_s`
+      `chunks`, `render_radius`, `fog_near`/`fog_far`/`fog_edge`/`fog_ok`, `total_chunks`, `all_meshed`, `collision_shapes`, `collision_ms_total`, `collision_n`, `collision_max_ms`, `collision_slabs`, `collision_slab_ms`, `collision_slab_max_ms`, `collision_slab_hist` (ms bins lt1/1_2/2_5/5_10/10_25/gte25), `reband_exit`, `reband_entry`, `reband_rearm_slabs`, `staged_drained`, `staged_dropped`, `col_deferred` (AC-0340 debt census), `col_deferred_in_footprint` (AC-0340 fence tripwire — 0), `footprint` {`cols`, `missing`} (AC-0340 arm-side fence scan — 0), `total_ms`, `frames`, `recenter_ms`, `max_frame_ms`, `build_units`, `drain_frames`, `max_drain_ms`, `gen_ms`, `build_ms`, `first_draw_ms`, `p50_ms`, `p95_ms`, `frame_max_ms`, `mem_before_bytes`, `mem_after_bytes`, `drain_s`
     envs: |-
-      `AWECRAFT_RADIUS`, `AWECRAFT_THREADGEN_N`/`TGDEBUG`, `AWECRAFT_RECPROBE`, `AWECRAFT_DRAIN_MS`, `AWECRAFT_GEN_BUDGET`, `AWECRAFT_MESH_INFO`
+      `AWECRAFT_RADIUS`, `AWECRAFT_THREADGEN_N`/`TGDEBUG`, `AWECRAFT_RECPROBE`, `AWECRAFT_DRAIN_MS`, `AWECRAFT_COLLIDE_MS` (AC-0340 staged collision cap, default 8 ms), `AWECRAFT_GEN_BUDGET`, `AWECRAFT_MESH_INFO`
     wall: |-
       r4 ≈12.3 s total_ms (measured `.scratch/ac0082_g4_perf_r4_t1.log` 2026-08-24); **r50 ≈850 s total_ms (from 2026-08-24 03:25 log `ac0082_g4_perf_r50_t1.log`)**
-    notes: SLOW at r50 — use 3000 s timeout
+    notes: |-
+      SLOW at r50 — use 3000 s timeout. **AC-0340: the per-frame collision budget (collide_drain_budget_ms, default 8 ms — the drain_budget_ms model) caps the staged lane; `col_deferred` counts budget-deferred (re-queued) columns, `col_deferred_in_footprint` the FENCE tripwire (must be 0), and `footprint` is the arm-side scan of the immediate footprint (Chebyshev ≤ 1 of the anchor + (0,0)) for meshed slabs missing a body (must be 0 — the "player falls through" class). `collision_n`/`collision_max_ms` now count PARTIAL batches (a column split across frames is 2+ batches, each ≤ budget); `collision_ms_total` and the per-slab census are invariant**
   boundary:
     entry: '`_boundary_test` (via `_await_boundary_core`)'
     tests: |-
       chunk streaming: walk r chunks, crossings, bursts, forward/trailing wall, mem, marker round-trip
     result_fields: |-
-      `ok`, `radius`, `walk_chunks`, `walk_speed`, `walk_s`, `crossings`, `p50_ms`, `p95_ms`, `max_ms`, `loads`, `unloads`, `flap`, `burst_ms_per_crossing`, `burst_p50_ms`, `burst_p95_ms`, `burst_max_ms`, `forward_wall_ms_per_crossing`, `forward_p95_ms`, `forward_max_ms`, `trailing_*`, `fluid_tick_ms_p95`, `mem_delta_mb`, `marker`, `marker_ok`, `remesh_ok`, `resident_final`, `built_final`, `in_radius_built_final`/`_max`/`_min`, `in_radius_present_final`, `target_in_radius`, `collision_ms_total`, `collision_n`, `collision_max_ms`, `collision_slabs`, `collision_slab_ms`, `collision_slab_max_ms`, `collision_slab_hist` (ms bins lt1/1_2/2_5/5_10/10_25/gte25), `reband_exit`, `reband_entry`, `reband_rearm_slabs`, `staged_drained`, `staged_dropped`, `unbodied_built_final`
+      `ok`, `radius`, `walk_chunks`, `walk_speed`, `walk_s`, `crossings`, `p50_ms`, `p95_ms`, `max_ms`, `loads`, `unloads`, `flap`, `burst_ms_per_crossing`, `burst_p50_ms`, `burst_p95_ms`, `burst_max_ms`, `forward_wall_ms_per_crossing`, `forward_p95_ms`, `forward_max_ms`, `trailing_*`, `fluid_tick_ms_p95`, `mem_delta_mb`, `marker`, `marker_ok`, `remesh_ok`, `resident_final`, `built_final`, `in_radius_built_final`/`_max`/`_min`, `in_radius_present_final`, `target_in_radius`, `collision_ms_total`, `collision_n`, `collision_max_ms`, `collision_slabs`, `collision_slab_ms`, `collision_slab_max_ms`, `collision_slab_hist` (ms bins lt1/1_2/2_5/5_10/10_25/gte25), `reband_exit`, `reband_entry`, `reband_rearm_slabs`, `staged_drained`, `staged_dropped`, `col_deferred` (AC-0340 debt census), `col_deferred_in_footprint` (AC-0340 fence tripwire — 0), `footprint` {`cols`, `missing`} (AC-0340 arm-side fence scan — 0), `unbodied_built_final`
     envs: |-
       `AWECRAFT_RADIUS` (r), `AWECRAFT_WALK`, `AWECRAFT_WALK_SPEED`, `AWECRAFT_TICKTIME`, `AWECRAFT_THREADGEN_N`/`TGDEBUG`, `AWECRAFT_RECPROBE`
     wall: |-
       r3 45 s, r4 46 s (measured 2026-08-24); r50 ≈1400 s wall (from 2026-08-24 10:34 log `.scratch/ac0079r3_battery/b_r50.log`)
     notes: |-
-      SLOW at r≥8 — 3000 s timeout; fluid sim enabled. **Off-default walk speeds read RED for a budget reason, not a world bug** — `ok = crossings == walk_lines and marker_ok` and the walk line is a fixed length, so at `AWECRAFT_WALK_SPEED=8` the arm needs ~2× the wall and finishes fewer crossings than `walk_lines` (measured 2026-09-17 at AC-0313: 7 crossings, `ok:false`, while the same run's world values were clean — p50 14, p95 21, `marker_ok`/`remesh_ok` true). Judge off-default runs on the p50/p95/`*_final` fields, not on `ok`.
+      SLOW at r≥8 — 3000 s timeout; fluid sim enabled. **Off-default walk speeds read RED for a budget reason, not a world bug** — `ok = crossings == walk_lines and marker_ok` and the walk line is a fixed length, so at `AWECRAFT_WALK_SPEED=8` the arm needs ~2× the wall and finishes fewer crossings than `walk_lines` (measured 2026-09-17 at AC-0313: 7 crossings, `ok:false`, while the same run's world values were clean — p50 14, p95 21, `marker_ok`/`remesh_ok` true). Judge off-default runs on the p50/p95/`*_final` fields, not on `ok`. **AC-0340: the walk moves the immediate footprint continuously (and crosses the band edge on every crossing), so the `col_deferred_in_footprint` / `footprint` fence fields are the MOVING-footprint proof — both must read 0; the per-frame staged collision cap must not move walk p50/p95 (standing band 39–42)**
   atlas:
     entry: '`_atlas_test`'
     tests: spawn chunk mesh UV sanity

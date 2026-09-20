@@ -165,7 +165,22 @@ Match these; do not improvise a different approach in a task.
   recenter anchor + column (0,0): free + rebuild in the landing frame, the footing guarantee)
   and the STAGED lane (`_col_pending`, ≤ 2 columns/frame in the drain's
   `build_dirty_slab_bodies`; `AWECRAFT_COLSTAGE=0` disables it — then only the immediate
-  footprint is serviced). **Band-edge lifecycle (AC-0337)**: a body is a deterministic
+  footprint is serviced). **Per-frame collision budget (AC-0340)**: the staged lane is
+  ALSO time-capped at `collide_drain_budget_ms` (default 8 ms — the `drain_budget_ms`
+  model that bounds the build lane; `AWECRAFT_COLLIDE_MS` overrides) — measured at
+  AC-0337, a column is up to 24 slabs at ~2 ms each, so the fixed 2-columns/frame
+  could carry 48 slab bodies (≈100 ms) in one frame. `build_dirty_slab_bodies` stops
+  BEFORE starting a slab once the budget is spent; a column whose slabs outlast it is
+  RE-QUEUED as debt (`perf_col_deferred`), never dropped (a drop is still an
+  invalidation: eviction / band change / stale). The FENCE: the immediate footprint
+  (the `_col_immediate_for` predicate) is built UNBOUNDED in the drain — the budget
+  must NEVER defer a slab under the player (a missing body there was the shipped
+  "player falls through" bug, chunk.gd:1355 / the AC-0264 hunt); a spent budget skips
+  out-of-footprint entries and keeps scanning (the (0,0) column can sit in the queue
+  sorted by distance — the band-0 re-entry staging does not foot-check). Standing
+  proof: the `perf_col_deferred_in_footprint` tripwire + the arm-side `footprint` scan
+  (meshed slabs missing a body, Chebyshev ≤ 1 + (0,0)) in the boundary/perf arms and
+  the tripwire in the player arm (HARNESS.md §1). **Band-edge lifecycle (AC-0337)**: a body is a deterministic
   function of its geometry inputs, stamped per slab — the slab's own `(dgen, fgen)` plus the
   four orthogonal neighbors' same-slab `(dgen, fgen)` (`_slab_geom_stamp`; the per-slab
   generations move only at a write to that slab / a column landing; **light is excluded** —

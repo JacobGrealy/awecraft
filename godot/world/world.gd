@@ -124,6 +124,14 @@ const FLUID_DIRS := [
 ]
 
 const DRAIN_MS_DEFAULT := 30
+# AC-0340: the staged collision lane's per-frame time cap (the drain_budget_ms
+# model — that one bounds the build lane). Measured at AC-0337: per-slab body
+# derivation averages ~2.1 ms (24 slabs/column, worst slab 6.7 ms on the
+# boundary walk), so the old fixed 2 columns/frame could carry 48 slabs ≈
+# 100 ms in one frame. 8 ms ≈ 3–4 bodies/frame = 48% of a 60 fps frame; the
+# excess re-queues as debt (never drops). AWECRAFT_COLLIDE_MS overrides
+# (tuning knob for the A/B, the AWECRAFT_DRAIN_MS pattern).
+const COLLIDE_DRAIN_BUDGET_MS := 8
 const REC_SLICE_BUDGET_MS := 8
 const REC_UNITS_PER_FRAME := 2048
 # AC-0335: the drain is the ONLY scheduler and its pacing is the surviving
@@ -2767,6 +2775,7 @@ var _cull_ny := PackedFloat32Array()
 var _cull_dc := PackedFloat32Array()
 var _cull_cen := Vector3()
 var drain_budget_ms := DRAIN_MS_DEFAULT
+var collide_drain_budget_ms := COLLIDE_DRAIN_BUDGET_MS  # AC-0340: the staged collision lane's per-frame cap
 # AC-0213: small-move (recenter) pacing state.
 var _sm_move_until := 0        # drain budget drops to 1 unit/frame until this ms
 var _last_recenter_ms := 0     # wall ms of the last recenter() entry
@@ -3082,6 +3091,17 @@ var perf_collision_n := 0
 var perf_collision_max_ms := 0
 var perf_staged_drained := 0
 var perf_staged_dropped := 0
+# AC-0340: the debt census — a column whose slabs outlast the per-frame
+# collision budget (collide_drain_budget_ms) is RE-QUEUED, never dropped:
+# perf_col_deferred counts the deferrals (informational; a healthy walk
+# shows a small steady number, the debt converges in <1 s).
+var perf_col_deferred := 0
+# AC-0340 FENCE TRIPWIRE: a deferral INSIDE the immediate footprint
+# (the _col_immediate_for predicate — Chebyshev <= 1 of the anchor, plus
+# the (0,0) spawn column) is the "player falls through" class (chunk.gd
+# :1355, the AC-0264 hunt) — the budget must NEVER defer a slab there.
+# Must read 0 in every gate (the boundary/perf/player arms expose it).
+var perf_col_deferred_in_footprint := 0
 # AC-0337 step 0: the per-SLAB collision census (the trio above counts
 # BATCHES — one per immediate landing / per staged column drain — so the
 # gate's "ms per collision" was per-batch). Counted at the single body-
@@ -3185,6 +3205,11 @@ func _ready() -> void:
 	var dr := OS.get_environment("AWECRAFT_DRAIN_MS")
 	if dr != "" and dr.to_int() > 0:
 		drain_budget_ms = dr.to_int()
+	# AC-0340: the staged collision lane's per-frame cap (the DRAIN_MS
+	# pattern — the harness A/B's tuning knob).
+	var cl := OS.get_environment("AWECRAFT_COLLIDE_MS")
+	if cl != "" and cl.to_int() > 0:
+		collide_drain_budget_ms = cl.to_int()
 	# AC-0224/AC-0225: tuning knob for the streaming handoff burst (default
 	# STREAM_TM_HANDOFF_PER_FRAME = 3) — the AWECRAFT_TM_HO env preloads the
 	# same Settings "chunks_per_frame" value the Options slider drives
@@ -8510,18 +8535,47 @@ func _col_dist(key: String) -> int:
 	return maxi(absi(int(c.cx) - last_pcx), absi(int(c.cz) - last_pcz))
 
 func _col_drain_step() -> void:
-	# <=2 staged bodies per frame, nearest-first, behind the build queue.
-	# Validity: chunk present + mesh_built + no body yet (dup guard) +
-	# collision_enabled + col_dirty + in radius; anything else drops (a
-	# rebuilt or out-of-radius chunk is cancelled, never double-bodied).
+	# <=2 staged columns/frame (the pacing contract) AND <= collide_drain_
+	# budget_ms of body derivation (the AC-0340 time cap — the drain_budget_ms
+	# model bounds the build lane the same way). Nearest-first, behind the
+	# build queue. A column whose slabs outlast the budget is RE-QUEUED
+	# (debt, perf_col_deferred) — never dropped: a dropped entry lost validity
+	# before its drain (eviction / band change / the mesh finished).
+	#
+	# THE FENCE: a column inside the IMMEDIATE footprint (the _col_immediate_for
+	# predicate — Chebyshev <= 1 of the anchor, plus the (0,0) spawn column)
+	# is built in full, ignoring the budget. A missing body under the player
+	# was a shipped bug (chunk.gd:1355 "the player falls through"): the budget
+	# must never defer a slab inside that footprint. perf_col_deferred_in_
+	# footprint is the tripwire (boundary/perf/player arms read it); the
+	# arm-side footprint scan is the independent check. Note the (0,0) column
+	# CAN sit in this queue (the band-0 re-entry staging at _reband does not
+	# foot-check) sorted by distance — so a spent budget SKIPS out-of-
+	# footprint entries and keeps scanning rather than breaking.
 	if _col_pending.is_empty():
 		return
 	_col_pending.sort_custom(func(a, b): return _col_dist(a) < _col_dist(b))
 	var done := 0
 	var i := 0
+	var t0 := Time.get_ticks_usec()
+	var budget_us := int(collide_drain_budget_ms * 1000)
 	while done < 2 and i < _col_pending.size():
 		var key: String = _col_pending[i]
 		var c = chunks.get(key)
+		if c == null:
+			# Stale (the chunk was freed) — cancel regardless of the budget
+			# (no work is owed; a never-served entry would only accumulate).
+			_col_pending.remove_at(i)
+			_col_pending_set.erase(key)
+			perf_staged_dropped += 1
+			continue
+		var footprint: bool = _col_immediate_for(int(c.cx), int(c.cz))
+		if not footprint and Time.get_ticks_usec() - t0 >= budget_us:
+			# The budget is spent — this out-of-footprint entry keeps its
+			# debt in the queue; the loop advances (it may hold a footprint
+			# entry behind it, which is still served unbounded).
+			i += 1
+			continue
 		var ok: bool = c != null and c.mesh_built and c.collision_enabled and c.any_col_dirty() and maxi(absi(int(c.cx) - last_pcx), absi(int(c.cz) - last_pcz)) <= render_radius
 		_col_pending.remove_at(i)
 		_col_pending_set.erase(key)
@@ -8529,13 +8583,32 @@ func _col_drain_step() -> void:
 			perf_staged_dropped += 1
 			continue
 		var _ct := Time.get_ticks_usec()  # AC-0337 step 0: the COLLIDE sub-stage (staged side)
-		c.build_dirty_slab_bodies()
+		# -1 = unbounded (the fence) or the remaining budget in usec.
+		var rem_us: int = -1 if footprint else (budget_us - (Time.get_ticks_usec() - t0))
+		c.build_dirty_slab_bodies(rem_us)
 		_wprof_add(WP_COLLIDE, Time.get_ticks_usec() - _ct)
 		if not c.any_col_dirty():
 			_count_collision_build(c)
 			perf_staged_drained += 1
 		else:
-			perf_staged_dropped += 1
+			# AC-0340: budget-deferred — the column keeps its dirty slabs
+			# (the debt) and re-enters the queue (nearest-first re-sort next
+			# frame). The old code DROPPED a still-dirty column here; with a
+			# budget that is the normal exit of a partial column. This
+			# PARTIAL build was a batch — count it now: build_dirty_slab_
+			# bodies resets last_collision_build_ms at entry, so the partial
+			# ms is lost if the count waits for the full drain (the per-slab
+			# census at the choke point is unaffected either way).
+			_count_collision_build(c)
+			_col_pending.append(key)
+			_col_pending_set[key] = true
+			perf_col_deferred += 1
+			if footprint:
+				# Structurally unreachable (the footprint is unbounded —
+				# build_dirty_slab_bodies(-1) clears every owed slab): a
+				# non-zero reading means a future change re-introduced the
+				# fall-through class. The gates read it.
+				perf_col_deferred_in_footprint += 1
 		done += 1
 
 func _count_collision_build(c: Node3D) -> void:

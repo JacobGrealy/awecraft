@@ -1281,12 +1281,22 @@ func first_opaque_mesh() -> ArrayMesh:
 	return null
 
 
-func build_dirty_slab_bodies() -> void:
+# AC-0340: budget_us = the caller's REMAINING per-frame collision budget
+# (usec; -1 = unbounded — the immediate path's _post_build_collision and the
+# drain's footprint fence both call with -1). The loop stops BEFORE starting
+# a slab once the budget is spent; the slabs left behind keep col_dirty (the
+# world re-queues the column as debt — the cap is "no new work past the
+# budget", the same convention as the drain's own time cap). A slab that has
+# started always finishes (per-slab max 6.7 ms, the AC-0337 census).
+func build_dirty_slab_bodies(budget_us: int = -1) -> void:
 	last_collision_build_ms = 0
 	if not collision_enabled:
 		return
+	var t0 := Time.get_ticks_usec()
 	for s in slabs:
 		if s.col_dirty and s.collision_body == null:
+			if budget_us >= 0 and Time.get_ticks_usec() - t0 >= budget_us:
+				break
 			_build_slab_collision(s)
 			if s.collision_body != null or s.mesh_instance == null or s.mesh_instance.mesh == null:
 				s.col_dirty = false
