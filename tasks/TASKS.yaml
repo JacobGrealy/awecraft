@@ -1,14 +1,12 @@
 meta:
-  updated_at: 2026-09-19T22:56
+  updated_at: 2026-09-20T04:21
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0335
 - AC-0336
 - AC-0337
 - AC-0338
-- AC-0333
 - AC-0334
 - AC-0339
 - AC-0290
@@ -16426,11 +16424,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-19T12:10
-  updated_at: 2026-09-19T21:08
-  completed_at: null
+  updated_at: 2026-09-20T04:21
+  completed_at: 2026-09-20T04:21
   waiting_on: null
   parent_id: null
   notes: "1) User Story: A few far columns can be drawn TWICE (overdraw / z-fighting in the distance).\
@@ -16500,7 +16498,20 @@ intake:
     \ the arm's\n   reference being stale. IF THAT COMES OUT \"THE ARM'S REFERENCE IS STALE\", then this\
     \ ticket is most\n   plausibly the same class (a generation-sensitive arm rather than an engine defect)\
     \ and both should be\n   resolved by one arm-hardening change rather than two engine fixes. Check\
-    \ AC-0334's result before\n   concluding anything here."
+    \ AC-0334's result before\n   concluding anything here.\n\nCLOSED 2026-09-20 as NOT REPRODUCIBLE on\
+    \ the current tree - with the honest correction that the unification did NOT fix it, because it was\
+    \ already gone before it. EVIDENCE TRAIL: the red was real and deterministic on the AC-0288 tree (far1.far_holes\
+    \ 3, three consecutive `--fixed-fps 600` runs, all identical), and then read `far_holes` 0 on EVERY\
+    \ tree after it - AC-0289's stage (my run), AC-0331's stage and AC-0335's stage - i.e. the cave P1\
+    \ field change (AC-0289) was enough to clear it, before the lane unification existed. So the classification\
+    \ the ticket asked for comes out as: the census was SENSITIVE TO THE FAR PAYLOAD'S CONTENT at that\
+    \ one tree state (a latent fragility of the two-lane seam, triggered by the cave P0 payload shift),\
+    \ not a persistent defect - and the unification's single order removes the seam that produced it,\
+    \ which is a structural improvement rather than this ticket's fix. The reproducer is preserved in\
+    \ the notes (the exact arm, recipe and counts) in case it returns; if it does, bisect against the\
+    \ AC-0288 tree state first and against AC-0335's single order second. The census check itself stays\
+    \ in the arm's sub-flags (far_holes 0 in both bands) and is now read by every r16 run in the standing\
+    \ set."
   comments: []
 - id: AC-0334
   title: halo-demote-content-mismatch
@@ -16579,11 +16590,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-09-19T21:05
-  updated_at: 2026-09-19T22:05
-  completed_at: null
+  updated_at: 2026-09-20T04:21
+  completed_at: 2026-09-20T04:21
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -16692,7 +16703,20 @@ intake:
     say this unification is expected to RECONCILE its reproducer, so treat `far_holes` 0 in both bands
     as a first-class acceptance criterion here, not a nice-to-have. AC-0334 (a halo demote/promote content
     mismatch that AC-0289''s tunnel carve introduced, 5 cells in column [5,0]) is a known PRE-EXISTING
-    red on this tree - do not chase it, just do not misread it as your regression.'
+    red on this tree - do not chase it, just do not misread it as your regression.
+
+
+    CLOSED 2026-09-20 (commit b5a3c2b). Coordinator verification: genhash 25/25 byte-identical in two
+    runs AND against the AC-0289 reference (generation untouched); ladder ok with band_a_ok 20/20; farab
+    ok (1080/1080, h_mismatch 0); meshprobe ok; halo green except the known AC-0334 (c) red (5 cells in
+    column [5,0], identical before and after - not this ticket); r16 with the documented --fixed-fps 600
+    recipe reading ALL sub-flags green with far_holes 0 in BOTH bands; boundary r4 p50 13 / p95 41 / max_ms
+    448 with marker_ok and remesh_ok true (p50 flat, no walk trade-off); battery 12 byte-identical with
+    EXACTLY the same differing-mode set as the pre-change run (no new delta) and save/survival/hunger
+    green. The frame-cost win is independently confirmed by the coordinator''s own r16 run: static p50
+    5 ms (fps_p50 200) and moving p50 8 ms, against the old two-scheduler path''s 30-40 ms per frame.
+    The single-order structure, the `_dispatch_column_work` switch, the surviving LOW_WAVE pacing pair
+    and the measured fps-independence are recorded in the commit and in ARCHITECTURE.md section 6.'
   comments: []
 - id: AC-0336
   title: remove-dead-lane-apparatus
