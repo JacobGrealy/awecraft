@@ -1,13 +1,17 @@
 meta:
-  updated_at: 2026-09-20T08:13
+  updated_at: 2026-09-20T12:55
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0337
+- AC-0340
 - AC-0338
 - AC-0334
 - AC-0339
+- AC-0341
+- AC-0342
+- AC-0343
+- AC-0344
 - AC-0290
 - AC-0291
 - AC-0292
@@ -16165,7 +16169,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-19T08:42
-  updated_at: 2026-09-19T12:10
+  updated_at: 2026-09-20T12:55
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -16196,7 +16200,15 @@ intake:
     \ of a fixed contract. When you work this ticket, treat that as part of the problem: an arm whose\
     \ status flips with world generation cannot gate anything reliably. Fix the scenario so it is deterministic\
     \ (build/choose its own target explicitly, the way AC-0314's hunger/survival arms now build a fixture)\
-    \ rather than inheriting whatever the seed's terrain provides."
+    \ rather than inheriting whatever the seed's terrain provides.\n\nANOTHER STALE-ARM BUDGET (coordinator,\
+    \ 2026-09-20, found while verifying AC-0337): the `editslab` arm's `ok` is FALSE because its `pre_total_ms`\
+    \ budget is 241 ms while the edit round trip now takes 347 ms - and the builder proved with a stash\
+    \ A/B that it is RED AT HEAD too, i.e. the budget predates the full-column change and has nothing\
+    \ to do with the work that exposed it. Add it to this ticket's list alongside craft/water/trees (ok:false\
+    \ in the archived baseline) and atlas/buckets/player/interact (no `ok` key at all). Note the pattern\
+    \ this keeps showing: an arm whose threshold is a WALL-CLOCK BUDGET goes stale every time the engine's\
+    \ work shape changes, whereas an arm that asserts an INVARIANT (byte-identity, a closure set, a determinism\
+    \ property) survives - prefer the invariant when you rework these."
   comments: []
 - id: AC-0331
   title: far-tier-mesh-floor-kernel
@@ -16824,11 +16836,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-19T21:22
-  updated_at: 2026-09-19T21:22
-  completed_at: null
+  updated_at: 2026-09-20T12:55
+  completed_at: 2026-09-20T12:55
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -16934,7 +16946,58 @@ intake:
     band-edge path: an arm-side staleness finding could explain part of the observed cost without any
     engine defect.
 
-    '
+
+
+    SIZED BY THE COORDINATOR BEFORE DELEGATION (2026-09-20, per the COORDINATOR.md Sizing rule). Measured
+    against the rule''s triggers, this ticket as written carried four steps in one turn: permanent instrumentation
+    (step 0), three distinct no-op-rebuild fixes (step 1), a per-frame budget with a debt queue plus a
+    footing fence (step 2), and a conditional redesign of the shape derivation (step 3, "only if steps
+    1-2 do not reach the target"). It is therefore SPLIT, with nothing reordered:
+
+
+    - THIS TICKET = steps 0 + 1: MEASURE FIRST (the per-slab counter beside perf_slab_body_builds/perf_slab_body_ms,
+    the new COLLIDE stage in the World._wprof list bracketing _post_build_collision and build_dirty_slab_bodies,
+    and staged_dropped promoted to a standing value with a threshold in HARNESS.md section 3 together
+    with harness_data.yaml + the rendered doc), THEN STOP REBUILDING WHAT DID NOT CHANGE (the _reband
+    band-0 flag keeping the bodies; the chunk.gd:1355-1364 geometry-vs-light distinction; and the _apply_edits_to_chunk
+    question, answered rather than assumed, since an edit already dirties the 3-slab closure via mark_edit_slabs
+    for the greedy-merge overhang). Its target is the cheapest, most certain part of the win, and it produces
+    the numbers the next piece needs.
+
+    - AC-0340 (filed alongside this note) = step 2: the per-frame collision time cap with a debt queue,
+    including the FENCE that the immediate path (Chebyshev <= 1 plus the 0,0 spawn column) must never
+    be deferred - a missing body there was a shipped "player falls through" bug.
+
+    - STEP 3 (the cheaper derivation: ship the worker''s greedy quads as a compact list and build the
+    shape from that, and reconsider whether ConcavePolygonShape3D is right for greedy voxel terrain) stays
+    UNFILED on purpose: the ticket makes it conditional on steps 1-2 not reaching the target, so it is
+    filed only if the measurements say it is needed - do not start it here.
+
+    WHAT THAT MEANS FOR YOU: deliver steps 0 + 1 only, with the instrumentation kept PERMANENT (it is
+    standing evidence, not scaffolding), and hand the coordinator the before/after numbers that decide
+    whether AC-0340''s budget is sufficient or step 3 is warranted. Do not build the budget here.
+
+
+    TAKEN BY THE COORDINATOR SESSION (2026-09-20) per the user''s instruction to work the queue in its
+    new order. It DEPENDS ON THE STATE AC-0335/AC-0336 LEFT: the drain is the only scheduler, band 0''s
+    collision path is untouched by those tickets, and the far tiers now carry a mesh floor at SEA (AC-0331/AC-0332)
+    - but collision exists in band 0 only, so the floor is irrelevant here. AC-0334 (the halo demote/promote
+    content mismatch, 5 cells in column [5,0]) is a known PRE-EXISTING red; do not chase it, and note
+    that its CLASSIFICATION (arm-side staleness vs engine staleness) could bear on the band-edge path
+    you are about to touch - the ticket''s own scope fence says to re-read that classification before
+    changing the band-edge path if it has landed. AC-0333 is closed as not-reproducible, so no reproducer
+    is waiting on you. THIS TICKET WAS SPLIT BY THE COORDINATOR: deliver its steps 0+1 only (see the split
+    note in its own notes); the per-frame budget is filed as AC-0340 and the conditional cheaper-derivation
+    step 3 is deliberately unfiled.
+
+
+    CLOSED 2026-09-20 (steps 0+1 of the original four; the budget is AC-0340, step 3 unfiled). Coordinator
+    verification: genhash 25/25 byte-identical x2 and against the reference; boundary p50 13 / p95 40
+    with staged_dropped 1778 inside the new <=2500 standing threshold; the new per-slab histogram shows
+    no slab above 10 ms; reband_rearm_slabs 0; editperf green with the editslab closures narrowed to [0,1]/[1]/[1,2];
+    the footing proven by spawnsearch (3 seeds, deterministic) and player; ladder/farab/meshprobe/interact/save
+    green; r16 all sub-flags with far_holes 0; battery with no new delta. The builder''s verdict that
+    AC-0340''s budget suffices and step 3 is unnecessary is recorded with its evidence.'
   comments: []
 - id: AC-0338
   title: far-tier-batched-draws
@@ -17097,6 +17160,430 @@ intake:
     arm reference, and option (b) above writes directly over that machinery. Also after AC-0335 if it
     lands first, since it changes the ORDER slabs are dispatched in and therefore what the settle wait
     even means. Do not change the cave fields, the mesh emit, or the far-tier floor.
+
+    '
+  comments: []
+- id: AC-0340
+  title: collision-frame-budget
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-20T08:14
+  updated_at: 2026-09-20T08:14
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Walking the band edge or breaking a block can spend the frame''s whole budget
+    rebuilding collision - and today that work has no time cap, only a fixed 2-columns-per-frame limit
+    that can mean 48 slabs at once. I want the per-frame cost capped, with the excess queued instead of
+    blowing the frame, WITHOUT ever deferring the collision under the player.
+
+
+    2) Technical Details:
+
+    SPLIT OUT OF AC-0337 BY THE COORDINATOR (2026-09-20, the Sizing rule) - that ticket now covers only
+    its steps 0+1 (the per-slab counter, the COLLIDE wprof stage, staged_dropped as a standing value,
+    and the no-op-rebuild fixes: the _reband band-0 flag, the geometry-vs-light distinction at chunk.gd:1355-1364,
+    and the _apply_edits_to_chunk question). THIS ticket is AC-0337''s STEP 2, and it depends on that
+    ticket''s numbers: measure first, then cap.
+
+    THE WORK: a per-frame collision time cap with a debt queue, the way `drain_budget_ms` already bounds
+    the build lane. Today the staged lane is a fixed 2 columns/frame (godot/world/world.gd `_col_drain_step`
+    :9068) with NO time cap, and each column can be 24 slabs - so a frame can carry 48 slab rebuilds at
+    ~2-4 ms each.
+
+    THE FENCE, WHICH IS THE WHOLE RISK OF THIS TICKET: the IMMEDIATE path (world.gd `_col_immediate_for`
+    :8953 - Chebyshev <= 1 from the player, plus the 0,0 spawn column) builds bodies inside the landing
+    frame, and chunk.gd:1355 records that a missing body under the spawn plateau was a real shipped bug
+    ("the player falls through"). The budget must NEVER defer a slab inside that footprint; only work
+    outside it may be deferred. Gate that explicitly rather than trusting the code path.
+
+    GATES: boundary r4 (walk p50/p95/max_ms AND staged_dropped - which AC-0337 promotes to a standing
+    value), the battery''s perf arm (collision_ms_total / collision_max_ms / frame_max_ms, and the new
+    per-slab counts AC-0337 adds), editperf (flush_frames and the per-edit max frame), r16 sub-flags,
+    and genhash 25/25 byte-identical (collision is not generation). Also prove the fence: a run that exercises
+    the immediate footprint (the player arm / spawnsearch) must show no deferred body inside it.
+
+    SCOPE FENCES: do NOT touch the far LOD lanes, the scheduler unification (AC-0335/AC-0336) or the demote/re-lower
+    machinery - collision exists in band 0 only. And do NOT do AC-0337''s step 3 (the cheaper shape derivation)
+    here: if the measurements say steps 1-2 are not enough, that gets its own ticket.
+
+    '
+  comments: []
+- id: AC-0341
+  title: cave-stratification-layers
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-20T11:15
+  updated_at: 2026-09-20T11:16
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story\n\nAs a player caving underground, I want the underground to be a STACK of cave\
+    \ levels separated by stone, not one cavern that runs the entire height of the world. Today the deeper\
+    \ you dig the more hollow it gets, with no floors and no ceilings anywhere — every descent is the\
+    \ same continuous void, so there are no \"levels\" to move between and nothing to make a descent feel\
+    \ like progress.\n\n2) Technical Details\n\nTHE GAP (measured/derived from the shipped code, not a\
+    \ guess):\nd = S_ramp(H, y) + A(y) * (C - 0.5)   (gen.cpp:479-481)\nA(y) = 1.8 * (1 + max(0, H - y\
+    \ - 10) / 6)   (gen.cpp:427-432; CAVE_AMP 1.8 / R_BAND 10.0 / DEEP_GROW 6.0 at gen.cpp:278-283)\n\
+    NOTHING in d is periodic in y, so the carve threshold falls monotonically with depth: air fraction\
+    \ ~0% at 10 blocks below the surface, ~4% at 22, ~11% at 30, ~18% at 40, ~34% at 80 (derived from\
+    \ the constants against the C distribution; AC-0215 measured 34.9% air at y8-15 and 30-38% in the\
+    \ deep zone). Compounding it, C's vertical correlation length is ystep = hmax/GY_CELLS = 384/8 = 48\
+    \ BLOCKS (gen.cpp:299 constexpr GY_CELLS = 8; ystep at gen.cpp:570/780/1088; Data.HEIGHT 384 at godot/autoload/data.gd:7)\
+    \ and consecutive lattice planes are 48/10 = 4.8 noise periods apart, so the cave field's nominal\
+    \ 10-block y scale (gen.cpp:800) is aliased away entirely — inside a cell C is a straight lerp between\
+    \ two uncorrelated values.\n\nBEDROCK TARGET (this is how vanilla gets layers; Bedrock shares Java's\
+    \ noise router post-Caves & Cliffs):\n  mul(4.0, square(noise \"cave_layer\", xz_scale 1.0, y_scale\
+    \ 8.0))\nadded to the cheese term inside final_density. noise cave_layer = {firstOctave: -8, amplitudes:\
+    \ [1.0]} (single octave, 256-unit lattice) => ~32-block VERTICAL period, ~256-block HORIZONTAL. It\
+    \ is SQUARED, so the bias is 0..+4 and one-sided, while the cheese carve can only supply about -(0.27\
+    \ + cheese) = -0.3..-1.3 (clamp(-1,1)(0.27 + cave_cheese)). So the bands where |layer| is large are\
+    \ simply stone: carving windows every ~16 blocks, capped by stone between them. Only the CHEESE family\
+    \ is stratified — add(spaghetti_2d, spaghetti_roughness_function) and noodle sit outside the layer\
+    \ bias, so tunnels pierce the caps and connect the levels.\nSources: Java 1.21.4 data/minecraft/worldgen/noise_settings/overworld.json\
+    \ + density_function/overworld/caves/entrances.json + noise/cave_layer.json. Bedrock: Caves & Cliffs\
+    \ Part II guide (cheese/spaghetti/noodle overhaul); MCPE-143895 (noise caves not in parity in 1.18.0.20/.21,\
+    \ fixed 1.18.0.22, \"with the seed parity returns\"); MCPE-154323 (still open, noise caves generate\
+    \ in largely the same positions and identically shaped, only carvers differ — labelled seed-parity-issues).\n\
+    \nDESIGN FOR US — do NOT copy the constant +4:\nOur carve pressure is A(y)*|C-0.5|, which GROWS with\
+    \ depth (about 0.2 near the surface, 1-2.5 deep), so a fixed additive bias would erase the shallow\
+    \ caves and barely modulate the deep ones. Gate the AMPLITUDE multiplicatively instead:\n  A_strat(y)\
+    \ = A(y) * (1 - LAYER_K * b)      b in [0,1], b = 1 at a cap, 0 at a room centre\nProperties that\
+    \ matter: caps work equally well at any depth (90% of A is 90% of the carve pressure); A_strat <=\
+    \ A <= 1.8 preserves the AC-0288 \"air for sure above H+R+1\" scan-start invariant (1.8 * 0.5268 =\
+    \ 0.948 < 1) which a negative additive bias would break; and the deep keeps its hollow fraction inside\
+    \ the rooms, so DEEP_GROW/CAVE_AMP need no compensating retune. Keep the term one-sided (never increase\
+    \ A) so it can never make a surface opening worse.\n\nWHERE b COMES FROM:\nCheap path — one fbm2 per\
+    \ column for a slow horizontal phase warp, then a periodic profile in y at ~10 flops per scan point:\n\
+    \  ph = fbm2(x/180.0 + 4000.0, z/180.0 + 4000.0, seed + 401, 2) - 0.5\n  u  = y / LAYER_H + ph;  u\
+    \ -= floor(u)\n  b  = 1.0 - fabs(2.0*u - 1.0);  b = b*b*(3.0 - 2.0*b)\nA 32-block period CANNOT be\
+    \ carried by the 48-block lattice, so this must be evaluated densely in the scan (gen.cpp:876-894),\
+    \ NOT added to the 441-point field lattice. Faithful-but-pricier alternative if the flat profile looks\
+    \ too regular: a real fbm3(x/200, y/32, z/200) per scan point, or at a 4-block y stride into a scratch\
+    \ array and lerped.\nKeep the layers ABSOLUTE in y (as Bedrock does), not relative to H: depth-relative\
+    \ layers would give every hill its own stack and break horizontal continuity across terrain.\nDo NOT\
+    \ gate the tunnels: tunnel_air is already evaluated outside dens_at (gen.cpp:889-890), so leaving\
+    \ it alone makes AC-0289's spaghetti/noodle the vertical connectors between levels — the same topology\
+    \ Bedrock has.\n\nDOCS TO SYNC IN THE SAME TASK (this mislabel is how the gap stayed invisible):\n\
+    gen.cpp header lines 1 and 5, docs/worldgen-current.html:369 and :376, and tasks/cave-compare/cave-compare.html:30\
+    \ and :32 all describe the lattice as \"4x8x4 cells\" while the same sentences/paragraphs state ystep\
+    \ = hmax/8 = 48 blocks (docs/worldgen-current.html:397 has the correct 48). \"4x8x4\" reads as Bedrock's\
+    \ 4x8x4-BLOCK cell; ours is 4 x 48 x 4 blocks (8 y-cells over HEIGHT 384). Correct every occurrence\
+    \ and state the contrast where the doc compares us to Bedrock.\n\nVERIFY:\n- G0: zero SCRIPT ERROR\
+    \ lines (not rc).\n- The direct signature: the air-%-by-depth profile must stop being monotone and\
+    \ gain a peak at the layer period (autocorrelation/FFT of the profile). Today it is monotone; that\
+    \ is the gate this ticket exists for. Use the AC-0215/AC-0288 depth-profile tooling.\n- Stacked-room\
+    \ cross-section renders in the AC-0288 xslice pattern (a blob spanning a cap must read as two stacked\
+    \ chambers with matching outlines).\n- H bit-exactness UNTOUCHED (no surface field moves; A is only\
+    \ scaled) — AC-0284b/AC-0286 promotion contract; the AWEH column_heights16 SHA-256 method from AC-0288\
+    \ is the proof.\n- genhash rebase is expected and accepted (standing user note 2026-09-15: old-world\
+    \ save compatibility NOT required, fresh worlds only).\n- Band 0 only (the far band never builds the\
+    \ cave field). Re-measure the scan stage from the AC-0237 gen_timing breakdown: the AC-0313 clause-4\
+    \ load-screen wall is derived from the real band's gen cost.\n- The deep air profile must not collapse:\
+    \ keep the AC-0215 30-38% deep-air figure as the reference, inside the rooms.\n\nDEFERRED: the vertical\
+    \ cell size itself (AC-0344 decides that on this ticket's evidence); the shallow-band/entrance rule\
+    \ (AC-0343).\n\n\n\n\nPRECISION NOTE (coordinator, filed with the ticket): \"A <= 1.8\" above is a\
+    \ statement about the SURFACE BAND only (y > H - R_BAND, where A(y) = 1.8 exactly). Below the band\
+    \ A grows with depth (A = 3.6 at H-16, 10.8 at H-40, ~38 near the floor), which is the whole point\
+    \ of DEEP_GROW. The AC-0288 scan-start invariant \"air for sure above H + R + 1\" lives in the band,\
+    \ and its entire margin is 1.8 * 0.5268 = 0.948 < 1 (max measured |C - 0.5| for the two-octave blend).\
+    \ A multiplicative gate <= 1 can only reduce |A * (C - 0.5)| at every depth, so it cannot break that\
+    \ margin anywhere; an ADDITIVE term can, which is why the layer term must stay one-sided (never add\
+    \ carve)."
+  comments: []
+- id: AC-0342
+  title: fluid-decision-before-carve
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-20T11:15
+  updated_at: 2026-09-20T11:15
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story\n\nAs a player, I want cave mouths and pits on land to be DRY unless they are\
+    \ actually part of the sea, and I want an ocean column to keep its water surface no matter what the\
+    \ caves below it do. Right now every cave that reaches the surface and drops the ground below water\
+    \ height fills with water whose surface sits at exactly the water height — a pool in the middle of\
+    \ dry land, at a level unrelated to the terrain around it.\n\n2) Technical Details\n\nTHE INVERSION\
+    \ (one line, gen.cpp:915-916):\n  if (y >= he + 1 && y <= sea && he < sea) { cell = B_WATER; }\nhe\
+    \ is the column's topmost SOLID cell AFTER carving, found by the top-down scan at gen.cpp:876-894.\
+    \ So the carve feeds back into the fluid decision: a cave or tunnel mouth that removes the top of\
+    \ the column moves he below SEA (126) and the whole opening is filled to y=126 regardless of the surrounding\
+    \ terrain height. The he cell is then written as the surface block (grass/sand, gen.cpp:917-925),\
+    \ so deep hole floors get grassed as well; and a fully-caved column (he = 0, gen.cpp:895-896) becomes\
+    \ a 126-block water column. Lava already obeys the right ordering — it is Y-only (gen.cpp:929-931).\n\
+    \nHOW VANILLA ORDERS IT (fluid decided BEFORE the carve, from pre-carve inputs only):\n- Global fluid\
+    \ rule: \"a fluid rule that depends only on the Y coordinate: below Y = min(-54, sea level): lava\
+    \ ... otherwise: the dimension's default fluid up to sea level\" (minecraft.wiki/w/Cave §Aquifer).\n\
+    - Aquifer status is computed from the \"preliminary surface level (a density function, usually slightly\
+    \ below the actual terrain)\" sampled at 13 chunk offsets; cells above the raised surface take the\
+    \ global rule, cells poking above a sampled surface that lies below sea level take sea level as their\
+    \ level, everything else underground is decided by noise or is dry. preliminary_surface_level is literally\
+    \ a noise-router entry beside final_density.\n- Bedrock outcome, from Bedrock's own Caves & Cliffs\
+    \ Part II guide: \"Local water levels and lava levels in caves can create underground water and lava\
+    \ lakes at different elevations\", and water lakes were removed because aquifers provide local water\
+    \ levels. The detailed aquifer algorithm on the wiki is documented for Java Edition; Bedrock's is\
+    \ hardcoded and undocumented, so this ticket matches Bedrock on BEHAVIOUR (dry inland caves, local\
+    \ levels), not on a spec.\n- Noise-cave parity evidence, for context: MCPE-143895 (Bedrock 1.18.0.20/.21\
+    \ caves \"no longer in parity\", fixed 1.18.0.22, \"seed parity returns\") and MCPE-154323 (open only\
+    \ for carvers).\n\nTHE FIX IS AN ORDERING CHANGE, NOT NEW CONTENT:\nThe water table must be a function\
+    \ of PRE-CARVE inputs. Today: level(x,z) = SEA if H(x,z) < SEA, else dry — H being the heightmap from\
+    \ surface_h (gen.cpp:391-407). Water then fills non-solid cells at y <= level, keeping the fill START\
+    \ at he+1 so a submarine cave still floods to sea level (the vanilla caption is exactly \"a cave under\
+    \ the sea floor, flooded to sea level\"). Concretely the GATE changes from he < sea to H < sea; H\
+    \ itself is untouched, so the AC-0284b/AC-0286 H-bit-exactness and promotion contract are safe.\n\n\
+    WHY IT GOES EARLY (before carvers and before the shallow-band ticket):\n- AC-0291 changes WHERE the\
+    \ level comes from (one global sea -> Voronoi per-cell levels capped at the preliminary surface);\
+    \ this ticket changes WHAT the level is computed from (post-carve he -> pre-carve H). Landing the\
+    \ ordering first makes AC-0291 a level-source swap instead of a rewrite entangled with a bug.\n- AC-0290\
+    \ (carvers) cuts through the surface (\"Intersects surface entrances\") and would widen this exact\
+    \ artifact.\n- AC-0343's verification includes the dry-pit census (columns whose topmost solid lands\
+    \ below SEA); that census is only meaningful once this rule is fixed.\n\nINTERACTIONS TO CHECK IN\
+    \ THE SAME RUN:\n- The skip and far paths are cave-free, so they already use he = H — today the full\
+    \ path is the odd one out and a demoted-then-promoted column can change its water. After the fix the\
+    \ three paths agree. The far band's materialized fill mirrors the full path's surface rules (AC-0312\
+    \ + AC-0291's CONSISTENCY NOTE), so re-run farab and the band-A water look; expect green rather than\
+    \ rewritten.\n- AC-0326's two red arms (basis: sea_ok false, sea_cell 3; sphere: home_sea_ok false,\
+    \ home_sea_cell 3) pick their ocean column with WorldGen.terrain_height(...) < Data.SEA — the heightmap,\
+    \ i.e. this same pre-carve rule (godot/scenes/harness.gd:12100-12119 and :23701-23717). This ticket\
+    \ likely turns both green. Residual case for AC-0326 to settle: an ocean column whose cave term raises\
+    \ he above SEA (a 1-block land stump in the sea).\n- AC-0334 is the same CLASS of defect (a demote/promote\
+    \ content mismatch) but its measured mismatch is at y=11, solid vs air, NOT this rule. Do NOT fold\
+    \ it in.\n\nVERIFY:\n- G0: zero SCRIPT ERROR lines.\n- The artifact is gone: a tunnel mouth on land\
+    \ in a lowland area (H between ~127 and ~145) is DRY (air), while nearby ocean columns (H < SEA) still\
+    \ hold water at y=SEA.\n- A submarine cave open to the sea floods to sea level (the intended half\
+    \ of the rule).\n- Arms: basis, sphere, r16, farab sub-flags; ladder.\n- genhash: only columns whose\
+    \ water changed may move, so expect a rebase; prove the H bytes are unchanged with the AWEH column_heights16\
+    \ SHA-256 method used at AC-0288.\n- Band-A coastal water look unchanged.\n\nDEFERRED: the Voronoi\
+    \ local levels and the lava aquifers themselves (AC-0291, which stays the owner of \"what the level\
+    \ is\").\n"
+  comments: []
+- id: AC-0343
+  title: cave-shallow-band-surface-openings
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-20T11:15
+  updated_at: 2026-09-20T11:15
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+
+    As a player, I want the ground to stay intact: caves should open to the surface rarely and deliberately,
+    not as a matter of course, and the first real cavern under my feet should be deep enough that the
+    surface does not feel like a thin shell over a void.
+
+
+    2) Technical Details
+
+
+    WHERE OUR SURFACE OPENINGS ACTUALLY COME FROM (derived from the shipped constants; the split matters
+    because only one of the two families is the cause):
+
+    (a) The CHEESE family is already shielded near the surface, and that shield is the wrong shape. In
+    the surface band A(y) = 1.8, and air within ~10 blocks of H needs C < 0, which is impossible (ramp
+    saturates at +1 for y <= H-9.5, so the carve needs 0.5 - C > 1/1.8 = 0.556). Inside the band the threshold
+    is C < 0.346 at H-1, 0.250 at H-2, 0.164 at H-3 — so cheese alone makes 1-3 block surface dimples
+    and SEALED voids, not pits. But the roof depth of a real void is set only by A(y) clearing 1/(0.5
+    - C): ~37 blocks of roof at C ~= 0.4 (about 17% of cells), ~21 at C ~= 0.3, ~15 at C ~= 0.25 — i.e.
+    the BIGGEST voids get the SHALLOWEST roofs, the inverse of Bedrock''s guarantee that the upper terrain
+    is protected.
+
+    (b) The TUNNELS are the family that opens the surface. tunnel_air is tested BEFORE the ramp (gen.cpp:889-890),
+    so it carves at any y and is not depth-limited at all; the rarity gate has GATE_LO 0.52 / GATE_HI
+    0.58 against an fbm3 mean of 0.5 (gen.cpp:296-297), and AC-0289 measured gate_frac 0.476 — nearly
+    half the world''s volume is inside a tunnel patch.
+
+
+    BEDROCK TARGET:
+
+    - The cheese carve is switched OFF in the shallow band, and only a dedicated entrance family may open
+    the surface: range_choice(input = sloped_cheese, min -1e6, max_exclusive 1.5625) -> when_in_range:
+    min(sloped_cheese, 5 * entrances); when_out_of_range: the deep cheese branch (4*cave_layer^2 + clamp(-1,1)(0.27
+    + cave_cheese) + clamp(0,0.5)(1.5 - 0.64*sloped_cheese)).
+
+    - The deep branch''s clamp(0,0.5)(1.5 - 0.64*sloped_cheese) is a +0.5 solid bias wherever the terrain
+    is shallow, vanishing by sloped_cheese ~= 2.34 — a smooth depth gate, not a hard cut.
+
+    - entrances = cache_once(min(add(add(0.37, noise cave_entrance xz_scale 0.75 y_scale 0.5), y_clamped_gradient(from_y
+    -10: 0.3 -> to_y 30: 0.0)), add(spaghetti_roughness_function, clamp(...)))) — a separate, localised
+    family on a ~43-block xz scale (cave_entrance = firstOctave -7, amplitudes [0.4, 0.5, 1.0]) that carves
+    where the noise is below ~-0.37. It is NOT a global gate covering half the world.
+
+    Source: Java 1.21.4 worldgen JSON (noise_settings/overworld.json, density_function/overworld/caves/entrances.json,
+    noise/cave_entrance.json); Bedrock parity context in MCPE-143895 / MCPE-154323.
+
+
+    THE WORK — two small rules, tuned on TOP of AC-0341''s layer geometry (the layer caps change the roof
+    geometry, which is why this follows it):
+
+    (i) Suppress the cheese carve across a shallow band, in the same one-sided spirit as AC-0341''s layer
+    gate (modulate A by a shallow factor, or route the shallow region through an "entrances only" path)
+    so the first real void starts deep enough. Tune the band against the measured roof-depth numbers in
+    (a) above.
+
+    (ii) Make surface openings localised instead of gate-wide: replace or augment the global GATE_LO/GATE_HI
+    tunnel patch with an entrance-shaped predicate, so a surface break is a deliberate feature rather
+    than a consequence of being inside a 47.6% patch. Keep AC-0289''s tunnels (they are the vertical connectors
+    AC-0341 relies on) — this is about WHERE they may break the surface, not whether they exist.
+
+
+    CONSTRAINTS:
+
+    - The AC-0288 "air for sure above H+R+1" scan-start invariant must hold: any new term that ADDS carve
+    near the surface can break it (1.8 * max(C-0.5) = 0.948 < 1 is the whole margin). A one-sided (solidity-adding)
+    shallow term is safe; AC-0341''s layer gate is already one-sided and composes.
+
+    - Do not touch the surface fields f_sc/f_sh/f_sr or SEA: H bit-exactness is the AC-0284b/AC-0286 promotion
+    contract.
+
+    - Band 0 only. The far band never shows caves, but its materialized fill mirrors the surface rules
+    (AC-0312 + AC-0291''s CONSISTENCY NOTE) — re-check if the surface/shore rule is touched.
+
+    - The dry-pit census used to verify this depends on AC-0342 (the fluid-ordering fix) already being
+    in, which is why that ticket precedes this one.
+
+
+    VERIFY:
+
+    - G0: zero SCRIPT ERROR lines.
+
+    - Surface-opening census before/after: the fraction of columns whose topmost solid lands below H-k
+    (k = 4, 8, 16) and the fraction whose topmost solid lands below SEA. Both must drop sharply; the second
+    is the shared dry-pit census with AC-0342.
+
+    - Roof-thickness distribution: no sealed cavern should have a roof thinner than the chosen band (the
+    inverse guarantee in (a) is the thing being fixed).
+
+    - Screenshots: a surface cave entrance (still exists, now deliberate) and an intact hillside over
+    a large chamber.
+
+    - The deep air profile must NOT regress (AC-0215''s 30-38% deep-air reference) — the shallow band
+    must not starve the deep.
+
+    - genhash rebase accepted (standing user note 2026-09-15: fresh worlds only); H bytes unchanged (AWEH
+    column_heights16 SHA-256, as at AC-0288).
+
+
+    DEFERRED: carvers/canyons are a separate surface-cutting family (AC-0290); the fluid rule itself is
+    AC-0342; the vertical cell size is AC-0344.
+
+    '
+  comments: []
+- id: AC-0344
+  title: cave-vertical-cell-resolution-decision
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-20T11:15
+  updated_at: 2026-09-20T11:15
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+
+    For whoever plans the next round of cave work: decide, with numbers, whether the generator''s coarse
+    vertical sampling (48-block cells) is worth fixing. It is the one cave defect that cannot be tuned
+    away — it caps how much vertical cave detail the world can ever have — so the answer should be recorded
+    before more cave features are built on top of it, and it should be an explicit decision rather than
+    an accident of the current lattice.
+
+
+    2) Technical Details
+
+
+    THE FACT (verified in the shipped code):
+
+    The density field is a 7x9x7 = 441-point lattice per chunk (gen.cpp:328-337). The xz cells are 4 blocks
+    (gen.cpp:325 and gen.cpp:348-350), but the Y CELL IS hmax/GY_CELLS = 384/8 = 48 BLOCKS (gen.cpp:299
+    constexpr int GY_CELLS = 8; ystep computed at gen.cpp:570 / :780 / :1088; Data.HEIGHT 384 at godot/autoload/data.gd:7).
+
+    Bedrock''s equivalent cell is 4x8x4 BLOCKS — size_horizontal: 1 and size_vertical: 2 in the overworld
+    noise settings, which the wiki documents as size_horizontal * 4 and size_vertical * 4 (cell 4 xz and
+    8 y); 384/8 = 48 vertical cells over the same world height, against our 8. Ours is 6x coarser vertically.
+    Bedrock shares Java''s noise router post-Caves & Cliffs (MCPE-143895 fixed in 1.18.0.22 "with the
+    seed parity returns"; MCPE-154323 now open only for carvers), so that 8-block cell is the right reference.
+
+    Consequence: no cave feature shorter than ~48 blocks can exist vertically, and the cave field''s own
+    10-block y scale (gen.cpp:800, build_field fy = 10.0) is sampled at 4.8 noise periods and is aliased
+    away completely. AC-0341''s 32-block layer period cannot be carried by this lattice at all, which
+    is why that ticket evaluates its layer term densely in the scan instead of on the lattice. Every other
+    vertical-structure idea is capped the same way (layered cheese, per-level aquifers, cave-biome bands).
+
+
+    THE DECISION TO MAKE, WITH EVIDENCE (deliverable = a measured recommendation, NOT an implementation):
+
+    - Wait for AC-0341 and use its evidence: does the dense per-y layer term deliver enough vertical structure
+    (the air-%-by-depth periodicity signature and the stacked-room renders are already that ticket''s
+    gates), or is a real lattice raise required?
+
+    - Cost side: field-build and scan timings from the AC-0237 gen_timing breakdown for GY_CELLS = 8 (current)
+    vs 16 (24-block cells, 7x17x7 = 833 lattice points per field) vs 24 (16-block cells, 7x25x7 = 1225)
+    on the same seed and window. Note this is per field and the full path builds seven of them (gen.cpp:800-815).
+
+    - Gate side: the AC-0313 clause-4 load-screen wall is DERIVED from the real band''s gen cost, and
+    AC-0286''s promotion cost rides the full gen — so a raise moves standing gate values, and that cost
+    must be quantified in the recommendation, not discovered later.
+
+    - Contract side: the AC-0284b far/skip H must stay bit-exact (the surface fields and surface_h are
+    untouched by a y-cell change, but the far payload and promotion contract must be re-proven); genhash
+    rebases are accepted per the standing user note 2026-09-15 (fresh worlds only).
+
+    - If the recommendation is "raise it": file the implementation as its own ticket at the HEAD of the
+    cave series (before AC-0290/AC-0291/AC-0292, and before AC-0311 planet-sphere-domain-generation, which
+    re-derives the whole flat-frame cave stack and waits on AC-0288..AC-0292).
+
+    - If the recommendation is "no": record the measurements and reasoning here and close the ticket.
+    Either way the answer becomes the recorded position on the lattice.
+
+
+    NOTES:
+
+    - AC-0341 carries the docs correction for the mislabel that hid this (gen.cpp header lines 1 and 5,
+    docs/worldgen-current.html:369/:376, tasks/cave-compare/cave-compare.html:30/:32 all say "4x8x4 cells"
+    while stating ystep = 48 in the same breath). Do not duplicate that fix here; verify it landed.
+
+    - A y-cell raise is NOT a prerequisite for AC-0341/AC-0342/AC-0343: those three are rule changes that
+    work on the current lattice. This ticket exists so that the question is decided on evidence before
+    the aquifer and pillar work (AC-0291/AC-0292) hardens around it.
+
+
+    VERIFY:
+
+    - G0: zero SCRIPT ERROR lines for any measurement arm used (a temporary arm must come out in the same
+    task — harness.gd is inert during play and pristine means in-and-out).
+
+    - The recommendation cites measured numbers for all three axes above (cost, quality, gates), with
+    the logs/renders that produced them.
+
+    - If an arm is added or changed: the branch in godot/scenes/harness.gd AND a row in tasks/harness_data.yaml,
+    then python3 tasks/scripts/harness_doc.py --render.
 
     '
   comments: []
