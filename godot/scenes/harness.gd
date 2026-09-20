@@ -15202,25 +15202,48 @@ func _r16_wave_test() -> Dictionary:
 	var guard := 0  # spin safety (a wedged pool must never hang the arm)
 	while seq.size() < cap and guard < 200000:
 		guard += 1
-		# AC-0262: _low_pick_slab was replaced by the batched
-		# _low_scan_slabs(n) — n=1 is the identical single-best-pick
-		# (rank-0 early stop, else the lowest rank's smallest taxi).
-		var _sc: Array = world._low_scan_slabs(1)
-		var e: Dictionary = {} if _sc.is_empty() else _sc[0]
+		# AC-0335: _low_scan_slabs is GONE (the unified drain owns the
+		# dispatch order — one work order, the ring decides the work).
+		# The arm drives the SAME pick the scheduler makes, restricted to
+		# the wave band (ring 2/3): the best pending low slab by the
+		# (taxi, layer) grid score across the queue, via the kept
+		# _entry_best_pending_cached probe. The dispatch primitives
+		# (_low_dispatch_slab / _low_air_slab / _low_poll) are the ones
+		# the unified path uses.
+		var e: Dictionary = {}
+		var si := -1
+		var es := 1e30
+		for _b in range(world.band_buckets.size()):
+			for _pe in world.band_buckets[_b]:
+				var _tdx: int = int(_pe["cx"]) - int(world.last_pcx)
+				var _tdz: int = int(_pe["cz"]) - int(world.last_pcz)
+				var _tt: int = int(world._lod_tier_of(_tdx, _tdz))
+				if _tt < 2 or _tt > 3:
+					continue
+				var _tc: Node3D = world.chunks.get(_pe["key"])
+				if _tc == null or _tc.data.is_empty():
+					continue
+				var _tsi: int = int(world._entry_best_pending_cached(_tc))
+				if _tsi < 0:
+					continue
+				var _ts: float = float(world._grid_score(_pe))
+				if _ts < es:
+					es = _ts
+					e = _pe
+					si = _tsi
 		if e.is_empty():
 			break
 		var c: Node3D = world.chunks.get(e["key"])
-		if c == null or c.data.is_empty() or bool(c.mesh_built):
-			world._low_slab_none_key = ""
+		if c == null or c.data.is_empty():
 			break
-		var d: int = world._low_dispatch_slab(c, int(e["si"]))
+		var d: int = world._low_dispatch_slab(c, si)
 		if d == 1:
-			seq.append([int(e["si"]), int(c.cx), int(c.cz)])
+			seq.append([si, int(c.cx), int(c.cz)])
 		elif d < 0:
 			# the -1 verdict (a NULL slab — no grid, no emit): the air
 			# bookkeeping runs inline (scene/state work, no generation).
-			world._low_air_slab(c, int(e["si"]))
-			seq.append([int(e["si"]), int(c.cx), int(c.cz)])
+			world._low_air_slab(c, si)
+			seq.append([si, int(c.cx), int(c.cz)])
 		else:
 			# d == 0 (the slab is in flight) or d == 2 (pool saturated):
 			# the slab leaves the pending set at its handoff — pump the

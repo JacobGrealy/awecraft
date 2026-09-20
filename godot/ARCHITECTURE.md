@@ -313,12 +313,13 @@ Match these; do not improvise a different approach in a task.
   skips meshed columns; the next promotion's full regen re-converges the delta),
   **bands B/C** flip to the ready stored low (else the low obligation re-opens and
   `_low_relower_owed` RE-LOWS the far column — the re-lower reaches far columns, the
-  low re-emitted at the current data_gen). Lane ownership is per-lane: the BUILD lane
-  owes the real band + band A (the drain's `high_only` pool admits tier ≤ 1), the WAVE
-  (low) lane owns bands 2/3 only — the low probe (`_entry_best_pending`) returns -1 for
-  tier ≤ 1 / ≥ 4 (a band-A far column is never "pending" for the low lane, or
-  `band_drained()` stalls). The unmaterialized band-A special case lives in the HIGH
-  probe (`_hslab_best_pending`). Chunk fields: `far_mat` (fill slabs resident) +
+  low re-emitted at the current data_gen). Work ownership is per-RING (AC-0335 unified
+  the two lanes into the drain's single order — see the build-order bullet): the ring
+  decides the work via `_dispatch_column_work` (rings 0/1 → the high build, rings 2/3 →
+  the avg emit), and the probes stay per-ring — the low probe (`_entry_best_pending`)
+  returns -1 for tier ≤ 1 / ≥ 4 (a band-A far column is never "pending" for the low
+  side, or `band_drained()` stalls), the unmaterialized band-A special case lives in
+  the HIGH probe (`_hslab_best_pending`). Chunk fields: `far_mat` (fill slabs resident) +
   `far_eff` (cached sky eff, dies with the data). **Mesh-attach contract
   (AC-0321)**: a FULL build (si1=-1, unscoped — the real-band full landing, the
   tex-refresh, the band-A mat landing) emits its opaque UVs in the
@@ -330,27 +331,36 @@ Match these; do not improvise a different approach in a task.
   way, AC-0321); the ladder arm's band-A gate (landed surfaces u-exact vs a
   fresh real-band emit + the material-canvas check) and the editmat arm
   (plain material under plain UVs) are the permanent proofs.
-- **Build order (AC-0313)**: every real-band column (taxi ≤ `band0_r` — the sim band) is
-  built as a **FULL 24-slab column, inside-out**: the bake score is `(taxi, layer)` —
-  across columns the innermost unbuilt column first (a pure function of the live
-  recenter anchor, no timer or mode), within a column the slabs go in Y-distance from
-  the player's slab (`_layer_rank_of`: 0 = player slab, then −1, +1, −2, +2, …). A built
-  column is complete and its queue entry is freed — there is no window rework.
-  `sim_dist` has a floor of **4** (`Settings.SIM_MIN`), so the player's 3x3 (taxi ≤ 2)
-  is always inside the real band: the band itself is the footing guarantee. The
-  AC-0263 Y-window (the player-slab ±1 windowed probe while moving), the AC-0283 P3
-  walk regime (the startup 3x3 completion pass, the `slow_cross` cadence, the
-  `1e9 if startup` time budget, the 12-unit spawn budget) and the tier-0 set
-  (`tier0_r` / `_is_tier0_col` / the `tier0_radius` setting + Developer-menu row + the
-  wave-start gate) are all GONE: after the player is active the drain is ALWAYS the
-  wall-clock paced unit budget + the `drain_budget_ms` time cap — no main-thread
-  blocking build pass. The AC-0283 P3 **TG-empty data feed** was removed with that
-  regime and RESTORED by AC-0322 as a stateless part of the steady drain (the
-  data pass also runs on a build-dispatched iteration when the TG pool is fully
-  drained — the slab unit frees a queue entry only once per 24 slabs, so the
-  `u == 0` gate alone starved the TG pipeline to the column-completion rate and the
-  walk's taxi-8 sim disc plateaued at ~53%): the data supply is part of the
-  scheduler's contract, not a regime.
+- **Build order (AC-0313, UNIFIED at AC-0335 — one order, the ring decides the work)**:
+  ONE scheduler — `_drain_build_queue`'s steady pass — works the whole world in a single
+  **inside-out work order**: the bake score is `(taxi, layer)` — across columns the
+  innermost owed column first (a pure function of the live recenter anchor, no timer or
+  mode), within a column the slabs go in Y-distance from the player's slab
+  (`_layer_rank_of`: 0 = player slab, then −1, +1, −2, +2, …), and the column's LOD ring
+  (`_lod_tier_of`) decides WHAT gets done for it — the one per-ring switch is
+  `_dispatch_column_work`: ring 0/1 (real band + band A) → the high slab build (band A's
+  first dispatch is the materialization, inside `_mesh_dispatch_hslab`), ring 2/3
+  (band B/C) → the far payload avg emit (the old slab wave's dispatch). A completed
+  column (its ring's probe owes nothing) is complete and its queue entry is freed —
+  there is no window rework; a column entering the real band is simply the next column
+  in the order whose ring changed (the AC-0231 WAVE 3 idle catch-up is GONE with the
+  lane seam). `sim_dist` has a floor of **4** (`Settings.SIM_MIN`), so the player's 3x3
+  (taxi ≤ 2) is always inside the real band: the band itself is the footing guarantee.
+  The AC-0263 Y-window, the AC-0283 P3 walk regime, and the tier-0 set are all GONE, and
+  AC-0335 removed the second scheduler with them (`_low_step` keeps only the attach
+  side it owns — `_low_poll`: the cap swap, the fog swap, the all-air terminal marks,
+  the per-slab tier stamps — plus the re-lower debt step): after the player is active
+  the drain is ALWAYS the ONE wall-clock paced unit budget (surviving pacing model:
+  `LOW_WAVE_PACE_MS` 3.5 ms/unit + `LOW_WAVE_FRAME_CAP` 8/frame — both pre-unification
+  paces were wall-clock accumulators, which is exactly what the AC-0231 fps-independence
+  constraint requires; the far-lane pace survived on its data-landing-rate tuning) +
+  the `drain_budget_ms` time cap — no main-thread blocking build pass. The AC-0283 P3
+  **TG-empty data feed** was removed with that regime and RESTORED by AC-0322 as a
+  stateless part of the steady drain (the data pass also runs on a build-dispatched
+  iteration when the TG pool is fully drained — the slab unit frees a queue entry only
+  once per 24 slabs, so the `u == 0` gate alone starved the TG pipeline to the
+  column-completion rate and the walk's taxi-8 sim disc plateaued at ~53%): the data
+  supply is part of the scheduler's contract, not a regime.
 - **Load screen (AC-0313, clause 4 as CORRECTED)**: the loading window closes the
   moment the **SIM TAXI DIAMOND** around the load anchor — every column with
   `taxi(dx,dz) <= band0_r` (= sim), 41 columns at sim 4 — is `mesh_built` by the
