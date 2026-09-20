@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-20T04:21
+  updated_at: 2026-09-20T08:13
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0336
 - AC-0337
 - AC-0338
 - AC-0334
@@ -16725,11 +16724,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-19T21:05
-  updated_at: 2026-09-19T21:05
-  completed_at: null
+  updated_at: 2026-09-20T08:13
+  completed_at: 2026-09-20T08:13
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -16795,7 +16794,28 @@ intake:
     - Expected shape: a net line-count reduction. If the diff does not shrink the file, something on this
     list was load-bearing after all and belongs back in the unification ticket.
 
-    '
+
+
+    TAKEN BY THE COORDINATOR SESSION (2026-09-20) per the user''s instruction to work the queue in its
+    new order. Its dependency AC-0335 (one work order, one dispatch) LANDED AND IS CLOSED (commit b5a3c2b):
+    the drain is now the only scheduler, `_dispatch_column_work` is the only per-ring switch, `_low_step`
+    lost its picking half, WAVE 3 is deleted, and the surviving pacing model is the LOW_WAVE_PACE_MS /
+    LOW_WAVE_FRAME_CAP pair (recorded in the code comment) while the drain''s 30 ms budget and DRAIN_DT_CLAMP
+    / DRAIN_WIN / LOAD_* are unchanged - so verify with a caller search which pair is genuinely dead rather
+    than trusting that sentence. ALSO: AC-0333 (the far-band double-draw holes) is CLOSED as not-reproducible,
+    so `far_holes` stays a standing sub-flag gate but there is no open reproducer to preserve. AC-0334
+    (the halo demote/promote content mismatch, 5 cells in column [5,0]) is a known PRE-EXISTING red -
+    do not chase it and do not let its presence make you think a deletion broke something.
+
+
+    CLOSED 2026-09-20 (commit follows). Coordinator verification: genhash 25/25 byte-identical (x2 and
+    against the reference), ladder/farab/meshprobe green, lightstate invariants green, r16 all sub-flags
+    with far_holes 0 in both bands and the AC-0335 perf win intact, boundary p50 flat, battery profile
+    identical to AC-0335''s with no new delta and the status arms green. Net -658 lines with a per-symbol
+    caller search recorded for every deletion and five items deliberately kept with evidence. Two things
+    for the record: the console.gd profiler-list sync came from a repo-wide sweep rather than the ticket''s
+    list (worth keeping in mind for the next deletion ticket), and lightstate''s low_on_high_n fell 33
+    -> 6 as an expected consequence of AC-0331''s floor - recorded as a finding, not smoothed.'
   comments: []
 - id: AC-0337
   title: collision-cost-budget-and-derivation
