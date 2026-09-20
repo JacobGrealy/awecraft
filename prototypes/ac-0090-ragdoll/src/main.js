@@ -238,8 +238,16 @@ function attachControls(el) {
 function focusCharacter(name) {
   const ch = characters.find((c) => c.preset === name);
   if (!ch) return;
-  cam.target.set(ch.group.position.x, DISPLAY_HEIGHT * 0.5, 0);
-  cam.dist = Math.max(2.2, ch.displayWidth * 2.6);
+  // Aim at the SUBJECT's centre, not at half the display height. A plan's bbox is
+  // grounded (min[1] = 0), so the body sits between y = 0 and y = displayHeight and
+  // its true centre is above 0.5 * displayHeight; aiming at 0.5 pushed the biped's
+  // head off the top of the frame (measured NDC max 1.07).
+  cam.target.set(ch.group.position.x, DISPLAY_HEIGHT * 0.575, 0);
+  // 1.6x the display width puts the subject at roughly 60% of the viewport: close
+  // enough to read the joint blending, far enough that the whole creature is in
+  // frame. At 2.6x a biped occupied 1% of the frame and every screenshot needed
+  // squinting to judge anything.
+  cam.dist = Math.max(1.45, ch.displayWidth * 1.75);
   cameraUpdate();
   state.focused = name;
 }
@@ -625,8 +633,14 @@ function testApi() {
     // Where does a character actually land on screen? Projects the skinned mesh
     // bounds through the live camera; a mesh that is off-screen or sub-pixel is
     // what "the page renders nothing" usually turns out to mean.
-    project(index) {
-      const c = characters[index || 0];
+    // `which` is an index OR a preset name. Resolving by name matters: a caller
+    // that focuses a different character and then asks about index 0 measures the
+    // character that just left the frame, which reads as "the subject is 126% off
+    // screen to the left".
+    project(which) {
+      const c = typeof which === 'string'
+        ? characters.find((k) => k.preset === which)
+        : characters[which || 0];
       if (!c) return null;
       const m = c.group.matrixWorld;
       camera.updateMatrixWorld();
@@ -643,6 +657,11 @@ function testApi() {
         minY = Math.min(minY, ndc.y); maxY = Math.max(maxY, ndc.y);
       }
       const px = (ndcX, w) => (ndcX * 0.5 + 0.5) * w;
+      // NDC y = +1 is the TOP of the screen, so image y runs the other way. Using
+      // the same expression as x mirrored every reported box vertically, which made
+      // a subject that was actually clipped at the bottom read as comfortably in
+      // frame — the gate was measuring a bounding box that did not exist.
+      const py = (ndcY, h) => (0.5 - ndcY * 0.5) * h;
       const W = renderer.domElement.width;
       const H = renderer.domElement.height;
       return {
@@ -650,7 +669,7 @@ function testApi() {
         ndc: [minX, minY, maxX, maxY].map((n) => Math.round(n * 100) / 100),
         screenPx: {
           x0: Math.round(px(minX, W)), x1: Math.round(px(maxX, W)),
-          y0: Math.round(px(minY, H)), y1: Math.round(px(maxY, H)),
+          y0: Math.round(py(maxY, H)), y1: Math.round(py(minY, H)),
         },
         widthPx: Math.round((maxX - minX) * 0.5 * W),
         heightPx: Math.round((maxY - minY) * 0.5 * H),

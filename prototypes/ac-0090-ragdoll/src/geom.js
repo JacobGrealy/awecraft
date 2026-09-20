@@ -622,17 +622,25 @@ export function generate(plan, opts = {}) {
   out.bw.fill(0, 0, out.bw.length);
   out.vWrite = 0;
   const partNames = Object.keys(plan.parts);
+  // `partId` becomes a unique id per SHAPE, not per part.
+  //
+  // It drives the "per-primitive" debug view, and with only three parts (body,
+  // limbs, detail) that view painted the whole creature in three colours — a
+  // documented feature that did not do what it said. Collapsed to a byte, so a
+  // preset may have at most 255 shapes (the widest here is 43).
+  let shapeSeq = 0;
   for (const name of partNames) {
     const p = plan.parts[name];
     const pid = p.index;
+    void pid;
     // Tubes first, then their lumps. A lump that sits on a joint of a tube
     // borrows that tube's weights (see buildLump), so the tube must already be
     // built. Multi-bone tubes win the claim on a shared joint.
     const tubes = p.shapes.filter((s) => s.type === 'tube')
       .sort((a, b) => b.bones.length - a.bones.length);
-    for (const s of p.shapes) if (s.type !== 'tube') s.partId = pid;
+    for (const s of p.shapes) if (s.type !== 'tube') s.partId = (shapeSeq++ & 0xff);
     for (const s of tubes) {
-      s.partId = pid;
+      s.partId = (shapeSeq++ & 0xff);
       buildTube(s, geomOpts, out);
     }
     // A joint lump borrows the weights of the tube it belongs to. The match must

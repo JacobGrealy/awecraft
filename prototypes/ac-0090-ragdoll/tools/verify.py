@@ -38,6 +38,7 @@ URL = f"http://127.0.0.1:{PORT}/prototypes/ac-0090-ragdoll/?preserve=1"
 # A frame must clear these to count as "rendered something", not "flat frame".
 MIN_DISTINCT_COLORS = 40
 MIN_NON_BG_FRACTION = 0.02
+MIN_SUBJECT_FRACTION = 0.03   # the subject must occupy >=3% of the frame
 MIN_MEAN_LUMA = 8.0
 
 
@@ -319,28 +320,51 @@ def main() -> int:
 
             # ---------------- W1: every preset renders ----------------
             log("\n=== W1 renders (screenshot per preset) ===")
-            page.evaluate("window.__AC0090.set({speed: 1})")
+            # moveAll MUST be off for these shots. With it on, the five characters
+            # walk apart every frame, frameAll widens to keep them all in view, and
+            # each individual subject shrinks: the biped was 34x81 px in a
+            # 1440x860 frame, which is far too small for anyone to judge the seam
+            # from — and small enough that the gate's colour-count threshold was
+            # measuring the grid and the UI panel, not the character.
+            page.evaluate("window.__AC0090.set({moveAll: false, speed: 1})")
             shots = []
             for name in info["presets"] if "presets" in info else [c["preset"] for c in info["characters"]]:
-                page.evaluate(f"window.__AC0090.set({{focus: {json.dumps(name)}, speed: 1}})")
+                page.evaluate(f"window.__AC0090.set({{focus: {json.dumps(name)}, moveAll: false, speed: 1}})")
                 page.wait_for_timeout(320)
                 shot = SHOT_DIR / f"AC-0090-{name}.png"
                 page.screenshot(path=str(shot))
                 stats = png_signature_stats(shot)
                 pixel = page.evaluate("window.__AC0090.capturePixels()")
+                # How much of the frame does the SUBJECT actually occupy? Without
+                # this the shots passed on colour count while the character was
+                # 34x81 px in a 1440x860 image, which is too small for a person to
+                # judge the seam from and much too small for the gate to mean
+                # anything about rendering quality.
+                proj = page.evaluate(f"window.__AC0090.project({json.dumps(name)})")
+                subjFrac = None
+                if proj:
+                    W = proj["canvas"][0]
+                    H = proj["canvas"][1]
+                    wpx = min(W, proj["screenPx"]["x1"]) - max(0, proj["screenPx"]["x0"])
+                    hpx = min(H, proj["screenPx"]["y1"]) - max(0, proj["screenPx"]["y0"])
+                    subjFrac = round(max(0, wpx) * max(0, hpx) / (W * H), 4)
                 ok = (stats.get("distinctColors", 0) >= MIN_DISTINCT_COLORS
                       and stats.get("nonBackgroundFraction", 0) >= MIN_NON_BG_FRACTION
-                      and stats.get("meanLuma", 0) >= MIN_MEAN_LUMA)
+                      and stats.get("meanLuma", 0) >= MIN_MEAN_LUMA
+                      and (subjFrac or 0) >= MIN_SUBJECT_FRACTION)
                 shots.append({"preset": name, "file": shot.name, "png": stats,
-                              "gl": pixel, "ok": bool(ok)})
+                              "gl": pixel, "projection": proj,
+                              "subjectFrameFraction": subjFrac, "ok": bool(ok)})
                 log(f"  {name:10s} colors={stats.get('distinctColors'):5} "
                     f"nonbg={stats.get('nonBackgroundFraction'):.3f} "
-                    f"luma={stats.get('meanLuma'):6.2f} -> {'PASS' if ok else 'FAIL'}")
+                    f"luma={stats.get('meanLuma'):6.2f} "
+                    f"subject={subjFrac:.3f} -> {'PASS' if ok else 'FAIL'}")
             report["gates"]["W1_render"] = {
                 "ok": all(s["ok"] for s in shots),
                 "thresholds": {"distinctColors": MIN_DISTINCT_COLORS,
                                "nonBackgroundFraction": MIN_NON_BG_FRACTION,
-                               "meanLuma": MIN_MEAN_LUMA},
+                               "meanLuma": MIN_MEAN_LUMA,
+                               "subjectFrameFraction": MIN_SUBJECT_FRACTION},
                 "shots": shots,
             }
 

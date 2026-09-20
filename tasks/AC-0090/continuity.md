@@ -76,3 +76,38 @@ python3 prototypes/ac-0090-ragdoll/tools/verify.py
 - **Never slice a file by two string indices without checking what is between them.** A `s[a:b]`
   replacement silently deleted ~500 lines of `geom.js` that lived between the two anchors, and the file was
   untracked so git could not recover it.
+
+## Addendum — the review that changed the result
+
+The images were re-checked with an image-capable view, which the earlier passes could not do. That review
+found the worst defect in the whole ticket and invalidated numbers that had already been committed.
+
+**The defect: forward kinematics subtracted the joint twice.** `world[i]` was built with a helper that
+already returns `T(origin) · R · T(-joint)` — a rest→posed *point* transform — and the skin matrix then
+multiplied by `restInv = T(-joint)` as well. At rest the skin matrix came out `T(-joint)` instead of the
+identity, so every vertex was dragged to its own bone's joint. Every creature rendered as a featureless
+lump the size of its torso, with no limbs.
+
+It passed **every** gate: watertight, correctly oriented, every bone skinned geometry, no orphans, unit
+normals, deterministic, animating, and 7/7 browser gates. What caught it was rendering a biped at a known
+camera and looking — then confirming mechanically by reproducing the shader's transform on the CPU from the
+buffers the shader actually reads (`boneData` + `aBi`/`aBw`): 1.815 units of mesh rendered 0.474 units tall.
+The same rig offline gave 1.816.
+
+**Consequences worth carrying forward:**
+
+- Max edge stretch went from 2.4–10.1× to **1.09–1.86×**. The "honest residual" the writeup had been
+  reporting as a property of the weights was entirely this bug.
+- Three of the last five defects were **the verification measuring the wrong thing**, not the code being
+  wrong: `project()` mirrored Y (NDC +1 is the top), the W1 gate asserted a *projected bounding box*
+  instead of pixels and passed while the subject was 34×81 px in a 1440×860 frame, and the "per-primitive"
+  debug view hashed the *part* index so it painted three flat colours.
+- A "make it chunkier" dial (`BLOB_BULK = 1.9`) buried every limb inside the torso — the preset radii are
+  base sizes the limb attachment points are laid out against, not free parameters. Back to 1.0.
+- The claim "DQS buys nothing" was measured against the broken FK. With it fixed the offline mirror does
+  separate (LBS 1.21–1.86× vs DQS 1.20–1.79×, better on four of five presets). The shader path stays out,
+  but for the honest reason — the GPU implementation was never validated — not because the effect is zero.
+
+**Lesson for the journal:** numeric gates find subtle structural faults no eye would catch, and the eye
+finds catastrophic visual ones no number is asking about. Both are needed. A gate is only as good as its
+question.

@@ -101,10 +101,10 @@
   </tr>
   <tr>
     <td>Does the deformation hold together?</td>
-    <td><b>Partly.</b> Max edge stretch over a walk cycle is 2.4–10.1× across the five body plans, where a
-        rigid body is 1.00×. The geometry stays closed and correctly oriented and nothing tears visibly,
-        but the worst edge is still stretched tenfold on the biped. This is the honest number and it is
-        the main thing left to improve.</td>
+    <td><b>Yes.</b> Max edge stretch over a walk cycle is <b>1.09–1.86×</b> across the five body plans,
+        where a rigid body is 1.00×. An earlier revision of this page reported 2.4–10.1× as an honest
+        residual; it was not a property of the weights at all but a forward-kinematics bug that collapsed
+        the whole character (defect 1 below).</td>
     <td>§5, §9, §10</td>
   </tr>
   <tr>
@@ -412,6 +412,24 @@
   <tr><th>#</th><th>Defect</th><th>Symptom that exposed it</th></tr>
   <tr>
     <td>1</td>
+    <td><b>Forward kinematics subtracted the joint twice, collapsing the entire character.</b>
+        <code>world[i]</code> was built with a helper that already produces
+        <code>T(origin)&nbsp;·&nbsp;R&nbsp;·&nbsp;T(−joint)</code> — a rest→posed <i>point</i> transform — and the
+        skin matrix then multiplied by <code>restInv = T(−joint)</code> as well. At rest the skin matrix came
+        out <code>T(−joint)</code> instead of the identity, so every vertex was dragged to its own bone's
+        joint and the creature collapsed to a lump the size of its torso. It also explains the tearing:
+        every bone's transform was wrong, so blended vertices were pulled in different directions.</td>
+    <td><b>Looking at a screenshot.</b> No gate caught it: the mesh was watertight and correctly oriented,
+        every bone skinned geometry, the rest pose was self-consistent, the rig animated, determinism held,
+        and 7 of 7 browser gates passed. What caught it was rendering a biped at a known camera and seeing a
+        smooth blob with no limbs — then confirming it by reproducing the shader's transform on the CPU from
+        the very buffers the shader reads (<code>boneData</code> + <code>aBi</code>/<code>aBw</code>): 1.815
+        units of mesh rendered 0.474 units tall. Offline, the same rig produced 1.816. Fixing it took max
+        edge stretch from 2.4–10.1× to <b>1.09–1.86×</b> — the "residual tearing" this page previously
+        reported as inherent was entirely this bug.</td>
+  </tr>
+  <tr>
+    <td>2</td>
     <td><b>The body mesh was never drawn at all.</b> The character pipeline builds three materials — body,
         "raw primitives", and the outline hull — and only two of them were given a model matrix each frame.
         The body therefore rendered with the identity matrix its material was constructed with, at world
@@ -426,7 +444,7 @@
         <code>MeshBasicMaterial</code>, which drew instantly.</td>
   </tr>
   <tr>
-    <td>2</td>
+    <td>3</td>
     <td><b>Every shape's triangles addressed the previous shape's vertices.</b> The tube builder records
         its ring offsets as <i>local</i> indices but the index buffer is global, and the offset was only
         added in some of the three places that emit indices. The result: 12 vertices per tube were never
@@ -437,7 +455,7 @@
         vertices are actually used.</td>
   </tr>
   <tr>
-    <td>3</td>
+    <td>4</td>
     <td><b>A scratch buffer aliased its own input.</b> The curve evaluator wrote its result into a caller
         buffer that <i>was</i> one of the curve's control points, so it silently rewrote each limb's joint
         positions as it tessellated them. Mirrored limbs ended up with degenerate joint arcs, hence
@@ -445,7 +463,7 @@
     <td>Alternating tubes with 0 non-zero weights; every second limb unskinned.</td>
   </tr>
   <tr>
-    <td>4</td>
+    <td>5</td>
     <td><b>The superellipsoid bound was inverted.</b> The radial scale factor returned the reciprocal of
         the correct value, so every lump was scaled <i>outward</i> past its declared radii and the sharp
         shapes blew up: a 5 cm blob's vertices landed 1.9 units from its own centre. Once corrected, the
@@ -455,7 +473,7 @@
         logging every emitted vertex whose |y| exceeded 2.</td>
   </tr>
   <tr>
-    <td>5</td>
+    <td>6</td>
     <td><b>The implicit field used for lump normals was identically zero on the surface.</b> The gradient
         was taken by differencing <code>shapeFactor - 1</code>, which is exactly 0 everywhere on the
         surface, so every normal came out <code>0/0</code> and defaulted to (1,0,0).</td>
@@ -465,7 +483,7 @@
         box.</td>
   </tr>
   <tr>
-    <td>6</td>
+    <td>7</td>
     <td><b>The tier dial selected a normal nothing used.</b> The vertex shader computed a flat normal into
         a varying and then lit the <i>smooth</i> one, so the entire "raw primitives" arm of the seam A/B was
         a no-op. The two normals differ by 35° on average and by more than 10° on 2,740 of 2,938
@@ -474,7 +492,7 @@
         normal it changed 24%.</td>
   </tr>
   <tr>
-    <td>7</td>
+    <td>8</td>
     <td><b>Orientation was inverted.</b> Two earlier versions of the winding test computed a signed volume
         relative to a fixed reference point (first the world origin, then the shape's centroid). A relative
         volume is only an orientation test for a surface that <i>encloses</i> the reference point, which no
@@ -483,14 +501,14 @@
         +4.03.</td>
   </tr>
   <tr>
-    <td>8</td>
+    <td>9</td>
     <td><b>The inverse bind pose was the identity.</b> With <code>B⁻¹ = I</code> the skinning matrix
         degenerates to a rotation about the <i>world origin</i> instead of the bone's own joint, so every
         articulation tore — and each bone looked correct in isolation.</td>
     <td>Rest-pose skinning error 36.9 units on a 1.8 m character.</td>
   </tr>
   <tr>
-    <td>9</td>
+    <td>10</td>
     <td><b>Weight indices were not global, and the buffers were never cleared.</b> Inside a shape loop the
         counter is a <i>local</i> vertex index; using it as a global one made each shape overwrite the
         weights of the shapes before it. Separately, the pre-sized weight arrays kept the previous
@@ -498,13 +516,13 @@
     <td>A hexapod leg skinned to the biped's arm; a whole limb claimed by <code>pelvis</code>.</td>
   </tr>
   <tr>
-    <td>10</td>
+    <td>11</td>
     <td><b>The neck bone skinned nothing, in all five presets.</b> The bone exists and is animated — the
         head counter-rotates through it — so the rig looked complete while that articulation did nothing.</td>
     <td>A "every bone skins geometry" check, once it existed.</td>
   </tr>
   <tr>
-    <td>11</td>
+    <td>12</td>
     <td><b>The hop snapped.</b> The launch phase is 0.12 of a cycle and swings the knee's target through
         1.8 rad, which is 61.6° in a single 1/30 s frame. Because the hopper's knee-to-ankle bone is short,
         it also dragged the surface 19× its rest edge length.</td>
@@ -512,27 +530,68 @@
         small and looked fine).</td>
   </tr>
   <tr>
-    <td>12</td>
-    <td><b>Two gates could not have failed.</b> The offline "does DQS beat LBS" assertion compared a
-        dual-quaternion mirror that returned the LBS number to four decimal places, and the seam metric
-        compared two arms that read the same geometry attribute. Both were replaced with measurements that
-        can actually disagree, and the unsupportable DQS claims were removed rather than tuned.</td>
-    <td>Reading the reported values instead of the pass/fail column.</td>
+    <td>13</td>
+    <td><b>A "does DQS beat LBS" gate whose two sides returned the same number.</b> The dual-quaternion
+        mirror reproduced the LBS figure to four decimal places, so the assertion could never fail. The
+        seam metric had the same shape of error: both of its arms read the same geometry attribute.</td>
+    <td>Reading the reported values instead of the pass/fail column. The unsupportable claims were removed
+        rather than tuned. (With the FK bug fixed the mirror now does separate: LBS 1.21–1.86× against DQS
+        1.20–1.79×, better on four of five presets — a small, real, and now-reportable difference.)</td>
+  </tr>
+  <tr>
+    <td>14</td>
+    <td><b>The screenshot gate was measuring a bounding box, not the screen.</b> W1 asserted a
+        "subject fraction" computed by projecting the mesh, and a colour count, and both passed while the
+        biped occupied <b>34&nbsp;×&nbsp;81 pixels in a 1440&nbsp;×&nbsp;860 frame</b> — the shot was the
+        far-away all-five overview because <code>moveAll</code> was still on and the characters walked
+        apart every frame, re-widening the camera.</td>
+    <td>Printing an ASCII occupancy map of the screenshots. A gate that measures intent rather than pixels
+        will pass on a frame a person cannot read.</td>
+  </tr>
+  <tr>
+    <td>15</td>
+    <td><b>The projection helper mirrored Y.</b> <code>project()</code> converted NDC to pixels with the
+        same expression for both axes, but NDC y = +1 is the <i>top</i> of the screen. Every reported box
+        was flipped vertically, so a subject clipped at the bottom read as comfortably in frame.</td>
+    <td>Comparing the reported box against the drawn pixels — a 225×559 px claim against a 115×117 px
+        reality.</td>
+  </tr>
+  <tr>
+    <td>16</td>
+    <td><b>The "per-primitive" debug view painted three colours.</b> It hashed the <i>part</i> index
+        (body / limbs / detail), so the whole creature came out one flat shade — a documented feature that
+        did not do what its own label said.</td>
+    <td>Turning it on and looking. It now hashes a unique per-shape id (28 ids on the biped, 43 on the
+        hexapod).</td>
+  </tr>
+  <tr>
+    <td>17</td>
+    <td><b>A "bulk" dial inflated the torsos over the limbs.</b> The per-preset radii are base sizes that
+        the limb attachment points are laid out against — the biped's shoulder sits at x = 0.20 and its
+        chest blob has radius 0.20. Raising the global blob bulk to 1.9 to make the creatures "chunkier"
+        buried every arm and leg inside the torso, so all five rendered as smooth stones.</td>
+    <td>Looking at the overview: five identical rounded lumps. Reverted to 1.0, which is what the preset
+        geometry was actually authored against.</td>
   </tr>
 </table>
 
 <div class="box bad">
-  <b>The pattern.</b> Every one of these produced something that rendered, moved, and passed a screenshot
-  check. None was findable by looking at a still image, and the browser's console stayed silent throughout.
-  The four checks that found almost all of them:
-  <b>(a)</b> a rest-pose assertion (skin the mesh at rest — it must not move);
-  <b>(b)</b> max edge stretch over an animation cycle;
+  <b>The pattern, and the correction to it.</b> Every one of these produced something that rendered,
+  moved, and passed a screenshot check. None was findable by looking at a still image of the <i>first</i>
+  version, and the browser's console stayed silent throughout. The four numeric checks that found most of
+  them, and that are ~150 lines of test code worth keeping:
+  <b>(a)</b> a rest-pose assertion; <b>(b)</b> max edge stretch over an animation cycle;
   <b>(c)</b> does every bone skin geometry, and is every vertex referenced by a triangle;
   <b>(d)</b> watertightness plus a reference-free orientation sum.
-  Those are ~150 lines of test code and they are the part of this ticket most worth keeping.
-  Two of the defects above were found only by <i>bypassing the screenshot</i> — reading the shader's
-  uniforms, or swapping a material — which is worth remembering when a page "renders nothing" but every
-  layer reports healthy.
+  <p style="margin:8px 0 0">
+  <b>But the single worst defect — the one that made every creature render as a featureless lump —
+  was invisible to all sixteen other checks and was found only by looking at the picture.</b> This page
+  originally argued that quality had to be judged numerically because the authoring model could not see
+  images. That was half right: the numbers found subtle structural faults that no eye would catch, and the
+  eye found a catastrophic visual one that no number was asking about. Both halves were needed, and three
+  of the last five defects here were "the verification was measuring the wrong thing" rather than "the code
+  was wrong". A gate is only as good as its question.
+  </p>
 </div>
 
 <h2 id="numbers">10. Measured results</h2>
@@ -547,11 +606,11 @@
 <table>
   <tr><th>Preset</th><th>Triangles</th><th>Vertices</th><th>Bones</th><th>Tubes</th><th>Lumps</th>
       <th>Height</th><th>Watertight</th><th>Max stretch (LBS)</th></tr>
-  <tr><td>biped</td><td class="n">5,808</td><td class="n">2,960</td><td class="n">17</td><td class="n">4</td><td class="n">24</td><td class="n">1.93</td><td>yes</td><td class="n">10.09×</td></tr>
-  <tr><td>quadruped</td><td class="n">6,202</td><td class="n">3,159</td><td class="n">19</td><td class="n">5</td><td class="n">24</td><td class="n">1.02</td><td>yes</td><td class="n">2.93×</td></tr>
-  <tr><td>hexapod</td><td class="n">8,452</td><td class="n">4,312</td><td class="n">27</td><td class="n">8</td><td class="n">35</td><td class="n">0.52</td><td>yes</td><td class="n">3.83×</td></tr>
-  <tr><td>hopper</td><td class="n">5,140</td><td class="n">2,618</td><td class="n">15</td><td class="n">4</td><td class="n">20</td><td class="n">0.66</td><td>yes</td><td class="n">5.74×</td></tr>
-  <tr><td>flyer</td><td class="n">6,528</td><td class="n">3,330</td><td class="n">21</td><td class="n">7</td><td class="n">26</td><td class="n">0.46</td><td>yes</td><td class="n">5.04×</td></tr>
+  <tr><td>biped</td><td class="n">5,808</td><td class="n">2,960</td><td class="n">17</td><td class="n">4</td><td class="n">24</td><td class="n">1.74</td><td>yes</td><td class="n">1.37×</td></tr>
+  <tr><td>quadruped</td><td class="n">6,480</td><td class="n">3,298</td><td class="n">19</td><td class="n">5</td><td class="n">24</td><td class="n">0.86</td><td>yes</td><td class="n">1.21×</td></tr>
+  <tr><td>hexapod</td><td class="n">8,944</td><td class="n">4,558</td><td class="n">27</td><td class="n">8</td><td class="n">35</td><td class="n">0.41</td><td>yes</td><td class="n">1.47×</td></tr>
+  <tr><td>hopper</td><td class="n">5,480</td><td class="n">2,788</td><td class="n">15</td><td class="n">4</td><td class="n">20</td><td class="n">0.54</td><td>yes</td><td class="n">1.09×</td></tr>
+  <tr><td>flyer</td><td class="n">6,886</td><td class="n">3,509</td><td class="n">21</td><td class="n">7</td><td class="n">26</td><td class="n">0.39</td><td>yes</td><td class="n">1.86×</td></tr>
 </table>
 
 <ul>
@@ -565,7 +624,12 @@
   <li><b>Weights:</b> normalised to 1.0 within 1e-6; no vertex unweighted.</li>
   <li><b>Determinism:</b> same (preset, seed) twice → identical digest; different seed → different digest.</li>
   <li>80 offline checks, <b>0 failures</b> (<code>node tools/meshcheck.mjs</code>).</li>
-  <li>7 browser gates, <b>all pass</b> (<code>python3 tools/verify.py</code>).</li>
+  <li>7 browser gates, <b>all pass</b> (<code>python3 tools/verify.py</code>, exit 0).</li>
+  <li><b>Verified by eye as well.</b> All five body plans were rendered at a known camera and inspected:
+      the biped shows head, torso, two arms with hands and two legs with feet; the hexapod shows six legs
+      and two antennae; the flyer shows swept wings and tucked limbs. The seam A/B is visibly different —
+      the smooth tier has continuous shading across shoulder, elbow and knee, the raw-primitive tier shows
+      flat facets.</li>
 </ul>
 
 <h3>Cost model (reasoned, not measured on a device)</h3>
@@ -589,9 +653,13 @@
   <li><b>LOD is not implemented.</b> The tessellation budget is a dial, not an automatic distance LOD.</li>
   <li><b>The implicit tier's bake is not characterised on mobile.</b> Its cost is reported per character
       in the demo's stats panel, but no device budget was measured.</li>
-  <li><b>Quality is judged from numeric probes and screenshots, not from a human looking at it.</b> The
-      harness rejects flat frames and asserts coverage, colour count and frame-to-frame change — but
-      "does it look good" is ultimately a human call.</li>
+  <li><b>Aesthetics were judged by one non-human reviewer.</b> The renders were inspected and the defects
+      above were found that way, which is far more than the numeric gates managed — but "does it look
+      good" is still a human call, and the art direction here (chunky, big-headed, black-outlined toon)
+      has not been reviewed by anyone.</li>
+  <li><b>Z-fighting where detail primitives sit on a surface.</b> Visible in the per-primitive debug view
+      as speckle on the head and thighs, where an eye or a joint ball is nearly coincident with the blob
+      under it. Invisible in normal shading because both primitives share a colour, but it is there.</li>
 </ul>
 
 <h2 id="port">12. If this were ported to the game</h2>

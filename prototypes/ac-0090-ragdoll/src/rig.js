@@ -73,6 +73,10 @@ export class Rig {
       return m4invert(m4(), restWorld);
     });
     this.local = plan.joints.map(() => [0, 0, 0]);
+    // Accumulated (world-space) rotation per bone: parent's accumulated rotation
+    // composed with this bone's local rotation. Kept separate from `world` because
+    // the translation and the rotation are computed in different frames.
+    this.qWorld = plan.joints.map(() => [0, 0, 0, 1]);
     this.world = plan.joints.map(() => m4());
     this.skin = plan.joints.map(() => m4());
     this.flatSkin = new Float32Array(n * 16);
@@ -148,19 +152,37 @@ export class Rig {
     const R = this._R || (this._R = m4());
     const tmp = this._local5 || (this._local5 = m4());
     const origin = this._origin || (this._origin = [0, 0, 0]);
+
+    // Standard skeletal FK, and the two halves must use the SAME convention:
+    //
+    //   world[i] = T(posedJoint) * R_accumulated      <- the BONE's transform
+    //   skin[i]  = world[i] * T(-restJoint)           <- rest space -> posed space
+    //
+    // The previous revision built world[i] with m4fromRotAround, which already
+    // produces T(origin) * R * T(-joint) — a rest->posed POINT transform — and then
+    // multiplied by restInv = T(-joint) as well. That subtracts the joint twice, so
+    // at rest the skin matrix came out T(-joint) instead of the identity and every
+    // vertex was dragged to its own bone's joint: the whole creature collapsed into
+    // a lump the size of its torso. Measured: a 1.815-unit-tall biped rendered 0.474
+    // units tall, which in the browser was a 115x117 px blob with no limbs, while
+    // the rest pose, the rig and the mesh were all individually correct.
     for (let i = 0; i < this.count; i++) {
       const b = plan.joints[i];
-      m4fromQuat(R, this.quatFor(i));
+      const q = this.quatFor(i);
       if (b.parent >= 0) {
-        const pw = this.world[b.parent];
-        // The joint's position AFTER the parent has moved: the child inherits
-        // the parent's motion, then rotates about that moved joint.
-        m4xformPoint(origin, pw, b.joint[0], b.joint[1], b.joint[2]);
-        m4fromRotAround(tmp, this.quatFor(i), origin, origin);
+        // Rotations compose down the chain, so a shoulder swing carries the elbow.
+        this.qWorld[i] = qmul(this.qWorld[b.parent], q);
+        // The child's joint position is the parent's REST->POSED transform applied
+        // to the child's rest joint; this.skin[parent] is exactly that transform.
+        m4xformPoint(origin, this.skin[b.parent], b.joint[0], b.joint[1], b.joint[2]);
       } else {
-        m4fromRotAround(tmp, this.quatFor(i), b.joint, b.joint);
+        this.qWorld[i] = q;
+        origin[0] = b.joint[0]; origin[1] = b.joint[1]; origin[2] = b.joint[2];
       }
-      this.world[i].set(tmp);
+      m4fromQuat(this.world[i], this.qWorld[i]);
+      this.world[i][12] = origin[0];
+      this.world[i][13] = origin[1];
+      this.world[i][14] = origin[2];
       m4mul(this.skin[i], this.world[i], this.restInv[i]);
       this.flatSkin.set(this.skin[i], i * 16);
     }

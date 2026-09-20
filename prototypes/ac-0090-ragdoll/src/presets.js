@@ -95,15 +95,16 @@ function neckBall(plan, partName = 'body') {
   blob(plan, partName, j.joint, [r * 1.05, r * 1.05, r * 1.05], 'neck', { round: 0.75 });
 }
 
-// Global bulk for the lump primitives.
+// Global bulk applied to every lump radius.
 //
-// The per-preset radii were authored against a generation path that inflated
-// blobs well past their declared size (see shapeFactor in geom.js), so once that
-// was corrected the characters came out as thin sticks — a biped torso 0.26 deep
-// against 1.74 of height. This is the single dial that restores the intended
-// chunky toy proportions; it is not a fudge factor for a geometry bug, it is the
-// preset's size choice now that the primitive means what it says.
-const BLOB_BULK = 1.9;
+// This exists because the per-preset radii are authored as *base* sizes that the
+// limb attachment points are laid out against: the biped's shoulder sits at
+// x = 0.20 while its chest blob has radius 0.20, so the arm only clears the torso
+// while the bulk stays near 1. Raising it to 1.35 swallowed the arms entirely
+// (verified by eye: the creature rendered as a smooth lump with no limbs), and
+// 1.9 did it for every preset. If a creature needs more mass, move the limb
+// attachment points out rather than inflating the torso over them.
+const BLOB_BULK = 1.0;
 
 function blob(plan, partName, centre, radii, bone, opts = {}) {
   return lump(plan, partName, centre, radii.map((r) => r * BLOB_BULK), {

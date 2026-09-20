@@ -28,7 +28,7 @@
 
 <h1>AC-0090 — verification results</h1>
 <p class="meta">
-  Measured 2026-09-19T22:55:07 · <code>prototypes/ac-0090-ragdoll/tools/verify.py</code> and
+  Measured 2026-09-20T09:37:57 · <code>prototypes/ac-0090-ragdoll/tools/verify.py</code> and
   <code>prototypes/ac-0090-ragdoll/tools/meshcheck.mjs</code><br>
   Environment: <b>headless Chromium (Playwright 1.62) / WebGL2 SwiftShader (software rasteriser) — NOT a mobile GPU measurement</b>
 </p>
@@ -44,16 +44,16 @@
 
 <h2>W1 — render evidence, one screenshot per preset</h2>
 <p class="meta">Full-size PNGs are beside this file in <code>tasks/AC-0090/</code>.</p>
-<table><tr><th>Preset</th><th>Distinct colours</th><th>Non-background</th><th>Mean luma</th><th>File</th></tr><tr><td>biped</td><td class="n">558</td><td class="n">0.1975</td><td class="n">34.35</td><td><code>AC-0090-biped.png</code></td></tr><tr><td>quadruped</td><td class="n">679</td><td class="n">0.1593</td><td class="n">30.2</td><td><code>AC-0090-quadruped.png</code></td></tr><tr><td>hexapod</td><td class="n">684</td><td class="n">0.1437</td><td class="n">26.64</td><td><code>AC-0090-hexapod.png</code></td></tr><tr><td>hopper</td><td class="n">618</td><td class="n">0.162</td><td class="n">29.61</td><td><code>AC-0090-hopper.png</code></td></tr><tr><td>flyer</td><td class="n">599</td><td class="n">0.118</td><td class="n">24.31</td><td><code>AC-0090-flyer.png</code></td></tr></table>
+<table><tr><th>Preset</th><th>Distinct colours</th><th>Non-background</th><th>Mean luma</th><th>Subject, % of frame</th><th>File</th></tr><tr><td>biped</td><td class="n">685</td><td class="n">0.3085</td><td class="n">46.88</td><td class="n">0.1786</td><td><code>AC-0090-biped.png</code></td></tr><tr><td>quadruped</td><td class="n">768</td><td class="n">0.2147</td><td class="n">34.44</td><td class="n">0.0633</td><td><code>AC-0090-quadruped.png</code></td></tr><tr><td>hexapod</td><td class="n">743</td><td class="n">0.2181</td><td class="n">34.55</td><td class="n">0.1297</td><td><code>AC-0090-hexapod.png</code></td></tr><tr><td>hopper</td><td class="n">575</td><td class="n">0.2655</td><td class="n">39.29</td><td class="n">0.1901</td><td><code>AC-0090-hopper.png</code></td></tr><tr><td>flyer</td><td class="n">583</td><td class="n">0.1523</td><td class="n">26.44</td><td class="n">0.1041</td><td><code>AC-0090-flyer.png</code></td></tr></table>
 
 <h2>W2 — the seam A/B</h2>
 <p>Framed on the biped's <code>elbow_l</code> from 1.4 units, pose frozen, outline off so the comparison is about the joint surface and not the silhouette.</p>
 <table>
   <tr><th>Measurement</th><th>Value</th></tr>
-  <tr><td>hard vs smooth tier, toon on</td><td class="n">0.0166 of pixels</td></tr>
-  <tr><td>hard vs smooth tier, toon off</td><td class="n">0.0186 of pixels</td></tr>
-  <tr><td>blend-window debug view</td><td class="n">0.0021 of pixels</td></tr>
-  <tr><td>per-primitive (raw parts) view</td><td class="n">0.0447 of pixels</td></tr>
+  <tr><td>hard vs smooth tier, toon on</td><td class="n">0.073 of pixels</td></tr>
+  <tr><td>hard vs smooth tier, toon off</td><td class="n">0.099 of pixels</td></tr>
+  <tr><td>blend-window debug view</td><td class="n">0.0721 of pixels</td></tr>
+  <tr><td>per-primitive (raw parts) view</td><td class="n">0.1753 of pixels</td></tr>
   <tr><td>smooth vs flat normal, mean angle</td><td class="n">16.33°</td></tr>
   <tr><td>smooth vs flat normal, p95</td><td class="n">26.88°</td></tr>
 </table>
@@ -72,7 +72,7 @@
 
 <h2>W4 — interactive controls</h2>
 <p class="meta">Each control is applied from a known base state and must both <i>take effect</i> (state read back from the page) and <i>move pixels</i>.</p>
-<table><tr><th>Control</th><th>Pixels differing</th><th>Verdict</th><th>Applied state</th></tr><tr><td><code>toon_off</code></td><td class="n">0.0002</td><td><span class="tag">wired, no visual signal</span></td><td><code>{"toon": false}</code></td></tr><tr><td><code>bands_2</code></td><td class="n">0.033</td><td><span class="tag yes">changed</span></td><td><code>{"bands": 2}</code></td></tr><tr><td><code>wireframe</code></td><td class="n">0.192</td><td><span class="tag yes">changed</span></td><td><code>{"wire": true}</code></td></tr><tr><td><code>joints</code></td><td class="n">0.0372</td><td><span class="tag yes">changed</span></td><td><code>{"joints": true}</code></td></tr><tr><td><code>outline_off</code></td><td class="n">0.042</td><td><span class="tag yes">changed</span></td><td><code>{"outline": false}</code></td></tr><tr><td><code>per_primitive</code></td><td class="n">0.0474</td><td><span class="tag yes">changed</span></td><td><code>{"partDebug": true}</code></td></tr><tr><td><code>blend_windows</code></td><td class="n">0.032</td><td><span class="tag yes">changed</span></td><td><code>{"seamDebug": true}</code></td></tr><tr><td><code>camera</code></td><td class="n">—</td><td><span class="tag yes">changed</span></td><td><code>—</code></td></tr><tr><td><code>focus</code></td><td class="n">—</td><td><span class="tag yes">changed</span></td><td><code>—</code></td></tr><tr><td><code>speed</code></td><td class="n">—</td><td><span class="tag yes">changed</span></td><td><code>—</code></td></tr><tr><td><code>seed</code></td><td class="n">—</td><td><span class="tag yes">changed</span></td><td><code>—</code></td></tr></table>
+<table><tr><th>Control</th><th>Pixels differing</th><th>Verdict</th><th>Applied state</th></tr><tr><td><code>toon_off</code></td><td class="n">0.0362</td><td><span class="tag yes">changed</span></td><td><code>{"toon": false}</code></td></tr><tr><td><code>bands_2</code></td><td class="n">0.1924</td><td><span class="tag yes">changed</span></td><td><code>{"bands": 2}</code></td></tr><tr><td><code>wireframe</code></td><td class="n">0.1467</td><td><span class="tag yes">changed</span></td><td><code>{"wire": true}</code></td></tr><tr><td><code>joints</code></td><td class="n">0.1341</td><td><span class="tag yes">changed</span></td><td><code>{"joints": true}</code></td></tr><tr><td><code>outline_off</code></td><td class="n">0.1766</td><td><span class="tag yes">changed</span></td><td><code>{"outline": false}</code></td></tr><tr><td><code>per_primitive</code></td><td class="n">0.2267</td><td><span class="tag yes">changed</span></td><td><code>{"partDebug": true}</code></td></tr><tr><td><code>blend_windows</code></td><td class="n">0.164</td><td><span class="tag yes">changed</span></td><td><code>{"seamDebug": true}</code></td></tr><tr><td><code>camera</code></td><td class="n">—</td><td><span class="tag yes">changed</span></td><td><code>—</code></td></tr><tr><td><code>focus</code></td><td class="n">—</td><td><span class="tag yes">changed</span></td><td><code>—</code></td></tr><tr><td><code>speed</code></td><td class="n">—</td><td><span class="tag yes">changed</span></td><td><code>—</code></td></tr><tr><td><code>seed</code></td><td class="n">—</td><td><span class="tag yes">changed</span></td><td><code>—</code></td></tr></table>
 <div class="box">
   <b>One control is wired but visually inert, and is recorded as such.</b>
   <code>toon: false</code> swaps the quantised wrapped lambertian for the unquantised one; on most of the
