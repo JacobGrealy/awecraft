@@ -21,6 +21,13 @@ const CHUNKS_PER_FRAME_MAX := 100
 # base the AC-0226 formula scales from).
 const PCT_MIN := 0
 const PCT_MAX := 100
+# AC-0332: the far-tier mesh floor scale (AC-0331's kernel seam) — the
+# chunks-below-sea range. A plain 0..24 scale with NO sentinel: the on/off
+# axis is the separate yfloor_enabled boolean, so the scale never encodes
+# "disabled". 0 = the waterline (y Data.SEA = 126); each step cuts 16
+# blocks deeper (y_floor = Data.SEA - n*16). 24 reaches y -258, below the
+# world floor (0) — the full far column.
+const YFLOOR_MAX := 24
 
 const DEFAULTS := {
 	"render_dist": 50,
@@ -78,6 +85,13 @@ const DEFAULTS := {
 	"dof_enabled": true,
 	"dof_far_distance": 82.62,
 	"dof_amount": 0.08,
+	# AC-0332: the far-tier mesh floor (AC-0331's kernel — the sub-waterline
+	# geometry of the three far draw tiers is removed at the floor). The
+	# on/off axis + the plain 0..24 chunks-below-sea scale (YFLOOR_MAX);
+	# 0 = the waterline. The -1 "disabled" is an INTERNAL sentinel derived
+	# only from the toggle (world.gd note_yfloor) — never storable.
+	"yfloor_enabled": true,
+	"yfloor_chunks_below_sea": 0,
 	# AC-0257: worker-thread in-flight caps. 0 = auto (scale to all
 	# available cores, never past — gen/mesh split 40/60); >0 = the
 	# explicit cap for that lane.
@@ -200,6 +214,13 @@ func _clamp(k: String, v) -> void:
 			values[k] = clampf(float(v), 1.0, 400.0)
 		"dof_amount":
 			values[k] = clampf(float(v), 0.0, 1.0)
+		# AC-0332: the far-tier mesh floor (AC-0331's kernel) — the on/off
+		# axis + the plain 0..24 chunks-below-sea scale (no sentinel: the
+		# -1 "off" is derived only from the toggle, in world.gd).
+		"yfloor_enabled":
+			values[k] = bool(v)
+		"yfloor_chunks_below_sea":
+			values[k] = clampi(int(v), 0, YFLOOR_MAX)
 		"worker_gen_threads":
 			values[k] = clampi(int(v), 0, WORKER_THREADS_MAX)
 		"worker_mesh_threads":
@@ -218,6 +239,12 @@ func set_value(k: String, v) -> void:
 	clamp_sim_to_render()
 	clamp_medium_start()  # AC-0263: the sim/render change moves its band
 	clamp_low_start_to_render()
+	# AC-0332: the far-tier mesh floor pair — the apply step alongside the
+	# clamp chain: the world re-derives the effective floor (note_yfloor)
+	# and handles the cache staleness a changed value owes. A no-op while
+	# Game.world is absent (menu / the settings arm's standalone context).
+	if k == "yfloor_enabled" or k == "yfloor_chunks_below_sea":
+		apply_yfloor()
 	save()
 
 
@@ -350,3 +377,17 @@ func apply_dof() -> void:
 				attrs.set("dof_blur_far_enabled", bool(values.get("dof_enabled", true)))
 				attrs.set("dof_blur_far_distance", float(values.get("dof_far_distance", 82.62)))
 				attrs.set("dof_blur_amount", float(values.get("dof_amount", 0.08)))
+
+
+# AC-0332: the far-tier mesh floor (AC-0331's kernel seam) — the world
+# re-derives the effective floor from the pair (note_yfloor: -1 when the
+# toggle is off, else Data.SEA - n*16) and handles the cache staleness a
+# change owes (the far_eff clear + the band-A far_mat reopen, so
+# materialized columns re-materialize at the new floor through the normal
+# drain). Boot/dev knob: a change applies to newly built columns
+# immediately; existing ones converge as they demote and re-mesh (the
+# live re-floor storm is a follow-up, designed against measured churn).
+# The has_method guard keeps the _StubWorld / range arms clean.
+func apply_yfloor() -> void:
+	if Game.world != null and Game.world.has_method("note_yfloor"):
+		Game.world.note_yfloor()

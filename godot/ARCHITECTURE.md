@@ -210,10 +210,12 @@ Match these; do not improvise a different approach in a task.
   multi-thousand-deep build backlog. Permanent counters: `star_seed_count/us`,
   `promo_enq_count`, `promo_land_count/ms`, `star_late_landings_promo` (expect 0 — the
   retain-swap never HIDEs), `hslab_defer_settle`.
-  **AC-0331 — the far-tier FLOOR** (`p_yfloor`, hard-coded at `Data.SEA` = 126 today;
-  the setting/knob is AC-0332's): the sub-waterline world of FAR columns is genuinely
-  REMOVED — the far draw tiers draw only the world above the floor, and nothing changes
-  from above (the water surface is bit-identical). Semantics (decided O3): a grid CELL
+  **AC-0331 — the far-tier FLOOR** (`p_yfloor`, a SETTING since AC-0332 — the pair
+  `yfloor_enabled` (bool, default true) + `yfloor_chunks_below_sea` (int, default 0,
+  the plain 0..24 scale `Settings.YFLOOR_MAX`, no sentinel) with a Developer-tab
+  row): the sub-waterline world of FAR columns is genuinely REMOVED — the far draw
+  tiers draw only the world above the floor, and nothing changes from above (the
+  water surface is bit-identical). Semantics (decided O3): a grid CELL
   is kept iff its topmost world-y > floor, kept WHOLE (sub-floor content inside a kept
   cell still counts in the solid test and the color); cells entirely below the floor are
   zeroed. The floor NEVER applies to the real band (tier 0 — `yfloor` stays −1). Three
@@ -232,12 +234,31 @@ Match these; do not improvise a different approach in a task.
   `band_a_fluid_only_cols`); (3) **the probes** — the far-column low-lane probes skip
   slabs entirely below the floor (`si*16+15 < floor`) so pruned slabs never re-dispatch;
   the mat handoff stamps 0..si1 unconditionally as before, so stamped-but-never-meshed
-  slabs read done to the visibility-flip bookkeeping. `chunk.far_eff` (the cached sky
-  eff) is floor-aware and stable while the floor is fixed — AC-0332 MUST invalidate it
-  on a floor change. Cost: the low-lane dispatch census drops ~25% (r16 `low_enqueue_n`
-  47847 → 36057) and the far slab censuses shrink accordingly (ladder band B 519 → 155,
-  band C 318 → 94). Honest caveat: submerged INSIDE a far column below the floor you see
-  the cap (water at 126 / the coarse 4×4 at 124), not the real ocean floor.
+  slabs read done to the visibility-flip bookkeeping. Cost: the low-lane dispatch
+  census drops ~25% (r16 `low_enqueue_n` 47847 → 36057) and the far slab censuses
+  shrink accordingly (ladder band B 519 → 155, band C 318 → 94). Honest caveat:
+  submerged INSIDE a far column below the floor you see the cap (water at 126 / the
+  coarse 4×4 at 124), not the real ocean floor.
+  **AC-0332 — the floor is a setting.** Derivation lives ONCE in
+  `world.note_yfloor()` (next to the other two Settings band reads; `_far_floor_y()`
+  is the seam every emitter/probe reads): `y_floor = -1` when the toggle is off,
+  else `Data.SEA - n*16`. The `-1` is an INTERNAL sentinel produced only by the
+  toggle — nothing in the 0..24 scale can yield it. The Developer tab carries a
+  CheckBox + SpinBox row (the AC-0260 fix: typeable SpinBox, the exact small int 0
+  reachable; the dependent spin dims while the toggle is off). The harness env
+  preloads `AWECRAFT_YFLOOR=<0..24>` + `AWECRAFT_YFLOOR_ENABLED=<0|1>` (the
+  `AWECRAFT_TM_HO`/`AWECRAFT_FOG_PCT` pattern — written into `Settings.values`
+  WITHOUT `save()`, so the arms never clobber the user's cfg). Cache staleness on a
+  value change: `note_yfloor` clears `chunk.far_eff` (the cached sky eff — floor-
+  aware, must not outlive the change) on every resident far column and re-opens the
+  band-A `far_mat` mark (with both probe caches invalidated, or the cached
+  "complete" verdict keeps the column settled forever) so materialized columns
+  re-materialize at the new floor. The pair is a BOOT/DEV KNOB: the change applies
+  to newly built columns immediately, existing ones converge as they demote and
+  re-mesh (band B/C lows keep their stamps — they re-emit on the normal re-lower);
+  the LIVE RE-FLOOR storm (re-meshing the whole far field at once — the expensive ON
+  direction) is DEFERRED, the follow-up designs both directions against measured
+  churn.
 - **The cave field (the single density field, AC-0215 / tuned at AC-0288 / P1 tunnels at
   AC-0289)**: caves are wherever the ONE density field reads solid→air,
   `d = S_ramp((H−y)/R) + A(y)·(C−0.5)` — the surface AND the caves come from the same

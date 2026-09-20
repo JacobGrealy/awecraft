@@ -548,19 +548,23 @@ func _player_slab() -> int:
 
 # AC-0331: the far-tier mesh FLOOR (world y). The sub-waterline geometry
 # of the THREE FAR DRAW TIERS (band A full-LOD materialization + bands
-# B/C avg) is REMOVED at the sea floor: the far ocean keeps its
-# translucent water surface at Data.SEA (the waterline voxel stays) +
-# the opaque cap face at the floor (no see-through from below — the
-# cap is the -Y face of the first kept cell / the floor row), and the
-# slabs entirely below it are never built or dispatched (the cost win:
-# 7 of 24 low-lane slabs + the band-A mat build starts at slab 7). The
-# REAL band (tier 0) NEVER floors — caves + sub-floor digging survive
-# there. Hard-coded at Data.SEA in this ticket (no setting, no env
-# knob, no UI); AC-0332 replaces this body with the setting read
-# (yfloor_enabled + yfloor_chunks_below_sea) — this function is the
-# single seam the follow-up owns.
+# B/C avg) is REMOVED at the floor: the far ocean keeps its translucent
+# water surface at Data.SEA (the waterline voxel stays) + the opaque cap
+# face at the floor (no see-through from below — the cap is the -Y face
+# of the first kept cell / the floor row), and the slabs entirely below
+# it are never built or dispatched (the cost win: 7 of 24 low-lane slabs
+# + the band-A mat build starts at slab 7). The REAL band (tier 0)
+# NEVER floors — caves + sub-floor digging survive there.
+# AC-0332: the value is a SETTING now — note_yfloor (next to the other
+# two Settings band reads) derives it once: -1 when the toggle is off,
+# else Data.SEA - n*16 for the 0..24 chunks-below-sea scale. This
+# function is the single seam every emitter/probe reads; the initial
+# state matches the shipped default (on, 0 = Data.SEA) and _ready
+# re-derives from the live Settings (after the harness env preloads).
+var yfloor_y := int(Data.SEA)
+
 func _far_floor_y() -> int:
-	return int(Data.SEA)
+	return yfloor_y
 
 # AC-0257: the Y-LAYER rank of slab si — the bake order around the player's
 # slab: rank 0 = the player's slab, then y-1, y+1, y-2, y+2, ... (the
@@ -849,6 +853,45 @@ func note_medium_start() -> void:
 	_low_slab_none_key = ""
 	_low_inr_invalidate()
 	_rescore_kick()
+
+# AC-0332: the far-tier mesh FLOOR became a setting (AC-0331's kernel
+# seam). The derivation happens HERE, once, next to the other two
+# Settings band reads (note_medium_start / apply_low_start): y_floor =
+# -1 when the toggle is off, else Data.SEA - n*16 for the plain 0..24
+# chunks-below-sea scale (no sentinel in the setting — the -1 is an
+# INTERNAL sentinel produced only by the toggle; nothing in the 0..24
+# range can yield it). _far_floor_y() returns the derived value. Called
+# from _ready (the boot derive, AFTER the AWECRAFT_YFLOOR /
+# AWECRAFT_YFLOOR_ENABLED env preloads land in Settings.values) and from
+# Settings.apply_yfloor (a mid-session change — the Developer-tab row /
+# set_value apply step).
+func note_yfloor() -> void:
+	var en := bool(Settings.values.get("yfloor_enabled", true))
+	var n := clampi(int(Settings.values.get("yfloor_chunks_below_sea", 0)), 0, Settings.YFLOOR_MAX)
+	var yf := -1 if not en else int(Data.SEA) - n * 16
+	if yf == yfloor_y:
+		return
+	yfloor_y = yf
+	# AC-0332: the cache staleness a floor change owes (the AC-0331
+	# caveat): c.far_eff is floor-aware and must not outlive the change;
+	# a materialized band-A column re-opens its far_mat mark so the high
+	# lane OWES the re-materialization at the new floor (it rides the
+	# normal drain — the boot/dev-knob contract: new columns build at the
+	# new floor, existing ones converge as they demote and re-mesh; the
+	# live re-floor storm that re-emits the whole far field at once is
+	# DEFERRED, the follow-up designs both directions against measured
+	# churn). The probe caches must go with the mark — a cached
+	# "complete" verdict (served without re-validation) would keep the
+	# column settled forever. Band B/C lows are untouched here (their
+	# stamps did not move — they converge through the normal re-lower).
+	for c in chunks.values():
+		if not c.far:
+			continue
+		c.far_eff = {}
+		if c.far_mat:
+			c.far_mat = false
+			_hslab_probe_invalidate(c)
+			_low_probe_invalidate(c)
 
 func _rescore_kick() -> void:
 	_rescore_ver += 1
@@ -3893,6 +3936,19 @@ func _ready() -> void:
 	if hoe != "":
 		Settings.values["chunks_per_frame"] = clampi(
 			hoe.to_int(), Settings.CHUNKS_PER_FRAME_MIN, Settings.CHUNKS_PER_FRAME_MAX)
+	# AC-0332: the far-tier mesh floor (AC-0331's kernel) — harness env
+	# preloads, the AWECRAFT_TM_HO / AWECRAFT_FOG_PCT pattern: written to
+	# Settings.values WITHOUT save() so the arms never clobber the user's
+	# cfg. AWECRAFT_YFLOOR=<0..24> (the chunks-below-sea scale) and
+	# AWECRAFT_YFLOOR_ENABLED=<0|1> (the on/off axis). The boot derive
+	# below runs AFTER these land.
+	var yfe := OS.get_environment("AWECRAFT_YFLOOR_ENABLED")
+	if yfe != "":
+		Settings.values["yfloor_enabled"] = yfe.to_int() == 1
+	var yfn := OS.get_environment("AWECRAFT_YFLOOR")
+	if yfn != "":
+		Settings.values["yfloor_chunks_below_sea"] = clampi(yfn.to_int(), 0, Settings.YFLOOR_MAX)
+	note_yfloor()  # AC-0332: the boot derive (the live Settings after the preloads)
 	# AC-0152: harness band overrides (default 4/8 per Bedrock Realms).
 	var b0e := OS.get_environment("AWECRAFT_BAND0")
 	if b0e != "":

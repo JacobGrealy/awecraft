@@ -133,13 +133,13 @@ modes:
   settings:
     entry: '`_settings_test`'
     tests: |-
-      settings defaults 50/4 (sim), ranges 4–96, sim→render clamp, load clamp, the AC-0313 sim floor (SIM_MIN 4: set 3 → 4, stored 2 → 4 on load), apply, volume, hunger toggle (AC-0072)
+      settings defaults 50/4 (sim), ranges 4–96, sim→render clamp, load clamp, the AC-0313 sim floor (SIM_MIN 4: set 3 → 4, stored 2 → 4 on load), apply, volume, hunger toggle (AC-0072), the AC-0332 far-tier floor pair (defaults on/0, the 0..24 clamp, toggle round-trip, the set_value apply step via the stub's note_yfloor, the Developer-tab row's presence from the real menu scene + the _sync_controls refresh)
     result_fields: |-
-      `defaults`, `range`, `sim_clamp`, `load_clamp`, `apply` (dist rebase [7,64] at AC-0313), `sim_floor` {saved 2, after_load 4}, `volume_ok`, `hunger` {saved_off, reloaded_off, back_on, default_true}, `ok`
+      `defaults`, `range`, `sim_clamp`, `load_clamp`, `apply` (dist rebase [7,64] at AC-0313), `sim_floor` {saved 2, after_load 4}, `volume_ok`, `hunger` {saved_off, reloaded_off, back_on, default_true}, `yfloor` {default_on_0, clamp_hi_24, clamp_lo_0, toggle_off_on, apply_step, apply_calls, dev_row_present, sync_set5, toggle_dim}, `ok`
     envs: '`AWECRAFT_IGNORE_SETTINGS` (self-managed)'
     wall: ~5 s (not re-run 08-24; fast class)
     notes: |-
-      dispatched at main.gd:576 BEFORE game nodes (works standalone + in battery). AC-0313: SIM_MIN 1→4 (the tier-0 set went, the real band taxi ≤ sim is the footing guarantee) — the apply dist expectation rebased [7,48]→[7,64] (sim 3 → floor 4) and the new `sim_floor` field round-trips the floor through the load path
+      dispatched at main.gd:576 BEFORE game nodes (works standalone + in battery). AC-0313: SIM_MIN 1→4 (the tier-0 set went, the real band taxi ≤ sim is the footing guarantee) — the apply dist expectation rebased [7,48]→[7,64] (sim 3 → floor 4) and the new `sim_floor` field round-trips the floor through the load path. AC-0332 (2026-09-19): the far-tier mesh floor pair (yfloor_enabled + yfloor_chunks_below_sea) is covered — the apply step rides set_value (Settings.apply_yfloor -> the world's note_yfloor, stub-counted) and the dev-row presence instantiates scenes/menu.tscn (synchronous _ready; the arm stays await-free by contract)
   fluids:
     entry: '`_fluids_test`'
     tests: |-

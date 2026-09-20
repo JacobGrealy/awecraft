@@ -1450,12 +1450,15 @@ class _StubWorld:
 	var fluid_tick_radius := 0
 	var band0_r := 0  # AC-0152: settings wiring target
 	var sim_kicks := 0  # AC-0239: apply_sim_distance must re-stamp the tiers
+	var yfloor_calls := 0  # AC-0332: the apply step's note_yfloor wiring
 	func recenter(_x: float, _z: float) -> void:
 		pass
 	func note_render_distance(_prev: int) -> void:  # AC-0178 stub (AC-0225: keeps the arm's log SCRIPT-ERROR-free)
 		pass
 	func note_sim_distance() -> void:  # AC-0239 stub
 		sim_kicks += 1
+	func note_yfloor() -> void:  # AC-0332 stub (Settings.apply_yfloor wiring)
+		yfloor_calls += 1
 
 
 func _settings_test() -> void:
@@ -1561,6 +1564,62 @@ func _settings_test() -> void:
 	var fog_lo_ok := int(Settings.values["fog_start_pct"]) == 0
 	# Leave the fog setting at its default.
 	Settings.set_value("fog_start_pct", 87)
+	# AC-0332: the far-tier mesh floor pair (AC-0331's kernel seam) —
+	# the defaults (on, 0), the plain 0..24 clamp (no sentinel: -1 is an
+	# INTERNAL sentinel the toggle derives, never a storable value), the
+	# apply step (set_value -> Settings.apply_yfloor -> the world's
+	# note_yfloor, observed through the stub), and the Developer-tab
+	# row's presence (the real menu scene, synchronous _ready).
+	Settings.load_settings()
+	var yf_default_ok := bool(Settings.values["yfloor_enabled"]) == true and int(Settings.values["yfloor_chunks_below_sea"]) == 0
+	Settings.set_value("yfloor_chunks_below_sea", 999)
+	var yf_clamp_hi_ok := int(Settings.values["yfloor_chunks_below_sea"]) == Settings.YFLOOR_MAX
+	Settings.set_value("yfloor_chunks_below_sea", -5)
+	var yf_clamp_lo_ok := int(Settings.values["yfloor_chunks_below_sea"]) == 0
+	Settings.set_value("yfloor_enabled", false)
+	var yf_toggle_off_ok := bool(Settings.values["yfloor_enabled"]) == false
+	Settings.set_value("yfloor_enabled", true)
+	var yf_toggle_on_ok := bool(Settings.values["yfloor_enabled"]) == true
+	var gw_save = Game.world
+	var wy := _StubWorld.new()
+	Game.world = wy
+	Settings.set_value("yfloor_chunks_below_sea", 7)
+	var yf_apply_1 := wy.yfloor_calls
+	Settings.set_value("yfloor_enabled", false)
+	var yf_apply_2 := wy.yfloor_calls
+	Game.world = gw_save
+	var yf_apply_ok := yf_apply_1 >= 1 and yf_apply_2 >= yf_apply_1 + 1
+	# restore the shipped default before the menu check (the apply test
+	# left (false, 7)).
+	Settings.set_value("yfloor_enabled", true)
+	Settings.set_value("yfloor_chunks_below_sea", 0)
+	# the dev-tab row's presence — the real menu scene (scenes/menu.tscn);
+	# add_child flushes _ready synchronously, so the rows exist by the
+	# time this line runs (no await — this arm must stay synchronous: it
+	# is dispatched without await both standalone and in the battery).
+	var ymenu = load("res://scenes/menu.tscn").instantiate()
+	add_child(ymenu)
+	ymenu._sync_controls()  # the state the game guarantees whenever the panel opens
+	var ydev = ymenu.get_node_or_null("Layer/OptionsBox/Center/OptTabs/Developer")
+	var yrow = ydev.get_node_or_null("YFloorRow") if ydev != null else null
+	var ycheck = ydev.get_node_or_null("YFloorCheck") if ydev != null else null
+	var ysp = yrow.get_child(1) if yrow != null and yrow.get_child_count() == 3 else null
+	var yrow_present := ydev != null and yrow != null and ycheck != null and ycheck is CheckBox \
+		and ysp != null and ysp is SpinBox \
+		and float(ysp.min_value) == 0.0 and float(ysp.max_value) == float(Settings.YFLOOR_MAX) \
+		and bool(ycheck.button_pressed) == true and float(ysp.value) == 0.0
+	# the _sync_controls refresh: a non-default value + a toggle-off
+	# state re-sync onto the row (the DOF dependent-control wiring).
+	Settings.set_value("yfloor_chunks_below_sea", 5)
+	ymenu._sync_controls()
+	var yrow_sync_ok := yrow_present and float(ysp.value) == 5.0 and bool(ycheck.button_pressed) == true
+	Settings.set_value("yfloor_enabled", false)
+	ymenu._sync_controls()
+	var yrow_dim_ok := yrow_present and bool(ycheck.button_pressed) == false and bool(ysp.editable) == false
+	# restore the shipped default + free the probe menu.
+	Settings.set_value("yfloor_enabled", true)
+	Settings.set_value("yfloor_chunks_below_sea", 0)
+	ymenu.queue_free()
 	Debug.result({
 		"defaults": {"render": 50, "sim": 4, "ok": defaults_ok},  # AC-0152 default is 4 (the 1 literal was pre-AC-0152)
 		"range": {"min": 4, "max": 96, "min_ok": min_ok, "max_ok": max_ok},
@@ -1576,7 +1635,16 @@ func _settings_test() -> void:
 		"chunks": {"default_3": chunks_default_ok, "set7_reloaded": chunks_saved_ok, "clamp_hi_100": chunks_hi_ok, "clamp_lo_1": chunks_lo_ok},
 		# AC-0232 (dither dropped in AC-0241): the fog slider round-trip + clamp.
 		"fog": {"default_87": fog_default_ok, "set60_reloaded": fog_saved_ok, "clamp_lo_0": fog_lo_ok},
-		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and sim_floor_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok,
+		# AC-0332: the far-tier mesh floor pair — defaults (on, 0), the
+		# 0..24 clamp (YFLOOR_MAX), the toggle round-trip, the apply step
+		# (set_value -> apply_yfloor -> note_yfloor, via the stub), the
+		# Developer-tab row's presence + the _sync_controls refresh /
+		# dependent-control dim.
+		"yfloor": {"default_on_0": yf_default_ok, "clamp_hi_24": yf_clamp_hi_ok, "clamp_lo_0": yf_clamp_lo_ok,
+			"toggle_off_on": yf_toggle_off_ok and yf_toggle_on_ok, "apply_step": yf_apply_ok,
+			"apply_calls": [yf_apply_1, yf_apply_2], "dev_row_present": yrow_present,
+			"sync_set5": yrow_sync_ok, "toggle_dim": yrow_dim_ok},
+		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and sim_floor_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok and yf_default_ok and yf_clamp_hi_ok and yf_clamp_lo_ok and yf_toggle_off_ok and yf_toggle_on_ok and yf_apply_ok and yrow_present and yrow_sync_ok and yrow_dim_ok,
 	})
 
 
@@ -9321,9 +9389,14 @@ func _halo_test(spawn: Vector3) -> void:
 					# AC-0331: the far-tier mesh floor — the applied low
 					# mesh is the floored worker emit (tier 2/3 = the far
 					# draw tiers), so the fresh reference floors too.
-					fresh = mc.h_avg_emit(c.far_h, c.far_biome, c.far_top, ore2, veg2, si, G, world._lod_fcc_get(), exp, int(Data.SEA), int(Data.HEIGHT), -1, -1, 0.0, int(Data.SEA))
+					# AC-0332: the floor is a setting now — the reference
+					# mirrors the dispatch's OWN input (the live
+					# _far_floor_y(), -1 while the toggle is off), not a
+					# hard-coded SEA (the stale-expectation class AC-0329
+					# found: the arm red, the game path fine).
+					fresh = mc.h_avg_emit(c.far_h, c.far_biome, c.far_top, ore2, veg2, si, G, world._lod_fcc_get(), exp, int(Data.SEA), int(Data.HEIGHT), -1, -1, 0.0, int(world._far_floor_y()))
 				else:
-					fresh = mc.low_emit_avg(mc.slab_copy(c.data), si, G, world._lod_fcc_get(), exp, -1, -1, 0.0, int(Data.SEA))
+					fresh = mc.low_emit_avg(mc.slab_copy(c.data), si, G, world._lod_fcc_get(), exp, -1, -1, 0.0, int(world._far_floor_y()))
 				if bool(fresh.get("empty", false)):
 					if int(applied["q"]) != 0:
 						if b_fail.size() < 4:
@@ -14323,8 +14396,13 @@ func _ladder_band_a_tex(mc, c: Node3D) -> Dictionary:
 	# the reference mirrors the dispatch's OWN inputs: the check loop
 	# below starts at the floor slab (the sub-floor slabs have no
 	# applied mesh — apply_accs nulls out-of-range refs).
-	var yfl_l := int(Data.SEA)
-	var r: Dictionary = mc.build_accs(c.data, c.fl, cx, cz, nbs, ctx_ref, ms_ref, effd["light"], int(yfl_l / 16), -1, 0, Lighting._att, Lighting._glow, PackedByteArray(), yfl_l)
+	# AC-0332: the floor is a setting now — the reference mirrors the
+	# LIVE value (the dispatch passes _far_floor_y(); -1 = the toggle
+	# off, si0 falls back to 0 exactly as the worker's mat branch
+	# does — the stale hard-coded SEA would red every band-A column
+	# in a floor-OFF run, the AC-0329 stale-arm-expectation class).
+	var yfl_l := int(world._far_floor_y())
+	var r: Dictionary = mc.build_accs(c.data, c.fl, cx, cz, nbs, ctx_ref, ms_ref, effd["light"], int(yfl_l / 16) if yfl_l >= 0 else 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray(), yfl_l)
 	var si0: int = int(r.get("si0", 0))
 	var si1: int = int(r.get("si1", 0))
 	var want_h := int(world._tm_ms_full.get("h", 0)) if not world._tm_ms_full.rects.is_empty() else (int(Data.atlas_tex.get_image().get_height()) if Data.atlas_tex != null and Data.atlas_tex.get_image() != null else 0)

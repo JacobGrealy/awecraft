@@ -83,6 +83,15 @@ var dof_far_spin: SpinBox
 var dof_far_val: Label
 var dof_amount_spin: SpinBox
 var dof_amount_val: Label
+# AC-0332: the far-tier mesh floor (AC-0331's kernel) — the on/off
+# toggle + the chunks-below-sea SpinBox (0..Settings.YFLOOR_MAX).
+# SpinBox rather than HSlider follows the recorded AC-0260 fix: the
+# Developer page's earlier HSlider rows were replaced because the tab
+# layout squashed them and an exact small integer such as 0 was not
+# reliably reachable by dragging.
+var yfloor_enabled_check: CheckBox
+var yfloor_spin: SpinBox
+var yfloor_val: Label
 var file_dialog: FileDialog
 var _options_from := "main"
 var _focus_last: Control = null  # AC-0087: gamepad focus highlight
@@ -270,6 +279,21 @@ func _ready() -> void:
 	dof_amount_spin = dofa[0]
 	dof_amount_val = dofa[1]
 	dof_amount_spin.step = 0.01
+	# AC-0332: the far-tier mesh floor (AC-0331's kernel) — the on/off
+	# toggle + the chunks-below-sea row. The DOF precedent
+	# (dof_enabled_check + dof_far_distance) for the dependent-control
+	# wiring: the SpinBox dims + disables while the toggle is off.
+	yfloor_enabled_check = CheckBox.new()
+	yfloor_enabled_check.name = "YFloorCheck"
+	yfloor_enabled_check.text = "Far-tier mesh floor"
+	yfloor_enabled_check.add_theme_font_size_override("font_size", 15)
+	yfloor_enabled_check.toggled.connect(_on_yfloor_enabled_toggled)
+	dev_page.add_child(yfloor_enabled_check)
+	var yfr := _mk_dev_spin_row(dev_page, "YFloorRow", "Far floor chunks below sea", 0.0, float(Settings.YFLOOR_MAX))
+	yfloor_spin = yfr[0]
+	yfloor_val = yfr[1]
+	yfloor_spin.step = 1.0
+	yfloor_spin.value_changed.connect(_on_yfloor_chunks_changed)
 	gen_spin.value_changed.connect(_on_gen_threads_changed)
 	mesh_spin.value_changed.connect(_on_mesh_threads_changed)
 	subcruise_spin.value_changed.connect(_on_subcruise_changed)
@@ -589,6 +613,12 @@ func _sync_controls() -> void:
 	dof_far_spin.modulate.a = 1.0 if bool(Settings.values.get("dof_enabled", true)) else 0.45
 	dof_amount_spin.editable = bool(Settings.values.get("dof_enabled", true))
 	dof_amount_spin.modulate.a = 1.0 if bool(Settings.values.get("dof_enabled", true)) else 0.45
+	# AC-0332: the far-tier mesh floor (Developer tab).
+	yfloor_enabled_check.button_pressed = bool(Settings.values.get("yfloor_enabled", true))
+	yfloor_spin.value = float(int(Settings.values.get("yfloor_chunks_below_sea", 0)))
+	yfloor_val.text = str(int(yfloor_spin.value))
+	yfloor_spin.editable = bool(Settings.values.get("yfloor_enabled", true))
+	yfloor_spin.modulate.a = 1.0 if bool(Settings.values.get("yfloor_enabled", true)) else 0.45
 	_syncing = false
 
 
@@ -738,6 +768,25 @@ func _on_dof_amount_changed(v: float) -> void:
 	dof_amount_val.text = "%.2f" % float(v)
 	Settings.set_value("dof_amount", float(v))
 	Settings.apply_dof()
+
+
+# AC-0332: the far-tier mesh floor (AC-0331's kernel). The apply step
+# rides set_value (Settings.apply_yfloor -> world.note_yfloor: the
+# re-derive + the cache staleness), so the handlers only wire the
+# dependent-control state (the DOF precedent).
+func _on_yfloor_enabled_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("yfloor_enabled", on)
+	yfloor_spin.editable = on
+	yfloor_spin.modulate.a = 1.0 if on else 0.45
+
+
+func _on_yfloor_chunks_changed(v: float) -> void:
+	if _syncing:
+		return
+	yfloor_val.text = str(int(v))
+	Settings.set_value("yfloor_chunks_below_sea", int(v))
 
 
 func _on_fogstart_changed(v: float) -> void:
