@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-20T12:55
+  updated_at: 2026-09-20T14:39
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0340
 - AC-0338
 - AC-0334
 - AC-0339
@@ -17170,11 +17169,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-20T08:14
-  updated_at: 2026-09-20T08:14
-  completed_at: null
+  updated_at: 2026-09-20T14:39
+  completed_at: 2026-09-20T14:39
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Walking the band edge or breaking a block can spend the frame''s whole budget
@@ -17212,7 +17211,33 @@ intake:
     machinery - collision exists in band 0 only. And do NOT do AC-0337''s step 3 (the cheaper shape derivation)
     here: if the measurements say steps 1-2 are not enough, that gets its own ticket.
 
-    '
+
+
+    TAKEN BY THE COORDINATOR SESSION (2026-09-20) per the user''s instruction to work the queue in its
+    new order. Its dependency AC-0337 (steps 0+1) LANDED AND IS CLOSED (commit follows 5be1c78): the per-slab
+    collision census exists (`collision_slabs` / `collision_slab_ms` / `collision_slab_max_ms` + a six-bin
+    histogram, permanently), the COLLIDE wprof sub-stage brackets `_post_build_collision` and `build_dirty_slab_bodies`,
+    `staged_dropped` is a standing value with a <=2500 threshold, and the no-op rebuilds are gone (band
+    excursions keep their bodies with only stale slabs re-arming, light-only remeshes no longer dirty
+    collision, and the edit path uses its own 3-slab closure). Its measured after-state is your input:
+    2079 slab builds / ~4450 ms over the run, per-slab max 6.5 ms with NOTHING above 10 ms, boundary p50
+    13 / p95 40. ITS VERDICT, recorded with that evidence, is that this ticket''s per-frame budget SUFFICES
+    and the conditional step 3 (a cheaper shape derivation) is NOT needed - so do not build step 3. AC-0334
+    (halo demote/promote mismatch, 5 cells in column [5,0]) is a known PRE-EXISTING red; the editslab
+    arm''s ok:false is a stale wall-clock budget recorded on AC-0330 - neither is yours.
+
+
+    CLOSED 2026-09-20. Coordinator verification: the cap is in place (8 ms, AWECRAFT_COLLIDE_MS override)
+    with debt re-queueing, and the FOOTING FENCE is proven by two independent readings - the perf run''s
+    and the player arm''s `col_deferred_in_footprint` 0, plus the arm-side footprint scan {cols 9, missing
+    0}. col_deferred 175 (boundary) / 16 (perf) shows the cap shaping the band-edge work. genhash byte-identical
+    x2 and against the reference; boundary p50 13 / p95 40 with staged_dropped 1882 inside the threshold;
+    the per-slab census is unchanged (max 6.6 ms, nothing above 10 ms), which is the point - this ticket
+    shapes WHEN collision lands, not how it is derived; editperf identical; ladder/farab/meshprobe/save
+    green; r16 all sub-flags with far_holes 0 and static max down; battery with no new delta. The player
+    arm''s stale jump_peak_y (110.33 vs 142.43) was proven pre-existing with before/after runs - it is
+    a re-measure-on-new-terrain follow-up, and its class (an arm expectation that is terrain-specific
+    rather than an invariant) is recorded on AC-0330.'
   comments: []
 - id: AC-0341
   title: cave-stratification-layers
