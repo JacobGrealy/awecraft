@@ -1,11 +1,11 @@
 meta:
-  updated_at: 2026-09-20T14:39
+  updated_at: 2026-09-20T19:08
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0338
 - AC-0334
+- AC-0345
 - AC-0339
 - AC-0341
 - AC-0342
@@ -17005,11 +17005,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-19T21:22
-  updated_at: 2026-09-19T21:22
-  completed_at: null
+  updated_at: 2026-09-20T19:08
+  completed_at: 2026-09-20T19:08
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -17072,7 +17072,41 @@ intake:
     the instance census is no longer a problem, say so in the results and close this as unnecessary rather
     than batching for its own sake.
 
-    '
+
+
+    TAKEN BY THE COORDINATOR SESSION (2026-09-20) per the user''s instruction to work the queue in its
+    new order. ITS SEQUENCING PRE-CONDITIONS ARE NOW SATISFIED: it demanded to be worked AFTER AC-0335
+    (one-work-order-one-dispatch) and AC-0336 (dead-lane removal) and NOT while AC-0331/AC-0332 (the far-tier
+    floor) were in flight - all four are closed and committed (AC-0331/0332 landed the mesh floor at SEA,
+    AC-0335 unified the scheduler, AC-0336 removed the dead lane scaffolding, net -658 lines). THAT MATTERS
+    TO THIS TICKET''S OWN ESCAPE HATCH: the ticket says that if the y-floor already reduces the far slab
+    count enough that the instance census is no longer a problem, say so and close this as unnecessary
+    rather than batching for its own sake - and the floor''s measured effect was exactly that: band B
+    slab census 519 -> 155 and band C 318 -> 94 (-70%) after the floor, and the r16 far census is 0 holes
+    / 0 far_capsule_n in band 0 with 5 in band 1. So STEP 0''s measurement is genuinely a DECISION, not
+    a formality: measure, state plainly whether the census is still a problem at the shipped default render
+    distance, and if it is not, CLOSE THIS as unnecessary with the numbers (that is a successful outcome
+    here, not a failure to deliver). If it IS still a problem, do step 1 (bands B/C only) and leave step
+    2 (band A) alone as the ticket says. ABOUT R50: the settings default render_dist is 50 and a full
+    R50 world in headless is the box''s KNOWN crash class (the `load` arm died 3/3 with an empty-backtrace
+    signal 11 - see AC-0323/AC-0328); do not make a fragile R50 run the centrepiece of your evidence -
+    prefer the census the existing arms already carry plus a clearly-labelled extrapolation, and if you
+    do attempt one R50 measurement, treat a crash banner as that known class (log it, retry once, then
+    fall back and say so). AC-0334 (halo demote/promote mismatch, 5 cells in column [5,0]) is a known
+    PRE-EXISTING red - do not chase it.
+
+
+    CLOSED 2026-09-20 AS UNNECESSARY, on the ticket''s own criterion, with the post-floor measurement
+    as the evidence (R16 2099 MI of which far 1496; R50 extrapolation 6.5-6.7k total with far 5.5-5.7k
+    against a pre-floor ~16-17k; all three of the ticket''s thresholds unmet). No game code changed and
+    harness.gd is byte-identical to HEAD (the temporary census arm was removed). Three standing values
+    recorded + the doc render in sync. THE TICKET''S REAL OUTPUT WAS A NEW BUG: AC-0345 (priority 1, r50-far-wave-starvation)
+    - at R50 the far wave stops after exactly 8704 slabs = PICK_POOL_CAP x 17, so a fresh world at the
+    shipped default render distance never renders its far field past ~210 m. That is the same class as
+    the AC-0333/AC-0334 findings in one respect worth naming: the standing gates are all green because
+    they run at R16, where the far column count fits the 512-entry candidate window - an arm that cannot
+    reach the broken regime cannot see the break, and the R50 measurement that AC-0338''s step 0 forced
+    is the only thing that did.'
   comments: []
 - id: AC-0339
   title: light-settle-gate-wait
@@ -17609,6 +17643,80 @@ intake:
 
     - If an arm is added or changed: the branch in godot/scenes/harness.gd AND a row in tasks/harness_data.yaml,
     then python3 tasks/scripts/harness_doc.py --render.
+
+    '
+  comments: []
+- id: AC-0345
+  title: r50-far-wave-starvation
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-20T19:07
+  updated_at: 2026-09-20T19:07
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: A fresh world at the shipped default render distance (50) never finishes streaming
+    its far field: the coarse rings stop about 210 m out and everything beyond simply never appears, with
+    no error, no crash and the worker pools sitting idle. The player sees a hole in the world where distant
+    terrain should be.
+
+
+    2) Technical Details:
+
+    MEASURED BY THE AC-0338 BUILDER while taking that ticket''s census (its evidence is 30 byte-identical
+    samples over a 40-minute R50 run, in .scratch/AC-0338/census50-hs-converge.log and the freeze/diag
+    runs): the far wave dispatches EXACTLY 8704 slabs and then stops FOREVER - `low_enqueue == low_handoff
+    == low_emit_cpp == 8704` (so every dispatched emit completed and attached; nothing is hung, nothing
+    crashed, `low_tasks` 0), while the band C side reports `qcols 3388, lcols 0` and 57596 pending, i.e.
+    the vast majority of far columns never get dispatched at all. At R16 the same run shape is fine (336
+    far columns), which is why every standing gate is green and this went unnoticed.
+
+    ROOT CAUSE (the builder''s, and the arithmetic is exact): 8704 = 512 x 17 = PICK_POOL_CAP (godot/world/world.gd:3130,
+    the 512-entry candidate window `_collect_pool` returns early from at :6878) x the 17 above-floor slabs
+    of a far column (the AC-0331 mesh floor starts band-A materialization at slab 7, and 24 - 7 = 17).
+    Settled far entries STAY in the build queue, so the same 512 columns are re-admitted to the candidate
+    window every frame and the scan never reaches the columns behind them. Coordinator corroboration,
+    structural rather than a re-measurement (state it plainly in your results - the reproduction has NOT
+    been redone independently yet): `_collect_pool` walks band_buckets in band order, returns as soon
+    as `out.size() >= PICK_POOL_CAP`, and skips meshed columns through the HIGH lane''s `c.mesh_built`
+    test - which is the wrong readiness predicate for a far column, whose readiness is its avg emit, so
+    a settled far entry is admitted over and over instead of being skipped like a settled high column.
+
+    IT IS NOT THE BATCHING QUESTION: AC-0338 measured the instance census and closed itself as unnecessary
+    (the y-floor cut it ~65-70%; far ~5.5-5.7k of ~6.5-6.7k at R50); batching would not fix this and this
+    ticket does not batch.
+
+    FIRST STEP IS AN INDEPENDENT REPRODUCTION: the builder''s temporary `census50` arm was removed at
+    exit to keep harness.gd pristine, and its recipe is recorded in tasks/AC-0338/continuity.md - re-create
+    that measurement (temporarily, and REMOVE it again before you exit) and confirm the freeze and the
+    512 x 17 arithmetic YOURSELF before changing anything. Do not trust the numbers above as given.
+
+    THEN FIX THE QUEUE LIFECYCLE, in the area AC-0335/AC-0336 just reworked: a settled far column must
+    either leave the build queue (the way a meshed high column effectively does) or be excluded from the
+    candidate window by the FAR lane''s own readiness test, so the window can advance past it. Beware
+    two traps the notes above imply: (a) the candidate window is a performance device (AC-0217/AC-0233/AC-0250
+    debounce the pool scan), so do not simply unbound it - that reintroduces the per-frame rescan those
+    tickets removed; (b) `_cap_queue_depth` and the AC-0274 defer-set loop both depend on queue membership,
+    so a column that is dropped from the queue must still be re-queueable when its tier or residency changes
+    (the AC-0335 tier-change re-dispatch).
+
+    GATES: an R50 measurement that shows the far wave CONVERGING (all far columns dispatched, `lcols`
+    draining to 0, the pending count falling to the floor) - that is the ticket''s proof and it is a NEW
+    standing value, recorded in HARNESS.md section 3 with tasks/harness_data.yaml + the rendered doc in
+    the same task; plus the full standing set unchanged (genhash 25/25 byte-identical, farab 1080/1080
+    with h_mismatch 0, halo, ladder 20/20, meshprobe, r16 ALL sub-flags with far_holes 0 in both bands,
+    boundary r4 p50/p95 and staged_dropped inside its threshold, battery) - because the fix touches the
+    shared pick path, a green standing set is what proves the R16 world still streams exactly as before.
+
+    QUOTA WARNING for whoever works it: a full R50 world in headless is this box''s KNOWN crash class
+    (the `load` arm died 3/3 with an empty-backtrace signal 11, AC-0323/AC-0328) - the builder''s convergence
+    runs survived, but if a run dies with the crash banner that is that class, not this bug: log it, retry
+    once, and say so.
 
     '
   comments: []
