@@ -1,13 +1,16 @@
 meta:
-  updated_at: 2026-09-19T19:54
+  updated_at: 2026-09-19T22:04
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0331
-- AC-0332
+- AC-0335
+- AC-0336
+- AC-0337
+- AC-0338
 - AC-0333
 - AC-0334
+- AC-0339
 - AC-0290
 - AC-0291
 - AC-0292
@@ -31,19 +34,14 @@ queue:
 - AC-0089
 - AC-0205
 - AC-0186
-- AC-0193
-- AC-0192
 - AC-0130
 - AC-0094
-- AC-0194
 - AC-0141
 - AC-0142
-- AC-0195
 - AC-0115
 - AC-0090
 - AC-0176
 - AC-0295
-- AC-0315
 - AC-0316
 - AC-0317
 - AC-0318
@@ -4170,10 +4168,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-23T23:13
-  updated_at: 2026-08-23T23:13
+  updated_at: 2026-09-19T21:25
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -8103,11 +8101,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-09-02T09:54
-  updated_at: 2026-09-02T09:54
-  completed_at: null
+  updated_at: 2026-09-19T21:12
+  completed_at: 2026-09-19T21:12
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a dev testing water/lava sim I want a flat isolated fluid tray without full
@@ -8126,11 +8124,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-09-02T09:54
-  updated_at: 2026-09-02T09:54
-  completed_at: null
+  updated_at: 2026-09-19T21:12
+  completed_at: 2026-09-19T21:12
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a dev testing block/sky light I want an enclosed cave harness so torch/lava
@@ -15307,11 +15305,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-18T10:20
-  updated_at: 2026-09-18T10:20
-  completed_at: null
+  updated_at: 2026-09-19T21:14
+  completed_at: 2026-09-19T21:14
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a developer (or an agent) reading the rules, I want them to mean what they
@@ -16211,11 +16209,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-09-19T10:47
-  updated_at: 2026-09-19T14:39
-  completed_at: null
+  updated_at: 2026-09-19T22:04
+  completed_at: 2026-09-19T22:04
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -16297,7 +16295,21 @@ intake:
     TAKEN BY THE COORDINATOR SESSION (2026-09-19) on the user''s explicit instruction ("work 331-333 next").
     If you are the session that filed this ticket, do not start it concurrently - the status is in-progress
     here. The three tickets AC-0331/AC-0332/AC-0333 chain naturally (kernel floor -> the setting that
-    wires it -> the far_holes re-measure) and are being worked in that order.'
+    wires it -> the far_holes re-measure) and are being worked in that order.
+
+
+    CLOSED 2026-09-19 (commit 9ee9b46), taken from the parallel session on the user''s instruction ("work
+    331-333 next"). Coordinator verification: genhash 25/25 byte-identical in two runs AND identical to
+    the AC-0289 reference - the decisive proof for this ticket, since the floor is a mesh-side change
+    and generation must not move; farab ok with slab_mismatch 0 / h_mismatch 0 over 1080 slabs (the shared-kernel
+    contract holds on the floor path); meshprobe ok (the C++ vs GDScript twin); ladder ok with band_a_ok
+    20/20; boundary r4 p50 13 / p95 43 (p50 flat, no walk trade-off); save ok; r16 with the documented
+    --fixed-fps 600 recipe ALL sub-flags green with far_holes 0. The halo (c) red on this tree is AC-0289''s
+    demote/promote mismatch, filed as AC-0334 and identical before/after this change - not this ticket''s.
+    Cost (builder''s instruments, stated in the commit): low_enqueue_n 47847 -> 36057 (-24.6%), ladder
+    BUILDCHUNK_MAT 136 -> 120 ms, far slab censuses band B 519 -> 155 and band C 318 -> 94. The honest
+    caveat stands: a far column whose terrain sits below the floor genuinely loses its sub-waterline geometry
+    - invisible from above, visible when submerged inside a far column.'
   comments: []
 - id: AC-0332
   title: far-tier-mesh-floor-setting
@@ -16306,11 +16318,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-19T10:47
-  updated_at: 2026-09-19T10:47
-  completed_at: null
+  updated_at: 2026-09-19T22:04
+  completed_at: 2026-09-19T22:04
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -16389,7 +16401,24 @@ intake:
     the far meshes of the whole far field at once); turning it OFF is the cheaper direction. The follow-up
     designs both against measured churn.
 
-    '
+
+
+    TAKEN BY THE COORDINATOR SESSION (2026-09-19) on the user''s explicit instruction ("work 331-333 next"),
+    immediately after AC-0331 (the kernel floor) landed in commit 9ee9b46. If you are the session that
+    filed this ticket, do not start it concurrently - the status is in-progress here. Between AC-0331
+    and this ticket the coordinator also filed AC-0334 (a halo demote/promote content mismatch that AC-0289''s
+    tunnel carve introduced) - it is NOT yours to fix here, but do not be surprised by the halo (c) red
+    in your runs: it is that ticket.
+
+
+    CLOSED 2026-09-19 (commit e9c8914), taken from the parallel session on the user''s instruction. Coordinator
+    verification of the shape that matters for a plumbed setting: the FLOOR-OFF run is byte-identical
+    to the pre-change tree (genhash, farab, meshprobe, ladder, halo, r16 sub-flags, battery) - the no-op
+    proof that the plumbing alone changes nothing; the FLOOR-ON run at the shipped default matches AC-0331''s
+    after-logs; and the env path provably does not write the user''s cfg (a fresh HOME stays without a
+    cfg file across an env world boot and an env battery). The reds present are AC-0334 (halo c, unchanged)
+    and the pre-existing settings ms_clamp. Live mid-session re-flooring stays deferred by design (boot/dev
+    knob), as the ticket''s notes require.'
   comments: []
 - id: AC-0333
   title: far-band-double-draw-holes
@@ -16401,54 +16430,78 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-19T12:10
-  updated_at: 2026-09-19T12:11
+  updated_at: 2026-09-19T21:08
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: '1) User Story: A few far columns can be drawn TWICE (overdraw / z-fighting in the distance).
-    Every far column should draw exactly once.
-
-
-    2) Technical Details:
-
-    MEASURED BY THE COORDINATOR on the AC-0288 tree (the cave-field change), r16 with its DOCUMENTED recipe
-    `AWECRAFT_LOGIC=r16 ... --fixed-fps 600`, THREE consecutive runs, all identical: `lod.catch_up_ok`
-    FALSE, `lod.far1.far_holes` **3**, `lod.far1.far_capsule_n` 11, `lod.far0.far_holes` 0 (far1 = band
-    1). Every OTHER r16 sub-flag is green (`air_ok`, `uv_repeat_ok` true; `uv_mismatch` 0; `catch_up`/`catch_up_frames`
-    0; `demoted_cols_n` 437). AC-0329 defined a "hole" in this census as a DOUBLE DRAW (its fix moved
-    the census to the mesh level: resident slabs = stored highs + active lows + stale capsules, and `far_holes`
-    counts double draws), so this is 3 columns drawn twice, deterministically, not a transient.
-
-    IT WAS GREEN ONE TICKET EARLIER: the same arm and recipe read ALL sub-flags green on the AC-0293 tree
-    (far_holes 0), so the trigger arrived with AC-0288''s cave change - most plausibly because a cave
-    reaching the surface changes the far payload''s `top`/biome at those columns (the H field is provably
-    unchanged: AC-0288''s SHA-256 of `column_heights16` over 441 columns is byte-identical before/after,
-    and farab reads `h_mismatch` 0 / `slab_mismatch` 0). But the FINDING is the sensitivity: the far census/demote
-    accounting can produce double draws when the payload content shifts.
-
-    FIRST STEP (decides "caused by" vs "latent, exposed by"): reproduce as above, then confirm with the
-    AC-0288 diff stashed (or a HEAD~1 native rebuild) whether far_holes returns to 0 - that tells you
-    whether the cave change is the cause or merely the trigger, and the fix differs accordingly (a payload-shape
-    assumption in the census vs a race in the demote/promotion path).
-
-    GATE: r16 with `--fixed-fps 600` reading ALL sub-flags green with `far_holes` 0 in BOTH bands, plus
-    the byte-identity gates for whatever you touch (farab 1080/1080 with h_mismatch 0, ladder band_a_ok
-    20/20, genhash byte-identical to the AC-0288 reference) and no `air_capsule_n`/`far_capsule_n` growth.
-
-    CONTEXT: related but distinct from AC-0329 (which fixed the arm''s CHECKERS for the three reds it
-    found - this is a value the checker now correctly reports as a hole) and from AC-0330 (the battery
-    arms'' undeclared ok status). Keep them separate.
-
-
-
-    POSSIBLE OVERLAP (coordinator, 2026-09-19): the parallel session has AC-0331 (far-tier-mesh-floor-kernel)
-    and AC-0332 (far-tier-mesh-floor-setting) in flight at the queue head - they remove the `c.candidate`
-    boolean and centralise the recenter distance checks (inside r -> queue for gen/mesh; r+1 -> keep data-only
-    hidden; r+2 -> free) across the picks and the fog/low/high gates. That is the same machinery this
-    ticket''s `far_holes` double-draw census observes, so BEFORE working this one, check whether their
-    rework has landed and whether it already changes or removes the reproducer. If it has, re-measure
-    first (r16 with --fixed-fps 600) and only then decide whether anything is left to fix here. Do not
-    edit their files or reorder their tickets.'
+  notes: "1) User Story: A few far columns can be drawn TWICE (overdraw / z-fighting in the distance).\
+    \ Every far column should draw exactly once.\n\n2) Technical Details:\nMEASURED BY THE COORDINATOR\
+    \ on the AC-0288 tree (the cave-field change), r16 with its DOCUMENTED recipe `AWECRAFT_LOGIC=r16\
+    \ ... --fixed-fps 600`, THREE consecutive runs, all identical: `lod.catch_up_ok` FALSE, `lod.far1.far_holes`\
+    \ **3**, `lod.far1.far_capsule_n` 11, `lod.far0.far_holes` 0 (far1 = band 1). Every OTHER r16 sub-flag\
+    \ is green (`air_ok`, `uv_repeat_ok` true; `uv_mismatch` 0; `catch_up`/`catch_up_frames` 0; `demoted_cols_n`\
+    \ 437). AC-0329 defined a \"hole\" in this census as a DOUBLE DRAW (its fix moved the census to the\
+    \ mesh level: resident slabs = stored highs + active lows + stale capsules, and `far_holes` counts\
+    \ double draws), so this is 3 columns drawn twice, deterministically, not a transient.\nIT WAS GREEN\
+    \ ONE TICKET EARLIER: the same arm and recipe read ALL sub-flags green on the AC-0293 tree (far_holes\
+    \ 0), so the trigger arrived with AC-0288's cave change - most plausibly because a cave reaching the\
+    \ surface changes the far payload's `top`/biome at those columns (the H field is provably unchanged:\
+    \ AC-0288's SHA-256 of `column_heights16` over 441 columns is byte-identical before/after, and farab\
+    \ reads `h_mismatch` 0 / `slab_mismatch` 0). But the FINDING is the sensitivity: the far census/demote\
+    \ accounting can produce double draws when the payload content shifts.\nFIRST STEP (decides \"caused\
+    \ by\" vs \"latent, exposed by\"): reproduce as above, then confirm with the AC-0288 diff stashed\
+    \ (or a HEAD~1 native rebuild) whether far_holes returns to 0 - that tells you whether the cave change\
+    \ is the cause or merely the trigger, and the fix differs accordingly (a payload-shape assumption\
+    \ in the census vs a race in the demote/promotion path).\nGATE: r16 with `--fixed-fps 600` reading\
+    \ ALL sub-flags green with `far_holes` 0 in BOTH bands, plus the byte-identity gates for whatever\
+    \ you touch (farab 1080/1080 with h_mismatch 0, ladder band_a_ok 20/20, genhash byte-identical to\
+    \ the AC-0288 reference) and no `air_capsule_n`/`far_capsule_n` growth.\nCONTEXT: related but distinct\
+    \ from AC-0329 (which fixed the arm's CHECKERS for the three reds it found - this is a value the checker\
+    \ now correctly reports as a hole) and from AC-0330 (the battery arms' undeclared ok status). Keep\
+    \ them separate.\n\n\nPOSSIBLE OVERLAP (coordinator, 2026-09-19): the parallel session has AC-0331\
+    \ (far-tier-mesh-floor-kernel) and AC-0332 (far-tier-mesh-floor-setting) in flight at the queue head\
+    \ - they remove the `c.candidate` boolean and centralise the recenter distance checks (inside r ->\
+    \ queue for gen/mesh; r+1 -> keep data-only hidden; r+2 -> free) across the picks and the fog/low/high\
+    \ gates. That is the same machinery this ticket's `far_holes` double-draw census observes, so BEFORE\
+    \ working this one, check whether their rework has landed and whether it already changes or removes\
+    \ the reproducer. If it has, re-measure first (r16 with --fixed-fps 600) and only then decide whether\
+    \ anything is left to fix here. Do not edit their files or reorder their tickets.\n\nUPDATE (coordinator,\
+    \ 2026-09-19, after the unification tickets were filed) - read this before the\n\"POSSIBLE OVERLAP\"\
+    \ paragraph above, which is OUT OF DATE:\n\n1) The overlap paragraph is wrong about what AC-0331/AC-0332\
+    \ do. It says they \"remove the `c.candidate`\n   boolean and centralise the recenter distance checks\
+    \ ... across the picks and the fog/low/high gates\".\n   Neither is true:\n   - `c.candidate` was\
+    \ removed at AC-0278 (commit 45dd719), long before this cluster.\n   - AC-0331's commit (9ee9b46)\
+    \ touches gdext/src/mesh.cpp, ARCHITECTURE.md, HARNESS.md, scenes/harness.gd\n     and world/world.gd,\
+    \ and its scope is the far-tier mesh FLOOR at Data.SEA. It did NOT touch the\n     recenter checks\
+    \ or the capsule census.\n   - The census this ticket observes is fully intact: far_capsule_n and\
+    \ far_holes are live in\n     scenes/harness.gd (the _far_census helper), and nothing in AC-0331/AC-0332\
+    \ removes them.\n   So the precondition the paragraph set - \"check whether their rework has landed\
+    \ and whether it already\n   changes or removes the reproducer\" - is NOT met by AC-0331/AC-0332.\
+    \ Do not read their landing as a\n   reason to re-measure this ticket.\n\n2) THE REPRODUCER IS IN\
+    \ DISPUTE, and that is now the first thing to settle:\n   - This ticket was filed 12:10 on the AC-0288\
+    \ tree: THREE consecutive r16 runs (--fixed-fps 600,\n     the documented recipe), all identical,\
+    \ far_holes 3 in band 1 (far1).\n   - AC-0331's closeout gate at 19:54 on its own tree reports r16\
+    \ \"reading all 12 sub-flags with\n     far_holes 0\" - i.e. the same census, clean.\n   Reconcile\
+    \ the two before any fix is attempted: re-run r16 --fixed-fps 600 on the CURRENT tree\n   (post AC-0332,\
+    \ which is in flight as this note is appended) and record the far_holes values for\n   BOTH bands\
+    \ plus far_capsule_n. If the value is 0, say so plainly and close this ticket as\n   \"reproducer\
+    \ no longer present, verified N runs\" rather than manufacturing a fix.\n\n3) SEQUENCING (the ticket\
+    \ is queued behind the lane unification, AC-0335 - \"one-work-order-one-dispatch\").\n   AC-0335's\
+    \ own gate set includes far_holes 0 in both bands, because removing the seam between the two\n   scheduling\
+    \ lanes is exactly the change that can reintroduce a double draw. That makes AC-0335's gate\n   run\
+    \ the natural reconciliation point for this ticket:\n   - if the unified tree reads far_holes 0 in\
+    \ both bands with far_capsule_n not growing, close this as\n     superseded by AC-0335 and cite its\
+    \ gate result here;\n   - if it still reads non-zero, this ticket becomes the fix, and the unification's\
+    \ shadow/diff work is\n     the place to look for which pick produced the second draw.\n   Do not\
+    \ spend a builder re-measuring this ticket on a tree that AC-0332 is still changing.\n\n4) CLASSIFICATION\
+    \ SHARED WITH AC-0334: AC-0334 (halo demote/promote content mismatch, 5 cells in column\n   [5,0])\
+    \ was flipped from green to red by the SAME trigger as this one - AC-0289's cave P1 tunnel carve -\n\
+    \   and it is still reproducing stably on both the AC-0289 and AC-0331 trees, while this one may not\
+    \ be.\n   AC-0334's first step is a classification: real staleness in the demote/promote path, or\
+    \ the arm's\n   reference being stale. IF THAT COMES OUT \"THE ARM'S REFERENCE IS STALE\", then this\
+    \ ticket is most\n   plausibly the same class (a generation-sensitive arm rather than an engine defect)\
+    \ and both should be\n   resolved by one arm-hardening change rather than two engine fixes. Check\
+    \ AC-0334's result before\n   concluding anything here."
   comments: []
 - id: AC-0334
   title: halo-demote-content-mismatch
@@ -16460,50 +16513,536 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-19T19:53
-  updated_at: 2026-09-19T19:53
+  updated_at: 2026-09-19T21:08
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: '1) User Story: After a column is demoted to the cheap far form and later promoted back, a handful
-    of its cells can hold the WRONG block (e.g. solid where the world says air). The player would see
-    a stray solid block hanging in a cave.
+  notes: "1) User Story: After a column is demoted to the cheap far form and later promoted back, a handful\
+    \ of its cells can hold the WRONG block (e.g. solid where the world says air). The player would see\
+    \ a stray solid block hanging in a cave.\n\n2) Technical Details:\nMEASURED BY THE COORDINATOR, twice:\
+    \ the `halo` arm's sub-check (c) - the band-A demote path's per-cell agreement against the light reference\
+    \ - is RED on the AC-0289 tree AND on the AC-0331 tree: `c: {col [5,0], mismatches 5, ok false, first\
+    \ {x 15, y 11, z 0, current 1, starlight 0}, promotes 9, settled true, unlit 0}`, while every sibling\
+    \ check is green (a: 41 cols / 0 mismatches / ref converged 5 rounds; b: 821/821 slabs, 84 cols; b1:\
+    \ 20/20; d: col [5,0] evicted, far, h_only, high_visible, mesh_resident, ok true; d2: ok true).\n\
+    IT IS NEW: the same arm read `ok:true` on the AC-0288 tree (the cave P0 tune) and on the AC-0293 tree,\
+    \ and it went red with AC-0289's cave P1 tunnels - so the trigger arrived with the tunnel carve, exactly\
+    \ as with AC-0333 (which the same tree flipped from `far_holes` 0 to 3). The AC-0331 builder's run\
+    \ shows the identical 5 mismatches, so it is stable, not a one-off.\nWHAT TO SETTLE FIRST (the classification\
+    \ decides everything): is this a REAL staleness - a demoted-then-promoted column keeping engine cells\
+    \ that no longer match the regenerated fill, i.e. a promoter that re-applies stale data - or is it\
+    \ the arm's REFERENCE that is stale (the check compares the engine against a \"starlight\" reference;\
+    \ if that reference is captured before the tunnel carve is known, the arm is wrong and the engine\
+    \ is right)? Answer it with data, not by picking the convenient side: dump the engine cells at the\
+    \ mismatch coordinates, regenerate the same column from the seed, and compare all three (engine /\
+    \ reference / true fill). The `first` payload already names a cell (x 15, y 11, z 0) and the promote\
+    \ telemetry (`land_count` 1, `recenter_ms` 11273, `swap_ms` 222) narrows it to one demote/promote\
+    \ cycle.\nSCOPE: one behaviour - the demote/promote per-cell agreement. Do NOT re-tune the cave fields,\
+    \ do NOT touch AC-0333's double-draw census (related area, separate ticket) and do NOT re-baseline\
+    \ the arm until the classification above is proven.\nGATE: `halo` `ok:true` with (c) mismatches 0\
+    \ and every sibling check still green, plus genhash/farab/ladder byte-identity for whatever you touch\
+    \ (a generation change must not be needed to fix this).\nCONTEXT: this is the third arm red this era\
+    \ that a generation change flipped (AC-0333 far_holes, AC-0330's terrain-dependent craft status, and\
+    \ this one) - if the classification comes out \"the arm's reference is stale\", say so plainly and\
+    \ make the arm deterministic instead of generation-sensitive (the AC-0314 hunger/survival fixture\
+    \ is the precedent for arm-side hardening).\n\n\nUPDATE (coordinator, 2026-09-19, after the unification\
+    \ tickets were filed):\n\n1) THE CLASSIFICATION IS THE FIRST ACTION, and it is cheap - do it before\
+    \ anything else in this ticket:\n   dump the engine cells at the mismatch coordinates, regenerate\
+    \ the same column from the seed, and\n   compare all three (engine / the arm's \"starlight\" reference\
+    \ / the true fill) as the notes above\n   already instruct. No code change is needed to run it.\n\n\
+    2) SEQUENCING CONSTRAINT (recorded here because the queue order alone does not carry it): the lane\n\
+    \   unification, AC-0335 (\"one-work-order-one-dispatch\"), is queued AHEAD of this ticket and rewrites\
+    \ the\n   demote/re-lower machinery while deliberately leaving the queue order alone. This ticket's\n\
+    \   classification decides whether that machinery is even implicated:\n   - \"REAL STALENESS in the\
+    \ demote/promote path\" -> the classification is evidence about code AC-0335 is\n     about to restructure.\
+    \ Land the finding (and ideally the fix) BEFORE AC-0335 is worked, or AC-0335\n     must account for\
+    \ it explicitly rather than restructuring around an open defect.\n   - \"THE ARM'S REFERENCE IS STALE\"\
+    \ -> the engine is right, this is an arm-side generation-sensitivity\n     problem, and AC-0335 is\
+    \ unaffected. Close this ticket via the arm hardening (the AC-0314\n     hunger/survival fixture is\
+    \ the named precedent).\n   So: AC-0335 must not be started while this classification is unanswered.\
+    \ If they end up close\n   together, the classification wins.\n\n3) SHARED TRIGGER WITH AC-0333, and\
+    \ what that means: AC-0333 (far-band double draw, far_holes) was\n   flipped from green to red by\
+    \ the SAME trigger as this ticket - AC-0289's cave P1 tunnel carve - and\n   the two are the third\
+    \ and fourth arm reds this era that a GENERATION change flipped (AC-0330's\n   terrain-dependent craft\
+    \ status is the other). They are deliberately kept as separate tickets because\n   the observed values\
+    \ are different (a draw census vs a per-cell content agreement) and the fixes may\n   diverge. BUT\
+    \ if this classification returns \"the arm's reference is stale\", the honest conclusion is\n   that\
+    \ the arm class - not the engine - is the defect, and AC-0333 + this ticket should be resolved\n \
+    \  together by one arm-hardening change. Say that plainly in this ticket's results rather than fixing\n\
+    \   each symptom independently.\n\n4) Do NOT re-baseline the arm until the classification is proven,\
+    \ and do NOT touch AC-0333's double-draw\n   census in this task (its notes say the same from the\
+    \ other side)."
+  comments: []
+- id: AC-0335
+  title: one-work-order-one-dispatch
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-19T21:05
+  updated_at: 2026-09-19T21:05
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
 
 
-    2) Technical Details:
+    Right now the world is streamed by two separate schedulers: one for the high-detail band around me
+    and one for the coarse far rings. Each keeps its own order, its own pacing and its own pick, so the
+    work near me and the work far away are chosen by different rules and compete for the same workers.
+    I want one work order for the whole world - inside-out, nearest column first - where the LOD ring
+    a column sits in simply decides what gets done for it.
 
-    MEASURED BY THE COORDINATOR, twice: the `halo` arm''s sub-check (c) - the band-A demote path''s per-cell
-    agreement against the light reference - is RED on the AC-0289 tree AND on the AC-0331 tree: `c: {col
-    [5,0], mismatches 5, ok false, first {x 15, y 11, z 0, current 1, starlight 0}, promotes 9, settled
-    true, unlit 0}`, while every sibling check is green (a: 41 cols / 0 mismatches / ref converged 5 rounds;
-    b: 821/821 slabs, 84 cols; b1: 20/20; d: col [5,0] evicted, far, h_only, high_visible, mesh_resident,
-    ok true; d2: ok true).
 
-    IT IS NEW: the same arm read `ok:true` on the AC-0288 tree (the cave P0 tune) and on the AC-0293 tree,
-    and it went red with AC-0289''s cave P1 tunnels - so the trigger arrived with the tunnel carve, exactly
-    as with AC-0333 (which the same tree flipped from `far_holes` 0 to 3). The AC-0331 builder''s run
-    shows the identical 5 mismatches, so it is stable, not a one-off.
+    2) Technical Details
 
-    WHAT TO SETTLE FIRST (the classification decides everything): is this a REAL staleness - a demoted-then-promoted
-    column keeping engine cells that no longer match the regenerated fill, i.e. a promoter that re-applies
-    stale data - or is it the arm''s REFERENCE that is stale (the check compares the engine against a
-    "starlight" reference; if that reference is captured before the tunnel carve is known, the arm is
-    wrong and the engine is right)? Answer it with data, not by picking the convenient side: dump the
-    engine cells at the mismatch coordinates, regenerate the same column from the seed, and compare all
-    three (engine / reference / true fill). The `first` payload already names a cell (x 15, y 11, z 0)
-    and the promote telemetry (`land_count` 1, `recenter_ms` 11273, `swap_ms` 222) narrows it to one demote/promote
-    cycle.
 
-    SCOPE: one behaviour - the demote/promote per-cell agreement. Do NOT re-tune the cave fields, do NOT
-    touch AC-0333''s double-draw census (related area, separate ticket) and do NOT re-baseline the arm
-    until the classification above is proven.
+    The two orchestrators today:
 
-    GATE: `halo` `ok:true` with (c) mismatches 0 and every sibling check still green, plus genhash/farab/ladder
-    byte-identity for whatever you touch (a generation change must not be needed to fix this).
+    - godot/world/world.gd:7790 _drain_build_queue - the near/high lane (real band taxi <= band0_r, plus
+    band A''s materialization). Picks with _grid_score (:801), paces with DRAIN_UNIT_PACE_MS / DRAIN_UNITS_FRAME_CAP
+    (8.0 ms per unit, cap 4/frame) plus the drain_budget_ms time cap.
 
-    CONTEXT: this is the third arm red this era that a generation change flipped (AC-0333 far_holes, AC-0330''s
-    terrain-dependent craft status, and this one) - if the classification comes out "the arm''s reference
-    is stale", say so plainly and make the arm deterministic instead of generation-sensitive (the AC-0314
-    hunger/survival fixture is the precedent for arm-side hardening).
+    - godot/world/world.gd:3323 _low_step - the far lane (bands B/C). Picks with _low_scan_slabs (:3154)
+    and _low_pick (:3001), paces with LOW_WAVE_PACE_MS (3.5 ms per slab) / LOW_WAVE_FRAME_CAP.
+
+
+    What is already shared, and is the reason this is a consolidation rather than a rewrite:
+
+    - Both pick from the SAME queue (band_buckets), and _grid_score already computes taxi*10000 + layer
+    - i.e. the inside-out column order this ticket wants ALREADY EXISTS as the one score. The far lane
+    simply does not use it for ordering.
+
+    - Both dispatch into the SAME worker pool (threadmesh_pool / the WorkerThreadPool singleton). The
+    two lanes are two orchestrators over one pool, not two pools.
+
+    - _lod_tier_of (:1707) already returns the ring (0 real / 1 band A / 2 band B / 3 band C / 4 data-only),
+    so "what does this column need" already has a home.
+
+
+    The change:
+
+    1. Extract the per-ring work choice into ONE function (e.g. _dispatch_column_work(c, si)) whose body
+    is a single match on _lod_tier_of: ring 0 and ring 1 -> the high slab build (both already reach _mesh_dispatch_hslab;
+    band A''s first dispatch stays the materialization), ring 2 and ring 3 -> the avg emit (the far payload
+    emit). That function is the "one worker thread doing what is needed for the column based on its ring"
+    switch.
+
+    2. _drain_build_queue becomes the ONLY scheduler: next column by _grid_score, ask _dispatch_column_work
+    what it needs, dispatch, obey one budget.
+
+    3. _low_step loses its picking half: _low_scan_slabs and _low_pick are removed. _low_step keeps the
+    parts it genuinely owns - the attach/bookkeeping side (_low_poll :2827, _low_handoff :2708, the cap
+    swap, the fog swap, the all-air terminal marks, the per-slab tier stamps).
+
+    4. WAVE 3 (the low-holding-column -> high idle catch-up, LOW_UPGRADE_PER_FRAME / LOW_IDLE_GRACE_FRAMES)
+    is deleted: a column entering the real band is now simply the next column whose ring changed, which
+    the single order handles by construction.
+
+    5. One pacing model must survive, not two. Decide and record which: the wall-clock unit budget (DRAIN_UNIT_PACE_MS)
+    or the far lane''s per-slab pace (LOW_WAVE_PACE_MS). The recorded reasoning belongs in the code comment,
+    because AC-0231''s fps-independence note is the constraint that matters (identical pace at 30 and
+    60 fps).
+
+
+    EXPLICITLY OUT OF SCOPE for this ticket (each is its own follow-up if still wanted once one order
+    is live):
+
+    - The probe fan order (_hslab_best_pending :708, _entry_best_pending :591) - the Y-distance fan from
+    the player slab is unchanged. Only the ORDER the columns are visited changes, not the order of slabs
+    inside a column.
+
+    - The demote + re-lower debt queue (_low_relower_owed_step :3474) and its "the wave can only reach
+    queued columns" workaround.
+
+    - The fog boxes and FOG_WAVE_ON (which is false today).
+
+    - Dead-code removal: the apparatus the two lanes needed to stay apart (LOW_SCAN_CAP, LOW_UPGRADE_PER_FRAME,
+    LOW_IDLE_GRACE_FRAMES, the per-lane caches, the dead _low_inr_* lane) is a separate cleanup ticket
+    filed alongside this one. Leave those symbols in place here so this ticket''s diff stays reviewable.
+
+
+    GATES (godot/HARNESS.md section 5):
+
+    - ladder (band-A texture identity, band_a_ok), halo, farab (1080/1080, h_mismatch 0), meshprobe (C++
+    vs the GDScript twin).
+
+    - r16 with its documented recipe (AWECRAFT_LOGIC=r16 ... --fixed-fps 600) reading ALL sub-flags -
+    in particular far_holes 0 in BOTH bands and lod.far_capsule_n not growing. Removing a seam between
+    two lanes is exactly the change that can reintroduce a double draw, so this census is the ticket''s
+    central gate; AC-0333''s reproducer is reconciled by it.
+
+    - boundary r4 walk (p50 flat, no tail trade-off), battery, genhash 25/25 byte-identical (generation
+    is untouched and the gate proves it).
+
+    - ARCHITECTURE.md section 6: the build-order bullet currently describes the drain AND the separate
+    slab wave as two mechanisms. Rewrite it to describe one order with the ring deciding the work - same
+    task, per the architecture-sync rule.
+
+    '
+  comments: []
+- id: AC-0336
+  title: remove-dead-lane-apparatus
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-19T21:05
+  updated_at: 2026-09-19T21:05
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+
+    Once all columns are worked in one order with the LOD ring deciding the work, a lot of the machinery
+    that existed only to keep the two old lanes from colliding has nothing left to do. I want it removed
+    so the streaming code has one path rather than two, and so nobody later mistakes a leftover constant
+    or cache for something load-bearing.
+
+
+    2) Technical Details
+
+
+    Depends on the lane-unification ticket. Every symbol below is either genuinely unreferenced after
+    that ticket lands or is guarded by a flag that is already false. VERIFY EACH WITH A CALLER SEARCH
+    BEFORE DELETING - the point of the ticket is that the code gets smaller and there are no orphans left
+    behind, not that a list gets applied mechanically.
+
+
+    Candidates (names are the anchor; line numbers will have moved by the time this is worked):
+
+    - world.gd LOW_SCAN_CAP - the low pick''s entry-visit cap; its only readers are _low_scan_slabs and
+    _low_pick, both deleted by the unification.
+
+    - world.gd LOW_UPGRADE_PER_FRAME and LOW_IDLE_GRACE_FRAMES - WAVE 3''s idle catch-up, deleted by the
+    unification.
+
+    - world.gd LOW_WAVE_PACE_MS / LOW_WAVE_FRAME_CAP - only if the unification keeps the wall-clock unit
+    budget as the surviving pacing model. If it keeps the far pace instead, this pair survives and the
+    DRAIN_* pair is the one that goes. Whichever the unification chose, the other pair is dead.
+
+    - world.gd the per-lane verdict caches: _low_none_key, _low_slab_none_key, _low_probe_cache, _hslab_probe_cache
+    - re-derive which are still reachable once a single pick exists. A cache whose "none" verdict can
+    no longer be set is worse than dead: it silently returns a stale empty.
+
+    - world.gd the dead in-radius lane: _low_inr_step (today a single _low_inr_drained = true), _low_inr_pick,
+    _low_inr_invalidate, _low_inr_drained, _low_inr_drain_since, _low_inr_budget_* and the WP_LOW_INR
+    wprof stage if nothing reports it. Confirm the _wprof stage list and harness_data.yaml rows stay consistent
+    if a stage is removed.
+
+    - world.gd the fog path: FOG_WAVE_ON (false today), _low_fog_bake, _fog_ensure_slab, _fog_drop_slab,
+    _fog_sync, _low_fog_for, the fog_slabs bookkeeping and the low_failed terminal marks - ONLY if a caller
+    search confirms nothing feeds fog_slabs in the shipped path. If something still restores a fog box,
+    keep the path and record why in the comment instead of deleting it.
+
+    - Any remaining references in the code comments to a "WAVE 1/2/3" lane model, which stops being true.
+
+
+    GATES:
+
+    - The full standing set, because a deletion can remove a proof as easily as a cost: ladder, halo,
+    farab, meshprobe, r16 (all sub-flags, far_holes 0 in both bands), boundary r4, battery.
+
+    - genhash 25/25 byte-identical.
+
+    - A caller search per symbol recorded in the results page - name it and show it has no remaining reader.
+
+    - HARNESS.md section 3 standing values: if a wprof stage or an arm field disappears, the harness_data.yaml
+    rows and the rendered doc move in the same task (tasks/harness_data.yaml then python3 tasks/scripts/harness_doc.py
+    --render).
+
+    - Expected shape: a net line-count reduction. If the diff does not shrink the file, something on this
+    list was load-bearing after all and belongs back in the unification ticket.
+
+    '
+  comments: []
+- id: AC-0337
+  title: collision-cost-budget-and-derivation
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-19T21:22
+  updated_at: 2026-09-19T21:22
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+
+    Walking along the edge of the high-detail band, or breaking a block, rebuilds chunk collision geometry
+    that did not actually change - and it rebuilds it one slab at a time, on the main thread, through
+    the physics server. That is the single most expensive thing the game does per event. I want the per-frame
+    cost capped, and the rebuilds that change nothing stopped.
+
+
+    2) Technical Details
+
+
+    WHAT IS MEASURED TODAY (gate logs, .scratch/AC-0313-gates/gate_13_battery_perf.log and the AC-0314
+    equivalent, R4):
+
+    - collision_ms_total 350-358 ms, collision_n 89-106, collision_max_ms 15-17, frame_max_ms 101-104
+    at R4.
+
+    - collision_n counts BATCHES, not slabs. chunk.gd:1247 build_dirty_slab_bodies and chunk.gd:1369 _post_build_collision
+    each loop the whole slab list and call _build_slab_collision per dirty slab, so "3.3 ms per collision"
+    is really per-batch. The per-slab figure this ticket needs is NOT currently measured - adding that
+    counter is part of this ticket (see step 0).
+
+    - boundary r4 staged_dropped rose 707 -> 1518-1678 at AC-0313, i.e. the staging lane is over-subscribed
+    and gives up on columns rather than building them.
+
+
+    THE COST (chunk.gd:1631 _build_slab_collision, main thread, per slab):
+
+    - mesh.surface_get_arrays(0) - a full vertex+index copy of the slab''s opaque surface;
+
+    - expanded into a de-indexed PackedVector3Array (3 Vector3 per triangle);
+
+    - a new ConcavePolygonShape3D with set_faces (physics BVH build);
+
+    - a new StaticBody3D + CollisionShape3D added to the chunk;
+
+    - the OLD body freed. A dense 16x16x16 slab can carry thousands of greedy-merged quads, and a column
+    is 24 of them.
+
+
+    STEP 0 - MEASURE (do this first; the rest of the ticket is unfalsifiable without it):
+
+    - Count SLABS, not batches: a per-slab counter beside the existing perf_slab_body_builds/perf_slab_body_ms
+    arrays (chunk.gd) so the gate can report slabs rebuilt and the ms histogram.
+
+    - Add a COLLIDE stage to the World._wprof stage list (world.gd WP_* constants) bracketing _post_build_collision
+    and build_dirty_slab_bodies, so collision time stops landing in the MISC residual. Keep the stage
+    list, harness_data.yaml and the rendered HARNESS.md consistent in the same task.
+
+    - Report staged_dropped beside flap as a standing value with a threshold (HARNESS.md section 3), so
+    an over-subscribed staging lane fails a gate instead of reading as a footnote.
+
+
+    STEP 1 - STOP REBUILDING WHAT DID NOT CHANGE (cheapest, do it before the budget):
+
+    - world.gd _reband (:9712): leaving band 0 calls drop_slab_bodies() and re-entering calls mark_all_slabs_dirty()
+    - all 24 slabs re-derived from full mesh arrays, although the GEOMETRY did not change, only whether
+    the band wants collision. Move the collision_enabled flag and KEEP the bodies. A player walking the
+    sim boundary currently oscillates columns across it and rebuilds both directions.
+
+    - chunk.gd:1355-1364: a mesh re-assembly unconditionally sets s.col_dirty = true, so a landing that
+    changed only LIGHT (the star remesh lane) or only the neighbour margin re-requests the whole slab''s
+    body. Distinguish "geometry changed" from "light changed" and only re-request on geometry.
+
+    - world.gd _apply_edits_to_chunk (:10195) calls mark_all_slabs_dirty(); confirm whether the edit path
+    needs more than the edit''s own slab closure before narrowing it (an edit already dirties the 3-slab
+    closure via chunk.gd mark_edit_slabs for the greedy-merge overhang - do not break that).
+
+
+    STEP 2 - BUDGET IT:
+
+    - A per-frame collision time cap with a debt queue, the way drain_budget_ms already bounds the build
+    lane. Today the staged lane is a fixed 2 columns/frame (world.gd _col_drain_step :9068) with no time
+    cap, and each column can be 24 slabs.
+
+    - FENCE - DO NOT REGRESS THE FOOTING: the immediate path (world.gd _col_immediate_for :8953, Chebyshev
+    <= 1 from the player, plus the 0,0 spawn column) builds bodies inside the landing frame, and chunk.gd:1355
+    records that a missing body under the spawn plateau was a real shipped bug ("the player falls through").
+    The budget must never defer a slab inside that footprint. Only the outside-the-footprint work is deferrable.
+
+
+    STEP 3 - CHEAPER DERIVATION (largest change; only if steps 1-2 do not reach the target):
+
+    - The worker already has the greedy quads. Ship a compact triangle/box list in the handoff result
+    and build the shape from that, instead of surface_get_arrays + de-indexing on the main thread.
+
+    - Consider whether ConcavePolygonShape3D is the right shape at all for greedy voxel terrain (per-slab
+    convex/box decomposition, or one merged column-level body rebuilt incrementally).
+
+
+    GATES: boundary r4 (walk p50/p95/max_ms and staged_dropped), r16 sub-flags, battery, editperf (flush_frames
+    and the per-edit max frame), genhash 25/25 byte-identical (collision is not generation, and the gate
+    proves it), plus the new per-slab and COLLIDE-stage numbers recorded as standing values in the same
+    task.
+
+
+    SCOPE FENCES: do NOT touch the far LOD lanes, the scheduler unification (AC-0335) or the demote/re-lower
+    machinery - collision exists in band 0 only, so the far tiers and the y-floor are irrelevant here.
+    If AC-0333/AC-0334''s classification lands while this is in flight, re-read it before changing the
+    band-edge path: an arm-side staleness finding could explain part of the observed cost without any
+    engine defect.
+
+    '
+  comments: []
+- id: AC-0338
+  title: far-tier-batched-draws
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-19T21:22
+  updated_at: 2026-09-19T21:22
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+
+    Every far column keeps its own draw instances, so the world ends up holding tens of thousands of small
+    MeshInstance3D nodes for terrain the player sees only as a coarse shell. I want the far rings drawn
+    as a few big batches instead, so the scene tree and the draw-call count stop growing with the render
+    distance.
+
+
+    2) Technical Details
+
+
+    MEASURED (r16 arm, pool census): 653 pooled columns holding 5 574 MeshInstance3Ds = 8.54 per column,
+    with 4 287 instances grown during ONE build pass. At the default render_dist 50 the resident count
+    is on the order of 5 000 columns, so the extrapolation is tens of thousands of instances plus the
+    fluid/flora/occluder/collision nodes. This is an order-of-magnitude figure from a measured per-column
+    rate, not a direct measurement - re-measure at R50 as step 0.
+
+
+    WHERE THE INSTANCES COME FROM: chunk.gd _assemble_slab (:1266) creates per slab - an opaque MeshInstance3D,
+    an optional fluid instance, an optional flora instance, and an OccluderInstance3D for a full-solid
+    slab - and AC-0247 pools the nodes but does not reduce the count.
+
+
+    WHAT ALREADY WORKS AND SHOULD BE THE MODEL: the far placeholder path is ALREADY batched - chunk.gd:90-118
+    documents fog_instance as ONE MultiMeshInstance3D holding a MultiMesh of pre-baked box instances,
+    one per non-air slab. That is the precedent, and it is the cheapest place to start because the tier''s
+    geometry is uniform.
+
+
+    STEP 0 - MEASURE FIRST: instances per frame and Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME / OBJECTS_IN_FRAME
+    at R16 AND R50, recorded as standing values. Note HARNESS.md section 2: this box renders through gl_compatibility
+    and is a PROXY, never evidence about the shipped forward_plus look - the node/draw counters are the
+    transferable part, the pixels are not.
+
+
+    STEP 1 - THE FAR AVG TIERS (bands B and C): their per-slab meshes are already generated by the C++
+    avg emitters (low_emit_avg / h_avg_emit) through the worker pool. Batch them into ring-level MultiMeshInstance3D
+    groups instead of one MeshInstance3D per column per slab. Keep the emitted geometry byte-identical
+    - the batch is a DRAW change, not an emit change - so farab (1080/1080, h_mismatch 0), halo and meshprobe
+    must stay green and are the proof.
+
+
+    STEP 2 - BAND A (only if step 1 pays): band A is full-LOD materialized geometry with water/trees/flowers,
+    so batching it is materially harder (heterogeneous surfaces). Do not fold it into step 1.
+
+
+    GATES: farab 1080/1080 byte-identical, halo (re-emit identity), ladder (band-A texture identity, band_a_ok),
+    meshprobe, r16 with ALL sub-flags including far_holes 0 in both bands (batching must not change the
+    double-draw census), boundary r4, battery, genhash 25/25 held. Standing values re-established in-task
+    with the supersedes chain.
+
+
+    SEQUENCING / SCOPE FENCES: this overlaps the mesh landing and LOD paths, which AC-0335 (one-work-order-one-dispatch)
+    and AC-0336 (dead-lane removal) are actively restructuring - it MUST be worked after both, or it will
+    be written against a pick path that no longer exists. Also do not attempt this while AC-0331/AC-0332
+    (the far-tier floor) are in flight. If the y-floor already reduces the far slab count enough that
+    the instance census is no longer a problem, say so in the results and close this as unnecessary rather
+    than batching for its own sake.
+
+    '
+  comments: []
+- id: AC-0339
+  title: light-settle-gate-wait
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-19T21:22
+  updated_at: 2026-09-19T21:22
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+
+    When the light in an area changes, the meshes around it wait for the lighting to finish calculating
+    before they are allowed to appear. On a big change - a block edit near a cave, a column being promoted
+    back into the high-detail band - that wait is long enough to read as the world stalling. I want the
+    wait measured first, then shortened.
+
+
+    2) Technical Details
+
+
+    STEP 0 - MEASURE THE WAIT (nothing here is provable without it; do this as its own first commit):
+
+    - The gate is world.gd _mesh_dispatch_hslab (:7284): "if star != null and not star.box_settled(cx,
+    cz, si - 1, si + 1): _hslab_last_defer = 5; hslab_defer_settle += 1; return false".
+
+    - hslab_defer_settle counts DEFERRALS, not WAITING TIME. A slab can be deferred for hundreds of frames
+    and the counter only shows one. Add a per-slab settle-wait duration (first-defer frame -> dispatch
+    frame) and report its p50/p95/max, plus the count of columns stalled behind it, as an arm field and
+    a standing value.
+
+    - Also report star_remesh queue depth and _star_step''s drained-vs-pending cells per frame, since
+    the light budget is the other half of the wait.
+
+    - Keep the addition instrumentation-only: no behaviour change, existing standing values must not move.
+
+
+    WHAT THE GATE ACTUALLY COVERS (verified in the engine):
+
+    - starlight.cpp box_settled(:584) loops ssi in [si0, si1] and, for each section, tests the 3x3 horizontal
+    neighbourhood for pending != 0. So the dispatch gate (si-1 .. si+1) tests 3 sections x 9 columns =
+    27 sections.
+
+    - The 3x3 is NOT gratuitous: the slab''s bake includes the neighbour margin strips, so the light of
+    adjacent columns genuinely feeds this slab''s mesh. The ENGINE already offers a finer query - section_settled(cx,
+    cz, si) (:198) - which the dispatch path does not use.
+
+    - on_edit (starlight.cpp:396) clears and re-seeds 3x3 columns x sections 0..si+1 - up to ~144 sections
+    for one block edit. That is the blast that creates the wait.
+
+
+    STEP 1 - SHORTEN THE WAIT (pick ONE, both are behaviour changes and each needs its own evidence):
+
+    - (a) Finer gate: gate on the sections the bake actually reads - the slab''s own section plus the
+    specific neighbour margin rows - instead of all 27. Requires establishing exactly which cells the
+    margin strips consume, and a gate that proves no unlit frame appears (the AC-0286 contract: a slab
+    NEVER shows unlit; brightslab/lightstate/halo are the arms that carry it).
+
+    - (b) Show the previous bake: let the slab land on its stale-but-settled light, then re-bake when
+    the engine settles. This changes what the player sees (briefly stale light) and therefore needs an
+    explicit look-and-feel answer, not just a green gate. If taken, it must be reconciled with the "never
+    unlit" contract rather than silently replacing it.
+
+
+    DO NOT DO: raise STAR_STEP_BUDGET_MS to make the wait shorter. That is a different trade (more main-thread
+    time per frame) and would spend the same currency this ticket is trying to save; if it is ever proposed,
+    it needs its own measurement and its own ticket.
+
+
+    GATES: lightstate, brightslab C1-C6 (C4 bakes 73 / over-bright 0 / lver_drops 0 is the standing shape),
+    halo (a)-(d2) including the demote/promote content check, starlighttest 0/5,308,416, ladder, r16 all
+    sub-flags, boundary r4, battery. Plus the new settle-wait numbers recorded as standing values in the
+    same task.
+
+
+    SEQUENCING / SCOPE FENCES: must be worked AFTER AC-0334 (halo demote-content classification) resolves
+    - that ticket is testing whether a demote/promote content mismatch is real engine staleness or a stale
+    arm reference, and option (b) above writes directly over that machinery. Also after AC-0335 if it
+    lands first, since it changes the ORDER slabs are dispatched in and therefore what the settle wait
+    even means. Do not change the cave fields, the mesh emit, or the far-tier floor.
 
     '
   comments: []
