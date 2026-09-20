@@ -108,10 +108,13 @@ func _prof_refresh() -> void:
 	# indented under LOW, so the in-game storm can be read sub-part by
 	# sub-part.
 	for nm in ["DRAIN", "LOW", "LOW_POLL",
-			"HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "MISC"]:
+			"HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "STAR", "COLLIDE", "MISC"]:
+		# AC-0283 P2: STAR (the starlight engine step); AC-0337: COLLIDE (the
+		# per-slab body derivation) — both sub-stages (subsets, never in the
+		# partition), indented like their kin.
 		s = p.get(nm, {})
 		var indent := "  " if ["FACELIGHT", "RESCORE", "MESHATTACH",
-				"LOW_POLL"].has(nm) else ""
+				"LOW_POLL", "STAR", "COLLIDE"].has(nm) else ""
 		lines += "\n%s%-10s %6.1f %6.1f %7.1f %6.1f   %4d" % [
 			indent, nm,
 			float(s.get("p50", 0.0)), float(s.get("p95", 0.0)), float(s.get("max", 0.0)),

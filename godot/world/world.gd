@@ -3082,6 +3082,22 @@ var perf_collision_n := 0
 var perf_collision_max_ms := 0
 var perf_staged_drained := 0
 var perf_staged_dropped := 0
+# AC-0337 step 0: the per-SLAB collision census (the trio above counts
+# BATCHES — one per immediate landing / per staged column drain — so the
+# gate's "ms per collision" was per-batch). Counted at the single body-
+# derivation choke point (chunk.gd _build_slab_collision) at usec
+# resolution; the ms histogram is the per-slab cost shape AC-0340's
+# budget needs. perf_reband_* = the band-0 excursion census (the walk's
+# oscillation: exit/entry column transitions + the kept bodies freed on
+# re-entry — step 1 makes re-entry re-arm only the STALE slabs, so
+# rearm ≈ 0 is the healthy reading).
+var perf_collision_slabs := 0
+var perf_collision_slab_ms := 0.0
+var perf_collision_slab_max_ms := 0.0
+var perf_collision_slab_hist := PackedInt32Array([0, 0, 0, 0, 0, 0])  # ms bins: <1, 1-2, 2-5, 5-10, 10-25, >=25
+var perf_reband_exit := 0
+var perf_reband_entry := 0
+var perf_reband_rearm_slabs := 0
 var _eff_cache: Dictionary = {}
 var _eff_cache_order: Array = []
 const EFF_CACHE_CAP := 128
@@ -3750,7 +3766,16 @@ const WP_LOW_POLL := 10
 # settled-column drain). A DRAIN subset (bracketed inside the drain pass —
 # it sums to <= DRAIN, never into the 5-stage partition).
 const WP_STAR := 11
-const WP_STAGES := 12
+# AC-0337 step 0: the collision body work (the slab body derivation in
+# chunk.gd _build_slab_collision, reached from BOTH _post_build_collision
+# (the landing/apply passes — a HANDOFF/DRAIN subset) and
+# build_dirty_slab_bodies (the staged drain — a DRAIN subset)). A SUB-STAGE
+# like STAR/MESHATTACH: it accumulates where the work happens and never
+# into the 5-stage partition, so the reconciliation stays exact. Before
+# this stage the collision cost was only visible in the MISC residual and
+# the batch counters (which count batches, not slabs).
+const WP_COLLIDE := 12
+const WP_STAGES := 13
 const WP_RING := 180
 
 var _wp_rows: Array = []    # WP_RING rows, each an Array of WP_STAGES ints (usec)
@@ -3795,12 +3820,12 @@ func _wprof_init() -> void:
 		d["frames"] = 0
 		_wp_stat.append(d)
 	_wp_names = ["DRAIN", "LOW", "HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "MISC", "frame",
-		"LOW_POLL", "STAR"]
+		"LOW_POLL", "STAR", "COLLIDE"]  # AC-0337 step 0: the collision sub-stage
 	_wp_live = {}
 	for j in range(WP_STAGES):
 		_wp_live[_wp_names[j]] = _wp_stat[j]
 	_wp_live["partition"] = ["DRAIN", "LOW", "HANDOFF", "IO", "RECENTER", "MISC"]
-	_wp_live["substages"] = ["FACELIGHT", "RESCORE", "MESHATTACH", "LOW_POLL", "STAR"]
+	_wp_live["substages"] = ["FACELIGHT", "RESCORE", "MESHATTACH", "LOW_POLL", "STAR", "COLLIDE"]
 	_wp_live["occupancy"] = {"tg": 0, "tm": 0, "low": 0, "star": 0}
 	_wp_live["misc_neg_max_us"] = 0
 	_wp_scratch.resize(WP_RING)
@@ -3825,6 +3850,12 @@ func _wprof_add(stage: int, us: int) -> void:
 # chunk.gd convenience (avoids a dynamic constant lookup across scripts).
 func _wprof_meshattach(us: int) -> void:
 	_wprof_add(WP_MESHATTACH, us)
+
+# AC-0337 step 0: chunk.gd convenience for the collision sub-stage (the
+# _post_build_collision bracket — the staged-drain side is bracketed in
+# _col_drain_step below, where the WP_ constant is in scope anyway).
+func _wprof_collide(us: int) -> void:
+	_wprof_add(WP_COLLIDE, us)
 
 # Commit the frame row: MISC = frame total - the five disjoint top stages
 # (exact by construction; a negative MISC would mean the stage brackets
@@ -8497,7 +8528,9 @@ func _col_drain_step() -> void:
 		if not ok:
 			perf_staged_dropped += 1
 			continue
+		var _ct := Time.get_ticks_usec()  # AC-0337 step 0: the COLLIDE sub-stage (staged side)
 		c.build_dirty_slab_bodies()
+		_wprof_add(WP_COLLIDE, Time.get_ticks_usec() - _ct)
 		if not c.any_col_dirty():
 			_count_collision_build(c)
 			perf_staged_drained += 1
@@ -8512,6 +8545,38 @@ func _count_collision_build(c: Node3D) -> void:
 		perf_collision_n += 1
 		if dt > perf_collision_max_ms:
 			perf_collision_max_ms = dt
+
+# AC-0337 step 0: one slab body was derived (chunk.gd _build_slab_collision,
+# usec since its entry). Bins are ms; the histogram is RESULT-ready via
+# collision_slab_hist_dict().
+func _count_collision_slab(us: int) -> void:
+	perf_collision_slabs += 1
+	var ms := float(us) / 1000.0
+	perf_collision_slab_ms += ms
+	if ms > perf_collision_slab_max_ms:
+		perf_collision_slab_max_ms = ms
+	if ms < 1.0:
+		perf_collision_slab_hist[0] += 1
+	elif ms < 2.0:
+		perf_collision_slab_hist[1] += 1
+	elif ms < 5.0:
+		perf_collision_slab_hist[2] += 1
+	elif ms < 10.0:
+		perf_collision_slab_hist[3] += 1
+	elif ms < 25.0:
+		perf_collision_slab_hist[4] += 1
+	else:
+		perf_collision_slab_hist[5] += 1
+
+func collision_slab_hist_dict() -> Dictionary:
+	return {
+		"lt1ms": int(perf_collision_slab_hist[0]),
+		"1_2ms": int(perf_collision_slab_hist[1]),
+		"2_5ms": int(perf_collision_slab_hist[2]),
+		"5_10ms": int(perf_collision_slab_hist[3]),
+		"10_25ms": int(perf_collision_slab_hist[4]),
+		"gte25ms": int(perf_collision_slab_hist[5]),
+	}
 
 func _key(cx: int, cz: int) -> String:
 	var k := cx * 65536 + cz
@@ -9125,17 +9190,33 @@ func _reband(c: Node3D, key: String, oldb: int, nb: int) -> void:
 	# is never rebuilt by a band change (keep-high); the low placeholder
 	# exists only on never-built far chunks (band 3) and a reband leaves
 	# its low untouched.
+	# AC-0337 step 1: the collision bodies SURVIVE the excursion. Leaving
+	# band 0 is the flag only — the geometry did not change (and at
+	# R <= sim the exit side never even reaches here: _rec_want_step
+	# early-returns on nb == 3, so a trailing column keeps its band).
+	# Re-entry re-arms ONLY the stale slabs — rearm_slab_bodies frees the
+	# bodies whose geometry moved while the column was out (a data
+	# landing, an edit, a neighbor landing) and the staged drain rebuilds
+	# them; the common re-entry (light-only re-bakes during the excursion
+	# moved no data/fl, so the per-slab geometry stamps still match)
+	# keeps every body. The old mark_all_slabs_dirty re-derived all 24
+	# for nothing on every re-entry. With staging disabled the re-arm
+	# would free bodies nothing ever rebuilds, so it is skipped (the
+	# pre-existing behavior: the kept — possibly stale — bodies stay).
 	c.band = nb
 	c.collision_enabled = collision_enabled and nb == 0
+	if oldb == 0 and nb != 0:
+		perf_reband_exit += 1  # AC-0337: the band-edge excursion census
+	elif nb == 0 and oldb != 0:
+		perf_reband_entry += 1  # AC-0337: the re-entry census
 	if not bool(c.mesh_built):
 		return
-	if oldb == 0 and nb != 0:
-		c.drop_slab_bodies()
-	elif nb == 0 and oldb != 0:
-		c.mark_all_slabs_dirty()
-		if not _col_pending_set.has(key):
-			_col_pending.append(key)
-			_col_pending_set[key] = true
+	if nb == 0 and oldb != 0:
+		if col_stage_enabled and c.any_col_dirty():
+			perf_reband_rearm_slabs += int(c.rearm_slab_bodies())
+			if not _col_pending_set.has(key):
+				_col_pending.append(key)
+				_col_pending_set[key] = true
 func _rec_start_walk(pcx: int, pcz: int) -> void:
 	# AC-0233: start (or restart) the recenter rebuild walk at (pcx, pcz)
 	# and arm the coverage anchor. A restart discards the in-flight walk's
@@ -9585,6 +9666,7 @@ func _apply_edits_to_chunk(c: Node3D) -> bool:
 	var cells: Dictionary = edits[key]
 	var changed := false
 	var fl_changed := false
+	var edit_ys: Array[int] = []  # AC-0337: the block-changed cells' slabs
 	for fkey in cells:
 		var e: Dictionary = cells[fkey]
 		var fi := int(fkey)
@@ -9592,6 +9674,7 @@ func _apply_edits_to_chunk(c: Node3D) -> bool:
 		var f := int(e.get("f", 0))
 		if c.get_at(fi) != b:
 			changed = true
+			edit_ys.append(fi >> 8)
 		if c.fl_at(fi) != f:
 			fl_changed = true
 		c.set_local(fi & 15, fi >> 8, (fi >> 4) & 15, b)
@@ -9601,7 +9684,19 @@ func _apply_edits_to_chunk(c: Node3D) -> bool:
 	if not changed and not fl_changed:
 		return false
 	c.update_top()  # AC-0197: edits may raise (or clear) the top
-	c.mark_all_slabs_dirty()
+	# AC-0337 step 1: the old mark_all_slabs_dirty is GONE. The per-slab
+	# geometry stamp already invalidates exactly the edited slabs (their
+	# dgen/fgen moved at set_local/set_fl_at above), and the closure marks
+	# cover the greedy-merge overhang (an edit at row y reshapes quads
+	# anchored at [y-3, y]). Confirmed the landing path needs NOTHING
+	# beyond this closure: the full-column mesh re-dispatch runs the
+	# assembly's stamp check on every slab, so any slab whose geometry
+	# inputs moved re-derives — the mark_all was a 24x over-rebuild. A
+	# fluid-only edit marks nothing new (fluids are not in the body; the
+	# touched slab's fgen move is the conservative flora case).
+	if changed:
+		for y in edit_ys:
+			c.mark_edit_slabs(int(y))
 	_eff_cache_evict(key)
 	if changed:
 		c.saved_light = {}

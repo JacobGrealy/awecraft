@@ -395,6 +395,21 @@ class Slab:
 	var col_dirty := false
 	var sidx := PackedInt32Array()
 	var fsidx := PackedInt32Array()
+	# AC-0337 step 1: per-slab data/fl generation counters (the column-level
+	# data_gen/fl_gen stay for the low lane's c.stamp() and the eff cache).
+	# Bumped by set_local/set_fl_at for THIS slab only and by the landing
+	# choke points (data_landed/slabs_landed/clear_data) for ALL slabs —
+	# they are the geometry-input stamp: a slab's body is a deterministic
+	# function of its own slab's data+fl and the 4 orthogonal neighbors'
+	# same-slab data+fl (light is deliberately excluded — a light-only
+	# remesh must not re-derive collision).
+	var dgen := 0
+	var fgen := 0
+	# The stamp captured at the last successful body build (empty = never
+	# built). _assemble_slab re-dirties a slab only when its live stamp
+	# differs (or the body is missing) — the old unconditional dirty
+	# re-derived every body on every light-only remesh.
+	var col_geom_stamp: Array = []
 
 
 static var _ms_key
@@ -615,6 +630,9 @@ func get_local(lx: int, y: int, lz: int) -> int:
 func set_local(lx: int, y: int, lz: int, id: int) -> void:
 	_slab_write(data, y, lz, lx, id)
 	data_gen += 1
+	if slabs.is_empty():
+		init_slabs()
+	slabs[y >> 4].dgen += 1  # AC-0337 step 1: per-slab geometry stamp
 	# AC-0283 P2: the flush_slabs clear is the WORLD's (the star re-arm
 	# pops the affected slabs surgically — an edit does not un-settle the
 	# whole column). light_settled stays a conservative flag (the world
@@ -641,6 +659,9 @@ func set_fl_at(fi: int, lvl: int) -> void:
 	var y: int = fi >> 8
 	_slab_write(fl, y, (fi >> 4) & 15, fi & 15, lvl)
 	fl_gen += 1
+	if slabs.is_empty():
+		init_slabs()
+	slabs[y >> 4].fgen += 1  # AC-0337 step 1: per-slab geometry stamp (flora is in the body)
 
 
 func get_fl(lx: int, y: int, lz: int) -> int:
@@ -653,6 +674,44 @@ func set_fl(lx: int, y: int, lz: int, lvl: int) -> void:
 
 func stamp() -> Array:
 	return [data_gen, fl_gen]
+
+# AC-0337 step 1: the per-slab generation bump at a landing — the landing
+# replaces (or wipes) EVERY slab's data and fl, so every slab's stamp moves
+# (a column-level landing re-derives all 24 bodies — same as the old
+# mark_all_slabs_dirty, the accepted false positive; the wins are the
+# light-only remeshes and the band excursions, where the slabs stay).
+func _slab_gens_landed() -> void:
+	if slabs.is_empty():
+		return
+	for s in slabs:
+		s.dgen += 1
+		s.fgen += 1
+
+# AC-0337 step 1: the geometry-input stamp for slab si — its own slab's
+# (dgen, fgen) plus the 4 orthogonal neighbors' same-slab (dgen, fgen).
+# LIGHT (eff) is deliberately excluded: a settled-light re-bake remeshes
+# without touching data/fl, so it must NOT re-derive collision. The overhang
+# rows (greedy quads anchored 3 rows up in the slab ABOVE reach down into
+# this slab) are covered by the EDIT path's own closure (mark_edit_slabs
+# marks [(y-3)/16 .. (y+1)/16] on the live set_block path and the landing
+# re-dispatches the whole column), so the stamp only owes the direct
+# same-slab + neighbor-slab inputs. Neighbor absent / stub / never-init =
+# the (-1, -1) sentinel: the first landing of a neighbor moves the stamp
+# (the ring gained content), which is exactly the invalidation owed.
+func _slab_geom_stamp(si: int) -> Array:
+	var s: Slab = slabs[si]
+	var t: Array = [s.dgen, s.fgen]
+	if Game.world == null or int(face) > 0:
+		return t
+	for d in [[-1, 0], [1, 0], [0, -1], [0, 1]]:
+		var nc = Game.world.chunks.get(Game.world._key(int(cx) + int(d[0]), int(cz) + int(d[1])))
+		if nc != null and nc.data.size() > 0 and nc.slabs.size() > si:
+			t.append(int(nc.slabs[si].dgen))
+			t.append(int(nc.slabs[si].fgen))
+		else:
+			t.append(-1)
+			t.append(-1)
+	return t
 
 
 # AC-0203: lazy flat expansion — the only way back to the legacy
@@ -704,6 +763,7 @@ func data_landed(d: PackedByteArray, f: PackedByteArray) -> void:
 	light_settled = false
 	flush_slabs = {}
 	fl_gen += 1
+	_slab_gens_landed()  # AC-0337 step 1: the landing moves every slab's stamp
 	update_top()
 
 
@@ -723,6 +783,7 @@ func slabs_landed(ds: Array, fs: Array) -> void:
 	light_settled = false
 	flush_slabs = {}
 	fl_gen += 1
+	_slab_gens_landed()  # AC-0337 step 1: the landing moves every slab's stamp
 	update_top()
 
 
@@ -740,6 +801,7 @@ func clear_data() -> void:
 	light_settled = false
 	flush_slabs = {}
 	fl_gen += 1
+	_slab_gens_landed()  # AC-0337 step 1: the wipe moves every slab's stamp
 
 
 # AC-0203: slab write with palette growth. The slab invariant holds on
@@ -1185,11 +1247,10 @@ func mark_edit_slabs(y: int) -> void:
 		slabs[si].col_dirty = true
 
 
-func mark_all_slabs_dirty() -> void:
-	if slabs.is_empty():
-		init_slabs()
-	for s in slabs:
-		s.col_dirty = true
+# AC-0337: mark_all_slabs_dirty is GONE (its last caller was the pre-AC-0337
+# _apply_edits_to_chunk landing path). The 24-slab re-derive it forced is the
+# exact churn the per-slab stamps + mark_edit_slabs closure replace — do not
+# resurrect it: any edit landing that calls it re-derives every slab body.
 
 
 func any_col_dirty() -> bool:
@@ -1231,12 +1292,18 @@ func build_dirty_slab_bodies() -> void:
 				s.col_dirty = false
 
 
-func drop_slab_bodies() -> void:
+# AC-0337 step 1: re-entry re-arm — free ONLY the dirty slabs' bodies (the
+# geometry moved while the column was out of band 0); the clean slabs keep
+# their valid bodies. The staged drain rebuilds the freed ones (build_dirty_
+# slab_bodies guards col_dirty && body == null). Returns the freed count.
+func rearm_slab_bodies() -> int:
+	var n := 0
 	for s in slabs:
-		if s.collision_body != null:
+		if s.col_dirty and s.collision_body != null:
 			s.collision_body.queue_free()
 			s.collision_body = null
-		s.col_dirty = true
+			n += 1
+	return n
 
 
 func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax: Acc, ms, full_solid: bool) -> void:
@@ -1337,29 +1404,41 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 	# hole under the spawn plateau. A mesh attach always re-requests the
 	# body; a later mesh-less re-assembly re-clears it in
 	# _post_build_collision as before.
-	s.col_dirty = true
+	# AC-0337 step 1: geometry vs light. The old unconditional dirty
+	# re-derived the collision body on EVERY remesh — and the star lane
+	# remeshes constantly during streaming, with light-only re-bakes the
+	# common case (the body is built from the opaque + flora-cutout
+	# surfaces; settled light changes neither). Re-dirty only when the
+	# geometry-input stamp moved (own + 4-neighbor data/fl) or the body
+	# is missing. col_dirty is set-only here and in mark_edit_slabs (the
+	# edit path's closure — the overhang case) and cleared only by a
+	# build, so both invalidators compose: union, never a gap.
+	if s.collision_body == null or _slab_geom_stamp(int(s.y0) / 16) != s.col_geom_stamp:
+		s.col_dirty = true
 	if Game.world != null:  # AC-0251: attribute to the world's pipeline ring
 		Game.world._wprof_meshattach(Time.get_ticks_usec() - _wpt)
 
 
 func _post_build_collision() -> void:
+	var _ct := Time.get_ticks_usec()  # AC-0337 step 0: the COLLIDE wprof sub-stage bracket
 	last_collision_build_ms = 0
-	if not collision_enabled:
-		return
-	for s in slabs:
-		if not s.col_dirty:
-			continue
-		if col_immediate:
-			if s.collision_body != null:
+	if collision_enabled:
+		for s in slabs:
+			if not s.col_dirty:
+				continue
+			if col_immediate:
+				if s.collision_body != null:
+					s.collision_body.queue_free()
+					s.collision_body = null
+				_build_slab_collision(s)
+				s.col_dirty = false
+			elif s.collision_body != null:
 				s.collision_body.queue_free()
 				s.collision_body = null
-			_build_slab_collision(s)
-			s.col_dirty = false
-		elif s.collision_body != null:
-			s.collision_body.queue_free()
-			s.collision_body = null
-		elif s.mesh_instance == null or s.mesh_instance.mesh == null:
-			s.col_dirty = false
+			elif s.mesh_instance == null or s.mesh_instance.mesh == null:
+				s.col_dirty = false
+	if Game.world != null:
+		Game.world._wprof_collide(Time.get_ticks_usec() - _ct)
 
 
 
@@ -1606,6 +1685,7 @@ func _acc_from_dict(d: Dictionary) -> Acc:
 
 func _build_slab_collision(s: Slab) -> void:
 	var tb := Time.get_ticks_msec()
+	var tb_u := Time.get_ticks_usec()  # AC-0337: usec for the per-slab world census
 	if s.mesh_instance == null or s.mesh_instance.mesh == null:
 		return
 	var mesh: ArrayMesh = s.mesh_instance.mesh
@@ -1645,6 +1725,9 @@ func _build_slab_collision(s: Slab) -> void:
 	body.add_child(col)
 	add_child(body)
 	s.collision_body = body
+	# AC-0337 step 1: stamp THIS build's inputs — the assembly check keeps
+	# the body (col_dirty stays false) until an input actually moves.
+	s.col_geom_stamp = _slab_geom_stamp(int(s.y0) / 16)
 	last_collision_build_ms += Time.get_ticks_msec() - tb
 	var si := 0
 	while si < slabs.size() and slabs[si] != s:
@@ -1652,6 +1735,15 @@ func _build_slab_collision(s: Slab) -> void:
 	if si < slabs.size():
 		perf_slab_body_builds[si] += 1
 		perf_slab_body_ms[si] += float(Time.get_ticks_msec() - tb)
+	# AC-0337 step 0: the per-SLAB world census — the world's perf_collision_*
+	# trio counts BATCHES (one per immediate landing / per staged column
+	# drain; a batch can carry 24 slab bodies), so the gate's "3.3 ms per
+	# collision" was really per-batch. This choke point is the single body-
+	# derivation site (immediate + staged), so counting here = the slabs
+	# actually rebuilt; the ms histogram is the per-slab cost shape AC-0340's
+	# budget needs.
+	if Game.world != null:
+		Game.world._count_collision_slab(Time.get_ticks_usec() - tb_u)
 
 
 # AC-0247: the column POOL reset — called by world._col_checkin before the
@@ -1742,6 +1834,9 @@ func _pool_reset() -> void:
 		s.col_dirty = true
 		s.sidx = PackedInt32Array()
 		s.fsidx = PackedInt32Array()
+		s.dgen = 0  # AC-0337 step 1: the per-slab stamp dies with the column
+		s.fgen = 0
+		s.col_geom_stamp = []
 	# perf counters (fresh = zeroed SIZE slab_n()). MUST be sized here —
 	# init_slabs early-returns on a pooled column (the slabs survive), so
 	# it would NOT resize them; an empty array makes _build_slab_collision's

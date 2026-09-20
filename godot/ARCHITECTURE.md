@@ -157,8 +157,34 @@ Build and loading:
 
 Match these; do not improvise a different approach in a task.
 
-- **Collision**: player and mobs are `CharacterBody3D`; voxel collision is a per-chunk
-  `StaticBody3D` built from that chunk's solid blocks and rebuilt on edit.
+- **Collision**: player and mobs are `CharacterBody3D`; voxel collision is a **per-slab**
+  `StaticBody3D` (24 per column) built in `chunk.gd _build_slab_collision` from the slab's
+  opaque surface plus the flora CUTOUT surface (AC-0270 — leaves have collision; fluids and
+  cross-flowers do not), and rebuilt from the MESH (the body mirrors the mesh, never the raw
+  data). Two lanes feed it: the IMMEDIATE lane (`_col_immediate_for` — Chebyshev ≤ 1 of the
+  recenter anchor + column (0,0): free + rebuild in the landing frame, the footing guarantee)
+  and the STAGED lane (`_col_pending`, ≤ 2 columns/frame in the drain's
+  `build_dirty_slab_bodies`; `AWECRAFT_COLSTAGE=0` disables it — then only the immediate
+  footprint is serviced). **Band-edge lifecycle (AC-0337)**: a body is a deterministic
+  function of its geometry inputs, stamped per slab — the slab's own `(dgen, fgen)` plus the
+  four orthogonal neighbors' same-slab `(dgen, fgen)` (`_slab_geom_stamp`; the per-slab
+  generations move only at a write to that slab / a column landing; **light is excluded** —
+  a settled-light re-bake remeshes without re-deriving collision). `collision_enabled`
+  follows the band (`band == 0`, = sim), and the bodies **survive a band excursion**:
+  leaving band 0 is the flag only (no free — the geometry did not change), and re-entry
+  re-arms ONLY the stale slabs (`rearm_slab_bodies` frees the bodies whose stamp moved
+  while the column was out; the staged drain rebuilds them) — a clean re-entry keeps every
+  body. An edit re-derives exactly its closure: the live `set_block` path marks the
+  greedy-merge closure (`mark_edit_slabs`, rows `y-3..y+1`), and a landing apply
+  (`_apply_edits_to_chunk`) marks the block-changed cells' closures — the per-slab stamps
+  do the rest (the old whole-column `mark_all_slabs_dirty` re-derive is gone). The wprof
+  ring carries a **COLLIDE sub-stage** (`WP_COLLIDE`, bracketing both the
+  `_post_build_collision` and `build_dirty_slab_bodies` derivations — a subset of
+  DRAIN/HANDOFF, never in the 5-stage partition, the STAR/MESHATTACH pattern), and the
+  permanent per-slab census (`perf_collision_slabs` + ms + 6-bin histogram, counted at the
+  single body-derivation choke point — the `perf_collision_*` trio counts BATCHES, not
+  slabs) plus the `perf_reband_*` excursion counters are the standing gate evidence
+  (HARNESS.md §3).
 - **Raycasting**: the analytical voxel DDA in `core/math.gd` for select/mine/place and
   projectiles — not physics rays (faster and deterministic).
 - **Meshing**: one `ArrayMesh` per slab/chunk via `SurfaceTool` (GDScript path) or the C++

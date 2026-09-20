@@ -15619,7 +15619,7 @@ func _wprof_ring_read() -> Dictionary:
 	# AC-0262: the LOW sub-stages join the read (sub-part breakdown of the
 	# low lane for the perf hunt).
 	for nm in ["DRAIN", "LOW", "HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "MISC",
-			"LOW_POLL", "STAR"]:  # AC-0283 P2
+			"LOW_POLL", "STAR", "COLLIDE"]:  # AC-0283 P2; AC-0337 step 0: the collision sub-stage
 		d["stages"][nm] = _wprof_snap_stage(p.get(nm, {}))
 	return d
 
@@ -15794,7 +15794,7 @@ func _wprof_test(spawn: Vector3) -> void:
 		"stages": stages,
 		"frame": frame,
 		"partition": ["DRAIN", "LOW", "HANDOFF", "IO", "RECENTER", "MISC"],
-		"substages": ["FACELIGHT", "RESCORE", "MESHATTACH", "LOW_POLL"],
+		"substages": ["FACELIGHT", "RESCORE", "MESHATTACH", "LOW_POLL", "STAR", "COLLIDE"],
 		"recon_raw_pct": recon_raw_pct,
 		"recon_display_pct": int(roundf(recon_display_pct * 10.0)) / 10.0,
 		"misc_neg_max_us": neg_max,
@@ -19468,6 +19468,15 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> v
 		"collision_ms_total": int(world.perf_collision_ms),
 		"collision_n": int(world.perf_collision_n),
 		"collision_max_ms": int(world.perf_collision_max_ms),
+		# AC-0337 step 0: the per-SLAB census (the trio above is per-BATCH)
+		# + the band-0 excursion counters (step 1's before/after signal).
+		"collision_slabs": int(world.perf_collision_slabs),
+		"collision_slab_ms": roundf(world.perf_collision_slab_ms * 10.0) / 10.0,
+		"collision_slab_max_ms": roundf(world.perf_collision_slab_max_ms * 10.0) / 10.0,
+		"collision_slab_hist": world.collision_slab_hist_dict(),
+		"reband_exit": int(world.perf_reband_exit),
+		"reband_entry": int(world.perf_reband_entry),
+		"reband_rearm_slabs": int(world.perf_reband_rearm_slabs),
 		"staged_drained": int(world.perf_staged_drained),
 		"staged_dropped": int(world.perf_staged_dropped),
 		"read_sync_gen": int(world.perf_read_sync_gen),
@@ -22666,6 +22675,16 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		"collision_ms_total": int(world.perf_collision_ms),
 		"collision_n": int(world.perf_collision_n),
 		"collision_max_ms": int(world.perf_collision_max_ms),
+		# AC-0337 step 0: the per-SLAB census (the trio above is per-BATCH)
+		# + the band-0 excursion counters — the walk crosses the sim
+		# boundary on every crossing, so these are the band-edge A/B.
+		"collision_slabs": int(world.perf_collision_slabs),
+		"collision_slab_ms": roundf(world.perf_collision_slab_ms * 10.0) / 10.0,
+		"collision_slab_max_ms": roundf(world.perf_collision_slab_max_ms * 10.0) / 10.0,
+		"collision_slab_hist": world.collision_slab_hist_dict(),
+		"reband_exit": int(world.perf_reband_exit),
+		"reband_entry": int(world.perf_reband_entry),
+		"reband_rearm_slabs": int(world.perf_reband_rearm_slabs),
 		"staged_drained": int(world.perf_staged_drained),
 		"staged_dropped": int(world.perf_staged_dropped),
 		"read_sync_gen": int(world.perf_read_sync_gen),
