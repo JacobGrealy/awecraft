@@ -4138,7 +4138,7 @@ func _gamepad_test(spawn: Vector3) -> void:
 # edit-rebuild of the worst chunk and the after stats - the user's
 # "breaking a block fixes the bad chunk" made measurable.
 # AC-0275: the low-band census (double-LOD slabs + the hole slabs with no
-# instance of any kind, fog/low/mask excluded; air above the top ignored).
+# instance of any kind, low/mask excluded; air above the top ignored).
 func _lod_census() -> Dictionary:
 	var dl := 0
 	var dl_chunks := 0
@@ -4173,7 +4173,7 @@ func _lod_census() -> Dictionary:
 			# buried slab with no exposed faces) and shows nothing by
 			# design. Not a hole.
 			if s3.mesh_instance == null and s3.fluid_instance == null and s3.flora_instance == null \
-					and not (c.low_mask & (1 << si)) and not (c.fog_mask & (1 << si)) \
+					and not (c.low_mask & (1 << si)) \
 					and int(c.low_failed.get(si, -1)) != int(c.data_gen) \
 					and int(c.high_stamps.get(si, -1)) != int(c.data_gen):
 				holes += 1
@@ -9365,7 +9365,7 @@ func _halo_test(spawn: Vector3) -> void:
 				var lia: int = c.low_slabs.find(si)
 				var mi: MeshInstance3D = c.low_instances[lia] if lia >= 0 and lia < c.low_instances.size() else null
 				if mi == null or mi.mesh == null or int(mi.mesh.get_surface_count()) == 0:
-					continue  # the slab shows nothing (air sample / fog) — no mesh to compare
+					continue  # the slab shows nothing (air sample) — no mesh to compare
 				b_slabs += 1
 				var arrs: Array = mi.mesh.surface_get_arrays(0)
 				var applied: Dictionary = {
@@ -10430,7 +10430,7 @@ func _tex_arrs_diff(a: Dictionary, b: Dictionary, fields: Array) -> String:
 # surface_get_arrays, no world code) showed Godot 4.7 round-trips
 # vertices / indices / UVs byte-exact, but stores NORMALS at 16-bit
 # (1/65536 scale) and VERTEX COLORS at 8-bit (1/255, truncated). Every
-# game mesh (high / low / fog) carries that precision — the arm's
+# game mesh (high / low) carries that precision — the arm's
 # contract is therefore: v / i byte-exact, u byte-exact when present,
 # n within 2/65536 per component, c within 1/255 per channel.
 const _TEX_N_TOL := 2.0 / 65536.0
@@ -13042,8 +13042,8 @@ func _r16_test(spawn: Vector3) -> void:
 	# AC-0231 rewrite: the far-LOD placeholder coverage at the moment the
 	# player first sees the terrain (the build is done, the camera settles)
 	# — EVERY far non-air slab (outside the render circle) must be covered
-	# at its Y (a fog box instance on data landing, or the per-slab 4x4x4
-	# low, or a high that already caught up).
+	# at its Y (the per-slab 4x4x4 low, or a high that already caught
+	# up).
 	var far0 := _r16_lod_far()
 	var inr0 := _r16_lod_inr()  # AC-0231: in-r pending set at first sight
 	var h0 := _r16_lod_slabcheck()  # AC-0231 rewrite: per-slab geometry + air checks
@@ -13151,7 +13151,7 @@ func _r16_test(spawn: Vector3) -> void:
 	var fly4d := _pool_grow_delta(p0, p4)
 	var fly50d := _pool_grow_delta(p4, p5)
 	var steady_total := 0
-	for k in ["mi", "mm", "col"]:
+	for k in ["mi", "col"]:
 		steady_total += int(fly4d[k]) + int(fly50d[k])
 	Debug.result({
 		"mode": "r16",
@@ -13307,34 +13307,28 @@ func _r16_test(spawn: Vector3) -> void:
 		# AC-0231 rewrite + fix3: the far-LOD low-res placeholder evidence,
 		# PER SLAB — far_slabs = the NON-AIR slabs of the data chunks
 		# OUTSIDE the render circle at the sample instant (resident, face
-		# 0/1); far_fog/far_low/far_high = the per-slab composition (one
-		# pre-baked 16^3 fog box instance / per-slab 4x4x4 low / high). The
-		# three GLOBAL waves (all fog -> all low -> all high, across ALL
-		# columns): wave 1 = fog on every data landing (immediate_ok
-		# covers it — EVERY far non-air slab is covered at its Y at first
-		# sight, no empty pop at 4-50x); wave 2 = the global slab wave —
-		# AC-0257 (AC-0313): (taxi, layer) inside-out (wave.layer_monotone_ok
-		# = the pick sequence's (taxi, layer) keys are non-decreasing —
-		# the innermost ring first, and within a ring all slabs of layer r
-		# before any of layer r+1, r = distance from the player's slab;
+		# 0/1); far_low/far_high = the per-slab composition (per-slab 4x4x4
+		# low / high). AC-0335 (one scheduler): the fill is the drain's
+		# (taxi, layer) inside-out dispatch — wave.layer_monotone_ok = the
+		# pick sequence's (taxi, layer) keys are non-decreasing (the
+		# innermost ring first, and within a ring all slabs of layer r
+		# before any of layer r+1, r = distance from the player's slab);
 		# wave.first_layer_columns >= 2 = the first layer interleaves
 		# several columns of the innermost ring, never one whole column
 		# before the next; far1.far_low = all the low per slab out to
-		# render distance);
-		# wave 3 = the AC-0233 tiers (catch_up = the low->high upgrades
-		# across the idle settle window, far_high filling per the tiered
-		# order). The gates: height_ok = every fog instance is a unit box
-		# at its slab's Y + every low mesh is slab-local 0..16 at
+		# render distance. catch_up = the low->high upgrades across the
+		# idle settle window (far_high filling per the tiered order). The
+		# gates: height_ok = every low mesh is slab-local 0..16 at
 		# (0, si*16, 0); no_giant_ok = no non-fully-solid coarse grid
 		# meshed as a 16^3 giant box (multiple block faces stay);
-		# uv_repeat_ok = every low quad samples the RIGHT tile at the RIGHT
-		# span (strip quads: repeating 31px per world block from the strip
-		# origin — 4 repeats per 4-block quad, NOT stretched; plain-rect
-		# quads: ONE 32px tile from its origin — the high-mesh plain
-		# convention; the old bug applied the repeating span from a plain
-		# rect, walking into the block's atlas neighbors); air_ok = no air
-		# slab carries a placeholder; no_downgrade_ok = a high never turned
-		# back to a low (keep-high).
+		# uv_repeat_ok = every low quad samples the RIGHT tile at the
+		# RIGHT span (strip quads: repeating 31px per world block from the
+		# strip origin — 4 repeats per 4-block quad, NOT stretched;
+		# plain-rect quads: ONE 32px tile from its origin — the high-mesh
+		# plain convention; the old bug applied the repeating span from a
+		# plain rect, walking into the block's atlas neighbors); air_ok =
+		# no air slab carries a placeholder; no_downgrade_ok = a high
+		# never turned back to a low (keep-high).
 		"lod": {
 			"far0": far0,
 			"far1": far1,
@@ -13343,26 +13337,12 @@ func _r16_test(spawn: Vector3) -> void:
 			# AC-0231 in-r pre-low: the INSIDE-circle pending set (data
 			# landed, no high mesh) at first sight / mid-fly4 / settle.
 			# AC-0257 (cap-less): inr_ok = no HOLE in-r slab at either
-			# sample — a slab is covered (low/fog) or PENDING (queued);
+			# sample — a slab is covered (low) or PENDING (queued);
 			# pending while streaming is the expected in-flight state.
 			"inr0": inr0,
 			"inr1": inr1,
 			"inr4": f4.get("inr_mid", {}),
 			"inr_ok": int(inr0.get("inr_holes", 1)) == 0 and int(inr1.get("inr_holes", 1)) == 0,
-			# AC-0231 order gate: gate_holds_n = tier >= 2 high dispatches
-			# HELD while in-r lows were pending (the gate working — must be
-			# large during streaming). high_before_low_n = tier >= 2 highs
-			# that LANDED while not drained (measured at DISPATCH tier);
-			# _firstbuild = the NEW-COVERAGE subset (a first high build —
-			# only in-flight stragglers from legitimate open windows can
-			# land this way: <= TM pool depth per re-close); re-meshes of
-			# already-high chunks don't breach the ordering. gate_ok gates
-			# the first-build subset against 4 x pool depth.
-			"gate_holds_n": int(world.perf_high_gate_holds_n),
-			"high_before_low_n": int(world.perf_high_before_low_n),
-			"high_before_low_firstbuild_n": int(world.perf_high_before_low_firstbuild_n),
-			"gate_reclose_n": int(world.perf_gate_reclose_n),
-			"gate_ok": int(world.perf_high_before_low_firstbuild_n) <= 24,
 			"wave": wave,
 			"air_chunk_test": air_test,
 			"height_ok": bool(h0["height_ok"]) and bool(h1["height_ok"]),
@@ -13377,7 +13357,6 @@ func _r16_test(spawn: Vector3) -> void:
 			"low_built_n": int(world.low_built_n),
 			"low_rebuilds_n": int(world.low_rebuilds_n),
 			"low_upgrades_n": int(world.low_upgrades_n),
-			"low_fog_boxes_n": int(world.low_fog_boxes_n),
 			# AC-0236 part 2 / AC-0250: the low-lane threading evidence.
 			# low_emit_cpp = the C++ emits completed on the TM pool (the
 			# worker path); low_enqueue_n = dispatches; low_handoff_n = the
@@ -13432,8 +13411,8 @@ func _r16_test(spawn: Vector3) -> void:
 		# radius + the R16 top-up at the arm's first recenter). ring_cols
 		# / target = the sizing inputs at the arm's radius (ring = the
 		# columns entering the circle per 1-chunk recenter pass; target =
-		# ~2 rings of columns + their slab MI demand + their fog+cap MM
-		# pairs). burst_grows = the on-demand growth across the INITIAL
+		# ~2 rings of columns + their slab MI demand). burst_grows = the
+		# on-demand growth across the INITIAL
 		# circle fill (the whole ~797-column circle, far past the 2-ring
 		# prewarm — it grows the pools once, by design); fly4_grows /
 		# fly50_grows = the growth DURING the sustained fly-forwards —
@@ -13550,9 +13529,9 @@ func _r16_dirty_delta(a: Dictionary, b: Dictionary) -> Dictionary:
 	return d
 
 
-# AC-0248: world._pool_targets_for's [mi, mm, col] as a JSON dict.
+# AC-0248: world._pool_targets_for's [mi, col] as a JSON dict.
 func _pool_targets_for_dict(t: Array) -> Dictionary:
-	return {"mi": int(t[0]), "mm": int(t[1]), "col": int(t[2])}
+	return {"mi": int(t[0]), "col": int(t[1])}
 
 
 # AC-0248: the pool GROW COUNTERS (on-demand checkouts past the prewarm)
@@ -13560,7 +13539,6 @@ func _pool_targets_for_dict(t: Array) -> Dictionary:
 func _pool_snap() -> Dictionary:
 	return {
 		"mi": int(world.perf_pool_mi_grows_n),
-		"mm": int(world.perf_pool_mm_grows_n),
 		"col": int(world.perf_pool_col_grows_n),
 	}
 
@@ -13568,7 +13546,6 @@ func _pool_snap() -> Dictionary:
 func _pool_grow_delta(a: Dictionary, b: Dictionary) -> Dictionary:
 	return {
 		"mi": int(b["mi"]) - int(a["mi"]),
-		"mm": int(b["mm"]) - int(a["mm"]),
 		"col": int(b["col"]) - int(a["col"]),
 	}
 
@@ -13608,9 +13585,9 @@ func _pool_live_stats() -> Dictionary:
 # AC-0231 rewrite: the far-LOD placeholder composition at the sample
 # instant, counted PER SLAB — the data chunks OUTSIDE the render circle
 # (resident, face 0/1): every NON-AIR slab (c.data[si] != null) must be
-# covered by its high (mesh_built), its per-slab fog box (fog_slabs), or
-# its per-slab 4x4x4 low (low_slabs). far_visible = the covered-slab count
-# (the "all fog per non-air slab out to render distance" numerator).
+# covered by its high (mesh_built) or its per-slab 4x4x4 low
+# (low_slabs). far_visible = the covered-slab count (the "all low per
+# non-air slab out to render distance" numerator).
 func _r16_lod_far() -> Dictionary:
 	# AC-0261: the cap-less contract — a far non-air slab (past the TAXI
 	# render edge — the data-only region) is HIGH / LOW (a catch-up
@@ -13620,7 +13597,6 @@ func _r16_lod_far() -> Dictionary:
 	# 0).
 	var n := 0
 	var slabs := 0
-	var fog := 0
 	var low := 0
 	var high := 0
 	var pending := 0
@@ -13713,21 +13689,19 @@ func _r16_lod_far() -> Dictionary:
 				high += 1
 			elif c.has_low_si(si):
 				low += 1
-			elif c.has_fog_si(si):
-				fog += 1
 			elif world.queued_keys.has(key):
 				pending += 1  # AC-0257: queued — the low lane will build it
 			else:
 				holes += 1
-	return {"far_n": n, "far_slabs": slabs, "far_fog": fog, "far_low": low, "far_high": high, "far_pending": pending, "far_holes": holes, "far_visible": fog + low + high, "far_capsule_n": far_capsule_n}
+	return {"far_n": n, "far_slabs": slabs, "far_low": low, "far_high": high, "far_pending": pending, "far_holes": holes, "far_visible": low + high, "far_capsule_n": far_capsule_n}
 
 
 # AC-0231 in-r pre-low evidence: the INSIDE-circle PENDING set (data
 # landed, no high mesh yet). Every non-air slab of a pending chunk must
 # carry a placeholder — uncovered == 0 is the "no empty space inside r"
-# contract. inr4 (mid-fly) reports the low/fog split: the tier-ordered
-# in-r pass should have most pending slabs at LOW already (it outruns the
-# high completions), with only the just-landed chunks still at fog.
+# contract. inr4 (mid-fly) reports the low split: the lane should have
+# most pending slabs at LOW already (it outruns the high completions),
+# with only the just-landed chunks still unplaced.
 func _r16_lod_inr() -> Dictionary:
 	# AC-0261: the cap-less contract — an in-edge non-air slab of a
 	# not-yet-meshed chunk is LOW (the visible band [medium_start_r, rr),
@@ -13738,7 +13712,6 @@ func _r16_lod_inr() -> Dictionary:
 	# or a HOLE (neither meshed nor queued — lost work, must stay 0).
 	var n := 0
 	var slabs := 0
-	var fog := 0
 	var low := 0
 	var air := 0  # AC-0262: terminal (all-air) slabs — see the count below
 	var edge := 0  # AC-0262: the boundary ring (taxi == rr) — the data-only
@@ -13771,8 +13744,6 @@ func _r16_lod_inr() -> Dictionary:
 			slabs += 1
 			if c.has_low_si(si):
 				low += 1
-			elif c.has_fog_si(si):
-				fog += 1
 			elif int(c.low_failed.get(si, -1)) == int(c.data_gen):
 				air += 1  # AC-0262: terminal mark (sampled all-air at this
 				         # data_gen — the wave advanced past it by design;
@@ -13783,15 +13754,14 @@ func _r16_lod_inr() -> Dictionary:
 				pending += 1  # AC-0257: queued — the low/high lane will build it
 			else:
 				holes += 1
-	return {"inr_n": n, "inr_slabs": slabs, "inr_fog": fog, "inr_low": low, "inr_air": air, "inr_edge": edge, "inr_pending": pending, "inr_holes": holes}
+	return {"inr_n": n, "inr_slabs": slabs, "inr_low": low, "inr_air": air, "inr_edge": edge, "inr_pending": pending, "inr_holes": holes}
 
 
 # AC-0231 rewrite: the PER-SLAB LOD geometry checks.
-# height_ok  = every fog instance is a unit-scale box at its slab's Y
-#              (origin (0, si*16, 0)) and every per-slab low mesh sits
-#              slab-local 0..16 at (0, si*16, 0) — the LOD is per slab at
-#              its Y, never the whole 384 column.
-# air_ok     = no air slab (data null) carries a fog or low instance.
+# height_ok  = every per-slab low mesh sits slab-local 0..16 at
+#              (0, si*16, 0) — the LOD is per slab at its Y, never
+#              the whole 384 column.
+# air_ok     = no air slab (data null) carries a low instance.
 # no_giant_ok= a slab whose 4x4x4 coarse grid is NOT fully solid must not
 #              mesh as a 16x16x16 giant box (6 full-face quads at 16 span)
 #              — sparse slabs stay small quads with shape. quad_span
@@ -13969,8 +13939,6 @@ func _r16_lod_slabcheck() -> Dictionary:
 	var sln: int = int(_ChunkScriptM.slab_n())
 	var hms: float = float(world._tm_ms_full.get("h", Data.ATLAS_PX))
 	var rects: Dictionary = world._tm_ms_full.get("rects", {})
-	var fog_n := 0
-	var fog_ok := true
 	var low_n := 0
 	var low_ok := true
 	var far_low_n := 0  # AC-0312: the payload lows (the h-only form)
@@ -13985,10 +13953,6 @@ func _r16_lod_slabcheck() -> Dictionary:
 	var low_pos_fail := 0
 	var low_aabb_fail := 0
 	var low_null_fail := 0
-	var fog_null_fail := 0
-	var fog_count_fail := 0
-	var fog_mesh_fail := 0
-	var fog_aabb_fail := 0
 	var box_legal := 0
 	var box_bad := 0
 	var uv_zero_fail := 0
@@ -14012,11 +13976,11 @@ func _r16_lod_slabcheck() -> Dictionary:
 		# is the whole low-LOD population.
 		# air slabs must carry NO placeholder instance.
 		if c.data.is_empty():
-			if bool(c.has_fog()) or bool(c.has_low()):
+			if bool(c.has_low()):
 				air_with_lod += 1
 		else:
 			for si in range(c.data.size()):
-				if c.data[si] == null and (c.has_fog_si(si) or c.has_low_si(si)):
+				if c.data[si] == null and c.has_low_si(si):
 					# AC-0312: a FAR column's null slabs are the h-only
 					# form — the payload low is the designed state (the
 					# air rule is for null slabs inside a data column).
@@ -14031,10 +13995,10 @@ func _r16_lod_slabcheck() -> Dictionary:
 						# re-lower drops it through the air bookkeeping —
 						# and a demote re-lowers it from the no-cave
 						# payload. Same class as the uv time capsules:
-						# reported (air_capsule_n), not gated. Only a FOG or
-						# a FRESH low (attached at the current stamp+tier —
-						# the lane built it ON AIR, a real bookkeeping
-						# failure the handoff guards are meant to prevent)
+						# reported (air_capsule_n), not gated. Only a FRESH
+						# low (attached at the current stamp+tier — the lane
+						# built it ON AIR, a real bookkeeping failure the
+						# handoff guards are meant to prevent)
 						# violates the rule.
 						var _ls: Array = []
 						var _lt: int = -1
@@ -14043,37 +14007,10 @@ func _r16_lod_slabcheck() -> Dictionary:
 							_lt = int(c.low_tiers.get(si, -1))
 						var _fresh: bool = bool(c.has_low_si(si)) and _ls == c.stamp() \
 								and _lt == int(world._lod_tier_of(dx, dz))
-						if bool(c.has_fog_si(si)) or _fresh:
+						if _fresh:
 							air_with_lod += 1
 						else:
 							air_capsule_n += 1
-		# FOG: one pre-baked 16^3 box instance per non-air slab at its Y.
-		# (This engine build's MultiMesh does not expose instance-transform
-		# readback under the dummy renderer, so the check is data-side: the
-		# instance COUNT must equal the fogged-slab count and the instance
-		# mesh must be the shared pre-baked 16^3 box — the per-slab Y
-		# placement is deterministic from fog_slabs in _fog_sync.)
-		if c.fog_instance != null:
-			var mm: MultiMesh = c.fog_instance.multimesh
-			if mm == null:
-				fog_ok = false
-				fog_null_fail += 1
-			else:
-				if int(mm.instance_count) != int(c.fog_slabs.size()):
-					fog_ok = false
-					fog_count_fail += 1
-				fog_n += int(mm.instance_count)
-				if mm.mesh != world._low_fog_mesh:
-					fog_ok = false
-					fog_mesh_fail += 1
-				elif world._low_fog_mesh != null:
-					var bb: AABB = world._low_fog_mesh.get_aabb()
-					if not (is_equal_approx(bb.size.x, 16.0) and is_equal_approx(bb.size.y, 16.0) \
-							and is_equal_approx(bb.size.z, 16.0) \
-							and is_equal_approx(bb.position.x, 0.0) and is_equal_approx(bb.position.y, 0.0) \
-							and is_equal_approx(bb.position.z, 0.0)):
-						fog_ok = false
-						fog_aabb_fail += 1
 		# AC-0257: the AC-0234 black-cap checks are gone (no caps).
 		# LOW: a per-slab 4x4x4 mesh, slab-local 0..16, at (0, si*16, 0).
 		for j in range(int(c.low_slabs.size())):
@@ -14221,17 +14158,12 @@ func _r16_lod_slabcheck() -> Dictionary:
 						float(ff["got"][0]), float(ff["got"][1]), float(ff["got"][2]), float(ff["got_a"]),
 						float(ff["want"][0]), float(ff["want"][1]), float(ff["want"][2]), float(ff.get("want_a", 1.0))])
 	return {
-		"fog_n": fog_n,
 		"low_n": low_n,
 		"far_low_n": far_low_n,  # AC-0312: the payload lows (grid checks skipped)
-		"height_ok": fog_ok and low_ok,
+		"height_ok": low_ok,
 		"low_pos_fail": low_pos_fail,
 		"low_aabb_fail": low_aabb_fail,
 		"low_null_fail": low_null_fail,
-		"fog_null_fail": fog_null_fail,
-		"fog_count_fail": fog_count_fail,
-		"fog_mesh_fail": fog_mesh_fail,
-		"fog_aabb_fail": fog_aabb_fail,
 		"air_with_lod": air_with_lod,
 		"air_ok": air_with_lod == 0,
 		"air_capsule_n": air_capsule_n,  # AC-0329: stale low capsules on air slabs (reported, not gated)
@@ -15120,8 +15052,8 @@ func _r16_stream_phase(cam: Camera3D, base: Vector3) -> Dictionary:
 # AC-0231 rewrite: targeted, NON-VACUOUS air-chunk test. The R16 terrain
 # has no natural air columns, so the air_ok count alone could be 0/0.
 # Here we take a REAL far chunk, clear its data to all-air (top = -1),
-# and verify the LOD path (the fog wave AND the per-slab low build)
-# creates NO placeholder for it — then restore.
+# and verify the LOD path (the per-slab low build) creates NO
+# placeholder for it — then restore.
 func _r16_air_chunk_test() -> Dictionary:
 	var pcx := int(world.last_pcx)
 	var pcz := int(world.last_pcz)
@@ -15149,9 +15081,6 @@ func _r16_air_chunk_test() -> Dictionary:
 		air.append(null)
 	c.data = air
 	c.top = -1  # all-air column (the LOD must refuse it)
-	# the fog wave must NOT create a placeholder for an air column
-	world._low_fog_for(c)
-	var fog_created: bool = c.has_fog()
 	# the per-slab low build must NOT create a low for an air column
 	world._low_build(c)
 	var low_created: bool = bool(c.low_built) or int(c.low_instances.size()) > 0
@@ -15161,19 +15090,18 @@ func _r16_air_chunk_test() -> Dictionary:
 		"ran": true,
 		"cx": int(c.cx),
 		"cz": int(c.cz),
-		"fog_created": fog_created,
 		"low_created": low_created,
-		"ok": (not fog_created) and (not low_created),
+		"ok": not low_created,
 	}
 
 
 # AC-0231 fix3 (+ AC-0252 offload, + AC-0257 bake order, AC-0313): the
-# WAVE ORDER check — drive the WAVE 2 global slab wave through the REAL
+# ORDER check — drive the global slab wave through the REAL
 # dispatch path (world._low_pick_slab + world._low_dispatch_slab, no game
 # frames between; the worker handoff is pumped with the same world._low_poll
-# the game loop runs) and record the pick sequence. The wave is GLOBAL (all
-# fog -> all low -> all high, across ALL columns — not one whole column
-# before the next). AC-0313: the order is (taxi, layer) inside-out — the
+# the game loop runs) and record the pick sequence. The wave is GLOBAL
+# (across ALL columns — not one whole column before the next).
+# AC-0313: the order is (taxi, layer) inside-out — the
 # innermost wave ring first, and within a ring the slabs land layer by
 # layer ACROSS the ring's columns (equal-taxi columns interleave A0, B0,
 # A1, B1, ...). The contract:
@@ -15194,7 +15122,7 @@ func _r16_air_chunk_test() -> Dictionary:
 # pool-saturated (verdict 2) is pumped to its handoff before the next
 # recorded pick, so each recorded slab is attached before the next is
 # dispatched — the same pending-set walk the old synchronous build
-# produced. The terminal-fog slabs (sampled all-air) end the sequence —
+# produced. The terminal slabs (sampled all-air) end the sequence —
 # the wave advanced past them by design.
 func _r16_wave_test() -> Dictionary:
 	var seq: Array = []
@@ -15254,9 +15182,9 @@ func _r16_wave_test() -> Dictionary:
 				world._low_poll(16.7)
 				pguard += 1
 	if seq.is_empty():
-		# the WAVE 2 global wave already DRAINED (every far non-air slab
+		# the global wave already DRAINED (every far non-air slab
 		# already holds its low at sample time — the wave completed, which
-		# is exactly the requirement: all fog -> all low across all columns)
+		# is exactly the requirement: all low across all columns)
 		return {"ran": true, "ok": true, "builds": 0, "drained_at_sample": true,
 			"layer_monotone_ok": true, "first_layer_columns": 0, "layers": {}}
 	# AC-0257 (AC-0313): the player slab is constant across the test (no
@@ -15602,9 +15530,9 @@ func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 	# Terminal pop check: a previously-built chunk still unbuilt at phase
 	# end. AC-0275: a DEMOTED chunk (the high-band exit frees its high
 	# meshes on recenter - the band-exit regeneration) is not a pop while
-	# its slabs are re-covered (a fog veil or a low box) or still pending
-	# (the wave owes them) - only the slabs with no instance of any kind
-	# and no obligation count as a true pop.
+	# its slabs are re-covered (a low box) or still pending (the wave
+	# owes them) - only the slabs with no instance of any kind and no
+	# obligation count as a true pop.
 	var lost := 0
 	for key in built_set:
 		var c: Node3D = world.chunks.get(key)
@@ -15616,7 +15544,7 @@ func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 				continue
 			var s3 = c.slabs[si]
 			if s3.mesh_instance == null and s3.fluid_instance == null and s3.flora_instance == null \
-					and not (c.low_mask & (1 << si)) and not (c.fog_mask & (1 << si)) \
+					and not (c.low_mask & (1 << si)) \
 					and int(c.low_failed.get(si, -1)) != int(c.data_gen):
 				holes_c += 1
 		if holes_c > 0:
@@ -15691,7 +15619,7 @@ func _wprof_ring_read() -> Dictionary:
 	# AC-0262: the LOW sub-stages join the read (sub-part breakdown of the
 	# low lane for the perf hunt).
 	for nm in ["DRAIN", "LOW", "HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "MISC",
-			"LOW_POLL", "LOW_INR", "LOW_WAVE", "LOW_PICK", "STAR"]:  # AC-0283 P2
+			"LOW_POLL", "STAR"]:  # AC-0283 P2
 		d["stages"][nm] = _wprof_snap_stage(p.get(nm, {}))
 	return d
 
@@ -15866,7 +15794,7 @@ func _wprof_test(spawn: Vector3) -> void:
 		"stages": stages,
 		"frame": frame,
 		"partition": ["DRAIN", "LOW", "HANDOFF", "IO", "RECENTER", "MISC"],
-		"substages": ["FACELIGHT", "RESCORE", "MESHATTACH", "LOW_POLL", "LOW_INR", "LOW_WAVE", "LOW_PICK"],
+		"substages": ["FACELIGHT", "RESCORE", "MESHATTACH", "LOW_POLL"],
 		"recon_raw_pct": recon_raw_pct,
 		"recon_display_pct": int(roundf(recon_display_pct * 10.0)) / 10.0,
 		"misc_neg_max_us": neg_max,
@@ -20242,7 +20170,6 @@ func _nofallback_test(spawn: Vector3) -> void:
 			continue
 		le_tried += 1
 		var sis: Array = c.low_slabs.duplicate()
-		sis.append_array(c.fog_slabs)
 		for si in sis:
 			var si2 := int(si)
 			if si2 < 0 or si2 >= c.data.size() or c.data[si2] == null:

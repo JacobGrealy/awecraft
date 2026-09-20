@@ -348,7 +348,7 @@ Match these; do not improvise a different approach in a task.
   (taxi ≤ 2) is always inside the real band: the band itself is the footing guarantee.
   The AC-0263 Y-window, the AC-0283 P3 walk regime, and the tier-0 set are all GONE, and
   AC-0335 removed the second scheduler with them (`_low_step` keeps only the attach
-  side it owns — `_low_poll`: the cap swap, the fog swap, the all-air terminal marks,
+  side it owns — `_low_poll`: the cap swap, the all-air terminal marks,
   the per-slab tier stamps — plus the re-lower debt step): after the player is active
   the drain is ALWAYS the ONE wall-clock paced unit budget (surviving pacing model:
   `LOW_WAVE_PACE_MS` 3.5 ms/unit + `LOW_WAVE_FRAME_CAP` 8/frame — both pre-unification

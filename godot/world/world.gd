@@ -123,28 +123,18 @@ const FLUID_DIRS := [
 	[0, -1],
 ]
 
-const BUILD_FAST_US := 15000
-const DRAIN_FRAME_BUDGET_US := 30000
 const DRAIN_MS_DEFAULT := 30
 const REC_SLICE_BUDGET_MS := 8
 const REC_UNITS_PER_FRAME := 2048
-# AC-0231 fps-tuning: the steady-state DRAIN UNIT pace (one unit = one gen
-# enqueue or one mesh dispatch) is WALL-CLOCK — the chunk generation/build
-# pace is identical at 30 fps and 60 fps (the player must never out-fly
-# generation by having a low frame rate; a slow machine lowers render
-# distance). At 60 fps these reproduce the old per-frame budgets exactly
-# (fast = 2 units/frame = 1 per 8.3 ms, slow = 1/frame = 1 per 16.7 ms);
-# at 30 fps the accumulator grows 2x/frame and the per-frame cap carries
-# the same wall-clock rate. Startup (12/frame) and the loading window keep
-# their own per-frame budgets (one-shot spawn contract / AC-0178 pacing).
-const DRAIN_UNIT_PACE_MS := 8.0        # fast: last dispatch < BUILD_FAST_US (125/s wall clock)
-const DRAIN_UNIT_PACE_SLOW_MS := 16.0  # slow: expensive dispatch (old 1/frame governor, 62.5/s)
-const DRAIN_UNITS_FRAME_CAP := 4       # per-frame unit cap (hitch spike guard; at 30 fps the
-                                       # acc banks 2x/frame and needs 4/frame to hold the pace)
-                                       # AC-0237 phase 2: retune TESTED (cap 6) and REVERTED -
-                                       # owed stragglers returned (owed_n 0 -> 4) with no fill
-                                       # gain (build_ms -1.4 percent, p95 flat); see TASKS AC-0237
-                                       # comment id 3.
+# AC-0335: the drain is the ONLY scheduler and its pacing is the surviving
+# wall-clock unit budget — LOW_WAVE_PACE_MS per unit (accumulated on the
+# frame wall clock) + LOW_WAVE_FRAME_CAP units/frame (defined below, next
+# to the low-attach machinery it paces). The old fast/slow
+# DRAIN_UNIT_PACE_* / DRAIN_UNITS_FRAME_CAP governor is GONE (the
+# unification kept the wall-clock pair — identical pace at 30 and 60 fps
+# is what AC-0231's fps-independence constraint required). The loading
+# window keeps its own LOAD_* per-frame budgets (one-shot spawn contract
+# / AC-0178 pacing).
 const DRAIN_DT_CLAMP_MS := 100.0       # clamp the wall-clock frame sample (pause/hitch)
 # AC-0313: the AC-0283 P3 walk-regime constants (WALK_CROSS_PERIOD_MS,
 # DRAIN_STARTUP_PASS_BUDGET_MS, DRAIN_DEFER_MAX_PER_FRAME) are GONE — the
@@ -627,12 +617,8 @@ func _entry_best_pending(c: Node3D) -> int:
 			# or built at a different band tier).
 			if c.low_stamps.get(si, []) == c.stamp() and c.low_tiers.get(si, -1) == tier:
 				continue
-		elif FOG_WAVE_ON:
-			# fog on: pending = fogged and not terminal-marked.
-			if not c.has_fog_si(si) or int(c.low_failed.get(si, -1)) == int(c.data_gen):
-				continue
 		elif int(c.low_failed.get(si, -1)) == int(c.data_gen):
-			continue  # terminal-fog mark (sampled all-air at this data_gen)
+			continue  # terminal all-air mark (sampled all-air at this data_gen)
 		return si
 	return -1
 
@@ -651,12 +637,8 @@ func _low_slab_pending_at(c: Node3D, si: int, tier: int) -> bool:
 		# a LOW slab is pending only when stale (edited after the low,
 		# or built at a different band tier).
 		return not (c.low_stamps.get(si, []) == c.stamp() and c.low_tiers.get(si, -1) == tier)
-	elif FOG_WAVE_ON:
-		# fog on: pending = fogged and not terminal-marked.
-		return c.has_fog_si(si) and int(c.low_failed.get(si, -1)) != int(c.data_gen)
-	else:
-		# terminal-fog mark (sampled all-air at this data_gen).
-		return int(c.low_failed.get(si, -1)) != int(c.data_gen)
+	# terminal all-air mark (sampled all-air at this data_gen).
+	return int(c.low_failed.get(si, -1)) != int(c.data_gen)
 
 # AC-0262: per-chunk cache of the _entry_best_pending result (the wprof
 # storm hunt: the 32-probe sweep is ~13 us/visit and dominated the slab
@@ -668,7 +650,7 @@ func _low_slab_pending_at(c: Node3D, si: int, tier: int) -> bool:
 # valid until the fingerprint moves (completions remove pendingness, they
 # never add a closer pending slab; only a data landing adds slabs, and
 # that bumps data_gen). Low/fog state changes that do NOT bump the
-# fingerprint (an attach, a drop, an air mark, a fog flip) must erase the
+# fingerprint (an attach, a drop, an air mark) must erase the
 # entry — every such site calls _low_probe_invalidate.
 var _low_probe_cache: Dictionary = {}
 
@@ -809,7 +791,7 @@ func _grid_score(e: Dictionary) -> float:
 	# completion stamps (an unmaterialized band-A column's first slab is
 	# the mat entry — the hslab probe carries that special case), so band
 	# A now gets a real layer rank instead of a constant 0; rings 2/3
-	# (band B/C, the avg emit) probe the low/fog state (the AC-0262
+	# (band B/C, the avg emit) probe the low state (the AC-0262
 	# cached probe).
 	var in_high := c != null and _lod_tier_of(dx, dz) <= 1
 	if c != null and not c.data.is_empty():
@@ -848,14 +830,11 @@ func note_sim_distance() -> void:
 
 # AC-0263: the "mid LOD distance" (Settings "medium_start") changed — the
 # HIGH band's outer edge moved. Entries crossing the edge change their
-# band tier, so re-stamp the queue's stamps and invalidate the wave's
-# cached none-verdicts (the live tier is recomputed at probe time, so the
-# boundary itself needs no stamp — the kick covers the ordering).
+# band tier, so re-stamp the queue's stamps (the live tier is recomputed
+# at probe time, so the boundary itself needs no stamp — the kick covers
+# the ordering).
 func note_medium_start() -> void:
 	medium_start_r = maxi(0, int(Settings.values.get("medium_start", 8)))
-	_low_none_key = ""
-	_low_slab_none_key = ""
-	_low_inr_invalidate()
 	_rescore_kick()
 	_pool_touch()  # AC-0335: the tier 1<->2 edge re-pends/completes slab work on both lanes — the pick cache must re-scan
 
@@ -929,64 +908,32 @@ func _rescore_step() -> void:
 	_wprof_add(WP_RESCORE, Time.get_ticks_usec() - _wpt)
 
 # --- AC-0231 rewrite (fix3): the far-LOD low-res placeholder (the AC-0233
-# consumer). A SEPARATE lane: it never touches the ThreadGen pool4 /
-# ThreadMesh pool6.
-# GLOBAL WAVES — all fog -> all low -> all high, ACROSS ALL COLUMNS (the
-# per-column sequential fill — column 1 fully fog->low->high, then column
-# 2 — is gone):
-# WAVE 1 — FOG (data landing, _low_fog_for): every candidate far column
-# with no mesh gets ONE pre-baked 16x16x16 fog-tinted box INSTANCE per
-# NON-AIR slab at the slab's Y (the slab BOTTOM: si*16, so the box spans
-# si*16..si*16+16) — the sparse null check on c.data (null = air) — on
-# EVERY data landing (sync gen / burst / threadgen handoff / disk load /
-# materialize). So every column with data is fogged IMMEDIATELY, before
-# any low of it exists: all fog first, across all columns. SEPARATE
-# instances (a shared MultiMesh over the ONE pre-baked box — NOT merged
-# into one column mesh), extremely cheap (just instancing the same
-# pre-baked mesh). Tier 0 (the column under the player) skips the wave
-# straight to high, so you never fall through.
-# WAVE 2 — LOW (per-frame _low_step): TWO WALL-CLOCK paced lanes (the
-# same build pace at 30-60 fps): (2a) the in-r pre-low — INSIDE-circle
-# pending chunks fully lowered in the AC-0233 (tier, taxi) order, the
-# same order the high builds land, so the low frontier leads the high
-# frontier; (2b) the far global SLAB wave — OUTSIDE the circle, the
-# SMALLEST slab index FIRST across all columns (all si=0 slabs first,
-# then all si=1, ... — ties by rank), never one whole column before the
-# next. Each pending slab gets its band-tier AVERAGE-COLOR placeholder
-# (AC-0252: MED 8x8x8 inside the low-start boundary, LOW 4x4x4 outside
-# it) — and the grid sample + emit of it run on the TM WORKER POOL (the
-# C++ low_emit_avg on a value-copied slab column: ZERO generation on the
-# main thread). The main thread only dispatches (a ~20 KB slab copy +
-# task enqueue) and, when the result lands, does the scene-tree attach +
-# the per-slab bookkeeping (the _low_handoff); a slab whose DATA is null
-# has nothing to emit — its air bookkeeping runs inline (_low_air_slab).
-# The TEXTURED 4x4x4 emit (64 coarse cells of 4x4x4 blocks, the 2D
-# greedy merge of same-type neighbors) stays in the tree, DORMANT with
-# the band split (the A/B reference). TEXTURE MAPPING (fix3): blocks
-# WITH a merged-atlas strip (solid, non-cutout) use REPEATING UVs — 31px
-# per world block, the texture repeats 4x across each 4-block quad (the
-# qwrite_merged convention — NOT stretched, and the 512x128 strip always
-# covers the span); blocks WITHOUT a strip (non-solid/cross/cutout: water,
-# leaves, flowers, torch, lava, banana) sample exactly ONE 32px tile (31px
-# span) from the original atlas rect — the high mesh's plain-branch
-# convention (mesh.cpp) — because a repeating span from a plain rect walks
-# 3+ tiles past the block's own tile into its atlas neighbors (the "wrong
-# texture mapping" the user saw on the far leaves). The low REPLACES the
-# fog per slab at its Y (the fog instance for that slab is freed, the low
-# replaces it).
-# WAVE 3 — HIGH (AC-0233 tiers): dirty edited first (1/frame), then
-# streaming (rewriting on debounced move) in tier order 0 (under you,
-# already high) -> sim radius (by taxi distance) -> the rest (by taxi
-# distance); separate tiered picks for gen vs mesh. AC-0335: ONE
-# scheduler (the drain's steady pass, the (taxi, layer) grid order) owns
-# the work of EVERY ring — the ring decides via _dispatch_column_work
-# (0/1 = the high slab build, 2/3 = the avg emit below) and a low-holding
-# column entering the real band is simply the next column whose ring
-# changed (the AC-0231 WAVE 3 idle catch-up is gone with the seam).
-# _low_step keeps the attach side it owns (_low_poll).
+# consumer). AC-0335: ONE scheduler — the drain's steady pass dispatches
+# every ring's work in the (taxi, layer) order (_dispatch_column_work:
+# rings 0/1 = the high slab build, 2/3 = the avg emit below); a
+# low-holding column entering the real band is simply the next column
+# whose ring changed. AC-0336: the (off) fog wave, the in-r pre-low lane,
+# and the WAVE 3 idle catch-up are GONE — the far fill is the drain's
+# ring-2/3 dispatch, paced by ONE wall-clock unit budget.
+# The per-slab avg emit runs on the TM WORKER POOL (the C++ low_emit_avg
+# on a value-copied slab column: ZERO generation on the main thread).
+# The main thread only dispatches (a ~20 KB slab copy + task enqueue)
+# and, when the result lands, does the scene-tree attach + the per-slab
+# bookkeeping (the _low_handoff); a slab whose DATA is null has nothing
+# to emit — its air bookkeeping runs inline (_low_air_slab).
+# TEXTURE MAPPING (fix3): blocks WITH a merged-atlas strip (solid,
+# non-cutout) use REPEATING UVs — 31px per world block, the texture
+# repeats 4x across each 4-block quad (the qwrite_merged convention —
+# NOT stretched, and the 512x128 strip always covers the span); blocks
+# WITHOUT a strip (non-solid/cross/cutout: water, leaves, flowers,
+# torch, lava, banana) sample exactly ONE 32px tile (31px span) from the
+# original atlas rect — the high mesh's plain-branch convention
+# (mesh.cpp) — because a repeating span from a plain rect walks 3+ tiles
+# past the block's own tile into its atlas neighbors (the "wrong texture
+# mapping" the user saw on the far leaves).
 # KEEP RULES: never downgrade built high at its Y to low (keep high until
-# freed per cand_since >= 2 after queue work); low and fog only for
-# never-built slabs. low_downgrade_n must stay 0.
+# freed per cand_since >= 2 after queue work); low only for never-built
+# slabs. low_downgrade_n must stay 0.
 const LOW_GRID := 4          # coarse cells per axis (4x4x4 = 64 cells/slab)
 const LOW_CELL_BLOCKS := 4   # world blocks per coarse cell (4*4 = 16 = 1 slab)
 # AC-0252: the MED tier — 8x8x8 samples per 16x16x16 slab; each sample is a
@@ -998,59 +945,15 @@ const LOW_CELL_BLOCKS := 4   # world blocks per coarse cell (4*4 = 16 = 1 slab)
 # per-block-face colors over its NON-AIR blocks (vertex colors, no UVs).
 const MED_GRID := 8
 const MED_CELL_BLOCKS := 2
-# the textured-low pass builds ONE candidate per frame (the rescan after
-# a build is the cost; 1/frame keeps ahead of the data landings, which
-# arrive at the TG rate — the far fill is data-limited, not build-limited).
-# AC-0231 fix3: the WAVE 2 global slab wave paces — a few slabs per frame
-# (the user-approved "one low per frame, or a few"). One slab build is ~0.3-
-# 0.7 ms main-thread (3 C++ row_bytes + the 4x4x4 greedy emit); 4/frame is
-# ~1-3 ms — half of what the old per-COLUMN build (all 8 slabs in one
-# frame, ~2-4 ms) cost, so the far fill keeps its pace while the ordering
-# goes global.
-# AC-0231 fps-tuning: ALL low-path pacing is WALL-CLOCK (not per-frame) —
-# "frame" is the render/main-loop frame (there is no separate logic tick),
-# and the game must build at the same wall-clock pace at 30 fps as at
-# 60 fps (a slow machine lowers render distance; it must never be able to
-# out-fly the build pipeline by having a low frame rate).
-const LOW_WAVE_PACE_MS := 3.5      # one far slab per 3.5 ms wall clock (~36 chunks/s,
-                                   # just above the ~33/s TG data-landing rate)
-const LOW_WAVE_FRAME_CAP := 8      # per-frame catch-up cap (8 x 0.7 ms = 5.6 ms max work;
-                                   # a stall never turns into a frame-killing catch-up)
-const LOW_UPGRADE_PER_FRAME := 1   # per-frame idle low->high dispatch (dispatch is cheap;
-                                   # the work runs on the TM workers)
-const LOW_IDLE_GRACE_FRAMES := 10  # consecutive no-work drain frames before upgrades
-const LOW_SCAN_CAP := 2048         # hard entry-visit cap for the low pick scan
-# AC-0231 in-r pre-low: the INSIDE-circle low lane (separate from the far
-# global slab wave). The tier-ordered pick (the AC-0233 (tier, taxi)
-# lexicographic score — the SAME order the TM high dispatch uses) fully
-# lowers one pending in-r chunk at a time. The budget is a FRACTION of the
-# measured frame wall time (clamped): a low build costs ~0.3-0.7 ms
-# main-thread per slab, so the pass lowers 1-2+ chunks per frame —
-# ~60-120+ low chunks/s wall clock vs the ~30 high-completions/s of the
-# 6-thread TM pool (100-300 ms each). The low frontier therefore stays
-# AHEAD of the high frontier in the same order at ANY frame rate (the
-# whole point: low is what renders fast enough to lead — the in-r visible
-# sequence is low-res textured -> high-res, never empty -> high). Tier 0
-# (under the player) is high only. The far wave (smallest si) owns
-# everything OUTSIDE the circle; the two lanes are disjoint.
-const LOW_INR_BUDGET_FRAC := 0.35  # share of the frame wall time the in-r pass may spend
-const LOW_INR_BUDGET_MIN_MS := 2.0
-const LOW_INR_BUDGET_MAX_MS := 8.0
-# AC-0231 high/low order gate: while ANY in-r chunk still has a pending
-# low (fog not yet lowered / a stale low to rebuild), the tier >= 2 HIGH
-# dispatch is HELD (the drain's build pass and the WAVE 3 catch-up both
-# check the _low_inr_drained flag) — only the tier 0 + 1 chunks (under the
-# player + the sim radius) keep building high. The freed budget is
-# REDIRECTED to the in-r low pass (the BUSY budget below: the gate is not
-# "high waits" — it is "that time goes to the low, so the low goes
-# faster"). The flag flips to drained only after the pending set stayed
-# empty for LOW_INR_STABLE_MS wall clock (no flap between data landings —
-# under continuous streaming the gate stays closed: the low covers the
-# circle, and the tier >= 2 high fills in after the player stops).
-const LOW_INR_BUSY_FRAC := 0.5     # budget share while the gate is closed (low is the frontier)
-const LOW_INR_BUSY_MAX_MS := 12.0
-const LOW_INR_STABLE_MS := 200.0   # continuous-drain window before the gate opens
-const LOW_INR_SCAN_CAP := 16384    # the in-r scan visits up to this many entries (r50's
+# AC-0312/AC-0335: the far fill is data-limited, not build-limited — the
+# wall-clock pace below keeps up with the TG data landings (~33/s) at
+# any frame rate (AC-0231 fps-independence: the same pace at 30 and
+# 60 fps). LOW_WAVE_PACE_MS is the drain's unit pace (one unit = one
+# dispatch); LOW_WAVE_FRAME_CAP the per-frame catch-up cap.
+const LOW_WAVE_PACE_MS := 3.5      # one dispatch unit per 3.5 ms wall clock (~36 units/s,
+                                    # just above the ~33/s TG data-landing rate)
+const LOW_WAVE_FRAME_CAP := 8      # per-frame catch-up cap (a stall never turns into a
+                                    # frame-killing catch-up)
 const LOW_TASK_CAP := 64           # AC-0236 part 2 / AC-0250: max in-flight low EMIT
                                    # tasks (64 x ~20 KB slab copies = ~1.3 MB; a
                                    # saturated pool leaves the slab PENDING — the
@@ -1065,28 +968,12 @@ const LOW_POLL_BUDGET_MS := 4.0    # AC-0236 part 2: the per-frame wall-clock ca
 # (see _lod_tier_of). low_start_r stays for settings/harness compat
 # (recomputed by apply_low_start; it no longer selects a draw tier).
 var low_start_r := 27
-var _low_fog_mat: StandardMaterial3D = null
-var _low_fog_mesh: ArrayMesh = null  # pre-baked 16x16x16 box (shared by every MultiMesh)
-var _low_fog_color := Color(0.55, 0.68, 0.85)
 var _low_tl: Dictionary = {}      # id*256+fi -> Vector2 (the tile top-left in the ms canvas)
-var _drain_units_last := 0        # units the last _drain_build_queue dispatched (the idle gate)
-var _low_none_key := ""           # (pool_ver, pcx, pcz) of the last no-candidate scan
-var _low_idle_frames := 0         # consecutive heavy-pipeline-idle frames
-var low_fog_boxes_n := 0          # fog box slab instances currently live
-var low_fog_chunks_n := 0         # chunks currently holding >= 1 fog slab (live)
+var _drain_units_last := 0        # units the last _drain_build_queue dispatched (the r16 arm's idle-wait predicate)
 var low_built_n := 0              # per-slab textured-low builds (cumulative)
 var low_rebuilds_n := 0           # per-slab stale (edited) low rebuilds
 var low_upgrades_n := 0           # high landings that replaced a placeholder (the catch-up)
 var low_downgrade_n := 0          # MUST stay 0 (keep-high — high never downgrades to low)
-# AC-0231 order-gate evidence: perf_high_gate_holds_n = tier >= 2 high
-# dispatches HELD by the gate (it was doing its job); perf_high_before_low_n
-# = tier >= 2 HIGH HANDOFFS that LANDED while in-r lows were still pending
-# (gate leakage — only tasks already in flight at the moment the gate
-# re-closed can land this way; the dispatch itself is gated).
-var perf_high_gate_holds_n := 0
-var perf_high_before_low_n := 0
-var perf_high_before_low_firstbuild_n := 0
-var perf_gate_reclose_n := 0
 # the max slab-local textured-low AABB height ever built (<= 16 by
 # construction: each low mesh is ONE slab, slab-local 0..16).
 var low_max_h := 0.0
@@ -1095,8 +982,8 @@ var low_max_h := 0.0
 # low_enqueue_n = slabs dispatched to a worker; low_emit_cpp = C++ emits
 # completed on the pool; low_handoff_n = main-thread attaches;
 # low_drop_stale_n = dropped results (data changed mid-flight / chunk
-# gone — the slab is still PENDING in the chunk state, so the in-r pass
-# or the far wave re-picks it next frame — no re-queue logic needed);
+# gone — the slab is still PENDING in the chunk state, so the drain's
+# steady pass re-picks it next frame — no re-queue logic needed);
 # low_sync_fallbacks_n = ALWAYS 0 since AC-0250 (the main-thread sync
 # fallback is gone — a saturated pool leaves the slab PENDING instead);
 # the variable survives as a regression gate: any increment is a bug.
@@ -1127,43 +1014,13 @@ var _low_ms_snap_dirty := true
 # AC-0257: the AC-0234 vertical window (black caps, kept masks, the
 # owed-superset rebuilds, the scoped re-entry regens) is GONE — every
 # slab in the horizontal radius is wanted at its band LOD; the layered
-# bake (P3) only orders them. The (off) fog wave stays behind its flag.
+# bake (P3) only orders them.
+# AC-0336: the (off) fog wave is GONE with its flag — FOG_WAVE_ON was
+# const false and every _fog_ensure_slab caller was gated by it, so
+# nothing ever fed the fog_slabs bookkeeping in the shipped path. The
+# pre-baked 16x16x16 fog box, its MultiMesh instance pool, and the cap
+# reuse are gone with it.
 # =====================================================================
-const FOG_WAVE_ON := false
-
-# AC-0231 rewrite: the pre-baked 16x16x16 fog box — ONE shared ArrayMesh
-# (24 verts, 6 faces, CCW outwards — the same quad-winding the chunk meshes
-# use), instanced per non-air slab by each far chunk's MultiMesh.
-func _low_fog_bake() -> void:
-	_low_fog_mat = StandardMaterial3D.new()
-	_low_fog_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_low_fog_mat.cull_mode = BaseMaterial3D.CULL_BACK
-	_low_fog_mat.albedo_color = _low_fog_color
-	var faces: Array = [
-		[Vector3(0, 0, 0), Vector3(0, 0, 16), Vector3(0, 16, 16), Vector3(0, 16, 0)],
-		[Vector3(16, 0, 16), Vector3(16, 0, 0), Vector3(16, 16, 0), Vector3(16, 16, 16)],
-		[Vector3(0, 16, 16), Vector3(16, 16, 16), Vector3(16, 16, 0), Vector3(0, 16, 0)],
-		[Vector3(0, 0, 0), Vector3(16, 0, 0), Vector3(16, 0, 16), Vector3(0, 0, 16)],
-		[Vector3(0, 0, 16), Vector3(16, 0, 16), Vector3(16, 16, 16), Vector3(0, 16, 16)],
-		[Vector3(0, 0, 0), Vector3(0, 16, 0), Vector3(16, 16, 0), Vector3(16, 0, 0)],
-	]
-	var av := PackedVector3Array()
-	for f in faces:
-		for v in f:
-			av.append(v)
-	var ai := PackedInt32Array()
-	for j in range(0, 24, 4):
-		ai.append(j)
-		ai.append(j + 2)
-		ai.append(j + 1)
-		ai.append(j)
-		ai.append(j + 3)
-		ai.append(j + 2)
-	_low_fog_mesh = ArrayMesh.new()
-	_low_fog_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _low_surface(av, ai))
-	# AC-0234 (user 2026-09-07): the CAPS reuse the FOG material + box mesh
-	# directly (the solid-black cap material is gone) — a capped slab reads
-	# as a fog box at every distance, void-fill, no lighting.
 
 # ============================================================================
 # AC-0247: slab pools (per World) — the mesh-instance / MultiMesh / column
@@ -1178,19 +1035,17 @@ func _low_fog_bake() -> void:
 # at the current render radius (the AC-0239 ring system: one ring = the
 # columns that ENTER the circle when the center moves one chunk = 2R,
 # _pool_ring_cols) + their slab demand in the MI pool (slabs-per-column x
-# columns) + their fog+cap MM pairs. Memory-warming ONLY: nothing visible
-# differs; grow-on-demand stays the safety net past the prewarm.
+# columns — the fog-box MM pool is gone with the dormant fog wave,
+# AC-0336). Memory-warming ONLY: nothing visible differs; grow-on-demand
+# stays the safety net past the prewarm.
 # ============================================================================
 const POOL_PREWARM_RINGS := 2   # AC-0248: ~1-2 rings of columns (the ticket)
-const POOL_MM_PER_COL := 2      # AC-0248: fog + cap (one MultiMesh each per column)
 # AC-0248: the floor sizes — a tiny-radius run (or a radius whose ring
 # target is smaller) still keeps the AC-0247 warm minimum.
 const POOL_MI_MIN := 32
-const POOL_MM_MIN := 8
 const POOL_COL_MIN := 16
 
 var _mi_pool: Array = []     # pooled MeshInstance3D (high + low slab instances)
-var _mm_pool: Array = []     # pooled [MultiMeshInstance3D, MultiMesh] (fog + cap)
 var _col_pool: Array = []    # pooled column nodes (detached, fresh state)
 # AC-0248: the POOL GROW COUNTERS — on-demand (fresh-allocation) checkouts,
 # i.e. the checkouts the prewarm did not cover. This is the ticket's
@@ -1199,7 +1054,6 @@ var _col_pool: Array = []    # pooled column nodes (detached, fresh state)
 # check-in feeds the ring check-out); pre-AC-0248 the first burst grew
 # everything.
 var perf_pool_mi_grows_n := 0
-var perf_pool_mm_grows_n := 0
 var perf_pool_col_grows_n := 0
 # AC-0248: the one-time prewarm cost (ready + every top-up, ms).
 var perf_pool_prewarm_ms := 0.0
@@ -1207,7 +1061,6 @@ var perf_pool_prewarm_ms := 0.0
 # recenter top-up check is three int compares in the steady state.
 var _pool_target_r := -1
 var _pool_target_mi := 0
-var _pool_target_mm := 0
 var _pool_target_col := 0
 
 # AC-0247 slab-buffer note: the 4096-cell slab cell buffers (the "i"/"p"
@@ -1253,14 +1106,13 @@ func _pool_mi_per_col() -> int:
 	return (Data.SEA + 15) / 16 + 2
 
 
-# AC-0248: the (mi, mm, col) pool targets for a render radius — POOL_
-# PREWARM_RINGS recenter rings of columns + their slab demand (MI) +
-# their fog+cap MM pairs, floored by the AC-0247 minimums.
+# AC-0248: the (mi, col) pool targets for a render radius — POOL_
+# PREWARM_RINGS recenter rings of columns + their slab demand (MI),
+# floored by the AC-0247 minimums.
 func _pool_targets_for(r: int) -> Array:
 	var cols := maxi(POOL_PREWARM_RINGS * _pool_ring_cols(r), POOL_COL_MIN)
 	return [
 		maxi(cols * _pool_mi_per_col(), POOL_MI_MIN),
-		maxi(cols * POOL_MM_PER_COL, POOL_MM_MIN),
 		cols,
 	]
 
@@ -1274,23 +1126,14 @@ func _pool_top_up() -> void:
 	if _pool_target_r != render_radius:
 		var t := _pool_targets_for(render_radius)
 		_pool_target_mi = int(t[0])
-		_pool_target_mm = int(t[1])
-		_pool_target_col = int(t[2])
+		_pool_target_col = int(t[1])
 		_pool_target_r = render_radius
-	if _mi_pool.size() >= _pool_target_mi and _mm_pool.size() >= _pool_target_mm \
+	if _mi_pool.size() >= _pool_target_mi \
 			and _col_pool.size() >= _pool_target_col:
 		return
 	var t0 := Time.get_ticks_usec()
 	while _mi_pool.size() < _pool_target_mi:
 		_mi_pool.append(MeshInstance3D.new())
-	while _mm_pool.size() < _pool_target_mm:
-		var mm := MultiMesh.new()
-		mm.mesh = _low_fog_mesh
-		mm.transform_format = MultiMesh.TRANSFORM_3D
-		var mmi := MultiMeshInstance3D.new()
-		mmi.multimesh = mm
-		mmi.material_override = _low_fog_mat
-		_mm_pool.append([mmi, mm])
 	while _col_pool.size() < _pool_target_col:
 		_col_pool.append(ChunkScript.new())
 	perf_pool_prewarm_ms += (Time.get_ticks_usec() - t0) / 1000.0
@@ -1299,7 +1142,7 @@ func _pool_top_up() -> void:
 	# number in its RESULT; this prints the live one for interactive /
 	# R50 runs).
 	if OS.get_environment("AWECRAFT_POOL_DEBUG") == "1":
-		print("POOLTOPUP r=%d mi=%d mm=%d col=%d total_ms=%.1f" % [render_radius, _mi_pool.size(), _mm_pool.size(), _col_pool.size(), perf_pool_prewarm_ms])
+		print("POOLTOPUP r=%d mi=%d col=%d total_ms=%.1f" % [render_radius, _mi_pool.size(), _col_pool.size(), perf_pool_prewarm_ms])
 
 
 # AC-0247 (the small fixed prewarm) -> AC-0248 (ring-sized): prewarm on
@@ -1313,7 +1156,7 @@ func _pool_prewarm() -> void:
 func pool_sizes() -> Dictionary:
 	# AC-0248: the harness-readable pool depths (the "pool sizes at end"
 	# of the r16 arm's pool evidence).
-	return {"mi": _mi_pool.size(), "mm": _mm_pool.size(), "col": _col_pool.size()}
+	return {"mi": _mi_pool.size(), "col": _col_pool.size()}
 
 
 func _mi_checkout() -> MeshInstance3D:
@@ -1343,51 +1186,11 @@ func _mi_checkin(mi: MeshInstance3D) -> void:
 		return
 	# Drop the mesh REFERENCE only — the per-slab ArrayMesh data frees by
 	# refcount (mesh-DATA pooling is out of scope for AC-0247; it would
-	# need the C++ emit side). The shared pre-baked fog box never rides a
-	# MeshInstance3D (fog/cap are MultiMesh entries), so nothing shared
-	# can be freed by this.
+	# need the C++ emit side).
 	mi.mesh = null
 	if mi.get_parent() != null:
 		mi.get_parent().remove_child(mi)
 	_mi_pool.append(mi)
-
-
-func _mm_checkout() -> Array:
-	# [MultiMeshInstance3D, MultiMesh] — the fog/cap placeholder holder
-	# (ONE per chunk; the MultiMesh holds the per-slab box instances).
-	while not _mm_pool.is_empty():
-		var pair = _mm_pool.pop_back()
-		if is_instance_valid(pair[0]):
-			var mmi: MultiMeshInstance3D = pair[0]
-			var mm: MultiMesh = pair[1]
-			mmi.visible = true
-			mmi.transform = Transform3D.IDENTITY
-			mmi.material_override = _low_fog_mat  # fog AND cap wear it
-			mm.mesh = _low_fog_mesh  # shared pre-baked box — never freed
-			mm.instance_count = 0
-			return pair
-	var mm := MultiMesh.new()
-	mm.mesh = _low_fog_mesh
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	var mmi := MultiMeshInstance3D.new()
-	mmi.multimesh = mm
-	mmi.material_override = _low_fog_mat
-	perf_pool_mm_grows_n += 1  # AC-0248: on-demand growth past the prewarm
-	return [mmi, mm]
-
-
-func _mm_checkin(mmi: Node3D) -> void:
-	if mmi == null or not is_instance_valid(mmi):
-		return
-	var mm: MultiMesh = mmi.multimesh
-	if mm != null:
-		# Zero the live instances; the pooled MultiMesh keeps its
-		# capacity buffer (the per-instance realloc that pooling removes).
-		# The shared mesh reference stays put (never freed).
-		mm.instance_count = 0
-	if mmi.get_parent() != null:
-		mmi.get_parent().remove_child(mmi)
-	_mm_pool.append([mmi, mm])
 
 
 func _column_checkout() -> Node3D:
@@ -1407,12 +1210,12 @@ func _column_checkout() -> Node3D:
 
 
 func _col_checkin(c: Node3D) -> void:
-	# The streaming-out (r+2) / face-FIFO free path. The placeholders
-	# (fog/low/cap) were already returned to the MultiMesh pool by
-	# _lod_free_all before this runs; here the remaining child kinds are
-	# handled: the HIGH slab MeshInstance3Ds (mesh/fluid/flora) go to the
-	# MeshInstance3D pool, the out-of-scope nodes (the StaticBody3D
-	# collision bodies + the OccluderInstance3D) keep the legacy free.
+	# The streaming-out (r+2) / face-FIFO free path. The per-slab lows
+	# were already handled by _lod_free_all before this runs; here the
+	# remaining child kinds are handled: the HIGH slab MeshInstance3Ds
+	# (mesh/fluid/flora) go to the MeshInstance3D pool, the out-of-scope
+	# nodes (the StaticBody3D collision bodies + the OccluderInstance3D)
+	# keep the legacy free.
 	# Walking the children (not just the Slab refs) also sweeps any
 	# untracked instance left by the build_mesh data-empty degenerate
 	# path (it nulls the Slab refs without freeing the nodes — a
@@ -1434,120 +1237,16 @@ func _col_checkin(c: Node3D) -> void:
 # have checked instances back in via handoffs). Pooled nodes are detached
 # orphans by the pool invariant (checkin removes them from the tree
 # first), so immediate free() is safe and the prewarm entries do not
-# leak at exit. The MM pool's MultiMesh entries are refcounted — dropping
-# the MMI releases them.
+# leak at exit.
 func _pool_free_all() -> void:
 	for mi in _mi_pool:
 		if mi != null and is_instance_valid(mi):
 			mi.free()
 	_mi_pool = []
-	for pair in _mm_pool:
-		var mmi = pair[0]
-		if mmi != null and is_instance_valid(mmi):
-			mmi.free()
-	_mm_pool = []
 	for c in _col_pool:
 		if c != null and is_instance_valid(c):
 			c.free()
 	_col_pool = []
-
-
-# AC-0231 rewrite: FOG WAVE — the immediate placeholder for a far column
-# that just landed data. ONE pre-baked 16x16x16 fog box INSTANCE per
-# NON-AIR slab (the sparse null check: c.data[si] == null = air), at the
-# slab's Y (slab bottom si*16) — SEPARATE instances (a shared MultiMesh
-# over the ONE pre-baked box, NOT merged into one column mesh); extremely
-# cheap. Runs on every data landing for a queued column with no mesh,
-# before low starts. TIER 0 (the column under the player) skips the wave
-# straight to high — never fall through. CANDIDATES (the r+1 far band)
-# are the wave's primary target — the out-of-set (one-ring) state must
-# NOT exclude a column from fog/low (AC-0231 fix: the far band was
-# empty-then-high; AC-0278: that exclusion is now a distance fact).
-# A slab already low/high never re-fogs.
-func _low_fog_for(c: Node3D) -> void:
-	# AC-0257: the vwin window is gone (no caps, no culled slabs) — every
-	# slab is wanted; on data landing the only possible placeholder is the
-	# (off) fog wave, and the in-r gate invalidation is the real work.
-	if int(c.face) > 1 or bool(c.mesh_built) or bool(c.low_built):
-		return
-	if c.data.is_empty():
-		return
-	var dx := int(c.cx) - last_pcx
-	var dz := int(c.cz) - last_pcz
-	# AC-0261: the in-r order-gate invalidation below is a no-op (the
-	# AC-0231 in-r placeholder lane is dead — _low_inr_invalidate keeps
-	# the gate open unconditionally); the taxi test stays for parity.
-	if absi(dx) + absi(dz) <= render_radius:
-		_low_inr_invalidate()
-	if int(c.face) > 1 or bool(c.mesh_built) or bool(c.low_built):
-		return
-	for si in range(c.data.size()):
-		var si2 := int(si)
-		# AC-0284b: a far column's slabs are all null BY REPRESENTATION —
-		# they are NOT air: fog them (the fog wave makes them pending, the
-		# far emit replaces the fog).
-		if (c.data[si2] == null and not c.far) or c.has_low_si(si2):
-			continue
-		if FOG_WAVE_ON and not c.has_fog_si(si2):
-			_fog_ensure_slab(c, si2)
-
-# AC-0231 rewrite: add slab si to the fog set (the shared MultiMesh
-# instance is created on first use). The live fog count is per SLAB
-# INSTANCE (low_fog_boxes_n) + per chunk (low_fog_chunks_n).
-func _fog_ensure_slab(c: Node3D, si: int) -> void:
-	var _wpt := Time.get_ticks_usec()  # AC-0251 MESHATTACH sub-stage (per-chunk fog node attach)
-	if c.has_fog_si(si):
-		_wprof_add(WP_MESHATTACH, Time.get_ticks_usec() - _wpt)
-		return
-	# AC-0275: the double-LOD guard - a fog veil over a high mesh is the
-	# user's "washed-out (day) / stuck-in-night" chunks. Never attach.
-	if c.slabs[si].mesh_instance != null:
-		low_on_high_n += 1
-		return
-	var had: bool = c.fog_slabs.size() > 0
-	var i := 0
-	while i < c.fog_slabs.size() and int(c.fog_slabs[i]) < si:
-		i += 1
-	c.fog_slabs.insert(i, si)
-	c.fog_mask |= (1 << si)  # AC-0237 1a: mirror mask sync
-	_low_probe_invalidate(c)  # AC-0262: fog state feeds the probe (FOG_WAVE_ON)
-	if c.fog_instance == null:
-		# AC-0247: the shared MultiMesh holder comes from the pool
-		# (this build: the property is "multimesh" — no underscore; the
-		# _mm_checkout reset sets mesh/material/transform/visibility).
-		var pair := _mm_checkout()
-		c.add_child(pair[0])
-		c.fog_instance = pair[0]
-	_fog_sync(c)
-	low_fog_boxes_n += 1
-	if not had:
-		low_fog_chunks_n += 1
-	_wprof_add(WP_MESHATTACH, Time.get_ticks_usec() - _wpt)
-
-# AC-0231 rewrite: drop the fog instance for slab si (a low or the high
-# replaces it at its Y).
-func _fog_drop_slab(c: Node3D, si: int) -> void:
-	var i: int = c.fog_slabs.find(si)
-	if i < 0:
-		return
-	c.fog_slabs.remove_at(i)
-	c.fog_mask &= ~(1 << si)  # AC-0237 1a: mirror mask sync
-	_low_probe_invalidate(c)  # AC-0262: fog state feeds the probe (FOG_WAVE_ON)
-	low_fog_boxes_n -= 1
-	if c.fog_slabs.is_empty():
-		_mm_checkin(c.fog_instance)  # AC-0247: pool (the shared box mesh is never freed)
-		c.fog_instance = null
-		low_fog_chunks_n -= 1
-	else:
-		_fog_sync(c)
-
-# AC-0231 rewrite: rewrite the MultiMesh from fog_slabs — instance i is
-# the pre-baked box at (0, si*16, 0) (the slab's Y, slab bottom).
-func _fog_sync(c: Node3D) -> void:
-	var mm: MultiMesh = c.fog_instance.multimesh
-	mm.instance_count = c.fog_slabs.size()
-	for i in range(c.fog_slabs.size()):
-		mm.set_instance_transform(i, Transform3D(Basis(), Vector3(0.0, float(int(c.fog_slabs[i]) * 16), 0.0)))
 
 # AC-0231: the placeholder surface arrays in the Mesh.ARRAY_*-indexed
 # Array form add_surface_from_arrays wants (the chunk _surface shape).
@@ -1758,11 +1457,8 @@ func apply_low_start() -> void:
 	if ls < lo or ls > hi:
 		ls = int((lo + hi) / 2)
 	low_start_r = ls
-	_low_none_key = ""
-	_low_slab_none_key = ""
-	_low_inr_invalidate()
 	_rescore_kick()
-	_pool_touch()  # AC-0335: a tier change re-pends/completes wave-band slabs — the pick cache must re-scan (the old none-key resets were the wave's half of this)
+	_pool_touch()  # AC-0335: a tier change re-pends/completes wave-band slabs — the pick cache must re-scan
 
 # AC-0252: the core average-color grid over 16 full 256-byte slab ROWS
 # (rows[local_y], local_y 0..15 — the chunk slab at si, edited data).
@@ -2340,19 +2036,13 @@ func _low_emit_slab(g: PackedByteArray, grids: Array, si: int) -> ArrayMesh:
 
 # AC-0231 fix3: build the per-slab lows for a chunk — the FULL COLUMN
 # pass (harness-only drive — the R16 air-chunk test uses it; the live
-# WAVE 2 lanes dispatch slab-by-slab themselves): every PENDING slab
-# (the fogged-not-low slabs + — when the chunk is stale, edited after the
-# low — every low slab to rebuild from the edited data), ascending si.
-# The per-slab core is _low_build_slab — the worker dispatch + the
-# null-slab air bookkeeping (NO main-thread generation). A slab's low
-# REPLACES its fog at the slab's Y.
+# drain dispatches slab-by-slab through _dispatch_column_work): every
+# PENDING slab (the data slabs holding no low + every stale low slab to
+# rebuild from the edited data), ascending si. The per-slab core is
+# _low_build_slab — the worker dispatch + the null-slab air bookkeeping
+# (NO main-thread generation).
 func _low_build(c: Node3D) -> void:
-	if _low_fog_mesh == null:
-		return
 	var t0 := Time.get_ticks_usec()
-	var rebuild := bool(c.low_built)
-	if not rebuild and c.fog_slabs.is_empty():
-		return
 	var targets: Array = _low_pending_sis(c)
 	if targets.is_empty():
 		return
@@ -2361,15 +2051,13 @@ func _low_build(c: Node3D) -> void:
 	if timing:
 		print("LOWBUILD %d,%d slabs=%d ms=%.1f" % [int(c.cx), int(c.cz), targets.size(), (Time.get_ticks_usec() - t0) / 1000.0])
 
-# AC-0231 fix3: every PENDING slab of a chunk, ascending si — a fogged
-# slab not yet lowed, or (when the chunk is stale: edited after the low)
-# a low slab to rebuild. fog_slabs / low_slabs are si-sorted and DISJOINT
-# (a slab is either fogged or lowed, never both — placement swaps one for
-# the other), so the merged walk yields the union in order.
-# AC-0257: the cap set and the kept mask are gone (vwin removal) — the
-# walk merges the fog + low sets in si order; every slab is wanted.
-# fog_slabs / low_slabs are si-sorted and pairwise DISJOINT (a slab holds
-# at most one placeholder).
+# AC-0231 fix3: every PENDING slab of a chunk, ascending si — a low slab
+# to rebuild (stale: edited after the low, or built at a different band
+# tier) + every data slab that holds NO low (the pending source
+# directly; bounded 24-slab scan). AC-0257: the cap set and the kept
+# mask are gone (vwin removal); every slab is wanted. AC-0336: the fog
+# walk is gone with the fog wave (fog_slabs never held a slab in the
+# shipped path).
 func _low_pending_sis(c: Node3D) -> Array:
 	var out: Array = []
 	var tier := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)  # AC-0252: the live band tier
@@ -2380,87 +2068,51 @@ func _low_pending_sis(c: Node3D) -> Array:
 	# AND on every re-lower). -1 for non-far (the real band never
 	# floors — caves + sub-floor digging survive there).
 	var yfl := _far_floor_y() if c.far else -1
-	var f := 0
-	var l := 0
-	while f < c.fog_slabs.size() or l < c.low_slabs.size():
-		var fs := int(c.fog_slabs[f]) if f < c.fog_slabs.size() else 1 << 30
-		var ls := int(c.low_slabs[l]) if l < c.low_slabs.size() else 1 << 30
-		var si: int
-		var is_ph := false  # true = FOG (the placeholder set)
-		if fs <= ls:
-			si = fs
-			f += 1
-			is_ph = true
-		else:
-			si = ls
-			l += 1
+	for l in range(c.low_slabs.size()):
+		var si := int(c.low_slabs[l])
 		if yfl >= 0 and si * 16 + 15 < yfl:
 			continue  # AC-0331: below the far floor — never dispatched
-		if is_ph:
-			# FOG (in si order): pending while the data is fresh (a
-			# terminal mark — the slab SAMPLED all-air at this data_gen —
-			# skips it until the data changes).
-			if int(c.low_failed.get(si, -1)) != int(c.data_gen):
-				out.append(si)
-		elif c.low_stamps.get(si, []) != c.stamp() \
+		# a LOW slab older than the chunk stamp (edited after the low)
+		# or built at a DIFFERENT band tier (AC-0252: the low-start
+		# boundary moved since the build — re-lower at the live tier)
+		# — PER-SLAB staleness: the finished slabs of a partially-
+		# lowered chunk stay fresh while its other slabs are pending.
+		if c.low_stamps.get(si, []) != c.stamp() \
 				or c.low_tiers.get(si, -1) != tier:
-			# a LOW slab older than the chunk stamp (edited after the low)
-			# or built at a DIFFERENT band tier (AC-0252: the low-start
-			# boundary moved since the build — re-lower at the live tier)
-			# — PER-SLAB staleness: the finished slabs of a partially-
-			# lowered chunk stay fresh while its other slabs are fogged.
 			out.append(si)
-	if not FOG_WAVE_ON:
-		# AC-0240: the fog set was the entry ticket into this walk - a kept
-		# slab got its fog on landing, the fog made it pending, the low swapped
-		# it. With the fog wave off a kept data slab that holds NO placeholder
-		# and no low is the pending source directly (bounded 24-slab scan; the
-		# flag-on path above is untouched).
-		for si in range(c.data.size()):
-			var si2 := int(si)
-			if yfl >= 0 and si2 * 16 + 15 < yfl:
-				continue  # AC-0331: below the far floor — never dispatched
-			if c.data[si2] != null and not c.has_low_si(si2) \
-					and int(c.low_failed.get(si2, -1)) != int(c.data_gen):
-				out.append(si2)
-		out.sort()
+	# AC-0240: a kept data slab that holds NO low is the pending source
+	# directly (a terminal all-air mark skips it until the data changes).
+	for si in range(c.data.size()):
+		var si2 := int(si)
+		if yfl >= 0 and si2 * 16 + 15 < yfl:
+			continue  # AC-0331: below the far floor — never dispatched
+		if c.data[si2] != null and not c.has_low_si(si2) \
+				and int(c.low_failed.get(si2, -1)) != int(c.data_gen):
+			out.append(si2)
+	out.sort()
 	return out
 
 # AC-0257: the old _low_pending_si (the min-si first-pending probe) is
-# gone — the WAVE 2 / in-r picks now use _entry_best_pending (the LAYER-
-# best pending slab — the bake order, see its comment).
+# gone — the drain's pick uses _entry_best_pending (the LAYER-best
+# pending slab — the bake order, see its comment). AC-0336: the WAVE 3
+# _low_any_stale helper is gone with the idle catch-up.
 
-# AC-0231 fix3: true when ANY low slab of the chunk is stale (built before
-# the current chunk stamp). The WAVE 3 upgrade pick uses it — a chunk is
-# upgrade-ready only when every one of its low slabs reflects the current
-# data (a per-slab stamp means a partially-lowered chunk is "stale" only
-# for the slabs that actually owe a rebuild).
-func _low_any_stale(c: Node3D) -> bool:
-	if not bool(c.low_built):
-		return false
-	var tier := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)  # AC-0252: the live band tier
-	for si in c.low_slabs:
-		if c.low_stamps.get(int(si), []) != c.stamp() \
-				or c.low_tiers.get(int(si), -1) != tier:
-			return true
-	return false
-
-# AC-0231 fix3 / AC-0252 (+ worker offload): the WAVE 2 per-slab entry —
+# AC-0231 fix3 / AC-0252 (+ worker offload): the per-slab low entry —
 # ZERO slab generation on the main thread. The band-tier AVERAGE-COLOR
 # grid sample + emit (MED 8x8x8 inside the configurable low-start
 # distance, LOW 4x4x4 outside it — _lod_tier_of) run on the TM WORKER
 # POOL (the C++ low_emit_avg, the _low_dispatch_slab path); the attach +
-# every bit of the per-slab bookkeeping (the fog swap, the cap swap, the
-# per-slab stamp WITH THE TIER, the all-air terminal mark, the counters)
-# land in the _low_handoff on the main thread — the scene-tree work that
-# has to stay there. The TEXTURED 4x4x4 emit (_low_emit_slab) stays in
-# the tree, dormant. The ONLY thing that runs inline is a slab whose DATA
+# every bit of the per-slab bookkeeping (the cap swap, the per-slab
+# stamp WITH THE TIER, the all-air terminal mark, the counters) lands
+# in the _low_handoff on the main thread — the scene-tree work that has
+# to stay there. The TEXTURED 4x4x4 emit (_low_emit_slab) stays in the
+# tree, dormant. The ONLY thing that runs inline is a slab whose DATA
 # IS NULL (the dispatch's -1 verdict — an empty column slab has no grid
 # to sample and no emit to run): the air bookkeeping via _low_air_slab
-# (a slab whose data went NULL shows nothing — its stale fog + any low
-# are dropped). A slab that has blocks but SAMPLES all-air is a real
-# emit (a worker task): its fog restore + the terminal low_failed mark
-# land in the _low_handoff.
+# (a slab whose data went NULL shows nothing — its stale low is
+# dropped). A slab that has blocks but SAMPLES all-air is a real emit
+# (a worker task): the terminal low_failed mark lands in the
+# _low_handoff.
 func _low_build_slab(c: Node3D, si: int) -> void:
 	if c.data.is_empty() or si < 0 or si >= c.data.size():
 		return
@@ -2481,15 +2133,12 @@ func _low_build_slab(c: Node3D, si: int) -> void:
 # nothing to dispatch). This is the air half of what the old sync
 # _low_build_slab did for a null slab, WITHOUT the (wasted) grid sample
 # of the slab's neighbors: drop the low if it holds one, erase its
-# per-slab stamp, and — with no data — drop its fog + cap. A slab whose
-# window culled it never touches its placeholders (the cap holds — the
-# same keep rule the sync build had at the top of the function).
+# per-slab stamp.
 func _low_air_slab(c: Node3D, si: int) -> void:
 	if si < 0 or si >= c.data.size() or c.data[si] != null:
 		return
 	_low_drop_slab(c, si)
 	c.low_stamps.erase(si)  # not low anymore (no data — air)
-	_fog_drop_slab(c, si)
 
 # AC-0257 (stale-LOD, absorbs AC-0256): the FLIP-BACK attach — the slab
 # holds a cached emit at its LIVE tier (emitted earlier, displaced when
@@ -2503,7 +2152,6 @@ func _low_attach_cached(c: Node3D, si: int, cached: Dictionary) -> void:
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _low_surface(cached["v"], cached["i"], cached["n"], cached["c"]))
 	low_max_h = maxf(low_max_h, float(cached.get("mh", 0.0)))
 	_low_place_slab(c, si, mesh)
-	_fog_drop_slab(c, si)
 	c.low_built = true
 	c.low_failed.erase(si)
 	c.low_stamps[si] = c.stamp()
@@ -2709,10 +2357,10 @@ func _low_dispatch_slab(c: Node3D, si: int) -> int:
 
 # AC-0236 part 2: the MAIN-THREAD attach of a completed low emit — the
 # bookkeeping half of _low_build_slab (the worker did the grid sample +
-# greedy mesh in C++): fog swap, per-slab stamp, the all-air terminal
-# mark. A dropped result (null / stale data / chunk gone) needs no
-# re-queue: the slab is still PENDING in the chunk state (fog_slabs /
-# low_stamps), so the in-r pass or the far wave re-picks it next frame.
+# greedy mesh in C++): per-slab stamp, the all-air terminal mark. A
+# dropped result (null / stale data / chunk gone) needs no re-queue: the
+# slab is still PENDING in the chunk state (low_stamps), so the drain's
+# steady pass re-picks it next frame.
 func _low_handoff(e: Dictionary, res) -> void:
 	var key: String = e["key"]
 	var si := int(e["si"])
@@ -2767,20 +2415,18 @@ func _low_handoff(e: Dictionary, res) -> void:
 	var was_low: bool = c.has_low_si(si)
 	if bool(res.get("empty", false)):
 		# all-air at the sample points (the _low_build_slab mesh == null
-		# bookkeeping — the fog is the honest placeholder, marked
-		# TERMINAL so the picks advance past it until the data changes).
+		# bookkeeping) — marked TERMINAL so the picks advance past it
+		# until the data changes.
 		_low_drop_slab(c, si)
 		c.low_stamps.erase(si)
 		# AC-0284b: a far slab that sampled all-air (a slab above the
 		# column top) is TERMINAL-marked like a real slab — without the
 		# mark it would re-pick + re-emit forever (its null slab is not
-		# air to the picker).
-		if c.data[si] == null and not c.far:
-			_fog_drop_slab(c, si)
-		else:
-			# AC-0240: flag-gated (the terminal mark stays - wave advance).
-			if FOG_WAVE_ON and not c.has_fog_si(si):
-				_fog_ensure_slab(c, si)
+		# air to the picker). A real null slab needs no mark: the probe
+		# skips null data slabs outright. AC-0336: the terminal mark is
+		# the low lane's all-air record (the fog wave it once paired with
+		# is gone).
+		if not (c.data[si] == null and not c.far):
 			c.low_failed[si] = c.data_gen
 			_low_probe_invalidate(c)  # AC-0262: terminal mark -> not pending
 	else:
@@ -2807,13 +2453,12 @@ func _low_handoff(e: Dictionary, res) -> void:
 		_low_place_slab(c, si, mesh)
 		if _low_first_attach_frame < 0:
 			_low_first_attach_frame = Time.get_ticks_msec()  # AC-0263: section-first evidence
-		_fog_drop_slab(c, si)
 		c.low_built = true
 		c.low_failed.erase(si)
 		_low_probe_invalidate(c)  # AC-0262: the un-mark re-pends the slab
 		# PER-SLAB stamp (the _low_build_slab comment: a chunk-level stamp
-		# would keep the other fogged slabs' finished neighbors stale and
-		# the wave would re-pick the built slabs forever).
+		# would keep the other slabs' finished neighbors stale and the
+		# drain would re-pick the built slabs forever).
 		c.low_stamps[si] = c.stamp()
 		c.low_tiers[si] = int(e.get("tier", 1))  # AC-0252: the band tier stamp
 		# AC-0257: the attached tier is VISIBLE now — a cache entry at the
@@ -2827,11 +2472,11 @@ func _low_handoff(e: Dictionary, res) -> void:
 	low_handoff_n += 1
 
 # AC-0236 part 2: attach the COMPLETED low tasks (wall-clock capped — an
-# attach is a node create + fog swap, ~0.2 ms). Runs every frame from
+# attach is a node create + cap swap, ~0.2 ms). Runs every frame from
 # _low_step so a ready placeholder lands without waiting for a high
 # handoff (the high lane keeps its own stream_ho_cap pace in
-# threadmesh_poll). The cap clamps to the frame wall time (the in-r step
-# pattern: at 600 fps a flat 4 ms cap would eat the whole 1.67 ms step).
+# threadmesh_poll). The cap clamps to the frame wall time: at 600 fps a
+# flat 4 ms cap would eat the whole 1.67 ms step.
 func _low_poll(dt_ms: float) -> void:
 	if _low_tasks.is_empty():
 		return
@@ -2860,8 +2505,8 @@ func _low_poll(dt_ms: float) -> void:
 		if (Time.get_ticks_usec() - t0) / 1000.0 >= LOW_POLL_BUDGET_MS:
 			return
 
-# AC-0231 rewrite: drop the low for ONE slab (the slab kept/restore its
-# fog, or became air).
+# AC-0231 rewrite: drop the low for ONE slab (it becomes air, or the
+# column flips/re-lowers).
 func _low_drop_slab(c: Node3D, si: int) -> void:
 	var i: int = c.low_slabs.find(si)
 	if i < 0:
@@ -2885,11 +2530,10 @@ func _low_place_slab(c: Node3D, si: int, mesh: ArrayMesh) -> void:
 	# instances stay on the node (hidden) until the column recycles - the
 	# re-entry flip brings them back WITHOUT a rebuild. AC-0275's
 	# double-LOD refusal is gone: the flip is atomic (one visible tier at
-	# a time) and there is no fog to refuse against.
+	# a time).
 	if c.slabs[si].mesh_instance != null:
 		c.high_slab_visible(si, false)
 		low_on_high_n += 1  # the flip count (high kept, low now active)
-		_fog_drop_slab(c, si)  # a veil (dormant wave) goes with the flip
 	var _wpt := Time.get_ticks_usec()  # AC-0251 MESHATTACH sub-stage
 	var i := 0
 	while i < c.low_slabs.size() and int(c.low_slabs[i]) < si:
@@ -2928,10 +2572,9 @@ func _low_place_slab(c: Node3D, si: int, mesh: ArrayMesh) -> void:
 # keeps the OLD strip UVs and samples the wrong texture on the new canvas
 # (the "wrong texture mapping" the user reported at distance). The HIGH
 # meshes recover through the tex_refresh drain (every chunk re-pushed),
-# the fog box is a flat color (no UVs), but the lows are main-thread
-# MeshInstance3Ds that only the slab wave (re)builds — so on a swap, drop
-# every low and restore its fog; the WAVE 2 slab wave re-lowers all of
-# them against the new table within a few hundred frames.
+# but the lows are main-thread MeshInstance3Ds that only the drain's
+# steady pass (re)builds — so on a swap, drop every low; the drain
+# re-lowers all of them against the new table within a few hundred frames.
 func _low_reset_all() -> void:
 	# the tile-base cache (_low_tile_base) is keyed by (id, fi) only —
 	# after a table re-merge the cached origins are the OLD strip
@@ -2948,39 +2591,27 @@ func _low_reset_all() -> void:
 		for si in c.low_slabs.duplicate():
 			var si2 := int(si)
 			_low_drop_slab(c, si2)
-			# AC-0263 spec (2026-09-13, "remove the fog blocks"): the
-			# placeholder is the dormant wave only (FOG_WAVE_ON) - a swap
-			# gap shows the stored tier (or nothing until the wave
-			# re-lowers) instead of a fog box.
-			if FOG_WAVE_ON and not c.data.is_empty() and si2 < c.data.size() \
-					and c.data[si2] != null and not c.has_fog_si(si2):
-				_fog_ensure_slab(c, si2)
 		# c.low_stamps was already cleared by the last _low_drop_slab (the
 		# empty-low reset); c.low_failed stays — its marks are keyed by
-		# data_gen, which the atlas swap does NOT change (the terminal-fog
-		# verdicts survive: re-picking them would just re-fail the sample).
-	_low_slab_none_key = ""
-	_low_none_key = ""
+		# data_gen, which the atlas swap does NOT change (the terminal
+		# all-air verdicts survive: re-picking them would just re-fail the
+		# sample).
 
-# AC-0231 rewrite: the high REPLACES the per-slab placeholders — free the
-# fog MultiMesh + every per-slab low. as_upgrade counts a
-# placeholder->high replacement (the catch-up evidence); the evict path
-# frees without counting. Keep-high from here on: a meshed chunk is never
-# downgraded to low (low_downgrade_n stays 0 — the low path only serves
-# never-built slabs).
+# AC-0231 rewrite: the high REPLACES the per-slab lows — free every
+# per-slab low instance. as_upgrade counts a placeholder->high
+# replacement (the catch-up evidence); the evict path frees without
+# counting. Keep-high from here on: a meshed chunk is never downgraded
+# to low (low_downgrade_n stays 0 — the low path only serves never-built
+# slabs).
 func _lod_free_all(c: Node3D, as_upgrade: bool) -> void:
-	if as_upgrade and (bool(c.low_built) or c.has_fog()):
+	if as_upgrade and bool(c.low_built):
 		low_upgrades_n += 1
 	if as_upgrade:
 		# AC-0263 spec (keep-all-LOD): the high takes over - the per-slab
 		# lows are STORED (visible=false), not freed: the band-exit
 		# flip-back renders them without a rebuild, and they pool out at
 		# column recycle. Their stamps/tiers/masks stay (the slabs remain
-		# low-complete - the low probe does not re-pend them). Only the
-		# fog (the dormant placeholder) drops.
-		if c.has_fog():
-			for si in c.fog_slabs.duplicate():
-				_fog_drop_slab(c, int(si))
+		# low-complete - the low probe does not re-pend them).
 		for i in range(c.low_slabs.size()):
 			var mi2: MeshInstance3D = c.low_instances[i]
 			if mi2 != null:
@@ -2989,29 +2620,9 @@ func _lod_free_all(c: Node3D, as_upgrade: bool) -> void:
 		return
 	# the free path (chunk clear / candidate): everything returns to the
 	# pools, the low state clears (the column is gone).
-	if c.has_fog():
-		low_fog_boxes_n -= int(c.fog_slabs.size())
-		low_fog_chunks_n -= 1
 	c.drop_low()
 	_low_probe_invalidate(c)  # AC-0262: drop_low re-pends the slabs
 
-# AC-0335: _low_pick (the WAVE 3 idle-catch-up pick) is GONE — the drain's
-# steady pass is the only scheduler (one order, the ring decides the work).
-# Its no-candidate cache _low_none_key + the helpers it owned
-# (_low_any_stale / _low_upgrade_ready) stay dead until AC-0336.
-
-# AC-0231: the heavy pipeline is caught up — the drain dispatched nothing
-# this frame, the TG pool drained, no recenter in flight, past the grace.
-func _low_idle() -> bool:
-	# AC-0293: the spawn-fast term is gone with the burst (it was true only
-	# inside the loading window, where loading_active already gates).
-	var idle := _drain_units_last == 0 and threadgen_inflight.is_empty() \
-			and not loading_active and not _rec_pending
-	if idle:
-		_low_idle_frames += 1
-	else:
-		_low_idle_frames = 0
-	return _low_idle_frames >= LOW_IDLE_GRACE_FRAMES
 
 # AC-0231 rewrite: the legacy SYNC build fallbacks (data-empty,
 # missing-neighbor, cap-drop with defer_on_cap=false, create_chunk
@@ -3021,146 +2632,30 @@ func _low_idle() -> bool:
 func _low_drop_sync(c: Node3D) -> void:
 	_lod_free_all(c, true)
 
-# AC-0231: idle-upgrade dispatchability — all 8 neighbors hold data. A
-# missing neighbor would force the sync fallback (a 300-1200 ms MAIN-thread
-# build, exactly what AC-0160 eliminated); a far chunk whose neighbor is
-# outside the streaming set never becomes ready, so it stays a low — the
-# intended far filler (the "rest" the catch-up upgrades once the region is
-# fully data-complete).
-func _low_upgrade_ready(cx: int, cz: int) -> bool:
-	for dx in range(-1, 2):
-		for dz in range(-1, 2):
-			if dx == 0 and dz == 0:
-				continue
-			var nc = chunks.get(_key(cx + dx, cz + dz))
-			if nc == null or nc.data.is_empty():
-				return false
-	return true
 
-# AC-0231 fix3: the WAVE 2 pick — the pending slab with the SMALLEST si
-# across ALL columns (pending = a fogged slab not yet lowed, or a low slab
-# to rebuild on a stale chunk); ties break by scan order (band_buckets is
-# rank-ordered — the AC-0233 e["rank"] taxi stamp, bucketed by distance).
-# The wave therefore sweeps the WHOLE region bottom-up, every column at
-# once — all si=0 slabs first, then all si=1, ... — NEVER one whole column
-# before the next (the per-column sequential fill the user rejected). Tier
-# 0 (under the player) is never a placeholder. The no-candidate verdict is
-# cached against (pool_ver, pcx, pcz): a pending slab can only APPEAR on a
-# pool-state change (data landing / handoff / recenter — all _pool_touch)
-# or a dirty edit (_dirty_add invalidates the key), and it LEAVES the
-# pending set only on our own build (which clears the key). Returns
-# {key, cx, cz, si} ({} = none).
-var _low_slab_none_key := ""  # the WAVE 2 none-verdict cache (pool_ver, pcx, pcz)
 var _slab_wave_last_t := 0    # AC-0231 fps-tuning: wall usec of the previous low frame
-var _slab_wave_acc_ms := 0.0  # the far slab wave's wall-clock accumulator
-# AC-0231 order gate: true = a full scan + the LOW_INR_STABLE_MS stability
-# window proved no in-r pending chunk (the tier >= 2 high dispatch may run).
-# Closed by _low_inr_invalidate() (in-r data landing / in-r edit / recenter /
-# pause exit) — see the const block.
-var _low_inr_drained := false
-var _low_inr_drain_since := 0  # wall ms the drain was first observed (0 = unknown)
 
-# AC-0335: _low_scan_slabs (the WAVE 2b global slab wave's batched pick)
-# is GONE — the drain's steady pass picks rings 2/3 in the same (taxi,
-# layer) order (the _grid_score scan + _entry_best_pending_cached probe)
-# and dispatches them through _dispatch_column_work. Its no-candidate
-# cache _low_slab_none_key + the scan cap LOW_SCAN_CAP stay dead until
-# AC-0336.
 
-# AC-0261: the in-r pre-low lane is DEAD (the per-column MED placeholder
-# pass) — pending slabs in the high band render NOTHING and the visible
-# band [band0_r, render_radius) is lowered per slab by the disc-ordered
-# wave. The order gate can never close again.
-func _low_inr_invalidate() -> void:
-	_low_inr_drained = true
-	_low_inr_drain_since = 0
-
-# AC-0231 in-r pre-low pick: the lowest-scoring INSIDE-circle pending chunk
-# (data + no mesh + at least one pending slab, tier 0 or higher). Score =
-# the AC-0233 (tier, taxi) lexicographic — the SAME order the TM high
-# dispatch uses, so the low frontier leads the high frontier in the same
-# order. Tier 0 (under the player) is high only. While the order gate is
-# open (_low_inr_drained) this is a single bool read; a pending chunk can
-# only APPEAR on an in-r data landing / in-r edit / recenter (all call
-# _low_inr_invalidate), and it LEAVES the pending set only on our own build.
-# The drained verdict requires a FULL scan plus LOW_INR_STABLE_MS of
-# continuous drain (a capped scan proves nothing — the gate stays closed).
-func _low_inr_pick() -> Dictionary:
-	if _low_inr_drained:
-		return {}
-	var best: Dictionary = {}
-	var best_s := 1e30
-	var visited := 0
-	var r2 := render_radius * render_radius
-	for b in range(band_buckets.size()):
-		var arr: Array = band_buckets[b]
-		for i in range(arr.size()):
-			visited += 1
-			if visited > LOW_INR_SCAN_CAP:
-				return {}  # capped — do NOT prove drained
-			var e: Dictionary = arr[i]
-			var dx := int(e["cx"]) - last_pcx
-			var dz := int(e["cz"]) - last_pcz
-			if dx * dx + dz * dz > r2:
-				continue  # in-r lane: circle only (the far slab wave owns the outside)
-			var c = chunks.get(e["key"])
-			if c == null or c.data.is_empty() or bool(c.mesh_built):
-				continue
-			if int(c.face) > 1 or not (c.has_fog() or bool(c.low_built)):
-				continue
-			if _entry_best_pending_cached(c) < 0:  # AC-0262: probe cache
-				continue  # no pending slab (all terminal-fog / fresh lows)
-			var s := _grid_score(e)  # AC-0313: the bake order (taxi, layer)
-			if s < best_s:
-				best_s = s
-				best = e
-	if best.is_empty():
-		var now := Time.get_ticks_msec()
-		if _low_inr_drain_since == 0:
-			_low_inr_drain_since = now
-			return {}  # start the stability window
-		if now - _low_inr_drain_since >= int(LOW_INR_STABLE_MS):
-			_low_inr_drained = true  # the gate opens
-		return {}
-	_low_inr_drain_since = 0  # pending found — the stability window restarts
-	return best
-
-# AC-0231 in-r pre-low step: within the frame budget (a FRACTION of the
-# measured frame wall time, clamped — fps-independent), fully lower the
-# pending slabs of the lowest-tier-score in-r chunks (fog -> low per slab),
-# one chunk at a time, in the same order the high builds land. While the
-# order gate is closed (in-r low pending), the BUSY budget applies — the
-# tier >= 2 high dispatch is held, and its frame share goes to the low. A
-# partial chunk resumes next frame (its slabs stay pending).
-func _low_inr_step(dt_ms: float) -> void:
-	# AC-0261: dead lane — no more per-column MED placeholders (pending
-	# slabs render nothing inside the high band; the slab wave owns the
-	# visible band per slab). The gate stays open.
-	_low_inr_drained = true
-
-# AC-0231 fix3 (AC-0335 UPDATED): the far-LOD lane's ATTACH side — the
-# picking half is GONE with the unification (AC-0335: the drain's steady
-# pass is the ONLY scheduler — it dispatches the far payload avg emits
-# (rings 2/3) in the same (taxi, layer) order as the high builds, through
-# _dispatch_column_work; WAVE 3's idle catch-up is gone with the seam: a
-# column entering the real band is simply the next column whose ring
-# changed). What _low_step keeps is the attach/bookkeeping it genuinely
-# owns: _low_poll (the attach — the cap swap, the fog swap, the all-air
-# terminal marks, the per-slab tier stamps), the dead in-r lane's flag
-# upkeep, the re-lower debt step, and the fog/avg-material day-night
-# upkeep.
+# AC-0231 fix3 (AC-0335 UPDATED, AC-0336 PRUNED): the far-LOD lane's
+# ATTACH side — the picking half is GONE with the unification (AC-0335:
+# the drain's steady pass is the ONLY scheduler — it dispatches the far
+# payload avg emits (rings 2/3) in the same (taxi, layer) order as the
+# high builds, through _dispatch_column_work; a column entering the real
+# band is simply the next column whose ring changed). AC-0336: the dead
+# in-r lane (flag upkeep + the WP_LOW_INR bracket) and the fog-material
+# upkeep are gone too. What _low_step owns: _low_poll (the attach — the
+# cap swap, the all-air terminal marks, the per-slab tier stamps) and the
+# re-lower debt step; the avg-LOD material tracks the sky's brightness.
 func _low_step() -> void:
-	if _shutting_down or _low_fog_mesh == null:
+	if _shutting_down:
 		return
 	# AC-0231 fps-tuning: the frame's WALL-CLOCK duration (clamped) — the
-	# pacing basis for both low lanes (identical build pace at 30-60 fps).
+	# pacing basis (identical build pace at 30-60 fps).
 	var now_t := Time.get_ticks_usec()
 	var dt_ms := 16.67
 	if _slab_wave_last_t > 0:
 		dt_ms = minf((now_t - float(_slab_wave_last_t)) / 1000.0, 100.0)
 	_slab_wave_last_t = now_t
-	# the fog color tracks the sky (the same color env.fog_light_color gets).
-	_low_fog_mat.albedo_color = DayNight.sky_display(Game.time_of_day)
 	# AC-0252 (the AC-0261 follow-up): the med/low avg-color LODs track the
 	# sky's BRIGHTNESS — a GRAY derived from the sky color's average — not
 	# the sky's hue. AC-0252 originally passed the sky color itself; the
@@ -3169,45 +2664,37 @@ func _low_step() -> void:
 	# night darkening is preserved (night sky avg ~= 0.07, same as before).
 	# The sky color changes slowly, so the per-frame set is skipped when
 	# unchanged (set_shader_parameter touches the material — keep it out of
-	# the hot main-thread LOW stage).
+	# the hot main-thread LOW stage). AC-0336: read the sky directly (the
+	# old carrier was the fog material, gone with the fog wave).
 	if _lod_avg_material != null:
-		var sdc := _low_fog_mat.albedo_color
+		var sdc := DayNight.sky_display(Game.time_of_day)
 		var dl := (sdc.r + sdc.g + sdc.b) / 3.0
 		var day_c := Color(dl, dl, dl)
 		if not _lod_day_last.is_equal_approx(day_c):
 			_lod_day_last = day_c
 			_lod_avg_material.set_shader_parameter("day", day_c)
 	# AC-0293: the spawn-fast term is gone with the burst (loading_active
-	# already covers the spawn window).
+	# already covers the spawn window) — the attach pauses with it (the
+	# dispatch side keeps its own loading budgets).
 	if loading_active:
-		# AC-0231 order gate: the in-r pass was paused — on resume the
-		# drained verdict is stale (fog may have landed meanwhile).
-		_low_inr_invalidate()
 		return
 	# AC-0335: the WAVE 3 idle catch-up (the low->high upgrade when a
 	# low-holding column entered the real band) is GONE with the lane
 	# seam — a column entering the real band is simply the next column in
 	# the drain's (taxi, layer) order whose ring changed, and its ring-0/1
-	# work is the high slab build (_dispatch_column_work). _low_idle /
-	# LOW_UPGRADE_PER_FRAME / LOW_IDLE_GRACE_FRAMES stay dead until AC-0336.
+	# work is the high slab build (_dispatch_column_work). AC-0336: the
+	# _low_idle / LOW_UPGRADE_PER_FRAME / LOW_IDLE_GRACE_FRAMES leftovers
+	# are gone too.
 	# AC-0236 part 2 (AC-0335 UPDATED): attach the completed low emits —
 	# a ready placeholder lands this frame (the emit started the moment
 	# the data landed, not when the main-thread pass got to it). The
 	# DISPATCH is the drain's (one order, the ring decides the work —
 	# _dispatch_column_work) — this lane attaches. AC-0262: sub-stage
-	# brackets — the LOW stage is split for the perf hunt: POLL (the
-	# attach poll, incl. mesh create), INR (dead since AC-0261 — stays
-	# bracketed to confirm zero). The WAVE/PICK brackets moved to the
-	# drain with the dispatch (the work now rides WP_DRAIN; the stage
-	# names stay until AC-0336).
+	# brackets — the LOW stage is split for the poll (the attach poll,
+	# incl. mesh create).
 	var _wpt2 := Time.get_ticks_usec()
 	_low_poll(dt_ms)
 	_wprof_add(WP_LOW_POLL, Time.get_ticks_usec() - _wpt2)
-	_wpt2 = Time.get_ticks_usec()
-	# WAVE 2a: the in-r pre-low — tier-ordered, budget = a fraction of the
-	# frame wall time (LOW_INR_BUDGET_FRAC, clamped).
-	_low_inr_step(dt_ms)
-	_wprof_add(WP_LOW_INR, Time.get_ticks_usec() - _wpt2)
 	# AC-0335: the WAVE 2b global slab wave dispatch (the _low_scan_slabs
 	# pick + the _slab_wave_acc_ms pacing loop) is GONE with the lane
 	# seam — the drain's steady pass dispatches rings 2/3 in the same
@@ -3674,7 +3161,6 @@ func _ready() -> void:
 	_tm_ms_full = ChunkScript._merge_atlas()
 	_low_ms_snap_dirty = true  # AC-0236 part 2: the low emit snapshot is stale (new atlas)
 	_tm_ctx_atlas = Data.atlas_tex  # AC-0160: stamp for the _process staleness guard
-	_low_fog_bake()  # AC-0231: the far-LOD fog-box template + material
 	_pool_prewarm()  # AC-0247/AC-0248: the ring-sized pool prewarm (the recenter that follows a radius change tops up — _pool_top_up)
 	threadmesh = true
 	_tm_debug = OS.get_environment("AWECRAFT_TMDEBUG") == "1"
@@ -4255,18 +3741,16 @@ const WP_MESHATTACH := 7
 const WP_MISC := 8
 const WP_FRAME := 9
 # AC-0262: the LOW stage's sub-parts (sub-stages — they sum to <= LOW,
-# never into the 5-stage partition): the low-lane attach poll, the (now
-# dead) in-r wave, the global slab-wave dispatch loop, and the per-slab
-# candidate scan inside it.
+# never into the 5-stage partition): the low-lane attach poll.
+# AC-0336: the in-r / slab-wave / pick sub-stages are GONE (the in-r
+# lane died at AC-0261; the WAVE/PICK brackets moved to WP_DRAIN with
+# the dispatch at AC-0335 — they were never _wprof_added again).
 const WP_LOW_POLL := 10
-const WP_LOW_INR := 11
-const WP_LOW_WAVE := 12
-const WP_LOW_PICK := 13
 # AC-0283 P2: the AweStarlight engine step (budgeted relaxation + the
 # settled-column drain). A DRAIN subset (bracketed inside the drain pass —
 # it sums to <= DRAIN, never into the 5-stage partition).
-const WP_STAR := 14
-const WP_STAGES := 15
+const WP_STAR := 11
+const WP_STAGES := 12
 const WP_RING := 180
 
 var _wp_rows: Array = []    # WP_RING rows, each an Array of WP_STAGES ints (usec)
@@ -4311,12 +3795,12 @@ func _wprof_init() -> void:
 		d["frames"] = 0
 		_wp_stat.append(d)
 	_wp_names = ["DRAIN", "LOW", "HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "MISC", "frame",
-		"LOW_POLL", "LOW_INR", "LOW_WAVE", "LOW_PICK", "STAR"]
+		"LOW_POLL", "STAR"]
 	_wp_live = {}
 	for j in range(WP_STAGES):
 		_wp_live[_wp_names[j]] = _wp_stat[j]
 	_wp_live["partition"] = ["DRAIN", "LOW", "HANDOFF", "IO", "RECENTER", "MISC"]
-	_wp_live["substages"] = ["FACELIGHT", "RESCORE", "MESHATTACH", "LOW_POLL", "LOW_INR", "LOW_WAVE", "LOW_PICK", "STAR"]
+	_wp_live["substages"] = ["FACELIGHT", "RESCORE", "MESHATTACH", "LOW_POLL", "STAR"]
 	_wp_live["occupancy"] = {"tg": 0, "tm": 0, "low": 0, "star": 0}
 	_wp_live["misc_neg_max_us"] = 0
 	_wp_scratch.resize(WP_RING)
@@ -5331,7 +4815,6 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	_pool_touch()  # AC-0217: sync data landed on a queued entry
 	_banana_register(cx, cz, gres["fruits"])
 	gen_count += 1
-	_low_fog_for(c)  # AC-0231: the immediate fog-box first pass (far only)
 	_apply_edits_to_chunk(c)
 	_apply_pending_leaf_decay(c)  # AC-0270: restore the saved timers
 	# AC-0283 P2 (P3): the engine seed (post-edits data) — REAL band only
@@ -5721,7 +5204,6 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 			_far_promo_owed[key] = true
 	_tg_handoff += 1
 	_pool_touch()  # AC-0217: queued entry's data landed (pool membership flipped)
-	_low_fog_for(c)  # AC-0231: the immediate fog-box first pass (far only)
 	if timing or _tg_debug:
 		print("GENHAND %d,%d t=%d" % [int(e["cx"]), int(e["cz"]), Time.get_ticks_msec()])
 
@@ -6284,7 +5766,6 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			for si_m in range(si1_m + 1):
 				c.high_stamps[si_m] = int(c.data_gen)
 				c.flush_slabs[si_m] = true
-				_fog_drop_slab(c, si_m)
 			_star_update_light_settled(c)
 			c.saved_light = {}
 			# high-complete in one shot (the full column landed; slabs
@@ -6305,7 +5786,6 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 					if not _low_slab_pending_at(c, si_l2, tier_m):
 						c.low_slab_visible(si_l2, true)
 						c.high_slab_visible(si_l2, false)
-						_fog_drop_slab(c, si_l2)
 				_low_relower_owed[key] = true
 			else:
 				for si_l in c.low_slabs:
@@ -6332,7 +5812,7 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		# dispatch window) and the band check above already ran. Scoped
 		# retain-swap attach (the edit lane's machinery, mark_complete=false
 		# — a slab landing does NOT complete the column), the slab's
-		# placeholder (fog/low) drops, the completion stamp lands (empty
+		# placeholder (the low) drops, the completion stamp lands (empty
 		# all-air builds stamped too — done, not pending), and the probe
 		# flips mesh_built when the column owes nothing.
 		var si_h: int = int(e["si0"])
@@ -6376,9 +5856,7 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		c.apply_edit_accs(res, _tm_ms_full, false)
 		c.high_stamps[si_h] = int(c.data_gen)
 		# AC-0263 spec: the slab's low is STORED, not dropped (the
-		# band-exit flip-back renders it without a rebuild); the fog
-		# (dormant) still drops with the placeholder state.
-		_fog_drop_slab(c, si_h)
+		# band-exit flip-back renders it without a rebuild).
 		# AC-0283 P2: a landing IS the settled bake — the dispatch passed
 		# the box gate (the 3x3x3 light settled at capture) and the epochs
 		# verified above (no engine mutation since). Set the per-slab
@@ -6473,21 +5951,6 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 		if timing or _tm_debug:
 			print("BUILDCHUNK_E %d,%d build_ms=%d t=%d" % [int(e["cx"]), int(e["cz"]), int(res.get("wms", 0)), Time.get_ticks_msec()])
 		return
-	# AC-0231 order-gate evidence: a tier >= 2 high landing while in-r lows
-	# are still pending = gate leakage. Measured with the DISPATCH-time tier
-	# (the gate's decision point — the live tier re-scores the chunk against
-	# the player's NEW position and would count every legitimate tier 0/1
-	# dispatch that outran the player, e.g. fly50). Only tasks already in
-	# flight at the moment the gate re-closed can land this way — the
-	# dispatch itself is gated, so this must stay near 0.
-	if int(e.get("tier", -1)) >= 2 and not _low_inr_drained:
-		perf_high_before_low_n += 1
-		if not bool(c.mesh_built):
-			# a FIRST high build (new coverage) while in-r low pending —
-			# the in-flight straggler class (dispatched in a legitimate
-			# open window, landed after a re-close). Re-meshes (the chunk
-			# already showed high) don't breach the ordering contract.
-			perf_high_before_low_firstbuild_n += 1
 	var ta := Time.get_ticks_msec()
 	if not bool(c.mesh_built):
 		_tm_full_firstbuild_n += 1  # AC-0263: first-build evidence
@@ -6520,7 +5983,7 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 	_hslab_probe_invalidate(c)
 	c.saved_light = {}
 	# AC-0231 rewrite: the high REPLACES the per-slab placeholders (the
-	# fog boxes + the 4x4x4 textured lows) at every slab's Y. Keep-high
+	# 4x4x4 textured lows) at every slab's Y. Keep-high
 	# from here on — a meshed chunk is never downgraded to low
 	# (low_downgrade_n stays 0; the low path only serves never-built
 	# slabs).
@@ -6598,21 +6061,6 @@ func _dirty_add(key: String, y: int) -> void:
 			return
 	dirty_queue.append({"key": key, "si0": si0, "si1": si1})
 	dirty_set[key] = true
-	# AC-0231: an edit stamps the chunk — a far textured low for it may now be
-	# stale (the low rebuilds from the edited data on the next low scan).
-	# Invalidate the cached no-candidate verdict (edits don't bump _pool_ver).
-	# AC-0231 fix3: the WAVE 2 slab-wave verdict too (the edit may have made
-	# a slab stale — or mined a fogged slab out, dropping it from pending).
-	# AC-0231: the order gate (the edit may have made an in-r low stale —
-	# or mined a fogged in-r slab out; far edits don't touch the gate).
-	_low_none_key = ""
-	_low_slab_none_key = ""
-	var cc = chunks.get(key)
-	if cc != null:
-		var ddx := int(cc.cx) - last_pcx
-		var ddz := int(cc.cz) - last_pcz
-		if absi(ddx) + absi(ddz) <= render_radius:  # AC-0261: taxi edge (the gate is a no-op)
-			_low_inr_invalidate()
 
 
 # AC-0199: _dirty_add + jump the entry to the FRONT of the dirty queue.
@@ -7901,10 +7349,9 @@ func _drain_build_queue() -> void:
 		#   ring 2/3 (band B/C)           -> the far payload avg emit
 		#     (the old slab wave's dispatch).
 		# A column ENTERING the real band (ring 2/3 -> 0/1) is simply the
-		# next column in this order whose ring changed: WAVE 3's idle
-		# catch-up is GONE (AC-0335) — the high build is just this
-		# loop's ring-0/1 work (keep-high: its stored lows flip on
-		# demote, low_downgrade_n stays 0).
+		# next column in this order whose ring changed — the high build
+		# is just this loop's ring-0/1 work (keep-high: its stored lows
+		# flip on demote, low_downgrade_n stays 0).
 		# The build unit is ONE SLAB — the column's best pending slab at
 		# its ring's lane (the (taxi, layer) order: the innermost column
 		# first, its slabs fanned in Y-distance from the player's slab).
@@ -9238,10 +8685,10 @@ func _drain_deferred_free() -> void:
 # no fog veil (the user's "fog cubes" were this path). Per slab: one that
 # already holds a READY low (a prior round-trip, fresh stamp + tier)
 # flips NOW (high off, low on - one visible tier at a time); the rest
-# keep SHOWING the high until the wave's low lands and _low_place_slab
+# keep SHOWING the high until the low lands and _low_place_slab
 # flips them. mesh_built stays as-is: a complete high is STILL complete
-# (it is stored on the node) - the drain and the WAVE 3 catch-up must not
-# re-pick the column (the re-entry flip is visibility-only); a PARTIAL
+# (it is stored on the node) - the drain must not re-pick the column
+# (the re-entry flip is visibility-only); a PARTIAL
 # high keeps mesh_built=false and the high lane rebuilds the missing
 # slabs on re-entry (the AC-0278 re-queue).
 # AC-0312: the real -> band demotion's data side — the full (caved)
@@ -9293,7 +8740,6 @@ func _demote_high_band_exit(c: Node3D, key: String) -> void:
 				# the ready stored low takes over - the atomic flip.
 				c.high_slab_visible(si, false)
 				c.low_slab_visible(si, true)
-				_fog_drop_slab(c, si)  # a veil (dormant wave) goes with the tier
 				flipped += 1
 			else:
 				# no ready low: the high keeps showing. Re-open the low
@@ -9420,9 +8866,6 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	# trickle budget until the window expires (see _drain_build_queue).
 	var _now_ms := Time.get_ticks_msec()
 	_sm_move_until = _now_ms + SMALL_MOVE_BUDGET_MS
-	# AC-0231 order gate: the circle moved — a fog-only far chunk may have
-	# just become in-r pending (and a pending in-r chunk may have left).
-	_low_inr_invalidate()
 	# AC-0277: the debounced rebuild SKIP is GONE (see the AHEAD_FAST_MS
 	# comment at the state block + the ahead-target decision at the top of
 	# this function): fast crossings recenter to the chunk in front of the
@@ -9490,7 +8933,7 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 			# the REAL band on this recenter - the engine evicts (free the
 			# nibbles; a re-entry re-seeds from the current data) and the
 			# stored high keeps, the ready lows flip, the rest re-open (the
-			# demote above - no free, no fog).
+			# demote above - no free).
 			if not c.data.is_empty() \
 					and _is_real_col(odx, odz) \
 					and not _is_real_col(dx, dz):
@@ -9681,7 +9124,7 @@ func _reband(c: Node3D, key: String, oldb: int, nb: int) -> void:
 	# (0 <-> 1) or the data-only bookkeeping (3 <-> 0/1). The MESH (high)
 	# is never rebuilt by a band change (keep-high); the low placeholder
 	# exists only on never-built far chunks (band 3) and a reband leaves
-	# its fog/low untouched.
+	# its low untouched.
 	c.band = nb
 	c.collision_enabled = collision_enabled and nb == 0
 	if not bool(c.mesh_built):
@@ -10256,7 +9699,6 @@ func _land_column(c: Node3D, res: Dictionary) -> void:
 	if gmask != 0xFFFFFF:
 		threadgen_enqueue(int(c.cx), int(c.cz), _key(int(c.cx), int(c.cz)), c.get_instance_id(), false, int(c.col_gen))
 	_pool_touch()  # AC-0217: disk data landed on a queued entry
-	_low_fog_for(c)  # AC-0231: the immediate fog-box first pass (far only)
 
 
 func _saved_light_from_res(light: Dictionary, cx: int, cz: int) -> Dictionary:

@@ -87,34 +87,29 @@ var cand_since := 0
 # slab/mesh path).
 var band := 0
 # AC-0231 rewrite: the far-LOD low-res placeholder state, PER SLAB
-# (SEPARATE from the high slabs): fog_instance = ONE MultiMeshInstance3D
-# holding a MultiMesh of SEPARATE instances of the pre-baked 16x16x16 fog-colored
-# box — one instance per NON-AIR slab, placed at the slab's Y (the slab
-# BOTTOM: si*16, so the box spans si*16..si*16+16) — the immediate
-# placeholder on data landing (no merged column mesh; air slabs get none).
-# low_instances/low_slabs = the per-slab cheap 4x4x4-sampled greedy
-# textured meshes (64 coarse cells of 4x4x4 blocks, air cells skipped,
-# AC-0231 fix3 UVs: merged-atlas-strip blocks use REPEATING UVs 4x per
-# 4-block quad, strip-less blocks (leaves/water/...) sample ONE 32px tile)
-# — one instance per slab, positioned at (0, si*16, 0) with slab-local
-# 0..16 geometry — which REPLACE the fog at that slab's Y. low_built/
-# low_stamps = the textured-low state, PER SLAB (si -> the chunk stamp
-# when THAT slab's low was last built) — a low slab is stale (pending
-# rebuild from edited data) when its stamp != c.stamp(); per-slab is what
-# the AC-0231 fix3 global slab wave needs (a partially-lowered chunk must
-# NOT mark its finished slabs stale while the other slabs are still
-# fogged — a single chunk-level stamp re-picked the built slabs forever).
-# low_failed = the AC-0231 fix3 WAVE 2
-# terminal-fog marks: si -> the data_gen at which the slab SAMPLED all-air
-# (the fog box was restored as the honest placeholder) — the slab is not
-# re-picked by the global slab wave until the data changes (an edit bumps
-# data_gen, which re-qualifies it); without the mark the wave would
-# re-pick + re-fail the same slab forever and never advance past it. The
-# HIGH replaces fog and low per slab (the mesh handoff frees them);
-# keep-high: a meshed chunk is never downgraded (the placeholders are only
+# (SEPARATE from the high slabs): low_instances/low_slabs = the per-slab
+# cheap 4x4x4-sampled greedy textured meshes (64 coarse cells of 4x4x4
+# blocks, air cells skipped, AC-0231 fix3 UVs: merged-atlas-strip blocks
+# use REPEATING UVs 4x per 4-block quad, strip-less blocks (leaves/
+# water/...) sample ONE 32px tile) — one instance per slab, positioned
+# at (0, si*16, 0) with slab-local 0..16 geometry. low_built/low_stamps =
+# the textured-low state, PER SLAB (si -> the chunk stamp when THAT
+# slab's low was last built) — a low slab is stale (pending rebuild from
+# edited data) when its stamp != c.stamp(); per-slab is what the low lane
+# needs (a partially-lowered chunk must NOT mark its finished slabs
+# stale while its other slabs are still pending — a single chunk-level
+# stamp re-picked the built slabs forever).
+# low_failed = the low lane's terminal all-air marks: si -> the data_gen
+# at which the slab SAMPLED all-air (the far slabs above the column top,
+# the sparse real slabs) — the slab is not re-picked until the data
+# changes (data[si] leaving null re-qualifies it); without the mark the
+# pick would re-pick + re-fail the same slab forever and never advance
+# past it. AC-0336: the (off) fog wave is GONE — the fog_instance
+# MultiMesh, the fog_slabs set and the fog_mask it drove are gone with
+# it (nothing ever fed them in the shipped path).
+# The HIGH replaces low per slab (the mesh handoff frees it);
+# keep-high: a meshed chunk is never downgraded (the placeholder is only
 # for never-built slabs — low_downgrade_n stays 0).
-var fog_instance: MultiMeshInstance3D = null
-var fog_slabs: Array = []        # sorted slab indices currently holding a fog box
 var low_instances: Array = []    # MeshInstance3D per low slab (sorted, parallel to low_slabs)
 var low_slabs: Array = []        # slab indices holding a per-slab textured low
 var low_built := false
@@ -155,14 +150,13 @@ var hmap: PackedByteArray = PackedByteArray()
 # / cap_mask) and the window stamps (vwin_ver / vwin_full / vwin_mask) are
 # GONE — no culled slabs, no black caps; every slab in the horizontal
 # radius is wanted at its band LOD.
-# AC-0237 phase 1a: 24-bit MIRROR masks of the two sorted placeholder slab
-# sets — O(1) membership for the hot per-frame paths (the low pick's 2-way
-# per-slab test, the fog/low ensure guards) without the sorted Array's
-# linear has(). The ARRAYS stay the source of truth (insert order drives
-# the MultiMesh rewrite loops); every mutation goes through the
-# ensure/drop functions, which sync their mask here. Bit si = 1 iff slab
-# si holds a placeholder of that kind.
-var fog_mask := 0
+# AC-0237 phase 1a: 24-bit MIRROR mask of the sorted placeholder slab
+# set — O(1) membership for the hot per-frame paths (the low pick's
+# per-slab test) without the sorted Array's linear has(). The ARRAY
+# stays the source of truth (insert order drives the attach loops); every
+# mutation goes through the ensure/drop functions, which sync the mask
+# here. Bit si = 1 iff slab si holds a per-slab low. (AC-0336: the fog
+# mask is gone with the fog wave.)
 var low_mask := 0
 # AC-0237 (window-scoped generation, legacy): the GENERATED state.
 # gen_keep = the slab keep mask the last generation ran with (EMPTY = the
@@ -248,17 +242,12 @@ func far_payload() -> PackedByteArray:
 func has_gen_si(si: int) -> bool:
 	return (gen_mask >> si) & 1 != 0
 
-func has_fog() -> bool:
-	return fog_slabs.size() > 0
 
 func has_low() -> bool:
 	return bool(low_built) and low_instances.size() > 0
 
-# AC-0237 phase 1a: O(1) per-slab membership (the mirror masks — see
-# fog_mask). The no-arg has_fog/has_low above keep their meaning (the
-# chunk holds ANY of that placeholder kind).
-func has_fog_si(si: int) -> bool:
-	return (fog_mask >> si) & 1 != 0
+# AC-0237 phase 1a: O(1) per-slab membership (the mirror mask — see
+# low_mask).
 
 func has_low_si(si: int) -> bool:
 	return (low_mask >> si) & 1 != 0
@@ -302,13 +291,9 @@ func low_slab_visible(si: int, on: bool) -> void:
 
 
 func drop_low() -> void:
-	if fog_instance != null:
-		_pool_free_mm(fog_instance)
-		fog_instance = null
 	for mi in low_instances:
 		if mi != null:
 			_pool_free_mi(mi)
-	fog_slabs = []
 	low_instances = []
 	low_slabs = []
 	low_built = false
@@ -316,7 +301,6 @@ func drop_low() -> void:
 	low_tiers = {}  # AC-0252: the tier stamps die with the low set
 	low_failed = {}
 	low_cache = {}  # AC-0257: the stale-LOD cache dies with the low set
-	fog_mask = 0
 	low_mask = 0
 
 # AC-0247: route an instance free through the world pools (the world owns
@@ -330,14 +314,6 @@ func _pool_free_mi(mi: MeshInstance3D) -> void:
 	else:
 		mi.queue_free()
 
-
-func _pool_free_mm(mmi: Node) -> void:
-	if mmi == null or not is_instance_valid(mmi):
-		return
-	if Game.world != null and Game.world.has_method("_mm_checkin"):
-		Game.world._mm_checkin(mmi)
-	else:
-		mmi.queue_free()
 
 
 # AC-0247: the old-instance free for the re-mesh paths (apply_accs /
@@ -1686,7 +1662,7 @@ func _build_slab_collision(s: Slab) -> void:
 # them — no per-spawn allocation); their per-use fields are reset in
 # place to the init_slabs fresh state. The placeholder/instance NODES
 # themselves are NOT touched here — world._col_checkin already returned
-# them to the world pools (fog/low via _lod_free_all, the high slab
+# them to the world pools (the lows via _lod_free_all, the high slab
 # instances via the child walk).
 #
 # col_gen is deliberately NOT reset: it is the logical-identity token the
@@ -1734,8 +1710,6 @@ func _pool_reset() -> void:
 	cand_since = 0
 	band = 0
 	# placeholders (the nodes were already returned to the world pools)
-	fog_instance = null
-	fog_slabs = []
 	low_instances = []
 	low_slabs = []
 	low_built = false
@@ -1743,7 +1717,6 @@ func _pool_reset() -> void:
 	low_tiers = {}  # AC-0252: the tier stamps die with the low set
 	low_failed = {}
 	low_cache = {}  # AC-0257: the stale-LOD cache dies with the low set
-	fog_mask = 0
 	low_mask = 0
 	# generation
 	gen_keep = PackedByteArray()
