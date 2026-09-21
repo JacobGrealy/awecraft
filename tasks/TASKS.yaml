@@ -1,11 +1,11 @@
 meta:
-  updated_at: 2026-09-21T06:21
+  updated_at: 2026-09-21T19:59
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0338
-- AC-0339
+- AC-0349
+- AC-0348
 - AC-0347
 - AC-0342
 - AC-0344
@@ -17096,11 +17096,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-19T21:22
-  updated_at: 2026-09-21T02:16
-  completed_at: null
+  updated_at: 2026-09-21T19:59
+  completed_at: 2026-09-21T19:59
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -17221,7 +17221,43 @@ intake:
     C into ring-level MultiMeshInstance3D groups keeping the emitted geometry byte-identical (farab 1080/1080
     with h_mismatch 0, halo and meshprobe are the proof), and step 2 band A only if step 1 pays. Keep
     the R16 numbers in the results as the comparison that shows what the player at a modest render distance
-    actually gets.'
+    actually gets.
+
+
+    RESUMED BY THE COORDINATOR SESSION (2026-09-21) AFTER A REOPEN - read the reopen note in this ticket''s
+    own notes FIRST, it is the whole reason you are working this. SUMMARY OF WHAT CHANGED SINCE THE FIRST
+    RUN: this ticket was closed as "unnecessary" on a census that had been measured in a BROKEN state
+    - at R50 the far wave was frozen (AC-0345, since FIXED AND PROVEN: the far field now converges) so
+    the first run''s census only ever saw 512 of the far columns, and its ~1.2 per-column extrapolation
+    came from that same starved frame. The corrected measurement is 16,711 converged far MeshInstance3Ds
+    with band C at 3.62 per column, which is about DOUBLE this ticket''s own >=8k batching trigger. So:
+    re-measure first (the AC-0345 builder''s temporary measurement arm was removed at exit, so re-create
+    your own temporarily and REMOVE it again before you exit - the pristine rule), then implement step
+    1 (batch bands B and C into ring-level MultiMeshInstance3D groups) as the ticket originally planned,
+    keeping the emitted geometry BYTE-IDENTICAL: farab 1080/1080 with h_mismatch 0, halo and meshprobe
+    are that proof. Step 2 (band A) only if step 1 pays, and NOT folded into it. RELEVANT NEIGHBOURS,
+    none of them yours: AC-0345 (the starved->converged far wave, closed), AC-0346 (the band-A rim full-data
+    leak, closed - it made the tier check total and generalized the recenter demote, so a far column''s
+    tier stamps are now reliable, which is good news for a batching pass that keys off them), and AC-0347/AC-0342/AC-0343/AC-0344
+    (cave tickets, queued behind you).
+
+
+    CLOSED 2026-09-21 (commit 5972fe2). Coordinator verification: genhash 25/25 byte-identical in two
+    runs and against the reference (the batching does not touch generation); farab 1080/1080 with h_mismatch
+    0 (the emitted-geometry byte-identity that makes this a draw change); ladder band_a_ok 20/20; meshprobe
+    1.0; halo ok; r16 with the documented --fixed-fps 600 recipe ALL sub-flags green with far_holes 0
+    in BOTH bands and static p50 5 ms / moving p95 11 ms; boundary r4 p50 13 / p95 38 with marker_ok and
+    remesh_ok true and staged_dropped 1768 inside its <=2500 threshold; save green; flysave green with
+    tail_delta 0 and disk_origin 0 (the save-filter contract survives the batching); battery 12 byte-identical
+    with exactly the same differing-mode set as before (no new delta). VISUAL CHECK MADE POSSIBLE BY VISION,
+    and it is the check this change most needed: two R24 renders under xvfb/gl_compatibility - a top-down
+    view and a grazing view - both show the far field as a CONTINUOUS stepped shell with NO seams, gaps
+    or missing wedges at the merged-sector boundaries, which is exactly the failure mode a batching change
+    risks. Caveat stated: the proxy renderer cannot show the shipped look, so this is a geometry/coverage
+    check, not a lighting one. The two gaps the builder flagged stand as named follow-ups: the ring''s
+    water-merge path is G0-verified but not world-verified on seed 44 (its only water-topped far column
+    legitimately holds no water surface at its G=4 stamp), and the R50 before-draw figure is derived rather
+    than measured.'
   comments: []
 - id: AC-0339
   title: light-settle-gate-wait
@@ -17230,11 +17266,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-19T21:22
-  updated_at: 2026-09-19T21:22
-  completed_at: null
+  updated_at: 2026-09-21T19:59
+  completed_at: 2026-09-21T19:59
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -17309,7 +17345,38 @@ intake:
     lands first, since it changes the ORDER slabs are dispatched in and therefore what the settle wait
     even means. Do not change the cave fields, the mesh emit, or the far-tier floor.
 
-    '
+
+
+    TAKEN BY THE COORDINATOR SESSION (2026-09-21). ITS SEQUENCING FENCES ARE SATISFIED: it required AC-0334
+    (the halo demote-content classification) to resolve first - it did, and the verdict was ARM-SIDE (the
+    reference was over-modelling the halo; the engine was right), so option (b)''s machinery is not sitting
+    on an unknown - and it required AC-0335 (one work order, one dispatch) if that landed first, which
+    it did (the dispatch order changed, which is exactly why this ticket wanted it settled before measuring
+    what the settle wait means). ALSO LANDED SINCE THE TICKET WAS WRITTEN and relevant to you: AC-0346
+    made the tier check total and generalized the recenter demote (so a demoted column''s data resolution
+    is trustworthy now), and AC-0338 changed how the far tiers are DRAWN (merged ring meshes with the
+    per-slab records kept off-tree) - the light/bake path is untouched by both, but if you read mesh or
+    instance state while instrumenting, remember the far slots are off-tree now. CONTENTION NOTE: the
+    coordinator''s AC-0338 heavy gate stage is running in the background while you work and holds the
+    godot slot intermittently - check `pgrep -af ''[g]odot''` before EVERY call and WAIT rather than proceeding,
+    and never kill a godot you did not start.
+
+
+    CLOSED 2026-09-21 (commit bc549af). The ticket''s own gate - step 0 must not move any existing standing
+    value - PASSED, which is what makes the measurement trustworthy: genhash 25/25 byte-identical x2 and
+    against the reference, farab 1080/1080 h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate
+    green (wash false, low_on_high_n 6, leaks 0, double-LOD census 0/0), starlighttest ok, r16 all sub-flags
+    with far_holes 0 in both bands and static p50 5 ms, boundary p50 13 / p95 38 with staged_dropped 1768,
+    battery with no new delta. The verdict is NO BEHAVIOUR CHANGE, taken through the ticket''s own escape
+    hatch because the evidence says so: the measured worst case is 0.78 s (torch_place p50 27 / p95 47
+    frames), the gated slab keeps showing its settled mesh so the AC-0286 never-unlit contract is not
+    strained, and the gate is the smaller half of the edit response - so a finer gate or a stale-bake
+    display would buy a fraction of a second at real risk. STAR_STEP_BUDGET_MS untouched as the ticket
+    demanded. TWO PROCESS IMPROVEMENTS OUT OF IT: `brightslab` is now in the coordinator''s standing set
+    (it was in neither the heavy set nor the battery list, which is why a red that gates its own ok went
+    unseen), and the heavy-stage launcher''s slot-wait pattern was tightened after a stage was found stuck
+    in a wait that matched its own command line - a stage that cannot start now says so instead of reporting
+    "running".'
   comments: []
 - id: AC-0340
   title: collision-frame-budget
@@ -18168,4 +18235,216 @@ intake:
     \ if the plan review concludes the structural path is wrong for us, fall back to AC-0341's superseded\
     \ multiplicative-gate design (it is a smaller, calibration-preserving change) and say so explicitly\
     \ in plan.html and the results page.\n"
+  comments: []
+- id: AC-0348
+  title: r24-crossing-frame-time-measurement
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-21T09:34
+  updated_at: 2026-09-21T09:34
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+
+    Walking across chunk boundaries still produces bad frames at real play distances. Every existing measurement
+    of that walking is taken at render distance 4, where the world only holds 93 columns; a session at
+    the shipped distances holds over a thousand. I want the crossing measured where people actually play,
+    and I want the crossing cost attributed to a cause instead of inferred.
+
+
+    2) Technical Details
+
+
+    WHY THIS TICKET EXISTS - the instrument''s blind spot:
+
+    - The `boundary` arm is the only arm that walks across chunks and counts crossings, and it is run
+    at R4. Standing row `boundary r4 one-shot` (HARNESS.md section 3) is the gate.
+
+    - At R4 the resident set is 93 columns; at R24 it is 1201 (taxi-square |dx|+|dz| <= R: R4 41, R8 145,
+    R16 545, R24 1201, R50 5101).
+
+    - The R24/R50 load-arm runs measure the LOAD GATE wall only (`simband_ms`) - they stop when the loading
+    screen closes and never sample steady-state play.
+
+    - So nothing in the suite has ever measured sustained crossing at a playable render distance.
+
+
+    WHAT THE R4 RUN ALREADY SHOWS (fresh run, .scratch/AC-0345/boundary-r4.log): ok true, walk_chunks
+    20, crossings 20, p50_ms 13, p95_ms 38, **max_ms 782**, resident_final 93, staged_dropped 1699, col_deferred
+    167, collision_slabs 1995, collision_slab_max_ms 24.8, reband_entry 186 with reband_rearm_slabs 0.
+    A 782 ms frame is a 47-frame stall at 60 fps, and it is at 1/13th of the R24 population.
+
+
+    READ THE EXISTING FIELDS CORRECTLY (a trap worth recording):
+
+    - `burst_ms_per_crossing` / `burst_p95_ms` / `burst_max_ms` are NOT frame latency. The arm records
+    the crossing time and resolves each entry when the whole forward WALL of chunks is `mesh_built` (harness.gd
+    ~22628), so a 4.5-7.5 s "burst" is wall-clock throughput for the forward band, not a stalled frame.
+    Do not gate frame smoothness on it. The frame-time fields in this arm are p50_ms / p95_ms / max_ms.
+
+
+    THE ATTRIBUTION GAP (why the 782 ms is unexplained, not just unmeasured-once):
+
+    - `recenter()` (world.gd, the crossing entry) is called from player.gd on a chunk change - i.e. from
+    the PHYSICS frame.
+
+    - The `WP_RECENTER` wprof stage brackets `_recenter_slice()` only, which is the SLICED continuation
+    (REC_SLICE_BUDGET_MS 8). The synchronous crossing sweep is outside the profiled window, so its cost
+    lands nowhere attributable.
+
+    - Measured reading of that sweep, recorded here so nobody re-derives it: the per-entry body is distance
+    arithmetic + `in_stream_set`, and the expensive calls (`_demote_high_band_exit`, `_star_halo_evict`,
+    `_star_halo_promote`, `_reentry_flip_high`) fire only inside the taxi-band-crossing guards - a one-chunk
+    crossing at sim 4 moves about 9 columns across the real-band diamond edge. So the sweep is expected
+    to be small (order 1-3 ms at R24, dominated by `generate_far` in `_demote_to_far`, which is synchronous
+    on the main thread at roughly 92 us/column). That is an ESTIMATE from code reading, not a measurement
+    - step 1 exists to replace it with one.
+
+
+    STEP 0 - BASELINE AT R24, no new code (do this first; it may be all that is needed):
+
+    `AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=24` on the current tree, with the walk length reduced (`AWECRAFT_WALK=n`,
+    default 20 crossings) to keep the wall manageable, and `AWECRAFT_TICKTIME=1` for the fluid sample.
+    Record p50_ms / p95_ms / max_ms, crossings, resident_final, and the collision/collide counters. Note
+    for reproducibility: the arm''s `ok` is `crossings == walk_lines and marker_ok`, so lowering AWECRAFT_WALK
+    keeps it meaningful (an off-default WALK_SPEED reads ok:false for a budget reason - judge on the metric
+    fields, per the existing standing-row caveat).
+
+
+    STEP 1 - MAKE THE CROSSING ATTRIBUTABLE:
+
+    - Bracket the synchronous crossing sweep in the physics frame (a dedicated crossing ring, since the
+    existing per-frame wprof partition only covers `World._process`), and report p50/p95/max of the crossing
+    burst alongside p50/p95/max frame time for the frames the crossing occurred on.
+
+    - A per-crossing cause census: columns demoted, columns promoted, halo evicts, re-entry flips, and
+    any synchronous `generate_far` calls - so the next reader can see which term owns the tail rather
+    than inferring it.
+
+    - Keep it instrumentation-only: no behaviour change, and the existing standing values must not move.
+
+
+    STEP 2 - MAKE IT A GATE:
+
+    - Add a standing value for R24 crossing frame latency (the frame-time fields, never the burst/throughput
+    fields) with a threshold, in HARNESS.md section 3 via tasks/harness_data.yaml + `python3 tasks/scripts/harness_doc.py
+    --render`.
+
+    - If the R24 `boundary` run is too long to gate on, add a crossing-focused phase to the existing r16
+    arm (which already measures per-frame latency and recenter counts) rather than a new arm - it must
+    not restructure the arms beyond adding the phase.
+
+
+    WHAT THIS TICKET DOES NOT DO: no optimisation, no threading work, no collision or mesh changes. Its
+    output is a measurement plus the standing value; whatever the attribution names becomes its own ticket.
+    Do NOT propose moving `recenter` to a worker thread without the step 1 numbers: the sweep''s mutating
+    calls (`_star_halo_evict` into the light engine, `_reentry_flip_high` setting MeshInstance3D.visible
+    on scene-tree nodes, the `chunks` state the demote rewrites) are main-thread-only, and `generate_far`
+    is the only cleanly movable piece.
+
+
+    RELATED: AC-0339 (light-settle gate wait) also adds a wait measurement; keep the two separate - this
+    ticket is frame-time-at-crossing, that one is settle-wait duration.
+
+    '
+  comments: []
+- id: AC-0349
+  title: brightslab-mesh-payload-mismatch
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-21T19:29
+  updated_at: 2026-09-21T19:59
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: After a block edit, a slab can show LIGHT that does not match the light the engine
+    actually settled - 15 cells wrong in one measured case. The player sees a patch of terrain lit differently
+    from its neighbours until something else rebuilds it.
+
+
+    2) Technical Details:
+
+    FOUND BY THE AC-0339 BUILDER (2026-09-21) while measuring the light-settle wait, and reported rather
+    than smoothed: the `brightslab` arm (the AC-0283 bright-slab-on-edit regression, a fully settled 7x7
+    that edits, drives the engine and the remesh lane to a quiet world, then asserts three ways) is RED
+    and DETERMINISTIC - three runs byte-identical - with `mesh_pa_mism` 15 / 5 / 5 on cases C2 / C5 /
+    C6 (the applied mesh versus the SETTLED engine payload) and C4 `bakes` 68 against the documented 73.
+    The arm''s `ok` requires `mesh_pa_mism == 0` (harness.gd:9079), so it has been silently red.
+
+    WHY IT WENT UNNOTICED, WHICH IS ITSELF THE FINDING: `brightslab` is NOT in the coordinator''s standing
+    heavy-gate set and NOT in the battery mode list, so no gate this era has run it. Add it to the coordinator''s
+    set as part of this ticket''s closeout (one line in the gate script, and HARNESS.md should say which
+    arms the standing set covers, so a green sweep means something).
+
+    THE CLASSIFICATION QUESTION IS THE AC-0334 QUESTION, RE-RUN FOR EDIT CASES, and it must be settled
+    on evidence before anything is re-baselined: is `mesh_pa_mism` REAL remesh-lane staleness (the lane
+    applied a bake computed before the engine finished settling, i.e. a slab that will keep showing stale
+    light - a genuine AC-0286 "never unlit"-adjacent defect), or is the ARM''s pairing wrong (comparing
+    the applied mesh against a payload snapshot taken at a different moment than the payload the mesh
+    was built from)? Do the three-way comparison AC-0334 did: dump the cells the mismatch names, recompute
+    the expected bake from the settled engine payload, and compare engine / arm expectation / applied
+    mesh all three. Do NOT re-baseline first.
+
+    THE C4 COUNT IS A SEPARATE, SIMPLER ITEM in the same run: `bakes` reads 68 against the documented
+    73, and the AC-0297 note in HARNESS.md section 3 records 73 as the sanctioned FEED delta. The likely
+    cause is the cave re-carve (AC-0288/AC-0289) changing what the fixture''s 7x7 contains, which makes
+    it the same class as the stale expectations already logged on AC-0330 - but establish it (A/B against
+    the pre-cave tree if needed) rather than assuming, and if it is content-driven, decide whether the
+    arm should assert the COUNT at all or assert an invariant (a bake count is a content-shaped expectation;
+    "the applied bake equals the settled payload''s bake" is not).
+
+    CONTEXT THE BUILDER ESTABLISHED: the red is not the AC-0339 instrumentation''s doing (it read the
+    same before and after, byte-identical), and the arm''s fixture is the REAL band (a settled 7x7), so
+    AC-0338''s far-tier draw batching cannot reach it by construction - the coordinator is confirming
+    that with a pre-AC-0338 A/B rather than assuming it, and will record the result here.
+
+    GATES: `brightslab` `ok:true` with every case exact and the documented fields matching what the arm
+    actually reports (update HARNESS.md section 3 + tasks/harness_data.yaml + the rendered doc in the
+    same task - the doc currently describes fields the arm does not check and omits one it does); plus
+    the standing set for whatever you touch (lightstate, halo, starlighttest 0/5,308,416, ladder, r16
+    all sub-flags, boundary r4, battery, genhash 25/25 byte-identical if generation is untouched).
+
+
+
+    COORDINATOR REPRODUCTION + A NARROWING DETAIL (2026-09-21, from the combined standing-set run on the
+    tree carrying AC-0338 + AC-0339): `brightslab` reads `ok:false` exactly as the AC-0339 builder reported
+    - C2 `mesh_pa_mism` 15 (and `mesh_pb_mism` 15), C5 5/5, C6 5/5, C4 `bakes` 68 with `lver_drops` 0,
+    C1/C3 clean - AND THE DETAIL THAT MATTERS FOR YOUR CLASSIFICATION: **`eng_mism` IS 0 IN EVERY SINGLE
+    CASE**. So the engine''s settled light agrees with the reference everywhere; what differs is the APPLIED
+    MESH''s baked light versus the settled payload (pa = the payload the mesh should have been baked from,
+    pb = the pull path). That points the investigation at the remesh/bake-application step rather than
+    at the light solve, and it means the AC-0334-style three-way comparison should be run as: settled
+    engine payload (known correct, `eng_mism` 0) / the payload the ARM believes the mesh was baked from
+    / the mesh''s actual vertex colors. Coordinator note on causation, already reasoned but to be confirmed
+    by the A/B recorded below: the fixture is a settled 7x7 in the REAL band, and AC-0338''s batching
+    only moved FAR-tier slab records off-tree, so it cannot reach this arm by construction - the coordinator
+    is running a pre-AC-0338 A/B (checking out that commit''s world.gd/chunk.gd) to prove it rather than
+    assume it, and will append the result here.
+
+
+    A/B RESULT, APPENDED AS PROMISED (coordinator, 2026-09-21): the pre-AC-0338 A/B is DONE and it EXONERATES
+    the far-tier draw batching. Method: the working tree was clean, so `git checkout 5972fe2^ -- godot/world/world.gd
+    godot/world/chunk.gd` restored the game code from before that commit, the `brightslab` arm was run
+    on it, and the tree was restored with `git checkout HEAD --`. RESULT: IDENTICAL red - C2 `mesh_pa_mism`
+    15, C5 5, C6 5, C4 `bakes` 68, C1/C3 clean, and `eng_mism` 0 in every case. So this is NOT caused
+    by AC-0338 (which only moved far-tier slab records off-tree and cannot reach a real-band 7x7 fixture
+    anyway), and combined with the AC-0339 builder''s before/after runs on its own instrumentation, the
+    red is older than both. That leaves the cave series as the likely trigger for the C4 count at least
+    (`bakes` 73 -> 68 is a content-shaped expectation in a fixture whose world was re-carved by AC-0288/AC-0289),
+    while the `mesh_pa_mism` cells need the three-way comparison to classify. THE STANDING SET HAS BEEN
+    FIXED so this cannot hide again: `brightslab` is now IN the coordinator''s heavy-gate set (it was
+    in neither that nor the battery list), and it reads red there - recorded honestly as a known red rather
+    than dropped from the set.'
   comments: []
