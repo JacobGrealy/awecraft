@@ -312,6 +312,38 @@ Match these; do not improvise a different approach in a task.
   the LIVE RE-FLOOR storm (re-meshing the whole far field at once — the expensive ON
   direction) is DEFERRED, the follow-up designs both directions against measured
   churn.
+- **AC-0338 — the ring-level far batch (how bands B/C DRAW)**: the avg tiers'
+  per-slab geometry is a DRAW-batched, not an emit-batched, thing. The emit is
+  still the per-slab C++ avg emit (byte-identical — farab 1080/1080 + h_mismatch 0,
+  halo, ladder, meshprobe are the standing proof), but the DRAW is per RING SECTOR:
+  one `MeshInstance3D` per (avg tier, world-space 1/32-angle sector) — 32 sectors ×
+  2 tiers = up to 64 children of `World` (`_ring_*` in `world.gd`), each wearing a
+  merged `ArrayMesh` of every visible slab of that tier in that sector, in world
+  coordinates (surface 0 = the opaque avg in the shared `_lod_avg_mat()`; surfaces
+  1/2 = the WATER EXCEPTION faces in the shared fluid materials — the two-pass
+  camera-side cull is per surface and survives the merge). The per-slab RECORD
+  survives on the slot `MeshInstance3D`s that `c.low_instances` holds — the slots
+  are OFF-TREE now (pooled exactly as before; their `.visible` flag is the far
+  draw state the ring re-derives, and their `.mesh` is the exact emit arrays the
+  harness byte gates read). A slab draws in the ring of its STORED tier stamp,
+  NOT its column's live tier (the AC-0257 stale-tier window: a knob change or
+  recenter leaves it at the old tier until the re-emit lands — it must keep
+  SHOWING then, exactly as the old on-tree MIs did; classifying by live tier
+  makes the slab vanish for the window — measured, AC-0338 resumed). Exit
+  teardown: the resident columns' off-tree slots are freed explicitly in
+  `_pool_free_all` — this Godot (4.7.1) does not release an off-tree node
+  referenced only from a freed node's script state (the pooled MIs always had
+  this treatment; the slots join them). Churn (attach / drop / flip / column
+  evict) marks the
+  column's sector(s) dirty; the coalesced step in `_low_step` re-merges ONE sector
+  per frame (per-sector 250 ms cooldown, 60 ms global floor). The sector
+  partition is STATIC in world space (chunk nodes sit at absolute `(cx*16, cz*16)`
+  and recenter only evicts/creates), so a recenter re-buckets nothing — its cost
+  is a paced far-field re-draw over a few seconds (a rebuild is whole-sector: the
+  `ArrayMesh` API has no in-place surface append, and a full-tier GDScript re-merge
+  is ~1.1 s at the R50 converged scale — the measured reason the tiers are
+  sectorized instead of one MI per tier). Memory: the sector meshes are one extra
+  copy of the visible far geometry (the slot meshes survive for the gates).
 - **The cave field (the single density field, AC-0215 / tuned at AC-0288 / P1 tunnels at
   AC-0289)**: caves are wherever the ONE density field reads solid→air,
   `d = S_ramp((H−y)/R) + A(y)·(C−0.5)` — the surface AND the caves come from the same

@@ -1250,6 +1250,23 @@ func _col_checkin(c: Node3D) -> void:
 # first), so immediate free() is safe and the prewarm entries do not
 # leak at exit.
 func _pool_free_all() -> void:
+	# AC-0338: the RESIDENT columns' off-tree slot MIs first — this
+	# engine version does NOT release an off-tree node at exit that is
+	# referenced only from a freed node's script state (measured: the
+	# R16 census leaked 1104 slots + their meshes + RIDs at exit; a
+	# minimal repro + the explicit-free fix in .scratch/AC-0338/
+	# leak_test2.gd). Free them explicitly and clear the owning arrays
+	# so the later tree teardown releases nothing dangling. (The pooled
+	# MIs below already had this treatment since AC-0247 — the pool
+	# teardown is what keeps them RID-clean at exit.)
+	for key in chunks:
+		var c: Node3D = chunks[key]
+		if c == null or not is_instance_valid(c):
+			continue
+		for mi in c.low_instances:
+			if mi != null and is_instance_valid(mi):
+				mi.free()
+		c.low_instances = []
 	for mi in _mi_pool:
 		if mi != null and is_instance_valid(mi):
 			mi.free()
@@ -1393,6 +1410,304 @@ func _lod_avg_mat() -> ShaderMaterial:
 		_lod_avg_material.shader = sh
 		_lod_avg_material.set_shader_parameter("day", Color(1.0, 1.0, 1.0))
 	return _lod_avg_material
+
+# =====================================================================
+# AC-0338 — the ring-level far batch (bands B/C draw batching)
+# =====================================================================
+# The far avg tiers used to draw one MeshInstance3D per column per slab
+# (~16.7k scene-tree nodes / draw calls at the shipped render distance
+# 50 — the AC-0338/AC-0345 converged census). The DRAW is now batched
+# per RING SECTOR: one MeshInstance3D per (avg tier, world-space 1/32
+# angle sector) wearing a merged ArrayMesh of every visible slab of
+# that tier in that sector, in world coordinates (surface 0 = the
+# opaque avg in the shared _lod_avg_mat(); surfaces 1/2 = the WATER
+# EXCEPTION faces in the shared fluid materials — the same two-pass
+# camera-side cull as the slot path). A DRAW change, not an emit
+# change: the emitted geometry stays byte-identical (farab 1080/1080 +
+# h_mismatch 0, halo, ladder and meshprobe are the proof) — the batch
+# only re-packages the already-emitted arrays.
+# The per-slab RECORD survives on the slot MeshInstance3Ds that
+# c.low_instances already holds (the exact emit arrays + the
+# visibility flag) — the slots just stop being scene-tree children
+# (they were pooled before AC-0247 and pool exactly the same way
+# now), so every harness read site (c.low_instances[i].visible/.mesh —
+# the r16 far census, the ladder, the halo) keeps its exact semantics,
+# and "at most one visible tier per slab" is still the slot's
+# .visible flag.
+# SECTORING (the merge-cost finding, measured — see the AC-0338
+# results): a full-tier re-merge in GDScript is ~1.1 s at the R50
+# converged scale (per-vertex translate + index rebase, ~218 ns/vert)
+# on top of a ~350 ms add_surface_from_arrays engine floor that no
+# caller-side C++ helper removes (the floor is the engine surface
+# build). So each tier is split into RING_SECTORS world-space angle
+# wedges and a rebuild touches ONE sector only (≤ ~40 ms at the R50
+# sector scale, ~5 ms at R16). The sector partition is STATIC in
+# world space (the chunk node sits at absolute (cx*16, cz*16) and is
+# never repositioned — recenter only evicts/creates), so a recenter
+# re-buckets nothing; the churn (the trailing-arc evicts + the
+# leading-arc far fill) marks the affected sectors dirty and the
+# coalesced step (one sector per frame, per-sector cooldown) re-merges
+# them. Re-merge is whole-sector (the ArrayMesh API has no in-place
+# surface append) — the paced cost of a recenter is a far-field
+# re-draw over a few seconds, recorded in the results.
+const RING_SECTORS := 32
+const RING_REBUILD_GAP_MS := 250  # per-sector cooldown between re-merges
+const RING_MIN_GAP_MS := 60       # global floor between any two sector re-merges
+
+var _ring_mi: Array = []        # [(tier-2)*32+sec] -> MeshInstance3D (lazy)
+var _ring_dirty: Array = []     # same index -> bool (membership changed)
+var _ring_last_ms: Array = []   # same index -> wall ms of the last re-merge
+var _ring_slab_n: Array = []    # same index -> merged slab count (census)
+var _ring_cur := 0              # rotating scan pointer (fairness under churn)
+var _ring_last_any_ms := 0
+var _ring_water_mat: Material = null
+var _ring_water_bf_mat: Material = null
+var ring_rebuilds_n := 0
+var ring_rebuild_ms := 0.0
+var ring_rebuild_max_ms := 0.0
+
+func _ring_ready() -> void:
+	if _ring_mi.is_empty():
+		for i in range(RING_SECTORS * 2):
+			_ring_mi.append(null)
+			_ring_dirty.append(false)
+			_ring_last_ms.append(0)
+			_ring_slab_n.append(0)
+
+# The harness-readable ring census (the census50 arm + the results).
+func ring_stats() -> Dictionary:
+	_ring_ready()
+	var mi_n := 0
+	var slabs := 0
+	for i in range(_ring_mi.size()):
+		if _ring_mi[i] != null:
+			mi_n += 1
+		slabs += int(_ring_slab_n[i])
+	return {
+		"mi": mi_n,
+		"sectors": RING_SECTORS,
+		"slabs": slabs,
+		"rebuilds": ring_rebuilds_n,
+		"ms": ring_rebuild_ms,
+		"max_ms": ring_rebuild_max_ms,
+	}
+
+# The sector of a column: its WORLD-space angle in 1/32-turn units.
+# Static (the nodes never move) — a recenter re-buckets nothing.
+func _ring_sector_of(cx: int, cz: int) -> int:
+	if cx == 0 and cz == 0:
+		return 0
+	var a := fmod(atan2(float(cz), float(cx)) + PI, TAU)
+	var s := int(a / (TAU / float(RING_SECTORS)))
+	return s if s >= 0 and s < RING_SECTORS else 0
+
+func _ring_mi_for(tier: int, sec: int) -> MeshInstance3D:
+	var i := (tier - 2) * RING_SECTORS + sec
+	if _ring_mi[i] == null:
+		var mi := MeshInstance3D.new()
+		mi.name = "ring_t%d_s%d" % [tier, sec]
+		add_child(mi)
+		_ring_mi[i] = mi
+	return _ring_mi[i]
+
+# Mark the column's sector dirty on BOTH avg tiers — the rebuild
+# re-classifies every segment by the slab's stored tier stamp
+# (c.low_tiers), so the double-mark is at worst one redundant re-merge
+# (coalesced like everything else).
+func _ring_dirty_column(c) -> void:
+	_ring_ready()
+	var sec := _ring_sector_of(int(c.cx), int(c.cz))
+	for t in [2, 3]:
+		_ring_dirty[(t - 2) * RING_SECTORS + sec] = true
+
+# The shared ring water materials (the slot path's materials, shared
+# per world): Data.fluid_anim(_bf)_mats[5] when the atlas pack built
+# them, one cached fallback otherwise (the chunk _fluid_material
+# shape — the no-atlas path).
+func _ring_water_material() -> Material:
+	var m = Data.fluid_anim_mats.get(5)
+	if m != null:
+		return m
+	if _ring_water_mat == null:
+		_ring_water_mat = _ring_fallback_fluid_mat()
+	return _ring_water_mat
+
+func _ring_water_bf_material() -> Material:
+	var m = Data.fluid_anim_bf_mats.get(5)
+	if m != null:
+		return m
+	if _ring_water_bf_mat == null:
+		_ring_water_bf_mat = _ring_fallback_fluid_mat()
+	return _ring_water_bf_mat
+
+func _ring_fallback_fluid_mat() -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED  # AC-0245: boundary faces from all sides
+	m.vertex_color_use_as_albedo = true
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.albedo_color = Color(1, 1, 1, 0.62)
+	m.roughness = 0.15
+	if Data.atlas_tex != null:
+		m.albedo_texture = Data.atlas_tex
+		m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	return m
+
+# The coalesced step — runs from _low_step after the attach poll (the
+# same frame the churn lands). One sector per frame, per-sector
+# cooldown, a global floor between re-merges; steady state (no churn)
+# costs the 64-flag scan.
+func _ring_step() -> void:
+	_ring_ready()
+	var now := Time.get_ticks_msec()
+	if now - _ring_last_any_ms < RING_MIN_GAP_MS:
+		return
+	for k in range(RING_SECTORS * 2):
+		var i := (_ring_cur + k) % (RING_SECTORS * 2)
+		if not _ring_dirty[i]:
+			continue
+		if now - int(_ring_last_ms[i]) < RING_REBUILD_GAP_MS:
+			continue
+		_ring_cur = (i + 1) % (RING_SECTORS * 2)
+		_ring_dirty[i] = false
+		_ring_rebuild_sector(i)
+		_ring_last_any_ms = Time.get_ticks_msec()
+		return
+
+# Re-merge ONE sector from the live slot records (read-back — the
+# slots always hold the exact emit arrays, so there is no registry to
+# keep in sync and no registry memory: the sector mesh is the only
+# extra copy of the visible far geometry).
+func _ring_rebuild_sector(i: int) -> void:
+	var tier := 2 + i / RING_SECTORS
+	var sec := i % RING_SECTORS
+	var t0 := Time.get_ticks_usec()
+	var bv := PackedVector3Array()
+	var bn := PackedVector3Array()
+	var bc := PackedColorArray()
+	var bi := PackedInt32Array()
+	var wv := PackedVector3Array()
+	var wn := PackedVector3Array()
+	var wc := PackedColorArray()
+	var wu := PackedVector2Array()
+	var wi := PackedInt32Array()
+	var slab_n := 0
+	for key in chunks:
+		var c: Node3D = chunks[key]
+		if int(c.face) > 1:
+			continue
+		# NO live-tier prefilter: a slab is drawn in the ring of its
+		# STORED tier stamp (the AC-0257 stale-tier window — a knob
+		# change / recenter leaves the slab at its old tier until the
+		# re-emit lands, and the old per-slab MIs kept SHOWING it then).
+		# Prefiltering on the column's live tier would make the slab
+		# vanish for the window (measured: an R50 boot dispatch at the
+		# cfg knobs stamped a band-C slab in a band-B column — the
+		# .scratch/AC-0338/census50-waterprobe2.log probe). The
+		# per-slab stamp check below does the real classification;
+		# skipping the live-tier check costs a cheap int compare per
+		# column per sector (~0.1 ms at the R50 scale).
+		if _ring_sector_of(int(c.cx), int(c.cz)) != sec:
+			continue
+		var ox := float(int(c.cx) * 16)
+		var oz := float(int(c.cz) * 16)
+		for j in range(c.low_slabs.size()):
+			var si: int = int(c.low_slabs[j])
+			# classified by the STORED tier stamp (the AC-0257
+			# stale-tier window: a slab re-pending at a new tier keeps
+			# showing its old-tier mesh until the re-emit — the ring
+			# draws exactly what the visible slot holds, identical to
+			# the old per-slab MI draw).
+			if int(c.low_tiers.get(si, -1)) != tier:
+				continue
+			var mi: MeshInstance3D = c.low_instances[j]
+			if mi == null or not mi.visible or not (mi.mesh is ArrayMesh):
+				continue
+			var am: ArrayMesh = mi.mesh
+			var off := Vector3(ox, float(si * 16), oz)
+			# surface_get_arrays returns an ARRAY_MAX Array of Variants
+			# (null where the slot surface has no such array) — the
+			# `as`-cast + null check keeps a degenerate surface from
+			# throwing a typed-assignment error (G0's zero-SCRIPT-ERROR
+			# contract).
+			var arrs: Array = am.surface_get_arrays(0)
+			var vv = arrs[Mesh.ARRAY_VERTEX]
+			var v: PackedVector3Array = vv as PackedVector3Array
+			if v == null or v.is_empty():
+				continue
+			var idx: PackedInt32Array = arrs[Mesh.ARRAY_INDEX] as PackedInt32Array
+			var base := bv.size()
+			for k in range(v.size()):
+				bv.append(v[k] + off)
+			if idx != null:
+				for k in range(idx.size()):
+					bi.append(idx[k] + base)
+			var nrm: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL] as PackedVector3Array
+			if nrm != null and not nrm.is_empty():
+				bn.append_array(nrm)
+			var col: PackedColorArray = arrs[Mesh.ARRAY_COLOR] as PackedColorArray
+			if col != null and not col.is_empty():
+				bc.append_array(col)
+			# the WATER EXCEPTION (AC-0312): surfaces 1 and 2 of the slot
+			# share the same arrays — the ring keeps both (the two-pass
+			# camera-side cull is per surface and survives the merge).
+			if am.get_surface_count() > 1:
+				var warrs: Array = am.surface_get_arrays(1)
+				var w2: PackedVector3Array = warrs[Mesh.ARRAY_VERTEX] as PackedVector3Array
+				if w2 != null and not w2.is_empty():
+					var wbase := wv.size()
+					for k in range(w2.size()):
+						wv.append(w2[k] + off)
+					var widx: PackedInt32Array = warrs[Mesh.ARRAY_INDEX] as PackedInt32Array
+					if widx != null:
+						for k in range(widx.size()):
+							wi.append(widx[k] + wbase)
+					var wnm: PackedVector3Array = warrs[Mesh.ARRAY_NORMAL] as PackedVector3Array
+					if wnm != null and not wnm.is_empty():
+						wn.append_array(wnm)
+					var wcm: PackedColorArray = warrs[Mesh.ARRAY_COLOR] as PackedColorArray
+					if wcm != null and not wcm.is_empty():
+						wc.append_array(wcm)
+					var wum: PackedVector2Array = warrs[Mesh.ARRAY_TEX_UV] as PackedVector2Array
+					if wum != null and not wum.is_empty():
+						wu.append_array(wum)
+			slab_n += 1
+	var ring_mi := _ring_mi_for(tier, sec)
+	if bv.is_empty():
+		ring_mi.mesh = null
+	else:
+		var mesh := ArrayMesh.new()
+		var a: Array = []
+		a.resize(Mesh.ARRAY_MAX)
+		a[Mesh.ARRAY_VERTEX] = bv
+		if not bn.is_empty():
+			a[Mesh.ARRAY_NORMAL] = bn
+		if not bc.is_empty():
+			a[Mesh.ARRAY_COLOR] = bc
+		a[Mesh.ARRAY_INDEX] = bi
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, a)
+		mesh.surface_set_material(0, _lod_avg_mat())
+		if not wv.is_empty():
+			var aw: Array = []
+			aw.resize(Mesh.ARRAY_MAX)
+			aw[Mesh.ARRAY_VERTEX] = wv
+			if not wn.is_empty():
+				aw[Mesh.ARRAY_NORMAL] = wn
+			if not wc.is_empty():
+				aw[Mesh.ARRAY_COLOR] = wc
+			if not wu.is_empty():
+				aw[Mesh.ARRAY_TEX_UV] = wu
+			aw[Mesh.ARRAY_INDEX] = wi
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, aw)
+			mesh.surface_set_material(mesh.get_surface_count() - 1, _ring_water_material())
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, aw)
+			mesh.surface_set_material(mesh.get_surface_count() - 1, _ring_water_bf_material())
+		ring_mi.mesh = mesh
+	_ring_slab_n[i] = slab_n
+	var dt := float(Time.get_ticks_usec() - t0) / 1000.0
+	ring_rebuilds_n += 1
+	ring_rebuild_ms += dt
+	ring_rebuild_max_ms = maxf(ring_rebuild_max_ms, dt)
+	_ring_last_ms[i] = Time.get_ticks_msec()
 
 # AC-0283 P3 (AC-0313): the REAL band — taxi ≤ band0_r (the sim square):
 # the collision/fluid sim square, exactly P2 (the star seed on data
@@ -2532,6 +2847,7 @@ func _low_drop_slab(c: Node3D, si: int) -> void:
 		c.low_built = false
 		c.low_stamps = {}
 	_low_probe_invalidate(c)  # AC-0262: a drop re-pends the slab
+	_ring_dirty_column(c)  # AC-0338: a segment left — the ring re-merges
 
 # AC-0231 rewrite: place/replace the per-slab low instance (slab-local
 # 0..16 geometry at (0, si*16, 0), sorted by slab index).
@@ -2564,7 +2880,12 @@ func _low_place_slab(c: Node3D, si: int, mesh: ArrayMesh) -> void:
 		# with the band split).
 		mi.material_override = _lod_avg_mat()
 	mi.position = Vector3(0.0, float(si * 16), 0.0)
-	c.add_child(mi)
+	# AC-0338: the slot is NO LONGER a scene-tree child — the far tier's
+	# draw is the ring-level batch (the _ring_* block above). The slot
+	# stays a plain (pooled, off-tree) MeshInstance3D that holds the
+	# per-slab record: the exact emit arrays (the harness byte gates
+	# read them off mi.mesh) + the visibility flag (the flip contract).
+	# Its position stays slab-local (the r16 arm checks 0/si*16/0).
 	if i < c.low_slabs.size() and int(c.low_slabs[i]) == si:
 		var old: MeshInstance3D = c.low_instances[i]
 		if old != null:
@@ -2576,6 +2897,7 @@ func _low_place_slab(c: Node3D, si: int, mesh: ArrayMesh) -> void:
 		c.low_mask |= (1 << si)  # AC-0237 1a: mirror mask sync
 	_low_probe_invalidate(c)  # AC-0262: an attach completes the slab
 	_wprof_add(WP_MESHATTACH, Time.get_ticks_usec() - _wpt)
+	_ring_dirty_column(c)  # AC-0338: a new/replaced segment — the ring re-merges
 
 # AC-0231 fix3: the atlas TEXTURE SWAP re-merges the strip table
 # (_tm_ms_full) — the merged-atlas strip POSITIONS move (a different
@@ -2628,11 +2950,13 @@ func _lod_free_all(c: Node3D, as_upgrade: bool) -> void:
 			if mi2 != null:
 				mi2.visible = false
 		_low_probe_invalidate(c)  # conservative (visible state moved)
+		_ring_dirty_column(c)  # AC-0338: the lows went stored — the ring drops them
 		return
 	# the free path (chunk clear / candidate): everything returns to the
 	# pools, the low state clears (the column is gone).
 	c.drop_low()
-	_low_probe_invalidate(c)  # AC-0262: drop_low re-pends the slabs
+	_low_probe_invalidate(c)  # AC-0262: drop_low re-pends the slab
+	_ring_dirty_column(c)  # AC-0338: the column's segments are gones
 
 
 # AC-0231 rewrite: the legacy SYNC build fallbacks (data-empty,
@@ -2706,6 +3030,11 @@ func _low_step() -> void:
 	var _wpt2 := Time.get_ticks_usec()
 	_low_poll(dt_ms)
 	_wprof_add(WP_LOW_POLL, Time.get_ticks_usec() - _wpt2)
+	# AC-0338: the ring-level far batch's coalesced rebuild step (the
+	# DRAW side of the low lane — the poll attaches the records, the
+	# ring re-merges the visible ones into the sector meshes). Rides
+	# WP_LOW_POLL (the low stage) — the five-stage partition is kept.
+	_ring_step()
 	# AC-0335: the WAVE 2b global slab wave dispatch (the _low_scan_slabs
 	# pick + the _slab_wave_acc_ms pacing loop) is GONE with the lane
 	# seam — the drain's steady pass dispatches rings 2/3 in the same

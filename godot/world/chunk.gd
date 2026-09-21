@@ -110,7 +110,7 @@ var band := 0
 # The HIGH replaces low per slab (the mesh handoff frees it);
 # keep-high: a meshed chunk is never downgraded (the placeholder is only
 # for never-built slabs — low_downgrade_n stays 0).
-var low_instances: Array = []    # MeshInstance3D per low slab (sorted, parallel to low_slabs)
+var low_instances: Array = []    # MeshInstance3D per low slab (sorted, parallel to low_slabs) — OFF-TREE since AC-0338 (the ring batch draws them; the slot holds the record)
 var low_slabs: Array = []        # slab indices holding a per-slab textured low
 var low_built := false
 var low_stamps: Dictionary = {}  # AC-0231 fix3: si -> stamp when that low slab was built
@@ -261,6 +261,14 @@ func has_low_si(si: int) -> bool:
 # user's GPU idles; generation is the cost) - hidden attached instances
 # are the stored tiers. The occluder + collision stay LOD-independent
 # (the terrain is solid whichever LOD shows).
+# AC-0338: the FAR tier slots (low_instances) are OFF-TREE — the far
+# bands B/C draw through the world's ring-level batch (world.gd
+# _ring_*), and the slot stays a plain pooled MeshInstance3D holding
+# the per-slab record (the exact emit arrays + the visibility flag,
+# which IS the far draw state the ring re-derives). Every recycle path
+# still goes through world._lod_free_all -> drop_low first, so a slot
+# never outlives its column (the _col_checkin children sweep covers
+# the HIGH instances only now).
 func high_slab_visible(si: int, on: bool) -> void:
 	if si < 0 or si >= slabs.size():
 		return
@@ -288,6 +296,14 @@ func low_slab_visible(si: int, on: bool) -> void:
 	var mi: MeshInstance3D = low_instances[i]
 	if mi != null:
 		mi.visible = on
+	# AC-0338: the far tier's draw is the world's ring-level batch —
+	# a flip re-dirties this column's ring sector (the coalesced
+	# rebuild re-derives membership from the slot flags, same
+	# semantics as the old per-slab MI visibility). The slot itself is
+	# off-tree (the AC-0338 batch), so the .visible flag IS the draw
+	# state for the ring, exactly as it was for the attached MI.
+	if Game.world != null and Game.world.has_method("_ring_dirty_column"):
+		Game.world._ring_dirty_column(self)
 
 
 func drop_low() -> void:
