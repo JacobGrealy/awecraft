@@ -1,11 +1,11 @@
 meta:
-  updated_at: 2026-09-20T23:27
+  updated_at: 2026-09-21T02:39
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0345
 - AC-0346
+- AC-0338
 - AC-0339
 - AC-0341
 - AC-0342
@@ -16168,7 +16168,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-19T08:42
-  updated_at: 2026-09-20T12:55
+  updated_at: 2026-09-21T02:16
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -16207,7 +16207,16 @@ intake:
     \ in the archived baseline) and atlas/buckets/player/interact (no `ok` key at all). Note the pattern\
     \ this keeps showing: an arm whose threshold is a WALL-CLOCK BUDGET goes stale every time the engine's\
     \ work shape changes, whereas an arm that asserts an INVARIANT (byte-identity, a closure set, a determinism\
-    \ property) survives - prefer the invariant when you rework these."
+    \ property) survives - prefer the invariant when you rework these.\n\nANOTHER ARM EXPECTATION THAT\
+    \ WENT STALE (coordinator, 2026-09-20, handed over by the AC-0345 builder): the `fluids` arm reads\
+    \ **24/24 where the documentation says 0/0**. The builder BISECTED it rather than assuming: the reading\
+    \ is identical on pristine HEAD, so it is pre-existing and NOT the work that exposed it - its cause\
+    \ is the combination of AC-0325's readback contract (edits read back through the recorded-edit path)\
+    \ and the post-cave terrain (AC-0288/AC-0289 changed what the arm's world contains). Do not re-baseline\
+    \ it blindly: the 0/0 in the docs is what the arm asserted when the terrain was different, so decide\
+    \ which of the two the arm SHOULD assert now (an invariant like \"the set of fluid cells after the\
+    \ edit equals the set the edit wrote\" survives a terrain change; a bare count does not) and harden\
+    \ it that way - the same guidance this ticket already carries for the wall-clock-shaped budgets."
   comments: []
 - id: AC-0331
   title: far-tier-mesh-floor-kernel
@@ -17031,11 +17040,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: done
+  status: open
   labels: []
   created_at: 2026-09-19T21:22
-  updated_at: 2026-09-20T19:08
-  completed_at: 2026-09-20T19:08
+  updated_at: 2026-09-21T02:16
+  completed_at: null
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -17132,7 +17141,31 @@ intake:
     the AC-0333/AC-0334 findings in one respect worth naming: the standing gates are all green because
     they run at R16, where the far column count fits the 512-entry candidate window - an arm that cannot
     reach the broken regime cannot see the break, and the R50 measurement that AC-0338''s step 0 forced
-    is the only thing that did.'
+    is the only thing that did.
+
+
+    REOPENED BY THE COORDINATOR (2026-09-20) because its closure rested on a measurement taken in a BROKEN
+    state, and the corrected measurement fails the ticket''s own criterion. WHAT CHANGED: AC-0345 (r50-far-wave-starvation,
+    fixed and proven the same day) showed that at R50 the far wave had been frozen at exactly 8704 dispatches
+    = 512 columns x 17 slabs - so when this ticket''s step 0 measured the far instance census at the shipped
+    default render distance, IT WAS COUNTING A WORLD THAT HAD ONLY EVER BUILT 512 OF ITS FAR COLUMNS.
+    The AC-0345 builder''s post-fix convergence run measured the real thing: **16,711 MeshInstance3Ds
+    converged, band C at 3.62 per column** (not the starved-state ~1.2 the extrapolation assumed). Against
+    this ticket''s own step-1 trigger (far tiers >= 8k) that is a clear FAIL of the "no longer a problem"
+    test - the far tiers at R50 are roughly double the threshold, not under it - so the honest verdict
+    flips from "close as unnecessary" to "batch it, and re-derive the numbers first". The R16 numbers
+    are unaffected and still modest (2099 MI total, far 1496), which is why the R16-only standing set
+    never saw either the starvation or the true census. THE COORDINATOR''S ERROR, RECORDED PLAINLY: the
+    earlier closure trusted a census whose sampling frame was the bug, and the extrapolation in it (6.5-6.7k
+    total, far 5.5-5.7k) was built on the starved per-column rate - the measurement was honest, its frame
+    was not, and that distinction is the lesson. WHAT TO DO NOW: re-measure the converged census at the
+    shipped default render distance FIRST (AC-0345''s fix is in, so the far field actually converges;
+    the AC-0345 builder''s temporary measurement arm was removed at exit, so re-create your own temporarily
+    and remove it before you exit), then apply the ticket''s original plan - step 1 batch bands B and
+    C into ring-level MultiMeshInstance3D groups keeping the emitted geometry byte-identical (farab 1080/1080
+    with h_mismatch 0, halo and meshprobe are the proof), and step 2 band A only if step 1 pays. Keep
+    the R16 numbers in the results as the comparison that shows what the player at a modest render distance
+    actually gets.'
   comments: []
 - id: AC-0339
   title: light-settle-gate-wait
@@ -17679,11 +17712,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-20T19:07
-  updated_at: 2026-09-20T19:07
-  completed_at: null
+  updated_at: 2026-09-21T02:39
+  completed_at: 2026-09-21T02:39
   waiting_on: null
   parent_id: null
   notes: '1) User Story: A fresh world at the shipped default render distance (50) never finishes streaming
@@ -17744,7 +17777,35 @@ intake:
     runs survived, but if a run dies with the crash banner that is that class, not this bug: log it, retry
     once, and say so.
 
-    '
+
+
+    TAKEN BY THE COORDINATOR SESSION (2026-09-20) immediately after AC-0338 was closed as unnecessary
+    (its step 0 measurement is what found this bug). CURRENT STATE: the scheduler was unified by AC-0335
+    (one work order, `_dispatch_column_work` as the only per-ring switch, WAVE 3 deleted) and the dead
+    lane scaffolding was removed by AC-0336 (-658 lines), so the pick path you are about to fix is the
+    POST-unification one - read the current code, not the ticket text''s line numbers if they disagree.
+    RELATED TICKET IN THE SAME AREA: AC-0346 (band-a-rim-full-data-leak, priority 1) - a tier-4 hole in
+    `_gen_skip_flag` plus a no-op 1 -> 1 reband hop that lets full cave data ride at band A. It is NOT
+    yours, but if your fix touches queue residency, tier stamps or the reband hop, say so in your results
+    so the two do not collide. CONTEXT ON WHY EVERY GATE IS GREEN: the entire standing set runs at R16
+    (its far column count fits inside the 512-entry candidate window), which is exactly why this bug has
+    never been caught by a gate - so an R50 measurement is not optional here, it is this ticket''s proof.
+
+
+    CLOSED 2026-09-20. The bug was real and user-visible (a fresh world at the shipped default render
+    distance never rendered its far field past ~210 m) and it is fixed: a settled far column now leaves
+    the candidate window through the FAR lane''s own readiness test, with the 512 cap untouched and the
+    queue entry kept. Coordinator verification: genhash 25/25 byte-identical x2 and against the reference;
+    farab 1080/1080 h_mismatch 0; ladder 20/20; meshprobe 1.0; halo ok:true (c) 0 with 820 glow cells
+    zeroed; r16 all sub-flags with far_holes 0 in both bands and static p50 5 ms (the AC-0335 perf win
+    survived, so convergence was not bought with frame time); boundary p50 13 / p95 39 with staged_dropped
+    1758; battery with no new delta. The builder''s own reproduction matched the filing ticket 1:1 (8704
+    = 512 x 17, pool_n 512, the t2/t3 numbers to the digit) and its after is exact in the other direction:
+    low_enqueue 80,852 = 4,756 x 17, pending 0, lcols 0 -> 3388, window 512 -> 0. TWO HANDOVERS: the converged
+    census (16,711 MI, band C 3.62/col) is about double AC-0338''s >=8k batching trigger, so that ticket''s
+    "unnecessary" verdict was overturned and it is reopened+requeued - its measurement was honest but
+    its sampling frame was the bug; and the fluids arm''s 24/24 vs documented 0/0 was bisected to pristine
+    HEAD (pre-existing) and is logged on AC-0330 for invariant-based hardening.'
   comments: []
 - id: AC-0346
   title: band-a-rim-full-data-leak
