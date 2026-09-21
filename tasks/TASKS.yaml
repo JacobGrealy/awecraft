@@ -1,11 +1,11 @@
 meta:
-  updated_at: 2026-09-20T19:08
+  updated_at: 2026-09-20T23:27
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0334
 - AC-0345
+- AC-0346
 - AC-0339
 - AC-0341
 - AC-0342
@@ -16530,11 +16530,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-19T19:53
-  updated_at: 2026-09-19T21:08
-  completed_at: null
+  updated_at: 2026-09-20T23:27
+  completed_at: 2026-09-20T23:27
   waiting_on: null
   parent_id: null
   notes: "1) User Story: After a column is demoted to the cheap far form and later promoted back, a handful\
@@ -16591,7 +16591,33 @@ intake:
     \  together by one arm-hardening change. Say that plainly in this ticket's results rather than fixing\n\
     \   each symptom independently.\n\n4) Do NOT re-baseline the arm until the classification is proven,\
     \ and do NOT touch AC-0333's double-draw\n   census in this task (its notes say the same from the\
-    \ other side)."
+    \ other side).\n\nTAKEN BY THE COORDINATOR SESSION (2026-09-20) - this ticket was filed BY the coordinator\
+    \ while closing AC-0289, and it is now the queue head. CURRENT STATE OF THE EVIDENCE: the red is stable\
+    \ and identical across every tree since it appeared - the coordinator's own heavy-stage runs read\
+    \ `halo` (c) mismatches 5 in column [5,0] on the AC-0289, AC-0331, AC-0335, AC-0336, AC-0337 and AC-0340\
+    \ trees with every sibling check green (a: 41 cols / 0 mismatches / ref converged; b: 821/821 slabs\
+    \ / 84 cols; b1: 20/20; d and d2: ok). The FIRST mismatch payload is {x 15, y 11, z 0, current 1,\
+    \ starlight 0} and the promote telemetry recorded {land_count 1, recenter_ms 11273, swap_ms 222, enqueued\
+    \ 1} with promote_ms 1943 and 9 promotes. It read `ok:true` on the AC-0288 tree (cave P0) and on AC-0293,\
+    \ so AC-0289's tunnel carve is the change that flipped it. SINCE THIS TICKET WAS FILED, the scheduler\
+    \ was unified (AC-0335: one work order, one dispatch, WAVE 3 deleted) and the dead lane scaffolding\
+    \ was removed (AC-0336, net -658 lines), so the demote/promote machinery this check exercises has\
+    \ been restructured around it - re-read the current code before you trust the line references in the\
+    \ notes. AC-0345 (filed 2026-09-20) is a DIFFERENT bug in the same general area (R50 far-wave starvation\
+    \ through PICK_POOL_CAP) - do not fix it here, but if your investigation touches the same queue-residency\
+    \ code, say so in your results so the two tickets do not collide.\n\nCLOSED 2026-09-20. VERDICT: STALE\
+    \ ARM REFERENCE - the engine was right and the (c) reference was over-modelling the halo by lighting\
+    \ transient band-A data from a neighbour the contract says is never seeded. Settled by the three-way\
+    \ comparison (engine / reference / true fill), not by re-baselining. The fix is arm-side and invariant-based\
+    \ (glow sources zeroed in non-real columns; max-plus monotonicity proves only the 5 red cells move),\
+    \ with a new `c.halo_glow_cells_zeroed` field so the hardening is visible. Coordinator verification:\
+    \ halo ok:true with (c) mismatches 0 in three consecutive runs with byte-identical signatures (820\
+    \ glow cells zeroed, a 0, b 233/233, d/d2 true) - deterministic as well as green; genhash 25/25 byte-identical\
+    \ x2 and against the reference; farab/ladder/meshprobe green; r16 all sub-flags with far_holes 0;\
+    \ boundary p50 13 / p95 37; battery with no new delta. THE ROOT CAUSE IT EXPOSED IS FILED AS AC-0346\
+    \ (priority 1): `_gen_skip_flag` misses tier 4 and the Euclidean-circle fall-through returns skip\
+    \ 0, so a rim column generates FULL data and the 1 -> 1 reband no-op lets it ride at band A - an AC-0312\
+    \ violation, run-nondeterministic, and the reason this red appeared to come out of nowhere."
   comments: []
 - id: AC-0335
   title: one-work-order-one-dispatch
@@ -17717,6 +17743,74 @@ intake:
     (the `load` arm died 3/3 with an empty-backtrace signal 11, AC-0323/AC-0328) - the builder''s convergence
     runs survived, but if a run dies with the crash banner that is that class, not this bug: log it, retry
     once, and say so.
+
+    '
+  comments: []
+- id: AC-0346
+  title: band-a-rim-full-data-leak
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-20T23:05
+  updated_at: 2026-09-20T23:05
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: A column sitting in the coarse far band can end up holding FULL-resolution generation
+    data - caves and all - instead of the cheap far payload, because a tier check falls through and a
+    re-band hop is a no-op. It renders from data the tier contract says it must not have, and whether
+    it happens depends on the run.
+
+
+    2) Technical Details:
+
+    FOUND BY THE AC-0334 INVESTIGATION (2026-09-20), as the root cause behind that ticket''s halo (c)
+    red - and out of its scope because that ticket''s verdict was an arm-side reference fix. The mechanism,
+    in the builder''s words and evidence: `_gen_skip_flag`''s tier check MISSES TIER 4, and the `band_of`
+    Euclidean-circle fall-through then returns skip 0, so a column that lands once at a tier-4 RIM position
+    (measured case: column (7,-3), taxi 10 from spawn but Euclidean 7.6 - inside the render circle) is
+    generated FULL (skip=0) instead of far. Compounding it, the 1 -> 1 reband hop is a NO-OP, so the fully-landed
+    data PERSISTS while the column sits at band A indefinitely. That column then held 3976 lava cells
+    at band A, which is what lit the five cells AC-0334 chased (the engine - correctly - never seeds a
+    band-A column for the halo, and the arm''s reference was over-modelling it by lighting that transient
+    data).
+
+    WHY IT MATTERS BEYOND THE ARM: this is an AC-0312 VIOLATION - the skip/band contract says a column
+    outside the real band generates the cheap far payload, and here a rim column generates full data and
+    keeps it. Effects: the far band can carry cave geometry (and any other full-resolution content) it
+    should not, memory and mesh cost ride along with it, and the OUTCOME IS RUN-NONDETERMINISTIC because
+    the rim landing race resolves differently per run (the AC-0334 closing run had 820 cells in a different
+    rim column instead).
+
+    THE FIX IS GAME-SIDE and that is why it needs its own ticket: closing the tier-4 hole in `_gen_skip_flag`
+    (make the tier check total, or make the Euclidean-circle fall-through return the far skip rather than
+    0) and making the 1 -> 1 reband hop actually re-band (or re-generate) a column whose data resolution
+    no longer matches its band, so full data cannot ride at band A by accident. Note the honest limit
+    AC-0334 already established: fixing the landing path PREVENTS FUTURE occurrences but cannot retroactively
+    clear an arm''s (c) red on a world where the data already landed through the hop - so this ticket''s
+    proof is a fresh-world measurement (no rim column carrying skip-0 data at band A across N runs, deterministic),
+    not a fix to that arm.
+
+    REPRODUCTION STARTING POINT: the AC-0334 results page carries the exact column, the taxi/Euclidean
+    numbers and the 3976-cell payload; the builder''s temporary probe was removed, so re-derive the check
+    with your own temporary instrumentation and REMOVE it before you exit (the pristine rule).
+
+    GATES: a fresh-world run (several times, to speak to the nondeterminism) showing NO far-band column
+    holding skip-0 generation data, with the count recorded as a NEW standing value in HARNESS.md section
+    3 + tasks/harness_data.yaml + the rendered doc in the same task; plus the standing set unchanged -
+    genhash 25/25 byte-identical (if the fix changes which columns get full data on the measured worlds,
+    that is a generation-visible change and must be stated plainly with a rebase and the supersedes chain,
+    NOT hidden), farab 1080/1080 with h_mismatch 0, ladder band_a_ok 20/20, meshprobe, halo ok:true with
+    (c) mismatches 0 (now that AC-0334 hardened the reference), r16 ALL sub-flags with far_holes 0 in
+    both bands, boundary r4 with staged_dropped inside its <=2500 threshold, and the battery.
+
+    OVERLAP WARNING: AC-0345 (r50-far-wave-starvation) also lives in the far-tier queue/residency area
+    - if your fix touches queue residency or the tier stamps, say so in your results so the two do not
+    collide.
 
     '
   comments: []
