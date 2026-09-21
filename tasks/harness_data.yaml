@@ -651,6 +651,12 @@ standing_values:
     **604 draw_calls / 662 objects-in-frame** (steady state, 2099 MI resident; fps ~10 software GL — the counters are valid, the frame rate is not the point). Full-circle cost is ~2× the far share of this (the other half adds its own far MIs) ≈ ~1.2–1.5k draws at R16. R50 full-circle extrapolation (from the instance census; far-field-dominant, water-surface slabs are multi-surface): ≈ 8–11k draws — growth ≈ 4–6× on the half-view basis, below the AC-0338 8× step-1 trigger. AC-0338 closeout one-shot (temporary camera inside the removed `census50` arm). (The R50 draw-count extrapolation inherits the starved-state census — superseded by the AC-0345 measured census, 17,706 total MI; the true R50 draw count is not re-measured here.)
   established_by: |-
     AC-0338 STEP 0 (2026-09-20)
+- value: |-
+    fresh-world far-band data leak (AC-0346 — the temporary bandleak probe arm was REMOVED at closeout; this row is the durable home, logs in `.scratch/AC-0346-*.log`)
+  fresh: |-
+    **0 in-set leak columns in EVERY census, 3 fresh processes + r4 geometry (post-fix; deterministic on this box)** — fresh world (seed 44), settle, then two 5-chunk recenter hops (the halo-(c) shape); census of every stream-set column for FULL (skip-0, caved) generation data on a FAR-BAND column (in set, outside the real band — the AC-0312 contract): halopin R9 (sim 4 / med 5 / render 9 — the arm's pin order clamps low to 4): rim (tier 4) 116/116 far-stamped stationary, 217/217 + 218/218 after the hops; r4 (render 4): 40/40, 91/91, 92/92. **Pre-fix on the same probe — halopin R9: 66 (stationary, all tier-4 rim, 84,887 leak lava cells) → 92 (hop 1, 3 RIDING AT BAND A, 116,524 lava) → 73 (hop 2, 1 at band A, 88,887 lava)**; the band-A rides include the EXACT AC-0334 case (col (7,-3), taxi 5, eucl 3.61, **820 lava cells** — full data, never meshed, the 1→1 reband no-op). r4 pre-fix: 18 / 10 / 4 in-set. OUT-OF-SET columns are NOT leaks: the hide-not-kill candidates (AC-0168, freed after 2 recenter events) hold their pre-exit data by design (the probe reports them separately as `cand_full`).
+  established_by: |-
+    AC-0346 closeout (2026-09-21 — the tier-total skip-flag check + the recenter data-resolution invariant; the temporary probe removed, this row the standing home)
 battery:
   modes:
   - player

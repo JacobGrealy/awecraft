@@ -247,7 +247,10 @@ var star_lver_drops := 0
 # the real band (halo -> real) seeds the engine from its current data
 # (the promotion: one full flood per column); a crossing OUT (real ->
 # halo) evicts it (free the nibbles — its draw is the 4x4 avg +
-# heightmap sky now).
+# heightmap sky now). AC-0346: the count is TOTAL over crossings — the
+# far-side promotion (the owed full regen, whose landing does the flood;
+# _star_halo_promote early-returns for far data) is counted at the
+# crossing too.
 var star_halo_promotes := 0
 var star_halo_evicts := 0
 var star_bake_probe: Variant = null
@@ -4906,18 +4909,23 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 func _gen_skip_flag(cx: int, cz: int) -> int:
 	var dx := cx - last_pcx
 	var dz := cz - last_pcz
-	# AC-0284a (AC-0284b: h-only; AC-0312 all draw tiers): EVERY
-	# draw band beyond the real band (tiers 1-3 — band A full-LOD,
-	# band B 8x8, band C 4x4) is far-generated: the h-only payload's
-	# draws (the materialized skip fill / the h_avg emits) never show
-	# caves; the umbrella marker (no_caves) rides the column so a
+	# AC-0284a (AC-0284b: h-only; AC-0312 all draw tiers; AC-0346 TOTAL):
+	# EVERY tier beyond the real band is far-generated: the h-only
+	# payload's draws (the materialized skip fill / the h_avg emits) never
+	# show caves; the umbrella marker (no_caves) rides the column so a
 	# real-band landing schedules the full regen. Taxi-only rule (no
-	# frustum test — the far representation IS the draw for these
-	# bands). Tier-0 columns are REAL (full fidelity) — never far.
-	# Tier 4 (data-only, past the render edge) falls through to the
-	# band_of / offscreen-collar rule below, untouched.
+	# frustum test — the far representation IS the draw for these bands).
+	# Tier-0 columns are REAL (full fidelity) — never far. AC-0346: the
+	# check is TOTAL — tier 4 (data-only, past the render edge) is far
+	# too. The old `< 4` bound let a rim column fall through to the
+	# band_of / offscreen-collar rule below, where the outermost taxi ring
+	# (band_of 1) returned 0 = FULL and the collar/ring (band_of 3)
+	# returned 0 whenever the column was inside the camera frustum — a
+	# data-only column generated FULL (caves and all), and the 1 -> 1
+	# reband hop was a no-op, so the data rode at band A indefinitely
+	# (the AC-0312 violation behind the AC-0334 halo red).
 	var _lt := _lod_tier_of(dx, dz)
-	if _lt > 0 and _lt < 4:
+	if _lt > 0:
 		return 2
 	var b := band_of(dx, dz)
 	if b <= 1:
@@ -9103,10 +9111,26 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 			# nibbles; a re-entry re-seeds from the current data) and the
 			# stored high keeps, the ready lows flip, the rest re-open (the
 			# demote above - no free).
+			# AC-0346 (generalized - the DATA-RESOLUTION INVARIANT): a
+			# column OUTSIDE the real band holds the h-only far
+			# representation, never the full (caved) data (AC-0312). The
+			# crossing test above covered the normal 0 -> 1 demote; the
+			# tier-4 rim full-landing class (the _gen_skip_flag fall-through,
+			# closed at the source) was NEVER real, so its band 1 -> 1
+			# reband hop never tripped the crossing test and the full data
+			# rode at band A indefinitely. Any full data (not c.far) outside
+			# the real band is demoted here on EVERY recenter - this is the
+			# 1 -> 1 hop actually re-banding the data. The starlight evict
+			# stays was-real-gated (the engine only seeds real columns; the
+			# rim class never seeded). A mid-regen full landing (the
+			# documented tolerance: the regen was enqueued in the real band
+			# and lands after the exit) is cleared by the next recenter the
+			# same way.
 			if not c.data.is_empty() \
-					and _is_real_col(odx, odz) \
+					and not c.far \
 					and not _is_real_col(dx, dz):
-				_star_halo_evict(c, key)
+				if _is_real_col(odx, odz):
+					_star_halo_evict(c, key)
 				_demote_high_band_exit(c, key)
 			# AC-0263 spec (keep-all-LOD, AC-0283 P3): the column just CAME
 			# BACK into the REAL band - the stored highs flip on (visibility
@@ -9146,6 +9170,18 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 					for si_e in c.high_stamps.keys():
 						if int(c.high_stamps[si_e]) == int(c.data_gen):
 							_star_remesh_add(key, int(si_e))
+				# AC-0346: a FAR column promotes through the owed full
+				# regen above (_star_halo_promote early-returns — seeding
+				# its h-only data would be a light hole), so count its
+				# promotion here: the counter stays TOTAL over halo ->
+				# real crossings (one full flood per column — the regen's
+				# landing does the flood). Pre-AC-0346 the counter only
+				# saw the seed-side promotions; the far side was invisible
+				# (and the full-data rim class that used to enter as full
+				# is now far at the source, so the far count is the clean
+				# one).
+				if bool(c.far):
+					star_halo_promotes += 1
 		else:
 			# AC-0278: "just exited" is a distance fact (in set w.r.t. the
 			# previous center, out now) - the one-time entry work (clear

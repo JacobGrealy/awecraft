@@ -19922,13 +19922,11 @@ func _flysave_test(spawn: Vector3) -> void:
 	var sim: int = int(world.band0_r)
 	var p = Game.player
 	# --- edit targets: three FAR (h-only) columns on the taxi-5 halo ring
-	# (the r4 draw band). A tier-4 (data-only) column is far-generated
-	# only when it is OUTSIDE the camera frustum — the onscreen collar is
-	# full-generated (world.gd _gen_skip_flag: tiers 1-3 are always far,
-	# tier 4 falls through to the band_of / offscreen-collar rule) — so
-	# the arm takes the first three far-stamped ring columns in order. A
-	# 75-degree frustum at this range cannot cover the whole 20-point
-	# ring, so three far columns always exist.
+	# (the r4 draw band). AC-0346: every non-real tier is now
+	# far-generated (the _gen_skip_flag tier check is total — pre-fix the
+	# tier-4 onscreen collar fell through to the band_of / frustum rule
+	# and landed FULL), so the pick is the deterministic first three ring
+	# columns in order (the frustum no longer decides which are far).
 	var scx := int(floorf(spawn.x / 16.0))
 	var scz := int(floorf(spawn.z / 16.0))
 	var ring: Array = []

@@ -232,7 +232,19 @@ Match these; do not improvise a different approach in a task.
   the translucent water material). Nothing in a draw tier ever shows caves. The
   skip=1 slab-skip path is therefore LIVE again (the `cols_skip` gen census reads the
   band-A count). A far column entering the real band schedules a FULL regen (AC-0283 P2
-  late-landing machinery).
+  late-landing machinery). **AC-0346 — the skip/band contract is TOTAL**: the skip-flag
+  policy at enqueue (`_gen_skip_flag`) is tier-total — EVERY non-real tier (1–4,
+  including the data-only tier past the render edge) is generated far (skip 2); only
+  tier 0 is ever full (skip 0; skip 1 is the band-A materialization fill run by the
+  drain). Pre-AC-0346 the tier check missed tier 4, so a data-only column could land
+  FULL through the `band_of` / offscreen-frustum tail (and the band 1→1 reband hop was
+  a no-op, so the data rode at band A indefinitely — the AC-0312 violation). The
+  matching DATA-RESOLUTION INVARIANT at recenter: any column OUTSIDE the real band that
+  holds full data (not `c.far`) is demoted to the far representation on EVERY recenter
+  (the crossing test, generalized — the 1→1 hop now actually re-bands; a mid-regen
+  landing that exits a frame later is cleared by the next recenter).
+  `star_halo_promotes` is the total halo→real crossing count (the far-side promotion —
+  the owed regen — is counted at the crossing too).
   AC-0286 completes the promotion contract: (1) **detection** — the crossing is owed from
   THREE points: the recenter walk, an in-band disk load, and a FAR data landing already
   inside the real band (gen-queue lag past the crossing); the owed step retries the enqueue
