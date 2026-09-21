@@ -3317,6 +3317,27 @@ var hslab_stale_key_n := 0
 # not settled). The promotion burst's stall forensics (a re-seeded /
 # evicted column's settle window is the burst's only legitimate pause).
 var hslab_defer_settle := 0
+# AC-0339 STEP 0 (INSTRUMENTATION ONLY): hslab_defer_settle counts
+# DEFERRALS (one per re-pick), not WAITING TIME — a slab can be deferred
+# for hundreds of frames and the counter shows one. The settle-wait
+# census measures the WAIT itself: an "episode" opens on the slab's FIRST
+# settle-defer (the gate below in _mesh_dispatch_hslab) and closes on its
+# dispatch (the gate passing). The bookkeeping is additive-only (a small
+# Dictionary + array appends per defer/dispatch EVENT) — no behaviour
+# change; the arms control the window via settlewait_reset/report.
+var _sw_frame := 0  # frame counter (one _process = one frame)
+var _sw_open := {}  # "cx,cz:si" -> first-defer frame (open episodes)
+var _sw_samples: Array = []  # closed waits in frames (first defer -> dispatch)
+var _sw_stalled: Array = []  # per settle-defer: the high-lane columns queued behind it
+var _sw_episodes := 0
+var _sw_defer_frames := 0
+var _sw_max_open := 0
+var _sw_remesh_max := 0  # star_remesh lane depth, max (the armed re-bake count)
+var _sw_star_busy_frames := 0  # frames where _star_step had pending > 0
+var _sw_star_pending_max := 0  # the relaxation queue depth at step start, max
+var _sw_star_drained_max := 0  # star.step's returned drained count, max/frame
+var _sw_star_pending_sum := 0
+var _sw_star_drained_sum := 0
 # AC-0274: the last hslab-dispatch deferral reason (0 = dispatched, 1 =
 # per-column dedup, 2 = TM pool full, 3 = diagonal neighbor ungenerated,
 # 4 = no data). The drain's skip-and-continue policy reads it: a
@@ -4295,6 +4316,7 @@ func _wprof_recon_raw_pct() -> float:
 func _process(_delta: float) -> void:
 	var pf0 := Time.get_ticks_usec()
 	_wprof_begin_frame()  # AC-0251: the frame sample commits at _wprof_end_frame(pf0)
+	_sw_frame += 1  # AC-0339: the settle-wait frame counter (before the idle return)
 	_game_tick_accumulate(_delta)  # AC-0158: 20 Hz game tick (simulation clock)
 	_drain_save_queue()  # AC-0155: amortized full-column writes (1-2/frame)
 	# AC-0178: BEFORE the idle early-return — the completion state IS the
@@ -4407,6 +4429,7 @@ func _process(_delta: float) -> void:
 	# fluid re-mesh arming. It runs BEFORE _drain_build_queue so the drain
 	# dispatches see this frame's settle state.
 	if star != null:
+		_sw_remesh_max = maxi(_sw_remesh_max, star_light_pending_depth())  # AC-0339: the remesh lane's depth (the armed re-bake count), sampled per frame
 		var _wps := Time.get_ticks_usec()
 		_star_step()
 		_wprof_add(WP_STAR, Time.get_ticks_usec() - _wps)
@@ -4469,11 +4492,22 @@ func _star_step() -> void:
 	if dt <= 0.0:
 		dt = 16.67
 	if int(star.pending_cells()) > 0:
+		# AC-0339: drained-vs-pending census (instrumentation only — the
+		# SAME step call, its return value [cells drained this frame] and
+		# the queue depth at step start captured; star.step's budget logic
+		# is untouched). The light budget is the other half of the settle
+		# wait: the gate only passes once this queue drains.
+		var sw_pend: int = int(star.pending_cells())
 		var base_ms := LOAD_STAR_STEP_BUDGET_MS if loading_active else STAR_STEP_BUDGET_MS
 		var budget_us: int = int(float(base_ms) * (dt / 16.67) * 1000.0)
 		if budget_us < 1:
 			budget_us = 1
-		star.step(budget_us)
+		var sw_drained: int = int(star.step(budget_us))
+		_sw_star_busy_frames += 1
+		_sw_star_pending_max = maxi(_sw_star_pending_max, sw_pend)
+		_sw_star_drained_max = maxi(_sw_star_drained_max, sw_drained)
+		_sw_star_pending_sum += sw_pend
+		_sw_star_drained_sum += sw_drained
 
 # The settled-column drain: a column whose light gate (all 24 sections
 # settled) has not been drained publishes its settled light (last_eff),
@@ -6986,6 +7020,7 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 	if star != null and not star.box_settled(cx, cz, si - 1, si + 1):
 		_hslab_last_defer = 5
 		hslab_defer_settle += 1
+		_sw_settle_defer(cx, cz, si)  # AC-0339: open/extend the settle-wait episode (instrumentation only)
 		return false
 	var tm_cap := threadmesh_max
 	if _startup_pending() and tm_cap < 9:
@@ -7067,9 +7102,115 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 	_tm_enq += 1
 	_hslab_last_defer = 0
 	_bd_log(cx, cz)
+	# AC-0339: the gate passed — close this slab's settle-wait episode
+	# (first-defer frame -> this dispatch frame). A slab that never
+	# settled-deferred (first dispatch on settled light) has no open
+	# episode and records nothing. Instrumentation only.
+	var swk := "%d,%d:%d" % [cx, cz, si]
+	if _sw_open.has(swk):
+		_sw_samples.append(_sw_frame - int(_sw_open[swk]))
+		_sw_open.erase(swk)
 	if _tm_debug:
 		print("TMESH HSLAB %d,%d slab=%d inflight=%d" % [cx, cz, si, threadmesh_inflight.size()])
 	return true
+
+# AC-0339 STEP 0 (instrumentation only): open/extend this slab's
+# settle-wait episode on a gate defer and census the high-lane work
+# queued behind it.
+func _sw_settle_defer(cx: int, cz: int, si: int) -> void:
+	var swk := "%d,%d:%d" % [cx, cz, si]
+	if not _sw_open.has(swk):
+		_sw_open[swk] = _sw_frame
+		_sw_episodes += 1
+	_sw_max_open = maxi(_sw_max_open, _sw_open.size())
+	_sw_defer_frames += 1
+	_sw_stalled.append(_sw_stalled_cols(cx, cz))
+
+# AC-0339: the OTHER high-lane columns (real band + band A — the
+# star-gated work) in the build queue at a settle defer. AC-0335's
+# per-column defer set means the drain SKIPS the deferred column within
+# the frame and dispatches the next-best, so this is the work ORDERED
+# behind the gated light (the inside-out (taxi, layer) order), not
+# hard-blocked frames — read the numbers with that semantics.
+func _sw_stalled_cols(cx: int, cz: int) -> int:
+	var self_key := _key(cx, cz)
+	var n := 0
+	for b in band_buckets:
+		for e in b:
+			if bool(e["data_only"]):
+				continue
+			if str(e["key"]) == self_key:
+				continue
+			if _lod_tier_of(int(e["cx"]) - last_pcx, int(e["cz"]) - last_pcz) <= 1:
+				n += 1
+	return n
+
+# AC-0339: window control for the settle-wait census — the arms reset
+# before the scenario and report at the end; a world's counters keep
+# accumulating across resets (the live values stay the diagnostics
+# surface).
+func settlewait_reset() -> void:
+	_sw_open.clear()
+	_sw_samples.clear()
+	_sw_stalled.clear()
+	_sw_episodes = 0
+	_sw_defer_frames = 0
+	_sw_max_open = 0
+	_sw_remesh_max = 0
+	_sw_star_busy_frames = 0
+	_sw_star_pending_max = 0
+	_sw_star_drained_max = 0
+	_sw_star_pending_sum = 0
+	_sw_star_drained_sum = 0
+
+# AC-0339: the settle-wait census as the arm reports it: the per-slab
+# wait (first-defer frame -> dispatch frame) p50/p95/max, the stalled
+# columns behind defers, and the starlight queue state (the remesh lane
+# depth + the _star_step drained-vs-pending census).
+func settlewait_report() -> Dictionary:
+	var ss: Array = _sw_samples.duplicate()
+	ss.sort_custom(func(a, b): return int(a) < int(b))
+	var st: Array = _sw_stalled.duplicate()
+	st.sort_custom(func(a, b): return int(a) < int(b))
+	var pct := func(arr: Array, p: float) -> int:
+		if arr.is_empty():
+			return 0
+		return int(arr[int(ceilf(p * float(arr.size()))) - 1])  # nearest-rank, 1-based
+	# the queue census at report time (context for the stalled counts —
+	# meshed columns' entries persist in the queue after completion, so
+	# the high-lane count is the work ORDERED behind a defer, see
+	# _sw_stalled_cols).
+	var q_tot := 0
+	var q_high := 0
+	for b in band_buckets:
+		for e in b:
+			q_tot += 1
+			if not bool(e["data_only"]) \
+					and _lod_tier_of(int(e["cx"]) - last_pcx, int(e["cz"]) - last_pcz) <= 1:
+				q_high += 1
+	return {
+		"queue_total": q_tot,
+		"queue_high": q_high,
+		"frames": _sw_frame,
+		"episodes": _sw_episodes,  # slabs that settled-deferred at least once
+		"n": ss.size(),  # closed waits
+		"open": _sw_open.size(),  # still waiting at report time (a non-zero = the window ended mid-wait)
+		"defer_frames": _sw_defer_frames,  # total settle-defer frame occurrences
+		"max_open": _sw_max_open,  # concurrent open episodes, max
+		"p50": pct.call(ss, 0.50),
+		"p95": pct.call(ss, 0.95),
+		"max": int(ss.max()) if not ss.is_empty() else 0,
+		"stalled_n": st.size(),
+		"stalled_p50": pct.call(st, 0.50),
+		"stalled_p95": pct.call(st, 0.95),
+		"stalled_max": int(st.max()) if not st.is_empty() else 0,
+		"remesh_max": _sw_remesh_max,  # the armed re-bake queue depth, max
+		"star_busy_frames": _sw_star_busy_frames,  # frames with relaxation work
+		"star_pending_max": _sw_star_pending_max,  # queue depth at step start, max
+		"star_drained_max": _sw_star_drained_max,  # cells drained in one step, max
+		"star_pending_sum": _sw_star_pending_sum,
+		"star_drained_sum": _sw_star_drained_sum,
+	}
 
 func _build_unit(c: Node3D, cx: int, cz: int) -> bool:
 	# Returns true when DEFERRED (worker slots full / task already in flight

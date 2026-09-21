@@ -557,6 +557,21 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _brightslab_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "settlewait":
+			# AC-0339 STEP 0: the settled-light gate's WAIT measurement —
+			# per-slab first-defer -> dispatch frames at box_settled, the
+			# high-lane columns stalled behind the defers, and the
+			# starlight queue state (remesh lane depth + the _star_step
+			# drained-vs-pending census — the light budget is the other
+			# half of the wait). The scenario reproduces the user-story
+			# light changes (surface break / torch place / cave break),
+			# each driven to a quiet world. Instrumentation-only: it
+			# edits the world the way play does and reads the world's
+			# settle-wait counters — it never changes behaviour.
+			world.collision_enabled = false
+			await _settlewait_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "halo":
 			# AC-0283 P3: the far-band HALO arm (the permanent gate: real
 			# band seeded + engine == reference; halo band unseeded + 4x4x4
@@ -8606,6 +8621,163 @@ func _brightslab_test(spawn: Vector3) -> void:
 		"pre_ref_rounds": int(pre_ri.get("rounds", -1)),
 		"pre_ref_converged": bool(pre_ri.get("converged", false)),
 		"cases": results,
+		"wall_ms": Time.get_ticks_msec() - t0,
+	})
+
+
+# AC-0339 STEP 0 (AWECRAFT_LOGIC=settlewait): measure the hslab
+# settled-light gate's WAIT. In a fully settled r4 world (the harness
+# default radius), the user-story light changes are applied one at a
+# time — a surface break, a torch place, a cave-wall break (each found
+# like brightslab's cases) — and each edit is driven to a quiet world
+# (star idle + remesh lane empty + no inflight builds, 5 quiet frames).
+# The world's AC-0339 counters report, per edit window: the per-slab
+# settle wait (first-defer frame -> dispatch frame, p50/p95/max), the
+# high-lane columns stalled behind each defer (AC-0335 semantics: work
+# ordered behind the gated light in the (taxi, layer) order), the
+# remesh lane depth max, and the _star_step drained-vs-pending census
+# (the light budget — the other half of the wait). ok = settled + every
+# edit quiesced + at least one wait sampled + no window left an episode
+# open (open == 0 means every deferred slab dispatched inside the
+# window).
+func _settlewait_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var H := int(Data.HEIGHT)
+	world.fluid_sim_enabled = false
+	world.collision_enabled = false
+	world.recenter(spawn.x, spawn.z, true)
+	var cx0 := int(floorf(spawn.x / 16.0))
+	var cz0 := int(floorf(spawn.z / 16.0))
+	var waited := 0
+	var have := false
+	while waited < 7200:
+		have = true
+		for dx in range(-3, 4):
+			for dz in range(-3, 4):
+				var c = world.chunks.get(world._key(cx0 + dx, cz0 + dz))
+				if c == null or c.data.is_empty():
+					have = false
+		for dx in range(-2, 3):
+			for dz in range(-2, 3):
+				var c = world.chunks.get(world._key(cx0 + dx, cz0 + dz))
+				if c == null or c.data.is_empty() or not c.mesh_built:
+					have = false
+		if have and world.star_light_idle() and world.dirty_queue.is_empty() \
+				and world.threadmesh_inflight.is_empty() and world.star_remesh.is_empty():
+			break
+		await get_tree().physics_frame
+		waited += 1
+	if not have or not world.star_light_idle():
+		Debug.result({"ok": false, "error": "world not settled", "waited": waited})
+		get_tree().quit()
+		return
+	for i in range(10):
+		await get_tree().physics_frame
+	# --- the edit cells (the user-story classes), found like brightslab ---
+	var sx := int(spawn.x)
+	var sz := int(spawn.z)
+	var c1 := Vector3i(sx, world.surface_top(sx, sz), sz)
+	var c1_ok := main._breakable(world.get_block(c1.x, c1.y, c1.z))
+	if not c1_ok:
+		for dx in range(-8, 9, 2):
+			if c1_ok:
+				break
+			for dz in range(-8, 9, 2):
+				var t2: int = world.surface_top(sx + dx, sz + dz)
+				if main._breakable(world.get_block(sx + dx, t2, sz + dz)):
+					c1 = Vector3i(sx + dx, t2, sz + dz)
+					c1_ok = true
+					break
+	if not c1_ok:
+		Debug.result({"ok": false, "error": "no breakable surface cell near spawn"})
+		get_tree().quit()
+		return
+	var cave: Array = _bs_cave_break_cell(cx0, cz0, H, false)
+	var cave_cell: Vector3i = Vector3i.ZERO
+	if cave.size() >= 7:
+		cave_cell = Vector3i(int(cave[0]), int(cave[1]), int(cave[2]))
+	var scenarios: Array = [
+		{"name": "surface_break", "cell": [c1.x, c1.y, c1.z, 0]},
+		# torch above the broken surface (an air cell by construction —
+		# surface_top is the topmost non-air): the block-light class
+		{"name": "torch_place", "cell": [c1.x, c1.y + 1, c1.z, 22]},
+	]
+	if cave_cell != Vector3i.ZERO:
+		scenarios.append({"name": "cave_break", "cell": [cave_cell.x, cave_cell.y, cave_cell.z, 0]})
+	var edits: Array = []
+	var episodes_total := 0
+	var all_quiet := true
+	var all_closed := true
+	for sc in scenarios:
+		world.settlewait_reset()
+		var e: Array = sc["cell"]
+		world.set_block(int(e[0]), int(e[1]), int(e[2]), int(e[3]))
+		var w := 0
+		var q := 0
+		var quiet := false
+		while w < 3600:
+			await get_tree().physics_frame
+			w += 1
+			if world.star_light_idle() and world.dirty_queue.is_empty() \
+					and world.threadmesh_inflight.is_empty() and world.star_remesh.is_empty():
+				q += 1
+				if q >= 5:
+					quiet = true
+					break
+			else:
+				q = 0
+		var rep: Dictionary = world.settlewait_report()
+		rep["name"] = str(sc["name"])
+		rep["cell"] = [int(e[0]), int(e[1]), int(e[2])]
+		rep["new_id"] = int(e[3])
+		rep["quiet"] = quiet
+		rep["quiet_frames"] = w
+		edits.append(rep)
+		episodes_total += int(rep.get("episodes", 0))
+		all_quiet = all_quiet and quiet
+		all_closed = all_closed and int(rep.get("open", 0)) == 0
+	# the user-story second class: a column being promoted back into the
+	# high-detail band — a 5-chunk recenter hop (new rim columns land,
+	# seed whole, and their slabs ride the same settled gate; leaving
+	# columns demote). The window measures the hop's gate waits.
+	world.settlewait_reset()
+	var hop_waited := 0
+	var hop_have := false
+	world.recenter(spawn.x + 80.0, spawn.z, true)
+	while hop_waited < 7200:
+		hop_have = true
+		for dx in range(-3, 4):
+			for dz in range(-3, 4):
+				var c = world.chunks.get(world._key(int(floorf((spawn.x + 80.0) / 16.0)) + dx, int(floorf(spawn.z / 16.0)) + dz))
+				if c == null or c.data.is_empty():
+					hop_have = false
+		for dx in range(-2, 3):
+			for dz in range(-2, 3):
+				var c = world.chunks.get(world._key(int(floorf((spawn.x + 80.0) / 16.0)) + dx, int(floorf(spawn.z / 16.0)) + dz))
+				if c == null or c.data.is_empty() or not c.mesh_built:
+					hop_have = false
+		if hop_have and world.star_light_idle() and world.dirty_queue.is_empty() \
+				and world.threadmesh_inflight.is_empty() and world.star_remesh.is_empty():
+			break
+		await get_tree().physics_frame
+		hop_waited += 1
+	if hop_waited >= 7200:
+		all_quiet = false
+	var hop_rep: Dictionary = world.settlewait_report()
+	hop_rep["name"] = "recenter_hop5"
+	hop_rep["quiet"] = hop_waited < 7200 and world.star_light_idle()
+	hop_rep["quiet_frames"] = hop_waited
+	edits.append(hop_rep)
+	episodes_total += int(hop_rep.get("episodes", 0))
+	all_closed = all_closed and int(hop_rep.get("open", 0)) == 0
+	Debug.result({
+		"ok": all_quiet and episodes_total > 0 and all_closed,
+		"settled": waited < 7200,
+		"settled_waited": waited,
+		"edits": edits,
+		"episodes_total": episodes_total,
+		"hslab_defer_settle_total": world.hslab_defer_settle,
+		"star_stats": world.star.stats() if world.star != null else {},
 		"wall_ms": Time.get_ticks_msec() - t0,
 	})
 
