@@ -9593,9 +9593,26 @@ func _halo_test(spawn: Vector3) -> void:
 	var unlit_p: int = _halo_unlit_ledger()
 	# the reference at the NEW anchor (a ±3 square — all inside the new
 	# taxi-6 diamond), compared over the ±2 center.
+	# AC-0334: the halo (non-real) columns are NEVER seeded in the engine
+	# ("REAL band only — the halo never seeds; the unseeded-tolerant box
+	# gate settles the edge against the halo neighbors" — world.gd
+	# threadgen_handoff), so the engine's light at the compared real-band
+	# cells can never carry a halo column's own glow. A halo column's
+	# data can nevertheless transiently hold glowing cave blocks (a
+	# tier-4 rim column — taxi past render but inside the Euclidean
+	# circle — lands FULL via the _gen_skip_flag fall-through; see the
+	# AC-0334 findings: rel 2,-3 held 3976 lava cells at taxi 5). The
+	# reference must model the unseeded halo: zero the glow sources in
+	# every non-real column (any id with glow > 0 -> stone) so its block
+	# light cannot leak into the compared cells. Soundness: the reference
+	# light is monotone in (paths, sources) and >= the engine's pointwise,
+	# so a compared cell that already agrees carries no positive
+	# halo-glow term — this removes exactly the halo-glow term from the
+	# cells it should, and nothing else.
 	var pkeys: Array = []
 	var pslabs := {}
 	var ptops := {}
+	var phalo_glow_cells := 0
 	for dx in range(-3, 4):
 		for dz in range(-3, 4):
 			var k := "%d,%d" % [dx, dz]
@@ -9603,6 +9620,11 @@ func _halo_test(spawn: Vector3) -> void:
 			if c == null or c.data.is_empty():
 				continue
 			var f: PackedByteArray = c.flat_data()
+			if absi(dx) + absi(dz) > int(world.band0_r):
+				for gi in range(f.size()):
+					if int(Lighting._glow[int(f[gi])]) > 0:
+						f[gi] = 1
+						phalo_glow_cells += 1
 			pslabs[k] = io.palettize_flat(f, 24)
 			ptops[k] = int(io.slabs_top(pslabs[k]))
 			pkeys.append(k)
@@ -9632,6 +9654,7 @@ func _halo_test(spawn: Vector3) -> void:
 	out["c"] = {
 		"col": [px, pz], "promote_ms": prom_ms, "settle_frames": pw,
 		"settled": psettled, "seeded": pseeded, "mismatches": pmism, "first": pfirst,
+		"halo_glow_cells_zeroed": phalo_glow_cells,  # AC-0334: unseeded-halo model
 		"ref_rounds": int(pri.get("rounds", -1)), "ref_converged": bool(pri.get("converged", false)),
 		"promotes": int(world.star_halo_promotes) - proms0,
 		"unlit": unlit_p, "why": pwhy,
