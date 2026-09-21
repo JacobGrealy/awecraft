@@ -1,15 +1,13 @@
 meta:
-  updated_at: 2026-09-21T02:39
+  updated_at: 2026-09-21T06:21
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0346
 - AC-0338
 - AC-0339
-- AC-0341
+- AC-0347
 - AC-0342
-- AC-0343
 - AC-0344
 - AC-0290
 - AC-0291
@@ -12820,7 +12818,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-15T08:17
-  updated_at: 2026-09-17T20:06
+  updated_at: 2026-09-21T03:10
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -12862,7 +12860,23 @@ intake:
     how the surface/shore blocks are chosen must be reflected there. Finally, re-measure the real band''s
     gen + mesh cost after your change: the load-screen gate (AC-0313 clause 4) waits for the simulated
     diamond (taxi <= sim) and its wall is derived from that cost, and promotion cost (AC-0286) rides the
-    full gen.'
+    full gen.
+
+
+
+    PREREQUISITE (coordinator, user decision 2026-09-20, filed as AC-0347): the cave density is being
+    re-budgeted into vanilla''s structure BEFORE this ticket — the shallow/deep switch (shallow = min(base
+    terrain, 5 * entrances), deep = the cave router alone), A(y)/DEEP_GROW deleted, the shallow suppressor
+    and the entrance family added, and vanilla''s noise definitions (amplitude list + firstOctave) ported.
+    Read AC-0347 before planning.
+
+    What that means for carvers specifically: carvers stay the separate post-fill family they already
+    are, and their absolute Y range (-56..180) is unaffected — but (i) the fill you carve into changes
+    shape (the deep becomes the cave router''s output rather than an amplified sponge, and the shallow
+    band gets tight), so re-take the before/after shots against the new tree, and (ii) the surface-opening
+    work that used to be AC-0343 (now cancelled) lives inside AC-0347 P2/P3: the entrance family is the
+    deliberate surface opener and the tunnels keep their AC-0289 role as the vertical connectors, so if
+    your cut-through policy assumes the old surface behaviour, re-check it there.'
   comments: []
 - id: AC-0291
   title: cave-p3-voronoi-aquifers
@@ -12874,7 +12888,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-15T08:17
-  updated_at: 2026-09-17T20:06
+  updated_at: 2026-09-21T03:10
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -12916,7 +12930,23 @@ intake:
     be updated in the same change - coordinate or file it. If your aquifers are strictly underground (below
     the surface layer), nothing else is owed. Also preserve H bit-exactness (the far payload''s H == the
     full path''s H): do not move the surface fields, and re-measure the real band''s gen cost for the
-    load-screen gate (AC-0313 clause 4).'
+    load-screen gate (AC-0313 clause 4).
+
+
+
+    PREREQUISITE (coordinator, user decision 2026-09-20, filed as AC-0347): the cave density is being
+    re-budgeted into vanilla''s STRUCTURE before this ticket, which changes what ports here. After AC-0347
+    the deep underground is the cave router itself (vanilla''s deep branch has no base-terrain term) and
+    the noise family is vanilla''s own (amplitude list + firstOctave), so vanilla''s aquifer constants
+    become literal rather than something to rescale: the cell grid (16x12x16, offset 5,5,1, center jittered
+    0-9 xz / 0-8 y, 12 neighbours / 4 nearest, the 25-squared-distance Voronoi rule), the fluid-level
+    noises (aquifer_fluid_level_floodedness xz 1.0 y 0.67, aquifer_fluid_level_spread xz 1.0 y 0.714,
+    aquifer_barrier xz 1.0 y 0.5, aquifer_lava xz 1.0 y 1.0), the floodedness thresholds, and "the level
+    is capped at the preliminary surface" (our preliminary surface is H, and it is available PRE-CARVE).
+
+    Also relevant to this ticket''s ordering rule: AC-0342 (fluid-decision-before-carve) lands before
+    this one and fixes the inversion in gen.cpp:915 so the water table is a function of pre-carve inputs
+    only. Build the Voronoi levels on top of that rule, not on the post-carve he.'
   comments: []
 - id: AC-0292
   title: cave-p4-pillars-veins-cave-biomes
@@ -12928,7 +12958,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-15T08:17
-  updated_at: 2026-09-17T20:06
+  updated_at: 2026-09-21T03:10
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -12970,7 +13000,22 @@ intake:
     how the surface/shore blocks are chosen must be reflected there. Finally, re-measure the real band''s
     gen + mesh cost after your change: the load-screen gate (AC-0313 clause 4) waits for the simulated
     diamond (taxi <= sim) and its wall is derived from that cost, and promotion cost (AC-0286) rides the
-    full gen.'
+    full gen.
+
+
+
+    PREREQUISITE (coordinator, user decision 2026-09-20, filed as AC-0347): the cave density is being
+    re-budgeted into vanilla''s structure before this ticket. That matters here because vanilla''s PILLARS
+    are not a bolt-on threshold — they are part of the same deep branch of final_density: max( min(entrances,
+    4*cave_layer^2 + clamp(-1,1)(0.27 + cave_cheese) + clamp(0,0.5)(1.5 - 0.64*sloped_cheese), add(spaghetti_2d,
+    spaghetti_roughness)), range_choice(input = caves/pillars, max_exclusive 0.03, min -1e6, when_in_range
+    -1e6, when_out_of_range caves/pillars) ) — i.e. where the pillar density is >= 0.03 it FILLS the carved
+    void with stone, which is what makes the pillars read as speleothems inside chambers. After AC-0347
+    the pillar family is a literal port like the cheese and layer families, so re-read that ticket''s
+    P2 before planning, and take the chamber-height geometry from the re-budgeted void rather than from
+    today''s sponge (the layer caps decide how tall a chamber can be).
+
+    The 3-D cave-biome/surface-rule half of this ticket is unaffected by the re-budget.'
   comments: []
 - id: AC-0293
   title: retire-5x5-startup-burst
@@ -16168,7 +16213,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-19T08:42
-  updated_at: 2026-09-21T02:16
+  updated_at: 2026-09-21T05:58
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -16216,7 +16261,18 @@ intake:
     \ it blindly: the 0/0 in the docs is what the arm asserted when the terrain was different, so decide\
     \ which of the two the arm SHOULD assert now (an invariant like \"the set of fluid cells after the\
     \ edit equals the set the edit wrote\" survives a terrain change; a bare count does not) and harden\
-    \ it that way - the same guidance this ticket already carries for the wall-clock-shaped budgets."
+    \ it that way - the same guidance this ticket already carries for the wall-clock-shaped budgets.\n\
+    \nANOTHER A/B-PROVEN PRE-EXISTING ARM RED (coordinator, 2026-09-21, handed over by the AC-0346 builder):\
+    \ the settings arm's `ms_clamp` check reads red, and the builder proved it pre-existing by an A/B\
+    \ run rather than assuming it - so it joins the list on this ticket (craft/water/trees ok:false in\
+    \ the archived baseline, atlas/buckets/player/interact with no `ok` key, the editslab stale 241 ms\
+    \ budget, the player arm's terrain-specific jump_peak_y, and now ms_clamp). Note what the pattern\
+    \ looks like after several rounds of this: EVERY one of these is an expectation that encodes a specific\
+    \ VALUE (a wall-clock budget, a terrain-derived height, an exact count from an older world) rather\
+    \ than a PROPERTY. The ones that have never gone stale assert byte-identity, a closure set, a determinism\
+    \ property or a monotonicity - those survive generation changes and engine rework. When this ticket\
+    \ is worked, convert each entry to the strongest property it can express, and delete the ones that\
+    \ cannot express one."
   comments: []
 - id: AC-0331
   title: far-tier-mesh-floor-kernel
@@ -17339,11 +17395,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-09-20T11:15
-  updated_at: 2026-09-20T11:16
-  completed_at: null
+  updated_at: 2026-09-21T03:10
+  completed_at: 2026-09-21T03:10
   waiting_on: null
   parent_id: null
   notes: "1) User Story\n\nAs a player caving underground, I want the underground to be a STACK of cave\
@@ -17417,7 +17473,59 @@ intake:
     \ and its entire margin is 1.8 * 0.5268 = 0.948 < 1 (max measured |C - 0.5| for the two-octave blend).\
     \ A multiplicative gate <= 1 can only reduce |A * (C - 0.5)| at every depth, so it cannot break that\
     \ margin anywhere; an ADDITIVE term can, which is why the layer term must stay one-sided (never add\
-    \ carve)."
+    \ carve).\n\n\n\nDESIGN CLARIFICATION (coordinator, 2026-09-20, per the user's steer: \"why not just\
+    \ make it like Minecraft?\"):\nThe layer field should BE vanilla's cave_layer in shape and scale,\
+    \ not a hand-rolled periodic profile. Vanilla's is a SINGLE-octave noise (noise cave_layer = {firstOctave:\
+    \ -8, amplitudes: [1.0]}) used at xz_scale 1.0 / y_scale 8.0, i.e. a ~256-block xz lattice and a ~32-block\
+    \ vertical period, SQUARED (one-sided), absolute in y, applied to the CHEESE family only.\nIn our\
+    \ terms that is one vnoise3(x/256.0, y/32.0, z/256.0, seed + 401) evaluated densely at each scan y\
+    \ (mirror it as AweNoise.vnoise3, godot/core/noise.gd:51-62, for the genprobe lockstep), with L =\
+    \ 2*(v - 0.5) and the bias shaped like vanilla's square. The cheap phase-warp profile described in\
+    \ the body above is DEMOTED TO A COST FALLBACK, used only if a per-scan-point noise sample is too\
+    \ expensive in the AC-0237 scan stage — it is not the default. (Our value noise vs vanilla's Perlin\
+    \ at a 256-block scale is visually irrelevant, and staying inside the AweNoise family keeps the port/mirror\
+    \ story intact.)\n\nWHY THE CONSTANT +4 CANNOT BE COPIED LITERALLY (the first unavoidable departure):\n\
+    Vanilla's cheese carve has a DEPTH-INDEPENDENT magnitude: clamp(-1,1)(0.27 + cave_cheese), so at most\
+    \ -0.73 and typically -0.2..-0.5, competing against a fixed 0..+4 layer bias. The layer term therefore\
+    \ dominates the carve at every altitude, and vanilla needs no depth compensation.\nOurs is A(y)*(C\
+    \ - 0.5) with A spanning 1.8 (surface band) to ~38 (near the floor) — a 20x range. Our carve condition\
+    \ is 0.5 - C > (1 + bias)/A(y), so a CONSTANT bias's effect is divided by A(y) and fades exactly where\
+    \ the complaint bites hardest:\n  bias 4 (its mean value over the noise is only ~0.36, since E[L^2]\
+    \ is small; the tail |L| = 0.6 gives 1.44):\n    at 30 blocks below the surface (A = 7.8): carve fraction\
+    \ oscillates 10% (gap) -> 0.15% (cap)  => strong layering\n    at 80 blocks below the surface (A =\
+    \ 22.8): carve fraction oscillates 33% -> 15%       => weak layering\n  and the deep average air fraction\
+    \ drops below the calibrated 30-38% (AC-0215), i.e. it silently re-tunes the deep.\nThe multiplicative\
+    \ gate A_strat = A*(1 - K*b) is the same mechanism expressed in our currency: the threshold becomes\
+    \ 1/(A*(1 - K*b)), so with K ~ 0.9 the gaps keep today's air EXACTLY (C < 0.5 - 1/A, unchanged) and\
+    \ the caps are sealed at every depth:\n    k = 30:  gap 11%  -> cap ~0%      k = 80:  gap 34% -> cap\
+    \ ~0%      k = 122: gap 37% -> cap ~0.3%\nThat uniformity is the whole point, and it is why the multiplicative\
+    \ form is closer to vanilla's EFFECT than vanilla's own constant would be in our units.\n\nWHY IT\
+    \ CANNOT BE SAMPLED ON THE LATTICE (the second unavoidable departure):\nVanilla's cave_layer sits\
+    \ INSIDE interpolated(...), so its 32-block period is carried by 8-block cells = 4 samples per period.\
+    \ Our lattice y-cell is 48 blocks, which is 0.67 samples per period — a literal port into the 441-point\
+    \ field would ALIAS it into a meaningless per-cell bias, arguably worse than no layer term at all.\
+    \ A literal port therefore requires the GY_CELLS raise first (AC-0344, 3-5x field-build cost). Evaluating\
+    \ the same noise densely at each scan y sidesteps the lattice entirely and gives vanilla's effective\
+    \ resolution (in fact finer: 1 block vs vanilla's interpolated 8).\nFully literal parity (vanilla's\
+    \ whole density model: sloped_cheese/base_3d_noise, squeeze, the clamp budgets, depth-independent\
+    \ cave magnitude) is a REPLACEMENT of our terrain model, not a layer term — it would discard the AC-0215/AC-0288\
+    \ calibration (30-38% deep air, the C-budget invariant against the AC-0288 scan-start margin) and\
+    \ belongs to the scale of AC-0311's domain rewrite, not to this ticket.\n\n\nSUPERSEDED AND CANCELLED\
+    \ (coordinator, user decision 2026-09-20): this ticket is merged into AC-0347 (cave-density-rebudget-vanilla-currency),\
+    \ which adopts vanilla's density STRUCTURE instead of rescaling vanilla's layer constant by A(y).\
+    \ The user's steer was \"why not just change where ours differs to be more like Minecraft?\" — and\
+    \ the answer is that ours differs in exactly one structural place: vanilla hands the deep underground\
+    \ entirely to the cave router (below the shallow band its base terrain term contributes 0), while\
+    \ we keep a +1 base everywhere below H-10 and amplify the carve with A(y) up to ~38. With that split\
+    \ adopted, the +4 layer bias competes against an O(1) carve and ports literally, with no multiplicative\
+    \ workaround.\nWHY THE NOTES STAY: this ticket's three appended notes are the record of the workaround\
+    \ and of the research behind both paths — the cave_layer definition and scales, the depth-dependent\
+    \ arithmetic showing why a constant bias cannot work in our currency (carve fraction 10%->0.15% at\
+    \ 30 blocks down vs 33%->15% at 80, i.e. backwards), the sampling argument (a 32-block period on a\
+    \ 48-block lattice aliases; vanilla carries it with 8-block cells inside interpolated), the vanilla/Bedrock\
+    \ source list, the fidelity table, and the precision note on the AC-0288 surface-band margin. AC-0347\
+    \ names this design as its documented FALLBACK if the structural path is rejected at plan time. Nothing\
+    \ here is deleted; only its status as the active plan is."
   comments: []
 - id: AC-0342
   title: fluid-decision-before-carve
@@ -17498,11 +17606,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-09-20T11:15
-  updated_at: 2026-09-20T11:15
-  completed_at: null
+  updated_at: 2026-09-21T03:10
+  completed_at: 2026-09-21T03:10
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -17607,7 +17715,27 @@ intake:
     DEFERRED: carvers/canyons are a separate surface-cutting family (AC-0290); the fluid rule itself is
     AC-0342; the vertical cell size is AC-0344.
 
-    '
+
+
+
+    MERGED INTO AC-0347 (coordinator, user decision 2026-09-20): this ticket is cancelled because the
+    shallow band is not a rule to add on top of our depth-growing amplitude — in vanilla''s structure
+    it IS the structure. AC-0347 adopts the range_choice split: the shallow region goes to min(base_terrain,
+    5 * entrances) and the deep region goes to the cave router, with the shallow SUPPRESSOR clamp(0,0.5)(1.5
+    - 0.64*sloped_cheese) replacing DEEP_GROW.
+
+    EVERYTHING MEASURED HERE IS PRESERVED IN AC-0347 P2/P3: the roof-depth inversion (the biggest voids
+    get the shallowest roofs — ~37 blocks of roof at C ~= 0.4, ~21 at 0.3, ~15 at 0.25), the fact that
+    the cheese family is already shielded near the surface (air within ~10 blocks of H would need C <
+    0, impossible at A = 1.8) while the TUNNELS are the family that opens it (tunnel_air is tested before
+    the ramp at gen.cpp:889-890, inside a patch gate that AC-0289 measured at gate_frac 0.476), the Bedrock
+    entrance family as the only deliberate surface opener (0.37 + cave_entrance xz 0.75 / y 0.5, y_clamped_gradient
+    from_y -10: 0.3 -> to_y 30: 0.0, entering final_density as min(sloped_cheese, 5*entrances)), and this
+    ticket''s whole VERIFY block (roof-thickness distribution, topmost-solid-below-H census at k = 4/8/16,
+    dry-pit census, intact-hillside screenshot).
+
+    Cancelled rather than deleted so the measurements and reasoning stay in the record; AC-0347 P3 is
+    the ticket that now owns them.'
   comments: []
 - id: AC-0344
   title: cave-vertical-cell-resolution-decision
@@ -17619,7 +17747,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-20T11:15
-  updated_at: 2026-09-20T11:15
+  updated_at: 2026-09-21T03:10
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -17703,7 +17831,27 @@ intake:
     - If an arm is added or changed: the branch in godot/scenes/harness.gd AND a row in tasks/harness_data.yaml,
     then python3 tasks/scripts/harness_doc.py --render.
 
-    '
+
+
+
+    REPOSITIONED (coordinator, user decision 2026-09-20): this question now follows AC-0347, which re-budgets
+    the cave density into vanilla''s structure and its O(1) cave currency. Two consequences:
+
+    1) The layer term still cannot ride a 48-block cell (a 32-block period), so AC-0347 P2 evaluates cave_layer
+    DENSELY in the scan regardless of what happens here. The question is therefore now explicitly: keep
+    our 48-block y-cells with dense layer sampling, or raise GY_CELLS toward vanilla''s 8-block cell for
+    full structural parity — vanilla''s cave_layer sits INSIDE interpolated(...), i.e. 4 samples per period
+    at 8-block cells, which is how it carries the layering at all.
+
+    2) Vanilla''s cell size is part of its model, not an independent knob, so if the answer here is "raise",
+    the raise buys parity for the whole router (every family sampled the way vanilla samples it), not
+    just smoother caves. Quantify it that way.
+
+    The cost side and the gate side are unchanged from the body above: field-build and scan timings from
+    the AC-0237 gen_timing breakdown at GY_CELLS 8 vs 16 vs 24 (833 / 1225 lattice points per field, seven
+    fields on the full path), the AC-0313 clause-4 load-screen wall which is derived from the real band''s
+    gen cost, AC-0286''s promotion cost, and the AC-0284b far/skip H bit-exactness. The deliverable stays
+    a measured recommendation, not an implementation.'
   comments: []
 - id: AC-0345
   title: r50-far-wave-starvation
@@ -17814,11 +17962,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-20T23:05
-  updated_at: 2026-09-20T23:05
-  completed_at: null
+  updated_at: 2026-09-21T06:21
+  completed_at: 2026-09-21T06:21
   waiting_on: null
   parent_id: null
   notes: '1) User Story: A column sitting in the coarse far band can end up holding FULL-resolution generation
@@ -17873,5 +18021,151 @@ intake:
     - if your fix touches queue residency or the tier stamps, say so in your results so the two do not
     collide.
 
-    '
+
+
+    TAKEN BY THE COORDINATOR SESSION (2026-09-20), immediately after AC-0345 (r50-far-wave-starvation)
+    was fixed and proven - that ticket touched the far-tier QUEUE lifecycle in the same area, and it also
+    REOPENED AC-0338 (the far-tier batching ticket) because its converged census turned out to be 16,711
+    MI, about double the batching trigger. NONE of that is yours, but the neighbourhood matters: read
+    the AC-0345 commit''s comment block in world.gd before you touch the tier stamps or the queue, and
+    say in your results if your fix overlaps it. THE EVIDENCE YOU INHERIT: the AC-0334 results page (tasks/AC-0334/AC-0334-results.html)
+    carries the exact column (7,-3), its taxi/Euclidean numbers (taxi 10 from spawn, Euclidean 7.6 - inside
+    the render circle), its 3976 lava cells and the halo (c) red it caused; AC-0334''s arm hardening is
+    in place, so the halo arm now reads ok:true and you are NOT expected to keep it red - your goal is
+    to stop the leak itself. OPTIONAL, ONLY IF IT COMES FREE: if your fresh-world runs report the far-wave
+    counters, record them as independent corroboration of AC-0345''s convergence (the coordinator verified
+    that fix with the standing set and a code review, but its R50 convergence number was measured by that
+    builder with a temporary arm that has since been removed - a second reading from a different arm would
+    close that gap).
+
+
+    CLOSED 2026-09-21. The leak is gone: the tier-4 hole in `_gen_skip_flag` (which had TWO fall-through
+    paths - the outermost taxi ring and the on-screen frustum collar) is closed by making the tier check
+    total, and the recenter demote is generalized so any full data outside the real band demotes on every
+    recenter instead of riding at band A forever. Coordinator verification: genhash 25/25 byte-identical
+    x2 and against the reference (generation untouched - the decisive claim), farab/ladder/meshprobe green,
+    halo ok:true with (c) 0 AND `glow_zeroed` 820 -> 0 (independent confirmation the leaked columns are
+    gone), lightstate clean, r16 all sub-flags with far_holes 0/0 and static p50 5 ms, boundary p50 13
+    / p95 37 with staged_dropped 1756, flysave/save/spawnsearch green, battery with no new delta. The
+    builder''s before/after shows the nondeterminism the ticket named (66 -> 92 with 3 columns riding
+    at band A -> 73 -> 0/0/0/0 across three fresh processes) and the new standing value records the invariant
+    (rim 116/116 far-stamped, leak columns 0 in every census). WORTH REMEMBERING: the halo counter had
+    been green only because of the leak, so this fix silently invalidated a proof that had been passing
+    for the wrong reason - a reminder that a green arm is only as good as what it is actually measuring.'
+  comments: []
+- id: AC-0347
+  title: cave-density-rebudget-vanilla-currency
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-21T03:11
+  updated_at: 2026-09-21T03:11
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story\n\nAs a player caving underground, I want the world below me to behave like Minecraft's:\
+    \ cave levels stacked at consistent heights that I can follow across the map, stone between them,\
+    \ ground near the surface that holds together (caves reaching the surface only where the world deliberately\
+    \ puts an entrance), and chambers that read as rooms rather than one void running from just under\
+    \ the grass to the floor. Today ours is a single continuous sponge that gets hollower the deeper you\
+    \ go, and any opening that drops a column below water height floods.\n\nThis ticket gets there by\
+    \ changing the ONE structural thing that makes us different from Minecraft. Minecraft hands the DEEP\
+    \ underground entirely to the cave functions — there is no base terrain density left to fight down\
+    \ there — and keeps the shallow band for the base terrain, switching between the two by depth. We\
+    \ instead keep a +1 base everywhere below H-10 and amplify the cave carve up to 20x with depth (A(y)\
+    \ to ~38). Adopting Minecraft's split is what makes Minecraft's own cave constants usable as-is, including\
+    \ the 32-block layer term that produces stacked levels, the 0.27 hollowness threshold, and the entrance\
+    \ family.\n\n2) Technical Details\n\nREFRAME: this ticket REPLACES AC-0341 (cancelled) and AC-0343\
+    \ (cancelled), merging both. AC-0341's notes hold the superseded workaround design (multiplicative\
+    \ gate A_strat = A*(1 - K*b) plus a dense periodic profile) and AC-0343's hold the surface-opening\
+    \ measurements; keep both as the record and the fallback.\n\nTHE STRUCTURE TO ADOPT (Java 1.21.4 noise_settings/overworld.json\
+    \ final_density; Bedrock shares this router post-Caves & Cliffs — MCPE-143895 was fixed in 1.18.0.22\
+    \ \"with the seed parity returns\", MCPE-154323 stays open only for carvers, so these values are Bedrock's\
+    \ too):\n  d = range_choice(input = sloped_cheese, min -1e6, max_exclusive 1.5625):\n        when_in_range\
+    \ (SHALLOW)  -> min(sloped_cheese, 5 * entrances)\n        when_out_of_range (DEEP) -> max( min( entrances,\n\
+    \                                              4*cave_layer^2\n                                  \
+    \            + clamp(-1,1)(0.27 + cave_cheese)\n                                              + clamp(0,0.5)(1.5\
+    \ - 0.64*sloped_cheese),\n                                              add(spaghetti_2d, spaghetti_roughness)\
+    \ ),\n                                         pillars_choice )\nTHE LOAD-BEARING FACT: in the DEEP\
+    \ branch the base terrain contributes NOTHING. clamp(0,0.5)(1.5 - 0.64*sloped_cheese) is 0 once sloped_cheese\
+    \ >= 2.34, and the base density appears nowhere else in that branch. Below the shallow band the solid/air\
+    \ decision IS the cave router. That is why vanilla's cave constants are O(1) and portable and ours\
+    \ are not: our S_ramp is +1 EVERYWHERE below H-10 (gen.cpp:413-422 saturates), so our carve must fight\
+    \ it, and A(y) = 1.8*(1 + max(0, H-y-10)/6) is the lever that does the fighting (gen.cpp:427-432,\
+    \ constants at gen.cpp:278-287).\nTwo consequences of that one difference, both player-visible:\n\
+    \  - DEEP_GROW is our substitute for vanilla's shallow SUPPRESSOR. We amplify with depth; vanilla\
+    \ suppresses near the surface (clamp(0,0.5)(1.5 - 0.64*sloped_cheese), +0.5 solid where the terrain\
+    \ is shallow, gone by 2.34). Same asymmetry, but the suppressor keeps every term O(1) — which is exactly\
+    \ what makes the constants shareable.\n  - A(y) is DEPTH-RELATIVE (f(H-y)), so our caves shift down\
+    \ with the terrain: under a mountain they sit deeper at the same world y. Vanilla's cave structure\
+    \ is ABSOLUTE in y; only the top band follows the terrain. Cave LEVELS only read as levels if they\
+    \ sit at consistent world heights, so this matters for the primary ask, not just for tidiness.\n\n\
+    WHAT CHANGES:\n  KEEP: H (the surface heightmap via surface_h, gen.cpp:391-407) and S_ramp as the\
+    \ SHALLOW branch. H is load-bearing for streaming: the far payload IS 256 x u16 H (AC-0284b), plus\
+    \ AC-0286 promotion consistency, the AC-0216 skip fill and the halo 4x4 avg emit. Vanilla's surface\
+    \ (spline-driven depth/factor/offset + base_3d_noise) is architecture, not a formula — do NOT replace\
+    \ the surface model in this ticket.\n  DELETE: A(y), DEEP_GROW, and CAVE_AMP's role as a depth amplifier\
+    \ (with them go the AC-0288 C-budget invariant built around 1.8 * max|C-0.5| = 0.948 < 1).\n  ADD:\
+    \ the depth switch (input = depth from the surface, k = H - y; NOT S_ramp, which saturates — pick\
+    \ the cut in the 10-25 block band and justify it), the shallow suppressor clamp(0,0.5)(1.5 - 0.64*k_norm),\
+    \ the entrance family, and the literal 4*cave_layer^2 layer term.\n  RECALIBRATE: the deep air target.\
+    \ AC-0215's 30-38% was our MIMIC of deepslate cheese; this ticket replaces the mimic with the mechanism,\
+    \ so measure the new profile rather than preserving the old number. The H distribution is a separate\
+    \ contract and stays untouched.\n\nTHE NOISE MUST PORT WITH THE CONSTANTS (otherwise the constants\
+    \ mean nothing):\nVanilla's NormalNoise = a sum of Perlin octaves with a CUSTOM AMPLITUDE LIST and\
+    \ a firstOctave FREQUENCY OFFSET, normalized by the amplitude sum. AweNoise.fbm3 (godot/core/noise.gd:78-88)\
+    \ is the same octave machine with a fixed gain 0.5 and no firstOctave. So P1 adds ONE small sampler:\
+    \ sum(a_i * vnoise3(p * 2^firstOctave * 2^i)) / sum(|a_i|), in AweNoise and the C++ mirror, bit-exact\
+    \ (f64, -ffp-contract=off, genprobe lockstep as usual). Then these port as-is:\n  cave_cheese   {firstOctave:\
+    \ -8, amplitudes: [0.5,1,2,1,2,1,0,2,0]}  at xz_scale 1.0,  y_scale 0.6667\n  cave_layer    {firstOctave:\
+    \ -8, amplitudes: [1.0]}                 at xz_scale 1.0,  y_scale 8.0\n  cave_entrance {firstOctave:\
+    \ -7, amplitudes: [0.4,0.5,1.0]}         at xz_scale 0.75, y_scale 0.5\nScale convention: the scale\
+    \ MULTIPLIES the block coordinate (the wiki's \"scales the X and Z before sampling\"; a y_scale of\
+    \ 0.0 in other vanilla entries is undefined under division, and cave_layer's y_scale 8.0 only makes\
+    \ sense as a ~32-block vertical period). Sanity wavelengths: cheese dominant octave ~64 blocks xz\
+    \ / ~96 y; layer ~256 xz / 32 y; entrance ~43 xz / 64 y.\nWhy this is unavoidable: our current C (fbm3\
+    \ xz14/y10, 3 octaves, mean 0.5, std 0.105, measured max|C-0.5| = 0.5268 at AC-0288) has a completely\
+    \ different distribution from vanilla's normalized cave_cheese, so \"0.27 + cheese\" and \"4*layer^2\"\
+    \ are meaningless numbers in our current units.\n\nPIECES — work one at a time, each delegated to\
+    \ a single blocking builder, gated and committed before the next:\n  P1  The vanilla sampler (amplitude\
+    \ list + firstOctave; GD + C++ bit-exact + genprobe) and the cheese field switched to vanilla's cave_cheese\
+    \ parameters. Gate: sampler bit-exactness (genprobe), the field's distribution sanity (normalized,\
+    \ centred), genhash rebase, cost measured from the AC-0237 breakdown.\n  P2  THE STRUCTURE, and where\
+    \ the layers land: the depth switch, the shallow suppressor, the deep branch min(entrances, 4*cave_layer^2\
+    \ + clamp(-1,1)(0.27+cheese) + clamp(0,0.5)(1.5-0.64*k_norm)), A(y)/DEEP_GROW deleted, entrances as\
+    \ the shallow carve. The +4 layer bias now competes against an O(1) carve, so it gates the cheese\
+    \ at every depth with no rescaling — that is the user's primary ask, and it ports as a literal vanilla\
+    \ constant. Keep the layer term one-sided (vanilla's square is), keep the tunnels outside it (tunnel_air\
+    \ is already evaluated outside dens_at, gen.cpp:889-890, so AC-0289's spaghetti/noodle keep piercing\
+    \ the caps and connecting levels — the same topology vanilla has), and note that a 32-block period\
+    \ still cannot ride the 48-block lattice, so cave_layer is evaluated DENSELY in the scan (see AC-0344\
+    \ for the cell-size decision).\n  P3  Surface-opening and asymmetry recalibration: measure the roof-thickness\
+    \ distribution, the topmost-solid-below-H census (k = 4, 8, 16) and the dry-pit census, tune the switch\
+    \ depth and the suppressor constant against those measures, re-measure the deep air profile. This\
+    \ absorbs AC-0343's verification block. Shots: stacked deep rooms + an intact hillside + one deliberate\
+    \ surface entrance.\n\nCONSTRAINTS AND GATES:\n  - Re-derive the top-down scan's \"air for sure\"\
+    \ start rather than inheriting it (gen.cpp:873-875 starts at H+11 because the old budget guaranteed\
+    \ air above H+R+1). In the new structure the shallow branch is min(S_ramp, 5*entrances) and S_ramp\
+    \ is exactly -1 above H+10.5, so the margin should survive — PROVE it, do not assume it.\n  - CONTINUITY\
+    \ at the switch: vanilla's two branches agree in magnitude near sloped_cheese = 1.5625 (the shallow\
+    \ branch is ~1.5 solid; the deep branch is usually positive too), so the cut is invisible. A naive\
+    \ hard switch can leave a horizontal seam. Measure a vertical profile across the cut and look at a\
+    \ cross-section.\n  - Unchanged contracts: H bit-exactness (no surface field moves, SEA stays 126),\
+    \ band 0 only, genhash rebase accepted (standing user note 2026-09-15: old-world save compatibility\
+    \ NOT required, fresh worlds only), the AC-0237 field/scan stage costs re-measured (AC-0313 clause\
+    \ 4's load-screen wall is derived from them; AC-0286's promotion cost rides the full gen).\n  - SEQUENCE:\
+    \ lands BEFORE AC-0290 (carvers), AC-0291 (aquifers) and AC-0292 (pillars) — their constants become\
+    \ portable after it — and before AC-0311, which re-derives the flat-frame cave stack and waits on\
+    \ the cave series.\n  - DOCS in the same task: gen.cpp header lines 1 and 5, docs/worldgen-current.html:369\
+    \ and :376, and tasks/cave-compare/cave-compare.html:30 and :32 all call the lattice \"4x8x4 cells\"\
+    \ while the same text states ystep = hmax/8 = 48 (docs/worldgen-current.html:397 has the correct 48).\
+    \ \"4x8x4\" reads as vanilla's 4x8x4-BLOCK cell; ours is 4x48x4 blocks (8 y-cells over HEIGHT 384).\
+    \ Correct every occurrence, and rewrite the cave/density description to the new structure.\n  - FALLBACK:\
+    \ if the plan review concludes the structural path is wrong for us, fall back to AC-0341's superseded\
+    \ multiplicative-gate design (it is a smaller, calibration-preserving change) and say so explicitly\
+    \ in plan.html and the results page.\n"
   comments: []
