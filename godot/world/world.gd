@@ -6888,6 +6888,30 @@ func _collect_pool(build: bool, include_fb := false, maxb := -1, high_only := fa
 				# AC-0257: keep-high — a meshed column is skipped.
 				if c == null or c.data.is_empty() or c.mesh_built:
 					continue
+				# AC-0345: the FAR lane's own readiness test — a settled
+				# far column (live tier ≥ 2 whose low probe owes nothing:
+				# _entry_best_pending < 0) leaves the candidate window the
+				# way a meshed high column does. The c.mesh_built skip
+				# above is the HIGH lane's test — a far column is never
+				# mesh_built (the low lane stamps, not the high lane), so
+				# without this test the R50 far wave starved: the 512
+				# innermost settled far columns filled the band-order
+				# window (PICK_POOL_CAP) permanently, the scan never
+				# reached the columns behind them, and the far field
+				# froze after exactly 8704 = 512 x 17 slabs with the
+				# pools idle (the AC-0338 find). The queue entry STAYS:
+				# the AC-0222 depth cap, the AC-0274 defer set and the
+				# tier/knob re-dispatch all work on queue membership, and
+				# a re-pended slab (a tier flip, an edit, a recenter)
+				# re-admits the entry on the next scan (those events bump
+				# _pool_ver and force the rescan). Tier 4 (data-only,
+				# past the render edge) reads -1 from the probe and
+				# leaves the window too — the pool contract already says
+				# "ring 4 owes nothing, the data pass feeds it".
+				var dxp := int(e["cx"]) - last_pcx
+				var dzp := int(e["cz"]) - last_pcz
+				if _lod_tier_of(dxp, dzp) >= 2 and _entry_best_pending_cached(c) < 0:
+					continue
 				if high_only:
 					# AC-0262 (AC-0313): the visible band's build entries
 					# are the slab wave's work list, not the drain's. The
@@ -6978,14 +7002,19 @@ func _pick_build_cached(maxb: int, include_fb: bool, high_only := false) -> Dict
 		# dispatch never had the gate).
 		if etier <= 1 and not _build_ready(int(e["cx"]), int(e["cz"])):
 			continue
-		# AC-0335 (the ladder's boundary-flip fix): a tier-2/3 candidate
-		# must still OWE a low — a fully-lowered far column (the probe
-		# owes nothing) is NOT a candidate. It stays queued (a tier
-		# change / edit re-pends its slabs and this SAME entry drives the
-		# re-dispatch — the old slab wave depended on far entries' queue
-		# residency; the old high-only drain never removed them), and
-		# skipping it here means it can never hold the top pick against
-		# pending far work behind it.
+		# AC-0335 (the ladder's boundary-flip fix; AC-0345 UPDATED): a
+		# tier-2/3 candidate must still OWE a low — a fully-lowered far
+		# column (the probe owes nothing) is NOT a candidate. AC-0345:
+		# the settled-far exclusion now lives in the POOL SCAN itself
+		# (_collect_pool's build filter runs this same probe — a settled
+		# far column no longer occupies a candidate-window slot, which
+		# was the R50 far-wave starvation); this loop's gate is now the
+		# same-frame race guard (a candidate settles between the scan
+		# and this gate — a low handoff landing this frame). The entry
+		# stays queued either way (a tier change / edit re-pends its
+		# slabs and this SAME entry drives the re-dispatch — the old
+		# slab wave depended on far entries' queue residency; the old
+		# high-only drain never removed them).
 		if etier > 1 and _entry_best_pending_cached(c) < 0:
 			continue
 		var s := _grid_score(e)  # AC-0313: the bake order (taxi, layer)
@@ -7538,11 +7567,13 @@ func _drain_build_queue() -> void:
 				#     edit, a demote re-pends its slabs) and the queue
 				#     entry is what drives the re-dispatch (the old slab
 				#     wave depended on far entries' queue residency — the
-				#     old high-only drain never removed them). This -1 is
-				#     a dispatch-time race (the pick's pending gate keeps
-				#     completed far entries out of the top pick): the
-				#     entry STAYS and the column is deferred for the frame
-				#     (the fresh re-pick skips it).
+				#     old high-only drain never removed them). AC-0345:
+				#     the pick's pending gate (this probe test) lives in
+				#     the pool scan now, so this -1 is a pure same-frame
+				#     race (the candidate settled between the scan and
+				#     this dispatch probe): the entry STAYS and the
+				#     column is deferred for the frame (the fresh re-pick
+				#     skips it).
 				if tierg <= 1:
 					_remove_entry(best_e)
 				else:

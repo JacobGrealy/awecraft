@@ -401,7 +401,25 @@ Match these; do not improvise a different approach in a task.
   iteration when the TG pool is fully drained — the slab unit frees a queue entry only
   once per 24 slabs, so the `u == 0` gate alone starved the TG pipeline to the
   column-completion rate and the walk's taxi-8 sim disc plateaued at ~53%): the data
-  supply is part of the scheduler's contract, not a regime.
+  supply is part of the scheduler's contract, not a regime. **Queue lifecycle
+  (AC-0345)**: the scheduler picks from a CANDIDATE WINDOW — `_collect_pool` scans
+  the queue in band order (innermost ring first) and returns at most
+  `PICK_POOL_CAP` (512) entries; the cap is a performance device (AC-0217/AC-0233/
+  AC-0250 removed the per-frame full-pool rescan), so what fills the window
+  matters: a column leaves the window the moment it no longer owes its ring's
+  work, by that lane's own readiness test — a high column through `c.mesh_built`
+  (and its queue entry is freed outright when it completes), a far column (rings
+  2/3) through the LOW probe (`_entry_best_pending < 0`). Far columns are never
+  `mesh_built` (the flag is the high lane's), so without the probe test in the
+  scan the 512 innermost settled far columns hold the window permanently and the
+  far field stops exactly there — at the shipped render distance 50 that was a
+  frozen 8704 = 512 × 17-slab wave with the pools idle (the AC-0338 find, fixed
+  at AC-0345: the R50 far field now streams to completion — 80,852 = 4,756 × 17
+  dispatched, `pend` → 0, the window empty at the floor). A settled far entry
+  STAYS IN THE QUEUE: the tier/knob-change re-dispatch, the AC-0222 depth cap and
+  the AC-0274 defer set all work on queue membership, and a re-pended slab (a
+  tier flip, an edit, a recenter) re-admits the entry on the next scan (those
+  events bump `_pool_ver` and force the rescan).
 - **Load screen (AC-0313, clause 4 as CORRECTED)**: the loading window closes the
   moment the **SIM TAXI DIAMOND** around the load anchor — every column with
   `taxi(dx,dz) <= band0_r` (= sim), 41 columns at sim 4 — is `mesh_built` by the
