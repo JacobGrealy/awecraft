@@ -1,10 +1,13 @@
-// AC-0215 (supersedes AC-0188): the MC 1.18 style COARSE 4x8x4 3D DENSITY
-// FIELD gen — caves AND surface come from ONE field (the user's AC-0215
-// ask: "replace the heightmap + per column cave carve").
+// AC-0215 (supersedes AC-0188): the MC 1.18 style COARSE 3D DENSITY FIELD
+// gen — caves AND surface come from ONE field (the user's AC-0215 ask:
+// "replace the heightmap + per column cave carve").
 //
-// The per-cell DENSITY (one field, sampled on a coarse 4x8x4-cell grid per
-// chunk — 7x9x7 = 441 lattice points per field, the 1-cell margin covering
-// the 2-ring tree neighborhood; each lattice point an AweNoise.fbm3):
+// The per-cell DENSITY (one field, sampled on a coarse 4x8x4-CELL grid per
+// chunk — 4x48x4 BLOCKS per cell: 4 x, 8 y-cells of h/8 = 48 blocks, 4 z
+// (AC-0347 P1 doc fix — the "4x8x4" cell count was readable as vanilla's
+// 4x8x4-BLOCK cell); 7x9x7 = 441 lattice points per field, the 1-cell
+// margin covering the 2-ring tree neighborhood; each lattice point an
+// AweNoise sample):
 //
 //   d(x,y,z) = S_ramp((H(x,z) - y + 0.5) / R) + A(y) * (C(x,y,z) - 0.5)
 //
@@ -14,14 +17,23 @@
 //   C(x,y,z) = trilinear of the coarse 3D CAVE field — the per-column cave
 //            carve (old 1D _vnoise3col / the y<16 0.42 threshold carve) is
 //            GONE: caves are where the one field says d < 0, at ANY depth.
-//            AC-0288 (P0 tune, pocket-size variety from this ONE field):
-//            C = C1 + 0.30 * (C2 - 0.5) where
-//              C1 = fbm3(gx/14, gy/10, gz/14, seed+301, 3)  (primary, 3 oct)
-//              C2 = fbm3(gx/8,  gy/10, gz/8,  seed+302, 2)  (detail octave,
-//                   half the xz wavelength, blended at CAVE_W2 = 0.30)
-//            The old AC-0215 field was fbm3(gx/16, gy/10, gz/16, seed+301,
-//            2). The detail octave is CENTERED before blending, so the mean
-//            stays 0.5 and the surface-band budget is unchanged.
+//            AC-0347 P1 (cave-density rebudget — the vanilla CURRENCY):
+//            C = the vanilla cave_cheese AS-IS, sampled with the vn3
+//            octave machine (AweNoise.vn3 / the mirror below — a custom
+//            AMPLITUDE LIST + a firstOctave FREQUENCY OFFSET, normalized
+//            by sum(|a_i|)):
+//              C = vn3(x*1.0,  y*0.6667, z*1.0, seed+301, -8,
+//                     [0.5, 1, 2, 1, 2, 1, 0, 2, 0])
+//            — the scale MULTIPLIES the block coordinate (the vanilla
+//            convention, "scales the X and Z before sampling"); dominant
+//            wavelengths ~64 blocks xz / ~96 y. The old AC-0288 field
+//            (C1 = fbm3(gx/14, gy/10, gz/14, seed+301, 3 oct) +
+//            C2 = fbm3(gx/8, gy/10, gz/8, seed+302, 2 oct) blended
+//            0.30) is GONE — this field replaces it (the seed+301 slot
+//            is kept; seed+302 is freed). The normalized field is
+//            centred (mean ~0.5) and O(1) — that is what makes the
+//            vanilla deep-branch constants portable (P2). The dense
+//            source is AweGen::density_cave (genprobe lockstep).
 //
 //   AC-0289 (cave P1, the SPAGHETTI/NOODLE TUNNELS — Bedrock-style EDGE
 //   densities blended into this one field, tasks/cave-compare §4 P1):
@@ -55,11 +67,14 @@
 //            (AC-0288: DEEP_GROW = 6, was 8 — the deep fattens sooner, and
 //            the detail octave's small pockets appear earlier down the
 //            column) so the 3D caves widen into the deep — MC 1.18 deepslate
-//            cheese: the deep zone is ~30-38% air, opening downward. AC-0288
-//            surface-safety margin (measured over 512x512x296, step 8):
-//            max(C-0.5) = 0.5268 for the blend, so 1.8 * 0.5268 = 0.948 < 1
-//            (a 2.0 amp would hit 1.054 and break the "air for sure above
-//            H + R + 1" invariant — the scan start).
+//            cheese: the deep zone is ~30-38% air, opening downward.
+//            Surface-safety margin (the "air for sure above H + R + 1"
+//            invariant — the scan start), RE-DERIVED at AC-0347 P1 on the
+//            NEW cheese field: max(C-0.5) = AC0347_P1_MAXC (measured dense,
+//            x,z in [0,512) step 8, y in [0,384) step 8) → 1.8 *
+//            AC0347_P1_MAXC < 1 holds; the AC-0288 number (0.5268, on the
+//            old two-octave blend) is INVALIDATED by the field swap. P2
+//            deletes A(y) entirely (the structure change).
 //   H(x,z) = the surface height derived from the coarse 3D SURFACE field —
 //            the AC-0091 2D heightmap (c/h/r fbm2) is REPLACED by the 3D
 //            fields on the same 4x8x4 grid, read at the sea-level slice
@@ -91,11 +106,13 @@
 //   * trees + flowers: exact old hash logic, base = the effective surface
 //     (h_eff = topmost d > 0 of the one field) instead of the 2D height.
 //
-// NOISE INVARIANT: hash2i/hash3i/fade/lerp/vnoise2/vnoise3/fbm2/fbm3 are
-// bit-for-bit ports of godot/core/noise.gd (f64 math, i64/i32 integer hash,
-// lerpf = a + (b-a)*t). gen.cpp is compiled with -ffp-contract=off so the
-// compiler never contracts the fade/ramp polynomials into FMA (baseline
-// x86-64 has none, MinGW included). Verified by AWECRAFT_LOGIC=genprobe.
+// NOISE INVARIANT: hash2i/hash3i/fade/lerp/vnoise2/vnoise3/fbm2/fbm3/vn3
+// are bit-for-bit ports of godot/core/noise.gd (f64 math, i64/i32 integer
+// hash, lerpf = a + (b-a)*t; vn3 = the vanilla octave machine — AC-0347
+// P1, the frequency is an exact power of two, no pow). gen.cpp is
+// compiled with -ffp-contract=off so the compiler never contracts the
+// fade/ramp polynomials into FMA (baseline x86-64 has none, MinGW
+// included). Verified by AWECRAFT_LOGIC=genprobe.
 //
 // The terrain is NEW again (new genhash baseline — expected, AC-0215 gate):
 // the surface now comes from the coarse 3D surface field, the caves run the
@@ -105,7 +122,7 @@
 // AC-0216 LAZY SKIP (offscreen interior bands): generate_flat/slabs/resl
 // take an optional 6th arg `skip` (default 0 — the pre-AC-0216 behavior,
 // bit-for-bit). When skip != 0 the 150-pt per-column DENSITY EVALUATION is
-// skipped free: the cave field (f_cave) is not built and the top-down
+// skipped free: the cave field (f_cheese) is not built and the top-down
 // d > 0 scan does not run; the column is solid exactly 0..H (the heightmap
 // surface from the coarse 3D surface field), he = H, no caves, no lava
 // pockets — NO HIDDEN CAVES BUILT in the chunk. The surface (H), the ore
@@ -251,6 +268,29 @@ static inline double fbm3(double x, double y, double z, int64_t s, int oct) {
 	return a / tot;
 }
 
+// AC-0347 P1: the vanilla NormalNoise octave machine — BIT-EXACT mirror of
+// AweNoise.vn3 (godot/core/noise.gd, same op order, f64). A custom
+// amplitude list + a firstOctave FREQUENCY OFFSET, normalized by
+// sum(|a_i|): f = 2^firstOct is an EXACT power of two (ldexp — no
+// rounding; no pow), doubled per octave; per-octave seed s + i*101 (the
+// fbm3 convention); zero-amplitude octaves are skipped (their
+// contribution is exactly +0.0 either way). genprobe lockstep.
+static inline double vn3(double x, double y, double z, int64_t s, int first_oct,
+		const double *amps, int n) {
+	double f = std::ldexp(1.0, first_oct);
+	double a = 0.0;
+	double tot = 0.0;
+	for (int i = 0; i < n; i++) {
+		double amp = amps[i];
+		if (amp != 0.0) {
+			a += amp * vnoise3(x * f, y * f, z * f, s + (int64_t)i * 101);
+		}
+		tot += amp < 0.0 ? -amp : amp;
+		f *= 2.0;
+	}
+	return a / tot;
+}
+
 // ---------------------------------------------------------------------------
 // Terrain constants (godot/world/generator.gd).
 // ---------------------------------------------------------------------------
@@ -282,9 +322,26 @@ constexpr double CAVE_AMP = 1.8;   // |CAVE_AMP * (cave-0.5)| < 1 keeps the
 constexpr double R_BAND = 10.0;    // spline surface half-width in y blocks.
 constexpr double DEEP_GROW = 6.0; // cave-amplitude growth scale with depth.
 // AC-0288: was 8 — the deep fattens sooner with the new detail octave.
-// AC-0288: the second (detail) cave octave's blend weight — C = C1 +
-// CAVE_W2 * (C2 - 0.5) (see the file header; genprobe mirrors it).
-constexpr double CAVE_W2 = 0.30;
+// AC-0347 P1 (cave-density rebudget — P1 ONLY, the structure change is
+// P2): the CHEESE field is vanilla's cave_cheese AS-IS — the NormalNoise
+// octave machine (vn3 above / AweNoise.vn3) with firstOctave -8 and the
+// amplitude list [0.5,1,2,1,2,1,0,2,0] (two zero octaves — their
+// contribution is exactly +0.0 and the samples are skipped), at
+// xz_scale 1.0 / y_scale 0.6667. Scale convention: the scale MULTIPLIES
+// the block coordinate (the wiki's "scales the X and Z before sampling";
+// a y_scale of 0.0 in other vanilla entries is undefined under division,
+// and this 0.6667 reads as the dominant octave's ~96-block vertical
+// period — the amp-2 octave at 2^-6 = 1/64 xz, × 0.6667 → 1/96 y; the
+// dominant wavelengths are ~64 blocks xz / ~96 y). The old AC-0288 field
+// (primary fbm3 3-oct xz/14 seed+301 + detail fbm3 2-oct xz/8 seed+302
+// blended at CAVE_W2 0.30) is GONE — this field replaces it (the seed+301
+// slot is kept). The dense source is AweGen::density_cave (genprobe
+// lockstep).
+constexpr int CHEESE_FIRST_OCT = -8;
+constexpr double CHEESE_XZ_SCALE = 1.0;
+constexpr double CHEESE_Y_SCALE = 0.6667;
+static const double CHEESE_AMPS[] = { 0.5, 1.0, 2.0, 1.0, 2.0, 1.0, 0.0, 2.0, 0.0 };
+constexpr int CHEESE_AMPS_N = 9;
 // AC-0289 (cave P1): the spaghetti/noodle tunnel fields — EDGE densities
 // (see the file header). The xz scales are the primary cave field's 14
 // times the family's relative scale (spaghetti 1.0x, noodle 0.75x).
@@ -349,6 +406,28 @@ static void build_field(Field &f, int bx, int bz, double ystep, int64_t seed,
 						((double)(iy * (int)(ystep))) / fy + oy,
 						((double)(bz + iz * 4)) / fz + oz,
 						seed, oct);
+			}
+		}
+	}
+}
+
+// AC-0347 P1: the vanilla-style field builder — the lattice points are
+// SAMPLED at (world coord * scale): the vanilla convention is that the
+// scale MULTIPLIES the block coordinate (the wiki's "scales the X and Z
+// before sampling"). No coordinate offsets (the vanilla cave entries have
+// none). The old build_field (divide-by-scale) is kept for the other
+// fields. y is the lattice row's block index, exactly as build_field.
+static void build_field_vn(Field &f, int bx, int bz, double ystep, int64_t seed,
+		double sx, double sy, double sz, int first_oct,
+		const double *amps, int n) {
+	for (int64_t ix = -1; ix <= 5; ix++) {
+		for (int64_t iy = 0; iy <= 8; iy++) {
+			for (int64_t iz = -1; iz <= 5; iz++) {
+				f[grid_idx(ix, iy, iz)] = vn3(
+						(double)(bx + ix * 4) * sx,
+						(double)(iy * (int)(ystep)) * sy,
+						(double)(bz + iz * 4) * sz,
+						seed, first_oct, amps, n);
 			}
 		}
 	}
@@ -429,14 +508,6 @@ static inline double cave_amp(int H, int y) {
 	if (d < 0.0)
 		d = 0.0;
 	return CAVE_AMP * (1.0 + d / DEEP_GROW);
-}
-
-// AC-0288: the two-octave cave blend — the primary field plus the detail
-// octave centered and weighted CAVE_W2 (mean stays 0.5). The dense source
-// function is AweGen::density_cave (the genprobe arm mirrors this exact
-// expression on the GDScript side).
-static inline double cave_blend(double c1, double c2) {
-	return c1 + CAVE_W2 * (c2 - 0.5);
 }
 
 // AC-0289: the rarity gate weight — 0 outside the tunnel patches, 1 at
@@ -792,13 +863,15 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	// field (the AC-0091 2D heightmap's c/h/r, now 3D on the same coarse
 	// grid — replaces the heightmap).
 	long long t_field = now_us();
-	Field f_cave{}, f_cave2{}, f_ore1, f_ore2, f_ore3;
+	Field f_cheese{}, f_ore1, f_ore2, f_ore3;
 	Field f_spag{}, f_nood{}, f_gate{};
 	if (!skip) {
-		// AC-0288: the cave field = the primary octave (3 oct, xz/14) +
-		// the detail octave (2 oct, xz/8) — see the file header + cave_blend.
-		build_field(f_cave, bx, bz, ystep, seed + 301, 14.0, 10.0, 14.0, 0.0, 0.0, 0.0, 3);
-		build_field(f_cave2, bx, bz, ystep, seed + 302, 8.0, 10.0, 8.0, 0.0, 0.0, 0.0);
+		// AC-0347 P1: the cheese field = vanilla's cave_cheese as-is (see
+		// the CHEESE_* constants + the file header) — ONE vn3 field
+		// replaces the old AC-0288 two-octave blend (f_cave/f_cave2 gone).
+		build_field_vn(f_cheese, bx, bz, ystep, seed + 301,
+				CHEESE_XZ_SCALE, CHEESE_Y_SCALE, CHEESE_XZ_SCALE,
+				CHEESE_FIRST_OCT, CHEESE_AMPS, CHEESE_AMPS_N);
 		// AC-0289: the P1 tunnel fields (see the file header) — FULL PATH
 		// only: skip != 0 keeps the H/far/promotion contracts bit-exact
 		// (the lazy fill and the far payload never read them).
@@ -856,7 +929,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			if (skip) {
 				// AC-0216: the 150-pt density evaluation is skipped free —
 				// solid exactly 0..H (the heightmap surface), no caves, no
-				// hidden caves built (no f_cave read, no scan, no lava
+				// hidden caves built (no f_cheese read, no scan, no lava
 				// pocket). The aquifer/surface/dirt/ore rules below apply
 				// unchanged with he = H.
 				he = H;
@@ -876,12 +949,13 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				for (int y = top; y >= 1; y--) {
 					if (!slab_kept(y >> 4))
 						continue; // AC-0237: ungenerated slab — skip
-					// AC-0288: the two-octave cave blend (primary + 0.30 *
-					// detail). The H+R+1 scan-start "air for sure" margin is
-					// preserved (CAVE_AMP * max(cave-0.5) = 0.948 < 1).
-					double cave = cave_blend(
-							tril(f_cave, gx, (double)y / ystep, gz),
-							tril(f_cave2, gx, (double)y / ystep, gz));
+					// AC-0347 P1: the cheese field (vanilla's cave_cheese —
+					// one vn3 field, the old two-octave blend is gone). The
+					// H+R+1 scan-start "air for sure" margin re-derived on
+					// the NEW field at AC-0347 P1 (CAVE_AMP * max(cheese-0.5)
+					// — the AC-0288 number 0.948 is invalidated by the field
+					// swap; see the file header).
+					double cave = tril(f_cheese, gx, (double)y / ystep, gz);
 					// AC-0289: the tunnel air wins over cheese solid — blended
 					// into d BEFORE the solid flag (the edge-density test). The
 					// tunnel only removes solidity, so the "air for sure"
@@ -975,7 +1049,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				hcol = heff[glz * 16 + glx];
 			} else if (skip) {
 				// AC-0216: the lazy margin column = the heightmap surface
-				// exactly (no cave term — the f_cave field was not built;
+				// exactly (no cave term — the f_cheese field was not built;
 				// the neighbor band is lazy too, so H2 is the shared
 				// surface).
 				hcol = H2;
@@ -989,10 +1063,9 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				if (top2 > hmax - 1)
 					top2 = hmax - 1;
 				for (int y = top2; y >= 1; y--) {
-					// AC-0288: same two-octave blend as the in-column scan.
-					double cave = cave_blend(
-							tril(f_cave, gx2, (double)y / ystep, gz2),
-							tril(f_cave2, gx2, (double)y / ystep, gz2));
+					// AC-0347 P1: the same cheese field as the in-column
+					// scan (vanilla's cave_cheese — one vn3 field).
+					double cave = tril(f_cheese, gx2, (double)y / ystep, gz2);
 					// AC-0289: the same tunnel rule as the in-column scan
 					// (the tree base must match the full column's surface).
 					if (dens_at(H2, y, cave) > 0.0
@@ -1236,6 +1309,9 @@ public:
 	static void _bind_methods() {
 		ClassDB::bind_method(D_METHOD("fbm2", "x", "z", "s", "oct"), &AweGen::fbm2, DEFVAL(4));
 		ClassDB::bind_method(D_METHOD("fbm3", "x", "y", "z", "s", "oct"), &AweGen::fbm3, DEFVAL(3));
+		// AC-0347 P1: the vanilla octave machine (amplitude list +
+		// firstOctave, normalized — the genprobe sampler bit-exactness gate).
+		ClassDB::bind_method(D_METHOD("vn3", "x", "y", "z", "s", "first_oct", "amps"), &AweGen::vn3);
 		ClassDB::bind_method(D_METHOD("vnoise2", "x", "z", "s"), &AweGen::vnoise2);
 		ClassDB::bind_method(D_METHOD("vnoise3", "x", "y", "z", "s"), &AweGen::vnoise3);
 		ClassDB::bind_method(D_METHOD("hash2i", "x", "z", "s"), &AweGen::hash2i);
@@ -1332,13 +1408,25 @@ public:
 		return awegen::fade(p_t);
 	}
 	// The cave-density noise at a point (the coarse field's source function).
-	// AC-0288: the two-octave blend (primary 3-oct xz/14 seed+301 + detail
-	// 2-oct xz/8 seed+302 at CAVE_W2) — the genprobe arm mirrors this exact
+	// AC-0347 P1: the cheese field = vanilla's cave_cheese as-is — the vn3
+	// octave machine at the CHEESE_* constants above (the scale MULTIPLIES
+	// the block coordinate: xz 1.0 / y 0.6667; firstOctave -8; the 9-amp
+	// list; the seed+301 slot). The genprobe arm mirrors this exact
 	// expression in GDScript (the lockstep contract).
 	double density_cave(double p_x, double p_y, double p_z, int p_s) const {
-		double c1 = awegen::fbm3(p_x / 14.0, p_y / 10.0, p_z / 14.0, p_s + 301, 3);
-		double c2 = awegen::fbm3(p_x / 8.0, p_y / 10.0, p_z / 8.0, p_s + 302, 2);
-		return c1 + CAVE_W2 * (c2 - 0.5);
+		return awegen::vn3(p_x * CHEESE_XZ_SCALE, p_y * CHEESE_Y_SCALE, p_z * CHEESE_XZ_SCALE,
+				p_s + 301, CHEESE_FIRST_OCT, CHEESE_AMPS, CHEESE_AMPS_N);
+	}
+	// AC-0347 P1: the vanilla NormalNoise octave machine (the bit-exact
+	// mirror of AweNoise.vn3 — the genprobe sampler gate).
+	double vn3(double p_x, double p_y, double p_z, int p_s, int p_first_oct, const Array &p_amps) const {
+		int n = (int)p_amps.size();
+		if (n > 16)
+			n = 16;
+		double amps[16];
+		for (int i = 0; i < n; i++)
+			amps[i] = (double)p_amps[i];
+		return awegen::vn3(p_x, p_y, p_z, p_s, p_first_oct, amps, n);
 	}
 	// AC-0289: the tunnel field dense sources + the tunnel air predicate
 	// (world coordinates). The genprobe arm mirrors these exact expressions

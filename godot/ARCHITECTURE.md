@@ -388,14 +388,23 @@ Match these; do not improvise a different approach in a task.
   `d = S_ramp((H−y)/R) + A(y)·(C−0.5)` — the surface AND the caves come from the same
   field, and the heightmap H (surface_h of the 3 coarse SURFACE fields) is structurally
   independent of the cave field: cave tuning MUST NOT touch f_sc/f_sh/f_sr or SEA (the
-  far-band H bit-exactness + promotion contract). AC-0288 established the P0 parameterisation
-  (the cave-series baseline, AC-0288…0292): **C = C1 + 0.30·(C2−0.5)** with
-  C1 = `fbm3(x/14, y/10, z/14, seed+301, 3 oct)` (primary) and C2 = `fbm3(x/8, y/10, z/8,
-  seed+302, 2 oct)` (detail octave — centered before blending so the field mean stays 0.5
-  and the surface-band budget is unchanged); **CAVE_AMP 1.8** is the largest value that keeps
-  the "air for sure above H+R+1" invariant (measured margin 1.8·max(C−0.5) = 0.948 < 1 — a
-  2.0 bump would be 1.054 and break it); **DEEP_GROW 6** (cave amplitude grows with depth —
-  the deep fattens sooner); R_BAND 10. AC-0289 (cave P1) added the **tunnel (edge-density)
+  far-band H bit-exactness + promotion contract). **C is vanilla's `cave_cheese` since AC-0347
+  P1** (the cave-density rebudget, worked in its own declared pieces P1/P2/P3): the field is
+  sampled by a NEW `vn3` sampler in both lanes — `AweNoise.vn3(x,y,z,s,first_oct,amps)` =
+  `Σ(aᵢ·vnoise3(p·2^firstOctave·2^i)) / Σ|aᵢ|`, vanilla's octave machine (exact power-of-two
+  frequencies, zero amplitudes skipped) which `fbm3` could not express (fixed gain 0.5, no
+  firstOctave) — with `{firstOctave −8, amplitudes [0.5,1,2,1,2,1,0,2,0]}` at xz_scale 1.0 /
+  y_scale 0.6667 (the scale MULTIPLIES the block coordinate; dominant wavelength ~64 xz / ~96 y).
+  Porting the noise WITH the constants is the point: the old `C = C1 + 0.30·(C2−0.5)` (AC-0288's
+  `fbm3` pair, superseded) had a different distribution, so vanilla's `0.27 + cheese` and
+  `4·layer²` are only meaningful in vanilla's units — measured over 196,608 dense samples the new
+  field reads mean 0.503294 / std 0.088558 / max|C−0.5| = 0.353027, triple-verified GD ≡ C++ ≡ an
+  independent Python port. **CAVE_AMP 1.8** is still the largest value that keeps the "air for
+  sure above H+R+1" invariant, and the margin improves with the new field: 1.8·0.353027 = 0.6354
+  < 1 (AC-0288's 0.948, computed on the superseded field, is invalidated). **DEEP_GROW 6** and
+  **A(y)** still stand (the deep fattens sooner); R_BAND 10. AC-0347 P2 replaces that structure —
+  the depth switch, the shallow suppressor and the deep cave router — and P3 recalibrates the
+  surface openings; until P2 lands, this paragraph describes P1's field inside P0's structure. AC-0289 (cave P1) added the **tunnel (edge-density)
   structure** on top of the same one field: two more coarse fields —
   **f_spag** = `fbm3(x/14, y/10, z/14, seed+303, 2 oct)` (spaghetti, the wide tagliatelle,
   1.0× the primary xz scale) and **f_nood** = `fbm3(x/10.5, y/10, z/10.5, seed+304, 2 oct)`

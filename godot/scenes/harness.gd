@@ -21067,6 +21067,7 @@ func _genprobe_test() -> void:
 		"hash3i": {"n": 0, "exact": 0},
 		"fade": {"n": 0, "exact": 0},
 		"cave": {"n": 0, "exact": 0},
+		"vn3": {"n": 0, "exact": 0},
 		"tunnel": {"n": 0, "exact": 0},
 	}
 	if not res["cpp_registered"]:
@@ -21130,18 +21131,42 @@ func _genprobe_test() -> void:
 	for i in 200:
 		var t := rng.randf_range(-2.0, 2.0)
 		cmp.call("fade", AweNoise._fade(t), G.fade(t))
+	# AC-0347 P1: the vanilla parameter sets (the sampler takes RAW
+	# coordinates — the scale MULTIPLIES the block coordinate, applied by
+	# the caller on BOTH lanes so the scaling math is gated too; the
+	# constants live in gen.cpp CHEESE_* — genprobe mirrors them).
+	var amp_cheese := [0.5, 1.0, 2.0, 1.0, 2.0, 1.0, 0.0, 2.0, 0.0]
+	var amp_layer := [1.0]
+	var amp_entrance := [0.4, 0.5, 1.0]
 	for i in 300:
 		# The cave-density wiring: exact coarse-field source function.
-		# AC-0288: the two-octave blend (primary 3-oct xz/14 seed+301 +
-		# detail 2-oct xz/8 seed+302 at 0.3) — mirrors AweGen::density_cave
-		# in gen.cpp exactly (the cave-field lockstep contract).
+		# AC-0347 P1: the cheese field = vanilla's cave_cheese AS-IS —
+		# vn3 at xz 1.0 / y 0.6667 (the scale multiplies the block
+		# coordinate), firstOctave -8, the 9-amp list, seed+301 — mirrors
+		# AweGen::density_cave in gen.cpp exactly (the cave-field
+		# lockstep contract; the AC-0288 two-octave blend is GONE).
 		var x := rng.randf_range(-1024.0, 1024.0)
 		var y := rng.randf_range(0.0, 384.0)
 		var z := rng.randf_range(-1024.0, 1024.0)
 		var s := rng.randi_range(-200, 200)
-		var c1 := AweNoise.fbm3(x / 14.0, y / 10.0, z / 14.0, s + 301, 3)
-		var c2 := AweNoise.fbm3(x / 8.0, y / 10.0, z / 8.0, s + 302, 2)
-		cmp.call("cave", c1 + 0.3 * (c2 - 0.5), G.density_cave(x, y, z, s))
+		var cq := AweNoise.vn3(x * 1.0, y * 0.6667, z * 1.0, s + 301, -8, amp_cheese)
+		cmp.call("cave", cq, G.density_cave(x, y, z, s))
+	for i in 300:
+		# AC-0347 P1: the vanilla octave machine (AweNoise.vn3) — the
+		# sampler's BIT-EXACTNESS contract (f64 equality). The production
+		# cheese parameters plus the two P2 sets (cave_layer /
+		# cave_entrance — pure sampler math, pre-validated, nothing
+		# wired into the production path by P1).
+		var x := rng.randf_range(-1024.0, 1024.0)
+		var y := rng.randf_range(0.0, 384.0)
+		var z := rng.randf_range(-1024.0, 1024.0)
+		var s := rng.randi_range(-200, 200)
+		var v1 := AweNoise.vn3(x * 1.0, y * 0.6667, z * 1.0, s, -8, amp_cheese)
+		cmp.call("vn3", v1, G.vn3(x * 1.0, y * 0.6667, z * 1.0, s, -8, amp_cheese))
+		var v2 := AweNoise.vn3(x * 1.0, y * 8.0, z * 1.0, s, -8, amp_layer)
+		cmp.call("vn3", v2, G.vn3(x * 1.0, y * 8.0, z * 1.0, s, -8, amp_layer))
+		var v3 := AweNoise.vn3(x * 0.75, y * 0.5, z * 0.75, s, -7, amp_entrance)
+		cmp.call("vn3", v3, G.vn3(x * 0.75, y * 0.5, z * 0.75, s, -7, amp_entrance))
 	for i in 300:
 		# AC-0289: the tunnel-field wiring — the three dense sources + the
 		# edge-density predicate. Mirrors AweGen::density_spag / density_nood /
@@ -21172,7 +21197,6 @@ func _genprobe_test() -> void:
 	res["ok"] = int(res["exact"]) == tot and tot > 0
 	Debug.result(res)
 	get_tree().quit()
-
 
 func _ci_zeros(sub: int) -> PackedByteArray:
 	var z := PackedByteArray()

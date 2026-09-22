@@ -86,3 +86,37 @@ static func fbm3(x: float, y: float, z: float, s: int, oct := 3) -> float:
 		amp *= 0.5
 		f *= 2.0
 	return a / tot
+
+
+# AC-0347 P1: the vanilla NormalNoise octave machine — a CUSTOM amplitude
+# list + a firstOctave FREQUENCY OFFSET, normalized by sum(|a_i|). Same
+# machine as fbm3 (per-octave seed s + i * 101), but the fixed 0.5 gain is
+# replaced by the amplitude list and the frequencies start at 2^firstOctave
+# (vanilla's cave entries use a NEGATIVE firstOctave: the base octave
+# samples at 2^-8). Vanilla uses Perlin gradients; ours uses this lane's
+# vnoise3 kernel — the octave machine is what the vanilla constants need.
+# BIT-EXACT contract: the C++ mirror (gen.cpp vn3) is op-order identical in
+# f64 (the frequency is an exact power of two — built by halving/doubling,
+# no pow; zero-amplitude octaves are skipped, their contribution is exactly
+# +0.0 either way; gen.cpp is -ffp-contract=off). genprobe lockstep.
+static func vn3(x: float, y: float, z: float, s: int, first_oct: int, amps: Array) -> float:
+	var a := 0.0
+	var tot := 0.0
+	var f := 1.0
+	var fo := first_oct
+	if fo < 0:
+		for k in -fo:
+			f *= 0.5
+	else:
+		for k in fo:
+			f *= 2.0
+	for i in amps.size():
+		var amp := float(amps[i])
+		if amp != 0.0:
+			a += amp * vnoise3(x * f, y * f, z * f, s + i * 101)
+		if amp < 0.0:
+			tot += -amp
+		else:
+			tot += amp
+		f *= 2.0
+	return a / tot
