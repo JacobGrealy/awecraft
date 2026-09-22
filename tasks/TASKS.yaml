@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-21T19:59
+  updated_at: 2026-09-21T22:24
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0349
 - AC-0348
 - AC-0347
 - AC-0342
@@ -16213,7 +16212,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-19T08:42
-  updated_at: 2026-09-21T05:58
+  updated_at: 2026-09-21T22:24
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -16272,7 +16271,13 @@ intake:
     \ than a PROPERTY. The ones that have never gone stale assert byte-identity, a closure set, a determinism\
     \ property or a monotonicity - those survive generation changes and engine rework. When this ticket\
     \ is worked, convert each entry to the strongest property it can express, and delete the ones that\
-    \ cannot express one."
+    \ cannot express one.\n\nONE MORE DOC-VS-ARM DRIFT (coordinator, 2026-09-21, flagged by the AC-0349\
+    \ builder and NOT re-baselined): lightstate's `ab.arr_diff_cells` reads 0 where HARNESS.md section\
+    \ 3 documents 1. It is NOT gated by the arm (so it is not a red), and the AC-0349 builder proved it\
+    \ is not from its change - it belongs on this ticket's list with the rest. Same guidance as the others:\
+    \ decide what the field is FOR (if \"the removed block's own light cell changed\" is the invariant,\
+    \ assert that; if 1 was just a measured value from an older world, document it as report-only rather\
+    \ than as a contract)."
   comments: []
 - id: AC-0331
   title: far-tier-mesh-floor-kernel
@@ -18362,11 +18367,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-21T19:29
-  updated_at: 2026-09-21T19:59
-  completed_at: null
+  updated_at: 2026-09-21T22:24
+  completed_at: 2026-09-21T22:24
   waiting_on: null
   parent_id: null
   notes: '1) User Story: After a block edit, a slab can show LIGHT that does not match the light the engine
@@ -18446,5 +18451,49 @@ intake:
     while the `mesh_pa_mism` cells need the three-way comparison to classify. THE STANDING SET HAS BEEN
     FIXED so this cannot hide again: `brightslab` is now IN the coordinator''s heavy-gate set (it was
     in neither that nor the battery list), and it reads red there - recorded honestly as a known red rather
-    than dropped from the set.'
+    than dropped from the set.
+
+
+    TAKEN BY THE COORDINATOR SESSION (2026-09-21) - the coordinator FILED this ticket an hour before working
+    it, so its notes already carry the reproduction, the narrowing detail and one exonerating A/B. READ
+    THEM ALL. The state of the evidence as you start, so you do not repeat it: (1) the arm is red and
+    deterministic, `ok:false` with C2 `mesh_pa_mism` 15 / C5 5 / C6 5, C4 `bakes` 68, C1/C3 clean; (2)
+    `eng_mism` IS 0 IN EVERY CASE - the engine''s settled light agrees with the reference everywhere,
+    so what differs is the APPLIED MESH''s baked light versus the payload it should have been baked from
+    (pa = the payload the mesh should carry, pb = the pull path) - which points your investigation at
+    the remesh/bake-APPLICATION step rather than at the light solve; (3) an A/B against the pre-AC-0338
+    game code (world.gd/chunk.gd checked out from `5972fe2^`) reproduces the IDENTICAL red, so AC-0338''s
+    far-tier draw batching is exonerated - and the arm''s fixture is a real-band 7x7, which that change
+    cannot reach by construction; (4) the AC-0339 builder had already shown its own instrumentation did
+    not cause it (byte-identical before and after). That leaves the cave series as the likely trigger
+    for the C4 count at least (`bakes` 73 -> 68 is a content-shaped expectation in a fixture whose world
+    AC-0288/AC-0289 re-carved), while the `mesh_pa_mism` cells still need the three-way comparison to
+    classify. THE COORDINATOR HAS ALSO ADDED `brightslab` TO THE STANDING HEAVY-GATE SET (it was in neither
+    that nor the battery list, which is why this red hid) - so your fix will be checked by it on every
+    future ticket, and leaving it red is not an option unless the classification proves the ARM is wrong.
+
+
+    CLOSED 2026-09-21. VERDICT: THE ARM WAS WRONG (the AC-0334 shape, and the second such verdict in a
+    row) - settled on the three-way comparison the ticket demanded, not by re-baselining. Every red slab''s
+    LANE PAYLOAD is byte-identical to the settled payload (eff/side/corner diff 0, lane_lver == cur_lver)
+    and eng_mism is 0 in every case, so the applied mesh''s light was NEVER stale; the reds are exactly
+    the slabs with FAR (h-only) neighbours, because the arm''s `_brightslab_slab_cmp` re-bake called `snap_rings`
+    WITHOUT the `far_payload` argument the lane passes (world.gd:7047 / chunk.gd:1585), so a far neighbour''s
+    ring read all-air and the re-bake over-drew the boundary wall against the halo. THE FIX IS ONE LINE
+    (pass `ncc.far_payload()`), and it is arm-side: genhash 25/25 byte-identical in two runs and against
+    the reference proves generation was never involved. COORDINATOR VERIFICATION: brightslab `ok:true`
+    in TWO consecutive runs with byte-identical results - `mesh_pa_mism` all 0, `eng_mism` all 0, the
+    residual `mesh_pb_mism` [0,3,0,0,1,1] being the documented boundary under-light, and `ob_bakes` 0
+    on the gated cases; farab 1080/1080 with h_mismatch 0; ladder band_a_ok 20/20; meshprobe 1.0; halo
+    ok; r16 all sub-flags with far_holes 0 in both bands and static p50 6 ms; boundary r4 p50 13 / p95
+    35 with staged_dropped 1824 inside its <=2500 threshold; battery with no new delta. THE C4 COUNT IS
+    NOW AN INVARIANT, not a number: the arm gates `ob_bakes == 0` and `conv_frame <= 120` and does not
+    gate `bakes`, whose 73 -> 68 move is content-shaped (the AC-0288/0289 cave re-carve of the fixture''s
+    7x7 - the AC-0330 class, established by provenance plus the coordinator''s pre-AC-0338 A/B rather
+    than by a disproportionate .so A/B). HARNESS.md section 3 was reconciled in-task: the stale `mesh_vs_eng_bake`/`mesh_vs_pull_bake`
+    fields are gone, the real ones (`eng_mism`, `mesh_pa_mism` [gate], `mesh_pb_mism`, `mesh_qa_mism`
+    [gate]) are documented, and the bake count is reframed as the invariant it actually is. ONE ITEM LOGGED
+    NOT RE-BASELINED: lightstate''s `ab.arr_diff_cells` reads 0 against a documented 1 - reported, not
+    gated, and not caused by this change; it has been added to AC-0330''s stale-expectation list. THE
+    STANDING SET NOW INCLUDES brightslab, so this red cannot hide again.'
   comments: []
