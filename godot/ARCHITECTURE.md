@@ -383,28 +383,42 @@ Match these; do not improvise a different approach in a task.
   is ~1.1 s at the R50 converged scale — the measured reason the tiers are
   sectorized instead of one MI per tier). Memory: the sector meshes are one extra
   copy of the visible far geometry (the slot meshes survive for the gates).
-- **The cave field (the single density field, AC-0215 / tuned at AC-0288 / P1 tunnels at
-  AC-0289)**: caves are wherever the ONE density field reads solid→air,
-  `d = S_ramp((H−y)/R) + A(y)·(C−0.5)` — the surface AND the caves come from the same
-  field, and the heightmap H (surface_h of the 3 coarse SURFACE fields) is structurally
-  independent of the cave field: cave tuning MUST NOT touch f_sc/f_sh/f_sr or SEA (the
-  far-band H bit-exactness + promotion contract). **C is vanilla's `cave_cheese` since AC-0347
-  P1** (the cave-density rebudget, worked in its own declared pieces P1/P2/P3): the field is
-  sampled by a NEW `vn3` sampler in both lanes — `AweNoise.vn3(x,y,z,s,first_oct,amps)` =
-  `Σ(aᵢ·vnoise3(p·2^firstOctave·2^i)) / Σ|aᵢ|`, vanilla's octave machine (exact power-of-two
-  frequencies, zero amplitudes skipped) which `fbm3` could not express (fixed gain 0.5, no
-  firstOctave) — with `{firstOctave −8, amplitudes [0.5,1,2,1,2,1,0,2,0]}` at xz_scale 1.0 /
-  y_scale 0.6667 (the scale MULTIPLIES the block coordinate; dominant wavelength ~64 xz / ~96 y).
-  Porting the noise WITH the constants is the point: the old `C = C1 + 0.30·(C2−0.5)` (AC-0288's
-  `fbm3` pair, superseded) had a different distribution, so vanilla's `0.27 + cheese` and
-  `4·layer²` are only meaningful in vanilla's units — measured over 196,608 dense samples the new
-  field reads mean 0.503294 / std 0.088558 / max|C−0.5| = 0.353027, triple-verified GD ≡ C++ ≡ an
-  independent Python port. **CAVE_AMP 1.8** is still the largest value that keeps the "air for
-  sure above H+R+1" invariant, and the margin improves with the new field: 1.8·0.353027 = 0.6354
-  < 1 (AC-0288's 0.948, computed on the superseded field, is invalidated). **DEEP_GROW 6** and
-  **A(y)** still stand (the deep fattens sooner); R_BAND 10. AC-0347 P2 replaces that structure —
-  the depth switch, the shallow suppressor and the deep cave router — and P3 recalibrates the
-  surface openings; until P2 lands, this paragraph describes P1's field inside P0's structure. AC-0289 (cave P1) added the **tunnel (edge-density)
+- **The cave field (the single density field, AC-0215 / the vanilla density router since AC-0347
+  P2 / P1 tunnels at AC-0289)**: caves are wherever the ONE density field reads solid→air, and the
+  surface AND the caves come from the same field. **Since AC-0347 P2 (THE STRUCTURE) the field is
+  vanilla's density ROUTER** (Java 1.21.4 `overworld.json` `final_density`'s `range_choice`,
+  verified against the shipped JSON; density > 0 = solid in both conventions): with
+  `k = H − y` (depth from the surface — NOT S_ramp, which saturates) and
+  `K_CUT = R_BAND = 10` (the switch cut = the ramp saturation depth):
+  `k < K_CUT: d = min(S_ramp(H,y), 5·entrances)` (SHALLOW — S_ramp kept as the surface, the
+  entrance family carves the deliberate openings); `k ≥ K_CUT: d = min(entrances,
+  4·layer_c² + clamp(−1,1)(0.27+cheese_c) + clamp(0,0.5)(1.5−0.64·k/K_CUT))` (DEEP — the base
+  terrain contributes NOTHING: the solid/air decision below the shallow band IS the cave router;
+  the suppressor is 0.5 at the cut and 0 at k ≈ 23.4; the squared ONE-SIDED layer term gates the
+  cheese caves into stacked levels in absolute y). The old `A(y)/DEEP_GROW/CAVE_AMP`
+  depth-amplifier structure is GONE. The "air for sure above H+11" margin is now STRUCTURAL (no
+  noise budget): for y ≥ H+10.5 the ramp clamps −1 exactly and the shallow branch reads
+  `min(−1, 5·entrances) ≤ −1 < 0` for any noise values (and under the router the effective
+  surface can only wobble DOWN — he ≤ H: d > 0 in the shallow branch requires S_ramp > 0, i.e.
+  y ≤ H). **All ported noise is centered `2·(vn3−0.5)`** — the vanilla O(1) convention; the
+  constants (0.27, 0.64, 1.5, 5, 4, 0.37) are only meaningful in those units. The noise fields
+  (sampled by the `vn3` octave machine in both lanes — `AweNoise.vn3(x,y,z,s,first_oct,amps)` =
+  `Σ(aᵢ·vnoise3(p·2^firstOctave·2^i)) / Σ|aᵢ|`, vanilla's octave machine which `fbm3` could not
+  express; the scale MULTIPLIES the block coordinate): **cheese** = vanilla's `cave_cheese`
+  AS-IS `{firstOctave −8, [0.5,1,2,1,2,1,0,2,0]}` at xz 1.0 / y 0.6667, seed+301, on the coarse
+  lattice (P1; dense samples read mean 0.503294 / std 0.088558 / max|C−0.5| = 0.353027);
+  **layer** = vanilla's `cave_layer` AS-IS `{firstOctave −8, [1.0]}` at xz 1.0 / y 8.0, seed+302
+  (P2; the ~32-block vertical period is evaluated DENSE in the scan — it cannot ride the
+  48-block lattice, AC-0344); **entrances** = the vanilla `caves/entrances` function minus its
+  spaghetti min — `0.37 + 2·(E−0.5) + 0.3·(1−clamp01((y−54)/40))` with E = `cave_entrance` AS-IS
+  `{firstOctave −7, [0.4,0.5,1.0]}` at xz 0.75 / y 0.5, seed+306 (DENSE; the +64 shift maps
+  vanilla's from_y −10 / to_y 30 onto our 54 / 94; the 0.37 offset makes entrances RARE) — also
+  DENSE in the scan. The heightmap H (surface_h of the 3 coarse SURFACE fields) is structurally
+  independent of the cave field: cave tuning MUST NOT touch f_sc/f_sh/f_sr or SEA (the far-band H
+  bit-exactness + promotion contract — AC-0347 P2's thash proved H byte-identical before/after:
+  `8df7aeb4…0dc4f11`, 21×21-chunk `column_heights16` SHA-256). The router's `max(…, pillars_choice)`
+  outer term is AC-0292's (SEQUENCE); P3 recalibrates the surface openings / asymmetry.
+  AC-0289 (cave P1) added the **tunnel (edge-density)
   structure** on top of the same one field: two more coarse fields —
   **f_spag** = `fbm3(x/14, y/10, z/14, seed+303, 2 oct)` (spaghetti, the wide tagliatelle,
   1.0× the primary xz scale) and **f_nood** = `fbm3(x/10.5, y/10, z/10.5, seed+304, 2 oct)`
@@ -419,9 +433,11 @@ Match these; do not improvise a different approach in a task.
   h-only payload never read them, so the H / far / promotion contracts stay bit-exact by
   construction (a tunnel breaking the surface only wobbles the EFFECTIVE surface, inside the
   documented H±R band, like the cheese term). The dense source functions are
-  `AweGen::density_cave` (P0) and `AweGen::density_spag / density_nood / density_gate /
-  tunnel_air` (P1); the genprobe arm mirrors those exact expressions in GDScript (the
-  lockstep contract — a parameter change updates both sides in the same task).
+  `AweGen::density_cave` (the cheese), `AweGen::density_spag / density_nood / density_gate /
+  tunnel_air` (the tunnels) and `AweGen::density_layer / density_entrance / dens_at` (the P2
+  router's layer / entrance family / the router itself); the genprobe arm mirrors those exact
+  expressions in GDScript (the lockstep contract — a parameter change updates both sides in the
+  same task; P2's run: 7900/7900 f64-exact).
 - **Edits on far / data-less columns (AC-0325)**: the flat write path has **no silent
   no-op**. `World.set_block` returns a bool and, when the target column holds no slabs
   (`data` empty — a node-only chunk that can sit data-less indefinitely since AC-0263's

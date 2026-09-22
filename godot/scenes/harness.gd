@@ -21069,6 +21069,9 @@ func _genprobe_test() -> void:
 		"cave": {"n": 0, "exact": 0},
 		"vn3": {"n": 0, "exact": 0},
 		"tunnel": {"n": 0, "exact": 0},
+		"layer": {"n": 0, "exact": 0},
+		"entrance": {"n": 0, "exact": 0},
+		"dens": {"n": 0, "exact": 0},
 	}
 	if not res["cpp_registered"]:
 		Debug.result(res)
@@ -21192,11 +21195,73 @@ func _genprobe_test() -> void:
 			dnd = -dnd
 		var ta := (wv > 0.0) and (dsp < 0.16 * wv or dnd < 0.08 * wv)
 		cmp.call("tunnel", float(ta), float(G.tunnel_air(x, y, z, s)))
+	for i in 300:
+		# AC-0347 P2: the router's dense sources — the CAVE LAYER (vanilla's
+		# cave_layer AS-IS at xz 1.0 / y 8.0, firstOctave -8, amp [1.0],
+		# seed+302 — mirrors AweGen::density_layer exactly) and the
+		# ENTRANCE FAMILY (the vanilla caves/entrances minus its spaghetti
+		# min: 0.37 + 2*(E - 0.5) + 0.3*(1 - clamp01((y - 54)/40)) with E =
+		# vn3 at the cave_entrance AS-IS parameters, seed+306 — mirrors
+		# AweGen::density_entrance exactly; the +64 world shift maps
+		# vanilla's gradient from_y -10 / to_y 30 onto 54 / 94).
+		var x := rng.randf_range(-1024.0, 1024.0)
+		var y := rng.randf_range(0.0, 384.0)
+		var z := rng.randf_range(-1024.0, 1024.0)
+		var s := rng.randi_range(-200, 200)
+		cmp.call("layer", AweNoise.vn3(x * 1.0, y * 8.0, z * 1.0, s + 302, -8, amp_layer), G.density_layer(x, y, z, s))
+		var ev := AweNoise.vn3(x * 0.75, y * 0.5, z * 0.75, s + 306, -7, amp_entrance)
+		var tg := (y - 54.0) / 40.0
+		if tg < 0.0:
+			tg = 0.0
+		elif tg > 1.0:
+			tg = 1.0
+		var entv := 2.0 * (ev - 0.5) + 0.37 + 0.3 * (1.0 - tg)
+		cmp.call("entrance", entv, G.density_entrance(x, y, z, s))
+	for i in 300:
+		# AC-0347 P2: the ROUTER itself (dens_at — the shallow/deep split
+		# on k = H - y, K_CUT 10 = R_BAND; the min/clamp arithmetic). The
+		# GD mirror below is op-order identical to the C++ in f64; the
+		# random inputs (cave/layer in [0,1) like the vn3 outputs, ent in
+		# its full range, H/y arbitrary) exercise both branches + the
+		# clamp edges.
+		var H := rng.randi_range(3, 300)
+		var y2 := rng.randi_range(1, 383)
+		var cv := rng.randf_range(0.0, 1.0)
+		var en := rng.randf_range(-0.6, 1.2)
+		var ly := rng.randf_range(0.0, 1.0)
+		var k2 := float(H) - float(y2)
+		if k2 < 10.0:
+			var t := (float(H) + 0.5 - float(y2)) / 10.0
+			if t > 1.0:
+				t = 1.0
+			elif t < -1.0:
+				t = -1.0
+			var u := 0.5 * (t + 1.0)
+			var q := u * u * u * (u * (u * 6.0 - 15.0) + 10.0)
+			var s3 := 2.0 * q - 1.0
+			var e3 := 5.0 * en
+			cmp.call("dens", s3 if s3 < e3 else e3, G.dens_at(float(H), float(y2), cv, en, ly))
+		else:
+			var q4 := 0.27 + 2.0 * (cv - 0.5)
+			if q4 < -1.0:
+				q4 = -1.0
+			elif q4 > 1.0:
+				q4 = 1.0
+			var kn := k2 / 10.0
+			var supp := 1.5 - 0.64 * kn
+			if supp < 0.0:
+				supp = 0.0
+			elif supp > 0.5:
+				supp = 0.5
+			var lc := 2.0 * (ly - 0.5)
+			var s4 := 4.0 * lc * lc + q4 + supp
+			cmp.call("dens", en if en < s4 else s4, G.dens_at(float(H), float(y2), cv, en, ly))
 	var tot := int(res["n"])
 	res["match_rate"] = float(int(res["exact"])) / float(tot) if tot > 0 else 0.0
 	res["ok"] = int(res["exact"]) == tot and tot > 0
 	Debug.result(res)
 	get_tree().quit()
+
 
 func _ci_zeros(sub: int) -> PackedByteArray:
 	var z := PackedByteArray()

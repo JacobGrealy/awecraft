@@ -364,26 +364,43 @@ footer b{color:var(--dim);font-weight:400}
     <strong>banana-tree pass</strong>.
   </p>
 
-  <h3>2.1 The AC-015 density model</h3>
+  <h3>2.1 The AC-015 density model (the vanilla density router since AC-0347 P2)</h3>
   <p>
-    The current terrain model is the <strong>MC-1.18-style coarse 4×8×4 3D density field</strong>
-    <span class="fn">(gdext/src/gen.cpp:1-64)</span>: one per-cell density field
-    <code>d(x,y,z) = S_ramp((H(x,z) − y + 0.5)/R) + A(y)·(C(x,y,z) − 0.5)</code> produces the
-    surface, <em>all</em> caves, and the deep lava lakes from a single solid/air test
-    (<code>d &gt; 0</code> solid). There is no heightmap-plus-carve anymore.
+    The current terrain model is the <strong>coarse 3D density field with a vanilla density
+    ROUTER</strong> <span class="fn">(gdext/src/gen.cpp:1-91)</span>: one per-cell density field produces
+    the surface, <em>all</em> caves, and the deep lava lakes from a single solid/air test
+    (<code>d &gt; 0</code> solid — the vanilla convention too). Since AC-0347 P2 (THE STRUCTURE) the
+    field is the Java 1.21.4 <code>final_density</code> router: with <code>k = H − y</code> (depth from
+    the surface) and <code>K_CUT = 10</code> (the switch cut = the ramp saturation depth):
+    <strong>shallow</strong> (<code>k &lt; 10</code>): <code>d = min(S_ramp(H,y), 5·entrances)</code> — the
+    quintic surface ramp kept as-is, the entrance family carving the deliberate openings;
+    <strong>deep</strong> (<code>k ≥ 10</code>): <code>d = min(entrances, 4·layer_c² +
+    clamp(−1,1)(0.27+cheese_c) + clamp(0,0.5)(1.5−0.64·k/10))</code> — the base terrain
+    contributes <em>nothing</em> below the shallow band (the solid/air decision IS the cave router),
+    the suppressor thins the caves toward the surface (0.5 at the cut, 0 by k≈23.4), and the
+    squared layer term stacks the cheese caves into levels in absolute y. The old
+    <code>A(y)/DEEP_GROW/CAVE_AMP</code> depth amplifier is gone; the “air for sure above H+11”
+    margin is now structural (the ramp clamps −1 above H+10.5 → <code>min(−1, 5·entrances) ≤ −1</code>
+    for any noise). There is no heightmap-plus-carve anymore.
   </p>
   <p>
-    The field is built on a coarse lattice: 7×9×7 = <strong>441 points per chunk</strong> (a 4×8×4 cell
-    grid of 4-block horizontal / 48-block vertical cells, plus a 1-cell margin per axis so trees
-    rooted up to 2 blocks outside the chunk can still grow leaves in), with <strong>7 independent
-    coarse fields</strong> sampled by 2-octave <code>AweNoise.fbm3</code> per lattice point, then
-    trilinearly interpolated per cell <span class="fn">(gen.cpp:292-311)</span>.
+    The field is built on a coarse lattice: 7×9×7 = <strong>441 points per chunk</strong> (a grid of
+    <strong>4×8×4 cells = 4×48×4 BLOCKS per cell</strong> — 4-block horizontal / 48-block vertical,
+    plus a 1-cell margin per axis so trees rooted up to 2 blocks outside the chunk can still grow
+    leaves in; the “4×8×4” count is the number of cells, not a 4×8×4-block cell size), with
+    <strong>10 independent coarse fields</strong> sampled per lattice point (3 surface + 3 ore +
+    the cheese + the 3 AC-0289 tunnel fields), then trilinearly interpolated per cell
+    <span class="fn">(gen.cpp:455-530)</span>. AC-0347 P2 adds TWO DENSE sources
+    evaluated in the scan itself (they cannot ride the 48-block lattice): the <strong>layer</strong>
+    (vanilla <code>cave_layer</code> AS-IS, seed+302 — the ~32-block vertical period) and the
+    <strong>entrance family</strong> (vanilla <code>caves/entrances</code> minus its spaghetti min,
+    seed+306 — the 0.37 offset makes entrances rare); the cheese stays coarse (P1’s field).
   </p>
   <div class="tbl-scroll">
   <table>
     <thead><tr><th>Field</th><th>Purpose</th><th>Salt</th><th>Scales (x,y,z)</th><th>Domain offsets</th><th>Notes / where</th></tr></thead>
     <tbody>
-      <tr><td class="hl">cave</td><td class="nm">All cave carving (cheese)</td><td>seed+301</td><td>16, 10, 16</td><td>0, 0, 0</td><td><span class="fn">gen.cpp:480</span> — <strong>skipped entirely when skip≠0</strong>; also the <code>density_cave</code> probe</td></tr>
+      <tr><td class="hl">cave (cheese)</td><td class="nm">The cheese caves (the deep branch of the router)</td><td>seed+301</td><td>×1.0, ×0.6667, ×1.0 (vn3, the scale MULTIPLIES)</td><td>0, 0, 0</td><td><span class="fn">gen.cpp:420-434</span> — vanilla <code>cave_cheese</code> AS-IS {firstOctave −8, [0.5,1,2,1,2,1,0,2,0]} (AC-0347 P1); <strong>skipped entirely when skip≠0</strong>; the <code>density_cave</code> probe. P2’s router (the shallow/deep split, the dense layer+entrance sources) is documented in <span class="fn">godot/ARCHITECTURE.md §cave field</span></td></tr>
       <tr><td class="hl">ore 1</td><td class="nm">Diamond ore</td><td>seed+77</td><td>7, 7, 7</td><td>0, 0, 0</td><td><span class="fn">gen.cpp:481</span> — &gt;0.78, y&lt;16</td></tr>
       <tr><td class="hl">ore 2</td><td class="nm">Iron ore</td><td>seed+88</td><td>9, 9, 9</td><td>900, 0, 900</td><td><span class="fn">gen.cpp:482</span> — &gt;0.8, y&lt;42</td></tr>
       <tr><td class="hl">ore 3</td><td class="nm">Coal ore</td><td>seed+99</td><td>6, 6, 6</td><td>1700, 0, 1700</td><td><span class="fn">gen.cpp:483</span> — &gt;0.82, y&lt;60</td></tr>

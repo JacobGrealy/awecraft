@@ -9,31 +9,86 @@
 // margin covering the 2-ring tree neighborhood; each lattice point an
 // AweNoise sample):
 //
-//   d(x,y,z) = S_ramp((H(x,z) - y + 0.5) / R) + A(y) * (C(x,y,z) - 0.5)
+//   AC-0347 P2 (cave-density rebudget — THE STRUCTURE, the vanilla DENSITY
+//   ROUTER, Java 1.21.4 noise_settings/overworld.json final_density — the
+//   range_choice at its core, verified against the shipped JSON): the ONE
+//   field is now a SHALLOW/DEEP SPLIT, switched by k = H - y (the DEPTH
+//   FROM THE SURFACE — NOT S_ramp, which saturates):
 //
+//     k <  K_CUT (K_CUT = 10 = R_BAND, the ramp saturation depth) [SHALLOW]:
+//        d = min( S_ramp(H, y), 5 * entrances )
+//     k >= K_CUT [DEEP]:
+//        d = min( entrances,
+//                4 * layer_c^2 + clamp(-1,1)(0.27 + cheese_c)
+//                + clamp(0, 0.5)(1.5 - 0.64 * k / K_CUT) )
+//
+//   THE LOAD-BEARING FACT: in the DEEP branch the base terrain contributes
+//   NOTHING — the suppressor clamp(0,0.5)(...) is 0 once k >= 23.4 and the
+//   ramp appears nowhere else in that branch, so below the shallow band the
+//   solid/air decision IS the cave router (that is why vanilla's O(1) cave
+//   constants are portable; our old S_ramp was +1 EVERYWHERE below H-10 and
+//   A(y) was the lever fighting it — BOTH GONE with the structure: the
+//   AC-0288 C-budget invariant 1.8*max|C-0.5| < 1 is RETIRED, not carried:
+//   the H+11 scan-start "air for sure" margin is now STRUCTURAL — for
+//   y >= H+10.5 the ramp clamps -1 exactly and the shallow branch reads
+//   min(-1, 5*entrances) <= -1 < 0 for ANY noise values, so no noise term
+//   can add solidity there. P1's field statistic (max|C-0.5| 0.353027 ->
+//   1.8*0.353027 = 0.6354 < 1) is recorded, not load-bearing.)
+//   The old A(y) / DEEP_GROW / CAVE_AMP depth-amplifier structure (and the
+//   "the deep fattens sooner" tuning) is GONE: vanilla suppresses near the
+//   surface (the clamp above, +0.5 solid, gone by k = 2.34375*K_CUT) and
+//   the layer term 4*layer_c^2 (always positive — the SQUARED layer noise,
+//   ONE-SIDED as in vanilla) gates the cheese caves into ~32-block stacked
+//   levels in ABSOLUTE y (cave LEVELS only read as levels at consistent
+//   world heights — the user's ask), instead of amplifying with relative
+//   depth. The router's max(..., pillars_choice) outer term is AC-0292's
+//   (SEQUENCE: this lands before AC-0290/0291/0292).
+//   CENTERING (the unit decision): every ported noise value is
+//   2*(vn3 - 0.5) — the vanilla convention (noise centred on 0, O(1));
+//   the vanilla constants (0.27, 0.64, 1.5, 5, 4, 0.37) are only
+//   meaningful in those units (un-centred, 0.27+cheese would be
+//   always-positive and the deep branch solid everywhere).
 //   S_ramp = the quintic SPLINE SURFACE DENSITY (C2, the same polynomial as
 //            AweNoise._fade) clamped to +/-1: +1 (solid) below the surface,
 //            -1 (air) above, the zero crossing IS the surface. R = 10.
-//   C(x,y,z) = trilinear of the coarse 3D CAVE field — the per-column cave
-//            carve (old 1D _vnoise3col / the y<16 0.42 threshold carve) is
-//            GONE: caves are where the one field says d < 0, at ANY depth.
-//            AC-0347 P1 (cave-density rebudget — the vanilla CURRENCY):
-//            C = the vanilla cave_cheese AS-IS, sampled with the vn3
-//            octave machine (AweNoise.vn3 / the mirror below — a custom
-//            AMPLITUDE LIST + a firstOctave FREQUENCY OFFSET, normalized
-//            by sum(|a_i|)):
+//            KEPT as the SHALLOW branch's surface (the ticket's KEEP list:
+//            H + S_ramp are the far payload / promotion / skip-fill
+//            contract — the surface model is NOT replaced).
+//   entrances = the ENTRANCE FAMILY, the vanilla caves/entrances function
+//            WITHOUT its spaghetti_3d min (ours: the AC-0289 tunnel rule,
+//            which stays OUTSIDE dens_at — the tunnels keep piercing the
+//            caps and connecting the levels, the vanilla topology):
+//              entrances = 0.37 + 2*(E - 0.5) + 0.3*(1 - clamp01((y-54)/40))
+//              E = vn3(x*0.75, y*0.5, z*0.75, seed+306, -7, [0.4, 0.5, 1.0])
+//            — the vanilla cave_entrance noise instance AS-IS (the +64
+//            world shift maps vanilla's y-gradient from_y -10 / to_y 30
+//            onto our 54 / 94); the 0.37 offset makes entrances RARE — the
+//            surface breaks only in the noise's lower tail. The shallow
+//            5*entrances carves the surface openings (the "deliberate
+//            entrances"); the deep min(..., entrances) extends them down —
+//            vanilla: "call the cave entrance again here, otherwise the
+//            entrance would only be generated in the surface part and cut
+//            off at the underground part".
+//   layer_c / cheese_c: the centered (2*(v-0.5)) values of the two vn3
+//            fields — the layer (vanilla cave_layer AS-IS, {firstOctave -8,
+//            amplitudes [1.0]}, xz 1.0 / y 8.0 — the ~32-BLOCK vertical
+//            period, evaluated DENSELY in the scan: a 32-block period
+//            cannot ride the 48-block lattice, AC-0344's cell-size
+//            decision, not re-litigated here; seed+302 = the slot P1
+//            freed) and the cheese (P1's coarse field, see below).
+//   C(x,y,z) = trilinear of the coarse 3D CAVE field — AC-0347 P1:
+//            vanilla's cave_cheese AS-IS, sampled with the vn3 octave
+//            machine (AweNoise.vn3 / the mirror below — a custom AMPLITUDE
+//            LIST + a firstOctave FREQUENCY OFFSET, normalized by
+//            sum(|a_i|)):
 //              C = vn3(x*1.0,  y*0.6667, z*1.0, seed+301, -8,
 //                     [0.5, 1, 2, 1, 2, 1, 0, 2, 0])
 //            — the scale MULTIPLIES the block coordinate (the vanilla
-//            convention, "scales the X and Z before sampling"); dominant
-//            wavelengths ~64 blocks xz / ~96 y. The old AC-0288 field
-//            (C1 = fbm3(gx/14, gy/10, gz/14, seed+301, 3 oct) +
-//            C2 = fbm3(gx/8, gy/10, gz/8, seed+302, 2 oct) blended
-//            0.30) is GONE — this field replaces it (the seed+301 slot
-//            is kept; seed+302 is freed). The normalized field is
-//            centred (mean ~0.5) and O(1) — that is what makes the
-//            vanilla deep-branch constants portable (P2). The dense
-//            source is AweGen::density_cave (genprobe lockstep).
+//            convention); dominant wavelengths ~64 blocks xz / ~96 y. The
+//            old AC-0288 field (C1 = fbm3(gx/14, ...) + C2 = fbm3(gx/8,
+//            ...) blended 0.30) is GONE — this field replaces it (the
+//            seed+301 slot is kept). The dense source is
+//            AweGen::density_cave (genprobe lockstep).
 //
 //   AC-0289 (cave P1, the SPAGHETTI/NOODLE TUNNELS — Bedrock-style EDGE
 //   densities blended into this one field, tasks/cave-compare §4 P1):
@@ -61,20 +116,15 @@
 //   surface (he), inside the documented H+/-R band, exactly like the
 //   cheese term already does. The H+R+1 scan-start "air for sure" margin
 //   is preserved (the tunnel only removes solidity).
-//   A(y) = 1.8 * (1 + max(0, H - y - R) / DEEP_GROW): the cave amplitude.
-//            1.8 in the surface band (the surface wobbles +/-~9 with the
-//            cave noise and caves break through it), growing with depth
-//            (AC-0288: DEEP_GROW = 6, was 8 — the deep fattens sooner, and
-//            the detail octave's small pockets appear earlier down the
-//            column) so the 3D caves widen into the deep — MC 1.18 deepslate
-//            cheese: the deep zone is ~30-38% air, opening downward.
-//            Surface-safety margin (the "air for sure above H + R + 1"
-//            invariant — the scan start), RE-DERIVED at AC-0347 P1 on the
-//            NEW cheese field: max(C-0.5) = AC0347_P1_MAXC (measured dense,
-//            x,z in [0,512) step 8, y in [0,384) step 8) → 1.8 *
-//            AC0347_P1_MAXC < 1 holds; the AC-0288 number (0.5268, on the
-//            old two-octave blend) is INVALIDATED by the field swap. P2
-//            deletes A(y) entirely (the structure change).
+//   A(y) = 1.8 * (1 + max(0, H - y - R) / DEEP_GROW) — the cave amplitude
+//   — is GONE with DEEP_GROW and CAVE_AMP at AC-0347 P2 (the structure
+//   change: the shallow suppressor + the squared layer term replace the
+//   depth amplification). The old "air for sure above H+R+1" invariant
+//   (CAVE_AMP * max|C-0.5| < 1; P1 re-derived it on the new field as
+//   1.8 * 0.353027 = 0.6354 < 1) is RETIRED with A(y) — the margin is now
+//   structural (the scan-start comment): the ramp clamps -1 above H+10.5
+//   and the shallow branch reads min(-1, 5*entrances) <= -1 < 0 for any
+//   noise values.
 //   H(x,z) = the surface height derived from the coarse 3D SURFACE field —
 //            the AC-0091 2D heightmap (c/h/r fbm2) is REPLACED by the 3D
 //            fields on the same 4x8x4 grid, read at the sea-level slice
@@ -314,14 +364,39 @@ constexpr int B_OBSIDIAN = 25;
 
 constexpr int TERRAIN_H_MAX = 300;
 
-// AC-0215 one-density-field params (MC 1.18 style).
-constexpr double CAVE_AMP = 1.8;   // |CAVE_AMP * (cave-0.5)| < 1 keeps the
-// ramp asymptotes solid/air (surface always in H +/- R). AC-0288: 1.8 is
-// the LARGEST safe value for the two-octave blend (measured max cave-0.5
-// 0.5268 → 1.8 * 0.5268 = 0.948 < 1; a 2.0 bump would be 1.054).
-constexpr double R_BAND = 10.0;    // spline surface half-width in y blocks.
-constexpr double DEEP_GROW = 6.0; // cave-amplitude growth scale with depth.
-// AC-0288: was 8 — the deep fattens sooner with the new detail octave.
+// AC-0347 P2: the vanilla density router (see the file header — the
+// SHALLOW/DEEP split switched by k = H - y; the AC-0215 one-field +
+// AC-0288 A(y) depth-amplifier structure is GONE: CAVE_AMP / DEEP_GROW /
+// cave_amp() deleted, the "air for sure" margin re-derived structurally).
+constexpr double R_BAND = 10.0;    // spline surface half-width in y blocks
+// (the ramp saturates at H+/-10.5). KEPT — the shallow branch's surface.
+constexpr double K_CUT = 10.0;     // the router's switch depth (k = H - y):
+// the RAMP SATURATION depth — below it S_ramp = +1 exactly, so the shallow
+// branch degenerates to min(1, 5*entrances) and the deep branch owns the
+// cave structure; the suppressor is at its 0.5 clamp maximum exactly at
+// the cut (1.5 - 0.64*1 = 0.86 -> 0.5, vanilla's value at ITS cut
+// 1.5 - 0.64*1.5625 = 0.5); k_norm = k/K_CUT, the suppressor reaches 0 at
+// k = 2.34375*K_CUT (vanilla's 1.5/0.64 = 2.34375 "gone by" value).
+// Continuity at the cut is provable: with S_ramp = +1 at k = 10 both
+// branches read d < 0 iff entrances < 0 — no solid/air seam.
+constexpr double ENTR_OFFSET = 0.37; // vanilla caves/entrances offset —
+// makes entrances RARE (surface breaks only in the noise's lower tail).
+constexpr double ENTR_GRAD_LO = 0.3; // the entrance y-gradient from_value.
+constexpr double ENTR_GRAD_FROM_Y = 54.0; // vanilla from_y -10 + the +64
+// world shift (vanilla min_y -64 -> our 0; same 384 height).
+constexpr double ENTR_GRAD_TO_Y = 94.0;   // vanilla to_y 30 + 64.
+constexpr double LAYER_XZ_SCALE = 1.0;    // vanilla cave_layer scales AS-IS
+constexpr double LAYER_Y_SCALE = 8.0;     // (~32-block vertical period —
+// DENSE in the scan: a 32-block period cannot ride the 48-block lattice,
+// AC-0344's cell-size decision, not re-litigated here).
+constexpr int LAYER_FIRST_OCT = -8;
+static const double LAYER_AMPS[] = { 1.0 };
+constexpr int LAYER_AMPS_N = 1;
+constexpr double ENTR_XZ_SCALE = 0.75;    // vanilla cave_entrance AS-IS
+constexpr double ENTR_Y_SCALE = 0.5;      // (~43 xz / ~64 y)
+constexpr int ENTR_FIRST_OCT = -7;
+static const double ENTR_AMPS[] = { 0.4, 0.5, 1.0 };
+constexpr int ENTR_AMPS_N = 3;
 // AC-0347 P1 (cave-density rebudget — P1 ONLY, the structure change is
 // P2): the CHEESE field is vanilla's cave_cheese AS-IS — the NormalNoise
 // octave machine (vn3 above / AweNoise.vn3) with firstOctave -8 and the
@@ -500,14 +575,38 @@ static inline double density_ramp(double H, int y) {
 	return 2.0 * q - 1.0;
 }
 
-// AC-0215: the cave amplitude of the one density field. CAVE_AMP in the
-// surface band (|y - H| <= R), growing with depth (the deep caves widen
-// downward — MC 1.18 cheese). The per-column deep carve is gone.
-static inline double cave_amp(int H, int y) {
-	double d = (double)H - (double)y - R_BAND;
-	if (d < 0.0)
-		d = 0.0;
-	return CAVE_AMP * (1.0 + d / DEEP_GROW);
+// AC-0347 P2: the dense CAVE LAYER source — vanilla's cave_layer noise
+// instance AS-IS ({firstOctave -8, amplitudes [1.0]} at xz 1.0 / y 8.0 —
+// the ~32-block vertical period), seed+302 (the slot P1 freed when the
+// old two-octave cheese blend went away). Evaluated DENSELY in the scan:
+// a 32-block period cannot ride the 48-block lattice (AC-0344's
+// cell-size decision). The genprobe lockstep source (AweGen::density_layer).
+static inline double layer_cave(double x, double y, double z, int64_t s) {
+	return vn3(x * LAYER_XZ_SCALE, y * LAYER_Y_SCALE, z * LAYER_XZ_SCALE,
+			s + 302, LAYER_FIRST_OCT, LAYER_AMPS, LAYER_AMPS_N);
+}
+
+// AC-0347 P2: the dense ENTRANCE FAMILY source — the vanilla
+// caves/entrances function WITHOUT its spaghetti_3d min (ours: the AC-0289
+// tunnel rule, which stays OUTSIDE dens_at):
+//   0.37 + 2*(E - 0.5) + 0.3*(1 - clamp01((y - 54)/40))
+// with E = vn3 at the vanilla cave_entrance instance AS-IS ({firstOctave
+// -7, amplitudes [0.4, 0.5, 1.0]} at xz 0.75 / y 0.5), seed+306. The 2*(v-0.5)
+// is the centering onto the vanilla convention (noise centred on 0, O(1) —
+// the unit in which the constants are meaningful); the +0.37 offset is
+// vanilla's (entrances RARE — the surface breaks only in the noise's lower
+// tail); the gradient is vanilla's from_y -10 / to_y 30 / 0.3 -> 0.0
+// shifted by +64 (the world's min_y). The genprobe lockstep source
+// (AweGen::density_entrance).
+static inline double entrance_cave(double x, double y, double z, int64_t s) {
+	double e = vn3(x * ENTR_XZ_SCALE, y * ENTR_Y_SCALE, z * ENTR_XZ_SCALE,
+			s + 306, ENTR_FIRST_OCT, ENTR_AMPS, ENTR_AMPS_N);
+	double t = (y - ENTR_GRAD_FROM_Y) / (ENTR_GRAD_TO_Y - ENTR_GRAD_FROM_Y);
+	if (t < 0.0)
+		t = 0.0;
+	else if (t > 1.0)
+		t = 1.0;
+	return 2.0 * (e - 0.5) + ENTR_OFFSET + ENTR_GRAD_LO * (1.0 - t);
 }
 
 // AC-0289: the rarity gate weight — 0 outside the tunnel patches, 1 at
@@ -544,11 +643,49 @@ static inline bool tunnel_air(const Field &f_spag, const Field &f_nood, const Fi
 	return nd < NOOD_TH * w;
 }
 
-// The ONE density field at a cell (solid where > 0, air where < 0).
-// AC-0314: the pad flag is gone (no more pad columns with a cave-free
-// exact-flat surface) — the cave term applies everywhere.
-static inline double dens_at(int H, int y, double cave) {
-	return density_ramp((double)H, y) + cave_amp(H, y) * (cave - 0.5);
+// AC-0347 P2: THE VANILLA DENSITY ROUTER — the ONE density field at a
+// cell (solid where > 0, air where < 0), the SHALLOW/DEEP split of the
+// file header (Java 1.21.4 overworld.json final_density's range_choice,
+// verified against the shipped JSON; density > 0 = solid is the vanilla
+// AND our convention — no sign flip). Inputs: H (the heightmap — the
+// far/payload/promotion contract, untouched), y, cave (the P1 coarse
+// cheese field's trilinear value), ent (the dense entrance family,
+// entrance_cave), layer (the dense cave layer's RAW vn3 value — the
+// centering happens here; pass 0.0 in the shallow band, it is not read).
+// TUNNELS: the AC-0289 tunnel_air rule is applied OUTSIDE this function
+// (the scan's "&& !tunnel_air") — the vanilla spaghetti min, kept where
+// AC-0289 put it so the tunnels pierce the caps and connect the levels.
+// PILLARS: the outer max(..., pillars_choice) is AC-0292 (SEQUENCE).
+static inline double dens_at(int H, int y, double cave, double ent, double layer) {
+	double k = (double)H - (double)y; // depth from the surface
+	if (k < K_CUT) {
+		// SHALLOW: min(S_ramp, 5 * entrances). The surface (S_ramp) is
+		// kept as-is (the KEEP list); the entrance family carves the
+		// deliberate surface openings where it dips low.
+		double s = density_ramp((double)H, y);
+		double e = 5.0 * ent;
+		return s < e ? s : e;
+	}
+	// DEEP: min(entrances, 4*layer_c^2 + clamp(-1,1)(0.27 + cheese_c)
+	// + clamp(0,0.5)(1.5 - 0.64*k/K_CUT)). The base terrain contributes
+	// NOTHING here (the load-bearing fact) — the solid/air decision IS
+	// the cave router. The layer is squared ONE-SIDED (vanilla's square:
+	// always positive — it gates the cheese caves into stacked levels).
+	double q = 0.27 + 2.0 * (cave - 0.5); // centered cheese, then +0.27
+	if (q < -1.0)
+		q = -1.0;
+	else if (q > 1.0)
+		q = 1.0;
+	double kn = k / K_CUT;
+	double supp = 1.5 - 0.64 * kn; // the shallow suppressor (0.5 at the
+	// cut, 0 at k = 2.34375*K_CUT — vanilla's shape, k-normalized)
+	if (supp < 0.0)
+		supp = 0.0;
+	else if (supp > 0.5)
+		supp = 0.5;
+	double lc = 2.0 * (layer - 0.5); // centered layer (vanilla convention)
+	double s = 4.0 * lc * lc + q + supp;
+	return ent < s ? ent : s;
 }
 
 // ---------------------------------------------------------------------------
@@ -935,9 +1072,15 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				he = H;
 			} else {
 				// The ONE density field, top-down: the solid flags + the
-				// effective surface (topmost d > 0). Above H + R + 1 the field is
-				// air for sure (the ramp clamps -1, |CAVE_AMP*(cave-0.5)| < 1),
-				// so the scan starts there; everything above stays the flag 0.
+				// effective surface (topmost d > 0). Above H + R + 1 the field
+				// is air for sure — RE-DERIVED structurally at AC-0347 P2:
+				// for y >= H+10.5 (k <= -10.5 < K_CUT) the ramp clamps -1
+				// exactly and the SHALLOW branch applies, so
+				// d = min(-1, 5*entrances) <= -1 < 0 for ANY noise values;
+				// the deep branch cannot reach above H - K_CUT and the tunnel
+				// rule only removes solidity. The H+11 start stands on the
+				// min/clamp structure — no noise budget is involved (the old
+				// CAVE_AMP argument died with A(y)).
 				// AC-0237: bounded to the generated slabs — solidf of an
 				// ungenerated slab is never read (the fill loop never
 				// emits there).
@@ -949,18 +1092,21 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				for (int y = top; y >= 1; y--) {
 					if (!slab_kept(y >> 4))
 						continue; // AC-0237: ungenerated slab — skip
-					// AC-0347 P1: the cheese field (vanilla's cave_cheese —
-					// one vn3 field, the old two-octave blend is gone). The
-					// H+R+1 scan-start "air for sure" margin re-derived on
-					// the NEW field at AC-0347 P1 (CAVE_AMP * max(cheese-0.5)
-					// — the AC-0288 number 0.948 is invalidated by the field
-					// swap; see the file header).
+					// AC-0347: the router inputs — the cheese from the P1
+					// coarse field (trilinear, unchanged), the entrance
+					// family DENSE (vanilla cave_entrance AS-IS, ~64-block y
+					// period — cannot ride the 48-block lattice), the layer
+					// DENSE in the deep band only (it is not read in the
+					// shallow branch — vanilla's 32-block period, AC-0344).
 					double cave = tril(f_cheese, gx, (double)y / ystep, gz);
-					// AC-0289: the tunnel air wins over cheese solid — blended
-					// into d BEFORE the solid flag (the edge-density test). The
-					// tunnel only removes solidity, so the "air for sure"
-					// margin above H+R+1 holds as before.
-					bool s = dens_at(H, y, cave) > 0.0
+					double ent = entrance_cave(x, (double)y, z, seed);
+					double lay = (H - y >= K_CUT)
+							? layer_cave(x, (double)y, z, seed)
+							: 0.0;
+					// AC-0289: the tunnel air wins over the router's solid —
+					// applied OUTSIDE dens_at (the vanilla spaghetti min,
+					// kept where AC-0289 put it: the tunnels pierce the caps).
+					bool s = dens_at(H, y, cave, ent, lay) > 0.0
 							&& !tunnel_air(f_spag, f_nood, f_gate, gx, (double)y / ystep, gz);
 					solidf[y] = s ? 1 : 0;
 					if (s && he < 0)
@@ -1063,12 +1209,16 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				if (top2 > hmax - 1)
 					top2 = hmax - 1;
 				for (int y = top2; y >= 1; y--) {
-					// AC-0347 P1: the same cheese field as the in-column
-					// scan (vanilla's cave_cheese — one vn3 field).
+					// AC-0347: the same router inputs as the in-column scan
+					// (the tree base must match the full column's surface —
+					// dense entrance + layer exactly as there).
 					double cave = tril(f_cheese, gx2, (double)y / ystep, gz2);
-					// AC-0289: the same tunnel rule as the in-column scan
-					// (the tree base must match the full column's surface).
-					if (dens_at(H2, y, cave) > 0.0
+					double ent = entrance_cave(tx, (double)y, tz, seed);
+					double lay = (H2 - y >= K_CUT)
+							? layer_cave(tx, (double)y, tz, seed)
+							: 0.0;
+					// AC-0289: the same tunnel rule as the in-column scan.
+					if (dens_at(H2, y, cave, ent, lay) > 0.0
 							&& !tunnel_air(f_spag, f_nood, f_gate, gx2, (double)y / ystep, gz2)) {
 						hcol = y;
 						break;
@@ -1318,6 +1468,11 @@ public:
 		ClassDB::bind_method(D_METHOD("hash3i", "x", "y", "z", "s"), &AweGen::hash3i);
 		ClassDB::bind_method(D_METHOD("fade", "t"), &AweGen::fade);
 		ClassDB::bind_method(D_METHOD("density_cave", "x", "y", "z", "s"), &AweGen::density_cave);
+		// AC-0347 P2: the router's dense sources + the router itself (the
+		// genprobe layer/entrance/dens lockstep blocks).
+		ClassDB::bind_method(D_METHOD("density_layer", "x", "y", "z", "s"), &AweGen::density_layer);
+		ClassDB::bind_method(D_METHOD("density_entrance", "x", "y", "z", "s"), &AweGen::density_entrance);
+		ClassDB::bind_method(D_METHOD("dens_at", "H", "y", "cave", "ent", "layer"), &AweGen::dens_at);
 		// AC-0289: the tunnel field dense sources + predicate (the genprobe
 		// tunnel lockstep — see density_spag et al. above).
 		ClassDB::bind_method(D_METHOD("density_spag", "x", "y", "z", "s"), &AweGen::density_spag);
@@ -1458,6 +1613,18 @@ public:
 		if (nd < NOOD_TH * w)
 			return 1.0;
 		return 0.0;
+	}
+	// AC-0347 P2: the router's dense sources + the router itself — the
+	// genprobe layer/entrance/dens lockstep blocks mirror these EXACT
+	// expressions in GDScript (op-order identical, f64).
+	double density_layer(double p_x, double p_y, double p_z, int p_s) const {
+		return awegen::layer_cave(p_x, p_y, p_z, p_s);
+	}
+	double density_entrance(double p_x, double p_y, double p_z, int p_s) const {
+		return awegen::entrance_cave(p_x, p_y, p_z, p_s);
+	}
+	double dens_at(double p_H, double p_y, double p_cave, double p_ent, double p_layer) const {
+		return awegen::dens_at((int)p_H, (int)p_y, p_cave, p_ent, p_layer);
 	}
 
 	// AC-0216: p_skip != 0 = the lazy offscreen-interior path (the 150-pt
