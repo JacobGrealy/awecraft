@@ -10149,7 +10149,16 @@ func _brightslab_slab_cmp(mc, wcx: int, wcz: int, si: int, ri: Dictionary, cx0: 
 			if ncc == null or ncc.data.is_empty():
 				nb_ok = false
 				break
-			nbs["%d,%d" % [ddx, ddz]] = mc.snap_rings(ncc.data, ncc.fl, ddx, ddz, ncc.gen_keep)
+			# AC-0284b / AC-0349: pass the FAR (h-only) neighbor's skip-fill
+			# edge row (far_payload) exactly like the lane (world.gd
+			# _mesh_dispatch_hslab) and the GDScript reference (chunk.gd:1585).
+			# Without it a far neighbour's ring reads all-air and this
+			# re-bake over-draws the boundary wall against the halo -> a
+			# different (lossless) face set -> the applied mesh (correctly
+			# baked by the lane) no longer matches, pa/q go red on boundary
+			# edits. The payload itself is byte-identical (proven by the
+			# AC-0349 three-way: eff/side/corner diff 0, lver equal).
+			nbs["%d,%d" % [ddx, ddz]] = mc.snap_rings(ncc.data, ncc.fl, ddx, ddz, ncc.gen_keep, ncc.far_payload())
 	if not nb_ok:
 		out["note"] = "neighbor missing"
 		return out
@@ -22584,6 +22593,15 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 	var light_batch_mark := int(world.perf_light_batch_calls)
 	var light_comp_cross: Array = []
 	var light_batch_cross: Array = []
+	# AC-0348: the crossing ring window — the synchronous recenter() sweep
+	# entries (world.crossing_ring) over the walk. crossing_frame_* = the
+	# frame time OF the crossing frame (the gate field); crossing_burst_* =
+	# the synchronous sweep wall (the crossing ring). Both are FRAME LATENCY.
+	# They are NOT the burst_* fields above — those are forward-wall
+	# wall-clock THROUGHPUT (resolved only when the whole forward wall is
+	# mesh_built; unresolvable at R24, and never a frame metric).
+	var crx_base := int(world.crossing_seq)
+	var cross_frame_ms: Array = []
 	var _framelog := OS.get_environment("AWECRAFT_FRAMELOG") == "1"
 	var _walklog := OS.get_environment("AWECRAFT_WALKLOG") == "1"  # AC-0229 debug
 	while crossings < walk_lines and walk_frames < walk_max_frames:
@@ -22665,6 +22683,11 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 					cross_tr[ci] = fe - int(cross_at[ci])
 		if cx_now > prev_pcx:
 			crossings += cx_now - prev_pcx
+			# AC-0348: this frame is the one the player's physics step ran
+			# recenter() on (the position it just saw is where the player
+			# physics step saw a new chunk) — tag its ms.
+			for _k in cx_now - prev_pcx:
+				cross_frame_ms.append(fms)
 			cross_at.append(fe)
 			cross_cx.append(cx_now + r)
 			cross_cz.append(cz_now)
@@ -22698,6 +22721,54 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 				walk_frames, (fe - t_walk0) / 1000.0, dt,
 				p.position.x, p.position.y, p.position.z,
 				(p.position.x - 8.0) / maxf((fe - t_walk0) / 1000.0, 0.001)])
+	# AC-0348: the crossing ring over the walk window (the boot recenter and
+	# the final re-entry recenter are outside it). crx_cross holds the
+	# cross > 0 entries (the walk crossings, in order); crx_other counts the
+	# cross == 0 entries (snap-backs / Y recenters, if any).
+	var crx_end := int(world.crossing_seq)
+	var crx_cross: Array = []
+	var crx_other := 0
+	for e in world.crossing_ring:
+		if int(e["seq"]) <= int(crx_base) or int(e["seq"]) > int(crx_end):
+			continue
+		if int(e["cross"]) > 0:
+			crx_cross.append(e)
+		else:
+			crx_other += 1
+	var crx_burst_ms: Array = []
+	var crx_census := {"demoted": 0, "gen_far": 0, "promoted": 0, "halo_evicts": 0, "reentry_flips": 0, "scanned": 0}
+	var crx_worst_idx := -1
+	for i2 in range(crx_cross.size()):
+		var e2: Dictionary = crx_cross[i2]
+		crx_burst_ms.append(roundf(float(e2["us"]) / 1000.0 * 10.0) / 10.0)
+		crx_census["demoted"] += int(e2["demoted"])
+		crx_census["gen_far"] += int(e2["gen_far"])
+		crx_census["promoted"] += int(e2["promoted"])
+		crx_census["halo_evicts"] += int(e2["halo_evicts"])
+		crx_census["reentry_flips"] += int(e2["reentry_flips"])
+		crx_census["scanned"] += int(e2["scanned"])
+		if crx_worst_idx < 0 or int(e2["us"]) > int(crx_cross[crx_worst_idx]["us"]):
+			crx_worst_idx = i2
+	var crx_worst_out = null  # Dictionary or null (no crossing window)
+	if crx_worst_idx >= 0:
+		var ew: Dictionary = crx_cross[crx_worst_idx]
+		var wframe := -1
+		if crx_cross.size() == cross_frame_ms.size():
+			wframe = int(cross_frame_ms[crx_worst_idx])  # 1:1 in order at the default speed
+		crx_worst_out = {
+			"seq": int(ew["seq"]),
+			"us_ms": roundf(float(ew["us"]) / 1000.0 * 10.0) / 10.0,
+			"scan_ms": roundf(float(ew["scan_us"]) / 1000.0 * 10.0) / 10.0,
+			"frame_ms": wframe,
+			"cross": int(ew["cross"]),
+			"ahead": bool(ew["ahead"]),
+			"scanned": int(ew["scanned"]),
+			"demoted": int(ew["demoted"]),
+			"gen_far": int(ew["gen_far"]),
+			"promoted": int(ew["promoted"]),
+			"halo_evicts": int(ew["halo_evicts"]),
+			"reentry_flips": int(ew["reentry_flips"]),
+		}
 
 	var settle_frames := 0
 	var settle_max := 1200
@@ -22873,6 +22944,24 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		"trailing_wall_ms_per_crossing": cross_tr,
 		"trailing_p95_ms": int(_percentile(_resolved_bursts(cross_tr), 0.95)),
 		"trailing_max_ms": int(_max_int(cross_tr)),
+		# AC-0348: the crossing attribution — FRAME-LATENCY fields only
+		# (never the burst_* throughput fields above). crossing_burst_* =
+		# the synchronous recenter() sweep wall (the world crossing ring);
+		# crossing_frame_* = the frame time OF the frame the crossing ran
+		# on (the gate fields); crossing_census / crossing_worst = the
+		# per-crossing cause census (which term owns the tail).
+		"crossing_n": int(crx_cross.size()),
+		"crossing_other_n": int(crx_other),
+		"crossing_burst_ms": crx_burst_ms,
+		"crossing_burst_p50_ms": roundf(_percentile(crx_burst_ms, 0.50) * 10.0) / 10.0,
+		"crossing_burst_p95_ms": roundf(_percentile(crx_burst_ms, 0.95) * 10.0) / 10.0,
+		"crossing_burst_max_ms": roundf(_max_f(crx_burst_ms) * 10.0) / 10.0,
+		"crossing_frame_ms": cross_frame_ms,
+		"crossing_frame_p50_ms": int(_percentile(cross_frame_ms, 0.50)),
+		"crossing_frame_p95_ms": int(_percentile(cross_frame_ms, 0.95)),
+		"crossing_frame_max_ms": int(_max_int(cross_frame_ms)),
+		"crossing_census": crx_census,
+		"crossing_worst": crx_worst_out,
 		"fwd_first10_per_crossing": fwd_first10_list,
 		"fwd_first10_p95": int(_percentile(fwd_first10, 0.95)),
 		"fluid_tick_ms_p95": roundf(fluid_p95 * 100.0) / 100.0,
@@ -22942,6 +23031,14 @@ func _max_int(arr: Array) -> int:
 		if int(v) > m:
 			m = int(v)
 	return m if m >= 0 else 0
+
+
+func _max_f(arr: Array) -> float:  # AC-0348: the float twin (the burst ms are sub-int)
+	var m := -1.0
+	for v in arr:
+		if float(v) > m:
+			m = float(v)
+	return m if m >= 0.0 else 0.0
 
 
 # AC-0079: spec wall check. dir=+1 forward (dx in 1..r), dir=-1 trailing (dx in -r..-1),

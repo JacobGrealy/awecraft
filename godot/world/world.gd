@@ -3488,6 +3488,23 @@ const PICK_POOL_CAP := 512
 var build_dispatch_total := 0
 var build_dispatch_log: Array = []
 const BUILD_DISPATCH_LOG_CAP := 16384
+# AC-0348: the crossing ring — one entry per SYNCHRONOUS recenter() call.
+# That sweep runs from the PHYSICS frame (the player.gd chunk-change call)
+# and from the _process snap-back (line ~4368) — both OUTSIDE the per-frame
+# wprof partition, whose WP_RECENTER stage brackets _recenter_slice() (the
+# SLICED continuation) only. So the crossing's synchronous cost (the chunk
+# walk + the band-exit/entry calls + the inline polls + the pre-warm) has
+# nowhere to land in the partition — the R4 boundary max_ms 782 class. Each
+# entry carries the whole-call wall, the chunk-scan sub-part, and the
+# per-crossing cause census (demoted / promoted / halo evicts / re-entry
+# flips / the synchronous generate_far calls) — so the next reader sees
+# which term owns the tail instead of inferring it. INSTRUMENTATION ONLY:
+# pure counters + one append at call end (the cap drops the oldest).
+# The boundary arm reads crossing_seq / crossing_ring over its walk window.
+const CROSSING_RING_CAP := 256
+var crossing_seq := 0
+var crossing_ring: Array = []
+var crx_gen_far_sync := 0  # cumulative synchronous generate_far calls (the per-sweep delta is the census term)
 
 func _bd_log(cx: int, cz: int) -> void:
 	build_dispatch_total += 1
@@ -9350,6 +9367,7 @@ func _demote_to_far(c: Node3D, key: String) -> void:
 	var g: Variant = WorldGen.gen_cpp()
 	if g == null:
 		return
+	crx_gen_far_sync += 1  # AC-0348 census: the synchronous generate_far (only caller: the recenter walk's _demote_high_band_exit)
 	var pay: PackedByteArray = g.generate_far(int(c.cx), int(c.cz), int(Game.world_seed), int(Data.HEIGHT), int(Data.SEA))
 	if pay.size() != 1024:
 		return
@@ -9459,6 +9477,17 @@ func _reentry_flip_high(c: Node3D, key: String) -> void:
 
 
 func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
+	# AC-0348: the crossing ring — bracket the WHOLE synchronous sweep
+	# (this call runs from the physics frame, outside the wprof partition)
+	# and count its cause census (see CROSSING_RING_CAP above).
+	# Instrumentation only — no behaviour change.
+	var crx_t0 := Time.get_ticks_usec()
+	var crx_genfar_base := int(crx_gen_far_sync)
+	var cx_demoted := 0
+	var cx_promoted := 0
+	var cx_halo_evicts := 0
+	var cx_reentry_flips := 0
+	var cx_scanned := 0
 	# AC-0275: the PRE-move center (the band-exit demote compares each
 	# column's old and new taxi).
 	var opcx := last_pcx
@@ -9553,6 +9582,7 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 		# swept them by accident; AC-0152 scopes it to home chunks.)
 		if int(c.face) > 1:
 			continue
+		cx_scanned += 1  # AC-0348 census: home-face columns visited by the sweep
 		var dx := int(c.cx) - pcx
 		var dz := int(c.cz) - pcz
 		var odx := int(c.cx) - opcx
@@ -9601,7 +9631,9 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 					and not _is_real_col(dx, dz):
 				if _is_real_col(odx, odz):
 					_star_halo_evict(c, key)
+					cx_halo_evicts += 1  # AC-0348 census
 				_demote_high_band_exit(c, key)
+				cx_demoted += 1  # AC-0348 census (generate_far counted in _demote_to_far)
 			# AC-0263 spec (keep-all-LOD, AC-0283 P3): the column just CAME
 			# BACK into the REAL band - the stored highs flip on (visibility
 			# only, no rebuild; the mirror of the demote above) and the
@@ -9612,7 +9644,9 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 					and not _is_real_col(odx, odz) \
 					and _is_real_col(dx, dz):
 				_reentry_flip_high(c, key)
+				cx_reentry_flips += 1  # AC-0348 census
 				_star_halo_promote(c, key)
+				cx_promoted += 1  # AC-0348 census
 				# AC-0284a: a NO-CAVES column promoted into the real band
 				# owes a FULL regen (the promotion's data side — skip data
 				# -> full data). It rides the same late-landing machinery
@@ -9674,6 +9708,7 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 				if c.cand_since >= 2:
 					to_free.append(key)
 	var tf1 := Time.get_ticks_usec()
+	var crx_scan_us := tf1 - rt0  # AC-0348: the synchronous chunk-scan sub-part (walk + the band calls)
 	_strip_candidate_builds(cand_builds)
 	# AC-0257 (instance cap): the per-frame detach/checkin is bounded by
 	# the SAME cap as the attach burst (stream_ho_cap — the "Chunk meshes
@@ -9759,6 +9794,26 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 			_rp_free_ms, _rp_walk_ms, _rp_stub_n,
 			queue_size, chunks.size(),
 			_rp_drain_stub_ms, _rp_drain_stub_n])
+	# AC-0348: append the crossing-ring entry — the whole synchronous
+	# sweep wall + its cause census (the oldest drops past the cap).
+	crossing_seq += 1
+	crossing_ring.append({
+		"seq": crossing_seq,
+		"cross": int(_cross),
+		"ahead": bool(_fast),
+		"us": Time.get_ticks_usec() - crx_t0,
+		"scan_us": int(crx_scan_us),
+		"free_ms": roundf(_rp_free_ms * 1000.0) / 1000.0,
+		"start_ms": roundf(_rp_walk_ms * 1000.0) / 1000.0,
+		"scanned": int(cx_scanned),
+		"demoted": int(cx_demoted),
+		"gen_far": int(crx_gen_far_sync) - int(crx_genfar_base),
+		"promoted": int(cx_promoted),
+		"halo_evicts": int(cx_halo_evicts),
+		"reentry_flips": int(cx_reentry_flips),
+	})
+	if crossing_ring.size() > CROSSING_RING_CAP:
+		crossing_ring.pop_front()
 
 func _recenter_slice() -> void:
 	if not _rec_pending:

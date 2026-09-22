@@ -200,6 +200,28 @@ Match these; do not improvise a different approach in a task.
   single body-derivation choke point — the `perf_collision_*` trio counts BATCHES, not
   slabs) plus the `perf_reband_*` excursion counters are the standing gate evidence
   (HARNESS.md §3).
+- **Crossing attribution (AC-0348)**: the synchronous `recenter()` sweep — the chunk-change
+  walk run from the PHYSICS frame (player.gd `_recenter()` on a chunk change) and the
+  `_process` snap-back — runs OUTSIDE the per-frame wprof partition (whose `WP_RECENTER`
+  stage brackets only the sliced continuation `_recenter_slice()`, the 8 ms-budgeted path),
+  so its cost never appears in the 5-stage partition — the home of the previously-
+  unattributable 782 ms-class worst frames. The WORLD CROSSING RING (`crossing_ring` /
+  `crossing_seq` in world.gd, capped 256 entries) brackets each synchronous call (total µs,
+  scan µs) and carries the per-crossing CAUSE CENSUS: demoted / promoted / halo evicts /
+  reentry flips / synchronous `generate_far` calls + the scanned count. The boundary arm
+  pairs each crossing with the frame time of the frame it ran on — `crossing_burst_*` (the
+  sweep) and `crossing_frame_*` (the frame — the gate fields of the HARNESS.md §3 standing
+  row "boundary r24 crossing frame latency", thresholds `crossing_frame_p95_ms` ≤ 75 /
+  `crossing_burst_max_ms` ≤ 15, coordinator-only ~20 min run). The arm's `burst_*` /
+  `forward_*` / `trailing_*` fields stay WALL-CLOCK THROUGHPUT (the forward wall resolves
+  only when the whole wall is `mesh_built` — unresolvable at R24, so they read −1/0 there)
+  and must never be gated as frame latency. Measured (R24, 2026-09-21): the sweep is
+  5.3–9.1 ms per crossing — dominated by the RESIDENT-SET SCAN (the full ~1453-column set
+  is walked on every crossing; the code-reading estimate of 1–3 ms dominated by sync
+  `generate_far` did not hold — it is ~0.9 ms) — and the crossing FRAME is 8–58 ms (p50 9):
+  the worst crossing (sweep 9.1 ms) ran inside a 58 ms frame, the rest being concurrent
+  storm streaming — so the multi-hundred-ms tail frames are NON-crossing storm work
+  (drain/handoff/mesh-attach), which this ring now attributes by exclusion.
 - **Raycasting**: the analytical voxel DDA in `core/math.gd` for select/mine/place and
   projectiles — not physics rays (faster and deterministic).
 - **Meshing**: one `ArrayMesh` per slab/chunk via `SurfaceTool` (GDScript path) or the C++
