@@ -1,10 +1,10 @@
 meta:
-  updated_at: 2026-09-21T22:24
+  updated_at: 2026-09-22T00:47
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0348
+- AC-0350
 - AC-0347
 - AC-0342
 - AC-0344
@@ -18248,11 +18248,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-21T09:34
-  updated_at: 2026-09-21T09:34
-  completed_at: null
+  updated_at: 2026-09-22T00:47
+  completed_at: 2026-09-22T00:47
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -18358,7 +18358,47 @@ intake:
     RELATED: AC-0339 (light-settle gate wait) also adds a wait measurement; keep the two separate - this
     ticket is frame-time-at-crossing, that one is settle-wait duration.
 
-    '
+
+
+    TAKEN BY THE COORDINATOR SESSION (2026-09-21). NEIGHBOUR STATE YOU INHERIT: AC-0339 (light-settle
+    wait) is CLOSED and its instrumentation is IN THE TREE - a permanent `settlewait` arm plus world-side
+    counters - and the ticket''s own RELATED note asks you to keep the two measurements SEPARATE (yours
+    is frame-time-at-crossing, that one is settle-wait duration), so do not fold them together. AC-0388/AC-0345/AC-0346
+    also landed in the far-tier area: the far tiers now DRAW as merged ring meshes with their per-slab
+    records kept OFF-TREE (AC-0338), the R50 far wave converges rather than starving (AC-0345), and the
+    tier/skip contract is total (AC-0346) - all of which change what a crossing costs relative to the
+    ticket''s code-reading estimate, which was written before them. THE COORDINATOR''S AC-0349 HEAVY STAGE
+    HAS FINISHED, so the godot slot is free as you start, but a PARALLEL SESSION shares the repo: check
+    `pgrep -af ''[g]odot''` before EVERY call and wait rather than proceeding; never kill a godot you
+    did not start. A NOTE ABOUT THE R24 WALK LENGTH: the ticket suggests reducing `AWECRAFT_WALK` to keep
+    the wall manageable, and warns that the arm''s `ok` is `crossings == walk_lines and marker_ok` - judge
+    on the metric fields and say plainly in your results which knobs you set, so the standing value you
+    record is reproducible.
+
+
+    CLOSED 2026-09-22. COORDINATOR VERIFICATION, and the new gate holds: the R24 boundary run (AWECRAFT_RADIUS=24
+    WALK=10 TICKTIME=1, seed 44) reached resident_final 1453 - the full R24 population - with 10 crossings,
+    marker_ok true, and the crossing ring reading 1:1 (crossing_other_n 0, no snap-back contamination).
+    Its numbers reproduce the builder''s within noise: crossing SWEEP p50 6.7 / p95 8.5 / max 8.7 against
+    the new threshold crossing_burst_max_ms <= 15, and crossing FRAME p50 12 / p95 68 / max 78 against
+    crossing_frame_p95_ms <= 75 - both PASS - with the per-crossing CENSUS BYTE-IDENTICAL to the builder''s
+    (demoted 97 = promoted 97 = halo_evicts 97 = reentry_flips 97 = gen_far 97, scanned 14528). The rest
+    of the standing set: genhash 25/25 byte-identical in two runs AND against the reference; farab 1080/1080
+    with h_mismatch 0; ladder band_a_ok 20/20; meshprobe 1.0; halo ok; brightslab ok (the newly-added
+    standing member, green); lightstate wash false with the double-LOD census 0/0; r16 all sub-flags with
+    far_holes 0 in both bands and static p50 6 ms; boundary r4 p50 13 / p95 37 with staged_dropped 1761;
+    save green; battery 12 byte-identical with no new mode differing. THE FINDINGS THIS TICKET PRODUCED,
+    recorded because they are the point of it: (1) the crossing sweep costs 5.3-9.1 ms at R24 and the
+    ticket''s own code-reading estimate (1-3 ms, generate_far-dominated) DID NOT HOLD - the resident-set
+    walk dominates and generate_far is only ~10%; (2) the crossing is NOT the tail - the 549-719 ms class
+    is non-crossing storm work (drain/handoff/mesh-attach), attributed by exclusion; (3) the whole resident
+    set (1453 columns, 14528 entries per ten crossings) is walked on EVERY crossing while only ~9.7 columns
+    per crossing do any work. THE FOLLOW-UP IS FILED AS AC-0350 (band-bounded recenter scan: O(ring) instead
+    of O(resident), with the per-crossing census required to stay identical as the proof), and the builder
+    correctly did NOT propose threading a 9 ms sweep. A PLEASANT SIDE EFFECT WORTH RECORDING: the ticket
+    estimated the R24 gate run at ~20 min wall, and the coordinator''s run took 54 s - an R24 world is
+    now far cheaper to build after AC-0331''s floor, AC-0338''s batching and AC-0345''s convergence fix
+    - which makes this gate cheap enough to keep in the standing set.'
   comments: []
 - id: AC-0349
   title: brightslab-mesh-payload-mismatch
@@ -18496,4 +18536,70 @@ intake:
     NOT RE-BASELINED: lightstate''s `ab.arr_diff_cells` reads 0 against a documented 1 - reported, not
     gated, and not caused by this change; it has been added to AC-0330''s stale-expectation list. THE
     STANDING SET NOW INCLUDES brightslab, so this red cannot hide again.'
+  comments: []
+- id: AC-0350
+  title: recenter-band-bounded-scan
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-22T00:24
+  updated_at: 2026-09-22T00:24
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Every time the player walks across a chunk boundary the game walks its ENTIRE
+    resident column set to decide what changed band - over 1400 columns at a real play distance - when
+    only the columns near a band edge can possibly have changed. That is a per-crossing cost the player
+    pays constantly while walking, and it is the dominant part of the crossing.
+
+
+    2) Technical Details:
+
+    MEASURED BY AC-0348 (2026-09-21) and this ticket is the follow-up that measurement recommends. THE
+    NUMBERS: at R24 the synchronous `recenter()` crossing sweep costs **5.3-9.1 ms per crossing** (p50
+    6.9 / p95 8.4 / max 9.1, ten crossings, the crossing ring reading 1:1 with no contamination), and
+    the per-crossing census shows why: **14528 entries scanned per ten crossings = the full 1453-column
+    resident set walked on EVERY crossing**, while the actual band work is ~9.7 columns per crossing (demoted
+    97 = promoted 97 = halo_evicts 97 = reentry_flips 97 over ten crossings, a symmetric edge). The ticket''s
+    own code-reading estimate said 1-3 ms dominated by `generate_far`; the measurement says otherwise
+    - `generate_far` is ~0.9 ms (~10% of the sweep) and the RESIDENT-SET WALK is the dominant term. THE
+    COST IS REAL BUT NOT THE TAIL: the crossing sweep runs inside a frame whose p50 is 9 ms and p95 54
+    ms, and the 549-719 ms class was shown by the same run to be NON-crossing storm work (drain/handoff/mesh-attach)
+    - so do not expect this ticket to fix the worst frames; it removes a per-crossing cost that is paid
+    on every chunk boundary.
+
+    THE FIX, in the shape AC-0348 recommends: make the scan BAND-BOUNDED - O(ring) instead of O(resident).
+    The sweep''s per-entry body is distance arithmetic plus `in_stream_set`, and the expensive calls (`_demote_high_band_exit`,
+    `_star_halo_evict`, `_star_halo_promote`, `_reentry_flip_high`) fire only inside the taxi-band-crossing
+    guards, so only columns within one taxi step of a band boundary can do anything; a crossing moves
+    about 9 columns across the real-band diamond edge at sim 4. Establish the exact bound from the band
+    boundaries the current tier contract defines (AC-0346 made the tier check total, so the tiers are
+    trustworthy now) and keep the SEMANTICS identical - this is a scan bound, not a behaviour change.
+
+    CONSTRAINTS, from AC-0348''s evidence: the sweep''s mutating calls are MAIN-THREAD-ONLY (`_star_halo_evict`
+    into the light engine, `_reentry_flip_high` setting `MeshInstance3D.visible` on scene-tree nodes,
+    the `chunks` state the demote rewrites), so this ticket does NOT thread anything and does not propose
+    to. And the R24 crossing ring added by AC-0348 is your measurement instrument: re-run it and show
+    the sweep falling while the per-crossing CENSUS stays the same (same demotes/promotes/evicts/flips)
+    - identical work for less scanning is the whole proof.
+
+    GATES: the R24 boundary run''s crossing ring (sweep p50/p95/max BEFORE 6.9/8.4/9.1) and its per-crossing
+    census UNCHANGED; boundary r4 (p50 flat, p95 in the band, staged_dropped inside its <=2500 threshold,
+    resident_final 93); the new standing row "boundary r24 crossing frame latency" (AC-0348''s, thresholds
+    crossing_frame_p95_ms <= 75 / crossing_burst_max_ms <= 15) must still hold; r16 ALL sub-flags with
+    far_holes 0 in both bands; genhash 25/25 byte-identical (a scan bound is not generation); farab 1080/1080
+    with h_mismatch 0; ladder band_a_ok 20/20; meshprobe 1.0; halo with (c) 0; lightstate (wash false,
+    census 0/0); brightslab ok:true; the battery. Note the R24 run is a coordinator-only ~20 min run -
+    keep your own wall bounded and say what you ran.
+
+    SECOND, OPTIONAL PIECE the same measurement suggests and this ticket may file rather than do: a "storm
+    tail" attribution run for the non-crossing 549-719 ms frames (drain/handoff/mesh-attach), since AC-0348
+    attributed them only by EXCLUSION. If the numbers are cheap to get while you are in there, take them;
+    if it needs its own instrument, file it and say so.
+
+    '
   comments: []
