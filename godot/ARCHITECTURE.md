@@ -215,13 +215,30 @@ Match these; do not improvise a different approach in a task.
   `crossing_burst_max_ms` ≤ 15, coordinator-only ~20 min run). The arm's `burst_*` /
   `forward_*` / `trailing_*` fields stay WALL-CLOCK THROUGHPUT (the forward wall resolves
   only when the whole wall is `mesh_built` — unresolvable at R24, so they read −1/0 there)
-  and must never be gated as frame latency. Measured (R24, 2026-09-21): the sweep is
+  and must never be gated as frame latency. Measured (R24, 2026-09-21): the sweep was
   5.3–9.1 ms per crossing — dominated by the RESIDENT-SET SCAN (the full ~1453-column set
-  is walked on every crossing; the code-reading estimate of 1–3 ms dominated by sync
-  `generate_far` did not hold — it is ~0.9 ms) — and the crossing FRAME is 8–58 ms (p50 9):
-  the worst crossing (sweep 9.1 ms) ran inside a 58 ms frame, the rest being concurrent
-  storm streaming — so the multi-hundred-ms tail frames are NON-crossing storm work
-  (drain/handoff/mesh-attach), which this ring now attributes by exclusion.
+  walked on every crossing; the code-reading estimate of 1–3 ms dominated by sync
+  `generate_far` did not hold — it is ~0.9 ms) — and the crossing FRAME was 8–58 ms (p50 9).
+  **AC-0350 (band-bounded sweep):** that resident-set walk is now bounded — O(ring), not
+  O(resident): with K = this recenter's center shift (taxi) and R_outer = the stream set's
+  outermost taxi (maxi(R, b1_eff()) + 2), the sweep visits only (A) the fills taxi ≤
+  band0_r + K around BOTH centers (the real-band window: build backstop, crossing-out
+  demote, re-entry flip), (B) the rings taxi ∈ [R_outer − K, R_outer + K] around both
+  centers (the stream-set flip set — and, every resident OUTSIDE column is proven at taxi
+  ≤ R_outer + K, so the free logic runs on exactly the set the old walk reached), and
+  (C) the maintained `_stream_outside` set (the exact backstop; the sole outside source
+  when K > R_outer — a jump/teleport, which degenerates B to the two set fills). The
+  per-entry body is unchanged. The AC-0346 1→1-hop class (a FULL-data column outside the
+  real band at BOTH centers — producible only by a full halo-band landing, a sim-band
+  shrink, or boot) is not within K of any edge: it is owed through `_real_demote_owed`
+  (flagged at the threadgen/disk/sync landing sites, in-set only — out-of-set full
+  columns are freed full by the free logic, never demoted) + a one-time full sweep
+  (boot/load and any detected band0_r shrink), cleared with the same body. Measured
+  (R24, 2026-09-22, before/after pair): the sweep is 4.2–8.5 ms (p50 5.4 / p95 7.4 vs
+  6.6 / 8.5 — at R24 the ring is the same order as the resident set; the O(R) vs O(R²)
+  scaling is the win) with a BYTE-IDENTICAL per-crossing census (97/97/97/97/97) and
+  resident_final 1453 — so the multi-hundred-ms tail frames remain NON-crossing storm
+  work (drain/handoff/mesh-attach), which this ring attributes by exclusion.
 - **Raycasting**: the analytical voxel DDA in `core/math.gd` for select/mine/place and
   projectiles — not physics rays (faster and deterministic).
 - **Meshing**: one `ArrayMesh` per slab/chunk via `SurfaceTool` (GDScript path) or the C++

@@ -3505,6 +3505,24 @@ const CROSSING_RING_CAP := 256
 var crossing_seq := 0
 var crossing_ring: Array = []
 var crx_gen_far_sync := 0  # cumulative synchronous generate_far calls (the per-sweep delta is the census term)
+# AC-0350: the band-bounded sweep's state. _stream_outside = the resident
+# home-face columns OUTSIDE the stream set (w.r.t. the current recenter
+# center) — maintained per recenter by the sweep's re-entry/exit branches
+# (the stream-set flip set) and rebuilt when the stream-set signature
+# (render radius / b1) changes; the bounded passes reach exactly the
+# columns the old O(resident) walk reached (see recenter()).
+# _real_demote_owed = the AC-0346 1→1 hop class: a column holding FULL
+# (caved) data outside the real band — producible only by a full landing
+# in the halo band (flagged at the threadgen/disk/sync landing sites), a
+# sim-band (band0_r) shrink, or boot; the next recenter clears it with the
+# SAME body the old walk's (iii) ran (a scan bound, not a behaviour change).
+# _real_demote_full_sweep: the one-time legacy full walk on the first
+# recenter (boot/load) and after any detected band0_r shrink.
+var _stream_outside: Dictionary = {}
+var _stream_outside_sig: Array = [-1, -1]
+var _real_demote_owed: Dictionary = {}
+var _real_demote_full_sweep := true
+var _last_sweep_band0_r := band0_r
 
 func _bd_log(cx: int, cz: int) -> void:
 	build_dispatch_total += 1
@@ -5251,6 +5269,12 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	var gres: Dictionary = WorldGen.apply_banana_trees(gdata, cx, cz, Game.world_seed, Data.HEIGHT)
 	c.data_landed(gdata, PackedByteArray())
 	c.no_caves = false
+	# AC-0346/AC-0350: the same 1→1 hop OWE as the threadgen handoff (the
+	# sync fallback is the threadgen-off dev path — identical landing
+	# semantics).
+	if not c.far and not _is_real_col(cx - last_pcx, cz - last_pcz) \
+			and in_stream_set(cx - last_pcx, cz - last_pcz):
+		_real_demote_owed[_key(cx, cz)] = true
 	_pool_touch()  # AC-0217: sync data landed on a queued entry
 	_banana_register(cx, cz, gres["fruits"])
 	gen_count += 1
@@ -5569,6 +5593,16 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 	# slabs it replaced).
 	if not _gen_far_stamp(c, resl):
 		c.clear_far()
+	# AC-0346/AC-0350: a FULL landing on a column OUTSIDE the real band (the
+	# mid-regen landing after the exit demote) is the 1→1 hop class — the
+	# bounded sweep never visits it (not within K of any edge); OWE the
+	# demote so the next recenter clears it with the same body the old
+	# walk's (iii) ran. Out-of-set landings are never flagged: the free
+	# logic (vi) frees such a column FULL (the save keeps the full form) —
+	# the old sweep's (iii) only ever ran in-set.
+	if not c.far and not _is_real_col(tcx - last_pcx, tcz - last_pcz) \
+			and in_stream_set(tcx - last_pcx, tcz - last_pcz):
+		_real_demote_owed[_key(tcx, tcz)] = true
 	_banana_register(tcx, tcz, gres["fruits"])
 	gen_count += 1
 	chunk_origin[e["key"]] = "gen"  # AC-0155
@@ -9292,6 +9326,8 @@ func _free_chunk_key(key: String) -> void:
 	promo_land_ms.erase(key)
 	_far_promo_owed.erase(key)
 	_promo_build.erase(key)
+	_stream_outside.erase(key)  # AC-0350: the bounded sweep's outside set
+	_real_demote_owed.erase(key)  # AC-0350: the AC-0346 backstop flag
 	chunks.erase(key)
 	queued_keys.erase(key)
 	fluid_dirty.erase(key)
@@ -9575,23 +9611,121 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	var rr := render_radius
 	var to_free: Array[String] = []
 	var cand_builds: Array = []
-	for key in chunks:
-		var c: Node3D = chunks[key]
+	# AC-0350: the crossing sweep is BAND-BOUNDED — O(ring) instead of
+	# O(resident). The old walk visited EVERY resident column (1453 at R24)
+	# on every crossing; the per-entry work can only fire near a band edge:
+	#   K       = this recenter's center shift (taxi) — |taxi_new − taxi_old| ≤ K,
+	#             so membership in any taxi-monotone band can only change
+	#             within K of its edge;
+	#   R_outer = the stream set's outermost taxi (maxi(R, b1_eff()) + 2).
+	# Passes (a resident cell is looked up once, deduped, and the UNCHANGED
+	# per-entry body below runs over the entries):
+	#   (A) the real-band window — the fills taxi ≤ band0_r + K around BOTH
+	#       centers: _enqueue_build (taxi ≤ band0_r), the crossing-out
+	#       demote (its was-real evict side), the re-entry flip/promote;
+	#   (B) the stream-set boundary band — rings taxi ∈ [R_outer − K,
+	#       R_outer + K] around both centers: every cell whose in/out
+	#       membership can flip (the re-entry _stage_check, the
+	#       _enter_candidate) and the halo-side demotes — and, because every
+	#       resident OUTSIDE column is not-two_out (taxi ≤ R_outer) or
+	#       became two_out within the last recenter (taxi ≤ R_outer + K),
+	#       also every outside-resident column: the free logic (vi) runs on
+	#       exactly the set the old walk reached;
+	#   (C) _stream_outside — the maintained outside-resident set — the
+	#       exact backstop, and the sole outside source when K > R_outer
+	#       (a jump/teleport, never a walk; (B) degenerates to the two set
+	#       fills there).
+	# The AC-0346 1→1 hop class (a FULL-data column outside the real band at
+	# BOTH centers — producible only by a full halo-band landing, a sim-band
+	# shrink, or boot) is not within K of any edge: the _real_demote_owed
+	# flag (set at the landing sites) + the one-time full sweep below clear
+	# it with the SAME body the old walk's (iii) ran.
+	var K := absi(pcx - opcx) + absi(pcz - opcz)
+	var R_outer := maxi(rr, b1_eff()) + 2
+	# the outside set is only valid for the stream-set signature it was built
+	# under — a radius change ends in a recenter, so detect it here (the
+	# first recenter rebuilds from the empty default).
+	if _stream_outside_sig != [rr, b1_eff()]:
+		_stream_outside.clear()
+		for _kso in chunks:
+			var _cso: Node3D = chunks[_kso]
+			if int(_cso.face) <= 1 and not in_stream_set(int(_cso.cx) - pcx, int(_cso.cz) - pcz):
+				_stream_outside[_kso] = true
+		_stream_outside_sig = [rr, b1_eff()]
+	var crx_entries: Array = []
+	var crx_visited: Dictionary = {}
+	var _crx_cell := func(cellx: int, celly: int) -> void:
+		var ck := _key(cellx, celly)
+		if crx_visited.has(ck):
+			return
+		var cc: Node3D = chunks.get(ck)
+		if cc == null:
+			return
+		crx_visited[ck] = true
+		crx_entries.append([ck, cc, int(cc.cx) - pcx, int(cc.cz) - pcz, int(cc.cx) - opcx, int(cc.cz) - opcz])
+	var _crx_ring := func(t: int, ox: int, oz: int) -> void:
+		# the 4t cells with |x| + |y| == t, around (ox, oz)
+		for x in range(-t, t + 1):
+			var y := t - absi(x)
+			var xx := ox + x
+			if y == 0:
+				_crx_cell.call(xx, oz)
+			elif x == 0:
+				_crx_cell.call(xx, oz + y)
+				_crx_cell.call(xx, oz - y)
+			else:
+				_crx_cell.call(xx, oz + y)
+				_crx_cell.call(xx, oz - y)
+	var _crx_fill := func(t: int, ox: int, oz: int) -> void:
+		# the fill |x| + |y| <= t, around (ox, oz)
+		for x in range(-t, t + 1):
+			var m := t - absi(x)
+			for y in range(-m, m + 1):
+				_crx_cell.call(ox + x, oz + y)
+	# (A) the real-band window (K ≤ R_outer keeps the K-edge band tight; past
+	# it the band0_r fills are exact — (ii) lives in the new fill, the
+	# (iii)/(iv) edge cases in the old fill, for any K).
+	var rA := band0_r + (K if K <= R_outer else 0)
+	_crx_fill.call(rA, pcx, pcz)
+	_crx_fill.call(rA, opcx, opcz)
+	# (B) the stream-set boundary band (or the two set fills for a jump).
+	if K <= R_outer:
+		for t in range(maxi(0, R_outer - K), R_outer + K + 1):
+			_crx_ring.call(t, pcx, pcz)
+			_crx_ring.call(t, opcx, opcz)
+	else:
+		_crx_fill.call(R_outer, pcx, pcz)
+		_crx_fill.call(R_outer, opcx, opcz)
+	# (C) the outside-resident set (a stale member = a column the drain freed
+	# between recenters — self-heal).
+	for _cko in _stream_outside.keys():
+		if crx_visited.has(_cko):
+			continue
+		var _cco: Node3D = chunks.get(_cko)
+		if _cco == null:
+			_stream_outside.erase(_cko)
+			continue
+		crx_visited[_cko] = true
+		crx_entries.append([_cko, _cco, int(_cco.cx) - pcx, int(_cco.cz) - pcz, int(_cco.cx) - opcx, int(_cco.cz) - opcz])
+	for ent in crx_entries:
+		var key: String = ent[0]
+		var c: Node3D = ent[1]
+		var dx := int(ent[2])
+		var dz := int(ent[3])
+		var odx := int(ent[4])
+		var odz := int(ent[5])
 		# AC-0143 face 2-11 chunks live in the 1024-cell sphere grid — the
 		# home streaming set has no claim on them. (The old Chebyshev walk
 		# swept them by accident; AC-0152 scopes it to home chunks.)
 		if int(c.face) > 1:
 			continue
 		cx_scanned += 1  # AC-0348 census: home-face columns visited by the sweep
-		var dx := int(c.cx) - pcx
-		var dz := int(c.cz) - pcz
-		var odx := int(c.cx) - opcx
-		var odz := int(c.cz) - opcz
 		if in_stream_set(dx, dz):
 			# AC-0278: re-entry is a distance fact (out of set w.r.t. the
 			# previous center, in now) - no flag to clear.
 			if not in_stream_set(odx, odz):
 				c.cand_since = 0
+				_stream_outside.erase(key)  # AC-0350: the entrant leaves the outside set (bookkeeping only)
 				_stage_check(c, key)
 			# AC-0278 (the stuck-mesh fix, AC-0283 P3): the single-source
 			# re-queue - a REAL-band chunk that holds data, has no high mesh,
@@ -9692,6 +9826,7 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 			# pending sets, strip the build entry) runs exactly once per
 			# exit, same as the old flag transition.
 			if in_stream_set(odx, odz):
+				_stream_outside[key] = true  # AC-0350: the leaver enters the outside set (bookkeeping only)
 				if _enter_candidate(key, c):
 					cand_builds.append(key)
 			# Free once TWO rings clear the set after 2 recenter events;
@@ -9707,6 +9842,61 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 				c.cand_since += 1
 				if c.cand_since >= 2:
 					to_free.append(key)
+	# AC-0346 backstop (AC-0350): the 1→1 hop class — a FULL-data column
+	# outside the real band at BOTH centers. Not within K of any band edge,
+	# so the bounded passes above never visit it; the old walk demoted it on
+	# every recenter. It can only arise from a full halo-band landing
+	# (flagged at the landing sites), a sim-band (band0_r) shrink, or boot —
+	# so clear it here with the SAME body the old walk's (iii) ran (identical
+	# semantics; the census counts identically).
+	var _do_full_sweep := _real_demote_full_sweep
+	if band0_r < _last_sweep_band0_r:
+		_do_full_sweep = true  # the sim band shrank since the last sweep — the legacy walk, once
+	_last_sweep_band0_r = band0_r
+	if not _real_demote_owed.is_empty() or _do_full_sweep:
+		for _fkey in _real_demote_owed.keys():
+			if crx_visited.has(_fkey):
+				_real_demote_owed.erase(_fkey)  # an entry pass ran its (iii) already
+				continue
+			var _fc: Node3D = chunks.get(_fkey)
+			if _fc == null:
+				_real_demote_owed.erase(_fkey)  # freed in the meantime
+				continue
+			cx_scanned += 1
+			var _fdx := int(_fc.cx) - pcx
+			var _fdz := int(_fc.cz) - pcz
+			# (iii) exact: in-set, full data, outside the real band (the
+			# out-of-set full columns the old walk freed full stay untouched).
+			if in_stream_set(_fdx, _fdz) and not _fc.data.is_empty() \
+					and not _fc.far and not _is_real_col(_fdx, _fdz):
+				if _is_real_col(int(_fc.cx) - opcx, int(_fc.cz) - opcz):
+					_star_halo_evict(_fc, _fkey)
+					cx_halo_evicts += 1
+				_demote_high_band_exit(_fc, _fkey)
+				cx_demoted += 1
+			_real_demote_owed.erase(_fkey)
+			crx_visited[_fkey] = true
+		if _do_full_sweep:
+			# the legacy walk: every unvisited resident home column gets the
+			# (iii) check (boot/load, a sim-band shrink). One time only.
+			for _gkey in chunks:
+				if crx_visited.has(_gkey):
+					continue
+				var _gc: Node3D = chunks[_gkey]
+				if int(_gc.face) > 1:
+					continue
+				cx_scanned += 1
+				var _gdx := int(_gc.cx) - pcx
+				var _gdz := int(_gc.cz) - pcz
+				if in_stream_set(_gdx, _gdz) and not _gc.data.is_empty() \
+						and not _gc.far and not _is_real_col(_gdx, _gdz):
+					if _is_real_col(int(_gc.cx) - opcx, int(_gc.cz) - opcz):
+						_star_halo_evict(_gc, _gkey)
+						cx_halo_evicts += 1
+					_demote_high_band_exit(_gc, _gkey)
+					cx_demoted += 1
+					crx_visited[_gkey] = true
+		_real_demote_full_sweep = false
 	var tf1 := Time.get_ticks_usec()
 	var crx_scan_us := tf1 - rt0  # AC-0348: the synchronous chunk-scan sub-part (walk + the band calls)
 	_strip_candidate_builds(cand_builds)
@@ -10433,6 +10623,16 @@ func _land_column(c: Node3D, res: Dictionary) -> void:
 		c.far_hmax = mh
 	else:
 		c.clear_far()
+		# AC-0346/AC-0350: a FULL disk column loaded in the halo band (a
+		# re-visit of a previously-saved full column) is the 1→1 hop class —
+		# OWE the next recenter's demote (the same body as the old walk's
+		# (iii)). Far disk columns (the h-only form) and real-band loads are
+		# the normal state; out-of-set loads are freed full by (vi), never
+		# demoted.
+		var _ldx := int(c.cx) - last_pcx
+		var _ldz := int(c.cz) - last_pcz
+		if not c.data.is_empty() and in_stream_set(_ldx, _ldz) and not _is_real_col(_ldx, _ldz):
+			_real_demote_owed[_key(int(c.cx), int(c.cz))] = true
 	var gk := PackedByteArray()
 	if gmask != 0xFFFFFF:
 		gk.resize(int(c.data.size()))
