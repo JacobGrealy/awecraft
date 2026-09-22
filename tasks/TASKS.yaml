@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-22T00:47
+  updated_at: 2026-09-22T05:47
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0350
 - AC-0347
 - AC-0342
 - AC-0344
@@ -16212,7 +16211,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-19T08:42
-  updated_at: 2026-09-21T22:24
+  updated_at: 2026-09-22T05:47
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -16277,7 +16276,17 @@ intake:
     \ is not from its change - it belongs on this ticket's list with the rest. Same guidance as the others:\
     \ decide what the field is FOR (if \"the removed block's own light cell changed\" is the invariant,\
     \ assert that; if 1 was just a measured value from an older world, document it as report-only rather\
-    \ than as a contract)."
+    \ than as a contract).\n\nTWO MORE ENTRIES FOR THIS LIST, both established by the coordinator on 2026-09-22:\
+    \ (1) the `webfall` battery mode's `ok` is FALSE and has been for as long as there are logs - byte-identical\
+    \ back through the AC-0289, AC-0331, AC-0336, AC-0345 and AC-0346 stages - so it is a standing red\
+    \ that no gate this era has questioned (its FIELDS are stable, which is why the battery profile diff\
+    \ never flagged it); find out whether its `ok` is stale, un-gated or genuinely failing, and either\
+    \ fix it or stop reporting it as a gate. (2) A PROCESSUAL LESSON WORTH KEEPING: a battery mode that\
+    \ returns rc=124 with NO RESULT may simply have been starved by a concurrent builder's godot runs\
+    \ on this memory-pressured box (that is exactly what happened to `webfall`, and a solo re-run was\
+    \ clean) - so when a heavy stage overlaps a builder, treat a no-result timeout as SUSPECT and re-run\
+    \ it solo before believing it, the same way a `handle_crash` banner is treated as the known crash\
+    \ class."
   comments: []
 - id: AC-0331
   title: far-tier-mesh-floor-kernel
@@ -18132,10 +18141,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-09-21T03:11
-  updated_at: 2026-09-21T03:11
+  updated_at: 2026-09-22T03:47
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -18239,7 +18248,20 @@ intake:
     \ Correct every occurrence, and rewrite the cave/density description to the new structure.\n  - FALLBACK:\
     \ if the plan review concludes the structural path is wrong for us, fall back to AC-0341's superseded\
     \ multiplicative-gate design (it is a smaller, calibration-preserving change) and say so explicitly\
-    \ in plan.html and the results page.\n"
+    \ in plan.html and the results page.\n\n\nTAKEN BY THE COORDINATOR SESSION (2026-09-22) AND BEING\
+    \ WORKED IN ITS OWN DECLARED PIECES. The ticket says explicitly: \"PIECES - work one at a time, each\
+    \ delegated to a single blocking builder, gated and committed before the next\", naming P1 (the vanilla\
+    \ sampler + the cheese field switched to vanilla's cave_cheese parameters), P2 (the structure: the\
+    \ depth switch, the shallow suppressor, the deep branch, A(y)/DEEP_GROW deleted, entrances) and P3\
+    \ (surface-opening and asymmetry recalibration). THIS RUN IS P1 ONLY - P2 and P3 are separate builder\
+    \ runs on the same ticket, so do not reach into them even if you can see the whole design; the coordinator\
+    \ commits and closes between pieces. NEIGHBOUR STATE: AC-0288 (the cave P0 tune) and AC-0289 (the\
+    \ spaghetti/noodle tunnels, P1 of the OLD cave series) are both CLOSED and in the tree, so `tunnel_air`\
+    \ exists and is evaluated outside `dens_at` (which P2 relies on to keep the tunnels piercing the new\
+    \ caps); AC-0346 made the tier/skip contract total; and AC-0288's C-budget invariant (1.8 * max|C-0.5|\
+    \ = 0.948 < 1) is built around the OLD cheese field's measured max|C-0.5| = 0.5268, so P1 replacing\
+    \ the field WILL invalidate it - say so explicitly in your results and hand the new distribution's\
+    \ numbers to P2 rather than leaving the invariant silently stale."
   comments: []
 - id: AC-0348
   title: r24-crossing-frame-time-measurement
@@ -18544,11 +18566,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-22T00:24
-  updated_at: 2026-09-22T00:24
-  completed_at: null
+  updated_at: 2026-09-22T05:47
+  completed_at: 2026-09-22T05:47
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Every time the player walks across a chunk boundary the game walks its ENTIRE
@@ -18601,5 +18623,44 @@ intake:
     attributed them only by EXCLUSION. If the numbers are cheap to get while you are in there, take them;
     if it needs its own instrument, file it and say so.
 
-    '
+
+
+    TAKEN BY THE COORDINATOR SESSION (2026-09-22), the day after it was filed as AC-0348''s follow-up.
+    ITS DEPENDENCY IS DONE AND CLOSED: AC-0348 measured the crossing at R24 (resident_final 1453) and
+    left you the instrument - the crossing ring in the `boundary` arm (`crossing_n`, `crossing_burst_ms`/`_max_ms`,
+    `crossing_frame_ms`, `crossing_other_n`, and the per-crossing `crossing_census`), plus the new standing
+    row "boundary r24 crossing frame latency" with thresholds crossing_frame_p95_ms <= 75 and crossing_burst_max_ms
+    <= 15. THE COORDINATOR''S OWN VERIFICATION RUN REPRODUCED THOSE NUMBERS: sweep p50 6.7 / p95 8.5 /
+    max 8.7 ms, crossing frame p50 12 / p95 68 / max 78, and the census demoted 97 = promoted 97 = halo_evicts
+    97 = reentry_flips 97 = gen_far 97 with scanned 14528 - so use those as YOUR before, and note that
+    the census being IDENTICAL before and after is the proof this ticket needs (same work, less scanning).
+    A PLEASANT SURPRISE THAT WIDENS YOUR FREEDOM: the R24 run was estimated at ~20 min wall by AC-0348
+    and the coordinator''s run took 54 s (AC-0331''s floor, AC-0338''s batching and AC-0345''s convergence
+    fix made R24 far cheaper to build), so you can afford to run it more than once - take a real before/after
+    pair rather than reasoning from one sample. NEIGHBOURS: AC-0346 made the tier/skip contract total
+    (a rim column can no longer hold full data at band A), which means the band boundaries you bound your
+    scan against are trustworthy now - that ticket is why this one is safe to do at all. CONTENTION: the
+    coordinator may start the next queue ticket''s heavy stage while you work; check `pgrep -af ''[g]odot''`
+    before EVERY call and wait rather than proceeding, and never kill a godot you did not start.
+
+
+    CLOSED 2026-09-22 (code commit 891b59e). COORDINATOR VERIFICATION, and the ticket''s proof reproduces
+    exactly: on a CLEAN pre-P1 tree (verified - the stage ended 04:17:05 and AC-0347 P1''s first file
+    change was 04:19:19, and the stage''s genhash matches the pre-P1 reference), the R24 crossing run
+    reads sweep p50 5.5 / p95 7.4 / max 8.4 ms against the before''s 6.7 / 8.5 / 8.7, the crossing frame
+    p50 9 / p95 51 / max 57 (inside the <= 75 gate), and - the ticket''s actual proof - the per-crossing
+    CENSUS IS BYTE-IDENTICAL at demoted = promoted = halo_evicts = reentry_flips = gen_far = 97/97/97/97/97
+    while `scanned` falls 14528 -> 3904 (a 73% reduction), with resident_final 1453 in both runs and crossing_other_n
+    0. Identical work, less scanning, on every one of the ten crossings. The rest of the set: boundary
+    r4 ok (p50 13 / p95 38, staged_dropped 1722, resident 93), r16 all sub-flags with far_holes 0 in both
+    bands and static p50 5 ms, genhash 25/25 byte-identical x2 (a scan bound is not generation), farab
+    1080/1080 with h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, brightslab ok, save green. TWO
+    ANOMALIES CHASED RATHER THAN WAVED THROUGH: (1) the battery''s `webfall` mode hit its timeout with
+    NO RESULT while AC-0347 P1''s builder was running godot concurrently - a solo re-run returns rc=0
+    immediately, so it was contention on a memory-pressured box with two godot processes, not a regression;
+    (2) its `ok:false` (present in that re-run) is LONG-STANDING - byte-identical back through the AC-0289,
+    AC-0331, AC-0336, AC-0345 and AC-0346 stages - so it is another AC-0330-class arm expectation, now
+    logged there. The builder''s honest note stands: the R24 gain is only ~1.2 ms because the ring is
+    about as large as the resident set at that radius - the structural win is O(R) instead of O(R^2),
+    which is what matters at R50 (5101 columns).'
   comments: []
