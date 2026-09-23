@@ -246,7 +246,12 @@ Match these; do not improvise a different approach in a task.
 - **Lighting**: baked into each face's **vertex colour** (albedo × light) — no realtime GI.
   Sky+block light come from the C++ `AweStarlight` single-queue engine inside the sim band;
   beyond it a heightmap-sky halo (sky 15 strictly above the terrain top, 0 at/below, no
-  flood, no nibbles) keeps the far field cheap. A far (h-only) column is **never seeded
+  flood, no nibbles) keeps the far field cheap. World writes fire `star.on_edit` (a per-write
+  two-phase re-seed of the 3×3 columns × sections 0..hi box); the 20 Hz fluid tick instead
+  BATCHES its whole pass — `begin/end_edit_batch` runs the same two-phase ONCE per tick over
+  the union of the touched sections (AC-0356 — a sustained fluid flow fired ~550 on_edit/s
+  into an unbounded queue the 3 ms/frame drain could never catch; batched, the queue holds at
+  a few K entries with settled light unchanged). A far (h-only) column is **never seeded
   into the engine as all air** (a stale all-air seam mis-carries sky across the promotion
   re-seed); a far→full promotion re-seeds the WHOLE column top-down. One `DirectionalLight3D`
   sun is modulated by `Game.time_of_day`; the mesh stores noon light and the shader uniform

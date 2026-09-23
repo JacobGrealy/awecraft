@@ -11808,6 +11808,20 @@ func tick_fluids() -> void:
 	fluid_tick_count += 1  # AC-0158: fluid pass now runs inside the 20 Hz game tick
 	if chunks.is_empty():
 		return
+	# AC-0356: batch this tick's light-side edit events. The fluid pass (and
+	# the water/lava reactions inside it) is a sustained burst of set_fluid /
+	# set_block calls — each used to fire its own star.on_edit (a 3x3 x 0..hi
+	# re-flood PER CELL), which the 3 ms star drain could never absorb: the
+	# R24 boundary arm's OOM was that per-cell queue growth. The batched
+	# two-phase runs once over the union of the touched sections — same
+	# settled light, one epoch bump per section per tick.
+	if star != null:
+		star.begin_edit_batch()
+	_tick_fluids_body()
+	if star != null:
+		star.end_edit_batch()
+
+func _tick_fluids_body() -> void:
 	var cl: Array[Vector2i] = []
 	if Game.player != null:
 		# AC-0152: the tick region is the band-0 taxicab diamond (Bedrock

@@ -197,6 +197,8 @@ public:
 		ClassDB::bind_method(D_METHOD("section_block", "cx", "cz", "si"), &AweStarlight::section_block);
 		ClassDB::bind_method(D_METHOD("section_settled", "cx", "cz", "si"), &AweStarlight::section_settled);
 		ClassDB::bind_method(D_METHOD("pending_cells"), &AweStarlight::pending_cells);
+		ClassDB::bind_method(D_METHOD("begin_edit_batch"), &AweStarlight::begin_edit_batch);
+		ClassDB::bind_method(D_METHOD("end_edit_batch"), &AweStarlight::end_edit_batch);
 		ClassDB::bind_method(D_METHOD("stats"), &AweStarlight::stats);
 		ClassDB::bind_method(D_METHOD("compare_eff", "cx", "cz", "eff"), &AweStarlight::compare_eff);
 		ClassDB::bind_method(D_METHOD("compare_eff_all", "cx", "cz", "eff", "limit"), &AweStarlight::compare_eff_all);
@@ -411,6 +413,30 @@ public:
 		int hi = si + 1;
 		if (hi > NSL - 1)
 			hi = NSL - 1;
+		int ep = ((p_wy & 15) << 8) | ((p_wz & 15) << 4) | (p_wx & 15);
+		// the ids ALWAYS update (the batch flush re-scans from the final
+		// ids; the clear below only touches sky/blk, never ids).
+		s0->ids[ep] = (uint8_t)p_new_id;
+		if (batch_depth > 0) {
+			// AC-0356: deferred two-phase — accumulate this edit's affected
+			// sections into the batch union; the flush (end_edit_batch) runs
+			// the SAME two-phase once over the union. A sustained fluid pass
+			// (hundreds of set_fluid/tick, each re-flooding the same 3x3 x
+			// 0..hi boxes) becomes one epoch bump per touched section instead
+			// of one per cell — the queue growth that OOM'd the R24 boundary
+			// arm was this per-cell re-flood, not the light dynamics.
+			for (int dx = -1; dx <= 1; dx++) {
+				for (int dz = -1; dz <= 1; dz++) {
+					for (int ssi = 0; ssi <= hi; ssi++) {
+						uint64_t k = sec_key(cx + dx, cz + dz, ssi);
+						if (secs.find(k) != secs.end())
+							batch_keys.insert(k);
+					}
+				}
+			}
+			edits_n++;
+			return true;
+		}
 		// the affected set, restricted to the SEEDED sections: an unseeded
 		// face drops (the region-boundary semantics) and heals when that
 		// column lands — the landing section's settle re-injects into the
@@ -438,8 +464,6 @@ public:
 			S.blk.assign(NIB, 0);
 			S.epoch++;
 		}
-		int ep = ((p_wy & 15) << 8) | ((p_wz & 15) << 4) | (p_wx & 15);
-		s0->ids[ep] = (uint8_t)p_new_id;
 		// phase 1.5: boundary injection from the surviving outside light
 		for (uint64_t k : keys)
 			boundary_inject(secs[k]);
@@ -469,6 +493,58 @@ public:
 		mutate();
 		edits_n++;
 		return !failed;
+	}
+
+	// AC-0356: the edit batch. While open, on_edit applies its id change and
+	// accumulates its affected sections into batch_keys; end_edit_batch runs
+	// the EXACT two-phase (clear + epoch bump, boundary inject, top-down
+	// rescan + re-queue) ONCE over the union — the same semantics as the
+	// per-call path (an N=1 batch is byte-identical to one on_edit), with
+	// the epoch bumped per section once instead of once per cell.
+	void begin_edit_batch() {
+		if (batch_depth == 0)
+			batch_keys.clear();
+		batch_depth++;
+	}
+
+	int end_edit_batch() {
+		if (batch_depth == 0)
+			return 0;
+		batch_depth--;
+		if (batch_depth > 0)
+			return 0; // nested — only the outermost flushes
+		if (batch_keys.empty())
+			return 0;
+		std::vector<uint64_t> keys(batch_keys.begin(), batch_keys.end());
+		batch_keys.clear();
+		// phase 1: darkness — clear the union, expire its stale entries
+		for (uint64_t k : keys) {
+			Sec &S = secs[k];
+			S.sky.assign(NIB, 0);
+			S.blk.assign(NIB, 0);
+			S.epoch++;
+		}
+		// phase 1.5: boundary injection from the surviving outside light
+		for (uint64_t k : keys)
+			boundary_inject(secs[k]);
+		// phase 2: heal — top-down (the open carry flows down through the
+		// cleared sections), sky scan + glow re-seed + re-queue
+		std::sort(keys.begin(), keys.end(), [](uint64_t a, uint64_t b) {
+			return (int)(a & 31) > (int)(b & 31);
+		});
+		for (uint64_t k : keys) {
+			Sec &S = secs[k];
+			uint8_t open_in[256];
+			if (!open_in_of(S.cx, S.cz, S.si, PackedByteArray(), open_in))
+				continue;
+			scan_and_seed(S, open_in);
+			enqueue_seeds(S);
+			if (S.pending == 0)
+				settle_notify(S);
+		}
+		mutate();
+		edits_n += (int64_t)keys.size();
+		return (int)keys.size();
 	}
 
 	PackedByteArray section_sky(int p_cx, int p_cz, int p_si) {
@@ -1299,6 +1375,8 @@ private:
 	int64_t stale_pops = 0;
 	int64_t edits_n = 0;
 	int64_t light_ver_n = 0;
+	int batch_depth = 0;    // AC-0356: open edit batches
+	std::set<uint64_t> batch_keys;  // AC-0356: the batch union (SEEDED sections)
 };
 
 void register_classes() {
