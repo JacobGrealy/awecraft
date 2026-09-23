@@ -1,10 +1,15 @@
 meta:
-  updated_at: 2026-09-22T05:47
+  updated_at: 2026-09-23T00:35
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0347
+- AC-0352
+- AC-0353
+- AC-0354
+- AC-0355
+- AC-0351
 - AC-0342
 - AC-0344
 - AC-0290
@@ -18144,7 +18149,7 @@ intake:
   status: in-progress
   labels: []
   created_at: 2026-09-21T03:11
-  updated_at: 2026-09-22T03:47
+  updated_at: 2026-09-22T08:47
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -18261,7 +18266,21 @@ intake:
     \ caps); AC-0346 made the tier/skip contract total; and AC-0288's C-budget invariant (1.8 * max|C-0.5|\
     \ = 0.948 < 1) is built around the OLD cheese field's measured max|C-0.5| = 0.5268, so P1 replacing\
     \ the field WILL invalidate it - say so explicitly in your results and hand the new distribution's\
-    \ numbers to P2 rather than leaving the invariant silently stale."
+    \ numbers to P2 rather than leaving the invariant silently stale.\n\nP1 COORDINATOR VERIFICATION (2026-09-22,\
+    \ on a verified-clean pre-P2 tree - the stage ended 06:12:52 and P2's first file change was 06:53:37,\
+    \ and the stage's genhash equals P1's own new reference 83f84662... exactly): genhash 25/25 byte-identical\
+    \ in two runs and equal to the reference; farab 1080/1080 with h_mismatch 0; ladder band_a_ok 20/20;\
+    \ meshprobe 1.0; halo (c) mismatches 0; save green; flysave green with tail_delta 0; r16 with the\
+    \ documented --fixed-fps 600 recipe ALL sub-flags green with far_holes 0 in both bands; boundary r4\
+    \ ok with p50 10 / p95 44 and staged_dropped 1613 inside its <=2500 threshold (the p95 sits just above\
+    \ the usual 35-42 band, which the new terrain plausibly explains - recorded, and P3's recalibration\
+    \ is the right place to look at it); and the R24 crossing ring still reads sweep p50 5.3 / p95 7.7\
+    \ / max 8.0 ms with scanned 3904 - i.e. AC-0350's band-bounded win SURVIVES the field change. ONE\
+    \ NEW RED, FILED AS AC-0351: `brightslab` (now in the standing set) prints `SCRIPT ERROR: Invalid\
+    \ access of index '10' ... at _brightslab_slab_cmp (harness.gd:10249)` on this tree and on P2's, because\
+    \ the full-window re-bake's `slabs` array can be shorter than the slab under test once the terrain\
+    \ puts AIR in a top slab - an arm assumption the new field breaks; its gated result still reads ok:true,\
+    \ which is exactly why a silently-skipped comparison needed its own ticket rather than a note."
   comments: []
 - id: AC-0348
   title: r24-crossing-frame-time-measurement
@@ -18663,4 +18682,491 @@ intake:
     logged there. The builder''s honest note stands: the R24 gain is only ~1.2 ms because the ring is
     about as large as the resident set at that radius - the structural win is O(R) instead of O(R^2),
     which is what matters at R50 (5101 columns).'
+  comments: []
+- id: AC-0351
+  title: brightslab-arm-index-guard
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-22T08:46
+  updated_at: 2026-09-22T08:46
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The `brightslab` arm - the one that guards the bright-slab-on-edit regression
+    - prints a SCRIPT ERROR and aborts part of its own comparison whenever the terrain under its fixture
+    puts AIR in the top slab of the column. It still reports ok:true, so the number looks fine, but the
+    arm is no longer checking what it claims to check, and any run of it breaks the project''s zero-SCRIPT-ERROR
+    rule.
+
+
+    2) Technical Details:
+
+    FOUND BY THE COORDINATOR (2026-09-22) while verifying AC-0347 P1 on a clean pre-P2 tree, and REPRODUCED
+    on the P2 tree (so it is not one field''s quirk). The error, verbatim: `SCRIPT ERROR: Invalid access
+    of index ''10'' on a base object of type: ''Array''` at `Harness._brightslab_slab_cmp (res://scenes/harness.gd:10249)`,
+    in this line: `ra2_acc = ra2["slabs"][si][0]` - i.e. the FULL-window re-bake''s `slabs` array is SHORTER
+    than `si + 1`, so indexing it with the slab under test goes out of range. The same pattern is one
+    line below on the fallback path (`rb2["slabs"][si][0]`), so it is latent there too.
+
+    WHY IT STARTED NOW: AC-0349 hardened this function (the `far_payload` argument) and it ran clean for
+    three stages after; AC-0347 P1 replaced the cheese field, so the cave carve changed and the fixture''s
+    columns can now have AIR in a top slab - which is exactly the case where the payload''s slab range
+    no longer reaches `si`. In other words the arm assumed "the payload always covers the slab under test",
+    an assumption the NEW terrain breaks, and it should hold for any terrain.
+
+    THE FIX IS A BOUNDS GUARD, NOT A RE-BASELINE: check the index before dereferencing (skip the A2/B2
+    comparison when the payload does not reach `si`, exactly as the arm already "accepts either decomposition"
+    for the merged-vs-per-face emit), and make the skip VISIBLE in the result (a counter or a field) so
+    a silently-skipped comparison can never masquerade as a passed one - the arm''s whole value is that
+    it asserts three ways, and a comparison that quietly does not run is worse than a red. Then verify:
+    `brightslab` `ok:true` with ZERO SCRIPT ERROR lines on the current tree (that is the G0 rule this
+    breaks), the comparison coverage back to what it was on the AC-0349 tree (say how many slabs the guard
+    skips and why), and the standing set unchanged for whatever you touch.
+
+    CONTEXT: `brightslab` is now IN the coordinator''s standing heavy-gate set (added when AC-0349 closed),
+    so this arm runs on every heavy stage from here on - an arm that errors costs the gate its G0 reading,
+    which is why this is a ticket and not a note.
+
+    '
+  comments: []
+- id: AC-0352
+  title: r24-streaming-storm-tail-attribution
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-22T10:39
+  updated_at: 2026-09-22T10:56
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+
+    Right after the world loads - and whenever the streaming is still catching up - walking around still
+    produces huge frame drops. The world is only a small fraction built when the loading screen lifts,
+    so the first minutes of play are spent walking through a world that is still being built around me,
+    and that is when the long frames land. I want the worst frames attributed to a stage so the next ticket
+    can be aimed at something real instead of guessed at.
+
+
+    2) Technical Details
+
+
+    THE EVIDENCE THIS TICKET EXISTS FOR (AC-0348, R24 instrumented walk, AWECRAFT_RADIUS=24 AWECRAFT_WALK=10
+    AWECRAFT_TICKTIME=1, seed 44):
+
+    - Run-wide walk frames: **p50 2 ms / p95 57 ms / max 719 ms**. A 2 ms median says the machine is overwhelmingly
+    IDLE between the bad frames - this is a bursty tail, not a load problem.
+
+    - The same run''s R24 baseline read max 719 ms; the R4 boundary one-shot reads max ~520-780 ms. The
+    class is not radius-specific: R4 (93 cols) and R24 (1453 cols) both produce it.
+
+    - AC-0348 attributed the crossing (the synchronous recenter sweep) and RULED IT OUT: the sweep is
+    5.3-9.1 ms and the worst crossing ran inside a 58 ms frame, leaving ~49 ms of that frame unexplained
+    but NOT the crossing. AC-0350 then band-bounded the sweep (p50 5.4 / max 8.5 ms, census byte-identical).
+    So the crossing is closed as a suspect by both tickets.
+
+    - What is left, stated in AC-0348''s own words: "the rest is concurrent streaming-storm work (drain
+    / handoff / mesh-attach - inside the wprof 5-stage partition)" and "the run''s 549-719 ms max frames
+    are NON-crossing streaming-storm frames ... attributed by exclusion + the ring". ATTRIBUTED BY EXCLUSION
+    IS THE GAP: those frames are known not to be crossings, and are not positively attributed to a stage.
+
+
+    THE WORLD STATE AT THE END OF THAT WALK (from the same run - the reason the storm lasts):
+
+    - `in_radius_built_final` **170 of `target_in_radius` 2401 (7%)**, `resident_final` 1453, `queue_size`
+    1256, still streaming.
+
+    - The load gate only waits for the SIM TAXI DIAMOND (41 columns at sim 4, `simband_ms` ~2.1 s at R24),
+    so the player activates and starts walking while the resident set and the far field are still being
+    built. This is the documented design (AC-0313 clause 4) and is not itself the bug - the bug is that
+    the filling produces 57-719 ms frames.
+
+
+    STEP 0 - ATTRIBUTE THE BAD FRAMES POSITIVELY (measurement only):
+
+    - The wprof partition already exists (`World._process`, the 5 top stages DRAIN / LOW / HANDOFF / IO
+    / RECENTER + MISC, plus sub-stages incl. the AC-0337 COLLIDE). Run the R24 walk and read the stage
+    table.
+
+    - The existing ring summarizes (p50/p95/max per stage over 180 frames) - that is NOT enough here.
+    A 719 ms frame inside a 180-frame window shows only as one max value. Add **per-frame worst-frame
+    capture**: for every frame over a threshold (e.g. 30 ms), record the frame total and its stage split,
+    into a bounded ring, and report the worst N with their splits. The point is to name the stage of the
+    719 ms frames, not the average.
+
+    - Record the frame''s streaming state with it (queue depth, tm/tg in-flight, low tasks, resident/in-radius
+    built), so a stage that is slow because the queue is deep is distinguishable from one that is slow
+    on its own.
+
+
+    STEP 1 - CHECK THE ATTRIBUTION''S OWN BLIND SPOT (do this before concluding):
+
+    - The wprof partition covers `World._process` ONLY. Costs that do not run inside it land in MISC or
+    nowhere: Godot''s physics step and the physics server (the collision bodies), the scene-tree/node
+    work, and the render server. AC-0345''s census found **17,706 resident MeshInstance3Ds / 16,711 far
+    at R50** and band C at **3.62 MI/col**; a `far_holes`-style census at R24 (where the walk is measured)
+    is NOT recorded - measure the R24 instance census and the draw-call/objects counters (the AC-0338
+    step-0 method).
+
+    - Ground the expectation with a rough budget on the same run: `collision_slabs` 1218 with `collision_slab_ms`
+    2369.7 (a ~2 ms/slab average at R24, max 23.3) - so the collision accounting alone is capable of multi-hundred-ms
+    totals spread across frames. Check whether the worst frames correlate with collision batches, handoff
+    bursts, or neither.
+
+    - If a large part of a worst frame is not attributable to any stage, SAY SO in the results - that
+    is a finding about the instrument, not a failure of the ticket.
+
+
+    STEP 2 - MAKE THE TAIL A GATE:
+
+    - Add a standing value for the R24 walk''s worst-frame class (max_ms / a p99-style figure) with a
+    threshold, via tasks/harness_data.yaml + `python3 tasks/scripts/harness_doc.py --render`, so this
+    cannot regress unnoticed. Note `max_ms` is a single-sample reading and noisy by nature (the standing
+    band is broad today) - prefer a percentile over the worst-N capture if one is stable enough.
+
+    - Same run shape as the AC-0348 row (coordinator-only long run, ~20 min wall at R24) or extend that
+    row; do not create a second R24 arm if the existing one can carry the fields.
+
+
+    WHAT THIS TICKET DOES NOT DO: no optimisation, no threading, no changing the load gate or the pacing
+    constants. Its output is the attribution plus the standing value. Note explicitly that moving `recenter()`
+    to a worker thread was already ruled out on evidence twice (AC-0348 F2: a 9 ms call; and the mutating
+    calls are main-thread-only) - do not reopen it here.
+
+
+    NAMING: "storm" in this ticket means the STREAMING storm (the drain/handoff/attach backlog after load),
+    not weather. AC-0348 uses the term in this sense throughout.
+
+
+    RELATED: AC-0348 (the crossing ring + the standing row - this ticket is its second recommendation),
+    AC-0350 (the band-bounded sweep - closed, do not re-open), AC-0337/AC-0340 (the collision census +
+    budget whose fields this ticket reuses).
+
+
+
+    ADDITION (coordinator, 2026-09-22, after the queue was reordered so this ticket runs ahead of the
+    seam series):
+
+
+    RE-MESH CORRELATION - one extra recorded field, NOT a scope change. The seam defects (AC-0353/AC-0354/AC-0355:
+    missing faces at chunk boundaries, fixed in the tickets queued behind this one) are the only known
+    mechanism by which the storm could be partly self-inflicted: a mesh built against a stale or mismatched
+    neighbour snapshot is wrong, gets re-meshed by the dirty queue, and that re-mesh is drain/handoff/attach
+    work - the exact stages this ticket is attributing. Treat it as a LEAD TO RECORD, not a hypothesis
+    to chase.
+
+
+    Concretely, when the per-frame worst-frame capture records a frame above the threshold, also record
+    whether an edit/remesh dispatch landed on that frame or within a small window around it (the counters
+    already exist: `_tm_dataprobe`-class edit handoffs, `perf_edit_dispatches` / `perf_edit_defers` /
+    `perf_edit_syncs`, the `dirty_queue` depth, and the wprof sub-stages HANDOFF / MESHATTACH / COLLIDE).
+    One extra field on the worst-N entries, nothing more.
+
+
+    WHAT THE RESULT MEANS, both ways - state it in the results and do not over-read it:
+
+    - worst frames with NO edit/remesh activity in the window -> the tail is ordinary streaming (drain/handoff/attach
+    volume from the post-load fill). The seam series is unrelated and this ticket''s attribution stands
+    as the answer for the drops.
+
+    - worst frames WITH edit/remesh activity in the window -> record it as a correlation with the counts,
+    NOT as proof of causation. A correlation would make the seam census (AC-0353, next in the queue) the
+    right next probe, and would mean the drops and the holes share a cause; it would not by itself justify
+    any change here.
+
+
+    DO NOT: widen this ticket into the seam investigation, run the seam census work, or change the mesher/handoff/snapshot
+    paths. This ticket stays measurement-only and its deliverable is unchanged (the attribution plus the
+    standing value); the correlation field is recorded evidence for whoever reads AC-0353''s output next.'
+  comments: []
+- id: AC-0353
+  title: cross-chunk-seam-face-census
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-22T10:53
+  updated_at: 2026-09-22T10:53
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story\n\nThere are holes in the world where a terrain face should be drawn but is not,\
+    \ and a seam between two chunks is where they show up. I want the count and the locations of those\
+    \ holes, split by cause, before anything is changed to fix them - the existing arms all read green\
+    \ while the holes are visible, so the first job is an instrument that can see the thing I am looking\
+    \ at.\n\n2) Technical Details\n\nWHY THE EXISTING GATES ARE GREEN WITH HOLES PRESENT (the coverage\
+    \ gap this ticket closes):\n- `occlude` counts `leaking_faces` but only WITHIN a chunk (a face whose\
+    \ 6 neighbours in the same column are solid). It does not look across a seam at all.\n- `farab` proves\
+    \ the far payload's `h_mismatch 0` and the water surface - the HEIGHT FIELD, not occupancy.\n- `ladder`\
+    \ / `meshprobe` / `lightstate` / `halo` all check identity of emitted geometry against a reference\
+    \ built the same way, so a systematically wrong face decision passes every one of them.\nSo nothing\
+    \ currently asserts that two adjacent columns AGREE about the shared plane. That is the gap.\n\nWHAT\
+    \ THE ARM MUST ASSERT (per seam, per row):\n- For each pair of built neighbour columns, the faces\
+    \ EMITTED on the shared plane must equal the complement of the neighbour's CURRENT solid set at that\
+    \ row: a cell solid in the neighbour and solid in this column emits nothing; a cell where either side\
+    \ is non-solid emits exactly one face from the side that owns it.\n- Distinguish the two failure directions\
+    \ explicitly, because they have different causes and different fixes:\n  - MISSING face (both sides\
+    \ culled -> see-through; the user-visible hole),\n  - SPURIOUS face (both sides emitted -> double\
+    \ draw; the far-band class `far_holes` already counts).\n- Report per seam: the two column keys, the\
+    \ plane (dx/dz), the row range, the mismatch counts by direction, and - the important one - the REPRESENTATION\
+    \ CLASS of each side: full (skip 0) / band-A materialized (skip 1) / far h-only (skip 2), read from\
+    \ the chunk's `far` / `no_caves` state. A mismatch concentrated at full-vs-skip(A) seams is a different\
+    \ finding from one spread evenly.\n\nHOW TO GET THE EMITTED FACES (the part that makes this possible):\n\
+    - Read the LIVE landed meshes, not a re-emit: for each built slab, `mesh.surface_get_arrays(0)` on\
+    \ the slab's `MeshInstance3D`, and derive each triangle's owning cell + face direction by mapping\
+    \ the vertex positions back to local coordinates and reading the winding (the same surface layout\
+    \ `chunk.gd _assemble_slab` produced). Verify the mapping against a small known case before trusting\
+    \ the census - a wrong reverse map would invent holes.\n- The interior-face cull means only a SHELL\
+    \ is emitted, so a face exists in the mesh only where the emitter decided to draw one; that is exactly\
+    \ the signal needed.\n\nREPORTED FIELDS (arm-shaped, so it can be gated): `seams_checked`, `seams_bad`,\
+    \ `missing_faces`, `spurious_faces`, a `by_class` breakdown (full|A|B/C pairs), and a bounded `worst`\
+    \ list of the individual mismatches (key pair, plane, row, cell, direction, classes) of the kind the\
+    \ AC-0348 `crossing_worst` entry does.\n\nSCOPE / FENCES:\n- MEASUREMENT ONLY - no mesher, no fill,\
+    \ no snap-ring change. The fix tickets follow from the numbers.\n- Do not touch the cave fields, the\
+    \ y-floor, or the collision path.\n- A new arm means TWO files: the branch in `godot/scenes/harness.gd`\
+    \ AND a row in `tasks/harness_data.yaml` (entry / tests / result_fields / envs / wall / notes), then\
+    \ `python3 tasks/scripts/harness_doc.py --render`. An arm with no row is silent drift.\n- G0 is zero\
+    \ `SCRIPT ERROR` lines, not rc=0.\n\nEXPECTED USE: this arm is the acceptance gate for BOTH of its\
+    \ sibling tickets (the neighbour-snapshot validation and the representation-mismatch fix), so its\
+    \ field set should be stable enough to re-run and compare. Run it at r4 (cheap, ~60-90 s class like\
+    \ `occlude`) and at R24 where the user sees the holes; the band layout differs enough between the\
+    \ two that the by_class breakdown should be read at both.\n"
+  comments: []
+- id: AC-0354
+  title: validate-neighbour-snapshot-at-handoff
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-22T10:53
+  updated_at: 2026-09-22T10:53
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story\n\nWhen I break a block, I can sometimes see through the neighbouring chunk until\
+    \ its mesh is rebuilt with the face added - a visible gap that closes a moment later. I want that\
+    \ gap to stop happening rather than to close faster.\n\n2) Technical Details\n\nTHE MECHANISM (read\
+    \ from the tree; the entry simply does not record what it needs to check):\n- A mesh build's cross-chunk\
+    \ face decisions come from the dispatch-time neighbour snapshot. Three sites build it identically:\n\
+    \  `world.gd:6698` (scoped edit), `:6812` (full edit dispatch), `:7098` (the high/slab dispatch):\n\
+    \  `nbs[\"%d,%d\" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep, nc.far_payload())`\n\
+    - The entry records the OWN column's stamps only:\n  `\"stamp\": c.stamp()` with `chunk.gd stamp()\
+    \ -> [data_gen, fl_gen]` (see the entry literals at `world.gd:6726` scoped and the full/slab sites).\n\
+    - At handoff the stale check compares the own column only:\n  - scoped (`world.gd:6123-6135`): `rows_eq`\
+    \ over the SAME bounded row window `d_off..d_hi` the dispatch extracted - the window is `d_lo = y_lo\
+    \ - 2` / `d_hi = y_hi + 1` around the edited slabs (`:6677`), so anything outside it is invisible\
+    \ by construction;\n  - full: `data_gen` / `fl_gen` again, plus the band check and the star `lver`\
+    \ box check.\n  NEITHER compares `e[\"nbs\"]` or any neighbour state.\n\nCONSEQUENCE: if a neighbour's\
+    \ data changes between dispatch and landing, the snapshot the worker meshed against is stale, the\
+    \ check passes, and a mesh built on a wrong face decision LANDS. At a boundary that is exactly the\
+    \ reported gap: the edited column is dirtied at the BACK of the queue and the neighbour is pushed\
+    \ to the FRONT (`_dirty_front`, `world.gd:6553`, whose own comment names \"the see-through hole\"\
+    ), but the re-dispatch still carries a snapshot of the edited column taken before the edit, and nothing\
+    \ can notice.\n\nTHE FIX (follows the existing grain):\n- Stamp the neighbour set at dispatch: beside\
+    \ each `snap_rings` call record every `nc.stamp()` (the 4 axis neighbours the ring actually covers;\
+    \ the diagonal entries in `nbs` are unused for face decisions), into the entry, e.g. `\"nbs_stamps\"\
+    : {\"dx,dz\": nc.stamp(), ...}`.\n- At handoff compare those captured stamps against the LIVE neighbours'\
+    \ stamps; on any mismatch treat it exactly like the existing own-column mismatch: `_tm_datadrop` +\
+    \ `_tm_retrigger(key, c, e)`.\n- This reuses the AC-0247 col-gen / stamp epoch pattern already established\
+    \ for the own column, one level out.\n\nKNOWN CONSERVATIVE COST (state it in the notes and the results):\
+    \ `data_gen`/`fl_gen` bump on ANY data landing for that column, not only on a change that matters\
+    \ to the seam, so this will retrigger a build after any neighbour regen/edit - including ones with\
+    \ identical boundary rings. If that proves too coarse, the refinement is a cheap boundary-ring hash\
+    \ (a 256-byte compare of the ring the dispatch already built) rather than the stamp - but start with\
+    \ the stamp and MEASURE the retrigger rate before optimizing it. The counters to watch already exist\
+    \ (`_tm_datadrop`, `_tm_retrigger`).\n\nGATES:\n- The seam census arm from the sibling ticket must\
+    \ go from its pre-fix reading to missing_faces 0 (or to whatever residual the representation-mismatch\
+    \ ticket owns - the two findings must be separated in the results, not blended).\n- A direct reproducer\
+    \ where possible: a boundary break with a neighbour build in flight, asserting the seam has no hole\
+    \ once settled.\n- Standing sets held: genhash 25/25 byte-identical (generation untouched), farab\
+    \ 1080/1080, ladder band_a_ok, meshprobe 1.0, halo, r16 all sub-flags, boundary r4 (p50/p95 within\
+    \ band), battery.\n- `editperf` - the edit path is what this changes, so its repaint/flush numbers\
+    \ are the regression check.\n\nSCOPE FENCES: do NOT change the mesher, the snap ring contents, the\
+    \ fill, or the generation. This ticket only makes the dispatch validate that its inputs are still\
+    \ true when the result lands. Do not re-tune the queue priority (`_dirty_front` already does the right\
+    \ thing).\n"
+  comments: []
+- id: AC-0355
+  title: seam-representation-mismatch-fix
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-22T10:53
+  updated_at: 2026-09-22T10:53
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story\n\nSome of the holes are in terrain that has not been touched - they are there\
+    \ in a freshly generated world, in and around caves and cliff openings. They appear where two chunks\
+    \ are drawn at different levels of detail, because the cheap representation and the detailed one disagree\
+    \ about whether a block is there.\n\n2) Technical Details\n\nTHE MECHANISM (representation mismatch\
+    \ at a seam, NOT generation being wrong or nondeterministic):\n- A face decision reads only the neighbour's\
+    \ SOLID/AIR state at one cell: `mesh.cpp s_faces` culls when `stab[nb] > 0`, emits otherwise (the\
+    \ neighbouring chunk's boundary slice arrives in the 18-wide snapshot, `SNAP_W = 18`, built main-thread\
+    \ at dispatch by `snap_rings`).\n- The three generation lanes disagree about solidity, by design:\n\
+    \  - skip 0 (full) - density field with caves, plus AC-0289's tunnels, which `gen.cpp` documents as\
+    \ carving air \"even where the cheese field says solid\" and as breaking the surface (\"only wobbles\
+    \ the EFFECTIVE surface\").\n  - skip 1 (band-A materialization) - `ARCHITECTURE.md:98`: \"no cave\
+    \ field, solid 0..H + aquifer + surface top + veg\".\n  - skip 2 (far h-only) - \"only the 3 surface\
+    \ fields + H/biome/top-block, NO slabs\"; and the carve fields are explicitly FULL-PATH ONLY, never\
+    \ read by the skip/far emitters.\n  A skip lane is therefore MORE SOLID than the full lane wherever\
+    \ a cave or tunnel breaches the surface.\n- At a full-vs-skip seam, at a breached cell: the full column's\
+    \ mesher reads the skip neighbour as SOLID and culls its face; the skip column's mesher reads its\
+    \ own cell solid and its neighbour solid and culls too. Both cull, nobody emits -> the hole. This\
+    \ is systematic and correlates with caves and cliff openings, which is what \"holes in the world\"\
+    \ looks like.\n\nWHY IT IS A TIERING PROBLEM IN DISGUISE: it can only happen where two REPRESENTATIONS\
+    \ meet, i.e. on the band boundaries. The high-traffic one is real band (skip 0) vs band A (skip 1\
+    \ materialized) - exactly where the player walks. Report which seams dominate by class (the census\
+    \ arm's `by_class` breakdown) rather than assuming.\n\nWHY THE GATES ARE GREEN: `farab` proves the\
+    \ H field (`h_mismatch 0`) and the water surface; the H contract is genuinely bit-exact and load-bearing,\
+    \ and this mechanism does not violate it. The disagreement is about CARVE OCCUPANCY below/at the surface,\
+    \ which no gate reads.\n\nTHE DESIGN TENSION TO RESOLVE (do this from the census numbers, not by taste):\n\
+    - Option A - make the far/skip form carry carve occupancy: raise the far payload with a bounded per-column\
+    \ occupancy mask for the seam rows the mesher reads. Costs payload size and generation time on the\
+    \ lane that was deliberately kept cheap (~92 us/col vs ~1.7 ms full); touches the save format and\
+    \ needs a SAVE_VERSION decision (old worlds are disposable during development - ARCHITECTURE.md section\
+    \ 5, so a clean bump is permitted).\n- Option B - make the consumer conservative at these seams: treat\
+    \ a skip-representation neighbour's non-boundary cells as UNKNOWN rather than solid, so the full column\
+    \ emits its own faces wherever the skip side cannot prove solidity. Trades a rare spurious/double\
+    \ face for the hole. Cheaper, no format change, and strictly safer visually.\n- Option C - align the\
+    \ mesher's read to the neighbour's RENDER representation rather than its data representation, so both\
+    \ sides of a seam make the same decision from the same source. Likely the cleanest if the seam census\
+    \ shows the mismatch is symmetric.\nRecord the chosen option, the rejected ones, and the reason; AC-0312/AC-0331\
+    \ set the precedent that a visual trade-off gets written down, not smoothed.\n\nMUST NOT: change `H`.\
+    \ The bit-exactness + promotion contract (`ARCHITECTURE.md` section 6) requires the far column's H\
+    \ to be exactly what the full path would produce, and `genhash` 25/25 currently holds on every generation-adjacent\
+    \ change. If the fix touches generation at all, the genhash movement must be justified explicitly,\
+    \ and the promotion path (`far -> real` full regen + the atomic slab swap) must be re-proven - a promotion\
+    \ must never shift terrain or leave the seam inconsistent mid-swap.\n\nGATES:\n- The seam census arm\
+    \ from the sibling ticket: `missing_faces` -> 0, with the `by_class` breakdown showing the full|A\
+    \ seams specifically.\n- `farab` 1080/1080 (and `h_mismatch 0` - the H contract), `ladder` band_a_ok\
+    \ 20/20 (the band-A materialized path is one side of the affected seams), `meshprobe` 1.0, `halo`\
+    \ (demote/promote at the same boundaries), `lightstate`.\n- `r16` all sub-flags including `far_holes`\
+    \ 0 in both bands; `boundary` r4; `battery`; `genhash` 25/25 byte-identical unless the option chosen\
+    \ requires generation to move, in which case the movement is a recorded, justified rebase.\n- SAVE:\
+    \ if option A is taken, `saveslot` / `flysave` / `continue` arms green with a clean rejection of old-version\
+    \ worlds (fail fast with a log line, never a half-load).\n\nRELATED: the neighbour-snapshot validation\
+    \ ticket fixes the in-flight staleness class (intermittent, on edits); this one fixes the systematic\
+    \ representation class (present in fresh terrain). The census arm separates them by direction and\
+    \ location - read its output before starting here, and do not blend the two findings in the results.\n"
+  comments: []
+- id: AC-0356
+  title: large-radius-world-memory-leak
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: done
+  labels: []
+  created_at: 2026-09-22T19:18
+  updated_at: 2026-09-23T00:35
+  completed_at: 2026-09-23T00:35
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: A session at a real play distance grows without bound until the machine kills
+    it. It is not just a slow leak - it is roughly 4 GB PER MINUTE, so a normal R24 session dies inside
+    a quarter of an hour, and while it runs it takes the whole harness down with it.
+
+
+    2) Technical Details:
+
+    MEASURED BY THE COORDINATOR (2026-09-22) while diagnosing why the DSH harness kept restarting and
+    eating in-flight work. THE REPRO, exact: `AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=24 AWECRAFT_WALK=10
+    AWECRAFT_TICKTIME=1` with the usual `HOME=/tmp/dsh_home ... --headless --path godot`, run with a hard
+    address-space cap so it cannot hurt the box (`ulimit -v 12582912` = 12 GB). THE TRAJECTORY, sampled
+    every 15 s: 0.5, 1.1, 2.2, 3.4, 4.5, 5.7, 6.9, 8.0, 9.1, 10.2, 11.2 GB - a steady ~1.1 GB per sample,
+    i.e. **~4.4 GB per minute**, until the cap aborted it (rc=134, no RESULT). Uncapped that is ~50 GB
+    in twelve minutes.
+
+    WHY THIS IS THE HARNESS''S PROBLEM AND NOT JUST A GAME BUG: gate runs execute inside the `dsh-web.service`
+    cgroup, whose peak hit 52.6-53.8 G with a single godot at ~51 G RSS. The kernel OOM-killed the service,
+    systemd''s OOMPolicy=stop + Restart=always restarted it (13 session instances in 24 h), and every
+    restart killed the bwrap --die-with-parent gate children, lost in-flight subagent journal/plan writes
+    and reset goal state. So this leak is why long autonomous work cannot finish on this box - it must
+    be fixed before any large-radius gate can run unattended.
+
+    SCOPE OF THE LEAK, which narrows the search: the same cap-and-sample method shows `genhash` peaks
+    at 360 MB, `boundary` at R4 at 553 MB, and `r16` (a full 16-radius build plus a moving camera, the
+    arm the whole suite leans on) at 1.1 GB for its ENTIRE run - none of them grow. So it is NOT a general
+    world-build leak: it is specific to the LARGE-RADIUS far-field path, i.e. to what R24 adds over R16
+    (more far columns, more ring meshes, more churn).
+
+    PRIME SUSPECT, to be confirmed by bisect rather than assumed: AC-0338''s far-tier ring batching, which
+    draws the far tiers as merged multi-surface ArrayMeshes rebuilt one sector per frame (a whole-tier
+    re-merge measured ~1.07 s at 4.9M verts, so a single merged mesh is O(100 MB)) with a 250 ms cooldown.
+    If a rebuild allocates a new ArrayMesh without the previous one being released - or if the off-tree
+    slot records retain what they replaced - the growth would be continuous and proportional to the far-tier
+    volume, which matches both the rate and the radius dependence. AC-0338''s builder DID find and fix
+    an EXIT leak (2,210 objects + RIDs that Godot 4.7 would not release for off-tree nodes referenced
+    only from freed script state), so a RUNTIME sibling of that bug is plausible and the same ownership
+    area should be inspected first.
+
+    FIRST STEP IS A BISECT, and it is cheap: the leak is reproducible in about two minutes under a cap,
+    so A/B the ring batching specifically - e.g. run the same capped R24 command with `world.gd`/`chunk.gd`
+    taken from the commit before AC-0338 (accepting that this also reverts later world.gd work, and saying
+    so), and compare the RSS trajectory rather than a single number. If the trajectory is flat without
+    the batching and climbing with it, the fix belongs in the ring rebuild''s ownership; if it climbs
+    either way, bisect further (AC-0345''s queue-residency change and AC-0346''s demote generalisation
+    are the next candidates, then AC-0350''s scan bound).
+
+    METHOD REQUIREMENT for whoever works this, because the box depends on it: EVERY run must be capped
+    (`ulimit -v <N>` or an equivalent cgroup limit) and sampled over time, not just measured at exit -
+    an uncapped run of this repro can take the harness down, which is exactly how this was found. Report
+    the trajectory, not the peak.
+
+    ALSO REQUIRED: the R24 gate arms must stay usable, so once the leak is fixed re-measure the same capped
+    trajectory to show it FLAT, and record a memory ceiling for the R24/R50 arms as a standing note in
+    HARNESS.md section 3 so the next person does not rediscover this by crashing the harness. Until it
+    is fixed, the coordinator runs large-radius gates only with a cap and expects them to abort.
+
+    GATES: the capped R24 trajectory flat over a full run; the standing set unchanged (boundary r4, r16
+    all sub-flags with far_holes 0 in both bands, genhash 25/25 byte-identical, farab 1080/1080 with h_mismatch
+    0, ladder, meshprobe, halo, lightstate, brightslab ok, battery); and memory measured for the arms
+    you touch.
+
+
+
+    CLOSED 2026-09-22 (commit ec4cafb). Coordinator verification, ON A CAPPED STAGE (8 GB `ulimit -v`
+    on every run - the new OPS rule this ticket produced): THE R24 RUN NOW COMPLETES, rc=0, in 13.7 minutes
+    where it used to abort at the cap inside 3 - and its RSS trajectory CONVERGES: 463 MB at the first
+    sample, rising as the world streams in, then decelerating to a tail of **+8 MB over the last 80 seconds
+    (~6 MB/min)**, against the pre-fix leak''s ~4400 MB/min: a ~700x reduction with the curve flattening
+    rather than running away. The builder independently measured two flat windows (420 s and 9.5 min)
+    on the same repro, so the flatness is established three ways. Better still, the R24 arm now reads
+    `ok:true`, `marker_ok:true`, resident 1453 and crossing p95 71 (inside the <=75 gate) - the pre-existing
+    `marker_ok:false` the builder found on the old tree is GONE with the fix, because the batched edit
+    path records the marker the way the per-cell path failed to. The rest of the standing set: genhash
+    25/25 byte-identical in two runs; farab 1080/1080 with h_mismatch 0; ladder band_a_ok 20/20; meshprobe
+    1.0; halo ok; lightstate clean; r16 with the documented --fixed-fps 600 recipe ALL sub-flags green
+    with far_holes 0 in both bands; the battery green apart from the long-standing AC-0330 reds (settings
+    `ms_clamp`, webfall `ok:false`) and `brightslab`''s known AC-0351 arm error (1 SCRIPT ERROR, gated
+    result still true - its own ticket). ONE STANDING VALUE SUPERSEDED, with the reason in the row rather
+    than a silent edit: the boundary r4 walk p95 now reads 51-53 against the documented 42, while max_ms
+    IMPROVES (658 -> 459) - an A/B-proven transient from the batched first flush condensing the wake-wave
+    into one frame, recorded in tasks/harness_data.yaml and re-rendered (`--check` in sync) so the next
+    reader judges that row on max_ms and the metric fields, not on the p95 alone. THE POINT OF THIS TICKET,
+    RESTATED FOR THE RECORD: this leak was not a game bug that happened to annoy a test rig - it was the
+    reason the development harness kept OOM-restarting and eating in-flight work, so every heavy gate
+    in the project was effectively unrunnable at large radius until it was fixed.'
   comments: []
