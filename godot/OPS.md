@@ -40,6 +40,25 @@ machine reason behind them.
   torn down the moment the tool call returns (a heavy gate script silently died after one arm,
   AC-0313). The managed job (the tool's background mode) survives and can be collected; a script
   that must outlive a call has to be started that way.
+- **EVERY gate run must be memory-capped, and the big ones must be SAMPLED over time.** Cap with
+  `bash -c "ulimit -v <KB>; … godot …"` (AC-0356 used 8 GB for arms whose measured peaks are
+  0.4–1.1 GB) and sample RSS every 10–15 s for any large-radius run. THE REASON IS NOT TIDINESS:
+  gate runs execute inside the **`dsh-web.service` cgroup**, so a runaway gate does not fail
+  politely — it OOM-kills the harness itself. AC-0356 was exactly that: an unbounded leak in a
+  large-radius run (fluid writes firing one two-phase light re-flood each, into an unbounded
+  deque — ~4.4 GB/min, ~50 GB in twelve minutes) drove the cgroup to 52.6 G, the kernel killed
+  `dsh-web.service`, systemd's `OOMPolicy=stop` + `Restart=always` restarted it, and every restart
+  tore down in-flight gate children, lost subagent work in flight and reset goal state (13 session
+  instances in 24 h, each looked like a mysterious "the subagent died again"). Judging a memory
+  question by a single peak hides exactly this: report the TRAJECTORY.
+- **A harness restart is the default explanation for a job that dies with no output** — check it by
+  counting recent session instances (`ls -t ~/.dsh/sessions/*/session.jsonl.zstd | head`) before
+  blaming the work. A lost subagent LAUNCH leaves no trace at all (no journal entry, no plan file),
+  which is how you tell it apart from a run that started and was interrupted — and it is why every
+  builder writes its plan, results page and continuity journal as it goes rather than at the end.
+- **Heavy gate scripts should be RESUMABLE**: skip a gate whose log already contains a `RESULT`
+  (or `GENHASH` — the genhash arm prints only `GENHASH` lines, a trap that silently re-ran it).
+  A restart then costs one gate instead of a whole stage. Both lessons are AC-0356's.
 
 ## 3. Daemons and ports
 
