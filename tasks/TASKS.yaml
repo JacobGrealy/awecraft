@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-23T00:35
+  updated_at: 2026-09-23T05:20
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0347
 - AC-0352
 - AC-0353
 - AC-0354
@@ -18146,11 +18145,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-09-21T03:11
-  updated_at: 2026-09-22T08:47
-  completed_at: null
+  updated_at: 2026-09-23T05:20
+  completed_at: 2026-09-23T05:20
   waiting_on: null
   parent_id: null
   notes: "1) User Story\n\nAs a player caving underground, I want the world below me to behave like Minecraft's:\
@@ -18280,7 +18279,34 @@ intake:
     \ access of index '10' ... at _brightslab_slab_cmp (harness.gd:10249)` on this tree and on P2's, because\
     \ the full-window re-bake's `slabs` array can be shorter than the slab under test once the terrain\
     \ puts AIR in a top slab - an arm assumption the new field breaks; its gated result still reads ok:true,\
-    \ which is exactly why a silently-skipped comparison needed its own ticket rather than a note."
+    \ which is exactly why a silently-skipped comparison needed its own ticket rather than a note.\n\n\
+    CLOSED 2026-09-23 (P1 68fa3fe, P2 60dad5a, P3 9bdcadd - the ticket was worked in its own three declared\
+    \ pieces, each with its own builder, gates and commit, exactly as its notes required). COORDINATOR\
+    \ VERIFICATION of the finished article, on a CAPPED stage (the OPS rule AC-0356 added): genhash 25/25\
+    \ byte-identical in two runs with 12 identical / 13 new against P2 - which INDEPENDENTLY CONFIRMS\
+    \ the builder's correction of a predecessor's bogus 18/7 split; farab 1080/1080 with h_mismatch 0\
+    \ (H unmoved, corroborating the thash proof); ladder band_a_ok 20/20; meshprobe 1.0; halo (c) mismatches\
+    \ 0; lightstate wash false with the double-LOD census 0/0; r16 with the documented --fixed-fps 600\
+    \ recipe ALL sub-flags green with far_holes 0 in both bands and static p50 5 ms; boundary r4 ok with\
+    \ p50 13 / p95 48 / max 279 (max well below the pre-AC-0356 658) and staged_dropped 1694, col_deferred\
+    \ 95; the R24 run COMPLETES with resident 1453, marker_ok true and an RSS trajectory of 456 -> 1092\
+    \ MB peaking flat at ~6 MB/min at the tail - i.e. the AC-0356 leak fix holds under the new field;\
+    \ the battery has 12 byte-identical modes and NO new differing mode. WHAT THE TICKET DELIVERED, in\
+    \ the user's terms: cave LEVELS at consistent world heights (the deep profile peaks at absolute y\
+    \ 24-96, 73-78%, and the stacked y-bins 24/48/72 are unchanged by P3's tuning), ground that holds\
+    \ together (the surface-opening fraction is 23.97% and P3 proved it is 96.9% knob-immune tunnel family\
+    \ with the entrance family opening ZERO columns in this world), and a first cavern that now sits deeper\
+    \ under an intact surface (the 10-15 bin collapsing into >=50, 1444 -> 1535 columns). A VISION CHECK\
+    \ BY THE COORDINATOR on the three shots the ticket asked for - the deep-rooms frame shows an underground\
+    \ chamber with ore, a torch and a water pocket, the hillside frame shows terraced grass, dirt faces\
+    \ and trees with NO cave punched through the surface anywhere in frame, and the surface-entrance frame\
+    \ shows exactly one deliberate rocky shaft descending through intact grass. THE HONEST CAVEAT, recorded:\
+    \ those renders are the proxy gl_compatibility renderer, so they are evidence about geometry and layout,\
+    \ never about the shipped forward_plus look - the in-game judgement is the user's. ONE COORDINATOR\
+    \ ERROR CAUGHT AND FIXED IN THIS CLOSEOUT rather than left as drift: I first read the R24 arm's GENERAL\
+    \ `p95_ms` (48-79 across runs) as if it were the GATED `crossing_frame_p95_ms` (51-68, all inside\
+    \ the <=75 gate) and wrote a spread note into the standing row on that basis; the row now names the\
+    \ two fields explicitly so the next reader cannot repeat it."
   comments: []
 - id: AC-0348
   title: r24-crossing-frame-time-measurement
