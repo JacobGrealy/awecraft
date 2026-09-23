@@ -4191,6 +4191,33 @@ const WP_COLLIDE := 12
 const WP_STAGES := 13
 const WP_RING := 180
 
+# --- AC-0352: per-frame WORST-FRAME CAPTURE (instrument-ONLY) ---
+# The WP_RING ring summarizes (p50/p95/max per stage over 180 frames) — the
+# 549-719 ms-class worst frames of the R24 streaming storm show up as ONE max
+# value and cannot be stage-attributed (AC-0348 attributed them only by
+# EXCLUSION + the crossing ring). This capture keeps the worst-N frames over
+# the threshold with their FULL stage split + the streaming state at that
+# frame + the edit/remesh activity of a small window around it, so a stage
+# that is slow because the queue is deep is distinguishable from one that is
+# slow on its own. MAIN-THREAD-ONLY and PRE-ALLOCATED (the wprof discipline):
+# the per-frame cost is a few subtractions and two array sizes (the activity
+# row); the capture path (the one O(resident) in-radius loop) runs ONLY on
+# over-threshold frames and AFTER the f1 stamp, so its cost never enters the
+# measured frame total. It measures; it changes NO scheduling, pacing,
+# ordering, or allocation behavior.
+const WFC_THRESHOLD_US := 30000   # the capture threshold (the ticket's 30 ms)
+const WFC_CAP := 256              # worst-N ring (bounded; a newcomer displaces the ring min)
+const WFC_WIN := 8                # the edit-activity window (capture frame + preceding frames)
+const WFA_RING := 64              # the per-frame edit-activity ring (holds the WFC_WIN history)
+
+var wfc_ring: Array = []          # the capture entries (dicts, worst-N)
+var wfc_total_n := 0              # frames over threshold since boot (incl. the load storm)
+var _wfa_rows: Array = []         # WFA_RING rows [per-frame edit activity, dirty depth, remesh depth]
+var _wfa_head := 0
+var _wfa_ed := 0                  # last committed frame's cumulative perf_edit_dispatches
+var _wfa_df := 0                  # ... perf_edit_defers
+var _wfa_sy := 0                  # ... perf_edit_syncs
+
 var _wp_rows: Array = []    # WP_RING rows, each an Array of WP_STAGES ints (usec)
 var _wp_head := 0
 var _wp_filled := 0
@@ -4242,6 +4269,16 @@ func _wprof_init() -> void:
 	_wp_live["occupancy"] = {"tg": 0, "tm": 0, "low": 0, "star": 0}
 	_wp_live["misc_neg_max_us"] = 0
 	_wp_scratch.resize(WP_RING)
+	# AC-0352: pre-allocate the worst-frame capture ring + the edit-activity ring.
+	wfc_ring.clear()
+	wfc_total_n = 0
+	_wfa_rows.clear()
+	for i in range(WFA_RING):
+		_wfa_rows.append([0, 0, 0])
+	_wfa_head = 0
+	_wfa_ed = 0
+	_wfa_df = 0
+	_wfa_sy = 0
 
 # Begin the current frame's row (zeroed in place — no allocation).
 func _wprof_begin_frame() -> void:
@@ -4288,6 +4325,97 @@ func _wprof_end_frame(f0_usec: int) -> void:
 	_wp_dirty = true
 	_wp_head = (_wp_head + 1) % WP_RING
 	_wp_filled = mini(_wp_filled + 1, WP_RING)
+	# AC-0352: the per-frame edit-activity row (the counter deltas since the
+	# previous committed frame — the dispatches/defers/syncs fired IN this
+	# frame, whatever stage they ran in) + the queue/remesh depths.
+	var _wfa_row: Array = _wfa_rows[_wfa_head]
+	_wfa_row[0] = maxi(0, (int(perf_edit_dispatches) - _wfa_ed) \
+			+ (int(perf_edit_defers) - _wfa_df) + (int(perf_edit_syncs) - _wfa_sy))
+	_wfa_row[1] = int(dirty_queue.size())
+	_wfa_row[2] = star_light_pending_depth()
+	_wfa_ed = int(perf_edit_dispatches)
+	_wfa_df = int(perf_edit_defers)
+	_wfa_sy = int(perf_edit_syncs)
+	_wfa_head = (_wfa_head + 1) % WFA_RING
+	# AC-0352: the worst-frame capture — AFTER the f1 stamp, so the capture
+	# cost never enters the measured total.
+	if int(_wp_cur[WP_FRAME]) > WFC_THRESHOLD_US:
+		_wfc_capture()
+
+# AC-0352: one stage of the just-committed row, in ms at 1 decimal.
+func _wfc_ms(stage: int) -> float:
+	return roundf(float(int(_wp_cur[stage])) / 1000.0 * 10.0) / 10.0
+
+# AC-0352: capture the just-committed frame into the worst-N ring: the full
+# stage split (five top stages + MISC + the six sub-stages), the streaming
+# state (queue depth, tm/tg in-flight, low tasks, star pending, resident,
+# in-radius present/built against the player chunk) and the re-mesh
+# correlation fields (the cumulative perf_edit_* snapshots, the dirty_queue
+# depth, the remesh-lane depth, and the per-frame dispatch/defer/sync
+# ACTIVITY over the capture frame + the WFC_WIN preceding frames — the
+# "small window" of the coordinator's addition: a dispatch that slows frame T
+# fires in T or a few frames before, never after). Bounded worst-N: a
+# newcomer displaces the ring's minimum, so the ring always holds the worst
+# WFC_CAP frames over threshold since boot.
+func _wfc_capture() -> void:
+	wfc_total_n += 1
+	var split := {
+		"drain": _wfc_ms(WP_DRAIN), "low": _wfc_ms(WP_LOW), "handoff": _wfc_ms(WP_HANDOFF),
+		"io": _wfc_ms(WP_IO), "recenter": _wfc_ms(WP_RECENTER), "misc": _wfc_ms(WP_MISC),
+		"facelight": _wfc_ms(WP_FACELIGHT), "rescore": _wfc_ms(WP_RESCORE),
+		"meshattach": _wfc_ms(WP_MESHATTACH), "low_poll": _wfc_ms(WP_LOW_POLL),
+		"star": _wfc_ms(WP_STAR), "collide": _wfc_ms(WP_COLLIDE),
+	}
+	# The one O(resident) cost — the in-radius census (the player-chunk
+	# square, the arm's own convention), run only on over-threshold frames.
+	var pcx := int(_rec_player_pcx)
+	var pcz := int(_rec_player_pcz)
+	var rr := int(render_radius)
+	var inr_present := 0
+	var inr_built := 0
+	for key in chunks:
+		var c: Node3D = chunks[key]
+		if absi(int(c.cx) - pcx) <= rr and absi(int(c.cz) - pcz) <= rr:
+			inr_present += 1
+			if c.mesh_built:
+				inr_built += 1
+	var act_win := 0
+	var dirty_max := 0
+	var remesh_max := 0
+	for i in range(WFC_WIN + 1):
+		var row: Array = _wfa_rows[(_wfa_head - 1 - i + WFA_RING) % WFA_RING]
+		act_win += int(row[0])
+		if int(row[1]) > dirty_max:
+			dirty_max = int(row[1])
+		if int(row[2]) > remesh_max:
+			remesh_max = int(row[2])
+	var entry := {
+		"t_ms": int(Time.get_ticks_msec()),
+		"ms": roundf(float(int(_wp_cur[WP_FRAME])) / 1000.0 * 10.0) / 10.0,
+		"split": split,
+		"state": {
+			"queue": int(queue_size), "tm": int(threadmesh_inflight.size()),
+			"tg": int(threadgen_inflight.size()), "low": int(_low_tasks.size()),
+			"star": 0 if star == null else int(star.pending_cells()),
+			"resident": int(chunks.size()), "inr_present": inr_present, "inr_built": inr_built,
+		},
+		"edit": {
+			"dispatches": int(perf_edit_dispatches), "defers": int(perf_edit_defers),
+			"syncs": int(perf_edit_syncs), "dirty_depth": int(dirty_queue.size()),
+			"remesh_depth": star_light_pending_depth(),
+			"act_window": act_win, "dirty_max_window": dirty_max,
+			"remesh_max_window": remesh_max,
+		},
+	}
+	if wfc_ring.size() < WFC_CAP:
+		wfc_ring.append(entry)
+	else:
+		var min_i := 0
+		for i in range(1, WFC_CAP):
+			if float(wfc_ring[i]["ms"]) < float(wfc_ring[min_i]["ms"]):
+				min_i = i
+		if float(entry["ms"]) > float(wfc_ring[min_i]["ms"]):
+			wfc_ring[min_i] = entry
 
 # Recompute the rolling-window stats (p50/p95/max/avg ms at 1 decimal +
 # active-frame count per stage, over the last WP_RING frames). Runs only on

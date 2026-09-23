@@ -239,6 +239,37 @@ Match these; do not improvise a different approach in a task.
   scaling is the win) with a BYTE-IDENTICAL per-crossing census (97/97/97/97/97) and
   resident_final 1453 — so the multi-hundred-ms tail frames remain NON-crossing storm
   work (drain/handoff/mesh-attach), which this ring attributes by exclusion.
+- **Worst-frame capture (AC-0352)**: the wprof ring (p50/p95/max per stage over 180 frames)
+  cannot NAME the stage of a single worst frame — the R24 storm's 549–719 ms class shows up
+  as one max value and was attributable only by exclusion + the crossing ring. The
+  WORST-FRAME CAPTURE (world.gd, the wprof block; MAIN-THREAD-ONLY, PRE-ALLOCATED) closes
+  that: every frame whose `World._process` total exceeds 30 ms (`WFC_THRESHOLD_US`) is
+  captured at `_wprof_end_frame` (AFTER the f1 stamp, so the capture cost never enters the
+  measured total) into the worst-N ring `wfc_ring` (`WFC_CAP` 256 — a newcomer displaces the
+  ring's minimum; `wfc_total_n` counts all over-threshold frames since boot): the full 13-slot
+  split (five top stages + MISC + the six sub-stages, ms at 0.1), the frame's streaming state
+  (queue depth, tm/tg in-flight, low tasks, star pending, resident, in-radius present/built
+  against the player chunk — the one O(resident) cost, run only on over-threshold frames),
+  and the re-mesh correlation fields (the cumulative `perf_edit_dispatches/defers/syncs`
+  snapshots, the `dirty_queue` depth, the remesh-lane depth, and the per-frame
+  dispatch/defer/sync ACTIVITY over the capture frame + the 8 preceding frames — a dispatch
+  that slows frame T fires in T or a few frames before, never after). The per-frame activity
+  rows come from the small `_wfa_rows` ring (64) fed by the `perf_edit_*` counter deltas at
+  each committed frame. It is the lead the seam series (AC-0353+) needs, read both ways:
+  worst frames with NO edit/remesh activity in the window → the tail is ordinary streaming
+  (the attribution stands as the answer); worst frames WITH activity → a correlation with the
+  counts to record, NOT proof of causation (the seam census is the next probe). The boundary
+  arm reports the walk-frame percentiles (`storm_walk_n` / `storm_walk_p99_ms` /
+  `storm_walk_max_ms` — the worst-frame class's standing value; the max is single-sample by
+  nature and never the gate), the worst 20 captured entries inside the walk window
+  (`worst_frames`) and the BLIND-SPOT CENSUS (`census_walk_start` / `census_walk_end`: the
+  in-tree MeshInstance3D count — the radius-independent post-AC-0338-ring-batching class — +
+  the collision-body population + the node count; headless has no rasterizer, so the
+  draw-call/object counters are meaningless there and the census is the instance-level ground
+  for the costs the partition cannot see: the physics step, the physics server and the render
+  server all run OUTSIDE `World._process`). Standing value: HARNESS.md §3, the "boundary r24
+  crossing frame latency" row (extended at AC-0352 with the storm-tail
+  `storm_walk_p99_ms` threshold).
 - **Raycasting**: the analytical voxel DDA in `core/math.gd` for select/mine/place and
   projectiles — not physics rays (faster and deterministic).
 - **Meshing**: one `ArrayMesh` per slab/chunk via `SurfaceTool` (GDScript path) or the C++

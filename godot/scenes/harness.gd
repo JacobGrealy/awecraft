@@ -22641,6 +22641,9 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 	world.fluid_tick_samples.clear()
 	var mem_before: int = OS.get_static_memory_usage()
 	var t_walk0 := Time.get_ticks_msec()
+	# AC-0352: the blind-spot census at WALK START (the storm state — the
+	# instrument's outside-the-partition population when the walk begins).
+	var census_start := _ac0352_tree_census()
 
 	var frame_ms_list: Array = []
 	var max_ms := 0
@@ -22810,6 +22813,30 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 				walk_frames, (fe - t_walk0) / 1000.0, dt,
 				p.position.x, p.position.y, p.position.z,
 				(p.position.x - 8.0) / maxf((fe - t_walk0) / 1000.0, 0.001)])
+	# AC-0352: the blind-spot census at WALK END (the still-streaming state —
+	# the world is far from settled here, and the census is the instance-level
+	# ground for the blind-spot analysis).
+	var census_end := _ac0352_tree_census()
+	# AC-0352: the worst-frame class fields — the walk frame percentiles (the
+	# standing-value fields; the max is single-sample by nature) + the
+	# worst-N capture entries INSIDE the walk window (the per-frame stage-split
+	# attribution + the re-mesh correlation lead; wfc_total_n / wfc_boot_n
+	# count the whole since-boot ring, incl. the pre-walk load storm).
+	var storm_n := 0
+	for f in frame_ms_list:
+		if int(f) > 30:
+			storm_n += 1
+	var wf: Array = []
+	var wfc_boot_n := 0
+	for e in world.wfc_ring:
+		if int(e["t_ms"]) < t_walk0:
+			wfc_boot_n += 1
+		elif int(e["t_ms"]) <= prev_t:
+			wf.append(e)
+	wf.sort_custom(func(a, b): return float(a["ms"]) > float(b["ms"]))
+	var worst_frames: Array = []
+	for i in range(mini(20, wf.size())):
+		worst_frames.append(wf[i])
 	# AC-0348: the crossing ring over the walk window (the boot recenter and
 	# the final re-entry recenter are outside it). crx_cross holds the
 	# cross > 0 entries (the walk crossings, in order); crx_other counts the
@@ -23102,6 +23129,22 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		"create_sync_gen": int(world.perf_create_sync_gen),
 		"staged_pending_final": int(world._col_pending.size()),
 		"unbodied_built_final": unbodied_final,
+		# AC-0352: the worst-frame class (the AC-0348 storm tail) — the WALK
+		# frame percentiles (the standing-value fields; the max is
+		# single-sample and NOT the gate) + the worst-N capture entries with
+		# their full stage split, the frame's streaming state and the re-mesh
+		# correlation fields (the LEAD TO RECORD) + the blind-spot census at
+		# walk start / end (the instance-level ground for the outside-the-
+		# partition costs).
+		"storm_walk_n": storm_n,
+		"storm_walk_p99_ms": int(_percentile(frame_ms_list, 0.99)),
+		"storm_walk_max_ms": int(max_ms),
+		"storm_threshold_ms": 30,
+		"wfc_total_n": int(world.wfc_total_n),
+		"wfc_boot_n": wfc_boot_n,
+		"worst_frames": worst_frames,
+		"census_walk_start": census_start,
+		"census_walk_end": census_end,
 	})
 	get_tree().quit()
 
@@ -23128,6 +23171,32 @@ func _max_f(arr: Array) -> float:  # AC-0348: the float twin (the burst ms are s
 		if float(v) > m:
 			m = float(v)
 	return m if m >= 0.0 else 0.0
+
+
+# AC-0352: the one-shot scene-tree census (the AC-0338 step-0 method, in-arm
+# form): the in-tree MeshInstance3D count (post AC-0338 ring-batching this is
+# the radius-independent ~1064 class — the far slots are OFF-tree) + the
+# collision-body population (the physics-server work that lives OUTSIDE the
+# wprof partition) + the node count + the resident chunk count. Headless has
+# no rasterizer, so the draw-call/object counters are meaningless here — the
+# census is the instance-level read; the draw counts come from the AC-0338
+# standing row's proxy-render numbers (labeled derivation).
+func _ac0352_tree_census() -> Dictionary:
+	var mi := 0
+	var sb := 0
+	var nodes := 0
+	var stack: Array = [world.get_tree().root]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		nodes += 1
+		if n is MeshInstance3D:
+			mi += 1
+		elif n is StaticBody3D:
+			sb += 1
+		var ch := n.get_children()
+		for i in range(ch.size()):
+			stack.append(ch[i])
+	return {"tree_nodes": nodes, "tree_mi": mi, "collision_bodies": sb, "resident": int(world.chunks.size())}
 
 
 # AC-0079: spec wall check. dir=+1 forward (dx in 1..r), dir=-1 trailing (dx in -r..-1),
