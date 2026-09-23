@@ -46,6 +46,17 @@ matches `build-scripts`.
   entry.
 - The builder makes **no commits, no pushes and no `tasks/TASKS.yaml` edits** (read-only
   `git log/show/diff/status` is fine) — the coordinator owns git and the registry.
+- **Do not let a builder open the render/shot PNGs.** A snapshot is 0.6–1.3 MB and reading a few of
+  them with vision exhausts a builder's budget with nothing to show: three AC-0347 P3 launches died
+  that way (two "failed" mid-sentence right after they started inspecting shots). Put the rule IN the
+  prompt — verify shots by filename, byte size and the snapshot run's `RESULT` fields, and **the
+  coordinator inspects the images**, which is the job that actually needs eyes.
+- **Keep the launch prompt lean.** A prompt well past a screenful failed outright ("subagent run
+  failed") and a trimmed rewrite of the same task ran; the depth belongs in the ticket notes and the
+  repo files the builder reads anyway. Route: spec + pointers + fences, not a restatement of the
+  ticket.
+- **Budget the builder's reading too.** Tell it which documents to read *selectively* (HARNESS.md
+  sections by number + greps, never whole) — the arm table alone has burned a launch to its limit.
 - A ticket touching `godot/world/*` or the lighting path may run **at most ONE** boundary r4 A/B
   probe as a self-check; on a trade-off it records an honest deviation and exits (no option loop).
 
