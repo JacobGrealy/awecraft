@@ -15,7 +15,10 @@
 //   field is now a SHALLOW/DEEP SPLIT, switched by k = H - y (the DEPTH
 //   FROM THE SURFACE — NOT S_ramp, which saturates):
 //
-//     k <  K_CUT (K_CUT = 10 = R_BAND, the ramp saturation depth) [SHALLOW]:
+//     k <  K_CUT (K_CUT = 16 — the P3-recalibrated switch depth, the
+//            ticket's 10-25 band; the ramp saturates at +1 for k >= 9.5,
+//            so the whole shallow band is solid + entrance slits)
+//            [SHALLOW]:
 //        d = min( S_ramp(H, y), 5 * entrances )
 //     k >= K_CUT [DEEP]:
 //        d = min( entrances,
@@ -23,7 +26,8 @@
 //                + clamp(0, 0.5)(1.5 - 0.64 * k / K_CUT) )
 //
 //   THE LOAD-BEARING FACT: in the DEEP branch the base terrain contributes
-//   NOTHING — the suppressor clamp(0,0.5)(...) is 0 once k >= 23.4 and the
+//   NOTHING — the suppressor clamp(0,0.5)(...) is 0 once k >= 37.5
+//   (2.34375*K_CUT) and the
 //   ramp appears nowhere else in that branch, so below the shallow band the
 //   solid/air decision IS the cave router (that is why vanilla's O(1) cave
 //   constants are portable; our old S_ramp was +1 EVERYWHERE below H-10 and
@@ -370,15 +374,30 @@ constexpr int TERRAIN_H_MAX = 300;
 // cave_amp() deleted, the "air for sure" margin re-derived structurally).
 constexpr double R_BAND = 10.0;    // spline surface half-width in y blocks
 // (the ramp saturates at H+/-10.5). KEPT — the shallow branch's surface.
-constexpr double K_CUT = 10.0;     // the router's switch depth (k = H - y):
-// the RAMP SATURATION depth — below it S_ramp = +1 exactly, so the shallow
-// branch degenerates to min(1, 5*entrances) and the deep branch owns the
-// cave structure; the suppressor is at its 0.5 clamp maximum exactly at
-// the cut (1.5 - 0.64*1 = 0.86 -> 0.5, vanilla's value at ITS cut
-// 1.5 - 0.64*1.5625 = 0.5); k_norm = k/K_CUT, the suppressor reaches 0 at
-// k = 2.34375*K_CUT (vanilla's 1.5/0.64 = 2.34375 "gone by" value).
-// Continuity at the cut is provable: with S_ramp = +1 at k = 10 both
-// branches read d < 0 iff entrances < 0 — no solid/air seam.
+constexpr double K_CUT = 16.0;     // the router's switch depth (k = H - y) —
+// AC-0347 P3 RECALIBRATION (was 10 at P2), picked inside the ticket's
+// 10-25 band AGAINST THE MEASURES (5x5 window, seed 44, 6400 cols, the
+// cavestat arm): at K_CUT 10 the near-surface band read 34% air at
+// k 10-16 — 29% of that air was CHEESE-CAVE (the deep structure starting
+// right at the cut) and the first-cave-below-intact-surface depth had a
+// mode at the cut (9.1% of intact columns at k 10-15, ~29% of it cheese)
+// — "one void from just under the grass" on the cheese side. The surface
+// openings themselves are the knob-immune families (tunnel piercings —
+// AC-0289's topology — 72% of the opened columns; the entrance family
+// opens 0 columns, rarer than the tunnels), so the switch is the only P3
+// lever with a measured effect: 16 moves the deep structure's start (and
+// the suppressor's 0.5-bias band, k 10-15.6 -> 16-25) six blocks deeper.
+// The ramp saturates at +1 for k >= 9.5, so the shallow band stays
+// degenerate (solid + entrance slits) across its full width, and the
+// continuity proof is unchanged (below). The suppressor is at its 0.5
+// clamp maximum exactly at the cut (1.5 - 0.64*1 = 0.86 -> 0.5, vanilla's
+// value at ITS cut 1.5 - 0.64*1.5625 = 0.5); k_norm = k/K_CUT, the
+// suppressor reaches 0 at k = 2.34375*K_CUT = 37.5 (vanilla's 1.5/0.64 =
+// 2.34375 "gone by" value). Continuity at the cut is provable: with
+// S_ramp = +1 at k = 16 both branches read d < 0 iff entrances < 0 (the
+// deep branch may add solid->air via the cheese tail — never air->solid:
+// d_shallow < 0 implies ent < 0 implies d_deep = min(ent, ...) < 0) — no
+// solid/air seam.
 constexpr double ENTR_OFFSET = 0.37; // vanilla caves/entrances offset —
 // makes entrances RARE (surface breaks only in the noise's lower tail).
 constexpr double ENTR_GRAD_LO = 0.3; // the entrance y-gradient from_value.

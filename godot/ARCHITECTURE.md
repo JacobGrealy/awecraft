@@ -394,12 +394,16 @@ Match these; do not improvise a different approach in a task.
   vanilla's density ROUTER** (Java 1.21.4 `overworld.json` `final_density`'s `range_choice`,
   verified against the shipped JSON; density > 0 = solid in both conventions): with
   `k = H − y` (depth from the surface — NOT S_ramp, which saturates) and
-  `K_CUT = R_BAND = 10` (the switch cut = the ramp saturation depth):
+  `K_CUT = 16` (the P3-recalibrated switch depth — inside the ticket's 10-25 band, set by
+  measurement, AC-0347 P3 results page; R_BAND = 10 stays the ramp saturation depth, and since
+  the ramp reads +1 for k ≥ 9.5 the shallow branch stays degenerate — solid + entrance slits —
+  across its whole width, so the cut-continuity proof holds unchanged):
   `k < K_CUT: d = min(S_ramp(H,y), 5·entrances)` (SHALLOW — S_ramp kept as the surface, the
   entrance family carves the deliberate openings); `k ≥ K_CUT: d = min(entrances,
   4·layer_c² + clamp(−1,1)(0.27+cheese_c) + clamp(0,0.5)(1.5−0.64·k/K_CUT))` (DEEP — the base
   terrain contributes NOTHING: the solid/air decision below the shallow band IS the cave router;
-  the suppressor is 0.5 at the cut and 0 at k ≈ 23.4; the squared ONE-SIDED layer term gates the
+  the suppressor is 0.5 at the cut and 0 at k = 2.34375·K_CUT = 37.5 — vanilla's 1.5/0.64
+  constants as-is, anchored at the cut; the squared ONE-SIDED layer term gates the
   cheese caves into stacked levels in absolute y). The old `A(y)/DEEP_GROW/CAVE_AMP`
   depth-amplifier structure is GONE. The "air for sure above H+11" margin is now STRUCTURAL (no
   noise budget): for y ≥ H+10.5 the ramp clamps −1 exactly and the shallow branch reads
@@ -422,7 +426,10 @@ Match these; do not improvise a different approach in a task.
   independent of the cave field: cave tuning MUST NOT touch f_sc/f_sh/f_sr or SEA (the far-band H
   bit-exactness + promotion contract — AC-0347 P2's thash proved H byte-identical before/after:
   `8df7aeb4…0dc4f11`, 21×21-chunk `column_heights16` SHA-256). The router's `max(…, pillars_choice)`
-  outer term is AC-0292's (SEQUENCE); P3 recalibrates the surface openings / asymmetry.
+  outer term is AC-0292's (SEQUENCE). P3 (same ticket) recalibrated the surface openings /
+  asymmetry against the measured censuses: K_CUT 10 → 16 (the first cave on intact columns
+  deepens, the k 10-16 air set was proven 100% tunnel family, the stacked levels survive);
+  the suppressor constants stayed vanilla as-is.
   AC-0289 (cave P1) added the **tunnel (edge-density)
   structure** on top of the same one field: two more coarse fields —
   **f_spag** = `fbm3(x/14, y/10, z/14, seed+303, 2 oct)` (spaghetti, the wide tagliatelle,

@@ -21219,18 +21219,18 @@ func _genprobe_test() -> void:
 		cmp.call("entrance", entv, G.density_entrance(x, y, z, s))
 	for i in 300:
 		# AC-0347 P2: the ROUTER itself (dens_at — the shallow/deep split
-		# on k = H - y, K_CUT 10 = R_BAND; the min/clamp arithmetic). The
-		# GD mirror below is op-order identical to the C++ in f64; the
-		# random inputs (cave/layer in [0,1) like the vn3 outputs, ent in
-		# its full range, H/y arbitrary) exercise both branches + the
-		# clamp edges.
+		# on k = H - y; K_CUT 16 = the AC-0347 P3 recalibrated switch depth
+		# (was 10 at P2); the min/clamp arithmetic). The GD mirror below is
+		# op-order identical to the C++ in f64; the random inputs
+		# (cave/layer in [0,1) like the vn3 outputs, ent in its full range,
+		# H/y arbitrary) exercise both branches + the clamp edges.
 		var H := rng.randi_range(3, 300)
 		var y2 := rng.randi_range(1, 383)
 		var cv := rng.randf_range(0.0, 1.0)
 		var en := rng.randf_range(-0.6, 1.2)
 		var ly := rng.randf_range(0.0, 1.0)
 		var k2 := float(H) - float(y2)
-		if k2 < 10.0:
+		if k2 < 16.0:
 			var t := (float(H) + 0.5 - float(y2)) / 10.0
 			if t > 1.0:
 				t = 1.0
@@ -21247,7 +21247,7 @@ func _genprobe_test() -> void:
 				q4 = -1.0
 			elif q4 > 1.0:
 				q4 = 1.0
-			var kn := k2 / 10.0
+			var kn := k2 / 16.0
 			var supp := 1.5 - 0.64 * kn
 			if supp < 0.0:
 				supp = 0.0
