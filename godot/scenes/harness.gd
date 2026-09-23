@@ -662,6 +662,20 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		if logic == "occlude":
 			await _occlude_test(spawn)
 			return
+		if logic == "seamcensus":
+			# AC-0353: the cross-chunk seam-face census (MEASUREMENT ONLY —
+			# the instrument for the user-visible seam holes; the fix
+			# tickets AC-0354/AC-0355 gate on its fields). Reads the LIVE
+			# landed meshes, reverse-maps every seam-plane quad to (cell,
+			# face direction), and asserts that adjacent built columns
+			# AGREE about their shared plane. The reverse map is validated
+			# in-arm against a 6-cell analytic fixture (written, then
+			# reverted) before the census is trusted.
+			world.fluid_sim_enabled = false
+			world.collision_enabled = false
+			await _seamcensus_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "stars":
 			player = main._spawn_player()
 			_stars_test(spawn)
@@ -24562,6 +24576,756 @@ func _occl_quad_audit(chunks: Array, stab: PackedByteArray, col_surf: Dictionary
 		"leaking_faces": leaking_faces,
 		"no_emitter": no_emitter,
 	}
+
+
+# ============================================================================
+# AC-0353 — cross-chunk seam-face census (the `seamcensus` arm).
+#
+# THE GAP this arm closes: `occlude` counts `leaking_faces` only WITHIN a
+# chunk and never looks across a seam; `farab` proves the far HEIGHT field,
+# not occupancy; `ladder`/`meshprobe`/`lightstate`/`halo` check emitted
+# geometry against a reference built the SAME WAY — so a systematically
+# wrong face decision across a seam passes all of them. Nothing asserted
+# that two adjacent built columns AGREE about their shared plane.
+#
+# THE ASSERTION (per seam, per row): for each pair of built neighbour
+# columns, the faces EMITTED on the shared plane must equal the complement
+# of the neighbour's CURRENT solid set at that row — solid next to solid
+# emits nothing; a cell where exactly one side is solid emits exactly one
+# face, from the side that owns it. Directions are reported separately:
+# MISSING (both culled → see-through, the user's hole), SPURIOUS (both
+# emitted → double draw, the far-band far_holes class), plus `shifted`
+# (the face landed on the wrong side — same plane, invisible) and
+# `spurious_single` (a face where both sides agree — phantom or leak). Per
+# seam: both column keys, the plane (dx/dz), the row range, the mismatch
+# counts by direction, and each side's REPRESENTATION CLASS (F full skip-0
+# / A band-A materialized skip-1 / BC far h-only skip-2, from `far` /
+# `far_mat`) — a mismatch concentrated at F-vs-A seams is a different
+# finding than one spread evenly.
+#
+# FACES FROM THE LIVE LANDED MESHES (not a re-emit): surface 0 of every
+# VISIBLE slab mesh (the high `mesh_instance`, else the off-tree low slot —
+# one visible tier per slab, the double-LOD contract). Reverse map: quad k
+# owns verts [4k..4k+3] (index pattern (b,b+2,b+1,b,b+3,b+2) in all three
+# emitters); the face plane is the flat axis; the covered cells are the
+# integer ranges along the other two axes; the direction = the stored
+# normal cross-checked against the winding. HIGH verts are chunk-local
+# (x,z 0..16, Y ABSOLUTE 0..383); LOW (avg) verts are slab-local (yoff
+# si*16). The `occlude` arm's quad audit already reads these raw arrays
+# against the chunk origin (a green gate).
+#
+# VALIDATION (a wrong reverse map would invent holes): a 6-cell fixture
+# (two 1x3x2 stone pillars across a real-band seam, the air column at the
+# seam plane keeping both pillars' seam faces exposed) is written, its
+# remesh waited, and the SAME reverse map must recover EXACTLY the analytic
+# faces (22 per pillar = 36 cell faces − 2×7 interior bonds; 12 on the seam
+# plane). The fixture is then REVERTED and the clear re-checked before the
+# census runs.
+#
+# MEASUREMENT ONLY — no mesher, no fill, no snap-ring change. `ok` = the
+# instrument's self-check (validation + settle + clean map), NOT the seam
+# state: the holes are the FINDING; AC-0354/AC-0355 gate on `missing_faces`.
+# ============================================================================
+
+func _seamc_flat(a: Array) -> bool:
+	var v0 := float(a[0])
+	for i in range(1, 4):
+		if absf(float(a[i]) - v0) > 0.001:
+			return false
+	return true
+
+# AC-0353: reverse-map one planar quad (verts [4k..4k+3]) of a landed slab
+# mesh. Returns null when the quad is non-planar / out of range (the caller
+# counts it as a map anomaly). Otherwise
+# [axis, coord, a0, a1, b0, b1, dir, nrm]:
+#   axis   0 = X / 1 = Y / 2 = Z (the flat axis)
+#   coord  the plane coordinate: local x or z (0..16) for axis 0/2,
+#          ABSOLUTE y (0..384) for axis 1
+#   a0..a1 covered cells along ABSOLUTE y (axis 0/2) or LOCAL x (axis 1)
+#   b0..b1 covered cells along LOCAL z (axis 0/1) or LOCAL x (axis 2)
+#   dir    Vector3i face direction from the stored normal
+#   nrm    1 when the winding is the OPPOSITE of the stored normal (the
+#          emitter's consistent sign — pinned by the fixture validation),
+#          -1 when it agrees, 0 when non-axis-aligned
+func _seamc_quad(verts: PackedVector3Array, normals: PackedVector3Array, k: int, yoff: int):
+	var v0: Vector3 = verts[k * 4]
+	var v1: Vector3 = verts[k * 4 + 1]
+	var v2: Vector3 = verts[k * 4 + 2]
+	var v3: Vector3 = verts[k * 4 + 3]
+	var xs: Array = [v0.x, v1.x, v2.x, v3.x]
+	var ys: Array = [v0.y + yoff, v1.y + yoff, v2.y + yoff, v3.y + yoff]
+	var zs: Array = [v0.z, v1.z, v2.z, v3.z]
+	var axis := -1
+	if _seamc_flat(xs):
+		axis = 0
+	elif _seamc_flat(ys):
+		axis = 1
+	elif _seamc_flat(zs):
+		axis = 2
+	if axis < 0:
+		return null
+	var coord: int
+	var a0: int
+	var a1: int
+	var b0: int
+	var b1: int
+	if axis == 0:
+		coord = int(round(v0.x))
+		a0 = int(round(ys.min()))
+		a1 = int(round(ys.max())) - 1
+		b0 = int(round(zs.min()))
+		b1 = int(round(zs.max())) - 1
+	elif axis == 1:
+		coord = int(round(v0.y + yoff))
+		a0 = int(round(xs.min()))
+		a1 = int(round(xs.max())) - 1
+		b0 = int(round(zs.min()))
+		b1 = int(round(zs.max())) - 1
+	else:
+		coord = int(round(v0.z))
+		a0 = int(round(ys.min()))
+		a1 = int(round(ys.max())) - 1
+		b0 = int(round(xs.min()))
+		b1 = int(round(xs.max())) - 1
+	var ok := a0 <= a1 and b0 <= b1
+	if axis == 0 or axis == 2:
+		ok = ok and coord >= 0 and coord <= 16 and a0 >= 0 and a1 < Data.HEIGHT and b0 >= 0 and b1 < 16
+	else:
+		ok = ok and coord >= 0 and coord <= Data.HEIGHT and a0 >= 0 and a1 < 16 and b0 >= 0 and b1 < 16
+	if not ok:
+		return null
+	var n: Vector3 = normals[k * 4]
+	var dir := Vector3i.ZERO
+	if axis == 0:
+		dir = Vector3i(signi(int(round(n.x))), 0, 0)
+	elif axis == 1:
+		dir = Vector3i(0, signi(int(round(n.y))), 0)
+	else:
+		dir = Vector3i(0, 0, signi(int(round(n.z))))
+	# the winding cross-check: the boundary cycle of the two emitted
+	# triangles ((v0,v2,v1) + (v0,v3,v2)) is v0 → v3 → v2 → v1 → v0; the
+	# polygon normal over that cycle is 2×area along the face axis.
+	var w := Vector3.ZERO
+	var p0 := Vector3(v0.x, v0.y + yoff, v0.z)
+	var p1 := Vector3(v1.x, v1.y + yoff, v1.z)
+	var p2 := Vector3(v2.x, v2.y + yoff, v2.z)
+	var p3 := Vector3(v3.x, v3.y + yoff, v3.z)
+	w += p0.cross(p3) + p3.cross(p2) + p2.cross(p1) + p1.cross(p0)
+	var w_axis: float
+	var w_other: float
+	if axis == 0:
+		w_axis = w.x
+		w_other = absf(w.y) + absf(w.z)
+	elif axis == 1:
+		w_axis = w.y
+		w_other = absf(w.x) + absf(w.z)
+	else:
+		w_axis = w.z
+		w_other = absf(w.x) + absf(w.y)
+	var nrm := 0
+	if w_axis != 0.0 and w_other < 0.001 * absf(w_axis):
+		var n_axis: float
+		if axis == 0:
+			n_axis = n.x
+		elif axis == 1:
+			n_axis = n.y
+		else:
+			n_axis = n.z
+		nrm = 1 if w_axis * n_axis < 0.0 else -1
+	return [axis, coord, a0, a1, b0, b1, dir, nrm]
+
+# AC-0353: the low slot MeshInstance3D for slab si (the off-tree record),
+# or null.
+func _seamc_low_at(c: Node3D, si: int):
+	for i in range(c.low_slabs.size()):
+		if int(c.low_slabs[i]) == si:
+			return c.low_instances[i]
+	return null
+
+# AC-0353: the VISIBLE slab mesh for slab si — the high instance when it
+# is visible, else the low slot (one visible tier per slab, the double-
+# LOD contract). [mi, yoff], or an EMPTY array when the slab shows
+# nothing (counted by the caller).
+func _seamc_visible_mesh(c: Node3D, si: int) -> Array:
+	var s = c.slabs[si]
+	var mi = s.mesh_instance
+	if mi != null and bool(mi.visible) and mi.mesh != null:
+		return [mi, 0]
+	var li: MeshInstance3D = _seamc_low_at(c, si)
+	if li != null and li.mesh != null and int(li.mesh.get_surface_count()) >= 1:
+		return [li, si * 16]
+	return []
+
+# AC-0353: collect the EMITTED faces on the column's four seam planes from
+# the live landed meshes. Returns {east/west/south/north: PackedByteArray
+# (384×16, row = y, t = the along-plane local cell), unshown, quads,
+# anomalies, winding, winding_bad}.
+func _seamc_emit_planes(c: Node3D) -> Dictionary:
+	var east := PackedByteArray(); east.resize(Data.HEIGHT * 16)
+	var west := PackedByteArray(); west.resize(Data.HEIGHT * 16)
+	var south := PackedByteArray(); south.resize(Data.HEIGHT * 16)
+	var north := PackedByteArray(); north.resize(Data.HEIGHT * 16)
+	var out := {"east": east, "west": west, "south": south, "north": north,
+		"unshown": 0, "quads": 0, "anomalies": 0, "winding": 0, "winding_bad": 0}
+	for si in range(c.slabs.size()):
+		var vm: Array = _seamc_visible_mesh(c, si)
+		if vm.is_empty():
+			out["unshown"] = int(out["unshown"]) + 1
+			continue
+		var mi: MeshInstance3D = vm[0]
+		var yoff := int(vm[1])
+		var mesh: ArrayMesh = mi.mesh
+		var arrs: Array = mesh.surface_get_arrays(0)
+		var verts: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+		var normals: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
+		var nq := int(verts.size()) / 4
+		for k in range(nq):
+			var q: Array = _seamc_quad(verts, normals, k, yoff)
+			if q == null:
+				out["anomalies"] = int(out["anomalies"]) + 1
+				continue
+			out["winding"] = int(out["winding"]) + 1
+			if int(q[7]) != 1:
+				out["winding_bad"] = int(out["winding_bad"]) + 1
+			var axis := int(q[0])
+			if axis == 1:
+				continue  # a Y-flat face never sits on a vertical seam plane
+			var coord := int(q[1])
+			if coord != 0 and coord != 16:
+				continue  # an interior face — the occlude arm's domain
+			var dir: Vector3i = q[6]
+			var want: Vector3i
+			if axis == 0:
+				want = Vector3i(1, 0, 0) if coord == 16 else Vector3i(-1, 0, 0)
+			else:
+				want = Vector3i(0, 0, 1) if coord == 16 else Vector3i(0, 0, -1)
+			if dir != want:
+				out["anomalies"] = int(out["anomalies"]) + 1
+				continue
+			var grid: PackedByteArray
+			if axis == 0:
+				grid = east if coord == 16 else west
+			else:
+				grid = south if coord == 16 else north
+			out["quads"] = int(out["quads"]) + 1
+			for y in range(int(q[2]), int(q[3]) + 1):
+				var base := y * 16
+				for t in range(int(q[4]), int(q[5]) + 1):
+					grid[base + t] = 1
+	return out
+
+# AC-0353: the column's CURRENT solid set on its four edge planes, as
+# PackedByteArray(384×16) grids (row = y, t = the along-plane local cell).
+# F/A columns: the mesher's stab semantics over flat_data(); BC (far
+# h-only): y ≤ H[idx] (the H u16 from far_h) OR a tree cell (the emitter's
+# veg cells — the far_veg cache, else AweGen.veg_cells, a pure f(H, biome,
+# seed)). Aquifer water is NOT solid (stab semantics) — the coarse far
+# emitter's >half grid test counts it solid, and that divergence is
+# exactly the far-band class this census measures.
+func _seamc_solid_planes(c: Node3D, stab: PackedByteArray, veg_cache: Dictionary) -> Dictionary:
+	var far := bool(c.far)
+	var flat: PackedByteArray = PackedByteArray()
+	if not far:
+		flat = c.flat_data()
+	var veg: Dictionary = {}
+	if far:
+		var vkey := "%d,%d" % [int(c.cx), int(c.cz)]
+		if veg_cache.has(vkey):
+			veg = veg_cache[vkey]
+		else:
+			var vb: PackedByteArray
+			if c.far_veg.size() > 0:
+				vb = c.far_veg
+			else:
+				vb = WorldGen.gen_cpp().veg_cells(int(c.cx), int(c.cz), Game.world_seed, int(Data.HEIGHT), int(Data.SEA))
+			if vb.size() >= 4:
+				var vn := vb.size() / 4
+				for kk in range(vn):
+					var cc := int(vb[kk * 4]) | (int(vb[kk * 4 + 1]) << 8) | (int(vb[kk * 4 + 2]) << 16) | (int(vb[kk * 4 + 3]) << 24)
+					var vy := (cc >> 8) & 0xFFFF
+					var vz := (cc >> 4) & 0xF
+					var vx := cc & 0xF
+					veg[vy * 4096 + vz * 16 + vx] = true
+			veg_cache[vkey] = veg
+	var east := PackedByteArray(); east.resize(Data.HEIGHT * 16)
+	var west := PackedByteArray(); west.resize(Data.HEIGHT * 16)
+	var south := PackedByteArray(); south.resize(Data.HEIGHT * 16)
+	var north := PackedByteArray(); north.resize(Data.HEIGHT * 16)
+	var H: PackedByteArray = c.far_h if far else PackedByteArray()
+	for y in range(Data.HEIGHT):
+		var row := y * 16
+		for t in range(16):
+			var s_east := false
+			var s_west := false
+			var s_south := false
+			var s_north := false
+			if not far:
+				s_east = stab[int(flat[(y << 8) | (t << 4) | 15])] > 0
+				s_west = stab[int(flat[(y << 8) | (t << 4) | 0])] > 0
+				s_south = stab[int(flat[(y << 8) | (15 << 4) | t])] > 0
+				s_north = stab[int(flat[(y << 8) | (0 << 4) | t])] > 0
+			else:
+				var he := int(H[2 * (t * 16 + 15)]) | (int(H[2 * (t * 16 + 15) + 1]) << 8)
+				var hw := int(H[2 * (t * 16 + 0)]) | (int(H[2 * (t * 16 + 0) + 1]) << 8)
+				var hs = int(H[2 * (15 * 16 + t)]) | (int(H[2 * (15 * 16 + t) + 1]) << 8)
+				var hn = int(H[2 * (0 * 16 + t)]) | (int(H[2 * (0 * 16 + t) + 1]) << 8)
+				s_east = y <= he or veg.has(y * 4096 + t * 16 + 15)
+				s_west = y <= hw or veg.has(y * 4096 + t * 16 + 0)
+				s_south = y <= hs or veg.has(y * 4096 + 15 * 16 + t)
+				s_north = y <= hn or veg.has(y * 4096 + 0 * 16 + t)
+			if s_east:
+				east[row + t] = 1
+			if s_west:
+				west[row + t] = 1
+			if s_south:
+				south[row + t] = 1
+			if s_north:
+				north[row + t] = 1
+	return {"east": east, "west": west, "south": south, "north": north}
+
+# AC-0353: recover the (owner world cell, face direction) of EVERY quad of
+# a column's visible slab meshes — the validation's full reverse map.
+func _seamc_recover_faces(c: Node3D) -> Array:
+	var out: Array = []
+	var cxw := int(c.cx) * 16
+	var czw := int(c.cz) * 16
+	for si in range(c.slabs.size()):
+		var vm: Array = _seamc_visible_mesh(c, si)
+		if vm.is_empty():
+			continue
+		var mi: MeshInstance3D = vm[0]
+		var yoff := int(vm[1])
+		var mesh: ArrayMesh = mi.mesh
+		var arrs: Array = mesh.surface_get_arrays(0)
+		var verts: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+		var normals: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
+		var nq := int(verts.size()) / 4
+		for k in range(nq):
+			var q: Array = _seamc_quad(verts, normals, k, yoff)
+			if q == null:
+				continue
+			var axis := int(q[0])
+			var coord := int(q[1])
+			var dir: Vector3i = q[6]
+			if axis == 0:
+				var lx := coord - 1 if dir.x > 0 else coord
+				for y in range(int(q[2]), int(q[3]) + 1):
+					for t in range(int(q[4]), int(q[5]) + 1):
+						out.append([Vector3i(cxw + lx, y, czw + t), dir])
+			elif axis == 2:
+				var lz := coord - 1 if dir.z > 0 else coord
+				for y in range(int(q[2]), int(q[3]) + 1):
+					for t in range(int(q[4]), int(q[5]) + 1):
+						out.append([Vector3i(cxw + t, y, czw + lz), dir])
+			else:
+				var yy := coord - 1 if dir.y > 0 else coord
+				if yy < 0 or yy >= Data.HEIGHT:
+					continue
+				for a in range(int(q[2]), int(q[3]) + 1):
+					for b in range(int(q[4]), int(q[5]) + 1):
+						out.append([Vector3i(cxw + a, yy, czw + b), dir])
+	return out
+
+# AC-0353: world drain + light idle (the brightslab settle condition).
+func _seamc_settled() -> bool:
+	return world.star_light_idle() and world.dirty_queue.is_empty() \
+		and world.threadmesh_inflight.is_empty() and world.star_remesh.is_empty()
+
+# AC-0353: is this resident column's geometry COMPLETE for the census?
+# Tier 0/1 (real band / band A): the high build landed (mesh_built).
+# Tier 2/3 (far B/C): the low lane caught up (_low_pending_sis empty).
+# Tier 4 (data-only, past the render edge): nothing to draw — complete.
+func _seamc_col_complete(c: Node3D) -> bool:
+	var tier: int = world._lod_tier_of(int(c.cx) - int(world.last_pcx), int(c.cz) - int(world.last_pcz))
+	if tier <= 1:
+		return c.data.size() > 0 and bool(c.mesh_built)
+	if tier <= 3:
+		return bool(c.far) and world._low_pending_sis(c).is_empty()
+	return true
+
+# AC-0353: wait until every resident column is census-complete + the
+# drains are idle. Bounded — a partial settle is REPORTED, not fatal.
+func _seamc_wait_settle(cap_frames: int) -> Dictionary:
+	var frames := 0
+	var pending: Array = []
+	var complete := false
+	while frames < cap_frames:
+		pending = []
+		for key in world.chunks:
+			var c: Node3D = world.chunks[key]
+			if not _seamc_col_complete(c):
+				pending.append(key)
+		complete = pending.is_empty() and _seamc_settled()
+		if complete:
+			break
+		await get_tree().physics_frame
+		frames += 1
+	return {"complete": complete, "waited": frames, "pending": pending}
+
+# AC-0353: the reverse-map VALIDATION — the small known case. Two 1×3×2
+# stone pillars across a real-band seam (the air column at the seam plane
+# keeps both pillars' seam faces exposed): write → wait the remesh → the
+# same reverse map the census uses must recover EXACTLY the analytic faces
+# (22 per pillar; 12 on the seam plane, 6 × +X owners (S−1,y,z) and
+# 6 × −X owners (S+1,y,z)) with the winding consistent. The fixture is
+# reverted and the clear re-checked before the census runs.
+func _seamc_validate(cx0: int, cz0: int) -> Dictionary:
+	var val := {"ok": false, "why": "ok"}
+	var cA = world.chunks.get(world._key(cx0, cz0))
+	var cB = world.chunks.get(world._key(cx0 + 1, cz0))
+	if cA == null or cB == null or not bool(cA.mesh_built) or not bool(cB.mesh_built):
+		val["why"] = "neighbour not built"
+		return val
+	var S := (cx0 + 1) * 16  # the seam plane's world x
+	var site: Array = []
+	for zc in [cz0 * 16 + 4, cz0 * 16 + 8, cz0 * 16 + 12]:
+		# the terrain top under the site box (5 columns × 4 z rows)
+		var ytop := 0
+		for wx in range(S - 2, S + 3):
+			var ck = world.chunks.get(world._key(int(floorf(float(wx) / 16.0)), cz0))
+			if ck != null and int(ck.top) > ytop:
+				ytop = int(ck.top)
+		var y0 := ytop + 4
+		# the air box: every neighbour of every pillar cell must be air
+		var air := true
+		for wx in range(S - 2, S + 3):
+			for wz in range(zc - 1, zc + 3):
+				for wy in range(y0 - 1, y0 + 4):
+					if int(world.get_block(wx, wy, wz)) != 0:
+						air = false
+						break
+				if not air:
+					break
+			if not air:
+				break
+		if air:
+			site = [S, zc, y0]
+			break
+	if site.is_empty():
+		val["why"] = "no air box near the seam"
+		return val
+	var S2 := int(site[0])
+	var zc2 := int(site[1])
+	var y0 := int(site[2])
+	var pillar: Dictionary = {}
+	for y in range(y0, y0 + 3):
+		for z in range(zc2, zc2 + 2):
+			pillar["%d,%d,%d" % [S2 - 1, y, z]] = true
+			pillar["%d,%d,%d" % [S2 + 1, y, z]] = true
+	# write the fixture — and the expected set is computed AFTER the
+	# write (the cull rule reads the live data; before the write every
+	# neighbour is air and the set would count the interior bonds too)
+	for y in range(y0, y0 + 3):
+		for z in range(zc2, zc2 + 2):
+			world.set_block(S2 - 1, y, z, 3)
+			world.set_block(S2 + 1, y, z, 3)
+	var write_check := 0
+	for pk in pillar:
+		var pck: PackedStringArray = String(pk).split(",")
+		if int(world.get_block(int(pck[0]), int(pck[1]), int(pck[2]))) == 3:
+			write_check += 1
+	val["write_check"] = write_check
+	if write_check != 12:
+		val["why"] = "fixture write not applied (%d/12)" % write_check
+		# revert what did land, then bail
+		for y in range(y0, y0 + 3):
+			for z in range(zc2, zc2 + 2):
+				world.set_block(S2 - 1, y, z, 0)
+				world.set_block(S2 + 1, y, z, 0)
+		return val
+	# the expected faces: the cull rule over the LIVE data — a face for
+	# every pillar cell / direction whose neighbour is air (the interior
+	# pillar neighbours are stone = same id, so this replicates the
+	# mesher's decision exactly for the fixture: 22 per pillar, 12 on
+	# the seam plane)
+	var expected: Dictionary = {}
+	for pk in pillar:
+		var pc: PackedStringArray = String(pk).split(",")
+		var px := int(pc[0])
+		var py := int(pc[1])
+		var pz := int(pc[2])
+		for d in [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]:
+			var nb := Vector3i(px + int(d[0]), py + int(d[1]), pz + int(d[2]))
+			if int(world.get_block(nb.x, nb.y, nb.z)) == 0:
+				expected["%d,%d,%d,%d,%d,%d" % [px, py, pz, int(d[0]), int(d[1]), int(d[2])]] = true
+	var expected_seam := 0
+	for ek in expected:
+		var ep: PackedStringArray = String(ek).split(",")
+		var epx := int(ep[0])
+		var edx := int(ep[3])
+		# on the seam plane: pillar A's +X face / pillar B's -X face
+		if (epx == S2 - 1 and edx == 1) or (epx == S2 + 1 and edx == -1):
+			expected_seam += 1
+	var ws := await _seamc_wait_settle(2400)
+	if not bool(ws.complete):
+		val["why"] = "post-fixture settle incomplete"
+		val["settle"] = ws
+		return val
+	var recovered: Dictionary = {}
+	var rec_seam := 0
+	for col in [cA, cB]:
+		for rf in _seamc_recover_faces(col):
+			var cell: Vector3i = rf[0]
+			var dir: Vector3i = rf[1]
+			if not pillar.has("%d,%d,%d" % [cell.x, cell.y, cell.z]):
+				continue
+			recovered["%d,%d,%d,%d,%d,%d" % [cell.x, cell.y, cell.z, dir.x, dir.y, dir.z]] = true
+			if (cell.x == S2 - 1 and dir.x > 0) or (cell.x == S2 + 1 and dir.x < 0):
+				rec_seam += 1
+	val["site"] = site
+	val["expected"] = expected.size()
+	val["recovered"] = recovered.size()
+	val["seam_expected"] = expected_seam
+	val["seam_recovered"] = rec_seam
+	val["missing"] = []
+	val["extra"] = []
+	for ek in expected:
+		if not recovered.has(ek):
+			val["missing"].append(ek)
+	for rk in recovered:
+		if not expected.has(rk):
+			val["extra"].append(rk)
+	# the winding consistency across BOTH fixture columns (all recovered
+	# quads of the two columns, not just the fixture faces)
+	var wchecked := 0
+	var wbad := 0
+	for col in [cA, cB]:
+		for si in range(col.slabs.size()):
+			var vm: Array = _seamc_visible_mesh(col, si)
+			if vm.is_empty():
+				continue
+			var mesh: ArrayMesh = vm[0].mesh
+			var arrs: Array = mesh.surface_get_arrays(0)
+			var verts: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+			var normals: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
+			for k in range(int(verts.size()) / 4):
+				var q: Array = _seamc_quad(verts, normals, k, int(vm[1]))
+				if q == null:
+					wbad += 1
+					continue
+				wchecked += 1
+				if int(q[7]) != 1:
+					wbad += 1
+	val["winding_checked"] = wchecked
+	val["winding_bad"] = wbad
+	# revert the fixture and verify the clear
+	for y in range(y0, y0 + 3):
+		for z in range(zc2, zc2 + 2):
+			world.set_block(S2 - 1, y, z, 0)
+			world.set_block(S2 + 1, y, z, 0)
+	var ws2 := await _seamc_wait_settle(2400)
+	var rec2 := -1
+	if bool(ws2.complete):
+		rec2 = 0
+		for col in [cA, cB]:
+			for rf in _seamc_recover_faces(col):
+				var cell: Vector3i = rf[0]
+				if pillar.has("%d,%d,%d" % [cell.x, cell.y, cell.z]):
+					rec2 += 1
+	val["clear_ok"] = bool(ws2.complete) and rec2 == 0
+	val["clear_left"] = rec2
+	val["ok"] = recovered.size() == expected.size() and val["missing"].is_empty() \
+		and val["extra"].is_empty() and wbad == 0 and val["clear_ok"]
+	return val
+
+# AC-0353: the arm body — settle, validate the reverse map, then the census.
+func _seamcensus_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var stab := main._occl_stab()
+	world.recenter(spawn.x, spawn.z, true)
+	var wait_cap := 36000
+	var wc := OS.get_environment("AWECRAFT_SEAM_WAIT")
+	if wc != "":
+		wait_cap = wc.to_int()
+	var settle: Dictionary = await _seamc_wait_settle(wait_cap)
+	var cx0 := int(floorf(spawn.x / 16.0))
+	var cz0 := int(floorf(spawn.z / 16.0))
+	var val: Dictionary = await _seamc_validate(cx0, cz0)
+	# --- the census over every built resident column ---
+	var veg_cache: Dictionary = {}
+	var info: Dictionary = {}  # key -> {class, solid, emit, no_caves}
+	var cols := {"resident": 0, "built": 0, "F": 0, "A": 0, "BC": 0, "no_caves": 0,
+		"unshown_slabs": 0, "unshown_owed": 0, "map_anomalies": 0, "winding_quads": 0, "winding_bad": 0}
+	var uncomplete: Array = []
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		cols["resident"] = int(cols["resident"]) + 1
+		if not _seamc_col_complete(c):
+			uncomplete.append(key)
+			continue
+		var tier: int = world._lod_tier_of(int(c.cx) - int(world.last_pcx), int(c.cz) - int(world.last_pcz))
+		var cls := "F"
+		if bool(c.far):
+			cls = "A" if bool(c.far_mat) else "BC"
+		if tier >= 4:
+			continue  # data-only — no draw, no census
+		cols["built"] = int(cols["built"]) + 1
+		cols[cls] = int(cols[cls]) + 1
+		if bool(c.no_caves):
+			cols["no_caves"] = int(cols["no_caves"]) + 1
+		var ep: Dictionary = _seamc_emit_planes(c)
+		var sp: Dictionary = _seamc_solid_planes(c, stab, veg_cache)
+		info[key] = {"cls": cls, "solid": sp, "emit": ep, "no_caves": bool(c.no_caves)}
+		cols["unshown_slabs"] = int(cols["unshown_slabs"]) + int(ep.unshown)
+		# unshown_owed: a slab with solid cells ON AN EDGE PLANE (seam
+		# geometry owed) but no visible mesh at all — the real red flag
+		# (plain unshown_slabs are mostly air slabs above the surface)
+		for si in range(c.slabs.size()):
+			var vms: Array = _seamc_visible_mesh(c, si)
+			if not vms.is_empty():
+				continue
+			var ytop := mini(si * 16 + 16, Data.HEIGHT)
+			var owed := false
+			for y in range(si * 16, ytop):
+				var row := y * 16
+				if int(sp.east[row]) > 0 or int(sp.west[row]) > 0 \
+						or int(sp.south[row]) > 0 or int(sp.north[row]) > 0:
+					owed = true
+					break
+			if owed:
+				cols["unshown_owed"] = int(cols["unshown_owed"]) + 1
+		cols["map_anomalies"] = int(cols["map_anomalies"]) + int(ep.anomalies)
+		cols["winding_quads"] = int(cols["winding_quads"]) + int(ep.winding)
+		cols["winding_bad"] = int(cols["winding_bad"]) + int(ep.winding_bad)
+	var floor_y := int(world._far_floor_y())
+	var seams_checked := 0
+	var seams_bad := 0
+	var rows_compared := 0
+	var rows_ok := 0
+	var missing_faces := 0
+	var spurious_faces := 0
+	var spurious_single := 0
+	var shifted_faces := 0
+	var bf := {"missing": 0, "spurious": 0, "spurious_single": 0, "shifted": 0}
+	var by_class: Dictionary = {}
+	var worst: Array = []
+	var worst_per_pair: Dictionary = {}
+	var seam_rows: Array = []
+	var keys := info.keys()
+	keys.sort()
+	for key in keys:
+		var A: Dictionary = info[key]
+		var ksplit: PackedStringArray = key.split(",")
+		var ax := int(ksplit[0])
+		var az := int(ksplit[1])
+		for pair in [[1, 0, "+X", "east", "west"], [0, 1, "+Z", "south", "north"]]:
+			var bkey: String = world._key(ax + int(pair[0]), az + int(pair[1]))
+			if not info.has(bkey):
+				continue
+			var B: Dictionary = info[bkey]
+			seams_checked += 1
+			var plane: String = pair[2]
+			var ea: PackedByteArray = A.emit[pair[3]]
+			var eb: PackedByteArray = B.emit[pair[4]]
+			var sa: PackedByteArray = A.solid[pair[3]]
+			var sb: PackedByteArray = B.solid[pair[4]]
+			var cls_pair: String
+			if A.cls <= B.cls:
+				cls_pair = "%s-%s" % [A.cls, B.cls]
+			else:
+				cls_pair = "%s-%s" % [B.cls, A.cls]
+			var st: Dictionary = by_class.get(cls_pair, {"seams": 0, "missing": 0, "spurious": 0, "spurious_single": 0, "shifted": 0, "below_floor": 0})
+			st["seams"] = int(st["seams"]) + 1
+			var m := 0
+			var s := 0
+			var ss := 0
+			var sh := 0
+			var ymn := -1
+			var ymx := -1
+			var bf_cnt := 0
+			for y in range(Data.HEIGHT):
+				var row := y * 16
+				for t in range(16):
+					rows_compared += 1
+					var asolid := int(sa[row + t])
+					var bsolid := int(sb[row + t])
+					var fa := int(ea[row + t])
+					var fb := int(eb[row + t])
+					if asolid == 0 and bsolid == 0 and fa == 0 and fb == 0:
+						rows_ok += 1
+						continue
+					var ex_a := asolid == 1 and bsolid == 0
+					var ex_b := bsolid == 1 and asolid == 0
+					var kind := ""
+					if fa == (1 if ex_a else 0) and fb == (1 if ex_b else 0):
+						rows_ok += 1
+						continue
+					elif fa == 0 and fb == 0 and asolid != bsolid:
+						kind = "missing"
+						m += 1
+					elif fa == 1 and fb == 1:
+						kind = "spurious"
+						s += 1
+					elif (ex_a and fa == 0 and fb == 1) or (ex_b and fb == 0 and fa == 1):
+						kind = "shifted"
+						sh += 1
+					else:
+						kind = "spurious_single"
+						ss += 1
+					if y < floor_y:
+						bf[kind] = int(bf[kind]) + 1
+						bf_cnt += 1
+					if ymn < 0:
+						ymn = y
+					if y > ymx:
+						ymx = y
+					var pcnt := int(worst_per_pair.get(cls_pair, 0))
+					if kind == "missing":
+						missing_faces += 1
+					elif kind == "spurious":
+						spurious_faces += 1
+					elif kind == "shifted":
+						shifted_faces += 1
+					else:
+						spurious_single += 1
+					st[kind] = int(st[kind]) + 1
+					if pcnt < 10 and worst.size() < 60:
+						worst_per_pair[cls_pair] = pcnt + 1
+						var cellw: Array
+						if plane == "+X":
+							cellw = [ax * 16 + 15, y, az * 16 + t]
+						else:
+							cellw = [ax * 16 + t, y, az * 16 + 15]
+						worst.append({"a": key, "b": bkey, "plane": plane, "y": y,
+							"cell": cellw, "dir": kind,
+							"classes": [A.cls, B.cls], "no_caves": [A.no_caves, B.no_caves],
+							"solids": [asolid, bsolid], "faces": [fa, fb]})
+			st["below_floor"] = int(st["below_floor"]) + bf_cnt
+			by_class[cls_pair] = st
+			var bad := m + s + ss + sh
+			if bad > 0:
+				seams_bad += 1
+				if seam_rows.size() < 200:
+					seam_rows.append({"a": key, "b": bkey, "plane": plane,
+						"y0": ymn, "y1": ymx, "missing": m, "spurious": s,
+						"spurious_single": ss, "shifted": sh,
+						"classes": [A.cls, B.cls], "no_caves": [A.no_caves, B.no_caves],
+						"below_floor": bf_cnt})
+	var out := {
+		"mode": "seamcensus",
+		"ok": bool(val.ok) and bool(settle.complete) and int(cols.map_anomalies) == 0,
+		"seed": int(Game.world_seed),
+		"radius": int(world.render_radius),
+		"floor_y": floor_y,
+		"settle": {"complete": bool(settle.complete), "waited": int(settle.waited),
+			"pending": settle.pending.slice(0, 30)},
+		"val": val,
+		"cols": cols,
+		"seams_checked": seams_checked,
+		"seams_bad": seams_bad,
+		"rows_compared": rows_compared,
+		"rows_ok": rows_ok,
+		"missing_faces": missing_faces,
+		"spurious_faces": spurious_faces,
+		"spurious_single": spurious_single,
+		"shifted_faces": shifted_faces,
+		"below_floor": bf,
+		"by_class": by_class,
+		"worst": worst,
+		"seams": seam_rows,
+		"wall_ms": Time.get_ticks_msec() - t0,
+	}
+	Debug.result(out)
 
 
 func _occlude_test(spawn: Vector3) -> void:
