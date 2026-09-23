@@ -6271,6 +6271,34 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			print("TMESH DATADROP %d,%d (data/fl changed mid-build)" % [int(e["cx"]), int(e["cz"])])
 		_tm_retrigger(key, c, e)
 		return
+	# AC-0354: the NEIGHBOUR set was snapshotted at dispatch (nbs_stamps —
+	# the col_gen/data_gen/fl_gen epoch of each axis neighbour the ring
+	# covers — the AC-0247 own-column identity+stamp pattern, one level
+	# out). The own-column checks above compare NOTHING of the neighbour
+	# state: a neighbour that moved between dispatch and landing (a
+	# boundary edit's _dirty_front re-dispatch, a far payload stamp, a
+	# demote, an evicted column) leaves a mesh built on a stale ring — a
+	# WRONG face decision lands (at a boundary: the see-through gap).
+	# Compare the captured epochs against the LIVE neighbours (a gone
+	# neighbour is a mismatch — the re-dispatch defers until it lands);
+	# any mismatch is the own-column mismatch treatment: datadrop +
+	# retrigger, which re-dispatches with a fresh snapshot.
+	var nbs_st: Dictionary = e.get("nbs_stamps", {})
+	if not nbs_st.is_empty():
+		var nb_stale := false
+		for nk in nbs_st:
+			var nc2 = chunks.get(nk)
+			if nc2 == null or [int(nc2.col_gen), int(nc2.data_gen), int(nc2.fl_gen)] != nbs_st[nk]:
+				nb_stale = true
+				break
+		if nb_stale:
+			_tm_datadrop += 1
+			if key == _editprobe_key:
+				_editprobe_drop += 1
+			if _tm_debug:
+				print("TMESH DATADROP %d,%d (neighbour changed mid-build)" % [int(e["cx"]), int(e["cz"])])
+			_tm_retrigger(key, c, e)
+			return
 	# AC-0152: the band can change mid-flight (recenter on player movement)
 	# — a stale-band result is dropped and the chunk re-queues fresh.
 	if int(e.get("band", int(c.band))) != int(c.band):
@@ -6815,15 +6843,19 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 	# AC-0208: C++-ONLY — the GDScript deep-copy nbs (the mc==null fallback)
 	# was removed.
 	var nbs: Dictionary = {}
+	var nbs_stamps: Dictionary = {}  # AC-0354: the 4 axis neighbours' epochs (col_gen/data_gen/fl_gen) the rings were taken from — the handoff validates them against the LIVE neighbours (the own-column stamp says nothing about the neighbour state)
 	var mc: Variant = ChunkScript.mesh_cpp()
 	for dx in range(-1, 2):
 		for dz in range(-1, 2):
 			if (dx == 0) == (dz == 0):
 				continue
-			var nc = chunks.get(_key(cx + dx, cz + dz))
+			var nk := _key(cx + dx, cz + dz)
+			var nc = chunks.get(nk)
 			if nc == null or nc.data.is_empty():
 				return false
 			nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep, nc.far_payload())  # AC-0237: ungenerated slabs read as solid; AC-0284b: a far neighbor's ring is the skip-fill edge row
+			if dx == 0 or dz == 0:
+				nbs_stamps[nk] = [int(nc.col_gen), int(nc.data_gen), int(nc.fl_gen)]  # AC-0354: the axis neighbours the ring covers (the diagonal entries are unused for face decisions — not stamped)
 	var tn1 := Time.get_ticks_usec()
 	var ms_w: Dictionary
 	if not _tm_ms_full.rects.is_empty():
@@ -6852,7 +6884,8 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 		"fl": mc.slab_copy(c.fl),
 		"stamp": c.stamp(),
 		"band": int(c.band),
-		"nbs": nbs, "eff": fast_eff, "eff_trust": false,
+		"nbs": nbs, "nbs_stamps": nbs_stamps,  # AC-0354: neighbour epochs the handoff re-checks
+		"eff": fast_eff, "eff_trust": false,
 		"ctx": ctx_w, "ms": ms_w, "ngen": _ngens_for(cx, cz),
 		"edit": true, "si0": si0, "si1": si1,
 		"scoped_snap": true, "d_off": d_lo, "d_hi": d_hi,
@@ -6917,12 +6950,14 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 		perf_edit_syncs += 1
 		return false  # AC-0263: the data lane owns it (the sync gen is gone)
 	var nbs: Dictionary = {}
+	var nbs_stamps: Dictionary = {}  # AC-0354: the 4 axis neighbours' epochs (col_gen/data_gen/fl_gen) the rings were taken from — the handoff validates them against the LIVE neighbours (the own-column stamp says nothing about the neighbour state)
 	var mc: Variant = ChunkScript.mesh_cpp()
 	for dx in range(-1, 2):
 		for dz in range(-1, 2):
 			if (dx == 0) == (dz == 0):
 				continue
-			var nc = chunks.get(_key(cx + dx, cz + dz))
+			var nk := _key(cx + dx, cz + dz)
+			var nc = chunks.get(nk)
 			if nc == null or nc.data.is_empty():
 				# AC-0160 (AC-0263): a missing neighbor DEFERS (the caller's
 				# retry re-queues; threadgen delivers the missing data within
@@ -6938,6 +6973,8 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 			# main-thread value snapshot). AC-0208: C++-ONLY — the GDScript
 			# deep-copy nbs (the mc==null fallback) was removed.
 			nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep, nc.far_payload())  # AC-0237: ungenerated slabs read as solid; AC-0284b: a far neighbor's ring is the skip-fill edge row
+			if dx == 0 or dz == 0:
+				nbs_stamps[nk] = [int(nc.col_gen), int(nc.data_gen), int(nc.fl_gen)]  # AC-0354: the axis neighbours the ring covers (the diagonal entries are unused for face decisions — not stamped)
 	if _tm_inflight_keys.has(key):
 		_tm_dedup += 1
 		if _tm_debug:
@@ -7006,7 +7043,8 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 		"fl": mc.slab_copy(c.fl),
 		"stamp": c.stamp(),
 		"band": int(c.band),
-		"nbs": nbs, "eff": eff, "eff_trust": eff_trust, "settle": settle,
+		"nbs": nbs, "nbs_stamps": nbs_stamps,  # AC-0354: neighbour epochs the handoff re-checks
+		"eff": eff, "eff_trust": eff_trust, "settle": settle,
 		"edit_full": bool(edit_full),  # AC-0283 P2 brightslab fix: the edit-fallback full bake
 		"ctx": ctx_w, "ms": ms_w, "ngen": _ngens_for(cx, cz),
 		# AC-0233: the dispatch wall time (the edit-lane entry carried it;
@@ -7133,17 +7171,21 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 			_hslab_last_defer = 2
 			return false
 		var nbs_a: Dictionary = {}
+		var nbs_a_stamps: Dictionary = {}  # AC-0354: the 4 axis neighbours' epochs (col_gen/data_gen/fl_gen) the rings were taken from — the handoff validates them against the LIVE neighbours
 		var mc_a: Variant = ChunkScript.mesh_cpp()
 		for dx in range(-1, 2):
 			for dz in range(-1, 2):
 				if (dx == 0) == (dz == 0):
 					continue
-				var nc = chunks.get(_key(cx + dx, cz + dz))
+				var nk := _key(cx + dx, cz + dz)
+				var nc = chunks.get(nk)
 				if nc == null or nc.data.is_empty():
 					hslab_defer_nbs += 1
 					_hslab_last_defer = 3
 					return false  # the neighbor lands, the entry retries
 				nbs_a["%d,%d" % [dx, dz]] = mc_a.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep, nc.far_payload())
+				if dx == 0 or dz == 0:
+					nbs_a_stamps[nk] = [int(nc.col_gen), int(nc.data_gen), int(nc.fl_gen)]  # AC-0354: the axis neighbours the ring covers (the diagonal entries are unused for face decisions — not stamped)
 		var is_mat := not bool(c.far_mat)
 		var ms_wa: Dictionary
 		if not _tm_ms_full.rects.is_empty():
@@ -7158,7 +7200,8 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 			"fl": mc_a.slab_copy(c.fl),
 			"stamp": c.stamp(),
 			"band": int(c.band),
-			"nbs": nbs_a, "eff": sea["light"], "eff_trust": true, "settle": false,
+			"nbs": nbs_a, "nbs_stamps": nbs_a_stamps,  # AC-0354: neighbour epochs the handoff re-checks
+			"eff": sea["light"], "eff_trust": true, "settle": false,
 			"ctx": ctx_wa, "ms": ms_wa, "ngen": _ngens_for(cx, cz),
 			"tier": _tier_of(int(cx) - last_pcx, int(cz) - last_pcz),
 			"hslab": true, "si0": 0 if is_mat else si, "si1": -1 if is_mat else si,
@@ -7213,17 +7256,21 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 			print("TMESH HSLABCAPDROP %d,%d slab=%d inflight=%d" % [cx, cz, si, threadmesh_inflight.size()])
 		return false
 	var nbs: Dictionary = {}
+	var nbs_stamps: Dictionary = {}  # AC-0354: the 4 axis neighbours' epochs (col_gen/data_gen/fl_gen) the rings were taken from — the handoff validates them against the LIVE neighbours (the own-column stamp says nothing about the neighbour state)
 	var mc: Variant = ChunkScript.mesh_cpp()
 	for dx in range(-1, 2):
 		for dz in range(-1, 2):
 			if (dx == 0) == (dz == 0):
 				continue
-			var nc = chunks.get(_key(cx + dx, cz + dz))
+			var nk := _key(cx + dx, cz + dz)
+			var nc = chunks.get(nk)
 			if nc == null or nc.data.is_empty():
 				hslab_defer_nbs += 1
 				_hslab_last_defer = 3
 				return false  # AC-0263: defer — the neighbor lands, the entry retries
 			nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep, nc.far_payload())  # AC-0237: ungenerated slabs read as solid; AC-0284b: a far neighbor's ring is the skip-fill edge row
+			if dx == 0 or dz == 0:
+				nbs_stamps[nk] = [int(nc.col_gen), int(nc.data_gen), int(nc.fl_gen)]  # AC-0354: the axis neighbours the ring covers (the diagonal entries are unused for face decisions — not stamped)
 	var y_lo := si * 16
 	var y_hi := (si + 1) * 16 - 1
 	var d_lo := maxi(0, y_lo - 1)
@@ -7261,7 +7308,8 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 		"fl": mc.slab_copy(c.fl),
 		"stamp": c.stamp(),
 		"band": int(c.band),
-		"nbs": nbs, "eff": eff, "eff_trust": true, "settle": settle or star != null,
+		"nbs": nbs, "nbs_stamps": nbs_stamps,  # AC-0354: neighbour epochs the handoff re-checks
+		"eff": eff, "eff_trust": true, "settle": settle or star != null,
 		"ctx": ctx_w, "ms": ms_w, "ngen": _ngens_for(cx, cz),
 		"tier": _tier_of(cx - last_pcx, cz - last_pcz),
 		"hslab": true, "si0": si, "si1": si,

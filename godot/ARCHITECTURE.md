@@ -273,7 +273,21 @@ Match these; do not improvise a different approach in a task.
 - **Raycasting**: the analytical voxel DDA in `core/math.gd` for select/mine/place and
   projectiles — not physics rays (faster and deterministic).
 - **Meshing**: one `ArrayMesh` per slab/chunk via `SurfaceTool` (GDScript path) or the C++
-  greedy/strip lanes; level-aware fluid faces; rebuilt on edit.
+  greedy/strip lanes; level-aware fluid faces; rebuilt on edit. **Handoff staleness contract
+  (AC-0354)**: a worker build's cross-chunk face decisions are made against the DISPATCH-time
+  neighbour snapshot (the compact `snap_rings` rings), so `threadmesh_handoff` re-validates its
+  inputs when the result LANDS, not just the own column: the own column via `rows_eq` over the
+  dispatch's scoped row window (or `data_gen`/`fl_gen` when full) + the band check + the star
+  `lver` box epochs; and the NEIGHBOURS via `nbs_stamps` — the `[col_gen, data_gen, fl_gen]`
+  epoch of each of the 4 axis neighbours captured beside every `snap_rings` call (the AC-0247
+  identity+stamp pattern, one level out; `col_gen` covers a freed-and-reused neighbour) —
+  compared against the LIVE neighbours (a gone neighbour is a mismatch; the re-dispatch defers
+  until the data lands). Any mismatch is the existing own-column treatment: `_tm_datadrop` +
+  `_tm_retrigger` (re-dispatch with a fresh snapshot) — a mesh built on a stale neighbour ring
+  never lands. (Pre-AC-0354 nothing compared the neighbour state: a neighbour that changed
+  between dispatch and landing passed the check and the wrong face decision landed — at a
+  boundary that is the user's see-through seam gap, because the edited column re-dispatches from
+  a snapshot taken before the edit while its neighbour rides `_dirty_front` to the front.)
 - **Lighting**: baked into each face's **vertex colour** (albedo × light) — no realtime GI.
   Sky+block light come from the C++ `AweStarlight` single-queue engine inside the sim band;
   beyond it a heightmap-sky halo (sky 15 strictly above the terrain top, 0 at/below, no
