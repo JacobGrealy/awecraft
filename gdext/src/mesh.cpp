@@ -3059,9 +3059,24 @@ public:
 					int base = grow + (lz + 1) * GW;
 					for (int lx = -1; lx < 17; lx++) {
 						int id2;
-						if (y >= y_lo && y < y_hi && lx < 16 && lz < 16) {
+						if (y >= y_lo && y < y_hi && lx >= 0 && lz >= 0 && lx < 16 && lz < 16) {
 							// AC-0253: the own cell via the slab source
 							// (the flat view load — the pre-AC-0253 cost).
+							// AC-0355: the lower bounds are LOAD-BEARING —
+							// the loops run -1..16, so without them the
+							// GUARD cells (lx=-1 / lz=-1) of in-window
+							// rows took the own-cell branch with
+							// ds.cell(negative offset) — an out-of-bounds
+							// flat read (garbage) instead of the snap ring
+							// read. The ymask boundary test then saw
+							// garbage neighbours: a seam cell beside a
+							// cave/air could read "all six solid" and be
+							// misclassified INTERIOR — its face silently
+							// dropped from every SCOPED build (the per-
+							// slab lane's steady-state mesh) while the
+							// full path (s_is_interior on the real snap)
+							// stayed complete. The see-through holes at
+							// chunk-boundary caves/cliff openings.
 							id2 = ds.cell(drowg + (lz << 4) + lx);
 						} else {
 							id2 = snap[(size_t)y * SNAP_ROW + (lz + 1) * 18 + (lx + 1)];

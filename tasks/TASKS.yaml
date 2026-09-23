@@ -1,11 +1,9 @@
 meta:
-  updated_at: 2026-09-23T14:49
+  updated_at: 2026-09-23T19:32
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0353
-- AC-0354
 - AC-0355
 - AC-0351
 - AC-0342
@@ -18945,11 +18943,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-09-22T10:53
-  updated_at: 2026-09-23T12:34
-  completed_at: null
+  updated_at: 2026-09-23T14:50
+  completed_at: 2026-09-23T14:50
   waiting_on: null
   parent_id: null
   notes: "1) User Story\n\nThere are holes in the world where a terrain face should be drawn but is not,\
@@ -18992,7 +18990,16 @@ intake:
     \ sibling tickets (the neighbour-snapshot validation and the representation-mismatch fix), so its\
     \ field set should be stable enough to re-run and compare. Run it at r4 (cheap, ~60-90 s class like\
     \ `occlude`) and at R24 where the user sees the holes; the band layout differs enough between the\
-    \ two that the by_class breakdown should be read at both.\n"
+    \ two that the by_class breakdown should be read at both.\n\n\nCoordinator: committed a39e643. The\
+    \ arm is instrumentation-only and genhash-neutral (25/25 including the -2,-2 probe byte-identical\
+    \ to the AC-0347 P3 reference), so its census is a BASELINE for AC-0354/0355 rather than a regression\
+    \ reading, and the numbers to move are the missing-face counts by representation class (r4: 493 missing\
+    \ / 0 spurious on 64 seams; R24: 62,759 missing, of which 31,749 are the A-F floor-pruned fill class\
+    \ across only 36 seams, plus 263,248 BC-BC spurious that the far payload documents by design and this\
+    \ arm therefore reports without gating). NOTE ON THE ARM'S PLACE IN THE BATTERY: it is deliberately\
+    \ NOT a battery mode - a 2,116-seam census with a 13M-row comparison is a deliberate measurement,\
+    \ not a smoke test - so the coordinator's standing stage runs it explicitly rather than through the\
+    \ battery."
   comments: []
 - id: AC-0354
   title: validate-neighbour-snapshot-at-handoff
@@ -19001,11 +19008,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-22T10:53
-  updated_at: 2026-09-22T10:53
-  completed_at: null
+  updated_at: 2026-09-23T19:32
+  completed_at: 2026-09-23T19:32
   waiting_on: null
   parent_id: null
   notes: "1) User Story\n\nWhen I break a block, I can sometimes see through the neighbouring chunk until\
@@ -19049,7 +19056,22 @@ intake:
     \ are the regression check.\n\nSCOPE FENCES: do NOT change the mesher, the snap ring contents, the\
     \ fill, or the generation. This ticket only makes the dispatch validate that its inputs are still\
     \ true when the result lands. Do not re-tune the queue priority (`_dirty_front` already does the right\
-    \ thing).\n"
+    \ thing).\n\n\nCOORDINATOR VERIFICATION, on a stage PROVEN CLEAN rather than assumed (the AC-0355\
+    \ builder's first mesh.cpp write is timestamped 19:03; my stage ran 16:07-16:33 and its genhash equals\
+    \ the standing reference b35813f5, so nothing of AC-0355's is in these readings): r16 all sub-flags\
+    \ green with far_holes 0 in both bands; farab 1080/1080 h_mismatch 0; ladder 20/20; meshprobe 1.0;\
+    \ halo (c) 0; lightstate wash false, census 0/0; boundary r4 ok with p50 13 / p95 55 / max 352 and\
+    \ staged_dropped 1713; and the R24 arm completes in ~14 min with the RSS trajectory flat at a ~6 MB/min\
+    \ tail, resident 1453, storm_walk_p99 153 (inside its <=200 gate) and the crossing SWEEP max 8.0 (inside\
+    \ <=15 - the crossing contract, untouched by the re-base). The battery's byte-identical set is the\
+    \ SAME 12 modes as every previous stage (combat, fluidfall, fluidprobe, fluidsettle, fpv, guiclick,\
+    \ held, light, look, toolpose, toolres, webfall) with 0 jitter-only, so no new differing mode. ONE\
+    \ CONTENTION ARTIFACT, diagnosed and cleared rather than reported as a red: the battery's `tint`,\
+    \ `toolpose` and `toolres` first came back rc=124 because the AC-0355 builder was running its own\
+    \ godot arms at the same time - the OPS rule is one godot at a time ACROSS agents, and a builder's\
+    \ independent runs can start while a battery sweep is mid-flight, so a stage and a builder must not\
+    \ overlap on this box. All three modes re-ran solo to rc=0 with 0 SCRIPT ERROR and their expected\
+    \ outputs, which is why the byte-identical set above is intact."
   comments: []
 - id: AC-0355
   title: seam-representation-mismatch-fix

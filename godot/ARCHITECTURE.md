@@ -288,6 +288,15 @@ Match these; do not improvise a different approach in a task.
   between dispatch and landing passed the check and the wrong face decision landed — at a
   boundary that is the user's see-through seam gap, because the edited column re-dispatches from
   a snapshot taken before the edit while its neighbour rides `_dirty_front` to the front.)
+  **Scoped-build boundary equivalence (AC-0355)**: the per-slab lane's scoped builds decide
+  interiority with the fast `ymask` boundary grid instead of the full path's `s_is_interior`,
+  and the two MUST read identical neighbour sets — in particular the mask's guard cells
+  (the ring row/column at lx=-1/lz=-1) must come from the snap rings, never from the own
+  slab source (the C++ port once lacked the lower bounds and read `flat[-1]` — out-of-bounds
+  garbage that misclassified cave-side seam cells as interior and silently dropped their
+  faces from every scoped build while full builds stayed complete). If a scoped mesh ever
+  disagrees with a full build of the same inputs at a seam, suspect this equivalence first
+  (the seamcensus F-F class + a direct scoped-vs-full build diff is the probe).
 - **Lighting**: baked into each face's **vertex colour** (albedo × light) — no realtime GI.
   Sky+block light come from the C++ `AweStarlight` single-queue engine inside the sim band;
   beyond it a heightmap-sky halo (sky 15 strictly above the terrain top, 0 at/below, no
