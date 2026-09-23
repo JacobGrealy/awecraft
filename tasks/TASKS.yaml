@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-23T05:20
+  updated_at: 2026-09-23T14:49
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0352
 - AC-0353
 - AC-0354
 - AC-0355
@@ -18767,11 +18766,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-22T10:39
-  updated_at: 2026-09-22T10:56
-  completed_at: null
+  updated_at: 2026-09-23T14:49
+  completed_at: 2026-09-23T14:49
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -18913,7 +18912,31 @@ intake:
 
     DO NOT: widen this ticket into the seam investigation, run the seam census work, or change the mesher/handoff/snapshot
     paths. This ticket stays measurement-only and its deliverable is unchanged (the attribution plus the
-    standing value); the correlation field is recorded evidence for whoever reads AC-0353''s output next.'
+    standing value); the correlation field is recorded evidence for whoever reads AC-0353''s output next.
+
+
+    COORDINATOR VERIFICATION (capped stage, all arms rc=0, R24 completing in ~14 min with the RSS trajectory
+    flat at a ~6 MB/min tail - AC-0356''s fix holding at a 1092 MB peak): the builder''s attribution REPRODUCES
+    independently. My run''s worst captured frame reads 147.6 ms with a split of **misc 114.1 (77%), drain
+    23.4, handoff 5.0, recenter 3.5, star 2.7, collide 2.0, low 1.6, and meshattach / io / facelight all
+    0.0** - the same shape and the same dominant stage as the builder''s worst-20 table, so MISC owning
+    ~two thirds of the tail is confirmed rather than asserted. The new gate reads `storm_walk_p99_ms`
+    136 against its <=200 threshold (the builder measured 151 and 141; a 136-151 band across three runs
+    is a stable percentile, which is exactly why the ticket asked for a percentile and not the max - my
+    run''s `storm_walk_max_ms` is 177 and the builder''s was 353, a 2x spread on a single-sample field).
+    The crossing contract holds where it matters: the SWEEP reads p50 5.6 / max 8.1 against its untouched
+    <=15 gate. AND THE RE-BASE IS VINDICATED AS A MECHANISM RATHER THAN ACCEPTED ON TRUST: my run''s `crossing_frame_p95_ms`
+    reads **34** (p50 9, max 48) - comfortably inside the ORIGINAL <=75 - where the builder''s read 99
+    and forced the move to <=150. Two runs, same tree, 34 vs 99: the field tracks nothing but whether
+    a crossing happened to land on a storm frame, which is precisely the contamination the builder named,
+    and it means the field was never able to gate the crossing''s own cost. The honest reading is that
+    <=150 is a ceiling on a contaminated statistic, that the storm-coincidence band is ~34-99, and that
+    the sweep field (8.1 <= 15) plus the crossing census are the real contract - recorded here so the
+    next reader does not mistake a 120 reading for a regression. Rest of the standing set green: genhash
+    25/25 byte-identical, farab 1080/1080 h_mismatch 0, ladder band_a_ok 20/20, meshprobe 1.0, halo (c)
+    0, lightstate wash false with census 0/0, r16 all sub-flags with far_holes 0 in both bands, boundary
+    r4 ok (p50 13 / p95 48 / max 251, max still improving on the pre-AC-0356 658), the battery complete
+    with only the long-standing AC-0330 reds and brightslab''s known AC-0351 arm error.'
   comments: []
 - id: AC-0353
   title: cross-chunk-seam-face-census
@@ -18922,10 +18945,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-09-22T10:53
-  updated_at: 2026-09-22T10:53
+  updated_at: 2026-09-23T12:34
   completed_at: null
   waiting_on: null
   parent_id: null
