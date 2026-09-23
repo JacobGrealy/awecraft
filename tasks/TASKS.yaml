@@ -1,11 +1,12 @@
 meta:
-  updated_at: 2026-09-23T19:32
+  updated_at: 2026-09-23T19:33
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0355
 - AC-0351
+- AC-0357
 - AC-0342
 - AC-0344
 - AC-0290
@@ -19240,4 +19241,56 @@ intake:
     RESTATED FOR THE RECORD: this leak was not a game bug that happened to annoy a test rig - it was the
     reason the development harness kept OOM-restarting and eating in-flight work, so every heavy gate
     in the project was effectively unrunnable at large radius until it was fixed.'
+  comments: []
+- id: AC-0357
+  title: lightstate-arr-diff-standing-drift
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-23T19:33
+  updated_at: 2026-09-23T19:33
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The light-settle arm has been reporting a number that no longer matches the value
+    the standing table documents, so a reader cannot tell whether the light system drifted or the table
+    is stale - and a light regression could hide behind the disagreement.
+
+
+    2) Technical Details:
+
+    FOUND BY AC-0355''s builder and A/B-PROVEN not to be its own doing: the `lightstate` arm''s `ab.arr_diff_cells`
+    reads **0** where the standing row documents **1**. The builder rebuilt the pre-fix and post-fix `.so`
+    and got the identical reading on both, so it does not come from the mesh path; it is deterministic
+    across three runs, and every other invariant the arm asserts holds (leaks 0, `vc_diff` 0, wash false,
+    double-LOD 0/0). The standing value dates from the 2026-09-18 measurement, and a great deal of light-path
+    work has landed since - AC-0347 P1/P2/P3 changed the cave field and therefore the air volume the light
+    settles through, and AC-0356 changed WHEN the light re-flood runs (the fluid-tick edit batch). Either
+    of those could legitimately have moved a "-1 cell" reading on a specific fixture, which is why this
+    needs a decision rather than a silent re-baseline.
+
+    WHAT TO DO, in the order the project''s rules require: (1) find out WHAT the field means and measure
+    it directly rather than trusting the row - if `arr_diff_cells` counts cells whose settled light differs
+    between the two passes the arm compares, then a 1 -> 0 move is an IMPROVEMENT (one fewer disagreeing
+    cell) and the row is stale; (2) A/B it against a tree from before the cave rebudget (a commit swap
+    is cheap for this arm and it is the only way to say which ticket moved it) so the change is attributed
+    rather than guessed; (3) then either re-baseline the row with the attribution and the date recorded,
+    or file the light defect if a 0 turns out to mask something (for instance if the arm''s comparison
+    window is too small to see the cell it used to catch - check the 240-frame timeout and the window
+    first, since a timeout-truncated comparison would read 0 for the wrong reason).
+
+    GATES: `lightstate` green with the row and the reading in agreement, whichever direction that resolves;
+    the standing table re-rendered (`python3 tasks/scripts/harness_doc.py --render`, then `--check`);
+    and the arm''s other invariants unchanged (leaks 0, vc_diff 0, wash false, double-LOD 0/0).
+
+    CONTEXT: this is an AC-0330-class arm-debt item - arms that assert VALUES (a specific count, a wall-clock
+    budget, a terrain-derived height) go stale as the world changes, while arms that assert INVARIANTS
+    (byte-identity, closure, determinism) do not. It was deliberately NOT fixed inside AC-0355, whose
+    fence is the seam class.
+
+    '
   comments: []
