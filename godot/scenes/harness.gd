@@ -10214,40 +10214,58 @@ func _brightslab_slab_cmp(mc, wcx: int, wcz: int, si: int, ri: Dictionary, cx0: 
 	var ra: Dictionary = mc.build_accs(data_c, fl_c, wcx, wcz, nbs, ctx0, ms_w, pl, si, si, 0, Lighting._att, Lighting._glow, PackedByteArray())
 	var y0 := maxi(0, si * 16 - 2)
 	var y1 := mini(H - 1, (si + 1) * 16 + 1)
-	var effs: Array = []
-	for s2 in [[1, 0], [-1, 0], [0, 1], [0, -1]]:
-		var e := PackedByteArray()
-		e.resize(2 * 16 * H)
-		var nk := "%d,%d" % [wcx - cx0 + int(s2[0]), wcz - cz0 + int(s2[1])]
-		var narr: PackedByteArray = ri["effs"].get(nk, PackedByteArray())
-		if int(narr.size()) >= 16 * H:
-			var colsz := 16 * H
-			if int(s2[0]) != 0:
-				for cc2 in range(2):
-					var nx: int = cc2 if int(s2[0]) > 0 else 15 - cc2
-					for yy in range(y0, y1 + 1):
-						for tt in range(16):
-							e[cc2 * colsz + yy * 16 + tt] = narr[(yy << 8) | (tt << 4) | nx]
-			else:
-				for cc2 in range(2):
-					var nz: int = cc2 if int(s2[1]) > 0 else 15 - cc2
-					for yy in range(y0, y1 + 1):
-						for tt in range(16):
-							e[cc2 * colsz + yy * 16 + tt] = narr[(yy << 8) | (nz << 4) | tt]
-		effs.append(e)
-	for s2 in [[1, 1], [-1, 1], [1, -1], [-1, -1]]:
-		var e := PackedByteArray()
-		e.resize(4 * H)
-		var nk := "%d,%d" % [wcx - cx0 + int(s2[0]), wcz - cz0 + int(s2[1])]
-		var narr: PackedByteArray = ri["effs"].get(nk, PackedByteArray())
-		if int(narr.size()) >= 16 * H:
-			for a in range(2):
-				var nx: int = a if int(s2[0]) > 0 else 15 - a
-				for b in range(2):
-					var nz: int = b if int(s2[1]) > 0 else 15 - b
-					for yy in range(y0, y1 + 1):
-						e[(a * 2 + b) * H + yy] = narr[(yy << 8) | (nz << 4) | nx]
-		effs.append(e)
+	# AC-0358: the classic reference re-bake consumes the 8 margin
+	# strips over its WHOLE bake box (bake_box fills the 20x20 margin
+	# ring for every row y_lo..y_hi — mesh.cpp:897). The per-slab build
+	# (si0=si1=si) bakes exactly [y0, y1], but the full-window (merged)
+	# build (si1=-1 — the A2/B2 "either decomposition" leg) bakes
+	# [0, top]. Feeding the full build the per-slab strips zero-fills
+	# the margin rows outside [y0, y1] while the payload path (A2)
+	# carries the full payload window [w_lo, w_hi]. Proven on the
+	# pristine C4 case (AC-0358): the two feeds are cell-wise IDENTICAL
+	# (own eff, every side/corner row, mask — ediff/sdif/cdif 0) yet
+	# A2 != B2, and the classic path re-fed the full window reproduces
+	# A2 STRICT — so the truncated window, not the light, was moving
+	# the merged layout and the boundary-face colors. The full-window
+	# reference is fed the same window the payload carries below
+	# (ctxb2): a fresh reference for the SAME inputs.
+	var make_strips := func(ya: int, yb: int) -> Array:
+		var es: Array = []
+		for s2 in [[1, 0], [-1, 0], [0, 1], [0, -1]]:
+			var e := PackedByteArray()
+			e.resize(2 * 16 * H)
+			var nk := "%d,%d" % [wcx - cx0 + int(s2[0]), wcz - cz0 + int(s2[1])]
+			var narr: PackedByteArray = ri["effs"].get(nk, PackedByteArray())
+			if int(narr.size()) >= 16 * H:
+				var colsz := 16 * H
+				if int(s2[0]) != 0:
+					for cc2 in range(2):
+						var nx: int = cc2 if int(s2[0]) > 0 else 15 - cc2
+						for yy in range(ya, yb + 1):
+							for tt in range(16):
+								e[cc2 * colsz + yy * 16 + tt] = narr[(yy << 8) | (tt << 4) | nx]
+				else:
+					for cc2 in range(2):
+						var nz: int = cc2 if int(s2[1]) > 0 else 15 - cc2
+						for yy in range(ya, yb + 1):
+							for tt in range(16):
+								e[cc2 * colsz + yy * 16 + tt] = narr[(yy << 8) | (nz << 4) | tt]
+			es.append(e)
+		for s2 in [[1, 1], [-1, 1], [1, -1], [-1, -1]]:
+			var e := PackedByteArray()
+			e.resize(4 * H)
+			var nk := "%d,%d" % [wcx - cx0 + int(s2[0]), wcz - cz0 + int(s2[1])]
+			var narr: PackedByteArray = ri["effs"].get(nk, PackedByteArray())
+			if int(narr.size()) >= 16 * H:
+				for a in range(2):
+					var nx: int = a if int(s2[0]) > 0 else 15 - a
+					for b in range(2):
+						var nz: int = b if int(s2[1]) > 0 else 15 - b
+						for yy in range(ya, yb + 1):
+							e[(a * 2 + b) * H + yy] = narr[(yy << 8) | (nz << 4) | nx]
+			es.append(e)
+		return es
+	var effs: Array = make_strips.call(y0, y1)
 	var ctxb: Dictionary = ctx0.duplicate()
 	ctxb["eff_strips"] = effs
 	var lk := "%d,%d" % [wcx - cx0, wcz - cz0]
@@ -10282,7 +10300,18 @@ func _brightslab_slab_cmp(mc, wcx: int, wcz: int, si: int, ri: Dictionary, cx0: 
 		# so a compare that does not run can never masquerade as passed.
 		if int(ra2.get("slabs", []).size()) > si:
 			ra2_acc = ra2["slabs"][si][0]
-	var rb2: Dictionary = mc.build_accs(data_c, fl_c, wcx, wcz, nbs, ctxb, ms_w, lb, 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())
+	# AC-0358: the full-window (merged) reference leg needs the strips
+	# over the FULL window the payload carries (its w_lo/w_hi), not the
+	# per-slab [y0, y1] — see the make_strips note above. Same ri feeds
+	# (the fresh same-input reference); the per-slab leg keeps ctxb.
+	var ctxb2: Dictionary = ctx0.duplicate()
+	if bool(pl2.get("ok", false)):
+		var wlo2: int = maxi(0, int(pl2.get("w_lo", 0)))
+		var whi2: int = mini(H - 1, int(pl2.get("w_hi", 0)))
+		ctxb2["eff_strips"] = make_strips.call(wlo2, whi2)
+	else:
+		ctxb2["eff_strips"] = effs
+	var rb2: Dictionary = mc.build_accs(data_c, fl_c, wcx, wcz, nbs, ctxb2, ms_w, lb, 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())
 	# AC-0351: same guard on the classic-reference side — the old
 	# unconditional line was the latent twin of the A2 crash.
 	var rb2_acc: Dictionary = {}
