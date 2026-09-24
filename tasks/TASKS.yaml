@@ -1,11 +1,11 @@
 meta:
-  updated_at: 2026-09-23T20:07
+  updated_at: 2026-09-23T20:45
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0351
 - AC-0357
+- AC-0358
 - AC-0342
 - AC-0344
 - AC-0290
@@ -18713,11 +18713,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-22T08:46
-  updated_at: 2026-09-22T08:46
-  completed_at: null
+  updated_at: 2026-09-23T20:45
+  completed_at: 2026-09-23T20:45
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The `brightslab` arm - the one that guards the bright-slab-on-edit regression
@@ -18755,7 +18755,21 @@ intake:
     so this arm runs on every heavy stage from here on - an arm that errors costs the gate its G0 reading,
     which is why this is a ticket and not a note.
 
-    '
+
+
+    COORDINATOR VERIFICATION (independent run): `brightslab` reads 0 SCRIPT ERROR - the crash is gone
+    and the errs=1 that had been in every heavy stage since AC-0347 P1 is cleared - and `a2b2_slab_skips`
+    reads 1, so the skip is visible in the RESULT exactly as this ticket required rather than being a
+    comparison that quietly did not happen. ONE PART OF THIS TICKET''S OWN GATE IS NOT MET AND IS NOT
+    THIS TICKET''S FAULT, recorded so the close is honest: the arm still reads `ok:false`, and the builder
+    proved on the PRISTINE tree that it did so BEFORE any of its changes, because the `C4_boundary_break`
+    case reports `mesh_pb_mism = 3` with `edit_inner = true` (legacy-reference under-light on neighbour
+    col 1,0 slab 3) while its engine-side numbers are exact (`eng_mism 0`, `mesh_pa_mism 0`). That is
+    filed as AC-0358 (brightslab-c4-legacy-ref-light-mismatch) with both readings recorded, because the
+    two point in opposite directions - a stale arm reference versus a real under-light on the payload
+    path the game actually applies - and settling it needs the C4 case isolated rather than assumed. Scope
+    of THIS ticket (the bounds guard plus the visible skip) is fully met, so it closes with the residual
+    tracked rather than left as a permanent red nobody reads.'
   comments: []
 - id: AC-0352
   title: r24-streaming-storm-tail-attribution
@@ -19305,6 +19319,58 @@ intake:
     budget, a terrain-derived height) go stale as the world changes, while arms that assert INVARIANTS
     (byte-identity, closure, determinism) do not. It was deliberately NOT fixed inside AC-0355, whose
     fence is the seam class.
+
+    '
+  comments: []
+- id: AC-0358
+  title: brightslab-c4-legacy-ref-light-mismatch
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-23T20:44
+  updated_at: 2026-09-23T20:44
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: One arm in the suite permanently reports failure, so a real bright-slab regression
+    could arrive and look exactly like the failure everyone has learned to ignore. Either the arm''s reference
+    is wrong or light is genuinely missing on an edited boundary - the value of the answer is that the
+    standing set stops carrying a permanent red.
+
+
+    2) Technical Details:
+
+    FOUND AND A/B-PROVEN BY AC-0351''s BUILDER, on the PRISTINE tree before its own change (so it is not
+    that ticket''s doing): `brightslab` reads `ok:false` because its `C4_boundary_break` case reports
+    `mesh_pb_mism = 3` with `edit_inner = true` - three slabs under-lit against the LEGACY reference on
+    neighbour column 1,0 slab 3 - while the same case''s engine-side numbers are exact (`eng_mism = 0`,
+    `mesh_pa_mism = 0`). Deterministic across runs.
+
+    THE TWO READINGS POINT IN OPPOSITE DIRECTIONS, which is the whole work: either (a) the LEGACY reference
+    path in the arm is stale or scoped differently from the payload path, in which case the arm''s classification
+    needs fixing (and the standing row should say which comparison is authoritative for an edited boundary),
+    or (b) the legacy path is right and the PAYLOAD path genuinely under-lights three slabs beside an
+    edit, in which case that is a real lighting defect on the user-visible side and the largest find in
+    the arm suite at the moment. AC-0349 already established that this arm can be the thing that is wrong
+    (it was re-fixed then for `mesh_pa_mism`), and AC-0297''s own comment in the function explains that
+    a slab can legitimately land through the merged or the per-face decomposition - so a reference-scope
+    explanation is plausible and must be TESTED, not assumed.
+
+    HOW TO SETTLE IT: reproduce the C4 case in isolation, read the three slabs'' light through both paths
+    on the same inputs, and decide which is the correct answer for an edited boundary (the payload path
+    is what the game applies, so the test is whether the APPLIED mesh''s light matches a freshly built
+    reference for the SAME inputs - not whether two references agree). Then either fix the arm''s reference
+    scope (recording why the two paths may legitimately differ) or file the light defect with the three
+    slabs named.
+
+    GATES: `brightslab` reads `ok:true` with 0 SCRIPT ERROR (AC-0351 has just made it error-free and made
+    its skipped comparisons visible via `a2b2_slab_skips` - a skipped comparison reading as a pass is
+    the failure mode to avoid here); the standing set unchanged; the `brightslab` row re-rendered if its
+    result_fields or its authoritative comparison change.
 
     '
   comments: []
