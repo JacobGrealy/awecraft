@@ -148,6 +148,55 @@
 //   dense), and the entrance's finest y feature sits at the sampling
 //   border (the analytic gradient term is exact — see AC-0359's results
 //   page for the measurement of both).
+//
+//   AC-0290 (cave P2 — the classic CARVER family: galleries,
+//   bubble-interrupted trunks, ravine canyons): the pre-1.18 worm carvers,
+//   re-added as a POST-DENSITY pass. Vanilla's worldgen runs the carver
+//   stage after the density field; ours runs it after the flat[] fill,
+//   before veg — the same ordering in substance, and deliberately
+//   SEPARATE from the density router (the router stays vanilla's; the
+//   post-pass is exactly why the carvers can intersect the surface and
+//   features with a cut-through policy). The families (vanilla parameters —
+//   minecraft.wiki/w/Cave §Carver caves + the 1.21
+//   data/minecraft/worldgen/configured_carver JSONs, +64 y-shift onto the
+//   0-based world): cave carver 0.15/chunk (cave.json probability), canyon
+//   0.01/chunk (canyon.json probability); Y range vanilla -56..180 -> ours
+//   8..244 (cave.json y = uniform above_bottom 8 .. absolute 180 — the
+//   ticket's "absolute Y range -56..180"); the main room (the gallery) is
+//   1-in-4 of the carvers (the ticket's main-room vs I/T split) — 1-14
+//   tall, Ø 5-15, FLAT FLOOR (the floor plane is the ellipsoid's bottom
+//   tangent: full-ellipse floor, elliptical dome ceiling) + a short exit
+//   trunk (the "room + trunk" shape); the trunk is 85-112 long (the
+//   ticket), direction wander + vertical drift, per-trunk radii (h 2-8 /
+//   v 1-9 — inside the wiki's 2-38 h / 1-36 v thickness range once the
+//   flicker and bubbles are in), per-step THICKNESS FLICKER (0.6-1.4x) and
+//   BUBBLE INTERRUPTIONS (~12% of the steps carve a 1.6x bulb — the wiki's
+//   "cave with bubbles"), 1-3 branches of 2-7 h / 1-7 v thickness at
+//   right-ish angles (the I/T shapes); the canyon (the tall ravine,
+//   canyon.json) is a vertical shaft starting at y 74..131 (vanilla 10..67),
+//   horizontal radius ~1-3 (thickness trapezoid(0,6,plateau 2) x factor
+//   0.75-1.0), VERTICAL RADIUS = 3x HORIZONTAL (yScale 3.0),
+//   vertical_rotation ±0.125 (the meander), length 45-150 x
+//   distance_factor 0.75-1.0 — it punches the surface: the steep cliff
+//   walls. DETERMINISM: a per-chunk splitmix64 stream (chunk-hash of world
+//   seed + cx/cz) — a pure f(seed, cx, cz); NO noise field is involved (the
+//   carvers are geometry, like the tree pass — the genprobe lockstep
+//   contract covers the AweNoise sources only). THE CUT-THROUGH POLICY: a
+//   carved cell replaces whatever solid is there (stone, ore, dirt, sand,
+//   the surface block — the trees/flowers do not exist yet, veg runs after)
+//   with AIR (or LAVA at y < 8 — the same deep-pocket rule the fill gives
+//   field-carved air). AIR/WATER/LAVA are never re-carved (a submarine
+//   carve reads flooded — the AC-0342 model — water is not a carvable
+//   solid); the bedrock row y = 0 is out of range by construction. If the
+//   carve drops a column's topmost solid (he2 < he), the new top is
+//   re-skinned with the fill's EXACT surface rule (grass / sand / snow-
+//   grass + the 3-deep dirt band — the vanilla finalize-stage behavior:
+//   cave mouths get a grass lip). H (the heightmap), the 3 surface fields
+//   and SEA are NEVER touched — the pass may lower the EFFECTIVE surface,
+//   which is the documented wobble class the farab contract already
+//   tolerates (the entrance/tunnel mouths do it today). The skip (1/2) and
+//   far paths never build the plan at all — the far/skip payloads stay
+//   bit-exact by construction (thash + farab h_mismatch prove it per run).
 //   A(y) = 1.8 * (1 + max(0, H - y - R) / DEEP_GROW) — the cave amplitude
 //   — is GONE with DEEP_GROW and CAVE_AMP at AC-0347 P2 (the structure
 //   change: the shallow suppressor + the squared layer term replace the
@@ -867,6 +916,333 @@ static inline double dens_at(int H, int y, double cave, double ent, double layer
 }
 
 // ---------------------------------------------------------------------------
+// AC-0290: the classic CARVER family (galleries / bubble-interrupted trunks /
+// ravine canyons) — the post-density pass (see the file header for the
+// families, the vanilla parameters and the cut-through policy).
+// ---------------------------------------------------------------------------
+
+// AC-0290: the per-chunk carver PRNG — splitmix64 (the vanilla
+// RandomSource.chunk role: a deterministic per-chunk stream). The carvers
+// are geometry, not noise: a pure f(seed, cx, cz).
+static inline uint64_t splitmix64_next(uint64_t &state) {
+	uint64_t z = (state += 0x9E3779B97F4A7C15ull);
+	z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+	z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+	return z ^ (z >> 31);
+}
+
+struct CarveRng {
+	uint64_t s;
+	explicit CarveRng(uint64_t seed) : s(seed) {}
+	uint64_t next() { return splitmix64_next(s); }
+	double u() { return (double)(next() >> 11) * (1.0 / 9007199254740992.0); } // [0,1)
+	int ri(int n) { return (int)(next() % (uint64_t)n); }
+	int rangei(int lo, int hi) { return lo + ri(hi - lo + 1); }
+};
+
+static uint64_t carve_chunk_seed(int64_t seed, int cx, int cz) {
+	uint64_t h = (uint64_t)(uint32_t)(uint64_t)seed;
+	h ^= (uint64_t)(uint32_t)(uint64_t)(int64_t)(cx + 1000000) * 0xBF58476D1CE4E5B9ull;
+	h = splitmix64_next(h);
+	h ^= (uint64_t)(uint32_t)(uint64_t)(int64_t)(cz + 2000000) * 0x94D049BB133111EBull;
+	return splitmix64_next(h);
+}
+
+// AC-0290: the vanilla carver parameters (see the file header; the +64
+// y-shift maps vanilla's -64-based world onto ours).
+constexpr int CARVE_Y_MIN = 8; // vanilla -56 (cave.json y min above_bottom 8)
+constexpr int CARVE_Y_MAX = 244; // vanilla 180 (cave.json y max absolute 180)
+constexpr double CARVE_PROB = 0.15; // cave.json probability (per chunk)
+constexpr double CANYON_PROB = 0.01; // canyon.json probability (per chunk)
+constexpr int CANYON_Y_MIN = 74; // vanilla 10 (canyon.json y min absolute 10)
+constexpr int CANYON_Y_MAX = 131; // vanilla 67 (canyon.json y max absolute 67)
+
+// One carved ellipsoid (world coords). flat = the flat-floor room shape
+// (the floor plane is the bottom tangent: the full-ellipse floor, the
+// elliptical dome ceiling).
+struct CarveEll {
+	int x, y, z;
+	double rx, ry, rz;
+	bool flat;
+	int floor; // the flat floor y (flat only)
+};
+
+// One carver feature (census/shot reporting). kind: 0 room, 1 trunk, 2 canyon.
+struct CarveFeature {
+	int kind;
+	int x, y, z; // start (room center / trunk start / canyon x,z + start y)
+	int len; // trunk/canyon length (0 = room)
+	int n_branches;
+	int n_bubbles;
+};
+
+// AC-0290: the worm walk — the step loop shared by the trunk and the
+// branches: per-step thickness flicker (0.6-1.4x) + bubble interruptions
+// (~12% of the steps carve a 1.6x bulb), direction wander + vertical drift
+// (clamped ±0.5/step), 1.5-block steps.
+static void carve_walk(CarveRng &rng, std::vector<CarveEll> &out, int x0, int y0, int z0,
+		int len, double rx0, double ry0, double ang0, double dy0,
+		int &n_bubbles, bool record_path, std::vector<std::array<double, 4>> *path) {
+	double ang = ang0, dy = dy0;
+	double x = (double)x0, y = (double)y0, z = (double)z0;
+	int bubbles = 0;
+	for (int t = 0; t < len; t++) {
+		if (record_path)
+			path->push_back({x, y, z, ang});
+		double flick = 0.6 + 0.8 * rng.u(); // the thickness flicker
+		double rx = rx0 * flick;
+		double ry = ry0 * flick;
+		if (rng.u() < 0.12) { // the bubble interruption (the bulb)
+			rx *= 1.6;
+			ry *= 1.3;
+			bubbles++;
+		}
+		out.push_back({(int)std::floor(x + 0.5), (int)std::floor(y + 0.5), (int)std::floor(z + 0.5), rx, ry, rx, false, 0});
+		ang += (rng.u() - 0.5) * 0.5; // the wander
+		dy += (rng.u() - 0.5) * 0.3; // the vertical drift
+		if (dy > 0.5)
+			dy = 0.5;
+		else if (dy < -0.5)
+			dy = -0.5;
+		x += std::cos(ang) * 1.5;
+		z += std::sin(ang) * 1.5;
+		y += dy * 1.5;
+		if (y < (double)CARVE_Y_MIN)
+			y = (double)CARVE_Y_MIN;
+		if (y > (double)(CARVE_Y_MAX - 4))
+			y = (double)(CARVE_Y_MAX - 4);
+	}
+	n_bubbles = bubbles;
+}
+
+// AC-0290: the trunk (the I/T shape) — 85-112 long (the ticket), per-trunk
+// radii, the shared walk, 1-3 branches of 2-7 h / 1-7 v thickness attached
+// in the middle half at right-ish angles.
+static void carve_trunk(CarveRng &rng, std::vector<CarveEll> &out, int x0, int y0, int z0,
+		CarveFeature &f) {
+	f.kind = 1;
+	f.x = x0;
+	f.y = y0;
+	f.z = z0;
+	f.len = rng.rangei(85, 112); // the ticket: trunk 85-112 long
+	double rx0 = 2.0 + (double)rng.ri(7); // h radius 2-8
+	double ry0 = 1.0 + rx0 * (0.4 + 0.8 * rng.u()); // v radius ~1-9
+	double ang0 = rng.u() * 6.283185307179586;
+	double dy0 = (rng.u() - 0.5) * 0.6;
+	std::vector<std::array<double, 4>> path;
+	path.reserve(f.len);
+	int bubbles = 0;
+	carve_walk(rng, out, x0, y0, z0, f.len, rx0, ry0, ang0, dy0, bubbles, true, &path);
+	int nb = 1 + rng.ri(3); // 1-3 branches
+	for (int b = 0; b < nb; b++) {
+		int bt = rng.rangei(f.len / 4, (f.len * 3) / 4);
+		double bx = path[bt][0], by = path[bt][1], bz = path[bt][2];
+		double bang = path[bt][3] + (rng.u() < 0.5 ? 1.0 : -1.0) * (1.5707963 + (rng.u() - 0.5) * 0.6);
+		double brx = 1.0 + (double)rng.ri(3); // h radius 1-3 (thickness 2-7)
+		double bry = 1.0 + 0.8 * (double)rng.ri(3); // v radius ~1-3 (thickness 1-7)
+		double bdy = (rng.u() - 0.5) * 0.4;
+		int blen = 15 + rng.ri(30); // 15-44
+		carve_walk(rng, out, (int)std::floor(bx + 0.5), (int)std::floor(by + 0.5),
+				(int)std::floor(bz + 0.5), blen, brx, bry, bang, bdy, bubbles, false, nullptr);
+	}
+	f.n_branches = nb;
+	f.n_bubbles = bubbles;
+}
+
+// AC-0290: the main room (the gallery) — 1-14 tall, Ø 5-15 (the ticket),
+// FLAT FLOOR (the floor plane is the ellipsoid's bottom tangent: the
+// full-ellipse floor, the elliptical dome ceiling) + the short exit trunk
+// (the classic "room + trunk" shape).
+static void carve_room(CarveRng &rng, std::vector<CarveEll> &out, int x0, int y0, int z0,
+		CarveFeature &f) {
+	f.kind = 0;
+	f.x = x0;
+	f.y = y0;
+	f.z = z0;
+	f.len = 0;
+	int h = rng.rangei(1, 14); // the ticket: main room 1-14 blocks tall
+	int dia = rng.rangei(5, 15); // the ticket: Ø 5-15
+
+	double ry = (double)h / 2.0;
+	double rx = (double)dia / 2.0;
+	out.push_back({x0, y0, z0, rx, ry, rx, true, y0 - (int)std::ceil(ry)});
+	// The exit trunk (from the room edge, mostly horizontal).
+	int bubbles = 0;
+	double ang = rng.u() * 6.283185307179586;
+	int sx = x0 + (int)std::floor(std::cos(ang) * rx);
+	int sz = z0 + (int)std::floor(std::sin(ang) * rx);
+	int sy = y0 - (int)std::floor(ry * 0.5);
+	int trlen = 30 + rng.ri(31); // 30-60
+	carve_walk(rng, out, sx, sy, sz, trlen, 2.0 + (double)rng.ri(3), 1.0 + (double)rng.ri(2),
+			ang, (rng.u() - 0.5) * 0.4, bubbles, false, nullptr);
+	f.n_branches = 0;
+	f.n_bubbles = bubbles;
+}
+
+// AC-0290: the canyon (the tall ravine, canyon.json) — the vertical shaft:
+// start y 74..131 (vanilla 10..67), horizontal radius ~1-3 (thickness
+// trapezoid(0,6,plateau 2) x factor 0.75-1.0), vertical radius = 3x
+// horizontal (yScale 3.0 — the tall ravine), vertical_rotation ±0.125 (the
+// meander), length 45-150 x distance_factor 0.75-1.0 — it punches the
+// surface: the steep cliff walls.
+static void carve_canyon(CarveRng &rng, std::vector<CarveEll> &out, int x0, int z0,
+		CarveFeature &f) {
+	f.kind = 2;
+	f.x = x0;
+	f.z = z0;
+	f.y = rng.rangei(CANYON_Y_MIN, CANYON_Y_MAX);
+	f.len = 0;
+	f.n_branches = 0;
+	f.n_bubbles = 0;
+	double thick = 2.0 + 4.0 * rng.u() * rng.u(); // ~2-6, narrow-biased (the trapezoid)
+	double rx = thick / 2.0 * (0.75 + 0.25 * rng.u()); // x factor 0.75-1.0
+	double ry = rx * 3.0; // yScale 3.0 — the TALL ravine
+	double vr = (rng.u() - 0.5) * 0.25; // vertical_rotation ±0.125
+	double df = 0.75 + 0.25 * rng.u(); // distance_factor 0.75-1.0
+	f.len = (int)((45.0 + rng.u() * 105.0) * df);
+	// The drift is small (the ravine rises NEARLY VERTICAL — vanilla's
+	// vertical_rotation is a gentle meander rate, not a worm's 1-block
+	// wander): the tube stays close to its start column, which is what
+	// punches the surface (a large wander would carry the tube out of the
+	// home chunk before it reaches the surface — the carve is per-chunk,
+	// so the rest of the tube would be lost to the seam). Small drift +
+	// the full ±0.125 rotation rate = a tight meander: the tube's bottom
+	// and its surface break sit close together, which is what makes the
+	// DEEP gully (a wide arc would only graze the surface — a shallow
+	// notch instead of a ravine).
+	double drift = 0.05 + 0.1 * rng.u(); // 0.05-0.15 blocks/step
+	double ang = rng.u() * 6.283185307179586;
+	double x = (double)x0, z = (double)z0, y = (double)f.y;
+	for (int t = 0; t < f.len; t++) {
+		out.push_back({(int)std::floor(x + 0.5), (int)std::floor(y + 0.5), (int)std::floor(z + 0.5), rx, ry, rx, false, 0});
+		ang += vr; // the meander (the rotation as it extends)
+		x += std::cos(ang) * drift;
+		z += std::sin(ang) * drift;
+		y += 1.0; // upward
+		if (y > 383.0)
+			break;
+	}
+}
+
+// AC-0290: the per-chunk carver plan (deterministic f(seed, cx, cz)).
+// feat may be nullptr (the production path does not need the per-feature
+// report).
+static void build_carver_plan(int cx, int cz, int64_t seed, std::vector<CarveEll> &ell,
+		std::vector<CarveFeature> *feat) {
+	CarveRng rng(carve_chunk_seed(seed, cx, cz));
+	if (rng.u() < CARVE_PROB) { // cave.json probability (0.15/chunk)
+		int x = cx * 16 + rng.ri(16);
+		int z = cz * 16 + rng.ri(16);
+		int y = rng.rangei(CARVE_Y_MIN, CARVE_Y_MAX);
+		CarveFeature f;
+		if (rng.ri(4) == 0)
+			carve_room(rng, ell, x, y, z, f); // 1-in-4: the main room (the gallery)
+		else
+			carve_trunk(rng, ell, x, y, z, f); // 3-in-4: the I/T trunk
+		if (feat)
+			feat->push_back(f);
+	}
+	if (rng.u() < CANYON_PROB) { // canyon.json probability (0.01/chunk)
+		int x = cx * 16 + rng.ri(16);
+		int z = cz * 16 + rng.ri(16);
+		CarveFeature f;
+		carve_canyon(rng, ell, x, z, f);
+		if (feat)
+			feat->push_back(f);
+	}
+}
+
+// AC-0290: the cut-through predicate — a carvable solid (everything except
+// air / water / lava — the water stays, the AC-0342 flooded model).
+static inline bool carve_is_solid(uint8_t id) {
+	return id != 0 && id != B_WATER && id != B_LAVA;
+}
+
+static inline bool carve_slab_kept(int y, const uint8_t *p_keep, int nsl) {
+	int sl = y >> 4;
+	return p_keep == nullptr || sl < nsl || p_keep[sl] != 0;
+}
+
+// AC-0290: the per-column carver apply (the cut-through + the re-skin).
+// ax/az = the LOCAL column (the flat[] index), wx/wz = the WORLD column
+// (the ellipsoid centers are world coords). Returns he2 = the topmost SOLID
+// after the carve (he = before): the caller updates heff[] so veg plants on
+// the carved surface. The re-skin (the new top gets the fill's exact surface
+// rule + the 3-deep dirt band) only fires where the carve dropped the top
+// (he2 < he) — block-level only; H / the surface fields / SEA are never
+// touched (the header's cut-through policy).
+static int carver_carve_column(std::vector<uint8_t> &flat, int ax, int az, int wx, int wz,
+		int he, int sea, int bm, const std::vector<CarveEll> &ell, int hmax, const uint8_t *p_keep) {
+	int nsl = hmax / 16;
+	for (const CarveEll &c : ell) {
+		double dx = (double)(wx - c.x);
+		double dz = (double)(wz - c.z);
+		double q = (dx * dx) / (c.rx * c.rx) + (dz * dz) / (c.rz * c.rz);
+		if (q >= 1.0)
+			continue;
+		int ylo, yhi;
+		if (c.flat) {
+			// The flat-floor room: the full-ellipse floor at c.floor, the
+			// dome ceiling (the upper half-ellipsoid).
+			ylo = c.floor;
+			yhi = (int)std::floor(c.y + c.ry * std::sqrt(1.0 - q));
+		} else {
+			double ym = c.ry * std::sqrt(1.0 - q);
+			ylo = (int)std::floor(c.y - ym);
+			yhi = (int)std::ceil(c.y + ym);
+		}
+		if (ylo < 1)
+			ylo = 1; // the bedrock row is never carved
+		if (yhi > hmax - 1)
+			yhi = hmax - 1;
+		for (int y = ylo; y <= yhi; y++) {
+			if (!c.flat) {
+				double dy = (double)y - c.y;
+				if (q + (dy * dy) / (c.ry * c.ry) > 1.0)
+					continue;
+			}
+			if (!carve_slab_kept(y, p_keep, nsl))
+				continue;
+			size_t k = (size_t)(y << 8) | (az << 4) | ax;
+			if (carve_is_solid(flat[k]))
+				flat[k] = (y < 8) ? B_LAVA : 0; // the cut-through (the deep-pocket lava rule)
+		}
+	}
+	// The new effective top (topmost solid): above he is air/water only, so
+	// walk down from he.
+	int he2 = he;
+	while (he2 >= 1) {
+		uint8_t id = flat[(size_t)(he2 << 8) | (az << 4) | ax];
+		if (id != 0 && id != B_WATER && id != B_LAVA)
+			break;
+		he2--;
+	}
+	// The re-skin (the fill's exact surface rule at the new top).
+	if (he2 < he && he2 >= 1) {
+		uint8_t top = B_GRASS;
+		if (bm == 1)
+			top = B_SAND;
+		else if (bm == 0)
+			top = B_SNOW_GRASS;
+		if (he2 <= sea + 1 && bm != 1)
+			top = B_SAND;
+		size_t k = (size_t)(he2 << 8) | (az << 4) | ax;
+		if (carve_is_solid(flat[k]))
+			flat[k] = top;
+		for (int y = he2 - 3; y < he2; y++) {
+			if (y < 1)
+				break;
+			if (!carve_slab_kept(y, p_keep, nsl))
+				continue;
+			size_t kk = (size_t)(y << 8) | (az << 4) | ax;
+			if (flat[kk] == B_STONE)
+				flat[kk] = (bm == 1) ? B_SAND : B_DIRT;
+		}
+	}
+	return he2;
+}
+
+// ---------------------------------------------------------------------------
 // AC-0216: cumulative lazy-skip counters (the harness reads them through
 // AweGen.skip_*(); the workers increment from any thread — atomics).
 // ---------------------------------------------------------------------------
@@ -886,6 +1262,7 @@ static std::atomic<long long> g_t_scan_us{0};
 static std::atomic<long long> g_t_fill_us{0};
 static std::atomic<long long> g_t_veg_us{0};
 static std::atomic<long long> g_t_pallet_us{0};
+static std::atomic<long long> g_t_carve_us{0}; // AC-0290: the carver pass
 static std::atomic<long long> g_t_cols_full{0};
 static std::atomic<long long> g_t_cols_skip{0};
 // AC-0284b: the far (h-only) column counters — g_t_cols_far = the far
@@ -1245,6 +1622,18 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 		return B_STONE;
 	};
 
+	// AC-0290: the carver pass (post-density, pre-veg — see the file
+	// header). The per-chunk plan (pure f(seed, cx, cz) — the splitmix64
+	// chunk stream, no noise field). FULL PATH only: skip != 0 never builds
+	// it (the far/skip payloads stay bit-exact by construction).
+	const std::vector<CarveEll> no_carves;
+	const std::vector<CarveEll> *carves_p = &no_carves;
+	std::vector<CarveEll> carves;
+	if (!skip) {
+		build_carver_plan(cx, cz, seed, carves, nullptr);
+		carves_p = &carves;
+	}
+
 	for (int lz = 0; lz < 16; lz++) {
 		for (int lx = 0; lx < 16; lx++) {
 			int idx = lz * 16 + lx;
@@ -1375,6 +1764,15 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				}
 			}
 			g_t_fill_us.fetch_add(now_us() - t_fill, std::memory_order_relaxed);
+
+			// AC-0290: the carver pass (post-fill, pre-veg) — the cut-
+			// through + the re-skin + heff updated to the carved surface
+			// (veg plants on the lip, not the pre-carve top). The skip
+			// paths never carve (the far/skip payloads stay bit-exact).
+			long long t_carve = now_us();
+			if (!skip)
+				heff[idx] = carver_carve_column(flat, lx, lz, x, z, he, sea, bm, *carves_p, hmax, p_keep);
+			g_t_carve_us.fetch_add(now_us() - t_carve, std::memory_order_relaxed);
 		}
 	}
 
@@ -1741,6 +2139,7 @@ public:
 		d["fill_us"] = (int64_t)g_t_fill_us.load(std::memory_order_relaxed);
 		d["veg_us"] = (int64_t)g_t_veg_us.load(std::memory_order_relaxed);
 		d["pallet_us"] = (int64_t)g_t_pallet_us.load(std::memory_order_relaxed);
+		d["carve_us"] = (int64_t)g_t_carve_us.load(std::memory_order_relaxed); // AC-0290
 		d["cols_full"] = (int64_t)g_t_cols_full.load(std::memory_order_relaxed);
 		d["cols_skip"] = (int64_t)g_t_cols_skip.load(std::memory_order_relaxed);
 		d["cols_far"] = (int64_t)g_t_cols_far.load(std::memory_order_relaxed);
@@ -1753,6 +2152,7 @@ public:
 		g_t_heights_us.store(0, std::memory_order_relaxed);
 		g_t_scan_us.store(0, std::memory_order_relaxed);
 		g_t_fill_us.store(0, std::memory_order_relaxed);
+		g_t_carve_us.store(0, std::memory_order_relaxed); // AC-0290
 		g_t_veg_us.store(0, std::memory_order_relaxed);
 		g_t_pallet_us.store(0, std::memory_order_relaxed);
 		g_t_cols_full.store(0, std::memory_order_relaxed);

@@ -95,7 +95,7 @@ quits.
 | Source | Role |
 |---|---|
 | `awe_common.{h,cpp}` | shared helpers/registration |
-| `gen.cpp` | terrain, biome, cave and ore generation (the density-field generator); `generate_resl`'s `skip` arg: 0 = full / 1 = **band-A materialization fill** (no cave field, solid 0..H + aquifer + surface top + veg — the drain's high lane runs it on each band-A column's first mesh, AC-0312) / 2 = **far h-only** (AC-0284b: builds only the 3 surface fields + H/biome/top-block, NO slabs, ~92 µs/col vs ~1.7 ms full) |
+| `gen.cpp` | terrain, biome, cave and ore generation (the density-field generator) + the **AC-0290 classic carver pass** (the post-density room/trunk/canyon carve — see the carver bullet in §4); `generate_resl`'s `skip` arg: 0 = full / 1 = **band-A materialization fill** (no cave field, solid 0..H + aquifer + surface top + veg — the drain's high lane runs it on each band-A column's first mesh, AC-0312) / 2 = **far h-only** (AC-0284b: builds only the 3 surface fields + H/biome/top-block, NO slabs, ~92 µs/col vs ~1.7 ms full) |
 | `mesh.cpp` | chunk meshing (greedy/FACE-BLOCK path); the avg far emitters `AweMesh.h_avg_emit` / `low_emit_avg` at a grid G (4 or 8 — AC-0312's band C / band B), byte-identical to the slab emitter on the same fill (shared `avg_grid_emit`), with the WATER EXCEPTION (a water-topped cell emits its top face with the translucent water material — `top_water` + atlas-rect params) and the `AweMesh.sky_eff` heightmap-sky light/strips builder (band A + the G-grid avg lanes); the far-tier floor (AC-0331) as a `p_yfloor` param on all three (−1 = off): a post-fill mask in the shared `avg_grid_emit` tail (avg tiers) + the per-voxel row gate + si0 in `build_accs` (band A) — the fill loops and the float32 op order are untouched |
 | `strips.cpp` | strip meshing lane |
 | `chunk_io.cpp` | column/slab blob encode+decode, region disk I/O |
@@ -535,6 +535,34 @@ Match these; do not improvise a different approach in a task.
   rule; the three paths now agree, so a demoted-then-promoted column can no longer change its
   water. H itself is untouched — the far-payload contract (thash `8df7aeb4…0dc4f11` byte-identical
   before/after + farab `h_mismatch` 0 is the proof).
+- **The classic carver pass (AC-0290 — the room / trunk / canyon family, POST-DENSITY)**: a second,
+  independent carve runs in `gen_flat` AFTER the density fill (`g_t_fill_us`) and BEFORE veg
+  (`g_t_carve_us`, ~20 µs/chunk measured): `build_carver_plan(cx, cz, seed, ell, feat)` draws the
+  per-chunk plan from a dedicated splitmix64 stream `carve_chunk_seed(seed, cx, cz)` (the
+  (cx+1000000)/(cz+2000000) salts — a pure `f(seed, cx, cz)`, no noise fields, so the AweNoise
+  lockstep / genprobe surface is untouched) — a cave roll `u < 0.15` → position rolls (x/z uniform
+  in-chunk, y 8..244) → 1-in-4 **main room** (h 1-14, Ø 5-15, the FLAT-FLOOR ellipse: full-ellipse
+  floor at `y0 − ⌈ry⌉` + dome ceiling, plus an exit trunk 30-60 long) vs 3-in-4 **I/T trunk**
+  (85-112 long, rx0 2-8 / ry0 1+rx0·(0.4+0.8u), 1-3 right-angle-ish branches 15-44 long attached in
+  the middle half, the walk's flicker 0.6-1.4× with ~12% bubble jitter 1.6×/1.3×, ±0.25 rad/step
+  wander, drift clamped ±0.5, y clamped 8..240); a canyon roll `u < 0.01` → the **ravine** (start
+  y 74-131, thickness 2+4u², rx = thick/2·(0.75-1.0), ry = 3rx, meander rotation ±0.125/step,
+  drift 0.05-0.15 blocks/step — NEARLY VERTICAL, the drift small enough that the tube's bottom and
+  its surface break sit close together (a tight meander = the deep gully; a wide arc would only
+  graze the surface), len `(45+105u)·df`, 1-block steps, deterministic path after setup). The apply
+  (`carver_carve_column`, per local column with WORLD x/z for the ellipsoid q-test) carves each
+  covered solid cell (`≠ 0/WATER/LAVA`) to AIR (to LAVA below y < 8), then walks the topmost solid
+  down (`he2`) and — only where `he2 < he` — re-skins the new top with the fill's EXACT surface
+  rule + the 3-deep dirt band; the caller updates `heff[]` so veg plants on the carved surface. The
+  carver writes only `flat[]` cells: it NEVER touches the heights[] / surface fields / SEA — H does
+  not move (thash `8df7aeb4…0dc4f11` byte-identical + farab `h_mismatch` 0 is the standing proof),
+  only the EFFECTIVE surface (he) can drop (measured: ~600 opened columns, max drop ~29 blocks in a
+  31×31 window; the drops are the ground truth, the topmost-solid census is the instrument). The
+  skip (1/2) and far paths NEVER build the plan, so the far/skip payloads stay bit-exact by
+  construction. Two accepted artifacts (documented, not fixed): the carve is PER-CHUNK, so a tube
+  that meanders out of its home chunk loses the neighbor-side portion (the vanilla seam), and the
+  veg pass runs AFTER the carver (the ticket's ordering), so trees may grow into a freshly-carved
+  opening.
 - **Edits on far / data-less columns (AC-0325)**: the flat write path has **no silent
   no-op**. `World.set_block` returns a bool and, when the target column holds no slabs
   (`data` empty — a node-only chunk that can sit data-less indefinitely since AC-0263's
