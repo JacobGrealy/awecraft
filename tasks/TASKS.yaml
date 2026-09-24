@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-23T19:33
+  updated_at: 2026-09-23T20:07
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0355
 - AC-0351
 - AC-0357
 - AC-0342
@@ -19081,11 +19080,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-22T10:53
-  updated_at: 2026-09-22T10:53
-  completed_at: null
+  updated_at: 2026-09-23T20:07
+  completed_at: 2026-09-23T20:07
   waiting_on: null
   parent_id: null
   notes: "1) User Story\n\nSome of the holes are in terrain that has not been touched - they are there\
@@ -19140,7 +19139,22 @@ intake:
     \ worlds (fail fast with a log line, never a half-load).\n\nRELATED: the neighbour-snapshot validation\
     \ ticket fixes the in-flight staleness class (intermittent, on edits); this one fixes the systematic\
     \ representation class (present in fresh terrain). The census arm separates them by direction and\
-    \ location - read its output before starting here, and do not blend the two findings in the results.\n"
+    \ location - read its output before starting here, and do not blend the two findings in the results.\n\
+    \n\nCOORDINATOR VERIFICATION, including an INDEPENDENT REPRODUCTION OF THE TICKET'S CENTRAL CLAIM\
+    \ rather than trusting the builder's logs: I ran `seamcensus` myself on the fixed tree (capped, solo,\
+    \ 0 SCRIPT ERROR) and it reads **missing_faces 0 / spurious 0 over 393,216 rows compared with by_class\
+    \ F-F 0** - the identical row window in which the pre-fix census reported 493 missing faces, so the\
+    \ F-F class is confirmed empty by a second operator with a second run rather than by the builder's\
+    \ own evidence. The standing stage is green end to end: genhash 25/25 byte-identical in two runs;\
+    \ farab 1080/1080 with h_mismatch 0; ladder band_a_ok 20/20; meshprobe 1.0; halo (c) 0; lightstate\
+    \ wash false with census 0/0; r16 with the documented --fixed-fps 600 recipe ALL sub-flags green with\
+    \ far_holes 0 in both bands; boundary r4 ok; and the R24 arm completes in ~14 min with the RSS trajectory\
+    \ flat at a ~6 MB/min tail (459 -> ~1064 MB), proving the AC-0356 leak fix still holds through the\
+    \ mesher change. The battery ran with NO contention this time - a builder was concurrently active\
+    \ during the previous stage and the difference is visible: `tint`, `toolpose` and `toolres` came back\
+    \ rc=0 here and rc=124 there, on the same tree and the same cap, which independently confirms the\
+    \ contention diagnosis recorded on AC-0354 and why a stage and a builder must not overlap on this\
+    \ box."
   comments: []
 - id: AC-0356
   title: large-radius-world-memory-leak
