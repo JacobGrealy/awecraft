@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-23T21:36
+  updated_at: 2026-09-23T23:35
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0358
 - AC-0342
 - AC-0344
 - AC-0290
@@ -19353,11 +19352,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-23T20:44
-  updated_at: 2026-09-23T20:44
-  completed_at: null
+  updated_at: 2026-09-23T23:35
+  completed_at: 2026-09-23T23:35
   waiting_on: null
   parent_id: null
   notes: '1) User Story: One arm in the suite permanently reports failure, so a real bright-slab regression
@@ -19396,5 +19395,20 @@ intake:
     the failure mode to avoid here); the standing set unchanged; the `brightslab` row re-rendered if its
     result_fields or its authoritative comparison change.
 
-    '
+
+
+    COORDINATOR VERIFICATION: an independent `brightslab` run reads rc=0, **zero SCRIPT ERROR**, `ok:true`,
+    `a2b2_slab_skips` 1, and no C4 `mesh_pb_mism` entry at all - so the arm that has been the standing
+    set''s one permanent red since AC-0347 P1 now passes, and it passes because the reading was WRONG
+    rather than because the threshold moved. I accept verdict (a) on the strength of the decisive experiment:
+    the two feeds are cell-wise identical on C4 (all masks equal), the classic path fed the payload''s
+    own full window reproduces the payload re-bake strictly across 23/23 slabs, and the mis-scope is mechanical
+    - B2''s bake box spans [0,top] while it was being fed the per-slab strip window [46,65], which zeroes
+    5,094-7,867 real margin cells and moves the greedy layout. Two corrections to the record this ticket
+    produced, both worth keeping: `pb_mism = 3` was three FIELDS (c/u/v) on ONE slab rather than three
+    slabs, and the residual C2/C5/C6 readings are NOT the same bug - there the feeds genuinely differ
+    through unseeded halo neighbours (payload 0 vs reference 15), which is the documented scoped-bake
+    margin class and was correctly left alone. The standing row now names the authoritative comparison
+    for an edited boundary (the payload path) instead of leaving a reader to guess which of four numbers
+    wins.'
   comments: []
