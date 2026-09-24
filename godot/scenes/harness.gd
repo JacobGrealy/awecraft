@@ -8626,14 +8626,20 @@ func _brightslab_test(spawn: Vector3) -> void:
 				int(r.get("final_exact_frame", -1)), int(r.get("lver_drops", -1)),
 				int(r.get("conv_frame", -1)), float(r.get("conv_frame", 0)) / 60.0 * 1000.0])
 	var cases_ok := true
+	var a2b2_slab_skips := 0
 	for r in results:
 		cases_ok = cases_ok and bool(r.get("ok", false))
+		# AC-0351: the guard's skip census at the top level — a compare
+		# that did not run must be visible in the one-line RESULT, with
+		# the per-slab reasons under cases[].slabs[].a2b2_skip.
+		a2b2_slab_skips += int(r.get("a2b2_slab_skips", 0))
 	Debug.result({
 		"ok": pre_ce == 0 and cases_ok,
 		"pre_edit_engine_vs_ref_mismatches": pre_ce,
 		"pre_edit_boundary_mismatches": pre_ce_boundary,
 		"pre_ref_rounds": int(pre_ri.get("rounds", -1)),
 		"pre_ref_converged": bool(pre_ri.get("converged", false)),
+		"a2b2_slab_skips": a2b2_slab_skips,
 		"cases": results,
 		"wall_ms": Time.get_ticks_msec() - t0,
 	})
@@ -9052,12 +9058,17 @@ func _brightslab_case(case: Dictionary, cx0: int, cz0: int, H: int, keys: Array,
 	var mesh_max_c := 0.0
 	var mesh_max_c_at := ""
 	var slab_notes: Array = []
+	var a2b2_skip_n := 0
 	for chk in checks:
 		var wcx: int = int(chk[0])
 		var wcz: int = int(chk[1])
 		var si3: int = int(chk[2])
 		var m: Dictionary = _brightslab_slab_cmp(mc, wcx, wcz, si3, ri, cx0, cz0)
 		slab_notes.append(m)
+		# AC-0351: count the guard-skipped slab compares (reason per slab
+		# in slab_notes[].a2b2_skip) so the skip is visible in the result.
+		if str(m.get("a2b2_skip", "")) != "":
+			a2b2_skip_n += 1
 		if int(m.get("pa_mism", 0)) > 0:
 			mesh_pa_mism += int(m["pa_mism"])
 		if int(m.get("pb_mism", 0)) > 0:
@@ -9081,6 +9092,9 @@ func _brightslab_case(case: Dictionary, cx0: int, cz0: int, H: int, keys: Array,
 	out["mesh_max_c_delta"] = mesh_max_c
 	out["mesh_max_c_at"] = mesh_max_c_at
 	out["slabs"] = slab_notes
+	# AC-0351: how many of this case's slab compares the A2/B2 bounds
+	# guard skipped (per-slab reasons in slab_notes[].a2b2_skip).
+	out["a2b2_slab_skips"] = a2b2_skip_n
 	out["quiet_frames"] = w2
 	# AC-0283 P3: an INTERIOR edit (box fits the seeded band) is exact on
 	# everything; a BOUNDARY edit under-lights the shared margin by design —
@@ -10260,9 +10274,32 @@ func _brightslab_slab_cmp(mc, wcx: int, wcz: int, si: int, ri: Dictionary, cx0: 
 		# si1 = -1: the true FULL build (was_full — the merged emit), the
 		# way the dispatch calls it (top-clamped inside).
 		ra2 = mc.build_accs(data_c, fl_c, wcx, wcz, nbs, ctx0, ms_w, pl2, 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())
-		ra2_acc = ra2["slabs"][si][0]
+		# AC-0351: the full build top-clamps to the column's top slab
+		# (AC-0197), so its dense `slabs` array can stop short of the slab
+		# under test once the terrain puts AIR in the top slab (the
+		# AC-0347 P1 field). Guard the index; a payload that does not
+		# reach `si` means the A2 comparison is SKIPPED — and recorded,
+		# so a compare that does not run can never masquerade as passed.
+		if int(ra2.get("slabs", []).size()) > si:
+			ra2_acc = ra2["slabs"][si][0]
 	var rb2: Dictionary = mc.build_accs(data_c, fl_c, wcx, wcz, nbs, ctxb, ms_w, lb, 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())
-	var rb2_acc: Dictionary = rb2["slabs"][si][0]
+	# AC-0351: same guard on the classic-reference side — the old
+	# unconditional line was the latent twin of the A2 crash.
+	var rb2_acc: Dictionary = {}
+	if int(rb2.get("slabs", []).size()) > si:
+		rb2_acc = rb2["slabs"][si][0]
+	var a2b2_skip := ""
+	if ra2_acc.is_empty() or rb2_acc.is_empty():
+		var why: Array = []
+		if ra2_acc.is_empty():
+			if ra2.is_empty():
+				why.append("A2 full-window payload not ok")
+			else:
+				why.append("A2 full-window slabs=%d does not reach si=%d" % [int(ra2.get("slabs", []).size()), si])
+		if rb2_acc.is_empty():
+			why.append("B2 full-window slabs=%d does not reach si=%d" % [int(rb2.get("slabs", []).size()), si])
+		a2b2_skip = " / ".join(why) + " (AC-0197 top clamp) — merged-path leg not run; per-slab A/B still gated"
+	out["a2b2_skip"] = a2b2_skip
 	var applied: Dictionary = {}
 	if s.mesh_instance != null and s.mesh_instance.mesh != null and int(s.mesh_instance.mesh.get_surface_count()) > 0:
 		var arrs: Array = s.mesh_instance.mesh.surface_get_arrays(0)
@@ -10298,7 +10335,11 @@ func _brightslab_slab_cmp(mc, wcx: int, wcz: int, si: int, ri: Dictionary, cx0: 
 		# the applied slab is settled-exact iff it matches the per-slab
 		# re-bake (the lane path) OR the full-window re-bake (the FEED /
 		# initial-build path) — same settled payload, same light.
-		out["pa_mism"] = mini(psum, psum_a2)
+		# AC-0351: when the A2 leg did not run (a2b2_skip above), the
+		# "either decomposition" OR degrades to the per-slab path — the
+		# old empty-dict short-circuit left psum_a2 at 0 and forced
+		# pa_mism to 0, i.e. a skipped compare read as a passed one.
+		out["pa_mism"] = psum if ra2_acc.is_empty() else mini(psum, psum_a2)
 		var pb2: Dictionary = _bs_acc_cmp_loose(applied, rb2_acc)
 		out["pb2"] = pb2
 		var psum2: int = 0
@@ -10309,7 +10350,10 @@ func _brightslab_slab_cmp(mc, wcx: int, wcz: int, si: int, ri: Dictionary, cx0: 
 		for fld in ["v", "n", "c", "u", "i"]:
 			if not bool(pb2[fld]):
 				psum2b += 1
-		out["pb_mism"] = mini(psum2, psum2b)
+		# AC-0351: explicit same-degradation for B2 (an empty rb2_acc
+		# compares all-false, so mini(psum2, psum2b) already fell back to
+		# psum2 — the intent is now stated, not accidental).
+		out["pb_mism"] = psum2 if rb2_acc.is_empty() else mini(psum2, psum2b)
 		var ab: Dictionary = _acc_cmp(ra_acc, rb_acc)
 		out["ab"] = ab
 		# the per-quad color detail: A/B for the per-face path, A2/B2 for
