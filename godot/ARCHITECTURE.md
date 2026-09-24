@@ -468,15 +468,33 @@ Match these; do not improvise a different approach in a task.
   (sampled by the `vn3` octave machine in both lanes — `AweNoise.vn3(x,y,z,s,first_oct,amps)` =
   `Σ(aᵢ·vnoise3(p·2^firstOctave·2^i)) / Σ|aᵢ|`, vanilla's octave machine which `fbm3` could not
   express; the scale MULTIPLIES the block coordinate): **cheese** = vanilla's `cave_cheese`
-  AS-IS `{firstOctave −8, [0.5,1,2,1,2,1,0,2,0]}` at xz 1.0 / y 0.6667, seed+301, on the coarse
+  AS-IS `{firstOctave −8, [0.5,1,2,1,2,1,0,2,0]}` at xz 1.0 / y 0.6667, seed+301, on the CAVE
   lattice (P1; dense samples read mean 0.503294 / std 0.088558 / max|C−0.5| = 0.353027);
   **layer** = vanilla's `cave_layer` AS-IS `{firstOctave −8, [1.0]}` at xz 1.0 / y 8.0, seed+302
-  (P2; the ~32-block vertical period is evaluated DENSE in the scan — it cannot ride the
-  48-block lattice, AC-0344); **entrances** = the vanilla `caves/entrances` function minus its
+  (P2; the ~32-block vertical period rides 4 samples/period on the cave lattice — pre-AC-0359 it
+  was evaluated DENSE in the scan, it cannot ride the 48-block SURFACE lattice, AC-0344);
+  **entrances** = the vanilla `caves/entrances` function minus its
   spaghetti min — `0.37 + 2·(E−0.5) + 0.3·(1−clamp01((y−54)/40))` with E = `cave_entrance` AS-IS
-  `{firstOctave −7, [0.4,0.5,1.0]}` at xz 0.75 / y 0.5, seed+306 (DENSE; the +64 shift maps
-  vanilla's from_y −10 / to_y 30 onto our 54 / 94; the 0.37 offset makes entrances RARE) — also
-  DENSE in the scan. The heightmap H (surface_h of the 3 coarse SURFACE fields) is structurally
+  `{firstOctave −7, [0.4,0.5,1.0]}` at xz 0.75 / y 0.5, seed+306 (the +64 shift maps
+  vanilla's from_y −10 / to_y 30 onto our 54 / 94; the 0.37 offset makes entrances RARE) — the
+  y-gradient stays ANALYTIC per-y (exact under trilinear), E is read from the cave lattice.
+  **AC-0359 (C48 — the selective lattice raise, the AC-0344 verdict)**: the CAVE family (cheese
+  + the 3 tunnel fields + layer + entrance) rides a SECOND lattice — 48 y-cells of the 384-block
+  height = **8-block Y cells** (Bedrock's resolution; `GY_CELLS_CAVE = 48`, FieldC 7×49×7 =
+  2401 pts, same xz cells as the coarse lattice) — while the SURFACE + ORE fields (f_sc/f_sh/
+  f_sr, f_ore1-3) stay on the original 48-block-y coarse lattice (`GY_CELLS = 8`, 441 pts); the
+  split is what keeps H / the far payload / the skip payload bit-exact by construction (the cave
+  lattice is built and read ONLY on the full path — never by gen_far / gen_veg_cells /
+  column_heights16). The in-column AND veg-margin scans read every cave input trilinearly off
+  the cave lattice (the dense per-block vn3 calls LEFT the scan at AC-0359 — per-chunk
+  generation 5076→2884 µs, the scan stage 4373→1291 µs); the dense sources `density_layer` /
+  `density_entrance` stay bound as the genprobe lockstep references. The deep zone is now
+  structured stone (k 50-80 air 78.7%→21.8%, an 85%-solid band at abs y 48-72, 98.1% of air
+  runs ≤32 blocks, openings avg depth 92→21); the second-order trilinear fidelity residuals are
+  recorded (not fixed) in `tasks/AC-0359/AC-0359-results.html` (measured: the layer peak
+  undershoot is 1.0 — a quintic-Perlin 1D slice is monotone between its lattice planes, so its
+  extrema sit on the 32-block period planes, a subset of the 8-block rows; the entrance peak
+  undershoot ≈0.996). The heightmap H (surface_h of the 3 coarse SURFACE fields) is structurally
   independent of the cave field: cave tuning MUST NOT touch f_sc/f_sh/f_sr or SEA (the far-band H
   bit-exactness + promotion contract — AC-0347 P2's thash proved H byte-identical before/after:
   `8df7aeb4…0dc4f11`, 21×21-chunk `column_heights16` SHA-256). The router's `max(…, pillars_choice)`
@@ -485,7 +503,7 @@ Match these; do not improvise a different approach in a task.
   deepens, the k 10-16 air set was proven 100% tunnel family, the stacked levels survive);
   the suppressor constants stayed vanilla as-is.
   AC-0289 (cave P1) added the **tunnel (edge-density)
-  structure** on top of the same one field: two more coarse fields —
+  structure** on top of the same one field: two more CAVE-LATTICE fields —
   **f_spag** = `fbm3(x/14, y/10, z/14, seed+303, 2 oct)` (spaghetti, the wide tagliatelle,
   1.0× the primary xz scale) and **f_nood** = `fbm3(x/10.5, y/10, z/10.5, seed+304, 2 oct)`
   (noodle, the 1–5-wide wormholes, 0.75× the primary xz scale) — plus the **rarity gate**

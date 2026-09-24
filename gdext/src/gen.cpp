@@ -76,10 +76,11 @@
 //   layer_c / cheese_c: the centered (2*(v-0.5)) values of the two vn3
 //            fields — the layer (vanilla cave_layer AS-IS, {firstOctave -8,
 //            amplitudes [1.0]}, xz 1.0 / y 8.0 — the ~32-BLOCK vertical
-//            period, evaluated DENSELY in the scan: a 32-block period
-//            cannot ride the 48-block lattice, AC-0344's cell-size
-//            decision, not re-litigated here; seed+302 = the slot P1
-//            freed) and the cheese (P1's coarse field, see below).
+//            period; AC-0359: on the C48 CAVE lattice, the period rides 4
+//            samples/period — pre-AC-0359 it was evaluated DENSELY in the
+//            scan, a 32-block period cannot ride the 48-block SURFACE
+//            lattice, AC-0344's cell-size decision; seed+302 = the slot
+//            P1 freed) and the cheese (see below).
 //   C(x,y,z) = trilinear of the coarse 3D CAVE field — AC-0347 P1:
 //            vanilla's cave_cheese AS-IS, sampled with the vn3 octave
 //            machine (AweNoise.vn3 / the mirror below — a custom AMPLITUDE
@@ -120,6 +121,33 @@
 //   surface (he), inside the documented H+/-R band, exactly like the
 //   cheese term already does. The H+R+1 scan-start "air for sure" margin
 //   is preserved (the tunnel only removes solidity).
+//
+//   AC-0359 (the AC-0344 C48 decision — the CAVE FAMILY ON AN 8-BLOCK-Y
+//   LATTICE): the cave family (cheese + the 3 tunnel fields + the NEW
+//   layer + entrance fields) rides a SECOND lattice, GY_CELLS_CAVE = 48
+//   (8-block y cells — Bedrock's resolution) vs the surface/ore lattice's
+//   48-block cells: FieldC = 7x49x7 = 2401 points, SAME xz cells. The
+//   in-column AND veg-margin scans read every cave input trilinearly off
+//   it (tril_c / tunnel_air_c / entrance_from_latt — the entrance y
+//   gradient stays analytic per-y) — the two dense per-block vn3 calls
+//   (entrance_cave / layer_cave) LEAVE the scan (they stay bound for the
+//   genprobe lockstep). The surface + ore fields (f_sc/f_sh/f_sr,
+//   f_ore1-3) and every skip/far path are UNTOUCHED (GY_CELLS = 8), which
+//   is what makes H / the far payload / the skip payload bit-exact by
+//   construction (thash 8df7aeb4... byte-identical, the gate proves it).
+//   Measured (AC-0344, seed 44, 5x5 window): per-chunk generation
+//   5076 -> 2884 us (-43.2% — the scan drops 4373 -> 1291 us, the field
+//   build grows 237 -> 1046 us), and the deep zone goes from a continuous
+//   75-78% air void to structured stone (k 50-80 air 78.7% -> 21.8%,
+//   k 80-130 75.1% -> 37.6%; an 85%-solid band at abs y 48-72; air runs
+//   collapse to <= 32 blocks; surface openings avg 92 -> 21 depth, max
+//   141 -> 62). Second-order fidelity residuals (recorded, not fixed):
+//   the trilinear between the 8-block samples undershoots the dense
+//   quintic PEAK amplitude (~cos(pi/4) = 0.707 for the layer's 4
+//   samples/period sinusoid — the level caps read marginally weaker than
+//   dense), and the entrance's finest y feature sits at the sampling
+//   border (the analytic gradient term is exact — see AC-0359's results
+//   page for the measurement of both).
 //   A(y) = 1.8 * (1 + max(0, H - y - R) / DEEP_GROW) — the cave amplitude
 //   — is GONE with DEEP_GROW and CAVE_AMP at AC-0347 P2 (the structure
 //   change: the shallow suppressor + the squared layer term replace the
@@ -406,8 +434,10 @@ constexpr double ENTR_GRAD_FROM_Y = 54.0; // vanilla from_y -10 + the +64
 constexpr double ENTR_GRAD_TO_Y = 94.0;   // vanilla to_y 30 + 64.
 constexpr double LAYER_XZ_SCALE = 1.0;    // vanilla cave_layer scales AS-IS
 constexpr double LAYER_Y_SCALE = 8.0;     // (~32-block vertical period —
-// DENSE in the scan: a 32-block period cannot ride the 48-block lattice,
-// AC-0344's cell-size decision, not re-litigated here).
+// AC-0359: on the C48 CAVE lattice the 32-block period rides 4
+// samples/period (vanilla's own convention); pre-AC-0359 it was DENSE in
+// the scan, a 32-block period cannot ride the 48-block SURFACE lattice —
+// the AC-0344 cell-size decision).
 constexpr int LAYER_FIRST_OCT = -8;
 static const double LAYER_AMPS[] = { 1.0 };
 constexpr int LAYER_AMPS_N = 1;
@@ -487,13 +517,40 @@ static inline size_t grid_idx(int64_t ix, int64_t iy, int64_t iz) {
 	return (size_t)((ix + 1) * GYN + iy) * GZN + (iz + 1);
 }
 
+// AC-0359 (the AC-0344 C48 decision): a SECOND lattice for the CAVE family
+// only — 8-block Y CELLS (Bedrock's resolution) vs the surface/ore lattice's
+// 48. The selective raise (AC-0344 verdict: the naive global raise B48 is
+// +16.9% per chunk, the selective C48 is -43.2% — the layer/entrance fields
+// ride it and stop being evaluated densely per block in the scan):
+// GY_CELLS_CAVE = 48 -> ystep_cave = hmax/48 = 8 blocks, GYN_C = 49 lattice
+// rows (y = 0..384), FieldC = 7x49x7 = 2401 doubles. The SAME xz cells (4
+// blocks, 1-cell margin) — only Y is refined. The CAVE family on it:
+// cheese (vn3, seed+301) + the 3 tunnel fields (fbm3, seeds +303/304/305) +
+// layer (vn3, seed+302 — the 32-block period rides 4 samples/period,
+// vanilla's own convention) + entrance (vn3, seed+306) — ALL BUILT ONLY ON
+// THE FULL PATH (skip/far never read them). UNTOUCHED (they keep GY_CELLS =
+// 8): the surface + ore fields (f_sc/f_sh/f_sr, f_ore1-3), gen_far,
+// gen_veg_cells, column_heights16 — that is what makes H / the far payload /
+// the skip payload bit-exact by construction (the thash gate proves it).
+constexpr int GY_CELLS_CAVE = 48; // 4x48x4 cells -> 48 y-cells of h/48 = 8 blocks
+constexpr int GYN_C = GY_CELLS_CAVE + 1;
+constexpr int GFN_C = GXN * GYN_C * GZN; // 2401
+using FieldC = std::array<double, GFN_C>;
+
+static inline size_t grid_idx_c(int64_t ix, int64_t iy, int64_t iz) {
+	return (size_t)((ix + 1) * GYN_C + iy) * GZN + (iz + 1);
+}
+
 // oct: the fbm octave count per lattice point (default 2 — every pre-AC-0288
 // field; AC-0288's primary cave octave passes 3).
 static void build_field(Field &f, int bx, int bz, double ystep, int64_t seed,
 		double fx, double fy, double fz, double ox, double oy, double oz,
 		int oct = 2) {
 	for (int64_t ix = -1; ix <= 5; ix++) {
-		for (int64_t iy = 0; iy <= 8; iy++) {
+		// AC-0359: the y bound was the hardcoded 8 — it HAD to be raised
+		// together with GY_CELLS in AC-0344's B-variants (latent bug). The
+		// constant form is the same value for the coarse lattice.
+		for (int64_t iy = 0; iy <= GYN - 1; iy++) {
 			for (int64_t iz = -1; iz <= 5; iz++) {
 				f[grid_idx(ix, iy, iz)] = fbm3(
 						((double)(bx + ix * 4)) / fx + ox,
@@ -515,9 +572,44 @@ static void build_field_vn(Field &f, int bx, int bz, double ystep, int64_t seed,
 		double sx, double sy, double sz, int first_oct,
 		const double *amps, int n) {
 	for (int64_t ix = -1; ix <= 5; ix++) {
-		for (int64_t iy = 0; iy <= 8; iy++) {
+		// AC-0359: `iy <= GYN - 1` (was the hardcoded 8 — see build_field).
+		for (int64_t iy = 0; iy <= GYN - 1; iy++) {
 			for (int64_t iz = -1; iz <= 5; iz++) {
 				f[grid_idx(ix, iy, iz)] = vn3(
+						(double)(bx + ix * 4) * sx,
+						(double)(iy * (int)(ystep)) * sy,
+						(double)(bz + iz * 4) * sz,
+						seed, first_oct, amps, n);
+			}
+		}
+	}
+}
+
+// AC-0359: the C48 cave-lattice builders — build_field / build_field_vn with
+// the 2401-pt FieldC and grid_idx_c (same world coords, 8-block y rows).
+static void build_field_c(FieldC &f, int bx, int bz, double ystep, int64_t seed,
+		double fx, double fy, double fz, double ox, double oy, double oz,
+		int oct = 2) {
+	for (int64_t ix = -1; ix <= 5; ix++) {
+		for (int64_t iy = 0; iy <= GYN_C - 1; iy++) {
+			for (int64_t iz = -1; iz <= 5; iz++) {
+				f[grid_idx_c(ix, iy, iz)] = fbm3(
+						((double)(bx + ix * 4)) / fx + ox,
+						((double)(iy * (int)(ystep))) / fy + oy,
+						((double)(bz + iz * 4)) / fz + oz,
+						seed, oct);
+			}
+		}
+	}
+}
+
+static void build_field_vn_c(FieldC &f, int bx, int bz, double ystep, int64_t seed,
+		double sx, double sy, double sz, int first_oct,
+		const double *amps, int n) {
+	for (int64_t ix = -1; ix <= 5; ix++) {
+		for (int64_t iy = 0; iy <= GYN_C - 1; iy++) {
+			for (int64_t iz = -1; iz <= 5; iz++) {
+				f[grid_idx_c(ix, iy, iz)] = vn3(
 						(double)(bx + ix * 4) * sx,
 						(double)(iy * (int)(ystep)) * sy,
 						(double)(bz + iz * 4) * sz,
@@ -544,6 +636,32 @@ static inline double tril(const Field &f, double gx, double gy, double gz) {
 	double x10 = lerp_gd(f[grid_idx(ix, iy + 1, iz)], f[grid_idx(ix + 1, iy + 1, iz)], u);
 	double x01 = lerp_gd(f[grid_idx(ix, iy, iz + 1)], f[grid_idx(ix + 1, iy, iz + 1)], u);
 	double x11 = lerp_gd(f[grid_idx(ix, iy + 1, iz + 1)], f[grid_idx(ix + 1, iy + 1, iz + 1)], u);
+	return lerp_gd(lerp_gd(x00, x10, v), lerp_gd(x01, x11, v), w);
+}
+
+// AC-0359: the C48 cave-lattice trilinear sample — tril on the 2401-pt
+// FieldC. gx/gz have the same meaning (the tree margin covers gx/gz >= -0.5,
+// <= 4.25 exactly as the coarse lattice); gy = y/ystep_cave in [0, 48).
+// The second-order fidelity residual is recorded, not hidden: trilinear
+// between the 8-block samples undershoots the dense-quintic PEAK amplitude
+// (~cos(pi/4) = 0.707 for the layer's 4-samples/period 32-block sinusoid —
+// the level caps read marginally weaker than a dense evaluation), and the
+// entrance's finest y feature sits at the sampling border (see AC-0359's
+// results page for the measurement).
+static inline double tril_c(const FieldC &f, double gx, double gy, double gz) {
+	double fx = std::floor(gx);
+	double fy = std::floor(gy);
+	double fz = std::floor(gz);
+	int64_t ix = (int64_t)fx;
+	int64_t iy = (int64_t)fy;
+	int64_t iz = (int64_t)fz;
+	double u = gx - fx;
+	double v = gy - fy;
+	double w = gz - fz;
+	double x00 = lerp_gd(f[grid_idx_c(ix, iy, iz)], f[grid_idx_c(ix + 1, iy, iz)], u);
+	double x10 = lerp_gd(f[grid_idx_c(ix, iy + 1, iz)], f[grid_idx_c(ix + 1, iy + 1, iz)], u);
+	double x01 = lerp_gd(f[grid_idx_c(ix, iy, iz + 1)], f[grid_idx_c(ix + 1, iy, iz + 1)], u);
+	double x11 = lerp_gd(f[grid_idx_c(ix, iy + 1, iz + 1)], f[grid_idx_c(ix + 1, iy + 1, iz + 1)], u);
 	return lerp_gd(lerp_gd(x00, x10, v), lerp_gd(x01, x11, v), w);
 }
 
@@ -597,9 +715,10 @@ static inline double density_ramp(double H, int y) {
 // AC-0347 P2: the dense CAVE LAYER source — vanilla's cave_layer noise
 // instance AS-IS ({firstOctave -8, amplitudes [1.0]} at xz 1.0 / y 8.0 —
 // the ~32-block vertical period), seed+302 (the slot P1 freed when the
-// old two-octave cheese blend went away). Evaluated DENSELY in the scan:
-// a 32-block period cannot ride the 48-block lattice (AC-0344's
-// cell-size decision). The genprobe lockstep source (AweGen::density_layer).
+// old two-octave cheese blend went away). AC-0359: the scan reads the
+// LATTICE value (f_layer on the C48 cave lattice — the 32-block period
+// rides 4 samples/period); this dense source stays bound as the genprobe
+// lockstep reference (AweGen::density_layer) and nothing else calls it.
 static inline double layer_cave(double x, double y, double z, int64_t s) {
 	return vn3(x * LAYER_XZ_SCALE, y * LAYER_Y_SCALE, z * LAYER_XZ_SCALE,
 			s + 302, LAYER_FIRST_OCT, LAYER_AMPS, LAYER_AMPS_N);
@@ -615,11 +734,29 @@ static inline double layer_cave(double x, double y, double z, int64_t s) {
 // the unit in which the constants are meaningful); the +0.37 offset is
 // vanilla's (entrances RARE — the surface breaks only in the noise's lower
 // tail); the gradient is vanilla's from_y -10 / to_y 30 / 0.3 -> 0.0
-// shifted by +64 (the world's min_y). The genprobe lockstep source
-// (AweGen::density_entrance).
+// shifted by +64 (the world's min_y). AC-0359: the scan reads the LATTICE
+// value (f_entr on the C48 cave lattice via entrance_from_latt); this dense
+// source stays bound as the genprobe lockstep reference
+// (AweGen::density_entrance) and nothing else calls it.
 static inline double entrance_cave(double x, double y, double z, int64_t s) {
 	double e = vn3(x * ENTR_XZ_SCALE, y * ENTR_Y_SCALE, z * ENTR_XZ_SCALE,
 			s + 306, ENTR_FIRST_OCT, ENTR_AMPS, ENTR_AMPS_N);
+	double t = (y - ENTR_GRAD_FROM_Y) / (ENTR_GRAD_TO_Y - ENTR_GRAD_FROM_Y);
+	if (t < 0.0)
+		t = 0.0;
+	else if (t > 1.0)
+		t = 1.0;
+	return 2.0 * (e - 0.5) + ENTR_OFFSET + ENTR_GRAD_LO * (1.0 - t);
+}
+
+// AC-0359: the entrance family OFF the cave lattice — e is the f_entr
+// lattice value (tril_c of the seed+306 vn3 field) and the analytic y
+// GRADIENT stays per-y, exactly as the dense source has it (a linear
+// function is exact under trilinear, so no residual there):
+//   2*(e - 0.5) + 0.37 + 0.3*(1 - clamp01((y - 54)/40)).
+// entrance_cave (the dense vn3 source) stays bound for the genprobe
+// lockstep; the scan no longer calls it.
+static inline double entrance_from_latt(double e, double y) {
 	double t = (y - ENTR_GRAD_FROM_Y) / (ENTR_GRAD_TO_Y - ENTR_GRAD_FROM_Y);
 	if (t < 0.0)
 		t = 0.0;
@@ -662,15 +799,37 @@ static inline bool tunnel_air(const Field &f_spag, const Field &f_nood, const Fi
 	return nd < NOOD_TH * w;
 }
 
+// AC-0359: the C48 tunnel predicate — tunnel_air on the cave lattice
+// (tril_c). The AC-0344 B-variant data showed the tunnels already read
+// correctly from the raised lattice; the scan now uses this everywhere the
+// coarse lattice used to.
+static inline bool tunnel_air_c(const FieldC &f_spag, const FieldC &f_nood, const FieldC &f_gate,
+		double gx, double gy, double gz) {
+	double w = gate_weight(tril_c(f_gate, gx, gy, gz));
+	if (w <= 0.0)
+		return false;
+	double sp = tril_c(f_spag, gx, gy, gz) - 0.5;
+	if (sp < 0.0)
+		sp = -sp;
+	if (sp < SPAG_TH * w)
+		return true;
+	double nd = tril_c(f_nood, gx, gy, gz) - 0.5;
+	if (nd < 0.0)
+		nd = -nd;
+	return nd < NOOD_TH * w;
+}
+
 // AC-0347 P2: THE VANILLA DENSITY ROUTER — the ONE density field at a
 // cell (solid where > 0, air where < 0), the SHALLOW/DEEP split of the
 // file header (Java 1.21.4 overworld.json final_density's range_choice,
 // verified against the shipped JSON; density > 0 = solid is the vanilla
 // AND our convention — no sign flip). Inputs: H (the heightmap — the
-// far/payload/promotion contract, untouched), y, cave (the P1 coarse
-// cheese field's trilinear value), ent (the dense entrance family,
-// entrance_cave), layer (the dense cave layer's RAW vn3 value — the
-// centering happens here; pass 0.0 in the shallow band, it is not read).
+// far/payload/promotion contract, untouched), y, cave (the cheese field's
+// trilinear value — the C48 cave lattice since AC-0359), ent (the entrance
+// family value — entrance_from_latt on the cave lattice since AC-0359,
+// dense entrance_cave before), layer (the cave layer's RAW vn3 value —
+// the C48 lattice value since AC-0359; the centering happens here; pass
+// 0.0 in the shallow band, it is not read).
 // TUNNELS: the AC-0289 tunnel_air rule is applied OUTSIDE this function
 // (the scan's "&& !tunnel_air") — the vanilla spaghetti min, kept where
 // AC-0289 put it so the tunnels pierce the caps and connect the levels.
@@ -1005,6 +1164,8 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 		return p_keep == nullptr || sl < nsl || p_keep[sl] != 0;
 	};
 	double ystep = (double)hmax / GY_CELLS;
+	// AC-0359: the cave lattice's y step (8 blocks — Bedrock's cell).
+	double ystep_cave = (double)hmax / GY_CELLS_CAVE;
 
 	if (skip) {
 		g_skip_chunks_total.fetch_add(1, std::memory_order_relaxed);
@@ -1019,21 +1180,37 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	// field (the AC-0091 2D heightmap's c/h/r, now 3D on the same coarse
 	// grid — replaces the heightmap).
 	long long t_field = now_us();
-	Field f_cheese{}, f_ore1, f_ore2, f_ore3;
-	Field f_spag{}, f_nood{}, f_gate{};
+	// AC-0359: the CAVE family rides the second (C48) lattice — 8-block y
+	// cells, 2401 points/field (cheese + 3 tunnels MOVED here from the
+	// coarse lattice; layer + entrance NEW here, built only on the full
+	// path — the dense vn3 calls leave the scan, the AC-0344 verdict).
+	FieldC f_cheese{}, f_spag{}, f_nood{}, f_gate{}, f_layer{}, f_entr{};
+	Field f_ore1, f_ore2, f_ore3;
 	if (!skip) {
 		// AC-0347 P1: the cheese field = vanilla's cave_cheese as-is (see
 		// the CHEESE_* constants + the file header) — ONE vn3 field
 		// replaces the old AC-0288 two-octave blend (f_cave/f_cave2 gone).
-		build_field_vn(f_cheese, bx, bz, ystep, seed + 301,
+		// AC-0359: on the cave lattice (ystep_cave).
+		build_field_vn_c(f_cheese, bx, bz, ystep_cave, seed + 301,
 				CHEESE_XZ_SCALE, CHEESE_Y_SCALE, CHEESE_XZ_SCALE,
 				CHEESE_FIRST_OCT, CHEESE_AMPS, CHEESE_AMPS_N);
 		// AC-0289: the P1 tunnel fields (see the file header) — FULL PATH
 		// only: skip != 0 keeps the H/far/promotion contracts bit-exact
 		// (the lazy fill and the far payload never read them).
-		build_field(f_spag, bx, bz, ystep, seed + 303, SPAG_XZ, 10.0, SPAG_XZ, 0.0, 0.0, 0.0);
-		build_field(f_nood, bx, bz, ystep, seed + 304, NOOD_XZ, 10.0, NOOD_XZ, 0.0, 0.0, 0.0);
-		build_field(f_gate, bx, bz, ystep, seed + 305, GATE_XZ, 10.0, GATE_XZ, 0.0, 0.0, 0.0);
+		// AC-0359: on the cave lattice (ystep_cave).
+		build_field_c(f_spag, bx, bz, ystep_cave, seed + 303, SPAG_XZ, 10.0, SPAG_XZ, 0.0, 0.0, 0.0);
+		build_field_c(f_nood, bx, bz, ystep_cave, seed + 304, NOOD_XZ, 10.0, NOOD_XZ, 0.0, 0.0, 0.0);
+		build_field_c(f_gate, bx, bz, ystep_cave, seed + 305, GATE_XZ, 10.0, GATE_XZ, 0.0, 0.0, 0.0);
+		// AC-0359: the layer (vanilla cave_layer AS-IS — the 32-block period
+		// rides 4 samples/period) and the entrance (vanilla cave_entrance
+		// AS-IS) move ONTO the cave lattice — the AC-0344 C48 design. They
+		// were DENSE vn3 in the scan before (layer deep-band only).
+		build_field_vn_c(f_layer, bx, bz, ystep_cave, seed + 302,
+				LAYER_XZ_SCALE, LAYER_Y_SCALE, LAYER_XZ_SCALE,
+				LAYER_FIRST_OCT, LAYER_AMPS, LAYER_AMPS_N);
+		build_field_vn_c(f_entr, bx, bz, ystep_cave, seed + 306,
+				ENTR_XZ_SCALE, ENTR_Y_SCALE, ENTR_XZ_SCALE,
+				ENTR_FIRST_OCT, ENTR_AMPS, ENTR_AMPS_N);
 	}
 	build_field(f_ore1, bx, bz, ystep, seed + 77, 7.0, 7.0, 7.0, 0.0, 0.0, 0.0);
 	build_field(f_ore2, bx, bz, ystep, seed + 88, 9.0, 9.0, 9.0, 900.0, 0.0, 900.0);
@@ -1111,22 +1288,24 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				for (int y = top; y >= 1; y--) {
 					if (!slab_kept(y >> 4))
 						continue; // AC-0237: ungenerated slab — skip
-					// AC-0347: the router inputs — the cheese from the P1
-					// coarse field (trilinear, unchanged), the entrance
-					// family DENSE (vanilla cave_entrance AS-IS, ~64-block y
-					// period — cannot ride the 48-block lattice), the layer
-					// DENSE in the deep band only (it is not read in the
-					// shallow branch — vanilla's 32-block period, AC-0344).
-					double cave = tril(f_cheese, gx, (double)y / ystep, gz);
-					double ent = entrance_cave(x, (double)y, z, seed);
+					// AC-0359: the router inputs ALL from the C48 cave
+					// lattice (8-block y cells) — cheese + the 3 tunnel
+					// fields MOVED here, layer + entrance ONTO the lattice
+					// (the dense vn3 calls leave the scan; the analytic
+					// entrance y-gradient stays per-y in
+					// entrance_from_latt). This is the scan that dropped
+					// 4373 -> 1291 us/chunk in the AC-0344 measurement.
+					double gy_c = (double)y / ystep_cave;
+					double cave = tril_c(f_cheese, gx, gy_c, gz);
+					double ent = entrance_from_latt(tril_c(f_entr, gx, gy_c, gz), (double)y);
 					double lay = (H - y >= K_CUT)
-							? layer_cave(x, (double)y, z, seed)
+							? tril_c(f_layer, gx, gy_c, gz)
 							: 0.0;
 					// AC-0289: the tunnel air wins over the router's solid —
 					// applied OUTSIDE dens_at (the vanilla spaghetti min,
 					// kept where AC-0289 put it: the tunnels pierce the caps).
 					bool s = dens_at(H, y, cave, ent, lay) > 0.0
-							&& !tunnel_air(f_spag, f_nood, f_gate, gx, (double)y / ystep, gz);
+							&& !tunnel_air_c(f_spag, f_nood, f_gate, gx, gy_c, gz);
 					solidf[y] = s ? 1 : 0;
 					if (s && he < 0)
 						he = y;
@@ -1248,17 +1427,20 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				if (top2 > hmax - 1)
 					top2 = hmax - 1;
 				for (int y = top2; y >= 1; y--) {
-					// AC-0347: the same router inputs as the in-column scan
-					// (the tree base must match the full column's surface —
-					// dense entrance + layer exactly as there).
-					double cave = tril(f_cheese, gx2, (double)y / ystep, gz2);
-					double ent = entrance_cave(tx, (double)y, tz, seed);
+					// AC-0347/AC-0359: the same router inputs as the
+					// in-column scan (the tree base must match the full
+					// column's surface — the C48 cave-lattice reads exactly
+					// as there; the fields' 1-cell xz margin covers the
+					// margin band on both lattices).
+					double gy2 = (double)y / ystep_cave;
+					double cave = tril_c(f_cheese, gx2, gy2, gz2);
+					double ent = entrance_from_latt(tril_c(f_entr, gx2, gy2, gz2), (double)y);
 					double lay = (H2 - y >= K_CUT)
-							? layer_cave(tx, (double)y, tz, seed)
+							? tril_c(f_layer, gx2, gy2, gz2)
 							: 0.0;
 					// AC-0289: the same tunnel rule as the in-column scan.
 					if (dens_at(H2, y, cave, ent, lay) > 0.0
-							&& !tunnel_air(f_spag, f_nood, f_gate, gx2, (double)y / ystep, gz2)) {
+							&& !tunnel_air_c(f_spag, f_nood, f_gate, gx2, gy2, gz2)) {
 						hcol = y;
 						break;
 					}
