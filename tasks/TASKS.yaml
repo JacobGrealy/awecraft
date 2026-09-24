@@ -1,10 +1,10 @@
 meta:
-  updated_at: 2026-09-24T02:08
+  updated_at: 2026-09-24T03:58
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0344
+- AC-0359
 - AC-0290
 - AC-0291
 - AC-0292
@@ -17855,11 +17855,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-20T11:15
-  updated_at: 2026-09-21T03:10
-  completed_at: null
+  updated_at: 2026-09-24T03:58
+  completed_at: 2026-09-24T03:58
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -17962,7 +17962,30 @@ intake:
     the AC-0237 gen_timing breakdown at GY_CELLS 8 vs 16 vs 24 (833 / 1225 lattice points per field, seven
     fields on the full path), the AC-0313 clause-4 load-screen wall which is derived from the real band''s
     gen cost, AC-0286''s promotion cost, and the AC-0284b far/skip H bit-exactness. The deliverable stays
-    a measured recommendation, not an implementation.'
+    a measured recommendation, not an implementation.
+
+
+    COORDINATOR CLOSE: the decision is recorded, the exit is verified clean (the working tree carries
+    only the registry change from the follow-up filing, and the builder''s own check that the rebuilt
+    .so is byte-identical to the pre-task build plus a byte-identical genhash is the right way to prove
+    a decision ticket left the engine alone), and the follow-up is filed where the work it feeds can use
+    it - AC-0359 sits at queue position 2, ahead of the cave P2-P4 series whose features will ride this
+    lattice, with a 5.3 KB re-derivable spec. WHAT MAKES THIS A GOOD ANSWER RATHER THAN A DEFERRAL: the
+    ticket asked whether the coarse vertical sampling was worth fixing and expected a cost/benefit judgement;
+    the builder MEASURED the cost and found it NEGATIVE (a 43% per-chunk saving, because moving the layer
+    and entrance fields onto the lattice removes two dense per-block evaluations that the 48-block lattice
+    could not carry - which is the same "a 32-block period cannot ride the 48-block lattice" observation
+    AC-0347''s notes recorded, now resolved in the direction that is both faster and finer), and it MEASURED
+    the benefit and found the deep void to be a 48-block trilinear aliasing artifact rather than a design
+    choice (deep-zone air 78.7% -> 21.8%, with a real 85%-solid cap band restored at absolute y 48-71).
+    It also separated the two candidate fixes on evidence: the naive global raise costs +16.9% AND MOVES
+    H (thash differs, H range 118-164 -> 104-210, which would owe an farab re-proof of the far payload),
+    while C48 keeps thash byte-identical so the H, far and skip contracts stay bit-exact - which is exactly
+    the kind of distinction this project''s H contract demands. Two second-order fidelity residuals are
+    recorded with the spec (a trilinear peak undershoot of ~0.71x and the entrance''s 16-block feature
+    at two samples per period) and one honest caveat that 99.5% of surface openings are tunnel-carved
+    in both variants, so tunnels remain the dominant shape - the benefit is in the deep structure, not
+    in the openings.'
   comments: []
 - id: AC-0345
   title: r50-far-wave-starvation
@@ -19431,4 +19454,69 @@ intake:
     margin class and was correctly left alone. The standing row now names the authoritative comparison
     for an edited boundary (the payload path) instead of leaving a reader to guess which of four numbers
     wins.'
+  comments: []
+- id: AC-0359
+  title: cave-lattice-8block-y-cells-c48
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-24T03:54
+  updated_at: 2026-09-24T03:54
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story\nThe caves are the world's vertical structure, and today that structure is decided\n\
+    on a 48-block-vertical grid while bedrock (the reference) decides it on an 8-block\ngrid — 6× coarser.\
+    \ The measured consequence (AC-0344, all numbers measured on\nseed 44, 5×5-chunk window): the deep\
+    \ zone (k 50–130 below surface) is a\ncontinuous 75–78%-air void instead of vanilla-shaped cave pockets\
+    \ (22–38% air);\nlevel caps are weak; no vertical feature shorter than ~48 blocks can exist;\nair\
+    \ runs are dominated by 32–63 and 64+ block stretches (7542 of 9239 runs ≥16\nblocks). After this\
+    \ ticket: the deep zone becomes structured stone with cave\npockets and real level caps (seed-44 profile:\
+    \ 85%-solid band at absolute y\n48–72, k 50–80 air 78.7%→21.8%, k 80–130 75.1%→37.6%); 82% of air\
+    \ runs become\n≤32 blocks; surface openings get shallow (mean depth 92→21 blocks, max\n141→62 — no\
+    \ more surface columns that open straight into a deep void). The\nchange is also NET CHEAPER: per-chunk\
+    \ generation 5076→2884 µs (−43%), because\nmoving layer+entrance onto the lattice removes two dense\
+    \ per-block noise calls\nfrom the ~4.4 ms scan, which outweighs the larger field build. H (the\nheightmap),\
+    \ the far payload and the skip payload are bit-exact by construction\n(thash byte-identical, measured)\
+    \ — only the cave world changes.\n\n2) Technical Details\nWhat to build (the design was measured as\
+    \ C48 in AC-0344; the temporary\nimplementation existed in-tree during AC-0344 and was reverted —\
+    \ re-derive\nfrom this list, the .so rebuild is ~4 s):\n- gen.cpp: add a second lattice for the CAVE\
+    \ family only:\n  * GY_CELLS_CAVE = 48 (GYN_C = 49, FieldC = 7×49×7 = 2401 doubles),\n    grid_idx_c\
+    \ + build_field_c (fbm3) + build_field_vn_c (vn3) + tril_c\n    (trilinear) + tunnel_air_c + entrance_from_latt\
+    \ (the entrance y-gradient\n    is the analytic part of the family and stays per-y:\n    2(e−0.5)\
+    \ + 0.37 + 0.3(1−clamp01((y−54)/40)) with e from the lattice).\n  * gen_flat: ystep_cave = hmax/GY_CELLS_CAVE;\
+    \ f_cheese (vn3, seed+301,\n    CHEESE_* constants), f_spag/f_nood/f_gate (fbm3, seeds +303/+304/+305,\n\
+    \    y-scale 10.0) move to FieldC; NEW f_layer (vn3, seed+302, LAYER_*\n    constants — the 32-block\
+    \ period rides 4 samples/period, vanilla's own\n    convention) and f_entr (vn3, seed+306, ENTR_*\
+    \ constants), built only on\n    the full path.\n  * The in-column scan AND the veg-margin scan read\
+    \ everything from the\n    lattice: cave = tril_c(f_cheese,…, y/ystep_cave, …); ent =\n    entrance_from_latt(tril_c(f_entr,…),\
+    \ y); lay = (H−y≥K_CUT) ? tril_c(\n    f_layer,…) : 0.0; tunnel via tunnel_air_c. The dense vn3 calls\n\
+    \    (entrance_cave/layer_cave) leave the scan — they stay bound for\n    genprobe.\n  * SURFACE +\
+    \ ORE fields (f_sc/f_sh/f_sr, f_ore1-3), gen_far, gen_veg_cells,\n    column_heights16 are UNTOUCHED\
+    \ (they keep GY_CELLS = 8) — this is what\n    makes H / far payload / skip payload bit-exact (thash\
+    \ gate proves it).\n  * build_field/build_field_vn loops should bound with `iy <= GYN - 1`\n    instead\
+    \ of the hardcoded 8 while you are in there (latent bug: the\n    constant and the literal had to\
+    \ be raised together in AC-0344's B-variants).\nVerify:\n- G0 zero script errors; thash == AC-0344\
+    \ baseline 8df7aeb442d2f1aff5d6cbb5fd63ecfe968b593b3fa428235722919d90dc4f11\n  (H bit-exactness —\
+    \ the contract proof); genhash 25/25 EXPECTED to change\n  (new world — the 2026-09-15 \"new world\
+    \ is fine\" note covers it) → rebase\n  the standing GENHASH references + GENMS band + thash-adjacent\
+    \ battery arms\n  that encode the old cave world.\n- gen_timing: expect field ~1.0 ms, scan ~1.3 ms,\
+    \ total ~2.9 ms/chunk\n  (measured: 1046/1291/2884 µs) — the scan drop is the pivot of the AC-0344\n\
+    \  verdict; if it does not appear, stop and re-open the decision.\n- Re-run the AC-0286 promotion-burst\
+    \ numbers (regen 2 ms / re-seed 2.6 ms /\n  mesh-swap 350–361 ms budgets): the deep band is more solid\
+    \ now, so the mesh\n  vertex count changes — the swap budget is ~170× headroom, re-proof anyway.\n\
+    - AC-0313 clause-4 load gate: per-column gen cost drops 19.8→11.4 µs — no\n  re-proof needed (Δ ≈\
+    \ 0.4 ms on a 959–2089 ms wall), G0 only.\n- Smoke: visual check of the deep band (dig down through\
+    \ k 50–130) + the\n  near-surface first-cave census (AC-0343 concern: C48 raises first-cave-at-\n\
+    \  k1-4 columns 148→781, but 99.5% of openings are tunnel mouths, not a void —\n  confirm the surface\
+    \ does not read as a thin shell).\n- ARCHITECTURE.md: the cave family now rides an 8-block-cell lattice\
+    \ separate\n  from the surface/ore 48-block-cell lattice (one-liner + the constants).\nKnown second-order\
+    \ residuals (record, don't fix here): trilinear between the\n8-block samples undershoots the dense-quintic\
+    \ peak amplitude (~0.71× for a\n4-samples/period sinusoid) — level caps are marginally weaker than\
+    \ a dense\nevaluation; the entrance's finest 16-block y feature sits at 2 samples/period\n(borderline,\
+    \ the analytic gradient term is exact).\n"
   comments: []
