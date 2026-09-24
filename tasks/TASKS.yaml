@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-23T23:35
+  updated_at: 2026-09-24T02:08
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0342
 - AC-0344
 - AC-0290
 - AC-0291
@@ -17625,11 +17624,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-20T11:15
-  updated_at: 2026-09-20T11:15
-  completed_at: null
+  updated_at: 2026-09-24T02:08
+  completed_at: 2026-09-24T02:08
   waiting_on: null
   parent_id: null
   notes: "1) User Story\n\nAs a player, I want cave mouths and pits on land to be DRY unless they are\
@@ -17688,7 +17687,28 @@ intake:
     \ water changed may move, so expect a rebase; prove the H bytes are unchanged with the AWEH column_heights16\
     \ SHA-256 method used at AC-0288.\n- Band-A coastal water look unchanged.\n\nDEFERRED: the Voronoi\
     \ local levels and the lava aquifers themselves (AC-0291, which stays the owner of \"what the level\
-    \ is\").\n"
+    \ is\").\n\n\nCOORDINATOR VERIFICATION: the standing stage is green end to end and the intentional\
+    \ rebase is INDEPENDENTLY COUNTED rather than accepted - my own extraction of the two genhash runs\
+    \ reads 25 lines, run 1 identical to run 2, and **10 identical / 15 new against the AC-0355 reference**,\
+    \ exactly the split the builder claimed, which is the check that matters because that reference is\
+    \ the one the doc now carries. The ocean half of the user's ask is independently corroborated by `farab`\
+    \ (1080/1080 with h_mismatch 0, i.e. the height field and the water plane agree across both grids)\
+    \ and the dry-land half by the builder's cell-exact census plus the render I inspected directly with\
+    \ vision - looking down on a green plateau with a DRY dark pit in it and the sea where it belongs\
+    \ in the distance, which is the user's acceptance test as a picture. r16 all sub-flags green with\
+    \ far_holes 0 in both bands; ladder 20/20; meshprobe 1.0; halo (c) 0; brightslab now runs with ZERO\
+    \ SCRIPT ERROR inside a heavy stage for the first time (AC-0351 + AC-0358 together); lightstate 0/0\
+    \ as re-baselined; boundary r4 ok with p95 35 - inside the ORIGINAL documented <=42 band, not merely\
+    \ the widened transient reading - while max_ms 603 and staged_dropped 1821 stay in their usual ranges;\
+    \ R24 ok with 10 crossings, resident 1453, storm_walk_p99 97 and sweep max 7.9, both well inside their\
+    \ gates (its wall was only ~53 s this run because the same walk completed faster, and the RSS samples\
+    \ span that shorter window). The battery is fully green apart from the long-standing AC-0330 items.\
+    \ ONE NOTE ON THE SCOPE OF MY OWN VERIFICATION, so the record is exact: I re-ran the standing set\
+    \ and the genhash comparison myself, and I inspected the render, but the three-way cell census (486,001\
+    \ wet land cells -> 0, the byte-identical ocean, the coast pools 120 -> 0) is the BUILDER's instrument\
+    \ - unlike AC-0355's seam census, which I reproduced independently. The census is well-constructed\
+    \ and its raw logs are parked in .scratch/AC-0342-gates, so anyone can re-run it; it is recorded here\
+    \ as builder-measured rather than coordinator-verified."
   comments: []
 - id: AC-0343
   title: cave-shallow-band-surface-openings
