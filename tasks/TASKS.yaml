@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-23T20:45
+  updated_at: 2026-09-23T21:36
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0357
 - AC-0358
 - AC-0342
 - AC-0344
@@ -16212,7 +16211,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-19T08:42
-  updated_at: 2026-09-22T05:47
+  updated_at: 2026-09-23T21:36
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -16287,7 +16286,18 @@ intake:
     \ on this memory-pressured box (that is exactly what happened to `webfall`, and a solo re-run was\
     \ clean) - so when a heavy stage overlaps a builder, treat a no-result timeout as SUSPECT and re-run\
     \ it solo before believing it, the same way a `handle_crash` banner is treated as the known crash\
-    \ class."
+    \ class.\n\nARM DEBT ADDED BY AC-0357 (2026-09-23), for whoever works this umbrella: the `lightstate`\
+    \ arm's `ab.arr_diff_cells` fixture has LOST ITS DETECTION POWER and now reads a true-but-uninformative\
+    \ 0. The field counts settled-light cells that change when the arm removes the topmost non-zero cell\
+    \ of chunk 0,1's local column (0,0) - and AC-0289's tunnel fields re-carved that fixture into a sea-level\
+    \ WATER cell (id 5, y=126 = Data.SEA), where removing the cell changes nothing because it already\
+    \ carried sky light 15. So the row was correctly re-baselined to 0 with the attribution, and the caveat\
+    \ recorded in the row is the point: a broken re-flood would read the same 0. Re-targeting the fixture\
+    \ at a cell whose removal must move settled light (a solid roofed cell rather than an exposed water\
+    \ surface) would restore the check - that is the work item, and it belongs to this umbrella rather\
+    \ than to a new ticket. Broader lesson, matching this umbrella's pattern: a fixture-anchored absolute\
+    \ value (a cell coordinate, a count, a wall-clock budget) silently changes meaning when the terrain\
+    \ under it changes, while an invariant assertion does not."
   comments: []
 - id: AC-0331
   title: far-tier-mesh-floor-kernel
@@ -19277,11 +19287,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-23T19:33
-  updated_at: 2026-09-23T19:33
-  completed_at: null
+  updated_at: 2026-09-23T21:36
+  completed_at: 2026-09-23T21:36
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The light-settle arm has been reporting a number that no longer matches the value
@@ -19320,7 +19330,21 @@ intake:
     (byte-identity, closure, determinism) do not. It was deliberately NOT fixed inside AC-0355, whose
     fence is the seam class.
 
-    '
+
+
+    COORDINATOR CLOSE (commit follows): the work is methodologically sound and I am accepting the re-baseline
+    because it came with its own attribution rather than as a convenience - `arr_diff_cells` is bracketed
+    to a single commit (AC-0289) by era-matched gate logs, the mechanism is a fixture that became a sea-level
+    water cell (so the removal genuinely changes nothing), and truncation - the one way a 0 could have
+    hidden a defect - was ruled out by a 1200-frame extended-wait probe plus the engine''s live light
+    being byte-identical to first landing. TWO THINGS WORTH KEEPING FROM THIS RUN: (1) the methodological
+    catch that worktree commit-swap A/B is CONFOUNDED for terrain questions, because generation is native
+    - an old tree carrying the current .so regenerates the current caves, so only era-matched historical
+    logs are a valid A/B (this was not obvious and it invalidates a technique used elsewhere in the queue,
+    so it is recorded); (2) the honest caveat written INTO the standing row that the fixture is now non-discriminating,
+    which is the difference between re-baselining a value and quietly banking a value that can no longer
+    fail. The fixture re-target is filed as a note on AC-0330 (the arm-debt umbrella) rather than a new
+    ticket, and the run''s side finding supports AC-0358''s stale-legacy-reference hypothesis.'
   comments: []
 - id: AC-0358
   title: brightslab-c4-legacy-ref-light-mismatch
