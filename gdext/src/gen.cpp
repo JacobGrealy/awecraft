@@ -1151,8 +1151,28 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 					cell = B_BEDROCK;
 				} else {
 					bool solid = skip ? (y <= he) : (solidf[y] != 0);
-					if (y >= he + 1 && y <= sea && he < sea) {
-						cell = B_WATER; // aquifer: ocean fill up to Sea 126
+					// AC-0342: the aquifer gate reads the PRE-CARVE heightmap H,
+					// not the post-carve effective surface he — the fluid
+					// decision is made BEFORE the carve, from pre-carve inputs
+					// only (the vanilla ordering). The inverted `he < sea` gate
+					// let the carve feed back into the fluid: a cave/tunnel
+					// mouth that removed a column's top moved he below SEA and
+					// filled the whole opening to y = SEA on land (a pool at
+					// water height in the middle of dry terrain), and a
+					// fully-caved column (he = 0) became a 126-block water
+					// column. With H < sea: ocean columns fill he+1..SEA
+					// exactly as before (he <= H < SEA always held — the
+					// AC-0347 P2 structural fact — so a submarine cave open to
+					// the sea still floods to sea level: the fill START stays
+					// he+1), and land columns (H >= SEA) stay dry whatever the
+					// caves below do (air above the floor; the y < 8 lava
+					// pockets keep their Y-only rule, which was already
+					// correct). The skip path (he = H) and the far path already
+					// obeyed this rule — the full path was the odd one out, so
+					// the three paths now agree and a demoted-then-promoted
+					// column can no longer change its water.
+					if (y >= he + 1 && y <= sea && H < sea) {
+						cell = B_WATER; // aquifer: ocean fill up to Sea 126, gated on pre-carve H
 					} else if (y == he) {
 						// Surface block (biome top; sand on shallow non-desert).
 						cell = B_GRASS;

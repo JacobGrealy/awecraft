@@ -503,7 +503,20 @@ Match these; do not improvise a different approach in a task.
   tunnel_air` (the tunnels) and `AweGen::density_layer / density_entrance / dens_at` (the P2
   router's layer / entrance family / the router itself); the genprobe arm mirrors those exact
   expressions in GDScript (the lockstep contract — a parameter change updates both sides in the
-  same task; P2's run: 7900/7900 f64-exact).
+  same task; P2's run: 7900/7900 f64-exact). **AC-0342 (the fluid decision BEFORE the carve —
+  the vanilla ordering)**: the aquifer is decided from PRE-CARVE inputs only — `gen_flat`'s fill
+  writes water at `y ∈ [he+1, SEA]` only when the heightmap says `H < SEA` (the gate READS H,
+  never writes it). `he` (the post-carve topmost solid) remains the fill START, so a submarine
+  cave open to the sea still floods to sea level — the vanilla caption, "a cave under the sea
+  floor, flooded to sea level" — while a land column (H ≥ SEA) stays DRY whatever the caves
+  below do: a cave/tunnel mouth that removed the column's top leaves air above its own floor
+  (the y < 8 pockets keep their Y-only lava rule). The inverted `he < sea` gate it replaced let
+  the carve feed back into the fluid — such a mouth filled the whole opening to y = SEA on land
+  (a pool at water height in the middle of dry terrain) and a fully-caved column became a
+  126-block water column. The skip path (he = H) and the far path already obeyed the pre-carve
+  rule; the three paths now agree, so a demoted-then-promoted column can no longer change its
+  water. H itself is untouched — the far-payload contract (thash `8df7aeb4…0dc4f11` byte-identical
+  before/after + farab `h_mismatch` 0 is the proof).
 - **Edits on far / data-less columns (AC-0325)**: the flat write path has **no silent
   no-op**. `World.set_block` returns a bool and, when the target column holds no slabs
   (`data` empty — a node-only chunk that can sit data-less indefinitely since AC-0263's
