@@ -1,10 +1,10 @@
 meta:
-  updated_at: 2026-09-24T20:42
+  updated_at: 2026-09-25T02:35
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0291
+- AC-0361
 - AC-0360
 - AC-0292
 - AC-0306
@@ -12900,11 +12900,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-09-15T08:17
-  updated_at: 2026-09-24T14:11
-  completed_at: null
+  updated_at: 2026-09-25T02:35
+  completed_at: 2026-09-25T02:35
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -12961,7 +12961,32 @@ intake:
 
     Also relevant to this ticket''s ordering rule: AC-0342 (fluid-decision-before-carve) lands before
     this one and fixes the inversion in gen.cpp:915 so the water table is a function of pre-carve inputs
-    only. Build the Voronoi levels on top of that rule, not on the post-carve he.'
+    only. Build the Voronoi levels on top of that rule, not on the post-carve he.
+
+
+    CLOSED with ONE GATE RED, recorded rather than waved through: the aquifers'' features and contracts
+    verify, but the `halo` arm went red on this tree and that is a REGRESSION this ticket introduced,
+    now filed as AC-0361 (aquifer-water-breaks-halo-light, priority 1). THE EVIDENCE, from two era-matched
+    heavy-stage logs rather than a commit swap (which is confounded for terrain): class (c) reads `mismatches
+    0, ok true` on `.scratch/AC-0290-stage/gate_6_halo.log` (the tree before the aquifers) and `mismatches
+    103, ok false` on `.scratch/AC-0291-stage/gate_6_halo.log` (this tree), with the first divergence
+    at col [5,0] `{current 7, starlight 4, x 0, y 30, z 6}`, `unlit 0`, `settle_frames 100`, `settled
+    true` and `halo_glow_cells_zeroed 0` - so it is neither a settling timeout nor the AC-0346 glow class;
+    and class (a)''s `inner_mismatches` goes 0 -> 12, meaning the mismatch now appears inside the ring
+    too. WHAT THE REST OF THE STAGE SHOWS (all green, and the reason the feature still closes): genhash
+    25/25 byte-identical in two runs, farab 1080/1080 with h_mismatch 0, ladder 20/20, meshprobe 1.0,
+    brightslab and lightstate clean, r16 all sub-flags with far_holes 0 in both bands, boundary r4 ok,
+    the R24 arm ok with 10 crossings, and the battery complete. THE TICKET''S OWN DELIVERABLE IS MET AND
+    MEASURED: 17,983 land lake columns with distinct tables, 215 water/lava rims, 4,838 waterfall cells,
+    ~340 barrier-stone cells per chunk; AC-0342''s contracts re-measured rather than assumed (272,366
+    land water cells, 100% hidden below the local table with OPEN water 0; the ocean surface 1,081/1,081
+    at sea level with only deep pockets filling); H provably untouched (thash byte-identical, farab h_mismatch
+    0, far payload bit-exact); and the census earned its keep by catching two real C++ bugs in the new
+    code (an insertion-sort out-of-bounds and a cell_at transposition). TWO FINDINGS CARRIED FORWARD:
+    the cost is 4,532 us/chunk against the previous 2,865 - a 58% increase where the estimate was off
+    by an order of magnitude (the sky fast path already removes 84% of evaluations, so the real cost is
+    the per-cell flood/barrier work) - and the halo regression above, which is what keeps this ticket
+    from closing fully green.'
   comments: []
 - id: AC-0292
   title: cave-p4-pillars-veins-cave-biomes
@@ -12970,10 +12995,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-09-15T08:17
-  updated_at: 2026-09-21T03:10
+  updated_at: 2026-09-24T20:53
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -19635,4 +19660,72 @@ intake:
     \ on a tree nobody will play. AC-0292 (pillars) FILLS chamber void, so this census is also its baseline\
     \ for how much void is left to fill; that is why this ticket sits ahead of AC-0292.\n- Sequence: queued\
     \ after AC-0291 and before AC-0292.\n"
+  comments: []
+- id: AC-0361
+  title: aquifer-water-breaks-halo-light
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: in-progress
+  labels: []
+  created_at: 2026-09-25T02:34
+  updated_at: 2026-09-25T02:35
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: A column of the world keeps light that is stale - the settled light disagrees
+    with a freshly computed reference for 103 cells after the aquifers landed - so a player standing there
+    sees lighting that does not match the world, and the one arm that watches for exactly this has been
+    red ever since.
+
+
+    2) Technical Details:
+
+    FOUND BY THE COORDINATOR while verifying AC-0291, from two ERA-MATCHED heavy-stage logs rather than
+    a commit swap (which is confounded for terrain questions - generation is native, so an old tree carrying
+    the current .so regenerates the current world; AC-0357 established that). The pair: `.scratch/AC-0290-stage/gate_6_halo.log`
+    (the tree BEFORE the aquifers) and `.scratch/AC-0291-stage/gate_6_halo.log` (the tree WITH them).
+
+    WHAT MOVED, verbatim from the RESULTs: class (c) reads `mismatches 0, ok true` on the pre-aquifer
+    tree and `mismatches 103, ok false` after it, with `first {current 7, starlight 4, x 0, y 30, z 6}`
+    at col `[5, 0]`, `promotes 33`, `settle_frames 100`, `settled true`, `unlit 0`, `halo_glow_cells_zeroed
+    0` - so it is not a settling timeout and not the glow-zeroing class that was fixed in AC-0346. Class
+    (a) also moves: `boundary_mismatches 332` (inner 0, ok true) -> `367` with `inner_mismatches 12` and
+    `ok false`, i.e. the mismatch appears INSIDE the ring too, which it did not before. NOTE WHAT THIS
+    MEANS FOR THE ARM: (a) read 332 mismatches on the pre-aquifer tree and still returned ok true (that
+    count is the documented boundary-ring class and is report-only), so the RED comes from (c) and from
+    (a)''s inner count - check both when you fix it, and do not "fix" the report-only outer count.
+
+    AC-0292 (the P4 cave contents, landed after) REDUCES both without clearing them: (a) 254, (c) 79 with
+    the same first mismatch - so it is not AC-0292''s doing either, and its builder A/B-proved that on
+    the tree it inherited. The suspicion to test rather than assume: the aquifers put water into pockets
+    that previously held air (AC-0291 measured 272,366 hidden water cells and 17,983 lake columns), water
+    attenuates light differently from air, and the halo/promotion path does not re-settle the cells behind
+    it - so the light the reference computes and the light that is actually stored diverge by a small
+    amount in a specific column. The alternative is that the aquifer''s own writes bypass the light''s
+    edit record (the class AC-0356 fixed for fluid ticks - read that ticket, because the mechanism may
+    rhyme).
+
+    HOW TO SETTLE IT: reproduce the halo arm on the current tree, dump the column''s 103 cells with both
+    the stored and the freshly computed values, and look at whether the divergence follows water cells,
+    follows the promotion boundary, or follows the aquifer''s write path. Then fix the owner. A genuine
+    possibility worth checking early: whether the aquifer writes its water into `flat[]` at generation
+    time (in which case light should be computed fresh and never diverge) or whether some later pass mutates
+    water after light has settled.
+
+    GATES: `halo` class (c) back to `mismatches 0, ok true` and (a)''s `inner_mismatches` back to 0, with
+    the report-only outer count documented at whatever the current world reads; the standing set unchanged
+    (genhash 25/25 byte-identical to the current reference, farab 1080/1080 h_mismatch 0, ladder 20/20,
+    meshprobe 1.0, r16 all sub-flags with far_holes 0 in both bands, boundary r4, lightstate 0/0, the
+    battery); and the halo standing row re-rendered with the new numbers if they legitimately differ from
+    the documented ones.
+
+    CONTEXT: `halo` is in the coordinator''s standing heavy set, so this red appears on every stage until
+    it is fixed - and it is a REGRESSION rather than arm debt, which is why it is a ticket. AC-0346 fixed
+    a related halo class (`halo_glow_cells_zeroed` 820 -> 0) and AC-0349 re-fixed the arm''s own reconciliation
+    once, so read both before concluding which side is wrong this time.
+
+    '
   comments: []
