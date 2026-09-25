@@ -309,7 +309,21 @@ Match these; do not improvise a different approach in a task.
   into the engine as all air** (a stale all-air seam mis-carries sky across the promotion
   re-seed); a far→full promotion re-seeds the WHOLE column top-down. One `DirectionalLight3D`
   sun is modulated by `Game.time_of_day`; the mesh stores noon light and the shader uniform
-  `u_day` does the darkening (AC-0204 — no day factor anywhere in the build path).
+  `u_day` does the darkening (AC-0204 — no day factor anywhere in the build path). Light is
+   MONOTONE: the engine only raises (relax never lowers), so a column keeps the light its
+   neighbors contributed until the column itself exits the band and re-seeds — a since-evicted
+   neighbor's contribution is never lowered (there is no lowering pass; the display-consistent
+   consequence: the settled state and its baked mesh agree, both holding the last full
+   re-derivation of the column's residency — the AC-0286 "old bake is always the settled
+   light" class). Concretely, a column RETAINED across a recenter (in both the old and the new
+   real band) settles to max(old-domain fixed point, new-domain fixed point) — the RESIDENCY
+   light (AC-0361: cell-exact on the live state; the aquifer's y≤28 lava pools made the class
+   measurable for the first time — 123 cells, +1..+4 levels, at the corners facing the
+   since-evicted neighbors; closer to the full-world truth than either fixed point alone). The
+   halo arm's reference models the unseeded halo as an OPAQUE WALL (no light crosses at any
+   depth — not the skip-fill / air-above-H terrain) and the retained columns against the
+   residency union (AC-0334's glow-zero model completed; the arm's `resid_over` census reports
+   the residency cells, report-only).
 - **Far data (the draw band, taxi > `band0_r`, + the offscreen interior collar)**: columns
   store **no slabs at all** — just a `[H u16×256][biome×256][top-block×256]` payload
   (~1 KB, ~198 B on disk; AC-0284b; the v6 flag bit 1 — **write-dead since AC-0287**:

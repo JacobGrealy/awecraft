@@ -9225,7 +9225,6 @@ func _bs_acc_cmp_loose(gm: Dictionary, rm: Dictionary) -> Dictionary:
 	out["dc"] = nc
 	return out
 
-
 # AC-0283 P3 (AC-0312 REBASED; AWECRAFT_LOGIC=halo): the far-band HALO arm
 # — the permanent settled-world gate for the heightmap-sky far bands + the
 # promotion/demotion lifecycle. A settled world at render 9 with the same
@@ -9322,6 +9321,10 @@ func _halo_test(spawn: Vector3) -> void:
 	# The reference is the legacy pull kernel converged over the taxi-6
 	# diamond (85 columns — 2 chunks of margin around the real band; the
 	# ring exchange carries the neighbor light like _starlight_world).
+	# AC-0361: the halo (the margin) is modelled as the engine's unseeded
+	# halo — an OPAQUE WALL (solid stone, no light at any depth), not the
+	# skip-fill terrain (the old model over-served light the engine never
+	# has; the aquifer's water-attenuated paths made it red).
 	var keys: Array = []
 	var slabs := {}
 	var tops := {}
@@ -9336,15 +9339,33 @@ func _halo_test(spawn: Vector3) -> void:
 				Debug.result(out)
 				get_tree().quit()
 				return
-			var f: PackedByteArray = c.flat_data()
-			if c.far:
-				# AC-0284b: a far column's stored payload IS the skip fill
-				# (solid 0..St + trees — the 984/984 farab proof); the
-				# legacy reference must see the FILL, not the null slabs
-				# (all air — a hole in the world that the engine's opaque
-				# far neighbor never is). skip=1 is the exact fill.
-				var fresl: Array = WorldGen.gen_cpp().generate_resl(int(c.cx), int(c.cz), int(Game.world_seed), H, int(Data.SEA), 1, PackedByteArray())
-				f = io.slabs_flat(fresl)
+			var f: PackedByteArray
+			if absi(dx) + absi(dz) > int(world.band0_r):
+				# AC-0361: the engine's unseeded halo is an OPAQUE WALL —
+				# no section, no light at any depth (the REAL band is the
+				# only seeded domain). The reference must model the wall,
+				# not the skip-fill / air-above-H terrain: the old model
+				# over-served light the engine never has (an air corridor
+				# above H that the aquifer's water-attenuated paths can
+				# detour through) — red as 12 inner cells on the aquifer
+				# world. Solid stone to full height (att 0, no glow) is
+				# the exact model: a fresh AweStarlight seeded on the live
+				# real band reproduces this reference to the cell
+				# (the AC-0361 fresh-engine probe).
+				f = PackedByteArray()
+				f.resize(H * 256)
+				f.fill(3)
+			else:
+				f = c.flat_data()
+				if c.far:
+					# AC-0284b: a far column's stored payload IS the skip
+					# fill (solid 0..St + trees — the 984/984 farab
+					# proof); the legacy reference must see the FILL, not
+					# the null slabs. skip=1 is the exact fill. (In a
+					# settled real band no column is far — kept for the
+					# streaming race.)
+					var fresl: Array = WorldGen.gen_cpp().generate_resl(int(c.cx), int(c.cz), int(Game.world_seed), H, int(Data.SEA), 1, PackedByteArray())
+					f = io.slabs_flat(fresl)
 			slabs[k] = io.palettize_flat(f, 24)
 			tops[k] = int(io.slabs_top(slabs[k]))
 			keys.append(k)
@@ -9793,42 +9814,101 @@ func _halo_test(spawn: Vector3) -> void:
 	var unlit_p: int = _halo_unlit_ledger()
 	# the reference at the NEW anchor (a ±3 square — all inside the new
 	# taxi-6 diamond), compared over the ±2 center.
-	# AC-0334: the halo (non-real) columns are NEVER seeded in the engine
-	# ("REAL band only — the halo never seeds; the unseeded-tolerant box
-	# gate settles the edge against the halo neighbors" — world.gd
-	# threadgen_handoff), so the engine's light at the compared real-band
-	# cells can never carry a halo column's own glow. A halo column's
-	# data can nevertheless transiently hold glowing cave blocks (a
-	# tier-4 rim column — taxi past render but inside the Euclidean
-	# circle — lands FULL via the _gen_skip_flag fall-through; see the
-	# AC-0334 findings: rel 2,-3 held 3976 lava cells at taxi 5). The
-	# reference must model the unseeded halo: zero the glow sources in
-	# every non-real column (any id with glow > 0 -> stone) so its block
-	# light cannot leak into the compared cells. Soundness: the reference
-	# light is monotone in (paths, sources) and >= the engine's pointwise,
-	# so a compared cell that already agrees carries no positive
-	# halo-glow term — this removes exactly the halo-glow term from the
-	# cells it should, and nothing else.
+	# AC-0334 (completed by AC-0361): the halo (non-real) columns are
+	# NEVER seeded in the engine ("REAL band only — the halo never seeds;
+	# the unseeded-tolerant box gate settles the edge against the halo
+	# neighbors" — world.gd threadgen_handoff). AC-0334 modelled the
+	# unseeded halo by zeroing its glow sources (glow -> stone) but left
+	# the halo terrain AIR; a pre-aquifer cave world had no valuable
+	# light paths through that corridor, so the model was sufficient
+	# (and the 5 reds it resolved were the halo-glow term). The aquifer's
+	# water-attenuated light paths make the air corridor worth 71 cells
+	# (the reference detours through it where the engine's wall blocks) —
+	# the (c) 79 red, all engine-under vs the corridor. The complete
+	# model is the WALL itself: solid stone to full height (att 0, no
+	# glow, no air paths). Soundness: a fresh AweStarlight seeded on the
+	# live real band reproduces this reference to the cell (the domain
+	# fixed point IS the wall-halo light — the AC-0361 fresh-engine
+	# probe), and the engine state at the retained columns is the
+	# RESIDENCY union below.
 	var pkeys: Array = []
 	var pslabs := {}
 	var ptops := {}
-	var phalo_glow_cells := 0
+	var phalo_glow_cells := 0  # AC-0334 counter — 0 since AC-0361 (the wall model subsumed the glow zeroing)
 	for dx in range(-3, 4):
 		for dz in range(-3, 4):
 			var k := "%d,%d" % [dx, dz]
 			var c = world.chunks.get(world._key(px + dx, pz + dz))
 			if c == null or c.data.is_empty():
 				continue
-			var f: PackedByteArray = c.flat_data()
+			var f: PackedByteArray
 			if absi(dx) + absi(dz) > int(world.band0_r):
-				for gi in range(f.size()):
-					if int(Lighting._glow[int(f[gi])]) > 0:
-						f[gi] = 1
-						phalo_glow_cells += 1
+				f = PackedByteArray()
+				f.resize(H * 256)
+				f.fill(3)
+			else:
+				f = c.flat_data()
 			pslabs[k] = io.palettize_flat(f, 24)
 			ptops[k] = int(io.slabs_top(pslabs[k]))
 			pkeys.append(k)
 	var pri: Dictionary = ref_iter.call(pslabs, ptops, pkeys)
+	# AC-0361: the RETAINED columns — in the OLD real band as well as the
+	# new one (8 overlap columns on this hop) — hold the RESIDENCY light:
+	# the engine is monotone (it only raises; a since-evicted neighbor's
+	# contribution is never lowered — "the old bake is always the settled
+	# light", AC-0286). A retained column's settled light is therefore
+	# max(old-domain fixed point, new-domain fixed point) — verified
+	# cell-exact on the live state (the fresh-engine probe; the aquifer's
+	# y<=28 lava pools made the class measurable for the first time: 123
+	# cells, +1..+4 levels, all at the corners facing the since-evicted
+	# neighbors, closer to the full-world truth than either fp alone).
+	# The old-domain fixed point IS ri — the (a) reference above (wall
+	# model, the old band centered on [cx0,cz0]).
+	var c_wall_effs := {}
+	for ck2 in pri["effs"].keys():
+		c_wall_effs[ck2] = pri["effs"][ck2]
+	var resid_over := 0
+	var resid_cols := {}
+	var resid_first: Dictionary = {}
+	for dx in range(-2, 3):
+		for dz in range(-2, 3):
+			var ck := "%d,%d" % [dx, dz]
+			if not pslabs.has(ck):
+				continue
+			# residency census (report-only): engine holds MORE than the
+			# fresh-domain (new-band) fixed point — the pre-hop light of
+			# since-evicted neighbors, the documented AC-0286 class.
+			var ovl: PackedInt32Array = world.star.compare_eff_all(px + dx, pz + dz, c_wall_effs[ck], 100000)
+			var n_ov := 0
+			var v_ov := -1
+			for v in ovl:
+				var vi := int(v)
+				if ((vi >> 4) & 15) > (vi & 15):
+					n_ov += 1
+					if v_ov < 0:
+						v_ov = vi
+			if n_ov > 0:
+				resid_over += n_ov
+				resid_cols[ck] = n_ov
+				if resid_first.is_empty():
+					resid_first = {
+						"x": (v_ov >> 8) & 15,
+						"y": ((v_ov >> 20) & 63) * 16 + ((v_ov >> 16) & 15),
+						"z": (v_ov >> 12) & 15,
+						"engine": (v_ov >> 4) & 15, "domain_fp": v_ov & 15,
+					}
+			# the union model for the retained columns (the gate reference).
+			var oe := "%d,%d" % [dx + (px - cx0), dz + (pz - cz0)]
+			if not ri["effs"].has(oe):
+				continue
+			var po: Array = oe.split(",")
+			if absi(int(po[0])) + absi(int(po[1])) > int(world.band0_r):
+				continue
+			var ue := PackedByteArray()
+			ue.resize(int(c_wall_effs[ck].size()))
+			for i in range(ue.size()):
+				ue[i] = maxi(int(ri["effs"][oe][i]), int(c_wall_effs[ck][i]))
+			pri["effs"][ck] = ue
 	var pmism := 0
 	var pfirst: Dictionary = {}
 	var psettled := false
@@ -9854,7 +9934,8 @@ func _halo_test(spawn: Vector3) -> void:
 	out["c"] = {
 		"col": [px, pz], "promote_ms": prom_ms, "settle_frames": pw,
 		"settled": psettled, "seeded": pseeded, "mismatches": pmism, "first": pfirst,
-		"halo_glow_cells_zeroed": phalo_glow_cells,  # AC-0334: unseeded-halo model
+		"halo_glow_cells_zeroed": phalo_glow_cells,  # AC-0334: unseeded-halo model (0 since AC-0361 — wall model)
+		"resid_over": resid_over, "resid_cols": resid_cols, "resid_first": resid_first,  # AC-0361: residency census (report-only)
 		"ref_rounds": int(pri.get("rounds", -1)), "ref_converged": bool(pri.get("converged", false)),
 		"promotes": int(world.star_halo_promotes) - proms0,
 		"unlit": unlit_p, "why": pwhy,
