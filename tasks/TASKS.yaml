@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-25T07:50
+  updated_at: 2026-09-25T09:46
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0306
 - AC-0307
 - AC-0308
 - AC-0309
@@ -14399,11 +14398,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-17T18:37
-  updated_at: 2026-09-17T18:39
-  completed_at: null
+  updated_at: 2026-09-25T09:46
+  completed_at: 2026-09-25T09:46
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want a block on the planet to be a real metre - the same size as
@@ -14472,7 +14471,26 @@ intake:
     GATE EDIT: the save round-trip assertion is now "R unchanged at 4000 with the clamp intact", not "round-trip
     at 5090". All other gates stand. Residual spacing after pre-warp: 1.00 m along the face midlines,
     ~0.92 m average, ~0.85 m toward the corners (the cube-sphere''s irreducible spread; AC-0042''s "2-5%"
-    was optimistic).'
+    was optimistic).
+
+
+    CLOSED (commit fae7898). COORDINATOR VERIFICATION: the ticket''s own four gates are green and, unusually
+    for a geometry change, the no-data-change claim is independently confirmed by a stage that was running
+    CONCURRENTLY with the builder (my AC-0360 stage ran 07:50:56-08:13:55 against the AC-0360 world and
+    its genhash `94f578ec` matches this ticket''s recorded reference exactly, while the builder''s first
+    edit of sphere_math.gd landed at 08:29 - so the claim "a home-pair column is its flat x/z and stays
+    that way" is not just asserted, it was measured on a tree from before the change and again after).
+    THE HONEST READING OF THE RENDER, which I inspected with vision: the horizon-dip shot is a legitimate
+    172 KB sky-heavy aerial frame with the calibration block visible and a _placed twin that differs,
+    so it is not a black frame of the kind HARNESS section 2 now warns about - but the atmospheric haze
+    fills the middle of the frame and OBSCURES THE HORIZON LINE ITSELF, so the image does NOT visibly
+    demonstrate the dip it is named for. The real evidence for curvature is the ARM''S MATH, which is
+    the right shape for this claim anyway: face midlines exactly 1.0000 m per column to 1.4e-9, an across-face
+    band of 0.7108-0.99999 m at an average of 0.9173. A future attempt at a dip shot would need a clearer
+    atmosphere or a camera nearer the horizon rather than a different angle. ONE METHODOLOGICAL NOTE WORTH
+    KEEPING: the spacing assertion has to be evaluated in FLOAT64, because Godot''s float32 Vector3 quantizes
+    the dot product and cannot resolve the 2.5e-4 rad arc involved - a float32 measurement would have
+    reported noise as the answer, so a uniform-spacing gate written naively would have been unfalsifiable.'
   comments: []
 - id: AC-0307
   title: planet-p1a-sphere-placement
@@ -19608,7 +19626,7 @@ intake:
   status: done
   labels: []
   created_at: 2026-09-24T19:29
-  updated_at: 2026-09-25T07:50
+  updated_at: 2026-09-25T09:45
   completed_at: 2026-09-25T07:50
   waiting_on: null
   parent_id: null
@@ -19696,7 +19714,21 @@ intake:
     \ count; AC-0347 P3's 96.9% opening share had already pointed here, and this ticket turned the share\
     \ into the thing the complaint was actually about. ONE RECORDED DECISION LEFT STANDING: the ENTRANCE\
     \ port was deliberately not re-scoped in this ticket (it opens zero columns in this world, so there\
-    \ was nothing to measure), and the pillars/cheese/deep branch were untouched."
+    \ was nothing to measure), and the pillars/cheese/deep branch were untouched.\n\nCOORDINATOR VERIFICATION,\
+    \ on a stage proven clean rather than assumed (my stage ran 07:50:56-08:13:55 and AC-0306's first\
+    \ edit of sphere_math.gd/world.gd is timestamped 08:29-08:36, i.e. AFTER it - so the readings are\
+    \ the AC-0360 tree, and they double as a check of AC-0306's own no-data-change claim, which holds:\
+    \ the geometry change did not touch generation): genhash 25/25 byte-identical in two runs and equal\
+    \ to the reference this ticket recorded (`94f578ec`, matching its own battery log); farab 1080/1080\
+    \ with h_mismatch 0; ladder 20/20; meshprobe 1.0; lightstate 0/0; r16 with the documented --fixed-fps\
+    \ 600 recipe ALL sub-flags green with far_holes 0 in both bands; boundary r4 ok with p50 13 / p95\
+    \ 38 (max_ms 1123 is a single-sample field, judged per the row's own rule); the R24 arm ok; and the\
+    \ battery complete with only the long-standing AC-0330 settings red. THE HEADLINE READING IS THE HALO\
+    \ ARM: it comes back FULLY green here - class (a) boundary mismatches 0 with inner 0, and class (c)\
+    \ mismatches 0 - which independently confirms AC-0361's resolution of the red I found in the aquifer\
+    \ stage logs. That closes the loop on the session's third arm-side verdict: the reference model was\
+    \ wrong twice over, the engine was proven exact by an independent oracle, and the arm now reads zero\
+    \ on a tree that still carries the water that exposed it."
   comments: []
 - id: AC-0361
   title: aquifer-water-breaks-halo-light
