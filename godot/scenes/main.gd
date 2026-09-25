@@ -523,7 +523,11 @@ func _continue_slot(slot: int) -> void:
 		target = Vector3(float(pos[0]), float(pos[1]), float(pos[2]))
 	else:
 		target = world.spawn_point()
-	world.recenter(target.x, target.z, true, target.y)
+	# AC-0307: a saved target is the player's GLOBAL position on the placed
+	# world; recenter takes flat coordinates (near the spawn they agree to
+	# mm, so the fresh-spawn fallback round-trips harmlessly).
+	var flt: Vector3 = world.flat_of_world_pos(target)
+	world.recenter(flt.x, flt.z, true, flt.y)
 	# AC-0313 clause 4 as CORRECTED: the continue path waits for the SAME
 	# sim taxi diamond (taxi <= band0_r) that the fresh-spawn path waits
 	# for — the continue flow has no loading window, so this wait is the
@@ -532,7 +536,9 @@ func _continue_slot(slot: int) -> void:
 	player = _spawn_player()
 	_restore_player(ps if height_ok else {})
 	if Game.world != null:
-		world.recenter(player.position.x, player.position.z, true, player.position.y)  # AC-0234
+		# AC-0307: global player position -> flat recenter coordinates.
+		var flp: Vector3 = world.flat_of_world_pos(player.position)
+		world.recenter(flp.x, flp.z, true, flp.y)  # AC-0234
 	Game.time_of_day = float(data.get("time", 0.0))
 	Game.start()
 	_apply_aw_query()

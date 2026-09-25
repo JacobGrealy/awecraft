@@ -1793,11 +1793,14 @@ func _build_slab_collision(s: Slab) -> void:
 # checkout). The instance_id is fixed per object — it is NOT identity
 # for a pooled column (col_gen is).
 func _pool_reset() -> void:
-	# identity (the checkout re-sets cx/cz/face/position + the map key)
+	# identity (the checkout re-sets cx/cz/face/transform + the map key;
+	# AC-0307: the pooled column carries the AC-0144 sphere placement, so
+	# the basis resets with the position)
 	cx = 0
 	cz = 0
 	face = 0
 	position = Vector3.ZERO
+	basis = Basis.IDENTITY
 	# data (the slab cell arrays — the 4096-cell buffers — drop here;
 	# the live slab buffers are C++-owned, freed by refcount as today)
 	data = []

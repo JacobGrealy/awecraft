@@ -9402,7 +9402,10 @@ func _make_chunk_node(cx: int, cz: int) -> Node3D:
 	c.col_gen += 1  # AC-0247: the logical identity bump (instance_id is fixed per object)
 	c.cx = cx
 	c.cz = cz
-	c.position = Vector3(cx * 16, 0, cz * 16)
+	# AC-0307: the rigid sphere placement (P2 of AC-0144) — local +Y is the
+	# radial at the column's own centre, neighbours share their edge line
+	# (the folded-net property); flat local geometry is untouched.
+	c.transform = _col_sphere_transform(cx, cz)
 	# AC-0152: band 0 gets collision; 1/2/3 do not. Out-of-set (stale
 	# caller) clamps to collar so it can never mesh by accident.
 	var nb := band_of(int(cx) - last_pcx, int(cz) - last_pcz)
@@ -12346,6 +12349,23 @@ func key_for_sphere_pos(pos: Vector3, R: float) -> Dictionary:
 		"cx": clampi(int(floorf(u * float(FACE_CELLS))), 0, FACE_CELLS - 1),
 		"cz": clampi(int(floorf(v * float(FACE_CELLS))), 0, FACE_CELLS - 1),
 	}
+
+# --- AC-0307: rigid per-column sphere placement (P2 of AC-0144) ---
+# The home pair bends onto the planet by one RIGID transform per 16x16
+# column (the math lives in SphereMath — column_transform / flat_to_world /
+# world_to_flat; see its section header). Chunk geometry stays in flat
+# local space; the column node's transform carries the curvature. The
+# global frame is the planet frame shifted by (0, -planet_R, 0), so the
+# flat origin (the home-patch centre) stays at the global origin and flat
+# coords agree with global near the spawn to within mm.
+func _col_sphere_transform(cx: int, cz: int) -> Transform3D:
+	return SphereMath.column_transform(cx, cz, Game.planet_R)
+
+func world_pos_of_flat(x: float, y: float, z: float) -> Vector3:
+	return SphereMath.flat_to_world(x, y, z, Game.planet_R)
+
+func flat_of_world_pos(p: Vector3) -> Vector3:
+	return SphereMath.world_to_flat(p, Game.planet_R)
 
 func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 	var ccx: int = int(floorf(float(colx) / 16.0))

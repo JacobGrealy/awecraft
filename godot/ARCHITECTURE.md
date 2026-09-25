@@ -177,7 +177,25 @@ Match these; do not improvise a different approach in a task.
   on the home pair a column IS its flat x/z and stays that way — genhash 25/25 and
   the save edit keys are untouched by the mapping; only the position→cell ratio and
   the pre-warp move. The `sphere` probe (harness arm `AWECRAFT_LOGIC=sphere`) is the
-  permanent proof.
+  permanent proof. **Per-column placement (AC-0307):** the chunk node transform is a
+  RIGID per-column placement, `SphereMath.column_transform(cx, cz, R)` — the facet is
+  the tangent plane at the sphere point of the column's own flat centre (local +Y =
+  the radial there), and its shared edges are aligned to the intersection line of the
+  neighbours' tangent planes (shared-edge bisector): the folded-net convention —
+  neighbours meet along the shared edge to the irreducible non-developable residual
+  (mm–cm near the spawn; up to ~1–2 m in the spacing-stretch corner regions — a
+  sub-mm-deep wedge, AC-0042 grout territory). The GLOBAL frame is the planet frame
+  shifted by (0,−R,0) so the +Y pole (flat origin) sits on the global origin and the
+  spawn facet is sub-degree. Point conversions: `SphereMath.flat_to_world(x,y,z,R)` /
+  `world_to_flat(p,R)` (exact inverse — height = above the LOCAL facet plane; at a
+  seam the point is attributed to the facet it lies on). Converters: the player
+  spawn + `_recenter` (the recenter contract takes FLAT coords everywhere), the
+  interaction rays (the DDA runs in the flat frame, `Player._flat_ray`; highlight and
+  fluid box-tests convert), and the altitude semantics (cruise altitude, fall
+  distance, the void kill) key on the FLAT height, never the global Y. The ground
+  stays a gapless polyhedron of 16 m facets (physics = visuals; the flat pipeline
+  is unchanged) and the terrain data does not move (genhash 25/25). Cross-face
+  movement (faces 2–11) is AC-0309; the round-planet look is its own ticket.
 - **Collision**: player and mobs are `CharacterBody3D`; voxel collision is a **per-slab**
   `StaticBody3D` (24 per column) built in `chunk.gd _build_slab_collision` from the slab's
   opaque surface plus the flora CUTOUT surface (AC-0270 — leaves have collision; fluids and

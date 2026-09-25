@@ -148,7 +148,10 @@ var _vm_L := 1.0
 func _ready() -> void:
 	Game.player = self
 	if Game.world != null:
-		position = Game.world.spawn_point()
+		# AC-0307: spawn_point() is flat; the placed world needs the
+		# sphere conversion (mm-level near the spawn, exact by contract).
+		var sp: Vector3 = Game.world.spawn_point()
+		position = Game.world.world_pos_of_flat(sp.x, sp.y, sp.z)
 		_chunk_x = int(floorf(position.x / 16.0))
 		_chunk_z = int(floorf(position.z / 16.0))
 		_chunk_y = int(floorf(position.y / 16.0))  # AC-0234
@@ -388,6 +391,11 @@ func _physics_process_impl(dt: float) -> void:
 		return
 	if dead:
 		return
+	# AC-0307: the placed world — the global Y is no longer the player's
+	# height (the ground curves down from the spawn); the altitude
+	# semantics (cruise altitude, fall distance, the void test) key on the
+	# FLAT height: the height above the local surface along the local radial.
+	var flat_h: float = Game.world.flat_of_world_pos(position).y if Game.world != null else position.y
 	# AC-0121: while the debug console is open, ignore every polled game
 	# action - typing "w"/space/shift must not steer, jump, sprint or toggle
 	# flight. Physics (gravity, falls, swimming buoyancy) keeps running.
@@ -446,7 +454,7 @@ func _physics_process_impl(dt: float) -> void:
 		# AC-0280: altitude-based flight speed — below cruising_altitude use
 		# sub_cruising_speed (default 2x WALK), at/above use cruising_speed (6x).
 		var cruise_alt := float(int(Settings.values.get("cruising_altitude", 275)))
-		var fly_mult := float(int(Settings.values.get("sub_cruising_speed", 2))) if position.y < cruise_alt else float(int(Settings.values.get("cruising_speed", 6)))
+		var fly_mult := float(int(Settings.values.get("sub_cruising_speed", 2))) if flat_h < cruise_alt else float(int(Settings.values.get("cruising_speed", 6)))
 		speed = WALK * fly_mult
 		if fly_sprint:
 			speed *= SPRINT / WALK
@@ -486,7 +494,7 @@ func _physics_process_impl(dt: float) -> void:
 		if (sprint_kbd or (not cg and Input.is_action_pressed("pad_cancel"))):
 			vy -= 1.0  # SHIFT or B (pad_cancel) = down (AC-0243)
 		var cruise_alt_vs := float(int(Settings.values.get("cruising_altitude", 275)))
-		var fly_mult_vs := float(int(Settings.values.get("sub_cruising_speed", 2))) if position.y < cruise_alt_vs else float(int(Settings.values.get("cruising_speed", 6)))
+		var fly_mult_vs := float(int(Settings.values.get("sub_cruising_speed", 2))) if flat_h < cruise_alt_vs else float(int(Settings.values.get("cruising_speed", 6)))
 		var fly_vs := WALK * fly_mult_vs * FLY_VS
 		if fly_sprint:
 			fly_vs *= SPRINT / WALK
@@ -530,7 +538,7 @@ func _physics_process_impl(dt: float) -> void:
 	if flying:
 		fall_start = -1.0
 	elif not was_ground and velocity.y < 0.0 and fall_start < 0.0:
-		fall_start = position.y
+		fall_start = flat_h  # AC-0307: flat height (the local surface curves)
 	move_and_slide()
 	# AC-0276: the sprint FOV kick (+10% while effectively sprinting on
 	# the ground OR while flying - the air sprint cue, lerp ~0.15 s;
@@ -551,13 +559,13 @@ func _physics_process_impl(dt: float) -> void:
 			cap.height = cap_h_t
 			col_shape.position.y = cap_h_t / 2.0
 	if not flying and is_on_floor() and not was_ground and fall_start >= 0.0:
-		var fall := fall_start - position.y
+		var fall := fall_start - flat_h  # AC-0307: flat heights both ends
 		if fall > 3.5:
 			damage_player(floorf(fall - 3.0), "fall")
 		fall_start = -1.0
 	_recenter()
 	_update_interaction(dt)
-	if position.y < -12.0:
+	if flat_h < -12.0:  # AC-0307: the void is below the LOCAL surface
 		damage_player(100.0, "void")
 	if in_lava:
 		lava_t += dt
@@ -1229,7 +1237,24 @@ func aim_dir() -> Vector3:
 func aim_hit() -> Dictionary:
 	if Game.world == null:
 		return {"hit": false, "cell": Vector3i.ZERO, "id": 0, "normal": Vector3i.ZERO, "t": 0.0}
-	return VoxelMath.raycast_blocks(camera.global_position, aim_dir(), REACH, Game.world.get_block)
+	# AC-0307: the DDA queries the FLAT block API; the camera sits in the
+	# placed global frame — the ray runs in the local flat frame.
+	var fr: Dictionary = _flat_ray()
+	return VoxelMath.raycast_blocks(fr["o"], fr["d"], REACH, Game.world.get_block)
+
+
+# AC-0307: the interaction rays (aim_hit, use_bucket) query the FLAT block
+# API, but the camera is in the placed global frame. Convert the ray's
+# origin + direction into the player's column flat frame (the rigid
+# placement transform; the basis transposed maps directions).
+func _flat_ray() -> Dictionary:
+	if Game.world == null:
+		return {"o": camera.global_position, "d": aim_dir()}
+	var o: Vector3 = Game.world.flat_of_world_pos(camera.global_position)
+	var cx := int(floorf(o.x / 16.0))
+	var cz := int(floorf(o.z / 16.0))
+	var tb: Basis = Game.world._col_sphere_transform(cx, cz).basis
+	return {"o": o, "d": (tb.transposed() * aim_dir()).normalized()}
 
 
 func start_mine() -> void:
@@ -1492,7 +1517,9 @@ func place_item(item: Dictionary) -> void:
 
 
 func use_bucket(info: Dictionary) -> void:
-	var hit := VoxelMath.raycast_cell(camera.global_position, aim_dir(), REACH, Game.world.get_block, true)
+	# AC-0307: the flat-frame ray (see _flat_ray) — get_block is flat.
+	var frb: Dictionary = _flat_ray()
+	var hit := VoxelMath.raycast_cell(frb["o"], frb["d"], REACH, Game.world.get_block, true)
 	if not hit.hit:
 		return
 	var cell: Vector3i = hit.cell
@@ -1525,8 +1552,10 @@ func use_bucket(info: Dictionary) -> void:
 
 
 func _box_intersects_player(cell: Vector3i) -> bool:
-	var pmin := Vector3(position.x - P_HALF, position.y, position.z - P_HALF)
-	var pmax := Vector3(position.x + P_HALF, position.y + P_H, position.z + P_HALF)
+	# AC-0307: the cell is FLAT; the player box must be too.
+	var pp: Vector3 = Game.world.flat_of_world_pos(position) if Game.world != null else position
+	var pmin := Vector3(pp.x - P_HALF, pp.y, pp.z - P_HALF)
+	var pmax := Vector3(pp.x + P_HALF, pp.y + P_H, pp.z + P_HALF)
 	var bmin := Vector3(float(cell.x), float(cell.y), float(cell.z))
 	var bmax := bmin + Vector3.ONE
 	return pmin.x < bmax.x and pmax.x > bmin.x and pmin.y < bmax.y and pmax.y > bmin.y and pmin.z < bmax.z and pmax.z > bmin.z
@@ -1539,7 +1568,12 @@ func _update_interaction(dt: float) -> void:
 	var hit := aim_hit()
 	if hit.hit:
 		highlight.visible = true
-		highlight.global_position = Vector3(float(hit.cell.x) + 0.5, float(hit.cell.y) + 0.5, float(hit.cell.z) + 0.5)
+		# AC-0307: the aimed cell is FLAT; the highlight node lives in the
+		# placed global frame.
+		if Game.world != null:
+			highlight.global_position = Game.world.world_pos_of_flat(float(hit.cell.x) + 0.5, float(hit.cell.y) + 0.5, float(hit.cell.z) + 0.5)
+		else:
+			highlight.global_position = Vector3(float(hit.cell.x) + 0.5, float(hit.cell.y) + 0.5, float(hit.cell.z) + 0.5)
 	else:
 		highlight.visible = false
 		if _mining:
@@ -1608,15 +1642,19 @@ func _recenter() -> void:
 	# the user-confirmed trigger: same walk + tiered rewrite as an X/Z
 	# cross) so the vertical window's player band moves with the
 	# altitude; the wy arg carries the Y to the window recompute.
-	var pcx := int(floorf(position.x / 16.0))
-	var pcz := int(floorf(position.z / 16.0))
-	var pcy := int(floorf(position.y / 16.0))
+	# AC-0307: the player position is global; the flat world (and with it
+	# the recenter contract) needs the sphere conversion — global x/z stop
+	# being flat coordinates a few hundred metres from the spawn.
+	var fp: Vector3 = Game.world.flat_of_world_pos(position) if Game.world != null else position
+	var pcx := int(floorf(fp.x / 16.0))
+	var pcz := int(floorf(fp.z / 16.0))
+	var pcy := int(floorf(fp.y / 16.0))
 	if pcx != _chunk_x or pcz != _chunk_z or pcy != _chunk_y:
 		_chunk_x = pcx
 		_chunk_z = pcz
 		_chunk_y = pcy
 		if Game.world != null:
-			Game.world.recenter(position.x, position.z, true, position.y)
+			Game.world.recenter(fp.x, fp.z, true, fp.y)
 
 
 func _apply_rotation() -> void:

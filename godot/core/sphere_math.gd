@@ -257,3 +257,129 @@ static func neighbor_key(face: int, cx: int, cz: int, dir: Vector2i) -> Dictiona
 		cxB = along
 		czB = CELLS_PER_FACE - 1 if int(seg[3]) == 2 else 0
 	return { "face": int(seg[2]), "cx": cxB, "cz": czB }
+
+# --- AC-0307: rigid per-column placement (P2 of AC-0144) ---
+# The home pair (faces 0,1 = the flat world) is bent onto the planet by ONE
+# RIGID transform per 16x16 chunk column: chunk geometry stays in flat local
+# space (meshing, greedy thresholds, light grid, collision all unchanged);
+# the column node's transform carries the curvature. The ground is a
+# gapless polyhedron of 16 m tangent facets (adjacent facets differ by
+# ~16/R = 0.23 deg at R = 4000), so physics and visuals coincide.
+#
+# Column c with flat corner (16cx, 16cz), centre C = (16cx+8, 16cz+8):
+#   P     = home_point(C)        (|P| = R, planet frame below)
+#   n     = P / R                (LOCAL +Y = the radial at the column's own
+#                                 centre — the facet is the tangent plane at P)
+#   uE/uW = the two x-neighbours' shared-edge directions: the intersection
+#           direction of this facet's tangent plane with the neighbour's
+#           (sign kept in the flat +z sense against the centre chord z0)
+#   z     = normalize(uE + uW)   (one-sided -> the single one; none -> z0)
+#   x     = n cross z
+#   origin = P - 8x - 8z         (the flat corner; the facet centre sits at P)
+# A's east edge line and B's west edge line (B = A's east neighbour) both
+# lie on the two tangent planes' intersection line (the folded-net shared
+# edge): they coincide to the irreducible mm-cm residual — a sphere is not
+# developable (AC-0042's grout territory; verified by the AC-0307 probe).
+#
+# FRAMES: the planet frame has origin = the planet centre and the home face
+# on +Y, so the flat origin (the home-patch centre) sits at (0, R, 0). The
+# GLOBAL frame is the planet frame shifted by (0, -R, 0): the flat origin
+# stays at the global origin, spawn and every global-space consumer keep
+# working near the spawn (flat coords agree with global there to mm).
+static func home_uv(x: float, z: float, R: float) -> Dictionary:
+	# Flat (x,z) on the home pair -> (face, u, v) for uv_to_world.
+	# Face 0: x = (pi*R/4)*u (x in [0, hw]); face 1: x = (pi*R/4)*(u-1);
+	# z = (pi*R/4)*(2v-1). Same half-face width as World.key_for_sphere_pos.
+	var hw: float = face_width(R) * 0.5
+	if x < 0.0:
+		return { "face": 1, "u": x / hw + 1.0, "v": (z / hw + 1.0) * 0.5 }
+	return { "face": 0, "u": x / hw, "v": (z / hw + 1.0) * 0.5 }
+
+static func home_point(x: float, z: float, R: float) -> Vector3:
+	# Flat (x,z) -> the planet-frame sphere point (|P| = R). The cube map
+	# extends continuously past the face edges (the per-coordinate pre-warp
+	# has no pole inside the neighbourhood of the home patch), so centre-of-
+	# column queries on the last columns past the patch boundary stay valid.
+	var r: Dictionary = home_uv(x, z, R)
+	return uv_to_world(int(r["face"]), float(r["u"]), float(r["v"]), R)
+
+static func column_transform(cx: int, cz: int, R: float) -> Transform3D:
+	# The rigid placement of chunk column (cx, cz) of the home pair, in the
+	# GLOBAL frame (planet frame shifted by (0, -R, 0)). Construction: the
+	# section header above.
+	var cxx: float = float(cx) * 16.0 + 8.0
+	var czz: float = float(cz) * 16.0 + 8.0
+	var P: Vector3 = home_point(cxx, czz, R)
+	var n: Vector3 = P / R
+	var z0: Vector3 = (home_point(cxx, czz + 8.0, R) - home_point(cxx, czz - 8.0, R)).normalized()
+	var uE: Vector3 = (home_point(cxx + 16.0, czz, R) / R).cross(n).normalized()
+	if uE.dot(z0) < 0.0:
+		uE = -uE
+	var uW: Vector3 = (home_point(cxx - 16.0, czz, R) / R).cross(n).normalized()
+	if uW.dot(z0) < 0.0:
+		uW = -uW
+	var z: Vector3
+	if not uE.is_zero_approx() and not uW.is_zero_approx():
+		z = (uE + uW).normalized()
+	elif not uE.is_zero_approx():
+		z = uE
+	elif not uW.is_zero_approx():
+		z = uW
+	else:
+		z = z0
+	var x: Vector3 = n.cross(z).normalized()
+	var origin: Vector3 = P - 8.0 * x - 8.0 * z - Vector3(0.0, R, 0.0)
+	return Transform3D(Basis(x, n, z), origin)
+
+static func flat_to_world(x: float, y: float, z: float, R: float) -> Vector3:
+	# Flat (block) coords (x, height, z) -> global world position: the point
+	# in its column's placed facet frame (exact at facet precision).
+	var cx := int(floorf(x / 16.0))
+	var cz := int(floorf(z / 16.0))
+	return column_transform(cx, cz, R) * Vector3(x - float(cx) * 16.0, y, z - float(cz) * 16.0)
+
+static func world_to_flat(p: Vector3, R: float) -> Vector3:
+	# Global world position -> flat (block) coords (x, height above the
+	# local facet, z). The exact inverse of flat_to_world: the planet-frame
+	# direction inverts through the shared world_to_face map for a first
+	# guess (the direction of the ray from the planet centre is biased
+	# toward the column centre by in_plane * h/(R+h) for a point at height
+	# h), then a 3x3 scan snaps to the column whose placed flat frame
+	# actually contains the point — the local coordinates ARE the flat
+	# coords (the height is above the local facet plane, not the radial).
+	# Off-home-pair directions (cross-face travel is AC-0309) clamp to the
+	# home-patch boundary (the nearest point of the +Y cube face) —
+	# deterministic.
+	var pp: Vector3 = p + Vector3(0.0, R, 0.0)
+	var dir: Vector3 = pp.normalized()
+	var m: float = maxf(absf(dir.x), absf(dir.z))
+	if m >= absf(dir.y) or dir.y <= 0.0:
+		dir = Vector3(dir.x, (m * 1.0001) if m > 0.0 else 1.0, dir.z)
+	var r: Dictionary = world_to_face(dir, R)
+	var face: int = int(r["face"])
+	var hw: float = face_width(R) * 0.5
+	var fx: float = (float(r["u"]) - (0.0 if face == 0 else 1.0)) * hw
+	var fz: float = hw * (2.0 * float(r["v"]) - 1.0)
+	var cx0 := int(floorf(fx / 16.0))
+	var cz0 := int(floorf(fz / 16.0))
+	var best: Vector3 = Vector3(fx, pp.length() - R, fz)
+	var best_over := 1e18
+	var best_h := 1e18
+	for dx in [-1, 0, 1]:
+		for dz in [-1, 0, 1]:
+			var t: Transform3D = column_transform(cx0 + dx, cz0 + dz, R)
+			var loc: Vector3 = t.affine_inverse() * p
+			# in-plane overshoot of the column footprint (0 = the point
+			# projects inside); the facets OVERLAP across their shared edge
+			# by the folded-net residual (mm near the spawn, up to ~2 m in
+			# the spacing-stretch region of the patch corner), so several
+			# columns can contain the projection — the second key picks the
+			# facet the point actually lies ON (the smallest |loc.y|).
+			var over: float = maxf(0.0, -loc.x) + maxf(0.0, loc.x - 16.0) \
+					+ maxf(0.0, -loc.z) + maxf(0.0, loc.z - 16.0)
+			var h: float = absf(loc.y)
+			if over < best_over or (over == best_over and h < best_h):
+				best_over = over
+				best_h = h
+				best = Vector3(float(cx0 + dx) * 16.0 + loc.x, loc.y, float(cz0 + dz) * 16.0 + loc.z)
+	return best
