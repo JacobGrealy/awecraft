@@ -535,6 +535,48 @@ Match these; do not improvise a different approach in a task.
   rule; the three paths now agree, so a demoted-then-promoted column can no longer change its
   water. H itself is untouched — the far-payload contract (thash `8df7aeb4…0dc4f11` byte-identical
   before/after + farab `h_mismatch` 0 is the proof).
+- **The Voronoi aquifer (AC-0291 — Bedrock's per-cell local water tables, FULL PATH ONLY)**:
+  the flat fill-to-SEA is gone on the full path — every underground pocket gets its own table.
+  The model: cells 16×12×16 with corner offset (5,5,1); each center is corner+5/+5/+1 plus
+  jitter 0–9 (xz) / 0–8 (y) from `hash3i` at seed+316/317/318. Cell status comes from 13 dense
+  surface samples (`aqu_surface_h_dense` — the three coarse SURFACE fields' `surface_h` formula
+  direct-evaluated at the sea slice y = SEA/64, 2 octaves each; pure f(world, seed), so chunk
+  seams are consistent — it differs from the exact H only by the trilinear lattice residual):
+  the own sample (k=0) sets the branch (global if the cell bottom is above it — water to SEA, or
+  the lava layer when the cell sits in it; "sea" if the cell top pokes above a sample below sea —
+  level SEA), else underground: exclusion (erosion < −0.225 ∧ 1.5−cy/128 > 0.9 → dry), then
+  floodedness (`vn3` seed+311) vs thresholds (full > −0.3→0.8, partial > −0.8→0.4, both linear
+  over 64 blocks below the lowest sample when that sample is under sea; flat 0.8/0.4 on land) —
+  full → level SEA; partial → `40·⌊cy/40⌋+20` + spread quantized to {−10,−7,−4,−1,2,5,8}
+  (spread noise seed+312, per 16×40×16 region) and **capped at the lowest sampled surface** (no
+  vanilla +8: H here is the actual surface, so a lake can never sit above its rim — the
+  open-pool artifact is structurally impossible). Lava type when level ≤ 54 (vanilla −10) ∧
+  |lava noise| (seed+313, per 64×40×64 region) > 0.3. Per air block (`aqu_block`): the 4
+  nearest of the 12 candidate centers; the barrier zone (2-nearest squared-distance gap < 25)
+  applies pressure between differing-status cells in the cluster (between levels: 1+min(dist);
+  lid ≤5 rows above the higher; floor ≤23 rows below the lower; water↔lava constant 6.0;
+  +2·barrier noise seed+314) → `B_STONE` **only where y < he** (the rim never raises the
+  surface). Else the nearest cell's status fills `y ≤ level` (water/lava). Then, per block, the
+  global lava layer **y ≤ 10** (vanilla −54, "exists regardless of aquifers") supersedes the
+  aquifer — it replaces the old y < 8 deep-pocket rule on the FULL path only (skip/far keep
+  y < 8 bit-exact by construction, never building the table). Documented adaptations vs vanilla
+  (plan.html §2 owns the full list): the cap (above), the erosion shifted-noise shift omitted,
+  the barrier formula is the wiki's stated shape with the 5/23 constants, the deep floor 8→10,
+  and — the load-bearing one for the AC-0342 contract — **aquifer fluid is gated to y < he**
+  (same gate as the barrier stone): a cave that opens a land column's top gets its mouth DRY
+  with the lake below, so open water in land columns stays 0 while the perched/cave lakes (all
+  hidden, y < he — measured 272,366 cells / 17,983 columns in an 11×11 window, 2,165 columns
+  with the surface ABOVE sea) are the feature. `generate_resl` returns real fl slabs on the
+  full path: `fl = 8` marks the scheduled flowing tick on differing-status boundary fluids
+  (the waterfalls — the fluid system flows them like sources) and on water at y = 11; the fl
+  slabs round-trip through the v6 codec and mesh identically to fl = 0. Noise slots 311–315
+  (floodedness/spread/barrier/lava/erosion) + 316/317/318 (jitter) are new; the five `aquifer_*`
+  dense sources are genprobe-mirrored (standing lockstep 9400/9400 f64-exact). H / heights / SEA
+  are untouched (writes are flat[] cells only; thash `8df7aeb4…0dc4f11` + farab `h_mismatch` 0
+  are the standing proof; the genhash rebased 25/25 at AC-0291). Cost: ~1.4 ms of the fill stage
+  (per-chunk 2884→4532 µs) — the per-block Voronoi over ~11,700 cave air blocks/chunk, with a
+  sky-block fast path (y > he ∧ y > max_fluid ∧ y > 10 skips the 4-nearest search — 84% of the
+  air blocks; it is load-bearing: without it the fill was 8.5 ms).
 - **The classic carver pass (AC-0290 — the room / trunk / canyon family, POST-DENSITY)**: a second,
   independent carve runs in `gen_flat` AFTER the density fill (`g_t_fill_us`) and BEFORE veg
   (`g_t_carve_us`, ~20 µs/chunk measured): `build_carver_plan(cx, cz, seed, ell, feat)` draws the

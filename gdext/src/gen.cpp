@@ -1263,6 +1263,16 @@ static std::atomic<long long> g_t_fill_us{0};
 static std::atomic<long long> g_t_veg_us{0};
 static std::atomic<long long> g_t_pallet_us{0};
 static std::atomic<long long> g_t_carve_us{0}; // AC-0290: the carver pass
+// AC-0291: the aquifer stage (the per-chunk table build), in gen_timing()
+// as "aquifer_us", + the placed-cell census (fluid via the aquifer /
+// barrier stone / the lava layer / fl=8 scheduled flow). Read via
+// AweGen.aquifer_stats().
+static std::atomic<long long> g_t_aquifer_us{0};
+static std::atomic<long long> g_aqu_water{0};
+static std::atomic<long long> g_aqu_lava{0};
+static std::atomic<long long> g_aqu_stones{0};
+static std::atomic<long long> g_aqu_lava_layer{0};
+static std::atomic<long long> g_aqu_fl8{0};
 static std::atomic<long long> g_t_cols_full{0};
 static std::atomic<long long> g_t_cols_skip{0};
 // AC-0284b: the far (h-only) column counters — g_t_cols_far = the far
@@ -1278,6 +1288,450 @@ static std::atomic<long long> g_t_vegcells_us{0};
 static inline long long now_us() {
 	return (long long)std::chrono::duration_cast<std::chrono::microseconds>(
 			std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// ---------------------------------------------------------------------------
+// AC-0291 — the VORONOI AQUIFERS (minecraft.wiki/w/Cave §Aquifer — the Java
+// 1.18+ algorithm; the +64 y-shift maps vanilla y_v = y − 64 onto our
+// 0-based world, so vanilla −54 → 10 and vanilla −10 → 54). Replaces the
+// flat "caves below SEA fill to SEA" model with per-cell local water tables:
+// every non-solid block takes the status of its nearest aquifer cell center
+// (Voronoi, the 25-squared-distance rule), so underground pockets get their
+// OWN water tables (perched mountain lakes, lava pools, waterfalls) instead
+// of one global fill.
+//
+// THE MODEL (vanilla constants literal, per the AC-0347 prerequisite):
+//   cells      16×12×16, grid offset (5,5,1); center = corner + 5/+5/+1
+//              + jitter 0–9 x / 0–8 y / 0–9 z (hash3i, seed+316/317/318).
+//   status     per cell center, from 13 surface samples (the chunk-centre
+//              columns around the centre chunk: own + W1-3/E1/N1/S1 + the 4
+//              diagonals + (0,±2) — the wiki's "13 chunk offsets"; only the
+//              own + the min are consumed, so the exact 12-set is immaterial):
+//              (1) cell bottom (cy−12) above its own surface → GLOBAL (water
+//              level SEA, or the lava layer when the cell lies in it);
+//              (2) cell top (cy+12) above any sampled surface below sea →
+//              SEA (water level SEA);
+//              (3) else underground: the EXCLUSION (erosion < −0.225 and
+//              depth 1.5 − cy/128 > 0.9 → dry; the deep-dark analogue — see
+//              the plan's adaptation note) or fluid_level_floodedness vs the
+//              thresholds (full > −0.3→0.8 / partial > −0.8→0.4, linear over
+//              64 blocks below the lowest sampled surface when the own
+//              surface is under sea, 0.8/0.4 on land): full → level SEA;
+//              partial → 40·⌊cy/40⌋ + 20 + spread (spread ∈ {−10,−7,−4,−1,
+//              2,5,8} from fluid_level_spread, once per 16×40×16 region),
+//              CAPPED AT THE LOWEST SAMPLED SURFACE ("capped at the
+//              preliminary surface");
+//              (4) lava type: flooded cell with level ≤ 54 (vanilla −10) and
+//              |lava noise| > 0.3 (once per 64×40×64 region).
+//   block      12 candidate centers (2×3×2), 4 nearest by squared distance;
+//              gap ≥ 25 → the nearest status (fluid when y ≤ level, else air);
+//              gap < 25 → the BARRIER zone: pressure between the differing
+//              fluid statuses among the cluster (d2 − d2[0] < 25) — between
+//              the levels: 1 + min distance to either level (peaks in the
+//              middle); above the higher: decays over 5 rows (the ≤5 lid);
+//              below the lower: decays over 23 rows (the ≤23 floor); a
+//              water-lava pair: the strong constant 6.0; + 2·barrier noise
+//              (the irregular rim). p > 0 → stone (only where y < he — the
+//              rim can never raise the surface, so H cannot move).
+//   fluids     the lava layer y ≤ 10 (vanilla −54, "exists regardless of
+//              aquifers") supersedes the aquifer per block (replacing the old
+//              y < 8 pocket rule); aquifer fluid gets fl = 8 (the scheduled
+//              flowing tick — the waterfalls) when it sits in the barrier
+//              zone next to a differing status, or is water directly above
+//              the lava layer (y = 11). The AC-0342 surface rule (y ∈
+//              [he+1, SEA], H < sea → WATER) stays FIRST and unchanged — the
+//              ocean surface + the submarine flood to sea level are
+//              byte-identical by construction; the aquifer only decides the
+//              cells below he+1 (ocean) or all air cells (land).
+//
+// ADAPTATIONS (vs vanilla's exact text — see tasks/AC-0291/plan.html §2):
+//   * NO +8 RAISE — vanilla raises its PRELIMINARY surface (≈ actual −8)
+//     before the comparisons; AweCraft's H IS the actual surface, so all
+//     comparisons use the raw sampled H. Consequence: a lake can NEVER sit
+//     above the lowest sampled ground (the AC-0342 open-pool artifact class
+//     is structurally impossible; land caves gain hidden perched lakes only).
+//   * H samples are DENSE (aqu_surface_h_dense — the same three surface
+//     fields evaluated directly at the sea slice, no lattice build): they
+//     differ from the exact H by the trilinear residual (a few blocks). The
+//     cell status must be a pure f(world, seed) (shared across chunk seams),
+//     so the own-chunk exact heights[] are not used. Exact H itself never
+//     moves (thash is the proof).
+//   * erosion/depth for the exclusion: the vanilla erosion instance as-is
+//     (firstOctave −9, amps [1,1,0,1,1], xz 0.25 / y 0) WITHOUT its
+//     shift_x/shift_z (they derive from the unported overworld/offset graph);
+//     depth = the vanilla y-gradient without the offset blend.
+//   * the barrier pressure closed form implements the wiki's stated shape
+//     (positive between, ≤5 lid, ≤23 floor, strong water-lava constant,
+//     noise-irregular) with the ticket's 5/23 constants.
+//
+// FULL PATH ONLY: the skip (lazy) path keeps its old `!solid` behavior
+// (y < 8 lava) — the aquifer, like the cave field and the carver, is built
+// only where the full density runs, so the skip/far payloads stay bit-exact
+// by construction. The dense sources (aqu_* below) are bound for the
+// genprobe lockstep (the AC-0291 aquifer block in the arm).
+// ---------------------------------------------------------------------------
+
+static inline int floordiv(int a, int b) {
+	int q = a / b;
+	if (a % b != 0 && ((a < 0) != (b < 0)))
+		q -= 1;
+	return q;
+}
+
+// The vanilla noise instances (overworld.json AS-IS; all single-octave
+// except erosion; xz scale 1.0 = 64-block wavelength, y scale as ticketed).
+constexpr double AQU_FLOOD_Y = 0.67;
+constexpr int AQU_FLOOD_OCT = -7;
+constexpr double AQU_SPREAD_Y = 0.7142857142857143;
+constexpr int AQU_SPREAD_OCT = -5;
+constexpr double AQU_BARRIER_Y = 0.5;
+constexpr int AQU_BARRIER_OCT = -3;
+constexpr int AQU_LAVA_OCT = -1;
+constexpr double AQU_EROSION_XZ = 0.25;
+constexpr int AQU_EROSION_OCT = -9;
+static const double AQU_ONE[] = { 1.0 };
+static const double AQU_EROSION_AMPS[] = { 1.0, 1.0, 0.0, 1.0, 1.0 };
+constexpr int AQU_EROSION_N = 5;
+
+// The aquifer geometry (vanilla AS-IS) + the +64-shifted lava constants.
+constexpr int AQU_CX = 16, AQU_CY = 12, AQU_CZ = 16;
+constexpr int AQU_OX = 5, AQU_OY = 5, AQU_OZ = 1;
+constexpr int AQU_LAVA_SURF = 10;    // vanilla −54 + 64 — the lava layer surface row
+constexpr int AQU_LAVA_LEVEL_MAX = 54; // vanilla −10 + 64 — "level at or below"
+constexpr double AQU_LAVA_WALL = 6.0;  // the strong fixed water-lava pressure
+// The 13 surface-sample chunk offsets (see the section header).
+static const int AQU_SX[13] = { 0, -1, -2, -3, 1, 0, 0, 1, 1, -1, -1, 0, 0 };
+static const int AQU_SZ[13] = { 0, 0, 0, 0, 0, 1, -1, 1, -1, 1, -1, 2, -2 };
+
+static inline double aqu_floodedness(double x, double y, double z, int64_t s) {
+	return vn3(x, y * AQU_FLOOD_Y, z, s + 311, AQU_FLOOD_OCT, AQU_ONE, 1);
+}
+static inline double aqu_spread(double x, double y, double z, int64_t s) {
+	return vn3(x, y * AQU_SPREAD_Y, z, s + 312, AQU_SPREAD_OCT, AQU_ONE, 1);
+}
+static inline double aqu_barrier(double x, double y, double z, int64_t s) {
+	return vn3(x, y * AQU_BARRIER_Y, z, s + 313, AQU_BARRIER_OCT, AQU_ONE, 1);
+}
+static inline double aqu_lava(double x, double y, double z, int64_t s) {
+	return vn3(x, y, z, s + 314, AQU_LAVA_OCT, AQU_ONE, 1);
+}
+static inline double aqu_erosion(double x, double z, int64_t s) {
+	// The vanilla erosion instance at xz_scale 0.25 / y_scale 0 (2-D); the
+	// shifted_noise shift is omitted (see the section header).
+	return vn3(x * AQU_EROSION_XZ, 0.0, z * AQU_EROSION_XZ, s + 315,
+			AQU_EROSION_OCT, AQU_EROSION_AMPS, AQU_EROSION_N);
+}
+
+// The aquifer's H reference — the DENSE sea-slice surface (the exact
+// surface_h formula with the three fields evaluated directly instead of
+// trilinear off the 4-block lattice; the 2-octave builds match
+// build_field's default). Differs from the exact H by the trilinear
+// residual; the cap uses it raw (no +8 — the section header).
+static inline int aqu_surface_h_dense(int x, int z, int64_t seed) {
+	double c = fbm3((double)x / 220.0, 126.0 / 64.0, (double)z / 220.0, seed, 2);
+	double h = fbm3((double)x / 70.0 + 333.0, 126.0 / 64.0, (double)z / 70.0 + 333.0, seed + 7, 2);
+	double r = fbm3((double)x / 300.0 + 500.0, 126.0 / 64.0, (double)z / 300.0 + 500.0, seed + 13, 2);
+	double cc = 0.4219 + (c - 0.3681) * (0.1280 / 0.0467);
+	double hc = 0.4964 + (h - 0.5112) * (0.1361 / 0.1107);
+	double rc = 0.4292 + (r - 0.5743) * (0.1366 / 0.1443);
+	double y = 105.2 + cc * 36.4 + hc * 52.0;
+	if (rc > 0.62)
+		y += (rc - 0.62) * 390.0;
+	return clampi((int)std::floor(y), 3, TERRAIN_H_MAX);
+}
+
+struct AquCell {
+	int16_t cx, cy, cz; // the center (world block)
+	int8_t type;        // 0 dry, 1 water, 2 lava
+	int16_t level;      // the topmost fluid row (0 when dry)
+	int8_t cls;         // 0 excluded, 1 dry-noise, 2 sea, 3 global, 4 full, 5 partial
+};
+
+// The per-chunk table: the 315 cells the chunk's blocks can ever query
+// (cell x index ∈ {cx−1, cx, cx+1}, y ∈ {−2..32} (35), z ∈ {cz−1, cz, cz+1})
+// + the 7×5 dense-H window (the chunk-centre columns of ncx ∈ [cx−4, cx+2],
+// ncz ∈ [cz−2, cz+2]).
+struct AquTable {
+	AquCell cells[3][35][3];
+	int16_t h[35];
+	// The max fluid level over all 315 cells (0 when none is a fluid) —
+	// the per-chunk bound for the sky-block fast path in the fill loop
+	// (a block with y > this can hold no aquifer fluid).
+	int16_t max_fluid{0};
+};
+
+static inline void aqu_cell_build(int ix, int iy, int iz, int64_t seed, int sea,
+		const AquTable &hm, int cx0, int cz0, AquCell &c) {
+	c.cx = (int16_t)(ix * AQU_CX + AQU_OX + (int)(hash3i((int64_t)ix, 0, (int64_t)iz, seed + 316) * 10.0));
+	c.cy = (int16_t)(iy * AQU_CY + AQU_OY + (int)(hash3i(0, (int64_t)iy, (int64_t)iz, seed + 317) * 9.0));
+	c.cz = (int16_t)(iz * AQU_CZ + AQU_OZ + (int)(hash3i((int64_t)ix, 0, (int64_t)iz, seed + 318) * 10.0));
+	int hown = 1 << 30;
+	int hmin = 1 << 30;
+	bool sea_poke = false;
+	for (int k = 0; k < 13; k++) {
+		int h = hm.h[(ix + AQU_SX[k] - (cx0 - 4)) * 5 + (iz + AQU_SZ[k] - (cz0 - 2))];
+		if (k == 0)
+			hown = h;
+		if (h < hmin)
+			hmin = h;
+		if (h < sea && c.cy + 12 > h)
+			sea_poke = true;
+	}
+	if (c.cy - 12 > hown) {
+		// The global fluid rule (the cell's bottom is above its own
+		// surface — "cells high above ground contain only air" once the
+		// per-block y ≤ level test runs).
+		if (c.cy + 12 <= AQU_LAVA_SURF) {
+			c.type = 2;
+			c.level = AQU_LAVA_SURF;
+		} else {
+			c.type = 1;
+			c.level = sea;
+		}
+		c.cls = 3;
+		return;
+	}
+	if (sea_poke) {
+		c.type = 1;
+		c.level = sea;
+		c.cls = 2;
+		return;
+	}
+	// Underground.
+	bool excluded = (aqu_erosion((double)c.cx, (double)c.cz, seed) < -0.225)
+			&& (1.5 - (double)c.cy / 128.0 > 0.9);
+	if (excluded) {
+		c.type = 0;
+		c.level = 0;
+		c.cls = 0;
+		return;
+	}
+	double f = aqu_floodedness((double)c.cx, (double)c.cy, (double)c.cz, seed);
+	if (f < -1.0)
+		f = -1.0;
+	else if (f > 1.0)
+		f = 1.0;
+	double full_th, part_th;
+	if (hown < sea) {
+		// Under the sea floor: the thresholds relax from the land values
+		// toward the underwater values over 64 blocks below the lowest
+		// sampled surface (the wiki's two-column table, linear between).
+		double t = ((double)hmin - (double)c.cy) / 64.0;
+		if (t < 0.0)
+			t = 0.0;
+		else if (t > 1.0)
+			t = 1.0;
+		full_th = -0.3 + 1.1 * t;
+		part_th = -0.8 + 1.2 * t;
+	} else {
+		full_th = 0.8;
+		part_th = 0.4;
+	}
+	if (f > full_th) {
+		c.type = 1;
+		c.level = sea;
+		c.cls = 4;
+	} else if (f > part_th) {
+		int rx = floordiv(c.cx, 16);
+		int ry = floordiv(c.cy, 40);
+		int rz = floordiv(c.cz, 16);
+		double sv = aqu_spread(16.0 * rx + 8.0, 40.0 * ry + 20.0, 16.0 * rz + 8.0, seed);
+		int sraw = (int)std::floor(sv * 10.0 + 0.5);
+		if (sraw < -10)
+			sraw = -10;
+		else if (sraw > 10)
+			sraw = 10;
+		int q = (int)std::floor((sraw + 10) / 3.0 + 0.5);
+		if (q < 0)
+			q = 0;
+		else if (q > 6)
+			q = 6;
+		int level = 40 * floordiv(c.cy, 40) + 20 + (q * 3 - 10);
+		if (level > hmin)
+			level = hmin; // capped at the lowest sampled surface (no +8 — see above)
+		c.type = 1;
+		c.level = (int16_t)level;
+		c.cls = 5;
+	} else {
+		c.type = 0;
+		c.level = 0;
+		c.cls = 1;
+		return;
+	}
+	// The lava type: a flooded cell becomes lava when its level is at or
+	// below vanilla −10 (ours 54) and |lava| > 0.3, once per 64×40×64 region.
+	if (c.type == 1 && c.level <= AQU_LAVA_LEVEL_MAX) {
+		int lx = floordiv(c.cx, 64);
+		int ly = floordiv(c.cy, 40);
+		int lz = floordiv(c.cz, 64);
+		double lv = aqu_lava(64.0 * lx + 32.0, 40.0 * ly + 20.0, 64.0 * lz + 32.0, seed);
+		if (lv < 0.0)
+			lv = -lv;
+		if (lv > 0.3)
+			c.type = 2;
+	}
+}
+
+static inline void aqu_table_build(int cx, int cz, int64_t seed, int sea, AquTable &t) {
+	for (int i = 0; i < 7; i++) {
+		for (int j = 0; j < 5; j++) {
+			int ncx = cx - 4 + i;
+			int ncz = cz - 2 + j;
+			t.h[i * 5 + j] = (int16_t)aqu_surface_h_dense(ncx * 16 + 8, ncz * 16 + 8, seed);
+		}
+	}
+	for (int ax = 0; ax < 3; ax++) {
+		for (int ay = 0; ay < 35; ay++) {
+			for (int az = 0; az < 3; az++) {
+				aqu_cell_build(cx - 1 + ax, -2 + ay, cz - 1 + az, seed, sea, t, cx, cz,
+						t.cells[ax][ay][az]);
+			}
+		}
+	}
+	int16_t mf = 0;
+	for (int ax = 0; ax < 3; ax++) {
+		for (int ay = 0; ay < 35; ay++) {
+			for (int az = 0; az < 3; az++) {
+				const AquCell &c = t.cells[ax][ay][az];
+				if (c.type > 0 && c.level > mf)
+					mf = c.level;
+			}
+		}
+	}
+	t.max_fluid = mf;
+}
+
+// The barrier pressure between two fluid levels at block height y (the
+// wiki's shape: positive between, peaking in the middle; ≤5 rows of lid
+// above the higher; ≤23 rows of floor below the lower).
+static inline double aqu_pressure(int y, int la, int lb) {
+	int lo = (la < lb) ? la : lb;
+	int hi = (la < lb) ? lb : la;
+	if (y > hi)
+		return (double)hi + 5.0 - (double)y;
+	if (y >= lo)
+		return 1.0 + (y - lo < hi - y ? (double)(y - lo) : (double)(hi - y));
+	return (double)y - (double)lo + 23.0;
+}
+
+struct AquOut {
+	uint8_t block; // 0 = air (no fluid / no stone), B_WATER, B_LAVA, B_STONE (rim)
+	uint8_t fl;    // 0 = stationary, 8 = the scheduled flowing tick
+};
+
+static inline void aqu_block(int x, int y, int z, int he, int cx, int cz,
+		const AquTable &t, int64_t seed, int sea, AquOut &out) {
+	out.block = 0;
+	out.fl = 0;
+	int ix = floordiv(x - AQU_OX, AQU_CX);
+	int iy = floordiv(y - AQU_OY, AQU_CY);
+	int iz = floordiv(z - AQU_OZ, AQU_CZ);
+	int ax = ix - (cx - 1);
+	int ay = iy + 2;
+	int az = iz - (cz - 1);
+	// The 4 nearest of the 12 candidate centers (insertion-sorted list).
+	double d2[4];
+	int ci[4];
+	for (int i = 0; i < 4; i++) {
+		d2[i] = 1e300;
+		ci[i] = 0;
+	}
+	for (int dx = 0; dx <= 1; dx++) {
+		for (int dy = -1; dy <= 1; dy++) {
+			for (int dz = 0; dz <= 1; dz++) {
+				int aax = ax + dx;
+				int aay = ay + dy;
+				int aaz = az + dz;
+				if (aax < 0 || aax >= 3 || aay < 0 || aay >= 35 || aaz < 0 || aaz >= 3)
+					continue; // out of the table (≥ 20 blocks away in y — never 4th nearest)
+				const AquCell &c = t.cells[aax][aay][aaz];
+				double dx2 = (double)x - (double)c.cx;
+				double dy2 = (double)y - (double)c.cy;
+				double dz2 = (double)z - (double)c.cz;
+				double dd = dx2 * dx2 + dy2 * dy2 + dz2 * dz2;
+				// Insertion into the size-4 nearest list: a candidate FARTHER than
+				// the current 4th can never enter (the list stays sorted ascending)
+				// — the guard is also what keeps the shift inside the array (an
+				// unconditional tail write at i = 3 would overflow it).
+				if (dd > d2[3])
+					continue;
+				int i = 3;
+				while (i >= 1 && d2[i - 1] > dd) {
+					d2[i] = d2[i - 1];
+					ci[i] = ci[i - 1];
+					i--;
+				}
+				d2[i] = dd;
+				ci[i] = aay * 9 + aaz * 3 + aax;
+			}
+		}
+	}
+	// idx = aay * 9 + aaz * 3 + aax (the candidate loop's packing) —
+	// decode against the STORED layout cells[ax][ay][az] = [3][35][3]:
+	// x = idx % 3, y = idx / 9, z = (idx / 3) % 3.
+	auto cell_at = [&](int idx) -> const AquCell & {
+		return t.cells[idx % 3][idx / 9][(idx / 3) % 3];
+	};
+	const AquCell &n0 = cell_at(ci[0]);
+	bool diff_status = false;
+	if (d2[1] - d2[0] < 25.0) {
+		// The barrier zone: pressure between the differing fluid statuses
+		// among the cluster (d2 − d2[0] < 25).
+		double p = 0.0;
+		for (int i = 0; i < 4 && d2[i] - d2[0] < 25.0; i++) {
+			for (int j = i + 1; j < 4 && d2[j] - d2[0] < 25.0; j++) {
+				const AquCell &a = cell_at(ci[i]);
+				const AquCell &b = cell_at(ci[j]);
+				if (a.type > 0 && b.type > 0 && (a.type != b.type || a.level != b.level)) {
+					double pa = (a.type != b.type)
+							? AQU_LAVA_WALL
+							: aqu_pressure(y, a.level, b.level);
+					if (pa > p)
+						p = pa;
+					diff_status = true;
+				}
+			}
+		}
+		if (p > 0.0) {
+			p += 2.0 * aqu_barrier((double)x, (double)y, (double)z, seed);
+		}
+		if (p > 0.0 && y < he) {
+			// The stone rim (only below the topmost solid — the rim can
+			// never raise the surface; H cannot move by construction).
+			out.block = B_STONE;
+			g_aqu_stones.fetch_add(1, std::memory_order_relaxed);
+			return;
+		}
+	}
+	// The nearest status (the clear zone takes it outright; the barrier
+	// zone falls through here when it did not turn the block to stone).
+	// The AC-0342 land-dry gate: fluid only BELOW the topmost solid
+	// (y < he) — the same gate the barrier stone above uses. A cave that
+	// opens a land column's top (he drops below the pre-carve surface)
+	// therefore does NOT get its opening flooded to the water table: the
+	// perched/cave lakes stay hidden (y < he, below the terrain — the
+	// feature) and open water in land columns stays 0 (the contract).
+	// Vanilla would flood the opened mouth to the table; AweCraft's
+	// AC-0342 contract is stricter, and this is the documented adaptation
+	// that reconciles the two (ocean columns are untouched — their sea
+	// fill is the separate rule above, H < sea).
+	if (n0.type > 0 && y <= n0.level && y < he) {
+		out.block = (n0.type == 1) ? B_WATER : B_LAVA;
+		if (n0.type == 1)
+			g_aqu_water.fetch_add(1, std::memory_order_relaxed);
+		else
+			g_aqu_lava.fetch_add(1, std::memory_order_relaxed);
+		// The scheduled flowing tick: a fluid at a boundary between cells
+		// of DIFFERING statuses (the waterfalls) — or water directly above
+		// the lava layer (always scheduled, per the wiki).
+		bool flow = diff_status;
+		if (!flow && n0.type == 1 && y == AQU_LAVA_SURF + 1)
+			flow = true;
+		if (flow) {
+			out.fl = 8;
+			g_aqu_fl8.fetch_add(1, std::memory_order_relaxed);
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1533,10 +1987,23 @@ static std::vector<uint8_t> gen_veg_cells(int cx, int cz, int64_t seed, int hmax
 // cross-slab state exists). The surface slab is always kept (the span
 // contains the tower's top), so the effective surface + veg always land.
 static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int sea,
-		int skip = 0, const uint8_t *p_keep = nullptr) {
+		int skip = 0, const uint8_t *p_keep = nullptr, std::vector<uint8_t> *p_fl = nullptr) {
 	int bx = cx * 16;
 	int bz = cz * 16;
 	int nsl = hmax / 16;
+	// AC-0291: the fl (fluid-level) array — the scheduled-flow marks (fl = 8
+	// on the aquifer boundary water, 0 elsewhere). Only the FULL path marks
+	// (the skip path keeps its all-zero fl — the band-A contract).
+	if (p_fl != nullptr && !skip)
+		p_fl->assign((size_t)hmax * 256, 0);
+	AquTable aq;
+	const AquTable *aq_p = nullptr;
+	if (!skip) {
+		long long ta = now_us();
+		aqu_table_build(cx, cz, seed, sea, aq);
+		aq_p = &aq;
+		g_t_aquifer_us.fetch_add(now_us() - ta, std::memory_order_relaxed);
+	}
 	auto slab_kept = [&](int sl) -> bool {
 		return p_keep == nullptr || sl < nsl || p_keep[sl] != 0;
 	};
@@ -1753,9 +2220,46 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 					} else if (y >= he - 3 && solid) {
 						cell = (bm == 1) ? B_SAND : B_DIRT;
 					} else if (!solid) {
-						// Air (cave) — deep cave pockets at y<8 hold LAVA
-						// (the old deep-carve lava lakes, now from the field).
-						cell = (y < 8) ? B_LAVA : 0;
+						if (aq_p == nullptr) {
+							// The skip path: no aquifer (the lazy path keeps its
+							// old behavior — the skip/far payloads stay bit-exact
+							// by construction, AC-0291).
+							cell = (y < 8) ? B_LAVA : 0;
+						} else {
+							// AC-0291: the VORONOI AQUIFER (full path only — the
+							// model + the documented adaptations in the section
+							// above). The AC-0342 surface rule above already owns
+							// [he+1, SEA] on ocean columns; here the aquifer
+							// decides the rest — the per-cell local water tables
+							// (perched mountain lakes, lava pools), the barrier
+							// stone rims, and the scheduled-flow marks.
+							//
+							// Sky-block fast path: a block ABOVE the topmost
+							// solid (barrier stone requires y < he), ABOVE
+							// every cell's fluid table (fluid requires
+							// y <= level <= max_fluid) and ABOVE the lava layer
+							// is provably inert for the aquifer — the 4-nearest
+							// search is skipped (measured: 84% of the air blocks
+							// in the census window).
+							if (y > he && y > aq_p->max_fluid && y > AQU_LAVA_SURF) {
+								cell = 0;
+							} else {
+								AquOut aout;
+								aqu_block(x, y, z, he, cx, cz, *aq_p, seed, sea, aout);
+								if (aout.block == 0 && y <= AQU_LAVA_SURF) {
+									// The global lava layer (vanilla -54 + 64 =
+									// 10, "exists regardless of aquifers") —
+									// replaces the old y < 8 deep-pocket rule
+									// on the full path.
+									cell = B_LAVA;
+									g_aqu_lava_layer.fetch_add(1, std::memory_order_relaxed);
+								} else {
+									cell = aout.block;
+								}
+								if (p_fl != nullptr && aout.fl != 0)
+									(*p_fl)[(size_t)(y << 8) | base] = aout.fl;
+							}
+						}
 					} else {
 						cell = stone_ore(x, y, z, gx, gz);
 					}
@@ -2098,6 +2602,15 @@ public:
 		ClassDB::bind_method(D_METHOD("density_nood", "x", "y", "z", "s"), &AweGen::density_nood);
 		ClassDB::bind_method(D_METHOD("density_gate", "x", "y", "z", "s"), &AweGen::density_gate);
 		ClassDB::bind_method(D_METHOD("tunnel_air", "x", "y", "z", "s"), &AweGen::tunnel_air);
+		// AC-0291: the aquifer dense sources (the vanilla noise instances
+		// AS-IS — the genprobe aquifer lockstep block mirrors them in
+		// GDScript) + the cumulative census + the per-chunk cell census.
+		ClassDB::bind_method(D_METHOD("aquifer_floodedness", "x", "y", "z", "s"), &AweGen::aquifer_floodedness);
+		ClassDB::bind_method(D_METHOD("aquifer_spread", "x", "y", "z", "s"), &AweGen::aquifer_spread);
+		ClassDB::bind_method(D_METHOD("aquifer_barrier", "x", "y", "z", "s"), &AweGen::aquifer_barrier);
+		ClassDB::bind_method(D_METHOD("aquifer_lava", "x", "y", "z", "s"), &AweGen::aquifer_lava);
+		ClassDB::bind_method(D_METHOD("aquifer_erosion", "x", "z", "s"), &AweGen::aquifer_erosion);
+		ClassDB::bind_method(D_METHOD("aquifer_stats"), &AweGen::aquifer_stats);
 		// AC-0216: the optional 6th arg `skip` (default 0 = the pre-AC-0216
 		// full density field, bit-for-bit) — the lazy offscreen-interior
 		// skip (see the file header).
@@ -2140,6 +2653,7 @@ public:
 		d["veg_us"] = (int64_t)g_t_veg_us.load(std::memory_order_relaxed);
 		d["pallet_us"] = (int64_t)g_t_pallet_us.load(std::memory_order_relaxed);
 		d["carve_us"] = (int64_t)g_t_carve_us.load(std::memory_order_relaxed); // AC-0290
+		d["aquifer_us"] = (int64_t)g_t_aquifer_us.load(std::memory_order_relaxed); // AC-0291
 		d["cols_full"] = (int64_t)g_t_cols_full.load(std::memory_order_relaxed);
 		d["cols_skip"] = (int64_t)g_t_cols_skip.load(std::memory_order_relaxed);
 		d["cols_far"] = (int64_t)g_t_cols_far.load(std::memory_order_relaxed);
@@ -2153,6 +2667,12 @@ public:
 		g_t_scan_us.store(0, std::memory_order_relaxed);
 		g_t_fill_us.store(0, std::memory_order_relaxed);
 		g_t_carve_us.store(0, std::memory_order_relaxed); // AC-0290
+		g_t_aquifer_us.store(0, std::memory_order_relaxed); // AC-0291
+		g_aqu_water.store(0, std::memory_order_relaxed);
+		g_aqu_lava.store(0, std::memory_order_relaxed);
+		g_aqu_stones.store(0, std::memory_order_relaxed);
+		g_aqu_lava_layer.store(0, std::memory_order_relaxed);
+		g_aqu_fl8.store(0, std::memory_order_relaxed);
 		g_t_veg_us.store(0, std::memory_order_relaxed);
 		g_t_pallet_us.store(0, std::memory_order_relaxed);
 		g_t_cols_full.store(0, std::memory_order_relaxed);
@@ -2248,6 +2768,38 @@ public:
 		return awegen::dens_at((int)p_H, (int)p_y, p_cave, p_ent, p_layer);
 	}
 
+	// AC-0291: the aquifer dense sources (the vanilla noise instances
+	// AS-IS — the genprobe aquifer lockstep mirrors each in GDScript).
+	double aquifer_floodedness(double x, double y, double z, int s) const {
+		return awegen::aqu_floodedness(x, y, z, (int64_t)s);
+	}
+	double aquifer_spread(double x, double y, double z, int s) const {
+		return awegen::aqu_spread(x, y, z, (int64_t)s);
+	}
+	double aquifer_barrier(double x, double y, double z, int s) const {
+		return awegen::aqu_barrier(x, y, z, (int64_t)s);
+	}
+	double aquifer_lava(double x, double y, double z, int s) const {
+		return awegen::aqu_lava(x, y, z, (int64_t)s);
+	}
+	double aquifer_erosion(double x, double z, int s) const {
+		return awegen::aqu_erosion(x, z, (int64_t)s);
+	}
+
+	// AC-0291: the cumulative aquifer census (the harness arm reads it;
+	// process-wide like gen_timing — reset_gen_timing() zeros it).
+	// AC-0291: the placed-cell census (see the counter block near the top).
+	Dictionary aquifer_stats() const {
+		Dictionary d;
+		d["water"] = (int64_t)g_aqu_water.load(std::memory_order_relaxed);
+		d["lava"] = (int64_t)g_aqu_lava.load(std::memory_order_relaxed);
+		d["stones"] = (int64_t)g_aqu_stones.load(std::memory_order_relaxed);
+		d["lava_layer"] = (int64_t)g_aqu_lava_layer.load(std::memory_order_relaxed);
+		d["fl8"] = (int64_t)g_aqu_fl8.load(std::memory_order_relaxed);
+		d["aquifer_us"] = (int64_t)g_t_aquifer_us.load(std::memory_order_relaxed);
+		return d;
+	}
+
 	// AC-0216: p_skip != 0 = the lazy offscreen-interior path (the 150-pt
 	// density evaluation skipped free — see the file header). Default 0.
 	// AC-0237: p_keep = the 24-byte slab keep mask (slab si generated iff
@@ -2269,11 +2821,15 @@ public:
 		return awegen::palettize_slabs(f, p_h);
 	}
 
-	// [data_slabs, fl_slabs] — the exact threadgen resl shape (fl = all null;
-	// gen produces no fluid). AC-0284b: skip == 2 = the FAR (h-only)
-	// column — the slabs are ALL NULL and the 1024-byte far payload rides
-	// resl[2] as {h, bm, top} (the v6 codec's bit-1 section replaces the
-	// slab section on disk).
+	// [data_slabs, fl_slabs] — the exact threadgen resl shape. AC-0284b:
+	// skip == 2 = the FAR (h-only) column — the slabs are ALL NULL and the
+	// 1024-byte far payload rides resl[2] as {h, bm, top} (the v6 codec's
+	// bit-1 section replaces the slab section on disk). AC-0291: the FULL
+	// path now returns the scheduled-flow fl array (fl = 8 on the aquifer
+	// boundary water — the "scheduled flowing ticks" the ticket asks for;
+	// the fluid tick's explicit-fl pass makes them flow: the waterfalls).
+	// The skip paths keep all-null fl (no flow marks — the band-A/far
+	// payloads stay bit-exact by construction).
 	Array generate_resl(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip, PackedByteArray p_keep) const {
 		if (p_skip == 2) {
 			std::vector<uint8_t> pay = awegen::gen_far(p_cx, p_cz, p_s, p_h, p_sea);
@@ -2301,12 +2857,17 @@ public:
 			return resl;
 		}
 		const uint8_t *keep = p_keep.size() > 0 ? (const uint8_t *)p_keep.ptr() : nullptr;
-		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip, keep);
+		std::vector<uint8_t> ffl;
+		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip, keep, &ffl);
 		Array resl;
 		resl.append(awegen::palettize_slabs(f, p_h));
-		Array fl;
-		fl.resize(p_h / 16); // all null
-		resl.append(fl);
+		if (p_skip == 0) {
+			resl.append(awegen::palettize_slabs(ffl, p_h)); // AC-0291: the flow marks
+		} else {
+			Array fl;
+			fl.resize(p_h / 16); // all null (the skip paths mark no flow)
+			resl.append(fl);
+		}
 		return resl;
 	}
 

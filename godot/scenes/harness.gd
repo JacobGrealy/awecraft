@@ -21159,6 +21159,7 @@ func _genprobe_test() -> void:
 		"layer": {"n": 0, "exact": 0},
 		"entrance": {"n": 0, "exact": 0},
 		"dens": {"n": 0, "exact": 0},
+		"aquifer": {"n": 0, "exact": 0},
 	}
 	if not res["cpp_registered"]:
 		Debug.result(res)
@@ -21343,6 +21344,22 @@ func _genprobe_test() -> void:
 			var lc := 2.0 * (ly - 0.5)
 			var s4 := 4.0 * lc * lc + q4 + supp
 			cmp.call("dens", en if en < s4 else s4, G.dens_at(float(H), float(y2), cv, en, ly))
+	for i in 300:
+		# AC-0291: the AQUIFER dense sources — the vanilla noise instances
+		# AS-IS (overworld.json: fluid_level_floodedness {−7, [1.0]} y 0.67;
+		# fluid_level_spread {−5, [1.0]} y 5/7; barrier {−3, [1.0]} y 0.5;
+		# lava {−1, [1.0]} y 1.0; erosion {−9, [1,1,0,1,1]} xz 0.25 / y 0,
+		# shift omitted — see the aquifer section in gen.cpp). All at xz
+		# 1.0 except erosion (0.25). Mirrors AweGen::aquifer_* exactly.
+		var x := rng.randf_range(-1024.0, 1024.0)
+		var y := rng.randf_range(0.0, 384.0)
+		var z := rng.randf_range(-1024.0, 1024.0)
+		var s := rng.randi_range(-200, 200)
+		cmp.call("aquifer", AweNoise.vn3(x * 1.0, y * 0.67, z * 1.0, s + 311, -7, [1.0]), G.aquifer_floodedness(x, y, z, s))
+		cmp.call("aquifer", AweNoise.vn3(x * 1.0, y * 0.7142857142857143, z * 1.0, s + 312, -5, [1.0]), G.aquifer_spread(x, y, z, s))
+		cmp.call("aquifer", AweNoise.vn3(x * 1.0, y * 0.5, z * 1.0, s + 313, -3, [1.0]), G.aquifer_barrier(x, y, z, s))
+		cmp.call("aquifer", AweNoise.vn3(x * 1.0, y * 1.0, z * 1.0, s + 314, -1, [1.0]), G.aquifer_lava(x, y, z, s))
+		cmp.call("aquifer", AweNoise.vn3(x * 0.25, 0.0, z * 0.25, s + 315, -9, [1.0, 1.0, 0.0, 1.0, 1.0]), G.aquifer_erosion(x, z, s))
 	var tot := int(res["n"])
 	res["match_rate"] = float(int(res["exact"])) / float(tot) if tot > 0 else 0.0
 	res["ok"] = int(res["exact"]) == tot and tot > 0
