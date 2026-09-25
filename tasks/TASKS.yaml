@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-25T05:33
+  updated_at: 2026-09-25T07:50
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0360
 - AC-0306
 - AC-0307
 - AC-0308
@@ -19606,11 +19605,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-24T19:29
-  updated_at: 2026-09-24T19:29
-  completed_at: null
+  updated_at: 2026-09-25T07:50
+  completed_at: 2026-09-25T07:50
   waiting_on: null
   parent_id: null
   notes: "1) User Story\n\nAs a player walking around, the ground near the surface reads like a shell:\
@@ -19679,7 +19678,25 @@ intake:
     \ void and add stone rims) — take the baseline AFTER it lands, not before, or the census will be measured\
     \ on a tree nobody will play. AC-0292 (pillars) FILLS chamber void, so this census is also its baseline\
     \ for how much void is left to fill; that is why this ticket sits ahead of AC-0292.\n- Sequence: queued\
-    \ after AC-0291 and before AC-0292.\n"
+    \ after AC-0291 and before AC-0292.\n\n\nCLOSED (commit c494a5c). WHAT THIS TICKET IS, IN ONE LINE:\
+    \ the user's \"the ground near the surface reads like a shell\" is measured, attributed at 100% to\
+    \ one family, and fixed by topology rather than by tuning. The instrument deserves the credit and\
+    \ is worth describing because it is the reason the attribution is trustworthy rather than plausible:\
+    \ a temporary `voidstat` arm generated the world TWICE per column (pre-carve and post-carve), re-ran\
+    \ the production predicates per cell, and carried an `unex` invariant that stayed 0 across ~900k cells\
+    \ - i.e. the re-run is provably cell-exact, so \"every void cell below k=16 is a tunnel\" is a measurement\
+    \ and not an inference from a predicate's shape. The same instrument then produced the after-numbers,\
+    \ so before and after are the same measurement applied twice rather than two different estimates.\
+    \ THE OUTCOME: k<16 void 32,249 -> 0, opened columns 1,669 -> 0, deep bands byte-stable, H byte-identical,\
+    \ and the cost DOWN by 171 us/chunk because a depth gate that short-circuits also skips work. THE\
+    \ HYPOTHESIS WAS THE USER'S AND IT WAS RIGHT, which is worth recording: their suspicion that the noodles/spaghetti\
+    \ are the wrong size near the top was structurally supported (tunnel_air_c reads only the three tunnel\
+    \ fields plus the gate weight - no depth term, no K_CUT, no ramp, no layer - and it was applied at\
+    \ every scan y outside the router) and it is now confirmed as a VOLUME split, not just as an opening\
+    \ count; AC-0347 P3's 96.9% opening share had already pointed here, and this ticket turned the share\
+    \ into the thing the complaint was actually about. ONE RECORDED DECISION LEFT STANDING: the ENTRANCE\
+    \ port was deliberately not re-scoped in this ticket (it opens zero columns in this world, so there\
+    \ was nothing to measure), and the pillars/cheese/deep branch were untouched."
   comments: []
 - id: AC-0361
   title: aquifer-water-breaks-halo-light
