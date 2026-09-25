@@ -89,17 +89,28 @@ func seed_inv() -> void:
 	p.recompute_craft()
 	Game.message("Seeded: 5 oak logs in storage[0]")
 
+# AC-0308: explicit CONTRACT — (x, y, z) are FLAT block coords on the
+# home pair (the grid the recenter keys on). The player is placed in the
+# PLACED world at world_pos_of_flat(x,y,z) and the recenter centers the
+# band on the same flat coords. At the +Y pole flat == global to mm, so
+# every pre-existing caller (all in the spawn window) is unchanged.
 func teleport(x, y, z) -> void:
 	if Game.player == null:
 		return
-	Game.player.position = Vector3(x, y, z)
+	if Game.world != null:
+		Game.player.position = Game.world.world_pos_of_flat(float(x), float(y), float(z))
+	else:
+		Game.player.position = Vector3(x, y, z)
 	if Game.world != null:
 		Game.world.recenter(x, z)
 
 func aim_at(x, y, z) -> void:
 	if Game.player == null:
 		return
-	Game.player.position = Vector3(x, y - Game.player.EYE, z)
+	if Game.world != null:
+		Game.player.position = Game.world.world_pos_of_flat(float(x), float(y - Game.player.EYE), float(z))
+	else:
+		Game.player.position = Vector3(x, y - Game.player.EYE, z)
 	Game.player.look(0.0, 0.0)
 	if Game.world != null:
 		Game.world.recenter(x, z)

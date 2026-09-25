@@ -635,6 +635,13 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _sphere_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "consumers":
+			# AC-0308: the sphere-consumers probe (P3 of AC-0144) — the
+			# mine/place/step gate at several positions. Run at
+			# AWECRAFT_RADIUS=16 (the r16 band reaches the gate positions).
+			await _consumers_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "lightaudit":
 			await _lightaudit_test(spawn)
 			return
@@ -22933,7 +22940,13 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 	var cross_pcz: Array = []
 	var wall_keys: Array = []
 	var wall_ever_built: Dictionary = {}
-	var prev_pcx := int(floorf(p.position.x / 16.0))
+	# AC-0308: the band is FLAT-centered (the recenter contract takes flat
+	# coords) — derive the player's chunk from the FLAT position so the
+	# crossing census measures the same chunk World.recenter keys on (the
+	# global derivation disagrees by the in-band folded-net residual within
+	# ~5 cm of a seam crossing).
+	var pfp0: Vector3 = world.flat_of_world_pos(p.position)
+	var prev_pcx := int(floorf(pfp0.x / 16.0))
 	var prev_keys: Dictionary = {}
 	for key in world.chunks:
 		prev_keys[key] = true
@@ -22969,8 +22982,9 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		if _framelog:
 			print("FLOG %d %d %d" % [walk_frames, fms, fe])
 		walk_frames += 1
-		var cx_now := int(floorf(p.position.x / 16.0))
-		var cz_now := int(floorf(p.position.z / 16.0))
+		var pfp: Vector3 = world.flat_of_world_pos(p.position)  # AC-0308 (flat chunk)
+		var cx_now := int(floorf(pfp.x / 16.0))
+		var cz_now := int(floorf(pfp.z / 16.0))
 		if walk_frames % count_every == 0:
 			var cur_keys: Dictionary = {}
 			var cur_chunks: Dictionary = {}
@@ -24623,6 +24637,466 @@ func _sphere_test(spawn: Vector3) -> void:
 	ok = ok and out["home_bedrock_ok"] and out["home_spawn_top_ok"] and out["home_spawn_solid"] and out["home_spawn_above_air"]
 	out["ok"] = ok
 	Debug.result(out)
+
+
+# --- AC-0308: the sphere-consumers probe (P3 of AC-0144) ---------------
+# The mine/place/step evidence the ticket gates on: at several FLAT
+# positions — the x=0 midline fold, high latitude (axial, the r16 band
+# edge), and high latitude + fold combined — the player teleports
+# (Debug.teleport's flat contract), stands upright on the ground
+# (is_on_floor + camera up ≈ the radial), WALKS across chunk seams
+# (per-frame on-floor census — the no-fall-through proof), MINES the
+# block it aims (the flat-frame DDA must hit exactly the aimed cell),
+# and PLACES a block on the aimed face. The mined cell is RESTORED —
+# the terrain exits pristine (the genhash gate). Step/mine/place use
+# the game's own paths (Input + start_mine/place), never substitutes.
+func _consumers_test(spawn: Vector3) -> void:
+	var out := {}
+	var ok := true
+	Game.mode = "play"
+	world.recenter(spawn.x, spawn.z, true)
+	await main._await_sim_band(spawn, 3000)
+	var p = main._spawn_player()
+	# AC-0308: hover while the band moves — a grounded player whose ground
+	# chunk is freed by a search recenter falls out of the world (the
+	# band-abandonment kill); in fly mode the player is gravity-free and
+	# the void test never trips (it never descends).
+	p.set_fly(true)
+	var t0 := Time.get_ticks_msec()
+	# flat positions, all inside the r16 band (256 m from the pole):
+	#   midline_fold  the x=0 face-0/face-1 fold at low latitude
+	#   highlat_axial the r16-edge chunk seam, ~3.6 deg from the pole
+	#   highlat_fold  the fold AT high latitude (the worst in-band combo)
+	var positions: Array = [
+		{"tag": "midline_fold", "fx": -2, "fz": 60, "fold": true},
+		{"tag": "highlat_axial", "fx": 248, "fz": 0, "fold": false},
+		{"tag": "highlat_fold", "fx": -3, "fz": 240, "fold": true},
+	]
+	var per: Array = []
+	for pos in positions:
+		var r: Dictionary = await _consumers_probe_one(p, pos)
+		per.append(r)
+		ok = ok and bool(r.get("ok", false))
+	out["positions"] = per
+	out["ms"] = Time.get_ticks_msec() - t0
+	out["ok"] = ok
+	Debug.result(out)
+
+
+func _consumers_probe_one(p: Node3D, pos: Dictionary) -> Dictionary:
+	var r := {}
+	var fx := int(pos["fx"])
+	var fz := int(pos["fz"])
+	var fold: bool = bool(pos["fold"])
+	# 0) CENTER THE BAND on the position and wait for its column data —
+	# surface_top reads the flat grid, which is air until the band's data
+	# lands. The terrain is static (seed), so the first clear line found
+	# is deterministic per seed.
+	# hover for the search: the band recenters onto the candidate, leaving
+	# the player's ground freed — a grounded player falls out of the world
+	# (the band-abandonment kill). The teleport below restores real physics.
+	p.set_fly(true)
+	world.recenter(fx, fz, true)
+	var wt := 0
+	while wt < 1500 and world.surface_top(fx, fz) <= 0:
+		await get_tree().physics_frame
+		wt += 1
+	# WALK LINE: +x (a fold position MUST walk +x — only that direction
+	# crosses the x=0 fold); if +x is blocked and the position is not a
+	# fold, -x; if the line is blocked, slide z in 8 m steps alternating
+	# +z/-z until one opens. The line (18 m) must be walkable: no rise
+	# (integer terrain: any rise is >= 1 m, above the 0.5 m auto-step),
+	# no drop deeper than 3 m (fall damage + probe noise), and no solid /
+	# water / lava in the body zone (feet + head cells) of any column —
+	# a trunk or lake on the path stops or kills the walker.
+	var fz_use := fz
+	var dirx := 1
+	var found := false
+	var top := 0
+	var zt := fz
+	for trial in range(0, 32):
+		if trial > 0:
+			zt = fz + ((trial + 1) / 2) * 8 * (1 if (trial % 2) == 1 else -1)
+		if trial > 0:
+			world.recenter(fx, zt, true)
+			var w2 := 0
+			while w2 < 1500 and world.surface_top(fx, zt) <= 0:
+				await get_tree().physics_frame
+				w2 += 1
+		# the LINE's data must also be in before it is evaluated: an
+		# ungenerated column reads surface_top = 0, which the walkability
+		# check accepts as a "drop to nothing" — the first real-data run
+		# walked through an ungenerated column and a 3 m wall materialised
+		# mid-walk (below_max 3.12). The line columns sit inside the
+		# recenter's data band, so they land within a few frames.
+		for s in range(0, 20):
+			var wla := 0
+			while wla < 300 and world.surface_top(fx + s, zt) <= 0:
+				await get_tree().physics_frame
+				wla += 1
+			var wlb := 0
+			while wlb < 300 and world.surface_top(fx - s, zt) <= 0:
+				await get_tree().physics_frame
+				wlb += 1
+		var t0: int = world.surface_top(fx, zt)
+		# reject submerged surfaces: water (5) or lava (24) at feet level
+		if t0 <= 0 or world.get_block(fx, t0 + 1, zt) == 5 or world.get_block(fx, t0 + 1, zt) == 24:
+			continue
+		# head clearance at the standing column
+		var clear := true
+		for dy in range(1, 4):
+			var hb: int = world.get_block(fx, t0 + dy, zt)
+			if hb != 0 and Data.block(hb) != null and bool(Data.block(hb).solid):
+				clear = false
+		if not clear:
+			continue
+		# walkability prefix over the line (see the WALK LINE comment
+		# above): the prefix must be long enough for the walk to clear
+		# the position's required seam (the fold for fold positions, the
+		# next chunk boundary otherwise) with a 2-column margin — beyond
+		# that the walk may stop against a wall (the probe measures the
+		# actual walk; the gate is the seam crossing, not the length).
+		var Lx: int = _consumers_line_prefix(fx, zt, 1, t0, _consumers_min_len(fx, 1, fold))
+		if Lx > 0:
+			dirx = 1
+			fz_use = zt
+			top = t0
+			found = true
+			break
+		if fold:
+			continue
+		var Lx2: int = _consumers_line_prefix(fx, zt, -1, t0, _consumers_min_len(fx, -1, fold))
+		if Lx2 > 0:
+			dirx = -1
+			fz_use = zt
+			top = t0
+			found = true
+			break
+	if not found:
+		r["ok"] = false
+		r["why"] = "no_walkable_line"
+		return r
+	# COLLISION WAIT — an unbuilt chunk is a hole in the world: wait for
+	# the standing chunk and the two chunks the walk line crosses (the
+	# walk is ~18 m, the seam census is only valid with bodies underfoot).
+	var cx0: int = int(floorf((float(fx) + 0.5) / 16.0))
+	var cz0: int = int(floorf((float(fz_use) + 0.5) / 16.0))
+	for s in [0, 8, 16]:
+		var k: String = world._key(cx0 + int(floorf((float(dirx) * s + 0.5) / 16.0)), cz0)
+		var wb := 0
+		while wb < 1500:
+			var cn = world.chunks.get(k)
+			if cn != null and bool(cn.mesh_built):
+				break
+			await get_tree().physics_frame
+			wb += 1
+	r["pos"] = [fx, top, fz_use]
+	r["dir"] = dirx
+	# 1) TELEPORT + FLOOR + UPRIGHT — Debug.teleport contract = flat args;
+	# feet at top+1 = exactly on the surface of the chosen face.
+	Debug.teleport(float(fx) + 0.5, float(top) + 1.0, float(fz_use) + 0.5)
+	p.set_fly(false)  # real physics: floor check, walk, mine, place
+	var floor_frames := 0
+	while floor_frames < 1500 and not p.is_on_floor():
+		await get_tree().physics_frame
+		floor_frames += 1
+	for i in 4:  # settle
+		await get_tree().physics_frame
+	r["floor_ok"] = p.is_on_floor()
+	r["floor_frames"] = floor_frames
+	r["settle"] = p.position.distance_to(Vector3(p.position.x, float(top) + 1.0, p.position.z))
+	p.look(0.0, 0.0)
+	for i in 3:
+		await get_tree().physics_frame
+	var radial: Vector3 = (p.position - Vector3(0.0, -4000.0, 0.0)).normalized()
+	var cam_up: Vector3 = p.camera.global_transform.basis.y
+	var up_dot := radial.dot(cam_up)
+	r["up_dot"] = up_dot
+	# the placement dip at this position (flat surface height minus the
+	# placed global y — how far below the flat plane the ground actually is)
+	r["dip_m"] = roundf((float(top) + 1.0 - p.position.y) * 100.0) / 100.0
+	if not p.is_on_floor() or up_dot < 0.999:
+		r["ok"] = false
+		return r
+	# 2) STEP — walk across seam(s) in dirx (the line was pre-verified in
+	# step 0): the fold positions cross the x=0 fold (dirx = +1); the axial
+	# position crosses the r16-edge chunk seam.
+	var yaw_t := atan2(-float(dirx), 0.0)
+	p.look(yaw_t, 0.0)
+	for i in 4:
+		await get_tree().physics_frame
+	Input.action_press("move_forward")
+	var h0: float = world.flat_of_world_pos(p.position).y
+	var on_floor_end := true
+	var air_run := 0
+	var air_run_max := 0
+	var dh_max := 0.0
+	var below_max := 0.0  # the fall-through metric: feet inside the terrain
+	var pcx0 := int(floorf(world.flat_of_world_pos(p.position).x / 16.0))
+	var pcz0 := int(floorf(world.flat_of_world_pos(p.position).z / 16.0))
+	var seams := 0
+	var frames := 0
+	while frames < 260:
+		await get_tree().physics_frame
+		frames += 1
+		if p.is_on_floor():
+			air_run = 0
+		else:
+			air_run += 1
+			air_run_max = maxi(air_run_max, air_run)
+		var fp: Vector3 = world.flat_of_world_pos(p.position)
+		dh_max = maxf(dh_max, absf(fp.y - h0))
+		var col_top: int = world.surface_top(int(floorf(fp.x)), int(floorf(fp.z)))
+		below_max = maxf(below_max, float(col_top) + 1.0 - fp.y)
+		var pcx1 := int(floorf(fp.x / 16.0))
+		var pcz1 := int(floorf(fp.z / 16.0))
+		if pcx1 != pcx0 or pcz1 != pcz0:
+			seams = maxi(seams, absi(pcx1 - pcx0) + absi(pcz1 - pcz0))
+			pcx0 = pcx1
+			pcz0 = pcz1
+	Input.action_release("move_forward")
+	for i in 8:
+		await get_tree().physics_frame
+	var fp_end: Vector3 = world.flat_of_world_pos(p.position)
+	var moved := Vector2(fp_end.x, fp_end.z).distance_to(Vector2(float(fx) + 0.5, float(fz_use) + 0.5))
+	# no fall-through: the feet are never more than half a cell inside the
+	# terrain (a real fall-through keeps the feet below the ground for the
+	# whole descent); a short slope-hop stays airborne (air_run) but never
+	# below.
+	var step_ok: bool = p.is_on_floor() and below_max < 0.5 and float(p.hp) >= 20.0 and seams >= 1 and moved > 2.0
+	if fold:
+		# the fold itself must be crossed: the flat x sign flipped
+		step_ok = step_ok and fp_end.x > 0.0
+	r["step"] = {
+		"dir": [dirx, 0], "frames": frames,
+		"moved": roundf(moved * 100.0) / 100.0,
+		"seams_crossed": seams,
+		"on_floor_end": p.is_on_floor(),
+		"air_run_max": air_run_max,
+		"dh_max": roundf(dh_max * 100.0) / 100.0,
+		"below_max": roundf(below_max * 100.0) / 100.0,
+		"hp": p.hp,
+		# forensics (what stopped a short walk): the flat end position and
+		# the ground/block just ahead
+		"end": [roundf(fp_end.x * 10.0) / 10.0, roundf(fp_end.y * 10.0) / 10.0, roundf(fp_end.z * 10.0) / 10.0],
+		"ahead_top": world.surface_top(int(floorf(fp_end.x + float(dirx) * 0.5)), int(floorf(fp_end.z))),
+		"ahead_feet": world.get_block(int(floorf(fp_end.x + float(dirx) * 0.5)), int(floorf(fp_end.y)), int(floorf(fp_end.z))),
+	}
+	r["step_ok"] = step_ok
+	if not step_ok:
+		r["ok"] = false
+		return r
+	# 3) MINE — a mineable solid in the walk half-plane (hard <= 2.0:
+	# dirt/grass/sand/stone/cobble — the local ground at high latitude
+	# is stone, and the bare-hand mine of a 2.0-hard block is ~2 s,
+	# inside the 6 s budget). The probe aims with the GAME's own look
+	# (column-frame yaw/pitch) and asserts the game's flat-frame DDA
+	# hits exactly that cell — the "placed where I am not aiming" gate.
+	var eye_w: Vector3 = p.camera.global_position
+	var eye_f: Vector3 = world.flat_of_world_pos(eye_w)
+	var target := Vector3i.ZERO
+	var target_id := 0
+	var mine_dir := Vector3.ZERO  # the flat ray direction that found it
+	var mine_normal := Vector3i(0, 0, 0)  # the face the game's DDA hit
+	var dirs3: Array = [
+		Vector3(1.0, 0.0, 0.0),
+		Vector3(1.0, -0.18, 0.0).normalized(),
+		Vector3(1.0, -0.35, 0.0).normalized(),
+		Vector3(0.0, 0.0, 1.0),
+		Vector3(0.0, 0.0, -1.0),
+	]
+	var mine_hits: Array = []
+	for d3 in dirs3:
+		var dh: Dictionary = VoxelMath.raycast_blocks(eye_f, d3, 5.5, world.get_block)
+		if dh.hit:
+			var bi := int(dh.id)
+			mine_hits.append(bi)
+			var binfo = Data.block(bi)
+			if binfo != null and bool(binfo.solid) and float(binfo.get("hard", 1e9)) <= 2.0:
+				target = Vector3i(dh.cell)
+				target_id = bi
+				mine_dir = d3
+				break
+	if target == Vector3i.ZERO:
+		r["ok"] = false
+		r["why"] = "no_mineable_target"
+		r["mine_hits"] = mine_hits
+		return r
+	var aim := _consumers_aim(p, target, target_id, eye_w)
+	p.look(aim["yaw"], aim["pitch"])
+	for i in 3:
+		await get_tree().physics_frame
+	var h1: Dictionary = p.aim_hit()
+	var mine_aim_ok: bool = bool(h1.hit) and h1.cell == target and int(h1.id) == target_id
+	mine_normal = h1.normal
+	var mt0 := Time.get_ticks_msec()
+	p.start_mine()
+	var mwait := 0
+	while mwait < 6000 and world.get_block(target.x, target.y, target.z) != 0:
+		await get_tree().physics_frame
+		mwait += 16
+	p.release_mine()
+	for i in 3:
+		await get_tree().physics_frame
+	var mine_ok: bool = world.get_block(target.x, target.y, target.z) == 0
+	r["mine"] = {"ok": mine_ok, "aim_ok": mine_aim_ok,
+		"cell": [target.x, target.y, target.z], "id": target_id,
+		"ms": Time.get_ticks_msec() - mt0}
+	if not mine_ok or not mine_aim_ok:
+		r["ok"] = false
+		return r
+	# 4) PLACE — cobblestone (9) on the aimed face: the mined hole is now
+	# air; aim a solid neighbour so hit.cell + hit.normal == the hole.
+	p.inv_add(9, 1)
+	p.sel = main._slot_of(p, 9)
+	var hole := target
+	# 4) PLACE — the mined hole is now air. Primary path: re-aim along
+	# the MINE ray — the ray passes straight through the (now air) hole
+	# and hits the block behind it on the hole-adjacent face: exactly
+	# what a player does (keep looking where you mined, then place).
+	# Fallback: the nearest solid neighbour whose hole-adjacent face is
+	# eye-side (the ray must hit that face: hit.cell + normal == hole).
+	# the block BEHIND the hole along the mine ray: the face the mine
+	# ray hit points toward the eye, so the ray's continuation enters
+	# the hole on the opposite side
+	var nb: Vector3i = hole - mine_normal
+	var nb_id: int = world.get_block(nb.x, nb.y, nb.z)
+	var aim2: Dictionary
+	if nb_id != 0:
+		aim2 = _consumers_aim_dir(p, mine_dir)
+	else:
+		nb = Vector3i.ZERO
+		var nb_d := 1e9
+		for nd in [Vector3i(-1, 0, 0), Vector3i(0, -1, 0), Vector3i(1, 0, 0),
+				Vector3i(0, 1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+			var nc: Vector3i = hole + nd
+			var bid2: int = world.get_block(nc.x, nc.y, nc.z)
+			if bid2 != 0:
+				var cw: Vector3 = world.world_pos_of_flat(float(nc.x) + 0.5, float(nc.y) + 0.5, float(nc.z) + 0.5)
+				# the eye must sit on the hole side of the neighbour's
+				# hole-adjacent face (or the ray hits the other face)
+				if (eye_w - cw).dot(Vector3(nd.x, nd.y, nd.z)) >= 0.0:
+					continue
+				var d2: float = cw.distance_to(eye_w)
+				if d2 < nb_d and d2 <= 4.5:
+					nb_d = d2
+					nb = nc
+		if nb == Vector3i.ZERO:
+			r["ok"] = false
+			r["why"] = "no_place_neighbour"
+			return r
+		aim2 = _consumers_aim(p, nb, world.get_block(nb.x, nb.y, nb.z), eye_w)
+	p.look(aim2["yaw"], aim2["pitch"])
+	for i in 3:
+		await get_tree().physics_frame
+	var h2: Dictionary = p.aim_hit()
+	var place_aim_ok: bool = bool(h2.hit) and (h2.cell + h2.normal) == hole
+	p.place()
+	for i in 3:
+		await get_tree().physics_frame
+	var placed: int = world.get_block(hole.x, hole.y, hole.z)
+	var place_ok: bool = placed == 9
+	r["place"] = {"ok": place_ok, "aim_ok": place_aim_ok,
+		"cell": [hole.x, hole.y, hole.z], "id": placed,
+		"nb": [nb.x, nb.y, nb.z],
+		"yaw": roundf(float(aim2["yaw"]) * 1000.0) / 1000.0,
+		"pitch": roundf(float(aim2["pitch"]) * 1000.0) / 1000.0,
+		"hit": bool(h2.hit),
+		"hit_cell": [int(h2.cell.x), int(h2.cell.y), int(h2.cell.z)] if h2.hit else null,
+		"hit_normal": [int(h2.normal.x), int(h2.normal.y), int(h2.normal.z)] if h2.hit else null}
+	if not place_ok or not place_aim_ok:
+		r["ok"] = false
+		return r
+	# 5) RESTORE — put the mined block back (the terrain exits pristine).
+	var restore_ok: bool = world.set_block(hole.x, hole.y, hole.z, target_id)
+	r["restore_ok"] = restore_ok
+	r["ok"] = restore_ok
+	return r
+
+
+# AC-0308: compute the (yaw, pitch) that makes the GAME's aim (the
+# column-frame convention: yaw about the local radial, pitch about the
+# local X) point from the eye at the centre of a flat cell.
+func _consumers_line_prefix(fx: int, zt: int, dirx: int, t0: int, min_len: int) -> int:
+	# AC-0308: the longest walkable prefix of the line from (fx, zt)
+	# along dirx (up to 20 columns — the walk runs ~18.6 m), 0 if the
+	# prefix is shorter than min_len. Walkability, per column:
+	#   - no rise: integer terrain makes any rise >= 1 m, above the
+	#     player's 0.5 m auto-step (a 1 m step is a wall on foot);
+	#   - drops <= 3 m: deeper falls risk damage and swamp the
+	#     fall-through metric with a free-fall dip;
+	#   - the body zone (feet cell sh+1, head cell sh+2) is clear of
+	#     solid / water / lava: a trunk blocks the path, a lake drowns
+	#     the walker (found live: the first probe drowned beside the
+	#     walk line mid-search).
+	var prev_h: int = t0
+	var L := 0
+	for s in range(0, 20):
+		var colx: int = fx + s * dirx
+		var sh: int = world.surface_top(colx, zt)
+		if s > 0 and (sh > prev_h or prev_h - sh > 3):
+			break
+		prev_h = sh
+		if not _consumers_cell_walkable(world.get_block(colx, sh + 1, zt)) \
+				or not _consumers_cell_walkable(world.get_block(colx, sh + 2, zt)):
+			break
+		L = s + 1
+	return L if L >= min_len else 0
+
+
+func _consumers_min_len(fx: int, dirx: int, fold: bool) -> int:
+	# the prefix length the walk needs: fold positions must cross the
+	# x=0 fold; any position must cross a 16 m chunk seam. Add a 3-column
+	# margin past the seam so the crossing is deep inside the walk, not
+	# at its last frame.
+	var x0: float = float(fx) + 0.5
+	if fold:
+		return int(ceilf(0.0 - x0)) + 3
+	var bnd: float = (floorf(x0 / 16.0) + 1.0) * 16.0 if dirx > 0 else floorf(x0 / 16.0) * 16.0
+	return int(ceilf(absf(bnd - x0))) + 3
+
+
+func _consumers_cell_walkable(bid: int) -> bool:
+	# air is walkable; non-solid vegetation (leaves, flowers) is passable;
+	# solids and fluids (water 5, lava 24) are not
+	if bid == 0:
+		return true
+	if bid == 5 or bid == 24:
+		return false
+	var info = Data.block(bid)
+	if info == null:
+		return false
+	return not bool(info.solid)
+
+
+func _consumers_aim_dir(p: Node3D, dir_f: Vector3) -> Dictionary:
+	# AC-0308: the look whose aim ray runs along dir_f (a FLAT/column-
+	# frame direction, like the probe's DDA search directions). Same
+	# solve as _consumers_aim, but the direction is given directly —
+	# used to re-run the mine ray through the fresh hole on place.
+	var dl: Vector3 = dir_f.normalized()
+	var ay := atan2(-dl.x, -dl.z)
+	var ap: float = asin(clampf(dl.y, -1.0, 1.0))
+	ap = clampf(ap, -p.PITCH_LIMIT, p.PITCH_LIMIT)
+	return {"yaw": ay, "pitch": ap}
+
+
+func _consumers_aim(p: Node3D, cell: Vector3i, _id: int, eye_w: Vector3) -> Dictionary:
+	# AC-0308: solve the look in the COLUMN frame. The rendered frame is
+	# col_basis * yaw and the camera looks down its -Z, so the direction
+	# to the cell, expressed in the column frame (dx, dy, dz), is met by
+	# yaw = atan2(-dx, -dz), pitch = asin(dy). NOT _col_frame(): it
+	# carries the CURRENT yaw, which would make the solve a relative
+	# correction on top of it instead of the absolute look we set.
+	var target_w: Vector3 = world.world_pos_of_flat(
+		float(cell.x) + 0.5, float(cell.y) + 0.5, float(cell.z) + 0.5)
+	var dir_w: Vector3 = (target_w - eye_w).normalized()
+	var dir_loc: Vector3 = p._col_basis().transposed() * dir_w
+	dir_loc = dir_loc.normalized()
+	var ay := atan2(-dir_loc.x, -dir_loc.z)
+	var ap: float = asin(clampf(dir_loc.y, -1.0, 1.0))
+	ap = clampf(ap, -p.PITCH_LIMIT, p.PITCH_LIMIT)
+	return {"yaw": ay, "pitch": ap}
 
 
 # AC-0306: the on-sphere great-circle arc (m) between two ADJACENT flat

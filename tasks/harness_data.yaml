@@ -49,6 +49,16 @@ modes:
     envs: —
     wall: 3 s (standalone) / 1.3 s battery
     notes: 'known-stable: `drop_spawned`/`place_ok` true'
+  consumers:
+    entry: '`_consumers_test` (AC-0308)'
+    tests: |-
+      sphere-consumers probe (P3 of AC-0144): at 3 flat positions (the x=0 midline fold; high latitude axial at the r16 band edge; high latitude + fold) — teleport, upright on the ground (is_on_floor + camera up ≈ the radial), walk across chunk seams (per-frame on-floor census — the no-fall-through proof), mine the exact cell the flat-frame DDA aims at, place cobblestone on the aimed face; the mined cell is restored (terrain exits pristine)
+    result_fields: |-
+      `ok`, `positions` (per position: `pos` [fx,top,fz], `dir`, `dip_m`, `floor_ok`, `floor_frames`, `settle`, `up_dot`, `step` {`dir`, `frames`, `moved`, `seams_crossed`, `on_floor_end`, `air_run_max`, `dh_max`, `below_max`, `hp`, `end`, `ahead_top`, `ahead_feet`}, `step_ok`, `mine` {`ok`, `aim_ok`, `cell`, `id`, `ms`} (+ `mine_hits` on failure), `place` {`ok`, `aim_ok`, `cell`, `id`, `nb`, `yaw`, `pitch`, `hit`, `hit_cell`, `hit_normal`}, `restore_ok`, `ok`, + `why` on failure), `ms`
+    envs: '`AWECRAFT_LOGIC=consumers` (+ `AWECRAFT_RADIUS=16`)'
+    wall: ~30 s
+    notes: |-
+      AC-0308 gate (spec.html): mine/place/step at several positions INCLUDING high latitude and the x=0 midline; no fall-through. BATTSKIP (multi-position teleports — out of battery scope); the gate job re-runs it fresh. Step/mine/place use the GAME's own paths (Input + start_mine/place); the probe's only DDA is its target search (`VoxelMath.raycast_blocks`, the game's own function). Terrain restored before exit — the genhash 25/25 is the pristine proof
   craft:
     entry: '`_craft_test`'
     tests: |-

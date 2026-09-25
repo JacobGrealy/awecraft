@@ -152,9 +152,11 @@ func _ready() -> void:
 		# sphere conversion (mm-level near the spawn, exact by contract).
 		var sp: Vector3 = Game.world.spawn_point()
 		position = Game.world.world_pos_of_flat(sp.x, sp.y, sp.z)
-		_chunk_x = int(floorf(position.x / 16.0))
-		_chunk_z = int(floorf(position.z / 16.0))
-		_chunk_y = int(floorf(position.y / 16.0))  # AC-0234
+		# AC-0308: track the player's column in FLAT coords (the recenter
+		# contract and the column frame both key on flat).
+		_chunk_x = int(floorf(sp.x / 16.0))
+		_chunk_z = int(floorf(sp.z / 16.0))
+		_chunk_y = int(floorf(sp.y / 16.0))  # AC-0234
 	_init_inv()
 	_build_highlight()
 	_build_held()
@@ -471,6 +473,14 @@ func _physics_process_impl(dt: float) -> void:
 	# sprint speed. Flight/swim-up keep their own speeds.
 	if crouched and not flying and not swim_up:
 		speed = WALK * CROUCH_SPEED
+	# AC-0308: the player lives in its column's rigid frame (see
+	# _col_basis): local +Y = the radial at the column centre (the normal
+	# of the ground facet underfoot). The horizontal target (tx, tz) below
+	# is already in that column frame (the input rotated by -yaw), so the
+	# velocity maps with the COLUMN basis only — _col_frame() would apply
+	# the yaw a second time. CharacterBody3D velocity is global space, so
+	# lerp in local and map back (gravity runs on the local -Y = local
+	# radial, not global -Y — the flat Y-up assumption, closed).
 	var sin_y := sin(_yaw)
 	var cos_y := cos(_yaw)
 	var tx := (-sin_y * iz + cos_y * ix) * speed
@@ -482,8 +492,11 @@ func _physics_process_impl(dt: float) -> void:
 		k = 4.0
 	else:
 		k = 12.0
-	velocity.x = lerpf(velocity.x, tx, minf(1.0, k * dt))
-	velocity.z = lerpf(velocity.z, tz, minf(1.0, k * dt))
+	var b: Basis = _col_basis()
+	# orthonormal basis: the inverse rotation is the transpose
+	var vloc: Vector3 = b.transposed() * velocity
+	vloc.x = lerpf(vloc.x, tx, minf(1.0, k * dt))
+	vloc.z = lerpf(vloc.z, tz, minf(1.0, k * dt))
 	if flying:
 		var vy := 0.0
 		if not cg and Input.is_action_pressed("jump"):
@@ -498,22 +511,23 @@ func _physics_process_impl(dt: float) -> void:
 		var fly_vs := WALK * fly_mult_vs * FLY_VS
 		if fly_sprint:
 			fly_vs *= SPRINT / WALK
-		velocity.y = lerpf(velocity.y, vy * fly_vs, minf(1.0, 10.0 * dt))
+		vloc.y = lerpf(vloc.y, vy * fly_vs, minf(1.0, 10.0 * dt))
 	elif in_water:
-		velocity.y = lerpf(velocity.y, -3.5, minf(1.0, 4.0 * dt))
+		vloc.y = lerpf(vloc.y, -3.5, minf(1.0, 4.0 * dt))
 		if not cg and Input.is_action_pressed("jump"):
-			velocity.y = lerpf(velocity.y, 4.5, minf(1.0, 8.0 * dt))
+			vloc.y = lerpf(vloc.y, 4.5, minf(1.0, 8.0 * dt))
 	elif in_lava:
-		velocity.y = lerpf(velocity.y, -0.7, minf(1.0, 3.0 * dt))
+		vloc.y = lerpf(vloc.y, -0.7, minf(1.0, 3.0 * dt))
 		if not cg and Input.is_action_pressed("jump"):
-			velocity.y = lerpf(velocity.y, 1.4, minf(1.0, 6.0 * dt))
+			vloc.y = lerpf(vloc.y, 1.4, minf(1.0, 6.0 * dt))
 	elif swim_up and (not cg and Input.is_action_pressed("jump")):
-		velocity.y = lerpf(velocity.y, 4.5, minf(1.0, 8.0 * dt))
+		vloc.y = lerpf(vloc.y, 4.5, minf(1.0, 8.0 * dt))
 	else:
-		velocity.y -= GRAV * dt
+		vloc.y -= GRAV * dt
 		if not cg and Input.is_action_pressed("jump") and is_on_floor():
-			velocity.y = JUMP
+			vloc.y = JUMP
 			fall_start = -1.0
+	velocity = b * vloc
 	# AC-0267: EDGE GUARD - crouched on the ground: if the block under the
 	# forward edge (0.45 ahead of the center along the INTENDED direction,
 	# at foot level) is air, strip the velocity's component along that
@@ -525,20 +539,56 @@ func _physics_process_impl(dt: float) -> void:
 		var fl := f.length()
 		if fl > 0.001:
 			f = f / fl
-			var by := int(floorf(position.y - 0.1))
-			var ex := position.x + f.x * 0.45
-			var ez := position.z + f.y * 0.45
-			var edge_open: bool = Game.world == null or Game.world.get_block(int(floorf(ex)), by, int(floorf(ez))) == 0
+			# AC-0308: probe the forward edge in the player's LOCAL frame
+			# (tangent-plane horizontal) and read the block in FLAT coords
+			# (the grid is the flat net — the global read stopped agreeing
+			# a few hundred metres from the pole).
+			var probe: Vector3 = position + b * Vector3(f.x * 0.45, -0.1, f.y * 0.45)
+			var ep: Vector3 = Game.world.flat_of_world_pos(probe) if Game.world != null else probe
+			var edge_open: bool = Game.world == null or Game.world.get_block(int(floorf(ep.x)), int(floorf(ep.y)), int(floorf(ep.z))) == 0
 			if edge_open:
-				var comp := Vector2(velocity.x, velocity.z).dot(f)
+				var comp := Vector2(vloc.x, vloc.z).dot(f)
 				if comp > 0.0:
-					velocity.x -= f.x * comp
-					velocity.z -= f.y * comp
+					vloc.x -= f.x * comp
+					vloc.z -= f.y * comp
+					velocity = b * vloc
 	var was_ground := is_on_floor()
 	if flying:
 		fall_start = -1.0
 	elif not was_ground and velocity.y < 0.0 and fall_start < 0.0:
 		fall_start = flat_h  # AC-0307: flat height (the local surface curves)
+	# AC-0308: auto-step over the seam micro-step. The per-column rigid
+	# placement (AC-0307) leaves an irreducible folded-net residual of up
+	# to 5.4 cm between adjacent columns' top faces along the shared edge
+	# (in-band, the +/-320 m window); CharacterBody3D has no step offset,
+	# so a walker is stopped dead at every seam. Nudge the capsule onto a
+	# forward step of at most AUTO_STEP — measured in GLOBAL y (the exact
+	# physical rise); a real 1 m terrain step stays a wall (jumped, as
+	# before). The nudge lands the feet ~2 cm above the step top; gravity
+	# settles them.
+	if not flying and is_on_floor() and Game.world != null and (absf(tx) > 0.001 or absf(tz) > 0.001):
+		var ff := Vector2(tx, tz)
+		var fl := ff.length()
+		if fl > 0.001:
+			ff = ff / fl
+			var fpos: Vector3 = position + b * Vector3(ff.x * 0.6, 0.0, ff.y * 0.6)
+			var fp2: Vector3 = Game.world.flat_of_world_pos(fpos)
+			var fx2 := int(floorf(fp2.x))
+			var fz2 := int(floorf(fp2.z))
+			var ftop: int = Game.world.surface_top(fx2, fz2)
+			# the forward ground top EXACTLY ahead (flat→world is an exact
+			# inverse, 0.17 mm) — the physical rise the capsule will meet
+			var fwd_g: Vector3 = Game.world.world_pos_of_flat(fp2.x, float(ftop) + 1.0, fp2.z)
+			var step_h := fwd_g.y - position.y
+			# the residual varies continuously along the fold (down to sub-mm);
+			# ANY positive step under 0.5 m is stepped (sub-mm false positives
+			# from the conversion noise are harmless — the nudge just settles)
+			if step_h > 0.001 and step_h <= 0.5:
+				# head clearance above the step (capsule ~1.8 m)
+				var head_cell: int = Game.world.get_block(fx2, ftop + 2, fz2)
+				var head_solid := head_cell != 0 and Data.block(head_cell) != null and bool(Data.block(head_cell).solid)
+				if not head_solid:
+					position += b * Vector3(0.0, step_h + 0.02, 0.0)
 	move_and_slide()
 	# AC-0276: the sprint FOV kick (+10% while effectively sprinting on
 	# the ground OR while flying - the air sprint cue, lerp ~0.15 s;
@@ -778,7 +828,11 @@ func vm_refresh(force: bool = false) -> void:
 	if _vm_mats.is_empty():
 		return
 	var day := DayNight.day(Game.time_of_day)
-	var eye := Vector3i(int(floorf(position.x)), int(floorf(position.y + (camera.position.y if camera != null else EYE))), int(floorf(position.z)))
+	# AC-0308: the light grid is FLAT (per-column local space) — convert
+	# the eye's world position before sampling.
+	var _eye_w: Vector3 = position + Vector3(0.0, (camera.position.y if camera != null else EYE), 0.0)
+	var _eye_f: Vector3 = Game.world.flat_of_world_pos(_eye_w) if Game.world != null else _eye_w
+	var eye := Vector3i(int(floorf(_eye_f.x)), int(floorf(_eye_f.y)), int(floorf(_eye_f.z)))
 	var now := Time.get_ticks_msec()
 	if force or eye != _vm_eye_cell or now - _vm_light_ms >= 500:
 		var w = Game.world
@@ -1231,7 +1285,10 @@ func _update_sway(dt: float) -> void:
 
 
 func aim_dir() -> Vector3:
-	return (Basis.from_euler(Vector3(_pitch, _yaw, 0.0)) * Vector3(0.0, 0.0, -1.0)).normalized()
+	# AC-0308: the camera's WORLD direction — the player's column frame
+	# (see _col_frame) times the camera pitch, applied to the aim axis.
+	# Computed from the stored yaw/pitch (no transform-lag frame).
+	return (_col_frame() * (Basis.from_euler(Vector3(_pitch, 0.0, 0.0)) * Vector3(0.0, 0.0, -1.0))).normalized()
 
 
 func aim_hit() -> Dictionary:
@@ -1610,7 +1667,9 @@ func _update_interaction(dt: float) -> void:
 		if bool(Settings.values["hunger_enabled"]):
 			hunger = maxf(0.0, hunger - 0.1)
 		var is_pick := held_item != null and str(held_item.get("tool", "")) == "pick"
-		var center := Vector3(float(_mine_cell.x) + 0.5, float(_mine_cell.y) + 0.5, float(_mine_cell.z) + 0.5)
+		# AC-0308: the drop spawns in the PLACED world (spawn_drop takes a
+		# world position) — the mined cell is FLAT, convert.
+		var center: Vector3 = Game.world.world_pos_of_flat(float(_mine_cell.x) + 0.5, float(_mine_cell.y) + 0.5, float(_mine_cell.z) + 0.5)
 		for d in Data.block_drops(_mine_id, is_pick):
 			if randf() < float(d["ch"]):
 				Game.world.spawn_drop(int(d["id"]), center)
@@ -1629,9 +1688,13 @@ func _cycle_time() -> void:
 
 
 func _block_at(wx: float, wy: float, wz: float) -> int:
+	# AC-0308: world position -> FLAT before the grid read (the block grid
+	# is the flat net; the global-read leftovers AC-0307 documented —
+	# in-water / in-lava / head-in-water — are closed by this).
 	if Game.world == null:
 		return 0
-	return Game.world.get_block(int(floorf(wx)), int(floorf(wy)), int(floorf(wz)))
+	var f: Vector3 = Game.world.flat_of_world_pos(Vector3(wx, wy, wz))
+	return Game.world.get_block(int(floorf(f.x)), int(floorf(f.y)), int(floorf(f.z)))
 
 
 func _recenter() -> void:
@@ -1653,13 +1716,45 @@ func _recenter() -> void:
 		_chunk_x = pcx
 		_chunk_z = pcz
 		_chunk_y = pcy
+		# AC-0308: the basis follows the chunk frame — re-apply it the
+		# instant the chunk changes, not only on the next look event (a
+		# seam crossing without a look must not leave the old column's
+		# up vector in place).
+		_apply_rotation()
 		if Game.world != null:
 			Game.world.recenter(fp.x, fp.z, true, fp.y)
 
 
 func _apply_rotation() -> void:
-	rotation.y = _yaw
+	# AC-0308: camera up = the radial underfoot. The player's basis is its
+	# column's rigid frame (the same frame the ground facet, the collision
+	# bodies and the DDA flat-frame use) times the yaw; the camera pitch
+	# is unchanged (local X).
+	basis = _col_frame()
 	camera.rotation.x = _pitch
+
+
+func _col_basis() -> Basis:
+	# AC-0308: the pure column frame (no yaw) — the containing column's
+	# rigid placement (the _chunk_x/_chunk_z the recenter tracks in FLAT
+	# coords). The movement code lerps its velocity in THIS frame: the
+	# (tx, tz) target formula already rotates the input by -yaw into the
+	# column frame, so mapping the velocity with the full _col_frame()
+	# (column * yaw) applies the yaw TWICE — the probe walked 90 degrees
+	# off at yaw -pi/2. Crossing a seam, the frame changes by the facet
+	# dihedral (<=0.23 deg at R = 4000) — the same snap the ground facet
+	# underfoot makes.
+	if Game.world == null:
+		return Basis.IDENTITY
+	return Game.world._col_sphere_transform(_chunk_x, _chunk_z).basis
+
+
+func _col_frame() -> Basis:
+	# AC-0308: the player's RENDERED frame = the column frame spun by the
+	# look yaw around the local radial. The camera looks down its -Z, so
+	# the basis and the aim ray both ride this frame; the velocity lives
+	# in _col_basis() (see there for the double-rotation trap).
+	return _col_basis() * Basis.from_euler(Vector3(0.0, _yaw, 0.0))
 
 
 func _build_debug() -> void:

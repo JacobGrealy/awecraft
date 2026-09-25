@@ -196,6 +196,25 @@ Match these; do not improvise a different approach in a task.
   stays a gapless polyhedron of 16 m facets (physics = visuals; the flat pipeline
   is unchanged) and the terrain data does not move (genhash 25/25). Cross-face
   movement (faces 2–11) is AC-0309; the round-planet look is its own ticket.
+- **Player-on-sphere convention (AC-0308)**: the player's rendered frame is
+  `Player._col_frame()` = the column basis times the look yaw, so the camera up
+  is the column's +Y — the radial at the column centre = the normal of the
+  ground facet underfoot (within 0.115° of the radial at the player's exact
+  position; the `consumers` arm pins `up_dot ≥ 0.999`). **The velocity lives in
+  the COLUMN frame** (`Player._col_basis()`, no yaw): the `(tx, tz)` target
+  formula already rotates the input by −yaw into the column frame, so mapping
+  the lerp back with `_col_frame()` would apply the yaw TWICE (walking 90° off
+  at yaw −π/2 — found in bring-up); gravity likewise runs on the local −Y (the
+  local radial). Every data read from the player is in FLAT absolute coords —
+  `_block_at`, the crouch edge guard and `vm_refresh` convert world→flat
+  first; `Debug.teleport`/`aim_at` take FLAT arguments (their contract), and
+  the settings render-distance recenter converts to flat before calling.
+  **Auto-step**: the player auto-climbs any forward step ≤ 0.5 m — the
+  folded-net seam residual varies continuously along a seam (down to sub-mm),
+  so ANY positive step under 0.5 m is stepped; real 1 m terrain steps stay
+  walls and are climbed by jumping as before. Standing proof: the `consumers`
+  arm (`AWECRAFT_LOGIC=consumers`) — mine/place/step at the x=0 midline fold +
+  two high-latitude positions, the no-fall-through census, terrain restored.
 - **Collision**: player and mobs are `CharacterBody3D`; voxel collision is a **per-slab**
   `StaticBody3D` (24 per column) built in `chunk.gd _build_slab_collision` from the slab's
   opaque surface plus the flora CUTOUT surface (AC-0270 — leaves have collision; fluids and

@@ -301,7 +301,10 @@ func apply_render_distance() -> void:
 		var prev := int(Game.world.render_radius)
 		Game.world.render_radius = int(values["render_dist"])
 		if Game.player != null:
-			Game.world.recenter(Game.player.position.x, Game.player.position.z)
+			# AC-0308: recenter takes FLAT coords — the player position is
+			# global on the placed world; convert (mm-identical at the pole).
+			var fp: Vector3 = Game.world.flat_of_world_pos(Game.player.position)
+			Game.world.recenter(fp.x, fp.z)
 		Game.world.note_render_distance(prev)  # AC-0178: Options render_distance trigger
 		# AC-0263: the render edge moved — re-clamp the medium_start band
 		# and re-stamp the high/med edge, then the low-start floor.
