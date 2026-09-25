@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-25T12:23
+  updated_at: 2026-09-25T16:55
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0308
 - AC-0309
 - AC-0145
 - AC-0310
@@ -14568,11 +14567,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-17T18:37
-  updated_at: 2026-09-17T18:37
-  completed_at: null
+  updated_at: 2026-09-25T16:55
+  completed_at: 2026-09-25T16:55
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want mining, placing, walking, spawning and looking to keep working
@@ -14606,7 +14605,28 @@ intake:
 
     GATES: mine/place/step at several positions including high latitude and next to the x=0 midline; no
     fall-through; boundary r4 walk p95 holds against the standing band; full battery green (player, interact,
-    light, fluids, craft, settings).'
+    light, fluids, craft, settings).
+
+
+    CLOSED (commit 40da781). COORDINATOR VERIFICATION: the gates are green and, more importantly for a
+    consumers piece, the two things that could silently be wrong are both settled with evidence rather
+    than assertion. First, the DDA choice is STATED AND JUSTIFIED - the flat chunk-local frame wins because
+    the data and the axis-aligned steps exist only in the flat net, and the ticket quantifies the alternative''s
+    cost (a 3x3 column scan across 256 steps plus mid-ray lattice picks at the seam) instead of hand-waving
+    it, then proves the flat frame lands on the displayed cell within the 6 m reach with world_to_flat
+    exact to 0.17 mm; crucially the gate exercises the GAME''s own Player._flat_ray path rather than a
+    parallel one, so the arm cannot pass while the game path is broken. Second, the collision claim is
+    proved by measurement (no fall-through, below_max <= 0.05 m across every walk, the AC-0340 footprint
+    tripwire 0 at the boundary) rather than by a code reading. AND THE PIECE EARNED ITS KEEP BY FINDING
+    TWO REAL BUGS that no gate in the suite would have named: the velocity/yaw double rotation that made
+    the player walk 90 degrees off (found because the camera-up work forced the basis to be looked at),
+    and the folded-net seam micro-step that DEAD-STOPPED THE CAPSULE at every seam - a sub-millimetre
+    to 5.4 cm lip acting as an invisible wall, which is exactly the class of defect that a screenshot
+    cannot show and a walk test only shows as "the player sometimes stops". The auto-step fix (<= 0.5
+    m) is deliberately narrow so 1 m steps stay walls that must be jumped, i.e. it restores Minecraft
+    behaviour instead of removing an obstacle class. Genhash 25/25 across the piece confirms the consumers
+    changed nothing about the world, and the battery''s zero behavioural deltas against the AC-0360 baseline
+    is the right shape of evidence for a change that should be behaviour-PRESERVING off the sphere.'
   comments: []
 - id: AC-0309
   title: planet-p1a-cross-face-movement
