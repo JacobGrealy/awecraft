@@ -95,7 +95,7 @@ quits.
 | Source | Role |
 |---|---|
 | `awe_common.{h,cpp}` | shared helpers/registration |
-| `gen.cpp` | terrain, biome, cave and ore generation (the density-field generator) + the **AC-0290 classic carver pass** (the post-density room/trunk/canyon carve — see the carver bullet in §4); `generate_resl`'s `skip` arg: 0 = full / 1 = **band-A materialization fill** (no cave field, solid 0..H + aquifer + surface top + veg — the drain's high lane runs it on each band-A column's first mesh, AC-0312) / 2 = **far h-only** (AC-0284b: builds only the 3 surface fields + H/biome/top-block, NO slabs, ~92 µs/col vs ~1.7 ms full) |
+| `gen.cpp` | terrain, biome, cave and ore generation (the density-field generator) + the **AC-0290 classic carver pass** (the post-density room/trunk/canyon carve — see the carver bullet in §4) + the **AC-0292 P4 families** (vanilla pillars in the deep branch, big ore veins, the 3-D biome field → deepslate/dripstone/sculk/moss surface rules + the post-carve drip pass — see the AC-0292 bullet in §4); `generate_resl`'s `skip` arg: 0 = full / 1 = **band-A materialization fill** (no cave field, solid 0..H + aquifer + surface top + veg — the drain's high lane runs it on each band-A column's first mesh, AC-0312) / 2 = **far h-only** (AC-0284b: builds only the 3 surface fields + H/biome/top-block, NO slabs, ~92 µs/col vs ~1.7 ms full) |
 | `mesh.cpp` | chunk meshing (greedy/FACE-BLOCK path); the avg far emitters `AweMesh.h_avg_emit` / `low_emit_avg` at a grid G (4 or 8 — AC-0312's band C / band B), byte-identical to the slab emitter on the same fill (shared `avg_grid_emit`), with the WATER EXCEPTION (a water-topped cell emits its top face with the translucent water material — `top_water` + atlas-rect params) and the `AweMesh.sky_eff` heightmap-sky light/strips builder (band A + the G-grid avg lanes); the far-tier floor (AC-0331) as a `p_yfloor` param on all three (−1 = off): a post-fill mask in the shared `avg_grid_emit` tail (avg tiers) + the per-voxel row gate + si0 in `build_accs` (band A) — the fill loops and the float32 op order are untouched |
 | `strips.cpp` | strip meshing lane |
 | `chunk_io.cpp` | column/slab blob encode+decode, region disk I/O |
@@ -605,6 +605,34 @@ Match these; do not improvise a different approach in a task.
   that meanders out of its home chunk loses the neighbor-side portion (the vanilla seam), and the
   veg pass runs AFTER the carver (the ticket's ordering), so trees may grow into a freshly-carved
   opening.
+- **Pillars + veins + biome field + surface rules (AC-0292 — the cave series' finishing piece, FULL PATH ONLY)**: the
+  deep-branch density scan (k = H−y ≥ 16, K_CUT) reads one more term per block — the **vanilla pillars** expression
+  (Java 1.21.4 `caves/pillars` as-is): P = (2·Np + (−1−Nr))·(0.55+0.55·Nt)³ with Np = pillar noise {−7, [1,1],
+  xz 25.0, y 0.3} seed+320, Nr = rareness {−8, [1], 1.0} +321, Nt = thickness +322 (every ported source centered
+  2·(vn3−0.5)); P ≥ 0.03 makes the block PILLAR SOLID (the pillar term wins over the tunnel; it runs identically
+  in the veg-margin scan — 83% of the dense-pillar solids sit on the cheese-air side: "pillars in the cheese").
+  **Big ore veins** add density BLOBS to the thin `f_ore` speckle thresholds (which stay below): one vn3 field
+  (seed+323) with nested per-read thresholds y<16 coal 0.80 / y<42 iron 0.78 / y<60 diamond 0.76 — the largest
+  measured blob is 11,063 cells (the coal-seam family, seed 44, 11×11 window). The **3-D cave biome field** (one
+  vn3, seed+319, {−7, [1,1]}, xz 0.5 / y 0.5) value-maps to deep-dark (<0.40) / dripstone (0.40–0.60) / lush
+  (>0.60) — vanilla 1.21.4 `surface_rule`'s +64-shifted abs-y windows (deep-dark 1..63, dripstone 48..128,
+  lush 64..128) — is read per column into a 16-band table (one read per level) and applied in the fill:
+  **deepslate** (B_DEEPSLATE, id 32) at y<64 with a 64..71 blend from `rock_base` (seed+326; vanilla's
+  true-below-0/false-above-8 mapped onto our absolute y), **sculk** (35) in deep-dark cells (<0.10 gate,
+  seed+327) and **moss** (36) in lush cells (<0.06 gate, seed+328). A **post-carve drip pass** (dripstone
+  biome only, `g_t_drip_us` ~238 µs/chunk): stalactites (33; 35% column gate +330, length +332) hang from
+  cave ceilings into air, stalagmites (gate +331, length +335) rise from floors, and clay pools (34; 6%
+  column gate +329, depth rolls +334/+336) swap WATER cells only — the aquifer tables never move (the AC-0342
+  land-dry contract re-measured green: land open water 0, ocean surface 1081/1081). The full path's **bedrock
+  band** y 0..4 = B_BEDROCK — the aquifer lava floor y≤10 supersedes it per block (the lava layer reads on
+  top); the skip/far paths stay vein/pillar/biome-free by construction (y<8 / y0 bit-exact — no P4 source is
+  ever read there), so H / the far payload / the promotion contract are untouched (thash `8df7aeb4…0dc4f11`
+  byte-identical + farab `h_mismatch` 0; genhash rebased 25/25 at AC-0292). New block ids 32–36 in `data.gd`
+  (table + atlas tiles from the Faithful 32x pack — all solid, drop themselves; pick 32/33/35/36, shovel 34).
+  Noise slots 319, 320–323, 326–336 (333 obsidian untouched); the dense sources `density_pillar` /
+  `density_vein` / `density_biome` are genprobe-mirrored as PERMANENT lockstep blocks (standing 10300/10300
+  f64-exact). Cost: per-chunk 4532→5711 µs (+26%; field +456 — three new FieldC builds; scan +339 — the
+  per-block pillar tril; fill +219; drip +238 new stage).
 - **Edits on far / data-less columns (AC-0325)**: the flat write path has **no silent
   no-op**. `World.set_block` returns a bool and, when the target column holds no slabs
   (`data` empty — a node-only chunk that can sit data-less indefinitely since AC-0263's

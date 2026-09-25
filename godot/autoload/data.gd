@@ -29,6 +29,14 @@ const C_ROSE := Color(0.863, 0.157, 0.157)
 const C_DANDELION := Color(0.941, 0.824, 0.157)
 # AC-0040: the hanging banana fruit (block 28 / item 126).
 const C_BANANA := Color(0.918, 0.824, 0.243)
+# AC-0292: the cave-feature block family (32-36) — colors approximate the
+# Faithful pack tiles the atlas probe pastes in (the tiles win at render;
+# the colors seed the face-color cache + item icons).
+const C_DEEPSLATE := Color(0.38, 0.38, 0.42)
+const C_DRIPSTONE := Color(0.62, 0.56, 0.47)
+const C_CLAY := Color(0.55, 0.60, 0.70)
+const C_SCULK := Color(0.10, 0.35, 0.35)
+const C_MOSS := Color(0.36, 0.52, 0.27)
 
 var atlas_tex: Texture2D = null
 var atlas_rects := {}
@@ -48,9 +56,9 @@ const TINT_WATER := Color(47.0 / 255.0, 107.0 / 255.0, 235.0 / 255.0)
 
 var blocks := {}
 const TOOL_BLOCKS := {
-	"pick": [3, 9, 14, 15, 16, 25],
+	"pick": [3, 9, 14, 15, 16, 25, 32, 33, 35, 36],
 	"axe": [6, 7, 8],
-	"shovel": [1, 2, 4, 12, 13],
+	"shovel": [1, 2, 4, 12, 13, 34],
 }
 var items := {
 	100: {"name": "Stick", "icon": Color(0.72, 0.55, 0.35), "stack": 64},
@@ -208,6 +216,14 @@ func _init() -> void:
 		23: {"name": "Glowstone", "solid": true, "cross": false, "hard": 0.3, "light": 12, "drop": 23, "color": {"top": C_GLOWSTONE, "side": C_GLOWSTONE, "bottom": C_GLOWSTONE}},
 		24: {"name": "Lava", "solid": false, "cross": true, "hard": 1e9, "light": 15, "color": {"top": C_LAVA, "side": C_LAVA, "bottom": C_LAVA}},
 		25: {"name": "Obsidian", "solid": true, "cross": false, "hard": 50.0, "light": 0, "drop": 25, "color": {"top": C_OBSIDIAN, "side": C_OBSIDIAN, "bottom": C_OBSIDIAN}},
+		# AC-0292: the cave-feature block family (32-36). All solid,
+		# drop themselves, atlas tiles at [64..192, 32] (the pack tiles
+		# pasted in by this ticket's one-shot probe).
+		32: {"name": "Deepslate", "solid": true, "cross": false, "hard": 1.5, "light": 0, "drop": 32, "color": {"top": C_DEEPSLATE, "side": C_DEEPSLATE, "bottom": C_DEEPSLATE}},
+		33: {"name": "Dripstone", "solid": true, "cross": false, "hard": 1.2, "light": 0, "drop": 33, "color": {"top": C_DRIPSTONE, "side": C_DRIPSTONE, "bottom": C_DRIPSTONE}},
+		34: {"name": "Clay", "solid": true, "cross": false, "hard": 0.6, "light": 0, "drop": 34, "color": {"top": C_CLAY, "side": C_CLAY, "bottom": C_CLAY}},
+		35: {"name": "Sculk", "solid": true, "cross": false, "hard": 1.2, "light": 0, "drop": 35, "color": {"top": C_SCULK, "side": C_SCULK, "bottom": C_SCULK}},
+		36: {"name": "Moss Block", "solid": true, "cross": false, "hard": 1.0, "light": 0, "drop": 36, "color": {"top": C_MOSS, "side": C_MOSS, "bottom": C_MOSS}},
 		# AC-0040: hanging banana fruit — cross (non-solid, light-passing,
 		# cutout quad like the flowers); lighting.gd already pre-wires id 28
 		# as a cross block (passes_light / _att[28]) and blocks_atlas.json

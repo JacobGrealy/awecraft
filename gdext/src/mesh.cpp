@@ -2596,7 +2596,10 @@ static Dictionary h_avg_emit_impl(const PackedByteArray &p_h, const PackedByteAr
 									bid = tid;
 								} else {
 								int Hi = Hh[idx];
-								if (y == 0) {
+								if (y < 5) {
+									// AC-0292: the bedrock band (the fill
+									// loop's y < 5 — the far emit mirrors the
+									// skip fill's bottom rows exactly).
 									bid = FAR_B_BEDROCK;
 								} else if (Hi < p_sea && y >= Hi + 1 && y <= p_sea) {
 									bid = FAR_B_WATER;
@@ -3352,7 +3355,7 @@ public:
 						int idx = lz * 16 + lx;
 						int H = (int)fp[2 * idx] | ((int)fp[2 * idx + 1] << 8);
 						int id;
-						if (y == 0)
+						if (y < 5) // AC-0292: the bedrock band (the fill mirror)
 							id = 11; // B_BEDROCK
 						else if (H < p_sea && y >= H + 1 && y <= p_sea)
 							id = 5; // B_WATER

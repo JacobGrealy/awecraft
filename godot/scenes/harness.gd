@@ -21160,6 +21160,9 @@ func _genprobe_test() -> void:
 		"entrance": {"n": 0, "exact": 0},
 		"dens": {"n": 0, "exact": 0},
 		"aquifer": {"n": 0, "exact": 0},
+		"pillar": {"n": 0, "exact": 0},
+		"vein": {"n": 0, "exact": 0},
+		"biome": {"n": 0, "exact": 0},
 	}
 	if not res["cpp_registered"]:
 		Debug.result(res)
@@ -21360,6 +21363,28 @@ func _genprobe_test() -> void:
 		cmp.call("aquifer", AweNoise.vn3(x * 1.0, y * 0.5, z * 1.0, s + 313, -3, [1.0]), G.aquifer_barrier(x, y, z, s))
 		cmp.call("aquifer", AweNoise.vn3(x * 1.0, y * 1.0, z * 1.0, s + 314, -1, [1.0]), G.aquifer_lava(x, y, z, s))
 		cmp.call("aquifer", AweNoise.vn3(x * 0.25, 0.0, z * 0.25, s + 315, -9, [1.0, 1.0, 0.0, 1.0, 1.0]), G.aquifer_erosion(x, z, s))
+	for i in 300:
+		# AC-0292: the P4 dense sources — the vanilla caves/pillars
+		# expression AS-IS (the three noise instances: pillar {firstOct
+		# -7, amps [1,1]} at xz 25.0 / y 0.3; pillar_rareness +
+		# pillar_thickness {firstOct -8, amps [1]} at scale 1.0; the
+		# centered convention 2*(vn3-0.5) = the vanilla noise-function
+		# value; the expression (2*Np + (-1-Nr)) * (0.55 + 0.55*Nt)^3 —
+		# mirrors AweGen::density_pillar exactly), the VEIN field's vn3
+		# (seed+323, {-5, [1.0, 0.5]} at scale 1.0) and the CAVE BIOME
+		# field's vn3 (seed+319, {-7, [1.0, 1.0]} at scale 0.5).
+		var x := rng.randf_range(-1024.0, 1024.0)
+		var y := rng.randf_range(0.0, 384.0)
+		var z := rng.randf_range(-1024.0, 1024.0)
+		var s := rng.randi_range(-200, 200)
+		var pp := 2.0 * (AweNoise.vn3(x * 25.0, y * 0.3, z * 25.0, s + 320, -7, [1.0, 1.0]) - 0.5)
+		var pr := 2.0 * (AweNoise.vn3(x, y, z, s + 321, -8, [1.0]) - 0.5)
+		var pt := 2.0 * (AweNoise.vn3(x, y, z, s + 322, -8, [1.0]) - 0.5)
+		var pa := 2.0 * pp + (-1.0 - pr)
+		var pb := 0.55 + 0.55 * pt
+		cmp.call("pillar", pa * pb * pb * pb, G.density_pillar(x, y, z, s))
+		cmp.call("vein", AweNoise.vn3(x * 1.0, y * 1.0, z * 1.0, s + 323, -5, [1.0, 0.5]), G.density_vein(x, y, z, s))
+		cmp.call("biome", AweNoise.vn3(x * 0.5, y * 0.5, z * 0.5, s + 319, -7, [1.0, 1.0]), G.density_biome(x, y, z, s))
 	var tot := int(res["n"])
 	res["match_rate"] = float(int(res["exact"])) / float(tot) if tot > 0 else 0.0
 	res["ok"] = int(res["exact"]) == tot and tot > 0

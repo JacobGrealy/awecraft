@@ -301,6 +301,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <functional> // AC-0292: build_field_eval_c's per-point expression
 #include <vector>
 
 #include "awe_common.h"
@@ -442,8 +443,56 @@ constexpr int B_ROSE = 18;
 constexpr int B_DANDELION = 19;
 constexpr int B_LAVA = 24;
 constexpr int B_OBSIDIAN = 25;
+// AC-0292: the cave-feature block family (the free slots above 25):
+// deepslate (the vanilla y<0 stone), pointed dripstone (the speleothem),
+// clay (the cave pools), sculk (the deep dark), moss (the lush caves).
+constexpr int B_DEEPSLATE = 32;
+constexpr int B_DRIPSTONE = 33;
+constexpr int B_CLAY = 34;
+constexpr int B_SCULK = 35;
+constexpr int B_MOSS = 36;
 
 constexpr int TERRAIN_H_MAX = 300;
+
+// AC-0292: the surface-rule stage (the vanilla 1.21.4 surface_rule, +64
+// y-shift: vanilla y_v = y − 64). Bedrock = vertical_gradient
+// above_bottom 0..5 (true at the bottom row, false above 5, a per-column
+// random patch between — simplified to the FULL band y 0..4 so the fill /
+// skip / far-emit / ring paths stay in lockstep with no signature changes;
+// the bottom rows sit below the farab/halo windows anyway). Deepslate =
+// vertical_gradient random_name, true below absolute 0 / false above 8
+// (vanilla y<0 -> deepslate; the 0..8 random gradient = our 64..71 blend).
+constexpr int DEEPSLATE_Y = 64;        // vanilla y < 0 -> deepslate
+constexpr int DEEPSLATE_BLEND_TOP = 72; // the vanilla 0..8 blend (our 64..71)
+constexpr int BEDROCK_BAND = 5;        // vanilla above_bottom 5 (our y 0..4)
+// AC-0292: the cave biome bands (the documented vanilla ranges, +64 shift —
+// the 1.19+ biome selector is code-internal, so the single 3-D biome field +
+// the fixed value mapping is the documented adaptation; the y-bands are the
+// vanilla eligibility gates): deep dark -63..-1, dripstone -16..64, lush 0..64.
+constexpr int DD_Y_LO = 1, DD_Y_HI = 63;
+constexpr int DRIP_Y_LO = 48, DRIP_Y_HI = 128;
+constexpr int LUSH_Y_LO = 64, LUSH_Y_HI = 128;
+// AC-0292: the vanilla caves/pillars range_choice threshold
+// (max_exclusive 0.03 — the deep branch only, the file header).
+constexpr double PILLAR_CHOICE_TH = 0.03;
+// AC-0292: the cave biome field — one vn3 (see the section below for the
+// model); the value -> biome mapping (one biome per position).
+constexpr double BIOME_DD_V = 0.40;
+constexpr double BIOME_DRIP_V = 0.60;
+constexpr int BIOME_FIRST_OCT = -7;
+static const double BIOME_AMPS[] = { 1.0, 1.0 };
+constexpr double BIOME_XZ_SCALE = 0.5;
+constexpr double BIOME_Y_SCALE = 0.5;
+// AC-0292: the ore vein field — ONE vn3 (32+16-block isotropic period),
+// the nested per-ore thresholds in the stone_ore chain (the coal blob
+// contains the iron which contains the diamond — the layered deposit).
+constexpr int VEIN_FIRST_OCT = -5;
+static const double VEIN_AMPS[] = { 1.0, 0.5 };
+constexpr double VEIN_XZ_SCALE = 1.0;
+constexpr double VEIN_Y_SCALE = 1.0;
+constexpr double VEIN_D_TH = 0.80; // diamond (the nested tip) — census-tuned
+constexpr double VEIN_I_TH = 0.78; // iron
+constexpr double VEIN_C_TH = 0.76; // coal (the widest)
 
 // AC-0347 P2: the vanilla density router (see the file header — the
 // SHALLOW/DEEP split switched by k = H - y; the AC-0215 one-field +
@@ -663,6 +712,25 @@ static void build_field_vn_c(FieldC &f, int bx, int bz, double ystep, int64_t se
 						(double)(iy * (int)(ystep)) * sy,
 						(double)(bz + iz * 4) * sz,
 						seed, first_oct, amps, n);
+			}
+		}
+	}
+}
+
+// AC-0292: the C48 evaluator builder — the lattice points are filled by a
+// caller-supplied expression (world x, lattice-row block y, world z). The
+// pillar field uses it: the field stores the FULL vanilla caves/pillars
+// value (3 vn3 per lattice point at build time) so the scan pays one
+// tril_c instead of three dense vn3 per deep point (the AC-0359 lesson —
+// the dense evaluation stays out of the scan).
+static void build_field_eval_c(FieldC &f, int bx, int bz, double ystep,
+		const std::function<double(double, double, double)> &fn) {
+	for (int64_t ix = -1; ix <= 5; ix++) {
+		for (int64_t iy = 0; iy <= GYN_C - 1; iy++) {
+			for (int64_t iz = -1; iz <= 5; iz++) {
+				f[grid_idx_c(ix, iy, iz)] =
+						fn((double)(bx + ix * 4), (double)(iy * (int)(ystep)),
+								(double)(bz + iz * 4));
 			}
 		}
 	}
@@ -1273,6 +1341,17 @@ static std::atomic<long long> g_aqu_lava{0};
 static std::atomic<long long> g_aqu_stones{0};
 static std::atomic<long long> g_aqu_lava_layer{0};
 static std::atomic<long long> g_aqu_fl8{0};
+// AC-0292: the P4 census (the TEMP census arms read it; process-wide like
+// the aquifer stats — reset_gen_timing() zeros it). Read via AweGen.p4_stats().
+static std::atomic<long long> g_p4_pillar{0};      // pillar-solid cells (deep, P >= 0.03)
+static std::atomic<long long> g_p4_pillar_void{0}; // ...of which the router+tunnel said AIR (the true void fill)
+static std::atomic<long long> g_p4_ore_vein{0};    // vein-blob ore cells (per-ore in the arm)
+static std::atomic<long long> g_p4_deepslate{0};   // deepslate cells placed (y<64 + blend)
+static std::atomic<long long> g_p4_dripstone{0};   // speleothem cells (the drip pass)
+static std::atomic<long long> g_p4_clay{0};        // clay pool cells (the drip pass)
+static std::atomic<long long> g_p4_sculk{0};       // deep dark sculk
+static std::atomic<long long> g_p4_moss{0};        // lush moss
+static std::atomic<long long> g_t_drip_us{0};      // the drip pass stage (gen_timing "drip_us")
 static std::atomic<long long> g_t_cols_full{0};
 static std::atomic<long long> g_t_cols_skip{0};
 // AC-0284b: the far (h-only) column counters — g_t_cols_far = the far
@@ -1770,6 +1849,122 @@ static void col_heights_pass(const Field &f_sc, const Field &f_sh, const Field &
 	}
 }
 
+// ---------------------------------------------------------------------------
+// AC-0292 — the cave P4 trio: the NOISE PILLARS (the vanilla caves/pillars
+// literal port), the ORE VEINS (sparse density blobs) and the 3-D CAVE
+// BIOME field (deepslate / dripstone / lush / deep dark), + the extended
+// surface-rule stage (deepslate transition, the bedrock band).
+//
+// PILLARS — the 1.21.4 `caves/pillars` density function AS-IS (verified
+// against the shipped JSON, .scratch/AC-0292-vanilla/):
+//   cache_once(mul(
+//       add(mul(2.0, noise{pillar, xz 25.0, y 0.3}),
+//           add(-1.0, mul(-1.0, noise{pillar_rareness, 1.0, 1.0}))),
+//       cube(add(0.55, mul(0.55, noise{pillar_thickness, 1.0, 1.0})))))
+// with the three vanilla noise instances (worldgen/noise/*.json):
+//   pillar              {firstOctave -7, amps [1, 1]}
+//   pillar_rareness     {firstOctave -8, amps [1]}
+//   pillar_thickness    {firstOctave -8, amps [1]}
+// The `noise` density-function value is the CENTERED vn3 value per the
+// project convention (AC-0347 P2: all ported noise = 2*(vn3-0.5) — the
+// vanilla O(1) units). So the port is
+//   P = (2*Np + (-1 - Nr)) * (0.55 + 0.55*Nt)^3      (N* centered).
+// In the router the pillar max sits in the DEEP branch only (the
+// final_density range_choice's when_out_of_range, the sloped-cheese split
+// AweCraft models with k = H - y >= K_CUT):
+//   solid = (router > 0 and not tunnel) or (deep and P >= 0.03).
+// The vanilla max is OUTSIDE the spaghetti min, so a pillar cell is solid
+// even where the tunnels carve — the pillar wins. The deep-only gate keeps
+// every pillar solid <= H - 16, so he <= H (the H/far/promotion contract)
+// holds by construction. The field stores P on the C48 cave lattice (the
+// build_field_eval_c route — one tril_c per deep scan point); the dense
+// pillar_density below is the exact expression the genprobe lockstep
+// mirrors.
+//
+// VEINS — one vn3 field (seed +323, {firstOctave -5, amps [1, 0.5]},
+// isotropic 32+16-block period — the blob scale). The stone_ore chain
+// checks it FIRST (full path only), with the NESTED per-ore thresholds
+// VEIN_D/I/C_TH inside the speckle's y-bands (y<16/42/60): the coal blob
+// contains the iron which contains the diamond — the layered deposit.
+// The legacy f_ore1/2/3 speckle runs after (kept — the ticket says the
+// blobs are IN ADDITION to the thin thresholds). The skip/far paths stay
+// vein-free (the band-A materialization is the provisional no-cave fill —
+// same documented adaptation as the caves/aquifer/carvers).
+//
+// CAVE BIOME — one vn3 field (seed +319, {firstOctave -7, amps [1, 1]},
+// scale 0.5 — ~100-300-block regions). One biome per position: value <
+// 0.40 -> DEEP DARK, < 0.60 -> DRIPSTONE, else LUSH; the y-bands (the
+// vanilla ranges +64) gate each. The cost route (the budget ask): the
+// biome is precomputed per column at the 16 y-levels (16 tril_c reads/
+// column — not per cell), and the per-cell cost drops to one hash where
+// the level's biome matches. Rules (full path only):
+//   deep dark (y 1..63):   stone/deepslate -> sculk   (hash +327, p 0.10)
+//   lush (y 64..128):      stone/deepslate -> moss    (hash +328, p 0.06)
+//   dripstone (y 48..128): the post-carve air-run pass — stalactite from
+//     the ceiling / stalagmite from the floor (2-6 blocks, 35% of eligible
+//     runs, hashes +330/+331, lengths +332/+335) where the CONTACT level's
+//     biome is dripstone; and the CLAY POOLS: aquifer water over a solid
+//     floor in a pool-hash column (hash +329, p 0.06) -> the bottom 1-3
+//     water cells become clay (depths +334/+336). The clay is a block swap
+//     ONLY — the water table level + fl marks + sea fills are never
+//     touched (the AC-0291 aquifer contract).
+//
+// SURFACE RULES — the deepslate transition (rock_base: y<64 deepslate,
+// the 64..71 vanilla random-gradient blend per-cell hash +326, stone
+// above) in the fill chain AND stone_ore_slab (the far deep-color
+// precompute — the farab identity); the bedrock band y 0..4 in the fill
+// AND h_avg_emit (mesh.cpp); the top block H<64 -> deepslate in the fill
+// top row AND gen_far (the farab 4a identity — both move together). Ores
+// in the deepslate zone keep their ore ids (the vanilla deepslate-ore
+// variants are a documented simplification).
+// ---------------------------------------------------------------------------
+
+static const double PILLAR_OCT_AMPS[2] = { 1.0, 1.0 };
+static const double ONE_AMP[1] = { 1.0 };
+
+// The vanilla caves/pillars expression AS-IS (see the section above) — the
+// DENSE source (the genprobe lockstep mirrors this; the field build uses
+// the SAME expression via build_field_eval_c, so the lattice points are
+// bit-exact with a dense evaluation).
+static inline double pillar_density(double x, double y, double z, int64_t s) {
+	double p = vn3(x * 25.0, y * 0.3, z * 25.0, s + 320, -7, PILLAR_OCT_AMPS, 2);
+	double r = vn3(x, y, z, s + 321, -8, ONE_AMP, 1);
+	double t = vn3(x, y, z, s + 322, -8, ONE_AMP, 1);
+	double np = 2.0 * (p - 0.5); // centered (the vanilla noise-function value)
+	double nr = 2.0 * (r - 0.5);
+	double nt = 2.0 * (t - 0.5);
+	double a = 2.0 * np + (-1.0 - nr);
+	double b = 0.55 + 0.55 * nt;
+	return a * b * b * b;
+}
+
+// The vein field's dense source (the one vn3; the per-ore thresholds live
+// in the stone_ore chain).
+static inline double vein_density(double x, double y, double z, int64_t s) {
+	return vn3(x * VEIN_XZ_SCALE, y * VEIN_Y_SCALE, z * VEIN_XZ_SCALE,
+			s + 323, VEIN_FIRST_OCT, VEIN_AMPS, 2);
+}
+
+// The cave biome field's dense source (the one vn3; the value -> biome
+// mapping lives in the per-column precompute in gen_flat).
+static inline double biome_density(double x, double y, double z, int64_t s) {
+	return vn3(x * BIOME_XZ_SCALE, y * BIOME_Y_SCALE, z * BIOME_XZ_SCALE,
+			s + 319, BIOME_FIRST_OCT, BIOME_AMPS, 2);
+}
+
+// The rock base — the surface-rule stage's deepslate transition. The fill
+// chain, stone_ore_slab and (via it) the far emit's deep cells must all
+// agree on this (the farab A/B contract).
+static inline uint8_t rock_base(int y, int x, int z, int64_t s) {
+	if (y < DEEPSLATE_Y)
+		return (uint8_t)B_DEEPSLATE;
+	if (y < DEEPSLATE_BLEND_TOP) {
+		double t = (double)(DEEPSLATE_BLEND_TOP - y) * 0.125; // 1.0 @64 -> 0.125 @71
+		return hash3i(x, y, z, s + 326) < t ? (uint8_t)B_DEEPSLATE : (uint8_t)B_STONE;
+	}
+	return (uint8_t)B_STONE;
+}
+
 // AC-0284b: the FAR (h-only) column — the skip arg value 2 (see the file
 // header). NO slabs, NO cave field, NO ore fields: only the 256 H (u16
 // LE), the 256 biome bcodes and the 256 TOP-BLOCK ids (the bit-exact
@@ -1815,6 +2010,8 @@ static std::vector<uint8_t> gen_far(int cx, int cz, int64_t seed, int hmax, int 
 			top = B_SNOW_GRASS;
 		if (H <= sea + 1 && bcode[i] != 1)
 			top = B_SAND;
+		if (H < DEEPSLATE_Y)
+			top = B_DEEPSLATE; // AC-0292: the fill top row matches (H<64 -> deepslate)
 		out[768 + i] = top;
 	}
 	g_t_far_us.fetch_add(now_us() - t0, std::memory_order_relaxed);
@@ -2029,6 +2226,10 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	// coarse lattice; layer + entrance NEW here, built only on the full
 	// path — the dense vn3 calls leave the scan, the AC-0344 verdict).
 	FieldC f_cheese{}, f_spag{}, f_nood{}, f_gate{}, f_layer{}, f_entr{};
+	// AC-0292: the P4 fields (full path only — same as the cave family;
+	// the skip/far paths never read them, the contracts hold by
+	// construction).
+	FieldC f_pillar{}, f_vein{}, f_biome{};
 	Field f_ore1, f_ore2, f_ore3;
 	if (!skip) {
 		// AC-0347 P1: the cheese field = vanilla's cave_cheese as-is (see
@@ -2055,6 +2256,25 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 		build_field_vn_c(f_entr, bx, bz, ystep_cave, seed + 306,
 				ENTR_XZ_SCALE, ENTR_Y_SCALE, ENTR_XZ_SCALE,
 				ENTR_FIRST_OCT, ENTR_AMPS, ENTR_AMPS_N);
+		// AC-0292: the PILLAR field — the full vanilla caves/pillars value
+		// stored per lattice point (3 vn3 at build time, 1 tril_c in the
+		// scan). The SAME expression as the dense pillar_density (the
+		// genprobe lockstep source) — the lattice points are bit-exact
+		// with a dense evaluation.
+		build_field_eval_c(f_pillar, bx, bz, ystep_cave,
+				[&](double x, double y, double z) {
+					return pillar_density(x, y, z, seed);
+				});
+		// AC-0292: the ORE VEIN field (one vn3 — the nested per-ore
+		// thresholds in the stone_ore chain below).
+		build_field_vn_c(f_vein, bx, bz, ystep_cave, seed + 323,
+				VEIN_XZ_SCALE, VEIN_Y_SCALE, VEIN_XZ_SCALE,
+				VEIN_FIRST_OCT, VEIN_AMPS, 2);
+		// AC-0292: the CAVE BIOME field (one vn3 — the per-column
+		// 16-level precompute below).
+		build_field_vn_c(f_biome, bx, bz, ystep_cave, seed + 319,
+				BIOME_XZ_SCALE, BIOME_Y_SCALE, BIOME_XZ_SCALE,
+				BIOME_FIRST_OCT, BIOME_AMPS, 2);
 	}
 	build_field(f_ore1, bx, bz, ystep, seed + 77, 7.0, 7.0, 7.0, 0.0, 0.0, 0.0);
 	build_field(f_ore2, bx, bz, ystep, seed + 88, 9.0, 9.0, 9.0, 900.0, 0.0, 900.0);
@@ -2078,6 +2298,26 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	// bands/thresholds, read from the coarse ore fields) + the exact old
 	// obsidian hash.
 	auto stone_ore = [&](int x, int y, int z, double gx, double gz) {
+		// AC-0292: the VEIN blobs first (full path only — the skip/far
+		// paths keep the speckle chain bit-exact, the documented
+		// band-A adaptation). The nested thresholds on ONE field:
+		// the coal blob contains the iron which contains the diamond.
+		// The band short-circuit keeps y >= 60 cells free of the reads.
+		if (!skip) {
+			double gy_c = (double)y / ystep_cave;
+			if (y < 16 && tril_c(f_vein, gx, gy_c, gz) > VEIN_D_TH) {
+				g_p4_ore_vein.fetch_add(1, std::memory_order_relaxed);
+				return B_DIAMOND_ORE;
+			}
+			if (y < 42 && tril_c(f_vein, gx, gy_c, gz) > VEIN_I_TH) {
+				g_p4_ore_vein.fetch_add(1, std::memory_order_relaxed);
+				return B_IRON_ORE;
+			}
+			if (y < 60 && tril_c(f_vein, gx, gy_c, gz) > VEIN_C_TH) {
+				g_p4_ore_vein.fetch_add(1, std::memory_order_relaxed);
+				return B_COAL_ORE;
+			}
+		}
 		if (y < 16 && tril(f_ore1, gx, (double)y / ystep, gz) > 0.78)
 			return B_DIAMOND_ORE;
 		if (y < 42 && tril(f_ore2, gx, (double)y / ystep, gz) > 0.8)
@@ -2086,7 +2326,12 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			return B_COAL_ORE;
 		if (y < 10 && hash3i(x, y, z, seed + 333) < 0.02)
 			return B_OBSIDIAN;
-		return B_STONE;
+		// AC-0292: the surface-rule stage's deepslate transition (the
+		// far emit's stone_ore_slab precompute agrees cell-for-cell).
+		int b = rock_base(y, x, z, seed);
+		if (b == B_DEEPSLATE)
+			g_p4_deepslate.fetch_add(1, std::memory_order_relaxed);
+		return b;
 	};
 
 	// AC-0290: the carver pass (post-density, pre-veg — see the file
@@ -2160,8 +2405,25 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 					// AC-0289: the tunnel air wins over the router's solid —
 					// applied OUTSIDE dens_at (the vanilla spaghetti min,
 					// kept where AC-0289 put it: the tunnels pierce the caps).
-					bool s = dens_at(H, y, cave, ent, lay) > 0.0
+					bool s0 = dens_at(H, y, cave, ent, lay) > 0.0
 							&& !tunnel_air_c(f_spag, f_nood, f_gate, gx, gy_c, gz);
+					// AC-0292: the PILLAR (the vanilla caves/pillars max,
+					// deep branch only — the range_choice split). The max
+					// sits OUTSIDE the spaghetti min, so a pillar cell is
+					// solid even where the tunnels carve (the pillar wins):
+					// solid = s0 or (deep and P >= 0.03). Deep-only (k >=
+					// K_CUT) keeps every pillar solid <= H - 16, so he <= H
+					// holds by construction (the H/far/promotion contract).
+					bool s = s0;
+					if (H - y >= K_CUT) {
+						double pil = tril_c(f_pillar, gx, gy_c, gz);
+						if (pil >= PILLAR_CHOICE_TH) {
+							s = true;
+							g_p4_pillar.fetch_add(1, std::memory_order_relaxed);
+							if (!s0)
+								g_p4_pillar_void.fetch_add(1, std::memory_order_relaxed);
+						}
+					}
 					solidf[y] = s ? 1 : 0;
 					if (s && he < 0)
 						he = y;
@@ -2171,6 +2433,35 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			}
 			g_t_scan_us.fetch_add(now_us() - t_scan, std::memory_order_relaxed);
 			heff[idx] = he;
+			// AC-0292: the per-column CAVE BIOME table — one entry per
+			// 8-block y-LEVEL (48 levels; the fill + drip paths index
+			// bio[y >> 3] up to level 47, so the table must cover the
+			// full height). Cost route: only the 16 levels touching a
+			// biome band read the field (the band check skips the rest),
+			// not a per-cell read. One biome per position (the value
+			// mapping), gated by the vanilla y-bands at the LEVEL (a
+			// level touching the band's edge counts — the <= 7-block edge
+			// bleed is the documented granularity; the y=0 row is bedrock
+			// anyway).
+			uint8_t bio[48] = {0};
+			if (!skip) {
+				for (int L = 0; L < 48; L++) {
+					int yb = L * 8;
+					int yt = yb + 7;
+					bool dd_ok = yt >= DD_Y_LO && yb <= DD_Y_HI;
+					bool dr_ok = yt >= DRIP_Y_LO && yb <= DRIP_Y_HI;
+					bool lu_ok = yt >= LUSH_Y_LO && yb <= LUSH_Y_HI;
+					if (!dd_ok && !dr_ok && !lu_ok)
+						continue;
+					double v = tril_c(f_biome, gx, (double)(yb + 4) / ystep_cave, gz);
+					if (v < BIOME_DD_V)
+						bio[L] = dd_ok ? 1 : 0;
+					else if (v < BIOME_DRIP_V)
+						bio[L] = dr_ok ? 2 : 0;
+					else
+						bio[L] = lu_ok ? 3 : 0;
+				}
+			}
 			long long t_fill = now_us();
 
 			// AC-0237: the emit loop is bounded to the generated slabs —
@@ -2182,7 +2473,10 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 					continue;
 				for (int y = ysi * 16; y < ysi * 16 + 16 && y < hmax; y++) {
 				uint8_t cell = 0;
-				if (y == 0) {
+				if (y < BEDROCK_BAND) {
+					// AC-0292: the bedrock band (vanilla above_bottom 0..5;
+					// the ticket's "bedrock -64..-59" — the full band keeps
+					// the fill/skip/far-emit/ring paths in lockstep).
 					cell = B_BEDROCK;
 				} else {
 					bool solid = skip ? (y <= he) : (solidf[y] != 0);
@@ -2209,14 +2503,23 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 					if (y >= he + 1 && y <= sea && H < sea) {
 						cell = B_WATER; // aquifer: ocean fill up to Sea 126, gated on pre-carve H
 					} else if (y == he) {
-						// Surface block (biome top; sand on shallow non-desert).
-						cell = B_GRASS;
-						if (bm == 1)
-							cell = B_SAND;
-						else if (bm == 0)
-							cell = B_SNOW_GRASS;
-						if (he <= sea + 1 && bm != 1)
-							cell = B_SAND;
+						if (he < DEEPSLATE_Y) {
+							// AC-0292: below vanilla y=0 no biome top fires
+							// (they are all y_above 0) — the top falls to the
+							// stone rule = deepslate. gen_far's top formula
+							// agrees (the farab 4a identity).
+							cell = B_DEEPSLATE;
+							g_p4_deepslate.fetch_add(1, std::memory_order_relaxed);
+						} else {
+							// Surface block (biome top; sand on shallow non-desert).
+							cell = B_GRASS;
+							if (bm == 1)
+								cell = B_SAND;
+							else if (bm == 0)
+								cell = B_SNOW_GRASS;
+							if (he <= sea + 1 && bm != 1)
+								cell = B_SAND;
+						}
 					} else if (y >= he - 3 && solid) {
 						cell = (bm == 1) ? B_SAND : B_DIRT;
 					} else if (!solid) {
@@ -2262,6 +2565,22 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 						}
 					} else {
 						cell = stone_ore(x, y, z, gx, gz);
+						// AC-0292: the CAVE BIOME rock rules (full path
+						// only — the level's biome, one hash where it
+						// matches; the dripstone biome's features live in
+						// the post-carve drip pass below).
+						if (!skip) {
+							int bb = bio[y >> 3];
+							if (bb == 1 && (cell == B_STONE || cell == B_DEEPSLATE)
+									&& hash3i(x, y, z, seed + 327) < 0.10) {
+								cell = B_SCULK;
+								g_p4_sculk.fetch_add(1, std::memory_order_relaxed);
+							} else if (bb == 3 && (cell == B_STONE || cell == B_DEEPSLATE)
+									&& hash3i(x, y, z, seed + 328) < 0.06) {
+								cell = B_MOSS;
+								g_p4_moss.fetch_add(1, std::memory_order_relaxed);
+							}
+						}
 					}
 				}
 					flat[(size_t)(y << 8) | base] = cell;
@@ -2277,6 +2596,104 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			if (!skip)
 				heff[idx] = carver_carve_column(flat, lx, lz, x, z, he, sea, bm, *carves_p, hmax, p_keep);
 			g_t_carve_us.fetch_add(now_us() - t_carve, std::memory_order_relaxed);
+
+			// AC-0292: the DRIPSTONE CAVES pass (full path only, post-carve
+			// — the carver's new air runs get speleothems too). Walks the
+			// column's air/water runs: a run with a solid CEILING in the
+			// dripstone biome grows a STALACTITE (2-6 blocks, 35% of the
+			// eligible runs); a run with a solid FLOOR grows a STALAGMITE
+			// (the floor's level must be dripstone — the floor must be rock,
+			// not water/lava); a pure-WATER run over a solid floor in a
+			// pool-hash column becomes a CLAY POOL (the bottom 1-3 water
+			// cells -> clay — a block swap ONLY: the water table level and
+			// the fl marks are never touched, the AC-0291 aquifer contract).
+			// Ungenerated slabs break the runs (their cells are unknown).
+			long long t_drip = now_us();
+			if (!skip) {
+				int y = 1;
+				while (y < hmax) {
+					if (!slab_kept(y >> 4)) {
+						y = ((y >> 4) + 1) * 16;
+						if (y > hmax)
+							break;
+						continue;
+					}
+					uint8_t c0 = flat[(size_t)(y << 8) | base];
+					if (c0 != 0 && c0 != B_WATER) {
+						y++;
+						continue;
+					}
+					int a = y;
+					while (y < hmax && slab_kept(y >> 4)) {
+						uint8_t cc = flat[(size_t)(y << 8) | base];
+						if (cc == 0 || cc == B_WATER)
+							y++;
+						else
+							break;
+					}
+					int b = y - 1;
+					int len = b - a + 1;
+					int up = a - 1;
+					int dn = b + 1;
+					bool ceil_solid = up >= 0 && flat[(size_t)(up << 8) | base] != 0
+							&& flat[(size_t)(up << 8) | base] != B_WATER
+							&& flat[(size_t)(up << 8) | base] != B_LAVA;
+					bool floor_solid = dn < hmax && slab_kept(dn >> 4)
+							&& flat[(size_t)(dn << 8) | base] != 0
+							&& flat[(size_t)(dn << 8) | base] != B_WATER
+							&& flat[(size_t)(dn << 8) | base] != B_LAVA;
+					// Stalactite — from the ceiling (its level must be drip).
+					if (ceil_solid && bio[up >> 3] == 2
+							&& hash3i(x, a, z, seed + 330) < 0.35) {
+						int h = 2 + (int)(hash2i(x, z, seed + 332) * 5.0); // 2..6
+						if (h > len)
+							h = len;
+						for (int yy = a; yy < a + h; yy++) {
+							if (flat[(size_t)(yy << 8) | base] == 0) {
+								flat[(size_t)(yy << 8) | base] = B_DRIPSTONE;
+								g_p4_dripstone.fetch_add(1, std::memory_order_relaxed);
+							}
+						}
+					}
+					// Stalagmite — from the floor (its level must be drip).
+					if (floor_solid && bio[dn >> 3] == 2
+							&& hash3i(x, b, z, seed + 331) < 0.35) {
+						int h = 2 + (int)(hash2i(x, z, seed + 335) * 5.0); // 2..6
+						if (h > len)
+							h = len;
+						for (int yy = b - h + 1; yy <= b; yy++) {
+							if (flat[(size_t)(yy << 8) | base] == 0) {
+								flat[(size_t)(yy << 8) | base] = B_DRIPSTONE;
+								g_p4_dripstone.fetch_add(1, std::memory_order_relaxed);
+							}
+						}
+					}
+					// Clay pool — the pure-water run over a solid floor.
+					if (floor_solid && c0 == B_WATER && bio[dn >> 3] == 2
+							&& hash2i(x, z, seed + 329) < 0.06) {
+						bool all_water = true;
+						for (int yy = a; yy <= b; yy++) {
+							if (flat[(size_t)(yy << 8) | base] != B_WATER) {
+								all_water = false;
+								break;
+							}
+						}
+						if (all_water) {
+							int d = 1 + (hash2i(x, z, seed + 334) < 0.5)
+									+ (hash2i(x, z, seed + 336) < 0.3); // 1..3
+							if (d > len)
+								d = len;
+							for (int yy = b - d + 1; yy <= b; yy++) {
+								if (flat[(size_t)(yy << 8) | base] == B_WATER) {
+									flat[(size_t)(yy << 8) | base] = B_CLAY;
+									g_p4_clay.fetch_add(1, std::memory_order_relaxed);
+								}
+							}
+						}
+					}
+				}
+			}
+			g_t_drip_us.fetch_add(now_us() - t_drip, std::memory_order_relaxed);
 		}
 	}
 
@@ -2341,8 +2758,14 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 							? tril_c(f_layer, gx2, gy2, gz2)
 							: 0.0;
 					// AC-0289: the same tunnel rule as the in-column scan.
-					if (dens_at(H2, y, cave, ent, lay) > 0.0
-							&& !tunnel_air_c(f_spag, f_nood, f_gate, gx2, gy2, gz2)) {
+					bool sv = dens_at(H2, y, cave, ent, lay) > 0.0
+							&& !tunnel_air_c(f_spag, f_nood, f_gate, gx2, gy2, gz2);
+					// AC-0292: the same pillar rule as the in-column scan
+					// (deep branch only, the max outside the tunnel min).
+					if (H2 - y >= K_CUT
+							&& tril_c(f_pillar, gx2, gy2, gz2) >= PILLAR_CHOICE_TH)
+						sv = true;
+					if (sv) {
 						hcol = y;
 						break;
 					}
@@ -2611,6 +3034,12 @@ public:
 		ClassDB::bind_method(D_METHOD("aquifer_lava", "x", "y", "z", "s"), &AweGen::aquifer_lava);
 		ClassDB::bind_method(D_METHOD("aquifer_erosion", "x", "z", "s"), &AweGen::aquifer_erosion);
 		ClassDB::bind_method(D_METHOD("aquifer_stats"), &AweGen::aquifer_stats);
+		// AC-0292: the P4 dense sources (the genprobe lockstep mirrors each
+		// in GDScript) + the cumulative P4 census.
+		ClassDB::bind_method(D_METHOD("density_pillar", "x", "y", "z", "s"), &AweGen::density_pillar);
+		ClassDB::bind_method(D_METHOD("density_vein", "x", "y", "z", "s"), &AweGen::density_vein);
+		ClassDB::bind_method(D_METHOD("density_biome", "x", "y", "z", "s"), &AweGen::density_biome);
+		ClassDB::bind_method(D_METHOD("p4_stats"), &AweGen::p4_stats);
 		// AC-0216: the optional 6th arg `skip` (default 0 = the pre-AC-0216
 		// full density field, bit-for-bit) — the lazy offscreen-interior
 		// skip (see the file header).
@@ -2654,6 +3083,7 @@ public:
 		d["pallet_us"] = (int64_t)g_t_pallet_us.load(std::memory_order_relaxed);
 		d["carve_us"] = (int64_t)g_t_carve_us.load(std::memory_order_relaxed); // AC-0290
 		d["aquifer_us"] = (int64_t)g_t_aquifer_us.load(std::memory_order_relaxed); // AC-0291
+		d["drip_us"] = (int64_t)g_t_drip_us.load(std::memory_order_relaxed); // AC-0292: the drip pass
 		d["cols_full"] = (int64_t)g_t_cols_full.load(std::memory_order_relaxed);
 		d["cols_skip"] = (int64_t)g_t_cols_skip.load(std::memory_order_relaxed);
 		d["cols_far"] = (int64_t)g_t_cols_far.load(std::memory_order_relaxed);
@@ -2673,6 +3103,16 @@ public:
 		g_aqu_stones.store(0, std::memory_order_relaxed);
 		g_aqu_lava_layer.store(0, std::memory_order_relaxed);
 		g_aqu_fl8.store(0, std::memory_order_relaxed);
+		// AC-0292: the P4 census + the drip stage.
+		g_p4_pillar.store(0, std::memory_order_relaxed);
+		g_p4_pillar_void.store(0, std::memory_order_relaxed);
+		g_p4_ore_vein.store(0, std::memory_order_relaxed);
+		g_p4_deepslate.store(0, std::memory_order_relaxed);
+		g_p4_dripstone.store(0, std::memory_order_relaxed);
+		g_p4_clay.store(0, std::memory_order_relaxed);
+		g_p4_sculk.store(0, std::memory_order_relaxed);
+		g_p4_moss.store(0, std::memory_order_relaxed);
+		g_t_drip_us.store(0, std::memory_order_relaxed);
 		g_t_veg_us.store(0, std::memory_order_relaxed);
 		g_t_pallet_us.store(0, std::memory_order_relaxed);
 		g_t_cols_full.store(0, std::memory_order_relaxed);
@@ -2786,6 +3226,20 @@ public:
 		return awegen::aqu_erosion(x, z, (int64_t)s);
 	}
 
+	// AC-0292: the P4 dense sources (the genprobe lockstep mirrors each in
+	// GDScript): the vanilla caves/pillars expression (the three noise
+	// instances + the centered-convention centering), the vein field's
+	// vn3, the cave biome field's vn3.
+	double density_pillar(double x, double y, double z, int s) const {
+		return awegen::pillar_density(x, y, z, (int64_t)s);
+	}
+	double density_vein(double x, double y, double z, int s) const {
+		return awegen::vein_density(x, y, z, (int64_t)s);
+	}
+	double density_biome(double x, double y, double z, int s) const {
+		return awegen::biome_density(x, y, z, (int64_t)s);
+	}
+
 	// AC-0291: the cumulative aquifer census (the harness arm reads it;
 	// process-wide like gen_timing — reset_gen_timing() zeros it).
 	// AC-0291: the placed-cell census (see the counter block near the top).
@@ -2797,6 +3251,28 @@ public:
 		d["lava_layer"] = (int64_t)g_aqu_lava_layer.load(std::memory_order_relaxed);
 		d["fl8"] = (int64_t)g_aqu_fl8.load(std::memory_order_relaxed);
 		d["aquifer_us"] = (int64_t)g_t_aquifer_us.load(std::memory_order_relaxed);
+		return d;
+	}
+
+	// AC-0292: the P4 cumulative census (the TEMP census arms read it;
+	// process-wide like aquifer_stats — reset_gen_timing() zeros it).
+	// pillar = the deep cells with P >= 0.03 (pillar-solid); pillar_void
+	// = the subset the router+tunnel said AIR (the true void fill);
+	// ore_vein = the vein-blob ore cells; deepslate = the deepslate cells
+	// placed (the y<64 chain + the 64..71 blend + the H<64 tops);
+	// dripstone/clay = the drip pass's speleothem + pool cells;
+	// sculk/moss = the biome rock rules.
+	Dictionary p4_stats() const {
+		Dictionary d;
+		d["pillar"] = (int64_t)g_p4_pillar.load(std::memory_order_relaxed);
+		d["pillar_void"] = (int64_t)g_p4_pillar_void.load(std::memory_order_relaxed);
+		d["ore_vein"] = (int64_t)g_p4_ore_vein.load(std::memory_order_relaxed);
+		d["deepslate"] = (int64_t)g_p4_deepslate.load(std::memory_order_relaxed);
+		d["dripstone"] = (int64_t)g_p4_dripstone.load(std::memory_order_relaxed);
+		d["clay"] = (int64_t)g_p4_clay.load(std::memory_order_relaxed);
+		d["sculk"] = (int64_t)g_p4_sculk.load(std::memory_order_relaxed);
+		d["moss"] = (int64_t)g_p4_moss.load(std::memory_order_relaxed);
+		d["drip_us"] = (int64_t)g_t_drip_us.load(std::memory_order_relaxed);
 		return d;
 	}
 
@@ -2925,15 +3401,22 @@ public:
 		std::vector<uint8_t> out(4096, B_STONE);
 		for (int ly = 0; ly < 16; ly++) {
 			int wy = p_si * 16 + ly;
-			if (wy >= 60)
-				break; // past every ore band (the chain returns B_STONE)
+			if (wy >= DEEPSLATE_BLEND_TOP)
+				break; // AC-0292: past the deepslate blend top (was 60 — the
+				// ore-band end; rows 60..71 are the deepslate transition,
+				// not plain stone — the fill chain agrees cell-for-cell).
+				// The veins are full-path only (the far emit stays
+				// vein-free, like it is cave-free).
 			for (int lz = 0; lz < 16; lz++) {
 				double gz = (double)lz / 4.0;
 				for (int lx = 0; lx < 16; lx++) {
 					int x = bx + lx;
 					int z = bz + lz;
 					double gx = (double)lx / 4.0;
-					int id = B_STONE;
+					// AC-0292: the rock base first (the deepslate
+					// transition), the ore chain overrides — the fill's
+					// stone_ore chain's exact shape (same ops, f64).
+					int id = rock_base(wy, x, z, p_s);
 					if (wy < 16 && tril(f_ore1, gx, (double)wy / ystep, gz) > 0.78)
 						id = B_DIAMOND_ORE;
 					else if (wy < 42 && tril(f_ore2, gx, (double)wy / ystep, gz) > 0.8)
