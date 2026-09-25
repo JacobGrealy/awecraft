@@ -18809,6 +18809,20 @@ func _save_test() -> void:
 		inv_before.append([int(it["id"]), int(it["n"])])
 	var pos_before: Array = [pl.position.x, pl.position.y, pl.position.z]
 	var saved_ok := Save.save_now(0)
+	# AC-0306 gate 3 (GATE EDIT): the planets[] record round-trips R = 4000
+	# unchanged — the grid width W = pi*R/2 is DERIVED from R
+	# (SphereMath.face_width), so the record gains no field.
+	var r_saved := -1
+	var rfile := FileAccess.open("user://awecraft_save_0.json", FileAccess.READ)
+	if rfile != null:
+		var rdata = JSON.parse_string(rfile.get_as_text())
+		rfile.close()
+		if typeof(rdata) == TYPE_DICTIONARY:
+			var rps = (rdata as Dictionary).get("planets", null)
+			if typeof(rps) == TYPE_ARRAY and (rps as Array).size() > 0:
+				var rh = (rps as Array)[0]
+				if typeof(rh) == TYPE_DICTIONARY:
+					r_saved = int((rh as Dictionary).get("R", -1))
 	var edited := {
 		[sx, top, sz]: 3,
 		[sx + 1, top, sz]: 4,
@@ -18829,6 +18843,7 @@ func _save_test() -> void:
 	main._free_game_nodes()
 	await main._continue_slot(0)
 	var pl2 = Game.player
+	var r_loaded := int(Game.planet_R)  # AC-0306: the load path's clamped R
 	var blocks_match := 0
 	var blocks_total := edited.size()
 	for k in edited:
@@ -18891,7 +18906,40 @@ func _save_test() -> void:
 		v1_softfail = world.edits.is_empty()
 	Save.clear(0)
 	Save.clear(2)
-	var ok: bool = saved_ok and slot0_ok and iso_ok and clear_pre_ok and clear_ok and v1_written and v1_softfail
+	# AC-0306: the [2000, 8000] R clamp at _continue_slot is intact at BOTH
+	# bounds — synthetic saves in the arm's established pattern (the v1
+	# soft-fail test above writes its file the same way).
+	var r_clamp_hi := -1
+	var r_clamp_lo := -1
+	var clamp_player := {
+		"pos": [float(tx) + 0.5, float(ttop) + 1.0, float(tz) + 0.5],
+		"yaw": 0.0, "pitch": 0.0, "sel": 0, "hp": 20.0, "hunger": 20.0,
+		"inv": [], "armor": [],
+	}
+	var rc := FileAccess.open("user://awecraft_save_0.json", FileAccess.WRITE)
+	if rc != null:
+		rc.store_string(JSON.stringify({
+			"version": Save.SAVE_VERSION, "seed": S, "height": Data.HEIGHT,
+			"time": 0.7, "ts": 124, "edits": {}, "leaf_decay": {},
+			"planets": [{"id": 0, "R": 9000, "orbit": null}],
+			"player": clamp_player,
+		}))
+		rc.close()
+		await main._continue_slot(0)
+		r_clamp_hi = int(Game.planet_R)
+		rc = FileAccess.open("user://awecraft_save_0.json", FileAccess.WRITE)
+		rc.store_string(JSON.stringify({
+			"version": Save.SAVE_VERSION, "seed": S, "height": Data.HEIGHT,
+			"time": 0.7, "ts": 125, "edits": {}, "leaf_decay": {},
+			"planets": [{"id": 0, "R": 1000, "orbit": null}],
+			"player": clamp_player,
+		}))
+		rc.close()
+		await main._continue_slot(0)
+		r_clamp_lo = int(Game.planet_R)
+	Save.clear(0)
+	var ok: bool = saved_ok and slot0_ok and iso_ok and clear_pre_ok and clear_ok and v1_written and v1_softfail \
+		and r_saved == 4000 and r_loaded == 4000 and r_clamp_hi == 8000 and r_clamp_lo == 2000
 	Debug.result({
 		"ok": ok,
 		"saved_ok": saved_ok,
@@ -18908,6 +18956,10 @@ func _save_test() -> void:
 		"v1_softfail": v1_softfail,
 		"iso_ok": iso_ok,
 		"iso_base": iso_base,
+		"r_saved": r_saved,
+		"r_loaded": r_loaded,
+		"r_clamp_hi": r_clamp_hi,
+		"r_clamp_lo": r_clamp_lo,
 		"pos_before": pos_before,
 		"pos_after": pos_after,
 	})
@@ -24480,7 +24532,10 @@ func _sphere_test(spawn: Vector3) -> void:
 				var inrange5 := false
 				if f5 >= 0 and f5 <= 11:
 					if f5 == 0 or f5 == 1:
-						inrange5 = absi(ax5) <= int(R) + 1 and absi(az5) <= int(R) + 1
+						# AC-0306 grid lock: the home patch is W x W with
+						# W = face_width(R) = pi*R/2 (was 2R x 2R).
+						var hwb: int = int(SphereMath.face_width(R) * 0.5) + 1
+						inrange5 = absi(ax5) <= hwb and absi(az5) <= hwb
 					else:
 						inrange5 = ax5 >= 0 and ax5 < N and az5 >= 0 and az5 < N
 				if not inrange5:
@@ -24518,10 +24573,78 @@ func _sphere_test(spawn: Vector3) -> void:
 	out["key_max_cx"] = max_cx5
 	out["key_max_cz"] = max_cz5
 	out["key_home_ok"] = home5
-	ok = ok and bad5 == 0 and home5
+	# --- (6) AC-0306 grid lock: the per-column arc-SPACING assertion ---
+	# P1a asserted GAPLESSNESS only, never uniformity. This is the gate that
+	# proves the ticket's actual claim (one flat metre is one metre of arc):
+	# the great-circle distance between ADJACENT flat columns on the home
+	# face, sampled across the face. Midlines must be 1.0000 +/- 1% (the
+	# pre-warp is exact there); the across-face 5x5 grid in both directions
+	# must fall in the documented irreducible cube-sphere band 0.70..1.01
+	# (measured 2026-09-25: min 0.7072 on the one-column edge row adjacent
+	# to a midline, max 1.0000, mean 0.9305; ~0.86 pole-to-corner).
+	var W6: float = SphereMath.face_width(R)
+	var W62: float = W6 * 0.5
+	var mid6: Array = [int(W62 * 0.125), int(W62 * 0.375), int(W62 * 0.625), int(W62 * 0.875), int(W62) - 1]
+	var sp_mid_min := 9.0
+	var sp_mid_max := -9.0
+	var sp_min := 9.0
+	var sp_max := -9.0
+	var sp_tot := 0.0
+	var sp_n := 0
+	for mx6 in mid6:
+		var smx: float = _sphere_arc_gap(W62, R, mx6, 0, 1, 0)
+		sp_mid_min = minf(sp_mid_min, smx)
+		sp_mid_max = maxf(sp_mid_max, smx)
+	for mz6 in mid6:
+		var smz: float = _sphere_arc_gap(W62, R, 0, mz6, 0, 1)
+		sp_mid_min = minf(sp_mid_min, smz)
+		sp_mid_max = maxf(sp_mid_max, smz)
+	for gx6 in mid6:
+		for gz6 in mid6:
+			var sgx: float = _sphere_arc_gap(W62, R, gx6, gz6, 1, 0)
+			var sgz: float = _sphere_arc_gap(W62, R, gx6, gz6, 0, 1)
+			sp_min = minf(sp_min, sgx)
+			sp_max = maxf(sp_max, sgx)
+			sp_min = minf(sp_min, sgz)
+			sp_max = maxf(sp_max, sgz)
+			sp_tot += sgx + sgz
+			sp_n += 2
+	var sp_ok := sp_mid_min >= 0.99 and sp_mid_max <= 1.01 and sp_min >= 0.70 and sp_max <= 1.01
+	if not sp_ok:
+		out["sp_fail"] = [sp_mid_min, sp_mid_max, sp_min, sp_max]
+	out["sp_mid_min"] = sp_mid_min
+	out["sp_mid_max"] = sp_mid_max
+	out["sp_min"] = sp_min
+	out["sp_max"] = sp_max
+	out["sp_avg"] = sp_tot / float(sp_n)
+	out["sp_n"] = sp_n
+	out["sp_ok"] = sp_ok
+	ok = ok and bad5 == 0 and home5 and sp_ok
 	ok = ok and out["home_bedrock_ok"] and out["home_spawn_top_ok"] and out["home_spawn_solid"] and out["home_spawn_above_air"]
 	out["ok"] = ok
 	Debug.result(out)
+
+
+# AC-0306: the on-sphere great-circle arc (m) between two ADJACENT flat
+# columns on the home face 0, in the ideal (double-precision) mapping.
+# Column (X, Z) sits at face-0 u = X/(W/2), 2v-1 = Z/(W/2) (W = face_width(R));
+# the pre-warped cube point is (tan(X/W2*pi/4), 1, tan(Z/W2*pi/4)).
+# MEASURED IN FLOAT64, NOT THE VECT3 PATH: the shipped Vector3 stores
+# float32, and dot() of two unit vectors whose true dot is 1 - 3e-8
+# quantizes onto the float32 grid near 1.0 (1 - 2^-24) — an adjacent-column
+# arc of ~2.5e-4 rad is below that resolution (measured 2026-09-25: the
+# Vector3 path returns 0.0 / 1.38 / 1.95 m, the 1- and 2-ulp steps). This
+# mirror keeps the arm on the ideal mapping; the arm's own (1) gapless and
+# (2) round-trip blocks pin the shipped Vector3 function to this formula.
+func _sphere_arc_gap(W2: float, R: float, X: int, Z: int, du: int, dv: int) -> float:
+	var a1: float = tan(float(X) / W2 * PI * 0.25)
+	var b1: float = tan(float(Z) / W2 * PI * 0.25)
+	var a2: float = tan((float(X) + float(du)) / W2 * PI * 0.25)
+	var b2: float = tan((float(Z) + float(dv)) / W2 * PI * 0.25)
+	var L1: float = sqrt(a1 * a1 + 1.0 + b1 * b1)
+	var L2: float = sqrt(a2 * a2 + 1.0 + b2 * b2)
+	var d: float = (a1 * a2 + 1.0 + b1 * b2) / (L1 * L2)
+	return acos(clampf(d, -1.0, 1.0)) * R
 
 
 func _occl_is_interior(wx: int, y: int, wz: int, stab: PackedByteArray) -> bool:

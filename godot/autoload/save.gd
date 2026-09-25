@@ -90,6 +90,9 @@ func save_now(slot: int) -> bool:
 		"leaf_decay": w.leaf_decay_index(),
 		# AC-0143 M5 v2: planet list - P1a stores home only (id=0, R=4000
 		# exact, orbit=null until AC-0147); load clamps R to [2000, 8000].
+		# AC-0306 grid lock: the flat grid width W = pi*R/2 is a pure
+		# function of R (SphereMath.face_width), so the record stays
+		# {id, R, orbit} - no new field, no save migration.
 		"planets": [
 			{"id": 0, "R": 4000, "orbit": null},
 		],

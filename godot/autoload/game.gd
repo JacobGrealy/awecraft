@@ -57,6 +57,9 @@ var dimension := "overworld"
 var world_seed := 1
 # AC-0143 M5: home planet radius (R) - the save planets[0].R, clamped to
 # [2000, 8000] on load; reset in new_world(). Used from AC-0144+.
+# AC-0306 grid lock: the flat grid derives from R, not a separate knob -
+# one cube face is SphereMath.face_width(R) = pi*R/2 columns wide (4W = 2*pi*R
+# = one flat metre per metre of arc; W = 6283 at the shipped R = 4000).
 var planet_R := 4000.0
 var time_of_day := 0.3
 var world = null

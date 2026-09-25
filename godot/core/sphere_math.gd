@@ -1,9 +1,32 @@
-# SphereMath — AweCraft planet sphere math (AC-0143 P1a). Pure static; no nodes.
+# SphereMath — AweCraft planet sphere math (AC-0143 P1a; grid lock AC-0306). Pure static; no nodes.
 # 12 faces = 6 axes x 2 sectors; face index = axis*2 + sector.
 #   axes: 0=+Y, 1=-Y, 2=+X, 3=-X, 4=+Z, 5=-Z
 #   FACE 0 = home face = current flat world (u->+x, v->+z, planet top).
 # Each face (u,v) in [0,1]^2 maps AFFINELY to a rectangle on the unit cube;
-# uv_to_world = normalize(cube_pt) * R ("pre-warp" = the cube step).
+# uv_to_world = normalize(prewarp(cube_pt)) * R ("pre-warp" = the cube step
+# plus the AC-0306 spacing warp, below).
+#
+# AC-0306 GRID LOCK — one flat metre is one metre of arc:
+#   one lap of the flat world (4 cube faces of W columns) = 2*pi*R
+#   => W/R = pi/2, i.e. face_width(R) = pi*R/2 = 6283 at the shipped R = 4000.
+# The flat home patch (faces 0+1, one cube face) is therefore W x W m (3141 per
+# half), NOT 2R x 2R as the pre-AC-0306 keying cx = R*u implied (ratio 2.000
+# => 0.72 m of arc per block — the planet was a subtly shrunken Minecraft).
+# The pre-warp makes the flat-to-arc map equal-spaced: a cube coordinate c
+# (in [-1,1], the flat distance from the face midline scaled by the half-face)
+# becomes tan(c*pi/4), so the on-sphere arc along either face midline is
+# exactly R*atan(tan(c*pi/4)) = c*(pi*R/4) = c*(W/2) — 1 column = 1 m = 1 m of
+# arc, EXACT on the midlines. The warp is per-coordinate (a pointwise function
+# of each cube coordinate): it is the ONLY warp shape that keeps the gapless
+# invariant, because both faces on a shared edge evaluate the same raw cube
+# arithmetic and must stay bitwise-identical after the warp. tan(pi/4) = 1 and
+# tan(0) = 0, so the cube edges and the face midlines are fixed points of the
+# warp and every shared edge still matches. Residual (irreducible cube-sphere
+# spread, measured 2026-09-25): 1.00 m on the midlines, ~0.93 m averaged over
+# a face, ~0.86 m pole-to-corner (the 0.71 m floor sits on the one-column edge
+# row adjacent to a midline — where the flat net wraps the cube edge). A sphere
+# is not developable, so no single fixed grid can give 1 m at every radius:
+# per planet W = 1.5708*R.
 # Cube maps C(face, u, v):
 #   0: (u, 1, 2v-1)      1: (u-1, 1, 2v-1)     [+Y halves, split on X]
 #   2: (u, -1, 2v-1)     3: (u-1, -1, 2v-1)    [-Y halves]
@@ -25,6 +48,23 @@
 class_name SphereMath
 
 const CELLS_PER_FACE := 1024
+
+# AC-0306: the flat width (m = columns) of ONE cube face at radius R. The grid
+# lock: 4 face-widths = the sphere circumference 2*pi*R => W = pi*R/2 (the
+# per-planet rule W = 1.5708*R). At the shipped R = 4000: W = 6283 (3141 per
+# home half). See the file header.
+static func face_width(R: float) -> float:
+	return PI * R * 0.5
+
+# AC-0306: the per-coordinate pre-warp. c in [-1,1] (one cube coord) ->
+# tan(c*pi/4). Fixes -1/0/1 (edges + midline centre), makes the midline arc
+# R*atan(tan(c*pi/4)) = c*(pi*R/4) = c*(W/2) exactly — 1 m of arc per flat m.
+static func _prewarp(c: float) -> float:
+	return tan(c * PI * 0.25)
+
+static func _prewarp_inv(c: float) -> float:
+	# Exact inverse of _prewarp on [-1,1]: (4/pi)*atan(c).
+	return atan(c) * 4.0 / PI
 
 static func face_for_dir(d: Vector3) -> int:
 	# 12-way: dominant axis (tie -> sign order), then sector.
@@ -57,7 +97,9 @@ static func uv_to_world(face: int, u: float, v: float, R: float) -> Vector3:
 		9: c = Vector3(u - 1.0, 2.0 * v - 1.0, 1.0)
 		10: c = Vector3(u, 2.0 * v - 1.0, -1.0)
 		_: c = Vector3(u - 1.0, 2.0 * v - 1.0, -1.0)
-	return c.normalized() * R
+	# AC-0306: the per-coordinate pre-warp (see the file header). Pointwise in
+	# each cube coord, so the gapless edge arithmetic is preserved.
+	return Vector3(_prewarp(c.x), _prewarp(c.y), _prewarp(c.z)).normalized() * R
 
 static func world_to_face(pos: Vector3, R: float) -> Dictionary:
 	# Invert the affine cube map: C = d rescaled so the dominant component
@@ -71,24 +113,29 @@ static func world_to_face(pos: Vector3, R: float) -> Dictionary:
 	var face: int = face_for_dir(d)
 	var dom: float = maxf(maxf(absf(d.x), absf(d.y)), absf(d.z))
 	var C: Vector3 = d / dom
+	# AC-0306: un-warp C back to the raw (affine) cube frame — C carries the
+	# pre-warped coordinates the forward map normalized.
+	var Cx: float = _prewarp_inv(C.x)
+	var Cy: float = _prewarp_inv(C.y)
+	var Cz: float = _prewarp_inv(C.z)
 	var u: float
 	var v: float
 	match face:
 		0, 2, 8, 10:
-			u = C.x
+			u = Cx
 		1, 3, 9, 11:
-			u = C.x + 1.0
+			u = Cx + 1.0
 		4, 5, 6, 7:
-			u = (C.y + 1.0) * 0.5
+			u = (Cy + 1.0) * 0.5
 	match face:
 		0, 1, 2, 3:
-			v = (C.z + 1.0) * 0.5
+			v = (Cz + 1.0) * 0.5
 		4, 6:
-			v = C.z
+			v = Cz
 		5, 7:
-			v = C.z + 1.0
+			v = Cz + 1.0
 		8, 9, 10, 11:
-			v = (C.y + 1.0) * 0.5
+			v = (Cy + 1.0) * 0.5
 	return { "face": face, "u": u, "v": v }
 
 # Neighbor edge table (P1a). _EDGES[face][edge], edge 0=u=1, 1=u=0, 2=v=1,

@@ -157,6 +157,27 @@ Build and loading:
 
 Match these; do not improvise a different approach in a task.
 
+- **Planet coordinate convention — the grid lock (AC-0143 → AC-0306)**: the planet is a
+  12-face cube-sphere (`core/sphere_math.gd`, face = axis*2 + sector, 1024-cell
+  `CELLS_PER_FACE` grid per face; the non-home faces are sparse data-level chunks).
+  **One flat metre is one metre of arc**: one lap of the flat world (4 cube faces of
+  W columns) equals the sphere circumference 2πR, so **W/R = π/2** — the flat width of
+  one cube face is `SphereMath.face_width(R) = π·R/2` (the per-planet rule W = 1.5708·R;
+  a sphere is not developable, so the grid scales with the radius). At the shipped
+  `Game.planet_R = 4000` (unchanged by AC-0306 — save record `planets:[{id,R,orbit}]`
+  keeps R only, W is derived, no migration): W = 6283 and the home pair (faces 0,1 —
+  the flat world, 1 m integer columns keyed `"%d,%d"`) is a 6283×6283 m patch (3141
+  per half). The position→cell map for the home pair is `World.key_for_sphere_pos`
+  (half-face width πR/4; pre-AC-0306 it was R — the 0.72 m-per-block "shrunken
+  Minecraft" defect). The cube-sphere mapping pre-warps each cube coordinate
+  `c → tan(c·π/4)` (per-coordinate on purpose: both faces of a shared edge evaluate
+  the same cube arithmetic, so the gapless invariant stays bitwise), which makes the
+  midlines exactly 1.0000 m/column; the irreducible residual is ~0.93 m face-average,
+  0.86 m pole-to-corner (the `sphere` arm's block 6 asserts it). **No data change:**
+  on the home pair a column IS its flat x/z and stays that way — genhash 25/25 and
+  the save edit keys are untouched by the mapping; only the position→cell ratio and
+  the pre-warp move. The `sphere` probe (harness arm `AWECRAFT_LOGIC=sphere`) is the
+  permanent proof.
 - **Collision**: player and mobs are `CharacterBody3D`; voxel collision is a **per-slab**
   `StaticBody3D` (24 per column) built in `chunk.gd _build_slab_collision` from the slab's
   opaque surface plus the flora CUTOUT surface (AC-0270 — leaves have collision; fluids and

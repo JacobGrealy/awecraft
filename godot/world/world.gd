@@ -175,8 +175,10 @@ const FRUSTUM_CULL_MARGIN := 32.0
 
 # AC-0143 M3 keying: the chunks dict is (face, cx, cz)-qualified.
 #   faces 0,1 (+Y halves, home pair) = the flat home world: key "%d,%d",
-#     1m columns; streaming/recenter byte-identical to pre-M3. Sphere
-#     mapping covers |x|,|z| <= R (face 0 = x >= 0, face 1 = x < 0).
+#     1m columns; streaming/recenter byte-identical to pre-M3. AC-0306 grid
+#     lock: the sphere mapping covers |x|,|z| <= pi*R/4 (W/2, W = pi*R/2 =
+#     face_width(R) — one flat metre is one metre of arc; pre-AC-0306 it
+#     covered |x|,|z| <= R). Face 0 = x >= 0, face 1 = x < 0.
 #   faces 2-11 = sparse on-demand data chunks: key "%d:%d:%d" (face,cx,cz)
 #     over the 1024-cell SphereMath grid (chunk = 16x16 cells); data level
 #     only in P1a (no meshing/lighting, AC-0144+).
@@ -12323,18 +12325,22 @@ func _key_f(face: int, ccx: int, ccz: int) -> String:
 	return "%d:%d:%d" % [face, ccx, ccz]
 
 # Single position->key resolver for planet-surface positions (radius R).
-# +Y halves (faces 0,1) = the flat home world (1m columns): face 0
-# x = R*u (x in [0,R]), face 1 x = R*(u-1) (x in [-R,0]); z = R*(2v-1).
-# Faces 2-11 resolve to their 1024-cell grid columns. Deterministic:
-# same position + R => same key.
+# +Y halves (faces 0,1) = the flat home world (1m columns). AC-0306 grid lock:
+# the home pair (one cube face) is W x W m with W = pi*R/2 = face_width(R) —
+# one flat metre is one metre of arc. Half-face width = pi*R/4: face 0
+# x = (pi*R/4)*u (x in [0, pi*R/4]), face 1 x = (pi*R/4)*(u-1)
+# (x in [-pi*R/4, 0]); z = (pi*R/4)*(2v-1). (Pre-AC-0306 this was R, tying the
+# face width to the radius — the 0.72 m-per-block defect.) Faces 2-11 resolve
+# to their 1024-cell grid columns. Deterministic: same position + R => same key.
 func key_for_sphere_pos(pos: Vector3, R: float) -> Dictionary:
 	var r: Dictionary = SphereMath.world_to_face(pos, R)
 	var face: int = int(r["face"])
 	var u: float = float(r["u"])
 	var v: float = float(r["v"])
 	if face == 0 or face == 1:
-		var fx: float = R * u if face == 0 else R * (u - 1.0)
-		return {"face": face, "cx": int(roundf(fx)), "cz": int(roundf(R * (2.0 * v - 1.0)))}
+		var hw: float = SphereMath.face_width(R) * 0.5  # AC-0306: pi*R/4 per half
+		var fx: float = hw * u if face == 0 else hw * (u - 1.0)
+		return {"face": face, "cx": int(roundf(fx)), "cz": int(roundf(hw * (2.0 * v - 1.0)))}
 	return {
 		"face": face,
 		"cx": clampi(int(floorf(u * float(FACE_CELLS))), 0, FACE_CELLS - 1),
