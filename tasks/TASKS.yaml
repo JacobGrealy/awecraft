@@ -1,12 +1,10 @@
 meta:
-  updated_at: 2026-09-25T02:35
+  updated_at: 2026-09-25T05:33
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0361
 - AC-0360
-- AC-0292
 - AC-0306
 - AC-0307
 - AC-0308
@@ -12995,11 +12993,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-09-15T08:17
-  updated_at: 2026-09-24T20:53
-  completed_at: null
+  updated_at: 2026-09-25T05:33
+  completed_at: 2026-09-25T05:33
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -13055,7 +13053,29 @@ intake:
     P2 before planning, and take the chamber-height geometry from the re-budgeted void rather than from
     today''s sponge (the layer caps decide how tall a chamber can be).
 
-    The 3-D cave-biome/surface-rule half of this ticket is unaffected by the re-budget.'
+    The 3-D cave-biome/surface-rule half of this ticket is unaffected by the re-budget.
+
+
+    CLOSED (commit c592204). COORDINATOR VERIFICATION note, stated precisely because it is a chain rather
+    than a fresh stage of my own: AC-0292''s world is verified by the twelve green runs AC-0361 made ON
+    THIS TREE immediately afterwards (genhash 25/25 byte-identical to the AC-0292 reference, genprobe
+    10,300/10,300, farab 1080/1080 h_mismatch 0, ladder 20/20, meshprobe 1.0, lightstate 0/0, r16 all
+    sub-flags with far_holes 0 in both bands, boundary r4 in band, the battery with only the documented
+    AC-0330 red), and AC-0361 touched only the ARM and the docs, so those readings are AC-0292''s world
+    read fresh. I did not run a separate stage for this ticket. THE DELIVERABLE: vanilla''s pillar threshold
+    in the deep branch with 83% of dense-pillar solids on the cheese-air side (real pillars in the pockets,
+    241,020 dense / 126,377 scan-level at seed 44), big ore veins as sparse blobs alongside the thin speckles
+    (42,669 cells, an 11,063-cell coal seam, 14,392 at seed 7), and a 3-D biome field driving deepslate
+    (crisp at y 64 with a 64..71 blend and 0 cells above 72), sculk, moss, dripstone stalactites/stalagmites
+    with clay pools, and a bedrock band under the lava floor. Five new blocks with atlas tiles. COST +26.0%
+    over the aquifer baseline, measured over 81 chunks and inside the predicted band. H and the water
+    contracts held. THE THREE SHOTS ARE RECORDED AS NON-EVIDENCE RATHER THAN EVIDENCE: they are 1280x720
+    but only 27-67 KB, the one I inspected is almost entirely black, and the reason is structural - the
+    proxy renderer produces no light underground, so an unlit cave render is a black frame no matter how
+    well the camera is aimed (the `_placed` variants being byte-identical in size for two of them is the
+    same fact from another angle: the reference block is not visible either). The censuses carry the proof.
+    That limitation is harvested as a standing rule so the next cave ticket does not spend a run rediscovering
+    it, and any future cave render needs a light rig or a lit vantage rather than a better camera angle.'
   comments: []
 - id: AC-0293
   title: retire-5x5-startup-burst
@@ -19668,11 +19688,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-09-25T02:34
-  updated_at: 2026-09-25T02:35
-  completed_at: null
+  updated_at: 2026-09-25T05:33
+  completed_at: 2026-09-25T05:33
   waiting_on: null
   parent_id: null
   notes: '1) User Story: A column of the world keeps light that is stale - the settled light disagrees
@@ -19727,5 +19747,19 @@ intake:
     a related halo class (`halo_glow_cells_zeroed` 820 -> 0) and AC-0349 re-fixed the arm''s own reconciliation
     once, so read both before concluding which side is wrong this time.
 
-    '
+
+
+    COORDINATOR CLOSE: this is the third time this session that a red turned out to be the ARM''s reference
+    rather than the engine (AC-0334''s halo class, AC-0349''s brightslab reconciliation, AC-0358''s mis-scoped
+    B2 window), and the pattern is now unmistakable enough to state as a rule of thumb: arms that assert
+    VALUES or model the world approximately go stale as soon as the world changes, while arms that assert
+    INVARIANTS or validate against a freshly computed oracle do not. What makes this close comfortable
+    rather than merely convenient is the ORACLE: the builder did not argue the engine was fine, it computed
+    the light independently and showed the live state equals the union of the domain fixed points cell-exactly,
+    with the promotion re-seed exact on all 33 newly-seeded columns - and then it made the newly-understood
+    class VISIBLE as report-only fields (resid_over/resid_cols/resid_first) instead of letting a corrected
+    reference silently absorb it. That last detail is the difference between fixing a test and hiding
+    a behaviour. The world is provably untouched (genhash byte-identical, no rebase) and the only standing-row
+    movement is the adjacent lightstate ab fixture, re-baselined with its attribution to P4''s re-carve
+    rather than folded in.'
   comments: []
