@@ -1,11 +1,11 @@
 meta:
-  updated_at: 2026-09-24T14:00
+  updated_at: 2026-09-24T20:42
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0290
 - AC-0291
+- AC-0360
 - AC-0292
 - AC-0306
 - AC-0307
@@ -12810,11 +12810,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-09-15T08:17
-  updated_at: 2026-09-24T08:36
-  completed_at: null
+  updated_at: 2026-09-24T20:42
+  completed_at: 2026-09-24T20:42
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -12871,7 +12871,27 @@ intake:
     band gets tight), so re-take the before/after shots against the new tree, and (ii) the surface-opening
     work that used to be AC-0343 (now cancelled) lives inside AC-0347 P2/P3: the entrance family is the
     deliberate surface opener and the tunnels keep their AC-0289 role as the vertical connectors, so if
-    your cut-through policy assumes the old surface behaviour, re-check it there.'
+    your cut-through policy assumes the old surface behaviour, re-check it there.
+
+
+    COORDINATOR VERIFICATION, on a stage proven clean rather than assumed (my stage ran 14:00:49-14:22:40
+    and AC-0291''s first gen.cpp write is timestamped 20:29 - six hours later - so every reading is the
+    AC-0290 tree): genhash 25/25 byte-identical in two runs and matching the current reference for the
+    probed chunk, which is itself informative because AC-0290''s rebase touched exactly ONE of the 25
+    chunks (the one carrying a solid-carving feature) so the `0 0` probe correctly reads unchanged; farab
+    1080/1080 with h_mismatch 0, the independent corroboration of the builder''s thash proof that the
+    heightmap did not move even though the carvers reach the surface; r16 with the documented --fixed-fps
+    600 recipe ALL sub-flags green with far_holes 0 in both bands; ladder 20/20; meshprobe 1.0; halo at
+    its documented classes; brightslab with zero SCRIPT ERROR; boundary r4 ok with p95 39 and staged_dropped
+    1753; the R24 arm ok with 10 crossings, storm_walk_p99 112 inside its gate and the crossing sweep
+    8.0 inside its own; and the battery complete with only the long-standing AC-0330 settings red. THE
+    SHOTS ARE THE WEAK PART AND ARE RECORDED AS SUCH: I inspected all three with vision and the geometry
+    is ambiguous at those camera angles under the proxy renderer - the gallery frame reads as a large
+    flat-ceilinged opening and the canyon frame as a steep green slope with stone above, and neither unambiguously
+    shows the feature it is named for. They were also initially written into .scratch/ (git-ignored) rather
+    than the ticket folder the verify list names, and I moved and committed them before they could be
+    lost. The carver CENSUSES, not the renders, are what demonstrate the families; a future render pass
+    should choose a vantage that actually frames the feature.'
   comments: []
 - id: AC-0291
   title: cave-p3-voronoi-aquifers
@@ -12880,10 +12900,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-09-15T08:17
-  updated_at: 2026-09-21T03:10
+  updated_at: 2026-09-24T14:11
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -19533,4 +19553,86 @@ intake:
     \ IMPLEMENTATIONS of the same spec (a decision ticket's throwaway prototype and this ticket's production\
     \ change) landing on the same world, which is much stronger evidence than a self-consistency run -\
     \ and my own extraction of the two runs confirms they are byte-identical line for line."
+  comments: []
+- id: AC-0360
+  title: cave-near-surface-void-census
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-24T19:29
+  updated_at: 2026-09-24T19:29
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story\n\nAs a player walking around, the ground near the surface reads like a shell:\
+    \ roughly one column in four of openable surface is punctured, holes average ~21 blocks deep, and\
+    \ the open space just below the grass is much bigger than it should be. The suspicion (user's, 2026-09-24)\
+    \ is that the TUNNEL family is the cause — the noodles/spaghetti are the wrong size near the top.\
+    \ This ticket measures which family actually makes the near-surface void, banded by depth, so the\
+    \ fix targets the right thing instead of tuning blindly; if the tunnels are confirmed, it then gates\
+    \ them to the deep the way Minecraft does, and the surface goes back to being opened only by the deliberate\
+    \ families.\n\n2) Technical Details\n\nTHE HYPOTHESIS (structurally supported, not yet measured as\
+    \ a volume split):\nOur tunnel predicate is DEPTH-BLIND. tunnel_air_c (gdext/src/gen.cpp:855 at the\
+    \ AC-0290 commit) reads only the three tunnel fields plus the gate weight — no depth term, no K_CUT,\
+    \ no ramp, no layer — and it is applied OUTSIDE the router at EVERY scan y of the in-column scan,\
+    \ and identically in the veg-margin scan. Vanilla/Bedrock's structure is different: spaghetti_2d and\
+    \ noodle live in the DEEP branch of final_density's range_choice; the shallow band is min(sloped_cheese,\
+    \ 5*entrances). So vanilla's tunnels never carve the near-surface band, and vanilla's noise-cave surface\
+    \ breaks come from cave_entrance alone. Constants today: K_CUT 16.0 (:454), SPAG_TH 0.16 / NOOD_TH\
+    \ 0.08 / GATE_LO 0.52 / GATE_HI 0.58 (:524-527).\n\nEVIDENCE ALREADY IN HAND (all measured — this\
+    \ ticket converts it into a per-band, per-family VOID BUDGET):\n- AC-0347 P3's K_CUT rationale: \"\
+    the shallow band stays degenerate (solid + entrance slits)\", and \"the surface openings themselves\
+    \ are the knob-immune families (tunnel piercings — AC-0289's topology — 72% of the opened columns;\
+    \ the entrance family opens 0 columns, rarer than the tunnels)\".\n- AC-0344's census (seed 44, 6,400\
+    \ cols): opened columns (openable surface cols) 1534 (24.0%) -> 1672 (26.1%); opening decomp (tunnel\
+    \ / entrance / other) 1486/0/48 -> 1663/0/9; opening depth avg/max 92.3/141 -> 20.9/62 blocks; first-cave\
+    \ k-bands (1-4/5-9/10-15/16-24/25-49/50+) 148/280/442/912/1462/1535 -> 781/614/572/1221/772/708.\n\
+    - AC-0289 measured tunnel widths median 2-6 blocks — so the hypothesis is NOT \"each tunnel is fat\"\
+    ; it is about WHERE they carve and how often near the surface.\n- AC-0290 CARVERS HAVE LANDED (committed\
+    \ 4c1b3c0) and are a deliberate ground-opening family: CARVE_PROB 0.15/chunk, CANYON_PROB 0.01/chunk,\
+    \ CARVE_Y_MIN 8 / CARVE_Y_MAX 244, CANYON_Y_MIN 74 / CANYON_Y_MAX 131 (:951-970), with measured openings\
+    \ (a 30-block shaft through sand, a 5x7 trunk opening dropping 17-29, a 3x4 gully with a 21-block\
+    \ drop). Vanilla has carvers too, so they are a legitimate opener — but they must be their own bucket\
+    \ in the census or they will be mistaken for tunnels.\n\nP1 — MEASURE (the deliverable of this ticket\
+    \ even if the verdict is \"not the tunnels\"):\n- Temp arm in the AC-0290 `carvstat` / AC-0344 `near-surface\
+    \ decomp` lineage: over the same window the cave censuses use (seed 44), generate each chunk and classify\
+    \ every NON-SOLID UNDERGROUND cell by the rule that made it non-solid — cheese/deep-router, tunnel,\
+    \ entrance, CARVER, and (k < 9.5) the shallow ramp band. Classify by RE-RUNNING the predicates at\
+    \ that cell, not by position or adjacency.\n- Report the void volume split BY DEPTH BAND k = H - y:\
+    \ 0-4, 4-8, 8-16, 16-24, 24-48, 48-80, 80-130, 130+. The k<16 bands are what the hypothesis is about.\n\
+    - Re-run AC-0344's opening census on the SAME tree (post-carver, post-aquifer baseline for the fix):\
+    \ opened columns %, opening decomp by family (now four families), first-cave k-bands, opening depth\
+    \ avg/max, and the count of columns whose topmost solid lands below SEA.\n- Fluid treatment: count\
+    \ water/lava-filled cells as VOID (the complaint is open space) but report them separately, because\
+    \ AC-0291 puts water in some of it and a flooded void is not walkable.\n- VERDICT + LEVER, stated\
+    \ plainly:\n  * tunnel share dominant at k<16 with a large volume -> P2 below;\n  * carver share dominant\
+    \ -> say so and stop (deliberate family, vanilla has it; if its openings are too many, that is AC-0290's\
+    \ OWN knob set, not the tunnels');\n  * the openness is really the k30-50 cheese band (59.0% air at\
+    \ C48) -> the hollowness knobs (CHEESE threshold / LAYER duty cycle), not the tunnels — say so and\
+    \ stop.\n\nP2 — THE FIX, ONLY IF P1 NAMES THE TUNNELS:\nGate the tunnel predicate by depth: allow\
+    \ tunnel_air_c only for k >= K_CUT (or a deeper cut of its OWN, measured, not assumed), which is literally\
+    \ vanilla's topology. The deep tunnel network and its cap-piercing stay untouched — the levels must\
+    \ remain connected (that is AC-0347's stated intent and vanilla's behaviour). Carvers and entrances\
+    \ remain the deliberate openers.\nTwo things that MUST be handled WITH it, not after:\n  (i) the entrance\
+    \ family opens 0 columns today (AC-0347 P3 and AC-0344 both measured 0). So once the tunnels stop\
+    \ opening the surface, decide DELIBERATELY whether the surface becomes nearly cave-free or the entrance\
+    \ port needs fixing (its 0.37 offset / threshold against the shallow branch's min(ramp, 5*ent) shape)\
+    \ — put the decision in plan.html, do not let it be discovered;\n  (ii) the veg-margin scan mirrors\
+    \ the in-column scan and must be gated IDENTICALLY, or tree bases land in mid-air holes.\nThen re-run\
+    \ P1's census as the proof (tunnel share at k<16 -> ~0, opened columns down, first-cave k-bands shifted\
+    \ down).\n\nCONSTRAINTS AND GATES:\n- P1 must be GENERATION-NEUTRAL: measurement only, no generator\
+    \ change (the temp arm goes in AND out in the same task — pristine rule; a new/changed arm also needs\
+    \ its row in tasks/harness_data.yaml and python3 tasks/scripts/harness_doc.py --render).\n- G0 = zero\
+    \ SCRIPT ERROR lines (not rc).\n- P2 is a generation change: genhash rebases (accepted — standing\
+    \ user note 2026-09-15: fresh worlds only), and it owes the H proof (thash byte-identical / the AWEH\
+    \ column_heights16 SHA-256 method), farab, and the standing battery + r16 sub-flags. It must NOT move\
+    \ the surface fields or SEA.\n- Coexistence: AC-0291 is IN FLIGHT (aquifers decide what fills the\
+    \ void and add stone rims) — take the baseline AFTER it lands, not before, or the census will be measured\
+    \ on a tree nobody will play. AC-0292 (pillars) FILLS chamber void, so this census is also its baseline\
+    \ for how much void is left to fill; that is why this ticket sits ahead of AC-0292.\n- Sequence: queued\
+    \ after AC-0291 and before AC-0292.\n"
   comments: []
