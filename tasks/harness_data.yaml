@@ -330,7 +330,7 @@ modes:
     envs: '`AWECRAFT_SEED` (default 44)'
     wall: 2 s
     notes: |-
-      known-stable: 25/25 identical across verified tasks; seed 99 → all 25 differ
+      known-stable: 25/25 identical across verified tasks; seed 99 → all 25 differ. **AC-0360 rebase (2026-09-25, intentional)**: 22/25 changed, 3 unchanged — (0,2) (1,2) (2,2) (no near-surface tunnel ever existed in those chunks, so the gate and the aquifer/carver second-order effects never reached them); the new reference set is recorded in `.scratch/AC-0360-gates/genhash_r1.log` (GENMS 144) and `tasks/AC-0360/AC-0360-results.html`; doc re-rendered and --check clean
   trees:
     entry: '`_trees_test`'
     tests: tree generation + cross-quad mesh per chunk

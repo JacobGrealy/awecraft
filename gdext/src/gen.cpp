@@ -116,11 +116,18 @@
 //   patch edge). The rule is applied BEFORE the he/solidf scan's solid
 //   flag (a tunnel carves air even where the cheese field says solid) and
 //   identically in the veg margin scan (the tree base matches the full
-//   column). The heightmap H (surface_h of the 3 SURFACE fields) is
-//   untouched — a tunnel breaking the surface only wobbles the EFFECTIVE
-//   surface (he), inside the documented H+/-R band, exactly like the
-//   cheese term already does. The H+R+1 scan-start "air for sure" margin
-//   is preserved (the tunnel only removes solidity).
+//   column). AC-0360 (the near-surface void census): the rule is now
+//   DEEP-ONLY — applied only for k >= K_CUT (vanilla's range_choice
+//   topology: the tunnel families live in the DEEP branch, the shallow
+//   band is ramp + entrances). The census proved the tunnel owned 100% of
+//   the k<16 void volume (32,249 cells, seed 44, 5x5 window) and 100% of
+//   the opened columns, so the gate removes exactly the near-surface
+//   carve and leaves the deep network + cap-piercing byte-identical. The
+//   heightmap H (surface_h of the 3 SURFACE fields) is untouched — the
+//   tunnel fields are read only on the full-path scan, so H / the far /
+//   skip payloads are bit-exact by construction (thash + farab prove it).
+//   The H+R+1 scan-start "air for sure" margin is preserved (the tunnel
+//   only removes solidity, and now only deep).
 //
 //   AC-0359 (the AC-0344 C48 decision — the CAVE FAMILY ON AN 8-BLOCK-Y
 //   LATTICE): the cave family (cheese + the 3 tunnel fields + the NEW
@@ -950,6 +957,8 @@ static inline bool tunnel_air_c(const FieldC &f_spag, const FieldC &f_nood, cons
 // TUNNELS: the AC-0289 tunnel_air rule is applied OUTSIDE this function
 // (the scan's "&& !tunnel_air") — the vanilla spaghetti min, kept where
 // AC-0289 put it so the tunnels pierce the caps and connect the levels.
+// AC-0360: the scan applies it DEEP-ONLY (k >= K_CUT) — vanilla's
+// range_choice topology; see the header's tunnel section.
 // PILLARS: the outer max(..., pillars_choice) is AC-0292 (SEQUENCE).
 static inline double dens_at(int H, int y, double cave, double ent, double layer) {
 	double k = (double)H - (double)y; // depth from the surface
@@ -2375,9 +2384,10 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				// exactly and the SHALLOW branch applies, so
 				// d = min(-1, 5*entrances) <= -1 < 0 for ANY noise values;
 				// the deep branch cannot reach above H - K_CUT and the tunnel
-				// rule only removes solidity. The H+11 start stands on the
-				// min/clamp structure — no noise budget is involved (the old
-				// CAVE_AMP argument died with A(y)).
+				// rule (DEEP-ONLY since AC-0360: k >= K_CUT) only removes
+				// solidity. The H+11 start stands on the min/clamp structure
+				// — no noise budget is involved (the old CAVE_AMP argument
+				// died with A(y)).
 				// AC-0237: bounded to the generated slabs — solidf of an
 				// ungenerated slab is never read (the fill loop never
 				// emits there).
@@ -2405,8 +2415,14 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 					// AC-0289: the tunnel air wins over the router's solid —
 					// applied OUTSIDE dens_at (the vanilla spaghetti min,
 					// kept where AC-0289 put it: the tunnels pierce the caps).
-					bool s0 = dens_at(H, y, cave, ent, lay) > 0.0
-							&& !tunnel_air_c(f_spag, f_nood, f_gate, gx, gy_c, gz);
+					// AC-0360: the tunnel is DEEP-ONLY — allowed for k >= K_CUT
+					// (vanilla's range_choice topology: spaghetti/noodle live in
+					// the DEEP branch, the shallow band is ramp + entrances).
+					// The short-circuit removes the 3 lattice reads at every
+					// shallow-band y (the measured scan cost win).
+					bool tun = (H - y >= K_CUT)
+							&& tunnel_air_c(f_spag, f_nood, f_gate, gx, gy_c, gz);
+					bool s0 = dens_at(H, y, cave, ent, lay) > 0.0 && !tun;
 					// AC-0292: the PILLAR (the vanilla caves/pillars max,
 					// deep branch only — the range_choice split). The max
 					// sits OUTSIDE the spaghetti min, so a pillar cell is
@@ -2758,8 +2774,12 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 							? tril_c(f_layer, gx2, gy2, gz2)
 							: 0.0;
 					// AC-0289: the same tunnel rule as the in-column scan.
-					bool sv = dens_at(H2, y, cave, ent, lay) > 0.0
-							&& !tunnel_air_c(f_spag, f_nood, f_gate, gx2, gy2, gz2);
+					// AC-0360: the SAME depth gate as the in-column scan
+					// (the tree base must match the full column — the margin
+					// column is scanned with the identical gated predicate).
+					bool tun = (H2 - y >= K_CUT)
+							&& tunnel_air_c(f_spag, f_nood, f_gate, gx2, gy2, gz2);
+					bool sv = dens_at(H2, y, cave, ent, lay) > 0.0 && !tun;
 					// AC-0292: the same pillar rule as the in-column scan
 					// (deep branch only, the max outside the tunnel min).
 					if (H2 - y >= K_CUT

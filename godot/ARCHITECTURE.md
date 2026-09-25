@@ -526,7 +526,17 @@ Match these; do not improvise a different approach in a task.
   air wins over cheese solid where `|f_spag−0.5| < 0.16·w` or `|f_nood−0.5| < 0.08·w` with
   `w = clamp01((f_gate−0.52)/0.06)` (the thickness scales with the gate weight — the tunnel
   pinches out at the patch edge); the rule runs BEFORE the he/solidf scan's solid flag and
-  identically in the veg margin scan, so the tree base matches the full column. The tunnel
+  identically in the veg margin scan (its own H2), so the tree base matches the full column.
+  **AC-0360 (the near-surface void census — the rule is DEEP-ONLY now)**: the scan applies the
+  tunnel only for `k = H−y ≥ K_CUT (16)` (`bool tun = (H − y >= K_CUT) && tunnel_air_c(...)`),
+  i.e. vanilla's range_choice topology — the tunnel families live in the DEEP branch, the shallow
+  band is ramp + entrances. The census (temp arm, out at closeout) proved the tunnel owned 100%
+  of the k&lt;16 void volume (32,249 cells, seed 44, 5×5 window) and 100% of the opened columns
+  (1,669 / 26.1%, depth avg 19.5); after the gate the k&lt;16 void is 0, opened columns 0, the
+  first cave on intact columns begins at k ≥ 16, and the deep bands (80-130 / 130+) are
+  byte-stable — the short-circuit also removes the 3 lattice reads at every shallow y (per-chunk
+  5,490→5,319 µs on the census instrument, scan 1,650→1,581 µs). genhash rebased 22/25 (3 chunks
+  unchanged), H byte-identical (thash `8df7aeb4…0dc4f11` both sides). The tunnel
   fields are built and read ONLY on the full path (skip==0) — the lazy skip fill and the far
   h-only payload never read them, so the H / far / promotion contracts stay bit-exact by
   construction (a tunnel breaking the surface only wobbles the EFFECTIVE surface, inside the
