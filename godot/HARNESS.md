@@ -128,6 +128,17 @@ lighting feel; the authoritative look is the user's Windows build of the shipped
 The `forward_plus` A/B on this box is unproven (a Vulkan device via lavapipe is present but
 untested) — AC-0300.
 
+**UNDERGROUND RENDERS ARE BLACK — a hard limit, not a camera problem (AC-0292, 2026-09-25).**
+The proxy renderer puts no light underground, so a snapshot taken in an unlit cave or inside solid
+ground is a black frame **however well the camera is aimed**, and it cannot evidence a cave feature
+or a lighting change at all. AC-0292's three cave shots came out at 27–67 KB for a 1280×720 frame (a
+surface shot is 500–700 KB), the one inspected was almost entirely black, and two of the three were
+byte-identical in size to their `_placed` twin because the reference block was invisible too.
+**Evidence cave features by CENSUS, not by render**; if a render is genuinely wanted it needs a light
+rig or a lit vantage (beside a torch, at an opening, or in a deliberately lit test scene), not a
+better angle. Check a shot's **byte size as well as** its dimensions before calling it evidence — a
+suspiciously small PNG is a black frame.
+
 | env | what it does | required flags / notes |
 |---|---|---|
 | `AWECRAFT_SNAPSHOT=path.png` | boot world (menu-first unless `AWECRAFT_MENU_BOOT=1`), wait for build, snap viewport PNG | xvfb-run -a + `--rendering-method gl_compatibility` (proxy renderer — see the note above §2); sets `RESULT {"m4":"ok",w,h,cam}` |
