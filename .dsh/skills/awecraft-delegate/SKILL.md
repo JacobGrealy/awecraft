@@ -69,3 +69,29 @@ Check the deliverable set before trusting it: `tasks/AC-NNNN/plan.html`, the sel
 
 Gate policy for the builder's VERIFY block: `awecraft-run-verify`. Ticket mechanics:
 `awecraft-file-ticket`.
+
+## When full builder runs start dying, decompose instead of retrying
+
+A real symptom from the 2026-09-26 session: `subagent_xhigh` and `subagent_medium` runs began hitting
+their token limit **before writing anything** — three consecutive attempts on AC-0362 produced a
+546-byte journal and no plan, no results page and no code, while a trivial `subagent_low` call and a
+small real task still worked. The fix is NOT a longer or better prompt (a tightened rewrite died the
+same way); it is a SMALLER TASK:
+
+- **One bounding deliverable per run.** "Measure X and write the numbers to a file, do not attempt a
+  fix" is achievable where "measure X then fix it and gate it" is not. Splitting AC-0362 into a
+  measurement run and a fill run is what finally worked — which is the project's own
+  *split before you delegate* sizing rule, applied to a degraded slot rather than to a hard ticket.
+- **Name the files to read and forbid the rest** ("read these four things; do NOT read
+  `docs/planet-epic.html`, `world.gd` or `chunk.gd` whole"). Two builders in one series died with
+  nothing written after loading whole large files.
+- **Ask for the artifact, not the prose** — a short results page or a script plus a <= 8 line report,
+  so a run that dies still leaves something a later run resumes from.
+- **Check the slot before blaming the ticket**: a trivial `subagent_low` call ("reply SLOT-OK") that
+  succeeds while every substantial run dies means the budget is the constraint, not the work.
+- **A measurement script is an instrument**: validate it against the SHIPPED implementation before
+  believing its numbers. AC-0362's first aperture script was a broken transcription of
+  `sphere_math.gd` (its origin dropped two terms, displacing columns up to 6.2 m) and its headline
+  "4.501 cm worst, 119,286 open seams" was a phantom that reached a ticket summary. Cross-check a
+  probe against the real geometry, the real engine, or a second independently written implementation —
+  the same rule AC-0353 followed when it validated its reverse map on a known fixture first.
