@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-27T05:56
+  updated_at: 2026-09-27T13:06
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0367
 - AC-0369
 - AC-0370
 - AC-0371
@@ -20594,11 +20593,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-26T17:28
-  updated_at: 2026-09-26T17:28
-  completed_at: null
+  updated_at: 2026-09-27T13:06
+  completed_at: 2026-09-27T13:06
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -20728,7 +20727,90 @@ intake:
     the three tunnel fields individually, which sets the expected win here. If AC-0366 has not run, P1
     may proceed but the before/after numbers must be captured by this ticket.
 
-    '
+
+
+
+    ADDITION (2026-09-28) - AC-0366''s PRICE LIST SHARPENS THE EXPECTED WIN, AND THIS TICKET''S ORIGINAL
+    NUMBER WAS TOO GENEROUS. Read this before sizing the change, because the expectation stated in the
+    main notes ("the scan is 1,630 us/chunk = 29% of the total, and the tunnel predicate is evaluated
+    per cell") risks over-promising.
+
+
+    WHAT AC-0366 MEASURED (tree dc07e05, generation lane byte-identical to AC-0363''s - so these prices
+    are valid here):
+
+    - Per octave-evaluation: **23.0 ns**. Per cave-lattice point: 0.575 us (25 octaves across the 9 cave
+    fields). Per scanned block: **36-49 ns** (the scan visits ~H+11 blocks x 256 columns = 33-45k blocks/chunk).
+
+    - Cave-family fields, priced per field: cheese (7 oct) 386.7 us · spag (2) 110.5 · nood (2) 110.5
+    · gate (2) 110.5 · entrance (3) 165.7 · pillar (4) 220.9 · vein (2) 110.5 · biome (2) 110.5.
+
+    - **The three tunnel fields you are deleting are 331 us/chunk combined** (14,406 of 65,317 octave-evaluations).
+
+    - The scan is 1,604 us/chunk TOTAL, and per scanned block the work is "2 tril_c always (cheese, entrance)
+    + deep band (k >= 16): +1 layer + 3 tunnel + 1 pillar + dens_at". So removing the 3 tunnel lookups
+    removes 3 of ~6 deep-band trilinear reads in the deep band only - a fraction of the scan, not the
+    scan.
+
+    - REALISTIC EXPECTED WIN: roughly **420-800 us/chunk = 7.6-14.5% of the 5,502 us total** (331 us of
+    field build + a slice of the scan), NOT 29%. Size the ticket and the claims accordingly. A win at
+    the low end is still worth landing for topology convergence; a claim of 29% would be wrong and would
+    make a correct result look like a failure.
+
+
+    WHAT AC-0366 ALSO FOUND THAT IS BIGGER THAN THIS TICKET (do not chase it here - AC-0371 owns it):
+
+    - The Voronoi aquifer search in the fill is **1,600 us/chunk = 29.1% of the total and 67.7% of the
+    1.84x regression** - the single biggest named term in the codebase''s history, and the one AC-0366
+    recommends attacking first.
+
+    - A cross-chunk lattice-margin cache is priced at **676-737 us/chunk** (the 1-cell xz margin is 1,176
+    of the 2,401 points = 48.9%, recomputed per chunk for all 9 fields, and each margin point is a neighbour''s
+    core point so the same value is computed up to 4x per region). AC-0366 recorded it as avoidable-without-changing-output
+    but did NOT implement it, because a lattice cache makes neighbor chunks a dependency and breaks the
+    `generate_resl` PURE `f(world coords, seed)` property that AC-0237''s window-scoped regeneration depends
+    on. If you find yourself reaching for that property while removing the tunnel apparatus, note that
+    this ticket does NOT need to touch it.
+
+    - The cave family as a whole (lattice + scan) is ~3.1 ms/chunk. "Keep the caves, they cost ~3.1 ms"
+    is the standing price, so this ticket is not about whether caves are worth it - it is about evaluating
+    them vanilla''s way.
+
+
+    DOES THE FIX GO INTO C++? Yes, and it already is: the density router, the cave fields, the scan and
+    the fill all live in `gdext/src/gen.cpp`, and AC-0366 confirmed the generation lane is C++ end to
+    end (its per-stage prices come from the shipped C++ atomics). Nothing about this change introduces
+    GDScript - keep it that way, and keep the per-field/per-block counters in C++ beside the existing
+    `g_t_*` atomics if you add any.
+
+
+    CLOSED, AND IT IS THE BEST KIND OF TICKET: the faithful change turned out to be the CHEAP one. COORDINATOR
+    VERIFICATION on my own capped stage (all arms rc 0, zero SCRIPT ERROR): genhash 25/25 byte-identical
+    in two runs against the rebase this ticket recorded; farab 1080/1080 with h_mismatch 0; ladder 20/20;
+    meshprobe 1.0; halo fully clean (a) boundary 0 with inner 0 and (c) 0; lightstate clean; r16 with
+    the documented --fixed-fps 600 recipe ALL sub-flags green with far_holes 0 in both bands; boundary
+    r4 ok with p50 10 / p95 39; the R24 arm completes with 10 crossings, resident 1453, storm p99 99 inside
+    its <=200 gate and the crossing sweep 13.6 inside its <=15 gate (worth noting as the tightest reading
+    this gate has taken, though still inside); and the battery complete with only the long-standing AC-0330
+    settings red. WHAT THE TICKET ACTUALLY BOUGHT, in order of how much a player would notice: (1) THE
+    WORLD IS NO LONGER HOLLOW - deep cave volume fell 236,845 -> 21,173 cells because the AC-0289 stand-in
+    was 92% of the deep void and its thick iso-band OR-test over-carved where vanilla''s terms are narrow-band
+    carvers; 66% of columns are now cave-free against 1.7% before, which is precisely the user story AC-0347
+    opened with ("chambers that read as rooms rather than one void running from just under the grass to
+    the floor"); (2) GENERATION GOT CHEAPER - 5,359 -> 4,758 us/chunk (-11.2%, -13.5% against the AC-0366
+    baseline), because retiring the heavy stand-in saved 842 us of per-cell aquifer fill and 98 us of
+    drip against the 347 us the four faithful dense builds cost, so the port paid for itself; (3) THE
+    PER-BLOCK CARVE APPARATUS IS GONE - the outside rule, its pass, the three fbm3 stand-in fields, their
+    constants, gate_weight/tunnel_air/tunnel_air_c and four AweGen bindings are deleted, which removes
+    an entire class of "why is this decided outside the router" questions. THE SEAL IS STRUCTURAL, NOT
+    RE-VERIFIED: the shallow branch is bit-identical so AC-0360''s zero near-surface void is held by construction
+    rather than by re-measurement, and H is byte-identical throughout (thash before and after, farab h_mismatch
+    0). THE PIECE-A PORT IS ALSO A STANDING ASSET: vanilla''s four tunnel noises are now in the native
+    lane with a three-way proof (GDScript == C++ 11,500/11,500 f64, an independently spec-written python
+    lane 832/832 with full rarity-mapper bucket coverage, and a permanent 208-point-per-function genprobe
+    lockstep block) - and it produced a project-wide hazard worth more than the port: GDScript''s literal
+    parser lands up to 4 ulp low on long decimal constants, an error invisible to every gate except the
+    lockstep block, now recorded in OPS.md with the division-as-exact-constant fix.'
   comments: []
 - id: AC-0368
   title: planet-p1a-cross-face-residuals
