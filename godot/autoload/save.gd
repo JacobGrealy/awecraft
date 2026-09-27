@@ -130,16 +130,26 @@ func format_time(t: float) -> String:
 	var mm := int(total % 60)
 	return "%02d:%02d" % [hh, mm]
 
-# AC-0143 M5: v2 edit key form "0:<face>:<ccx>:<ccz>:<local>" (home pair
-# only in P1a; the planet_id:face:cx:cz:local form addresses non-home faces
-# from AC-0144+ when the player can reach them). Old runtime key
-# "<ccx>,<ccz>" maps to face 0 (ccx >= 0) / face 1 (ccx < 0) - no column
-# straddles the x=0 midline.
+# AC-0143 M5: v2 edit key form "0:<face>:<ccx>:<ccz>:<local>" (the
+# planet_id:face:cx:cz:local form addresses non-home faces from AC-0144+;
+# AC-0309 is that ticket — the face runtime records edits under the 3-part
+# runtime key "face:ccx:ccz" and the re-keyer passes them through). The
+# old runtime key "<ccx>,<ccz>" maps to face 0 (ccx >= 0) / face 1
+# (ccx < 0) - no column straddles the x=0 midline.
 func _edits_v2(old: Dictionary) -> Dictionary:
 	var v2: Dictionary = {}
 	for ck in old:
 		var parts: PackedStringArray = String(ck).split(",")
 		if parts.size() != 2:
+			# AC-0309 C6: the face runtime key is 3-part (face:ccx:ccz)
+			var fp: PackedStringArray = String(ck).split(":")
+			if fp.size() != 3:
+				continue
+			var fcells = old[ck]
+			if typeof(fcells) != TYPE_DICTIONARY:
+				continue
+			for li in fcells:
+				v2["0:%d:%d:%d:%d" % [int(fp[0]), int(fp[1]), int(fp[2]), li]] = fcells[li]
 			continue
 		var ccx: int = parts[0].to_int()
 		var ccz: int = parts[1].to_int()

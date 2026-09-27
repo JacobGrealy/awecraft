@@ -319,11 +319,13 @@ var _editprobe_kind := ""
 var _editprobe_drop := 0
 # AC-0040 bouncy-banana: the hanging B_BANANA fruit cells awaiting the
 # 10-block fall roll. Key "x,y,z" (flat world cell) -> [cx, cz] (the owning
-# flat chunk, for eviction cleanup). Face-planet chunks (AC-0143) get the
-# banana trees visually but never register fruit (the player can't reach
-# them). The roll plucks a fruit (set_block 0) and spawns a RigidBody3D
-# (BananaScript) that bounces until rest, then the drop-magnet interact
-# pickup delivers item 126 (eat = health + stamina + gorilla SFX).
+# flat chunk, for eviction cleanup). Face-planet chunks (AC-0143, reachable
+# since AC-0309) get the banana trees visually; fruit registration stays
+# home-only in v1 (the fall-roll + drop-magnet pickup run in the flat
+# home frame — face-side trees are scenery until the fruits ticket). The
+# roll plucks a fruit (set_block 0) and spawns a RigidBody3D (BananaScript)
+# that bounces until rest, then the drop-magnet interact pickup delivers
+# item 126 (eat = health + stamina + gorilla SFX).
 var _banana_fruits := {}
 var _banana_roll_t := 0.0
 var _banana_plucked := 0
@@ -4600,6 +4602,8 @@ func _process(_delta: float) -> void:
 		_wprof_add(WP_STAR, Time.get_ticks_usec() - _wps)
 		_star_settled_drain()
 		_star_remesh_drain()
+		_face_star_pass()  # AC-0309 D4: the per-face AweStarlight instances
+		_face_stream()  # AC-0309 D5: the boundary-band face-chunk streaming (time-budgeted)
 		for fm in fluid_marks:
 			var cc: Node3D = fm[0]
 			var ckey := _key(int(cc.cx), int(cc.cz))
@@ -5294,6 +5298,11 @@ func _bucket_count() -> int:
 
 func _enqueue_build(cx: int, cz: int) -> void:
 	var key := _key(cx, cz)
+	# AC-0309 D2: the home grid ends at the patch edge — a fully-past chunk
+	# is face territory (no data ever lands, so a build entry would defer
+	# on the dispatch forever).
+	if _chunk_past_patch(cx, cz):
+		return
 	var c = chunks.get(key)
 	# AC-0257: a meshed column is skipped (keep-high — a built range is
 	# sticky; the vwin fall-through / window-re-entry re-queues are gone).
@@ -5498,6 +5507,10 @@ func threadgen_enqueue(cx: int, cz: int, key: String, inst: int, regen: bool = f
 		_tg_capdrop += 1
 		if _tg_debug:
 			print("TGEN CAPDROP %d,%d inflight=%d" % [cx, cz, threadgen_inflight.size()])
+		return false
+	# AC-0309 D2: the home grid ends at the patch edge — a fully-past
+	# chunk is face territory (the gen never runs; the stub stays air).
+	if _chunk_past_patch(cx, cz):
 		return false
 	var skipf := 0 if regen else _gen_skip_flag(cx, cz)  # AC-0216/0284b (0 = full density, 2 = far h-only)
 	if skipf:
@@ -5705,6 +5718,10 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 		c.data_gen += 1  # the stamp/staleness token (an in-flight build on the pre-regen snapshot goes stale)
 	else:
 		c.slabs_landed(resl[0], resl[1])
+	# AC-0309 D2: the home grid ends at the patch edge — zero this
+	# chunk's fully-past columns (the far side belongs to the face grid;
+	# the live face data feeds this chunk's cross-face ring).
+	_patch_mask(c)
 	# AC-0237: stamp the generated state (the re-entry check + the
 	# snap_rings genkeep read it).
 	var gm := 0xFFFFFF
@@ -5723,6 +5740,8 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 	# slabs it replaced).
 	if not _gen_far_stamp(c, resl):
 		c.clear_far()
+	# AC-0309 D2: the far (h-only) tier ends at the patch edge too.
+	_patch_far_mask(c)
 	# AC-0346/AC-0350: a FULL landing on a column OUTSIDE the real band (the
 	# mid-regen landing after the exit demote) is the 1→1 hop class — the
 	# bounded sweep never visits it (not within K of any edge); OWE the
@@ -6854,6 +6873,11 @@ func _mesh_dispatch_edit(c: Node3D, cx: int, cz: int, si0: int, si1: int, fast_e
 			var nk := _key(cx + dx, cz + dz)
 			var nc = chunks.get(nk)
 			if nc == null or nc.data.is_empty():
+				# AC-0309 D2: a neighbour position fully past a home-patch
+				# edge is the far side of the seam — the resampled live face
+				# ring (or solid); never a defer (that data never lands).
+				if _patch_edge_ring(int(cx), int(cz), dx, dz, nbs):
+					continue
 				return false
 			nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep, nc.far_payload())  # AC-0237: ungenerated slabs read as solid; AC-0284b: a far neighbor's ring is the skip-fill edge row
 			if dx == 0 or dz == 0:
@@ -6961,6 +6985,11 @@ func _mesh_dispatch_impl(c: Node3D, cx: int, cz: int, eff: Dictionary, eff_trust
 			var nk := _key(cx + dx, cz + dz)
 			var nc = chunks.get(nk)
 			if nc == null or nc.data.is_empty():
+				# AC-0309 D2: a neighbour position fully past a home-patch
+				# edge is the far side of the seam — the resampled live face
+				# ring (or solid); never a defer (that data never lands).
+				if _patch_edge_ring(int(cx), int(cz), dx, dz, nbs):
+					continue
 				# AC-0160 (AC-0263): a missing neighbor DEFERS (the caller's
 				# retry re-queues; threadgen delivers the missing data within
 				# ~500 ms). The legacy sync fallback (100-500 ms of main-
@@ -7182,6 +7211,10 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 				var nk := _key(cx + dx, cz + dz)
 				var nc = chunks.get(nk)
 				if nc == null or nc.data.is_empty():
+					# AC-0309 D2: past-patch neighbour = the far side of the
+					# seam (the live face ring or solid) — never a defer.
+					if _patch_edge_ring(int(cx), int(cz), dx, dz, nbs_a):
+						continue
 					hslab_defer_nbs += 1
 					_hslab_last_defer = 3
 					return false  # the neighbor lands, the entry retries
@@ -7267,6 +7300,10 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 			var nk := _key(cx + dx, cz + dz)
 			var nc = chunks.get(nk)
 			if nc == null or nc.data.is_empty():
+				# AC-0309 D2: past-patch neighbour = the far side of the
+				# seam (the live face ring or solid) — never a defer.
+				if _patch_edge_ring(int(cx), int(cz), dx, dz, nbs):
+					continue
 				hslab_defer_nbs += 1
 				_hslab_last_defer = 3
 				return false  # AC-0263: defer — the neighbor lands, the entry retries
@@ -10185,6 +10222,11 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	})
 	if crossing_ring.size() > CROSSING_RING_CAP:
 		crossing_ring.pop_front()
+	# AC-0309 D5: the boundary-band face-chunk streaming (inert — the
+	# face machinery does nothing — when the player is far from a patch
+	# edge; the boundary r4 walk stays in the spawn region with zero
+	# resident face chunks).
+	_face_stream()
 
 func _recenter_slice() -> void:
 	if not _rec_pending:
@@ -10583,6 +10625,11 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> bool:
 		_dirty_front(_key(cx, cz + 1), y)
 	_eff_cache_evict(_key(cx, cz))
 	_mark_light_around(cx, cz)
+	# AC-0309 C5: a home BOUNDARY-column edit changes the live data the
+	# resident face edge chunks read through their cross-face rings (the
+	# ring is a snapshot at face-build time) — re-bake the ones whose edge
+	# row overlaps the edited column (the seam stays coherent both ways).
+	_face_rebake_boundary(cx, cz)
 	# AC-0283 P2 (P3): the engine sees the edit (the two-phase re-seed —
 	# the landing-order healing covers an unseeded face) and the mesh side
 	# re-arms (the affected slabs re-bake on the settled light). REAL band
@@ -10687,7 +10734,10 @@ func _record_edit(cx: int, cz: int, fi: int, b: int, f: int) -> void:
 	edits[key][fi] = {"b": b, "f": f}
 
 func _apply_edits_to_chunk(c: Node3D) -> bool:
-	var key := _key(c.cx, c.cz)
+	# AC-0309 C6: the edit key is the runtime key — home pair: "cx,cz";
+	# the face world: "face:ccx:ccz" (the 3-part _key_f key; the fi cells
+	# are local-slot based on BOTH grids, so the body below is unchanged).
+	var key := _key(c.cx, c.cz) if int(c.face) <= 1 else _key_f(int(c.face), int(c.cx), int(c.cz))
 	if not edits.has(key):
 		return false
 	if c.data.is_empty():
@@ -10695,8 +10745,9 @@ func _apply_edits_to_chunk(c: Node3D) -> bool:
 	# AC-0284b: a far column holds NO slabs (all null) — the edit would
 	# land nowhere. Schedule the full regen (the no-caves umbrella); the
 	# landing re-applies the edit from the global edits dict (the handoff
-	# runs _apply_edits_to_chunk after the slab arrays are in).
-	if c.far:
+	# runs _apply_edits_to_chunk after the slab arrays are in). Face
+	# chunks are never far (no far tier on the face grid).
+	if int(c.face) <= 1 and c.far:
 		threadgen_enqueue(int(c.cx), int(c.cz), _key(int(c.cx), int(c.cz)), c.get_instance_id(), true, int(c.col_gen))
 		return false
 	var cells: Dictionary = edits[key]
@@ -11505,6 +11556,29 @@ func light_at(x: int, y: int, z: int) -> Dictionary:
 	var r := 8
 	var mn := Vector3i(x - r, maxi(y - r, 0), z - r)
 	var mx := Vector3i(x + r, mini(y + r, Data.HEIGHT - 1), z + r)
+	if Game.planet_R > 0.0:
+		# AC-0309 C4: the classic pull light is HOME-grid. A box past the
+		# patch edge reads past-patch columns (no data ever lands there —
+		# the D2 clause) and the split kernel resizes to a negative size
+		# (engine ERROR spam every 500 ms while the player stands within
+		# 8 m of the boundary — measured in the crossface arm). Clip the
+		# box to the resident-data columns (the straddlers keep their
+		# sliver data, so the clip keeps the full boundary column).
+		var hwf: float = SphereMath.face_width(Game.planet_R) * 0.5
+		var xlo: int = int(floorf(-hwf / 16.0)) * 16
+		var xhi: int = int(floorf(hwf / 16.0)) * 16 + 15
+		mn = Vector3i(maxi(mn.x, xlo), maxi(mn.y, 0), maxi(mn.z, xlo))
+		mx = Vector3i(mini(mx.x, xhi), mini(mx.y, Data.HEIGHT - 1), mini(mx.z, xhi))
+		# an eye PAST the patch (a player on the face side, the anchor
+		# switch not yet caught up) inverts the clipped box (mn > mx) —
+		# degenerate it to the edge column (15 = air above the seam)
+		# instead of letting the kernel resize to a negative size.
+		if mn.x > mx.x:
+			mn.x = mx.x
+		if mn.y > mx.y:
+			mn.y = mx.y
+		if mn.z > mx.z:
+			mn.z = mx.z
 	if _lightflat.size() > 8:
 		_lightflat.clear()
 	var res: Dictionary = Lighting.compute_light_split({"min": mn, "max": mx}, self, _lightflat)
@@ -12324,6 +12398,654 @@ const FACE_CELLS := 1024  # SphereMath.CELLS_PER_FACE
 const FACE_CHUNK_CAP := 512  # max resident non-home chunks (FIFO)
 var _face_order: Array = []  # FIFO of non-home chunk keys (eviction)
 
+# --- AC-0309: cross-face movement (P4 of AC-0144) — the face-side runtime ---
+# The home pair (faces 0,1) keeps its flat 1 m grid UNTOUCHED (D1: genhash
+# 25/25 stays byte-identical — the home terrain never changes). Faces 4-11
+# carry the 1024-cell grid; the player walks/flies from the home patch
+# across a shared cube edge onto the far side. C1's interim BLEND BAND
+# (generator.gd, FACE_BLEND_BAND cells) fades the face field into the
+# home-extended field so the far side is ground and the boundary is
+# continuous. C3 rule: the meshing stays PER-CHUNK — the cross-face SNAP
+# RING is a per-chunk solid test resampled from the neighbour's LIVE data
+# (no cross-face greedy merge: build_accs is a per-chunk function and the
+# ring only supplies neighbour solidness, never geometry).
+var _star_faces: Dictionary = {}  # face -> AweStarlight (D4, per-face engine)
+var _face_evict_last := Vector2(INF, INF)  # the windowed-eviction travel gate
+const FACE_STREAM_EVICT_MARGIN := 64.0  # m past the window before eviction
+
+# D4: the per-face AweStarlight instance (the same engine — starlight.cpp's
+# per-instance (cx,cz) key space means one instance per face, no C++ change).
+func _star_for_face(face: int) -> Variant:
+	if _star_faces.has(face):
+		return _star_faces[face]
+	var st: Variant = AweStarlight.new()
+	st.set_tables(Lighting._att, Lighting._glow)
+	_star_faces[face] = st
+	return st
+
+# D4: the face light pass — step each face instance; a face column whose
+# light has settled re-bakes its slabs on the star payload ONLY if the
+# payload differs from the landing (pull) light (the AC-0297 seam
+# contract: at the boundary the pull light is byte-equal to the settled
+# star — the re-bake is a no-op in steady state, a self-heal if the
+# engines ever disagree).
+func _face_star_pass() -> void:
+	if _star_faces.is_empty():
+		return
+	for face in _star_faces.keys():
+		var st: Variant = _star_faces[face]
+		if st == null:
+			continue
+		if int(st.pending_cells()) > 0:
+			st.step(int(STAR_STEP_BUDGET_MS) * 1000)
+		for key in star_owed.keys():
+			# the face keys are 3-part (face:ccx:ccz); the home keys are
+			# 2-part (cx:cz) and must NOT match (a home cx of 4 is "4:-3")
+			var parts: PackedStringArray = String(key).split(":")
+			if parts.size() != 3 or int(parts[0]) != int(face):
+				continue
+			var c = chunks.get(key)
+			if c == null:
+				star_owed.erase(key)
+				continue
+			if not bool(st.column_settled(int(c.cx), int(c.cz))):
+				continue
+			var pl: Dictionary = st.slab_light_payload(int(c.cx), int(c.cz), 0, maxi(0, int(c.top) >> 4))
+			if not bool(pl.get("ok", false)):
+				continue  # keep the owed key — retry next frame (r21:
+			# erasing first made the re-bake one-shot — a payload that was
+			# not ok on the first settled pass left the column on the
+			# landing pull light (0) forever: light_face_eff stuck at 0)
+			var new_eff: Dictionary = st.column_light_dict(int(c.cx), int(c.cz))
+			if new_eff.is_empty():
+				continue  # keep the owed key — retry next frame
+			var old_arr: PackedByteArray = c.last_eff.get("arr", PackedByteArray())
+			var new_arr: PackedByteArray = new_eff.get("arr", PackedByteArray())
+			if old_arr.size() == new_arr.size() and old_arr == new_arr:
+				c.light_settled = true  # the pull light WAS the star light
+				star_owed.erase(key)
+				continue
+			c.last_eff = ChunkScript._eff_store(new_eff)
+			c.light_settled = true
+			# the settled payload differs from the landing light — the
+			# star engine wins (re-bake the column on the payload).
+			c.build_mesh_face(pl)
+			star_owed.erase(key)
+
+# D2: a home chunk position fully past the home patch (face territory —
+# the home grid ENDS at the patch edge; such chunks never carry data).
+func _chunk_past_patch(cx: int, cz: int) -> bool:
+	var R: float = Game.planet_R
+	if R <= 0.0:
+		return false
+	var hw: float = SphereMath.face_width(R) * 0.5
+	return cx * 16.0 >= hw or (cx + 1.0) * 16.0 <= -hw or cz * 16.0 >= hw or (cz + 1.0) * 16.0 <= -hw
+
+# D2: zero a home chunk's fully-past columns (a boundary-straddler keeps
+# the boundary sliver column — the face cell at the edge partially
+# overlaps it; C1's blend handles the 0.4 m sliver). The mesh/collision/
+# light all read the slabs, so the mask here covers every consumer.
+func _patch_mask(c: Node3D) -> void:
+	var R: float = Game.planet_R
+	if R <= 0.0:
+		return
+	var hw: float = SphereMath.face_width(R) * 0.5
+	var x0: float = float(c.cx) * 16.0
+	var z0: float = float(c.cz) * 16.0
+	var io: Variant = ChunkIO.io_cpp()
+	for si in range(c.data.size()):
+		if c.data[si] == null:
+			continue
+		for lz in range(16):
+			for lx in range(16):
+				var x: float = x0 + float(lx)
+				var z: float = z0 + float(lz)
+				if not (x >= hw or x + 1.0 <= -hw or z >= hw or z + 1.0 <= -hw):
+					continue
+				for y_in in range(16):
+					io.slab_set(c.data, si, ((y_in << 8) | (lz << 4) | lx), 0)
+				io.slab_set(c.fl, si, ((0 << 8) | (lz << 4) | lx), 0)
+
+# D2: the far (h-only) tier ends at the patch edge too — no home LOD
+# skirt past the boundary. Fully-past chunk: no far payload; straddler:
+# the past H columns zeroed (the far emitter emits nothing for H = 0).
+func _patch_far_mask(c: Node3D) -> void:
+	if not c.far or c.far_h.is_empty():
+		return
+	var R: float = Game.planet_R
+	if R <= 0.0:
+		return
+	var hw: float = SphereMath.face_width(R) * 0.5
+	var x0: float = float(c.cx) * 16.0
+	var z0: float = float(c.cz) * 16.0
+	var fully_past := x0 >= hw or x0 + 16.0 <= -hw or z0 >= hw or z0 + 16.0 <= -hw
+	if fully_past:
+		c.clear_far()
+		return
+	var mh := 0
+	for i in range(0, 512, 2):
+		var lz: int = (i >> 1) >> 4
+		var lx: int = (i >> 1) & 15
+		var x: float = x0 + float(lx)
+		var z: float = z0 + float(lz)
+		if x >= hw or x + 1.0 <= -hw or z >= hw or z + 1.0 <= -hw:
+			c.far_h[i] = 0
+			c.far_h[i + 1] = 0
+			continue
+		var v: int = int(c.far_h[i]) | (int(c.far_h[i + 1]) << 8)
+		if v > mh:
+			mh = v
+	c.far_hmax = mh
+
+# C3: the ring builders. A ring = 24 slabs x 256 bytes (16 x 16 id bytes
+# per slab, out[y_in*16 + t], t = the along-edge axis) — the same shape
+# the C++ snap_rings returns, so build_accs consumes them unchanged.
+func _solid_ring() -> PackedByteArray:
+	var r := PackedByteArray()
+	r.resize((Data.HEIGHT / 16) * 256)
+	r.fill(3)  # stone: a solid neighbour (the terrain continues there)
+	return r
+
+# C3: the face cell adjacent to the home edge covering the given flat
+# coordinate along the edge. The edge side is the NEIGHBOUR chunk's axis
+# sign (ex for x edges, ez for z edges): +1 -> the +half edge (faces 4/5
+# on x+, 8/9 on z+), -1 -> the -half edge (6/7 on x-, 10/11 on z-). The
+# along-edge position's sign picks the face half (z >= 0 vs < 0 on x
+# edges, x >= 0 vs < 0 on z edges); the -half faces (5,7,9,11) use the
+# v-1/u-1 cube form, shifting the raw coordinate by +1. The home edge is
+# u = 1 (x edges) / v = 1 (z edges) -> iu = 1023 / iv = 1023.
+func _face_edge_cells(dx: int, dz: int, along: float, ex: int, ez: int) -> Array:
+	var R: float = Game.planet_R
+	var hw: float = SphereMath.face_width(R) * 0.5
+	var N: int = SphereMath.CELLS_PER_FACE
+	if dx != 0:
+		var pos_half: bool = along >= 0.0
+		var f: int
+		if ex > 0:
+			f = 4 if pos_half else 5
+		else:
+			f = 6 if pos_half else 7
+		var vr: float = along / hw + (0.0 if (f == 4 or f == 6) else 1.0)
+		return [f, N - 1, clampi(int(floorf(vr * float(N))), 0, N - 1)]
+	var pos_half: bool = along >= 0.0
+	var f: int
+	if ez > 0:
+		f = 8 if pos_half else 9
+	else:
+		f = 10 if pos_half else 11
+	var ur: float = along / hw + (0.0 if (f == 8 or f == 10) else 1.0)
+	return [f, clampi(int(floorf(ur * float(N))), 0, N - 1), N - 1]
+
+# C3: the home boundary chunk's cross-face ring — the LIVE face cells
+# adjacent to the edge at each ring position (a per-chunk solid test;
+# the greedy emitter never spans the seam). Missing face chunks read as
+# air (the home column shows its edge wall until the face data lands —
+# the face landing re-arms the home chunk).
+func _home_face_ring(cx: int, cz: int, dx: int, dz: int) -> PackedByteArray:
+	var ring := PackedByteArray()
+	ring.resize((Data.HEIGHT / 16) * 256)
+	var z0: float = float(cz) * 16.0
+	var x0: float = float(cx) * 16.0
+	var ex: int = 1 if cx + dx > 0 else -1
+	var ez: int = 1 if cz + dz > 0 else -1
+	var cols: Array = []
+	for t in range(16):
+		var along: float = (z0 + float(t)) if dx != 0 else (x0 + float(t))
+		var ec: Array = _face_edge_cells(dx, dz, along, ex, ez)
+		var face: int = int(ec[0])
+		var iu: int = int(ec[1])
+		var iv: int = int(ec[2])
+		var nc: Node3D = chunks.get(_key_f(face, iu >> 4, iv >> 4))
+		if nc == null or nc.data.is_empty():
+			cols.append([null, 0, 0])
+		else:
+			cols.append([nc, SphereMath.face_local_x(face, iu, iu >> 4), iv & 15])
+	for si in range(Data.HEIGHT / 16):
+		for y_in in range(16):
+			var y: int = si * 16 + y_in  # row_bytes takes the GLOBAL y
+			for t in range(16):
+				var col: Array = cols[t]
+				var v: int = 0
+				if col[0] != null:
+					v = int(col[0].row_bytes(y)[int(col[2]) * 16 + int(col[1])])
+				ring[(si * 16 + y_in) * 16 + t] = v
+	return ring
+
+# C3: the face boundary chunk's cross-face ring — the LIVE home boundary
+# column(s) at each ring position (the home side of the edge, sampled at
+# the face cell's flat position). Missing home chunks read as air (never
+# happens in the window — the home data band overshoots the patch).
+func _face_home_ring(face: int, ccx: int, ccz: int, dx: int, dz: int) -> PackedByteArray:
+	var ring := PackedByteArray()
+	ring.resize((Data.HEIGHT / 16) * 256)
+	var R: float = Game.planet_R
+	var hw: float = SphereMath.face_width(R) * 0.5
+	var is_x: bool = dx != 0
+	var cols: Array = []
+	for t in range(16):
+		# the edge-adjacent face cell at this ring position
+		var iu: int = (SphereMath.CELLS_PER_FACE - 1) if is_x else ccx * 16 + t
+		var iv: int = (ccz * 16 + t) if is_x else (SphereMath.CELLS_PER_FACE - 1)
+		var b: Vector3 = SphereMath.face_cell_band(face, iu, iv, R)
+		# the home edge of faces 4/5 is the patch's +x edge, of 6/7 the
+		# -x edge — face-based, not direction-based (the mirror x faces
+		# present their home edge as the local WEST ring, dx = -1)
+		var fx: float = (hw - 0.5) if (is_x and (face == 4 or face == 5)) else (-hw + 0.5) if is_x else b.x
+		var fz: float = b.y if is_x else ((hw - 0.5) if dz > 0 else (-hw + 0.5))
+		var hcx: int = int(floorf(fx / 16.0))
+		var hcz: int = int(floorf(fz / 16.0))
+		var nc: Node3D = chunks.get(_key(hcx, hcz))
+		if nc == null or nc.data.is_empty():
+			cols.append([null, 0, 0])
+		else:
+			cols.append([nc, int(floorf(fx)) - hcx * 16, int(floorf(fz)) - hcz * 16])
+	for si in range(Data.HEIGHT / 16):
+		for y_in in range(16):
+			var y: int = si * 16 + y_in  # row_bytes takes the GLOBAL y
+			for t in range(16):
+				var col: Array = cols[t]
+				var v: int = 0
+				if col[0] != null:
+					v = int(col[0].row_bytes(y)[int(col[2]) * 16 + int(col[1])])
+				ring[(si * 16 + y_in) * 16 + t] = v
+	return ring
+
+# C3: the 4 rings of a face chunk — the same-face neighbour via the C++
+# snap_rings (the identical 16x16xH local shape); the home edge (the
+# edge-adjacent row only) via the resampled LIVE home ring; the
+# sector/antipode and window edges = a solid ring (the terrain continues;
+# never a defer — the face streaming owns the window, not a retry).
+func _face_rings(c: Node3D) -> Dictionary:
+	var face: int = int(c.face)
+	var ccx: int = int(c.cx)
+	var ccz: int = int(c.cz)
+	var is_x_face: bool = face <= 7
+	# AC-0309: the mirror class runs its local +X AGAINST the face's u,
+	# so a chunk's local EAST edge is the chart line at its u-range's
+	# WEST end — the chart chunk adjacent there is ccx-1 (not ccx+1),
+	# read through its local x = 0 row (snap_rings dx = +1). Without the
+	# flip the mirror faces' same-face x rings carried the opposite end
+	# of the chunk's u range (up to 15 cells away — the shared-edge
+	# mismatch no transform can repair). The home edge sits on the
+	# local WEST of chunk 63 on the mirror x faces (the seam cell
+	# iu = 1023 is local slot 0 there) and on the local EAST on the
+	# plain x faces; the z faces' home edge (local NORTH of ccz = 63)
+	# is untouched (the z slot is never mirrored).
+	var mirrored: bool = SphereMath.face_mirror_x(face)
+	var nbs: Dictionary = {}
+	var mc: Variant = ChunkScript.mesh_cpp()
+	for d in [[1, 0], [-1, 0], [0, 1], [0, -1]]:
+		var dx: int = int(d[0])
+		var dz: int = int(d[1])
+		var is_home_edge: bool = (dz == 0 and is_x_face and ccx == 63 and ((dx == -1 and mirrored) or (dx == 1 and not mirrored))) \
+				or (dx == 0 and not is_x_face and ccz == 63 and dz == 1)
+		if is_home_edge:
+			nbs["%d,%d" % [dx, dz]] = _face_home_ring(face, ccx, ccz, dx, dz)
+			continue
+		var nccx: int = ccx - dx if (mirrored and dx != 0) else ccx + dx
+		var nccz: int = ccz + dz
+		if nccx < 0 or nccx > 63 or nccz < 0 or nccz > 63:
+			nbs["%d,%d" % [dx, dz]] = _solid_ring()
+			continue
+		var nc: Node3D = chunks.get(_key_f(face, nccx, nccz))
+		if nc == null or nc.data.is_empty():
+			nbs["%d,%d" % [dx, dz]] = _solid_ring()
+		else:
+			nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep, nc.far_payload())
+	return nbs
+
+# D2: the home dispatch clause — a neighbour position fully past a
+# home-patch edge is the far side of the seam: its ring is the LIVE face
+# data (resampled) or an air ring, NEVER a defer (that data is not home
+# and never lands). True iff the neighbour is past the patch (nbs set).
+func _patch_edge_ring(cx: int, cz: int, dx: int, dz: int, nbs: Dictionary) -> bool:
+	if not _chunk_past_patch(cx + dx, cz + dz):
+		return false
+	var nc_any: bool = false
+	var ex: int = 1 if cx + dx > 0 else -1
+	var ez: int = 1 if cz + dz > 0 else -1
+	for t in range(16):
+		var along: float = (float(cz) * 16.0 + float(t)) if dx != 0 else (float(cx) * 16.0 + float(t))
+		var ec: Array = _face_edge_cells(dx, dz, along, ex, ez)
+		var nc: Node3D = chunks.get(_key_f(int(ec[0]), int(ec[1]) >> 4, int(ec[2]) >> 4))
+		if nc != null and not nc.data.is_empty():
+			nc_any = true
+			break
+	nbs["%d,%d" % [dx, dz]] = _home_face_ring(cx, cz, dx, dz) if nc_any else _solid_ring()
+	return true
+
+# D5: the face-chunk distance query — the chunk's nearest corner cell's
+# extended-flat position (face_cell_band) to the player's flat position.
+func _face_chunk_min_dist(face: int, ccx: int, ccz: int, px: float, pz: float) -> float:
+	var R: float = Game.planet_R
+	var best := INF
+	for iu2 in [ccx * 16 + 1, ccx * 16 + 14]:
+		for iv2 in [ccz * 16 + 1, ccz * 16 + 14]:
+			var b: Vector3 = SphereMath.face_cell_band(face, iu2, iv2, R)
+			if is_inf(b.z):
+				return 0.0  # this face does not border the home patch
+			var d: float = Vector2(b.x - px, b.y - pz).length()
+			if d < best:
+				best = d
+	return best
+
+func _face_player_flat() -> Vector2:
+	var R: float = Game.planet_R
+	var hw: float = SphereMath.face_width(R) * 0.5
+	# AC-0309: _rec_player_wx/wz ARE flat coordinates — the recenter
+	# contract takes flat (player._recenter converts world->flat first;
+	# the sim_dist recenter in main.gd converts before calling). The old
+	# flat_of_world_pos() here re-read the flat values as a WORLD point:
+	# at the boundary the radius < R, the projection collapses to the +x
+	# edge near z 0, and face 4's window (z 0..win at the far corner,
+	# cc 0..2) ate the FACE_STREAM_BUDGET_MS before face 5's turn — the
+	# crossing row (cc 62) never streamed while the player stood
+	# home-side near the edge (C4 face chunk null in the crossface arm
+	# r23).
+	return Vector2(clampf(_rec_player_wx, -hw, hw), clampf(_rec_player_wz, -hw, hw))
+
+func _face_in_mesh_window(face: int, ccx: int, ccz: int) -> bool:
+	if Game.planet_R <= 0.0:
+		return true  # harness arm: build on demand
+	var hw: float = SphereMath.face_width(Game.planet_R) * 0.5
+	var S: float = SphereMath.face_cell_size(Game.planet_R)
+	var p: Vector2 = _face_player_flat()
+	return _face_chunk_min_dist(face, ccx, ccz, p.x, p.y) <= float(int(Settings.values.get("sim_dist", 4)) * 16) + 8.0 * S
+
+# D5: the boundary-band face-chunk streaming (the recenter hook). Window
+# = the face cells within the home sim band of the player's (patch-
+# clamped) flat position, on the 8 non-home faces that border the patch.
+# Paced (FACE_STREAM_PER_RECENTER new chunks per recenter — the first
+# crossing is a one-shot recenter-class burst spread over a few frames);
+# resident chunks past the expanded window are evicted (star evict +
+# the pooled-column checkin).
+# D5: the boundary-band face-chunk streaming — the per-frame pass (the
+# recenter hook also calls it; the time budget makes the double call
+# harmless). Window = the face cells within the home sim band of the
+# player's (patch-clamped) flat position, on the 8 non-home faces that
+# border the patch, edge chunks first (the seam is what the player
+# meets). Each pass spends at most FACE_STREAM_BUDGET_MS of work (an
+# ensure = gen + C1 blend for band chunks + the sync mesh + the star
+# seed); resident chunks are cheap (the dict lookup) and consume no
+# budget. Inert when the player is far from every edge (the boundary r4
+# walk stays in the spawn region with zero resident face chunks).
+const FACE_STREAM_BUDGET_MS := 12.0
+func _face_stream() -> void:
+	var R: float = Game.planet_R
+	if R <= 0.0:
+		return
+	var hw: float = SphereMath.face_width(R) * 0.5
+	var S: float = SphereMath.face_cell_size(R)
+	var p: Vector2 = _face_player_flat()
+	var win: float = float(int(Settings.values.get("sim_dist", 4)) * 16)
+	var t0: int = Time.get_ticks_msec()
+	for face in range(4, 12):
+		var is_x_face: bool = face <= 7
+		# the in-band (edge-normal) axis: full-width (S) on the x faces,
+		# half-width (S/2) on the z faces (face_cell_scale)
+		var rows: int = mini(64, int(ceili(win / S)) + 1) if is_x_face else mini(64, int(ceili(win / (S * 0.5))) + 1)
+		# the along-edge extent of this face's half of the edge
+		# the along-edge clamp must match the face's HALF of the edge:
+		# the first face of each pair (4/6, 8/10) covers the + half
+		# ([0, hw]), the second (5/7, 9/11) the - half ([-hw, 0]). The
+		# old `face <= 5`/`face <= 9` lumps the two members of a pair
+		# together, so a z<0 player gets lo = 0, hi = 0 for face 5 (and a
+		# x<0 player gets the same for face 9) — hi <= lo, the face is
+		# skipped, and HALF THE PLANET BOUNDARY STREAMS NO FACE CHUNKS:
+		# a player walking the +x edge south of the seam walks off the
+		# home boundary into a hole to the void (the AC-0309 no-hole
+		# contract). Measured in the crossface arm r15/r16 (the arm's
+		# explicit prewarm masked it until the walk died in the crack).
+		var lo: float
+		var hi: float
+		if is_x_face:
+			if face == 5 or face == 7:
+				lo = maxf(-hw, p.y - win)
+				hi = minf(0.0, p.y + win)
+			else:
+				lo = maxf(0.0, p.y - win)
+				hi = minf(hw, p.y + win)
+		else:
+			if face == 9 or face == 11:
+				lo = maxf(-hw, p.x - win)
+				hi = minf(0.0, p.x + win)
+			else:
+				lo = maxf(0.0, p.x - win)
+				hi = minf(hw, p.x + win)
+		if hi <= lo:
+			continue
+		# AC-0309 r30: the along-edge window is non-empty for EVERY face when
+		# the player is mid-patch (the projection always falls inside some half
+		# of some edge), so the window alone streamed all eight edges' face
+		# bands on an interior walk — the boundary r4 interior walk read
+		# resident 93 → 272, p95 48 → 97 ms, flap 10 → 137. Stream this face's
+		# band only when the player is within win of THAT edge (edge-normal
+		# distance); on the face side of the seam the distance is negative and
+		# still streams.
+		var edge_dist: float
+		if is_x_face:
+			edge_dist = (hw - p.x) if (face == 4 or face == 5) else (p.x + hw)
+		else:
+			edge_dist = (hw - p.y) if (face == 8 or face == 9) else (p.y + hw)
+		if edge_dist > win:
+			continue
+		# the along-edge axis is the half-width axis (S/2 per cell). The flat
+		# window must be mapped through the SECTOR's chart formula (the face
+		# coordinate scales the flat coordinate only in the z>=0 sectors; the
+		# mirror sectors (5/7) and the z faces (8-11) run their chart from the
+		# -hw end — the raw flat index streamed the far corner of the mirror
+		# faces, 3000 m from the seam, and left the crossing row unbuilt):
+		#   x faces 4/6 (z>=0):  face v =  z/hw
+		#   x faces 5/7 (z<0):   face v = (z+hw)/hw
+		#   z faces 8-11:        face u = (x+hw)/2hw
+		# (+-1 chunk padding for the pre-warp curvature at the outer rows)
+		var stride: float = S * 0.5
+		var raw_idx: bool = face == 4 or face == 6  # the z>=0 x-faces scale from 0
+		var idx_lo: float = lo / stride if raw_idx else (lo + hw) / stride
+		var idx_hi: float = hi / stride if raw_idx else (hi + hw) / stride
+		var cc0: int = clampi(int(floorf(idx_lo)) - 16, 0, 1023) >> 4
+		var cc1: int = clampi(int(ceilf(idx_hi)) + 16, 0, 1023) >> 4
+		for r in range(rows):
+			if Time.get_ticks_msec() - int(t0) > int(FACE_STREAM_BUDGET_MS):
+				break
+			var edge_cc: int = 63 - r
+			if edge_cc < 0:
+				break
+			if is_x_face:
+				for cc in range(cc0, cc1 + 1):
+					if Time.get_ticks_msec() - int(t0) > int(FACE_STREAM_BUDGET_MS):
+						break
+					_ensure_face_chunk(face, edge_cc * 16 + 8, cc * 16 + 8)
+			else:
+				for cc in range(cc0, cc1 + 1):
+					if Time.get_ticks_msec() - int(t0) > int(FACE_STREAM_BUDGET_MS):
+						break
+					_ensure_face_chunk(face, cc * 16 + 8, edge_cc * 16 + 8)
+			if Time.get_ticks_msec() - int(t0) > int(FACE_STREAM_BUDGET_MS):
+				break
+	# the windowed eviction (the FIFO cap in _ensure_face_chunk refines it)
+	# — every 16 m of travel (the per-chunk band query stays off the idle
+	# frame).
+	if not _face_order.is_empty():
+		var moved: float = INF if _face_evict_last == Vector2(INF, INF) else (_face_evict_last - p).length()
+		if moved > 16.0:
+			_face_evict_last = p
+			var evict_r: float = win + float(WorldGen.FACE_BLEND_BAND) * S + FACE_STREAM_EVICT_MARGIN
+			for k in _face_order.duplicate():
+				var c = chunks.get(k)
+				if c == null:
+					_face_order.erase(k)
+					continue
+				if _face_chunk_min_dist(int(c.face), int(c.cx), int(c.cz), p.x, p.y) > evict_r:
+					_face_free_chunk(k)
+
+func _face_free_chunk(key: String) -> void:
+	var c: Node3D = chunks.get(key)
+	if c == null:
+		_face_order.erase(key)
+		return
+	var st: Variant = _star_faces.get(int(c.face))
+	if st != null:
+		st.evict_column(int(c.cx), int(c.cz))
+	star_owed.erase(key)
+	star_remesh.erase(key)
+	chunks.erase(key)
+	_face_order.erase(key)
+	_lod_free_all(c, false)
+	if not _nofree:
+		_col_checkin(c)
+
+# A face landing makes the adjacent home boundary chunk(s)' ring live —
+# re-mesh them so the cross-face ring picks up the face data (the home
+# dispatch reads the ring at dispatch time; the flag drops mesh_built so
+# the drain re-dispatches with the fresh ring).
+func _face_rearm_home_neighbors(face: int, ccx: int, ccz: int) -> void:
+	var R: float = Game.planet_R
+	var hw: float = SphereMath.face_width(R) * 0.5
+	var S: float = SphereMath.face_cell_size(R)
+	var is_x_face: bool = face <= 7
+	var edge_col: int = int(floorf((hw - 0.5) / 16.0)) if (face == 4 or face == 5 or face == 8 or face == 9) else int(floorf((-hw + 0.5) / 16.0))
+	# the along-edge flat extent of this chunk's row (the half-width axis:
+	# S/2 per cell; the v-1/u-1 form faces (5,7,9,11) sit on the -half of
+	# the axis, shifted by -hw)
+	var neg: bool = face == 5 or face == 7 or face == 9 or face == 11
+	var off: float = hw if neg else 0.0
+	var cell0: int = ccz * 16 if is_x_face else ccx * 16
+	var lo: float = float(cell0) * S * 0.5 - off
+	var hi: float = float(cell0 + 16) * S * 0.5 - off
+	var i0: int = int(floorf(lo / 16.0))
+	var i1: int = int(floorf(hi / 16.0))
+	for i in range(i0, i1 + 1):
+		var nc: Node3D = chunks.get(_key(edge_col, i)) if is_x_face else chunks.get(_key(i, edge_col))
+		if nc == null or not bool(nc.mesh_built):
+			continue
+		nc.mesh_built = false
+		nc.data_gen += 1
+		nc.flush_slabs = {}
+
+# C5: the reverse of _face_rearm_home_neighbors — a home BOUNDARY-column
+# edit changes the live data the resident face edge chunks read through
+# their cross-face rings (a ring is a snapshot at face-build time), so
+# the face edge row overlapping the edited column re-bakes (the seam
+# stays coherent in both directions). Only edge-row face chunks (ccx ==
+# 63 on the x faces / ccz == 63 on the z faces) read the home side at
+# all, and only along the edge row's overlap range — one chunk per edit.
+func _face_rebake_boundary(cx: int, cz: int) -> void:
+	if Game.planet_R <= 0.0 or _face_order.is_empty():
+		return
+	var R: float = Game.planet_R
+	var hw: float = SphereMath.face_width(R) * 0.5
+	var S: float = SphereMath.face_cell_size(R)
+	var bx: int = int(floorf(hw - 0.5))  # the +hw straddling home column
+	var bxn: int = int(floorf(-hw + 0.5))  # the -hw straddling home column
+	var x0: float = float(cx) * 16.0
+	var z0: float = float(cz) * 16.0
+	var x_plus: bool = x0 <= float(bx) and x0 + 16.0 > float(bx)
+	var x_minus: bool = x0 <= float(bxn) and x0 + 16.0 > float(bxn)
+	var z_plus: bool = z0 <= float(bx) and z0 + 16.0 > float(bx)
+	var z_minus: bool = z0 <= float(bxn) and z0 + 16.0 > float(bxn)
+	if not (x_plus or x_minus or z_plus or z_minus):
+		return
+	for k in _face_order.duplicate():
+		var c = chunks.get(k)
+		if c == null or not bool(c.mesh_built):
+			continue
+		var f: int = int(c.face)
+		var rebake := false
+		# the +edge faces (4,5,8,9) read the +hw column, the -edge faces
+		# (6,7,10,11) the -hw column
+		if (f == 4 or f == 5) and x_plus and int(c.cx) == 63:
+			var neg: bool = f == 5
+			var off: float = hw if neg else 0.0
+			var lo: float = float(int(c.cz) * 16) * S * 0.5 - off
+			var hi: float = float(int(c.cz) * 16 + 16) * S * 0.5 - off
+			rebake = hi >= z0 and lo <= z0 + 16.0
+		elif (f == 6 or f == 7) and x_minus and int(c.cx) == 63:
+			var neg: bool = f == 7
+			var off: float = hw if neg else 0.0
+			var lo: float = float(int(c.cz) * 16) * S * 0.5 - off
+			var hi: float = float(int(c.cz) * 16 + 16) * S * 0.5 - off
+			rebake = hi >= z0 and lo <= z0 + 16.0
+		elif (f == 8 or f == 9) and z_plus and int(c.cz) == 63:
+			var neg: bool = f == 9
+			var off: float = hw if neg else 0.0
+			var lo: float = float(int(c.cx) * 16) * S * 0.5 - off
+			var hi: float = float(int(c.cx) * 16 + 16) * S * 0.5 - off
+			rebake = hi >= x0 and lo <= x0 + 16.0
+		elif f >= 10 and z_minus and int(c.cz) == 63:
+			var neg: bool = f == 11
+			var off: float = hw if neg else 0.0
+			var lo: float = float(int(c.cx) * 16) * S * 0.5 - off
+			var hi: float = float(int(c.cx) * 16 + 16) * S * 0.5 - off
+			rebake = hi >= x0 and lo <= x0 + 16.0
+		if rebake:
+			c.build_mesh_face()
+
+# C5: the player's sim anchor (world.gd side). Inside the home patch the
+# anchor is the home identity frame (the player's column basis, as
+# before); past the patch edge the anchor is the player's face chunk's
+# UNIT-vector frame (the chunk node's basis is scaled by the cell size
+# S in-plane; the player frame is orthonormal metres — same origin and
+# axes, unscaled) so all player physics (gravity, jump, auto-step) run
+# in metres without any rescale.
+func player_anchor(pos: Vector3) -> Dictionary:
+	if Game.planet_R <= 0.0:
+		return {"face": 0, "origin": Vector3.ZERO, "basis": Basis.IDENTITY}
+	var R: float = Game.planet_R
+	var pp: Vector3 = pos + Vector3(0.0, R, 0.0)
+	var hw: float = SphereMath.face_width(R) * 0.5
+	var r: Dictionary = SphereMath.world_to_face(pp, R)
+	var f: int = int(r["face"])
+	if f <= 1:
+		var u0: float = float(r["u"])
+		var v0: float = float(r["v"])
+		var fx: float = hw * u0 if f == 0 else hw * (u0 - 1.0)
+		var fz: float = hw * (2.0 * v0 - 1.0)
+		if absf(fx) <= hw and absf(fz) <= hw:
+			return {"face": 0, "origin": Vector3.ZERO, "basis": Basis.IDENTITY}
+		# past the patch edge but still y-dominant — resolve through the
+		# sphere (the home_point continuous extension) to the bordering
+		# face
+		r = SphereMath.world_to_face(SphereMath.home_point(fx, fz, R), R)
+		f = int(r["face"])
+	var iu: int = clampi(int(floorf(float(r["u"]) * float(SphereMath.CELLS_PER_FACE))), 0, SphereMath.CELLS_PER_FACE - 1)
+	var iv: int = clampi(int(floorf(float(r["v"]) * float(SphereMath.CELLS_PER_FACE))), 0, SphereMath.CELLS_PER_FACE - 1)
+	var ccx: int = iu >> 4
+	var ccz: int = iv >> 4
+	var B: Transform3D = SphereMath.face_chunk_transform(f, ccx, ccz, R)
+	var sc: Vector2 = SphereMath.face_cell_scale(f, R)
+	var bx: Vector3 = B.basis.x / sc.x
+	var bn: Vector3 = B.basis.y
+	var bz: Vector3 = B.basis.z / sc.y
+	return {"face": f, "ccx": ccx, "ccz": ccz, "origin": B.origin, "basis": Basis(bx, bn, bz), "scale": sc}
+
+# C5: the player's sim height above the LOCAL surface (home: the flat
+# height; face: the height above the anchor chunk's tangent plane — the
+# same altitude semantics for cruise / fall / the void test).
+func sim_height(pos: Vector3) -> float:
+	var R: float = Game.planet_R
+	if R <= 0.0:
+		return pos.y
+	var a: Dictionary = player_anchor(pos)
+	if int(a["face"]) <= 1:
+		return flat_of_world_pos(pos).y
+	var p: Vector3 = pos - a["origin"]
+	return p.dot(a["basis"].y)
+
+# C5: the topmost solid y of a face column (the face y axis is unscaled
+# metres), or -1.
+func surface_top_key(face: int, colx: int, colz: int) -> int:
+	var c: Node3D = _ensure_face_chunk(face, colx, colz)
+	if c == null or c.data.is_empty():
+		return -1
+	var lx: int = SphereMath.face_local_x(face, colx, int(c.cx))
+	var lz: int = colz & 15
+	for y in range(Data.HEIGHT - 1, -1, -1):
+		var id: int = c.get_local(lx, y, lz)
+		if id != 0 and id != WorldGen.B_WATER and id != WorldGen.B_LAVA:
+			return y
+	return -1
+
 func _key_f(face: int, ccx: int, ccz: int) -> String:
 	return "%d:%d:%d" % [face, ccx, ccz]
 
@@ -12379,28 +13101,52 @@ func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 	c.face = face
 	c.cx = ccx
 	c.cz = ccz
-	c.position = Vector3(ccx * 16, 0, ccz * 16)
-	c.collision_enabled = false
 	c.init_slabs()
 	add_child(c)
 	# AC-0040: face-planet columns get the banana trees too (same shore
-	# rule in face space — the generate_face coordinate/seed transform);
-	# no fruit registration (the player can't reach face chunks, so there
-	# is no fall/pickup — trees only, visually).
-	var fdata: PackedByteArray = WorldGen.generate_face(face, ccx, ccz, Game.world_seed)
+	# rule in face space — the generate_face coordinate/seed transform).
+	# AC-0309 C1: R > 0 enables the generator blend band (the far side is
+	# ground: the face field fades into the home-extended field near the
+	# home edge).
+	var fdata: PackedByteArray = WorldGen.generate_face(face, ccx, ccz, Game.world_seed, Game.planet_R)
 	WorldGen.apply_banana_trees(fdata, face * 64 + ccx, face * 64 + ccz, Game.world_seed ^ (face * 1000003), Data.HEIGHT)
 	c.data_landed(fdata, PackedByteArray())
 	c.no_caves = false
+	# AC-0309 C6: a saved face chunk re-applies its edits on landing (the
+	# home pattern — the fi cells are local-slot based, so the home body
+	# works verbatim through the 3-part key).
+	_apply_edits_to_chunk(c)
+	# AC-0309 D3: the rigid + scaled face placement (the cell-unit local
+	# grid; the in-plane scale is anisotropic — face_cell_scale). Replaces
+	# the flat placeholder: the chunk joins the real draw path at cell
+	# resolution with collision (C5: bodies tile across the boundary).
+	c.transform = SphereMath.face_chunk_transform(face, ccx, ccz, Game.planet_R)
+	c.collision_enabled = true
 	chunks[key] = c
 	_face_order.append(key)
+	# AC-0309 D4: seed the per-face AweStarlight (the same engine — the
+	# per-instance (cx,cz) key space, no C++ change). The landing light is
+	# the classic pull (the AC-0297 seam contract: byte-equal to the
+	# settled star at the boundary); _face_star_pass re-bakes iff the
+	# settled payload differs.
+	var st: Variant = _star_for_face(face)
+	if st != null:
+		st.seed_column(ccx, ccz, ChunkIO.io_cpp().slabs_flat(c.data))
+		star_owed[key] = true
+	# D3: the mesh — the sync face build (the home drain dispatch is
+	# home-grid-keyed and stays untouched; the face chunk is few and the
+	# sync lane is its build lane). Inert when the player is far from the
+	# edges (data-only outside the mesh window).
+	if _face_in_mesh_window(face, ccx, ccz):
+		c.build_mesh_face()
+	# the adjacent home boundary chunk(s) now have live face data across
+	# their edge — re-mesh them (their ring reads the face side live).
+	_face_rearm_home_neighbors(face, ccx, ccz)
+	# the FIFO cap (the windowed eviction in _face_stream refines it)
 	if _face_order.size() > FACE_CHUNK_CAP:
 		var old: String = String(_face_order.pop_front())
 		if chunks.has(old):
-			var oc: Node3D = chunks[old]
-			chunks.erase(old)
-			_lod_free_all(oc, false)  # AC-0247: placeholders to the pool (a no-op — face chunks are data-only)
-			if not _nofree:
-				_col_checkin(oc)  # AC-0247: the column node is reset + pooled (the legacy oc.queue_free() is gone)
+			_face_free_chunk(old)
 	return c
 
 # Storage-level block access, any face. Face 0 (colx,colz) = flat 1m world
@@ -12415,7 +13161,9 @@ func get_block_key(face: int, colx: int, colz: int, y: int) -> int:
 	var c: Node3D = _ensure_face_chunk(face, colx, colz)
 	if c == null or c.data.is_empty():
 		return 0
-	return c.get_local(colx & 15, y, colz & 15)
+	# AC-0309: the local x slot runs against the face's u on the mirror
+	# class (face_local_x) — the data layout the mesh/collision/light see.
+	return c.get_local(SphereMath.face_local_x(face, colx, int(c.cx)), y, colz & 15)
 
 func set_block_key(face: int, colx: int, colz: int, y: int, id: int) -> bool:
 	if y < 0 or y >= Data.HEIGHT:
@@ -12427,9 +13175,29 @@ func set_block_key(face: int, colx: int, colz: int, y: int, id: int) -> bool:
 		# AC-0325: no silent no-op (a face chunk is generated on ensure,
 		# so this is unreachable — the honest return anyway).
 		return false
-	var fi: int = (y << 8) | ((colz & 15) << 4) | (colx & 15)
-	c.set_local(colx & 15, y, colz & 15, id)
+	# AC-0309: the local x slot runs against the face's u on the mirror
+	# class (face_local_x) — the data layout the mesh/collision/light see.
+	var lx: int = SphereMath.face_local_x(face, colx, int(c.cx))
+	var fi: int = (y << 8) | ((colz & 15) << 4) | lx
+	c.set_local(lx, y, colz & 15, id)
 	c.set_fl_at(fi, 0)
+	# AC-0309 C6: face edits persist under the 3-part runtime key (the v2
+	# save form "0:<face>:<ccx>:<ccz>:<local>" addresses them directly —
+	# the format was face-capable from AC-0143 M5; the load gate and the
+	# re-keyer learned the non-home faces with this ticket).
+	var key := _key_f(face, int(c.cx), int(c.cz))
+	if not edits.has(key):
+		edits[key] = {}
+	edits[key][fi] = {"b": id, "f": 0}
+	# the face build is sync (its build lane) — the edit re-bakes in the
+	# same call (mesh + collision), then the star re-seeds (the light
+	# follows the edit; the drain re-bakes iff it settles different).
+	if c.mesh_built:
+		c.build_mesh_face()
+	var st2: Variant = _star_faces.get(face)
+	if st2 != null:
+		st2.seed_column(int(c.cx), int(c.cz), ChunkIO.io_cpp().slabs_flat(c.data))
+		star_owed[key] = true
 	return true
 
 

@@ -1604,6 +1604,55 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}, mask: PackedByt
 	apply_accs(res, ms_full)
 
 
+func build_mesh_face(light: Dictionary = {}) -> void:
+	# AC-0309: the face-chunk sync build — the face grid's build lane (the
+	# home drain dispatch is home-grid-keyed and stays untouched). The
+	# SAME C++ pipeline as build_mesh (light -> rings -> build_accs ->
+	# apply_accs; the local 16x16xH shape is identical, so the greedy
+	# emitter, the collision derivation and the light bake all run
+	# unchanged — the C3 rule: per-chunk meshing, the cross-face ring is
+	# a solid test only, no geometry crosses the seam). The rings come
+	# from the face-aware resolver (World._face_rings: the same-face
+	# neighbour via the C++ snap_rings, the home edge via the resampled
+	# LIVE ring, the window/sector edges = solid). Light: a passed
+	# payload (the settled star), else the classic pull with EMPTY strips
+	# (the home strip cache is home-grid-keyed — a face chunk self-lights
+	# from its own data; the AC-0297 seam contract: at the boundary the
+	# pull light is byte-equal to the settled star).
+	if data.is_empty():
+		return
+	var mc: Variant = mesh_cpp()
+	var nbs_face: Dictionary = Game.world._face_rings(self)
+	var light_d: Dictionary = light
+	var has_payload: bool = not light_d.is_empty() and light_d.has("arr")
+	if not has_payload:
+		var ze := PackedByteArray()
+		light_d = Lighting.compute_light_flat_chunk_pull(data, int(cx), int(cz), Data.HEIGHT, ze, ze, ze)
+	var ctx_w: Dictionary = make_ctx()
+	var ze2 := PackedByteArray()
+	ctx_w["eff_strips"] = ze2
+	ctx_w["blk_strips"] = ze2
+	ctx_w["blk_strips_b"] = ze2
+	ctx_w["top"] = int(top)
+	var ms_full: Dictionary
+	if OS.get_environment("AWECRAFT_MERGE") == "0":
+		ms_full = {"tex": null, "rects": {}}
+	else:
+		ms_full = _merge_atlas()
+	var ms_w: Dictionary
+	if not ms_full.rects.is_empty():
+		ms_w = {"rects": ms_full.rects.duplicate(), "h": float(ms_full.get("h", 0.0))}
+	else:
+		ms_w = {"rects": {}}
+	var res: Dictionary = mc.build_accs(data, fl, cx, cz, nbs_face, ctx_w, ms_w, light_d, 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())
+	apply_accs(res, ms_full)
+	# the landing light store (the face star drain diffs the settled
+	# payload against it)
+	if light_d.has("arr"):
+		last_eff = _eff_store(light_d)
+	mesh_built = true
+
+
 # AC-0128 RUN 3: the chunk keeps only the eff bytes (+blk_src) in last_eff -
 # the 16KB block-light mask rides the light dict for the bake + the bounded
 # eff cache (world.gd, EFF_CACHE_CAP) and is never pinned per-chunk (memory

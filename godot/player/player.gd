@@ -18,6 +18,10 @@ const MOUSE_SENS := 0.0022
 const PAD_LOOK_SPEED := 2.5
 const PITCH_LIMIT := 1.55
 const REACH := 6.0
+# AC-0309 C5: the auto-step on the FACE world (6 m cell resolution —
+# terrain steps up to ~2-3 m): 1.0 m auto-stepped, the jump (1.35 m)
+# covers the rest. The home step stays 0.5 m (the folded-net seam lip).
+const FACE_STEP := 1.0
 const INV_SIZE := 36
 const STACK_MAX := 64
 const ARMOR_SIZE := 4
@@ -64,6 +68,7 @@ var _pitch := 0.0
 var _chunk_x := 0
 var _chunk_z := 0
 var _chunk_y := 0  # AC-0234: the tracked 16-block Y slab (a crossing re-centers)
+var _anchor: Dictionary = {}  # AC-0309 C5: the sim anchor (World.player_anchor)
 var _debug_layer: CanvasLayer = null
 var _debug_label: Label = null
 var inv: Array = []
@@ -397,7 +402,14 @@ func _physics_process_impl(dt: float) -> void:
 	# height (the ground curves down from the spawn); the altitude
 	# semantics (cruise altitude, fall distance, the void test) key on the
 	# FLAT height: the height above the local surface along the local radial.
-	var flat_h: float = Game.world.flat_of_world_pos(position).y if Game.world != null else position.y
+	# AC-0309 C5: the sim anchor — home patch: the identity frame (the
+	# flat height, as before); past a patch edge: the player's face chunk's
+	# UNIT-vector frame (orthonormal metres; the chunk node's basis is the
+	# same axes scaled by the cell widths). All movement physics below run
+	# in the anchor frame unchanged (gravity along local -Y, jump, step).
+	var flat_h: float = Game.world.sim_height(position) if Game.world != null else position.y
+	if Game.world != null:
+		_anchor = Game.world.player_anchor(position)
 	# AC-0121: while the debug console is open, ignore every polled game
 	# action - typing "w"/space/shift must not steer, jump, sprint or toggle
 	# flight. Physics (gravity, falls, swimming buoyancy) keeps running.
@@ -492,7 +504,7 @@ func _physics_process_impl(dt: float) -> void:
 		k = 4.0
 	else:
 		k = 12.0
-	var b: Basis = _col_basis()
+	var b: Basis = _anchor_basis()  # AC-0309 C5: the sim anchor (home: the column basis)
 	# orthonormal basis: the inverse rotation is the transpose
 	var vloc: Vector3 = b.transposed() * velocity
 	vloc.x = lerpf(vloc.x, tx, minf(1.0, k * dt))
@@ -544,8 +556,10 @@ func _physics_process_impl(dt: float) -> void:
 			# (the grid is the flat net — the global read stopped agreeing
 			# a few hundred metres from the pole).
 			var probe: Vector3 = position + b * Vector3(f.x * 0.45, -0.1, f.y * 0.45)
-			var ep: Vector3 = Game.world.flat_of_world_pos(probe) if Game.world != null else probe
-			var edge_open: bool = Game.world == null or Game.world.get_block(int(floorf(ep.x)), int(floorf(ep.y)), int(floorf(ep.z))) == 0
+			# AC-0309 C5: sim-routed (the face world's grid is the face
+			# cell frame; the probe cell is resolved in that frame).
+			var ep: Vector3i = _sim_probe_cell(probe.x, probe.y, probe.z)
+			var edge_open: bool = Game.world == null or _sim_get_block(ep.x, ep.y, ep.z) == 0
 			if edge_open:
 				var comp := Vector2(vloc.x, vloc.z).dot(f)
 				if comp > 0.0:
@@ -572,23 +586,46 @@ func _physics_process_impl(dt: float) -> void:
 		if fl > 0.001:
 			ff = ff / fl
 			var fpos: Vector3 = position + b * Vector3(ff.x * 0.6, 0.0, ff.y * 0.6)
-			var fp2: Vector3 = Game.world.flat_of_world_pos(fpos)
-			var fx2 := int(floorf(fp2.x))
-			var fz2 := int(floorf(fp2.z))
-			var ftop: int = Game.world.surface_top(fx2, fz2)
-			# the forward ground top EXACTLY ahead (flat→world is an exact
-			# inverse, 0.17 mm) — the physical rise the capsule will meet
-			var fwd_g: Vector3 = Game.world.world_pos_of_flat(fp2.x, float(ftop) + 1.0, fp2.z)
-			var step_h := fwd_g.y - position.y
-			# the residual varies continuously along the fold (down to sub-mm);
-			# ANY positive step under 0.5 m is stepped (sub-mm false positives
-			# from the conversion noise are harmless — the nudge just settles)
-			if step_h > 0.001 and step_h <= 0.5:
-				# head clearance above the step (capsule ~1.8 m)
-				var head_cell: int = Game.world.get_block(fx2, ftop + 2, fz2)
-				var head_solid := head_cell != 0 and Data.block(head_cell) != null and bool(Data.block(head_cell).solid)
-				if not head_solid:
-					position += b * Vector3(0.0, step_h + 0.02, 0.0)
+			if int(_anchor.get("face", 0)) > 1:
+				# AC-0309 C5: the face world — the forward CELL (the anchor's
+				# cell frame; the in-plane axes per cell width, y unscaled
+				# metres). The face grid's 6 m resolution means terrain steps
+				# up to ~2-3 m: the step threshold is FACE_STEP (1.0 m, vs
+				# the home 0.5 m seam lip) and the jump (1.35 m) covers the
+				# rest.
+				var p: Vector3 = fpos - _anchor["origin"]
+				var bx: Vector3 = _anchor["basis"].x
+				var bn: Vector3 = _anchor["basis"].y
+				var bz: Vector3 = _anchor["basis"].z
+				var sc: Vector2 = _anchor["scale"]
+				var pc: Vector3 = Vector3(p.dot(bx) / sc.x, p.dot(bn), p.dot(bz) / sc.y)
+				var fx2 := int(floorf(pc.x))
+				var fz2 := int(floorf(pc.z))
+				var ftop: int = Game.world.surface_top_key(int(_anchor["face"]), fx2, fz2)
+				var step_h: float = float(ftop) - pc.y
+				if step_h > 0.001 and step_h <= FACE_STEP:
+					var head_cell: int = Game.world.get_block_key(int(_anchor["face"]), fx2, fz2, ftop + 2)
+					var head_solid := head_cell != 0 and Data.block(head_cell) != null and bool(Data.block(head_cell).solid)
+					if not head_solid:
+						position += b * Vector3(0.0, step_h + 0.02, 0.0)
+			else:
+				var fp2: Vector3 = Game.world.flat_of_world_pos(fpos)
+				var fx2 := int(floorf(fp2.x))
+				var fz2 := int(floorf(fp2.z))
+				var ftop: int = Game.world.surface_top(fx2, fz2)
+				# the forward ground top EXACTLY ahead (flat→world is an exact
+				# inverse, 0.17 mm) — the physical rise the capsule will meet
+				var fwd_g: Vector3 = Game.world.world_pos_of_flat(fp2.x, float(ftop) + 1.0, fp2.z)
+				var step_h := fwd_g.y - position.y
+				# the residual varies continuously along the fold (down to sub-mm);
+				# ANY positive step under 0.5 m is stepped (sub-mm false positives
+				# from the conversion noise are harmless — the nudge just settles)
+				if step_h > 0.001 and step_h <= 0.5:
+					# head clearance above the step (capsule ~1.8 m)
+					var head_cell: int = Game.world.get_block(fx2, ftop + 2, fz2)
+					var head_solid := head_cell != 0 and Data.block(head_cell) != null and bool(Data.block(head_cell).solid)
+					if not head_solid:
+						position += b * Vector3(0.0, step_h + 0.02, 0.0)
 	move_and_slide()
 	# AC-0276: the sprint FOV kick (+10% while effectively sprinting on
 	# the ground OR while flying - the air sprint cue, lerp ~0.15 s;
@@ -678,6 +715,20 @@ func _init_inv() -> void:
 	held = {}
 	craft_out = {}
 	ui_mode = ""
+
+
+# AC-0309: the highlight is a child of Game.world (see _build_highlight).
+# The save round-trip / slot-continue path frees the world and spawns a
+# fresh one while a player node can still be alive (queue_free is
+# deferred; the continue path creates the new world in the same frame),
+# so the stored reference can dangle and every aim frame hits
+# "previously freed". Rebuilding is cheap (one 1-box MeshInstance3D) and
+# re-attaches to the CURRENT world; never touch a freed node.
+func _ensure_highlight() -> MeshInstance3D:
+	if is_instance_valid(highlight):
+		return highlight
+	_build_highlight()
+	return highlight
 
 
 func _build_highlight() -> void:
@@ -836,7 +887,12 @@ func vm_refresh(force: bool = false) -> void:
 	var now := Time.get_ticks_msec()
 	if force or eye != _vm_eye_cell or now - _vm_light_ms >= 500:
 		var w = Game.world
-		if w != null:
+		# AC-0309 C5 (v1): the light_at pull is home-grid; on the face
+		# world the viewmodel rides its floor (the lvm formula below keeps
+		# it lit by the player light) — the face MESH light is the real
+		# pull (build_mesh_face), so the terrain around the hand is
+		# correctly lit even though the hand sample is the floor.
+		if w != null and int(_anchor.get("face", 0)) <= 1:
 			var l: Dictionary = w.light_at(eye.x, eye.y, eye.z)
 			_vm_sky = float(l.sky)
 			_vm_blk = float(l.block)
@@ -1285,10 +1341,11 @@ func _update_sway(dt: float) -> void:
 
 
 func aim_dir() -> Vector3:
-	# AC-0308: the camera's WORLD direction — the player's column frame
-	# (see _col_frame) times the camera pitch, applied to the aim axis.
+	# AC-0308: the camera's WORLD direction — the player's sim frame
+	# (see _anchor_frame: the column frame on home, the face frame past
+	# the patch edge) times the camera pitch, applied to the aim axis.
 	# Computed from the stored yaw/pitch (no transform-lag frame).
-	return (_col_frame() * (Basis.from_euler(Vector3(_pitch, 0.0, 0.0)) * Vector3(0.0, 0.0, -1.0))).normalized()
+	return (_anchor_frame() * (Basis.from_euler(Vector3(_pitch, 0.0, 0.0)) * Vector3(0.0, 0.0, -1.0))).normalized()
 
 
 func aim_hit() -> Dictionary:
@@ -1296,7 +1353,14 @@ func aim_hit() -> Dictionary:
 		return {"hit": false, "cell": Vector3i.ZERO, "id": 0, "normal": Vector3i.ZERO, "t": 0.0}
 	# AC-0307: the DDA queries the FLAT block API; the camera sits in the
 	# placed global frame — the ray runs in the local flat frame.
+	# AC-0309 C5: past the patch edge the ray runs in the face chunk's
+	# CELL frame (the in-plane axes per cell width) against the face block
+	# API — the same DDA (core/math.gd is resolution-agnostic).
 	var fr: Dictionary = _flat_ray()
+	if int(_anchor.get("face", 0)) > 1:
+		var face: int = int(_anchor["face"])
+		var cb := func(x: int, y: int, z: int) -> int: return Game.world.get_block_key(face, x, z, y)
+		return VoxelMath.raycast_blocks(fr["o"], fr["d"], fr["reach"], cb)
 	return VoxelMath.raycast_blocks(fr["o"], fr["d"], REACH, Game.world.get_block)
 
 
@@ -1304,14 +1368,31 @@ func aim_hit() -> Dictionary:
 # API, but the camera is in the placed global frame. Convert the ray's
 # origin + direction into the player's column flat frame (the rigid
 # placement transform; the basis transposed maps directions).
+# AC-0309 C5: past the patch edge the ray converts into the face chunk's
+# CELL frame (metres / cell width per in-plane axis; y unscaled metres)
+# with the reach rescaled to cell units (a reach of 6 m = ~0.97 face
+# cells — the 6 m resolution of the face world).
 func _flat_ray() -> Dictionary:
 	if Game.world == null:
-		return {"o": camera.global_position, "d": aim_dir()}
+		return {"o": camera.global_position, "d": aim_dir(), "reach": REACH}
+	if int(_anchor.get("face", 0)) > 1:
+		var o: Vector3 = camera.global_position - _anchor["origin"]
+		var bx: Vector3 = _anchor["basis"].x
+		var bn: Vector3 = _anchor["basis"].y
+		var bz: Vector3 = _anchor["basis"].z
+		var sc: Vector2 = _anchor["scale"]
+		var ad: Vector3 = aim_dir()
+		var dcells: Vector3 = Vector3(ad.dot(bx) / sc.x, ad.dot(bn), ad.dot(bz) / sc.y)
+		return {
+			"o": Vector3(o.dot(bx) / sc.x, o.dot(bn), o.dot(bz) / sc.y),
+			"d": dcells.normalized(),
+			"reach": REACH / dcells.length(),
+		}
 	var o: Vector3 = Game.world.flat_of_world_pos(camera.global_position)
 	var cx := int(floorf(o.x / 16.0))
 	var cz := int(floorf(o.z / 16.0))
 	var tb: Basis = Game.world._col_sphere_transform(cx, cz).basis
-	return {"o": o, "d": (tb.transposed() * aim_dir()).normalized()}
+	return {"o": o, "d": (tb.transposed() * aim_dir()).normalized(), "reach": REACH}
 
 
 func start_mine() -> void:
@@ -1369,8 +1450,8 @@ func _fire_bow() -> void:
 # (e.g. half torn out by a future editor tool) - callers must treat
 # "ok": false as "not a door".
 func _door_pair(cell: Vector3i) -> Dictionary:
-	var g = Game.world
-	var id = int(g.get_block(int(cell.x), int(cell.y), int(cell.z)))
+	# AC-0309 C5: sim-routed (doors on the face world read the face grid).
+	var id = int(_sim_get_block(int(cell.x), int(cell.y), int(cell.z)))
 	var open: bool = id == DOOR_LO_OPEN or id == DOOR_HI_OPEN
 	if id != DOOR_LO and id != DOOR_HI and not open:
 		return {"ok": false, "lo": cell, "hi": cell, "open": false}
@@ -1379,24 +1460,24 @@ func _door_pair(cell: Vector3i) -> Dictionary:
 		lo = cell - Vector3i(0, 1, 0)
 	var hi := lo + Vector3i(0, 1, 0)
 	if open:
-		return {"ok": g.get_block(lo.x, lo.y, lo.z) == DOOR_LO_OPEN \
-			and g.get_block(hi.x, hi.y, hi.z) == DOOR_HI_OPEN, "lo": lo, "hi": hi, "open": true}
-	return {"ok": g.get_block(lo.x, lo.y, lo.z) == DOOR_LO \
-		and g.get_block(hi.x, hi.y, hi.z) == DOOR_HI, "lo": lo, "hi": hi, "open": false}
+		return {"ok": _sim_get_block(lo.x, lo.y, lo.z) == DOOR_LO_OPEN \
+			and _sim_get_block(hi.x, hi.y, hi.z) == DOOR_HI_OPEN, "lo": lo, "hi": hi, "open": true}
+	return {"ok": _sim_get_block(lo.x, lo.y, lo.z) == DOOR_LO \
+		and _sim_get_block(hi.x, hi.y, hi.z) == DOOR_HI, "lo": lo, "hi": hi, "open": false}
 
 
 # AC-0271: toggle the door pair at `cell` (either half).
+# AC-0309 C5: sim-routed (the face world's doors toggle in the face grid).
 func _toggle_door(cell: Vector3i) -> void:
 	var pr := _door_pair(cell)
 	if not bool(pr["ok"]):
 		return
-	var g = Game.world
 	if bool(pr["open"]):
-		g.set_block(int(pr["lo"].x), int(pr["lo"].y), int(pr["lo"].z), DOOR_LO)
-		g.set_block(int(pr["hi"].x), int(pr["hi"].y), int(pr["hi"].z), DOOR_HI)
+		_sim_set_block(int(pr["lo"].x), int(pr["lo"].y), int(pr["lo"].z), DOOR_LO)
+		_sim_set_block(int(pr["hi"].x), int(pr["hi"].y), int(pr["hi"].z), DOOR_HI)
 	else:
-		g.set_block(int(pr["lo"].x), int(pr["lo"].y), int(pr["lo"].z), DOOR_LO_OPEN)
-		g.set_block(int(pr["hi"].x), int(pr["hi"].y), int(pr["hi"].z), DOOR_HI_OPEN)
+		_sim_set_block(int(pr["lo"].x), int(pr["lo"].y), int(pr["lo"].z), DOOR_LO_OPEN)
+		_sim_set_block(int(pr["hi"].x), int(pr["hi"].y), int(pr["hi"].z), DOOR_HI_OPEN)
 	Audio.play("door")
 
 
@@ -1555,7 +1636,7 @@ func place_item(item: Dictionary) -> void:
 	# air check) and neither may swallow the player.
 	if bid == DOOR_LO:
 		var above := target + Vector3i(0, 1, 0)
-		if Game.world.get_block(above.x, above.y, above.z) != 0:
+		if _sim_get_block(above.x, above.y, above.z) != 0:  # AC-0309 C5: sim-routed
 			if _pt:
 				print("PLACETRACE door reject: cell above not air %s" % str(above))
 			return
@@ -1563,17 +1644,22 @@ func place_item(item: Dictionary) -> void:
 			if _pt:
 				print("PLACETRACE door reject: top cell intersects player")
 			return
-		Game.world.set_block(target.x, target.y, target.z, DOOR_LO)
-		Game.world.set_block(above.x, above.y, above.z, DOOR_HI)
+		_sim_set_block(target.x, target.y, target.z, DOOR_LO)  # AC-0309 C5: sim-routed
+		_sim_set_block(above.x, above.y, above.z, DOOR_HI)
 		inv_consume_selected()
 		Audio.play("place")
 		return
-	Game.world.set_block(target.x, target.y, target.z, bid)
+	_sim_set_block(target.x, target.y, target.z, bid)  # AC-0309 C5: sim-routed
 	inv_consume_selected()
 	Audio.play("place")
 
 
 func use_bucket(info: Dictionary) -> void:
+	# AC-0309 C5 (v1): the fluid sim is home-grid only — the bucket is a
+	# no-op on the face world (the generated face fluids still render and
+	# displace; placing/scooping there is the fluids ticket's scope).
+	if Game.world != null and int(_anchor.get("face", 0)) > 1:
+		return
 	# AC-0307: the flat-frame ray (see _flat_ray) — get_block is flat.
 	var frb: Dictionary = _flat_ray()
 	var hit := VoxelMath.raycast_cell(frb["o"], frb["d"], REACH, Game.world.get_block, true)
@@ -1619,20 +1705,21 @@ func _box_intersects_player(cell: Vector3i) -> bool:
 
 
 func _update_interaction(dt: float) -> void:
+	var hl := _ensure_highlight()  # AC-0309: survives the world free/recreate
 	if ui_mode != "":
-		highlight.visible = false
+		hl.visible = false
 		return
 	var hit := aim_hit()
 	if hit.hit:
-		highlight.visible = true
+		hl.visible = true
 		# AC-0307: the aimed cell is FLAT; the highlight node lives in the
 		# placed global frame.
 		if Game.world != null:
-			highlight.global_position = Game.world.world_pos_of_flat(float(hit.cell.x) + 0.5, float(hit.cell.y) + 0.5, float(hit.cell.z) + 0.5)
+			hl.global_position = Game.world.world_pos_of_flat(float(hit.cell.x) + 0.5, float(hit.cell.y) + 0.5, float(hit.cell.z) + 0.5)
 		else:
-			highlight.global_position = Vector3(float(hit.cell.x) + 0.5, float(hit.cell.y) + 0.5, float(hit.cell.z) + 0.5)
+			hl.global_position = Vector3(float(hit.cell.x) + 0.5, float(hit.cell.y) + 0.5, float(hit.cell.z) + 0.5)
 	else:
-		highlight.visible = false
+		hl.visible = false
 		if _mining:
 			_mine_id = -1
 			_mine_prog = 0.0
@@ -1658,18 +1745,20 @@ func _update_interaction(dt: float) -> void:
 				or int(_mine_id) == DOOR_LO_OPEN or int(_mine_id) == DOOR_HI_OPEN:
 			var pr := _door_pair(_mine_cell)
 			if pr["ok"]:
-				Game.world.set_block(int(pr["lo"].x), int(pr["lo"].y), int(pr["lo"].z), 0)
-				Game.world.set_block(int(pr["hi"].x), int(pr["hi"].y), int(pr["hi"].z), 0)
+				_sim_set_block(int(pr["lo"].x), int(pr["lo"].y), int(pr["lo"].z), 0)  # AC-0309 C5: sim-routed
+				_sim_set_block(int(pr["hi"].x), int(pr["hi"].y), int(pr["hi"].z), 0)
 			else:
-				Game.world.set_block(_mine_cell.x, _mine_cell.y, _mine_cell.z, 0)
+				_sim_set_block(_mine_cell.x, _mine_cell.y, _mine_cell.z, 0)
 		else:
-			Game.world.set_block(_mine_cell.x, _mine_cell.y, _mine_cell.z, 0)
+			_sim_set_block(_mine_cell.x, _mine_cell.y, _mine_cell.z, 0)  # AC-0309 C5: sim-routed
 		if bool(Settings.values["hunger_enabled"]):
 			hunger = maxf(0.0, hunger - 0.1)
 		var is_pick := held_item != null and str(held_item.get("tool", "")) == "pick"
 		# AC-0308: the drop spawns in the PLACED world (spawn_drop takes a
 		# world position) — the mined cell is FLAT, convert.
-		var center: Vector3 = Game.world.world_pos_of_flat(float(_mine_cell.x) + 0.5, float(_mine_cell.y) + 0.5, float(_mine_cell.z) + 0.5)
+		# AC-0309 C5: sim-routed (home: flat->world; face: the chunk
+		# transform on the local cell centre).
+		var center: Vector3 = _sim_cell_center(_mine_cell.x, _mine_cell.y, _mine_cell.z)
 		for d in Data.block_drops(_mine_id, is_pick):
 			if randf() < float(d["ch"]):
 				Game.world.spawn_drop(int(d["id"]), center)
@@ -1691,10 +1780,74 @@ func _block_at(wx: float, wy: float, wz: float) -> int:
 	# AC-0308: world position -> FLAT before the grid read (the block grid
 	# is the flat net; the global-read leftovers AC-0307 documented —
 	# in-water / in-lava / head-in-water — are closed by this).
+	# AC-0309 C5: past the patch edge the read goes through the face block
+	# API (the anchor's cell frame; the far side is a live voxel world,
+	# not air — fluids/terrain behave on both sides of the seam).
 	if Game.world == null:
 		return 0
+	if int(_anchor.get("face", 0)) > 1:
+		var p: Vector3 = Vector3(wx, wy, wz) - _anchor["origin"]
+		var bx: Vector3 = _anchor["basis"].x
+		var bn: Vector3 = _anchor["basis"].y
+		var bz: Vector3 = _anchor["basis"].z
+		var sc: Vector2 = _anchor["scale"]
+		var pc: Vector3 = Vector3(p.dot(bx) / sc.x, p.dot(bn), p.dot(bz) / sc.y)
+		return Game.world.get_block_key(int(_anchor["face"]), int(floorf(pc.x)), int(floorf(pc.y)), int(floorf(pc.z)))
 	var f: Vector3 = Game.world.flat_of_world_pos(Vector3(wx, wy, wz))
 	return Game.world.get_block(int(floorf(f.x)), int(floorf(f.y)), int(floorf(f.z)))
+
+
+# AC-0309 C5: the sim cell accessors — the grid cell (the DDA's frame:
+# flat 1 m on home, the face cell frame past the patch edge) to the
+# world API. Mine/place/doors all route through these so the far side
+# is a live voxel world (C6: edits key planet_id:face:ccx:ccz:local).
+func _sim_get_block(x: int, y: int, z: int) -> int:
+	if Game.world == null:
+		return 0
+	if int(_anchor.get("face", 0)) > 1:
+		return Game.world.get_block_key(int(_anchor["face"]), x, z, y)
+	return Game.world.get_block(x, y, z)
+
+
+func _sim_set_block(x: int, y: int, z: int, id: int) -> bool:
+	if Game.world == null:
+		return false
+	if int(_anchor.get("face", 0)) > 1:
+		return Game.world.set_block_key(int(_anchor["face"]), x, z, y, id)
+	return Game.world.set_block(x, y, z, id)
+
+
+func _sim_cell_center(x: int, y: int, z: int) -> Vector3:
+	# AC-0309 C5: the cell centre in the global frame (drops spawn here) —
+	# home: flat->world; face: the anchor chunk transform applied to the
+	# local cell centre (the mirror layout is the data convention — the
+	# transform runs on the chunk's local slots).
+	if Game.world == null:
+		return Vector3.ZERO
+	if int(_anchor.get("face", 0)) > 1:
+		var face: int = int(_anchor["face"])
+		var ccx: int = int(_anchor["ccx"])
+		var ccz: int = int(_anchor["ccz"])
+		var lx: int = SphereMath.face_local_x(face, x, ccx)
+		return SphereMath.face_chunk_transform(face, ccx, ccz, Game.planet_R) * Vector3(float(lx) + 0.5, float(y) + 0.5, float(z) + 0.5)
+	return Game.world.world_pos_of_flat(float(x) + 0.5, float(y) + 0.5, float(z) + 0.5)
+
+
+func _sim_probe_cell(wx: float, wy: float, wz: float) -> Vector3i:
+	# AC-0309 C5: a world position to its sim grid cell (the probe the
+	# crouch edge check uses).
+	if Game.world == null:
+		return Vector3i(int(wx), int(wy), int(wz))
+	if int(_anchor.get("face", 0)) > 1:
+		var p: Vector3 = Vector3(wx, wy, wz) - _anchor["origin"]
+		var bx: Vector3 = _anchor["basis"].x
+		var bn: Vector3 = _anchor["basis"].y
+		var bz: Vector3 = _anchor["basis"].z
+		var sc: Vector2 = _anchor["scale"]
+		var pc: Vector3 = Vector3(p.dot(bx) / sc.x, p.dot(bn), p.dot(bz) / sc.y)
+		return Vector3i(int(floorf(pc.x)), int(floorf(pc.y)), int(floorf(pc.z)))
+	var f: Vector3 = Game.world.flat_of_world_pos(Vector3(wx, wy, wz))
+	return Vector3i(int(floorf(f.x)), int(floorf(f.y)), int(floorf(f.z)))
 
 
 func _recenter() -> void:
@@ -1727,10 +1880,11 @@ func _recenter() -> void:
 
 func _apply_rotation() -> void:
 	# AC-0308: camera up = the radial underfoot. The player's basis is its
-	# column's rigid frame (the same frame the ground facet, the collision
-	# bodies and the DDA flat-frame use) times the yaw; the camera pitch
-	# is unchanged (local X).
-	basis = _col_frame()
+	# sim frame (the column's rigid frame on home; the face chunk's
+	# unit-vector frame past the patch edge — AC-0309 C5; the same frame
+	# the ground facet, the collision bodies and the DDA flat-frame use)
+	# times the yaw; the camera pitch is unchanged (local X).
+	basis = _anchor_frame()
 	camera.rotation.x = _pitch
 
 
@@ -1755,6 +1909,23 @@ func _col_frame() -> Basis:
 	# the basis and the aim ray both ride this frame; the velocity lives
 	# in _col_basis() (see there for the double-rotation trap).
 	return _col_basis() * Basis.from_euler(Vector3(0.0, _yaw, 0.0))
+
+
+func _anchor_basis() -> Basis:
+	# AC-0309 C5: the player's SIM frame — inside the home patch the
+	# column basis (as before); past a patch edge the player's face
+	# chunk's UNIT-vector frame (orthonormal metres — the chunk node's
+	# basis is the same axes scaled by the cell widths, face_cell_scale).
+	# Crossing the seam, the frame changes by the tangent-facet dihedral
+	# (<= ~0.7 deg for the boundary-adjacent chunk) — the same snap class
+	# as the home column seams, continuous by construction.
+	if Game.world == null or int(_anchor.get("face", 0)) <= 1:
+		return _col_basis()
+	return _anchor["basis"]
+
+
+func _anchor_frame() -> Basis:
+	return _anchor_basis() * Basis.from_euler(Vector3(0.0, _yaw, 0.0))
 
 
 func _build_debug() -> void:

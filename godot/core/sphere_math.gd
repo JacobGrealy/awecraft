@@ -383,3 +383,181 @@ static func world_to_flat(p: Vector3, R: float) -> Vector3:
 				best_h = h
 				best = Vector3(float(cx0 + dx) * 16.0 + loc.x, loc.y, float(cz0 + dz) * 16.0 + loc.z)
 	return best
+
+# --- AC-0309: cross-face movement (P4 of AC-0144) ---
+# The home pair (faces 0,1) keeps its exact AC-0306/AC-0307 geometry and
+# keying; the helpers below extend the net to faces 2-11 so a player can
+# cross a home edge onto the neighbouring face's grid. Faces 2-11 are
+# 1024-cell grids (one local unit of a face chunk = one cell = W/1024 m);
+# the height stays 1 m.
+
+# AC-0309: one face cell in flat metres (W/1024 = 6.135 m at R = 4000).
+static func face_cell_size(R: float) -> float:
+	return face_width(R) / float(CELLS_PER_FACE)
+
+# AC-0309: the (u, v) cell widths in flat metres — ANISOTROPIC. The u
+# axis spans the full cube-face width W (1024 cells -> S per cell) and
+# the v axis spans the half-face W/2 (1024 cells -> S/2 per cell) on the
+# x faces (4-7, v along a home edge); the z faces (8-11) swap the roles
+# (u = the half axis, v = the full axis). A face chunk's 16x16 local
+# grid is therefore S x S/2 metres in-plane on the x faces (S/2 x S on
+# the z faces).
+static func face_cell_scale(face: int, R: float) -> Vector2:
+	var s: float = face_cell_size(R)
+	if face >= 4 and face <= 7:
+		return Vector2(s, s * 0.5)
+	return Vector2(s * 0.5, s)
+
+# AC-0309: the folded net has two chart orientation classes. For these
+# faces the (u,v) chart is LEFT-handed relative to the outward radial, so
+# a right-handed local frame (+X = n x +Z, +Z = face +v, +Y = radial) runs
+# its +X AGAINST the face's u. The chunk data of a mirror face therefore
+# stores cell (iu, iv) in local slot (15 - (iu - ccx*16), iv - ccz*16) —
+# a DATA-LAYOUT convention (face_local_x), while every face_chunk_transform
+# stays a proper right-handed rigid transform (the mesh materials are
+# CULL_BACK: a mirrored node basis would cull the terrain).
+static func face_mirror_x(face: int) -> bool:
+	return (face >= 2 and face <= 5) or (face >= 8 and face <= 9)
+
+# AC-0309: face cell iu -> its chunk-local x slot within chunk ccx
+# (the mirror class runs local +X against the face's u; see above).
+static func face_local_x(face: int, iu: int, ccx: int) -> int:
+	var k: int = iu - ccx * 16
+	return 15 - k if face_mirror_x(face) else k
+
+# AC-0309: the face-chart direction at (u0, v0) toward (u0 + d.u, v0 + d.v):
+# the chord of the two neighbour sphere points, perpendicularized against
+# the centre radial (the column_transform uE/uW construction, in the face
+# frame; the clamped one-sided chord at a face border is the same class of
+# approximation as that fallback).
+static func _face_chart_dir(face: int, u0: float, v0: float, d: Vector2, R: float) -> Vector3:
+	var pa: Vector3 = uv_to_world(face, clampf(u0 + float(d.x), 0.0, 1.0), clampf(v0 + float(d.y), 0.0, 1.0), R)
+	var pb: Vector3 = uv_to_world(face, clampf(u0 - float(d.x), 0.0, 1.0), clampf(v0 - float(d.y), 0.0, 1.0), R)
+	var nc: Vector3 = pa.normalized()
+	var t: Vector3 = (pa - pb) - nc * (pa - pb).dot(nc)
+	return t.normalized() if t.length() > 1e-9 else Vector3.ZERO
+
+# AC-0309: the placement of face chunk (ccx, ccz) of a NON-HOME face
+# (2-11), GLOBAL (home) frame (planet frame shifted by (0, -R, 0)).
+# A per-chunk least-squares AFFINE fit of the 256 cell centres to their
+# chart positions (uv_to_world): local (lx, lz) -> world, one local unit
+# = one cell (face_cell_scale — anisotropic), local +Y = the radial at
+# the chunk centre (the height stays 1 m). The chart is not
+# affine-developable, so no facet/rigid construction can place every cell
+# close over the full 49-98 m chunk: the tangent-plane-at-centre form
+# left far-edge cells 3-4 m off the chart and — worse — adjacent chunks'
+# shared edges up to 98-189 m apart on the mirror class. The LSQ affine
+# keeps every cell within ~0.4 m of its chart position and adjacent
+# shared edges within ~0.8 m (the walkable class on the 1 m face step).
+# The mirror class enters through the data layout only (face_local_x):
+# the fit follows the layout, so the home-edge row sits on the chart
+# seam line, which IS the home edge line (the gapless invariant) — the
+# home seam closure falls out of the fit; no special edge transform.
+# Right-handed on both chart classes (det > 0 measured on all 8 faces);
+# the CULL_BACK materials see no mirror.
+static var _fit_inv: Array = []  # cached inverse of the 3x3 normal matrix
+	# of the 16x16 local grid — the local positions are identical for
+	# every chunk, so it is built once (Cramer's-rule cofactors / det)
+static func _fit_build_gram() -> void:
+	var a := 0.0; var b := 0.0; var c := 0.0
+	var d := 0.0; var e := 0.0; var f := 0.0
+	var o := 0.0
+	for lx in range(16):
+		for lz in range(16):
+			var x: float = float(lx) + 0.5
+			var y: float = float(lz) + 0.5
+			a += x * x; b += x * y; c += x
+			d += y * y; e += y; o += 1.0
+	var det: float = a * (d * o - e * e) - b * (b * o - c * e) + c * (b * e - d * c)
+	_fit_inv = [
+		(d * o - e * e) / det, (c * e - b * o) / det, (b * e - d * c) / det,
+		(c * e - b * o) / det, (a * o - c * c) / det, (b * c - a * e) / det,
+		(b * e - d * c) / det, (b * c - a * e) / det, (a * d - b * b) / det,
+	]
+
+static func face_chunk_transform(face: int, ccx: int, ccz: int, R: float) -> Transform3D:
+	if _fit_inv.is_empty():
+		_fit_build_gram()
+	var inv: Array = _fit_inv
+	var mirrored: bool = face_mirror_x(face)
+	var u0: float = (float(ccx) * 16.0 + 8.0) / float(CELLS_PER_FACE)
+	var v0: float = (float(ccz) * 16.0 + 8.0) / float(CELLS_PER_FACE)
+	var n: Vector3 = uv_to_world(face, u0, v0, R) / R
+	# s[world_coord][0..2] = (sum lx*w, sum lz*w, sum w) over the 256
+	# cell centres in the HOME frame (uv_to_world minus (0, R, 0)) — the
+	# normal-equation RHS row (the Gram matrix's [2][2] stays the count)
+	var s: Array = [
+		[0.0, 0.0, 0.0],
+		[0.0, 0.0, 0.0],
+		[0.0, 0.0, 0.0],
+	]
+	for lx in range(16):
+		var iu: int = ccx * 16 + (15 - lx if mirrored else lx)
+		var x: float = float(lx) + 0.5
+		for lz in range(16):
+			var iv: int = ccz * 16 + lz
+			var w: Vector3 = uv_to_world(face, (float(iu) + 0.5) / float(CELLS_PER_FACE), (float(iv) + 0.5) / float(CELLS_PER_FACE), R) - Vector3(0.0, R, 0.0)
+			var y: float = float(lz) + 0.5
+			s[0][0] += x * w.x; s[0][1] += y * w.x; s[0][2] += w.x
+			s[1][0] += x * w.y; s[1][1] += y * w.y; s[1][2] += w.y
+			s[2][0] += x * w.z; s[2][1] += y * w.z; s[2][2] += w.z
+	# co[world_coord] = [coef_lx, coef_lz, const] (inv * the moment row)
+	var co: Array = []
+	for ci in range(3):
+		co.append([
+			inv[0] * s[ci][0] + inv[1] * s[ci][1] + inv[2] * s[ci][2],
+			inv[3] * s[ci][0] + inv[4] * s[ci][1] + inv[5] * s[ci][2],
+			inv[6] * s[ci][0] + inv[7] * s[ci][1] + inv[8] * s[ci][2],
+		])
+	return Transform3D(
+		Basis(
+			Vector3(co[0][0], co[1][0], co[2][0]),
+			n,
+			Vector3(co[0][1], co[1][1], co[2][1]),
+		),
+		Vector3(co[0][2], co[1][2], co[2][2]),
+	)
+
+# AC-0309: the EXTENDED home flat (x, z) of a planet-frame sphere point
+# whose direction has y > 0 (near/above the home-pair hemisphere): the home
+# chart run past its edges — the per-coordinate pre-warp has no
+# singularity in the home-patch neighbourhood, so sphere points just across
+# a home edge map to flat coords just past ±hw (the exact inverse of the
+# midline arc law x = hw*u: d.x/d.y = tan(pi*x/(4*hw))). Returns (INF, INF)
+# for d.y <= 0 (far from the home patch — the ratio would resolve onto the
+# wrong edge).
+static func home_flat_ext(p: Vector3, R: float) -> Vector2:
+	var d: Vector3 = p.normalized()
+	if d.y <= 0.0:
+		return Vector2(INF, INF)
+	var hw: float = face_width(R) * 0.5
+	var k: float = hw * 4.0 / PI
+	return Vector2(k * atan(d.x / d.y), k * atan(d.z / d.y))
+
+# AC-0309: the C1 blend-band query for one face cell: the cell centre's
+# extended home flat position (fx, fz) plus d_edge, its distance in metres
+# to the nearest home-shared cube edge along the extended home normal —
+# INF for cells that do not border the home pair (the -Y faces, and
+# +X/-X/+Z/-Z cells on the far hemisphere, d.y <= 0). The C1 band blends a
+# face cell whose d_edge < BAND into the home-extended field with weight
+# 1 - d_edge/BAND (1 on the edge).
+static func face_cell_band(face: int, ccx: int, ccz: int, R: float) -> Vector3:
+	if face < 4:
+		return Vector3(INF, INF, INF)
+	var u: float = (float(ccx) + 0.5) / float(CELLS_PER_FACE)
+	var v: float = (float(ccz) + 0.5) / float(CELLS_PER_FACE)
+	var P: Vector3 = uv_to_world(face, u, v, R)
+	var f: Vector2 = home_flat_ext(P, R)
+	if is_inf(f.x):
+		return Vector3(INF, INF, INF)
+	var hw: float = face_width(R) * 0.5
+	var de: float
+	if face == 4 or face == 5:      # +X: the home edge is flat x = +hw
+		de = f.x - hw
+	elif face == 6 or face == 7:    # -X: the home edge is flat x = -hw
+		de = -hw - f.x
+	elif face == 8 or face == 9:    # +Z: the home edge is flat z = +hw
+		de = f.y - hw
+	else:                           # -Z: the home edge is flat z = -hw
+		de = -hw - f.y
+	return Vector3(f.x, f.y, de)

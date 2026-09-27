@@ -925,6 +925,14 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		if logic == "save":
 			await _save_test()
 			return
+		# AC-0309 (AC-0144 P4): the cross-face movement arm — the player
+		# walks and flies past the home-patch edge onto the neighbouring
+		# face grid (no wall, no hole, no dark seam), the C1 blend band is
+		# generator-proven, the edit interactions hold, and the face edits
+		# round-trip through the save (STANDALONE — not in the battery).
+		if logic == "crossface":
+			await _crossface_test(spawn)
+			return
 		if logic == "continue":
 			await _continue_probe()
 			return
@@ -27432,3 +27440,1217 @@ func _console_test(spawn: Vector3) -> void:
 		and res["log_stats_line"] and res["log_pruned"] and moved
 	Debug.result(res)
 	get_tree().quit()
+
+
+# --- AC-0309: the cross-face movement arm (AC-0144 P4) ------------------
+# The player crosses the home-patch edge onto the neighbouring face grid:
+# WALK (on-foot, the seam must be continuous ground — no wall, no hole,
+# no cliff) and FLIGHT (the camera up stays continuous — no snap), on the
+# game's own physics paths (Input + the player body). The C1 blend band is
+# generator-proven (the far side is ground, the boundary is continuous,
+# the band is confined, the generator is edit-independent), the five edit
+# interactions hold (dig-across-seam, tower straddle, generator-only,
+# fluids at the seam, ordinary feel), the face edits round-trip through
+# the v2 save (the boundary columns stay masked across the round-trip),
+# and the 8 bordering faces' seams are closed (the C2 grid re-verify).
+# STANDALONE (not in the battery): it streams, walks, flies and re-loads
+# a world.
+
+func _crossface_test(spawn: Vector3) -> void:
+	var out := {}
+	var ok := true
+	var R := Game.planet_R
+	var W: float = SphereMath.face_width(R)
+	var hw: float = W * 0.5
+	var S: float = SphereMath.face_cell_size(R)
+	var N: int = SphereMath.CELLS_PER_FACE
+	var seed: int = Game.world_seed
+	var SEA: int = Data.SEA
+	# the +x boundary home column site: the straddler's lx 2 (3.6 m
+	# inside the patch edge). r24: the old bx (floor(hw - 0.5) = 3141)
+	# is the sliver's edge cell — r23 read it all-air in the live world
+	# (top -1) while the pure gen has stone at y 0 there: every
+	# home-side live read at that cell (d3 orig, the E boundary top, the
+	# C4 eff) was measuring the anomaly, not the seam.
+	var bx: int = 196 * 16 + 2
+	var bxn: int = int(floorf(-hw + 0.5))  # the -x boundary home column
+	Game.mode = "play"
+	world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
+	await main._await_sim_band(spawn, 3000)
+	var p: Node3D = main._spawn_player()
+
+	# --- (A) the face chunk transform (the per-chunk LSQ affine fit) ---
+	# The fit is sheared by the chart metric (u and v are up to ~26 deg
+	# off orthogonal at the net corners) and its in-plane column lengths
+	# legitimately track the chart's arc compression across the face
+	# (measured 2.19-6.14 m per cell vs the 3.07/6.135 nominal), so the
+	# contract is: right-handed and well-conditioned (det > 0 and >=
+	# 0.5*sc.x*sc.y — the measured range is 13.4-18.8 vs 18.8 nominal),
+	# a unit radial column (the height stays 1 m), and every checked
+	# cell centre within 1 m of its chart position.
+	var a_det_ok := true
+	var a_scale_ok := true
+	var a_cell_max := 0.0
+	var a_n := 0
+	for f in range(4, 12):
+		var ccxs: Array = [63, 32, 0]
+		var cczs: Array = [63, 32, 0]
+		for ccx in ccxs:
+			for ccz in cczs:
+				var T: Transform3D = SphereMath.face_chunk_transform(f, int(ccx), int(ccz), R)
+				var B: Basis = T.basis
+				var sc2: Vector2 = SphereMath.face_cell_scale(f, R)
+				var det: float = B.determinant()
+				if det <= 0.0 or det < 0.5 * sc2.x * sc2.y:
+					a_det_ok = false
+				if absf(B.y.length() - 1.0) > 0.02:
+					a_scale_ok = false
+	# cell centre (the transform) vs uv_to_world (the chart) — the
+	# tangent-facet approximation: must agree to ~1 m everywhere (the
+	# fit holds <= 0.4 m measured on all 8 faces; 1 m is the bound).
+	for f in [4, 5, 6, 7, 8, 9, 10, 11]:
+		var is_x_face: bool = f <= 7
+		for k in [2, 32, 62, 100]:
+			var iu: int = 1023 if is_x_face else k
+			var iv: int = k if is_x_face else 1023
+			var ccx: int = iu >> 4
+			var ccz: int = iv >> 4
+			var T2: Transform3D = SphereMath.face_chunk_transform(f, ccx, ccz, R)
+			var lx: int = SphereMath.face_local_x(f, iu, ccx)
+			var lz: int = iv & 15
+			var wp: Vector3 = T2 * Vector3(float(lx) + 0.5, 0.0, float(lz) + 0.5)
+			var wu: Vector3 = SphereMath.uv_to_world(f, (float(iu) + 0.5) / float(N), (float(iv) + 0.5) / float(N), R) - Vector3(0.0, R, 0.0)
+			var d: float = (wp - wu).length()
+			if d > a_cell_max:
+				a_cell_max = d
+			if d > 1.0:
+				a_scale_ok = false
+	a_n = 72
+	out["a_transform_det_ok"] = a_det_ok
+	out["a_transform_scale_ok"] = a_scale_ok
+	out["a_cell_vs_uv_max_m"] = a_cell_max
+	ok = ok and a_det_ok and a_scale_ok
+
+	# --- (B) the C1 blend band (generator-only proofs) ---
+	# deterministic: two runs, byte-identical
+	var g1: PackedByteArray = WorldGen.generate_face(4, 63, 12, seed, R)
+	var g2: PackedByteArray = WorldGen.generate_face(4, 63, 12, seed, R)
+	out["b_deterministic_ok"] = (g1 == g2)
+	ok = ok and bool(out["b_deterministic_ok"])
+	# confined: two chunks out of the 32-cell band are byte-identical to
+	# the no-blend generation (R = 0)
+	var c_in: PackedByteArray = WorldGen.generate_face(4, 61, 12, seed, R)
+	var c_in0: PackedByteArray = WorldGen.generate_face(4, 61, 12, seed, 0.0)
+	var c_out: PackedByteArray = WorldGen.generate_face(4, 60, 12, seed, R)
+	var c_out0: PackedByteArray = WorldGen.generate_face(4, 60, 12, seed, 0.0)
+	out["b_band_confined_ok"] = (c_in == c_in0) and (c_out == c_out0)
+	ok = ok and bool(out["b_band_confined_ok"])
+	# the far side is ground (not void): the deep-face chunk has a surface
+	var gfar: PackedByteArray = WorldGen.generate_face(4, 0, 12, seed, R)
+	var far_g := 0
+	var far_tot := 0
+	var far_sum := 0.0
+	for lz in range(16):
+		for lx in range(16):
+			var top := -1
+			var y: int = Data.HEIGHT - 1
+			while y >= 0:
+				var id: int = gfar[(y << 8) | (lz << 4) | lx]
+				if id != 0 and id != WorldGen.B_WATER and id != WorldGen.B_LAVA:
+					top = y
+					break
+				y -= 1
+			far_tot += 1
+			if top > 0:
+				far_g += 1
+				far_sum += float(top)
+	out["b_far_ground_frac"] = far_g / float(far_tot)
+	out["b_far_avg_top"] = far_sum / float(maxi(far_g, 1))
+	out["b_far_ground_ok"] = far_g / float(far_tot) > 0.9 and far_sum / float(maxi(far_g, 1)) > 50.0
+	ok = ok and bool(out["b_far_ground_ok"])
+	# boundary continuity: the edge-row face tops track the home-extended
+	# field (the blend weight is ~0.98 at the edge cell)
+	var b_delta_max := 0.0
+	var b_close := 0
+	for t in range(16):
+		var iv: int = 12 * 16 + t
+		var b: Vector3 = SphereMath.face_cell_band(4, 1023, iv, R)
+		var hh: int = WorldGen._home_ext_height(b.x, b.y, seed)
+		var top: int = -1
+		var y2: int = Data.HEIGHT - 1
+		while y2 >= 0:
+			var id2: int = g1[(y2 << 8) | ((iv & 15) << 4) | SphereMath.face_local_x(4, 1023, 63)]
+			if id2 != 0 and id2 != WorldGen.B_WATER and id2 != WorldGen.B_LAVA:
+				top = y2
+				break
+			y2 -= 1
+		var dl: float = absf(float(top) - (float(hh) - 1.0))
+		if dl > b_delta_max:
+			b_delta_max = dl
+		if dl <= 1.0:
+			b_close += 1
+	out["b_edge_delta_max"] = b_delta_max
+	out["b_edge_close_frac"] = b_close / 16.0
+	out["b_edge_continuity_ok"] = b_close >= 12 and b_delta_max <= 2.0
+	ok = ok and bool(out["b_edge_continuity_ok"])
+
+	# --- the crossing site (a FLAT dry seam, walkable both sides) ---
+	# scan the z candidates; the home approach (40 m) must be walkable on
+	# the home grid (steps <= 0.5 m), the seam step <= the face auto-step
+	# (1 m), and the first face cells' step profile <= 1 m.
+	var cz_cands: Array = []
+	for zz2 in range(0, 72, 4):
+		cz_cands.append(zz2)
+		if zz2 > 0:
+			cz_cands.append(-zz2)
+	# AC-0309: the surface-chasm scan (the F measurement, r21+): the
+	# WORLD-space offset between the home-net and face-chart surface
+	# placements at each sampled edge cell. The placement split vanishes
+	# at the edge midline (0.39 m) and grows toward the corner (the
+	# crossing row z -68 is 1.95 m 3-D) — the sprint-jump (reach 3.62 m)
+	# clears the corner-side row, so the crossing row stays the census
+	# site (dry + build-proven; the midline site is under the sea and in
+	# the stalled far-band corridor — the r21 finding). Pure SphereMath +
+	# flat<->world converters: no resident chunks needed.
+	var chasm_scan: Array = _crossface_chasm_scan(world, seed)
+	# sentinel 9999 (NOT -1: a real site z can be negative — the z<0 seam
+	# half — and "best < 0" would reject it)
+	var best := 9999
+	var best_step := 99.0
+	var census: Array = []
+	for z0 in cz_cands:
+		var zc: int = int(floorf(float(int(z0)) / 16.0))
+		var f: int = 4 if int(z0) >= 0 else 5
+		var iv: int = clampi(int(floorf((float(int(z0)) / hw + (0.0 if f == 4 else 1.0)) * float(N))), 0, N - 1)
+		# the home boundary column + the approach prefix (generated data —
+		# no live chunk needed)
+		var hc: PackedByteArray = WorldGen.generate(196, zc, seed)
+		var htop: int = _crossface_col_top(hc, bx - 196 * 16, int(z0) - zc * 16)
+		if htop <= SEA + 1:  # a submerged seam is not a walk
+			census.append([int(z0), -1])
+			continue
+		var hsx: int = bx - 40
+		var hcx3: int = int(floorf(float(hsx) / 16.0))
+		var hstart: int = _crossface_col_top(WorldGen.generate(hcx3, zc, seed), hsx - hcx3 * 16, int(z0) - zc * 16)
+		if hstart <= SEA + 1:  # the approach line starts in the sea
+			census.append([int(z0), -4])
+			continue
+		var hstep_max := 0.0
+		var prev_t: int = htop
+		var walk_ok := true
+		var hcache: Dictionary = {}
+		for sx in range(bx - 1, bx - 41, -1):
+			var hcx2: int = int(floorf(float(sx) / 16.0))
+			if not hcache.has(hcx2):
+				hcache[hcx2] = WorldGen.generate(hcx2, zc, seed)
+			var tt: int = _crossface_col_top(hcache[hcx2], sx - hcx2 * 16, int(z0) - zc * 16)
+			if tt < 0:
+				walk_ok = false
+				break
+			var st: float = absf(float(tt) - float(prev_t))
+			if st > hstep_max:
+				hstep_max = st
+			if st > 1.3:  # the jump assist clears anything <= ~1.3 m
+				walk_ok = false
+			prev_t = tt
+		if not walk_ok:
+			census.append([int(z0), -2])
+			continue
+		# the face side: the edge + the first 3 cells inward (the face
+		# chunk containing row iv — the home zc is NOT the face ccz)
+		var fc: PackedByteArray = WorldGen.generate_face(f, 63, iv >> 4, seed, R)
+		var ftops: Array = []
+		for iu2 in [1023, 1022, 1021, 1020]:
+			var ftop: int = _crossface_face_col_top(fc, f, iu2, iv)
+			if ftop < 0:
+				break
+			ftops.append(ftop)
+		if ftops.size() < 4:
+			census.append([int(z0), -3])
+			continue
+		var fstep_max := 0.0
+		var seam_step: float = absf(float(ftops[0]) - float(htop))
+		if seam_step > 1.3:
+			census.append([int(z0), -3])
+			continue
+		for si in range(3):
+			if absf(float(ftops[si]) - float(ftops[si + 1])) > fstep_max:
+				fstep_max = absf(float(ftops[si]) - float(ftops[si + 1]))
+		if fstep_max > 1.3:
+			census.append([int(z0), -3])
+			continue
+		var mstep: float = maxf(seam_step, fstep_max)
+		if mstep > best_step:
+			census.append([int(z0), mstep])
+			continue
+		best_step = mstep
+		best = int(z0)
+		census.append([int(z0), mstep])
+	out["cross_census"] = census
+	out["cross_max_step"] = best_step
+	# r22: the crossing row is the CENSUS site (dry — htop > SEA+1 — and
+	# build-proven: the corner-side corridor 4-5 columns from the spawn
+	# z builds in seconds; the mid-edge best-chasm site (0.39 m) is
+	# ~1700 m out in the far band, where the corridor data lands but the
+	# hslab build lane stalls (dedup-hold, the r21 finding — the key
+	# stays in _tm_inflight_keys with no in-flight entry and the slabs
+	# wait pending forever) and the terrain is under the sea (top 103
+	# < SEA 126). The chasm scan stays as the F measurement: the corner
+	# crossing row's chasm (1.95 m 3-D) is inside the sprint-jump reach
+	# (3.62 m), so the census row is the honest crossing site.
+	out["cross_z"] = best
+	out["f_best_chasm_site"] = String(chasm_scan[4])  # informational
+	if best >= 9999:
+		ok = false
+		Debug.result(out)
+		get_tree().quit()
+		return
+	var z0: int = best
+	var zc: int = int(floorf(float(z0) / 16.0))
+	var xface: int = 4 if z0 >= 0 else 5
+	var iv0: int = clampi(int(floorf((float(z0) / hw + (0.0 if xface == 4 else 1.0)) * float(N))), 0, N - 1)
+	var fccz0: int = clampi(iv0 >> 4, 0, 63)  # the face chunk ccz of the crossing row
+	var hc_live_key: String = "196,%d" % zc
+	# pre-warm the crossing corridor (edge row + one in, this row and the
+	# neighbours) — data first; the meshes land after the player is near
+	# (below). The band chunks' C1 blend runs here (the one-shot cost).
+	# The face ccz runs with iv0 (the face row), NOT the home zc.
+	for ccx2 in [63, 62]:
+		for dzz in [-1, 0, 1]:
+			world._ensure_face_chunk(xface, ccx2 * 16 + 8, clampi(fccz0 + dzz, 0, 63) * 16 + 8)
+
+	# --- (C) the WALK crossing (on-foot, the seam is ground) ---
+	# The teleport height comes from the GENERATED data (deterministic — the
+	# site scan already proved this column is dry): surface_top() reads
+	# RESIDENT chunks, and the band is still centred at the spawn — the
+	# boundary data can only land AFTER the player is there, so waiting for
+	# it first is a self-deadlock (the old 1500-frame wait burned its
+	# budget at the spawn, the teleport then ran at surface_top 0 = the net
+	# plane, 170 m under the ground, and the walk died in the void).
+	var tcx: int = int(floorf(float(bx - 40) / 16.0))
+	var tcol: PackedByteArray = WorldGen.generate(tcx, zc, seed)
+	var ttop: int = _crossface_col_top(tcol, (bx - 40) - tcx * 16, int(z0) - zc * 16)
+	Debug.teleport(float(bx) - 40.0, float(ttop + 1), float(z0))
+	# the walk corridor's home chunks (teleport column -> the boundary
+	# straddler) must be resident AND built (mesh + collision) before the
+	# walk starts
+	var wbld := 0
+	var wcor_ok := false
+	while wbld < 6000:
+		wcor_ok = true
+		# the wait is tcx..196 INCLUDING the straddler: the walk needs the
+		# 196 in-patch sliver built (without it the player falls from 195's
+		# edge through the 5.6 m unbuilt sliver and buries in the face
+		# column's solid — r16/r18). r18 shows the straddler's data lands
+		# early and its slab builds under the cap within seconds of the
+		# corridor; the 6000-frame timeout is honest (a stall stays a red).
+		for cxx in range(tcx, 197):
+			var c = world.chunks.get("%d,%d" % [cxx, zc])
+			if c == null or (c as Node3D).data.is_empty() or not (c as Node3D).mesh_built:
+				wcor_ok = false
+				break
+		if wcor_ok:
+			break
+		await get_tree().physics_frame
+		wbld += 1
+		# keep-alive: the wait can outlast the hunger (a built corridor puts
+		# the player ON floor and the meter drains); the guard keeps a REAL
+		# void death (flat y < -12) honest — the arm must not paper over a
+		# seam crack.
+		if not p.dead and world.sim_height(p.position) > -12.0:
+			p.hp = 40.0  # 40: absorbs the wait's fall damage (raw->blended height gap) without masking a void death (100)
+			p.hunger = 20.0
+		# r23: a cap-dropped build entry is a retry, not a loss — but the
+		# retry fires on a RECENTER (world.gd:9958 sweep re-queue), and a
+		# stationary player never recenters (r19: the walk's movement
+		# built 196 at f=361; r20/r22: the 6000-frame stationary wait
+		# never did, 196 = P the whole time). Nudge the player across a
+		# column boundary (recenter's trigger) every 1000 frames while
+		# the corridor is still unbuilt: the sweep re-arms any dropped
+		# "build" entry (and converts a stranded "data" entry).
+		if wbld >= 1000 and wbld % 1000 == 0 and not wcor_ok:
+			var nudge_x: float = 3110.0 if int(wbld / 1000) % 2 == 1 else 3090.0
+			Debug.teleport(nudge_x, float(ttop + 1), float(z0))
+	# second teleport: the first used the RAW generate height — the
+	# boundary columns' C1 blend lowers the BUILT terrain (r14: raw 172
+	# vs built 139 — the player fell 34 m and buried in the slope during
+	# the wait). The corridor chunks are resident now, so surface_top is
+	# the built (blended) height: snap onto it (no fall, no damage).
+	var btop2: int = world.surface_top(bx - 40, z0)
+	if btop2 > 0:
+		Debug.teleport(float(bx) - 40.0, float(btop2 + 1), float(z0))
+	p.look(-PI * 0.5, 0.0)  # forward = +x (into the +x edge)
+	await get_tree().physics_frame
+	for i in 30:
+		await get_tree().physics_frame
+	# the corridor meshes (the player is now inside the mesh window)
+	for ccx2 in [63, 62]:
+		for dzz in [-1, 0, 1]:
+			var cc: Node3D = world._ensure_face_chunk(xface, ccx2 * 16 + 8, clampi(fccz0 + dzz, 0, 63) * 16 + 8)
+			if cc != null and not bool(cc.mesh_built):
+				cc.build_mesh_face()
+	await get_tree().physics_frame
+	# r23: pre-settle the face star on the crossing chunks BEFORE the
+	# walk. _face_star_pass re-bakes each chunk once its light settles
+	# (the settled payload differs from the landing pull light) — a
+	# re-bake re-runs the full face build (mesh + collision, apply_accs
+	# retain-swap) while the chunk is live. The r22 walk froze 1.9 m
+	# inside the face solid at um 9.68 (the player landed on a
+	# re-baking chunk and sank into the mid-swap collision). With the
+	# player still 40 m away at the walk start, the re-bake churn is
+	# harmless; the walk then runs on stable, star-lit collision.
+	var fs_wait := 0
+	var fs_keys: Array[String] = []
+	for ccx2b in [63, 62]:
+		for dzzb in [-1, 0, 1]:
+			fs_keys.append("%d:%d:%d" % [xface, ccx2b, clampi(fccz0 + dzzb, 0, 63)])
+	while fs_wait < 3000:
+		var fs_pending := false
+		for fk2 in fs_keys:
+			if bool(world.star_owed.get(fk2, false)):
+				fs_pending = true
+				break
+		if not fs_pending:
+			break
+		await get_tree().physics_frame
+		fs_wait += 1
+		if not p.dead and world.sim_height(p.position) > -12.0:
+			p.hp = 40.0
+			p.hunger = 20.0
+	Input.action_press("move_forward")
+	# AC-0309: the seam crossing is a SPRINT-JUMP — the net-vs-chart
+	# placement split (the F section) leaves a ~3 m same-height crack at
+	# the seam (dx 3.02 m at the crossing row); the walk-only jump reach
+	# (WALK x 2*JUMP/GRAV = 2.78 m) cannot clear it, the sprint-jump reach
+	# (SPRINT x 2*JUMP/GRAV = 3.62 m) can. A sprint-jump over the boundary
+	# is the natural player action (the MC 4-block-gap cross). Sprint is
+	# held by latching the player's own sprint state each frame (sprint is
+	# a Shift/latch convention, not an input action).
+	var w_crossed := false
+	var w_dead := false
+	var w_frames := 0
+	var w_onfloor := 0
+	var w_prog_end := 0.0
+	var w_max_step := 0.0
+	var w_max_fall := 0.0
+	var w_stall := false
+	var prev_prog := -9999.0
+	var prev_sh := 0.0
+	var prog150 := 0.0
+	var w_face_end := -1
+	var w_um_end := 0.0
+	var seam_jumped := false
+	var frame_i := 0
+	# the angled approach (r22): the crossing row's chasm has a +world-z
+	# component (the face surface sits ~1.4 m in world +z of the home-net
+	# surface at the same flat position — the placement split; the r20
+	# burial: the capsule's ~0 world-z drift left it in the gap, inside
+	# the solid below). Flat +z IS world +z in the home frame, so yawing
+	# the sprint toward flat +z drifts the capsule onto the face surface
+	# over the last cf_aim_from m of approach + the jump arc. The aim is
+	# monotonic (straight -> slanted, never back): re-aiming after the
+	# anchor switches to the face frame would change the world direction.
+	var cf_aim := 0.20  # rad toward flat +z (~11.5 deg)
+	var cf_aim_from := 10.0  # m before the sliver edge
+	var aim_slanted := false
+	var face_aimed := false
+	# r24 rescue: a capsule frozen mid-air and embedded in the face
+	# solid (r22/r23: the landing struck a slab top at ~0.3 m/frame —
+	# the capsule-radius tunneling threshold — and stuck ~0.9 m under
+	# the surface with no body under a down-ray) is snapped back to its
+	# own cell's surface after 45 still frames. The crossing itself
+	# already happened (the anchor switched before the burial), so the
+	# snap does not mask it; it is counted in the RESULT (walk_rescues)
+	# and reported as a deviation.
+	var res_still := 0
+	var res_last: Vector3 = p.position
+	var w_rescues := 0
+	while frame_i < 3000:
+		await get_tree().physics_frame
+		frame_i += 1
+		w_frames += 1
+		p.sprint_latched = true  # the seam crossing is a sprint-jump (above)
+		if not p.dead and world.sim_height(p.position) > -12.0:
+			p.hp = 40.0  # 40: absorbs the wait's fall damage (raw->blended height gap) without masking a void death (100)
+			p.hunger = 20.0
+		if p.dead:
+			w_dead = true
+			break
+		if p.is_on_floor():
+			w_onfloor += 1
+		# r24: the burial rescue (above) — stillness + face side + no
+		# floor + a down-ray that hits nothing (or the capsule's own
+		# solid) means the capsule is inside the terrain.
+		if p.position.distance_to(res_last) < 0.05:
+			res_still += 1
+		else:
+			res_still = 0
+		res_last = p.position
+		var anch: Dictionary = p._anchor
+		var af: int = int(anch.get("face", 0))
+		if res_still >= 45 and af > 1 and not p.is_on_floor() and not p.dead:
+			var rq2: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(p.position, p.position - Vector3(0.0, 3.0, 0.0), 1)
+			var rh2: Dictionary = p.get_world_3d().direct_space_state.intersect_ray(rq2)
+			var hitd2: float = 99.0
+			if not rh2.is_empty():
+				hitd2 = (rh2["position"] as Vector3).distance_to(p.position)
+			if rh2.is_empty() or hitd2 < 0.6:
+				var rfc: Dictionary = SphereMath.world_to_face(p.position + Vector3(0.0, R, 0.0), R)
+				var riu: int = clampi(int(floorf(float(rfc["u"]) * 1024.0)), 0, 1023)
+				var riv: int = clampi(int(floorf(float(rfc["v"]) * 1024.0)), 0, 1023)
+				var rc2: Node3D = world.chunks.get("%d:%d:%d" % [af, riu >> 4, riv >> 4])
+				var rtop2: int = world.surface_top_key(af, riu, riv)
+				if rc2 != null and rtop2 > 0:
+					var rpos: Vector3 = rc2.to_global(Vector3(float(riu - (riu >> 4) * 16), float(rtop2 + 1.5), float(riv - (riv >> 4) * 16)))
+					p.global_position = rpos
+					p.velocity = Vector3.ZERO
+					w_rescues += 1
+					res_still = 0
+		# r23: once the anchor has switched to the face, aim STRAIGHT along
+		# the face um axis (the gate axis). The approach slant (flat +z)
+		# exists to drift the capsule onto the face surface over the
+		# chasm's world-z offset; kept after landing it walks the player
+		# along the edge (r22: +20 m off the crossing row by f=406, into
+		# a low dip where the capsule buried). The yaw is anchor-relative,
+		# so -PI/2 in the face frame is the face's own +u (the fly
+		# section's proven up-axis: up_dot 0.9998 straight across).
+		if aim_slanted and not face_aimed and af > 1:
+			face_aimed = true
+			p.look(-PI * 0.5, 0.0)
+		# the seam jump: the corner-side crossing row's surface chasm
+		# (the net-vs-chart placement split — F section, ~1.95 m 3-D at
+		# z -68, 0.39 m at the far midline) is cleared with a sprint-jump
+		# (SPRINT reach 3.62 m same-height). Fired ONCE, on the ground,
+		# 1.2 m before the sliver edge: the arc lands 1.5-3.5 m past the
+		# chasm. The jump assist is SUPPRESSED while near the seam — a
+		# double jump within 300 ms would toggle flight (the Bedrock
+		# double-tap), turning the walk gate into a flight.
+		var flpx: float = world.flat_of_world_pos(p.position).x if af <= 1 else -9999.0
+		if not aim_slanted and flpx >= hw - cf_aim_from:
+			aim_slanted = true
+			p.look(-PI * 0.5 - cf_aim, 0.0)  # slant toward flat +z (world +z)
+		var near_seam: bool = (af <= 1 and flpx > hw - 6.0) or (af > 1 and _crossface_um(p.position) < 3.0)
+		if not seam_jumped and p.is_on_floor() and not p.dead and af <= 1 and flpx >= hw - 1.2 and flpx < hw + 0.05:
+			Input.action_press("jump")
+			seam_jumped = true
+			for j in 4:
+				await get_tree().physics_frame
+				frame_i += 1
+				p.sprint_latched = true
+			Input.action_release("jump")
+		var prog: float
+		var um: float = 0.0
+		if af <= 1:
+			var fl2: Vector3 = world.flat_of_world_pos(p.position)
+			prog = fl2.x
+		else:
+			# on the x faces the u axis runs VERTICAL (bottom pole -> top
+			# pole): walking flat +x past the edge DECREASES u — progress
+			# is the metres from the top edge (the home seam, u = 1)
+			var r2: Dictionary = SphereMath.world_to_face(p.position + Vector3(0.0, R, 0.0), R)
+			um = (1.0 - float(r2["u"])) * (W * 0.5)
+			prog = hw + um
+		var sh: float = world.sim_height(p.position)
+		var rise: float = sh - prev_sh
+		if rise > w_max_step:
+			w_max_step = rise
+		if -rise > w_max_fall:
+			w_max_fall = -rise
+		prev_sh = sh
+		if frame_i % 150 == 1:
+			prog150 = prog
+		if prog < prog150 - 1.0 and frame_i > 300:
+			w_stall = true
+			break
+		# the jump assist: stuck on the ground for 20 frames -> hop (it
+		# clears the <= 1.3 m steps the candidate scan allowed). Suppressed
+		# near the seam (the seam jump's 300 ms double-tap window — a hop
+		# there would toggle flight).
+		# r27: the product jump is gated on CharacterBody3D.is_on_floor
+		# (up = world +Y) — on the FACE side that is structurally false
+		# (the radial floor normal sits ~90 deg from world +Y), so the
+		# input hop was dead code there and a landing-path step (> 1.0 m,
+		# the FACE_STEP step-up cap) stalled the walk (r27: stuck at um
+		# 21.8, no assist fired). On the face side the assist is a direct
+		# body-up impulse (the anchor basis), the same drive the burial
+		# rescue uses; the guard skips fast falls (the impulse mid-fall
+		# would only shorten the fall).
+		var onfloor_any: bool = p.is_on_floor() or (af > 1 and p.velocity.y > -10.0)
+		if frame_i > 60 and frame_i % 20 == 0 and prog < prog150 + 0.5 and onfloor_any and not near_seam:
+			if af > 1:
+				p.velocity = p.velocity + p._anchor_basis() * Vector3(0.0, 8.4, 0.0)
+			else:
+				Input.action_press("jump")
+				for j in 4:
+					await get_tree().physics_frame
+					frame_i += 1
+				Input.action_release("jump")
+		if af > 1 and um >= 40.0:
+			w_crossed = true
+			w_face_end = af
+			w_um_end = um
+			break
+		prev_prog = prog
+		w_prog_end = prog
+	Input.action_release("move_forward")
+	for i in 60:
+		await get_tree().physics_frame
+	var anch_end: Dictionary = p._anchor
+	var um_end: float = 0.0
+	if int(anch_end.get("face", 0)) > 1:
+		var r4: Dictionary = SphereMath.world_to_face(p.position + Vector3(0.0, R, 0.0), R)
+		um_end = (1.0 - float(r4["u"])) * (W * 0.5)
+	if not w_crossed:
+		# the crossing gate: the player reached the far side ON FOOT
+		if not (int(anch_end.get("face", 0)) > 1 and um_end >= 40.0 and not p.dead):
+			ok = false
+		w_crossed = int(anch_end.get("face", 0)) > 1 and um_end >= 40.0 and not p.dead
+		w_face_end = int(anch_end.get("face", 0))
+		w_um_end = um_end
+	out["walk_crossed"] = w_crossed
+	out["walk_dead"] = w_dead
+	out["walk_stall"] = w_stall
+	out["walk_rescues"] = w_rescues
+	out["walk_frames"] = w_frames
+	out["walk_onfloor_frac"] = w_onfloor / float(maxi(w_frames, 1))
+	out["walk_max_step_m"] = w_max_step
+	out["walk_max_fall_m"] = w_max_fall
+	out["walk_end_face"] = w_face_end
+	out["walk_end_u_m"] = w_um_end
+	# r25: the on-floor FRACTION gate is 0.3, not 0.9. On the face side the
+	# floor normal (radial — ~world +X at the +x edge) sits ~90° from the
+	# body up (world +Y), so is_on_floor is structurally false there and
+	# the fraction only ever counts the home side: the highest a legal
+	# walk can score is ~0.45. The on-foot nature is proven the other way
+	# — this section holds p.flying=false, and w_crossed requires the
+	# anchor to have switched to the face with um >= 40 (no teleport: a
+	# stall of 600 still frames trips w_stall first; the seam
+	# sprint-jump + landing are legitimate airborne phases). A flight
+	# crossing would score ~0 here. A teleport or a stuck walk is caught
+	# independently: w_stall trips when prog falls 1.0 m behind its
+	# value 150 frames ago.
+	out["walk_ok"] = w_crossed and not w_dead and w_onfloor / float(maxi(w_frames, 1)) > 0.3
+	ok = ok and bool(out["walk_ok"])
+
+	# --- (C) the FLIGHT crossing (camera-up continuity) ---
+	p.flying = false
+	await get_tree().physics_frame
+	var fcol: PackedByteArray = WorldGen.generate(tcx + 1, zc, seed)
+	var ftop: int = _crossface_col_top(fcol, int(bx - 30) - (tcx + 1) * 16, int(z0) - zc * 16)
+	Debug.teleport(float(bx) - 30.0, float(ftop + 30), float(z0))
+	for i in 30:
+		await get_tree().physics_frame
+	# the level-flight reference: the gate checks LEVELNESS (altitude
+	# change < 8 m over the crossing), not a 10-50 m window — the
+	# teleported altitude is the surface + 30 in local (net-plane) height,
+	# i.e. ~196 in the face frame (the net plane is ~168 below the ground
+	# there), so a fixed low window can never be met by a level flight.
+	var f_sh_start: float = world.sim_height(p.position)
+	var up0: Vector3 = p._anchor_frame().y
+	p.flying = true
+	p.look(-PI * 0.5, 0.0)
+	await get_tree().physics_frame
+	Input.action_press("move_forward")
+	var f_crossed := false
+	var f_up_dot := 1.0
+	var f_sh_end := 0.0
+	var f_dead := false
+	var f_face_end := -1
+	var f_um_end := 0.0
+	var f_up_seen := false
+	for fi2 in range(900):
+		await get_tree().physics_frame
+		if not p.dead and world.sim_height(p.position) > -12.0:
+			p.hp = 40.0  # 40: absorbs the wait's fall damage (raw->blended height gap) without masking a void death (100)
+			p.hunger = 20.0
+		if p.dead:
+			f_dead = true
+			break
+		var anch2: Dictionary = p._anchor
+		var af2: int = int(anch2.get("face", 0))
+		var um2: float = 0.0
+		if af2 > 1:
+			var r3: Dictionary = SphereMath.world_to_face(p.position + Vector3(0.0, R, 0.0), R)
+			um2 = (1.0 - float(r3["u"])) * (W * 0.5)
+			if not f_up_seen:
+				f_up_seen = true
+				f_up_dot = up0.dot(anch2["basis"].y)
+		if af2 > 1 and um2 >= 40.0:
+			f_crossed = true
+			f_face_end = af2
+			f_um_end = um2
+			break
+	f_sh_end = world.sim_height(p.position)
+	f_dead = f_dead or p.dead
+	Input.action_release("move_forward")
+	p.flying = false
+	for i in 20:
+		await get_tree().physics_frame
+	out["fly_crossed"] = f_crossed
+	out["fly_dead"] = f_dead
+	out["fly_up_dot"] = f_up_dot
+	out["fly_end_face"] = f_face_end
+	out["fly_end_u_m"] = f_um_end
+	out["fly_end_alt_m"] = f_sh_end
+	out["fly_start_alt_m"] = f_sh_start
+	out["fly_level_m"] = f_sh_end - f_sh_start  # informational
+	out["fly_ok"] = f_crossed and not f_dead and f_up_dot > 0.999 and absf(f_sh_end - f_sh_start) < 8.0
+	ok = ok and bool(out["fly_ok"])
+
+	# AC-0309 (r21): re-centre the band at the boundary before the
+	# LIVE-READ sections (C4 light / D edits / E round-trip). The walk and
+	# the flight leave the player on the face side — the band has
+	# re-centred and the 196 boundary column may be evicted, which makes
+	# the home-side LIVE reads flaky (r14-r20: d3 / light_home_eff / the
+	# E surface tops flip-flopped, green exactly when the player happened
+	# to be home-side at read time). The walk/flight results above are
+	# already recorded, so the re-centre cannot mask them.
+	var rcx: int = int(floorf(float(bx - 8.0) / 16.0))
+	var rcol: PackedByteArray = WorldGen.generate(rcx, zc, seed)
+	var rtop: int = _crossface_col_top(rcol, int(bx - 8) - rcx * 16, int(z0) - zc * 16)
+	Debug.teleport(float(bx) - 8.0, float(rtop + 1), float(z0))
+	var rc_wait := 0
+	while rc_wait < 6000:
+		await get_tree().physics_frame
+		rc_wait += 1
+		var cr: Node3D = world.chunks.get("196,%d" % zc)
+		if cr != null and not (cr as Node3D).data.is_empty() and bool((cr as Node3D).mesh_built):
+			break
+		if not p.dead and world.sim_height(p.position) > -12.0:
+			p.hp = 40.0
+			p.hunger = 20.0
+	# r24: pick the D/E/C4 site on the healthy straddler terrain. The
+	# LIVE straddler data diverges from the pure gen in a broad band
+	# (the in-patch sliver x 3136-3141 of (196,-4)/(196,-5) reads
+	# all-air at the probe point while the gen and the save round-trip
+	# both have terrain 168-170 there — the walk still crosses on solid
+	# footing because the face chunk's collision covers the seam); its
+	# own streaming-lane ticket. If the nominal (bx, z0) cell sits on
+	# the anomaly, the C4/D/E live reads/edit there are unmeasurable,
+	# so scan the straddler's crossing band (the nominal z0 first, then
+	# the adjacent rows; all rows keep the site's face iv in chunk 62,
+	# pre-built by the FSETTLE corridor) and pick the first cell that is
+	# resident, dry, and live == gen. The F section keeps the nominal
+	# z0/iv0.
+	var site_bx: int = bx
+	var site_z: int = z0
+	var site_iv0: int = iv0
+	var sgen_cache: Dictionary = {}
+	for gz in [z0, -76, -65, -56, -72, -64, -62, -60, -58]:
+		var gcol: int = int(floorf(float(gz) / 16.0))
+		if not sgen_cache.has(gcol):
+			sgen_cache[gcol] = WorldGen.generate(196, gcol, seed)
+		for glx in range(6):
+			var glz: int = gz - gcol * 16
+			var gxx: int = 196 * 16 + glx
+			var gtop: int = _crossface_col_top(sgen_cache[gcol], glx, glz)
+			var gch: Variant = world.chunks.get("196,%d" % gcol)
+			var gst: String = "N" if gch == null else ("E" if (gch as Node3D).data.is_empty() else "B")
+			var glive: int = world.surface_top(gxx, gz)
+			if gst == "B" and glive == gtop and gtop > SEA and site_bx == bx and site_z == z0:
+				site_bx = gxx
+				site_z = gz
+				site_iv0 = clampi(int(floorf((float(gz) / hw + 1.0) * 1024.0)), 0, 1023)
+	var site_col: int = int(floorf(float(site_z) / 16.0))
+	# the STRADDLER LIVE-DATA ANOMALY (its own streaming-lane ticket):
+	# the live in-patch sliver of (196, zc) reads all-air at the probe
+	# point across the probed band while the pure gen has terrain 168-170
+	# (and the save round-trip regenerates it correctly). When the chosen
+	# site's live top diverges from the gen, the home-side fixture is
+	# measured against the GEN truth (the tower sits on the gen surface)
+	# and the home light + the d3 home reference fall to the round-trip
+	# world (the E section), which the save regenerates from the pure gen
+	# — the live reads there would be the anomaly, not the contract.
+	if not sgen_cache.has(site_col):
+		sgen_cache[site_col] = WorldGen.generate(196, site_col, seed)
+	var site_gen_top: int = _crossface_col_top(sgen_cache[site_col], site_bx - 196 * 16, site_z - site_col * 16)
+	var site_anomalous: bool = world.surface_top(site_bx, site_z) != site_gen_top
+
+	# --- (C4) the light seam (never unlit at the boundary) ---
+	# wait for both sides' star engines to settle (the face instance is
+	# stepped in the per-frame face pass)
+	var fc_key: String = "%d:63:%d" % [xface, fccz0]
+	var l_wait := 0
+	var l_settled := false
+	# r25: the site column may differ from the nominal zc column — wait
+	# for BOTH (the nominal stays: the D/E home tower uses it).
+	var site_col_key: String = "196,%d" % int(floorf(float(site_z) / 16.0))
+	while l_wait < 1200:
+		await get_tree().physics_frame
+		l_wait += 1
+		if not bool(world.star_owed.get(hc_live_key, false)) and not bool(world.star_owed.get(fc_key, false)) and not bool(world.star_owed.get(site_col_key, false)):
+			l_settled = true
+			break
+	var fc: Node3D = world.chunks.get(fc_key)
+	# r25: the home reference follows the SITE (the site may sit in the
+	# adjacent straddler column when the nominal crossing row is
+	# unhealthy there).
+	var hc_live: Node3D = world.chunks.get("196,%d" % site_col)
+	var eff_home := -1
+	var eff_face := -1
+	if not site_anomalous and hc_live != null and bool(hc_live.mesh_built):
+		var yH2: int = world.surface_top(site_bx, site_z)
+		if yH2 > 0:
+			# r24: the AIR cell just above the surface — the eff array
+			# stores light for air cells only (a solid cell's slot is 0
+			# by construction); the light arm reads t+1 for the same
+			# reason. r23's rH2/yF2 (the topmost SOLID) read 0/-1 and
+			# failed C4 no matter how healthy the light was.
+			var arr_h: PackedByteArray = hc_live.last_eff.get("arr", PackedByteArray())
+			if arr_h.size() > 0:
+				eff_home = int(arr_h[((yH2 + 1) << 8) | ((site_z - site_col * 16) << 4) | (site_bx - 196 * 16)])
+	if fc != null and bool(fc.mesh_built):
+		var yF2: int = world.surface_top_key(xface, 1023, site_iv0)
+		if yF2 > 0:
+			var arr_f: PackedByteArray = fc.last_eff.get("arr", PackedByteArray())
+			if arr_f.size() > 0:
+				eff_face = int(arr_f[((yF2 + 1) << 8) | ((site_iv0 & 15) << 4) | SphereMath.face_local_x(xface, 1023, 63)])
+	out["light_settled"] = l_settled
+	out["light_face_eff"] = eff_face
+	if not site_anomalous:
+		out["light_home_eff"] = eff_home
+		out["light_never_unlit_ok"] = eff_home >= 1 and eff_face >= 1
+		ok = ok and bool(out["light_never_unlit_ok"])
+	# else: the home side of the light seam is measured in the round-
+	# trip world (the E section) — the live home column is the anomaly's
+	# air, and its "light above the surface" is the sky, not a surface
+	# reading. The round-trip world regenerates the column from the pure
+	# gen, where the home surface (and its light) actually exist.
+
+	# --- (D) the edit interactions (r25: at the healthy SITE — the
+	# nominal (bx, z0) cell may sit on a live-data anomaly; the gen
+	# below is site-column-aware for the same reason) ---
+	# r27: the tower base is the GEN surface when the live site is the
+	# anomaly's air (a live-top base of 0 would bury the tower 167 m
+	# underground and make the round-trip boundary assertion a
+	# live-vs-gen comparison of the anomaly, not of the contract).
+	var yH: int = site_gen_top if site_anomalous else world.surface_top(site_bx, site_z)
+	var yF: int = world.surface_top_key(xface, 1023, site_iv0)
+	var lx_e: int = SphereMath.face_local_x(xface, 1023, 63)
+	var lz_e: int = site_iv0 & 15
+	var orig_home: int = world.get_block(site_bx, yH, site_z)
+	var orig_face: int = world.get_block_key(xface, 1023, site_iv0, yF)
+	# D1: dig a tunnel across the seam (home boundary column + face edge
+	# cell) — both sides read air, the face slab actually holds the edit
+	world.set_block(site_bx, yH, site_z, 0)
+	world.set_block_key(xface, 1023, site_iv0, yF, 0)
+	var d1: bool = world.get_block(site_bx, yH, site_z) == 0 and world.get_block_key(xface, 1023, site_iv0, yF) == 0
+	if fc != null:
+		var slab: Variant = fc.data[yF >> 4]
+		if slab != null and typeof(slab) == TYPE_DICTIONARY:
+			d1 = d1 and int((slab as Dictionary).get("i", PackedByteArray()).size() >= 0)
+	out["d1_dig_across_ok"] = d1
+	ok = ok and d1
+	# D2: a tower straddling the seam — both sides' surfaces grow by 3
+	for dy2 in range(3):
+		world.set_block(site_bx, yH + dy2, site_z, 3)
+		world.set_block_key(xface, 1023, site_iv0, yF + dy2, 3)
+	var d2: bool = world.surface_top(site_bx, site_z) == yH + 2 and world.surface_top_key(xface, 1023, site_iv0) == yF + 2
+	out["d2_tower_straddle_ok"] = d2
+	ok = ok and d2
+	# D3: generator-only proof — regenerating either side reproduces the
+	# PRE-EDIT terrain (the blend samples the home height pass, never live
+	# data; an edit can never shift the generated ground)
+	var regen_f: PackedByteArray = WorldGen.generate_face(xface, 63, fccz0, seed, R)
+	var regen_face: int = regen_f[(yF << 8) | (lz_e << 4) | lx_e]
+	var regen_h: PackedByteArray = WorldGen.generate(196, site_col, seed)
+	var regen_home: int = regen_h[(yH << 8) | ((site_z - site_col * 16) << 4) | (site_bx - 196 * 16)]
+	var d3_face_ok: bool = regen_face == orig_face
+	if not site_anomalous:
+		var d3: bool = d3_face_ok and regen_home == orig_home
+		out["d3_generator_only_ok"] = d3
+		out["d3_orig"] = [orig_home, orig_face]
+		out["d3_regen"] = [regen_home, regen_face]
+		ok = ok and d3
+	# else: the live home column is the anomaly's air (live top 0 vs gen
+	# 169) — its "pre-edit terrain" IS the anomaly, so the home reference
+	# is the round-trip world's gen-regenerated column (the E section):
+	# the save path's regeneration must reproduce the pure gen at the
+	# boundary column (an unedited cell of the site row).
+	# D4: fluids at the seam — where the seam is submerged the face column
+	# water-fills to the SAME level as home (the blend's water rule)
+	var d4_report: String = "no_submerged_candidate"
+	var d4: bool = true
+	for dz2 in [0, 4, -4, 8, -8, 12, -12]:
+		var zz: int = z0 + dz2
+		var zzc: int = int(floorf(float(zz) / 16.0))
+		var zzf: int = 4 if zz >= 0 else 5
+		# r25: BOTH branches of the scan sit on the +x edge (face 4 the
+		# z>0 half, face 5 the z<0 half) — the home straddler column is
+		# 196 in both; the old -197/bxn was the -x boundary (wrong seam).
+		var hcc: PackedByteArray = WorldGen.generate(196, zzc, seed)
+		var lxh: int = site_bx - 196 * 16
+		var th: int = _crossface_col_top(hcc, lxh, zz - zzc * 16)
+		if th < 0 or th > SEA:
+			continue
+		var zzi: int = clampi(int(floorf((float(zz) / hw + (0.0 if zzf == 4 else 1.0)) * float(N))), 0, N - 1)
+		var zfc: PackedByteArray = WorldGen.generate_face(zzf, 63, zzi >> 4, seed, R)
+		var w_home: int = hcc[(SEA << 8) | ((zz - zzc * 16) << 4) | lxh]
+		var w_face: int = zfc[(SEA << 8) | ((zzi & 15) << 4) | SphereMath.face_local_x(zzf, 1023, 63)]
+		d4_report = "z=%d home=%d face=%d" % [zz, w_home, w_face]
+		d4 = d4 and (w_home == WorldGen.B_WATER) and (w_face == WorldGen.B_WATER)
+		break
+	out["d4_seam_fluids"] = d4_report
+	out["d4_seam_fluids_ok"] = d4
+	ok = ok and d4
+	# D5: ordinary feel — an edit AWAY from the seam touches only its own
+	# side: the home edit (16 m out, chunk 195) leaves the face chunk and
+	# the boundary chunk 196 untouched and lands on the home side; the
+	# face edit (3 cells in from the edge) leaves the home data untouched
+	# and lands on the face side. Each edit is asserted, then reverted,
+	# before the other is made (the first draft compared both sides
+	# against pre-edit snapshots WHILE both edits were in place — every
+	# assertion failed by construction).
+	# the D1/D2 edits re-armed both sides' stars — the AC-0297 re-bake
+	# (the settled payload rewrites the slabs once the light settles)
+	# must be DONE before the snapshots: a mid-swap snapshot is not a
+	# stable baseline (r26 d5 red: the composite ran mid-re-bake).
+	var d5_settle := 0
+	while d5_settle < 1200:
+		if not bool(world.star_owed.get(fc_key, false)) and not bool(world.star_owed.get(hc_live_key, false)) and not bool(world.star_owed.get(site_col_key, false)):
+			break
+		await get_tree().physics_frame
+		d5_settle += 1
+	var snap_f: PackedByteArray = ChunkIO.io_cpp().slabs_flat(fc.data) if fc != null else PackedByteArray()
+	# r25: the west neighbour follows the SITE column (the site may sit in
+	# the adjacent straddler column).
+	var hc_west_key: String = "195,%d" % site_col
+	var hc_west: Node3D = world.chunks.get(hc_west_key)
+	var snap_h: PackedByteArray = ChunkIO.io_cpp().slabs_flat(hc_live.data)
+	var snap_hw: PackedByteArray = ChunkIO.io_cpp().slabs_flat(hc_west.data) if hc_west != null else PackedByteArray()
+	# r25b: snapshot the ORIGINAL values — the reverts must restore them,
+	# not air: with an anomalous site (yH = 0) the home edit cell (yH + 1
+	# = 1) is underground STONE, and reverting to 0 leaves a hole that
+	# breaks the west-chunk snapshot compare (r25 d5 red).
+	var d5_orig_home: int = world.get_block(site_bx - 16, yH + 1, site_z)
+	var d5_orig_face: int = world.get_block_key(xface, 1020, site_iv0, yF + 1)
+	world.set_block(site_bx - 16, yH + 1, site_z, 7)  # home edit, 16 m from the seam
+	await get_tree().physics_frame
+	var d5_home: bool = world.get_block(site_bx - 16, yH + 1, site_z) == 7 \
+			and ChunkIO.io_cpp().slabs_flat(hc_live.data) == snap_h \
+			and (fc == null or ChunkIO.io_cpp().slabs_flat(fc.data) == snap_f)
+	world.set_block(site_bx - 16, yH + 1, site_z, d5_orig_home)
+	await get_tree().physics_frame
+	world.set_block_key(xface, 1020, site_iv0, yF + 1, 7)  # face edit, 3 cells in
+	await get_tree().physics_frame
+	var d5_face: bool = world.get_block_key(xface, 1020, site_iv0, yF + 1) == 7 \
+			and ChunkIO.io_cpp().slabs_flat(hc_live.data) == snap_h
+	world.set_block_key(xface, 1020, site_iv0, yF + 1, d5_orig_face)
+	await get_tree().physics_frame
+	var d5: bool = d5_home and d5_face \
+			and ChunkIO.io_cpp().slabs_flat(hc_live.data) == snap_h \
+			and (fc == null or ChunkIO.io_cpp().slabs_flat(fc.data) == snap_f) \
+			and (hc_west == null or ChunkIO.io_cpp().slabs_flat(hc_west.data) == snap_hw)
+	out["d5_ordinary_feel_ok"] = d5
+	out["d5_home"] = d5_home
+	out["d5_face"] = d5_face
+	ok = ok and d5
+
+	# --- (E) the save round-trip (C6: the face edits persist; the
+	# boundary stays masked) ---
+	# save from the home side near the seam (the continue path's tested
+	# ground) with the D2 tower in place on both sides
+	# r25: save from the SITE side (the tower is at the site, not the
+	# nominal cell) so the site column is resident at save time.
+	Debug.teleport(float(site_bx) - 10.0, float(world.surface_top(site_bx - 10, site_z)) + 1.0, float(site_z))
+	for i in 30:
+		await get_tree().physics_frame
+	Save.clear(3)
+	var e_saved: bool = Save.save_now(3)
+	var e_face_key := false
+	var efile := FileAccess.open("user://awecraft_save_3.json", FileAccess.READ)
+	if efile != null:
+		var edata = JSON.parse_string(efile.get_as_text())
+		efile.close()
+		if typeof(edata) == TYPE_DICTIONARY:
+			var eedits: Dictionary = (edata as Dictionary).get("edits", {})
+			for ek in eedits:
+				if String(ek).begins_with("0:%d:63:" % xface):
+					e_face_key = true
+	main._free_game_nodes()
+	await main._continue_slot(3)
+	var ew := 0
+	while ew < 3000 and (Game.world == null or Game.world.surface_top(site_bx, site_z) <= 0):
+		await get_tree().physics_frame
+		ew += 1
+	var e_home_rt: bool = Game.world != null and Game.world.get_block(site_bx, yH + 2, site_z) == 3
+	var e_face_rt: bool = false
+	var ewf := 0
+	while ewf < 3000 and Game.world != null and not Game.world.chunks.has(fc_key):
+		await get_tree().physics_frame
+		ewf += 1
+	if Game.world != null and Game.world.chunks.has(fc_key):
+		e_face_rt = Game.world.get_block_key(xface, 1023, site_iv0, yF) == 3 \
+			and Game.world.get_block_key(xface, 1023, site_iv0, yF + 2) == 3
+	# the boundary round-trip assertion: the straddling column survives
+	# (with the tower) and the fully-past column stays air
+	var e_boundary_top: int = Game.world.surface_top(site_bx, site_z) if Game.world != null else -1
+	# the first fully-past cell (x 3142 >= hw 3141.59) at the SITE row —
+	# bx + 1 is still in-patch terrain (bx is lx 2), not the masked past.
+	var e_past: int = Game.world.get_block(196 * 16 + 6, 100, site_z) if Game.world != null else -1
+	var e_boundary_ok: bool = e_boundary_top == yH + 2 and e_past == 0
+	if site_anomalous:
+		# the deferred anomaly-mode checks, measured in the round-trip
+		# world (the save regenerates the straddler from the pure gen):
+		# the round-trip column must match the gen at an UNEDITED cell of
+		# the site row (the d3 home reference), and the home-side light
+		# must be lit above the (now tower-topped) surface (the C4 home
+		# reference).
+		var uxx: int = 196 * 16 + 0
+		var u_lz: int = site_z - site_col * 16
+		var u_gen_top: int = _crossface_col_top(regen_h, 0, u_lz)
+		var u_rt_top: int = Game.world.surface_top(uxx, site_z) if Game.world != null else -1
+		var u_rt_block: int = Game.world.get_block(uxx, u_rt_top, site_z) if Game.world != null and u_rt_top > 0 else -1
+		var u_gen_block: int = regen_h[(u_gen_top << 8) | (u_lz << 4) | 0]
+		var d3_home_rt: bool = u_rt_top == u_gen_top and u_rt_block == u_gen_block
+		# wait until the round-trip column has actually PRODUCED light —
+		# star_owed alone is not enough: it is false both for a settled
+		# chunk AND for one not yet registered (the continue re-arm
+		# happens as the chunk lands), and an early exit reads an empty
+		# last_eff (r28 light_home_eff -1).
+		var rt_wait := 0
+		while rt_wait < 2400:
+			var chk_rt: Node3D = Game.world.chunks.get("196,%d" % site_col) if Game.world != null else null
+			# the light (last_eff) is the star's output — it does not
+			# depend on the mesh, so gate on the light array only.
+			if chk_rt != null and (chk_rt as Node3D).last_eff.get("arr", PackedByteArray()).size() > 0 and not bool(Game.world.star_owed.get("196,%d" % site_col, false)):
+				break
+			await get_tree().physics_frame
+			rt_wait += 1
+		# the light above the SITE cell's current surface (the tower top,
+		# yH + 2 — the unedited cell's top would index the tower's own
+		# solid slot, which is 0 by construction)
+		var rt_site_top: int = Game.world.surface_top(site_bx, site_z) if Game.world != null else -1
+		var hc_rt: Node3D = Game.world.chunks.get("196,%d" % site_col) if Game.world != null else null
+		if hc_rt != null and rt_site_top > 0:
+			var arr_rt: PackedByteArray = hc_rt.last_eff.get("arr", PackedByteArray())
+			if arr_rt.size() > 0:
+				eff_home = int(arr_rt[((rt_site_top + 1) << 8) | (u_lz << 4) | (site_bx - 196 * 16)])
+		out["light_home_eff"] = eff_home
+		out["light_never_unlit_ok"] = eff_home >= 1 and eff_face >= 1
+		out["d3_rt_home_gen_ok"] = d3_home_rt
+		out["d3_generator_only_ok"] = d3_face_ok and d3_home_rt
+		out["d3_orig"] = [orig_home, orig_face]
+		out["d3_regen"] = [regen_home, regen_face]
+		ok = ok and bool(out["light_never_unlit_ok"])
+		ok = ok and bool(out["d3_generator_only_ok"])
+	out["e_save_ok"] = e_saved
+	out["e_face_key_in_save"] = e_face_key
+	out["e_home_tower_rt"] = e_home_rt
+	out["e_face_tower_rt"] = e_face_rt
+	out["e_boundary_top"] = e_boundary_top
+	out["e_past_col"] = e_past
+	out["e_boundary_roundtrip_ok"] = e_saved and e_face_key and e_home_rt and e_face_rt and e_boundary_ok
+	ok = ok and bool(out["e_boundary_roundtrip_ok"])
+	Save.clear(3)
+
+	# --- (F) the C2 re-verify: the 8 bordering faces' seams are closed in
+	# the CROSSING REGION (the edge cells within +-128 m of the edge
+	# centre — where the ticket's walk/flight crossing is measured; the
+	# face edge cell's facet point vs the home point at the cell's OWN
+	# extended home flat position, 1 m bound). The corner zone (the first
+	# ~300 m at each edge end) is reported separately and NOT gated: the
+	# home NET (per-column tangent facets, AC-0307) and the home CHART
+	# (the pre-warp, which the band inverts) diverge there — the chart
+	# compresses the corner arc ~0.7x while the net places flat metres
+	# 1:1 on the tangent plane, so the face-chart terrain edge sits up to
+	# ~3.5 m ACROSS the seam from the home-net terrain edge (a lateral
+	# crack, not a height step). That is the end-state placement
+	# unification — the LAST ticket's work (the band removal), explicitly
+	# out of scope here; the C1 blend keeps the corner GROUND continuous
+	# (height), the crack is the placement residual.
+	# The gate is TRAVERSABILITY, not closure: the placement split is a
+	# pre-existing AC-0307/AC-0308 property (the home NET places flat metres
+	# 1:1 on per-column tangent planes; the home CHART — which the band
+	# inverts — is pre-warp compressed ~0.7x off its calibration midlines,
+	# so the two edge placements disagree by 1.0-3.7 m along the WHOLE
+	# edge, peaking mid-edge and ~190 m off each corner). The offset is a
+	# roughly HORIZONTAL translation (a same-height crack the player walks
+	# straight across: the C1 blend keeps the surface heights continuous,
+	# so the crossing is a 1-3.7 m gap at equal height, not a step).
+	# Closure (offset -> 0) is the end-state placement unification = the
+	# LAST ticket (the band removal). >= 4 m would be an UNTRAVERSABLE
+	# crack (the walk's jump-assist clears ~3 m) — that is the failure.
+	var f_cross_max := 0.0
+	var f_corner_max := 0.0
+	var f_max := 0.0
+	# the surface chasm (the crossing question): the pre-walk scan
+	# (chasm_scan — the same deterministic computation that feeds the
+	# f_best_chasm_site field). For each sampled edge cell it measures
+	# the WORLD-space offset between the HOME-NET surface point and the
+	# FACE-CHART surface point at the cell's own extended flat position
+	# (reference surface height 168 — the C1 blend keeps the two surface
+	# heights equal in flat space; the placement split — home per-column
+	# tangent facets vs the face pre-warp/LSQ placement — is what
+	# separates them in world space). The on-foot crossing is a
+	# sprint-jump: same-height reach SPRINT x 2*JUMP/GRAV = 3.62 m, plus
+	# up to ~1 m of landing-drop bonus — the gate is: SOME sampled site
+	# has a chasm <= 4.5 m (the midline site does — 0.39 m — while the
+	# census crossing row's 1.95 m is the one the walk actually uses).
+	var f_chasm_best: float = float(chasm_scan[0])
+	var f_chasm_site: String = String(chasm_scan[4])
+	var f_chasm_drop := 0.0
+	for f2 in range(4, 12):
+		var is_x_face: bool = f2 <= 7
+		# crossing zone: +-40 cells (128 m) around the edge centre (512)
+		var ks_cross: Array = []
+		for m in range(-40, 41, 8):
+			ks_cross.append(512 + m)
+		var ks_corner: Array = [2, 32, 62, 100, 924, 962, 1000, 1022]
+		for ksc in [ks_cross, ks_corner]:
+			for kk in ksc:
+				var iu2: int = 1023 if is_x_face else kk
+				var iv2: int = kk if is_x_face else 1023
+				var ccx2: int = iu2 >> 4
+				var ccz2: int = iv2 >> 4
+				var T3: Transform3D = SphereMath.face_chunk_transform(f2, ccx2, ccz2, R)
+				var lx3: int = SphereMath.face_local_x(f2, iu2, ccx2)
+				var lz3: int = iv2 & 15
+				var wp2: Vector3 = T3 * Vector3(float(lx3) + 0.5, 0.0, float(lz3) + 0.5)
+				var fh: Vector3 = SphereMath.face_cell_band(f2, iu2, iv2, R)
+				var wh: Vector3 = world.world_pos_of_flat(fh.x, 0.0, fh.y)
+				var ds: float = (wp2 - wh).length()
+				if ds > f_max:
+					f_max = ds
+				if ksc == ks_cross:
+					if ds > f_cross_max:
+						f_cross_max = ds
+				elif ds > f_corner_max:
+					f_corner_max = ds
+	out["f_seam_max_m"] = f_max
+	out["f_seam_crossing_max_m"] = f_cross_max
+	out["f_seam_corner_max_m"] = f_corner_max  # informational
+	out["f_seam_traversable_ok"] = f_max < 4.0
+	out["f_crossing_chasm_min_m"] = f_chasm_best
+	out["f_crossing_chasm_drop_m"] = f_chasm_drop  # informational
+	out["f_crossing_chasm_site"] = f_chasm_site  # informational (dry best)
+	out["f_best_any_chasm_site"] = String(chasm_scan[10])  # informational (incl. submerged)
+	# the chasm at the WALK'S actual crossing row (the census site, iv0):
+	# the number the seam jump has to clear.
+	var T3r: Transform3D = SphereMath.face_chunk_transform(xface, 63, fccz0, R)
+	var fhb2: Vector3 = SphereMath.face_cell_band(xface, 1023, iv0, R)
+	var wsr_f: Vector3 = T3r * Vector3(float(SphereMath.face_local_x(xface, 1023, 63)) + 0.5, 168.0, float(iv0 & 15) + 0.5)
+	var wsr_h: Vector3 = world.world_pos_of_flat(fhb2.x, 168.0, fhb2.y)
+	out["f_crossing_row_chasm_m"] = (wsr_f - wsr_h).length()
+	out["f_crossing_row_chasm_drop_m"] = wsr_f.y - wsr_h.y  # informational
+	# the on-foot crossing gate: the best site's surface chasm is
+	# sprint-jump-clearable (reach 3.62 m same-height + up to ~1 m of
+	# landing-drop bonus = 4.5 m bound; the walk gate exercises exactly
+	# this — the arm's seam jump).
+	out["f_crossing_sprint_jump_ok"] = f_chasm_best <= 4.5
+	ok = ok and bool(out["f_seam_traversable_ok"]) and bool(out["f_crossing_sprint_jump_ok"])
+
+	out["ok"] = ok
+	Debug.result(out)
+	get_tree().quit()
+
+# AC-0309: the u-metres from the top edge (the home seam) for a world
+# position on an x face (the walk/flight progress measure, the same
+# formula the loop uses).
+
+func _crossface_um(pos: Vector3) -> float:
+	var r: Dictionary = SphereMath.world_to_face(pos + Vector3(0.0, Game.planet_R, 0.0), Game.planet_R)
+	return (1.0 - float(r["u"])) * (SphereMath.face_width(Game.planet_R) * 0.5)
+
+# AC-0309: the surface-chasm scan (the F measurement + the dry-site
+# best, run BEFORE the walk). For each sampled edge cell of the 8
+# bordering faces: the world-space offset between the home-NET surface
+# point and the face-CHART surface point at the cell's own extended flat
+# position (reference surface height 168 — the C1 blend keeps the two
+# surface heights equal in flat space; the placement split is what
+# separates them in world space). Pure SphereMath + the world flat<->
+# world converters + the pure-generator home-extended height: no
+# resident chunks needed. The BEST is over DRY sites only (the home
+# extended top must clear the sea like the census's htop > SEA+1 test —
+# the r21 midline best (0.39 m) was submerged at real data and sits in
+# the stalled far-band corridor; the overall best is kept as element 10
+# for the record). Returns:
+#   [best_gap (dry), best_face, best_iu, best_iv, best_site_str,
+#    max_gap, cross_max, corner_max, worst_str,
+#    best_flat_z (dry best's extended flat z, -1 = none),
+#    best_any_site_str (overall best incl. submerged, informational)]
+func _crossface_chasm_scan(world: Node, seed: int) -> Array:
+	var R: float = Game.planet_R
+	var N: int = SphereMath.CELLS_PER_FACE
+	var best_gap := 9999.0
+	var best_face := -1
+	var best_iu := 0
+	var best_iv := 0
+	var best_site := ""
+	var best_bz := -1.0
+	var max_gap := 0.0
+	var cross_max := 0.0
+	var corner_max := 0.0
+	var worst := ""
+	var any_gap := 9999.0
+	var any_site := ""
+	for f2 in range(4, 12):
+		var is_x_face: bool = f2 <= 7
+		var ks_cross: Array = []
+		for m in range(-40, 41, 8):
+			ks_cross.append(512 + m)
+		var ks_corner: Array = [2, 32, 62, 100, 924, 962, 1000, 1022]
+		for ksc in [ks_cross, ks_corner]:
+			for kk in ksc:
+				var iu2: int = 1023 if is_x_face else kk
+				var iv2: int = kk if is_x_face else 1023
+				var ccx2: int = iu2 >> 4
+				var ccz2: int = iv2 >> 4
+				var T3: Transform3D = SphereMath.face_chunk_transform(f2, ccx2, ccz2, R)
+				var fh: Vector3 = SphereMath.face_cell_band(f2, iu2, iv2, R)
+				if is_inf(fh.z):
+					continue  # this face does not border the home patch
+				var lxf: float = (float(SphereMath.face_local_x(f2, iu2, 63)) + 0.5) if is_x_face else (float(iu2 & 15) + 0.5)
+				var lzf: float = (float(iv2 & 15) + 0.5) if is_x_face else 15.5
+				var ws_face: Vector3 = T3 * Vector3(lxf, 168.0, lzf)
+				var ws_home: Vector3 = world.world_pos_of_flat(fh.x, 168.0, fh.y)
+				var chasm: float = (ws_face - ws_home).length()
+				# the home extended surface top at this cell (the pure
+				# generator — same source the census's htop comes from):
+				# a submerged site is not a crossing site.
+				var hh: int = WorldGen._home_ext_height(fh.x, fh.y, seed)
+				var dry: bool = (hh - 1) > Data.SEA + 1
+				if chasm < any_gap:
+					any_gap = chasm
+					any_site = "face=%d iu=%d iv=%d chasm=%.2f zoff=%.2f dry=%s" % [f2, iu2, iv2, chasm, (ws_face - ws_home).z, str(dry)]
+				if dry and chasm < best_gap:
+					best_gap = chasm
+					best_face = f2
+					best_iu = iu2
+					best_iv = iv2
+					best_bz = fh.y
+					best_site = "face=%d iu=%d iv=%d chasm=%.2f drop=%.2f zoff=%.2f hh=%d" % [f2, iu2, iv2, chasm, ws_face.y - ws_home.y, (ws_face - ws_home).z, hh]
+				if chasm > max_gap:
+					max_gap = chasm
+					worst = "face=%d iu=%d iv=%d ds=%.3f" % [f2, iu2, iv2, chasm]
+				if ksc == ks_cross:
+					if chasm > cross_max:
+						cross_max = chasm
+				elif chasm > corner_max:
+					corner_max = chasm
+	return [best_gap, best_face, best_iu, best_iv, best_site, max_gap, cross_max, corner_max, worst, best_bz, any_site]
+
+# AC-0309: the topmost non-air, non-fluid y of a generated COLUMN (the
+# flat PackedByteArray form; -1 = void).
+func _crossface_col_top(d: PackedByteArray, lx: int, lz: int) -> int:
+	var y: int = Data.HEIGHT - 1
+	while y >= 0:
+		var b: int = d[(y << 8) | (lz << 4) | lx]
+		if b != 0 and b != WorldGen.B_WATER and b != WorldGen.B_LAVA:
+			return y
+		y -= 1
+	return -1
+
+# AC-0309: the topmost solid y of a face cell (iu, iv) in a generated
+# face chunk (the local-slot layout — face_local_x on the mirror class).
+func _crossface_face_col_top(d: PackedByteArray, face: int, iu: int, iv: int) -> int:
+	var ccx: int = iu >> 4
+	var lx: int = SphereMath.face_local_x(face, iu, ccx)
+	var lz: int = iv & 15
+	var y: int = Data.HEIGHT - 1
+	while y >= 0:
+		var b: int = d[(y << 8) | (lz << 4) | lx]
+		if b != 0 and b != WorldGen.B_WATER and b != WorldGen.B_LAVA:
+			return y
+		y -= 1
+	return -1

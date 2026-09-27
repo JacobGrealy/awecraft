@@ -463,7 +463,9 @@ func _conv_edits_v2(edits_raw) -> Dictionary:
 		var ep: PackedStringArray = String(ek).split(":")
 		if ep.size() != 5:
 			continue
-		var ck: String = "%d,%d" % [int(ep[2]), int(ep[3])]
+		# AC-0309 C6: the non-home faces map to the 3-part runtime key
+		# ("face:ccx:ccz"); the home pair keeps "ccx,ccz".
+		var ck: String = "%d,%d" % [int(ep[2]), int(ep[3])] if int(ep[1]) <= 1 else "%d:%d:%d" % [int(ep[1]), int(ep[2]), int(ep[3])]
 		if not conv.has(ck):
 			conv[ck] = {}
 		conv[ck][int(ep[4])] = edits_raw[ek]
@@ -484,8 +486,10 @@ func _continue_slot(slot: int) -> void:
 	# face 1 = ccx < 0 half; planet 0). Old saves (no planets, old "cx,cz"
 	# edit keys, or a non-home face/planet in an edit key) are discarded:
 	# fresh world at the same seed + one clear log line. R is clamped to
-	# [2000, 8000] on load (AC-0147 range). P1a never records non-home edits
-	# (faces 2-11 are data-level only; player edits land with AC-0144+).
+	# [2000, 8000] on load (AC-0147 range). AC-0309 (the AC-0144 P4 that
+	# lets the player reach the non-home faces) records face edits — the
+	# gate accepts faces 0-11 (planet 0); an edit key of any other shape
+	# still soft-fails (old saves are disposable during development).
 	var planets = data.get("planets", null)
 	var planets_ok: bool = typeof(planets) == TYPE_ARRAY and (planets as Array).size() > 0
 	var edits_raw = data.get("edits", {})
@@ -493,7 +497,7 @@ func _continue_slot(slot: int) -> void:
 	if edits_v2_ok:
 		for ek in edits_raw:
 			var ep: PackedStringArray = String(ek).split(":")
-			if ep.size() != 5 or int(ep[0]) != 0 or int(ep[1]) < 0 or int(ep[1]) > 1:
+			if ep.size() != 5 or int(ep[0]) != 0 or int(ep[1]) < 0 or int(ep[1]) > 11:
 				edits_v2_ok = false
 				break
 	if height_ok and (not planets_ok or not edits_v2_ok):

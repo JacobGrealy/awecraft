@@ -215,6 +215,43 @@ Match these; do not improvise a different approach in a task.
   walls and are climbed by jumping as before. Standing proof: the `consumers`
   arm (`AWECRAFT_LOGIC=consumers`) — mine/place/step at the x=0 midline fold +
   two high-latitude positions, the no-fall-through census, terrain restored.
+- **Cross-face movement (AC-0309)**: beyond the home patch the 12 face charts
+  (faces 2–11) stream around the net. The face grid is 1024×1024 cells per
+  face — ANISOTROPIC: the u axis spans the full face width (S ≈ 6.14 m per
+  cell), the v axis the half-face (S/2 per cell on the z faces). Face chunks
+  hold 16×16 cells, keyed `face:ccx:ccz`, placed by `face_chunk_transform`
+  (the pre-warp + per-chunk LSQ — the chart placement; the net-vs-chart
+  placement residual it leaves at the seam is the AC-0307/AC-0308 property
+  the LAST ticket — the band removal — closes). `_face_stream` (per-frame)
+  streams the player's window (sim_dist × 16 m, the per-face half of the
+  edge — the along-edge clamp pairs faces 4/6/8/10 with the + half and
+  5/7/9/11 with the − half; lumping the pair is the r15 hole-to-void bug).
+  The window is ALSO edge-normal gated (r30): a face streams only when the
+  player is within `win` of THAT edge — the along-edge window alone is
+  non-empty for every face mid-patch and would stream all eight edges'
+  bands on an interior walk (boundary r4 resident 93→272, p95 48→97 ms);
+  a player already on the face side has a negative distance and still
+  streams. Within `FACE_STREAM_BUDGET_MS`, evicting face chunks past
+  `_face_chunk_min_dist` every 16 m of travel. **`_face_player_flat` returns
+  the recenter coords as-is: they are ALREADY flat** (the recenter contract
+  takes flat — `player._recenter` and the main.gd sim_dist recenter convert
+  world→flat before calling); re-reading them through `flat_of_world_pos`
+  collapsed the boundary projection onto the +x edge near z 0 and starved
+  face 5's stream budget (the crossing row never streamed while the player
+  stood home-side near the edge). **No cross-face merge**: the face edge
+  cells mirror the home edge data (the cross-face ring) and
+  `_face_rearm_home_neighbors` re-arms the home neighbours on a face
+  landing. **Per-face AweStarlight** (`_star_for_face`): each face owns a
+  star instance stepped in the per-frame face pass; `_face_star_pass`
+  re-bakes a settled face column on the star payload only when it differs
+  from the landing (pull) light — the AC-0297 seam contract (byte-equal in
+  steady state, a self-heal if the engines disagree). **Player anchor (C5)**:
+  at the edge the player's anchor switches to the face frame — the face
+  auto-step is 1.0 m (`Player.FACE_STEP`; the 6 m cell resolution makes
+  2–3 m steps common; the 1.35 m jump covers the rest) vs 0.5 m on the home
+  net. Gate: the `crossface` arm (`AWECRAFT_LOGIC=crossface` — the
+  walk/flight crossing, the light seam, the edit interactions, the save
+  round-trip, the seam audit).
 - **Collision**: player and mobs are `CharacterBody3D`; voxel collision is a **per-slab**
   `StaticBody3D` (24 per column) built in `chunk.gd _build_slab_collision` from the slab's
   opaque surface plus the flora CUTOUT surface (AC-0270 — leaves have collision; fluids and
