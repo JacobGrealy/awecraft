@@ -432,8 +432,17 @@ Match these; do not improvise a different approach in a task.
   (~1 KB, ~198 B on disk; AC-0284b; the v6 flag bit 1 — **write-dead since AC-0287**:
   the save filter never encodes a far column; the bit-1 shape survives on disk only in
   pre-AC-0287 saves and is decode-only). Gen builds only the 3 coarse
-  SURFACE fields (the ones H depends on) + the heights pass — ~92 µs/col vs ~1.7 ms full
-  (≈18×); the heights pass alone is ~34 µs (the RP "heights-only" line). H is bit-exact
+  SURFACE fields (the ones H depends on) + the heights pass for a data-less column, against
+  the FULL path's cost — **re-measured by AC-0363 (2026-09-26) at 5,502 ± 25 µs per chunk on
+  the current tree**, i.e. ≈ 20.8 µs per column at 256 columns per chunk. The sentence that
+  used to sit here ("~92 µs/col vs ~1.7 ms full (≈18×)") is **stale AND unit-inconsistent** —
+  both figures predate the cave series (AC-0290/AC-0291/AC-0292/AC-0359/AC-0360) and the ratio
+  divided a per-chunk figure by a per-column one, so it never meant anything; AC-0363's
+  attribution names the real history instead: 2,884 µs/chunk after the C48 lattice, 4,532 after
+  the Voronoi aquifers (the per-block 4-nearest search alone is ~1.6 ms), 5,711 after the P4
+  contents and 5,319 after the deep-only tunnel gate, with the planet pieces contributing
+  nothing to generation (`git diff` over the native lane is empty across them).
+  H is bit-exact
   with the full path (the stored H *is* the heightmap — promotion must not shift terrain).
   **AC-0312: the draw band is THREE tiers** (`_lod_tier_of`, the render-edge guard first —
   a knob sitting past the render radius is data-only): **BAND A** (`sim` < taxi ≤
