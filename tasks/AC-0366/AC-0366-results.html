@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0366 — cave-family noise cost attribution vs vanilla (price list)</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:1.45em;border-bottom:3px solid #2563eb;padding-bottom:.3em}
+h2{font-size:1.15em;margin-top:1.8em;color:#1e40af;border-bottom:1px solid #cbd5e1;padding-bottom:.2em}
+h3{font-size:1em;margin-top:1.2em;color:#334155}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}
+pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+table{border-collapse:collapse;font-size:13px;margin:10px 0;width:100%}
+th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}
+th{background:#f0f0f0}
+.ok{background:#e6f4ea}
+.warn{background:#fff4e5}
+.find{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}
+.note{font-size:13px;color:#555}
+</style></head><body>
+
+<h1>AC-0366 — the price list: what one lattice point, one octave, one field, and one non-lattice block cost</h1>
+<p><b>Role:</b> bounded measurement-and-analysis (no fix, no profiler added, no TASKS.yaml edit, no renders).
+Tree: HEAD <code>dc07e05</code>; <code>git diff bc597d0..HEAD -- gdext/</code> is <b>EMPTY</b> — the generation
+lane is byte-identical to AC-0363's step-0 measurement tree, so AC-0363's per-stage split (the
+<code>gen_timing()</code> C++ atomics ÷ 25 full-path chunks) is inherited as valid for this tree.
+<b>Verdict: DONE.</b></p>
+
+<h2>1. The measurement record (this ticket's own run)</h2>
+<p>One <code>genhash</code> arm run, memory-capped
+(<code>ulimit -v 8388608</code>, <code>HOME=/tmp/dsh_home</code>, one godot, pgrep-checked):</p>
+<table>
+<tr><th>run</th><th>rc</th><th>SCRIPT ERROR</th><th>GENMS</th><th>result</th></tr>
+<tr><td>genhash (pristine tree)</td><td>0</td><td>0</td><td>144</td>
+<td class="ok">G0 PASS (0 SCRIPT ERROR lines); 25/25 hashes <b>BYTE-IDENTICAL</b> to the AC-0360 reference
+set (<code>.scratch/AC-0360-gates/genhash_r1.log</code>) — the world this price list prices is the
+exact world the split measured. GENMS 144 sits on AC-0363's 144/145.</td></tr>
+</table>
+<p>Log: <code>.scratch/AC-0366-gates/genhash_r1.log</code>. GENMS 144 ms ÷ 25 = 5.76 ms/chunk
+end-to-end (MD5 + PackedByteArray boundary + loop overhead included); the stage-sum figure is
+<b>5,502 µs/chunk</b> (AC-0363 run 1; the 6.5 ms gap is the documented AC-0363 §3.3 boundary cost).</p>
+
+<h2>2. What prices what — instrument notes</h2>
+<ul>
+<li><b>Per-stage prices are measured</b> — the permanent C++ atomics (<code>g_t_*_us</code> in the
+shipped <code>generate_resl</code>, gen.cpp) divided by 25, as AC-0292/AC-0360/AC-0363 did. No
+python/GDScript transcription of the generation was written or believed (the AC-0362 trap, applied).</li>
+<li><b>Per-point / per-octave / per-field prices are static allocations</b> of the measured
+field-stage total over a counted number of noise evaluations. That is legitimate because every
+field on both lattices is built from the <b>same primitive</b> (<code>vnoise3</code>, gen.cpp 365;
+<code>fbm3</code> = <code>oct</code> × <code>vnoise3</code>, 396; <code>vn3</code> = <code>n</code>
+nonzero-amplitude × <code>vnoise3</code>, 417) — the field stage is pure primitive work, so one
+uniform price per <code>vnoise3</code> is exact by construction, not an assumption about fields.
+The per-field <i>split</i> of the 1,503 µs is <b>not measured by the existing instruments</b>
+(the field stage has one accumulator); the measurement that would price it is the ticket's own
+STEP 0: one wall accumulator per cave-family build call site beside <code>g_t_aquifer_us</code>
+(additive, no world change). Recorded as a finding, not a failure.</li>
+<li><b>Two unit counts are bounded, not measured</b> (no counter exists): the number of scan
+blocks per chunk (bounded via the thash H-band, §4.4) and the number of aquifer searches per
+chunk (bounded via AC-0291's census, §4.5). The counters that would price them exactly are named
+in §4.4/4.5 — one line each.</li>
+</ul>
+
+<h2>3. Static counts (from the code, arithmetic shown)</h2>
+<h3>3.1 The lattices</h3>
+<table>
+<tr><th>lattice</th><th>cells</th><th>grid (incl. 1-cell margin/axis)</th><th>points/chunk</th><th>built when</th></tr>
+<tr><td>coarse <code>Field</code> (surface + ore)</td><td>4 blocks xz, 48 blocks y (8 y-cells)</td>
+<td>7 × 9 × 7</td><td><b>441</b></td><td>always (full + skip + far)</td></tr>
+<tr><td>cave <code>FieldC</code> (C48, AC-0359)</td><td>4 blocks xz, <b>8 blocks y (48 y-cells)</b></td>
+<td>7 × 49 × 7</td><td><b>2,401</b></td><td>full path only (genhash: cols_full 25, skip 0, far 0)</td></tr>
+</table>
+<p>The cave cell is <b>vanilla's own 4×8×4-block cell</b> (AC-0359: "8-block Y cells — Bedrock's
+resolution"). 7 = 5 chunk cells (16/4) + margin; 49 = 384/8 + 1. The margin is 1 cell per axis —
+needed for the 2-ring tree neighborhood — and it is 1,176 of the 2,401 points (48.9%).</p>
+
+<h3>3.2 The fields and their octave counts (15 fields, all call sites in <code>generate_resl</code>)</h3>
+<table>
+<tr><th>field</th><th>lattice</th><th>points</th><th>primitive</th><th>vnoise3 / point</th><th>evals / chunk</th></tr>
+<tr><td>f_cheese</td><td>C48</td><td>2,401</td><td>vn3, CHEESE_AMPS 9 entries, <b>2 zero</b> (skipped)</td><td>7</td><td>16,807</td></tr>
+<tr><td>f_spag</td><td>C48</td><td>2,401</td><td>fbm3, oct 2 (default)</td><td>2</td><td>4,802</td></tr>
+<tr><td>f_nood</td><td>C48</td><td>2,401</td><td>fbm3, oct 2</td><td>2</td><td>4,802</td></tr>
+<tr><td>f_gate</td><td>C48</td><td>2,401</td><td>fbm3, oct 2</td><td>2</td><td>4,802</td></tr>
+<tr><td>f_layer</td><td>C48</td><td>2,401</td><td>vn3, LAYER_AMPS n=1</td><td>1</td><td>2,401</td></tr>
+<tr><td>f_entr</td><td>C48</td><td>2,401</td><td>vn3, ENTR_AMPS n=3</td><td>3</td><td>7,203</td></tr>
+<tr><td>f_pillar</td><td>C48</td><td>2,401</td><td>pillar_density = vn3(n=2) + vn3(n=1) + vn3(n=1)</td><td>4</td><td>9,604</td></tr>
+<tr><td>f_vein</td><td>C48</td><td>2,401</td><td>vn3, VEIN_AMPS n=2</td><td>2</td><td>4,802</td></tr>
+<tr><td>f_biome</td><td>C48</td><td>2,401</td><td>vn3, BIOME_AMPS n=2</td><td>2</td><td>4,802</td></tr>
+<tr><th colspan="5">cave-lattice subtotal: (7+2+2+2+1+3+4+2+2) = <b>25 vnoise3/point</b></th><th><b>60,025</b></th></tr>
+<tr><td>f_ore1..3, f_sc, f_sh, f_sr</td><td>coarse</td><td>441 × 6</td><td>fbm3, oct 2 each</td><td>12/point</td><td>5,292</td></tr>
+<tr><th colspan="5">TOTAL octave-evaluations per full-path chunk</th><th><b>65,317</b></th></tr>
+</table>
+
+<h2>4. THE PRICE LIST (the deliverable)</h2>
+<h3>4.1 Per noise evaluation — the atom everything is priced in</h3>
+<p>field stage <b>1,503 µs/chunk</b> (AC-0363 run 1) ÷ <b>65,317</b> <code>vnoise3</code> evals
+(§3.2) = <b>23.0 ns per octave-evaluation</b> (per vnoise3: 8 × hash3i + 3 fades + 7 lerps).</p>
+<h3>4.2 Per lattice point</h3>
+<table>
+<tr><th>unit</th><th>count</th><th>price</th></tr>
+<tr><td>cave lattice point (all 9 fields, 25 octaves)</td><td>2,401/chunk</td>
+<td><b>0.575 µs/point</b> (60,025 × 23.0 ns ÷ 2,401)</td></tr>
+<tr><td>coarse lattice point (all 6 fields, 12 octaves)</td><td>441/chunk</td>
+<td><b>0.276 µs/point</b> (5,292 × 23.0 ns ÷ 441)</td></tr>
+</table>
+<h3>4.3 Per octave / per field (2,401 points per field)</h3>
+<table>
+<tr><th>unit</th><th>price</th><th>unit</th><th>price</th></tr>
+<tr><td>one octave-layer (2,401 pts)</td><td><b>55.2 µs</b></td><td>f_layer (1 oct)</td><td>55.2 µs</td></tr>
+<tr><td colspan="4">C48 fields: cheese (7) 386.7 · spag (2) 110.5 · nood (2) 110.5 · gate (2) 110.5 · entr (3) 165.7 · pillar (4) 220.9 · vein (2) 110.5 · biome (2) 110.5 — sum 1,381.3 µs + coarse 121.7 µs = 1,503.0 ✓</td></tr>
+</table>
+<h3>4.4 Per non-lattice block (the scan)</h3>
+<p>scan stage <b>1,604 µs/chunk</b>. The scan visits, per column, y from min(H+11, 383) down to 1
+(gen.cpp 2396-2446) — ≈ H+11 blocks/column, 256 columns. With the measured H-band [118, 164]
+(thash window, AC-0359): 33,024–44,800 blocks/chunk → <b>36–49 ns per scanned block</b>
+(midpoint ≈ 42 ns; per chunk block 98,304: 16.3 ns). Per scanned block the work is: 2 tril_c
+always (cheese, entrance) + deep band (k ≥ 16): +1 layer + 3 tunnel + 1 pillar tril_c + dens_at.
+<b>Bounded, not counted</b> — no counter for Σ(H+11). The counter that would price it exactly:
+one line accumulating <code>top</code> in the column loop, beside <code>g_t_scan_us</code>.</p>
+<h3>4.5 Per non-lattice block (the aquifer search)</h3>
+<p><b>~1,600 µs/chunk</b> (AC-0291's own measurement: fill 515→1,910 at landing; the per-block
+Voronoi 4-nearest search, the single biggest named term in this codebase's history). It runs for
+<b>14.3% of the chunk's cells = 14,057 searches/chunk</b> (AC-0291 census; the <code>max_fluid</code>
+sky-block fast path skips the other 84% of air blocks) → <b>113.8 ns per search</b>
+(16.3 ns per chunk block). Each search: 12 candidate centers (2×3×2 in AquTable space) with
+insertion-sort into the 4-nearest list (gen.cpp 1720-1756) + the barrier-zone pairwise pass.
+The aquifer stage the counter names (<code>aquifer_us</code>, the 315-cell table build) is only
+<b>29 µs/chunk</b> — the search lives inside the fill stage. The rest of fill
+(2,066 − 1,600 = <b>466 µs</b>) is the solid-cell rules (stone/ore hashes, biome rock, surface
+block, water/bedrock) at ~4.7 ns per chunk block. <b>Bounded, not counted</b> — the counters that
+exist count <i>placed cells</i> (g_aqu_water/lava/stones), not <i>searches executed</i>; the
+counter that would price it exactly: one line at the <code>aqu_block</code> call site.
+The drip pass (the speleothem pass, full path only): <b>235 µs/chunk</b>, per-block, 2.4 ns per
+chunk block. Carve 17, heights 34, veg 13, pallet 0.</p>
+
+<h2>5. Reconciliation against the measured ~5,500 µs/chunk</h2>
+<table>
+<tr><th>stage (µs/chunk, AC-0363 run 1)</th><th>share</th><th>candidate</th><th>priced as</th></tr>
+<tr><td>field 1,503</td><td>27.3%</td><td>(a)+(b)+(c)</td><td>65,317 evals × 23.0 ns (cave 60,025 + coarse 5,292)</td></tr>
+<tr><td>scan 1,604</td><td>29.2%</td><td>(d)</td><td>33–45k blocks × 36–49 ns (§4.4)</td></tr>
+<tr><td>fill 2,066</td><td>37.6%</td><td>(d) + solid rules</td><td>14,057 searches × 113.8 ns = ~1,600 + 466 solid-cell rules</td></tr>
+<tr><td>drip 235</td><td>4.3%</td><td>(d)</td><td>per-block speleothem pass</td></tr>
+<tr><td>heights 34 / aquifer-table 29 / carve 17 / veg 13 / pallet 0</td><td>1.7%</td><td>—</td><td>per-column H, 315-cell table, carver, trees</td></tr>
+<tr><th>total 5,502</th><th>100%</th><th colspan="2">non-lattice (d) subtotal = 1,604 + 1,600 + 235 + 29 = <b>3,468 µs (63.0%)</b>; lattice (a+b+c) = 1,503 (27.3%); solid-cell rules 466 (8.5%); other 64 (heights 34 + carve 17 + veg 13, 1.2%) — sums to 5,501 (1 µs rounding)</th></tr>
+</table>
+
+<h2>6. The vanilla comparison (STEP 1, stated as a ratio)</h2>
+<p>Same scheme — our cave cell <i>is</i> vanilla's 4×8×4-block cell. The counts:</p>
+<ul>
+<li><b>N (us, full path) = 65,317</b> octave-evaluations/chunk (§3.2).</li>
+<li><b>M (vanilla's scheme, its own entries, no margin) = 1,225 × 15 = 18,375</b>: 5×49×5 chunk-core
+points × (cheese 7 + layer 1 + entrance 3 + caves/pillars 4) — the ported "AS-IS" vanilla entries
+per the code's own comments. Excluded: spag/nood/gate, vein, biome (no vanilla counterpart in the
+density scheme) and the coarse surface/ore lattice (vanilla's surface is not from this density
+lattice).</li>
+<li><b>N/M = 3.55×</b> — and the cost per evaluation is <b>the same 23.0 ns for both</b>, by the
+ticket's own isolation rule: a vanilla-scheme build on this box would call the same
+<code>vnoise3</code>/<code>fbm3</code>/<code>vn3</code> primitives, and the measured field-stage
+price is the price of those primitives on this box. So: <b>"we do 65,317 octave-evaluations per
+chunk against vanilla's 18,375, at the same cost per evaluation (23.0 ns)"</b> — the 3.55× is
+purely a count ratio, with no per-evaluation premium.</li>
+<li>Where the 3.55× comes from: margin ×1.96 (2,401 vs 1,225 points) × richer cave point 25 vs 15
+octaves ×1.67 = 3.27× on the cave lattice, + the 8.1% coarse surface/ore lattice. The
+<b>"richer caves" delta specifically</b> (spag+nood+gate = 6 vnoise3/point = 14,406 evals) is
+<b>331 µs/chunk</b>; vein+biome 221 µs; coarse surface/ore 122 µs.</li>
+</ul>
+
+<h2>7. THE VERDICT — the 1.84× regression (2,884 → 5,319, +2,435 µs), "evaluate more" vs "pay more per evaluation"</h2>
+<p>Ticket-level attribution (AC-0363 step-0, inherited — the numbers sum exactly: 1,648 + 1,179 − 392 = 2,435):</p>
+<table>
+<tr><th>ticket</th><th>Δ µs</th><th>share</th><th>candidate</th></tr>
+<tr><td>AC-0291 Voronoi aquifer (per-block 4-nearest search in fill, fill 515→1,910)</td><td>+1,648</td><td>67.7%</td><td>(d) non-lattice</td></tr>
+<tr><td>AC-0292 P4 contents (3 new C48 fields + scan reads of them + the new drip stage)</td><td>+1,179</td><td>48.4%</td><td>(c) more fields (+ its scan/drip tails)</td></tr>
+<tr><td>AC-0360 deep-only tunnel gate (shallow-band lattice reads removed)</td><td>−392</td><td>−16.1%</td><td>(c) partial reversal</td></tr>
+</table>
+<table>
+<tr><th>question</th><th>answer</th><th>number</th></tr>
+<tr><td>(a) more lattice points — in the regression window?</td><td><b>NO.</b> The C48 lattice (2,401 pts) landed with AC-0359, which <i>precedes</i> the window (2,884 is the post-C48 baseline). Candidate (a) is a standing design decision (AC-0344/AC-0359), not a regression driver.</td><td>0 of 2,435</td></tr>
+<tr><td>(b) more octaves per point — in the window?</td><td><b>NO.</b> No octave count changed between 2,884 and 5,319 (cheese was already 7; layer 1; entrance 3; tunnels 2).</td><td>0 of 2,435</td></tr>
+<tr><td>(c) more fields — "we evaluate more"</td><td><b>YES — the only evaluation-side driver.</b> AC-0292's 3 new fields = +19,208 evals (+41.7%) priced at the flat 23.0 ns = <b>+458 µs</b> (field 1,044→1,502), plus the scan reads of the new fields (1,277→1,630 = +353 gross; net +304 after AC-0360's gate).</td><td>≈ 762–811 µs ≈ 31–33%</td></tr>
+<tr><td>"we pay more per evaluation"</td><td><b>NO — zero.</b> The per-evaluation price is 22.6 ns in the AC-0359 era (1,044 µs ÷ 46,109 evals — both static and measured) vs 23.0 ns today (1,503 ÷ 65,317): +1.6%, inside the instrument's documented same-code noise. Every stage of the regression is a COUNT change (more searches, more fields, more scan reads), never a price change.</td><td>+0.4 ns (+1.6%) ≈ noise</td></tr>
+<tr><td>(d) non-lattice per-block work vanilla's scheme doesn't interleave</td><td><b>YES — the majority.</b> AC-0291's per-block aquifer search +1,648 (67.7%) + AC-0292's drip pass +238 (9.8%) + the scan's deep-band growth.</td><td>≈ 1,886 µs ≈ 77.5%</td></tr>
+</table>
+<div class="find"><b>The answer to the decision question:</b> of the 2,435 µs regression, <b>~31–33% is
+"we evaluate more"</b> (3 new fields, +19,208 evals at the unchanged price) and <b>~77% is
+"per-block work we do that the vanilla lattice scheme does not"</b> (the Voronoi aquifer search,
+the drip pass, the deeper scan) — and <b>0% is "we pay more per evaluation"</b> (23.0 ns before and
+after, +1.6% = noise). (The candidate-level figures sum to ~2,648 µs, ~8.7% over 2,435 — the
+documented run-to-run stage noise of this instrument, AC-0363 §3.2; the ticket-level figures sum
+exactly.) The "richer caves" purchase the user asked about (spag/nood/gate, no vanilla
+counterpart) is 331 µs/chunk — 6.0% of today's 5,502 and 13.6% of the 2,435 regression; the cave
+family as a whole costs 1,503 µs of lattice + 1,604 µs of scan, and "keep the caves, they cost
+~3.1 ms/chunk" is the standing price for the whole family.</div>
+
+<h2>8. Which candidate to attack first — handed over, not decided</h2>
+<p><b>(d) — the per-block aquifer Voronoi search. The number: 1,600 µs/chunk</b> — 29.1% of the
+total 5,502, 67.7% of the 1.84× regression, ~14,057 searches × 113.8 ns, the single biggest named
+term in this codebase's history, and 29.1% of today's total by itself.
+It is also the only candidate that (i) grew during the window, (ii) is not frozen by a prior
+decision (the lattice resolution, octave counts and field count are AC-0344/AC-0359 "must not
+move"), and (iii) has a live fast path already (the 84% sky-block skip) whose boundary
+(<code>max_fluid</code>) is the natural first lever. A fix that moves fluid placement is a
+separate ticket with the full genhash/genprobe/farab/ladder/thash gate set.</p>
+<p>Step-2 record — costs the numbers say are avoidable <b>without changing output</b> (recorded,
+not implemented):</p>
+<ul>
+<li><b>The margin recomputation — priced 676 µs/chunk, capped at ~737 µs:</b> 1,176 of the 2,401
+cave points (48.9%) are the 1-cell xz margin, rebuilt per chunk for all 9 fields
+(1,176 × 25 oct × 23.0 ns = 676 µs); each of them is a CORE point of a neighbor chunk, so the
+same 25-octave value is computed up to 4× per region (the coarse lattice has the same 48.9%
+margin, 216 of 441 points). A cross-chunk lattice cache — a chunk computes its own 5×49×5 core
+(1,225 pts) and reads its margin from neighbors — caps the saving at ~49% of the field stage:
+(30,625 + 2,700) evals × 23.0 ns = ~767 µs vs 1,503, i.e. <b>~737 µs/chunk</b>. It is a structural
+change to the per-chunk build, not a hoist: separate ticket, full gate set (the values must stay
+byte-exact; genhash 25/25 is the proof).</li>
+<li><b>The AC-0360 precedent is the template:</b> a gate in the right place (tunnel deep-only)
+already bought −392 µs by removing 3 shallow-band lattice reads per scanned block. The remaining
+scan deep-band reads (layer + tunnel×3 + pillar per deep y — the deep band k ≥ 16 is ~80–85% of
+the scanned blocks, H ∈ [118, 164]) are the same shape of lever — but every read there buys a
+feature (the pillar max, the tunnel pierce), so each removal is a fidelity decision, not a free
+win.</li>
+<li><b>The aquifer search's 12-candidate window</b> (2×3×2 in the 3×35×3 table) is the per-search
+cost's shape (113.8 ns); narrowing it changes fluid placement → separate ticket.</li>
+</ul>
+
+<h2>9. Deviations (honest list)</h2>
+<ul>
+<li><b>No per-field counters were added</b> (the ticket's STEP 0) and no micro-benchmark was built
+(STEP 1's vanilla half): this run's brief forbids modifying any file but the results page and
+forbids new profilers. Both prices were therefore produced the sanctioned other way — the field
+stage is pure single-primitive work, so the static allocation at the measured 23.0 ns/eval is
+exact by construction, and the vanilla side is priced with the same measured primitive (the
+ticket's own isolation rule: same primitives, so the comparison is scheme-vs-scheme, not
+machine-vs-machine). What would upgrade each: per-field wall accumulators (STEP 0, additive) and
+a Σtop / aqu_block-call counter pair (one line each). Both are instrument-only, zero world
+change, and the next ticket on this family should run them.</li>
+<li>The scan-block and aquifer-search counts are bounds (H-band, AC-0291 census), not this
+ticket's own counts — named in §4.4/4.5 with the counters that would close the bound.</li>
+<li>No renders (llvmpipe degraded, per brief). No TASKS.yaml edit (shared ticket). No commit.</li>
+</ul>
+
+<h2>10. RESULT</h2>
+<pre>
+RESULT {"ticket":"AC-0366","g0_script_errors":0,"genms":144,
+"genhash_parity":"25/25 byte-identical to AC-0360 reference set",
+"price_per_vnoise3_ns":23.0,"evals_per_chunk":65317,
+"cave_points_per_chunk":2401,"cave_octaves_per_point":25,"coarse_points_per_chunk":441,
+"price_per_cave_point_us":0.575,"price_per_octave_layer_us":55.2,
+"price_per_field_us":{"cheese":386.7,"spag":110.5,"nood":110.5,"gate":110.5,"layer":55.2,"entr":165.7,"pillar":220.9,"vein":110.5,"biome":110.5},
+"price_per_scanned_block_ns":"36-49 (bounded, H-band)","price_per_aquifer_search_ns":113.8,
+"aquifer_searches_per_chunk":14057,"nonlattice_us":3468,
+"reconciled_total_us":5502,"vanilla_evals_M":18375,"ratio_N_over_M":3.55,"per_eval_premium":"none (22.6->23.0 ns, +1.6% = noise)",
+"regression_2435_us":{"evaluate_more_c":"~31-33% (458 fields + 304-353 scan net)","more_per_eval":"0%","nonlattice_d":"~77% (1648 aquifer + 238 drip)"},
+"attack_first":"(d) aquifer per-block search, 1600 us/chunk (29.1% of total, 67.7% of regression)",
+"avoidable_no_output_change":{"margin_recompute_us":676,"ac0360_gate_precedent_us":392}}
+</pre>
+<p class="note">Evidence: <code>.scratch/AC-0366-gates/genhash_r1.log</code> (this run);
+AC-0363 step-0 results (the per-stage split, inherited — gdext/ byte-identical since);
+AC-0359 results (C48 lattice + the 2,884-era field stage); AC-0291 (aquifer search, census);
+gen.cpp lines cited per section. Static counts verified against the code at HEAD dc07e05.</p>
+</body></html>

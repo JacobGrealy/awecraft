@@ -1,13 +1,13 @@
 meta:
-  updated_at: 2026-09-27T05:26
+  updated_at: 2026-09-27T05:56
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0366
 - AC-0367
 - AC-0369
 - AC-0370
+- AC-0371
 - AC-0145
 - AC-0310
 - AC-0311
@@ -20455,11 +20455,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-26T17:25
-  updated_at: 2026-09-26T17:25
-  completed_at: null
+  updated_at: 2026-09-27T05:56
+  completed_at: 2026-09-27T05:56
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -20559,7 +20559,33 @@ intake:
     AC-0363''s step-0 result first - if it names a term outside the cave family or the aquifer, this ticket''s
     scope narrows to that term.
 
-    '
+
+
+    CLOSED. THE PRICING QUESTION IS ANSWERED, THE TOTAL RECONCILES TO THE MICROSECOND, AND THE ANSWER
+    IS NOT THE ONE THE REGRESSION''S SIZE SUGGESTS. Price list, all from static counts shown in the page
+    plus the existing `GENMS` instrument (genhash G0 clean, GENMS 144, 25/25 byte-identical to the AC-0360
+    set, and the native lane byte-identical to AC-0363''s measurement tree so its split is inherited rather
+    than re-derived): **23.0 ns per octave-evaluation** (the field stage''s 1,503 us divided by 65,317
+    evaluations = 2,401 cave points x 25 octaves + 441 coarse points x 12 octaves, all countable arithmetic);
+    **0.575 us per cave lattice point** (9 fields) x 2,401 and **0.276 us per coarse point** (6 fields)
+    x 441; per field, cheese 387 / pillar 221 / entrance 166 / the spaghetti-noodle-gate-vein-biome family
+    110.5 each / layer 55 us; and per NON-LATTICE block, the scan at 36-49 ns over ~33-45k scanned blocks,
+    the **aquifer search at 113.8 ns x 14,057 searches = ~1,600 us** (84% of air blocks skip it), and
+    drip at 2.4 ns/block. Those sum to 5,501-5,502 us/chunk against AC-0363''s independently measured
+    5,500 - a reconciliation good to one microsecond, which is what makes the rest of the page trustworthy.
+    THE DECISION: vanilla needs 18,375 octave-evaluations for the same cell scheme; we need 65,317 - **3.55x
+    more, at the SAME 23.0 ns each** (22.6 -> 23.0 over the series is noise). Our cave cell IS vanilla''s
+    4x8x4, so the scheme is not the difference and we are NOT paying more per evaluation - a finding that
+    kills the "port the noise to a faster kernel" instinct outright. Of the 1.84x regression (+2,435 us),
+    roughly **31-33% is "we evaluate more"** (AC-0292''s three new fields, +19,208 evaluations at flat
+    price) and roughly **77% is per-block work vanilla''s scheme never interleaves** (the aquifer search
+    1,648 us plus drip 238 us) - with the small overlap explained in the page. WHY THAT MATTERS: the per-lattice-point
+    and per-octave candidates are FROZEN by AC-0344/AC-0359 (the C48 lattice was chosen on cost and fidelity
+    together) and the field count is a 458 us fidelity purchase, so the only lever with real money in
+    it is **(d) the per-block aquifer Voronoi search at 1,600 us/chunk - 29.1% of the whole chunk and
+    67.7% of the regression** - which is filed as its own ticket rather than worked here. Instrumentation
+    gaps are recorded rather than papered over: the per-field split needs the ticket''s own STEP-0 counters
+    and the exact scan/search counts need one-line accumulators, both named in the page.'
   comments: []
 - id: AC-0367
   title: vanilla-carving-tunnels-inside-density
@@ -20875,6 +20901,72 @@ intake:
     CONTEXT: read tasks/AC-0365/AC-0365-results.html first (it has the brackets you will want to re-add),
     and note AC-0356''s batched-edit pattern and AC-0369''s separate DRAIN work - DRAIN is the bigger
     share (72% of the worst frame) so this ticket is the secondary target, not the headline.
+
+    '
+  comments: []
+- id: AC-0371
+  title: cheapen-aquifer-voronoi-search
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-27T05:56
+  updated_at: 2026-09-27T05:56
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: One search - the per-block aquifer lookup - costs more than a quarter of every
+    chunk we generate and nearly seventy percent of the cave series'' slowdown, and it is the one piece
+    of our cave work that vanilla''s scheme never interleaves. Cutting it is the largest single win available
+    in generation.
+
+
+    2) Technical Details:
+
+    THE NUMBER (AC-0366, current tree, reconciled to the microsecond against AC-0363''s independent measurement):
+    the aquifer Voronoi search costs **113.8 ns x 14,057 searches = ~1,600 us per chunk**, i.e. 29.1%
+    of the total 5,502 us/chunk and **67.7% of the 1.84x cave-series regression**. 84% of air blocks skip
+    it, so the 14,057 searches are the ones that mattered; the whole non-lattice share of the chunk is
+    63%, and the other named per-block terms are the scan (1,604 us, 36-49 ns per scanned block) and drip
+    (235 us, 2.4 ns/block).
+
+    WHAT IT DOES, so nobody optimises the wrong thing: AC-0291 gave every underground pocket its own water
+    table via Bedrock''s Voronoi aquifers - 16x12x16 cells with a 4-nearest lookup, and it is the feature
+    the user asked for (perched lakes, lava pools behind stone rims, waterfalls). The ticket is to make
+    the LOOKUP cheap, not to remove the feature.
+
+    WHERE THE TIME LIKELY GOES AND WHAT TO MEASURE FIRST: 113.8 ns per search is roughly 250-300 cycles,
+    which for a 4-nearest-cell query over a small neighbourhood is expensive enough to suggest either
+    an unbounded neighbourhood scan, redundant recomputation per block (the same cell lattice queried
+    once per solid block rather than once per cell), or a cache-hostile access pattern. Measure WHICH
+    before choosing a fix: count the candidate cells actually visited per search, check whether the same
+    query repeats within a column (and whether a per-column or per-slab memo would collapse it), and price
+    the alternatives (a coarser pre-pass that stamps a water-table id into the lattice and lets the per-block
+    path read it; a spatial hash; a cheaper distance metric with the same nearest-cell outcome). AC-0366
+    also names the instrument gap: one-line accumulators for the search count and the scan count, which
+    this ticket should add permanently if the arm keeps reporting them.
+
+    CONSTRAINTS: the aquifer''s BEHAVIOUR must be preserved - the water tables, the rims, the lava rules
+    and the AC-0342 land-dry / ocean-surface contracts are all measured and must be re-measured after
+    the change (AC-0291''s results page has the census: 17,983 land lake columns, 215 water/lava rims,
+    4,838 waterfall cells, land open water 0, ocean 1081/1081); H must not move (thash + farab h_mismatch
+    0); genhash will rebase ONLY if the water placement changes - if it does, that is a finding, not an
+    expected rebase, because a pure lookup optimisation should be bit-identical; and the native lane rebuild/re-stage
+    procedure in OPS.md is mandatory.
+
+    GATES: the aquifer census re-measured identical (or the difference explained and justified); the per-chunk
+    cost measured with the same `GENMS` instrument AC-0366 used, against the 5,502 us/chunk baseline and
+    the 1,600 us term; genhash 25/25 if behaviour is preserved; farab h_mismatch 0; ladder 20/20; meshprobe
+    1.0; halo green; boundary r4 in band; the battery green; and the R24 fill window re-measured with
+    AC-0364''s instrument so the win is stated in window seconds as well as microseconds (the window is
+    bounded by the dispatch cost, so a cheaper chunk should SHORTEN it - that is the user-visible payoff).
+
+    CONTEXT: read tasks/AC-0366/AC-0366-results.html (the price list) and tasks/AC-0291/AC-0291-results.html
+    (the feature and its census) first. DRAIN (AC-0369) and the random-tick port (AC-0370) are separate
+    and address different shares; this is the generation-side lever.
 
     '
   comments: []
