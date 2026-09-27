@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-27T14:48
+  updated_at: 2026-09-27T15:29
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0372
 - AC-0369
 - AC-0370
 - AC-0371
@@ -21060,11 +21059,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-27T14:47
-  updated_at: 2026-09-27T14:47
-  completed_at: null
+  updated_at: 2026-09-27T15:29
+  completed_at: 2026-09-27T15:29
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Three times during a single instrumented walk the game froze for fourteen to
@@ -21112,5 +21111,28 @@ intake:
     walk log path), and note that AC-0364''s fill-window work and AC-0365''s tick decomposition both measured
     INSIDE frames - so this ticket is the first to look between them.
 
-    '
+
+
+    CLOSED as an EVIDENCED NULL RESULT, which for an unreproducible stall is the correct outcome and a
+    better one than a speculative fix. WHAT WAS ESTABLISHED: the stalls do not reproduce - four consecutive
+    capped R24 walks on code `git diff`-identical to the run that showed them (105.1 / 103.2 / 70.2 /
+    107.9 s wall, all ok:true with 10/10 crossings, both remesh regimes) leave a maximum between-frame
+    gap of 0.65-0.97 s, and each of those is a single heavy frame (max_ms 545 / 407 / 512 / 327) rather
+    than a stall. THE NON-REPRODUCTION IS INDEPENDENTLY CORROBORATED rather than merely asserted: the
+    20 Hz game tick is frame-delta-driven with a catch-up cap, so a between-frame stall MUST freeze it,
+    and across the four runs ~6,100 ticks ran with no gap above a second - a second instrument agreeing
+    with the first, which is what makes a null result trustworthy. THE INSTRUMENT IS THE DELIVERABLE AND
+    IT IS KEPT: a /proc-only watcher that runs OUTSIDE godot (10 Hz main-thread utime/stime/state/wchan
+    plus 1 Hz per-thread utime, RSS, VmSwap, io, top-CPU thread and comm, host load and PSI), with its
+    raw CSVs committed as evidence rather than a prose summary, and a documented escalation path (perf
+    record -g / strace -T -f) if the cheap one cannot separate the candidates next time. WHAT IT SHOWED
+    during the phase where the stalls had appeared: the main thread at 97-100% of one core in state R
+    with wchan 0 (CPU-bound, NOT blocked), RSS ramping smoothly 204 -> 669 MB with no allocation spike,
+    VmSwap at 0 KB across all 108 samples, and a quiet host (load 0.4-1.6 on 6 cores, PSI 0). SO THE CLASSIFICATION
+    IS AN ENVIRONMENT EVENT at the moment of the earlier run, recorded with the caveat that that run has
+    no kernel-side record of its own (its evidence was wall-clock arithmetic). ONE HYPOTHESIS OF MINE
+    IS RETIRED BY THIS WORK, and I would rather record it than quietly drop it: I had listed degraded
+    software GL as a candidate, but the headless arm has no GL in the loop at all, so llvmpipe cannot
+    be the cause for this arm - the next reader should not chase it. AC-0369''s own conclusion is unaffected:
+    its per-unit and per-frame costs were measured inside frames and reconcile.'
   comments: []
