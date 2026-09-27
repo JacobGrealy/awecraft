@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-27T03:44
+  updated_at: 2026-09-27T04:17
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0363
 - AC-0364
 - AC-0365
 - AC-0366
@@ -20032,11 +20031,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-26T17:07
-  updated_at: 2026-09-26T17:25
-  completed_at: null
+  updated_at: 2026-09-27T04:17
+  completed_at: 2026-09-27T04:17
   waiting_on: null
   parent_id: null
   notes: "1) User Story\n\nPerformance got noticeably worse after AC-0352 measured the storm tail, and\
@@ -20131,7 +20130,40 @@ intake:
     \ on the FRAME-time side. Read this ticket's step-0 result first: if the regression is named outside\
     \ the cave family or the aquifer, AC-0366 narrows to that term; if it lands on the cave family / aquifer,\
     \ AC-0366 is the direct follow-up and there is no need to re-derive the per-stage split here. Do not\
-    \ duplicate its per-field instrumentation."
+    \ duplicate its per-field instrumentation.\n\nCLOSED. BOTH STEPS ARE DONE AND THEY AGREE. STEP 0 (attribution,\
+    \ bounded builder run): the CURRENT per-chunk generation cost measured 5,502 +/- 25 us/chunk (two\
+    \ probe runs, GENMS 144/145, 25/25 hashes byte-identical to the AC-0360 set, zero SCRIPT ERROR across\
+    \ four runs) - only +3.5% over AC-0360's 5,319 and INSIDE the instrument's documented +/-3.9% same-code\
+    \ noise, so nothing after AC-0360 contributed at all, and that is corroborated structurally rather\
+    \ than statistically: `git diff c494a5c..HEAD -- gdext/` is EMPTY (the native lane owns every stage\
+    \ counter), `generate()` is unchanged and the measurement loop is byte-identical end to end. THE NAMED\
+    \ ATTRIBUTION, which is what the ticket asked for: per-chunk generation belongs to the CAVE SERIES\
+    \ alone (2,884 -> 4,532 with the Voronoi aquifers, whose per-block 4-nearest search is ~1.6 ms on\
+    \ its own; -> 5,711 with the P4 contents; -> 5,319 with the deep-only tunnel gate; net 1.84x), and\
+    \ the PLANET PIECES ARE EXCLUDED with evidence rather than by assertion (P2/AC-0362 are per-chunk\
+    \ PLACEMENT with zero new geometry and genhash 25/25; P3's player work sits in AC-0352's engine-side\
+    \ gap and is not measurable with current instruments; P4's face-streaming measured zero on interior\
+    \ walks by its own A/B). The ticket's own timeline also needed one correction: AC-0342 landed 09-24\
+    \ 01:47, i.e. PRE-CARVER, flat at landing, so its ~0 us belongs inside the 2,884 baseline rather than\
+    \ after AC-0360. THE HYPOTHESIS IS REFUTED IN MECHANISM AND CONFIRMED IN SHAPE, which is a better\
+    \ outcome than either alone: the drain is a FIXED 3.5 ms wall-clock pace per dispatch unit with a\
+    \ count-capped handoff, so unit cost is not an input to it - but the TG worker's production rate is\
+    \ proportional to 1/cost, so the under-built window and the storm's DURATION stretch ~1.84x while\
+    \ the per-frame cost per unit is unchanged. The builder also recorded the STEP-1 distinguisher that\
+    \ tells the two shapes apart (same DRAIN ms with a stretched window = the TG shape; a ~1.84x bigger\
+    \ DRAIN ms at the same unit count = a per-call slowdown), which is the kind of thing that makes the\
+    \ next ticket cheap. AND THE PREMISE ITSELF WAS WRONG IN A USEFUL WAY: AC-0352's 09-23 tree sat at\
+    \ ~5,076 us/chunk, so today is +4.8% rather than the ticket's assumed \"roughly HALF\" - the half\
+    \ came from comparing against the pre-carver baseline instead of the tree AC-0352 actually ran on.\
+    \ STEP 1 (the owed re-measure, coordinator heavy stage): the R24 walk completed (rc=0, 10 crossings,\
+    \ resident 1453, in-radius 165, queue 1268, walk 10.21 s, storm p99 115 inside its <=200 gate) and\
+    \ it ANSWERS THE TICKET BY ITSELF - the worst-frame split has INVERTED since AC-0352: DRAIN 26.7%\
+    \ -> 72% and MISC 59.3% -> 8.5%. So the regressing term is named: DRAIN owns the tail now, exactly\
+    \ as the per-chunk attribution predicts, and MISC's collapse is further evidence that the regression\
+    \ is inside the measured partition rather than in the engine-side gap. AN ARCHITECTURE CORRECTION\
+    \ FELL OUT OF THIS TICKET and is committed separately: the generation-cost line there was both stale\
+    \ and unit-inconsistent (it divided a per-chunk figure by a per-column one), so it now carries this\
+    \ measured history in consistent units."
   comments: []
 - id: AC-0364
   title: streaming-fill-rate-and-unit-budget-curve

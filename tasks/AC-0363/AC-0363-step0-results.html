@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0363 STEP 0 — current per-chunk generation cost + named attribution</title>
+<style>
+body{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;max-width:110em;margin:1.5em auto;padding:0 1em;color:#1a1a1a;line-height:1.45}
+h1{font-size:1.5em;border-bottom:3px solid #2563eb;padding-bottom:.3em}
+h2{font-size:1.2em;margin-top:1.8em;color:#1e40af;border-bottom:1px solid #cbd5e1;padding-bottom:.2em}
+h3{font-size:1.05em;margin-top:1.2em;color:#334155}
+table{border-collapse:collapse;margin:1em 0;font-size:13px}
+th,td{border:1px solid #cbd5e1;padding:.35em .6em;text-align:left;vertical-align:top}
+th{background:#eff6ff}
+.ok{background:#dcfce7}.warn{background:#fef9c3}.bad{background:#fee2e2}
+code,pre{background:#f1f5f9;padding:.1em .3em;border-radius:3px}
+pre{padding:.8em;overflow-x:auto;font-size:12px;line-height:1.35}
+.note{background:#eff6ff;border-left:4px solid #2563eb;padding:.6em 1em;margin:1em 0}
+.find{background:#fefce8;border-left:4px solid #eab308;padding:.6em 1em;margin:1em 0}
+</style>
+</head>
+<body>
+
+<h1>AC-0363 STEP 0 — current per-chunk generation cost + regression attribution to named terms</h1>
+<p><b>Role:</b> bounded measurement run (no fix, no re-baseline, no TASKS.yaml edit, no renders).
+Tree: <code>bc597d0</code> (2026-09-27, post AC-0362 seam fill; last world-affecting commit
+<code>b916fc2</code> AC-0362, 2026-09-27 03:42). <b>Verdict: DONE (STEP 0).</b></p>
+<p><b>Bottom line:</b> the current per-chunk full-path generation cost is
+<b>5,502 ± 25 µs/chunk</b> (two probe runs; GENMS 144/145) — <b>no material change since AC-0360's
+5,319</b> (+3.5%, inside this instrument's documented same-code box noise of ±3.9%, on a provably
+byte-identical generation code path). <b>Nothing after AC-0360 contributed to per-chunk generation
+cost.</b> The entire per-chunk regression is the cave series (2,884 → 5,319 µs = 1.84×), and the
+planet pieces are EXCLUDED from generation cost by byte-identical genhash + zero C++ changes.
+The ticket's causal hypothesis is <b>refuted in its literal mechanism and confirmed in its shape
+via a different route</b> (§5), and the "AC-0352's world had half today's per-column generation"
+premise is <b>REFUTED by the cost sequence</b> (it was 5,076 µs/chunk, +4.8% of today, not half) —
+but the R24 row still needs re-measuring for the reasons in §6.</p>
+
+<h2>1. What this run measured</h2>
+<ul>
+<li>The CURRENT per-chunk full-path generation cost via the standing <code>genhash</code> arm
+(<code>GENMS</code> over 25 full-path chunk generations — the same instrument as the
+2,884 / 4,532 / 5,711 / 5,319 µs sequence), plus the full C++ per-stage set from
+<code>AweGen.gen_timing()</code> (field / heights / scan / fill / veg / pallet / carve / aquifer /
+drip / far) read from a temporary print on the same 25-gen loop.</li>
+<li>Attribution of any delta vs 5,319 to NAMED tickets that landed since AC-0360, and the
+per-chunk / per-frame / neither classification of each.</li>
+<li>A code-reading of the drain pacing (the ticket's causal hypothesis) and the answer on
+AC-0352's re-measure need.</li>
+</ul>
+
+<h2>2. Runs and gates</h2>
+<p>Every godot run: <code>HOME=/tmp/dsh_home</code> in the same command, <code>ulimit -v 8388608</code>,
+absolute engine path, one at a time (pgrep-checked before each; no other agent held the slot),
+G0 judged on zero <code>SCRIPT ERROR</code> lines, not rc. Logs:
+<code>.scratch/AC-0363-gates/</code>.</p>
+<table>
+<tr><th>run</th><th>rc</th><th>SCRIPT ERROR</th><th>GENMS</th><th>result</th></tr>
+<tr><td>genhash vanilla (pristine tree)</td><td>0</td><td>0</td><td>144</td><td class="ok">25/25 hashes BYTE-IDENTICAL to the AC-0360 reference set (<code>.scratch/AC-0360-gates/genhash_r1.log</code>)</td></tr>
+<tr><td>genhash + temp stage probe (run 1)</td><td>0</td><td>0</td><td>144</td><td class="ok">AC0363STAGE logged — §3.2; hashes identical</td></tr>
+<tr><td>genhash + temp stage probe (run 2)</td><td>0</td><td>0</td><td>145</td><td class="ok">stability pair — §3.2; hashes identical</td></tr>
+<tr><td>genhash vanilla (post-probe-removal, pristine proof)</td><td>0</td><td>0</td><td>145</td><td class="ok">25/25 identical to the AC-0360 set; <code>git diff</code> of harness.gd EMPTY (probe fully removed)</td></tr>
+</table>
+<p>The temp probe was two lines in <code>_genhash_print</code> (<code>reset_gen_timing()</code> before
+the loop, <code>gen_timing()</code> print after) — the AC-0360 temp-arm pattern; removed before the
+final run, leaving <code>godot/scenes/harness.gd</code> byte-identical to HEAD.</p>
+
+<h2>3. STEP 0 — the measurement</h2>
+<h3>3.1 The per-chunk figure, against the sequence</h3>
+<table>
+<tr><th>point</th><th>ticket</th><th>date</th><th>per-chunk µs</th><th>GENMS</th><th>vs 2,884</th></tr>
+<tr><td>pre-carver baseline (post-C48)</td><td>AC-0359</td><td>09-24</td><td>2,884</td><td>76-77</td><td>1.00×</td></tr>
+<tr><td>+Voronoi aquifer (per-block 4-nearest)</td><td>AC-0291</td><td>09-24</td><td>4,532</td><td>118</td><td>1.57×</td></tr>
+<tr><td>+pillars/veins/biome + drip pass</td><td>AC-0292</td><td>09-25</td><td>5,711</td><td>147</td><td>1.98×</td></tr>
+<tr><td>+deep-only tunnel gate (scan work removed)</td><td>AC-0360</td><td>09-25</td><td>5,319</td><td>144/139</td><td>1.84×</td></tr>
+<tr><td><b>CURRENT tree (this run)</b></td><td><b>AC-0363</b></td><td><b>09-27</b></td><td><b>5,502 / 5,527</b></td><td><b>144 / 145</b></td><td><b>1.91× / 1.92×</b></td></tr>
+</table>
+<p>5,502 ± 25 µs/chunk vs the 5,319 standing = <b>+3.5%</b>. The instrument's own documented
+same-code spread is at least that wide: AC-0360's BEFORE read 5,490 on code identical to AC-0292's
+5,711 (−3.9%, recorded there as "machine noise — same code, different box state"), and its own
+drip stage swung 185→231 µs (+25%) between same-day runs, recorded as run-to-run noise. GENMS
+144/145 sits exactly on AC-0360's 144/139. <b>Reading: no change since AC-0360; the cave series
+(1.84×) is still the entire per-chunk story.</b></p>
+
+<h3>3.2 Per-stage split (µs/chunk, the <code>gen_timing()</code> C++ counters ÷ 25 chunks)</h3>
+<table>
+<tr><th>stage</th><th>AC-0360 (same instrument, 09-25)</th><th>this run 1</th><th>this run 2</th><th>Δ vs AC-0360 (run 1)</th><th>reading</th></tr>
+<tr><td>field</td><td>1,479</td><td>1,503</td><td>1,509</td><td>+24 (+1.6%)</td><td>cleared (noise)</td></tr>
+<tr><td>scan</td><td>1,581</td><td>1,604</td><td>1,607</td><td>+23 (+1.5%)</td><td>cleared (noise)</td></tr>
+<tr class="warn"><td>fill</td><td>1,934</td><td>2,066</td><td>2,075</td><td>+132 (+6.8%)</td><td>the largest mover — see the noise argument below</td></tr>
+<tr><td>drip</td><td>231</td><td>235</td><td>236</td><td>+4 (+1.7%)</td><td>cleared</td></tr>
+<tr><td>aquifer</td><td>29</td><td>29</td><td>38</td><td>+0 / +9</td><td>cleared (small stage)</td></tr>
+<tr><td>carve</td><td>16</td><td>17</td><td>15</td><td>+1</td><td>cleared</td></tr>
+<tr><td>veg</td><td>13</td><td>13</td><td>14</td><td>0</td><td>cleared</td></tr>
+<tr><td>heights</td><td>32</td><td>34</td><td>34</td><td>+2</td><td>cleared</td></tr>
+<tr><td>pallet / far</td><td>0 / 0</td><td>0 / 0</td><td>0 / 0</td><td>0</td><td>cleared (the genhash loop is full-path only: cols_full 25, cols_skip 0, cols_far 0)</td></tr>
+<tr><th>total</th><th>5,315 (reported 5,319)</th><th>5,502</th><th>5,527</th><th>+187 (+3.5%)</th><th>inside the documented ±3.9% same-code band</th></tr>
+</table>
+<p>The fill +132 µs is the one term above the ±2% noise line, but (i) the code it measures
+(the fill loop in <code>generate_resl</code>) is byte-identical to AC-0360 — <b>nothing after
+AC-0360 touches the C++ lane at all</b> (§4.1) — and (ii) this instrument has documented same-code
+swings of the same size on individual stages (drip +46 µs at AC-0360; total ±3.9% between
+AC-0292/AC-0360). The only code that could have moved fill since AC-0360 is GDScript outside the
+counters — and the wrapper <code>WorldGen.generate</code> is unchanged (§4.1). <b>Reading: fill is
+cleared as noise; no stage MOVED.</b> A stage that grew would be the target; every stage is named
+as cleared.</p>
+
+<h3>3.3 Instrument validation (the AC-0362 trap, applied to this run's own instrument)</h3>
+<ul>
+<li><b>Counters, not a transcription.</b> The per-stage numbers are the C++ atomics
+(<code>g_t_*_us</code>) accumulated inside the SHIPPED <code>generate_resl</code> (gen.cpp) — the same
+counters AC-0292/AC-0360 divided by 25 to produce the standing sequence. No python/GDScript
+re-implementation of the generation was written or believed.</li>
+<li><b>Reconciled against GENMS.</b> Stage sums: 137,557 µs (run 1) / 138,162 µs (run 2) over the
+25-gen loop vs GENMS 144/145 ms — the 6.4/6.8 ms gap is the MD5 + PackedByteArray boundary + loop
+overhead, same structure as AC-0360's run (its 144 ms GENMS vs 133 ms of stages). The arithmetic
+closes.</li>
+<li><b>Counter granularity checked.</b> <code>g_t_cols_full</code> increments ONCE PER CHUNK (gen.cpp
+~2225, after the per-chunk skip gate) despite its name — the reading <code>cols_full = 25</code> is
+25 chunks, so ÷25 is exact. (AC-0363's STEP-1 addition should read that line before quoting
+"columns/second" from the r16 arm's <code>gen_timing</code> block — the mix fields are
+chunk-mix, not column-mix.)</li>
+<li><b>Same world, same path.</b> 25/25 hashes byte-identical to the AC-0360 reference in all
+four runs; <code>WorldGen.generate → gen_cpp().generate_resl</code> is C++-only and unchanged
+(grep-verified: the only generator.gd diff since AC-0360 is in <code>generate_face</code> + the P4
+blend helpers, not <code>generate</code>).</li>
+</ul>
+
+<h2>4. Attribution — the named candidates, classified</h2>
+<h3>4.1 The decisive fact: nothing after AC-0360 touches the generation code path</h3>
+<p><code>git diff c494a5c..HEAD -- gdext/</code> is <b>EMPTY</b> — the entire C++ lane
+(<code>gen.cpp</code>, where every stage counter is accumulated) is byte-identical to AC-0360.
+The GDScript on the home-pair path is unchanged: the only <code>generator.gd</code> diff is
+<code>generate_face</code> (the planet face path) + the four P4 blend helpers; <code>generate()</code>
+— the exact call the genhash arm makes — is untouched. The world data is byte-identical (25/25).
+Therefore the measurement loop executes <b>byte-identical code end to end</b>, and any reading
+difference is box noise, full stop. Files that DID change since AC-0360: <code>sphere_math.gd
++401</code>, <code>player.gd +430</code>, <code>chunk.gd +54</code>, <code>world.gd +856</code>,
+<code>generator.gd +108</code> (face path only) + small autoload diffs — all planet/seam work,
+none on the home-pair generate path.</p>
+<h3>4.2 The candidates, named and classified</h3>
+<table>
+<tr><th>ticket</th><th>landed</th><th>class</th><th>evidence</th></tr>
+<tr><th colspan="4">(a) per-chunk GENERATION cost — the cave series: the whole regression</th></tr>
+<tr><td>AC-0290 carver</td><td>09-24 13:59</td><td>(a) +20-23 µs/chunk</td><td>the <code>carve_us</code> counter exists for it (reads ~16 µs today — §3.2); GENMS flat at landing (77-78)</td></tr>
+<tr><td>AC-0291 Voronoi aquifer</td><td>09-24 20:43</td><td>(a) 2,884→4,532 (+57%)</td><td>the per-block 4-nearest search, ~1.6 ms/chunk (fill 515→1,910); GENMS 77-78→118</td></tr>
+<tr><td>AC-0292 P4 contents</td><td>09-25 02:34</td><td>(a) 4,532→5,711 (+26%)</td><td>field 1,502 / scan 1,630 / fill 2,129 / drip 238 — the new drip stage; GENMS →147</td></tr>
+<tr><td>AC-0360 tunnel gate</td><td>09-25 07:50</td><td>(a) 5,711→5,319 (−3.1%)</td><td>scan 1,650→1,581 — the short-circuit removed lattice reads, as predicted</td></tr>
+<tr><td><b>AC-0342 fluid-before-carve</b> <span class="warn">(timeline correction)</span></td><td><b>09-24 01:47 — BEFORE the carver, not after AC-0360</b></td><td>(a) but ≈0 µs</td><td>the fill-loop water gate is a one-condition swap (he→H); its own landing A/B read GENMS <b>134/133 — flat</b>. Its (zero) cost is INSIDE the 2,884 pre-carver baseline, so it is not a post-AC-0360 contributor at all. Git: commit a7c33c0, 09-24 01:47; the genhash rebase chain places it before AC-0359's</td></tr>
+<tr><th colspan="4">(b) per-chunk placement / per-frame streaming — the planet pieces + seam</th></tr>
+<tr><td>AC-0307 (P2) rigid placement</td><td>09-25 12:23</td><td>(b) per-chunk PLACEMENT</td><td><code>column_transform</code> applied to the chunk node at attach — not a generation cost (the data never changes: genhash 25/25, "placement touched no terrain"); zero new vertices/columns/mesh/collision</td></tr>
+<tr><td>AC-0362 seam fill</td><td>09-27 03:42</td><td>(b) per-chunk placement, negligible</td><td>a constant (1+S) scale + constant origin shift on the SAME transform; "ZERO new vertices, columns, mesh or collision"; genhash 25/25 byte-identical (re-confirmed in this run)</td></tr>
+<tr><td>AC-0309 (P4) blend band + face streaming</td><td>09-26 23:25</td><td>(b) per-frame, measured ZERO on interior walks</td><td>the <code>_face_stream</code> pair + recenter calls run in world.gd, but the ticket's own A/B caught and fixed the interior-walk leak (all eight edges' blend bands: resident 272 / p95 97 → the r30 edge-normal spatial gate → resident 93 / p95 45-49, in band); home-pair generation byte-identical (genhash 25/25 — the blend band touches face chunks only, which the genhash arm never generates)</td></tr>
+<tr><td>AC-0308 (P3) consumers</td><td>09-25 16:55</td><td>(b) per-frame player work — <b>not measurable with the current instruments</b></td><td>+145 lines through the player's physics path (mining/placement/walk frames, the flat-frame DDA) — lands exactly in the near-constant ~16-17 ms engine-side gap AC-0352 measured (physics/render-server/scene-tree, outside the wprof partition, which has no per-stage counter for it). Reported as the ticket's STEP-2 escape hatch demands: a code-path placement, not a measured number. Terrain untouched (genhash 25/25)</td></tr>
+<tr><th colspan="4">(c) neither</th></tr>
+<tr><td>AC-0306 (P1a) grid lock</td><td>09-25 09:45</td><td>(c) no hot-path work</td><td>position↔cell mapping + the R constant (W = πR/2); on the home pair a column IS its flat x/z — genhash 25/25 byte-identical; no per-chunk or per-frame transform added to the home path</td></tr>
+<tr><td>AC-0361 halo arm fix</td><td>09-25 05:32</td><td>(c) arm-side only</td><td>"no engine change, and genhash byte-identical proves the world never moved" — the fix is the arm's reference model (harness.gd), which does not run in the game</td></tr>
+</table>
+<div class="find"><b>The planet pieces are EXCLUDED from generation cost — stated, with the numbers agreeing.</b>
+All four planet commits claim genhash 25/25 byte-identical to the AC-0360 set, and this run
+re-confirmed it on the live tree (all four runs). No C++ file changed; <code>generate()</code>
+unchanged; the measured per-chunk cost is inside the same-code noise band. Their cost, where any,
+is per-chunk <b>placement</b> (P2/AC-0362 transforms — a constant-factor on an existing transform)
+and per-frame <b>player/streaming</b> work (P3 consumers in the engine-side gap; P4 face-streaming,
+zero on interior walks) — none of it is in the 5,319 µs, and none of it shows in the per-stage
+counters, which count generation only.</div>
+
+<h2>5. The ticket's causal hypothesis — refuted in mechanism, confirmed in shape</h2>
+<p>The hypothesis to confirm-or-refute: "the fill is a queue whose drain is paced BY TIME PER UNIT
+rather than by unit count, so doubling a unit's cost halves the units discharged per frame and
+roughly doubles the under-built window and the storm's DURATION — more frames spent in an
+expensive state, not a bigger single frame."</p>
+<h3>5.1 What the drain actually is (world.gd, current tree — code reading)</h3>
+<ul>
+<li><b>Dispatch</b> (<code>_drain_build_queue</code>, the DRAIN stage): ONE wall-clock unit budget —
+<code>LOW_WAVE_PACE_MS = 3.5 ms</code> of WALL CLOCK per dispatch unit (gen-enqueue + high-slab +
+far-emit all ride it), per-frame catch-up cap <code>LOW_WAVE_FRAME_CAP = 8</code>, plus a
+<code>drain_budget_ms = 30</code> time cap and a windowed bucket scan. The 3.5 ms is wall clock
+spent <b>per unit dispatched</b> — it is fixed by the constant, and the unit's COST is not an
+input. The per-frame unit count (≈ 4-5 at 60 fps, capped at 8) does <b>not</b> depend on how
+expensive a chunk is to generate.</li>
+<li><b>Generation</b>: runs on the TG worker threads (<code>threadgen_max = 3</code>; 8 in the
+loading window) — the 5,319 µs/chunk is paid there, off the main thread, and its rate is
+∝ 1/cost-per-chunk.</li>
+<li><b>Handoff</b> (<code>threadmesh_poll</code>): COUNT-capped at <code>stream_ho_cap</code>
+(base 3 × speed_factor × radius_factor, clamped 1-100; at R24 walking ≈ 4-5 chunks/frame) — the
+loading window is time-budgeted (<code>LOAD_HO_BUDGET_MS = 100</code>) but the R24 storm runs
+steady state. Count-capped again: landing cost does not reduce the count.</li>
+</ul>
+<p><b>So the literal mechanism is REFUTED:</b> the drain is not "time per unit of cost" — it is a
+fixed wall-clock pace per dispatched unit + per-frame count caps, and the per-chunk generation
+cost enters none of that arithmetic. Doubling the unit cost would NOT halve the units dispatched
+or landed per frame.</p>
+<h3>5.2 But the shape is CONFIRMED, through the TG rate instead</h3>
+<p>The 5,319 µs/chunk is paid by the TG worker threads, whose chunk production rate is
+∝ 1/cost. At 1.84× cost (vs the 2,884 baseline), the in-radius BUILT set fills 1.84× slower — so
+the under-built window (the walk through ~1%-built terrain) lasts ~1.84× longer, while the
+per-frame main-thread cost (DRAIN's fixed ~3.5 ms/unit pace × the same ~4-5 units, the same
+count-capped handoff, the same MISC bookkeeping) is UNCHANGED. That is exactly "more frames spent
+in an expensive state, not a bigger single frame" — the duration stretches, the frame shape
+doesn't. AC-0352's own worst frames are consistent with a data-limited, dispatch-capped state:
+tm/tg pinned at 8/2 (pools saturated — the drain is waiting on data, not throttling cost), the
+queue deep at 1,306-1,352, in-radius built 22-34 of 2,401, all 20 worst frames in one ~3 s burst.</p>
+<div class="find"><b>What distinguishes the two failure shapes — the observable for STEP 1's R24 walk:</b>
+<i>(i) "one stage got slower per call"</i> → the per-frame stage ms GROWS for the same unit count —
+a current run would show DRAIN at ~1.84× AC-0352's 20-40 ms (≈ 40-70 ms) on equivalent frames,
+with the storm window length about the same. <i>(ii) "more frames in the expensive state"</i> (the
+TG-rate shape this run's evidence supports) → the per-frame split is UNCHANGED (DRAIN still
+20-40 ms, same units/frame, same handoff count) but the storm window STRETCHES: more over-30 ms
+frames (<code>storm_walk_n</code> up), the queue deep for more seconds,
+<code>in_radius_built_final</code> lower, <code>storm_walk_p99_ms</code> about the same. A current
+R24 walk (STEP 1, coordinator's heavy stage — ~14 min, not this run) reads exactly those fields and
+settles it. This run's contribution: the cost side is measured (5,319-class, unchanged since
+AC-0360) and the code reading says (ii).</div>
+
+<h2>6. Does AC-0352's streaming attribution need re-measuring? — YES, and the ticket's premise needs one correction</h2>
+<p><b>The premise, corrected.</b> The ticket says AC-0352 "was measured on a world whose
+per-column generation was roughly HALF of today's." The cost sequence refutes that: AC-0352 ran
+2026-09-23, which is BEFORE C48 (AC-0359, 09-24 08:35) — and C48 is what made generation
+cheaper (5,076 → 2,884 µs). AC-0352's tree sat at the pre-C48 cost, measured twice: GENMS 131-133
+at AC-0347 P3 (≈ 5,000-5,100 µs/chunk) and 5,076 µs/chunk in AC-0359's own before-side. Today is
+5,319 — <b>+4.8%, not 2×</b>. The "half" is 2,884, the C48 baseline, which is a number measured a
+day AFTER AC-0352 ran and never applied to it. (The 1.84× regression 2,884→5,319 is real — it is
+just measured between two post-AC-0352 points, not between AC-0352's tree and today.)</p>
+<p><b>But the re-measure is still owed, for reasons the premise doesn't cover:</b></p>
+<ul>
+<li><b>The world under the walk changed.</b> The cave series reshaped exactly what the R24 walk
+drives through: 22/25 chunks in the genhash window changed; AC-0360 removed 32,249 near-surface
+void cells and 1,669 opened columns; the aquifer re-watered the deep zone. The full/skip column
+mix, the recenter crossings, and the terrain the walk crosses are different at (nearly) the same
+per-chunk cost — so the row's FIELDS (<code>storm_walk_p99_ms</code> 151/141, worst 66-156 ms,
+queue 1,272, built 148/2,401, resident 1,453) are measurements of a different world and are
+HISTORICAL references until a current R24 walk re-establishes them.</li>
+<li><b>The streaming code changed.</b> world.gd +856 lines since AC-0360 (the planet streaming
+paths, the r30 gate, the face-stream pair clamps). P4's interior-walk A/B says the leak is closed
+(resident 93 / p95 45-49, in band at r4), but r4 ≠ R24-storm, and the storm-state interaction has
+not been re-measured.</li>
+<li><b>The per-frame SPLIT (MISC 59.3% / DRAIN 26.7%) is the part that may survive.</b> It is a
+per-frame shape measurement, and both stages are count-capped mechanisms this run verified
+unchanged in shape — so the split plausibly holds on the new world. But "plausibly" is not
+"measured": it needs the STEP-1 run to say which of §5.2's two shapes (i)/(ii) the current tree
+actually shows, and the MISC bucket (59.3%, the instrument's known blind spot) is exactly where
+P3's per-frame player work would hide if it leaked into <code>_process</code>.</li>
+</ul>
+<p><b>Verdict:</b> re-measuring IS needed (the row's fields are stale world references), via
+STEP 1's R24 walk — a ~14 min coordinator heavy-stage run, NOT done in this run per its fence.
+What it should check first, per §5.2: the DRAIN ms on equivalent frames (same or ~1.84× bigger?)
+vs the storm window length (same or stretched?) — that single pair decides the fix's target.</p>
+
+<h2>7. Findings for the record (measurement-only, no action taken)</h2>
+<ol>
+<li><b>Stale ARCHITECTURE per-column figures.</b> ARCHITECTURE.md lines 98/435 read "~92 µs/col
+[far] vs ~1.7 ms [full]". The current full path measures 5,319 µs/chunk ÷ 256 cols ≈ <b>20.8
+µs/col</b> — the documented "~1.7 ms full" is ~82× higher than the measured per-column cost, and
+the paired "~92 µs/col" far figure would make far costlier than full. Both figures are
+stale (pre-optimization era). The ticket's "~3.1× against ~1.7 ms/col" divides a PER-CHUNK figure
+(5,319 µs) by a PER-COLUMN one (1,700 µs) — it does not close under either unit. The
+apples-to-apples regression number is the per-chunk one: <b>1.84×</b> (2,884→5,319). A doc fix
+belongs in the closeout of whichever ticket owns the generation-cost story (AC-0366 territory),
+not here.</li>
+<li><b><code>cols_full</code> counts chunks, not columns</b> (gen.cpp ~2225 — the counter
+increments once per chunk despite the name). The STEP-1 addition's "columns/second per lane"
+should read chunk/second, or re-derive columns as ×256.</li>
+<li><b>AC-0342's position in the timeline</b> (the prompt's candidate list has it as post-AC-0360;
+git places it 09-24 01:47, pre-carver, pre-C48-baseline) — §4.2. Its cost is inside the 2,884
+baseline and was flat at landing.</li>
+</ol>
+
+<h2>8. RESULT JSON</h2>
+<pre>
+tree bc597d0 (2026-09-27) · seed 44 · instrument: standing genhash arm + temp gen_timing() print
+runs 4 (vanilla 1 / probe 2 / pristine 1) · rc 0 ×4 · SCRIPT ERROR 0 ×4 · genhash 25/25 == AC-0360 set ×4
+
+per_chunk_us:   { r1: 5502, r2: 5527, standing_AC0360: 5319, delta_pct: +3.5, verdict: "no change — inside the documented ±3.9% same-code band" }
+gen_ms:         { r1: 144, r2: 145, AC0360: "144/139", AC0292: 147, AC0291: 118, AC0359: "76-77" }
+stages_us_per_chunk:   // run 1 / run 2 (AC-0360 same instrument in parens)
+  field:   1503 / 1509   (1479)
+  scan:    1604 / 1607   (1581)
+  fill:    2066 / 2075   (1934)  <- largest mover, +6.8%; code byte-identical; noise (see §3.2)
+  drip:    235 / 236     (231)
+  aquifer: 29 / 38       (29)
+  carve:   17 / 15       (16)
+  veg:     13 / 14       (13)
+  heights: 34 / 34       (32)
+  pallet:  0 / 0         (0)
+cols:        { full: 25, skip: 0, far: 0 }   // chunk counts (the counter is per-chunk)
+
+attribution:
+  per_chunk_generation: "CAVE SERIES ONLY — AC-0290 (+20-23) → AC-0291 (2884→4532) → AC-0292 (→5711) → AC-0360 (→5319); unchanged since (this run: 5502±25, byte-identical code path)"
+  post_AC0360_contributors: []   // empty — gdext/ diff empty; generate() unchanged; genhash 25/25
+  AC0342: "(a)-class, ≈0 µs (GENMS 134/133 flat at landing), landed 09-24 01:47 PRE-carver — inside the 2884 baseline, not post-AC-0360"
+  planet_P1a_AC0306: "(c) neither — mapping + R constant; genhash 25/25"
+  planet_P2_AC0307:  "(b) per-chunk placement (rigid transform at attach) — not generation; genhash 25/25"
+  planet_P3_AC0308:  "(b) per-frame player work (+145 lines physics path) — lands in AC-0352's 16-17 ms engine-side gap; NOT measurable with current instruments"
+  planet_P4_AC0309:  "(b) per-frame face-streaming — zero on interior walks (ticket's own A/B: r30 gate; resident 93 / p95 45-49); home gen byte-identical"
+  AC0361:            "(c) arm-side only — no engine change"
+  AC0362_seam_fill:  "(b) per-chunk placement, negligible (constant transform scale; zero new geometry); genhash 25/25"
+
+hypothesis: {
+  literal_mechanism: "REFUTED — the drain is a fixed wall-clock pace (LOW_WAVE_PACE_MS 3.5 ms/dispatch-unit, cap 8/frame, 30 ms time cap) + count-capped handoff (stream_ho_cap ≈ 4-5/frame at R24); unit cost is not an input",
+  shape: "CONFIRMED via the TG worker rate — cost ∝ 1/chunk-production-rate → the under-built window and storm DURATION stretch ~1.84× (vs the 2884 baseline), per-frame cost unchanged",
+  step1_distinguisher: "same DRAIN ms/frame + stretched window (more storm frames, lower built) = the TG shape; ~1.84× bigger DRAIN ms/frame at same unit count = a per-call slowdown"
+}
+
+ac0352_remeasure: {
+  needed: true,
+  premise_correction: "AC-0352's tree (09-23) pre-dated C48 and sat at ~5,076 µs/chunk (GENMS 131-133; AC-0359 before-side 5,076) — today's 5,319 is +4.8%, NOT 'half'",
+  why_still_owed: "world under the walk changed (22/25 chunks; AC-0360 sealed 32,249 near-surface cells; aquifer re-watered) + streaming code +856 lines (planet); row fields are historical references",
+  split_may_survive: "MISC 59.3% / DRAIN 26.7% is a per-frame shape on count-capped stages — plausibly holds, unverified",
+  scope: "STEP 1's R24 walk (~14 min) — coordinator heavy stage, not this run"
+}
+</pre>
+
+<h2>9. Deviations (honest list)</h2>
+<ol>
+<li>The temp <code>gen_timing()</code> probe (2 lines in <code>_genhash_print</code>) was added for
+§3.2 and REMOVED before the final run — harness.gd is byte-identical to HEAD (git diff empty), and
+the post-removal genhash re-verified 25/25 + GENMS 145. The probe's first version had the reset
+on the wrong side of the loop (self-caught before any run used it — the numbers above are from
+the corrected placement).</li>
+<li>No A/B worktree run against the AC-0360 commit was done: the code-path argument (§4.1, git
+diff empty on the entire measurement loop) + the instrument's documented same-code noise band make
+the +3.5% reading unambiguous without it, and the run budget was kept small per the ticket's
+fence. If the coordinator wants a same-day A/B number, it is one worktree + one 2 s genhash run.</li>
+<li>No R24 walk (STEP 1, ~14 min, coordinator territory) and no render — per the fences. The
+drain-mechanism statements in §5 are code readings of world.gd (lines cited), not measurements.</li>
+<li>No commit, no TASKS.yaml mutation (shared ticket — read-only here), no new standing values.</li>
+</ol>
+
+<h2>10. Files</h2>
+<ul>
+<li><code>tasks/AC-0363/AC-0363-step0-results.html</code> — this page</li>
+<li><code>.scratch/AC-0363-gates/genhash_vanilla1.log</code>, <code>genhash_probe1.log</code>,
+<code>genhash_probe2.log</code>, <code>genhash_pristine.log</code> — the four runs</li>
+<li><code>godot/scenes/harness.gd</code> — probe added and removed; byte-identical to HEAD at end</li>
+</ul>
+
+</body>
+</html>
+<h2>STEP 1 - the R24 re-measure (coordinator heavy stage, 2026-09-26)</h2>
+<p>The owed re-measure ran on the current tree (capped, one godot at a time, rc=0, 10 crossings,
+resident 1453, in-radius 165, queue 1268, walk 10.21 s - a complete walk, not an early exit).</p>
+<p><b>THE WORST-FRAME SPLIT HAS INVERTED, which is the ticket's answer:</b></p>
+<table border=1 cellpadding=4>
+<tr><th>stage</th><th>AC-0352 (09-23)</th><th>now (09-26)</th></tr>
+<tr><td>DRAIN</td><td>26.7%</td><td><b>72%</b> (53.7 of 74.1 ms)</td></tr>
+<tr><td>MISC</td><td>59.3%</td><td><b>8.5%</b> (6.3 ms)</td></tr>
+<tr><td>COLLIDE</td><td>2.1%</td><td>8.8 ms</td></tr>
+<tr><td>HANDOFF / RECENTER</td><td>6.6% / 5.7%</td><td>5.8 / 5.8 ms</td></tr>
+<tr><td>MESHATTACH / IO / FACELIGHT</td><td>0.0</td><td>0.5 / 0.0 / 0.0 ms</td></tr>
+</table>
+<p>Run figures: frames p50 3 / p95 61 / max 203 ms; <code>storm_walk_n</code> 127,
+<code>storm_walk_p99_ms</code> 115 (inside its &lt;= 200 gate), max 203. So the worst frames are no
+longer MISC-dominated: generation/queue discharge (DRAIN) now owns them, which is exactly what the
+per-chunk attribution predicts once a dispatch unit costs 1.84x more - the same window is spent
+discharging fewer units. MISC's collapse is itself evidence for the STEP-0 mechanism reading: the
+unbracketed engine-side share did not grow, so the regression is inside the measured partition.</p>
