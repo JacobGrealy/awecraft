@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-26T23:27
+  updated_at: 2026-09-27T03:44
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0362
 - AC-0363
 - AC-0364
 - AC-0365
@@ -19891,11 +19890,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-26T17:07
-  updated_at: 2026-09-26T17:12
-  completed_at: null
+  updated_at: 2026-09-27T03:44
+  completed_at: 2026-09-27T03:44
   waiting_on: null
   parent_id: null
   notes: "1) User Story\n\nChunks now have visible gaps around them where they meet their neighbours -\
@@ -19997,7 +19996,34 @@ intake:
     \ in the results.\n\nACCEPTANCE: no visible crack anywhere in a fresh world, verified by render at\
     \ BOTH the spawn and a patch-corner-scale distance (the ~2 m region), with the aperture distribution\
     \ recorded before and after. A spawn-only check would pass on the current tree and prove nothing -\
-    \ that is exactly how this shipped."
+    \ that is exactly how this shipped.\n\nCLOSED (commit b916fc2). COORDINATOR VERIFICATION, including\
+    \ one FALSE ALARM OF MINE THAT I WANT ON THE RECORD because the loop that produced it is the loop\
+    \ that makes these closes trustworthy: I re-ran the corrected aperture script, saw \"worst-60: 29/60\
+    \ seams with see-through rays\" at its tail, and briefly concluded the builder's \"AFTER 0/0\" was\
+    \ unsupported. It was my misreading - that line is a per-ray sample inside an earlier SECTION of the\
+    \ script's output, while the aggregate the ticket gates on is in `true.out`, which reads exactly what\
+    \ was claimed: design (f64) `seams=308112 open=1284 max=53.33 um` going to `open=0` at `S=5.0e-06`,\
+    \ and rendered (float32 storage jitter) `open=1425 max=502.1 um` going to `open=0` at `S=5e-05`. The\
+    \ shipped `SEAM_FILL = 1e-4` is therefore DOUBLE the smallest value that zeroes the rendered count,\
+    \ which is the margin the code comment claims and the reason the fix is robust rather than marginal.\
+    \ I also verified the terrain claim myself rather than accepting it: genhash returns 25 hashes matching\
+    \ the reference `94f578ec...`. WHAT THE TICKET ACTUALLY ESTABLISHED, correctly ordered by what a reader\
+    \ should believe: (1) the STEP 0 measurement was a phantom - its script was a broken transcription\
+    \ of sphere_math.gd whose origin dropped the -8z.x/-8z.y terms (displacing columns by up to 6.2 m\
+    \ at the z-edges) and whose x-seam pair was the wrong edge, so \"4.501 cm worst, 119,286 open seams\"\
+    \ measured a mis-placed net, not the shipped ground; (2) the true across-seam aperture is MICROMETRES\
+    \ (53 um design, 502 um rendered), which means the see-through the user reports is almost certainly\
+    \ NOT this component at all; (3) the fill closes that component to zero with a 2x margin at a cost\
+    \ of 1.6 mm of overlap per seam, no new verts and no collision lip; and (4) the component the user\
+    \ probably sees is the ALONG-seam/radial V-crack reaching -4.69 m deep at a patch boundary, which\
+    \ this change moves by 1.6 mm and which belongs to AC-0311 (planet-sphere-domain-generation) exactly\
+    \ as the C1 contract of the cross-face piece recorded. So this ticket's user story is fixed in the\
+    \ strict sense and probably NOT fixed in the sense the user meant - and saying that plainly is more\
+    \ useful than a green tick. ONE METHOD LESSON WORTH KEEPING: a measurement script is an instrument\
+    \ and needs validating against the shipped implementation before its numbers are believed (AC-0353's\
+    \ reverse-map fixture is the same lesson from the other direction) - the aperture script's phantom\
+    \ survived long enough to be quoted in a ticket summary, and only a cross-check against the real geometry\
+    \ caught it."
   comments: []
 - id: AC-0363
   title: streaming-regression-attribution-post-cave-series
