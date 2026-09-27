@@ -1,10 +1,15 @@
 meta:
-  updated_at: 2026-09-25T16:55
+  updated_at: 2026-09-26T23:27
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0309
+- AC-0362
+- AC-0363
+- AC-0364
+- AC-0365
+- AC-0366
+- AC-0367
 - AC-0145
 - AC-0310
 - AC-0311
@@ -36,6 +41,7 @@ queue:
 - AC-0327
 - AC-0328
 - AC-0330
+- AC-0368
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -14635,11 +14641,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-17T18:37
-  updated_at: 2026-09-17T18:52
-  completed_at: null
+  updated_at: 2026-09-26T23:27
+  completed_at: 2026-09-26T23:27
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want to walk or fly past the edge of the region I am in and keep
@@ -14742,7 +14748,33 @@ intake:
     preserve the terrain under existing saves; the acceptance tests in the edit-interaction note are about
     live behaviour (dig/build/save/regenerate inside one session''s world), not about migrating old ones.
     SAVE_VERSION must still be bumped when the format changes so an old world fails cleanly and starts
-    fresh.'
+    fresh.
+
+
+    CLOSED (commit 636db3d). COORDINATOR VERIFICATION: the ticket''s own instrument - the permanent crossface
+    arm - is the right shape of evidence for a crossing feature, because it exercises the real paths rather
+    than a parallel one: an on-foot seam crossing with a sprint-jump and the anchor switching from home
+    to face 5, a flight pass, a light check on both sides, the C3 no-merge rule, and a save round-trip
+    in which face edits persist, a straddler survives and past-patch is masked. It reads ok:true, and
+    the supporting gates hold (genhash 25/25 so the home pair is untouched, the full battery with zero
+    per-arm diff against the P3 baseline, the sphere arm green apart from its known AC-0326 red, halo
+    green, boundary r4 p95 45-49 in band with resident 93 matching P3 and zero face chunks interior).
+    THE SELF-CAUGHT REGRESSION IS THE PART WORTH PRAISING: the first boundary walk read resident 272 and
+    p95 97 because the streaming path was pulling all eight edges'' blend bands on an INTERIOR walk, and
+    the r30 edge-normal spatial gate it added fixed it - a ticket catching its own performance regression
+    through its own gate, before any heavy stage saw it. THE RENDER GATE IS DOCUMENTED AS INFEASIBLE RATHER
+    THAN SILENTLY SKIPPED: 17 attempts timed out because this box''s llvmpipe has degraded to roughly
+    1-5 seconds per frame, the previously-working AC-0308 spawn recipe now times out as well, and 8 versus
+    16 GB made no difference - so the boundary GEOMETRY is proven by the arm''s measurements instead,
+    and the spec''s render line ("<= 1") is satisfied by zero. That is an environment regression, not
+    a ticket failure, and it is recorded as such for whoever next wants a render (a box reboot is the
+    likely fix). FOLLOW-UPS FILED: AC-0368 carries the three remaining residuals (a straddler live-data
+    anomaly where the SAVE path is the proven one so the live path is the suspect; a cap-drop strand to
+    be reproduced and classified rather than assumed to be a leak; and a light/fluids standing re-baseline
+    owed because crossing now seeds the neighbour face''s chunk through the halo path - with AC-0357''s
+    lesson applied, i.e. noting whether a re-based value can still discriminate a defect). The blend-band
+    removal is NOT filed as new work because it already has a home: AC-0311 (planet-sphere-domain-generation)
+    is open in this queue and is deliberately last, which the C1 contract''s own note requires.'
   comments: []
 - id: AC-0310
   title: planet-satellite-lod
@@ -19851,4 +19883,767 @@ intake:
     a behaviour. The world is provably untouched (genhash byte-identical, no rebase) and the only standing-row
     movement is the adjacent lightstate ab fixture, re-baselined with its attribution to P4''s re-carve
     rather than folded in.'
+  comments: []
+- id: AC-0362
+  title: planet-placement-seam-gap-measure-and-fill
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-26T17:07
+  updated_at: 2026-09-26T17:12
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story\n\nChunks now have visible gaps around them where they meet their neighbours -\
+    \ you can see through the ground at the boundary, which is different from the face-culling holes tracked\
+    \ in the seam series (those are individual faces missing; these are a gap around a whole chunk). It\
+    \ started when the planet placement landed. I want the residual measured over the whole walkable surface,\
+    \ not just near spawn, and then actually filled so the ground reads as solid.\n\n2) Technical Details\n\
+    \nWHAT THIS IS (not a culling bug - do not route this to AC-0355):\n- AC-0307 (P2, 2026-09-25 12:23)\
+    \ placed each column node with a RIGID transform from `SphereMath.column_transform(cx, cz, R)`: the\
+    \ facet is the TANGENT PLANE at the sphere point of the column's own flat centre, with the in-plane\
+    \ axes chosen so edge directions bisect the two neighbours' shared-edge lines. Chunk geometry itself\
+    \ stays flat local (the mesher, light grid and collision all run on flat coords).\n- A sphere is not\
+    \ developable, so a polyhedron of flat facets cannot tile it. Every facet edge therefore leaves a\
+    \ WEDGE against its neighbour. The commit QUANTIFIED the residual: **5.4 cm worst over the spawn window,\
+    \ 1.21 m at the patch corner**, and framed it as \"a sub-millimetre-DEEP wedge no capsule can enter\
+    \ - AC-0042's grout territory rather than a hole\".\n- ARCHITECTURE.md §6 carries the same reading\
+    \ (`~0.93 m face-average` irreducible residual; \"neighbours meet along the shared edge to the irreducible\
+    \ non-developable residual ... sub-mm-deep wedge, AC-0042 grout territory\"), and §6 notes the seam\
+    \ residual \"varies continuously along a seam (down to sub-mm)\".\n\nTHE TWO THINGS THAT ARE PROBABLY\
+    \ WRONG WITH THAT READING (measure both before choosing a fix):\n1. **The measured window is too small.**\
+    \ 5.4 cm is the worst over the SPAWN window. The same geometry gives 1.21 m at a patch corner - and\
+    \ a 1.21 m gap is more than a block: it is a visible hole you can fall into, not a sub-mm crack. The\
+    \ player walks far past the spawn window. STEP 0 is therefore: measure the residual over the FULL\
+    \ walkable surface (or a representative sweep of faces/cells, including at least one patch corner\
+    \ and several cell-size-scale distances from it), and report the DISTRIBUTION (p50/p95/max) rather\
+    \ than the two point samples. A defect that is invisible at spawn and 1.21 m at a corner is not one\
+    \ number.\n2. **\"Sub-millimetre-deep\" and \"5.4 cm worst\" cannot both describe the same wedge.**\
+    \ Depth and aperture are being conflated. Report both explicitly: the wedge APERTURE (the gap width\
+    \ you can see through) and its DEPTH (how far it runs before the two facets' bottoms converge). The\
+    \ user-visible symptom is the aperture, and the fall-through risk is the depth versus the collision\
+    \ capsule.\n\nSTEP 1 - decide the fix from the numbers (options, cheapest first):\n- **(a) Grout,\
+    \ as AC-0042 already anticipated.** Emit a filler strip along each seam (and a patch at corners) spanning\
+    \ the wedge. This is the plan the docs name; it needs the aperture/depth distribution from step 0\
+    \ to size the geometry, and it has to interact correctly with the mesher's block coordinates, the\
+    \ light grid, and collision (a grout quad must not become a collision surface that trips the player,\
+    \ and must not be lit as terrain).\n- **(b) Remove the EDGE residual exactly, so only corners remain.**\
+    \ The basis is the tangent at the column CENTRE with edge-bisecting axes, which leaves a wedge along\
+    \ every column edge. If instead `n` were chosen per column from a small SET of orientations pooled\
+    \ at edges and corners (each edge orientation shared exactly by the two columns that meet there),\
+    \ adjacent facets would share a plane along their common edge and the edge wedge would vanish identically\
+    \ - moving the whole residual into the corner points, where it is a much smaller number of much smaller\
+    \ sites. This is worth pricing: it may convert a per-seam defect into a per-corner one, which grout\
+    \ can then cover cheaply. VERIFY THE GEOMETRY BEFORE BUILDING IT - the claim that a shared edge orientation\
+    \ removes the edge residual is a geometric assertion, not a measured fact.\n- **(c) Widen/skirt the\
+    \ column geometry** so placed facets overlap rather than abut. Cheapest to implement, but it hides\
+    \ geometry inside geometry (double-drawn faces, collision overlap), so it must be shown not to reintroduce\
+    \ the very seams the mesher culls.\n\nSTEP 2 - the acceptance test (the part that makes this closable):\n\
+    - A measurement that walks the seams and asserts the maximum APERTURE is below a threshold, over the\
+    \ full walkable surface rather than the spawn window, plus a render check at a patch corner (the 1.21\
+    \ m site). Follow the AC-0292 lesson recorded in HARNESS §2: the proxy renderer cannot see underground\
+    \ - confirm the check is done in daylight surface geometry, or it proves nothing.\n- The existing\
+    \ instruments to extend rather than replace: the P2 math probe (`PLACEMENT_TEST`, which currently\
+    \ reports the radial exact and the dip within 1.3 cm of R(1-cos)) and the sphere arm (`3140/3139`,\
+    \ edge `884/884` bitwise).\n\nGATES / CONTRACTS:\n- genhash 25/25 byte-identical (placement must not\
+    \ touch terrain - it did not at AC-0307 and must not here).\n- The sphere arm's keying unchanged (3140/3139,\
+    \ edge 884/884).\n- The player battery: `is_on_floor` true at the placed spawn, no fall-through -\
+    \ and ADD a far-from-spawn case, because the wedge grows with distance and the current test is at\
+    \ the spawn.\n- boundary r4 within its standing band, and note that AC-0307 already recorded `max_ms`\
+    \ 826 against a 473 reference as \"a single-frame saturation watch item\" - check whether that is\
+    \ related or coincidence.\n- ARCHITECTURE.md §6's planet bullet updated with the measured distribution\
+    \ and the chosen fix (invariant 2).\n\nSCOPE: this ticket owns the placement seam. It does NOT own\
+    \ the face-culling holes (AC-0355) or the neighbour-snapshot staleness (AC-0354) - but if the user's\
+    \ \"gaps around them\" turns out to include a culling component as well, record it and let the seam\
+    \ census (`seamcensus`) numbers separate the two, rather than folding both into this ticket.\n\n\n\
+    \nADDITION (2026-09-26) - CONFIRMED AGAINST A FRESH BUILD, and the mechanism is now pinned. The reporter's\
+    \ own words: thin cracks along chunk seams, visible in a newly created world. That matters for two\
+    \ reasons: near-zero staleness (so nothing transient is involved - this is static placement geometry),\
+    \ and it rules the symptom into THIS ticket rather than the seam-culling series (AC-0355 closed the\
+    \ face-dropping class with F-F 493 -> 0).\n\nTHE RESIDUAL IS NOT A SMALL CONSTANT - it grows with\
+    \ distance from spawn. From the placement code itself (`core/sphere_math.gd:374`, the world_to_flat\
+    \ facet-selection comment), verbatim:\n  \"the facets OVERLAP across their shared edge by the folded-net\
+    \ residual (mm near the spawn, up to ~2 m in the spacing-stretch region of the patch corner)\"\nSo\
+    \ the AC-0307 figure of \"5.4 cm worst over the spawn window\" was never a ceiling for the planet\
+    \ - it is the LOCAL reading at the spawn window, and the same geometry reaches ~2 m at patch corners.\
+    \ Step 0's \"measure over the full walkable surface\" is therefore not a formality: the reported sites\
+    \ are the patch-corner spacing-stretch regions, and the spawn window is close to the BEST case. Measure\
+    \ the distribution and make sure the sweep actually reaches a patch corner.\n\nCORRECTION TO THE DESIGN\
+    \ RECORD (worth stating in the results, because the current framing is misleading): the documentation\
+    \ calls this a \"sub-mm-deep WEDGE\" (`ARCHITECTURE.md:187`, repeating `sphere_math.gd`'s \"AC-0042\
+    \ grout territory\") and the code comment above describes the facets as OVERLAPPING rather than gapping.\
+    \ Those are three different descriptions of one defect: overlap in the plane, depth below it, and\
+    \ aperture through it. A visible through-crack means the APERTURE at these sites is real, so the \"\
+    sub-mm-deep, no capsule can enter\" framing does not cover the reported case. Pin down which quantity\
+    \ is which from the measurement - and if it is an overlap/step rather than a through-hole, say so\
+    \ explicitly, because the fix differs.\n\nGROUT WAS NEVER BUILT. `sphere_math.gd:374` calls this \"\
+    AC-0042 grout territory\" and `ARCHITECTURE.md:187` repeats it, but a search of the docs finds no\
+    \ grout implementation anywhere - it is a named intent from AC-0042 carried forward as an assumption\
+    \ in two comments, not a component that exists. Confirm this before starting (grep the tree, do not\
+    \ take this note's word for it), and if correct say so plainly: the seam has been documented as handled\
+    \ while nothing fills it.\n\nTHE FIRST EVIDENCE MUST BE A RENDER, NOT A MATH PROBE. The reporter is\
+    \ describing what they SEE in a running build; the AC-0307 probe (PLACEMENT_TEST, radial exact, dip\
+    \ within 1.3 cm of R(1-cos)) passed while the cracks are visible, which means a coordinate-level probe\
+    \ cannot substitute for looking. Two obligations follow:\n- Take a render at a known patch-corner-adjacent\
+    \ site and at the spawn, and record the crack width in PIXELS and in blocks, at a stated camera height\
+    \ and angle. Follow the HARNESS section 2 lesson: the proxy renderer cannot see underground, so pick\
+    \ daylight surface sites or the shot proves nothing.\n- Cross-check the reporter's build: confirm\
+    \ the shipping binary carries AC-0355's native fix (`mesh.cpp` guard, `.so`/`.dll` md5 `71c2d51e`).\
+    \ If it does not, some of what is on screen is the face-dropping class and the two must not be blended\
+    \ in the results.\n\nACCEPTANCE: no visible crack anywhere in a fresh world, verified by render at\
+    \ BOTH the spawn and a patch-corner-scale distance (the ~2 m region), with the aperture distribution\
+    \ recorded before and after. A spawn-only check would pass on the current tree and prove nothing -\
+    \ that is exactly how this shipped."
+  comments: []
+- id: AC-0363
+  title: streaming-regression-attribution-post-cave-series
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-26T17:07
+  updated_at: 2026-09-26T17:25
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story\n\nPerformance got noticeably worse after AC-0352 measured the storm tail, and\
+    \ it is still getting worse as work lands. I need the regression attributed to a named term instead\
+    \ of guessed at, because the suspicion (the planet work) and the evidence (the cave series) point\
+    \ in different directions and I do not want the next ticket aimed at the wrong subsystem.\n\n2) Technical\
+    \ Details\n\nTHE OBSERVATION AND THE TIMELINE (this is the whole reason the ticket exists):\n- AC-0352\
+    \ (the R24 storm-tail attribution) ran on a tree dated **2026-09-23**. The cave series had not started:\
+    \ the CARVER (AC-0290) landed **2026-09-24 13:59**, the Voronoi AQUIFERS (AC-0291) **09-24 20:43**,\
+    \ caves-P4 contents (AC-0292) **09-25 02:34**, the tunnel gate (AC-0360) **09-25 07:50**. The planet\
+    \ pieces landed **09-25** (P1a grid lock 09:45, P2 placement 12:23, P3 consumers 16:55).\n- Per-chunk\
+    \ generation cost, from the commit/standing records (all same-box measurements):\n  - AC-0359 (pre-carver\
+    \ baseline): **2,884 us/chunk**\n  - AC-0291: **4,532 us/chunk** (+57%; the Voronoi aquifer's per-block\
+    \ 4-nearest search is ~1.6 ms/chunk on its own, fill 515 -> 1,910 us)\n  - AC-0292: **5,711 us/chunk**\
+    \ (+26%; field 1502 / scan 1630 / fill 2129 / drip 238)\n  - AC-0360: **5,319 us/chunk** (the deep-only\
+    \ tunnel gate removed scan work, as predicted)\n- Net across the cave series: **2,884 -> 5,319 us/chunk\
+    \ = 1.84x**, and against the ARCHITECTURE-documented pre-series full-path figure (~1.7 ms/col) it\
+    \ is **~3.1x**.\n- SO: the clean attribution in AC-0352 (MISC 59.3% / DRAIN 26.7%, worst frames 66-156\
+    \ ms `_process`) was measured on a world whose per-column generation was roughly HALF of today's.\
+    \ Every streaming measurement in the R24 row predates the cave series and is now a historical reference,\
+    \ not a current one.\n\nWHY PER-CHUNK COST IS THE RIGHT SUSPECT FOR FRAME TIME (the causal loop, to\
+    \ be confirmed not assumed):\n- The fill is a QUEUE (AC-0352 read queue 1,306-1,352 with `in_radius_built`\
+    \ 22-34 of 2,401). The drain is paced BY TIME per unit, not by unit count. So when the cost of a unit\
+    \ doubles, the number of units discharged per frame halves and the under-built window (and the storm's\
+    \ duration) roughly doubles - more frames spent in the expensive state, not a bigger single frame.\n\
+    - That is a different failure shape from \"one stage got slower per call\" and the instrument must\
+    \ be able to tell them apart. Do not assume the loop; measure both halves.\n\nSTEP 0 - the cheap first\
+    \ measurement (do this before any profiling work):\n- `GENMS` / the genhash arm already report per-chunk\
+    \ generation time. Read it on the CURRENT tree and compare directly against the 2,884 / 4,532 / 5,711\
+    \ / 5,319 sequence above. If the current reading is materially above 5,319 us/chunk, something AFTER\
+    \ AC-0360 (AC-0342's fluid-before-carve, AC-0347 P1-P3, the planet pieces) added cost and that is\
+    \ the first finding.\n- Name the delta terms rather than the total: the C++ side already tracks `g_t_carve_us`\
+    \ (~20 us/chunk) and `g_t_drip_us` (~238 us/chunk) class counters; read the full per-stage set (field\
+    \ build / scan / fill / drip / fluid) and report which term MOVED versus the sequence above. A term\
+    \ that grew is the target; a term that is unchanged should be named as cleared.\n\nSTEP 1 - attribute\
+    \ the frame-time side (the other half of the loop):\n- Re-run the R24 walk arm shape (same knobs as\
+    \ AC-0352: AWECRAFT_RADIUS=24 AWECRAFT_WALK=10 AWECRAFT_TICKTIME=1, seed 44) on the CURRENT tree and\
+    \ compare against AC-0352's readings as the pre-cave-series reference: worst-frame split, `storm_walk_p99_ms`\
+    \ (was 151/141), p95/max, `in_radius_built_final`, `queue_size`, `resident_final`, and the new `crossing_*`\
+    \ fields.\n- The comparison is the deliverable: does the CURRENT tree show (a) the same split with\
+    \ a longer tail, (b) a different split (a stage that was small in AC-0352 now large), or (c) the same\
+    \ frames with a deeper queue and a lower built count (the throughput loop)? Each answer points at\
+    \ a different fix.\n- Record the tree SHA and the date for both sides. The AC-0352 numbers are only\
+    \ usable as a reference with their date attached, because the generation cost beneath them has since\
+    \ changed by 1.84x.\n\nSTEP 2 - the planet pieces specifically (the user's hypothesis deserves a measurement,\
+    \ not a dismissal):\n- The planet commits touch `core/sphere_math.gd` (+67/+126 lines), `player/player.gd`\
+    \ (+68/+145), `world/world.gd` (~22 lines each) and `chunk.gd` (+5). Check whether any per-chunk or\
+    \ per-frame work was ADDED on the hot paths: sphere/tangent-plane math evaluated per column during\
+    \ placement or streaming, per-frame player placement, or a new per-chunk transform. Two of those commits\
+    \ touch `world.gd`, whose streaming loops are the ones under measurement.\n- ALSO check `player.gd`:\
+    \ AC-0308 (P3 consumers) put +145 lines through the player's physics path, and AC-0352 measured a\
+    \ near-CONSTANT 16-17 ms/frame engine-side gap (physics over 453 collision bodies, render-server bookkeeping,\
+    \ scene-tree work) that the partition cannot see. If the planet consumers added per-frame player work,\
+    \ it lands in exactly that unmeasured gap and would present as \"worse since the planet stuff\" while\
+    \ being invisible to every existing counter.\n- Report the planet contribution as a MEASURED number\
+    \ or an explicit \"not measurable with the current instruments\" - not as an assumption in either\
+    \ direction.\n\nSCOPE FENCES: measurement and attribution only - no generation optimization, no streaming\
+    \ retune, no reverting anything. Whatever the numbers name becomes its own ticket with its own budget.\
+    \ If it names the cave series, the fix ticket must respect the H contract (AC-0292/AC-0360 hold H\
+    \ byte-exact, and that is load-bearing) and the AC-0342 land-dry water contract. Do NOT change generation\
+    \ in this ticket.\n\n\n\nADDITION (2026-09-26) - A SHARPER INSTRUMENT FOR STEP 1, from a question\
+    \ worth answering exactly: is the cave-series 3D noise being paid on the FAR LODs too? It is NOT,\
+    \ and the measurement to prove it per run is already exposed.\n\nWHAT THE CODE DOES (`gdext/src/gen.cpp`,\
+    \ `generate_resl` -> `gen_flat`):\n- The skip gate is at ~2220: `if (skip) { g_t_cols_skip += 1; ...\
+    \ } else { g_t_cols_full += 1; ... }`.\n- Inside the per-column fill the solid test is the SAME gate\
+    \ (~2372): `if (skip) { he = H; }` - verbatim: \"the 150-pt density evaluation is skipped free - solid\
+    \ exactly 0..H (the heightmap surface), no caves, no hidden caves built (no f_cheese read, no scan,\
+    \ no lava pocket)\".\n- Every expensive builder sits in the `else` (full-path) branch: the cave lattice\
+    \ fields (`build_field_c(f_spag/f_nood/f_gate)`, `build_field_vn_c(f_layer)`), the cheese density\
+    \ scan, the aquifer table (`g_t_aquifer_us`, full path only - \"the lazy fill and the far payload\
+    \ never read them\"), the AC-0292 pillar/vein/biome fields, and the drip pass (`g_t_drip_us`).\n-\
+    \ Therefore skip 1 (band-A materialization) and skip 2 (far h-only) both pay NONE of the cave-series\
+    \ cost. The far LODs are not running the new 3D noise; nor is band A.\n\nSO THE REGRESSION IS THE\
+    \ OPPOSITE SHAPE, and this is the thing to measure: the 3D noise got expensive on the FULL path (2,884\
+    \ -> 5,319 us/chunk across the cave series), and the streaming load is dominated by how many FULL-PATH\
+    \ columns per second the drain has to produce. The far tier stays cheap (~92 us/col) - it is not the\
+    \ consumer; it is the thing whose existence makes the full path's cost matter.\n\nSTEP 1 ADDITION\
+    \ - report the FULL-vs-SKIP generation mix per run:\n- `AweGen.p4_stats()` already returns `cols_full`\
+    \ and `cols_skip` (gen.cpp ~3107; reset by ~3138). Read them at arm start and end to get COLUMNS/SECOND\
+    \ PER LANE, and report that split next to the per-chunk cost.\n- Deliverable: full-path columns/second,\
+    \ skip columns/second, and the generation-time share each lane accounts for. If the storm's generation\
+    \ load is mostly full-path columns, the cave-series cost lands directly on the storm window and the\
+    \ attribution is closed in one number. If it is mostly skip columns, that contradicts the code reading\
+    \ above and is itself a finding worth chasing before any optimization.\n- Cross-check against the\
+    \ cost sequence in this ticket's step 0 (2,884 / 4,532 / 5,711 / 5,319 us/chunk) by multiplying out:\
+    \ columns/second x us/column should reconcile with the wall time the arm spends generating. A reconciliation\
+    \ that does not close means one of the two numbers is measured wrong - say which.\n\nThis does not\
+    \ add scope: it is a read of counters that already exist, and it turns \"the cave series made generation\
+    \ 1.84x more expensive\" into \"here is how much of the storm window that costs, per second.\"\n\n\
+    \nCROSS-REFERENCE (2026-09-26): AC-0366 (cave-family noise cost attribution vs vanilla) is queued\
+    \ behind this ticket and answers the generation-COST side of the same question this ticket answers\
+    \ on the FRAME-time side. Read this ticket's step-0 result first: if the regression is named outside\
+    \ the cave family or the aquifer, AC-0366 narrows to that term; if it lands on the cave family / aquifer,\
+    \ AC-0366 is the direct follow-up and there is no need to re-derive the per-stage split here. Do not\
+    \ duplicate its per-field instrumentation."
+  comments: []
+- id: AC-0364
+  title: streaming-fill-rate-and-unit-budget-curve
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-26T17:14
+  updated_at: 2026-09-26T17:14
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+
+    Walking into the world is smooth once it is built, but for the first minutes after loading I am walking
+    through a world that is not there yet, and that is when the long frames land. I want to know how long
+    that window actually lasts, and what it would cost to shorten it, so the decision to spend frames
+    on filling faster can be made from numbers instead of taste.
+
+
+    2) Technical Details
+
+
+    PREREQUISITE - READ AC-0363''s RESULTS FIRST. That ticket attributes the post-cave-series regression:
+    per-chunk generation went 2,884 -> 5,319 us/chunk across the cave series (carver, aquifers, P4 contents),
+    against an AC-0352 measurement taken on a 2026-09-23 tree at roughly half today''s cost. Do not set
+    any budget here before knowing whether the current cost is 5,319 us/chunk or materially above it.
+    The two tickets are deliberately adjacent in the queue for this reason.
+
+
+    THE STATE THIS TICKET EXPLAINS (AC-0352, R24, 2026-09-23):
+
+    - At the end of a 10-chunk walk: `in_radius_built_final` **22-34 of `target_in_radius` 2,401 (~1%)**,
+    `queue_size` **1,306-1,352**, `resident_final` 1,453, TM pool **pinned at its cap (tm/tg 8/2)** in
+    every one of the 20 worst frames.
+
+    - The storm is not a spike: it IS the post-load fill state. The load gate only waits for the SIM TAXI
+    DIAMOND (41 columns at sim 4, `simband_ms` ~2.1 s at R24 - AC-0313 clause 4), so the player activates
+    and walks while the resident set and far field are still being built.
+
+    - The drain is paced BY TIME per unit and by a per-frame unit cap (the constants named in the tree;
+    AC-0363 records their current values - read them there rather than trusting a name from this note).
+    Consequence to CONFIRM, not assume: when the cost of one unit rises, units discharged per frame falls,
+    so the under-built WINDOW lengthens even if no single frame gets worse. That is a different failure
+    shape from a per-stage slowdown and the measurement must distinguish them.
+
+
+    STEP 0 - measure the window, not the frame:
+
+    - Extend the walk arm to emit a TIME SERIES of `in_radius_built` vs `target_in_radius` against wall
+    clock, plus queue depth, resident count and TM/TG in-flight, sampled every N frames.
+
+    - Deliverables: **columns/second** sustained; **time-to-built** (seconds until `in_radius_built` reaches
+    `target_in_radius`, or the asymptote if it never does inside the walk); the queue depth TREND (rising
+    = the drain is behind production; flat = balanced); and the wall time the player spends above a stated
+    "under-built" threshold (e.g. built < 50% of target).
+
+    - Report the same figures at r4 (cheap reference) and R24, and state the seed, the knobs, and the
+    tree SHA - AC-0352''s numbers are a dated reference and cannot be compared without one.
+
+
+    STEP 1 - the budget curve (the actual decision input):
+
+    - Sweep the drain''s unit pace / per-frame cap constants over a small set of values (e.g. current,
+    2x, 4x) and for each report BOTH sides: (a) columns/second and time-to-built, (b) the frame-time cost
+    - `storm_walk_p99_ms` and `max_ms` against the AC-0352 standing gate (`storm_walk_p99_ms <= 200`).
+
+    - The output is a TRADE CURVE (fill speed vs. worst-frame cost), not a recommended constant. Choosing
+    a point on that curve is a product decision (how much hitch for how much earlier world); this ticket
+    supplies the curve and the coordinator picks.
+
+    - If the curve is flat - i.e. raising the budget does not shorten the window because the bottleneck
+    is upstream (generation throughput on the workers, disk, or the TM pool cap rather than the main-thread
+    pace) - SAY SO. That is the most valuable possible finding here: it would mean the fill window is
+    bounded by something a main-thread budget cannot move, and the fix belongs elsewhere (worker pool
+    sizing, far-field generation cost, or the load gate).
+
+
+    STEP 2 - the load gate, measured not guessed:
+
+    - Report how long the load screen holds at R24 and what it waits for (`simband_ms`, the 41-column
+    sim diamond), next to how long the world then takes to become usable. If the fill window is minutes,
+    the gate/streaming split is a legitimate design question - but it is answered by these two numbers,
+    not by moving the gate first.
+
+
+    FENCES: measurement only - do NOT retune any constant, do not change the load gate, do not touch generation.
+    Whatever the curve shows becomes its own ticket with its own gates. Hold the standing values (boundary
+    r4 band, storm_walk_p99_ms, the R24 crossing row) and state them per sweep point so a regression is
+    visible while sweeping.
+
+    '
+  comments: []
+- id: AC-0365
+  title: decompose-misc-worst-frame-residual
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-26T17:15
+  updated_at: 2026-09-26T17:36
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+
+    The frame drops are attributed now, but the single biggest share of them is a bucket labelled "other"
+    that nobody can break down, so "we know what is slow" is only two-thirds true. I want that bucket
+    opened so the next ticket can be aimed at a named consumer instead of at the residual.
+
+
+    2) Technical Details
+
+
+    PREREQUISITE - READ AC-0363''s RESULTS FIRST. If AC-0363 shows the tail is dominated by a named stage
+    on the current tree, this ticket''s shape changes (the residual may shrink or grow with the post-cave-series
+    generation cost). If AC-0363 reports the same split AC-0352 did, this ticket is the direct follow-up.
+    Either way, take the current MISC share as the baseline to move, do not reuse AC-0352''s 59.3% as
+    if it were today''s number.
+
+
+    WHAT IS KNOWN (AC-0352, R24, worst-20 frames, 1,973 ms total):
+
+    - **MISC 1,170.4 ms = 59.3%** of the worst-frame cost. It is the in-process RESIDUAL of the wprof
+    partition - everything inside `World._process` that no stage bracket covers.
+
+    - Named candidates, listed by that ticket but never measured: save-queue writes, the 20 Hz tick, fluid
+    dispatch, atlas/cull checks, and GC-class pauses.
+
+    - The rest of the split for reference: DRAIN 26.7%, HANDOFF 6.6%, STAR 5.8%, RECENTER 5.7%, COLLIDE
+    2.1%, LOW 1.7%, and MESHATTACH / FACELIGHT / IO at 0.0.
+
+    - Separately and NOT part of this ticket: the arm-side frame wall exceeds the `_process` total by
+    a near-constant 16-17 ms (physics over 453 collision bodies, render-server bookkeeping over 882 MIs,
+    scene-tree work) - ~15.5% of the mean worst frame and 68% of the run''s 353 ms max. That is the ENGINE-SIDE
+    gap and it is a different instrument problem (see step 2).
+
+
+    STEP 0 - sub-bracket the residual (the whole ticket):
+
+    - Add sub-brackets inside `World._process` for each named consumer: save-queue writes, the 20 Hz tick,
+    fluid dispatch, the atlas/cull checks, and a GC proxy. Keep them cheap and keep them in the residual''s
+    own idiom - this must not itself become a per-frame cost that shows up in the numbers it measures.
+
+    - Report the split over the SAME population AC-0352 used: the worst-N frames above the threshold,
+    not an average over all frames. A consumer that is 2% on average and 40% on the worst frames is the
+    interesting one, and averaging hides exactly that.
+
+    - Report per-consumer p50/p95/max over those frames plus the aggregate share, so one dominant consumer
+    is distinguishable from five small ones.
+
+
+    STEP 1 - the two hypotheses worth naming in advance (so the result is interpreted, not just tabulated):
+
+    - **The 20 Hz tick may fire more than once inside a long frame.** If the tick is driven by accumulated
+    time rather than frame count, a 150 ms frame can run it several times, which makes it a candidate
+    that SCALES WITH the stall rather than merely contributing to it. Check the call count per captured
+    frame explicitly - if it is >1, that is a finding.
+
+    - **GC is the classic explanation for a bursty p50-2ms/p95-57ms tail** and has never been measured.
+    A GC proxy (object count deltas, or the engine''s own counters where available) belongs in the capture
+    even if it is crude. If GC dominates, the fix is allocation reduction in the streaming path, which
+    is a very different ticket from tuning a consumer.
+
+    - A third possibility to record honestly: the brackets may show the residual is genuinely diffuse
+    (five consumers each 5-15%) with no owner. That is a legitimate result - say so rather than picking
+    the largest and calling it the cause.
+
+
+    STEP 2 - report the engine-side gap as a number, not a footnote (and do NOT try to fix it here):
+
+    - `World._process` cannot see the physics step, the physics server, the render server or scene-tree
+    work. AC-0352 measured that gap at 16-17 ms/frame on the worst frames and 68% of the run''s max frame.
+    Record whether the per-consumer brackets change that reading, and if the gap is unchanged, state that
+    this ticket deliberately leaves it to a separate one - an engine-side fix needs a different instrument
+    (FrameTime-style profiling or a custom physics-step bracket) and should not be smuggled in here.
+
+
+    FENCES: instrumentation only. No allocation rewrites, no consumer optimization, no touching the engine-side
+    gap. Deliverable is the split plus the recommendation of which named consumer (or which diffuse finding)
+    the follow-up should target. Keep the standing values held - this adds brackets inside an existing
+    partition, so boundary r4, the R24 crossing row and storm_walk_p99_ms must not move.
+
+
+
+
+    ADDITION (2026-09-26) - FLAG NATIVE-PORT CANDIDATES IN THE SPLIT. When a sub-bracket names a consumer,
+    also record whether that consumer is main-thread GDScript, and if so whether it looks like a port
+    candidate. The reason this clause exists: a GDScript hotspot on the main thread is invisible to a
+    stage partition - it lands in MISC and reads as "bookkeeping" - so without this flag a real native-port
+    case would be reported as an anonymous residual and lost.
+
+
+    For each named consumer, record three extra fields:
+
+    - **lane**: C++ (gdext) / GDScript main thread / engine-side (not in `World._process` at all).
+
+    - **call shape**: per-frame, per-column, per-slab, per-cell, or per-event. THIS IS THE DECIDING FIELD
+    - a consumer called per frame is a port candidate at almost any size; one called per column is usually
+    not worth the marshalling.
+
+    - **port candidate**: yes / no / unclear, one line why.
+
+
+    Worked examples so the builder does not have to guess what "candidate" means (these are illustrative,
+    not a worklist - do NOT port anything in this ticket):
+
+    - `world.gd`''s pool/score path (`_collect_pool` and the scored picks) rebuilds an array of up to
+    `PICK_POOL_CAP` (512) entries and re-scores it, and `world.gd:466` documents that it used to run every
+    frame before AC-0233/AC-0250 added the version-gated debounce. It is main-thread GDScript, PER-FRAME
+    in shape - so if it appears in the MISC split, flag it as a candidate with its measured share.
+
+    - `core/sphere_math.gd` is pure float math with no SceneTree dependency (a natural native port) but
+    its call sites are per-column for placement and a couple of operations per frame for movement - so
+    it is main-thread GDScript with a PER-COLUMN/PER-FRAME-MINOR shape. Flag it, but say plainly that
+    its frequency is low; porting it on structure alone would be a guess.
+
+    - Anything in `scenes/harness.gd` is dev-only and must NOT be flagged as a shipped-work port candidate,
+    even when it is expensive (the `seamcensus` reverse-map is the current example).
+
+
+    WHAT THIS DOES NOT CHANGE: the ticket stays instrumentation-only. The flag is a REPORT, not a work
+    item - no consumer may be optimized or ported here. If the split names a per-frame GDScript consumer
+    with a material share, that is the finding this ticket was worth running for, and the port becomes
+    its own ticket with the measured number attached.'
+  comments: []
+- id: AC-0366
+  title: cave-family-noise-cost-attribution-vs-vanilla
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-26T17:25
+  updated_at: 2026-09-26T17:25
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+
+    Generation got 1.84x more expensive across the cave series and that is now the reason the world takes
+    minutes to fill in. Before we optimize anything I want to know whether we are paying more PER noise
+    evaluation than Minecraft does, or simply doing more evaluations because our cave family is richer
+    - because those two answers lead to completely different decisions about what to keep and what to
+    cut.
+
+
+    2) Technical Details
+
+
+    THE QUESTION, STATED SO IT CAN BE ANSWERED: vanilla builds the final density on a 4x8x4-block cell
+    and interpolates, and so do we (the cave lattice is `4x48x4` cells -> 8-block Y, read trilinearly
+    off `FieldC` - `gen.cpp` ~630-641, AC-0344/AC-0359). So the SCHEME is not the difference. The candidates
+    are (a) more lattice POINTS, (b) more OCTAVES per point, (c) more FIELDS, and (d) non-lattice work
+    vanilla has no equivalent for (the per-block carve scan, the per-block aquifer search). The deliverable
+    is a cost per unit of each, so "richer caves" can be priced against "cheaper noise".
+
+
+    WHERE THE TIME IS DOCUMENTED TO GO (per chunk, AC-0292''s split, total 5,711 us before AC-0360''s
+    -392):
+
+    - field build **1,502 us**; scan **1,630 us**; fill **2,129 us**; drip **238 us**.
+
+    - Within the fill, the aquifer is the named term: AC-0291 measured the Voronoi 4-nearest search at
+    **~1,600 us/chunk** (14.3% of the chunk''s cells), with a `max_fluid` sky-block fast path that skips
+    84% of air blocks.
+
+    - The cave family is SIX fields built on the cave lattice: cheese (vn3, seed+301), spag/nood/gate
+    (fbm3, +303/304/305), layer (vn3, +302), entrance (vn3, +306). `oct` is 2 by default and 3 for AC-0288''s
+    primary cave octave.
+
+    - So the untested part is the SPLIT WITHIN the 1,502 us field build - which field, how many octave
+    evaluations, and what each one costs per point.
+
+
+    STEP 0 - per-field timing (the right instrument, and it is additive not ablative):
+
+    - Add per-field wall counters in `gen_timing()` beside the existing `g_t_aquifer_us` / `g_t_drip_us`
+    pattern: one accumulator per cave-family `build_field_*` call site (cheese, spag, nood, gate, layer,
+    entrance). Permanent instrumentation, cheap, no world change.
+
+    - An ABLATION (stubbing a field to a constant and re-running) is the cross-check, NOT the primary
+    method: it scatters the terrain, so it is diagnostic-only and its numbers must be labelled as such.
+    If used at all, run each stub in its own branch with the world discarded, and never let an ablated
+    tree''s other fields be quoted as evidence.
+
+    - Report per field: us/chunk, lattice points (7x49x7 = 2,401 for this lattice), octaves, and **us
+    per point per octave**. That last figure is the whole point of the ticket - it is the directly comparable
+    number.
+
+
+    STEP 1 - the comparison, stated as a ratio against vanilla''s scheme:
+
+    - Vanilla''s reference to compute, using the documented scheme (4x8x4 cell, 16x384x16 chunk -> 5x49x5
+    = 1,225 in-plane lattice points, per-octave interpolation of the final density, terrain/cheese/carvers
+    derived from that one function): octave-evaluations per chunk and us per octave-evaluation on this
+    box. Measure the second half directly rather than quoting it from the literature - write a micro-benchmark
+    that calls the SAME `fbm3`/`vn3` primitives this codebase uses, so the comparison isolates scheme
+    against scheme and not machine against machine.
+
+    - Output: **"we do N octave-evaluations per chunk against vanilla''s M, at the same cost per evaluation"**
+    - or, if the per-evaluation cost is also higher, the ratio and the reason (hash cost, interpolation
+    count, `lerp_gd` chains). Either answer is a result; do not force a story.
+
+    - Also price the two stages vanilla has no equivalent for: the scan (1,630 us - us per solid cell
+    scanned, and how many cells that is) and the aquifer (us per block, and the candidate count after
+    the `max_fluid` gate). These are the "d" candidate and must be reported separately from the noise,
+    because "our noise is expensive" and "we scan per block where vanilla does not" are different findings
+    with different fixes.
+
+
+    STEP 2 - hand the decision over, do not make it:
+
+    - Where the numbers say a specific cost is avoidable WITHOUT changing output (loop-invariant hoisting,
+    a redundant margin recomputation across the 7x7 field, a gate in the wrong place), record it as a
+    candidate with its price - but do not implement it here.
+
+    - Where the cost buys fidelity (the cave family is deliberately five fields where vanilla has cheaper
+    period-based equivalents; the layer field rides 4 samples/period at vn3), say so plainly and give
+    the per-feature price. "Keep the caves, they cost X us/chunk" is a legitimate and useful result.
+
+
+    WHAT MUST NOT MOVE: the cave lattice resolution, the octave counts, the field count, and H. This ticket
+    attributes cost; it does not tune. If any candidate fix would change generated output, it is a separate
+    ticket needing the full genhash/genprobe/farab/ladder/thash gate set (H byte-exact, `h_mismatch` 0,
+    the AC-0342 land-dry water contract). G0 zero SCRIPT ERROR, and the per-field counters must be proven
+    not to move the world (genhash 25/25 on the instrumented tree).
+
+
+    RELATED: AC-0363 measures the regression''s FRAME-time side and reads the existing `cols_full`/`cols_skip`
+    lane split. This ticket measures the GENERATION-cost side and can run in parallel with it, but read
+    AC-0363''s step-0 result first - if it names a term outside the cave family or the aquifer, this ticket''s
+    scope narrows to that term.
+
+    '
+  comments: []
+- id: AC-0367
+  title: vanilla-carving-tunnels-inside-density
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-26T17:28
+  updated_at: 2026-09-26T17:28
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+
+    Our caves are close to vanilla''s but the way they are evaluated is ours, not Minecraft''s, and that
+    difference is what costs us 1,630 us per chunk in the carve scan. I want the carving done the way
+    Minecraft actually does it - vanilla''s tunnel noise inside the density function, not a separate per-block
+    rule on top - so the cave network matches vanilla''s topology and the per-block carve apparatus can
+    go away.
+
+
+    2) Technical Details
+
+
+    WHAT WE ALREADY HAVE (do not re-port these - they are vanilla already):
+
+    - The density ROUTER: AC-0347 P2 landed Java 1.21.4 `noise_settings/overworld.json` `final_density`''s
+    `range_choice` as-is - the SHALLOW/DEEP split on `k = H - y` with `K_CUT = 16`, `d = min(S_ramp, 5*entrances)`
+    shallow and `d = min(entrances, 4*layer_c^2 + clamp(-1,1)(0.27 + cheese_c) + clamp(0,0.5)(1.5 - 0.64*k/K_CUT))`
+    deep. The constants (0.27, 0.64, 1.5, 5, 4, 0.37) are vanilla''s and the unit convention is vanilla''s
+    (`2*(vn3-0.5)`).
+
+    - The CARVERS: AC-0290 is vanilla''s carver caves (gallery/flat-floor, bubble-interrupted trunk, canyon)
+    - positional + per-chunk RNG, already cheap per block.
+
+    - The AQUIFERS: AC-0291 is Bedrock''s Voronoi `NoiseBasedAquifer` as-is.
+
+    - The PILLARS/VEINS/BIOME: AC-0292 is vanilla 1.21.4 `caves/pillars` (threshold 0.03 in the deep branch),
+    big ore veins, and the +64-shifted `surface_rule` abs-y windows.
+
+    - The LAYER and ENTRANCE noises: `cave_layer` / `cave_entrance` AS-IS (rides 4 samples per 32-block
+    period).
+
+    So the ONE piece that is ours rather than vanilla''s is the TUNNEL apparatus.
+
+
+    THE DIVERGENCE TO REMOVE (the whole ticket):
+
+    - Ours: THREE `fbm3` fields (`f_spag`, `f_nood`, `f_gate`) on the cave lattice, combined as `|f_spag
+    - 0.5| < SPAG_TH * w or |f_nood - 0.5| < NOOD_TH * w` with `w = clamp01((f_gate - GATE_LO)/(GATE_HI
+    - GATE_LO))`, where `f_gate` is explicitly "the AweCraft stand-in for Bedrock''s spaghetti_3d_rarity,
+    which picks the spaghetti scale per region".
+
+    - Vanilla: `spaghetti_2d` + `spaghetti_3d` (with its own rarity selector) + `noodle`, all evaluated
+    INSIDE the density function and combined with the cheese/layer/pillar terms by the router''s min/max
+    structure.
+
+    - THE STRUCTURAL CONSEQUENCE, and the reason this is a real change rather than a rename: our tunnel
+    rule sits OUTSIDE `dens_at` BY DESIGN ("ours: the AC-0289 tunnel rule, which stays OUTSIDE dens_at
+    - the tunnels keep piercing the caps and connecting the levels"). That placement is what forces the
+    separate per-block pass over the carve band, and the per-block pass is the cost: the scan is 1,630
+    us/chunk = 29% of the 5,711 us total, and the tunnel predicate is evaluated per cell through `tunnel_air_c`''s
+    trilinear lookups.
+
+    - The stated purpose of staying outside is to preserve vanilla''s TOPOLOGY (cap-piercing, level-connecting).
+    The claim to test is that putting vanilla''s own tunnel noises inside the density function preserves
+    that topology by construction, because vanilla''s topology IS that density function - which makes
+    this convergence rather than a regression.
+
+
+    WHAT THE TICKET CHANGES:
+
+    1. Replace the three-field `f_spag`/`f_nood`/`f_gate` apparatus with vanilla''s `spaghetti_2d` + `spaghetti_3d`
+    + `noodle` noise instances evaluated inside `dens_at`, using vanilla''s constants and unit convention.
+
+    2. Delete `tunnel_air_c` and the per-block tunnel part of the carve scan. The scan keeps its one remaining
+    job (deriving the solid flags + the effective surface from the density field, which the fill and the
+    fluid decision need) - confirm whether that remaining scan is still needed per block or can be reduced,
+    and report the finding either way.
+
+    3. Delete the three tunnel fields from the full-path field build (three fewer `fbm3` builds at 2 octaves
+    each).
+
+    4. Decide and record the fate of `f_gate`: vanilla''s `spaghetti_3d_rarity` at vanilla''s threshold,
+    or vanilla''s region-based scale selection. Do not keep an AweCraft stand-in in a ticket whose purpose
+    is convergence.
+
+
+    EXPECTED PERFORMANCE EFFECT (measure, do not assume): the three field builds leave the 1,502 us field
+    stage, the per-block tunnel predicate leaves the 1,630 us scan, and the density function gains vanilla''s
+    tunnel terms - which DO evaluate per block, because vanilla also evaluates its density function per
+    block. So the win is "three field builds + a whole per-block predicate" against "a few more terms
+    in an already-per-block function". Report before/after per-stage numbers (`g_t_*`) and state whether
+    the net is a win or a wash. A wash is an acceptable result if the topology improves; do not dress
+    it up.
+
+
+    CONTRACTS AND GATES (this is the high-risk part - it changes generated terrain):
+
+    - **H must NOT move.** H is `surface_h` of the 3 SURFACE fields, and the skip/far paths never read
+    a cave field, so it stays bit-exact BY CONSTRUCTION. Gate it: thash byte-identical, `farab` 1080/1080
+    with `h_mismatch` 0, and the promotion contract (far -> real full regen) re-proven.
+
+    - **genhash WILL move and must be REBASED deliberately**, with the new reference recorded and the
+    reason stated (an intentional generation change, not a regression - the AC-0292/AC-0360 precedent).
+    `genprobe` grows lockstep blocks for the new spaghetti/noodle instances and must be exact (the AC-0291
+    pattern: 10,300/10,300 f64-exact).
+
+    - **AC-0342''s land-dry water contract** must hold (land open water 0, ocean surface 1,081/1,081)
+    - the tunnel rule is applied before the solid flag, so its removal can change the water-logging decision.
+
+    - **The cave-contamination discipline is mandatory.** AC-0292''s closeout recorded a contamination
+    scare, and AC-0290/AC-0291 each needed a cell-exact before/after. Build the before/after comparison
+    instrument FIRST (the AC-0360 `voidstat` pattern: a two-generation pre/post-carve plus a production-predicate
+    re-run per cell with an unex invariant of 0), so the cave change is measurable rather than eyeballed.
+    Bind the "deep bands byte-stable" style invariant where it applies.
+
+    - G0 zero SCRIPT ERROR; `ladder` band_a_ok 20/20; `meshprobe` 1.0; `halo`; `lightstate`; `r16` all
+    sub-flags with `far_holes` 0 both bands; `boundary` r4 in band; the battery.
+
+    - Shots: record renders BUT note HARNESS section 2 - the proxy renderer cannot see underground, so
+    cave screenshots on this box are NON-evidence (AC-0292 recorded exactly this). Use censuses as proof;
+    if shots are taken, say plainly what they can and cannot show.
+
+    - ARCHITECTURE.md section 4/6 cave bullets updated in the same task (invariant 2), including the fact
+    that the tunnel apparatus is gone and the scan''s remaining job.
+
+
+    DECOMPOSITION: this is large enough to land in pieces - (P1) the vanilla tunnel noises inside `dens_at`
+    + the census instrument, (P2) the apparatus removal (`tunnel_air_c`, the three fields, the scan reduction),
+    (P3) the genhash rebase and the full gate set. Declare the pieces in this ticket and file them as
+    children if the build grows; do not land P2 before P1 is proven.
+
+
+    RELATED: AC-0366 (per-field noise cost attribution) should be read first if it has run - it prices
+    the three tunnel fields individually, which sets the expected win here. If AC-0366 has not run, P1
+    may proceed but the before/after numbers must be captured by this ticket.
+
+    '
+  comments: []
+- id: AC-0368
+  title: planet-p1a-cross-face-residuals
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-26T23:26
+  updated_at: 2026-09-26T23:26
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Three small residuals from the cross-face work (AC-0309) are documented but unfixed,
+    and each one is a way the new edge-crossing can still surprise a player or a future reader.
+
+
+    2) Technical Details:
+
+    ALL THREE WERE FOUND AND DOCUMENTED BY AC-0309''s builder while making face-edge crossing work; none
+    of them blocks play, and all three are recorded in tasks/AC-0309/AC-0309-results.html with their evidence.
+
+    (1) STRADDLER LIVE-DATA ANOMALY: a column that straddles a boundary behaves correctly through a SAVE
+    round-trip (AC-0309''s crossface arm proves the straddler survives and past-patch is masked) but its
+    LIVE data reads anomalously in the running world. Start from the arm''s straddler case, dump the live
+    column state against the saved state for the same column, and find which of the two is wrong before
+    changing anything - the save path is the proven one, so the live path is the prime suspect.
+
+    (2) CAP-DROP STRAND: a strand exists where the streaming cap drops a face-band entry in a way that
+    leaves the band stranded rather than released (AC-0309 added the `_face_stream` pair clamp and the
+    r30 edge-normal spatial gate; this residual is what remains of that area). Reproduce it, then decide
+    whether it is a leak, a stall, or a cosmetic gap, and fix it as whatever the evidence says it is -
+    do not assume it is a leak.
+
+    (3) LIGHT/FLUIDS STANDING RE-BASELINE: crossing a boundary now seeds the neighbouring face''s chunk
+    into AweStarlight through the halo promote/demote path, and the light/fluids standing rows predate
+    that. Re-measure them on the current tree and re-baseline with the attribution, the way AC-0357 and
+    AC-0361 did - including, per AC-0357''s lesson, a note on whether the re-based value can still DISCRIMINATE
+    a defect or has become non-discriminating.
+
+    GATES: each item fixed or explicitly re-baselined with its mechanism recorded; G0 zero SCRIPT ERROR;
+    the crossface arm still ok:true; genhash 25/25 unchanged; the halo arm still green; boundary r4 p95
+    inside the standing band; the battery green at the documented 16 GB cap for the combined run.
+
+    CONTEXT: read tasks/AC-0309/AC-0309-results.html first - it carries all three with their measurements,
+    plus the two environment findings it recorded (this box''s llvmpipe is degraded so renders are currently
+    infeasible, and the 7-mode-in-one-process battery needs 16 GB where 8 GB used to do).
+
+    '
   comments: []
