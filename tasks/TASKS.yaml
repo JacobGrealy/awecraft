@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-09-27T13:06
+  updated_at: 2026-09-27T14:48
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0372
 - AC-0369
 - AC-0370
 - AC-0371
@@ -20870,10 +20871,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-09-27T05:03
-  updated_at: 2026-09-27T05:03
+  updated_at: 2026-09-27T13:06
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -21049,6 +21050,67 @@ intake:
     CONTEXT: read tasks/AC-0366/AC-0366-results.html (the price list) and tasks/AC-0291/AC-0291-results.html
     (the feature and its census) first. DRAIN (AC-0369) and the random-tick port (AC-0370) are separate
     and address different shares; this is the generation-side lever.
+
+    '
+  comments: []
+- id: AC-0372
+  title: between-frame-main-thread-stalls
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-27T14:47
+  updated_at: 2026-09-27T14:47
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Three times during a single instrumented walk the game froze for fourteen to
+    eighteen seconds - not a long frame, a stall - and nothing in our own instrumentation can see it,
+    so the worst thing that happens to a player is currently invisible to every gate we run.
+
+
+    2) Technical Details:
+
+    FOUND BY AC-0369''s measurement step (2026-09-28, tree bcdf045, one R24 instrumented walk). THE EVIDENCE
+    IS ARITHMETIC, NOT A BRACKET: the run''s wall time minus the sum of its measured frame times leaves
+    **three gaps of 14-18 s** unaccounted for, and the in-process wprof brackets cannot attribute them
+    because they do not run while the main thread is not returning to `_process`. Everything the project
+    has measured so far - the storm tail, DRAIN, COLLIDE, the tick - happens INSIDE frames, so a stall
+    BETWEEN frames is structurally outside every existing instrument.
+
+    WHY IT IS PROBABLY NOT THE USUAL SUSPECTS: the per-frame costs are all reconciled (the walk phase
+    composes to ~14.4 ms/frame), the thread-generation worker is starved (1-2 inflight against 545/s),
+    the mesh pool is under-full, and the memory leak that used to produce multi-second behaviour was fixed
+    in AC-0356 (an unbounded deque at ~4.4 GB/min). So the candidates are the classes that do not return
+    to `_process`: a blocking engine call on the main thread (resource load, shader/atlas work, a physics
+    flush), a lock held by a worker that the main thread waits on (the thread-gen and thread-mesh lanes
+    both hold structures the main thread consumes), a page-fault/allocator storm after a large allocation,
+    or an OS-level scheduling/preemption effect on a box whose software GL is already degraded.
+
+    HOW TO MEASURE IT, and this is the ticket''s real work - BUILD THE INSTRUMENT THAT CAN SEE IT: the
+    measurement step named the tools: an EXTERNAL sampler (a 1 Hz `/proc/<pid>/stat` utime/stime plus
+    RSS reader, or `perf trace`/`strace -T -e trace=all` for a blocking syscall, or `perf record -g` around
+    the window) run alongside the walk. The sampler must run OUTSIDE godot so it survives the stall. Then
+    correlate: does utime keep climbing during a stall (CPU-bound in engine code) or stop (blocked on
+    a syscall/lock)? Does RSS spike (an allocation storm) or stay flat? Does the stall coincide with a
+    specific streaming event (a promotion, a recenter, a save-queue flush) - the walk''s own timeline
+    gives the timestamps.
+
+    THEN, once the owner is named, fix it or file it: if it is a blocking engine call or a lock, that
+    is a real defect; if it turns out to be an artifact of this degraded box (software GL at 1-5 s/frame,
+    a 4-day uptime), say so with the evidence and record it as environment rather than shipping a workaround.
+
+    GATES: the stall reproduced with the external sampler attached and its owner named (or a documented,
+    evidenced null result); the sampler''s own output kept as the evidence (not a prose summary); the
+    standing set green (the ticket should not change behaviour while diagnosing); and if a fix lands,
+    the R24 walk''s wall time and gap count before/after on the same instrument.
+
+    CONTEXT: read tasks/AC-0369/AC-0369-results.html sections 1-9 first (it has the arithmetic and the
+    walk log path), and note that AC-0364''s fill-window work and AC-0365''s tick decomposition both measured
+    INSIDE frames - so this ticket is the first to look between them.
 
     '
   comments: []

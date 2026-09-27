@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="utf-8">
+<head>
+<meta charset="utf-8">
+<title>AC-0369 — the ~4.5 ms per-unit DRAIN dispatch cost, decomposed into named terms</title>
+<style>
+body{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;max-width:110em;margin:1.5em auto;padding:0 1em;color:#1a1a1a;line-height:1.45}
+h1{font-size:1.5em;border-bottom:3px solid #2563eb;padding-bottom:.3em}
+h2{font-size:1.2em;margin-top:1.8em;color:#1e40af;border-bottom:1px solid #cbd5e1;padding-bottom:.2em}
+h3{font-size:1.05em;margin-top:1.2em;color:#334155}
+table{border-collapse:collapse;margin:1em 0;font-size:13px}
+th,td{border:1px solid #cbd5e1;padding:.35em .6em;text-align:left;vertical-align:top}
+th{background:#eff6ff}
+.ok{background:#dcfce7}.warn{background:#fef9c3}.bad{background:#fee2e2}
+code,pre{background:#f1f5f9;padding:.1em .3em;border-radius:3px}
+pre{padding:.8em;overflow-x:auto;font-size:12px;line-height:1.35}
+.note{background:#eff6ff;border-left:4px solid #2563eb;padding:.6em 1em;margin:1em 0}
+.find{background:#fefce8;border-left:4px solid #eab308;padding:.6em 1em;margin:1em 0}
+</style>
+</head>
+<body>
+
+<h1>AC-0369 — decomposing the ~4.5 ms per-unit DRAIN dispatch cost (and the ~25 ms/frame COLLIDE share) into named terms</h1>
+<p><b>Role:</b> bounded MEASUREMENT step (no optimisation, no retuning, no TASKS.yaml edit, no renders).
+Tree: <code>bcdf045</code> (HEAD at run start; includes AC-0367's vanilla-carving terrain — NOT byte-identical to
+AC-0364's <code>e39e550</code>). Seed: <code>1</code>. Knobs: <code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=24
+AWECRAFT_WALK=10 AWECRAFT_TICKTIME=1</code>, <code>ulimit -v 8388608</code>, ONE godot run, capped (~2 min wall),
+one godot at a time (slot verified free before each run).</p>
+<p><b>Method:</b> the existing wprof ring splits the FRAME (DRAIN/COLLIDE/…), not the per-unit path. This run
+added <b>temporary usec sub-stage brackets inside the per-unit dispatch path</b> (<code>world.gd</code>: pick
+bracket + steady-list-rescan bracket + per-lane unit wall + per-term brackets in <code>_build_unit_hslab</code> /
+<code>_mesh_dispatch_hslab</code> / <code>_low_dispatch_slab</code> / the data pass; <code>chunk.gd</code>: four
+sub-brackets inside <code>_build_slab_collision</code>) gated to the drain's steady loop by a
+<code>_sub_in_drain</code> flag (so the star-remesh lane, the promo burst, the recenter re-dispatch and the
+loading window do not pollute the lane terms). One <code>WPSUB</code> line every 60 frames (28 counters).
+Brackets removed after the run; G0 re-verified on the pristine tree; <code>git diff --stat</code> empty on both
+touched files. Nothing outside the brackets was changed, so the run measures the shipped dispatch path
+(<span class="note" style="display:inline">instrument validation in §7</span>).</p>
+
+<div class="find"><b>Verdict (from numbers):</b> a dispatch unit is NOT 4.5 ms. One HIGH-lane unit (one high-slab
+dispatch) costs <b>0.23–0.40 ms</b> main-thread (walk-phase 0.395 ms: <b>58–61% of it the engine's star light
+payload capture</b> <code>slab_light_payload</code>+<code>box_settled</code>+<code>box_epochs</code>, 19% the
+8-neighbour <code>snap_rings</code> C++ calls, 8% full-column slab copies, 9% entry-dict/ctx, 3% eff-lookup +
+pool handoff). The gen enqueue is 0.02 ms. The "4.5 ms per unit" is <b>per-frame overhead amortised over the
+6–8 units the frame's budget dispatches</b>: the pick machinery (pool rescan + steady-list rebuild <b>5.4
+ms/frame avg, up to 10 ms/frame</b> + data-lane pick 2.8 ms/frame) and the <b>staged collision lane (0–29
+ms/frame, inside the DRAIN stage itself</b> — <code>_col_drain_step</code> runs inside
+<code>_drain_build_queue</code>) — plus loop bookkeeping. The COLLIDE share splits per slab (1.87 ms):
+<b>42% <code>set_faces</code> (engine), 39% body+shape scene-tree creation (engine), 15% the GDScript vertex
+gather, 3% surface-array extract</b> — 81% engine-side. The LOW lane dispatched <b>zero</b> far-slab units in
+the whole run (a regime finding, §6), so its per-unit cost is not measurable here. The ticket's later fix
+should target the <b>per-frame scan machinery and the staged collision</b>, not the dispatch call itself
+(§4 names the candidates with numbers).</div>
+
+<h2>1. What the brackets measure (the named terms)</h2>
+<table>
+<tr><th>counter</th><th>bracket site</th><th>measures</th></tr>
+<tr><td><code>pick</code> / <code>pick_us</code></td><td>inner drain loop, per iteration (all three exits: dispatch / <code>sigo&lt;0</code> / <code>best_c==null</code>)</td><td>one pick iteration: <code>_pick_build_cached</code> (pool scan on cache-miss + probes) + the steady-skip walk + tier + pending-probe + the second-pass lead-column offer</td></tr>
+<tr><td><code>list_us</code></td><td>the defer-frame rescan block inside a pick iteration</td><td><code>steady_list</code> clear + <code>_collect_pool</code> (up to 512 entries × dict-get + <code>_lod_tier_of</code> + <code>_build_ready</code> 8-neighbour gate + <code>_grid_score</code>) + sort</td></tr>
+<tr><td><code>hi_tot</code> / <code>hi_n</code></td><td><code>_dispatch_column_work</code> call, tier ≤ 1</td><td>one HIGH unit wall (attempt, incl. defers): <code>_build_unit_hslab</code> + <code>_mesh_dispatch_hslab</code> to the point the worker owns the slab</td></tr>
+<tr><td><code>hi_eff</code></td><td><code>_eff_for</code> (+ saved-light restore)</td><td>the eff-cache lookup (its result is REPLACED by the star payload when star is on — dead work on this path)</td></tr>
+<tr><td><code>hi_nbs</code></td><td>the 8-neighbour <code>snap_rings</code> loop (both band-A and main paths, incl. in-loop defer returns)</td><td>8 C++ calls snapshotting neighbour rings + AC-0354 axis-epoch stamps — <b>recomputed every slab</b></td></tr>
+<tr><td><code>hi_star</code></td><td><code>star.box_settled</code> gate + <code>star.slab_light_payload</code> + <code>box_epochs</code></td><td>the AweStarlight engine calls (settle gate + settled light payload capture for the 3×3×3 box)</td></tr>
+<tr><td><code>hi_copy</code></td><td>the two <code>mc.slab_copy</code> (data + fl)</td><td>full-column C++ value copies handed to the worker</td></tr>
+<tr><td><code>hi_pool</code></td><td><code>threadmesh_pool.add_task</code> + slots-mutex + inflight append</td><td>the pool handoff bookkeeping</td></tr>
+<tr><td><code>lo_tot</code> / <code>lo_n</code> … <code>lo_sky</code> / <code>lo_copy</code> / <code>lo_entry</code> / <code>lo_pool</code></td><td><code>_low_dispatch_slab</code> (far slab avg-emit)</td><td>one LOW unit: halo sky payload, full-column slab copy, entry dict (incl. fcc/ms snapshots), pool handoff</td></tr>
+<tr><td><code>gen</code>: <code>g_pick</code> / <code>g_stub</code> / <code>g_unit</code> / <code>g_adv</code></td><td>the drain's data pass, once per frame with <code>u==0</code> or empty TG inflight</td><td><code>_pick_data_cached</code> scan, <code>stub_chunk</code> node instantiate, <code>_gen_unit</code> TG enqueue, <code>_advance_dq_past</code> queue scan</td></tr>
+<tr><td><code>cs_tot</code>: <code>cs_arr</code> / <code>cs_gat</code> / <code>cs_shp</code> / <code>cs_trs</code></td><td><code>_build_slab_collision</code> (chunk.gd — the single body-derivation site, immediate + staged)</td><td><code>surface_get_arrays</code> (engine extract) / GDScript vertex-gather loop (incl. flora cutout gather) / <code>ConcavePolygonShape3D</code>+<code>set_faces</code> (engine) / <code>StaticBody3D</code>+<code>CollisionShape3D</code>+<code>add_child</code>×2 (scene tree)</td></tr>
+</table>
+
+<h2>2. The per-unit split — LOW lane vs HIGH lane</h2>
+<h3>2.1 HIGH lane (one unit = one high-slab dispatch; the worker does the meshing)</h3>
+<p>Walk phase (t 5.0–13.5 s, the 3 storm windows: 923 units): <b>0.395 ms/unit</b></p>
+<table>
+<tr><th>term</th><th>ms/unit</th><th>% of unit</th></tr>
+<tr><td class="bad">hi_star — star payload capture (<code>box_settled</code> + <code>slab_light_payload</code> + <code>box_epochs</code>)</td><td>0.239</td><td>60.6%</td></tr>
+<tr><td>hi_nbs — 8 × <code>snap_rings</code> (C++ neighbour-ring snapshot, per slab)</td><td>0.076</td><td>19.3%</td></tr>
+<tr><td>hi_copy — 2 × full-column <code>slab_copy</code> (data + fl)</td><td>0.030</td><td>7.7%</td></tr>
+<tr><td>rest — entry dict build, <code>_tm_ctx.duplicate()</code>, <code>_ngens_for</code>, stamp, …</td><td>0.036</td><td>9.1%</td></tr>
+<tr><td>hi_eff — <code>_eff_for</code> cache lookup (result discarded on the star path)</td><td>0.009</td><td>2.3%</td></tr>
+<tr><td>hi_pool — <code>add_task</code> + mutex + append</td><td>0.004</td><td>1.0%</td></tr>
+</table>
+<p>Full run (11 windows, 4,491 units, 1,044 ms total): 0.233 ms/unit — hi_star 0.134 (57.6%), hi_nbs 0.043
+(18.6%), hi_copy 0.018 (7.6%), rest 0.026 (11.1%), hi_eff 0.009 (4.0%), hi_pool 0.003 (1.1%).</p>
+<h3>2.2 LOW lane (one unit = one far-slab avg-emit dispatch)</h3>
+<p><span class="bad"><b>0 units dispatched in the entire run — every WPSUB window shows <code>lo=0</code>.</b></span>
+The drain's (taxi, layer) order never reached a ring-2/3 candidate: 4,491 HIGH attempts consumed the whole
+budget for 68 s (the in-radius high set finished — <code>in_radius_built_final: 147</code> — only at run end),
+and no high defer (TM cap / settle gate) ever let a far entry through the <code>steady_skip</code> re-pick.
+This is a <b>regime difference from AC-0364</b> (same drain code, two days earlier: low 85/s vs high 5.8/s,
+<code>remesh_ok: false</code>): on the current tree <code>remesh_ok: true</code>, the settle gate passed and the
+TM cap (inflight 8) never bound, so the drain stayed high-saturated. The LOW lane's per-unit cost is
+therefore <b>not measurable in this run</b> (§6) — the AC-0364-era low numbers (the worker does the grid
+sample + greedy mesh; the main-thread share was sky + full-column copy + entry dict + pool, all small per the
+bracket design) stand as the last measurement, and a later run needs a knob (e.g. a longer walk past the high
+set, or forcing high defers) to re-measure it on this tree.</p>
+<h3>2.3 GEN unit (one TG enqueue; the worker generates)</h3>
+<p><code>g_unit</code> = <b>0.022 ms</b> (threadgen_enqueue — already off-thread). The data pass also pays
+<code>g_pick</code> = <b>2.8 ms/frame</b> (<code>_pick_data_cached</code> — the data-lane pick scan, §4) and
+<code>g_adv</code> 0.016 ms/frame; <code>g_stub</code> = 0 (all columns already stubbed — stubs exist by the
+time the data pass runs).</p>
+<h3>2.4 Per-window table (60 frames each; pick/iter = pick_us/n; list ms/frame = list_us/60)</h3>
+<table>
+<tr><th>t_end</th><th>phase</th><th>hi n</th><th>hi µs/unit</th><th>pick µs/iter</th><th>pick n/frame</th><th>list ms/frame</th><th>gen n</th><th>collide slabs</th></tr>
+<tr><td>3348</td><td>boot/gate</td><td>427</td><td>177</td><td>488</td><td>7.7</td><td>1.55</td><td>107</td><td>47</td></tr>
+<tr><td>4296</td><td>pre-walk</td><td>256</td><td>205</td><td>975</td><td>4.3</td><td>0.92</td><td>78</td><td>43</td></tr>
+<tr><td>6845</td><td>walk</td><td>275</td><td>311</td><td>1298</td><td>4.6</td><td>1.44</td><td>61</td><td>164</td></tr>
+<tr><td>9681</td><td>walk</td><td>280</td><td>435</td><td>1331</td><td>4.7</td><td>1.29</td><td>60</td><td>90</td></tr>
+<tr><td>13410</td><td>walk</td><td>368</td><td>426</td><td>1292</td><td>6.2</td><td>2.31</td><td>44</td><td>82</td></tr>
+<tr><td>27710</td><td>settle</td><td>606</td><td>258</td><td>1154</td><td>10.1</td><td>5.63</td><td>90</td><td>89</td></tr>
+<tr><td>46183</td><td>settle</td><td>354</td><td>264</td><td>2597</td><td>5.9</td><td>7.73</td><td>120</td><td>31</td></tr>
+<tr><td>61090</td><td>settle</td><td>378</td><td>222</td><td>2778</td><td>6.3</td><td>8.54</td><td>92</td><td>92</td></tr>
+<tr><td>63388</td><td>settle</td><td>511</td><td>153</td><td>2324</td><td>8.5</td><td>10.04</td><td>120</td><td>70</td></tr>
+<tr><td>65803</td><td>settle</td><td>527</td><td>145</td><td>2216</td><td>8.8</td><td>9.97</td><td>120</td><td>86</td></tr>
+<tr><td>68429</td><td>settle</td><td>509</td><td>126</td><td>2283</td><td>8.5</td><td>9.85</td><td>120</td><td>94</td></tr>
+</table>
+<p>The HIGH unit gets CHEAPER as the run goes (177 → 126 µs; lighter slabs once the storm's cave-heavy
+front passes) while the pick per iteration GROWS (488 → 2,283 µs — the rescan's probe/score cost climbs as the
+1,300-deep pool fills) — the growing term is the scan machinery, not the dispatch.</p>
+
+<h2>3. The COLLIDE share split (AC-0337's per-slab collision build)</h2>
+<p>888 slab bodies in the 660 emitted frames (the shipped census in the same RESULT counts 894 — the 6-slab
+delta is the un-emitted tail; §7): <b>1.87 ms/slab</b>, tiling exactly:</p>
+<table>
+<tr><th>term</th><th>ms/slab</th><th>% of slab</th><th>where it lives</th></tr>
+<tr><td class="bad">cs_shp — <code>ConcavePolygonShape3D.new()</code> + <code>set_faces(faces)</code></td><td>0.789</td><td>42.2%</td><td>engine C++</td></tr>
+<tr><td class="bad">cs_trs — <code>StaticBody3D</code> + <code>CollisionShape3D</code> + <code>add_child</code>×2</td><td>0.737</td><td>39.4%</td><td>engine scene tree</td></tr>
+<tr><td>cs_gat — the GDScript vertex-gather loop (<code>faces[i] = verts[idx[i]]</code>, incl. the flora-cutout gather)</td><td>0.280</td><td>15.0%</td><td>GDScript</td></tr>
+<tr><td>cs_arr — <code>mesh.surface_get_arrays(0)</code></td><td>0.062</td><td>3.3%</td><td>engine C++</td></tr>
+</table>
+<p>Per-frame, the collide load is 0–14 slab bodies (≤ 2 staged columns/frame under <code>collide_drain_
+budget_ms</code> + the immediate builds on attach frames): 0–26 ms/frame — this IS the "~25 ms/frame" share.
+The worst-20 ring in this run: collide 0–29.1 ms/frame; the frames with <code>tm=8</code> (full TM inflight
+landing) carry the collide spikes. Note the staged side runs <b>inside the DRAIN stage</b>
+(<code>_col_drain_step</code> at the end of <code>_drain_build_queue</code>) — so the DRAIN ms of a worst
+frame includes its staged collide; e.g. frame t=10328 (50.0 ms, drain 34.7, collide 29.1) reconciles as
+≈ 29 ms staged collide inside DRAIN + ~5 ms of pick/dispatch/bookkeeping + 0.2 star + 5.6 misc + 7.9
+recenter + 1.8 low. The immediate-vs-staged split per frame is <b>not separated</b> by any bracket (both ride
+<code>WP_COLLIDE</code>) — a one-counter addition for a later run (§6). <code>staged_dropped: 987</code>
+(172 drained): the staged lane mostly drops stale columns — the debt it would have built is small, which is
+why the per-slab cost (not the drop churn) is the number to cut.</p>
+
+<h2>4. Redundant / hoistable terms (the AC-0356-shaped candidates, with numbers)</h2>
+<ol>
+<li><b>The defer-frame steady-list rescan — 3,556 ms total, 5.4 ms/frame avg, up to 10.0 ms/frame — the single
+largest drain term (44% of all pick time).</b> On every defer frame the 512-cap candidate list is CLEARED,
+REBUILT (<code>_collect_pool</code> × 512 entries: dict-get + <code>_lod_tier_of</code> + <code>_build_ready</code>
+(8 neighbour chunk-gets) + <code>_entry_best_pending_cached</code> probe + <code>_grid_score</code>) and RE-SORTED.
+The list is a snapshot that only needs <b>incremental invalidation</b>: a deferred column is removed from the
+list, and the rebuild is owed only when the pool itself changes (<code>_pool_ver</code> — the pick cache key
+already tracks it). Per the AC-0356 model this removes a per-frame main-thread cost wholesale: the 5.4 ms/frame
+average becomes the small per-change delta.</li>
+<li><b>The data-lane pick scan <code>_pick_data_cached</code> — 1,842 ms total, 2.8 ms/frame (4.8 ms/frame in
+the late windows), the same shape</b> (a cached full-pool scan for the gen feed). Same incremental treatment.</li>
+<li><b><code>hi_nbs</code> — the 8-neighbour <code>snap_rings</code> are recomputed per slab (24× per column)
+even though a neighbour's ring only changes when that neighbour's data does — 0.043–0.076 ms/unit, i.e. ~1–1.8
+ms per column of pure recomputation.</b> The AC-0354 <code>nbs_stamps</code> (the 4 axis neighbours'
+col_gen/data_gen/fl_gen epochs) already exist on the entry as the staleness key — the snapshot is cacheable
+per column against exactly those stamps. A per-column ring cache keyed on the stamps cuts this 24×.</li>
+<li><b><code>hi_copy</code> — two FULL-column C++ value copies per slab (0.018–0.030 ms/unit).</b> The comment
+says the copy is "shared with the handoff stale check" (the check is stamp/colgen-based — <code>c.stamp()</code>
+is copied separately); the worker's own-slab need is 1 of 24 slabs (the emit path's comment says si-1/si/si+1).
+Whether a 3-slab copy suffices for the high build + the stale check is a verify-then-cut candidate.</li>
+<li><b><code>hi_eff</code> — 0.009 ms/unit, and its result is DISCARDED whenever star is on</b>
+(<code>_mesh_dispatch_hslab</code> replaces <code>eff</code> with the star payload <code>pl</code> — this run
+was star-on for every unit: <code>light_self_computes: 0</code>). Dead work, but 9 µs — a no-cost cleanup,
+not a window-mover.</li>
+<li><b>COLLIDE: the per-slab body is the unit, but 81% of it is engine-side</b> (<code>set_faces</code> 42% +
+tree 39%): the GD-gather 15% (0.28 ms/slab) is the only in-process-cuttable slice; the structural hoist is
+one body per column (24 bodies → 1: −23 shape builds, −23 node pairs per column) — but AC-0337 deliberately
+picked per-slab bodies so streaming slabs detach without a full-column rebuild; that is a design trade to make
+on purpose, with the number above, not a slip.</li>
+<li><b><code>hi_star</code> (0.13–0.24 ms/unit, 58–61% of the unit) is the largest per-UNIT term but
+engine-side</b> (C++ AweStarlight). The 3×3×3 settle boxes of adjacent slabs overlap heavily; a column-level
+capture (one payload per settled column instead of per slab) would be the ~24× analog of item 3 — but it
+needs C++-side timing before it can be believed (§6, the instrument note).</li>
+</ol>
+
+<h2>5. What could move to the worker, and what would have to change</h2>
+<p><b>The TG (generation) side has nothing to move:</b> the gen enqueue is already 0.022 ms main-thread — the
+"99% idle" TG worker capacity is a generation-capacity fact, not a per-unit cost site. The per-unit prep that
+COULD leave the main thread is <b>TM (mesh-worker) input preparation</b>: <code>hi_nbs</code> (43 µs),
+<code>hi_copy</code> (18 µs), the entry dict (26 µs), and — the big one — <code>hi_star</code> (134 µs).
+What would have to change: (a) the TM worker would need a <b>thread-safe, epoch-validated view of the live
+neighbours</b> — the snapshot happens on the main thread because AC-0354's contract validates
+<code>nbs_stamps</code> against the LIVE neighbours at handoff; moving it worker-side means a C++ API where the
+worker takes the ring snapshot AND checks the epochs itself (the TM worker already calls AweMesh on value
+copies, so this is an API addition, not a threading overhaul); (b) <code>slab_light_payload</code> reads
+<b>engine state (AweStarlight)</b> — the TM worker does not touch star today, so star-payload offload is
+engine-threading work (a star API callable from a worker against a settled snapshot, or the column-level
+capture of §4.7 computed in C++); (c) the pick machinery (§4.1–4.2) cannot move — it schedules against the
+live queue on the main thread; it must be made cheaper where it is.</p>
+
+<h2>6. What could NOT be measured (and the instrument that would be needed)</h2>
+<ol>
+<li><b>the LOW lane's per-unit cost</b> — zero far-slab dispatches in the whole run (the drain stayed
+high-saturated: no TM-cap/settle defer ever let a ring-2/3 entry through the re-pick; §2.2). Instrument that
+would close it: a later R24 walk long enough to pass the high set (or a run with high-lane defers forced —
+e.g. <code>AWECRAFT_TM_HO</code>-style cap lowering — if one exists for the slab lane), re-running these same
+brackets.</li>
+<li><b>three long main-thread stalls outside the frame</b> (t ≈ 13.4–27.7, 27.7–46.2, 46.2–61.1 s — 14.3/18.5/
+14.9 s of window wall each). The WPSUB cadence (60 frames) cannot see between-frame stalls, but the
+wall-time arithmetic proves them: a gap window's 60 frames carry only ~2–4 s of frame time (e.g. window
+t=27710: 702 ms of pick + 156 ms of dispatch + 326 ms of collide in 60 frames) against 14.3 s of wall — and
+the 289-frame storm cap (<code>wfc_total_n</code>) rules out ~60 × 250 ms storm frames filling the gap.
+No in-process bracket can attribute a stall that happens between frames. Instrument that would be needed: an
+<b>external 1 Hz sampler on <code>/proc/&lt;pid&gt;/stat</code> + RSS</b> (or <code>perf trace
+-e sched:sched_switch,page-faults</code>) running alongside the walk; candidate causes to distinguish:
+machine memory pressure/swap (this box's 16 GB battery, per the standing continuity note), a Godot main-loop
+sync operation, or an engine GC pause (the AC-0365 lesson: engine GC is not exposed in-process, and its
+absence here is consistent with that). Consequence for this ticket: the per-window averages understate the
+worst-frame composition by whatever share the stalls displaced; the per-UNIT numbers (bracketed inside the
+frames) are unaffected.</li>
+<li><b>inside the engine terms</b> — <code>slab_light_payload</code>/<code>box_settled</code> internals
+(134 µs/unit) and <code>set_faces</code>/<code>add_child</code> internals (1.53 ms/slab) are C++; a C++-side
+timer (gdext perf counters / Godot profiler at C++ granularity) would be needed to split them further. The
+GD-side sub-split (shape vs tree vs gather) is the actionable half and is already delivered.</li>
+<li><b>immediate vs staged COLLIDE per frame</b> — both ride the one <code>WP_COLLIDE</code> stage and one
+per-slab census; one extra counter (tag the slabs served by <code>_col_drain_step</code>) would split them in a
+later run.</li>
+</ol>
+
+<h2>7. Reconciliation against AC-0364's c ≈ 4.5 ms, and instrument validation</h2>
+<p><b>c is not a dispatch cost.</b> AC-0364 computed c = (DRAIN-stage ms of the worst 20 frames) ÷
+(units/frame) ≈ 25.7–48 ms ÷ 6–8 ≈ 4.5 ms. This run's brackets show what those DRAIN ms contain per frame
+(walk-phase average, 180 frames): pick + rescan 6.73 + data-pick 1.56 + HIGH dispatch 2.02 + staged collide
+3.65 + star 0.2 + bookkeeping ≈ 14.4 ms, and the worst frames in the same window carry DRAIN 28–35 ms with
+collide up to 29 ms inside — i.e. c ≈ (14–40 ms per frame) ÷ (6–8 units) = the observed 4.5 ms, of which the
+actual per-unit dispatch (0.40 ms) is ~10%. <b>The window is bounded by the per-frame scan machinery + the
+staged collision lane amortised over the budgeted units — cutting "the 4.5 ms per unit" means cutting §4.1–4.2
+and the collide per-slab cost, not the dispatch call.</b></p>
+<p><b>Instrument validation (the AC-0362 seam lesson, applied):</b></p>
+<ul>
+<li><b>Collision sub-brackets tile exactly onto the shipped census</b> (AC-0337's per-slab counter, already in
+the arm's RESULT): this run's brackets 888 slabs / 1,659.8 ms / 1.87 ms-slab vs the shipped census 894 slabs /
+1,685.1 ms / 1.88 ms-slab — the 6-slab / 25 ms delta is exactly the un-emitted tail (no WPSUB window after
+t=68,429 ms); sub-splits sum to the per-slab total with 0 µs residual.</li>
+<li><b>Frame-level reconciliation:</b> the per-frame drain terms (16.4 ms full-run avg, 10.4 ms walk) sit
+under the DRAIN-stage ms of the corresponding worst frames (17.4–40.9), with the difference accounted by the
+staged collide + star + bookkeeping (worked example in §3); no term exceeds its stage.</li>
+<li><b>Run sanity:</b> arm <code>ok: true</code>, 10/10 crossings, <code>walk_s: 10.95</code>,
+<code>storm_walk_p99_ms: 90</code> (gate ≤ 200), max 388, <code>resident_final: 1453</code>,
+<code>queue_size: 1281</code>, <code>staged_pending_final: 0</code> — same shape as AC-0364's run (queue flat
+~1,255–1,352, in-radius high growing 13→97 during the walk here vs 13→84 there).</li>
+<li><b>Deviation (stated, not hidden):</b> the run measured on <code>bcdf045</code> (post AC-0367 terrain: 66%
+cave-free columns) is not AC-0364's tree; the lane-mix difference (§2.2) is the visible consequence. The
+per-unit terms are tree-local measurements of the shipped dispatch path (the brackets changed no behaviour —
+G0 with brackets: rc 0, zero SCRIPT ERROR; pristine re-verified: rc 0, zero SCRIPT ERROR;
+<code>git diff --stat</code> empty on <code>godot/world/world.gd</code> + <code>godot/world/chunk.gd</code>).</li>
+</ul>
+
+<h2>8. Gates and deviations</h2>
+<table>
+<tr><th>gate</th><th>result</th></tr>
+<tr><td>G0 with brackets (compile + run check)</td><td class="ok">rc 0, zero <code>SCRIPT ERROR</code> lines (<code>.scratch/AC-0369-gates/g0_brackets.log</code>)</td></tr>
+<tr><td>ONE R24 instrumented walk (capped, one godot)</td><td class="ok">rc 0, <code>ok: true</code>, 10/10 crossings, zero ERROR lines, walk_s 10.95, storm p99 90 ≤ 200 (<code>.scratch/AC-0369-gates/walk_r24.log</code>, 839 lines, 11 WPSUB)</td></tr>
+<tr><td>brackets removed + G0 pristine</td><td class="ok">rc 0, zero <code>SCRIPT ERROR</code> lines (<code>.scratch/AC-0369-gates/g0_pristine.log</code>)</td></tr>
+<tr><td><code>git diff --stat</code> on touched files</td><td class="ok">empty on <code>godot/world/world.gd</code>, <code>godot/world/chunk.gd</code> (the only tree delta is another session's pre-existing <code>tasks/TASKS.yaml</code> change — untouched by this run)</td></tr>
+<tr><td>no renders / no R50 / no <code>load</code> arm / no commit</td><td class="ok">honoured</td></tr>
+<tr><td>deviations</td><td class="warn">(a) three 14–18 s between-frame stalls cut the WPSUB coverage (11 windows instead of a continuous stream) — §6.2; (b) LOW lane 0 units — §2.2/§6.1; (c) tree is <code>bcdf045</code>, not AC-0364's <code>e39e550</code> — §7. No other deviation; no optimisation was made (measurement only, per the fence).</td></tr>
+</table>
+
+<h2>9. Files</h2>
+<ul>
+<li><code>tasks/AC-0369/AC-0369-results.html</code> — this page</li>
+<li><code>.scratch/AC-0369-gates/walk_r24.log</code> — the one instrumented walk (839 lines; 11 WPSUB + RESULT)</li>
+<li><code>.scratch/AC-0369-gates/g0_brackets.log</code>, <code>g0_pristine.log</code> — the two G0 runs</li>
+<li><code>.scratch/AC-0369-gates/analyze.py</code> — the WPSUB parser (read-only instrument; validated in §7)</li>
+<li><code>godot/world/world.gd</code>, <code>godot/world/chunk.gd</code> — brackets added and removed; byte-identical to HEAD at end</li>
+</ul>
+
+</body>
+</html>
