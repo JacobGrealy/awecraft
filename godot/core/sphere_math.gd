@@ -49,6 +49,12 @@ class_name SphereMath
 
 const CELLS_PER_FACE := 1024
 
+# AC-0362: the seam grout (see the column_transform section header) — the
+# centre-anchored in-plane overlap of the placed facet. 8*SEAM_FILL = 0.8 mm
+# of extra footprint per side closes every across-seam slit (design worst
+# 53 um; rendered float32 worst 502 um) with a >= 1.07 mm rendered margin.
+const SEAM_FILL := 1.0e-4
+
 # AC-0306: the flat width (m = columns) of ONE cube face at radius R. The grid
 # lock: 4 face-widths = the sphere circumference 2*pi*R => W = pi*R/2 (the
 # per-planet rule W = 1.5708*R). At the shipped R = 4000: W = 6283 (3141 per
@@ -275,11 +281,31 @@ static func neighbor_key(face: int, cx: int, cz: int, dir: Vector2i) -> Dictiona
 #           (sign kept in the flat +z sense against the centre chord z0)
 #   z     = normalize(uE + uW)   (one-sided -> the single one; none -> z0)
 #   x     = n cross z
-#   origin = P - 8x - 8z         (the flat corner; the facet centre sits at P)
+#   origin = P - 8(1+S)x - 8(1+S)z  (S = SEAM_FILL, the AC-0362 grout; the
+#             flat corner; the facet centre (8,0,8) still sits at P)
 # A's east edge line and B's west edge line (B = A's east neighbour) both
 # lie on the two tangent planes' intersection line (the folded-net shared
-# edge): they coincide to the irreducible mm-cm residual — a sphere is not
+# edge): they coincide to the irreducible residual — a sphere is not
 # developable (AC-0042's grout territory; verified by the AC-0307 probe).
+#
+# AC-0362 SEAM GROUT — centre-anchored in-plane overlap. Measured
+# 2026-09-27 (.scratch/ac0362_true.py, the exact across-seam footprint gap
+# of the placed sheets): the folded-net residual sits almost entirely in the
+# along-seam/radial directions (the V-crack class, AC-0311); the ACROSS-seam
+# footprint residual is 1,284 of the 308,112 home-pair seams open by up to
+# 53 um at design precision, and 1,403 seams up to 502 um once the float32
+# stored Transform3D rounding is emulated. A ray from above threads the
+# ground iff the two footprints' across-seam ranges do not overlap, so the
+# grout is a pure in-plane overlap: the basis scales by (1 + SEAM_FILL) in
+# the x/z columns and the origin follows, i.e. every footprint extends
+# 8*SEAM_FILL past its flat edge (0.8 mm) and every seam gains 16*SEAM_FILL
+# = 1.6 mm of double coverage — the rendered worst case becomes a 1.07 mm
+# overlap, so all 308,112 seams are opaque with margin. NO TILT: tilting the
+# facet would close nothing (the open component is in-plane) and would move
+# the terrain. Cost: +0.8 mm per footprint side, <= ~1.2 mm column height
+# change, zero new geometry; the local 16x16 range, meshing, greedy
+# thresholds, light grid and collision stay flat-local (the flat-local
+# invariant holds — only the node transform changed).
 #
 # FRAMES: the planet frame has origin = the planet centre and the home face
 # on +Y, so the flat origin (the home-patch centre) sits at (0, R, 0). The
@@ -328,8 +354,12 @@ static func column_transform(cx: int, cz: int, R: float) -> Transform3D:
 	else:
 		z = z0
 	var x: Vector3 = n.cross(z).normalized()
-	var origin: Vector3 = P - 8.0 * x - 8.0 * z - Vector3(0.0, R, 0.0)
-	return Transform3D(Basis(x, n, z), origin)
+	# AC-0362 seam grout (section header): the centre-anchored in-plane
+	# overlap. The facet stays flat; the basis stays orthogonal (the x/z
+	# columns share the scale s); local (8,0,8) still maps to P - (0,R,0).
+	var s: float = 1.0 + SEAM_FILL
+	var origin: Vector3 = P - 8.0 * s * x - 8.0 * s * z - Vector3(0.0, R, 0.0)
+	return Transform3D(Basis(x * s, n, z * s), origin)
 
 static func flat_to_world(x: float, y: float, z: float, R: float) -> Vector3:
 	# Flat (block) coords (x, height, z) -> global world position: the point

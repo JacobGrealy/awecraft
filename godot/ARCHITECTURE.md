@@ -177,14 +177,22 @@ Match these; do not improvise a different approach in a task.
   on the home pair a column IS its flat x/z and stays that way — genhash 25/25 and
   the save edit keys are untouched by the mapping; only the position→cell ratio and
   the pre-warp move. The `sphere` probe (harness arm `AWECRAFT_LOGIC=sphere`) is the
-  permanent proof. **Per-column placement (AC-0307):** the chunk node transform is a
-  RIGID per-column placement, `SphereMath.column_transform(cx, cz, R)` — the facet is
+  permanent proof. **Per-column placement (AC-0307; seam grout AC-0362):** the
+  chunk node transform is a RIGID per-column placement (affine: the facet basis is
+  scaled by `(1 + SphereMath.SEAM_FILL)` in its x/z columns),
+  `SphereMath.column_transform(cx, cz, R)` — the facet is
   the tangent plane at the sphere point of the column's own flat centre (local +Y =
   the radial there), and its shared edges are aligned to the intersection line of the
   neighbours' tangent planes (shared-edge bisector): the folded-net convention —
   neighbours meet along the shared edge to the irreducible non-developable residual
   (mm–cm near the spawn; up to ~1–2 m in the spacing-stretch corner regions — a
-  sub-mm-deep wedge, AC-0042 grout territory). The GLOBAL frame is the planet frame
+  sub-mm-deep wedge, AC-0042 grout territory). The ACROSS-seam footprint component
+  of that residual was closed by the AC-0362 grout: a centre-anchored in-plane
+  overlap (`SEAM_FILL = 1e-4` → 0.8 mm extra footprint per side, 1.6 mm double
+  coverage per seam; rendered worst case a 1.07 mm overlap), so all 308,112
+  home-pair seams are opaque — before: up to 53 um (design) / 502 um (float32
+  rendered) slits on 1,284 / 1,403 seams. The residual's radial/along-seam
+  component stays AC-0311's V-crack class (double-covered, not see-through). The GLOBAL frame is the planet frame
   shifted by (0,−R,0) so the +Y pole (flat origin) sits on the global origin and the
   spawn facet is sub-degree. Point conversions: `SphereMath.flat_to_world(x,y,z,R)` /
   `world_to_flat(p,R)` (exact inverse — height = above the LOCAL facet plane; at a
