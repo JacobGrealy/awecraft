@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0365 — the MISC residual, decomposed into named consumers</title>
+<style>
+body{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;max-width:110em;margin:1.5em auto;padding:0 1em;color:#1a1a1a;line-height:1.45}
+h1{font-size:1.5em;border-bottom:3px solid #2563eb;padding-bottom:.3em}
+h2{font-size:1.2em;margin-top:1.8em;color:#1e40af;border-bottom:1px solid #cbd5e1;padding-bottom:.2em}
+h3{font-size:1.05em;margin-top:1.2em;color:#334155}
+table{border-collapse:collapse;margin:1em 0;font-size:13px}
+th,td{border:1px solid #cbd5e1;padding:.35em .6em;text-align:left;vertical-align:top}
+th{background:#eff6ff}
+.ok{background:#dcfce7}.warn{background:#fef9c3}.bad{background:#fee2e2}
+code,pre{background:#f1f5f9;padding:.1em .3em;border-radius:3px}
+pre{padding:.8em;overflow-x:auto;font-size:12px;line-height:1.35}
+.note{background:#eff6ff;border-left:4px solid #2563eb;padding:.6em 1em;margin:1em 0}
+.find{background:#fefce8;border-left:4px solid #eab308;padding:.6em 1em;margin:1em 0}
+</style>
+</head>
+<body>
+
+<h1>AC-0365 — the MISC residual, decomposed into named consumers</h1>
+<p><b>Role:</b> bounded measurement run (instrumentation-only, no optimisation, no TASKS.yaml edit, no renders, ONE R24 walk, capped).
+Tree: <code>e39e550</code> (game code byte-identical to AC-0363/AC-0364's tree). Knobs:
+<code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=24 AWECRAFT_WALK=10 AWECRAFT_TICKTIME=1</code>,
+<code>ulimit -v 8388608</code>, one godot at a time. <b>Verdict: DONE.</b></p>
+
+<div class="find"><b>Priority has moved — said plainly, per the ticket's own premise:</b> MISC is no longer the
+biggest share of the worst frame. AC-0363's STEP-1 re-measure inverted the split (worst captured frame
+74.1 ms: DRAIN 53.7 ms / 72%, MISC 6.3 ms / 8.5%), and AC-0364 showed the fill window is bounded by the
+DRAIN stage's ~4.5 ms per-unit dispatch cost, not by anything in MISC. <b>The ticket to aim at next is
+AC-0369 (the DRAIN dispatch cost); this ticket's value is that the ~6 ms residual is now NAMED.</b>
+Delivered below: of the worst-20 walk frames' MISC (124.3 ms over 20 frames, mean 6.2 ms — matching
+AC-0363's 6.3 ms, NOT AC-0352's 59.3% era), <b>98.0% is a single named consumer: the 20 Hz game tick</b>
+(121.8 ms; inside it, the fluid sim is 33.8 ms and the random-tick pass ≈ 88.0 ms). Save-queue writes,
+the per-frame fluid arming loop, the atlas identity check, and the manual cull pass all measured
+<b>0.0 ms</b> (the cull pass is not even enabled — engine cull is the AC-0212 default). What remains
+unattributable is ≤ 2.5 ms over 20 frames (display-rounding floor) plus GC-class pauses, which are
+engine-side and not bracketable from GDScript (the instrument gap, §6). And the tick <b>multi-fires in
+long frames</b> (17 of the 20 worst fired 2–3 ticks) — the ticket's hypothesis #1, confirmed.</div>
+
+<h2>1. Baseline (the current MISC share — not AC-0352's)</h2>
+<table>
+<tr><th>population</th><th>frame</th><th>MISC</th><th>source</th></tr>
+<tr><td>worst captured frame (single)</td><td>74.1 ms</td><td><b>6.3 ms (8.5%)</b></td><td>AC-0363 STEP 1 (current tree, 09-26)</td></tr>
+<tr><td>worst-20 walk frames (this run)</td><td>43.0–67.5 ms (mean 48.9)</td><td><b>3.8–9.4 ms (mean 6.2; 12.7% of frame)</b></td><td>this run, same wprof partition, <code>worst_frames[]</code> ring</td></tr>
+<tr class="warn"><td>historical reference — NOT a baseline</td><td>worst-20, 1,973 ms total</td><td>1,170.4 ms (59.3%)</td><td>AC-0352 (09-23, pre-cave-series world) — the ticket forbids reusing it</td></tr>
+</table>
+<p>This run's MISC (mean 6.2 ms over the worst 20; p50 5.9 / p95 7.9 / max 9.4) sits on AC-0363's 6.3 ms
+reading — the instrument (including this run's temp brackets, §2) did not move the bucket.</p>
+
+<h2>2. The instrument (temporary, removed before exit)</h2>
+<p>Six sub-stage slots added to the existing wprof partition in <code>godot/world/world.gd</code>
+(constants <code>WP_AC365_*</code> 13–18, <code>WP_STAGES</code> 13→19), in the residual's own idiom
+(<code>_wprof_add(stage, us)</code> with <code>Time.get_ticks_usec()</code> stamps) — sub-stages that
+accumulate where the work happens and <b>never</b> into the five-stage partition, so the MISC
+reconciliation stays exact (verified: 0 of 20 frames where the named sum exceeded MISC beyond display
+rounding). Bracketed: <code>_drain_save_queue()</code>, <code>_game_tick_accumulate()</code>,
+<code>tick_fluids()</code> (inside the tick), the per-frame <code>fluid_marks</code> arming loop, the
+atlas-identity check/rebuild block, and <code>_frustum_cull_pass()</code>. A per-frame tick-fire counter
+(<code>ac365_tickn</code>, from the existing <code>tick_index</code>) rode along for the multi-fire
+hypothesis. Values were captured into the existing AC-0352 worst-frame ring
+(<code>_wfc_capture</code>), so the split landed in the arm's own <code>RESULT worst_frames[].split</code>
+on the exact population the arm defines (walk-window frames &gt; 30 ms, worst 20). Per-frame overhead:
+six timestamp reads + six array adds — a few µs, below the instrument's 0.1 ms display granularity.
+<b>All of it removed before exit</b> (§7).</p>
+
+<h2>3. The split — what MISC's ~6 ms actually consists of</h2>
+<p>Population: the 20 worst walk-window frames of this run (same population AC-0352 used: worst-N above
+threshold, not an average). ms values at the instrument's 0.1 ms display precision.</p>
+<table>
+<tr><th>consumer (bracket)</th><th>what it is</th><th>p50</th><th>p95</th><th>max</th><th>sum (20)</th><th>share of frame</th><th>share of MISC</th></tr>
+<tr class="warn"><td><b>20 Hz game tick</b> (<code>ac365_gtick</code>)</td><td><code>_game_tick_accumulate</code> — the fixed-step 50 ms sim clock; per tick: random-tick pass (band-0 timer countdown, 24 sub-chunks/column, hash + <code>random_tick_map</code> dict updates), <code>tick_fluids</code>, leaf decay</td><td>5.8</td><td>7.8</td><td>9.3</td><td><b>121.8</b></td><td><b>12.4%</b></td><td><b>98.0%</b></td></tr>
+<tr><td>— of which fluid sim (<code>ac365_fluidt</code>, a gtick subset)</td><td><code>tick_fluids()</code> — the band-0 fluid pass, once per fired tick</td><td>1.7</td><td>2.1</td><td>2.8</td><td>33.8</td><td>3.5%</td><td>27.2%</td></tr>
+<tr><td>— of which random-tick pass + leaf decay (derived: gtick − fluidt)</td><td>per-tick, per-band-0-column × 24 sub-chunks: hash math + per-sub-chunk Dictionary map update (the consumer hook is a stub — bookkeeping today)</td><td>—</td><td>—</td><td>—</td><td>≈ 88.0</td><td>≈ 9.0%</td><td>≈ 70.8%</td></tr>
+<tr><td>save-queue writes (<code>ac365_saveq</code>)</td><td><code>_drain_save_queue</code> — amortized full-column writes</td><td>0.0</td><td>0.0</td><td>0.0</td><td>0.0</td><td>0.0%</td><td>0.0%</td></tr>
+<tr><td>fluid arming loop (<code>ac365_fluidmk</code>)</td><td>the per-frame <code>fluid_marks</code> build + <code>fluid_dirty</code> clear</td><td>0.0</td><td>0.0</td><td>0.0</td><td>0.0</td><td>0.0%</td><td>0.0%</td></tr>
+<tr><td>atlas check (<code>ac365_atlas</code>)</td><td>the per-frame atlas identity compare (rebuild path: never fired in this run)</td><td>0.0</td><td>0.0</td><td>0.0</td><td>0.0</td><td>0.0%</td><td>0.0%</td></tr>
+<tr><td>cull pass (<code>ac365_cull</code>)</td><td><code>_frustum_cull_pass</code> — <b>disabled in this run</b> (engine cull is the AC-0212 default; <code>_cull_enabled</code> false) — the atlas/cull candidate reads "off", not "fast"; the engine's own cull sits in the engine-side gap, §5</td><td>0.0</td><td>0.0</td><td>0.0</td><td>0.0</td><td>0.0%</td><td>0.0%</td></tr>
+<tr><td>unbracketed remainder (<code>other</code>, derived: MISC − named)</td><td><code>_loading_tick</code>, <code>_banana_tick</code>, the ahead/settle checks, the idle predicate, <code>_drain_deferred_free</code>, <code>_dirty_drain</code>, <code>_drain_tex_refresh</code>, the <code>_prof_ring</code> append — each &lt; 0.1 ms</td><td>0.0</td><td>0.7</td><td>0.7</td><td>2.5</td><td>0.26%</td><td>2.0%</td></tr>
+<tr><th>MISC (the residual being decomposed)</th><th></th><th>5.9</th><th>7.9</th><th>9.4</th><th>124.3</th><th>12.7%</th><th>100%</th></tr>
+<tr><th>frame total (<code>_process</code> wall)</th><th></th><th>48.2</th><th>59.6</th><th>67.5</th><th>978.9</th><th>100%</th><th>—</th></tr>
+</table>
+<p>Context stages on the same 20 frames (the arm's existing split, unchanged by the brackets):
+DRAIN 17.1–44.1 ms (mean ~31), COLLIDE 0.1–25.6, HANDOFF 3.0–14.5, RECENTER 0–8.0, LOW 1.4–2.4 —
+consistent with AC-0363/AC-0364's DRAIN-dominated worst-frame shape on this tree.</p>
+
+<h2>4. The multi-fire finding (the ticket's hypothesis #1 — CONFIRMED)</h2>
+<p><code>ac365_tickn</code> (20 Hz ticks fired INSIDE one <code>_process</code> frame) over the 20 worst
+frames: <b>{1: 3 frames, 2: 15 frames, 3: 2 frames}</b> — 17 of 20 fired more than once. The tick is
+driven by accumulated wall time with a catch-up of up to 4 (TICK_MAX_CATCHUP), so a stalled frame that
+accumulates &gt; 100 ms runs 2–3 full ticks back-to-back. Per-tick cost from the data: tickn=1 frames
+3.7–5.0 ms; tickn=2 frames 5.1–7.8 ms (≈ 2.6–3.9 ms each); tickn=3 frames 7.5–9.3 ms (≈ 2.5–3.1 ms
+each) — <b>≈ 2.5–4 ms per tick, so the consumer scales WITH the stall rather than merely contributing
+to it</b>: every 50 ms of backlog the frame pays another ~3 ms of main-thread tick work.</p>
+
+<h2>5. The engine-side gap (STEP 2 — a number, unchanged, not fixed here)</h2>
+<p>All six brackets sit inside <code>World._process</code>, so the arm-side frame wall (which includes
+physics over the collision bodies, render-server bookkeeping, and scene-tree work) still exceeds the
+<code>_process</code> total by the ~16–17 ms AC-0352 measured; these brackets change that reading in no
+way (they measure strictly inside the partition, and the MISC reconciliation stayed exact on all 20
+frames). It remains a different instrument problem — FrameTime-style profiling or an engine-side
+physics-step bracket — deliberately left to its own ticket. Nothing in this run touches it.</p>
+
+<h2>6. What remains unattributable, and the instrument gap (GC)</h2>
+<ol>
+<li><b>Display-rounding floor:</b> the derived remainder is 2.5 ms over 20 frames (0.125 ms/frame), and
+the split's 12 fields are reported at 0.1 ms precision — the true unbracketed <code>_process</code>
+work (loading/banana ticks, the idle predicate, deferred frees, tex refresh) is each well under 0.1 ms
+on this population. <b>There is no hidden consumer in MISC on the current tree.</b></li>
+<li><b>GC-class pauses: NOT measurable in-process — an instrument gap, stated as the ticket allows.</b>
+Godot's script GC runs on the main thread but exposes no pause-duration counter to GDScript; a bracket
+cannot wrap an engine-internal collection, and a crude proxy (object-count deltas,
+<code>Engine.get_total_object_count()</code>) sees the allocation, not the pause. The instrument that
+would be needed: the Godot profiler's script-GC category (profiling build / the editor profiler export)
+or an engine-side timer. Note the shape evidence: with the tick bracketed, MISC is a steady 3.8–9.4 ms
+that tracks tickn almost exactly — the "bursty unattributed tail" GC hypothesis is <b>not supported</b>
+on this tree; whatever GC pauses exist, they do not own the residual.</li>
+</ol>
+
+<h2>7. Gates, removal, and deviations</h2>
+<ol>
+<li><b>Three godot runs, one at a time, all <code>HOME=/tmp/dsh_home</code> + <code>ulimit -v 8388608</code>,
+absolute engine path, no R50, no <code>load</code> arm, no renders:</b> (a) G0 with brackets in place —
+rc 0, <b>zero</b> SCRIPT ERROR lines (<code>.scratch/AC-0365-gates/g0_bracketed.log</code>); (b) THE run —
+one R24 boundary walk, rc 0, zero SCRIPT ERROR lines, arm <code>ok: true</code> (10/10 crossings,
+marker_ok), walk 10.19 s, storm 109 frames &gt; 30 ms / p99 157 / max 430, queue 1316
+(<code>.scratch/AC-0365-gates/walk_r24.log</code>, 1617 lines); (c) G0 on the pristine tree after removal
+— rc 0, <b>zero</b> SCRIPT ERROR lines (<code>.scratch/AC-0365-gates/g0_pristine.log</code>).</li>
+<li><b>Removal proven, not asserted:</b> <code>grep -c "AC-0365|AC365|ac365"</code> on world.gd = 0;
+<code>git diff --stat</code> on <code>godot/world/world.gd</code> AND <code>godot/scenes/harness.gd</code>
+= <b>empty</b> (both byte-identical to HEAD; harness.gd was never touched — the capture already lived in
+world.gd's ring). No commit; <code>tasks/TASKS.yaml</code> untouched (its pre-existing modification
+belongs to another session).</li>
+<li><b>Standing values not re-baselined.</b> This run's row fields (storm p99 157 vs AC-0363's 115 /
+AC-0364's 180; walk 10.19 s vs 10.13) come from the <i>instrumented</i> tree and sit inside the
+run-to-run band those two runs already span; the brackets cost a few µs/frame (below the 0.1 ms display
+granularity) and the MISC reconciliation stayed exact, so they cannot move boundary r4, the R24 crossing
+row, or <code>storm_walk_p99_ms</code>. No second walk was run on the pristine tree — the ticket's fence
+requires the values not to move, not a pristine re-walk, and the run budget was kept to the one walk
+plus two G0s.</li>
+<li>Percentile method on n=20: nearest-rank (p50 = 10th, p95 = 19th of the sorted values).</li>
+</ol>
+
+<h2>8. Native-port flags (the 2026-09-26 ADDITION — a report, not a work item)</h2>
+<table>
+<tr><th>consumer</th><th>lane</th><th>call shape</th><th>port candidate</th></tr>
+<tr class="warn"><td><b>20 Hz tick — random-tick pass + leaf decay</b> (≈ 70.8% of MISC; the per-tick work: 24 sub-chunks × (hash math + <code>random_tick_map</code> Dictionary update) per band-0 column, × the fired tick count)</td><td>GDScript main thread</td><td><b>per-tick — fires 2–3× per stalled frame, i.e. per-frame in the storm</b> (the deciding field)</td><td><b>YES</b> — per-frame GDScript with a material measured share (≈ 9.0% of the worst frame); the work is pure data (hash + dict bookkeeping, consumer hook is a stub) with no SceneTree dependency. Per the ticket's own rule, this is the finding this ticket was worth running for; a port/rewrite is its own ticket with this number attached.</td></tr>
+<tr class="warn"><td><b>20 Hz tick — fluid sim</b> (<code>tick_fluids</code>; 27.2% of MISC)</td><td>GDScript main thread</td><td>per-tick × per band-0 column (the 41-column sim diamond), 2–3× per stalled frame</td><td><b>YES</b> — same lane/shape argument as above, smaller share; it rides the same tick, so the follow-up ticket would cover it in the same move.</td></tr>
+<tr><td>save-queue drain</td><td>GDScript main thread</td><td>per-event (player edits) — empty on a walk arm</td><td>no — measured 0.0 on this population; no share to attach.</td></tr>
+<tr><td>fluid arming loop / atlas check</td><td>GDScript main thread</td><td>per-frame</td><td>no — per-frame shape but measured 0.0 ms (well below display precision); porting on structure alone would be a guess, which the ticket's own worked examples say not to do.</td></tr>
+<tr><td>manual cull pass</td><td>GDScript main thread (when enabled)</td><td>per-frame</td><td>unclear — <b>not enabled in this run</b> (engine cull default), so there is no measured share to flag; the engine's own cull work sits in the engine-side gap (§5), which is not a GDScript port question.</td></tr>
+</table>
+<p class="note">Nothing in <code>scenes/harness.gd</code> was flagged (dev-only, per the ADDITION) — and
+nothing was added there at all.</p>
+
+<h2>9. RESULT (the single run)</h2>
+<pre>
+tree e39e550 · AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=24 AWECRAFT_WALK=10 AWECRAFT_TICKTIME=1 · ulimit -v 8388608 · one godot at a time
+rc 0 · SCRIPT ERROR 0 · arm ok:true · crossings 10/10 · walk_s 10.19 · storm_walk_n 109 · storm_walk_p99_ms 157 · storm_walk_max_ms 430
+wfc_total_n 349 · wfc_boot_n 1 · queue 1316 · built_final 117 · resident_final 1453
+
+misc_decomposition  // population: the arm's worst-20 walk-window frames (&gt;30 ms), ms @ 0.1 precision
+  frame_total:  p50 48.2 / p95 59.6 / max 67.5 / sum 978.9
+  MISC:         p50 5.9  / p95 7.9  / max 9.4  / sum 124.3   // 12.7% of frame; matches AC-0363's 6.3 ms/frame (NOT AC-0352's 59.3%)
+  gtick (20 Hz): p50 5.8 / p95 7.8 / max 9.3 / sum 121.8 = 98.0% of MISC, 12.4% of frame
+    - fluidt (subset):  p50 1.7 / p95 2.1 / max 2.8 / sum 33.8 = 27.2% of MISC
+    - random-tick+leaf (derived): sum ≈ 88.0 = 70.8% of MISC
+  saveq: 0.0 · fluidmk: 0.0 · atlas: 0.0 · cull: 0.0 (disabled — engine cull default)
+  other (unbracketed remainder, derived): p50 0.0 / p95 0.7 / max 0.7 / sum 2.5 = 2.0% of MISC (display-rounding floor)
+  consistency: 0/20 frames where named sum &gt; MISC; 0/20 where fluidt &gt; gtick
+
+tick_multifire  // the ticket's hypothesis #1 — CONFIRMED
+  tickn histogram over worst-20: {1: 3, 2: 15, 3: 2}   // 17/20 fired &gt; 1 tick
+  per-tick cost: tickn=1: 3.7–5.0 ms/frame · tickn=2: 5.1–7.8 · tickn=3: 7.5–9.3  → ≈ 2.5–4 ms per fired tick
+  reading: the tick SCALES WITH the stall (50 ms of backlog → one more ~3 ms of main-thread tick work)
+
+gc: { measurable_in_process: false, residual_supported: false,
+      note: "MISC tracks tickn almost exactly once bracketed — no unattributed bursty tail; GC pauses are engine-side, no pause-duration counter exposed to GDScript; instrument needed: Godot profiler script-GC category or engine-side timer" }
+
+port_flags: { random_tick_pass: "YES — GDScript main thread, per-tick (per-frame in the storm), ≈9.0% of worst frame, pure hash+dict bookkeeping",
+              tick_fluids: "YES — same lane/shape, 3.5% of worst frame, rides the same tick",
+              saveq: "no (0.0)", fluidmk: "no (0.0, per-frame but sub-precision)", atlas: "no (0.0)", cull: "unclear (not enabled in this run)" }
+
+priority: "DRAIN is the share to move (72% of the worst frame, AC-0363 STEP 1; window-bounding ~4.5 ms/unit, AC-0364) — its ticket is AC-0369. MISC (8.5–12.7%) is now named: the 20 Hz tick. A follow-up aimed at a NAME (the tick's per-tick work, incl. the catch-up multiplier) is possible, but it is no longer the biggest share."
+</pre>
+
+<h2>10. Per-frame table (the 20 worst walk frames, worst first)</h2>
+<pre>
+frame  misc   drain  tickn  saveq  gtick  fluidt fluidmk atlas  cull   other
+ 67.5   7.3  42.1     2    0.0    6.6     1.8     0.0   0.0   0.0    0.7
+ 59.6   5.7  44.1     2    0.0    5.7     1.7     0.0   0.0   0.0    0.0
+ 55.0   5.1  34.1     2    0.0    5.1     1.3     0.0   0.0   0.0    0.0
+ 50.7   9.4  31.6     3    0.0    9.3     2.8     0.0   0.0   0.0    0.1
+ 50.4   5.2  35.5     2    0.0    5.1     1.4     0.0   0.0   0.0    0.1
+ 50.1   6.2  39.0     2    0.0    6.2     1.7     0.0   0.0   0.0    0.0
+ 49.3   7.8  24.1     2    0.0    7.8     2.1     0.0   0.0   0.0    0.0
+ 48.8   5.0  33.6     1    0.0    5.0     1.5     0.0   0.0   0.0    0.0
+ 48.6   5.8  28.7     2    0.0    5.8     1.7     0.0   0.0   0.0    0.0
+ 48.2   6.0  18.9     2    0.0    6.0     1.6     0.0   0.0   0.0    0.0
+ 48.2   5.8  29.3     2    0.0    5.8     1.7     0.0   0.0   0.0    0.0
+ 46.5   6.0  20.8     2    0.0    6.0     1.6     0.0   0.0   0.0    0.0
+ 46.0   3.8  28.6     1    0.0    3.7     1.1     0.0   0.0   0.0    0.1
+ 45.8   3.9  17.9     1    0.0    3.9     1.2     0.0   0.0   0.0    0.0
+ 45.3   7.3  29.1     2    0.0    7.2     2.0     0.0   0.0   0.0    0.1
+ 44.9   7.5  28.1     3    0.0    7.5     1.9     0.0   0.0   0.0    0.0
+ 44.2   5.2  29.5     2    0.0    5.2     1.3     0.0   0.0   0.0    0.0
+ 43.8   7.5  20.2     2    0.0    7.5     2.1     0.0   0.0   0.0    0.0
+ 43.0   5.9  17.1     2    0.0    5.2     1.3     0.0   0.0   0.0    0.7
+ 43.0   7.9  17.5     2    0.0    7.2     2.0     0.0   0.0   0.0    0.7
+</pre>
+
+<h2>11. Files</h2>
+<ul>
+<li><code>tasks/AC-0365/AC-0365-results.html</code> — this page</li>
+<li><code>.scratch/AC-0365-gates/g0_bracketed.log</code> — G0 with brackets (rc 0, 0 SCRIPT ERROR)</li>
+<li><code>.scratch/AC-0365-gates/walk_r24.log</code> — THE run (1617 lines, RESULT at line 1617)</li>
+<li><code>.scratch/AC-0365-gates/g0_pristine.log</code> — G0 after removal (rc 0, 0 SCRIPT ERROR)</li>
+<li><code>.scratch/AC-0365-gates/post.py</code> — the post-processing script (percentiles/shares/consistency)</li>
+<li><code>godot/world/world.gd</code> — brackets added and removed; byte-identical to HEAD at end (git diff empty)</li>
+</ul>
+
+</body>
+</html>

@@ -1,13 +1,13 @@
 meta:
-  updated_at: 2026-09-27T05:03
+  updated_at: 2026-09-27T05:26
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0365
 - AC-0366
 - AC-0367
 - AC-0369
+- AC-0370
 - AC-0145
 - AC-0310
 - AC-0311
@@ -20293,11 +20293,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-26T17:15
-  updated_at: 2026-09-26T17:36
-  completed_at: null
+  updated_at: 2026-09-27T05:26
+  completed_at: 2026-09-27T05:26
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -20421,7 +20421,32 @@ intake:
     WHAT THIS DOES NOT CHANGE: the ticket stays instrumentation-only. The flag is a REPORT, not a work
     item - no consumer may be optimized or ported here. If the split names a per-frame GDScript consumer
     with a material share, that is the finding this ticket was worth running for, and the port becomes
-    its own ticket with the measured number attached.'
+    its own ticket with the measured number attached.
+
+
+    CLOSED. THE BUCKET IS OPEN, AND ITS CONTENTS ARE UNEXPECTED AND ACTIONABLE. Measured on the current
+    tree with temporary sub-stage brackets inside `World._process` (three capped runs, all rc 0 with zero
+    SCRIPT ERROR, brackets removed afterwards with `git diff --stat` empty on both touched files): the
+    MISC residual is **98.0% the 20 Hz GAME TICK** - 121.8 of 124.3 ms over the worst-20 walk frames,
+    p50 5.8 / p95 7.8 / max 9.3 ms per frame, i.e. 12.4% of the worst frame. INSIDE that tick, the split
+    is the surprise: the random-tick pass and leaf decay account for ~88 ms (71%) against the fluid sim''s
+    33.8 ms (27%). Every other candidate AC-0352 listed measures ZERO: save-queue writes 0.0, the fluid
+    arming loop 0.0, the atlas check 0.0 - and the cull pass is 0.0 because culling is DISABLED (the engine
+    cull is the AC-0212 default), which is a different statement from "fast" and is recorded as such.
+    There is no hidden consumer left in the bucket: the unattributable remainder is 2.5 ms across 20 frames,
+    which is the instrument''s 0.1 ms display-rounding floor. ONE MECHANISM CONFIRMED RATHER THAN ASSUMED,
+    and it is the reason this is worth acting on: 17 of the 20 worst frames fired 2-3 ticks ({1 tick:
+    3 frames, 2: 15, 3: 2}), so the per-tick consumer SCALES WITH THE STALL - the longer a frame is, the
+    more ticks land in it - which is a feedback shape rather than a fixed cost. THE GC EXPLANATION IS
+    NOT SUPPORTED: the residual tracks the tick count almost exactly, and a pause-duration counter is
+    not exposed to GDScript at all, so GC cannot be measured in-process; the instrument that would settle
+    it is the Godot profiler''s script-GC category or an engine-side timer, and that gap is recorded rather
+    than papered over. PORT FLAGS, which is the actionable output: the tick''s per-tick work (its hash
+    and the `random_tick_map` dictionary bookkeeping) plus `tick_fluids` are main-thread GDScript and,
+    in the storm, per-tick means per-frame - so they are port candidates; saveq/fluidmk/atlas are not
+    (they measure 0.0) and cull is unclear because it is not enabled. PRIORITY STATED PLAINLY, because
+    the ticket asked for that honesty: DRAIN owns 72% of the worst frame and the whole fill window (AC-0369),
+    so MISC - now only 8.5% of the tail and fully named as of this ticket - is the secondary target.'
   comments: []
 - id: AC-0366
   title: cave-family-noise-cost-attribution-vs-vanilla
@@ -20786,6 +20811,70 @@ intake:
     CONTEXT: AC-0362 (the seam fill) and AC-0306/0307/0308/0309 (the planet pieces) are all recent and
     touch placement/streaming, so read their results pages before changing the dispatch path; and note
     that this box''s llvmpipe is degraded, so renders are not available as evidence.
+
+    '
+  comments: []
+- id: AC-0370
+  title: port-or-throttle-random-tick-and-leaf-decay
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-27T05:26
+  updated_at: 2026-09-27T05:26
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The frame tail is now attributed down to a single line of work - the per-tick
+    random block pass and leaf decay, which run on the main thread in GDScript and fire two or three times
+    inside the longest frames - so the longest frames get longer the longer they already are.
+
+
+    2) Technical Details:
+
+    WHERE THIS COMES FROM (AC-0365, measured with sub-stage brackets inside `World._process`, worst-20
+    R24 walk frames, current tree, 2026-09-27): MISC is 8.5% of the worst frame and is 98.0% the 20 Hz
+    game tick (121.8 of 124.3 ms; p50 5.8 / p95 7.8 / max 9.3 ms; 12.4% of the worst frame). Inside the
+    tick, the RANDOM-TICK PASS AND LEAF DECAY take ~88 ms (71%) against the fluid sim''s 33.8 ms (27%);
+    save-queue writes, the fluid arming loop and the atlas check all measure 0.0, and the cull pass is
+    0.0 only because culling is disabled (the AC-0212 engine-cull default). The unattributable remainder
+    is 2.5 ms across 20 frames = the instrument''s display-rounding floor, so nothing is hidden. THE FEEDBACK
+    SHAPE TO BREAK: 17 of the 20 worst frames fired 2-3 ticks ({1: 3, 2: 15, 3: 2}), so per-tick cost
+    is paid 2-3 times in exactly the frames that are already long - a stall makes itself worse.
+
+    THE JOB, one of two (pick by evidence, not preference, and say which you chose and why):
+
+    (a) PORT the hot work to the native lane: the tick''s hash and the `random_tick_map` dictionary bookkeeping
+    plus `tick_fluids` are main-thread GDScript paying per-tick costs that in the storm become per-frame
+    costs. The native lane already hosts the generation, meshing and starlight paths, and AC-0356 showed
+    a batched native call can remove a per-item main-thread cost wholesale (the fluid-edit light re-flood),
+    so the same shape is available here - MEASURE what a batched/ported version costs before committing
+    to it.
+
+    (b) THROTTLE or DEFER the random-tick pass so a long frame does not pay it twice. This is cheaper
+    to build but changes behaviour (fewer random ticks per unit time, so leaf decay and crop growth slow
+    down under load) - if you take this route, say explicitly what it costs in game terms.
+
+    Either way the acceptance test is the SAME INSTRUMENT AC-0365 USED: the tick''s share of the worst-20
+    walk frames, before and after, plus the tick count per worst frame (the multi-fire number should fall
+    if the feedback is broken).
+
+    CONSTRAINTS: genhash byte-identical (this is not a world-content change) and the standing set green
+    (ladder, meshprobe, halo, lightstate, farab h_mismatch 0, r16 all sub-flags with far_holes 0 both
+    bands, boundary r4 in band, the battery); the fluids arms matter specifically (fluidfall/fluidprobe/fluids/fluidsettle)
+    because `tick_fluids` is in scope; and if you touch the native lane, the OPS.md rebuild and re-stage
+    procedure is mandatory.
+
+    GATES: the tick share and tickn before/after on the same instrument; G0 zero SCRIPT ERROR; genhash
+    25/25; the battery green; the fluids arms unchanged; and a statement of what the change costs in game
+    behaviour.
+
+    CONTEXT: read tasks/AC-0365/AC-0365-results.html first (it has the brackets you will want to re-add),
+    and note AC-0356''s batched-edit pattern and AC-0369''s separate DRAIN work - DRAIN is the bigger
+    share (72% of the worst frame) so this ticket is the secondary target, not the headline.
 
     '
   comments: []
