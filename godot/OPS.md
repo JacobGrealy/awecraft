@@ -40,6 +40,12 @@ machine reason behind them.
   torn down the moment the tool call returns (a heavy gate script silently died after one arm,
   AC-0313). The managed job (the tool's background mode) survives and can be collected; a script
   that must outlive a call has to be started that way.
+- **GDScript's literal parser can MIS-ROUND a long decimal literal** (found by AC-0367 piece A,
+  2026-09-27): the value `0.011499999999999996` parsed 4 ulp LOW, which showed up as an 8-sample
+  1-ulp drift between the GDScript and C++ lanes of a ported noise. The fix is to spell an exact
+  constant as a DIVISION (`-6629298651489368.0/2^59`) rather than a long decimal string. Any ported
+  constant that must be bit-exact in both lanes is a candidate for this trap, and the lockstep
+  genprobe block is what catches it - a drift of one ulp is invisible to every other gate.
 - **EVERY gate run must be memory-capped, and the big ones must be SAMPLED over time.** Cap with
   `bash -c "ulimit -v <KB>; … godot …"` (AC-0356 used 8 GB for arms whose measured peaks are
   0.4–1.1 GB) and sample RSS every 10–15 s for any large-radius run. THE REASON IS NOT TIDINESS:
