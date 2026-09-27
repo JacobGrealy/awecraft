@@ -1961,6 +1961,207 @@ static inline double biome_density(double x, double y, double z, int64_t s) {
 			s + 319, BIOME_FIRST_OCT, BIOME_AMPS, 2);
 }
 
+// ---------------------------------------------------------------------------
+// AC-0367 piece A — the VANILLA TUNNEL NOISES, bit-exact port (PIECE A ONLY:
+// nothing below is wired into the density router or the scan yet — the port
+// is GENHASH-NEUTRAL by construction, proven in the results page). Piece B
+// evaluates these inside dens_at and deletes the AC-0289 tunnel apparatus.
+//
+// The three families are the 1.21.4 `worldgen/density_function/overworld/
+// caves/*.json` expressions AS-IS (frozen reference:
+// .scratch/AC-0347-gates/vanilla/df_ow/), with the noise instances from
+// `worldgen/noise/*.json` (mcmeta 1.21.4, fetched 2026-09-27) and the
+// `weird_scaled_sampler` + rarity-mapper semantics VERIFIED against the
+// decompiled official 1.21.4 client jar (CFR, .scratch/AC-0367-vanilla/):
+//
+//   weird_scaled_sampler(input=I, noise=N, mapper=M)
+//       v = I(pos)                    (the centered modulator value)
+//       d = M.sampleValue(v)          (the rarity value — the scale)
+//       return d * |N(pos / d)|       (the main noise sampled at pos/d,
+//                                      absolute, scaled by d)
+//
+//   mapper type_1 (the spaghetti_3d RARITY SELECTOR):
+//       v < -0.5 -> 0.75;  v < 0.0 -> 1.0;  v < 0.5 -> 1.5;  else -> 2.0
+//   mapper type_2 (the spaghetti_2d scale):
+//       v < -0.75 -> 0.5;  v < -0.5 -> 0.75;  v < 0.5 -> 1.0;
+//       v < 0.75 -> 2.0;   else -> 3.0
+//
+// The `minecraft:noise` node is the CENTERED vn3 value per the project
+// convention (AC-0347 P2: all ported noise = 2*(vn3-0.5), the vanilla O(1)
+// units), sampled at (x*xz_scale, y*y_scale, z*xz_scale). The 1.21.4
+// `interpolated` / `cache_once` nodes are value-IDENTITY in the dense
+// evaluation (decompiled: the cache wrapper's apply delegates straight to
+// the inner function), so they vanish from the port. The +64 world shift
+// applies to the y-STRUCTURE (gradients / range boundaries), not the noise
+// coordinates — the same convention as the AC-0347 P2 entrance/gradient.
+//
+// The 14 noise instances (all single-octave {firstOctave, amps [1.0]} in
+// 1.21.4) sit on NEW seed slots +337..+350 (per-instance slots, the
+// project's seeding convention — the AC-0347/AC-0291 pattern):
+//   +337 spaghetti_2d            {firstOctave -7}   (2.0/1.0 via the sampler)
+//   +338 spaghetti_2d_modulator  {firstOctave -11}  xz 2.0 / y 1.0
+//   +339 spaghetti_2d_thickness  {firstOctave -11}  xz 2.0 / y 1.0
+//   +340 spaghetti_2d_elevation  {firstOctave -8}   xz 1.0 / y 0.0
+//   +341 spaghetti_3d_rarity     {firstOctave -11}  xz 2.0 / y 1.0 (the selector)
+//   +342 spaghetti_3d_1          {firstOctave -7}   (1.0/1.0 via the sampler)
+//   +343 spaghetti_3d_2          {firstOctave -7}   (1.0/1.0 via the sampler)
+//   +344 spaghetti_3d_thickness  {firstOctave -8}   xz 1.0 / y 1.0
+//   +345 spaghetti_roughness     {firstOctave -5}   xz 1.0 / y 1.0
+//   +346 spaghetti_roughness_modulator {firstOctave -8} xz 1.0 / y 1.0
+//   +347 noodle                  {firstOctave -8}   xz 1.0 / y 1.0
+//   +348 noodle_thickness        {firstOctave -8}   xz 1.0 / y 1.0
+//   +349 noodle_ridge_a          {firstOctave -7}   xz 8/3 / y 8/3
+//   +350 noodle_ridge_b          {firstOctave -7}   xz 8/3 / y 8/3
+//
+// The DENSE sources below are the genprobe lockstep (the GDScript mirrors
+// are AweNoise.spag2d / spag3d / spagrough / noodle, and the independent
+// python port is tasks/AC-0367/ac0367_tunnel_check.py).
+// ---------------------------------------------------------------------------
+
+// AC-0367 BIT-EXACT NOTE (learned the hard way, 2026-09-27 — see the
+// results page for the full trace): GDScript's FLOAT-LITERAL PARSER does
+// not always round a decimal literal to the correctly-rounded double.
+// Short literals (<= ~15 significant digits) round correctly, but the
+// 1.21.4 constant 0.011499999999999996 parses 4 ulp LOW in the GDScript
+// lane while the C++ (GCC) and python (CPython) lanes both produce the
+// correctly-rounded value — so the three lanes disagreed on spag3d at
+// 8/180 lockstep points. The fix: spell that ONE constant identically in
+// all three lanes as the exact division  -6629298651489368.0 /
+// 576460752303423488.0  (= mantissa / 2^59; both literals are exact f64
+// and the quotient is representable, so IEEE division returns it with no
+// rounding — no decimal parsing in the hot path at all). Every OTHER
+// constant in these four sources was audited (the tunndx literal sweep)
+// and parses identically in all lanes; the genprobe lockstep must stay
+// all-exact and is the standing proof.
+
+// The rarity mappers (exact 1.21.4 — decompiled `eda.a::a/b` statics).
+static inline double spag_rarity_type1(double v) {
+	if (v < -0.5)
+		return 0.75;
+	if (v < 0.0)
+		return 1.0;
+	if (v < 0.5)
+		return 1.5;
+	return 2.0;
+}
+static inline double spag_rarity_type2(double v) {
+	if (v < -0.75)
+		return 0.5;
+	if (v < -0.5)
+		return 0.75;
+	if (v < 0.5)
+		return 1.0;
+	if (v < 0.75)
+		return 2.0;
+	return 3.0;
+}
+
+// spaghetti_2d (caves/spaghetti_2d.json): the 2D family — the modulated
+// sampler (mapper type_2) plus the thickness/elevation ridge:
+//   clamp(max(
+//       add(weird(sampler_2d, type_2), mul(0.083, thickness_modulator)),
+//       cube(add(abs(add(0.0, mul(8.0, elevation)),
+//                 y_grad(8.0, -64 -> -40.0, 320))), thickness_modulator))),
+//   where thickness_modulator = cache_once(add(-0.95, mul(-0.35,
+//   noise{spaghetti_2d_thickness, 2.0, 1.0})) and the gradient is the
+//   +64-shifted vanilla (-64..320 -> our 0..384).
+static inline double spag2d_density(double x, double y, double z, int64_t s) {
+	double m = 2.0 * (vn3(x * 2.0, y * 1.0, z * 2.0, s + 338, -11, ONE_AMP, 1) - 0.5);
+	double d = spag_rarity_type2(m);
+	double wn = vn3(x / d, y / d, z / d, s + 337, -7, ONE_AMP, 1);
+	double wv = d * std::fabs(2.0 * (wn - 0.5));
+	double nt = 2.0 * (vn3(x * 2.0, y * 1.0, z * 2.0, s + 339, -11, ONE_AMP, 1) - 0.5);
+	double tm = -0.95 + (-0.35000000000000003 * nt);
+	double ev = 2.0 * (vn3(x * 1.0, y * 0.0, z * 1.0, s + 340, -8, ONE_AMP, 1) - 0.5);
+	double tg = (y - 0.0) / (384.0 - 0.0);
+	if (tg < 0.0)
+		tg = 0.0;
+	if (tg > 1.0)
+		tg = 1.0;
+	double g = 8.0 + (-40.0 - 8.0) * tg;
+	double e = (0.0 + 8.0 * ev) + g;
+	e = std::fabs(e);
+	double c = e + tm;
+	double cc = c * c * c;
+	double a = wv + (0.083 * tm);
+	double r = a > cc ? a : cc;
+	if (r < -1.0)
+		r = -1.0;
+	if (r > 1.0)
+		r = 1.0;
+	return r;
+}
+
+// spaghetti_3d (the spaghetti part of caves/entrances.json) INCLUDING its
+// rarity selector — the piece that replaces the AC-0289 f_gate:
+//   clamp(
+//       add(max(weird(spaghetti_3d_1, type_1), weird(spaghetti_3d_2, type_1)),
+//           add(-0.0765, mul(-0.0115, noise{spaghetti_3d_thickness, 1.0, 1.0}))),
+//   both weird samplers share the ONE rarity noise (cache_once, xz 2.0 /
+//   y 1.0) — the selector picks the sampling scale per region (0.75..2.0).
+static inline double spag3d_density(double x, double y, double z, int64_t s) {
+	double r = 2.0 * (vn3(x * 2.0, y * 1.0, z * 2.0, s + 341, -11, ONE_AMP, 1) - 0.5);
+	double d1 = spag_rarity_type1(r);
+	double n1 = vn3(x / d1, y / d1, z / d1, s + 342, -7, ONE_AMP, 1);
+	double w1 = d1 * std::fabs(2.0 * (n1 - 0.5));
+	double d2 = spag_rarity_type1(r);
+	double n2 = vn3(x / d2, y / d2, z / d2, s + 343, -7, ONE_AMP, 1);
+	double w2 = d2 * std::fabs(2.0 * (n2 - 0.5));
+	double nt = 2.0 * (vn3(x * 1.0, y * 1.0, z * 1.0, s + 344, -8, ONE_AMP, 1) - 0.5);
+	// 0.011499999999999996 (the 1.21.4 constant) spelled as the EXACT
+	// division mantissa / 2^59 — see the BIT-EXACT NOTE above: GDScript's
+	// float-literal parser cannot round that decimal (4 ulp low for EVERY
+	// decimal string in the double's rounding basin, verified 2026-09-27),
+	// so all three lanes (C++ / GD / python) use this identical form.
+	// Both literals are exact f64 (K < 2^53; 2^59 is a power of two) and
+	// the quotient is representable — IEEE division returns it exactly.
+	double c2 = -6629298651489368.0 / 576460752303423488.0;
+	double th = -0.0765 + (c2 * nt);
+	double a = (w1 > w2 ? w1 : w2) + th;
+	if (a < -1.0)
+		a = -1.0;
+	if (a > 1.0)
+		a = 1.0;
+	return a;
+}
+
+// spaghetti_roughness (caves/spaghetti_roughness_function.json) — the
+// companion of the spaghetti_2d term in the deep branch (vanilla:
+// max(deep-cheese-family, add(spaghetti_2d, spaghetti_roughness))):
+//   cache_once(mul(add(-0.05, mul(-0.05, roughness_modulator)),
+//                  add(-0.4, abs(roughness))))
+static inline double spagrough_density(double x, double y, double z, int64_t s) {
+	double rm = 2.0 * (vn3(x * 1.0, y * 1.0, z * 1.0, s + 346, -8, ONE_AMP, 1) - 0.5);
+	double rs = 2.0 * (vn3(x * 1.0, y * 1.0, z * 1.0, s + 345, -5, ONE_AMP, 1) - 0.5);
+	double a = -0.05 + (-0.05 * rm);
+	double b = -0.4 + std::fabs(rs);
+	return a * b;
+}
+
+// noodle (caves/noodle.json) — the top-level min-term of final_density
+// (vanilla: min(everything, noodle), i.e. a carve-cap at ALL altitudes):
+//   range_choice(input = noodle_noise in y[-60, 321) else -1,
+//                min -1e6, max 0, in_range 64.0, out_range =
+//       add(thickness_term in y[-60, 321) else 0,
+//           mul(1.5, max(abs(ridge_a in-band else 0), abs(ridge_b ...))))
+// with thickness_term = add(-0.075, mul(-0.025, noodle_thickness)) and the
+// ridges at xz/y scale 8/3; the y-band is +64-shifted (our 4..385).
+static inline double noodle_density(double x, double y, double z, int64_t s) {
+	bool inb = (y >= 4.0) && (y < 385.0);
+	double nv = inb ? 2.0 * (vn3(x * 1.0, y * 1.0, z * 1.0, s + 347, -8, ONE_AMP, 1) - 0.5) : -1.0;
+	if (nv >= -1000000.0 && nv < 0.0)
+		return 64.0;
+	double nt = 2.0 * (vn3(x * 1.0, y * 1.0, z * 1.0, s + 348, -8, ONE_AMP, 1) - 0.5);
+	double ra = 2.0 * (vn3(x * 2.6666666666666665, y * 2.6666666666666665, z * 2.6666666666666665,
+			s + 349, -7, ONE_AMP, 1) - 0.5);
+	double rb = 2.0 * (vn3(x * 2.6666666666666665, y * 2.6666666666666665, z * 2.6666666666666665,
+			s + 350, -7, ONE_AMP, 1) - 0.5);
+	double ot = inb ? (-0.07500000000000001 + (-0.025 * nt)) : 0.0;
+	double va = inb ? std::fabs(ra) : 0.0;
+	double vb = inb ? std::fabs(rb) : 0.0;
+	return ot + (1.5 * (va > vb ? va : vb));
+}
+
 // The rock base — the surface-rule stage's deepslate transition. The fill
 // chain, stone_ore_slab and (via it) the far emit's deep cells must all
 // agree on this (the farab A/B contract).
@@ -3060,6 +3261,13 @@ public:
 		ClassDB::bind_method(D_METHOD("density_vein", "x", "y", "z", "s"), &AweGen::density_vein);
 		ClassDB::bind_method(D_METHOD("density_biome", "x", "y", "z", "s"), &AweGen::density_biome);
 		ClassDB::bind_method(D_METHOD("p4_stats"), &AweGen::p4_stats);
+		// AC-0367 piece A: the vanilla tunnel-noise dense sources (genprobe
+		// lockstep only — nothing consumes them yet).
+		ClassDB::bind_method(D_METHOD("spag2d_density", "x", "y", "z", "s"), &AweGen::spag2d_density);
+		ClassDB::bind_method(D_METHOD("spag3d_density", "x", "y", "z", "s"), &AweGen::spag3d_density);
+		ClassDB::bind_method(D_METHOD("spagrough_density", "x", "y", "z", "s"), &AweGen::spagrough_density);
+		ClassDB::bind_method(D_METHOD("noodle_density", "x", "y", "z", "s"), &AweGen::noodle_density);
+		ClassDB::bind_method(D_METHOD("f64_exact", "v"), &AweGen::f64_exact);
 		// AC-0216: the optional 6th arg `skip` (default 0 = the pre-AC-0216
 		// full density field, bit-for-bit) — the lazy offscreen-interior
 		// skip (see the file header).
@@ -3258,6 +3466,35 @@ public:
 	}
 	double density_biome(double x, double y, double z, int s) const {
 		return awegen::biome_density(x, y, z, (int64_t)s);
+	}
+	// AC-0367 piece A: the vanilla tunnel-noise dense sources (spaghetti_2d /
+	// spaghetti_3d+selector / spaghetti_roughness / noodle — see the AC-0367
+	// section above). Bound for the genprobe lockstep ONLY: no generation
+	// path reads them yet, so the port is genhash-neutral (piece B wires
+	// them into dens_at).
+	double spag2d_density(double x, double y, double z, int s) const {
+		return awegen::spag2d_density(x, y, z, (int64_t)s);
+	}
+	double spag3d_density(double x, double y, double z, int s) const {
+		return awegen::spag3d_density(x, y, z, (int64_t)s);
+	}
+	double spagrough_density(double x, double y, double z, int s) const {
+		return awegen::spagrough_density(x, y, z, (int64_t)s);
+	}
+	double noodle_density(double x, double y, double z, int s) const {
+		return awegen::noodle_density(x, y, z, (int64_t)s);
+	}
+	// AC-0367 piece A: bit-exact value transfer for the genprobe third-lane
+	// (python) cross-check. Godot's decimal formatting is NOT correctly
+	// rounded beyond ~15 significant digits (verified 2026-09-27: %.30f
+	// strings from the engine do not parse back to the same f64 in
+	// CPython), so the cross-check values travel as the exact IEEE-754 bit
+	// pattern (unsigned 64-bit, the engine's own snprintf-free path); the
+	// python port decodes with struct.unpack('<d', pack('<Q', bits)).
+	String f64_exact(double v) const {
+		uint64_t b;
+		std::memcpy(&b, &v, sizeof(b));
+		return String::num_uint64((int64_t)b);
 	}
 
 	// AC-0291: the cumulative aquifer census (the harness arm reads it;

@@ -21311,6 +21311,10 @@ func _genprobe_test() -> void:
 		"pillar": {"n": 0, "exact": 0},
 		"vein": {"n": 0, "exact": 0},
 		"biome": {"n": 0, "exact": 0},
+		"spag2d": {"n": 0, "exact": 0},
+		"spag3d": {"n": 0, "exact": 0},
+		"spagrough": {"n": 0, "exact": 0},
+		"noodle": {"n": 0, "exact": 0},
 	}
 	if not res["cpp_registered"]:
 		Debug.result(res)
@@ -21533,6 +21537,57 @@ func _genprobe_test() -> void:
 		cmp.call("pillar", pa * pb * pb * pb, G.density_pillar(x, y, z, s))
 		cmp.call("vein", AweNoise.vn3(x * 1.0, y * 1.0, z * 1.0, s + 323, -5, [1.0, 0.5]), G.density_vein(x, y, z, s))
 		cmp.call("biome", AweNoise.vn3(x * 0.5, y * 0.5, z * 0.5, s + 319, -7, [1.0, 1.0]), G.density_biome(x, y, z, s))
+	for i in 300:
+		# AC-0367 piece A: the VANILLA TUNNEL-NOISE dense sources — the
+		# spaghetti_2d / spaghetti_3d(+rarity selector) / spaghetti_roughness /
+		# noodle 1.21.4 caves/*.json expressions AS-IS (see the AC-0367
+		# section in gen.cpp for the verified semantics + parameters). The
+		# GDScript AweNoise mirrors (AweNoise.spag2d/spag3d/spagrough/noodle)
+		# must agree f64-exactly with the C++ AweGen methods.
+		var x := rng.randf_range(-1024.0, 1024.0)
+		var y := rng.randf_range(0.0, 384.0)
+		var z := rng.randf_range(-1024.0, 1024.0)
+		var s := rng.randi_range(-200, 200)
+		cmp.call("spag2d", AweNoise.spag2d(x, y, z, s), G.spag2d_density(x, y, z, s))
+		cmp.call("spag3d", AweNoise.spag3d(x, y, z, s), G.spag3d_density(x, y, z, s))
+		cmp.call("spagrough", AweNoise.spagrough(x, y, z, s), G.spagrough_density(x, y, z, s))
+		cmp.call("noodle", AweNoise.noodle(x, y, z, s), G.noodle_density(x, y, z, s))
+	# AC-0367 piece A: the THIRD-lane (python) cross-check points — a fixed
+	# grid (x/z in {-128,0,128}, y in {3,4,10,64,128,256,320,384,385,386},
+	# seeds {44,-17} — the y list straddles the noodle band's +64-shifted
+	# 4..385 boundary). Each value travels as its EXACT IEEE-754 bit pattern
+	# (AweGen.f64_exact — Godot's decimal formatting is not correctly
+	# rounded beyond ~15 digits, so the string channel would corrupt the
+	# bits); the independent python port
+	# (tasks/AC-0367/ac0367_tunnel_check.py, written from the spec) decodes
+	# the bits (struct) and must reproduce every value f64-exactly.
+	var vntun := {"spag2d": [], "spag3d": [], "spagrough": [], "noodle": []}
+	for s2 in [44, -17]:
+		for y2 in [3.0, 4.0, 10.0, 64.0, 128.0, 256.0, 320.0, 384.0, 385.0, 386.0]:
+			for x2 in [-128.0, 0.0, 128.0]:
+				for z2 in [-128.0, 0.0, 128.0]:
+					vntun["spag2d"].append(G.f64_exact(G.spag2d_density(x2, y2, z2, s2)))
+					vntun["spag3d"].append(G.f64_exact(G.spag3d_density(x2, y2, z2, s2)))
+					vntun["spagrough"].append(G.f64_exact(G.spagrough_density(x2, y2, z2, s2)))
+					vntun["noodle"].append(G.f64_exact(G.noodle_density(x2, y2, z2, s2)))
+	# AC-0367 piece A: WIDE-DOMAIN cross-lane points. The rarity field is
+	# low-frequency (firstOctave -11, xz ×2.0) — over the ±128 grid above it
+	# is nearly constant, so only t1 bucket 0 and t2 buckets {1,2} are ever
+	# exercised there. These ±8192 points hit EVERY bucket of both rarity
+	# selectors (verified in the python port: t1 0..3, t2 0..4), so the
+	# three-way bit-exact proof covers the full mapper branch space.
+	var wide := [[-8192.0, -8192.0], [-8192.0, 0.0], [-8192.0, 8192.0], [-4096.0, 0.0], [-1024.0, 8192.0], [1024.0, -8192.0], [4096.0, 8192.0]]
+	for s2 in [44, -17]:
+		for y2 in [32.0, 288.0]:
+			for xz in wide:
+				var x2: float = xz[0]
+				var z2: float = xz[1]
+				vntun["spag2d"].append(G.f64_exact(G.spag2d_density(x2, y2, z2, s2)))
+				vntun["spag3d"].append(G.f64_exact(G.spag3d_density(x2, y2, z2, s2)))
+				vntun["spagrough"].append(G.f64_exact(G.spagrough_density(x2, y2, z2, s2)))
+				vntun["noodle"].append(G.f64_exact(G.noodle_density(x2, y2, z2, s2)))
+	res["vntun_points"] = 208
+	res["vntun"] = vntun
 	var tot := int(res["n"])
 	res["match_rate"] = float(int(res["exact"])) / float(tot) if tot > 0 else 0.0
 	res["ok"] = int(res["exact"]) == tot and tot > 0

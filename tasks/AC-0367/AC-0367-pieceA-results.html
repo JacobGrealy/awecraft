@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0367 Piece A — results (the vanilla tunnel noises, bit-exact port, GENHASH-NEUTRAL)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:980px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:16px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.pass{background:#e6f4e6;color:#1a5c1a;font-weight:600}.find{background:#fdecea;color:#8a1a1a;font-weight:600}.meta{color:#555;font-size:14px}</style></head><body>
+<h1>AC-0367 Piece A — results (the vanilla tunnel noises, bit-exact port, GENHASH-NEUTRAL)</h1>
+<p class="meta">Builder run 2026-09-27, <b>PIECE A ONLY</b> (the port; Piece B wires the router and deletes the old tunnel rule). Spec: <code>spec.html</code>. Journal: <code>continuity.md</code>. Gate logs: <code>.scratch/AC-0367-gates/</code>. This piece is <b>NOT</b> an intentional generation change — the sources are added but never read by the generator, and the neutrality gate is <b>25/25 byte-identical genhash</b> (below). No router wiring, no <code>tunnel_air_c</code> touch, no per-block-scan change, no genhash rebase. The temporary <code>tunndx</code> measurement arm was added and <b>removed in this task</b> (pristine rule, §7).</p>
+
+<h2>Status board</h2>
+<table>
+<tr><th>Gate</th><th>Condition</th><th>Status</th></tr>
+<tr><td>G0 (zero SCRIPT ERROR)</td><td>0 lines in the final genprobe + genhash logs (rc=0, not the gate)</td><td class="pass">PASS — 0 SCRIPT ERROR in genprobe.log and genhash_after.log</td></tr>
+<tr><td>Three-way lockstep (GD ≡ C++ ≡ python)</td><td>f64 EQUALITY over large samples, all three lanes</td><td class="pass">PASS — GD≡C++ 11500/11500 (1200 of them the four new blocks, 300/300 each); C++≡python 832/832 (208 fixed points × 4, exact IEEE bit patterns). Full rarity-mapper bucket coverage in the cross-lane set (t1 4/4, t2 5/5). §3, §4</td></tr>
+<tr><td>GENHASH NEUTRALITY (the piece's core gate)</td><td>25/25 byte-identical vs the pre-run baseline (== the AC-0360 reference set)</td><td class="pass">PASS — <code>diff</code> of the 25 <code>GENHASH</code> lines: empty (genhash_before.log vs genhash_after.log)</td></tr>
+<tr><td>Permanent genprobe lockstep block</td><td>vntun third-lane block added to the arm, sample counts in the RESULT</td><td class="pass">PASS — 208 points/fn × 4 sources, values travel as exact bit strings (the <code>f64_exact</code> channel, §5)</td></tr>
+<tr><td>pristine (temp arm removed)</td><td>tunndx out of harness.gd, G0 clean</td><td class="pass">PASS — 0 <code>tunndx</code> references; final genprobe + genhash runs are on the pristine harness</td></tr>
+<tr><td>third lane independence</td><td>python port written from the SPEC (vanilla semantics + params), not transcribed from C++</td><td class="pass">PASS — <code>tasks/AC-0367/ac0367_tunnel_check.py</code> implements hash2i/hash3i/fade/vnoise3/vn3/mappers/sources from the 1.21.4 JSON + decompiled jar; 832/832 f64-exact against the C++ values</td></tr>
+</table>
+
+<h2>What was ported (Piece A deliverable)</h2>
+<p>Four dense sources — the 1.21.4 <code>worldgen/density_function/overworld/caves/*.json</code> expressions <b>as-is</b> — each a pure <code>f(x, y, z, world_seed)</code> in vanilla O(1) centered-noise units (<code>2·(vn3−0.5)</code>, the AC-0347 convention):</p>
+<ul>
+<li><b>spag2d</b> (<code>caves_spaghetti_2d.json</code>) — the <code>weird_scaled_sampler</code> family: a type-2 rarity mapper over the centered modulator picks a scale <code>d ∈ {0.5, 0.75, 1.0, 2.0, 3.0}</code>; the main noise is sampled at <code>pos/d</code>, absolute, multiplied by <code>d</code>; thickness <code>tm = −0.95 + (−0.35000000000000003·nt)</code>; elevation <code>ev</code> (y-scale 0.0 — a y-constant field) + the +64-shifted y-gradient <code>g: 8.0 → −40.0</code> over <code>y 0..384</code>; <code>r = clamp(±1, wv + 0.083·tm + cube(|8·ev + g| + tm))</code>.</li>
+<li><b>spag3d</b> (<code>caves_entrances.json</code> — the spaghetti_3d family) — the type-1 <b>rarity selector</b> <code>d1 ∈ {0.75, 1.0, 1.5, 2.0}</code> over the centered <code>spaghetti_3d_rarity</code>; two main noises sampled at <code>pos/d1</code> (each <code>d1·|…|</code>); thickness <code>th = −0.0765 + (c2·nt)</code> with <code>c2 = −0.011499999999999996</code> (exact form, §6.1); <code>r = clamp(−1..1, max(w1, w2) + th)</code>. <b>This selector replaces AweCraft's <code>f_gate</code> in Piece B</b> — the ticket's rationale for deleting the stand-in.</li>
+<li><b>spagrough</b> (<code>caves_spaghetti_roughness_function.json</code>) — <code>(−0.05 + (−0.05·rm)) · |rs|</code>, a small signed roughness term.</li>
+<li><b>noodle</b> (<code>caves_noodle.json</b>) — the all-depth cap: in-band <code>4 ≤ y &lt; 385</code> (the +64-shifted vanilla <code>−60 ≤ y &lt; 321</code>), base noise <code>nv &lt; 0 → 64.0</code> (the "no carve / far solid" sentinel, <code>nv ≥ −10⁶ ∧ nv &lt; 0</code>), else <code>ot + 1.5·max(|ra|, |rb|)</code> with the 8/3-scaled ridge noises and <code>ot = −0.07500000000000001 + (−0.025·nt)</code>; out-of-band → <code>64.0</code> (the outer <code>min</code> in vanilla's <code>final_density</code> caps it — informational for Piece B).</li>
+</ul>
+
+<h3>Noise instances — parameters adopted (14, all single-octave)</h3>
+<p><b>Source of the parameters (stated per the ticket): the frozen vanilla data — mcmeta 1.21.4 (<code>worldgen/noise/*.json</code>, fetched 2026-09-27) + the decompiled official 1.21.4 client jar (CFR, <code>.scratch/AC-0367-vanilla/out/</code>) — NOT the ticket notes/spec</b> (the notes/spec carry no parameters). The density expressions are the frozen files under <code>.scratch/AC-0347-gates/vanilla/df_ow/</code>. The <code>weird_scaled_sampler</code> and rarity-mapper semantics were verified against the decompiled classes (<code>ecn$z</code>, <code>eda.a</code>). All 14 instances are <code>firstOctave / xz-scale / y-scale</code>, amps <code>[1.0]</code>:</p>
+<table>
+<tr><th>slot</th><th>instance</th><th>firstOctave</th><th>xz</th><th>y</th><th>role</th></tr>
+<tr><td>+337</td><td>spaghetti_2d</td><td>−7</td><td>1.0 (via sampler)</td><td>1.0</td><td>spag2d main</td></tr>
+<tr><td>+338</td><td>spaghetti_2d_modulator</td><td>−11</td><td>2.0</td><td>1.0</td><td>spag2d rarity input (type-2 mapper)</td></tr>
+<tr><td>+339</td><td>spaghetti_2d_thickness</td><td>−11</td><td>2.0</td><td>1.0</td><td>spag2d thickness</td></tr>
+<tr><td>+340</td><td>spaghetti_2d_elevation</td><td>−8</td><td>1.0</td><td>0.0</td><td>spag2d elevation (y-constant)</td></tr>
+<tr><td>+341</td><td>spaghetti_3d_rarity</td><td>−11</td><td>2.0</td><td>1.0</td><td>spag3d selector (type-1 mapper)</td></tr>
+<tr><td>+342</td><td>spaghetti_3d_1</td><td>−7</td><td>1.0 (via sampler)</td><td>1.0</td><td>spag3d main A</td></tr>
+<tr><td>+343</td><td>spaghetti_3d_2</td><td>−7</td><td>1.0 (via sampler)</td><td>1.0</td><td>spag3d main B</td></tr>
+<tr><td>+344</td><td>spaghetti_3d_thickness</td><td>−8</td><td>1.0</td><td>1.0</td><td>spag3d thickness</td></tr>
+<tr><td>+345</td><td>spaghetti_roughness</td><td>−5</td><td>1.0</td><td>1.0</td><td>spagrough base</td></tr>
+<tr><td>+346</td><td>spaghetti_roughness_modulator</td><td>−8</td><td>1.0</td><td>1.0</td><td>spagrough modulator</td></tr>
+<tr><td>+347</td><td>noodle</td><td>−8</td><td>1.0</td><td>1.0</td><td>noodle base (band gate)</td></tr>
+<tr><td>+348</td><td>noodle_thickness</td><td>−8</td><td>1.0</td><td>1.0</td><td>noodle thickness</td></tr>
+<tr><td>+349</td><td>noodle_ridge_a</td><td>−7</td><td>8/3</td><td>8/3</td><td>noodle ridge A</td></tr>
+<tr><td>+350</td><td>noodle_ridge_b</td><td>−7</td><td>8/3</td><td>8/3</td><td>noodle ridge B</td></tr>
+</table>
+<p><b>Seeds' relationship to vanilla</b> (per the existing seeding convention): each instance sits on a fixed per-role slot <code>world_seed + NNN</code> (the AC-0347/AC-0291 pattern; +337..+350 verified free). In vanilla 1.21.4 every noise in the chunk shares the <b>one</b> world-seed <code>RandomState</code> (decompiled <code>ese</code> holds a single <code>azh</code> seed state; the JSON carries no per-noise seed fields — verified in the frozen data): instances are distinguished by first_octave/amplitudes/coordinates, not per-noise seed offsets. AweCraft's per-role slots are the project's established convention (superset: more decorrelated); the exact slot↔vanilla-instance mapping is finalized at Piece B wiring.</p>
+
+<h2>1 — G0 (zero SCRIPT ERROR, not rc=0)</h2>
+<pre>genprobe.log   rc=0  SCRIPT ERROR lines: 0   (final pristine run)
+genhash_after  rc=0  SCRIPT ERROR lines: 0</pre>
+
+<h2>2 — The four dense sources, bit-exact in the native lane</h2>
+<p><b>C++ lane</b> (<code>gdext/src/gen.cpp</code>, §AC-0367 after <code>biome_density</code>): the two rarity mappers (exact decompiled <code>eda.a::a/b</code> statics) + the four <code>static inline</code> dense sources <code>spag2d_density / spag3d_density / spagrough_density / noodle_density(x, y, z, int64 s)</code>, all on the existing <code>vn3</code> octave machine (AC-0347 P1) with <code>ONE_AMP</code>; bound on <code>AweGen</code> (<code>spag2d_density…noodle_density</code> + <code>f64_exact</code>, §5). <b>GDScript lane</b> (<code>godot/core/noise.gd</code>): the mirrors <code>AweNoise.spag2d / spag3d / spagrough / noodle</code> + <code>_spag_rarity_type1/2</code>, identical op order. Nothing calls them yet — the router is untouched (genhash §6 proves it).</p>
+
+<h2>3 — The three-way lockstep (AC-0347 P1 precedent), with sample counts</h2>
+<pre># lane 1 ≡ lane 2: GDScript AweNoise vs C++ AweGen, f64 EQUALITY, seeded rng
+# (x,z ∈ ±1024, y ∈ 0..384, s ∈ ±200), 300 samples per source — the four new blocks:
+RESULT {"ok":true, "n":11500, "exact":11500, "max_diff":0.0, "match_rate":1.0,
+        "spag2d":{"exact":300,"n":300}, "spag3d":{"exact":300,"n":300},
+        "spagrough":{"exact":300,"n":300}, "noodle":{"exact":300,"n":300},
+        "vntun_points":208, ...}        (all 24 pre-existing blocks stay all-exact too)
+
+# lane 3: the INDEPENDENT python port (written from the spec) vs the C++ values —
+# the 208-point fixed grid, values carried as exact IEEE-754 bit strings:
+third-lane cross-check: 832/832 f64-exact (python spec port vs C++)
+PASS
+
+# branch coverage of the cross-lane set (the rarity mappers are low-frequency,
+# firstOctave −11 × 2.0 — the ±128 sub-grid is nearly constant there, so the
+# 28 wide-domain points (±8192, y 32/288, seeds 44/−17) exist to cover them):
+t1 buckets (0.75/1.0/1.5/2.0):  4/4 hit   t2 buckets (0.5/0.75/1.0/2.0/3.0): 5/5 hit</pre>
+<p>Self-sweep sanity (python against itself, 32×96×32 grid @ seed 44, 98,304 pts each): spag2d ∈ [−0.0856, 1.0] mean 0.940 (solid above the gradient knee — the deep-only term, correct); spag3d ∈ [−0.0806, 0.574] mean 0.252; spagrough ∈ [−0.0385, 0.0277] mean 0.0038 (the small signed term, correct); noodle: 47.96% of in-band points are the 64.0 sentinel, the rest carved in (−0.065, 1.5); out-of-band → 64.0 always (verified on 16,384-pt wide grids at both band edges). The base-noise band split is 0.4796 (symmetric, as the hash-perlin distribution requires).</p>
+
+<h2>4 — The permanent genprobe lockstep block (third lane)</h2>
+<pre># harness.gd, _genprobe_test — PERMANENT:
+#   res["vntun_points"] = 208
+#   res["vntun"] = { "spag2d": [bits…], "spag3d": [...], "spagrough": [...], "noodle": [...] }
+# grid = 180 small-domain (seeds 44/−17 × y {3,4,10,64,128,256,320,384,385,386} × x,z ±128 —
+#        straddles the noodle band's +64-shifted 4..385 boundary)
+#      + 28 wide-domain (seeds 44/−17 × y {32,288} × 7 (x,z) pairs at ±8192 — full mapper
+#        bucket coverage, verified in the python port)
+# consumer: python3 tasks/AC-0367/ac0367_tunnel_check.py &lt;genprobe.log&gt;
+#           → decodes every bit string (struct), recomputes from the spec,
+#             requires 832/832 f64-exact, else FAIL (exit 1)</pre>
+<p>Why the bit-string channel: Godot's float→string formatting is <b>not correctly rounded</b> beyond ~15 significant digits (verified this task: <code>str()</code> ≈ 14 digits, <code>%.30f</code> strings do not parse back to the same f64 in CPython, and 4.7.1 has no <code>%.17g</code>/<code>%.17e</code>/<code>num_real_to_string</code>/<code>float_to_bits</code>), so the new <code>AweGen.f64_exact(double) → String</code> returns the exact IEEE-754 bit pattern via <code>String::num_uint64</code> — the only corruption-free channel. (Any future third-lane value transfer in the harness should use it.)</p>
+
+<h2>5 — GENHASH NEUTRALITY — the piece's core gate</h2>
+<pre>$ diff &lt;(grep ^GENHASH genhash_before.log) &lt;(grep ^GENHASH genhash_after.log)
+(no output — the 25 hashes are byte-identical)
+GENHASH: 25/25 byte-identical
+before == .scratch/AC-0367-gates/genhash_before.log == the AC-0360 reference set (0 SCRIPT ERROR)
+after  == .scratch/AC-0367-gates/genhash_after.log  (GENMS 144 — wall time only, never gated)
+conclusion: the four sources are present in the binary but read by NOTHING in the generator —
+the port is genhash-neutral by construction, and the gate proves it.</pre>
+
+<h2>6 — Findings (deviations + engine traps, all resolved in-lane)</h2>
+<h3>6.1 GDScript's float-literal parser is not correctly rounded (the spag3d 1-ulp hunt)</h3>
+<p>The first lockstep run: spag2d/spagrough/noodle 300/300, <b>spag3d 292/300 (8× 1-ulp)</b>. Trace: a temporary step-by-step arm (<code>tunndx</code>) showed every spag3d intermediate agreeing — the divergence was in the constant, not the op order. A standalone C++ repro at the project's exact flags (<code>-O2 -ffp-contract=off</code>) matched CPython bit-for-bit, so C++ was correct; a literal audit (every constant in the four sources, its exact bits as parsed by the GDScript compiler via <code>f64_exact</code>) isolated the culprit: <b><code>0.011499999999999996</code> parses 4 ulp low in GDScript — for EVERY decimal string in that double's rounding basin, including the double's full 52-digit exact expansion</b> (Godot's literal parser is not a correctly-rounded strtod for long mantissas; a second 17-digit literal, <code>0.07649999999999999</code>, parses 1 ulp off too). All other AC-0367 literals parse identically in every lane. <b>Fix:</b> that one constant is spelled in all three lanes as the exact division <code>−6629298651489368.0 / 576460752303423488.0</code> (= mantissa < 2⁵³ over 2⁵⁹ — both literals exact f64, the quotient representable, IEEE division exact), i.e. the correctly-rounded double of the 1.21.4 JSON text, with no decimal parsing in the hot path. This is a <b>project-wide hazard</b>: any new multi-digit float literal must be literal-audited (bits in every lane) before it enters a lockstep surface — candidate for <code>godot/OPS.md</code> at closeout.</p>
+<h3>6.2 The 1.21.4 cache nodes are value-identity (they vanish from the port)</h3>
+<p>The <code>interpolated</code> / <code>cache_once</code> / <code>flat_cache</code> / <code>cache_2d</code> wrappers in the noodle/spaghetti JSON are VALUE-IDENTITY in the 1.21.4 dense evaluation (decompiled: the <code>l</code> cache class's <code>apply</code> delegates straight to the inner function — no resampling). The port evaluates the inner expression directly; nothing is lost.</p>
+<h3>6.3 Constants are the vanilla JSON text as-is, except §6.1's one exact-form spelling</h3>
+<p><code>−0.0765, −0.95, −0.35000000000000003, 0.083, −0.025, 1.5, −0.07500000000000001, −0.05, −0.4, 2.6666666666666665</code> — all audited bit-identical across lanes. The 8/3 ridge scale is the literal <code>2.6666666666666665</code> (the JSON text), not a computed 8.0/3.0 (which is a different double).</p>
+<h3>6.4 Noodle is an ALL-DEPTH cap, unlike the deep-only spaghetti (informational for Piece B)</h3>
+<p>Vanilla's <code>final_density</code> applies the outer <code>min</code> with the noodle at every depth (its band is the whole world minus the bottom 4 levels), while the spaghetti families are deep-branch only. Piece A ports the noise only; the cap placement is Piece B's wiring.</p>
+
+<h2>7 — Pristine rule (temporary arm in AND out)</h2>
+<pre>$ grep -c "tunndx" godot/scenes/harness.gd   → 0
+the final genprobe + genhash runs above are on the pristine harness</pre>
+
+<h2>8 — Build / artifacts</h2>
+<pre>native rebuild:  PYTHONPATH=.scratch/scons python3 -m SCons -C gdext platform=linux target=template_release -j4
+re-stage:        cp gdext/bin/libchunkio.so godot/bin/libchunkio.so
+staged .so:      bdce79616e70c93422316bc471e1763f (gdext/bin == godot/bin, verified)
+flag note:       -O2 -ffp-contract=off (the AC-0188 load-bearing pair) unchanged
+files:           gdext/src/gen.cpp (mappers + 4 sources + AweGen bindings + f64_exact + ClassDB)
+                 godot/core/noise.gd (the 4 AweNoise mirrors + the 2 rarity mappers)
+                 godot/scenes/harness.gd (genprobe vntun block — permanent; tunndx temp arm — REMOVED)
+                 tasks/AC-0367/ac0367_tunnel_check.py (the independent python port + check)
+gate logs:       .scratch/AC-0367-gates/{genprobe.log, genhash_before.log, genhash_after.log, tunndx*.log}</pre>
+
+<p class="meta">No commits (per the piece's safety rules). TASKS.yaml untouched (the shared ticket moves via the coordinator). Piece B scope unchanged: wire the four sources into the router (the spaghetti_3d rarity selector REPLACES <code>f_gate</code>), delete the old tunnel rule + <code>tunnel_air_c</code>, rebase the genhash.</p>
+</body></html>
