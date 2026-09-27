@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0364 — the post-load fill window: duration + unit-budget cost curve</title>
+<style>
+body{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;max-width:110em;margin:1.5em auto;padding:0 1em;color:#1a1a1a;line-height:1.45}
+h1{font-size:1.5em;border-bottom:3px solid #2563eb;padding-bottom:.3em}
+h2{font-size:1.2em;margin-top:1.8em;color:#1e40af;border-bottom:1px solid #cbd5e1;padding-bottom:.2em}
+h3{font-size:1.05em;margin-top:1.2em;color:#334155}
+table{border-collapse:collapse;margin:1em 0;font-size:13px}
+th,td{border:1px solid #cbd5e1;padding:.35em .6em;text-align:left;vertical-align:top}
+th{background:#eff6ff}
+.ok{background:#dcfce7}.warn{background:#fef9c3}.bad{background:#fee2e2}
+code,pre{background:#f1f5f9;padding:.1em .3em;border-radius:3px}
+pre{padding:.8em;overflow-x:auto;font-size:12px;line-height:1.35}
+.note{background:#eff6ff;border-left:4px solid #2563eb;padding:.6em 1em;margin:1em 0}
+.find{background:#fefce8;border-left:4px solid #eab308;padding:.6em 1em;margin:1em 0}
+</style>
+</head>
+<body>
+
+<h1>AC-0364 — the post-load fill window: how long it actually lasts, and what it costs to shorten</h1>
+<p><b>Role:</b> bounded measurement-and-model run (no fix, no retuning, no TASKS.yaml edit, no renders,
+ONE godot run, capped). Tree: <code>e39e550</code> (2026-09-27; game code byte-identical to AC-0363's
+<code>bc597d0</code> — the only diff is <code>ARCHITECTURE.md</code>). Seed: <code>1</code> (the harness
+does not override <code>Game.world_seed</code>). Knobs: <code>AWECRAFT_LOGIC=boundary
+AWECRAFT_RADIUS=24 AWECRAFT_WALK=10 AWECRAFT_TICKTIME=1</code>, arm walk speed 16 m/s (fly),
+<code>ulimit -v 8388608</code>. Inherited from AC-0363 (same code): per-chunk generation 5,502 ± 25 µs;
+drain = wall-clock unit bank at 3.5 ms/unit + 8/frame catch-up cap + 30 ms/frame time cap; TG 3 workers;
+TM chunk-inflight 3; handoff count-capped.</p>
+<div class="find"><b>Verdict (from numbers):</b> the window is <b>≥ 10.13 s hard</b> (one measured walk)
+and <b>≈ 20 ± 4 s modeled</b> total — at the walk's end the in-radius HIGH set is only 50% built
+(72/145 achievable — the arm's 2401 denominator overstates, §4), the queue is still 1316 deep and
+flat, and the storm is still running (109 frames &gt; 30 ms in the walk, p99 180, max 354).
+<b>The window is bounded by the main-thread DRAIN stage</b> — its 30 ms per-frame time cap + a ~4.5 ms
+per-unit dispatch cost (sustained ~75–130 units/s) — plus ~20 ms of non-drain per-step overhead
+(COLLIDE averages 25 ms/frame, 841 staged drops). <b>Not</b> by generation throughput (TG starved:
+1–2 inflight in all 20 worst frames vs a 545/s capacity) and <b>not</b> by the 3.5 ms pace constant
+(the unit bank is saturated — the 30 ms time cap binds first). The budget curve is <b>flat</b>:
+2×/4×/8× the per-frame fill budget buys −10% / −15% / −17% window while pushing storm p99 to
+≈ 290 / 500 / 940 ms. The single cheapest change: <code>drain_budget_ms</code> 30 → 60 (with the unit
+cap 8 → 16) — a two-line constant edit, −10% window for +≈ 50 ms storm p99. The real fix (its own
+ticket, per the fence) is the ~4.5 ms per-unit main-thread dispatch cost, which bounds the whole curve.</div>
+
+<h2>1. The measurement — one R24 instrumented walk (the existing arm, unmodified)</h2>
+<p>G0: rc 0, <b>zero</b> <code>SCRIPT ERROR</code> lines (log: <code>.scratch/AC-0364-gates/walk_r24.log</code>,
+1617 lines; 0 lines matching <code>ERROR</code> at all). Arm verdict <code>ok: true</code> (10/10
+crossings, marker_ok). One godot at a time (slot verified free before the run; the run is the only
+process). The arm's own sequence: recenter(R24) → wait 3×3 core (the harness proxy for the load gate)
+→ spawn → fly 10 chunk-crossings at 16 m/s (10.13 s) → settle ≤ 1200 frames. <code>wfc_total_n = 487</code>
+(frames &gt; 30 ms since boot, counter — uncapped); <code>wfc_boot_n = 0</code> is UNRELIABLE: it is
+derived from the worst-256 ring, which is fully displaced by walk/settle frames (earliest ring entry
+t_ms 5909; boot-phase storm frames have been evicted — noted, not chased).</p>
+<table>
+<tr><th>field</th><th>value</th><th>reading</th></tr>
+<tr><td><code>walk_s</code> / crossings</td><td>10.13 s / 10</td><td>the measured window segment, gate-lift → walk end</td></tr>
+<tr><td><code>in_radius_built_min → final</code> (max 84) of <code>target_in_radius</code> 2401</td><td>13 → <b>72</b></td><td>sustained <b>~5.8–8.1 in-radius HIGH chunks/s</b> (worst-frame <code>inr_built</code> 26 → 83 over t 5.9–12.9 s); §4: 72 is 50% of the achievable HIGH set (145), not 3% of a real target</td></tr>
+<tr><td><code>in_radius_present_final</code> / <code>resident_final</code> / <code>built_final</code></td><td>1477 / 1503 / 72</td><td>the resident set is ~stationary (1401 → 1503 over the walk); high-built = 72 in total</td></tr>
+<tr><td>census walk start → end (<code>tree_mi</code>, mesh instances)</td><td>212 → <b>1076</b></td><td>the LOW representations fill at <b>~85/s</b> (212 → 1076 ≈ 97% of the 1105-column draw footprint, §4) — the "world not there" is mostly a HIGH-band + small-low-gap story, not 99%-missing</td></tr>
+<tr><td><code>queue_size</code> (walk end) / worst-frame range</td><td><b>1316</b> / 1256–1352</td><td><b>queue trend: FLAT</b> (net −36 over 10.13 s against walk production ≈ 46 new/crossing + re-queue churn ≈ 25/crossing ≈ 71/s) → drain ≈ production ≈ <b>~75/s sustained in the walk phase</b></td></tr>
+<tr><td><code>loads / unloads / flap</code></td><td>459 / 458 / 0</td><td>~46 per crossing ≈ the taxi footprint shift (2r+1) — no flapping</td></tr>
+<tr><td>walk frames: <code>p50 / p95 / max</code> ms</td><td>3 / 65 / <b>354</b></td><td>frames alternate fast (3 ms) / slow (45–354 ms) — a steady storm regime, not a spike</td></tr>
+<tr><td>storm (<code>storm_threshold_ms</code> 30): <code>n / p99 / max</code></td><td><b>109</b> / <b>180</b> / <b>354</b></td><td>the storm is alive at walk end — the window is ≥ 10.13 s and OPEN</td></tr>
+<tr><td>COLLIDE over the walk</td><td>n 473, total <b>2575 ms</b> (avg ~25 ms/step), slab max 23.3, batch max 27</td><td>the storm's co-owner: staged collision rebuilds on landings; <code>staged_dropped 841</code> (stale churn), <code>staged_pending_final 0</code> (fully drained at walk end)</td></tr>
+<tr><td><code>read_sync_gen</code> / light self-computes</td><td>0 / 0 (3594 cache hits)</td><td>the player's read path never forces a sync gen; lighting is all cache — neither is a hidden window contributor</td></tr>
+<tr><td><code>mem_delta_mb</code></td><td>+336 MB over the walk</td><td>noted (capped run, 8 GB virtual); not a gate here</td></tr>
+</table>
+<h3>1.1 The worst-frame census (20 entries, the ticket's "census that tells us what bounds it")</h3>
+<table>
+<tr><th>stage (ms, range over the 20 worst frames)</th><th>share of worst frame</th><th>state fields (range)</th></tr>
+<tr><td><b>DRAIN 25.7 – 48.0</b></td><td><b>45 – 75%</b></td><td rowspan="5"><code>queue</code> 1256–1352 (flat)<br><b><code>tg</code> 1–2</b> (TG starved)<br><b><code>tm</code> 1–8</b> (slab-level tasks; chunk-inflight gate 3 — the pool is not pinned at its slab cap 64)<br><code>low</code> 0–1, <code>star</code> 0<br><code>inr_built</code> 26 → 83 (rising), <code>resident</code> 1404–1504</td></tr>
+<tr><td>COLLIDE 0 – 44.0 (spiky)</td><td>0 – 70%</td></tr>
+<tr><td>HANDOFF 0 – 14.6</td><td>≤ 23%</td></tr>
+<tr><td>RECENTER 3.8 – 9.4</td><td>≤ 15%</td></tr>
+<tr><td>MISC 0.7 – 9.3, LOW 1.6 – 2.2, rest ≤ 1.7</td><td>≤ 15%</td></tr>
+</table>
+<p>The non-DRAIN share is a steady <b>~20 ms</b> per worst frame (this run: 63.5 − 42.9 = 20.6;
+AC-0363 STEP-1: 74.1 − 53.7 = 20.4) — the K in the §5 model. DRAIN ≈ 30 ms of it is the stage's own
+<code>drain_budget_ms</code> cap (the drain runs to the cap every storm frame — the unit bank is
+saturated, the TIME cap is what binds).</p>
+
+<h2>2. The drain mechanism on this tree (code read, grep-verified — the model's constants)</h2>
+<table>
+<tr><th>constant</th><th>value (line)</th><th>role in the model</th></tr>
+<tr><td><code>LOW_WAVE_PACE_MS</code> (world.gd 968)</td><td>3.5 ms</td><td>the unit bank tick: one dispatch unit per 3.5 ms of banked wall clock</td></tr>
+<tr><td><code>LOW_WAVE_FRAME_CAP</code> (970)</td><td>8 units/frame</td><td>catch-up cap; the bank is capped at 8 × 3.5 = 28 ms (line 7968) → <b>sustained ≈ 240–270 units/s</b> wall — the code's own comment records "the same ~240-270/s wall rate at both [30 and 60] rates"</td></tr>
+<tr><td><code>drain_budget_ms</code> (126/3113)</td><td><b>30 ms/frame</b></td><td>the drain stage's wall-clock time cap — <b>the binding frame constraint</b> (§5: 30 ms ÷ ~4.5 ms/unit ≈ 6.7 units &lt; the 8-unit pace cap)</td></tr>
+<tr><td><code>DRAIN_DT_CLAMP_MS</code> (146)</td><td>100 ms</td><td>bank sample clamp (pause/hitch guard)</td></tr>
+<tr><td><code>DRAIN_WIN_PACE_MS</code> (153)</td><td>250 ms/bucket</td><td>the windowed bucket scan starts at the spawn ring and grows one bucket per 250 ms wall</td></tr>
+<tr><td>per-unit dispatch cost <code>c</code></td><td><b>≈ 4.5 ms (measured)</b></td><td>DRAIN ms ÷ units/frame across the 20 worst frames (25.7–48 ms ÷ ~6–8) — the main-thread work of ONE dispatch (slab copy + nbs stamps + bookkeeping + pick/scan + dedup). NOT the 3.5 ms bank tick — the dispatch costs more than its own pace tick</td></tr>
+<tr><td>TG (3200) / TM (3253) / caps</td><td>3 / 3 workers (8/64 only in the loading window — not active here)</td><td>TG capacity 3 ÷ 5.502 ms ≈ 545 chunks/s; TM chunk-inflight 3 (slab tasks to 64 low); <code>LOW_TASK_CAP</code> 64, <code>LOW_POLL_BUDGET_MS</code> 4 ms</td></tr>
+<tr><td>handoff (3429/6130)</td><td><code>stream_ho_cap</code> = round(3 × speed × radius), clamp 1–100</td><td>= 17 in this run (fly 16 m/s → speed factor 3.72, radius factor 24/16 = 1.5); ≈ 5 at real walking speed (4.3 m/s). Count-capped; landing ≈ ~1 ms each</td></tr>
+</table>
+<p><b>What a unit is</b> (world.gd ~8180+ comments): one dispatch = ONE SLAB of the best-pending column in
+the single (taxi, layer) ring order across all draw tiers — ring 0/1 (the real band + band A) does the
+high slab build; ring 2/3 does the far avg emit. A column stays queued until complete; per-column
+defers (a slab in flight, neighbors/data/light not ready, TM or low-pool full) skip the column for the
+frame and re-pick; only a POOL-FULL defer ends the frame. A high column whose light 3×3×3 box is not
+settled defers — so under TM/settle pressure the drain preferentially dispatches the CHEAP far lows
+(measured: low 85/s vs high 5.8/s).</p>
+
+<h2>3. The window — duration and what bounds it</h2>
+<h3>3.1 Measured (hard): ≥ 10.13 s, and the window is still open at 10.13 s</h3>
+<p>At the walk's end — 10.13 s after the gate-lift proxy — the state is: in-radius HIGH set 72/145
+(50%), low coverage ~97% (1076/1105), queue 1316 deep and flat, storm alive (109 storm frames in the
+walk, p99 180, max 354). <b>The in-radius set is NOT substantially built and the storm has NOT stopped
+by the end of the only thing we can measure directly</b> — so 10.13 s is the hard lower bound, and the
+rest is the model below (labeled as such).</p>
+<h3>3.2 Modeled (the extrapolation, with its error bars): total window ≈ 20 ± 4 s</h3>
+<p>After the walk (player still, production → 0), the queue drains at the steady-state rate of the
+§5 model: <code>rate(T) = (T/c) / (T + K)</code> per ms, with the measured <code>c = 4.5 ms</code>,
+<code>K = 20 ms</code> → 133 units/s at the current budget. Queue 1316 → <b>~9.9 s</b> → storm ends at
+<b>≈ 20 s</b> from gate-lift. The in-radius HIGH set completes when the drain + TM/handoff finish the
+remaining 73 columns: the high columns are the INNERMOST of the (taxi, layer) queue order, but their
+landing is paced at the measured ~5.8–8/s (TM inflight 3 + light-settle defers + handoff) →
+<b>10.13 + 73/5.8–8 ≈ 19–22.7 s</b>. The two converge: <b>storm end ≈ high-set completion ≈ 20 s</b>.
+Error bars: the walk-phase sustained rate was ~75/s (recenter churn + COLLIDE spikes eat budget —
+measured net −36/10.13 s), the still-phase ~133/s is a model point, and <code>c</code> carries ± 1 ms
+from the 20-frame sample → the total window is <b>20 ± 4 s</b>; the high-set "substantially built"
+point is 19–23 s. (The arm's settle loop ran to its 1200-frame cap mid-window — consistent, not a
+contradiction: 1200 steps at ~20/s ≈ 60 s &gt; the remaining ~10 s of window.)</p>
+<h3>3.3 The bound — the census answer</h3>
+<ul>
+<li><b>NOT generation throughput.</b> TG is STARVED: <code>tg</code> inflight 1–2 in all 20 worst
+frames (Little's law: 1.5 ÷ 5.5 ms ≈ a 270/s data-landing capacity against a ~100/s demand). Raising
+<code>threadgen_max</code> buys nothing — the workers are waiting on dispatch, not the other way
+round. (This is the census line the ticket asked for: AC-0352's "pool pinned at its cap" reads as
+saturation, but the current ring shows TG idle, TM at 1–8 slab tasks against a 64-slab / 3-chunk
+gate — the pools are under-full, not pinned.)</li>
+<li><b>NOT the 3.5 ms pace constant.</b> The unit bank saturates (its 28 ms cap ≈ two fast steps'
+accumulation) and the drain runs to its 30 ms TIME cap every storm frame —
+halving the pace constant alone changes nothing (§5, the no-op finding).</li>
+<li><b>IT IS the main-thread DRAIN stage:</b> the 30 ms/frame time cap × the ~4.5 ms per-unit
+dispatch cost → ~6–8 units/frame → ~75–130 units/s sustained — against a queue of 1316 that the walk
+keeps refilling at ~71/s. Window ≈ queue ÷ rate.</li>
+<li><b>Coadjutor: the COLLIDE lane</b> — ~25 ms/frame average (0–44 ms spiky, 841 staged drops over
+the walk) sits in K and keeps frames &gt; 30 ms; it scales with landing rate, so it dies with the
+queue but extends the tail.</li>
+<li><b>Separate bound for the measured "built" metric:</b> the in-radius HIGH fill (5.8/s) is paced by
+TM chunk-inflight 3 + the light-settle defers + the handoff — the drain defers the high columns and
+ships the far lows instead. That is why the arm's <code>in_radius_built</code> creeps at ~6/s while
+the tree fills at ~85/s.</li>
+</ul>
+<h3>3.4 The load gate next to the window (the spec's STEP-2 pair of numbers)</h3>
+<p>The gate (SIM TAXI DIAMOND, 41 columns at sim 4) holds ≈ <b>2.1 s</b> at R24 (AC-0313 standing
+value; this run's boot-to-walk phase, derived from the ring's t_ms span + walk_s, is 2.7–5.9 s — the
+harness's 3×3-core proxy is looser than the game's gate). <b>Gate ≈ 2.1 s vs window ≈ 20 s: the gate
+is ~10% of the story.</b> Moving the gate earlier buys at most ~2 s; the decision belongs on the
+window, not the gate.</p>
+
+<h2>4. A denominator correction (stated, with the numbers) — the arm's 2401 is not the real target</h2>
+<p>The draw tiers at R24 (<code>_lod_tier_of</code>, world.gd ~2290, with <code>band0_r = 4</code>,
+<code>medium_start_r = 8</code>, <code>low_start_r</code> clamped to <code>render_radius</code>):
+tier 0 (real band, the 41-column sim diamond) taxi ≤ 4; tier 1 (band A, full-LOD high) taxi 5–8;
+tier 2 (band B, 8×8 low avg) taxi 9–23; tier 3 none (the render edge cuts at taxi 24); tier 4
+data-only taxi ≥ 24. So the HIGH set = <b>145 columns</b> (diamond taxi ≤ 8), the drawn footprint =
+<b>1105 columns</b> (diamond taxi ≤ 23), and the arm's <code>target_in_radius</code> = (2r+1)² =
+<b>2401</b> is a CHEBYSHEV SQUARE — its corners are low/data-only by design. Far columns are "never
+<code>mesh_built</code> (the low lane stamps, not the high lane)" (world.gd ~7640 comment), so
+<code>in_radius_built</code> can reach at most ~145. <b>Measured 72 is 50% of the real target, not
+3% of a phantom one</b> — and AC-0352's "22–34 of 2401 (~1%)" carries the same artifact (it was
+15–23% of the high set, on a world whose low coverage this run re-measures at 212/1105 = 19% at the
+equivalent walk-start point). The user-visible "world not there" at 10.13 s is: half the
+high band + ~3% missing low (≈ 33 columns), not 99%.</p>
+
+<h2>5. The cost curve — window vs per-frame fill budget (the model; no constant was changed)</h2>
+<p><b>Setup.</b> "Per-frame fill budget" must mean the unit cap AND the time cap together: with
+<code>c = 4.5 ms</code>/unit, the 30 ms time cap already allows only ~6.7 units &lt; the 8-unit cap,
+so <b>raising <code>LOW_WAVE_FRAME_CAP</code> (or halving the 3.5 ms pace) alone is a NO-OP</b> — the
+bank is saturated and the time cap binds first (this is the measurement contradicting the inherited
+"the drain is paced at 3.5 ms/unit" framing: that paces the bank, the frame is capped by time +
+cost). Points: budget ×1/×2/×4/×8 = (B, T) = (8,30) / (16,60) / (32,120) / (64,240). Model:
+units/step <code>u = T/c</code> (cap B never binds), step wall <code>fw = T + K</code>, steps/s =
+1000/fw, wall rate = u/fw; window = walk (10.13 s, kinematic — production keeps the queue refilled at
+~71/s, so all points keep the measured 10.13 s walk; the queue at walk end ≈ 1316 at every point) +
+1316 ÷ rate. Frame cost: DRAIN ms ≈ T per storm frame; p99/max scaled linearly on the DRAIN share
+(20 ms non-DRAIN held fixed) — upper-bound extrapolation, stated as such.</p>
+<table>
+<tr><th>budget</th><th>units/step</th><th>step wall (storm)</th><th>wall rate</th><th>queue drain</th><th><b>window</b> (from gate-lift)</th><th><b>storm p99 / max</b></th><th>storm fps (steps/s)</th></tr>
+<tr><td><b>current</b> (B8, T30)</td><td>6.7</td><td>50 ms</td><td>133/s</td><td>9.9 s</td><td><b>20.0 s</b> (measured 10.13 + modeled 9.9)</td><td>180 / 354 (measured)</td><td>20</td></tr>
+<tr><td>2× (B16, T60)</td><td>13.3</td><td>80 ms</td><td>167/s (+25%)</td><td>7.9 s</td><td><b>18.0 s (−10%)</b></td><td>≈ 287 / 567</td><td>12.5</td></tr>
+<tr><td>4× (B32, T120)</td><td>26.7</td><td>140 ms</td><td>190/s (+43%)</td><td>6.9 s</td><td><b>17.0 s (−15%)</b></td><td>≈ 503 / 991</td><td>7.1</td></tr>
+<tr><td>8× (B64, T240)</td><td>53.3</td><td>260 ms</td><td>205/s (+54%)</td><td>6.4 s</td><td><b>16.5 s (−17%)</b></td><td>≈ 935 / 1841 (upper bound)</td><td>3.8</td></tr>
+<tr><td>asymptote</td><td>∞</td><td>—</td><td><b>1/c = 222/s</b></td><td>5.9 s</td><td>16.0 s (−20%)</td><td>unbounded frame cost</td><td>→ 1/c</td></tr>
+</table>
+<div class="find"><b>The curve is flat — the ticket's most valuable branch, and it is the measurement's
+answer.</b> 8× the fill budget buys −17% window (20 → 16.5 s) while tripling the storm's worst-frame
+cost (p99 180 → ~940 ms, fps 20 → 4). The reason is arithmetic, not tuning: the wall rate is
+<code>(T/c)/(T+K)</code> and saturates at <b>1/c ≈ 222 units/s</b> — the main-thread per-unit dispatch
+cost. More budget just moves the same ~4.5 ms of main-thread work into fewer, longer frames (the
+code's own "frame-rate bound" arithmetic, world.gd ~8000: 8×30 fps ≈ 4–5×60 fps ≈ the same wall rate).
+The K = 20 ms non-DRAIN overhead (COLLIDE's ~25 ms average included) taxes every step and is why even
+the asymptote (16.0 s) leaves the 10.13 s kinematic walk untouched. <b>A main-thread budget cannot
+move this window by more than ~20%</b>; the fix that moves it is cutting <code>c</code> (halving
+4.5 → 2.25 ms doubles the ceiling to 445/s AND halves every DRAIN frame — the storm would end with
+the queue at half depth, i.e. window ≈ 13–15 s at unchanged budget).</div>
+
+<h2>6. Verdict — the single cheapest change</h2>
+<p><b><code>drain_budget_ms</code> 30 → 60 (world.gd 126/3113), paired with
+<code>LOW_WAVE_FRAME_CAP</code> 8 → 16 (line 970) so the bank can feed it.</b> Two one-line constant
+edits, no new code path, fps-independent by construction (the wall-clock bank is unchanged),
+reversible. It IS the first point of the measured curve: window −10% (20 → 18 s), the storm's DRAIN
+30 → 60 ms (p99 ≈ 180 → ~287, max ≈ 354 → ~567, storm fps 20 → 12.5). It is the cheapest change that
+the census identifies as on the binding constraint — TG is starved (its cap is not), the handoff cap
+(17 in-harness / 5 walking) has headroom, and the pace constant alone is a no-op (§5). Two honest
+caveats for the follow-up ticket: (i) beyond 2× the curve flattens (§5) — the budget is the cheap
+FIRST step, not the fix; (ii) the in-radius "built" metric is separately TM/settle-gate-paced
+(5.8/s) — <code>threadmesh_max</code> 3 → 6 is the paired one-constant move that halves the high-set
+completion (window 20 → ~17 s) at the cost of ~1–2 ms/frame extra handoff+collision. And the real fix
+— cutting the ~4.5 ms per-unit main-thread dispatch cost (slab copy + nbs stamps + the pick/scan +
+dedup) — is the only lever on BOTH axes of the curve; per the fence it is its own ticket with its own
+gates.</p>
+
+<h2>7. Measurement vs model — where the inherited framing had to bend</h2>
+<ol>
+<li><b>"The drain is paced at a fixed ~3.5 ms wall-clock per dispatch unit, so the window stretches in
+proportion to unit cost"</b> (inherited): the 3.5 ms is the UNIT BANK tick, verified — but the binding
+frame constraint is the <b>30 ms time cap × the ~4.5 ms ACTUAL per-unit cost</b> (the dispatch costs
+more than its own pace tick). The per-chunk GENERATION cost (5,502 µs) enters none of the window
+arithmetic — TG is starved (1–2 inflight), so the AC-0363 "1.84× cost → 1.84× window" stretch does
+not show in THIS window: the window is queue ÷ drain-rate, and the drain-rate is main-thread-work
+bounded, not generation-cost bounded.</li>
+<li><b>"TM pool pinned at its cap (tm/tg 8/2)" (AC-0352)</b>: the current census reads <code>tg</code>
+1–2 (starved, cap 3) and <code>tm</code> 1–8 SLAB tasks (chunk gate 3, slab cap 64 — under-full). The
+pools are not pinned; the saturation in AC-0352's world was real then, but the current ring shows a
+dispatch-limited, worker-idle regime.</li>
+<li><b>"in_radius_built 22–34 of 2401 (~1%)" (AC-0352)</b>: the 2401 Chebyshev square is not the
+buildable set — the high set is 145, the drawn footprint 1105 (§4). Same state reads ~15–23% of the
+real target.</li>
+<li><b><code>wfc_boot_n</code> = 0</b> is a ring-eviction artifact (worst-256 ring, earliest entry
+t_ms 5909), not "no boot storm" — the 487 counter includes boot; the ring just no longer holds it.</li>
+</ol>
+
+<h2>8. Gates and deviations</h2>
+<ol>
+<li><b>G0:</b> rc 0, <b>zero</b> <code>SCRIPT ERROR</code> lines, zero <code>ERROR</code> lines, arm
+<code>ok: true</code> (10/10 crossings, marker_ok). <code>remesh_ok: false</code> at R24 — the
+re-entry remesh of the start marker did not land within the arm's settle cap; <code>remesh_ok</code>
+is reported but NOT in the arm's <code>ok</code> at this radius (ok = crossings + marker_ok) —
+noted, not chased (a storm-stationary R24, expected shape).</li>
+<li>ONE godot run (the run the ticket names), capped (<code>ulimit -v 8388608</code>), one at a time
+(slot verified free), ~2 min wall. No R50, no <code>load</code> arm, no renders. No probe added to
+<code>godot/scenes/harness.gd</code> (the arm's existing fields were sufficient — <code>git status</code>
+on <code>godot/</code> + <code>gdext/</code> empty at end). No commit; <code>tasks/TASKS.yaml</code>
+untouched by this run (its pre-existing modification belongs to another session). Standing values:
+the R24 row's fields are the NEW reference for this tree (AC-0363 already moved the frame-split
+standing to DRAIN 72% / MISC 8.5%; this run's worst-frame DRAIN share 45–75% + COLLIDE 0–70% is
+consistent, with COLLIDE the newly-visible co-owner); no standing value was re-baselined silently.</li>
+</ol>
+
+<h2>9. RESULT JSON (verbatim, the single run)</h2>
+<pre>
+{"built_final":72,"burst_max_ms":0,"burst_ms_per_crossing":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"burst_p50_ms":0,"burst_p95_ms":0,"census_walk_end":{"collision_bodies":562,"resident":1385,"tree_mi":1076,"tree_nodes":3785},"census_walk_start":{"collision_bodies":128,"resident":1401,"tree_mi":212,"tree_nodes":2041},"col_deferred":103,"col_deferred_in_footprint":0,"collision_max_ms":27,"collision_ms_total":2575,"collision_n":473,"collision_slab_hist":{"10_25ms":40,"1_2ms":286,"2_5ms":371,"5_10ms":36,"gte25ms":0,"lt1ms":337},"collision_slab_max_ms":23.3,"collision_slab_ms":2571.1,"collision_slabs":1070,"create_sync_gen":0,"crossing_burst_max_ms":12.9,"crossing_burst_ms":[4.1,8.5,7.0,5.8,5.5,5.7,6.2,8.0,4.0,12.9,11.4,7.8],"crossing_burst_p50_ms":6.6,"crossing_burst_p95_ms":12.1,"crossing_census":{"demoted":109,"gen_far":109,"halo_evicts":109,"promoted":125,"reentry_flips":125,"scanned":5269},"crossing_frame_max_ms":191,"crossing_frame_ms":[44,10,11,9,13,191,11,59,62,11],"crossing_frame_p50_ms":12,"crossing_frame_p95_ms":132,"crossing_n":12,"crossing_other_n":0,"crossing_worst":{"ahead":true,"cross":1,"demoted":9,"frame_ms":-1,"gen_far":9,"halo_evicts":9,"promoted":9,"reentry_flips":9,"scan_ms":4.2,"scanned":373,"seq":12,"us_ms":12.9},"crossings":10,"flap":0,"fluid_tick_max_ms":0.15,"fluid_tick_ms_p95":0.05,"fluid_tick_n":1572,"footprint":{"cols":10,"missing":0},"forward_max_ms":0,"forward_p95_ms":0,"forward_wall_ms_per_crossing":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"fwd_first10_p95":10,"fwd_first10_per_crossing":[4,7,7,8,10,10,4,9,6,0],"in_radius_built_final":72,"in_radius_built_max":84,"in_radius_built_min":13,"in_radius_present_final":1477,"light_batch_calls":0,"light_batch_chunks":0,"light_batches_per_crossing":[0,0,0,0,0,0,0,0,0,0],"light_cache_hits":3594,"light_computes_per_crossing":[0,0,0,0,0,0,0,0,0,0],"light_self_computes":0,"loads":459,"marker":[16,139,8,1,3],"marker_ok":true,"max_ms":354,"mem_after_bytes":565394711,"mem_before_bytes":213074231,"mem_delta_mb":336.0,"ok":true,"p50_ms":3,"p95_ms":65,"queue_size":1316,"radius":24,"read_sync_gen":0,"read_sync_gen_ms":0.0,"reband_entry":150,"reband_exit":150,"reband_rearm_slabs":0,"remesh_ok":false,"resident_final":1503,"staged_drained":124,"staged_dropped":841,"staged_pending_final":0,"storm_threshold_ms":30,"storm_walk_max_ms":354,"storm_walk_n":109,"storm_walk_p99_ms":180,"target_in_radius":2401,"trailing_max_ms":0,"trailing_p95_ms":0,"trailing_wall_ms_per_crossing":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"unbodied_built_final":83,"unloads":458,"walk_chunks":10,"walk_s":10.13,"walk_speed":16.0,"wfc_boot_n":0,"wfc_total_n":487,"worst_frames":[{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":0,"remesh_max_window":0,"syncs":0},"ms":63.5,"split":{"collide":0.0,"drain":42.9,"facelight":0.0,"handoff":6.0,"io":0.0,"low":1.9,"low_poll":0.0,"meshattach":0.0,"misc":8.5,"recenter":4.2,"rescore":0.0,"star":0.2},"state":{"inr_built":71,"inr_present":1433,"low":1,"queue":1256,"resident":1453,"star":0,"tg":2,"tm":3},"t_ms":12856},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":0,"remesh_max_window":0,"syncs":0},"ms":62.9,"split":{"collide":18.4,"drain":42.2,"facelight":0.0,"handoff":6.3,"io":0.0,"low":1.9,"low_poll":0.0,"meshattach":0.0,"misc":8.3,"recenter":4.2,"rescore":0.0,"star":0.2},"state":{"inr_built":46,"inr_present":1433,"low":0,"queue":1322,"resident":1453,"star":0,"tg":2,"tm":7},"t_ms":9269},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":0,"remesh_max_window":0,"syncs":0},"ms":61.6,"split":{"collide":44.0,"drain":48.0,"facelight":0.0,"handoff":0.0,"io":0.0,"low":1.7,"low_poll":0.0,"meshattach":0.0,"misc":3.8,"recenter":8.0,"rescore":0.0,"star":0.0},"state":{"inr_built":83,"inr_present":1404,"low":0,"queue":1309,"resident":1419,"star":0,"tg":2,"tm":1},"t_ms":11267},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":0,"remesh_max_window":0,"syncs":0},"ms":56.4,"split":{"collide":19.1,"drain":34.9,"facelight":0.0,"handoff":6.2,"io":0.0,"low":1.9,"low_poll":0.0,"meshattach":0.0,"misc":8.7,"recenter":4.8,"rescore":0.0,"star":0.2},"state":{"inr_built":53,"inr_present":1410,"low":0,"queue":1314,"resident":1425,"star":0,"tg":2,"tm":8},"t_ms":10373},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":7,"remesh_max_window":7,"syncs":0},"ms":54.0,"split":{"collide":8.5,"drain":25.9,"facelight":0.0,"handoff":14.6,"io":0.0,"low":2.2,"low_poll":0.0,"meshattach":0.0,"misc":4.0,"recenter":7.2,"rescore":0.0,"star":0.5},"state":{"inr_built":33,"inr_present":1395,"low":0,"queue":1352,"resident":1414,"star":0,"tg":2,"tm":8},"t_ms":5909},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":0,"remesh_max_window":0,"syncs":0},"ms":53.0,"split":{"collide":12.3,"drain":30.9,"facelight":0.0,"handoff":2.9,"io":0.0,"low":1.9,"low_poll":0.0,"meshattach":0.0,"misc":9.0,"recenter":8.2,"rescore":1.4,"star":0.1},"state":{"inr_built":43,"inr_present":1433,"low":0,"queue":1314,"resident":1453,"star":0,"tg":1,"tm":8},"t_ms":9668},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":0,"remesh_max_window":0,"syncs":0},"ms":52.1,"split":{"collide":20.2,"drain":35.1,"facelight":0.0,"handoff":6.0,"io":0.0,"low":2.0,"low_poll":0.0,"meshattach":0.0,"misc":5.2,"recenter":3.8,"rescore":0.0,"star":0.1},"state":{"inr_built":51,"inr_present":1433,"low":0,"queue":1314,"resident":1453,"star":0,"tg":2,"tm":1},"t_ms":10487},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":0,"remesh_max_window":2,"syncs":0},"ms":51.7,"split":{"collide":24.5,"drain":40.9,"facelight":0.0,"handoff":0.0,"io":0.0,"low":2.0,"low_poll":0.0,"meshattach":0.0,"misc":0.7,"recenter":8.1,"rescore":0.0,"star":0.0},"state":{"inr_built":39,"inr_present":1448,"low":0,"queue":1306,"resident":1472,"star":0,"tg":2,"tm":8},"t_ms":6779},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":0,"remesh_max_window":0,"syncs":0},"ms":50.1,"split":{"collide":9.1,"drain":26.4,"facelight":0.0,"handoff":5.7,"io":0.0,"low":1.8,"low_poll":0.0,"meshattach":0.0,"misc":8.1,"recenter":8.1,"rescore":0.0,"star":0.1},"state":{"inr_built":55,"inr_present":1392,"low":0,"queue":1314,"resident":1407,"star":0,"tg":2,"tm":8},"t_ms":10268},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":0,"remesh_max_window":0,"syncs":0},"ms":49.8,"split":{"collide":22.4,"drain":29.6,"facelight":0.0,"handoff":5.4,"io":0.0,"low":1.9,"low_poll":0.0,"meshattach":0.0,"misc":5.3,"recenter":7.5,"rescore":1.5,"star":0.1},"state":{"inr_built":78,"inr_present":1433,"low":0,"queue":1304,"resident":1453,"star":0,"tg":2,"tm":1},"t_ms":11869},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":0,"remesh_max_window":0,"syncs":0},"ms":49.7,"split":{"collide":8.3,"drain":28.0,"facelight":0.0,"handoff":2.8,"io":0.0,"low":1.8,"low_poll":0.0,"meshattach":0.0,"misc":7.6,"recenter":9.4,"rescore":1.7,"star":0.1},"state":{"inr_built":38,"inr_present":1433,"low":0,"queue":1322,"resident":1453,"star":0,"tg":1,"tm":8},"t_ms":8313},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":0,"remesh_max_window":0,"syncs":0},"ms":48.8,"split":{"collide":26.2,"drain":31.0,"facelight":0.0,"handoff":5.3,"io":0.0,"low":1.9,"low_poll":0.0,"meshattach":0.0,"misc":5.1,"recenter":5.5,"rescore":0.0,"star":0.1},"state":{"inr_built":81,"inr_present":1404,"low":0,"queue":1309,"resident":1419,"star":0,"tg":2,"tm":1},"t_ms":11467},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":0,"remesh_max_window":0,"syncs":0},"ms":48.7,"split":{"collide":9.2,"drain":25.9,"facelight":0.0,"handoff":6.2,"io":0.0,"low":1.9,"low_poll":0.0,"meshattach":0.0,"misc":8.3,"recenter":6.5,"rescore":0.0,"star":0.2},"state":{"inr_built":48,"inr_present":1402,"low":0,"queue":1322,"resident":1417,"star":0,"tg":2,"tm":8},"t_ms":9152},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":0,"remesh_max_window":0,"syncs":0},"ms":48.5,"split":{"collide":18.1,"drain":32.7,"facelight":0.0,"handoff":0.0,"io":0.0,"low":1.8,"low_poll":0.0,"meshattach":0.0,"misc":6.2,"recenter":7.8,"rescore":0.0,"star":0.0},"state":{"inr_built":52,"inr_present":1404,"low":0,"queue":1322,"resident":1419,"star":0,"tg":2,"tm":8},"t_ms":8904},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":5,"remesh_max_window":7,"syncs":0},"ms":47.9,"split":{"collide":8.1,"drain":26.9,"facelight":0.0,"handoff":6.0,"io":0.0,"low":1.8,"low_poll":0.0,"meshattach":0.0,"misc":5.9,"recenter":7.4,"rescore":0.0,"star":0.1},"state":{"inr_built":31,"inr_present":1477,"low":0,"queue":1352,"resident":1504,"star":0,"tg":2,"tm":8},"t_ms":6038},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":3,"remesh_max_window":7,"syncs":0},"ms":47.8,"split":{"collide":8.9,"drain":25.9,"facelight":0.0,"handoff":6.0,"io":0.0,"low":1.6,"low_poll":0.0,"meshattach":0.0,"misc":9.3,"recenter":5.0,"rescore":0.0,"star":0.2},"state":{"inr_built":30,"inr_present":1477,"low":0,"queue":1352,"resident":1504,"star":0,"tg":2,"tm":8},"t_ms":6131},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":1,"remesh_max_window":7,"syncs":0},"ms":47.3,"split":{"collide":5.7,"drain":25.7,"facelight":0.0,"handoff":5.9,"io":0.0,"low":1.7,"low_poll":0.0,"meshattach":0.0,"misc":7.8,"recenter":6.2,"rescore":1.6,"star":0.2},"state":{"inr_built":26,"inr_present":1477,"low":0,"queue":1306,"resident":1504,"star":0,"tg":2,"tm":8},"t_ms":6300},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":0,"remesh_max_window":0,"syncs":0},"ms":46.6,"split":{"collide":10.1,"drain":26.9,"facelight":0.0,"handoff":6.0,"io":0.0,"low":2.0,"low_poll":0.0,"meshattach":0.0,"misc":6.2,"recenter":5.6,"rescore":0.0,"star":0.2},"state":{"inr_built":44,"inr_present":1433,"low":0,"queue":1322,"resident":1453,"star":0,"tg":1,"tm":8},"t_ms":9562},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":0,"remesh_max_window":0,"syncs":0},"ms":45.8,"split":{"collide":23.5,"drain":28.4,"facelight":0.0,"handoff":5.3,"io":0.0,"low":1.9,"low_poll":0.0,"meshattach":0.0,"misc":5.2,"recenter":5.1,"rescore":0.0,"star":0.1},"state":{"inr_built":79,"inr_present":1433,"low":0,"queue":1309,"resident":1453,"star":0,"tg":2,"tm":1},"t_ms":11641},{"edit":{"act_window":0,"defers":2,"dirty_depth":0,"dirty_max_window":0,"dispatches":1,"remesh_depth":0,"remesh_max_window":0,"syncs":0},"ms":45.4,"split":{"collide":22.3,"drain":27.8,"facelight":0.0,"handoff":5.6,"io":0.0,"low":1.8,"low_poll":0.0,"meshattach":0.0,"misc":5.8,"recenter":4.4,"rescore":0.0,"star":0.1},"state":{"inr_built":80,"inr_present":1433,"low":0,"queue":1309,"resident":1453,"star":0,"tg":2,"tm":1},"t_ms":11553}]}
+</pre>
+<p class="note">Full log: <code>.scratch/AC-0364-gates/walk_r24.log</code> (1617 lines). Tree
+<code>e39e550</code>, seed 1, knobs as header. All fields above are read from this JSON.</p>
+
+</body>
+</html>

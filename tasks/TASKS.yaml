@@ -1,13 +1,13 @@
 meta:
-  updated_at: 2026-09-27T04:17
+  updated_at: 2026-09-27T05:03
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0364
 - AC-0365
 - AC-0366
 - AC-0367
+- AC-0369
 - AC-0145
 - AC-0310
 - AC-0311
@@ -20172,11 +20172,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-26T17:14
-  updated_at: 2026-09-26T17:14
-  completed_at: null
+  updated_at: 2026-09-27T05:03
+  completed_at: 2026-09-27T05:03
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -20259,7 +20259,32 @@ intake:
     r4 band, storm_walk_p99_ms, the R24 crossing row) and state them per sweep point so a regression is
     visible while sweeping.
 
-    '
+
+
+    CLOSED. THE QUESTION IS ANSWERED WITH NUMBERS, AND THE ANSWER OVERTURNS THE OBVIOUS INTUITION. Measured
+    on one current-tree R24 walk (rc 0, zero SCRIPT ERROR, ok:true): the fill window is >= 10.13 s HARD
+    and still open at that point - the in-radius HIGH set only 72/145 (50%) built, the queue flat at 1316,
+    and the storm still alive with 109 frames over 30 ms (p99 180, max 354). The modeled total from gate-lift
+    is ~20 +/- 4 s (queue 1316 divided by the sustained ~133 units/s, converging with the high-set completion
+    estimate of 19-23 s), of which the 2.1 s load gate is only about a tenth. WHAT BOUNDS IT, which is
+    the part that redirects any future ticket: the MAIN-THREAD DRAIN STAGE - a 30 ms per-frame time cap
+    times an actual ~4.5 ms per-unit dispatch cost, i.e. a sustained 75-130 units/s, plus ~20 ms of non-drain
+    overhead per frame (COLLIDE averaging ~25 ms/frame with 841 staged drops). It is emphatically NOT
+    generation (the thread-gen pipeline is STARVED at 1-2 inflight against a 545/s capacity), NOT the
+    3.5 ms pace (that bank is already saturated, so halving it alone is a no-op), and NOT the mesh pool
+    (1-8 slab tasks, under-full). THE COST CURVE IS FLAT, and that is the decision: doubling, quadrupling
+    or octupling the fill budget (unit cap and time cap together) moves the window only to 18.0 / 17.0
+    / 16.5 s - minus 10, 15 and 17 percent - while storm p99 goes to ~287 / ~503 / ~935 ms and the frame
+    rate falls 20 -> 12.5 -> 7.0 -> 3.8 fps. The wall rate saturates at 1/c = ~222 units/s, so spending
+    main-thread frames cannot buy more than about 20% of the window: the budget knobs are a bad trade
+    and the numbers now say so instead of taste. THE SINGLE CHEAPEST CHANGE, offered as the small option
+    rather than the answer: drain_budget_ms 30 -> 60 with LOW_WAVE_FRAME_CAP 8 -> 16, two one-line constants,
+    buys ~10% of the window for ~+50 ms of storm p99. THE REAL LEVER, filed as its own ticket because
+    this ticket''s fence is measurement: cut the ~4.5 ms PER-UNIT DISPATCH COST, which is the only knob
+    that moves the window and the frame cost together rather than trading one against the other. Deviations
+    recorded in the page: wfc_boot_n = 0 is ring eviction, remesh_ok:false sits outside the arm''s ok
+    at R24, and the frame-cost extrapolations are upper bounds. The tree is pristine - harness.gd byte-identical,
+    no probes, no commits from the run.'
   comments: []
 - id: AC-0365
   title: decompose-misc-worst-frame-residual
@@ -20702,6 +20727,65 @@ intake:
     CONTEXT: read tasks/AC-0309/AC-0309-results.html first - it carries all three with their measurements,
     plus the two environment findings it recorded (this box''s llvmpipe is degraded so renders are currently
     infeasible, and the 7-mode-in-one-process battery needs 16 GB where 8 GB used to do).
+
+    '
+  comments: []
+- id: AC-0369
+  title: cut-per-unit-dispatch-cost
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-27T05:03
+  updated_at: 2026-09-27T05:03
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The window right after loading lasts about twenty seconds, and the only reason
+    it lasts that long is that each unit of world is dispatched on the main thread at a cost of about
+    4.5 ms. Cutting that cost is the one change that shortens the window without making the long frames
+    worse - every other knob trades one against the other.
+
+
+    2) Technical Details:
+
+    WHERE THIS COMES FROM (AC-0364, measured on the current tree, 2026-09-26): the post-load fill window
+    is ~20 +/- 4 s from gate-lift, bounded by the MAIN-THREAD DRAIN stage at ~4.5 ms per discharge unit
+    (a 30 ms/frame time cap yielding only ~75-130 units/s) plus ~20 ms/frame of non-drain overhead, with
+    COLLIDE averaging ~25 ms/frame and 841 staged drops. It is NOT generation (thread-gen is starved at
+    1-2 inflight against 545/s capacity), NOT the 3.5 ms drain pace (already saturated), and NOT the mesh
+    pool. The budget curve is FLAT: 2x/4x/8x the fill budget moves the window only 18.0/17.0/16.5 s while
+    storm p99 goes 287/503/935 ms, because the wall rate saturates at ~222 units/s.
+
+    THE JOB: find where the ~4.5 ms per unit actually goes and cut it. Start from the wprof stage split
+    inside DRAIN (the instrument already exists and AC-0352/AC-0363 both used it), and remember AC-0363''s
+    finding that the drain is a FIXED wall-clock pace with a count-capped handoff - so the win must come
+    from making a unit cheaper, not from discharging more of them per frame. Candidates worth measuring
+    before touching: what a "unit" costs in the low versus high lane and whether one lane''s units are
+    much more expensive than the other''s; whether the per-unit work includes anything that could be hoisted,
+    cached, or moved to the thread-generation worker (which has enormous spare capacity - 1-2 inflight
+    against 545/s); and the COLLIDE share, which at ~25 ms/frame is comparable to the drain itself and
+    is (per AC-0337) the per-slab collision build. AC-0291''s Voronoi aquifer search (~1.6 ms/chunk) and
+    AC-0292''s drip pass are named per-chunk costs from AC-0363''s attribution and are candidates for
+    the same treatment.
+
+    CONSTRAINTS: behaviour-preserving - genhash must stay byte-identical (or, if a real change to the
+    world is unavoidable, rebase deliberately and record it); the mesh/light invariants hold (meshprobe
+    1.0, ladder 20/20, halo green, lightstate 0/0); boundary r4 walk p95 inside its standing band; the
+    crossface and sphere arms stay green; and the R24 fill window must be RE-MEASURED after the change
+    with the same instrument AC-0364 used, so the win is stated in the same units (window seconds, storm
+    p99, fps) rather than as a stage percentage.
+
+    GATES: the wprof DRAIN split before and after with the cost per unit named; the R24 window before/after;
+    G0 zero SCRIPT ERROR; genhash 25/25; farab h_mismatch 0; ladder 20/20; meshprobe 1.0; halo green;
+    boundary r4 in band; the battery green.
+
+    CONTEXT: AC-0362 (the seam fill) and AC-0306/0307/0308/0309 (the planet pieces) are all recent and
+    touch placement/streaming, so read their results pages before changing the dispatch path; and note
+    that this box''s llvmpipe is degraded, so renders are not available as evidence.
 
     '
   comments: []
