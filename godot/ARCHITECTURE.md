@@ -440,7 +440,9 @@ Match these; do not improvise a different approach in a task.
   divided a per-chunk figure by a per-column one, so it never meant anything; AC-0363's
   attribution names the real history instead: 2,884 µs/chunk after the C48 lattice, 4,532 after
   the Voronoi aquifers (the per-block 4-nearest search alone is ~1.6 ms), 5,711 after the P4
-  contents and 5,319 after the deep-only tunnel gate, with the planet pieces contributing
+  contents and 5,319 after the deep-only tunnel gate, 4,758 after the AC-0367-B vanilla tunnel
+  wiring (the 4 dense builds cost +347 µs but the 11× smaller void population saves −842 µs of
+  per-cell aquifer fill + −98 µs of drip), with the planet pieces contributing
   nothing to generation (`git diff` over the native lane is empty across them).
   H is bit-exact
   with the full path (the stored H *is* the heightmap — promotion must not shift terrain).
@@ -569,7 +571,8 @@ Match these; do not improvise a different approach in a task.
   sectorized instead of one MI per tier). Memory: the sector meshes are one extra
   copy of the visible far geometry (the slot meshes survive for the gates).
 - **The cave field (the single density field, AC-0215 / the vanilla density router since AC-0347
-  P2 / P1 tunnels at AC-0289)**: caves are wherever the ONE density field reads solid→air, and the
+  P2 / the vanilla tunnel wiring at AC-0367 piece B)**: caves are wherever the ONE density field
+  reads solid→air, and the
   surface AND the caves come from the same field. **Since AC-0347 P2 (THE STRUCTURE) the field is
   vanilla's density ROUTER** (Java 1.21.4 `overworld.json` `final_density`'s `range_choice`,
   verified against the shipped JSON; density > 0 = solid in both conventions): with
@@ -579,12 +582,15 @@ Match these; do not improvise a different approach in a task.
   the ramp reads +1 for k ≥ 9.5 the shallow branch stays degenerate — solid + entrance slits —
   across its whole width, so the cut-continuity proof holds unchanged):
   `k < K_CUT: d = min(S_ramp(H,y), 5·entrances)` (SHALLOW — S_ramp kept as the surface, the
-  entrance family carves the deliberate openings); `k ≥ K_CUT: d = min(entrances,
-  4·layer_c² + clamp(−1,1)(0.27+cheese_c) + clamp(0,0.5)(1.5−0.64·k/K_CUT))` (DEEP — the base
-  terrain contributes NOTHING: the solid/air decision below the shallow band IS the cave router;
-  the suppressor is 0.5 at the cut and 0 at k = 2.34375·K_CUT = 37.5 — vanilla's 1.5/0.64
+  entrance family carves the deliberate openings; BIT-IDENTICAL to the pre-AC-0367-B router —
+  the AC-0360 near-surface seal is structural); `k ≥ K_CUT: d = min(entrances,
+  4·layer_c² + clamp(−1,1)(0.27+cheese_c) + clamp(0,0.5)(1.5−0.64·k/K_CUT),
+  spaghetti_2d + spaghetti_roughness, spaghetti_roughness + spaghetti_3d, noodle)` (DEEP — the
+  base terrain contributes NOTHING: the solid/air decision below the shallow band IS the cave
+  router; the suppressor is 0.5 at the cut and 0 at k = 2.34375·K_CUT = 37.5 — vanilla's 1.5/0.64
   constants as-is, anchored at the cut; the squared ONE-SIDED layer term gates the
-  cheese caves into stacked levels in absolute y). The old `A(y)/DEEP_GROW/CAVE_AMP`
+  cheese caves into stacked levels in absolute y; AC-0367 piece B: the four vanilla tunnel
+  sources join the deep min chain — the AC-0289 outside tunnel rule is GONE). The old `A(y)/DEEP_GROW/CAVE_AMP`
   depth-amplifier structure is GONE. The "air for sure above H+11" margin is now STRUCTURAL (no
   noise budget): for y ≥ H+10.5 the ramp clamps −1 exactly and the shallow branch reads
   `min(−1, 5·entrances) ≤ −1 < 0` for any noise values (and under the router the effective
@@ -599,13 +605,16 @@ Match these; do not improvise a different approach in a task.
   **layer** = vanilla's `cave_layer` AS-IS `{firstOctave −8, [1.0]}` at xz 1.0 / y 8.0, seed+302
   (P2; the ~32-block vertical period rides 4 samples/period on the cave lattice — pre-AC-0359 it
   was evaluated DENSE in the scan, it cannot ride the 48-block SURFACE lattice, AC-0344);
-  **entrances** = the vanilla `caves/entrances` function minus its
-  spaghetti min — `0.37 + 2·(E−0.5) + 0.3·(1−clamp01((y−54)/40))` with E = `cave_entrance` AS-IS
+  **entrances** = the vanilla `caves/entrances` function — AC-0367 piece B: the FULL vanilla
+  form INCLUDING its spaghetti min, `min( base, spaghetti_roughness + spaghetti_3d )` with
+  `base = 0.37 + 2·(E−0.5) + 0.3·(1−clamp01((y−54)/40))` and E = `cave_entrance` AS-IS
   `{firstOctave −7, [0.4,0.5,1.0]}` at xz 0.75 / y 0.5, seed+306 (the +64 shift maps
   vanilla's from_y −10 / to_y 30 onto our 54 / 94; the 0.37 offset makes entrances RARE) — the
-  y-gradient stays ANALYTIC per-y (exact under trilinear), E is read from the cave lattice.
+  y-gradient stays ANALYTIC per-y (exact under trilinear), E is read from the cave lattice; the
+  spaghetti min enters the deep branch as the `spaghetti_roughness + spaghetti_3d` term (below).
   **AC-0359 (C48 — the selective lattice raise, the AC-0344 verdict)**: the CAVE family (cheese
-  + the 3 tunnel fields + layer + entrance) rides a SECOND lattice — 48 y-cells of the 384-block
+  + the 4 vanilla tunnel sources [AC-0367 piece B — the 3 AC-0289 stand-in fields they replaced]
+  + layer + entrance) rides a SECOND lattice — 48 y-cells of the 384-block
   height = **8-block Y cells** (Bedrock's resolution; `GY_CELLS_CAVE = 48`, FieldC 7×49×7 =
   2401 pts, same xz cells as the coarse lattice) — while the SURFACE + ORE fields (f_sc/f_sh/
   f_sr, f_ore1-3) stay on the original 48-block-y coarse lattice (`GY_CELLS = 8`, 441 pts); the
@@ -628,36 +637,32 @@ Match these; do not improvise a different approach in a task.
   asymmetry against the measured censuses: K_CUT 10 → 16 (the first cave on intact columns
   deepens, the k 10-16 air set was proven 100% tunnel family, the stacked levels survive);
   the suppressor constants stayed vanilla as-is.
-  AC-0289 (cave P1) added the **tunnel (edge-density)
-  structure** on top of the same one field: two more CAVE-LATTICE fields —
-  **f_spag** = `fbm3(x/14, y/10, z/14, seed+303, 2 oct)` (spaghetti, the wide tagliatelle,
-  1.0× the primary xz scale) and **f_nood** = `fbm3(x/10.5, y/10, z/10.5, seed+304, 2 oct)`
-  (noodle, the 1–5-wide wormholes, 0.75× the primary xz scale) — plus the **rarity gate**
-  **f_gate** = `fbm3(x/56, y/10, z/56, seed+305, 2 oct)` (low-frequency 3D patchiness:
-  tunnels appear in patches, the AweCraft stand-in for Bedrock's spaghetti_3d_rarity). Tunnel
-  air wins over cheese solid where `|f_spag−0.5| < 0.16·w` or `|f_nood−0.5| < 0.08·w` with
-  `w = clamp01((f_gate−0.52)/0.06)` (the thickness scales with the gate weight — the tunnel
-  pinches out at the patch edge); the rule runs BEFORE the he/solidf scan's solid flag and
-  identically in the veg margin scan (its own H2), so the tree base matches the full column.
-  **AC-0360 (the near-surface void census — the rule is DEEP-ONLY now)**: the scan applies the
-  tunnel only for `k = H−y ≥ K_CUT (16)` (`bool tun = (H − y >= K_CUT) && tunnel_air_c(...)`),
-  i.e. vanilla's range_choice topology — the tunnel families live in the DEEP branch, the shallow
-  band is ramp + entrances. The census (temp arm, out at closeout) proved the tunnel owned 100%
-  of the k&lt;16 void volume (32,249 cells, seed 44, 5×5 window) and 100% of the opened columns
-  (1,669 / 26.1%, depth avg 19.5); after the gate the k&lt;16 void is 0, opened columns 0, the
-  first cave on intact columns begins at k ≥ 16, and the deep bands (80-130 / 130+) are
-  byte-stable — the short-circuit also removes the 3 lattice reads at every shallow y (per-chunk
-  5,490→5,319 µs on the census instrument, scan 1,650→1,581 µs). genhash rebased 22/25 (3 chunks
-  unchanged), H byte-identical (thash `8df7aeb4…0dc4f11` both sides). The tunnel
-  fields are built and read ONLY on the full path (skip==0) — the lazy skip fill and the far
-  h-only payload never read them, so the H / far / promotion contracts stay bit-exact by
-  construction (a tunnel breaking the surface only wobbles the EFFECTIVE surface, inside the
-  documented H±R band, like the cheese term). The dense source functions are
-  `AweGen::density_cave` (the cheese), `AweGen::density_spag / density_nood / density_gate /
-  tunnel_air` (the tunnels) and `AweGen::density_layer / density_entrance / dens_at` (the P2
-  router's layer / entrance family / the router itself); the genprobe arm mirrors those exact
-  expressions in GDScript (the lockstep contract — a parameter change updates both sides in the
-  same task; P2's run: 7900/7900 f64-exact). **AC-0342 (the fluid decision BEFORE the carve —
+  **AC-0367 piece B (the vanilla tunnel wiring — the AC-0289 outside rule is DELETED)**:
+  AC-0289's tunnel structure (three CAVE-LATTICE stand-in fields — `f_spag`/`f_nood`/`f_gate`,
+  `fbm3` seeds +303/304/305 — with the outside edge-density rule
+  `|f_spag−0.5| < 0.16·w` or `|f_nood−0.5| < 0.08·w`, `w = clamp01((f_gate−0.52)/0.06)`, applied
+  as "tunnel air wins over solid" BEFORE the scan's solid flag) is GONE — the constants, the
+  fields, `gate_weight`/`tunnel_air`/`tunnel_air_c`, the `AweGen` bindings and the genprobe
+  tunnel block all removed. In its place the FOUR vanilla 1.21.4 tunnel sources (the piece-A
+  ports, `AweGen::spag2d_density / spag3d_density / spagrough_density / noodle_density`, slots
+  seed+337..346) ride the C48 cave lattice as 4 more `FieldC`'s (the dense expressions at the
+  2,401 lattice points, the AC-0292 pillar pattern) and enter the DEEP-branch min chain:
+  `min( 4·layer_c² + q + supp, entrances, spaghetti_2d + spaghetti_roughness,
+  spaghetti_roughness + spaghetti_3d, noodle )` (min is associative — the exact `final_density` /
+  `caves_entrances` structure; the outer pillar `max` stays in the scan). The tunnels no longer
+  "win over" the router — they ARE a min term of it (the vanilla structure). DEEP-ONLY
+  (`k ≥ K_CUT`): vanilla applies the spag3d/noodle terms at all depths, but the shallow branch
+  must stay bit-identical or the AC-0360 near-surface seal (32,249→0 void) comes back — the
+  deviation is recorded. Built and read ONLY on the full path (skip==0) and in the deep band,
+  so the heightmap H (surface_h of the 3 SURFACE fields) / the far / the skip payloads stay
+  bit-exact by construction (thash `8df7aeb4…0dc4f11` byte-identical before/after + farab
+  `h_mismatch` 0 prove it). The dense source functions are `AweGen::density_cave` (the cheese),
+  `AweGen::spag2d_density / spag3d_density / spagrough_density / noodle_density` (the vanilla
+  tunnels) and `AweGen::density_layer / density_entrance / dens_at` (the router's layer /
+  entrance family / the 9-arg router itself); the genprobe arm mirrors those exact expressions
+  in GDScript (the lockstep contract — a parameter change updates both sides in the same task;
+  the piece-B run: 10,300/10,300 f64-exact, the tunnel block's 1,200 pts replaced by the dens
+  block covering the new chain). **AC-0342 (the fluid decision BEFORE the carve —
   the vanilla ordering)**: the aquifer is decided from PRE-CARVE inputs only — `gen_flat`'s fill
   writes water at `y ∈ [he+1, SEA]` only when the heightmap says `H < SEA` (the gate READS H,
   never writes it). `he` (the post-carve topmost solid) remains the fill START, so a submarine

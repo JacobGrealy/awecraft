@@ -21283,9 +21283,9 @@ func _slabops_test(spawn: Vector3) -> void:
 # fade, vnoise2/vnoise3, fbm2/fbm3 at deterministic random points (seeded
 # RNG — reproducible), plus the cave-density wiring (density_cave must equal
 # the exact coarse-field source function — AC-0288: the two-octave blend,
-# see the cave block below) and the tunnel-field wiring (density_spag /
-# density_nood / density_gate / tunnel_air — AC-0289: the three P1 dense
-# sources + the edge-density predicate, see the tunnel block below).
+# see the cave block below) and the tunnel-family wiring (AC-0367 piece B:
+# the 4 vanilla tunnel sources spag2d/spag3d/spagrough/noodle + the 9-arg
+# dens_at router — the AC-0289 tunnel block was deleted with its functions).
 # Exact = f64 equality.
 func _genprobe_test() -> void:
 	var res := {
@@ -21303,7 +21303,6 @@ func _genprobe_test() -> void:
 		"fade": {"n": 0, "exact": 0},
 		"cave": {"n": 0, "exact": 0},
 		"vn3": {"n": 0, "exact": 0},
-		"tunnel": {"n": 0, "exact": 0},
 		"layer": {"n": 0, "exact": 0},
 		"entrance": {"n": 0, "exact": 0},
 		"dens": {"n": 0, "exact": 0},
@@ -21413,31 +21412,11 @@ func _genprobe_test() -> void:
 		cmp.call("vn3", v2, G.vn3(x * 1.0, y * 8.0, z * 1.0, s, -8, amp_layer))
 		var v3 := AweNoise.vn3(x * 0.75, y * 0.5, z * 0.75, s, -7, amp_entrance)
 		cmp.call("vn3", v3, G.vn3(x * 0.75, y * 0.5, z * 0.75, s, -7, amp_entrance))
-	for i in 300:
-		# AC-0289: the tunnel-field wiring — the three dense sources + the
-		# edge-density predicate. Mirrors AweGen::density_spag / density_nood /
-		# density_gate / tunnel_air in gen.cpp exactly (the tunnel lockstep
-		# contract — the constants SPAG_XZ 14 / NOOD_XZ 10.5 / GATE_XZ 56,
-		# SPAG_TH 0.16 / NOOD_TH 0.08 / GATE_LO 0.52 / GATE_HI 0.58).
-		var x := rng.randf_range(-1024.0, 1024.0)
-		var y := rng.randf_range(0.0, 384.0)
-		var z := rng.randf_range(-1024.0, 1024.0)
-		var s := rng.randi_range(-200, 200)
-		var sp := AweNoise.fbm3(x / 14.0, y / 10.0, z / 14.0, s + 303, 2)
-		var nd := AweNoise.fbm3(x / 10.5, y / 10.0, z / 10.5, s + 304, 2)
-		var gt := AweNoise.fbm3(x / 56.0, y / 10.0, z / 56.0, s + 305, 2)
-		cmp.call("tunnel", sp, G.density_spag(x, y, z, s))
-		cmp.call("tunnel", nd, G.density_nood(x, y, z, s))
-		cmp.call("tunnel", gt, G.density_gate(x, y, z, s))
-		var wv := clampf((gt - 0.52) / (0.58 - 0.52), 0.0, 1.0)
-		var dsp := sp - 0.5
-		if dsp < 0.0:
-			dsp = -dsp
-		var dnd := nd - 0.5
-		if dnd < 0.0:
-			dnd = -dnd
-		var ta := (wv > 0.0) and (dsp < 0.16 * wv or dnd < 0.08 * wv)
-		cmp.call("tunnel", float(ta), float(G.tunnel_air(x, y, z, s)))
+	# AC-0289: the tunnel-field wiring block (the 3 dense sources + the
+	# edge-density predicate, 300 iterations x 4 = 1200 points) was DELETED
+	# in AC-0367 piece B — its C++ functions (density_spag/nood/gate +
+	# tunnel_air) are gone; the vanilla tunnel family is locked by the
+	# spag2d/spag3d/spagrough/noodle blocks + the dens block below.
 	for i in 300:
 		# AC-0347 P2: the router's dense sources — the CAVE LAYER (vanilla's
 		# cave_layer AS-IS at xz 1.0 / y 8.0, firstOctave -8, amp [1.0],
@@ -21462,18 +21441,27 @@ func _genprobe_test() -> void:
 		cmp.call("entrance", entv, G.density_entrance(x, y, z, s))
 	for i in 300:
 		# AC-0347 P2: the ROUTER itself (dens_at — the shallow/deep split
-		# on k = H - y; K_CUT 16 = the AC-0347 P3 recalibrated switch depth
-		# (was 10 at P2); the min/clamp arithmetic). The GD mirror below is
-		# op-order identical to the C++ in f64; the random inputs
-		# (cave/layer in [0,1) like the vn3 outputs, ent in its full range,
-		# H/y arbitrary) exercise both branches + the clamp edges.
+		# on k = H - y; K_CUT 16; the min/clamp arithmetic). AC-0367 piece
+		# B: the 9-arg router — the deep branch gains the vanilla tunnel min
+		# chain (min(s1, ent, spag2d+spagrough, spagrough+spag3d, noodle)).
+		# The GD mirror below is op-order identical to the C++ in f64; the
+		# random inputs (cave/layer in [0,1) like the vn3 outputs, ent in
+		# its full range, the 4 tunnel terms in their clamped ranges, H/y
+		# arbitrary) exercise both branches + the clamp edges + the new
+		# min terms.
 		var H := rng.randi_range(3, 300)
 		var y2 := rng.randi_range(1, 383)
 		var cv := rng.randf_range(0.0, 1.0)
 		var en := rng.randf_range(-0.6, 1.2)
 		var ly := rng.randf_range(0.0, 1.0)
+		var s2d := rng.randf_range(-1.0, 1.0)
+		var s3d := rng.randf_range(-1.0, 1.0)
+		var spr := rng.randf_range(-0.1, 0.1)
+		var nod := rng.randf_range(-1.3, 0.2)
 		var k2 := float(H) - float(y2)
 		if k2 < 16.0:
+			# SHALLOW: min(S_ramp, 5*ent) — bit-identical to the pre-piece-B
+			# router (the 4 tunnel terms are not read; sentinels passed).
 			var t := (float(H) + 0.5 - float(y2)) / 10.0
 			if t > 1.0:
 				t = 1.0
@@ -21483,8 +21471,9 @@ func _genprobe_test() -> void:
 			var q := u * u * u * (u * (u * 6.0 - 15.0) + 10.0)
 			var s3 := 2.0 * q - 1.0
 			var e3 := 5.0 * en
-			cmp.call("dens", s3 if s3 < e3 else e3, G.dens_at(float(H), float(y2), cv, en, ly))
+			cmp.call("dens", s3 if s3 < e3 else e3, G.dens_at(float(H), float(y2), cv, en, ly, s2d, s3d, spr, nod))
 		else:
+			# DEEP: the vanilla min chain (op-order identical to the C++).
 			var q4 := 0.27 + 2.0 * (cv - 0.5)
 			if q4 < -1.0:
 				q4 = -1.0
@@ -21498,7 +21487,17 @@ func _genprobe_test() -> void:
 				supp = 0.5
 			var lc := 2.0 * (ly - 0.5)
 			var s4 := 4.0 * lc * lc + q4 + supp
-			cmp.call("dens", en if en < s4 else s4, G.dens_at(float(H), float(y2), cv, en, ly))
+			if en < s4:
+				s4 = en
+			var a4 := s2d + spr
+			if a4 < s4:
+				s4 = a4
+			var b4 := spr + s3d
+			if b4 < s4:
+				s4 = b4
+			if nod < s4:
+				s4 = nod
+			cmp.call("dens", s4, G.dens_at(float(H), float(y2), cv, en, ly, s2d, s3d, spr, nod))
 	for i in 300:
 		# AC-0291: the AQUIFER dense sources — the vanilla noise instances
 		# AS-IS (overworld.json: fluid_level_floodedness {−7, [1.0]} y 0.67;

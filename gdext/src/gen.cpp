@@ -59,10 +59,13 @@
 //            H + S_ramp are the far payload / promotion / skip-fill
 //            contract — the surface model is NOT replaced).
 //   entrances = the ENTRANCE FAMILY, the vanilla caves/entrances function
-//            WITHOUT its spaghetti_3d min (ours: the AC-0289 tunnel rule,
-//            which stays OUTSIDE dens_at — the tunnels keep piercing the
-//            caps and connecting the levels, the vanilla topology):
-//              entrances = 0.37 + 2*(E - 0.5) + 0.3*(1 - clamp01((y-54)/40))
+//            — AC-0367 piece B: the FULL vanilla form INCLUDING its
+//            spaghetti_3d min (the spagrough + spag3d term enters the
+//            deep min chain inside dens_at — the AC-0289 f_gate stand-in
+//            and the outside tunnel rule are DELETED):
+//              entrances = min( base, spaghetti_roughness
+//                               + clamp(spaghetti_3d) )
+//              base = 0.37 + 2*(E - 0.5) + 0.3*(1 - clamp01((y-54)/40))
 //              E = vn3(x*0.75, y*0.5, z*0.75, seed+306, -7, [0.4, 0.5, 1.0])
 //            — the vanilla cave_entrance noise instance AS-IS (the +64
 //            world shift maps vanilla's y-gradient from_y -10 / to_y 30
@@ -96,47 +99,40 @@
 //            AweGen::density_cave (genprobe lockstep).
 //
 //   AC-0289 (cave P1, the SPAGHETTI/NOODLE TUNNELS — Bedrock-style EDGE
-//   densities blended into this one field, tasks/cave-compare §4 P1):
-//   three MORE coarse fields (same 7x9x7 lattice, 2 octaves each, built
-//   ONLY on the full path — the skip and far paths never read them, so the
-//   H / far / promotion contracts stay bit-exact by construction):
-//     f_spag = fbm3(gx/14,   gy/10, gz/14,   seed+303, 2)  (spaghetti —
-//              the wide tagliatelle; 1.0x the primary cave xz scale)
-//     f_nood = fbm3(gx/10.5, gy/10, gz/10.5, seed+304, 2)  (noodle — the
-//              1-5-wide wormholes; 0.75x the primary cave xz scale)
-//     f_gate = fbm3(gx/56,   gy/10, gz/56,   seed+305, 2)  (the RARITY
-//              SELECTOR — a low-frequency 3D patchiness: tunnels appear in
-//              patches, not world-wide; the AweCraft stand-in for Bedrock's
-//              spaghetti_3d_rarity, which picks the spaghetti scale per
-//              region)
-//   Tunnel air where the EDGE wins (the max(|noise|-threshold) test):
-//     |f_spag - 0.5| < SPAG_TH * w  or  |f_nood - 0.5| < NOOD_TH * w
-//   with w = clamp01((f_gate - GATE_LO)/(GATE_HI - GATE_LO)) — the
-//   thickness scales with the gate weight (the tunnel pinches out at the
-//   patch edge). The rule is applied BEFORE the he/solidf scan's solid
-//   flag (a tunnel carves air even where the cheese field says solid) and
-//   identically in the veg margin scan (the tree base matches the full
-//   column). AC-0360 (the near-surface void census): the rule is now
-//   DEEP-ONLY — applied only for k >= K_CUT (vanilla's range_choice
-//   topology: the tunnel families live in the DEEP branch, the shallow
-//   band is ramp + entrances). The census proved the tunnel owned 100% of
-//   the k<16 void volume (32,249 cells, seed 44, 5x5 window) and 100% of
-//   the opened columns, so the gate removes exactly the near-surface
-//   carve and leaves the deep network + cap-piercing byte-identical. The
-//   heightmap H (surface_h of the 3 SURFACE fields) is untouched — the
-//   tunnel fields are read only on the full-path scan, so H / the far /
-//   skip payloads are bit-exact by construction (thash + farab prove it).
-//   The H+R+1 scan-start "air for sure" margin is preserved (the tunnel
-//   only removes solidity, and now only deep).
+//   densities |f-0.5| < TH*w with the f_gate rarity stand-in, applied
+//   OUTSIDE dens_at as a per-block "tunnel air wins" predicate) was
+//   DELETED in AC-0367 piece B and replaced by the VANILLA WIRING: the
+//   four 1.21.4 tunnel sources — spaghetti_2d, spaghetti_3d (with its
+//   rarity selector — the piece that replaces f_gate), spaghetti_
+//   roughness, noodle (the piece-A dense ports, genprobe-locked, slots
+//   seed+337..346) — ride the C48 cave lattice as 4 FieldC's (the dense
+//   expressions evaluated at the 2401 lattice points, the AC-0292 pillar
+//   pattern) and enter dens_at's DEEP-branch min chain:
+//     deep: min( 4*lc^2 + q + supp, ent, spag2d + spagrough,
+//                spagrough + spag3d, noodle )
+//   (min associative — the exact final_density/caves_entrances min
+//   structure; the outer pillar max stays in the scan). The outside rule
+//   is GONE: the tunnels no longer "win over" the router — they ARE a
+//   min term of it (the vanilla structure). DEEP-ONLY (k >= K_CUT): the
+//   AC-0360 near-surface seal — vanilla applies the spag3d/noodle terms
+//   at all depths, but the shallow band must stay bit-identical or the
+//   near-surface void (AC-0360: 32,249 -> 0) comes back; the deviation
+//   is recorded. Built ONLY on the full path (skip/far never read them)
+//   and read only in the deep band, so the heightmap H (surface_h of the
+//   3 SURFACE fields) / the far / the skip payloads stay bit-exact by
+//   construction (thash + farab prove it). The H+R+1 scan-start "air for
+//   sure" margin is preserved (the new terms only remove solidity, deep
+//   only).
 //
 //   AC-0359 (the AC-0344 C48 decision — the CAVE FAMILY ON AN 8-BLOCK-Y
-//   LATTICE): the cave family (cheese + the 3 tunnel fields + the NEW
-//   layer + entrance fields) rides a SECOND lattice, GY_CELLS_CAVE = 48
-//   (8-block y cells — Bedrock's resolution) vs the surface/ore lattice's
-//   48-block cells: FieldC = 7x49x7 = 2401 points, SAME xz cells. The
-//   in-column AND veg-margin scans read every cave input trilinearly off
-//   it (tril_c / tunnel_air_c / entrance_from_latt — the entrance y
-//   gradient stays analytic per-y) — the two dense per-block vn3 calls
+//   LATTICE): the cave family (cheese + the 4 vanilla tunnel sources
+//   [AC-0367 piece B — the 3 AC-0289 stand-in fields they replaced] +
+//   the NEW layer + entrance fields) rides a SECOND lattice,
+//   GY_CELLS_CAVE = 48 (8-block y cells — Bedrock's resolution) vs the
+//   surface/ore lattice's 48-block cells: FieldC = 7x49x7 = 2401 points,
+//   SAME xz cells. The in-column AND veg-margin scans read every cave
+//   input trilinearly off it (tril_c / entrance_from_latt — the entrance
+//   y gradient stays analytic per-y) — the two dense per-block vn3 calls
 //   (entrance_cave / layer_cave) LEAVE the scan (they stay bound for the
 //   genprobe lockstep). The surface + ore fields (f_sc/f_sh/f_sr,
 //   f_ore1-3) and every skip/far path are UNTOUCHED (GY_CELLS = 8), which
@@ -571,16 +567,11 @@ constexpr double CHEESE_XZ_SCALE = 1.0;
 constexpr double CHEESE_Y_SCALE = 0.6667;
 static const double CHEESE_AMPS[] = { 0.5, 1.0, 2.0, 1.0, 2.0, 1.0, 0.0, 2.0, 0.0 };
 constexpr int CHEESE_AMPS_N = 9;
-// AC-0289 (cave P1): the spaghetti/noodle tunnel fields — EDGE densities
-// (see the file header). The xz scales are the primary cave field's 14
-// times the family's relative scale (spaghetti 1.0x, noodle 0.75x).
-constexpr double SPAG_XZ = 14.0;  // the spaghetti xz scale (1.0x primary)
-constexpr double NOOD_XZ = 10.5;  // the noodle xz scale (0.75x primary)
-constexpr double GATE_XZ = 56.0;  // the rarity selector's patch scale
-constexpr double SPAG_TH = 0.16;  // the spaghetti half-thickness (|S-0.5|)
-constexpr double NOOD_TH = 0.08;  // the noodle half-thickness (1-5 wide)
-constexpr double GATE_LO = 0.52;  // the rarity gate window (the fbm3 mean
-constexpr double GATE_HI = 0.58;  // is 0.5 — tunnels patchy, not world-wide)
+// AC-0289 (cave P1): the spaghetti/noodle tunnel field constants
+// (SPAG_XZ/NOOD_XZ/GATE_XZ, SPAG_TH/NOOD_TH, GATE_LO/GATE_HI) were
+// DELETED in AC-0367 piece B — the AC-0289 outside rule (|f-0.5| < TH*w)
+// is replaced by the vanilla density min chain inside dens_at (the
+// piece-A ported sources on the FieldS spaghetti lattice).
 constexpr double SURF_YSCALE = 64.0; // 3D surface-field y-scale (slow).
 constexpr int GY_CELLS = 8;        // 4x8x4 cells -> 8 y-cells of h/8.
 
@@ -630,10 +621,12 @@ static inline size_t grid_idx(int64_t ix, int64_t iy, int64_t iz) {
 // GY_CELLS_CAVE = 48 -> ystep_cave = hmax/48 = 8 blocks, GYN_C = 49 lattice
 // rows (y = 0..384), FieldC = 7x49x7 = 2401 doubles. The SAME xz cells (4
 // blocks, 1-cell margin) — only Y is refined. The CAVE family on it:
-// cheese (vn3, seed+301) + the 3 tunnel fields (fbm3, seeds +303/304/305) +
-// layer (vn3, seed+302 — the 32-block period rides 4 samples/period,
-// vanilla's own convention) + entrance (vn3, seed+306) — ALL BUILT ONLY ON
-// THE FULL PATH (skip/far never read them). UNTOUCHED (they keep GY_CELLS =
+// cheese (vn3, seed+301) + the 4 vanilla tunnel sources (the dense
+// spag2d/spag3d/spagrough/noodle expressions at the lattice points —
+// AC-0367 piece B, replacing the 3 AC-0289 fbm3 stand-in fields) + layer
+// (vn3, seed+302 — the 32-block period rides 4 samples/period, vanilla's
+// own convention) + entrance (vn3, seed+306) — ALL BUILT ONLY ON THE FULL
+// PATH (skip/far never read them). UNTOUCHED (they keep GY_CELLS =
 // 8): the surface + ore fields (f_sc/f_sh/f_sr, f_ore1-3), gen_far,
 // gen_veg_cells, column_heights16 — that is what makes H / the far payload /
 // the skip payload bit-exact by construction (the thash gate proves it).
@@ -889,59 +882,13 @@ static inline double entrance_from_latt(double e, double y) {
 	return 2.0 * (e - 0.5) + ENTR_OFFSET + ENTR_GRAD_LO * (1.0 - t);
 }
 
-// AC-0289: the rarity gate weight — 0 outside the tunnel patches, 1 at
-// their core, linear in between (the patch edge). The production path
-// reads the coarse f_gate trilinearly; AweGen::tunnel_air is the dense
-// source of the same predicate (the genprobe lockstep).
-static inline double gate_weight(double g) {
-	double w = (g - GATE_LO) / (GATE_HI - GATE_LO);
-	if (w < 0.0)
-		return 0.0;
-	if (w > 1.0)
-		return 1.0;
-	return w;
-}
-
-// AC-0289: the TUNNEL air predicate — true where an edge density wins
-// over the cheese (a tunnel carves air even where dens_at says solid).
-// Called at every scan point of the full-path scan (before the solid
-// flag) and identically in the veg margin scan; the skip/far paths never
-// call it (no tunnel fields are built there — the H contract).
-static inline bool tunnel_air(const Field &f_spag, const Field &f_nood, const Field &f_gate,
-		double gx, double gy, double gz) {
-	double w = gate_weight(tril(f_gate, gx, gy, gz));
-	if (w <= 0.0)
-		return false;
-	double sp = tril(f_spag, gx, gy, gz) - 0.5;
-	if (sp < 0.0)
-		sp = -sp;
-	if (sp < SPAG_TH * w)
-		return true;
-	double nd = tril(f_nood, gx, gy, gz) - 0.5;
-	if (nd < 0.0)
-		nd = -nd;
-	return nd < NOOD_TH * w;
-}
-
-// AC-0359: the C48 tunnel predicate — tunnel_air on the cave lattice
-// (tril_c). The AC-0344 B-variant data showed the tunnels already read
-// correctly from the raised lattice; the scan now uses this everywhere the
-// coarse lattice used to.
-static inline bool tunnel_air_c(const FieldC &f_spag, const FieldC &f_nood, const FieldC &f_gate,
-		double gx, double gy, double gz) {
-	double w = gate_weight(tril_c(f_gate, gx, gy, gz));
-	if (w <= 0.0)
-		return false;
-	double sp = tril_c(f_spag, gx, gy, gz) - 0.5;
-	if (sp < 0.0)
-		sp = -sp;
-	if (sp < SPAG_TH * w)
-		return true;
-	double nd = tril_c(f_nood, gx, gy, gz) - 0.5;
-	if (nd < 0.0)
-		nd = -nd;
-	return nd < NOOD_TH * w;
-}
+// AC-0289: the rarity gate weight + the TUNNEL air predicate
+// (gate_weight / tunnel_air / tunnel_air_c) were DELETED in AC-0367 piece
+// B — the AC-0289 outside rule (|f_spag-0.5| < SPAG_TH*w OR
+// |f_nood-0.5| < NOOD_TH*w, the per-block predicate that forced its own
+// lattice reads at every deep scan point) is replaced by the vanilla
+// density min chain inside dens_at (the piece-A ported sources on the
+// FieldS spaghetti lattice, one trilinear read per field per deep point).
 
 // AC-0347 P2: THE VANILLA DENSITY ROUTER — the ONE density field at a
 // cell (solid where > 0, air where < 0), the SHALLOW/DEEP split of the
@@ -957,24 +904,52 @@ static inline bool tunnel_air_c(const FieldC &f_spag, const FieldC &f_nood, cons
 // TUNNELS: the AC-0289 tunnel_air rule is applied OUTSIDE this function
 // (the scan's "&& !tunnel_air") — the vanilla spaghetti min, kept where
 // AC-0289 put it so the tunnels pierce the caps and connect the levels.
-// AC-0360: the scan applies it DEEP-ONLY (k >= K_CUT) — vanilla's
-// range_choice topology; see the header's tunnel section.
-// PILLARS: the outer max(..., pillars_choice) is AC-0292 (SEQUENCE).
-static inline double dens_at(int H, int y, double cave, double ent, double layer) {
+// PILLARS: the outer max(..., pillars_choice) is AC-0292 (SEQUENCE) — it
+// stays OUTSIDE this function, in the scan (unchanged).
+// AC-0367 piece B: the VANILLA TUNNEL WIRING (the piece-A ported sources,
+// now read by the production path). The 1.21.4 final_density structure
+// (frozen .scratch/AC-0347-gates/vanilla/overworld.json,
+// noise_router.final_density) is
+//   min( <the range_choice below>, noodle )
+// where the DEEP branch of the range_choice is
+//   max( min( min(4*layer_c^2 + clamp(-1,1)(0.27 + cheese_c)
+//               + clamp(0,0.5)(1.5 - 0.64*k/K_CUT),
+//             entrances),
+//         spaghetti_2d + spaghetti_roughness ),
+//         pillars_choice )
+// and entrances (caves_entrances.json) =
+//   min( entrance_base, spaghetti_roughness + clamp(spaghetti_3d) )
+// — the spaghetti_3d family WITH its rarity selector is the piece-A port
+// that replaces the AC-0289 f_gate stand-in. Written as one flat min chain
+// (min is associative — identical result to the nested form):
+//   min( 4*lc^2 + q + supp, ent, spag2d + spagrough,
+//        spagrough + spag3d, noodle )
+// DEVIATION, recorded (the AC-0360 seal): vanilla applies the entrances'
+// spag3d term and the outer noodle min at ALL depths (the shallow
+// range_choice branch is 5*entrances, and the noodle min caps every y in
+// its 4..385 band). Applying them in the shallow band would carve the
+// near-surface void back — the ticket's hard gate (AC-0360 took it to 0;
+// it must stay 0). So the four terms enter the DEEP branch only, exactly
+// where vanilla's own range_choice puts the spaghetti_2d family. The
+// shallow branch below is BIT-IDENTICAL to the pre-piece-B router.
+static inline double dens_at(int H, int y, double cave, double ent, double layer,
+		double spag2d, double spag3d, double spagrough, double noodle) {
 	double k = (double)H - (double)y; // depth from the surface
 	if (k < K_CUT) {
-		// SHALLOW: min(S_ramp, 5 * entrances). The surface (S_ramp) is
-		// kept as-is (the KEEP list); the entrance family carves the
-		// deliberate surface openings where it dips low.
+		// SHALLOW: min(S_ramp, 5 * entrance_base) — bit-identical to the
+		// pre-piece-B router (the AC-0360 seal; the vanilla spag3d/noodle
+		// terms are deep-gated, see above).
 		double s = density_ramp((double)H, y);
 		double e = 5.0 * ent;
 		return s < e ? s : e;
 	}
-	// DEEP: min(entrances, 4*layer_c^2 + clamp(-1,1)(0.27 + cheese_c)
-	// + clamp(0,0.5)(1.5 - 0.64*k/K_CUT)). The base terrain contributes
+	// DEEP: the vanilla min chain (above). The base terrain contributes
 	// NOTHING here (the load-bearing fact) — the solid/air decision IS
 	// the cave router. The layer is squared ONE-SIDED (vanilla's square:
 	// always positive — it gates the cheese caves into stacked levels).
+	// The 64.0 sentinel (the noodle no-carve value) makes a min with it
+	// a no-op, so a caller passing the sentinel for an unread field is
+	// safe.
 	double q = 0.27 + 2.0 * (cave - 0.5); // centered cheese, then +0.27
 	if (q < -1.0)
 		q = -1.0;
@@ -989,7 +964,17 @@ static inline double dens_at(int H, int y, double cave, double ent, double layer
 		supp = 0.5;
 	double lc = 2.0 * (layer - 0.5); // centered layer (vanilla convention)
 	double s = 4.0 * lc * lc + q + supp;
-	return ent < s ? ent : s;
+	if (ent < s)
+		s = ent; // entrances base
+	double a = spag2d + spagrough; // the deep spaghetti_2d family
+	if (a < s)
+		s = a;
+	double b = spagrough + spag3d; // the entrances' second min argument
+	if (b < s)
+		s = b;
+	if (noodle < s)
+		s = noodle; // the outer vanilla min
+	return s;
 }
 
 // ---------------------------------------------------------------------------
@@ -2435,7 +2420,13 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	// cells, 2401 points/field (cheese + 3 tunnels MOVED here from the
 	// coarse lattice; layer + entrance NEW here, built only on the full
 	// path — the dense vn3 calls leave the scan, the AC-0344 verdict).
-	FieldC f_cheese{}, f_spag{}, f_nood{}, f_gate{}, f_layer{}, f_entr{};
+	// AC-0367 piece B: the 3 AC-0289 tunnel fields (f_spag/f_nood/f_gate)
+	// are GONE — replaced by the 4 vanilla tunnel sources on the SAME C48
+	// cave lattice (the piece-A dense expressions evaluated at the 2401
+	// lattice points — the AC-0292 pillar pattern; the 4-block xz cells
+	// match vanilla's own evaluation-grid resolution).
+	FieldC f_cheese{}, f_layer{}, f_entr{};
+	FieldC f_s2d{}, f_s3d{}, f_spr{}, f_nod{};
 	// AC-0292: the P4 fields (full path only — same as the cave family;
 	// the skip/far paths never read them, the contracts hold by
 	// construction).
@@ -2449,13 +2440,36 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 		build_field_vn_c(f_cheese, bx, bz, ystep_cave, seed + 301,
 				CHEESE_XZ_SCALE, CHEESE_Y_SCALE, CHEESE_XZ_SCALE,
 				CHEESE_FIRST_OCT, CHEESE_AMPS, CHEESE_AMPS_N);
-		// AC-0289: the P1 tunnel fields (see the file header) — FULL PATH
-		// only: skip != 0 keeps the H/far/promotion contracts bit-exact
-		// (the lazy fill and the far payload never read them).
-		// AC-0359: on the cave lattice (ystep_cave).
-		build_field_c(f_spag, bx, bz, ystep_cave, seed + 303, SPAG_XZ, 10.0, SPAG_XZ, 0.0, 0.0, 0.0);
-		build_field_c(f_nood, bx, bz, ystep_cave, seed + 304, NOOD_XZ, 10.0, NOOD_XZ, 0.0, 0.0, 0.0);
-		build_field_c(f_gate, bx, bz, ystep_cave, seed + 305, GATE_XZ, 10.0, GATE_XZ, 0.0, 0.0, 0.0);
+		// AC-0367 piece B: the VANILLA TUNNEL FAMILY (the piece-A ported
+		// sources — spaghetti_2d / spaghetti_3d / spaghetti_roughness /
+		// noodle) on the C48 cave lattice: the DENSE expressions evaluated
+		// at the 2401 lattice points (the AC-0292 pillar pattern — the
+		// lattice points are bit-exact dense values; the scan pays one
+		// tril_c per field per deep point). FULL PATH only: skip != 0
+		// keeps the H/far/promotion contracts bit-exact (the lazy fill and
+		// the far payload never read them). This REPLACES the 3 AC-0289
+		// stand-in fields (f_spag/f_nood/f_gate, 331 us/chunk — the
+		// ticket's apparatus removal). COST NOTE: the 4 dense sources are
+		// 14 vn3 per lattice point (vs the old 3 fields' 2-octave fbm3) —
+		// the build cost is measured, not assumed (the AC-0366 price: the
+		// expected win assumed these terms were cheap; they are not — see
+		// the results page).
+		build_field_eval_c(f_s2d, bx, bz, ystep_cave,
+				[&](double x, double y, double z) {
+					return spag2d_density(x, y, z, seed);
+				});
+		build_field_eval_c(f_s3d, bx, bz, ystep_cave,
+				[&](double x, double y, double z) {
+					return spag3d_density(x, y, z, seed);
+				});
+		build_field_eval_c(f_spr, bx, bz, ystep_cave,
+				[&](double x, double y, double z) {
+					return spagrough_density(x, y, z, seed);
+				});
+		build_field_eval_c(f_nod, bx, bz, ystep_cave,
+				[&](double x, double y, double z) {
+					return noodle_density(x, y, z, seed);
+				});
 		// AC-0359: the layer (vanilla cave_layer AS-IS — the 32-block period
 		// rides 4 samples/period) and the entrance (vanilla cave_entrance
 		// AS-IS) move ONTO the cave lattice — the AC-0344 C48 design. They
@@ -2601,29 +2615,32 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 					if (!slab_kept(y >> 4))
 						continue; // AC-0237: ungenerated slab — skip
 					// AC-0359: the router inputs ALL from the C48 cave
-					// lattice (8-block y cells) — cheese + the 3 tunnel
-					// fields MOVED here, layer + entrance ONTO the lattice
-					// (the dense vn3 calls leave the scan; the analytic
-					// entrance y-gradient stays per-y in
-					// entrance_from_latt). This is the scan that dropped
-					// 4373 -> 1291 us/chunk in the AC-0344 measurement.
+					// lattice (8-block y cells) — cheese + the tunnel
+					// family, layer + entrance (the dense vn3 calls leave
+					// the scan; the analytic entrance y-gradient stays
+					// per-y in entrance_from_latt). This is the scan that
+					// dropped 4373 -> 1291 us/chunk in the AC-0344
+					// measurement. AC-0367 piece B: the 3 AC-0289 tunnel
+					// fields + the outside "&& !tunnel_air" predicate are
+					// GONE — the 4 vanilla tunnel sources enter dens_at's
+					// deep-branch min chain (the piece-A port, read
+					// here).
 					double gy_c = (double)y / ystep_cave;
 					double cave = tril_c(f_cheese, gx, gy_c, gz);
 					double ent = entrance_from_latt(tril_c(f_entr, gx, gy_c, gz), (double)y);
-					double lay = (H - y >= K_CUT)
-							? tril_c(f_layer, gx, gy_c, gz)
-							: 0.0;
-					// AC-0289: the tunnel air wins over the router's solid —
-					// applied OUTSIDE dens_at (the vanilla spaghetti min,
-					// kept where AC-0289 put it: the tunnels pierce the caps).
-					// AC-0360: the tunnel is DEEP-ONLY — allowed for k >= K_CUT
-					// (vanilla's range_choice topology: spaghetti/noodle live in
-					// the DEEP branch, the shallow band is ramp + entrances).
-					// The short-circuit removes the 3 lattice reads at every
-					// shallow-band y (the measured scan cost win).
-					bool tun = (H - y >= K_CUT)
-							&& tunnel_air_c(f_spag, f_nood, f_gate, gx, gy_c, gz);
-					bool s0 = dens_at(H, y, cave, ent, lay) > 0.0 && !tun;
+					// The deep-band fields, each short-circuited in the
+					// shallow band (the 64.0 sentinel = the noodle
+					// no-carve value; a min with it is a no-op, and the
+					// other three are only read deep). The AC-0360 seal:
+					// the shallow band never reads the tunnel family, so
+					// it stays bit-identical (near-surface void stays 0).
+					bool deep = (H - y >= K_CUT);
+					double lay = deep ? tril_c(f_layer, gx, gy_c, gz) : 0.0;
+					double s2d = deep ? tril_c(f_s2d, gx, gy_c, gz) : 64.0;
+					double s3d = deep ? tril_c(f_s3d, gx, gy_c, gz) : 64.0;
+					double spr = deep ? tril_c(f_spr, gx, gy_c, gz) : 64.0;
+					double nod = deep ? tril_c(f_nod, gx, gy_c, gz) : 64.0;
+					bool s0 = dens_at(H, y, cave, ent, lay, s2d, s3d, spr, nod) > 0.0;
 					// AC-0292: the PILLAR (the vanilla caves/pillars max,
 					// deep branch only — the range_choice split). The max
 					// sits OUTSIDE the spaghetti min, so a pillar cell is
@@ -2911,6 +2928,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				}
 			}
 			g_t_drip_us.fetch_add(now_us() - t_drip, std::memory_order_relaxed);
+
 		}
 	}
 
@@ -2971,16 +2989,18 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 					double gy2 = (double)y / ystep_cave;
 					double cave = tril_c(f_cheese, gx2, gy2, gz2);
 					double ent = entrance_from_latt(tril_c(f_entr, gx2, gy2, gz2), (double)y);
-					double lay = (H2 - y >= K_CUT)
-							? tril_c(f_layer, gx2, gy2, gz2)
-							: 0.0;
-					// AC-0289: the same tunnel rule as the in-column scan.
-					// AC-0360: the SAME depth gate as the in-column scan
-					// (the tree base must match the full column — the margin
-					// column is scanned with the identical gated predicate).
-					bool tun = (H2 - y >= K_CUT)
-							&& tunnel_air_c(f_spag, f_nood, f_gate, gx2, gy2, gz2);
-					bool sv = dens_at(H2, y, cave, ent, lay) > 0.0 && !tun;
+					// AC-0367 piece B: the same vanilla tunnel wiring as the
+					// in-column scan (the tree base must match the full
+					// column — the margin column is scanned with the
+					// identical deep-gated predicate; the 3 AC-0289 tunnel
+					// fields + outside rule are gone).
+					bool deep2 = (H2 - y >= K_CUT);
+					double lay = deep2 ? tril_c(f_layer, gx2, gy2, gz2) : 0.0;
+					double s2d = deep2 ? tril_c(f_s2d, gx2, gy2, gz2) : 64.0;
+					double s3d = deep2 ? tril_c(f_s3d, gx2, gy2, gz2) : 64.0;
+					double spr = deep2 ? tril_c(f_spr, gx2, gy2, gz2) : 64.0;
+					double nod = deep2 ? tril_c(f_nod, gx2, gy2, gz2) : 64.0;
+					bool sv = dens_at(H2, y, cave, ent, lay, s2d, s3d, spr, nod) > 0.0;
 					// AC-0292: the same pillar rule as the in-column scan
 					// (deep branch only, the max outside the tunnel min).
 					if (H2 - y >= K_CUT
@@ -3239,13 +3259,12 @@ public:
 		// genprobe layer/entrance/dens lockstep blocks).
 		ClassDB::bind_method(D_METHOD("density_layer", "x", "y", "z", "s"), &AweGen::density_layer);
 		ClassDB::bind_method(D_METHOD("density_entrance", "x", "y", "z", "s"), &AweGen::density_entrance);
-		ClassDB::bind_method(D_METHOD("dens_at", "H", "y", "cave", "ent", "layer"), &AweGen::dens_at);
-		// AC-0289: the tunnel field dense sources + predicate (the genprobe
-		// tunnel lockstep — see density_spag et al. above).
-		ClassDB::bind_method(D_METHOD("density_spag", "x", "y", "z", "s"), &AweGen::density_spag);
-		ClassDB::bind_method(D_METHOD("density_nood", "x", "y", "z", "s"), &AweGen::density_nood);
-		ClassDB::bind_method(D_METHOD("density_gate", "x", "y", "z", "s"), &AweGen::density_gate);
-		ClassDB::bind_method(D_METHOD("tunnel_air", "x", "y", "z", "s"), &AweGen::tunnel_air);
+		// AC-0367 piece B: the 9-arg router (the vanilla tunnel min chain
+		// — the genprobe dens lockstep mirrors it; the 4 AC-0289 tunnel
+		// bindings density_spag/nood/gate + tunnel_air are deleted with
+		// their functions).
+		ClassDB::bind_method(D_METHOD("dens_at", "H", "y", "cave", "ent", "layer",
+				"s2d", "s3d", "spr", "nod"), &AweGen::dens_at);
 		// AC-0291: the aquifer dense sources (the vanilla noise instances
 		// AS-IS — the genprobe aquifer lockstep block mirrors them in
 		// GDScript) + the cumulative census + the per-chunk cell census.
@@ -3349,6 +3368,7 @@ public:
 		g_t_far_us.store(0, std::memory_order_relaxed);
 	}
 
+
 	// Noise probe surface (bit-exact AweNoise port).
 	double fbm2(double p_x, double p_z, int p_s, int p_oct) const {
 		return awegen::fbm2(p_x, p_z, p_s, p_oct);
@@ -3393,36 +3413,10 @@ public:
 		return awegen::vn3(p_x, p_y, p_z, p_s, p_first_oct, amps, n);
 	}
 	// AC-0289: the tunnel field dense sources + the tunnel air predicate
-	// (world coordinates). The genprobe arm mirrors these exact expressions
-	// in GDScript (the tunnel lockstep contract). The production path
-	// samples the COARSE 4x8x4 fields trilinearly — the documented grid
-	// approximation of these dense sources (the same as every other field).
-	double density_spag(double p_x, double p_y, double p_z, int p_s) const {
-		return awegen::fbm3(p_x / SPAG_XZ, p_y / 10.0, p_z / SPAG_XZ, p_s + 303, 2);
-	}
-	double density_nood(double p_x, double p_y, double p_z, int p_s) const {
-		return awegen::fbm3(p_x / NOOD_XZ, p_y / 10.0, p_z / NOOD_XZ, p_s + 304, 2);
-	}
-	double density_gate(double p_x, double p_y, double p_z, int p_s) const {
-		return awegen::fbm3(p_x / GATE_XZ, p_y / 10.0, p_z / GATE_XZ, p_s + 305, 2);
-	}
-	double tunnel_air(double p_x, double p_y, double p_z, int p_s) const {
-		double w = awegen::gate_weight(
-				awegen::fbm3(p_x / GATE_XZ, p_y / 10.0, p_z / GATE_XZ, p_s + 305, 2));
-		if (w <= 0.0)
-			return 0.0;
-		double sp = awegen::fbm3(p_x / SPAG_XZ, p_y / 10.0, p_z / SPAG_XZ, p_s + 303, 2) - 0.5;
-		if (sp < 0.0)
-			sp = -sp;
-		if (sp < SPAG_TH * w)
-			return 1.0;
-		double nd = awegen::fbm3(p_x / NOOD_XZ, p_y / 10.0, p_z / NOOD_XZ, p_s + 304, 2) - 0.5;
-		if (nd < 0.0)
-			nd = -nd;
-		if (nd < NOOD_TH * w)
-			return 1.0;
-		return 0.0;
-	}
+	// (density_spag/density_nood/density_gate/tunnel_air) were DELETED in
+	// AC-0367 piece B — the AC-0289 outside rule is replaced by the
+	// vanilla density min chain inside dens_at (the piece-A ported
+	// sources, bound as spag2d_density etc. below).
 	// AC-0347 P2: the router's dense sources + the router itself — the
 	// genprobe layer/entrance/dens lockstep blocks mirror these EXACT
 	// expressions in GDScript (op-order identical, f64).
@@ -3432,8 +3426,13 @@ public:
 	double density_entrance(double p_x, double p_y, double p_z, int p_s) const {
 		return awegen::entrance_cave(p_x, p_y, p_z, p_s);
 	}
-	double dens_at(double p_H, double p_y, double p_cave, double p_ent, double p_layer) const {
-		return awegen::dens_at((int)p_H, (int)p_y, p_cave, p_ent, p_layer);
+	// AC-0367 piece B: the 9-arg router — the vanilla tunnel min chain
+	// (spag2d+spagrough, spagrough+spag3d, noodle) joins the deep branch;
+	// the shallow branch is bit-identical to the pre-piece-B 5-arg router.
+	double dens_at(double p_H, double p_y, double p_cave, double p_ent, double p_layer,
+			double p_s2d, double p_s3d, double p_spr, double p_nod) const {
+		return awegen::dens_at((int)p_H, (int)p_y, p_cave, p_ent, p_layer,
+				p_s2d, p_s3d, p_spr, p_nod);
 	}
 
 	// AC-0291: the aquifer dense sources (the vanilla noise instances

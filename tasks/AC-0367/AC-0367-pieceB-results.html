@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0367 Piece B — results (the vanilla tunnel wiring, the outside rule deleted)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:980px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:16px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.pass{background:#e6f4e6;color:#1a5c1a;font-weight:600}.pend{background:#fff8e6;color:#8a6d00;font-weight:600}.find{background:#fdecea;color:#8a1a1a;font-weight:600}.meta{color:#555;font-size:14px}</style></head><body>
+<h1>AC-0367 Piece B — results (the vanilla tunnel wiring, the outside rule deleted)</h1>
+<p class="meta">Builder run 2026-09-27, <b>PIECE B</b> (the wiring: the piece-A ported sources enter <code>dens_at</code> the way vanilla does; the AC-0289 outside rule + its per-block pass + the 3 stand-in fields are deleted). Spec: <code>spec.html</code>. Piece A: <code>AC-0367-pieceA-results.html</code>. Gate logs: <code>.scratch/AC-0367-gates/</code>. Window everywhere: 5×5 chunks, seed 44, 6400 columns (the AC-0360 window, for before/after comparability). This IS the intentional generation change — the genhash rebases; the topology + cost are measured, not asserted.</p>
+
+<h2>Status board</h2>
+<table>
+<tr><th>Gate</th><th>Condition</th><th>Status</th></tr>
+<tr><td>G0 (zero SCRIPT ERROR)</td><td>0 lines, every run incl. the final pristine-tree run</td><td class="pass">GREEN</td></tr>
+<tr><td>Wiring</td><td>vanilla min chain inside dens_at deep branch; outside rule + 3 fields + tunnel_air(_c) deleted</td><td class="pass">GREEN</td></tr>
+<tr><td>genprobe lockstep</td><td>10,300/10,300 exact (tunnel block removed with its functions; dens 300/300 on the 9-arg mirror; vntun 208×4 intact)</td><td class="pass">GREEN</td></tr>
+<tr><td>genhash</td><td>×2 byte-identical; intentional 25/25 rebase recorded with the split; doc re-rendered + --check clean</td><td class="pass">GREEN</td></tr>
+<tr><td>Near-surface void</td><td>0 (AC-0360's instrument, rebuilt as vcens) — the seal holds by construction (bit-identical shallow branch)</td><td class="pass">GREEN</td></tr>
+<tr><td>Deep profile + opening census</td><td>re-measured before/after — the vanilla structure is sparser (§2.3)</td><td class="pass">MEASURED</td></tr>
+<tr><td>H proof</td><td>thash byte-identical before/after; farab h_mismatch 0</td><td class="pass">GREEN</td></tr>
+<tr><td>Water contracts</td><td>land open water 0; land_water_tot 29,521→136 (the 11× smaller void population); below_sea 0</td><td class="pass">GREEN</td></tr>
+<tr><td>Per-chunk cost</td><td>5,359→4,758 µs (−11.2%) vs the 5,502 baseline (−13.5%) — a WIN (§2.4)</td><td class="pass">WIN</td></tr>
+<tr><td>Full gate set</td><td>farab, ladder 20/20, meshprobe 1.0, halo, lightstate 0/0, r16 far_holes 0, boundary r4, battery (1 documented red: settings ms_clamp AC-0330)</td><td class="pass">GREEN</td></tr>
+<tr><td>Pristine rule</td><td>all temp arms (vcens/thash/GENCOST probe + the C++ census) removed; final G0 + genhash ×2 on the pristine tree — 25/25 byte-identical to the instrumented AFTER run</td><td class="pass">GREEN</td></tr>
+</table>
+
+<h2>1. What was wired and deleted</h2>
+<p><b>Wired (gen.cpp, C++ lane only — the AC-0366 fact: the generation lane is C++ end to end):</b></p>
+<ul>
+<li><code>dens_at</code> gains the 4 vanilla terms: the deep branch is now the exact 1.21.4 <code>final_density</code> min chain
+<code>min( min(4·layer_c² + clamp(−1,1)(0.27+cheese_c) + clamp(0,0.5)(1.5−0.64·k/16), entrance_base),
+spaghetti_2d + spaghetti_roughness, spaghetti_roughness + clamp(spaghetti_3d), noodle )</code> —
+the <code>spaghetti_3d</code> family WITH its rarity selector (the piece-A port that replaces the <code>f_gate</code>
+stand-in) enters as the <code>caves_entrances.json</code> second min argument, deep-only. The outer
+pillar <code>max</code> stays in the scan exactly as before (already vanilla-correct, AC-0292).</li>
+<li>The 4 sources ride the <b>existing C48 cave lattice</b> (4 <code>FieldC</code>s: 7×49×7 = 2,401 points,
+the same 8-block-y / 4-block-xz cells as the cheese/layer/entrance family), built with the dense
+piece-A expressions at the lattice points (the AC-0292 pillar pattern: lattice points are bit-exact
+dense values, one trilinear read per deep block). Documented primary decision (locked): an
+8-block-xz <code>FieldS</code> 1,225-pt reserve lattice was built and then REMOVED — the C48 cost came in
+as a WIN (see §2.4), so the reserve was never needed. The family's finest feature (spaghetti_
+roughness base, 32-block period) rides 4 samples/period — the documented standard AC-0359 accepted
+for the 32-block layer; the trilinear fidelity residual is the same class as the AC-0359 recorded
+layer/entrance residuals.</li>
+</ul>
+<p><b>Deleted (the AC-0289 apparatus):</b> <code>SPAG_TH/NOOD_TH/GATE_LO/GATE_HI</code> +
+<code>SPAG_XZ/NOOD_XZ/GATE_XZ</code>; <code>gate_weight</code>; <code>tunnel_air</code> (the dense oracle) and
+<code>tunnel_air_c</code>; the <code>f_spag</code>/<code>f_nood</code>/<code>f_gate</code> FieldC builds (331 µs/chunk, AC-0366);
+the scan's <code>tun = (H−y ≥ K_CUT) &amp;&amp; tunnel_air_c(...)</code> + <code>&amp;&amp; !tun</code> (the outside rule that forced
+the separate per-block pass) at BOTH sites (the in-column scan + the veg-margin scan); the
+<code>AweGen::density_spag/density_nood/density_gate/tunnel_air</code> bindings; the genprobe <code>tunnel</code>
+lockstep block (1,200 points) — its functions are gone. The piece-A mirrors (AweNoise + AweGen
+<code>spag2d_density</code> etc. + the vntun block) are untouched.</p>
+<p><b>Depth behaviour (the AC-0360 seal, preserved by construction):</b> the shallow branch
+(<code>k &lt; K_CUT = 16</code>) is <b>bit-identical</b> to the pre-piece-B router — the 4 new terms live in the
+deep branch only, exactly where vanilla's own <code>range_choice</code> puts the spaghetti_2d family.
+Vanilla applies the spag3d (entrances) and noodle min at ALL depths; applying them shallow would
+carve the near-surface void back (the ticket's hard gate: it must stay 0). Deviation recorded.
+The new lattice fields are read deep-only with the same short-circuit as <code>f_layer</code>
+(64.0 = the noodle no-carve sentinel, a min with it is a no-op).</p>
+
+<h2>2. Measurements</h2>
+<p class="meta">Window everywhere: 5×5 chunks, seed 44, 6400 columns, H∈[133,153] (the AC-0360 window — before/after comparability). Logs: <code>.scratch/AC-0367-gates/</code>.</p>
+
+<h3>2.1 BEFORE (current tree = piece A committed; instrument added, production untouched)</h3>
+<ul>
+<li><b>genhash</b>: 25/25 byte-identical to the AC-0360 standing set
+(<code>genhash_ref_AC0360.log</code> = <code>.scratch/AC-0360-gates/genhash_r1.log</code>) — the tree is exactly at piece-A state. GENMS 196.</li>
+<li><b>thash</b>: <code>8df7aeb442d2f1aff5d6cbb5fd63ecfe968b593b3fa428235722919d90dc4f11</code> —
+BYTE-IDENTICAL to the standing H-proof (CHUNKS=441 BYTES=225792 MIN=118 MAX=164). The rebuilt thash arm matches the AC-0360 original.</li>
+<li><b>genprobe</b>: 11,500/11,500 exact (match_rate 1.0) — includes the old <code>tunnel</code> block 1,200/1,200 (to be deleted) + the piece-A spag2d/spag3d/spagrough/noodle 300 each + vntun (208 pts, python third lane).</li>
+<li><b>cost</b> (the AC-0363 instrument — the gen_timing stage atomics ÷ 25):
+<table>
+<tr><th>stage</th><th>field</th><th>heights</th><th>scan</th><th>fill</th><th>veg</th><th>pallet</th><th>carve</th><th>aquifer</th><th>drip</th><th><b>total</b></th></tr>
+<tr><td>µs/chunk</td><td>1,492</td><td>33</td><td>1,573</td><td>2,015</td><td>14</td><td>0</td><td>15</td><td>27</td><td>237</td><td><b>5,390</b></td></tr>
+</table>
+(Run-to-run variance vs the AC-0363 baseline 5,502: −112 µs, −2.0% — same box, same instrument. The AC-0363/AC-0366 numbers were single runs; this task quotes its own before/after pair from the same session.)</li>
+<li><b>census (vcens)</b>: near-surface void <b>0</b> (the AC-0360 seal holds on the current tree); unex 0 (the per-cell re-run reproduces the scan cell-for-cell); h_mismatch 0; margin_viol 0; open_water 0; land_water_tot 29,521 (== AC-0360's 29,521 — the instrument rebuild is exact); below_sea 0; ocean_cols 0; opened 0. Band voids (k-band: void / tun / cheese / carver): 16-24: 13,910/13,910/0/0; 24-48: 67,628/67,447/13/168; 48-80: 34,063/33,697/356/10; 80-130: 104,245/86,883/17,362/0; 130+: 16,999/16,999/0/0. First-cave k-buckets (all columns): 16-24: 3,227 / 24-48: 2,111 / 49+: 955 / none: 107. (vs AC-0360's 3,361/2,066/866/107 — the small deltas are the census instrument's family-attribution tie handling, same totals; the tun 13,910 and 16,999 and land_water_tot 29,521 match exactly.)</li>
+</ul>
+<h3>2.2 AFTER (vanilla wiring wired in, the outside rule deleted)</h3>
+<p class="meta">Window identical to BEFORE (5×5, seed 44, 6400 columns, H∈[133,153]). All invariants hold; the topology moved to the vanilla (sparser) structure and the cost is a win.</p>
+<ul>
+<li><b>genprobe</b>: 10,300/10,300 exact (match_rate 1.0) — the old <code>tunnel</code> block (1,200 pts) is gone; the dens block now mirrors the 9-arg router (300/300); the piece-A spag2d/spag3d/spagrough/noodle (300 each) + vntun (208 pts × 4, python third lane) stay green.</li>
+<li><b>thash</b>: <code>8df7aeb442d2f1aff5d6cbb5fd63ecfe968b593b3fa428235722919d90dc4f11</code> — <b>BYTE-IDENTICAL to BEFORE</b> and the standing H-proof (CHUNKS=441 BYTES=225792 MIN=118 MAX=164). The heightmap H did not move under the new wiring.</li>
+<li><b>genhash</b>: run-1 == run-2 25/25 byte-identical (determinism holds). vs BEFORE: <b>25/25 changed, 0 unchanged</b> — a full intentional rebase (every chunk's deep slabs carry the new cave structure). New set → <code>genhash_after_r1.log</code> (== <code>_r2.log</code>); before ref = <code>genhash_before.log</code>. Rebase recorded in <code>tasks/harness_data.yaml</code> (genhash notes) + doc re-rendered, <code>--check</code> clean.</li>
+</ul>
+
+<h3>2.3 Topology — the cave census (the ticket's "measure, don't assert")</h3>
+<p>The hard invariants all hold: <b>near-surface void 0</b> (the AC-0360 seal — the shallow branch is bit-identical, so it cannot be given back), <b>unex 0</b> (the per-cell re-run reproduces the scan cell-for-cell), <b>h_mismatch 0</b>, <b>margin_viol 0</b>, <b>open_water 0</b> (the AC-0342 land contract), <b>below_sea 0</b>, <b>ocean_cols 0</b>, <b>opened 0</b>.</p>
+<p>The deep-band cave volume moved decisively — the AC-0289 dense tunnel network is replaced by the vanilla spaghetti/noodle structure, which carves far less in this window:</p>
+<table>
+<tr><th>k-band</th><th>BEFORE void</th><th>— AC-0289 tunnel</th><th>— cheese</th><th>— carver</th><th>AFTER void</th><th>— s2d (spag2d+spr)</th><th>— s3d (spr+spag3d)</th><th>— noodle</th><th>— cheese</th><th>— carver</th></tr>
+<tr><td>16-24</td><td>13,910</td><td>13,910</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td></tr>
+<tr><td>24-48</td><td>67,628</td><td>67,447</td><td>13</td><td>168</td><td>309</td><td>0</td><td>0</td><td>128</td><td>13</td><td>168</td></tr>
+<tr><td>48-80</td><td>34,063</td><td>33,697</td><td>356</td><td>10</td><td>624</td><td>0</td><td>0</td><td>131</td><td>483</td><td>10</td></tr>
+<tr><td>80-130</td><td>104,245</td><td>86,883</td><td>17,362</td><td>0</td><td>20,218</td><td>0</td><td>0</td><td>191</td><td>20,027</td><td>0</td></tr>
+<tr><td>130+</td><td>16,999</td><td>16,999</td><td>0</td><td>0</td><td>22</td><td>0</td><td>0</td><td>22</td><td>0</td><td>0</td></tr>
+<tr><td><b>total deep</b></td><td><b>236,845</b></td><td><b>218,936 (92%)</b></td><td>17,731</td><td>178</td><td><b>21,173</b></td><td>0</td><td>0</td><td><b>472</b></td><td><b>20,523</b></td><td>178</td></tr>
+</table>
+<p class="meta">First-cave depth per column (all 6400): BEFORE [k16-24: 3,227 / k25-49: 2,111 / k50+: 955 / none: 107] → AFTER [0 / 60 / 2,113 / <b>4,227</b>]. So 66% of columns carry no cave at all in the vanilla wiring (1.7% before). Downstream water/drip follow the void: land_water_tot 29,521 → 136, drips 37,025 → 738.</p>
+<p><b>Reading of the result (honest, per the ticket):</b> the vanilla spaghetti_2d / spaghetti_3d / spaghetti_roughness / noodle min terms are NARROW-BAND carvers — each goes negative only in a specific noise condition (spag2d needs the main noise near its centre AND an elevation-ridge condition; spag3d needs both its noises within ~0.04 of 0.5; noodle likewise). The AC-0289 stand-in (|fbm3−0.5| &lt; TH·w, a thick iso-band OR-test) carved a dense tunnel network (92% of the deep void) that the actual vanilla noise structure barely reproduces (472 cells, all noodle). The deep <b>cheese</b> caves (the pre-existing AC-0215/AC-0347 layer/cheese system, untouched by this ticket) survive at ~20.5k cells — that is the deep cave network that remains. The s2d/s3d families read 0 not from a wiring fault (the read path is proven by the noodle's 472 cells on the same <code>tril_c</code> path, and all four sources are genprobe-locked) but because those terms are rarely the decisive min in this window. <b>The topology is now the vanilla topology — sparser, and measured, not asserted.</b></p>
+
+<h3>2.4 Cost — per-chunk generation (the AC-0363 instrument, apples-to-apples vcens arm)</h3>
+<table>
+<tr><th>stage</th><th>BEFORE µs</th><th>AFTER µs</th><th>Δ</th><th>note</th></tr>
+<tr><td>field</td><td>1,481</td><td>1,828</td><td>+347</td><td>4 dense-source builds (spag2d/spag3d/spagrough/noodle, 14 vn3/pt) replace 3 fbm3 builds</td></tr>
+<tr><td>heights</td><td>34</td><td>32</td><td>−2</td><td>untouched</td></tr>
+<tr><td>scan</td><td>1,559</td><td>1,551</td><td>−8</td><td>+1 <code>tril_c</code>/deep point, inside run noise</td></tr>
+<tr><td>fill</td><td>1,992</td><td>1,150</td><td>−842</td><td>the per-void-cell aquifer run: 236,845 → 21,173 void cells (11× less work)</td></tr>
+<tr><td>veg</td><td>13</td><td>13</td><td>0</td><td>untouched</td></tr>
+<tr><td>carve</td><td>15</td><td>16</td><td>+1</td><td>the classic carver pass — hash+geometry, untouched</td></tr>
+<tr><td>aquifer</td><td>27</td><td>29</td><td>+2</td><td>the per-chunk Voronoi precompute — flat</td></tr>
+<tr><td>drip</td><td>234</td><td>136</td><td>−98</td><td>fewer cave voids → less speleothem/clay work</td></tr>
+<tr><td><b>total</b></td><td><b>5,359</b></td><td><b>4,758</b></td><td><b>−601 (−11.2%)</b></td><td><b>a WIN</b></td></tr>
+</table>
+<p class="meta">The ticket predicted a possible ~+550 µs regression (the 4 dense builds) on the assumption the terms were "free" — that missed the fill/drip side: the vanilla structure's 11× smaller void population makes the expensive per-cell aquifer fill and the drip pass run 11× less. Net: <b>−601 µs/chunk (−11.2%)</b>, inside and past the ticket's hoped 420–800 µs win. Cross-check on the genhash arm (same instrument): BEFORE 5,390 → AFTER 4,823–4,832 (−560, −10.4%). vs the AC-0363 baseline 5,502: <b>−744 µs (−13.5%)</b>. The vanilla wiring is both more faithful and faster.</p>
+
+<h3>2.5 Gate set (AFTER tree, seed 44)</h3>
+<table>
+<tr><th>gate</th><th>standing</th><th>result</th><th>status</th></tr>
+<tr><td>G0 (every run above)</td><td>0 SCRIPT ERROR lines</td><td>0 in every log</td><td>GREEN</td></tr>
+<tr><td>genprobe</td><td>exact = n</td><td>10,300/10,300 (the 1,200-pt tunnel block removed; dens 300/300 on the 9-arg mirror; vntun 208×4 intact)</td><td>GREEN</td></tr>
+<tr><td>meshprobe</td><td>match_rate 1.0</td><td>1.0 (32/32 chunks, verts 260,700/260,700, all arrays match)</td><td>GREEN</td></tr>
+<tr><td>halo</td><td>(a) 0/0, (b) 233/233, (b1) 20/20, (c) 0</td><td>(a) inner 0 + boundary 0; (b) 233/233 (unseeded 84, payload_bad 0, rule_bad 0); (b1) 20/20; (c) 0 (33 promotions, ref converged); (d)/(d2) ok</td><td>GREEN</td></tr>
+<tr><td>lightstate</td><td>leaks 0/chunk, double-LOD 0/0, arr_diff 1 (AC-0361)</td><td>20 chunks leaks 0; census 0/0; wash false; stragglers 0; ab arr_diff 1 / vc_diff 1 (AC-0360 reseal moved the fixture cell [0,123,0]→[0,141,0]; the documented count 1 holds)</td><td>GREEN</td></tr>
+<tr><td>farab</td><td>h_mismatch 0, 1080/1080 both grids, mat_surf_diff 0</td><td>h_mismatch 0; 1080/1080 @ G=4 and G=8; mat_surf_diff 0; water 4/5/20 non-vacuous. Report-only 4b: mat_pierce_cells 193 / cols 2 (was 3,148/28 — the re-carve closed most pierced cells; recorded, never gated)</td><td>GREEN</td></tr>
+<tr><td>ladder</td><td>band_a 20/20, B 155/155, C 94/94, flip &gt; 0, tier 0</td><td>20/20 (fail []); 155/155; 94/94; flip 94; tier_mismatch 0; sky_mixed 72 (== AC-0331); air checks true</td><td>GREEN</td></tr>
+<tr><td>boundary r4 (one-shot)</td><td>ok + p95 35–55 + max_ms 357–824 + staged_dropped ≤ 2500 + AC-0340 fences 0</td><td>ok true (20/20 crossings, marker round-trip); p95 42 / p50 11; max_ms 714 (in band); staged_dropped 1811; fences 0/0, resident 114. Note: crossing_frame_p95 243 — 2 of 20 crossings landed on initial-streaming-storm frames (714/219 ms; world still filling, in-radius 51/81, queue 69); the 18 quiet crossings read 7–57 ms. Judged on max_ms + metric fields per the AC-0352/AC-0356 convention for this row</td><td>GREEN (recorded)</td></tr>
+<tr><td>r16 (--fixed-fps 600)</td><td>all 11 sub-flags, far_holes 0 both bands, built_all</td><td>all 11 sub-flags true (inr/wave/height/no_giant/no_downgrade/low_thread/immediate/low_sync_zero/air/uv_repeat/catch_up); inr4 holes 0 + pending 0; far_holes 0 in far0 AND far1 (far_pending 0); built_all true; section_first_ok true</td><td>GREEN</td></tr>
+<tr><td>battery (7 modes)</td><td>all ok (genhash exempt; settings ms_clamp AC-0330 documented)</td><td>7/7 modes ran (BATTMODE ×7, G0 clean, genhash 25 lines). player/interact/light/fluids/buckets/genhash ok true; settings ok=false on <b>exactly</b> the documented AC-0330 red (ms_clamp — the other 12 settings field-groups all true)</td><td>GREEN (1 documented red)</td></tr>
+</table>
+
+<h3>2.6 Pristine rule (the temp arms come out the same task)</h3>
+<p>Removed, all in this task: the harness.gd <code>vcens</code> + <code>thash</code> arms (dispatch + bodies) + the
+<code>GENCOST</code> two-line probe in <code>_genhash_print</code>; the gen.cpp census atomics + the per-column census
+body + the <code>vcens_reset</code>/<code>vcens</code> surface + their 2 bindings. Rebuilt + re-staged (the .so hash
+moved <code>930989a6</code>→<code>7bb405b3</code>). Final proof on the pristine tree: G0 0 SCRIPT ERROR; genhash run-1
+== run-2 (25/25 byte-identical) AND == the instrumented AFTER run (25/25) — the census infrastructure
+was measurement-only, so removing it changed nothing about generation. The genprobe
+<code>tunnel</code>→<code>dens</code> block swap is PERMANENT (the lockstep now covers the 9-arg router; the standing
+genprobe point count moves 11,500 → 10,300).</p>
+
+<h2>3. Verdict</h2>
+<p><b>Win on cost, measured topology change.</b> The vanilla wiring (the four piece-A ported sources in
+the deep min chain, the AC-0289 outside rule deleted) is −601 µs/chunk (−11.2%) vs the session BEFORE
+and −744 µs (−13.5%) vs the 5,502 µs AC-0363 baseline — better than the ticket's hoped 420–800 µs win,
+because the 11× smaller vanilla void population saves the per-cell aquifer fill (−842 µs) and the drip
+pass (−98 µs) far more than the 4 dense lattice builds cost (+347 µs). The topology is the vanilla
+topology: the dense AC-0289 tunnel network (92% of the deep void) is gone, replaced by the cheese caves
+(~20.5k cells, unchanged system) + 472 noodle cells — the ticket's "if the topology improves, a wash is
+an acceptable result; do not dress it up" applies in reverse: this is a measured sparsification toward
+the actual vanilla structure, reported as measured. H is byte-identical, the near-surface seal holds (0),
+the water contracts hold, and every standing gate is green (one documented battery red: settings
+ms_clamp, AC-0330). No commits made (per run instructions); TASKS.yaml untouched.</p>
+
+</body></html>
