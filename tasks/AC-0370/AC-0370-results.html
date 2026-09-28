@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0370 — the 20 Hz tick's random-block pass + leaf decay: measured split, then port or throttle</title>
+<style>
+body{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;max-width:110em;margin:1.5em auto;padding:0 1em;color:#1a1a1a;line-height:1.45}
+h1{font-size:1.5em;border-bottom:3px solid #2563eb;padding-bottom:.3em}
+h2{font-size:1.2em;margin-top:1.8em;color:#1e40af;border-bottom:1px solid #cbd5e1;padding-bottom:.2em}
+h3{font-size:1.05em;margin-top:1.2em;color:#334155}
+table{border-collapse:collapse;margin:1em 0;font-size:13px}
+th,td{border:1px solid #cbd5e1;padding:.35em .6em;text-align:left;vertical-align:top}
+th{background:#eff6ff}
+.ok{background:#dcfce7}.warn{background:#fef9c3}.bad{background:#fee2e2}
+code,pre{background:#f1f5f9;padding:.1em .3em;border-radius:3px}
+pre{padding:.8em;overflow-x:auto;font-size:12px;line-height:1.35}
+.note{background:#eff6ff;border-left:4px solid #2563eb;padding:.6em 1em;margin:1em 0}
+.find{background:#fefce8;border-left:4px solid #eab308;padding:.6em 1em;margin:1em 0}
+.todo{background:#f1f5f9;border-left:4px solid #94a3b8;padding:.6em 1em;margin:1em 0}
+</style>
+</head>
+<body>
+
+<h1>AC-0370 — the 20 Hz tick's random-block pass + leaf decay: measured split, then port or throttle</h1>
+<p><b>Status (as written): INSTRUMENTED — measurement run pending.</b> Tree: <code>a28ca9a</code>
+(AC-0369 closeout; game code identical to the AC-0365 baseline for the tick path — AC-0369 touched the
+starlight pick/drain paths only). Knobs for every run:
+<code>export HOME=/tmp/dsh_home</code>, <code>bash -c "ulimit -v 8388608; …"</code> (16 GB for the battery only),
+one godot at a time, no R50, no <code>load</code> arm, no renders, no commits.</p>
+
+<div class="todo"><b>Plan (budget-aware):</b>
+(1) instrument world.gd with the AC-0365 acceptance brackets RE-ADDED (saveq/gtick/fluidt/fluidmk/atlas/cull
++ per-frame tickn) plus the AC-0370 split brackets (rtp/leaf/cols/mix/map) — TEMPORARY, removed before exit;
+(2) ONE capped R24 walk = the BEFORE acceptance numbers AND the bookkeeping-vs-work split in the same run;
+(3) the <code>tick</code> arm (AWECRAFT_LOGIC=tick, W=120) BEFORE the change = the bit-identity baseline
+(<code>window_md5</code> + samples + recompute); (4) implement the chosen route; (5) <code>tick</code> arm
+AFTER (bit-identity proof: window_md5 byte-identical, recompute_mismatch 0 vs the GDScript reference);
+(6) ONE capped R24 walk = the AFTER acceptance numbers; (7) the standing set on the pristine tree;
+(8) remove brackets, G0 on pristine, <code>git diff --stat</code> clean. <b>No second measurement walk —
+the before/after pair is exactly two walks.</b></div>
+
+<h2>1. What the code is (read, not re-derived)</h2>
+<p><code>World._game_tick()</code> (world.gd:3777) fires at 20 Hz with catch-up ≤ 4 (TICK_MAX_CATCHUP) and
+runs, per fired tick: <code>_random_tick_pass(tick_index)</code> → <code>tick_fluids()</code> (if enabled) →
+<code>_leaf_decay_tick()</code> (if enabled).</p>
+<ul>
+<li><b><code>_random_tick_pass</code> (world.gd:12291)</b> — scans the resident <code>chunks</code> dict for
+the band-0 columns with non-empty data (the 41-column taxicab diamond), then per column: one
+<code>_rt_colhash</code> (3× <code>_rt_mix64</code>) + 24 sub-chunks × (1× <code>_rt_mix64</code> + 3 unpack
+shifts). Each position goes to <code>_apply_random_tick</code> (world.gd:12317) which does exactly two
+things: <code>random_tick_total += 1</code> and
+<code>random_tick_map[base*24+sub] = int(random_tick_map.get(…, 0)) + 1</code> — <b>the consumer hook is a
+STUB</b> (a comment: "decode cx/cz, world cell (cx*16+lx, sub*16+ly, cz*16+lz)"). AC-0365 flagged this
+("pure hash+dict bookkeeping, consumer hook is a stub"). <b>The "per-block work the pass dispatches" does
+not exist yet — there is no dispatched work to be non-portable.</b></li>
+<li><b><code>_leaf_decay_tick</code> (world.gd:11930)</b> — per band-0 column: skip if
+<code>c.leaf_decay.is_empty()</code>; else <code>keys()</code> + per-timer has/int/erase/write-back, and a
+fired timer does <code>c.get_local</code> + <code>set_block(wx, ly, wz, 0)</code> (a real edit). On a WALK arm
+no tree is broken, so the maps are empty and this is a per-tick column iteration (≈ resident-set property
+reads) plus ~0 timer work. It is NOT dispatched from the random pass — it is a sibling inside the same tick.</li>
+<li><b><code>tick_fluids</code> (world.gd:12108)</b> — already bracketed by AC-0365 (33.8 ms / 27.2% of the
+tick over the worst-20). Its per-cell work is real set_fluid/set_block + star batched edits — the
+non-portable class; out of this ticket's split decision (it is in scope only in that the fluids arms must
+stay green, since <code>tick_fluids</code> sits in the same tick).</li>
+</ul>
+<p>Only consumer of <code>random_tick_map</code>/<code>random_tick_total</code>/<code>random_tick_seq</code>
+outside world.gd is the <b><code>tick</code> arm</b> (harness.gd:21887, <code>AWECRAFT_LOGIC=tick</code>,
+W=120): it resets the state, runs 120 real 20 Hz ticks over the full 41-set, verifies scope (41 cols, band
+0), per-subchunk counts == W, <b>recomputes every logged position with the GDScript
+<code>_rt_colhash</code>/<code>_rt_mix64</code> and requires <code>recompute_mismatch == 0</code></b>, and
+reports <code>window_md5</code> (md5 of all logged positions across the window — "byte-identical across
+fresh runs", the arm's own determinism gate). It is NOT in the 7-mode battery. This arm is the bit-identity
+proof: BEFORE-vs-AFTER <code>window_md5</code> + the recompute check (which, after the port, compares the
+NATIVE output against the GDScript reference — strictly stronger than before).</p>
+<p>Native lane shape (for the port): one GDExtension library <code>libchunkio</code> (entry
+<code>chunkio_library_init</code>, gdext/src/chunk_io.cpp), one <code>RefCounted</code> class per
+<code>src/*.cpp</code> (SCons glob), <code>ClassDB::bind_method(D_METHOD(…))</code> registration,
+<code>GDREGISTER_CLASS</code> + the <code>register_classes()</code> call in the entry symbol. AC-0356's
+pattern = a synchronous batched call (star.begin/end_edit_batch). The port is one synchronous call per
+fired tick: the per-tick work is ≈ 1100 mix64 + 984 map increments — a few µs in C++, no queue needed.
+Constants: c1 = 0x9E3779B97F4A7C15, c2 = 0xBF58476D1CE4E5B9, c3 = 0x94D049BB133111EB (GDScript int64
+two's-complement bit patterns; C++ replicates with <code>int64_t</code> so <code>&gt;&gt;</code> stays
+arithmetic and +/* wrap mod 2⁶⁴ — bit-identical; <code>-O2 -ffp-contract=off</code> untouched, integers are
+not FMA candidates).</p>
+
+<h2>2. The instrument (TEMPORARY — removed before exit)</h2>
+<p>world.gd only: <code>WP_STAGES</code> 13 → 24 with 11 sub-stage slots (the AC-0365 six —
+<code>WP_AC365_SAVEQ/GTICK/FLUIDT/FLUIDMK/ATLAS/CULL</code> 13–18, bracketing
+<code>_drain_save_queue</code> / <code>_game_tick_accumulate</code> / <code>tick_fluids</code> / the
+<code>fluid_marks</code> arming loop / the atlas identity block / <code>_frustum_cull_pass</code> — plus the
+AC-0370 five: <code>WP_AC370_RTP/LEAF/COLS/MIX/MAP</code> 19–23, bracketing
+<code>_random_tick_pass</code> whole, <code>_leaf_decay_tick</code> whole, the pass's column scan, and the
+per-sub-chunk hash math vs the per-sub-chunk <code>random_tick_map</code> bookkeeping). Values land in the
+existing AC-0352 worst-frame ring (<code>_wfc_capture</code> split dict — the arm's own population,
+walk-window frames &gt; 30 ms, worst 20) plus a per-frame <code>tickn</code> (ticks fired inside the frame,
+from <code>tick_index</code>). Sub-stages accumulate where the work happens and never into the
+5-stage partition (MISC reconciliation stays exact). Overhead: per fired tick ≈ 2 stamps (rtp) + 2 (leaf) +
+2 (cols) + 2×984 (mix+map per sub-chunk) ≈ 1974 <code>Time.get_ticks_usec()</code> reads ≈ 0.1 ms
+(documented as an upper bound on the BEFORE numbers; the AFTER run keeps the same gtick/fluidt/leaf
+brackets but the per-sub stamps disappear with the loop — the asymmetry is reported, not hidden).</p>
+
+<h2>3. The measured split (Run A — BEFORE, the AC-0365 instrument + the AC-0370 split brackets)</h2>
+<p>Population: the arm's own worst-20 walk-window frames (&gt; 30 ms), same run, same tree, same knobs
+as AC-0365. 46 tick fires over the 20 frames (histogram {1: 4, 2: 6, 3: 10} — the multi-fire feedback
+reproduces: 16 of 20 fired &gt; 1). ms at the 0.1 display precision; per_tick = sum ÷ 46 fires.</p>
+<table>
+<tr><th>bracket</th><th>what it is</th><th>p50</th><th>p95</th><th>max</th><th>sum (20)</th><th>ms/tick</th><th>share</th></tr>
+<tr><td><code>gtick</code></td><td><code>_game_tick_accumulate</code> — the whole 20 Hz tick</td><td>8.0</td><td>12.8</td><td>14.1</td><td><b>162.9</b></td><td>3.54</td><td>96.9% of MISC · 15.1% of frame</td></tr>
+<tr class="warn"><td><code>rtp</code></td><td><code>_random_tick_pass</code> whole</td><td>4.9</td><td>7.2</td><td>7.4</td><td><b>98.8</b></td><td>2.15</td><td>60.7% of gtick</td></tr>
+<tr><td>— <code>cols</code></td><td>the band-0 column scan (≈1450 resident-chunk property reads + 41 small-array allocs)</td><td>2.0</td><td>3.1</td><td>3.5</td><td>39.9</td><td>0.87</td><td>of rtp</td></tr>
+<tr><td>— <code>mix</code></td><td>984 × (mix64 + 3 unpack shifts) — the per-sub hash</td><td>0.6</td><td>1.0</td><td>1.0</td><td>14.2</td><td>0.31</td><td>of rtp</td></tr>
+<tr><td>— <code>map</code></td><td>984 × (counter + <code>random_tick_map</code> dict get/set) — the bookkeeping</td><td>1.0</td><td>1.4</td><td>1.6</td><td>20.8</td><td>0.45</td><td>of rtp</td></tr>
+<tr><td>— (unbracketed)</td><td>the colhash (3×mix64/col) + the loop skeleton + ≈0.1 ms of per-sub stamps (instrument overhead)</td><td>—</td><td>—</td><td>—</td><td>≈ 24</td><td>≈ 0.5</td><td>of rtp</td></tr>
+<tr class="warn"><td><code>leaf</code></td><td><code>_leaf_decay_tick</code> — per-tick column scan; <b>zero timer work on a walk</b> (no tree broken → all maps empty → no <code>get_local</code>/<code>set_block</code> ever runs)</td><td>1.3</td><td>2.5</td><td>3.1</td><td><b>27.3</b></td><td>0.59</td><td>16.8% of gtick</td></tr>
+<tr><td><code>fluidt</code></td><td><code>tick_fluids</code> (the AC-0365 number, re-measured on this tree)</td><td>1.9</td><td>3.0</td><td>3.8</td><td>36.8</td><td>0.80</td><td>22.6% of gtick</td></tr>
+<tr><td>saveq / fluidmk / atlas / cull</td><td>the AC-0365 zero-checks</td><td>0.0</td><td>0.0</td><td>0.0</td><td>0.0</td><td>—</td><td>confirmed 0.0 again</td></tr>
+<tr><th>MISC / frame</th><th></th><th>8.0 / 49.4</th><th>12.9 / 64.2</th><th>15.0 / 77.5</th><th>168.1 / 1075.7</th><th>—</th><th>—</th></tr>
+</table>
+<div class="find"><b>THE SPLIT (the ticket's decision question, answered with numbers):</b> over the worst-20 frames
+the ticket's "≈ 88 ms random-tick pass + leaf decay" class re-measures at <b>126.1 ms (rtp 98.8 + leaf 27.3,
+2.74 ms per fired tick)</b>. Of that: <b>the per-block work the pass dispatches at the chosen positions is
+0.0 — the consumer hook is a stub</b>; the "work" that exists is (a) the per-tick hash +
+<code>random_tick_map</code> dict bookkeeping + loop skeleton ≈ 1.2 ms/tick (43% — <b>pure computation,
+portable</b>), (b) the GDScript column scan (≈0.87 ms/tick, 32% — dict iteration + property reads, portable
+in principle but reads chunk-node state), and (c) the leaf-decay tick's column scan (0.59 ms/tick, 21% —
+<b>zero</b> timer work on this population; its actual edits, <code>get_local</code>/<code>set_block</code>, are the
+non-portable class and never fire on a walk). So 100% of the measured cost is either portable bookkeeping
+or a scan; nothing dispatched is world-edit-bound. <b>This is a PORT, not a throttle problem.</b></div>
+
+<h2>4. The route: (a) PORT — and exactly what goes</h2>
+<p><b>Chosen: (a) PORT the hash + the <code>random_tick_map</code> bookkeeping to the native lane</b> (one
+synchronous call per fired tick), for the measured reasons:</p>
+<ol>
+<li><b>The bookkeeping dominates and is pure.</b> 43% of the hot cost is hash math + dict updates with a
+stub consumer — the AC-0356 shape exactly (a per-tick main-thread cost that is wholesale portable, no
+SceneTree dependency, no world edits). Throttling would remove at most the per-sub part of it (mix+map+
+colhash ≈ 1.2 ms/tick → ~2.4–3.6 ms per multi-fire frame) <b>while changing behaviour</b> (see §6 for the
+cost that would have been stated); the port removes the same work with <b>zero</b> game-behaviour change.</li>
+<li><b>The lane has the headroom.</b> Per the ticket, threadgen is starved at 1–2 inflight against 545/s;
+≈ 1100 mix64 + 984 map increments is a few µs in C++ — a synchronous call, no queue, no drain pacing.
+AC-0356's begin/end_edit_batch is the precedent for a synchronous batched call on this lane.</li>
+<li><b>The bit-identity proof exists and gets stronger.</b> The <code>tick</code> arm recomputes every logged
+position with the GDScript reference (<code>_rt_colhash</code>/<code>_rt_mix64</code> stay in world.gd as the
+reference) and gates <code>recompute_mismatch == 0</code> + the window md5. AFTER the port, that check compares
+the <b>native</b> output against the GDScript reference — cross-lane, strictly stronger than the before.</li>
+</ol>
+<p><b>Scope of the port (deliberately narrow):</b> the per-column colhash + the 24× per-sub mix64 + the map
+increments move to C++ (<code>AweRandomTick.random_tick_pass</code>); the map itself becomes C++ state
+(<code>map_dict()</code> exposes it on demand — the only reader is the <code>tick</code> arm, two-line edit,
+its core recompute check untouched). The column scan stays in GDScript with <b>exact</b> semantics
+(same filter, same order, sort only when <code>random_tick_log</code>) but allocation-free (reused
+<code>PackedInt32Array</code>s instead of 41 fresh <code>Array</code>s per tick). <b>Leaf decay stays in
+GDScript</b>: its measured cost is a column scan (the edit work is zero here) and its fires do
+<code>set_block</code> (world edits — the non-portable class); porting its scan would owe a cross-lane
+state-sync contract for ~0.6 ms/tick. <b>Named residual (a follow-up, not this ticket):</b> the two column
+scans (rtp 0.87 + leaf 0.59 ms/tick) — the band-0 set is the 41-column taxicab diamond, so a diamond-anchored
+lookup (41 keys, not ≈1450) or a native column mirror would remove them; both need a band-anchoring
+equivalence proof the budget does not carry safely. Expected after (from the split): rtp ≈ 0.75 ms/tick
+(≈ 0.7 scan + ≈ 0.05 native call) vs 2.15 before — the tick drops ~35–40% and the multi-fire multiplier
+weakens by the same factor; the acceptance run in §6 says whether the expectation holds.</p>
+
+<h2>5. The change (route a — the files)</h2>
+<ul>
+<li><b><code>gdext/src/random_tick.cpp</code> (NEW)</b> — <code>AweRandomTick</code> (RefCounted, the per-module
+pattern): <code>random_tick_pass(t, seed, cxs, czs, log)</code> runs the colhash + 24× per-sub mix64 in
+<code>int64_t</code> (arithmetic <code>&gt;&gt;</code>, mod-2⁶⁴ wrap — the GDScript bit patterns) and does
+<code>map_[base*24+sub] += 1</code> per position; returns the logged seq (the <code>random_tick_log</code>
+path — the arm's md5 input) when <code>log</code>. <code>map_dict()</code> / <code>reset()</code> expose the
+map on demand. The consumer hook stays a stub, as in the GDScript.</li>
+<li><b><code>gdext/src/chunk_io.cpp</code></b> — the <code>awert</code> namespace forward declaration + the
+<code>register_classes()</code> call in <code>initialize_chunkio_module</code> (the SCons glob picks up the
+new file; same <code>libchunkio</code> library, entry <code>chunkio_library_init</code>).</li>
+<li><b><code>godot/world/world.gd</code></b> — <code>_random_tick = AweRandomTick.new()</code> (main-thread,
+next to the star pre-warm); <code>_random_tick_pass</code> now scans the band-0 columns into two
+<code>PackedInt32Array</code>s (allocation-free vs the old 41 <code>Array</code>s per tick; same filter, same
+order; the log path sorts exactly as the old <code>cols.sort()</code>) and makes ONE native call;
+<code>random_tick_total += n*24</code>; the <code>random_tick_map</code> var is GONE (native state) and
+<code>_apply_random_tick</code> is GONE; <code>random_tick_map_dict()</code> / <code>random_tick_map_reset()</code>
+are the on-demand view/reset for the arm. <code>_rt_mix64</code> / <code>_rt_colhash</code> /
+<code>_rt_c1..3</code> STAY as the GDScript reference the arm recomputes against (now cross-lane). Leaf decay
+(<code>_leaf_decay_tick</code>) and <code>tick_fluids</code> are UNTOUCHED.</li>
+<li><b><code>godot/scenes/harness.gd</code></b> — the <code>tick</code> arm, two lines: the reset
+(<code>random_tick_map_reset()</code>) and the scope iteration (<code>random_tick_map_dict()</code>).
+<b>Deviation stated per scenes/AGENTS.md:</b> the arm's contract is unchanged (same fields, same ok
+conditions, same W=120 window); its core — the per-position recompute against
+<code>_rt_colhash</code>/<code>_rt_mix64</code> — is untouched and is now the cross-lane proof. No other arm
+touched; <code>harness_data.yaml</code> needs no row change (no field, env, or gate changed).</li>
+<li><b><code>godot/ARCHITECTURE.md</code></b> — §4 table row for <code>random_tick.cpp</code> (invariant 2:
+the new native component is documented in the same task).</li>
+</ul>
+
+<h2>6. Bit-identity (the <code>tick</code> arm, W=120, before vs after — PROVEN)</h2>
+<p>Same instrument, same seed (44), same 41-set, one process per run (8 GB cap). BEFORE = the
+pristine tree (<code>a28ca9a</code>) + the pre-change <code>.so</code> (run in the main tree with the
+HEAD <code>world.gd</code>/<code>harness.gd</code> temporarily restored — a git worktree at HEAD was
+tried first and failed: it lacks the untracked generated files the autoloads need, e.g.
+<code>assets/items_atlas.png</code>); AFTER = this change. The arm's recompute check runs the
+<b>GDScript</b> <code>_rt_colhash</code>/<code>_rt_mix64</code> reference against the arm's logged
+positions — after the port those positions come from the <b>native lane</b>, so
+<code>recompute_mismatch == 0</code> is now a cross-lane identity check.</p>
+<table>
+<tr><th>field</th><th>BEFORE (pristine)</th><th>AFTER (this change)</th><th>verdict</th></tr>
+<tr class="ok"><td><code>window_md5</code> (md5 of ALL 118,080 logged positions)</td><td colspan="2"><b><code>d81250cdbeb79419156517a7bad108b0</code> — byte-identical</b> (also <code>md5_first</code> <code>840a5ba8…</code> and <code>md5_last</code> <code>9955053e…</code> identical)</td><td><b>the same positions, from the same seeds</b></td></tr>
+<tr class="ok"><td><code>recompute_mismatch</code> / <code>cells_compared</code></td><td colspan="2">0 / 118,080 (both)</td><td>native ≡ GDScript reference, every position</td></tr>
+<tr class="ok"><td>scope: <code>cols</code> / <code>subchunks</code> / <code>min_count</code>=<code>max_count</code> / <code>scope_bad</code> / <code>band123_ticks</code> / <code>random_total</code></td><td colspan="2">41 / 984 / 120=120 / 0 / 0 / 118,080 (both)</td><td>identical</td></tr>
+<tr class="ok"><td><code>hz2</code> / <code>ok</code></td><td colspan="2">19.9933 / true (both)</td><td>20 Hz clock intact</td></tr>
+<tr class="warn"><td><code>tick_ms_mean / p95 / max</code> (per fired tick, R4 steady world, fluids on)</td><td>1.121 / 1.563 / 1.640</td><td><b>0.424 / 0.750 / 0.898</b></td><td><b>2.6× cheaper per tick</b> — the arm's own steady-state sample</td></tr>
+</table>
+<p class="note"><b>Game-behaviour cost of the change: NONE.</b> Route (a) keeps every tick firing at the
+same 20 Hz with the same positions (the md5 proof above), so nothing slows: leaf decay timers tick at
+the same rate, the (future) crop/growth consumer hook would see the identical position stream, and
+<code>random_tick_total</code> advances identically. The throttle route's cost — for the record, had the
+evidence pointed there: dropping the Nth tick of a multi-fire frame loses N×984 random ticks per
+stall frame (16 of the 20 worst frames fired &gt; 1), i.e. under load the whole world's random-tick
+process (leaf decay, and crops once they exist) runs at less than 20 Hz exactly when the player is
+most active — that is the behaviour change the ticket would have forced stated. The port owes none
+of it. <b>What the port does NOT remove:</b> the two GDScript column scans (rtp 0.87 + leaf 0.59 ms/tick,
+§4) — the named residual.</p>
+
+<h2>7. The acceptance (ONE capped R24 walk, AFTER — same instrument as §3)</h2>
+<table>
+<tr><th>number</th><th>BEFORE (§3)</th><th>AFTER (§7)</th><th>delta</th></tr>
+<tr class="ok"><td>tick <code>gtick</code> ms/frame: p50 / p95 / max</td><td>8.0 / 12.8 / 14.1</td><td><b>4.0 / 5.6 / 5.7</b></td><td><b>−50%</b> (sum over worst-20: 162.9 → 80.7)</td></tr>
+<tr class="ok"><td>tick share of MISC / of frame</td><td>96.9% / 15.1%</td><td>94.1% / <b>8.9%</b></td><td>the frame share halves (MISC share stays high — MISC is ~all tick; the tick itself got smaller)</td></tr>
+<tr class="ok"><td>tick count per worst frame (multi-fire)</td><td>{1: 4, 2: 6, 3: 10} — 16/20 multi-fire</td><td>{1: 10, 2: 7, 3: 3} — <b>10/20</b> multi-fire</td><td><b>the feedback broke as predicted</b>: shorter frames → fewer catch-up fires (46 → 33 fires over the 20 frames)</td></tr>
+<tr><td>inside the tick (ms/tick): rtp / (cols / native-call / mix) / leaf / fluidt</td><td>2.15 / (0.87 / — / 0.31+0.45) / 0.59 / 0.80</td><td>1.01 / (0.89 / 0.11 / 0.0) / 0.61 / 0.83</td><td>hash+map: 0.76+colhash ≈ 1.1 ms/tick → <b>0.11 ms/tick native call</b> (≈ 10×); the two scans stay (the named residual, §4)</td></tr>
+<tr><td>worst-20 frame p50 / max (ms) · storm p99</td><td>49.4 / 77.5 · 90</td><td><b>44.2 / 56.9</b> · 84</td><td>the tail shortens with the tick</td></tr>
+<tr><td>arm sanity</td><td colspan="2">ok true, crossings 10, resident_final 1453 (both)</td><td>same population, same walk</td></tr>
+</table>
+<p><b>Verdict: the change moves its number</b> — the tick halves and the multi-fire feedback weakens
+(16/20 → 10/20), exactly the shape the ticket asked for. The residual per-tick cost is the two
+GDScript column scans (0.89 + 0.61 ms/tick) + the fluid sim (0.83 ms/tick, out of scope — its
+per-cell work is the non-portable class); the named follow-up is the diamond-anchored scan (§4).
+Nothing was reverted: the only change measured is the port itself.</p>
+
+<h2>8. The standing set (on the pristine tree — brackets removed, new <code>.so</code> staged)</h2>
+<p>Every run: <code>HOME=/tmp/dsh_home</code>, <code>ulimit -v 8388608</code> (16 GB for the battery), one godot at
+a time, no R50, no <code>load</code> arm, no renders. Both platform builds per OPS.md: linux
+<code>libchunkio.so</code> staged to <code>godot/bin/</code> + Windows
+<code>libchunkio.windows.template_release.x86_64.dll</code> (MinGW cross, <code>random_tick.os</code> linked
+into both).</p>
+<table>
+<tr><th>gate</th><th>standing value (HARNESS.md §3 / references)</th><th>result</th></tr>
+<tr><td>G0</td><td>zero <code>SCRIPT ERROR</code> (not rc=0)</td><td class="ok">rc 0, 0 SCRIPT ERROR (bracketed tree, ported tree, pristine tree — three boots)</td></tr>
+<tr><td><code>genhash</code></td><td>25/25 byte-identical to <code>.scratch/AC-0367-gates/genhash_pristine_r1.log</code></td><td class="ok"><b>25/25 byte-identical</b></td></tr>
+<tr><td><code>fluids</code></td><td>known-stable row values (sea 2756/914, shore [5,7], <code>sea_stable</code> true, …)</td><td class="ok">RESULT <b>byte-identical to the same-tree AC-0369 battery run</b> (both show the current-tree values — shore [0,0], sea 0/0 — the row's standing values are stale vs this tree's resident set; the before/after identity is the gate: <code>tick_fluids</code> untouched, zero drift from this change)</td></tr>
+<tr><td><code>fluidfall</code> / <code>fluidsettle</code> (rows: "not re-run 08-24")</td><td>before-state comparison (HEAD <code>.gd</code> + HEAD-rebuilt <code>.so</code>, same env)</td><td class="ok">RESULT <b>byte-identical before/after</b> (fluidfall ok:false on both — the stale-row pre-existing state, not a regression)</td></tr>
+<tr><td><code>fluidprobe</code></td><td><code>done</code> true</td><td class="ok">true</td></tr>
+<tr><td><code>leaves</code> (AC-0270, leaf-decay behaviour) / <code>trees</code> (row: "not re-run 08-24")</td><td>before-state comparison, same env (<code>AWECRAFT_LEAFDECAY_MS=2000</code>)</td><td class="ok">both RESULTS <b>byte-identical before/after</b>. Reading the leaves arm on its own fields: <code>solid_ok</code> true, <code>decay_fired</code> true, <code>timers_started</code> true, <code>sim_exit_ok</code> true — the full-phase <code>ok:false</code> is the <code>persisted_ok</code> sub-check (placed leaf not flagged persistent), identical in the before-state → pre-existing, reported here, not re-baselined</td></tr>
+<tr><td><code>farab</code></td><td><code>h_mismatch</code> 0</td><td class="ok">0 (ok true, 45 cols)</td></tr>
+<tr><td><code>ladder</code></td><td>20/20 band A</td><td class="ok">ok true — band A 20/20 (<code>band_a_fail_n</code> 0), band B 155/155, band C 94/94</td></tr>
+<tr><td><code>meshprobe</code></td><td>1.0</td><td class="ok"><code>match_rate</code> 1.0 (32/32 chunks, 1914 cells)</td></tr>
+<tr><td><code>halo</code></td><td>ok</td><td class="ok">true</td></tr>
+<tr><td><code>lightstate</code></td><td>leaks 0/0</td><td class="ok">0/0 (ab before/after + every grid chunk)</td></tr>
+<tr><td><code>r16</code> (<code>--fixed-fps 600</code>, read the sub-flags, never the hardcoded <code>ok</code>)</td><td>all sub-flags green; <code>far_holes</code> 0/0 both bands</td><td class="ok">all green — <code>air_ok</code> <code>catch_up_ok</code> <code>height_ok</code> <code>immediate_ok</code> <code>inr_ok</code> <code>low_sync_zero_ok</code> <code>low_thread_ok</code> <code>no_downgrade_ok</code> <code>no_giant_ok</code> <code>uv_repeat_ok</code> <code>wave_ok</code> all true; <b><code>far0.far_holes</code> 0, <code>far1.far_holes</code> 0</b> (both bands), <code>far_pending</code> 0, inr0/inr1/inr4 holes 0, slab uv_mismatch 0; built_all + section_first_ok true</td></tr>
+<tr><td><code>boundary r4</code></td><td>AC-0367 same-tree reference: p50 11 / p95 42 / crossings 20 / <code>marker_ok</code>/<code>remesh_ok</code> / crossing_burst_p50 4.5 (≤ 10 gate; the max is a watch item, not a gate)</td><td class="ok"><b>in band</b>: p50 12 / p95 41 (ref 11/42), crossings 20/20, <code>marker_ok</code>/<code>remesh_ok</code> true, crossing_burst_p50 4.5 (≤ 10), <code>col_deferred_in_footprint</code> 0, footprint missing 0; max 1027 (watch item; ref 714)</td></tr>
+<tr><td>battery 7 modes (16 GB, one process)</td><td><code>player;interact;light;fluids;buckets;genhash;settings</code>; known AC-0330 settings red is pre-existing (AC-0369 closeout: "green apart from the known AC-0330 settings red")</td><td class="ok">all 7 modes ran (0 SCRIPT ERROR). <b>Full-shape before/after battery diff (this ticket's own before-state run, same 7-mode one-process shape): buckets/fluids/genhash/interact/light/settings byte-identical; player differs only in <code>time_before</code>/<code>time_after</code> (the day-night clock phase at the arm's read instant — wall-clock frame-phase noise, ~5e-5; every other player field identical).</b> Combined <code>ok:false</code> is the known AC-0330 settings red — its settings RESULT is byte-identical to the same-tree AC-0369 standalone reference (which is also <code>ok:false</code>); genhash is battery-exempt. Not a new red.</td></tr>
+<tr><td><code>tick</code> arm</td><td>see §6 (the bit-identity instrument, run before+after)</td><td class="ok">done</td></tr>
+</table>
+
+<h2>9. The files (and the instrument's removal)</h2>
+<ul>
+<li><b>Changed:</b> <code>godot/world/world.gd</code> (the port — 4 hunks: the <code>_random_tick</code>
+decl + comment, the instantiation next to the star pre-warm, the rewritten
+<code>_random_tick_pass</code>, the <code>random_tick_map_dict()</code>/<code>random_tick_map_reset()</code>
+accessors); <code>gdext/src/chunk_io.cpp</code> (the <code>awert</code> registration, 8 lines);
+<code>godot/scenes/harness.gd</code> (the <code>tick</code> arm's two reset/iterate lines);
+<code>godot/ARCHITECTURE.md</code> (§4 row for <code>random_tick.cpp</code>).</li>
+<li><b>New:</b> <code>gdext/src/random_tick.cpp</code> (the <code>AweRandomTick</code> class);
+<code>tasks/AC-0370/AC-0370-results.html</code> (this page).</li>
+<li><b>Rebuilt + staged (OPS.md, both platforms):</b> <code>gdext/bin/libchunkio.so</code> →
+<code>godot/bin/libchunkio.so</code> (linux, <code>random_tick.os</code> linked);
+<code>gdext/bin/libchunkio.windows.template_release.x86_64.dll</code> (MinGW cross, product artifact —
+the Windows-only product ships the <code>.dll</code>; both built from the same sources, <code>-O2
+-ffp-contract=off</code>).</li>
+<li><b>Removed:</b> every <code>WP_AC365_*</code>/<code>WP_AC370_*</code> bracket, the
+<code>_ac370_tick_prev</code> var, the extended <code>_wp_names</code>, and the
+<code>_wfc_capture</code> additions — <code>WP_STAGES</code> back to 13, G0 re-verified on the pristine
+tree (rc 0, 0 <code>SCRIPT ERROR</code>), <code>git diff --stat</code> shows exactly the four changed
+files above (+ the pre-existing <code>tasks/TASKS.yaml</code> status flip from the other session, which
+this task does not touch).</li>
+</ul>
+
+<h2>9.1 Execution incident (recorded, not papered over)</h2>
+<p>The first <code>r16</code> attempt of the long-gate run was executed on a <b>corrupt working file</b>:
+the before/after comparison swap restored <code>godot/world/world.gd</code> from
+<code>.scratch/AC-0370-gates/world.gd.ac370.bak</code> — a backup taken at the start of the session,
+<i>before</i> the <code>var _random_tick: Variant = null</code> type fix and the bracket removal, so it
+still contained <code>var _random_tick := null</code> + all TEMP brackets. The post-swap md5 check
+passed only because it compared the file against that same stale backup. The r16 process then
+parse-failed <code>world.gd</code> at boot, <code>World</code> never loaded, and
+<code>Main._update_fog</code> read <code>world.render_radius</code> on a bare <code>Node3D</code> every frame
+for ~20 min — a 6.8 GB log of 21,393,647 SCRIPT ERROR lines (snippet kept as
+<code>r16_incident_evidence.txt</code>; the log was deleted). <b>No result from that run is used
+anywhere in this page.</b> Every other run in this page was on a verified tree: the quick batch
+predates the swap (its logs all show 0 <code>SCRIPT ERROR</code> + sane RESULTs — impossible with a
+parse-failed <code>world.gd</code>), the before-runs used pristine HEAD files, and the file was
+re-fixed (type fix + bracket removal re-applied), G0 re-verified (rc 0, 0 <code>SCRIPT ERROR</code>),
+the backups refreshed to the verified version, and the long gates re-run. The fix is a guard for the
+rest of this session: file-state checks from now on compare against <code>git diff</code> +
+<code>grep</code> for residue, never against a session backup alone.</p>
+
+<h2>10. The evidence (RESULT blocks, verbatim)</h2>
+<p class="note">Logs: <code>.scratch/AC-0370-gates/</code> (<code>tick_before.log</code> = the before-state
+run — HEAD <code>world.gd</code>+<code>harness.gd</code> restored into the main tree, pre-change
+<code>.so</code>; the git worktree attempt failed on the untracked generated files, noted in §6).
+Worst-20 walk tables: <code>post.py</code> output preserved in the ticket's continuity notes.</p>
+<h3>10.1 <code>tick</code> arm — before (pristine)</h3>
+<pre>RESULT {"mode": "tick", "ok": true, "window": 120, "n_ticks": 120, "hz": 19.9900049975012, "hz2": 19.9933355548151,
+ "random_total": 118080, "subchunks": 984, "cols": 41, "min_count": 120, "max_count": 120, "scope_bad": 0,
+ "band123_ticks": 0, "recompute_mismatch": 0, "cells_compared": 118080,
+ "md5_first": "840a5ba8fd7b372c549cf78c22f9bc89", "md5_last": "9955053e6c603d4fb4e8177cc2e395ec",
+ "window_md5": "d81250cdbeb79419156517a7bad108b0", "tick_ms_p95": 1.563, "tick_ms_max": 1.64, "tick_ms_mean": 1.12091666666667}</pre>
+<h3>10.2 <code>tick</code> arm — after (this change; window_md5 byte-identical, recompute_mismatch 0 cross-lane)</h3>
+<pre>RESULT {"mode": "tick", "ok": true, "window": 120, "n_ticks": 120, "hz": 19.99…, "hz2": 19.9933355548151,
+ "random_total": 118080, "subchunks": 984, "cols": 41, "min_count": 120, "max_count": 120, "scope_bad": 0,
+ "band123_ticks": 0, "recompute_mismatch": 0, "cells_compared": 118080,
+ "md5_first": "840a5ba8fd7b372c549cf78c22f9bc89", "md5_last": "9955053e6c603d4fb4e8177cc2e395ec",
+ "window_md5": "d81250cdbeb79419156517a7bad108b0", "tick_ms_p95": 0.75, "tick_ms_max": 0.898, "tick_ms_mean": 0.423816666666667}</pre>
+<h3>10.3 R24 walk — after (worst-20 instrument, §7)</h3>
+<pre>RESULT: ok=true, crossings=10, walk_s=10.7, storm p99 84 / max 751, resident_final 1453
+worst-20: gtick p50 4.0 / p95 5.6 / max 5.7 (sum 80.7, 2.45/tick) · rtp 1.01/tick (cols 0.89, native call 0.11, mix 0.0)
+          leaf 0.61/tick · fluidt 0.83/tick · tickn {1:10, 2:7, 3:3} · frame p50 44.2 / max 56.9
+before (§3, same instrument): gtick 8.0/12.8/14.1 (sum 162.9, 3.54/tick) · rtp 2.15 (cols 0.87, mix 0.31, map 0.45)
+          · leaf 0.59 · fluidt 0.80 · tickn {1:4, 2:6, 3:10} · frame p50 49.4 / max 77.5 · storm p99 90</pre>
+<h3>10.4 genhash</h3>
+<pre>25/25 GENHASH lines byte-identical to .scratch/AC-0367-gates/genhash_pristine_r1.log (the AC-0367-piece-B reference)</pre>
+<h3>10.5 The long gates (r16 / boundary r4 / battery)</h3>
+<pre>r16 (--fixed-fps 600, 0 SCRIPT ERROR): built_all true, section_first_ok true
+  lod: air_ok true, catch_up_ok true (catch_up 0), height_ok true, immediate_ok true, inr_ok true
+       (inr0/inr1/inr4: holes 0, pending 0), low_sync_zero_ok true, low_thread_ok true,
+       no_downgrade_ok true, no_giant_ok true, uv_repeat_ok true, wave_ok true
+       far0: far_holes 0, far_pending 0, far_visible 0 · far1: far_holes 0, far_pending 0, far_visible 265
+       slab0/slab1: air_ok/height_ok/no_giant_ok/uv_repeat_ok true, uv_mismatch 0
+boundary r4: ok true, radius 4, walk_chunks 20, crossings 20, p50_ms 12, p95_ms 41, max_ms 1027 (watch item),
+       marker_ok true, remesh_ok true, crossing_burst_p50_ms 4.5 (&le; 10 gate), col_deferred_in_footprint 0,
+       footprint missing 0  (AC-0367 same-tree reference: p50 11 / p95 42 / burst_p50 4.5)
+battery 7 modes (16 GB, one process, 0 SCRIPT ERROR): player;interact;light;fluids;buckets;genhash;settings
+       BATTMODE ms: player 9524 · interact 1240 · light 120 · fluids 68 · buckets 407 · genhash 162 · settings 53
+       combined ok:false = the known AC-0330 settings red (its RESULT byte-identical to the same-tree AC-0369
+       standalone reference, which is also ok:false; genhash battery-exempt)
+       FULL-SHAPE BEFORE/AFTER BATTERY DIFF (this ticket's own before-state run, same 7-mode shape):
+       buckets/fluids/genhash/interact/light/settings IDENTICAL; player: all 17 game-state fields identical,
+       only ms (9524 vs 9558 wall) + time_before/time_after (day-night clock phase at read, ~5e-5 jitter)</pre>
+<h3>10.6 Build evidence</h3>
+<pre>linux:   scons -C gdext platform=linux target=template_release  → gdext/bin/libchunkio.so (random_tick.os linked)
+         staged → godot/bin/libchunkio.so (md5 2dcf8ac236bb61fc8623ffef1b9900ac)
+windows: scons -C gdext platform=windows target=template_release → gdext/bin/libchunkio.windows.template_release.x86_64.dll (3,976,448 B)
+pre .so: rebuilt from HEAD (git archive) for the before-state runs (md5 7bb405b39a705806a26e929c23b41e2b, 1,591,848 B — same size as the
+         AC-0369 build that was staged before this ticket)
+both: -O2 -ffp-contract=off (the load-bearing no-FMA flags), godot-cpp static libs from .scratch/godot-cpp/bin/</pre>
+
+
+</body>
+</html>

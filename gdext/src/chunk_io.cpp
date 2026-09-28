@@ -60,6 +60,13 @@ void register_classes();
 namespace awestarlight {
 void register_classes();
 }
+// AC-0370: the random-tick module (src/random_tick.cpp) joins the same
+// library — AweRandomTick (the per-tick random block pass: the hash and the
+// random_tick_map bookkeeping, ported from GDScript world.gd) registers from
+// the same initializer (namespace awert, defined in random_tick.cpp).
+namespace awert {
+void register_classes();
+}
 
 namespace {
 
@@ -1129,6 +1136,7 @@ void initialize_chunkio_module(ModuleInitializationLevel p_level) {
 	awemesh::register_classes(); // AC-0190: AweMesh (build_accs + greedy emit)
 	awestrips::register_classes(); // AC-0207: AweStrips (strips + face compute)
 	awestarlight::register_classes(); // AC-0283: AweStarlight (single-queue light engine)
+	awert::register_classes(); // AC-0370: AweRandomTick (the per-tick random block pass, ported from GDScript)
 }
 
 void uninitialize_chunkio_module(ModuleInitializationLevel p_level) {

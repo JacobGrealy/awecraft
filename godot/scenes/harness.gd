@@ -21947,7 +21947,7 @@ func _tick_test(spawn: Vector3) -> void:
 	world.tick_index = 0
 	world._tick_acc = 0.0
 	world.random_tick_total = 0
-	world.random_tick_map.clear()
+	world.random_tick_map_reset()  # AC-0370: the map is native state now (AweRandomTick)
 	world.random_tick_seq.clear()
 	world.game_tick_samples.clear()
 	world.fluid_tick_samples.clear()
@@ -21992,7 +21992,7 @@ func _tick_test(spawn: Vector3) -> void:
 	var band123_ticks := 0
 	var cols_seen := {}
 	var expected_subs: int = 41 * world.SUBCHUNKS_PER_COLUMN
-	for sk in world.random_tick_map:
+	for sk in world.random_tick_map_dict():  # AC-0370: native-state map view
 		var k: int = sk
 		var col_base: int = k / 24
 		var cz := int(col_base) % 16384 - 4096

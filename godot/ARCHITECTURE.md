@@ -101,6 +101,7 @@ quits.
 | `chunk_io.cpp` | column/slab blob encode+decode, region disk I/O |
 | `lighting.cpp` | **test-only reference**: the legacy `AweLighting` flood kernel (AC-0283 P4) |
 | `starlight.cpp` | the live light engine: single-queue sky+block propagation, per-section nibbles (`AweStarlight`) |
+| `random_tick.cpp` | the 20 Hz tick's per-tick random block pass (`AweRandomTick`, AC-0370): the splitmix64 hash (colhash + 24× per-sub-chunk mix64) + the `random_tick_map` bookkeeping, ported from GDScript — bit-identical (int64 wrap + arithmetic `>>`; the `tick` arm recomputes every logged position with the GDScript `_rt_colhash`/`_rt_mix64` reference and gates `recompute_mismatch == 0`, now cross-lane). One synchronous main-thread call per fired tick; the map is C++ state, exposed on demand (`map_dict()`/`reset()` — the arm's scope check). The consumer hook is still a stub (no crops/leaves dispatch yet — leaf decay runs separately in GDScript) |
 
 Build and loading:
 - Built with SCons: `python3 -m SCons -C gdext platform=linux|windows target=template_release`

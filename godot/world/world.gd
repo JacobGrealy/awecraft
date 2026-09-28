@@ -434,7 +434,12 @@ var _tick_acc := 0.0
 var game_tick_samples: Array = []
 var fluid_tick_count := 0
 var random_tick_total := 0
-var random_tick_map := {}
+# AC-0370: the per-tick hash + random_tick_map bookkeeping moved to the native
+# lane (gdext/src/random_tick.cpp — AweRandomTick). The map is C++ state now —
+# the only reader is the harness `tick` arm (random_tick_map_dict() rebuilds
+# it on demand; random_tick_map_reset() clears it). random_tick_total stays a
+# plain int: the pass adds n*24 to it per tick (the per-position += 1 sum).
+var _random_tick: Variant = null
 var random_tick_log := false
 var random_tick_seq: Array = []
 var _rt_c1 := 0
@@ -3592,6 +3597,11 @@ func _ready() -> void:
 	# value copies — the engine dereferences no autoloads).
 	star = AweStarlight.new()
 	star.set_tables(Lighting._att, Lighting._glow)
+	# AC-0370: the native random-tick engine (gdext/src/random_tick.cpp) — the
+	# per-tick hash + random_tick_map bookkeeping (bit-identical to the old
+	# GDScript; the `tick` arm's recompute check is the cross-lane proof).
+	# MAIN-THREAD only (the 20 Hz tick); no worker dereferences it.
+	_random_tick = AweRandomTick.new()
 	_tm_ctx = ChunkScript.make_ctx()
 	_tm_ms_full = ChunkScript._merge_atlas()
 	_low_ms_snap_dirty = true  # AC-0236 part 2: the low emit snapshot is stale (new atlas)
@@ -12285,49 +12295,44 @@ func _tick_fluids_body() -> void:
 # band-0 diamond (Simulate 4 = 41 columns; band 1-3 / far 13-50 NEVER tick).
 # Deterministic: the chosen cell is a pure function of (world seed, tick
 # index, column, subchunk) via a splitmix64 chain, so two fresh runs
-# produce identical sequences. The consumer is a counter/hook — crops and
-# wheat do not exist in this codebase yet; future growth/redstone ticks
-# attach in _apply_random_tick (world cell = cx*16+lx, sub*16+ly, cz*16+lz).
+# produce identical sequences. AC-0370: the hash + random_tick_map
+# bookkeeping runs on the native lane (AweRandomTick.random_tick_pass —
+# bit-identical; the `tick` arm recomputes every logged position with the
+# GDScript reference below and gates recompute_mismatch == 0, so the check
+# is now cross-lane). The consumer is a counter/hook — crops and wheat do
+# not exist in this codebase yet; future growth/redstone ticks attach in
+# AweRandomTick (world cell = cx*16+lx, sub*16+ly, cz*16+lz).
 func _random_tick_pass(t: int) -> void:
-	var cols: Array = []
+	var cxa: PackedInt32Array = PackedInt32Array()
+	var cza: PackedInt32Array = PackedInt32Array()
 	for key in chunks:
 		var c: Node3D = chunks[key]
 		if int(c.face) > 1 or int(c.band) != 0 or c.data.is_empty():
 			continue
-		cols.append([int(c.cx), int(c.cz)])
-	if cols.is_empty():
+		cxa.append(int(c.cx))
+		cza.append(int(c.cz))
+	if cxa.is_empty():
 		return
-	var seq: PackedInt32Array = PackedInt32Array()
 	if random_tick_log:
+		# the harness log needs the DETERMINISTIC sorted order (the arm's
+		# window md5 is over sorted columns) — the old cols.sort() semantics.
+		var cols: Array = []
+		for i in cxa.size():
+			cols.append([int(cxa[i]), int(cza[i])])
 		cols.sort()
-	for col in cols:
-		var cx := int(col[0])
-		var cz := int(col[1])
-		var base: int = (cx + 4096) * 16384 + (cz + 4096)
-		var hcol: int = _rt_colhash(t, cx, cz)
-		for sub in SUBCHUNKS_PER_COLUMN:
-			var h := _rt_mix64(hcol ^ (sub * 0x9E3779B9))
-			var lx := h & 15
-			var ly := (h >> 4) & 15
-			var lz := (h >> 8) & 15
-			_apply_random_tick(base, sub, lx, ly, lz, seq)
+		cxa = PackedInt32Array()
+		cza = PackedInt32Array()
+		for col in cols:
+			cxa.append(int(col[0]))
+			cza.append(int(col[1]))
+	var seq: PackedInt32Array = _random_tick.random_tick_pass(t, Game.world_seed, cxa, cza, random_tick_log)
+	random_tick_total += cxa.size() * SUBCHUNKS_PER_COLUMN
 	if random_tick_log:
 		random_tick_seq.append(seq)
 
-func _apply_random_tick(base: int, sub: int, lx: int, ly: int, lz: int, seq: PackedInt32Array) -> void:
-	random_tick_total += 1
-	var sk: int = base * 24 + sub
-	random_tick_map[sk] = int(random_tick_map.get(sk, 0)) + 1
-	if random_tick_log:
-		seq.append(base)
-		seq.append(sub)
-		seq.append(lx)
-		seq.append(ly)
-		seq.append(lz)
-	# consumer hook: base encodes the column ((cx+4096)*16384+(cz+4096));
-	# decode cz = base % 16384 - 4096, cx = (base - (cz+4096)) / 16384 - 4096;
-	# world cell (cx*16+lx, sub*16+ly, cz*16+lz)
-
+# AC-0370: the GDScript reference for the native lane's mix64 / colhash —
+# the `tick` arm's recompute check runs THESE against AweRandomTick's logged
+# positions (recompute_mismatch == 0 is the cross-lane bit-identity gate).
 func _rt_mix64(x: int) -> int:
 	x = x + _rt_c1
 	x = ((x ^ (x >> 30)) * _rt_c2)
@@ -12340,6 +12345,14 @@ func _rt_colhash(t: int, cx: int, cz: int) -> int:
 	h = _rt_mix64(h ^ (cx * 0x85EBCA6B))
 	h = _rt_mix64(h ^ (cz * 0xC2B2AE35))
 	return h
+
+# AC-0370: the random_tick_map view over the native lane (the harness `tick`
+# arm's scope check reads it; the game itself never reads the map).
+func random_tick_map_dict() -> Dictionary:
+	return _random_tick.map_dict()
+
+func random_tick_map_reset() -> void:
+	_random_tick.reset()
 
 # AC-0158: Bedrock region contracts (pure predicates — feature work
 # deferred). in_mob_spawn_region = circle 24-44 (squared distance in the
