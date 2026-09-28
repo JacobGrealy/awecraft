@@ -2986,11 +2986,26 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 							&& flat[(size_t)(dn << 8) | base] != B_WATER
 							&& flat[(size_t)(dn << 8) | base] != B_LAVA;
 					// Stalactite — from the ceiling (its level must be drip).
+					// AC-0375: a run that crosses the water surface (an
+					// open-sky ocean column, or a submarine cave opening
+					// into the sea) caps the spire strictly BELOW the
+					// surface - the vanilla speleothem rule (a column
+					// never pokes through the ceiling, and the water
+					// surface is the ceiling of an open run). The run's
+					// cells at or below the surface are the AC-0342
+					// water fill, so the cap removes exactly the cells
+					// that would stand above the intact sea surface;
+					// spires in cave air entirely below the surface are
+					// untouched (h naturally stays under the cap).
+					bool crosses_sea = a <= sea && sea <= b
+							&& flat[(size_t)(sea << 8) | base] == B_WATER;
 					if (ceil_solid && bio[up >> 3] == 2
 							&& hash3i(x, a, z, seed + 330) < 0.35) {
 						int h = 2 + (int)(hash2i(x, z, seed + 332) * 5.0); // 2..6
 						if (h > len)
 							h = len;
+						if (crosses_sea && h > sea - a)
+							h = sea - a;
 						for (int yy = a; yy < a + h; yy++) {
 							if (flat[(size_t)(yy << 8) | base] == 0) {
 								flat[(size_t)(yy << 8) | base] = B_DRIPSTONE;

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0375 — results (builder)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.find{background:#fff3e0;border-left:4px solid #e07b00;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.ok{background:#eef7ee;border-left:4px solid #2e8b57;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0375 — results (builder)</h1>
+<p class="meta">Tree at start: <code>6c86fd7</code> (registry: AC-0375 filed; staged <code>.so</code> already current against HEAD — verified by timestamp). One file changed: <code>gdext/src/gen.cpp</code> (the drip pass). Harness doc re-rendered. All logs in <code>.scratch/AC-0375-gates/</code>. Measure-first: the <code>oceansurface</code> arm was run across several seeds <b>before</b> touching code.</p>
+
+<div class="find"><b>VERDICT: the spires are a GENERAL rate, not a seed-44 artifact — 5.5–33% of ocean columns carry dripstone standing 1–5 blocks above the intact sea surface, on every ocean seed measured. The anchor is the drip pass's floor-anchored speleothem (<code>gen_flat()</code>, AC-0292), which grows 2–6 cells from the seafloor into the air/water run; in an open-sky ocean column that run extends into open air, so every air cell it can reach sits ≥ 127, above the intact water surface. Fixed by the vanilla speleothem rule — <b>do not place above the sea</b> (a spire never pokes through its ceiling; the water surface is the ceiling of an open run): a <code>crosses_sea</code> guard caps the spire strictly below the surface. 472 cells removed in the seed-44 11×11 window, all above sea in ocean columns; nothing below the surface, in caves, or in water moved. genhash 25/25 unchanged (the 5×5 window is 100% land — no rebase needed); the water contracts and the AC-0292/AC-0291 censuses hold; all standing gates green (one pre-existing battery red, unchanged).</div>
+
+<h2>1. Rate first — is 194 a seed-44 artifact?</h2>
+<p><b>No.</b> The permanent <code>oceansurface</code> arm (pure generation, no live world) on the pre-fix tree, seeds and windows overridable via <code>AWECRAFT_SEED</code>/<code>AWECRAFT_OCEAN_HALF</code>:</p>
+<table>
+<tr><th>window / seed</th><th>ocean cols</th><th>capped_solid_above (pre)</th><th>rate</th><th>capped (post)</th><th>surface_ok pre → post</th></tr>
+<tr><td>11×11 / 44</td><td>1,081</td><td>194</td><td>17.9%</td><td><b>0</b></td><td>887 → 1,081</td></tr>
+<tr><td>11×11 / 99</td><td>627</td><td>209</td><td>33.3%</td><td><b>0</b></td><td>418 → 627</td></tr>
+<tr><td>25×25 / 44</td><td>3,029</td><td>580</td><td>19.1%</td><td><b>0</b></td><td>2,449 → 3,029</td></tr>
+<tr><td>25×25 / 7</td><td>2,474</td><td>161</td><td>6.5%</td><td><b>0</b></td><td>2,313 → 2,474</td></tr>
+<tr><td>25×25 / 99</td><td>2,751</td><td>242</td><td>8.8%</td><td><b>0</b></td><td>2,509 → 2,751</td></tr>
+<tr><td>25×25 / 2026 (ocean-dominant)</td><td>9,471</td><td>519</td><td>5.5%</td><td><b>0</b></td><td>8,952 → 9,471</td></tr>
+</table>
+<p>Every pre-fix number reproduces AC-0374's table byte-for-byte (tree consistency check). The 194 is the seed-44 value of a <b>general</b> rate: on a 25×25 window a player standing on any of these shorelines sees spires in roughly 1 in 6–18 ocean columns right at the waterline, on every ocean seed tried (seeds 1/1234/424242/31337 have no ocean at 11×11, as AC-0374 noted). This is exactly the "stone spikes standing out of the water" the user saw — the fix is worth making on rate alone.</p>
+<p class="note">Pre-existing, not touched by this fix: <code>land.open_wet_in_he_plus_1_to_sea</code> reads 1 (seed 99) and 9 (seed 2026) on the <i>pre-fix</i> tree — the AC-0342 sub-contract arm gate is red on those two non-standing seeds. Values are pre/post identical under this change (water is never written), so they are carried forward as pre-existing; the standing seed (44) reads 0 / ok=true both sides. (Seeds 1, 7, 2026, 31337 all-land at 11×11 — no ocean statistics there, same as AC-0374.)</p>
+
+<h2>2. Where the anchor was decided</h2>
+<p>The drip pass in <code>gdext/src/gen.cpp</code> <code>gen_flat()</code> (AC-0292): per column it walks the air/water runs <code>[a, b]</code> (<code>a</code> = bottom of the run, <code>b</code> = top). The two speleothem blocks carry swapped names in the comments, which matters for finding the culprit:</p>
+<ul>
+<li>The block commented <i>"Stalactite — from the ceiling"</i> is actually the <b>floor-anchored stalagmite</b>: <code>ceil_solid</code> tests the cell <i>below</i> the run (<code>a−1</code>, the floor) and places <code>h = 2 + floor(hash2i·5)</code> ∈ 2..6 cells at <code>a..a+h−1</code>, growing UP from the floor (only into air — water cells are skipped, which is what lets a spire keep the water at 126 and still stand at 127+).</li>
+<li>The block commented <i>"Stalagmite — from the floor"</i> is the ceiling-anchored stalactite: it grows DOWN from <code>b+1</code> into <code>b−h+1..b</code>. It can never stand above the water surface (it hangs from rock that is above the run) — no guard needed.</li>
+</ul>
+<p>In an open-sky ocean column (H &lt; 126) the run is <code>[he+1, top-of-slab]</code>: the AC-0342 water fill at <code>he+1..126</code> plus open air from 127 up — no ceiling. So the floor-anchored spire, anchored to the seafloor, has its air cells <i>only</i> at ≥ 127 and stands above the intact sea surface whenever it fires (35% hash) — AC-0374's column dump (stone 118–121, dirt 122–124, sand 125, water 126, dripstone 127–130) is exactly this shape. (AC-0374's phrasing "anchors to the SLAB-GENERATION top" refers to the run's top bound <code>b</code>; the placement itself is floor-anchored.)</p>
+
+<h2>3. The fix — option 1: do not place above the sea</h2>
+<p>The ticket offered two options; <b>carving the water around the spire was rejected</b>: it would replace sea-surface water cells with solid (breaking the <code>surface_ok_at_sea</code>/<code>flooded_to_sea</code> classification — the affected columns would become <code>water_below_only</code>), and it is anti-vanilla — vanilla speleothems are ceiling-capped (a stalagmite column never pokes through the air pocket's ceiling) and dripstone is not an open-water feature at all. The chosen rule:</p>
+<pre>// AC-0375: a run that crosses the water surface (an
+// open-sky ocean column, or a submarine cave opening
+// into the sea) caps the spire strictly BELOW the
+// surface - the vanilla speleothem rule (a column
+// never pokes through the ceiling, and the water
+// surface is the ceiling of an open run). The run's
+// cells at or below the surface are the AC-0342
+// water fill, so the cap removes exactly the cells
+// that would stand above the intact sea surface;
+// spires in cave air entirely below the surface are
+// untouched (h naturally stays under the cap).
+bool crosses_sea = a <= sea && sea <= b
+        && flat[(size_t)(sea << 8) | base] == B_WATER;
+...
+if (crosses_sea && h > sea - a)
+    h = sea - a;   // spire top ≤ sea−1</pre>
+<p>Consequences, by run shape: (a) open-sky ocean run — the spire's only air cells are ≥ 127, the cap leaves none, <b>no spire</b> (the water at 126 is never touched); (b) submarine cave run with air pockets below the surface — spires stay where they were, fully submerged (h naturally under the cap); (c) land caves / sealed underwater pockets — the run does not contain water at 126, guard inert. The cap is applied <i>after</i> the hash gate, so no hash was touched and no spire moved that was not above the sea.</p>
+
+<h2>4. The deliberate, counted delta (contents census — AC-0292 stays intact underground)</h2>
+<p>Measured with a <b>temp</b> census arm (<code>ac0375census</code>, pure generation + the process-wide P4/aquifer counters zeroed first; <b>removed at exit</b>, <code>harness.gd</code> pristine again — verified 0 references). Same window both sides, seed 44, 11×11:</p>
+<table>
+<tr><th>field</th><th>pre-fix</th><th>post-fix</th><th>Δ</th></tr>
+<tr><td>dripstone cells, total</td><td>13,918</td><td>13,446</td><td>−472</td></tr>
+<tr><td>dripstone <b>above sea in ocean columns</b> (the defect class)</td><td>472</td><td><b>0</b></td><td>−472 (the whole delta)</td></tr>
+<tr><td>dripstone below sea (underground)</td><td>9,484</td><td>9,484</td><td>0</td></tr>
+<tr><td>dripstone at sea level (land-cave cells)</td><td>86</td><td>86</td><td>0</td></tr>
+<tr><td>dripstone above sea in LAND caves</td><td>4,348</td><td>3,876</td><td>−472 (same cells, re-classified column)</td></tr>
+<tr><td>clay / deepslate / moss / sculk cells</td><td>142 / 1,808,824 / 32,208 / 0</td><td>142 / 1,808,824 / 32,208 / 0</td><td>0</td></tr>
+<tr><td>native p4 dripstone counter</td><td>13,931</td><td>13,459</td><td>−472</td></tr>
+<tr><td>native aquifer: water / lava / stones / lava_layer / fl8</td><td>24,149 / 412 / 3,606 / 513 / 13</td><td>24,149 / 412 / 3,606 / 513 / 13</td><td><b>field-identical (AC-0291)</b></td></tr>
+</table>
+<div class="ok"><b>AC-0292 intact underground:</b> 13,446 dripstone cells remain in the window (9,484 of them below the sea surface), deepslate/sculk/moss/clay byte-identical, aquifer census field-identical — the feature is present, just no longer standing in the sea. The placement delta is exactly the 472 cells the census counted above sea in ocean columns: <b>deliberate and counted</b>.</div>
+
+<h2>5. genhash — no rebase (and why that is correct)</h2>
+<p><b>25/25 byte-identical to the AC-0367 reference set</b> (standalone arm <i>and</i> the genhash in the battery), GENMS 124. That is not a false negative: the 5×5 genhash window (chunks −2..2) is <b>100% land on seed 44</b> — the <code>oceansurface</code> arm at <code>half=2</code> on the exact window reports 6,400 land cols, <b>0 ocean cols</b>, open_wet 0 — and the guard fires only on runs containing water at 126, of which the window has none. The 472 moved cells live in the AC-0374 11×11 window (chunks −5..5), outside the genhash window. Rebase cost: 0. H does not move: <code>farab h_mismatch 0</code>, <code>slab_cmp</code> 1080/1080, <code>mat_surf_diff</code> 0 (the report-only <code>mat_pierce</code> deviation reads 193/2 vs the stale 1218/33 note — that note predates the AC-0367 deep re-carve; gated fields are green).</p>
+
+<h2>6. Water contracts (both sides, all 6 seed/window runs)</h2>
+<table>
+<tr><th>run</th><th>ocean.dry_zero_water</th><th>land.open_wet</th><th>water cells (pre → post)</th><th>max_water_y</th><th>he&lt;H</th></tr>
+<tr><td>11×11 / 44 (standing seed)</td><td>0 → 0</td><td>0 → 0</td><td>4,355 → 4,355</td><td>126</td><td>0</td></tr>
+<tr><td>11×11 / 99</td><td>0 → 0</td><td>1 → 1 (pre-existing)</td><td>2,307 → 2,307</td><td>126</td><td>0</td></tr>
+<tr><td>25×25 / 44</td><td>0 → 0</td><td>0 → 0</td><td>15,380 → 15,380</td><td>126</td><td>376</td></tr>
+<tr><td>25×25 / 7</td><td>0 → 0</td><td>0 → 0</td><td>16,582 → 16,582</td><td>126</td><td>0</td></tr>
+<tr><td>25×25 / 99</td><td>0 → 0</td><td>1 → 1 (pre-existing)</td><td>15,782 → 15,782</td><td>126</td><td>436</td></tr>
+<tr><td>25×25 / 2026</td><td>0 → 0</td><td>9 → 9 (pre-existing)</td><td>74,324 → 74,324</td><td>126</td><td>540</td></tr>
+</table>
+<p>Both gates of the <code>oceansurface</code> arm stay green on the standing seed (<code>ok:true</code>); <code>flooded_to_sea</code> rises to the full ocean count (e.g. 887 → 1,081 at 44/11×11; seed 2026 8,838 → 9,357, +519 = exactly its capped count), i.e. every ocean column now has an intact, fully flooded sea surface. The fix writes only <i>air</i> → (removed) dripstone; water cells are byte-identical by construction and by measurement.</p>
+
+<h2>7. Gates (all on the final tree; logs in <code>.scratch/AC-0375-gates/</code>)</h2>
+<table>
+<tr><th>gate</th><th>result</th></tr>
+<tr><td>G0</td><td>rc 0, <b>0 SCRIPT ERROR</b> — pre-change, post-change, and final tree (after temp-arm removal) — <code>G0_before.log</code>/<code>G0_after.log</code>/<code>G0_final3.log</code></td></tr>
+<tr><td>genhash</td><td><b>25/25 unchanged</b> vs the AC-0367 reference (standalone + battery genhash) — no rebase, §5</td></tr>
+<tr><td>farab</td><td><b>h_mismatch 0</b>, slab_cmp 1080/1080 (4×4 and 8×8), mat_surf_diff 0, water 4/5/20, ok — H does not move</td></tr>
+<tr><td>AC-0342 + oceansurface contracts</td><td>dry_zero_water <b>0</b> and land open_wet <b>0</b> on the standing seed (44); all 6 runs pre/post identical, §6</td></tr>
+<tr><td>aquifer census (AC-0291)</td><td><b>field-identical</b> pre/post (water 24,149 / lava 412 / stones 3,606 / lava_layer 513 / fl8 13) + water cells identical in all 6 arm runs</td></tr>
+<tr><td>AC-0292 contents census</td><td>dripstone <b>13,446</b> cells in the window (9,484 below sea), clay/deepslate/moss identical, p4 counter −472 exactly, §4</td></tr>
+<tr><td>ladder</td><td><b>20/20</b> band-a, band-b 155 / band-c 94 (the AC-0374 known-stable values), ok true</td></tr>
+<tr><td>meshprobe</td><td>match_rate <b>1.0</b>, ok</td></tr>
+<tr><td>halo</td><td>a/b/c all ok, 0 mismatches, b1 20/20</td></tr>
+<tr><td>lightstate</td><td><b>census 0/0</b>, 20/20 chunks leaks 0, wash false, arr_diff_cells 1 (the AC-0361 re-baselined value)</td></tr>
+<tr><td>r16</td><td>ok; <b>far_holes 0/0 both bands</b> (far0 0 / far1 0), built_all true, section_first_ok true</td></tr>
+<tr><td>boundary r4</td><td>ok in band: 20/20 crossings, p95 <b>42 ms</b> (band 39–42), marker_ok, resident 103, staged_dropped 1,967 ≤ 2,500, col_deferred_in_footprint 0</td></tr>
+<tr><td>battery (7 modes, one process, 16 GB cap)</td><td>all 7 modes ran (player/interact/light/fluids/buckets/genhash/settings). Single red: <code>settings ms_clamp</code> (ceil_render/default_8/floor_sim5) — <b>PRE-EXISTING</b>, byte-identical signature in AC-0367/AC-0370/AC-0371; genhash inside the battery 25/25</td></tr>
+<tr><td>native build + stage</td><td>Linux <code>.so</code> + Windows <code>.dll</code> (MinGW cross) rebuilt with the fix and re-staged to <code>godot/bin/</code> — the product is Windows-only. The full <code>AweCraft.exe</code> export + 8080 serve (<code>./build_windows.sh</code>) is the coordinator's heavy-gate job</td></tr>
+<tr><td>harness doc</td><td><code>harness_data.yaml</code> updated (genhash note + oceansurface row + standing-value block), <code>--render</code> + <code>--check</code> in sync</td></tr>
+<tr><td>pristine</td><td>temp census arm in/out in this task — <code>harness.gd</code> back to 0 references; no renders (llvmpipe degraded), no R50, no <code>load</code> arm, no commits</td></tr>
+</table>
+
+<h2>8. Notes for closeout</h2>
+<ol>
+<li>No <code>ARCHITECTURE.md</code> change: a placement-rule fix inside the existing drip pass — no new subsystem, lane, format or convention.</li>
+<li>The swapped block comments in the drip pass ("Stalactite"/"Stalagmite") are misleading (documented in §2); worth a one-line doc fix in a follow-up if the coordinator wants it.</li>
+<li>Pre-existing, carried forward (not introduced, not fixed here): <code>land.open_wet</code> 1 @ seed 99 and 9 @ seed 2026 (the AC-0342 sub-contract is red on those non-standing seeds on the pre-fix tree too — see §1 note), and the battery <code>settings ms_clamp</code> red (since at least AC-0367).</li>
+<li>SCons was not on PATH on this box; installed to <code>.scratch/sconsinst</code> (workspace-local) — builds ran as <code>PYTHONPATH=.scratch/sconsinst python3 -m SCons -C gdext …</code>.</li>
+</ol>
+
+<p class="note">Deliverables: <code>tasks/AC-0375/AC-0375-results.html</code> (this page); the fix in <code>gdext/src/gen.cpp</code> (drip pass, +17/−1 lines); staged <code>godot/bin/libchunkio.so</code> + <code>godot/bin/libchunkio.windows.template_release.x86_64.dll</code>; <code>tasks/harness_data.yaml</code> + re-rendered <code>godot/HARNESS.md</code>. No commits (closeout is the coordinator's). Ticket left <code>in-progress</code> for the coordinator.</p>
+</body></html>
