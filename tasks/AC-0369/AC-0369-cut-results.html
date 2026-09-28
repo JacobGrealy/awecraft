@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="utf-8">
+<head>
+<meta charset="utf-8">
+<title>AC-0369 — the CUT step: T3 snap_rings cache + T4 dead _eff_for kept, T1/T2 pick lists reverted (r16 far-lane gate)</title>
+<style>
+body{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;max-width:110em;margin:1.5em auto;padding:0 1em;color:#1a1a1a;line-height:1.45}
+h1{font-size:1.5em;border-bottom:3px solid #2563eb;padding-bottom:.3em}
+h2{font-size:1.2em;margin-top:1.8em;color:#1e40af;border-bottom:1px solid #cbd5e1;padding-bottom:.2em}
+h3{font-size:1.05em;margin-top:1.2em;color:#334155}
+table{border-collapse:collapse;margin:1em 0;font-size:13px}
+th,td{border:1px solid #cbd5e1;padding:.35em .6em;text-align:left;vertical-align:top}
+th{background:#eff6ff}
+.ok{background:#dcfce7}.warn{background:#fef9c3}.bad{background:#fee2e2}
+code,pre{background:#f1f5f9;padding:.1em .3em;border-radius:3px}
+pre{padding:.8em;overflow-x:auto;font-size:12px;line-height:1.35}
+.note{background:#eff6ff;border-left:4px solid #2563eb;padding:.6em 1em;margin:1em 0}
+.find{background:#fefce8;border-left:4px solid #eab308;padding:.6em 1em;margin:1em 0}
+.revert{background:#fee2e2;border-left:4px solid #dc2626;padding:.6em 1em;margin:1em 0}
+</style>
+</head>
+<body>
+
+<h1>AC-0369 — the bounded IMPLEMENTATION step: cutting the per-FRAME pick machinery</h1>
+<p><b>Role:</b> bounded implementation (no TASKS.yaml edit, no renders, no R50, no <code>load</code> arm, no commits).
+Tree at run start: <code>292e640</code> (world code identical to the measurement tree <code>bcdf045</code>, so the
+measurement's numbers are the same-tree baseline). Seed <code>1</code> for the walks. Knobs per the fence:
+<code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=24 AWECRAFT_WALK=10 AWECRAFT_TICKTIME=1</code>,
+<code>ulimit -v 8388608</code>, one godot at a time.</p>
+
+<div class="note"><b>FINAL VERDICT.</b>
+<b>T3</b> (per-column <code>snap_rings</code> cache) and <b>T4</b> (drop the discarded <code>_eff_for</code> on the
+star path) are <b>KEPT</b> — both move their numbers on the same instrument and all standing gates are green on
+the final tree. <b>T1</b> (incremental build-lane list) and <b>T2</b> (incremental data-lane list) were
+implemented and measured a real win (list 5.39 → 0.44 ms/frame; <code>g_pick</code> 2.8 → 0.01 ms/frame) but they
+<b>regressed the r16 arm</b> (<code>far_holes</code> 0 → 7–10, both bands, stable across runs; pristine 0/0).
+The regression was exhaustively diagnosed (membership, pick order, window, probe staleness, forced rebuilds) and
+cannot be fixed without reintroducing the per-defer rebuild that T1 removes — so <b>T1/T2 are REVERTED</b> per the
+green-gate constraint. Final tree = <code>292e640</code> + T3 + T4 only: <code>world.gd</code> +66/−20,
+<code>chunk.gd</code> untouched.</div>
+
+<h2>0. The map (from <code>AC-0369-results.html</code> — not re-derived)</h2>
+<ul>
+<li>per-unit dispatch is 0.23–0.40 ms — <b>not</b> the problem. The per-FRAME overhead is.</li>
+<li>steady-list clear+rebuild+sort: <b>5.4 ms/frame avg, up to 10 ms</b> (44% of pick time; 3,556 ms over the walk).</li>
+<li><code>_pick_data_cached</code>: same shape, <b>1,842 ms total, 2.8 ms/frame</b> (4.8 late).</li>
+<li><code>snap_rings</code>: 8 calls per slab, <b>24× more than necessary</b> (inputs are per-COLUMN), ~1–1.8 ms/column.</li>
+<li><code>_eff_for</code>: 0.009 ms/unit, <b>result discarded</b> on the star path.</li>
+</ul>
+
+<h2>1. Findings from the code (grep-only, functions involved)</h2>
+<h3>1.1 Why the steady list rebuilds every defer frame (world.gd 8162–8270)</h3>
+<p><code>steady_list</code> is a <b>per-frame local</b> of <code>_drain_build_queue</code>. On every defer frame the first
+defer re-runs <code>_collect_pool(true, false, maxb, false)</code> (up to <code>PICK_POOL_CAP</code>=512 entries: dict-get +
+chunk-get + <code>_lod_tier_of</code> + <code>_build_ready</code> (8 neighbour chunk-gets) + far pending probe) +
+<code>_grid_score</code> per admitted entry + <code>sort_custom</code>. The pick cache (<code>_pool_ver</code>-keyed) protects the
+TOP pick only — the steady list never consults it. That is the 5.4 ms/frame.</p>
+<h3>1.2 What actually moves the list's contents (the event census)</h3>
+<table>
+<tr><th>event</th><th>site(s)</th><th>effect on the build list</th></tr>
+<tr><td>data lands (TG / sync / disk)</td><td>5833 / 5417 / 10893</td><td>one column becomes (re-)admitted; its 8 neighbours' <code>_build_ready</code> gate can only turn ON (data lands, never leaves, within a residency)</td></tr>
+<tr><td>entry enters the queue</td><td>5337 (<code>_enqueue_build</code>)</td><td>one candidate added (build if data, else data lane)</td></tr>
+<tr><td>data→build convert</td><td>5227</td><td>entry becomes eligible for the build lane</td></tr>
+<tr><td>entry leaves the queue (remove / drop / evict / strip)</td><td>8481, 8500, 6684, 8560, 9520</td><td>one slot removed</td></tr>
+<tr><td>TM high slab lands (the entry STAYS queued)</td><td>6422 (mat), 6512 (hslab), 6616 (full)</td><td>one slot's <code>_grid_score</code> (layer rank) moves</td></tr>
+<tr><td>low-lane state move (far columns' pending)</td><td>the <code>_low_probe_invalidate</code> sites (893, 2761, 2788, 2853, 2902, 2956, 2962, 9646, 9692, 9726)</td><td>a tier-2/3 slot's layer rank moves</td></tr>
+<tr><td>edit (set_local → data_gen++)</td><td>world.gd 10600</td><td>the edited column's pending resets → score moves</td></tr>
+<tr><td>score-domain move (center cross, sim radius, medium/low start, render radius, drain window, recenter re-bucket)</td><td>9765–9770, 854, 1791, 7996, 10488</td><td>ALL taxi scores change → full rebuild (rare: a column cross ~1–2/s, recenter rarer)</td></tr>
+</table>
+<p>Consequence: <b>every list change is either a single-entry event or a domain move</b>. A single-entry event
+costs a binary insert / remove (µs at ≤512–1,300 slots); a domain move costs one full rebuild (the exact
+pre-change scan). This is the AC-0356 shape: the per-FRAME main-thread cost is removed wholesale and replaced
+by per-CHANGE deltas.</p>
+<h3>1.3 Why <code>_pick_data_cached</code> rescans every frame (world.gd 7786–7833)</h3>
+<p>Its cache key is <code>_pool_key(maxb) + tg_inflight.size() + io_inflight.size()</code>. The TG pool churns
+(enqueue/land) every frame in the walk regime, so the key misses every frame → full <code>_collect_pool(false)</code>
+rescan + rescore. The data-lane score is <code>taxi × 10000</code> ONLY (no-data chunks have no pending → layer 0) —
+a pure function of the domain. So the data list needs membership events (queue add / data land / removal) and
+domain rebuilds — the in-flight dedup set is a skip-walk at pick time, not a key element.</p>
+<h3>1.4 The snap_rings inputs and the AC-0354 contract (world.gd 7293–7312, handoff 6295–6322)</h3>
+<p><code>mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep, nc.far_payload())</code> is a pure function of the
+neighbour chunk's state, which is pinned by <code>(col_gen, data_gen, fl_gen)</code> (edits bump <code>data_gen</code> —
+chunk.gd 648; landings bump <code>data_gen</code>+<code>fl_gen</code>; full regens bump <code>col_gen</code>;
+<code>gen_keep</code>/<code>far_payload</code> are set at those same landings). The handoff validates the entry's
+<code>nbs_stamps</code> (the 4 AXIS neighbours' epochs) against the LIVE neighbours — a mismatch drops + re-dispatches
+with a fresh snapshot. A cache keyed on the <b>all-8</b> neighbours' epochs (strictly more than the contract's
+axis set — a stale DIAGONAL ring is impossible, which today's per-slab re-snapshot also guarantees) and carrying
+the same axis-only <code>nbs_stamps</code> into the entry preserves the contract exactly: ring + stamps are captured
+atomically, verified against live state at dispatch, re-verified at handoff.</p>
+<h3>1.5 <code>_eff_for</code> is dead on the star path (world.gd 7532–7547, 7164–7357)</h3>
+<p><code>_build_unit_hslab</code> calls <code>_eff_for</code> unconditionally and passes the result to
+<code>_mesh_dispatch_hslab</code>, which <b>replaces</b> it with <code>star.slab_light_payload</code> whenever
+<code>star != null</code> (7334) and ignores it entirely on the band-A path (uses <code>_band_a_eff_for</code>).
+<code>_eff_for</code> itself is a pure cache lookup (its only side effect is the
+<code>perf_light_cache_hits</code> counter). With star on, the result is discarded on every dispatching path.
+Star is live in the headless harness (unconditional <code>AweStarlight.new()</code> in world <code>_ready</code>;
+the harness arms call <code>world.star.*</code> directly) — verified by a one-line probe
+(<code>star_null=false</code>, probe removed before closeout).</p>
+
+<h2>2. The changes (four targets, in measured-value order)</h2>
+<h3>T1 — incremental build-lane steady list (the 5.4 ms/frame) <span class="bad">REVERTED</span></h3>
+<div class="revert">Implemented (below), measured a real win (§5), then <b>REVERTED</b>: it regressed the r16 arm
+(<code>far_holes</code> 0 → 7–10, both bands; pristine 0/0). See the §4 log for the diagnosis chain and the
+revert decision.</div>
+<ul>
+<li><code>_steady_list</code> (sorted <code>[score, e, c]</code>) + <code>_steady_idx</code> (key→slot) became PERSISTENT
+members, maintained per the §1.2 event census: binary insert / remove on single-entry events;
+<code>_steady_ensure(maxb)</code> compares the score domain
+(<code>last_pcx, last_pcz, _player_slab(), band0_r, medium_start_r, low_start_r, render_radius</code>) and does one full
+rebuild (the exact pre-change scan) only when the domain moves.</li>
+<li>the drain's defer-frame walk re-checked each offered slot against live state (the stale-list guard the
+AC-0335 fix added stays; the chunk is re-fetched from <code>chunks</code>, strictly fresher than the pre-change
+rebuild's stored node) and skipped <code>steady_skip</code> — selection is the lowest-score valid, non-deferred
+candidate, same priority order.</li>
+<li>the TOP pick (<code>_pick_build_cached</code>, non-fb) walked the same list from the front with the same
+admission re-check — its pre-change <code>_collect_pool</code> rescan on every <code>_pool_ver</code> miss was
+replaced by a front-walk (usually 0–2 slots). The fb pass (include_fb) kept its own cached rescan (rare:
+only when the in-radius pool is empty).</li>
+</ul>
+<h3>T2 — incremental data-lane list (the 1,842 ms) <span class="bad">REVERTED</span></h3>
+<div class="revert">Reverted with T1 (same r16 gate, same root cause class — the incremental lists). The data
+list itself was never the measured r16 difference, but it shares the <code>_steady_*</code> machinery and the
+green-gate constraint governs the whole change set.</div>
+<h3>T3 — per-column <code>snap_rings</code> cache (the 24× recompute) <span class="ok">KEPT</span></h3>
+<p><code>_nbs_ring_cache: key → {rings, stamps(axis-only, into the entry), key8(all-8 epochs / missing
+marker)}</code> inside <code>_mesh_dispatch_hslab</code>'s main path. Dispatch verifies the cached all-8 epochs
+against the LIVE neighbours (8 × chunk-get + 3-int compare ≈ µs); a hit serves the captured rings + stamps
+atomically, a miss runs the exact pre-change snapshot loop and stores it (cap 256 columns, clear-on-full).
+The band-A path (one dispatch per column per residency) is left uncached and said so. The AC-0354 handoff
+validation is untouched and strictly MORE protected (diagonals now epoch-verified too — never weaker).</p>
+<h3>T4 — drop the discarded <code>_eff_for</code> (the 0.009 ms/unit) <span class="ok">KEPT</span></h3>
+<p><code>_build_unit_hslab</code>: <code>var eff = {} if star != null else _eff_for(c, cx, cz)</code>; the
+saved-light restore is gated to <code>star == null</code> (with star on the restored eff would be replaced by the
+payload anyway). The star-null path is byte-identical to before. Census counters <code>light_saved_restores</code> /
+<code>perf_light_cache_hits</code> drop on star-on runs (counters, not world state — §7).</p>
+
+<h2>3. Verification plan (the same instrument the measurement used)</h2>
+<ul>
+<li><b>Brackets re-added</b> (env-gated <code>AWECRAFT_WPSUB2=1</code>, removed before finish): <code>hi</code>
+(hslab units), <code>his_nbs</code> (the snap_rings block — pre-cut loop, post-cut cache block, same site),
+<code>his_eff</code>, <code>nbsh</code>/<code>nbsm</code>/<code>nbkey</code> (the T3 cache census), <code>g_pick</code>
+(the <code>_pick_build_cached</code> call) and <code>list_us</code>/<code>rbn</code> (the steady rebuild block) — one
+WPSUB line per 60 drain frames.</li>
+<li><b>ONE capped BEFORE walk</b> on the pristine tree + brackets (validates the re-added instrument against the
+measurement's 5.4 ms/frame — it reproduces it: 5.29 ms/frame, 498 rebuilds) and <b>ONE capped AFTER walk</b> on
+the final tree + brackets, same knobs, same seed, plus <code>AWECRAFT_PICKLOG=1</code> on both.</li>
+<li><b>Same-machine control:</b> because the box's state moved between the original measurement and the closeout
+runs (see the <code>g_pick</code> note in §5), the pristine tree was re-walked with the same brackets on the same
+machine hours apart — the T3/T4 deltas below are read against <b>that</b> control, not against the stale
+measurement.</li>
+<li><b>Pick-order verification:</b> the final tree's drain is the pre-cut drain <b>verbatim</b> (the git diff
+contains only T3/T4, neither of which touches the pick path), so the chosen sequence is identical by
+construction; the PICKLOG runs (§6) bound the run-to-run noise that would otherwise masquerade as a change.</li>
+<li><b>Gates</b> (all <code>ulimit -v 8388608</code>, one godot at a time, brackets OFF): G0 zero SCRIPT ERROR
+(before AND after AND on the pristine tree once brackets are removed); genhash 25/25 byte-identical to
+<code>.scratch/AC-0367-gates/genhash_after_r1.log</code> (the AC-0367 standing set); farab <code>h_mismatch</code> 0;
+ladder 20/20; meshprobe 1.0; halo green; lightstate 0/0; <b>r16 all sub-flags with <code>far_holes</code> 0
+(both bands, <code>--fixed-fps 600</code>)</b>; boundary r4 walk p95 in the standing 35–55 band
+(<code>staged_dropped</code> ≤ 2500); the battery as SEVEN single arms (player, interact, light, fluids,
+buckets, genhash, settings — the one-process battery needs 16 GB, the fence caps every run at 8 GB).</li>
+<li>If a change does not move its number: <b>revert it and say so</b> (per the fence). For T1/T2 the inverse
+applied: a change that moved its number but broke a standing gate was reverted and said so.</li>
+</ul>
+
+<h2>4. Execution log</h2>
+<ul>
+<li><span class="ok">code reading done (functions involved only); design fixed (§2); instrument re-add
+planned (§3).</span></li>
+<li><span class="ok">WPSUB bracket set re-added (env-gated <code>AWECRAFT_WPSUB2=1</code>, zero behaviour
+change), G0 clean. BEFORE anchor walk (pristine code + brackets, seed 1, R24/WALK=10/TICKTIME=1): RESULT
+<code>ok</code>, walk 10.04 s, p50 5 / p95 57 / max 263 ms, storm_n 103 (p99 83), wfc 271, staged_dropped 971,
+loads 510 / unloads 458, built 172/2401, crossing census 97×; the re-added instrument reproduced the
+measurement's <code>list_us</code> (3,556 ms / 5.39 ms/frame) and <code>g_pick</code> (1,842 ms / 2.8 ms/frame)
+field-for-field.</span></li>
+<li><span class="ok">T1–T4 implemented in <code>world.gd</code> (members + <code>_steady_*</code> census block +
+21 event hooks + drain walk + both picks + T3 ring cache + T4 eff skip). G0 clean on every intermediate
+state (g0_impl1–17, all 0 SCRIPT ERROR). The PICK-sequence diff caught a TIE-ORDER deviation (equal-score
+picks) — three root causes found and fixed: (1) <code>sort_custom</code> is not stable → the rebuild is a
+(score, scan-index) total order; (2) the recenter swaps <code>band_buckets</code> in one raw move AFTER
+<code>last_pcx</code> changed, so a domain-triggered rebuild ran against the OLD buckets → the swap now sets
+<code>_steady_stale = true</code>; (3) an event re-inject jumped an already-listed column to the front of its
+tie group → injects now skip already-present keys, and a data landing re-scores the landed column in place.
+The drain window was moved OUT of the score domain (it grows every few frames — a per-growth rebuild
+reproduced the pre-cut rebuild rate): the lists are window-LESS (the <code>PICK_POOL_CAP</code> 512 still
+applies) and the offer paths filter by the live window at offer time. After the fixes the deterministic
+phase matched the before walk pick-for-pick (42 identical picks, including every tie group of the boot data
+sweep).</span></li>
+<li><span class="ok">T1/T2 measured win (after7 walk): <code>list_us</code> 3,556 → 399 ms (5.39 → 0.44
+ms/frame; 28 rebuilds @ ~14 ms, domain moves only), <code>g_pick</code> 1,842 → 9.5 ms (2.8 → 0.011
+ms/frame), pick-iteration 0.488–2.283 → 0.154 µs/iter flat. Walk RESULT: p95 57→53, storm_n 103→74,
+wfc 271→51, built 172→183, loads/unloads identical.</span></li>
+<li><span class="ok">T3 kept (fence check): the ring cache hits 77–79% of main-path dispatches; the same-site
+<code>his_nbs</code> bracket falls 240 → 86 ms over the walk (51.1 → 18.6 µs/unit) against the same-machine
+pristine control. The per-unit walk reading is a normalization artifact (<code>hi_nbs</code> counts dispatch
+ATTEMPTS, retries included) — the frame-budget reading is the stable one.</span></li>
+<li><span class="bad">r16 regression found on the T1–T4 tree: <code>far_holes</code> 7 / 10 / 10 (three runs,
+both bands) vs pristine 0/0 (four runs); every other sub-flag green. Diagnosis chain (env-gated probes, each
+reverted): (a) T3 exonerated — a <code>NOCACHE3</code> gate disabling the cache hit left far_holes at 10;
+(b) membership PROVEN exact — a per-frame census (queued far columns the pre-cut filter would admit vs the
+list's tier-2/3 slots) matched at every sample; (c) the drain walk's re-check is line-identical to the
+pre-cut (verified against the pristine worktree); (d) the deficit is ~10,000 far dispatches concentrated in
+the build phase (pristine bursts 717+397 far/300 frames at t1–2 s; the T1 tree ~0 until frame 2400) while
+steady-phase far rates are EQUAL — a catch-up timing gap of ~7,800 frames that the arm's fixed-end census
+exposes; (e) the drain window was a red herring (forcing its growth left far_holes at 10); (f) forced
+periodic list rebuilds (every 30 <code>_steady_ensure</code> calls) cut far_holes 10 → 3 — the stale
+incremental list is a major factor but not the whole story; per-frame rebuilds time out (14 ms × every
+ensure cannot hold 600 fps). Conclusion: the pre-cut's per-defer rebuild keeps the far lane's candidate
+window fresh in a way the event-driven maintenance does not fully reproduce (the remaining 3 holes persist
+with a near-fresh list). The green-gate constraint is not negotiable — <b>T1/T2 REVERTED</b> (pristine drain
+restored verbatim; the <code>_steady_*</code> block, the 21 event hooks and the window-less-list changes
+removed).</span></li>
+<li><span class="ok">After the revert, r16 on the final (T3+T4) tree: <b>far_holes 0/0 both bands,
+<code>catch_up_ok</code> true</b> — run A (<code>low_emit_cpp</code> 44,864 vs pristine's 44,433), run B, and the
+battery's own r16 (third run, also 0/0). The far lane is back to the pre-cut's paydown exactly
+(±1% emit count), as expected for a verbatim drain.</span></li>
+<li><span class="ok">Final instrumented walk (final tree + brackets, seed 1) ×2, plus the same-machine
+pristine control walk: T3 <code>his_nbs</code> 240,094 → 86,445 / 78,180 µs (51.1 → 18.6 / 17.6 µs/unit,
+hit rate 76.8/78.1%, <code>nbkey</code> 23.5/21.6 ms); T4 <code>his_eff</code> 40,656 → 2,505 / 2,437 µs
+(8.65 → 0.54 µs/unit, 16×); <code>g_pick</code> 4,052,373 → 4,158,105 / 4,565,672 µs and
+<code>list_us</code> 3,489,755 → 3,397,171 / 3,478,353 µs — both UNCHANGED within run noise (the pick code is
+verbatim pre-cut; the original measurement's 1,842 ms / 3,556 ms are the same code on an earlier machine
+state — the control run is the valid before for <code>g_pick</code>/<code>list_us</code>). Walk RESULT
+(p95): 58 (pristine) → 56 / 55 (final); wfc 289 → 249 / 189; built 185 → 145 / 177 (run-to-run trajectory
+noise — the final-tree runs end at the same marker [16,145,8,1,3]).</span></li>
+<li><span class="ok">PICKLOG: before vs final-tree walk share a 3-pick prefix; a SAME-CODE pair (before vs the
+pristine control) also shares a 3-pick prefix — the early divergence is run-to-run thread noise, identical
+for same-code and T3/T4-code, and the multiset deltas (316/191) are the two runs' different walk trajectories
+(marker 139 vs 145), not a pick change. The final tree's pick path is byte-identical to the pre-cut (git
+diff: only T3/T4, neither touches it).</span></li>
+</ul>
+
+<h2>5. Final numbers (same instrument: <code>AWECRAFT_WPSUB2=1</code>, one capped R24 walk each,
+seed 1, WALK=10, TICKTIME=1, 660 frames each unless noted)</h2>
+<p>BEFORE = pristine tree + brackets. Two before readings exist: the <b>original measurement</b>
+(<code>walk_r24.log</code>, the measurement page's own run) and the <b>same-machine control</b>
+(<code>walk_r24_precut_now.log</code>, pristine re-walked hours apart with the same brackets — used for
+<code>g_pick</code>/<code>list_us</code>, which drifted with machine state: 1,842 → 4,052 µs×1000 between the
+two pristine runs while the pick code never changed). AFTER = final tree (pristine + T3 + T4) + brackets,
+runs <code>walk_r24_t34.log</code> / <code>walk_r24_t34b.log</code>.</p>
+<table>
+<tr><th>target</th><th>instrument</th><th>BEFORE (control)</th><th>AFTER (final tree)</th><th>moved?</th></tr>
+<tr><td>T3 <code>snap_rings</code> per column</td><td><code>his_nbs</code> (the 8-snap loop pre-cut, the cache block post-cut) + <code>nbsh/nbsm/nbkey</code></td>
+<td>240,094 µs total · 51.1 µs/unit (4,698 units)</td>
+<td>86,445 / 78,180 µs total · 18.6 / 17.6 µs/unit (4,644 / 4,447 units) · hit rate 76.8 / 78.1% · key build 23.5 / 21.6 ms</td>
+<td class="ok"><b>2.8× / 3.1×</b> (154 / 162 ms main-thread saved per walk); the original-measurement reading is the same 24×-collapse at 194,562 → 86,445 µs</td></tr>
+<tr><td>T4 discarded <code>_eff_for</code> on star</td><td><code>his_eff</code></td>
+<td>40,656 µs total · 8.65 µs/unit</td>
+<td>2,505 / 2,437 µs total · 0.54 µs/unit (the residual is the <code>star == null</code> guard + the bracket itself)</td>
+<td class="ok"><b>16×</b> (38 ms saved per walk; original-measurement reading 41,578 → 2,505 µs)</td></tr>
+<tr><td>T1 steady-list clear+rebuild+sort</td><td><code>list_us</code>/<code>rbn</code></td>
+<td>3,489,755 µs · 5.29 ms/frame · 498 rebuilds @ 7.0 ms</td>
+<td>3,397,171 / 3,478,353 µs · 5.15 / 5.14 ms/frame · 464 / 468 rebuilds @ 7.3 ms — <b>unchanged (T1 reverted)</b></td>
+<td class="warn">reverted — the pre-cut per-defer rebuild stays (it is the r16 far-lane's freshness source, §4)</td></tr>
+<tr><td>T2 <code>_pick_data_cached</code> rescan</td><td><code>g_pick</code></td>
+<td>4,052,373 µs total · 6.14 ms/frame</td>
+<td>4,158,105 / 4,565,672 µs total · 6.30 / 6.34 ms/frame — <b>unchanged within run noise (T2 reverted)</b></td>
+<td class="warn">reverted — same machine-state caveat as T1 (the original 1,842 µs×1000 is stale-box reading of the same code)</td></tr>
+</table>
+<p>Walk RESULT (same fields both sides): <b>p95 58 → 56 / 55 ms</b> (the standing r4 band is 35–55 — r24 is
+the measurement instrument, r4 is the gate, §8); max_ms 301 → 456 / 225 (whole-run max including the load
+phase — variance); storm_n 116 → 113 / 95; wfc 289 → 249 / 189; staged_dropped 987 → 975 / 1,008;
+loads/unloads identical across all three runs; marker [16,145,8,1,3] on both final-tree runs (the before
+runs ended at 139 — the trajectory noise, §6). The machine streamed a comparable world: built 185 → 145 /
+177, resident 1,419 → 1,437 / — (same order).</p>
+
+<h2>6. Pick-order verification (PICKLOG)</h2>
+<ul>
+<li>Instrument: the <code>PICK (b|fb|d) cx,cz slab</code> tuples, compared as sequences, <code>t=</code>/<code>s=</code> excluded.</li>
+<li>The final tree's drain is the pre-cut drain <b>verbatim</b> — the git diff vs the base tree contains only
+the T3 cache block and the T4 eff skip, and neither is on the pick path. The chosen sequence is therefore
+identical <b>by construction</b>; there is no list, no tie-group logic and no window handling left to
+deviate.</li>
+<li>The PICKLOG runs bound the noise floor: before vs final-tree = 3-pick common prefix; before vs the
+SAME-CODE pristine control = 3-pick common prefix. Same-code and T3/T4-code diverge identically in the first
+worker-landing window (intrinsic thread-race interleaving, established earlier: two same-tree after-runs
+diverged at pick 28 in the same b/d-interleaving way). The multiset delta (before 1,729 vs final 1,627 picks;
+316 / 191 not shared) is the different walk trajectories (markers 139 vs 145), not a pick difference — the
+world-state gates (§8) prove the change is world-neutral.</li>
+</ul>
+
+<h2>7. Deviations from the pre-cut (final tree — all accounted for)</h2>
+<ul>
+<li>The T3 cache aliases the captured rings/stamps dicts into dispatch entries (read-only downstream — the
+worker/handoff never mutate them; verified across genhash + the battery). The band-A mat path stays uncached
+(one dispatch per column). key = own + all-8 neighbour (col_gen, data_gen, fl_gen) epochs = a superset of the
+AC-0354 axis-stamp contract (never weaker); 256-column cap, clear-on-full (a full clear is always safe — a
+miss re-snapshots).</li>
+<li>Census counters move (not world state): <code>perf_light_cache_hits</code> 3,556 → 0 (T4 skips the
+<code>_eff_for</code> lookups that fed it — those were wasted hits whose result is discarded on the star
+path), and the same for <code>light_saved_restores</code> on star-on runs. Star-null behaviour is
+byte-identical (the restore stays on that path).</li>
+<li><code>g_pick</code>/<code>list_us</code> are machine-state-sensitive on this box (a pristine-to-pristine
+pair measured 1,842 vs 4,052 µs×1000 for identical code) — the same-machine control, not the stale
+measurement, is the valid before for those two fields; T3/T4 deltas are read against it and are unchanged
+there.</li>
+<li><code>max_ms</code>/<code>storm_walk_max_ms</code> is the whole-run max including the load phase — treat
+as variance, not a walk regression.</li>
+</ul>
+
+<h2>8. Gates (brackets OFF, <code>ulimit -v 8388608</code>, one godot at a time — all 15 on the final tree,
+<code>.scratch/AC-0369-gates/run_gates.sh</code>, rc=0 each)</h2>
+<table>
+<tr><th>gate</th><th>standing value</th><th>final tree</th><th>verdict</th></tr>
+<tr><td>G0 (parse)</td><td>0 SCRIPT ERROR</td><td>0 — <code>g0_final.log</code> on the bracket-removed final tree; also 0 on every intermediate state (g0_impl1–17, g0_t34, g0_t34b, g0_precut_br)</td><td class="ok">ok</td></tr>
+<tr><td>genhash</td><td>25/25 byte-identical to <code>.scratch/AC-0367-gates/genhash_after_r1.log</code></td><td>25/25 IDENTICAL (standalone <code>genhash.log</code> + battery <code>bat_genhash.log</code> both diff-verified against the ref)</td><td class="ok">ok</td></tr>
+<tr><td>farab</td><td><code>h_mismatch</code> 0</td><td><code>h_mismatch:0</code>, <code>ok:true</code></td><td class="ok">ok</td></tr>
+<tr><td>ladder</td><td>20/20 band_a, <code>boundary_flip_ok</code>, <code>tier_mismatch</code> 0</td><td><code>band_a_ok:20</code>, <code>boundary_flip_ok:true</code>, <code>tier_mismatch:0</code>, <code>ok:true</code></td><td class="ok">ok</td></tr>
+<tr><td>meshprobe</td><td>match_rate 1.0</td><td><code>match_rate:1.0</code>, 32/32 chunks, all row/quad/vert matches, <code>ok:true</code></td><td class="ok">ok</td></tr>
+<tr><td>halo</td><td>ok</td><td><code>ok:true</code></td><td class="ok">ok</td></tr>
+<tr><td>lightstate</td><td>leaks 0</td><td><code>leaks:0</code> (all census bands)</td><td class="ok">ok</td></tr>
+<tr><td><b>r16</b> (the gate T1/T2 broke)</td><td><code>far_holes</code> 0, both bands; <code>catch_up_ok</code></td><td><b>far_holes 0/0, both bands — 3/3 runs</b> (run A <code>r16_t34a.log</code>, run B <code>r16_t34b.log</code>, battery <code>r16.log</code>); <code>catch_up_ok:true</code>; <code>low_emit_cpp</code> 44,864 vs pristine 44,433 (±1%) — vs <span class="bad">7/10/10 on the T1–T4 tree</span> and 0/0 on pristine (4 runs)</td><td class="ok">ok</td></tr>
+<tr><td>boundary r4</td><td>p50 ~13, p95 in 35–55, <code>staged_dropped</code> ≤ 2500</td><td>p50 13, <b>p95 40</b>, staged_dropped 2,048, <code>ok:true</code>, <code>marker_ok:true</code></td><td class="ok">ok</td></tr>
+<tr><td>battery (7 single arms, one-process mode)</td><td>match the same-mode AC-0367 one-process refs (<code>.scratch/AC-0367-gates/battery_r2.log</code>)</td><td>light / fluids / settings <b>byte-identical</b> to the refs (settings <code>ok:false</code> and fluids <code>sea_stable:false</code> are the refs' own values — pre-existing, not failures); player differs only in the wall-clock <code>time_before/time_after</code> fields (0.31573 vs 0.31573 — timing diagnostics); interact differs only in <code>mine_diag.frames</code> (36 vs 73 — frames-to-break timing; <code>prog_max</code>/<code>last_hit</code> identical); buckets differs in <code>inv_place n:1→2</code> / <code>inv_scoop n:1→0</code> / <code>scoop_before [5,8]→[0,0]</code> — the <b>pre-existing</b> n2/n0 delta already documented on the base tree before this ticket</td><td class="ok">ok (documented pre-existing deltas only)</td></tr>
+</table>
+
+</body>
+</html>

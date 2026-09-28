@@ -491,6 +491,13 @@ var _pool_b: Array = []    # [key, e, c, s, pe] last build-pass pick
 var _pool_fb: Array = []   # [key, e, c, s, pe] last forward-lead pick
 var _pool_data: Array = [] # [key, e, null, s, pe] last data-pass pick
 
+# AC-0369 CUT: the per-COLUMN neighbour-ring cache (the 8 snap_rings calls
+# are per-column inputs, re-run 24x per column before). key -> {rings,
+# stamps (the axis-only nbs_stamps into the entry), key8 (ALL 8 neighbours'
+# epochs — strictly MORE than the AC-0354 axis contract, so a stale
+# DIAGONAL ring is impossible; -1 marks a missing (patch-edge) neighbour)}.
+var _nbs_ring_cache: Dictionary = {}
+
 # AC-0233: the amortized queue-rewrite slice — entries re-stamped per drain
 # step (a full R50 7845-entry queue re-stamps in ~4 frames; R16 in one).
 const RESCORE_PER_FRAME := 2048
@@ -7290,26 +7297,55 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 		if _tm_debug:
 			print("TMESH HSLABCAPDROP %d,%d slab=%d inflight=%d" % [cx, cz, si, threadmesh_inflight.size()])
 		return false
+	# AC-0369 CUT T3: the per-column ring cache. The 8 snap_rings calls
+	# are a pure function of the 8 neighbours' (data, fl, gen_keep,
+	# far_payload) — pinned by each neighbour's (col_gen, data_gen,
+	# fl_gen) epoch (the AC-0354 stamp contract), plus the OWN column's
+	# stamp (a patch-edge ring derives from the own column's far side of
+	# the seam). The 24 per-slab re-snapshots per column become 1; a hit
+	# serves the atomically-captured rings + stamps (the entry's
+	# nbs_stamps stay the axis-only set the handoff validates — a hit
+	# requires ALL 8 epochs unchanged, strictly MORE than the axis
+	# contract, so a stale DIAGONAL ring is impossible; the band-A mat
+	# path stays uncached — one dispatch per column there).
+	var key8: Array = [int(c.col_gen), int(c.data_gen), int(c.fl_gen)]
+	for dx8 in range(-1, 2):
+		for dz8 in range(-1, 2):
+			if dx8 == 0 and dz8 == 0:
+				continue
+			var nc8 = chunks.get(_key(cx + dx8, cz + dz8))
+			if nc8 == null or nc8.data.is_empty():
+				key8.append(-1)
+			else:
+				key8.append([int(nc8.col_gen), int(nc8.data_gen), int(nc8.fl_gen)])
 	var nbs: Dictionary = {}
 	var nbs_stamps: Dictionary = {}  # AC-0354: the 4 axis neighbours' epochs (col_gen/data_gen/fl_gen) the rings were taken from — the handoff validates them against the LIVE neighbours (the own-column stamp says nothing about the neighbour state)
 	var mc: Variant = ChunkScript.mesh_cpp()
-	for dx in range(-1, 2):
-		for dz in range(-1, 2):
-			if (dx == 0) == (dz == 0):
-				continue
-			var nk := _key(cx + dx, cz + dz)
-			var nc = chunks.get(nk)
-			if nc == null or nc.data.is_empty():
-				# AC-0309 D2: past-patch neighbour = the far side of the
-				# seam (the live face ring or solid) — never a defer.
-				if _patch_edge_ring(int(cx), int(cz), dx, dz, nbs):
+	var hit8: Dictionary = _nbs_ring_cache.get(key, {})
+	if hit8.size() > 0 and hit8["key8"] == key8:
+		nbs = hit8["rings"]
+		nbs_stamps = hit8["stamps"]
+	else:
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				if (dx == 0) == (dz == 0):
 					continue
-				hslab_defer_nbs += 1
-				_hslab_last_defer = 3
-				return false  # AC-0263: defer — the neighbor lands, the entry retries
-			nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep, nc.far_payload())  # AC-0237: ungenerated slabs read as solid; AC-0284b: a far neighbor's ring is the skip-fill edge row
-			if dx == 0 or dz == 0:
-				nbs_stamps[nk] = [int(nc.col_gen), int(nc.data_gen), int(nc.fl_gen)]  # AC-0354: the axis neighbours the ring covers (the diagonal entries are unused for face decisions — not stamped)
+				var nk := _key(cx + dx, cz + dz)
+				var nc = chunks.get(nk)
+				if nc == null or nc.data.is_empty():
+					# AC-0309 D2: past-patch neighbour = the far side of the
+					# seam (the live face ring or solid) — never a defer.
+					if _patch_edge_ring(int(cx), int(cz), dx, dz, nbs):
+						continue
+					hslab_defer_nbs += 1
+					_hslab_last_defer = 3
+					return false  # AC-0263: defer — the neighbor lands, the entry retries (no cache store — nothing was captured)
+				nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep, nc.far_payload())  # AC-0237: ungenerated slabs read as solid; AC-0284b: a far neighbor's ring is the skip-fill edge row
+				if dx == 0 or dz == 0:
+					nbs_stamps[nk] = [int(nc.col_gen), int(nc.data_gen), int(nc.fl_gen)]  # AC-0354: the axis neighbours the ring covers (the diagonal entries are unused for face decisions — not stamped)
+		if _nbs_ring_cache.size() >= 256:
+			_nbs_ring_cache.clear()  # the cache is a speed aid — a full clear is always safe (a miss re-snapshots)
+		_nbs_ring_cache[key] = {"rings": nbs, "stamps": nbs_stamps, "key8": key8}
 	var y_lo := si * 16
 	var y_hi := (si + 1) * 16 - 1
 	var d_lo := maxi(0, y_lo - 1)
@@ -7531,10 +7567,20 @@ func _build_unit(c: Node3D, cx: int, cz: int) -> bool:
 # frame), false when a worker task owns the slab.
 func _build_unit_hslab(c: Node3D, cx: int, cz: int, si: int) -> bool:
 	var tb := Time.get_ticks_msec()
-	var eff := _eff_for(c, cx, cz)
-	if eff.is_empty() and not c.saved_light.is_empty():
-		eff = c.saved_light
-		light_saved_restores += 1
+	# AC-0369 CUT: with the star engine live (star != null) the eff
+	# lookup's result is ALWAYS discarded — the non-band-A dispatch
+	# replaces it with the settled star payload (or defers before the
+	# entry exists) and band A replaces it with the sky eff. Skip the
+	# lookup (and the saved_light restore it feeds) on that path; the
+	# star == null test arms keep the legacy behaviour verbatim.
+	var eff: Dictionary
+	if star != null:
+		eff = {}
+	else:
+		eff = _eff_for(c, cx, cz)
+		if eff.is_empty() and not c.saved_light.is_empty():
+			eff = c.saved_light
+			light_saved_restores += 1
 	var covered := _mesh_dispatch_hslab(c, cx, cz, si, eff)
 	var dt := Time.get_ticks_msec() - tb
 	last_build_us = dt * 1000
