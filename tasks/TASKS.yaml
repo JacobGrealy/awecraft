@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-28T08:11
+  updated_at: 2026-09-28T10:09
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0373
 - AC-0375
 - AC-0145
 - AC-0310
@@ -21257,11 +21256,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-28T02:29
-  updated_at: 2026-09-28T02:29
-  completed_at: null
+  updated_at: 2026-09-28T10:09
+  completed_at: 2026-09-28T10:09
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The random-tick pass no longer stutters the frame, but what is left of its cost
@@ -21304,7 +21303,35 @@ intake:
     target (52.5 ms of a 69.8 ms worst frame on my verification run) and is AC-0369''s successor work,
     so this is the secondary lever.
 
-    '
+
+
+    CLOSED - the residual AC-0370 left behind is gone, and the two tick tickets together have removed
+    the tick from the list of things that matter. COORDINATOR VERIFICATION on my own capped stage of commit
+    354776d (every arm rc 0, zero SCRIPT ERROR): the tick arm plus genhash 25/25 byte-identical in two
+    runs; farab h_mismatch 0; ladder 20/20; meshprobe 1.0; halo ok; lightstate 0/0; **r16 no reds with
+    far_holes 0/0 in both bands**; boundary r4 ok at 10/40; and the R24 walk inside every gated value
+    - crossing sweep p50 6.8 against the re-based <=10, crossing frame p95 50 against <=150, storm p99
+    117 against <=200; the battery complete with only the known AC-0330 settings red and wallshot''s render
+    timeout on this degraded-llvmpipe box. THE CUMULATIVE PICTURE IS THE POINT, and it is now visible
+    in a single number: the tick''s share of the worst captured frame has gone from 12.4% (AC-0365, before
+    any of this work) to 5.5 ms (AC-0370''s port) to **2.1 ms** in my own run of this build, while the
+    worst frame itself fell 77.5 -> 56.9 -> **49.6 ms** and DRAIN''s 32.3 ms share of it is now unambiguously
+    the thing to attack. Two tickets, two ports of the same reasoning - measure the split, then let the
+    split choose the fix - took a cost that was 98% of the MISC bucket down to a rounding error. THE MEASUREMENT
+    THAT CHOSE THIS ROUTE was almost comically decisive: each tick walked 1,402-1,504 resident chunks
+    and only about 40 of them (2.8%) could ever tick, and leaf_decay was non-empty on ZERO of 1,600 ticks
+    - so the scan was not merely inefficient, it was almost entirely wasted work, and the answer was an
+    index rather than a cheaper per-column test. THE REFINEMENT INSIDE THE FIX is the part worth generalising:
+    the first version invalidated the memo whenever anything changed, which moved the number but fired
+    roughly one rebuild per tick during the load storm, 75% of them from far-ring churn that cannot affect
+    the band-0 set - so the stamps were GATED on whether a change can actually move the set the scan cares
+    about. That is the same discipline as the blacklist in AC-0369''s revert: the cheap-looking version
+    works, and the correct version asks which changes actually matter. BEHAVIOUR IS UNTOUCHED and proven
+    by the strongest instrument this project has: AC-0370''s cross-lane oracle, with window_md5 byte-identical
+    over W=120 and recompute_mismatch 0 across all 118,080 positions, plus byte-identical fluids, trees,
+    leaves, fluidfall and fluidsettle RESULTS. One number moved the wrong way and is reported rather than
+    smoothed: frame p99 read 78 -> 90, a DRAIN-bound one-sample tail, which is exactly the kind of reading
+    that would be tempting to leave out of a summary.'
   comments: []
 - id: AC-0374
   title: carved-islets-dry-ocean-columns
