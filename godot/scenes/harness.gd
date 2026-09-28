@@ -727,6 +727,13 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
 			_fluidsettle_test()
 			return
+		if logic == "oceansurface":
+			# AC-0374: the standing ocean/land water classification census
+			# (the drypit window, pure generation — no live world, no
+			# settle). Gated fields: ocean.dry_zero_water == 0 (no
+			# dry-below-sea ocean column) and the AC-0342 land contract.
+			_oceansurface_test(seed_env)
+			return
 		if logic == "buckets":
 			world.collision_enabled = false
 			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
@@ -23873,6 +23880,126 @@ func _fluidsettle_test() -> void:
 		if not hard and quiet >= 3:
 			break
 	Debug.result({"ticks_to_settle": i, "quiet": quiet, "water_final": prev_w, "chunk_count": world.chunks.size()})
+	get_tree().quit()
+
+
+# AC-0374: the OCEAN/LAND WATER CLASSIFICATION standing census (oceansurface).
+# Pure generation — generate_flat(skip=0) + column_heights16 on the C++ full
+# path, no live world, no settle: deterministic, seed-pinned, fast.
+#
+# WHY IT EXISTS (the ticket's step 3): the ocean/land water split was a
+# MEASURED CLAIM in the AC-0291/AC-0342/AC-0371 results pages, not a standing
+# gated value — which is exactly why the carved-islet class (as filed in
+# AC-0374 from AC-0371's F2) could surface uncaught. This arm makes the
+# classification a checkable standing value on the drypit window (11x11
+# chunks, seed 44 — the window of the AC-0342/AC-0371 censuses).
+#
+# GATES (ok): ocean.dry_zero_water == 0 — no ocean lattice cell (H < SEA)
+# stands dry below sea (the carved-islet class: a column the carve dropped
+# below sea that never got its fill) — AND land.open_wet_in_he_plus_1_to_sea
+# == 0 (the AC-0342 hard sub-contract: no open water in a cave-dropped land
+# column, [he+1, SEA]). WATCH: ocean.capped_solid_above — water at sea with
+# a solid above it (the dripstone spires above sea, AC-0374 finding F-SPIRE;
+# 194 on the seed-44 window — filed separately, never gated).
+#
+# The solid set for he (the topmost terrain solid) is the AC-0342 drypit set
+# verbatim (grass/dirt/stone/sand/bedrock/snowgrass/ores/23/obsidian — logs,
+# leaves, fluids not solid), so the land contract value stays comparable to
+# the AC-0342 measurement. Env: AWECRAFT_SEED (default 44), AWECRAFT_OCEAN_HALF
+# (window half-size in chunks, default 5 = the drypit window; the 2026-09-28
+# multi-seed scan used 12).
+func _oceansurface_test(seed_env: String) -> void:
+	var seed := int(seed_env) if str(seed_env) != "" else 44
+	var SEA := Data.SEA
+	var HMAX := Data.HEIGHT
+	var half := int(OS.get_environment("AWECRAFT_OCEAN_HALF"))
+	if half <= 0 or half > 24:
+		half = 5
+	var G: Variant = WorldGen.gen_cpp()
+	var SLUT := PackedByteArray()
+	SLUT.resize(64)
+	for s in [1, 2, 3, 4, 11, 12, 14, 15, 16, 23, 25]:
+		SLUT[s] = 1
+	var t0 := Time.get_ticks_msec()
+	var res := {
+		"seed": seed, "half": half, "chunks": 0, "cols": 0, "sea": SEA,
+		"land": {"cols": 0, "open": 0, "open_wet_in_he_plus_1_to_sea": 0,
+			"water_cells": 0},
+		"ocean": {"cols": 0, "surface_ok_at_sea": 0, "flooded_to_sea": 0,
+			"dry_zero_water": 0, "capped_solid_above": 0, "water_below_only": 0,
+			"he_below_H": 0, "water_cells": 0, "max_water_y": -1},
+		"total_water": 0, "total_lava": 0,
+	}
+	var L: Dictionary = res["land"]
+	var O: Dictionary = res["ocean"]
+	for cx in range(-half, half + 1):
+		for cz in range(-half, half + 1):
+			res["chunks"] += 1
+			var flat: PackedByteArray = G.generate_flat(cx, cz, seed, HMAX, SEA, 0, [])
+			var hs: PackedByteArray = G.column_heights16(cx, cz, seed, HMAX)
+			for i in 256:
+				var H := int(hs[2 * i]) | (int(hs[2 * i + 1]) << 8)
+				res["cols"] += 1
+				var he := -1
+				var water := 0
+				var lava := 0
+				var maxw := -1
+				var y := 0
+				while y < HMAX:
+					var c0: int = flat[y * 256 + i]
+					if SLUT[c0] > 0:
+						he = y
+					if c0 == 5:
+						water += 1
+						if y > maxw:
+							maxw = y
+					elif c0 == 24:
+						lava += 1
+					y += 1
+				res["total_water"] += water
+				res["total_lava"] += lava
+				if H >= SEA:
+					L["cols"] += 1
+					L["water_cells"] += water
+					if he < SEA:
+						L["open"] += 1
+						var wet := false
+						for yy in range(he + 1, SEA + 1):
+							if int(flat[yy * 256 + i]) == 5:
+								wet = true
+								break
+						if wet:
+							L["open_wet_in_he_plus_1_to_sea"] += 1
+				else:
+					O["cols"] += 1
+					O["water_cells"] += water
+					if maxw > int(O["max_water_y"]):
+						O["max_water_y"] = maxw
+					if he < H:
+						O["he_below_H"] += 1
+					if water == 0:
+						O["dry_zero_water"] += 1
+					else:
+						var srow := SEA * 256 + i
+						if int(flat[srow]) == 5:
+							var above: int = int(flat[srow + 256])
+							if above == 0 or above == 7:
+								O["surface_ok_at_sea"] += 1
+								var full := true
+								for yy in range(he + 1, SEA + 1):
+									if int(flat[yy * 256 + i]) != 5:
+										full = false
+										break
+								if full:
+									O["flooded_to_sea"] += 1
+							else:
+								O["capped_solid_above"] += 1
+						else:
+							O["water_below_only"] += 1
+	res["ms"] = Time.get_ticks_msec() - t0
+	res["ok"] = int(res["ocean"]["dry_zero_water"]) == 0 \
+			and int(res["land"]["open_wet_in_he_plus_1_to_sea"]) == 0
+	Debug.result(res)
 	get_tree().quit()
 
 

@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0374 — results (builder)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.find{background:#fff3e0;border-left:4px solid #e07b00;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.ok{background:#eef7ee;border-left:4px solid #2e8b57;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0374 — results (builder)</h1>
+<p class="meta">Tree at start: <code>1992cc4</code> (post-AC-0371 closeout). No native changes (the permanent arm is GDScript-only) — no Windows DLL rebuild required. All logs in <code>.scratch/AC-0374-gates/</code>. Per the ticket: measure first, touch nothing until the measurement speaks.</p>
+
+<div class="find"><b>VERDICT (measure-first, plain): the pits do not exist on the current tree — and the fluid simulation cannot self-heal them either way, so step 2 was never triggered. The ticket's premise ("791 of 1,081 lattice-ocean columns are carved islets standing dry in the ocean") is not reproducible: a byte-verified census of the very window where that number was measured finds <b>all 1,081 ocean columns with a water surface at y=126</b> — 0 dry below sea. A multi-seed scan (~800k columns, including an ocean-dominant seed with 9,471 ocean columns) found 0 dry islets anywhere. The honest outcome this ticket anticipated — "a documentation fix plus an arm field rather than a generation change" — is exactly what landed, with the docs correction even stronger: the measured claim is <i>refuted</i>, and the permanent <code>oceansurface</code> arm now gates the classification instead of carrying it in a results page.</div>
+
+<h2>1. Step 1 — does the fluid simulation self-heal the pits?</h2>
+<p><b>Answer: the question is vacuous on this tree (there is nothing to heal), and by construction the sim could not heal such a column anyway.</b> Two independent proofs, then the measurement.</p>
+<h3>1.1 Mechanism proof (code)</h3>
+<ol>
+<li>Natural worldgen water is <b>stationary, fl=0</b> — the aquifer fill places block id 5 with no flow level (<code>gen.cpp</code> emit loop; the sparse scan in <code>world.gd _tick_fluids_body</code> only processes cells with <code>l != 0</code>).</li>
+<li><code>_tick_fluids_body</code> only processes chunks in <code>fluid_wet</code>, which is populated exclusively by <b>runtime edits</b> (<code>set_fluid</code> lvl&gt;0, <code>set_block</code> on a fluid id, <code>_wake_fluid_around</code> on a block break near water, saved-edit apply) — <b>never by worldgen build</b>. A freshly generated world has <code>fluid_wet = {}</code>, so <code>tick_fluids()</code> is a mathematical no-op.</li>
+<li>A dry-below-sea column has no adjacent flowing water cell at all — there is no fl&gt;0 donor anywhere in a fresh world. The sim has nothing to spread. <b>No worldgen defect in the ocean fill can be healed by the fluid sim; only a generation-side fix could.</b></li>
+</ol>
+<h3>1.2 Measurement (the <code>pitsettle</code> instrument, temp arm — removed at exit)</h3>
+<p>Built the 11×11-chunk seed-44 window (chunks −5..5, the exact AC-0342/AC-0371 census window) as FULL-path data (band0_r stretched to 12 so every window chunk is tier-0), verified it against the generator byte-for-byte, censused the ocean/land water classification, then settled the sim exactly the way the ticket names (tick <code>tick_fluids()</code> to 3 quiet ticks / <code>AWECRAFT_SETTLE_TICKS</code> cap) and re-censused. Logs <code>pitsettle_r1..r6.log</code>.</p>
+<ul>
+<li><b>Byte verification:</b> 119/121 chunks md5-identical to <code>generate_flat(skip=0)</code>; the 2 differing chunks differ only in 33/44 <i>non-water</i> cells (material/texture-class variance in the live path) with <b>identical water counts</b> (767/767, 324/324) and top water at 126 — the full-path data is what the census ran on.</li>
+<li><b>Settle census (before → after):</b> <code>fluid_wet</code> 0 → 0; 3 ticks to quiescence; <b>0 writes</b> (<code>_fp_writes</code> delta). The before/after censuses are field-identical — the sim moved nothing, as the mechanism predicts.</li>
+<li><b>Pre/post classification (this is the actual census the ticket asked for):</b> land 29,895 cols (open cave-dropped 110, <b>open water in [he+1, 126]: 0</b> — the AC-0342 sub-contract holds); ocean <b>1,081</b> cols: <b>surface_ok_at_sea 887, flooded_to_sea 887, dry_islets_zero_water 0</b>, water-at-sea-with-solid-above 194 (all capped — §3), water_below_only 0, he&lt;H 0 (no column's solid top carved below lattice H in this window). Total water 28,194, lava 925, max water y 144 — the AC-0371 census totals, reproduced exactly.</li>
+</ul>
+<div class="ok"><b>Self-heal answer:</b> 0 dry-below-sea columns before settling, 0 after; the sim wrote 0 cells and had 0 wet chunks. Nothing healed because nothing was dry — and a hypothetical dry column would never have healed (stationary fl=0 sources + the empty <code>fluid_wet</code> gate). <b>The generation-side gate is the only guard on this classification</b> — which is precisely why step 3 (the arm field) is the durable deliverable.</div>
+
+<h2>2. The "791" — not reproducible, with byte-level evidence</h2>
+<p>The number came from AC-0371's results page (F2): "791 of the 1,081 lattice-ocean columns are CARVED ISLETS… (measured: H=125, solid top 121–123, zero water); 290 at-sea-or-islet." Its arithmetic is <code>1,081 − 290</code>, i.e. the <b>complement</b> of an <code>ocean_at_sea</code> field. The byte-verified data refutes the per-column claim outright:</p>
+<ul>
+<li><b>Every one of the 1,081 ocean columns has water at y=126</b> (887 open-surface + 194 capped; <code>dry_zero_water = 0</code>, <code>water_below_only = 0</code>). "Zero water" describes no column in the window.</li>
+<li>The cited column shape ("H=125, solid top 121–123") matches <b>no column</b>: only 218 of 1,081 ocean columns even have H=125 (distribution 125:218, 124:171, 123:149, 122:129, 121:115, 120:104, 119:95, 118:100), and <b>he == H for all 1,081</b> — no column's topmost solid is carved below its lattice H in this window at all.</li>
+<li>The AC-0371 arm's own debug progression shows the field was still being tuned when the number shipped: <code>ocean_at_sea</code> 0 (v1, dense-H variant — ocean 2,947, open water 4,187!) → 74 (v2, lattice H) → 290 (final, <code>census_base3.log</code> in <code>.scratch/AC-0371-gates/</code>). 290 matches neither the water-at-sea count (1,081) nor any per-column subset of the verified data; the arm was removed at AC-0371 closeout, so the exact bug in that field is not recoverable — but the per-column water pass (run here) is the instrument it never did, and it found 0 dry.</li>
+<li>Its <i>aggregates</i> (land 29,895 / ocean 1,081 / water 28,194 / lava 925 / hidden 24,030 / max_w_y 144) all match the byte-verified census — the arm read the world correctly; only the derived per-column classification was unsound, and it was extrapolated into "791 dry islets" without a per-column water check.</li>
+</ul>
+<h3>2.1 The ticket's stated mechanism is also impossible in the current code</h3>
+<p>The ticket says "AC-0342 gates ocean fill on PRE-carve height, so a column the carve drops below sea receives no water." The actual rule (<code>gen.cpp</code> emit loop, the AC-0342 block):</p>
+<pre>bool solid = skip ? (y &lt;= he) : (solidf[y] != 0);
+...
+if (y &gt;= he + 1 &amp;&amp; y &lt;= sea &amp;&amp; H &lt; sea) {
+    cell = B_WATER;  // aquifer: ocean fill up to Sea 126, gated on pre-carve H
+}</pre>
+<p>The <b>gate</b> is <code>H &lt; sea</code> — the pre-carve <i>lattice</i> heightmap, a quantity the carve cannot change — and the <b>fill range</b> <code>[he+1, SEA]</code> starts at the <i>post-carve</i> topmost solid, so the carve can only <i>extend</i> the fill (flood a carved opening up to sea level — submarine caves open to the sea still flood, as the AC-0342 comment itself states), never shrink it. For an ocean column (H&lt;126) to stand dry, its post-carve top would need he ≥ 126 — solid at or above sea level inside an ocean lattice cell. The only pass that places terrain above H is the drip pass, and it leaves the water fill intact (the capped columns, §3) — so the mechanism as filed cannot produce an air column in the sea on this tree.</p>
+<h3>2.2 Multi-seed confirmation (pure generation, no live world)</h3>
+<p>The <code>pitsettle</code> arm's pure-gen census (<code>generate_flat</code> + <code>column_heights16</code>, skip=0) over <b>11×11 on 6 seeds</b> [44, 1, 7, 99, 1234, 424242] and <b>25×25 on 5 seeds</b> [44, 7, 99, 2026, 31337] — ~800,000 columns total, <code>pitsettle_r6.log</code>:</p>
+<table>
+<tr><th>window / seed</th><th>ocean cols</th><th>dry_zero_water</th><th>surface at 126</th><th>capped solid above</th><th>water below only</th><th>he &lt; H (carved below lattice)</th></tr>
+<tr><td>11×11 / 44</td><td>1,081</td><td><b>0</b></td><td>1,081</td><td>194</td><td>0</td><td>0</td></tr>
+<tr><td>11×11 / 1, 7, 1234, 424242</td><td>0 (all-land windows)</td><td><b>0</b></td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+<tr><td>11×11 / 99</td><td>627</td><td><b>0</b></td><td>627</td><td>209</td><td>0</td><td>0</td></tr>
+<tr><td>25×25 / 44</td><td>3,029</td><td><b>0</b></td><td>3,029</td><td>580</td><td>0</td><td>376</td></tr>
+<tr><td>25×25 / 7</td><td>2,474</td><td><b>0</b></td><td>2,474</td><td>161</td><td>0</td><td>0</td></tr>
+<tr><td>25×25 / 99</td><td>2,751</td><td><b>0</b></td><td>2,751</td><td>242</td><td>0</td><td>436</td></tr>
+<tr><td>25×25 / 2026 (ocean-dominant)</td><td>9,471</td><td><b>0</b></td><td>9,471</td><td>519</td><td>0</td><td>540</td></tr>
+<tr><td>25×25 / 31337</td><td>0 (all-land window)</td><td><b>0</b></td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+</table>
+<p>Zero dry-below-sea islets and zero no-surface columns anywhere measured. (he&lt;H in the wide windows = submarine cave openings below the lattice H — those columns still flood to sea level, the AC-0342 "submarine cave open to the sea" contract, and they are <i>wetter</i>, not drier.)</p>
+
+<h2>3. Finding F-SPIRE — dripstone spires standing in the sea (the one real visible artifact)</h2>
+<p>The 194 "capped" columns (seed-44 window; 209/seed-99; 580/25×25-44; 519/ocean-dominant) are a <b>real, visible artifact</b>: dripstone stalagmites rising 1–5 blocks <i>above</i> the intact water surface in ocean columns (column dump, e.g. (−21,76): stone 118–121, dirt 122–124, sand 125, <b>water 126</b>, dripstone 127–130, air above; cap histogram <code>{33: 194}</code> — every cap is dripstone, block 33). The sea surface itself is intact everywhere — these are rock spires, not holes. Mechanism (<code>gen.cpp</code> drip pass, AC-0292): a stalagmite grows 2–6 blocks from a solid floor into an air/water run whose <i>top of the generated slab</i> bounds the run — in an open-sky ocean column there is no ceiling, so the spire anchors 2–6 blocks below the slab-generation margin and pokes above sea whenever H ≈ 122+. <b>Out of scope for this ticket</b> (it is the drip pass's open-run handling, not the water classification) — recommend a follow-up ticket; the permanent arm carries the count as a watch field so it can be tracked without gating.</p>
+
+<h2>4. Step 2 — not triggered</h2>
+<p>The step-2 fix (re-classify after carve, or gate on the post-carve surface in lattice-ocean cells) fires <b>only if the pits stay dry after settling</b>. They do not exist, so there is nothing to fix; any water-placement change would move water on a world whose water is already correct — a pointless rebase. <b>No generation code changed; genhash stays 25/25 (no rebase, rebase cost 0). The AC-0342 land-dry contract and the AC-0291 aquifer behaviour are untouched and re-measured below.</b></p>
+
+<h2>5. Step 3 — the permanent arm field (landed regardless of outcome, as filed)</h2>
+<p>The root cause of the ticket — "the ocean/land water classification was a MEASURED CLAIM in a results page rather than a GATED standing value" — is fixed. New permanent arm <b><code>oceansurface</code></b> (<code>_oceansurface_test</code>, <code>godot/scenes/harness.gd</code>): pure generation on the C++ full path (<code>generate_flat(skip=0)</code> + <code>column_heights16</code>), no live world, no settle — deterministic, seed-pinned, ~2 s wall over the 11×11 drypit window (seed 44; <code>AWECRAFT_SEED</code> / <code>AWECRAFT_OCEAN_HALF</code> envs). It reports the classification per column: land (cols, open, <b>open_wet_in_he_plus_1_to_sea</b>), ocean (cols, surface_ok_at_sea, flooded_to_sea, <b>dry_zero_water</b>, capped_solid_above, water_below_only, he_below_H, water, max_water_y), totals. <b>Gates:</b> <code>ocean.dry_zero_water == 0</code> (the carved-islet class) AND <code>land.open_wet_in_he_plus_1_to_sea == 0</code> (the AC-0342 hard sub-contract, same window/solid set as the AC-0342 measurement so the values stay comparable). <b>Watch:</b> <code>capped_solid_above</code> (F-SPIRE — never gated).</p>
+<p>Row added to <code>tasks/harness_data.yaml</code> (mode + standing value), <code>harness_doc.py --render</code> + <code>--check</code> in sync (HARNESS.md generated block refreshed). First measurement (<code>oceansurface_r1.log</code>, ~2 s): <code>ok: true</code> — ocean 1,081 / surface 887 / dry 0 / capped 194 / land 29,895 / open 110 / open_wet 0 / water 28,194 / lava 925 / <code>ocean.max_water_y</code> 126 (by construction — ocean water sits at sea; the AC-0371 window-wide max water y of 144 was perched land-lake water, not an arm field) — reproducing the AC-0371 census totals byte-for-byte. Any future carve change moving these fields now trips <code>ok</code> and needs a deliberate, counted re-base (genhash + the standing-value row).</p>
+<p>The temp <code>pitsettle</code> arm (the live-world + settle instrument that produced §1.2) was <b>removed at exit</b> per the temp-arm rule — its measurement lives in this page and the logs; the permanent arm supersedes it for the standing gate.</p>
+
+<h2>6. Gates (no-behaviour-change path, all re-measured on the final tree)</h2>
+<table>
+<tr><th>gate</th><th>result</th></tr>
+<tr><td>G0 (final tree, after all edits)</td><td>rc 0, <b>0 SCRIPT ERROR</b> (<code>G0_final.log</code>)</td></tr>
+<tr><td>genhash</td><td><b>25/25 = 25/25 = 25/25 vs the AC-0367 reference</b> (<code>.scratch/AC-0367-gates/genhash_pristine_r1.log</code>) — byte-identical; GENMS 124 (machine variance, not a gate)</td></tr>
+<tr><td>farab</td><td><b>h_mismatch 0</b>, slab_cmp 1080/1080, mat_surf_diff 0, ok</td></tr>
+<tr><td>AC-0342 contracts (re-measured)</td><td>land open water <b>0</b> (110 open cave-dropped columns, none wet in [he+1,126]); ocean at sea 1,081/1,081 — via the new <code>oceansurface</code> arm</td></tr>
+<tr><td>aquifer census field-identical</td><td>world byte-identical (genhash 25/25 ⇒ identical census by construction) + arm totals exactly match the AC-0371 recorded census (29,895 / 1,081 / 28,194 / 925 / 144); the native aquifer counters (48,298/824/7,212/1,026/26) were removed with AC-0371's temp arm and are not independently re-measurable — the byte identity is the proof</td></tr>
+<tr><td>ladder</td><td><b>20/20</b> band-a (155 band-b / 94 band-c)</td></tr>
+<tr><td>meshprobe</td><td>match_rate <b>1.0</b>, ok</td></tr>
+<tr><td>halo</td><td>a/b/c all ok, 0 mismatches</td></tr>
+<tr><td>lightstate</td><td><b>census 0/0</b>, 20/20 chunks leaks 0, wash false, arr_diff_cells 1 (the AC-0361 re-baselined value)</td></tr>
+<tr><td>r16</td><td>ok; <b>far_holes 0/0 both bands</b> (far0/far1), built_all, section_first_ok</td></tr>
+<tr><td>boundary r4</td><td>ok in band (p95 42 ms, resident 93, staged_dropped 1,907 ≤ 2,500, marker_ok true, reband 188)</td></tr>
+<tr><td>battery (7 modes)</td><td>all 7 modes ran (player/interact/light/fluids/buckets/genhash/settings). Single red: <code>settings</code> <code>ms_clamp</code> (ceil_render/default_8/floor_sim5) — <b>PRE-EXISTING</b>: byte-identical failure signature in the AC-0367, AC-0370 and AC-0371 battery logs on this tree; not a regression (this task changed no settings/world code, genhash proves it)</td></tr>
+<tr><td>fluid arms (the self-heal question)</td><td><code>fluidsettle</code>: 3 ticks to quiescence, water_final 0 (the documented degenerate r4 spawn state — the spawn region is land, no ocean water resident). <code>fluidprobe</code>: 0 adds across 8 ticks — the natural ocean is stable, no unexplained writes. <code>fluidfall</code>: FAIL — <b>PRE-EXISTING</b>, identical signature (caseA total_water 0, all cases false) in AC-0370 before/after + AC-0371 stage-12 logs; arm debt, out of scope here</td></tr>
+<tr><td><code>oceansurface</code> (new, the step-3 gate)</td><td><b>ok: true</b> — 0/0 (dry_zero_water / open_wet), wall ~2 s</td></tr>
+<tr><td>harness doc</td><td><code>--render</code> + <code>--check</code> in sync (mode row + standing value row added)</td></tr>
+<tr><td>Windows DLL</td><td>not required — GDScript-only change (arm + doc data), no native lane touched</td></tr>
+</table>
+<p class="note">Pre-existing reds carried forward (not introduced, not fixed here): battery <code>settings.ms_clamp</code> and <code>fluidfall</code> — both stable-identical since at least AC-0367; recommend arm-debt tickets so the battery reads fully green again.</p>
+
+<h2>7. Recommended follow-ups (coordinator's call)</h2>
+<ol>
+<li><b>Docs correction:</b> AC-0371's results page F2 ("791 carved islets, zero water") is refuted by the byte-verified census in §2 — annotate/correct at AC-0371 closeout or by coordinator note; the standing-value row in <code>tasks/harness_data.yaml</code> (oceansurface) now carries the corrected classification as the gated record.</li>
+<li><b>F-SPIRE ticket:</b> dripstone spires above sea in ocean columns (194 @ seed 44 window; mechanism §3 — the drip pass's stalagmite anchors to the slab-generation top in open-sky runs, not to a ceiling). Visible artifact, separate owner (AC-0292 drip pass), the <code>capped_solid_above</code> watch field now tracks it.</li>
+<li><b>Arm debt:</b> <code>fluidfall</code> (water source never materializes: total_water 0) and battery <code>settings.ms_clamp</code> staleness — pre-existing reds, §6.</li>
+</ol>
+
+<p class="note">Deliverables: <code>tasks/AC-0374/AC-0374-results.html</code> (this page); permanent arm <code>_oceansurface_test</code> in <code>godot/scenes/harness.gd</code>; <code>tasks/harness_data.yaml</code> mode + standing-value rows (HARNESS.md re-rendered); logs in <code>.scratch/AC-0374-gates/</code>. No commits made (closeout is the coordinator's). Ticket left <code>in-progress</code> for the coordinator's closeout.</p>
+</body></html>
