@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0373 — index the random-tick column scan: measured split, then route</title>
+<style>
+body{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;max-width:110em;margin:1.5em auto;padding:0 1em;color:#1a1a1a;line-height:1.45}
+h1{font-size:1.5em;border-bottom:3px solid #2563eb;padding-bottom:.3em}
+h2{font-size:1.2em;margin-top:1.8em;color:#1e40af;border-bottom:1px solid #cbd5e1;padding-bottom:.2em}
+h3{font-size:1.05em;margin-top:1.2em;color:#334155}
+table{border-collapse:collapse;margin:1em 0;font-size:13px}
+th,td{border:1px solid #cbd5e1;padding:.35em .6em;text-align:left;vertical-align:top}
+th{background:#eff6ff}
+.ok{background:#dcfce7}.warn{background:#fef9c3}.bad{background:#fee2e2}
+code,pre{background:#f1f5f9;padding:.1em .3em;border-radius:3px}
+pre{padding:.8em;overflow-x:auto;font-size:12px;line-height:1.35}
+.note{background:#eff6ff;border-left:4px solid #2563eb;padding:.6em 1em;margin:1em 0}
+.find{background:#fefce8;border-left:4px solid #eab308;padding:.6em 1em;margin:1em 0}
+.todo{background:#f1f5f9;border-left:4px solid #94a3b8;padding:.6em 1em;margin:1em 0}
+</style>
+</head>
+<body>
+
+<h1>AC-0373 — index the random-tick column scan: measured split, then route</h1>
+<p><b>Status (as written): DONE — the fix is in, the instrument is out, the gates are green.</b>
+Tree: <code>499ec22</code> (AC-0375 filing; game code post-AC-0370/0371/0374 — the AC-0370 port is in,
+its brackets removed, WP_STAGES back to 13). Change: <code>godot/world/world.gd</code> ONLY (+83/−10);
+no C++ touched → no rebuild, no Windows DLL (the native lane is AC-0371's staged
+<code>godot/bin/libchunkio.so</code>, md5 <code>e2018d40985b1670b9b20a0c6e9b684a</code>, 1,621,208 B —
+unchanged by this ticket). Knobs for every run: <code>export HOME=/tmp/dsh_home</code>,
+<code>bash -c "ulimit -v 8388608; …"</code> (16 GB for the battery only),
+engine <code>/home/angrygiant/tools/godot/godot --path godot</code>, one godot at a time, no R50, no
+<code>load</code> arm, no renders, no commits. <code>tasks/TASKS.yaml</code> is shared and was NOT
+touched (its working-tree delta is another session's). All logs: <code>.scratch/AC-0373-gates/</code>.</p>
+
+<h2>1. What the two scans were (read, not re-derived)</h2>
+<p>AC-0370 moved the hash + <code>random_tick_map</code> bookkeeping to the native lane and named the
+residual: two GDScript column scans, both walking the ENTIRE resident <code>chunks</code> dict
+(≈ 1400–1600 entries on the R24 walk):</p>
+<ul>
+<li><b><code>_random_tick_pass</code></b> — keep <code>face ≤ 1 and band == 0 and !data.is_empty()</code>
+→ the 41-column taxicab diamond → one native call. AC-0370 measured 0.89 ms/tick.</li>
+<li><b><code>_leaf_decay_tick</code></b> — the SAME filter minus the face test, then per kept column
+<code>leaf_decay.is_empty()</code> + timer countdown. AC-0370 measured 0.61 ms/tick — on a walk the
+timer work is ZERO, so the whole cost was the second 1400+ walk.</li>
+</ul>
+<p>Mutation-point census (before choosing a route): the filter inputs per resident chunk are exactly
+membership in <code>chunks</code>, <code>c.band</code>, <code>c.face</code>, <code>c.data</code>
+empty-vs-not; every write to them funnels through a small set of <code>world.gd</code> sites
+(§3). Column defaults are <code>band 0 / face 0 / data []</code> (chunk.gd) — a spawn fails the filter
+until its data lands, and face chunks (AC-0309 grid) keep band 0 by default, so they sit INSIDE the
+leaf-decay filter (the random pass excludes them only via the face test). The tick fires at the TOP of
+<code>World._process</code>, before every streaming pass of the frame; catch-up ticks run back-to-back
+inside one <code>_game_tick_accumulate</code>.</p>
+
+<h2>2. THE MEASURED SPLIT (the decision data — one instrumented R24 walk BEFORE, WALK=10, TICKTIME=1)</h2>
+<table>
+<tr><th>measured quantity</th><th>value (walk window t≈5.3–13.4 s = the storm worst-20 window)</th><th>value (steady state after the walk)</th></tr>
+<tr><td>resident chunks scanned per tick (both scans)</td><td>1402–1504 (worst-20 frames); cumulative avg 1410→1640 over 1600 ticks</td><td>1791</td></tr>
+<tr><td>columns passing the tickable test</td><td><b>39.4–40.6 (≈ 40 of ≈ 1400 — 2.8%)</b></td><td>40.6</td></tr>
+<tr><td>how often the ANSWER changes (column-SET fingerprint change across consecutive ticks)</td><td>≈ 11 changes in the ≈ 130 storm-walk ticks (~1 of 12); 19 in the first 200 ticks (load landings)</td><td><b>1 change in 1000 ticks (0.1%)</b> — 28→29 from tick 600 to 1600</td></tr>
+<tr><td>tickable fraction of resident columns (the ticket's "typical streaming frame")</td><td>≈ 40/1453 ≈ 2.9%</td><td>40.6/1791 ≈ 2.3%</td></tr>
+<tr><td>columns with a NON-empty <code>leaf_decay</code></td><td colspan="2"><b>0.0000 every tick</b> (no tree is broken on a walk) — the entire leaf-scan cost is the second resident walk</td></tr>
+</table>
+<div class="find"><b>Reading (the ticket's own fork):</b> "almost none pass" → the per-column test is
+already one cheap comparison — making it cheaper buys nothing; <b>an index is the win</b>. And the set
+"changes far more slowly than the tick fires" — 0.1% of ticks in steady state — so the index should be
+rebuilt ON CHANGE (hoist, candidate c), not per tick. The measurement also exposed the one place the
+naive reading is wrong: during the LOAD storm (the worst-20 frames themselves sit at t 4.3–13.4 s),
+band-0 data landings fire at ~1/tick, so a "stamp on ANY resident mutation" design rebuilds almost
+every tick there. The stamps must be GATED on "can this mutation move the band-0 set" (§3) — then even
+the storm rebuilds drop to the 41 diamond landings + a few rebands.</div>
+
+<h2>3. THE FIX (world.gd only — the memoized band-0 column list)</h2>
+<p>One memo, two consumers. <code>_rt_rebuild_if_stale()</code> walks the resident dict with the
+band-0/data-present filter (the old scans' verbatim filter, verbatim dict order) and caches
+<code>(cx, cz, node-ref)</code> lists under a stamp <code>_rt_idx_v</code>; it rebuilds only when
+<code>_rt_stamp</code> moved. <code>_random_tick_pass</code> applies the face test over the cached ≈ 41
+nodes; <code>_leaf_decay_tick</code> applies its per-column <code>leaf_decay</code> test over the same
+41 (that test stays per-tick — it is edit-sensitive and must see same-frame <code>set_block</code>s).
+The per-tick cost drops from two ≈ 1450-walks to two 41-reads; the full walk happens only on a stamp
+change. Bit-identity is by construction: same filter, same dict order, same columns — the <code>tick</code>
+arm's cross-lane <code>window_md5</code> is the gate, and it passed.</p>
+<p>The stamp sites are each gated by the "can this move the memo's set" predicate (a far-ring landing or
+a band 1↔3 reband never rebuilds):</p>
+<table>
+<tr><th>site</th><th>gate</th></tr>
+<tr><td>band-0 data landing — <code>threadgen_handoff</code> (the <code>c.data = ds</code> / <code>slabs_landed</code> split), the sync-gen fallback, the band-A mat landing, the disk choke point <code>_land_column</code>, the face landing</td><td><code>int(c.band) == 0</code></td></tr>
+<tr><td><code>_reband</code> (called only on an actual band change)</td><td><code>oldb == 0 or nb == 0</code></td></tr>
+<tr><td>far-demotion wipe <code>clear_data</code></td><td><code>int(c.band) == 0</code></td></tr>
+<tr><td><code>_free_chunk_key</code> / <code>_face_free_chunk</code> (removal, read BEFORE the erase/pool-reset)</td><td><code>band == 0 and !data.is_empty()</code></td></tr>
+<tr><td><code>_ensure_face_chunk</code> (a face chunk joins RESIDENT with its data already landed — the one add that enters the memo)</td><td><code>band == 0 and !data.is_empty()</code></td></tr>
+<tr><td><code>_make_chunk_node</code> (a spawn's data is always empty — pool reset, no write before insert — so it fails the filter until its own landing/reband stamps)</td><td>NO stamp (commented in place)</td></tr>
+</table>
+<p><b>Nothing was reverted.</b> The first iteration of the fix stamped on EVERY resident mutation
+(11 unconditional sites); it already moved the numbers (gtick 3.095→2.174 per tick, multi-fire
+16/20→11/20, rebuilds 150 in the first 200 ticks), but the measurement showed the far-ring churn
+rebuilding the memo on ~75% of storm ticks for nothing — so it was REFINED to the gated form rather
+than kept. The temporary instrument (the re-added AC-0370 brackets + the AC-0373 counters) was removed
+after the before/after pair, per plan.</p>
+
+<h2>4. BEFORE / AFTER — one capped R24 walk each (same instrument on both sides; worst-20 = the arm's own &gt; 30 ms population)</h2>
+<table>
+<tr><th>term (worst-20 frames)</th><th>BEFORE p50 / p95 / max (per-tick)</th><th>AFTER p50 / p95 / max (per-tick)</th></tr>
+<tr><td class="warn">gtick (whole 20 Hz tick)</td><td>4.3 / 14.5 / 14.7 ms (3.095 / tick)</td><td class="ok"><b>2.4 / 4.8 / 5.6 ms (1.537 / tick) — p95 −67%, per-tick −50%</b></td></tr>
+<tr><td>fluidt</td><td>1.4 / 5.0 / 5.0 (1.036)</td><td>1.3 / 2.4 / 4.2 (0.900)</td></tr>
+<tr><td>rtp (the random pass)</td><td>1.8 / 5.2 / 5.4 (1.195)</td><td>1.0 / 1.4 / 2.4 (0.619)</td></tr>
+<tr><td>cols (the column lookup — the named residual's main term)</td><td>1.6 / 4.6 / 4.8 (1.059)</td><td class="ok"><b>0.8 / 1.3 / 2.1 (0.491) — the residual is now the amortized memo rebuild in the load storm</b></td></tr>
+<tr><td>leaf (the second column scan)</td><td>1.1 / 4.2 / 4.2 (0.841)</td><td class="ok"><b>0.0 / 0.1 / 0.1 (0.009) — −99%</b></td></tr>
+<tr><td>frame (the storm frame itself)</td><td>p50 52.5 / max 66.3 ms</td><td>p50 47.1 / max 80.0 ms (DRAIN-bound; the single max is one-sample — see below)</td></tr>
+<tr><td>multi-fire (ticks ≥ 2 in the frame, over worst-20)</td><td>{1:4, 2:13, 3:3} → 16/20</td><td class="ok">{0:1, 1:11, 2:3, 3:5} → <b>8/20</b></td></tr>
+<tr><td>tick's share of the worst frame</td><td>14.7/66.3 ≈ 22%</td><td class="ok">5.6/80 ≈ <b>7%</b></td></tr>
+<tr><td>walk window p99 / single max / frames &gt; 30 ms</td><td>78 / 550 ms / 110</td><td>90 / <b>158</b> ms / 122</td></tr>
+</table>
+<p>The two column scans went from <b>1.90 ms/tick to 0.50 ms/tick</b> inside the storm frames (and to
+≈ 0.05 ms/tick in steady state, where no rebuild fires). What remains in <code>cols</code> is the
+amortized gated rebuild: 74 rebuilds in the first 200 ticks (the 41 diamond landings + the early
+rebands) and 0 after the walk — <code>rebuilds=101</code> total by tick 600, flat since. Honest
+caveats: the walk p99 (78→90) and the single worst frame (66.3→80.0) are the DRAIN-bound tail —
+one-sample by nature (AC-0370/0371 both documented this band and that the R24 window is
+drain-bounded) — and the 80 ms frame's tick term was ≤ 5.6 ms of it (7%). The single-sample storm max
+fell 550→158 ms. Nothing in this ticket touches DRAIN (that is AC-0369's successor work, still the
+bigger target).</p>
+
+<h2>5. THE GATE — the <code>tick</code> arm (AC-0370's instrument, now cross-lane)</h2>
+<pre>BEFORE  window_md5 d81250cdbeb79419156517a7bad108b0   recompute_mismatch 0 / 118,080   cols 41  subs 984  min=max=120  scope_bad 0  band123 0  ok true
+AFTER   window_md5 d81250cdbeb79419156517a7bad108b0   recompute_mismatch 0 / 118,080   cols 41  subs 984  min=max=120  scope_bad 0  band123 0  ok true
+        (byte-identical window md5 — md5_first/md5_last identical too; the GDScript reference recomputes
+         every logged position against the native output)
+        steady-state per-tick ms (R4, fluids on): mean 0.4196 → 0.3414, p95 0.756 → 0.608, max 0.805 → 0.690</pre>
+
+<h2>6. Standing gate set (final tree; pristine-pair arms run on git-HEAD <code>world.gd</code> with md5-verified swaps — the AC-0370 stale-backup discipline)</h2>
+<table>
+<tr><th>gate</th><th>result</th><th class="ok">verdict</th></tr>
+<tr><td>G0 (headless boot)</td><td>rc 0, <b>0 SCRIPT ERROR</b></td><td class="ok">green</td></tr>
+<tr><td>genhash (vs <code>.scratch/AC-0367-gates/genhash_pristine_r1.log</code>)</td><td><b>25/25 byte-identical</b></td><td class="ok">green</td></tr>
+<tr><td>fluids (pristine vs final)</td><td>RESULT <b>byte-identical</b>, 0/0 SCRIPT ERROR</td><td class="ok">green</td></tr>
+<tr><td>trees (pristine vs final)</td><td>RESULT <b>byte-identical</b>, 0/0 (the known persisted_ok sub-state, identical both sides)</td><td class="ok">green</td></tr>
+<tr><td>leaves, AWECRAFT_LEAFDECAY_MS=2000 (pristine vs final) — the arm that exercises the changed leaf scan</td><td>RESULT <b>byte-identical</b> (solid_ok/decay_fired/timers_started/sim_exit_ok true, persisted_ok false — the pre-existing sub-state, identical both sides), 0/0</td><td class="ok">green</td></tr>
+<tr><td>fluidfall (pristine vs final)</td><td>RESULT <b>byte-identical</b>, 0/0 (pre-existing red, identical)</td><td class="ok">green</td></tr>
+<tr><td>fluidsettle (pristine vs final)</td><td>RESULT <b>byte-identical</b> (ticks_to_settle 3, quiet 3, water_final 0 — clean at 0 writes), 0/0</td><td class="ok">green</td></tr>
+<tr><td>farab</td><td><b>h_mismatch 0</b>, ok true (45 cols)</td><td class="ok">green</td></tr>
+<tr><td>ladder</td><td>band A <b>20/20</b>, B 155/155, C 94/94, ok true</td><td class="ok">green</td></tr>
+<tr><td>meshprobe</td><td>match_rate <b>1.0</b> (244,564/244,564)</td><td class="ok">green</td></tr>
+<tr><td>halo</td><td>ok true</td><td class="ok">green</td></tr>
+<tr><td>lightstate, AWECRAFT_LS_RADIUS=16</td><td><b>leaks 0/0</b> (20 grid chunks, ab both sides), stragglers 0, wash false, double-LOD 0/0</td><td class="ok">green</td></tr>
+<tr><td>r16, --fixed-fps 600</td><td><b>all sub-flags green</b>, far_holes <b>0/0 both bands</b>, built_all + section_first_ok true</td><td class="ok">green</td></tr>
+<tr><td>boundary r4 (in band)</td><td>ok true, 20/20 crossings, <b>p50 9 / p95 44</b> (ref 11–12 / 41–42), crossing burst p50 4.4 ≤ 10, marker/remesh true, footprint missing 0, col_deferred_in_footprint 0 (max_ms 678 = the watch-field storm tail, single-sample)</td><td class="ok">green</td></tr>
+<tr><td>battery (7 modes, one process, 16 GB)</td><td>0 SCRIPT ERROR; player/interact/light/fluids/buckets green on their fields (light 15/−1/−1/−1, interact drop+place true, fluids current-tree values per AC-0370's note); the ONLY red is the pre-existing <b>settings <code>ms_clamp</code> (AC-0330)</b>; genhash inside the battery 25 lines</td><td class="ok">green (known pre-existing red only)</td></tr>
+</table>
+
+<h2>7. Cleanup and residue</h2>
+<pre>all temporary instrument removed (the re-added WP sub-stages, the wfc "tickn" field, every _ac373_*
+counter, the AC373MEAS print):  grep "_ac373\|WP_AC373\|AC373MEAS" over godot/ + gdext/ → zero hits
+git diff --stat → godot/world/world.gd only (+83/−10; the TASKS.yaml delta is another session's, untracked by this ticket)
+no C++ change → the staged libchunkio.so (AC-0371 build) is unchanged; no Windows DLL rebuild owed
+logs: .scratch/AC-0373-gates/ (walk_before/walk_after2, tick_after/tick_after2, g0_*, genhash_final,
+       fluids/trees/leaves/fluidfall/fluidsettle {pristine,final}, farab, ladder, meshprobe, halo,
+       lightstate, r16, boundary_r4, battery, world.gd.fixed backup)</pre>
+
+</body>
+</html>

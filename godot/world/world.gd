@@ -5425,6 +5425,8 @@ func _gen_unit(c: Node3D, cx: int, cz: int) -> int:
 	var gres: Dictionary = WorldGen.apply_banana_trees(gdata, cx, cz, Game.world_seed, Data.HEIGHT)
 	c.data_landed(gdata, PackedByteArray())
 	c.no_caves = false
+	if int(c.band) == 0:
+		_rt_dirty()  # AC-0373: only a band-0 landing can reach the memo
 	# AC-0346/AC-0350: the same 1→1 hop OWE as the threadgen handoff (the
 	# sync fallback is the threadgen-off dev path — identical landing
 	# semantics).
@@ -5735,6 +5737,8 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 		c.data_gen += 1  # the stamp/staleness token (an in-flight build on the pre-regen snapshot goes stale)
 	else:
 		c.slabs_landed(resl[0], resl[1])
+	if int(c.band) == 0:
+		_rt_dirty()  # AC-0373: only a band-0 landing can reach the memo
 	# AC-0309 D2: the home grid ends at the patch edge — zero this
 	# chunk's fully-past columns (the far side belongs to the face grid;
 	# the live face data feeds this chunk's cross-face ring).
@@ -6413,6 +6417,8 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			var ta_m := Time.get_ticks_msec()
 			c.slabs_landed(md[0], md[1])
 			c.far_mat = true
+			if int(c.band) == 0:
+				_rt_dirty()  # AC-0373: only a band-0 landing can reach the memo
 			c.no_caves = true  # the skip fill is cave-less (the promotion owes the full regen)
 			var ms_m: int = int(e.get("mat_ms", 0))
 			band_a_mat_ms_sum += ms_m
@@ -9507,6 +9513,10 @@ func _make_chunk_node(cx: int, cz: int) -> Node3D:
 	c.init_slabs()
 	add_child(c)
 	chunks[_key(cx, cz)] = c
+	# AC-0373: NO stamp here — a spawn's data is always empty (the pool
+	# reset + no data write between checkout and the insert), so the new
+	# member fails the memo's band-0/data-present filter; its first data
+	# landing (or a reband to 0) stamps itself.
 	return c
 
 func create_chunk(cx: int, cz: int, mesh_now: bool) -> Node3D:
@@ -9602,6 +9612,8 @@ func _free_chunk_key(key: String) -> void:
 	_promo_build.erase(key)
 	_stream_outside.erase(key)  # AC-0350: the bounded sweep's outside set
 	_real_demote_owed.erase(key)  # AC-0350: the AC-0346 backstop flag
+	if int(c.band) == 0 and not c.data.is_empty():
+		_rt_dirty()  # AC-0373: a memo member leaves the resident set
 	chunks.erase(key)
 	queued_keys.erase(key)
 	fluid_dirty.erase(key)
@@ -9698,6 +9710,8 @@ func _demote_to_far(c: Node3D, key: String) -> void:
 	# free the slabs (the stamp bump re-pends nothing visible — the probe
 	# reads the far representation; the mesh instances stay attached).
 	c.clear_data()
+	if int(c.band) == 0:
+		_rt_dirty()  # AC-0373: only a band-0 wipe can leave the memo
 	_hslab_probe_invalidate(c)
 	_low_probe_invalidate(c)
 
@@ -10339,6 +10353,8 @@ func _reband(c: Node3D, key: String, oldb: int, nb: int) -> void:
 	# pre-existing behavior: the kept — possibly stale — bodies stay).
 	c.band = nb
 	c.collision_enabled = collision_enabled and nb == 0
+	if oldb == 0 or nb == 0:
+		_rt_dirty()  # AC-0373: a band-0-related reband moves the memo set
 	if oldb == 0 and nb != 0:
 		perf_reband_exit += 1  # AC-0337: the band-edge excursion census
 	elif nb == 0 and oldb != 0:
@@ -10886,6 +10902,8 @@ func _land_column(c: Node3D, res: Dictionary) -> void:
 		c.slabs_landed(ds, res["f_slabs"])
 	else:
 		c.data_landed(res["data"], res["fl"])
+	if int(c.band) == 0:
+		_rt_dirty()  # AC-0373: only a band-0 landing can reach the memo
 	# AC-0237: restore the generated state (v5 stores the 24-bit mask;
 	# v1-v4 = the full column). An ungenerated slab that reloads is
 	# solid-for-snap + capped + regen-owed, NOT air.
@@ -11941,10 +11959,12 @@ func _leaf_decay_tick() -> void:
 	if not leaf_decay_enabled:
 		return
 	var ms := int(TICK_INTERVAL * 1000.0)
-	for key in chunks:
-		var c: Node3D = chunks[key]
-		if int(c.band) != 0 or c.data.is_empty():
-			continue
+	# AC-0373: the band-0 filter is the shared memo (same set + order the
+	# old per-tick scan produced); only the per-column leaf_decay test stays
+	# per-tick (it is edit-sensitive and must see same-frame set_blocks).
+	_rt_rebuild_if_stale()
+	for i in _rt_idx_nodes.size():
+		var c: Node3D = _rt_idx_nodes[i]
 		if c.leaf_decay.is_empty():
 			continue
 		var lfkeys: Array = c.leaf_decay.keys()
@@ -12302,12 +12322,59 @@ func _tick_fluids_body() -> void:
 # is now cross-lane). The consumer is a counter/hook — crops and wheat do
 # not exist in this codebase yet; future growth/redstone ticks attach in
 # AweRandomTick (world cell = cx*16+lx, sub*16+ly, cz*16+lz).
+# AC-0373: the band-0 column MEMO. The ticked column set (band 0 + data
+# present, dict order) changes only when one of its members' inputs move —
+# and every such move funnels through a gated _rt_dirty() site in this
+# file: a band-0 data landing (the threadgen handoff, the sync-gen
+# fallback, the mat landing, the disk choke point _land_column, the face
+# landing), a band-0 reband (_reband, called only on an actual change), a
+# band-0 wipe (the far-demotion clear_data), and a memo member joining or
+# leaving the resident set (_ensure_face_chunk inserts WITH data landed;
+# _free_chunk_key / _face_free_chunk remove a member; _make_chunk_node
+# needs no stamp — a spawn's data is always empty, so it fails the filter
+# until its own landing/reband stamps). Each gate is the "can this move
+# the memo's set" predicate, so the far-ring churn (bands 1-3 landings and
+# rebands) never costs a rebuild. Both per-tick scans (this one and
+# _leaf_decay_tick) share the memo, so a full resident walk (≈ 1400-1600
+# chunks) happens only on a stamp change — the AC-0373 measurement found
+# the SET itself changing on ~1 of every 12 storm-walk ticks and ~0.1% of
+# steady ticks — never per tick. The filter and the dict order are the old
+# scan's verbatim, so the ticked columns and the leaf-decay iteration
+# order are bit-identical (the `tick` arm's window md5 is the gate).
+var _rt_stamp := 0
+var _rt_idx_v := -1
+var _rt_idx_cx: PackedInt32Array = PackedInt32Array()
+var _rt_idx_cz: PackedInt32Array = PackedInt32Array()
+var _rt_idx_nodes: Array = []
+
+func _rt_dirty() -> void:
+	_rt_stamp += 1
+
+func _rt_rebuild_if_stale() -> void:
+	if _rt_stamp == _rt_idx_v:
+		return
+	_rt_idx_v = _rt_stamp
+	_rt_idx_cx.clear()
+	_rt_idx_cz.clear()
+	_rt_idx_nodes.clear()
+	for key in chunks:
+		var c: Node3D = chunks[key]
+		if int(c.band) != 0 or c.data.is_empty():
+			continue
+		_rt_idx_cx.append(int(c.cx))
+		_rt_idx_cz.append(int(c.cz))
+		_rt_idx_nodes.append(c)
+
 func _random_tick_pass(t: int) -> void:
 	var cxa: PackedInt32Array = PackedInt32Array()
 	var cza: PackedInt32Array = PackedInt32Array()
-	for key in chunks:
-		var c: Node3D = chunks[key]
-		if int(c.face) > 1 or int(c.band) != 0 or c.data.is_empty():
+	# AC-0373: the column lookup is the shared memo — the full resident
+	# walk happens only on a stamp change, never per tick (the doc above
+	# _rt_rebuild_if_stale owns the invariant).
+	_rt_rebuild_if_stale()
+	for i in _rt_idx_nodes.size():
+		var c: Node3D = _rt_idx_nodes[i]
+		if int(c.face) > 1:
 			continue
 		cxa.append(int(c.cx))
 		cza.append(int(c.cz))
@@ -12948,6 +13015,8 @@ func _face_free_chunk(key: String) -> void:
 		st.evict_column(int(c.cx), int(c.cz))
 	star_owed.erase(key)
 	star_remesh.erase(key)
+	if int(c.band) == 0 and not c.data.is_empty():
+		_rt_dirty()  # AC-0373: a memo member leaves the resident set
 	chunks.erase(key)
 	_face_order.erase(key)
 	_lod_free_all(c, false)
@@ -13171,6 +13240,8 @@ func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 	WorldGen.apply_banana_trees(fdata, face * 64 + ccx, face * 64 + ccz, Game.world_seed ^ (face * 1000003), Data.HEIGHT)
 	c.data_landed(fdata, PackedByteArray())
 	c.no_caves = false
+	if int(c.band) == 0:
+		_rt_dirty()  # AC-0373: face chunks keep the default band 0 (the memo's filter sees them)
 	# AC-0309 C6: a saved face chunk re-applies its edits on landing (the
 	# home pattern — the fi cells are local-slot based, so the home body
 	# works verbatim through the 3-part key).
@@ -13182,6 +13253,8 @@ func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 	c.transform = SphereMath.face_chunk_transform(face, ccx, ccz, Game.planet_R)
 	c.collision_enabled = true
 	chunks[key] = c
+	if int(c.band) == 0 and not c.data.is_empty():
+		_rt_dirty()  # AC-0373: a face chunk joins RESIDENT with data landed
 	_face_order.append(key)
 	# AC-0309 D4: seed the per-face AweStarlight (the same engine — the
 	# per-instance (cx,cz) key space, no C++ change). The landing light is
