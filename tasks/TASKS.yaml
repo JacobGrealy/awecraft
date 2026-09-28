@@ -5,6 +5,7 @@ meta:
     screenshots
 queue:
 - AC-0373
+- AC-0375
 - AC-0145
 - AC-0310
 - AC-0311
@@ -21404,4 +21405,57 @@ intake:
     194 seed-44 columns carrying dripstone stalagmites 1-5 blocks ABOVE an intact sea surface, because
     the drip pass anchors spires to the slab-generation top in open-sky runs. It is now a watch field
     on the new arm and is filed as its own ticket.'
+  comments: []
+- id: AC-0375
+  title: dripstone-spires-above-sea-surface
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-28T08:11
+  updated_at: 2026-09-28T08:11
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Along the shoreline there are stone spikes standing out of the water - stalagmites
+    that grew from the sea floor up through an intact water surface, 194 of them in one small window.
+
+
+    2) Technical Details:
+
+    FOUND BY AC-0374''s census (2026-09-28): in a seed-44 11x11 window, **194 columns carry dripstone
+    stalagmites 1-5 blocks ABOVE an intact sea surface** (the arm field is `ocean.capped_solid_above`;
+    the water surface itself is correct at y=126 with 887 columns properly flooded). The cause is an anchoring
+    choice in the drip pass: it anchors spires to the SLAB-GENERATION top rather than to the water surface,
+    so in open-sky ocean runs the dripstone is placed on top of the generated slab and ends up poking
+    through the sea. This is a small, visible oddity rather than a structural problem - which is why it
+    is filed separately rather than folded into the water-contract work.
+
+    THE JOB: find where the drip pass decides its anchor height (AC-0292 added the dripstone contents;
+    the census is the `oceansurface` arm''s `capped_solid_above` watch field) and make it respect the
+    water surface - either do not place a spire where it would stand above the sea, or carve the water
+    around it consistently, whichever matches vanilla''s dripstone-in-ocean behaviour. State which you
+    chose and why.
+
+    CONSTRAINTS: the deepslate/sculk/moss/dripstone contents are a delivered feature (AC-0292) with its
+    own census, so do not remove dripstone - fix the anchoring. genhash WILL rebase if the placement changes,
+    which must be deliberate and counted; H must not move (thash byte-identical + farab h_mismatch 0);
+    the water contracts must hold (the new `oceansurface` arm gates ocean dry_zero_water 0 and the AC-0342
+    land rule - both stay green); and the aquifer census (AC-0291) stays field-identical.
+
+    VERIFY: `oceansurface`''s `capped_solid_above` before and after on SEVERAL SEEDS (that field exists
+    because of this finding - use it, and say whether 194 is a seed-44 artifact or a general rate); the
+    full standing set (G0 zero SCRIPT ERROR, genhash, farab h_mismatch 0, ladder 20/20, meshprobe 1.0,
+    halo, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, the battery);
+    and a statement of what the dripstone census shows afterwards (the AC-0292 contents must still be
+    present underground, just not standing in the sea).
+
+    CONTEXT: read tasks/AC-0374/AC-0374-results.html (the census, the new arm, and F-SPIRE) and the AC-0292
+    results page (the drip pass). Renders are currently infeasible on this box (llvmpipe degraded), so
+    evidence this by census rather than by picture.
+
+    '
   comments: []
