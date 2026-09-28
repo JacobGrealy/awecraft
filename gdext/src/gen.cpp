@@ -1335,6 +1335,12 @@ static std::atomic<long long> g_aqu_lava{0};
 static std::atomic<long long> g_aqu_stones{0};
 static std::atomic<long long> g_aqu_lava_layer{0};
 static std::atomic<long long> g_aqu_fl8{0};
+// AC-0371: the two one-line unit counters AC-0366 named as the instrument
+// gap — searches EXECUTED (the aquifer Voronoi 4-nearest calls) and the
+// scan-block count (Σ top of the per-column density scan).
+static std::atomic<long long> g_aqu_searches{0};
+static std::atomic<long long> g_scan_blocks{0};
+
 // AC-0292: the P4 census (the TEMP census arms read it; process-wide like
 // the aquifer stats — reset_gen_timing() zeros it). Read via AweGen.p4_stats().
 static std::atomic<long long> g_p4_pillar{0};      // pillar-solid cells (deep, P >= 0.03)
@@ -1692,69 +1698,170 @@ struct AquOut {
 	uint8_t fl;    // 0 = stationary, 8 = the scheduled flowing tick
 };
 
+// AC-0371 — the per-column state for the search (the fix for the 94.5 ns
+// per-search cost measured on the post-AC-0367 tree): the xz part of each
+// candidate's d² is constant per column (precomputed once), the 12-candidate
+// set is constant per (column, slab) (cached once), and the distance math is
+// INT — bit-identical to the original double version by construction, because
+// every operand (x, y, z, the cell centers) is an integer and every squared
+// distance here is exact in int32 (|x−cx|,|z−cz| ≤ 30, |y−cy| ≤ 23 for the
+// 12 candidates — see the bounds derived in the AqColState note — so
+// d² ≤ ~2,329) and therefore exact in double as well — the original
+// computed the same integers as doubles. The insertion-sort
+// semantics (strict `>`, ties keep the earlier-iterated candidate) are
+// reproduced op-for-op in int.
+struct AqColState {
+	int x = INT32_MIN;    // the world x of the initialized column
+	int last_slab = -999; // the slab index (ay) the candidate cache was built for
+	int ax = 0, az = 0;   // the column's cell xz base
+	int32_t A[2][2];      // A[dx][dz] = (x−cx)² + (z−cz)² (AQI_MAX = out of table)
+	int16_t cy[12];       // the candidate center y, 12 slots in the ORIGINAL (dx,dy,dz) order
+	int32_t dA[12];       // the xz part of d² (AQI_MAX = out of table)
+	const AquCell *cp[12];// the candidate cell (pointer barrier pass — no index decode)
+	uint8_t valid[12];
+};
+static const int32_t AQI_MAX = INT32_MAX;
+// (i−128)² — the candidates always satisfy |y − cy| ≤ 23 (the 12-neighborhood
+// geometry: the own slab spans 12 rows around the query, the neighbor slabs'
+// centers are at most 12±8 away), so the 256-entry table cannot miss.
+static int32_t g_aq_sq[256];
+static bool g_aq_sq_init = false;
+static inline const int32_t *aq_sq() {
+	if (!g_aq_sq_init) {
+		for (int i = 0; i < 256; i++) {
+			int d = i - 128;
+			g_aq_sq[i] = d * d;
+		}
+		g_aq_sq_init = true; // concurrent first-use is benign (identical values)
+	}
+	return g_aq_sq;
+}
+
 static inline void aqu_block(int x, int y, int z, int he, int cx, int cz,
-		const AquTable &t, int64_t seed, int sea, AquOut &out) {
+		const AquTable &t, int64_t seed, int sea, AquOut &out, AqColState &st) {
 	out.block = 0;
 	out.fl = 0;
+	g_aqu_searches.fetch_add(1, std::memory_order_relaxed);
+	const int32_t *sq = aq_sq();
 	int ix = floordiv(x - AQU_OX, AQU_CX);
 	int iy = floordiv(y - AQU_OY, AQU_CY);
 	int iz = floordiv(z - AQU_OZ, AQU_CZ);
 	int ax = ix - (cx - 1);
 	int ay = iy + 2;
 	int az = iz - (cz - 1);
-	// The 4 nearest of the 12 candidate centers (insertion-sorted list).
-	double d2[4];
-	int ci[4];
-	for (int i = 0; i < 4; i++) {
-		d2[i] = 1e300;
-		ci[i] = 0;
-	}
-	for (int dx = 0; dx <= 1; dx++) {
-		for (int dy = -1; dy <= 1; dy++) {
+	// Column init: the xz part of each candidate's d² is constant per column
+	// (the centers' xz depend only on the cell's ix/iz, never on the slab).
+	if (st.x != x) {
+		st.x = x;
+		st.last_slab = -999;
+		st.ax = ax;
+		st.az = az;
+		for (int dx = 0; dx <= 1; dx++) {
 			for (int dz = 0; dz <= 1; dz++) {
-				int aax = ax + dx;
-				int aay = ay + dy;
-				int aaz = az + dz;
-				if (aax < 0 || aax >= 3 || aay < 0 || aay >= 35 || aaz < 0 || aaz >= 3)
-					continue; // out of the table (≥ 20 blocks away in y — never 4th nearest)
-				const AquCell &c = t.cells[aax][aay][aaz];
-				double dx2 = (double)x - (double)c.cx;
-				double dy2 = (double)y - (double)c.cy;
-				double dz2 = (double)z - (double)c.cz;
-				double dd = dx2 * dx2 + dy2 * dy2 + dz2 * dz2;
-				// Insertion into the size-4 nearest list: a candidate FARTHER than
-				// the current 4th can never enter (the list stays sorted ascending)
-				// — the guard is also what keeps the shift inside the array (an
-				// unconditional tail write at i = 3 would overflow it).
-				if (dd > d2[3])
+				int aax = ax + dx, aaz = az + dz;
+				if (aax < 0 || aax >= 3 || aaz < 0 || aaz >= 3) {
+					st.A[dx][dz] = AQI_MAX;
 					continue;
-				int i = 3;
-				while (i >= 1 && d2[i - 1] > dd) {
-					d2[i] = d2[i - 1];
-					ci[i] = ci[i - 1];
-					i--;
 				}
-				d2[i] = dd;
-				ci[i] = aay * 9 + aaz * 3 + aax;
+				const AquCell &c0 = t.cells[aax][0][aaz];
+				int ddx = x - c0.cx, ddz = z - c0.cz;
+				st.A[dx][dz] = ddx * ddx + ddz * ddz;
 			}
 		}
 	}
-	// idx = aay * 9 + aaz * 3 + aax (the candidate loop's packing) —
-	// decode against the STORED layout cells[ax][ay][az] = [3][35][3]:
-	// x = idx % 3, y = idx / 9, z = (idx / 3) % 3.
-	auto cell_at = [&](int idx) -> const AquCell & {
-		return t.cells[idx % 3][idx / 9][(idx / 3) % 3];
-	};
-	const AquCell &n0 = cell_at(ci[0]);
+	// Slab cache: the 12-candidate set is constant per (column, slab). The
+	// slots keep the ORIGINAL (dx, dy, dz) iteration order — the insertion
+	// sort's tie-break (ties keep the earlier-iterated candidate) depends on
+	// that order, so it must not move.
+	if (st.last_slab != ay) {
+		st.last_slab = ay;
+		int k = 0;
+		for (int dx = 0; dx <= 1; dx++) {
+			for (int dy = -1; dy <= 1; dy++) {
+				for (int dz = 0; dz <= 1; dz++, k++) {
+					int aax = ax + dx, aay = ay + dy, aaz = az + dz;
+					int cx_ = aax, cy_ = aay, cz_ = aaz; // clamped — the safe pointer
+					if (cx_ < 0)
+						cx_ = 0;
+					else if (cx_ > 2)
+						cx_ = 2;
+					if (cy_ < 0)
+						cy_ = 0;
+					else if (cy_ > 34)
+						cy_ = 34;
+					if (cz_ < 0)
+						cz_ = 0;
+					else if (cz_ > 2)
+						cz_ = 2;
+					st.cp[k] = &t.cells[cx_][cy_][cz_];
+					st.cy[k] = t.cells[cx_][cy_][cz_].cy;
+					if (aax < 0 || aax >= 3 || aay < 0 || aay >= 35 || aaz < 0 || aaz >= 3
+							|| st.A[dx][dz] == AQI_MAX) {
+						st.valid[k] = 0;
+						st.dA[k] = AQI_MAX;
+					} else {
+						st.valid[k] = 1;
+						st.dA[k] = st.A[dx][dz];
+					}
+				}
+			}
+		}
+	}
+	// The all-dry early-out (measured 86% of searches on the post-AC-0367
+	// world): with NO fluid among the 12 candidates the search is provably
+	// inert — the barrier stone needs a fluid pair (p stays 0) and the fluid
+	// rule needs n0.type > 0 — so the original code returns {0,0} here.
+	{
+		bool any_wet = false;
+		for (int i = 0; i < 12; i++) {
+			if (st.valid[i] && st.cp[i]->type > 0) {
+				any_wet = true;
+				break;
+			}
+		}
+		if (!any_wet)
+			return;
+	}
+	// The 4 nearest of the 12 candidate centers (insertion-sorted list).
+	// INT version of the original double version — bit-identical: same
+	// candidate order, same strict comparisons, and every d² here is exact
+	// in int32 (and was exact in double). The AQI_MAX sentinel plays the
+	// role of the original 1e300 (larger than any real d², both ways).
+	int32_t d2[4];
+	int ck[4];
+	for (int i = 0; i < 4; i++) {
+		d2[i] = AQI_MAX;
+		ck[i] = 0;
+	}
+	for (int k = 0; k < 12; k++) {
+		if (!st.valid[k])
+			continue; // out of the table — the original's `continue`
+		int32_t dd = sq[y - st.cy[k] + 128] + st.dA[k];
+		// Insertion into the size-4 nearest list: a candidate FARTHER than
+		// the current 4th can never enter (the list stays sorted ascending)
+		// — the guard is also what keeps the shift inside the array.
+		if (dd > d2[3])
+			continue;
+		int i = 3;
+		while (i >= 1 && d2[i - 1] > dd) {
+			d2[i] = d2[i - 1];
+			ck[i] = ck[i - 1];
+			i--;
+		}
+		d2[i] = dd;
+		ck[i] = k;
+	}
+	const AquCell &n0 = *st.cp[ck[0]];
 	bool diff_status = false;
-	if (d2[1] - d2[0] < 25.0) {
+	if (d2[1] - d2[0] < 25) {
 		// The barrier zone: pressure between the differing fluid statuses
-		// among the cluster (d2 − d2[0] < 25).
+		// among the cluster (d2 − d2[0] < 25) — the pointer form of the
+		// original cell_at decode (same cells, no index math).
 		double p = 0.0;
-		for (int i = 0; i < 4 && d2[i] - d2[0] < 25.0; i++) {
-			for (int j = i + 1; j < 4 && d2[j] - d2[0] < 25.0; j++) {
-				const AquCell &a = cell_at(ci[i]);
-				const AquCell &b = cell_at(ci[j]);
+		for (int i = 0; i < 4 && d2[i] - d2[0] < 25; i++) {
+			for (int j = i + 1; j < 4 && d2[j] - d2[0] < 25; j++) {
+				const AquCell &a = *st.cp[ck[i]];
+				const AquCell &b = *st.cp[ck[j]];
 				if (a.type > 0 && b.type > 0 && (a.type != b.type || a.level != b.level)) {
 					double pa = (a.type != b.type)
 							? AQU_LAVA_WALL
@@ -2580,6 +2687,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			double gx = (double)lx / 4.0;
 			double gz = (double)lz / 4.0;
 			int base = (lz << 4) | lx;
+			AqColState aqst; // AC-0371: the column's aquifer search state
 
 			int he;
 			std::vector<uint8_t> solidf;
@@ -2611,6 +2719,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				int top = H + 11;
 				if (top > hmax - 1)
 					top = hmax - 1;
+				g_scan_blocks.fetch_add(top, std::memory_order_relaxed); // AC-0371
 				for (int y = top; y >= 1; y--) {
 					if (!slab_kept(y >> 4))
 						continue; // AC-0237: ungenerated slab — skip
@@ -2782,7 +2891,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 								cell = 0;
 							} else {
 								AquOut aout;
-								aqu_block(x, y, z, he, cx, cz, *aq_p, seed, sea, aout);
+								aqu_block(x, y, z, he, cx, cz, *aq_p, seed, sea, aout, aqst);
 								if (aout.block == 0 && y <= AQU_LAVA_SURF) {
 									// The global lava layer (vanilla -54 + 64 =
 									// 10, "exists regardless of aquifers") —
@@ -3335,6 +3444,8 @@ public:
 		d["cols_skip"] = (int64_t)g_t_cols_skip.load(std::memory_order_relaxed);
 		d["cols_far"] = (int64_t)g_t_cols_far.load(std::memory_order_relaxed);
 		d["far_us"] = (int64_t)g_t_far_us.load(std::memory_order_relaxed);
+		d["aqu_searches"] = (int64_t)g_aqu_searches.load(std::memory_order_relaxed); // AC-0371
+		d["scan_blocks"] = (int64_t)g_scan_blocks.load(std::memory_order_relaxed); // AC-0371
 		return d;
 	}
 
@@ -3350,6 +3461,8 @@ public:
 		g_aqu_stones.store(0, std::memory_order_relaxed);
 		g_aqu_lava_layer.store(0, std::memory_order_relaxed);
 		g_aqu_fl8.store(0, std::memory_order_relaxed);
+		g_aqu_searches.store(0, std::memory_order_relaxed); // AC-0371
+		g_scan_blocks.store(0, std::memory_order_relaxed); // AC-0371
 		// AC-0292: the P4 census + the drip stage.
 		g_p4_pillar.store(0, std::memory_order_relaxed);
 		g_p4_pillar_void.store(0, std::memory_order_relaxed);

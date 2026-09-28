@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0371 — results (builder)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.find{background:#fff3e0;border-left:4px solid #e07b00;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.ok{background:#eef7ee;border-left:4px solid #2e8b57;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0371 — results (builder)</h1>
+<h1>AC-0371 — cheapen the aquifer Voronoi search: measure-first, behaviour-exact</h1>
+<p class="meta">Tree at start: <code>d5e3967</code> (post-AC-0370 closeout, 2026-09-28 02:30). Native <code>godot/bin/libchunkio.so</code> dated 2026-09-28 02:00 — newer than the last <code>gen.cpp</code> edit (09-27 12:14), so the staged .so matches the tree.</p>
+
+<div class="find"><b>FINDING F1 (before any measurement): the ticket's numbers price the wrong tree.</b>
+AC-0371 was filed 2026-09-27 05:56 — 4 h <i>before</i> AC-0367 piece A landed (09:41) and 7 h before piece B (12:42). Its
+"113.8 ns × 14,057 searches = ~1,600 µs/chunk (29.1% of 5,502)" is AC-0366's number for tree <code>dc07e05</code>,
+which is byte-identical to AC-0363's pre-cave-series-fix tree. Since then, AC-0367 replaced the outside tunnel rule with
+vanilla's spaghetti/noodle min-chain: the deep cave void shrank <b>236,845 → 21,173 cells (11×)</b>, 66% of columns are now
+cave-free (was 1.7%), genhash was intentionally rebased 25/25 (ref now
+<code>.scratch/AC-0367-gates/genhash_pristine_r1.log</code>, GENMS 202-203), and AC-0367 piece B already measured the aquifer
+fill saving at −842 µs/chunk (per-chunk 5,359 → 4,758 µs). The aquifer SEARCH population (cave-air blocks) collapsed with the
+void, so the current-tree term and search count must be re-measured on this tree before any fix is chosen — exactly the
+measure-first discipline the ticket demands. The ticket's reference numbers (1,600 µs term, 5,502 µs/chunk) are kept as the
+stated baselines; every number below is measured on this tree.</div>
+
+<h2>Plan (recorded as executed)</h2>
+<ol>
+<li>Baseline on the pristine tree: G0, genhash (25/25 vs the AC-0367 reference + GENMS), R24 boundary walk (AC-0364 instrument:
+<code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=24 AWECRAFT_WALK=10 AWECRAFT_TICKTIME=1</code>, 16 m/s fly, seed 1 default, 8 GB cap).</li>
+<li>Probe build: one-line counters (permanent: <code>aqu_searches</code>, <code>scan_blocks</code> — the AC-0366 instrument gap;
+temporary: candidates visited, barrier-zone entries, barrier-noise calls, distinct (column, slab) keys, sky fast-path skips) +
+a temp 11×11/seed-44 census arm (lake columns, rim junctions, the AC-0342 contracts) + an env-gated aqu-stub for the exact
+fill-without-search term. Rebuild + re-measure.</li>
+<li>Fix: whichever of (a) unbounded/oversized scan, (b) redundant per-block recomputation, (c) cache hostility the counts
+indicate. Constraint: genhash 25/25 byte-identical (any move = a finding), census identical, H untouched.</li>
+<li>Gates: G0, genhash 25/25, census identical, farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo, lightstate 0/0, r16
+(far_holes 0/0 both bands), water contracts, boundary r4 in band, battery (7 modes, 16 GB), per-chunk before/after, R24 window
+before/after. Windows DLL rebuilt + re-staged. Pristine re-verification at the end.</li>
+</ol>
+
+<h2>1. Baseline (pristine tree)</h2>
+<p>G0: rc 0, 0 SCRIPT ERROR. genhash: <b>25/25 byte-identical</b> to the AC-0367 reference
+(<code>.scratch/AC-0367-gates/genhash_pristine_r1.log</code>), GENMS 126-127 (25 chunks end-to-end;
+lower than AC-0366's 144 and AC-0367's 202-203 — machine/cgroup variance, noted).
+True per-chunk fill (clean instrument, the <code>fill_us</code> stage ÷ 25, full path): <b>1,149.2 µs/chunk</b>.</p>
+
+<h2>2. The measurement (probe build, current tree)</h2>
+<p>Probe build = pristine + one-line counters (permanent <code>g_aqu_searches</code>/<code>g_scan_blocks</code>;
+temporary: candidates visited, barrier-zone entries, barrier-noise calls, distinct (world-column, aquifer-slab) keys,
+sky fast-path skips, all-dry-slab searches) + an env-gated aqu-stub (<code>AWECRAFT_AQU_STUB</code>) that returns
+<code>{0,0}</code> at the top of <code>aqu_block</code> — the fill-without-search term. 25-chunk genhash census
+(<code>.scratch/AC-0371-gates/genhash_probe_r1.log</code>):</p>
+<table>
+<tr><th>metric (per chunk)</th><th>value</th><th>reading</th></tr>
+<tr><td>searches</td><td>869.3</td><td>was 14,057 pre-AC-0367 (the ticket's number) — 16× collapse with the cave void</td></tr>
+<tr><td>candidates visited / search</td><td><b>12.000</b> (exact)</td><td>hypothesis (a) refuted: the neighbourhood is bounded and tight (12 = the full 2×3×2 table neighbourhood; no oversized scan)</td></tr>
+<tr><td>barrier-zone entries / search</td><td>31.0%</td><td>barrier pass runs a third of the time, but…</td></tr>
+<tr><td>barrier-noise calls (25 chunks)</td><td><b>2</b></td><td>…almost never produces pressure (no differing-status fluid pair in reach)</td></tr>
+<tr><td>distinct (column, slab) keys</td><td>167.8</td><td>→ <b>5.18 searches re-query the same 12-neighborhood</b>: hypothesis (b) confirmed — redundant per-block recomputation</td></tr>
+<tr><td>all-dry-slab searches</td><td><b>86.0%</b></td><td>on the post-AC-0367 (land-dominant genhash window) world, 12 of 12 candidates are dry in the overwhelming majority of searches — the search is provably inert there</td></tr>
+<tr><td>sky fast-path skips</td><td>62,033</td><td>the existing air skip already removes 84% of the air blocks from the search at all</td></tr>
+</table>
+<p>Cache (c) is not the story: the table is ~3.8 KB (L1-resident) and the access pattern is per-column sequential.
+The term itself, measured with the stub on the <b>clean</b> baseline build (no probe counters — the probe's own
+atomics inflated the fill by ~200 µs/chunk, which is why the term is quoted from the clean pair):
+<b>fill 1,149.2 µs (with search) − 1,067.1 µs (stub) = 82.2 µs/chunk = 94.5 ns/search</b> — 1.7% of the ~4,800 µs
+chunk, <b>not</b> the ticket's 1,600 µs / 29.1%. AC-0367's world change already captured ~1,520 µs of this term
+(via the 16× search-count collapse); the per-search cost fell 113.8 → 94.5 ns (mix shift: the surviving searches
+sit in denser cave/land structure).</p>
+
+<h2>3. The fix</h2>
+<p>Answers (b) + the measured dry-slab dominance; <b>bit-identical by construction</b> — every d² operand
+(x, y, z, the cell centers) is an integer and every squared distance is exact in int32 (|x−cx|,|z−cz| ≤ 30,
+|y−cy| ≤ 23 for the 12 candidates, d² ≤ ~2,329) and was exact in double, so the int math computes the same
+integers the double version did; the candidate iteration order and the strict insertion-sort comparisons
+(ties keep the earlier-iterated candidate) are reproduced op-for-op; the <code>INT32_MAX</code> sentinel plays
+the <code>1e300</code> role. All in <code>aqu_block</code> + a per-column POD (<code>AqColState</code>),
+no file-static state (TG-safe: columns are disjoint across workers):</p>
+<ol>
+<li><b>Per-column precompute</b> (the fill loop is per-column; x, z, he are constant): <code>A[dx][dz] =
+(x−cx)² + (z−cz)²</code> for the 4 xz combinations — the centers' xz depend only on the cell ix/iz, never the
+slab. Computed once per column.</li>
+<li><b>Per-slab candidate cache</b> (rebuilt only when the slab <code>ay</code> changes): the 12 slots in the
+<b>original (dx, dy, dz) iteration order</b>, each {cy, dA, <code>const AquCell *</code>, valid} — the barrier
+pair pass now dereferences pointers (the <code>idx % 3 / idx / 9</code> decode is gone).</li>
+<li><b>All-dry early-out</b> (measured 86% of searches): with no fluid among the 12 candidates the search is
+provably inert (barrier stone needs a fluid pair → p stays 0; the fluid rule needs <code>n0.type &gt; 0</code>) —
+returns <code>{0,0}</code>, exactly what the original computed there. The caller's y ≤ 10 lava-layer rule is
+unaffected (it runs on <code>out.block == 0</code> either way).</li>
+<li><b>Int d²</b>: 12 × (squared-diff table load <code>SQ[y−cy+128]</code> + A add) + the int insertion sort.</li>
+</ol>
+<p>Everything downstream of the search — <code>aqu_pressure</code>, <code>aqu_barrier</code>, the fluid/fl-8
+rules, the lava layer, the stone-rim <code>y &lt; he</code> gate — is untouched.</p>
+
+<h2>4. After (fixed tree)</h2>
+<p>genhash: <b>25/25 byte-identical</b> to the AC-0367 reference (verified twice, on two independent rebuilds of
+the fixed source); GENMS 124-128. The per-chunk number moves:</p>
+<table>
+<tr><th>per chunk (same instrument)</th><th>before (C)</th><th>after (D)</th><th>Δ</th></tr>
+<tr><td>fill stage</td><td>1,149.2 µs</td><td>1,110.6 µs</td><td>−38.6 µs (inter-run variance ±~15 µs on the rest of the fill)</td></tr>
+<tr><td>aquifer search term (stub difference)</td><td><b>82.2 µs</b> (94.5 ns/search)</td><td><b>28.1 µs</b> (32.3 ns/search)</td><td>−54.0 µs — <b>2.9× cheaper per search</b></td></tr>
+<tr><td>searches / chunk</td><td>869.3</td><td>869.3</td><td>unchanged (same searches, cheaper)</td></tr>
+</table>
+<p>Against the ticket's stated baselines: the 1,600 µs term is 28.1 µs now (AC-0367 removed ~1,520 µs of it by
+shrinking the world; this fix removes a further 54 µs). R24 window (AC-0364 instrument, one run each, clean
+baseline build C vs fixed D): <b>no measurable change</b> — walk_s 11.22 → 10.22, <code>queue_size</code>
+1316 → 1316, storm p99 85 → 106 / max 484 → 362 ms, <code>in_radius_built_final</code> 102 → 88,
+<code>crossing_frame</code> p50 10 → 32 / p95 61 → 63 ms; all deltas are inside the run-to-run variance of this
+window (the same window's storm max varied 262 ↔ 484 ms across runs of the SAME tree). Expected: the R24 window
+is bounded by main-thread drain + collide + dispatch (AC-0364/0369/0370), and ~54 µs × ~1,300 generated chunks
+≈ 70 ms of a 10 s walk is below that floor.</p>
+
+<h2>5. Gates</h2>
+<p>All on the fixed build D (the gate set), then re-verified on the final build E (temp instrumentation
+physically removed, permanent counters + fix only). Logs: <code>.scratch/AC-0371-gates/</code>.</p>
+<table>
+<tr><th>gate</th><th>result</th><th>log</th></tr>
+<tr><td>G0 (zero SCRIPT ERROR, not rc)</td><td>0/0 on pristine, D, and E</td><td><code>G0_*.log</code></td></tr>
+<tr><td>genhash 25/25 vs AC-0367 ref</td><td><b>byte-identical</b> — 4 independent runs (C-state, D×2, E) + the battery's genhash mode (7th)</td><td><code>genhash_*.log</code></td></tr>
+<tr><td>aquifer census (11×11, seed 44) before/after</td><td><b>identical</b>: land 29,895 / ocean 1,081 / lake 3,081 / hidden water 24,030 / at-sea-or-islet 290 / water cells 28,194 / lava 925 / rim junctions 21 / aquifer counters 48,298/824/7,212/1,026/26 (C == D, field-for-field)</td><td><code>census_base3.log</code>, <code>census_fix2.log</code></td></tr>
+<tr><td>water contracts</td><td><b>open_water 0</b> (no water strictly above any solid — the AC-0342 contract, flat-measurable); max water y = 144 (perched mountain lakes — the AC-0291 "above-sea" class, legitimate). See the finding below on the 1,081 ocean columns.</td><td>census logs</td></tr>
+<tr><td>farab</td><td><b>h_mismatch 0</b>, mat_surf_diff 0, ok true (45 cols) — H did not move</td><td><code>farab.log</code></td></tr>
+<tr><td>ladder</td><td><b>20/20</b> band_a (fail_n 0), band_b 155/155, band_c 94/94, ok true</td><td><code>ladder.log</code></td></tr>
+<tr><td>meshprobe</td><td><b>1.0</b> (1914/1914 cell match, 32/32 chunks)</td><td><code>meshprobe.log</code></td></tr>
+<tr><td>halo</td><td>mismatches 0, ref_converged, ok true</td><td><code>halo.log</code></td></tr>
+<tr><td>lightstate (r16)</td><td>0/0 (stragglers 0, wash false) — field-identical to AC-0367's accepted run</td><td><code>lightstate.log</code></td></tr>
+<tr><td>r16</td><td><b>far_holes 0/0 both bands</b> (far0 0, far1 0), ok true</td><td><code>r16.log</code></td></tr>
+<tr><td>boundary r4</td><td>ok true, radius 4, marker_ok true, in band (same shape as AC-0367's)</td><td><code>boundary_r4.log</code></td></tr>
+<tr><td>battery (7 modes, 16 GB cap)</td><td>rc 0, 0 SCRIPT ERROR, 7/7 RESULT lines — mode-for-mode field-identical to AC-0367's accepted battery run (player/interact/light/fluids/buckets/genhash/settings)</td><td><code>battery2.log</code></td></tr>
+<tr><td>R24 window before/after</td><td>no measurable change (see §4 — inside run-to-run variance; the window is dispatch/drain-bounded)</td><td><code>r24_base2.log</code>, <code>r24_fix.log</code></td></tr>
+<tr><td>per-chunk cost</td><td>fill 1,149.2 → 1,110.6 µs; search term 82.2 → 28.1 µs (<b>−54 µs</b>, 2.9×/search)</td><td>stub pairs</td></tr>
+</table>
+<p><b>Temp probes removed, pristine re-verified:</b> all <code>g_p_*</code> counters, the env stub, the AQP
+line, the <code>&lt;cstdio&gt;</code> include, and the <code>aqucensus</code> arm are physically removed —
+<code>git diff --stat</code> shows only <code>gdext/src/gen.cpp</code> (the fix + the two permanent
+<code>g_aqu_searches</code>/<code>g_scan_blocks</code> counters + their <code>gen_timing()</code>/
+<code>reset_gen_timing()</code> entries); <code>godot/scenes/harness.gd</code> is pristine (zero diff).
+Final E build: G0 0/0, genhash 25/25 byte-identical, GENMS 124, no AQP output. Windows DLL rebuilt +
+re-staged via <code>./build_windows.sh --no-serve</code> (real HOME): new
+<code>libchunkio.windows.template_release.x86_64.dll</code> (3,976,613 B) in <code>gdext/bin</code>,
+<code>godot/bin</code> and <code>exports/windows</code> (side-by-side with the exe + in the zips), fresh
+stamped artifact <code>AweCraft-20260928-0535.exe</code> — <code>winbuild.log</code> rc 0. The ticket's <code>git diff --stat</code> also shows <code>tasks/TASKS.yaml</code>
+(status open → in-progress) — the coordinator's own flip at session start, not this change.</p>
+<p><b>FINDING F2 (the census window on this tree):</b> the 1,081 lattice-ocean columns (the exact AC-0342
+contract set) split three ways on the current tree: 290 are at-sea or islets (topmost water at 126, or the
+solid top reaches the sea — where the fill legitimately stops); the rest are <b>carved islets</b> — columns
+whose pre-carve effective surface <code>he</code> reached ≥ 126 (so the AC-0342 pre-carve-<code>he</code>
+fill policy placed no ocean water), then AC-0290's carver dropped the post-carve top back below sea level,
+leaving the column dry (measured: H=125, solid top 121-123, zero water). This is the documented AC-0342
+policy (fill start = pre-carve he+1; "H / the surface fields / SEA are never touched") interacting with
+AC-0367's changed density — a property of the current tree, byte-identical before and after this change.
+The flat-measurable contract (no water above any solid) holds exactly. Note for closeout: the AC-0342
+"1081/1081 at sea" standing contract no longer holds in its strict pre-carve form on this tree — worth a
+coordinator look (possibly AC-0367 follow-up), not a regression of this fix. (Side note on measurement:
+the land/ocean split must use the generator's lattice H — <code>column_heights16</code> = <code>surface_h</code> —
+not the dense <code>terrain_height</code>, which differs by the trilinear residual and misclassifies coastal
+columns.)</p>
+
+<h2>Verdict</h2>
+<p>Measure-first held: on this tree the aquifer search is <b>82.2 µs/chunk (869.3 searches × 94.5 ns), not the
+ticket's 1,600 µs (29.1%)</b> — AC-0367's world change already removed ~1,520 µs of the term by collapsing
+the cave void 11× (search population 14,057 → 869/chunk). Of the ticket's three hypotheses: (a) refuted
+(exactly 12.000 candidates/search — the neighbourhood is bounded and tight), (b) <b>confirmed</b>
+(5.18 searches re-query the same 12-neighborhood), (c) not implicated (3.8 KB table, L1-resident).
+The fix (per-column xz precompute + per-slab 12-candidate cache + all-dry early-out + int d², all
+bit-identical by construction) takes the term to <b>28.1 µs (32.3 ns/search, 2.9× cheaper per search)</b> —
+the per-chunk number moves (fill −38.6 µs measured; −54 µs term by the stub method), so it is kept, not
+reverted. genhash 25/25 byte-identical (5 runs), census identical, farab h_mismatch 0, ladder 20/20,
+meshprobe 1.0, halo 0, lightstate 0/0, r16 far_holes 0/0 both bands, boundary r4 ok, battery 7/7
+mode-identical, G0 0/0, R24 window unchanged (dispatch-bounded; reported honestly). The remaining
+lever is small (28 µs of ~4,800 µs); the user-felt generation cost lives elsewhere on this tree.</p>
+</body></html>
