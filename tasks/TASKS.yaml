@@ -1,10 +1,11 @@
 meta:
-  updated_at: 2026-09-28T02:30
+  updated_at: 2026-09-28T05:39
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0371
+- AC-0374
 - AC-0373
 - AC-0145
 - AC-0310
@@ -21059,10 +21060,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-09-27T05:56
-  updated_at: 2026-09-27T05:56
+  updated_at: 2026-09-28T02:30
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -21255,6 +21256,68 @@ intake:
     split, and the new `gdext/src/random_tick.cpp` this ticket would extend. DRAIN remains the bigger
     target (52.5 ms of a 69.8 ms worst frame on my verification run) and is AC-0369''s successor work,
     so this is the secondary lever.
+
+    '
+  comments: []
+- id: AC-0374
+  title: carved-islets-dry-ocean-columns
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-28T05:39
+  updated_at: 2026-09-28T05:39
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: In the ocean there are now hundreds of dry shafts - columns whose top the cave
+    carve pushed below sea level but which never got any water, because the decision to fill a column
+    with ocean was made before the carve ran. Standing over one you would see a hole in the sea.
+
+
+    2) Technical Details:
+
+    FOUND BY AC-0371''s verification (2026-09-28) and NOT caused by that fix, which only made an existing
+    search cheaper: on the current tree **791 of the 1,081 lattice-ocean columns are carved islets**.
+    The mechanism is a classification-order bug: AC-0342''s contract gates the ocean fill on the PRE-CARVE
+    height (`he`), so a column with `he >= 126` is classified as land and receives no water - and AC-0367''s
+    carve (which replaced our over-carving tunnel apparatus with vanilla''s narrow-band terms and changed
+    the deep void from 236,845 to 21,173 cells) then drops some of those columns'' tops BELOW sea. The
+    result is an air column standing inside the ocean, because the fill is per-column and the neighbouring
+    water does not spread into it.
+
+    WHY IT NEEDS A DECISION RATHER THAN AN OBVIOUS PATCH: (1) the water simulation may heal it at runtime
+    - if the fluid sim spreads water into a below-sea column adjacent to ocean, the pit fills itself and
+    the only cost is the fluid ticks; if it does not (source blocks at sea level, no lateral flow in that
+    configuration), it stays a visible hole. MEASURE THAT FIRST - load a region containing affected columns,
+    let it settle, and census the columns that remain dry below sea. (2) The fix has two shapes with different
+    consequences: re-classify AFTER the carve (so a carved-below-sea column in a lattice-ocean cell gets
+    filled), or gate on the post-carve surface in the ocean cells only. Either changes water placement,
+    so genhash WILL rebase and the rebase must be deliberate and counted, with the AC-0342 land contracts
+    re-measured (land open water 0; no water above the carve on land). (3) The contract itself was a MEASURED
+    claim in AC-0291/AC-0342''s results rather than a standing gated row, which is why nothing caught
+    this - consider whether the ocean/land water classification deserves a permanent arm field so the
+    next carve change cannot move it silently.
+
+    SCOPE: this is about the ocean/lattice-ocean cells only. Do not touch the land aquifer behaviour (AC-0291''s
+    perched lakes, rims and waterfalls are a delivered feature with a census and must stay field-identical),
+    and do not "fix" this by weakening AC-0342''s land-dry contract - the whole point of that contract
+    was to stop the carve from creating water on land.
+
+    VERIFY: the islet count before/after (the same census AC-0371 used); whether the fluid sim heals them
+    (a settle run plus a census of dry-below-sea columns); the AC-0342 contracts re-measured (land open
+    water 0, ocean water at sea where it should be); genhash rebased deliberately with the count of changed
+    chunks recorded and the doc re-rendered; H unchanged (thash + farab h_mismatch 0); and the standing
+    set green (G0, ladder 20/20, meshprobe 1.0, halo, lightstate 0/0, r16 all sub-flags with far_holes
+    0/0 both bands, boundary r4 in band, the battery, and the fluid arms specifically).
+
+    CONTEXT: read tasks/AC-0371/AC-0371-results.html (F2 and the census method), tasks/AC-0291/AC-0291-results.html
+    (the aquifer feature and its census) and tasks/AC-0367/AC-0367-pieceB-results.html (the carve change
+    that exposed it). Note the R24/`water` arm and the fluidfall/fluidsettle arms as the instruments for
+    the self-healing question.
 
     '
   comments: []
