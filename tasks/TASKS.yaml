@@ -1,11 +1,11 @@
 meta:
-  updated_at: 2026-09-27T23:33
+  updated_at: 2026-09-28T02:30
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0370
 - AC-0371
+- AC-0373
 - AC-0145
 - AC-0310
 - AC-0311
@@ -20963,11 +20963,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-27T05:26
-  updated_at: 2026-09-27T05:26
-  completed_at: null
+  updated_at: 2026-09-28T02:29
+  completed_at: 2026-09-28T02:29
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The frame tail is now attributed down to a single line of work - the per-tick
@@ -21018,7 +21018,39 @@ intake:
     and note AC-0356''s batched-edit pattern and AC-0369''s separate DRAIN work - DRAIN is the bigger
     share (72% of the worst frame) so this ticket is the secondary target, not the headline.
 
-    '
+
+
+    CLOSED - and it is the cleanest ticket of this performance series: the route was chosen by a measurement
+    taken BEFORE any code was written, the win is large, and the behaviour-identity claim is proven by
+    an oracle rather than by argument. COORDINATOR VERIFICATION on my own capped stage of commit f1ed66c
+    (every arm rc 0, zero SCRIPT ERROR): genhash 25/25 byte-identical in two runs; farab h_mismatch 0;
+    ladder 20/20; meshprobe 1.0; halo ok; lightstate 0/0; **r16 all sub-flags green with far_holes 0/0
+    in BOTH bands**; boundary r4 ok at 10/40; the R24 walk inside every gated value - crossing sweep p50
+    **6.9** against the re-based <=10 (and its max 13.7 would have cleared the OLD <=15 as well, which
+    is a small independent confirmation that AC-0369''s re-base was about variance rather than about loosening
+    a gate), crossing frame p95 60 against <=150, and storm p99 100 against <=200; and the battery complete
+    with only the known AC-0330 settings red and wallshot''s render timeout on this degraded-llvmpipe
+    box. The worst captured frame in my run is 69.8 ms splitting DRAIN 52.5 / MISC 5.5, which is exactly
+    the shape AC-0363 predicted and the port was meant to produce: the tick is no longer a major term
+    and DRAIN''s share is unambiguously the target that remains. THE MEASUREMENT THAT DECIDED THE ROUTE
+    is worth recording as method: a fired tick costs 2.15 ms of which the column scan is 0.87, the hash
+    math ~0.8 and the random_tick_map bookkeeping 0.45, while the DISPATCHED per-block work is 0.0 ms
+    because the consumer hook is a stub on a walk - i.e. the cost was ~100% portable bookkeeping, so the
+    port won and the throttle was correctly refused rather than merely deferred: throttling would have
+    owed a real, statable game cost (N x 984 random ticks lost per multi-fire stall frame under load).
+    WHAT LANDED: tick 8.0/12.8/14.1 -> 4.0/5.6/5.7 ms (-50% of the sum), frame share 15.1% -> 8.9%, worst
+    frame 77.5 -> 56.9 ms, hash+map 1.1 -> 0.11 ms/tick (10x), and the multi-fire count 16/20 -> 10/20
+    - the last of which matters most because that is the feedback loop AC-0365 discovered, where the per-tick
+    cost was paid two or three times inside the frames that were already long. BIT-IDENTITY IS CROSS-LANE:
+    the tick arm''s window_md5 is byte-identical over W=120 and recompute_mismatch is 0 across all 118,080
+    positions, with GDScript as the reference against native output rather than the same code checked
+    twice. THE FLUIDS AND TREES ARMS ARE BYTE-IDENTICAL before and after, which is the right evidence
+    for a change touching tick_fluids and leaf decay, and the pre-existing stale-row states (leaves persisted_ok
+    among them) are documented instead of being counted as clean. ONE INCIDENT IS ON THE RECORD RATHER
+    THAN HIDDEN: an r16 attempt ran against a stale backup file, threw a parse error and produced a 6.8
+    GB log; no result from it was used, the file was cleaned up, and the gates were re-run on a verified
+    tree - I checked the working tree myself for oversized artifacts and found none, with 256 GB free.
+    The residual is now the two column scans at 1.48 ms/tick, filed as AC-0373.'
   comments: []
 - id: AC-0371
   title: cheapen-aquifer-voronoi-search
@@ -21169,4 +21201,60 @@ intake:
     software GL as a candidate, but the headless arm has no GL in the loop at all, so llvmpipe cannot
     be the cause for this arm - the next reader should not chase it. AC-0369''s own conclusion is unaffected:
     its per-unit and per-frame costs were measured inside frames and reconcile.'
+  comments: []
+- id: AC-0373
+  title: index-the-random-tick-column-scan
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-28T02:29
+  updated_at: 2026-09-28T02:29
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The random-tick pass no longer stutters the frame, but what is left of its cost
+    is spent walking columns to find the ones that can tick at all - work that could be answered by an
+    index instead of a scan.
+
+
+    2) Technical Details:
+
+    WHERE THIS COMES FROM (AC-0370, 2026-09-28): porting the random-tick pass to the native lane cut the
+    tick from 8.0/12.8/14.1 ms to 4.0/5.6/5.7 ms, the frame share from 15.1% to 8.9%, and the multi-fire
+    incidence from 16/20 to 10/20 worst frames. The named residual is the **two column scans at 1.48 ms/tick**
+    (of which the main column scan is 0.87 ms), which is now the largest remaining term inside a tick
+    that fires one to three times per frame during the streaming storm - so it is worth 1-3 ms/frame,
+    roughly 10-20% of a storm-phase frame.
+
+    THE JOB: replace the scan with something that does not touch every column. The candidates, to be chosen
+    by measurement the way AC-0370 chose its route: (a) maintain a compact per-region index of columns
+    that currently have anything tickable (the random-tick pass only matters where there is foliage, crops,
+    snow, ice or fire - an empty stone column can never produce a tick), invalidated on edit and on load/unload
+    rather than recomputed; (b) if the scan is already bounded by a per-column flag, make the flag hierarchical
+    (a per-slab or per-region "nothing tickable here" bit) so the scan can skip whole regions in one test;
+    (c) hoist the scan out of the per-tick path entirely if the tickable set changes far more slowly than
+    the tick fires. Measure which of these the data supports BEFORE writing one, and report the split
+    the way AC-0370 did.
+
+    THE ACCEPTANCE TEST IS AC-0370''s OWN INSTRUMENT: the tick arm (`window_md5` byte-identical, `recompute_mismatch`
+    0 across all 118,080 positions - the port made this a cross-lane oracle, so it is now the strongest
+    behaviour check available) plus the R24 walk''s tick ms/frame, frame share, multi-fire count and worst
+    frame. A change that does not move the tick number must be reverted and said so.
+
+    CONSTRAINTS: bit-identical behaviour (the md5 oracle is the gate, not a proxy); genhash 25/25 byte-identical;
+    the fluids, trees, leaves and fluidfall/fluidsettle arms byte-identical before and after; r16 all
+    sub-flags with far_holes 0/0 both bands; G0 zero SCRIPT ERROR; the battery green (7 modes in one process
+    need 16 GB); and if the native lane is touched, OPS.md''s rebuild plus re-stage procedure, including
+    the Windows DLL because the product is Windows-only.
+
+    CONTEXT: read tasks/AC-0370/AC-0370-results.html first - it has the sub-stage brackets, the measured
+    split, and the new `gdext/src/random_tick.cpp` this ticket would extend. DRAIN remains the bigger
+    target (52.5 ms of a 69.8 ms worst frame on my verification run) and is AC-0369''s successor work,
+    so this is the secondary lever.
+
+    '
   comments: []
