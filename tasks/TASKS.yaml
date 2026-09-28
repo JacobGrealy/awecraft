@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-27T15:29
+  updated_at: 2026-09-27T23:33
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0369
 - AC-0370
 - AC-0371
 - AC-0145
@@ -20870,11 +20869,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-09-27T05:03
-  updated_at: 2026-09-27T13:06
-  completed_at: null
+  updated_at: 2026-09-27T23:33
+  completed_at: 2026-09-27T23:33
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The window right after loading lasts about twenty seconds, and the only reason
@@ -20920,7 +20919,42 @@ intake:
     touch placement/streaming, so read their results pages before changing the dispatch path; and note
     that this box''s llvmpipe is degraded, so renders are not available as evidence.
 
-    '
+
+
+    CLOSED - TWO WINNING CHANGES LANDED, ONE WINNING CHANGE REVERTED, AND THE REVERT IS THE MOST VALUABLE
+    THING IN THE TICKET. COORDINATOR VERIFICATION on my own capped stage of commit 04e67bc (every arm
+    rc 0, zero SCRIPT ERROR): genhash 25/25 byte-identical in two runs; farab h_mismatch 0 with 1080/1080
+    slabs; ladder 20/20; meshprobe 1.0; halo ok; lightstate leaks 0; **r16 with NO reds and far_holes
+    0/0 in BOTH bands** - the decisive check, since r16 is exactly what forced the revert; boundary r4
+    ok with p50 12 / p95 44 inside the band; and the battery complete with only the long-standing AC-0330
+    settings red plus wallshot''s rc=124, which is the known render timeout on this degraded-llvmpipe
+    box rather than a code failure. WHAT LANDED: (1) `snap_rings` is cached per COLUMN keyed on the existing
+    `nbs_stamps` instead of being recomputed eight times per slab, taking his_nbs 240.1 -> 78-86 ms and
+    51.1 -> ~18 us/unit (2.8-3.1x at a 77-78% hit rate) with the AC-0354 neighbour-staleness contract
+    PRESERVED rather than weakened - an all-8 epoch superset key, band-A deliberately uncached, aliasing
+    read-only; (2) the `_eff_for` call on the star path is deleted, its result having been discarded all
+    along (8.65 -> 0.54 us/unit, 16x), with `star_null=false` verified in headless and the light_cache_hits
+    move documented as a counter rather than world state. WHAT WAS REVERTED AND WHY IT MATTERS MORE THAN
+    EITHER WIN: the incremental steady-list change (T1/T2) measured a LARGE win - pick list 5.39 -> 0.44
+    ms/frame, g_pick 2.8 -> 0.011 - and still went in the bin, because it regressed r16''s `far_holes`
+    from 0 to a stable 7-10 in both bands. The diagnosis is what makes the revert trustworthy rather than
+    superstitious: a forced-rebuild probe narrowed the gap to 3 but never to 0, and window, membership
+    and pick-order were each exonerated in turn, so the per-defer rebuild T1 removes is LOAD-BEARING for
+    the far-hole invariant and the win was not merely unproven but actively incompatible. A measured 12x
+    on one cost does not buy a correctness regression, and this is the second time this session a tempting
+    optimisation has been refused on evidence rather than on caution. The same experiment produced a negative
+    result about a measurement: roughly 1.8 s previously attributed to `_pick_data_cached` was BOX DRIFT
+    rather than code (against a same-machine pristine control the pick figures agree to within noise),
+    which is recorded because a number that flatters a future change is worse than no number. THE MEASUREMENT
+    PHASE ALSO CORRECTED THE TICKET''S OWN PREMISE before any code moved: the "~4.5 ms per unit" was per-FRAME
+    amortised overhead over 6-8 units, not a per-unit cost (a unit is really 0.23-0.40 ms), so the attack
+    moved to the pick machinery and the redundant per-slab work, where the money actually was. ONE STANDING-VALUE
+    CORRECTION FELL OUT OF MY VERIFICATION and is committed separately: the crossing SWEEP was gated on
+    its MAX (<=15) but three consecutive R24 runs on this one build read max 9.3 / 15.6 / 24.4 while the
+    p50 held at 5.9 / 6.4 / 7.0 against a historical 5.3-6.7 - so the gate now rides the stable p50 with
+    the max documented as a watch item, and the row says explicitly that this re-base came from same-build
+    variance rather than from a green reading after a change, and that a rising p50 remains a real regression
+    signal.'
   comments: []
 - id: AC-0370
   title: port-or-throttle-random-tick-and-leaf-decay
