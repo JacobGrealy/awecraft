@@ -78,6 +78,14 @@ machine reason behind them.
 Gate curls: `curl -sI http://127.0.0.1:8080/AweCraft.exe` → 200 and
 `curl -sI http://127.0.0.1:5180/` → 200. Report both `localhost` and the LAN address.
 
+**Serving wrinkle (2026-09-28):** `build_windows.sh` may report `pidfile stale` then `port 8080 busy
+— trying next` and start its server on 8081, while the ORIGINAL 8080 server is still alive and serving the
+SAME export directory (its document root is the export dir, so a rebuild is picked up in place). Verify by
+content, not by port: `curl -s http://127.0.0.1:8080/BUILD.txt | head -3` prints the git revision and stamp
+of what is actually being downloaded, and if that matches the build you just made then the canonical URL is
+correct and nothing needs fixing. Do not try to kill the 8080 holder from inside an agent sandbox — it lives
+outside the bwrap PID namespace, so it is invisible to `ps` there even though `ss` shows the listener.
+
 ## 4. Windows build + serve
 
 ```bash
