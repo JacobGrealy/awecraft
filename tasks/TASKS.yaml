@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-28T10:09
+  updated_at: 2026-09-28T11:34
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0375
 - AC-0145
 - AC-0310
 - AC-0311
@@ -21440,11 +21439,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-28T08:11
-  updated_at: 2026-09-28T08:11
-  completed_at: null
+  updated_at: 2026-09-28T11:34
+  completed_at: 2026-09-28T11:34
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Along the shoreline there are stone spikes standing out of the water - stalagmites
@@ -21484,5 +21483,37 @@ intake:
     results page (the drip pass). Renders are currently infeasible on this box (llvmpipe degraded), so
     evidence this by census rather than by picture.
 
-    '
+
+
+    CLOSED - and it grew from a cosmetic footnote into a real coastline fix once the rate was measured.
+    COORDINATOR VERIFICATION on my own capped stage of commit d4cc369 (every arm rc 0, zero SCRIPT ERROR):
+    genhash 25/25 byte-identical in two runs; farab h_mismatch 0; ladder 20/20; meshprobe 1.0; halo ok;
+    lightstate 0/0; r16 no reds with far_holes 0/0 in both bands; boundary r4 ok at 10/42; the R24 walk
+    inside every gated value (sweep p50 7.1 against the re-based <=10, crossing frame p95 49 against <=150,
+    storm p99 77 against <=200); the battery complete with only the known AC-0330 settings red and wallshot''s
+    render timeout; AND the new `oceansurface` arm run by me on the fixed build reads ok:true with 1,081
+    ocean columns, **capped_solid_above 0** and **surface_ok_at_sea 1,081**, up from 887 - so every ocean
+    column now carries a proper sea surface rather than 194 of them carrying a stalagmite through it.
+    WHAT CHANGED BY THE END OF THE TICKET versus what I filed: I had described this as a small, visible
+    oddity from a single seed-44 window; the census across six seeds showed **5.5-33% of ocean columns
+    on EVERY ocean seed** (194/1081 and 209/627 at 11x11; 580/3029, 161/2474, 242/2751 and 519/9471 at
+    25x25), i.e. stalagmites standing out of the water on every coastline a player would visit. The lesson
+    is one this session keeps teaching from different directions: the RATE is part of the finding, and
+    a single-window count is not a rate. THE FIX IS THE CONSERVATIVE ONE and it was chosen on vanilla''s
+    behaviour rather than on convenience: vanilla speleothems are ceiling-capped and never poke through
+    water, so the ticket''s option 2 (carving water around the spire) was refused - it would contradict
+    vanilla AND disturb the sea-surface classification that AC-0342 and the new arm exist to protect.
+    A crosses_sea guard instead caps the spire strictly below the surface, touching no water at all; water
+    cells are byte-identical in every run, submerged cave spires and land caves are unaffected, and the
+    feature is intact underground (dripstone 13,918 -> 13,446 cells with all 9,484 below-sea cells unchanged,
+    clay/deepslate/moss identical, the aquifer census field-identical). All six censuses go to zero: 194/209/580/161/242/519
+    -> 0. A DELIBERATE DELTA WITH NO REBASE, which is the unusual part and the reason the accounting is
+    worth reading: genhash stayed 25/25 unchanged because the 5x5 genhash window is entirely land on seed
+    44 (6,400 land, 0 ocean columns), so the fix removed 472 dripstone cells that the hash simply does
+    not cover - the delta is therefore counted separately with a temporary A/B census rather than being
+    waved through as "no rebase". Both native binaries were rebuilt and staged, and the builder also had
+    to install SCons workspace-local because it was missing from PATH. FINALLY, THE COORDINATOR HEAVY
+    GATE THE BUILDER FLAGGED IS RUN: the full Windows export and the :8080 serve are rebuilt so the served
+    download actually contains this session''s work (the round planet, the de-hollowed caves, the seam
+    fill, the tick and aquifer wins, and this fix) rather than a build from before it.'
   comments: []
