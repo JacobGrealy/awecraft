@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-28T05:39
+  updated_at: 2026-09-28T06:03
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0371
 - AC-0374
 - AC-0373
 - AC-0145
@@ -21060,11 +21059,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-09-27T05:56
-  updated_at: 2026-09-28T02:30
-  completed_at: null
+  updated_at: 2026-09-28T06:03
+  completed_at: 2026-09-28T06:03
   waiting_on: null
   parent_id: null
   notes: '1) User Story: One search - the per-block aquifer lookup - costs more than a quarter of every
@@ -21117,7 +21116,42 @@ intake:
     (the feature and its census) first. DRAIN (AC-0369) and the random-tick port (AC-0370) are separate
     and address different shares; this is the generation-side lever.
 
-    '
+
+
+    CLOSED - the fix is small, bit-identical and measured, and the ticket''s most valuable output was
+    a premise correction plus a contract break it surfaced. COORDINATOR VERIFICATION on my own capped
+    stage of commit d26bbd0 (every arm rc 0, zero SCRIPT ERROR): genhash 25/25 byte-identical in two runs;
+    farab ok with h_mismatch 0; ladder 20/20; meshprobe 1.0; halo clean; lightstate 0/0; **r16 no reds
+    with far_holes 0/0 in both bands**; boundary r4 ok at 11/42; and the R24 walk inside every gated value
+    - crossing sweep p50 7.2 against the re-based <=10, crossing frame p95 57 against <=150, storm p99
+    69 against <=200; the battery complete with only the known AC-0330 settings red and wallshot''s render
+    timeout on this degraded-llvmpipe box. WHAT THE TICKET ACTUALLY ESTABLISHED, in the order a reader
+    should weigh it: (1) THE PREMISE WAS STALE AND THE CREDIT BELONGS TO AC-0367 - the 1,600 us / 14,057-search
+    figures priced the pre-AC-0367 tree, and on the current tree the term is already 869.3 searches/chunk
+    at 82.2 us, because collapsing the deep void population from 236,845 cells to 21,173 left 11x fewer
+    solid blocks to search; roughly 1,520 us of this term had been removed by work that never claimed
+    it, which is exactly the kind of thing that should be recorded before someone prices a future aquifer
+    ticket from the old number. (2) THE HYPOTHESIS WAS CHOSEN BY MEASUREMENT: the neighbourhood is exactly
+    12.000 candidates per search (bounded, so an unbounded scan is refuted), the 3.8 KB table is L1-resident
+    (so cache-hostility is not implicated), and the real cost was 5.18 searches re-querying the same 12-neighbourhood
+    per (column, slab) with 86% of searches landing on provably-inert all-dry slabs. (3) THE FIX is a
+    per-column xz-squared precompute, a per-slab 12-candidate cache preserving the original iteration
+    order, an all-dry early-out, integer squared distances with an INT32_MAX sentinel and a squared-diff
+    table, and a pointer barrier pass - bit-identical by construction. It moved its number: 82.2 -> 28.1
+    us/chunk, a 2.9x cheaper search with fill 1,149.2 -> 1,110.6. (4) WHAT IT HONESTLY DOES NOT CLAIM:
+    the R24 fill window is unchanged within run variance (queue 1316/1316, walk 11.22 -> 10.22 s), because
+    the window is drain- and dispatch-bounded per AC-0364 and 70 ms of generation saving inside a ten-second
+    walk sits below that floor - so this is a generation-cost win and not yet a felt-latency win, and
+    the ticket says so instead of implying otherwise. (5) BEHAVIOUR IS UNTOUCHED: genhash 25/25 byte-identical
+    across five runs, the aquifer census field-identical, open water 0 with perched lakes to y 144. THE
+    FINDING THAT MATTERS MOST IS ONE THE TICKET DID NOT SET OUT TO MAKE, and it is filed separately as
+    AC-0374: **791 of the 1,081 lattice-ocean columns are CARVED ISLETS** - AC-0342 gates the ocean fill
+    on PRE-carve height, so a column the carve then drops below sea receives no water and stands as an
+    air column in the ocean. It is a consequence of AC-0367''s carve rather than of this fix, it moved
+    a contract that AC-0291/AC-0342 MEASURED rather than one any arm GATES (which is why nothing caught
+    it), and the new ticket asks first whether the fluid simulation self-heals the pits before anyone
+    changes classification - which is the right order, because a fix that rebases genhash to solve a problem
+    the water sim already solves would be pure loss.'
   comments: []
 - id: AC-0372
   title: between-frame-main-thread-stalls
