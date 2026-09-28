@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-28T06:03
+  updated_at: 2026-09-28T08:11
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0374
 - AC-0373
 - AC-0145
 - AC-0310
@@ -21062,7 +21061,7 @@ intake:
   status: done
   labels: []
   created_at: 2026-09-27T05:56
-  updated_at: 2026-09-28T06:03
+  updated_at: 2026-09-28T08:11
   completed_at: 2026-09-28T06:03
   waiting_on: null
   parent_id: null
@@ -21151,7 +21150,20 @@ intake:
     a contract that AC-0291/AC-0342 MEASURED rather than one any arm GATES (which is why nothing caught
     it), and the new ticket asks first whether the fluid simulation self-heals the pits before anyone
     changes classification - which is the right order, because a fix that rebases genhash to solve a problem
-    the water sim already solves would be pure loss.'
+    the water sim already solves would be pure loss.
+
+
+    COORDINATOR CORRECTION (2026-09-28): F2 IS REFUTED. The "791 carved islets" this ticket reported were
+    never real - AC-0374''s byte-verified census of the same window finds all 1,081 ocean columns holding
+    water at y=126 with 0 dry and 0 without a surface, and a multi-seed scan of roughly 800,000 columns
+    finds zero dry islets anywhere. The number was 1,081 minus 290, the complement of an ocean_at_sea
+    field still being TUNED in this ticket''s own debug runs (0 -> 74 -> 290), extrapolated by subtraction
+    without the per-column water pass; the fill gate reads pre-carve lattice H and the fill range can
+    only be extended by the carve, never shrunk, so the described mechanism is impossible in the shipped
+    code. Nothing in this ticket''s fix is affected - the aquifer search change is bit-identical and independently
+    verified on my stage - and the false F2 line should not be quoted forward. The durable outcome of
+    the follow-up is a new permanent `oceansurface` arm that gates the water classification instead of
+    leaving it as a measured claim.'
   comments: []
 - id: AC-0372
   title: between-frame-main-thread-stalls
@@ -21300,11 +21312,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-28T05:39
-  updated_at: 2026-09-28T05:39
-  completed_at: null
+  updated_at: 2026-09-28T08:11
+  completed_at: 2026-09-28T08:11
   waiting_on: null
   parent_id: null
   notes: '1) User Story: In the ocean there are now hundreds of dry shafts - columns whose top the cave
@@ -21353,5 +21365,43 @@ intake:
     that exposed it). Note the R24/`water` arm and the fluidfall/fluidsettle arms as the instruments for
     the self-healing question.
 
-    '
+
+
+    CLOSED AS A REFUTATION, AND THE REFUTATION IS THE DELIVERABLE. AC-0374 existed because AC-0371''s
+    verification reported 791 carved islets in the ocean; the pits do not exist. The census that proves
+    it was run twice over: a byte-verified pass on the exact AC-0371 window (11x11, seed 44, 121 chunks
+    md5-checked against the generator) finds every one of the 1,081 ocean columns holding a water surface
+    at y=126 - dry_zero_water 0, no-surface 0, split 887 open and 194 dripstone-capped - and a multi-seed
+    scan of roughly 800,000 columns, including a seed with 9,471 ocean columns, finds ZERO dry islets
+    anywhere. The origin of the number is now identified rather than merely doubted: 791 is 1,081 minus
+    290, the complement of an ocean_at_sea field that was still being TUNED across AC-0371''s debug runs
+    (it read 0, then 74, then 290), extrapolated by subtraction without the per-column water pass, and
+    the mechanism it claimed (H=125 with solid tops at 121-123 and zero water) describes no real column
+    - only 218 of 1,081 have H=125, he equals H throughout, and zero water matches nothing. The structural
+    argument agrees independently: the fill gate reads the pre-carve LATTICE H and the fill range can
+    only be extended by the carve, never shrunk, so the described failure cannot occur in the current
+    code at all. NO GENERATION CHANGE, NO REBASE, COST ZERO - genhash is 25/25 byte-identical against
+    the AC-0367 reference because nothing was touched. WHAT THE TICKET STILL BOUGHT, and it is the reason
+    the exercise was worth its cost: the ocean/land water classification is now a GATED INVARIANT instead
+    of a measured claim in a results page. The new `oceansurface` arm is a pure-generation census that
+    runs in about 1.9 s with seed and window overridable, gating ocean.dry_zero_water == 0 and AC-0342''s
+    land.open_wet_in_he_plus_1_to_sea == 0, with capped_solid_above as a watch field; I ran it myself
+    and it reports ok:true with 1,081 ocean columns, 0 dry, 887 flooded to sea and max water y 126. Two
+    structural facts came with it: the water simulation CANNOT self-heal a dry below-sea column under
+    any circumstances (a fresh world has fluid_wet 0, natural sea water sits stationary at fl=0, and settling
+    the region writes nothing), so a generation gate is the only guard that can ever exist for this class
+    - and that is exactly the kind of thing worth knowing BEFORE someone proposes a runtime fix. THE METHOD
+    LESSON, which is the second instance this session and the reason I am recording it here rather than
+    in passing: a number derived from a DEBUG or instrumented field must be validated against the shipped
+    generator before it becomes a ticket premise. AC-0362''s phantom 4.5 cm aperture came from a broken
+    transcription of the sphere math; AC-0374''s phantom 791 islets came from the complement of a field
+    still being tuned. In both cases the process that caught it was the same - the ticket''s FIRST step
+    was to measure the claim rather than to fix it - and in both cases the claim had already travelled
+    into a summary. I also have to own my part: I repeated the 791 figure to the user as an established
+    finding, with a paragraph of reasoning about its visual consequence, without verifying it myself;
+    the ticket''s measure-first framing is what stopped that from becoming a wrong fix, and the correction
+    is in this round''s report. ONE REAL FINDING CAME OUT OF IT, smaller and genuinely there: F-SPIRE,
+    194 seed-44 columns carrying dripstone stalagmites 1-5 blocks ABOVE an intact sea surface, because
+    the drip pass anchors spires to the slab-generation top in open-sky runs. It is now a watch field
+    on the new arm and is filed as its own ticket.'
   comments: []
