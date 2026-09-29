@@ -1,11 +1,9 @@
 meta:
-  updated_at: 2026-09-29T08:00
+  updated_at: 2026-09-29T09:48
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0378
-- AC-0376
 - AC-0368
 - AC-0310
 - AC-0311
@@ -21610,11 +21608,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-28T23:44
-  updated_at: 2026-09-28T23:44
-  completed_at: null
+  updated_at: 2026-09-29T09:48
+  completed_at: 2026-09-29T09:48
   waiting_on: null
   parent_id: null
   notes: '1) User Story: One arm has been red for weeks and everybody has learned to read past it - which
@@ -21659,7 +21657,27 @@ intake:
     the change that made the expectation stale is AC-0263. Read `tasks/harness_data.yaml`''s settings
     row for what the standing value says.
 
-    '
+
+
+    CLOSED - the standing suite has no permanent red left, and I verified it by running the arm myself
+    twice: `settings` reads ok:true on both runs with all five ms_clamp sub-checks green (default_8, oob_hi_redef_8,
+    oob_lo_redef_8, redef_band_floor_11, set_mid). COORDINATOR VERIFICATION on commit 4ce0afe across the
+    full gate set: G0 zero SCRIPT ERROR; genhash 25/25 byte-identical in two runs; farab h_mismatch 0;
+    ladder 20/20; meshprobe 1.0; halo ok; lightstate 0/0; r16 all sub-flags with far_holes 0/0 both bands;
+    boundary r4 in band; and the battery''s seven modes running ok:true IN ONE PROCESS, which is the outcome
+    this ticket existed to produce. WHAT THE FIX ACTUALLY FOUND, beyond the field that was reported: THREE
+    stale expectations rather than one - floor_sim5 wanted 5 where the code gives 8 and ceil_render wanted
+    50 where it gives 8, both made stale by AC-0263, and default_8 was red for a subtler reason worth
+    recording, namely that the arm''s own flight-knob steps legitimately leave ms in-band at 5 so the
+    check needed reset_defaults() first. A degenerate pin was added for the case that actually protects
+    the contract: a band that does not contain 8 at all (sim 10, render 20) must floor to 11. The pinned
+    semantic is that medium_start is RE-DEFAULTED rather than edge-clamped, which is what clamp_medium_start()
+    has done since AC-0263 and what the arm had never been told. WHY THIS WAS WORTH A TICKET EVEN THOUGH
+    NOTHING IN THE GAME CHANGED: the project''s standard is that a standing red does not exist, because
+    a suite with known reds trains every reader - human or agent - to skim past red, and this session
+    alone has produced four instruments whose reds or flags were broken rather than the world. A green
+    field that used to be red for a stale reason is not cosmetic; it is the difference between a suite
+    that can fail and a suite that cannot.'
   comments: []
 - id: AC-0377
   title: mobs-on-a-sphere-walk-facing-and-spawn
@@ -21758,11 +21776,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-29T02:37
-  updated_at: 2026-09-29T08:00
-  completed_at: null
+  updated_at: 2026-09-29T09:48
+  completed_at: 2026-09-29T09:48
   waiting_on: null
   parent_id: null
   notes: '1) User Story: A second arm has been red without anyone knowing why, and a red nobody has explained
@@ -21824,5 +21842,29 @@ intake:
     session. The ones that are stable and wrong are the real finding, and only then does the engine-versus-arm
     question make sense. A useful target shape, from the fix that worked twice already: gate on invariants
     that cannot flap (did anything end up below ground, did the up-vector stay radial, did the tables
-    load) and demote the aggregate censuses to reported watch values with their observed ranges.'
+    load) and demote the aggregate censuses to reported watch values with their observed ranges.
+
+
+    CLOSED - and the method the ticket demanded (establish which fields are STABLE before asking which
+    side is wrong) is what made the answer clean. COORDINATOR VERIFICATION: I ran the arm twice myself
+    on commit 4ce0afe and it reads ok:true both times with wolf_ok true and **wolf_at0 = 6.00060033798218
+    BIT-IDENTICAL across runs**, while the field that genuinely varies (fall_watch''s yland, -0.0223 then
+    -0.0211) is correctly demoted to a reported watch value rather than gated - which is exactly the shape
+    this session has now converged on four times. THE DIAGNOSIS IS THE VALUABLE PART: the stability table
+    across eight runs separated a stable-wrong field (wolf_ok, false five times) from a flapping one (fall_ok,
+    false/true/false) from two frame-sum censuses that swing by thousands with wander and despawn timing,
+    and only then was the stable-wrong field traced to its cause - the wolf was teleported in RAW CARTESIAN
+    while the player rides world_pos_of_flat, so the facet-frame rotation made the intended 6 m bench
+    measure 5.17 m, inside the FOLLOW_FAR band, which means a CORRECTLY HOLDING wolf could never satisfy
+    the old wf1 < wf0 - 0.7 gate. It has been stale since the sphere port in AC-0145, and the fix is both
+    a correction and an improvement: the wolf is placed through the same mapping as the player (giving
+    the bit-stable 6.0006 above) and the gate now asserts the CONTRACT rather than a distance - started
+    outside the band, closed by at least 0.7, holds within FOLLOW_FAR + 0.5. The flapping field was likewise
+    not physics: the pig wanders into a one-deep depression at spawn +3 and the -1.03 m read was wander
+    while is_on_floor was true on solid ground, so the gate is now lands-on-solid-ground plus never two
+    metres below the plateau with the wander itself reported. NO ENGINE DEFECT WAS FOUND, which is the
+    honest headline: four instruments this session have looked broken and all four were the instrument.
+    ONE ITEM IS FLAGGED RATHER THAN FIXED, and it is worth carrying forward: the gamepad arm''s "flat
+    within d < 6" contract is violated by the same one-deep depression the pig wanders into, so if that
+    arm ever goes red the cause is known and it is not the gamepad.'
   comments: []
