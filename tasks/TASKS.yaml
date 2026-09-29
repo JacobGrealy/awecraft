@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-29T11:17
+  updated_at: 2026-09-29T11:43
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0368
 - AC-0379
 - AC-0380
 - AC-0310
@@ -20902,11 +20901,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-09-26T23:26
-  updated_at: 2026-09-29T09:49
-  completed_at: null
+  updated_at: 2026-09-29T11:43
+  completed_at: 2026-09-29T11:43
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Three small residuals from the cross-face work (AC-0309) are documented but unfixed,
@@ -20944,7 +20943,37 @@ intake:
     plus the two environment findings it recorded (this box''s llvmpipe is degraded so renders are currently
     infeasible, and the 7-mode-in-one-process battery needs 16 GB where 8 GB used to do).
 
-    '
+
+
+    CLOSED - all three residuals are diagnosed by mechanism, and the two items that need real work are
+    filed rather than forced. COORDINATOR VERIFICATION on my own capped stage of commit 7b026bd (every
+    arm rc 0, zero SCRIPT ERROR): genhash 25/25 byte-identical in two runs, which is the right proof here
+    because this ticket changed NO product code, farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo
+    ok, lightstate 0/0, r16 no reds with far_holes 0/0 in both bands, boundary r4 ok at 12/41, the R24
+    walk inside every gated value (sweep p50 5.9, crossing frame p95 75, storm p99 86), the battery complete,
+    and the crossface arm''s transform and edge fields all true. ITEM 1 is the one that mattered and it
+    came out with a name rather than a shrug: the LIVE path is wrong and there is no inversion - 54 in-patch
+    sliver cells read air with live_top 0 while pure generation and the save round-trip both hold terrain
+    at 168-171 - because those columns are still in the FAR/h-only form (top -1, far_hmax 169/171) where
+    tier 0 and the real band belong, i.e. the far-to-full promotion is not completing. That is a streaming-lane
+    state, it is user-visible as a six-column air strip along a face boundary that disappears on reload,
+    and the fix is a scheduler change rather than a measurement, so it is filed as AC-0379 with the three
+    candidate families to distinguish by instrumenting the promotion path and with the guard that the
+    PROVEN save path must never be bent to match the buggy live one. ITEM 2 is a case where the ticket''s
+    own warning was the whole value: it says do not assume it is a leak, and it is not one - the face-chunk
+    set is bounded by construction through a FIFO cap with windowed eviction, so an RSS trajectory reads
+    flat rather than climbing, which is the correct instrument and it returns a negative; what remains
+    is a bounded stranded counter (eviction held under zero travel) with no visual gap, i.e. a stall,
+    and calling it benign-with-mechanism is the correct resolution rather than inventing a change to make
+    a counter move. ITEM 3 produced the most valuable thing in the ticket, which is a confession: cave,
+    torch and sea read -1/0, a MEASUREMENT FAILURE, because the AC-0288-through-AC-0360 re-bases moved
+    the cave and sea generation off the area those scans look at, so three rows have been silently testing
+    nothing. They are now recorded as stale arms and non-discriminating per AC-0357 rather than allowed
+    to read green, and re-pointing them is filed as AC-0380 with the requirement to state per row whether
+    it can still discriminate. A THRESHOLD EVERYTHING PASSES IS WORSE THAN NO THRESHOLD BECAUSE IT LOOKS
+    LIKE COVERAGE, and this is the second time this session that principle has paid: AC-0368''s item 3
+    found three blind rows, and the arm-hygiene pair earlier found that two reds were instruments rather
+    than defects. Between them, the suite is now both honest and green.'
   comments: []
 - id: AC-0369
   title: cut-per-unit-dispatch-cost
