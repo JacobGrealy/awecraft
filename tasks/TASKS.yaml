@@ -1,14 +1,13 @@
 meta:
-  updated_at: 2026-09-28T11:34
+  updated_at: 2026-09-28T21:02
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0145
+- AC-0368
 - AC-0310
 - AC-0311
-- AC-0294
-- AC-0296
 - AC-0093
 - AC-0038
 - AC-0039
@@ -21,10 +20,11 @@ queue:
 - AC-0205
 - AC-0186
 - AC-0130
+- AC-0294
+- AC-0296
 - AC-0094
 - AC-0141
 - AC-0142
-- AC-0115
 - AC-0176
 - AC-0295
 - AC-0316
@@ -35,7 +35,6 @@ queue:
 - AC-0327
 - AC-0328
 - AC-0330
-- AC-0368
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -5103,11 +5102,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-08-25T09:44
-  updated_at: 2026-08-30T14:57
-  completed_at: null
+  updated_at: 2026-09-28T13:53
+  completed_at: 2026-09-28T13:53
   waiting_on: null
   parent_id: null
   notes: 'Review godot/ codebase for code smells / maintainability for future agents+humans.
@@ -6431,10 +6430,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-29T12:09
-  updated_at: 2026-09-17T18:37
+  updated_at: 2026-09-28T21:02
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -6481,7 +6480,26 @@ intake:
 
     DEPENDS: AC-0308 (sphere consumers) for the ground, AC-0309 for other faces. OWES: ARCHITECTURE.md
     sync if the altitude/flight model becomes structural; HARNESS.md standing values if a new arm or threshold
-    is added.'
+    is added.
+
+
+    PIECE 1 VERIFIED BY THE COORDINATOR (2026-09-28), and the new arm was run by me rather than taken
+    on report. My capped stage of commit 9d6c80c is green across the board (every arm rc 0, zero SCRIPT
+    ERROR): genhash 25/25 byte-identical in two runs - so the world is untouched by player physics, which
+    is the property that matters most for a change in this file - farab h_mismatch 0, ladder 20/20, meshprobe
+    1.0, halo ok, lightstate 0/0, r16 no reds with far_holes 0/0 in both bands, boundary r4 ok at 11/40,
+    and the R24 walk inside every gated value (sweep p50 7.0, crossing frame p95 66, storm p99 71). The
+    `spherewalk` arm reads as reported and better: flight reaches alt_max 170.7 m, crosses the midline,
+    and LANDS ON THE HOME PAIR''S SECOND FACE with land_on_floor true, land_up_dot 1.0 and up_dot_min
+    1.0 over 689 frames with zero lifts - i.e. the capsule''s up vector is exactly radial throughout a
+    fold crossing, which is the acceptance this ticket asked for and the first time it has been demonstrated
+    on a face other than the home one. The walk half reports the ticket''s 12 edges and 8 corners satisfied
+    (12-14 corners, 9-10 lines, 137-155 seam-edge hits) with on_floor 0.892 and no fall-through. THE PIECE
+    IS NOT COMPLETE AND THIS NOTE IS NOT A CLOSE: pieces 2 and 3 remain - the flight/altitude reconciliation
+    (the existing cruising_altitude 275, sub-cruising speed and A/SHIFT climb knobs versus the sphere''s
+    altitude bands, which the ticket insists must be an explicit decision rather than a blank slate) and
+    the five flat-grid consumers beyond what the basis already touches, with drops and mobs falling under
+    -Y named last. The ticket stays in-progress on that basis.'
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549794'
