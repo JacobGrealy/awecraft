@@ -1,10 +1,12 @@
 meta:
-  updated_at: 2026-09-29T00:24
+  updated_at: 2026-09-29T02:37
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0145
+- AC-0377
+- AC-0378
 - AC-0376
 - AC-0368
 - AC-0310
@@ -21618,6 +21620,124 @@ intake:
     CONTEXT: the arm is `settings` in `godot/scenes/harness.gd`; the function is `clamp_medium_start()`;
     the change that made the expectation stale is AC-0263. Read `tasks/harness_data.yaml`''s settings
     row for what the standing value says.
+
+    '
+  comments: []
+- id: AC-0377
+  title: mobs-on-a-sphere-walk-facing-and-spawn
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-29T02:36
+  updated_at: 2026-09-29T02:36
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Animals do not belong on the far side of the planet yet - they cannot walk or
+    turn on a face that is not the home pair, and they do not spawn there at all, so a player who flies
+    to another face finds a landscape with no life on it.
+
+
+    2) Technical Details:
+
+    REMAINDER OF AC-0145 ITEM 5, stated by piece 3''s run rather than discovered here (2026-09-28): drops,
+    bananas, arrows and mob GRAVITY now fall toward the planet centre (-up) and drops and arrows read
+    their ground in the sim frame, but two mob behaviours are still flat-world and were deliberately left
+    undone rather than rushed:
+
+    - **Mob walk/facing on a face other than home** - the walk and facing code needs the same tangent-plane
+    treatment the player''s WASD got in AC-0145 piece 1 (the basis aligned to the radial up). Mob spawning
+    and ticking on the HOME PAIR is already frame-correct, so this is specifically the general case.
+
+    - **Face-world mob spawn** - `_mob_tick`''s home-pair spawn path is frame-correct, while a spawn attempt
+    on another face currently SKIPS rather than placing anything wrongly. That is the safe failure mode
+    and the reason it was left: a missing animal is better than one standing sideways in the ground. The
+    fix is to build the spawn position through the face transform the way `world_pos_of_flat` does for
+    the player (AC-0308/AC-0309 established that convention; `World.player_anchor(pos)` is the reference
+    implementation).
+
+    THE JOB: port the mob walk/facing to the tangent plane and make face-world spawning use the face transform,
+    then verify on a SECOND face (AC-0309''s crossing makes that testable) that a spawned animal stands
+    upright with its up-vector radial, walks without jitter or drifting, and does not fall through. Report
+    the tick cost of whatever per-tick frame work you add, because mobs are ticked in the same 20 Hz pass
+    that AC-0370/AC-0373 just made cheap - do not give that back.
+
+    CONSTRAINTS: genhash 25/25 byte-identical (mobs are not generation); do not regress the falling work
+    just landed; the standing set green (G0 zero SCRIPT ERROR, ladder 20/20, meshprobe 1.0, halo, lightstate
+    0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, the battery); and the `mobs`
+    arm, which is currently red (fall_ok/wolf_ok) and A/B-IDENTICAL on pristine HEAD - see the separate
+    ticket about that red rather than assuming this change will fix it, and do not silence it.
+
+    SAFETY: `export HOME=/tmp/dsh_home; mkdir -p $HOME`; every godot run memory-capped via `bash -c "ulimit
+    -v 8388608; AWECRAFT_LOGIC=... timeout N /home/angrygiant/tools/godot/godot --headless --path godot"`;
+    ONE godot at a time; never R50 or the `load` arm; no renders (llvmpipe degraded); no commits.
+
+    CONTEXT: read tasks/AC-0145/AC-0145-piece3-results.html item 5 (the precise statement of what is owed),
+    tasks/AC-0145/AC-0145-piece1-results.html (the player''s tangent-plane and basis treatment, which
+    is the model to follow) and tasks/AC-0308/AC-0308-results.html (the consumer conventions).
+
+    '
+  comments: []
+- id: AC-0378
+  title: diagnose-mobs-arm-red
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-29T02:37
+  updated_at: 2026-09-29T02:37
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: A second arm has been red without anyone knowing why, and a red nobody has explained
+    is the same as no signal at all - either something in the world is broken or the test is, and we cannot
+    currently tell which.
+
+
+    2) Technical Details:
+
+    FOUND BY AC-0145 piece 3 (2026-09-28): the **`mobs` arm is red on `fall_ok` and `wolf_ok`**, and a
+    git-stash A/B proves it reads IDENTICALLY on pristine HEAD, so it is neither caused by nor fixed by
+    the sphere work. It is the second unexplained standing red alongside the `settings` arm''s `ms_clamp`
+    (which AC-0376 owns and which is a proven stale expectation).
+
+    THE JOB IS DIAGNOSIS FIRST, FIX SECOND, and the outcome may legitimately be "the arm is stale" - this
+    session has produced three of those already (AC-0334''s halo, AC-0349''s brightslab, AC-0358''s mis-scoped
+    window) against a smaller number of genuine engine defects. So: reproduce the failure, read what the
+    arm asserts in each field, and decide which side is wrong. If the ENGINE is wrong, say precisely what
+    is broken and fix it. If the ARM''s expectation is stale (a threshold that predates a change, a field
+    that moved meaning, a scenario that no longer matches how the world is built), fix the arm and say
+    which change made it stale. Do not do BOTH halves halfway, and do not silence or delete the assertion
+    to get a green - a deleted assertion is worse than a red one.
+
+    WHY IT MATTERS BEYOND THIS ARM: the project''s standard is that the standing set has NO PERMANENT
+    RED, because a suite with known reds trains every reader - human or agent - to skim past red. Two
+    are currently open (this one and AC-0376''s), and this session has already had one ticket close on
+    a gate that was quietly flapping (the spherewalk `ok` flag, fixed in AC-0145 piece 3, which demonstrated
+    the problem by holding green while its census flapped beneath it).
+
+    SCOPE NOTE: `fall_ok` and `wolf_ok` sound like falling and mob behaviour - the sphere work just changed
+    how falling works (AC-0145 piece 3 made drops, bananas, arrows and mob gravity fall toward the planet
+    centre), so one plausible outcome is that these fields were ALREADY stale before that change and the
+    change is unrelated. Establish which before touching anything.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless a genuine engine defect requires a rebase, in which
+    case it must be deliberate and counted; the standing set otherwise green; G0 zero SCRIPT ERROR (not
+    rc=0); and if you fix an engine defect, add whatever field would have caught it earlier.
+
+    SAFETY: `export HOME=/tmp/dsh_home; mkdir -p $HOME`; every godot run memory-capped via `bash -c "ulimit
+    -v 8388608; AWECRAFT_LOGIC=mobs timeout N /home/angrygiant/tools/godot/godot --headless --path godot"`;
+    ONE godot at a time; never R50 or the `load` arm; no renders; no commits.
+
+    CONTEXT: the arm is `mobs` in godot/scenes/harness.gd; its row in tasks/harness_data.yaml says what
+    the standing value claims; AC-0145''s piece 3 results page records the A/B that proves it pre-existing.
 
     '
   comments: []
