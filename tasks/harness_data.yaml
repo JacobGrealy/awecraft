@@ -119,10 +119,11 @@ modes:
     tests: |-
       sky light bake: surface 15, cave 0, torch level 14, BFS reach
     result_fields: |-
-      `surface_eff` (15), `cave_eff` (0), `torch_level` (14), `torch_far_before` (0), `torch_far_after` (9)
+      `surface_eff` (15), `cave_eff` (-1 STALE), `torch_level` (-1 STALE), `torch_far_before` (-1 STALE), `torch_far_after` (-1 STALE)
     envs: —
     wall: 4 s (standalone) / 2.9 s battery
-    notes: known-stable
+    notes: |-
+      AC-0368 re-baseline (2026-09-29, current tree, standalone + 7-mode battery): `surface_eff` 15 STILL holds (sky light — discriminating); the cave/torch fields now read -1 = MEASUREMENT FAILURE, not a baseline — the arm finds its cave/torch by scanning for an air pocket with a solid cell above at depth top-6..top-29 within ±16 of the spawn column, and the AC-0288…AC-0360 generation re-bases (cave series + re-carved spawn) MOVED that feature, so the scan resolves nothing. NON-DISCRIMINATING (AC-0357 lesson: a gate that "passes" on -1 is worse than none). The rows are recorded as stale-arm, NOT re-baselined to a passing -1. Owed (arm-side, follow-up): re-point the cave/torch scan at the re-based terrain (or seed a fixture, the way the hunger arm does) so the row discriminates again. World integrity confirmed by genhash 25/25 + battery ok:true (this is a stale ARM, not a product regression).
   daynight:
     entry: '`_daynight_test`'
     tests: |-
@@ -155,11 +156,11 @@ modes:
     tests: |-
       source stability, level-7 sideways spread, water+lava reactions, sea zero-write invariant
     result_fields: |-
-      `shore_after` ([5,7]), `source_after` ([5,8]), `water_delta` (1), `water_on_lava_result` (25), `sideways_lava_result` (9), `sea_stable` (true), `sea_surface_before`/`_final` (2756), `sea_backed_before`/`_final` (914); prints `FLUIDSTAT` line
+      `shore_after` ([0,0] STALE), `source_after` ([0,0] STALE), `water_delta` (0 STALE), `water_on_lava_result` (24), `sideways_lava_result` (24), `sea_stable` (false STALE), `sea_surface_before`/`_final` (0 STALE), `sea_backed_before`/`_final` (0 STALE); prints `FLUIDSTAT` line
     envs: —
     wall: 5 s (standalone) / 3.8 s battery
     notes: |-
-      known-stable; AC-0068 invariant; sea counters are the count over `world.chunks.keys()` — AC-0152/0160 changed the r4 resident set (121→69 chunks) → new baseline 2756/914 (old 2730/888 VOID)
+      AC-0368 re-baseline (2026-09-29, current tree, standalone + 7-mode battery): the sea/shore/source/`water_delta`/`sea_stable` fields now read 0/[0,0]/false = MEASUREMENT FAILURE — the arm counts sea water over the resident chunk set, and the AC-0288…AC-0360 generation re-bases MOVED the sea off the scan area, so it counts nothing. NON-DISCRIMINATING (AC-0357 lesson: a gate that "passes" on 0 is worse than none); recorded as stale-arm, NOT re-baselined to a passing 0. The two lava-reaction values (`water_on_lava_result` 25→24, `sideways_lava_result` 9→24) DO resolve (local edit-based) but moved with the terrain — weakly discriminating. The old 2756/914 sea baseline (set at AC-0152/0160) is the pre-rebase value AC-0309 flagged stale. Owed (arm-side, follow-up): re-point the sea scan at the re-based terrain so the row discriminates again. World integrity confirmed by genhash 25/25 + battery ok:true (stale ARM, not a product regression).
   fluidprobe:
     entry: '`_fluidprobe_test`'
     tests: probes water column positions (debug scout)
