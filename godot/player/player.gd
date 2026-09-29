@@ -22,6 +22,14 @@ const REACH := 6.0
 # terrain steps up to ~2-3 m): 1.0 m auto-stepped, the jump (1.35 m)
 # covers the rest. The home step stays 0.5 m (the folded-net seam lip).
 const FACE_STEP := 1.0
+# AC-0145 P1: core sphere motion. The basis is an ACCUMULATED continuous
+# frame: local Y slews toward up = the EXACT radial underfoot (C = (0,-R,0)
+# global — the planet frame shifted by (0,-R,0)), the look yaw is applied as
+# a delta around that local Y, and the per-column step (0.23 deg at R = 4000)
+# is a continuous slew, never a re-snap. SPHERE_SNAP: a misalignment above
+# ~20 deg is a teleport-class position set, not a motion — it snaps.
+const SPHERE_SLEW := 12.0
+const SPHERE_SNAP := 0.35
 const INV_SIZE := 36
 const STACK_MAX := 64
 const ARMOR_SIZE := 4
@@ -65,6 +73,12 @@ var _base_fov := -1.0
 var _last_jump_t := -1  # AC-0243: double-tap fly toggle (Bedrock jump-double-tap)
 var _yaw := 0.0
 var _pitch := 0.0
+# AC-0145 P1: the accumulated continuous frame (see SPHERE_SLEW). _up is the
+# exact radial underfoot (or +Y in flat mode / before the first align);
+# _applied_yaw is the yaw already baked into the basis (look events apply
+# only their delta, _sphere_align owns the radial alignment).
+var _up: Vector3 = Vector3.UP
+var _applied_yaw := 0.0
 var _chunk_x := 0
 var _chunk_z := 0
 var _chunk_y := 0  # AC-0234: the tracked 16-block Y slab (a crossing re-centers)
@@ -167,6 +181,12 @@ func _ready() -> void:
 	_build_held()
 	_build_debug()
 	camera.current = true
+	# AC-0145 P1: seed the ACCUMULATED frame from the sim anchor (the column
+	# frame on home, the face frame past the patch edge) so the first
+	# _sphere_align has a sane heading to preserve; _applied_yaw starts at the
+	# current look so the first look event is a zero delta.
+	basis = _anchor_frame().orthonormalized()
+	_applied_yaw = _yaw
 	_apply_rotation()
 	_update_debug_label()
 	# AC-0281: apply DOF settings to the live CameraAttributes
@@ -410,6 +430,9 @@ func _physics_process_impl(dt: float) -> void:
 	var flat_h: float = Game.world.sim_height(position) if Game.world != null else position.y
 	if Game.world != null:
 		_anchor = Game.world.player_anchor(position)
+	# AC-0145 P1: the continuous radial alignment of the basis, BEFORE the
+	# velocity math — the movement frame below IS the accumulated basis.
+	_sphere_align(dt)
 	# AC-0121: while the debug console is open, ignore every polled game
 	# action - typing "w"/space/shift must not steer, jump, sprint or toggle
 	# flight. Physics (gravity, falls, swimming buoyancy) keeps running.
@@ -485,18 +508,18 @@ func _physics_process_impl(dt: float) -> void:
 	# sprint speed. Flight/swim-up keep their own speeds.
 	if crouched and not flying and not swim_up:
 		speed = WALK * CROUCH_SPEED
-	# AC-0308: the player lives in its column's rigid frame (see
-	# _col_basis): local +Y = the radial at the column centre (the normal
-	# of the ground facet underfoot). The horizontal target (tx, tz) below
-	# is already in that column frame (the input rotated by -yaw), so the
-	# velocity maps with the COLUMN basis only — _col_frame() would apply
-	# the yaw a second time. CharacterBody3D velocity is global space, so
-	# lerp in local and map back (gravity runs on the local -Y = local
-	# radial, not global -Y — the flat Y-up assumption, closed).
-	var sin_y := sin(_yaw)
-	var cos_y := cos(_yaw)
-	var tx := (-sin_y * iz + cos_y * ix) * speed
-	var tz := (-cos_y * iz - sin_y * ix) * speed
+	# AC-0308 -> AC-0145 P1: the player lives in the ACCUMULATED continuous
+	# frame (the basis, see _sphere_align): local +Y = up = the EXACT radial
+	# underfoot, the look yaw is baked in. The WASD target in this frame is
+	# (ix, -iz) * speed (forward = local -Z, strafe = local +X) — the old
+	# (tx, tz) formula pre-rotated the input by -yaw into the COLUMN frame;
+	# mapping it through the rendered frame would apply the yaw TWICE (the
+	# AC-0308 double-rotation trap), so the formula is replaced by the frame
+	# choice. CharacterBody3D velocity is global space, so lerp in local and
+	# map back. The per-column facet normal is no longer the movement up —
+	# the tangent-plane projection below uses the exact up.
+	var tx := ix * speed
+	var tz := -iz * speed
 	var k: float
 	if flying:
 		k = 10.0
@@ -504,11 +527,19 @@ func _physics_process_impl(dt: float) -> void:
 		k = 4.0
 	else:
 		k = 12.0
-	var b: Basis = _anchor_basis()  # AC-0309 C5: the sim anchor (home: the column basis)
+	var b: Basis = basis  # AC-0145 P1: the continuous up-aligned frame (was _anchor_basis())
 	# orthonormal basis: the inverse rotation is the transpose
 	var vloc: Vector3 = b.transposed() * velocity
 	vloc.x = lerpf(vloc.x, tx, minf(1.0, k * dt))
 	vloc.z = lerpf(vloc.z, tz, minf(1.0, k * dt))
+	if not flying and is_on_floor():
+		# AC-0145 P1: walking stays tangent-flat — while on the ground the
+		# velocity is projected onto the tangent plane (the two basis vectors
+		# perpendicular to up): in the up-aligned orthonormal frame that is
+		# the horizontal part. Done BEFORE the jump so a takeoff keeps its
+		# vertical kick; flight/air keep the full 3-DOF lerp (the flight
+		# reconciliation is a later AC-0145 piece).
+		vloc.y = 0.0
 	if flying:
 		var vy := 0.0
 		if not cg and Input.is_action_pressed("jump"):
@@ -535,7 +566,11 @@ func _physics_process_impl(dt: float) -> void:
 	elif swim_up and (not cg and Input.is_action_pressed("jump")):
 		vloc.y = lerpf(vloc.y, 4.5, minf(1.0, 8.0 * dt))
 	else:
-		vloc.y -= GRAV * dt
+		# AC-0145 P1: gravity = -up * GRAV (the same 26.0 constant, the felt
+		# strength is unchanged): the world-space gravity mapped into the
+		# frame — local -Y within the slew residual, exact in a converged
+		# frame (was: the column facet's local -Y).
+		vloc += b.transposed() * (-_up * GRAV * dt)
 		if not cg and Input.is_action_pressed("jump") and is_on_floor():
 			vloc.y = JUMP
 			fall_start = -1.0
@@ -1341,11 +1376,13 @@ func _update_sway(dt: float) -> void:
 
 
 func aim_dir() -> Vector3:
-	# AC-0308: the camera's WORLD direction — the player's sim frame
-	# (see _anchor_frame: the column frame on home, the face frame past
-	# the patch edge) times the camera pitch, applied to the aim axis.
-	# Computed from the stored yaw/pitch (no transform-lag frame).
-	return (_anchor_frame() * (Basis.from_euler(Vector3(_pitch, 0.0, 0.0)) * Vector3(0.0, 0.0, -1.0))).normalized()
+	# AC-0145 P1: the camera's WORLD direction — the live basis (the
+	# accumulated continuous frame: the radial alignment + the baked look
+	# yaw) times the camera pitch, applied to the aim axis. Computed from
+	# the stored yaw/pitch + the basis (no transform-lag frame — the basis
+	# is updated in _sphere_align on the physics frame, the same source the
+	# camera rides).
+	return (basis * (Basis.from_euler(Vector3(_pitch, 0.0, 0.0)) * Vector3(0.0, 0.0, -1.0))).normalized()
 
 
 func aim_hit() -> Dictionary:
@@ -1869,35 +1906,75 @@ func _recenter() -> void:
 		_chunk_x = pcx
 		_chunk_z = pcz
 		_chunk_y = pcy
-		# AC-0308: the basis follows the chunk frame — re-apply it the
-		# instant the chunk changes, not only on the next look event (a
-		# seam crossing without a look must not leave the old column's
-		# up vector in place).
+		# AC-0308 -> AC-0145 P1: the basis no longer re-snaps to the column
+		# frame on a seam crossing — _sphere_align slews local Y to the exact
+		# radial (continuous across the seam). The call flushes a pending
+		# look-yaw delta and the camera pitch (a look that landed on this
+		# frame must not wait for the next input event).
 		_apply_rotation()
 		if Game.world != null:
 			Game.world.recenter(fp.x, fp.z, true, fp.y)
 
 
 func _apply_rotation() -> void:
-	# AC-0308: camera up = the radial underfoot. The player's basis is its
-	# sim frame (the column's rigid frame on home; the face chunk's
-	# unit-vector frame past the patch edge — AC-0309 C5; the same frame
-	# the ground facet, the collision bodies and the DDA flat-frame use)
-	# times the yaw; the camera pitch is unchanged (local X).
-	basis = _anchor_frame()
+	# AC-0145 P1: the basis is ACCUMULATED, not re-derived from the anchor —
+	# _sphere_align (per physics frame) slews local Y toward the EXACT radial
+	# underfoot, and look events must only apply their YAW DELTA around that
+	# local Y (instant, as before). Re-snapping to _anchor_frame() here would
+	# reintroduce the per-column 0.23 deg basis snap this piece removes.
+	# The camera pitch is unchanged (local X).
+	var dyaw := _yaw - _applied_yaw
+	if absf(dyaw) > 1e-9:
+		basis = (basis * Basis.from_euler(Vector3(0.0, dyaw, 0.0))).orthonormalized()
+		_applied_yaw = _yaw
 	camera.rotation.x = _pitch
+
+
+func _sphere_align(dt: float) -> void:
+	# AC-0145 P1: local Y tracks up = normalize(pos - C) — the EXACT radial
+	# (C = (0,-R,0) global: the planet frame shifted by (0,-R,0); the first
+	# step is the same as world_to_flat / player_anchor). Slerp, never snap:
+	# up is a continuous function of position (0.23 deg per 16 m column at
+	# R = 4000), so the basis follows it smoothly at SPHERE_SLEW rad/s; a
+	# teleport-class misalignment (>= SPHERE_SNAP ~20 deg) snaps, because a
+	# position discontinuity is not a motion. Flat mode (no world / R <= 0):
+	# the identity frame, up = +Y.
+	if Game.world == null or Game.planet_R <= 0.0:
+		_up = Vector3.UP
+		return
+	_up = (position + Vector3(0.0, Game.planet_R, 0.0)).normalized()
+	var cur: Vector3 = basis.y
+	if cur.length() < 0.5 or not cur.is_finite():
+		# degenerate basis — rebuild an up-aligned frame (heading from the
+		# old basis if it survives, else an axis not parallel to up)
+		var f: Vector3 = -basis.z
+		if f.length() < 0.5 or absf(f.normalized().dot(_up)) > 0.95:
+			f = Vector3.UP if absf(_up.dot(Vector3.UP)) < 0.95 else Vector3.RIGHT
+		f = (f - _up * f.dot(_up)).normalized()
+		basis = Basis(_up.cross(f).normalized(), _up, f)
+		return
+	var q: Quaternion = Quaternion(cur.normalized(), _up)
+	# the minimal-rotation angle = the angle between the two vectors
+	# (Quaternion has no angle() in this engine build)
+	var ang: float = 2.0 * acos(clampf(cur.normalized().dot(_up), -1.0, 1.0))
+	if ang < 1e-6:
+		return
+	# t = the fraction of the alignment to apply this frame (1.0 = full
+	# snap for teleport-class misalignments). q is the FULL alignment, so
+	# slerp back toward IDENTITY by (1 - t): t=1 keeps q, t=0 drops it.
+	var t: float = 1.0 if ang >= SPHERE_SNAP else minf(1.0, SPHERE_SLEW * dt / ang)
+	basis = (Basis(q.slerp(Quaternion.IDENTITY, 1.0 - t)) * basis).orthonormalized()
 
 
 func _col_basis() -> Basis:
 	# AC-0308: the pure column frame (no yaw) — the containing column's
 	# rigid placement (the _chunk_x/_chunk_z the recenter tracks in FLAT
-	# coords). The movement code lerps its velocity in THIS frame: the
-	# (tx, tz) target formula already rotates the input by -yaw into the
-	# column frame, so mapping the velocity with the full _col_frame()
-	# (column * yaw) applies the yaw TWICE — the probe walked 90 degrees
-	# off at yaw -pi/2. Crossing a seam, the frame changes by the facet
-	# dihedral (<=0.23 deg at R = 4000) — the same snap the ground facet
-	# underfoot makes.
+	# coords). AC-0145 P1: the movement code no longer lerps its velocity
+	# in this frame (it lives in the ACCUMULATED basis, up = the exact
+	# radial, see _sphere_align); this is now the frame seed at _ready and
+	# the aim/step reference the test arms use. Crossing a seam the frame
+	# changes by the facet dihedral (<=0.23 deg at R = 4000) — the basis
+	# slerp absorbs that as a continuous slew, never a snap.
 	if Game.world == null:
 		return Basis.IDENTITY
 	return Game.world._col_sphere_transform(_chunk_x, _chunk_z).basis
@@ -1912,13 +1989,13 @@ func _col_frame() -> Basis:
 
 
 func _anchor_basis() -> Basis:
-	# AC-0309 C5: the player's SIM frame — inside the home patch the
-	# column basis (as before); past a patch edge the player's face
-	# chunk's UNIT-vector frame (orthonormal metres — the chunk node's
-	# basis is the same axes scaled by the cell widths, face_cell_scale).
-	# Crossing the seam, the frame changes by the tangent-facet dihedral
-	# (<= ~0.7 deg for the boundary-adjacent chunk) — the same snap class
-	# as the home column seams, continuous by construction.
+	# AC-0309 C5: the player's ANCHOR frame — inside the home patch the
+	# column basis; past a patch edge the player's face chunk's UNIT-vector
+	# frame (orthonormal metres — the chunk node's basis is the same axes
+	# scaled by the cell widths, face_cell_scale). AC-0145 P1: this is no
+	# longer the movement frame (that is the accumulated basis, up = the
+	# exact radial); it remains the cell-frame reference for the face-world
+	# reads (auto-step, the DDA) and the arms' jump-kick direction.
 	if Game.world == null or int(_anchor.get("face", 0)) <= 1:
 		return _col_basis()
 	return _anchor["basis"]

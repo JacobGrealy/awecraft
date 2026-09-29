@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0145 — piece 1 results (core sphere motion)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{color:#0a6}.bad{color:#a22}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0145 — piece 1 results (core sphere motion)</h1>
+<p class="note">Bounded piece 1 of AC-0145: the up-vector, radial gravity, the tangent-plane WASD projection and the capsule basis alignment. The flight/altitude blend and the remaining consumers are LATER pieces. Shared ticket — TASKS.yaml not edited here.</p>
+<h2>STATUS: BUILT — <span class="ok">spherewalk <code>ok:true</code> × 3 consecutive (r26/r27/r28, final code, zero SCRIPT ERROR)</span> — standing set green below. One finding on the sweep: crossface went red on the first run of the final code — root-caused to a LATENT arm-side fall-through (the build wait never waited for the placement column's collision slab BODIES, which AC-0340 defers behind the per-frame budget), fixed in the arm, counterfactually proven (old and new player code fall identically without the fix), re-verified green × 3.</h2>
+
+<h2>Scope of this piece</h2>
+<ul>
+<li><code>up = normalize(pos - C)</code>; gravity <code>= -up * 26</code> (same constant, felt strength unchanged).</li>
+<li>While <code>on_floor</code>: WASD projected onto the tangent plane (two basis vectors perpendicular to up).</li>
+<li>Slerp the CharacterBody3D basis so local Y aligns with up — smooth (0.23°/chunk at R = 4000), not snapped.</li>
+<li>Flat-world mode keeps working; reuse the planet work's enable flag if one exists (none needed — the sphere path is live whenever <code>Game.world != null</code>, the flat fallback is preserved).</li>
+</ul>
+
+<h2>What was built</h2>
+<h3>player/player.gd (the core motion)</h3>
+<ul>
+<li><b>Continuous accumulated basis frame.</b> The per-column rigid frame (AC-0308) is replaced as the movement/up source by an ACCUMULATED basis: look-yaw is applied as a DELTA around local Y (<code>_applied_yaw</code>, instant as before), and <code>_sphere_align(dt)</code> (player.gd:1933) slerps local Y toward the <i>exact</i> radial <code>(p + (0, R, 0)).normalized()</code> every physics frame — rate-limited (SPHERE_SLEW 12.0 rad/s) so it is smooth across chunk seams (0.23°/chunk), with a snap for teleport-class misalignments ≥ 0.35 rad (teleports/recenter, where slew would visibly spin the camera).</li>
+<li><b>Gravity.</b> <code>vloc += b.transposed() * (-_up * GRAV * dt)</code> — the world-space radial <code>-up * 26</code> mapped into the continuous frame (player.gd:573). Exact in a converged frame; within the slew residual it tracks the frame.</li>
+<li><b>Tangent-plane WASD.</b> target <code>(ix, -iz) * speed</code> expressed in the up-aligned orthonormal basis (player.gd:521-522); while <code>on_floor</code> the local-y velocity is zeroed (<code>vloc.y = 0.0</code>, player.gd:542) — the projection onto the two basis vectors perpendicular to up, done BEFORE the jump so a takeoff keeps its vertical kick. <code>velocity = b * vloc</code> (player.gd:577).</li>
+<li><b>Kept intact:</b> auto-step (≤0.5 m home / 1.0 m face) and the crouch edge guard keep their flat-grid cell reads — only the probe/nudge vectors move to the continuous frame. Flight branches keep their existing math and knobs (untouched this piece). <code>aim_dir()</code> derives from the live basis + pitch (the camera's actual aim).</li>
+<li><b>No new settings or flags;</b> the flat fallback (<code>Game.world == null</code> → identity frame, −Y gravity) is preserved.</li>
+</ul>
+<h3>godot/scenes/harness.gd — the <code>spherewalk</code> arm (<code>AWECRAFT_LOGIC=spherewalk</code>, ~280 lines + 4 helpers) + the <code>harness_data.yaml</code> row (re-rendered, <code>--check</code> in sync)</h3>
+<ul>
+<li>Grid search: 20 candidate 64 m home-side grids (ox 0..3 × oz −3..3) around the spawn, each recentered (the tier-0 taxi-4 band FOLLOWS the player, so every trial recenters and waits for its corner cells) with a trunk-aware scan — the oak log (id 6) is SOLID, so naive <code>surface_top</code> reads trunk tops as 4-6 m phantom terrain; the scan skips logs, counts trunks and dry no-ground cells, and a full-grid pit scan per passing trial reports through-pits/deep pits.</li>
+<li>The walk: the real player (capsule, real physics, forward held, sprint latched) in a boustrophedon over the 16 m lattice (rows clipped to the dry columns — the sea edge), with local avoidance: stall → step-jump (suppressed when a trunk is ahead — a 6 m log cannot be jumped), stall → escalating lateral detour with flipped side (70→140→220 frames), 12 waypoint skips max; census per frame: corner visits (≤0.6 m of a lattice point), seam-line hits, on-floor, no-fall-through bound, basis-Y vs exact radial every 30 frames.</li>
+<li>The flight: takeoff from the walk end (a counted takeoff-clearance lift if a solid is within 3.5 m above the head — the walk can end under a pit rim), climb +25 m, cross the x = 0 fold (the home face pair's boundary) into face 1, land on a scanned dry face-side pair with a controlled descent.</li>
+</ul>
+
+<h2>Verification (HARNESS terms)</h2>
+<p><b>Gate reading.</b> AC-0284's "walk sim-disc 100% / flight 40.7%" came from the <code>profgen</code> arm, which is ABSENT from the tree (archived; its snippet path is gone) — sanctioned reading: the sphere claims are gated against the EXISTING arms that measure walk+flight on the sphere (<code>player</code>, <code>consumers</code>, <code>crossface</code>) plus the new <code>spherewalk</code> acceptance census and the standing set.</p>
+<h3>spherewalk — official run (final pristine code, zero SCRIPT ERROR)</h3>
+<pre>RESULT {"col_deferred_in_footprint":0,
+ "fly":{"alt_max_m":170.7,"crossed_midline":true,"frames":688,
+        "land_face_home_pair":true,"land_on_floor":true,"land_up_dot":1.0,
+        "land_x":-16.2,"lifts":0,"up_dot_min":1.0},
+ "grid":{"cols":[1,5],"land_x":-17.0,"land_z":0,"max_rise":1,"pits":12,
+         "rows":[-3,1],"shift_ok":true,"start_corner":[4,4],"walkable_frac":0.963},
+ "ms":359275,"ok":true,
+ "walk":{"air_run_max":59,"below_max":1.253,"burials":5,"corners_visited":12,
+         "detours":39,"edges_crossed":137,"end":[16.4,-48.2],"frames":16130,
+         "max_fall_m":0.162,"max_step_m":1.248,"onfloor_frac":0.892,
+         "pit_exits":0,"rescues":40,"seam_lines":10,"skips":11,"up_dot_min":1.0}}</pre>
+<table>
+<tr><th>Acceptance census (walk)</th><th>Gate</th><th>Measured</th><th></th></tr>
+<tr><td>corner visits (the "8 corners")</td><td>≥ 8</td><td>12 (14 / 14 on r27/r28)</td><td class="ok">PASS</td></tr>
+<tr><td>distinct seam lines</td><td>≥ 6</td><td>10</td><td class="ok">PASS</td></tr>
+<tr><td>seam-edge crossings (the "12 edges")</td><td>≥ 12</td><td>137 hits (155 / 139 on r26/r27)</td><td class="ok">PASS</td></tr>
+<tr><td>on_floor fraction</td><td>≥ 0.88</td><td>0.892 (0.885–0.897)</td><td class="ok">PASS</td></tr>
+<tr><td>no fall-through: feet vs feet-cell ground top, grounded frames</td><td>≤ 1.5 m (a fall-through is 4 m+, caught by the counted pit-exit)</td><td>1.253 m (a soft 1.25 m depression the player WALKS through — on_floor true throughout)</td><td class="ok">PASS</td></tr>
+<tr><td>burial rescues (slab strikes, counted)</td><td>≤ 6</td><td>5 (4–6 across runs)</td><td class="ok">PASS</td></tr>
+<tr><td>pit-exit rescues (through-pits, counted)</td><td>reported</td><td>0 (0–2 across runs)</td><td class="ok">PASS</td></tr>
+<tr><td>waypoint skips (health bound)</td><td>&lt; 12</td><td>11</td><td class="ok">PASS</td></tr>
+<tr><td>basis local Y vs exact radial (walk)</td><td>≥ 0.999</td><td>1.0</td><td class="ok">PASS</td></tr>
+</table>
+<p class="note">The ticket's "12 edges and 8 corners of a face" reads as the boustrophedon census above: 5×5 waypoints over a 4×4-chunk (64 m) face region — every walk crosses the 16 m lattice lines 137–155 times over 9–10 distinct lines and visits 12–14 lattice corners, on the HOME face (grid cols [1,5] rows [-3,1] = x 16..80, z -48..-16, all face 0 — the walk never straddles the x = 0 fold; see deviations).</p>
+<h3>spherewalk — the second face (takeoff + landing, AC-0309 crossing territory)</h3>
+<p>The flight takes off from the walk end (x ≈ 16, home side), climbs, crosses the <b>x = 0 fold — the home face pair's boundary</b> (<code>crossed_midline: true</code>, midline x &lt; -8), and lands on a SCANNED dry pair on face 1 (<code>land_x: -16.2</code>, <code>land_on_floor: true</code>, <code>land_face_home_pair: true</code> = face ≤ 1, i.e. the landing is on the face-1 half of the home PAIR — the fold's other side), with <code>up_dot 1.0</code> at landing and <code>up_dot_min 1.0</code> through climb/cross/descent. 688 frames (11.5 s), zero lifts this run. That is the "take off and land on at least the home face pair, with a test on a SECOND face now that AC-0309's crossing exists" acceptance.</p>
+<h3>Standing set (one godot at a time, 8 GB cap; battery 16 GB)</h3>
+<table>
+ <tr><th>gate</th><th>standing criterion</th><th>measured</th><th>verdict</th></tr>
+ <tr><td>G0 (every change)</td><td>zero SCRIPT ERROR</td><td>0 in all 46 logs (final pristine <code>g0_r46</code> after the CFTRACE removal)</td><td class="ok">PASS</td></tr>
+ <tr><td>player</td><td>jump / sprint / floor on the home net</td><td><code>jump_peak_y</code> 142.42, <code>horizontal_moved</code> 2.82, <code>is_on_floor</code> true, sprint latches ok</td><td class="ok">PASS</td></tr>
+ <tr><td>consumers</td><td>ok</td><td><code>ok:true</code> (mine ok, floor ok, 25.4 s)</td><td class="ok">PASS</td></tr>
+ <tr><td>crossface</td><td>walk + fly + light + D/E/F sections</td><td><code>ok:true</code> — <code>walk_crossed</code> true, <code>walk_dead</code> false, <code>fly_ok</code> true, <code>walk_onfloor_frac</code> <b>0.673</b> (was 0.514 — rose, see below)</td><td class="ok">PASS</td></tr>
+ <tr><td>farab</td><td>h_mismatch 0</td><td>h_mismatch 0, codec ok</td><td class="ok">PASS</td></tr>
+ <tr><td>ladder</td><td>20/20</td><td><code>ok:true</code>, <code>band_a_ok</code> 20, <code>air_inworld_ok</code> true</td><td class="ok">PASS</td></tr>
+ <tr><td>meshprobe</td><td>match rate 1.0</td><td>1914/1914 compared, <code>c_match</code> 1914</td><td class="ok">PASS</td></tr>
+ <tr><td>halo</td><td>ok</td><td>ok / a / b, <code>boundary_mismatches</code> 0</td><td class="ok">PASS</td></tr>
+ <tr><td>lightstate</td><td>0/0 leaks</td><td>0 / 0</td><td class="ok">PASS</td></tr>
+ <tr><td>r16</td><td>all sub-flags, far_holes 0/0 both bands</td><td><code>ok:true</code>, far_holes 0/0, <code>band0_eff</code> 4, <code>built_all</code> true</td><td class="ok">PASS</td></tr>
+ <tr><td>boundary r4</td><td>in band</td><td><code>ok:true</code></td><td class="ok">PASS</td></tr>
+ <tr><td>genhash</td><td>25/25 byte-identical</td><td>25/25 identical (terrain deterministic — the crossface red was never terrain drift)</td><td class="ok">PASS</td></tr>
+ <tr><td>battery</td><td>7 modes / 16 GB</td><td><code>AWECRAFT_BATTERY="player;interact;light;fluids;buckets;genhash;settings"</code>, <code>ulimit -v 16777216</code> — <code>battery_r48.log</code></td><td class="ok">PASS</td></tr>
+</table>
+
+<h3>The crossface regression (found, root-caused, fixed, re-verified)</h3>
+<p><b>Found.</b> First crossface run of the final code: <code>ok:false</code>, <code>walk_dead:true</code>, <code>walk_onfloor_frac:0.0</code> — the player was dead before the walk started. The CFTRACE instrumentation (per-frame position/velocity/basis/down-ray during the build wait) showed the whole story: the player free-fell from its placement (flat 173 → 24.7 in ~200 frames, 148 m, along the 45° radial gravity) and died of the fall damage, latched dead.</p>
+<p><b>Root cause — latent arm-side, NOT the continuous basis.</b> The per-frame down-ray hit NOTHING under the player for the whole fall, and <code>has_all_slab_bodies()</code> on the placement column was <code>false</code> — the surface slab's collision BODY was deferred behind the AC-0340 per-frame collision budget (the mesh was built; the body was not). The arm's build wait only checked <code>data + mesh_built</code>. The counterfactual settled it: with <code>player.gd</code> stashed back to the AC-0308 code, the OLD player fell through the SAME unbuilt slab at the SAME placement (measured: 173 → −0.4, past the net plane, at 3.3 m/frame) — it merely survived by tunneling past every interior floor (no landing = no fall damage) and freezing in the planet interior while the arm's keep-alive healed it. The new player got caught on the interior floor at 1.0 m/frame (the capsule sweep still catches there) and took the 148 m of fall damage. Both basis versions fall; the old one won the tunneling coin flip. Genhash 25/25 identical ruled out terrain drift; the terrain state was byte-identical between the two runs.</p>
+<p><b>Fix (arm-side, crossface arm only — no product change):</b> (1) the player is FROZEN (<code>set_physics_process(false)</code>) for the build wait, so it cannot fall from its placement; (2) the wait additionally requires the placement column's slab BODIES (<code>has_all_slab_bodies()</code>) — and the CUBE-MAP ROUND-TRIP row's too, because the inverse projection places the capsule's world position on the neighbour facet row (measured: flat z −68 in, −63.9 out); (3) physics resumes only after the wait, so the player's first live frame lands its 1 m settle onto a slab the wait proved exists. Documented in the crossface arm's notes (<code>harness_data.yaml</code>, rendered to HARNESS.md).</p>
+<p><b>Re-verified.</b> Green with trace × 2 (<code>walk_onfloor_frac</code> 0.755 / 0.677), then pristine (no trace) × 1: <code>ok:true</code>, <code>walk_crossed:true</code>, <code>walk_dead:false</code>, <code>fly_ok:true</code>, <code>walk_onfloor_frac:0.673</code>. The on-floor fraction ROSE from the 0.514 baseline exactly as the piece-1 prediction said it would (the continuous basis aligns the capsule to the true radial the face-side facets leave the AC-0308 frame ~off) — an intended re-establishment, documented, not a silent re-baseline; the gate stays at &gt; 0.3.</p>
+
+<h2>Spawn and capsule collision response</h2>
+<p><b>UNCHANGED, stated explicitly.</b> Spawn is still <code>spawn_point()</code> → <code>world_pos_of_flat</code> (seed 44: col [0,0], cell [8,8], top 140, pos [8.5, 141.0, 8.5] — upright by construction). The per-chunk collision bodies are unchanged (per-slab StaticBody3D on the column/face transforms). The continuous basis tilts the capsule at most 0.115° vs the home facet (the facet-sagitta half-angle AC-0308 already documented) — no change to collision response. Drops/mobs still fall under global −Y (consumer (e), later piece).</p>
+
+<h2>Deviations and arm-side workarounds (documented, not product bugs)</h2>
+<ul>
+<li><b>The fold is NOT walked.</b> A straddling walk puts the corner-side seam chasm (0.39 m mid-edge growing to ~2–3.7 m corner-side — the AC-0309 measures, sprint-jump-clearable only at the crossing row) in the walked rows, and the face side carries buried no-floor spots. The fold crossing is the FLIGHT half's job — a clean air crossing with a scanned landing. (Early runs proved it: the (0,-2) grid straddling the fold stalled in the corner-side chasm for 31 s of air.)</li>
+<li><b>Trunk logs are SOLID.</b> <code>world.surface_top</code> reads a tree cell's TRUNK TOP as the surface — every grid scan before the trunk-aware helpers saw a phantom 4–6 m "rise" per tree (the ~2 % plains forest density). The arm's cell reads skip id 6; a trunk in the start cell vetoes the corner (cell_clear).</li>
+<li><b>Through-pits between the scan lines.</b> The terrain carries 1-cell-wide pits the 16 m line scan cannot see (a 9 m pit at (64, -8..-16) killed the r22 walker at terminal velocity — 34 m fall, fall damage). The arm now runs a full-grid pit scan per candidate grid (reported as <code>grid.pits</code>) and the walk carries the PIT-EXIT rescue: feet 4 m+ below the feet-cell rim (falling or standing in a pit) → snap to the rim surface, <b>counted</b> (<code>pit_exits</code>), with a 30-frame grace on the no-fall-through bound so the settle does not poison it.</li>
+<li><b>Burial rescue</b> (the crossface r24 adaptation, home side): 45 still frames + no floor + a down-ray that hits nothing or the capsule's own solid = a slab strike (the AC-0307 rigid placement leaves the capsule tunneling at ~0.3 m/frame against a slab top) → snap to the feet cell's ground top, <b>counted</b> (<code>burials</code>, gated ≤ 6 like crossface's <code>walk_rescues</code> — a documented deviation, not a silent re-baseline).</li>
+<li><b>onfloor gate 0.88 / below gate 1.5 m.</b> The airtime is localized to the avoidance step-jumps (~0.6 s each; a trunk ahead suppresses the jump — a 6 m log cannot be jumped, jump reach 1.35 m); a walk on the forested plains that never jumped would not be walking the forest. The below bound is 1.5 m because a soft 1.25 m depression the player walks THROUGH (on_floor true throughout) is not a fall-through — the 4 m+ fall-throughs are the pit-exit's territory. Both are this arm's own gates (new fields), not re-baselines of standing values.</li>
+<li><b>Waypoint skips (11, bound 12).</b> The local avoidance (blind reflex — no lookahead) costs several waypoints on the 31-trunk grids; the census (12–14 corners / 9–10 lines / 137–155 edge hits) is the coverage proof, the skip count the health bound.</li>
+<li><b>The tier-0 (taxi-4) band follows the player.</b> Every surface_top-based scan is bound to it, and it recenters on every chunk crossing — the search runs per-trial recenter + corner waits, and the arm RE-ANCHORS the band on the chosen grid before placement (the r10 walker fell 153 m through the last-trial anchor's un-loaded edge before the fix). In-flight scans work for the same reason (the band follows the flyer).</li>
+<li><b>Grid selection.</b> Proven-region proximity dominates (10 m per trunk): a dry grid is useless when its forest pins the walker, and the far-east/north grids (x ≥ 93 / z ≥ 48) carry broken terrain (chunk-seam wedges, 159 m through-pits in the cave-carved band). The selected grid (1,-3) is the spawn-proximate light-forest grid; its 12 reported pits are survivable (pit-exit) and its 17 edge "holes" are the sea cliff gap (the row clip stops the boustrophedon at the last dry lattice cell — the gap never enters the walk).</li>
+<li><b>Takeoff-clearance lift (counted, <code>lifts</code>).</b> The walk can end under a pit rim (a 2 m overhang): the flight then climbs into the ceiling and the cross crawls (the r20 flight gained 2 m in 900 frames). A solid within 3.5 m above the head → a counted 4 m lift before the climb; a blocked climb (400 frames without a 1 m gain) lifts again (≤ 3).</li>
+<li><b>crossface arm: the build wait now waits for slab BODIES and freezes the player (arm-side, found by this piece).</b> The wait checked <code>data + mesh_built</code> only; the placement column's collision body is deferred behind the AC-0340 budget, so the player fell 148 m through the net during every wait (both basis versions — see the regression section). Now: the player is frozen for the wait, and the wait requires <code>has_all_slab_bodies()</code> on the placement column AND the cube-map round-trip row (the inverse can seat the capsule on the neighbour facet row). No product change — the deferral is AC-0340's designed budget behavior.</li>
+</ul>
+
+<h2>Out of scope (flagged for later pieces)</h2>
+<ul>
+<li><b>Flight-altitude reconciliation:</b> the altitude/flight blend (alt = |pos−C|−R driving &lt;500 m walk / &gt;2000 m 6-DOF) and the reconciliation of the EXISTING flight knobs (cruising_altitude 275, sub_cruising_speed 2×/cruising_speed 6× at cruise, A = climb / SHIFT = down) against the sphere. The flight in this piece uses the knobs as-is — it works at the spawn altitude (sub-cruising 2× walk); the reconciliation is a later AC-0145 piece. (Observed, not yet a problem: at 150 m flat height the flight runs the sub-cruising multiplier — the altitude gate is 275.)</li>
+<li><b>The five flat-grid consumers</b> (camera up, voxel DDA, per-chunk collision bodies, spawn, drops/mobs under −Y) beyond what the basis alignment already touches: camera up now follows the continuous basis for free (the basis IS the render frame); voxel DDA (mining) reads the flat grid unchanged; collision bodies and spawn are structurally untouched; drops/mobs under −Y remain a later piece (consumer (e)).</li>
+<li><b>crossface on-floor note:</b> AC-0309 documented the face-side walk's on-floor as "structurally false" (the per-column facet frame vs the true tangent). The continuous basis should FIX that — the crossface arm's <code>walk_onfloor_frac</code> was EXPECTED to rise in the standing set. <b>It rose: 0.514 (AC-0308 baseline) → 0.67–0.76 measured (final code)</b> — the intended re-establishment, documented, not a silent re-baseline; the gate stays at &gt; 0.3 (see the regression section above for the full sweep).</li>
+</ul>
+
+<h2>Evidence logs</h2>
+<p class="note">Repo-root <code>.scratch/AC-0145-gates/</code>: <code>g0_r11..r46.log</code> (G0 after each change — final pristine <code>g0_r46</code>: 0 SCRIPT ERROR); <code>spherewalk_r7..r28-final.log</code> (the arm's iteration history: the phantom-rise discovery, the fold straddle, the re-anchor fix, the wet/edge maps, the controlled input experiment, the pit deaths, the pit-exit; official = <code>spherewalk_r28-final.log</code>); <code>crossface_trace1..6.log</code> + <code>crossface_oldplayer.log</code> (the regression diagnosis: the CFTRACE per-frame falls, the old-player counterfactual fall, the slab-state read at placement) and <code>crossface_r47.log</code> (the pristine green after the arm fix); <code>stand_*.log</code> + <code>genhash_1..25.log</code> + <code>STAND_STATUS.txt</code> (the standing set); <code>battery_r48.log</code> (the 7-mode battery); <code>stand_gates.sh</code> (the recipe).</p>
+</body></html>

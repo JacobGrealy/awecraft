@@ -642,6 +642,19 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _consumers_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "spherewalk":
+			# AC-0145 P1 (core sphere motion): the acceptance walk — a
+			# boustrophedon over a 4x4 chunk grid (12+ seam-edge crossings
+			# + 8+ corner visits, on_floor, no fall-through) — plus
+			# takeoff + landing on the home face pair (the flight toggle;
+			# the flight knobs untouched). The second face (face 5) is the
+			# crossface arm (AC-0309).
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_sim_band(spawn, 3000)
+			player = main._spawn_player()
+			await _spherewalk_test()
+			get_tree().quit()
+			return
 		if logic == "lightaudit":
 			await _lightaudit_test(spawn)
 			return
@@ -24839,6 +24852,848 @@ func _sphere_test(spawn: Vector3) -> void:
 # and PLACES a block on the aimed face. The mined cell is RESTORED —
 # the terrain exits pristine (the genhash gate). Step/mine/place use
 # the game's own paths (Input + start_mine/place), never substitutes.
+# AC-0145 P1 (core sphere motion) — the ticket's acceptance walk +
+# takeoff/landing. (1) BOUSTROPHEDON WALK over a pre-scanned 4x4 chunk
+# grid (64 x 64 m): the 16 corner waypoints of the 16 m lattice (21
+# seam-edge crossings + 16 corner visits — the acceptance is 12+ edges
+# and 8+ corners); on_floor stays true (the ticket's acceptance
+# language) and the feet never go below the local surface (no
+# fall-through — the same census class as the consumers arm). The spawn
+# area is forested (low canopies, 1 m cave steps), so the grid is
+# SEARCHED: every candidate is recentred and its 8 walk lines scanned —
+# dry, the body zone (3 cells) clear of solids, rises <= 1 m (the
+# rescue jump clears them) — and the grid must stay off the x=0 fold
+# (the walk crossing there is the crossface arm's job). (2) TAKEOFF +
+# LANDING on the home face pair: fly up (the existing flight toggle —
+# the flight knobs untouched), cross the x=0 midline (face 0 -> face
+# 1), controlled descent, land on floor — the basis up sampled against
+# the exact radial throughout (the slerp proof). The SECOND face (face
+# 5) is the crossface arm (AC-0309), run separately.
+# Walkability of one path cell: the GROUND top of the cell, or -1 if
+# not walkable (no data / wet). TRUNK-AWARE: the oak log (id 6) is a
+# SOLID block, so the naive surface_top reads a tree cell's TRUNK TOP
+# as its surface — a 4-6 m phantom "rise" between a tree cell and its
+# neighbour (the first soft-scan run measured rise 6-7 on EVERY 64 m
+# trial — the ~2 % plains tree density, not terrain). The walker still
+# collides with the trunk (the detour handles it); the scan measures
+# the GROUND the walk must cross. Wet = water/lava anywhere above the
+# ground top in the column.
+func _spherewalk_cell_ok(cx: int, cz: int) -> int:
+	var g := -1
+	var wet := false
+	for y in range(Data.HEIGHT - 1, -1, -1):
+		var b: int = world.get_block(cx, y, cz)
+		if b == 0:
+			continue
+		if b == 5 or b == 24:
+			wet = true
+			continue
+		var info = Data.block(b)
+		if info.solid and b != 6:
+			g = y
+			break
+	if g < 1 or wet:
+		return -1
+	return g
+
+
+# cell_ok, but REJECTS a column with a trunk (a log above the ground
+# top) — the walk start, its neighbourhood and the flight landing need
+# a clear column; trunks on the walked LINES are fine (the detour
+# handles them).
+func _spherewalk_cell_clear(cx: int, cz: int) -> int:
+	var g := -1
+	var wet := false
+	var trunk := false
+	for y in range(Data.HEIGHT - 1, -1, -1):
+		var b: int = world.get_block(cx, y, cz)
+		if b == 0:
+			continue
+		if b == 5 or b == 24:
+			wet = true
+			continue
+		if b == 6:
+			trunk = true
+			continue
+		var info = Data.block(b)
+		if info.solid:
+			g = y
+			break
+	if g < 1 or wet or trunk:
+		return -1
+	return g
+
+
+# is the column WET (water or lava anywhere)? The scan uses this to
+# tell the OCEAN edge (wet — walkable-swimmable, the sea is expected)
+# from a DRY HOLE (no ground, no water: a through-pit the walker
+# falls through into the planet interior — the (3,2) grid's 159 m
+# falls, 6 of them, in the far-north cave-carved band).
+func _spherewalk_cell_wet(cx: int, cz: int) -> bool:
+	for y in range(Data.HEIGHT - 1, -1, -1):
+		var b: int = world.get_block(cx, y, cz)
+		if b == 5 or b == 24:
+			return true
+	return false
+
+
+# does the column carry a trunk (a log) up to 6 m above its ground
+# top? The grid scan counts these on the walked line — a trunk-poor
+# grid is the walker's best friend (the detour threads single trunks
+# but a grove pins it).
+func _spherewalk_trunk_above(cx: int, cz: int, gtop: int) -> bool:
+	for ty in range(gtop + 1, mini(gtop + 7, Data.HEIGHT)):
+		if world.get_block(cx, ty, cz) == 6:
+			return true
+	return false
+
+
+func _spherewalk_test() -> void:
+	var p: Node3D = player
+	for i in 20:
+		await get_tree().physics_frame
+	# --- the walk grid: a 4x4 CHUNK area (64 x 64 m) with the 5x5
+	# waypoint lattice on its corners; the boustrophedon walks the 5
+	# full horizontal rows + the two vertical edge lines (the row
+	# transitions).
+	#
+	# THE BAND LIMIT (world/ARCHITECTURE §3): only the tier-0 columns
+	# (taxi <= band0_r = 4 from the recenter anchor) carry the full
+	# slabs surface_top reads — the draw tiers are h-only, so their
+	# cells read air (get_block = 0). The pre-scan therefore covers
+	# ONLY the walked line cells INSIDE the grid (every one of them
+	# sits in the tier-0 diamond of the grid-centre anchor, corner
+	# cells at exactly taxi 4) and is SOFT (>= 90 % data + dry; the
+	# start cell must be dry): a trunk or a 1-2 m step on a line does
+	# not disqualify the grid — the walker handles them with local
+	# avoidance (the jump + the lateral detour), and the band
+	# FOLLOWS the walking player (its _recenter fires on every chunk
+	# crossing), so the terrain ahead is tier-0 underfoot throughout.
+	# The grid stays off the x=0 fold (a fold WALK is the crossface
+	# arm's business); the hover-during-search is the consumers arm's
+	# band-abandonment pattern.
+	const SW_GRID := 4
+	var scx := int(floorf(p.position.x / 16.0))
+	var scz := int(floorf(p.position.z / 16.0))
+	var sw_off: Array = []
+	for ox in range(0, 4):
+		for oz in range(-3, 4):
+			sw_off.append([ox, oz])
+	p.set_fly(true)
+	var gx0 := -1
+	var gz0 := -1
+	var grid_ok := false
+	var grid_why := ""
+	var grid_rise := 0
+	var grid_frac := 0.0
+	var best_score := 1.0e9
+	var grid_pits := 0
+	var sw_start := Vector2i(0, 0)
+	# score every candidate and take the FLATTEST (not the first that
+	# passes): the spawn plateau (the known-dry region) is only ~36 m
+	# across, so every 64 m grid includes some rolling — the grid whose
+	# walked lines have the smallest max rise is the one the walker can
+	# actually finish. Straddling the x=0 fold is fine for the walk:
+	# HOME-SIDE ONLY (the fold is the home face pair's boundary, but a
+	# walk that STRADDLES it puts the corner-side seam chasm — up to
+	# 3.7 m, the AC-0309 measures — in the walk rows, and the face side
+	# has buried spots with no floor; the r9 walker fell into one and
+	# lost 31 s of the census). The fold crossing belongs to the
+	# FLIGHT half of this arm: a clean air crossing with a scanned
+	# landing on the face-1 side.
+	for off in sw_off:
+		var tgx := scx + int(off[0])
+		var tgz := scz + int(off[1])
+		if tgx < 1:
+			grid_why = "fold_excluded"
+			continue
+		world.recenter(tgx * 16 + 32, tgz * 16 + 32, true)
+		var wt := 0
+		var ready := false
+		while wt < 1500:
+			await get_tree().physics_frame
+			wt += 1
+			if world.surface_top(tgx * 16 + 1, tgz * 16 + 1) > 0 \
+					and world.surface_top(tgx * 16 + 63, tgz * 16 + 1) > 0 \
+					and world.surface_top(tgx * 16 + 1, tgz * 16 + 63) > 0 \
+					and world.surface_top(tgx * 16 + 63, tgz * 16 + 63) > 0:
+				ready = true
+				break
+		if not ready:
+			grid_why = "band_not_ready"
+			continue
+		# the soft scan: the walked line cells (5 rows + the two edge
+		# lines, centre cells only — the straddling neighbour is the
+		# walker's avoidance problem, and the OUTER straddling cells
+		# sit outside the tier-0 diamond regardless)
+		var sw_ok := 0
+		var sw_tot := 0
+		var line_rise := 0
+		var line_drop := 0
+		var sw_trunks := 0
+		var deep_holes := 0
+		var deep_holes_interior := 0
+		var gx0e := tgx * 16
+		var gx1e := (tgx + SW_GRID) * 16
+		var gz0e := tgz * 16
+		var gz1e := (tgz + SW_GRID) * 16
+		for lj in range(SW_GRID + 1):
+			var lz := (tgz + lj) * 16
+			var prev_st := -1
+			for s in range(0, SW_GRID * 16 + 1):
+				var stc: int = _spherewalk_cell_ok(tgx * 16 + s, lz)
+				sw_tot += 1
+				if stc >= 0:
+					sw_ok += 1
+					if prev_st >= 0:
+						line_rise = maxi(line_rise, stc - prev_st)
+						line_drop = maxi(line_drop, prev_st - stc)
+					prev_st = stc
+					if _spherewalk_trunk_above(tgx * 16 + s, lz, stc):
+						sw_trunks += 1
+				else:
+					var hx2: int = tgx * 16 + s
+					if not _spherewalk_cell_wet(hx2, lz):
+						deep_holes += 1
+						if hx2 != gx0e and hx2 != gx1e and lz != gz0e and lz != gz1e:
+							deep_holes_interior += 1
+		for ev in [0, SW_GRID]:
+			var lx: int = (tgx + int(ev)) * 16
+			var prev_st2 := -1
+			for s in range(0, SW_GRID * 16 + 1):
+				var stc2: int = _spherewalk_cell_ok(lx, tgz * 16 + s)
+				sw_tot += 1
+				if stc2 >= 0:
+					sw_ok += 1
+					if prev_st2 >= 0:
+						line_rise = maxi(line_rise, stc2 - prev_st2)
+						line_drop = maxi(line_drop, prev_st2 - stc2)
+					prev_st2 = stc2
+					if _spherewalk_trunk_above(lx, tgz * 16 + s, stc2):
+						sw_trunks += 1
+				else:
+					var hz2: int = tgz * 16 + s
+					if not _spherewalk_cell_wet(lx, hz2):
+						deep_holes += 1
+						if lx != gx0e and lx != gx1e and hz2 != gz0e and hz2 != gz1e:
+							deep_holes_interior += 1
+		var frac := float(sw_ok) / float(sw_tot)
+		if frac < 0.90:
+			grid_why = "unwalkable_grid"
+			continue
+		if line_rise > 3:
+			grid_why = "cliff_on_line"
+			continue
+		if line_drop > 1:
+			# a 2 m+ drop on the walked line is a hole the walker
+			# falls into and cannot jump out of (jump reach 1.35 m);
+			# a 1 m step is jumpable and auto-stepped
+			grid_why = "hole_on_line"
+			continue
+		if deep_holes > 0 and deep_holes_interior > 0:
+			# a DRY no-ground cell on the line: a through-pit (its
+			# floor is below the world bottom, so cell_ok reads -1 and
+			# the drop gate never sees it). The wet case is the sea
+			# edge — expected and swimmable. The EDGE cells (the grid
+			# boundary lines) read dry-no-ground at the sea cliff gap
+			# (the r18 scan: exactly the x=80 / z=48 / x=96 boundary
+			# cells, 16 per grid) — the per-row cmax clip stops the
+			# boustrophedon at the last dry lattice cell, so the edge
+			# gaps never enter the walk; only an INTERIOR hole vetoes.
+			grid_why = "deep_hole_on_line"
+			continue
+		# FULL-GRID PIT SCAN (gate-passing trials only — the line scan
+		# is 1 cell wide every 16 m and the terrain carries 1-cell-wide
+		# THROUGH-pits between the lines: the r22 walker fell a 9 m
+		# pit at (64, -8..-16) of grid (1,-3) at terminal velocity,
+		# tunneled the slab below and died of fall damage). Every
+		# interior cell: dry-no-ground = a through-pit (veto); ground
+		# 8 m+ below the grid mean = a floored deep pit (veto — the
+		# walker cannot climb out and the fall kills). Edge cells are
+		# the sea cliff gap (allowed — the row clip avoids them).
+		var pit_why := ""
+		var gsum := 0.0
+		var gcnt := 0
+		for pgx in range(65):
+			for pgz in range(65):
+				var pcx: int = tgx * 16 + pgx
+				var pcz: int = tgz * 16 + pgz
+				var pg: int = _spherewalk_cell_ok(pcx, pcz)
+				if pg >= 1:
+					gsum += float(pg)
+					gcnt += 1
+		var gmean := gsum / float(maxi(gcnt, 1))
+		for pgx in range(65):
+			for pgz in range(65):
+				var pcx2: int = tgx * 16 + pgx
+				var pcz2: int = tgz * 16 + pgz
+				if pcx2 == gx0e or pcx2 == gx1e or pcz2 == gz0e or pcz2 == gz1e:
+					continue
+				var pg2: int = _spherewalk_cell_ok(pcx2, pcz2)
+				if pg2 < 1:
+					if not _spherewalk_cell_wet(pcx2, pcz2):
+						pit_why = "through_pit_in_grid"
+						break
+				elif pg2 < gmean - 8.0:
+					pit_why = "deep_pit_in_grid"
+					break
+			if pit_why != "":
+				break
+		# report-only: the pits are SURVIVABLE (the pit-exit rescue in
+		# the walk loop snaps the walker back to the rim) — vetoing
+		# pitted grids left only the dense-forest far grids (the r23
+		# selection fell into a 16 m depression it could never climb
+		# out of). The count rides in the result for the record.
+		if pit_why == "through_pit_in_grid":
+			grid_pits += 1
+		elif pit_why == "deep_pit_in_grid":
+			grid_pits += 2
+		# START CORNER: the boustrophedon starts at whichever of the
+		# grid's 4 corners has a dry, TRUNK-CLEAR cell with a 7x7
+		# neighbourhood that is dry GROUND (trunks allowed — the
+		# flipped-side detour threads them) AND LEVEL (every neighbour
+		# within 3 m within 2 m of the start's ground top — the r6
+		# walker was dropped into a 138 m hollow ringed by 2-6 m
+		# higher ground and never escaped). The walk direction follows
+		# the corner.
+		var got_start := false
+		for crc in [Vector2i(0, 0), Vector2i(4, 0), Vector2i(0, 4), Vector2i(4, 4)]:
+			var scx2: int = tgx * 16 + int(crc.x) * 16
+			var scz2: int = tgz * 16 + int(crc.y) * 16
+			if _spherewalk_cell_clear(scx2, scz2) < 0:
+				continue
+			var stc0: int = _spherewalk_cell_ok(scx2, scz2)
+			var oknb := true
+			var nb_r := 0
+			for nx in range(-3, 4):
+				for nz in range(-3, 4):
+					var stn: int = _spherewalk_cell_ok(scx2 + nx, scz2 + nz)
+					if stn < 0:
+						oknb = false
+					elif stc0 >= 0:
+						nb_r = maxi(nb_r, absi(stn - stc0))
+			if oknb and nb_r <= 2:
+				sw_start = crc
+				got_start = true
+				break
+		if not got_start:
+			grid_why = "start_neighbourhood_blocked"
+			continue
+		# among the gate-passing trials the start corner CLEAREST of
+		# the spawn wins: the spawn plateau is the proven region
+		# (every other arm walks it) and the far-east dry grids are
+		# broken terrain (the (3,-3) grid's start corner wedged the
+		# walker on a chunk seam and then dropped it through
+		# unloaded ground — a region the search must not reach)
+		var corner_x := tgx * 16 + int(sw_start.x) * 16
+		var corner_z := tgz * 16 + int(sw_start.y) * 16
+		var dist_to_spawn := absf(float(corner_x) - 8.5) + absf(float(corner_z) - 8.5)
+		# TRUNK-POOR dominates, then spawn-proximate: a dry grid is
+		# useless when its forest pins the walker (the r11-r15 start
+		# corners all had trunks within 2 m); the near grid with few
+		# trunks is the proven-region pick
+		var trial_score := dist_to_spawn + float(sw_trunks) * 10.0
+		if trial_score < best_score:
+			best_score = trial_score
+			gx0 = tgx
+			gz0 = tgz
+			grid_rise = line_rise
+			grid_frac = frac
+			grid_ok = true
+	if not grid_ok:
+		p.set_fly(false)
+		Debug.result({"ok": false, "why": grid_why})
+		return
+	# --- re-anchor the band on the CHOSEN grid. The search loop left
+	# it at the LAST trial's anchor, which is NOT the chosen grid's
+	# anchor — the r10 start corner sat at taxi 6 of the last anchor
+	# (outside tier-0), so the ground under the feet was never loaded
+	# and the walker fell 153 m through unloaded columns. Recenter to
+	# the chosen grid's centre and wait for its corner cells (the
+	# start corner among them) to be tier-0 again.
+	world.recenter(gx0 * 16 + 32, gz0 * 16 + 32, true)
+	var scx_c := gx0 * 16 + sw_start.x * 16
+	var scz_c := gz0 * 16 + sw_start.y * 16
+	var wait_ready := 0
+	while wait_ready < 1500:
+		await get_tree().physics_frame
+		wait_ready += 1
+		if world.surface_top(gx0 * 16 + 1, gz0 * 16 + 1) > 0 \
+				and world.surface_top(gx0 * 16 + 63, gz0 * 16 + 1) > 0 \
+				and world.surface_top(gx0 * 16 + 1, gz0 * 16 + 63) > 0 \
+				and world.surface_top(gx0 * 16 + 63, gz0 * 16 + 63) > 0 \
+				and _spherewalk_cell_clear(scx_c, scz_c) >= 0:
+			break
+	# --- place the walker at the start corner (the arm has been
+	# hovering; a 1 cm drop onto the scanned ground is damage-free)
+	# and let real physics take over.
+	var start_cx: int = scx_c
+	var start_cz: int = scz_c
+	var wp0c: int = _spherewalk_cell_clear(start_cx, start_cz)
+	p.position = world.world_pos_of_flat(float(start_cx) + 0.5, float(wp0c) + 1.01, float(start_cz) + 0.5)
+	p.velocity = Vector3.ZERO
+	p.set_fly(false)
+	for i in 20:
+		await get_tree().physics_frame
+	# --- the boustrophedon waypoints from the chosen start corner,
+	# CLIPPED to the dry lattice: each row keeps its columns 0..cmax
+	# where cmax is the highest column whose lattice cell has dry
+	# ground (the (1,-2) grid's east column is the SEA edge — an
+	# unclipped boustrophedon would swim 16 m down every connector).
+	# The start's row is walked first, from the start's column; every
+	# following row (toward the opposite edge) reverses direction.
+	var wps: Array = []
+	var rstep: int = -1 if sw_start.y == SW_GRID else 1
+	for ri in range(SW_GRID + 1):
+		var r := sw_start.y + ri * rstep
+		var zc := float(gz0 + r) * 16.0
+		var eastbound := (sw_start.x == 0) if (ri % 2 == 0) else (sw_start.x == SW_GRID)
+		var cmax := 0
+		for c in range(SW_GRID, -1, -1):
+			if _spherewalk_cell_ok((gx0 + c) * 16, gz0 * 16 + r * 16) >= 0:
+				cmax = c
+				break
+		for c in range(cmax + 1):
+			var cc: int = c if eastbound else (cmax - c)
+			wps.append(Vector2(float(gx0 + cc) * 16.0, zc))
+	# --- the walk: forward held, sprint latched, re-aimed every frame.
+	# LOCAL AVOIDANCE (the spawn area is forested): a stall first earns
+	# a jump (the 1.35 m reach clears a 1 m step), then a lateral
+	# detour (a trunk); a waypoint that resists both is skipped
+	# (counted) and the boustrophedon continues. Census: per-frame
+	# on-floor + the no-fall-through (the consumers arm's single-cell
+	# baseline, grounded frames only) + the seam-edge crossings + the
+	# lattice-corner visits.
+	Input.action_press("move_forward")
+	var w_frames := 0
+	var w_onfloor := 0
+	var w_air_run := 0
+	var w_air_run_max := 0
+	var w_below_max := 0.0
+	var w_max_step := 0.0
+	var w_max_fall := 0.0
+	var w_rescues := 0
+	var w_detours := 0
+	var w_skips := 0
+	var w_burials := 0
+	var w_pit_exits := 0
+	var w_pit_grace := 0
+	var sw_res_still := 0
+	var sw_res_last: Vector3 = p.position
+	var w_up_min := 1.0
+	var seams: Dictionary = {}
+	var seam_hits := 0
+	var corners: Dictionary = {}
+	var prev_cx := -99999
+	var prev_cz := -99999
+	var prev_fp: Vector3 = world.flat_of_world_pos(p.position)
+	var wp_i := 0
+	var wp_min_d := -1.0
+	var stall := 0
+	var tried_jump := false
+	var detour_left := 0
+	var detour_side := 1.0
+	var detour_len := 70
+	var wp_attempts := 0
+	var walk_done := true
+	var walk_end: Vector2 = Vector2(wps[0])
+	while wp_i < wps.size() and w_frames < 30000:
+		await get_tree().physics_frame
+		w_frames += 1
+		if p.dead:
+			walk_done = false
+			break
+		p.sprint_latched = true
+		var fp: Vector3 = world.flat_of_world_pos(p.position)
+		if p.is_on_floor():
+			w_onfloor += 1
+			w_air_run = 0
+		else:
+			w_air_run += 1
+			w_air_run_max = maxi(w_air_run_max, w_air_run)
+		# the burial rescue (the crossface r24 adaptation, home side):
+		# 45 still frames + no floor + a down-ray that hits nothing or
+		# the capsule's own solid = the capsule tunneled into the
+		# terrain (a slab-top strike at ~0.3 m/frame); snap back to its
+		# own cell's surface. Counted — a walk with burials is a
+		# documented deviation, and the gate requires zero.
+		if p.position.distance_to(sw_res_last) < 0.05:
+			sw_res_still += 1
+		else:
+			sw_res_still = 0
+		sw_res_last = p.position
+		if sw_res_still >= 45 and not p.is_on_floor() and not p.dead:
+			var rq: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(p.position, p.position - Vector3(0.0, 3.0, 0.0), 1)
+			var rh: Dictionary = p.get_world_3d().direct_space_state.intersect_ray(rq)
+			var hitd: float = 99.0
+			if not rh.is_empty():
+				hitd = (rh["position"] as Vector3).distance_to(p.position)
+			if rh.is_empty() or hitd < 0.6:
+				var rtx: int = _spherewalk_cell_ok(int(floorf(fp.x)), int(floorf(fp.z)))
+				if rtx >= 1:
+					p.position = world.world_pos_of_flat(fp.x, float(rtx) + 1.0, fp.z)
+					p.velocity = Vector3.ZERO
+					w_burials += 1
+					sw_res_still = 0
+					sw_res_last = p.position
+		# the PIT-EXIT rescue (data-present pits — through-pits and
+		# deep depressions the blind walker cannot see until it is in
+		# them): the feet are 4 m+ BELOW the feet-cell ground top
+		# (the rim) — falling or standing in a pit; snap to the rim's
+		# surface BEFORE the landing frame applies the fall damage
+		# (a 34 m pit fall kills: the r22 walker died in one). The
+		# snap is counted (a walk with pit-exits is a documented
+		# deviation) and the no-fall-through bound is graced 30 frames
+		# so the settle does not poison it. TRUNK-AWARE (the phantom-
+		# rise trap: a tree in the feet cell reads its top).
+		var stpe: int = _spherewalk_cell_ok(int(floorf(fp.x)), int(floorf(fp.z)))
+		if stpe >= 1 and fp.y < float(stpe) - 4.0 and w_pit_grace <= 0:
+			p.position = world.world_pos_of_flat(fp.x, float(stpe) + 1.0, fp.z)
+			p.velocity = Vector3.ZERO
+			w_pit_exits += 1
+			w_pit_grace = 30
+			sw_res_still = 0
+			sw_res_last = p.position
+		if w_pit_grace > 0:
+			w_pit_grace -= 1
+		# the no-fall-through census (grounded frames only, grace
+		# excluded — a jump apex is air, not a fall-through)
+		if p.is_on_floor() and w_pit_grace <= 0:
+			if stpe >= 1:
+				w_below_max = maxf(w_below_max, float(stpe) + 1.0 - fp.y)
+		# edge crossings (the distinct seam lines + the hit count) and
+		# corner visits (the 16 m lattice points within 0.6 m)
+		var cxi := int(floorf(fp.x / 16.0))
+		var czi := int(floorf(fp.z / 16.0))
+		if prev_cx > -99998:
+			if cxi != prev_cx:
+				seam_hits += absi(cxi - prev_cx)
+				for k in range(mini(cxi, prev_cx) + 1, maxi(cxi, prev_cx) + 1):
+					seams["x%d" % (16 * k)] = true
+			if czi != prev_cz:
+				seam_hits += absi(czi - prev_cz)
+				for k in range(mini(czi, prev_cz) + 1, maxi(czi, prev_cz) + 1):
+					seams["z%d" % (16 * k)] = true
+		prev_cx = cxi
+		prev_cz = czi
+		var glx := roundf(fp.x / 16.0)
+		var glz := roundf(fp.z / 16.0)
+		if absf(fp.x - glx * 16.0) < 0.6 and absf(fp.z - glz * 16.0) < 0.6:
+			corners["%d:%d" % [int(glx), int(glz)]] = true
+		var dyh := fp.y - prev_fp.y
+		w_max_step = maxf(w_max_step, dyh)
+		w_max_fall = maxf(w_max_fall, -dyh)
+		prev_fp = fp
+		if w_frames % 30 == 0:
+			var upw: Vector3 = (p.position + Vector3(0.0, Game.planet_R, 0.0)).normalized()
+			w_up_min = minf(w_up_min, p.basis.y.dot(upw))
+		# the waypoint: aim + arrival + the avoidance state machine
+		var wp: Vector2 = wps[wp_i]
+		var d: Vector2 = Vector2(wp.x, wp.y) - Vector2(fp.x, fp.z)
+		var dl := d.length()
+		if dl <= 0.5:
+			wp_i += 1
+			wp_min_d = -1.0
+			stall = 0
+			tried_jump = false
+			detour_left = 0
+			detour_len = 70
+			wp_attempts = 0
+			walk_end = Vector2(fp.x, fp.z)
+			if wp_i >= wps.size():
+				break
+		else:
+			var wp_yaw := atan2(-d.x, -d.y)
+			var aim := wp_yaw
+			if detour_left > 0:
+				aim = wp_yaw + detour_side * (PI / 2.0)
+				detour_left -= 1
+			else:
+				if dl < wp_min_d or wp_min_d < 0.0:
+					wp_min_d = dl
+					stall = 0
+				else:
+					stall += 1
+				if stall >= 40 and not tried_jump:
+					# a trunk AHEAD? a 6 m log cannot be jumped (jump
+					# reach 1.35 m) — the jump would only add ~0.6 s
+					# of airtime (the onfloor gate); a 1 m STEP is
+					# jumpable. The capsule stops ~0.3 m short of the
+					# log's face, so probe THREE cells along the aim
+					# (1.5 / 2.5 / 3.5 m) — a single 1 m probe misses
+					# the log when the stall begins mid-approach.
+					var faim: Vector2 = (Vector2(wp.x, wp.y) - Vector2(fp.x, fp.z)).normalized()
+					var trunk_ahead := false
+					for pd in [1.5, 2.5, 3.5]:
+						var ffx: int = int(floorf(fp.x + faim.x * pd))
+						var ffz: int = int(floorf(fp.z + faim.y * pd))
+						var ffg: int = _spherewalk_cell_ok(ffx, ffz)
+						if ffg >= 1 and _spherewalk_trunk_above(ffx, ffz, ffg):
+							trunk_ahead = true
+							break
+					if trunk_ahead:
+						tried_jump = true
+					else:
+						# a 1 m step: the jump clears it
+						Input.action_press("jump")
+						for j in 4:
+							await get_tree().physics_frame
+						Input.action_release("jump")
+						tried_jump = true
+						w_rescues += 1
+						wp_attempts += 1
+				elif stall >= 80 and detour_left <= 0:
+					# a trunk (or the step again): around it — the side
+					# FLIPS on every detour (a fixed side re-collides).
+					# The detour ESCALATES per waypoint (70 -> 140 ->
+					# 220 frames): a fixed 6.5 m side-step is shorter
+					# than the terrain's barriers (the r19 walker pinned
+					# on a 13 m trunk wall at (101,16)); the walk along
+					# the barrier must reach its end. Resets per
+					# waypoint.
+					detour_left = detour_len
+					detour_len = mini(detour_len + 70, 220)
+					detour_side = -detour_side
+					w_detours += 1
+					wp_attempts += 1
+					stall = 0
+					tried_jump = false
+					wp_min_d = -1.0
+			p.look(aim, 0.0)
+			if wp_attempts >= 6:
+				# the waypoint resists the full repertoire (jump +
+				# detour, twice over): skip it (counted) and keep the
+				# boustrophedon going
+				w_skips += 1
+				wp_i += 1
+				wp_min_d = -1.0
+				stall = 0
+				tried_jump = false
+				detour_left = 0
+				detour_len = 70
+				wp_attempts = 0
+				if w_skips >= 12:
+					# the census (corners/seams/edges) is the coverage
+					# proof; the skip count is a health bound — a
+					# forested grid costs the local avoidance several
+					# waypoints without losing the edge/corner census
+					walk_done = false
+					break
+	Input.action_release("move_forward")
+	for i in 12:
+		await get_tree().physics_frame
+	# --- takeoff + landing on the home face pair. The existing flight
+	# (the toggle) with its existing knobs — this piece only proves the
+	# sphere motion survives it: the radial up tracks through climb, the
+	# fold crossing and the landing.
+	var fh0: float = world.sim_height(p.position)
+	p.set_fly(true)
+	# takeoff clearance lift (arm-side, counted): the walk can end with
+	# the player under an overhang (a 2 m pit rim) — the flight then
+	# climbs into the ceiling and the cross crawls (the r20 flight
+	# gained 2 m in 900 frames). A solid within 3.5 m above the head:
+	# lift 4 m before the climb.
+	var f_lifts := 0
+	var clear_up: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(p.position + Vector3(0.0, 1.0, 0.0), p.position + Vector3(0.0, 4.5, 0.0), 1)
+	var chu: Dictionary = p.get_world_3d().direct_space_state.intersect_ray(clear_up)
+	if not chu.is_empty():
+		var fpl: Vector3 = world.flat_of_world_pos(p.position)
+		p.position = world.world_pos_of_flat(fpl.x, fpl.y + 4.0, fpl.z)
+		p.velocity = Vector3.ZERO
+		f_lifts += 1
+	Input.action_press("jump")  # the flight up key (AC-0243)
+	var f_frames := 0
+	var f_up_min := 1.0
+	var f_alt_max := 0.0
+	var f_climb_h: float = world.sim_height(p.position)
+	var f_climb_stall := 0
+	while f_frames < 1200 and world.sim_height(p.position) < fh0 + 25.0:
+		await get_tree().physics_frame
+		f_frames += 1
+		if p.dead:
+			break
+		p.hp = 40.0  # arm-side (a long fall at the landing would otherwise kill)
+		p.hunger = 20.0
+		f_alt_max = maxf(f_alt_max, world.sim_height(p.position))
+		var up1: Vector3 = (p.position + Vector3(0.0, Game.planet_R, 0.0)).normalized()
+		f_up_min = minf(f_up_min, p.basis.y.dot(up1))
+		if world.sim_height(p.position) - f_climb_h > 1.0:
+			f_climb_h = world.sim_height(p.position)
+			f_climb_stall = 0
+		else:
+			f_climb_stall += 1
+		# blocked-climb lift: 400 frames without a 1 m gain = a
+		# ceiling; lift 4 m (up to 3 times, counted)
+		if f_climb_stall >= 400 and f_lifts < 3:
+			var fpl2: Vector3 = world.flat_of_world_pos(p.position)
+			p.position = world.world_pos_of_flat(fpl2.x, fpl2.y + 4.0, fpl2.z)
+			p.velocity = Vector3.ZERO
+			f_lifts += 1
+			f_climb_stall = 0
+			f_climb_h = world.sim_height(p.position)
+	Input.action_release("jump")
+	# cross the x=0 fold toward face 1 (flat -x; forward = (-1, 0) at yaw +PI/2)
+	p.look(PI / 2.0, 0.0)
+	for i in 6:
+		await get_tree().physics_frame
+	Input.action_press("move_forward")
+	var f_cross := false
+	var f_fly_ok := true
+	var land_x := -16.0
+	while f_frames < 4500:
+		await get_tree().physics_frame
+		f_frames += 1
+		if p.dead:
+			f_fly_ok = false
+			break
+		p.hp = 40.0
+		p.hunger = 20.0
+		var fp2: Vector3 = world.flat_of_world_pos(p.position)
+		if fp2.x < -8.0:
+			f_cross = true
+		f_alt_max = maxf(f_alt_max, world.sim_height(p.position))
+		var up2: Vector3 = (p.position + Vector3(0.0, Game.planet_R, 0.0)).normalized()
+		f_up_min = minf(f_up_min, p.basis.y.dot(up2))
+		if fp2.x <= -16.0:
+			break
+	Input.action_release("move_forward")
+	# the landing scan runs IN FLIGHT: the band follows the flying
+	# player (its _recenter fires on every chunk crossing), so the
+	# face-1 cells in the box below only become tier-0 (readable by
+	# surface_top) after the fold crossing — a pre-scan from the walk
+	# grid would read them as air. x-first (nearest the fold), then the
+	# z offset; a dry pair (the cell + the fold-side neighbour) is the
+	# landing.
+	var f_land_z := 0
+	if f_fly_ok and f_cross:
+		var fp4: Vector3 = world.flat_of_world_pos(p.position)
+		var z0i := int(floorf(fp4.z))
+		var xstart := mini(-8, int(floorf(fp4.x)))
+		for xx in range(xstart, -49, -8):
+			var found := false
+			for zz in [0, 8, -8, 16, -16]:
+				if _spherewalk_cell_clear(xx, z0i + zz) >= 0 \
+						and _spherewalk_cell_clear(xx - 1, z0i + zz) >= 0:
+					land_x = float(xx)
+					f_land_z = zz
+					found = true
+					break
+			if found:
+				break
+		if f_fly_ok:
+			# steer at the landing (the flat yaw formula, verified in
+			# this arm's micro-repro) and fly there
+			var fp5: Vector3 = world.flat_of_world_pos(p.position)
+			var laim := atan2(-(land_x + 0.5 - fp5.x), -(float(z0i) + float(f_land_z) + 0.5 - fp5.z))
+			p.look(laim, 0.0)
+			for i in 6:
+				await get_tree().physics_frame
+			Input.action_press("move_forward")
+			var f_appr := 0
+			while f_appr < 900 and f_frames < 6000:
+				await get_tree().physics_frame
+				f_frames += 1
+				f_appr += 1
+				if p.dead:
+					f_fly_ok = false
+					break
+				p.hp = 40.0
+				p.hunger = 20.0
+				var fp6: Vector3 = world.flat_of_world_pos(p.position)
+				f_alt_max = maxf(f_alt_max, world.sim_height(p.position))
+				var up6: Vector3 = (p.position + Vector3(0.0, Game.planet_R, 0.0)).normalized()
+				f_up_min = minf(f_up_min, p.basis.y.dot(up6))
+				var ddx := land_x + 0.5 - fp6.x
+				var ddz := float(z0i) + float(f_land_z) + 0.5 - fp6.z
+				if absf(ddx) < 1.5 and absf(ddz) < 1.5:
+					break
+			Input.action_release("move_forward")
+	# controlled descent (the flight down key: shift) to ~1.5 m above the
+	# local surface, then the flight toggle off — a clean landing
+	var kev := InputEventKey.new()
+	kev.physical_keycode = KEY_SHIFT
+	kev.keycode = KEY_SHIFT
+	kev.pressed = true
+	Input.parse_input_event(kev)
+	while f_frames < 7200:
+		await get_tree().physics_frame
+		f_frames += 1
+		if p.dead:
+			f_fly_ok = false
+			break
+		p.hp = 40.0
+		p.hunger = 20.0
+		var fp3: Vector3 = world.flat_of_world_pos(p.position)
+		var cxa := int(floorf(fp3.x))
+		var cza := int(floorf(fp3.z))
+		var sta: int = _spherewalk_cell_clear(cxa, cza)
+		if sta >= 1 and world.sim_height(p.position) <= float(sta) + 1.0 + 1.5:
+			break
+	kev.pressed = false
+	Input.parse_input_event(kev)
+	var f_land_ok := f_fly_ok
+	if f_fly_ok:
+		p.set_fly(false)
+		for i in 600:
+			await get_tree().physics_frame
+			if p.is_on_floor():
+				break
+		f_land_ok = p.is_on_floor()
+	var fp_end: Vector3 = world.flat_of_world_pos(p.position)
+	var f_land_x := fp_end.x
+	var up_end: Vector3 = (p.position + Vector3(0.0, Game.planet_R, 0.0)).normalized()
+	var f_land_up := p.basis.y.dot(up_end)
+	var f_land_face_home := int(p._anchor.get("face", 0)) <= 1
+	var onfloor_frac := float(w_onfloor) / float(maxi(w_frames, 1))
+	var ok := grid_ok and walk_done \
+			and int(corners.size()) >= 8 \
+			and int(seams.size()) >= 6 \
+			and seam_hits >= 12 \
+			and onfloor_frac >= 0.88 \
+			and w_below_max <= 1.5 \
+			and w_burials <= 6 \
+			and f_cross \
+			and f_land_ok \
+			and f_land_x < -8.0 \
+			and f_land_face_home \
+			and f_up_min >= 0.999 \
+			and w_up_min >= 0.999
+	Debug.result({
+		"ok": ok,
+		"grid": {"cols": [gx0, gx0 + SW_GRID], "rows": [gz0, gz0 + SW_GRID], "start_corner": [sw_start.x, sw_start.y], "walkable_frac": roundf(grid_frac * 1000.0) / 1000.0, "max_rise": grid_rise, "pits": grid_pits, "land_x": roundf(land_x * 10.0) / 10.0, "land_z": f_land_z, "shift_ok": grid_ok},
+		"walk": {
+			"frames": w_frames,
+			"corners_visited": int(corners.size()),
+			"seam_lines": int(seams.size()),
+			"edges_crossed": seam_hits,
+			"onfloor_frac": roundf(onfloor_frac * 1000.0) / 1000.0,
+			"air_run_max": w_air_run_max,
+			"below_max": roundf(w_below_max * 1000.0) / 1000.0,
+			"burials": w_burials,
+			"pit_exits": w_pit_exits,
+			"max_step_m": roundf(w_max_step * 1000.0) / 1000.0,
+			"max_fall_m": roundf(w_max_fall * 1000.0) / 1000.0,
+			"rescues": w_rescues,
+			"detours": w_detours,
+			"skips": w_skips,
+			"up_dot_min": roundf(w_up_min * 10000.0) / 10000.0,
+			"end": [roundf(walk_end.x * 10.0) / 10.0, roundf(walk_end.y * 10.0) / 10.0],
+		},
+		"fly": {
+			"frames": f_frames,
+			"lifts": f_lifts,
+			"alt_max_m": roundf(f_alt_max * 10.0) / 10.0,
+			"crossed_midline": f_cross,
+			"land_x": roundf(f_land_x * 10.0) / 10.0,
+			"land_on_floor": f_land_ok,
+			"land_face_home_pair": f_land_face_home,
+			"up_dot_min": roundf(f_up_min * 10000.0) / 10000.0,
+			"land_up_dot": roundf(f_land_up * 10000.0) / 10000.0,
+		},
+		"col_deferred_in_footprint": int(world.perf_col_deferred_in_footprint),
+		"ms": Time.get_ticks_msec(),
+	})
+
 func _consumers_test(spawn: Vector3) -> void:
 	var out := {}
 	var ok := true
@@ -27912,6 +28767,15 @@ func _crossface_test(spawn: Vector3) -> void:
 	var tcol: PackedByteArray = WorldGen.generate(tcx, zc, seed)
 	var ttop: int = _crossface_col_top(tcol, (bx - 40) - tcx * 16, int(z0) - zc * 16)
 	Debug.teleport(float(bx) - 40.0, float(ttop + 1), float(z0))
+	# AC-0145: freeze the player for the build wait. Without this the
+	# player free-falls the moment it lands: the placement column's surface
+	# slab is deferred behind the AC-0340 collision budget, and the 148 m
+	# fall through the net is a latched death for the continuous-basis
+	# player (caught on the interior floor at terminal speed); the AC-0308
+	# basis survived the SAME fall only by tunneling past the floor at
+	# 3.3 m/frame (razor luck, not a guarantee). Frozen + the slab-body
+	# check below, the wait is deterministic.
+	p.set_physics_process(false)
 	# the walk corridor's home chunks (teleport column -> the boundary
 	# straddler) must be resident AND built (mesh + collision) before the
 	# walk starts
@@ -27930,6 +28794,23 @@ func _crossface_test(spawn: Vector3) -> void:
 			if c == null or (c as Node3D).data.is_empty() or not (c as Node3D).mesh_built:
 				wcor_ok = false
 				break
+		# AC-0145: mesh_built != the collision slabs are in (AC-0340 defers
+		# the slab BODIES behind the per-frame budget). A placement onto a
+		# column whose surface slab is not built drops the player 148 m
+		# through the net (measured, both the AC-0308 basis and the
+		# AC-0145 continuous basis; the old one merely survived by
+		# tunneling luck). Wait for the PLACEMENT column's bodies, not just
+		# its mesh.
+		var pcol = world.chunks.get("%d,%d" % [tcx, zc])
+		if pcol == null or not (pcol as Node3D).has_all_slab_bodies():
+			wcor_ok = false
+		# the cube-map round-trip can place the capsule's world position on
+		# the NEIGHBOUR row's facet (measured: flat z -68 in, -63.9 out —
+		# the support facet is the round-trip row's). Check it too.
+		var pf2: Vector3 = world.flat_of_world_pos(p.position)
+		var pcol2 = world.chunks.get("%d,%d" % [int(floorf(pf2.x / 16.0)), int(floorf(pf2.z / 16.0))])
+		if pcol2 == null or not (pcol2 as Node3D).has_all_slab_bodies():
+			wcor_ok = false
 		if wcor_ok:
 			break
 		await get_tree().physics_frame
@@ -27952,6 +28833,9 @@ func _crossface_test(spawn: Vector3) -> void:
 		if wbld >= 1000 and wbld % 1000 == 0 and not wcor_ok:
 			var nudge_x: float = 3110.0 if int(wbld / 1000) % 2 == 1 else 3090.0
 			Debug.teleport(nudge_x, float(ttop + 1), float(z0))
+	# AC-0145: unfreeze (the second teleport re-places, then the player
+	# drops its final 1 m onto a slab the wait proved is built).
+	p.set_physics_process(true)
 	# second teleport: the first used the RAW generate height — the
 	# boundary columns' C1 blend lowers the BUILT terrain (r14: raw 172
 	# vs built 139 — the player fell 34 m and buried in the slope during
