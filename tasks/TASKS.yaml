@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-09-28T23:44
+  updated_at: 2026-09-29T00:24
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -6434,7 +6434,7 @@ intake:
   status: in-progress
   labels: []
   created_at: 2026-08-29T12:09
-  updated_at: 2026-09-28T21:02
+  updated_at: 2026-09-29T00:24
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -6500,7 +6500,34 @@ intake:
     (the existing cruising_altitude 275, sub-cruising speed and A/SHIFT climb knobs versus the sphere''s
     altitude bands, which the ticket insists must be an explicit decision rather than a blank slate) and
     the five flat-grid consumers beyond what the basis already touches, with drops and mobs falling under
-    -Y named last. The ticket stays in-progress on that basis.'
+    -Y named last. The ticket stays in-progress on that basis.
+
+
+    PIECE 2 VERIFIED BY THE COORDINATOR, WITH ONE INSTRUMENT CAVEAT THAT MUST BE FIXED BEFORE ANYONE TRUSTS
+    THIS ARM''S ok FLAG. The substance checks out on my own capped stage of commit 400b1e9 and I ran the
+    arm myself THREE times rather than once: on every run the fly half is IDENTICAL and correct - alt_max_rad_m
+    2050.0, band_peak 1.0, freeze_dot 0.966, band_land 0.0, land_up_dot 1.0, up_dot_min 1.0, crossed_midline
+    true, land_on_floor true, land_x -16.2 - so the 6-DOF free-basis proof (a deliberate ~15-degree misalignment
+    is NOT re-aligned at band 1) is solid, and the takeoff / fold-crossing / second-face landing is solid.
+    The standing set is green around it: genhash 25/25 byte-identical in two runs (player physics does
+    not touch generation), farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0, r16
+    no reds with far_holes 0/0 in both bands, boundary r4 ok at 11/40, and the R24 walk inside every gated
+    value (sweep p50 6.3, crossing frame p95 104, storm p99 109). THE CAVEAT: the arm''s `ok` flag is
+    NOT RELIABLE on this process. The builder reports ok:true; my first run returned **ok:false** with
+    every fly field exactly as reported, my second run returned ok:true, and a third run did not finish
+    inside 600 seconds. Since the fly half is bit-stable across all of them, the flapping must come from
+    the walk/grid half, whose censuses depend on how the threaded generator happened to build the region
+    that run - the builder itself recorded a non-deterministic corner count (11 vs 12) on the walk path.
+    This is the SAME CLASS OF DEFECT AS THE CROSSING-SWEEP MAX that AC-0369''s verification exposed: an
+    arm that gates a value produced by a variable process will flap, and a flapping gate trains readers
+    to ignore it. THE FIX BELONGS TO PIECE 3''s run, which owns this instrument: gate `ok` on the INVARIANTS
+    that cannot flap - no fall-through (below_max), the up-vector staying radial (up_dot_min), the band
+    behaviour (band_peak / band_land / freeze_dot), land_on_floor and crossed_midline - and demote the
+    walk-coverage census (corners, lines, pits, onfloor_frac) to WATCH fields reported alongside, exactly
+    as the water-classification work did when it turned a measured claim into a gated invariant. The arm
+    also needs a runtime budget: a run that needs more than ten minutes is not usable in a standing gate,
+    so either bound the walk region or report the duration as a field. Until that lands, READ THE FIELDS
+    AND NOT THE FLAG on this arm.'
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549794'
