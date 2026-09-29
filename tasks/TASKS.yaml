@@ -1,13 +1,13 @@
 meta:
-  updated_at: 2026-09-29T11:43
+  updated_at: 2026-09-29T18:38
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0379
 - AC-0380
 - AC-0310
 - AC-0311
+- AC-0381
 - AC-0093
 - AC-0038
 - AC-0039
@@ -21906,11 +21906,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-29T11:17
-  updated_at: 2026-09-29T11:17
-  completed_at: null
+  updated_at: 2026-09-29T18:38
+  completed_at: 2026-09-29T18:38
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Where two faces of the planet meet, a strip of ground about six columns wide
@@ -21955,7 +21955,41 @@ intake:
     and the instrument - then tasks/AC-0309/AC-0309-results.html for the straddler case and the `_face_stream`
     work this sits next to.
 
-    '
+
+
+    CLOSED - the air strip is gone, and I verified the fix myself in the field the bug was found in rather
+    than on the builder''s word. COORDINATOR VERIFICATION on my own capped stage of commit 83509e1 (every
+    arm rc 0, zero SCRIPT ERROR): the crossface arm reads ok:true with **d3_straddler_sliver_live_gen
+    [54, 54]** - all fifty-four columns of AC-0368''s sliver window now reading live generated terrain,
+    where the same measurement was [0, 54] before, every one of them air - plus d3_orig [4, 1] and e_boundary_top
+    172, which are the two moved values the builder recorded rather than hid. Genhash is 25/25 byte-identical
+    in two runs, which is the proof that matters most here: the fix is in the streaming lane and generation
+    did not move an inch. Also green: farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate
+    0/0, r16 no reds with far_holes 0/0 in both bands, boundary r4 ok at 13/37 with staged_dropped 2170
+    under its 2500 ceiling, the R24 walk inside every gated value (sweep p50 5.7, crossing frame p95 48,
+    storm p99 120), and the battery complete. WHY THIS BUG WAS WORTH A TICKET AND WHY THE DIAGNOSIS IS
+    WORTH READING: the symptom looked exactly like a broken promotion and the obvious suspects were both
+    wrong - the trace showed the straddler landing correctly EVERY time it reached the enqueue, with zero
+    stale handoffs and every landing committing, which cleared "result discarded" and "commits to the
+    wrong sub-chunk" before anything was changed. What was actually happening was starvation: the recenter
+    want/ring walks queued a fully-past-patch chunk as an ordinary entry, the scored data pick re-picked
+    it every frame, and each pick was a no-op that still counted as a consumed unit - so the straddler
+    waited a hundred seconds with the threadgen pool IDLE at 0/2. The pool was not busy, it was starved,
+    and that distinction is the entire ticket. THE FIX MATCHES A GUARD THE CODE ALREADY HAD: _enqueue_build
+    already rejected past-patch chunks, and the want/ring walks simply did not, so the change is less
+    a new rule than a consistency fix, with a defence-in-depth filter added in the pool''s data branch.
+    THE TICKET''S ASSERTION NOW EXISTS AND DISCRIMINATES, which was the other half of the ask: d3_straddler_sliver_live_gen
+    gates the arm''s ok flag, and it earned the claim during development by going RED at [0,54] mid-promotion
+    before the waits were bounded - a gate that demonstrably fails is the only kind worth having, and
+    this session has now produced four instruments that had to be taught that lesson. THE GUARD THE TICKET
+    SET WAS HONOURED ABSOLUTELY: the save path is untouched. It was the proven side, and the temptation
+    to reconcile the two paths toward each other is exactly how a working save gets broken to match a
+    broken live view. ONE PROCESS NOTE, since this run began under unusual conditions: the harness restarted
+    mid-launch and cancelled the first attempt, which had already installed the env-gated CFPR trace and
+    a status page. I inspected the partial change before deciding, kept the instrumentation because it
+    was coherent and clearly marked TEMP, and resumed from it rather than reverting - and the resumed
+    run removed every trace of it (functions, vars, the _ready hook, all call sites, the heartbeat) with
+    G0 re-verified on the pristine tree.'
   comments: []
 - id: AC-0380
   title: repoint-non-discriminating-light-fluid-scan-rows
@@ -22013,6 +22047,156 @@ intake:
 
     CONTEXT: read tasks/AC-0368/AC-0368-results.html item 3 (the re-baseline table and the stale-arm finding)
     and the light/fluids rows in tasks/harness_data.yaml.
+
+    '
+  comments: []
+- id: AC-0381
+  title: post-planet-performance-re-review
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-09-29T16:42
+  updated_at: 2026-09-29T16:42
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+
+    The planet series changed a lot of the code that runs every frame and every chunk, and the last full
+    performance review predates it. I want performance re-reviewed on the current tree with the same evidence
+    discipline as the last round, so I know what the bottlenecks actually are now rather than which ones
+    were true three reviews ago.
+
+
+    2) Technical Details
+
+
+    READ THIS FIRST - THE THREE TRAPS THAT COST THE LAST ROUND ITS TIME. Every one of them produced a
+    confident wrong answer, so they are stated up front rather than as advice:
+
+    1. **A measurement is only valid for the tree it ran on, and the tree moves fast here.** AC-0352''s
+    storm attribution (MISC 59.3% / DRAIN 26.7%) ran on a 2026-09-23 tree BEFORE the cave series. By the
+    time it was re-measured (AC-0363/AC-0365) MISC was 8.5% and DRAIN was 72% - the OPPOSITE shape. Any
+    number reused from a prior review must carry its tree SHA and date, or it must be re-measured. State
+    the SHA for every figure in the results.
+
+    2. **Check what REGION you measured before generalising.** AC-0307 measured the planet placement residual
+    at "5.4 cm worst over the spawn window" and it was reported as a sub-millimetre wedge; the same geometry
+    reaches ~2 m at patch corners, and the visible cracks are there. A spawn-anchored measurement is not
+    a worst case unless you show it is. Same failure: AC-0348''s sweep estimate, which priced the right
+    mechanism and the wrong dominant term.
+
+    3. **Do not trust structural reasoning about a hot path without a number.** In the last round, two
+    separate predictions ("recenter''s O(resident) sweep is the crossing cost"; "collision batches own
+    the worst frames") were both plausible from code reading and both WRONG when measured - the crossing
+    was ~9 ms and closed twice (AC-0348/AC-0350), collision was 2.1%. The instrument is cheap; guessing
+    costs a ticket.
+
+
+    WHAT IS ALREADY MEASURED AND CLOSED (do not re-derive - verify cheaply if you doubt it, and re-open
+    only with evidence):
+
+    - **Generation cost is attributed** (AC-0366, tree dc07e05): per octave-evaluation 23.0 ns; 65,317
+    evals/chunk against vanilla''s 18,375 (3.55x, purely a COUNT ratio - the per-evaluation price moved
+    +1.6% = noise). Of the 1.84x regression: ~77% is per-block work vanilla''s lattice scheme does not
+    interleave (the aquifer Voronoi search alone 1,600 us/chunk = 67.7%), ~31-33% is more fields, 0% is
+    price. The cave family total is ~3.1 ms/chunk (1,503 lattice + 1,604 scan).
+
+    - **The fill window is ~20 +/- 4 s** and is bounded by the main-thread DRAIN stage''s ~4.5 ms per-unit
+    dispatch cost, NOT by generation throughput (TG starved at 1-2 in-flight vs a 545/s capacity) and
+    NOT by the pace constant (AC-0364). The budget curve is FLAT: 8x the fill budget buys -17% window
+    for p99 ~940 ms.
+
+    - **MISC is no longer a problem** (AC-0365): 8.5% of the worst frame, 98% of it one named consumer
+    (the 20 Hz game tick: random-tick pass ~88 ms + fluid 33.8 ms over 20 worst frames). Save-queue writes,
+    the fluid arming loop, the atlas check and the cull pass all measured 0.0. There is no unnamed GDScript
+    hotspot hiding in it.
+
+    - **The crossing is closed twice** (AC-0348 measured 5-9 ms; AC-0350 band-bounded it to O(ring) with
+    the census byte-identical).
+
+    - **The engine-side gap is real and unowned**: arm wall minus `_process` total is a near-constant
+    16-17 ms/frame (physics over ~453 collision bodies, render-server bookkeeping over ~882 MIs, scene-tree
+    work), ~15.5% of a mean worst frame but 68% of the run''s max frame. `World._process` CANNOT see it.
+    Any review that stops at the wprof partition is measuring 40-90% of the frame and should say so.
+
+
+    THE NEW SUSPECTS THE PLANET SERIES INTRODUCES (the point of this ticket):
+
+    - **`core/sphere_math.gd` (+183 lines) and its call sites.** Pure float math, no SceneTree dependency
+    - a natural native port - but the earlier check found the call sites are per-column for placement
+    and only a couple of operations per frame for movement, so its frequency is UNVERIFIED. Planet work
+    added `world.gd`''s face-key/band derivation (the face-key loops reach `CELLS_PER_FACE` = 1024 cells)
+    and a `chunk.gd` hook. Measure the call frequency and the per-call cost BEFORE proposing a port; structure
+    alone is not a reason.
+
+    - **`player.gd` (+173 lines) and the P3 consumers (AC-0308, +145 lines through the player''s physics
+    path).** Player physics runs per frame and lands in the ENGINE-SIDE gap above, where no existing counter
+    can see it. AC-0307 also converted three global-Y assumptions (void kill plane, fall damage, cruise
+    altitude) to flat height - a per-frame path with new work in it. This is the most likely place for
+    a planet-introduced regression to hide invisibly, and it is the first thing to instrument.
+
+    - **The far/satellite tier costs that AC-0310 does not exist yet to introduce** - and **AC-0311''s
+    field-coordinate refactor**, which makes the surface/cave/ore/biome fields functions of a global direction
+    so they flow across face boundaries. A per-point coordinate transform on the lattice build would land
+    directly in AC-0366''s 23.0 ns/octave price. If this review runs AFTER AC-0311, that price MUST be
+    re-measured and compared against 23.0 ns - a change there is the single cleanest regression signal
+    available.
+
+    - **COLLIDE is unexplained.** AC-0364 read it at avg ~25 ms/frame with a 0-44 ms range and a 27 ms
+    batch max, against an `AWECRAFT_COLLIDE_MS` budget of 8 ms (AC-0340). Either the budget is not enforced
+    on the landing-time rebuild path (only on the speculative debt queue) or it is enforced at a granularity
+    that permits these overshoots. Establish which, with the code and a measurement - the collision series
+    was supposed to have capped this.
+
+    - **The per-unit DRAIN dispatch cost (~4.5 ms/unit)** is the measured bound on the fill window (AC-0369
+    owns the fix). If it has not landed by the time this runs, re-measure it; if it has, verify the window
+    moved.
+
+
+    STEP 0 - RE-BASELINE, then look (the order matters):
+
+    - Run the current standard set on the CURRENT tree and record the SHA: `boundary` r4 (the standing
+    band), the R24 walk arm (the AC-0348/0352/0363/0364 shape: `AWECRAFT_RADIUS=24 AWECRAFT_WALK=10 AWECRAFT_TICKTIME=1`),
+    `genhash` (GENMS), and the `wprof` partition.
+
+    - Read `AweGen.p4_stats()` for `cols_full` / `cols_skip` per second, and the `gen_timing()` per-stage
+    atomics - they are the cheapest real signal available and they already exist.
+
+    - Deliverable before any analysis: a table of "figure / value / tree SHA / arm" where every reused
+    number carries its provenance. Anything without a SHA gets re-measured or labelled stale.
+
+
+    STEP 1 - look for hotspots with a method, not a hunch:
+
+    - Rank the per-frame cost by stage for the WORST frames (the worst-N population, never an average
+    - a consumer that is 2% on average and 40% on the worst frames is the only interesting kind).
+
+    - For each suspect above, measure call frequency x per-call cost as its own two numbers. A per-frame
+    call at any cost outranks a per-column call, which outranks a per-slab/per-cell one; say which shape
+    each is.
+
+    - Cross-check against the standing values: if a standing row reads worse than its band on the current
+    tree, that is a regression with a name and a date - find where it moved.
+
+
+    STEP 2 - the deliverable: a RANKED list of hotspots with (share of frame or chunk, call shape, lane,
+    tree SHA), each marked as CONFIRMED-BY-MEASUREMENT or SUSPECTED-UNMEASURED, plus an explicit list
+    of what could NOT be measured with the current instruments and what instrument would be needed. A
+    ranked list of five measured items beats a ranked list of ten guesses - and "the engine-side gap is
+    68% of the max frame and nothing here can see inside it" is a legitimate headline result if that is
+    what the numbers say.
+
+
+    FENCES: this is a REVIEW - measurement, attribution and a ranked list. No optimisation, no retuning,
+    no native ports, no reverting. Each hotspot becomes its own ticket with its own gates (the AC-0366
+    -> AC-0369/0370/0371 pattern is the model: one review, then one ticket per finding). Where a fix would
+    change generated output, it needs the full genhash/genprobe/farab/ladder/thash set and `H` byte-exact.
 
     '
   comments: []
