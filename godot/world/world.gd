@@ -7747,6 +7747,13 @@ func _collect_pool(build: bool, include_fb := false, maxb := -1, high_only := fa
 			else:
 				if c == null or not c.data.is_empty():
 					continue
+				# AC-0379: a fully-past chunk is face territory — its gen
+				# is a permanent ENQ-PASTPATCH no-op, so presenting it to
+				# the scored pick would hold the pick (the drain counts
+				# the pick as a consumed unit, the entry never leaves the
+				# pool). Defense in depth behind the want/ring walk guards.
+				if _chunk_past_patch(int(e["cx"]), int(e["cz"])):
+					continue
 				out.append(e)
 	return out
 
@@ -10439,7 +10446,19 @@ func _rec_want_step() -> void:
 	# AC-0278 re-queue that runs BEFORE this walk - must not suppress the
 	# re-queue, or the column strands: entry dropped, flag stale, WANT
 	# skipping = never built again).
-	if c == null or not c.mesh_built:
+	# AC-0379: the home grid ends at the patch edge — a fully-past chunk
+	# is face territory: the stub exists (the crossface ring reads it)
+	# but no data/build work is ever owed (threadgen_enqueue's
+	# ENQ-PASTPATCH guard refuses it forever — same design as the
+	# _enqueue_build guard above). Without this the want-merge queued
+	# the past stub as a normal entry, and the scored data pick re-picked
+	# it every frame (each pick a no-op enqueue counted as a consumed
+	# unit, the pick cache staying warm) — starving every no-data entry
+	# behind it. Measured: the tier-0 boundary straddler (196,-4) sat
+	# no-data 100 s while the threadgen pool idled at 0/2 behind a past
+	# chunk at equal taxi score (AC-0368 item 1: the six-column live air
+	# strip at the face boundary).
+	if (c == null or not c.mesh_built) and not _chunk_past_patch(cx, cz):
 		_rec_want[key] = {"cx": cx, "cz": cz, "d": absi(dx) + absi(dz)}
 		_rec_want_keys.append(key)
 
@@ -10602,6 +10621,11 @@ func _rec_merge_ring_step() -> void:
 		return
 	var cx := _rec_pcx + dx
 	var cz := _rec_pcz + dz
+	# AC-0379: face territory owes no data (the same ENQ-PASTPATCH
+	# refusal as the want walk — a data-only entry for a fully-past
+	# chunk would be the same permanent no-op in the scored data pick).
+	if _chunk_past_patch(cx, cz):
+		return
 	var key := _key(cx, cz)
 	if queued_keys.has(key):
 		return

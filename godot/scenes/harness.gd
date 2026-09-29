@@ -29435,10 +29435,42 @@ func _crossface_test(spawn: Vector3) -> void:
 	# pre-built by the FSETTLE corridor) and pick the first cell that is
 	# resident, dry, and live == gen. The F section keeps the nominal
 	# z0/iv0.
+	# AC-0379: drive the straddler window itself — the walk/fly's
+	# recenter demote can leave the straddlers mid-promotion (far /
+	# all-air) when this probe runs (the r21 wait above breaks on a
+	# FAR chunk too — a far column holds data and its stored high mesh,
+	# so mesh_built is not the full-data test). The owed full-regen
+	# retry contract settles them (one accepted regen per residency,
+	# per-frame retry); wait for the steady state the live world
+	# converges to — both straddler chunks resident, full data, not far —
+	# before measuring the sliver. Bounded: a regression that breaks the
+	# promotion contract times out and the sliver assertion below fails
+	# on the broken state instead of passing on a lucky frame.
+	for d3w in 3600:
+		var cs4: Node3D = world.chunks.get("196,-4")
+		var cs5: Node3D = world.chunks.get("196,-5")
+		if cs4 != null and not cs4.data.is_empty() and not cs4.far \
+				and cs5 != null and not cs5.data.is_empty() and not cs5.far:
+			break
+		await get_tree().physics_frame
 	var site_bx: int = bx
 	var site_z: int = z0
 	var site_iv0: int = iv0
 	var sgen_cache: Dictionary = {}
+	# AC-0379: the straddler sliver's LIVE-VS-ROUND-TRIP contract, measured
+	# across the whole 54-cell probed band (x 3136-41, the 9 crossing rows
+	# — the AC-0368 window): every resident cell must read the gen top.
+	# d3_rt_home_gen_ok proves round-trip == gen, so live == gen here IS
+	# live == round-trip. Before AC-0379 this band read all-air live (the
+	# straddler's full gen starved behind a fully-past queue entry) and the
+	# arm silently fell back to the round-trip reference (site_anomalous);
+	# the agreement is now GATED — the defect this catches: any regression
+	# that leaves the boundary straddler no-data or far at the probe point
+	# (a queue starvation, an open demote->promote window, or a write to
+	# the wrong sub-chunk of the shared straddling columns) fails the arm
+	# instead of being measured as a green fallback.
+	var d3s_cells: int = 0
+	var d3s_live: int = 0
 	for gz in [z0, -76, -65, -56, -72, -64, -62, -60, -58]:
 		var gcol: int = int(floorf(float(gz) / 16.0))
 		if not sgen_cache.has(gcol):
@@ -29450,11 +29482,19 @@ func _crossface_test(spawn: Vector3) -> void:
 			var gch: Variant = world.chunks.get("196,%d" % gcol)
 			var gst: String = "N" if gch == null else ("E" if (gch as Node3D).data.is_empty() else "B")
 			var glive: int = world.surface_top(gxx, gz)
+			if gst == "B":
+				d3s_cells += 1
+				if glive == gtop:
+					d3s_live += 1
 			if gst == "B" and glive == gtop and gtop > SEA and site_bx == bx and site_z == z0:
 				site_bx = gxx
 				site_z = gz
 				site_iv0 = clampi(int(floorf((float(gz) / hw + 1.0) * 1024.0)), 0, 1023)
 	var site_col: int = int(floorf(float(site_z) / 16.0))
+	out["d3_straddler_sliver_live_gen"] = [d3s_live, d3s_cells]
+	var d3s_ok: bool = d3s_cells == 54 and d3s_live == 54
+	out["d3_straddler_sliver_live_gen_ok"] = d3s_ok
+	ok = ok and d3s_ok
 	# the STRADDLER LIVE-DATA ANOMALY (its own streaming-lane ticket):
 	# the live in-patch sliver of (196, zc) reads all-air at the probe
 	# point across the probed band while the pure gen has terrain 168-170
@@ -29477,11 +29517,17 @@ func _crossface_test(spawn: Vector3) -> void:
 	var l_settled := false
 	# r25: the site column may differ from the nominal zc column — wait
 	# for BOTH (the nominal stays: the D/E home tower uses it).
+	# AC-0379: also wait for the SITE column's high mesh — after a
+	# demote->full re-promotion the promotion handoff re-derives mesh_built
+	# on the bumped data_gen (the stored high stamps are stale) and the
+	# 24 slabs rebuild on the TM pool; star-settle alone completes before
+	# the eff arrays are stamped, which reads the home light as -1.
 	var site_col_key: String = "196,%d" % int(floorf(float(site_z) / 16.0))
 	while l_wait < 1200:
 		await get_tree().physics_frame
 		l_wait += 1
-		if not bool(world.star_owed.get(hc_live_key, false)) and not bool(world.star_owed.get(fc_key, false)) and not bool(world.star_owed.get(site_col_key, false)):
+		var scl: Node3D = world.chunks.get(site_col_key)
+		if not bool(world.star_owed.get(hc_live_key, false)) and not bool(world.star_owed.get(fc_key, false)) and not bool(world.star_owed.get(site_col_key, false)) and scl != null and bool(scl.mesh_built):
 			l_settled = true
 			break
 	var fc: Node3D = world.chunks.get(fc_key)
