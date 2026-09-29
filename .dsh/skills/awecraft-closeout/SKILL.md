@@ -48,3 +48,22 @@ or the **process skills** (pipeline, delegation). Never leave a standing rule on
 - Push with the sandbox-safe form: `GIT_SSH_COMMAND="ssh -F /dev/null" git push`.
 - Then record the outcome on the ticket (`tasks.py note --id AC-NNNN`) — gates, build stamp, commit
   sha, and the server addresses — and report to the user with **both** localhost and LAN URLs.
+
+## Commit hygiene: print the staged list, never silence git's stderr
+
+A real failure from the 2026-09-28 session: `git add <paths> 2>/dev/null && git commit ...` reported
+success while committing NOTHING, because one path was wrong (`godot/scenes/menu.gd` when the file is
+`godot/ui/menu.gd`). `git add` aborts on an unmatched pathspec, the silenced stderr hid the complaint, and
+the following push answered `Everything up-to-date` - which after a change commit is a FAILURE signal, not
+a success one. The rule:
+
+- **Stage with explicit paths, then print them**: `git add <paths> && git diff --cached --name-only` and
+  check that list against `git status --short` before writing the message. The staged list is the only
+  evidence that the commit will contain what you think it will.
+- **Never redirect git's stderr to /dev/null.** A silent `git add` is the quietest way to lose a whole
+  ticket's work while every command in the chain returns zero.
+- **Treat "Everything up-to-date" after a change commit as a red flag**, and verify with
+  `git log --oneline -1` that the revision you meant to create exists.
+- Two related traps from the same session: `tasks.py note`'s `--append` is ambiguous with
+  `--append-file` (use `--append-file <file>`), and backticks inside a `git commit -m` string are
+  SHELL-substituted unless quoted or passed via `-F -`.

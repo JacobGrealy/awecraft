@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-29T02:37
+  updated_at: 2026-09-29T03:09
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0145
 - AC-0377
 - AC-0378
 - AC-0376
@@ -6433,11 +6432,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-29T12:09
-  updated_at: 2026-09-29T00:24
-  completed_at: null
+  updated_at: 2026-09-29T03:09
+  completed_at: 2026-09-29T03:09
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want to fly seamlessly off the planet into space and land on any
@@ -6529,7 +6528,47 @@ intake:
     as the water-classification work did when it turned a measured claim into a gated invariant. The arm
     also needs a runtime budget: a run that needs more than ten minutes is not usable in a standing gate,
     so either bound the walk region or report the duration as a field. Until that lands, READ THE FIELDS
-    AND NOT THE FLAG on this arm.'
+    AND NOT THE FLAG on this arm.
+
+
+    CLOSED - ALL THREE PIECES DONE AND VERIFIED, and the ticket''s own acceptance language is now demonstrable
+    rather than aspirational: a player walks tangent-flat on any face, flies off the planet into 6-DOF
+    free flight above the atmosphere, and lands on a different face with the capsule''s up vector exactly
+    radial. COORDINATOR VERIFICATION on my own capped stage of commit c2dcf2c (every arm rc 0, zero SCRIPT
+    ERROR): genhash 25/25 byte-identical in two runs - the property that matters most for changes in the
+    player, entity and settings files, because it proves none of this touched world generation - farab
+    h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0, r16 no reds with far_holes 0/0
+    in both bands, boundary r4 ok at 13/39, the R24 walk inside every gated value (sweep p50 6.9, crossing
+    frame p95 48, storm p99 75), and the battery complete with only the documented pre-existing settings
+    red that AC-0376 owns. The re-gated arm held on my run too: ok true with wall_s 377 inside its nine-minute
+    budget and freeze_dot 0.9658, and the census fields that used to drive the flag are now watch values.
+    ONE HONEST LIMIT ON MY OWN VERIFICATION, stated because I asked the builder for exactly this discipline:
+    I ran the arm twice but my second run exceeded the 600-second wait I allowed it, so I can confirm
+    ONE clean run rather than the two the builder reported. The arm''s runtime is bounded and reported,
+    but it is a six-minute-class arm and a future reader should budget for that rather than assume a failure.
+    THE DEFECTS THIS TICKET FIXED BEYOND ITS FEATURE, which is where most of its value sits: two residual
+    world-+Y body offsets (the head-in-water probe and the view-model light sample, both of which would
+    have misbehaved in ways nobody would attribute to a sphere), and a respawn() frame-mixing bug that
+    built a global position as if it were flat and floated the player d-squared over 2R off the surface.
+    Two of the five consumers turned out to need NOTHING - the voxel DDA, because the ray runs in the
+    containing column''s frame and is independent of the player basis, and the per-slab collision bodies,
+    because they ride the per-column rigid transforms - and saying so plainly is as useful as the fixes,
+    since a future reader would otherwise re-derive it. THE TICKET''S INSTRUMENT WAS ALSO BROKEN AND IS
+    NOW TRUSTWORTHY, demonstrated rather than asserted: spherewalk''s ok moved off the flapping coverage
+    census onto thirteen invariants, and on the builder''s two runs the census flapped (onfloor 0.895
+    then 0.868) while ok held - the OLD gate would have failed the second run for a reason unrelated to
+    the player. That is the third instrument defect this session caught by running an arm more than once,
+    and they have all been the same shape: a gate riding a statistic produced by a variable process. WHAT
+    IS OWED AND FILED RATHER THAN HIDDEN: the mob walk/facing tangent-plane port and face-world mob spawn
+    (AC-0377), where the failure mode today is a MISSING animal rather than one standing sideways in the
+    ground, which is why reporting it beat rushing it; and the mobs arm''s unexplained fall_ok/wolf_ok
+    red (AC-0378), A/B-proven identical on pristine HEAD. MY OWN PROCESS SLIP, recorded because it nearly
+    cost the ticket its commit: I listed `godot/scenes/menu.gd` when the file is `godot/ui/menu.gd`, `git
+    add` aborted on the unmatched path, and my own `2>/dev/null` hid the error - so the commit silently
+    did nothing and the push reported everything up to date. The stage was still testing the working tree
+    from disk, so nothing was verified unfairly, but the lesson is worth a rule: on this project, stage
+    with explicit paths AND PRINT THE STAGED LIST before committing, and never silence git''s stderr,
+    because "everything up-to-date" after a change commit is a failure signal, not a success one.'
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549794'
