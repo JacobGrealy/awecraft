@@ -133,20 +133,26 @@ func _box(c: Color, size: Vector3) -> MeshInstance3D:
 
 
 func center() -> Vector3:
-	return position + Vector3(0.0, _h * 0.55, 0.0)
+	# AC-0377: the chest is along the body's LOCAL up (the converged
+	# radial — basis.y), the AC-0145 P3 pattern the arrow code already
+	# uses for the player. Near the home centre basis.y ~= +Y and the
+	# offset is unchanged.
+	return position + basis.y * _h * 0.55
 
 
 func hurt(n: float, from: Vector3) -> void:
 	hp -= n
 	last_hit = Time.get_ticks_msec()
-	var dx := position.x - from.x
-	var dz := position.z - from.z
-	var d := sqrt(dx * dx + dz * dz)
-	if d <= 0.0001:
-		d = 1.0
-	velocity.x += dx / d * 5.0
-	velocity.z += dz / d * 5.0
-	velocity.y += 3.0
+	# AC-0377: the knockback direction is tangent-projected (and the lift
+	# is along the local up) — the pre-AC-0377 world-xz form pointed part
+	# way into the surface once the radial tilted. basis is the last
+	# physics frame's tangent frame (hurt fires between frames).
+	var mup: Vector3 = basis.y
+	var kdir := Vector3(position.x - from.x, 0.0, position.z - from.z)
+	kdir -= mup * kdir.dot(mup)
+	if kdir.length() <= 0.0001:
+		kdir = basis.x
+	velocity += kdir.normalized() * 5.0 + mup * 3.0
 
 
 func try_kill() -> bool:
@@ -236,25 +242,51 @@ func _physics_process(dt: float) -> void:
 			_atk_cd = 1.0
 			if p != null and not p.dead:
 				p.damage_player(_dmg, "mob:" + key)
-	# ---- physics: walk the intent, gravity, slide.
-	velocity.x = lerpf(velocity.x, intent.x, minf(1.0, 8.0 * dt))
-	velocity.z = lerpf(velocity.z, intent.y, minf(1.0, 8.0 * dt))
-	# AC-0145 P3: gravity is toward the planet centre (-up, the exact
-	# radial), not world -Y, and the grounded zero strips the RADIAL
-	# velocity component (not the world-y one) — near the home face the
-	# two agree and the motion is unchanged. The intent/facing stay in
-	# world xz (a tangent-plane motion model for mobs is the follow-up —
-	# see the AC-0145 piece-3 results).
+	# ---- physics: tangent-plane walk (AC-0377: the AC-0145 P1 port —
+	# the motion model piece-3 owed). mup = the EXACT radial (P3 kept it
+	# for gravity); the body frame is rebuilt per frame from (mup, the
+	# _face_yaw heading projected onto the tangent plane): local +Y =
+	# radial, local -Z = the heading. The intent (world xz) is mapped
+	# through the frame and the velocity is lerped IN LOCAL, so a
+	# grounded walk stays tangent-flat (vloc.y = 0 on the floor) and the
+	# radial never leaks into the speed. The rebuild is jitter-free: mup
+	# changes 0.23 deg per 16 m column and _face_yaw is lerped; the
+	# player's slew/snap dance is for its free flight band, which mobs
+	# don't have. Flat mode (R <= 0): mup = +Y, the frame is the old
+	# world-yaw one and the motion is unchanged.
 	var mup := Vector3.UP
 	if Game.world != null and Game.planet_R > 0.0:
 		mup = (position + Vector3(0.0, Game.planet_R, 0.0)).normalized()
-	if not is_on_floor():
-		velocity -= mup * (GRAV * dt)
+	var fwd := Vector3(-sin(_face_yaw), 0.0, -cos(_face_yaw))
+	fwd -= mup * fwd.dot(mup)
+	if fwd.length() < 0.01:
+		# the heading is (nearly) radial — fall back to a world axis not
+		# parallel to mup (home-centre degenerate case)
+		var ax := Vector3(0.0, 0.0, -1.0) - mup * (Vector3(0.0, 0.0, -1.0).dot(mup))
+		if ax.length() < 0.01:
+			ax = Vector3(1.0, 0.0, 0.0) - mup * (Vector3(1.0, 0.0, 0.0).dot(mup))
+		fwd = ax
+	fwd = fwd.normalized()
+	basis = Basis(fwd.cross(mup).normalized(), mup, -fwd)
+	var b: Basis = basis  # orthonormal: the inverse rotation is the transpose
+	var wvec := Vector3(intent.x, 0.0, intent.y)
+	wvec -= mup * wvec.dot(mup)
+	var vloc: Vector3 = b.transposed() * wvec
+	var vcur: Vector3 = b.transposed() * velocity
+	vcur.x = lerpf(vcur.x, vloc.x, minf(1.0, 8.0 * dt))
+	vcur.z = lerpf(vcur.z, vloc.z, minf(1.0, 8.0 * dt))
+	if is_on_floor():
+		vcur.y = 0.0  # the grounded zero (P3's radial strip, in-frame)
 	else:
-		velocity -= mup * velocity.dot(mup)
+		# AC-0145 P3 gravity, in-frame: local -Y is the radial within the
+		# (re-exact) frame — the felt strength is unchanged
+		vcur += b.transposed() * (-mup * GRAV * dt)
+	velocity = b * vcur
 	move_and_slide()
 	# ---- facing: lerp toward the move direction (hostiles keep the
-	# player in view when standing).
+	# player in view when standing). The angle feeds next frame's basis
+	# rebuild — no rotation.y assignment (that would clobber the radial
+	# alignment with a world-Y yaw).
 	var hv := Vector2(velocity.x, velocity.z)
 	if hv.length() > 0.2:
 		face_t = atan2(-hv.x, -hv.y)
@@ -263,7 +295,6 @@ func _physics_process(dt: float) -> void:
 		if to3.length() > 0.001:
 			face_t = atan2(-to3.x, -to3.y)
 	_face_yaw = lerp_angle(_face_yaw, face_t, minf(1.0, 8.0 * dt))
-	rotation.y = _face_yaw
 	# ---- walk-cycle animation: the limbs swing while the body moves.
 	var moving: float = clampf(hv.length() / maxf(_speed, 0.01), 0.0, 1.0)
 	_anim_mix = lerpf(_anim_mix, moving, minf(1.0, 6.0 * dt))

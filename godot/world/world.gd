@@ -12472,19 +12472,78 @@ func _mob_tick(d: float) -> void:
 	for e in table:
 		total += int(e[1])
 	# AC-0145 P3: the spawn region is selected in the player's SIM frame
-	# (the flat net on the home pair) and the mob is placed through the
-	# frame->GLOBAL conversion. The pre-P3 code used the player's GLOBAL
-	# x/z as flat coordinates — the frames agree only near the home centre,
-	# so a spawn ~d from it landed d²/2R off the surface. Past the patch
-	# edge (a face) the flat home grid is not the player's ground: skip the
-	# spawn rather than misplace (the sim-routed face spawn + the mob
-	# tangent-plane motion model are the follow-up — AC-0145 piece-3 results).
-	var pface := 0
+	# and the mob is placed through the frame->GLOBAL conversion. The
+	# pre-P3 code used the player's GLOBAL x/z as flat coordinates — the
+	# frames agree only near the home centre, so a spawn ~d from it landed
+	# d²/2R off the surface. On the home pair (faces 0,1) the SIM frame is
+	# the flat net; flat mode (R <= 0) is the raw position. AC-0377: past
+	# the patch edge (a face) the ring is measured in the player's tangent
+	# plane, each point resolved through the key resolver, and the mob is
+	# placed through the column's own chunk transform (the P3 skip
+	# retired).
+	var an: Dictionary = {"face": 0, "origin": Vector3.ZERO, "basis": Basis.IDENTITY, "scale": Vector2.ONE}
+	var pf: Vector3 = ppos
 	if Game.planet_R > 0.0:
-		pface = int(player_anchor(ppos).get("face", 0))
-	if pface > 1:
-		return
-	var pf: Vector3 = flat_of_world_pos(ppos) if Game.planet_R > 0.0 else ppos
+		an = player_anchor(ppos)
+		if int(an["face"]) > 1:
+			# ---- the face path (AC-0377): the ring in the player's
+			# TANGENT plane, at the player's altitude; each point is
+			# resolved through the key resolver (direction -> face/cell)
+			# and placed through the column's own chunk transform. The
+			# anchor's flat frame (the radius-R plane) must NOT carry
+			# the ring: for a player on high terrain the flat projection
+			# of the position lands tens of metres from the true column
+			# (the tangent plane only touches the sphere at the chunk
+			# centre), so a flat ring resolves the WRONG columns — over
+			# cliff terrain the spawn would fall through. The in-plane
+			# axes (anchor basis x/z, normalized) keep the ring hugging
+			# the player's surface.
+			var u1: Vector3 = (an["basis"].x as Vector3).normalized()
+			var u2: Vector3 = (an["basis"].z as Vector3).normalized()
+			for att in range(3):
+				var ang := randf() * TAU
+				var dist := randf_range(float(MOB_SPAWN_CIRCLE_MIN), float(MOB_SPAWN_CIRCLE_MAX))
+				var tw: Vector3 = ppos + (u1 * cos(ang) + u2 * sin(ang)) * dist
+				var k2: Dictionary = key_for_sphere_pos(tw + Vector3(0.0, Game.planet_R, 0.0), Game.planet_R)
+				var f2: int = int(k2["face"])
+				if f2 <= 1:
+					continue  # the ring crossed into the home pair; that side is the home path's
+				var fcx: int = int(k2["cx"])
+				var fcz: int = int(k2["cz"])
+				var sy: int = surface_top_key(f2, fcx, fcz)
+				if sy <= 0:
+					continue
+				# open ground: sy is the topmost SOLID by definition, so
+				# only the cell above it matters (the home rule, keyed)
+				if sy + 1 >= Data.HEIGHT or get_block_key(f2, fcx, fcz, sy + 1) != 0:
+					continue
+				var c2: Node3D = _ensure_face_chunk(f2, fcx, fcz)
+				# a data-only column (outside the mesh window) has no
+				# collision: the mob would fall through, so skip it like
+				# the sy/overhead rejects. The test is the SLAB at the
+				# spawn height (the topmost-solid band): air slabs above
+				# the terrain are legitimately bodyless in a MESHED
+				# chunk too (has_all_slab_bodies would reject every
+				# valid column).
+				if c2 == null or c2.data.is_empty() or c2.slab_for_y(sy).collision_body == null:
+					continue
+				var r2 := randi() % total
+				var pick2 := str(table[0][0])
+				for e2 in table:
+					r2 -= int(e2[1])
+					if r2 < 0:
+						pick2 = str(e2[0])
+						break
+				var m2: Node3D = MobScript.new()
+				m2.key = pick2
+				Game.entities.add_child(m2)
+				m2.position = c2.transform * Vector3(
+					float(SphereMath.face_local_x(f2, fcx, int(c2.cx))) + 0.5,
+					float(sy) + 1.02,
+					float(fcz & 15) + 0.5)
+				return
+			return  # every face attempt was rejected (the region is full of sky/obstruction)
+		pf = flat_of_world_pos(ppos)
 	for att in range(3):
 		var ang := randf() * TAU
 		var dist := randf_range(float(MOB_SPAWN_CIRCLE_MIN), float(MOB_SPAWN_CIRCLE_MAX))
