@@ -143,13 +143,13 @@ modes:
   settings:
     entry: '`_settings_test`'
     tests: |-
-      settings defaults 50/4 (sim), ranges 4–96, sim→render clamp, load clamp, the AC-0313 sim floor (SIM_MIN 4: set 3 → 4, stored 2 → 4 on load), apply, volume, hunger toggle (AC-0072), the AC-0332 far-tier floor pair (defaults on/0, the 0..24 clamp, toggle round-trip, the set_value apply step via the stub's note_yfloor, the Developer-tab row's presence from the real menu scene + the _sync_controls refresh)
+      settings defaults 50/4 (sim), ranges 4–96, sim→render clamp, the AC-0263/AC-0376 medium_start band (sim, render] re-default (out of band → clampi(8, lo, hi), incl. the degenerate band floor 11 at sim 10 / render 20), load clamp, the AC-0313 sim floor (SIM_MIN 4: set 3 → 4, stored 2 → 4 on load), apply, volume, hunger toggle (AC-0072), the AC-0332 far-tier floor pair (defaults on/0, the 0..24 clamp, toggle round-trip, the set_value apply step via the stub's note_yfloor, the Developer-tab row's presence from the real menu scene + the _sync_controls refresh)
     result_fields: |-
-      `defaults`, `range`, `sim_clamp`, `load_clamp`, `apply` (dist rebase [7,64] at AC-0313), `sim_floor` {saved 2, after_load 4}, `volume_ok`, `hunger` {saved_off, reloaded_off, back_on, default_true}, `yfloor` {default_on_0, clamp_hi_24, clamp_lo_0, toggle_off_on, apply_step, apply_calls, dev_row_present, sync_set5, toggle_dim}, `ok`
+      `defaults`, `range`, `sim_clamp`, `ms_clamp` {default_8, oob_lo_redef_8, oob_hi_redef_8, set_mid, redef_band_floor_11}, `load_clamp`, `apply` (dist rebase [7,64] at AC-0313), `sim_floor` {saved 2, after_load 4}, `volume_ok`, `hunger` {saved_off, reloaded_off, back_on, default_true}, `yfloor` {default_on_0, clamp_hi_24, clamp_lo_0, toggle_off_on, apply_step, apply_calls, dev_row_present, sync_set5, toggle_dim}, `ok`
     envs: '`AWECRAFT_IGNORE_SETTINGS` (self-managed)'
     wall: ~5 s (not re-run 08-24; fast class)
     notes: |-
-      dispatched at main.gd:576 BEFORE game nodes (works standalone + in battery). AC-0313: SIM_MIN 1→4 (the tier-0 set went, the real band taxi ≤ sim is the footing guarantee) — the apply dist expectation rebased [7,48]→[7,64] (sim 3 → floor 4) and the new `sim_floor` field round-trips the floor through the load path. AC-0332 (2026-09-19): the far-tier mesh floor pair (yfloor_enabled + yfloor_chunks_below_sea) is covered — the apply step rides set_value (Settings.apply_yfloor -> the world's note_yfloor, stub-counted) and the dev-row presence instantiates scenes/menu.tscn (synchronous _ready; the arm stays await-free by contract)
+      dispatched at main.gd:576 BEFORE game nodes (works standalone + in battery). AC-0313: SIM_MIN 1→4 (the tier-0 set went, the real band taxi ≤ sim is the footing guarantee) — the apply dist expectation rebased [7,48]→[7,64] (sim 3 → floor 4) and the new `sim_floor` field round-trips the floor through the load path. AC-0332 (2026-09-19): the far-tier mesh floor pair (yfloor_enabled + yfloor_chunks_below_sea) is covered — the apply step rides set_value (Settings.apply_yfloor -> the world's note_yfloor, stub-counted) and the dev-row presence instantiates scenes/menu.tscn (synchronous _ready; the arm stays await-free by contract). AC-0376 (2026-09-29): the AC-0263 `medium_start` clamp is RE-DEFAULT, not edge-clamp — an out-of-band value (band (sim, render]) re-defaults to `clampi(8, lo, hi)` (8 itself band-clamped: the degenerate sim 10 / render 20 band lands on the floor 11), an in-band value is untouched; the arm's `default_8` reads after `reset_defaults()` (the flight-knob steps above legitimately leave it in-band at 5). `ms_clamp` {default_8, oob_lo_redef_8, oob_hi_redef_8, set_mid, redef_band_floor_11}
   fluids:
     entry: '`_fluids_test`'
     tests: |-
@@ -391,6 +391,16 @@ modes:
     wall: ~5–10 s
     notes: |-
       self-quit harness (Exit press → `get_tree().quit()` on desktop); intercepted in `_ready()` BEFORE the game dispatch; BATTSKIP in battery (self-quits the process)
+  mobs:
+    entry: '`_mobs_test`'
+    tests: |-
+      the 9 rigged mob models (bunny incl.), the drop-to-floor physics, zombie chase, the day-inert/night-active spider, the skeleton arrow volley, the bone-tamed wolf follow (the 8-ray bench scan + teleport onto a same-level bench), and the day/night spawn tables (passive day ring, hostile night ring, cap + despawn)
+    result_fields: |-
+      `rig_ok`, `bunny_ok`, `fall_ok`, `chase_ok`, `spider_ok`, `wolf_ok`, `arrow_ok`, `tables_ok`, `ok`; AC-0378 watch: `fall_watch` {ymin, yland, land_d}, `wolf_tamed`, `wolf_bench`, `wolf_at0`, `wolf_wf0`, `wolf_wf1`, `day_passive`/`night_hostile` (frame-SUM censuses, ranges recorded), `total`, `ring_ready`
+    envs: —
+    wall: ~100 s (r4, seed 40, box-dependent; the ring_ready wait + the two tables windows dominate)
+    notes: |-
+      row added AC-0378 (the arm has stood undocumented since AC-0037). AC-0378 re-gate (2026-09-29): the two standing reds were the ARM, not the engine. (1) `fall_ok` measured the pig's PLATEAU-relative height at exactly frame 120, but the pig wanders (0.9 m/s) into the 1-deep depression at (spawn +3) in most runs — flap proven F/T/F on one build (it was `is_on_floor` at -1.03 m in every failing run, on solid ground). The gate is now the physics invariants that cannot flap: comes to rest on solid ground within 240 frames (`is_on_floor` + a solid block at the feet) and never sinks 2 m+ below the plateau (`fall_watch` reports the wander). (2) `wolf_ok` failed because the wolf was teleported in RAW cartesian while the player goes through `world_pos_of_flat` — the column's placed-facet frame is rotated ~3 deg at bench distance, so the "6 m" bench measured 5.17 m, already inside/at the FOLLOW_FAR band before the settle, and a correctly HOLDING wolf (close while pdist > FOLLOW_FAR, hold in the band — mob.gd) could never satisfy the old `wf1 < wf0 - 0.7` gate. The wolf now rides the same flat→world mapping (measured `wolf_at0` 6.0006) and the gate asserts the engine contract: started outside the band, closed >= 0.7 m, reached and holds the band (`wolf_wf1` <= FOLLOW_FAR + 0.5). Stale since the sphere port (AC-0145/AC-0309 facet frames). The tables censuses (`day_passive` 2130–2257, `night_hostile` 788–2988 observed) are frame sums — reported watch values; the tables gate stays the invariants (passives spawn, no day hostiles, hostiles at night, total <= cap + 5). NOT in the battery (self-contained standalone arm; teleports + long windows)
   occlude:
     entry: '`_occlude_test`'
     tests: |-

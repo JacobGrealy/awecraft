@@ -1543,17 +1543,30 @@ func _settings_test() -> void:
 	Settings.set_value("sim_dist", 9)
 	var sim_raise_ok := int(Settings.values["sim_dist"]) == 5
 	# AC-0263: the "mid LOD distance" (medium_start) — band (sim, render].
-	# Here: sim 5 / render 5 -> the band is empty (lo=hi=5+... the clamp
-	# resolves to render 5), so set sim back to 4 first for a sane band.
+	# AC-0376: the pinned post-AC-0263 semantic is RE-DEFAULT, not edge-clamp:
+	# an out-of-band value becomes clampi(8, lo, hi) — the default 8, itself
+	# clamped into the band when 8 is out of band (degenerate bands); an
+	# in-band value is left alone (never pulled to a default or an edge).
+	# The flight-knob steps above legitimately leave medium_start at 5 (in
+	# band at sim 4 / render 50), so reset first: default_8 must test the
+	# default, not the side effect of this arm's own prior steps.
+	Settings.reset_defaults()
 	Settings.set_value("sim_dist", 4)
 	Settings.set_value("render_dist", 50)
 	var ms_def_ok := int(Settings.values["medium_start"]) == 8
-	Settings.set_value("medium_start", 4)  # at sim 4 the band floor is 5
-	var ms_clamp_lo_ok := int(Settings.values["medium_start"]) == 5
-	Settings.set_value("medium_start", 999)  # past render 50 -> clamps to 50
-	var ms_clamp_hi_ok := int(Settings.values["medium_start"]) == 50
-	Settings.set_value("medium_start", 30)  # back mid-band
+	Settings.set_value("medium_start", 4)  # below band floor (5) -> re-default 8
+	var ms_clamp_lo_ok := int(Settings.values["medium_start"]) == 8
+	Settings.set_value("medium_start", 999)  # past render 50 -> re-default 8
+	var ms_clamp_hi_ok := int(Settings.values["medium_start"]) == 8
+	Settings.set_value("medium_start", 30)  # back mid-band (in band: untouched)
 	var ms_set_ok := int(Settings.values["medium_start"]) == 30
+	# The re-default is itself band-clamped: in a band that does not
+	# contain 8 (sim 10 / render 20 -> band [11, 20]) an out-of-band value
+	# lands on the band floor 11, not the raw 8. (The 30 set above goes
+	# out of band the moment render shrinks to 20.)
+	Settings.set_value("render_dist", 20)
+	Settings.set_value("sim_dist", 10)
+	var ms_redef_clamped_ok := int(Settings.values["medium_start"]) == 11
 	var cfi := ConfigFile.new()
 	cfi.set_value("settings", "render_dist", 10)
 	cfi.set_value("settings", "sim_dist", 20)
@@ -1688,8 +1701,10 @@ func _settings_test() -> void:
 		"defaults": {"render": 50, "sim": 4, "ok": defaults_ok},  # AC-0152 default is 4 (the 1 literal was pre-AC-0152)
 		"range": {"min": 4, "max": 96, "min_ok": min_ok, "max_ok": max_ok},
 		"sim_clamp": {"set_ok": sim_set_ok, "render_lower_8to4": sim_lower_ok, "sim_raise_9at5": sim_raise_ok},
-		# AC-0263: the mid LOD distance (medium_start) default + band clamp.
-		"ms_clamp": {"default_8": ms_def_ok, "floor_sim5": ms_clamp_lo_ok, "ceil_render": ms_clamp_hi_ok, "set_mid": ms_set_ok},
+		# AC-0263 (AC-0376 pin): the mid LOD distance (medium_start) —
+		# re-default semantic (out of band -> clampi(8, lo, hi)), incl. the
+		# degenerate band that does not contain 8 -> band floor 11.
+		"ms_clamp": {"default_8": ms_def_ok, "oob_lo_redef_8": ms_clamp_lo_ok, "oob_hi_redef_8": ms_clamp_hi_ok, "set_mid": ms_set_ok, "redef_band_floor_11": ms_redef_clamped_ok},
 		"load_clamp": {"saved": [10, 20], "after_load": [10, 10], "ok": load_clamp_ok},
 		"apply": {"world": [10, 160], "dist": [7, 64], "ok": apply_world_ok and apply_dist_ok},
 		# AC-0313: the sim floor (SIM_MIN 4) — set_value 3 -> 4, load 2 -> 4.
@@ -1708,7 +1723,7 @@ func _settings_test() -> void:
 			"toggle_off_on": yf_toggle_off_ok and yf_toggle_on_ok, "apply_step": yf_apply_ok,
 			"apply_calls": [yf_apply_1, yf_apply_2], "dev_row_present": yrow_present,
 			"sync_set5": yrow_sync_ok, "toggle_dim": yrow_dim_ok},
-		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and sim_floor_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok and yf_default_ok and yf_clamp_hi_ok and yf_clamp_lo_ok and yf_toggle_off_ok and yf_toggle_on_ok and yf_apply_ok and yrow_present and yrow_sync_ok and yrow_dim_ok,
+		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and ms_redef_clamped_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and sim_floor_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok and yf_default_ok and yf_clamp_hi_ok and yf_clamp_lo_ok and yf_toggle_off_ok and yf_toggle_on_ok and yf_apply_ok and yrow_present and yrow_sync_ok and yrow_dim_ok,
 	})
 
 
@@ -2956,10 +2971,37 @@ func _mobs_test(spawn: Vector3) -> void:
 	for i in 6:
 		await get_tree().physics_frame
 	# 2) PHYSICS: a mob dropped from the air lands on the floor.
+	# AC-0378: the old check read the pig's PLATEAU-relative height at
+	# exactly frame 120, but the pig WANDERS (0.9 m/s passive) and in
+	# most runs steps into the 1-deep depression at (spawn +3) within 2 s
+	# — the -1.03 m read was the wander, not the physics (it was
+	# is_on_floor in every measured run, on solid ground). Gate the
+	# physics invariants that cannot flap: it comes to rest on solid
+	# ground within the window (is_on_floor + a solid block at the feet)
+	# and never sinks 2 m+ below the plateau (the 1-deep depression
+	# passes; a fall-through to a pit or the void cannot). The
+	# plateau-relative height and the landing cell are watch fields.
 	var test: Node3D = Debug.spawn_mob("pig", float(bx) + 0.5, by + 5.0, float(bz) + 0.5)
-	for i in 120:
+	var landed := false
+	var fall_ymin := 1e9
+	var fall_yland := 1e9
+	var fall_lx := 0
+	var fall_lz := 0
+	for i in 240:
 		await get_tree().physics_frame
-	var fall_ok: bool = test != null and test.is_on_floor() and absf(test.position.y - by) < 0.3
+		if test == null:
+			break
+		fall_ymin = minf(fall_ymin, test.position.y - by)
+		if test.is_on_floor():
+			var fy := int(test.position.y - 1.0)
+			if world.get_block(int(test.position.x), fy, int(test.position.z)) != 0 \
+					or world.get_block(int(test.position.x), fy - 1, int(test.position.z)) != 0:
+				landed = true
+				fall_yland = test.position.y - by
+				fall_lx = int(test.position.x) - int(sp0.x)
+				fall_lz = int(test.position.z) - int(sp0.z)
+				break
+	var fall_ok: bool = landed and fall_ymin >= -2.0
 	if test != null:
 		test.queue_free()
 	for i in 6:
@@ -3057,20 +3099,39 @@ func _mobs_test(spawn: Vector3) -> void:
 		if bench_b != Vector3i(-9999, -9999, -9999):
 			break
 	var wolf_ok: bool = tamed
+	var wolf_bench := bench_b != Vector3i(-9999, -9999, -9999)
+	var wolf_wf0 := -1.0
+	var wolf_wf1 := -1.0
+	var wolf_at0 := -1.0  # distance right after the teleports (pre-settle)
 	if bench_b != Vector3i(-9999, -9999, -9999):
-		# player at the near bench cell, wolf 6+ m further along it
+		# player at the near bench cell, wolf 6+ m further along it.
+		# AC-0378: the wolf is placed through the SAME flat->world
+		# mapping as the player. The old raw-cartesian wolf.position
+		# predates the sphere port — the column's placed-facet frame is
+		# rotated ~3 deg at this distance, so the raw point landed
+		# 0.8 m SHORT of the bench (measured: 5.17 m apart instead of
+		# 6.0), already inside/at the FOLLOW_FAR band before the settle,
+		# and a correctly holding wolf then could not satisfy the old
+		# wf1 < wf0 - 0.7 gate. The engine contract (Mob._physics_process)
+		# is: close while pdist > FOLLOW_FAR, hold in the band — the gate
+		# asserts THAT: it started outside the band, it closed (>= 0.7 m
+		# from the start), and it reached and holds the band.
 		Debug.teleport(float(bench_a.x) + 0.5, float(bench_a.y) + 1.02, float(bench_a.z) + 0.5)
 		p.velocity = Vector3.ZERO
-		wolf.position = Vector3(float(bench_b.x) + 0.5, float(bench_b.y) + 1.02, float(bench_b.z) + 0.5)
+		wolf.position = Game.world.world_pos_of_flat(float(bench_b.x) + 0.5, float(bench_b.y) + 1.02, float(bench_b.z) + 0.5)
 		wolf.velocity = Vector3.ZERO
+		wolf_at0 = wolf.position.distance_to(p.position)
 		for i in 8:
 			await get_tree().physics_frame
 		var wf0: float = wolf.position.distance_to(p.position)
 		for i in 150:
 			await get_tree().physics_frame
 		var wf1: float = wolf.position.distance_to(p.position)
-		# the tamed wolf closes and holds at ~FOLLOW_FAR (5 m)
-		wolf_ok = tamed and wf1 < wf0 - 0.7
+		wolf_ok = tamed and wolf_at0 > Mob.FOLLOW_FAR \
+				and wf1 < wolf_at0 - 0.7 \
+				and wf1 <= Mob.FOLLOW_FAR + 0.5
+		wolf_wf0 = wf0
+		wolf_wf1 = wf1
 		wolf.queue_free()
 	else:
 		# no bench in this terrain: taming is the spec feature; the
@@ -3143,9 +3204,17 @@ func _mobs_test(spawn: Vector3) -> void:
 		"rig_missing": rig_names,
 		"bunny_ok": bunny_ok,
 		"fall_ok": fall_ok,
+		# AC-0378 watch: the pig's wander is reported, not gated (the
+		# gate = lands on solid ground + never 2 m+ below the plateau).
+		"fall_watch": {"ymin": fall_ymin, "yland": fall_yland, "land_d": [fall_lx, fall_lz]},
 		"chase_ok": chase_ok,
 		"spider_ok": spider_ok,
 		"wolf_ok": wolf_ok,
+		"wolf_tamed": tamed,
+		"wolf_bench": wolf_bench,
+		"wolf_at0": wolf_at0,
+		"wolf_wf0": wolf_wf0,
+		"wolf_wf1": wolf_wf1,
 		"arrow_ok": arrow_ok,
 		"tables_ok": tables_ok,
 		"day_passive": day_passive,
