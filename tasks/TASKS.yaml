@@ -1,10 +1,12 @@
 meta:
-  updated_at: 2026-09-29T09:48
+  updated_at: 2026-09-29T11:17
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0368
+- AC-0379
+- AC-0380
 - AC-0310
 - AC-0311
 - AC-0093
@@ -20900,10 +20902,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-09-26T23:26
-  updated_at: 2026-09-26T23:26
+  updated_at: 2026-09-29T09:49
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -21867,4 +21869,121 @@ intake:
     ONE ITEM IS FLAGGED RATHER THAN FIXED, and it is worth carrying forward: the gamepad arm''s "flat
     within d < 6" contract is violated by the same one-deep depression the pig wanders into, so if that
     arm ever goes red the cause is known and it is not the gamepad.'
+  comments: []
+- id: AC-0379
+  title: fix-non-completing-far-to-full-promotion
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-09-29T11:17
+  updated_at: 2026-09-29T11:17
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Where two faces of the planet meet, a strip of ground about six columns wide
+    is missing in the live world - the player sees air there - even though saving and reloading that same
+    area puts the terrain back. Something in the streaming path leaves those columns half-promoted.
+
+
+    2) Technical Details:
+
+    DIAGNOSED BY AC-0368 (2026-09-29) and left unfixed there deliberately, because the fix is a scheduler
+    change rather than a measurement: **all 54 in-patch sliver cells** of the straddler chunks (x 3136-41
+    of chunks (196,-4) and (196,-5), located via the crossface arm''s straddler case) read **air with
+    `live_top` 0** in the running world, while **pure generation and the save round-trip both hold terrain
+    at 168-171** (`d3_rt_home_gen_ok` and `e_boundary_roundtrip_ok` true). The mechanism is named: those
+    columns are still holding the **FAR/h-only form** (`top` -1, `far_hmax` 169/171) where **tier 0 and
+    the real band** should be, i.e. the **far-to-full promotion (`_far_promo_owed` regen) is not completing**.
+    So this is a streaming-lane state, not a generation or save defect, and it is visible: a player walking
+    a face boundary sees a six-column air strip that vanishes on reload.
+
+    THE JOB: find why the promotion does not complete for straddling columns specifically, and fix it.
+    The likely families, to be distinguished by instrumenting the promotion path rather than by guessing:
+    the promotion is scheduled but dropped (a cap, a queue, or a generation-token interaction); it is
+    scheduled but its result is discarded because the straddler''s key or patch identity changes between
+    scheduling and completion; or it completes but is not committed to the live column because the write
+    targets the wrong sub-chunk of a straddling column (two chunks sharing one column is exactly the shape
+    that breaks a naive key). The crossface arm''s straddler case is the reproducer and its `live_top`
+    versus round-trip comparison is the acceptance instrument - the arm currently measures a green fallback,
+    so use the straddler window directly rather than the fallback.
+
+    CONSTRAINTS: this is a streaming fix, so generation must not move - genhash 25/25 byte-identical;
+    the save path is the PROVEN one and must not be changed to match the buggy live path (if the evidence
+    ever suggests otherwise, stop and report it); the crossface arm must stay ok:true and the halo arm
+    green (both touch this area); boundary r4 p95 inside the standing band; the battery green. If the
+    fix changes what the crossface arm reports, that is expected - record the before/after rather than
+    treating a moved number as a failure.
+
+    SAFETY: `export HOME=/tmp/dsh_home; mkdir -p $HOME`; every godot run memory-capped via `bash -c "ulimit
+    -v 8388608; AWECRAFT_LOGIC=... timeout N /home/angrygiant/tools/godot/godot --headless --path godot"`;
+    ONE godot at a time; never R50 or the `load` arm; no renders (llvmpipe degraded); no commits.
+
+    CONTEXT: read tasks/AC-0368/AC-0368-results.html item 1 first - it carries the cell list, the mechanism
+    and the instrument - then tasks/AC-0309/AC-0309-results.html for the straddler case and the `_face_stream`
+    work this sits next to.
+
+    '
+  comments: []
+- id: AC-0380
+  title: repoint-non-discriminating-light-fluid-scan-rows
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-29T11:17
+  updated_at: 2026-09-29T11:17
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Three of our lighting and fluid checks have been quietly testing nothing for
+    weeks - they read a failure value that looks like a pass - so the suite appears to cover ground it
+    stopped covering when the cave and sea generation moved.
+
+
+    2) Technical Details:
+
+    FOUND BY AC-0368 (2026-09-29) while re-baselining the light/fluids standing rows: `surface_eff` 15
+    still discriminates and the lava rows discriminate weakly (25 -> 24, 9 -> 24), but **cave, torch and
+    sea now read -1/0, which is a MEASUREMENT FAILURE rather than a pass** - the AC-0288 through AC-0360
+    re-bases moved the cave and sea generation off the area those scans look at, so the rows have silently
+    stopped testing anything. They are recorded as stale arms and NON-DISCRIMINATING per AC-0357 rather
+    than being allowed to read green, which is the right immediate handling; this ticket makes them discriminate
+    again.
+
+    THE JOB: re-point each of the three scans at terrain that actually contains the thing it is supposed
+    to measure - a cave for the cave row, a torch for the torch row, sea at a column that is genuinely
+    ocean after the AC-0342/AC-0367 water work. Do NOT simply raise or lower a threshold to make a number
+    appear: the value has to come from a scenario that contains the feature, and the results page should
+    show the new scenario, the value it produces, and what defect the row would now catch. Use the world''s
+    own instruments to find suitable locations rather than hardcoding a coordinate that will drift again
+    - `oceansurface` (from the AC-0374 work) already censuses ocean columns and the cave census instruments
+    exist from the cave series; prefer a scenario derived from a census over a fixed literal.
+
+    ALSO, because this is the fourth stale-arm case this session: when you finish, state for EACH of the
+    light/fluids rows whether it can still discriminate a defect, and how you know - the project''s standard,
+    from AC-0357, is that a threshold everything passes is worse than no threshold because it looks like
+    coverage. If any row still cannot discriminate after re-pointing, say so plainly rather than leaving
+    it green.
+
+    CONSTRAINTS: no product behaviour change is expected - this is arm work - so genhash must stay 25/25
+    byte-identical, G0 stays clean (zero SCRIPT ERROR lines, not rc=0), and the standing set stays green
+    (ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands,
+    boundary r4 in band, the battery). Update tasks/harness_data.yaml and re-render (python3 tasks/scripts/harness_doc.py
+    --render, then --check).
+
+    SAFETY: `export HOME=/tmp/dsh_home; mkdir -p $HOME`; every godot run memory-capped via `bash -c "ulimit
+    -v 8388608; AWECRAFT_LOGIC=... timeout N /home/angrygiant/tools/godot/godot --headless --path godot"`;
+    ONE godot at a time; never R50 or the load arm; no renders; no commits.
+
+    CONTEXT: read tasks/AC-0368/AC-0368-results.html item 3 (the re-baseline table and the stale-arm finding)
+    and the light/fluids rows in tasks/harness_data.yaml.
+
+    '
   comments: []
