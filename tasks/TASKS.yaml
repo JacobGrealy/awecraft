@@ -1,10 +1,11 @@
 meta:
-  updated_at: 2026-09-28T21:02
+  updated_at: 2026-09-28T23:44
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0145
+- AC-0376
 - AC-0368
 - AC-0310
 - AC-0311
@@ -21534,4 +21535,62 @@ intake:
     GATE THE BUILDER FLAGGED IS RUN: the full Windows export and the :8080 serve are rebuilt so the served
     download actually contains this session''s work (the round planet, the de-hollowed caves, the seam
     fill, the tick and aquifer wins, and this fix) rather than a build from before it.'
+  comments: []
+- id: AC-0376
+  title: stale-settings-arm-expectation
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-28T23:44
+  updated_at: 2026-09-28T23:44
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: One arm has been red for weeks and everybody has learned to read past it - which
+    is exactly how a suite stops being trustworthy. It is the LOD clamp check in the settings arm, and
+    its expectation is the thing that is out of date, not the code.
+
+
+    2) Technical Details:
+
+    STANDING RED, A/B-PROVEN STALE (AC-0145 piece 2, 2026-09-28, and observed on every run for many tickets
+    before it): the `settings` arm''s `ms_clamp` field is red because the arm expects `medium_start` to
+    CLAMP TO THE EDGE while `clamp_medium_start()` RE-DEFAULTS TO 8 per AC-0263. The proof it is the arm
+    rather than the engine: it reads identically on pristine HEAD and on the changed tree, and every flight-knob
+    field in the same arm is green.
+
+    THE JOB, small and self-contained: make the arm assert what the code actually guarantees after AC-0263
+    - the clamp behaviour it has now, whichever form that is (re-default to 8 on an invalid value, which
+    the function name says) - rather than the pre-AC-0263 edge-clamp expectation. Read the function, write
+    the assertion to match it, and state in the results which semantic you pinned and why. If the truth
+    turns out to be neither of those (i.e. the function does something else again), say so and pin THAT.
+
+    THEN: the reason this ticket exists at all is that the project''s own standard is that the standing
+    set has NO PERMANENT RED - a suite with a known-red field trains every reader, human or agent, to
+    skim past reds, and this session has already had three cases where a red turned out to be the ARM''s
+    stale expectation rather than the engine (AC-0334''s halo, AC-0349''s brightslab, AC-0358''s mis-scoped
+    window). So the deliverable is not just a green field: it is a suite where a red means something.
+    If, while fixing this one, you find any OTHER field that is red because its expectation predates a
+    change (rather than because something is broken), fix it the same way and list every one you touched
+    with the reason.
+
+    CONSTRAINTS: do not change engine behaviour to satisfy an arm - the ONLY exception is if the arm''s
+    expectation turns out to be right and the code wrong, in which case stop and report it as a finding
+    rather than "fixing" the arm. The standing set must be green apart from genuinely broken things, G0
+    stays clean (zero SCRIPT ERROR lines, not rc=0), and genhash stays 25/25 byte-identical (this ticket
+    should touch no generation code at all).
+
+    SAFETY: `export HOME=/tmp/dsh_home; mkdir -p $HOME`; every godot run memory-capped via `bash -c "ulimit
+    -v 8388608; AWECRAFT_LOGIC=... timeout N /home/angrygiant/tools/godot/godot --headless --path godot"`;
+    ONE godot at a time; never R50 or the `load` arm; no renders; no commits.
+
+    CONTEXT: the arm is `settings` in `godot/scenes/harness.gd`; the function is `clamp_medium_start()`;
+    the change that made the expectation stale is AC-0263. Read `tasks/harness_data.yaml`''s settings
+    row for what the standing value says.
+
+    '
   comments: []
