@@ -30,6 +30,17 @@ const FACE_STEP := 1.0
 # ~20 deg is a teleport-class position set, not a motion — it snaps.
 const SPHERE_SLEW := 12.0
 const SPHERE_SNAP := 0.35
+# AC-0145 P2: the altitude band window, in RADIAL altitude (m above the
+# surface, |pos - C| - R — the same number on every face). band = 0 at/
+# below BAND_WALK_MAX (surface walk + step, full up-alignment + gravity),
+# band = 1 at/above BAND_FLY_MIN (6-DOF: free basis, no up-alignment /
+# auto-level, no gravity — thrust only), smoothstep between. BAND_FLY_MIN
+# sits above the atmosphere's visible (depth-fog) boundary (full fog
+# 714 m at the R50 render edge 800 m — the sky/fog is distance-driven) and
+# at R = 4000 the horizon reads as a curve in space: the planet-epic
+# window (design of record, docs/planet-epic.html §09 T6).
+const BAND_WALK_MAX := 500.0
+const BAND_FLY_MIN := 2000.0
 const INV_SIZE := 36
 const STACK_MAX := 64
 const ARMOR_SIZE := 4
@@ -430,9 +441,25 @@ func _physics_process_impl(dt: float) -> void:
 	var flat_h: float = Game.world.sim_height(position) if Game.world != null else position.y
 	if Game.world != null:
 		_anchor = Game.world.player_anchor(position)
+	# AC-0145 P2: the RADIAL altitude above the surface = |pos - C| - R
+	# (C = (0,-R,0) global) — the same number on every face (a flat-Y
+	# altitude breaks the moment the player flies over a fold). It drives
+	# the band blend: band = 0 at/ below BAND_WALK_MAX (surface walk +
+	# step, full up-alignment + gravity), band = 1 at/ above BAND_FLY_MIN
+	# (6-DOF: free basis, no up-alignment / auto-level, no gravity),
+	# smoothstep between. Flat mode (no world / R <= 0): no bands.
+	var R_b: float = Game.planet_R if Game.world != null else 0.0
+	var alt_rad: float = position.y
+	var band: float = 0.0
+	if R_b > 0.0:
+		alt_rad = (position + Vector3(0.0, R_b, 0.0)).length() - R_b
+		band = smoothstep(BAND_WALK_MAX, BAND_FLY_MIN, alt_rad)
 	# AC-0145 P1: the continuous radial alignment of the basis, BEFORE the
 	# velocity math — the movement frame below IS the accumulated basis.
-	_sphere_align(dt)
+	# AC-0145 P2: the alignment scales with (1 - band) — full at the
+	# surface (up_dot 1.0, piece 1), zero above the atmosphere (the 6-DOF
+	# band is a FREE basis: no up-alignment, no auto-level).
+	_sphere_align(dt, 1.0 - band)
 	# AC-0121: while the debug console is open, ignore every polled game
 	# action - typing "w"/space/shift must not steer, jump, sprint or toggle
 	# flight. Physics (gravity, falls, swimming buoyancy) keeps running.
@@ -490,8 +517,11 @@ func _physics_process_impl(dt: float) -> void:
 	if flying:
 		# AC-0280: altitude-based flight speed — below cruising_altitude use
 		# sub_cruising_speed (default 2x WALK), at/above use cruising_speed (6x).
+		# AC-0145 P2: the gate is the RADIAL altitude (alt_rad = |pos-C|-R),
+		# not the flat-Y (flat_h) — the speed step tracks the height above
+		# the surface, the same on every face.
 		var cruise_alt := float(int(Settings.values.get("cruising_altitude", 275)))
-		var fly_mult := float(int(Settings.values.get("sub_cruising_speed", 2))) if flat_h < cruise_alt else float(int(Settings.values.get("cruising_speed", 6)))
+		var fly_mult := float(int(Settings.values.get("sub_cruising_speed", 2))) if alt_rad < cruise_alt else float(int(Settings.values.get("cruising_speed", 6)))
 		speed = WALK * fly_mult
 		if fly_sprint:
 			speed *= SPRINT / WALK
@@ -549,8 +579,9 @@ func _physics_process_impl(dt: float) -> void:
 		# make L3 double-trigger (descend AND speed up).
 		if (sprint_kbd or (not cg and Input.is_action_pressed("pad_cancel"))):
 			vy -= 1.0  # SHIFT or B (pad_cancel) = down (AC-0243)
+		# AC-0145 P2: radial altitude gate (alt_rad), same as the speed gate above.
 		var cruise_alt_vs := float(int(Settings.values.get("cruising_altitude", 275)))
-		var fly_mult_vs := float(int(Settings.values.get("sub_cruising_speed", 2))) if flat_h < cruise_alt_vs else float(int(Settings.values.get("cruising_speed", 6)))
+		var fly_mult_vs := float(int(Settings.values.get("sub_cruising_speed", 2))) if alt_rad < cruise_alt_vs else float(int(Settings.values.get("cruising_speed", 6)))
 		var fly_vs := WALK * fly_mult_vs * FLY_VS
 		if fly_sprint:
 			fly_vs *= SPRINT / WALK
@@ -570,7 +601,12 @@ func _physics_process_impl(dt: float) -> void:
 		# strength is unchanged): the world-space gravity mapped into the
 		# frame — local -Y within the slew residual, exact in a converged
 		# frame (was: the column facet's local -Y).
-		vloc += b.transposed() * (-_up * GRAV * dt)
+		# AC-0145 P2: scaled by (1 - band) — full gravity at the surface,
+		# zero above the atmosphere (the 6-DOF band is thrust, not weight).
+		# band = 0 at the surface, so the felt strength is unchanged on foot.
+		var gs: float = 1.0 - band
+		if gs > 1e-6:
+			vloc += b.transposed() * (-_up * GRAV * gs * dt)
 		if not cg and Input.is_action_pressed("jump") and is_on_floor():
 			vloc.y = JUMP
 			fall_start = -1.0
@@ -1930,7 +1966,7 @@ func _apply_rotation() -> void:
 	camera.rotation.x = _pitch
 
 
-func _sphere_align(dt: float) -> void:
+func _sphere_align(dt: float, align_amount: float = 1.0) -> void:
 	# AC-0145 P1: local Y tracks up = normalize(pos - C) — the EXACT radial
 	# (C = (0,-R,0) global: the planet frame shifted by (0,-R,0); the first
 	# step is the same as world_to_flat / player_anchor). Slerp, never snap:
@@ -1939,6 +1975,10 @@ func _sphere_align(dt: float) -> void:
 	# teleport-class misalignment (>= SPHERE_SNAP ~20 deg) snaps, because a
 	# position discontinuity is not a motion. Flat mode (no world / R <= 0):
 	# the identity frame, up = +Y.
+	# AC-0145 P2: align_amount = 1 - band scales the slew — full at the
+	# surface (band 0), zero above the atmosphere (band 1 = the 6-DOF band,
+	# a FREE basis: no up-alignment, no auto-level). The degenerate-basis
+	# rebuild below is a safety net and stays unconditional.
 	if Game.world == null or Game.planet_R <= 0.0:
 		_up = Vector3.UP
 		return
@@ -1953,6 +1993,10 @@ func _sphere_align(dt: float) -> void:
 		f = (f - _up * f.dot(_up)).normalized()
 		basis = Basis(_up.cross(f).normalized(), _up, f)
 		return
+	# AC-0145 P2: above the atmosphere the basis is free — no slew to the
+	# radial (align_amount ~ 0). Return BEFORE touching the basis.
+	if align_amount <= 1e-6:
+		return
 	var q: Quaternion = Quaternion(cur.normalized(), _up)
 	# the minimal-rotation angle = the angle between the two vectors
 	# (Quaternion has no angle() in this engine build)
@@ -1962,7 +2006,11 @@ func _sphere_align(dt: float) -> void:
 	# t = the fraction of the alignment to apply this frame (1.0 = full
 	# snap for teleport-class misalignments). q is the FULL alignment, so
 	# slerp back toward IDENTITY by (1 - t): t=1 keeps q, t=0 drops it.
+	# AC-0145 P2: the slew RATE scales with (1 - band) in the blend.
 	var t: float = 1.0 if ang >= SPHERE_SNAP else minf(1.0, SPHERE_SLEW * dt / ang)
+	t *= align_amount
+	if t <= 1e-6:
+		return
 	basis = (Basis(q.slerp(Quaternion.IDENTITY, 1.0 - t)) * basis).orthonormalized()
 
 

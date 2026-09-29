@@ -25507,14 +25507,31 @@ func _spherewalk_test() -> void:
 	var f_alt_max := 0.0
 	var f_climb_h: float = world.sim_height(p.position)
 	var f_climb_stall := 0
-	while f_frames < 1200 and world.sim_height(p.position) < fh0 + 25.0:
+	# AC-0145 P2: the high-altitude 6-DOF excursion. The climb target is the
+	# RADIAL altitude (|pos - C| - R) past the 6-DOF band edge (BAND_FLY_MIN
+	# 2000), so at the peak band = 1 (free basis, no gravity, cruising 6x).
+	var R_sw: float = Game.planet_R
+	var PEAK_ALT := 2050.0
+	var f_alt_rad_max := 0.0
+	var f_band_max := 0.0
+	var f_band_peak := 0.0
+	var f_freeze_dot := 1.0
+	var f_band_land := 0.0
+	# the takeoff column's ground top — the proxy for the descent-shortcut
+	# altitude (the ground under the PEAK is outside the loaded band, so its
+	# own top is unreadable there; the takeoff plains top is the proxy).
+	var takeoff_gtop: int = _spherewalk_cell_clear(int(floorf(world.flat_of_world_pos(p.position).x)), int(floorf(world.flat_of_world_pos(p.position).z)))
+	while f_frames < 7500 and (p.position + Vector3(0.0, R_sw, 0.0)).length() - R_sw < PEAK_ALT:
 		await get_tree().physics_frame
 		f_frames += 1
 		if p.dead:
 			break
 		p.hp = 40.0  # arm-side (a long fall at the landing would otherwise kill)
 		p.hunger = 20.0
+		var alt_rad1: float = (p.position + Vector3(0.0, R_sw, 0.0)).length() - R_sw
 		f_alt_max = maxf(f_alt_max, world.sim_height(p.position))
+		f_alt_rad_max = maxf(f_alt_rad_max, alt_rad1)
+		f_band_max = maxf(f_band_max, smoothstep(500.0, 2000.0, alt_rad1))
 		var up1: Vector3 = (p.position + Vector3(0.0, Game.planet_R, 0.0)).normalized()
 		f_up_min = minf(f_up_min, p.basis.y.dot(up1))
 		if world.sim_height(p.position) - f_climb_h > 1.0:
@@ -25532,6 +25549,66 @@ func _spherewalk_test() -> void:
 			f_climb_stall = 0
 			f_climb_h = world.sim_height(p.position)
 	Input.action_release("jump")
+	f_band_peak = smoothstep(500.0, 2000.0, (p.position + Vector3(0.0, R_sw, 0.0)).length() - R_sw)
+	# AC-0145 P2: the FREEZE PROBE — the 6-DOF band's defining property is a
+	# FREE basis (no up-alignment, no auto-level). At the peak (band ~ 1,
+	# align_amount = 1 - band ~ 0) a misaligned basis must NOT re-align to
+	# the radial: rotate it 15 deg, run 30 physics frames, and the basis.y
+	# should stay ~cos(15 deg) = 0.966 off the radial (f_freeze_dot < 0.99).
+	# At the surface (band 0) the same misalignment re-aligns to ~1.0 in a
+	# few frames (SPHERE_SLEW 12 rad/s — piece 1's up_dot 1.0).
+	var up_p: Vector3 = (p.position + Vector3(0.0, R_sw, 0.0)).normalized()
+	var side: Vector3 = up_p.cross(Vector3.UP)
+	if side.length() < 0.5:
+		side = up_p.cross(Vector3.RIGHT)
+	side = side.normalized()
+	p.basis = (Basis(Quaternion(side, deg_to_rad(15.0))) * p.basis).orthonormalized()
+	p.velocity = Vector3.ZERO
+	for i in 30:
+		await get_tree().physics_frame
+		f_frames += 1
+		p.hp = 40.0
+		p.hunger = 20.0
+	var up_p2: Vector3 = (p.position + Vector3(0.0, R_sw, 0.0)).normalized()
+	f_freeze_dot = p.basis.y.dot(up_p2)
+	# restore the basis to the radial frame for a clean descent/landing
+	# (a harness-side state reset — the real player would never be
+	# misaligned by an external hand).
+	var fwd: Vector3 = -p.basis.z
+	if fwd.length() < 0.5 or absf(fwd.normalized().dot(up_p2)) > 0.95:
+		fwd = Vector3.UP if absf(up_p2.dot(Vector3.UP)) < 0.95 else Vector3.RIGHT
+	fwd = (fwd - up_p2 * fwd.dot(up_p2)).normalized()
+	p.basis = Basis(up_p2.cross(fwd).normalized(), up_p2, fwd).orthonormalized()
+	# AC-0145 P2: the arm-side descent shortcut. A continuous descent from
+	# the peak (~2050 m) would run ~90 s of sim; the arm teleports the
+	# player to a controlled-descent altitude 40 m above the (proxy) ground
+	# at the current x/z. The real player descends continuously — this only
+	# bounds the arm's wall. At 40 m the ground is inside the taxi-4 band,
+	# so the landing scan below can read it, and band ~ 0 (surface walk).
+	var fpl3: Vector3 = world.flat_of_world_pos(p.position)
+	var dtop: int = takeoff_gtop if takeoff_gtop >= 1 else int(floorf(fpl3.y)) - 40
+	p.position = world.world_pos_of_flat(fpl3.x, float(dtop) + 40.0, fpl3.z)
+	p.velocity = Vector3.ZERO
+	for i in 30:
+		await get_tree().physics_frame
+		f_frames += 1
+		p.hp = 40.0
+		p.hunger = 20.0
+	# AC-0145 P2: a clean heading for the fold crossing. The freeze probe set
+	# the basis directly (bypassing the yaw tracking), so _applied_yaw is
+	# stale and a plain look() applies the wrong delta (r1/r2 flew +x 207 m
+	# instead of crossing the fold). Set the basis to a clean frame with
+	# FORWARD = -x (toward the fold): the movement forward is LOCAL -Z, so
+	# basis.z must be +x (= -hd), and re-sync the yaw (yaw PI/2 == forward -x)
+	# so move_forward flies the crossing deterministically.
+	var up_d: Vector3 = (p.position + Vector3(0.0, R_sw, 0.0)).normalized()
+	var hd: Vector3 = Vector3(-1.0, 0.0, 0.0)  # the desired forward (-x)
+	hd = (hd - up_d * hd.dot(up_d)).normalized()
+	var bz: Vector3 = -hd  # basis.z, so local -z (forward) = hd
+	p.basis = Basis(up_d.cross(bz).normalized(), up_d, bz).orthonormalized()
+	p._yaw = PI / 2.0
+	p._applied_yaw = PI / 2.0
+	p._pitch = 0.0
 	# cross the x=0 fold toward face 1 (flat -x; forward = (-1, 0) at yaw +PI/2)
 	p.look(PI / 2.0, 0.0)
 	for i in 6:
@@ -25540,9 +25617,11 @@ func _spherewalk_test() -> void:
 	var f_cross := false
 	var f_fly_ok := true
 	var land_x := -16.0
-	while f_frames < 4500:
+	var f_post := 0  # AC-0145 P2: post-peak phase budget (the climb already consumed f_frames)
+	while f_post < 1500:
 		await get_tree().physics_frame
 		f_frames += 1
+		f_post += 1
 		if p.dead:
 			f_fly_ok = false
 			break
@@ -25590,9 +25669,10 @@ func _spherewalk_test() -> void:
 				await get_tree().physics_frame
 			Input.action_press("move_forward")
 			var f_appr := 0
-			while f_appr < 900 and f_frames < 6000:
+			while f_appr < 900 and f_post < 3000:
 				await get_tree().physics_frame
 				f_frames += 1
+				f_post += 1
 				f_appr += 1
 				if p.dead:
 					f_fly_ok = false
@@ -25615,9 +25695,10 @@ func _spherewalk_test() -> void:
 	kev.keycode = KEY_SHIFT
 	kev.pressed = true
 	Input.parse_input_event(kev)
-	while f_frames < 7200:
+	while f_post < 4500:
 		await get_tree().physics_frame
 		f_frames += 1
+		f_post += 1
 		if p.dead:
 			f_fly_ok = false
 			break
@@ -25644,6 +25725,9 @@ func _spherewalk_test() -> void:
 	var up_end: Vector3 = (p.position + Vector3(0.0, Game.planet_R, 0.0)).normalized()
 	var f_land_up := p.basis.y.dot(up_end)
 	var f_land_face_home := int(p._anchor.get("face", 0)) <= 1
+	# AC-0145 P2: the band at landing (should be ~0 — back in the surface
+	# band, the basis re-aligned to the radial = the seamless landing).
+	f_band_land = smoothstep(500.0, 2000.0, (p.position + Vector3(0.0, R_sw, 0.0)).length() - R_sw)
 	var onfloor_frac := float(w_onfloor) / float(maxi(w_frames, 1))
 	var ok := grid_ok and walk_done \
 			and int(corners.size()) >= 8 \
@@ -25657,6 +25741,11 @@ func _spherewalk_test() -> void:
 			and f_land_x < -8.0 \
 			and f_land_face_home \
 			and f_up_min >= 0.999 \
+			and f_land_up >= 0.999 \
+			and f_alt_rad_max > 2000.0 \
+			and f_band_peak > 0.95 \
+			and f_band_land < 0.05 \
+			and f_freeze_dot < 0.99 \
 			and w_up_min >= 0.999
 	Debug.result({
 		"ok": ok,
@@ -25683,6 +25772,12 @@ func _spherewalk_test() -> void:
 			"frames": f_frames,
 			"lifts": f_lifts,
 			"alt_max_m": roundf(f_alt_max * 10.0) / 10.0,
+			# AC-0145 P2: the band model fields (radial altitude + band blend)
+			"alt_max_rad_m": roundf(f_alt_rad_max * 1.0) / 1.0,
+			"band_peak": roundf(f_band_peak * 1000.0) / 1000.0,
+			"band_max": roundf(f_band_max * 1000.0) / 1000.0,
+			"band_land": roundf(f_band_land * 1000.0) / 1000.0,
+			"freeze_dot": roundf(f_freeze_dot * 10000.0) / 10000.0,
 			"crossed_midline": f_cross,
 			"land_x": roundf(f_land_x * 10.0) / 10.0,
 			"land_on_floor": f_land_ok,

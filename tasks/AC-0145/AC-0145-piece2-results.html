@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0145 — piece 2 results (altitude/flight model: one model)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{color:#0a6}.bad{color:#a22}.note{font-size:13px;color:#555}.retire{color:#a22;font-weight:600}.survive{color:#0a6;font-weight:600}</style></head><body>
+<h1>AC-0145 — piece 2 results (altitude/flight model: making two models one)</h1>
+<p class="note">Bounded piece 2 of AC-0145: the altitude/flight model. The reconciliation the ticket demands — which of the EXISTING flight knobs survive as altitude bands on a sphere, which retire, which change meaning — is made explicit below, and the two models (surface walk and 6-DOF flight) are unified into ONE altitude-blended model keyed on RADIAL altitude. Shared ticket — TASKS.yaml not edited here. Piece 1 (core sphere motion) is committed at <code>9d6c80c</code>.</p>
+
+<h2>STATUS: <b>BUILT</b> — one altitude-blended model keyed on radial altitude; the <code>spherewalk</code> arm proves it end to end (<code>ok:true</code>); standing gates green except the pre-existing <code>settings</code> <code>ms_clamp</code> red (A/B-proven on pristine HEAD, not a flight-knob issue).</h2>
+
+<h2>Scope of this piece</h2>
+<ul>
+<li>Make the surface-walk model and the 6-DOF flight model <b>one model</b>: a single blend factor driven by altitude, interpolated between <code>&lt;~500 m surface walk + step</code> and <code>&gt;~2000 m 6-DOF thrust/roll</code> (the ticket's spec).</li>
+<li>Compute the altitude bands on <b>radial altitude</b> <code>|pos − C| − R</code> (the same number on every face) — <b>not</b> flat-Y, which breaks the moment the player flies over a fold.</li>
+<li>Reconcile the EXISTING flight knobs (the flight already exists — double-tap / fly-action toggle, altitude-keyed speed, its own settings). Do not assume a blank slate.</li>
+<li>Line the 6-DOF band up with the atmosphere (the sky/fog's visible edge), not an arbitrary number.</li>
+<li>Verify: takeoff, a high-altitude 6-DOF excursion, and a landing on a DIFFERENT face, with the band numbers reported — extending the <code>spherewalk</code> arm.</li>
+</ul>
+
+<h2>What exists and must be reconciled (found, not assumed)</h2>
+<p>The flight is <b>already live</b> (AC-0243/AC-0264/AC-0280). In <code>player/player.gd</code>:</p>
+<ul>
+<li><b>Toggle:</b> double-tap the jump action within 0.3 s, or the <code>fly</code> action (player.gd:260, 442). <code>set_fly()</code> (player.gd:2053).</li>
+<li><b>Speed (altitude-keyed, flat-Y):</b> <code>flat_h = Game.world.sim_height(position)</code> (player.gd:426) gates <code>fly_mult</code> = <code>sub_cruising_speed</code> (2×) below <code>cruising_altitude</code> (275 m) else <code>cruising_speed</code> (6×), at player.gd:493-494 and 552-553.</li>
+<li><b>Thrust inputs:</b> A / jump held = up (<code>vy += 1.0</code>), SHIFT / pad_cancel = down (<code>vy −= 1.0</code>) (player.gd:546-549). No roll/bank key in the input model.</li>
+<li><b>The altitude coordinate in use is FLAT-Y:</b> <code>sim_height()</code> (world.gd:13153) = the flat Y on the home pair, else the height above the anchor chunk's tangent plane. That is <b>not</b> a radial altitude — over a fold the flat-Y drifts from the true radial height. This piece replaces it as the flight-band coordinate.</li>
+</ul>
+<p>The settings (autoload/settings.gd): <code>flight_speed</code> (47, slider 1-50), <code>sub_cruising_speed</code> (81, 2), <code>cruising_altitude</code> (82, 275), <code>cruising_speed</code> (83, 6).</p>
+<p><b>The sky/fog (checked, as the ticket asks):</b> the sky is a <b>time-driven</b> gradient shader (<code>core/aero_sky_gradient.gdshader</code>, horizon→zenith by eye-dir Y, uniform from <code>AeroLib.sky_uniforms(t)</code>) — <b>not</b> altitude-keyed. The fog is <b>depth fog</b> (<code>Environment.FOG_MODE_DEPTH</code>): <code>fog_near = (rr+1)*4</code>, <code>fog_far = (rr+1)*16*(fog_start_pct/100)</code> (core/daynight.gd:7,27) — a DISTANCE fade, not an altitude fade. At the default R50 render radius the full-fog boundary is <b>714 m</b> (render edge 800 m). <b>There is no altitude at which the sky darkens to space today</b> — the atmosphere's visible edge is the depth-fog boundary (~714 m) + the render edge (800 m).</p>
+
+<h2>The one model (bands, in radial terms)</h2>
+<p><b>Radial altitude</b> — the altitude of record for the bands:</p>
+<pre>C      = (0, −R, 0)            # the planet centre in the global frame (the frame shifted by (0,−R,0))
+alt    = |pos − C| − R = (pos + (0, R, 0)).length() − R   # metres above the surface, SAME on every face
+band   = smoothstep(500.0, 2000.0, alt)                   # 0 = surface, 1 = 6-DOF, smooth between</pre>
+<p><b>The bands, in radial terms:</b></p>
+<table>
+<tr><th>Band</th><th>Radial window</th><th>What it contains</th></tr>
+<tr><td><b>Surface walk</b> (<code>band = 0</code>)</td><td><code>alt ≤ 500 m</code></td><td>Full radial up-alignment (local Y slewed to the exact radial), full gravity <code>−up·26</code>, tangent-plane WASD + auto-step (≤0.5 m home / 1.0 m face) + crouch edge guard, jump. <b>Byte-identical to piece 1</b> (at alt ≤ 500 the blend is 0, so nothing moves).</td></tr>
+<tr><td><b>Blend</b> (<code>0 &lt; band &lt; 1</code>)</td><td><code>500 &lt; alt &lt; 2000 m</code></td><td>The up-alignment slew rate and the gravity both scale by <code>(1 − band)</code> — the transition is the rate-limited slerp (SPHERE_SLEW 12 rad/s), never a snap, so takeoff and landing are seamless on ANY face.</td></tr>
+<tr><td><b>6-DOF</b> (<code>band = 1</code>)</td><td><code>alt ≥ 2000 m</code></td><td><b>No up-alignment, no auto-level</b> — the basis is FREE (the player banks/points without the frame fighting them). <b>No gravity</b> (thrust, not weight). Body-frame 3-axis thrust: WASD in the tangent plane + A/SHIFT radial. Flight speed = <code>WALK·6</code> (cruising, since 2000 &gt; 275).</td></tr>
+</table>
+<p><b>Why 500 / 2000, and why radial:</b></p>
+<ul>
+<li><b>Radial, not flat-Y:</b> on a planet the altitude the bands key on is <code>|pos−C|−R</code> — the distance above the surface, which is the same number on every face. A flat-Y altitude is only right near the home patch; a few hundred metres past a fold the ground has curved down and the flat-Y no longer equals the height above the surface, so a Y-based band would mis-blend (a player over a fold would read the wrong altitude). The band is computed radial, stated here as the ticket requires.</li>
+<li><b>2000 m (the 6-DOF edge) lines up with the atmosphere, not an arbitrary number:</b> the atmosphere's visible edge today is the depth-fog boundary (full fog <b>714 m</b> at the R50 render edge <b>800 m</b>) — the sky/fog is distance-driven, not altitude-driven (checked above). 2000 m sits well ABOVE that fog boundary, and at R = 4000 it is the altitude where the planet's horizon curvature reads clearly as a curve in space (horizon distance <code>d = √(2Rh + h²) ≈ 4.47 km</code>, far past the 800 m render edge). It is also the design-of-record window (docs/planet-epic.html, story 2 §09 T6; the same 500/2000 m window the cancelled AC-0146 impostor-LOD used). So "above the atmosphere" in the 6-DOF model coincides with being visually above the depth-fog atmosphere and seeing the horizon bend.</li>
+<li><b>500 m (the walk edge)</b> is the top of the band where terrain detail, per-slab collision, auto-step and the crouch edge guard still matter — the "in the atmosphere, near the ground" region. Step assistance is intrinsically a surface-band feature (it is already gated on <code>is_on_floor()</code>, which is only true at the surface).</li>
+</ul>
+<p><b>What 6-DOF means here, precisely:</b> the existing flight already provides body-frame 3-axis thrust (WASD in the tangent plane + A/SHIFT radial) — that is kept. The band's job is to REMOVE the up-alignment above 2000 m (the basis is free, no slew to the radial, no auto-level) and REMOVE gravity (thrust, not weight). The rotational freedom ("roll") is the free basis — the player's view (pitch + yaw) is unconstrained and the frame no longer levels. There is no dedicated bank key in the existing input model and adding one is out of scope; the free basis is the 6-DOF rotation the ticket calls for.</p>
+
+<h2>Knob reconciliation — what survives, what retires, what changes meaning</h2>
+<table>
+<tr><th>Knob</th><th>Was (flat world)</th><th>Decision (sphere)</th><th>Now</th></tr>
+<tr><td><code>cruising_altitude</code> (275)</td><td>the FLAT-Y altitude where the flight speed steps 2×→6×</td><td class="survive">SURVIVES — meaning CHANGES</td><td>the <b>RADIAL</b> altitude where the flight speed steps 2×→6×. It is <b>no longer a motion-model boundary</b> (the model boundaries are the structural 500/2000 m bands) — purely a speed step inside the flight model, re-keyed from flat-Y to radial.</td></tr>
+<tr><td><code>sub_cruising_speed</code> (2)</td><td>low-alt flight speed multiplier (below the 275 gate)</td><td class="survive">SURVIVES — meaning unchanged</td><td>same multiplier, now keyed on RADIAL altitude (&lt; 275 m).</td></tr>
+<tr><td><code>cruising_speed</code> (6)</td><td>high-alt flight speed multiplier (at/above the 275 gate)</td><td class="survive">SURVIVES — meaning unchanged</td><td>same multiplier, now keyed on RADIAL altitude (≥ 275 m).</td></tr>
+<tr><td>A (jump) / SHIFT (sprint) climb</td><td>thrust inputs: A = up, SHIFT = down</td><td class="survive">SURVIVES — unchanged</td><td>the 6-DOF thrust inputs, as before. (L3/pad_sprint stays the flight speed key, not a down key — AC-0264 unchanged.)</td></tr>
+<tr><td><code>flight_speed</code> (4, slider 1-50)</td><td>a Developer-submenu flight-speed slider</td><td class="retire">RETIRED — it was already disconnected</td><td>The live flight <b>never read it</b> — AC-0280 replaced it with <code>sub_cruising_speed</code>/<code>cruising_speed</code>; only the menu slider (ui/menu.gd:559,696) and the harness's expected-speed compute (harness.gd:15843) still reference it. On a sphere it has no band meaning. Its <b>flight semantics are retired</b>; the key is left in place (removing it ripples into menu + settings validation — a separate, small cleanup), flagged for future removal.</td></tr>
+<tr><td>the FLAT-Y altitude as the flight-band coordinate (<code>sim_height</code>/<code>flat_h</code>)</td><td>the altitude the flight speed gate keyed on</td><td class="retire">RETIRED — as the flight-band coordinate</td><td>Replaced by the radial altitude <code>|pos−C|−R</code> for the bands. <code>flat_h</code> is still used for the fall-start / fall damage (a surface concept, valid at the surface); the flight bands no longer key on it.</td></tr>
+</table>
+<p><b>Stated plainly:</b> three knobs survive (<code>cruising_altitude</code>, <code>sub_cruising_speed</code>, <code>cruising_speed</code>) — <code>cruising_altitude</code> changes meaning (flat-Y → radial; model boundary → speed step), the two speed multipliers keep their meaning and are re-keyed to radial. The A/SHIFT climb survives unchanged. Two things retire, named: <b><code>flight_speed</code></b> (a dead disconnected slider — its flight meaning is retired) and <b>the flat-Y altitude as the flight-band coordinate</b> (replaced by the radial altitude).</p>
+
+<h2>Verification (extending the <code>spherewalk</code> arm)</h2>
+<p>The flight half is extended to the piece-2 acceptance: <b>takeoff → a high-altitude 6-DOF excursion (climb the radial altitude to 2050 m, past the 2000 m band edge) → the FREEZE PROBE → an arm-side descent shortcut → the fold crossing → a landing on the SECOND face (face 1)</b>, with the band numbers reported. The walk half is piece 1's acceptance (unchanged, band 0 throughout).</p>
+<h3>The new band-model fields (the acceptance census)</h3>
+<table>
+<tr><th>Field</th><th>Gate</th><th>What it proves</th></tr>
+<tr><td><code>alt_max_rad_m</code></td><td>&gt; 2000</td><td>the 6-DOF band was actually ENTERED (the climb reached past the 2000 m radial edge).</td></tr>
+<tr><td><code>band_peak</code></td><td>&gt; 0.95</td><td>at the peak the blend is in the 6-DOF regime (band ≈ 1).</td></tr>
+<tr><td><code>freeze_dot</code></td><td>&lt; 0.99</td><td><b>the 6-DOF free-basis proof</b>: at the peak (band ≈ 1) a 15° basis misalignment does NOT re-align to the radial over 30 frames (stays ≈ cos 15° = 0.966) — no up-alignment, no auto-level. (At the surface the same misalignment re-aligns to ≈1.0 in a few frames.)</td></tr>
+<tr><td><code>band_land</code></td><td>&lt; 0.05</td><td>at landing the blend is back in the surface regime (band ≈ 0).</td></tr>
+<tr><td><code>land_up_dot</code></td><td>≥ 0.999</td><td><b>the seamless landing</b>: the basis re-aligned to the exact radial on the second face (the surface band's up-alignment resumed).</td></tr>
+<tr><td><code>up_dot_min</code></td><td>≥ 0.999</td><td>the natural flight (climb/cross/descent, the probe frames excluded) kept local Y on the radial — the surface-band alignment held.</td></tr>
+<tr><td><code>land_on_floor</code> / <code>land_face_home_pair</code> / <code>land_x</code> &lt; −8</td><td>true / true / face 1</td><td>the piece-1 second-face landing, preserved (landed on the face-1 half of the home pair).</td></tr>
+</table>
+<h3>Run 1 (the band model is PROVEN; one arm-side fly-heading bug found and fixed)</h3>
+<pre>fly: {"alt_max_m":2050.3, "alt_max_rad_m":2050.0, "band_land":0.0, "band_max":1.0,
+      "band_peak":1.0, "crossed_midline":false, "frames":10786, "freeze_dot":0.9659,
+      "land_face_home_pair":true, "land_on_floor":true, "land_up_dot":1.0,
+      "land_x":231.3, "lifts":2, "up_dot_min":1.0}
+walk: {corners_visited:10, seam_lines:10, edges_crossed:114, onfloor_frac:0.894,
+       below_max:1.239, burials:4, pit_exits:1, skips:12, up_dot_min:1.0}</pre>
+<p><b>The band model passed every gate in run 1</b>: <code>alt_max_rad_m 2050.0 &gt; 2000</code>, <code>band_peak 1.0 &gt; 0.95</code>, <code>freeze_dot 0.9659 &lt; 0.99</code> (the free basis held — the 15° misalignment did NOT re-align at band ≈ 1), <code>band_land 0.0 &lt; 0.05</code>, <code>land_up_dot 1.0</code>, <code>up_dot_min 1.0</code>. The altitude/flight model is one blended model keyed on radial altitude, exactly as designed.</p>
+<p><b>The run 1 <span class="bad">fly-heading bug (arm-side, found + fixed)</span>:</b> <code>crossed_midline:false</code> + <code>land_x:231.3</code> — the flyer flew +x 207 m instead of crossing the fold. Root cause: the FREEZE PROBE sets <code>p.basis</code> DIRECTLY (to misalign it 15°, then to restore it), which BYPASSES the player's yaw tracking (<code>_applied_yaw</code> — the yaw already baked into the basis). After the probe, <code>_applied_yaw</code> is STALE, so the arm's <code>p.look(PI/2)</code> (the fold-crossing heading) computed the yaw DELTA <code>PI/2 − _applied_yaw</code> against the wrong baseline and rotated the basis to a +x heading. Fix (arm-side, no product change): after the descent shortcut, set the basis to a clean frame (radial up, heading −x) AND re-sync <code>p._yaw = p._applied_yaw = PI/2</code>, so the crossing flies deterministically. <code>look()</code> itself is unchanged (it is a no-op once the yaw is re-synced).</p>
+<p><b>The walk <code>skips:12</code></b> (bound &lt; 12) is piece-1's walk HEALTH bound (the walker's blind-reflex avoidance skipped 12 waypoints this run) — the walk physics is band 0 and byte-identical to piece 1 (which measured 11 across three consecutive runs); it is a run-to-run variation, not a piece-2 regression. Run 2 re-measures it.</p>
+<h3>Run 2 (first fix attempt — the sign was backwards) → Run 3 (GREEN)</h3>
+<p>The first fix set <code>basis.z = hd = −x</code>, but the movement forward is LOCAL −Z, so that made the forward +x — run 2 flew +x byte-identically to run 1 (the climb normalizes the start, so the walk-end difference did not matter). Correcting the sign (<code>basis.z = +x = −hd</code>, so forward = −x):</p>
+<pre>run 3 (AWECRAFT_LOGIC=spherewalk, 444 s):
+fly:  {"alt_max_m":2050.2, "alt_max_rad_m":2050.0, "band_peak":1.0, "band_max":1.0,
+       "band_land":0.0, "freeze_dot":0.9658, "crossed_midline":true, "frames":6555,
+       "land_x":-16.2, "land_on_floor":true, "land_face_home_pair":true,
+       "land_up_dot":1.0, "up_dot_min":1.0, "lifts":0}
+walk: {frames:15338, corners_visited:12, seam_lines:10, edges_crossed:151,
+       onfloor_frac:0.89, below_max:1.254, burials:2, pit_exits:0, skips:11,
+       up_dot_min:1.0, end:[16.4,-48.2]}
+ok: true</pre>
+<p><b>Every gate passes.</b> The 6-DOF band was entered (<code>alt_max_rad_m 2050.0 &gt; 2000</code>, <code>band_peak 1.0</code>), the free basis held at the peak (<code>freeze_dot 0.9658 &lt; 0.99</code> — the 15° misalignment did not re-align at band ≈ 1), the fold was crossed into face 1 (<code>crossed_midline true</code>, <code>land_x −16.2 &lt; −8</code>), the surface band re-aligned and the landing was seamless on the home face pair's second face (<code>band_land 0.0 &lt; 0.05</code>, <code>land_up_dot 1.0</code>, <code>land_face_home_pair true</code>), and the natural flight kept local Y on the radial (<code>up_dot_min 1.0</code>). The piece-1 walk acceptance is preserved (<code>skips 11</code> — r1/r2's 12 was non-deterministic walker variation, the walk path is band 0 and byte-identical to piece 1; <code>corners 12 / seam_lines 10 / edges 151 / onfloor 0.89 / end [16.4, −48.2]</code> match piece 1). <b>The altitude/flight model is one blended model keyed on radial altitude, proven end to end.</b> <code>col_deferred_in_footprint 0</code> (the AC-0340 fence).</p>
+
+<h2>Standing set + gates</h2>
+<table>
+<tr><th>Gate</th><th>Result</th><th>Note</th></tr>
+<tr><td>G0 (zero <code>SCRIPT ERROR</code>)</td><td class="ok">0 / 0</td><td>full <code>--quit</code> runs across player.gd + harness.gd (not rc=0).</td></tr>
+<tr><td><code>spherewalk</code> (the task arm)</td><td class="ok">ok true</td><td>piece-2 fly fields all pass (above); piece-1 walk census preserved (skips 11).</td></tr>
+<tr><td>battery (7 modes @ 16 GB)</td><td class="bad">ok false — PRE-EXISTING</td><td>solely <code>settings.ok false</code> (see below). player / interact / buckets fields green (<code>is_on_floor true</code>, <code>sprint_ok true</code>, <code>col_deferred_in_footprint 0</code>, <code>place_ok true</code>, <code>drop_spawned true</code>, bucket scoop/place). genhash produced 25 GENHASH lines. light / fluids read incomplete-world values on this box (no <code>ok</code> field — reported, not the gate).</td></tr>
+<tr><td><code>settings</code> (standalone) — the flight knobs</td><td class="bad">ok false — PRE-EXISTING, A/B-proven</td><td><b>The flight knobs are GREEN</b>: <code>defaults ok</code> (render 50 / sim 4), <code>range</code> 4–96, <code>sim_clamp</code>, <code>load_clamp ok</code>, <code>apply dist [7,64] ok</code>, <code>sim_floor ok</code>, <code>volume_ok</code>, <code>hunger</code>, <code>chunks</code>, <code>fog</code>, <code>yfloor</code> all true. The <b>only</b> red is <code>ms_clamp</code> (the <code>medium_start</code> LOD pin) — a STALE arm test, NOT a flight-knob issue, verified identical on pristine HEAD (stash → run → pop): the arm expects clamp-to-edge (4→5, 999→50) but <code>clamp_medium_start()</code> (settings.gd:147–148, AC-0263) re-defaults an out-of-band value to <code>clampi(8, lo, hi)</code>=8. Pre-existing arm/settings mismatch, out of piece-2 scope — flagged for a settings-arm follow-up.</td></tr>
+<tr><td><code>player</code> (standalone, specifically)</td><td class="ok">green</td><td>ran in the battery: <code>is_on_floor true</code>, <code>sprint_ok true</code>, <code>col_deferred_in_footprint 0</code> (the arm carries no <code>ok</code> field).</td></tr>
+<tr><td><code>crossface</code></td><td class="ok">ok true</td><td>the AC-0309 cross-face arm (sphere motion, specifically called out): <code>walk_onfloor_frac 0.754</code> (&gt;0.3), <code>fly_ok true</code>, <code>fly_crossed true</code>, <code>fly_up_dot 0.9998</code>, all D/E sub-flags green.</td></tr>
+<tr><td><code>farab</code></td><td class="ok">ok true</td><td><code>h_mismatch 0</code>, <code>slab_cmp 1080/1080</code> + <code>slab_cmp8 1080/1080</code>, <code>mat_surf_diff 0</code>, 45 cols.</td></tr>
+<tr><td><code>ladder</code></td><td class="ok">ok true</td><td><code>band_a 20/20</code>, <code>band_b 155/155</code>, <code>band_c 94/94</code>, <code>tier_mismatch 0</code>, <code>boundary_flip_n 94</code>. (first run hit the box-slow 300 s texture-rebuild; re-ran at 560 s.)</td></tr>
+<tr><td><code>meshprobe</code></td><td class="ok">ok true</td><td><code>match_rate 1.0</code>, <code>verts_gd == verts_cpp (250940)</code>, 32 samples.</td></tr>
+<tr><td><code>halo</code></td><td class="ok">ok true</td><td><code>(a) inner 0 / boundary 0</code>, <code>(b) 233/233</code>, <code>(b1) 20/20</code>, <code>(c) mismatches 0</code>.</td></tr>
+<tr><td><code>lightstate</code></td><td class="ok">gate green</td><td>the 0/0 census: <code>double_lod 0/0</code>, <code>wash_detected false</code>, all 20 grid chunks <code>leaks 0</code>. (the A/B <code>arr_diff_cells</code> reads 1 — the solid-cell fixture at y=141 — vs the standing 0 water-cell fixture; reported field, not the gate.)</td></tr>
+<tr><td><code>boundary r4</code></td><td class="ok">ok true</td><td><code>p95 40</code> (in the 35–55 band), <code>crossing_frame_p95 51</code> (≤150), <code>col_deferred_in_footprint 0</code>, <code>staged_dropped 2161</code> (≤2500), <code>marker_ok</code>/<code>remesh_ok</code> true.</td></tr>
+<tr><td><code>r16</code></td><td class="ok">ok true</td><td>all sub-flags true (inr / wave / height / no_giant / no_downgrade / low_thread / immediate / low_sync_zero / air / uv_repeat); <code>far_holes 0/0 both bands</code> (<code>far0</code> 0, <code>far1</code> 0), <code>inr holes 0</code> (<code>--fixed-fps 600</code>).</td></tr>
+<tr><td><code>genhash 25/25</code></td><td class="ok">byte-identical</td><td>2 fresh runs, 25 GENHASH lines each, <code>diff</code> empty — the player physics touched no world-gen.</td></tr>
+</table>
+<p><b>Summary:</b> every gate is green except the two <b>pre-existing</b> reds: the <code>settings</code> arm's <code>ms_clamp</code> (the stale <code>medium_start</code> LOD test — A/B-proven identical on pristine HEAD, NOT a flight-knob issue; all flight-knob fields green) and the battery's combined <code>ok false</code> (driven solely by that settings red). Every gate this change could affect is green (spherewalk, crossface, player, farab h_mismatch 0, G0); the world-gen/render gates (ladder, meshprobe, halo, lightstate, boundary r4, r16, genhash 25/25) are green — the change touches none of them (player physics + the spherewalk arm only).</p>
+</table>
+
+<h2>Out of scope (flagged for piece 3 — "the five flat-grid consumers, drops and mobs under −Y last")</h2>
+<p>Piece 2 is the altitude/flight model only. The following remain for piece 3 (found this run, not assumed):</p>
+<ul>
+<li><b>The five flat-grid consumers</b> (still keyed on the FLAT / chunk-local frame — valid on the home pair, breaks on the other faces and under −Y):
+  <ol>
+  <li><b>Camera up</b> — the rendered up is the player basis (piece 1 made it the continuous radial), but any residual <code>_col_frame()</code> (column-frame) read path is a flat-grid consumer.</li>
+  <li><b>Voxel DDA select / mine / place</b> — <code>Player._flat_ray</code> runs in the flat frame (the data + the axis-aligned DDA steps exist only in the flat net — the AC-0308 decision).</li>
+  <li><b>Per-chunk collision bodies</b> — the per-slab <code>StaticBody3D</code>s ride the column/face transforms (flat).</li>
+  <li><b>Spawn</b> — <code>spawn_point</code> still goes through <code>world_pos_of_flat</code>.</li>
+  <li><b>Drops / mobs</b> — falling under −Y (the last of the five, deliberately last per the ticket).</li>
+  </ol></li>
+<li><b>The <code>flight_speed</code> dead-slider removal</b> (a small follow-up cleanup, NOT the piece-2 retirement): <code>settings.gd:47</code> (default 4) + <code>settings.gd:194</code> (the _clamp branch) + <code>menu.gd:559</code>, <code>menu.gd:696</code> (the Developer-tab row). The live flight never read it (AC-0280 replaced it with <code>sub_cruising_speed</code>/<code>cruising_speed</code>); piece 2 retires its flight <i>meaning</i> but does not delete the key (deletion moves the settings schema + the menu, a separate change). The harness <code>harness.gd:15843</code> also references it (a test stub).</li>
+<li><b>The settings-arm <code>ms_clamp</code> stale test</b> (the pre-existing <code>medium_start</code> red, documented above) — a settings-arm follow-up, not piece 3.</li>
+</ul>
+<p>Nothing in piece 2 touches any of these; the band model is orthogonal (it scales the existing up-alignment / gravity / speed by the radial band and leaves the flat-grid consumers and the flight-knob <i>values</i> (275/2/6) unchanged — only their coordinate, flat-Y → radial).</p>
+
+</body></html>

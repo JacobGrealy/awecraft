@@ -200,8 +200,10 @@ Match these; do not improvise a different approach in a task.
   seam the point is attributed to the facet it lies on). Converters: the player
   spawn + `_recenter` (the recenter contract takes FLAT coords everywhere), the
   interaction rays (the DDA runs in the flat frame, `Player._flat_ray`; highlight and
-  fluid box-tests convert), and the altitude semantics (cruise altitude, fall
-  distance, the void kill) key on the FLAT height, never the global Y. The ground
+  fluid box-tests convert), and the altitude semantics: the flight band blend +
+  the cruise speed step key on the RADIAL altitude (|pos−C|−R, AC-0145), while
+  fall distance + the void kill key on the FLAT height (sim_height) — never the
+  global Y. The ground
   stays a gapless polyhedron of 16 m facets (physics = visuals; the flat pipeline
   is unchanged) and the terrain data does not move (genhash 25/25). Cross-face
   movement (faces 2–11) is AC-0309; the round-planet look is its own ticket.
@@ -224,6 +226,34 @@ Match these; do not improvise a different approach in a task.
   walls and are climbed by jumping as before. Standing proof: the `consumers`
   arm (`AWECRAFT_LOGIC=consumers`) — mine/place/step at the x=0 midline fold +
   two high-latitude positions, the no-fall-through census, terrain restored.
+- **Player continuous frame + altitude/flight band (AC-0145)**: supersedes the
+  "velocity lives in the COLUMN frame" statement above. The movement/up frame is a
+  **CONTINUOUS ACCUMULATED basis** (piece 1), not re-derived per column:
+  `_sphere_align` (player.gd) slerps local Y toward the EXACT radial
+  `up = normalize(pos - C)` (C = (0,−R,0) global) at SPHERE_SLEW 12 rad/s (a
+  ≥0.35 rad teleport-class misalignment snaps), and the look yaw is applied as a
+  DELTA around that local Y — the 0.23°/column step is a continuous slew, never a
+  re-snap. **The altitude/flight model is ONE band blend on RADIAL altitude**
+  (piece 2): `alt = |pos - C| - R` (the same number on every face — a flat-Y
+  altitude breaks over a fold) and `band = smoothstep(500, 2000, alt)`. band 0
+  (alt ≤ 500) = surface walk: full up-alignment + full gravity (−up·26) +
+  tangent-plane WASD + auto-step (byte-identical to piece 1); band 1 (alt ≥ 2000)
+  = 6-DOF: a FREE basis (no up-alignment / auto-level) + no gravity (thrust
+  only); the blend is the rate-limited slerp + the gravity scale (1−band), so
+  takeoff/landing are seamless on any face — `_sphere_align(dt, align_amount)`
+  takes `align_amount = 1 - band`. The existing flight knobs are reconciled, not
+  re-derived: `cruising_altitude` (275) survives as a RADIAL speed step (2×→6×,
+  no longer a motion-model boundary), `sub_cruising_speed` (2) /
+  `cruising_speed` (6) are re-keyed to RADIAL, the A/SHIFT thrust is unchanged,
+  and `flight_speed` (settings.gd:47) is a disconnected Developer slider whose
+  flight meaning is RETIRED. The 2000 m edge sits above the atmosphere's visible
+  (depth-fog) boundary (full fog 714 m @ the R50 render edge 800 m) — the
+  planet-epic window (docs/planet-epic.html §09 T6). Fall distance + the void
+  kill still key on the FLAT height (sim_height) — a surface concept. Standing
+  proof: the `spherewalk` arm's piece-2 fly fields (`alt_max_rad_m > 2000`,
+  `band_peak > 0.95`, `freeze_dot < 0.99` the 6-DOF free-basis proof,
+  `band_land < 0.05` + `land_up_dot ≥ 0.999` the surface re-alignment + seamless
+  landing on the second face).
 - **Cross-face movement (AC-0309)**: beyond the home patch the 12 face charts
   (faces 2–11) stream around the net. The face grid is 1024×1024 cells per
   face — ANISOTROPIC: the u axis spans the full face width (S ≈ 6.14 m per
