@@ -245,8 +245,10 @@ Match these; do not improvise a different approach in a task.
   re-derived: `cruising_altitude` (275) survives as a RADIAL speed step (2×→6×,
   no longer a motion-model boundary), `sub_cruising_speed` (2) /
   `cruising_speed` (6) are re-keyed to RADIAL, the A/SHIFT thrust is unchanged,
-  and `flight_speed` (settings.gd:47) is a disconnected Developer slider whose
-  flight meaning is RETIRED. The 2000 m edge sits above the atmosphere's visible
+  and `flight_speed` was a disconnected Developer slider whose flight meaning
+  is RETIRED (piece 3 removed the key, the clamp branch and the Developer-menu
+  row — a stale cfg key is simply never read, no migration: load_settings only
+  pulls keys in the DEFAULTS table). The 2000 m edge sits above the atmosphere's visible
   (depth-fog) boundary (full fog 714 m @ the R50 render edge 800 m) — the
   planet-epic window (docs/planet-epic.html §09 T6). Fall distance + the void
   kill still key on the FLAT height (sim_height) — a surface concept. Standing
@@ -254,6 +256,17 @@ Match these; do not improvise a different approach in a task.
   `band_peak > 0.95`, `freeze_dot < 0.99` the 6-DOF free-basis proof,
   `band_land < 0.05` + `land_up_dot ≥ 0.999` the surface re-alignment + seamless
   landing on the second face).
+  **Entity fall direction (AC-0145 piece 3)**: everything that falls falls toward
+  the centre (−up, the exact radial), not world −Y: drops (`entities/drop.gd`,
+  radial gravity + a sim-frame ground read — home: the world→flat conversion,
+  face: the anchor's cell frame — replacing a global-as-flat mix), bananas
+  (a per-frame compensating force so the RigidBody's NET gravity is radial),
+  arrows (radial light gravity + sim-frame solid read) and mob gravity (radial,
+  the grounded zero strips the radial velocity component). The mob WALK/FACING
+  motion model is still flat (world-xz intent + `rotation.y`) — the tangent-plane
+  port is the follow-up, as is the sim-routed face-world mob spawn
+  (`world._mob_tick` now picks the home-pair spawn region in the sim frame and
+  skips a face spawn rather than misplace).
 - **Cross-face movement (AC-0309)**: beyond the home patch the 12 face charts
   (faces 2–11) stream around the net. The face grid is 1024×1024 cells per
   face — ANISOTROPIC: the u axis spans the full face width (S ≈ 6.14 m per

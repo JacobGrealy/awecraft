@@ -12471,11 +12471,25 @@ func _mob_tick(d: float) -> void:
 	var total := 0
 	for e in table:
 		total += int(e[1])
+	# AC-0145 P3: the spawn region is selected in the player's SIM frame
+	# (the flat net on the home pair) and the mob is placed through the
+	# frame->GLOBAL conversion. The pre-P3 code used the player's GLOBAL
+	# x/z as flat coordinates — the frames agree only near the home centre,
+	# so a spawn ~d from it landed d²/2R off the surface. Past the patch
+	# edge (a face) the flat home grid is not the player's ground: skip the
+	# spawn rather than misplace (the sim-routed face spawn + the mob
+	# tangent-plane motion model are the follow-up — AC-0145 piece-3 results).
+	var pface := 0
+	if Game.planet_R > 0.0:
+		pface = int(player_anchor(ppos).get("face", 0))
+	if pface > 1:
+		return
+	var pf: Vector3 = flat_of_world_pos(ppos) if Game.planet_R > 0.0 else ppos
 	for att in range(3):
 		var ang := randf() * TAU
 		var dist := randf_range(float(MOB_SPAWN_CIRCLE_MIN), float(MOB_SPAWN_CIRCLE_MAX))
-		var sx := int(floorf(ppos.x + cos(ang) * dist))
-		var sz := int(floorf(ppos.z + sin(ang) * dist))
+		var sx := int(floorf(pf.x + cos(ang) * dist))
+		var sz := int(floorf(pf.z + sin(ang) * dist))
 		var sy: int = surface_top(sx, sz)
 		if sy <= 0:
 			continue
@@ -12493,7 +12507,10 @@ func _mob_tick(d: float) -> void:
 		var m: Node3D = MobScript.new()
 		m.key = pick
 		Game.entities.add_child(m)
-		m.position = Vector3(float(sx) + 0.5, float(sy) + 1.02, float(sz) + 0.5)
+		if Game.planet_R > 0.0:
+			m.position = world_pos_of_flat(float(sx) + 0.5, float(sy) + 1.02, float(sz) + 0.5)
+		else:
+			m.position = Vector3(float(sx) + 0.5, float(sy) + 1.02, float(sz) + 0.5)
 		return
 
 func _fluid_near(x: int, y: int, z: int) -> bool:

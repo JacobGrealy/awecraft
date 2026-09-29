@@ -27,12 +27,10 @@ var version_label: Label
 var render_slider: HSlider
 var sim_slider: HSlider
 var volume_slider: HSlider
-var flight_slider: HSlider
 var chunk_slider: HSlider
 var render_val: Label
 var sim_val: Label
 var volume_val: Label
-var flight_val: Label
 var chunk_val: Label
 var res_option: OptionButton
 var full_check: CheckBox
@@ -147,11 +145,9 @@ func _ready() -> void:
 	render_slider = get_node("Layer/OptionsBox/Center/VBox/RenderRow/RenderSlider")
 	sim_slider = get_node("Layer/OptionsBox/Center/VBox/SimRow/SimSlider")
 	volume_slider = get_node("Layer/OptionsBox/Center/VBox/VolumeRow/VolumeSlider")
-	flight_slider = get_node("Layer/OptionsBox/Center/VBox/FlightRow/FlightSlider")
 	render_val = get_node("Layer/OptionsBox/Center/VBox/RenderRow/RenderVal")
 	sim_val = get_node("Layer/OptionsBox/Center/VBox/SimRow/SimVal")
 	volume_val = get_node("Layer/OptionsBox/Center/VBox/VolumeRow/VolumeVal")
-	flight_val = get_node("Layer/OptionsBox/Center/VBox/FlightRow/FlightVal")
 	chunk_slider = get_node("Layer/OptionsBox/Center/VBox/ChunkRow/ChunkSlider")
 	chunk_val = get_node("Layer/OptionsBox/Center/VBox/ChunkRow/ChunkVal")
 	res_option = get_node("Layer/OptionsBox/Center/VBox/ResRow/ResOption")
@@ -556,12 +552,10 @@ func _sync_controls() -> void:
 	sim_slider.max_value = float(int(Settings.values["render_dist"]))
 	sim_slider.value = float(int(Settings.values["sim_dist"]))
 	volume_slider.value = float(int(Settings.values["volume"]))
-	flight_slider.value = float(int(Settings.values.get("flight_speed", 4)))
 	chunk_slider.value = float(int(Settings.values.get("chunks_per_frame", 3)))
 	render_val.text = str(int(render_slider.value))
 	sim_val.text = str(int(sim_slider.value))
 	volume_val.text = str(int(volume_slider.value))
-	flight_val.text = str(int(flight_slider.value)) + "x"
 	chunk_val.text = str(int(chunk_slider.value))
 	res_option.clear()
 	for m in RES_MODES:
@@ -689,12 +683,10 @@ func _on_volume_changed(v: float) -> void:
 	Settings.apply_audio()
 
 
-func _on_flight_changed(v: float) -> void:
-	if _syncing:
-		return
-	flight_val.text = str(int(v)) + "x"
-	Settings.set_value("flight_speed", int(v))
-
+# AC-0145 P3: the flight-speed slider (and its _on_flight_changed) is gone
+# — the live flight never read flight_speed (AC-0280 replaced it with
+# sub_cruising_speed / cruising_speed, re-keyed to radial altitude in
+# AC-0145 piece 2). The FlightRow node is removed from scenes/menu.tscn.
 
 # AC-0225: the per-frame streaming chunk-mesh handoff burst (the AC-0224
 # drain cap). world.gd's drain reads Settings "chunks_per_frame" every

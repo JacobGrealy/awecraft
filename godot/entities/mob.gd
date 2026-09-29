@@ -223,7 +223,9 @@ func _physics_process(dt: float) -> void:
 			a.dmg = _dmg
 			Game.entities.add_child(a)
 			a.position = center() + Vector3(0.0, 0.2, 0.0)
-			var eye_t := Vector3(p.position.x, p.position.y + 1.2, p.position.z)
+			# AC-0145 P3: the chest is along the player's LOCAL up (the
+			# continuous basis), not world +Y.
+			var eye_t: Vector3 = p.position + p.basis.y * 1.2
 			a.vel = (eye_t - a.position).normalized() * 12.0
 	# attack (hostile, in melee range, cooldown elapsed)
 	_atk_cd -= dt
@@ -237,10 +239,19 @@ func _physics_process(dt: float) -> void:
 	# ---- physics: walk the intent, gravity, slide.
 	velocity.x = lerpf(velocity.x, intent.x, minf(1.0, 8.0 * dt))
 	velocity.z = lerpf(velocity.z, intent.y, minf(1.0, 8.0 * dt))
+	# AC-0145 P3: gravity is toward the planet centre (-up, the exact
+	# radial), not world -Y, and the grounded zero strips the RADIAL
+	# velocity component (not the world-y one) — near the home face the
+	# two agree and the motion is unchanged. The intent/facing stay in
+	# world xz (a tangent-plane motion model for mobs is the follow-up —
+	# see the AC-0145 piece-3 results).
+	var mup := Vector3.UP
+	if Game.world != null and Game.planet_R > 0.0:
+		mup = (position + Vector3(0.0, Game.planet_R, 0.0)).normalized()
 	if not is_on_floor():
-		velocity.y -= GRAV * dt
+		velocity -= mup * (GRAV * dt)
 	else:
-		velocity.y = 0.0
+		velocity -= mup * velocity.dot(mup)
 	move_and_slide()
 	# ---- facing: lerp toward the move direction (hostiles keep the
 	# player in view when standing).

@@ -52,6 +52,16 @@ func _process(dt: float) -> void:
 	if _age > LIFE:
 		queue_free()
 		return
+	# AC-0145 P3: the engine gravity is world -Y (the project never overrides
+	# physics/3d/default_gravity); the planet wants the fall toward the
+	# centre (-up, the exact radial). A per-frame force cancels the -Y part
+	# so the NET gravity is radial: near the home face up ~= +Y and the
+	# force is ~0 (a banana near the spawn behaves as before); on other
+	# faces the pull rotates with the radial. The RigidBody bounce against
+	# the slab bodies is untouched.
+	if Game.world != null and Game.planet_R > 0.0:
+		var up := (position + Vector3(0.0, Game.planet_R, 0.0)).normalized()
+		apply_central_force((Vector3.UP - up) * 9.8 * mass)
 	if not settled:
 		# Bounce until rest: the RigidBody3D settles against the chunk
 		# StaticBody3D colliders; sleeping (or ~zero velocity) = at rest.

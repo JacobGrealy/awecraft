@@ -32,16 +32,40 @@ func _process(dt: float) -> void:
 	if t > LIFETIME:
 		queue_free()
 		return
-	vel.y -= GRAV * dt
+	# AC-0145 P3: the light gravity is toward the planet centre (the exact
+	# radial), not world -Y; flat mode: -Y as before.
+	var aup := Vector3.UP
+	if Game.world != null and Game.planet_R > 0.0:
+		aup = (position + Vector3(0.0, Game.planet_R, 0.0)).normalized()
+	vel -= aup * (GRAV * dt)
 	position += vel * dt
 	var w = Game.world
 	if w != null:
-		# a solid cell ends the flight (the first block it reaches)
-		if w.get_block(int(floorf(position.x)), int(floorf(position.y)), int(floorf(position.z))) != 0:
+		# a solid cell ends the flight (the first block it reaches).
+		# AC-0145 P3: the read runs in the SIM frame — home: the world->flat
+		# conversion (the pre-P3 code passed the GLOBAL position straight to
+		# the flat grid, a frame mix that read the wrong column ~d²/2R from
+		# home); face: the anchor's cell frame.
+		var solid := false
+		if Game.planet_R <= 0.0:
+			solid = w.get_block(int(floorf(position.x)), int(floorf(position.y)), int(floorf(position.z))) != 0
+		else:
+			var a: Dictionary = w.player_anchor(position)
+			var face: int = int(a.get("face", 0))
+			if face <= 1:
+				var f: Vector3 = w.flat_of_world_pos(position)
+				solid = w.get_block(int(floorf(f.x)), int(floorf(f.y)), int(floorf(f.z))) != 0
+			else:
+				var pv: Vector3 = position - a["origin"]
+				var pc: Vector3 = Vector3(pv.dot(a["basis"].x) / a["scale"].x, pv.dot(a["basis"].y), pv.dot(a["basis"].z) / a["scale"].y)
+				solid = w.get_block_key(face, int(floorf(pc.x)), int(floorf(pc.y)), int(floorf(pc.z))) != 0
+		if solid:
 			queue_free()
 			return
 	var p = Game.player
 	if p != null and not p.dead:
-		if position.distance_to(p.position + Vector3(0.0, 1.0, 0.0)) < 0.9:
+		# AC-0145 P3: the chest is along the player's LOCAL up (the
+		# continuous basis), not world +Y.
+		if position.distance_to(p.position + p.basis.y * 1.0) < 0.9:
 			p.damage_player(dmg, "arrow")
 			queue_free()

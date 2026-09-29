@@ -732,7 +732,11 @@ func _physics_process_impl(dt: float) -> void:
 			damage_player(4.0, "lava")
 	else:
 		lava_t = 0.0
-	var head_in_water := _block_at(position.x, position.y + (camera.position.y if camera != null else EYE), position.z) == 5
+	# AC-0145 P3: the head offset is along the LOCAL up (the continuous
+	# basis), not world +Y — the two agree on the home face and diverge
+	# as the radial tilts (a +Y offset reads a cell off the head).
+	var _head_w: Vector3 = position + basis.y * (camera.position.y if camera != null else EYE)
+	var head_in_water := _block_at(_head_w.x, _head_w.y, _head_w.z) == 5
 	if head_in_water and not flying:
 		air = maxf(0.0, air - dt)
 		if air <= 0.0:
@@ -952,7 +956,9 @@ func vm_refresh(force: bool = false) -> void:
 	var day := DayNight.day(Game.time_of_day)
 	# AC-0308: the light grid is FLAT (per-column local space) — convert
 	# the eye's world position before sampling.
-	var _eye_w: Vector3 = position + Vector3(0.0, (camera.position.y if camera != null else EYE), 0.0)
+	# AC-0145 P3: the eye offset is along the LOCAL up (the continuous
+	# basis), not world +Y (the hand sample follows the head on every face).
+	var _eye_w: Vector3 = position + basis.y * (camera.position.y if camera != null else EYE)
 	var _eye_f: Vector3 = Game.world.flat_of_world_pos(_eye_w) if Game.world != null else _eye_w
 	var eye := Vector3i(int(floorf(_eye_f.x)), int(floorf(_eye_f.y)), int(floorf(_eye_f.z)))
 	var now := Time.get_ticks_msec()
@@ -2236,12 +2242,26 @@ func respawn() -> void:
 	velocity = Vector3.ZERO
 	if Game.world == null:
 		return
-	var sx := int(floorf(position.x))
-	var sz := int(floorf(position.z))
+	# AC-0145 P3: the respawn column + placement run in the SIM frame. The
+	# old code took the player's GLOBAL x/z as flat column coords and built
+	# the flat (sx, sy, sz) straight into a global position — the frames
+	# agree only near the home centre (at d from it the surface sits d²/2R
+	# lower in global y, so a respawn far from home floated in the air and
+	# fell back onto the ground). The scan reads the death column through
+	# the sim accessors (the flat net on the home pair, the anchor's face
+	# cell frame past it); the placement converts the landed cell back to
+	# the GLOBAL frame (world_pos_of_flat on home, the anchor chunk
+	# transform on a face — the same cell->world path as _sim_cell_center).
+	var sc: Vector3i = _sim_probe_cell(position.x, position.y, position.z)
 	var sy := Data.HEIGHT - 2
-	while sy > 1 and _block_at(float(sx), float(sy), float(sz)) == 0:
+	while sy > 1 and _sim_get_block(sc.x, sy, sc.z) == 0:
 		sy -= 1
-	position = Vector3(float(sx) + 0.5, float(sy) + 1.01, float(sz) + 0.5)
+	if int(_anchor.get("face", 0)) > 1:
+		var T: Transform3D = SphereMath.face_chunk_transform(int(_anchor["face"]), int(_anchor["ccx"]), int(_anchor["ccz"]), Game.planet_R)
+		var lx: int = SphereMath.face_local_x(int(_anchor["face"]), sc.x, int(_anchor["ccx"]))
+		position = T * Vector3(float(lx) + 0.5, float(sy) + 1.01, float(sc.z) + 0.5)
+	else:
+		position = Game.world.world_pos_of_flat(float(sc.x) + 0.5, float(sy) + 1.01, float(sc.z) + 0.5)
 
 
 func _inv_get(i: int) -> Dictionary:

@@ -15840,7 +15840,7 @@ func _r16_stats(ms_list: Array) -> Dictionary:
 #                      default slider base 3, vs the fixed 3 pre-AC-0229)
 func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 	var n_frames := int(seconds * 600.0)
-	var speed := 4.3 * float(mult)  # player.WALK * flight_speed multiplier
+	var speed := 4.3 * float(mult)  # player.WALK * the arm's own speed multiplier
 	var dt := 1.0 / 600.0
 	# Yaw along the flight dir (probe convention — the look no longer
 	# affects the tier order since AC-0250): dir=+x -> yaw=-PI/2.
@@ -24950,6 +24950,13 @@ func _spherewalk_trunk_above(cx: int, cz: int, gtop: int) -> bool:
 
 func _spherewalk_test() -> void:
 	var p: Node3D = player
+	# AC-0145 P3: the runtime budget (a standing gate that can need more
+	# than ten minutes is not usable). A run past the budget stops with
+	# ok:false + why:"wall_budget" + the wall_s field instead of running
+	# unbounded (the pre-P3 arm ran past 600 s once on the committed build).
+	const SW_WALL_BUDGET_MS := 540000  # 9 min
+	var t0_ms := Time.get_ticks_msec()
+	var sw_timed_out := false
 	for i in 20:
 		await get_tree().physics_frame
 	# --- the walk grid: a 4x4 CHUNK area (64 x 64 m) with the 5x5
@@ -25011,6 +25018,9 @@ func _spherewalk_test() -> void:
 		var wt := 0
 		var ready := false
 		while wt < 1500:
+			if Time.get_ticks_msec() - t0_ms > SW_WALL_BUDGET_MS:
+				sw_timed_out = true
+				break
 			await get_tree().physics_frame
 			wt += 1
 			if world.surface_top(tgx * 16 + 1, tgz * 16 + 1) > 0 \
@@ -25200,6 +25210,14 @@ func _spherewalk_test() -> void:
 			grid_rise = line_rise
 			grid_frac = frac
 			grid_ok = true
+	if sw_timed_out:
+		p.set_fly(false)
+		Debug.result({
+			"ok": false,
+			"why": "wall_budget",
+			"wall_s": roundf((Time.get_ticks_msec() - t0_ms) / 1000.0),
+		})
+		return
 	if not grid_ok:
 		p.set_fly(false)
 		Debug.result({"ok": false, "why": grid_why})
@@ -25298,6 +25316,10 @@ func _spherewalk_test() -> void:
 	var walk_done := true
 	var walk_end: Vector2 = Vector2(wps[0])
 	while wp_i < wps.size() and w_frames < 30000:
+		if Time.get_ticks_msec() - t0_ms > SW_WALL_BUDGET_MS:
+			sw_timed_out = true
+			walk_done = false
+			break
 		await get_tree().physics_frame
 		w_frames += 1
 		if p.dead:
@@ -25482,6 +25504,24 @@ func _spherewalk_test() -> void:
 	Input.action_release("move_forward")
 	for i in 12:
 		await get_tree().physics_frame
+	if sw_timed_out:
+		# the budget ran out mid-walk: stop (the fly half would only
+		# push the run past the budget further) and report honestly.
+		Debug.result({
+			"ok": false,
+			"why": "wall_budget",
+			"wall_s": roundf((Time.get_ticks_msec() - t0_ms) / 1000.0),
+			"walk": {
+				"frames": w_frames,
+				"up_dot_min": roundf(w_up_min * 10000.0) / 10000.0,
+				"below_max": roundf(w_below_max * 1000.0) / 1000.0,
+				"onfloor_frac": roundf(float(w_onfloor) / float(maxi(w_frames, 1)) * 1000.0) / 1000.0,
+				"skips": w_skips,
+				"burials": w_burials,
+				"pit_exits": w_pit_exits,
+			},
+		})
+		return
 	# --- takeoff + landing on the home face pair. The existing flight
 	# (the toggle) with its existing knobs — this piece only proves the
 	# sphere motion survives it: the radial up tracks through climb, the
@@ -25522,6 +25562,11 @@ func _spherewalk_test() -> void:
 	# own top is unreadable there; the takeoff plains top is the proxy).
 	var takeoff_gtop: int = _spherewalk_cell_clear(int(floorf(world.flat_of_world_pos(p.position).x)), int(floorf(world.flat_of_world_pos(p.position).z)))
 	while f_frames < 7500 and (p.position + Vector3(0.0, R_sw, 0.0)).length() - R_sw < PEAK_ALT:
+		# (sw_timed_out is honoured by the post-peak loop below, which
+		# fails f_fly_ok — f_fly_ok is not declared until then)
+		if Time.get_ticks_msec() - t0_ms > SW_WALL_BUDGET_MS:
+			sw_timed_out = true
+			break
 		await get_tree().physics_frame
 		f_frames += 1
 		if p.dead:
@@ -25619,6 +25664,10 @@ func _spherewalk_test() -> void:
 	var land_x := -16.0
 	var f_post := 0  # AC-0145 P2: post-peak phase budget (the climb already consumed f_frames)
 	while f_post < 1500:
+		if Time.get_ticks_msec() - t0_ms > SW_WALL_BUDGET_MS:
+			sw_timed_out = true
+			f_fly_ok = false
+			break
 		await get_tree().physics_frame
 		f_frames += 1
 		f_post += 1
@@ -25670,6 +25719,10 @@ func _spherewalk_test() -> void:
 			Input.action_press("move_forward")
 			var f_appr := 0
 			while f_appr < 900 and f_post < 3000:
+				if Time.get_ticks_msec() - t0_ms > SW_WALL_BUDGET_MS:
+					sw_timed_out = true
+					f_fly_ok = false
+					break
 				await get_tree().physics_frame
 				f_frames += 1
 				f_post += 1
@@ -25696,6 +25749,10 @@ func _spherewalk_test() -> void:
 	kev.pressed = true
 	Input.parse_input_event(kev)
 	while f_post < 4500:
+		if Time.get_ticks_msec() - t0_ms > SW_WALL_BUDGET_MS:
+			sw_timed_out = true
+			f_fly_ok = false
+			break
 		await get_tree().physics_frame
 		f_frames += 1
 		f_post += 1
@@ -25729,26 +25786,43 @@ func _spherewalk_test() -> void:
 	# band, the basis re-aligned to the radial = the seamless landing).
 	f_band_land = smoothstep(500.0, 2000.0, (p.position + Vector3(0.0, R_sw, 0.0)).length() - R_sw)
 	var onfloor_frac := float(w_onfloor) / float(maxi(w_frames, 1))
-	var ok := grid_ok and walk_done \
-			and int(corners.size()) >= 8 \
-			and int(seams.size()) >= 6 \
-			and seam_hits >= 12 \
-			and onfloor_frac >= 0.88 \
+	var wall_s := roundf((Time.get_ticks_msec() - t0_ms) / 1000.0)
+	# AC-0145 P3: ok is gated on the invariants that CANNOT flap. The
+	# walk/grid coverage census (corners / seam lines / edges / onfloor /
+	# burials / skips / walk_done) is REGION-DEPENDENT — how the threaded
+	# generator happened to build the region that run decides which grid
+	# the search finds and how the walker threads it — and it is what made
+	# this arm's ok flap on the committed build (the coordinator ran it
+	# three times: the fly half bit-identical, ok false once / true once /
+	# > 600 s on the third). Those censuses are now WATCH fields (reported
+	# alongside, not gated — the same treatment the water-classification
+	# work gave its measured claims). What gates: the measurement happened
+	# (grid_ok), no fall-through (below_max), the up-vector stayed radial
+	# (walk + fly up_dot_min), the 6-DOF band was entered and behaved
+	# (alt_max_rad_m / band_peak / freeze_dot / band_land), and the
+	# second-face landing (crossed_midline / land_on_floor / land_x /
+	# land_face_home_pair / land_up_dot). A walk death or a budget timeout
+	# breaks the fly invariants (the fly loops watch p.dead) or force
+	# ok false directly, so walk_done is not needed in ok.
+	var ok := grid_ok \
 			and w_below_max <= 1.5 \
-			and w_burials <= 6 \
-			and f_cross \
-			and f_land_ok \
-			and f_land_x < -8.0 \
-			and f_land_face_home \
-			and f_up_min >= 0.999 \
-			and f_land_up >= 0.999 \
+			and w_up_min >= 0.999 \
 			and f_alt_rad_max > 2000.0 \
 			and f_band_peak > 0.95 \
 			and f_band_land < 0.05 \
 			and f_freeze_dot < 0.99 \
-			and w_up_min >= 0.999
+			and f_cross \
+			and f_land_ok \
+			and f_land_x < -8.0 \
+			and f_land_face_home \
+			and f_land_up >= 0.999 \
+			and f_up_min >= 0.999
+	if sw_timed_out:
+		ok = false
 	Debug.result({
 		"ok": ok,
+		"why": "wall_budget" if sw_timed_out else "",
+		"wall_s": wall_s,
 		"grid": {"cols": [gx0, gx0 + SW_GRID], "rows": [gz0, gz0 + SW_GRID], "start_corner": [sw_start.x, sw_start.y], "walkable_frac": roundf(grid_frac * 1000.0) / 1000.0, "max_rise": grid_rise, "pits": grid_pits, "land_x": roundf(land_x * 10.0) / 10.0, "land_z": f_land_z, "shift_ok": grid_ok},
 		"walk": {
 			"frames": w_frames,

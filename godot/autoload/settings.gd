@@ -44,7 +44,12 @@ const DEFAULTS := {
 	"overlay_band": false,
 	"overlay_light": false,
 	"overlay_collision": false,
-	"flight_speed": 4,
+	# AC-0145 P3: the "flight_speed" Developer slider is GONE — the live
+	# flight never read it (AC-0280 replaced it with sub_cruising_speed /
+	# cruising_speed; AC-0145 piece 2 re-keyed those to radial altitude).
+	# A stale key in an old cfg is simply never read: load_settings only
+	# pulls keys in this table (the old worlds are disposable — no
+	# migration owed, the AC-0313 tier0_radius precedent).
 	# AC-0225: streaming chunk-mesh handoff burst per frame (the AC-0224
 	# drain cap); 3 = the shipped AC-0224 default, so the default is a
 	# no-behavior-change.
@@ -191,8 +196,8 @@ func _clamp(k: String, v) -> void:
 			values[k] = bool(v)
 		"overlay_collision":
 			values[k] = bool(v)
-		"flight_speed":
-			values[k] = clampi(int(v), 1, 50)
+		# (AC-0145 P3: the flight_speed clamp branch is gone with the
+		# setting — a stale cfg key is never read.)
 		"chunks_per_frame":
 			values[k] = clampi(int(v), CHUNKS_PER_FRAME_MIN, CHUNKS_PER_FRAME_MAX)
 		# AC-0232 (dither dropped in AC-0241): the fog percent slider.
