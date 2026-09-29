@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-29T03:09
+  updated_at: 2026-09-29T08:00
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0377
 - AC-0378
 - AC-0376
 - AC-0368
@@ -21669,11 +21668,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-29T02:36
-  updated_at: 2026-09-29T02:36
-  completed_at: null
+  updated_at: 2026-09-29T08:00
+  completed_at: 2026-09-29T08:00
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Animals do not belong on the far side of the planet yet - they cannot walk or
@@ -21719,7 +21718,38 @@ intake:
     tasks/AC-0145/AC-0145-piece1-results.html (the player''s tangent-plane and basis treatment, which
     is the model to follow) and tasks/AC-0308/AC-0308-results.html (the consumer conventions).
 
-    '
+
+
+    CLOSED - the remainder from AC-0145 is done, verified on a second face, and it cost the tick nothing.
+    COORDINATOR VERIFICATION on my own capped stage of commit 97ff5d4 (every arm rc 0, zero SCRIPT ERROR):
+    genhash 25/25 byte-identical in two runs - which is the proof that the mob work is player-side only,
+    since mobs are not generation - farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate
+    0/0, r16 no reds with far_holes 0/0 in both bands, boundary r4 ok at 13/37, the R24 walk inside every
+    gated value (sweep p50 6.7, crossing frame p95 61, storm p99 93), and the battery complete with only
+    the documented pre-existing settings red. THE GEOMETRIC FINDING IS THE PART WORTH KEEPING, because
+    it is the kind of thing that is invisible until it bites: the natural way to place a spawn ring -
+    build it in the anchor''s radius-minus-R flat frame - is simply WRONG on high terrain, measured 167.3
+    m off at a 164 m summit, and over cliffs it resolves the wrong columns and drops mobs through the
+    ground. The ring must be built in the PLAYER''S TANGENT PLANE AT THE PLAYER''S ALTITUDE. A second
+    wrong assumption fell out with it: the slab guard wants slab_for_y(sy).collision_body != null, and
+    has_all_slab_bodies is not that predicate. Both are now recorded in the results page rather than living
+    only in the diff. THE VERIFICATION IS ON A FACE THAT IS NOT HOME (face 5, 45.4 degrees of radial tilt,
+    a 164 m summit), which AC-0309''s crossing made possible and which is the only honest way to test
+    any of this: the player stands at up-dot-basis 0.99985, a NATURAL face spawn fired with a sheep 27.3
+    m out and up 1.0, twenty of twenty pigs placed, and a 150-frame walker held upmin 1.0 with pen_min
+    0.002 - never below ground, with the 0-1 m range being inherent 1 m voxel stepping given no auto-step
+    - a maximum step of 0.61 m per 15 frames, no jitter, no drift, no despawn. THE COST CONSTRAINT I SET
+    WAS MET AND MEASURED: 0.12 -> 0.09 microseconds per mob per frame at 16-18 live, i.e. the per-frame
+    normalize/cross/basis rebuild is below per-mob measurement noise, so the 20 Hz pass that AC-0370 and
+    AC-0373 just made cheap is untouched and no per-mob caching is needed. THE PRE-EXISTING RED WAS HANDLED
+    THE WAY THE TICKET ASKED: fall_ok and wolf_ok were NOT silenced and NOT assumed fixed, and the run
+    reported them bit-identical to its BEFORE baseline. My own run then added a data point that sharpens
+    the diagnosis - see the note on AC-0378 - because fall_ok read TRUE for me where the builder measured
+    FALSE on the same build, which means that field flaps rather than failing deterministically, and a
+    flapping field is a broken instrument rather than a broken engine. That is the FOURTH instrument of
+    this shape this session, after the crossing-sweep max, the spherewalk flag and this field, and the
+    pattern is now unmistakable: a gate riding a statistic produced by a variable process will move for
+    reasons that have nothing to do with the thing it claims to measure.'
   comments: []
 - id: AC-0378
   title: diagnose-mobs-arm-red
@@ -21731,7 +21761,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-29T02:37
-  updated_at: 2026-09-29T02:37
+  updated_at: 2026-09-29T08:00
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -21778,5 +21808,21 @@ intake:
     CONTEXT: the arm is `mobs` in godot/scenes/harness.gd; its row in tasks/harness_data.yaml says what
     the standing value claims; AC-0145''s piece 3 results page records the A/B that proves it pre-existing.
 
-    '
+
+
+    SHARPENING EVIDENCE FROM THE COORDINATOR (2026-09-29), added before this ticket was worked because
+    it changes the diagnosis: **fall_ok FLAPS.** AC-0377''s builder measured it FALSE on the committed
+    build (and reported it bit-identical to a BEFORE baseline); I ran the same arm on the same build minutes
+    later and read **fall_ok TRUE**, with wolf_ok still FALSE, day_passive identical at 2130, night_hostile
+    788 against the builder''s 1961 and an earlier 2386, and tables_ok true in both. So the two red fields
+    are not the same kind of thing: at least one of them is non-deterministic, and night_hostile is a
+    cumulative frame-sum that swings by thousands between runs. THAT REFRAMES THE JOB: before asking whether
+    the engine or the arm is wrong, establish WHICH FIELDS ARE STABLE. Run the arm several times on one
+    build and tabulate each field; the ones that move are measuring a variable process (timing, wander,
+    despawn order) rather than a contract, and they belong in watch fields or need a deterministic scenario,
+    exactly as the crossing-sweep max gate and the spherewalk ok flag were re-based earlier in this same
+    session. The ones that are stable and wrong are the real finding, and only then does the engine-versus-arm
+    question make sense. A useful target shape, from the fix that worked twice already: gate on invariants
+    that cannot flap (did anything end up below ground, did the up-vector stay radial, did the tables
+    load) and demote the aggregate censuses to reported watch values with their observed ranges.'
   comments: []
