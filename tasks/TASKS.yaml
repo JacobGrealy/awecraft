@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-29T18:38
+  updated_at: 2026-09-29T20:50
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0380
 - AC-0310
 - AC-0311
 - AC-0381
@@ -21998,11 +21997,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-29T11:17
-  updated_at: 2026-09-29T11:17
-  completed_at: null
+  updated_at: 2026-09-29T20:50
+  completed_at: 2026-09-29T20:50
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Three of our lighting and fluid checks have been quietly testing nothing for
@@ -22048,7 +22047,34 @@ intake:
     CONTEXT: read tasks/AC-0368/AC-0368-results.html item 3 (the re-baseline table and the stale-arm finding)
     and the light/fluids rows in tasks/harness_data.yaml.
 
-    '
+
+
+    CLOSED - three rows that had been testing nothing now test something, and I verified it by running
+    the arm myself rather than on report. COORDINATOR VERIFICATION on my own capped stage of commit 35b92b4
+    (every arm rc 0, zero SCRIPT ERROR): genhash 25/25 byte-identical in two runs, which is the right
+    proof for arm work since no product behaviour may move; farab h_mismatch 0; ladder 20/20; meshprobe
+    1.0; halo ok; lightstate 0/0; r16 no reds with far_holes 0/0 in both bands; boundary r4 ok at 13/41;
+    the R24 walk inside every gated value (sweep p50 7.3, crossing frame p95 50, storm p99 75); and the
+    battery complete. The re-pointed `light` arm as I ran it reads cave_census_cands 415 with the census
+    taking 434 ms, cave_pocket [64,122,-2] with recenter [2,-1], cave_eff 0, surface_eff 15, torch_level
+    14 and torch_far 0 -> 9 - live values from a scenario derived at run time, where the same rows previously
+    read -1/0, a failure value that looks like a pass. WHY CENSUS-DERIVED IS THE WHOLE FIX rather than
+    a detail: the rows went blind because the AC-0288-through-AC-0360 re-bases moved the cave and sea
+    generation away from a hardcoded scan window, so a new hardcoded coordinate would go blind the next
+    time generation moves. The new census walks pure generation with the same path and predicate the oceansurface
+    arm uses, rediscovers its target every run, and proved the OLD window empty at 0 of 415 candidates
+    - which is both the diagnosis and the guarantee. DISCRIMINATION WAS PROVEN, NOT ASSUMED, one perturbation
+    per row: glowstone two blocks behind the pocket moves cave_eff 0 -> 10; a non-emitting block takes
+    torch_level 14 -> 0 with far_after 0; destroying a single sea cell moves the sea count 1717 -> 1716
+    with sea_stable false. That is the standard this ticket existed to set - a row that has never been
+    seen to fail is the thing we were eliminating, so each was made to fail on purpose first. A BONUS
+    CORRECTION came out of the work: the lava rows are restored to their pre-rebase 25 and 9 because AC-0368''s
+    24/24 was a band-position artifact rather than a measurement. THE BROADER LEDGER, worth stating at
+    this point in the session: FOUR instruments have now been found broken and ZERO engine defects were
+    found by any of them - the crossing-sweep max gate, the spherewalk ok flag, the mobs fall_ok/wolf_ok
+    pair (where the wolf''s bench was measured in the wrong frame entirely), and now three light/fluid
+    rows reading a failure value as a pass. The suite is green AND honest, which is a stronger claim than
+    green, and it also means the next red is far more likely to be real than any red has been this session.'
   comments: []
 - id: AC-0381
   title: post-planet-performance-re-review
