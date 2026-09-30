@@ -65,7 +65,14 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │  │                      chunk manager: streaming bands, LOD tiers, scheduler/drain,
 │  │                      chunk pool, fluid ticking, edit flush, drops + mob spawning
 │  ├─ drops (Node)        entities/drop.gd instances
-│  └─ entities (Node)     entities/mob.gd, arrow.gd, banana.gd
+│  ├─ entities (Node)     entities/mob.gd, arrow.gd, banana.gd
+│  └─ SatelliteBody       world/satellite_body.gd — the satellite body tier (AC-0310 P2):
+│                         the 12-face great-circle chart (sphere_math.gd) at radius R + SEA,
+│                         unlit (the bake carries the fixed-sun lambert), per-fragment
+│                         dissolve into the drawn disc at the depth-fog wall
+│                         (core/satellite_body.gdshader); runtime bake cache
+│                         user://satellite/p{planet}_r{R}_s{seed}/, seeded from
+│                         godot/assets/satellite/ for the canonical seed 44
 │     (scenes/test_range.tscn substitutes for World in the AC-0191 test range)
 ├─ Player                 player/player.tscn  →  player/player.gd
 │                         CharacterBody3D + CollisionShape3D + Camera3D
@@ -124,7 +131,12 @@ Build and loading:
 - **Textures**: `godot/assets/blocks_atlas.png` + `.json` and `items_atlas.png` + `.json`,
   generated from the Faithful pack by the pack-import probe (`godot/probe_alpha.gd`, hook
   `AWECRAFT_IMPORT_PACK`). The runtime can also load a user resource pack (`*.zip`/`*.mcpack`)
-  from the menu.
+  from the menu. `godot/assets/satellite/satellite_faceNN.png` (AC-0310 P2) are the 12
+  per-face 1024² satellite textures of the canonical seed 44 (the piece-1 bake, 16.0 m²/texel
+  equal-area); any other seed bakes them at runtime to
+  `user://satellite/p{planet}_r{R}_s{seed}/` (frame-sliced, keyed by (planet_id, R, seed)).
+  The satellite body's camera-far extension (the default 4000 m plane clips the body's far
+  limb) is owned by the tier, not the camera.
 - **Saves**: slot-based (`Save` autoload + `core/chunk_io.gd` + `gdext/chunk_io.cpp`), column
   blob format **v6**, per-slot chunk directories under `user://` — which in this sandbox is
   `/tmp/dsh_home/...`, so saves do not survive a reboot (see `godot/OPS.md`). v6 = v5

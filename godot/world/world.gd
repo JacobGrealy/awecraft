@@ -186,6 +186,10 @@ const FRUSTUM_CULL_MARGIN := 32.0
 # P1a: flat get/set_block stay the home pair (player on the flat home face).
 var render_radius := 4
 var fluid_tick_radius := 14
+# AC-0310 P2: the satellite body tier (whole-planet view above the
+# atmosphere) - a child node; configure is deferred to the first tick
+# (Game.world_seed must be set by then) and the bake is frame-sliced.
+var satellite: SatelliteBody = null
 # AC-0152 Bedrock Realms bands: band 0 = taxicab diamond <= band0_r (full
 # 16x16x16, TICKS, collision), band 1 = taxicab <= band1_r (FULL 16x16x16
 # mesh, no tick, no collision — same builder path as band 0), band 3 =
@@ -3574,6 +3578,12 @@ func _ready() -> void:
 	# slot then held the startup build-hold forever — a spawn deadlock).
 	WorldGen.gen_cpp()
 	ChunkScript.mesh_cpp()
+	# AC-0310 P2: the satellite body tier (the node is created here; the
+	# configure + texture load/bake start from the first _process tick,
+	# once Game.world_seed is guaranteed set).
+	satellite = SatelliteBody.new()
+	satellite.name = "SatelliteBody"
+	add_child(satellite)
 	threadgen_pool = Engine.get_singleton("WorkerThreadPool")
 	threadgen = true
 	io_pool = threadgen_pool  # AC-0164: column I/O shares the threadgen pool
@@ -4508,6 +4518,15 @@ func _process(_delta: float) -> void:
 	_loading_tick()
 	# AC-0040 bouncy-banana: the 10-block fall roll (before the idle return).
 	_banana_tick(_delta)
+	# AC-0310 P2: satellite body tier - visibility + shader uniforms +
+	# the frame-sliced bake (before the idle early-return: the bake runs
+	# during the load, when the streaming state IS idle). A few
+	# microseconds per frame when the body is settled.
+	if satellite != null:
+		if not satellite.configured:
+			satellite.configure(0, int(Game.world_seed), Game.planet_R, int(Data.HEIGHT), int(Data.SEA))
+		var _sp: Vector3 = Game.player.position if Game.player != null else Vector3.ZERO
+		satellite.process_frame(_sp, Game.time_of_day, render_radius, float(Settings.values.get("fog_start_pct", 87.5)))
 	# AC-0160: keep the worker ctx in sync with the atlas identity. If Data
 	# bakes/loads the atlas after World._ready captured the ctx (or a
 	# texture-pack swap re-bakes it), the stale ctx (has_tex=false,

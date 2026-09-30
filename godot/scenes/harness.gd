@@ -593,6 +593,21 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _farab_test()
 			get_tree().quit()
 			return
+		if logic == "satellite":
+			# AC-0310 P2: the SATELLITE BODY tier arm (the task gate): the
+			# 12-face body at R+SEA with the runtime variance guard, the
+			# derived thresholds + the no-pop angular-size criterion, the
+			# altitude ladder (hidden/rim/dissolve/full) via vertical
+			# teleports with a frozen player, and the bake stats (the
+			# sliced bake's main-thread stall). AWECRAFT_SATELLITE_REBAKE=1
+			# forces a rebuild + byte-compares the canonical seed against
+			# the shipped res:// textures.
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_sim_band(spawn, 3000)
+			player = main._spawn_player()
+			await _satellite_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "texrefresh":
 			# AC-0297 (b): the TEX-REFRESH star-native arm (the permanent
 			# gate for the atlas-swap rebuild): the real band rebuilds its
@@ -11155,6 +11170,217 @@ func _texrefresh_halo_cmp(mc, hc: Node3D, hcx: int, hcz: int, hsi_g: int, halo_p
 
 # AC-0284b: the FAR (h-only) column A/B battery (the permanent gate). See
 # the dispatch for the contract. The A/B pair is (a) the skip-filled
+# AC-0310 P2 probe (env-gated by AWECRAFT_LOGIC=satellite, harness-only,
+# never runs in game): the satellite body tier gate. Renders are
+# infeasible on this box (llvmpipe), so the no-pop criterion is numeric:
+#  (0) the tier exists: 12 face meshes at R + SEA, 12 x 1024^2 textures,
+#      and the runtime variance guard (the piece-1 smear tripwire) passes
+#      on every face;
+#  (1) the thresholds are DERIVED (fog_far, render_edge, h_first, h_full)
+#      and the no-pop angular-size criterion holds across the transition:
+#      texel 4.0 m (16.0 m^2, the piece-1 equal-area partition) vs the
+#      16 m chunk -> ratio 1/4 at every view distance (reported at the
+#      fog wall and the render edge);
+#  (2) the altitude ladder via vertical teleports with a FROZEN player:
+#      hidden (h < h_first: no body fragment past the fog wall), rim
+#      (h_first < h < SEA + fog_far: the nadir still hidden, the rim
+#      sliver visible), dissolve (h in (SEA + fog_far, SEA + edge): the
+#      nadir's per-fragment opacity strictly between 0 and 1), full
+#      (h > SEA + edge: the nadir fully established);
+#  (3) the bake: the startup bake's stats (the sliced bake's measured
+#      main-thread stall), and with AWECRAFT_SATELLITE_REBAKE=1 a forced
+#      rebuild whose PNGs are pixel-compared against the shipped seed-44
+#      res:// textures (reproducibility of the in-engine bake).
+func _satellite_test(spawn: Vector3) -> void:
+	var out := {}
+	var ok := true
+	var sb: SatelliteBody = world.satellite
+	if sb == null:
+		Debug.result({"ok": false, "why": "no satellite node"})
+		return
+	# (0) wait for the textures (the startup bake may still be slicing)
+	var t_wait := 0
+	while sb.phase != SatelliteBody.Phase.LOADED and sb.phase != SatelliteBody.Phase.FAILED:
+		await get_tree().physics_frame
+		t_wait += 1
+		if t_wait > 30000:
+			Debug.result({"ok": false, "why": "texture wait timeout", "phase": sb.phase, "stats": sb.bake_stats})
+			return
+	if sb.phase == SatelliteBody.Phase.FAILED:
+		Debug.result({"ok": false, "why": "bake failed", "stats": sb.bake_stats})
+		return
+	for i in 10:
+		await get_tree().physics_frame  # let the view tick publish the thresholds
+	out["phase"] = sb.phase
+	out["meshes"] = sb.face_nodes.size()
+	out["textures"] = sb.textures.size()
+	out["guard"] = sb.guard
+	var guard_ok := sb.face_nodes.size() == 12 and sb.textures.size() == 12
+	for g in sb.guard:
+		if not g["ok"]:
+			guard_ok = false
+	out["guard_ok"] = guard_ok
+	var shape_ok := true
+	for t in sb.textures:
+		var im: Image = (t as ImageTexture).get_image()
+		if im.get_width() != 1024 or im.get_height() != 1024:
+			shape_ok = false
+	out["tex_shape_ok"] = shape_ok
+	if not (guard_ok and shape_ok):
+		ok = false
+	# (1) thresholds + the no-pop angular-size criterion
+	var R: float = Game.planet_R
+	var SEA: int = Data.SEA
+	var rr: int = world.render_radius
+	var ff: float = sb.last_fog_far
+	var edge: float = sb.last_render_edge
+	var h_first: float = sb.last_h_first
+	var h_full: float = sb.last_h_full
+	var texel_m := 4.0  # piece 1: 16.0 m^2/texel (sqrt = 4.0 m side)
+	var chunk_m := 16.0  # the drawn chunk
+	out["thresholds"] = {
+		"R": R, "SEA": SEA, "render_radius": rr, "fog_far": ff, "render_edge": edge,
+		"body_radius": R + float(SEA), "h_first": roundf(h_first * 100.0) / 100.0,
+		"h_full": roundf(h_full * 100.0) / 100.0,
+	}
+	out["angular"] = {
+		"texel_m": texel_m, "chunk_m": chunk_m, "ratio": texel_m / chunk_m,
+		"texel_rad_at_fog_far": roundf(texel_m / ff * 1e6) / 1e6,
+		"chunk_rad_at_fog_far": roundf(chunk_m / ff * 1e6) / 1e6,
+		"texel_rad_at_edge": roundf(texel_m / edge * 1e6) / 1e6,
+		"chunk_rad_at_edge": roundf(chunk_m / edge * 1e6) / 1e6,
+	}
+	# (2) the altitude ladder (vertical scene-space teleports, frozen
+	# player - the player's x,z never move, the disc is unchanged)
+	var p: Node3D = player
+	p.set_physics_process(false)
+	p.hunger = 20.0
+	var levels: Array = [
+		{"name": "hidden", "h": h_first - 100.0, "want_vis": false},
+		{"name": "rim", "h": h_first + 50.0, "want_vis": true},
+		{"name": "dissolve", "h": float(SEA) + (ff + edge) * 0.5, "want_vis": true},
+		{"name": "full", "h": h_full + 100.0, "want_vis": true},
+	]
+	var lad: Array = []
+	for lv in levels:
+		var h: float = float(lv["h"])
+		# DIRECT scene-position set (not Debug.teleport: that maps through
+		# the flat->sphere conversion and re-centers, which distorts the
+		# altitude). h_band is a SCENE-space quantity: |(px,py,pz) +
+		# (0,R,0)| - R, so with the player's x,z fixed,
+		# y = sqrt((R+h)^2 - px^2 - pz^2) - R lands h_band exactly.
+		var px: float = p.position.x
+		var pz: float = p.position.z
+		var y: float = sqrt((R + h) * (R + h) - px * px - pz * pz) - R
+		p.position = Vector3(px, y, pz)
+		p.hunger = 20.0
+		for i in 10:
+			await get_tree().physics_frame
+		var hb: float = sb.last_h_band
+		var nadir_d: float = hb - float(SEA)
+		var rim_d: float = sqrt((R + hb) * (R + hb) - (R + float(SEA)) * (R + float(SEA)))
+		var entry := {
+			"level": lv["name"],
+			"h_band": roundf(hb * 100.0) / 100.0,
+			"visible": sb.visible,
+			"nadir_d": roundf(nadir_d * 100.0) / 100.0,
+			"nadir_op": roundf(sb.opacity_at(nadir_d) * 1000.0) / 1000.0,
+			"rim_d": roundf(rim_d * 100.0) / 100.0,
+			"rim_op": roundf(sb.opacity_at(rim_d) * 1000.0) / 1000.0,
+		}
+		lad.append(entry)
+		if sb.visible != bool(lv["want_vis"]):
+			ok = false
+			out["visible_fail"] = lv["name"]
+	out["altitude"] = lad
+	p.set_physics_process(true)
+	# ladder sub-flags: the dissolve happens inside the band where the
+	# nadir's opacity is strictly between 0 and 1 (the per-fragment fade);
+	# hidden is truly dark; full is fully established.
+	if lad[0]["visible"] or float(lad[0]["nadir_op"]) > 0.0:
+		ok = false
+		out["hidden_fail"] = lad[0]
+	if not (float(lad[1]["nadir_op"]) < 0.001 and float(lad[1]["rim_op"]) > 0.9):
+		ok = false
+		out["rim_fail"] = lad[1]
+	if not (float(lad[2]["nadir_op"]) > 0.0 and float(lad[2]["nadir_op"]) < 1.0):
+		ok = false
+		out["dissolve_fail"] = lad[2]
+	if float(lad[3]["nadir_op"]) < 1.0:
+		ok = false
+		out["full_fail"] = lad[3]
+	# (3) the bake (the sliced bake's measured main-thread stall)
+	out["bake"] = sb.bake_stats
+	if OS.get_environment("AWECRAFT_SATELLITE_REBAKE") == "1":
+		sb.force_rebake()
+		var t2 := 0
+		while sb.bake_active:
+			await get_tree().physics_frame
+			t2 += 1
+			if t2 > 60000:
+				ok = false
+				out["rebake_timeout"] = true
+				break
+		out["rebake"] = sb.bake_stats
+		# keep the rebaked PNGs for offline analysis (the harness HOME
+		# user:// is ephemeral - /tmp is a per-invocation tmpfs)
+		var dest := ProjectSettings.globalize_path("res://") + "../.scratch/AC-0310-gates/rebake/"
+		DirAccess.make_dir_recursive_absolute(dest)
+		for f in 12:
+			var rf := FileAccess.open(sb._cache_path(f), FileAccess.READ)
+			if rf != null:
+				var wb := rf.get_buffer(rf.get_length())
+				rf.close()
+				var wf := FileAccess.open(dest + "satellite_face%02d.png" % f, FileAccess.WRITE)
+				if wf != null:
+					wf.store_buffer(wb)
+					wf.close()
+		if int(Game.world_seed) == SatelliteBody.CANONICAL_SEED:
+			# reproducibility: the in-engine bake vs the shipped piece-1
+			# PNGs - a 128x128 pixel sample per face (ULP tolerance: the
+			# GDScript float path may differ in the last bit of the sRGB
+			# power; a real deviation shows as many diff px, not one).
+			var cmp = []
+			var max_diff := 0
+			var diff_px := 0
+			var samples := 0
+			for f in 12:
+				var a := _sat_img(sb._cache_path(f))
+				var b := _sat_img("res://assets/satellite/satellite_face%02d.png" % f)
+				if a == null or b == null:
+					ok = false
+					cmp.append({"face": f, "read": false})
+					continue
+				for j in 128:
+					for i in 128:
+						var pa := a.get_pixel(i * 8, j * 8)
+						var pb := b.get_pixel(i * 8, j * 8)
+						samples += 3
+						max_diff = maxi(max_diff, absi(pa.r8 - pb.r8))
+						max_diff = maxi(max_diff, absi(pa.g8 - pb.g8))
+						max_diff = maxi(max_diff, absi(pa.b8 - pb.b8))
+						if pa.r8 != pb.r8 or pa.g8 != pb.g8 or pa.b8 != pb.b8:
+							diff_px += 1
+			cmp = {"samples": samples, "diff_px": diff_px, "max_abs_diff": max_diff, "identical": diff_px == 0}
+			out["rebuild_vs_shipped"] = cmp
+			if max_diff > 1 or (float(diff_px) / float(maxi(samples, 1)) > 0.01):
+				ok = false
+	out["ok"] = ok
+	Debug.result(out)
+
+
+func _sat_img(pth: String) -> Image:
+	var f := FileAccess.open(pth, FileAccess.READ)
+	if f == null:
+		return null
+	var b := f.get_buffer(f.get_length())
+	f.close()
+	var img := Image.new()
+	if img.load_png_from_buffer(b) != OK:
+		return null
+	return img
+
+
 # slabs (generate_resl skip=1 — the 284a shape, kept as the reference)
 # through low_emit_avg, and (b) the far payload through h_avg_emit;
 # identical grid inputs (the shared tail) + identical fcc/sky must give

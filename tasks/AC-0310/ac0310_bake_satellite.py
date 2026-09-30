@@ -276,15 +276,24 @@ for f in range(12):
         B2 = BMh[I, J, K].astype(np.int32)
         T2 = Toph[I, J, K].astype(np.int32)
         # column-space gradient (1 m spacing), clamped at chunk edges.
-        # Hgf axes: [cx, cz, lz, lx] (slot = lz*16+lx splits 256 -> 16x16),
-        # so axis 2 differences are dH/dz and axis 3 differences are dH/dx.
+        # Hgf axes: [cx+197, cz+197, lz, lx] (slot = lz*16+lx splits 256
+        # -> 16x16; the chunk axes inherit Hh's +197 offset), so axis 2
+        # differences are dH/dz and axis 3 differences are dH/dx.
         Hgf = Hh.astype(np.float32).reshape(394, 394, 16, 16)
         P = np.pad(Hgf, [(0, 0), (0, 0), (1, 1), (1, 1)], mode="edge")
         dHdx = (P[:, :, 1:17, 2:18] - P[:, :, 1:17, 0:16]) / 2.0   # dH/dlx
         dHdz = (P[:, :, 2:18, 1:17] - P[:, :, 0:16, 1:17]) / 2.0   # dH/dlz
-        # index the 4D gradient grids
-        gxc = dHdx[I - 197, J - 197, Lj, Li]
-        gzc = dHdz[I - 197, J - 197, Lj, Li]
+        # index the 4D gradient grids. AC-0310 P2 (2026-09-30) FIX: the
+        # original `dHdx[I - 197, J - 197, ...]` indexed the +197-offset
+        # axes with raw cxi/czj in [-197, 196] — numpy silently WRAPS the
+        # negative indices, so every home pixel was shaded with a
+        # DIFFERENT chunk's slope (~69% of home-face pixels off, max
+        # channel diff 40). Caught when P2's in-engine bake byte-compared
+        # against these shipped PNGs (the in-engine bake was always
+        # correct). Index with I/J directly. Faces 2-11 were never affected
+        # (their gradients are per-face; no offset axis).
+        gxc = dHdx[I, J, Lj, Li]
+        gzc = dHdz[I, J, Lj, Li]
         gx = gxc.reshape(NPIX, NPIX)
         gz = gzc.reshape(NPIX, NPIX)
         du_m, dv_m = 1.0, 1.0
